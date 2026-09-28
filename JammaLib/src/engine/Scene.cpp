@@ -746,7 +746,8 @@ void Scene::Draw3d(DrawContext& ctx,
 	}
 
 	glCtx.ClearMvp();
-	glCtx.PushMvp(_viewProj);
+	glCtx.PushMvp(projection);
+	glCtx.PushMvp(view);
 
 	if (PASS_SCENE == pass)
 	{
@@ -758,6 +759,7 @@ void Scene::Draw3d(DrawContext& ctx,
 	for (auto& station : _stations)
 		station->Draw3d(ctx, 1, pass);
 
+	glCtx.PopMvp();
 	glCtx.PopMvp();
 }
 

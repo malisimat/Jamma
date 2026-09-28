@@ -47,7 +47,7 @@ MidiModelParams::MidiModelParams()
 	  DiscAlpha(0.2f),
 	  CenterPitch(60)
 {
-	ModelTextures = { "levels" };
+	ModelTextures = { "probe_chrome", "probe_pearl" };
 	ModelShaders = { "midi_note" };
 	Verts = MidiModel::BuildBaseVerts(MidiModel::BaseArcSegments);
 	Uvs = MidiModel::BuildBaseUvs(MidiModel::BaseArcSegments);
@@ -66,7 +66,7 @@ MidiModelParams::MidiModelParams(gui::GuiModelParams params)
 	  CenterPitch(60)
 {
 	if (ModelTextures.empty())
-		ModelTextures = { "levels" };
+		ModelTextures = { "probe_chrome", "probe_pearl" };
 	if (ModelShaders.empty())
 		ModelShaders = { "midi_note" };
 	if (Verts.empty())
@@ -151,6 +151,12 @@ void MidiModel::Draw3d(DrawContext& ctx, unsigned int numInstances, base::DrawPa
 
 	if (base::PASS_SCENE == pass)
 	{
+		auto discProbe = GetTextureAt(1u).lock();
+		glActiveTexture(GL_TEXTURE1);
+		glBindTexture(GL_TEXTURE_2D, discProbe ? discProbe->GetId() : 0u);
+		glActiveTexture(GL_TEXTURE0);
+		glCtx.SetUniform("TextureSampler", 0u);
+		glCtx.SetUniform("DiscProbeSampler", 1u);
 		GLboolean prevDepthMask = GL_TRUE;
 		glGetBooleanv(GL_DEPTH_WRITEMASK, &prevDepthMask);
 
@@ -164,6 +170,9 @@ void MidiModel::Draw3d(DrawContext& ctx, unsigned int numInstances, base::DrawPa
 		_DrawAutomation(glCtx);
 
 		glDepthMask(prevDepthMask);
+		glActiveTexture(GL_TEXTURE1);
+		glBindTexture(GL_TEXTURE_2D, 0u);
+		glActiveTexture(GL_TEXTURE0);
 	}
 	else
 	{
@@ -486,27 +495,36 @@ void MidiModel::_DrawAutomation(GlDrawContext& glCtx)
 std::vector<float> MidiModel::BuildBaseVerts(unsigned int segments)
 {
 	std::vector<float> verts;
-	verts.reserve((segments * 8u + 4u) * 9u);
+	if (segments == 0u)
+		return verts;
+	// One shared chamfered cross-section serves every instanced note and disc.
+	constexpr std::array<std::pair<float, float>, 8> profile = {{
+		{ 1.0f, -0.40f }, { 1.0f, 0.40f }, { 0.86f, 0.50f },
+		{ -0.86f, 0.50f }, { -1.0f, 0.40f }, { -1.0f, -0.40f },
+		{ -0.86f, -0.50f }, { 0.86f, -0.50f }
+	}};
+	verts.reserve((segments * profile.size() * 2u + profile.size() * 2u) * 9u);
 
 	for (auto segment = 0u; segment < segments; ++segment)
 	{
 		const auto x1 = static_cast<float>(segment) / static_cast<float>(segments);
 		const auto x2 = static_cast<float>(segment + 1u) / static_cast<float>(segments);
-
-		AddTri(verts, x1, -0.5f,  1.0f, x2, -0.5f,  1.0f, x1,  0.5f,  1.0f);
-		AddTri(verts, x1,  0.5f,  1.0f, x2, -0.5f,  1.0f, x2,  0.5f,  1.0f);
-		AddTri(verts, x1, -0.5f, -1.0f, x1,  0.5f, -1.0f, x2, -0.5f, -1.0f);
-		AddTri(verts, x1,  0.5f, -1.0f, x2,  0.5f, -1.0f, x2, -0.5f, -1.0f);
-		AddTri(verts, x1,  0.5f, -1.0f, x1,  0.5f,  1.0f, x2,  0.5f, -1.0f);
-		AddTri(verts, x1,  0.5f,  1.0f, x2,  0.5f,  1.0f, x2,  0.5f, -1.0f);
-		AddTri(verts, x1, -0.5f, -1.0f, x2, -0.5f, -1.0f, x1, -0.5f,  1.0f);
-		AddTri(verts, x1, -0.5f,  1.0f, x2, -0.5f, -1.0f, x2, -0.5f,  1.0f);
+		for (auto edge = 0u; edge < profile.size(); ++edge)
+		{
+			const auto& a = profile[edge];
+			const auto& b = profile[(edge + 1u) % profile.size()];
+			AddTri(verts, x1, a.second, a.first, x2, a.second, a.first, x1, b.second, b.first);
+			AddTri(verts, x1, b.second, b.first, x2, a.second, a.first, x2, b.second, b.first);
+		}
 	}
 
-	AddTri(verts, 0.0f, -0.5f, -1.0f,  0.0f, -0.5f,  1.0f,  0.0f,  0.5f, -1.0f);
-	AddTri(verts, 0.0f, -0.5f,  1.0f,  0.0f,  0.5f,  1.0f,  0.0f,  0.5f, -1.0f);
-	AddTri(verts, 1.0f, -0.5f, -1.0f,  1.0f,  0.5f, -1.0f,  1.0f,  0.5f,  1.0f);
-	AddTri(verts, 1.0f, -0.5f, -1.0f,  1.0f,  0.5f,  1.0f,  1.0f, -0.5f,  1.0f);
+	for (auto edge = 0u; edge < profile.size(); ++edge)
+	{
+		const auto& a = profile[edge];
+		const auto& b = profile[(edge + 1u) % profile.size()];
+		AddTri(verts, 0.0f, 0.0f, 0.0f, 0.0f, b.second, b.first, 0.0f, a.second, a.first);
+		AddTri(verts, 1.0f, 0.0f, 0.0f, 1.0f, a.second, a.first, 1.0f, b.second, b.first);
+	}
 
 	return verts;
 }
@@ -517,26 +535,26 @@ std::vector<float> MidiModel::BuildBaseUvs(unsigned int segments)
 	if (0u == segments)
 		return uvs;
 
-	uvs.reserve((segments * 8u + 4u) * 6u);
+	constexpr auto profileEdges = 8u;
+	uvs.reserve((segments * profileEdges * 2u + profileEdges * 2u) * 6u);
 
 	for (auto segment = 0u; segment < segments; ++segment)
 	{
 		const auto x1 = static_cast<float>(segment) / static_cast<float>(segments);
 		const auto x2 = static_cast<float>(segment + 1u) / static_cast<float>(segments);
-		for (auto face = 0u; face < 4u; ++face)
+		for (auto face = 0u; face < profileEdges; ++face)
 		{
 			AddUvTri(uvs, x1, 0.0f, x2, 0.0f, x1, 1.0f);
 			AddUvTri(uvs, x1, 1.0f, x2, 0.0f, x2, 1.0f);
 		}
 	}
 
-	// Mark arc end-cap triangles with UV.y = 2.0 so the fragment shader can
-	// discard them for full-circle disc instances (both caps land at the same
-	// world-space angle, leaving a visible seam fin if not discarded).
-	AddUvTri(uvs, 0.0f, 2.0f,  0.0f, 2.0f,  0.0f, 2.0f);
-	AddUvTri(uvs, 0.0f, 2.0f,  0.0f, 2.0f,  0.0f, 2.0f);
-	AddUvTri(uvs, 1.0f, 2.0f,  1.0f, 2.0f,  1.0f, 2.0f);
-	AddUvTri(uvs, 1.0f, 2.0f,  1.0f, 2.0f,  1.0f, 2.0f);
+	// Full-circle discs discard these coincident end caps in the shader.
+	for (auto edge = 0u; edge < profileEdges; ++edge)
+	{
+		AddUvTri(uvs, 0.0f, 2.0f, 0.0f, 2.0f, 0.0f, 2.0f);
+		AddUvTri(uvs, 1.0f, 2.0f, 1.0f, 2.0f, 1.0f, 2.0f);
+	}
 
 	return uvs;
 }

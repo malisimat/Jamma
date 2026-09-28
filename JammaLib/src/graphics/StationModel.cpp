@@ -433,6 +433,7 @@ StationModel::StationModel() :
 	_ringsNeedInitialising(true)
 {
 	_modelParams.ModelShaders = { "station", "picker", "station_ring" };
+	_modelParams.ModelTextures = { "probe_amber" };
 	SetVisible(false);
 
 	auto [verts, uvs] = BuildAllGeometry(DefaultNumSides, DeckRadius, DefaultNumRibs);
@@ -649,6 +650,10 @@ void StationModel::Draw3d(DrawContext& ctx,
 		break;
 	}
 
+	glCtx.SetUniform("ProbeSampler", 0u);
+	auto probeTexture = GetTexture().lock();
+	glActiveTexture(GL_TEXTURE0);
+	glBindTexture(GL_TEXTURE_2D, probeTexture ? probeTexture->GetId() : 0u);
 	glUseProgram(shader->GetId());
 	shader->SetUniforms(glCtx);
 
@@ -665,12 +670,16 @@ void StationModel::Draw3d(DrawContext& ctx,
 		_DrawRingMesh(_bottomRing);
 		glBindVertexArray(0);
 		glUseProgram(0);
+		glBindTexture(GL_TEXTURE_2D, 0u);
 		return;
 	}
 
 	auto ringShader = GetShaderAt(2u).lock();
 	if (!ringShader)
+	{
+		glBindTexture(GL_TEXTURE_2D, 0u);
 		return;
+	}
 
 	glCtx.SetUniform("Highlight", _stationSelected ? (pass == base::PASS_HIGHLIGHT ? 1.0f : 0.35f) : 0.0f);
 	glCtx.SetUniform("StationHover", _stationPicking ? 1.0f : 0.0f);
@@ -692,4 +701,5 @@ void StationModel::Draw3d(DrawContext& ctx,
 	_DrawRingOccluder(_ringOccluder);
 	glBindVertexArray(0);
 	glUseProgram(0);
+	glBindTexture(GL_TEXTURE_2D, 0u);
 }

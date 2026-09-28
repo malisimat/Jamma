@@ -8,10 +8,12 @@ layout(location = 4) in vec4 InstanceShape;
 
 out float Velocity;
 out float Diff;
+out vec3 ProbeNormal;
 flat out float IsDisc;
 flat out float IsEndCap;
 
 uniform mat4 MVP;
+uniform mat4 ModelView;
 
 const float TwoPi = 6.28318530718;
 
@@ -37,7 +39,17 @@ void main()
 
     // The generated MIDI mesh carries inward-facing normal sign on Y, so flip
     // it here to keep lighting oriented outward on notes and the center disc.
-    vec3 radialNormal = normalize(vec3(sin(angle), -NormalIN.y * 0.35, cos(angle)));
+    vec3 tangent = vec3(cos(angle), 0.0, -sin(angle));
+    vec3 radialNormal = normalize(vec3(sin(angle) * NormalIN.z, -NormalIN.y, cos(angle) * NormalIN.z) +
+        tangent * NormalIN.x);
+    float topEdge = smoothstep(0.39, 0.5, abs(PositionIN.y));
+    float radialEdge = smoothstep(0.76, 1.0, abs(PositionIN.z));
+    float endEdge = (1.0 - IsDisc) * (1.0 - smoothstep(0.0, 0.035, min(PositionIN.x, 1.0 - PositionIN.x)));
+    vec3 bevelNormal = normalize(radialNormal +
+        vec3(0.0, sign(PositionIN.y) * topEdge * 0.45, 0.0) +
+        vec3(sin(angle), 0.0, cos(angle)) * sign(PositionIN.z) * radialEdge * 0.25 +
+        tangent * (PositionIN.x < 0.5 ? -1.0 : 1.0) * endEdge * 0.4);
+    ProbeNormal = normalize(mat3(ModelView) * bevelNormal);
     vec3 lightDir = normalize(vec3(0.0, 0.5, -0.3));
     vec4 normScreen = MVP * vec4(radialNormal, 0.0);
     Diff = 0.15 + clamp(dot(normScreen.xyz, lightDir), 0.0, 0.85);

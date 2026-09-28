@@ -74,7 +74,7 @@ Loop::Loop(LoopParams params,
 	LoopModelParams modelParams;
 	modelParams.Size = { 12, 14 };
 	modelParams.ModelScale = 1.0f;
-	modelParams.ModelTextures = { "levels" };
+	modelParams.ModelTextures = { "levels", "probe_pearl" };
 	modelParams.ModelShaders = { "waveform", "picker", "white"};
 	_model = std::make_shared<LoopModel>(modelParams);
 

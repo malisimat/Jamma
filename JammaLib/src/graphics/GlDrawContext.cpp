@@ -244,6 +244,14 @@ std::optional<std::any> GlDrawContext::GetUniform(std::string name)
 {
 	if (_MvpUniformName == name)
 		return (name, _mvp);
+	if (name == "ModelView" && _mvp.size() >= 2u)
+	{
+		// Scene puts projection first; omit it when transforming normals.
+		auto modelView = glm::mat4(1.0f);
+		for (auto i = 1u; i < _mvp.size(); ++i)
+			modelView *= _mvp[i];
+		return modelView;
+	}
 
 	auto it = _uniforms.find(name);
 

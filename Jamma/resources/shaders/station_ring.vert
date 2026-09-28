@@ -5,6 +5,7 @@ layout(location = 1) in vec2 UvIN;
 layout(location = 2) in vec3 NormalIN;
 
 uniform mat4 MVP;
+uniform mat4 ModelView;
 uniform float StationLevel;
 uniform int StationVisualState;
 uniform float RingCapY;
@@ -12,6 +13,7 @@ uniform float RingDirection;
 uniform float RingScale;
 
 out vec3 Normal;
+out vec3 ProbeNormal;
 out vec2 Uv;
 out vec3 WorldPos;
 flat out float StationLevelOut;
@@ -83,6 +85,7 @@ void main()
     }
 
     Normal = normal;
+    ProbeNormal = normalize(mat3(ModelView) * normal);
     Uv = UvIN;
     WorldPos = pos;
     StationLevelOut = clamp(StationLevel, 0.0, 1.0);

@@ -91,6 +91,7 @@ void LoopModel::Draw3d(DrawContext& ctx,
 	UploadWaveformTexture();
 
 	auto modelTexture = GetTexture();
+	auto probeTexture = GetTextureAt(1u).lock();
 	auto modelShader = GetShader();
 
 	auto texture = modelTexture.lock();
@@ -104,6 +105,7 @@ void LoopModel::Draw3d(DrawContext& ctx,
 
 	glCtx.SetUniform("TextureSampler", 0u);
 	glCtx.SetUniform("WaveformSampler", 1u);
+	glCtx.SetUniform("ProbeSampler", 2u);
 	glCtx.SetUniform("WaveformRadius", waveformRadius);
 	glCtx.SetUniform("WaveformHeightScale", _HeightScale);
 	glCtx.SetUniform("WaveformMinHeight", _MinHeight);
@@ -121,12 +123,16 @@ void LoopModel::Draw3d(DrawContext& ctx,
 
 	glActiveTexture(GL_TEXTURE1);
 	glBindTexture(GL_TEXTURE_1D, _waveformTexture);
+	glActiveTexture(GL_TEXTURE2);
+	glBindTexture(GL_TEXTURE_2D, probeTexture ? probeTexture->GetId() : 0u);
 
 	if (numInstances > 1)
 		glDrawArraysInstanced(GL_TRIANGLES, 0, _numTris * 3, numInstances);
 	else
 		glDrawArrays(GL_TRIANGLES, 0, _numTris * 3);
 
+	glBindTexture(GL_TEXTURE_2D, 0);
+	glActiveTexture(GL_TEXTURE1);
 	glBindTexture(GL_TEXTURE_1D, 0);
 	glActiveTexture(GL_TEXTURE0);
 	glBindTexture(GL_TEXTURE_2D, 0);

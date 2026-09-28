@@ -6,8 +6,13 @@ layout(location = 2) in vec3 NormalIN;
 
 out vec2 UV;
 out float diff;
+out vec3 ProbeNormal;
+out vec3 ProbeRadial;
+out vec3 ProbeUp;
+out vec2 BevelEdge;
 
 uniform mat4 MVP;
+uniform mat4 ModelView;
 uniform sampler1D WaveformSampler;
 uniform float WaveformRadius;
 uniform float WaveformHeightScale;
@@ -36,6 +41,11 @@ void main()
     gl_Position = MVP * vec4(scaledXZ.x, y, scaledXZ.y, 1.0);
     float colorV = clamp(0.5 - (y * colorScale * WaveformColorMultiplier), 0.0, 1.0);
     UV = vec2(u, colorV);
+    ProbeNormal = normalize(mat3(ModelView) * NormalIN);
+    ProbeRadial = normalize(mat3(ModelView) * vec3(normalize(PositionIN.xz).x, 0.0, normalize(PositionIN.xz).y));
+    ProbeUp = normalize(mat3(ModelView) * vec3(0.0, 1.0, 0.0));
+    BevelEdge = vec2(clamp((y - yMin) / max(yMax - yMin, 0.001), 0.0, 1.0),
+        clamp((length(PositionIN.xz) / safeUnitRadius - 0.95) / 0.1, 0.0, 1.0));
 
     vec3 lightDir = normalize(vec3(0.0, 0.5, -0.3));
     vec4 normScreen = MVP * vec4(NormalIN, 0.0);

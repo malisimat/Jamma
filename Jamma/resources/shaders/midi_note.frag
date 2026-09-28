@@ -2,6 +2,7 @@
 
 in float Velocity;
 in float Diff;
+in vec3 ProbeNormal;
 flat in float IsDisc;
 flat in float IsEndCap;
 
@@ -12,6 +13,8 @@ uniform float Highlight;
 uniform float LoopHover;
 uniform float DiscAlpha;
 uniform int RenderMode;
+uniform sampler2D TextureSampler;
+uniform sampler2D DiscProbeSampler;
 
 const int RenderModeScene = 0;
 const int RenderModePicker = 1;
@@ -49,7 +52,8 @@ void main()
 
     if (IsDisc > 0.5)
     {
-        vec3 discColor = vec3(0.55, 0.6, 0.7) * Diff;
+        vec2 probeUv = clamp(ProbeNormal.xy * 0.49 + 0.5, 0.01, 0.99);
+        vec3 discColor = texture(DiscProbeSampler, probeUv).rgb * (0.35 + 0.65 * Diff);
         ColorOUT = vec4(discColor + (LoopHover * vec3(0.18, 0.18, 0.12)), DiscAlpha);
         return;
     }
@@ -59,5 +63,8 @@ void main()
     vec3 high = vec3(1.0, 0.72, 0.18);
     float upper = smoothstep(0.45, 1.0, Velocity);
     vec3 baseColor = mix(mix(low, mid, smoothstep(0.0, 0.55, Velocity)), high, upper);
-    ColorOUT = vec4((baseColor * Diff) + (LoopHover * vec3(0.18, 0.18, 0.12)), 0.88);
+    vec2 probeUv = clamp(ProbeNormal.xy * 0.49 + 0.5, 0.01, 0.99);
+    vec3 probe = texture(TextureSampler, probeUv).rgb;
+    ColorOUT = vec4((baseColor * (0.18 + 0.82 * probe) * (0.45 + 0.55 * Diff)) +
+        (LoopHover * vec3(0.18, 0.18, 0.12)), 0.88);
 }

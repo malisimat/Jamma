@@ -1,6 +1,7 @@
 #version 330 core
 
 in vec3 Normal;
+in vec3 ProbeNormal;
 in vec2 Uv;
 in vec3 WorldPos;
 flat in float StationLevelOut;
@@ -10,6 +11,7 @@ out vec4 ColorOUT;
 uniform float Highlight;
 uniform float StationHover;
 uniform vec3 StationStateColor;
+uniform sampler2D ProbeSampler;
 
 // uv.x = radial fraction on top/bevel, vertical fraction on side (0=bottom,1=top)
 // uv.y = part kind:  0=deck-top, 1=bevel, 2=side
@@ -47,6 +49,8 @@ void main()
 	vec3 lightDir  = normalize(vec3(0.3, 1.0, 0.4));
 	float diffuse  = clamp(dot(normalize(Normal), lightDir), 0.0, 1.0);
 	base *= (0.90 + 0.35 * diffuse);
+	vec3 probe = texture(ProbeSampler, clamp(normalize(ProbeNormal).xy * 0.49 + 0.5, 0.01, 0.99)).rgb;
+	base *= 0.34 + 0.90 * probe;
 
 	// -- highlight flash (selection) --
 	float hi = clamp(Highlight, 0.0, 1.0);
