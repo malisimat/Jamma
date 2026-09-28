@@ -393,6 +393,17 @@ public:
 			TickCameraForTest(2205u, 44100u);
 	}
 
+	void SettleLoopGridEditorForTest()
+	{
+		for (unsigned int tick = 0u; tick < 10u; ++tick)
+		{
+			_camera.TickBackgroundDrag(0.05f);
+			_TickLoopGridEditor(0.05f);
+		}
+	}
+
+	bool EditorOwnsPointerForTest() const { return _editorPointerOwned; }
+
 	bool IsSceneTouchingForTest() const
 	{
 		return _camera.IsBackgroundDragging();
@@ -2047,6 +2058,119 @@ TEST(CameraView, StationInteriorClearsHoveredFocusWhenStationIsRemoved) {
 	for (unsigned int tick = 0u; tick < 8u; ++tick)
 		camera.TickBackgroundDrag(0.05f);
 	EXPECT_FLOAT_EQ(-200.0f, camera.CurrentPose().Eye.X);
+}
+
+TEST(CameraView, EditorReturnRestoresInterruptedEntryPoseAndRememberedViews) {
+	graphics::Camera camera(graphics::CameraParams(base::MoveableParams(), 0u));
+	camera.CycleView({}, {}, {}, {}, {}, false);
+	camera.TickBackgroundDrag(0.05f);
+	const auto entryPose = camera.CurrentPose();
+	const auto entryView = camera.CurrentView();
+	const auto hadTopDown = camera.HasRememberedPose(graphics::Camera::View::TopDown);
+	const auto saved = camera.CaptureEditorReturnState();
+	camera.SetEditorPerspective(true);
+	graphics::Camera::Pose editorPose;
+	editorPose.Eye = { 40.0f, 340.0f, 80.0f };
+	editorPose.Forward = { -40.0f, -340.0f, -80.0f };
+	editorPose.Up = { 0.0f, 0.0f, -1.0f };
+	camera.SetViewTarget(graphics::Camera::View::TopDown, editorPose);
+	for (unsigned int i = 0u; i < 8u; ++i)
+		camera.TickBackgroundDrag(0.05f);
+	EXPECT_FLOAT_EQ(0.0f, camera.Projection(1.0f, {})[3][3]);
+	camera.RestoreEditorReturnState(saved);
+	for (unsigned int i = 0u; i < 8u; ++i)
+		camera.TickBackgroundDrag(0.05f);
+	camera.SetEditorPerspective(false);
+	EXPECT_EQ(entryView, camera.CurrentView());
+	EXPECT_NEAR(entryPose.Eye.Z, camera.CurrentPose().Eye.Z, 0.001f);
+	EXPECT_NEAR(entryPose.Forward.Z, camera.CurrentPose().Forward.Z, 0.001f);
+	EXPECT_EQ(hadTopDown, camera.HasRememberedPose(graphics::Camera::View::TopDown));
+}
+
+TEST(CameraView, EditorReturnSuppressesDeferredSelectionDepthChange) {
+	graphics::Camera camera(graphics::CameraParams(base::MoveableParams(), 0u));
+	camera.CycleView({}, {}, {}, {}, {}, true);
+	for (unsigned int i = 0u; i < 8u; ++i)
+		camera.TickBackgroundDrag(0.05f);
+	camera.CycleView({}, {}, {}, {}, {}, false);
+	const auto saved = camera.CaptureEditorReturnState();
+	graphics::Camera::Pose editorPose;
+	editorPose.Eye = { 0.0f, 340.0f, 80.0f };
+	editorPose.Forward = { 0.0f, -340.0f, -80.0f };
+	editorPose.Up = { 0.0f, 0.0f, -1.0f };
+	camera.SetViewTarget(graphics::Camera::View::TopDown, editorPose);
+	camera.RestoreEditorReturnState(saved);
+	for (unsigned int i = 0u; i < 8u; ++i)
+		camera.TickBackgroundDrag(0.05f);
+	EXPECT_EQ(graphics::Camera::SelectDepthChange::None, camera.PendingSelectDepthChange());
+}
+
+TEST(Scene, LoopGridEditorTracksOneMidiLoopAndClosesWhenItIsReplaced) {
+	SceneParams sceneParams{ base::DrawableParams(), base::MoveableParams(),
+		base::SizeableParams({ 1400u, 900u }) };
+	TestScene scene(sceneParams, {});
+	auto station = MakeTestStation("editor-midi");
+	scene.AddStationForTest(station);
+	auto take = station->AddTake();
+	LoopTake::MidiExportState state;
+	state.LoopLengthSamps = 400u;
+	for (unsigned int channel = 0u; channel < 2u; ++channel)
+	{
+		LoopTake::MidiStreamExport stream;
+		stream.Channel = channel;
+		stream.Loop.LoopLengthSamps = 400u;
+		stream.Loop.EventCount = 2u;
+		stream.Loop.Events[0] = midi::MidiEvent::MakeNoteOn(20u, channel, 60u, 100u);
+		stream.Loop.Events[1] = midi::MidiEvent::MakeNoteOff(40u, channel, 60u);
+		state.Streams.push_back(stream);
+	}
+	ASSERT_TRUE(take->RestoreMidiFromExport(state));
+	take->Select();
+	scene.SetCameraSelectDepthForTest(Scene::VIEW_LOOP);
+	const auto firstLoop = take->GetMidiLoops()[0];
+	const auto secondLoop = take->GetMidiLoops()[1];
+	firstLoop->StartRecord();
+	EXPECT_FALSE(scene.OpenLoopGridEditor(take, {}, firstLoop));
+	firstLoop->EndRecord(0u);
+	EXPECT_FALSE(scene.OpenLoopGridEditor(take, {}, firstLoop));
+	const auto returnPose = scene.CameraPoseForTest();
+	ASSERT_TRUE(scene.OpenLoopGridEditor(take, {}, secondLoop));
+	EXPECT_TRUE(scene.OnAction(MakeSceneTouch(TouchAction::TOUCH_DOWN,
+		{ 700, 450 }, 0, LeftMouseButtonMask)).IsEaten);
+	EXPECT_FALSE(scene.EditorOwnsPointerForTest());
+	scene.OnAction(MakeSceneTouch(TouchAction::TOUCH_UP, { 700, 450 }, 0, 0u));
+	EXPECT_EQ(secondLoop, scene.LoopGridEditorMidiLoop());
+	EXPECT_NE(firstLoop, scene.LoopGridEditorMidiLoop());
+	EXPECT_FLOAT_EQ(0.0f, scene.CameraProjectionForTest()[3][3]);
+	scene.SettleLoopGridEditorForTest();
+	EXPECT_TRUE(scene.LoopGridEditorReady());
+	const auto editorPose = scene.CameraPoseForTest();
+	scene.OnAction(MakeSceneTouch(TouchAction::TOUCH_DOWN, { 700, 450 }, 0, LeftMouseButtonMask));
+	EXPECT_TRUE(scene.EditorOwnsPointerForTest());
+	scene.OnAction(MakeSceneTouchMove({ 740, 480 }, 0u));
+	EXPECT_FALSE(scene.EditorOwnsPointerForTest());
+	scene.OnAction(MakeSceneTouch(TouchAction::TOUCH_DOWN, { 700, 450 }, 0, LeftMouseButtonMask));
+	scene.OnAction(MakeSceneTouchMove({ 740, 480 }, LeftMouseButtonMask));
+	scene.OnAction(MakeSceneTouch(TouchAction::TOUCH_UP, { 740, 480 }, 0, 0u));
+	EXPECT_FLOAT_EQ(editorPose.Eye.X, scene.CameraPoseForTest().Eye.X);
+	scene.CloseLoopGridEditor();
+	scene.SettleLoopGridEditorForTest();
+	EXPECT_FALSE(scene.IsLoopGridEditorOpen());
+	EXPECT_EQ(Scene::VIEW_LOOP, scene.CameraSelectDepthForTest());
+	EXPECT_FLOAT_EQ(returnPose.Eye.Z, scene.CameraPoseForTest().Eye.Z);
+	ASSERT_TRUE(scene.OpenLoopGridEditor(take, {}, secondLoop));
+	KeyAction escape;
+	escape.KeyChar = 27u;
+	escape.KeyActionType = KeyAction::KEY_UP;
+	EXPECT_TRUE(scene.OnAction(escape).IsEaten);
+	EXPECT_FALSE(scene.IsLoopGridEditorOpen());
+	scene.SettleLoopGridEditorForTest();
+	ASSERT_TRUE(scene.OpenLoopGridEditor(take, {}, secondLoop));
+	ASSERT_TRUE(take->RestoreMidiFromExport(state));
+	scene.SettleLoopGridEditorForTest();
+	EXPECT_FALSE(scene.IsLoopGridEditorOpen());
+	EXPECT_EQ(nullptr, scene.LoopGridEditorMidiLoop());
+	EXPECT_EQ(graphics::Camera::View::Front, scene.CameraViewForTest());
 }
 
 TEST(CameraView, StationInteriorObservesRevisionWhenStationShiftsIndex) {

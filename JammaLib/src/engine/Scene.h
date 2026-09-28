@@ -24,6 +24,7 @@
 #include "../graphics/GlDrawContext.h"
 #include "../graphics/Skybox.h"
 #include "../gui/GuiLabel.h"
+#include "../gui/GuiButton.h"
 #include "../gui/GuiPopup.h"
 #include "../gui/GuiFocusManager.h"
 #include "../gui/GuiNumericInput.h"
@@ -199,6 +200,18 @@ namespace engine
 			return _rigCoordinator.Accepted();
 		}
 		void ApplyDeferredHoverUpdates();
+		// UI-thread editor seam. A MIDI target is always one MidiLoop, never its take.
+		bool OpenLoopGridEditor(const std::shared_ptr<LoopTake>& take,
+			const std::shared_ptr<Loop>& audioLoop,
+			const std::shared_ptr<midi::MidiLoop>& midiLoop);
+		void CloseLoopGridEditor();
+		bool IsLoopGridEditorOpen() const noexcept;
+		bool LoopGridEditorReady() const noexcept;
+		float LoopGridEditorMorph() const noexcept { return _editorBlend; }
+		float LoopGridEditorSurroundingDim() const noexcept { return 1.0f - 0.72f * _editorBlend; }
+		std::shared_ptr<Loop> LoopGridEditorAudioLoop() const noexcept { return _editorAudioLoop.lock(); }
+		std::shared_ptr<midi::MidiLoop> LoopGridEditorMidiLoop() const noexcept { return _editorMidiLoop.lock(); }
+		std::shared_ptr<LoopTake> LoopGridEditorTake() const noexcept { return _editorTake.lock(); }
 
 		// Returns a locked station snapshot safe to use outside render/tick threads.
 		std::vector<std::shared_ptr<Station>> SnapshotStations() const;
@@ -313,6 +326,17 @@ namespace engine
 		void _OpenRemoteTempoPromptIfNeeded();
 		void _HandleRemoteTempoPromptDecision(bool accept);
 		void _CloseRemoteTempoPrompt();
+		bool _ValidateLoopGridEditorTarget() const;
+		void _TickLoopGridEditor(float deltaSeconds);
+		void _UpdateLoopGridEditorUi();
+		bool _FindLoopGridEditorCandidate(std::shared_ptr<LoopTake>& take,
+			std::shared_ptr<Loop>& audioLoop,
+			std::shared_ptr<midi::MidiLoop>& midiLoop) const;
+		std::string _LoopGridEditorUnavailableReason(const std::shared_ptr<LoopTake>& take,
+			const std::shared_ptr<Loop>& audioLoop,
+			const std::shared_ptr<midi::MidiLoop>& midiLoop) const;
+		bool _HandleLoopGridEditorButton(actions::TouchAction action);
+		void _SetLoopGridEditorFeedback(const std::string& message);
 
 
 	protected:
@@ -357,6 +381,8 @@ namespace engine
 		io::JamFile::GlobalMidiQuantState _globalMidiQuantState = io::JamFile::GlobalMidiQuantState::Mixed;
 		double _transportOffsetLoopFrac = 0.0;
 		std::unique_ptr<gui::GuiLabel> _label;
+		std::shared_ptr<gui::GuiButton> _editorButton;
+		std::shared_ptr<gui::GuiLabel> _editorFeedback;
 		std::unique_ptr<gui::SceneSelector> _selector;
 		std::shared_ptr<gui::GuiMainPanel> _mainPanel;
 		std::shared_ptr<gui::GuiHud> _hudPanel;
@@ -391,6 +417,18 @@ namespace engine
 		graphics::CtrlHandleOverlay _ctrlHandleOverlay;
 		engine::QuantiserController _quantisationInteraction;
 		graphics::Camera _camera;
+		enum class EditorState { Closed, Opening, Active, Closing };
+		EditorState _editorState = EditorState::Closed;
+		std::weak_ptr<Station> _editorStation;
+		std::weak_ptr<LoopTake> _editorTake;
+		std::weak_ptr<Loop> _editorAudioLoop;
+		std::weak_ptr<midi::MidiLoop> _editorMidiLoop;
+		graphics::Camera::EditorReturnState _editorReturnCamera{};
+		float _editorBlend = 0.0f;
+		bool _editorButtonPressed = false;
+		bool _editorButtonShowsClose = false;
+		bool _editorPointerOwned = false;
+		std::string _editorFeedbackText;
 		std::optional<Time> _lastCameraUpdateTime;
 		std::thread _jobRunner;
 		std::mutex _jobMutex;

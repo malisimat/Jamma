@@ -215,6 +215,12 @@ namespace midi
 		MidiLoopState State() const noexcept { return _state; }
 		std::size_t EventCount() const noexcept { return _eventCount; }
 		std::uint32_t LoopLengthSamps() const noexcept { return _loopLengthSamps; }
+		// UI/job readers use this completion publication instead of reading the
+		// callback-owned plain state and length during finalisation or reset.
+		std::uint32_t CompletedLengthForEditor() const noexcept
+		{
+			return _completedLengthForEditor.load(std::memory_order_acquire);
+		}
 		// Global sample that maps to loop-relative position 0.  Frozen at EndRecord.
 		// Use to convert a global sample counter into a loop-relative frac:
 		//   frac = (globalSample - AutomationGlobalSampleOrigin() - correction) % loopLen / loopLen
@@ -363,6 +369,7 @@ namespace midi
 		std::uint64_t _modelRevision;
 		std::uint32_t _modelLengthSamps;
 		MidiLoopState _state;
+		std::atomic<std::uint32_t> _completedLengthForEditor{ 0u };
 		std::bitset<TotalNoteSlots> _held;
 		std::atomic<std::shared_ptr<MidiModel>> _model;
 		MidiQuantisationSettings _quantisation;

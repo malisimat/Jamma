@@ -86,6 +86,18 @@ Scene::Scene(SceneParams params,
 	labelParams.ModelPosition = { (float)(int)params.Size.Width - 220.0f, (float)(int)params.Size.Height - 28.0f, 0.0f };
 	labelParams.Size = { 220, 24 };
 	_label = std::make_unique<GuiLabel>(labelParams);
+	{
+		auto buttonParams = GuiButtonParams::PanelButton(190u);
+		buttonParams.Text = "Edit loop (E)";
+		buttonParams.Position = { std::max(0, static_cast<int>(params.Size.Width) - 202),
+			std::max(0, static_cast<int>(params.Size.Height) - 42) };
+		_editorButton = std::make_shared<GuiButton>(buttonParams);
+		_editorButton->Init();
+		auto feedbackParams = GuiLabelParams::PanelHeader("", 330u);
+		feedbackParams.Position = { std::max(0, buttonParams.Position.X - 340), buttonParams.Position.Y + 6 };
+		_editorFeedback = std::make_shared<GuiLabel>(feedbackParams);
+		_editorFeedback->Init();
+	}
 
 	GuiMainPanelParams mainParams;
 	mainParams.PopupManager = &_popupManager;
@@ -648,6 +660,7 @@ std::optional<std::shared_ptr<Scene>> Scene::FromFile(SceneParams sceneParams,
 
 void Scene::Draw(DrawContext& ctx)
 {
+	_UpdateLoopGridEditorUi();
 	std::scoped_lock lock(_sceneMutex);
 
 	glDisable(GL_DEPTH_TEST);
@@ -695,6 +708,13 @@ void Scene::Draw(DrawContext& ctx)
 	_ctrlHandleOverlay.Draw(ctx);
 
 	_popupManager.Draw(ctx);
+	if (!_popupManager.IsOpen())
+	{
+		if (_editorFeedback)
+			_editorFeedback->Draw(ctx);
+		if (_editorButton)
+			_editorButton->Draw(ctx);
+	}
 
 	glCtx.PopMvp();
 }
@@ -747,6 +767,11 @@ void Scene::Draw3d(DrawContext& ctx,
 
 	glCtx.ClearMvp();
 	glCtx.PushMvp(_viewProj);
+	if (PASS_PICKER == pass && EditorState::Closed != _editorState)
+	{
+		glCtx.PopMvp();
+		return;
+	}
 
 	if (PASS_SCENE == pass)
 	{
@@ -781,7 +806,9 @@ void Scene::UpdateCamera()
 
 	if (_camera.IsBackgroundDragging() || _camera.IsTransitioning())
 		_camera.TickBackgroundDrag(deltaSeconds);
-	_ApplyCameraSelectDepthChange(_camera.PendingSelectDepthChange());
+	_TickLoopGridEditor(deltaSeconds);
+	if (EditorState::Closed == _editorState)
+		_ApplyCameraSelectDepthChange(_camera.PendingSelectDepthChange());
 	if (_isSceneTouching && !_camera.IsBackgroundDragging())
 		_EndBackgroundDrag();
 }
@@ -792,6 +819,8 @@ void Scene::_InitResources(ResourceLib& resourceLib, bool forceInit)
 
 	_skybox.InitResources(resourceLib, forceInit);
 	_label->InitResources(resourceLib, forceInit);
+	_editorButton->InitResources(resourceLib, forceInit);
+	_editorFeedback->InitResources(resourceLib, forceInit);
 	_selector->InitResources(resourceLib, forceInit);
 	_modeRadio->InitResources(resourceLib, forceInit);
 	_globalMidiQuantRadio->InitResources(resourceLib, forceInit);
@@ -814,6 +843,8 @@ void Scene::_ReleaseResources()
 {
 	_skybox.ReleaseResources();
 	_label->ReleaseResources();
+	_editorButton->ReleaseResources();
+	_editorFeedback->ReleaseResources();
 	_selector->ReleaseResources();
 	_modeRadio->ReleaseResources();
 	_globalMidiQuantRadio->ReleaseResources();
@@ -837,6 +868,38 @@ ActionResult Scene::OnAction(TouchAction action)
 	action.SetUserConfig(_userConfig);
 	_cursorPos = action.Position;
 	_InvalidateHover2d();
+	if (_popupManager.IsOpen())
+	{
+		_editorPointerOwned = false;
+		_editorButtonPressed = false;
+		auto popupRes = _popupManager.OnAction(action);
+		if (_remoteTempoDialogOpen && !_popupManager.IsOpen())
+			_HandleRemoteTempoPromptDecision(false);
+		if (TouchAction::TOUCH_UP == action.State)
+		{
+			_touchDownElement.reset();
+			_touchDownIsHud = false;
+		}
+		return popupRes;
+	}
+	if (_HandleLoopGridEditorButton(action))
+	{
+		ActionResult eaten;
+		eaten.IsEaten = true;
+		return eaten;
+	}
+	if (IsLoopGridEditorOpen() || EditorState::Closing == _editorState)
+	{
+		// Phase 5 receives this owned sequence. Until then, consume it so it
+		// cannot pan, select, change quantisation, or leak into another control.
+		if (TouchAction::TOUCH_DOWN == action.State && 0 == action.Index && LoopGridEditorReady())
+			_editorPointerOwned = true;
+		if (TouchAction::TOUCH_UP == action.State)
+			_editorPointerOwned = false;
+		ActionResult eaten;
+		eaten.IsEaten = true;
+		return eaten;
+	}
 	if (TouchAction::TouchState::TOUCH_DOWN == action.State)
 	{
 		// Clear the old hover now so only the capture target appears pressed.
@@ -846,21 +909,6 @@ ActionResult Scene::OnAction(TouchAction action)
 	}
 
 	std::cout << "Touch action " << action.Touch << " [State " << action.State << "] Index " << action.Index << "(Modifiers " << action.Modifiers << ")" << std::endl;
-
-	// Popups capture all pointer input while open (routing, outside-dismiss).
-	if (_popupManager.IsOpen())
-	{
-		auto popupRes = _popupManager.OnAction(action);
-		if (_remoteTempoDialogOpen && !_popupManager.IsOpen())
-			_HandleRemoteTempoPromptDecision(false);
-		if (TouchAction::TouchState::TOUCH_UP == action.State)
-		{
-			// Clear the interrupted press captured before the popup opened.
-			_touchDownElement.reset();
-			_touchDownIsHud = false;
-		}
-		return popupRes;
-	}
 
 	if ((TouchAction::TouchState::TOUCH_DOWN == action.State)
 		&& (0 == action.Index)
@@ -1047,9 +1095,19 @@ ActionResult Scene::OnAction(TouchMoveAction action)
 	action.SetUserConfig(_userConfig);
 	_cursorPos = action.Position;
 	_InvalidateHover2d();
-
 	if (_popupManager.IsOpen())
+	{
+		_editorPointerOwned = false;
 		return _popupManager.OnAction(action);
+	}
+	if (IsLoopGridEditorOpen() || EditorState::Closing == _editorState)
+	{
+		if (_editorPointerOwned && 0u == action.MouseButtonsDown)
+			_editorPointerOwned = false; // lost capture
+		ActionResult eaten;
+		eaten.IsEaten = true;
+		return eaten;
+	}
 
 	if (auto overlayRes = _quantisationInteraction.TryHandleTouchMove(action,
 		_CurrentSampleRate());
@@ -1092,6 +1150,25 @@ ActionResult Scene::OnAction(KeyAction action)
 	action.SetAudioParams(_audioEngine->GetStreamParams());
 
 	std::cout << "Key action " << action.KeyActionType << " [" << action.KeyChar << "] IsSytem:" << action.IsSystem << ", Modifiers:" << action.Modifiers << "]" << std::endl;
+	if (_popupManager.IsOpen())
+	{
+		_editorPointerOwned = false;
+		auto popupRes = _popupManager.OnAction(action);
+		if (_remoteTempoDialogOpen && !_popupManager.IsOpen())
+			_HandleRemoteTempoPromptDecision(false);
+		if (IsLoopGridEditorOpen() || EditorState::Closing == _editorState)
+			popupRes.IsEaten = true;
+		if (popupRes.IsEaten)
+			return popupRes;
+	}
+	if (IsLoopGridEditorOpen() || EditorState::Closing == _editorState)
+	{
+		if (27u == action.KeyChar && KeyAction::KEY_UP == action.KeyActionType)
+			CloseLoopGridEditor();
+		ActionResult eaten;
+		eaten.IsEaten = true;
+		return eaten;
+	}
 
 	if ((192u == action.KeyChar) || (96u == action.KeyChar))
 	{
@@ -1111,16 +1188,6 @@ ActionResult Scene::OnAction(KeyAction action)
 			if (hudResult.IsEaten)
 				return hudResult;
 		}
-	}
-
-	// 1. Open popups capture the keyboard first.
-	if (_popupManager.IsOpen())
-	{
-		auto popupRes = _popupManager.OnAction(action);
-		if (_remoteTempoDialogOpen && !_popupManager.IsOpen())
-			_HandleRemoteTempoPromptDecision(false);
-		if (popupRes.IsEaten)
-			return popupRes;
 	}
 
 	if (auto overrideRes = _inputSubsystem->HandleChannelOverrideKey(action, SnapshotStations());
@@ -1144,6 +1211,20 @@ ActionResult Scene::OnAction(KeyAction action)
 			return focusRes;
 		if (_focusManager.IsEditingText())
 			return ActionResult::NoAction();
+	}
+	if ((69u == action.KeyChar) && KeyAction::KEY_UP == action.KeyActionType
+		&& Action::MODIFIER_NONE == action.Modifiers)
+	{
+		std::shared_ptr<LoopTake> take;
+		std::shared_ptr<Loop> audioLoop;
+		std::shared_ptr<midi::MidiLoop> midiLoop;
+		if (_FindLoopGridEditorCandidate(take, audioLoop, midiLoop))
+			OpenLoopGridEditor(take, audioLoop, midiLoop);
+		else
+			_SetLoopGridEditorFeedback("Select and hover one loop to edit");
+		ActionResult eaten;
+		eaten.IsEaten = true;
+		return eaten;
 	}
 
 	if ((9u == action.KeyChar)
@@ -1816,6 +1897,8 @@ void Scene::AddChild(std::shared_ptr<base::GuiElement> child)
 
 void Scene::SetHover3d(std::vector<unsigned char> path, Action::Modifiers modifiers)
 {
+	if (EditorState::Closed != _editorState)
+		return;
 	bool isSelected = false;
 	auto tweakState = base::Tweakable::TweakState::TWEAKSTATE_NONE;
 	std::vector<unsigned char> fullElementPath;
@@ -2315,6 +2398,13 @@ bool Scene::_OnUndo(std::shared_ptr<base::ActionUndo> undo)
 
 void Scene::_InitSize()
 {
+	if (_editorButton && _editorFeedback)
+	{
+		const auto x = std::max(0, static_cast<int>(_sizeParams.Size.Width) - 202);
+		const auto y = std::max(0, static_cast<int>(_sizeParams.Size.Height) - 42);
+		_editorButton->SetPosition({ x, y });
+		_editorFeedback->SetPosition({ std::max(0, x - 340), y + 6 });
+	}
 	auto ar = _sizeParams.Size.Height > 0 ?
 		(float)_sizeParams.Size.Width / (float)_sizeParams.Size.Height :
 		1.0f;
@@ -2332,6 +2422,299 @@ void Scene::_InitSize()
 		_hudPanel->SetSize(_sizeParams.Size);
 
 	_UpdateHudStationAnchors();
+}
+
+bool Scene::IsLoopGridEditorOpen() const noexcept
+{
+	return EditorState::Opening == _editorState || EditorState::Active == _editorState;
+}
+
+bool Scene::LoopGridEditorReady() const noexcept
+{
+	return EditorState::Active == _editorState && !_camera.IsTransitioning();
+}
+
+void Scene::_SetLoopGridEditorFeedback(const std::string& message)
+{
+	if (_editorFeedback && message != _editorFeedbackText)
+	{
+		_editorFeedbackText = message;
+		_editorFeedback->SetString(message);
+	}
+}
+
+bool Scene::_FindLoopGridEditorCandidate(std::shared_ptr<LoopTake>& take,
+	std::shared_ptr<Loop>& audioLoop,
+	std::shared_ptr<midi::MidiLoop>& midiLoop) const
+{
+	const auto hovered = _hoverElement3d.lock();
+	std::scoped_lock lock(_sceneMutex);
+	unsigned int fallbackCount = 0u;
+	for (const auto& station : _stations)
+	{
+		for (const auto& candidateTake : station->GetLoopTakes())
+		{
+			if (!candidateTake || !candidateTake->IsSelected())
+				continue;
+			for (const auto& candidate : candidateTake->GetLoops())
+			{
+				if (!candidate)
+					continue;
+				if (candidate->IsSelected() && hovered
+					&& (hovered == candidate || hovered->Parent() == candidate))
+				{
+					take = candidateTake;
+					audioLoop = candidate;
+					midiLoop.reset();
+					return true;
+				}
+				if (candidate->IsSelected())
+				{
+					++fallbackCount;
+					take = candidateTake;
+					audioLoop = candidate;
+					midiLoop.reset();
+				}
+			}
+			for (const auto& candidate : candidateTake->GetMidiLoops())
+			{
+				if (!candidate)
+					continue;
+				if (hovered == candidate->Model() && candidate->Model() && candidate->Model()->IsSelected())
+				{
+					take = candidateTake;
+					audioLoop.reset();
+					midiLoop = candidate;
+					return true;
+				}
+				if (candidate->Model() && candidate->Model()->IsSelected())
+				{
+					++fallbackCount;
+					take = candidateTake;
+					audioLoop.reset();
+					midiLoop = candidate;
+				}
+			}
+		}
+	}
+	return fallbackCount == 1u;
+}
+
+std::string Scene::_LoopGridEditorUnavailableReason(const std::shared_ptr<LoopTake>& take,
+	const std::shared_ptr<Loop>& audioLoop,
+	const std::shared_ptr<midi::MidiLoop>& midiLoop) const
+{
+	if (!take || !take->IsSelected()
+		|| (static_cast<bool>(audioLoop) == static_cast<bool>(midiLoop)))
+		return "Select one loop to edit";
+	const auto state = take->TakeState();
+	if (state != LoopTake::STATE_PLAYING && state != LoopTake::STATE_INACTIVE)
+		return "Finish recording before editing";
+	if (audioLoop)
+	{
+		if (!audioLoop->IsSelected())
+			return "Select the audio loop to edit";
+		if (audioLoop->LoopLength() == 0ul)
+			return "Loop has no completed audio";
+		if (audioLoop->PlayState() == Loop::STATE_RECORDING)
+			return "Finish recording before editing";
+	}
+	else
+	{
+		if (!midiLoop->Model() || !midiLoop->Model()->IsSelected())
+			return "Select the MIDI loop to edit";
+		if (midiLoop->CompletedLengthForEditor() == 0u)
+			return "Finish recording or set a loop length to edit";
+	}
+	return {};
+}
+
+bool Scene::_ValidateLoopGridEditorTarget() const
+{
+	const auto station = _editorStation.lock();
+	const auto take = _editorTake.lock();
+	const auto audioLoop = _editorAudioLoop.lock();
+	const auto midiLoop = _editorMidiLoop.lock();
+	if (!station || !take || (static_cast<bool>(audioLoop) == static_cast<bool>(midiLoop)))
+		return false;
+	std::scoped_lock lock(_sceneMutex);
+	if (std::find(_stations.begin(), _stations.end(), station) == _stations.end())
+		return false;
+	const auto& takes = station->GetLoopTakes();
+	if (std::find(takes.begin(), takes.end(), take) == takes.end())
+		return false;
+	const auto state = take->TakeState();
+	if (state != LoopTake::STATE_PLAYING && state != LoopTake::STATE_INACTIVE)
+		return false;
+	if (audioLoop)
+	{
+		const auto& loops = take->GetLoops();
+		return audioLoop->LoopLength() > 0ul
+			&& audioLoop->PlayState() != Loop::STATE_RECORDING
+			&& std::find(loops.begin(), loops.end(), audioLoop) != loops.end();
+	}
+	const auto& loops = take->GetMidiLoops();
+	return midiLoop->CompletedLengthForEditor() > 0u
+		&& midiLoop->Model()
+		&& std::find(loops.begin(), loops.end(), midiLoop) != loops.end();
+}
+
+bool Scene::OpenLoopGridEditor(const std::shared_ptr<LoopTake>& take,
+	const std::shared_ptr<Loop>& audioLoop,
+	const std::shared_ptr<midi::MidiLoop>& midiLoop)
+{
+	if (_editorState != EditorState::Closed || !take || !take->IsSelected()
+		|| (static_cast<bool>(audioLoop) == static_cast<bool>(midiLoop)))
+		return false;
+	const auto unavailableReason = _LoopGridEditorUnavailableReason(take, audioLoop, midiLoop);
+	if (!unavailableReason.empty())
+	{
+		_SetLoopGridEditorFeedback(unavailableReason);
+		return false;
+	}
+	std::shared_ptr<Station> owningStation;
+	{
+		std::scoped_lock lock(_sceneMutex);
+		for (const auto& station : _stations)
+		{
+			const auto& takes = station->GetLoopTakes();
+			if (std::find(takes.begin(), takes.end(), take) != takes.end())
+			{
+				owningStation = station;
+				_editorStation = station;
+				break;
+			}
+		}
+	}
+	_editorTake = take;
+	_editorAudioLoop = audioLoop;
+	_editorMidiLoop = midiLoop;
+	if (!_ValidateLoopGridEditorTarget())
+	{
+		_editorStation.reset();
+		_editorTake.reset();
+		_editorAudioLoop.reset();
+		_editorMidiLoop.reset();
+		_SetLoopGridEditorFeedback("Loop must be complete and idle to edit");
+		return false;
+	}
+	_editorReturnCamera = _camera.CaptureEditorReturnState();
+	_editorBlend = 0.0f;
+	_editorPointerOwned = false;
+	_editorState = EditorState::Opening;
+	_focusManager.ClearFocus();
+	_touchDownElement.reset();
+	_touchDownIsHud = false;
+	_EndBackgroundDrag();
+	_quantisationInteraction.OnCtrlModifierChanged(false, Timer::GetTime(),
+		_InteractionContext(), [this](const std::vector<unsigned char>& path) { return _ChildFromPath(path); });
+	const auto centre = owningStation->ModelPosition() + take->ModelPosition();
+	graphics::Camera::Pose pose;
+	pose.Eye = centre + Position3d{ 45.0f, 340.0f, 80.0f };
+	pose.Forward = { -45.0f, -340.0f, -80.0f };
+	pose.Up = { 0.0f, 0.0f, -1.0f };
+	_camera.SetEditorPerspective(true);
+	_camera.SetViewTarget(graphics::Camera::View::TopDown, pose);
+	_SetLoopGridEditorFeedback(midiLoop ? "MIDI loop editor" : "Audio loop view");
+	return true;
+}
+
+void Scene::CloseLoopGridEditor()
+{
+	if (!IsLoopGridEditorOpen())
+		return;
+	_editorPointerOwned = false;
+	_editorButtonPressed = false;
+	_editorState = EditorState::Closing;
+	_camera.RestoreEditorReturnState(_editorReturnCamera);
+	_SetLoopGridEditorFeedback("");
+}
+
+void Scene::_TickLoopGridEditor(float deltaSeconds)
+{
+	if (IsLoopGridEditorOpen() && !_ValidateLoopGridEditorTarget())
+		CloseLoopGridEditor();
+	if (EditorState::Closed == _editorState)
+		return;
+	const auto step = std::max(0.0f, deltaSeconds) / 0.4f;
+	if (EditorState::Closing == _editorState)
+	{
+		_editorBlend = std::max(0.0f, _editorBlend - step);
+		if (_editorBlend == 0.0f && !_camera.IsTransitioning())
+		{
+			_camera.SetEditorPerspective(false);
+			_editorState = EditorState::Closed;
+			_editorStation.reset();
+			_editorTake.reset();
+			_editorAudioLoop.reset();
+			_editorMidiLoop.reset();
+		}
+		return;
+	}
+	_editorBlend = std::min(1.0f, _editorBlend + step);
+	if (_editorBlend == 1.0f && !_camera.IsTransitioning())
+		_editorState = EditorState::Active;
+}
+
+void Scene::_UpdateLoopGridEditorUi()
+{
+	if (!_editorButton)
+		return;
+	const auto showsClose = IsLoopGridEditorOpen();
+	if (!showsClose && EditorState::Closed == _editorState)
+	{
+		std::shared_ptr<LoopTake> take;
+		std::shared_ptr<Loop> audioLoop;
+		std::shared_ptr<midi::MidiLoop> midiLoop;
+		const auto hasCandidate = _FindLoopGridEditorCandidate(take, audioLoop, midiLoop);
+		const auto reason = hasCandidate
+			? _LoopGridEditorUnavailableReason(take, audioLoop, midiLoop)
+			: std::string("Select and hover one loop to edit");
+		_editorButton->SetEnabled(hasCandidate && reason.empty());
+		_SetLoopGridEditorFeedback(reason);
+	}
+	else
+		_editorButton->SetEnabled(true);
+	if (showsClose != _editorButtonShowsClose)
+	{
+		_editorButton->SetText(showsClose ? "Close editor (Esc)" : "Edit loop (E)");
+		_editorButtonShowsClose = showsClose;
+	}
+	_editorButton->SetVisible(_editorState != EditorState::Closing);
+}
+
+bool Scene::_HandleLoopGridEditorButton(actions::TouchAction action)
+{
+	if (!_editorButton || _editorState == EditorState::Closing || _popupManager.IsOpen())
+		return false;
+	const auto inside = _editorButton->HitTest(_editorButton->GlobalToLocal(action.Position));
+	if (TouchAction::TOUCH_DOWN == action.State && 0 == action.Index && inside)
+	{
+		_editorButtonPressed = true;
+		_editorButton->OnAction(_editorButton->GlobalToLocal(action));
+		return true;
+	}
+	if (TouchAction::TOUCH_UP == action.State && _editorButtonPressed)
+	{
+		_editorButtonPressed = false;
+		_editorButton->OnAction(_editorButton->GlobalToLocal(action));
+		if (inside)
+		{
+			if (IsLoopGridEditorOpen())
+				CloseLoopGridEditor();
+			else
+			{
+				std::shared_ptr<LoopTake> take;
+				std::shared_ptr<Loop> audioLoop;
+				std::shared_ptr<midi::MidiLoop> midiLoop;
+				if (_editorButton->IsEnabled()
+					&& _FindLoopGridEditorCandidate(take, audioLoop, midiLoop))
+					OpenLoopGridEditor(take, audioLoop, midiLoop);
+			}
+		}
+		return true;
+	}
+	return false;
 }
 
 void Scene::_UpdateHudStationAnchors()

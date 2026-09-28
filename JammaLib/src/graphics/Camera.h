@@ -5,6 +5,7 @@
 #include "../actions/TouchAction.h"
 #include "../actions/TouchMoveAction.h"
 #include <glm/glm.hpp>
+#include <array>
 #include <cstdint>
 #include <memory>
 #include <optional>
@@ -43,6 +44,19 @@ namespace graphics
 			utils::Position3d Up{ 0.0f, 1.0f, 0.0f };
 		};
 
+		// Editor entry must not replace any of the user's remembered view poses.
+		struct EditorReturnState
+		{
+			View ActiveView = View::Front;
+			Pose TargetPose{};
+			std::array<Pose, 3u> RememberedPoses{};
+			std::array<bool, 3u> HasRememberedPose{};
+			bool InteriorForcedLoopTakeDepth = false;
+			bool InteriorSelectDepthChanged = false;
+			bool InteriorRestorePending = false;
+			std::shared_ptr<const void> InteriorFocusIdentity;
+		};
+
 		enum class SelectDepthChange { None, Station, LoopTake };
 
 		Camera(CameraParams camParams);
@@ -72,6 +86,9 @@ namespace graphics
 		bool HasRememberedPose(View view) const noexcept;
 		Pose RememberedPose(View view) const noexcept;
 		void SetViewTarget(View view, Pose target) noexcept;
+		EditorReturnState CaptureEditorReturnState() const noexcept;
+		void RestoreEditorReturnState(const EditorReturnState& state) noexcept;
+		void SetEditorPerspective(bool enabled) noexcept { _editorPerspective = enabled; }
 		void RegisterStation(size_t index, std::shared_ptr<const void> identity, std::uint64_t revision);
 		void ObserveStation(size_t index, std::shared_ptr<const void> identity, std::uint64_t revision, utils::Position3d position);
 		void CompleteStationObservation(size_t stationCount, std::optional<utils::Position3d> firstStation);
@@ -160,5 +177,6 @@ namespace graphics
 		bool _interiorForcedLoopTakeDepth = false;
 		bool _interiorSelectDepthChanged = false;
 		bool _interiorRestorePending = false;
+		bool _editorPerspective = false;
 	};
 }

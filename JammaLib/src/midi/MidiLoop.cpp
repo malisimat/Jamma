@@ -176,6 +176,7 @@ MidiLoop::MidiLoop() noexcept
 
 void MidiLoop::StartRecord() noexcept
 {
+	_completedLengthForEditor.store(0u, std::memory_order_release);
 	_eventCount = 0;
 	_loopLengthSamps = 0;
 	_dropped = 0;
@@ -213,6 +214,7 @@ void MidiLoop::ReplaceRecordedEvents(const MidiEvent* events,
 	std::size_t count,
 	std::uint32_t loopLengthSamps)
 {
+	_completedLengthForEditor.store(0u, std::memory_order_release);
 	_eventCount = 0u;
 	_dropped = 0u;
 	_held.reset();
@@ -237,10 +239,12 @@ void MidiLoop::ReplaceRecordedEvents(const MidiEvent* events,
 		PublishQuantisedEvents();
 	else
 		_quantisedEvents.store(nullptr, std::memory_order_release);
+	_completedLengthForEditor.store(loopLengthSamps, std::memory_order_release);
 }
 
 void MidiLoop::FinalizeOverdubBase(std::uint32_t loopLengthSamps)
 {
+	_completedLengthForEditor.store(0u, std::memory_order_release);
 	MidiNote::SortMidiEvents(_events.data(), _eventCount);
 	_loopLengthSamps = loopLengthSamps;
 	_state = MidiLoopState::Playing;
@@ -249,10 +253,12 @@ void MidiLoop::FinalizeOverdubBase(std::uint32_t loopLengthSamps)
 
 	if (_quantisation.Enabled)
 		PublishQuantisedEvents();
+	_completedLengthForEditor.store(loopLengthSamps, std::memory_order_release);
 }
 
 void MidiLoop::EndRecord(std::uint32_t loopLengthSamps, std::uint32_t startGlobalSample)
 {
+	_completedLengthForEditor.store(0u, std::memory_order_release);
 	MidiNote::SortMidiEvents(_events.data(), _eventCount);
 
 	_loopLengthSamps = loopLengthSamps;
@@ -266,10 +272,12 @@ void MidiLoop::EndRecord(std::uint32_t loopLengthSamps, std::uint32_t startGloba
 	// first playback block can read it without further work.
 	if (_quantisation.Enabled)
 		PublishQuantisedEvents();
+	_completedLengthForEditor.store(loopLengthSamps, std::memory_order_release);
 }
 
 void MidiLoop::Reset() noexcept
 {
+	_completedLengthForEditor.store(0u, std::memory_order_release);
 	_eventCount = 0;
 	_loopLengthSamps = 0;
 	_dropped = 0;
@@ -392,6 +400,7 @@ bool MidiLoop::RestoreFromExport(const ExportState& state) noexcept
 		PublishQuantisedEvents();
 	else
 		_quantisedEvents.store(nullptr, std::memory_order_release);
+	_completedLengthForEditor.store(state.LoopLengthSamps, std::memory_order_release);
 	return true;
 }
 
