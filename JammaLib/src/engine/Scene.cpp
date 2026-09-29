@@ -2673,7 +2673,8 @@ bool Scene::_FindLoopGridEditorCandidate(std::shared_ptr<LoopTake>& take,
 			{
 				if (!candidate)
 					continue;
-				if (hovered == candidate->Model() && candidate->Model() && candidate->Model()->IsSelected())
+				if (candidate->Model() && candidate->Model()->IsSelected() && hovered
+					&& (hovered == candidate->Model() || hovered->Parent() == candidate->Model()))
 				{
 					take = candidateTake;
 					audioLoop.reset();
@@ -3302,7 +3303,16 @@ void Scene::_UpdateSelection(ActionResultType res)
 
 		hovering = _ChildFromPath(_selector->CurrentHover());
 		if (nullptr != hovering)
-			hovering->SetPicking3d(true);
+		{
+			// MIDI models are children of LoopTake, but selection state is owned by
+			// the take. At loop selection depth, mark that owner for the normal
+			// selection commit instead of marking only the non-selectable model.
+			auto selectionTarget = hovering;
+			if (_selector->CurrentSelectDepth() == base::DEPTH_LOOP)
+				if (auto take = std::dynamic_pointer_cast<LoopTake>(hovering->Parent()))
+					selectionTarget = take;
+			selectionTarget->SetPicking3d(true);
+		}
 
 		break;
 	case ACTIONRESULT_CLEARSELECT:

@@ -372,6 +372,16 @@ public:
 		OnAction(action);
 	}
 
+	void SetSelectionDepthForTest(unsigned int value)
+	{
+		_UpdateSelectDepth(value);
+	}
+
+	std::shared_ptr<base::GuiElement> CurrentHoverElementForTest()
+	{
+		return _ChildFromPath(_selector->CurrentHover());
+	}
+
 	bool IsCameraTransitioningForTest() const
 	{
 		return _camera.IsTransitioning();
@@ -2184,6 +2194,59 @@ TEST(Scene, LoopGridEditorTracksOneMidiLoopAndClosesWhenItIsReplaced) {
 	EXPECT_FALSE(scene.IsLoopGridEditorOpen());
 	EXPECT_EQ(nullptr, scene.LoopGridEditorMidiLoop());
 	EXPECT_EQ(graphics::Camera::View::Front, scene.CameraViewForTest());
+}
+
+TEST(Scene, LoopGridEditorCanSelectMidiLoopAtEverySelectionDepthAndOpenWithE) {
+	SceneParams sceneParams{ base::DrawableParams(), base::MoveableParams(),
+		base::SizeableParams({ 1400u, 900u }) };
+	TestScene scene(sceneParams, {});
+	auto station = MakeTestStation("editor-midi-selection-depth");
+	scene.AddStationForTest(station);
+	auto take = station->AddTake();
+	LoopTake::MidiExportState state;
+	state.LoopLengthSamps = 400u;
+	LoopTake::MidiStreamExport stream;
+	stream.Channel = 0u;
+	stream.Loop.LoopLengthSamps = 400u;
+	stream.Loop.EventCount = 2u;
+	stream.Loop.Events[0] = midi::MidiEvent::MakeNoteOn(20u, 0u, 60u, 100u);
+	stream.Loop.Events[1] = midi::MidiEvent::MakeNoteOff(40u, 0u, 60u);
+	state.Streams.push_back(stream);
+	ASSERT_TRUE(take->RestoreMidiFromExport(state));
+	station->CommitChanges();
+	auto model = take->GetMidiLoops().front()->Model();
+	ASSERT_NE(nullptr, model);
+
+	std::vector<unsigned char> pickPath;
+	for (const auto index : model->GlobalId())
+		pickPath.push_back(static_cast<unsigned char>(index + 1u));
+	const auto click = [&scene]() {
+		scene.OnAction(MakeSceneTouch(TouchAction::TOUCH_DOWN, { 1, 1 }, 0,
+			LeftMouseButtonMask));
+		scene.OnAction(MakeSceneTouch(TouchAction::TOUCH_UP, { 1, 1 }, 0u, 0u));
+	};
+	for (const auto depth : { Scene::VIEW_STATION, Scene::VIEW_LOOPTAKE, Scene::VIEW_LOOP })
+	{
+		take->DeSelect();
+		scene.SetSelectionDepthForTest(static_cast<unsigned int>(depth));
+		scene.SetHover3d(pickPath, base::Action::MODIFIER_NONE);
+		ASSERT_NE(nullptr, scene.CurrentHoverElementForTest()) << "selection depth=" << depth;
+		click();
+		EXPECT_TRUE(take->IsSelected()) << "selection depth=" << depth;
+		EXPECT_TRUE(model->IsSelected()) << "selection depth=" << depth;
+	}
+
+	KeyAction edit;
+	edit.KeyChar = 69u;
+	edit.KeyActionType = KeyAction::KEY_UP;
+	EXPECT_TRUE(scene.OnAction(edit).IsEaten);
+	EXPECT_EQ(take->GetMidiLoops().front(), scene.LoopGridEditorMidiLoop());
+	scene.CloseLoopGridEditor();
+	scene.SettleLoopGridEditorForTest();
+	scene.OnAction(MakeSceneTouch(TouchAction::TOUCH_DOWN, { 1290, 875 }, 0,
+		LeftMouseButtonMask));
+	scene.OnAction(MakeSceneTouch(TouchAction::TOUCH_UP, { 1290, 875 }, 0u, 0u));
+	EXPECT_EQ(take->GetMidiLoops().front(), scene.LoopGridEditorMidiLoop());
 }
 
 TEST(CameraView, StationInteriorObservesRevisionWhenStationShiftsIndex) {

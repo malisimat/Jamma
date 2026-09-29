@@ -1463,6 +1463,7 @@ void LoopTake::Record(std::vector<unsigned int> channels,
 			_midiLoops.push_back(midiLoop);
 			_midiLoopChannels.push_back(midiChan);
 			_midiLoopDevices.push_back(midiDevice);
+			midiModel->SetParent(GuiElement::shared_from_this());
 			_children.push_back(midiModel);
 		}
 	}
@@ -2054,6 +2055,7 @@ void LoopTake::Overdub(std::vector<unsigned int> channels,
 			_midiLoops.push_back(midiLoop);
 			_midiLoopChannels.push_back(midiChan);
 			_midiLoopDevices.push_back(midiDevice);
+			midiModel->SetParent(GuiElement::shared_from_this());
 			_children.push_back(midiModel);
 		}
 	}
@@ -2632,7 +2634,10 @@ bool LoopTake::RestoreMidiFromExport(const MidiExportState& state)
 		loop->SetQuantisation(ResolvedMidiQuantisation(), state.QuantisationTransportStartSamps);
 	for (const auto& loop : _midiLoops)
 		if (loop && loop->Model())
+		{
+			loop->Model()->SetParent(GuiElement::shared_from_this());
 			_children.push_back(loop->Model());
+		}
 	_PublishMidiLoopSnapshot();
 	_ArrangeChildren();
 	return true;
@@ -3484,6 +3489,7 @@ void LoopTake::_RemoveMidiModelChildren()
 		if (!midiModel)
 			continue;
 
+		midiModel->SetParent(nullptr);
 		auto child = std::find(_children.begin(), _children.end(), midiModel);
 		if (_children.end() != child)
 			_children.erase(child);
