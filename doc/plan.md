@@ -1,11 +1,11 @@
 # Mirror-ball graphics: remaining validation
 
-The feature implementation is committed on `feature/mirrorball-graphics` in `f515010`, `2019005`, `023f135`, and `78517d5`. The original implementation plan and the reviewed corrections remain in those commits. No further code change is identified by the final static review.
+The feature implementation is committed on `feature/mirrorball-graphics` in `f515010`, `2019005`, `023f135`, `78517d5`, and `17a8d96`. The original implementation plan and reviewed corrections remain in those commits. No further code change is identified by the final static review.
 
 ## Live appearance and shader loading
 
 1. Launch the newly built Debug x64 `Jamma.exe` from this worktree in an interactive desktop session. Check shader compile and link diagnostics during startup. The C++ build copies GLSL files but does not compile them, and no standalone GLSL validator was installed in the review environment.
-2. Rotate the camera around MIDI notes, selection discs, a waveform, and a station. Confirm the supplied BMP probe is visible on waveform top and bottom faces, the neutral station caps and bevels have smooth highlights, and the level cylinder and coloured state rings retain their original cues. Check short MIDI notes and full-circle disc seams.
+2. Rotate the camera around MIDI notes, selection discs, a waveform, and a station. Confirm the supplied BMP probe is visible on waveform top and bottom faces, the neutral station caps and bevels have smooth highlights, and the dark jagged ring surrounding the green state shape now shares that shading. Confirm the green surface and level cylinder retain their original cues. Check short MIDI notes and full-circle disc seams.
 3. Check scene, picker, and highlight passes, and recording, muted, and hover states. Pay particular attention to waveforms at zero or near-zero visual height, where the corrected probe basis should remain stable.
 
 ## Audio and render load
