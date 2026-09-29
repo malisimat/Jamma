@@ -11,6 +11,7 @@ uniform float Highlight;
 uniform float StationHover;
 uniform vec3 StationStateColor;
 uniform float RingScale;
+uniform float SceneDim;
 
 void main()
 {
@@ -32,11 +33,11 @@ void main()
         colour += vec3(0.70) * specular * 0.50;
         colour += vec3(0.20) * outerHighlight * 0.18;
         colour += vec3(0.10, 0.16, 0.20) * clamp(Highlight, 0.0, 1.0);
-        ColorOUT = vec4(colour, 1.0);
+        ColorOUT = vec4(colour * SceneDim, 1.0);
         return;
     }
 
     vec3 charcoal = vec3(0.10, 0.12, 0.14) * (0.58 + 0.40 * diffuse);
     charcoal += vec3(0.08, 0.11, 0.14) * min(0.08, 0.08 * max(Highlight, StationHover));
-    ColorOUT = vec4(charcoal, 1.0);
+    ColorOUT = vec4(charcoal * SceneDim, 1.0);
 }

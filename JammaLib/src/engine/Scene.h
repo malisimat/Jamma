@@ -3,6 +3,7 @@
 // Job/UI orchestrator: presents and forwards subsystem values without taking over
 // audio-callback application, remote timing authority, or per-entity loop state.
 #include <atomic>
+#include <array>
 #include <memory>
 #include <algorithm>
 #include <chrono>
@@ -383,6 +384,8 @@ namespace engine
 		std::unique_ptr<gui::GuiLabel> _label;
 		std::shared_ptr<gui::GuiButton> _editorButton;
 		std::shared_ptr<gui::GuiLabel> _editorFeedback;
+		std::array<std::shared_ptr<gui::GuiLabel>, 5> _editorTimeTicks;
+		std::array<std::shared_ptr<gui::GuiLabel>, 11> _editorPitchTicks;
 		std::unique_ptr<gui::SceneSelector> _selector;
 		std::shared_ptr<gui::GuiMainPanel> _mainPanel;
 		std::shared_ptr<gui::GuiHud> _hudPanel;

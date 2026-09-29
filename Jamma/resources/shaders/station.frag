@@ -10,6 +10,7 @@ out vec4 ColorOUT;
 uniform float Highlight;
 uniform float StationHover;
 uniform vec3 StationStateColor;
+uniform float SceneDim;
 
 // uv.x = radial fraction on top/bevel, vertical fraction on side (0=bottom,1=top)
 // uv.y = part kind:  0=deck-top, 1=bevel, 2=side
@@ -52,5 +53,5 @@ void main()
 	float hi = clamp(Highlight, 0.0, 1.0);
 	base = mix(base, base + vec3(0.18, 0.28, 0.38), hi);
 
-	ColorOUT = vec4(base, 1.0);
+	ColorOUT = vec4(base * SceneDim, 1.0);
 }

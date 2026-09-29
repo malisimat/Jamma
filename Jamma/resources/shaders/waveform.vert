@@ -6,6 +6,8 @@ layout(location = 2) in vec3 NormalIN;
 
 out vec2 UV;
 out float diff;
+out float EditorU;
+out float EditorMorphV;
 
 uniform mat4 MVP;
 uniform sampler1D WaveformSampler;
@@ -15,6 +17,7 @@ uniform float WaveformMinHeight;
 uniform float WaveformColorMultiplier;
 uniform float WaveformUnitMeshRadius;
 uniform float WaveformColorScale;
+uniform float EditorMorph;
 
 void main()
 {
@@ -33,7 +36,16 @@ void main()
     float radiusScale = WaveformRadius / safeUnitRadius; 
     vec2 scaledXZ = PositionIN.xz * radiusScale;
 
-    gl_Position = MVP * vec4(scaledXZ.x, y, scaledXZ.y, 1.0);
+    // The two UV seam vertices share the ring position but end at opposite
+    // grid edges. No vertex buffer changes during the transition.
+    float gridZ = clamp(y / max(WaveformHeightScale, 0.0001), -1.0, 1.0)
+        * WaveformRadius * 0.78;
+    float gridY = 3.0 + (length(scaledXZ) - WaveformRadius) * 0.55;
+    vec3 gridPosition = vec3((u - 0.5) * WaveformRadius * 2.0, gridY, gridZ);
+    gl_Position = MVP * vec4(mix(vec3(scaledXZ.x, y, scaledXZ.y),
+        gridPosition, EditorMorph), 1.0);
+    EditorU = u;
+    EditorMorphV = EditorMorph;
     float colorV = clamp(0.5 - (y * colorScale * WaveformColorMultiplier), 0.0, 1.0);
     UV = vec2(u, colorV);
 

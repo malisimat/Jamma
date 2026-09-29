@@ -11,6 +11,7 @@
 #include "../utils/PathUtils.h"
 #include "../utils/MathUtils.h"
 #include "../midi/MidiTimestampMapper.h"
+#include "../graphics/LoopGridProjection.h"
 #include "../io/IoSessionExporter.h"
 #include "../vst/Vst3Plugin.h"
 
@@ -97,6 +98,16 @@ Scene::Scene(SceneParams params,
 		feedbackParams.Position = { std::max(0, buttonParams.Position.X - 340), buttonParams.Position.Y + 6 };
 		_editorFeedback = std::make_shared<GuiLabel>(feedbackParams);
 		_editorFeedback->Init();
+		for (auto& tick : _editorTimeTicks)
+		{
+			tick = std::make_shared<GuiLabel>(GuiLabelParams::PanelHeader("", 56u));
+			tick->Init();
+		}
+		for (auto& tick : _editorPitchTicks)
+		{
+			tick = std::make_shared<GuiLabel>(GuiLabelParams::PanelHeader("", 56u));
+			tick->Init();
+		}
 	}
 
 	GuiMainPanelParams mainParams;
@@ -714,6 +725,12 @@ void Scene::Draw(DrawContext& ctx)
 			_editorFeedback->Draw(ctx);
 		if (_editorButton)
 			_editorButton->Draw(ctx);
+		if (IsLoopGridEditorOpen() && _editorBlend > 0.72f)
+		{
+			for (auto& tick : _editorTimeTicks) if (tick) tick->Draw(ctx);
+			if (!_editorMidiLoop.expired())
+				for (auto& tick : _editorPitchTicks) if (tick) tick->Draw(ctx);
+		}
 	}
 
 	glCtx.PopMvp();
@@ -780,8 +797,37 @@ void Scene::Draw3d(DrawContext& ctx,
 		_quantisationInteraction.Tick(now);
 	}
 
+	glCtx.SetUniform("SceneDim", LoopGridEditorSurroundingDim());
+	glCtx.SetUniform("EditorMorph", 0.0f);
+	glCtx.SetUniform("EditorTime", _skyboxStarted
+		? static_cast<float>(Timer::GetElapsedSeconds(_skyboxStartTime, Timer::GetTime())) : 0.0f);
+	if (auto audioLoop = _editorAudioLoop.lock())
+		if (auto model = audioLoop->Model())
+		{
+			model->SetEditorMorph(_editorBlend);
+			model->SetEditorActive(true);
+		}
+	if (auto midiLoop = _editorMidiLoop.lock())
+	{
+		if (auto model = midiLoop->Model())
+		{
+			model->SetEditorMorph(_editorBlend);
+			model->SetEditorActive(true);
+			if (const auto take = _editorTake.lock())
+			{
+				const auto length = midiLoop->CompletedLengthForEditor();
+				model->SetEditorPlayFrac(length == 0u ? 0.0f
+					: static_cast<float>(take->MidiPlayIndex() % length) / static_cast<float>(length));
+				model->UpdateEditorGrid(length, take->ResolvedMidiQuantisation(),
+					take->MidiQuantisationTransportStartSamps());
+			}
+		}
+	}
 	for (auto& station : _stations)
+	{
 		station->Draw3d(ctx, 1, pass);
+	}
+	glCtx.SetUniform("SceneDim", 1.0f);
 
 	glCtx.PopMvp();
 }
@@ -821,6 +867,8 @@ void Scene::_InitResources(ResourceLib& resourceLib, bool forceInit)
 	_label->InitResources(resourceLib, forceInit);
 	_editorButton->InitResources(resourceLib, forceInit);
 	_editorFeedback->InitResources(resourceLib, forceInit);
+	for (auto& tick : _editorTimeTicks) tick->InitResources(resourceLib, forceInit);
+	for (auto& tick : _editorPitchTicks) tick->InitResources(resourceLib, forceInit);
 	_selector->InitResources(resourceLib, forceInit);
 	_modeRadio->InitResources(resourceLib, forceInit);
 	_globalMidiQuantRadio->InitResources(resourceLib, forceInit);
@@ -845,6 +893,8 @@ void Scene::_ReleaseResources()
 	_label->ReleaseResources();
 	_editorButton->ReleaseResources();
 	_editorFeedback->ReleaseResources();
+	for (auto& tick : _editorTimeTicks) tick->ReleaseResources();
+	for (auto& tick : _editorPitchTicks) tick->ReleaseResources();
 	_selector->ReleaseResources();
 	_modeRadio->ReleaseResources();
 	_globalMidiQuantRadio->ReleaseResources();
@@ -2642,6 +2692,19 @@ void Scene::_TickLoopGridEditor(float deltaSeconds)
 		_editorBlend = std::max(0.0f, _editorBlend - step);
 		if (_editorBlend == 0.0f && !_camera.IsTransitioning())
 		{
+			if (auto loop = _editorAudioLoop.lock())
+				if (auto model = loop->Model())
+				{
+					model->SetEditorMorph(0.0f);
+					model->SetEditorActive(false);
+				}
+			if (auto loop = _editorMidiLoop.lock())
+				if (auto model = loop->Model())
+				{
+					model->SetEditorMorph(0.0f);
+					model->SetEditorActive(false);
+					model->SetEditorHover(-1.0f, -1);
+				}
 			_camera.SetEditorPerspective(false);
 			_editorState = EditorState::Closed;
 			_editorStation.reset();
@@ -2660,6 +2723,71 @@ void Scene::_UpdateLoopGridEditorUi()
 {
 	if (!_editorButton)
 		return;
+	if (IsLoopGridEditorOpen())
+	{
+		const auto width = static_cast<int>(_sizeParams.Size.Width);
+		const auto height = static_cast<int>(_sizeParams.Size.Height);
+		if (auto station = _editorStation.lock())
+			if (auto take = _editorTake.lock())
+			{
+				auto modelMatrix = glm::translate(glm::mat4(1.0f), glm::vec3(
+					station->ModelPosition().X, station->ModelPosition().Y, station->ModelPosition().Z));
+				modelMatrix = glm::scale(modelMatrix, glm::vec3(station->ModelScale()));
+				modelMatrix = glm::translate(modelMatrix, glm::vec3(
+					take->ModelPosition().X, take->ModelPosition().Y, take->ModelPosition().Z));
+				modelMatrix = glm::scale(modelMatrix, glm::vec3(take->ModelScale()));
+				float radius = 100.0f;
+				std::shared_ptr<graphics::MidiModel> midiModel;
+				if (auto midiLoop = _editorMidiLoop.lock())
+				{
+					const auto length = midiLoop->CompletedLengthForEditor();
+					if (length > 0u)
+						radius = static_cast<float>(std::clamp(
+							70.0 * std::log(static_cast<double>(length)) - 600.0, 50.0, 400.0));
+					midiModel = midiLoop->Model();
+					if (midiModel)
+					{
+						const auto p = midiModel->ModelPosition();
+						modelMatrix = glm::translate(modelMatrix, glm::vec3(p.X, p.Y, p.Z));
+						modelMatrix = glm::scale(modelMatrix, glm::vec3(midiModel->ModelScale()));
+					}
+				}
+				else if (auto audioLoop = _editorAudioLoop.lock())
+				{
+					radius = static_cast<float>(Loop::CalcDrawRadius(audioLoop->LoopLength()));
+					const auto p = audioLoop->ModelPosition();
+					modelMatrix = glm::translate(modelMatrix, glm::vec3(p.X, p.Y, p.Z));
+					modelMatrix = glm::scale(modelMatrix, glm::vec3(audioLoop->ModelScale()));
+				}
+				static constexpr const char* timeNames[] = { "0", "1/4", "1/2", "3/4", "END" };
+				for (std::size_t i = 0u; i < _editorTimeTicks.size(); ++i)
+				{
+					const auto u = static_cast<float>(i) / 4.0f;
+					const auto point = graphics::LoopGridProjection::Project(_viewProj, modelMatrix,
+						{ (u - 0.5f) * radius * 2.0f, 0.0f, radius * 0.88f }, width, height);
+					_editorTimeTicks[i]->SetString(point ? timeNames[i] : "");
+					if (point)
+						_editorTimeTicks[i]->SetPosition({ point->X - 14, point->Y - 24 });
+				}
+				for (auto& tick : _editorPitchTicks) tick->SetString("");
+				if (midiModel)
+				{
+					const auto bottom = midiModel->EditorBottomPitch();
+					const auto rows = midiModel->EditorVisibleRows();
+					for (std::size_t octave = 0u; octave < _editorPitchTicks.size(); ++octave)
+					{
+						const auto pitch = static_cast<int>(octave * 12u);
+						if (pitch < bottom || pitch > bottom + rows) continue;
+						const auto v = static_cast<float>(pitch - bottom) / rows;
+						const auto point = graphics::LoopGridProjection::Project(_viewProj, modelMatrix,
+							{ -radius * 1.12f, 0.0f, (v * 2.0f - 1.0f) * radius * 0.78f }, width, height);
+						if (!point) continue;
+						_editorPitchTicks[octave]->SetString("C" + std::to_string(static_cast<int>(octave) - 1));
+						_editorPitchTicks[octave]->SetPosition({ point->X - 12, point->Y - 10 });
+					}
+				}
+			}
+	}
 	const auto showsClose = IsLoopGridEditorOpen();
 	if (!showsClose && EditorState::Closed == _editorState)
 	{

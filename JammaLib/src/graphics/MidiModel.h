@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <atomic>
 #include <cstdint>
 #include <memory>
@@ -8,6 +9,8 @@
 
 #include "../gui/GuiModel.h"
 #include "../midi/MidiNote.h"
+#include "../midi/LoopGridGeometry.h"
+#include "../midi/MidiQuantisation.h"
 
 namespace midi
 {
@@ -58,12 +61,24 @@ namespace graphics
 
 		double LoopIndexFrac() const noexcept { return _loopIndexFrac; }
 		void SetLoopIndexFrac(double frac) noexcept;
+		void SetEditorMorph(float morph) noexcept { _editorMorph = std::clamp(morph, 0.0f, 1.0f); }
+		void SetEditorActive(bool active) noexcept { _editorActive = active; }
+		void SetEditorPlayFrac(float frac) noexcept { _editorPlayFrac = frac; }
+		void SetEditorPitchRange(int bottomPitch, int visibleRows) noexcept;
+		int EditorBottomPitch() const noexcept { return _editorBottomPitch; }
+		int EditorVisibleRows() const noexcept { return _editorVisibleRows; }
+		bool EditorGridResolved() const noexcept { return _editorGridResolved; }
+		void SetEditorHover(float u, int pitch) noexcept;
+		void UpdateEditorGrid(std::uint32_t loopLength,
+			const midi::MidiQuantisationSettings& settings, std::uint64_t transportStart);
 		unsigned int NoteInstanceCount() const noexcept { return _backNoteInstanceCount; }
 		unsigned int TotalInstanceCount() const noexcept { return _backInstanceCount; }
 		void UpdateModel(const std::vector<midi::MidiNote>& spans, std::uint32_t loopLengthSamps);
 		void QueueModelUpdate(const std::vector<midi::MidiNote>& spans, std::uint32_t loopLengthSamps);
 		static std::vector<float> BuildBaseVerts(unsigned int segments);
 		static std::vector<float> BuildBaseUvs(unsigned int segments);
+		static std::vector<float> BuildEditorGridVertices(const midi::LoopGridGeometry* grid,
+			std::uint32_t loopLength, int bottomPitch, int visibleRows);
 
 		// Back-pointer to the owning loop so the renderer can read automation lanes.
 		// The loop owns this model (shared_ptr), so the raw pointer outlives the model.
@@ -76,7 +91,7 @@ namespace graphics
 
 	private:
 		friend class MidiModelParams;
-		static constexpr unsigned int BaseArcSegments = 16u;
+		static constexpr unsigned int BaseArcSegments = 32u;
 		static constexpr unsigned int TimePitchAttribute = 3u;
 		static constexpr unsigned int ShapeAttribute = 4u;
 		// Automation curtain tessellation around the loop circumference. Higher counts
@@ -97,10 +112,29 @@ namespace graphics
 		void _InitAutomationGl(resources::ResourceLib& resourceLib);
 		void _ReleaseAutomationGl();
 		void _DrawAutomation(GlDrawContext& glCtx);
+		void _DrawEditorGrid(GlDrawContext& glCtx);
 
 	private:
 		MidiModelParams _midiParams;
 		double _loopIndexFrac;
+		float _editorMorph = 0.0f;
+		bool _editorActive = false;
+		float _editorPlayFrac = 0.0f;
+		int _editorBottomPitch = 48;
+		int _editorVisibleRows = 24;
+		float _editorHoverU = -1.0f;
+		int _editorHoverPitch = -1;
+		std::vector<float> _editorGridVertices;
+		midi::MidiQuantisationSettings _editorGridSettings;
+		std::uint64_t _editorGridTransportStart = 0u;
+		std::uint32_t _editorGridLength = 0u;
+		bool _editorGridSignatureValid = false;
+		bool _editorGridResolved = false;
+		bool _editorGridDirty = true;
+		std::weak_ptr<resources::ShaderResource> _editorGridShader;
+		unsigned int _editorGridVao = 0u;
+		unsigned int _editorGridVbo = 0u;
+		unsigned int _editorGridVertexCount = 0u;
 		unsigned int _backNoteInstanceCount;
 		std::atomic<std::shared_ptr<ModelInstanceData>> _pendingModelUpdate;
 

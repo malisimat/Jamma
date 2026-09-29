@@ -9,6 +9,7 @@
 #include "GlDrawContext.h"
 #include "GlDeleteQueue.h"
 #include "../midi/MidiLoop.h"
+#include "../midi/LoopGridGeometry.h"
 #include "../midi/MidiRouter.h"
 #include "../resources/ResourceLib.h"
 #include "../resources/ShaderResource.h"
@@ -122,8 +123,19 @@ void MidiModel::Draw3d(DrawContext& ctx, unsigned int numInstances, base::DrawPa
 
 	auto& glCtx = dynamic_cast<GlDrawContext&>(ctx);
 	glCtx.PushMvp(glm::rotate(glm::mat4(1.0),
-		(float)(constants::TWOPI * _loopIndexFrac),
+		(float)(constants::TWOPI * _loopIndexFrac) * (1.0f - _editorMorph),
 		glm::vec3(0.0f, 1.0f, 0.0f)));
+	glCtx.SetUniform("EditorMorph", _editorMorph);
+	glCtx.SetUniform("EditorActive", _editorActive ? 1.0f : 0.0f);
+	glCtx.SetUniform("EditorPlayFrac", _editorPlayFrac);
+	glCtx.SetUniform("EditorBottomPitch", _editorBottomPitch);
+	glCtx.SetUniform("EditorVisibleRows", _editorVisibleRows);
+	glCtx.SetUniform("EditorHoverU", _editorHoverU);
+	glCtx.SetUniform("EditorHoverPitch", _editorHoverPitch);
+	const auto editorLength = _displayLengthSamps.load(std::memory_order_relaxed);
+	const auto editorRadius = editorLength == 0u ? 50.0f : static_cast<float>(std::clamp(
+		70.0 * std::log(static_cast<double>(editorLength)) - 600.0, 50.0, 400.0));
+	glCtx.SetUniform("EditorGridRadius", editorRadius);
 
 	switch (pass)
 	{
@@ -161,6 +173,7 @@ void MidiModel::Draw3d(DrawContext& ctx, unsigned int numInstances, base::DrawPa
 		glCtx.SetUniform("RenderMode", 4);
 		GuiModel::Draw3d(glCtx, numInstances, pass);
 
+		_DrawEditorGrid(glCtx);
 		_DrawAutomation(glCtx);
 
 		glDepthMask(prevDepthMask);
@@ -175,6 +188,66 @@ void MidiModel::Draw3d(DrawContext& ctx, unsigned int numInstances, base::DrawPa
 void MidiModel::SetLoopIndexFrac(double frac) noexcept
 {
 	_loopIndexFrac = frac;
+}
+
+void MidiModel::SetEditorPitchRange(int bottomPitch, int visibleRows) noexcept
+{
+	const auto rows = std::clamp(visibleRows, 1, 128);
+	const auto bottom = std::clamp(bottomPitch, 0, 128 - rows);
+	if (rows != _editorVisibleRows || bottom != _editorBottomPitch)
+	{
+		_editorVisibleRows = rows;
+		_editorBottomPitch = bottom;
+		_editorGridSignatureValid = false;
+	}
+}
+
+void MidiModel::SetEditorHover(float u, int pitch) noexcept
+{
+	_editorHoverU = u >= 0.0f && u < 1.0f ? u : -1.0f;
+	_editorHoverPitch = pitch >= 0 && pitch < 128 ? pitch : -1;
+}
+
+void MidiModel::UpdateEditorGrid(std::uint32_t loopLength,
+	const midi::MidiQuantisationSettings& settings, std::uint64_t transportStart)
+{
+	if (_editorGridSignatureValid && _editorGridLength == loopLength
+		&& _editorGridSettings == settings && _editorGridTransportStart == transportStart)
+		return;
+	_editorGridSignatureValid = true;
+	_editorGridLength = loopLength;
+	_editorGridSettings = settings;
+	_editorGridTransportStart = transportStart;
+	const auto grid = midi::LoopGridGeometry::Resolve(loopLength, settings, transportStart);
+	_editorGridResolved = grid.has_value();
+	_editorGridVertices = BuildEditorGridVertices(grid ? &*grid : nullptr,
+		loopLength, _editorBottomPitch, _editorVisibleRows);
+	_editorGridDirty = true;
+}
+
+std::vector<float> MidiModel::BuildEditorGridVertices(const midi::LoopGridGeometry* grid,
+	std::uint32_t loopLength, int bottomPitch, int visibleRows)
+{
+	std::vector<float> vertices;
+	if (visibleRows <= 0 || visibleRows > 128 || bottomPitch < 0 || bottomPitch + visibleRows > 128)
+		return vertices;
+	if (grid && loopLength > 0u)
+	{
+		vertices.reserve((grid->Boundaries.size() + static_cast<std::size_t>(visibleRows) + 1u) * 6u);
+		for (std::size_t i = 0u; i < grid->Boundaries.size(); ++i)
+		{
+			const auto u = static_cast<float>(midi::LoopGridGeometry::SampleU(grid->Boundaries[i], loopLength));
+			const auto weight = i % 4u == 0u || i + 1u == grid->Boundaries.size() ? 1.0f : 0.45f;
+			vertices.insert(vertices.end(), { u, 0.0f, weight, u, 1.0f, weight });
+		}
+	}
+	for (int row = 0; row <= visibleRows; ++row)
+	{
+		const auto v = static_cast<float>(row) / static_cast<float>(visibleRows);
+		const auto weight = (bottomPitch + row) % 12 == 0 ? 1.0f : 0.35f;
+		vertices.insert(vertices.end(), { 0.0f, v, weight, 1.0f, v, weight });
+	}
+	return vertices;
 }
 
 void MidiModel::UpdateModel(const std::vector<midi::MidiNote>& spans, std::uint32_t loopLengthSamps)
@@ -249,7 +322,9 @@ std::shared_ptr<MidiModel::ModelInstanceData> MidiModel::BuildInstanceData(const
 		shapeData.push_back(baseRadius);
 		shapeData.push_back(radialThickness);
 		shapeData.push_back(noteHeight);
-		shapeData.push_back(0.0f);
+		// Negative tag retains exact ring geometry while carrying the unscaled
+		// pitch needed to place every row on the unwrapped grid.
+		shapeData.push_back(-static_cast<float>(span.Note) - 1.0f);
 		++noteCount;
 	}
 
@@ -279,14 +354,88 @@ std::weak_ptr<resources::ShaderResource> MidiModel::GetShader()
 
 void MidiModel::_InitResources(resources::ResourceLib& resourceLib, bool forceInit)
 {
+	if (!HasCurrentGlContext())
+		return;
 	GuiModel::_InitResources(resourceLib, forceInit);
+	if (auto resOpt = resourceLib.GetResource("midi_grid"); resOpt.has_value())
+	{
+		if (auto res = resOpt.value().lock(); res && resources::SHADER == res->GetType())
+			_editorGridShader = std::dynamic_pointer_cast<resources::ShaderResource>(res);
+	}
+	if (_editorGridVao == 0u)
+		glGenVertexArrays(1, &_editorGridVao);
+	if (_editorGridVbo == 0u)
+		glGenBuffers(1, &_editorGridVbo);
+	glBindVertexArray(_editorGridVao);
+	glBindBuffer(GL_ARRAY_BUFFER, _editorGridVbo);
+	glEnableVertexAttribArray(0);
+	glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 0, 0);
+	glBindVertexArray(0);
+	glBindBuffer(GL_ARRAY_BUFFER, 0);
+	_editorGridDirty = true;
 	_InitAutomationGl(resourceLib);
 }
 
 void MidiModel::_ReleaseResources()
 {
 	GuiModel::_ReleaseResources();
+	if (_editorGridVbo != 0u)
+	{
+		graphics::GlDeleteQueue::DeleteBuffers(1, &_editorGridVbo);
+		_editorGridVbo = 0u;
+	}
+	if (_editorGridVao != 0u)
+	{
+		graphics::GlDeleteQueue::DeleteVertexArrays(1, &_editorGridVao);
+		_editorGridVao = 0u;
+	}
+	_editorGridVertexCount = 0u;
+	_editorGridDirty = true;
 	_ReleaseAutomationGl();
+}
+
+void MidiModel::_DrawEditorGrid(GlDrawContext& glCtx)
+{
+	if (_editorMorph <= 0.0f || _editorGridVao == 0u || _editorGridVbo == 0u)
+		return;
+	const auto shader = _editorGridShader.lock();
+	if (!shader)
+		return;
+	if (_editorGridDirty)
+	{
+		glBindBuffer(GL_ARRAY_BUFFER, _editorGridVbo);
+		glBufferData(GL_ARRAY_BUFFER, _editorGridVertices.size() * sizeof(float),
+			_editorGridVertices.data(), GL_DYNAMIC_DRAW);
+		glBindBuffer(GL_ARRAY_BUFFER, 0);
+		_editorGridVertexCount = static_cast<unsigned int>(_editorGridVertices.size() / 3u);
+		_editorGridDirty = false;
+	}
+	if (_editorGridVertexCount == 0u)
+		return;
+	const auto pos = ModelPosition();
+	const auto scale = ModelScale();
+	glCtx.PushMvp(glm::translate(glm::mat4(1.0), glm::vec3(pos.X, pos.Y, pos.Z)));
+	glCtx.PushMvp(glm::scale(glm::mat4(1.0), glm::vec3(scale, scale, scale)));
+	glUseProgram(shader->GetId());
+	shader->SetUniforms(glCtx);
+	GLboolean wasBlend = glIsEnabled(GL_BLEND);
+	GLint oldSrcRgb = GL_ONE, oldDstRgb = GL_ZERO;
+	GLint oldSrcAlpha = GL_ONE, oldDstAlpha = GL_ZERO;
+	glGetIntegerv(GL_BLEND_SRC_RGB, &oldSrcRgb);
+	glGetIntegerv(GL_BLEND_DST_RGB, &oldDstRgb);
+	glGetIntegerv(GL_BLEND_SRC_ALPHA, &oldSrcAlpha);
+	glGetIntegerv(GL_BLEND_DST_ALPHA, &oldDstAlpha);
+	glEnable(GL_BLEND);
+	glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+	glBindVertexArray(_editorGridVao);
+	glDrawArrays(GL_LINES, 0, _editorGridVertexCount);
+	glBindVertexArray(0);
+	glBlendFuncSeparate(oldSrcRgb, oldDstRgb, oldSrcAlpha, oldDstAlpha);
+	if (!wasBlend)
+		glDisable(GL_BLEND);
+	glUseProgram(0);
+	glCtx.PopMvp();
+	glCtx.PopMvp();
 }
 
 void MidiModel::_InitAutomationGl(resources::ResourceLib& resourceLib)

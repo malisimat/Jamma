@@ -8,6 +8,7 @@ out vec4 ColorOUT;
 uniform sampler2D TextureSampler;
 uniform int LoopState;
 uniform float LoopHover;
+uniform float SceneDim;
 
 void main()
 {
@@ -25,4 +26,5 @@ void main()
 		muteFade * muteColor +
 		max(1.0 - (muteFade + recFade), 0.0) * shadedColor +
 		LoopHover * vec4(0.5, 0.6, 0.4, 1.0);
+	ColorOUT.rgb *= SceneDim;
 }
