@@ -98,6 +98,11 @@ Scene::Scene(SceneParams params,
 		feedbackParams.Position = { std::max(0, buttonParams.Position.X - 340), buttonParams.Position.Y + 6 };
 		_editorFeedback = std::make_shared<GuiLabel>(feedbackParams);
 		_editorFeedback->Init();
+		auto modeParams = GuiLabelParams::PanelHeader("", 260u);
+		modeParams.Position = { std::max(0, buttonParams.Position.X - 340),
+			buttonParams.Position.Y - 20 };
+		_editorModeLabel = std::make_shared<GuiLabel>(modeParams);
+		_editorModeLabel->Init();
 		for (auto& tick : _editorTimeTicks)
 		{
 			tick = std::make_shared<GuiLabel>(GuiLabelParams::PanelHeader("", 56u));
@@ -723,6 +728,8 @@ void Scene::Draw(DrawContext& ctx)
 	{
 		if (_editorFeedback)
 			_editorFeedback->Draw(ctx);
+		if (_editorModeLabel && IsLoopGridEditorOpen())
+			_editorModeLabel->Draw(ctx);
 		if (_editorButton)
 			_editorButton->Draw(ctx);
 		if (IsLoopGridEditorOpen() && _editorBlend > 0.72f)
@@ -818,8 +825,11 @@ void Scene::Draw3d(DrawContext& ctx,
 				const auto length = midiLoop->CompletedLengthForEditor();
 				model->SetEditorPlayFrac(length == 0u ? 0.0f
 					: static_cast<float>(take->MidiPlayIndex() % length) / static_cast<float>(length));
-				model->UpdateEditorGrid(length, take->ResolvedMidiQuantisation(),
-					take->MidiQuantisationTransportStartSamps());
+				midi::MidiLoop::EditState published;
+				if (midiLoop->SnapshotForEdit(published))
+					model->UpdateEditorGrid(published.LoopLengthSamps,
+						published.Quantisation,
+						published.QuantisationTransportStartSamps);
 			}
 		}
 	}
@@ -867,6 +877,7 @@ void Scene::_InitResources(ResourceLib& resourceLib, bool forceInit)
 	_label->InitResources(resourceLib, forceInit);
 	_editorButton->InitResources(resourceLib, forceInit);
 	_editorFeedback->InitResources(resourceLib, forceInit);
+	_editorModeLabel->InitResources(resourceLib, forceInit);
 	for (auto& tick : _editorTimeTicks) tick->InitResources(resourceLib, forceInit);
 	for (auto& tick : _editorPitchTicks) tick->InitResources(resourceLib, forceInit);
 	_selector->InitResources(resourceLib, forceInit);
@@ -893,6 +904,7 @@ void Scene::_ReleaseResources()
 	_label->ReleaseResources();
 	_editorButton->ReleaseResources();
 	_editorFeedback->ReleaseResources();
+	_editorModeLabel->ReleaseResources();
 	for (auto& tick : _editorTimeTicks) tick->ReleaseResources();
 	for (auto& tick : _editorPitchTicks) tick->ReleaseResources();
 	_selector->ReleaseResources();
@@ -920,7 +932,7 @@ ActionResult Scene::OnAction(TouchAction action)
 	_InvalidateHover2d();
 	if (_popupManager.IsOpen())
 	{
-		_editorPointerOwned = false;
+		_CancelLoopGridEditorGesture();
 		_editorButtonPressed = false;
 		auto popupRes = _popupManager.OnAction(action);
 		if (_remoteTempoDialogOpen && !_popupManager.IsOpen())
@@ -940,12 +952,105 @@ ActionResult Scene::OnAction(TouchAction action)
 	}
 	if (IsLoopGridEditorOpen() || EditorState::Closing == _editorState)
 	{
-		// Phase 5 receives this owned sequence. Until then, consume it so it
-		// cannot pan, select, change quantisation, or leak into another control.
-		if (TouchAction::TOUCH_DOWN == action.State && 0 == action.Index && LoopGridEditorReady())
-			_editorPointerOwned = true;
-		if (TouchAction::TOUCH_UP == action.State)
-			_editorPointerOwned = false;
+		_CheckLoopGridEditorGesture();
+		if (TouchAction::TOUCH_DOWN == action.State && 4 == action.Index
+			&& action.Touch == TouchAction::TOUCH_MOUSE)
+		{
+			if (auto loop = _editorMidiLoop.lock())
+				if (auto model = loop->Model())
+				{
+					if (Action::MODIFIER_SHIFT & action.Modifiers)
+					{
+						const auto rows = std::clamp(model->EditorVisibleRows()
+							+ (action.Value > 0 ? -12 : 12), 12, 128);
+						model->SetEditorPitchRange(model->EditorBottomPitch(), rows);
+					}
+					else model->SetEditorPitchRange(model->EditorBottomPitch()
+						+ (action.Value > 0 ? 3 : -3), model->EditorVisibleRows());
+					_CancelLoopGridEditorGesture();
+					_SetLoopGridEditorFeedback("Wheel scrolls pitch; Shift+wheel zooms");
+				}
+		}
+		else if (TouchAction::TOUCH_DOWN == action.State && 0 == action.Index
+			&& action.Touch == TouchAction::TOUCH_MOUSE
+			&& LoopGridEditorReady() && _ValidateLoopGridEditorTarget())
+		{
+			if (auto point = _LoopGridEditorPoint(action.Position, false))
+				if (auto loop = _editorMidiLoop.lock())
+				{
+					midi::MidiLoop::EditState source;
+					if (loop->SnapshotForEdit(source))
+					{
+						_editorGesture = std::make_unique<midi::MidiGridGesture>();
+						std::uint8_t channel = 0u;
+						if (auto take = _editorTake.lock())
+						{
+							const auto& loops = take->GetMidiLoops();
+							const auto& channels = take->MidiLoopChannels();
+							const auto it = std::find(loops.begin(), loops.end(), loop);
+							if (it != loops.end() && static_cast<std::size_t>(it - loops.begin()) < channels.size())
+								channel = static_cast<std::uint8_t>(channels[it - loops.begin()]);
+						}
+						const auto radius = static_cast<float>(std::clamp(
+							70.0 * std::log(static_cast<double>(source.LoopLengthSamps)) - 600.0,
+							50.0, 400.0));
+						const auto aspect = static_cast<float>(_sizeParams.Size.Width)
+							/ std::max(1u, _sizeParams.Size.Height);
+						const auto viewProjection = _camera.Projection(aspect, _StationCentre(_stations))
+							* _camera.ViewMatrix();
+						const auto left = graphics::LoopGridProjection::Project(viewProjection,
+							_LoopGridEditorModelMatrix(), { -radius, 2.0f, 0.0f },
+							static_cast<int>(_sizeParams.Size.Width), static_cast<int>(_sizeParams.Size.Height));
+						const auto right = graphics::LoopGridProjection::Project(viewProjection,
+							_LoopGridEditorModelMatrix(), { radius, 2.0f, 0.0f },
+							static_cast<int>(_sizeParams.Size.Width), static_cast<int>(_sizeParams.Size.Height));
+						const auto pixelsPerSample = left && right && source.LoopLengthSamps
+							? static_cast<double>(std::abs(right->X - left->X))
+								/ source.LoopLengthSamps : 0.0;
+						if (_editorGesture->Begin(source, *point, channel, pixelsPerSample))
+						{
+							_editorPointerOwned = true;
+							_UpdateLoopGridEditorPreview();
+						}
+						else
+						{
+							_CancelLoopGridEditorGesture();
+							_SetLoopGridEditorFeedback("Cannot create or map this MIDI edit");
+						}
+					}
+				}
+		}
+		else if (TouchAction::TOUCH_UP == action.State && _editorPointerOwned
+			&& action.Touch == TouchAction::TOUCH_MOUSE && action.Index == 0)
+		{
+			if (_editorGesture)
+				if (auto point = _LoopGridEditorPoint(action.Position, true))
+					_editorGesture->Update(*point);
+			if (_editorGesture && _editorGesture->Dirty() && !_editorGesture->Rejected())
+			{
+				if (auto loop = _editorMidiLoop.lock())
+					if (auto take = _editorTake.lock())
+					{
+						std::uint64_t acceptedRevision = 0u;
+						if (take->PublishMidiEdit(loop, _editorGesture->Working(), &acceptedRevision))
+						{
+							if (!_editorRevisionCursor)
+								_editorRevisionCursor = std::make_shared<actions::MidiEditRevisionCursor>();
+							_undoHistory.Add(std::make_shared<actions::MidiLoopEditUndo>(take, loop,
+								_editorGesture->Before(), _editorGesture->Working(),
+								acceptedRevision, _editorRevisionCursor));
+							_SetLoopGridEditorFeedback("MIDI edit applied (Ctrl+Z to undo)");
+						}
+						else _SetLoopGridEditorFeedback("Edit changed or cannot be represented");
+					}
+			}
+			else if (_editorGesture && _editorGesture->Rejected())
+				_SetLoopGridEditorFeedback("Edit rejected; source unchanged");
+			_CancelLoopGridEditorGesture();
+		}
+		else if (TouchAction::TOUCH_UP == action.State && _editorPointerOwned
+			&& action.MouseButtonsDown == 0u)
+			_CancelLoopGridEditorGesture();
 		ActionResult eaten;
 		eaten.IsEaten = true;
 		return eaten;
@@ -1147,13 +1252,35 @@ ActionResult Scene::OnAction(TouchMoveAction action)
 	_InvalidateHover2d();
 	if (_popupManager.IsOpen())
 	{
-		_editorPointerOwned = false;
+		_CancelLoopGridEditorGesture();
 		return _popupManager.OnAction(action);
 	}
 	if (IsLoopGridEditorOpen() || EditorState::Closing == _editorState)
 	{
-		if (_editorPointerOwned && 0u == action.MouseButtonsDown)
-			_editorPointerOwned = false; // lost capture
+		_CheckLoopGridEditorGesture();
+		if (0u == (action.MouseButtonsDown & 1u))
+			_editorButtonPressed = false;
+		if (_editorPointerOwned && (action.Touch != TouchAction::TOUCH_MOUSE
+			|| 0u == (action.MouseButtonsDown & 1u)))
+			_CancelLoopGridEditorGesture(); // lost capture
+		else if (_editorPointerOwned && _editorGesture)
+		{
+			if (auto point = _LoopGridEditorPoint(action.Position, true))
+			{
+				_editorGesture->Update(*point);
+				_UpdateLoopGridEditorPreview();
+				if (_editorGesture->Rejected())
+					_SetLoopGridEditorFeedback("Cannot map this drag to source MIDI");
+			}
+		}
+		else if (auto point = _LoopGridEditorPoint(action.Position, false))
+		{
+			if (auto loop = _editorMidiLoop.lock())
+				if (auto model = loop->Model())
+					model->SetEditorHover(static_cast<float>(point->U), point->Pitch);
+		}
+		else if (auto loop = _editorMidiLoop.lock())
+			if (auto model = loop->Model()) model->SetEditorHover(-1.0f, -1);
 		ActionResult eaten;
 		eaten.IsEaten = true;
 		return eaten;
@@ -1202,7 +1329,7 @@ ActionResult Scene::OnAction(KeyAction action)
 	std::cout << "Key action " << action.KeyActionType << " [" << action.KeyChar << "] IsSytem:" << action.IsSystem << ", Modifiers:" << action.Modifiers << "]" << std::endl;
 	if (_popupManager.IsOpen())
 	{
-		_editorPointerOwned = false;
+		_CancelLoopGridEditorGesture();
 		auto popupRes = _popupManager.OnAction(action);
 		if (_remoteTempoDialogOpen && !_popupManager.IsOpen())
 			_HandleRemoteTempoPromptDecision(false);
@@ -1215,6 +1342,15 @@ ActionResult Scene::OnAction(KeyAction action)
 	{
 		if (27u == action.KeyChar && KeyAction::KEY_UP == action.KeyActionType)
 			CloseLoopGridEditor();
+		if (90u == action.KeyChar && KeyAction::KEY_UP == action.KeyActionType
+			&& (Action::MODIFIER_CTRL & action.Modifiers))
+		{
+			_CancelLoopGridEditorGesture();
+			const bool redo = (Action::MODIFIER_SHIFT & action.Modifiers) != 0;
+			const auto accepted = redo ? _undoHistory.Redo() : _undoHistory.Undo();
+			_SetLoopGridEditorFeedback(accepted ? (redo ? "MIDI edit redone" : "MIDI edit undone")
+				: "No applicable MIDI edit");
+		}
 		ActionResult eaten;
 		eaten.IsEaten = true;
 		return eaten;
@@ -2448,12 +2584,19 @@ bool Scene::_OnUndo(std::shared_ptr<base::ActionUndo> undo)
 
 void Scene::_InitSize()
 {
+	if (IsLoopGridEditorOpen())
+	{
+		_CancelLoopGridEditorGesture();
+		_PositionLoopGridEditorCamera();
+	}
 	if (_editorButton && _editorFeedback)
 	{
 		const auto x = std::max(0, static_cast<int>(_sizeParams.Size.Width) - 202);
 		const auto y = std::max(0, static_cast<int>(_sizeParams.Size.Height) - 42);
 		_editorButton->SetPosition({ x, y });
 		_editorFeedback->SetPosition({ std::max(0, x - 340), y + 6 });
+		if (_editorModeLabel)
+			_editorModeLabel->SetPosition({ std::max(0, x - 340), y - 20 });
 	}
 	auto ar = _sizeParams.Size.Height > 0 ?
 		(float)_sizeParams.Size.Width / (float)_sizeParams.Size.Height :
@@ -2651,6 +2794,50 @@ bool Scene::OpenLoopGridEditor(const std::shared_ptr<LoopTake>& take,
 	_editorReturnCamera = _camera.CaptureEditorReturnState();
 	_editorBlend = 0.0f;
 	_editorPointerOwned = false;
+	_editorRevisionCursors.erase(std::remove_if(_editorRevisionCursors.begin(),
+		_editorRevisionCursors.end(), [](const EditorCursorEntry& entry)
+			{ return entry.Loop.expired(); }), _editorRevisionCursors.end());
+	_editorRevisionCursor.reset();
+	if (midiLoop)
+	{
+		for (const auto& entry : _editorRevisionCursors)
+			if (entry.Loop.lock() == midiLoop)
+			{
+				_editorRevisionCursor = entry.Cursor;
+				break;
+			}
+		if (!_editorRevisionCursor)
+		{
+			_editorRevisionCursor = std::make_shared<actions::MidiEditRevisionCursor>();
+			_editorRevisionCursors.push_back({ midiLoop, _editorRevisionCursor });
+		}
+	}
+	if (midiLoop)
+		if (auto model = midiLoop->Model())
+		{
+			midi::MidiLoop::EditState source;
+			if (midiLoop->SnapshotForEdit(source))
+			{
+				std::vector<midi::MidiEvent> displayed(source.EventCount);
+				if (source.Quantisation.Enabled)
+					midi::MidiQuantisation::BuildQuantisedPlaybackEvents(source.Events.data(),
+						source.EventCount, source.LoopLengthSamps, source.Quantisation,
+						source.QuantisationTransportStartSamps, displayed.data());
+				else std::copy_n(source.Events.begin(), source.EventCount, displayed.begin());
+				const auto notes = midi::MidiNote::ExtractSpans(displayed.data(),
+					displayed.size(), source.LoopLengthSamps);
+				int low = 127, high = 0;
+				for (const auto& note : notes)
+				{
+					low = std::min(low, static_cast<int>(note.Note));
+					high = std::max(high, static_cast<int>(note.Note));
+				}
+				const auto rows = notes.empty() ? 24 : std::clamp(
+					((high - low + 7 + 11) / 12) * 12, 24, 128);
+				const auto bottom = notes.empty() ? 48 : std::clamp(low - 3, 0, 128 - rows);
+				model->SetEditorPitchRange(bottom, rows);
+			}
+		}
 	_editorState = EditorState::Opening;
 	_focusManager.ClearFocus();
 	_touchDownElement.reset();
@@ -2658,13 +2845,8 @@ bool Scene::OpenLoopGridEditor(const std::shared_ptr<LoopTake>& take,
 	_EndBackgroundDrag();
 	_quantisationInteraction.OnCtrlModifierChanged(false, Timer::GetTime(),
 		_InteractionContext(), [this](const std::vector<unsigned char>& path) { return _ChildFromPath(path); });
-	const auto centre = owningStation->ModelPosition() + take->ModelPosition();
-	graphics::Camera::Pose pose;
-	pose.Eye = centre + Position3d{ 45.0f, 340.0f, 80.0f };
-	pose.Forward = { -45.0f, -340.0f, -80.0f };
-	pose.Up = { 0.0f, 0.0f, -1.0f };
 	_camera.SetEditorPerspective(true);
-	_camera.SetViewTarget(graphics::Camera::View::TopDown, pose);
+	_PositionLoopGridEditorCamera();
 	_SetLoopGridEditorFeedback(midiLoop ? "MIDI loop editor" : "Audio loop view");
 	return true;
 }
@@ -2673,17 +2855,147 @@ void Scene::CloseLoopGridEditor()
 {
 	if (!IsLoopGridEditorOpen())
 		return;
-	_editorPointerOwned = false;
+	_CancelLoopGridEditorGesture();
+	_editorRevisionCursor.reset();
 	_editorButtonPressed = false;
 	_editorState = EditorState::Closing;
 	_camera.RestoreEditorReturnState(_editorReturnCamera);
 	_SetLoopGridEditorFeedback("");
 }
 
+glm::mat4 Scene::_LoopGridEditorModelMatrix() const
+{
+	auto matrix = glm::mat4(1.0f);
+	const auto station = _editorStation.lock();
+	const auto take = _editorTake.lock();
+	const auto midiLoop = _editorMidiLoop.lock();
+	const auto audioLoop = _editorAudioLoop.lock();
+	if (!station || !take || (!midiLoop && !audioLoop)) return matrix;
+	const auto stationPos = station->ModelPosition();
+	const auto takePos = take->ModelPosition();
+	matrix = glm::translate(matrix, glm::vec3(stationPos.X, stationPos.Y, stationPos.Z));
+	matrix = glm::scale(matrix, glm::vec3(station->ModelScale()));
+	matrix = glm::translate(matrix, glm::vec3(takePos.X, takePos.Y, takePos.Z));
+	matrix = glm::scale(matrix, glm::vec3(take->ModelScale()));
+	if (midiLoop)
+	{
+		const auto model = midiLoop->Model();
+		if (!model) return matrix;
+		const auto pos = model->ModelPosition();
+		matrix = glm::translate(matrix, glm::vec3(pos.X, pos.Y, pos.Z));
+		return glm::scale(matrix, glm::vec3(model->ModelScale()));
+	}
+	const auto pos = audioLoop->ModelPosition();
+	matrix = glm::translate(matrix, glm::vec3(pos.X, pos.Y, pos.Z));
+	return glm::scale(matrix, glm::vec3(audioLoop->ModelScale()));
+}
+
+void Scene::_PositionLoopGridEditorCamera()
+{
+	const auto matrix = _LoopGridEditorModelMatrix();
+	const auto centre = glm::vec3(matrix * glm::vec4(0.0f, 0.0f, 0.0f, 1.0f));
+	const auto worldScale = glm::length(glm::vec3(matrix * glm::vec4(1.0f, 0.0f, 0.0f, 0.0f)));
+	float radius = 50.0f;
+	if (const auto midiLoop = _editorMidiLoop.lock())
+	{
+		const auto length = midiLoop->CompletedLengthForEditor();
+		if (length)
+			radius = static_cast<float>(std::clamp(
+				70.0 * std::log(static_cast<double>(length)) - 600.0, 50.0, 400.0));
+	}
+	else if (const auto audioLoop = _editorAudioLoop.lock())
+		radius = static_cast<float>(Loop::CalcDrawRadius(audioLoop->LoopLength()));
+	const auto aspect = _sizeParams.Size.Height > 0u
+		? static_cast<float>(_sizeParams.Size.Width) / _sizeParams.Size.Height : 1.0f;
+	const auto distance = graphics::LoopGridProjection::CameraDistance(radius,
+		worldScale, aspect);
+	const auto offset = glm::vec3(0.07f * distance, distance, 0.12f * distance);
+	graphics::Camera::Pose pose;
+	pose.Eye = { centre.x + offset.x, centre.y + offset.y, centre.z + offset.z };
+	pose.Forward = { -offset.x, -offset.y, -offset.z };
+	pose.Up = { 0.0f, 0.0f, -1.0f };
+	_camera.SetViewTarget(graphics::Camera::View::TopDown, pose);
+}
+
+std::optional<midi::MidiGridGesture::Point> Scene::_LoopGridEditorPoint(
+	utils::Position2d pixel, bool clampToGrid) const
+{
+	const auto loop = _editorMidiLoop.lock();
+	if (!loop || !loop->Model()) return std::nullopt;
+	const auto length = loop->CompletedLengthForEditor();
+	const auto width = static_cast<int>(_sizeParams.Size.Width);
+	const auto height = static_cast<int>(_sizeParams.Size.Height);
+	if (!length || width <= 0 || height <= 0) return std::nullopt;
+	const auto aspect = static_cast<float>(width) / height;
+	const auto viewProjection = _camera.Projection(aspect, _StationCentre(_stations))
+		* _camera.ViewMatrix();
+	const auto local = graphics::LoopGridProjection::UnprojectToLocalPlane(viewProjection,
+		_LoopGridEditorModelMatrix(), pixel, width, height, 2.0f);
+	if (!local) return std::nullopt;
+	const auto radius = static_cast<float>(std::clamp(
+		70.0 * std::log(static_cast<double>(length)) - 600.0, 50.0, 400.0));
+	const auto u = static_cast<double>(local->x / (2.0f * radius) + 0.5f);
+	const auto v = static_cast<double>(0.5f - local->z / (1.56f * radius));
+	if (!clampToGrid && (u < 0.0 || u >= 1.0 || v < 0.0 || v >= 1.0))
+		return std::nullopt;
+	const auto boundedU = std::clamp(u, 0.0, std::nextafter(1.0, 0.0));
+	const auto boundedV = std::clamp(v, 0.0, std::nextafter(1.0, 0.0));
+	const auto model = loop->Model();
+	const auto pitch = std::clamp(model->EditorBottomPitch()
+		+ static_cast<int>(boundedV * model->EditorVisibleRows()), 0, 127);
+	return midi::MidiGridGesture::Point{
+		midi::LoopGridGeometry::SampleAtU(boundedU, length),
+		static_cast<std::uint8_t>(pitch), boundedU };
+}
+
+void Scene::_CancelLoopGridEditorGesture()
+{
+	_editorPointerOwned = false;
+	if (_editorGesture) _editorGesture->Cancel();
+	_editorGesture.reset();
+	if (auto loop = _editorMidiLoop.lock())
+		if (auto model = loop->Model())
+		{
+			model->SetEditorHover(-1.0f, -1);
+			model->SetEditorPreview({}, loop->CompletedLengthForEditor());
+		}
+}
+
+void Scene::_UpdateLoopGridEditorPreview()
+{
+	const auto loop = _editorMidiLoop.lock();
+	if (!loop || !loop->Model() || !_editorGesture) return;
+	std::vector<graphics::MidiModel::EditorPreviewSpan> spans;
+	spans.reserve(_editorGesture->Preview().size());
+	for (const auto& preview : _editorGesture->Preview())
+		spans.push_back({ preview.Start, preview.End, preview.Pitch, preview.Fill });
+	loop->Model()->SetEditorPreview(std::move(spans),
+		_editorGesture->Before().LoopLengthSamps);
+}
+
+void Scene::_CheckLoopGridEditorGesture()
+{
+	if (!_editorGesture || !_editorPointerOwned) return;
+	const auto loop = _editorMidiLoop.lock();
+	const auto take = _editorTake.lock();
+	midi::MidiLoop::EditState current;
+	if (!LoopGridEditorReady() || !_ValidateLoopGridEditorTarget()
+		|| !loop || !take || !loop->SnapshotForEdit(current)
+		|| !_editorGesture->MatchesPublished(current)
+		|| current.Quantisation != take->ResolvedMidiQuantisation()
+		|| current.QuantisationTransportStartSamps != take->MidiQuantisationTransportStartSamps())
+	{
+		_CancelLoopGridEditorGesture();
+		_SetLoopGridEditorFeedback("Edit cancelled: loop or grid changed");
+	}
+}
+
 void Scene::_TickLoopGridEditor(float deltaSeconds)
 {
 	if (IsLoopGridEditorOpen() && !_ValidateLoopGridEditorTarget())
 		CloseLoopGridEditor();
+	if (_editorPointerOwned)
+		_CheckLoopGridEditorGesture();
 	if (EditorState::Closed == _editorState)
 		return;
 	const auto step = std::max(0.0f, deltaSeconds) / 0.4f;
@@ -2725,6 +3037,19 @@ void Scene::_UpdateLoopGridEditorUi()
 		return;
 	if (IsLoopGridEditorOpen())
 	{
+		if (_editorModeLabel)
+		{
+			std::string mode = "Audio: view only";
+			if (auto loop = _editorMidiLoop.lock())
+			{
+				midi::MidiLoop::EditState state;
+				if (loop->SnapshotForEdit(state))
+					mode = midi::LoopGridGeometry::Resolve(state.LoopLengthSamps,
+						state.Quantisation, state.QuantisationTransportStartSamps)
+						? "Quantised paint: drag cells" : "Free timing: drag notes or edges";
+			}
+			_editorModeLabel->SetString(mode);
+		}
 		const auto width = static_cast<int>(_sizeParams.Size.Width);
 		const auto height = static_cast<int>(_sizeParams.Size.Height);
 		if (auto station = _editorStation.lock())
@@ -2780,7 +3105,7 @@ void Scene::_UpdateLoopGridEditorUi()
 						if (pitch < bottom || pitch > bottom + rows) continue;
 						const auto v = static_cast<float>(pitch - bottom) / rows;
 						const auto point = graphics::LoopGridProjection::Project(_viewProj, modelMatrix,
-							{ -radius * 1.12f, 0.0f, (v * 2.0f - 1.0f) * radius * 0.78f }, width, height);
+							{ -radius * 1.12f, 0.0f, -(v * 2.0f - 1.0f) * radius * 0.78f }, width, height);
 						if (!point) continue;
 						_editorPitchTicks[octave]->SetString("C" + std::to_string(static_cast<int>(octave) - 1));
 						_editorPitchTicks[octave]->SetPosition({ point->X - 12, point->Y - 10 });
@@ -2816,13 +3141,15 @@ bool Scene::_HandleLoopGridEditorButton(actions::TouchAction action)
 	if (!_editorButton || _editorState == EditorState::Closing || _popupManager.IsOpen())
 		return false;
 	const auto inside = _editorButton->HitTest(_editorButton->GlobalToLocal(action.Position));
-	if (TouchAction::TOUCH_DOWN == action.State && 0 == action.Index && inside)
+	if (TouchAction::TOUCH_DOWN == action.State && 0 == action.Index
+		&& action.Touch == TouchAction::TOUCH_MOUSE && inside)
 	{
 		_editorButtonPressed = true;
 		_editorButton->OnAction(_editorButton->GlobalToLocal(action));
 		return true;
 	}
-	if (TouchAction::TOUCH_UP == action.State && _editorButtonPressed)
+	if (TouchAction::TOUCH_UP == action.State && _editorButtonPressed
+		&& action.Touch == TouchAction::TOUCH_MOUSE && action.Index == 0)
 	{
 		_editorButtonPressed = false;
 		_editorButton->OnAction(_editorButton->GlobalToLocal(action));

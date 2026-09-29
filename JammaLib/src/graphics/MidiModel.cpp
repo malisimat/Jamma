@@ -199,6 +199,7 @@ void MidiModel::SetEditorPitchRange(int bottomPitch, int visibleRows) noexcept
 		_editorVisibleRows = rows;
 		_editorBottomPitch = bottom;
 		_editorGridSignatureValid = false;
+		_editorGridDirty = true;
 	}
 }
 
@@ -206,6 +207,14 @@ void MidiModel::SetEditorHover(float u, int pitch) noexcept
 {
 	_editorHoverU = u >= 0.0f && u < 1.0f ? u : -1.0f;
 	_editorHoverPitch = pitch >= 0 && pitch < 128 ? pitch : -1;
+}
+
+void MidiModel::SetEditorPreview(std::vector<EditorPreviewSpan> spans,
+	std::uint32_t loopLength)
+{
+	_editorPreviewSpans = std::move(spans);
+	_editorPreviewLength = loopLength;
+	_editorGridDirty = true;
 }
 
 void MidiModel::UpdateEditorGrid(std::uint32_t loopLength,
@@ -390,6 +399,7 @@ void MidiModel::_ReleaseResources()
 		_editorGridVao = 0u;
 	}
 	_editorGridVertexCount = 0u;
+	_editorPreviewVertexCount = 0u;
 	_editorGridDirty = true;
 	_ReleaseAutomationGl();
 }
@@ -403,14 +413,34 @@ void MidiModel::_DrawEditorGrid(GlDrawContext& glCtx)
 		return;
 	if (_editorGridDirty)
 	{
+		std::vector<float> vertices = _editorGridVertices;
+		_editorGridVertexCount = static_cast<unsigned int>(vertices.size() / 3u);
+		for (const auto& preview : _editorPreviewSpans)
+		{
+			if (_editorPreviewLength == 0u || preview.Start >= preview.End
+				|| preview.End > _editorPreviewLength
+				|| preview.Pitch < _editorBottomPitch
+				|| preview.Pitch >= _editorBottomPitch + _editorVisibleRows) continue;
+			const auto left = static_cast<float>(preview.Start) / _editorPreviewLength;
+			const auto right = static_cast<float>(preview.End) / _editorPreviewLength;
+			const auto bottom = static_cast<float>(preview.Pitch - _editorBottomPitch)
+				/ _editorVisibleRows;
+			const auto top = static_cast<float>(preview.Pitch - _editorBottomPitch + 1)
+				/ _editorVisibleRows;
+			const auto weight = preview.Fill ? -1.0f : -2.0f;
+			vertices.insert(vertices.end(), { left, bottom, weight, right, bottom, weight,
+				left, top, weight, left, top, weight, right, bottom, weight,
+				right, top, weight });
+		}
+		_editorPreviewVertexCount = static_cast<unsigned int>(vertices.size() / 3u)
+			- _editorGridVertexCount;
 		glBindBuffer(GL_ARRAY_BUFFER, _editorGridVbo);
-		glBufferData(GL_ARRAY_BUFFER, _editorGridVertices.size() * sizeof(float),
-			_editorGridVertices.data(), GL_DYNAMIC_DRAW);
+		glBufferData(GL_ARRAY_BUFFER, vertices.size() * sizeof(float),
+			vertices.data(), GL_DYNAMIC_DRAW);
 		glBindBuffer(GL_ARRAY_BUFFER, 0);
-		_editorGridVertexCount = static_cast<unsigned int>(_editorGridVertices.size() / 3u);
 		_editorGridDirty = false;
 	}
-	if (_editorGridVertexCount == 0u)
+	if (_editorGridVertexCount == 0u && _editorPreviewVertexCount == 0u)
 		return;
 	const auto pos = ModelPosition();
 	const auto scale = ModelScale();
@@ -429,6 +459,8 @@ void MidiModel::_DrawEditorGrid(GlDrawContext& glCtx)
 	glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 	glBindVertexArray(_editorGridVao);
 	glDrawArrays(GL_LINES, 0, _editorGridVertexCount);
+	if (_editorPreviewVertexCount > 0u)
+		glDrawArrays(GL_TRIANGLES, _editorGridVertexCount, _editorPreviewVertexCount);
 	glBindVertexArray(0);
 	glBlendFuncSeparate(oldSrcRgb, oldDstRgb, oldSrcAlpha, oldDstAlpha);
 	if (!wasBlend)

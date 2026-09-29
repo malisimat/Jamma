@@ -46,8 +46,8 @@ void main()
     float gridU = startFrac + PositionIN.x * durationFrac;
     float row = pitch - float(EditorBottomPitch) + 0.5;
     float gridZ = IsDisc > 0.5
-        ? PositionIN.z * EditorGridRadius * 0.78
-        : ((row / rows) * 2.0 - 1.0) * EditorGridRadius * 0.78
+        ? -PositionIN.z * EditorGridRadius * 0.78
+        : -((row / rows) * 2.0 - 1.0) * EditorGridRadius * 0.78
             + PositionIN.z * EditorGridRadius * 1.56 / rows * 0.40;
     float gridY = (IsDisc > 0.5 ? 0.0 : 3.0 + Velocity * 4.0)
         + PositionIN.y * (IsDisc > 0.5 ? 3.0 : height);

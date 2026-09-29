@@ -608,6 +608,8 @@ ActionResult Window::OnAction(WindowAction winAction)
 
 ActionResult Window::OnAction(TouchAction touchAction)
 {
+	_cachedCursorPosition = touchAction.Position;
+	_cachedCursorModifiers = touchAction.Modifiers;
 	switch (touchAction.Touch)
 	{
 	case TouchAction::TOUCH_MOUSE:
@@ -650,6 +652,22 @@ ActionResult Window::OnAction(TouchMoveAction touchAction)
 	_hover3dDirty = true;
 
 	return _scene->OnAction(touchAction);
+}
+
+bool Window::CancelMouseCapture()
+{
+	if (_buttonsDown == 0u) return false;
+	_buttonsDown = 0u;
+	TouchMoveAction cancelled;
+	cancelled.Touch = TouchAction::TOUCH_MOUSE;
+	cancelled.Index = 0;
+	cancelled.Position = _cachedCursorPosition.value_or(utils::Position2d{});
+	cancelled.MouseButtonsDown = 0u;
+	cancelled.Modifiers = _modifiers;
+	OnAction(cancelled);
+	if (_wnd && GetCapture() == _wnd)
+		ReleaseCapture();
+	return true;
 }
 
 ActionResult Window::OnAction(KeyAction keyAction)
@@ -962,8 +980,9 @@ LRESULT CALLBACK Window::WindowProcedure(HWND hWindow, UINT message, WPARAM wPar
 			window->SetResizing(false);
 			return 0;
 		}
+		window->CancelMouseCapture();
+		return 0;
 	}
-	break;
 	case WM_EXITSIZEMOVE:
 	{
 		if (window->IsResizing())
@@ -1295,6 +1314,7 @@ LRESULT CALLBACK Window::WindowProcedure(HWND hWindow, UINT message, WPARAM wPar
 		// window (such as a VST editor) those key-ups never reach us, leaving
 		// the modifier bitmask stuck. Clear it on focus loss so subsequent
 		// clicks aren't treated as modified gestures.
+		window->CancelMouseCapture();
 		window->ClearModifiers();
 		return 0;
 	}

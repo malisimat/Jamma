@@ -41,6 +41,14 @@ namespace graphics
 
 	class MidiModel : public virtual gui::GuiModel
 	{
+	public:
+		struct EditorPreviewSpan
+		{
+			std::uint32_t Start = 0u, End = 0u;
+			std::uint8_t Pitch = 60u;
+			bool Fill = true;
+		};
+
 	private:
 		struct ModelInstanceData
 		{
@@ -69,6 +77,8 @@ namespace graphics
 		int EditorVisibleRows() const noexcept { return _editorVisibleRows; }
 		bool EditorGridResolved() const noexcept { return _editorGridResolved; }
 		void SetEditorHover(float u, int pitch) noexcept;
+		void SetEditorPreview(std::vector<EditorPreviewSpan> spans,
+			std::uint32_t loopLength);
 		void UpdateEditorGrid(std::uint32_t loopLength,
 			const midi::MidiQuantisationSettings& settings, std::uint64_t transportStart);
 		unsigned int NoteInstanceCount() const noexcept { return _backNoteInstanceCount; }
@@ -125,6 +135,9 @@ namespace graphics
 		float _editorHoverU = -1.0f;
 		int _editorHoverPitch = -1;
 		std::vector<float> _editorGridVertices;
+		std::vector<EditorPreviewSpan> _editorPreviewSpans;
+		std::uint32_t _editorPreviewLength = 0u;
+		unsigned int _editorPreviewVertexCount = 0u;
 		midi::MidiQuantisationSettings _editorGridSettings;
 		std::uint64_t _editorGridTransportStart = 0u;
 		std::uint32_t _editorGridLength = 0u;

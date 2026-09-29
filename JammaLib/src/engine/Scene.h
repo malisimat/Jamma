@@ -60,6 +60,8 @@
 #include "StationRemote.h"
 #include "RigCoordinator.h"
 #include "../actions/ActionUndoHistory.h"
+#include "../midi/MidiGridGesture.h"
+#include "../midi/MidiLoopEditUndo.h"
 
 namespace engine
 {
@@ -338,6 +340,13 @@ namespace engine
 			const std::shared_ptr<midi::MidiLoop>& midiLoop) const;
 		bool _HandleLoopGridEditorButton(actions::TouchAction action);
 		void _SetLoopGridEditorFeedback(const std::string& message);
+		glm::mat4 _LoopGridEditorModelMatrix() const;
+		void _PositionLoopGridEditorCamera();
+		std::optional<midi::MidiGridGesture::Point> _LoopGridEditorPoint(
+			utils::Position2d pixel, bool clampToGrid) const;
+		void _CancelLoopGridEditorGesture();
+		void _UpdateLoopGridEditorPreview();
+		void _CheckLoopGridEditorGesture();
 
 
 	protected:
@@ -384,6 +393,7 @@ namespace engine
 		std::unique_ptr<gui::GuiLabel> _label;
 		std::shared_ptr<gui::GuiButton> _editorButton;
 		std::shared_ptr<gui::GuiLabel> _editorFeedback;
+		std::shared_ptr<gui::GuiLabel> _editorModeLabel;
 		std::array<std::shared_ptr<gui::GuiLabel>, 5> _editorTimeTicks;
 		std::array<std::shared_ptr<gui::GuiLabel>, 11> _editorPitchTicks;
 		std::unique_ptr<gui::SceneSelector> _selector;
@@ -431,6 +441,14 @@ namespace engine
 		bool _editorButtonPressed = false;
 		bool _editorButtonShowsClose = false;
 		bool _editorPointerOwned = false;
+		std::unique_ptr<midi::MidiGridGesture> _editorGesture;
+		std::shared_ptr<actions::MidiEditRevisionCursor> _editorRevisionCursor;
+		struct EditorCursorEntry
+		{
+			std::weak_ptr<midi::MidiLoop> Loop;
+			std::shared_ptr<actions::MidiEditRevisionCursor> Cursor;
+		};
+		std::vector<EditorCursorEntry> _editorRevisionCursors;
 		std::string _editorFeedbackText;
 		std::optional<Time> _lastCameraUpdateTime;
 		std::thread _jobRunner;

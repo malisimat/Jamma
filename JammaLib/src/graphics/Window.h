@@ -71,6 +71,8 @@ namespace graphics
 		void SetResizing(bool resizing);
 		base::Action::Modifiers Modifiers() const;
 		void ClearModifiers();
+		// Propagate OS capture/focus loss so editor pointer transactions cancel.
+		bool CancelMouseCapture();
 		bool IsTrackingMouse() const;
 		void SetTrackingMouse(bool resizing);
 		void Resize(utils::Size2d size);
