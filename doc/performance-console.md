@@ -7,6 +7,10 @@ the built-in Windows Console Host. Terminal is optional; install it from the
 [official Windows Terminal instructions](https://learn.microsoft.com/en-us/windows/terminal/install)
 if you want its fonts and appearance. A custom Terminal profile is optional;
 Jamma passes its own title and command line at launch.
+In Windows Terminal, **Ctrl+Shift+mouse wheel** adjusts background opacity
+when that [Terminal interaction setting](https://learn.microsoft.com/en-us/windows/terminal/customize-settings/interaction)
+is enabled. Optional profile appearance settings include `opacity` and
+`useAcrylic`; Jamma does not edit Terminal settings.
 
 Keep `JammaConsole.exe` beside `Jamma.exe` when copying a build. The Jamma
 project builds the companion as a dependency into the same configuration output

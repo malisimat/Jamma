@@ -277,6 +277,7 @@ namespace console
 			}
 		}
 		catch (...) { SetEvent(state->StopEvent.Get()); }
+		state->Connected.store(false, std::memory_order_release);
 		writerStopping.store(true, std::memory_order_release);
 		writer.join();
 		FinishSession(gate,
@@ -289,7 +290,6 @@ namespace console
 			},
 			[&] { return WaitForSingleObject(launchedProcess.Get(), 500) != WAIT_TIMEOUT; },
 			[&] { TerminateProcess(launchedProcess.Get(), 1); });
-		state->Connected.store(false, std::memory_order_release);
 		return true;
 	}
 
@@ -358,10 +358,11 @@ namespace console
 	bool ConsoleBroker::Reopen(const std::wstring& companionPath,
 		std::shared_ptr<CommandMailbox> commands, std::string initialStatus)
 	{
-		if (Connected() && WaitForSingleObject(_state->StopEvent.Get(), 0) != WAIT_OBJECT_0)
-			return true;
-		if (!Stop()) return false;
-		return Start(companionPath, std::move(commands), std::move(initialStatus));
+		const bool live = Connected()
+			&& WaitForSingleObject(_state->StopEvent.Get(), 0) != WAIT_OBJECT_0;
+		return RunReopenPlan(live, [&] { return Stop(); }, [&] {
+			return Start(companionPath, std::move(commands), std::move(initialStatus));
+		});
 	}
 
 	bool ConsoleBroker::Connected() const noexcept

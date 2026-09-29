@@ -5,6 +5,7 @@
 #include "../../../../console/CommandParsing.h"
 #include "../../../../console/LineRing.h"
 #include "../../../../Jamma/src/ConsoleCapture.h"
+#include "../../../../Jamma/src/ConsoleStatus.h"
 #include <gtest/gtest.h>
 #include <array>
 #include <chrono>
@@ -30,6 +31,16 @@ TEST(ConsoleSession, CaptureOnlySinkKeepsOptedInLinesAndBoundsOverflow)
 	EXPECT_EQ(*captured, "visible");
 	EXPECT_FALSE(ring.Take());
 	EXPECT_EQ(ring.ConsumeDropped(), 1u);
+}
+
+TEST(ConsoleSession, StatusCadenceUsesMonotonicOneSecondBoundary)
+{
+	using Clock = std::chrono::steady_clock;
+	const auto last = Clock::time_point{};
+	EXPECT_FALSE(console::StatusUpdateDue(last, last));
+	EXPECT_FALSE(console::StatusUpdateDue(last, last + std::chrono::milliseconds(999)));
+	EXPECT_TRUE(console::StatusUpdateDue(last, last + std::chrono::seconds(1)));
+	EXPECT_TRUE(console::StatusUpdateDue(last, last + std::chrono::seconds(2)));
 }
 
 TEST(ConsoleSession, AuthenticatesOneClientAndIncreasingRequests)
@@ -343,6 +354,25 @@ TEST(ConsoleLaunch, NeverCreatesFallbackAfterStopOrAcceptedTerminal)
 		[] { return false; }, [&] { ++notices; }), console::LaunchOutcome::WindowsTerminal);
 	EXPECT_EQ(attempts, 2);
 	EXPECT_EQ(notices, 0);
+}
+
+TEST(ConsoleLaunch, ReopenKeepsLiveGenerationAndNeverStartsAfterFailedStop)
+{
+	int stopped = 0;
+	int started = 0;
+	const auto stop = [&] { ++stopped; return true; };
+	const auto start = [&] { ++started; return true; };
+	EXPECT_TRUE(console::RunReopenPlan(true, stop, start));
+	EXPECT_TRUE(console::RunReopenPlan(true, stop, start));
+	EXPECT_EQ(stopped, 0);
+	EXPECT_EQ(started, 0);
+	EXPECT_TRUE(console::RunReopenPlan(false, stop, start));
+	EXPECT_EQ(stopped, 1);
+	EXPECT_EQ(started, 1);
+	EXPECT_FALSE(console::RunReopenPlan(false,
+		[&] { ++stopped; return false; }, start));
+	EXPECT_EQ(stopped, 2);
+	EXPECT_EQ(started, 1);
 }
 
 TEST(ConsoleLaunch, BuildsTerminalAndConsoleArgumentsFromAbsoluteSibling)

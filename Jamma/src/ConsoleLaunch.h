@@ -47,6 +47,15 @@ namespace console
 			? LaunchOutcome::ConsoleHost : LaunchOutcome::Failed;
 	}
 
+	// Keep an authenticated live generation; otherwise retire it before launch.
+	// Stop failure must never create a competing companion generation.
+	template<class Stop, class Start>
+	bool RunReopenPlan(bool liveGeneration, Stop&& stop, Start&& start)
+	{
+		if (liveGeneration) return true;
+		return stop() && start();
+	}
+
 	inline std::wstring SiblingCompanionPath(std::wstring_view jammaPath)
 	{
 		return (std::filesystem::path(jammaPath).parent_path()

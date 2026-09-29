@@ -20,6 +20,7 @@
 #include "../io/InitFile.h"
 #include "../io/StartupConfig.h"
 #include "ConsoleCapture.h"
+#include "ConsoleStatus.h"
 #include "../vst/Vst3Plugin.h"
 #include <objbase.h>
 #include <dbt.h>
@@ -1109,7 +1110,7 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 		}
 		drainConsoleLines();
 		const auto statusNow = std::chrono::steady_clock::now();
-		if (consoleEvents && statusNow - lastConsoleStatus >= std::chrono::seconds(1))
+		if (consoleEvents && console::StatusUpdateDue(lastConsoleStatus, statusNow))
 		{
 			auto lastEvent = consoleEvents->LatestEvent();
 			if (lastEvent.size() > 200)

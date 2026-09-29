@@ -13,7 +13,7 @@ namespace console
 	class CommandMailbox;
 	class OutboundMailbox;
 	class UniqueHandle;
-	// App-owned, non-real-time preview broker. The worker owns all pipe I/O;
+	// App-owned, non-real-time console broker. The worker owns all pipe I/O;
 	// Start/Stop/Reopen are called only by the app owner thread.
 	class ConsoleBroker
 	{
