@@ -13,49 +13,40 @@ ActionUndoHistory::~ActionUndoHistory()
 
 void actions::ActionUndoHistory::Add(std::shared_ptr<ActionUndo> actionUndo)
 {
-	while (!_poppedHistory.empty())
-		_poppedHistory.pop();
-
-	_history.push(actionUndo);
+	if (!actionUndo)
+		return;
+	_poppedHistory.clear();
+	_history.push_back(std::move(actionUndo));
 }
 
 void actions::ActionUndoHistory::Clear()
 {
-	while (!_poppedHistory.empty())
-		_poppedHistory.pop();
-
-	while (!_history.empty())
-		_history.pop();
+	_poppedHistory.clear();
+	_history.clear();
 }
 
 bool actions::ActionUndoHistory::Undo()
 {
-	auto lastOpt = Pop();
-
-	if (!lastOpt.has_value())
+	if (_history.empty())
 		return false;
-
-	auto last = lastOpt.value();
-
-	if (last)
-		return last->Undo();
-
-	return false;
+	auto last = _history.back();
+	if (!last || !last->Undo())
+		return false;
+	_poppedHistory.push_back(last);
+	_history.pop_back();
+	return true;
 }
 
 bool actions::ActionUndoHistory::Redo()
 {
-	auto nextOpt = UnPop();
-
-	if (!nextOpt.has_value())
+	if (_poppedHistory.empty())
 		return false;
-
-	auto next = nextOpt.value();
-
-	if (next)
-		return next->Redo();
-
-	return false;
+	auto next = _poppedHistory.back();
+	if (!next || !next->Redo())
+		return false;
+	_history.push_back(next);
+	_poppedHistory.pop_back();
+	return true;
 }
 
 std::optional<std::shared_ptr<ActionUndo>> actions::ActionUndoHistory::Pop()
@@ -63,10 +54,10 @@ std::optional<std::shared_ptr<ActionUndo>> actions::ActionUndoHistory::Pop()
 	if (_history.empty())
 		return std::nullopt;
 
-	_poppedHistory.push(_history.front());
-	_history.pop();
-
-	return _poppedHistory.front();
+	auto last = _history.back();
+	_poppedHistory.push_back(last);
+	_history.pop_back();
+	return last;
 }
 
 std::optional<std::shared_ptr<ActionUndo>> actions::ActionUndoHistory::UnPop()
@@ -74,8 +65,8 @@ std::optional<std::shared_ptr<ActionUndo>> actions::ActionUndoHistory::UnPop()
 	if (_poppedHistory.empty())
 		return std::nullopt;
 
-	_history.push(_poppedHistory.front());
-	_poppedHistory.pop();
-
-	return _history.front();
+	auto next = _poppedHistory.back();
+	_history.push_back(next);
+	_poppedHistory.pop_back();
+	return next;
 }

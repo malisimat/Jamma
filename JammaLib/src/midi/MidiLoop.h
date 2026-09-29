@@ -154,10 +154,28 @@ namespace midi
 			std::array<AutomationLaneExport, MaxAutomationLanes> AutomationLanes{};
 		};
 
-	private:
-		struct QuantisedEventBuffer
+	public:
+		struct EditState
 		{
 			std::array<MidiEvent, DefaultCapacity> Events{};
+			std::size_t EventCount = 0u;
+			std::uint32_t LoopLengthSamps = 0u;
+			std::uint64_t Revision = 0u;
+			MidiQuantisationSettings Quantisation{};
+			std::uint64_t QuantisationTransportStartSamps = 0u;
+		};
+
+	private:
+		struct PlaybackSnapshot
+		{
+			std::array<MidiEvent, DefaultCapacity> Raw{};
+			std::array<MidiEvent, DefaultCapacity> Quantised{};
+			std::size_t EventCount = 0u;
+			std::uint32_t LoopLengthSamps = 0u;
+			std::uint64_t Revision = 0u;
+			bool QuantisationActive = false;
+			MidiQuantisationSettings Quantisation{};
+			std::uint64_t QuantisationTransportStartSamps = 0u;
 		};
 
 	public:
@@ -212,9 +230,9 @@ namespace midi
 			IMidiSink& sink) noexcept;
 
 		// Accessors
-		MidiLoopState State() const noexcept { return _state; }
-		std::size_t EventCount() const noexcept { return _eventCount; }
-		std::uint32_t LoopLengthSamps() const noexcept { return _loopLengthSamps; }
+		MidiLoopState State() const noexcept { return _state.load(std::memory_order_acquire); }
+		std::size_t EventCount() const noexcept;
+		std::uint32_t LoopLengthSamps() const noexcept;
 		// UI/job readers use this completion publication instead of reading the
 		// callback-owned plain state and length during finalisation or reset.
 		std::uint32_t CompletedLengthForEditor() const noexcept
@@ -227,11 +245,18 @@ namespace midi
 		// where correction is the transport re-anchor delta held externally on LoopTake.
 		std::uint32_t AutomationGlobalSampleOrigin() const noexcept { return _automationGlobalSampleOrigin; }
 		std::uint64_t DroppedEventCount() const noexcept { return _dropped; }
-		std::uint64_t Revision() const noexcept { return _revision; }
+		std::uint64_t Revision() const noexcept;
 		// Notes that have been emitted as NoteOn but whose NoteOff has not yet been played.
 		// Used by the ditch path to flush stuck notes before the loop is discarded.
-		const std::bitset<TotalNoteSlots>& HeldNotes() const noexcept { return _held; }
+		std::bitset<TotalNoteSlots> HeldNotes() const noexcept;
+		// Ditch handoff: job side requests callback flush before sampling the held
+		// mirror. Any in-flight callback that emits later sees the request at exit.
+		void RequestHeldFlush() noexcept { _heldFlushRequested.store(true, std::memory_order_seq_cst); }
 		bool TryGetEvent(std::size_t index, MidiEvent& ev) const noexcept;
+		bool SnapshotForEdit(EditState& state) const noexcept;
+		// Owner thread only, serialized by LoopTake::_midiCaptureMutex. A failed
+		// publication leaves the completed source and playback unchanged.
+		bool PublishEdit(const EditState& state) noexcept;
 		// Job-side diagnostics: read the event currently published for playback.
 		bool TryGetPlaybackEvent(std::size_t index, MidiEvent& ev) const noexcept;
 		void AttachModel(std::shared_ptr<MidiModel> model) noexcept;
@@ -306,10 +331,10 @@ namespace midi
 		// event buffers and publishes a raw pointer for audio-thread readers. Retained
 		// buffers are not overwritten or freed until this MidiLoop is destroyed, so
 		// ReadBlock never touches shared ownership or dangling storage.
-		void SetQuantisation(const MidiQuantisationSettings& settings,
+		bool SetQuantisation(const MidiQuantisationSettings& settings,
 			std::uint64_t transportStartSamps = 0u);
 		const MidiQuantisationSettings& Quantisation() const noexcept { return _quantisation; }
-		bool IsQuantisationActive() const noexcept { return nullptr != _quantisedEvents.load(std::memory_order_acquire); }
+		bool IsQuantisationActive() const noexcept;
 
 		// Update the sample rate used to project the ms-based automation merge
 		// window into normalised frac space. Should be called whenever the audio
@@ -326,9 +351,15 @@ namespace midi
 		void EmitEventsInRange(std::uint32_t lo,
 			std::uint32_t hi,
 			std::uint32_t globalBase,
+			const PlaybackSnapshot& snapshot,
 			IMidiSink& sink) noexcept;
 		void FlushHeldNotes(std::uint32_t atGlobalSample, IMidiSink& sink) noexcept;
-		void PublishQuantisedEvents();
+		bool PublishCompletedEvents(const MidiEvent* raw, std::size_t count,
+			std::uint32_t length, std::uint64_t revision,
+			const MidiQuantisationSettings& quantisation,
+			std::uint64_t transportStart) noexcept;
+		const PlaybackSnapshot* AcquirePlaybackSnapshot() const noexcept;
+		void ReleasePlaybackSnapshot() const noexcept;
 
 		// --- Automation point helpers ---
 		static constexpr std::uint32_t MidiModelUpdateIntervalSamps = constants::DefaultSampleRate / 30u;
@@ -355,8 +386,15 @@ namespace midi
 		static bool FracWithinOverwriteWindow(float frac, float startFrac, float endFrac, bool wraps) noexcept;
 
 		std::array<MidiEvent, DefaultCapacity> _events{};
-		std::atomic<const QuantisedEventBuffer*> _quantisedEvents;
-		std::vector<std::unique_ptr<QuantisedEventBuffer>> _retainedQuantisedEvents;
+		// Job/MIDI owner builds one of three fixed buffers. Callback and job readers
+		// increment before loading the pointer and decrement after their last read.
+		// The owner reuses retired buffers only after the reader count reaches zero.
+		// All handoff operations are seq_cst, including the reader's first increment.
+		std::array<PlaybackSnapshot, 3u> _playbackBuffers{};
+		std::array<bool, 3u> _playbackBufferUsed{};
+		std::atomic<const PlaybackSnapshot*> _playbackSnapshot{ nullptr };
+		mutable std::atomic<std::uint32_t> _playbackReaders{ 0u };
+		std::uint64_t _callbackRevision = 0u;
 		std::size_t _eventCount;
 		float _sampleRate;
 		std::uint32_t _loopLengthSamps;
@@ -368,9 +406,13 @@ namespace midi
 		std::uint64_t _revision;
 		std::uint64_t _modelRevision;
 		std::uint32_t _modelLengthSamps;
-		MidiLoopState _state;
+		std::atomic<MidiLoopState> _state;
 		std::atomic<std::uint32_t> _completedLengthForEditor{ 0u };
 		std::bitset<TotalNoteSlots> _held;
+		// Callback owns _held. Job-side ditch reads this per-slot atomic mirror;
+		// it never mutates callback state or requires a lock.
+		std::array<std::atomic<std::uint8_t>, TotalNoteSlots> _heldPublished{};
+		std::atomic<bool> _heldFlushRequested{ false };
 		std::atomic<std::shared_ptr<MidiModel>> _model;
 		MidiQuantisationSettings _quantisation;
 		std::uint64_t _quantisationTransportStartSamps = 0u;

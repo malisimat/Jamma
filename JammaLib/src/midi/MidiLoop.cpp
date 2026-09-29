@@ -169,8 +169,7 @@ MidiLoop::MidiLoop() noexcept
 	  _modelRevision(0),
 	  _modelLengthSamps(0),
 	  _state(MidiLoopState::Empty),
-	  _model(nullptr),
-	  _quantisedEvents(nullptr)
+	  _model(nullptr)
 {
 }
 
@@ -181,8 +180,7 @@ void MidiLoop::StartRecord() noexcept
 	_loopLengthSamps = 0;
 	_dropped = 0;
 	_state = MidiLoopState::Recording;
-	_held.reset();
-	_quantisedEvents.store(nullptr, std::memory_order_release);
+	_playbackSnapshot.store(nullptr, std::memory_order_seq_cst);
 	++_revision;
 }
 
@@ -217,7 +215,6 @@ void MidiLoop::ReplaceRecordedEvents(const MidiEvent* events,
 	_completedLengthForEditor.store(0u, std::memory_order_release);
 	_eventCount = 0u;
 	_dropped = 0u;
-	_held.reset();
 
 	if (events && count > 0u)
 	{
@@ -235,10 +232,8 @@ void MidiLoop::ReplaceRecordedEvents(const MidiEvent* events,
 	_state = MidiLoopState::Playing;
 	++_revision;
 
-	if (_quantisation.Enabled)
-		PublishQuantisedEvents();
-	else
-		_quantisedEvents.store(nullptr, std::memory_order_release);
+	PublishCompletedEvents(_events.data(), _eventCount, _loopLengthSamps,
+		_revision, _quantisation, _quantisationTransportStartSamps);
 	_completedLengthForEditor.store(loopLengthSamps, std::memory_order_release);
 }
 
@@ -248,11 +243,10 @@ void MidiLoop::FinalizeOverdubBase(std::uint32_t loopLengthSamps)
 	MidiNote::SortMidiEvents(_events.data(), _eventCount);
 	_loopLengthSamps = loopLengthSamps;
 	_state = MidiLoopState::Playing;
-	_held.reset();
 	++_revision;
 
-	if (_quantisation.Enabled)
-		PublishQuantisedEvents();
+	PublishCompletedEvents(_events.data(), _eventCount, _loopLengthSamps,
+		_revision, _quantisation, _quantisationTransportStartSamps);
 	_completedLengthForEditor.store(loopLengthSamps, std::memory_order_release);
 }
 
@@ -264,14 +258,13 @@ void MidiLoop::EndRecord(std::uint32_t loopLengthSamps, std::uint32_t startGloba
 	_loopLengthSamps = loopLengthSamps;
 	_automationGlobalSampleOrigin = startGlobalSample;
 	_state = MidiLoopState::Playing;
-	_held.reset();
 	++_revision;
 
 	// Recording just finalised the loop window. If quantisation was already armed
 	// for this take, rebuild the parallel buffer against the new length now so the
 	// first playback block can read it without further work.
-	if (_quantisation.Enabled)
-		PublishQuantisedEvents();
+	PublishCompletedEvents(_events.data(), _eventCount, _loopLengthSamps,
+		_revision, _quantisation, _quantisationTransportStartSamps);
 	_completedLengthForEditor.store(loopLengthSamps, std::memory_order_release);
 }
 
@@ -282,31 +275,37 @@ void MidiLoop::Reset() noexcept
 	_loopLengthSamps = 0;
 	_dropped = 0;
 	_state = MidiLoopState::Empty;
-	_held.reset();
-	_quantisedEvents.store(nullptr, std::memory_order_release);
+	_playbackSnapshot.store(nullptr, std::memory_order_seq_cst);
 	++_revision;
 }
 
 bool MidiLoop::SnapshotForExport(ExportState& state,
 	std::int32_t anchorCorrection) const noexcept
 {
-	state.LoopLengthSamps = _loopLengthSamps;
+	const auto* snapshot = AcquirePlaybackSnapshot();
+	state.LoopLengthSamps = snapshot ? snapshot->LoopLengthSamps : _loopLengthSamps;
 	state.AutomationGlobalSampleOrigin = _automationGlobalSampleOrigin
 		+ static_cast<std::uint32_t>(anchorCorrection);
-	if (_eventCount > state.Events.size())
+	const auto count = snapshot ? snapshot->EventCount : _eventCount;
+	if (count > state.Events.size())
+	{
+		if (snapshot) ReleasePlaybackSnapshot();
 		return false;
+	}
 
 	// EndRecord deliberately retains events beyond a quantised loop boundary so
 	// capture can finish without modifying its source storage. Playback ignores
 	// those events, and export must do the same: sidecars only represent the
 	// playable loop window.
 	state.EventCount = 0u;
-	for (std::size_t i = 0u; i < _eventCount; ++i)
+	for (std::size_t i = 0u; i < count; ++i)
 	{
-		if (_events[i].sampleOffset >= state.LoopLengthSamps)
+		const auto& event = snapshot ? snapshot->Raw[i] : _events[i];
+		if (event.sampleOffset >= state.LoopLengthSamps)
 			continue;
-		state.Events[state.EventCount++] = _events[i];
+		state.Events[state.EventCount++] = event;
 	}
+	if (snapshot) ReleasePlaybackSnapshot();
 
 	for (std::size_t laneIdx = 0u; laneIdx < MaxAutomationLanes; ++laneIdx)
 	{
@@ -370,6 +369,10 @@ bool MidiLoop::RestoreFromExport(const ExportState& state) noexcept
 				return false;
 		}
 	}
+	if (!PublishCompletedEvents(state.Events.data(), state.EventCount,
+		state.LoopLengthSamps, _revision + 1u, _quantisation,
+		_quantisationTransportStartSamps))
+		return false;
 
 	_eventCount = state.EventCount;
 	for (std::size_t i = 0u; i < _eventCount; ++i)
@@ -377,7 +380,6 @@ bool MidiLoop::RestoreFromExport(const ExportState& state) noexcept
 	_loopLengthSamps = state.LoopLengthSamps;
 	_automationGlobalSampleOrigin = state.AutomationGlobalSampleOrigin;
 	_dropped = 0u;
-	_held.reset();
 	_state = MidiLoopState::Playing;
 
 	for (std::size_t laneIdx = 0u; laneIdx < MaxAutomationLanes; ++laneIdx)
@@ -396,10 +398,6 @@ bool MidiLoop::RestoreFromExport(const ExportState& state) noexcept
 	}
 
 	++_revision;
-	if (_quantisation.Enabled)
-		PublishQuantisedEvents();
-	else
-		_quantisedEvents.store(nullptr, std::memory_order_release);
 	_completedLengthForEditor.store(state.LoopLengthSamps, std::memory_order_release);
 	return true;
 }
@@ -416,21 +414,219 @@ bool MidiLoop::BindAutomationLaneTarget(std::size_t laneIdx,
 
 bool MidiLoop::TryGetEvent(std::size_t index, MidiEvent& ev) const noexcept
 {
-	if (index >= _eventCount)
-		return false;
-
+	const auto* snapshot = AcquirePlaybackSnapshot();
+	if (snapshot)
+	{
+		const bool found = index < snapshot->EventCount;
+		if (found) ev = snapshot->Raw[index];
+		ReleasePlaybackSnapshot();
+		return found;
+	}
+	if (index >= _eventCount) return false;
 	ev = _events[index];
 	return true;
 }
 
 bool MidiLoop::TryGetPlaybackEvent(std::size_t index, MidiEvent& ev) const noexcept
 {
-	if (index >= _eventCount)
-		return false;
+	const auto* snapshot = AcquirePlaybackSnapshot();
+	if (snapshot)
+	{
+		const bool found = index < snapshot->EventCount;
+		if (found) ev = snapshot->QuantisationActive ? snapshot->Quantised[index] : snapshot->Raw[index];
+		ReleasePlaybackSnapshot();
+		return found;
+	}
+	return TryGetEvent(index, ev);
+}
 
-	const auto* quantised = _quantisedEvents.load(std::memory_order_acquire);
-	ev = quantised ? quantised->Events[index] : _events[index];
+bool MidiLoop::SnapshotForEdit(EditState& state) const noexcept
+{
+	const auto* snapshot = AcquirePlaybackSnapshot();
+	if (!snapshot) return false;
+	state.EventCount = snapshot->EventCount;
+	state.LoopLengthSamps = snapshot->LoopLengthSamps;
+	state.Revision = snapshot->Revision;
+	state.Quantisation = snapshot->Quantisation;
+	state.QuantisationTransportStartSamps = snapshot->QuantisationTransportStartSamps;
+	std::copy_n(snapshot->Raw.begin(), snapshot->EventCount, state.Events.begin());
+	ReleasePlaybackSnapshot();
 	return true;
+}
+
+bool MidiLoop::PublishEdit(const EditState& state) noexcept
+{
+	if (_state != MidiLoopState::Playing || state.Revision != _revision
+		|| state.LoopLengthSamps != _loopLengthSamps || state.LoopLengthSamps == 0u
+		|| state.Quantisation != _quantisation
+		|| state.QuantisationTransportStartSamps != _quantisationTransportStartSamps
+		|| state.EventCount > DefaultCapacity) return false;
+	const auto* previous = AcquirePlaybackSnapshot();
+	if (!previous || previous->Revision != state.Revision)
+	{
+		if (previous) ReleasePlaybackSnapshot();
+		return false;
+	}
+	std::array<MidiEvent, DefaultCapacity> priorEvents{};
+	const auto priorCount = previous->EventCount;
+	std::copy_n(previous->Raw.begin(), priorCount, priorEvents.begin());
+	// Non-note events belong to capture/automation and are never changed by an
+	// editor gesture. Compare their complete ordered subsequence before publish.
+	std::size_t oldNonNote = 0u;
+	std::size_t newNonNote = 0u;
+	for (;;)
+	{
+		while (oldNonNote < previous->EventCount &&
+			(previous->Raw[oldNonNote].IsNoteOn() || previous->Raw[oldNonNote].IsNoteOff())) ++oldNonNote;
+		while (newNonNote < state.EventCount &&
+			(state.Events[newNonNote].IsNoteOn() || state.Events[newNonNote].IsNoteOff())) ++newNonNote;
+		if (oldNonNote == previous->EventCount || newNonNote == state.EventCount) break;
+		const auto& oldEvent = previous->Raw[oldNonNote++];
+		const auto& newEvent = state.Events[newNonNote++];
+		if (oldEvent.sampleOffset != newEvent.sampleOffset || oldEvent.status != newEvent.status
+			|| oldEvent.data1 != newEvent.data1 || oldEvent.data2 != newEvent.data2)
+		{
+			ReleasePlaybackSnapshot();
+			return false;
+		}
+	}
+	const bool nonNoteCountMatches = oldNonNote == previous->EventCount && newNonNote == state.EventCount;
+	ReleasePlaybackSnapshot();
+	if (!nonNoteCountMatches) return false;
+	// Finalised capture may retain a suffix beyond the snapped playable length.
+	// It is invisible to playback/export but must survive an unrelated edit.
+	std::size_t priorTail = 0u;
+	while (priorTail < priorCount && priorEvents[priorTail].sampleOffset < state.LoopLengthSamps)
+		++priorTail;
+	std::size_t newTail = 0u;
+	while (newTail < state.EventCount && state.Events[newTail].sampleOffset < state.LoopLengthSamps)
+		++newTail;
+	if (priorCount - priorTail != state.EventCount - newTail) return false;
+	for (std::size_t i = 0u; i < priorCount - priorTail; ++i)
+	{
+		const auto& a = priorEvents[priorTail + i];
+		const auto& b = state.Events[newTail + i];
+		if (a.sampleOffset != b.sampleOffset || a.status != b.status
+			|| a.data1 != b.data1 || a.data2 != b.data2) return false;
+	}
+	std::array<std::uint32_t, TotalNoteSlots> activeStart{};
+	std::bitset<TotalNoteSlots> active;
+	std::bitset<TotalNoteSlots> invalidSlots;
+	std::uint32_t previousOffset = 0u;
+	int previousPriority = -1;
+	for (std::size_t i = 0u; i < state.EventCount; ++i)
+	{
+		const auto& event = state.Events[i];
+		if (event.sampleOffset >= state.LoopLengthSamps) break;
+		const int priority = event.IsNoteOff() ? 0 : (event.IsNoteOn() ? 2 : 1);
+		if (i > 0u && (event.sampleOffset < previousOffset
+			|| (event.sampleOffset == previousOffset && priority < previousPriority))) return false;
+		previousOffset = event.sampleOffset;
+		previousPriority = priority;
+		if (!event.IsNoteOn() && !event.IsNoteOff()) continue;
+		if (event.data1 >= 128u) return false;
+		const auto slot = NoteSlot(event.Channel(), event.data1);
+		if (event.IsNoteOn())
+		{
+			if (active.test(slot)) invalidSlots.set(slot);
+			active.set(slot);
+			activeStart[slot] = event.sampleOffset;
+		}
+		else
+		{
+			if (!active.test(slot) || event.sampleOffset <= activeStart[slot]) invalidSlots.set(slot);
+			active.reset(slot);
+		}
+	}
+	// An unmatched NoteOn legitimately lasts to the loop seam, where playback
+	// emits a synthetic off. Existing malformed overlap on an untouched slot
+	// must not prevent a separate note from being edited.
+	for (std::size_t slot = 0u; slot < TotalNoteSlots; ++slot)
+	{
+		if (!invalidSlots.test(slot)) continue;
+		std::size_t oldIndex = 0u;
+		std::size_t newIndex = 0u;
+		for (;;)
+		{
+			while (oldIndex < priorCount &&
+				(!priorEvents[oldIndex].IsNoteOn() && !priorEvents[oldIndex].IsNoteOff()
+					|| NoteSlot(priorEvents[oldIndex].Channel(), priorEvents[oldIndex].data1) != slot)) ++oldIndex;
+			while (newIndex < state.EventCount &&
+				(!state.Events[newIndex].IsNoteOn() && !state.Events[newIndex].IsNoteOff()
+					|| NoteSlot(state.Events[newIndex].Channel(), state.Events[newIndex].data1) != slot)) ++newIndex;
+			if (oldIndex == priorCount || newIndex == state.EventCount) break;
+			const auto& oldEvent = priorEvents[oldIndex++];
+			const auto& newEvent = state.Events[newIndex++];
+			if (oldEvent.sampleOffset != newEvent.sampleOffset || oldEvent.status != newEvent.status
+				|| oldEvent.data1 != newEvent.data1 || oldEvent.data2 != newEvent.data2) return false;
+		}
+		if (oldIndex != priorCount || newIndex != state.EventCount) return false;
+	}
+	if (!PublishCompletedEvents(state.Events.data(), state.EventCount,
+		state.LoopLengthSamps, _revision + 1u, _quantisation,
+		_quantisationTransportStartSamps)) return false;
+	std::copy_n(state.Events.begin(), state.EventCount, _events.begin());
+	_eventCount = state.EventCount;
+	++_revision;
+	return true;
+}
+
+const MidiLoop::PlaybackSnapshot* MidiLoop::AcquirePlaybackSnapshot() const noexcept
+{
+	_playbackReaders.fetch_add(1u, std::memory_order_seq_cst);
+	const auto* snapshot = _playbackSnapshot.load(std::memory_order_seq_cst);
+	if (!snapshot) ReleasePlaybackSnapshot();
+	return snapshot;
+}
+
+void MidiLoop::ReleasePlaybackSnapshot() const noexcept
+{
+	_playbackReaders.fetch_sub(1u, std::memory_order_seq_cst);
+}
+
+bool MidiLoop::IsQuantisationActive() const noexcept
+{
+	const auto* snapshot = AcquirePlaybackSnapshot();
+	if (!snapshot) return false;
+	const bool active = snapshot->QuantisationActive;
+	ReleasePlaybackSnapshot();
+	return active;
+}
+
+std::bitset<MidiLoop::TotalNoteSlots> MidiLoop::HeldNotes() const noexcept
+{
+	std::bitset<TotalNoteSlots> result;
+	for (std::size_t slot = 0u; slot < TotalNoteSlots; ++slot)
+		if (_heldPublished[slot].load(std::memory_order_seq_cst) != 0u)
+			result.set(slot);
+	return result;
+}
+
+std::size_t MidiLoop::EventCount() const noexcept
+{
+	const auto* snapshot = AcquirePlaybackSnapshot();
+	if (!snapshot) return _eventCount;
+	const auto count = snapshot->EventCount;
+	ReleasePlaybackSnapshot();
+	return count;
+}
+
+std::uint32_t MidiLoop::LoopLengthSamps() const noexcept
+{
+	const auto* snapshot = AcquirePlaybackSnapshot();
+	if (!snapshot) return _loopLengthSamps;
+	const auto length = snapshot->LoopLengthSamps;
+	ReleasePlaybackSnapshot();
+	return length;
+}
+
+std::uint64_t MidiLoop::Revision() const noexcept
+{
+	const auto* snapshot = AcquirePlaybackSnapshot();
+	if (!snapshot) return _revision;
+	const auto revision = snapshot->Revision;
+	ReleasePlaybackSnapshot();
+	return revision;
 }
 
 void MidiLoop::AttachModel(std::shared_ptr<graphics::MidiModel> model) noexcept
@@ -473,12 +669,14 @@ bool MidiLoop::BuildModelFromEvents(std::uint32_t displayLengthSamps, bool force
 		// If loop length is not yet resolved (for example during arming/transition
 		// windows), derive a temporary display span from recorded events so notes
 		// remain visible instead of disappearing.
-		const auto* quantisedEvents = _quantisedEvents.load(std::memory_order_acquire);
-		const MidiEvent* eventSource = quantisedEvents ? quantisedEvents->Events.data() : _events.data();
+		const auto* snapshot = AcquirePlaybackSnapshot();
+		const MidiEvent* eventSource = snapshot ?
+			(snapshot->QuantisationActive ? snapshot->Quantised.data() : snapshot->Raw.data()) : _events.data();
 		std::uint32_t maxOffset = 0u;
-		for (std::size_t i = 0; i < _eventCount; ++i)
+		for (std::size_t i = 0; i < (snapshot ? snapshot->EventCount : _eventCount); ++i)
 			if (eventSource[i].sampleOffset > maxOffset)
 				maxOffset = eventSource[i].sampleOffset;
+		if (snapshot) ReleasePlaybackSnapshot();
 
 		constexpr std::uint32_t MaxUint32 = 0xFFFFFFFFu;
 		effectiveLength = (maxOffset < MaxUint32) ? (maxOffset + 1u) : maxOffset;
@@ -511,10 +709,11 @@ bool MidiLoop::BuildModelFromEvents(std::uint32_t displayLengthSamps, bool force
 
 	// Visualisation must reflect what playback emits, so use the same published
 	// immutable quantised buffer that the audio thread reads from.
-	const auto* quantisedEvents = _quantisedEvents.load(std::memory_order_acquire);
-	const MidiEvent* eventSource = quantisedEvents ? quantisedEvents->Events.data() : _events.data();
-
-	auto spans = MidiNote::ExtractSpans(eventSource, _eventCount, effectiveLength);
+	const auto* snapshot = AcquirePlaybackSnapshot();
+	const MidiEvent* eventSource = snapshot ?
+		(snapshot->QuantisationActive ? snapshot->Quantised.data() : snapshot->Raw.data()) : _events.data();
+	auto spans = MidiNote::ExtractSpans(eventSource, snapshot ? snapshot->EventCount : _eventCount, effectiveLength);
+	if (snapshot) ReleasePlaybackSnapshot();
 	if (queueUpdate && !force)
 		model->QueueModelUpdate(spans, effectiveLength);
 	else
@@ -529,8 +728,20 @@ void MidiLoop::ReadBlock(std::uint32_t globalSample,
                          std::uint32_t numSamples,
                          IMidiSink& sink) noexcept
 {
-	if (_state != MidiLoopState::Playing || 0u == _loopLengthSamps || 0u == numSamples)
+	const auto* snapshot = AcquirePlaybackSnapshot();
+	if (!snapshot || 0u == snapshot->LoopLengthSamps || 0u == numSamples)
+	{
+		if (numSamples > 0u)
+			FlushHeldNotes(globalSample, sink);
+		if (snapshot) ReleasePlaybackSnapshot();
 		return;
+	}
+	const auto loopLength = snapshot->LoopLengthSamps;
+	if (_callbackRevision != snapshot->Revision)
+	{
+		FlushHeldNotes(globalSample, sink);
+		_callbackRevision = snapshot->Revision;
+	}
 
 	std::uint32_t remaining = numSamples;
 	std::uint32_t cursor = globalSample;
@@ -538,8 +749,8 @@ void MidiLoop::ReadBlock(std::uint32_t globalSample,
 	while (remaining > 0u)
 	{
 		const std::uint32_t loopOffset =
-			static_cast<std::uint32_t>(cursor % _loopLengthSamps);
-		const std::uint32_t roomInLoop = _loopLengthSamps - loopOffset;
+			static_cast<std::uint32_t>(cursor % loopLength);
+		const std::uint32_t roomInLoop = loopLength - loopOffset;
 		const std::uint32_t segment = (remaining < roomInLoop) ? remaining : roomInLoop;
 
 		// If we are at the very start of a loop iteration, flush any notes that are
@@ -553,38 +764,38 @@ void MidiLoop::ReadBlock(std::uint32_t globalSample,
 
 		// globalBase is the absolute sample corresponding to loopOffset.
 		const std::uint32_t globalBase = cursor - loopOffset;
-		EmitEventsInRange(loopOffset, loopOffset + segment, globalBase, sink);
+		EmitEventsInRange(loopOffset, loopOffset + segment, globalBase, *snapshot, sink);
 
 		const bool wraps = (segment == roomInLoop) && (remaining > roomInLoop);
 		if (wraps)
 		{
 			// Wrap boundary: flush held notes at the exact wrap sample.
-			const std::uint32_t wrapSample = globalBase + _loopLengthSamps;
+			const std::uint32_t wrapSample = globalBase + loopLength;
 			FlushHeldNotes(wrapSample, sink);
 		}
 
 		cursor += segment;
 		remaining -= segment;
 	}
+	if (_heldFlushRequested.load(std::memory_order_seq_cst))
+		FlushHeldNotes(cursor - 1u, sink);
+	ReleasePlaybackSnapshot();
 }
 
 void MidiLoop::EmitEventsInRange(std::uint32_t lo,
                                  std::uint32_t hi,
                                  std::uint32_t globalBase,
+								 const PlaybackSnapshot& snapshot,
                                  IMidiSink& sink) noexcept
 {
-	// Snapshot which event source playback is using for this scan. Quantised
-	// buffers are immutable and retained by the owning MidiLoop, so this raw
-	// pointer stays valid without shared_ptr control-block work on the audio path.
-	const auto* quantisedEvents = _quantisedEvents.load(std::memory_order_acquire);
-	const MidiEvent* events = quantisedEvents ? quantisedEvents->Events.data() : _events.data();
+	const MidiEvent* events = snapshot.QuantisationActive ? snapshot.Quantised.data() : snapshot.Raw.data();
 
 	// Linear scan: small N expected, and storage is contiguous.
-	for (std::size_t i = 0; i < _eventCount; ++i)
+	for (std::size_t i = 0; i < snapshot.EventCount; ++i)
 	{
 		const MidiEvent& src = events[i];
 		const std::uint32_t off = src.sampleOffset;
-		if (off >= _loopLengthSamps)
+		if (off >= snapshot.LoopLengthSamps)
 			continue;
 		if (off < lo || off >= hi)
 			continue;
@@ -595,9 +806,15 @@ void MidiLoop::EmitEventsInRange(std::uint32_t lo,
 
 		// Track held notes for wrap flushing.
 		if (src.IsNoteOn())
+		{
 			_held.set(NoteSlot(src.Channel(), src.data1));
+			_heldPublished[NoteSlot(src.Channel(), src.data1)].store(1u, std::memory_order_seq_cst);
+		}
 		else if (src.IsNoteOff())
+		{
 			_held.reset(NoteSlot(src.Channel(), src.data1));
+			_heldPublished[NoteSlot(src.Channel(), src.data1)].store(0u, std::memory_order_seq_cst);
+		}
 	}
 }
 
@@ -618,45 +835,58 @@ void MidiLoop::FlushHeldNotes(std::uint32_t atGlobalSample, IMidiSink& sink) noe
 				static_cast<std::uint32_t>(atGlobalSample), channel, note);
 			sink.OnEvent(off);
 			_held.reset(slot);
+			_heldPublished[slot].store(0u, std::memory_order_seq_cst);
 		}
 	}
 }
 
-void MidiLoop::SetQuantisation(const MidiQuantisationSettings& settings,
+bool MidiLoop::SetQuantisation(const MidiQuantisationSettings& settings,
 	std::uint64_t transportStartSamps)
 {
-	const auto previous = _quantisation;
+	if (settings == _quantisation && transportStartSamps == _quantisationTransportStartSamps)
+		return true;
+	if (_state == MidiLoopState::Playing &&
+		!PublishCompletedEvents(_events.data(), _eventCount, _loopLengthSamps,
+			_revision + 1u, settings, transportStartSamps))
+		return false;
 	_quantisation = settings;
 	_quantisationTransportStartSamps = transportStartSamps;
-
-	const auto hasGrid = _quantisation.Enabled
-		&& (_quantisation.GrainSamps > 0u || _quantisation.HasRemoteGrid());
-	if (hasGrid && _loopLengthSamps > 0u && _eventCount > 0u)
-		PublishQuantisedEvents();
-	else
-		_quantisedEvents.store(nullptr, std::memory_order_release);
-
-	if (previous != _quantisation)
-		++_revision;
+	++_revision;
+	return true;
 }
 
-void MidiLoop::PublishQuantisedEvents()
+bool MidiLoop::PublishCompletedEvents(const MidiEvent* raw, std::size_t count,
+	std::uint32_t length, std::uint64_t revision,
+	const MidiQuantisationSettings& quantisation,
+	std::uint64_t transportStart) noexcept
 {
-	const auto hasGrid = _quantisation.Enabled
-		&& (_quantisation.GrainSamps > 0u || _quantisation.HasRemoteGrid());
-	if (!hasGrid || 0u == _loopLengthSamps || 0u == _eventCount)
+	if (count > DefaultCapacity || length == 0u)
+		return false;
+	const auto* current = _playbackSnapshot.load(std::memory_order_seq_cst);
+	if (_playbackReaders.load(std::memory_order_seq_cst) == 0u)
 	{
-		_quantisedEvents.store(nullptr, std::memory_order_release);
-		return;
+		for (std::size_t i = 0u; i < _playbackBuffers.size(); ++i)
+			if (&_playbackBuffers[i] != current) _playbackBufferUsed[i] = false;
 	}
-
-	auto quantisedEvents = std::make_unique<QuantisedEventBuffer>();
-	MidiQuantisation::BuildQuantisedPlaybackEvents(_events.data(), _eventCount,
-		_loopLengthSamps, _quantisation, _quantisationTransportStartSamps,
-		quantisedEvents->Events.data());
-	const auto* snapshot = quantisedEvents.get();
-	_retainedQuantisedEvents.push_back(std::move(quantisedEvents));
-	_quantisedEvents.store(snapshot, std::memory_order_release);
+	std::size_t slot = _playbackBuffers.size();
+	for (std::size_t i = 0u; i < _playbackBuffers.size(); ++i)
+		if (!_playbackBufferUsed[i]) { slot = i; break; }
+	if (slot == _playbackBuffers.size()) return false;
+	auto& snapshot = _playbackBuffers[slot];
+	std::copy_n(raw, count, snapshot.Raw.begin());
+	snapshot.EventCount = count;
+	snapshot.LoopLengthSamps = length;
+	snapshot.Revision = revision;
+	snapshot.Quantisation = quantisation;
+	snapshot.QuantisationTransportStartSamps = transportStart;
+	snapshot.QuantisationActive = quantisation.Enabled
+		&& (quantisation.GrainSamps > 0u || quantisation.HasRemoteGrid()) && count > 0u;
+	if (snapshot.QuantisationActive)
+		MidiQuantisation::BuildQuantisedPlaybackEvents(snapshot.Raw.data(), count,
+			length, quantisation, transportStart, snapshot.Quantised.data());
+	_playbackBufferUsed[slot] = true;
+	_playbackSnapshot.store(&snapshot, std::memory_order_seq_cst);
+	return true;
 }
 
 void MidiLoop::SetAutomationValueAtFrac(std::size_t laneIdx, double frac, float value) noexcept

@@ -11,6 +11,9 @@
 #include "engine/LoopTake.h"
 #include "engine/Quantiser.h"
 #include "midi/MidiLoop.h"
+#include "midi/MidiEditOperations.h"
+#include "midi/MidiLoopEditUndo.h"
+#include "actions/ActionUndoHistory.h"
 #include "graphics/MidiModel.h"
 #include "midi/MidiQuantisation.h"
 #include "engine/Scene.h"
@@ -1666,4 +1669,364 @@ TEST(LoopTakeMidiPlayback, MutedTakeDoesNotEmitMidiEvents)
 	MidiLoopCapturingOutputSink sink;
 	EXPECT_EQ(1u, take->ReadMidiBlock(123u, 64u, sink));
 	EXPECT_TRUE(sink.events.empty());
+}
+
+TEST(MidiLoopEdit, PublishesRawAndPlaybackTogetherAndRejectsStaleOrOverflow)
+{
+	MidiLoop loop;
+	const std::array events{
+		MidiEvent::MakeNoteOn(10u, 2u, 60u, 99u),
+		MidiEvent::MakeNoteOff(20u, 2u, 60u),
+		MidiEvent{ 15u, 0xB2u, 7u, 45u, 0u }
+	};
+	loop.ReplaceRecordedEvents(events.data(), events.size(), 100u);
+	MidiLoop::EditState edit;
+	ASSERT_TRUE(loop.SnapshotForEdit(edit));
+	ASSERT_TRUE(midi::MidiEditOperations::Create(edit, 30u, 10u, 2u, 64u));
+	ASSERT_TRUE(loop.PublishEdit(edit));
+	EXPECT_EQ(5u, loop.EventCount());
+	MidiEvent event{};
+	ASSERT_TRUE(loop.TryGetEvent(1u, event));
+	EXPECT_EQ(0xB2u, event.status);
+	EXPECT_FALSE(loop.PublishEdit(edit));
+	MidiLoop::EditState overflow;
+	ASSERT_TRUE(loop.SnapshotForEdit(overflow));
+	overflow.EventCount = MidiLoop::DefaultCapacity + 1u;
+	EXPECT_FALSE(loop.PublishEdit(overflow));
+	MidiLoop::ExportState exported;
+	ASSERT_TRUE(loop.SnapshotForExport(exported));
+	EXPECT_EQ(5u, exported.EventCount);
+	EXPECT_EQ(0xB2u, exported.Events[1].status);
+}
+
+TEST(MidiLoopEdit, QuantisationKeepsRawSourceAndFlushesHeldOnRevision)
+{
+	MidiLoop loop;
+	const std::array events{
+		MidiEvent::MakeNoteOn(11u, 0u, 60u, 90u),
+		MidiEvent::MakeNoteOff(90u, 0u, 60u)
+	};
+	loop.ReplaceRecordedEvents(events.data(), events.size(), 100u);
+	MidiQuantisationSettings quant;
+	quant.Enabled = true;
+	quant.GrainSamps = 20u;
+	quant.Fraction = MidiQuantisationFraction::Whole;
+	loop.SetQuantisation(quant);
+	MidiEvent raw{};
+	MidiEvent playback{};
+	ASSERT_TRUE(loop.TryGetEvent(0u, raw));
+	ASSERT_TRUE(loop.TryGetPlaybackEvent(0u, playback));
+	EXPECT_EQ(11u, raw.sampleOffset);
+	EXPECT_EQ(20u, playback.sampleOffset);
+	MidiLoopCapturingSink sink;
+	loop.ReadBlock(20u, 1u, sink);
+	ASSERT_TRUE(loop.HeldNotes().test(MidiLoop::NoteSlot(0u, 60u)));
+	MidiLoop::EditState edit;
+	ASSERT_TRUE(loop.SnapshotForEdit(edit));
+	edit.EventCount = 0u;
+	ASSERT_TRUE(loop.PublishEdit(edit));
+	sink.Clear();
+	loop.ReadBlock(21u, 1u, sink);
+	ASSERT_EQ(1u, sink.events.size());
+	EXPECT_TRUE(sink.events[0].IsNoteOff());
+	EXPECT_EQ(21u, sink.events[0].sampleOffset);
+	EXPECT_TRUE(loop.HeldNotes().none());
+	MidiLoop::ExportState exported;
+	ASSERT_TRUE(loop.SnapshotForExport(exported));
+	EXPECT_EQ(0u, exported.EventCount);
+}
+
+TEST(MidiLoopEdit, FinalCellUsesHeldToWrapSeamConvention)
+{
+	MidiLoop loop;
+	loop.ReplaceRecordedEvents(nullptr, 0u, 16u);
+	MidiLoop::EditState edit;
+	ASSERT_TRUE(loop.SnapshotForEdit(edit));
+	ASSERT_TRUE(midi::MidiEditOperations::Create(edit, 15u, 1u, 1u, 72u));
+	ASSERT_EQ(1u, edit.EventCount);
+	ASSERT_TRUE(loop.PublishEdit(edit));
+	MidiLoopCapturingSink sink;
+	loop.ReadBlock(15u, 2u, sink);
+	ASSERT_EQ(2u, sink.events.size());
+	EXPECT_TRUE(sink.events[0].IsNoteOn());
+	EXPECT_EQ(15u, sink.events[0].sampleOffset);
+	EXPECT_TRUE(sink.events[1].IsNoteOff());
+	EXPECT_EQ(16u, sink.events[1].sampleOffset);
+}
+
+TEST(MidiLoopEdit, RejectsChangedNonNoteWithoutPublishing)
+{
+	MidiLoop loop;
+	const std::array events{ MidiEvent{ 5u, 0xB0u, 7u, 42u, 0u } };
+	loop.ReplaceRecordedEvents(events.data(), events.size(), 16u);
+	MidiLoop::EditState edit;
+	ASSERT_TRUE(loop.SnapshotForEdit(edit));
+	edit.Events[0].data2 = 99u;
+	EXPECT_FALSE(loop.PublishEdit(edit));
+	MidiEvent original{};
+	ASSERT_TRUE(loop.TryGetEvent(0u, original));
+	EXPECT_EQ(42u, original.data2);
+}
+
+TEST(MidiLoopEdit, QuantisedCellSplitPreservesAdjacentCoverage)
+{
+	MidiLoop loop;
+	const std::array events{
+		MidiEvent::MakeNoteOn(7u, 1u, 60u, 87u),
+		MidiEvent::MakeNoteOff(67u, 1u, 60u)
+	};
+	loop.ReplaceRecordedEvents(events.data(), events.size(), 100u);
+	MidiQuantisationSettings quant;
+	quant.Enabled = true;
+	quant.Fraction = MidiQuantisationFraction::Whole;
+	quant.RemoteIntervalSamps = 100u;
+	quant.RemoteBpi = 5u;
+	quant.RemoteOriginSamps = 7;
+	ASSERT_TRUE(loop.SetQuantisation(quant));
+	MidiLoop::EditState edit;
+	ASSERT_TRUE(loop.SnapshotForEdit(edit));
+	ASSERT_TRUE(midi::MidiEditOperations::SetCell(edit, 27u, 47u, 60u, 1u,
+		false, quant, 0u));
+	ASSERT_TRUE(loop.PublishEdit(edit));
+	std::array<MidiEvent, 4u> playback{};
+	for (std::size_t i = 0u; i < playback.size(); ++i)
+		ASSERT_TRUE(loop.TryGetPlaybackEvent(i, playback[i]));
+	const auto spans = midi::MidiNote::ExtractSpans(playback.data(), playback.size(), 100u);
+	ASSERT_EQ(2u, spans.size());
+	EXPECT_EQ(7u, spans[0].StartSample);
+	EXPECT_EQ(20u, spans[0].DurationSamples);
+	EXPECT_EQ(47u, spans[1].StartSample);
+	EXPECT_EQ(20u, spans[1].DurationSamples);
+}
+
+TEST(MidiLoopEdit, QuantisedAddRejectsNonBoundaryWithPhaseOffset)
+{
+	MidiLoop::EditState edit;
+	edit.LoopLengthSamps = 100u;
+	MidiQuantisationSettings quant;
+	quant.Enabled = true;
+	quant.GrainSamps = 20u;
+	quant.Fraction = MidiQuantisationFraction::Whole;
+	quant.PhaseOffsetSamps = 3;
+	EXPECT_FALSE(midi::MidiEditOperations::SetCell(edit, 20u, 40u,
+		60u, 0u, true, quant, 0u));
+	EXPECT_EQ(0u, edit.EventCount);
+	EXPECT_TRUE(midi::MidiEditOperations::SetCell(edit, 23u, 43u,
+		60u, 0u, true, quant, 0u));
+}
+
+TEST(MidiLoopEdit, QuantisedAddInvertsLargePhaseOffset)
+{
+	MidiLoop loop;
+	loop.ReplaceRecordedEvents(nullptr, 0u, 100u);
+	MidiQuantisationSettings quant;
+	quant.Enabled = true;
+	quant.GrainSamps = 20u;
+	quant.Fraction = MidiQuantisationFraction::Whole;
+	quant.PhaseOffsetSamps = 12;
+	ASSERT_TRUE(loop.SetQuantisation(quant));
+	MidiLoop::EditState edit;
+	ASSERT_TRUE(loop.SnapshotForEdit(edit));
+	EXPECT_FALSE(midi::MidiEditOperations::SetCell(edit, 0u, 12u,
+		60u, 0u, true, quant, 0u));
+	EXPECT_EQ(0u, edit.EventCount);
+	ASSERT_TRUE(midi::MidiEditOperations::SetCell(edit, 12u, 32u,
+		60u, 0u, true, quant, 0u));
+	ASSERT_TRUE(loop.PublishEdit(edit));
+	MidiEvent raw{}, displayed{};
+	ASSERT_TRUE(loop.TryGetEvent(0u, raw));
+	ASSERT_TRUE(loop.TryGetPlaybackEvent(0u, displayed));
+	EXPECT_EQ(0u, raw.sampleOffset);
+	EXPECT_EQ(12u, displayed.sampleOffset);
+}
+
+TEST(MidiLoopEdit, QuantisedFinalCellUsesHeldSeamWhenShifted)
+{
+	MidiLoop loop;
+	loop.ReplaceRecordedEvents(nullptr, 0u, 100u);
+	MidiQuantisationSettings quant;
+	quant.Enabled = true;
+	quant.GrainSamps = 20u;
+	quant.Fraction = MidiQuantisationFraction::Whole;
+	quant.PhaseOffsetSamps = 12;
+	ASSERT_TRUE(loop.SetQuantisation(quant));
+	MidiLoop::EditState edit;
+	ASSERT_TRUE(loop.SnapshotForEdit(edit));
+	ASSERT_TRUE(midi::MidiEditOperations::SetCell(edit, 92u, 100u,
+		60u, 0u, true, quant, 0u));
+	ASSERT_TRUE(loop.PublishEdit(edit));
+	MidiEvent raw{}, displayed{};
+	ASSERT_TRUE(loop.TryGetEvent(0u, raw));
+	ASSERT_TRUE(loop.TryGetPlaybackEvent(0u, displayed));
+	EXPECT_EQ(80u, raw.sampleOffset);
+	EXPECT_EQ(92u, displayed.sampleOffset);
+	MidiLoopCapturingSink sink;
+	loop.ReadBlock(92u, 9u, sink);
+	ASSERT_EQ(2u, sink.events.size());
+	EXPECT_EQ(100u, sink.events[1].sampleOffset);
+	MidiLoop::EditState erase;
+	ASSERT_TRUE(loop.SnapshotForEdit(erase));
+	ASSERT_TRUE(midi::MidiEditOperations::SetCell(erase, 92u, 100u,
+		60u, 0u, false, quant, 0u));
+	ASSERT_TRUE(loop.PublishEdit(erase));
+	EXPECT_EQ(0u, loop.EventCount());
+}
+
+TEST(MidiLoopEdit, PreservesFinalisedCaptureTail)
+{
+	MidiLoop loop;
+	loop.StartRecord();
+	ASSERT_TRUE(loop.RecordEvent(MidiEvent::MakeNoteOn(10u, 0u, 60u, 90u)));
+	ASSERT_TRUE(loop.RecordEvent(MidiEvent::MakeNoteOff(120u, 0u, 60u)));
+	loop.EndRecord(100u);
+	MidiLoop::EditState edit;
+	ASSERT_TRUE(loop.SnapshotForEdit(edit));
+	ASSERT_TRUE(midi::MidiEditOperations::Create(edit, 30u, 10u, 0u, 64u));
+	ASSERT_TRUE(loop.PublishEdit(edit));
+	EXPECT_EQ(4u, loop.EventCount());
+	MidiEvent tail{};
+	ASSERT_TRUE(loop.TryGetEvent(3u, tail));
+	EXPECT_EQ(120u, tail.sampleOffset);
+	MidiLoop::ExportState exported;
+	ASSERT_TRUE(loop.SnapshotForExport(exported));
+	EXPECT_EQ(3u, exported.EventCount);
+}
+
+TEST(MidiLoopEdit, CallbackKeepsOneImmutableRevisionAcrossPublication)
+{
+	MidiLoop loop;
+	const std::array events{
+		MidiEvent::MakeNoteOn(10u, 0u, 60u, 90u),
+		MidiEvent::MakeNoteOff(20u, 0u, 60u)
+	};
+	loop.ReplaceRecordedEvents(events.data(), events.size(), 100u);
+	class PublishingSink final : public IMidiSink
+	{
+	public:
+		MidiLoop& Loop;
+		std::array<MidiEvent, 4u> Events{};
+		std::size_t Count = 0u;
+		bool Published = false;
+		explicit PublishingSink(MidiLoop& loop) : Loop(loop) {}
+		void OnEvent(const MidiEvent& event) noexcept override
+		{
+			Events[Count++] = event;
+			if (Published) return;
+			MidiLoop::EditState edit;
+			Published = Loop.SnapshotForEdit(edit)
+				&& midi::MidiEditOperations::MoveOrTrim(edit, 0u, 10u, 30u, 60u)
+				&& Loop.PublishEdit(edit);
+		}
+	} sink(loop);
+	loop.ReadBlock(0u, 40u, sink);
+	ASSERT_TRUE(sink.Published);
+	ASSERT_EQ(2u, sink.Count);
+	EXPECT_EQ(20u, sink.Events[1].sampleOffset);
+	MidiLoopCapturingSink later;
+	loop.ReadBlock(100u, 40u, later);
+	ASSERT_EQ(2u, later.events.size());
+	EXPECT_EQ(130u, later.events[1].sampleOffset);
+}
+
+TEST(MidiLoopEdit, DitchFlushUsesLastSampleInsideBlock)
+{
+	MidiLoop loop;
+	const std::array events{ MidiEvent::MakeNoteOn(10u, 0u, 60u, 90u) };
+	loop.ReplaceRecordedEvents(events.data(), events.size(), 100u);
+	class DitchSink final : public IMidiSink
+	{
+	public:
+		MidiLoop& Loop;
+		std::array<MidiEvent, 2u> Events{};
+		std::size_t Count = 0u;
+		explicit DitchSink(MidiLoop& loop) : Loop(loop) {}
+		void OnEvent(const MidiEvent& event) noexcept override
+		{
+			Events[Count++] = event;
+			if (event.IsNoteOn()) Loop.RequestHeldFlush();
+		}
+	} sink(loop);
+	loop.ReadBlock(10u, 10u, sink);
+	ASSERT_EQ(2u, sink.Count);
+	EXPECT_TRUE(sink.Events[1].IsNoteOff());
+	EXPECT_EQ(19u, sink.Events[1].sampleOffset);
+}
+
+TEST(MidiLoopEdit, SnapshotPoolRejectsAndRetriesWithoutReusingActiveReader)
+{
+	MidiLoop loop;
+	const std::array events{
+		MidiEvent::MakeNoteOn(10u, 0u, 60u, 90u),
+		MidiEvent::MakeNoteOff(20u, 0u, 60u)
+	};
+	loop.ReplaceRecordedEvents(events.data(), events.size(), 100u);
+	class PoolSink final : public IMidiSink
+	{
+	public:
+		MidiLoop& Loop;
+		std::array<MidiEvent, 2u> Events{};
+		std::size_t Count = 0u;
+		std::array<bool, 3u> Results{};
+		explicit PoolSink(MidiLoop& loop) : Loop(loop) {}
+		void OnEvent(const MidiEvent& event) noexcept override
+		{
+			Events[Count++] = event;
+			if (Count != 1u) return;
+			for (std::uint32_t i = 0u; i < Results.size(); ++i)
+			{
+				MidiQuantisationSettings settings;
+				settings.Enabled = true;
+				settings.GrainSamps = 20u + i;
+				settings.Fraction = MidiQuantisationFraction::Whole;
+				Results[i] = Loop.SetQuantisation(settings);
+			}
+		}
+	} sink(loop);
+	loop.ReadBlock(0u, 40u, sink);
+	EXPECT_EQ((std::array<bool, 3u>{ true, true, false }), sink.Results);
+	ASSERT_EQ(2u, sink.Count);
+	EXPECT_EQ(20u, sink.Events[1].sampleOffset);
+	MidiQuantisationSettings retry;
+	retry.Enabled = true;
+	retry.GrainSamps = 22u;
+	retry.Fraction = MidiQuantisationFraction::Whole;
+	EXPECT_TRUE(loop.SetQuantisation(retry));
+}
+
+TEST(MidiLoopEdit, FinalCellNeedsOnlyOneFreeEventSlot)
+{
+	MidiLoop::EditState edit;
+	edit.LoopLengthSamps = 100u;
+	edit.EventCount = MidiLoop::DefaultCapacity - 1u;
+	EXPECT_TRUE(midi::MidiEditOperations::Create(edit, 99u, 1u, 0u, 60u));
+	EXPECT_EQ(MidiLoop::DefaultCapacity, edit.EventCount);
+	EXPECT_FALSE(midi::MidiEditOperations::Create(edit, 98u, 1u, 0u, 61u));
+}
+
+TEST(MidiLoopEdit, TwoGestureUndoRedoFollowsMonotonicRevisions)
+{
+	auto take = MakeLoopTake("two-gesture-midi-edit");
+	take->Record({}, "station", { 0u }, { "" });
+	take->Play(0u, 100u, 0u);
+	auto loop = take->GetMidiLoops().at(0u);
+	actions::ActionUndoHistory history;
+	auto cursor = std::make_shared<actions::MidiEditRevisionCursor>();
+	for (std::uint8_t pitch : { 60u, 64u })
+	{
+		MidiLoop::EditState before;
+		ASSERT_TRUE(loop->SnapshotForEdit(before));
+		auto after = before;
+		ASSERT_TRUE(midi::MidiEditOperations::Create(after, pitch, 10u, 0u, pitch));
+		std::uint64_t accepted = 0u;
+		ASSERT_TRUE(take->PublishMidiEdit(loop, after, &accepted));
+		history.Add(std::make_shared<actions::MidiLoopEditUndo>(take, loop,
+			before, after, accepted, cursor));
+	}
+	ASSERT_EQ(4u, loop->EventCount());
+	EXPECT_TRUE(history.Undo());
+	EXPECT_TRUE(history.Undo());
+	EXPECT_EQ(0u, loop->EventCount());
+	EXPECT_TRUE(history.Redo());
+	EXPECT_TRUE(history.Redo());
+	EXPECT_EQ(4u, loop->EventCount());
 }

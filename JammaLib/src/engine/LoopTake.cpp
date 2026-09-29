@@ -1137,12 +1137,16 @@ ActionResult LoopTake::OnAction(JobAction action)
 	break;
 	case JobAction::JOB_UPDATEMIDIQUANTISATION:
 	{
+		std::scoped_lock midiLock(_midiCaptureMutex);
 		const auto settings = ResolvedMidiQuantisation();
+		bool retry = false;
 		for (auto& midiLoop : action.MidiLoops)
 		{
 			if (midiLoop)
-				midiLoop->SetQuantisation(settings, MidiQuantisationTransportStartSamps());
+				retry |= !midiLoop->SetQuantisation(settings, MidiQuantisationTransportStartSamps());
 		}
+		if (retry)
+			_midiQuantisationUpdatePending.store(true, std::memory_order_release);
 
 		const auto displayLength = static_cast<std::uint32_t>(_recordedSampCount.load(std::memory_order_relaxed));
 		for (auto& midiLoop : action.MidiLoops)
@@ -2518,6 +2522,24 @@ bool LoopTake::RestoreAudioRoutes(const std::vector<std::vector<unsigned long>>&
 	return true;
 }
 
+bool LoopTake::PublishMidiEdit(const std::shared_ptr<midi::MidiLoop>& loop,
+	const midi::MidiLoop::EditState& edit,
+	std::uint64_t* acceptedRevision)
+{
+	std::scoped_lock midiLock(_midiCaptureMutex);
+	if (!loop || _state.load(std::memory_order_acquire) != STATE_PLAYING
+		|| std::find(_midiLoops.begin(), _midiLoops.end(), loop) == _midiLoops.end()
+		|| edit.Quantisation != ResolvedMidiQuantisation()
+		|| edit.QuantisationTransportStartSamps != MidiQuantisationTransportStartSamps()
+		|| !loop->PublishEdit(edit))
+		return false;
+	if (acceptedRevision)
+		*acceptedRevision = edit.Revision + 1u;
+	loop->QueueModelUpdateFromEvents(edit.LoopLengthSamps, true);
+	_changesMade = true;
+	return true;
+}
+
 bool LoopTake::SnapshotMidiForExport(MidiExportState& state) const
 {
 	// The paused scene boundary excludes audio callbacks, but the MIDI ingress
@@ -2555,6 +2577,7 @@ bool LoopTake::SnapshotMidiForExport(MidiExportState& state) const
 
 bool LoopTake::RestoreMidiFromExport(const MidiExportState& state)
 {
+	std::scoped_lock midiLock(_midiCaptureMutex);
 	if (state.Streams.size() > MaxMidiStreamsForRestore)
 		return false;
 	if (state.Streams.empty()
@@ -2714,6 +2737,7 @@ void LoopTake::_UpdateLoops()
 
 void LoopTake::_UpdateMidiModels(bool force)
 {
+	std::scoped_lock midiLock(_midiCaptureMutex);
 	const auto displayLength = static_cast<std::uint32_t>(_recordedSampCount.load(std::memory_order_relaxed));
 	if (_midiOverdubSession.Active)
 		_RefreshMidiOverdubPreview(displayLength);
