@@ -45,10 +45,15 @@ void main()
     vec3 radialNormal = vec3(radial.x, 0.0, radial.y);
     // Tilt the probe lookup on horizontal faces toward the rim. The flat
     // geometry, amplitude colour lookup and wall normals stay unchanged.
-    ProbeNormal = normalize(mat3(ModelView) *
+    // The waveform can be scaled to zero in Y. Recover its orientation from
+    // the unaffected X/Z axes so probe normals never inherit that scale.
+    vec3 probeX = normalize(ModelView[0].xyz);
+    vec3 probeZ = normalize(ModelView[2].xyz);
+    mat3 probeBasis = mat3(probeX, normalize(cross(probeZ, probeX)), probeZ);
+    ProbeNormal = normalize(probeBasis *
         normalize(NormalIN + radialNormal * (0.72 * abs(NormalIN.y))));
-    ProbeRadial = normalize(mat3(ModelView) * radialNormal);
-    ProbeUp = normalize(mat3(ModelView) * vec3(0.0, 1.0, 0.0));
+    ProbeRadial = normalize(probeBasis * radialNormal);
+    ProbeUp = probeBasis[1];
     BevelEdge = vec2(clamp((y - yMin) / max(yMax - yMin, 0.001), 0.0, 1.0),
         clamp((length(PositionIN.xz) / safeUnitRadius - 0.95) / 0.1, 0.0, 1.0));
 
