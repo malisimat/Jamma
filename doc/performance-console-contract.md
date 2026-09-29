@@ -270,6 +270,7 @@ The Jamma project builds JammaConsole as a dependency into the same output
 directory. The companion project explicitly copies `utf8proc.dll` from its
 configuration's vcpkg runtime directory. Debug and Release x64 output layouts
 were checked for `Jamma.exe`, `JammaConsole.exe`, and `utf8proc.dll`.
-The final focused native run passed 59 of 59 console, preference, window
-shortcut, and disconnected-chat unit tests. Live Terminal/Console Host launch,
+The final focused native run passed 61 of 61 console, preference, window
+shortcut, reopen lifecycle, one-second status cadence, and disconnected-chat
+unit tests. Live Terminal/Console Host launch,
 mouse, clipboard, and visual behavior were outside the unit-only test scope.
