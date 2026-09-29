@@ -23,6 +23,7 @@ namespace console
 		std::size_t Size() const noexcept { return _entries.size(); }
 		std::size_t Bytes() const noexcept { return _bytes; }
 		std::uint64_t FirstId() const noexcept { return _entries.empty() ? 0 : _entries.front().Id; }
+		std::uint64_t LastId() const noexcept { return _entries.empty() ? 0 : _entries.back().Id; }
 		bool Following() const noexcept { return _following; }
 		TextPosition Anchor() const noexcept { return _anchor; }
 
@@ -117,6 +118,14 @@ namespace console
 			}
 		}
 		void FollowTail() noexcept { _following = true; }
+		void Pause() noexcept { _following = false; }
+		std::vector<LogicalTextEntry> LogicalEntries() const
+		{
+			std::vector<LogicalTextEntry> result;
+			result.reserve(_entries.size());
+			for (const auto& entry : _entries) result.push_back({ entry.Id, entry.Text });
+			return result;
+		}
 
 	private:
 		struct Entry { std::uint64_t Id; std::string Text; };

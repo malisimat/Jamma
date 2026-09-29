@@ -16,6 +16,11 @@ namespace console
 		const std::string& Text() const noexcept { return _text; }
 		std::size_t Caret() const noexcept { return _caret; }
 		bool HasSelection() const noexcept { return _anchor && *_anchor != _caret; }
+		std::optional<std::pair<std::size_t, std::size_t>> SelectedRange() const noexcept
+		{
+			if (!HasSelection()) return std::nullopt;
+			return SelectionRange();
+		}
 
 		InputResult Insert(std::string_view text)
 		{
@@ -56,6 +61,12 @@ namespace console
 		{
 			BeginMove(selecting);
 			_caret = ColumnToByte(_text, column);
+		}
+		void ClickByte(std::size_t byte, bool selecting = false)
+		{
+			if (byte > _text.size() || !IsGraphemeBoundary(_text, byte)) return;
+			BeginMove(selecting);
+			_caret = byte;
 		}
 
 		void Backspace()

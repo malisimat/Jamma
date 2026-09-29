@@ -2,6 +2,8 @@
 #include "../../../../console/PromptEditor.h"
 #include "../../../../console/Transcript.h"
 #include "../../../../console/PasteInput.h"
+#include "../../../../console/SelectionController.h"
+#include "../../../../console/ClipboardText.h"
 #include <gtest/gtest.h>
 #include <array>
 
@@ -249,4 +251,160 @@ TEST(ConsoleTextCoordinates, NarrowStatusAndPromptWindow)
 	const std::string prompt = "abcdef\xE6\xB5\x8B";
 	EXPECT_EQ(console::PromptWindowStart(prompt, prompt.size(), 3), 5u);
 	EXPECT_EQ(console::ClipColumns(prompt.substr(5), 3), "f\xE6\xB5\x8B");
+}
+
+TEST(ConsoleTextCoordinates, WrappedRowHitTestAndSelectionRange)
+{
+	console::Transcript transcript;
+	transcript.Append("a\xCC\x84\xE6\xB5\x8B" "bc\nnext");
+	const auto rows = transcript.Visible(2, 5);
+	ASSERT_EQ(rows.size(), 5u);
+	EXPECT_EQ(console::RowPosition(rows[0].Start, rows[0].Text, 1).Byte, 3u);
+	EXPECT_EQ(console::RowPosition(rows[1].Start, rows[1].Text, 0).Byte, 3u);
+	EXPECT_EQ(console::RowPosition(rows[1].Start, rows[1].Text, 1).Byte, 6u);
+	console::TextSelection selection;
+	selection.Press(console::RowPosition(rows[0].Start, rows[0].Text, 1));
+	selection.Drag(console::RowPosition(rows[3].Start, rows[3].Text, 2));
+	const auto middle = selection.RowRange(rows[1].Start, rows[1].Text.size());
+	ASSERT_TRUE(middle);
+	EXPECT_EQ(*middle, (std::pair<std::size_t, std::size_t>{ 0, 3 }));
+	EXPECT_EQ(selection.Copy(transcript.LogicalEntries()), "\xE6\xB5\x8B" "bc\nne");
+}
+
+TEST(ConsoleTextCoordinates, PromptClickUsesWindowAndGraphemeBoundaries)
+{
+	const std::string text = "abcdef\xE6\xB5\x8B";
+	const auto caret = text.size();
+	EXPECT_EQ(console::PromptColumnToByte(text, caret, 6, 2), 5u);
+	EXPECT_EQ(console::PromptColumnToByte(text, caret, 6, 3), 6u);
+	EXPECT_EQ(console::PromptColumnToByte(text, caret, 6, 4), caret);
+	console::PromptEditor prompt;
+	ASSERT_EQ(prompt.Insert(text), console::InputResult::Accepted);
+	prompt.ClickByte(console::PromptColumnToByte(prompt.Text(), prompt.Caret(), 6, 3));
+	prompt.ClickByte(console::PromptColumnToByte(prompt.Text(), prompt.Caret(), 6, 0), true);
+	EXPECT_TRUE(prompt.HasSelection());
+	EXPECT_TRUE(console::IsGraphemeBoundary(prompt.Text(), prompt.Caret()));
+}
+
+TEST(ConsoleTextCoordinates, PromptDragKeepsWindowUntilRelease)
+{
+	console::PromptEditor prompt;
+	ASSERT_EQ(prompt.Insert("abcdefghij"), console::InputResult::Accepted);
+	const auto origin = console::PromptWindowStart(prompt.Text(), prompt.Caret(), 3);
+	ASSERT_EQ(origin, 7u);
+	prompt.ClickByte(console::PromptColumnToByte(prompt.Text(), prompt.Caret(), 6, 2));
+	prompt.ClickByte(console::PromptColumnToByteAtOrigin(prompt.Text(), origin, 6, 2), true);
+	EXPECT_FALSE(prompt.HasSelection());
+	prompt.ClickByte(console::PromptColumnToByteAtOrigin(prompt.Text(), origin, 6, 5), true);
+	EXPECT_EQ(prompt.SelectedText(), "hij");
+	prompt.ClickByte(console::PromptColumnToByteAtOrigin(prompt.Text(), origin, 6, 3), true);
+	EXPECT_EQ(prompt.SelectedText(), "h");
+}
+
+TEST(ConsoleTextCoordinates, FullWidthCaretClickUsesSecondCell)
+{
+	const std::string text = "a\xE6\xB5\x8B" "b";
+	EXPECT_EQ(console::PromptColumnToByte(text, 1, 6, 3), 1u);
+	EXPECT_EQ(console::PromptColumnToByte(text, 1, 6, 4), 4u);
+	const std::string emoji = "\xF0\x9F\x91\xA9\xE2\x80\x8D\xF0\x9F\x92\xBB" "x";
+	EXPECT_EQ(console::PromptColumnToByte(emoji, 0, 4, 2), 0u);
+	EXPECT_EQ(console::PromptColumnToByte(emoji, 0, 4, 3), emoji.size() - 1);
+}
+
+TEST(ConsoleTextCoordinates, SelectionSurvivesReflowAndClearsOnEviction)
+{
+	console::Transcript transcript;
+	transcript.Append("long logical text");
+	const auto first = transcript.Visible(4, 3);
+	console::TextSelection selection;
+	selection.Press({ first.front().Start.EntryId, 1 });
+	selection.Drag({ first.front().Start.EntryId, 12 });
+	transcript.Visible(7, 3);
+	transcript.Append("new output");
+	EXPECT_EQ(selection.Copy(transcript.LogicalEntries()), "ong logical");
+	for (std::size_t i = 0; i < console::Transcript::MaxEntries; ++i)
+		transcript.Append("x");
+	selection.ReconcileBounds(transcript.FirstId(), transcript.LastId());
+	EXPECT_FALSE(selection.Active);
+}
+
+TEST(ConsoleTextCoordinates, PointerSelectionExpandsContractsAndReleases)
+{
+	console::PromptEditor prompt;
+	console::SelectionController selection;
+	selection.PressTranscript({ 1, 0 }, 0, 2, prompt);
+	selection.DragTranscriptRow({ 1, 0 }, "ab", 0, 2);
+	EXPECT_FALSE(selection.Transcript.RowRange({ 1, 0 }, 2));
+	selection.DragTranscriptRow({ 1, 0 }, "ab", 1, 2);
+	EXPECT_EQ(selection.Transcript.RowRange({ 1, 0 }, 2),
+		(std::optional<std::pair<std::size_t, std::size_t>>{ { 0, 2 } }));
+	selection.DragTranscriptRow({ 1, 0 }, "ab", 0, 2);
+	EXPECT_FALSE(selection.Transcript.RowRange({ 1, 0 }, 2));
+	selection.DragTranscriptRow({ 1, 0 }, "ab", 1, 2);
+	selection.Release();
+	EXPECT_EQ(selection.Dragging, console::SelectionRegion::None);
+	EXPECT_TRUE(selection.Transcript.Active);
+	selection.DragTranscriptRow({ 1, 0 }, "ab", 0, 2);
+	EXPECT_EQ(selection.Transcript.Focus.Byte, 2u);
+}
+
+TEST(ConsoleTextCoordinates, RegionSwitchClearsOtherSelection)
+{
+	console::PromptEditor prompt;
+	ASSERT_EQ(prompt.Insert("hello"), console::InputResult::Accepted);
+	console::SelectionController selection;
+	selection.PressTranscript({ 1, 0 }, 0, 2, prompt);
+	selection.DragTranscriptRow({ 1, 0 }, "abc", 1, 2);
+	ASSERT_TRUE(selection.Transcript.Active);
+	selection.PressPrompt(1, 0, prompt);
+	EXPECT_FALSE(selection.Transcript.Active);
+	selection.DragPrompt(3, prompt);
+	EXPECT_EQ(prompt.SelectedText(), "el");
+	selection.PressTranscript({ 2, 0 }, 0, 2, prompt);
+	EXPECT_FALSE(prompt.HasSelection());
+}
+
+TEST(ConsoleTextCoordinates, EdgeScrollFocusUsesScrolledRow)
+{
+	console::PromptEditor prompt;
+	console::Transcript transcript;
+	transcript.Append("first\nsecond\nthird");
+	const auto before = transcript.Visible(6, 2);
+	console::SelectionController selection;
+	selection.PressTranscript(before.front().Start, 0, 2, prompt);
+	transcript.ScrollUp(6, 1);
+	const auto after = transcript.Visible(6, 2);
+	selection.DragTranscriptRow(after.front().Start, after.front().Text, 0, -1);
+	EXPECT_EQ(selection.Transcript.Focus.EntryId, after.front().Start.EntryId);
+	selection.Release();
+}
+
+TEST(ConsoleTextCoordinates, ClipboardEncodingAndFailureLeaveSelectionIntact)
+{
+	const auto wide = console::Utf8ToUtf16("a\xE6\xB5\x8B\xF0\x9F\xAA\x90");
+	ASSERT_TRUE(wide);
+	EXPECT_EQ(*wide, L"a\u6D4B\U0001FA90");
+	EXPECT_FALSE(console::Utf8ToUtf16("\xED\xA0\x80"));
+	EXPECT_EQ(console::ClipboardUtf8ToUtf16("one\ntwo\rthree\r\nfour"),
+		std::optional<std::wstring>(L"one\r\ntwo\r\nthree\r\nfour"));
+	EXPECT_FALSE(console::ClipboardUtf8ToUtf16(std::string_view("a\0b", 3)));
+	const std::array<console::LogicalTextEntry, 1> entries{{ { 1, "a\xE6\xB5\x8B" } }};
+	console::TextSelection selection;
+	selection.Press({ 1, 0 });
+	selection.Drag({ 1, entries[0].Text.size() });
+	EXPECT_FALSE(selection.CopyToClipboard(entries, [](std::string_view) { return false; }));
+	EXPECT_TRUE(selection.Active);
+	EXPECT_EQ(selection.Copy(entries), entries[0].Text);
+}
+
+TEST(ConsoleTextCoordinates, KeyboardAndHelpRemainWithoutMouseEvents)
+{
+	console::SelectionController selection;
+	console::PromptEditor prompt;
+	ASSERT_EQ(prompt.Insert("chat"), console::InputResult::Accepted);
+	prompt.MoveLeft();
+	prompt.Backspace();
+	EXPECT_EQ(prompt.Text(), "cht");
+	EXPECT_EQ(selection.Dragging, console::SelectionRegion::None);
+	EXPECT_NE(console::NoMouseHelp.find("host selection"), std::string_view::npos);
 }

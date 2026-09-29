@@ -233,3 +233,25 @@ restores console modes at exit. It clears processed input during the FTXUI loop
 so Ctrl+C can reach the handled key event rather than a console control
 signal. Terminal-specific behavior remains unverified under the unit-only
 test scope.
+
+## Phase 4 selection
+
+FTXUI mouse coordinates are used as zero-based screen cells. The owner thread
+maps visible wrapped rows back to stable entry IDs and grapheme-boundary byte
+offsets. A press pauses follow-tail, movement expands or contracts a logical
+selection, and release retains it for copy. Edge dragging scrolls at most one
+wrapped row every 80 ms; the timer only posts an owner-thread task while the
+pointer is outside the transcript viewport. The renderer highlights only
+visible selected segments. When eviction removes either endpoint, the whole
+selection clears. Resize and new output keep retained endpoints unchanged.
+
+Prompt drag freezes its horizontal text origin until release, so a stationary
+pointer cannot select different bytes after caret movement. Clicking a
+full-width grapheme uses its cell midpoint; the display placeholder used for
+an over-wide grapheme keeps a matching hit-test width. Selecting either prompt
+or transcript clears the other selection. Ctrl+C copies selected logical
+UTF-8 text as `CF_UNICODETEXT`, with line breaks only between retained logical
+entries and CR-LF encoding required by the clipboard format, through a
+message-only clipboard owner window. Clipboard failure
+leaves source text intact. F1 explains keyboard and host selection fallback
+when a terminal does not deliver mouse reports.

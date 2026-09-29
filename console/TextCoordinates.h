@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <compare>
 #include <cstdint>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -109,6 +110,40 @@ namespace console
 		return begin;
 	}
 
+	inline std::size_t NextGrapheme(std::string_view text, std::size_t byte);
+
+	inline std::size_t PromptColumnToByte(std::string_view text, std::size_t caret,
+		int width, int column)
+	{
+		const int label = width >= 3 ? 2 : width == 2 ? 1 : 0;
+		const int available = std::max(0, width - label);
+		const auto next = NextGrapheme(text, caret);
+		const auto atCaret = caret < text.size() ? text.substr(caret, next - caret) : " ";
+		const int actualCaretColumns = std::max(1, ftxui::string_width(std::string(atCaret)));
+		const int caretColumns = actualCaretColumns > available ? 1 : actualCaretColumns;
+		const auto begin = PromptWindowStart(text, caret, std::max(0, available - caretColumns));
+		const auto prefix = text.substr(begin, caret - begin);
+		const auto prefixColumns = ftxui::string_width(std::string(prefix));
+		const auto local = std::max(0, column - label);
+		if (local < prefixColumns) return begin + ColumnToByte(prefix, local);
+		if (local < prefixColumns + caretColumns)
+		{
+			if (actualCaretColumns > available) return caret;
+			return caret + ColumnToByte(atCaret, local - prefixColumns);
+		}
+		const auto suffix = ClipColumns(text.substr(next),
+			std::max(0, available - prefixColumns - caretColumns));
+		return next + ColumnToByte(suffix, local - prefixColumns - caretColumns);
+	}
+
+	inline std::size_t PromptColumnToByteAtOrigin(std::string_view text,
+		std::size_t origin, int width, int column)
+	{
+		const int label = width >= 3 ? 2 : width == 2 ? 1 : 0;
+		const auto visible = ClipColumns(text.substr(origin), std::max(0, width - label));
+		return origin + ColumnToByte(visible, std::max(0, column - label));
+	}
+
 	inline std::size_t PreviousGrapheme(std::string_view text, std::size_t byte)
 	{
 		std::size_t previous = 0;
@@ -158,6 +193,22 @@ namespace console
 		auto operator<=>(const TextPosition&) const = default;
 	};
 
+	inline TextPosition RowPosition(TextPosition start, std::string_view text, int column)
+	{
+		return { start.EntryId, start.Byte + ColumnToByte(text, column) };
+	}
+
+	inline std::size_t HoverEndByte(std::string_view text, int column)
+	{
+		int at = 0;
+		for (const auto& cluster : Graphemes(text))
+		{
+			at += cluster.Columns;
+			if (column < at) return cluster.End;
+		}
+		return text.size();
+	}
+
 	struct TextSelection
 	{
 		TextPosition Anchor;
@@ -171,6 +222,24 @@ namespace console
 		}
 		void Drag(TextPosition position) noexcept { if (Active) Focus = position; }
 		void Clear() noexcept { Active = false; }
+		void ReconcileBounds(std::uint64_t firstId, std::uint64_t lastId) noexcept
+		{
+			if (Active && (Anchor.EntryId < firstId || Anchor.EntryId > lastId
+				|| Focus.EntryId < firstId || Focus.EntryId > lastId)) Clear();
+		}
+		std::optional<std::pair<std::size_t, std::size_t>> RowRange(
+			TextPosition start, std::size_t bytes) const noexcept
+		{
+			if (!Active) return std::nullopt;
+			const auto first = std::min(Anchor, Focus);
+			const auto last = std::max(Anchor, Focus);
+			const TextPosition end{ start.EntryId, start.Byte + bytes };
+			if (last <= start || first >= end) return std::nullopt;
+			const auto beginByte = std::max(first, start).Byte - start.Byte;
+			const auto endByte = std::min(last, end).Byte - start.Byte;
+			if (beginByte >= endByte) return std::nullopt;
+			return std::pair{ beginByte, endByte };
+		}
 
 		void Reconcile(std::span<const LogicalTextEntry> entries)
 		{

@@ -1,6 +1,8 @@
 #include "../../console/WindowsPipe.h"
 #include "../../console/PromptEditor.h"
 #include "../../console/PasteInput.h"
+#include "../../console/SelectionController.h"
+#include "../../console/ClipboardText.h"
 #include "../../console/Transcript.h"
 #include <ftxui/component/component.hpp>
 #include <ftxui/component/event.hpp>
@@ -19,9 +21,28 @@
 #include <string>
 #include <thread>
 #include <utility>
+#include <vector>
 
 struct ConsoleClientState
 {
+	static bool WriteClipboard(HWND owner, std::string_view text)
+	{
+		const auto wideText = console::ClipboardUtf8ToUtf16(text);
+		if (!owner || !wideText) return false;
+		const auto bytes = (wideText->size() + 1) * sizeof(wchar_t);
+		const auto memory = GlobalAlloc(GMEM_MOVEABLE, bytes);
+		if (!memory) return false;
+		auto* wide = static_cast<wchar_t*>(GlobalLock(memory));
+		if (!wide) { GlobalFree(memory); return false; }
+		std::copy(wideText->begin(), wideText->end(), wide);
+		wide[wideText->size()] = L'\0';
+		GlobalUnlock(memory);
+		if (!OpenClipboard(owner)) { GlobalFree(memory); return false; }
+		const bool saved = EmptyClipboard() && SetClipboardData(CF_UNICODETEXT, memory);
+		CloseClipboard();
+		if (!saved) GlobalFree(memory);
+		return saved;
+	}
 	static std::optional<std::string> ClipboardText(bool& tooLong)
 	{
 		tooLong = false;
@@ -63,6 +84,7 @@ struct ConsoleClientState
 		return {};
 	}
 	std::mutex InboxMutex;
+	HWND ClipboardOwner = nullptr;
 	std::condition_variable InboxReady;
 	std::deque<console::Message> Inbox;
 	std::optional<console::Message> PendingStatus;
@@ -70,6 +92,12 @@ struct ConsoleClientState
 	std::atomic<bool> NotificationPending{ false };
 	std::string Status = "Connecting to Jamma...";
 	console::Transcript Transcript;
+	console::SelectionController Selection;
+	std::vector<console::TranscriptRow> VisibleRows;
+	std::mutex EdgeMutex;
+	std::condition_variable EdgeReady;
+	std::atomic<int> EdgeDirection{ 0 };
+	std::atomic<int> EdgeX{ 0 };
 	console::PromptEditor Prompt;
 	std::string PromptError;
 	console::PasteInput Paste;
@@ -112,6 +140,8 @@ int wmain(int argc, wchar_t** argv)
 	screen.TrackMouse();
 	screen.ForceHandleCtrlC(false);
 	ConsoleClientState state;
+	state.ClipboardOwner = CreateWindowExW(0, L"STATIC", L"", WS_CHILD,
+		0, 0, 0, 0, HWND_MESSAGE, nullptr, GetModuleHandleW(nullptr), nullptr);
 	auto drain = [&] {
 		std::deque<console::Message> batch;
 		std::optional<console::Message> status;
@@ -141,34 +171,74 @@ int wmain(int argc, wchar_t** argv)
 		{
 			state.Transcript.Append("[CONSOLE] Lost " + std::to_string(dropped) + " events");
 		}
+		state.Selection.Transcript.ReconcileBounds(state.Transcript.FirstId(), state.Transcript.LastId());
 	};
 	auto view = ftxui::Renderer([&] {
 		const int width = std::max(1, screen.dimx());
 		const int height = std::max(1, screen.dimy());
 		const int visibleHeight = std::max(0, height - 5);
 		ftxui::Elements rows;
-		if (height >= 3) rows.push_back(ftxui::text("JAMMA"));
+		if (height >= 3) rows.push_back(ftxui::text(console::ClipColumns(
+			"JAMMA  F1: input help", width)));
 		if (height >= 4) rows.push_back(ftxui::separator());
-		const auto visible = state.Transcript.Visible(width, visibleHeight);
-		for (const auto& row : visible) rows.push_back(ftxui::text(row.Text));
-		for (int line = static_cast<int>(visible.size()); line < visibleHeight; ++line)
+		state.VisibleRows = state.Transcript.Visible(width, visibleHeight);
+		for (const auto& row : state.VisibleRows)
+		{
+			const auto selected = state.Selection.Transcript.RowRange(row.Start, row.Text.size());
+			if (!selected) { rows.push_back(ftxui::text(row.Text)); continue; }
+			const auto [first, last] = *selected;
+			rows.push_back(ftxui::hbox({ ftxui::text(row.Text.substr(0, first)),
+				ftxui::text(row.Text.substr(first, last - first)) | ftxui::inverted,
+				ftxui::text(row.Text.substr(last)) }));
+		}
+		for (int line = static_cast<int>(state.VisibleRows.size()); line < visibleHeight; ++line)
 			rows.push_back(ftxui::text(""));
 		if (height >= 5) rows.push_back(ftxui::separator());
 		const auto prompt = state.Prompt.Text();
 		const auto caret = state.Prompt.Caret();
 		const auto label = width >= 3 ? "> " : width == 2 ? ">" : "";
 		const int available = width - static_cast<int>(std::string_view(label).size());
-		const auto next = console::NextGrapheme(prompt, caret);
-		const auto caretText = caret < prompt.size() ? prompt.substr(caret, next - caret) : " ";
-		const auto atCaret = ftxui::string_width(caretText) <= available ? caretText : "_";
-		const auto begin = console::PromptWindowStart(prompt, caret,
-			std::max(0, available - ftxui::string_width(atCaret)));
-		const auto prefix = prompt.substr(begin, caret - begin);
-		const auto remaining = std::max(0, available - ftxui::string_width(prefix) - ftxui::string_width(atCaret));
 		if (height >= 2)
-			rows.push_back(ftxui::hbox({ ftxui::text(label), ftxui::text(prefix),
-				ftxui::text(atCaret) | ftxui::inverted,
-				ftxui::text(console::ClipColumns(std::string_view(prompt).substr(next), remaining)) }));
+		{
+			ftxui::Elements promptPieces{ ftxui::text(label) };
+			const auto selected = state.Prompt.SelectedRange();
+			const auto addText = [&](std::string_view part, std::size_t at, bool showCaret) {
+				for (const auto& cluster : console::Graphemes(part))
+				{
+					auto element = ftxui::text(std::string(part.substr(cluster.Start, cluster.End - cluster.Start)));
+					if ((selected && at + cluster.Start >= selected->first
+						&& at + cluster.Start < selected->second)
+						|| (showCaret && at + cluster.Start == caret))
+						element = element | ftxui::inverted;
+					promptPieces.push_back(std::move(element));
+				}
+			};
+			if (state.Selection.PromptOrigin)
+			{
+				const auto visible = console::ClipColumns(
+					std::string_view(prompt).substr(*state.Selection.PromptOrigin), available);
+				addText(visible, *state.Selection.PromptOrigin, true);
+				if (visible.empty() && *state.Selection.PromptOrigin < prompt.size())
+					promptPieces.push_back(ftxui::text("_") | ftxui::inverted);
+				if (caret == prompt.size() && ftxui::string_width(visible) < available)
+					promptPieces.push_back(ftxui::text(" ") | ftxui::inverted);
+			}
+			else
+			{
+				const auto next = console::NextGrapheme(prompt, caret);
+				const auto caretText = caret < prompt.size() ? prompt.substr(caret, next - caret) : " ";
+				const auto atCaret = ftxui::string_width(caretText) <= available ? caretText : "_";
+				const auto begin = console::PromptWindowStart(prompt, caret,
+					std::max(0, available - ftxui::string_width(atCaret)));
+				const auto prefix = prompt.substr(begin, caret - begin);
+				const auto remaining = std::max(0, available - ftxui::string_width(prefix) - ftxui::string_width(atCaret));
+				addText(prefix, begin, false);
+				promptPieces.push_back(ftxui::text(atCaret) | ftxui::inverted);
+				const auto suffix = console::ClipColumns(std::string_view(prompt).substr(next), remaining);
+				addText(suffix, next, false);
+			}
+			rows.push_back(ftxui::hbox(std::move(promptPieces)));
+		}
 		rows.push_back(ftxui::text(console::StatusForWidth(
 			state.PromptError.empty() ? state.Status : state.PromptError, width)));
 		return ftxui::vbox(std::move(rows));
@@ -199,7 +269,22 @@ int wmain(int argc, wchar_t** argv)
 			else state.Paste.Control();
 			return true;
 		}
-		if (event == ftxui::Event::CtrlC) return true;
+		if (event == ftxui::Event::CtrlC)
+		{
+			const auto copy = state.Selection.Transcript.Active
+				? state.Selection.Transcript.Copy(state.Transcript.LogicalEntries())
+				: state.Prompt.SelectedText();
+			if (!copy.empty()) state.PromptError = ConsoleClientState::WriteClipboard(state.ClipboardOwner, copy)
+				? "Copied selection" : "Clipboard unavailable";
+			return true;
+		}
+		if (event == ftxui::Event::F1)
+		{
+			state.Transcript.Append(console::NoMouseHelp);
+			state.Selection.Transcript.ReconcileBounds(state.Transcript.FirstId(), state.Transcript.LastId());
+			state.Transcript.FollowTail();
+			return true;
+		}
 		if (event == ftxui::Event::ArrowUp || event == ftxui::Event::PageUp)
 		{
 			state.Transcript.ScrollUp(std::max(1, screen.dimx()), event == ftxui::Event::PageUp ? std::max(1, screen.dimy() - 6) : 1);
@@ -266,8 +351,84 @@ int wmain(int argc, wchar_t** argv)
 		if (event.is_mouse())
 		{
 			const auto& mouse = event.mouse();
-			if (mouse.button == ftxui::Mouse::Left && mouse.motion == ftxui::Mouse::Moved)
+			const auto width = std::max(1, screen.dimx());
+			const auto height = std::max(1, screen.dimy());
+			const auto viewport = std::max(0, height - 5);
+			state.VisibleRows = state.Transcript.Visible(width, viewport);
+			if (mouse.button == ftxui::Mouse::WheelUp || mouse.button == ftxui::Mouse::WheelDown)
+			{
+				if (mouse.button == ftxui::Mouse::WheelUp) state.Transcript.ScrollUp(width, 3);
+				else state.Transcript.ScrollDown(width, 3);
 				return true;
+			}
+			const auto transcriptPosition = [&](int x, int y) -> std::optional<console::TextPosition> {
+				if (state.VisibleRows.empty()) return std::nullopt;
+				const auto row = std::clamp(y - 2, 0, static_cast<int>(state.VisibleRows.size()) - 1);
+				return console::RowPosition(state.VisibleRows[row].Start,
+					state.VisibleRows[row].Text, x);
+			};
+			if (mouse.button == ftxui::Mouse::Left && mouse.motion == ftxui::Mouse::Pressed)
+			{
+				state.Selection.Release();
+				state.EdgeDirection.store(0, std::memory_order_release);
+				if (height >= 2 && mouse.y == height - 2)
+				{
+					const auto caret = state.Prompt.Caret();
+					const auto next = console::NextGrapheme(state.Prompt.Text(), caret);
+					const auto atCaret = caret < state.Prompt.Text().size()
+						? state.Prompt.Text().substr(caret, next - caret) : " ";
+					const auto available = width - (width >= 3 ? 2 : width == 2 ? 1 : 0);
+					const auto shownCaret = ftxui::string_width(atCaret) <= available ? atCaret : "_";
+					const auto origin = console::PromptWindowStart(state.Prompt.Text(), caret,
+						std::max(0, available - ftxui::string_width(shownCaret)));
+					state.Selection.PressPrompt(console::PromptColumnToByte(state.Prompt.Text(),
+						caret, width, mouse.x), origin, state.Prompt);
+					return true;
+				}
+				if (viewport > 0 && mouse.y >= 2 && mouse.y < 2 + viewport)
+				{
+					if (const auto position = transcriptPosition(mouse.x, mouse.y))
+					{
+						state.Transcript.Pause();
+						state.Selection.PressTranscript(*position, mouse.x, mouse.y, state.Prompt);
+					}
+					return true;
+				}
+			}
+			if (mouse.motion == ftxui::Mouse::Moved)
+			{
+				if (state.Selection.Dragging == console::SelectionRegion::Prompt)
+				{
+					state.Selection.DragPrompt(console::PromptColumnToByteAtOrigin(state.Prompt.Text(),
+						*state.Selection.PromptOrigin, width, mouse.x), state.Prompt);
+					return true;
+				}
+				if (state.Selection.Dragging == console::SelectionRegion::Transcript)
+				{
+					const auto delta = console::EdgeScrollDelta(mouse.y - 2, viewport);
+					state.EdgeX.store(mouse.x, std::memory_order_relaxed);
+					state.EdgeDirection.store(delta, std::memory_order_release);
+					if (delta) state.EdgeReady.notify_one();
+					if (delta < 0) state.Transcript.ScrollUp(width, 1);
+					else if (delta > 0) state.Transcript.ScrollDown(width, 1);
+					state.VisibleRows = state.Transcript.Visible(width, viewport);
+					if (!state.VisibleRows.empty())
+					{
+						const auto row = std::clamp(mouse.y - 2, 0,
+							static_cast<int>(state.VisibleRows.size()) - 1);
+						state.Selection.DragTranscriptRow(state.VisibleRows[row].Start,
+							state.VisibleRows[row].Text, mouse.x, mouse.y);
+					}
+					return true;
+				}
+			}
+			if (mouse.motion == ftxui::Mouse::Released
+				&& state.Selection.Dragging != console::SelectionRegion::None)
+			{
+				state.Selection.Release();
+				state.EdgeDirection.store(0, std::memory_order_release);
+				return true;
+			}
 		}
 		return false;
 	});
@@ -348,6 +509,44 @@ int wmain(int argc, wchar_t** argv)
 			screen.Exit();
 		}
 	});
+	std::thread edgeTimer([&] {
+		std::unique_lock lock(state.EdgeMutex);
+		for (;;)
+		{
+			state.EdgeReady.wait(lock, [&] {
+				return state.EdgeDirection.load(std::memory_order_acquire) != 0
+					|| WaitForSingleObject(stop.Get(), 0) == WAIT_OBJECT_0;
+			});
+			if (WaitForSingleObject(stop.Get(), 0) == WAIT_OBJECT_0) break;
+			if (state.EdgeReady.wait_for(lock, std::chrono::milliseconds(80), [&] {
+				return state.EdgeDirection.load(std::memory_order_acquire) == 0
+					|| WaitForSingleObject(stop.Get(), 0) == WAIT_OBJECT_0;
+			})) continue;
+			lock.unlock();
+			{
+				std::scoped_lock postLock(state.PostMutex);
+				if (WaitForSingleObject(stop.Get(), 0) != WAIT_OBJECT_0)
+					screen.Post([&] {
+						const auto direction = state.EdgeDirection.load(std::memory_order_acquire);
+						if (!direction || state.Selection.Dragging != console::SelectionRegion::Transcript) return;
+						const auto width = std::max(1, screen.dimx());
+						const auto viewport = std::max(0, screen.dimy() - 5);
+						if (!viewport) return;
+						if (direction < 0) state.Transcript.ScrollUp(width, 1);
+						else state.Transcript.ScrollDown(width, 1);
+						state.VisibleRows = state.Transcript.Visible(width, viewport);
+						if (!state.VisibleRows.empty())
+						{
+						const auto& row = direction < 0 ? state.VisibleRows.front() : state.VisibleRows.back();
+							state.Selection.DragTranscriptRow(row.Start, row.Text,
+								state.EdgeX.load(std::memory_order_relaxed),
+								direction < 0 ? -1 : screen.dimy());
+						}
+					});
+			}
+			lock.lock();
+		}
+	});
 	const auto outputHandle = GetStdHandle(STD_OUTPUT_HANDLE);
 	const auto inputHandle = GetStdHandle(STD_INPUT_HANDLE);
 	DWORD originalInputMode = 0;
@@ -369,6 +568,8 @@ int wmain(int argc, wchar_t** argv)
 		std::scoped_lock lock(state.PostMutex);
 		SetEvent(stop.Get());
 	}
+	state.EdgeReady.notify_all();
+	edgeTimer.join();
 	state.OutboxReady.notify_all();
 	if (WaitForSingleObject(writer.native_handle(), 2500) != WAIT_OBJECT_0)
 	{
@@ -384,5 +585,6 @@ int wmain(int argc, wchar_t** argv)
 		return 0;
 	}
 	reader.join();
+	if (state.ClipboardOwner) DestroyWindow(state.ClipboardOwner);
 	return 0;
 }
