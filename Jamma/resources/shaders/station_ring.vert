@@ -5,6 +5,7 @@ layout(location = 1) in vec2 UvIN;
 layout(location = 2) in vec3 NormalIN;
 
 uniform mat4 MVP;
+uniform mat4 ModelView;
 uniform float StationLevel;
 uniform int StationVisualState;
 uniform float RingCapY;
@@ -12,6 +13,7 @@ uniform float RingDirection;
 uniform float RingScale;
 
 out vec3 Normal;
+out vec3 ProbeNormal;
 out vec2 Uv;
 out vec3 WorldPos;
 flat out float StationLevelOut;
@@ -61,6 +63,7 @@ void main()
 {
     vec3 pos = PositionIN;
     vec3 normal = NormalIN;
+    vec3 probeNormal = normal;
     if (UvIN.y > 4.5)
     {
         int endpoint = PositionIN.z > 0.5 ? 1 : 0;
@@ -80,9 +83,23 @@ void main()
             cos(normalAngle) * NormalIN.x - sin(normalAngle) * NormalIN.z,
             RingDirection * NormalIN.y,
             sin(normalAngle) * NormalIN.x + cos(normalAngle) * NormalIN.z);
+
+        // Smooth the curved radial walls at each segment endpoint. Keep the
+        // prism's horizontal and cut faces hard.
+        if (abs(NormalIN.x) > 0.5)
+        {
+            float radialSign = -sign(NormalIN.x);
+            probeNormal = radialSign * vec3(cos(azimuth), 0.0, sin(azimuth));
+            normal = probeNormal;
+        }
+        else
+        {
+            probeNormal = normal;
+        }
     }
 
     Normal = normal;
+    ProbeNormal = normalize(mat3(ModelView) * probeNormal);
     Uv = UvIN;
     WorldPos = pos;
     StationLevelOut = clamp(StationLevel, 0.0, 1.0);

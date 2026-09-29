@@ -1,6 +1,7 @@
 #version 330 core
 
 in vec3 Normal;
+in vec3 ProbeNormal;
 in vec2 Uv;
 in vec3 WorldPos;
 flat in float StationLevelOut;
@@ -11,6 +12,7 @@ uniform float Highlight;
 uniform float StationHover;
 uniform vec3 StationStateColor;
 uniform float RingScale;
+uniform sampler2D ProbeSampler;
 
 void main()
 {
@@ -37,6 +39,8 @@ void main()
     }
 
     vec3 charcoal = vec3(0.10, 0.12, 0.14) * (0.58 + 0.40 * diffuse);
+    vec3 probe = texture(ProbeSampler, clamp(normalize(ProbeNormal).xy * 0.49 + 0.5, 0.01, 0.99)).rgb;
+    charcoal *= 0.65 + 1.25 * probe;
     charcoal += vec3(0.08, 0.11, 0.14) * min(0.08, 0.08 * max(Highlight, StationHover));
     ColorOUT = vec4(charcoal, 1.0);
 }
