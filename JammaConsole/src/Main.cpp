@@ -25,6 +25,23 @@
 
 struct ConsoleClientState
 {
+	static ftxui::Color LineColor(std::string_view line)
+	{
+		if (line.starts_with("[NINJAM]"))
+		{
+			const auto message = line.substr(8);
+			if (message.find("<you>") != std::string_view::npos) return ftxui::Color::GreenLight;
+			if (message.find("(private)") != std::string_view::npos) return ftxui::Color::MagentaLight;
+			if (message.find("Not connected") != std::string_view::npos
+				|| message.find("Unknown command") != std::string_view::npos)
+				return ftxui::Color::YellowLight;
+			if (message.find('<') != std::string_view::npos) return ftxui::Color::CyanLight;
+			return ftxui::Color::Cyan;
+		}
+		if (line.starts_with("[CONSOLE]") || line.starts_with("[BOOT]"))
+			return ftxui::Color::Yellow;
+		return ftxui::Color::Default;
+	}
 	static bool WriteClipboard(HWND owner, std::string_view text)
 	{
 		const auto wideText = console::ClipboardUtf8ToUtf16(text);
@@ -179,17 +196,19 @@ int wmain(int argc, wchar_t** argv)
 		const int visibleHeight = std::max(0, height - 5);
 		ftxui::Elements rows;
 		if (height >= 3) rows.push_back(ftxui::text(console::ClipColumns(
-			"JAMMA  F1: input help", width)));
+			"JAMMA  F1: input help", width)) | ftxui::color(ftxui::Color::CyanLight));
 		if (height >= 4) rows.push_back(ftxui::separator());
 		state.VisibleRows = state.Transcript.Visible(width, visibleHeight);
 		for (const auto& row : state.VisibleRows)
 		{
 			const auto selected = state.Selection.Transcript.RowRange(row.Start, row.Text.size());
-			if (!selected) { rows.push_back(ftxui::text(row.Text)); continue; }
+			const auto* logicalText = state.Transcript.TextFor(row.Start.EntryId);
+			const auto lineColor = ConsoleClientState::LineColor(logicalText ? *logicalText : row.Text);
+			if (!selected) { rows.push_back(ftxui::text(row.Text) | ftxui::color(lineColor)); continue; }
 			const auto [first, last] = *selected;
 			rows.push_back(ftxui::hbox({ ftxui::text(row.Text.substr(0, first)),
 				ftxui::text(row.Text.substr(first, last - first)) | ftxui::inverted,
-				ftxui::text(row.Text.substr(last)) }));
+				ftxui::text(row.Text.substr(last)) }) | ftxui::color(lineColor));
 		}
 		for (int line = static_cast<int>(state.VisibleRows.size()); line < visibleHeight; ++line)
 			rows.push_back(ftxui::text(""));
@@ -240,7 +259,8 @@ int wmain(int argc, wchar_t** argv)
 			rows.push_back(ftxui::hbox(std::move(promptPieces)));
 		}
 		rows.push_back(ftxui::text(console::StatusForWidth(
-			state.PromptError.empty() ? state.Status : state.PromptError, width)));
+			state.PromptError.empty() ? state.Status : state.PromptError, width))
+			| ftxui::color(state.PromptError.empty() ? ftxui::Color::Cyan : ftxui::Color::YellowLight));
 		return ftxui::vbox(std::move(rows));
 	});
 	view = ftxui::CatchEvent(view, [&](ftxui::Event event) {

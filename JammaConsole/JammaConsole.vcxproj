@@ -17,6 +17,7 @@
     <UseDebugLibraries>true</UseDebugLibraries>
     <OutDir>$(SolutionDir)Jamma\bin\$(Platform)\$(Configuration)\</OutDir>
     <IntDir>obj\$(Platform)\$(Configuration)\</IntDir>
+    <ConsoleRuntimeDir>$(SolutionDir)vcpkg_installed\x64-windows\debug\bin\</ConsoleRuntimeDir>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <ConfigurationType>Application</ConfigurationType>
@@ -24,6 +25,7 @@
     <WholeProgramOptimization>true</WholeProgramOptimization>
     <OutDir>$(SolutionDir)Jamma\bin\$(Platform)\$(Configuration)\</OutDir>
     <IntDir>obj\$(Platform)\$(Configuration)\</IntDir>
+    <ConsoleRuntimeDir>$(SolutionDir)vcpkg_installed\x64-windows\bin\</ConsoleRuntimeDir>
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
@@ -55,4 +57,7 @@
   </ItemDefinitionGroup>
   <ItemGroup><ClCompile Include="src\Main.cpp" /></ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+  <Target Name="CopyConsoleRuntime" AfterTargets="Build">
+    <Copy SourceFiles="$(ConsoleRuntimeDir)utf8proc.dll" DestinationFolder="$(OutDir)" SkipUnchangedFiles="true" />
+  </Target>
 </Project>

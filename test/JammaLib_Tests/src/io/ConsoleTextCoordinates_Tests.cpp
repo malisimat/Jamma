@@ -7,6 +7,21 @@
 #include <gtest/gtest.h>
 #include <array>
 
+TEST(ConsoleTranscript, WrappedRowsRetainLogicalTextForSemanticRendering)
+{
+	console::Transcript transcript;
+	transcript.Append("[NINJAM] <you> a long line");
+	const auto rows = transcript.Visible(8, 16);
+	ASSERT_GT(rows.size(), 1u);
+	for (const auto& row : rows)
+	{
+		const auto* logical = transcript.TextFor(row.Start.EntryId);
+		ASSERT_NE(logical, nullptr);
+		EXPECT_EQ(*logical, "[NINJAM] <you> a long line");
+	}
+	EXPECT_EQ(transcript.TextFor(rows.front().Start.EntryId + 1), nullptr);
+}
+
 TEST(ConsoleTextCoordinates, GraphemeMovementAndFullWidthClick)
 {
 	const std::string text = "a\xCC\x84\xE6\xB5\x8B\xF0\x9F\xAA\x90"; // ā测🪐

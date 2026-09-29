@@ -24,6 +24,11 @@ namespace console
 		std::size_t Bytes() const noexcept { return _bytes; }
 		std::uint64_t FirstId() const noexcept { return _entries.empty() ? 0 : _entries.front().Id; }
 		std::uint64_t LastId() const noexcept { return _entries.empty() ? 0 : _entries.back().Id; }
+		const std::string* TextFor(std::uint64_t id) const noexcept
+		{
+			if (_entries.empty() || id < FirstId() || id > LastId()) return nullptr;
+			return &_entries[static_cast<std::size_t>(id - FirstId())].Text;
+		}
 		bool Following() const noexcept { return _following; }
 		TextPosition Anchor() const noexcept { return _anchor; }
 

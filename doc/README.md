@@ -3,6 +3,7 @@
 ## Developer Resources
 
 - [Build and Test Guide](build.md)
+- [Performance Console](performance-console.md)
 - [Real-Time Audio Guidance](realtime-audio.md)
 - [Multi-Device MIDI Trigger Rig Configuration](midi-trigger-mapping.md)
 - [Ninjam Integration Guide](ninjam.md)

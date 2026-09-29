@@ -17,6 +17,7 @@ const std::string InitFile::DefaultJson(std::string roamingPath)
 	json.KeyValues["jam"] = roamingPath + "\\default.jam";
 	json.KeyValues["jamload"] = 1l;
 	json.KeyValues["rigload"] = 0l;
+	json.KeyValues["consoleautostart"] = true;
 	// Fresh defaults describe candidate paths, not published generated files.
 	json.KeyValues["win"] = Json::JsonArray{ 4u, std::vector<long>{ 0l, 0l, 1400l, 1000l } };
 
@@ -131,6 +132,10 @@ std::optional<InitFile> InitFile::FromStream(std::stringstream ss)
 	if (iter != iniParams.KeyValues.end() && iter->second.index() == 4)
 		ini.JamOrigin = std::get<std::string>(iter->second);
 
+	iter = iniParams.KeyValues.find("consoleautostart");
+	if (iter != iniParams.KeyValues.end() && iter->second.index() == 0)
+		ini.ConsoleAutoStart = std::get<bool>(iter->second);
+
 	iter = iniParams.KeyValues.find("win");
 	if (iter != iniParams.KeyValues.end())
 	{
@@ -188,6 +193,7 @@ bool InitFile::ToStream(InitFile ini, std::stringstream& ss)
 	root.KeyValues["jamload"] = static_cast<unsigned long>(ini.JamLoadType);
 	root.KeyValues["rig"] = utils::EncodeUtf8(ini.Rig);
 	root.KeyValues["rigload"] = static_cast<unsigned long>(ini.RigLoadType);
+	root.KeyValues["consoleautostart"] = ini.ConsoleAutoStart;
 	if (!ini.RigOrigin.empty())
 		root.KeyValues["rigorigin"] = ini.RigOrigin;
 	if (!ini.JamOrigin.empty())

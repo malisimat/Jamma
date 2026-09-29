@@ -235,6 +235,12 @@
     <Image Include="resources\textures\takemode_over.tga" />
     <Image Include="resources\textures\takemode_toggled.tga" />
   </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\JammaConsole\JammaConsole.vcxproj">
+      <Project>{A8D162C3-9F69-4E7E-84BF-4D09C7DE1B67}</Project>
+      <LinkLibraryDependencies>false</LinkLibraryDependencies>
+    </ProjectReference>
+  </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
   </ImportGroup>

@@ -4,11 +4,33 @@
 #include "../../../../console/OutboundMailbox.h"
 #include "../../../../console/CommandParsing.h"
 #include "../../../../console/LineRing.h"
+#include "../../../../Jamma/src/ConsoleCapture.h"
 #include <gtest/gtest.h>
 #include <array>
 #include <chrono>
 #include <thread>
 #include <vector>
+
+TEST(ConsoleSession, CaptureOnlySinkKeepsOptedInLinesAndBoundsOverflow)
+{
+	console::LineRing ring;
+	{
+		console::ConsoleCapture capture(ring);
+		console::ConsoleCapture::EnableForCurrentThread(true);
+		std::cout << "visible\n";
+		console::ConsoleCapture::EnableForCurrentThread(false);
+		std::cout << "unopted\n";
+		console::ConsoleCapture::EnableForCurrentThread(true);
+		std::cout << std::string(console::LineRing::MaxLineBytes + 1, 'x') << '\n';
+		console::ConsoleCapture::EnableForCurrentThread(false);
+		capture.Stop();
+	}
+	const auto captured = ring.Take();
+	ASSERT_TRUE(captured);
+	EXPECT_EQ(*captured, "visible");
+	EXPECT_FALSE(ring.Take());
+	EXPECT_EQ(ring.ConsumeDropped(), 1u);
+}
 
 TEST(ConsoleSession, AuthenticatesOneClientAndIncreasingRequests)
 {

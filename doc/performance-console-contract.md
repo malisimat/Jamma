@@ -194,11 +194,11 @@ broker starts. Later status replaces the slot at most once per second. It
 contains physical connection and the last published event. It does not infer
 tempo, phase, memory, or other unverified fields.
 
-`std::cout` and `std::cerr` on opted-in non-audio threads are mirrored; C
-stdio, wide C++ streams, and callback-owned diagnostics are excluded. The
-legacy TUI still handles those diagnostics during migration. Phase 5 must
-keep the capture path when retiring its visual/input UI, and the final review
-must check any required callback diagnostic policy against real-time rules.
+`std::cout` and `std::cerr` on opted-in non-audio threads feed the bounded
+capture ring. C stdio, wide C++ streams, and callback-owned diagnostics are
+excluded. The legacy TUI is no longer started. The app retains the last 256
+valid captured lines and replays them to a newly opened companion; restarting
+Jamma clears this in-memory history.
 
 Debug x64 `JammaLib`, `Jamma`, `JammaConsole`, and native tests built
 incrementally with task-defined MSBuild and absolute `SolutionDir`. The
@@ -255,3 +255,21 @@ entries and CR-LF encoding required by the clipboard format, through a
 message-only clipboard owner window. Clipboard failure
 leaves source text intact. F1 explains keyboard and host selection fallback
 when a terminal does not deliver mouse reports.
+
+## Phase 5 startup and distribution
+
+The app installs a bounded capture-only sink before startup work and no longer
+allocates or redirects an attached console. `consoleautostart` in defaults JSON
+defaults to true. The app starts the companion beside `Jamma.exe` after Scene
+construction, or opens it on Ctrl+Shift+C. A connected reopen is idempotent;
+a closed generation is stopped before another starts. The app retains 256 valid
+captured lines for a newly opened companion. Closing Jamma discards that cache.
+Fatal startup errors before companion launch are written to the support log.
+
+The Jamma project builds JammaConsole as a dependency into the same output
+directory. The companion project explicitly copies `utf8proc.dll` from its
+configuration's vcpkg runtime directory. Debug and Release x64 output layouts
+were checked for `Jamma.exe`, `JammaConsole.exe`, and `utf8proc.dll`.
+The final focused native run passed 59 of 59 console, preference, window
+shortcut, and disconnected-chat unit tests. Live Terminal/Console Host launch,
+mouse, clipboard, and visual behavior were outside the unit-only test scope.
