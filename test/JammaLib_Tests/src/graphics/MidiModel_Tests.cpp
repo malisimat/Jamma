@@ -24,3 +24,20 @@ TEST(GraphicsMidiModel, SharedArcMeshHasChamferedCrossSectionAndMatchingUvs)
 	EXPECT_TRUE(graphics::MidiModel::BuildBaseVerts(0u).empty());
 	EXPECT_TRUE(graphics::MidiModel::BuildBaseUvs(0u).empty());
 }
+
+TEST(GraphicsMidiModel, NoteEndCapsFaceOutward)
+{
+	constexpr unsigned int segments = 16u;
+	const auto vertices = graphics::MidiModel::BuildBaseVerts(segments);
+	const auto capOffset = segments * 8u * 2u * 9u;
+	for (auto edge = 0u; edge < 8u; ++edge)
+	{
+		for (auto end = 0u; end < 2u; ++end)
+		{
+			const auto i = capOffset + (edge * 2u + end) * 9u;
+			const auto normalX = vertices[i + 4u] * vertices[i + 8u] -
+				vertices[i + 5u] * vertices[i + 7u];
+			EXPECT_GT(end == 0u ? -normalX : normalX, 0.0f);
+		}
+	}
+}

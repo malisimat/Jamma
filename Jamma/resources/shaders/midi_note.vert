@@ -37,10 +37,9 @@ void main()
 
     gl_Position = MVP * vec4(position, 1.0);
 
-    // The generated MIDI mesh carries inward-facing normal sign on Y, so flip
-    // it here to keep lighting oriented outward on notes and the center disc.
+    // The arc mesh is wound outward; keep its top, bottom and end-cap signs.
     vec3 tangent = vec3(cos(angle), 0.0, -sin(angle));
-    vec3 radialNormal = normalize(vec3(sin(angle) * NormalIN.z, -NormalIN.y, cos(angle) * NormalIN.z) +
+    vec3 radialNormal = normalize(vec3(sin(angle) * NormalIN.z, NormalIN.y, cos(angle) * NormalIN.z) +
         tangent * NormalIN.x);
     float topEdge = smoothstep(0.39, 0.5, abs(PositionIN.y));
     float radialEdge = smoothstep(0.76, 1.0, abs(PositionIN.z));

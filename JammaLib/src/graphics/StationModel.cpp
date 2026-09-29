@@ -650,10 +650,13 @@ void StationModel::Draw3d(DrawContext& ctx,
 		break;
 	}
 
-	glCtx.SetUniform("ProbeSampler", 0u);
-	auto probeTexture = GetTexture().lock();
-	glActiveTexture(GL_TEXTURE0);
-	glBindTexture(GL_TEXTURE_2D, probeTexture ? probeTexture->GetId() : 0u);
+	if (pass == base::PASS_SCENE || pass == base::PASS_HIGHLIGHT)
+	{
+		glCtx.SetUniform("ProbeSampler", 0u);
+		auto probeTexture = GetTexture().lock();
+		glActiveTexture(GL_TEXTURE0);
+		glBindTexture(GL_TEXTURE_2D, probeTexture ? probeTexture->GetId() : 0u);
+	}
 	glUseProgram(shader->GetId());
 	shader->SetUniforms(glCtx);
 

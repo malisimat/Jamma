@@ -522,8 +522,8 @@ std::vector<float> MidiModel::BuildBaseVerts(unsigned int segments)
 	{
 		const auto& a = profile[edge];
 		const auto& b = profile[(edge + 1u) % profile.size()];
-		AddTri(verts, 0.0f, 0.0f, 0.0f, 0.0f, b.second, b.first, 0.0f, a.second, a.first);
-		AddTri(verts, 1.0f, 0.0f, 0.0f, 1.0f, a.second, a.first, 1.0f, b.second, b.first);
+		AddTri(verts, 0.0f, 0.0f, 0.0f, 0.0f, a.second, a.first, 0.0f, b.second, b.first);
+		AddTri(verts, 1.0f, 0.0f, 0.0f, 1.0f, b.second, b.first, 1.0f, a.second, a.first);
 	}
 
 	return verts;
