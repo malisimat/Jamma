@@ -508,7 +508,7 @@ int wmain(int argc, wchar_t** argv)
 						state.InboxReady.wait_for(lock, std::chrono::milliseconds(50));
 					}
 				}
-				if (WaitForSingleObject(stop.Get(), 0) != WAIT_OBJECT_0) break;
+				if (WaitForSingleObject(stop.Get(), 0) == WAIT_OBJECT_0) break;
 				if (received.Value->Type != console::MessageType::StatusSnapshot
 					&& state.Inbox.size() == 256)
 				{
