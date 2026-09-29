@@ -1,5 +1,7 @@
 #include "../../../../console/TextCoordinates.h"
 #include "../../../../console/PromptEditor.h"
+#include "../../../../console/Transcript.h"
+#include "../../../../console/PasteInput.h"
 #include <gtest/gtest.h>
 #include <array>
 
@@ -130,4 +132,121 @@ TEST(ConsolePromptEditor, InsertionKeepsCaretOutsideMergedGrapheme)
 	EXPECT_EQ(editor.Caret(), editor.Text().size());
 	editor.Backspace();
 	EXPECT_TRUE(editor.Text().empty());
+}
+
+TEST(ConsolePromptEditor, WordNavigationAndSubmit)
+{
+	console::PromptEditor editor;
+	ASSERT_EQ(editor.Insert("hello \xE6\xB5\x8B world"), console::InputResult::Accepted);
+	editor.MoveWordLeft();
+	EXPECT_EQ(editor.Caret(), editor.Text().find("world"));
+	editor.DeleteWordLeft();
+	EXPECT_EQ(editor.Text(), "hello world");
+	EXPECT_EQ(editor.Take(), "hello world");
+	EXPECT_TRUE(editor.Text().empty());
+	EXPECT_EQ(editor.Caret(), 0u);
+}
+
+TEST(ConsolePromptEditor, WordMotionAtInputLimit)
+{
+	console::PromptEditor editor;
+	ASSERT_EQ(editor.Insert(std::string(console::MaxInputBytes, 'x')),
+		console::InputResult::Accepted);
+	editor.MoveWordLeft();
+	EXPECT_EQ(editor.Caret(), 0u);
+	editor.MoveWordRight();
+	EXPECT_EQ(editor.Caret(), console::MaxInputBytes);
+}
+
+TEST(ConsolePromptEditor, BracketedPasteRejectsControlsAndOversizeAtomically)
+{
+	console::PromptEditor editor;
+	console::PasteInput paste;
+	paste.Start();
+	paste.Character("first");
+	paste.Control(); // CR, LF, Escape, and other special input use this path.
+	paste.Character("second");
+	EXPECT_EQ(paste.Finish(editor), console::InputResult::Multiline);
+	EXPECT_TRUE(editor.Text().empty());
+	paste.Start();
+	paste.Character(std::string(console::MaxInputBytes, 'x'));
+	paste.Character("z");
+	EXPECT_EQ(paste.Finish(editor), console::InputResult::TooLong);
+	EXPECT_TRUE(editor.Text().empty());
+	paste.Start();
+	paste.Character("hello");
+	EXPECT_EQ(paste.Finish(editor), console::InputResult::Accepted);
+	EXPECT_EQ(editor.Text(), "hello");
+}
+
+TEST(ConsoleTranscript, RetentionAndStableIds)
+{
+	console::Transcript transcript;
+	for (std::size_t index = 0; index < console::Transcript::MaxEntries + 2; ++index)
+		transcript.Append("x");
+	EXPECT_EQ(transcript.Size(), console::Transcript::MaxEntries);
+	EXPECT_EQ(transcript.Bytes(), console::Transcript::MaxEntries);
+	const auto visible = transcript.Visible(10, 2);
+	ASSERT_EQ(visible.size(), 2u);
+	EXPECT_EQ(visible.front().Start.EntryId, 100001u);
+}
+
+TEST(ConsoleTranscript, ByteRetentionEvictsOldestEntry)
+{
+	console::Transcript transcript;
+	const std::string entry(4096, 'x');
+	for (std::size_t index = 0; index < console::Transcript::MaxBytes / entry.size() + 1; ++index)
+		transcript.Append(entry);
+	EXPECT_EQ(transcript.Bytes(), console::Transcript::MaxBytes);
+	EXPECT_EQ(transcript.Size(), console::Transcript::MaxBytes / entry.size());
+	EXPECT_EQ(transcript.FirstId(), 2u);
+}
+
+TEST(ConsoleTranscript, WrapReflowAndPausedAnchor)
+{
+	console::Transcript transcript;
+	transcript.Append("a\xCC\x84\xE6\xB5\x8B" "bc\nlast");
+	auto visible = transcript.Visible(2, 5);
+	ASSERT_EQ(visible.size(), 5u);
+	EXPECT_EQ(visible[0].Text, "a\xCC\x84");
+	EXPECT_EQ(visible[1].Text, "\xE6\xB5\x8B");
+	transcript.ScrollUp(2, 2);
+	EXPECT_FALSE(transcript.Following());
+	const auto anchor = transcript.Anchor();
+	transcript.Append("new");
+	visible = transcript.Visible(4, 3);
+	EXPECT_EQ(visible.front().Start.EntryId, anchor.EntryId);
+	transcript.FollowTail();
+	visible = transcript.Visible(4, 1);
+	ASSERT_EQ(visible.size(), 1u);
+	EXPECT_EQ(visible.front().Text, "new");
+}
+
+TEST(ConsoleTranscript, LargeEntryRendersOnlyViewportRows)
+{
+	console::Transcript transcript;
+	transcript.Append(std::string(16000, 'x'));
+	const auto visible = transcript.Visible(1, 3);
+	ASSERT_EQ(visible.size(), 3u);
+	for (const auto& row : visible) EXPECT_EQ(row.Text, "x");
+	EXPECT_EQ(visible.front().Start.Byte, 15997u);
+}
+
+TEST(ConsoleTranscript, ScrollAfterResizeUsesContainingRow)
+{
+	console::Transcript transcript;
+	transcript.Append("abcdef");
+	const auto tail = transcript.Visible(2, 1);
+	ASSERT_EQ(tail.front().Start.Byte, 4u);
+	transcript.ScrollUp(3, 1);
+	EXPECT_EQ(transcript.Anchor().Byte, 0u);
+}
+
+TEST(ConsoleTextCoordinates, NarrowStatusAndPromptWindow)
+{
+	EXPECT_EQ(console::StatusForWidth("NINJAM connected | last: hello", 8), "C|hello");
+	EXPECT_EQ(console::StatusForWidth("NINJAM disconnected | last: hello", 1), "D");
+	const std::string prompt = "abcdef\xE6\xB5\x8B";
+	EXPECT_EQ(console::PromptWindowStart(prompt, prompt.size(), 3), 5u);
+	EXPECT_EQ(console::ClipColumns(prompt.substr(5), 3), "f\xE6\xB5\x8B");
 }

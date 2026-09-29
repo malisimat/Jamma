@@ -67,6 +67,48 @@ namespace console
 		return text.size();
 	}
 
+	inline std::string ClipColumns(std::string_view text, int columns)
+	{
+		if (columns <= 0) return {};
+		std::size_t end = 0;
+		int used = 0;
+		for (const auto& cluster : Graphemes(text))
+		{
+			if (used + cluster.Columns > columns) break;
+			used += cluster.Columns;
+			end = cluster.End;
+		}
+		return std::string(text.substr(0, end));
+	}
+
+	inline std::string StatusForWidth(std::string_view status, int columns)
+	{
+		if (columns <= 0) return {};
+		if (ftxui::string_width(std::string(status)) <= columns)
+			return std::string(status);
+		constexpr std::string_view divider = " | last: ";
+		const auto split = status.find(divider);
+		if (split == std::string_view::npos) return ClipColumns(status, columns);
+		const bool connected = status.substr(0, split) == "NINJAM connected";
+		const std::string_view state = connected ? "C" : "D";
+		if (columns == 1) return std::string(state);
+		return std::string(state) + "|" + ClipColumns(status.substr(split + divider.size()), columns - 2);
+	}
+
+	inline std::size_t PromptWindowStart(std::string_view text, std::size_t caret, int columns)
+	{
+		std::size_t begin = caret;
+		int used = 0;
+		const auto clusters = Graphemes(text.substr(0, caret));
+		for (auto it = clusters.rbegin(); it != clusters.rend(); ++it)
+		{
+			if (used + it->Columns > columns) break;
+			used += it->Columns;
+			begin = it->Start;
+		}
+		return begin;
+	}
+
 	inline std::size_t PreviousGrapheme(std::string_view text, std::size_t byte)
 	{
 		std::size_t previous = 0;

@@ -70,6 +70,41 @@ namespace console
 			if (HasSelection()) { EraseSelection(); return; }
 			_text.erase(_caret, NextGrapheme(_text, _caret) - _caret);
 		}
+		void MoveWordLeft(bool selecting = false)
+		{
+			BeginMove(selecting);
+			const auto clusters = Graphemes(_text);
+			auto at = std::lower_bound(clusters.begin(), clusters.end(), _caret,
+				[](const Grapheme& cluster, std::size_t byte) { return cluster.Start < byte; });
+			while (at != clusters.begin() && _text[(at - 1)->Start] == ' ') --at;
+			while (at != clusters.begin() && _text[(at - 1)->Start] != ' ') --at;
+			_caret = at == clusters.end() ? _text.size() : at->Start;
+		}
+		void MoveWordRight(bool selecting = false)
+		{
+			BeginMove(selecting);
+			const auto clusters = Graphemes(_text);
+			auto at = std::lower_bound(clusters.begin(), clusters.end(), _caret,
+				[](const Grapheme& cluster, std::size_t byte) { return cluster.Start < byte; });
+			while (at != clusters.end() && _text[at->Start] != ' ') ++at;
+			while (at != clusters.end() && _text[at->Start] == ' ') ++at;
+			_caret = at == clusters.end() ? _text.size() : at->Start;
+		}
+		void DeleteWordLeft()
+		{
+			if (HasSelection()) { EraseSelection(); return; }
+			const auto last = _caret;
+			MoveWordLeft();
+			_text.erase(_caret, last - _caret);
+		}
+		std::string Take()
+		{
+			auto result = std::move(_text);
+			_text.clear();
+			_caret = 0;
+			_anchor.reset();
+			return result;
+		}
 
 		std::string SelectedText() const
 		{

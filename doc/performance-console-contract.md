@@ -208,3 +208,28 @@ passed 20 of 20 tests after the thread opt-in changes. The tests cover parser al
 replacement, close with queued and in-flight submissions, result IDs and
 overflow, status replacement, capture bounds, final loss notice, and
 disconnected chat outcome.
+
+## Phase 3 screen ownership
+
+FTXUI's loop alone owns the retained transcript, prompt, request IDs, paste
+state, and rendering. The pipe reader posts bounded inbox updates; a separate
+writer consumes a 64-request queue. At most 64 requests can remain outstanding.
+The transcript retains up to 64 MiB of UTF-8 payload and 100,000 logical
+entries. Entry IDs are never reused. Wrapped row starts are cached for the
+current entry and width, and only visible row strings are built for a frame.
+Eviction moves an old viewport anchor to the first retained entry; resizing
+rewraps at the anchor's byte position. Page Up/Down and arrows pause following;
+Ctrl+F resumes the tail. Home/End remain prompt editing keys.
+
+The screen uses FTXUI fullscreen layout. Status arrives from the app at most
+once per second; the companion has no polling timer. Narrow status abbreviates
+connected/disconnected to C/D while retaining the beginning of the last event.
+The prompt is limited to 4 KiB and keeps its caret in the visible cell window.
+Windows clipboard Ctrl+V and bracketed terminal paste commit only after input
+validation. A bracketed paste containing a control, including CR, LF, or
+Escape, is consumed through its closing marker and rejected as a whole.
+The companion enables bracketed paste and virtual terminal output mode and
+restores console modes at exit. It clears processed input during the FTXUI loop
+so Ctrl+C can reach the handled key event rather than a console control
+signal. Terminal-specific behavior remains unverified under the unit-only
+test scope.
