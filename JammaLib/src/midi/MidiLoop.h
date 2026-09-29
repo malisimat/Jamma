@@ -358,6 +358,10 @@ namespace midi
 			std::uint32_t length, std::uint64_t revision,
 			const MidiQuantisationSettings& quantisation,
 			std::uint64_t transportStart) noexcept;
+		// Owner-side completion only. An active callback reader releases its pool
+		// slot independently; never call this from an audio callback.
+		void PublishCompletionWithRetry(const MidiEvent* raw, std::size_t count,
+			std::uint32_t length, std::uint64_t revision) noexcept;
 		const PlaybackSnapshot* AcquirePlaybackSnapshot() const noexcept;
 		void ReleasePlaybackSnapshot() const noexcept;
 
@@ -386,6 +390,7 @@ namespace midi
 		static bool FracWithinOverwriteWindow(float frac, float startFrac, float endFrac, bool wraps) noexcept;
 
 		std::array<MidiEvent, DefaultCapacity> _events{};
+		std::array<MidiEvent, DefaultCapacity> _completionScratch{};
 		// Job/MIDI owner builds one of three fixed buffers. Callback and job readers
 		// increment before loading the pointer and decrement after their last read.
 		// The owner reuses retired buffers only after the reader count reaches zero.

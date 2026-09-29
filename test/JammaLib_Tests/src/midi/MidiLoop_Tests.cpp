@@ -1,9 +1,12 @@
 #include <algorithm>
 #include <array>
+#include <atomic>
+#include <chrono>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <sstream>
+#include <thread>
 #include <vector>
 
 #include "gtest/gtest.h"
@@ -1952,6 +1955,37 @@ TEST(MidiLoopEdit, DitchFlushUsesLastSampleInsideBlock)
 	EXPECT_EQ(19u, sink.Events[1].sampleOffset);
 }
 
+TEST(MidiLoopEdit, DitchFlushRequestDoesNotTruncateLaterNote)
+{
+	MidiLoop loop;
+	const std::array events{
+		MidiEvent::MakeNoteOn(10u, 0u, 60u, 90u),
+		MidiEvent::MakeNoteOn(30u, 0u, 62u, 90u),
+		MidiEvent::MakeNoteOff(70u, 0u, 62u)
+	};
+	loop.ReplaceRecordedEvents(events.data(), events.size(), 100u);
+	MidiLoopCapturingSink sink;
+	loop.RequestHeldFlush();
+	loop.ReadBlock(10u, 10u, sink);
+	ASSERT_EQ(2u, sink.events.size());
+	EXPECT_TRUE(sink.events[0].IsNoteOn());
+	EXPECT_TRUE(sink.events[1].IsNoteOff());
+	EXPECT_EQ(19u, sink.events[1].sampleOffset);
+
+	sink.Clear();
+	loop.ReadBlock(30u, 10u, sink);
+	ASSERT_EQ(1u, sink.events.size());
+	EXPECT_TRUE(sink.events[0].IsNoteOn());
+	EXPECT_EQ(30u, sink.events[0].sampleOffset);
+	loop.ReadBlock(40u, 10u, sink);
+	EXPECT_EQ(1u, sink.events.size());
+	EXPECT_TRUE(loop.HeldNotes().test(MidiLoop::NoteSlot(0u, 62u)));
+	loop.ReadBlock(70u, 1u, sink);
+	ASSERT_EQ(2u, sink.events.size());
+	EXPECT_TRUE(sink.events[1].IsNoteOff());
+	EXPECT_EQ(70u, sink.events[1].sampleOffset);
+}
+
 TEST(MidiLoopEdit, SnapshotPoolRejectsAndRetriesWithoutReusingActiveReader)
 {
 	MidiLoop loop;
@@ -1991,6 +2025,153 @@ TEST(MidiLoopEdit, SnapshotPoolRejectsAndRetriesWithoutReusingActiveReader)
 	retry.GrainSamps = 22u;
 	retry.Fraction = MidiQuantisationFraction::Whole;
 	EXPECT_TRUE(loop.SetQuantisation(retry));
+}
+
+TEST(MidiLoopEdit, CompletionWaitsForReaderBeforeReplacingSource)
+{
+	MidiLoop loop;
+	const std::array original{
+		MidiEvent::MakeNoteOn(10u, 0u, 60u, 90u),
+		MidiEvent::MakeNoteOff(20u, 0u, 60u)
+	};
+	loop.ReplaceRecordedEvents(original.data(), original.size(), 100u);
+	std::atomic<bool> readerEntered{ false };
+	std::atomic<bool> releaseReader{ false };
+	class HoldingSink final : public IMidiSink
+	{
+	public:
+		std::atomic<bool>& Entered;
+		std::atomic<bool>& Release;
+		HoldingSink(std::atomic<bool>& entered, std::atomic<bool>& release)
+			: Entered(entered), Release(release) {}
+		void OnEvent(const MidiEvent&) noexcept override
+		{
+			Entered.store(true, std::memory_order_release);
+			while (!Release.load(std::memory_order_acquire))
+				std::this_thread::yield();
+		}
+	} sink(readerEntered, releaseReader);
+	std::thread reader([&] { loop.ReadBlock(0u, 40u, sink); });
+	const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+	while (!readerEntered.load(std::memory_order_acquire)
+		&& std::chrono::steady_clock::now() < deadline)
+		std::this_thread::yield();
+	const bool entered = readerEntered.load(std::memory_order_acquire);
+	if (entered)
+	{
+		MidiQuantisationSettings settings;
+		settings.Enabled = true;
+		settings.Fraction = MidiQuantisationFraction::Whole;
+		settings.GrainSamps = 20u;
+		EXPECT_TRUE(loop.SetQuantisation(settings));
+		settings.GrainSamps = 25u;
+		EXPECT_TRUE(loop.SetQuantisation(settings));
+
+		const std::array replacement{
+			MidiEvent::MakeNoteOn(30u, 0u, 64u, 90u),
+			MidiEvent::MakeNoteOff(60u, 0u, 64u)
+		};
+		const auto beforeRevision = loop.Revision();
+		std::atomic<bool> completionStarted{ false };
+		std::atomic<bool> completionFinished{ false };
+		std::thread completion([&]
+		{
+			completionStarted.store(true, std::memory_order_release);
+			loop.ReplaceRecordedEvents(replacement.data(), replacement.size(), 100u);
+			completionFinished.store(true, std::memory_order_release);
+		});
+		while (!completionStarted.load(std::memory_order_acquire))
+			std::this_thread::yield();
+		std::this_thread::sleep_for(std::chrono::milliseconds(20));
+		EXPECT_FALSE(completionFinished.load(std::memory_order_acquire));
+		EXPECT_EQ(beforeRevision, loop.Revision());
+		MidiEvent source{};
+		EXPECT_TRUE(loop.TryGetEvent(0u, source));
+		EXPECT_EQ(60u, source.data1);
+		releaseReader.store(true, std::memory_order_release);
+		reader.join();
+		completion.join();
+		EXPECT_TRUE(completionFinished.load(std::memory_order_acquire));
+		EXPECT_EQ(beforeRevision + 1u, loop.Revision());
+		EXPECT_TRUE(loop.TryGetEvent(0u, source));
+		EXPECT_EQ(64u, source.data1);
+		EXPECT_TRUE(loop.TryGetPlaybackEvent(0u, source));
+		EXPECT_EQ(64u, source.data1);
+
+		// Record finalisation uses the same bounded publication contract.
+		readerEntered.store(false, std::memory_order_release);
+		releaseReader.store(false, std::memory_order_release);
+		reader = std::thread([&] { loop.ReadBlock(0u, 40u, sink); });
+		const auto secondDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+		while (!readerEntered.load(std::memory_order_acquire)
+			&& std::chrono::steady_clock::now() < secondDeadline)
+			std::this_thread::yield();
+		const bool secondEntered = readerEntered.load(std::memory_order_acquire);
+		if (secondEntered)
+		{
+			bool poolExhausted = false;
+			for (std::uint32_t grain = 20u; grain < 25u; ++grain)
+			{
+				settings.GrainSamps = grain;
+				if (!loop.SetQuantisation(settings))
+				{
+					poolExhausted = true;
+					break;
+				}
+			}
+			EXPECT_TRUE(poolExhausted);
+			loop.StartRecord();
+			EXPECT_TRUE(loop.RecordEvent(MidiEvent::MakeNoteOn(40u, 0u, 67u, 90u)));
+			EXPECT_TRUE(loop.RecordEvent(MidiEvent::MakeNoteOff(80u, 0u, 67u)));
+			const auto recordRevision = loop.Revision();
+			completionStarted.store(false, std::memory_order_release);
+			completionFinished.store(false, std::memory_order_release);
+			completion = std::thread([&]
+			{
+				completionStarted.store(true, std::memory_order_release);
+				loop.EndRecord(100u);
+				completionFinished.store(true, std::memory_order_release);
+			});
+			while (!completionStarted.load(std::memory_order_acquire))
+				std::this_thread::yield();
+			std::this_thread::sleep_for(std::chrono::milliseconds(20));
+			EXPECT_FALSE(completionFinished.load(std::memory_order_acquire));
+			EXPECT_EQ(MidiLoopState::Recording, loop.State());
+			EXPECT_EQ(0u, loop.CompletedLengthForEditor());
+			EXPECT_EQ(recordRevision, loop.Revision());
+		}
+		releaseReader.store(true, std::memory_order_release);
+		reader.join();
+		if (secondEntered)
+		{
+			completion.join();
+			EXPECT_EQ(MidiLoopState::Playing, loop.State());
+			EXPECT_EQ(100u, loop.CompletedLengthForEditor());
+			EXPECT_EQ(67u, loop.TryGetPlaybackEvent(0u, source) ? source.data1 : 0u);
+		}
+		else
+			ADD_FAILURE() << "Second playback reader did not enter the test sink";
+	}
+	else
+	{
+		releaseReader.store(true, std::memory_order_release);
+		reader.join();
+		FAIL() << "Playback reader did not enter the test sink";
+	}
+}
+
+TEST(MidiLoopEdit, ZeroLengthCompletionClearsPriorPlayback)
+{
+	MidiLoop loop;
+	const std::array events{ MidiEvent::MakeNoteOn(10u, 0u, 60u, 90u) };
+	loop.ReplaceRecordedEvents(events.data(), events.size(), 100u);
+	loop.ReplaceRecordedEvents(nullptr, 0u, 0u);
+	EXPECT_EQ(0u, loop.EventCount());
+	EXPECT_EQ(0u, loop.LoopLengthSamps());
+	EXPECT_EQ(0u, loop.CompletedLengthForEditor());
+	MidiLoopCapturingSink sink;
+	loop.ReadBlock(10u, 1u, sink);
+	EXPECT_TRUE(sink.events.empty());
 }
 
 TEST(MidiLoopEdit, FinalCellNeedsOnlyOneFreeEventSlot)

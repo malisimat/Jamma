@@ -114,7 +114,7 @@ MidiModel::MidiModel(MidiModelParams params)
 
 MidiModel::~MidiModel()
 {
-	_ReleaseAutomationGl();
+	_ReleaseResources();
 }
 
 void MidiModel::Draw3d(DrawContext& ctx, unsigned int numInstances, base::DrawPass pass)

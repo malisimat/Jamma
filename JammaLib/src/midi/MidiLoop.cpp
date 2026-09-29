@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <thread>
 
 #include "../graphics/MidiModel.h"
 #include "MidiNote.h"
@@ -212,59 +213,48 @@ void MidiLoop::ReplaceRecordedEvents(const MidiEvent* events,
 	std::size_t count,
 	std::uint32_t loopLengthSamps)
 {
-	_completedLengthForEditor.store(0u, std::memory_order_release);
-	_eventCount = 0u;
-	_dropped = 0u;
-
-	if (events && count > 0u)
-	{
-		const auto keepCount = (count < _events.size()) ? count : _events.size();
-		for (std::size_t i = 0u; i < keepCount; ++i)
-			_events[i] = events[i];
-
-		_eventCount = keepCount;
-		if (count > _events.size())
-			_dropped = static_cast<std::uint64_t>(count - _events.size());
-	}
-
-	MidiNote::SortMidiEvents(_events.data(), _eventCount);
+	const auto keepCount = (events && count > 0u)
+		? (std::min)(count, _events.size()) : 0u;
+	if (keepCount > 0u)
+		std::copy_n(events, keepCount, _completionScratch.begin());
+	MidiNote::SortMidiEvents(_completionScratch.data(), keepCount);
+	PublishCompletionWithRetry(_completionScratch.data(), keepCount,
+		loopLengthSamps, _revision + 1u);
+	std::copy_n(_completionScratch.begin(), keepCount, _events.begin());
+	_eventCount = keepCount;
+	_dropped = (events && count > _events.size())
+		? static_cast<std::uint64_t>(count - _events.size()) : 0u;
 	_loopLengthSamps = loopLengthSamps;
 	_state = MidiLoopState::Playing;
 	++_revision;
-
-	PublishCompletedEvents(_events.data(), _eventCount, _loopLengthSamps,
-		_revision, _quantisation, _quantisationTransportStartSamps);
 	_completedLengthForEditor.store(loopLengthSamps, std::memory_order_release);
 }
 
 void MidiLoop::FinalizeOverdubBase(std::uint32_t loopLengthSamps)
 {
-	_completedLengthForEditor.store(0u, std::memory_order_release);
-	MidiNote::SortMidiEvents(_events.data(), _eventCount);
+	std::copy_n(_events.begin(), _eventCount, _completionScratch.begin());
+	MidiNote::SortMidiEvents(_completionScratch.data(), _eventCount);
+	PublishCompletionWithRetry(_completionScratch.data(), _eventCount,
+		loopLengthSamps, _revision + 1u);
+	std::copy_n(_completionScratch.begin(), _eventCount, _events.begin());
 	_loopLengthSamps = loopLengthSamps;
 	_state = MidiLoopState::Playing;
 	++_revision;
-
-	PublishCompletedEvents(_events.data(), _eventCount, _loopLengthSamps,
-		_revision, _quantisation, _quantisationTransportStartSamps);
 	_completedLengthForEditor.store(loopLengthSamps, std::memory_order_release);
 }
 
 void MidiLoop::EndRecord(std::uint32_t loopLengthSamps, std::uint32_t startGlobalSample)
 {
-	_completedLengthForEditor.store(0u, std::memory_order_release);
-	MidiNote::SortMidiEvents(_events.data(), _eventCount);
-
+	std::copy_n(_events.begin(), _eventCount, _completionScratch.begin());
+	MidiNote::SortMidiEvents(_completionScratch.data(), _eventCount);
+	// Publish the final grid before making the source or editor length visible.
+	PublishCompletionWithRetry(_completionScratch.data(), _eventCount,
+		loopLengthSamps, _revision + 1u);
+	std::copy_n(_completionScratch.begin(), _eventCount, _events.begin());
 	_loopLengthSamps = loopLengthSamps;
 	_automationGlobalSampleOrigin = startGlobalSample;
 	_state = MidiLoopState::Playing;
 	++_revision;
-
-	// Recording just finalised the loop window. If quantisation was already armed
-	// for this take, rebuild the parallel buffer against the new length now so the
-	// first playback block can read it without further work.
-	PublishCompletedEvents(_events.data(), _eventCount, _loopLengthSamps,
-		_revision, _quantisation, _quantisationTransportStartSamps);
 	_completedLengthForEditor.store(loopLengthSamps, std::memory_order_release);
 }
 
@@ -732,7 +722,10 @@ void MidiLoop::ReadBlock(std::uint32_t globalSample,
 	if (!snapshot || 0u == snapshot->LoopLengthSamps || 0u == numSamples)
 	{
 		if (numSamples > 0u)
+		{
 			FlushHeldNotes(globalSample, sink);
+			_heldFlushRequested.exchange(false, std::memory_order_seq_cst);
+		}
 		if (snapshot) ReleasePlaybackSnapshot();
 		return;
 	}
@@ -777,7 +770,7 @@ void MidiLoop::ReadBlock(std::uint32_t globalSample,
 		cursor += segment;
 		remaining -= segment;
 	}
-	if (_heldFlushRequested.load(std::memory_order_seq_cst))
+	if (_heldFlushRequested.exchange(false, std::memory_order_seq_cst))
 		FlushHeldNotes(cursor - 1u, sink);
 	ReleasePlaybackSnapshot();
 }
@@ -853,6 +846,22 @@ bool MidiLoop::SetQuantisation(const MidiQuantisationSettings& settings,
 	_quantisationTransportStartSamps = transportStartSamps;
 	++_revision;
 	return true;
+}
+
+void MidiLoop::PublishCompletionWithRetry(const MidiEvent* raw, std::size_t count,
+	std::uint32_t length, std::uint64_t revision) noexcept
+{
+	if (length == 0u)
+	{
+		_playbackSnapshot.store(nullptr, std::memory_order_seq_cst);
+		return;
+	}
+
+	// Completion runs on the MIDI owner, never the audio callback. A reader of
+	// one of the fixed buffers can finish independently, making a slot reusable.
+	while (!PublishCompletedEvents(raw, count, length, revision,
+		_quantisation, _quantisationTransportStartSamps))
+		std::this_thread::yield();
 }
 
 bool MidiLoop::PublishCompletedEvents(const MidiEvent* raw, std::size_t count,
