@@ -382,7 +382,7 @@ TEST(ConsoleLaunch, BuildsTerminalAndConsoleArgumentsFromAbsoluteSibling)
 	const auto terminal = console::TerminalArguments(L"Jamma-123", companion,
 		L"\\\\.\\pipe\\JammaConsole-123", L"abc");
 	EXPECT_EQ(terminal,
-		L"-w \"Jamma-123\" --size 100,30 \"C:\\Program Files\\Jamma\\JammaConsole.exe\" --pipe \"\\\\.\\pipe\\JammaConsole-123\" --token \"abc\"");
+		L"-w \"Jamma-123\" --size 100,30 --suppressApplicationTitle --title \"Jamma-123\" \"C:\\Program Files\\Jamma\\JammaConsole.exe\" --pipe \"\\\\.\\pipe\\JammaConsole-123\" --token \"abc\" --title \"Jamma-123\"");
 	EXPECT_EQ(console::ConsoleArguments(L"pipe", L"abc"),
 		L"--pipe \"pipe\" --token \"abc\"");
 }

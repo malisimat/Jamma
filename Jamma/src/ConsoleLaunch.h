@@ -73,7 +73,10 @@ namespace console
 		std::wstring_view companionPath, std::wstring_view pipeName,
 		std::wstring_view token)
 	{
-		return L"-w " + QuoteWindowsArgument(windowName) + L" --size 100,30 "
-			+ QuoteWindowsArgument(companionPath) + L" " + ConsoleArguments(pipeName, token);
+		return L"-w " + QuoteWindowsArgument(windowName)
+			+ L" --size 100,30 --suppressApplicationTitle --title "
+			+ QuoteWindowsArgument(windowName) + L" " + QuoteWindowsArgument(companionPath)
+			+ L" " + ConsoleArguments(pipeName, token) + L" --title "
+			+ QuoteWindowsArgument(windowName);
 	}
 }

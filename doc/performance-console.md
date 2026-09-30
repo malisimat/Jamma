@@ -19,10 +19,11 @@ directory. Copy the runtime DLLs from that directory too, including
 
 The startup preference is `consoleautostart` in Jamma's defaults JSON. Set it
 to `false` before launching Jamma to leave the companion closed initially.
-In the Jamma window, press **Ctrl+Shift+C** to open or reopen it. Repeating the
-shortcut while it is connected keeps the same session. If it has closed,
-the shortcut starts a fresh companion. The preference controls startup only;
-opening the console manually does not change it.
+In the Jamma window, press **Ctrl+`** to hide or show the companion. Hiding it
+keeps its session and transcript. Closing the companion window itself ends that
+session; the next **Ctrl+`** starts a fresh one. The preference controls startup
+only; opening the console manually does not change it. Jamma closes its
+companion when Jamma exits.
 
 Type `/`, `/?`, or `/help` for the server list and command help. `/c <number>`
 or `/connect <number>` connects using a number from that list. `/d`, `/q`,
@@ -38,7 +39,7 @@ the host's native selection. Console Host may render fonts, emoji, and mouse
 interaction differently from Windows Terminal.
 
 The companion retains at most 64 MiB and 100,000 logical transcript entries.
-Closing and reopening it starts a fresh screen; Jamma replays its last 256
+Closing its window and reopening it starts a fresh screen; Jamma replays its last 256
 captured output lines from memory, then streams new output. Commands already
 executed are not replayed. Restarting Jamma clears that in-memory history.
 Status and event loss are reported in the companion when connected.

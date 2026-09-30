@@ -17,19 +17,27 @@ namespace console
 {
 	struct ConsoleBroker::State
 	{
-		explicit State(std::wstring path, std::shared_ptr<CommandMailbox> commands,
-			std::string initialStatus)
-			: CompanionPath(std::move(path)), Commands(std::move(commands)),
+		explicit State(std::wstring path, std::wstring windowName,
+			std::shared_ptr<CommandMailbox> commands, std::string initialStatus)
+			: CompanionPath(std::move(path)),
+			TerminalWindowName(windowName + L"-WT"),
+			HostWindowName(windowName + L"-Host"),
+			Commands(std::move(commands)),
 			Events(std::make_shared<OutboundMailbox>()),
 			StopEvent(CreateEventW(nullptr, TRUE, FALSE, nullptr))
 		{
 			Events->SetStatus(std::move(initialStatus));
 		}
 		std::wstring CompanionPath;
+		const std::wstring TerminalWindowName;
+		const std::wstring HostWindowName;
 		std::shared_ptr<CommandMailbox> Commands;
 		std::shared_ptr<OutboundMailbox> Events;
 		UniqueHandle StopEvent;
 		std::atomic<bool> Connected{ false };
+		// Worker writes these; the app-owner thread reads them.
+		std::atomic<bool> EverConnected{ false };
+		std::atomic<bool> TerminalHost{ false };
 		std::atomic<bool> FallbackNotice{ false };
 		std::atomic<bool> Finished{ false };
 	};
@@ -207,19 +215,29 @@ namespace console
 		auto pipe = CreateServer(pipeName, userSid);
 		if (!pipe.Valid()) return false;
 		UniqueHandle launchedProcess;
+		state->TerminalHost.store(terminal, std::memory_order_release);
 		if (terminal)
 		{
-			const auto windowName = L"Jamma-" + std::to_wstring(GetCurrentProcessId())
-				+ L"-" + WidenAscii(nonce);
-			launchedProcess = Launch(terminalPath, TerminalArguments(windowName,
+			launchedProcess = Launch(terminalPath, TerminalArguments(state->TerminalWindowName,
 				state->CompanionPath, pipeName, WidenAscii(token)), false);
 		}
 		else launchedProcess = Launch(state->CompanionPath,
-			ConsoleArguments(pipeName, WidenAscii(token)), true);
+			ConsoleArguments(pipeName, WidenAscii(token)) + L" --title "
+				+ QuoteWindowsArgument(state->HostWindowName), true);
 		if (!launchedProcess.Valid()) return false;
+		const auto abandon = [&] {
+			if (!terminal) { TerminateProcess(launchedProcess.Get(), 1); return; }
+			// WT may outlive its launcher. Close only this attempt's titled window.
+			for (int retry = 0; retry < 5; ++retry)
+			{
+				const auto window = FindWindowByTitle(state->TerminalWindowName);
+				if (window) { PostMessageW(window, WM_CLOSE, 0, 0); return; }
+				WaitForSingleObject(state->StopEvent.Get(), 100);
+			}
+		};
 		if (!ConnectClient(pipe.Get(), state->StopEvent.Get(), terminal ? 4000 : 3000))
 		{
-			if (!terminal) TerminateProcess(launchedProcess.Get(), 1);
+			abandon();
 			return false;
 		}
 		const auto hello = ReadMessage(pipe.Get(), state->StopEvent.Get(), 4000);
@@ -229,10 +247,11 @@ namespace console
 			|| !gate.AcceptHello(hello.Value->Text,
 				SameUserClient(pipe.Get(), userSid, state->StopEvent.Get())))
 		{
-			if (!terminal) TerminateProcess(launchedProcess.Get(), 1);
+			abandon();
 			return false;
 		}
 		state->Connected.store(true, std::memory_order_release);
+		state->EverConnected.store(true, std::memory_order_release);
 		std::atomic<bool> writerStopping{ false };
 		std::thread writer([&] {
 			try
@@ -334,9 +353,15 @@ namespace console
 		if (!Stop()) return false;
 		if (!commands) return false;
 		if (GetFileAttributesW(companionPath.c_str()) == INVALID_FILE_ATTRIBUTES) return false;
-		_state = std::make_shared<State>(companionPath, std::move(commands),
+		const auto nonce = RandomHex();
+		if (nonce.empty()) return false;
+		const auto windowName = L"Jamma-" + std::to_wstring(GetCurrentProcessId())
+			+ L"-" + WidenAscii(nonce);
+		_state = std::make_shared<State>(companionPath, windowName, std::move(commands),
 			std::move(initialStatus));
 		if (!_state->StopEvent.Valid()) { _state.reset(); return false; }
+		_window = nullptr;
+		_hidden = false;
 		_worker = std::thread([state = _state] { Run(state); });
 		return true;
 	}
@@ -344,6 +369,7 @@ namespace console
 	bool ConsoleBroker::Stop() noexcept
 	{
 		if (!_state) return true;
+		const auto window = FindWindow();
 		SetEvent(_state->StopEvent.Get());
 		if (_worker.joinable())
 		{
@@ -351,8 +377,82 @@ namespace console
 				return false; // Keep generation owned; refuse a duplicate reopen.
 			_worker.join();
 		}
+		if (window && IsWindow(window)) PostMessageW(window, WM_CLOSE, 0, 0);
 		_state.reset();
+		_window = nullptr;
+		_hidden = false;
 		return true;
+	}
+
+	HWND ConsoleBroker::FindWindowByTitle(const std::wstring& name) noexcept
+	{
+		struct Search
+		{
+			const std::wstring& Name;
+			HWND Window = nullptr;
+		};
+		Search search{ name };
+		EnumWindows([](HWND window, LPARAM parameter) -> BOOL {
+			auto& match = *reinterpret_cast<Search*>(parameter);
+			std::array<wchar_t, 512> title{};
+			const auto length = GetWindowTextW(window, title.data(), static_cast<int>(title.size()));
+			if (length > 0 && std::wstring_view(title.data(), length).find(match.Name)
+				!= std::wstring_view::npos)
+			{
+				match.Window = window;
+				return FALSE;
+			}
+			return TRUE;
+		}, reinterpret_cast<LPARAM>(&search));
+		return search.Window;
+	}
+
+	HWND ConsoleBroker::FindWindow() const noexcept
+	{
+		if (!_state) return nullptr;
+		return FindWindowByTitle(_state->TerminalHost.load(std::memory_order_acquire)
+			? _state->TerminalWindowName : _state->HostWindowName);
+	}
+
+	void ConsoleBroker::UpdateVisibility() noexcept
+	{
+		if (!_state || !Connected() || _window) return;
+		const auto window = FindWindow();
+		if (!window) return;
+		_window = window;
+		if (_hidden) ShowWindow(window, SW_HIDE);
+	}
+
+	bool ConsoleBroker::ToggleVisibility(const std::wstring& companionPath,
+		std::shared_ptr<CommandMailbox> commands, std::string initialStatus)
+	{
+		if (Connected())
+		{
+			const auto window = FindWindow();
+			if (window)
+			{
+				_window = window;
+				_hidden = !_hidden;
+				ShowWindow(window, _hidden ? SW_HIDE : SW_SHOW);
+				if (!_hidden) SetForegroundWindow(window);
+				return true;
+			}
+			if (!_window)
+			{
+				_hidden = !_hidden; // The authenticated client is still acquiring its window title.
+				return true;
+			}
+			// A connected client whose identified window was closed is retired.
+			if (!Stop()) return false;
+			return Start(companionPath, std::move(commands), std::move(initialStatus));
+		}
+		if (_state && !_state->EverConnected.load(std::memory_order_acquire)
+			&& !_state->Finished.load(std::memory_order_acquire))
+		{
+			_hidden = !_hidden; // Startup is still in progress.
+			return true;
+		}
+		return Reopen(companionPath, std::move(commands), std::move(initialStatus));
 	}
 
 	bool ConsoleBroker::Reopen(const std::wstring& companionPath,

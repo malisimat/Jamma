@@ -14,7 +14,7 @@ namespace console
 	class OutboundMailbox;
 	class UniqueHandle;
 	// App-owned, non-real-time console broker. The worker owns all pipe I/O;
-	// Start/Stop/Reopen are called only by the app owner thread.
+	// Start/Stop/ToggleVisibility are called only by the app owner thread.
 	class ConsoleBroker
 	{
 	public:
@@ -27,6 +27,9 @@ namespace console
 		bool Stop() noexcept;
 		bool Reopen(const std::wstring& companionPath,
 			std::shared_ptr<CommandMailbox> commands, std::string initialStatus);
+		bool ToggleVisibility(const std::wstring& companionPath,
+			std::shared_ptr<CommandMailbox> commands, std::string initialStatus);
+		void UpdateVisibility() noexcept;
 		bool Connected() const noexcept;
 		bool ConsumeFallbackNotice() noexcept;
 		std::shared_ptr<OutboundMailbox> Events() const noexcept;
@@ -47,7 +50,11 @@ namespace console
 		static bool RunAttempt(const std::shared_ptr<State>& state, bool terminal,
 			const std::wstring& terminalPath, const std::vector<std::uint8_t>& userSid);
 		static void Run(const std::shared_ptr<State>& state);
+		static HWND FindWindowByTitle(const std::wstring& name) noexcept;
+		HWND FindWindow() const noexcept;
 		std::shared_ptr<State> _state;
 		std::thread _worker;
+		HWND _window = nullptr; // App-owner thread only; validated by generation title before use.
+		bool _hidden = false;
 	};
 }

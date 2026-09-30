@@ -1128,12 +1128,13 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 		if (scene.value()->PumpGlobalKeyCapture(globalKeyAction))
 			window.OnAction(globalKeyAction);
 
-		if (window.ConsumeConsoleReopenRequest())
+		consoleBroker->UpdateVisibility();
+		if (window.ConsumeConsoleToggleRequest())
 		{
-			if (companionPath.empty() || !consoleBroker->Reopen(companionPath, consoleCommands,
+			if (companionPath.empty() || !consoleBroker->ToggleVisibility(companionPath, consoleCommands,
 				scene.value()->NinjamConnected() ? "NINJAM connected | last: Ready"
 					: "NINJAM disconnected | last: Ready"))
-				std::cerr << "[CONSOLE] Could not reopen companion beside Jamma.exe.\n";
+				std::cerr << "[CONSOLE] Could not toggle companion beside Jamma.exe.\n";
 		}
 
 		if (window.ConsumeJamLoadRequest())

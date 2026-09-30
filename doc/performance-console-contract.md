@@ -261,8 +261,9 @@ when a terminal does not deliver mouse reports.
 The app installs a bounded capture-only sink before startup work and no longer
 allocates or redirects an attached console. `consoleautostart` in defaults JSON
 defaults to true. The app starts the companion beside `Jamma.exe` after Scene
-construction, or opens it on Ctrl+Shift+C. A connected reopen is idempotent;
-a closed generation is stopped before another starts. The app retains 256 valid
+construction, or opens it on Ctrl+`. A connected toggle hides or shows the same
+window and retains its transcript; a closed generation is stopped before another
+starts. The app retains 256 valid
 captured lines for a newly opened companion. Closing Jamma discards that cache.
 Fatal startup errors before companion launch are written to the support log.
 

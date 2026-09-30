@@ -130,7 +130,9 @@ int wmain(int argc, wchar_t** argv)
 {
 	const auto pipeName = ConsoleClientState::Argument(argc, argv, L"--pipe");
 	const auto wideToken = ConsoleClientState::Argument(argc, argv, L"--token");
+	const auto windowTitle = ConsoleClientState::Argument(argc, argv, L"--title");
 	if (pipeName.empty() || wideToken.size() != 32) return 2;
+	if (!windowTitle.empty()) SetConsoleTitleW(windowTitle.c_str());
 	std::string token;
 	token.reserve(wideToken.size());
 	for (const auto ch : wideToken)
