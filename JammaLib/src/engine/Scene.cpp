@@ -3460,15 +3460,20 @@ void Scene::_UpdateSelection(ActionResultType res)
 	{
 		if (auto pressed = _ChildFromPath(_selector->CurrentHover()))
 		{
-			if (auto station = std::dynamic_pointer_cast<Station>(pressed))
-				station->SetClickPressed(true);
-			else if (auto take = std::dynamic_pointer_cast<LoopTake>(pressed))
-			{
+			const auto pressTakeLoops = [](const std::shared_ptr<LoopTake>& take) {
 				for (const auto& loop : take->GetLoops())
 					if (auto model = loop->Model()) model->SetClickPressed(true);
 				for (const auto& midiLoop : take->GetMidiLoops())
 					if (auto model = midiLoop->Model()) model->SetClickPressed(true);
+			};
+			if (auto station = std::dynamic_pointer_cast<Station>(pressed))
+			{
+				station->SetClickPressed(true);
+				for (const auto& take : station->GetLoopTakes())
+					pressTakeLoops(take);
 			}
+			else if (auto take = std::dynamic_pointer_cast<LoopTake>(pressed))
+				pressTakeLoops(take);
 			else if (auto loop = std::dynamic_pointer_cast<Loop>(pressed))
 			{
 				if (auto model = loop->Model()) model->SetClickPressed(true);
