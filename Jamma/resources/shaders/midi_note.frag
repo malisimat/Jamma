@@ -66,14 +66,22 @@ void main()
 
     if (IsDisc > 0.5)
     {
+        float selected = clamp(LoopSelected, 0.0, 1.0);
+        float hovered = clamp(LoopHover, 0.0, 1.0);
+        float pressed = clamp(LoopPressed, 0.0, 1.0);
         vec3 discColor = mix(vec3(0.46, 0.53, 0.65),
-            vec3(0.06, 0.91, 0.96), clamp(LoopSelected, 0.0, 1.0)) * Diff;
-        discColor = min(discColor * (1.0 + 0.40 * LoopHover)
-            + vec3(0.10) * LoopHover, vec3(1.0));
+            vec3(0.06, 0.91, 0.96), selected) * Diff;
+        discColor = min(discColor * (1.0 + 1.75 * selected)
+            + vec3(0.12, 0.22, 0.25) * selected, vec3(1.0));
+        discColor = min(discColor * (1.0 + (0.80 - 0.42 * selected) * hovered)
+            + vec3(0.15 - 0.08 * selected) * hovered, vec3(1.0));
         discColor = mix(discColor, vec3(1.0, 0.42, 0.10),
-            0.82 * clamp(LoopPressed, 0.0, 1.0));
-        ColorOUT = vec4(discColor, max(DiscAlpha, 0.48) + 0.32 * LoopSelected
-            + 0.16 * LoopHover);
+            0.82 * pressed);
+        // The ring is blended over the scene; a press needs near-opaque coverage
+        // to read as clearly as the solid station mesh.
+        float discOpacity = max(DiscAlpha, 0.48) + 0.34 * selected
+            + 0.18 * hovered + 0.52 * pressed;
+        ColorOUT = vec4(discColor, min(discOpacity, 1.0));
     }
     else
     {

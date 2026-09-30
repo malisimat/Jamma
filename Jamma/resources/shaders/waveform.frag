@@ -48,11 +48,10 @@ void main()
     ColorOUT.rgb = ColorOUT.rgb / (vec3(1.0) + 0.55 * ColorOUT.rgb);
     float selected = clamp(LoopSelected, 0.0, 1.0);
     float hovered = clamp(LoopHover, 0.0, 1.0);
-    vec3 luma = vec3(dot(ColorOUT.rgb, vec3(0.2126, 0.7152, 0.0722)));
-    ColorOUT.rgb = mix(ColorOUT.rgb, luma + (ColorOUT.rgb - luma) * 1.5
-        + vec3(0.03, 0.13, 0.17), selected);
-    ColorOUT.rgb = min(ColorOUT.rgb * (1.0 + 0.18 * hovered)
-        + vec3(0.025) * hovered, vec3(0.96));
+    ColorOUT.rgb = min(ColorOUT.rgb * (1.0 + 1.80 * selected)
+        + vec3(0.07, 0.19, 0.23) * selected, vec3(1.0));
+    ColorOUT.rgb = min(ColorOUT.rgb * (1.0 + (0.80 - 0.43 * selected) * hovered)
+        + vec3(0.12 - 0.07 * selected) * hovered, vec3(1.0));
     ColorOUT.rgb = mix(ColorOUT.rgb, vec3(0.86, 0.38, 0.12),
         0.70 * clamp(LoopPressed, 0.0, 1.0));
     if (EditorActive > 0.5)
