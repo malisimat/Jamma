@@ -3342,17 +3342,13 @@ void Scene::_UpdateSelection(ActionResultType res)
 		case SceneSelector::SELECT_SELECTADD:
 			for (auto& station : stations)
 				station->SetPicking3d(false);
-			hovering = _ChildFromPath(_selector->CurrentHover());
 			applySelection(_selector->CurrentHover(), true);
-			if (hovering) hovering->SetPicking3d(true);
 
 			break;
 		case SceneSelector::SELECT_SELECTREMOVE:
 			for (auto& station : stations)
 				station->SetPicking3d(false);
-			hovering = _ChildFromPath(_selector->CurrentHover());
 			applySelection(_selector->CurrentHover(), false);
-			if (hovering) hovering->SetPicking3d(true);
 
 			break;
 		case SceneSelector::SELECT_MUTE:
@@ -3415,7 +3411,10 @@ void Scene::_UpdateSelection(ActionResultType res)
 			applySelection(_selector->PaintedPathForTest(), select);
 			applySelection(_selector->CurrentHover(), select);
 		}
-		if (hovering) hovering->SetPicking3d(true);
+		// A drag has entered paint mode: show only the selected state while painting.
+		if (currentMode != SceneSelector::SELECT_SELECTADD
+			&& currentMode != SceneSelector::SELECT_SELECTREMOVE && hovering)
+			hovering->SetPicking3d(true);
 
 		break;
 	case ACTIONRESULT_CLEARSELECT:
@@ -3425,7 +3424,9 @@ void Scene::_UpdateSelection(ActionResultType res)
 
 		break;
 	}
-	if (_selector->CurrentSelectDepth() == base::DEPTH_LOOP)
+	const bool paintingSelection = currentMode == SceneSelector::SELECT_SELECTADD
+		|| currentMode == SceneSelector::SELECT_SELECTREMOVE;
+	if (!paintingSelection && _selector->CurrentSelectDepth() == base::DEPTH_LOOP)
 	{
 		if (auto hovered = _ChildFromPath(_selector->CurrentHover()))
 		{
