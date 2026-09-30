@@ -13,6 +13,7 @@ StationRemote::StationRemote(StationParams params,
 	_assignedOutputChannel(0u),
 	_isConnectedRemote(false),
 	_intervalLengthSamps(constants::DefaultSampleRate),
+	_intervalVisualLengthSamps(constants::DefaultSampleRate),
 	_intervalPositionSamps(0u),
 	_remoteTake(nullptr),
 	_leftLoop(nullptr),
@@ -120,21 +121,33 @@ void StationRemote::SetRemoteInterval(unsigned int lengthSamps, unsigned int pos
 {
 	const auto safeLength = std::max(1u, lengthSamps);
 	const auto safeVisualLength = std::max(safeLength, visualLengthSamps);
+	const auto safePosition = positionSamps % safeLength;
+
+	// Early-out if nothing has changed (avoids redundant buffer
+	// resize / dirty-flag work on each job tick).
+	if (safeLength == _intervalLengthSamps.load() &&
+		safeVisualLength == _intervalVisualLengthSamps.load() &&
+		safePosition == _intervalPositionSamps.load())
+	{
+		return;
+	}
+
 	_intervalLengthSamps.store(safeLength);
-	_intervalPositionSamps.store(positionSamps % safeLength);
+	_intervalVisualLengthSamps.store(safeVisualLength);
+	_intervalPositionSamps.store(safePosition);
 
 	if (_leftLoop)
 	{
 		_leftLoop->SetMeasureLength(safeLength);
 		_leftLoop->SetVisualLength(safeVisualLength);
-		_leftLoop->SetMeasurePosition(_intervalPositionSamps.load());
+		_leftLoop->SetMeasurePosition(safePosition);
 	}
 
 	if (_rightLoop)
 	{
 		_rightLoop->SetMeasureLength(safeLength);
 		_rightLoop->SetVisualLength(safeVisualLength);
-		_rightLoop->SetMeasurePosition(_intervalPositionSamps.load());
+		_rightLoop->SetMeasurePosition(safePosition);
 	}
 }
 
