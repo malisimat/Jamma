@@ -18,7 +18,9 @@
 2 quantisation_division MVP Highlight OverlayAlpha SceneDim
 2 ctrl_handle MVP Color
 2 station MVP ObjectId Highlight HighlightPass StationHover StationPressed StationLevel SceneDim
+2 station_picker MVP ObjectId StationLevel
 2 station_ring MVP Highlight HighlightPass StationHover StationPressed StationLevel StationStateColor StationVisualState RingCapY RingDirection RingScale SceneDim
+2 station_ring_picker MVP ObjectId StationLevel StationVisualState RingCapY RingDirection RingScale
 2 white MVP Highlight
 2 blur
 1 fader_back
