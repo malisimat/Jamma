@@ -107,6 +107,7 @@ namespace engine
 		virtual MultiAudioPlugType MultiAudioPlug() const override { return MULTIAUDIOPLUG_BOTH; }
 		virtual void SetSize(utils::Size2d size) override;
 		virtual void Draw3d(base::DrawContext& ctx, unsigned int numInstances, base::DrawPass pass) override;
+		void SetClickPressed(bool pressed) noexcept { if (_stationModel) _stationModel->SetClickPressed(pressed); }
 		utils::Position3d TopCapModelPosition() const;
 		virtual	utils::Position2d Position() const override;
 		virtual unsigned int NumInputChannels(base::Audible::AudioSourceType source) const override;

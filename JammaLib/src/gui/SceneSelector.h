@@ -35,6 +35,7 @@ namespace gui
 
 	public:
 		virtual actions::ActionResult OnAction(actions::TouchAction action) override;
+		virtual actions::ActionResult OnAction(actions::TouchMoveAction action) override;
 		virtual actions::ActionResult OnAction(actions::KeyAction action) override;
 
 		SelectMode CurrentMode() const;
@@ -42,6 +43,7 @@ namespace gui
 		void SetSelectDepth(base::SelectDepth level);
 		std::vector<unsigned char> CurrentHover() const;
 		std::vector<unsigned char> PaintedPathForTest() const;
+		bool IsClickPressed() const;
 		bool UpdateCurrentHover(std::vector<unsigned char> path,
 			base::Action::Modifiers modifiers,
 			bool isSelected,
@@ -67,6 +69,8 @@ namespace gui
 		std::vector<unsigned char> _currentHover;
 		std::vector<unsigned char> _paintedPath;
 		bool _currentHoverSelected;
+		bool _pressHoverSelected;
+		bool _clickPressed;
 		base::Tweakable::TweakState _currentHoverTweakState;
 	};
 }

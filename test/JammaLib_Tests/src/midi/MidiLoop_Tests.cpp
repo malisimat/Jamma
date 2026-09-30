@@ -530,6 +530,9 @@ TEST(LoopTakeMidiVisualization, RecordMatchesConfiguredMidiDevices)
 	auto secondMidiModel = std::dynamic_pointer_cast<MidiModel>(take->TryGetChild(2u));
 	ASSERT_NE(nullptr, firstMidiModel);
 	ASSERT_NE(nullptr, secondMidiModel);
+	// Device/channel streams remain separate loops, but share one visible pick ring.
+	EXPECT_EQ(1u, firstMidiModel->TotalInstanceCount());
+	EXPECT_EQ(0u, secondMidiModel->TotalInstanceCount());
 
 	EXPECT_TRUE(take->RecordMidiEvent(MidiEvent::MakeNoteOn(0u, 3, 60, 100), "Keys A", 0u));
 	EXPECT_TRUE(take->RecordMidiEvent(MidiEvent::MakeNoteOn(0u, 3, 61, 100), "Keys B", 0u));
@@ -1672,6 +1675,23 @@ TEST(LoopTakeMidiPlayback, MutedTakeDoesNotEmitMidiEvents)
 	MidiLoopCapturingOutputSink sink;
 	EXPECT_EQ(1u, take->ReadMidiBlock(123u, 64u, sink));
 	EXPECT_TRUE(sink.events.empty());
+}
+
+TEST(LoopTakeMidiVisualization, MultipleChannelsShareOneSelectionRing)
+{
+	auto take = MakeLoopTake();
+	take->Record({}, "station", { 2u, 3u });
+	ASSERT_EQ(2u, take->GetMidiLoops().size());
+	auto first = take->GetMidiLoops()[0]->Model();
+	auto second = take->GetMidiLoops()[1]->Model();
+	ASSERT_NE(nullptr, first);
+	ASSERT_NE(nullptr, second);
+
+	const std::vector<midi::MidiNote> notes{ midi::MidiNote{ 0u, 240u, 2u, 60u, 100u } };
+	first->UpdateModel(notes, 960u);
+	second->UpdateModel(notes, 960u);
+	EXPECT_EQ(2u, first->TotalInstanceCount());
+	EXPECT_EQ(1u, second->TotalInstanceCount());
 }
 
 TEST(MidiLoopEdit, PublishesRawAndPlaybackTogetherAndRejectsStaleOrOverflow)

@@ -8,7 +8,9 @@ flat in float StationLevelOut;
 out vec4 ColorOUT;
 
 uniform float Highlight;
+uniform float HighlightPass;
 uniform float StationHover;
+uniform float StationPressed;
 uniform vec3 StationStateColor;
 uniform float SceneDim;
 
@@ -16,6 +18,13 @@ uniform float SceneDim;
 // uv.y = part kind:  0=deck-top, 1=bevel, 2=side
 void main()
 {
+	if (HighlightPass > 0.5)
+	{
+		float alpha = clamp(Highlight, 0.0, 1.0);
+		if (alpha <= 0.0) discard;
+		ColorOUT = vec4(vec3(alpha * SceneDim), alpha);
+		return;
+	}
 	float radialFrac = Uv.x;
 	float partKind   = Uv.y;
 	// accentuate small values
@@ -49,9 +58,14 @@ void main()
 	float diffuse  = clamp(dot(normalize(Normal), lightDir), 0.0, 1.0);
 	base *= (0.90 + 0.35 * diffuse);
 
-	// -- highlight flash (selection) --
+	// Selection changes the whole deck's hue; hover lifts its brightness
+	// independently, so the two states remain legible together.
 	float hi = clamp(Highlight, 0.0, 1.0);
-	base = mix(base, base + vec3(0.18, 0.28, 0.38), hi);
+	base = mix(base, base * 1.18 + vec3(0.03, 0.20, 0.24), hi);
+	base = min(base * (1.0 + 0.22 * clamp(StationHover, 0.0, 1.0))
+		+ vec3(0.035) * StationHover, vec3(1.0));
+	base = mix(base, vec3(0.90, 0.40, 0.13),
+		0.68 * clamp(StationPressed, 0.0, 1.0));
 
 	ColorOUT = vec4(base * SceneDim, 1.0);
 }

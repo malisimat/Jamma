@@ -1310,6 +1310,15 @@ ActionResult Scene::OnAction(TouchMoveAction action)
 
 	if (_isSceneTouching)
 		return _UpdateBackgroundDrag(action);
+	if (0u != (action.MouseButtonsDown & 1u))
+	{
+		auto selectionMove = _selector->OnAction(_selector->ParentToLocal(action));
+		if (selectionMove.ResultType == ACTIONRESULT_INITSELECT)
+		{
+			_UpdateSelection(selectionMove.ResultType);
+			return selectionMove;
+		}
+	}
 	if (_hudPanel)
 	{
 		// Lock the HUD tree while the job thread rebuilds it.
@@ -2102,6 +2111,25 @@ void Scene::SetHover3d(std::vector<unsigned char> path, Action::Modifiers modifi
 	_hoverPath3d = fullElementPath;
 	_hoverElement3d = _ChildFromPath(fullElementPath);
 	elementPath = fullElementPath;
+	if (auto pickedElement = _hoverElement3d.lock();
+		_selector->CurrentSelectDepth() == base::DEPTH_LOOP && pickedElement)
+	{
+		if (auto take = std::dynamic_pointer_cast<LoopTake>(pickedElement->Parent()))
+		{
+			for (const auto& midiLoop : take->GetMidiLoops())
+			{
+				if (midiLoop->Model() != pickedElement)
+					continue;
+				if (!take->GetMidiLoops().empty() && take->GetMidiLoops().front()->Model())
+				{
+					elementPath.clear();
+					for (auto index : take->GetMidiLoops().front()->Model()->GlobalId())
+						elementPath.push_back(static_cast<unsigned char>(index));
+				}
+				break;
+			}
+		}
+	}
 
 	elementPath = TrimPath(elementPath, _selector->CurrentSelectDepth() + 1);
 
@@ -2669,6 +2697,7 @@ bool Scene::_FindLoopGridEditorCandidate(std::shared_ptr<LoopTake>& take,
 					midiLoop.reset();
 				}
 			}
+			bool countedMidiForTake = false;
 			for (const auto& candidate : candidateTake->GetMidiLoops())
 			{
 				if (!candidate)
@@ -2681,8 +2710,10 @@ bool Scene::_FindLoopGridEditorCandidate(std::shared_ptr<LoopTake>& take,
 					midiLoop = candidate;
 					return true;
 				}
-				if (candidate->Model() && candidate->Model()->IsSelected())
+				if (!countedMidiForTake && candidate->Model() && candidate->Model()->IsSelected())
 				{
+					// All channel models share one visible MIDI loop at this depth.
+					countedMidiForTake = true;
 					++fallbackCount;
 					take = candidateTake;
 					audioLoop.reset();
@@ -3210,6 +3241,72 @@ void Scene::_UpdateSelection(ActionResultType res)
 	const auto stations = SnapshotStations();
 	auto currentMode = _selector->CurrentMode();
 	std::shared_ptr<GuiElement> hovering = nullptr;
+	const auto applySelection = [this](const std::vector<unsigned char>& path, bool selected) {
+		auto target = _ChildFromPath(path);
+		if (!target)
+			return;
+		if (_selector->CurrentSelectDepth() == base::DEPTH_STATION)
+		{
+			if (auto station = std::dynamic_pointer_cast<Station>(target))
+			{
+				if (selected) station->Select(); else station->DeSelect();
+				for (const auto& take : station->GetLoopTakes())
+					if (selected) take->Select(); else take->DeSelect();
+				return;
+			}
+		}
+		if (_selector->CurrentSelectDepth() == base::DEPTH_LOOP)
+		{
+			if (auto take = std::dynamic_pointer_cast<LoopTake>(target->Parent()))
+			{
+				bool isMidiModel = false;
+				for (const auto& midiLoop : take->GetMidiLoops())
+					isMidiModel |= midiLoop->Model() == target;
+				// A take keeps the aggregate selected state used by the editor, while
+				// individual loop models carry the loop-depth visual selection.
+				if (selected && !take->IsSelected())
+				{
+					take->Select();
+					for (const auto& loop : take->GetLoops())
+						if (loop != target) loop->DeSelect();
+					for (const auto& midiLoop : take->GetMidiLoops())
+						if (auto model = midiLoop->Model(); model && model != target)
+							model->DeSelect();
+				}
+				if (isMidiModel)
+				{
+				for (const auto& midiLoop : take->GetMidiLoops())
+					if (auto model = midiLoop->Model())
+						if (selected) model->Select(); else model->DeSelect();
+			}
+				else if (selected) target->Select(); else target->DeSelect();
+				if (!selected && take->IsSelected())
+				{
+					bool anySelected = false;
+					for (const auto& loop : take->GetLoops()) anySelected |= loop->IsSelected();
+					for (const auto& midiLoop : take->GetMidiLoops())
+						if (auto model = midiLoop->Model()) anySelected |= model->IsSelected();
+					if (!anySelected) take->DeSelect();
+				}
+				return;
+			}
+		}
+		if (selected) target->Select();
+		else target->DeSelect();
+	};
+	const auto clearSelection = [&stations]() {
+		for (const auto& station : stations)
+		{
+			station->DeSelect();
+			for (const auto& take : station->GetLoopTakes())
+			{
+				take->DeSelect();
+				for (const auto& loop : take->GetLoops()) loop->DeSelect();
+				for (const auto& midiLoop : take->GetMidiLoops())
+					if (auto model = midiLoop->Model()) model->DeSelect();
+			}
+		}
+	};
 	switch (res)
 	{
 	case ACTIONRESULT_DEFAULT:
@@ -3227,29 +3324,35 @@ void Scene::_UpdateSelection(ActionResultType res)
 			break;
 		case SceneSelector::SELECT_NONEADD:
 			for (auto& station : stations)
-				station->SetPickingFromState(GuiElement::EDIT_SELECT, false);
+				station->SetPicking3d(false);
 
 			hovering = _ChildFromPath(_selector->CurrentHover());
 			if (nullptr != hovering)
-				hovering->SetPicking3d(!hovering->IsSelected());
+				hovering->SetPicking3d(true);
 
 			break;
 		case SceneSelector::SELECT_SELECT:
+			for (auto& station : stations)
+				station->SetPicking3d(false);
 			hovering = _ChildFromPath(_selector->CurrentHover());
 			if (nullptr != hovering)
 				hovering->SetPicking3d(true);
 
 			break;
 		case SceneSelector::SELECT_SELECTADD:
+			for (auto& station : stations)
+				station->SetPicking3d(false);
 			hovering = _ChildFromPath(_selector->CurrentHover());
-			if (nullptr != hovering)
-				hovering->SetPicking3d(true);
+			applySelection(_selector->CurrentHover(), true);
+			if (hovering) hovering->SetPicking3d(true);
 
 			break;
 		case SceneSelector::SELECT_SELECTREMOVE:
+			for (auto& station : stations)
+				station->SetPicking3d(false);
 			hovering = _ChildFromPath(_selector->CurrentHover());
-			if (nullptr != hovering)
-				hovering->SetPicking3d(false);
+			applySelection(_selector->CurrentHover(), false);
+			if (hovering) hovering->SetPicking3d(true);
 
 			break;
 		case SceneSelector::SELECT_MUTE:
@@ -3267,12 +3370,15 @@ void Scene::_UpdateSelection(ActionResultType res)
 		}
 		break;
 	case ACTIONRESULT_SELECT:
-		// Only called on touch up
+		// A click replaces the selection with the item pressed at touch down.
+		clearSelection();
+		applySelection(_selector->PaintedPathForTest(), true);
 		for (auto& station : stations)
 		{
-			station->SetStateFromPicking(GuiElement::EDIT_SELECT, false);
 			station->SetPicking3d(false);
 		}
+		hovering = _ChildFromPath(_selector->CurrentHover());
+		if (hovering) hovering->SetPicking3d(true);
 
 		break;
 	case ACTIONRESULT_MUTE:
@@ -3302,27 +3408,86 @@ void Scene::_UpdateSelection(ActionResultType res)
 			station->SetPicking3d(false);
 
 		hovering = _ChildFromPath(_selector->CurrentHover());
-		if (nullptr != hovering)
+		if (currentMode == SceneSelector::SELECT_SELECTADD ||
+			currentMode == SceneSelector::SELECT_SELECTREMOVE)
 		{
-			// MIDI models are children of LoopTake, but selection state is owned by
-			// the take. At loop selection depth, mark that owner for the normal
-			// selection commit instead of marking only the non-selectable model.
-			auto selectionTarget = hovering;
-			if (_selector->CurrentSelectDepth() == base::DEPTH_LOOP)
-				if (auto take = std::dynamic_pointer_cast<LoopTake>(hovering->Parent()))
-					selectionTarget = take;
-			selectionTarget->SetPicking3d(true);
+			const bool select = currentMode == SceneSelector::SELECT_SELECTADD;
+			applySelection(_selector->PaintedPathForTest(), select);
+			applySelection(_selector->CurrentHover(), select);
 		}
+		if (hovering) hovering->SetPicking3d(true);
 
 		break;
 	case ACTIONRESULT_CLEARSELECT:
+		clearSelection();
 		for (auto& station : stations)
 			station->SetPicking3d(false);
 
-		for (auto& station : stations)
-			station->SetStateFromPicking(GuiElement::EDIT_SELECT, false);
-
 		break;
+	}
+	if (_selector->CurrentSelectDepth() == base::DEPTH_LOOP)
+	{
+		if (auto hovered = _ChildFromPath(_selector->CurrentHover()))
+		{
+			if (auto take = std::dynamic_pointer_cast<LoopTake>(hovered->Parent()))
+			{
+				for (const auto& midiLoop : take->GetMidiLoops())
+					if (midiLoop->Model() == hovered)
+					{
+						for (const auto& sibling : take->GetMidiLoops())
+							if (auto model = sibling->Model()) model->SetPicking3d(true);
+						break;
+					}
+			}
+		}
+	}
+	// A click has a short-lived pressed appearance. Keep it separate from
+	// persistent selection and hover, and clear it when the gesture becomes paint.
+	for (const auto& station : stations)
+	{
+		station->SetClickPressed(false);
+		for (const auto& take : station->GetLoopTakes())
+		{
+			for (const auto& loop : take->GetLoops())
+				if (auto model = loop->Model()) model->SetClickPressed(false);
+			for (const auto& midiLoop : take->GetMidiLoops())
+				if (auto model = midiLoop->Model()) model->SetClickPressed(false);
+		}
+	}
+	if (_selector->IsClickPressed()
+		&& _selector->CurrentHover() == _selector->PaintedPathForTest())
+	{
+		if (auto pressed = _ChildFromPath(_selector->CurrentHover()))
+		{
+			if (auto station = std::dynamic_pointer_cast<Station>(pressed))
+				station->SetClickPressed(true);
+			else if (auto take = std::dynamic_pointer_cast<LoopTake>(pressed))
+			{
+				for (const auto& loop : take->GetLoops())
+					if (auto model = loop->Model()) model->SetClickPressed(true);
+				for (const auto& midiLoop : take->GetMidiLoops())
+					if (auto model = midiLoop->Model()) model->SetClickPressed(true);
+			}
+			else if (auto loop = std::dynamic_pointer_cast<Loop>(pressed))
+			{
+				if (auto model = loop->Model()) model->SetClickPressed(true);
+			}
+			else if (auto take = std::dynamic_pointer_cast<LoopTake>(pressed->Parent()))
+			{
+				for (const auto& midiLoop : take->GetMidiLoops())
+					if (auto model = midiLoop->Model()) model->SetClickPressed(true);
+			}
+		}
+	}
+	// The picker may keep the same ID after a click or paint stroke, so update
+	// the selector's cached starting state without waiting for another pick.
+	if (auto hovered = _ChildFromPath(_selector->CurrentHover()))
+	{
+		auto tweakState = base::Tweakable::TWEAKSTATE_NONE;
+		if (auto tweakable = std::dynamic_pointer_cast<Tweakable>(hovered))
+			tweakState = tweakable->GetTweakState();
+		_selector->UpdateCurrentHover(_selector->CurrentHover(),
+			Action::MODIFIER_NONE, hovered->IsSelected(), tweakState);
 	}
 
 	_quantisationInteraction.RefreshOverlay(_InteractionContext(),

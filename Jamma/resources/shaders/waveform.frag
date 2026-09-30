@@ -10,6 +10,10 @@ out vec4 ColorOUT;
 uniform sampler2D TextureSampler;
 uniform int LoopState;
 uniform float LoopHover;
+uniform float LoopSelected;
+uniform float LoopPressed;
+uniform float Highlight;
+uniform float HighlightPass;
 uniform float EditorPlayFrac;
 uniform float SceneDim;
 uniform float EditorActive;
@@ -18,6 +22,12 @@ uniform float EditorTime;
 void main()
 {
     gl_FragDepth = gl_FragCoord.z;
+    if (HighlightPass > 0.5)
+    {
+        ColorOUT = vec4(Highlight);
+        return;
+    }
+
     float ambient = 0.04;
     float diffScale = 0.2 + diff;
     float loopState = LoopState;
@@ -32,8 +42,19 @@ void main()
 
     ColorOUT = recFade * recColor +
         muteFade * muteColor +
-        max(1.0 - (muteFade + recFade), 0.0) * shadedColor +
-        LoopHover * vec4(0.5, 0.6, 0.4, 1.0);
+        max(1.0 - (muteFade + recFade), 0.0) * shadedColor;
+    // Compress the recording peaks before applying interaction colours. The
+    // old additive hover term clipped broad sections of the waveform white.
+    ColorOUT.rgb = ColorOUT.rgb / (vec3(1.0) + 0.55 * ColorOUT.rgb);
+    float selected = clamp(LoopSelected, 0.0, 1.0);
+    float hovered = clamp(LoopHover, 0.0, 1.0);
+    vec3 luma = vec3(dot(ColorOUT.rgb, vec3(0.2126, 0.7152, 0.0722)));
+    ColorOUT.rgb = mix(ColorOUT.rgb, luma + (ColorOUT.rgb - luma) * 1.5
+        + vec3(0.03, 0.13, 0.17), selected);
+    ColorOUT.rgb = min(ColorOUT.rgb * (1.0 + 0.18 * hovered)
+        + vec3(0.025) * hovered, vec3(0.96));
+    ColorOUT.rgb = mix(ColorOUT.rgb, vec3(0.86, 0.38, 0.12),
+        0.70 * clamp(LoopPressed, 0.0, 1.0));
     if (EditorActive > 0.5)
     {
         float ahead = fract(EditorU - EditorPlayFrac + 1.0);

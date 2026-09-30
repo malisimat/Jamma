@@ -1456,6 +1456,7 @@ void LoopTake::Record(std::vector<unsigned int> channels,
 			auto midiLoop = std::make_shared<midi::MidiLoop>();
 			graphics::MidiModelParams modelParams;
 			modelParams.ModelScale = 1.0f;
+			modelParams.DrawSelectionRing = _midiLoops.empty();
 			auto midiModel = std::make_shared<graphics::MidiModel>(modelParams);
 			midiLoop->AttachModel(midiModel);
 			midiLoop->StartRecord();
@@ -2048,6 +2049,7 @@ void LoopTake::Overdub(std::vector<unsigned int> channels,
 			auto midiLoop = std::make_shared<midi::MidiLoop>();
 			graphics::MidiModelParams modelParams;
 			modelParams.ModelScale = 1.0f;
+			modelParams.DrawSelectionRing = _midiLoops.empty();
 			auto midiModel = std::make_shared<graphics::MidiModel>(modelParams);
 			midiLoop->AttachModel(midiModel);
 			midiLoop->StartRecord();
@@ -2610,6 +2612,7 @@ bool LoopTake::RestoreMidiFromExport(const MidiExportState& state)
 		graphics::MidiModelParams modelParams;
 		modelParams.Size = { 12, 14 };
 		modelParams.ModelScale = 1.0f;
+		modelParams.DrawSelectionRing = restoredLoops.empty();
 		modelParams.ModelTextures = { "levels" };
 		auto model = std::make_shared<graphics::MidiModel>(modelParams);
 		loop->AttachModel(model);
@@ -2677,7 +2680,8 @@ void LoopTake::_ArrangeChildren()
 		if (midiLoop && midiLoop->Model())
 			numMidiLoops++;
 	}
-	auto numVisualRings = numLoops + numMidiLoops;
+	// MIDI streams in one take share a single visual ring, regardless of channel.
+	auto numVisualRings = numLoops + (numMidiLoops > 0u ? 1u : 0u);
 
 	if (0 == numVisualRings)
 		return;
@@ -2711,7 +2715,6 @@ void LoopTake::_ArrangeChildren()
 		midiModel->SetModelPosition({ 0.0f, 0.0f, 0.0f });
 		midiModel->SetModelScale(1.0 + (loopCount * dScale) - (dTotalScale * 0.5));
 
-		loopCount++;
 	}
 }
 

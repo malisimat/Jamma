@@ -15,6 +15,7 @@
 
 using base::ActionSender;
 using base::ActionReceiver;
+using engine::Loop;
 using engine::LoopTake;
 using engine::LoopTakeParams;
 using engine::Scene;
@@ -380,6 +381,12 @@ public:
 	std::shared_ptr<base::GuiElement> CurrentHoverElementForTest()
 	{
 		return _ChildFromPath(_selector->CurrentHover());
+	}
+
+	bool FindLoopGridEditorCandidateForTest(std::shared_ptr<LoopTake>& take,
+		std::shared_ptr<Loop>& audioLoop, std::shared_ptr<midi::MidiLoop>& midiLoop) const
+	{
+		return _FindLoopGridEditorCandidate(take, audioLoop, midiLoop);
 	}
 
 	bool IsCameraTransitioningForTest() const
@@ -2247,6 +2254,59 @@ TEST(Scene, LoopGridEditorCanSelectMidiLoopAtEverySelectionDepthAndOpenWithE) {
 		LeftMouseButtonMask));
 	scene.OnAction(MakeSceneTouch(TouchAction::TOUCH_UP, { 1290, 875 }, 0u, 0u));
 	EXPECT_EQ(take->GetMidiLoops().front(), scene.LoopGridEditorMidiLoop());
+}
+
+TEST(Scene, MultiStreamMidiSelectionCountsAsOneEditorCandidate) {
+	SceneParams sceneParams{ base::DrawableParams(), base::MoveableParams(),
+		base::SizeableParams({ 1400u, 900u }) };
+	TestScene scene(sceneParams, {});
+	auto station = MakeTestStation("editor-midi-aggregate");
+	scene.AddStationForTest(station);
+	auto take = station->AddTake();
+	LoopTake::MidiExportState state;
+	state.LoopLengthSamps = 400u;
+	for (unsigned int channel = 0u; channel < 2u; ++channel)
+	{
+		LoopTake::MidiStreamExport stream;
+		stream.Channel = channel;
+		stream.Loop.LoopLengthSamps = 400u;
+		stream.Loop.EventCount = 2u;
+		stream.Loop.Events[0] = midi::MidiEvent::MakeNoteOn(20u, channel, 60u, 100u);
+		stream.Loop.Events[1] = midi::MidiEvent::MakeNoteOff(40u, channel, 60u);
+		state.Streams.push_back(stream);
+	}
+	ASSERT_TRUE(take->RestoreMidiFromExport(state));
+	station->CommitChanges();
+	const auto& midiLoops = take->GetMidiLoops();
+	ASSERT_EQ(2u, midiLoops.size());
+	scene.SetSelectionDepthForTest(Scene::VIEW_LOOP);
+	std::vector<unsigned char> pickPath;
+	for (const auto index : midiLoops[1]->Model()->GlobalId())
+		pickPath.push_back(static_cast<unsigned char>(index + 1u));
+	scene.SetHover3d(pickPath, base::Action::MODIFIER_NONE);
+	scene.OnAction(MakeSceneTouch(TouchAction::TOUCH_DOWN, { 1, 1 }, 0, LeftMouseButtonMask));
+	scene.OnAction(MakeSceneTouch(TouchAction::TOUCH_UP, { 1, 1 }, 0u, 0u));
+	EXPECT_TRUE(midiLoops[0]->Model()->IsSelected());
+	EXPECT_TRUE(midiLoops[1]->Model()->IsSelected());
+
+	std::shared_ptr<LoopTake> candidateTake;
+	std::shared_ptr<Loop> audioLoop;
+	std::shared_ptr<midi::MidiLoop> midiLoop;
+	ASSERT_TRUE(scene.FindLoopGridEditorCandidateForTest(candidateTake, audioLoop, midiLoop));
+	EXPECT_EQ(midiLoops[1], midiLoop);
+	// Keep the same picker ID after the click: the next drag must start in
+	// subtractive paint mode using the newly selected state.
+	scene.OnAction(MakeSceneTouch(TouchAction::TOUCH_DOWN, { 1, 1 }, 0, LeftMouseButtonMask));
+	scene.OnAction(MakeSceneTouchMove({ 6, 1 }, LeftMouseButtonMask));
+	EXPECT_FALSE(midiLoops[0]->Model()->IsSelected());
+	EXPECT_FALSE(midiLoops[1]->Model()->IsSelected());
+	scene.OnAction(MakeSceneTouch(TouchAction::TOUCH_UP, { 6, 1 }, 0, 0u));
+	// Re-select to exercise the no-hover editor fallback separately.
+	scene.OnAction(MakeSceneTouch(TouchAction::TOUCH_DOWN, { 1, 1 }, 0, LeftMouseButtonMask));
+	scene.OnAction(MakeSceneTouch(TouchAction::TOUCH_UP, { 1, 1 }, 0, 0u));
+	scene.SetHover3d({}, base::Action::MODIFIER_NONE);
+	ASSERT_TRUE(scene.FindLoopGridEditorCandidateForTest(candidateTake, audioLoop, midiLoop));
+	EXPECT_EQ(midiLoops[0], midiLoop);
 }
 
 TEST(CameraView, StationInteriorObservesRevisionWhenStationShiftsIndex) {

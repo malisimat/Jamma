@@ -46,6 +46,7 @@ MidiModelParams::MidiModelParams()
 	  DiscRadialThicknessFactor(0.12f),
 	  DiscHeightFactor(0.06f),
 	  DiscAlpha(0.2f),
+	  DrawSelectionRing(true),
 	  CenterPitch(60)
 {
 	ModelTextures = { "levels" };
@@ -64,6 +65,7 @@ MidiModelParams::MidiModelParams(gui::GuiModelParams params)
 	  DiscRadialThicknessFactor(0.12f),
 	  DiscHeightFactor(0.06f),
 	  DiscAlpha(0.2f),
+	  DrawSelectionRing(true),
 	  CenterPitch(60)
 {
 	if (ModelTextures.empty())
@@ -97,19 +99,21 @@ MidiModel::MidiModel(MidiModelParams params)
 	  _dotVao(0u),
 	  _dotVbo(0u)
 {
-	// Emit a disc at the minimum radius so the loop target is visible
-	// from the moment it is created (before the loop length is known).
-	constexpr float defaultRadius = 50.0f;
-	SetInstanceAttributes(
-		{
-			{ TimePitchAttribute, 4u, { 0.0f, 1.0f, 0.0f, 0.0f } },
-			{ ShapeAttribute, 4u,
-				{ defaultRadius * _midiParams.DiscRadiusFactor,
-				  defaultRadius * _midiParams.DiscRadialThicknessFactor,
-				  defaultRadius * _midiParams.DiscHeightFactor,
-				  1.0f } }
-		},
-		1u);
+	if (_midiParams.DrawSelectionRing)
+	{
+		// Keep the shared MIDI target visible before the loop length is known.
+		constexpr float defaultRadius = 50.0f;
+		SetInstanceAttributes(
+			{
+				{ TimePitchAttribute, 4u, { 0.0f, 1.0f, 0.0f, 0.0f } },
+				{ ShapeAttribute, 4u,
+					{ defaultRadius * _midiParams.DiscRadiusFactor,
+					  defaultRadius * _midiParams.DiscRadialThicknessFactor,
+					  defaultRadius * _midiParams.DiscHeightFactor,
+					  1.0f } }
+			},
+			1u);
+	}
 }
 
 MidiModel::~MidiModel()
@@ -156,6 +160,8 @@ void MidiModel::Draw3d(DrawContext& ctx, unsigned int numInstances, base::DrawPa
 		break;
 	default:
 		glCtx.SetUniform("LoopHover", _isPicking3d ? 1.0f : 0.0f);
+		glCtx.SetUniform("LoopSelected", _isSelected ? 1.0f : 0.0f);
+		glCtx.SetUniform("LoopPressed", _clickPressed ? 1.0f : 0.0f);
 		glCtx.SetUniform("DiscAlpha", _midiParams.DiscAlpha);
 		glCtx.SetUniform("RenderMode", 3);
 		break;
@@ -297,21 +303,24 @@ std::shared_ptr<MidiModel::ModelInstanceData> MidiModel::BuildInstanceData(const
 	const float radialThickness = baseRadius * _midiParams.RadialThickness;
 	const float noteHeight = baseRadius * _midiParams.NoteHeight;
 
-	timePitchData.reserve((spans.size() + 1u) * 4u);
-	shapeData.reserve((spans.size() + 1u) * 4u);
+	const auto ringCount = _midiParams.DrawSelectionRing ? 1u : 0u;
+	timePitchData.reserve((spans.size() + ringCount) * 4u);
+	shapeData.reserve((spans.size() + ringCount) * 4u);
 
-	// Always emit a semi-transparent disc at the middle-C plane so every MIDI
-	// loop presents a large, reliable hover/select target (the disc is opaque in
-	// the picker pass and shares the loop's ObjectId). Tagged via shape.w = 1.0.
-	timePitchData.push_back(0.0f);
-	timePitchData.push_back(1.0f);
-	timePitchData.push_back(PitchOffset(_midiParams.CenterPitch) * baseRadius);
-	timePitchData.push_back(0.0f);
+	// Only the designated stream emits the shared take ring. The ring is opaque
+	// in the picker pass and is tagged via shape.w = 1.0.
+	if (_midiParams.DrawSelectionRing)
+	{
+		timePitchData.push_back(0.0f);
+		timePitchData.push_back(1.0f);
+		timePitchData.push_back(PitchOffset(_midiParams.CenterPitch) * baseRadius);
+		timePitchData.push_back(0.0f);
 
-	shapeData.push_back(baseRadius * _midiParams.DiscRadiusFactor);
-	shapeData.push_back(baseRadius * _midiParams.DiscRadialThicknessFactor);
-	shapeData.push_back(baseRadius * _midiParams.DiscHeightFactor);
-	shapeData.push_back(1.0f);
+		shapeData.push_back(baseRadius * _midiParams.DiscRadiusFactor);
+		shapeData.push_back(baseRadius * _midiParams.DiscRadialThicknessFactor);
+		shapeData.push_back(baseRadius * _midiParams.DiscHeightFactor);
+		shapeData.push_back(1.0f);
+	}
 
 	unsigned int noteCount = 0u;
 	for (const auto& span : spans)

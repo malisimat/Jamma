@@ -6,9 +6,9 @@
 2 texture_tinted MVP TextureSampler TintColor
 2 font MVP TextureSampler
 2 texture_shaded MVP LoopState LoopHover SceneDim
-2 waveform MVP LoopState LoopHover TextureSampler WaveformSampler WaveformRadius WaveformHeightScale WaveformMinHeight WaveformColorMultiplier WaveformColorScale WaveformUnitMeshRadius EditorMorph EditorPlayFrac SceneDim EditorActive EditorTime
+2 waveform MVP LoopState LoopHover LoopSelected LoopPressed Highlight HighlightPass TextureSampler WaveformSampler WaveformRadius WaveformHeightScale WaveformMinHeight WaveformColorMultiplier WaveformColorScale WaveformUnitMeshRadius EditorMorph EditorPlayFrac SceneDim EditorActive EditorTime
 2 vu MVP DX DY NumInstances InstanceOffset SceneDim
-2 midi_note MVP ObjectId Highlight LoopHover DiscAlpha RenderMode EditorMorph EditorPlayFrac EditorBottomPitch EditorVisibleRows EditorHoverU EditorHoverPitch SceneDim EditorGridRadius EditorActive EditorTime
+2 midi_note MVP ObjectId Highlight LoopHover LoopSelected LoopPressed DiscAlpha RenderMode EditorMorph EditorPlayFrac EditorBottomPitch EditorVisibleRows EditorHoverU EditorHoverPitch SceneDim EditorGridRadius EditorActive EditorTime
 2 midi_grid MVP EditorGridRadius EditorMorph SceneDim
 2 automation MVP SceneDim EditorMorph
 2 picker MVP ObjectId WaveformRadius WaveformUnitMeshRadius EditorMorph
@@ -17,8 +17,8 @@
 2 quantisation MVP Highlight OverlayAlpha SceneDim
 2 quantisation_division MVP Highlight OverlayAlpha SceneDim
 2 ctrl_handle MVP Color
-2 station MVP ObjectId Highlight StationHover StationLevel SceneDim
-2 station_ring MVP Highlight StationHover StationLevel StationStateColor StationVisualState RingCapY RingDirection RingScale SceneDim
+2 station MVP ObjectId Highlight HighlightPass StationHover StationPressed StationLevel SceneDim
+2 station_ring MVP Highlight HighlightPass StationHover StationPressed StationLevel StationStateColor StationVisualState RingCapY RingDirection RingScale SceneDim
 2 white MVP Highlight
 2 blur
 1 fader_back

@@ -13,6 +13,8 @@ out vec4 ColorOUT;
 uniform int ObjectId;
 uniform float Highlight;
 uniform float LoopHover;
+uniform float LoopSelected;
+uniform float LoopPressed;
 uniform float DiscAlpha;
 uniform int RenderMode;
 uniform float EditorPlayFrac;
@@ -64,8 +66,14 @@ void main()
 
     if (IsDisc > 0.5)
     {
-        vec3 discColor = vec3(0.55, 0.6, 0.7) * Diff;
-        ColorOUT = vec4(discColor + (LoopHover * vec3(0.18, 0.18, 0.12)), DiscAlpha);
+        vec3 discColor = mix(vec3(0.46, 0.53, 0.65),
+            vec3(0.06, 0.91, 0.96), clamp(LoopSelected, 0.0, 1.0)) * Diff;
+        discColor = min(discColor * (1.0 + 0.40 * LoopHover)
+            + vec3(0.10) * LoopHover, vec3(1.0));
+        discColor = mix(discColor, vec3(1.0, 0.42, 0.10),
+            0.82 * clamp(LoopPressed, 0.0, 1.0));
+        ColorOUT = vec4(discColor, max(DiscAlpha, 0.48) + 0.32 * LoopSelected
+            + 0.16 * LoopHover);
     }
     else
     {
@@ -74,7 +82,14 @@ void main()
         vec3 high = vec3(1.0, 0.72, 0.18);
         float upper = smoothstep(0.45, 1.0, Velocity);
         vec3 baseColor = mix(mix(low, mid, smoothstep(0.0, 0.55, Velocity)), high, upper);
-        ColorOUT = vec4((baseColor * Diff) + (LoopHover * vec3(0.18, 0.18, 0.12)), 0.88);
+        vec3 noteColor = baseColor * Diff;
+        noteColor = mix(noteColor, noteColor * 1.30 + vec3(0.02, 0.12, 0.14),
+            clamp(LoopSelected, 0.0, 1.0));
+        noteColor = min(noteColor * (1.0 + 0.20 * LoopHover)
+            + vec3(0.04) * LoopHover, vec3(1.0));
+        noteColor = mix(noteColor, vec3(1.0, 0.43, 0.10),
+            0.75 * clamp(LoopPressed, 0.0, 1.0));
+        ColorOUT = vec4(noteColor, 0.88);
     }
     if (EditorActive > 0.5)
     {

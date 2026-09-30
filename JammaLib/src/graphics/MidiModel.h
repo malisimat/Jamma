@@ -36,6 +36,7 @@ namespace graphics
 		float DiscRadialThicknessFactor;
 		float DiscHeightFactor;
 		float DiscAlpha;
+		bool DrawSelectionRing;
 		std::uint8_t CenterPitch;
 	};
 
@@ -71,6 +72,7 @@ namespace graphics
 		void SetLoopIndexFrac(double frac) noexcept;
 		void SetEditorMorph(float morph) noexcept { _editorMorph = std::clamp(morph, 0.0f, 1.0f); }
 		void SetEditorActive(bool active) noexcept { _editorActive = active; }
+		void SetClickPressed(bool pressed) noexcept { _clickPressed = pressed; }
 		void SetEditorPlayFrac(float frac) noexcept { _editorPlayFrac = frac; }
 		void SetEditorPitchRange(int bottomPitch, int visibleRows) noexcept;
 		int EditorBottomPitch() const noexcept { return _editorBottomPitch; }
@@ -129,6 +131,7 @@ namespace graphics
 		double _loopIndexFrac;
 		float _editorMorph = 0.0f;
 		bool _editorActive = false;
+		bool _clickPressed = false;
 		float _editorPlayFrac = 0.0f;
 		int _editorBottomPitch = 48;
 		int _editorVisibleRows = 24;

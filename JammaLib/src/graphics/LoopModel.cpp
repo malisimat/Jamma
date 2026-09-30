@@ -83,10 +83,14 @@ void LoopModel::Draw3d(DrawContext& ctx,
 		break;
 	case STATE_HIGHLIGHTING:
 		glCtx.SetUniform("Highlight", _isSelected ? 1.0f : 0.0f);
+		glCtx.SetUniform("HighlightPass", 1.0f);
 		break;
 	default:
+		glCtx.SetUniform("HighlightPass", 0.0f);
 		glCtx.SetUniform("LoopState", (unsigned int)_modelState);
 		glCtx.SetUniform("LoopHover", _isPicking3d ? 1.0f : 0.0f);
+		glCtx.SetUniform("LoopSelected", _isSelected ? 1.0f : 0.0f);
+		glCtx.SetUniform("LoopPressed", _clickPressed ? 1.0f : 0.0f);
 		break;
 	}
 
