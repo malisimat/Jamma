@@ -5,6 +5,7 @@
 #include "../../console/ClipboardText.h"
 #include "../../console/Transcript.h"
 #include "LogColors.h"
+#include "../../JammaLib/include/Constants.h"
 #include <ftxui/component/component.hpp>
 #include <ftxui/component/event.hpp>
 #include <ftxui/component/mouse.hpp>
@@ -183,7 +184,7 @@ int wmain(int argc, wchar_t** argv)
 		const int visibleHeight = std::max(0, height - 5);
 		ftxui::Elements rows;
 		if (height >= 3) rows.push_back(ftxui::text(console::ClipColumns(
-			"JAMMA  F1: input help", width)) | ftxui::color(ftxui::Color::CyanLight));
+			"JAMMA  <v" LIB_VERSION ">  [Press F1 or / for help]", width)) | ftxui::color(ftxui::Color::CyanLight));
 		if (height >= 4) rows.push_back(ftxui::separator());
 		state.VisibleRows = state.Transcript.Visible(width, visibleHeight);
 		for (const auto& row : state.VisibleRows)
@@ -287,9 +288,16 @@ int wmain(int argc, wchar_t** argv)
 		}
 		if (event == ftxui::Event::F1)
 		{
-			state.Transcript.Append(console::NoMouseHelp);
-			state.Selection.Transcript.ReconcileBounds(state.Transcript.FirstId(), state.Transcript.LastId());
-			state.Transcript.FollowTail();
+			std::scoped_lock lock(state.OutboxMutex);
+			if (state.Outbox.size() < 64 && state.PendingRequests.size() < 64)
+			{
+				const auto requestId = state.NextRequestId++;
+				state.PendingRequests.insert(requestId);
+				state.Outbox.push_back({ console::MessageType::CommandRequest, requestId, "/" });
+				state.OutboxReady.notify_one();
+				state.PromptError.clear();
+			}
+			else state.PromptError = "Command queue full";
 			return true;
 		}
 		if (event == ftxui::Event::ArrowUp || event == ftxui::Event::PageUp)
@@ -350,9 +358,6 @@ int wmain(int argc, wchar_t** argv)
 		}
 		if (event == ftxui::Event::Escape)
 		{
-			std::scoped_lock lock(state.PostMutex);
-			SetEvent(stop.Get());
-			screen.Exit();
 			return true;
 		}
 		if (event.is_mouse())

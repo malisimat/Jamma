@@ -5,8 +5,6 @@
 
 namespace console
 {
-	inline constexpr std::string_view NoMouseHelp =
-		"[CONSOLE] Mouse unavailable? Use host selection (Shift+drag) and keyboard editing.";
 	enum class SelectionRegion { None, Transcript, Prompt };
 
 	// One UI owner coordinates the two editable regions. Release retains the

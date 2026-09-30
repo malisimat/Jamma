@@ -421,5 +421,4 @@ TEST(ConsoleTextCoordinates, KeyboardAndHelpRemainWithoutMouseEvents)
 	prompt.Backspace();
 	EXPECT_EQ(prompt.Text(), "cht");
 	EXPECT_EQ(selection.Dragging, console::SelectionRegion::None);
-	EXPECT_NE(console::NoMouseHelp.find("host selection"), std::string_view::npos);
 }
