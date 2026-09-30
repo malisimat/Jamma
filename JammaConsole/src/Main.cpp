@@ -4,6 +4,7 @@
 #include "../../console/SelectionController.h"
 #include "../../console/ClipboardText.h"
 #include "../../console/Transcript.h"
+#include "LogColors.h"
 #include <ftxui/component/component.hpp>
 #include <ftxui/component/event.hpp>
 #include <ftxui/component/mouse.hpp>
@@ -25,23 +26,6 @@
 
 struct ConsoleClientState
 {
-	static ftxui::Color LineColor(std::string_view line)
-	{
-		if (line.starts_with("[NINJAM]"))
-		{
-			const auto message = line.substr(8);
-			if (message.find("<you>") != std::string_view::npos) return ftxui::Color::GreenLight;
-			if (message.find("(private)") != std::string_view::npos) return ftxui::Color::MagentaLight;
-			if (message.find("Not connected") != std::string_view::npos
-				|| message.find("Unknown command") != std::string_view::npos)
-				return ftxui::Color::YellowLight;
-			if (message.find('<') != std::string_view::npos) return ftxui::Color::CyanLight;
-			return ftxui::Color::Cyan;
-		}
-		if (line.starts_with("[CONSOLE]") || line.starts_with("[BOOT]"))
-			return ftxui::Color::Yellow;
-		return ftxui::Color::Default;
-	}
 	static bool WriteClipboard(HWND owner, std::string_view text)
 	{
 		const auto wideText = console::ClipboardUtf8ToUtf16(text);
@@ -159,6 +143,7 @@ int wmain(int argc, wchar_t** argv)
 	screen.TrackMouse();
 	screen.ForceHandleCtrlC(false);
 	ConsoleClientState state;
+	const LogPalette palette;
 	state.ClipboardOwner = CreateWindowExW(0, L"STATIC", L"", WS_CHILD,
 		0, 0, 0, 0, HWND_MESSAGE, nullptr, GetModuleHandleW(nullptr), nullptr);
 	auto drain = [&] {
@@ -205,7 +190,7 @@ int wmain(int argc, wchar_t** argv)
 		{
 			const auto selected = state.Selection.Transcript.RowRange(row.Start, row.Text.size());
 			const auto* logicalText = state.Transcript.TextFor(row.Start.EntryId);
-			const auto lineColor = ConsoleClientState::LineColor(logicalText ? *logicalText : row.Text);
+			const auto lineColor = LogLineColor(logicalText ? *logicalText : row.Text, palette);
 			if (!selected) { rows.push_back(ftxui::text(row.Text) | ftxui::color(lineColor)); continue; }
 			const auto [first, last] = *selected;
 			rows.push_back(ftxui::hbox({ ftxui::text(row.Text.substr(0, first)),
