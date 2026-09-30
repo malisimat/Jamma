@@ -370,6 +370,21 @@ std::weak_ptr<resources::ShaderResource> MidiModel::GetShader()
 	return GetShaderAt(0u);
 }
 
+void MidiModel::DrawMesh(GLuint shaderProgram, unsigned int drawInstances)
+{
+	const auto geometryPass = glGetUniformLocation(shaderProgram, "GeometryPass");
+	// The ring uses only the curved sides. Notes retain the complete mesh,
+	// including their start and end faces.
+	if (_midiParams.DrawSelectionRing && drawInstances != 0u)
+	{
+		glUniform1i(geometryPass, 1);
+		glDrawArraysInstanced(GL_TRIANGLES, 0, BaseArcSegments * 8u * 3u, 1u);
+	}
+	glUniform1i(geometryPass, 2);
+	if (drawInstances > (_midiParams.DrawSelectionRing ? 1u : 0u))
+		glDrawArraysInstanced(GL_TRIANGLES, 0, _numTris * 3u, drawInstances);
+}
+
 void MidiModel::_InitResources(resources::ResourceLib& resourceLib, bool forceInit)
 {
 	if (!HasCurrentGlContext())

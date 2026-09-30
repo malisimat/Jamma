@@ -99,7 +99,8 @@ namespace graphics
 	protected:
 		std::weak_ptr<resources::ShaderResource> GetShader() override;
 		void _InitResources(resources::ResourceLib& resourceLib, bool forceInit) override;
-		void _ReleaseResources() override;
+	void _ReleaseResources() override;
+	void DrawMesh(GLuint shaderProgram, unsigned int drawInstances) override;
 
 	private:
 		friend class MidiModelParams;

@@ -17,6 +17,7 @@ uniform float LoopSelected;
 uniform float LoopPressed;
 uniform float DiscAlpha;
 uniform int RenderMode;
+uniform int GeometryPass;
 uniform float EditorPlayFrac;
 uniform float EditorHoverU;
 uniform int EditorHoverPitch;
@@ -35,9 +36,12 @@ const int RenderModeDiscOnly = 4;
 void main()
 {
     gl_FragDepth = gl_FragCoord.z;
-    // Discard end-cap faces on full-circle disc instances: both caps map to
-    // the same angle (0/2pi) and produce an ugly overlapping seam fin.
-    if (IsDisc > 0.5 && IsEndCap > 0.5 && EditorMorphV < 0.999)
+    // The ring draw range has no end caps. Back faces of its translucent
+    // shell must not shine through the outward-facing surfaces.
+    if (GeometryPass == 1 && (IsDisc < 0.5 ||
+        (EditorMorphV < 0.5 && !gl_FrontFacing)))
+        discard;
+    if (GeometryPass == 2 && IsDisc > 0.5)
         discard;
 
     if (RenderMode == RenderModeNotesOnly && IsDisc > 0.5)
