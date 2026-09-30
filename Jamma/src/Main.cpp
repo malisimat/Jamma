@@ -790,7 +790,7 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 
 	if (defaults.has_value())
 		scene.value()->SetLogging(defaults.value().Logging);
-	consoleBroker = std::make_unique<console::ConsoleBroker>();
+	consoleBroker = std::make_unique<console::ConsoleBroker>(defaults && defaults->ConsoleForceConhost);
 	if (defaults && defaults->ConsoleAutoStart && !companionPath.empty())
 	{
 		if (!consoleBroker->Start(companionPath, consoleCommands,

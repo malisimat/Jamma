@@ -18,7 +18,8 @@ namespace console
 	class ConsoleBroker
 	{
 	public:
-		ConsoleBroker() = default;
+		explicit ConsoleBroker(bool forceConsoleHost = false)
+			: _forceConsoleHost(forceConsoleHost) {}
 		~ConsoleBroker();
 		ConsoleBroker(const ConsoleBroker&) = delete;
 		ConsoleBroker& operator=(const ConsoleBroker&) = delete;
@@ -56,5 +57,6 @@ namespace console
 		std::thread _worker;
 		HWND _window = nullptr; // App-owner thread only; validated by generation title before use.
 		bool _hidden = false;
+		const bool _forceConsoleHost;
 	};
 }

@@ -220,6 +220,7 @@ TEST(InitFile, DefaultJsonParsesWithoutVstDebugBlock) {
 	EXPECT_EQ(0, parsed->Jam.compare(L"C:\\Users\\tester\\AppData\\Roaming\\Jamma\\default.jam"));
 	EXPECT_EQ(0, parsed->Rig.compare(L"C:\\Users\\tester\\AppData\\Roaming\\Jamma\\default.rig"));
 	EXPECT_TRUE(parsed->ConsoleAutoStart);
+	EXPECT_FALSE(parsed->ConsoleForceConhost);
 }
 
 TEST(InitFile, ParsesUiLoggingSetting) {
@@ -242,6 +243,21 @@ TEST(InitFile, ConsoleAutostartDefaultsOnAndPersistsOff) {
 	const auto wrongType = InitFile::FromStream(std::stringstream("{\"consoleautostart\":\"off\"}"));
 	ASSERT_TRUE(wrongType);
 	EXPECT_TRUE(wrongType->ConsoleAutoStart);
+}
+
+TEST(InitFile, ForceConsoleHostDefaultsOffAndPersistsOn) {
+	auto legacy = InitFile::FromStream(std::stringstream("{}"));
+	ASSERT_TRUE(legacy);
+	EXPECT_FALSE(legacy->ConsoleForceConhost);
+	legacy->ConsoleForceConhost = true;
+	std::stringstream serialized;
+	ASSERT_TRUE(InitFile::ToStream(*legacy, serialized));
+	const auto forced = InitFile::FromStream(std::move(serialized));
+	ASSERT_TRUE(forced);
+	EXPECT_TRUE(forced->ConsoleForceConhost);
+	const auto wrongType = InitFile::FromStream(std::stringstream("{\"consoleforceconhost\":\"yes\"}"));
+	ASSERT_TRUE(wrongType);
+	EXPECT_FALSE(wrongType->ConsoleForceConhost);
 }
 
 TEST(InitFile, ToStreamWritesJsonThatParses) {

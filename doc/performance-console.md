@@ -19,6 +19,9 @@ directory. Copy the runtime DLLs from that directory too, including
 
 The startup preference is `consoleautostart` in Jamma's defaults JSON. Set it
 to `false` before launching Jamma to leave the companion closed initially.
+For testing, set `consoleforceconhost` to `true` in the same file to skip
+Windows Terminal detection and always launch the companion in Console Host.
+Its default is `false`; the setting also applies when reopening the companion.
 In the Jamma window, press **Ctrl+`** to hide or show the companion. Hiding it
 keeps its session and transcript. Closing the companion window itself ends that
 session; the next **Ctrl+`** starts a fresh one. The preference controls startup

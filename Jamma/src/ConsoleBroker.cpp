@@ -18,10 +18,12 @@ namespace console
 	struct ConsoleBroker::State
 	{
 		explicit State(std::wstring path, std::wstring windowName,
-			std::shared_ptr<CommandMailbox> commands, std::string initialStatus)
+			std::shared_ptr<CommandMailbox> commands, std::string initialStatus,
+			bool forceConsoleHost)
 			: CompanionPath(std::move(path)),
 			TerminalWindowName(windowName + L"-WT"),
 			HostWindowName(windowName + L"-Host"),
+			ForceConsoleHost(forceConsoleHost),
 			Commands(std::move(commands)),
 			Events(std::make_shared<OutboundMailbox>()),
 			StopEvent(CreateEventW(nullptr, TRUE, FALSE, nullptr))
@@ -31,6 +33,7 @@ namespace console
 		std::wstring CompanionPath;
 		const std::wstring TerminalWindowName;
 		const std::wstring HostWindowName;
+		const bool ForceConsoleHost;
 		std::shared_ptr<CommandMailbox> Commands;
 		std::shared_ptr<OutboundMailbox> Events;
 		UniqueHandle StopEvent;
@@ -319,14 +322,19 @@ namespace console
 			const auto userSid = CurrentUserSid();
 			if (!userSid.empty())
 			{
-				const auto terminal = FindWindowsTerminal();
+				// The debug override skips Terminal detection as well as its launch.
+				const auto terminal = DetectTerminalUnlessForced(state->ForceConsoleHost,
+					[] { return FindWindowsTerminal(); });
 				RunLaunchPlan(!terminal.empty(),
 					[&](LaunchHost host) {
 						return RunAttempt(state, host == LaunchHost::WindowsTerminal,
 							terminal, userSid);
 					},
 					[&] { return WaitForSingleObject(state->StopEvent.Get(), 0) == WAIT_OBJECT_0; },
-					[&] { state->FallbackNotice.store(true, std::memory_order_release); });
+					[&] {
+						if (!state->ForceConsoleHost)
+							state->FallbackNotice.store(true, std::memory_order_release);
+					});
 			}
 		}
 		catch (...) { OutputDebugStringW(L"[CONSOLE] Broker worker failed.\n"); }
@@ -358,7 +366,7 @@ namespace console
 		const auto windowName = L"Jamma-" + std::to_wstring(GetCurrentProcessId())
 			+ L"-" + WidenAscii(nonce);
 		_state = std::make_shared<State>(companionPath, windowName, std::move(commands),
-			std::move(initialStatus));
+			std::move(initialStatus), _forceConsoleHost);
 		if (!_state->StopEvent.Valid()) { _state.reset(); return false; }
 		_window = nullptr;
 		_hidden = false;

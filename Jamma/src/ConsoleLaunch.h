@@ -33,6 +33,12 @@ namespace console
 	enum class LaunchHost { WindowsTerminal, ConsoleHost };
 	enum class LaunchOutcome { WindowsTerminal, ConsoleHost, Failed, Stopped };
 
+	template<class Detect>
+	std::wstring DetectTerminalUnlessForced(bool forceConsoleHost, Detect&& detect)
+	{
+		return forceConsoleHost ? std::wstring{} : detect();
+	}
+
 	// The callbacks are the process/pipe boundary. An accepted Terminal
 	// session ends normally without starting a second companion.
 	template<class Attempt, class Stopping, class Fallback>

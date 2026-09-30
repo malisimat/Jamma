@@ -340,6 +340,30 @@ TEST(ConsoleLaunch, FallsBackOnMissingLaunchOrHandshake)
 	EXPECT_EQ(attempts[0], console::LaunchHost::ConsoleHost);
 }
 
+TEST(ConsoleLaunch, ForcedConsoleHostSkipsTerminalDetectionAndAttempt)
+{
+	int detections = 0;
+	const auto terminal = console::DetectTerminalUnlessForced(true, [&] {
+		++detections;
+		return std::wstring(L"C:\\wt.exe");
+	});
+	EXPECT_TRUE(terminal.empty());
+	EXPECT_EQ(detections, 0);
+	EXPECT_EQ(console::DetectTerminalUnlessForced(false, [&] {
+		++detections;
+		return std::wstring(L"C:\\wt.exe");
+	}), L"C:\\wt.exe");
+	EXPECT_EQ(detections, 1);
+	std::vector<console::LaunchHost> attempts;
+	EXPECT_EQ(console::RunLaunchPlan(!terminal.empty(),
+		[&](console::LaunchHost host) {
+			attempts.push_back(host);
+			return true;
+		}, [] { return false; }, [] {}), console::LaunchOutcome::ConsoleHost);
+	ASSERT_EQ(attempts.size(), 1u);
+	EXPECT_EQ(attempts[0], console::LaunchHost::ConsoleHost);
+}
+
 TEST(ConsoleLaunch, NeverCreatesFallbackAfterStopOrAcceptedTerminal)
 {
 	int attempts = 0;
