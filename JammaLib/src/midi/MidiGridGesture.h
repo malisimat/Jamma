@@ -17,12 +17,13 @@ namespace midi
 	class MidiGridGesture
 	{
 	public:
-		enum class Kind { None, Paint, Create, Move, TrimLeft, TrimRight };
+		enum class Kind { None, Paint, Create, Move, TrimLeft, TrimRight, Velocity, SnappedMove };
 		struct Point
 		{
 			std::uint32_t Sample = 0u;
 			std::uint8_t Pitch = 60u;
 			double U = 0.0;
+			double V = 0.0;
 		};
 		struct PreviewSpan
 		{
@@ -30,6 +31,30 @@ namespace midi
 			std::uint8_t Pitch = 60u;
 			bool Fill = true;
 		};
+
+		bool BeginVelocity(const MidiLoop::EditState& source, Point point)
+		{
+			return BeginCaptured(source, point, Kind::Velocity);
+		}
+		bool BeginSnappedMove(const MidiLoop::EditState& source, Point point)
+		{
+			return BeginCaptured(source, point, Kind::SnappedMove);
+		}
+		// Upward-positive relative device units: 3-unit dead zone, 4 units/value.
+		// Foreground raw input excludes cursor recenter messages and OS acceleration.
+		bool UpdateRelative(double dy)
+		{
+			if (_kind != Kind::Velocity || _rejected || !std::isfinite(dy)) return false;
+			_velocityDelta = std::clamp(_velocityDelta + dy, -1000000.0, 1000000.0);
+			const auto steps = std::abs(_velocityDelta) < 3.0 ? 0 : static_cast<int>(std::clamp(std::trunc(_velocityDelta / 4.0), -127.0, 127.0));
+			_proposedVelocity = std::clamp(_initialVelocity + steps, 1, 127);
+			_working = _before;
+			_dirty = _proposedVelocity != _initialVelocity;
+			return MidiEditOperations::SetVelocity(_working, _onIndex, _proposedVelocity);
+		}
+		std::optional<std::size_t> CapturedNoteIndex() const noexcept { return _captured.NoteIndex; }
+		const MidiGridTargets::Target& CapturedTarget() const noexcept { return _captured; }
+		int ProposedVelocity() const noexcept { return _proposedVelocity; }
 
 		bool Begin(const MidiLoop::EditState& source, Point point, std::uint8_t channel,
 			double pixelsPerSample = 0.0)
@@ -81,6 +106,23 @@ namespace midi
 		{
 			if (_kind == Kind::None || _rejected || point.Pitch > 127u) return false;
 			point.Sample = std::min(point.Sample, _before.LoopLengthSamps - 1u);
+			if (_kind == Kind::Velocity) return true;
+			if (_kind == Kind::SnappedMove)
+			{
+				const auto grabbedOffset = static_cast<std::int64_t>(_grid->CellAt(_anchor.Sample)) - _grid->CellAt(_start);
+				const auto targetCell = std::clamp<std::int64_t>(static_cast<std::int64_t>(_grid->CellAt(point.Sample)) - grabbedOffset,
+					0, _grid->Boundaries.size() - 2u);
+				const auto duration = _end - _start;
+				auto cell = static_cast<std::size_t>(targetCell);
+				while (cell > 0 && duration > _before.LoopLengthSamps - _grid->Boundaries[cell]) --cell;
+				const auto start = _grid->CellAt(point.Sample) == _grid->CellAt(_anchor.Sample)
+					? _start : _grid->Boundaries[cell];
+				const auto pitch = static_cast<std::uint8_t>(std::clamp(static_cast<int>(_pitch) + static_cast<int>(point.Pitch) - _anchor.Pitch, 0, 127));
+				_working = _before; _preview.clear();
+				if (start == _start && pitch == _pitch) { _dirty = false; _preview.push_back({_start, _end, _pitch, true}); return true; }
+				if (!MidiEditOperations::MoveSnapped(_working, _onIndex, _offIndex, start, start + duration, pitch)) return Reject();
+				_dirty = true; _preview.push_back({start, start + duration, pitch, true}); return true;
+			}
 			if (_kind == Kind::Paint)
 			{
 				int seam = 0;
@@ -144,6 +186,7 @@ namespace midi
 		{
 			_kind = Kind::None; _grid.reset(); _visited.clear(); _removed.clear(); _targets.Notes.clear();
 			_dirty = false;
+			_captured = {}; _velocityDelta = 0.0;
 			_rejected = false;
 			_preview.clear();
 		}
@@ -170,6 +213,21 @@ namespace midi
 		}
 
 	private:
+		bool BeginCaptured(const MidiLoop::EditState& source, Point point, Kind kind)
+		{
+			Cancel();
+			if (!source.LoopLengthSamps || point.Sample >= source.LoopLengthSamps || point.Pitch > 127u || source.EventCount > MidiLoop::DefaultCapacity) return false;
+			_before = source; _working = source; _anchor = point; _last = point;
+			_grid = LoopGridGeometry::Resolve(source.LoopLengthSamps, source.Quantisation, source.QuantisationTransportStartSamps);
+			_targets = MidiGridTargets::Build(source);
+			_captured = _targets.Resolve(point.Sample, point.Pitch, _grid ? &*_grid : nullptr);
+			if (!_captured.NoteIndex || (kind == Kind::SnappedMove && !_grid)) { Cancel(); return false; }
+			const auto& note = _targets.Notes[*_captured.NoteIndex];
+			if (note.Ambiguous) { Cancel(); _rejected = true; return false; }
+			_onIndex = note.On; _offIndex = note.Off; _start = note.Start; _end = note.End; _pitch = note.Pitch;
+			_initialVelocity = source.Events[note.On].data2; _proposedVelocity = _initialVelocity;
+			_kind = kind; if (kind == Kind::SnappedMove) _preview.push_back({_start, _end, _pitch, true}); return true;
+		}
 		struct NoteHit
 		{
 			std::size_t Index;
@@ -314,7 +372,10 @@ namespace midi
 		std::vector<PreviewSpan> _preview;
 		Kind _kind = Kind::None;
 		Point _anchor{}, _last{};
-		std::size_t _onIndex = 0u;
+		std::size_t _onIndex = 0u, _offIndex = 0u;
+		MidiGridTargets::Target _captured{};
+		double _velocityDelta = 0.0;
+		int _initialVelocity = 96, _proposedVelocity = 96;
 		std::uint32_t _start = 0u, _end = 0u;
 		std::uint32_t _createDefaultDuration = 1u;
 		std::uint8_t _pitch = 60u, _channel = 0u;

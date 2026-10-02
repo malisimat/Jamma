@@ -6,6 +6,7 @@
 
 #include "MidiLoop.h"
 #include "MidiNote.h"
+#include "MidiGridTargets.h"
 
 namespace midi
 {
@@ -13,6 +14,93 @@ namespace midi
 	// publishes the whole gesture once through LoopTake::PublishMidiEdit.
 	struct MidiEditOperations
 	{
+		static bool SetVelocity(MidiLoop::EditState& state, std::size_t on, int velocity) noexcept
+		{
+			if (on >= state.EventCount || !state.Events[on].IsNoteOn() || velocity < 1 || velocity > 127) return false;
+			state.Events[on].data2 = static_cast<std::uint8_t>(velocity);
+			return true;
+		}
+
+		// Preserve endpoint identity and raw duration; every other event must project
+		// identically after the move. Work remains detached until all checks pass.
+		static bool MoveSnapped(MidiLoop::EditState& state, std::size_t onIndex,
+			std::size_t offIndex, std::uint32_t start, std::uint32_t end, std::uint8_t pitch)
+		{
+			if (onIndex >= state.EventCount || !state.Events[onIndex].IsNoteOn()
+				|| start >= end || end > state.LoopLengthSamps || pitch > 127u) return false;
+			if (!LoopGridGeometry::Resolve(state.LoopLengthSamps, state.Quantisation, state.QuantisationTransportStartSamps)) return false;
+			const auto original = state;
+			const auto on = original.Events[onIndex];
+			const auto priorTargets = MidiGridTargets::Build(original);
+			const auto captured = std::find_if(priorTargets.Notes.begin(), priorTargets.Notes.end(), [&](const auto& n) { return n.On == onIndex; });
+			if (captured == priorTargets.Notes.end() || captured->Ambiguous || captured->Off != offIndex) return false;
+			const bool hasOff = offIndex < original.EventCount;
+			if (hasOff && (!original.Events[offIndex].IsNoteOff()
+				|| original.Events[offIndex].PairingSlot() != on.PairingSlot())) return false;
+			const auto duration = (hasOff ? original.Events[offIndex].sampleOffset : original.LoopLengthSamps) - on.sampleOffset;
+			const auto& q = original.Quantisation;
+			const auto interval = static_cast<std::uint64_t>(q.HasRemoteGrid() ? q.RemoteIntervalSamps : q.GrainSamps);
+			const auto divisions = static_cast<std::uint64_t>(q.HasRemoteGrid() ? q.RemoteBpi : 1u) * MidiQuantisation::Divisor(q.Fraction);
+			if (!q.Enabled || !interval || !divisions) return false;
+			const auto transport = static_cast<std::int64_t>(original.QuantisationTransportStartSamps);
+			const auto origin = q.HasRemoteGrid() ? q.RemoteOriginSamps : 0ll;
+			const auto first = MidiQuantisation::NearestBoundaryIndex(transport - origin, interval, divisions);
+			const auto last = MidiQuantisation::NearestBoundaryIndex(transport - origin + original.LoopLengthSamps - 1u, interval, divisions);
+			if (last < first || last - first > 8192) return false;
+			std::vector<MidiEvent> displayed(original.EventCount);
+			MidiQuantisation::BuildQuantisedPlaybackEvents(original.Events.data(), original.EventCount,
+				original.LoopLengthSamps, q, original.QuantisationTransportStartSamps, displayed.data(), false);
+			for (auto boundary = first; boundary <= last; ++boundary)
+			{
+				const auto localBoundary = origin + MidiQuantisation::BoundarySampleAt(boundary, interval, divisions) - transport + q.PhaseOffsetSamps;
+				const auto wrapped = (localBoundary % original.LoopLengthSamps + original.LoopLengthSamps) % original.LoopLengthSamps;
+				if (!on.HasExactTiming() && wrapped != start) continue;
+				const auto raw = on.HasExactTiming() ? static_cast<std::int64_t>(start)
+					: std::clamp<std::int64_t>(origin + MidiQuantisation::BoundarySampleAt(boundary, interval, divisions) - transport,
+						0, original.LoopLengthSamps - 1u);
+				if (duration > original.LoopLengthSamps - raw || (hasOff && raw + duration >= original.LoopLengthSamps)
+					|| (!hasOff && raw + duration != original.LoopLengthSamps)) continue;
+				auto candidate = original;
+				candidate.Events[onIndex].sampleOffset = static_cast<std::uint32_t>(raw);
+				candidate.Events[onIndex].data1 = pitch;
+				if (hasOff) { candidate.Events[offIndex].sampleOffset = static_cast<std::uint32_t>(raw + duration); candidate.Events[offIndex].data1 = pitch; }
+				std::vector<std::size_t> order(candidate.EventCount);
+				std::iota(order.begin(), order.end(), 0u);
+				const auto priority = [](const MidiEvent& e) { return e.IsNoteOff() ? 0 : e.IsNoteOn() ? 2 : 1; };
+				std::stable_sort(order.begin(), order.end(), [&](auto a, auto b) {
+					return candidate.Events[a].sampleOffset != candidate.Events[b].sampleOffset
+						? candidate.Events[a].sampleOffset < candidate.Events[b].sampleOffset : priority(candidate.Events[a]) < priority(candidate.Events[b]); });
+				auto sorted = candidate;
+				std::size_t movedOn = 0;
+				for (std::size_t i = 0; i < order.size(); ++i) { sorted.Events[i] = candidate.Events[order[i]]; if (order[i] == onIndex) movedOn = i; }
+				std::vector<MidiEvent> projected(sorted.EventCount);
+				MidiQuantisation::BuildQuantisedPlaybackEvents(sorted.Events.data(), sorted.EventCount,
+					sorted.LoopLengthSamps, q, sorted.QuantisationTransportStartSamps, projected.data(), false);
+				bool unchanged = true;
+				for (std::size_t i = 0; i < order.size(); ++i)
+				{
+					if (order[i] == onIndex || order[i] == offIndex) continue;
+					if (projected[i].sampleOffset != displayed[order[i]].sampleOffset) unchanged = false;
+				}
+				const auto targets = MidiGridTargets::Build(sorted);
+				const auto moved = std::find_if(targets.Notes.begin(), targets.Notes.end(), [&](const auto& n) { return n.On == movedOn; });
+				if (!unchanged || moved == targets.Notes.end() || moved->Ambiguous || moved->Start != start || moved->End != end || moved->Pitch != pitch) continue;
+				// A destination overlap must not truncate any other displayed note.
+				const auto& prior = priorTargets;
+				if (targets.Notes.size() != prior.Notes.size()) continue;
+				for (const auto& n : prior.Notes)
+				{
+					if (n.On == onIndex) continue;
+					const auto index = static_cast<std::size_t>(std::find(order.begin(), order.end(), n.On) - order.begin());
+					const auto other = std::find_if(targets.Notes.begin(), targets.Notes.end(), [&](const auto& t) { return t.On == index; });
+					if (other == targets.Notes.end() || other->Start != n.Start || other->End != n.End || other->Ambiguous != n.Ambiguous) unchanged = false;
+				}
+				if (!unchanged) continue;
+				state = sorted; return true;
+			}
+			return false;
+		}
+
 		static bool Create(MidiLoop::EditState& state, std::uint32_t start,
 			std::uint32_t duration, std::uint8_t channel, std::uint8_t pitch,
 			std::uint8_t velocity = 96u) noexcept
