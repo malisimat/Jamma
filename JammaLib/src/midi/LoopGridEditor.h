@@ -78,6 +78,7 @@ namespace midi
 		bool OwnsPointer() const noexcept { return _pointerOwned; }
 		float Morph() const noexcept { return _blend; }
 		float SurroundingDim() const noexcept { return 1.0f - 0.72f * _blend; }
+		glm::vec3 ProbeEyeLocal() const;
 		std::shared_ptr<engine::Loop> AudioLoop() const noexcept { return _audioLoop.lock(); }
 		std::shared_ptr<MidiLoop> TargetMidiLoop() const noexcept { return _midiLoop.lock(); }
 		std::shared_ptr<engine::LoopTake> Take() const noexcept { return _take.lock(); }
@@ -106,6 +107,10 @@ namespace midi
 		glm::mat4 _ModelMatrix() const;
 		glm::mat4 _ViewProjection() const;
 		void _PositionCamera();
+		graphics::Camera::Pose _OrbitPose() const noexcept;
+		void _BeginOrbit(utils::Position2d pointer) noexcept;
+		void _UpdateOrbit(utils::Position2d pointer) noexcept;
+		void _EndOrbit() noexcept;
 		std::optional<MidiGridGesture::Point> _PointAt(utils::Position2d pixel,
 			bool clampToGrid) const;
 		std::uint8_t _ChannelOf(const std::shared_ptr<MidiLoop>& loop) const;
@@ -128,6 +133,14 @@ namespace midi
 		std::weak_ptr<engine::Loop> _audioLoop;
 		std::weak_ptr<MidiLoop> _midiLoop;
 		graphics::Camera::EditorReturnState _returnCamera{};
+		glm::vec3 _orbitCentre{};
+		float _orbitRadius = 1.0f;
+		float _orbitHorizontal = 0.0f;
+		float _orbitVertical = 0.0f;
+		float _orbitAnchorHorizontal = 0.0f;
+		float _orbitAnchorVertical = 0.0f;
+		utils::Position2d _orbitPointerAnchor{};
+		bool _orbitDragging = false;
 		float _blend = 0.0f;
 		bool _buttonPressed = false;
 		bool _buttonShowsClose = false;

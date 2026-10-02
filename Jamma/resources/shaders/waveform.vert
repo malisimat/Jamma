@@ -8,6 +8,7 @@ out vec2 UV;
 out float diff;
 out float EditorU;
 out float EditorMorphV;
+out vec3 EditorLocalPosition;
 
 uniform mat4 MVP;
 uniform sampler1D WaveformSampler;
@@ -42,6 +43,7 @@ void main()
         * WaveformRadius * 0.78;
     float gridY = 3.0 + (length(scaledXZ) - WaveformRadius) * 0.55;
     vec3 gridPosition = vec3((u - 0.5) * WaveformRadius * 2.0, gridY, gridZ);
+    EditorLocalPosition = gridPosition;
     gl_Position = MVP * vec4(mix(vec3(scaledXZ.x, y, scaledXZ.y),
         gridPosition, EditorMorph), 1.0);
     EditorU = u;

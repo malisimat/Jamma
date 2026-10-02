@@ -420,6 +420,7 @@ public:
 	}
 
 	bool EditorOwnsPointerForTest() const { return _loopEditor.OwnsPointer(); }
+	glm::vec3 EditorProbeEyeLocalForTest() const { return _loopEditor.ProbeEyeLocal(); }
 
 	bool IsSceneTouchingForTest() const
 	{
@@ -2161,6 +2162,26 @@ TEST(Scene, LoopGridEditorTracksOneMidiLoopAndClosesWhenItIsReplaced) {
 	EXPECT_FLOAT_EQ(0.0f, scene.CameraProjectionForTest()[3][3]);
 	scene.SettleLoopGridEditorForTest();
 	EXPECT_TRUE(scene.LoopGridEditorReady());
+	const auto alignedEye = scene.EditorProbeEyeLocalForTest();
+	EXPECT_NEAR(0.0f, alignedEye.x, 0.001f);
+	EXPECT_NEAR(0.0f, alignedEye.z, 0.001f);
+	const auto alignedRadius = glm::length(alignedEye);
+	scene.OnAction(MakeSceneTouch(TouchAction::TOUCH_DOWN,
+		{ 100, 100 }, 0, LeftMouseButtonMask));
+	scene.OnAction(MakeSceneTouchMove({ 60, 140 }, LeftMouseButtonMask));
+	scene.OnAction(MakeSceneTouch(TouchAction::TOUCH_UP, { 60, 140 }, 0, 0u));
+	const auto orbitEye = scene.EditorProbeEyeLocalForTest();
+	EXPECT_LT(orbitEye.x, 0.0f);
+	EXPECT_LT(orbitEye.z, 0.0f);
+	EXPECT_NEAR(alignedRadius, glm::length(orbitEye), 0.001f);
+	const auto forward = scene.CameraPoseForTest().Forward;
+	EXPECT_NEAR(1.0f, glm::dot(glm::normalize(-orbitEye),
+		glm::vec3(forward.X, forward.Y, forward.Z)), 0.001f);
+	scene.OnAction(MakeSceneTouch(TouchAction::TOUCH_DOWN,
+		{ 100, 100 }, 2, RightMouseButtonMask));
+	scene.OnAction(MakeSceneTouchMove({ 80, 120 }, RightMouseButtonMask));
+	scene.OnAction(MakeSceneTouch(TouchAction::TOUCH_UP, { 80, 120 }, 2, 0u));
+	EXPECT_NEAR(alignedRadius, glm::length(scene.EditorProbeEyeLocalForTest()), 0.001f);
 	const auto editorPose = scene.CameraPoseForTest();
 	scene.OnAction(MakeSceneTouch(TouchAction::TOUCH_DOWN, { 700, 450 }, 0, LeftMouseButtonMask));
 	EXPECT_TRUE(scene.EditorOwnsPointerForTest());

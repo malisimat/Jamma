@@ -4,6 +4,7 @@ in vec2 UV;
 in float diff;
 in float EditorU;
 in float EditorMorphV;
+in vec3 EditorLocalPosition;
 
 out vec4 ColorOUT;
 
@@ -18,6 +19,9 @@ uniform float EditorPlayFrac;
 uniform float SceneDim;
 uniform float EditorActive;
 uniform float EditorTime;
+uniform samplerCube ProbeSampler;
+uniform float ProbeStrength;
+uniform vec3 EditorProbeEye;
 
 void main()
 {
@@ -67,6 +71,13 @@ void main()
             * (core * vec3(0.35, 0.85, 1.0) + trail * vec3(0.03, 0.12, 0.18));
         if (EditorMorphV > 0.0)
         {
+			vec3 towardEye = normalize(EditorProbeEye - EditorLocalPosition);
+			vec3 reflected = reflect(-towardEye, vec3(0.0, 1.0, 0.0));
+			vec3 probe = texture(ProbeSampler, reflected).rgb;
+			float brightBand = smoothstep(0.52, 0.82,
+				dot(probe, vec3(0.2126, 0.7152, 0.0722)));
+			ColorOUT.rgb += ProbeStrength * EditorMorphV * 0.16
+				* brightBand * probe;
             float timeCoord = EditorU * 16.0;
             float timeLine = 1.0 - smoothstep(0.0, fwidth(timeCoord) * 1.4,
                 min(fract(timeCoord), 1.0 - fract(timeCoord)));

@@ -597,6 +597,15 @@ void Camera::SetViewTarget(View view, Pose target) noexcept
 	_EndBackgroundDrag();
 }
 
+void Camera::SetEditorPose(Pose pose) noexcept
+{
+	if (!_editorPerspective) return;
+	_ApplyPose(pose);
+	_transitionStart = _pose;
+	_transitionTarget = _pose;
+	_transitioning = false;
+}
+
 Camera::EditorReturnState Camera::CaptureEditorReturnState() const noexcept
 {
 	EditorReturnState state;

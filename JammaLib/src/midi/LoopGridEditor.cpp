@@ -67,6 +67,7 @@ void LoopGridEditor::SetSize(utils::Size2d size)
 	if (IsOpen())
 	{
 		_CancelGesture();
+		_EndOrbit();
 		_PositionCamera();
 	}
 	_Layout();
@@ -279,6 +280,9 @@ bool LoopGridEditor::Open(const std::shared_ptr<engine::LoopTake>& take,
 	_returnCamera = _host.Camera.CaptureEditorReturnState();
 	_blend = 0.0f;
 	_pointerOwned = false;
+	_EndOrbit();
+	_orbitHorizontal = 0.0f;
+	_orbitVertical = 0.0f;
 	_AcquireRevisionCursor(midiLoop);
 	if (midiLoop)
 		_FitPitchRange(midiLoop);
@@ -350,6 +354,7 @@ void LoopGridEditor::Close()
 	if (!IsOpen())
 		return;
 	_CancelGesture();
+	_EndOrbit();
 	_revisionCursor.reset();
 	_buttonPressed = false;
 	_state = State::Closing;
@@ -409,12 +414,58 @@ void LoopGridEditor::_PositionCamera()
 		? static_cast<float>(_size.Width) / _size.Height : 1.0f;
 	const auto distance = graphics::LoopGridProjection::CameraDistance(radius,
 		worldScale, aspect);
-	const auto offset = glm::vec3(0.07f * distance, distance, 0.12f * distance);
+	_orbitCentre = centre;
+	_orbitRadius = distance;
+	_host.Camera.SetViewTarget(graphics::Camera::View::TopDown, _OrbitPose());
+}
+
+glm::vec3 LoopGridEditor::ProbeEyeLocal() const
+{
+	const auto eye = _host.Camera.CurrentPose().Eye;
+	return glm::vec3(glm::inverse(_ModelMatrix())
+		* glm::vec4(eye.X, eye.Y, eye.Z, 1.0f));
+}
+
+graphics::Camera::Pose LoopGridEditor::_OrbitPose() const noexcept
+{
+	// Screen X and Y rotations both respond from the exact face-on pose.
+	const auto offset = _orbitRadius * glm::vec3(
+		std::sin(_orbitHorizontal) * std::cos(_orbitVertical),
+		std::cos(_orbitHorizontal) * std::cos(_orbitVertical),
+		std::sin(_orbitVertical));
 	graphics::Camera::Pose pose;
-	pose.Eye = { centre.x + offset.x, centre.y + offset.y, centre.z + offset.z };
+	pose.Eye = { _orbitCentre.x + offset.x, _orbitCentre.y + offset.y,
+		_orbitCentre.z + offset.z };
 	pose.Forward = { -offset.x, -offset.y, -offset.z };
 	pose.Up = { 0.0f, 0.0f, -1.0f };
-	_host.Camera.SetViewTarget(graphics::Camera::View::TopDown, pose);
+	return pose;
+}
+
+void LoopGridEditor::_BeginOrbit(utils::Position2d pointer) noexcept
+{
+	_orbitDragging = true;
+	_orbitPointerAnchor = pointer;
+	_orbitAnchorHorizontal = _orbitHorizontal;
+	_orbitAnchorVertical = _orbitVertical;
+}
+
+void LoopGridEditor::_UpdateOrbit(utils::Position2d pointer) noexcept
+{
+	if (!_orbitDragging) return;
+	constexpr float radiansPerPixel = 0.004f;
+	constexpr float maxAngle = 1.05f;
+	const auto delta = pointer - _orbitPointerAnchor;
+	_orbitHorizontal = std::clamp(_orbitAnchorHorizontal
+		+ static_cast<float>(delta.X) * radiansPerPixel, -maxAngle, maxAngle);
+	// App pixels rise upward; moving up should reveal the grid from its top edge (-Z).
+	_orbitVertical = std::clamp(_orbitAnchorVertical
+		- static_cast<float>(delta.Y) * radiansPerPixel, -maxAngle, maxAngle);
+	_host.Camera.SetEditorPose(_OrbitPose());
+}
+
+void LoopGridEditor::_EndOrbit() noexcept
+{
+	_orbitDragging = false;
 }
 
 std::optional<MidiGridGesture::Point> LoopGridEditor::_PointAt(
@@ -587,6 +638,7 @@ void LoopGridEditor::_CheckGesture()
 void LoopGridEditor::CancelInput()
 {
 	_CancelGesture();
+	_EndOrbit();
 	_buttonPressed = false;
 }
 
@@ -800,13 +852,22 @@ std::optional<actions::ActionResult> LoopGridEditor::OnAction(actions::TouchActi
 		_HandleWheel(action);
 	else if (actions::TouchAction::TOUCH_DOWN == action.State && 0 == action.Index
 		&& isMouse && IsReady() && _Validate())
+	{
 		_BeginGesture(action);
+		if (!_pointerOwned) _BeginOrbit(action.Position);
+	}
+	else if (actions::TouchAction::TOUCH_DOWN == action.State && 2 == action.Index
+		&& isMouse && IsReady() && !_pointerOwned)
+		_BeginOrbit(action.Position);
 	else if (actions::TouchAction::TOUCH_UP == action.State && _pointerOwned
 		&& isMouse && action.Index == 0)
 		_EndGesture(action);
 	else if (actions::TouchAction::TOUCH_UP == action.State && _pointerOwned
 		&& action.MouseButtonsDown == 0u)
 		_CancelGesture();
+	if (actions::TouchAction::TOUCH_UP == action.State && _orbitDragging
+		&& (action.MouseButtonsDown & ((1u << 0) | (1u << 2))) == 0u)
+		_EndOrbit();
 	return _Eaten();
 }
 
@@ -829,6 +890,13 @@ std::optional<actions::ActionResult> LoopGridEditor::OnAction(actions::TouchMove
 			if (_gesture->Rejected())
 				_SetFeedback("Cannot map this drag to source MIDI");
 		}
+	}
+	else if (_orbitDragging)
+	{
+		if (action.Touch == actions::TouchAction::TOUCH_MOUSE
+			&& (action.MouseButtonsDown & ((1u << 0) | (1u << 2))) != 0u)
+			_UpdateOrbit(action.Position);
+		else _EndOrbit();
 	}
 	else if (auto point = _PointAt(action.Position, false))
 	{

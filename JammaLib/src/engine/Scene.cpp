@@ -773,12 +773,29 @@ void Scene::Draw3d(DrawContext& ctx,
 	glCtx.SetUniform("EditorMorph", 0.0f);
 	glCtx.SetUniform("EditorTime", _skyboxStarted
 		? static_cast<float>(Timer::GetElapsedSeconds(_skyboxStartTime, Timer::GetTime())) : 0.0f);
+	const auto probeId = PASS_SCENE == pass && _loopEditor.IsEngaged()
+		? _skybox.CubemapId() : 0u;
+	glCtx.SetUniform("ProbeStrength", probeId != 0u ? 1.0f : 0.0f);
+	if (probeId != 0u)
+	{
+		glCtx.SetUniform("ProbeSampler", 3);
+		glCtx.SetUniform("EditorProbeEye", _loopEditor.ProbeEyeLocal());
+		glActiveTexture(GL_TEXTURE3);
+		glBindTexture(GL_TEXTURE_CUBE_MAP, probeId);
+		glActiveTexture(GL_TEXTURE0);
+	}
 	_loopEditor.ApplyToModels();
 	for (auto& station : _stations)
 	{
 		station->Draw3d(ctx, 1, pass);
 	}
 	glCtx.SetUniform("SceneDim", 1.0f);
+	if (probeId != 0u)
+	{
+		glActiveTexture(GL_TEXTURE3);
+		glBindTexture(GL_TEXTURE_CUBE_MAP, 0);
+		glActiveTexture(GL_TEXTURE0);
+	}
 
 	glCtx.PopMvp();
 }

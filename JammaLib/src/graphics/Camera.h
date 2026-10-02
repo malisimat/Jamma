@@ -86,6 +86,7 @@ namespace graphics
 		bool HasRememberedPose(View view) const noexcept;
 		Pose RememberedPose(View view) const noexcept;
 		void SetViewTarget(View view, Pose target) noexcept;
+		void SetEditorPose(Pose pose) noexcept;
 		EditorReturnState CaptureEditorReturnState() const noexcept;
 		void RestoreEditorReturnState(const EditorReturnState& state) noexcept;
 		void SetEditorPerspective(bool enabled) noexcept { _editorPerspective = enabled; }

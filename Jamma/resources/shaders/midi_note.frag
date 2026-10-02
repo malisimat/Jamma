@@ -8,6 +8,7 @@ in float EditorU;
 in float EditorPitchRow;
 in float EditorMorphV;
 in float EditorCrossNote;
+in vec3 EditorLocalPosition;
 flat in float EditorTopFace;
 flat in vec3 EditorNoteHit;
 
@@ -29,6 +30,9 @@ uniform int EditorVisibleRows;
 uniform float SceneDim;
 uniform float EditorActive;
 uniform float EditorTime;
+uniform samplerCube ProbeSampler;
+uniform float ProbeStrength;
+uniform vec3 EditorProbeEye;
 
 const int RenderModeScene = 0;
 const int RenderModePicker = 1;
@@ -149,6 +153,14 @@ void main()
                 ColorOUT.rgb += hover * EditorMorphV * vec3(0.10, 0.35, 0.40);
             }
             ColorOUT.a = mix(ColorOUT.a, 0.93, EditorMorphV);
+			// A bright part of the sky probe glances across the editor's flat surface.
+			vec3 towardEye = normalize(EditorProbeEye - EditorLocalPosition);
+			vec3 reflected = reflect(-towardEye, vec3(0.0, 1.0, 0.0));
+			vec3 probe = texture(ProbeSampler, reflected).rgb;
+			float brightBand = smoothstep(0.52, 0.82,
+				dot(probe, vec3(0.2126, 0.7152, 0.0722)));
+			ColorOUT.rgb += ProbeStrength * EditorMorphV * 0.16
+				* brightBand * probe;
         }
         float playheadTint = IsDisc > 0.5 ? 1.0 : 0.15;
         ColorOUT.rgb += playheadTint * (0.22 + 0.78 * EditorMorphV)

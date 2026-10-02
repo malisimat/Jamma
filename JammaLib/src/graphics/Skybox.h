@@ -23,6 +23,7 @@ namespace graphics
 	public:
 		void InitResources(resources::ResourceLib& resourceLib, bool forceInit);
 		void Draw(GlDrawContext& ctx);
+		unsigned int CubemapId() const noexcept;
 		void ReleaseResources();
 
 	private:

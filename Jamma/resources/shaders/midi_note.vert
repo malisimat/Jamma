@@ -14,6 +14,7 @@ out float EditorU;
 out float EditorPitchRow;
 out float EditorMorphV;
 out float EditorCrossNote;
+out vec3 EditorLocalPosition;
 flat out float EditorTopFace;
 flat out vec3 EditorNoteHit;
 
@@ -55,6 +56,7 @@ void main()
     float gridY = (IsDisc > 0.5 ? 0.0 : 3.0 + Velocity * 4.0)
         + PositionIN.y * (IsDisc > 0.5 ? 3.0 : height);
     vec3 gridPosition = vec3((gridU - 0.5) * width, gridY, gridZ);
+    EditorLocalPosition = gridPosition;
     gl_Position = MVP * vec4(mix(position, gridPosition, EditorMorph), 1.0);
     EditorU = gridU;
     EditorPitchRow = IsDisc > 0.5

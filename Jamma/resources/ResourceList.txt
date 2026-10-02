@@ -6,9 +6,9 @@
 2 texture_tinted MVP TextureSampler TintColor
 2 font MVP TextureSampler
 2 texture_shaded MVP LoopState LoopHover SceneDim
-2 waveform MVP LoopState LoopHover LoopSelected LoopPressed Highlight HighlightPass TextureSampler WaveformSampler WaveformRadius WaveformHeightScale WaveformMinHeight WaveformColorMultiplier WaveformColorScale WaveformUnitMeshRadius EditorMorph EditorPlayFrac SceneDim EditorActive EditorTime
+2 waveform MVP LoopState LoopHover LoopSelected LoopPressed Highlight HighlightPass TextureSampler WaveformSampler WaveformRadius WaveformHeightScale WaveformMinHeight WaveformColorMultiplier WaveformColorScale WaveformUnitMeshRadius EditorMorph EditorPlayFrac SceneDim EditorActive EditorTime ProbeSampler ProbeStrength EditorProbeEye
 2 vu MVP DX DY NumInstances InstanceOffset SceneDim
-2 midi_note MVP ObjectId Highlight LoopHover LoopSelected LoopPressed DiscAlpha RenderMode EditorMorph EditorPlayFrac EditorBottomPitch EditorVisibleRows EditorHoverU EditorHoverPitch SceneDim EditorGridRadius EditorActive EditorTime
+2 midi_note MVP ObjectId Highlight LoopHover LoopSelected LoopPressed DiscAlpha RenderMode EditorMorph EditorPlayFrac EditorBottomPitch EditorVisibleRows EditorHoverU EditorHoverPitch SceneDim EditorGridRadius EditorActive EditorTime ProbeSampler ProbeStrength EditorProbeEye
 2 midi_grid MVP EditorGridRadius EditorMorph SceneDim
 2 automation MVP SceneDim EditorMorph
 2 picker MVP ObjectId WaveformRadius WaveformUnitMeshRadius EditorMorph
