@@ -1223,9 +1223,6 @@ LRESULT CALLBACK Window::WindowProcedure(HWND hWindow, UINT message, WPARAM wPar
 	{
 		bool repeatkey = false;
 
-		if (VK_ESCAPE == wParam)
-			PostMessage(hWindow, WM_CLOSE, 0, 0);
-
 		if (lParam & (0x01 << 30))
 			repeatkey = true;
 
