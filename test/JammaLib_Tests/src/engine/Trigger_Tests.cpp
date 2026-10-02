@@ -386,7 +386,7 @@ public:
 	bool FindLoopGridEditorCandidateForTest(std::shared_ptr<LoopTake>& take,
 		std::shared_ptr<Loop>& audioLoop, std::shared_ptr<midi::MidiLoop>& midiLoop) const
 	{
-		return _FindLoopGridEditorCandidate(take, audioLoop, midiLoop);
+		return _loopEditor.FindCandidate(take, audioLoop, midiLoop);
 	}
 
 	bool IsCameraTransitioningForTest() const
@@ -415,11 +415,11 @@ public:
 		for (unsigned int tick = 0u; tick < 10u; ++tick)
 		{
 			_camera.TickBackgroundDrag(0.05f);
-			_TickLoopGridEditor(0.05f);
+			_loopEditor.Tick(0.05f);
 		}
 	}
 
-	bool EditorOwnsPointerForTest() const { return _editorPointerOwned; }
+	bool EditorOwnsPointerForTest() const { return _loopEditor.OwnsPointer(); }
 
 	bool IsSceneTouchingForTest() const
 	{

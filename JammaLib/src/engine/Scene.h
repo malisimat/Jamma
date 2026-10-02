@@ -60,8 +60,7 @@
 #include "StationRemote.h"
 #include "RigCoordinator.h"
 #include "../actions/ActionUndoHistory.h"
-#include "../midi/MidiGridGesture.h"
-#include "../midi/MidiLoopEditUndo.h"
+#include "../midi/LoopGridEditor.h"
 
 namespace engine
 {
@@ -203,18 +202,21 @@ namespace engine
 			return _rigCoordinator.Accepted();
 		}
 		void ApplyDeferredHoverUpdates();
-		// UI-thread editor seam. A MIDI target is always one MidiLoop, never its take.
+		// UI-thread editor seam, forwarded to midi::LoopGridEditor.
 		bool OpenLoopGridEditor(const std::shared_ptr<LoopTake>& take,
 			const std::shared_ptr<Loop>& audioLoop,
-			const std::shared_ptr<midi::MidiLoop>& midiLoop);
-		void CloseLoopGridEditor();
-		bool IsLoopGridEditorOpen() const noexcept;
-		bool LoopGridEditorReady() const noexcept;
-		float LoopGridEditorMorph() const noexcept { return _editorBlend; }
-		float LoopGridEditorSurroundingDim() const noexcept { return 1.0f - 0.72f * _editorBlend; }
-		std::shared_ptr<Loop> LoopGridEditorAudioLoop() const noexcept { return _editorAudioLoop.lock(); }
-		std::shared_ptr<midi::MidiLoop> LoopGridEditorMidiLoop() const noexcept { return _editorMidiLoop.lock(); }
-		std::shared_ptr<LoopTake> LoopGridEditorTake() const noexcept { return _editorTake.lock(); }
+			const std::shared_ptr<midi::MidiLoop>& midiLoop)
+		{
+			return _loopEditor.Open(take, audioLoop, midiLoop);
+		}
+		void CloseLoopGridEditor() { _loopEditor.Close(); }
+		bool IsLoopGridEditorOpen() const noexcept { return _loopEditor.IsOpen(); }
+		bool LoopGridEditorReady() const noexcept { return _loopEditor.IsReady(); }
+		float LoopGridEditorMorph() const noexcept { return _loopEditor.Morph(); }
+		float LoopGridEditorSurroundingDim() const noexcept { return _loopEditor.SurroundingDim(); }
+		std::shared_ptr<Loop> LoopGridEditorAudioLoop() const noexcept { return _loopEditor.AudioLoop(); }
+		std::shared_ptr<midi::MidiLoop> LoopGridEditorMidiLoop() const noexcept { return _loopEditor.TargetMidiLoop(); }
+		std::shared_ptr<LoopTake> LoopGridEditorTake() const noexcept { return _loopEditor.Take(); }
 
 		// Returns a locked station snapshot safe to use outside render/tick threads.
 		std::vector<std::shared_ptr<Station>> SnapshotStations() const;
@@ -329,24 +331,7 @@ namespace engine
 		void _OpenRemoteTempoPromptIfNeeded();
 		void _HandleRemoteTempoPromptDecision(bool accept);
 		void _CloseRemoteTempoPrompt();
-		bool _ValidateLoopGridEditorTarget() const;
-		void _TickLoopGridEditor(float deltaSeconds);
-		void _UpdateLoopGridEditorUi();
-		bool _FindLoopGridEditorCandidate(std::shared_ptr<LoopTake>& take,
-			std::shared_ptr<Loop>& audioLoop,
-			std::shared_ptr<midi::MidiLoop>& midiLoop) const;
-		std::string _LoopGridEditorUnavailableReason(const std::shared_ptr<LoopTake>& take,
-			const std::shared_ptr<Loop>& audioLoop,
-			const std::shared_ptr<midi::MidiLoop>& midiLoop) const;
-		bool _HandleLoopGridEditorButton(actions::TouchAction action);
-		void _SetLoopGridEditorFeedback(const std::string& message);
-		glm::mat4 _LoopGridEditorModelMatrix() const;
-		void _PositionLoopGridEditorCamera();
-		std::optional<midi::MidiGridGesture::Point> _LoopGridEditorPoint(
-			utils::Position2d pixel, bool clampToGrid) const;
-		void _CancelLoopGridEditorGesture();
-		void _UpdateLoopGridEditorPreview();
-		void _CheckLoopGridEditorGesture();
+		void _OnLoopGridEditorOpened();
 
 
 	protected:
@@ -391,11 +376,6 @@ namespace engine
 		io::JamFile::GlobalMidiQuantState _globalMidiQuantState = io::JamFile::GlobalMidiQuantState::Mixed;
 		double _transportOffsetLoopFrac = 0.0;
 		std::unique_ptr<gui::GuiLabel> _label;
-		std::shared_ptr<gui::GuiButton> _editorButton;
-		std::shared_ptr<gui::GuiLabel> _editorFeedback;
-		std::shared_ptr<gui::GuiLabel> _editorModeLabel;
-		std::array<std::shared_ptr<gui::GuiLabel>, 5> _editorTimeTicks;
-		std::array<std::shared_ptr<gui::GuiLabel>, 11> _editorPitchTicks;
 		std::unique_ptr<gui::SceneSelector> _selector;
 		std::shared_ptr<gui::GuiMainPanel> _mainPanel;
 		std::shared_ptr<gui::GuiHud> _hudPanel;
@@ -430,26 +410,6 @@ namespace engine
 		graphics::CtrlHandleOverlay _ctrlHandleOverlay;
 		engine::QuantiserController _quantisationInteraction;
 		graphics::Camera _camera;
-		enum class EditorState { Closed, Opening, Active, Closing };
-		EditorState _editorState = EditorState::Closed;
-		std::weak_ptr<Station> _editorStation;
-		std::weak_ptr<LoopTake> _editorTake;
-		std::weak_ptr<Loop> _editorAudioLoop;
-		std::weak_ptr<midi::MidiLoop> _editorMidiLoop;
-		graphics::Camera::EditorReturnState _editorReturnCamera{};
-		float _editorBlend = 0.0f;
-		bool _editorButtonPressed = false;
-		bool _editorButtonShowsClose = false;
-		bool _editorPointerOwned = false;
-		std::unique_ptr<midi::MidiGridGesture> _editorGesture;
-		std::shared_ptr<actions::MidiEditRevisionCursor> _editorRevisionCursor;
-		struct EditorCursorEntry
-		{
-			std::weak_ptr<midi::MidiLoop> Loop;
-			std::shared_ptr<actions::MidiEditRevisionCursor> Cursor;
-		};
-		std::vector<EditorCursorEntry> _editorRevisionCursors;
-		std::string _editorFeedbackText;
 		std::optional<Time> _lastCameraUpdateTime;
 		std::thread _jobRunner;
 		std::mutex _jobMutex;
@@ -459,5 +419,7 @@ namespace engine
 		std::function<bool(const io::RigFile&)> _saveRig;
 		ViewMode _viewMode;
 		utils::Position2d _cursorPos{};
+		// Declared last: it holds references to the members above.
+		midi::LoopGridEditor _loopEditor;
 	};
 }

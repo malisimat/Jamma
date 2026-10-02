@@ -1,0 +1,875 @@
+#include "LoopGridEditor.h"
+#include <algorithm>
+#include <cmath>
+#include <cstdlib>
+#include "glm/ext.hpp"
+#include "../graphics/LoopGridProjection.h"
+#include "MidiNote.h"
+#include "MidiQuantisation.h"
+
+using namespace midi;
+
+LoopGridEditor::LoopGridEditor(Host host, utils::Size2d size) :
+	_host(std::move(host)),
+	_size(size)
+{
+	const auto buttonPos = _ButtonPosition(size);
+
+	auto buttonParams = gui::GuiButtonParams::PanelButton(190u);
+	buttonParams.Text = "Edit loop (E)";
+	buttonParams.Position = buttonPos;
+	_button = std::make_shared<gui::GuiButton>(buttonParams);
+	_button->Init();
+
+	auto feedbackParams = gui::GuiLabelParams::PanelHeader("", 330u);
+	feedbackParams.Position = { std::max(0, buttonPos.X - 340), buttonPos.Y + 6 };
+	_feedback = std::make_shared<gui::GuiLabel>(feedbackParams);
+	_feedback->Init();
+
+	auto modeParams = gui::GuiLabelParams::PanelHeader("", 260u);
+	modeParams.Position = { std::max(0, buttonPos.X - 340), buttonPos.Y - 20 };
+	_modeLabel = std::make_shared<gui::GuiLabel>(modeParams);
+	_modeLabel->Init();
+
+	for (auto& tick : _timeTicks)
+	{
+		tick = std::make_shared<gui::GuiLabel>(gui::GuiLabelParams::PanelHeader("", 56u));
+		tick->Init();
+	}
+	for (auto& tick : _pitchTicks)
+	{
+		tick = std::make_shared<gui::GuiLabel>(gui::GuiLabelParams::PanelHeader("", 56u));
+		tick->Init();
+	}
+}
+
+void LoopGridEditor::InitResources(resources::ResourceLib& resourceLib, bool forceInit)
+{
+	_button->InitResources(resourceLib, forceInit);
+	_feedback->InitResources(resourceLib, forceInit);
+	_modeLabel->InitResources(resourceLib, forceInit);
+	for (auto& tick : _timeTicks) tick->InitResources(resourceLib, forceInit);
+	for (auto& tick : _pitchTicks) tick->InitResources(resourceLib, forceInit);
+}
+
+void LoopGridEditor::ReleaseResources()
+{
+	_button->ReleaseResources();
+	_feedback->ReleaseResources();
+	_modeLabel->ReleaseResources();
+	for (auto& tick : _timeTicks) tick->ReleaseResources();
+	for (auto& tick : _pitchTicks) tick->ReleaseResources();
+}
+
+void LoopGridEditor::SetSize(utils::Size2d size)
+{
+	_size = size;
+	if (IsOpen())
+	{
+		_CancelGesture();
+		_PositionCamera();
+	}
+	_Layout();
+}
+
+bool LoopGridEditor::IsReady() const noexcept
+{
+	return State::Active == _state && !_host.Camera.IsTransitioning();
+}
+
+actions::ActionResult LoopGridEditor::_Eaten()
+{
+	actions::ActionResult eaten;
+	eaten.IsEaten = true;
+	return eaten;
+}
+
+utils::Position2d LoopGridEditor::_ButtonPosition(utils::Size2d size)
+{
+	return { std::max(0, static_cast<int>(size.Width) - 202),
+		std::max(0, static_cast<int>(size.Height) - 42) };
+}
+
+float LoopGridEditor::_MidiRadius(std::uint32_t lengthSamps) noexcept
+{
+	return static_cast<float>(std::clamp(
+		70.0 * std::log(static_cast<double>(lengthSamps)) - 600.0, 50.0, 400.0));
+}
+
+void LoopGridEditor::_Layout()
+{
+	const auto pos = _ButtonPosition(_size);
+	_button->SetPosition(pos);
+	_feedback->SetPosition({ std::max(0, pos.X - 340), pos.Y + 6 });
+	_modeLabel->SetPosition({ std::max(0, pos.X - 340), pos.Y - 20 });
+}
+
+void LoopGridEditor::_SetFeedback(const std::string& message)
+{
+	if (message != _feedbackText)
+	{
+		_feedbackText = message;
+		_feedback->SetString(message);
+	}
+}
+
+void LoopGridEditor::_ResetTarget()
+{
+	_station.reset();
+	_take.reset();
+	_audioLoop.reset();
+	_midiLoop.reset();
+}
+
+bool LoopGridEditor::FindCandidate(std::shared_ptr<engine::LoopTake>& take,
+	std::shared_ptr<engine::Loop>& audioLoop,
+	std::shared_ptr<MidiLoop>& midiLoop) const
+{
+	const auto hovered = _host.Hovered ? _host.Hovered() : nullptr;
+	std::scoped_lock lock(_host.SceneMutex);
+	unsigned int fallbackCount = 0u;
+	for (const auto& station : _host.Stations)
+	{
+		for (const auto& candidateTake : station->GetLoopTakes())
+		{
+			if (!candidateTake || !candidateTake->IsSelected())
+				continue;
+			for (const auto& candidate : candidateTake->GetLoops())
+			{
+				if (!candidate)
+					continue;
+				if (candidate->IsSelected() && hovered
+					&& (hovered == candidate || hovered->Parent() == candidate))
+				{
+					take = candidateTake;
+					audioLoop = candidate;
+					midiLoop.reset();
+					return true;
+				}
+				if (candidate->IsSelected())
+				{
+					++fallbackCount;
+					take = candidateTake;
+					audioLoop = candidate;
+					midiLoop.reset();
+				}
+			}
+			bool countedMidiForTake = false;
+			for (const auto& candidate : candidateTake->GetMidiLoops())
+			{
+				if (!candidate)
+					continue;
+				if (candidate->Model() && candidate->Model()->IsSelected() && hovered
+					&& (hovered == candidate->Model() || hovered->Parent() == candidate->Model()))
+				{
+					take = candidateTake;
+					audioLoop.reset();
+					midiLoop = candidate;
+					return true;
+				}
+				if (!countedMidiForTake && candidate->Model() && candidate->Model()->IsSelected())
+				{
+					// All channel models share one visible MIDI loop at this depth.
+					countedMidiForTake = true;
+					++fallbackCount;
+					take = candidateTake;
+					audioLoop.reset();
+					midiLoop = candidate;
+				}
+			}
+		}
+	}
+	return fallbackCount == 1u;
+}
+
+std::string LoopGridEditor::_UnavailableReason(const std::shared_ptr<engine::LoopTake>& take,
+	const std::shared_ptr<engine::Loop>& audioLoop,
+	const std::shared_ptr<MidiLoop>& midiLoop) const
+{
+	if (!take || !take->IsSelected()
+		|| (static_cast<bool>(audioLoop) == static_cast<bool>(midiLoop)))
+		return "Select one loop to edit";
+	const auto state = take->TakeState();
+	if (state != engine::LoopTake::STATE_PLAYING && state != engine::LoopTake::STATE_INACTIVE)
+		return "Finish recording before editing";
+	if (audioLoop)
+	{
+		if (!audioLoop->IsSelected())
+			return "Select the audio loop to edit";
+		if (audioLoop->LoopLength() == 0ul)
+			return "Loop has no completed audio";
+		if (audioLoop->PlayState() == engine::Loop::STATE_RECORDING)
+			return "Finish recording before editing";
+	}
+	else
+	{
+		if (!midiLoop->Model() || !midiLoop->Model()->IsSelected())
+			return "Select the MIDI loop to edit";
+		if (midiLoop->CompletedLengthForEditor() == 0u)
+			return "Finish recording or set a loop length to edit";
+	}
+	return {};
+}
+
+bool LoopGridEditor::_Validate() const
+{
+	const auto station = _station.lock();
+	const auto take = _take.lock();
+	const auto audioLoop = _audioLoop.lock();
+	const auto midiLoop = _midiLoop.lock();
+	if (!station || !take || (static_cast<bool>(audioLoop) == static_cast<bool>(midiLoop)))
+		return false;
+	std::scoped_lock lock(_host.SceneMutex);
+	const auto& stations = _host.Stations;
+	if (std::find(stations.begin(), stations.end(), station) == stations.end())
+		return false;
+	const auto& takes = station->GetLoopTakes();
+	if (std::find(takes.begin(), takes.end(), take) == takes.end())
+		return false;
+	const auto state = take->TakeState();
+	if (state != engine::LoopTake::STATE_PLAYING && state != engine::LoopTake::STATE_INACTIVE)
+		return false;
+	if (audioLoop)
+	{
+		const auto& loops = take->GetLoops();
+		return audioLoop->LoopLength() > 0ul
+			&& audioLoop->PlayState() != engine::Loop::STATE_RECORDING
+			&& std::find(loops.begin(), loops.end(), audioLoop) != loops.end();
+	}
+	const auto& loops = take->GetMidiLoops();
+	return midiLoop->CompletedLengthForEditor() > 0u
+		&& midiLoop->Model()
+		&& std::find(loops.begin(), loops.end(), midiLoop) != loops.end();
+}
+
+bool LoopGridEditor::Open(const std::shared_ptr<engine::LoopTake>& take,
+	const std::shared_ptr<engine::Loop>& audioLoop,
+	const std::shared_ptr<MidiLoop>& midiLoop)
+{
+	if (State::Closed != _state || !take || !take->IsSelected()
+		|| (static_cast<bool>(audioLoop) == static_cast<bool>(midiLoop)))
+		return false;
+	const auto unavailableReason = _UnavailableReason(take, audioLoop, midiLoop);
+	if (!unavailableReason.empty())
+	{
+		_SetFeedback(unavailableReason);
+		return false;
+	}
+	{
+		std::scoped_lock lock(_host.SceneMutex);
+		for (const auto& station : _host.Stations)
+		{
+			const auto& takes = station->GetLoopTakes();
+			if (std::find(takes.begin(), takes.end(), take) != takes.end())
+			{
+				_station = station;
+				break;
+			}
+		}
+	}
+	_take = take;
+	_audioLoop = audioLoop;
+	_midiLoop = midiLoop;
+	if (!_Validate())
+	{
+		_ResetTarget();
+		_SetFeedback("Loop must be complete and idle to edit");
+		return false;
+	}
+	_returnCamera = _host.Camera.CaptureEditorReturnState();
+	_blend = 0.0f;
+	_pointerOwned = false;
+	_AcquireRevisionCursor(midiLoop);
+	if (midiLoop)
+		_FitPitchRange(midiLoop);
+	_state = State::Opening;
+	if (_host.OnOpened)
+		_host.OnOpened();
+	_host.Camera.SetEditorPerspective(true);
+	_PositionCamera();
+	_SetFeedback(midiLoop ? "MIDI loop editor" : "Audio loop view");
+	return true;
+}
+
+void LoopGridEditor::_AcquireRevisionCursor(const std::shared_ptr<MidiLoop>& midiLoop)
+{
+	_revisionCursors.erase(std::remove_if(_revisionCursors.begin(), _revisionCursors.end(),
+		[](const CursorEntry& entry) { return entry.Loop.expired(); }), _revisionCursors.end());
+	_revisionCursor.reset();
+	if (!midiLoop)
+		return;
+	for (const auto& entry : _revisionCursors)
+		if (entry.Loop.lock() == midiLoop)
+		{
+			_revisionCursor = entry.Cursor;
+			break;
+		}
+	if (!_revisionCursor)
+	{
+		_revisionCursor = std::make_shared<actions::MidiEditRevisionCursor>();
+		_revisionCursors.push_back({ midiLoop, _revisionCursor });
+	}
+}
+
+void LoopGridEditor::_FitPitchRange(const std::shared_ptr<MidiLoop>& midiLoop)
+{
+	const auto model = midiLoop->Model();
+	MidiLoop::EditState source;
+	if (!model || !midiLoop->SnapshotForEdit(source))
+		return;
+	std::vector<MidiEvent> displayed(source.EventCount);
+	if (source.Quantisation.Enabled)
+		MidiQuantisation::BuildQuantisedPlaybackEvents(source.Events.data(),
+			source.EventCount, source.LoopLengthSamps, source.Quantisation,
+			source.QuantisationTransportStartSamps, displayed.data());
+	else std::copy_n(source.Events.begin(), source.EventCount, displayed.begin());
+	const auto notes = MidiNote::ExtractSpans(displayed.data(),
+		displayed.size(), source.LoopLengthSamps);
+	int low = 127, high = 0;
+	for (const auto& note : notes)
+	{
+		low = std::min(low, static_cast<int>(note.Note));
+		high = std::max(high, static_cast<int>(note.Note));
+	}
+	const auto rows = notes.empty() ? 24 : std::clamp(
+		((high - low + 7 + 11) / 12) * 12, 24, 128);
+	int bottom = 24; // C1 is the default when the notes fit with headroom.
+	if (!notes.empty())
+	{
+		const auto headroom = (rows + 3) / 4;
+		const auto lowestDefault = std::min(24, low);
+		const auto bottomForHeadroom = high + headroom + 1 - rows;
+		bottom = std::min(low, std::max(lowestDefault, bottomForHeadroom));
+	}
+	bottom = std::clamp(bottom, 0, 128 - rows);
+	model->SetEditorPitchRange(bottom, rows);
+}
+
+void LoopGridEditor::Close()
+{
+	if (!IsOpen())
+		return;
+	_CancelGesture();
+	_revisionCursor.reset();
+	_buttonPressed = false;
+	_state = State::Closing;
+	_host.Camera.RestoreEditorReturnState(_returnCamera);
+	_SetFeedback("");
+}
+
+glm::mat4 LoopGridEditor::_ModelMatrix() const
+{
+	auto matrix = glm::mat4(1.0f);
+	const auto station = _station.lock();
+	const auto take = _take.lock();
+	const auto midiLoop = _midiLoop.lock();
+	const auto audioLoop = _audioLoop.lock();
+	if (!station || !take || (!midiLoop && !audioLoop)) return matrix;
+	const auto stationPos = station->ModelPosition();
+	const auto takePos = take->ModelPosition();
+	matrix = glm::translate(matrix, glm::vec3(stationPos.X, stationPos.Y, stationPos.Z));
+	matrix = glm::scale(matrix, glm::vec3(station->ModelScale()));
+	matrix = glm::translate(matrix, glm::vec3(takePos.X, takePos.Y, takePos.Z));
+	matrix = glm::scale(matrix, glm::vec3(take->ModelScale()));
+	if (midiLoop)
+	{
+		const auto model = midiLoop->Model();
+		if (!model) return matrix;
+		const auto pos = model->ModelPosition();
+		matrix = glm::translate(matrix, glm::vec3(pos.X, pos.Y, pos.Z));
+		return glm::scale(matrix, glm::vec3(model->ModelScale()));
+	}
+	const auto pos = audioLoop->ModelPosition();
+	matrix = glm::translate(matrix, glm::vec3(pos.X, pos.Y, pos.Z));
+	return glm::scale(matrix, glm::vec3(audioLoop->ModelScale()));
+}
+
+glm::mat4 LoopGridEditor::_ViewProjection() const
+{
+	const auto aspect = _size.Height > 0u
+		? static_cast<float>(_size.Width) / _size.Height : 1.0f;
+	return _host.ViewProjection(aspect);
+}
+
+void LoopGridEditor::_PositionCamera()
+{
+	const auto matrix = _ModelMatrix();
+	const auto centre = glm::vec3(matrix * glm::vec4(0.0f, 0.0f, 0.0f, 1.0f));
+	const auto worldScale = glm::length(glm::vec3(matrix * glm::vec4(1.0f, 0.0f, 0.0f, 0.0f)));
+	float radius = 50.0f;
+	if (const auto midiLoop = _midiLoop.lock())
+	{
+		const auto length = midiLoop->CompletedLengthForEditor();
+		if (length)
+			radius = _MidiRadius(length);
+	}
+	else if (const auto audioLoop = _audioLoop.lock())
+		radius = static_cast<float>(engine::Loop::CalcDrawRadius(audioLoop->LoopLength()));
+	const auto aspect = _size.Height > 0u
+		? static_cast<float>(_size.Width) / _size.Height : 1.0f;
+	const auto distance = graphics::LoopGridProjection::CameraDistance(radius,
+		worldScale, aspect);
+	const auto offset = glm::vec3(0.07f * distance, distance, 0.12f * distance);
+	graphics::Camera::Pose pose;
+	pose.Eye = { centre.x + offset.x, centre.y + offset.y, centre.z + offset.z };
+	pose.Forward = { -offset.x, -offset.y, -offset.z };
+	pose.Up = { 0.0f, 0.0f, -1.0f };
+	_host.Camera.SetViewTarget(graphics::Camera::View::TopDown, pose);
+}
+
+std::optional<MidiGridGesture::Point> LoopGridEditor::_PointAt(
+	utils::Position2d pixel, bool clampToGrid) const
+{
+	const auto loop = _midiLoop.lock();
+	if (!loop || !loop->Model()) return std::nullopt;
+	const auto length = loop->CompletedLengthForEditor();
+	const auto width = static_cast<int>(_size.Width);
+	const auto height = static_cast<int>(_size.Height);
+	if (!length || width <= 0 || height <= 0) return std::nullopt;
+	const auto local = graphics::LoopGridProjection::UnprojectToLocalPlane(_ViewProjection(),
+		_ModelMatrix(), pixel, width, height, 2.0f);
+	if (!local) return std::nullopt;
+	const auto radius = _MidiRadius(length);
+	const auto u = static_cast<double>(local->x / (2.0f * radius) + 0.5f);
+	const auto v = static_cast<double>(0.5f - local->z / (1.56f * radius));
+	if (!clampToGrid && (u < 0.0 || u >= 1.0 || v < 0.0 || v >= 1.0))
+		return std::nullopt;
+	const auto boundedU = std::clamp(u, 0.0, std::nextafter(1.0, 0.0));
+	const auto boundedV = std::clamp(v, 0.0, std::nextafter(1.0, 0.0));
+	const auto model = loop->Model();
+	const auto pitch = std::clamp(model->EditorBottomPitch()
+		+ static_cast<int>(boundedV * model->EditorVisibleRows()), 0, 127);
+	return MidiGridGesture::Point{
+		LoopGridGeometry::SampleAtU(boundedU, length),
+		static_cast<std::uint8_t>(pitch), boundedU };
+}
+
+std::uint8_t LoopGridEditor::_ChannelOf(const std::shared_ptr<MidiLoop>& loop) const
+{
+	std::uint8_t channel = 0u;
+	if (auto take = _take.lock())
+	{
+		const auto& loops = take->GetMidiLoops();
+		const auto& channels = take->MidiLoopChannels();
+		const auto it = std::find(loops.begin(), loops.end(), loop);
+		if (it != loops.end() && static_cast<std::size_t>(it - loops.begin()) < channels.size())
+			channel = static_cast<std::uint8_t>(channels[it - loops.begin()]);
+	}
+	return channel;
+}
+
+double LoopGridEditor::_PixelsPerSample(std::uint32_t lengthSamps) const
+{
+	const auto radius = _MidiRadius(lengthSamps);
+	const auto viewProjection = _ViewProjection();
+	const auto model = _ModelMatrix();
+	const auto width = static_cast<int>(_size.Width);
+	const auto height = static_cast<int>(_size.Height);
+	const auto left = graphics::LoopGridProjection::Project(viewProjection, model,
+		{ -radius, 2.0f, 0.0f }, width, height);
+	const auto right = graphics::LoopGridProjection::Project(viewProjection, model,
+		{ radius, 2.0f, 0.0f }, width, height);
+	return left && right && lengthSamps
+		? static_cast<double>(std::abs(right->X - left->X)) / lengthSamps : 0.0;
+}
+
+void LoopGridEditor::_HandleWheel(const actions::TouchAction& action)
+{
+	if (auto loop = _midiLoop.lock())
+		if (auto model = loop->Model())
+		{
+			if (base::Action::MODIFIER_SHIFT & action.Modifiers)
+			{
+				const auto rows = std::clamp(model->EditorVisibleRows()
+					+ (action.Value > 0 ? -12 : 12), 12, 128);
+				model->SetEditorPitchRange(model->EditorBottomPitch(), rows);
+			}
+			else model->SetEditorPitchRange(model->EditorBottomPitch()
+				+ (action.Value > 0 ? 3 : -3), model->EditorVisibleRows());
+			_CancelGesture();
+			_SetFeedback("Wheel scrolls pitch; Shift+wheel zooms");
+		}
+}
+
+void LoopGridEditor::_BeginGesture(const actions::TouchAction& action)
+{
+	const auto point = _PointAt(action.Position, false);
+	const auto loop = _midiLoop.lock();
+	MidiLoop::EditState source;
+	if (!point || !loop || !loop->SnapshotForEdit(source))
+		return;
+	_gesture = std::make_unique<MidiGridGesture>();
+	if (_gesture->Begin(source, *point, _ChannelOf(loop), _PixelsPerSample(source.LoopLengthSamps)))
+	{
+		_pointerOwned = true;
+		_UpdatePreview();
+	}
+	else
+	{
+		_CancelGesture();
+		_SetFeedback("Cannot create or map this MIDI edit");
+	}
+}
+
+void LoopGridEditor::_EndGesture(const actions::TouchAction& action)
+{
+	if (_gesture)
+		if (auto point = _PointAt(action.Position, true))
+			_gesture->Update(*point);
+	if (_gesture && _gesture->Dirty() && !_gesture->Rejected())
+		_PublishGesture();
+	else if (_gesture && _gesture->Rejected())
+		_SetFeedback("Edit rejected; source unchanged");
+	_CancelGesture();
+}
+
+void LoopGridEditor::_PublishGesture()
+{
+	const auto loop = _midiLoop.lock();
+	const auto take = _take.lock();
+	if (!loop || !take)
+		return;
+	std::uint64_t acceptedRevision = 0u;
+	if (!take->PublishMidiEdit(loop, _gesture->Working(), &acceptedRevision))
+	{
+		_SetFeedback("Edit changed or cannot be represented");
+		return;
+	}
+	if (!_revisionCursor)
+		_revisionCursor = std::make_shared<actions::MidiEditRevisionCursor>();
+	_host.Undo.Add(std::make_shared<actions::MidiLoopEditUndo>(take, loop,
+		_gesture->Before(), _gesture->Working(), acceptedRevision, _revisionCursor));
+	_SetFeedback("MIDI edit applied (Ctrl+Z to undo)");
+}
+
+void LoopGridEditor::_CancelGesture()
+{
+	_pointerOwned = false;
+	if (_gesture) _gesture->Cancel();
+	_gesture.reset();
+	if (auto loop = _midiLoop.lock())
+		if (auto model = loop->Model())
+		{
+			model->SetEditorHover(-1.0f, -1);
+			model->SetEditorPreview({}, loop->CompletedLengthForEditor());
+		}
+}
+
+void LoopGridEditor::_UpdatePreview()
+{
+	const auto loop = _midiLoop.lock();
+	if (!loop || !loop->Model() || !_gesture) return;
+	std::vector<graphics::MidiModel::EditorPreviewSpan> spans;
+	spans.reserve(_gesture->Preview().size());
+	for (const auto& preview : _gesture->Preview())
+		spans.push_back({ preview.Start, preview.End, preview.Pitch, preview.Fill });
+	loop->Model()->SetEditorPreview(std::move(spans),
+		_gesture->Before().LoopLengthSamps);
+}
+
+void LoopGridEditor::_CheckGesture()
+{
+	if (!_gesture || !_pointerOwned) return;
+	const auto loop = _midiLoop.lock();
+	const auto take = _take.lock();
+	MidiLoop::EditState current;
+	if (!IsReady() || !_Validate()
+		|| !loop || !take || !loop->SnapshotForEdit(current)
+		|| !_gesture->MatchesPublished(current)
+		|| current.Quantisation != take->ResolvedMidiQuantisation()
+		|| current.QuantisationTransportStartSamps != take->MidiQuantisationTransportStartSamps())
+	{
+		_CancelGesture();
+		_SetFeedback("Edit cancelled: loop or grid changed");
+	}
+}
+
+void LoopGridEditor::CancelInput()
+{
+	_CancelGesture();
+	_buttonPressed = false;
+}
+
+void LoopGridEditor::Tick(float deltaSeconds)
+{
+	if (IsOpen() && !_Validate())
+		Close();
+	if (_pointerOwned)
+		_CheckGesture();
+	if (State::Closed == _state)
+		return;
+	const auto step = std::max(0.0f, deltaSeconds) / 0.4f;
+	if (State::Closing == _state)
+	{
+		_blend = std::max(0.0f, _blend - step);
+		if (_blend == 0.0f && !_host.Camera.IsTransitioning())
+		{
+			if (auto loop = _audioLoop.lock())
+				if (auto model = loop->Model())
+				{
+					model->SetEditorMorph(0.0f);
+					model->SetEditorActive(false);
+				}
+			if (auto loop = _midiLoop.lock())
+				if (auto model = loop->Model())
+				{
+					model->SetEditorMorph(0.0f);
+					model->SetEditorActive(false);
+					model->SetEditorHover(-1.0f, -1);
+				}
+			_host.Camera.SetEditorPerspective(false);
+			_state = State::Closed;
+			_ResetTarget();
+		}
+		return;
+	}
+	_blend = std::min(1.0f, _blend + step);
+	if (_blend == 1.0f && !_host.Camera.IsTransitioning())
+		_state = State::Active;
+}
+
+void LoopGridEditor::UpdateUi(const glm::mat4& viewProjection)
+{
+	if (IsOpen())
+	{
+		std::string mode = "Audio: view only";
+		if (auto loop = _midiLoop.lock())
+		{
+			MidiLoop::EditState state;
+			if (loop->SnapshotForEdit(state))
+				mode = LoopGridGeometry::Resolve(state.LoopLengthSamps,
+					state.Quantisation, state.QuantisationTransportStartSamps)
+					? "Quantised paint: drag cells" : "Free timing: drag notes or edges";
+		}
+		_modeLabel->SetString(mode);
+
+		const auto width = static_cast<int>(_size.Width);
+		const auto height = static_cast<int>(_size.Height);
+		if (_station.lock() && _take.lock())
+		{
+			float radius = 100.0f;
+			std::shared_ptr<graphics::MidiModel> midiModel;
+			if (auto midiLoop = _midiLoop.lock())
+			{
+				const auto length = midiLoop->CompletedLengthForEditor();
+				if (length > 0u)
+					radius = _MidiRadius(length);
+				midiModel = midiLoop->Model();
+			}
+			else if (auto audioLoop = _audioLoop.lock())
+				radius = static_cast<float>(engine::Loop::CalcDrawRadius(audioLoop->LoopLength()));
+			const auto modelMatrix = _ModelMatrix();
+
+			static constexpr const char* timeNames[] = { "0", "1/4", "1/2", "3/4", "END" };
+			for (std::size_t i = 0u; i < _timeTicks.size(); ++i)
+			{
+				const auto u = static_cast<float>(i) / 4.0f;
+				const auto point = graphics::LoopGridProjection::Project(viewProjection, modelMatrix,
+					{ (u - 0.5f) * radius * 2.0f, 0.0f, radius * 0.88f }, width, height);
+				_timeTicks[i]->SetString(point ? timeNames[i] : "");
+				if (point)
+					_timeTicks[i]->SetPosition({ point->X - 14, point->Y - 24 });
+			}
+			for (auto& tick : _pitchTicks) tick->SetString("");
+			if (midiModel)
+			{
+				const auto bottom = midiModel->EditorBottomPitch();
+				const auto rows = midiModel->EditorVisibleRows();
+				for (std::size_t octave = 0u; octave < _pitchTicks.size(); ++octave)
+				{
+					const auto pitch = static_cast<int>(octave * 12u);
+					if (pitch < bottom || pitch > bottom + rows) continue;
+					const auto v = static_cast<float>(pitch - bottom) / rows;
+					const auto point = graphics::LoopGridProjection::Project(viewProjection, modelMatrix,
+						{ -radius * 1.12f, 0.0f, -(v * 2.0f - 1.0f) * radius * 0.78f }, width, height);
+					if (!point) continue;
+					_pitchTicks[octave]->SetString("C" + std::to_string(static_cast<int>(octave) - 1));
+					_pitchTicks[octave]->SetPosition({ point->X - 12, point->Y - 10 });
+				}
+			}
+		}
+	}
+	const auto showsClose = IsOpen();
+	if (!showsClose && State::Closed == _state)
+	{
+		std::shared_ptr<engine::LoopTake> take;
+		std::shared_ptr<engine::Loop> audioLoop;
+		std::shared_ptr<MidiLoop> midiLoop;
+		const auto hasCandidate = FindCandidate(take, audioLoop, midiLoop);
+		const auto reason = hasCandidate
+			? _UnavailableReason(take, audioLoop, midiLoop)
+			: std::string("Select and hover one loop to edit");
+		_button->SetEnabled(hasCandidate && reason.empty());
+		_SetFeedback(reason);
+	}
+	else
+		_button->SetEnabled(true);
+	if (showsClose != _buttonShowsClose)
+	{
+		_button->SetText(showsClose ? "Close editor (Esc)" : "Edit loop (E)");
+		_buttonShowsClose = showsClose;
+	}
+	_button->SetVisible(State::Closing != _state);
+}
+
+void LoopGridEditor::ApplyToModels()
+{
+	if (auto audioLoop = _audioLoop.lock())
+		if (auto model = audioLoop->Model())
+		{
+			model->SetEditorMorph(_blend);
+			model->SetEditorActive(true);
+		}
+	if (auto midiLoop = _midiLoop.lock())
+		if (auto model = midiLoop->Model())
+		{
+			model->SetEditorMorph(_blend);
+			model->SetEditorActive(true);
+			if (const auto take = _take.lock())
+			{
+				const auto length = midiLoop->CompletedLengthForEditor();
+				model->SetEditorPlayFrac(length == 0u ? 0.0f
+					: static_cast<float>(take->MidiPlayIndex() % length) / static_cast<float>(length));
+				MidiLoop::EditState published;
+				if (midiLoop->SnapshotForEdit(published))
+					model->UpdateEditorGrid(published.LoopLengthSamps,
+						published.Quantisation,
+						published.QuantisationTransportStartSamps);
+			}
+		}
+}
+
+void LoopGridEditor::Draw(base::DrawContext& ctx)
+{
+	_feedback->Draw(ctx);
+	if (IsOpen())
+		_modeLabel->Draw(ctx);
+	_button->Draw(ctx);
+	if (IsOpen() && _blend > 0.72f)
+	{
+		for (auto& tick : _timeTicks) tick->Draw(ctx);
+		if (!_midiLoop.expired())
+			for (auto& tick : _pitchTicks) tick->Draw(ctx);
+	}
+}
+
+bool LoopGridEditor::_HandleButton(actions::TouchAction action)
+{
+	if (State::Closing == _state)
+		return false;
+	const auto inside = _button->HitTest(_button->GlobalToLocal(action.Position));
+	if (actions::TouchAction::TOUCH_DOWN == action.State && 0 == action.Index
+		&& action.Touch == actions::TouchAction::TOUCH_MOUSE && inside)
+	{
+		_buttonPressed = true;
+		_button->OnAction(_button->GlobalToLocal(action));
+		return true;
+	}
+	if (actions::TouchAction::TOUCH_UP == action.State && _buttonPressed
+		&& action.Touch == actions::TouchAction::TOUCH_MOUSE && action.Index == 0)
+	{
+		_buttonPressed = false;
+		_button->OnAction(_button->GlobalToLocal(action));
+		if (inside)
+		{
+			if (IsOpen())
+				Close();
+			else
+			{
+				std::shared_ptr<engine::LoopTake> take;
+				std::shared_ptr<engine::Loop> audioLoop;
+				std::shared_ptr<MidiLoop> midiLoop;
+				if (_button->IsEnabled() && FindCandidate(take, audioLoop, midiLoop))
+					Open(take, audioLoop, midiLoop);
+			}
+		}
+		return true;
+	}
+	return false;
+}
+
+std::optional<actions::ActionResult> LoopGridEditor::OnAction(actions::TouchAction action)
+{
+	if (_HandleButton(action))
+		return _Eaten();
+	if (!IsEngaged())
+		return std::nullopt;
+	_CheckGesture();
+	const auto isMouse = action.Touch == actions::TouchAction::TOUCH_MOUSE;
+	if (actions::TouchAction::TOUCH_DOWN == action.State && 4 == action.Index && isMouse)
+		_HandleWheel(action);
+	else if (actions::TouchAction::TOUCH_DOWN == action.State && 0 == action.Index
+		&& isMouse && IsReady() && _Validate())
+		_BeginGesture(action);
+	else if (actions::TouchAction::TOUCH_UP == action.State && _pointerOwned
+		&& isMouse && action.Index == 0)
+		_EndGesture(action);
+	else if (actions::TouchAction::TOUCH_UP == action.State && _pointerOwned
+		&& action.MouseButtonsDown == 0u)
+		_CancelGesture();
+	return _Eaten();
+}
+
+std::optional<actions::ActionResult> LoopGridEditor::OnAction(actions::TouchMoveAction action)
+{
+	if (!IsEngaged())
+		return std::nullopt;
+	_CheckGesture();
+	if (0u == (action.MouseButtonsDown & 1u))
+		_buttonPressed = false;
+	if (_pointerOwned && (action.Touch != actions::TouchAction::TOUCH_MOUSE
+		|| 0u == (action.MouseButtonsDown & 1u)))
+		_CancelGesture(); // lost capture
+	else if (_pointerOwned && _gesture)
+	{
+		if (auto point = _PointAt(action.Position, true))
+		{
+			_gesture->Update(*point);
+			_UpdatePreview();
+			if (_gesture->Rejected())
+				_SetFeedback("Cannot map this drag to source MIDI");
+		}
+	}
+	else if (auto point = _PointAt(action.Position, false))
+	{
+		if (auto loop = _midiLoop.lock())
+			if (auto model = loop->Model())
+				model->SetEditorHover(static_cast<float>(point->U), point->Pitch);
+	}
+	else if (auto loop = _midiLoop.lock())
+		if (auto model = loop->Model()) model->SetEditorHover(-1.0f, -1);
+	return _Eaten();
+}
+
+std::optional<actions::ActionResult> LoopGridEditor::OnAction(const actions::KeyAction& action)
+{
+	if (!IsEngaged())
+		return std::nullopt;
+	if (27u == action.KeyChar && actions::KeyAction::KEY_UP == action.KeyActionType)
+		Close();
+	if (90u == action.KeyChar && actions::KeyAction::KEY_UP == action.KeyActionType
+		&& (base::Action::MODIFIER_CTRL & action.Modifiers))
+	{
+		_CancelGesture();
+		const bool redo = (base::Action::MODIFIER_SHIFT & action.Modifiers) != 0;
+		const auto accepted = redo ? _host.Undo.Redo() : _host.Undo.Undo();
+		_SetFeedback(accepted ? (redo ? "MIDI edit redone" : "MIDI edit undone")
+			: "No applicable MIDI edit");
+	}
+	return _Eaten();
+}
+
+std::optional<actions::ActionResult> LoopGridEditor::TryOpenFromKey(const actions::KeyAction& action)
+{
+	if (!((69u == action.KeyChar) && actions::KeyAction::KEY_UP == action.KeyActionType
+		&& base::Action::MODIFIER_NONE == action.Modifiers))
+		return std::nullopt;
+	std::shared_ptr<engine::LoopTake> take;
+	std::shared_ptr<engine::Loop> audioLoop;
+	std::shared_ptr<MidiLoop> midiLoop;
+	if (FindCandidate(take, audioLoop, midiLoop))
+		Open(take, audioLoop, midiLoop);
+	else
+		_SetFeedback("Select and hover one loop to edit");
+	return _Eaten();
+}
