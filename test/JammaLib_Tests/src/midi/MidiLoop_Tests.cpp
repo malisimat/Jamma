@@ -15,6 +15,7 @@
 #include "engine/Quantiser.h"
 #include "midi/MidiLoop.h"
 #include "midi/MidiEditOperations.h"
+#include "midi/MidiGridGesture.h"
 #include "midi/MidiLoopEditUndo.h"
 #include "actions/ActionUndoHistory.h"
 #include "graphics/MidiModel.h"
@@ -2230,4 +2231,76 @@ TEST(MidiLoopEdit, TwoGestureUndoRedoFollowsMonotonicRevisions)
 	EXPECT_TRUE(history.Redo());
 	EXPECT_TRUE(history.Redo());
 	EXPECT_EQ(4u, loop->EventCount());
+}
+
+TEST(MidiLoopEdit, EntirePaintGesturePublishesOnceAndUndoRedoPreservesExactTiming)
+{
+	auto take = MakeLoopTake("paint-midi-edit");
+	take->SetGlobalMidiQuantState(io::JamFile::GlobalMidiQuantState::Mixed);
+	take->Record({}, "station", {0u}, {""});
+	take->Play(0u, 100u, 0u);
+	auto settings = take->ResolvedMidiQuantisation();
+	settings.Enabled = true; settings.GrainSamps = 10u;
+	settings.Fraction = MidiQuantisationFraction::Whole; settings.PhaseOffsetSamps = 1;
+	take->SetMidiQuantisation(settings);
+	auto loop = take->GetMidiLoops().at(0u);
+	// Apply the job-side quantisation publication before taking the UI snapshot.
+	ASSERT_TRUE(loop->SetQuantisation(take->ResolvedMidiQuantisation(), take->MidiQuantisationTransportStartSamps()));
+	MidiLoop::EditState before;
+	ASSERT_TRUE(loop->SnapshotForEdit(before));
+	midi::MidiGridGesture paint;
+	ASSERT_TRUE(paint.Begin(before, {0u, 60u, 0.0}, 0u));
+	ASSERT_EQ(midi::MidiGridGesture::Kind::Paint, paint.Mode());
+	ASSERT_TRUE(paint.Update({35u, 60u, 0.35}));
+	EXPECT_EQ(0u, loop->EventCount()); EXPECT_EQ(before.Revision, loop->Revision());
+	std::uint64_t accepted = 0;
+	ASSERT_TRUE(take->PublishMidiEdit(loop, paint.Working(), &accepted));
+	EXPECT_EQ(before.Revision + 1u, accepted);
+	actions::ActionUndoHistory history;
+	auto cursor = std::make_shared<actions::MidiEditRevisionCursor>();
+	history.Add(std::make_shared<actions::MidiLoopEditUndo>(take, loop, before,
+		paint.Working(), accepted, cursor));
+	ASSERT_TRUE(history.Undo()); EXPECT_EQ(0u, loop->EventCount());
+	EXPECT_FALSE(history.Undo()); // Whole paint is exactly one undo entry.
+	ASSERT_TRUE(history.Redo());
+	MidiLoop::EditState after;
+	ASSERT_TRUE(loop->SnapshotForEdit(after));
+	EXPECT_EQ(paint.Working().EventCount, after.EventCount);
+	for (std::size_t i = 0; i < after.EventCount; ++i)
+	{
+		EXPECT_EQ(paint.Working().Events[i].sampleOffset, after.Events[i].sampleOffset);
+		EXPECT_EQ(MidiEvent::ExactTiming, after.Events[i].flags);
+	}
+	midi::MidiGridGesture erase;
+	ASSERT_TRUE(erase.Begin(after, {0u, 60u, 0.0}, 0u));
+	ASSERT_TRUE(erase.Update({35u, 60u, 0.35}));
+	ASSERT_TRUE(take->PublishMidiEdit(loop, erase.Working()));
+	EXPECT_EQ(0u, loop->EventCount());
+	EXPECT_FALSE(take->PublishMidiEdit(loop, after)); // stale publication
+}
+
+TEST(MidiLoopEdit, PartialDisplayedCellPaintPreservesCapturedNoteDespiteRawOverlap)
+{
+	MidiLoop loop;
+	const std::array events{MidiEvent::MakeNoteOn(12u, 2u, 60u, 87u),
+		MidiEvent::MakeNoteOff(28u, 2u, 60u)};
+	loop.ReplaceRecordedEvents(events.data(), events.size(), 100u);
+	MidiQuantisationSettings settings;
+	settings.Enabled = true; settings.GrainSamps = 10u; settings.Fraction = MidiQuantisationFraction::Whole;
+	ASSERT_TRUE(loop.SetQuantisation(settings));
+	MidiLoop::EditState before;
+	ASSERT_TRUE(loop.SnapshotForEdit(before));
+	midi::MidiGridGesture add;
+	ASSERT_TRUE(add.Begin(before, {27u, 60u, 0.27}, 2u));
+	ASSERT_TRUE(loop.PublishEdit(add.Working()));
+	std::vector<MidiEvent> playback(loop.EventCount());
+	for (std::size_t i = 0; i < playback.size(); ++i) ASSERT_TRUE(loop.TryGetPlaybackEvent(i, playback[i]));
+	const auto rendered = midi::MidiNote::ExtractSpans(playback.data(), playback.size(), 100u);
+	ASSERT_EQ(2u, rendered.size());
+	EXPECT_EQ(10u, rendered[0].StartSample); EXPECT_EQ(16u, rendered[0].DurationSamples);
+	EXPECT_EQ(87u, rendered[0].Velocity);
+	EXPECT_EQ(26u, rendered[1].StartSample); EXPECT_EQ(4u, rendered[1].DurationSamples);
+	MidiLoop::ExportState exported;
+	ASSERT_TRUE(loop.SnapshotForExport(exported));
+	EXPECT_EQ(4u, exported.EventCount);
 }

@@ -47,7 +47,7 @@ namespace actions
 				const auto& a = lhs.Events[i];
 				const auto& b = rhs.Events[i];
 				if (a.sampleOffset != b.sampleOffset || a.status != b.status
-					|| a.data1 != b.data1 || a.data2 != b.data2) return false;
+					|| a.data1 != b.data1 || a.data2 != b.data2 || a.flags != b.flags) return false;
 			}
 			return true;
 		}

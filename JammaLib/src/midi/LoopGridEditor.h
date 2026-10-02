@@ -121,6 +121,7 @@ namespace midi
 		void _PublishGesture();
 		void _CancelGesture();
 		void _UpdatePreview();
+		void _UpdateHover(MidiGridGesture::Point point);
 		void _CheckGesture();
 		bool _HandleButton(actions::TouchAction action);
 
@@ -145,6 +146,7 @@ namespace midi
 		bool _buttonPressed = false;
 		bool _buttonShowsClose = false;
 		bool _pointerOwned = false;
+		std::uint64_t _hoverRevision = 0u; // UI-owned; invalidates model-instance targets
 		std::unique_ptr<MidiGridGesture> _gesture;
 		std::shared_ptr<actions::MidiEditRevisionCursor> _revisionCursor;
 		std::vector<CursorEntry> _revisionCursors;

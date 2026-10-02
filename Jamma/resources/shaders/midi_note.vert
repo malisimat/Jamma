@@ -17,6 +17,7 @@ out float EditorCrossNote;
 out vec3 EditorLocalPosition;
 flat out float EditorTopFace;
 flat out vec3 EditorNoteHit;
+flat out int EditorNoteInstance;
 
 uniform mat4 MVP;
 uniform float EditorMorph;
@@ -65,6 +66,7 @@ void main()
     EditorCrossNote = PositionIN.z;
     EditorTopFace = NormalIN.y > 0.5 ? 1.0 : 0.0;
     EditorNoteHit = vec3(startFrac, startFrac + durationFrac, pitch);
+    EditorNoteInstance = gl_InstanceID;
 
     // Preserve the circular scene lighting during the transition to the grid.
     vec3 radialNormal = normalize(vec3(sin(angle), -NormalIN.y * 0.35, cos(angle)));

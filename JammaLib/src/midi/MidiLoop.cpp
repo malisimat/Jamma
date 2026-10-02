@@ -474,7 +474,7 @@ bool MidiLoop::PublishEdit(const EditState& state) noexcept
 		const auto& oldEvent = previous->Raw[oldNonNote++];
 		const auto& newEvent = state.Events[newNonNote++];
 		if (oldEvent.sampleOffset != newEvent.sampleOffset || oldEvent.status != newEvent.status
-			|| oldEvent.data1 != newEvent.data1 || oldEvent.data2 != newEvent.data2)
+			|| oldEvent.data1 != newEvent.data1 || oldEvent.data2 != newEvent.data2 || oldEvent.flags != newEvent.flags)
 		{
 			ReleasePlaybackSnapshot();
 			return false;
@@ -497,11 +497,11 @@ bool MidiLoop::PublishEdit(const EditState& state) noexcept
 		const auto& a = priorEvents[priorTail + i];
 		const auto& b = state.Events[newTail + i];
 		if (a.sampleOffset != b.sampleOffset || a.status != b.status
-			|| a.data1 != b.data1 || a.data2 != b.data2) return false;
+			|| a.data1 != b.data1 || a.data2 != b.data2 || a.flags != b.flags) return false;
 	}
-	std::array<std::uint32_t, TotalNoteSlots> activeStart{};
-	std::bitset<TotalNoteSlots> active;
-	std::bitset<TotalNoteSlots> invalidSlots;
+	std::array<std::uint32_t, TotalNoteSlots * 2u> activeStart{};
+	std::bitset<TotalNoteSlots * 2u> active;
+	std::bitset<TotalNoteSlots * 2u> invalidSlots;
 	std::uint32_t previousOffset = 0u;
 	int previousPriority = -1;
 	for (std::size_t i = 0u; i < state.EventCount; ++i)
@@ -515,7 +515,7 @@ bool MidiLoop::PublishEdit(const EditState& state) noexcept
 		previousPriority = priority;
 		if (!event.IsNoteOn() && !event.IsNoteOff()) continue;
 		if (event.data1 >= 128u) return false;
-		const auto slot = NoteSlot(event.Channel(), event.data1);
+		const auto slot = event.PairingSlot();
 		if (event.IsNoteOn())
 		{
 			if (active.test(slot)) invalidSlots.set(slot);
@@ -531,7 +531,7 @@ bool MidiLoop::PublishEdit(const EditState& state) noexcept
 	// An unmatched NoteOn legitimately lasts to the loop seam, where playback
 	// emits a synthetic off. Existing malformed overlap on an untouched slot
 	// must not prevent a separate note from being edited.
-	for (std::size_t slot = 0u; slot < TotalNoteSlots; ++slot)
+	for (std::size_t slot = 0u; slot < TotalNoteSlots * 2u; ++slot)
 	{
 		if (!invalidSlots.test(slot)) continue;
 		std::size_t oldIndex = 0u;
@@ -540,15 +540,15 @@ bool MidiLoop::PublishEdit(const EditState& state) noexcept
 		{
 			while (oldIndex < priorCount &&
 				(!priorEvents[oldIndex].IsNoteOn() && !priorEvents[oldIndex].IsNoteOff()
-					|| NoteSlot(priorEvents[oldIndex].Channel(), priorEvents[oldIndex].data1) != slot)) ++oldIndex;
+					|| priorEvents[oldIndex].PairingSlot() != slot)) ++oldIndex;
 			while (newIndex < state.EventCount &&
 				(!state.Events[newIndex].IsNoteOn() && !state.Events[newIndex].IsNoteOff()
-					|| NoteSlot(state.Events[newIndex].Channel(), state.Events[newIndex].data1) != slot)) ++newIndex;
+					|| state.Events[newIndex].PairingSlot() != slot)) ++newIndex;
 			if (oldIndex == priorCount || newIndex == state.EventCount) break;
 			const auto& oldEvent = priorEvents[oldIndex++];
 			const auto& newEvent = state.Events[newIndex++];
 			if (oldEvent.sampleOffset != newEvent.sampleOffset || oldEvent.status != newEvent.status
-				|| oldEvent.data1 != newEvent.data1 || oldEvent.data2 != newEvent.data2) return false;
+				|| oldEvent.data1 != newEvent.data1 || oldEvent.data2 != newEvent.data2 || oldEvent.flags != newEvent.flags) return false;
 		}
 		if (oldIndex != priorCount || newIndex != state.EventCount) return false;
 	}

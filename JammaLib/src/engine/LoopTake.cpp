@@ -311,7 +311,7 @@ std::optional<std::shared_ptr<LoopTake>> LoopTake::FromFile(LoopTakeParams takeP
 		for (std::size_t eventIndex = 0u; eventIndex < sidecar->Events.size(); ++eventIndex)
 		{
 			const auto& event = sidecar->Events[eventIndex];
-			restored.Loop.Events[eventIndex] = { event.SampleOffset, event.Status, event.Data1, event.Data2 };
+			restored.Loop.Events[eventIndex] = { event.SampleOffset, event.Status, event.Data1, event.Data2, event.Flags };
 		}
 		for (std::size_t laneIndex = 0u; laneIndex < sidecar->Lanes.size(); ++laneIndex)
 		{

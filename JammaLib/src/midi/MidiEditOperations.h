@@ -34,6 +34,57 @@ namespace midi
 			return true;
 		}
 
+		static bool RemoveNote(MidiLoop::EditState& state, std::size_t onIndex) noexcept
+		{
+			if (onIndex >= state.EventCount || !state.Events[onIndex].IsNoteOn()) return false;
+			const auto on = state.Events[onIndex];
+			std::size_t off = state.EventCount;
+			// Any still active predecessor makes this source identity ambiguous.
+			bool active = false;
+			for (std::size_t i = 0; i < onIndex; ++i)
+				if (state.Events[i].PairingSlot() == on.PairingSlot())
+				{
+					if (state.Events[i].IsNoteOn()) active = true;
+					if (state.Events[i].IsNoteOff()) active = false;
+				}
+			if (active) return false;
+			for (std::size_t i = onIndex + 1u; i < state.EventCount; ++i)
+			{
+				const auto& ev = state.Events[i];
+				if (ev.sampleOffset >= state.LoopLengthSamps) break;
+				if (ev.PairingSlot() != on.PairingSlot()) continue;
+				if (ev.IsNoteOn()) return false;
+				if (ev.IsNoteOff()) { off = i; break; }
+			}
+			std::size_t kept = 0;
+			for (std::size_t i = 0; i < state.EventCount; ++i)
+				if (i != onIndex && i != off) state.Events[kept++] = state.Events[i];
+			state.EventCount = kept;
+			return true;
+		}
+
+		// Exact editor timing represents every physical cell, including seam
+		// fragments with no inverse snapped onset. Both endpoints carry the flag.
+		static bool CreateExact(MidiLoop::EditState& state, std::uint32_t start,
+			std::uint32_t end, std::uint8_t channel, std::uint8_t pitch) noexcept
+		{
+			if (start >= end || end > state.LoopLengthSamps
+				|| channel >= 16u || pitch >= 128u) return false;
+			if (state.EventCount > MidiLoop::DefaultCapacity - (end == state.LoopLengthSamps ? 1u : 2u))
+				return false;
+			auto on = MidiEvent::MakeNoteOn(start, channel, pitch, 96u);
+			on.flags = MidiEvent::ExactTiming;
+			state.Events[state.EventCount++] = on;
+			if (end < state.LoopLengthSamps)
+			{
+				auto off = MidiEvent::MakeNoteOff(end, channel, pitch);
+				off.flags = MidiEvent::ExactTiming;
+				state.Events[state.EventCount++] = off;
+			}
+			MidiNote::SortMidiEvents(state.Events.data(), state.EventCount);
+			return true;
+		}
+
 		// Event index identifies the exact NoteOn in this revision. Reject an
 		// overlapping duplicate whose NoteOff pairing is ambiguous.
 		static bool MoveOrTrim(MidiLoop::EditState& state, std::size_t onIndex,
@@ -48,7 +99,7 @@ namespace midi
 			for (std::size_t i = onIndex + 1u; i < state.EventCount; ++i)
 			{
 				const auto& ev = state.Events[i];
-				if (ev.Channel() != on.Channel() || ev.data1 != on.data1) continue;
+				if (ev.PairingSlot() != on.PairingSlot()) continue;
 				if (ev.IsNoteOn()) return false;
 				if (ev.IsNoteOff()) { offIndex = i; break; }
 			}
@@ -71,7 +122,11 @@ namespace midi
 				}
 			}
 			else if (newEnd < state.LoopLengthSamps)
-				state.Events[state.EventCount++] = MidiEvent::MakeNoteOff(newEnd, on.Channel(), newPitch);
+			{
+				auto off = MidiEvent::MakeNoteOff(newEnd, on.Channel(), newPitch);
+				off.flags = on.flags;
+				state.Events[state.EventCount++] = off;
+			}
 			MidiNote::SortMidiEvents(state.Events.data(), state.EventCount);
 			return true;
 		}

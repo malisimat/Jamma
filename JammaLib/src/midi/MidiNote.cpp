@@ -33,7 +33,7 @@ std::vector<MidiNote> MidiNote::ExtractSpans(const MidiEvent* events,
 
 	spans.reserve(eventCount / 2u);
 
-	std::array<ActiveNote, MidiNote::TotalNoteSlots> activeNotes{};
+	std::array<ActiveNote, MidiNote::TotalNoteSlots * 2u> activeNotes{};
 
 	for (std::size_t i = 0; i < eventCount; ++i)
 	{
@@ -43,7 +43,7 @@ std::vector<MidiNote> MidiNote::ExtractSpans(const MidiEvent* events,
 
 		const auto channel = ev.Channel();
 		const auto note = static_cast<std::uint8_t>(ev.data1 & 0x7F);
-		const auto slot = MidiNote::NoteSlot(channel, note);
+		const auto slot = ev.PairingSlot();
 		auto& active = activeNotes[slot];
 
 		if (ev.IsNoteOn())

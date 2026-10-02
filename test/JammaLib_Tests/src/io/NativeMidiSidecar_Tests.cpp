@@ -67,3 +67,26 @@ TEST(NativeMidiSidecar, RejectsTruncatedAndInvalidAssets)
 	std::stringstream out;
 	EXPECT_FALSE(io::NativeMidiSidecar::ToStream(stream, out, &error));
 }
+
+TEST(NativeMidiSidecar, ExactEditorFlagsRoundTripAndLegacyEventsDefaultToRecordedTiming)
+{
+	io::NativeMidiSidecar::Stream stream;
+	stream.LogicalLength = 11u;
+	stream.Events = {{1u, 0x90u, 60u, 96u, 1u}, {4u, 0x80u, 60u, 0u, 1u}};
+	std::stringstream bytes;
+	ASSERT_TRUE(io::NativeMidiSidecar::ToStream(stream, bytes));
+	const auto parsed = io::NativeMidiSidecar::FromStream(bytes);
+	ASSERT_TRUE(parsed);
+	EXPECT_EQ(1u, parsed->Events[0].Flags); EXPECT_EQ(1u, parsed->Events[1].Flags);
+	// Version 0.2 used seven bytes per event; construct that old asset exactly.
+	auto legacy = bytes.str();
+	legacy[10] = 2; // minor version (little endian)
+	legacy.erase(49u, 1u); legacy.erase(41u, 1u); // metadata bytes after 34-byte header
+	std::stringstream oldBytes(legacy);
+	const auto old = io::NativeMidiSidecar::FromStream(oldBytes);
+	ASSERT_TRUE(old);
+	EXPECT_EQ(0u, old->Events[0].Flags); EXPECT_EQ(0u, old->Events[1].Flags);
+	stream.Events[0].Flags = 2u;
+	std::stringstream invalid;
+	EXPECT_FALSE(io::NativeMidiSidecar::ToStream(stream, invalid));
+}

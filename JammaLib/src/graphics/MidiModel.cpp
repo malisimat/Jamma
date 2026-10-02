@@ -136,6 +136,9 @@ void MidiModel::Draw3d(DrawContext& ctx, unsigned int numInstances, base::DrawPa
 	glCtx.SetUniform("EditorVisibleRows", _editorVisibleRows);
 	glCtx.SetUniform("EditorHoverU", _editorHoverU);
 	glCtx.SetUniform("EditorHoverPitch", _editorHoverPitch);
+	glCtx.SetUniform("EditorTargetStart", _editorTargetStart);
+	glCtx.SetUniform("EditorTargetEnd", _editorTargetEnd);
+	glCtx.SetUniform("EditorTargetInstance", _editorTargetInstance);
 	const auto editorLength = _displayLengthSamps.load(std::memory_order_relaxed);
 	const auto editorRadius = editorLength == 0u ? 50.0f : static_cast<float>(std::clamp(
 		70.0 * std::log(static_cast<double>(editorLength)) - 600.0, 50.0, 400.0));
@@ -213,6 +216,15 @@ void MidiModel::SetEditorHover(float u, int pitch) noexcept
 {
 	_editorHoverU = u >= 0.0f && u < 1.0f ? u : -1.0f;
 	_editorHoverPitch = pitch >= 0 && pitch < 128 ? pitch : -1;
+	_editorTargetStart = _editorTargetEnd = -1.0f;
+	_editorTargetInstance = -1;
+}
+
+void MidiModel::SetEditorTarget(float startU, float endU, int pitch, int noteIndex) noexcept
+{
+	SetEditorHover(startU, pitch);
+	_editorTargetStart = startU; _editorTargetEnd = endU;
+	_editorTargetInstance = noteIndex < 0 ? -1 : noteIndex + (_midiParams.DrawSelectionRing ? 1 : 0);
 }
 
 void MidiModel::SetEditorPreview(std::vector<EditorPreviewSpan> spans,
@@ -229,6 +241,7 @@ void MidiModel::UpdateEditorGrid(std::uint32_t loopLength,
 	if (_editorGridSignatureValid && _editorGridLength == loopLength
 		&& _editorGridSettings == settings && _editorGridTransportStart == transportStart)
 		return;
+	SetEditorHover(-1.0f, -1);
 	_editorGridSignatureValid = true;
 	_editorGridLength = loopLength;
 	_editorGridSettings = settings;

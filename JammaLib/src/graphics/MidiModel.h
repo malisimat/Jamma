@@ -79,6 +79,7 @@ namespace graphics
 		int EditorVisibleRows() const noexcept { return _editorVisibleRows; }
 		bool EditorGridResolved() const noexcept { return _editorGridResolved; }
 		void SetEditorHover(float u, int pitch) noexcept;
+		void SetEditorTarget(float startU, float endU, int pitch, int noteIndex) noexcept;
 		void SetEditorPreview(std::vector<EditorPreviewSpan> spans,
 			std::uint32_t loopLength);
 		void UpdateEditorGrid(std::uint32_t loopLength,
@@ -138,6 +139,8 @@ namespace graphics
 		int _editorVisibleRows = 24;
 		float _editorHoverU = -1.0f;
 		int _editorHoverPitch = -1;
+		float _editorTargetStart = -1.0f, _editorTargetEnd = -1.0f;
+		int _editorTargetInstance = -1;
 		std::vector<float> _editorGridVertices;
 		std::vector<EditorPreviewSpan> _editorPreviewSpans;
 		std::uint32_t _editorPreviewLength = 0u;

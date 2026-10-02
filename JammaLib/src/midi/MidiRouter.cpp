@@ -540,7 +540,7 @@ MidiConnectionResult MidiRouter::InitMidi(const io::UserConfig& cfg,
 				ingress.status = status;
 				ingress.data1 = data1;
 				ingress.data2 = data2;
-				ingress._pad = 0u;
+				ingress.flags = 0u;
 					const auto rigRevision = notification->RigRevision.load(std::memory_order_acquire);
 					endpoint->Ingress.Push({ ingress, rigRevision, timestamp.EventMicros,
 						callbackArrivalMicros, deltaSeconds, timestamp.Source });

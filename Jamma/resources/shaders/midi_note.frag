@@ -11,6 +11,7 @@ in float EditorCrossNote;
 in vec3 EditorLocalPosition;
 flat in float EditorTopFace;
 flat in vec3 EditorNoteHit;
+flat in int EditorNoteInstance;
 
 out vec4 ColorOUT;
 
@@ -25,6 +26,9 @@ uniform int GeometryPass;
 uniform float EditorPlayFrac;
 uniform float EditorHoverU;
 uniform int EditorHoverPitch;
+uniform float EditorTargetStart;
+uniform float EditorTargetEnd;
+uniform int EditorTargetInstance;
 uniform int EditorBottomPitch;
 uniform int EditorVisibleRows;
 uniform float SceneDim;
@@ -111,8 +115,7 @@ void main()
             + vec3(0.04) * LoopHover, vec3(1.0));
         noteColor = mix(noteColor, vec3(1.0, 0.43, 0.10),
             0.75 * clamp(LoopPressed, 0.0, 1.0));
-        bool noteHovered = EditorActive > 0.5 && EditorHoverU >= EditorNoteHit.x
-            && EditorHoverU < EditorNoteHit.y
+        bool noteHovered = EditorActive > 0.5 && EditorTargetInstance == EditorNoteInstance
             && EditorHoverPitch == int(EditorNoteHit.z);
         float noteHover = noteHovered ? EditorMorphV : 0.0;
         // Let the top clip to white while the sides retain a little depth.
@@ -147,7 +150,8 @@ void main()
                 + major * vec3(0.04, 0.08, 0.10));
             if (EditorHoverU >= 0.0 && EditorHoverPitch >= 0)
             {
-                float hover = 1.0 - smoothstep(0.0, 0.015, abs(EditorU - EditorHoverU));
+                float hover = EditorTargetInstance < 0 && EditorU >= EditorTargetStart
+                    && EditorU < EditorTargetEnd ? 1.0 : 0.0;
                 float pitchRow = float(EditorHoverPitch - EditorBottomPitch) + 0.5;
                 hover *= 1.0 - smoothstep(0.4, 0.55, abs(EditorPitchRow - pitchRow));
                 ColorOUT.rgb += hover * EditorMorphV * vec3(0.10, 0.35, 0.40);
