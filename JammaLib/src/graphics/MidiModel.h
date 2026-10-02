@@ -48,6 +48,7 @@ namespace graphics
 			std::uint32_t Start = 0u, End = 0u;
 			std::uint8_t Pitch = 60u;
 			bool Fill = true;
+			bool Ghost = false;
 			bool operator==(const EditorPreviewSpan&) const = default;
 		};
 
@@ -82,6 +83,11 @@ namespace graphics
 		std::uint32_t EditorTimeOrigin() const noexcept { return _editorTimeOrigin; }
 		void SetEditorHover(float u, int pitch) noexcept;
 		void SetEditorTarget(float startU, float endU, int pitch, int noteIndex) noexcept;
+		void SetEditorHeld(int noteIndex, int proposedVelocity = -1) noexcept;
+		void ClearEditorHeld() noexcept;
+		std::uint64_t EditorModelGeneration() const noexcept { return _editorModelGeneration; }
+		int EditorHeldInstance() const noexcept { return _editorHeldInstance; }
+		int EditorPreviewVelocity() const noexcept { return _editorPreviewVelocity; }
 		void SetEditorPreview(std::vector<EditorPreviewSpan> spans,
 			std::uint32_t loopLength);
 		void UpdateEditorGrid(std::uint32_t loopLength,
@@ -143,6 +149,9 @@ namespace graphics
 		int _editorHoverPitch = -1;
 		float _editorTargetStart = -1.0f, _editorTargetEnd = -1.0f;
 		int _editorTargetInstance = -1;
+		int _editorHeldInstance = -1;
+		int _editorPreviewVelocity = -1;
+		std::uint64_t _editorModelGeneration = 0u;
 		std::vector<float> _editorGridVertices;
 		std::vector<EditorPreviewSpan> _editorPreviewSpans;
 		std::uint32_t _editorPreviewLength = 0u;

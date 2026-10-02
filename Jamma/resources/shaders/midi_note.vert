@@ -26,6 +26,8 @@ uniform int EditorVisibleRows;
 uniform float EditorGridRadius;
 uniform float EditorTimeOrigin;
 uniform float EditorWrapCopy;
+uniform int EditorHeldInstance;
+uniform float EditorPreviewVelocity;
 
 const float TwoPi = 6.28318530718;
 
@@ -35,6 +37,9 @@ void main()
     float durationFrac = InstanceTimePitch.y;
     float pitchOffset = InstanceTimePitch.z;
     Velocity = InstanceTimePitch.w;
+    if (EditorHeldInstance == gl_InstanceID && InstanceShape.w < 0.5
+        && EditorPreviewVelocity >= 0.0)
+        Velocity = EditorPreviewVelocity;
     IsDisc = InstanceShape.w > 0.5 ? 1.0 : 0.0;
     IsEndCap = (UvIN.y > 1.5) ? 1.0 : 0.0;
 

@@ -43,6 +43,41 @@ TEST(MidiGridVisual, ExactBoundariesReachBothSeamEdges)
 	EXPECT_FLOAT_EQ(1.0f, vertices[vertices.size() - 3u]);
 }
 
+TEST(MidiGridVisual, HeldTargetUsesRingOffsetAndClampsVelocity)
+{
+	graphics::MidiModelParams params;
+	auto model = MidiModel(params);
+	model.UpdateModel({ midi::MidiNote{ 10u, 20u, 0u, 60u, 80u, 0u } }, 100u);
+	model.SetEditorHeld(0, 0);
+	EXPECT_EQ(1, model.EditorHeldInstance());
+	EXPECT_EQ(1, model.EditorPreviewVelocity());
+	model.SetEditorHeld(0, 200);
+	EXPECT_EQ(127, model.EditorPreviewVelocity());
+	model.SetEditorHeld(0);
+	EXPECT_EQ(-1, model.EditorPreviewVelocity());
+	model.SetEditorHeld(1, 90);
+	EXPECT_EQ(-1, model.EditorHeldInstance());
+}
+
+TEST(MidiGridVisual, AppliedReplacementInvalidatesHeldIdentityWithoutViewChanges)
+{
+	graphics::MidiModelParams params;
+	params.DrawSelectionRing = false;
+	auto model = MidiModel(params);
+	const std::vector<midi::MidiNote> spans{ midi::MidiNote{ 10u, 20u, 0u, 60u, 80u, 0u } };
+	model.UpdateModel(spans, 100u);
+	const auto generation = model.EditorModelGeneration();
+	model.SetEditorHeld(0, 90);
+	EXPECT_EQ(0, model.EditorHeldInstance());
+	model.SetEditorPitchRange(30, 36);
+	EXPECT_EQ(generation, model.EditorModelGeneration());
+	EXPECT_EQ(0, model.EditorHeldInstance());
+	model.UpdateModel(spans, 100u);
+	EXPECT_EQ(generation + 1u, model.EditorModelGeneration());
+	EXPECT_EQ(-1, model.EditorHeldInstance());
+	EXPECT_EQ(-1, model.EditorPreviewVelocity());
+}
+
 TEST(MidiGridVisual, LongNotesHaveFixedTessellationAndDistinctEnds)
 {
 	const auto vertices = MidiModel::BuildBaseVerts(32u);

@@ -17,6 +17,13 @@ void main()
         vec2 edgePixels = min(PreviewUv, vec2(1.0) - PreviewUv)
             / max(fwidth(PreviewUv), vec2(1e-6));
         float border = 1.0 - smoothstep(1.5, 2.5, min(edgePixels.x, edgePixels.y));
+        if (Weight < -2.5)
+        {
+            // A destination ghost leaves the velocity body visible underneath.
+            vec3 tint = mix(vec3(0.12, 0.65, 0.82), vec3(0.70, 0.96, 1.0), border);
+            ColorOUT = vec4(tint, mix(0.12, 0.92, border) * reveal);
+            return;
+        }
         vec3 tint = mix(vec3(0.90, 0.40, 0.13), vec3(1.0, 0.72, 0.20), border);
         ColorOUT = vec4(tint, mix(0.82, 1.0, border) * reveal);
         return;

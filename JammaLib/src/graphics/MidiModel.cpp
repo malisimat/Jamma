@@ -141,6 +141,9 @@ void MidiModel::Draw3d(DrawContext& ctx, unsigned int numInstances, base::DrawPa
 	glCtx.SetUniform("EditorTargetStart", _editorTargetStart);
 	glCtx.SetUniform("EditorTargetEnd", _editorTargetEnd);
 	glCtx.SetUniform("EditorTargetInstance", _editorTargetInstance);
+	glCtx.SetUniform("EditorHeldInstance", _editorHeldInstance);
+	glCtx.SetUniform("EditorPreviewVelocity", _editorPreviewVelocity < 0
+		? -1.0f : static_cast<float>(_editorPreviewVelocity) / 127.0f);
 	const auto editorLength = _displayLengthSamps.load(std::memory_order_relaxed);
 	const auto editorRadius = editorLength == 0u ? 50.0f : static_cast<float>(std::clamp(
 		70.0 * std::log(static_cast<double>(editorLength)) - 600.0, 50.0, 400.0));
@@ -231,6 +234,24 @@ void MidiModel::SetEditorTarget(float startU, float endU, int pitch, int noteInd
 	_editorTargetInstance = noteIndex < 0 ? -1 : noteIndex + (_midiParams.DrawSelectionRing ? 1 : 0);
 }
 
+void MidiModel::SetEditorHeld(int noteIndex, int proposedVelocity) noexcept
+{
+	if (noteIndex < 0 || static_cast<unsigned int>(noteIndex) >= _backNoteInstanceCount)
+	{
+		ClearEditorHeld();
+		return;
+	}
+	// Seam copies share gl_InstanceID with the original instance.
+	_editorHeldInstance = noteIndex + (_midiParams.DrawSelectionRing ? 1 : 0);
+	_editorPreviewVelocity = proposedVelocity < 0 ? -1 : std::clamp(proposedVelocity, 1, 127);
+}
+
+void MidiModel::ClearEditorHeld() noexcept
+{
+	_editorHeldInstance = -1;
+	_editorPreviewVelocity = -1;
+}
+
 void MidiModel::SetEditorPreview(std::vector<EditorPreviewSpan> spans,
 	std::uint32_t loopLength)
 {
@@ -304,6 +325,11 @@ void MidiModel::UpdateModel(const std::vector<midi::MidiNote>& spans, std::uint3
 {
 	_displayLengthSamps.store(loopLengthSamps, std::memory_order_relaxed);
 	auto data = BuildInstanceData(spans, loopLengthSamps);
+	// Instance identity is valid only until the next applied model replacement.
+	++_editorModelGeneration;
+	ClearEditorHeld();
+	SetEditorHover(-1.0f, -1);
+	SetEditorPreview({}, loopLengthSamps);
 	_backNoteInstanceCount = data->NoteCount;
 	SetInstanceAttributes(std::move(data->Attributes), data->InstanceCount);
 }
@@ -396,6 +422,10 @@ void MidiModel::ApplyPendingModelUpdate()
 	if (!pending)
 		return;
 
+	++_editorModelGeneration;
+	ClearEditorHeld();
+	SetEditorHover(-1.0f, -1);
+	SetEditorPreview({}, _displayLengthSamps.load(std::memory_order_relaxed));
 	_backNoteInstanceCount = pending->NoteCount;
 	SetInstanceAttributes(std::move(pending->Attributes), pending->InstanceCount);
 }
@@ -498,7 +528,7 @@ void MidiModel::_DrawEditorGrid(GlDrawContext& glCtx)
 				/ _editorVisibleRows;
 			const auto top = (static_cast<float>(preview.Pitch - _editorBottomPitch) + 0.90f)
 				/ _editorVisibleRows;
-			const auto weight = preview.Fill ? -1.0f : -2.0f;
+			const auto weight = preview.Ghost ? -3.0f : preview.Fill ? -1.0f : -2.0f;
 			const auto append = [&](float a, float b) {
 				vertices.insert(vertices.end(), { a, bottom, weight, b, bottom, weight,
 					a, top, weight, a, top, weight, b, bottom, weight, b, top, weight });
