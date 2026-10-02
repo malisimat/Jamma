@@ -49,7 +49,6 @@ namespace midi
 			if (_grid)
 			{
 				_kind = Kind::Paint;
-
 				_visited.resize((_grid->Boundaries.size() - 1u) * 128u, false);
 				_removed.resize(source.EventCount, false);
 				_fill = !_targets.Resolve(point.Sample, point.Pitch, &*_grid).NoteIndex;
@@ -83,7 +82,6 @@ namespace midi
 			point.Sample = std::min(point.Sample, _before.LoopLengthSamps - 1u);
 			if (_kind == Kind::Paint)
 			{
-
 				int seam = 0;
 				if (_last.U > 0.90 && point.U < 0.10) seam = 1;
 				else if (_last.U < 0.10 && point.U > 0.90) seam = -1;
@@ -218,10 +216,10 @@ namespace midi
 			return false;
 		}
 		bool Paint(Point point)
-			{
+		{
 			const auto target = TargetAt(point);
 			if (target.NoteIndex)
-				{
+			{
 				if (_fill) return true;
 				const auto& note = _targets.Notes[*target.NoteIndex];
 				if (_removed[note.On]) return true;
@@ -295,7 +293,7 @@ namespace midi
 				const Point traversed{static_cast<std::uint32_t>(sample),
 					static_cast<std::uint8_t>(std::round(_last.Pitch + pitchDelta * t)), sample / length};
 				if (!Paint(traversed)) return false;
-		}
+			}
 			return Paint(point);
 		}
 

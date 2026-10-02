@@ -72,15 +72,11 @@ namespace midi
 				|| channel >= 16u || pitch >= 128u) return false;
 			if (state.EventCount > MidiLoop::DefaultCapacity - (end == state.LoopLengthSamps ? 1u : 2u))
 				return false;
-			auto on = MidiEvent::MakeNoteOn(start, channel, pitch, 96u);
-			on.flags = MidiEvent::ExactTiming;
-			state.Events[state.EventCount++] = on;
+			state.Events[state.EventCount++] = MidiEvent::MakeNoteOn(start, channel, pitch, 96u)
+				.WithFlags(MidiEvent::ExactTiming);
 			if (end < state.LoopLengthSamps)
-			{
-				auto off = MidiEvent::MakeNoteOff(end, channel, pitch);
-				off.flags = MidiEvent::ExactTiming;
-				state.Events[state.EventCount++] = off;
-			}
+				state.Events[state.EventCount++] = MidiEvent::MakeNoteOff(end, channel, pitch)
+					.WithFlags(MidiEvent::ExactTiming);
 			MidiNote::SortMidiEvents(state.Events.data(), state.EventCount);
 			return true;
 		}
@@ -122,11 +118,8 @@ namespace midi
 				}
 			}
 			else if (newEnd < state.LoopLengthSamps)
-			{
-				auto off = MidiEvent::MakeNoteOff(newEnd, on.Channel(), newPitch);
-				off.flags = on.flags;
-				state.Events[state.EventCount++] = off;
-			}
+				state.Events[state.EventCount++] = MidiEvent::MakeNoteOff(newEnd, on.Channel(), newPitch)
+					.WithFlags(on.flags);
 			MidiNote::SortMidiEvents(state.Events.data(), state.EventCount);
 			return true;
 		}

@@ -26,8 +26,6 @@ struct MidiOverdubActiveNote
 
 struct MidiOverdubSourceSpan
 {
-	static MidiEvent WithFlags(MidiEvent event, std::uint8_t flags) noexcept
-	{ event.flags = flags; return event; }
 	std::uint32_t Start = 0u;
 	std::uint32_t End = 0u;
 	std::uint8_t Channel = 0u;
@@ -130,7 +128,7 @@ static std::size_t BuildSourceSpans(const MidiEvent* sourceEvents,
 	if (!sourceEvents || !outSpans || outCapacity == 0u || sourceLoopLength == 0u)
 		return 0u;
 
-	std::array<MidiOverdubActiveNote, MidiNote::TotalNoteSlots * 2u> activeNotes{};
+	std::array<MidiOverdubActiveNote, MidiEvent::PairingSlotCount> activeNotes{};
 	std::size_t spanCount = 0u;
 
 	const auto emitSpan = [&](std::uint32_t start,
@@ -289,9 +287,9 @@ std::size_t midi::BuildMidiOverdubBaseEvents(const MidiOverdubRenderParams& para
 					const auto segEnd = (window.Start < stop) ? window.Start : stop;
 					if (segEnd > segStart)
 					{
-						if (!AppendEvent(MidiOverdubSourceSpan::WithFlags(MidiEvent::MakeNoteOn(segStart, span.Channel, span.Note, span.Velocity), span.Flags), outEvents, outCapacity, outCount))
+						if (!AppendEvent(MidiEvent::MakeNoteOn(segStart, span.Channel, span.Note, span.Velocity).WithFlags(span.Flags), outEvents, outCapacity, outCount))
 							goto finalize;
-						if (!AppendEvent(MidiOverdubSourceSpan::WithFlags(MidiEvent::MakeNoteOff(segEnd, span.Channel, span.Note), span.Flags), outEvents, outCapacity, outCount))
+						if (!AppendEvent(MidiEvent::MakeNoteOff(segEnd, span.Channel, span.Note).WithFlags(span.Flags), outEvents, outCapacity, outCount))
 							goto finalize;
 					}
 				}
@@ -307,9 +305,9 @@ std::size_t midi::BuildMidiOverdubBaseEvents(const MidiOverdubRenderParams& para
 
 			if (cursor < stop)
 			{
-				if (!AppendEvent(MidiOverdubSourceSpan::WithFlags(MidiEvent::MakeNoteOn(cursor, span.Channel, span.Note, span.Velocity), span.Flags), outEvents, outCapacity, outCount))
+				if (!AppendEvent(MidiEvent::MakeNoteOn(cursor, span.Channel, span.Note, span.Velocity).WithFlags(span.Flags), outEvents, outCapacity, outCount))
 					goto finalize;
-				if (!AppendEvent(MidiOverdubSourceSpan::WithFlags(MidiEvent::MakeNoteOff(stop, span.Channel, span.Note), span.Flags), outEvents, outCapacity, outCount))
+				if (!AppendEvent(MidiEvent::MakeNoteOff(stop, span.Channel, span.Note).WithFlags(span.Flags), outEvents, outCapacity, outCount))
 					goto finalize;
 			}
 		}

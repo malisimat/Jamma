@@ -166,3 +166,23 @@ TEST(MidiNote, DenseContentRemainsStable)
 	EXPECT_EQ((MidiLoop::Capacity() - 2u), spans.back().StartSample);
 	EXPECT_EQ(1u, spans.back().DurationSamples);
 }
+
+TEST(MidiNote, ExactAndRecordedNotesPairIndependentlyAndCarryTimingFlag)
+{
+const std::vector<MidiEvent> events{
+MidiEvent::MakeNoteOn(10u, 0, 60, 90),
+MidiEvent::MakeNoteOn(20u, 0, 60, 96).WithFlags(MidiEvent::ExactTiming),
+MidiEvent::MakeNoteOff(30u, 0, 60).WithFlags(MidiEvent::ExactTiming),
+MidiEvent::MakeNoteOff(40u, 0, 60)
+};
+
+const auto spans = Extract(events, 100u);
+
+ASSERT_EQ(2u, spans.size());
+EXPECT_EQ(20u, spans[0].StartSample);
+EXPECT_EQ(10u, spans[0].DurationSamples);
+EXPECT_EQ(MidiEvent::ExactTiming, spans[0].Flags);
+EXPECT_EQ(10u, spans[1].StartSample);
+EXPECT_EQ(30u, spans[1].DurationSamples);
+EXPECT_EQ(0u, spans[1].Flags);
+}

@@ -39,7 +39,7 @@ namespace midi
 				displayed.data(), false);
 			std::vector<std::size_t> order(count), off(count, count);
 			std::vector<bool> ambiguous(count, false);
-			std::array<std::size_t, 4096u> head, tail;
+			std::array<std::size_t, MidiEvent::PairingSlotCount> head, tail;
 			head.fill(count); tail.fill(count);
 			std::vector<std::size_t> next(count, count);
 			for (std::size_t i = 0; i < count; ++i)
@@ -72,7 +72,7 @@ namespace midi
 					? displayed[a].sampleOffset < displayed[b].sampleOffset
 					: priority(displayed[a]) < priority(displayed[b]);
 			});
-			std::array<std::size_t, 4096u> active;
+			std::array<std::size_t, MidiEvent::PairingSlotCount> active;
 			active.fill(count);
 			const auto emit = [&](std::size_t on, std::uint32_t end, std::size_t displayedOff) {
 				const auto& ev = displayed[on];

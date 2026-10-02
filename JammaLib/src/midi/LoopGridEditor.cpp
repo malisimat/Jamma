@@ -611,28 +611,48 @@ void LoopGridEditor::_CancelGesture()
 void LoopGridEditor::_UpdateHover(MidiGridGesture::Point point)
 {
 	const auto loop = _midiLoop.lock();
-	if (!loop || !loop->Model()) return;
+	const auto model = loop ? loop->Model() : nullptr;
+	if (!model) return;
 	MidiGridTargets::Target target;
 	std::uint32_t length = 0u;
+	bool gridResolved = false;
 	if (_gesture)
 	{
-		if (_gesture->Rejected()) { loop->Model()->SetEditorHover(-1.0f, -1); return; }
-		target = _gesture->TargetAt(point); length = _gesture->Before().LoopLengthSamps;
+		if (_gesture->Rejected())
+		{
+			model->SetEditorHover(-1.0f, -1);
+			return;
+		}
+		target = _gesture->TargetAt(point);
+		length = _gesture->Before().LoopLengthSamps;
+		gridResolved = _gesture->Grid().has_value();
 		_hoverRevision = _gesture->Before().Revision;
 	}
 	else
 	{
 		MidiLoop::EditState source;
-		if (!loop->SnapshotForEdit(source)) { loop->Model()->SetEditorHover(-1.0f, -1); return; }
+		if (!loop->SnapshotForEdit(source))
+		{
+			model->SetEditorHover(-1.0f, -1);
+			return;
+		}
 		const auto grid = LoopGridGeometry::Resolve(source.LoopLengthSamps,
 			source.Quantisation, source.QuantisationTransportStartSamps);
 		target = MidiGridTargets::Build(source).Resolve(point.Sample, point.Pitch, grid ? &*grid : nullptr);
 		length = source.LoopLengthSamps;
+		gridResolved = grid.has_value();
 		_hoverRevision = source.Revision;
 	}
-	if (length)
-		loop->Model()->SetEditorTarget(static_cast<float>(target.Start) / length,
-			static_cast<float>(target.End) / length, target.Pitch, target.NoteIndex ? static_cast<int>(*target.NoteIndex) : -1);
+	if (!length) return;
+	// Free timing has no cell to highlight, so empty space keeps the pointer glow.
+	if (!target.NoteIndex && !gridResolved)
+	{
+		model->SetEditorHover(static_cast<float>(point.U), point.Pitch);
+		return;
+	}
+	model->SetEditorTarget(static_cast<float>(target.Start) / length,
+		static_cast<float>(target.End) / length, target.Pitch,
+		target.NoteIndex ? static_cast<int>(*target.NoteIndex) : -1);
 }
 
 void LoopGridEditor::_UpdatePreview()

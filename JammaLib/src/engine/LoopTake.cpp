@@ -102,9 +102,9 @@ std::size_t engine::LoopTake::_BuildRebasedMidiOverdubSourceEvents(const midi::M
 
 		if (mappedStart < mappedEnd)
 		{
-			if (!_AppendMidiEvent(midi::MidiEvent::MakeNoteOn(mappedStart, span.Channel, span.Note, span.Velocity), outEvents, outCapacity, outCount))
+			if (!_AppendMidiEvent(midi::MidiEvent::MakeNoteOn(mappedStart, span.Channel, span.Note, span.Velocity).WithFlags(span.Flags), outEvents, outCapacity, outCount))
 				return outCount;
-			if (!_AppendMidiEvent(midi::MidiEvent::MakeNoteOff(mappedEnd, span.Channel, span.Note), outEvents, outCapacity, outCount))
+			if (!_AppendMidiEvent(midi::MidiEvent::MakeNoteOff(mappedEnd, span.Channel, span.Note).WithFlags(span.Flags), outEvents, outCapacity, outCount))
 				return outCount;
 			continue;
 		}
@@ -113,18 +113,18 @@ std::size_t engine::LoopTake::_BuildRebasedMidiOverdubSourceEvents(const midi::M
 		{
 			if (mappedEnd > 0u)
 			{
-				if (!_AppendMidiEvent(midi::MidiEvent::MakeNoteOn(0u, span.Channel, span.Note, span.Velocity), outEvents, outCapacity, outCount))
+				if (!_AppendMidiEvent(midi::MidiEvent::MakeNoteOn(0u, span.Channel, span.Note, span.Velocity).WithFlags(span.Flags), outEvents, outCapacity, outCount))
 					return outCount;
-				if (!_AppendMidiEvent(midi::MidiEvent::MakeNoteOff(mappedEnd, span.Channel, span.Note), outEvents, outCapacity, outCount))
+				if (!_AppendMidiEvent(midi::MidiEvent::MakeNoteOff(mappedEnd, span.Channel, span.Note).WithFlags(span.Flags), outEvents, outCapacity, outCount))
 					return outCount;
 			}
 
-			if (!_AppendMidiEvent(midi::MidiEvent::MakeNoteOn(mappedStart, span.Channel, span.Note, span.Velocity), outEvents, outCapacity, outCount))
+			if (!_AppendMidiEvent(midi::MidiEvent::MakeNoteOn(mappedStart, span.Channel, span.Note, span.Velocity).WithFlags(span.Flags), outEvents, outCapacity, outCount))
 				return outCount;
 			continue;
 		}
 
-		if (!_AppendMidiEvent(midi::MidiEvent::MakeNoteOn(0u, span.Channel, span.Note, span.Velocity), outEvents, outCapacity, outCount))
+		if (!_AppendMidiEvent(midi::MidiEvent::MakeNoteOn(0u, span.Channel, span.Note, span.Velocity).WithFlags(span.Flags), outEvents, outCapacity, outCount))
 			return outCount;
 	}
 

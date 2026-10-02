@@ -113,8 +113,8 @@ void MidiQuantisation::QuantiseEvents(const MidiEvent* src,
 	// Track pending NoteOn shifts per (channel, note) slot in FIFO order so
 	// overlapping same-pitch notes pair each NoteOff with the earliest unmatched
 	// NoteOn.
-	std::array<std::vector<std::int64_t>, TotalNoteSlots * 2u> pendingDeltas;
-	std::array<std::size_t, TotalNoteSlots * 2u> pendingReadIndex{};
+	std::array<std::vector<std::int64_t>, MidiEvent::PairingSlotCount> pendingDeltas;
+	std::array<std::size_t, MidiEvent::PairingSlotCount> pendingReadIndex{};
 
 	for (std::size_t i = 0; i < eventCount; ++i)
 	{
@@ -232,8 +232,8 @@ void MidiQuantisation::BuildQuantisedPlaybackEvents(const MidiEvent* src,
 	// Both local and remote grids use one absolute origin and rounded rational
 	// boundaries. A loop whose length is a whole number of intervals repeats on
 	// exactly the same boundaries, even when interval/divisions is fractional.
-	std::array<std::vector<std::int64_t>, TotalNoteSlots * 2u> pendingDeltas;
-	std::array<std::size_t, TotalNoteSlots * 2u> pendingReadIndex{};
+	std::array<std::vector<std::int64_t>, MidiEvent::PairingSlotCount> pendingDeltas;
+	std::array<std::size_t, MidiEvent::PairingSlotCount> pendingReadIndex{};
 	for (std::size_t i = 0u; i < eventCount; ++i)
 	{
 		auto event = src[i];

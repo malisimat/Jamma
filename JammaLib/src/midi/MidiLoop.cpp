@@ -499,9 +499,9 @@ bool MidiLoop::PublishEdit(const EditState& state) noexcept
 		if (a.sampleOffset != b.sampleOffset || a.status != b.status
 			|| a.data1 != b.data1 || a.data2 != b.data2 || a.flags != b.flags) return false;
 	}
-	std::array<std::uint32_t, TotalNoteSlots * 2u> activeStart{};
-	std::bitset<TotalNoteSlots * 2u> active;
-	std::bitset<TotalNoteSlots * 2u> invalidSlots;
+	std::array<std::uint32_t, MidiEvent::PairingSlotCount> activeStart{};
+	std::bitset<MidiEvent::PairingSlotCount> active;
+	std::bitset<MidiEvent::PairingSlotCount> invalidSlots;
 	std::uint32_t previousOffset = 0u;
 	int previousPriority = -1;
 	for (std::size_t i = 0u; i < state.EventCount; ++i)
@@ -531,7 +531,7 @@ bool MidiLoop::PublishEdit(const EditState& state) noexcept
 	// An unmatched NoteOn legitimately lasts to the loop seam, where playback
 	// emits a synthetic off. Existing malformed overlap on an untouched slot
 	// must not prevent a separate note from being edited.
-	for (std::size_t slot = 0u; slot < TotalNoteSlots * 2u; ++slot)
+	for (std::size_t slot = 0u; slot < MidiEvent::PairingSlotCount; ++slot)
 	{
 		if (!invalidSlots.test(slot)) continue;
 		std::size_t oldIndex = 0u;

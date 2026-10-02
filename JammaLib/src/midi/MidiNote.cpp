@@ -9,7 +9,8 @@ void MidiNote::AddSpan(std::vector<MidiNote>& spans,
 	std::uint32_t endSample,
 	std::uint8_t channel,
 	std::uint8_t note,
-	std::uint8_t velocity)
+	std::uint8_t velocity,
+	std::uint8_t flags)
 {
 	if (endSample <= startSample)
 		return;
@@ -19,7 +20,8 @@ void MidiNote::AddSpan(std::vector<MidiNote>& spans,
 		endSample - startSample,
 		static_cast<std::uint8_t>(channel & MidiEvent::ChannelMask),
 		static_cast<std::uint8_t>(note & 0x7F),
-		velocity
+		velocity,
+		flags
 	});
 }
 
@@ -33,7 +35,7 @@ std::vector<MidiNote> MidiNote::ExtractSpans(const MidiEvent* events,
 
 	spans.reserve(eventCount / 2u);
 
-	std::array<ActiveNote, MidiNote::TotalNoteSlots * 2u> activeNotes{};
+	std::array<ActiveNote, MidiEvent::PairingSlotCount> activeNotes{};
 
 	for (std::size_t i = 0; i < eventCount; ++i)
 	{
@@ -50,19 +52,20 @@ std::vector<MidiNote> MidiNote::ExtractSpans(const MidiEvent* events,
 		{
 			if (active.IsActive)
 			{
-				AddSpan(spans, active.StartSample, ev.sampleOffset, channel, note, active.Velocity);
+				AddSpan(spans, active.StartSample, ev.sampleOffset, channel, note, active.Velocity, active.Flags);
 			}
 
 			active.IsActive = true;
 			active.StartSample = ev.sampleOffset;
 			active.Velocity = ev.data2;
+			active.Flags = ev.flags;
 		}
 		else if (ev.IsNoteOff())
 		{
 			if (!active.IsActive)
 				continue;
 
-			AddSpan(spans, active.StartSample, ev.sampleOffset, channel, note, active.Velocity);
+			AddSpan(spans, active.StartSample, ev.sampleOffset, channel, note, active.Velocity, active.Flags);
 			active.IsActive = false;
 		}
 	}
@@ -75,7 +78,7 @@ std::vector<MidiNote> MidiNote::ExtractSpans(const MidiEvent* events,
 
 		const auto channel = static_cast<std::uint8_t>((slot >> 7) & MidiEvent::ChannelMask);
 		const auto note = static_cast<std::uint8_t>(slot & 0x7F);
-		AddSpan(spans, active.StartSample, loopLengthSamps, channel, note, active.Velocity);
+		AddSpan(spans, active.StartSample, loopLengthSamps, channel, note, active.Velocity, active.Flags);
 	}
 
 	return spans;
