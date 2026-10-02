@@ -54,7 +54,6 @@ using namespace utils;
 // ---------------------------------------------------------------------------
 static void PrintNinjamHelp()
 {
-	auto snapshot = ninjam::NinjamSession::GetPublicServerDirectorySnapshot();
 	auto servers = ninjam::NinjamSession::GetReachablePublicServers();
 	std::ostringstream output;
 	output << "[NINJAM] Commands:\n"
@@ -62,9 +61,6 @@ static void PrintNinjamHelp()
 	          << "[NINJAM]   /c <n>  /connect <n> Connect to server by number\n"
 	          << "[NINJAM]   /d  /q  /quit        Disconnect from current server\n"
 	          << "[NINJAM] Servers:\n";
-	if (snapshot.RefreshInFlight)
-		output << "[NINJAM]   Refreshing live metadata from autosong.ninjam.com...\n";
-
 	for (std::size_t i = 0; i < servers.size(); ++i)
 	{
 		output << "[NINJAM]   " << (i + 1) << ". "
@@ -500,6 +496,10 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 {
 	auto consoleLines = std::make_shared<console::LineRing>();
 	console::ConsoleCapture capture(*consoleLines);
+	struct DirectoryShutdown
+	{
+		~DirectoryShutdown() { ninjam::NinjamSession::ShutdownPublicServerDirectory(); }
+	} directoryShutdown;
 	console::ConsoleCapture::EnableForCurrentThread(true);
 	{
 		const DWORD cwdLength = GetCurrentDirectoryW(0, nullptr);
@@ -1236,7 +1236,7 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 	vst::DrainUiThreadDestroyQueue();
 
 	// Join the opted-in Scene job thread before restoring global stream buffers.
-	ninjam::NinjamSession::DisablePublicServerDirectoryOutput();
+	ninjam::NinjamSession::ShutdownPublicServerDirectory();
 	scene.reset();
 	console::ConsoleCapture::EnableForCurrentThread(false);
 	capture.Stop();

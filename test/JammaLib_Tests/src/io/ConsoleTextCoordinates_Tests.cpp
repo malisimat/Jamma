@@ -394,6 +394,57 @@ TEST(ConsoleTextCoordinates, EdgeScrollFocusUsesScrolledRow)
 	selection.Release();
 }
 
+TEST(ConsoleTextCoordinates, BackspaceClearsEmptySelectionAnchor)
+{
+	console::PromptEditor prompt;
+	ASSERT_EQ(prompt.Insert("abc"), console::InputResult::Accepted);
+	prompt.ClickByte(prompt.Caret(), true); // A drag that did not move.
+	prompt.Backspace();
+	EXPECT_EQ(prompt.Text(), "ab");
+	EXPECT_FALSE(prompt.HasSelection());
+	prompt.Backspace();
+	EXPECT_EQ(prompt.Text(), "a");
+}
+
+TEST(ConsoleTextCoordinates, DeletingSeparatorKeepsCaretAtGraphemeBoundary)
+{
+	const std::string left = "\xF0\x9F\x87\xA6";
+	const std::string right = "\xF0\x9F\x87\xA7";
+	for (int operation = 0; operation < 3; ++operation)
+	{
+		console::PromptEditor prompt;
+		ASSERT_EQ(prompt.Insert(left + "x" + right), console::InputResult::Accepted);
+		prompt.ClickByte(left.size());
+		if (operation == 0) prompt.Delete();
+		else if (operation == 1)
+		{
+			prompt.MoveRight();
+			prompt.Backspace();
+		}
+		else
+		{
+			prompt.MoveRight(true);
+			prompt.Backspace();
+		}
+		EXPECT_EQ(prompt.Text(), left + right);
+		EXPECT_TRUE(console::IsGraphemeBoundary(prompt.Text(), prompt.Caret()));
+		prompt.Backspace();
+		EXPECT_TRUE(prompt.Text().empty());
+	}
+}
+
+TEST(ConsoleTextCoordinates, ClipboardUtf16RejectsUnpairedSurrogates)
+{
+	EXPECT_EQ(console::Utf16ToUtf8(L""), std::optional<std::string>(""));
+	EXPECT_EQ(console::Utf16ToUtf8(L"hello"), std::optional<std::string>("hello"));
+	const std::wstring high(1, static_cast<wchar_t>(0xD800));
+	const std::wstring low(1, static_cast<wchar_t>(0xDC00));
+	EXPECT_FALSE(console::Utf16ToUtf8(high));
+	EXPECT_FALSE(console::Utf16ToUtf8(low));
+	EXPECT_FALSE(console::Utf16ToUtf8(high + L"a"));
+	EXPECT_EQ(console::Utf16ToUtf8(high + low), std::optional<std::string>("\xF0\x90\x80\x80"));
+}
+
 TEST(ConsoleTextCoordinates, ClipboardEncodingAndFailureLeaveSelectionIntact)
 {
 	const auto wide = console::Utf8ToUtf16("a\xE6\xB5\x8B\xF0\x9F\xAA\x90");

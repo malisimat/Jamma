@@ -347,10 +347,9 @@ namespace console
 	{
 		if (!Stop() && _worker.joinable())
 		{
-			// At process exit only: retain State in the worker. Reopen never
-			// detaches or creates a second generation while this one is live.
-			OutputDebugStringW(L"[CONSOLE] Worker did not stop before process exit.\n");
-			_worker.detach();
+			// Stop keeps a bounded reopen deadline; destruction must still quiesce
+			// the worker before CRT teardown, including its pipe-writer child.
+			_worker.join();
 		}
 	}
 

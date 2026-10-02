@@ -72,14 +72,18 @@ namespace console
 		void Backspace()
 		{
 			if (HasSelection()) { EraseSelection(); return; }
+			_anchor.reset();
 			const auto first = PreviousGrapheme(_text, _caret);
 			_text.erase(first, _caret - first);
 			_caret = first;
+			RepairCaret();
 		}
 		void Delete()
 		{
 			if (HasSelection()) { EraseSelection(); return; }
+			_anchor.reset();
 			_text.erase(_caret, NextGrapheme(_text, _caret) - _caret);
+			RepairCaret();
 		}
 		void MoveWordLeft(bool selecting = false)
 		{
@@ -107,6 +111,7 @@ namespace console
 			const auto last = _caret;
 			MoveWordLeft();
 			_text.erase(_caret, last - _caret);
+			RepairCaret();
 		}
 		std::string Take()
 		{
@@ -125,6 +130,12 @@ namespace console
 		}
 
 	private:
+		void RepairCaret()
+		{
+			// Erasing a separator can merge the neighbours into one grapheme
+			// (for example, regional indicators). Keep the caret on its boundary.
+			if (!IsGraphemeBoundary(_text, _caret)) _caret = NextGrapheme(_text, _caret);
+		}
 		void BeginMove(bool selecting)
 		{
 			if (selecting) { if (!_anchor) _anchor = _caret; }
@@ -141,6 +152,7 @@ namespace console
 			_text.erase(first, last - first);
 			_caret = first;
 			_anchor.reset();
+			RepairCaret();
 		}
 		std::string _text;
 		std::size_t _caret = 0;

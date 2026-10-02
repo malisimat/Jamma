@@ -8,6 +8,20 @@
 
 namespace console
 {
+	inline std::optional<std::string> Utf16ToUtf8(std::wstring_view text)
+	{
+		if (text.empty()) return std::string{};
+		if (text.size() > static_cast<std::size_t>(INT_MAX)) return std::nullopt;
+		const auto bytes = WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS,
+			text.data(), static_cast<int>(text.size()), nullptr, 0, nullptr, nullptr);
+		if (bytes <= 0) return std::nullopt;
+		std::string result(static_cast<std::size_t>(bytes), '\0');
+		if (WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, text.data(),
+			static_cast<int>(text.size()), result.data(), bytes, nullptr, nullptr) != bytes)
+			return std::nullopt;
+		return result;
+	}
+
 	inline std::optional<std::wstring> Utf8ToUtf16(std::string_view text)
 	{
 		if (text.empty() || text.size() > static_cast<std::size_t>(INT_MAX))

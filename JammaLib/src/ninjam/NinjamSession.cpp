@@ -46,6 +46,10 @@ std::atomic_bool NinjamSession::_PublicServerListFetchInFlight{ false };
 std::mutex NinjamSession::_PublicServerOutputMutex;
 bool NinjamSession::_PublicServerOutputEnabled = true;
 bool NinjamSession::_PublicServerListHasLiveData = false;
+std::mutex NinjamSession::_PublicServerWorkerMutex;
+bool NinjamSession::_PublicServerStopping = false;
+// Defined last so automatic joining also precedes cache/mutex static teardown.
+std::jthread NinjamSession::_PublicServerWorker;
 
 void NinjamSession::WithPublicServerOutput(const std::function<void()>& output)
 {
@@ -53,10 +57,16 @@ void NinjamSession::WithPublicServerOutput(const std::function<void()>& output)
 	if (_PublicServerOutputEnabled) output();
 }
 
-void NinjamSession::DisablePublicServerDirectoryOutput()
+void NinjamSession::ShutdownPublicServerDirectory()
 {
-	std::scoped_lock lock(_PublicServerOutputMutex);
-	_PublicServerOutputEnabled = false;
+	std::scoped_lock workerLock(_PublicServerWorkerMutex);
+	_PublicServerStopping = true;
+	_PublicServerWorker.request_stop();
+	{
+		std::scoped_lock outputLock(_PublicServerOutputMutex);
+		_PublicServerOutputEnabled = false;
+	}
+	if (_PublicServerWorker.joinable()) _PublicServerWorker.join();
 }
 
 std::vector<NinjamSession::PublicServerInfo> NinjamSession::BuildStaticServerList()
@@ -68,7 +78,7 @@ std::vector<NinjamSession::PublicServerInfo> NinjamSession::BuildStaticServerLis
 	return servers;
 }
 
-std::optional<std::string> NinjamSession::FetchAutosongServerListHtml()
+std::optional<std::string> NinjamSession::FetchAutosongServerListHtml(std::stop_token stop)
 {
 	struct ScopedWinHttpHandle
 	{
@@ -134,6 +144,7 @@ std::optional<std::string> NinjamSession::FetchAutosongServerListHtml()
 	if (!request)
 		return std::nullopt;
 
+	if (stop.stop_requested()) return std::nullopt;
 	if (!WinHttpSendRequest(request,
 		WINHTTP_NO_ADDITIONAL_HEADERS,
 		0,
@@ -145,7 +156,7 @@ std::optional<std::string> NinjamSession::FetchAutosongServerListHtml()
 		return std::nullopt;
 	}
 
-	if (!WinHttpReceiveResponse(request, nullptr))
+	if (stop.stop_requested() || !WinHttpReceiveResponse(request, nullptr))
 		return std::nullopt;
 
 	DWORD statusCode = 0;
@@ -162,8 +173,12 @@ std::optional<std::string> NinjamSession::FetchAutosongServerListHtml()
 	}
 
 	std::string body;
+	const auto deadline = std::chrono::steady_clock::now()
+		+ std::chrono::milliseconds(_ServerListFetchTimeoutMs);
 	for (;;)
 	{
+		if (stop.stop_requested() || std::chrono::steady_clock::now() >= deadline)
+			return std::nullopt;
 		DWORD available = 0;
 		if (!WinHttpQueryDataAvailable(request, &available))
 			return std::nullopt;
@@ -172,6 +187,9 @@ std::optional<std::string> NinjamSession::FetchAutosongServerListHtml()
 			break;
 
 		const auto offset = body.size();
+		// Bound memory and shutdown work even if a server streams indefinitely.
+		constexpr std::size_t maxBodyBytes = 1024 * 1024;
+		if (available > maxBodyBytes - offset) return std::nullopt;
 		body.resize(offset + available);
 		DWORD read = 0;
 		if (!WinHttpReadData(request, body.data() + offset, available, &read))
@@ -590,6 +608,8 @@ std::vector<NinjamSession::PublicServerInfo> NinjamSession::GetReachablePublicSe
 bool NinjamSession::RefreshPublicServerDirectoryAsync(std::function<void()> onComplete,
 	std::function<void()> onThreadStart, std::function<void()> onStarted)
 {
+	std::scoped_lock workerLock(_PublicServerWorkerMutex);
+	if (_PublicServerStopping) return false;
 	const auto now = std::chrono::steady_clock::now();
 	{
 		std::scoped_lock lock(_PublicServerListMutex);
@@ -604,47 +624,56 @@ bool NinjamSession::RefreshPublicServerDirectoryAsync(std::function<void()> onCo
 	bool expected = false;
 	if (!_PublicServerListFetchInFlight.compare_exchange_strong(expected, true))
 		return false;
-	try { if (onStarted) onStarted(); }
-	catch (...) { _PublicServerListFetchInFlight = false; throw; }
+	try
+	{
+		if (_PublicServerWorker.joinable()) _PublicServerWorker.join();
+		if (onStarted) onStarted();
+		_PublicServerWorker = std::jthread([onComplete = std::move(onComplete),
+			onThreadStart = std::move(onThreadStart)](std::stop_token stop) mutable {
+			struct FetchCompletion
+			{
+				~FetchCompletion() { _PublicServerListFetchInFlight = false; }
+			} completion;
+			try
+			{
+				if (onThreadStart) onThreadStart();
+				if (stop.stop_requested()) return;
 
-	std::thread([onComplete = std::move(onComplete),
-		onThreadStart = std::move(onThreadStart)]() mutable {
-		if (onThreadStart) onThreadStart();
-		auto clearInFlight = []() { _PublicServerListFetchInFlight = false; };
+				auto html = FetchAutosongServerListHtml(stop);
+				if (stop.stop_requested()) return;
+				if (!html.has_value())
+				{
+					WithPublicServerOutput([] {
+						std::cout << "[NINJAM] Live server refresh timed out; using cached server list" << std::endl;
+					});
+					return;
+				}
 
-		auto html = FetchAutosongServerListHtml();
-		if (!html.has_value())
-		{
-			clearInFlight();
-			WithPublicServerOutput([] {
-				std::cout << "[NINJAM] Live server refresh timed out; using cached server list" << std::endl;
-			});
-			return;
-		}
+				auto parsed = ParseAutosongServerList(html.value());
+				if (parsed.empty())
+				{
+					WithPublicServerOutput([] {
+						std::cout << "[NINJAM] Live server refresh returned no parsable entries" << std::endl;
+					});
+					return;
+				}
 
-		auto parsed = ParseAutosongServerList(html.value());
-		if (parsed.empty())
-		{
-			clearInFlight();
-			WithPublicServerOutput([] {
-				std::cout << "[NINJAM] Live server refresh returned no parsable entries" << std::endl;
-			});
-			return;
-		}
+				{
+					std::scoped_lock lock(_PublicServerListMutex);
+					_PublicServerListCache = MergeServerLists(parsed);
+					_PublicServerListLastFetch = std::chrono::steady_clock::now();
+					_PublicServerListHasLiveData = true;
+				}
 
-		{
-			std::scoped_lock lock(_PublicServerListMutex);
-			_PublicServerListCache = MergeServerLists(parsed);
-			_PublicServerListLastFetch = std::chrono::steady_clock::now();
-			_PublicServerListHasLiveData = true;
-		}
-
-		clearInFlight();
-		WithPublicServerOutput([&] {
-			std::cout << "[NINJAM] Live server metadata refreshed" << std::endl;
-			if (onComplete) onComplete();
+				WithPublicServerOutput([&] {
+					std::cout << "[NINJAM] Live server metadata refreshed" << std::endl;
+					if (onComplete) onComplete();
+				});
+			}
+			catch (...) {} // Callback/fetch failures must not terminate the process.
 		});
-	}).detach();
+	}
+	catch (...) { _PublicServerListFetchInFlight = false; throw; }
 
 	return true;
 }

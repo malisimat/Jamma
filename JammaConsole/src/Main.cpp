@@ -62,16 +62,9 @@ struct ConsoleClientState
 				if (length > console::MaxInputBytes) tooLong = true;
 				else if (length < capacity)
 				{
-					const auto bytes = WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS,
-						wide, static_cast<int>(length), nullptr, 0, nullptr, nullptr);
-					if (bytes > static_cast<int>(console::MaxInputBytes)) tooLong = true;
-					else if (bytes >= 0)
-					{
-						std::string text(static_cast<std::size_t>(bytes), '\0');
-						if (!bytes || WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, wide,
-							static_cast<int>(length), text.data(), bytes, nullptr, nullptr) == bytes)
-							result = std::move(text);
-					}
+					auto text = console::Utf16ToUtf8(std::wstring_view(wide, length));
+					if (text && text->size() > console::MaxInputBytes) tooLong = true;
+					else result = std::move(text);
 				}
 				GlobalUnlock(handle);
 			}
@@ -84,6 +77,25 @@ struct ConsoleClientState
 		for (int index = 1; index + 1 < argc; ++index)
 			if (std::wstring_view(argv[index]) == name) return argv[index + 1];
 		return {};
+	}
+	void SignalStop(HANDLE stop)
+	{
+		// Update each wait predicate under its wait mutex, preventing a stop
+		// notification from landing between the predicate check and the wait.
+		{
+			std::scoped_lock lock(OutboxMutex, EdgeMutex);
+			SetEvent(stop);
+		}
+		OutboxReady.notify_all();
+		EdgeReady.notify_all();
+	}
+	void SetEdgeDirection(int direction)
+	{
+		{
+			std::scoped_lock lock(EdgeMutex);
+			EdgeDirection.store(direction, std::memory_order_release);
+		}
+		EdgeReady.notify_one();
 	}
 	std::mutex InboxMutex;
 	HWND ClipboardOwner = nullptr;
@@ -382,7 +394,7 @@ int wmain(int argc, wchar_t** argv)
 			if (mouse.button == ftxui::Mouse::Left && mouse.motion == ftxui::Mouse::Pressed)
 			{
 				state.Selection.Release();
-				state.EdgeDirection.store(0, std::memory_order_release);
+				state.SetEdgeDirection(0);
 				if (height >= 2 && mouse.y == height - 2)
 				{
 					const auto caret = state.Prompt.Caret();
@@ -419,8 +431,7 @@ int wmain(int argc, wchar_t** argv)
 				{
 					const auto delta = console::EdgeScrollDelta(mouse.y - 2, viewport);
 					state.EdgeX.store(mouse.x, std::memory_order_relaxed);
-					state.EdgeDirection.store(delta, std::memory_order_release);
-					if (delta) state.EdgeReady.notify_one();
+					state.SetEdgeDirection(delta);
 					if (delta < 0) state.Transcript.ScrollUp(width, 1);
 					else if (delta > 0) state.Transcript.ScrollDown(width, 1);
 					state.VisibleRows = state.Transcript.Visible(width, viewport);
@@ -438,7 +449,7 @@ int wmain(int argc, wchar_t** argv)
 				&& state.Selection.Dragging != console::SelectionRegion::None)
 			{
 				state.Selection.Release();
-				state.EdgeDirection.store(0, std::memory_order_release);
+				state.SetEdgeDirection(0);
 				return true;
 			}
 		}
@@ -460,7 +471,7 @@ int wmain(int argc, wchar_t** argv)
 			}
 			if (!console::WriteMessage(pipe.Get(), stop.Get(), request))
 			{
-				SetEvent(stop.Get());
+				state.SignalStop(stop.Get());
 				std::scoped_lock lock(state.PostMutex);
 				screen.Exit();
 				break;
@@ -517,7 +528,7 @@ int wmain(int argc, wchar_t** argv)
 		std::scoped_lock postLock(state.PostMutex);
 		if (WaitForSingleObject(stop.Get(), 0) != WAIT_OBJECT_0)
 		{
-			SetEvent(stop.Get());
+			state.SignalStop(stop.Get());
 			screen.Exit();
 		}
 	});
@@ -578,7 +589,7 @@ int wmain(int argc, wchar_t** argv)
 	if (hasInputMode) SetConsoleMode(inputHandle, originalInputMode);
 	{
 		std::scoped_lock lock(state.PostMutex);
-		SetEvent(stop.Get());
+		state.SignalStop(stop.Get());
 	}
 	state.EdgeReady.notify_all();
 	edgeTimer.join();

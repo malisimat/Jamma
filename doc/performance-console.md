@@ -33,7 +33,7 @@ or `/connect <number>` connects using a number from that list. `/d`, `/q`,
 `/quit`, `/exit`, and `/disconnect` disconnect. Lines without a leading slash
 are NINJAM chat; unknown slash commands show a hint.
 
-In the companion, **F1** shows input and selection help. Arrow keys and
+In the companion, **F1** shows NINJAM command help and the server list. Arrow keys and
 Page Up/Down scroll the transcript; **Ctrl+F** returns to the newest entry.
 The prompt supports caret and word editing. **Ctrl+V** pastes validated text;
 **Ctrl+C** copies selected prompt or transcript text. A left drag selects text
