@@ -79,7 +79,9 @@ Scene::Scene(SceneParams params,
 		_camera, _undoHistory, _sceneMutex, _stations,
 		[this]() { return _hoverElement3d.lock(); },
 		[this](float aspect) { return _camera.Projection(aspect, _StationCentre(_stations)) * _camera.ViewMatrix(); },
-		[this]() { _OnLoopGridEditorOpened(); } },
+		[this]() { _OnLoopGridEditorOpened(); },
+		[this](int button, utils::Position2d anchor) { return _beginRelativePointer && _beginRelativePointer(button, anchor); },
+		[this](int button) { if (_endRelativePointer) _endRelativePointer(button); } },
 		params.Size)
 {
 	_quantisation.SetClock(std::make_shared<Timer>());
@@ -3162,4 +3164,12 @@ void Scene::_UpdateStationQuantisation(std::shared_ptr<base::GuiElement> candida
 void Scene::_ClearStationQuantisation()
 {
 	_quantisation.ClearStationHints(_stations);
+}
+
+void Scene::SetRelativePointerHost(std::function<bool(int, utils::Position2d)> begin,
+	std::function<void(int)> end)
+{
+	_loopEditor.CancelInput();
+	_beginRelativePointer = std::move(begin);
+	_endRelativePointer = std::move(end);
 }

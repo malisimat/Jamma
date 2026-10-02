@@ -47,6 +47,7 @@ Window::Window(Scene& scene,
 	_highlightPass(ImageFullscreenParams(base::DrawableParams{""}, "blur"))
 {
 	_scene->InitGui();
+	_InstallRelativePointerHost();
 
 	_config.Size = { scene.GetSize().Width, scene.GetSize().Height };
 	_config.Position = { scene.Position().X, scene.Position().Y};
@@ -57,6 +58,8 @@ Window::Window(Scene& scene,
 
 Window::~Window()
 {
+	CancelMouseCapture();
+	_scene->SetRelativePointerHost({}, {});
 	Release();
 }
 
@@ -418,6 +421,7 @@ void Window::SetTrackingMouse(bool tracking)
 
 void Window::Resize(Size2d size)
 {
+	if (HasRelativePointer()) CancelMouseCapture();
 	if (size.Width < 1)
 		size.Width = 1;
 	if (size.Height < 1)
@@ -465,6 +469,7 @@ void Window::ApplyPendingResize()
 
 void Window::SetWindowState(WindowState state)
 {
+	if (HasRelativePointer()) CancelMouseCapture();
 	_config.State = state;
 }
 
@@ -551,6 +556,7 @@ void Window::Release()
 	if (_released)
 		return;
 
+	CancelMouseCapture();
 	_released = true;
 
 	if (_dc && _rc)
@@ -608,6 +614,13 @@ ActionResult Window::OnAction(WindowAction winAction)
 
 ActionResult Window::OnAction(TouchAction touchAction)
 {
+	if (HasRelativePointer() && touchAction.Touch == TouchAction::TOUCH_MOUSE
+		&& touchAction.State == TouchAction::TOUCH_UP && touchAction.Index == _relativeButton)
+	{
+		if (!_RelativePointerValid() || !SetCursorPos(_relativeAnchorScreen.x, _relativeAnchorScreen.y))
+			CancelMouseCapture();
+		else touchAction.Position = _relativeAnchor;
+	}
 	_cachedCursorPosition = touchAction.Position;
 	_cachedCursorModifiers = touchAction.Modifiers;
 	switch (touchAction.Touch)
@@ -619,7 +632,7 @@ ActionResult Window::OnAction(TouchAction touchAction)
 			return _scene->OnAction(touchAction);
 		}
 
-		if (0 == _buttonsDown)
+		if (0 == _buttonsDown && touchAction.State == TouchAction::TOUCH_DOWN && _wnd)
 			SetCapture(_wnd);
 
 		switch (touchAction.State)
@@ -633,8 +646,6 @@ ActionResult Window::OnAction(TouchAction touchAction)
 			touchAction.Value = (1 << touchAction.Index);
 			_forcePick = true;
 
-			if (_buttonsDown == 0)
-				ReleaseCapture();
 			break;
 		}
 		break;
@@ -642,21 +653,28 @@ ActionResult Window::OnAction(TouchAction touchAction)
 
 	touchAction.MouseButtonsDown = _buttonsDown;
 
-	return _scene->OnAction(touchAction);
+	const auto result = _scene->OnAction(touchAction);
+	if (touchAction.Touch == TouchAction::TOUCH_MOUSE && touchAction.State == TouchAction::TOUCH_UP)
+	{
+		EndRelativePointer(touchAction.Index);
+		if (_buttonsDown == 0u && _wnd && GetCapture() == _wnd) ReleaseCapture();
+	}
+	return result;
 }
 
 ActionResult Window::OnAction(TouchMoveAction touchAction)
 {
 	_cachedCursorPosition = touchAction.Position;
 	_cachedCursorModifiers = touchAction.Modifiers;
-	_hover3dDirty = true;
+	if (!touchAction.IsRelative) _hover3dDirty = true;
 
 	return _scene->OnAction(touchAction);
 }
 
 bool Window::CancelMouseCapture()
 {
-	if (_buttonsDown == 0u) return false;
+	if (_buttonsDown == 0u && !HasRelativePointer()) return false;
+	EndRelativePointer(_relativeButton);
 	_buttonsDown = 0u;
 	TouchMoveAction cancelled;
 	cancelled.Touch = TouchAction::TOUCH_MOUSE;
@@ -716,8 +734,11 @@ ActionResult Window::OnAction(KeyAction keyAction)
 
 void Window::ReplaceScene(Scene& scene)
 {
+	CancelMouseCapture();
+	_scene->SetRelativePointerHost({}, {});
 	_scene->ReleaseResources();
 	_scene = &scene;
+	_InstallRelativePointerHost();
 	_scene->InitGui();
 	_scene->SetSize(_config.Size);
 	_scene->InitResources(_resourceLib, true);
@@ -903,6 +924,7 @@ LRESULT CALLBACK Window::WindowProcedure(HWND hWindow, UINT message, WPARAM wPar
 	break;
 	case WM_MOVE:
 	{
+		if (window->HasRelativePointer()) window->CancelMouseCapture();
 		RECT windowRect{};
 		if (GetWindowRect(hWindow, &windowRect))
 		{
@@ -1132,8 +1154,19 @@ LRESULT CALLBACK Window::WindowProcedure(HWND hWindow, UINT message, WPARAM wPar
 		std::cout << "Left Client Area...\n";
 		return 0;
 	}
+	case WM_INPUT:
+	{
+		if (GET_RAWINPUT_CODE_WPARAM(wParam) == RIM_INPUT)
+			window->_HandleRawInput(reinterpret_cast<HRAWINPUT>(lParam));
+		return DefWindowProc(hWindow, message, wParam, lParam);
+	}
+	case WM_DPICHANGED:
+		if (window->HasRelativePointer()) window->CancelMouseCapture();
+		break;
 	case WM_MOUSEMOVE:
 	{
+		// Absolute messages include stale and synthetic recenter notifications.
+		if (window->HasRelativePointer()) return 0;
 		int winHeight = (int)window->GetSize().Height;
 		int x = GET_X_LPARAM(lParam);
 		int y = GET_Y_LPARAM(lParam);
@@ -1317,6 +1350,7 @@ LRESULT CALLBACK Window::WindowProcedure(HWND hWindow, UINT message, WPARAM wPar
 	}
 	case WM_DESTROY:
 	{
+		window->CancelMouseCapture();
 		WindowAction winAction;
 		winAction.WindowEventType = WindowAction::DESTROY;
 
@@ -1328,4 +1362,128 @@ LRESULT CALLBACK Window::WindowProcedure(HWND hWindow, UINT message, WPARAM wPar
 	}
 
 	return DefWindowProc(hWindow, message, wParam, lParam);
+}
+
+void Window::_InstallRelativePointerHost()
+{
+	_scene->SetRelativePointerHost(
+		[this](int button, utils::Position2d anchor) { return BeginRelativePointer(button, anchor); },
+		[this](int button) { EndRelativePointer(button); });
+}
+
+bool Window::_RelativePointerValid() const
+{
+	if (!_wnd || GetCapture() != _wnd || GetForegroundWindow() != _wnd) return false;
+	RECT client{};
+	POINT cursor{};
+	if (!GetClientRect(_wnd, &client) || !GetCursorPos(&cursor) || !ScreenToClient(_wnd, &cursor)) return false;
+	POINT screen = _relativeAnchorClient;
+	return PtInRect(&client, _relativeAnchorClient) && PtInRect(&client, cursor)
+		&& ClientToScreen(_wnd, &screen)
+		&& screen.x == _relativeAnchorScreen.x && screen.y == _relativeAnchorScreen.y;
+}
+
+bool Window::BeginRelativePointer(int button, utils::Position2d anchor)
+{
+	if (HasRelativePointer() || (button != 0 && button != 2)
+		|| (_buttonsDown & (1u << button)) == 0u) return false;
+	_relativeAnchor = anchor;
+	_relativeAnchorClient = { static_cast<LONG>(anchor.X), static_cast<LONG>(_config.Size.Height) - static_cast<LONG>(anchor.Y) };
+	_relativeAnchorScreen = _relativeAnchorClient;
+	if (!_wnd || !ClientToScreen(_wnd, &_relativeAnchorScreen) || !_RelativePointerValid()) return false;
+	// Registration is process-wide: restore the previous mouse owner on teardown.
+	UINT count = 0u;
+	if (GetRegisteredRawInputDevices(nullptr, &count, sizeof(RAWINPUTDEVICE)) == UINT(-1)) return false;
+	std::vector<RAWINPUTDEVICE> registered(count);
+	if (count && GetRegisteredRawInputDevices(registered.data(), &count, sizeof(RAWINPUTDEVICE)) == UINT(-1)) return false;
+	_previousRawMouse.reset();
+	for (const auto& device : registered)
+		if (device.usUsagePage == 1u && device.usUsage == 2u) _previousRawMouse = device;
+	RAWINPUTDEVICE mouse{ 1u, 2u, 0u, _wnd };
+	if (!RegisterRawInputDevices(&mouse, 1u, sizeof(mouse))) return false;
+	_relativeButton = button;
+	if (!SetCursorPos(_relativeAnchorScreen.x, _relativeAnchorScreen.y))
+	{
+		EndRelativePointer(button);
+		return false;
+	}
+	return true;
+}
+
+void Window::_RestoreRawInput()
+{
+	// A plugin may have registered a new owner meanwhile; do not remove it.
+	UINT count = 0u;
+	if (GetRegisteredRawInputDevices(nullptr, &count, sizeof(RAWINPUTDEVICE)) != UINT(-1))
+	{
+		std::vector<RAWINPUTDEVICE> registered(count);
+		if (!count || GetRegisteredRawInputDevices(registered.data(), &count, sizeof(RAWINPUTDEVICE)) != UINT(-1))
+			for (const auto& device : registered)
+				if (device.usUsagePage == 1u && device.usUsage == 2u && device.hwndTarget == _wnd)
+				{
+					const RAWINPUTDEVICE restore = _previousRawMouse.value_or(RAWINPUTDEVICE{ 1u, 2u, RIDEV_REMOVE, nullptr });
+					RegisterRawInputDevices(&restore, 1u, sizeof(restore));
+					break;
+				}
+	}
+	_previousRawMouse.reset();
+}
+
+void Window::_ResamplePointer()
+{
+	POINT cursor{};
+	if (!_wnd || !GetCursorPos(&cursor) || !ScreenToClient(_wnd, &cursor)) return;
+	_cachedCursorPosition = utils::Position2d{ static_cast<int>(cursor.x), static_cast<int>(_config.Size.Height) - static_cast<int>(cursor.y) };
+	_hover3dDirty = true;
+	_forcePick = true;
+	// Remove stale recenter notifications and resume hover after editor teardown.
+	MSG pending{};
+	while (PeekMessage(&pending, _wnd, WM_MOUSEMOVE, WM_MOUSEMOVE, PM_REMOVE)) {}
+	PostMessage(_wnd, WM_MOUSEMOVE, 0, MAKELPARAM(cursor.x, cursor.y));
+}
+
+void Window::EndRelativePointer(int button)
+{
+	if (!HasRelativePointer() || button != _relativeButton) return;
+	_relativeButton = -1;
+	_RestoreRawInput();
+	_ResamplePointer();
+}
+
+void Window::_HandleRawInput(HRAWINPUT input)
+{
+	if (!HasRelativePointer()) return;
+	if (!_RelativePointerValid() || (_buttonsDown & (1u << _relativeButton)) == 0u)
+	{
+		CancelMouseCapture();
+		return;
+	}
+	RAWINPUT raw{};
+	UINT size = sizeof(raw);
+	const auto read = GetRawInputData(input, RID_INPUT, &raw, &size, sizeof(RAWINPUTHEADER));
+	if (read == UINT(-1) || read < sizeof(RAWINPUTHEADER))
+	{
+		CancelMouseCapture();
+		return;
+	}
+	if (raw.header.dwType != RIM_TYPEMOUSE) return;
+	if (read < sizeof(RAWINPUT) || (raw.data.mouse.usFlags & MOUSE_MOVE_ABSOLUTE))
+	{
+		CancelMouseCapture();
+		return;
+	}
+	if (!SetCursorPos(_relativeAnchorScreen.x, _relativeAnchorScreen.y))
+	{
+		CancelMouseCapture();
+		return;
+	}
+	if (raw.data.mouse.lLastX == 0 && raw.data.mouse.lLastY == 0) return;
+	TouchMoveAction movement;
+	movement.Index = _relativeButton;
+	movement.Position = _relativeAnchor;
+	movement.MouseButtonsDown = _buttonsDown;
+	movement.Modifiers = _modifiers;
+	movement.IsRelative = true;
+	movement.RelativeDelta = { static_cast<int>(raw.data.mouse.lLastX), -static_cast<int>(raw.data.mouse.lLastY) };
+	OnAction(movement);
 }

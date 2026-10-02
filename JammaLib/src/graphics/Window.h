@@ -73,6 +73,9 @@ namespace graphics
 		void ClearModifiers();
 		// Propagate OS capture/focus loss so editor pointer transactions cancel.
 		bool CancelMouseCapture();
+		bool BeginRelativePointer(int button, utils::Position2d anchor);
+		void EndRelativePointer(int button);
+		bool HasRelativePointer() const noexcept { return _relativeButton >= 0; }
 		bool IsTrackingMouse() const;
 		void SetTrackingMouse(bool resizing);
 		void Resize(utils::Size2d size);
@@ -99,6 +102,11 @@ namespace graphics
 		static LRESULT CALLBACK WindowProcedure(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) noexcept;
 
 	private:
+		void _InstallRelativePointerHost();
+		bool _RelativePointerValid() const;
+		void _RestoreRawInput();
+		void _ResamplePointer();
+		void _HandleRawInput(HRAWINPUT input);
 		void LoadResources();
 		void InitScene();
 		void ApplyPendingResize();
@@ -118,6 +126,11 @@ namespace graphics
 		bool _trackingMouse;
 		bool _released;
 		unsigned int _buttonsDown;
+		int _relativeButton = -1;
+		POINT _relativeAnchorClient{};
+		POINT _relativeAnchorScreen{};
+		utils::Position2d _relativeAnchor{};
+		std::optional<RAWINPUTDEVICE> _previousRawMouse;
 		unsigned int _lastHoverObjectId;
 		bool _hover3dDirty;
 		bool _forcePick;

@@ -24,6 +24,7 @@
 #include "../resources/ResourceLib.h"
 #include "MidiGridGesture.h"
 #include "MidiGridTargets.h"
+#include "MidiPitchViewGesture.h"
 #include "LoopGridGeometry.h"
 #include "MidiLoop.h"
 #include "MidiLoopEditUndo.h"
@@ -45,6 +46,8 @@ namespace midi
 			std::function<std::shared_ptr<base::GuiElement>()> Hovered;
 			std::function<glm::mat4(float aspect)> ViewProjection;
 			std::function<void()> OnOpened;
+			std::function<bool(int button, utils::Position2d anchor)> BeginRelativePointer;
+			std::function<void(int button)> EndRelativePointer;
 		};
 
 	public:
@@ -119,6 +122,8 @@ namespace midi
 		double _PixelsPerSample(std::uint32_t lengthSamps) const;
 		void _HandleWheel(const actions::TouchAction& action);
 		void _BeginGesture(const actions::TouchAction& action);
+		bool _BeginSpecialGesture(const actions::TouchAction& action);
+		void _UpdateHeldTarget();
 		void _EndGesture(const actions::TouchAction& action);
 		void _PublishGesture();
 		void _CancelGesture();
@@ -150,6 +155,11 @@ namespace midi
 		bool _buttonPressed = false;
 		bool _buttonShowsClose = false;
 		bool _pointerOwned = false;
+		int _pointerButton = -1;
+		bool _relativePointer = false;
+		bool _pitchView = false;
+		MidiPitchViewGesture _pitchViewGesture;
+		std::uint64_t _gestureModelGeneration = 0u;
 		bool _previewDirty = false;
 		// UI-owned: retain pixels so camera and pitch-range changes refresh stationary hover.
 		std::optional<utils::Position2d> _idleHoverPointer;
