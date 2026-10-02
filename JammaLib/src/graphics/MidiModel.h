@@ -134,7 +134,7 @@ namespace graphics
 		bool _editorActive = false;
 		bool _clickPressed = false;
 		float _editorPlayFrac = 0.0f;
-		int _editorBottomPitch = 48;
+		int _editorBottomPitch = 24;
 		int _editorVisibleRows = 24;
 		float _editorHoverU = -1.0f;
 		int _editorHoverPitch = -1;

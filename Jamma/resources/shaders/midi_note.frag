@@ -7,6 +7,9 @@ flat in float IsEndCap;
 in float EditorU;
 in float EditorPitchRow;
 in float EditorMorphV;
+in float EditorCrossNote;
+flat in float EditorTopFace;
+flat in vec3 EditorNoteHit;
 
 out vec4 ColorOUT;
 
@@ -89,19 +92,36 @@ void main()
     }
     else
     {
-        vec3 low = vec3(0.1, 0.45, 0.95);
-        vec3 mid = vec3(0.1, 0.9, 0.55);
-        vec3 high = vec3(1.0, 0.72, 0.18);
-        float upper = smoothstep(0.45, 1.0, Velocity);
-        vec3 baseColor = mix(mix(low, mid, smoothstep(0.0, 0.55, Velocity)), high, upper);
-        vec3 noteColor = baseColor * Diff;
-        noteColor = mix(noteColor, noteColor * 1.30 + vec3(0.02, 0.12, 0.14),
-            clamp(LoopSelected, 0.0, 1.0));
+        vec3 low = vec3(0.08, 0.42, 1.0);
+        vec3 mid = vec3(0.04, 1.0, 0.35);
+        vec3 warm = vec3(1.0, 0.84, 0.03);
+        vec3 hot = vec3(1.0, 0.04, 0.02);
+        vec3 baseColor = mix(low, mid, smoothstep(0.0, 0.38, Velocity));
+        baseColor = mix(baseColor, warm, smoothstep(0.38, 0.56, Velocity));
+        // Velocity 90/127 is already at the red end of the palette.
+        baseColor = mix(baseColor, hot, smoothstep(0.56, 0.70, Velocity));
+        float diffuse = clamp((Diff - 0.15) / 0.85, 0.0, 1.0);
+        vec3 noteColor = baseColor * (0.10 + 1.05 * pow(diffuse, 0.72));
+        noteColor *= 1.0 + 0.15 * clamp(LoopSelected, 0.0, 1.0);
         noteColor = min(noteColor * (1.0 + 0.20 * LoopHover)
             + vec3(0.04) * LoopHover, vec3(1.0));
         noteColor = mix(noteColor, vec3(1.0, 0.43, 0.10),
             0.75 * clamp(LoopPressed, 0.0, 1.0));
-        ColorOUT = vec4(noteColor, 0.88);
+        bool noteHovered = EditorActive > 0.5 && EditorHoverU >= EditorNoteHit.x
+            && EditorHoverU < EditorNoteHit.y
+            && EditorHoverPitch == int(EditorNoteHit.z);
+        float noteHover = noteHovered ? EditorMorphV : 0.0;
+        // Let the top clip to white while the sides retain a little depth.
+        float whiteLift = mix(0.55, 0.92, EditorTopFace);
+        noteColor = min(noteColor * (1.0 + noteHover)
+            + vec3(whiteLift * noteHover), vec3(1.0));
+        float timeEdge = 1.0 - smoothstep(0.0, max(2.5 * fwidth(EditorU), 1e-6),
+            min(EditorU - EditorNoteHit.x, EditorNoteHit.y - EditorU));
+        float rowEdge = 1.0 - smoothstep(0.0, max(2.5 * fwidth(EditorCrossNote), 1e-6),
+            1.0 - abs(EditorCrossNote));
+        float outline = max(timeEdge, rowEdge) * EditorTopFace * noteHover;
+        noteColor = mix(noteColor, vec3(0.08, 0.16, 0.20), 0.92 * outline);
+        ColorOUT = vec4(noteColor, 0.88 + 0.12 * noteHover);
     }
     if (EditorActive > 0.5)
     {
@@ -130,7 +150,8 @@ void main()
             }
             ColorOUT.a = mix(ColorOUT.a, 0.93, EditorMorphV);
         }
-        ColorOUT.rgb += (0.22 + 0.78 * EditorMorphV)
+        float playheadTint = IsDisc > 0.5 ? 1.0 : 0.15;
+        ColorOUT.rgb += playheadTint * (0.22 + 0.78 * EditorMorphV)
             * (core * vec3(0.35, 0.86, 1.0) + trail * vec3(0.025, 0.11, 0.16));
     }
     ColorOUT.rgb *= mix(SceneDim, 1.0, EditorMorphV);

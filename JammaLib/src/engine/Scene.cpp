@@ -2866,7 +2866,15 @@ bool Scene::OpenLoopGridEditor(const std::shared_ptr<LoopTake>& take,
 				}
 				const auto rows = notes.empty() ? 24 : std::clamp(
 					((high - low + 7 + 11) / 12) * 12, 24, 128);
-				const auto bottom = notes.empty() ? 48 : std::clamp(low - 3, 0, 128 - rows);
+				int bottom = 24; // C1 is the default when the notes fit with headroom.
+				if (!notes.empty())
+				{
+					const auto headroom = (rows + 3) / 4;
+					const auto lowestDefault = std::min(24, low);
+					const auto bottomForHeadroom = high + headroom + 1 - rows;
+					bottom = std::min(low, std::max(lowestDefault, bottomForHeadroom));
+				}
+				bottom = std::clamp(bottom, 0, 128 - rows);
 				model->SetEditorPitchRange(bottom, rows);
 			}
 		}

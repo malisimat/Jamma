@@ -13,6 +13,9 @@ flat out float IsEndCap;
 out float EditorU;
 out float EditorPitchRow;
 out float EditorMorphV;
+out float EditorCrossNote;
+flat out float EditorTopFace;
+flat out vec3 EditorNoteHit;
 
 uniform mat4 MVP;
 uniform float EditorMorph;
@@ -57,11 +60,17 @@ void main()
     EditorPitchRow = IsDisc > 0.5
         ? (PositionIN.z + 1.0) * rows * 0.5 : row;
     EditorMorphV = EditorMorph;
+    EditorCrossNote = PositionIN.z;
+    EditorTopFace = NormalIN.y > 0.5 ? 1.0 : 0.0;
+    EditorNoteHit = vec3(startFrac, startFrac + durationFrac, pitch);
 
-    // The generated MIDI mesh carries inward-facing normal sign on Y, so flip
-    // it here to keep lighting oriented outward on notes and the center disc.
+    // Preserve the circular scene lighting during the transition to the grid.
     vec3 radialNormal = normalize(vec3(sin(angle), -NormalIN.y * 0.35, cos(angle)));
     vec3 lightDir = normalize(vec3(0.0, 0.5, -0.3));
     vec4 normScreen = MVP * vec4(radialNormal, 0.0);
-    Diff = 0.15 + clamp(dot(normScreen.xyz, lightDir), 0.0, 0.85);
+    float sceneDiff = 0.15 + clamp(dot(normScreen.xyz, lightDir), 0.0, 0.85);
+    // On the flat grid, face normals give every note top the same light level.
+    vec3 editorLightDir = normalize(vec3(-0.2, 0.9, 0.35));
+    float editorDiff = 0.15 + 0.85 * max(dot(NormalIN, editorLightDir), 0.0);
+    Diff = mix(sceneDiff, editorDiff, EditorMorph);
 }
