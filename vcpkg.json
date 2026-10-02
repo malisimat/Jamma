@@ -1,7 +1,10 @@
 {
   "name": "jamma",
   "version-string": "0.0.0",
+  "builtin-baseline": "256acc64012b23a13041d8705805e1f23b43a024",
   "dependencies": [
+    { "name": "ftxui", "version>=": "6.1.9" },
+    { "name": "utf8proc", "version>=": "2.11.3" },
     "gtest",
     "libogg",
     "libvorbis",

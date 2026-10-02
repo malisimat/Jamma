@@ -25,7 +25,7 @@ namespace ninjam
 
 		std::shared_ptr<ninjam::NinjamController> GetController() const { return _ninjamController; }
 
-		void SendChat(const std::string& msg);
+		bool SendChat(const std::string& msg);
 		void Connect(const std::string& host);
 		void Disconnect();
 

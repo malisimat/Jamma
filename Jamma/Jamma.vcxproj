@@ -113,7 +113,7 @@
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
-      <AdditionalDependencies>JammaLib.lib;opengl32.lib;Comctl32.lib;ws2_32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>JammaLib.lib;opengl32.lib;Comctl32.lib;ws2_32.lib;advapi32.lib;bcrypt.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <AdditionalLibraryDirectories>$(SolutionDir)JammaLib\bin\Win32\Debug;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
     </Link>
   </ItemDefinitionGroup>
@@ -134,7 +134,7 @@
     <Link>
       <SubSystem>Windows</SubSystem>
       <AdditionalLibraryDirectories>$(ProjectDir)..\lib\vst2sdk\x64\Debug\MD;$(ProjectDir)..\lib\njclient\x64\Debug\MD;$(SolutionDir)vcpkg_installed\x64-windows\debug\lib;$(SolutionDir)vcpkg_installed\x64-windows\debug\lib\manual-link;$(SolutionDir)JammaLib\bin\x64\Debug;$(SolutionDir)vcpkg_installed\x64-windows\debug\lib\vst3sdk;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
-      <AdditionalDependencies>vst2sdk.lib;njclient.lib;ogg.lib;vorbis.lib;vorbisenc.lib;vorbisfile.lib;ws2_32.lib;JammaLib.lib;sdk_hosting.lib;sdk.lib;sdk_common.lib;pluginterfaces.lib;base.lib;opengl32.lib;Comctl32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>vst2sdk.lib;njclient.lib;ogg.lib;vorbis.lib;vorbisenc.lib;vorbisfile.lib;ws2_32.lib;advapi32.lib;bcrypt.lib;JammaLib.lib;sdk_hosting.lib;sdk.lib;sdk_common.lib;pluginterfaces.lib;base.lib;opengl32.lib;Comctl32.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
     <PostBuildEvent>
       <Command>copy /Y "$(SolutionDir)vcpkg_installed\x64-windows\debug\bin\ogg.dll" "$(OutDir)"&#x0D;&#x0A;copy /Y "$(SolutionDir)vcpkg_installed\x64-windows\debug\bin\vorbis.dll" "$(OutDir)"&#x0D;&#x0A;copy /Y "$(SolutionDir)vcpkg_installed\x64-windows\debug\bin\vorbisenc.dll" "$(OutDir)"</Command>
@@ -162,7 +162,7 @@
       <LinkTimeCodeGeneration>UseLinkTimeCodeGeneration</LinkTimeCodeGeneration>
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
       <OptimizeReferences>true</OptimizeReferences>
-      <AdditionalDependencies>JammaLib.lib;opengl32.lib;Comctl32.lib;ws2_32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>JammaLib.lib;opengl32.lib;Comctl32.lib;ws2_32.lib;advapi32.lib;bcrypt.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <AdditionalLibraryDirectories>$(SolutionDir)JammaLib\bin\Win32\Release;$(ProjectDir)lib\x86;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
     </Link>
   </ItemDefinitionGroup>
@@ -186,7 +186,7 @@
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
       <OptimizeReferences>true</OptimizeReferences>
       <AdditionalLibraryDirectories>$(ProjectDir)..\lib\vst2sdk\x64\Release\MD;$(ProjectDir)..\lib\njclient\x64\Release\MD;$(SolutionDir)vcpkg_installed\x64-windows\lib;$(SolutionDir)vcpkg_installed\x64-windows\lib\manual-link;$(SolutionDir)JammaLib\bin\x64\Release;$(ProjectDir)lib\x64;$(SolutionDir)vcpkg_installed\x64-windows\lib\vst3sdk;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
-      <AdditionalDependencies>vst2sdk.lib;njclient.lib;ogg.lib;vorbis.lib;vorbisenc.lib;vorbisfile.lib;ws2_32.lib;JammaLib.lib;sdk_hosting.lib;sdk.lib;sdk_common.lib;pluginterfaces.lib;base.lib;opengl32.lib;Comctl32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>vst2sdk.lib;njclient.lib;ogg.lib;vorbis.lib;vorbisenc.lib;vorbisfile.lib;ws2_32.lib;advapi32.lib;bcrypt.lib;JammaLib.lib;sdk_hosting.lib;sdk.lib;sdk_common.lib;pluginterfaces.lib;base.lib;opengl32.lib;Comctl32.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
     <PostBuildEvent>
       <Command>copy /Y "$(SolutionDir)vcpkg_installed\x64-windows\bin\ogg.dll" "$(OutDir)"&#x0D;&#x0A;copy /Y "$(SolutionDir)vcpkg_installed\x64-windows\bin\vorbis.dll" "$(OutDir)"&#x0D;&#x0A;copy /Y "$(SolutionDir)vcpkg_installed\x64-windows\bin\vorbisenc.dll" "$(OutDir)"</Command>
@@ -194,6 +194,7 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="src\Main.cpp" />
+    <ClCompile Include="src\ConsoleBroker.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="include\Main.h" />
@@ -233,6 +234,12 @@
     <Image Include="resources\textures\takemode_down.tga" />
     <Image Include="resources\textures\takemode_over.tga" />
     <Image Include="resources\textures\takemode_toggled.tga" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\JammaConsole\JammaConsole.vcxproj">
+      <Project>{A8D162C3-9F69-4E7E-84BF-4D09C7DE1B67}</Project>
+      <LinkLibraryDependencies>false</LinkLibraryDependencies>
+    </ProjectReference>
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

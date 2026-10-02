@@ -13,9 +13,9 @@ namespace ninjam
 	{
 	}
 
-	void NinjamNetworkService::SendChat(const std::string& msg)
+	bool NinjamNetworkService::SendChat(const std::string& msg)
 	{
-		_ninjamController->SendChat(msg);
+		return _ninjamController->SendChat(msg);
 	}
 
 	void NinjamNetworkService::Connect(const std::string& host)

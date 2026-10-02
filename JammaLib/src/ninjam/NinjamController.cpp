@@ -62,9 +62,9 @@ std::optional<ninjam::NinjamRemoteSnapshot> NinjamController::TakePendingSnapsho
 	return snapshot;
 }
 
-void NinjamController::SendChat(const std::string& msg)
+bool NinjamController::SendChat(const std::string& msg)
 {
-	_session.SendChat(msg);
+	return _session.SendChat(msg);
 }
 
 void NinjamController::Connect(const std::string& host)

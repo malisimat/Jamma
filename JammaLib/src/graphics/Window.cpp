@@ -44,6 +44,7 @@ Window::Window(Scene& scene,
 	_restoreConfig(),
 	_modifiers(Action::MODIFIER_NONE),
 	_jamLoadRequested(false),
+	_consoleToggleRequested(false),
 	_highlightPass(ImageFullscreenParams(base::DrawableParams{""}, "blur"))
 {
 	_scene->InitGui();
@@ -692,6 +693,14 @@ ActionResult Window::OnAction(KeyAction keyAction)
 		_jamLoadRequested = true;
 		return { true, "window", "load-jam", ACTIONRESULT_DEFAULT, nullptr, {} };
 	}
+	if ((192u == keyAction.KeyChar)
+		&& (Action::MODIFIER_CTRL & keyAction.Modifiers)
+		&& !(Action::MODIFIER_SHIFT & keyAction.Modifiers))
+	{
+		if (KeyAction::KEY_UP == keyAction.KeyActionType)
+			_consoleToggleRequested = true;
+		return { true, "window", "toggle-console", ACTIONRESULT_DEFAULT, nullptr, {} };
+	}
 
 	return _scene->OnAction(keyAction);
 }
@@ -712,6 +721,13 @@ bool Window::ConsumeJamLoadRequest() noexcept
 {
 	const bool requested = _jamLoadRequested;
 	_jamLoadRequested = false;
+	return requested;
+}
+
+bool Window::ConsumeConsoleToggleRequest() noexcept
+{
+	const bool requested = _consoleToggleRequested;
+	_consoleToggleRequested = false;
 	return requested;
 }
 
@@ -1203,9 +1219,6 @@ LRESULT CALLBACK Window::WindowProcedure(HWND hWindow, UINT message, WPARAM wPar
 	case WM_KEYDOWN:
 	{
 		bool repeatkey = false;
-
-		if (VK_ESCAPE == wParam)
-			PostMessage(hWindow, WM_CLOSE, 0, 0);
 
 		if (lParam & (0x01 << 30))
 			repeatkey = true;
