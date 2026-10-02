@@ -2224,6 +2224,59 @@ TEST(Scene, LoopGridEditorTracksOneMidiLoopAndClosesWhenItIsReplaced) {
 	EXPECT_EQ(graphics::Camera::View::Front, scene.CameraViewForTest());
 }
 
+TEST(Scene, LoopGridEditorPreservesPaintExcursionAndReleaseBeforeNextFrame) {
+	SceneParams sceneParams{ base::DrawableParams(), base::MoveableParams(),
+		base::SizeableParams({ 1400u, 900u }) };
+	TestScene scene(sceneParams, {});
+	auto station = MakeTestStation("editor-paint");
+	scene.AddStationForTest(station);
+	auto take = station->AddTake();
+	take->SetGlobalMidiQuantState(io::JamFile::GlobalMidiQuantState::Mixed);
+	take->Record({}, "station", { 0u }, { "" });
+	take->Play(0u, 400u, 0u);
+	auto grid = take->MidiQuantisation();
+	grid.Enabled = true;
+	grid.GrainSamps = 10u;
+	grid.Fraction = midi::MidiQuantisationFraction::Whole;
+	take->SetMidiQuantisation(grid);
+	take->Select();
+	const auto loop = take->GetMidiLoops().front();
+	// Apply the job-side grid publication before beginning UI input.
+	ASSERT_TRUE(loop->SetQuantisation(take->ResolvedMidiQuantisation(),
+		take->MidiQuantisationTransportStartSamps()));
+	ASSERT_TRUE(scene.OpenLoopGridEditor(take, {}, loop));
+	scene.SettleLoopGridEditorForTest();
+	midi::MidiLoop::EditState before;
+	ASSERT_TRUE(loop->SnapshotForEdit(before));
+	ASSERT_EQ(0u, before.EventCount);
+	ASSERT_TRUE(before.Quantisation.Enabled);
+	scene.OnAction(MakeSceneTouchMove({ 700, 450 }, 0u));
+	scene.OnAction(MakeSceneTouch(TouchAction::TOUCH_DOWN,
+		{ 700, 450 }, 0, LeftMouseButtonMask));
+	ASSERT_TRUE(scene.EditorOwnsPointerForTest());
+	scene.OnAction(MakeSceneTouchMove({ 900, 450 }, LeftMouseButtonMask));
+	scene.OnAction(MakeSceneTouchMove({ 700, 450 }, LeftMouseButtonMask));
+	midi::MidiLoop::EditState during;
+	ASSERT_TRUE(loop->SnapshotForEdit(during));
+	EXPECT_EQ(before.Revision, during.Revision);
+	EXPECT_EQ(0u, during.EventCount);
+	// No editor Tick between input samples: publication must include the excursion,
+	// even though release returns to the starting cell before the next frame.
+	scene.OnAction(MakeSceneTouch(TouchAction::TOUCH_UP, { 700, 450 }, 0, 0u));
+	EXPECT_FALSE(scene.EditorOwnsPointerForTest());
+	midi::MidiLoop::EditState after;
+	ASSERT_TRUE(loop->SnapshotForEdit(after));
+	EXPECT_GT(after.EventCount, 2u);
+	EXPECT_GT(after.Revision, before.Revision);
+	KeyAction undo;
+	undo.KeyChar = 90u;
+	undo.KeyActionType = KeyAction::KEY_UP;
+	undo.Modifiers = base::Action::MODIFIER_CTRL;
+	scene.OnAction(undo);
+	ASSERT_TRUE(loop->SnapshotForEdit(after));
+	EXPECT_EQ(0u, after.EventCount);
+}
+
 TEST(Scene, LoopGridEditorCanSelectMidiLoopAtEverySelectionDepthAndOpenWithE) {
 	SceneParams sceneParams{ base::DrawableParams(), base::MoveableParams(),
 		base::SizeableParams({ 1400u, 900u }) };

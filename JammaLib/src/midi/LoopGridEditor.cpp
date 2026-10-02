@@ -116,6 +116,7 @@ void LoopGridEditor::_SetFeedback(const std::string& message)
 
 void LoopGridEditor::_ResetTarget()
 {
+	_ClearIdleHover(true);
 	_station.reset();
 	_take.reset();
 	_audioLoop.reset();
@@ -280,6 +281,7 @@ bool LoopGridEditor::Open(const std::shared_ptr<engine::LoopTake>& take,
 	_returnCamera = _host.Camera.CaptureEditorReturnState();
 	_blend = 0.0f;
 	_pointerOwned = false;
+	_ClearIdleHover(true);
 	_EndOrbit();
 	_orbitHorizontal = 0.0f;
 	_orbitVertical = 0.0f;
@@ -354,6 +356,7 @@ void LoopGridEditor::Close()
 	if (!IsOpen())
 		return;
 	_CancelGesture();
+	_ClearIdleHover(true);
 	_EndOrbit();
 	_revisionCursor.reset();
 	_buttonPressed = false;
@@ -553,7 +556,7 @@ void LoopGridEditor::_BeginGesture(const actions::TouchAction& action)
 	if (_gesture->Begin(source, *point, _ChannelOf(loop), _PixelsPerSample(source.LoopLengthSamps)))
 	{
 		_pointerOwned = true;
-		_UpdatePreview();
+		_previewDirty = true;
 		_UpdateHover(*point);
 	}
 	else
@@ -573,8 +576,12 @@ void LoopGridEditor::_EndGesture(const actions::TouchAction& action)
 	else if (_gesture && _gesture->Rejected())
 		_SetFeedback("Edit rejected; source unchanged");
 	_CancelGesture();
+	_ClearIdleHover(false);
 	if (auto point = _PointAt(action.Position, false))
+	{
+		_idleHoverPointer = action.Position;
 		_UpdateHover(*point);
+	}
 }
 
 void LoopGridEditor::_PublishGesture()
@@ -599,6 +606,7 @@ void LoopGridEditor::_PublishGesture()
 void LoopGridEditor::_CancelGesture()
 {
 	_pointerOwned = false;
+	_previewDirty = false;
 	_hoverRevision = 0u;
 	if (_gesture) _gesture->Cancel();
 	_gesture.reset();
@@ -608,6 +616,35 @@ void LoopGridEditor::_CancelGesture()
 			model->SetEditorHover(-1.0f, -1);
 			model->SetEditorPreview({}, loop->CompletedLengthForEditor());
 		}
+}
+
+void LoopGridEditor::_ClearIdleHover(bool clearCache)
+{
+	_idleHoverPointer.reset();
+	if (clearCache)
+	{
+		_idleHoverCacheValid = false;
+		_idleHoverCacheRevision = 0u;
+		_idleHoverCacheLength = 0u;
+		_idleHoverCacheQuantisation = {};
+		_idleHoverCacheTransportStart = 0u;
+		_idleHoverTargets = {};
+		_idleHoverGrid.reset();
+	}
+}
+
+void LoopGridEditor::_UpdateIdleHover()
+{
+	if (!_idleHoverPointer || !IsOpen() || _pointerOwned || _orbitDragging)
+		return;
+	const auto point = _PointAt(*_idleHoverPointer, false);
+	if (!point)
+	{
+		if (auto loop = _midiLoop.lock())
+			if (auto model = loop->Model()) model->SetEditorHover(-1.0f, -1);
+		return;
+	}
+	_UpdateHover(*point);
 }
 
 void LoopGridEditor::_UpdateHover(MidiGridGesture::Point point)
@@ -643,11 +680,24 @@ void LoopGridEditor::_UpdateHover(MidiGridGesture::Point point)
 			model->SetEditorHover(-1.0f, -1);
 			return;
 		}
-		const auto grid = LoopGridGeometry::Resolve(source.LoopLengthSamps,
-			source.Quantisation, source.QuantisationTransportStartSamps);
-		target = MidiGridTargets::Build(source).Resolve(point.Sample, point.Pitch, grid ? &*grid : nullptr);
+		if (!_idleHoverCacheValid || _idleHoverCacheRevision != source.Revision
+			|| _idleHoverCacheLength != source.LoopLengthSamps
+			|| _idleHoverCacheQuantisation != source.Quantisation
+			|| _idleHoverCacheTransportStart != source.QuantisationTransportStartSamps)
+		{
+			_idleHoverTargets = MidiGridTargets::Build(source);
+			_idleHoverGrid = LoopGridGeometry::Resolve(source.LoopLengthSamps,
+				source.Quantisation, source.QuantisationTransportStartSamps);
+			_idleHoverCacheRevision = source.Revision;
+			_idleHoverCacheLength = source.LoopLengthSamps;
+			_idleHoverCacheQuantisation = source.Quantisation;
+			_idleHoverCacheTransportStart = source.QuantisationTransportStartSamps;
+			_idleHoverCacheValid = true;
+		}
+		target = _idleHoverTargets.Resolve(point.Sample, point.Pitch,
+			_idleHoverGrid ? &*_idleHoverGrid : nullptr);
 		length = source.LoopLengthSamps;
-		gridResolved = grid.has_value();
+		gridResolved = _idleHoverGrid.has_value();
 		_hoverRevision = source.Revision;
 	}
 	if (!length) return;
@@ -695,6 +745,7 @@ void LoopGridEditor::CancelInput()
 {
 	_CancelGesture();
 	_EndOrbit();
+	_ClearIdleHover(true);
 	_buttonPressed = false;
 }
 
@@ -734,6 +785,12 @@ void LoopGridEditor::Tick(float deltaSeconds)
 	_blend = std::min(1.0f, _blend + step);
 	if (_blend == 1.0f && !_host.Camera.IsTransitioning())
 		_state = State::Active;
+	if (_previewDirty)
+	{
+		_UpdatePreview();
+		_previewDirty = false;
+	}
+	_UpdateIdleHover();
 }
 
 void LoopGridEditor::UpdateUi(const glm::mat4& viewProjection)
@@ -912,12 +969,23 @@ std::optional<actions::ActionResult> LoopGridEditor::OnAction(actions::TouchActi
 	else if (actions::TouchAction::TOUCH_DOWN == action.State && 0 == action.Index
 		&& isMouse && IsReady() && _Validate())
 	{
+		_ClearIdleHover(false);
 		_BeginGesture(action);
-		if (!_pointerOwned) _BeginOrbit(action.Position);
+		if (!_pointerOwned)
+		{
+			if (auto loop = _midiLoop.lock())
+				if (auto model = loop->Model()) model->SetEditorHover(-1.0f, -1);
+			_BeginOrbit(action.Position);
+		}
 	}
 	else if (actions::TouchAction::TOUCH_DOWN == action.State && 2 == action.Index
 		&& isMouse && IsReady() && !_pointerOwned)
+	{
+		_ClearIdleHover(false);
+		if (auto loop = _midiLoop.lock())
+			if (auto model = loop->Model()) model->SetEditorHover(-1.0f, -1);
 		_BeginOrbit(action.Position);
+	}
 	else if (actions::TouchAction::TOUCH_UP == action.State && _pointerOwned
 		&& isMouse && action.Index == 0)
 		_EndGesture(action);
@@ -939,13 +1007,17 @@ std::optional<actions::ActionResult> LoopGridEditor::OnAction(actions::TouchMove
 		_buttonPressed = false;
 	if (_pointerOwned && (action.Touch != actions::TouchAction::TOUCH_MOUSE
 		|| 0u == (action.MouseButtonsDown & 1u)))
+	{
+		_ClearIdleHover(false);
 		_CancelGesture(); // lost capture
+	}
 	else if (_pointerOwned && _gesture)
 	{
 		if (auto point = _PointAt(action.Position, true))
 		{
 			_gesture->Update(*point);
-			_UpdatePreview();
+			// Preserve every paint sample; rebuild its derived preview only once per frame.
+			_previewDirty = true;
 			_UpdateHover(*point);
 			if (_gesture->Rejected())
 				_SetFeedback("Cannot map this drag to source MIDI");
@@ -958,12 +1030,10 @@ std::optional<actions::ActionResult> LoopGridEditor::OnAction(actions::TouchMove
 			_UpdateOrbit(action.Position);
 		else _EndOrbit();
 	}
-	else if (auto point = _PointAt(action.Position, false))
+	else
 	{
-		_UpdateHover(*point);
+		_idleHoverPointer = action.Position;
 	}
-	else if (auto loop = _midiLoop.lock())
-		if (auto model = loop->Model()) model->SetEditorHover(-1.0f, -1);
 	return _Eaten();
 }
 

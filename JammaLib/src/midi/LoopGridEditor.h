@@ -23,6 +23,8 @@
 #include "../gui/GuiLabel.h"
 #include "../resources/ResourceLib.h"
 #include "MidiGridGesture.h"
+#include "MidiGridTargets.h"
+#include "LoopGridGeometry.h"
 #include "MidiLoop.h"
 #include "MidiLoopEditUndo.h"
 
@@ -122,6 +124,8 @@ namespace midi
 		void _CancelGesture();
 		void _UpdatePreview();
 		void _UpdateHover(MidiGridGesture::Point point);
+		void _UpdateIdleHover();
+		void _ClearIdleHover(bool clearCache = false);
 		void _CheckGesture();
 		bool _HandleButton(actions::TouchAction action);
 
@@ -146,6 +150,16 @@ namespace midi
 		bool _buttonPressed = false;
 		bool _buttonShowsClose = false;
 		bool _pointerOwned = false;
+		bool _previewDirty = false;
+		// UI-owned: retain pixels so camera and pitch-range changes refresh stationary hover.
+		std::optional<utils::Position2d> _idleHoverPointer;
+		bool _idleHoverCacheValid = false;
+		std::uint64_t _idleHoverCacheRevision = 0u;
+		std::uint32_t _idleHoverCacheLength = 0u;
+		MidiQuantisationSettings _idleHoverCacheQuantisation{};
+		std::uint64_t _idleHoverCacheTransportStart = 0u;
+		MidiGridTargets _idleHoverTargets;
+		std::optional<LoopGridGeometry> _idleHoverGrid;
 		std::uint64_t _hoverRevision = 0u; // UI-owned; invalidates model-instance targets
 		std::unique_ptr<MidiGridGesture> _gesture;
 		std::shared_ptr<actions::MidiEditRevisionCursor> _revisionCursor;

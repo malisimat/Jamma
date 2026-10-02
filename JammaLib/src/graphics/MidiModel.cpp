@@ -178,7 +178,9 @@ void MidiModel::Draw3d(DrawContext& ctx, unsigned int numInstances, base::DrawPa
 		glDepthMask(GL_TRUE);
 		GuiModel::Draw3d(glCtx, numInstances, pass);
 
-		glDepthMask(GL_FALSE);
+		// The morphed ring is the editor's solid backing plane: later scene
+		// geometry must not draw through it. Normal loop rings stay translucent.
+		glDepthMask(_editorActive ? GL_TRUE : GL_FALSE);
 		glCtx.SetUniform("RenderMode", 4);
 		GuiModel::Draw3d(glCtx, numInstances, pass);
 
@@ -230,6 +232,9 @@ void MidiModel::SetEditorTarget(float startU, float endU, int pitch, int noteInd
 void MidiModel::SetEditorPreview(std::vector<EditorPreviewSpan> spans,
 	std::uint32_t loopLength)
 {
+	if (_editorPreviewLength == loopLength && _editorPreviewSpans == spans)
+		return;
+
 	_editorPreviewSpans = std::move(spans);
 	_editorPreviewLength = loopLength;
 	_editorGridDirty = true;

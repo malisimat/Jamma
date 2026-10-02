@@ -161,7 +161,7 @@ void main()
                     : (EditorPitchRow >= pitchRow - 0.5 && EditorPitchRow < pitchRow + 0.5 ? 1.0 : 0.0);
                 ColorOUT.rgb += hover * EditorMorphV * vec3(0.10, 0.35, 0.40);
             }
-            ColorOUT.a = mix(ColorOUT.a, 0.93, EditorMorphV);
+            ColorOUT.a = mix(ColorOUT.a, 1.0, EditorMorphV);
 			// A bright part of the sky probe glances across the editor's flat surface.
 			vec3 towardEye = normalize(EditorProbeEye - EditorLocalPosition);
 			vec3 reflected = reflect(-towardEye, vec3(0.0, 1.0, 0.0));

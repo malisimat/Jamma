@@ -48,6 +48,7 @@ namespace graphics
 			std::uint32_t Start = 0u, End = 0u;
 			std::uint8_t Pitch = 60u;
 			bool Fill = true;
+			bool operator==(const EditorPreviewSpan&) const = default;
 		};
 
 	private:
