@@ -16,6 +16,9 @@
 #include "midi/MidiLoop.h"
 #include "midi/MidiEditOperations.h"
 #include "midi/MidiGridGesture.h"
+#include "midi/LoopGridEditor.h"
+#include "graphics/LoopGridProjection.h"
+#include "glm/ext.hpp"
 #include "midi/MidiLoopEditUndo.h"
 #include "actions/ActionUndoHistory.h"
 #include "graphics/MidiModel.h"
@@ -2303,4 +2306,225 @@ TEST(MidiLoopEdit, PartialDisplayedCellPaintPreservesCapturedNoteDespiteRawOverl
 	MidiLoop::ExportState exported;
 	ASSERT_TRUE(loop.SnapshotForExport(exported));
 	EXPECT_EQ(4u, exported.EventCount);
+}
+
+TEST(MidiLoopEdit, VelocityAndSnappedMoveEachPublishOneUndoableRevision)
+{
+	auto take = MakeLoopTake("pointer-midi-edit");
+	take->SetGlobalMidiQuantState(io::JamFile::GlobalMidiQuantState::Mixed);
+	take->Record({}, "station", {0u}, {""});
+	take->Play(0u, 100u, 0u);
+	auto settings = take->ResolvedMidiQuantisation();
+	settings.Enabled = true; settings.GrainSamps = 10u;
+	settings.Fraction = MidiQuantisationFraction::Whole;
+	take->SetMidiQuantisation(settings);
+	auto loop = take->GetMidiLoops().at(0u);
+	const std::array events{MidiEvent::MakeNoteOn(10u, 2u, 60u, 80u),
+		MidiEvent::MakeNoteOff(30u, 2u, 60u)};
+	loop->ReplaceRecordedEvents(events.data(), events.size(), 100u);
+	ASSERT_TRUE(loop->SetQuantisation(take->ResolvedMidiQuantisation(), take->MidiQuantisationTransportStartSamps()));
+	auto cursor = std::make_shared<actions::MidiEditRevisionCursor>();
+	for (bool velocity : {true, false})
+	{
+		actions::ActionUndoHistory history;
+		MidiLoop::EditState before;
+		ASSERT_TRUE(loop->SnapshotForEdit(before));
+		midi::MidiGridGesture gesture;
+		ASSERT_TRUE(velocity ? gesture.BeginVelocity(before, {15u, 60u, 0.15})
+			: gesture.BeginSnappedMove(before, {15u, 60u, 0.15}));
+		ASSERT_TRUE(velocity ? gesture.UpdateRelative(40.0) : gesture.Update({45u, 64u, 0.45}));
+		EXPECT_EQ(before.Revision, loop->Revision());
+		std::uint64_t accepted = 0u;
+		ASSERT_TRUE(take->PublishMidiEdit(loop, gesture.Working(), &accepted));
+		EXPECT_EQ(before.Revision + 1u, accepted);
+		history.Add(std::make_shared<actions::MidiLoopEditUndo>(take, loop,
+			before, gesture.Working(), accepted, cursor));
+		ASSERT_TRUE(history.Undo());
+		EXPECT_FALSE(history.Undo());
+		MidiLoop::EditState restored;
+		ASSERT_TRUE(loop->SnapshotForEdit(restored));
+		ASSERT_EQ(before.EventCount, restored.EventCount);
+		for (std::size_t i = 0; i < before.EventCount; ++i)
+		{
+			EXPECT_EQ(before.Events[i].sampleOffset, restored.Events[i].sampleOffset);
+			EXPECT_EQ(before.Events[i].data1, restored.Events[i].data1);
+			EXPECT_EQ(before.Events[i].data2, restored.Events[i].data2);
+			EXPECT_EQ(before.Events[i].flags, restored.Events[i].flags);
+		}
+		ASSERT_TRUE(history.Redo());
+		EXPECT_FALSE(history.Redo());
+	}
+	MidiEvent on;
+	ASSERT_TRUE(loop->TryGetEvent(0u, on));
+	EXPECT_EQ(40u, on.sampleOffset);
+	EXPECT_EQ(64u, on.data1);
+	EXPECT_GT(on.data2, 80u);
+}
+
+class MidiPointerEditorTest : public testing::Test
+{
+protected:
+	void SetUp() override
+	{
+		station = MakeStation("pointer-editor");
+		station->SetGlobalMidiQuantState(io::JamFile::GlobalMidiQuantState::Mixed);
+		take = MakeLoopTake("pointer-editor-take");
+		take->SetGlobalMidiQuantState(io::JamFile::GlobalMidiQuantState::Mixed);
+		take->Record({}, "station", {0u}, {""});
+		take->Play(0u, 100u, 0u);
+		auto settings = take->ResolvedMidiQuantisation();
+		settings.Enabled = true; settings.GrainSamps = 10u;
+		settings.Fraction = MidiQuantisationFraction::Whole;
+		take->SetMidiQuantisation(settings);
+		loop = take->GetMidiLoops().at(0u);
+		const std::array events{MidiEvent::MakeNoteOn(10u, 0u, 60u, 80u), MidiEvent::MakeNoteOff(30u, 0u, 60u)};
+		loop->ReplaceRecordedEvents(events.data(), events.size(), 100u);
+		ASSERT_TRUE(loop->SetQuantisation(take->ResolvedMidiQuantisation(), take->MidiQuantisationTransportStartSamps()));
+		station->AddTake(take);
+		stations.push_back(station);
+		station->SetModelPosition({0,0,0}); station->SetModelScale(1);
+		take->SetModelPosition({0,0,0}); take->SetModelScale(1);
+		ASSERT_TRUE(loop->Model());
+		loop->Model()->SetModelPosition({0,0,0}); loop->Model()->SetModelScale(1);
+		loop->Model()->UpdateModel({midi::MidiNote{10u, 20u, 0u, 60u, 80u, 0u}}, 100u);
+		take->Select(); loop->Model()->Select();
+		vp = glm::ortho(-70.0f, 70.0f, -70.0f, 70.0f, 1.0f, 1000.0f)
+			* glm::lookAt(glm::vec3(0,400,0), glm::vec3(0), glm::vec3(0,0,-1));
+		editor = std::make_unique<midi::LoopGridEditor>(midi::LoopGridEditor::Host{
+			camera, history, mutex, stations, {}, [this](float) { return vp; }, {},
+			[this](int button, utils::Position2d) { relativeButton = button; return allowRelative; },
+			[this](int) { relativeButton = -1; ++endCount; }}, utils::Size2d{800u,800u});
+		ASSERT_TRUE(editor->Open(take, nullptr, loop));
+		for (int frame = 0; frame < 10; ++frame)
+		{ camera.TickBackgroundDrag(0.05f); editor->Tick(0.05f); }
+		ASSERT_TRUE(editor->IsReady());
+		loop->Model()->SetEditorPitchRange(48,24);
+	}
+	utils::Position2d Pixel(double u, int pitch)
+	{
+		const auto v = (pitch + 0.5 - loop->Model()->EditorBottomPitch()) / loop->Model()->EditorVisibleRows();
+		return *graphics::LoopGridProjection::Project(vp, glm::mat4(1.0f),
+			{static_cast<float>((u-0.5)*100), 2.0f, static_cast<float>((0.5-v)*78)},800,800);
+	}
+	void Button(int index, bool down, utils::Position2d pixel, unsigned int buttons, bool control=false)
+	{
+		TouchAction action;
+		action.Index=index; action.State=down ? TouchAction::TOUCH_DOWN : TouchAction::TOUCH_UP;
+		action.Position=pixel; action.MouseButtonsDown=buttons;
+		action.Modifiers=control ? base::Action::MODIFIER_CTRL : base::Action::MODIFIER_NONE;
+		editor->OnAction(action);
+	}
+	void Relative(int dx, int dy, unsigned int buttons)
+	{
+		TouchMoveAction move; move.IsRelative=true; move.RelativeDelta={dx,dy};
+		move.MouseButtonsDown=buttons; editor->OnAction(move);
+	}
+	std::shared_ptr<Station> station;
+	std::shared_ptr<LoopTake> take;
+	std::shared_ptr<MidiLoop> loop;
+	std::vector<std::shared_ptr<Station>> stations;
+	graphics::Camera camera{graphics::CameraParams(base::MoveableParams(),0u)};
+	actions::ActionUndoHistory history;
+	std::mutex mutex;
+	glm::mat4 vp{1};
+	std::unique_ptr<midi::LoopGridEditor> editor;
+	int relativeButton=-1, endCount=0;
+	bool allowRelative=true;
+};
+
+TEST_F(MidiPointerEditorTest, RightNoteOwnsReleaseAndModifierChangesCannotSwitchMode)
+{
+	const auto pixel=Pixel(0.15,60);
+	const auto revision=loop->Revision();
+	Button(2,true,pixel,4u,true);
+	ASSERT_TRUE(editor->OwnsPointer()); EXPECT_EQ(2,relativeButton);
+	Relative(500,40,4u);
+	Button(0,true,Pixel(0.7,65),5u);
+	Button(0,false,Pixel(0.7,65),4u);
+	EXPECT_TRUE(editor->OwnsPointer()); EXPECT_EQ(revision,loop->Revision());
+	Button(2,false,pixel,0u);
+	EXPECT_FALSE(editor->OwnsPointer()); EXPECT_EQ(-1,relativeButton);
+	EXPECT_EQ(revision+1u,loop->Revision());
+	MidiEvent on; ASSERT_TRUE(loop->TryGetEvent(0u,on)); EXPECT_EQ(90u,on.data2);
+	EXPECT_EQ(10u,on.sampleOffset); EXPECT_EQ(60u,on.data1);
+	EXPECT_EQ(-1,loop->Model()->EditorHeldInstance());
+	EXPECT_TRUE(history.Undo()); EXPECT_FALSE(history.Undo()); EXPECT_TRUE(history.Redo());
+}
+
+TEST_F(MidiPointerEditorTest, ControlEmptyViewAndRightEmptyOrbitNeverPublish)
+{
+	const auto pixel=Pixel(0.7,65);
+	const auto revision=loop->Revision();
+	Button(0,true,pixel,1u,true);
+	ASSERT_TRUE(editor->OwnsPointer()); EXPECT_EQ(0,relativeButton);
+	Relative(16,24,1u); // No Ctrl: gesture remains latched.
+	EXPECT_EQ(26,loop->Model()->EditorVisibleRows());
+	Button(2,true,pixel,5u); Button(2,false,pixel,1u);
+	EXPECT_TRUE(editor->OwnsPointer());
+	Button(0,false,pixel,0u);
+	EXPECT_EQ(revision,loop->Revision()); EXPECT_FALSE(history.Undo());
+	Button(2,true,pixel,4u);
+	EXPECT_FALSE(editor->OwnsPointer()); EXPECT_EQ(-1,relativeButton);
+	Button(2,false,pixel,0u); EXPECT_EQ(revision,loop->Revision());
+}
+
+TEST_F(MidiPointerEditorTest, FailedAnchorAndCaptureLossLeaveSourceAndUndoUnchanged)
+{
+	const auto pixel=Pixel(0.15,60); const auto revision=loop->Revision();
+	allowRelative=false; Button(2,true,pixel,4u);
+	EXPECT_FALSE(editor->OwnsPointer()); EXPECT_EQ(revision,loop->Revision());
+	allowRelative=true; Button(2,true,pixel,4u); Relative(0,40,4u);
+	editor->CancelInput();
+	EXPECT_FALSE(editor->OwnsPointer()); EXPECT_EQ(-1,relativeButton);
+	EXPECT_EQ(-1,loop->Model()->EditorHeldInstance());
+	Button(2,false,pixel,0u); EXPECT_EQ(revision,loop->Revision()); EXPECT_FALSE(history.Undo());
+}
+
+TEST_F(MidiPointerEditorTest, ControlNoteMovesAbsolutelyWhilePlainLeftStillPaints)
+{
+	const auto note=Pixel(0.15,60), destination=Pixel(0.45,64);
+	Button(0,true,note,1u,true);
+	ASSERT_TRUE(editor->OwnsPointer()); EXPECT_EQ(-1,relativeButton);
+	TouchMoveAction move; move.Position=destination; move.MouseButtonsDown=1u;
+	editor->OnAction(move); Button(0,false,destination,0u);
+	MidiEvent on; ASSERT_TRUE(loop->TryGetEvent(0u,on));
+	EXPECT_EQ(40u,on.sampleOffset); EXPECT_EQ(64u,on.data1); EXPECT_EQ(80u,on.data2);
+	ASSERT_TRUE(history.Undo());
+	const auto empty=Pixel(0.75,66);
+	Button(0,true,empty,1u); Button(0,false,empty,0u);
+	EXPECT_EQ(4u,loop->EventCount());
+}
+
+TEST_F(MidiPointerEditorTest, NoteClickAndReturnToStartingVelocityAreNoOps)
+{
+	const auto pixel=Pixel(0.15,60); const auto revision=loop->Revision();
+	Button(2,true,pixel,4u); Button(2,false,pixel,0u);
+	EXPECT_EQ(revision,loop->Revision()); EXPECT_FALSE(history.Undo());
+	Button(2,true,pixel,4u); Relative(0,40,4u); Relative(0,-40,4u);
+	Button(2,false,pixel,0u);
+	EXPECT_EQ(revision,loop->Revision()); EXPECT_FALSE(history.Undo());
+}
+
+TEST_F(MidiPointerEditorTest, ModelReplacementAndResizeCancelCapturedEdit)
+{
+	const auto pixel=Pixel(0.15,60); const auto revision=loop->Revision();
+	Button(2,true,pixel,4u); Relative(0,40,4u);
+	loop->Model()->UpdateModel({midi::MidiNote{10u,20u,0u,60u,80u,0u}},100u);
+	Button(2,false,pixel,0u);
+	EXPECT_EQ(revision,loop->Revision()); EXPECT_FALSE(editor->OwnsPointer());
+	Button(2,true,pixel,4u); Relative(0,40,4u);
+	editor->SetSize({640u,480u});
+	EXPECT_FALSE(editor->OwnsPointer()); EXPECT_EQ(-1,relativeButton);
+	EXPECT_EQ(revision,loop->Revision()); EXPECT_FALSE(history.Undo());
+}
+
+TEST_F(MidiPointerEditorTest, ControlNoteWithoutGridRejectsInsteadOfPainting)
+{
+	auto q=take->ResolvedMidiQuantisation(); q.Enabled=false; take->SetMidiQuantisation(q);
+	ASSERT_TRUE(loop->SetQuantisation(take->ResolvedMidiQuantisation(),take->MidiQuantisationTransportStartSamps()));
+	const auto revision=loop->Revision(); const auto count=loop->EventCount();
+	const auto pixel=Pixel(0.15,60);
+	Button(0,true,pixel,1u,true); Button(0,false,pixel,0u);
+	EXPECT_FALSE(editor->OwnsPointer()); EXPECT_EQ(-1,relativeButton);
+	EXPECT_EQ(count,loop->EventCount()); EXPECT_EQ(revision,loop->Revision()); EXPECT_FALSE(history.Undo());
 }

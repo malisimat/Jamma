@@ -54,6 +54,7 @@ void LoopGridEditor::InitResources(resources::ResourceLib& resourceLib, bool for
 
 void LoopGridEditor::ReleaseResources()
 {
+	CancelInput();
 	_button->ReleaseResources();
 	_feedback->ReleaseResources();
 	_modeLabel->ReleaseResources();
@@ -497,7 +498,7 @@ std::optional<MidiGridGesture::Point> LoopGridEditor::_PointAt(
 		LoopGridGeometry::SampleAtU(boundedU, length)) + model->EditorTimeOrigin()) % length);
 	return MidiGridGesture::Point{ sample,
 		static_cast<std::uint8_t>(pitch), model->EditorTimeOrigin()
-			? LoopGridGeometry::SampleU(sample, length) : boundedU };
+			? LoopGridGeometry::SampleU(sample, length) : boundedU, boundedV };
 }
 
 std::uint8_t LoopGridEditor::_ChannelOf(const std::shared_ptr<MidiLoop>& loop) const
@@ -558,6 +559,7 @@ void LoopGridEditor::_BeginGesture(const actions::TouchAction& action)
 	if (_gesture->Begin(source, *point, _ChannelOf(loop), _PixelsPerSample(source.LoopLengthSamps)))
 	{
 		_pointerOwned = true;
+		_pointerButton = 0;
 		_previewDirty = true;
 		_UpdateHover(*point);
 	}
@@ -568,21 +570,98 @@ void LoopGridEditor::_BeginGesture(const actions::TouchAction& action)
 	}
 }
 
+bool LoopGridEditor::_BeginSpecialGesture(const actions::TouchAction& action)
+{
+	const auto point = _PointAt(action.Position, false);
+	const auto loop = _midiLoop.lock();
+	MidiLoop::EditState source;
+	if (!point || !loop || !loop->Model() || !loop->SnapshotForEdit(source))
+		return false;
+	const auto targets = MidiGridTargets::Build(source);
+	const auto target = targets.Resolve(point->Sample, point->Pitch, nullptr);
+	const bool velocity = action.Index == 2;
+	if (velocity && !target.NoteIndex) return false; // Empty right press orbits.
+	if (target.NoteIndex)
+	{
+		_gesture = std::make_unique<MidiGridGesture>();
+		const auto accepted = velocity ? _gesture->BeginVelocity(source, *point)
+			: _gesture->BeginSnappedMove(source, *point);
+		if (!accepted)
+		{
+			_CancelGesture();
+			_SetFeedback(targets.Notes[*target.NoteIndex].Ambiguous
+				? "Ambiguous note: edit rejected"
+				: "Enable a time grid, or use plain-left free move");
+			return true; // Never fall through to paint or view on a note.
+		}
+		_gestureModelGeneration = loop->Model()->EditorModelGeneration();
+	}
+	else
+	{
+		_pitchView = true;
+		_pitchViewGesture.Begin(loop->Model()->EditorBottomPitch(),
+			loop->Model()->EditorVisibleRows(), point->V);
+	}
+	_pointerOwned = true;
+	_pointerButton = action.Index;
+	_relativePointer = velocity || _pitchView;
+	_ClearIdleHover(false);
+	if (_relativePointer && (!_host.BeginRelativePointer
+		|| !_host.BeginRelativePointer(_pointerButton, action.Position)))
+	{
+		_CancelGesture();
+		_SetFeedback("Pointer anchoring failed: gesture cancelled");
+		return true;
+	}
+	_previewDirty = true;
+	_UpdateHeldTarget();
+	if (_pitchView) _SetFeedback("Drag up/down to pan pitch; left/right to zoom");
+	return true;
+}
+
+void LoopGridEditor::_UpdateHeldTarget()
+{
+	const auto loop = _midiLoop.lock();
+	const auto model = loop ? loop->Model() : nullptr;
+	if (!model) return;
+	if (!_gesture || !_gesture->CapturedNoteIndex() || _gesture->Rejected())
+	{
+		model->SetEditorHover(-1.0f, -1);
+		model->ClearEditorHeld();
+		return;
+	}
+	const auto target = _gesture->CapturedTarget();
+	const auto length = _gesture->Before().LoopLengthSamps;
+	_hoverRevision = _gesture->Before().Revision;
+	model->SetEditorTarget(static_cast<float>(target.Start) / length,
+		static_cast<float>(target.End) / length, target.Pitch,
+		static_cast<int>(*_gesture->CapturedNoteIndex()));
+	model->SetEditorHeld(static_cast<int>(*_gesture->CapturedNoteIndex()),
+		_gesture->Mode() == MidiGridGesture::Kind::Velocity ? _gesture->ProposedVelocity() : -1);
+	if (_gesture->Mode() == MidiGridGesture::Kind::Velocity)
+		_SetFeedback("Velocity " + std::to_string(_gesture->ProposedVelocity()));
+	else if (_gesture->Mode() == MidiGridGesture::Kind::SnappedMove && !_gesture->Preview().empty())
+	{
+		const auto& preview = _gesture->Preview().front();
+		_SetFeedback("Move: pitch " + std::to_string(preview.Pitch)
+			+ ", sample " + std::to_string(preview.Start));
+	}
+}
+
 void LoopGridEditor::_EndGesture(const actions::TouchAction& action)
 {
-	if (_gesture)
-		if (auto point = _PointAt(action.Position, true))
-			_gesture->Update(*point);
-	if (_gesture && _gesture->Dirty() && !_gesture->Rejected())
-		_PublishGesture();
-	else if (_gesture && _gesture->Rejected())
-		_SetFeedback("Edit rejected; source unchanged");
+	const auto wasRelative = _relativePointer;
+	if (_gesture && !wasRelative)
+		if (auto point = _PointAt(action.Position, true)) _gesture->Update(*point);
+	if (_gesture && _gesture->Dirty() && !_gesture->Rejected()) _PublishGesture();
+	else if (_gesture && _gesture->Rejected()) _SetFeedback("Edit rejected; source unchanged");
 	_CancelGesture();
 	_ClearIdleHover(false);
-	if (auto point = _PointAt(action.Position, false))
+	// Relative teardown sends a fresh absolute position from the window adapter.
+	if (!wasRelative)
 	{
 		_idleHoverPointer = action.Position;
-		_UpdateHover(*point);
+		if (auto point = _PointAt(action.Position, false)) _UpdateHover(*point);
 	}
 }
 
@@ -607,7 +686,12 @@ void LoopGridEditor::_PublishGesture()
 
 void LoopGridEditor::_CancelGesture()
 {
+	const auto relative = _relativePointer;
+	const auto button = _pointerButton;
 	_pointerOwned = false;
+	_pointerButton = -1;
+	_relativePointer = false;
+	_pitchView = false;
 	_previewDirty = false;
 	_hoverRevision = 0u;
 	if (_gesture) _gesture->Cancel();
@@ -617,7 +701,9 @@ void LoopGridEditor::_CancelGesture()
 		{
 			model->SetEditorHover(-1.0f, -1);
 			model->SetEditorPreview({}, loop->CompletedLengthForEditor());
+			model->ClearEditorHeld();
 		}
+	if (relative && _host.EndRelativePointer) _host.EndRelativePointer(button);
 }
 
 void LoopGridEditor::_ClearIdleHover(bool clearCache)
@@ -721,7 +807,8 @@ void LoopGridEditor::_UpdatePreview()
 	std::vector<graphics::MidiModel::EditorPreviewSpan> spans;
 	spans.reserve(_gesture->Preview().size());
 	for (const auto& preview : _gesture->Preview())
-		spans.push_back({ preview.Start, preview.End, preview.Pitch, preview.Fill });
+		spans.push_back({ preview.Start, preview.End, preview.Pitch, preview.Fill,
+			_gesture->Mode() == MidiGridGesture::Kind::SnappedMove });
 	loop->Model()->SetEditorPreview(std::move(spans),
 		_gesture->Before().LoopLengthSamps);
 }
@@ -735,6 +822,8 @@ void LoopGridEditor::_CheckGesture()
 	if (!IsReady() || !_Validate()
 		|| !loop || !take || !loop->SnapshotForEdit(current)
 		|| !_gesture->MatchesPublished(current)
+		|| (_gesture->CapturedNoteIndex() && loop->Model()
+			&& _gestureModelGeneration != loop->Model()->EditorModelGeneration())
 		|| current.Quantisation != take->ResolvedMidiQuantisation()
 		|| current.QuantisationTransportStartSamps != take->MidiQuantisationTransportStartSamps())
 	{
@@ -960,82 +1049,94 @@ bool LoopGridEditor::_HandleButton(actions::TouchAction action)
 
 std::optional<actions::ActionResult> LoopGridEditor::OnAction(actions::TouchAction action)
 {
-	if (_HandleButton(action))
-		return _Eaten();
-	if (!IsEngaged())
-		return std::nullopt;
 	_CheckGesture();
 	const auto isMouse = action.Touch == actions::TouchAction::TOUCH_MOUSE;
+	if (_pointerOwned)
+	{
+		if (isMouse && actions::TouchAction::TOUCH_UP == action.State && action.Index == _pointerButton)
+			_EndGesture(action);
+		return _Eaten(); // Another button, wheel, modifier or HUD cannot switch a held gesture.
+	}
+	if (_HandleButton(action)) return _Eaten();
+	if (!IsEngaged()) return std::nullopt;
+	if (_orbitDragging)
+	{
+		if (isMouse && actions::TouchAction::TOUCH_UP == action.State && action.Index == _pointerButton)
+		{
+			_EndOrbit();
+			_pointerButton = -1;
+			_idleHoverPointer = action.Position;
+		}
+		return _Eaten();
+	}
 	if (actions::TouchAction::TOUCH_DOWN == action.State && 4 == action.Index && isMouse)
 		_HandleWheel(action);
-	else if (actions::TouchAction::TOUCH_DOWN == action.State && 0 == action.Index
-		&& isMouse && IsReady() && _Validate())
+	else if (actions::TouchAction::TOUCH_DOWN == action.State && isMouse
+		&& (action.Index == 0 || action.Index == 2) && IsReady() && _Validate())
 	{
+		const auto control = (base::Action::MODIFIER_CTRL & action.Modifiers) != 0;
+		if ((action.Index == 2 || control) && _BeginSpecialGesture(action)) return _Eaten();
 		_ClearIdleHover(false);
-		_BeginGesture(action);
+		if (action.Index == 0 && !control) _BeginGesture(action);
 		if (!_pointerOwned)
 		{
 			if (auto loop = _midiLoop.lock())
 				if (auto model = loop->Model()) model->SetEditorHover(-1.0f, -1);
+			_pointerButton = action.Index;
 			_BeginOrbit(action.Position);
 		}
 	}
-	else if (actions::TouchAction::TOUCH_DOWN == action.State && 2 == action.Index
-		&& isMouse && IsReady() && !_pointerOwned)
-	{
-		_ClearIdleHover(false);
-		if (auto loop = _midiLoop.lock())
-			if (auto model = loop->Model()) model->SetEditorHover(-1.0f, -1);
-		_BeginOrbit(action.Position);
-	}
-	else if (actions::TouchAction::TOUCH_UP == action.State && _pointerOwned
-		&& isMouse && action.Index == 0)
-		_EndGesture(action);
-	else if (actions::TouchAction::TOUCH_UP == action.State && _pointerOwned
-		&& action.MouseButtonsDown == 0u)
-		_CancelGesture();
-	if (actions::TouchAction::TOUCH_UP == action.State && _orbitDragging
-		&& (action.MouseButtonsDown & ((1u << 0) | (1u << 2))) == 0u)
-		_EndOrbit();
 	return _Eaten();
 }
 
 std::optional<actions::ActionResult> LoopGridEditor::OnAction(actions::TouchMoveAction action)
 {
-	if (!IsEngaged())
-		return std::nullopt;
+	if (!IsEngaged()) return std::nullopt;
 	_CheckGesture();
-	if (0u == (action.MouseButtonsDown & 1u))
-		_buttonPressed = false;
+	if (0u == (action.MouseButtonsDown & 1u)) _buttonPressed = false;
 	if (_pointerOwned && (action.Touch != actions::TouchAction::TOUCH_MOUSE
-		|| 0u == (action.MouseButtonsDown & 1u)))
+		|| 0u == (action.MouseButtonsDown & (1u << _pointerButton))))
 	{
 		_ClearIdleHover(false);
-		_CancelGesture(); // lost capture
+		_CancelGesture();
+		_SetFeedback("Gesture cancelled: pointer capture lost");
 	}
-	else if (_pointerOwned && _gesture)
+	else if (_pointerOwned)
 	{
-		if (auto point = _PointAt(action.Position, true))
+		if (_relativePointer && !action.IsRelative) return _Eaten();
+		if (_pitchView)
 		{
-			_gesture->Update(*point);
-			// Preserve every paint sample; rebuild its derived preview only once per frame.
+			_pitchViewGesture.Update(action.RelativeDelta.X, action.RelativeDelta.Y);
+			if (auto loop = _midiLoop.lock())
+				if (auto model = loop->Model())
+				{
+					model->SetEditorPitchRange(_pitchViewGesture.Bottom(), _pitchViewGesture.Rows());
+					_SetFeedback("Pitch view " + std::to_string(_pitchViewGesture.Bottom())
+						+ "–" + std::to_string(_pitchViewGesture.Bottom() + _pitchViewGesture.Rows() - 1));
+				}
+		}
+		else if (_gesture)
+		{
+			if (_relativePointer) _gesture->UpdateRelative(action.RelativeDelta.Y);
+			else if (auto point = _PointAt(action.Position, true)) _gesture->Update(*point);
 			_previewDirty = true;
-			_UpdateHover(*point);
+			if (_gesture->CapturedNoteIndex()) _UpdateHeldTarget();
+			else if (auto point = _PointAt(action.Position, true)) _UpdateHover(*point);
 			if (_gesture->Rejected())
-				_SetFeedback("Cannot map this drag to source MIDI");
+			{
+				_CancelGesture();
+				_SetFeedback("Cannot represent this move; source unchanged");
+			}
 		}
 	}
 	else if (_orbitDragging)
 	{
 		if (action.Touch == actions::TouchAction::TOUCH_MOUSE
-			&& (action.MouseButtonsDown & ((1u << 0) | (1u << 2))) != 0u)
+			&& (action.MouseButtonsDown & (1u << _pointerButton)) != 0u)
 			_UpdateOrbit(action.Position);
-		else _EndOrbit();
+		else { _EndOrbit(); _pointerButton = -1; }
 	}
-	else
-	{
-		_idleHoverPointer = action.Position;
-	}
+	else if (!action.IsRelative) _idleHoverPointer = action.Position;
 	return _Eaten();
 }
 
