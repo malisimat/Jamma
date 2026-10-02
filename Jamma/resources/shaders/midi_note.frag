@@ -187,5 +187,11 @@ void main()
     }
     ColorOUT.rgb *= mix(SceneDim, 1.0, EditorMorphV);
     if (EditorActive > 0.5)
-        gl_FragDepth = gl_FragCoord.z * mix(1.0, 0.05, EditorMorphV);
+    {
+        float editorDepth = gl_FragCoord.z * mix(1.0, 0.05, EditorMorphV);
+        // Keep the captured low-velocity note legible over higher overlapping notes.
+        if (IsDisc < 0.5 && EditorHeldInstance == EditorNoteInstance)
+            editorDepth *= mix(1.0, 0.5, EditorMorphV);
+        gl_FragDepth = editorDepth;
+    }
 }

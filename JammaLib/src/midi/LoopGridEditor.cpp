@@ -578,6 +578,20 @@ bool LoopGridEditor::_BeginSpecialGesture(const actions::TouchAction& action)
 	if (!point || !loop || !loop->Model() || !loop->SnapshotForEdit(source))
 		return false;
 	const auto targets = MidiGridTargets::Build(source);
+	const auto model = loop->Model();
+	bool displayMatches = model->NoteInstanceCount() == targets.Notes.size();
+	for (std::size_t i = 0; displayMatches && i < targets.Notes.size(); ++i)
+	{
+		const auto& note = targets.Notes[i];
+		const auto& on = source.Events[note.On];
+		displayMatches = model->EditorNoteMatches(i, MidiNote{note.Start, note.End - note.Start,
+			on.Channel(), note.Pitch, on.data2, on.flags}, source.LoopLengthSamps);
+	}
+	if (!displayMatches)
+	{
+		_SetFeedback("Note display is refreshing; try again");
+		return true; // Never capture a source identity behind a stale displayed instance.
+	}
 	const auto target = targets.Resolve(point->Sample, point->Pitch, nullptr);
 	const bool velocity = action.Index == 2;
 	if (velocity && !target.NoteIndex) return false; // Empty right press orbits.
@@ -1099,7 +1113,7 @@ std::optional<actions::ActionResult> LoopGridEditor::OnAction(actions::TouchMove
 	{
 		_ClearIdleHover(false);
 		_CancelGesture();
-		_SetFeedback("Gesture cancelled: pointer capture lost");
+		_SetFeedback("Gesture cancelled: pointer anchoring or capture lost");
 	}
 	else if (_pointerOwned)
 	{

@@ -58,6 +58,8 @@ namespace graphics
 			std::vector<gui::GuiModel::InstanceAttribute> Attributes;
 			unsigned int InstanceCount = 0u;
 			unsigned int NoteCount = 0u;
+			std::vector<midi::MidiNote> EditorNotes;
+			std::uint32_t LoopLength = 0u;
 		};
 
 	public:
@@ -85,6 +87,8 @@ namespace graphics
 		void SetEditorTarget(float startU, float endU, int pitch, int noteIndex) noexcept;
 		void SetEditorHeld(int noteIndex, int proposedVelocity = -1) noexcept;
 		void ClearEditorHeld() noexcept;
+		bool EditorNoteMatches(std::size_t index, const midi::MidiNote& note,
+			std::uint32_t loopLength) const noexcept;
 		std::uint64_t EditorModelGeneration() const noexcept { return _editorModelGeneration; }
 		int EditorHeldInstance() const noexcept { return _editorHeldInstance; }
 		int EditorPreviewVelocity() const noexcept { return _editorPreviewVelocity; }
@@ -152,6 +156,9 @@ namespace graphics
 		int _editorHeldInstance = -1;
 		int _editorPreviewVelocity = -1;
 		std::uint64_t _editorModelGeneration = 0u;
+		// UI/render-owned identity metadata arrives in the existing immutable model snapshot.
+		std::vector<midi::MidiNote> _editorNoteSpans;
+		std::uint32_t _editorModelLength = 0u;
 		std::vector<float> _editorGridVertices;
 		std::vector<EditorPreviewSpan> _editorPreviewSpans;
 		std::uint32_t _editorPreviewLength = 0u;

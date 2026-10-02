@@ -246,6 +246,16 @@ void MidiModel::SetEditorHeld(int noteIndex, int proposedVelocity) noexcept
 	_editorPreviewVelocity = proposedVelocity < 0 ? -1 : std::clamp(proposedVelocity, 1, 127);
 }
 
+bool MidiModel::EditorNoteMatches(std::size_t index, const midi::MidiNote& note,
+	std::uint32_t loopLength) const noexcept
+{
+	if (_editorModelLength != loopLength || index >= _editorNoteSpans.size()) return false;
+	const auto& applied = _editorNoteSpans[index];
+	return applied.StartSample == note.StartSample && applied.DurationSamples == note.DurationSamples
+		&& applied.Channel == note.Channel && applied.Note == note.Note
+		&& applied.Velocity == note.Velocity && applied.Flags == note.Flags;
+}
+
 void MidiModel::ClearEditorHeld() noexcept
 {
 	_editorHeldInstance = -1;
@@ -330,6 +340,8 @@ void MidiModel::UpdateModel(const std::vector<midi::MidiNote>& spans, std::uint3
 	ClearEditorHeld();
 	SetEditorHover(-1.0f, -1);
 	SetEditorPreview({}, loopLengthSamps);
+	_editorNoteSpans = std::move(data->EditorNotes);
+	_editorModelLength = data->LoopLength;
 	_backNoteInstanceCount = data->NoteCount;
 	SetInstanceAttributes(std::move(data->Attributes), data->InstanceCount);
 }
@@ -344,6 +356,8 @@ std::shared_ptr<MidiModel::ModelInstanceData> MidiModel::BuildInstanceData(const
 	std::uint32_t loopLengthSamps) const
 {
 	auto data = std::make_shared<ModelInstanceData>();
+	data->LoopLength = loopLengthSamps;
+	data->EditorNotes.reserve(spans.size());
 	std::vector<float> timePitchData;
 	std::vector<float> shapeData;
 
@@ -404,6 +418,7 @@ std::shared_ptr<MidiModel::ModelInstanceData> MidiModel::BuildInstanceData(const
 		// Negative tag retains exact ring geometry while carrying the unscaled
 		// pitch needed to place every row on the unwrapped grid.
 		shapeData.push_back(-static_cast<float>(span.Note) - 1.0f);
+		data->EditorNotes.push_back(span);
 		++noteCount;
 	}
 
@@ -426,6 +441,8 @@ void MidiModel::ApplyPendingModelUpdate()
 	ClearEditorHeld();
 	SetEditorHover(-1.0f, -1);
 	SetEditorPreview({}, _displayLengthSamps.load(std::memory_order_relaxed));
+	_editorNoteSpans = std::move(pending->EditorNotes);
+	_editorModelLength = pending->LoopLength;
 	_backNoteInstanceCount = pending->NoteCount;
 	SetInstanceAttributes(std::move(pending->Attributes), pending->InstanceCount);
 }

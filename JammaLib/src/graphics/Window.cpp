@@ -1484,6 +1484,8 @@ void Window::_HandleRawInput(HRAWINPUT input)
 	movement.MouseButtonsDown = _buttonsDown;
 	movement.Modifiers = _modifiers;
 	movement.IsRelative = true;
-	movement.RelativeDelta = { static_cast<int>(raw.data.mouse.lLastX), -static_cast<int>(raw.data.mouse.lLastY) };
+	const auto upward = -static_cast<std::int64_t>(raw.data.mouse.lLastY);
+	movement.RelativeDelta = { static_cast<int>(raw.data.mouse.lLastX),
+		static_cast<int>(std::clamp<std::int64_t>(upward, INT_MIN, INT_MAX)) };
 	OnAction(movement);
 }

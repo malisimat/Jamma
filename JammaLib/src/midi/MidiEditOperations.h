@@ -45,7 +45,9 @@ namespace midi
 			const auto transport = static_cast<std::int64_t>(original.QuantisationTransportStartSamps);
 			const auto origin = q.HasRemoteGrid() ? q.RemoteOriginSamps : 0ll;
 			const auto first = MidiQuantisation::NearestBoundaryIndex(transport - origin, interval, divisions);
-			const auto last = MidiQuantisation::NearestBoundaryIndex(transport - origin + original.LoopLengthSamps - 1u, interval, divisions);
+			// Exact-timing endpoints already have their inverse: validate it once.
+			const auto last = on.HasExactTiming() ? first
+				: MidiQuantisation::NearestBoundaryIndex(transport - origin + original.LoopLengthSamps - 1u, interval, divisions);
 			if (last < first || last - first > 8192) return false;
 			std::vector<MidiEvent> displayed(original.EventCount);
 			MidiQuantisation::BuildQuantisedPlaybackEvents(original.Events.data(), original.EventCount,

@@ -2528,3 +2528,14 @@ TEST_F(MidiPointerEditorTest, ControlNoteWithoutGridRejectsInsteadOfPainting)
 	EXPECT_FALSE(editor->OwnsPointer()); EXPECT_EQ(-1,relativeButton);
 	EXPECT_EQ(count,loop->EventCount()); EXPECT_EQ(revision,loop->Revision()); EXPECT_FALSE(history.Undo());
 }
+
+TEST_F(MidiPointerEditorTest, StaleDisplayedInstanceCannotCaptureDifferentSourceNote)
+{
+	const std::array replacement{MidiEvent::MakeNoteOn(10u,0u,60u,100u), MidiEvent::MakeNoteOff(30u,0u,60u)};
+	loop->ReplaceRecordedEvents(replacement.data(),replacement.size(),100u);
+	const auto revision=loop->Revision();
+	Button(2,true,Pixel(0.15,60),4u);
+	EXPECT_FALSE(editor->OwnsPointer()); EXPECT_EQ(-1,relativeButton);
+	Relative(0,40,4u); Button(2,false,Pixel(0.15,60),0u);
+	EXPECT_EQ(revision,loop->Revision()); EXPECT_FALSE(history.Undo());
+}
