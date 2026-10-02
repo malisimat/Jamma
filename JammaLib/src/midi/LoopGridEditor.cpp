@@ -573,6 +573,8 @@ void LoopGridEditor::_EndGesture(const actions::TouchAction& action)
 	else if (_gesture && _gesture->Rejected())
 		_SetFeedback("Edit rejected; source unchanged");
 	_CancelGesture();
+	if (auto point = _PointAt(action.Position, false))
+		_UpdateHover(*point);
 }
 
 void LoopGridEditor::_PublishGesture()
@@ -613,6 +615,11 @@ void LoopGridEditor::_UpdateHover(MidiGridGesture::Point point)
 	const auto loop = _midiLoop.lock();
 	const auto model = loop ? loop->Model() : nullptr;
 	if (!model) return;
+	if (_pointerOwned)
+	{
+		model->SetEditorHover(-1.0f, -1);
+		return;
+	}
 	MidiGridTargets::Target target;
 	std::uint32_t length = 0u;
 	bool gridResolved = false;

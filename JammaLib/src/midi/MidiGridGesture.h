@@ -63,6 +63,7 @@ namespace midi
 				_pitch = hit->Pitch;
 				_kind = hit->Zone == LoopGridGeometry::HitZone::LeftEdge ? Kind::TrimLeft
 					: hit->Zone == LoopGridGeometry::HitZone::RightEdge ? Kind::TrimRight : Kind::Move;
+				_preview.push_back({ _start, _end, _pitch, true });
 				return true;
 			}
 			_kind = Kind::Create;
@@ -124,6 +125,7 @@ namespace midi
 				if (start == _start && end == _end && pitch == _pitch)
 				{
 					_dirty = false;
+					_preview.push_back({ _start, _end, _pitch, true });
 					_last = point;
 					return true;
 				}
@@ -220,9 +222,15 @@ namespace midi
 			const auto target = TargetAt(point);
 			if (target.NoteIndex)
 			{
-				if (_fill) return true;
 				const auto& note = _targets.Notes[*target.NoteIndex];
 				if (_removed[note.On]) return true;
+				if (_fill)
+				{
+					// Existing notes crossed by add paint are held too, without editing them.
+					_removed[note.On] = true;
+					_preview.push_back({ note.Start, note.End, note.Pitch, true });
+					return true;
+				}
 				if (note.Ambiguous) return Reject();
 				_removed[note.On] = true;
 				// Rebuild from frozen source identities, deleting in descending order.

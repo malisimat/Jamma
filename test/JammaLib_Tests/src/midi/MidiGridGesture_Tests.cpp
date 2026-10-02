@@ -94,8 +94,16 @@ TEST(MidiGridGesture, FreeEdgeTrimHasSixPixelTargetAndClickIsNoOp)
 	MidiGridGesture click;
 	ASSERT_TRUE(click.Begin(source, { 30u, 64u, 0.30 }, 1u, 10.0));
 	EXPECT_EQ(MidiGridGesture::Kind::Move, click.Mode());
+	ASSERT_EQ(1u, click.Preview().size());
+	EXPECT_EQ(20u, click.Preview()[0].Start);
+	EXPECT_EQ(40u, click.Preview()[0].End);
 	ASSERT_TRUE(click.Update({ 30u, 64u, 0.30 }));
 	EXPECT_FALSE(click.Dirty());
+	ASSERT_EQ(1u, click.Preview().size());
+	EXPECT_EQ(20u, click.Preview()[0].Start);
+	EXPECT_EQ(40u, click.Preview()[0].End);
+	click.Cancel();
+	EXPECT_TRUE(click.Preview().empty());
 }
 
 TEST(MidiGridGesture, FullCapacityFreeCreateRejectsWithoutSourceChange)
@@ -272,7 +280,34 @@ TEST(MidiGridGesture, PartialCellFillsMultipleUncoveredSpansAndKeepsNotes)
 	EXPECT_EQ(18u, add.Preview()[2].Start); EXPECT_EQ(20u, add.Preview()[2].End);
 	EXPECT_EQ(5u, midi::MidiGridTargets::Build(add.Working()).Notes.size());
 	ASSERT_TRUE(add.Update({13u, 60u, 0.13}));
-	EXPECT_EQ(3u, add.Preview().size());
+	ASSERT_EQ(4u, add.Preview().size());
+	EXPECT_EQ(12u, add.Preview().back().Start);
+	EXPECT_EQ(14u, add.Preview().back().End);
+	ASSERT_TRUE(add.Update({13u, 60u, 0.13}));
+	EXPECT_EQ(4u, add.Preview().size());
+	EXPECT_EQ(5u, midi::MidiGridTargets::Build(add.Working()).Notes.size());
+}
+
+TEST(MidiGridGesture, AddPaintHoldsSkippedExistingNotesWithoutChangingThem)
+{
+	auto source = MidiGridGestureFixture::EmptyLoop();
+	ASSERT_TRUE(midi::MidiEditOperations::CreateExact(source, 10u, 11u, 2u, 60u));
+	ASSERT_TRUE(midi::MidiEditOperations::CreateExact(source, 30u, 31u, 2u, 60u));
+	MidiGridGesture add;
+	ASSERT_TRUE(add.Begin(source, {5u, 60u, 0.05}, 2u));
+	ASSERT_TRUE(add.Update({35u, 60u, 0.35}));
+	const auto heldCount = add.Preview().size();
+	for (const auto start : {10u, 30u})
+	{
+		EXPECT_EQ(1u, std::count_if(add.Preview().begin(), add.Preview().end(),
+			[start](const auto& span) { return span.Start == start && span.End == start + 1u; }));
+	}
+	ASSERT_TRUE(add.Update({5u, 60u, 0.05}));
+	EXPECT_EQ(heldCount, add.Preview().size());
+	const auto notes = midi::MidiGridTargets::Build(add.Working()).Notes;
+	for (const auto start : {10u, 30u})
+		EXPECT_EQ(1u, std::count_if(notes.begin(), notes.end(),
+			[start](const auto& note) { return note.Start == start && note.End == start + 1u; }));
 }
 
 TEST(MidiGridGesture, AmbiguousSourceRemovalRollsBackWholeGesture)

@@ -1,6 +1,7 @@
 #version 330 core
 
 in float Weight;
+in vec2 PreviewUv;
 out vec4 ColorOUT;
 
 uniform float EditorMorph;
@@ -12,9 +13,12 @@ void main()
     float reveal = smoothstep(0.58, 0.92, EditorMorph);
     if (Weight < 0.0)
     {
-        vec3 tint = Weight < -1.5 ? vec3(1.0, 0.24, 0.32)
-            : vec3(0.26, 0.92, 0.88);
-        ColorOUT = vec4(tint, 0.44 * reveal);
+        // Both add and remove paint share the down state, independent of hover.
+        vec2 edgePixels = min(PreviewUv, vec2(1.0) - PreviewUv)
+            / max(fwidth(PreviewUv), vec2(1e-6));
+        float border = 1.0 - smoothstep(1.5, 2.5, min(edgePixels.x, edgePixels.y));
+        vec3 tint = mix(vec3(0.90, 0.40, 0.13), vec3(1.0, 0.72, 0.20), border);
+        ColorOUT = vec4(tint, mix(0.82, 1.0, border) * reveal);
         return;
     }
     ColorOUT = vec4(vec3(0.15, 0.30, 0.38) * Weight

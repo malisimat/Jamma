@@ -460,9 +460,9 @@ void MidiModel::_DrawEditorGrid(GlDrawContext& glCtx)
 				|| preview.Pitch >= _editorBottomPitch + _editorVisibleRows) continue;
 			const auto left = static_cast<float>(preview.Start) / _editorPreviewLength;
 			const auto right = static_cast<float>(preview.End) / _editorPreviewLength;
-			const auto bottom = static_cast<float>(preview.Pitch - _editorBottomPitch)
+			const auto bottom = (static_cast<float>(preview.Pitch - _editorBottomPitch) + 0.10f)
 				/ _editorVisibleRows;
-			const auto top = static_cast<float>(preview.Pitch - _editorBottomPitch + 1)
+			const auto top = (static_cast<float>(preview.Pitch - _editorBottomPitch) + 0.90f)
 				/ _editorVisibleRows;
 			const auto weight = preview.Fill ? -1.0f : -2.0f;
 			vertices.insert(vertices.end(), { left, bottom, weight, right, bottom, weight,
@@ -484,6 +484,7 @@ void MidiModel::_DrawEditorGrid(GlDrawContext& glCtx)
 	glCtx.PushMvp(glm::translate(glm::mat4(1.0), glm::vec3(pos.X, pos.Y, pos.Z)));
 	glCtx.PushMvp(glm::scale(glm::mat4(1.0), glm::vec3(scale, scale, scale)));
 	glUseProgram(shader->GetId());
+	glCtx.SetUniform("EditorPreviewFirstVertex", static_cast<int>(_editorGridVertexCount));
 	shader->SetUniforms(glCtx);
 	GLboolean wasBlend = glIsEnabled(GL_BLEND);
 	GLint oldSrcRgb = GL_ONE, oldDstRgb = GL_ZERO;
@@ -497,7 +498,13 @@ void MidiModel::_DrawEditorGrid(GlDrawContext& glCtx)
 	glBindVertexArray(_editorGridVao);
 	glDrawArrays(GL_LINES, 0, _editorGridVertexCount);
 	if (_editorPreviewVertexCount > 0u)
+	{
+		// Held spans must remain visible above tall notes at every velocity.
+		const auto wasDepthTest = glIsEnabled(GL_DEPTH_TEST);
+		glDisable(GL_DEPTH_TEST);
 		glDrawArrays(GL_TRIANGLES, _editorGridVertexCount, _editorPreviewVertexCount);
+		if (wasDepthTest) glEnable(GL_DEPTH_TEST);
+	}
 	glBindVertexArray(0);
 	glBlendFuncSeparate(oldSrcRgb, oldDstRgb, oldSrcAlpha, oldDstAlpha);
 	if (!wasBlend)
