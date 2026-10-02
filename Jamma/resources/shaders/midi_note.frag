@@ -33,6 +33,8 @@ uniform int EditorBottomPitch;
 uniform int EditorVisibleRows;
 uniform float SceneDim;
 uniform float EditorActive;
+uniform float EditorGridRadius;
+uniform float EditorWrapCopy;
 uniform float EditorTime;
 uniform samplerCube ProbeSampler;
 uniform float ProbeStrength;
@@ -47,6 +49,11 @@ const int RenderModeDiscOnly = 4;
 void main()
 {
     gl_FragDepth = gl_FragCoord.z;
+    if (EditorWrapCopy != 0.0 && IsDisc > 0.5)
+        discard;
+    if (EditorMorphV > 0.999 && IsDisc < 0.5 &&
+        abs(EditorLocalPosition.x) > EditorGridRadius)
+        discard;
     // The ring draw range has no end caps. Back faces of its translucent
     // shell must not shine through the outward-facing surfaces.
     if (GeometryPass == 1 && (IsDisc < 0.5 ||
@@ -153,7 +160,7 @@ void main()
                 // A negative target start means free timing: glow at the pointer, not a cell.
                 float hover = EditorTargetInstance >= 0 ? 0.0
                     : EditorTargetStart < 0.0 ? 1.0 - smoothstep(0.0, 0.015, abs(EditorU - EditorHoverU))
-                    : (EditorU >= EditorTargetStart && EditorU < EditorTargetEnd ? 1.0 : 0.0);
+                    : (fract(EditorU) >= EditorTargetStart && fract(EditorU) < EditorTargetEnd ? 1.0 : 0.0);
                 float pitchRow = float(EditorHoverPitch - EditorBottomPitch) + 0.5;
                 // Resolved cells fill the complete row with constant intensity.
                 hover *= EditorTargetStart < 0.0

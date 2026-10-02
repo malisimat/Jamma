@@ -493,9 +493,11 @@ std::optional<MidiGridGesture::Point> LoopGridEditor::_PointAt(
 	const auto model = loop->Model();
 	const auto pitch = std::clamp(model->EditorBottomPitch()
 		+ static_cast<int>(boundedV * model->EditorVisibleRows()), 0, 127);
-	return MidiGridGesture::Point{
-		LoopGridGeometry::SampleAtU(boundedU, length),
-		static_cast<std::uint8_t>(pitch), boundedU };
+	const auto sample = static_cast<std::uint32_t>((static_cast<std::uint64_t>(
+		LoopGridGeometry::SampleAtU(boundedU, length)) + model->EditorTimeOrigin()) % length);
+	return MidiGridGesture::Point{ sample,
+		static_cast<std::uint8_t>(pitch), model->EditorTimeOrigin()
+			? LoopGridGeometry::SampleU(sample, length) : boundedU };
 }
 
 std::uint8_t LoopGridEditor::_ChannelOf(const std::shared_ptr<MidiLoop>& loop) const

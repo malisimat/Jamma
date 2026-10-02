@@ -79,6 +79,7 @@ namespace graphics
 		int EditorBottomPitch() const noexcept { return _editorBottomPitch; }
 		int EditorVisibleRows() const noexcept { return _editorVisibleRows; }
 		bool EditorGridResolved() const noexcept { return _editorGridResolved; }
+		std::uint32_t EditorTimeOrigin() const noexcept { return _editorTimeOrigin; }
 		void SetEditorHover(float u, int pitch) noexcept;
 		void SetEditorTarget(float startU, float endU, int pitch, int noteIndex) noexcept;
 		void SetEditorPreview(std::vector<EditorPreviewSpan> spans,
@@ -149,6 +150,7 @@ namespace graphics
 		midi::MidiQuantisationSettings _editorGridSettings;
 		std::uint64_t _editorGridTransportStart = 0u;
 		std::uint32_t _editorGridLength = 0u;
+		std::uint32_t _editorTimeOrigin = 0u;
 		bool _editorGridSignatureValid = false;
 		bool _editorGridResolved = false;
 		bool _editorGridDirty = true;

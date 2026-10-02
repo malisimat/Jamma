@@ -33,6 +33,29 @@ namespace midi
 		// Zero-width cells are removed.
 		std::vector<std::uint32_t> Boundaries;
 
+		// Presentation only: cut a whole-grain loop at the nearest master grain.
+		// Explicit phase offsets and non-repeating geometry retain physical edges.
+		static std::uint32_t DisplayOrigin(std::uint32_t length,
+			const MidiQuantisationSettings& settings, std::uint64_t transportStart) noexcept
+		{
+			if (!length || !settings.Enabled || settings.PhaseOffsetSamps != 0
+				|| !settings.GrainSamps || settings.HasRemoteGrid()
+				|| length % settings.GrainSamps != 0u)
+				return 0u;
+			const auto grain = settings.GrainSamps;
+			const auto phase = transportStart % grain;
+			const auto delta = phase * 2u < grain
+				? -static_cast<std::int64_t>(phase) : static_cast<std::int64_t>(grain - phase);
+			return static_cast<std::uint32_t>((delta % length + length) % length);
+		}
+
+		static std::uint32_t DisplaySample(std::uint32_t sample, std::uint32_t length,
+			std::uint32_t origin) noexcept
+		{
+			return length ? static_cast<std::uint32_t>((static_cast<std::uint64_t>(sample)
+				+ length - origin) % length) : 0u;
+		}
+
 		static std::optional<LoopGridGeometry> Resolve(std::uint32_t length,
 			const MidiQuantisationSettings& settings, std::uint64_t transportStart)
 		{

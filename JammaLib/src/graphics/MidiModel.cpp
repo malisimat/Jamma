@@ -132,6 +132,8 @@ void MidiModel::Draw3d(DrawContext& ctx, unsigned int numInstances, base::DrawPa
 	glCtx.SetUniform("EditorMorph", _editorMorph);
 	glCtx.SetUniform("EditorActive", _editorActive ? 1.0f : 0.0f);
 	glCtx.SetUniform("EditorPlayFrac", _editorPlayFrac);
+	glCtx.SetUniform("EditorTimeOrigin", _editorGridLength
+		? static_cast<float>(_editorTimeOrigin) / _editorGridLength : 0.0f);
 	glCtx.SetUniform("EditorBottomPitch", _editorBottomPitch);
 	glCtx.SetUniform("EditorVisibleRows", _editorVisibleRows);
 	glCtx.SetUniform("EditorHoverU", _editorHoverU);
@@ -253,7 +255,22 @@ void MidiModel::UpdateEditorGrid(std::uint32_t loopLength,
 	_editorGridTransportStart = transportStart;
 	const auto grid = midi::LoopGridGeometry::Resolve(loopLength, settings, transportStart);
 	_editorGridResolved = grid.has_value();
-	_editorGridVertices = BuildEditorGridVertices(grid ? &*grid : nullptr,
+	_editorTimeOrigin = grid ? midi::LoopGridGeometry::DisplayOrigin(loopLength, settings, transportStart) : 0u;
+	auto displayedGrid = grid;
+	if (displayedGrid && _editorTimeOrigin)
+	{
+		// Physical sample zero is an artificial cut, not a master-grid line.
+		displayedGrid->Boundaries.clear();
+		for (std::size_t i = 1u; i + 1u < grid->Boundaries.size(); ++i)
+			displayedGrid->Boundaries.push_back(midi::LoopGridGeometry::DisplaySample(
+				grid->Boundaries[i], loopLength, _editorTimeOrigin));
+		displayedGrid->Boundaries.push_back(0u);
+		displayedGrid->Boundaries.push_back(loopLength);
+		std::sort(displayedGrid->Boundaries.begin(), displayedGrid->Boundaries.end());
+		displayedGrid->Boundaries.erase(std::unique(displayedGrid->Boundaries.begin(),
+			displayedGrid->Boundaries.end()), displayedGrid->Boundaries.end());
+	}
+	_editorGridVertices = BuildEditorGridVertices(displayedGrid ? &*displayedGrid : nullptr,
 		loopLength, _editorBottomPitch, _editorVisibleRows);
 	_editorGridDirty = true;
 }
@@ -400,7 +417,18 @@ void MidiModel::DrawMesh(GLuint shaderProgram, unsigned int drawInstances)
 	}
 	glUniform1i(geometryPass, 2);
 	if (drawInstances > (_midiParams.DrawSelectionRing ? 1u : 0u))
+	{
+		const auto copyLocation = glGetUniformLocation(shaderProgram, "EditorWrapCopy");
+		glUniform1f(copyLocation, 0.0f);
 		glDrawArraysInstanced(GL_TRIANGLES, 0, _numTris * 3u, drawInstances);
+		if (_editorTimeOrigin && _editorMorph >= 1.0f)
+		{
+			// Shifted notes crossing the display seam need their clipped left copy.
+			glUniform1f(copyLocation, -1.0f);
+			glDrawArraysInstanced(GL_TRIANGLES, 0, _numTris * 3u, drawInstances);
+			glUniform1f(copyLocation, 0.0f);
+		}
+	}
 }
 
 void MidiModel::_InitResources(resources::ResourceLib& resourceLib, bool forceInit)
@@ -463,16 +491,20 @@ void MidiModel::_DrawEditorGrid(GlDrawContext& glCtx)
 				|| preview.End > _editorPreviewLength
 				|| preview.Pitch < _editorBottomPitch
 				|| preview.Pitch >= _editorBottomPitch + _editorVisibleRows) continue;
-			const auto left = static_cast<float>(preview.Start) / _editorPreviewLength;
-			const auto right = static_cast<float>(preview.End) / _editorPreviewLength;
+			const auto left = static_cast<float>(midi::LoopGridGeometry::DisplaySample(
+				preview.Start, _editorPreviewLength, _editorTimeOrigin)) / _editorPreviewLength;
+			const auto right = left + static_cast<float>(preview.End - preview.Start) / _editorPreviewLength;
 			const auto bottom = (static_cast<float>(preview.Pitch - _editorBottomPitch) + 0.10f)
 				/ _editorVisibleRows;
 			const auto top = (static_cast<float>(preview.Pitch - _editorBottomPitch) + 0.90f)
 				/ _editorVisibleRows;
 			const auto weight = preview.Fill ? -1.0f : -2.0f;
-			vertices.insert(vertices.end(), { left, bottom, weight, right, bottom, weight,
-				left, top, weight, left, top, weight, right, bottom, weight,
-				right, top, weight });
+			const auto append = [&](float a, float b) {
+				vertices.insert(vertices.end(), { a, bottom, weight, b, bottom, weight,
+					a, top, weight, a, top, weight, b, bottom, weight, b, top, weight });
+			};
+			append(left, std::min(right, 1.0f));
+			if (right > 1.0f) append(0.0f, right - 1.0f);
 		}
 		_editorPreviewVertexCount = static_cast<unsigned int>(vertices.size() / 3u)
 			- _editorGridVertexCount;

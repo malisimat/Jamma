@@ -8,6 +8,53 @@ using midi::LoopGridGeometry;
 using midi::MidiQuantisationFraction;
 using midi::MidiQuantisationSettings;
 
+TEST(LoopGridGeometry, DisplayRotationAlignsOffGridWholeGrainLoopsWithoutChangingSourceGrid)
+{
+	MidiQuantisationSettings settings;
+	settings.Enabled = true;
+	settings.GrainSamps = 100u;
+	settings.Fraction = MidiQuantisationFraction::Quarter;
+	for (const auto start : { 13u, 63u, 213u, 263u })
+	{
+		const auto origin = LoopGridGeometry::DisplayOrigin(400u, settings, start);
+		EXPECT_EQ(0u, (start + origin) % settings.GrainSamps);
+		const auto grid = LoopGridGeometry::Resolve(400u, settings, start);
+		ASSERT_TRUE(grid);
+		std::vector<std::uint32_t> displayed;
+		for (std::size_t i = 1u; i + 1u < grid->Boundaries.size(); ++i)
+			displayed.push_back(LoopGridGeometry::DisplaySample(grid->Boundaries[i], 400u, origin));
+		std::sort(displayed.begin(), displayed.end());
+		ASSERT_EQ(16u, displayed.size());
+		for (std::size_t i = 0u; i < displayed.size(); ++i)
+			EXPECT_EQ(i * 25u, displayed[i]);
+		for (std::uint32_t sample = 0; sample < 400u; ++sample)
+			EXPECT_EQ(sample, (LoopGridGeometry::DisplaySample(sample, 400u, origin) + origin) % 400u);
+		EXPECT_EQ(0u, grid->Boundaries.front());
+		EXPECT_EQ(400u, grid->Boundaries.back());
+	}
+}
+
+TEST(LoopGridGeometry, DisplayRotationRetainsExplicitOffsetsFreeTimingAndUnequalGeometry)
+{
+	MidiQuantisationSettings settings;
+	settings.Enabled = true;
+	settings.GrainSamps = 100u;
+	EXPECT_EQ(387u, LoopGridGeometry::DisplayOrigin(400u, settings, 13u));
+	EXPECT_EQ(0u, LoopGridGeometry::DisplayOrigin(0u, settings, 13u));
+	EXPECT_EQ(0u, LoopGridGeometry::DisplayOrigin(401u, settings, 13u));
+	settings.PhaseOffsetSamps = -1;
+	EXPECT_EQ(0u, LoopGridGeometry::DisplayOrigin(400u, settings, 13u));
+	settings.PhaseOffsetSamps = 1;
+	EXPECT_EQ(0u, LoopGridGeometry::DisplayOrigin(400u, settings, 13u));
+	settings.PhaseOffsetSamps = 0;
+	settings.Enabled = false;
+	EXPECT_EQ(0u, LoopGridGeometry::DisplayOrigin(400u, settings, 13u));
+	settings.Enabled = true;
+	settings.RemoteIntervalSamps = 400u;
+	settings.RemoteBpi = 4u;
+	EXPECT_EQ(0u, LoopGridGeometry::DisplayOrigin(400u, settings, 13u));
+}
+
 TEST(LoopGridGeometry, UsesClippedIntegerBoundariesAndLocalLoopLength)
 {
 	MidiQuantisationSettings settings;
