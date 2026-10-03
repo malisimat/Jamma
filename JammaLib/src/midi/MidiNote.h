@@ -18,6 +18,7 @@ namespace midi
 			bool IsActive = false;
 			std::uint32_t StartSample = 0u;
 			std::uint8_t Velocity = 0u;
+			std::uint8_t Flags = 0u;
 		};
 
 		static void AddSpan(std::vector<MidiNote>& spans,
@@ -25,7 +26,8 @@ namespace midi
 			std::uint32_t endSample,
 			std::uint8_t channel,
 			std::uint8_t note,
-			std::uint8_t velocity);
+			std::uint8_t velocity,
+			std::uint8_t flags);
 
 	public:
 		std::uint32_t StartSample;
@@ -33,6 +35,7 @@ namespace midi
 		std::uint8_t Channel;
 		std::uint8_t Note;
 		std::uint8_t Velocity;
+		std::uint8_t Flags = 0u; // MidiEvent::flags of the NoteOn
 
 		static constexpr std::size_t TotalNoteSlots = 16u * 128u;
 		static constexpr std::size_t NoteSlot(std::uint8_t channel, std::uint8_t note) noexcept

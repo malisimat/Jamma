@@ -1,6 +1,8 @@
 
 #include "gtest/gtest.h"
 #include "graphics/LoopModel.h"
+#include "graphics/MidiModel.h"
+#include "graphics/LoopGridProjection.h"
 #include "graphics/VU.h"
 
 #include <cmath>
@@ -9,12 +11,104 @@ using audio::BufferBank;
 using engine::LoopModel;
 using engine::LoopModelParams;
 using graphics::VU;
+using graphics::MidiModel;
 using graphics::VuParams;
 
 static constexpr auto GrainVertFloatCount = 72u;
 static constexpr auto GrainUvFloatCount = 48u;
 static constexpr auto MeshMinHeight = 1.0f;
 static constexpr auto MeshHeightScale = 100.0f;
+
+TEST(MidiGridVisual, ExactBoundariesReachBothSeamEdges)
+{
+	midi::MidiQuantisationSettings settings;
+	settings.Enabled = true;
+	settings.GrainSamps = 10u;
+	settings.Fraction = midi::MidiQuantisationFraction::Quarter;
+	settings.PhaseOffsetSamps = 1;
+	const auto grid = midi::LoopGridGeometry::Resolve(11u, settings, 3u);
+	ASSERT_TRUE(grid);
+	const auto vertices = MidiModel::BuildEditorGridVertices(&*grid, 11u, 48, 24);
+	ASSERT_EQ((grid->Boundaries.size() + 25u) * 6u, vertices.size());
+	for (std::size_t i = 0u; i < grid->Boundaries.size(); ++i)
+	{
+		const auto u = static_cast<float>(grid->Boundaries[i]) / 11.0f;
+		EXPECT_FLOAT_EQ(u, vertices[i * 6u]);
+		EXPECT_FLOAT_EQ(u, vertices[i * 6u + 3u]);
+	}
+	EXPECT_FLOAT_EQ(0.0f, vertices[0]);
+	EXPECT_FLOAT_EQ(1.0f, vertices[(grid->Boundaries.size() - 1u) * 6u]);
+	EXPECT_FLOAT_EQ(0.0f, vertices[grid->Boundaries.size() * 6u + 1u]);
+	EXPECT_FLOAT_EQ(1.0f, vertices[vertices.size() - 5u]);
+	EXPECT_FLOAT_EQ(1.0f, vertices[vertices.size() - 3u]);
+}
+
+TEST(MidiGridVisual, HeldTargetUsesRingOffsetAndClampsVelocity)
+{
+	graphics::MidiModelParams params;
+	auto model = MidiModel(params);
+	model.UpdateModel({ midi::MidiNote{ 10u, 20u, 0u, 60u, 80u, 0u } }, 100u);
+	model.SetEditorHeld(0, 0);
+	EXPECT_EQ(1, model.EditorHeldInstance());
+	EXPECT_EQ(1, model.EditorPreviewVelocity());
+	model.SetEditorHeld(0, 200);
+	EXPECT_EQ(127, model.EditorPreviewVelocity());
+	model.SetEditorHeld(0);
+	EXPECT_EQ(-1, model.EditorPreviewVelocity());
+	model.SetEditorHeld(1, 90);
+	EXPECT_EQ(-1, model.EditorHeldInstance());
+}
+
+TEST(MidiGridVisual, AppliedReplacementInvalidatesHeldIdentityWithoutViewChanges)
+{
+	graphics::MidiModelParams params;
+	params.DrawSelectionRing = false;
+	auto model = MidiModel(params);
+	const std::vector<midi::MidiNote> spans{ midi::MidiNote{ 10u, 20u, 0u, 60u, 80u, 0u } };
+	model.UpdateModel(spans, 100u);
+	const auto generation = model.EditorModelGeneration();
+	model.SetEditorHeld(0, 90);
+	EXPECT_EQ(0, model.EditorHeldInstance());
+	model.SetEditorPitchRange(30, 36);
+	EXPECT_EQ(generation, model.EditorModelGeneration());
+	EXPECT_EQ(0, model.EditorHeldInstance());
+	model.UpdateModel(spans, 100u);
+	EXPECT_EQ(generation + 1u, model.EditorModelGeneration());
+	EXPECT_EQ(-1, model.EditorHeldInstance());
+	EXPECT_EQ(-1, model.EditorPreviewVelocity());
+}
+
+TEST(MidiGridVisual, LongNotesHaveFixedTessellationAndDistinctEnds)
+{
+	const auto vertices = MidiModel::BuildBaseVerts(32u);
+	ASSERT_EQ((32u * 8u + 4u) * 9u, vertices.size());
+	EXPECT_FLOAT_EQ(0.0f, vertices[0]);
+	EXPECT_FLOAT_EQ(1.0f / 32.0f, vertices[3u]);
+	const auto capStart = 32u * 8u * 9u;
+	EXPECT_FLOAT_EQ(0.0f, vertices[capStart]);
+	EXPECT_FLOAT_EQ(1.0f, vertices[capStart + 18u]);
+}
+
+TEST(MidiGridVisual, ProjectionTracksViewportWithoutChangingLocalCoordinates)
+{
+	const glm::mat4 identity(1.0f);
+	const auto centre = graphics::LoopGridProjection::Project(identity, identity,
+		{ 0.0f, 0.0f, 0.0f }, 800, 400);
+	const auto wider = graphics::LoopGridProjection::Project(identity, identity,
+		{ 0.0f, 0.0f, 0.0f }, 1200, 400);
+	ASSERT_TRUE(centre);
+	ASSERT_TRUE(wider);
+	EXPECT_EQ(400, centre->X);
+	EXPECT_EQ(200, centre->Y);
+	EXPECT_EQ(600, wider->X);
+	EXPECT_EQ(200, wider->Y);
+	const auto left = graphics::LoopGridProjection::Project(identity, identity,
+		{ -1.0f, 0.0f, 0.0f }, 800, 400);
+	ASSERT_TRUE(left);
+	EXPECT_EQ(0, left->X);
+	EXPECT_FALSE(graphics::LoopGridProjection::Project(identity, identity,
+		{ 0.0f, 0.0f, 0.0f }, 0, 400));
+}
 
 class GraphicsTestLoopModel :
 	public LoopModel

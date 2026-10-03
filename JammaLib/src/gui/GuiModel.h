@@ -74,6 +74,7 @@ namespace gui
 		bool InitShaders(resources::ResourceLib& resourceLib);
 		bool InitVertexArray(std::vector<float> verts, std::vector<float> uvs);
 		bool InitInstanceAttributes();
+		virtual void DrawMesh(GLuint shaderProgram, unsigned int drawInstances);
 
 		// Thread-safe locked accessors — always use these instead of _modelTextures/_modelShaders
 		// directly. They acquire _modelStateMutex so reads can never race against Init writes.

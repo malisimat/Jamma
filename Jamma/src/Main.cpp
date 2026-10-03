@@ -1038,6 +1038,9 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 	std::shared_ptr<console::OutboundMailbox> replayedConsoleEvents;
 	while (active)
 	{
+		// Dispatch one message before checking the budget so queued work always progresses.
+		constexpr auto messagePumpBudget = std::chrono::milliseconds(2);
+		const auto messagePumpStart = std::chrono::steady_clock::now();
 		while (PeekMessage(&msg, nullptr, 0, 0, PM_REMOVE))
 		{
 			if (msg.message == WM_DEVICECHANGE && msg.wParam == DBT_DEVNODES_CHANGED)
@@ -1054,6 +1057,8 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 
 			TranslateMessage(&msg);
 			DispatchMessage(&msg);
+			if (std::chrono::steady_clock::now() - messagePumpStart >= messagePumpBudget)
+				break;
 		}
 
 		if (!active)

@@ -55,7 +55,9 @@ void LoopModel::Draw3d(DrawContext& ctx,
 {
 	auto& glCtx = dynamic_cast<GlDrawContext&>(ctx);
 
-	glCtx.PushMvp(glm::rotate(glm::mat4(1.0), (float)(constants::TWOPI * (_loopIndexFrac + 0.0)), glm::vec3(0.0f, 1.0f, 0.0f)));
+	glCtx.PushMvp(glm::rotate(glm::mat4(1.0),
+		(float)(constants::TWOPI * _loopIndexFrac) * (1.0f - _editorMorph),
+		glm::vec3(0.0f, 1.0f, 0.0f)));
 
 	float waveformRadius = _UnitMeshRadius;
 	float waveformColorMultiplier = 0.5f / (_HeightScale + _MinHeight);
@@ -81,10 +83,14 @@ void LoopModel::Draw3d(DrawContext& ctx,
 		break;
 	case STATE_HIGHLIGHTING:
 		glCtx.SetUniform("Highlight", _isSelected ? 1.0f : 0.0f);
+		glCtx.SetUniform("HighlightPass", 1.0f);
 		break;
 	default:
+		glCtx.SetUniform("HighlightPass", 0.0f);
 		glCtx.SetUniform("LoopState", (unsigned int)_modelState);
 		glCtx.SetUniform("LoopHover", _isPicking3d ? 1.0f : 0.0f);
+		glCtx.SetUniform("LoopSelected", _isSelected ? 1.0f : 0.0f);
+		glCtx.SetUniform("LoopPressed", _clickPressed ? 1.0f : 0.0f);
 		break;
 	}
 
@@ -110,6 +116,9 @@ void LoopModel::Draw3d(DrawContext& ctx,
 	glCtx.SetUniform("WaveformColorMultiplier", waveformColorMultiplier);
 	glCtx.SetUniform("WaveformUnitMeshRadius", _UnitMeshRadius);
 	glCtx.SetUniform("WaveformColorScale", _waveformColorScale);
+	glCtx.SetUniform("EditorMorph", _editorMorph);
+	glCtx.SetUniform("EditorActive", _editorActive ? 1.0f : 0.0f);
+	glCtx.SetUniform("EditorPlayFrac", static_cast<float>(std::fmod(1.0 - _loopIndexFrac + 1.0, 1.0)));
 
 	glUseProgram(shader->GetId());
 	shader->SetUniforms(dynamic_cast<GlDrawContext&>(ctx));

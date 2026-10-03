@@ -113,17 +113,18 @@ void MidiQuantisation::QuantiseEvents(const MidiEvent* src,
 	// Track pending NoteOn shifts per (channel, note) slot in FIFO order so
 	// overlapping same-pitch notes pair each NoteOff with the earliest unmatched
 	// NoteOn.
-	std::array<std::vector<std::int64_t>, TotalNoteSlots> pendingDeltas;
-	std::array<std::size_t, TotalNoteSlots> pendingReadIndex{};
+	std::array<std::vector<std::int64_t>, MidiEvent::PairingSlotCount> pendingDeltas;
+	std::array<std::size_t, MidiEvent::PairingSlotCount> pendingReadIndex{};
 
 	for (std::size_t i = 0; i < eventCount; ++i)
 	{
 		MidiEvent ev = src[i];
-		const auto slot = NoteSlot(ev.Channel(), ev.data1);
+		const auto slot = ev.PairingSlot();
 
 		if (ev.IsNoteOn())
 		{
-			if (ev.sampleOffset < loopLength)
+			if (ev.HasExactTiming()) pendingDeltas[slot].push_back(0);
+			else if (ev.sampleOffset < loopLength)
 			{
 				const auto quantised = QuantiseSampleOffset(ev.sampleOffset,
 					stepSamps,
@@ -209,7 +210,7 @@ std::int64_t MidiQuantisation::BoundarySampleAt(std::int64_t index,
 void MidiQuantisation::BuildQuantisedPlaybackEvents(const MidiEvent* src,
 	std::size_t eventCount, std::uint32_t loopLength,
 	const MidiQuantisationSettings& settings, std::uint64_t transportStartSamps,
-	MidiEvent* dst) noexcept
+	MidiEvent* dst, bool sort) noexcept
 {
 	if (nullptr == src || nullptr == dst || eventCount == 0u || loopLength == 0u || !settings.Enabled)
 	{
@@ -231,13 +232,15 @@ void MidiQuantisation::BuildQuantisedPlaybackEvents(const MidiEvent* src,
 	// Both local and remote grids use one absolute origin and rounded rational
 	// boundaries. A loop whose length is a whole number of intervals repeats on
 	// exactly the same boundaries, even when interval/divisions is fractional.
-	std::array<std::vector<std::int64_t>, TotalNoteSlots> pendingDeltas;
-	std::array<std::size_t, TotalNoteSlots> pendingReadIndex{};
+	std::array<std::vector<std::int64_t>, MidiEvent::PairingSlotCount> pendingDeltas;
+	std::array<std::size_t, MidiEvent::PairingSlotCount> pendingReadIndex{};
 	for (std::size_t i = 0u; i < eventCount; ++i)
 	{
 		auto event = src[i];
-		const auto slot = NoteSlot(event.Channel(), event.data1);
-		if (event.IsNoteOn() && event.sampleOffset < loopLength)
+		const auto slot = event.PairingSlot();
+		if (event.IsNoteOn() && event.HasExactTiming())
+			pendingDeltas[slot].push_back(0);
+		else if (event.IsNoteOn() && event.sampleOffset < loopLength)
 		{
 			const auto absolute = static_cast<std::int64_t>(transportStartSamps) + event.sampleOffset;
 			const auto index = NearestBoundaryIndex(absolute - origin,
@@ -263,5 +266,5 @@ void MidiQuantisation::BuildQuantisedPlaybackEvents(const MidiEvent* src,
 		}
 		dst[i] = event;
 	}
-	MidiNote::SortMidiEvents(dst, eventCount);
+	if (sort) MidiNote::SortMidiEvents(dst, eventCount);
 }

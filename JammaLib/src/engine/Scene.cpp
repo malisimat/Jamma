@@ -74,7 +74,15 @@ Scene::Scene(SceneParams params,
 	_audioEngine(std::make_unique<audio::AudioHost>(user)),
 	_inputSubsystem(std::make_unique<io::IoInputSubsystem>(user, io::LoggingConfig{})),
 	_windowSubsystem(std::make_unique<vst::VstEditorWindowManager>()),
-	_networkService(std::make_unique<ninjam::NinjamNetworkService>())
+	_networkService(std::make_unique<ninjam::NinjamNetworkService>()),
+	_loopEditor(midi::LoopGridEditor::Host{
+		_camera, _undoHistory, _sceneMutex, _stations,
+		[this]() { return _hoverElement3d.lock(); },
+		[this](float aspect) { return _camera.Projection(aspect, _StationCentre(_stations)) * _camera.ViewMatrix(); },
+		[this]() { _OnLoopGridEditorOpened(); },
+		[this](int button, utils::Position2d anchor) { return _beginRelativePointer && _beginRelativePointer(button, anchor); },
+		[this](int button) { if (_endRelativePointer) _endRelativePointer(button); } },
+		params.Size)
 {
 	_quantisation.SetClock(std::make_shared<Timer>());
 	_quantisation.SetSeedUsesPowers(_userConfig.Loop.SeedUsesPowers);
@@ -651,7 +659,11 @@ std::optional<std::shared_ptr<Scene>> Scene::FromFile(SceneParams sceneParams,
 
 void Scene::Draw(DrawContext& ctx)
 {
+	_loopEditor.UpdateUi(_viewProj);
 	std::scoped_lock lock(_sceneMutex);
+	const bool midiEditorEngaged = _loopEditor.IsEngaged() && _loopEditor.TargetMidiLoop();
+	if (_hudPanel)
+		_hudPanel->SetLoopEditorMode(midiEditorEngaged);
 
 	glDisable(GL_DEPTH_TEST);
 
@@ -689,15 +701,21 @@ void Scene::Draw(DrawContext& ctx)
 		if (child)
 			child->Draw(ctx);
 
-	for (auto& station : _stations)
-		station->Draw(ctx);
+	if (!midiEditorEngaged)
+	{
+		for (auto& station : _stations)
+			station->Draw(ctx);
+	}
 
 	_selector->Draw(ctx);
 	_modeRadio->Draw(ctx);
 	_globalMidiQuantRadio->Draw(ctx);
-	_ctrlHandleOverlay.Draw(ctx);
+	if (!midiEditorEngaged)
+		_ctrlHandleOverlay.Draw(ctx);
 
 	_popupManager.Draw(ctx);
+	if (!_popupManager.IsOpen())
+		_loopEditor.Draw(ctx);
 
 	glCtx.PopMvp();
 }
@@ -750,6 +768,11 @@ void Scene::Draw3d(DrawContext& ctx,
 
 	glCtx.ClearMvp();
 	glCtx.PushMvp(_viewProj);
+	if (PASS_PICKER == pass && _loopEditor.IsEngaged())
+	{
+		glCtx.PopMvp();
+		return;
+	}
 
 	if (PASS_SCENE == pass)
 	{
@@ -758,8 +781,33 @@ void Scene::Draw3d(DrawContext& ctx,
 		_quantisationInteraction.Tick(now);
 	}
 
+	glCtx.SetUniform("SceneDim", _loopEditor.SurroundingDim());
+	glCtx.SetUniform("EditorMorph", 0.0f);
+	glCtx.SetUniform("EditorTime", _skyboxStarted
+		? static_cast<float>(Timer::GetElapsedSeconds(_skyboxStartTime, Timer::GetTime())) : 0.0f);
+	const auto probeId = PASS_SCENE == pass && _loopEditor.IsEngaged()
+		? _skybox.CubemapId() : 0u;
+	glCtx.SetUniform("ProbeStrength", probeId != 0u ? 1.0f : 0.0f);
+	if (probeId != 0u)
+	{
+		glCtx.SetUniform("ProbeSampler", 3);
+		glCtx.SetUniform("EditorProbeEye", _loopEditor.ProbeEyeLocal());
+		glActiveTexture(GL_TEXTURE3);
+		glBindTexture(GL_TEXTURE_CUBE_MAP, probeId);
+		glActiveTexture(GL_TEXTURE0);
+	}
+	_loopEditor.ApplyToModels();
 	for (auto& station : _stations)
+	{
 		station->Draw3d(ctx, 1, pass);
+	}
+	glCtx.SetUniform("SceneDim", 1.0f);
+	if (probeId != 0u)
+	{
+		glActiveTexture(GL_TEXTURE3);
+		glBindTexture(GL_TEXTURE_CUBE_MAP, 0);
+		glActiveTexture(GL_TEXTURE0);
+	}
 
 	glCtx.PopMvp();
 }
@@ -784,7 +832,9 @@ void Scene::UpdateCamera()
 
 	if (_camera.IsBackgroundDragging() || _camera.IsTransitioning())
 		_camera.TickBackgroundDrag(deltaSeconds);
-	_ApplyCameraSelectDepthChange(_camera.PendingSelectDepthChange());
+	_loopEditor.Tick(deltaSeconds);
+	if (!_loopEditor.IsEngaged())
+		_ApplyCameraSelectDepthChange(_camera.PendingSelectDepthChange());
 	if (_isSceneTouching && !_camera.IsBackgroundDragging())
 		_EndBackgroundDrag();
 }
@@ -795,6 +845,7 @@ void Scene::_InitResources(ResourceLib& resourceLib, bool forceInit)
 
 	_skybox.InitResources(resourceLib, forceInit);
 	_label->InitResources(resourceLib, forceInit);
+	_loopEditor.InitResources(resourceLib, forceInit);
 	_selector->InitResources(resourceLib, forceInit);
 	_modeRadio->InitResources(resourceLib, forceInit);
 	_globalMidiQuantRadio->InitResources(resourceLib, forceInit);
@@ -817,6 +868,7 @@ void Scene::_ReleaseResources()
 {
 	_skybox.ReleaseResources();
 	_label->ReleaseResources();
+	_loopEditor.ReleaseResources();
 	_selector->ReleaseResources();
 	_modeRadio->ReleaseResources();
 	_globalMidiQuantRadio->ReleaseResources();
@@ -840,6 +892,27 @@ ActionResult Scene::OnAction(TouchAction action)
 	action.SetUserConfig(_userConfig);
 	_cursorPos = action.Position;
 	_InvalidateHover2d();
+	if (_popupManager.IsOpen())
+	{
+		_loopEditor.CancelInput();
+		auto popupRes = _popupManager.OnAction(action);
+		if (_remoteTempoDialogOpen && !_popupManager.IsOpen())
+			_HandleRemoteTempoPromptDecision(false);
+		if (TouchAction::TOUCH_UP == action.State)
+		{
+			_touchDownElement.reset();
+			_touchDownIsHud = false;
+		}
+		return popupRes;
+	}
+	if (_loopEditor.IsEngaged() && !_loopEditor.OwnsPointer() && !_loopEditor.IsOrbitDragging() && _hudPanel)
+	{
+		std::scoped_lock lock(_sceneMutex);
+		auto hudResult = _hudPanel->OnAction(_hudPanel->GlobalToLocal(action));
+		if (hudResult.IsEaten) return hudResult;
+	}
+	if (auto editorRes = _loopEditor.OnAction(action))
+		return *editorRes;
 	if (TouchAction::TouchState::TOUCH_DOWN == action.State)
 	{
 		// Clear the old hover now so only the capture target appears pressed.
@@ -849,21 +922,6 @@ ActionResult Scene::OnAction(TouchAction action)
 	}
 
 	std::cout << "Touch action " << action.Touch << " [State " << action.State << "] Index " << action.Index << "(Modifiers " << action.Modifiers << ")" << std::endl;
-
-	// Popups capture all pointer input while open (routing, outside-dismiss).
-	if (_popupManager.IsOpen())
-	{
-		auto popupRes = _popupManager.OnAction(action);
-		if (_remoteTempoDialogOpen && !_popupManager.IsOpen())
-			_HandleRemoteTempoPromptDecision(false);
-		if (TouchAction::TouchState::TOUCH_UP == action.State)
-		{
-			// Clear the interrupted press captured before the popup opened.
-			_touchDownElement.reset();
-			_touchDownIsHud = false;
-		}
-		return popupRes;
-	}
 
 	if ((TouchAction::TouchState::TOUCH_DOWN == action.State)
 		&& (0 == action.Index)
@@ -1050,9 +1108,19 @@ ActionResult Scene::OnAction(TouchMoveAction action)
 	action.SetUserConfig(_userConfig);
 	_cursorPos = action.Position;
 	_InvalidateHover2d();
-
 	if (_popupManager.IsOpen())
+	{
+		_loopEditor.CancelInput();
 		return _popupManager.OnAction(action);
+	}
+	if (_loopEditor.IsEngaged() && !_loopEditor.OwnsPointer() && !_loopEditor.IsOrbitDragging() && _hudPanel)
+	{
+		std::scoped_lock lock(_sceneMutex);
+		auto hudResult = _hudPanel->OnAction(_hudPanel->GlobalToLocal(action));
+		if (hudResult.IsEaten) return hudResult;
+	}
+	if (auto editorRes = _loopEditor.OnAction(action))
+		return *editorRes;
 
 	if (auto overlayRes = _quantisationInteraction.TryHandleTouchMove(action,
 		_CurrentSampleRate());
@@ -1078,6 +1146,15 @@ ActionResult Scene::OnAction(TouchMoveAction action)
 
 	if (_isSceneTouching)
 		return _UpdateBackgroundDrag(action);
+	if (0u != (action.MouseButtonsDown & 1u))
+	{
+		auto selectionMove = _selector->OnAction(_selector->ParentToLocal(action));
+		if (selectionMove.ResultType == ACTIONRESULT_INITSELECT)
+		{
+			_UpdateSelection(selectionMove.ResultType);
+			return selectionMove;
+		}
+	}
 	if (_hudPanel)
 	{
 		// Lock the HUD tree while the job thread rebuilds it.
@@ -1095,6 +1172,17 @@ ActionResult Scene::OnAction(KeyAction action)
 	action.SetAudioParams(_audioEngine->GetStreamParams());
 
 	std::cout << "Key action " << action.KeyActionType << " [" << action.KeyChar << "] IsSytem:" << action.IsSystem << ", Modifiers:" << action.Modifiers << "]" << std::endl;
+	if (_popupManager.IsOpen())
+	{
+		_loopEditor.CancelInput();
+		auto popupRes = _popupManager.OnAction(action);
+		if (_remoteTempoDialogOpen && !_popupManager.IsOpen())
+			_HandleRemoteTempoPromptDecision(false);
+		if (_loopEditor.IsEngaged())
+			popupRes.IsEaten = true;
+		if (popupRes.IsEaten)
+			return popupRes;
+	}
 
 	if ((192u == action.KeyChar) || (96u == action.KeyChar))
 	{
@@ -1116,15 +1204,8 @@ ActionResult Scene::OnAction(KeyAction action)
 		}
 	}
 
-	// 1. Open popups capture the keyboard first.
-	if (_popupManager.IsOpen())
-	{
-		auto popupRes = _popupManager.OnAction(action);
-		if (_remoteTempoDialogOpen && !_popupManager.IsOpen())
-			_HandleRemoteTempoPromptDecision(false);
-		if (popupRes.IsEaten)
-			return popupRes;
-	}
+	if (auto editorRes = _loopEditor.OnAction(action))
+		return *editorRes;
 
 	if (auto overrideRes = _inputSubsystem->HandleChannelOverrideKey(action, SnapshotStations());
 		overrideRes.IsEaten)
@@ -1148,6 +1229,8 @@ ActionResult Scene::OnAction(KeyAction action)
 		if (_focusManager.IsEditingText())
 			return ActionResult::NoAction();
 	}
+	if (auto editorRes = _loopEditor.TryOpenFromKey(action))
+		return *editorRes;
 
 	if ((9u == action.KeyChar)
 		&& (actions::KeyAction::KEY_UP == action.KeyActionType)
@@ -1819,6 +1902,8 @@ void Scene::AddChild(std::shared_ptr<base::GuiElement> child)
 
 void Scene::SetHover3d(std::vector<unsigned char> path, Action::Modifiers modifiers)
 {
+	if (_loopEditor.IsEngaged())
+		return;
 	bool isSelected = false;
 	auto tweakState = base::Tweakable::TweakState::TWEAKSTATE_NONE;
 	std::vector<unsigned char> fullElementPath;
@@ -1836,6 +1921,25 @@ void Scene::SetHover3d(std::vector<unsigned char> path, Action::Modifiers modifi
 	_hoverPath3d = fullElementPath;
 	_hoverElement3d = _ChildFromPath(fullElementPath);
 	elementPath = fullElementPath;
+	if (auto pickedElement = _hoverElement3d.lock();
+		_selector->CurrentSelectDepth() == base::DEPTH_LOOP && pickedElement)
+	{
+		if (auto take = std::dynamic_pointer_cast<LoopTake>(pickedElement->Parent()))
+		{
+			for (const auto& midiLoop : take->GetMidiLoops())
+			{
+				if (midiLoop->Model() != pickedElement)
+					continue;
+				if (!take->GetMidiLoops().empty() && take->GetMidiLoops().front()->Model())
+				{
+					elementPath.clear();
+					for (auto index : take->GetMidiLoops().front()->Model()->GlobalId())
+						elementPath.push_back(static_cast<unsigned char>(index));
+				}
+				break;
+			}
+		}
+	}
 
 	elementPath = TrimPath(elementPath, _selector->CurrentSelectDepth() + 1);
 
@@ -2318,6 +2422,7 @@ bool Scene::_OnUndo(std::shared_ptr<base::ActionUndo> undo)
 
 void Scene::_InitSize()
 {
+	_loopEditor.SetSize(_sizeParams.Size);
 	auto ar = _sizeParams.Size.Height > 0 ?
 		(float)_sizeParams.Size.Width / (float)_sizeParams.Size.Height :
 		1.0f;
@@ -2335,6 +2440,21 @@ void Scene::_InitSize()
 		_hudPanel->SetSize(_sizeParams.Size);
 
 	_UpdateHudStationAnchors();
+}
+
+void Scene::_OnLoopGridEditorOpened()
+{
+	if (_hudPanel)
+	{
+		std::scoped_lock lock(_sceneMutex);
+		_hudPanel->SetLoopEditorMode(static_cast<bool>(_loopEditor.TargetMidiLoop()));
+	}
+	_focusManager.ClearFocus();
+	_touchDownElement.reset();
+	_touchDownIsHud = false;
+	_EndBackgroundDrag();
+	_quantisationInteraction.OnCtrlModifierChanged(false, Timer::GetTime(),
+		_InteractionContext(), [this](const std::vector<unsigned char>& path) { return _ChildFromPath(path); });
 }
 
 void Scene::_UpdateHudStationAnchors()
@@ -2374,6 +2494,72 @@ void Scene::_UpdateSelection(ActionResultType res)
 	const auto stations = SnapshotStations();
 	auto currentMode = _selector->CurrentMode();
 	std::shared_ptr<GuiElement> hovering = nullptr;
+	const auto applySelection = [this](const std::vector<unsigned char>& path, bool selected) {
+		auto target = _ChildFromPath(path);
+		if (!target)
+			return;
+		if (_selector->CurrentSelectDepth() == base::DEPTH_STATION)
+		{
+			if (auto station = std::dynamic_pointer_cast<Station>(target))
+			{
+				if (selected) station->Select(); else station->DeSelect();
+				for (const auto& take : station->GetLoopTakes())
+					if (selected) take->Select(); else take->DeSelect();
+				return;
+			}
+		}
+		if (_selector->CurrentSelectDepth() == base::DEPTH_LOOP)
+		{
+			if (auto take = std::dynamic_pointer_cast<LoopTake>(target->Parent()))
+			{
+				bool isMidiModel = false;
+				for (const auto& midiLoop : take->GetMidiLoops())
+					isMidiModel |= midiLoop->Model() == target;
+				// A take keeps the aggregate selected state used by the editor, while
+				// individual loop models carry the loop-depth visual selection.
+				if (selected && !take->IsSelected())
+				{
+					take->Select();
+					for (const auto& loop : take->GetLoops())
+						if (loop != target) loop->DeSelect();
+					for (const auto& midiLoop : take->GetMidiLoops())
+						if (auto model = midiLoop->Model(); model && model != target)
+							model->DeSelect();
+				}
+				if (isMidiModel)
+				{
+				for (const auto& midiLoop : take->GetMidiLoops())
+					if (auto model = midiLoop->Model())
+						if (selected) model->Select(); else model->DeSelect();
+			}
+				else if (selected) target->Select(); else target->DeSelect();
+				if (!selected && take->IsSelected())
+				{
+					bool anySelected = false;
+					for (const auto& loop : take->GetLoops()) anySelected |= loop->IsSelected();
+					for (const auto& midiLoop : take->GetMidiLoops())
+						if (auto model = midiLoop->Model()) anySelected |= model->IsSelected();
+					if (!anySelected) take->DeSelect();
+				}
+				return;
+			}
+		}
+		if (selected) target->Select();
+		else target->DeSelect();
+	};
+	const auto clearSelection = [&stations]() {
+		for (const auto& station : stations)
+		{
+			station->DeSelect();
+			for (const auto& take : station->GetLoopTakes())
+			{
+				take->DeSelect();
+				for (const auto& loop : take->GetLoops()) loop->DeSelect();
+				for (const auto& midiLoop : take->GetMidiLoops())
+					if (auto model = midiLoop->Model()) model->DeSelect();
+			}
+		}
+	};
 	switch (res)
 	{
 	case ACTIONRESULT_DEFAULT:
@@ -2391,29 +2577,31 @@ void Scene::_UpdateSelection(ActionResultType res)
 			break;
 		case SceneSelector::SELECT_NONEADD:
 			for (auto& station : stations)
-				station->SetPickingFromState(GuiElement::EDIT_SELECT, false);
+				station->SetPicking3d(false);
 
 			hovering = _ChildFromPath(_selector->CurrentHover());
 			if (nullptr != hovering)
-				hovering->SetPicking3d(!hovering->IsSelected());
+				hovering->SetPicking3d(true);
 
 			break;
 		case SceneSelector::SELECT_SELECT:
+			for (auto& station : stations)
+				station->SetPicking3d(false);
 			hovering = _ChildFromPath(_selector->CurrentHover());
 			if (nullptr != hovering)
 				hovering->SetPicking3d(true);
 
 			break;
 		case SceneSelector::SELECT_SELECTADD:
-			hovering = _ChildFromPath(_selector->CurrentHover());
-			if (nullptr != hovering)
-				hovering->SetPicking3d(true);
+			for (auto& station : stations)
+				station->SetPicking3d(false);
+			applySelection(_selector->CurrentHover(), true);
 
 			break;
 		case SceneSelector::SELECT_SELECTREMOVE:
-			hovering = _ChildFromPath(_selector->CurrentHover());
-			if (nullptr != hovering)
-				hovering->SetPicking3d(false);
+			for (auto& station : stations)
+				station->SetPicking3d(false);
+			applySelection(_selector->CurrentHover(), false);
 
 			break;
 		case SceneSelector::SELECT_MUTE:
@@ -2431,12 +2619,15 @@ void Scene::_UpdateSelection(ActionResultType res)
 		}
 		break;
 	case ACTIONRESULT_SELECT:
-		// Only called on touch up
+		// A click replaces the selection with the item pressed at touch down.
+		clearSelection();
+		applySelection(_selector->PaintedPathForTest(), true);
 		for (auto& station : stations)
 		{
-			station->SetStateFromPicking(GuiElement::EDIT_SELECT, false);
 			station->SetPicking3d(false);
 		}
+		hovering = _ChildFromPath(_selector->CurrentHover());
+		if (hovering) hovering->SetPicking3d(true);
 
 		break;
 	case ACTIONRESULT_MUTE:
@@ -2466,18 +2657,96 @@ void Scene::_UpdateSelection(ActionResultType res)
 			station->SetPicking3d(false);
 
 		hovering = _ChildFromPath(_selector->CurrentHover());
-		if (nullptr != hovering)
+		if (currentMode == SceneSelector::SELECT_SELECTADD ||
+			currentMode == SceneSelector::SELECT_SELECTREMOVE)
+		{
+			const bool select = currentMode == SceneSelector::SELECT_SELECTADD;
+			applySelection(_selector->PaintedPathForTest(), select);
+			applySelection(_selector->CurrentHover(), select);
+		}
+		// A drag has entered paint mode: show only the selected state while painting.
+		if (currentMode != SceneSelector::SELECT_SELECTADD
+			&& currentMode != SceneSelector::SELECT_SELECTREMOVE && hovering)
 			hovering->SetPicking3d(true);
 
 		break;
 	case ACTIONRESULT_CLEARSELECT:
+		clearSelection();
 		for (auto& station : stations)
 			station->SetPicking3d(false);
 
-		for (auto& station : stations)
-			station->SetStateFromPicking(GuiElement::EDIT_SELECT, false);
-
 		break;
+	}
+	const bool paintingSelection = currentMode == SceneSelector::SELECT_SELECTADD
+		|| currentMode == SceneSelector::SELECT_SELECTREMOVE;
+	if (!paintingSelection && _selector->CurrentSelectDepth() == base::DEPTH_LOOP)
+	{
+		if (auto hovered = _ChildFromPath(_selector->CurrentHover()))
+		{
+			if (auto take = std::dynamic_pointer_cast<LoopTake>(hovered->Parent()))
+			{
+				for (const auto& midiLoop : take->GetMidiLoops())
+					if (midiLoop->Model() == hovered)
+					{
+						for (const auto& sibling : take->GetMidiLoops())
+							if (auto model = sibling->Model()) model->SetPicking3d(true);
+						break;
+					}
+			}
+		}
+	}
+	// A click has a short-lived pressed appearance. Keep it separate from
+	// persistent selection and hover, and clear it when the gesture becomes paint.
+	for (const auto& station : stations)
+	{
+		station->SetClickPressed(false);
+		for (const auto& take : station->GetLoopTakes())
+		{
+			for (const auto& loop : take->GetLoops())
+				if (auto model = loop->Model()) model->SetClickPressed(false);
+			for (const auto& midiLoop : take->GetMidiLoops())
+				if (auto model = midiLoop->Model()) model->SetClickPressed(false);
+		}
+	}
+	if (_selector->IsClickPressed()
+		&& _selector->CurrentHover() == _selector->PaintedPathForTest())
+	{
+		if (auto pressed = _ChildFromPath(_selector->CurrentHover()))
+		{
+			const auto pressTakeLoops = [](const std::shared_ptr<LoopTake>& take) {
+				for (const auto& loop : take->GetLoops())
+					if (auto model = loop->Model()) model->SetClickPressed(true);
+				for (const auto& midiLoop : take->GetMidiLoops())
+					if (auto model = midiLoop->Model()) model->SetClickPressed(true);
+			};
+			if (auto station = std::dynamic_pointer_cast<Station>(pressed))
+			{
+				station->SetClickPressed(true);
+				for (const auto& take : station->GetLoopTakes())
+					pressTakeLoops(take);
+			}
+			else if (auto take = std::dynamic_pointer_cast<LoopTake>(pressed))
+				pressTakeLoops(take);
+			else if (auto loop = std::dynamic_pointer_cast<Loop>(pressed))
+			{
+				if (auto model = loop->Model()) model->SetClickPressed(true);
+			}
+			else if (auto take = std::dynamic_pointer_cast<LoopTake>(pressed->Parent()))
+			{
+				for (const auto& midiLoop : take->GetMidiLoops())
+					if (auto model = midiLoop->Model()) model->SetClickPressed(true);
+			}
+		}
+	}
+	// The picker may keep the same ID after a click or paint stroke, so update
+	// the selector's cached starting state without waiting for another pick.
+	if (auto hovered = _ChildFromPath(_selector->CurrentHover()))
+	{
+		auto tweakState = base::Tweakable::TWEAKSTATE_NONE;
+		if (auto tweakable = std::dynamic_pointer_cast<Tweakable>(hovered))
+			tweakState = tweakable->GetTweakState();
+		_selector->UpdateCurrentHover(_selector->CurrentHover(),
+			Action::MODIFIER_NONE, hovered->IsSelected(), tweakState);
 	}
 
 	_quantisationInteraction.RefreshOverlay(_InteractionContext(),
@@ -2923,4 +3192,12 @@ void Scene::_UpdateStationQuantisation(std::shared_ptr<base::GuiElement> candida
 void Scene::_ClearStationQuantisation()
 {
 	_quantisation.ClearStationHints(_stations);
+}
+
+void Scene::SetRelativePointerHost(std::function<bool(int, utils::Position2d)> begin,
+	std::function<void(int)> end)
+{
+	_loopEditor.CancelInput();
+	_beginRelativePointer = std::move(begin);
+	_endRelativePointer = std::move(end);
 }

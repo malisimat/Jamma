@@ -218,6 +218,7 @@ namespace engine
 		virtual void Update();
 		void UpdateCapacity();
 		void RefreshVisualModel();
+		std::shared_ptr<LoopModel> Model() const noexcept { return _model; }
 		bool CanRefreshVisualModel() const noexcept;
 
 		unsigned int LoopChannel() const;

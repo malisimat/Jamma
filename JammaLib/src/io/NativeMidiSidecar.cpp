@@ -32,7 +32,8 @@ bool NativeMidiSidecar::ToStream(const Stream& stream, std::ostream& out, std::s
 		if (!WriteBytes(out, &event.SampleOffset, sizeof(event.SampleOffset))
 			|| !WriteBytes(out, &event.Status, sizeof(event.Status))
 			|| !WriteBytes(out, &event.Data1, sizeof(event.Data1))
-			|| !WriteBytes(out, &event.Data2, sizeof(event.Data2)))
+			|| !WriteBytes(out, &event.Data2, sizeof(event.Data2))
+			|| !WriteBytes(out, &event.Flags, sizeof(event.Flags)))
 		{
 			SetError(error, "could not write MIDI event");
 			return false;
@@ -85,7 +86,7 @@ std::optional<NativeMidiSidecar::Stream> NativeMidiSidecar::FromStream(std::istr
 		SetError(error, "truncated or malformed MIDI sidecar header");
 		return std::nullopt;
 	}
-	if (major > CurrentMajor || (major == CurrentMajor && (minor != CurrentMinor || patch != CurrentPatch)))
+	if (major > CurrentMajor || (major == CurrentMajor && (minor < 2u || minor > CurrentMinor || patch != CurrentPatch)))
 	{
 		SetError(error, "unsupported MIDI sidecar version");
 		return std::nullopt;
@@ -100,7 +101,8 @@ std::optional<NativeMidiSidecar::Stream> NativeMidiSidecar::FromStream(std::istr
 	{
 		if (!ReadBytes(in, &event.SampleOffset, sizeof(event.SampleOffset), consumed)
 			|| !ReadBytes(in, &event.Status, sizeof(event.Status), consumed) || !ReadBytes(in, &event.Data1, sizeof(event.Data1), consumed)
-			|| !ReadBytes(in, &event.Data2, sizeof(event.Data2), consumed))
+			|| !ReadBytes(in, &event.Data2, sizeof(event.Data2), consumed)
+			|| (minor >= 3u && !ReadBytes(in, &event.Flags, sizeof(event.Flags), consumed)))
 		{
 			SetError(error, "truncated MIDI event payload");
 			return std::nullopt;
@@ -161,7 +163,8 @@ bool NativeMidiSidecar::Validate(const Stream& stream, std::string* error) noexc
 	for (const auto& event : stream.Events)
 	{
 		const auto statusType = event.Status & 0xf0u;
-		if (event.SampleOffset >= stream.LogicalLength || statusType < 0x80u || statusType > 0xe0u || event.Data1 > 127u || event.Data2 > 127u)
+		if (event.SampleOffset >= stream.LogicalLength || statusType < 0x80u || statusType > 0xe0u || event.Data1 > 127u || event.Data2 > 127u
+			|| event.Flags > 1u || (event.Flags && statusType != 0x80u && statusType != 0x90u))
 		{
 			SetError(error, "invalid MIDI event");
 			return false;

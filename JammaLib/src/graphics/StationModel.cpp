@@ -432,7 +432,7 @@ StationModel::StationModel() :
 	_ringOccluder(),
 	_ringsNeedInitialising(true)
 {
-	_modelParams.ModelShaders = { "station", "picker", "station_ring" };
+	_modelParams.ModelShaders = { "station", "station_picker", "station_ring", "station_ring_picker" };
 	SetVisible(false);
 
 	auto [verts, uvs] = BuildAllGeometry(DefaultNumSides, DeckRadius, DefaultNumRibs);
@@ -627,23 +627,29 @@ void StationModel::Draw3d(DrawContext& ctx,
 	case base::PASS_PICKER:
 	{
 		auto idVec = _stationGlobalId.empty() ? GlobalId() : _stationGlobalId;
-		idVec.resize(3);
 		for (auto& idPart : idVec)
 			idPart += 1;
+		// Leave unused path components at zero so picking resolves to the station.
+		idVec.resize(3);
 		const auto id = utils::VecToId(idVec);
 		glCtx.SetUniform("ObjectId", id);
+		glCtx.SetUniform("StationLevel", stationLevel);
 		break;
 	}
 	case base::PASS_HIGHLIGHT:
 			glCtx.SetUniform("Highlight", _stationSelected ? 1.0f : 0.0f);
-			glCtx.SetUniform("StationHover", _stationPicking ? 1.0f : 0.0f);
+			glCtx.SetUniform("HighlightPass", 1.0f);
+		glCtx.SetUniform("StationHover", _stationPicking ? 1.0f : 0.0f);
+		glCtx.SetUniform("StationPressed", _clickPressed ? 1.0f : 0.0f);
 			glCtx.SetUniform("StationLevel", stationLevel);
 			glCtx.SetUniform("StationStateColor", stationStateColors[stationStateIndex]);
 			break;
 		case base::PASS_SCENE:
 		default:
-			glCtx.SetUniform("Highlight", _stationSelected ? 0.35f : 0.0f);
+			glCtx.SetUniform("Highlight", _stationSelected ? 1.0f : 0.0f);
+			glCtx.SetUniform("HighlightPass", 0.0f);
 			glCtx.SetUniform("StationHover", _stationPicking ? 1.0f : 0.0f);
+			glCtx.SetUniform("StationPressed", _clickPressed ? 1.0f : 0.0f);
 		glCtx.SetUniform("StationLevel", stationLevel);
 		glCtx.SetUniform("StationStateColor", stationStateColors[stationStateIndex]);
 		break;
@@ -659,10 +665,23 @@ void StationModel::Draw3d(DrawContext& ctx,
 
 	if (pass == base::PASS_PICKER)
 	{
-		glUseProgram(shader->GetId());
-		shader->SetUniforms(glCtx);
+		auto ringPickerShader = GetShaderAt(3u).lock();
+		if (!ringPickerShader)
+			return;
+		glCtx.SetUniform("StationVisualState", static_cast<int>(stationStateIndex));
+		glCtx.SetUniform("RingScale", StateRingScale);
+		glUseProgram(ringPickerShader->GetId());
+		ringPickerShader->SetUniforms(glCtx);
 		_DrawRingMesh(_topRing);
 		_DrawRingMesh(_bottomRing);
+		glCtx.SetUniform("RingCapY", StateRingTopY);
+		glCtx.SetUniform("RingDirection", 1.0f);
+		ringPickerShader->SetUniforms(glCtx);
+		_DrawRingOccluder(_ringOccluder);
+		glCtx.SetUniform("RingCapY", StateRingBottomY);
+		glCtx.SetUniform("RingDirection", -1.0f);
+		ringPickerShader->SetUniforms(glCtx);
+		_DrawRingOccluder(_ringOccluder);
 		glBindVertexArray(0);
 		glUseProgram(0);
 		return;
@@ -672,8 +691,10 @@ void StationModel::Draw3d(DrawContext& ctx,
 	if (!ringShader)
 		return;
 
-	glCtx.SetUniform("Highlight", _stationSelected ? (pass == base::PASS_HIGHLIGHT ? 1.0f : 0.35f) : 0.0f);
+	glCtx.SetUniform("Highlight", _stationSelected ? 1.0f : 0.0f);
+	glCtx.SetUniform("HighlightPass", pass == base::PASS_HIGHLIGHT ? 1.0f : 0.0f);
 	glCtx.SetUniform("StationHover", _stationPicking ? 1.0f : 0.0f);
+	glCtx.SetUniform("StationPressed", _clickPressed ? 1.0f : 0.0f);
 	glCtx.SetUniform("StationLevel", stationLevel);
 	glCtx.SetUniform("StationStateColor", stationStateColors[stationStateIndex]);
 	glCtx.SetUniform("StationVisualState", static_cast<int>(stationStateIndex));

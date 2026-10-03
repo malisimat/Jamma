@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <array>
 #include <mutex>
 #include <vector>
@@ -60,7 +61,10 @@ namespace engine
 		double LoopIndexFrac() const;
 		void SetLoopIndexFrac(double frac);
 		void SetLoopState(LoopModelState state);
+		void SetClickPressed(bool pressed) noexcept { _clickPressed = pressed; }
 		void SetWaveformColorScale(float scale) noexcept;
+		void SetEditorMorph(float morph) noexcept { _editorMorph = std::clamp(morph, 0.0f, 1.0f); }
+		void SetEditorActive(bool active) noexcept { _editorActive = active; }
 		void UpdateModel(const audio::BufferBank& buffer,
 			unsigned long loopLength,
 			unsigned long offset,
@@ -139,6 +143,9 @@ namespace engine
 		unsigned long _lastWaveformOffset;
 		float _lastWaveformRadius;
 		float _waveformColorScale;
+		float _editorMorph = 0.0f;
+		bool _editorActive = false;
+		bool _clickPressed = false;
 		std::mutex _waveformMutex;
 	};
 }

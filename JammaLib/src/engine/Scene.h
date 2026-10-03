@@ -3,6 +3,7 @@
 // Job/UI orchestrator: presents and forwards subsystem values without taking over
 // audio-callback application, remote timing authority, or per-entity loop state.
 #include <atomic>
+#include <array>
 #include <memory>
 #include <algorithm>
 #include <chrono>
@@ -24,6 +25,7 @@
 #include "../graphics/GlDrawContext.h"
 #include "../graphics/Skybox.h"
 #include "../gui/GuiLabel.h"
+#include "../gui/GuiButton.h"
 #include "../gui/GuiPopup.h"
 #include "../gui/GuiFocusManager.h"
 #include "../gui/GuiNumericInput.h"
@@ -58,6 +60,7 @@
 #include "StationRemote.h"
 #include "RigCoordinator.h"
 #include "../actions/ActionUndoHistory.h"
+#include "../midi/LoopGridEditor.h"
 
 namespace engine
 {
@@ -200,6 +203,23 @@ namespace engine
 			return _rigCoordinator.Accepted();
 		}
 		void ApplyDeferredHoverUpdates();
+		void SetRelativePointerHost(std::function<bool(int, utils::Position2d)> begin,
+			std::function<void(int)> end);
+		// UI-thread editor seam, forwarded to midi::LoopGridEditor.
+		bool OpenLoopGridEditor(const std::shared_ptr<LoopTake>& take,
+			const std::shared_ptr<Loop>& audioLoop,
+			const std::shared_ptr<midi::MidiLoop>& midiLoop)
+		{
+			return _loopEditor.Open(take, audioLoop, midiLoop);
+		}
+		void CloseLoopGridEditor() { _loopEditor.Close(); }
+		bool IsLoopGridEditorOpen() const noexcept { return _loopEditor.IsOpen(); }
+		bool LoopGridEditorReady() const noexcept { return _loopEditor.IsReady(); }
+		float LoopGridEditorMorph() const noexcept { return _loopEditor.Morph(); }
+		float LoopGridEditorSurroundingDim() const noexcept { return _loopEditor.SurroundingDim(); }
+		std::shared_ptr<Loop> LoopGridEditorAudioLoop() const noexcept { return _loopEditor.AudioLoop(); }
+		std::shared_ptr<midi::MidiLoop> LoopGridEditorMidiLoop() const noexcept { return _loopEditor.TargetMidiLoop(); }
+		std::shared_ptr<LoopTake> LoopGridEditorTake() const noexcept { return _loopEditor.Take(); }
 
 		// Returns a locked station snapshot safe to use outside render/tick threads.
 		std::vector<std::shared_ptr<Station>> SnapshotStations() const;
@@ -319,6 +339,7 @@ namespace engine
 		void _OpenRemoteTempoPromptIfNeeded();
 		void _HandleRemoteTempoPromptDecision(bool accept);
 		void _CloseRemoteTempoPrompt();
+		void _OnLoopGridEditorOpened();
 
 
 	protected:
@@ -406,5 +427,9 @@ namespace engine
 		std::function<bool(const io::RigFile&)> _saveRig;
 		ViewMode _viewMode;
 		utils::Position2d _cursorPos{};
+		std::function<bool(int, utils::Position2d)> _beginRelativePointer;
+		std::function<void(int)> _endRelativePointer;
+		// Declared last: it holds references to the members above.
+		midi::LoopGridEditor _loopEditor;
 	};
 }

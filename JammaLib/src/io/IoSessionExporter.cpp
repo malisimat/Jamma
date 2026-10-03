@@ -275,7 +275,7 @@ namespace io
 						for (std::size_t eventIndex = 0u; eventIndex < stream.Loop.EventCount; ++eventIndex)
 						{
 							const auto& event = stream.Loop.Events[eventIndex];
-							sidecar.Events.push_back({ event.sampleOffset, event.status, event.data1, event.data2 });
+							sidecar.Events.push_back({ event.sampleOffset, event.status, event.data1, event.data2, event.flags });
 						}
 						for (const auto& exportedLane : stream.Loop.AutomationLanes)
 						{

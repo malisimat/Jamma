@@ -365,6 +365,9 @@
     <ClInclude Include="src\midi\MidiQueue.h">
       <Filter>src\midi</Filter>
     </ClInclude>
+    <ClInclude Include="src\midi\LoopGridEditor.h">
+      <Filter>src\midi</Filter>
+    </ClInclude>
     <ClInclude Include="src\midi\MidiLoop.h">
       <Filter>src\midi</Filter>
     </ClInclude>
@@ -786,6 +789,9 @@
     </ClCompile>
     <ClCompile Include="src\engine\Timer.cpp">
       <Filter>src\engine</Filter>
+    </ClCompile>
+    <ClCompile Include="src\midi\LoopGridEditor.cpp">
+      <Filter>src\midi</Filter>
     </ClCompile>
     <ClCompile Include="src\midi\MidiLoop.cpp">
       <Filter>src\midi</Filter>

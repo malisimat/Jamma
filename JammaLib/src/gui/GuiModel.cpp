@@ -83,10 +83,7 @@ void GuiModel::Draw3d(DrawContext& ctx,
 
 	glBindTexture(GL_TEXTURE_2D, texture->GetId());
 	const auto drawInstances = _usesInstanceAttributes ? _instanceCount : numInstances;
-	if (drawInstances > 1 || _usesInstanceAttributes)
-		glDrawArraysInstanced(GL_TRIANGLES, 0, _numTris * 3, drawInstances);
-	else
-		glDrawArrays(GL_TRIANGLES, 0, _numTris * 3);
+	DrawMesh(shader->GetId(), drawInstances);
 
 	glBindTexture(GL_TEXTURE_2D, 0);
 	glBindVertexArray(0);
@@ -97,6 +94,14 @@ void GuiModel::Draw3d(DrawContext& ctx,
 
 	glCtx.PopMvp();
 	glCtx.PopMvp();
+}
+
+void GuiModel::DrawMesh(GLuint, unsigned int drawInstances)
+{
+	if (drawInstances > 1 || _usesInstanceAttributes)
+		glDrawArraysInstanced(GL_TRIANGLES, 0, _numTris * 3, drawInstances);
+	else
+		glDrawArrays(GL_TRIANGLES, 0, _numTris * 3);
 }
 
 void GuiModel::SetGeometry(std::vector<float> verts, std::vector<float> uvs)
