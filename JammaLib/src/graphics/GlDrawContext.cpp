@@ -244,6 +244,9 @@ std::optional<std::any> GlDrawContext::GetUniform(std::string name)
 {
 	if (_MvpUniformName == name)
 		return (name, _mvp);
+	if (name == "ProbeView" && _mvp.size() >= 2u)
+		// Scene's second matrix is the camera view, before model transforms.
+		return _mvp[1];
 	if (name == "ModelView" && _mvp.size() >= 2u)
 	{
 		// Scene puts projection first; omit it when transforming normals.

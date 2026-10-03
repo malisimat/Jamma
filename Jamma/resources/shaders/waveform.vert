@@ -5,11 +5,8 @@ layout(location = 1) in vec2 UvIN;
 layout(location = 2) in vec3 NormalIN;
 
 out vec2 UV;
-out float diff;
 out vec3 ProbeNormal;
-out vec3 ProbeRadial;
-out vec3 ProbeUp;
-out vec2 BevelEdge;
+out vec3 ViewPosition;
 
 uniform mat4 MVP;
 uniform mat4 ModelView;
@@ -38,26 +35,15 @@ void main()
     float radiusScale = WaveformRadius / safeUnitRadius; 
     vec2 scaledXZ = PositionIN.xz * radiusScale;
 
-    gl_Position = MVP * vec4(scaledXZ.x, y, scaledXZ.y, 1.0);
+    vec4 position = vec4(scaledXZ.x, y, scaledXZ.y, 1.0);
+    gl_Position = MVP * position;
+    ViewPosition = (ModelView * position).xyz;
     float colorV = clamp(0.5 - (y * colorScale * WaveformColorMultiplier), 0.0, 1.0);
     UV = vec2(u, colorV);
-    vec2 radial = normalize(PositionIN.xz);
-    vec3 radialNormal = vec3(radial.x, 0.0, radial.y);
-    // Tilt the probe lookup on horizontal faces toward the rim. The flat
-    // geometry, amplitude colour lookup and wall normals stay unchanged.
     // The waveform can be scaled to zero in Y. Recover its orientation from
     // the unaffected X/Z axes so probe normals never inherit that scale.
     vec3 probeX = normalize(ModelView[0].xyz);
     vec3 probeZ = normalize(ModelView[2].xyz);
     mat3 probeBasis = mat3(probeX, normalize(cross(probeZ, probeX)), probeZ);
-    ProbeNormal = normalize(probeBasis *
-        normalize(NormalIN + radialNormal * (0.72 * abs(NormalIN.y))));
-    ProbeRadial = normalize(probeBasis * radialNormal);
-    ProbeUp = probeBasis[1];
-    BevelEdge = vec2(clamp((y - yMin) / max(yMax - yMin, 0.001), 0.0, 1.0),
-        clamp((length(PositionIN.xz) / safeUnitRadius - 0.95) / 0.1, 0.0, 1.0));
-
-    vec3 lightDir = normalize(vec3(0.0, 0.5, -0.3));
-    vec4 normScreen = MVP * vec4(NormalIN, 0.0);
-    diff = 0.1 + clamp(dot(normScreen.xyz, lightDir), 0.0, 0.9);
+    ProbeNormal = normalize(probeBasis * NormalIN);
 }

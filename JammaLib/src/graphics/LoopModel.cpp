@@ -81,10 +81,14 @@ void LoopModel::Draw3d(DrawContext& ctx,
 		break;
 	case STATE_HIGHLIGHTING:
 		glCtx.SetUniform("Highlight", _isSelected ? 1.0f : 0.0f);
+		glCtx.SetUniform("HighlightPass", 1.0f);
 		break;
 	default:
+		glCtx.SetUniform("HighlightPass", 0.0f);
 		glCtx.SetUniform("LoopState", (unsigned int)_modelState);
 		glCtx.SetUniform("LoopHover", _isPicking3d ? 1.0f : 0.0f);
+		glCtx.SetUniform("LoopSelected", _isSelected ? 1.0f : 0.0f);
+		glCtx.SetUniform("LoopPressed", 0.0f);
 		break;
 	}
 
@@ -107,7 +111,7 @@ void LoopModel::Draw3d(DrawContext& ctx,
 	{
 		glCtx.SetUniform("TextureSampler", 0u);
 		glCtx.SetUniform("WaveformSampler", 1u);
-		glCtx.SetUniform("ProbeSampler", 2u);
+		glCtx.SetUniform("MaterialProbeSampler", 2u);
 	}
 	glCtx.SetUniform("WaveformRadius", waveformRadius);
 	glCtx.SetUniform("WaveformHeightScale", _HeightScale);

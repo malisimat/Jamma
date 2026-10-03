@@ -144,6 +144,8 @@ void MidiModel::Draw3d(DrawContext& ctx, unsigned int numInstances, base::DrawPa
 		break;
 	default:
 		glCtx.SetUniform("LoopHover", _isPicking3d ? 1.0f : 0.0f);
+		glCtx.SetUniform("LoopSelected", _isSelected ? 1.0f : 0.0f);
+		glCtx.SetUniform("LoopPressed", 0.0f);
 		glCtx.SetUniform("DiscAlpha", _midiParams.DiscAlpha);
 		glCtx.SetUniform("RenderMode", 3);
 		break;
