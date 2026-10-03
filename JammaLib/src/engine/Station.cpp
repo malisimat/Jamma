@@ -1175,8 +1175,11 @@ ActionResult Station::OnAction(TriggerAction action)
 	if (isStart && (!_isEnabled || !_isVisible))
 		return ActionResult::NoAction();
 
-	auto resolveMidiRecordChannels = [this]() {
+	auto resolveMidiRecordChannels = [this, &action]() {
 		std::vector<unsigned int> midiChannels;
+		// Station channel permissions do not supply a trigger recording source.
+		if (action.MidiInputDevices.empty())
+			return midiChannels;
 		const auto mask = _allowedMidiChannelMask.load(std::memory_order_acquire);
 		for (std::uint8_t channel = 0u; channel < 16u; ++channel)
 		{
