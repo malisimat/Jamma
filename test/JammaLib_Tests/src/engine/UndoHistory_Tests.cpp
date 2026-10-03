@@ -85,3 +85,32 @@ TEST(ActionUndoHistory, CannotRedoAfterAdding) {
 
 	ASSERT_FALSE(undoHistory.Redo());
 }
+
+class TrackingUndo final : public ActionUndo
+{
+public:
+	TrackingUndo(int id, std::vector<int>& order) : ActionUndo({}), Id(id), Order(order) {}
+	bool Undo() override { Order.push_back(-Id); return Succeeds; }
+	bool Redo() override { Order.push_back(Id); return Succeeds; }
+	int Id;
+	std::vector<int>& Order;
+	bool Succeeds = true;
+};
+
+TEST(ActionUndoHistory, LastActionFirstAndFailureRetainsAction)
+{
+	std::vector<int> order;
+	ActionUndoHistory history;
+	auto first = std::make_shared<TrackingUndo>(1, order);
+	auto second = std::make_shared<TrackingUndo>(2, order);
+	history.Add(first);
+	history.Add(second);
+	second->Succeeds = false;
+	EXPECT_FALSE(history.Undo());
+	second->Succeeds = true;
+	EXPECT_TRUE(history.Undo());
+	EXPECT_TRUE(history.Undo());
+	EXPECT_TRUE(history.Redo());
+	EXPECT_TRUE(history.Redo());
+	EXPECT_EQ((std::vector<int>{ -2, -2, -1, 1, 2 }), order);
+}

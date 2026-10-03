@@ -102,9 +102,9 @@ std::size_t engine::LoopTake::_BuildRebasedMidiOverdubSourceEvents(const midi::M
 
 		if (mappedStart < mappedEnd)
 		{
-			if (!_AppendMidiEvent(midi::MidiEvent::MakeNoteOn(mappedStart, span.Channel, span.Note, span.Velocity), outEvents, outCapacity, outCount))
+			if (!_AppendMidiEvent(midi::MidiEvent::MakeNoteOn(mappedStart, span.Channel, span.Note, span.Velocity).WithFlags(span.Flags), outEvents, outCapacity, outCount))
 				return outCount;
-			if (!_AppendMidiEvent(midi::MidiEvent::MakeNoteOff(mappedEnd, span.Channel, span.Note), outEvents, outCapacity, outCount))
+			if (!_AppendMidiEvent(midi::MidiEvent::MakeNoteOff(mappedEnd, span.Channel, span.Note).WithFlags(span.Flags), outEvents, outCapacity, outCount))
 				return outCount;
 			continue;
 		}
@@ -113,18 +113,18 @@ std::size_t engine::LoopTake::_BuildRebasedMidiOverdubSourceEvents(const midi::M
 		{
 			if (mappedEnd > 0u)
 			{
-				if (!_AppendMidiEvent(midi::MidiEvent::MakeNoteOn(0u, span.Channel, span.Note, span.Velocity), outEvents, outCapacity, outCount))
+				if (!_AppendMidiEvent(midi::MidiEvent::MakeNoteOn(0u, span.Channel, span.Note, span.Velocity).WithFlags(span.Flags), outEvents, outCapacity, outCount))
 					return outCount;
-				if (!_AppendMidiEvent(midi::MidiEvent::MakeNoteOff(mappedEnd, span.Channel, span.Note), outEvents, outCapacity, outCount))
+				if (!_AppendMidiEvent(midi::MidiEvent::MakeNoteOff(mappedEnd, span.Channel, span.Note).WithFlags(span.Flags), outEvents, outCapacity, outCount))
 					return outCount;
 			}
 
-			if (!_AppendMidiEvent(midi::MidiEvent::MakeNoteOn(mappedStart, span.Channel, span.Note, span.Velocity), outEvents, outCapacity, outCount))
+			if (!_AppendMidiEvent(midi::MidiEvent::MakeNoteOn(mappedStart, span.Channel, span.Note, span.Velocity).WithFlags(span.Flags), outEvents, outCapacity, outCount))
 				return outCount;
 			continue;
 		}
 
-		if (!_AppendMidiEvent(midi::MidiEvent::MakeNoteOn(0u, span.Channel, span.Note, span.Velocity), outEvents, outCapacity, outCount))
+		if (!_AppendMidiEvent(midi::MidiEvent::MakeNoteOn(0u, span.Channel, span.Note, span.Velocity).WithFlags(span.Flags), outEvents, outCapacity, outCount))
 			return outCount;
 	}
 
@@ -311,7 +311,7 @@ std::optional<std::shared_ptr<LoopTake>> LoopTake::FromFile(LoopTakeParams takeP
 		for (std::size_t eventIndex = 0u; eventIndex < sidecar->Events.size(); ++eventIndex)
 		{
 			const auto& event = sidecar->Events[eventIndex];
-			restored.Loop.Events[eventIndex] = { event.SampleOffset, event.Status, event.Data1, event.Data2 };
+			restored.Loop.Events[eventIndex] = { event.SampleOffset, event.Status, event.Data1, event.Data2, event.Flags };
 		}
 		for (std::size_t laneIndex = 0u; laneIndex < sidecar->Lanes.size(); ++laneIndex)
 		{
@@ -1137,12 +1137,16 @@ ActionResult LoopTake::OnAction(JobAction action)
 	break;
 	case JobAction::JOB_UPDATEMIDIQUANTISATION:
 	{
+		std::scoped_lock midiLock(_midiCaptureMutex);
 		const auto settings = ResolvedMidiQuantisation();
+		bool retry = false;
 		for (auto& midiLoop : action.MidiLoops)
 		{
 			if (midiLoop)
-				midiLoop->SetQuantisation(settings, MidiQuantisationTransportStartSamps());
+				retry |= !midiLoop->SetQuantisation(settings, MidiQuantisationTransportStartSamps());
 		}
+		if (retry)
+			_midiQuantisationUpdatePending.store(true, std::memory_order_release);
 
 		const auto displayLength = static_cast<std::uint32_t>(_recordedSampCount.load(std::memory_order_relaxed));
 		for (auto& midiLoop : action.MidiLoops)
@@ -1452,6 +1456,7 @@ void LoopTake::Record(std::vector<unsigned int> channels,
 			auto midiLoop = std::make_shared<midi::MidiLoop>();
 			graphics::MidiModelParams modelParams;
 			modelParams.ModelScale = 1.0f;
+			modelParams.DrawSelectionRing = _midiLoops.empty();
 			auto midiModel = std::make_shared<graphics::MidiModel>(modelParams);
 			midiLoop->AttachModel(midiModel);
 			midiLoop->StartRecord();
@@ -1459,6 +1464,7 @@ void LoopTake::Record(std::vector<unsigned int> channels,
 			_midiLoops.push_back(midiLoop);
 			_midiLoopChannels.push_back(midiChan);
 			_midiLoopDevices.push_back(midiDevice);
+			midiModel->SetParent(GuiElement::shared_from_this());
 			_children.push_back(midiModel);
 		}
 	}
@@ -2043,6 +2049,7 @@ void LoopTake::Overdub(std::vector<unsigned int> channels,
 			auto midiLoop = std::make_shared<midi::MidiLoop>();
 			graphics::MidiModelParams modelParams;
 			modelParams.ModelScale = 1.0f;
+			modelParams.DrawSelectionRing = _midiLoops.empty();
 			auto midiModel = std::make_shared<graphics::MidiModel>(modelParams);
 			midiLoop->AttachModel(midiModel);
 			midiLoop->StartRecord();
@@ -2050,6 +2057,7 @@ void LoopTake::Overdub(std::vector<unsigned int> channels,
 			_midiLoops.push_back(midiLoop);
 			_midiLoopChannels.push_back(midiChan);
 			_midiLoopDevices.push_back(midiDevice);
+			midiModel->SetParent(GuiElement::shared_from_this());
 			_children.push_back(midiModel);
 		}
 	}
@@ -2518,6 +2526,24 @@ bool LoopTake::RestoreAudioRoutes(const std::vector<std::vector<unsigned long>>&
 	return true;
 }
 
+bool LoopTake::PublishMidiEdit(const std::shared_ptr<midi::MidiLoop>& loop,
+	const midi::MidiLoop::EditState& edit,
+	std::uint64_t* acceptedRevision)
+{
+	std::scoped_lock midiLock(_midiCaptureMutex);
+	if (!loop || _state.load(std::memory_order_acquire) != STATE_PLAYING
+		|| std::find(_midiLoops.begin(), _midiLoops.end(), loop) == _midiLoops.end()
+		|| edit.Quantisation != ResolvedMidiQuantisation()
+		|| edit.QuantisationTransportStartSamps != MidiQuantisationTransportStartSamps()
+		|| !loop->PublishEdit(edit))
+		return false;
+	if (acceptedRevision)
+		*acceptedRevision = edit.Revision + 1u;
+	loop->QueueModelUpdateFromEvents(edit.LoopLengthSamps, true);
+	_changesMade = true;
+	return true;
+}
+
 bool LoopTake::SnapshotMidiForExport(MidiExportState& state) const
 {
 	// The paused scene boundary excludes audio callbacks, but the MIDI ingress
@@ -2555,6 +2581,7 @@ bool LoopTake::SnapshotMidiForExport(MidiExportState& state) const
 
 bool LoopTake::RestoreMidiFromExport(const MidiExportState& state)
 {
+	std::scoped_lock midiLock(_midiCaptureMutex);
 	if (state.Streams.size() > MaxMidiStreamsForRestore)
 		return false;
 	if (state.Streams.empty()
@@ -2585,6 +2612,7 @@ bool LoopTake::RestoreMidiFromExport(const MidiExportState& state)
 		graphics::MidiModelParams modelParams;
 		modelParams.Size = { 12, 14 };
 		modelParams.ModelScale = 1.0f;
+		modelParams.DrawSelectionRing = restoredLoops.empty();
 		modelParams.ModelTextures = { "probe_chrome", "probe_pearl" };
 		auto model = std::make_shared<graphics::MidiModel>(modelParams);
 		loop->AttachModel(model);
@@ -2609,7 +2637,10 @@ bool LoopTake::RestoreMidiFromExport(const MidiExportState& state)
 		loop->SetQuantisation(ResolvedMidiQuantisation(), state.QuantisationTransportStartSamps);
 	for (const auto& loop : _midiLoops)
 		if (loop && loop->Model())
+		{
+			loop->Model()->SetParent(GuiElement::shared_from_this());
 			_children.push_back(loop->Model());
+		}
 	_PublishMidiLoopSnapshot();
 	_ArrangeChildren();
 	return true;
@@ -2649,7 +2680,8 @@ void LoopTake::_ArrangeChildren()
 		if (midiLoop && midiLoop->Model())
 			numMidiLoops++;
 	}
-	auto numVisualRings = numLoops + numMidiLoops;
+	// MIDI streams in one take share a single visual ring, regardless of channel.
+	auto numVisualRings = numLoops + (numMidiLoops > 0u ? 1u : 0u);
 
 	if (0 == numVisualRings)
 		return;
@@ -2683,7 +2715,6 @@ void LoopTake::_ArrangeChildren()
 		midiModel->SetModelPosition({ 0.0f, 0.0f, 0.0f });
 		midiModel->SetModelScale(1.0 + (loopCount * dScale) - (dTotalScale * 0.5));
 
-		loopCount++;
 	}
 }
 
@@ -2714,6 +2745,7 @@ void LoopTake::_UpdateLoops()
 
 void LoopTake::_UpdateMidiModels(bool force)
 {
+	std::scoped_lock midiLock(_midiCaptureMutex);
 	const auto displayLength = static_cast<std::uint32_t>(_recordedSampCount.load(std::memory_order_relaxed));
 	if (_midiOverdubSession.Active)
 		_RefreshMidiOverdubPreview(displayLength);
@@ -3460,6 +3492,7 @@ void LoopTake::_RemoveMidiModelChildren()
 		if (!midiModel)
 			continue;
 
+		midiModel->SetParent(nullptr);
 		auto child = std::find(_children.begin(), _children.end(), midiModel);
 		if (_children.end() != child)
 			_children.erase(child);

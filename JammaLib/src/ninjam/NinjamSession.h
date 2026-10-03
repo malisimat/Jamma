@@ -8,6 +8,7 @@
 #include <mutex>
 #include <optional>
 #include <string>
+#include <thread>
 #include <vector>
 #include "../io/JamFile.h"
 #include "NinjamConnection.h"
@@ -128,7 +129,7 @@ namespace ninjam
 
 		// Send a chat message. Logs "[NINJAM] <you> ..." on success.
 		// No-op if not connected.
-		void SendChat(const std::string& msg);
+		bool SendChat(const std::string& msg);
 
 		// Request a tempo change on the server. Returns true on success.
 		// No-op (returns false) if not connected.
@@ -136,7 +137,11 @@ namespace ninjam
 
 		static PublicServerDirectorySnapshot GetPublicServerDirectorySnapshot();
 		static std::vector<PublicServerInfo> GetReachablePublicServers();
-		static bool RefreshPublicServerDirectoryAsync(std::function<void()> onComplete = {});
+		static bool RefreshPublicServerDirectoryAsync(std::function<void()> onComplete = {},
+			std::function<void()> onThreadStart = {}, std::function<void()> onStarted = {});
+		// App-owner shutdown only: reject new refreshes and join before restoring
+		// console buffers. Never call from a refresh callback or the audio thread.
+		static void ShutdownPublicServerDirectory();
 		static std::string FormatPublicServerSummary(const PublicServerInfo& server);
 
 	private:
@@ -150,10 +155,18 @@ namespace ninjam
 		static std::vector<PublicServerInfo> _PublicServerListCache;
 		static std::chrono::steady_clock::time_point _PublicServerListLastFetch;
 		static std::atomic_bool _PublicServerListFetchInFlight;
+		static std::mutex _PublicServerOutputMutex;
+		static bool _PublicServerOutputEnabled;
+		static void WithPublicServerOutput(const std::function<void()>& output);
 		static bool _PublicServerListHasLiveData;
+		// Non-audio callers serialize launch/shutdown. The worker never takes this
+		// mutex; its stop token cancels publication after an outstanding HTTP call.
+		static std::mutex _PublicServerWorkerMutex;
+		static bool _PublicServerStopping;
+		static std::jthread _PublicServerWorker;
 
 		static std::vector<PublicServerInfo> BuildStaticServerList();
-		static std::optional<std::string> FetchAutosongServerListHtml();
+		static std::optional<std::string> FetchAutosongServerListHtml(std::stop_token stop);
 		static std::vector<PublicServerInfo> ParseAutosongServerList(const std::string& html);
 		static std::vector<PublicServerInfo> MergeServerLists(const std::vector<PublicServerInfo>& fetched);
 

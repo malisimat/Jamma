@@ -4,6 +4,7 @@ out vec4 ColorOUT;
 
 uniform float Highlight;
 uniform float OverlayAlpha;
+uniform float SceneDim;
 
 in float PartKind;
 
@@ -21,5 +22,5 @@ void main()
 		colour = backingColour;
 
 	colour *= mix(0.82, 1.18, clamp(Highlight, 0.0, 1.0));
-	ColorOUT = vec4(colour, OverlayAlpha * partAlpha);
+	ColorOUT = vec4(colour * SceneDim, OverlayAlpha * partAlpha);
 }

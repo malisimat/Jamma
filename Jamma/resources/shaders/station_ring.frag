@@ -10,10 +10,11 @@ out vec4 ColorOUT;
 
 uniform float Highlight;
 uniform float HighlightPass;
-uniform float StationPressed;
 uniform float StationHover;
+uniform float StationPressed;
 uniform vec3 StationStateColor;
 uniform float RingScale;
+uniform float SceneDim;
 uniform sampler2D MaterialProbeSampler;
 
 void main()
@@ -22,9 +23,9 @@ void main()
     {
         float alpha = clamp(Highlight, 0.0, 1.0);
         if (alpha <= 0.0) discard;
-        ColorOUT = vec4(vec3(alpha), alpha);
-        return;
-    }
+		ColorOUT = vec4(vec3(alpha * SceneDim), alpha);
+		return;
+	}
     const float brightPart = 4.0;
     vec3 lightDir = normalize(vec3(0.35, 0.82, 0.44));
     vec3 viewDir = normalize(vec3(0.0, 0.30, 1.0));
@@ -50,7 +51,7 @@ void main()
             + vec3(0.13 - 0.07 * selected) * hovered, vec3(1.0));
         colour = mix(colour, vec3(1.0, 0.42, 0.11),
             0.72 * clamp(StationPressed, 0.0, 1.0));
-        ColorOUT = vec4(colour, 1.0);
+        ColorOUT = vec4(colour * SceneDim, 1.0);
         return;
     }
 
@@ -63,5 +64,5 @@ void main()
     charcoal += vec3(0.16) * clamp(StationHover, 0.0, 1.0);
     charcoal = mix(charcoal, vec3(0.50, 0.21, 0.07),
         0.65 * clamp(StationPressed, 0.0, 1.0));
-    ColorOUT = vec4(charcoal, 1.0);
+    ColorOUT = vec4(charcoal * SceneDim, 1.0);
 }

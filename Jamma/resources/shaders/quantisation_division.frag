@@ -4,6 +4,7 @@ out vec4 ColorOUT;
 
 uniform float Highlight;
 uniform float OverlayAlpha;
+uniform float SceneDim;
 
 in float BandValue;
 in vec3 Normal;
@@ -24,5 +25,5 @@ void main()
 	colour += vec3(specular * mix(0.12, 0.40, verticalSheen));
 
 	colour *= mix(0.82, 1.18, clamp(Highlight, 0.0, 1.0));
-	ColorOUT = vec4(colour, OverlayAlpha * 0.62);
+	ColorOUT = vec4(colour * SceneDim, OverlayAlpha * 0.62);
 }

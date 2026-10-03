@@ -70,6 +70,9 @@ namespace gui
 			utils::Position2d point,
 			float radius);
 		static bool Related(const Cable& cable, const Endpoint& endpoint);
+		static bool Revealed(const Cable& cable, bool revealHeld, bool dragging,
+			const std::optional<Endpoint>& hoveredSocket);
+		static bool CanGrabEnd(const Cable& cable, End end, bool loopEditor, bool revealHeld);
 		static bool Compatible(const Drag& drag, const Endpoint& candidate, const io::RigFile& rig);
 		static std::optional<size_t> NearestViable(const Drag& drag,
 			const std::vector<Endpoint>& endpoints,

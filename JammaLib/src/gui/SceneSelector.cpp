@@ -16,6 +16,8 @@ SceneSelector::SceneSelector(GuiSelectorParams guiParams) :
 	_currentHover({}),
 	_paintedPath({}),
 	_currentHoverSelected(false),
+	_pressHoverSelected(false),
+	_clickPressed(false),
 	_currentHoverTweakState(Tweakable::TweakState::TWEAKSTATE_NONE),
 	GuiElement(guiParams)
 {
@@ -44,6 +46,11 @@ std::vector<unsigned char> SceneSelector::CurrentHover() const
 std::vector<unsigned char> SceneSelector::PaintedPathForTest() const
 {
 	return _paintedPath;
+}
+
+bool SceneSelector::IsClickPressed() const
+{
+	return _clickPressed;
 }
 
 bool SceneSelector::UpdateCurrentHover(std::vector<unsigned char> path,
@@ -79,6 +86,9 @@ actions::ActionResult SceneSelector::OnAction(actions::TouchAction action)
 
 	if (actions::TouchAction::TouchState::TOUCH_DOWN == action.State)
 	{
+		_initPos = action.Position;
+		_pressHoverSelected = _currentHoverSelected;
+		_clickPressed = false;
 		if (_currentHover.empty())
 			_selectMode = SELECT_NONE;
 		else
@@ -92,6 +102,7 @@ actions::ActionResult SceneSelector::OnAction(actions::TouchAction action)
 					SELECT_SELECT;
 
 				StartPaintSelection(mode, _currentHover);
+				_clickPressed = (SELECT_SELECT == mode);
 
 				if (SELECT_SELECT == mode)
 					res.ResultType = actions::ACTIONRESULT_INITSELECT;
@@ -109,6 +120,7 @@ actions::ActionResult SceneSelector::OnAction(actions::TouchAction action)
 	}
 	else if (actions::TouchAction::TouchState::TOUCH_UP == action.State)
 	{
+		_clickPressed = false;
 		if (0 == action.Index)
 		{
 			if ((SELECT_SELECT == _selectMode) ||
@@ -116,7 +128,8 @@ actions::ActionResult SceneSelector::OnAction(actions::TouchAction action)
 				(SELECT_SELECTREMOVE == _selectMode))
 			{
 				res.IsEaten = true;
-				res.ResultType = actions::ACTIONRESULT_SELECT;
+				res.ResultType = (SELECT_SELECT == _selectMode) ?
+					actions::ACTIONRESULT_SELECT : actions::ACTIONRESULT_DEFAULT;
 
 				EndSelection();
 			}
@@ -136,6 +149,27 @@ actions::ActionResult SceneSelector::OnAction(actions::TouchAction action)
 		}
 	}
 
+	return res;
+}
+
+actions::ActionResult SceneSelector::OnAction(actions::TouchMoveAction action)
+{
+	auto res = GuiElement::OnAction(action);
+	if (!_isEnabled || !_isVisible || !_isSelecting || 0u == (action.MouseButtonsDown & 1u))
+		return res;
+
+	if (SELECT_SELECT == _selectMode)
+	{
+		const auto dx = action.Position.X - _initPos.X;
+		const auto dy = action.Position.Y - _initPos.Y;
+		if (dx * dx + dy * dy >= 16)
+		{
+			_selectMode = _pressHoverSelected ? SELECT_SELECTREMOVE : SELECT_SELECTADD;
+			_clickPressed = false;
+			res.ResultType = actions::ACTIONRESULT_INITSELECT;
+			res.IsEaten = true;
+		}
+	}
 	return res;
 }
 
@@ -207,5 +241,6 @@ void SceneSelector::UpdateRectSelection(utils::Position2d pos)
 void SceneSelector::EndSelection()
 {
 	_isSelecting = false;
+	_clickPressed = false;
 	_selectMode = SELECT_NONE;
 }

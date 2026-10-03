@@ -200,3 +200,26 @@ TEST(MidiOverdub, DropsDeterministicallyWhenOutputCapacityExceeded)
 	EXPECT_EQ(10u, events[2].Offset);
 	EXPECT_EQ(15u, events[3].Offset);
 }
+
+TEST(MidiOverdub, PunchFragmentsRetainExactTimingAndIndependentRecordedPairing)
+{
+	auto on = MidiEvent::MakeNoteOn(10u, 2u, 60u, 96u);
+	auto off = MidiEvent::MakeNoteOff(40u, 2u, 60u);
+	on.flags = off.flags = MidiEvent::ExactTiming;
+	const std::array source{on, MidiEvent::MakeNoteOn(12u, 2u, 60u, 80u),
+		MidiEvent::MakeNoteOff(28u, 2u, 60u), off};
+	const std::array windows{MidiPunchWindow{20u, 30u}};
+	std::array<MidiEvent, 16u> output;
+	MidiOverdubRenderParams params;
+	params.SourceEvents = source.data(); params.SourceEventCount = source.size();
+	params.SourceLoopLengthSamps = params.TargetLoopLengthSamps = 100u;
+	params.PunchWindows = windows.data(); params.PunchWindowCount = windows.size();
+	const auto count = midi::BuildMidiOverdubBaseEvents(params, output.data(), output.size());
+	ASSERT_EQ(6u, count);
+	std::size_t exact = 0u, recorded = 0u;
+	for (std::size_t i = 0; i < count; ++i)
+	{
+		if (output[i].HasExactTiming()) ++exact; else ++recorded;
+	}
+	EXPECT_EQ(4u, exact); EXPECT_EQ(2u, recorded);
+}

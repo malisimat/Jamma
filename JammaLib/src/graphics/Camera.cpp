@@ -419,6 +419,15 @@ glm::mat4 Camera::ViewMatrix() const
 
 glm::mat4 Camera::Projection(float aspectRatio, Position3d stationCentre) const
 {
+	if (_editorPerspective)
+	{
+		const auto dx = _pose.Eye.X - stationCentre.X;
+		const auto dy = _pose.Eye.Y - stationCentre.Y;
+		const auto dz = _pose.Eye.Z - stationCentre.Z;
+		const auto distance = std::sqrt(dx * dx + dy * dy + dz * dz);
+		return glm::perspective(glm::radians(42.0f), aspectRatio, 10.0f,
+			std::max(2000.0f, distance + 1000.0f));
+	}
 	if (View::StationInterior == _view)
 		return glm::perspective(glm::radians(_stationInteriorFieldOfView), aspectRatio, 10.0f, 1000.0f);
 
@@ -586,6 +595,51 @@ void Camera::SetViewTarget(View view, Pose target) noexcept
 	_transitionElapsedSeconds = 0.0f;
 	_transitioning = true;
 	_EndBackgroundDrag();
+}
+
+void Camera::SetEditorPose(Pose pose) noexcept
+{
+	if (!_editorPerspective) return;
+	_ApplyPose(pose);
+	_transitionStart = _pose;
+	_transitionTarget = _pose;
+	_transitioning = false;
+}
+
+Camera::EditorReturnState Camera::CaptureEditorReturnState() const noexcept
+{
+	EditorReturnState state;
+	state.ActiveView = _view;
+	// Preserve the actual entry pose, including an interrupted transition.
+	state.TargetPose = _pose;
+	for (size_t i = 0u; i < ViewCount; ++i)
+	{
+		state.RememberedPoses[i] = _rememberedPoses[i];
+		state.HasRememberedPose[i] = _hasRememberedPose[i];
+	}
+	state.InteriorForcedLoopTakeDepth = _interiorForcedLoopTakeDepth;
+	state.InteriorSelectDepthChanged = _interiorSelectDepthChanged;
+	state.InteriorRestorePending = _interiorRestorePending;
+	state.InteriorFocusIdentity = _interiorFocusIdentity;
+	return state;
+}
+
+void Camera::RestoreEditorReturnState(const EditorReturnState& state) noexcept
+{
+	SetViewTarget(state.ActiveView, state.TargetPose);
+	for (size_t i = 0u; i < ViewCount; ++i)
+	{
+		_rememberedPoses[i] = state.RememberedPoses[i];
+		_hasRememberedPose[i] = state.HasRememberedPose[i];
+	}
+	_interiorForcedLoopTakeDepth = state.InteriorForcedLoopTakeDepth;
+	_interiorSelectDepthChanged = state.InteriorSelectDepthChanged;
+	_interiorFocusIdentity = state.InteriorFocusIdentity;
+	// The editor returns to the exact entry depth. A deferred interior-depth
+	// change from the interrupted view transition must not fire afterward.
+	_interiorRestorePending = false;
+	if (state.InteriorRestorePending)
+		_interiorForcedLoopTakeDepth = false;
 }
 
 void Camera::_TickTransition(float deltaSeconds) noexcept

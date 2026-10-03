@@ -8,6 +8,13 @@
 
 using namespace io;
 
+thread_local bool ConsoleTui::_captureEnabled = false;
+
+void ConsoleTui::EnableCaptureForCurrentThread(bool enabled) noexcept
+{
+	_captureEnabled = enabled;
+}
+
 	// Returns a styled, emoji-prefixed version of `line` for known [NINJAM]
 	// log shapes. Lines without the [NINJAM] tag are returned unchanged so
 	// non-ninjam logs continue to look exactly as they did before.
@@ -98,13 +105,15 @@ ConsoleTui::~ConsoleTui()
 	Stop();
 }
 
-void ConsoleTui::Start(std::string prompt, SubmitHandler onSubmit)
+void ConsoleTui::Start(std::string prompt, SubmitHandler onSubmit,
+	CaptureHandler onLine)
 {
 	if (_started.exchange(true))
 		return;
 
 	_prompt = std::move(prompt);
 	_onSubmit = std::move(onSubmit);
+	_onLine = std::move(onLine);
 	_stop = false;
 	_input.clear();
 
@@ -280,6 +289,7 @@ void ConsoleTui::_OnLogChar(char c)
 		return;
 	}
 
+	if (_captureEnabled && _onLine) _onLine(pending);
 	std::string formatted = ConsoleTui::_FormatLine(pending);
 	pending.clear();
 
@@ -301,6 +311,7 @@ void ConsoleTui::_OnLogChar(char c)
 
 void ConsoleTui::_InputLoop()
 {
+	EnableCaptureForCurrentThread(true);
 	if (!_hStdin || _hStdin == INVALID_HANDLE_VALUE)
 		return;
 

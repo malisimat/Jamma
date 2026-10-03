@@ -304,3 +304,15 @@ CableInteraction::Release CableInteraction::ReleaseToCandidate(const Drag& drag,
 		return { io::RigFileRouting::WithAdcInput(removed.value(), drag.Route.TriggerIndex, replacement->AdcChannel), true };
 	return { io::RigFileRouting::WithMidiInput(removed.value(), drag.Route.TriggerIndex, replacement->MidiDevice), true };
 }
+
+// Reveal intent, rather than fade-out alpha, defines which routes accept input.
+bool CableInteraction::Revealed(const Cable& cable, bool revealHeld, bool dragging,
+	const std::optional<Endpoint>& hoveredSocket)
+{
+	return revealHeld || dragging || (hoveredSocket && Related(cable, *hoveredSocket));
+}
+
+bool CableInteraction::CanGrabEnd(const Cable& cable, End end, bool loopEditor, bool revealHeld)
+{
+	return !loopEditor || revealHeld || cable.Route.Kind != RouteKind::Station || end == End::Start;
+}

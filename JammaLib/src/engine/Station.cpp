@@ -2597,6 +2597,7 @@ void Station::_DitchLoopTake(std::shared_ptr<LoopTake>& take) noexcept
 	{
 		if (!midiLoop)
 			continue;
+		midiLoop->RequestHeldFlush();
 		const auto& held = midiLoop->HeldNotes();
 		if (held.none())
 			continue;

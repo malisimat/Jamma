@@ -100,6 +100,12 @@ void Skybox::Draw(GlDrawContext& ctx)
 	glDepthMask(depthMask);
 }
 
+unsigned int Skybox::CubemapId() const noexcept
+{
+	const auto cubemap = _cubemap.lock();
+	return cubemap ? cubemap->GetId() : 0u;
+}
+
 void Skybox::ReleaseResources()
 {
 	if (_vao)

@@ -19,13 +19,13 @@
 #include "gl/gl.h"
 #include "gl/glext.h"
 #include "gl/wglext.h"
-#include "../engine/Scene.h"
 #include "Action.h"
 #include "ActionReceiver.h"
 #include "CommonTypes.h"
+#include "../../include/Constants.h"
+#include "../engine/Scene.h"
 #include "../base/DrawContext.h"
 #include "../utils/VecUtils.h"
-#include "../include/Constants.h"
 #include "../resources/Resource.h"
 #include "../resources/ResourceLib.h"
 #include "../actions/KeyAction.h"
@@ -71,6 +71,11 @@ namespace graphics
 		void SetResizing(bool resizing);
 		base::Action::Modifiers Modifiers() const;
 		void ClearModifiers();
+		// Propagate OS capture/focus loss so editor pointer transactions cancel.
+		bool CancelMouseCapture();
+		bool BeginRelativePointer(int button, utils::Position2d anchor);
+		void EndRelativePointer(int button);
+		bool HasRelativePointer() const noexcept { return _relativeButton >= 0; }
 		bool IsTrackingMouse() const;
 		void SetTrackingMouse(bool resizing);
 		void Resize(utils::Size2d size);
@@ -82,6 +87,7 @@ namespace graphics
 		void Release();
 		void ReplaceScene(engine::Scene& scene);
 		bool ConsumeJamLoadRequest() noexcept;
+		bool ConsumeConsoleToggleRequest() noexcept;
 
 		virtual actions::ActionResult OnAction(actions::WindowAction winAction) override;
 		virtual actions::ActionResult OnAction(actions::TouchAction touchAction) override;
@@ -97,6 +103,11 @@ namespace graphics
 		static LRESULT CALLBACK WindowProcedure(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) noexcept;
 
 	private:
+		void _InstallRelativePointerHost();
+		bool _RelativePointerValid() const;
+		void _RestoreRawInput();
+		void _ResamplePointer();
+		void _HandleRawInput(HRAWINPUT input);
 		void LoadResources();
 		void InitScene();
 		void ApplyPendingResize();
@@ -116,6 +127,11 @@ namespace graphics
 		bool _trackingMouse;
 		bool _released;
 		unsigned int _buttonsDown;
+		int _relativeButton = -1;
+		POINT _relativeAnchorClient{};
+		POINT _relativeAnchorScreen{};
+		utils::Position2d _relativeAnchor{};
+		std::optional<RAWINPUTDEVICE> _previousRawMouse;
 		unsigned int _lastHoverObjectId;
 		bool _hover3dDirty;
 		bool _forcePick;
@@ -131,6 +147,7 @@ namespace graphics
 		resources::ResourceLib& _resourceLib;
 		base::Action::Modifiers _modifiers;
 		bool _jamLoadRequested;
+		bool _consoleToggleRequested;
 
 		ImageFullscreen _highlightPass;
 	};

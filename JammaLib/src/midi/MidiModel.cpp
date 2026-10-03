@@ -4,7 +4,7 @@
 #include <cmath>
 #include <utility>
 
-#include "../include/Constants.h"
+#include "../../include/Constants.h"
 #include "../graphics/GlDrawContext.h"
 #include "../utils/VecUtils.h"
 

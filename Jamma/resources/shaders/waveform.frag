@@ -3,6 +3,9 @@
 in vec2 UV;
 in vec3 ProbeNormal;
 in vec3 ViewPosition;
+in float EditorU;
+in float EditorMorphV;
+in vec3 EditorLocalPosition;
 
 out vec4 ColorOUT;
 
@@ -15,9 +18,17 @@ uniform float LoopSelected;
 uniform float LoopPressed;
 uniform float Highlight;
 uniform float HighlightPass;
+uniform float EditorPlayFrac;
+uniform float SceneDim;
+uniform float EditorActive;
+uniform float EditorTime;
+uniform samplerCube ProbeSampler;
+uniform float ProbeStrength;
+uniform vec3 EditorProbeEye;
 
 void main()
 {
+    gl_FragDepth = gl_FragCoord.z;
     if (HighlightPass > 0.5)
     {
         ColorOUT = vec4(Highlight);
@@ -54,8 +65,21 @@ void main()
     float brightBand = smoothstep(0.20, 0.70, dot(probe, vec3(0.2126, 0.7152, 0.0722)));
     float fresnel = 0.65 + 0.35 * pow(1.0 - clamp(dot(normal, towardEye), 0.0, 1.0), 5.0);
     // Level colours keep a strong diffuse floor; the environment only adds light.
+    // Keep material light subordinate to the interaction palette. Both probe
+    // paths enter before peak compression and selected/hovered/pressed styling.
+    vec3 materialLight = 0.12 * fresnel * brightBand * clamp(probe, 0.0, 1.0);
+    if (EditorActive > 0.5 && EditorMorphV > 0.0)
+    {
+        vec3 editorTowardEye = normalize(EditorProbeEye - EditorLocalPosition);
+        vec3 editorReflected = reflect(-editorTowardEye, vec3(0.0, 1.0, 0.0));
+        vec3 editorProbe = texture(ProbeSampler, editorReflected).rgb;
+        float editorBrightBand = smoothstep(0.52, 0.82,
+            dot(editorProbe, vec3(0.2126, 0.7152, 0.0722)));
+        materialLight += clamp(ProbeStrength, 0.0, 1.0) * EditorMorphV * 0.16
+            * editorBrightBand * clamp(editorProbe, 0.0, 1.0);
+    }
     vec4 shadedColor = vec4(ambient + (0.78 + 0.22 * diffuse) * texColor
-        + 0.55 * fresnel * brightBand * probe, 1.0);
+        + materialLight, 1.0);
     vec4 recColor = shadedColor + vec4(diffScale * vec3(8.0, 3.0, 0.5), 1.0);
     vec4 muteColor = ambient + vec4(diffScale * vec3(0.6, 0.6, 0.6), 0.2);
 
@@ -65,11 +89,46 @@ void main()
     ColorOUT = recFade * recColor +
         muteFade * muteColor +
         max(1.0 - (muteFade + recFade), 0.0) * shadedColor;
+
+    // Compress the recording peaks before applying interaction colours. The
+    // old additive hover term clipped broad sections of the waveform white.
+    ColorOUT.rgb = ColorOUT.rgb / (vec3(1.0) + 0.55 * ColorOUT.rgb);
     float selected = clamp(LoopSelected, 0.0, 1.0);
-    if (selected > 0.0)
-        ColorOUT.rgb = min(ColorOUT.rgb * (1.0 + 1.80 * selected)
-            + vec3(0.07, 0.19, 0.23) * selected, vec3(1.0));
-    ColorOUT += LoopHover * vec4(0.5, 0.6, 0.4, 1.0);
+    float hovered = clamp(LoopHover, 0.0, 1.0);
+    // Preserve level hue with scalar peak limiting only while selected. The
+    // ceiling leaves room for master's cyan lift and its additional hover lift:
+    // (0.10 * 2.80 + 0.23) * 1.37 + 0.05 = 0.7487, below white.
+    // A fixed ceiling keeps selection stable as lighting and the camera move;
+    // idle and unselected hover retain their vivid level/recording colours.
+    float peak = max(max(ColorOUT.r, ColorOUT.g), ColorOUT.b);
+    float interactionCeiling = mix(peak, 0.10, selected);
+    ColorOUT.rgb *= min(1.0, interactionCeiling / max(peak, 0.0001));
+    ColorOUT.rgb = min(ColorOUT.rgb * (1.0 + 1.80 * selected)
+        + vec3(0.07, 0.19, 0.23) * selected, vec3(1.0));
+    ColorOUT.rgb = min(ColorOUT.rgb * (1.0 + (0.80 - 0.43 * selected) * hovered)
+        + vec3(0.12 - 0.07 * selected) * hovered, vec3(1.0));
     ColorOUT.rgb = mix(ColorOUT.rgb, vec3(0.86, 0.38, 0.12),
         0.70 * clamp(LoopPressed, 0.0, 1.0));
+    if (EditorActive > 0.5)
+    {
+        float ahead = fract(EditorU - EditorPlayFrac + 1.0);
+        float distanceU = min(ahead, 1.0 - ahead);
+        float pulse = 0.92 + 0.08 * sin(EditorTime * 3.0);
+        float core = exp(-pow(distanceU / 0.0025, 2.0)) * pulse;
+        float trail = exp(-ahead / 0.035);
+        ColorOUT.rgb = mix(ColorOUT.rgb, ColorOUT.rgb * 0.82 + vec3(0.10, 0.22, 0.28),
+            EditorMorphV);
+        ColorOUT.rgb += (0.25 + 0.75 * EditorMorphV)
+            * (core * vec3(0.35, 0.85, 1.0) + trail * vec3(0.03, 0.12, 0.18));
+        if (EditorMorphV > 0.0)
+        {
+            float timeCoord = EditorU * 16.0;
+            float timeLine = 1.0 - smoothstep(0.0, fwidth(timeCoord) * 1.4,
+                min(fract(timeCoord), 1.0 - fract(timeCoord)));
+            ColorOUT.rgb += EditorMorphV * timeLine * vec3(0.07, 0.12, 0.16);
+        }
+    }
+    ColorOUT.rgb *= mix(SceneDim, 1.0, EditorMorphV);
+    if (EditorActive > 0.5)
+        gl_FragDepth = gl_FragCoord.z * mix(1.0, 0.05, EditorMorphV);
 }

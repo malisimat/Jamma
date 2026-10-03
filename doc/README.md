@@ -3,11 +3,11 @@
 ## Developer Resources
 
 - [Build and Test Guide](build.md)
+- [Performance Console](performance-console.md)
 - [Real-Time Audio Guidance](realtime-audio.md)
+- [Loop Grid Editor](loop-grid-editor.md)
 - [Multi-Device MIDI Trigger Rig Configuration](midi-trigger-mapping.md)
 - [Ninjam Integration Guide](ninjam.md)
-- [Ninjam Sync Implementation Plan](ninjam-sync-implementation-plan.md)
-- [Ninjam Sync Handoff](ninjam-sync-handoff.md)
 - [VS Code Tasks Starter](vscode-tasks.example.json)
 
 ## Project Structure

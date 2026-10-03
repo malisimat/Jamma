@@ -630,7 +630,7 @@ void StationModel::Draw3d(DrawContext& ctx,
 		auto idVec = _stationGlobalId.empty() ? GlobalId() : _stationGlobalId;
 		for (auto& idPart : idVec)
 			idPart += 1;
-		// Unused path components stay zero so the hit resolves to the station.
+		// Leave unused path components at zero so picking resolves to the station.
 		idVec.resize(3);
 		const auto id = utils::VecToId(idVec);
 		glCtx.SetUniform("ObjectId", id);
@@ -641,7 +641,7 @@ void StationModel::Draw3d(DrawContext& ctx,
 		glCtx.SetUniform("Highlight", _stationSelected ? 1.0f : 0.0f);
 		glCtx.SetUniform("HighlightPass", 1.0f);
 		glCtx.SetUniform("StationHover", _stationPicking ? 1.0f : 0.0f);
-		glCtx.SetUniform("StationPressed", 0.0f);
+		glCtx.SetUniform("StationPressed", _clickPressed ? 1.0f : 0.0f);
 		glCtx.SetUniform("StationLevel", stationLevel);
 		glCtx.SetUniform("StationStateColor", stationStateColors[stationStateIndex]);
 		break;
@@ -650,7 +650,7 @@ void StationModel::Draw3d(DrawContext& ctx,
 		glCtx.SetUniform("Highlight", _stationSelected ? 1.0f : 0.0f);
 		glCtx.SetUniform("HighlightPass", 0.0f);
 		glCtx.SetUniform("StationHover", _stationPicking ? 1.0f : 0.0f);
-		glCtx.SetUniform("StationPressed", 0.0f);
+		glCtx.SetUniform("StationPressed", _clickPressed ? 1.0f : 0.0f);
 		glCtx.SetUniform("StationLevel", stationLevel);
 		glCtx.SetUniform("StationStateColor", stationStateColors[stationStateIndex]);
 		break;
@@ -706,7 +706,7 @@ void StationModel::Draw3d(DrawContext& ctx,
 	glCtx.SetUniform("Highlight", _stationSelected ? 1.0f : 0.0f);
 	glCtx.SetUniform("HighlightPass", pass == base::PASS_HIGHLIGHT ? 1.0f : 0.0f);
 	glCtx.SetUniform("StationHover", _stationPicking ? 1.0f : 0.0f);
-	glCtx.SetUniform("StationPressed", 0.0f);
+	glCtx.SetUniform("StationPressed", _clickPressed ? 1.0f : 0.0f);
 	glCtx.SetUniform("StationLevel", stationLevel);
 	glCtx.SetUniform("StationStateColor", stationStateColors[stationStateIndex]);
 	glCtx.SetUniform("StationVisualState", static_cast<int>(stationStateIndex));

@@ -18,6 +18,7 @@ using gui::SceneSelector;
 using gui::GuiSelectorParams;
 using actions::GuiAction;
 using actions::TouchAction;
+using actions::TouchMoveAction;
 using actions::KeyAction;
 
 class GuiControlsMockedGuiReceiver :
@@ -450,4 +451,36 @@ TEST(SceneSelector, HoverLossDoesNotClearCommittedPaintPath) {
 		false,
 		base::Tweakable::TWEAKSTATE_NONE);
 	ASSERT_EQ(hoveredPath, selector->PaintedPathForTest());
+}
+
+TEST(SceneSelector, DragChoosesPaintDirectionFromPressedItem) {
+	for (const bool initiallySelected : { false, true }) {
+		GuiSelectorParams params;
+		params.Position = { 100, 200 };
+		SceneSelector selector(params);
+		selector.SetSelectDepth(base::DEPTH_STATION);
+		ASSERT_TRUE(selector.UpdateCurrentHover({ 2 }, base::Action::MODIFIER_NONE,
+			initiallySelected, base::Tweakable::TWEAKSTATE_NONE));
+
+		auto down = MakeTouchAction(TouchAction::TOUCH_DOWN, { 105, 205 });
+		down.Index = 0;
+		EXPECT_EQ(actions::ACTIONRESULT_INITSELECT,
+			selector.OnAction(selector.ParentToLocal(down)).ResultType);
+		EXPECT_TRUE(selector.IsClickPressed());
+
+		TouchMoveAction smallMove;
+		smallMove.Position = { 107, 207 };
+		smallMove.MouseButtonsDown = 1u;
+		selector.OnAction(selector.ParentToLocal(smallMove));
+		EXPECT_EQ(SceneSelector::SELECT_SELECT, selector.CurrentMode());
+
+		TouchMoveAction drag;
+		drag.Position = { 110, 205 };
+		drag.MouseButtonsDown = 1u;
+		EXPECT_EQ(actions::ACTIONRESULT_INITSELECT,
+			selector.OnAction(selector.ParentToLocal(drag)).ResultType);
+		EXPECT_EQ(initiallySelected ? SceneSelector::SELECT_SELECTREMOVE : SceneSelector::SELECT_SELECTADD,
+			selector.CurrentMode());
+		EXPECT_FALSE(selector.IsClickPressed());
+	}
 }

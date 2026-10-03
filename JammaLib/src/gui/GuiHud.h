@@ -89,6 +89,7 @@ namespace gui
 			std::vector<std::string> midiInputNames,
 			const engine::RigSnapshot& routing);
 		void SetStationAnchors(std::vector<StationAnchor> anchors);
+		void SetLoopEditorMode(bool enabled);
 		bool HasCableDrag() const noexcept { return _cableDrag.has_value(); }
 		bool IsApplying() const { return _RoutingEditAvailability() == RoutingEditAvailability::Applying; }
 		static std::vector<CableRoute> BuildCableRoutes(const engine::RoutingGraph& graph);
@@ -156,6 +157,9 @@ namespace gui
 		void _RebuildCableVertices();
 		void _BuildInteractionGeometry(std::vector<CableInteraction::Endpoint>& endpoints,
 			std::vector<CableInteraction::Cable>& cables) const;
+		bool _CableVisible(const CableInteraction::Cable& cable) const;
+		void _FilterCableHits(std::vector<CableInteraction::Endpoint>& endpoints,
+			std::vector<CableInteraction::Cable>& cables, utils::Position2d point) const;
 		void _UpdateCableHover(utils::Position2d point);
 		void _UpdateSocketHighlights();
 		bool _SourceVisible(size_t index) const;
@@ -241,6 +245,8 @@ namespace gui
 		unsigned int _cableVertexArray = 0;
 		unsigned int _cableVertexBuffer = 0;
 		bool _cablesDirty = true;
+		bool _loopEditorMode = false;
+		std::optional<utils::Position2d> _cableHoverPoint;
 		std::vector<StationAnchor> _stationAnchors;
 		static constexpr int _CableSegments = 24;
 		static constexpr float _SocketHitRadius = 14.0f;

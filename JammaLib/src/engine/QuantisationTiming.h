@@ -3,7 +3,7 @@
 #include <cstdint>
 #include <optional>
 
-#include "../include/Constants.h"
+#include "../../include/Constants.h"
 
 namespace midi
 {

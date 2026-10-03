@@ -55,7 +55,9 @@ void LoopModel::Draw3d(DrawContext& ctx,
 {
 	auto& glCtx = dynamic_cast<GlDrawContext&>(ctx);
 
-	glCtx.PushMvp(glm::rotate(glm::mat4(1.0), (float)(constants::TWOPI * (_loopIndexFrac + 0.0)), glm::vec3(0.0f, 1.0f, 0.0f)));
+	glCtx.PushMvp(glm::rotate(glm::mat4(1.0),
+		(float)(constants::TWOPI * _loopIndexFrac) * (1.0f - _editorMorph),
+		glm::vec3(0.0f, 1.0f, 0.0f)));
 
 	float waveformRadius = _UnitMeshRadius;
 	float waveformColorMultiplier = 0.5f / (_HeightScale + _MinHeight);
@@ -88,7 +90,7 @@ void LoopModel::Draw3d(DrawContext& ctx,
 		glCtx.SetUniform("LoopState", (unsigned int)_modelState);
 		glCtx.SetUniform("LoopHover", _isPicking3d ? 1.0f : 0.0f);
 		glCtx.SetUniform("LoopSelected", _isSelected ? 1.0f : 0.0f);
-		glCtx.SetUniform("LoopPressed", 0.0f);
+		glCtx.SetUniform("LoopPressed", _clickPressed ? 1.0f : 0.0f);
 		break;
 	}
 
@@ -107,11 +109,12 @@ void LoopModel::Draw3d(DrawContext& ctx,
 		return;
 	}
 
-	if (pass == base::PASS_SCENE)
+	if (pass != base::PASS_PICKER)
 	{
 		glCtx.SetUniform("TextureSampler", 0u);
 		glCtx.SetUniform("WaveformSampler", 1u);
 		glCtx.SetUniform("MaterialProbeSampler", 2u);
+		glCtx.SetUniform("ProbeSampler", 3u);
 	}
 	glCtx.SetUniform("WaveformRadius", waveformRadius);
 	glCtx.SetUniform("WaveformHeightScale", _HeightScale);
@@ -119,6 +122,9 @@ void LoopModel::Draw3d(DrawContext& ctx,
 	glCtx.SetUniform("WaveformColorMultiplier", waveformColorMultiplier);
 	glCtx.SetUniform("WaveformUnitMeshRadius", _UnitMeshRadius);
 	glCtx.SetUniform("WaveformColorScale", _waveformColorScale);
+	glCtx.SetUniform("EditorMorph", _editorMorph);
+	glCtx.SetUniform("EditorActive", _editorActive ? 1.0f : 0.0f);
+	glCtx.SetUniform("EditorPlayFrac", static_cast<float>(std::fmod(1.0 - _loopIndexFrac + 1.0, 1.0)));
 
 	glUseProgram(shader->GetId());
 	shader->SetUniforms(dynamic_cast<GlDrawContext&>(ctx));
@@ -129,10 +135,16 @@ void LoopModel::Draw3d(DrawContext& ctx,
 	{
 		glActiveTexture(GL_TEXTURE0);
 		glBindTexture(GL_TEXTURE_2D, texture ? texture->GetId() : 0u);
-		glActiveTexture(GL_TEXTURE1);
-		glBindTexture(GL_TEXTURE_1D, _waveformTexture);
 		glActiveTexture(GL_TEXTURE2);
 		glBindTexture(GL_TEXTURE_2D, probeTexture ? probeTexture->GetId() : 0u);
+	}
+
+	// Highlighting shares the waveform vertex shader and needs its height data,
+	// while picking uses fixed geometry and needs no waveform texture upload.
+	if (pass != base::PASS_PICKER)
+	{
+		glActiveTexture(GL_TEXTURE1);
+		glBindTexture(GL_TEXTURE_1D, _waveformTexture);
 	}
 
 	if (numInstances > 1)
@@ -144,10 +156,14 @@ void LoopModel::Draw3d(DrawContext& ctx,
 	{
 		glActiveTexture(GL_TEXTURE2);
 		glBindTexture(GL_TEXTURE_2D, 0);
+		glActiveTexture(GL_TEXTURE0);
+		glBindTexture(GL_TEXTURE_2D, 0);
+	}
+	if (pass != base::PASS_PICKER)
+	{
 		glActiveTexture(GL_TEXTURE1);
 		glBindTexture(GL_TEXTURE_1D, 0);
 		glActiveTexture(GL_TEXTURE0);
-		glBindTexture(GL_TEXTURE_2D, 0);
 	}
 	glBindVertexArray(0);
 	glUseProgram(0);

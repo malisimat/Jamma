@@ -2,9 +2,54 @@
 
 #include <atomic>
 #include <chrono>
+#include <future>
+#include <stdexcept>
 #include <thread>
 
 #include "ninjam/NinjamSession.h"
+
+TEST(NinjamDirectoryDeathTest, ShutdownJoinsWorkerAndRejectsNewRefreshes)
+{
+	// Isolate process-wide shutdown so test ordering/repetition stays independent.
+	ASSERT_EXIT({
+		using Session = ninjam::NinjamSession;
+		try
+		{
+			Session::RefreshPublicServerDirectoryAsync({}, {}, [] {
+				throw std::runtime_error("start failure");
+			});
+			std::exit(1);
+		}
+		catch (const std::runtime_error&) {}
+		if (Session::GetPublicServerDirectorySnapshot().RefreshInFlight) std::exit(2);
+		std::promise<void> entered;
+		std::promise<void> release;
+		auto released = release.get_future();
+		std::atomic<bool> finished{ false };
+		if (!Session::RefreshPublicServerDirectoryAsync({}, [&] {
+			entered.set_value();
+			released.wait();
+			finished = true;
+			throw std::runtime_error("worker failure"); // Never uses the network.
+		})) std::exit(3);
+		entered.get_future().wait();
+		auto shutdown = std::async(std::launch::async, [] { Session::ShutdownPublicServerDirectory(); });
+		const bool waited = shutdown.wait_for(std::chrono::milliseconds(50)) == std::future_status::timeout;
+		release.set_value();
+		shutdown.get();
+		if (!waited || !finished || Session::GetPublicServerDirectorySnapshot().RefreshInFlight)
+			std::exit(4);
+		if (Session::RefreshPublicServerDirectoryAsync()) std::exit(5);
+		Session::ShutdownPublicServerDirectory();
+		std::exit(0);
+	}, ::testing::ExitedWithCode(0), "");
+}
+
+TEST(NinjamSessionAudio, ChatReportsNotSentWithoutConnection)
+{
+	ninjam::NinjamSession session;
+	EXPECT_FALSE(session.SendChat("hello"));
+}
 
 TEST(NinjamSessionAudio, StopCannotInvalidateBorrowDuringSynchronousConsume)
 {

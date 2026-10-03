@@ -10,22 +10,23 @@ out vec4 ColorOUT;
 
 uniform float Highlight;
 uniform float HighlightPass;
-uniform float StationPressed;
 uniform float StationHover;
+uniform float StationPressed;
 uniform vec3 StationStateColor;
+uniform float SceneDim;
 uniform sampler2D MaterialProbeSampler;
 
 // uv.x = radial fraction on top/bevel, vertical fraction on side (0=bottom,1=top)
 // uv.y = part kind:  0=deck-top, 1=bevel, 2=side
 void main()
 {
-    if (HighlightPass > 0.5)
-    {
-        float alpha = clamp(Highlight, 0.0, 1.0);
-        if (alpha <= 0.0) discard;
-        ColorOUT = vec4(vec3(alpha), alpha);
-        return;
-    }
+	if (HighlightPass > 0.5)
+	{
+		float alpha = clamp(Highlight, 0.0, 1.0);
+		if (alpha <= 0.0) discard;
+		ColorOUT = vec4(vec3(alpha * SceneDim), alpha);
+		return;
+	}
 	float radialFrac = Uv.x;
 	float partKind   = Uv.y;
 	// accentuate small values
@@ -61,21 +62,25 @@ void main()
 	if (partKind < 1.5 || partKind > 3.5)
 	{
 		vec3 probe = texture(MaterialProbeSampler, clamp(normalize(ProbeNormal).xy * 0.49 + 0.5, 0.01, 0.99)).rgb;
-        // Reflected light is additive: dark probe regions leave the
-        // diffuse material intact, and highlights brighten neutral caps.
-        base *= 0.34;
-        base += vec3(0.24, 0.27, 0.32) * probe;
+		// Reflected light is additive: dark probe regions leave the
+		// diffuse material intact, and highlights brighten neutral caps.
+		base *= 0.34;
+		base += vec3(0.24, 0.27, 0.32) * probe;
+		// Leave headroom for selected cyan and the additional hover lift;
+		// bright reflections must not turn both states solid white.
+		float materialCeiling = mix(0.40, 0.13, clamp(Highlight, 0.0, 1.0));
+		base = min(base, vec3(materialCeiling));
 	}
 
-	// -- highlight flash (selection) --
+	// Keep the diffuse and level variation visible beneath the stronger state light.
 	float hi = clamp(Highlight, 0.0, 1.0);
-    float hover = clamp(StationHover, 0.0, 1.0);
-    base = min(base * (1.0 + 1.65 * hi) + vec3(0.08, 0.27, 0.32) * hi,
-        vec3(1.0));
-    base = min(base * (1.0 + (0.70 - 0.35 * hi) * hover)
-        + vec3(0.14 - 0.07 * hi) * hover, vec3(1.0));
-    base = mix(base, vec3(0.90, 0.40, 0.13),
-        0.68 * clamp(StationPressed, 0.0, 1.0));
+	float hover = clamp(StationHover, 0.0, 1.0);
+	base = min(base * (1.0 + 1.65 * hi) + vec3(0.08, 0.27, 0.32) * hi,
+		vec3(1.0));
+	base = min(base * (1.0 + (0.70 - 0.35 * hi) * hover)
+		+ vec3(0.14 - 0.07 * hi) * hover, vec3(1.0));
+	base = mix(base, vec3(0.90, 0.40, 0.13),
+		0.68 * clamp(StationPressed, 0.0, 1.0));
 
-    ColorOUT = vec4(base, 1.0);
+	ColorOUT = vec4(base * SceneDim, 1.0);
 }

@@ -19,7 +19,7 @@ namespace io
 	{
 	public:
 		static constexpr std::uint16_t CurrentMajor = 0u;
-		static constexpr std::uint16_t CurrentMinor = 2u;
+		static constexpr std::uint16_t CurrentMinor = 3u;
 		static constexpr std::uint16_t CurrentPatch = 0u;
 		static constexpr std::size_t MaxEvents = 4096u;
 		static constexpr std::size_t MaxLanes = 8u;
@@ -32,6 +32,7 @@ namespace io
 			std::uint8_t Status = 0;
 			std::uint8_t Data1 = 0;
 			std::uint8_t Data2 = 0;
+			std::uint8_t Flags = 0;
 		};
 
 		struct Stream

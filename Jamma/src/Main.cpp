@@ -6,6 +6,12 @@
 ///////////////////////////////////////////////////////////
 
 #include "NetworkSession.h"
+#include "ConsoleBroker.h"
+#include "ConsoleLaunch.h"
+#include "../../console/CommandMailbox.h"
+#include "../../console/CommandParsing.h"
+#include "../../console/LineRing.h"
+#include "../../console/OutboundMailbox.h"
 #include "Main.h"
 #include "Window.h"
 #include "PathUtils.h"
@@ -13,7 +19,8 @@
 #include "../io/TextReadWriter.h"
 #include "../io/InitFile.h"
 #include "../io/StartupConfig.h"
-#include "../io/ConsoleTui.h"
+#include "ConsoleCapture.h"
+#include "ConsoleStatus.h"
 #include "../vst/Vst3Plugin.h"
 #include <objbase.h>
 #include <dbt.h>
@@ -21,6 +28,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cctype>
+#include <deque>
 #include <iostream>
 #include <iomanip>
 #include <memory>
@@ -46,68 +54,62 @@ using namespace utils;
 // ---------------------------------------------------------------------------
 static void PrintNinjamHelp()
 {
-	auto snapshot = ninjam::NinjamSession::GetPublicServerDirectorySnapshot();
 	auto servers = ninjam::NinjamSession::GetReachablePublicServers();
-	std::cout << "[NINJAM] Commands:\n"
+	std::ostringstream output;
+	output << "[NINJAM] Commands:\n"
 	          << "[NINJAM]   /  /?  /help        Show this help and server list\n"
 	          << "[NINJAM]   /c <n>  /connect <n> Connect to server by number\n"
 	          << "[NINJAM]   /d  /q  /quit        Disconnect from current server\n"
 	          << "[NINJAM] Servers:\n";
-	if (snapshot.RefreshInFlight)
-		std::cout << "[NINJAM]   Refreshing live metadata from autosong.ninjam.com...\n";
-
 	for (std::size_t i = 0; i < servers.size(); ++i)
 	{
-		std::cout << "[NINJAM]   " << (i + 1) << ". "
+		output << "[NINJAM]   " << (i + 1) << ". "
 		          << servers[i].Host
 		          << ninjam::NinjamSession::FormatPublicServerSummary(servers[i])
 		          << "\n";
 	}
-	std::cout << std::flush;
+	const auto text = output.str();
+	std::cout << text << std::flush;
+}
+
+static void WriteConsoleEventLine(std::string line)
+{
+	std::cout << line << std::endl;
 }
 
 // Returns true when the message was a slash command (consumed; should NOT
 // be forwarded as chat). Returns false for ordinary chat text.
 static bool HandleSlashCommand(const std::string& msg, Scene* scene)
 {
-	if (msg.empty() || msg[0] != '/')
-		return false;
+	const auto parsed = console::ParseCommand(msg);
+	if (parsed.Kind == console::CommandKind::Chat) return false;
 
-	const std::string rest = msg.substr(1);
-	const auto sp = rest.find(' ');
-	std::string verb = (sp == std::string::npos) ? rest : rest.substr(0, sp);
-	std::string args = (sp == std::string::npos) ? std::string{} : rest.substr(sp + 1);
-
-	for (auto& c : verb)
-		c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-	while (!args.empty() && args.front() == ' ')
-		args.erase(0, 1);
-
-	if (verb.empty() || verb == "?" || verb == "help")
+	if (parsed.Kind == console::CommandKind::Help)
 	{
 		const auto snapshot = ninjam::NinjamSession::GetPublicServerDirectorySnapshot();
-		const bool refreshStarted = ninjam::NinjamSession::RefreshPublicServerDirectoryAsync(PrintNinjamHelp);
-		if (refreshStarted || snapshot.RefreshInFlight || !snapshot.HasLiveData)
+		const bool refreshStarted = ninjam::NinjamSession::RefreshPublicServerDirectoryAsync(
+			PrintNinjamHelp,
+			[] { console::ConsoleCapture::EnableForCurrentThread(true); },
+			[] { WriteConsoleEventLine("[NINJAM] Refreshing live metadata from autosong.ninjam.com..."); });
+		if (!refreshStarted && (snapshot.RefreshInFlight || !snapshot.HasLiveData))
 		{
-			std::cout << "[NINJAM] Refreshing live metadata from autosong.ninjam.com..." << std::endl;
+			WriteConsoleEventLine("[NINJAM] Refreshing live metadata from autosong.ninjam.com...");
 		}
-		else
+		else if (!refreshStarted)
 		{
 			PrintNinjamHelp();
 		}
 		return true;
 	}
 
-	if (verb == "c" || verb == "connect")
+	if (parsed.Kind == console::CommandKind::Connect)
 	{
-		if (args.empty())
+		if (parsed.Arguments.empty())
 		{
-			std::cout << "[NINJAM] Usage: /c <number>  (type / for list)" << std::endl;
+			WriteConsoleEventLine("[NINJAM] Usage: /c <number>  (type / for list)");
 			return true;
 		}
-		int idx = 0;
-		try { idx = std::stoi(args); }
-		catch (const std::exception&) { idx = 0; }
+		const int idx = parsed.ServerNumber;
 
 		auto snapshot = ninjam::NinjamSession::GetPublicServerDirectorySnapshot();
 		auto servers = ninjam::NinjamSession::GetReachablePublicServers();
@@ -115,14 +117,14 @@ static bool HandleSlashCommand(const std::string& msg, Scene* scene)
 
 		if (serverCount == 0)
 		{
-			std::cout << "[NINJAM] No reachable servers in the current list  (type / to refresh)" << std::endl;
+			WriteConsoleEventLine("[NINJAM] No reachable servers in the current list  (type / to refresh)");
 			return true;
 		}
 
 		if (idx < 1 || idx > serverCount)
 		{
-			std::cout << "[NINJAM] Server number must be 1-" << serverCount
-			          << "  (type / for list)" << std::endl;
+			WriteConsoleEventLine("[NINJAM] Server number must be 1-"
+				+ std::to_string(serverCount) + "  (type / for list)");
 			return true;
 		}
 		if (scene)
@@ -133,22 +135,21 @@ static bool HandleSlashCommand(const std::string& msg, Scene* scene)
 			scene->ConnectNinjam(servers[idx - 1].Host, options);
 		}
 		else
-			std::cout << "[NINJAM] Not ready yet" << std::endl;
+			WriteConsoleEventLine("[NINJAM] Not ready yet");
 		return true;
 	}
 
-	if (verb == "d" || verb == "q" || verb == "quit"
-		|| verb == "exit" || verb == "disconnect")
+	if (parsed.Kind == console::CommandKind::Disconnect)
 	{
 		if (scene)
 			scene->DisconnectNinjam();
 		else
-			std::cout << "[NINJAM] Not connected" << std::endl;
+			WriteConsoleEventLine("[NINJAM] Not connected");
 		return true;
 	}
 
-	std::cout << "[NINJAM] Unknown command /" << verb
-	          << "  (type / for help)" << std::endl;
+	WriteConsoleEventLine("[NINJAM] Unknown command /" + parsed.Verb
+		+ "  (type / for help)");
 	return true;
 }
 using namespace io;
@@ -239,17 +240,6 @@ static bool SaveRigAtomic(const std::wstring& finalPath, const io::RigFile& rig)
 	return UpdateIni(finalPath, json.str());
 }
 
-void SetupConsole()
-{
-	AllocConsole();
-	FILE* newStdout = nullptr;
-	FILE* newStderr = nullptr;
-	FILE* newStdin = nullptr;
-	freopen_s(&newStdout, "CONOUT$", "w", stdout);
-	freopen_s(&newStderr, "CONOUT$", "w", stderr);
-	freopen_s(&newStdin, "CONIN$", "r", stdin);
-}
-
 std::optional<io::InitFile> LoadIni(const std::wstring& initPath)
 {
 	io::TextReadWriter txtFile;
@@ -266,7 +256,7 @@ std::optional<io::JamFile> LoadJam(io::InitFile& ini, bool& readable)
 {
 	io::TextReadWriter txtFile;
 
-	std::wcout << L"[BOOT] Loading JAM from defaults path: " << ini.Jam << std::endl;
+	std::cout << "[BOOT] Loading JAM from defaults path: " << EncodeUtf8(ini.Jam) << std::endl;
 	auto res = txtFile.Read(ini.Jam, MAX_JSON_CHARS);
 	readable = res.has_value();
 	if (!res.has_value())
@@ -280,7 +270,7 @@ std::optional<io::JamFile> LoadJam(io::InitFile& ini, bool& readable)
 	if (parsed.has_value() && !io::StartupConfig::ValidateJam(*parsed))
 		parsed.reset();
 	if (!parsed.has_value())
-		std::wcerr << L"[BOOT] JAM is unreadable; starting with an empty session: " << ini.Jam << std::endl;
+		std::cerr << "[BOOT] JAM is unreadable; starting with an empty session: " << EncodeUtf8(ini.Jam) << std::endl;
 	else
 		std::cout << "[BOOT] Parsed JAM '" << parsed->Name << "' from " << EncodeUtf8(ini.Jam)
 			<< " with " << parsed->Stations.size() << " station descriptor(s)." << std::endl;
@@ -293,7 +283,7 @@ std::optional<io::JamFile> LoadJamFile(const std::wstring& path)
 	auto contents = reader.Read(path, MAX_JSON_CHARS);
 	if (!contents.has_value())
 	{
-		std::wcerr << L"[LOAD] Could not read JAM: " << path << std::endl;
+		std::cerr << "[LOAD] Could not read JAM: " << EncodeUtf8(path) << std::endl;
 		return std::nullopt;
 	}
 
@@ -301,7 +291,7 @@ std::optional<io::JamFile> LoadJamFile(const std::wstring& path)
 	std::stringstream stream(std::move(json));
 	auto parsed = JamFile::FromStream(std::move(stream));
 	if (!parsed.has_value())
-		std::wcerr << L"[LOAD] JAM is unreadable: " << path << std::endl;
+		std::cerr << "[LOAD] JAM is unreadable: " << EncodeUtf8(path) << std::endl;
 	else
 		std::cout << "[LOAD] Parsed JAM '" << parsed->Name << "' from " << EncodeUtf8(path)
 			<< " with " << parsed->Stations.size() << " station descriptor(s)." << std::endl;
@@ -504,7 +494,13 @@ static bool SaveGeneratedJam(const std::wstring& path, const io::JamFile& jam)
 
 int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLine, int nCmdShow)
 {
-	SetupConsole();
+	auto consoleLines = std::make_shared<console::LineRing>();
+	console::ConsoleCapture capture(*consoleLines);
+	struct DirectoryShutdown
+	{
+		~DirectoryShutdown() { ninjam::NinjamSession::ShutdownPublicServerDirectory(); }
+	} directoryShutdown;
+	console::ConsoleCapture::EnableForCurrentThread(true);
 	{
 		const DWORD cwdLength = GetCurrentDirectoryW(0, nullptr);
 		if (cwdLength > 0)
@@ -513,7 +509,7 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 			GetCurrentDirectoryW(cwdLength, cwd.data());
 			if (!cwd.empty() && cwd.back() == L'\0')
 				cwd.pop_back();
-			std::wcout << L"[BOOT] cwd=" << cwd << std::endl;
+			std::cout << "[BOOT] cwd=" << EncodeUtf8(cwd) << std::endl;
 		}
 	}
 	// Initialize COM as STA matching the Steinberg editorhost pattern.
@@ -528,36 +524,32 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 	const HRESULT uiComInit = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
 	const bool uiComInitialized = SUCCEEDED(uiComInit);
 
-	// Bring up the console TUI immediately after SetupConsole() so that
-	// ALL application logs (socket init, file load, connection lifecycle, etc.)
-	// get the coloured/emoji treatment. The TUI's lifetime spans the entire
-	// application run and is independent of any NINJAM session.
-	//
-	// The pointer and mutex let the submit handler forward chat safely while the
-	// UI thread replaces a complete Scene after an explicit JAM load.
-	auto tui = std::make_unique<io::ConsoleTui>();
-	std::atomic<Scene*> sceneRaw{ nullptr };
-	std::mutex sceneRawMutex;
-	tui->Start("> ", [&sceneRaw, &sceneRawMutex](const std::string& msg) {
-		std::scoped_lock lock(sceneRawMutex);
-		auto* s = sceneRaw.load(std::memory_order_acquire);
-		if (HandleSlashCommand(msg, s))
-			return;
-		if (s)
-			s->SendNinjamChat(msg);
-		else
-			std::cout << "[NINJAM] Not connected - message not sent" << std::endl;
-	});
-
-	NetworkSession socketSession;
-	if (!socketSession.IsInitialised())
+	// ConsoleCapture is active before startup logging. All companion commands
+	// are serialized on this app thread, which owns Scene replacement.
+	auto consoleCommands = std::make_shared<console::CommandMailbox>();
+	std::unique_ptr<console::ConsoleBroker> consoleBroker;
+	std::wstring companionPath;
 	{
-		std::cerr << "[NINJAM] Failed to initialise socket library" << std::endl;
-		return -1;
+		std::wstring modulePath(32768, L'\0');
+		const auto length = GetModuleFileNameW(nullptr, modulePath.data(),
+			static_cast<DWORD>(modulePath.size()));
+		if (length && length < modulePath.size())
+		{
+			modulePath.resize(length);
+			companionPath = console::SiblingCompanionPath(modulePath);
+		}
 	}
 
 	const auto initPath = ResolveIniPath();
 	StartupLog startupLog(initPath);
+	NetworkSession socketSession;
+	if (!socketSession.IsInitialised())
+	{
+		startupLog.Write("[NINJAM] Failed to initialise socket library");
+		std::cerr << "[NINJAM] Failed to initialise socket library" << std::endl;
+		return -1;
+	}
+
 	SYSTEMTIME startupTime{};
 	GetLocalTime(&startupTime);
 	std::ostringstream startupHeader;
@@ -595,6 +587,9 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 	SceneParams sceneParams(DrawableParams{ "" },
 		MoveableParams{ {0, 0}, {0, 0, 0}, 1.0 },
 		SizeableParams{ 1400, 1000 });
+	sceneParams.OnJobThreadStart = [] {
+		console::ConsoleCapture::EnableForCurrentThread(true);
+	};
 	JamFile jam = EmptyJam();
 	RigFile rig = RigFile::FromStream(std::stringstream(RigFile::DefaultJson)).value();
 	bool rigGenerated = true;
@@ -758,10 +753,12 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 		}
 		catch (const std::exception& error)
 		{
+			startupLog.Write(std::string("[BOOT] Scene creation failed: ") + error.what());
 			std::cerr << "[BOOT] Scene creation failed: " << error.what() << std::endl;
 		}
 		catch (...)
 		{
+			startupLog.Write("[BOOT] Scene creation failed with an unknown error.");
 			std::cerr << "[BOOT] Scene creation failed with an unknown error." << std::endl;
 		}
 		return std::nullopt;
@@ -780,20 +777,27 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 	}
 	if (!scene.has_value())
 	{
+		startupLog.Write("[BOOT] Failed to create empty Scene; quitting");
 		std::cout << "Failed to create empty Scene... quitting" << std::endl;
 		return -1;
 	}
 	if (scene.value()->SnapshotStations().empty())
 	{
+		startupLog.Write("[BOOT] Scene has no constructed Station.");
 		std::cerr << "[BOOT] Scene has no constructed Station." << std::endl;
 		return -1;
 	}
 
-	// Wire the scene pointer so the TUI submit handler can forward chat.
-	sceneRaw.store(scene.value().get(), std::memory_order_release);
-
 	if (defaults.has_value())
 		scene.value()->SetLogging(defaults.value().Logging);
+	consoleBroker = std::make_unique<console::ConsoleBroker>(defaults && defaults->ConsoleForceConhost);
+	if (defaults && defaults->ConsoleAutoStart && !companionPath.empty())
+	{
+		if (!consoleBroker->Start(companionPath, consoleCommands,
+			scene.value()->NinjamConnected() ? "NINJAM connected | last: Ready"
+				: "NINJAM disconnected | last: Ready"))
+			std::cerr << "[CONSOLE] Could not start companion beside Jamma.exe.\n";
+	}
 
 	ResourceLib resourceLib;
 	Window window(*(scene.value()), resourceLib);
@@ -1028,14 +1032,23 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 
 	MSG msg;
 	bool active = true;
+	auto lastConsoleStatus = std::chrono::steady_clock::now() - std::chrono::seconds(1);
+	std::size_t pendingCaptureLoss = 0;
+	std::deque<std::string> recentConsoleLines;
+	std::shared_ptr<console::OutboundMailbox> replayedConsoleEvents;
 	while (active)
 	{
+		// Dispatch one message before checking the budget so queued work always progresses.
+		constexpr auto messagePumpBudget = std::chrono::milliseconds(2);
+		const auto messagePumpStart = std::chrono::steady_clock::now();
 		while (PeekMessage(&msg, nullptr, 0, 0, PM_REMOVE))
 		{
 			if (msg.message == WM_DEVICECHANGE && msg.wParam == DBT_DEVNODES_CHANGED)
 				scene.value()->RequestMidiRefresh();
 			if (msg.message == WM_QUIT)
 			{
+				consoleCommands->Close();
+				if (consoleBroker) consoleBroker->Stop();
 				scene.value()->Shutdown();
 				vst::DrainUiThreadDestroyQueue();
 				active = false;
@@ -1044,14 +1057,90 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 
 			TranslateMessage(&msg);
 			DispatchMessage(&msg);
+			if (std::chrono::steady_clock::now() - messagePumpStart >= messagePumpBudget)
+				break;
 		}
 
 		if (!active)
 			break;
+		if (consoleBroker && consoleBroker->ConsumeFallbackNotice())
+			std::cout << "[CONSOLE] Windows Terminal unavailable; using Console Host." << std::endl;
+		auto consoleEvents = consoleBroker ? consoleBroker->Events() : nullptr;
+		if (consoleEvents && consoleEvents != replayedConsoleEvents)
+		{
+			for (const auto& line : recentConsoleLines)
+				consoleEvents->Publish({ console::MessageType::Event, 0, line });
+			replayedConsoleEvents = consoleEvents;
+		}
+		auto drainConsoleLines = [&] {
+			for (unsigned drained = 0; drained < console::LineRing::Capacity; ++drained)
+			{
+				auto line = consoleLines->Take();
+				if (!line) break;
+				if (!console::ValidUtf8(*line)) ++pendingCaptureLoss;
+				else
+				{
+					if (recentConsoleLines.size() == 256) recentConsoleLines.pop_front();
+					recentConsoleLines.push_back(*line);
+					if (consoleEvents)
+						consoleEvents->Publish({ console::MessageType::Event, 0, std::move(*line) });
+				}
+			}
+			pendingCaptureLoss += consoleLines->ConsumeDropped();
+			if (pendingCaptureLoss && consoleEvents
+				&& consoleEvents->ReportLoss(pendingCaptureLoss))
+				pendingCaptureLoss = 0;
+		};
+		drainConsoleLines();
+		for (unsigned handled = 0; handled < 8; ++handled)
+		{
+			auto submission = consoleCommands->Take();
+			if (!submission) break;
+			std::string result = "Command handled";
+			try
+			{
+				if (!HandleSlashCommand(submission->Text, scene.value().get()))
+				{
+					result = scene.value()->SendNinjamChat(submission->Text)
+						? "Chat sent" : "Chat not sent";
+				}
+			}
+			catch (const std::exception& error)
+			{
+				result = std::string("Command failed: ") + error.what();
+			}
+			catch (...) { result = "Command failed"; }
+			drainConsoleLines(); // Synchronous output precedes its correlated result.
+			submission->Completion->set_value(std::move(result));
+		}
+		drainConsoleLines();
+		const auto statusNow = std::chrono::steady_clock::now();
+		if (consoleEvents && console::StatusUpdateDue(lastConsoleStatus, statusNow))
+		{
+			auto lastEvent = consoleEvents->LatestEvent();
+			if (lastEvent.size() > 200)
+			{
+				lastEvent.resize(200);
+				while (!console::ValidUtf8(lastEvent)) lastEvent.pop_back();
+			}
+			consoleEvents->SetStatus(std::string(scene.value()->NinjamConnected()
+				? "NINJAM connected" : "NINJAM disconnected")
+				+ " | last: " + lastEvent);
+			lastConsoleStatus = statusNow;
+		}
 
 		actions::KeyAction globalKeyAction;
 		if (scene.value()->PumpGlobalKeyCapture(globalKeyAction))
 			window.OnAction(globalKeyAction);
+
+		consoleBroker->UpdateVisibility();
+		if (window.ConsumeConsoleToggleRequest())
+		{
+			if (companionPath.empty() || !consoleBroker->ToggleVisibility(companionPath, consoleCommands,
+				scene.value()->NinjamConnected() ? "NINJAM connected | last: Ready"
+					: "NINJAM disconnected | last: Ready"))
+				std::cerr << "[CONSOLE] Could not toggle companion beside Jamma.exe.\n";
+		}
 
 		if (window.ConsumeJamLoadRequest())
 		{
@@ -1092,7 +1181,7 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 
 				if (!replacement.has_value())
 				{
-					std::wcerr << L"Load JAM failed; keeping the current session: " << jamPath << std::endl;
+					std::cerr << "Load JAM failed; keeping the current session: " << EncodeUtf8(jamPath) << std::endl;
 					if (paused)
 						scene.value()->ResumeAudio();
 					else
@@ -1104,16 +1193,12 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 						replacement.value()->SetLogging(defaults.value().Logging);
 
 					{
-						// Exclude the console submit callback while its raw scene view is rebound.
-						std::scoped_lock scenePointerLock(sceneRawMutex);
-						sceneRaw.store(nullptr, std::memory_order_release);
 						// Editors, queued jobs, and plugin instances belong to the outgoing
 						// JAM. Tear them down completely before binding the window to the
 						// already-constructed replacement Scene.
 						scene.value()->Shutdown();
 						window.ReplaceScene(*replacement.value());
 						scene = std::move(replacement);
-						sceneRaw.store(scene.value().get(), std::memory_order_release);
 					}
 					vst::DrainUiThreadDestroyQueue();
 
@@ -1133,6 +1218,8 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 
 	// Shutdown stops the audio callback before it closes VST editor windows and
 	// releases their plugins, while this main thread's COM STA is still valid.
+	consoleCommands->Close();
+	if (consoleBroker) consoleBroker->Stop();
 	scene.value()->Shutdown();
 
 	if (defaultsValid && rigReadyForDefaults && jamReadyForDefaults)
@@ -1153,15 +1240,13 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 	// Final drain for any plugins queued after the last render iteration.
 	vst::DrainUiThreadDestroyQueue();
 
-	// Stop the TUI before returning so console mode and cout/cerr rdbufs
-	// are fully restored before the CRT shuts down.
-	sceneRaw.store(nullptr, std::memory_order_release);
-	tui->Stop();
-	FreeConsole();
-
-	// Tear down Scene (joins job thread) before COM teardown, then drain once
-	// more for any failed-load plugins queued late during job-thread shutdown.
+	// Join the opted-in Scene job thread before restoring global stream buffers.
+	ninjam::NinjamSession::ShutdownPublicServerDirectory();
 	scene.reset();
+	console::ConsoleCapture::EnableForCurrentThread(false);
+	capture.Stop();
+
+	// Drain once more for any failed-load plugins queued late during Scene teardown.
 	vst::DrainUiThreadDestroyQueue();
 
 	if (uiComInitialized)

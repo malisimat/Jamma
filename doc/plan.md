@@ -1,10 +1,10 @@
 # Mirror-ball graphics: remaining validation
 
-The feature implementation is committed on `feature/mirrorball-graphics` in `f515010`, `2019005`, `023f135`, `78517d5`, and `17a8d96`. The original implementation plan and reviewed corrections remain in those commits. No further code change is identified by the final static review.
+The original feature implementation is committed on `feature/mirrorball-graphics` in `f515010`, `2019005`, `023f135`, `78517d5`, and `17a8d96`. Master's loop editor has since been integrated using the updated [merge plan](mirrorball-merge.md), with functional interaction cues and live velocity hue taking priority over material shading. That document records integration fixes and the completed native/shader checks; the full interactive appearance and recording-load checks below remain open.
 
 ## Live appearance and shader loading
 
-1. Launch the newly built Debug x64 `Jamma.exe` from this worktree in an interactive desktop session. Check shader compile and link diagnostics during startup. The C++ build copies GLSL files but does not compile them, and no standalone GLSL validator was installed in the review environment.
+1. Launch the newly built Debug x64 `Jamma.exe` from this worktree in an interactive desktop session. Check shader compile and link diagnostics during startup. All 22 shader programs have passed compile/link/validation in a real hidden NVIDIA GL context; full-app startup and interactive appearance still need confirmation.
 2. Rotate the camera around MIDI notes, selection discs, a waveform, and a station. Confirm the supplied BMP probe is visible on waveform top and bottom faces, the neutral station caps and bevels have smooth highlights, and the dark jagged ring surrounding the green state shape now shares that shading. Confirm the green surface and level cylinder retain their original cues. Check short MIDI notes and full-circle disc seams.
 3. Check scene, picker, and highlight passes, and recording, muted, and hover states. Pay particular attention to waveforms at zero or near-zero visual height, where the corrected probe basis should remain stable.
 

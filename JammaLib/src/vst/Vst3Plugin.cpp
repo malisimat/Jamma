@@ -12,6 +12,7 @@
 #include "Vst3MidiMapping.h"
 #include "Vst3StateBlob.h"
 #include "VstGlContextScope.h"
+#include "../utils/StringUtils.h"
 #include <algorithm>
 #include <array>
 #include <cstdint>
@@ -906,7 +907,8 @@ bool Vst3Plugin::PreInit(const std::wstring& path)
 	// sequence. One outer scope guard covers the whole sequence below.
 	VstGlContextScope glScope;
 
-	std::wcout << L"[Vst3Plugin] PreInit (main thread): path='" << path << L"'" << std::endl;
+	std::cout << "[Vst3Plugin] PreInit (main thread): path='"
+		<< utils::EncodeUtf8(path) << "'" << std::endl;
 
 	_moduleHandle = LoadLibraryW(path.c_str());
 	if (!_moduleHandle)
@@ -1062,10 +1064,10 @@ bool Vst3Plugin::Load(const std::wstring& path,
 	if (_isLoaded)
 		Unload();
 
-	std::wcout << L"[Vst3Plugin] Load request: path='" << path
-		<< L"', sampleRate=" << sampleRate
-		<< L", blockSize=" << blockSize
-		<< L", requestedChannels=" << numChannels
+	std::cout << "[Vst3Plugin] Load request: path='" << utils::EncodeUtf8(path)
+		<< "', sampleRate=" << sampleRate
+		<< ", blockSize=" << blockSize
+		<< ", requestedChannels=" << numChannels
 		<< std::endl;
 
 	const auto requestedChannels = static_cast<Steinberg::int32>(std::max(1u, numChannels));

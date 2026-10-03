@@ -127,8 +127,8 @@ namespace midi
 		// Non-note events (and unpaired note events) keep their original
 		// timestamps.
 		// `dst` must have capacity for `eventCount` entries; allocation is the
-		// caller's responsibility. This routine performs no heap allocation and is
-		// safe to call from non-realtime threads.
+		// caller's responsibility. Pairing scratch may allocate; use this routine
+		// only from non-realtime publication paths.
 		static void QuantiseEvents(const MidiEvent* src,
 			std::size_t eventCount,
 			std::uint32_t loopLength,
@@ -151,7 +151,8 @@ namespace midi
 			std::uint32_t loopLength,
 			const MidiQuantisationSettings& settings,
 			std::uint64_t transportStartSamps,
-			MidiEvent* dst) noexcept;
+			// False retains source event indices for UI target attribution.
+			MidiEvent* dst, bool sort = true) noexcept;
 	};
 
 	// Per-LoopTake / per-MidiLoop quantisation settings. Non-destructive: applied

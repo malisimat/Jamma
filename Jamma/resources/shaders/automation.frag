@@ -10,6 +10,8 @@ uniform vec3  LaneColor;
 uniform float RecordGlow; // 0..1, lifts brightness while recording
 uniform float PlayFrac;
 uniform int   RenderMode; // 0 curtain, 1 crown, 2 playhead, 3 dot
+uniform float SceneDim;
+uniform float EditorMorph;
 
 const int RenderModeCurtain = 0;
 const int RenderModeCrown = 1;
@@ -40,7 +42,7 @@ void main()
         float halo = 1.0 - smoothstep(0.35, 1.0, r);
         vec3 col = mix(LaneColor, vec3(1.0), core * 0.8) + RecordGlow * 0.4;
         float a = clamp(core + halo * 0.5, 0.0, 1.0);
-        ColorOUT = vec4(col, a);
+        ColorOUT = vec4(col * SceneDim, a * (1.0 - EditorMorph));
         return;
     }
 
@@ -49,7 +51,7 @@ void main()
         // Thin bright vertical line at the play position, fading toward the base.
         vec3 col = mix(LaneColor * 1.4, vec3(1.0), 0.5) + RecordGlow * 0.5;
         float a = mix(0.15, 0.95, vEdge);
-        ColorOUT = vec4(col, a);
+        ColorOUT = vec4(col * SceneDim, a * (1.0 - EditorMorph));
         return;
     }
 
@@ -58,7 +60,7 @@ void main()
         // Glowing top ring crown: bright, pulses up while recording.
         vec3 col = LaneColor * 1.6 + vec3(0.25) + RecordGlow * 0.6;
         float a = clamp(0.45 + 0.55 * trail + RecordGlow * 0.2, 0.0, 1.0);
-        ColorOUT = vec4(col, a);
+        ColorOUT = vec4(col * SceneDim, a * (1.0 - EditorMorph));
         return;
     }
 
@@ -72,5 +74,5 @@ void main()
 
     float alpha = mix(0.10, 0.55, trail);
     alpha = clamp(alpha + topBand * 0.4 + RecordGlow * 0.15, 0.0, 0.9);
-    ColorOUT = vec4(col, alpha);
+    ColorOUT = vec4(col * SceneDim, alpha * (1.0 - EditorMorph));
 }

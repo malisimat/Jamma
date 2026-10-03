@@ -30,7 +30,7 @@ namespace ninjam
 		void ApplySessionPumpResult(const NinjamSessionPumpResult& result);
 		std::optional<NinjamRemoteSnapshot> TakePendingSnapshot();
 
-		void SendChat(const std::string& msg);
+		bool SendChat(const std::string& msg);
 		void Connect(const std::string& host);
 		void Disconnect();
 		void Stop();

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <cstddef>
 #include <ostream>
 
 namespace midi
@@ -19,7 +20,23 @@ namespace midi
 		std::uint8_t  status;
 		std::uint8_t  data1;
 		std::uint8_t  data2;
-		std::uint8_t  _pad; // explicit padding for predictable layout
+		std::uint8_t  flags = 0u; // Jamma metadata, never sent as a MIDI byte
+
+		static constexpr std::uint8_t ExactTiming = 1u;
+		// One slot per (timing class, channel, note).
+		static constexpr std::size_t PairingSlotCount = 2u * 16u * 128u;
+		constexpr bool HasExactTiming() const noexcept { return (flags & ExactTiming) != 0u; }
+		constexpr MidiEvent WithFlags(std::uint8_t newFlags) const noexcept
+		{
+			auto copy = *this;
+			copy.flags = newFlags;
+			return copy;
+		}
+		// Keep recorded and editor-authored endpoint pairing independent.
+		constexpr std::size_t PairingSlot() const noexcept
+		{
+			return Channel() * 128u + (data1 & 127u) + (HasExactTiming() ? PairingSlotCount / 2u : 0u);
+		}
 
 		static constexpr std::uint8_t StatusMask  = 0xF0;
 		static constexpr std::uint8_t ChannelMask = 0x0F;

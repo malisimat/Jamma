@@ -3,7 +3,7 @@
 #include <memory>
 #include <functional>
 #include <optional>
-#include <queue>
+#include <vector>
 #include "../base/ActionUndo.h"
 #include "../base/ActionSender.h"
 #include "../base/ActionReceiver.h"
@@ -28,7 +28,7 @@ namespace actions
 		virtual std::optional<std::shared_ptr<base::ActionUndo>> UnPop();
 
 	protected:
-		std::queue<std::shared_ptr<base::ActionUndo>> _history;
-		std::queue< std::shared_ptr<base::ActionUndo>> _poppedHistory;
+		std::vector<std::shared_ptr<base::ActionUndo>> _history;
+		std::vector<std::shared_ptr<base::ActionUndo>> _poppedHistory;
 	};
 }

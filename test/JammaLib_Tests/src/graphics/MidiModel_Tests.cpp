@@ -41,3 +41,47 @@ TEST(GraphicsMidiModel, NoteEndCapsFaceOutward)
 		}
 	}
 }
+
+TEST(GraphicsMidiModel, CapFreeRingRangeCoversEveryChamferFace)
+{
+	constexpr unsigned int segments = 16u;
+	const auto vertices = graphics::MidiModel::BuildBaseVerts(segments);
+	const auto uvs = graphics::MidiModel::BuildBaseUvs(segments);
+	constexpr auto ringVertexCount = segments * 16u * 3u;
+	ASSERT_EQ(vertices.size() / 3u, uvs.size() / 2u);
+	ASSERT_EQ(ringVertexCount + 16u * 3u, vertices.size() / 3u);
+	for (auto i = 0u; i < vertices.size() / 3u; ++i)
+	{
+		if (i < ringVertexCount)
+			EXPECT_LT(uvs[i * 2u + 1u], 1.5f);
+		else
+			EXPECT_GT(uvs[i * 2u + 1u], 1.5f);
+	}
+}
+
+TEST(GraphicsMidiModel, VelocityPreviewPreservesPublishedNotesAndClearsOnReplacement)
+{
+	for (const auto drawRing : { false, true })
+	{
+		graphics::MidiModelParams params;
+		params.DrawSelectionRing = drawRing;
+		graphics::MidiModel model(params);
+		const midi::MidiNote original{ 10u, 20u, 0u, 60u, 80u, 0u };
+		model.UpdateModel({ original }, 100u);
+		for (const auto velocity : { 1, 32, 64, 90, 127 })
+		{
+			model.SetEditorHeld(0, velocity);
+			EXPECT_EQ(drawRing ? 1 : 0, model.EditorHeldInstance());
+			EXPECT_EQ(velocity, model.EditorPreviewVelocity());
+			EXPECT_TRUE(model.EditorNoteMatches(0u, original, 100u));
+			EXPECT_EQ(drawRing ? 2u : 1u, model.TotalInstanceCount());
+		}
+		model.ClearEditorHeld();
+		EXPECT_EQ(-1, model.EditorHeldInstance());
+		EXPECT_EQ(-1, model.EditorPreviewVelocity());
+		model.SetEditorHeld(0, 32);
+		model.UpdateModel({ original }, 100u);
+		EXPECT_EQ(-1, model.EditorHeldInstance());
+		EXPECT_EQ(-1, model.EditorPreviewVelocity());
+	}
+}
