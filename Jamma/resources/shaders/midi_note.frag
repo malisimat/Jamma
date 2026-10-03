@@ -157,11 +157,22 @@ void main()
             float rowPhase = fract(EditorPitchRow);
             float rowLine = 1.0 - smoothstep(0.0, fwidth(EditorPitchRow) * 1.4,
                 min(rowPhase, 1.0 - rowPhase));
-            float major = 1.0 - smoothstep(0.0, fwidth(EditorPitchRow) * 1.6,
-                min(fract(EditorPitchRow / 12.0), 1.0 - fract(EditorPitchRow / 12.0)));
-            ColorOUT.rgb = mix(ColorOUT.rgb, vec3(0.028, 0.055, 0.082), EditorMorphV);
-            ColorOUT.rgb += EditorMorphV * (rowLine * vec3(0.025, 0.05, 0.07)
-                + major * vec3(0.04, 0.08, 0.10));
+            // Use absolute MIDI pitch so bands and B/C boundaries follow pitch scrolling.
+            float midiPitch = float(EditorBottomPitch) + EditorPitchRow;
+            int pitchClass = int(mod(floor(midiPitch), 12.0));
+            bool blackKey = pitchClass == 1 || pitchClass == 3 || pitchClass == 6
+                || pitchClass == 8 || pitchClass == 10;
+            vec3 rowColor = blackKey ? vec3(0.025, 0.049, 0.074)
+                : vec3(0.038, 0.069, 0.098);
+            ColorOUT.rgb = mix(ColorOUT.rgb, rowColor, EditorMorphV);
+            ColorOUT.rgb += EditorMorphV * rowLine * vec3(0.025, 0.05, 0.07);
+            // A solid ~2-pixel core with a narrow antialiased edge, never an octave tint.
+            float octavePhase = mod(midiPitch, 12.0);
+            float octavePixels = min(octavePhase, 12.0 - octavePhase)
+                / max(fwidth(midiPitch), 1e-6);
+            float octaveLine = 1.0 - smoothstep(1.0, 1.5, octavePixels);
+            ColorOUT.rgb = mix(ColorOUT.rgb, vec3(0.15, 0.30, 0.38),
+                octaveLine * EditorMorphV);
             if (EditorHoverU >= 0.0 && EditorHoverPitch >= 0)
             {
                 // A negative target start means free timing: glow at the pointer, not a cell.
