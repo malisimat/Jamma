@@ -32,6 +32,7 @@ Detailed guides on setup, building, testing, and advanced configurations live in
 - **[Real-Time Audio Guidance](doc/realtime-audio.md)**: Guidelines for working within real-time constraints and the hot-path review checklist.
 - **[Jamma Concepts and Glossary](doc/glossary.md)**: Plain-language definitions for Scene, Station, LoopTake, Loop, recording actions, timing, quantisation, and NINJAM tempo following.
 - **[Overlay Control UI](doc/overlay-controls.md)**: Instructions for the Ctrl-held overlay controls, target selection rules, and quantisation handle behavior.
+- **[Loop Grid Editor](doc/loop-grid-editor.md)**: Opening a loop and MIDI editing controls, including note, velocity, pitch-view, and undo gestures.
 - **[Multi-Device MIDI Trigger Rig Config](doc/midi-trigger-mapping.md)**: Rig file mapping for multiple MIDI devices, channels, and activation mappings.
 - **[Ninjam Integration Guide](doc/ninjam.md)**: Vendored files structure, reference dependencies, and update steps.
 - **[VS Code Tasks Setup](doc/vscode-tasks.example.json)**: Local configurations for automating MSBuild.
