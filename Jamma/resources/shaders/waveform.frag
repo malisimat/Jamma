@@ -90,23 +90,19 @@ void main()
         muteFade * muteColor +
         max(1.0 - (muteFade + recFade), 0.0) * shadedColor;
 
-    // Compress the recording peaks before applying interaction colours. The
-    // old additive hover term clipped broad sections of the waveform white.
-    ColorOUT.rgb = ColorOUT.rgb / (vec3(1.0) + 0.55 * ColorOUT.rgb);
     float selected = clamp(LoopSelected, 0.0, 1.0);
     float hovered = clamp(LoopHover, 0.0, 1.0);
-    // Preserve level hue with scalar peak limiting only while selected. The
-    // ceiling leaves room for master's cyan lift and its additional hover lift:
-    // (0.10 * 2.80 + 0.23) * 1.37 + 0.05 = 0.7487, below white.
-    // A fixed ceiling keeps selection stable as lighting and the camera move;
-    // idle and unselected hover retain their vivid level/recording colours.
+    // Selection intensifies the level hue instead of dimming it or tinting cyan.
+    float colourFloor = min(min(ColorOUT.r, ColorOUT.g), ColorOUT.b);
+    ColorOUT.rgb -= vec3(colourFloor * 0.35 * selected);
+    ColorOUT.rgb *= mix(1.35, 1.85, selected);
+    // Scalar limiting preserves saturation, with more headroom for selection.
     float peak = max(max(ColorOUT.r, ColorOUT.g), ColorOUT.b);
-    float interactionCeiling = mix(peak, 0.10, selected);
-    ColorOUT.rgb *= min(1.0, interactionCeiling / max(peak, 0.0001));
-    ColorOUT.rgb = min(ColorOUT.rgb * (1.0 + 1.80 * selected)
-        + vec3(0.07, 0.19, 0.23) * selected, vec3(1.0));
-    ColorOUT.rgb = min(ColorOUT.rgb * (1.0 + (0.80 - 0.43 * selected) * hovered)
-        + vec3(0.12 - 0.07 * selected) * hovered, vec3(1.0));
+    float ceiling = mix(0.82, 1.0, selected);
+    ColorOUT.rgb *= min(1.0, ceiling / max(peak, 0.0001));
+    // Hover adds brightness and may reach white, even on a selected waveform.
+    ColorOUT.rgb = min(ColorOUT.rgb * (1.0 + 0.45 * hovered)
+        + vec3(0.18 * hovered), vec3(1.0));
     ColorOUT.rgb = mix(ColorOUT.rgb, vec3(0.86, 0.38, 0.12),
         0.70 * clamp(LoopPressed, 0.0, 1.0));
     if (EditorActive > 0.5)
