@@ -49,5 +49,7 @@ namespace io
 		utils::Position2d WinPos{ 0, 0 };
 		utils::Size2d WinSize{ 1400u, 1000u };
 		LoggingConfig Logging;
+		bool ConsoleAutoStart = true;
+		bool ConsoleForceConhost = false;
 	};
 }

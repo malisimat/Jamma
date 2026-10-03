@@ -6,6 +6,7 @@
 #include <mutex>
 #include <streambuf>
 #include <string>
+#include <string_view>
 #include <thread>
 
 namespace io
@@ -30,6 +31,7 @@ namespace io
 	{
 	public:
 		using SubmitHandler = std::function<void(const std::string&)>;
+		using CaptureHandler = std::function<void(std::string_view)>;
 
 		ConsoleTui();
 		~ConsoleTui();
@@ -41,7 +43,10 @@ namespace io
 		// (e.g. "> "). `onSubmit` is invoked on the input thread with the
 		// entered text whenever the user presses Enter. The submit callback
 		// is invoked outside any internal lock, so it is safe to log from it.
-		void Start(std::string prompt, SubmitHandler onSubmit);
+		void Start(std::string prompt, SubmitHandler onSubmit,
+			CaptureHandler onLine = {});
+		// Only audited non-audio threads opt into the capture callback.
+		static void EnableCaptureForCurrentThread(bool enabled) noexcept;
 
 		// Stops the TUI, joins the input thread and restores console state.
 		// Idempotent.
@@ -85,6 +90,8 @@ namespace io
 		std::string _prompt;
 		std::string _input;
 		SubmitHandler _onSubmit;
+		CaptureHandler _onLine;
+		static thread_local bool _captureEnabled;
 
 		std::unique_ptr<TuiBuf> _coutBuf;
 		std::unique_ptr<TuiBuf> _cerrBuf;

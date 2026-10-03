@@ -264,7 +264,10 @@ Scene::Scene(SceneParams params,
 
 	_PublishAudioStations();
 
-	_jobRunner = std::thread([this]() { this->_JobLoop(); });
+	_jobRunner = std::thread([this, onStart = params.OnJobThreadStart]() {
+		if (onStart) onStart();
+		this->_JobLoop();
+	});
 }
 
 void Scene::ConnectNinjam(const std::string& host)

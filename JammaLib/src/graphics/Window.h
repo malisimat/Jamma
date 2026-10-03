@@ -87,6 +87,7 @@ namespace graphics
 		void Release();
 		void ReplaceScene(engine::Scene& scene);
 		bool ConsumeJamLoadRequest() noexcept;
+		bool ConsumeConsoleToggleRequest() noexcept;
 
 		virtual actions::ActionResult OnAction(actions::WindowAction winAction) override;
 		virtual actions::ActionResult OnAction(actions::TouchAction touchAction) override;
@@ -146,6 +147,7 @@ namespace graphics
 		resources::ResourceLib& _resourceLib;
 		base::Action::Modifiers _modifiers;
 		bool _jamLoadRequested;
+		bool _consoleToggleRequested;
 
 		ImageFullscreen _highlightPass;
 	};

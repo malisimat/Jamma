@@ -130,7 +130,7 @@ namespace ninjam
 
 		// Broadcasts a text message to all users in the current session.
 		// Safe to call from any thread while connected.
-		void SendChat(const std::string& message);
+		bool SendChat(const std::string& message);
 
 		// Rate-limited health signal for the export-lane timing anomaly
 		// detector (planC §3.2/§3.3): count of blocks where NJClient's
