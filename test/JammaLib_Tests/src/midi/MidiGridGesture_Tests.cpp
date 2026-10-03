@@ -536,19 +536,48 @@ TEST(MidiGridGesture, SnappedMoveRetainsGrabOffsetRawDurationAndMetadata)
 	ASSERT_TRUE(gesture.Update({31u, 60u})); EXPECT_FALSE(gesture.Dirty());
 }
 
-TEST(MidiGridGesture, SnappedOverlapAndSeamEndpointChangesRejectAtomically)
+TEST(MidiGridGesture, SnappedOverlapReplacesAndInvalidDestinationKeepsPreview)
 {
 	auto source = MidiGridGestureFixture::EmptyLoop();
 	ASSERT_TRUE(midi::MidiEditOperations::Create(source, 10u, 20u, 1u, 60u));
 	ASSERT_TRUE(midi::MidiEditOperations::Create(source, 50u, 20u, 1u, 60u));
 	MidiGridGesture gesture;
 	ASSERT_TRUE(gesture.BeginSnappedMove(source, {15u, 60u}));
-	EXPECT_FALSE(gesture.Update({55u, 60u})); EXPECT_FALSE(gesture.Dirty());
-	EXPECT_EQ(source.Events[0].sampleOffset, gesture.Working().Events[0].sampleOffset);
+	ASSERT_TRUE(gesture.Update({55u, 60u})); EXPECT_TRUE(gesture.Dirty());
+	EXPECT_EQ(2u, gesture.Working().EventCount);
+	EXPECT_EQ(50u, gesture.Working().Events[0].sampleOffset);
+	ASSERT_TRUE(gesture.Update({35u, 62u}));
+	EXPECT_EQ(4u, gesture.Working().EventCount); // Only the released destination matters.
 	auto seam = MidiGridGestureFixture::EmptyLoop();
 	ASSERT_TRUE(midi::MidiEditOperations::Create(seam, 80u, 20u, 1u, 60u));
 	ASSERT_TRUE(gesture.BeginSnappedMove(seam, {85u, 60u}));
 	EXPECT_FALSE(gesture.Update({15u, 60u})); EXPECT_EQ(1u, gesture.Working().EventCount);
+	EXPECT_FALSE(gesture.Rejected()); ASSERT_EQ(1u, gesture.Preview().size());
+	EXPECT_EQ(10u, gesture.Preview()[0].Start);
+	ASSERT_TRUE(gesture.Update({85u, 61u})); EXPECT_TRUE(gesture.Dirty());
+}
+
+TEST(MidiGridGesture, SnappedMoveReplacesAllOverlappingChannelsAndKeepsOtherNotes)
+{
+	auto source = MidiGridGestureFixture::EmptyLoop();
+	ASSERT_TRUE(midi::MidiEditOperations::Create(source, 10u, 20u, 3u, 60u, 41u));
+	ASSERT_TRUE(midi::MidiEditOperations::Create(source, 40u, 20u, 0u, 64u));
+	ASSERT_TRUE(midi::MidiEditOperations::Create(source, 60u, 20u, 1u, 64u));
+	ASSERT_TRUE(midi::MidiEditOperations::Create(source, 50u, 20u, 2u, 65u));
+	ASSERT_TRUE(midi::MidiEditOperations::Create(source, 70u, 10u, 2u, 64u));
+	MidiGridGesture gesture;
+	ASSERT_TRUE(gesture.BeginSnappedMove(source, {15u, 60u}));
+	ASSERT_TRUE(gesture.Update({55u, 64u}));
+	const auto targets = midi::MidiGridTargets::Build(gesture.Working());
+	ASSERT_EQ(3u, targets.Notes.size());
+	const auto moved = std::find_if(targets.Notes.begin(), targets.Notes.end(), [](const auto& n) {
+		return n.Start == 50u && n.Pitch == 64u;
+	});
+	ASSERT_NE(targets.Notes.end(), moved);
+	EXPECT_EQ(70u, moved->End);
+	EXPECT_EQ(3u, gesture.Working().Events[moved->On].Channel());
+	EXPECT_EQ(41u, gesture.Working().Events[moved->On].data2);
+	EXPECT_EQ(10u, source.EventCount); // Detached preview has not edited the source.
 }
 
 TEST(MidiGridGesture, SnappedRationalRemoteAndPhaseGridReprojectsExactly)

@@ -120,8 +120,11 @@ namespace midi
 				const auto pitch = static_cast<std::uint8_t>(std::clamp(static_cast<int>(_pitch) + static_cast<int>(point.Pitch) - _anchor.Pitch, 0, 127));
 				_working = _before; _preview.clear();
 				if (start == _start && pitch == _pitch) { _dirty = false; _preview.push_back({_start, _end, _pitch, true}); return true; }
-				if (!MidiEditOperations::MoveSnapped(_working, _onIndex, _offIndex, start, start + duration, pitch)) return Reject();
-				_dirty = true; _preview.push_back({start, start + duration, pitch, true}); return true;
+				_preview.push_back({start, start + duration, pitch, true});
+				// An invalid destination is transient: keep the preview and allow retry.
+				_dirty = MidiEditOperations::MoveSnappedReplacingOverlaps(_working,
+					_onIndex, _offIndex, start, start + duration, pitch);
+				return _dirty;
 			}
 			if (_kind == Kind::Paint)
 			{

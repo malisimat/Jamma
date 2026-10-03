@@ -662,9 +662,15 @@ void LoopGridEditor::_UpdateHeldTarget()
 void LoopGridEditor::_EndGesture(const actions::TouchAction& action)
 {
 	const auto wasRelative = _relativePointer;
+	bool validDrop = true;
 	if (_gesture && !wasRelative)
-		if (auto point = _PointAt(action.Position, true)) _gesture->Update(*point);
-	if (_gesture && _gesture->Dirty() && !_gesture->Rejected()) _PublishGesture();
+	{
+		const auto snappedMove = _gesture->Mode() == MidiGridGesture::Kind::SnappedMove;
+		const auto point = _PointAt(action.Position, !snappedMove);
+		validDrop = !snappedMove || point.has_value();
+		if (point) _gesture->Update(*point);
+	}
+	if (validDrop && _gesture && _gesture->Dirty() && !_gesture->Rejected()) _PublishGesture();
 	else if (_gesture && _gesture->Rejected()) _SetFeedback("Edit rejected; source unchanged");
 	_CancelGesture();
 	_ClearIdleHover(false);

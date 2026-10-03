@@ -14,6 +14,38 @@ namespace midi
 	// publishes the whole gesture once through LoopTake::PublishMidiEdit.
 	struct MidiEditOperations
 	{
+		// Delete complete displayed notes under the destination across channels,
+		// then move with remapped endpoint identities in one detached transaction.
+		static bool MoveSnappedReplacingOverlaps(MidiLoop::EditState& state,
+			std::size_t onIndex, std::size_t offIndex, std::uint32_t start,
+			std::uint32_t end, std::uint8_t pitch)
+		{
+			if (onIndex >= state.EventCount || offIndex > state.EventCount) return false;
+			const auto targets = MidiGridTargets::Build(state);
+			std::vector<bool> removed(state.EventCount, false);
+			for (const auto& note : targets.Notes)
+			{
+				if (note.On == onIndex || note.Pitch != pitch
+					|| note.Start >= end || note.End <= start) continue;
+				if (note.Ambiguous) return false;
+				removed[note.On] = true;
+				if (note.Off < state.EventCount) removed[note.Off] = true;
+			}
+			auto candidate = state;
+			std::size_t kept = 0u, movedOn = 0u, movedOff = 0u;
+			for (std::size_t i = 0u; i < state.EventCount; ++i)
+			{
+				if (i == onIndex) movedOn = kept;
+				if (i == offIndex) movedOff = kept;
+				if (!removed[i]) candidate.Events[kept++] = state.Events[i];
+			}
+			candidate.EventCount = kept;
+			if (offIndex == state.EventCount) movedOff = kept;
+			if (!MoveSnapped(candidate, movedOn, movedOff, start, end, pitch)) return false;
+			state = candidate;
+			return true;
+		}
+
 		static bool SetVelocity(MidiLoop::EditState& state, std::size_t on, int velocity) noexcept
 		{
 			if (on >= state.EventCount || !state.Events[on].IsNoteOn() || velocity < 1 || velocity > 127) return false;

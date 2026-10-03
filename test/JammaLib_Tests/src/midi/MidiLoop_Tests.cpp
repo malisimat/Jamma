@@ -2488,6 +2488,44 @@ TEST_F(MidiPointerEditorTest, FailedAnchorAndCaptureLossLeaveSourceAndUndoUnchan
 	Button(2,false,pixel,0u); EXPECT_EQ(revision,loop->Revision()); EXPECT_FALSE(history.Undo());
 }
 
+TEST_F(MidiPointerEditorTest, ControlMoveReplacesOnReleaseAndUndoRestoresBothNotes)
+{
+	MidiLoop::EditState source;
+	ASSERT_TRUE(loop->SnapshotForEdit(source));
+	ASSERT_TRUE(midi::MidiEditOperations::Create(source, 40u, 20u, 0u, 64u));
+	ASSERT_TRUE(take->PublishMidiEdit(loop, source));
+	loop->Model()->UpdateModel(midi::MidiNote::ExtractSpans(source.Events.data(),
+		source.EventCount, source.LoopLengthSamps), source.LoopLengthSamps);
+	const auto revision = loop->Revision();
+	const auto note = Pixel(0.15,60), destination = Pixel(0.45,64);
+	Button(0,true,note,1u,true);
+	TouchMoveAction move; move.Position=destination; move.MouseButtonsDown=1u;
+	editor->OnAction(move);
+	EXPECT_TRUE(editor->OwnsPointer()); EXPECT_EQ(revision,loop->Revision());
+	Button(0,false,destination,0u);
+	MidiLoop::EditState moved;
+	ASSERT_TRUE(loop->SnapshotForEdit(moved)); ASSERT_EQ(2u,moved.EventCount);
+	EXPECT_EQ(40u,moved.Events[0].sampleOffset); EXPECT_EQ(64u,moved.Events[0].data1);
+	EXPECT_EQ(80u,moved.Events[0].data2);
+	ASSERT_TRUE(history.Undo());
+	ASSERT_TRUE(loop->SnapshotForEdit(moved)); EXPECT_EQ(4u,moved.EventCount);
+	EXPECT_EQ(10u,moved.Events[0].sampleOffset); EXPECT_EQ(60u,moved.Events[0].data1);
+	ASSERT_TRUE(history.Redo());
+	ASSERT_TRUE(loop->SnapshotForEdit(moved)); EXPECT_EQ(2u,moved.EventCount);
+}
+
+TEST_F(MidiPointerEditorTest, ControlMoveReleasedOutsideGridDoesNotPublish)
+{
+	const auto revision = loop->Revision();
+	Button(0,true,Pixel(0.15,60),1u,true);
+	TouchMoveAction move; move.Position=Pixel(0.45,64); move.MouseButtonsDown=1u;
+	editor->OnAction(move);
+	move.Position={-100,-100}; editor->OnAction(move);
+	EXPECT_TRUE(editor->OwnsPointer());
+	Button(0,false,move.Position,0u);
+	EXPECT_EQ(revision,loop->Revision()); EXPECT_FALSE(history.Undo());
+}
+
 TEST_F(MidiPointerEditorTest, ControlNoteMovesAbsolutelyWhilePlainLeftStillPaints)
 {
 	const auto note=Pixel(0.15,60), destination=Pixel(0.45,64);
