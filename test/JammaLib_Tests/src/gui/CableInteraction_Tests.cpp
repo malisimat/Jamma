@@ -233,3 +233,28 @@ TEST_F(CableInteractionTests, StationReleaseMovesOrUnplugsSingleTarget)
 	EXPECT_EQ("B", moved.Candidate->Triggers[0].StationTarget.value());
 	EXPECT_EQ("trigger-1-id", moved.Candidate->Triggers[0].Id);
 }
+
+TEST_F(CableInteractionTests, HiddenRoutesDoNotBecomeRevealedWithoutASocketOrExplicitReveal)
+{
+	CableInteraction::Cable cable;
+	cable.Finish = Input(0u, 20, 20);
+	EXPECT_FALSE(CableInteraction::Revealed(cable, false, false, std::nullopt));
+	EXPECT_TRUE(CableInteraction::Revealed(cable, true, false, std::nullopt));
+	EXPECT_TRUE(CableInteraction::Revealed(cable, false, true, std::nullopt));
+	EXPECT_TRUE(CableInteraction::Revealed(cable, false, false, cable.Finish));
+	EXPECT_FALSE(CableInteraction::Revealed(cable, false, false, Input(1u, 20, 20)));
+	// Releasing the key and leaving the socket immediately revokes interaction.
+	EXPECT_FALSE(CableInteraction::Revealed(cable, false, false, std::nullopt));
+}
+
+TEST_F(CableInteractionTests, EditorStationRoutesRequireExplicitRevealAtTheStationEnd)
+{
+	CableInteraction::Cable cable;
+	cable.Route.Kind = CableInteraction::RouteKind::Station;
+	EXPECT_TRUE(CableInteraction::CanGrabEnd(cable, CableInteraction::End::Start, true, false));
+	EXPECT_FALSE(CableInteraction::CanGrabEnd(cable, CableInteraction::End::Finish, true, false));
+	EXPECT_TRUE(CableInteraction::CanGrabEnd(cable, CableInteraction::End::Finish, true, true));
+	EXPECT_TRUE(CableInteraction::CanGrabEnd(cable, CableInteraction::End::Finish, false, false));
+	cable.Route.Kind = CableInteraction::RouteKind::Capture;
+	EXPECT_TRUE(CableInteraction::CanGrabEnd(cable, CableInteraction::End::Finish, true, false));
+}

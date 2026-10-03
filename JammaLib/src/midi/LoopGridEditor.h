@@ -81,6 +81,7 @@ namespace midi
 		bool IsEngaged() const noexcept { return State::Closed != _state; }
 		bool IsReady() const noexcept;
 		bool OwnsPointer() const noexcept { return _pointerOwned; }
+		bool IsOrbitDragging() const noexcept { return _orbitDragging; }
 		float Morph() const noexcept { return _blend; }
 		float SurroundingDim() const noexcept { return 1.0f - 0.72f * _blend; }
 		glm::vec3 ProbeEyeLocal() const;

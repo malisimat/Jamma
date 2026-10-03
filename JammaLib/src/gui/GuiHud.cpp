@@ -624,6 +624,11 @@ void GuiHud::_RebuildPanels()
 void GuiHud::SetCableRevealHeld(bool held)
 {
 	_cableRevealHeld = held;
+	_cablesDirty = true;
+	_hoveredCableRoute.reset();
+	_hoveredCableEnd.reset();
+	_hoveredCableEndpoint.reset();
+	if (_cableHoverPoint) _UpdateCableHover(*_cableHoverPoint);
 }
 
 void GuiHud::SetAudioInputPeak(unsigned int channel, float peak, unsigned int numSamps)
@@ -883,9 +888,13 @@ void GuiHud::SetStationAnchors(std::vector<StationAnchor> anchors)
 
 actions::ActionResult GuiHud::_BeginCableDrag(Position2d point)
 {
+	if (_RoutingEditAvailability() != RoutingEditAvailability::Ready)
+		return actions::ActionResult::NoAction();
+	_UpdateCableHover(point);
 	std::vector<CableInteraction::Endpoint> endpoints;
 	std::vector<CableInteraction::Cable> cables;
 	_BuildInteractionGeometry(endpoints, cables);
+	_FilterCableHits(endpoints, cables, point);
 	const auto canEditTrigger = [this](size_t triggerIndex) { return _CanEditTrigger(triggerIndex); };
 
 	const auto cableEnd = CableInteraction::HitCableEnd(cables, point, _CableEndSize);
@@ -897,7 +906,9 @@ actions::ActionResult GuiHud::_BeginCableDrag(Position2d point)
 		const auto& cable = cables[cableIndex.value()];
 		if (!canEditTrigger(cable.Route.TriggerIndex))
 			return actions::ActionResult::NoAction();
-		const auto movingEnd = cableEnd.has_value() ? cableEnd->second : CableInteraction::ClosestEnd(cable, point);
+		const auto movingEnd = _loopEditorMode && !_cableRevealHeld && cable.Route.Kind == CableInteraction::RouteKind::Station
+			? CableInteraction::End::Start
+			: cableEnd.has_value() ? cableEnd->second : CableInteraction::ClosestEnd(cable, point);
 		const auto& fixed = movingEnd == CableInteraction::End::Start ? cable.Finish : cable.Start;
 		if (!fixed.Available || (fixed.Source.has_value() && !fixed.Source->Available))
 			return actions::ActionResult::NoAction();
@@ -945,7 +956,7 @@ actions::ActionResult GuiHud::_BeginCableDrag(Position2d point)
 
 	if (!_cableDrag.has_value())
 		return actions::ActionResult::NoAction();
-	_cableRevealHeld = true;
+	_cablesDirty = true;
 	return { true, {}, {}, actions::ACTIONRESULT_DEFAULT, nullptr,
 		std::static_pointer_cast<base::GuiElement>(shared_from_this()) };
 }
@@ -957,6 +968,33 @@ void GuiHud::_CancelCableDrag()
 	_cablesDirty = true;
 }
 
+void GuiHud::SetLoopEditorMode(bool enabled)
+{
+	if (_loopEditorMode == enabled) return;
+	_loopEditorMode = enabled;
+	_hoveredCableEndpoint.reset();
+	_hoveredCableRoute.reset();
+	_hoveredCableEnd.reset();
+	_CancelCableDrag();
+}
+
+bool GuiHud::_CableVisible(const CableInteraction::Cable& cable) const
+{
+	return CableInteraction::Revealed(cable, _cableRevealHeld, _cableDrag.has_value(), _hoveredCableEndpoint);
+}
+
+void GuiHud::_FilterCableHits(std::vector<CableInteraction::Endpoint>& endpoints,
+	std::vector<CableInteraction::Cable>& cables, Position2d point) const
+{
+	std::erase_if(endpoints, [this](const auto& endpoint) {
+		return _loopEditorMode && endpoint.Kind == CableInteraction::EndpointKind::Station;
+	});
+	std::erase_if(cables, [this, point](const auto& cable) {
+		return !_CableVisible(cable) || (!CableInteraction::CanGrabEnd(cable, CableInteraction::End::Finish, _loopEditorMode, _cableRevealHeld) &&
+			!CableInteraction::HitTest(cable.Start, point, _CableEndSize));
+	});
+}
+
 void GuiHud::_DrawCableSockets(base::DrawContext& ctx)
 {
 	std::vector<CableInteraction::Endpoint> endpoints;
@@ -966,6 +1004,12 @@ void GuiHud::_DrawCableSockets(base::DrawContext& ctx)
 	{
 		if (anchor.screenPos.X < -1000)
 			continue;
+		const bool revealed = _cableRevealHeld || std::any_of(cables.begin(), cables.end(),
+			[this, &anchor](const auto& cable) {
+				return cable.Finish.Kind == CableInteraction::EndpointKind::Station &&
+					cable.Finish.StationIndex == anchor.StationIndex && _CableVisible(cable);
+			});
+		_stationSocketIcon->SetVisible(!_loopEditorMode || revealed);
 		_stationSocketIcon->SetPosition({ anchor.screenPos.X - static_cast<int>(_SocketSize / 2u),
 			anchor.screenPos.Y - static_cast<int>(_SocketSize / 2u) });
 		const auto highlighted = _hoveredCableEndpoint.has_value() && !_hoveredCableRoute.has_value() &&
@@ -995,7 +1039,9 @@ void GuiHud::_DrawCableSockets(base::DrawContext& ctx)
 	};
 	for (const auto& cable : cables)
 	{
-		if (cable.Finish.Kind != CableInteraction::EndpointKind::TriggerInput &&
+		// Plugs indicate connections even when curves cannot be edited.
+		if ((!_loopEditorMode || _CableVisible(cable)) &&
+			cable.Finish.Kind != CableInteraction::EndpointKind::TriggerInput &&
 			cable.Finish.Kind != CableInteraction::EndpointKind::TriggerOutput)
 			drawEnd(cable, CableInteraction::End::Finish);
 	}
@@ -1157,18 +1203,24 @@ actions::ActionResult GuiHud::OnAction(actions::TouchAction action)
 		return GuiPanel::OnAction(action);
 
 	const auto drag = _cableDrag.value();
-	if (drag.Route.Revision == _displayedRevision)
+	if (_RoutingEditAvailability() == RoutingEditAvailability::Ready &&
+		(drag.Route.TriggerIndex >= _triggers.size() || _CanEditTrigger(drag.Route.TriggerIndex)) &&
+		drag.Route.Revision == _displayedRevision)
 	{
 		const auto release = CableInteraction::ReleaseToCandidate(drag, _displayedRig);
 		if (release.Changed && release.Candidate.has_value())
 			_SubmitCandidate(release.Candidate.value());
 	}
 	_CancelCableDrag();
+	_UpdateCableHover(action.Position);
 	return { true, {}, {}, actions::ACTIONRESULT_DEFAULT, nullptr, {} };
 }
 
 actions::ActionResult GuiHud::OnAction(actions::TouchMoveAction action)
 {
+	if (_cableDrag && (_RoutingEditAvailability() != RoutingEditAvailability::Ready ||
+		(_cableDrag->Route.TriggerIndex < _triggers.size() && !_CanEditTrigger(_cableDrag->Route.TriggerIndex))))
+		_CancelCableDrag();
 	if (!_cableDrag.has_value())
 	{
 		_UpdateCableHover(action.Position);
@@ -1179,6 +1231,11 @@ actions::ActionResult GuiHud::OnAction(actions::TouchMoveAction action)
 	std::vector<CableInteraction::Endpoint> endpoints;
 	std::vector<CableInteraction::Cable> cables;
 	_BuildInteractionGeometry(endpoints, cables);
+	std::erase_if(endpoints, [this](const auto& endpoint) {
+		return (endpoint.TriggerIndex && endpoint.Kind != CableInteraction::EndpointKind::Station &&
+			!_CanEditTrigger(*endpoint.TriggerIndex)) ||
+			(_loopEditorMode && !_cableRevealHeld && endpoint.Kind == CableInteraction::EndpointKind::Station);
+	});
 	CableInteraction::Update(_cableDrag.value(), action.Position, endpoints, _displayedRig,
 		_SnapRadius, _SnapHysteresis);
 	_UpdateSocketHighlights();
@@ -1189,10 +1246,17 @@ actions::ActionResult GuiHud::OnAction(actions::TouchMoveAction action)
 
 void GuiHud::_UpdateCableHover(Position2d point)
 {
+	_cableHoverPoint = point;
 	std::vector<CableInteraction::Endpoint> endpoints;
 	std::vector<CableInteraction::Cable> cables;
 	_BuildInteractionGeometry(endpoints, cables);
-	const auto cableEnd = CableInteraction::HitCableEnd(cables, point, _CableEndSize);
+	_FilterCableHits(endpoints, cables, point);
+	// In the editor only sockets reveal cables; cable hover cannot sustain reveal.
+	if (_loopEditorMode && !_cableRevealHeld) cables.clear();
+	auto cableEnd = CableInteraction::HitCableEnd(cables, point, _CableEndSize);
+	if (!cableEnd && !_loopEditorMode)
+		if (const auto index = CableInteraction::HitCable(cables, point, _CableHitRadius))
+			cableEnd = std::pair{ *index, CableInteraction::ClosestEnd(cables[*index], point) };
 	const auto endpointIndex = cableEnd.has_value() ? std::nullopt :
 		CableInteraction::HitEndpoint(endpoints, point, _SocketHitRadius);
 	const auto next = cableEnd.has_value()
@@ -1369,7 +1433,7 @@ void GuiHud::_BuildInteractionGeometry(std::vector<CableInteraction::Endpoint>& 
 		if (anchor.screenPos.X < -1000)
 			continue;
 		const auto xs = CableInteraction::Spread(anchor.screenPos.X - 7, anchor.screenPos.X + 7,
-			stationTriggers[anchorIndex].size() + 1u);
+			stationTriggers[anchorIndex].size());
 		for (size_t i = 0u; i < stationTriggers[anchorIndex].size(); ++i)
 		{
 			CableInteraction::Endpoint endpoint{ CableInteraction::EndpointKind::Station,
@@ -1444,9 +1508,7 @@ void GuiHud::_RebuildCableVertices()
 	_BuildInteractionGeometry(endpoints, cables);
 	for (const auto& cable : cables)
 	{
-		if (!_cableRevealHeld && !_cableDrag.has_value() &&
-			(!_hoveredCableEndpoint.has_value() ||
-				!CableInteraction::Related(cable, _hoveredCableEndpoint.value())))
+		if (!_CableVisible(cable))
 			continue;
 		const bool selected = _hoveredCableRoute.has_value() &&
 			_hoveredCableRoute->Revision == cable.Route.Revision &&

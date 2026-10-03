@@ -658,6 +658,9 @@ void Scene::Draw(DrawContext& ctx)
 {
 	_loopEditor.UpdateUi(_viewProj);
 	std::scoped_lock lock(_sceneMutex);
+	const bool midiEditorEngaged = _loopEditor.IsEngaged() && _loopEditor.TargetMidiLoop();
+	if (_hudPanel)
+		_hudPanel->SetLoopEditorMode(midiEditorEngaged);
 
 	glDisable(GL_DEPTH_TEST);
 
@@ -695,13 +698,17 @@ void Scene::Draw(DrawContext& ctx)
 		if (child)
 			child->Draw(ctx);
 
-	for (auto& station : _stations)
-		station->Draw(ctx);
+	if (!midiEditorEngaged)
+	{
+		for (auto& station : _stations)
+			station->Draw(ctx);
+	}
 
 	_selector->Draw(ctx);
 	_modeRadio->Draw(ctx);
 	_globalMidiQuantRadio->Draw(ctx);
-	_ctrlHandleOverlay.Draw(ctx);
+	if (!midiEditorEngaged)
+		_ctrlHandleOverlay.Draw(ctx);
 
 	_popupManager.Draw(ctx);
 	if (!_popupManager.IsOpen())
@@ -894,6 +901,12 @@ ActionResult Scene::OnAction(TouchAction action)
 			_touchDownIsHud = false;
 		}
 		return popupRes;
+	}
+	if (_loopEditor.IsEngaged() && !_loopEditor.OwnsPointer() && !_loopEditor.IsOrbitDragging() && _hudPanel)
+	{
+		std::scoped_lock lock(_sceneMutex);
+		auto hudResult = _hudPanel->OnAction(_hudPanel->GlobalToLocal(action));
+		if (hudResult.IsEaten) return hudResult;
 	}
 	if (auto editorRes = _loopEditor.OnAction(action))
 		return *editorRes;
@@ -1097,6 +1110,12 @@ ActionResult Scene::OnAction(TouchMoveAction action)
 		_loopEditor.CancelInput();
 		return _popupManager.OnAction(action);
 	}
+	if (_loopEditor.IsEngaged() && !_loopEditor.OwnsPointer() && !_loopEditor.IsOrbitDragging() && _hudPanel)
+	{
+		std::scoped_lock lock(_sceneMutex);
+		auto hudResult = _hudPanel->OnAction(_hudPanel->GlobalToLocal(action));
+		if (hudResult.IsEaten) return hudResult;
+	}
 	if (auto editorRes = _loopEditor.OnAction(action))
 		return *editorRes;
 
@@ -1161,8 +1180,6 @@ ActionResult Scene::OnAction(KeyAction action)
 		if (popupRes.IsEaten)
 			return popupRes;
 	}
-	if (auto editorRes = _loopEditor.OnAction(action))
-		return *editorRes;
 
 	if ((192u == action.KeyChar) || (96u == action.KeyChar))
 	{
@@ -1183,6 +1200,9 @@ ActionResult Scene::OnAction(KeyAction action)
 				return hudResult;
 		}
 	}
+
+	if (auto editorRes = _loopEditor.OnAction(action))
+		return *editorRes;
 
 	if (auto overrideRes = _inputSubsystem->HandleChannelOverrideKey(action, SnapshotStations());
 		overrideRes.IsEaten)
@@ -2421,6 +2441,11 @@ void Scene::_InitSize()
 
 void Scene::_OnLoopGridEditorOpened()
 {
+	if (_hudPanel)
+	{
+		std::scoped_lock lock(_sceneMutex);
+		_hudPanel->SetLoopEditorMode(static_cast<bool>(_loopEditor.TargetMidiLoop()));
+	}
 	_focusManager.ClearFocus();
 	_touchDownElement.reset();
 	_touchDownIsHud = false;
