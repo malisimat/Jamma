@@ -1,6 +1,7 @@
 #pragma once
 
 #include <optional>
+#include <algorithm>
 #include <cmath>
 
 #include "glm/glm.hpp"
@@ -11,6 +12,28 @@ namespace graphics
 	// Pure world-to-pixel mapping shared by editor rulers and future pointer math.
 	struct LoopGridProjection
 	{
+		// Keep a 2D control outside the entire projected rectangle as the camera orbits.
+		static std::optional<utils::Position2d> SideControlPosition(
+			const glm::mat4& viewProjection, const glm::mat4& model, float radius,
+			int width, int height, utils::Size2d controlSize) noexcept
+		{
+			int left = width, right = 0, bottom = height, top = 0;
+			for (const float x : {-1.0f, 1.0f})
+				for (const float z : {-0.78f, 0.78f})
+				{
+					const auto point = Project(viewProjection, model, {x * radius, 0.0f, z * radius}, width, height);
+					if (!point) return std::nullopt;
+					left = std::min(left, point->X); right = std::max(right, point->X);
+					bottom = std::min(bottom, point->Y); top = std::max(top, point->Y);
+				}
+			constexpr int gap = 18;
+			const auto w = static_cast<int>(controlSize.Width);
+			const auto h = static_cast<int>(controlSize.Height);
+			const auto x = right + gap + w <= width - gap ? right + gap : left - gap - w;
+			return utils::Position2d{std::clamp(x, gap, std::max(gap, width - gap - w)),
+				std::clamp((bottom + top - h) / 2, gap, std::max(gap, height - gap - h))};
+		}
+
 		static float CameraDistance(float radius, float worldScale,
 			float viewportAspect) noexcept
 		{

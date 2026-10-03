@@ -462,6 +462,32 @@ void MidiModel::DrawMesh(GLuint shaderProgram, unsigned int drawInstances)
 		glUniform1i(geometryPass, 1);
 		glDrawArraysInstanced(GL_TRIANGLES, 0, BaseArcSegments * 8u * 3u, 1u);
 	}
+	else if (!_midiParams.DrawSelectionRing && _editorActive && _editorMorph > 0.0f)
+	{
+		// Use the same ring mesh and shader as the first stream's backing, without
+		// adding a persistent instance or shifting note/hover/held identities.
+		GLint timePitchEnabled = 0, shapeEnabled = 0;
+		GLfloat previousTimePitch[4], previousShape[4];
+		glGetVertexAttribiv(TimePitchAttribute, GL_VERTEX_ATTRIB_ARRAY_ENABLED, &timePitchEnabled);
+		glGetVertexAttribiv(ShapeAttribute, GL_VERTEX_ATTRIB_ARRAY_ENABLED, &shapeEnabled);
+		glGetVertexAttribfv(TimePitchAttribute, GL_CURRENT_VERTEX_ATTRIB, previousTimePitch);
+		glGetVertexAttribfv(ShapeAttribute, GL_CURRENT_VERTEX_ATTRIB, previousShape);
+		glDisableVertexAttribArray(TimePitchAttribute);
+		glDisableVertexAttribArray(ShapeAttribute);
+		const auto length = _displayLengthSamps.load(std::memory_order_relaxed);
+		const auto radius = length == 0u ? 50.0f : static_cast<float>(std::clamp(
+			70.0 * std::log(static_cast<double>(length)) - 600.0, 50.0, 400.0));
+		glVertexAttrib4f(TimePitchAttribute, 0.0f, 1.0f, 0.0f, 0.0f);
+		glVertexAttrib4f(ShapeAttribute, radius * _midiParams.DiscRadiusFactor,
+			radius * _midiParams.DiscRadialThicknessFactor,
+			radius * _midiParams.DiscHeightFactor, 1.0f);
+		glUniform1i(geometryPass, 1);
+		glDrawArraysInstanced(GL_TRIANGLES, 0, BaseArcSegments * 8u * 3u, 1u);
+		glVertexAttrib4fv(TimePitchAttribute, previousTimePitch);
+		glVertexAttrib4fv(ShapeAttribute, previousShape);
+		if (timePitchEnabled) glEnableVertexAttribArray(TimePitchAttribute);
+		if (shapeEnabled) glEnableVertexAttribArray(ShapeAttribute);
+	}
 	glUniform1i(geometryPass, 2);
 	if (drawInstances > (_midiParams.DrawSelectionRing ? 1u : 0u))
 	{
@@ -531,7 +557,7 @@ void MidiModel::_DrawEditorGrid(GlDrawContext& glCtx)
 	if (_editorGridDirty)
 	{
 		std::vector<float> vertices = _editorGridVertices;
-		_editorGridVertexCount = static_cast<unsigned int>(vertices.size() / 3u);
+		_editorGridVertexCount = static_cast<unsigned int>(_editorGridVertices.size() / 3u);
 		for (const auto& preview : _editorPreviewSpans)
 		{
 			if (_editorPreviewLength == 0u || preview.Start >= preview.End

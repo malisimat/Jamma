@@ -8,6 +8,34 @@
 using midi::MidiGridGesture;
 using midi::MidiLoop;
 
+TEST(MidiGridGesture, ChannelControlStaysOutsideProjectedGridDuringOrbit)
+{
+	const auto projection = glm::perspective(glm::radians(42.0f), 1.0f, 1.0f, 1000.0f);
+	std::optional<utils::Position2d> previous;
+	bool moved = false;
+	for (const auto eye : {glm::vec3(0,300,0.01f), glm::vec3(120,260,80),
+		glm::vec3(-100,250,-100)})
+	{
+		const auto vp = projection * glm::lookAt(eye, glm::vec3(0), glm::vec3(0,0,-1));
+		const auto position = graphics::LoopGridProjection::SideControlPosition(
+			vp, glm::mat4(1), 50.0f, 800, 800, {88u,84u});
+		ASSERT_TRUE(position);
+		int left = 800, right = 0;
+		for (const auto x : {-50.0f, 50.0f})
+			for (const auto z : {-39.0f, 39.0f})
+			{
+				const auto corner = graphics::LoopGridProjection::Project(vp, glm::mat4(1), {x,0,z}, 800,800);
+				ASSERT_TRUE(corner);
+				left = std::min(left, corner->X); right = std::max(right, corner->X);
+			}
+		EXPECT_TRUE(position->X >= right + 18 || position->X + 88 <= left - 18);
+		EXPECT_GE(position->Y, 18); EXPECT_LE(position->Y + 84, 782);
+		if (previous && (position->X != previous->X || position->Y != previous->Y)) moved = true;
+		previous = position;
+	}
+	EXPECT_TRUE(moved);
+}
+
 struct MidiGridGestureFixture
 {
 	static MidiLoop::EditState EmptyLoop(bool quantised = true)

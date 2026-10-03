@@ -2367,7 +2367,7 @@ TEST(Scene, MultiStreamMidiSelectionCountsAsOneEditorCandidate) {
 	std::shared_ptr<Loop> audioLoop;
 	std::shared_ptr<midi::MidiLoop> midiLoop;
 	ASSERT_TRUE(scene.FindLoopGridEditorCandidateForTest(candidateTake, audioLoop, midiLoop));
-	EXPECT_EQ(midiLoops[1], midiLoop);
+	EXPECT_EQ(midiLoops[0], midiLoop);
 	// Keep the same picker ID after the click: the next drag must start in
 	// subtractive paint mode using the newly selected state.
 	scene.OnAction(MakeSceneTouch(TouchAction::TOUCH_DOWN, { 1, 1 }, 0, LeftMouseButtonMask));
@@ -2381,6 +2381,48 @@ TEST(Scene, MultiStreamMidiSelectionCountsAsOneEditorCandidate) {
 	scene.SetHover3d({}, base::Action::MODIFIER_NONE);
 	ASSERT_TRUE(scene.FindLoopGridEditorCandidateForTest(candidateTake, audioLoop, midiLoop));
 	EXPECT_EQ(midiLoops[0], midiLoop);
+}
+
+TEST(Scene, MidiEditorDefaultsToFirstPopulatedWiredChannel) {
+	SceneParams params{ base::DrawableParams(), base::MoveableParams(),
+		base::SizeableParams({ 1400u, 900u }) };
+	TestScene scene(params, {});
+	auto station = MakeTestStation("editor-midi-default-channel");
+	scene.AddStationForTest(station);
+	auto take = station->AddTake();
+	LoopTake::MidiExportState state;
+	state.LoopLengthSamps = 400u;
+	for (const unsigned int channel : {4u, 1u, 7u}) {
+		LoopTake::MidiStreamExport stream;
+		stream.Channel = channel;
+		stream.Loop.LoopLengthSamps = 400u;
+		state.Streams.push_back(stream);
+	}
+	ASSERT_TRUE(take->RestoreMidiFromExport(state));
+	station->CommitChanges();
+	take->Select();
+	const auto& loops = take->GetMidiLoops();
+	for (const auto& loop : loops) loop->Model()->Select();
+	std::shared_ptr<LoopTake> candidateTake;
+	std::shared_ptr<Loop> audioLoop;
+	std::shared_ptr<midi::MidiLoop> candidate;
+	ASSERT_TRUE(scene.FindLoopGridEditorCandidateForTest(candidateTake, audioLoop, candidate));
+	EXPECT_EQ(loops[0], candidate); // All empty: first wired, not lowest channel number.
+	const std::array events{midi::MidiEvent::MakeNoteOn(20u, 7u, 60u, 100u),
+		midi::MidiEvent::MakeNoteOff(40u, 7u, 60u)};
+	loops[2]->ReplaceRecordedEvents(events.data(), events.size(), 400u);
+	ASSERT_TRUE(scene.FindLoopGridEditorCandidateForTest(candidateTake, audioLoop, candidate));
+	EXPECT_EQ(loops[2], candidate);
+	loops[1]->ReplaceRecordedEvents(events.data(), events.size(), 400u);
+	ASSERT_TRUE(scene.FindLoopGridEditorCandidateForTest(candidateTake, audioLoop, candidate));
+	EXPECT_EQ(loops[1], candidate);
+	std::vector<unsigned char> path;
+	for (const auto index : loops[0]->Model()->GlobalId())
+		path.push_back(static_cast<unsigned char>(index + 1u));
+	scene.SetSelectionDepthForTest(Scene::VIEW_LOOP);
+	scene.SetHover3d(path, base::Action::MODIFIER_NONE);
+	ASSERT_TRUE(scene.FindLoopGridEditorCandidateForTest(candidateTake, audioLoop, candidate));
+	EXPECT_EQ(loops[1], candidate);
 }
 
 TEST(CameraView, StationInteriorObservesRevisionWhenStationShiftsIndex) {

@@ -21,6 +21,7 @@
 #include "../graphics/Camera.h"
 #include "../gui/GuiButton.h"
 #include "../gui/GuiLabel.h"
+#include "../gui/GuiNumericInput.h"
 #include "../resources/ResourceLib.h"
 #include "MidiGridGesture.h"
 #include "MidiGridTargets.h"
@@ -80,6 +81,8 @@ namespace midi
 		// Open or closing: the editor owns input and the 3d picker is suspended.
 		bool IsEngaged() const noexcept { return State::Closed != _state; }
 		bool IsReady() const noexcept;
+		utils::Position2d ChannelControlPosition() const { return _channelInput->Position(); }
+		bool SelectMidiChannel(unsigned int channel); // Human-facing channel 1..16.
 		bool OwnsPointer() const noexcept { return _pointerOwned; }
 		bool IsOrbitDragging() const noexcept { return _orbitDragging; }
 		float Morph() const noexcept { return _blend; }
@@ -100,6 +103,7 @@ namespace midi
 		static actions::ActionResult _Eaten();
 		static utils::Position2d _ButtonPosition(utils::Size2d size);
 		static float _MidiRadius(std::uint32_t lengthSamps) noexcept;
+		static std::shared_ptr<MidiLoop> _InitialMidiLoop(const engine::LoopTake& take);
 
 		void _Layout();
 		void _SetFeedback(const std::string& message);
@@ -180,6 +184,9 @@ namespace midi
 		std::shared_ptr<gui::GuiButton> _button;
 		std::shared_ptr<gui::GuiLabel> _feedback;
 		std::shared_ptr<gui::GuiLabel> _modeLabel;
+		std::shared_ptr<gui::GuiNumericInput> _channelInput;
+		std::shared_ptr<gui::GuiLabel> _channelLabel;
+		bool _channelDragging = false;
 		std::array<std::shared_ptr<gui::GuiLabel>, 5> _timeTicks;
 		std::array<std::shared_ptr<gui::GuiLabel>, 11> _pitchTicks;
 	};

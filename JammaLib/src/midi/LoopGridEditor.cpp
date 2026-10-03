@@ -31,6 +31,21 @@ LoopGridEditor::LoopGridEditor(Host host, utils::Size2d size) :
 	_modeLabel = std::make_shared<gui::GuiLabel>(modeParams);
 	_modeLabel->Init();
 
+	auto channelParams = gui::GuiNumericInputParams::PanelInput(88u);
+	channelParams.Size = {88u, 56u};
+	channelParams.Padding = 8u;
+	channelParams.TintColor = {0.12f, 0.45f, 0.60f};
+	channelParams.Min = 1;
+	channelParams.Max = 16;
+	channelParams.Step = 0.1;
+	channelParams.Decimals = 0;
+	channelParams.InitValue = 1;
+	_channelInput = std::make_shared<gui::GuiNumericInput>(channelParams);
+	_channelInput->Init();
+	_channelLabel = std::make_shared<gui::GuiLabel>(gui::GuiLabelParams::PanelHeader("CHANNEL", 88u));
+	_channelLabel->Init();
+	_Layout();
+
 	for (auto& tick : _timeTicks)
 	{
 		tick = std::make_shared<gui::GuiLabel>(gui::GuiLabelParams::PanelHeader("", 56u));
@@ -48,6 +63,8 @@ void LoopGridEditor::InitResources(resources::ResourceLib& resourceLib, bool for
 	_button->InitResources(resourceLib, forceInit);
 	_feedback->InitResources(resourceLib, forceInit);
 	_modeLabel->InitResources(resourceLib, forceInit);
+	_channelInput->InitResources(resourceLib, forceInit);
+	_channelLabel->InitResources(resourceLib, forceInit);
 	for (auto& tick : _timeTicks) tick->InitResources(resourceLib, forceInit);
 	for (auto& tick : _pitchTicks) tick->InitResources(resourceLib, forceInit);
 }
@@ -58,6 +75,8 @@ void LoopGridEditor::ReleaseResources()
 	_button->ReleaseResources();
 	_feedback->ReleaseResources();
 	_modeLabel->ReleaseResources();
+	_channelInput->ReleaseResources();
+	_channelLabel->ReleaseResources();
 	for (auto& tick : _timeTicks) tick->ReleaseResources();
 	for (auto& tick : _pitchTicks) tick->ReleaseResources();
 }
@@ -104,6 +123,7 @@ void LoopGridEditor::_Layout()
 	_button->SetPosition(pos);
 	_feedback->SetPosition({ std::max(0, pos.X - 340), pos.Y + 6 });
 	_modeLabel->SetPosition({ std::max(0, pos.X - 340), pos.Y - 20 });
+
 }
 
 void LoopGridEditor::_SetFeedback(const std::string& message)
@@ -122,6 +142,19 @@ void LoopGridEditor::_ResetTarget()
 	_take.reset();
 	_audioLoop.reset();
 	_midiLoop.reset();
+}
+
+std::shared_ptr<MidiLoop> LoopGridEditor::_InitialMidiLoop(const engine::LoopTake& take)
+{
+	std::shared_ptr<MidiLoop> first;
+	// Wiring order determines the default; picker order must not hide recorded events.
+	for (const auto& loop : take.GetMidiLoops())
+	{
+		if (!loop || !loop->Model()) continue;
+		if (!first) first = loop;
+		if (loop->EventCount() > 0u) return loop;
+	}
+	return first;
 }
 
 bool LoopGridEditor::FindCandidate(std::shared_ptr<engine::LoopTake>& take,
@@ -167,7 +200,7 @@ bool LoopGridEditor::FindCandidate(std::shared_ptr<engine::LoopTake>& take,
 				{
 					take = candidateTake;
 					audioLoop.reset();
-					midiLoop = candidate;
+					midiLoop = _InitialMidiLoop(*candidateTake);
 					return true;
 				}
 				if (!countedMidiForTake && candidate->Model() && candidate->Model()->IsSelected())
@@ -177,7 +210,7 @@ bool LoopGridEditor::FindCandidate(std::shared_ptr<engine::LoopTake>& take,
 					++fallbackCount;
 					take = candidateTake;
 					audioLoop.reset();
-					midiLoop = candidate;
+					midiLoop = _InitialMidiLoop(*candidateTake);
 				}
 			}
 		}
@@ -288,7 +321,10 @@ bool LoopGridEditor::Open(const std::shared_ptr<engine::LoopTake>& take,
 	_orbitVertical = 0.0f;
 	_AcquireRevisionCursor(midiLoop);
 	if (midiLoop)
+	{
 		_FitPitchRange(midiLoop);
+		_channelInput->SetValue(_ChannelOf(midiLoop) + 1u);
+	}
 	_state = State::Opening;
 	if (_host.OnOpened)
 		_host.OnOpened();
@@ -352,11 +388,58 @@ void LoopGridEditor::_FitPitchRange(const std::shared_ptr<MidiLoop>& midiLoop)
 	model->SetEditorPitchRange(bottom, rows);
 }
 
+bool LoopGridEditor::SelectMidiChannel(unsigned int channel)
+{
+	const auto take = _take.lock();
+	const auto previous = _midiLoop.lock();
+	if (!IsOpen() || !take || !previous || channel < 1u || channel > 16u)
+		return false;
+	std::shared_ptr<MidiLoop> next;
+	{
+		std::scoped_lock lock(_host.SceneMutex);
+		const auto& loops = take->GetMidiLoops();
+		const auto& channels = take->MidiLoopChannels();
+		for (std::size_t i = 0; i < loops.size() && i < channels.size(); ++i)
+			if (channels[i] == channel - 1u && loops[i] && loops[i]->Model()
+				&& loops[i]->CompletedLengthForEditor() > 0u)
+			{
+				next = loops[i];
+				break;
+			}
+	}
+	if (!next)
+	{
+		_channelInput->SetValue(_ChannelOf(previous) + 1u);
+		_SetFeedback("No completed loop on MIDI channel " + std::to_string(channel));
+		return false;
+	}
+	_channelInput->SetValue(channel);
+	if (next == previous) return true;
+	_CancelGesture();
+	_EndOrbit();
+	_ClearIdleHover(true);
+	if (const auto model = previous->Model())
+	{
+		model->SetEditorMorph(0.0f);
+		model->SetEditorActive(false);
+		model->SetEditorHover(-1.0f, -1);
+	}
+	_midiLoop = next;
+	_AcquireRevisionCursor(next);
+	_FitPitchRange(next);
+	_PositionCamera();
+	_state = State::Opening;
+	_SetFeedback("Editing MIDI channel " + std::to_string(channel));
+	return true;
+}
+
 void LoopGridEditor::Close()
 {
 	if (!IsOpen())
 		return;
 	_CancelGesture();
+	_channelInput->ClearFocus();
+	_channelDragging = false;
 	_ClearIdleHover(true);
 	_EndOrbit();
 	_revisionCursor.reset();
@@ -855,6 +938,8 @@ void LoopGridEditor::CancelInput()
 	_EndOrbit();
 	_ClearIdleHover(true);
 	_buttonPressed = false;
+	_channelDragging = false;
+	_channelInput->ClearFocus();
 }
 
 void LoopGridEditor::Tick(float deltaSeconds)
@@ -903,6 +988,8 @@ void LoopGridEditor::Tick(float deltaSeconds)
 
 void LoopGridEditor::UpdateUi(const glm::mat4& viewProjection)
 {
+	_channelInput->SetVisible(false);
+	_channelLabel->SetVisible(false);
 	if (IsOpen())
 	{
 		std::string mode = "Audio: view only";
@@ -932,6 +1019,20 @@ void LoopGridEditor::UpdateUi(const glm::mat4& viewProjection)
 			else if (auto audioLoop = _audioLoop.lock())
 				radius = static_cast<float>(engine::Loop::CalcDrawRadius(audioLoop->LoopLength()));
 			const auto modelMatrix = _ModelMatrix();
+			if (midiModel)
+			{
+				const auto anchor = graphics::LoopGridProjection::SideControlPosition(
+					viewProjection, modelMatrix, radius, width, height, {88u, 84u});
+				if (anchor)
+				{
+					_channelInput->SetVisible(true);
+					_channelLabel->SetVisible(true);
+					_channelInput->SetPosition(*anchor);
+					_channelLabel->SetPosition({anchor->X, anchor->Y + 62});
+					if (!_channelInput->HasFocus() && !_channelDragging)
+						_channelInput->SetValue(_ChannelOf(_midiLoop.lock()) + 1u);
+				}
+			}
 
 			static constexpr const char* timeNames[] = { "0", "1/4", "1/2", "3/4", "END" };
 			for (std::size_t i = 0u; i < _timeTicks.size(); ++i)
@@ -1020,6 +1121,11 @@ void LoopGridEditor::Draw(base::DrawContext& ctx)
 	_feedback->Draw(ctx);
 	if (IsOpen())
 		_modeLabel->Draw(ctx);
+	if (IsOpen() && !_midiLoop.expired())
+	{
+		_channelLabel->Draw(ctx);
+		_channelInput->Draw(ctx);
+	}
 	_button->Draw(ctx);
 	if (IsOpen() && _blend > 0.72f)
 	{
@@ -1074,6 +1180,31 @@ std::optional<actions::ActionResult> LoopGridEditor::OnAction(actions::TouchActi
 			_EndGesture(action);
 		return _Eaten(); // Another button, wheel, modifier or HUD cannot switch a held gesture.
 	}
+	if (IsOpen() && !_midiLoop.expired() && isMouse && action.Index == 0)
+	{
+		const auto inside = _channelInput->IsVisible() && _channelInput->HitTest(_channelInput->GlobalToLocal(action.Position));
+		if (inside || _channelDragging)
+		{
+			if (action.State == actions::TouchAction::TOUCH_DOWN)
+			{
+				_channelInput->RequestFocus();
+				_channelDragging = true;
+			}
+			_channelInput->OnAction(_channelInput->GlobalToLocal(action));
+			if (action.State == actions::TouchAction::TOUCH_UP) _channelDragging = false;
+			return _Eaten();
+		}
+		if (action.State == actions::TouchAction::TOUCH_DOWN && _channelInput->HasFocus())
+		{
+			actions::KeyAction commit;
+			commit.KeyChar = 13u;
+			commit.KeyActionType = actions::KeyAction::KEY_DOWN;
+			_channelInput->OnAction(commit);
+			_channelInput->ClearFocus();
+			SelectMidiChannel(static_cast<unsigned int>(std::lround(_channelInput->Value())));
+			return _Eaten();
+		}
+	}
 	if (_HandleButton(action)) return _Eaten();
 	if (!IsEngaged()) return std::nullopt;
 	if (_orbitDragging)
@@ -1110,6 +1241,13 @@ std::optional<actions::ActionResult> LoopGridEditor::OnAction(actions::TouchMove
 {
 	if (!IsEngaged()) return std::nullopt;
 	_CheckGesture();
+	if (_channelDragging)
+	{
+		_channelInput->OnAction(_channelInput->GlobalToLocal(action));
+		if (0u == (action.MouseButtonsDown & 1u)) _channelDragging = false;
+		SelectMidiChannel(static_cast<unsigned int>(std::lround(_channelInput->Value())));
+		return _Eaten();
+	}
 	if (0u == (action.MouseButtonsDown & 1u)) _buttonPressed = false;
 	if (_pointerOwned && (action.Touch != actions::TouchAction::TOUCH_MOUSE
 		|| 0u == (action.MouseButtonsDown & (1u << _pointerButton))))
@@ -1167,6 +1305,16 @@ std::optional<actions::ActionResult> LoopGridEditor::OnAction(const actions::Key
 {
 	if (!IsEngaged())
 		return std::nullopt;
+	if (_channelInput->HasFocus() && action.KeyChar != 27u)
+	{
+		_channelInput->OnAction(action);
+		if (action.KeyChar == 13u && action.KeyActionType == actions::KeyAction::KEY_DOWN)
+		{
+			_channelInput->ClearFocus();
+			SelectMidiChannel(static_cast<unsigned int>(std::lround(_channelInput->Value())));
+		}
+		return _Eaten();
+	}
 	if (27u == action.KeyChar && actions::KeyAction::KEY_UP == action.KeyActionType)
 		Close();
 	if (90u == action.KeyChar && actions::KeyAction::KEY_UP == action.KeyActionType

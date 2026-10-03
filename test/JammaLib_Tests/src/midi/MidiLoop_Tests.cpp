@@ -2370,7 +2370,7 @@ protected:
 		station->SetGlobalMidiQuantState(io::JamFile::GlobalMidiQuantState::Mixed);
 		take = MakeLoopTake("pointer-editor-take");
 		take->SetGlobalMidiQuantState(io::JamFile::GlobalMidiQuantState::Mixed);
-		take->Record({}, "station", {0u}, {""});
+		take->Record({}, "station", {0u, 1u}, {"", ""});
 		take->Play(0u, 100u, 0u);
 		auto settings = take->ResolvedMidiQuantisation();
 		settings.Enabled = true; settings.GrainSamps = 10u;
@@ -2431,6 +2431,63 @@ protected:
 	int relativeButton=-1, endCount=0;
 	bool allowRelative=true;
 };
+
+TEST_F(MidiPointerEditorTest, NumericChannelControlCommitsTypedChannel)
+{
+	const auto second = take->GetMidiLoops().at(1u);
+	const std::array events{MidiEvent::MakeNoteOn(10u, 1u, 67u, 80u), MidiEvent::MakeNoteOff(30u, 1u, 67u)};
+	second->ReplaceRecordedEvents(events.data(), events.size(), 100u);
+	editor->UpdateUi(vp);
+	const auto anchor = editor->ChannelControlPosition();
+	const utils::Position2d pixel{anchor.X + 16, anchor.Y + 16};
+	Button(0,true,pixel,1u); Button(0,false,pixel,0u);
+	for (const auto key : {36u, 46u, 50u, 13u}) // Home, Delete, 2, Enter.
+	{
+		actions::KeyAction action;
+		action.KeyChar = key; action.KeyActionType = actions::KeyAction::KEY_DOWN;
+		editor->OnAction(action);
+	}
+	EXPECT_EQ(second, editor->TargetMidiLoop());
+}
+
+TEST_F(MidiPointerEditorTest, ChannelSelectionCancelsGestureAndCreatesOnSelectedChannel)
+{
+	const auto first = loop;
+	const auto second = take->GetMidiLoops().at(1u);
+	const std::array events{MidiEvent::MakeNoteOn(10u, 1u, 67u, 80u), MidiEvent::MakeNoteOff(30u, 1u, 67u)};
+	second->ReplaceRecordedEvents(events.data(), events.size(), 100u);
+	ASSERT_TRUE(second->SetQuantisation(take->ResolvedMidiQuantisation(), take->MidiQuantisationTransportStartSamps()));
+	second->Model()->SetModelPosition({0,0,0}); second->Model()->SetModelScale(1);
+	const auto revision = first->Revision();
+	Button(2,true,Pixel(0.15,60),4u);
+	ASSERT_TRUE(editor->OwnsPointer());
+	Relative(0,40,4u);
+	ASSERT_TRUE(editor->SelectMidiChannel(2u));
+	EXPECT_FALSE(editor->OwnsPointer());
+	EXPECT_EQ(revision, first->Revision());
+	EXPECT_FALSE(history.Undo());
+	EXPECT_EQ(second, editor->TargetMidiLoop());
+	EXPECT_FALSE(editor->SelectMidiChannel(3u));
+	EXPECT_FALSE(editor->SelectMidiChannel(0u));
+	EXPECT_FALSE(editor->SelectMidiChannel(17u));
+	EXPECT_EQ(second, editor->TargetMidiLoop());
+	loop = second;
+	for (int frame = 0; frame < 10; ++frame)
+	{ camera.TickBackgroundDrag(0.05f); editor->Tick(0.05f); }
+	loop->Model()->SetEditorPitchRange(48,24);
+	const auto pixel = Pixel(0.55,65);
+	Button(0,true,pixel,1u); Button(0,false,pixel,0u);
+	MidiLoop::EditState edited;
+	ASSERT_TRUE(second->SnapshotForEdit(edited));
+	ASSERT_EQ(4u, edited.EventCount);
+	for (std::size_t i = 0; i < edited.EventCount; ++i) EXPECT_EQ(1u, edited.Events[i].Channel());
+	EXPECT_EQ(revision, first->Revision());
+	ASSERT_TRUE(history.Undo());
+	ASSERT_TRUE(second->SnapshotForEdit(edited)); EXPECT_EQ(2u, edited.EventCount);
+	ASSERT_TRUE(history.Redo());
+	ASSERT_TRUE(editor->SelectMidiChannel(1u));
+	EXPECT_EQ(first, editor->TargetMidiLoop());
+}
 
 TEST_F(MidiPointerEditorTest, RightNoteOwnsReleaseAndModifierChangesCannotSwitchMode)
 {
