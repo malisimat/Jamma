@@ -11,7 +11,7 @@
 #include <vector>
 
 #include "../graphics/MidiModel.h"
-#include "../include/Constants.h"
+#include "../../include/Constants.h"
 #include "MidiEvent.h"
 #include "MidiQuantisation.h"
 

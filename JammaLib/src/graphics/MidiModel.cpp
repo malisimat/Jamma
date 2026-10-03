@@ -5,7 +5,7 @@
 #include <cmath>
 #include <utility>
 
-#include "../include/Constants.h"
+#include "../../include/Constants.h"
 #include "GlDrawContext.h"
 #include "GlDeleteQueue.h"
 #include "../midi/MidiLoop.h"

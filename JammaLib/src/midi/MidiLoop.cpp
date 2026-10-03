@@ -2,13 +2,12 @@
 
 #include <algorithm>
 #include <cmath>
-#include <limits>
 #include <thread>
 
 #include "../graphics/MidiModel.h"
 #include "MidiNote.h"
 #include "MidiQuantisation.h"
-#include "../include/Constants.h"
+#include "../../include/Constants.h"
 
 using namespace midi;
 
