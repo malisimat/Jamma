@@ -126,19 +126,23 @@ void main()
         bool noteHovered = EditorActive > 0.5 && EditorTargetInstance == EditorNoteInstance
             && EditorHoverPitch == int(EditorNoteHit.z);
         bool noteHeld = EditorActive > 0.5 && EditorHeldInstance == EditorNoteInstance;
-        float noteHover = (noteHovered || noteHeld) ? EditorMorphV : 0.0;
+        float noteHover = (noteHovered && !noteHeld) ? EditorMorphV : 0.0;
+        float noteDown = noteHeld ? EditorMorphV : 0.0;
+        // Keep the changing velocity hue vivid, with warm pressed-state edges.
+        vec3 heldColor = baseColor * (0.65 + 0.35 * diffuse);
+        noteColor = mix(noteColor, heldColor, noteDown);
         // Let the top clip to white while the sides retain a little depth.
         float whiteLift = mix(0.55, 0.92, EditorTopFace);
-        noteColor = min(noteColor * (1.0 + (noteHeld ? 0.0 : noteHover))
-            + vec3(whiteLift * noteHover * (noteHeld ? 0.0 : 1.0)), vec3(1.0));
+        noteColor = min(noteColor * (1.0 + noteHover)
+            + vec3(whiteLift * noteHover), vec3(1.0));
         float timeEdge = 1.0 - smoothstep(0.0, max(2.5 * fwidth(EditorU), 1e-6),
             min(EditorU - EditorNoteHit.x, EditorNoteHit.y - EditorU));
         float rowEdge = 1.0 - smoothstep(0.0, max(2.5 * fwidth(EditorCrossNote), 1e-6),
             1.0 - abs(EditorCrossNote));
-        float outline = max(timeEdge, rowEdge) * EditorTopFace * noteHover;
+        float outline = max(timeEdge, rowEdge) * EditorTopFace * max(noteHover, noteDown);
         vec3 edgeColor = noteHeld ? vec3(1.0, 0.63, 0.18) : vec3(0.08, 0.16, 0.20);
         noteColor = mix(noteColor, edgeColor, 0.92 * outline);
-        ColorOUT = vec4(noteColor, 0.88 + 0.12 * noteHover);
+        ColorOUT = vec4(noteColor, 0.88 + 0.12 * max(noteHover, noteDown));
     }
     if (EditorActive > 0.5)
     {

@@ -2438,7 +2438,10 @@ TEST_F(MidiPointerEditorTest, RightNoteOwnsReleaseAndModifierChangesCannotSwitch
 	const auto revision=loop->Revision();
 	Button(2,true,pixel,4u,true);
 	ASSERT_TRUE(editor->OwnsPointer()); EXPECT_EQ(2,relativeButton);
+	EXPECT_EQ(1,loop->Model()->EditorHeldInstance());
+	EXPECT_EQ(80,loop->Model()->EditorPreviewVelocity());
 	Relative(500,40,4u);
+	EXPECT_EQ(90,loop->Model()->EditorPreviewVelocity());
 	Button(0,true,Pixel(0.7,65),5u);
 	Button(0,false,Pixel(0.7,65),4u);
 	EXPECT_TRUE(editor->OwnsPointer()); EXPECT_EQ(revision,loop->Revision());
@@ -2451,21 +2454,26 @@ TEST_F(MidiPointerEditorTest, RightNoteOwnsReleaseAndModifierChangesCannotSwitch
 	EXPECT_TRUE(history.Undo()); EXPECT_FALSE(history.Undo()); EXPECT_TRUE(history.Redo());
 }
 
-TEST_F(MidiPointerEditorTest, ControlEmptyViewAndRightEmptyOrbitNeverPublish)
+TEST_F(MidiPointerEditorTest, RightEmptyViewAndControlEmptyNeverPublish)
 {
 	const auto pixel=Pixel(0.7,65);
 	const auto revision=loop->Revision();
-	Button(0,true,pixel,1u,true);
-	ASSERT_TRUE(editor->OwnsPointer()); EXPECT_EQ(0,relativeButton);
-	Relative(16,24,1u); // No Ctrl: gesture remains latched.
-	EXPECT_EQ(26,loop->Model()->EditorVisibleRows());
-	Button(2,true,pixel,5u); Button(2,false,pixel,1u);
-	EXPECT_TRUE(editor->OwnsPointer());
-	Button(0,false,pixel,0u);
-	EXPECT_EQ(revision,loop->Revision()); EXPECT_FALSE(history.Undo());
 	Button(2,true,pixel,4u);
+	ASSERT_TRUE(editor->OwnsPointer()); EXPECT_EQ(-1,relativeButton);
+	TouchMoveAction move; move.Position={pixel.X,pixel.Y+24}; move.MouseButtonsDown=4u;
+	editor->OnAction(move);
+	EXPECT_EQ(24,loop->Model()->EditorVisibleRows());
+	EXPECT_EQ(47,loop->Model()->EditorBottomPitch());
+	move.Position.X += 16; editor->OnAction(move);
+	EXPECT_EQ(26,loop->Model()->EditorVisibleRows());
+	EXPECT_EQ(45,loop->Model()->EditorBottomPitch());
+	Button(0,true,pixel,5u,true); Button(0,false,pixel,4u,true);
+	EXPECT_TRUE(editor->OwnsPointer());
+	Button(2,false,pixel,0u);
+	EXPECT_EQ(revision,loop->Revision()); EXPECT_FALSE(history.Undo());
+	Button(0,true,pixel,1u,true);
 	EXPECT_FALSE(editor->OwnsPointer()); EXPECT_EQ(-1,relativeButton);
-	Button(2,false,pixel,0u); EXPECT_EQ(revision,loop->Revision());
+	Button(0,false,pixel,0u,true); EXPECT_EQ(revision,loop->Revision());
 }
 
 TEST_F(MidiPointerEditorTest, FailedAnchorAndCaptureLossLeaveSourceAndUndoUnchanged)

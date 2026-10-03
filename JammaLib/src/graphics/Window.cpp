@@ -617,9 +617,8 @@ ActionResult Window::OnAction(TouchAction touchAction)
 	if (HasRelativePointer() && touchAction.Touch == TouchAction::TOUCH_MOUSE
 		&& touchAction.State == TouchAction::TOUCH_UP && touchAction.Index == _relativeButton)
 	{
-		if (!_RelativePointerValid() || !SetCursorPos(_relativeAnchorScreen.x, _relativeAnchorScreen.y))
+		if (!_RelativePointerValid())
 			CancelMouseCapture();
-		else touchAction.Position = _relativeAnchor;
 	}
 	_cachedCursorPosition = touchAction.Position;
 	_cachedCursorModifiers = touchAction.Modifiers;
@@ -1402,11 +1401,8 @@ bool Window::BeginRelativePointer(int button, utils::Position2d anchor)
 	RAWINPUTDEVICE mouse{ 1u, 2u, 0u, _wnd };
 	if (!RegisterRawInputDevices(&mouse, 1u, sizeof(mouse))) return false;
 	_relativeButton = button;
-	if (!SetCursorPos(_relativeAnchorScreen.x, _relativeAnchorScreen.y))
-	{
-		EndRelativePointer(button);
-		return false;
-	}
+	// Keep the visible cursor free while raw input supplies gesture deltas.
+	// SetCursorPos(_relativeAnchorScreen.x, _relativeAnchorScreen.y);
 	return true;
 }
 
@@ -1436,7 +1432,7 @@ void Window::_ResamplePointer()
 	_cachedCursorPosition = utils::Position2d{ static_cast<int>(cursor.x), static_cast<int>(_config.Size.Height) - static_cast<int>(cursor.y) };
 	_hover3dDirty = true;
 	_forcePick = true;
-	// Remove stale recenter notifications and resume hover after editor teardown.
+	// Resume hover at the current cursor position after editor teardown.
 	MSG pending{};
 	while (PeekMessage(&pending, _wnd, WM_MOUSEMOVE, WM_MOUSEMOVE, PM_REMOVE)) {}
 	PostMessage(_wnd, WM_MOUSEMOVE, 0, MAKELPARAM(cursor.x, cursor.y));
@@ -1472,11 +1468,7 @@ void Window::_HandleRawInput(HRAWINPUT input)
 		CancelMouseCapture();
 		return;
 	}
-	if (!SetCursorPos(_relativeAnchorScreen.x, _relativeAnchorScreen.y))
-	{
-		CancelMouseCapture();
-		return;
-	}
+	// SetCursorPos(_relativeAnchorScreen.x, _relativeAnchorScreen.y);
 	if (raw.data.mouse.lLastX == 0 && raw.data.mouse.lLastY == 0) return;
 	TouchMoveAction movement;
 	movement.Index = _relativeButton;

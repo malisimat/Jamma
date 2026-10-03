@@ -594,7 +594,7 @@ bool LoopGridEditor::_BeginSpecialGesture(const actions::TouchAction& action)
 	}
 	const auto target = targets.Resolve(point->Sample, point->Pitch, nullptr);
 	const bool velocity = action.Index == 2;
-	if (velocity && !target.NoteIndex) return false; // Empty right press orbits.
+	if (!velocity && !target.NoteIndex) return true; // Ctrl is reserved for moving notes.
 	if (target.NoteIndex)
 	{
 		_gesture = std::make_unique<MidiGridGesture>();
@@ -613,12 +613,13 @@ bool LoopGridEditor::_BeginSpecialGesture(const actions::TouchAction& action)
 	else
 	{
 		_pitchView = true;
+		_pitchViewPointerAnchor = action.Position;
 		_pitchViewGesture.Begin(loop->Model()->EditorBottomPitch(),
 			loop->Model()->EditorVisibleRows(), point->V);
 	}
 	_pointerOwned = true;
 	_pointerButton = action.Index;
-	_relativePointer = velocity || _pitchView;
+	_relativePointer = velocity && !_pitchView;
 	_ClearIdleHover(false);
 	if (_relativePointer && (!_host.BeginRelativePointer
 		|| !_host.BeginRelativePointer(_pointerButton, action.Position)))
@@ -644,12 +645,8 @@ void LoopGridEditor::_UpdateHeldTarget()
 		model->ClearEditorHeld();
 		return;
 	}
-	const auto target = _gesture->CapturedTarget();
-	const auto length = _gesture->Before().LoopLengthSamps;
 	_hoverRevision = _gesture->Before().Revision;
-	model->SetEditorTarget(static_cast<float>(target.Start) / length,
-		static_cast<float>(target.End) / length, target.Pitch,
-		static_cast<int>(*_gesture->CapturedNoteIndex()));
+	model->SetEditorHover(-1.0f, -1);
 	model->SetEditorHeld(static_cast<int>(*_gesture->CapturedNoteIndex()),
 		_gesture->Mode() == MidiGridGesture::Kind::Velocity ? _gesture->ProposedVelocity() : -1);
 	if (_gesture->Mode() == MidiGridGesture::Kind::Velocity)
@@ -1120,7 +1117,13 @@ std::optional<actions::ActionResult> LoopGridEditor::OnAction(actions::TouchMove
 		if (_relativePointer && !action.IsRelative) return _Eaten();
 		if (_pitchView)
 		{
-			_pitchViewGesture.Update(action.RelativeDelta.X, action.RelativeDelta.Y);
+			const auto local = graphics::LoopGridProjection::UnprojectToLocalPlane(_ViewProjection(),
+				_ModelMatrix(), action.Position, static_cast<int>(_size.Width),
+				static_cast<int>(_size.Height), 2.0f);
+			const auto loop = _midiLoop.lock();
+			if (!local || !loop) return _Eaten();
+			const auto fraction = 0.5 - local->z / (1.56 * _MidiRadius(loop->CompletedLengthForEditor()));
+			_pitchViewGesture.Update(action.Position.X - _pitchViewPointerAnchor.X, fraction);
 			if (auto loop = _midiLoop.lock())
 				if (auto model = loop->Model())
 				{

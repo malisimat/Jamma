@@ -159,6 +159,7 @@ namespace midi
 		bool _relativePointer = false;
 		bool _pitchView = false;
 		MidiPitchViewGesture _pitchViewGesture;
+		utils::Position2d _pitchViewPointerAnchor{};
 		std::uint64_t _gestureModelGeneration = 0u;
 		bool _previewDirty = false;
 		// UI-owned: retain pixels so camera and pitch-range changes refresh stationary hover.

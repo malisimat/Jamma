@@ -579,16 +579,17 @@ TEST(MidiGridGesture, SnappedRationalRemoteAndPhaseGridReprojectsExactly)
 	}
 }
 
-TEST(MidiPitchViewGesture, AccumulatesIndependentPanZoomAndKeepsAnchorPitch)
+TEST(MidiPitchViewGesture, ProjectedPanAndZoomKeepAnchorPitch)
 {
 	midi::MidiPitchViewGesture view;
-	view.Begin(40, 24, 0.5); view.Update(4, 6);
+	view.Begin(40, 24, 0.5); view.Update(4, 0.5);
 	EXPECT_EQ(40, view.Bottom()); EXPECT_EQ(24, view.Rows());
-	view.Update(12, 18); EXPECT_EQ(26, view.Rows()); EXPECT_EQ(41, view.Bottom());
-	view.Update(-16, -24); EXPECT_EQ(24, view.Rows()); EXPECT_EQ(40, view.Bottom());
+	view.Update(16, 0.75); EXPECT_EQ(26, view.Rows()); EXPECT_EQ(33, view.Bottom());
+	EXPECT_NEAR(52.0, view.Bottom() + 0.75 * view.Rows(), 0.5);
+	view.Update(0, 0.5); EXPECT_EQ(24, view.Rows()); EXPECT_EQ(40, view.Bottom());
 	view.Update(10000, 10000); EXPECT_EQ(128, view.Rows()); EXPECT_EQ(0, view.Bottom());
 	view.Begin(40, 24, 0.5); view.Update(-10000, -10000);
-	EXPECT_EQ(12, view.Rows()); EXPECT_EQ(0, view.Bottom());
+	EXPECT_EQ(12, view.Rows()); EXPECT_EQ(116, view.Bottom());
 }
 
 TEST(MidiGridGesture, ExactTimingSnappedMovePreservesFlagsAndPitchLimits)
