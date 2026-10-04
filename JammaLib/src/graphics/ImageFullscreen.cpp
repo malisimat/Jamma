@@ -38,6 +38,9 @@ void ImageFullscreen::Draw3d(DrawContext& ctx,
 	glUseProgram(shader->GetId());
 	shader->SetUniforms(dynamic_cast<GlDrawContext&>(ctx));
 
+	glUniform2f(glGetUniformLocation(shader->GetId(), "BlurDirection"),
+		_blurDirection[0], _blurDirection[1]);
+
 	glBindVertexArray(_vertexArray);
 
 	glActiveTexture(GL_TEXTURE0);

@@ -143,6 +143,7 @@ namespace graphics
 		std::optional<GlDrawContext> _drawContext;
 		std::optional<GlDrawContext> _pickContext;
 		std::optional<GlDrawContext> _textureContext;
+		std::optional<GlDrawContext> _highlightBlurContext;
 		engine::Scene* _scene;
 		resources::ResourceLib& _resourceLib;
 		base::Action::Modifiers _modifiers;

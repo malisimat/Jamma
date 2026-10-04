@@ -74,6 +74,7 @@ void Window::ReleaseGlResources()
 	_drawContext.reset();
 	_pickContext.reset();
 	_textureContext.reset();
+	_highlightBlurContext.reset();
 
 	_resourceLib.ClearResources();
 
@@ -134,6 +135,7 @@ void Window::InitScene()
 	_highlightPass.InitResources(_resourceLib, true);
 	_pickContext->Initialise();
 	_textureContext->Initialise();
+	_highlightBlurContext->Initialise();
 	_drawContext->Initialise();
 }
 
@@ -330,6 +332,7 @@ int Window::Create(HINSTANCE hInstance, int nCmdShow)
 
 	_pickContext.emplace(_config.Size, base::DrawContext::ContextTarget::PICKING);
 	_textureContext.emplace(_config.Size, base::DrawContext::ContextTarget::TEXTURE);
+	_highlightBlurContext.emplace(_config.Size, base::DrawContext::ContextTarget::TEXTURE);
 	_drawContext.emplace(_config.Size, base::DrawContext::ContextTarget::SCREEN);
 
 	LoadResources();
@@ -452,16 +455,18 @@ void Window::ApplyPendingResize()
 	if (!GlDeleteQueue::IsRenderThread())
 		return;
 
-	if (!_pickContext.has_value() || !_textureContext.has_value() || !_drawContext.has_value())
+	if (!_pickContext.has_value() || !_textureContext.has_value() || !_highlightBlurContext.has_value() || !_drawContext.has_value())
 		return;
 
 	auto size = _pendingResize.value();
 	_pickContext.emplace(size, base::DrawContext::ContextTarget::PICKING);
 	_textureContext.emplace(size, base::DrawContext::ContextTarget::TEXTURE);
+	_highlightBlurContext.emplace(size, base::DrawContext::ContextTarget::TEXTURE);
 	_drawContext.emplace(size, base::DrawContext::ContextTarget::SCREEN);
 
 	_pickContext->Initialise();
 	_textureContext->Initialise();
+	_highlightBlurContext->Initialise();
 	_drawContext->Initialise();
 
 	_forcePick = true;
@@ -535,6 +540,15 @@ void Window::Render()
 	glClear(GL_COLOR_BUFFER_BIT);
 	_scene->Draw3d(*_textureContext, 1, DrawPass::PASS_HIGHLIGHT);
 
+	// Separable X/Y blur gives a full 2D halo with two linear sampling passes.
+	_highlightBlurContext->Bind();
+	glDisable(GL_DEPTH_TEST);
+	glDisable(GL_BLEND); // Preserve RGBA without applying alpha a second time.
+	_highlightPass.SetTexture(_textureContext->GetTexture());
+	_highlightPass.SetBlurDirection(1.0f, 0.0f);
+	_highlightPass.Draw3d(*_highlightBlurContext, 1, DrawPass::PASS_SCENE);
+	glEnable(GL_BLEND);
+
 	_drawContext->Bind();
 
 	glClearColor(0.029f, 0.186f, 0.249f, 1.0f);
@@ -543,7 +557,8 @@ void Window::Render()
 	// Composite the halo over the skybox, then let scene geometry cover its interior.
 	_scene->DrawBackground(*_drawContext);
 	glDisable(GL_DEPTH_TEST);
-	_highlightPass.SetTexture(_textureContext->GetTexture());
+	_highlightPass.SetTexture(_highlightBlurContext->GetTexture());
+	_highlightPass.SetBlurDirection(0.0f, 1.0f);
 	_highlightPass.Draw3d(*_drawContext, 1, DrawPass::PASS_SCENE);
 
 	_scene->Draw3d(*_drawContext, 1, DrawPass::PASS_SCENE);
