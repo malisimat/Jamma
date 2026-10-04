@@ -21,6 +21,7 @@ uniform float Highlight;
 uniform float LoopHover;
 uniform float LoopSelected;
 uniform float LoopPressed;
+uniform float LoopMuted;
 uniform float DiscAlpha;
 uniform int RenderMode;
 uniform int GeometryPass;
@@ -57,6 +58,13 @@ vec3 selectionColour(vec3 colour, float selected)
     float dull = clamp(SelectionActive, 0.0, 1.0) * (1.0 - clamp(selected, 0.0, 1.0));
     float luminance = dot(colour, vec3(0.2126, 0.7152, 0.0722));
     return mix(colour, mix(vec3(luminance), colour, 0.25) * 0.72, dull);
+}
+
+vec3 muteColour(vec3 colour)
+{
+    float luminance = clamp(0.60 * dot(colour, vec3(0.2126, 0.7152, 0.0722))
+        + 0.16 * clamp(LoopSelected, 0.0, 1.0) + 0.24 * clamp(LoopHover, 0.0, 1.0), 0.0, 1.0);
+    return vec3(0.07, 0.10, 0.15) + vec3(0.18, 0.23, 0.30) * luminance;
 }
 
 void main()
@@ -116,7 +124,9 @@ void main()
         discColor = selectionColour(discColor, selected);
         discColor = min(discColor * (1.0 + (0.80 - 0.42 * selected) * hovered)
             + vec3(0.15 - 0.08 * selected) * hovered, vec3(1.0));
-        discColor = mix(discColor, vec3(1.0, 0.42, 0.10),
+        if (LoopMuted > 0.5) discColor = muteColour(discColor);
+        vec3 pressColour = LoopPressed > 1.5 ? vec3(0.12, 0.42, 0.72) : vec3(1.0, 0.42, 0.10);
+        discColor = mix(discColor, pressColour,
             0.82 * pressed);
         // The ring is blended over the scene; a press needs near-opaque coverage
         // to read as clearly as the solid station mesh.
@@ -155,7 +165,9 @@ void main()
             + baseColor * (0.16 * hovered);
         peak = max(max(noteColor.r, noteColor.g), noteColor.b);
         noteColor *= mix(1.0, min(1.0, 1.0 / max(peak, 0.0001)), hovered);
-        noteColor = mix(noteColor, vec3(1.0, 0.43, 0.10),
+        if (LoopMuted > 0.5) noteColor = muteColour(noteColor);
+        vec3 pressColour = LoopPressed > 1.5 ? vec3(0.12, 0.42, 0.72) : vec3(1.0, 0.43, 0.10);
+        noteColor = mix(noteColor, pressColour,
             0.75 * clamp(LoopPressed, 0.0, 1.0));
         bool noteHovered = EditorActive > 0.5 && EditorTargetInstance == EditorNoteInstance
             && EditorHoverPitch == int(EditorNoteHit.z);
@@ -164,6 +176,7 @@ void main()
         float noteDown = noteHeld ? EditorMorphV : 0.0;
         // Keep the changing velocity hue vivid, with warm pressed-state edges.
         vec3 heldColor = baseColor * (0.65 + 0.35 * diffuse);
+        if (LoopMuted > 0.5) heldColor = muteColour(heldColor);
         noteColor = mix(noteColor, heldColor, noteDown);
         // Let the top clip to white while the sides retain a little depth.
         float whiteLift = mix(0.55, 0.92, EditorTopFace);

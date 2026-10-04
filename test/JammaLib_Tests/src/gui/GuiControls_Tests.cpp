@@ -453,6 +453,61 @@ TEST(SceneSelector, HoverLossDoesNotClearCommittedPaintPath) {
 	ASSERT_EQ(hoveredPath, selector->PaintedPathForTest());
 }
 
+TEST(SceneSelector, MiddleClickPreviewsMuteAndDragKeepsItsInitialDirection) {
+	for (const bool initiallyMuted : { false, true }) {
+		SceneSelector selector({});
+		selector.SetSelectDepth(base::DEPTH_STATION);
+		selector.UpdateCurrentHover({ 0 }, base::Action::MODIFIER_NONE, false,
+			initiallyMuted ? base::Tweakable::TWEAKSTATE_MUTED : base::Tweakable::TWEAKSTATE_NONE);
+		auto down = MakeTouchAction(TouchAction::TOUCH_DOWN, { 10, 10 });
+		down.Index = 1u;
+		EXPECT_EQ(actions::ACTIONRESULT_INITSELECT, selector.OnAction(down).ResultType);
+		EXPECT_TRUE(selector.IsMutePressed());
+		EXPECT_FALSE(selector.IsPaintingMute());
+		TouchMoveAction move;
+		move.Position = { 12, 10 };
+		move.MouseButtonsDown = 2u;
+		selector.OnAction(move);
+		EXPECT_TRUE(selector.IsMutePressed());
+		move.Position = { 15, 10 };
+		EXPECT_EQ(actions::ACTIONRESULT_INITSELECT, selector.OnAction(move).ResultType);
+		EXPECT_FALSE(selector.IsMutePressed());
+		EXPECT_TRUE(selector.IsPaintingMute());
+		selector.UpdateCurrentHover({ 1 }, base::Action::MODIFIER_NONE, false,
+			initiallyMuted ? base::Tweakable::TWEAKSTATE_NONE : base::Tweakable::TWEAKSTATE_MUTED);
+		EXPECT_EQ(initiallyMuted ? SceneSelector::SELECT_UNMUTE : SceneSelector::SELECT_MUTE,
+			selector.CurrentMode());
+		auto up = MakeTouchAction(TouchAction::TOUCH_UP, { 15, 10 });
+		up.Index = 1u;
+		EXPECT_EQ(actions::ACTIONRESULT_DEFAULT, selector.OnAction(up).ResultType);
+		EXPECT_FALSE(selector.IsPaintingMute());
+		EXPECT_EQ(SceneSelector::SELECT_NONE, selector.CurrentMode());
+	}
+}
+
+TEST(SceneSelector, MiddleClickCommitsOnReleaseAndCaptureLossCancelsPreview) {
+	SceneSelector selector({});
+	selector.SetSelectDepth(base::DEPTH_STATION);
+	selector.UpdateCurrentHover({ 0 }, base::Action::MODIFIER_NONE, false, base::Tweakable::TWEAKSTATE_NONE);
+	auto down = MakeTouchAction(TouchAction::TOUCH_DOWN, { 10, 10 });
+	down.Index = 1u;
+	selector.OnAction(down);
+	auto up = MakeTouchAction(TouchAction::TOUCH_UP, { 10, 10 });
+	up.Index = 1u;
+	EXPECT_EQ(actions::ACTIONRESULT_MUTE, selector.OnAction(up).ResultType);
+	selector.UpdateCurrentHover({ 0 }, base::Action::MODIFIER_NONE, false, base::Tweakable::TWEAKSTATE_MUTED);
+	selector.OnAction(down);
+	EXPECT_EQ(actions::ACTIONRESULT_UNMUTE, selector.OnAction(up).ResultType);
+	selector.OnAction(down);
+	TouchMoveAction cancelled;
+	cancelled.MouseButtonsDown = 0u;
+	EXPECT_TRUE(selector.OnAction(cancelled).IsEaten);
+	EXPECT_FALSE(selector.IsClickPressed());
+	EXPECT_FALSE(selector.IsPaintingMute());
+	EXPECT_EQ(SceneSelector::SELECT_NONE, selector.CurrentMode());
+	EXPECT_EQ(actions::ACTIONRESULT_DEFAULT, selector.OnAction(up).ResultType);
+}
+
 TEST(SceneSelector, DragChoosesPaintDirectionFromPressedItem) {
 	for (const bool initiallySelected : { false, true }) {
 		GuiSelectorParams params;

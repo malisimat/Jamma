@@ -610,6 +610,7 @@ void StationModel::Draw3d(DrawContext& ctx,
 	if (!shader || 0u == _vertexArray || 0u == _numTris)
 		return;
 
+	glCtx.SetUniform("StationMuted", _muted ? 1.0f : 0.0f);
 	const auto stationLevel = std::clamp(_stationLevel, 0.0f, 1.0f);
 	const glm::vec3 stationStateColors[] = {
 		{ 0.24f, 0.68f, 0.98f },
@@ -641,7 +642,7 @@ void StationModel::Draw3d(DrawContext& ctx,
 		glCtx.SetUniform("Highlight", _stationSelected ? 1.0f : 0.0f);
 		glCtx.SetUniform("HighlightPass", 1.0f);
 		glCtx.SetUniform("StationHover", _stationPicking ? 1.0f : 0.0f);
-		glCtx.SetUniform("StationPressed", _clickPressed ? 1.0f : 0.0f);
+		glCtx.SetUniform("StationPressed", _clickPressed);
 		glCtx.SetUniform("StationLevel", stationLevel);
 		glCtx.SetUniform("StationStateColor", stationStateColors[stationStateIndex]);
 		break;
@@ -650,7 +651,7 @@ void StationModel::Draw3d(DrawContext& ctx,
 		glCtx.SetUniform("Highlight", _stationSelected ? 1.0f : 0.0f);
 		glCtx.SetUniform("HighlightPass", 0.0f);
 		glCtx.SetUniform("StationHover", _stationPicking ? 1.0f : 0.0f);
-		glCtx.SetUniform("StationPressed", _clickPressed ? 1.0f : 0.0f);
+		glCtx.SetUniform("StationPressed", _clickPressed);
 		glCtx.SetUniform("StationLevel", stationLevel);
 		glCtx.SetUniform("StationStateColor", stationStateColors[stationStateIndex]);
 		break;
@@ -706,7 +707,7 @@ void StationModel::Draw3d(DrawContext& ctx,
 	glCtx.SetUniform("Highlight", _stationSelected ? 1.0f : 0.0f);
 	glCtx.SetUniform("HighlightPass", pass == base::PASS_HIGHLIGHT ? 1.0f : 0.0f);
 	glCtx.SetUniform("StationHover", _stationPicking ? 1.0f : 0.0f);
-	glCtx.SetUniform("StationPressed", _clickPressed ? 1.0f : 0.0f);
+	glCtx.SetUniform("StationPressed", _clickPressed);
 	glCtx.SetUniform("StationLevel", stationLevel);
 	glCtx.SetUniform("StationStateColor", stationStateColors[stationStateIndex]);
 	glCtx.SetUniform("StationVisualState", static_cast<int>(stationStateIndex));

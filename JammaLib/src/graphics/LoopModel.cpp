@@ -90,7 +90,8 @@ void LoopModel::Draw3d(DrawContext& ctx,
 		glCtx.SetUniform("LoopState", (unsigned int)_modelState);
 		glCtx.SetUniform("LoopHover", _isPicking3d ? 1.0f : 0.0f);
 		glCtx.SetUniform("LoopSelected", _isSelected ? 1.0f : 0.0f);
-		glCtx.SetUniform("LoopPressed", _clickPressed ? 1.0f : 0.0f);
+		glCtx.SetUniform("LoopPressed", _clickPressed);
+		glCtx.SetUniform("LoopMuted", _muted || _modelState == STATE_MUTED ? 1.0f : 0.0f);
 		break;
 	}
 

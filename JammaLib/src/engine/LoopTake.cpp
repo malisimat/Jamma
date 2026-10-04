@@ -408,6 +408,8 @@ void LoopTake::Draw3d(DrawContext& ctx,
 	}
 
 	_UpdateMidiModelRotation();
+	for (const auto& loop : _midiLoops)
+		if (loop && loop->Model()) loop->Model()->SetMuted(IsMuted());
 	base::GuiElement::Draw3d(ctx, numInstances, pass);
 }
 

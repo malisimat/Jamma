@@ -378,6 +378,13 @@ void Station::SetSize(utils::Size2d size)
 	_ArrangeChildren();
 }
 
+bool Station::AllTakesMuted() const
+{
+	const auto& takes = GetLoopTakes();
+	return !takes.empty() && std::all_of(takes.begin(), takes.end(),
+		[](const auto& take) { return take && take->IsMuted(); });
+}
+
 void Station::Draw3d(base::DrawContext& ctx,
 	unsigned int numInstances,
 	base::DrawPass pass)
@@ -399,6 +406,7 @@ void Station::Draw3d(base::DrawContext& ctx,
 		take->SetParentVisualScale(stationVisualScale);
 	if (_stationModel)
 	{
+		_stationModel->SetMuted(AllTakesMuted());
 		glCtx.PushMvp(glm::translate(glm::mat4(1.0), glm::vec3(0.0f, _StationModelYOffset, 0.01f)));
 		const auto stationPeak = _masterMixer ? _masterMixer->VuPeakLevel() : 0.0f;
 		_stationModel->SetStationState(GlobalId(), IsSelected(), _isPicking3d, stationPeak,

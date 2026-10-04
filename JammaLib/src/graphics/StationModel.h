@@ -42,7 +42,9 @@ namespace graphics
 			float level = 0.0f,
 			std::uint8_t visualState = 0u);
 		void SetParams(float fallRate) noexcept;
-		void SetClickPressed(bool pressed) noexcept { _clickPressed = pressed; }
+		// Shader press state: 0 = released/painting, 1 = left click, 2 = mute click.
+		void SetClickPressed(bool pressed, bool mute = false) noexcept { _clickPressed = pressed ? (mute ? 2.0f : 1.0f) : 0.0f; }
+		void SetMuted(bool muted) noexcept { _muted = muted; }
 		void ResetStationLevel() noexcept;
 
 		// --- Pure geometry builders (no OpenGL; testable without a GL context) ---
@@ -159,7 +161,8 @@ namespace graphics
 		std::vector<unsigned int> _stationGlobalId;
 		bool _stationSelected;
 		bool _stationPicking;
-		bool _clickPressed = false;
+		float _clickPressed = 0.0f;
+		bool _muted = false;
 		float _stationLevel;
 		std::uint8_t _stationVisualState;
 		float _stationFallRate;

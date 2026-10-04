@@ -155,6 +155,7 @@ namespace base
 		virtual bool Select();
 		virtual bool DeSelect();
 		virtual void SetPicking3d(bool picking);
+		bool IsPicking3d() const noexcept { return _isPicking3d; }
 		virtual void SetPickingFromState(EditMode mode, bool flipState);
 		virtual void SetStateFromPicking(EditMode mode, bool flipState);
 		virtual void SetIndex(unsigned int index);

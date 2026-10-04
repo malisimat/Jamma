@@ -16,6 +16,7 @@ uniform int LoopState;
 uniform float LoopHover;
 uniform float LoopSelected;
 uniform float LoopPressed;
+uniform float LoopMuted;
 uniform float Highlight;
 uniform float HighlightPass;
 uniform float EditorPlayFrac;
@@ -90,7 +91,7 @@ void main()
     vec4 shadedColor = vec4(ambient + (0.78 + 0.22 * diffuse) * texColor
         + materialLight, 1.0);
     vec4 recColor = shadedColor + vec4(diffScale * vec3(8.0, 3.0, 0.5), 1.0);
-    vec4 muteColor = ambient + vec4(diffScale * vec3(0.6, 0.6, 0.6), 0.2);
+    vec4 muteColor = vec4(ambient + diffScale * vec3(0.6), 1.0);
 
     float muteFade = max(loopState - 1.0, 0.0);
     float recFade = 0.2 * (1.0 - mod(min(loopState, 1.0), 2.0));
@@ -118,7 +119,15 @@ void main()
     peak = max(max(ColorOUT.r, ColorOUT.g), ColorOUT.b);
     float hoverCeiling = mix(ceiling, mix(0.90, 1.0, selected), hovered);
     ColorOUT.rgb *= min(1.0, hoverCeiling / max(peak, 0.0001));
-    ColorOUT.rgb = mix(ColorOUT.rgb, vec3(0.86, 0.38, 0.12),
+    if (LoopMuted > 0.5)
+    {
+        // Preserve lighting/selection/hover variation inside a dark blue-grey palette.
+        float luminance = clamp(0.60 * dot(ColorOUT.rgb, vec3(0.2126, 0.7152, 0.0722))
+            + 0.16 * selected + 0.24 * hovered, 0.0, 1.0);
+        ColorOUT.rgb = vec3(0.07, 0.10, 0.15) + vec3(0.18, 0.23, 0.30) * luminance;
+    }
+    vec3 pressColour = LoopPressed > 1.5 ? vec3(0.12, 0.42, 0.72) : vec3(0.86, 0.38, 0.12);
+    ColorOUT.rgb = mix(ColorOUT.rgb, pressColour,
         0.70 * clamp(LoopPressed, 0.0, 1.0));
     if (EditorActive > 0.5)
     {

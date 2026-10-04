@@ -1161,10 +1161,9 @@ ActionResult Scene::OnAction(TouchMoveAction action)
 
 	if (_isSceneTouching)
 		return _UpdateBackgroundDrag(action);
-	if (0u != (action.MouseButtonsDown & 1u))
 	{
 		auto selectionMove = _selector->OnAction(_selector->ParentToLocal(action));
-		if (selectionMove.ResultType == ACTIONRESULT_INITSELECT)
+		if (selectionMove.IsEaten)
 		{
 			_UpdateSelection(selectionMove.ResultType);
 			return selectionMove;
@@ -1981,8 +1980,7 @@ void Scene::SetHover3d(std::vector<unsigned char> path, Action::Modifiers modifi
 	{
 		isSelected = hovering->IsSelected();
 
-		if (std::shared_ptr<Tweakable> tweakable = std::dynamic_pointer_cast<Tweakable>(hovering))
-			tweakState = tweakable->GetTweakState();
+		tweakState = _SelectionTweakState(hovering);
 	}
 
 	_selector->UpdateCurrentHover(elementPath,
@@ -2503,6 +2501,40 @@ void Scene::_UpdateHudStationAnchors()
 	_hudPanel->SetStationAnchors(std::move(anchors));
 }
 
+base::Tweakable::TweakState Scene::_SelectionTweakState(const std::shared_ptr<GuiElement>& target) const
+{
+	std::scoped_lock lock(_sceneMutex);
+	if (auto station = std::dynamic_pointer_cast<Station>(target))
+		return station->AllTakesMuted() ? Tweakable::TWEAKSTATE_MUTED : Tweakable::TWEAKSTATE_NONE;
+	if (auto tweakable = std::dynamic_pointer_cast<Tweakable>(target))
+		return tweakable->GetTweakState();
+	if (target)
+		if (auto take = std::dynamic_pointer_cast<LoopTake>(target->Parent()))
+			return take->GetTweakState();
+	return Tweakable::TWEAKSTATE_NONE;
+}
+
+void Scene::_SetSelectionMuted(const std::vector<unsigned char>& path, bool muted)
+{
+	// Membership can change on the job thread. Resolve and visit the target
+	// under the scene lock; the existing mute flags are atomic for audio readers.
+	std::scoped_lock lock(_sceneMutex);
+	auto target = _ChildFromPathLocked(path);
+	const auto setMuted = [muted](const std::shared_ptr<Tweakable>& tweakable) {
+		if (!tweakable) return;
+		if (muted) tweakable->Mute(); else tweakable->UnMute();
+	};
+	if (auto station = std::dynamic_pointer_cast<Station>(target))
+	{
+		for (const auto& take : station->GetLoopTakes()) setMuted(take);
+	}
+	else if (auto tweakable = std::dynamic_pointer_cast<Tweakable>(target))
+		setMuted(tweakable);
+	else if (target)
+		// MIDI streams share their owning take's mute and backing ring.
+		setMuted(std::dynamic_pointer_cast<LoopTake>(target->Parent()));
+}
+
 void Scene::_UpdateSelection(ActionResultType res)
 {
 	// Called when touch up + down, and when hover updated
@@ -2620,15 +2652,13 @@ void Scene::_UpdateSelection(ActionResultType res)
 
 			break;
 		case SceneSelector::SELECT_MUTE:
-			hovering = _ChildFromPath(_selector->CurrentHover());
-			if (nullptr != hovering)
-				hovering->SetPicking3d(true);
-
-			break;
 		case SceneSelector::SELECT_UNMUTE:
-			hovering = _ChildFromPath(_selector->CurrentHover());
-			if (nullptr != hovering)
-				hovering->SetPicking3d(true);
+			for (auto& station : stations)
+				station->SetPicking3d(false);
+			if (_selector->IsPaintingMute())
+				_SetSelectionMuted(_selector->CurrentHover(), currentMode == SceneSelector::SELECT_MUTE);
+			else if (auto target = _ChildFromPath(_selector->CurrentHover()))
+				target->SetPicking3d(true);
 
 			break;
 		}
@@ -2646,26 +2676,11 @@ void Scene::_UpdateSelection(ActionResultType res)
 
 		break;
 	case ACTIONRESULT_MUTE:
-		// Only called on touch up
-		for (auto& station : stations)
-		{
-			station->SetStateFromPicking(GuiElement::EDIT_MUTE, false);
-			station->SetPicking3d(false);
-		}
-
-		SetHover3d(_selector->CurrentHover(), Action::MODIFIER_NONE);
-
-		break;
 	case ACTIONRESULT_UNMUTE:
-		// Only called on touch up
-		for (auto& station : stations)
-		{
-			station->SetStateFromPicking(GuiElement::EDIT_MUTE, true);
-			station->SetPicking3d(false);
-		}
-
-		SetHover3d(_selector->CurrentHover(), Action::MODIFIER_NONE);
-
+		// A click changes only its pressed target; a paint stroke already applied.
+		_SetSelectionMuted(_selector->PaintedPathForTest(), res == ACTIONRESULT_MUTE);
+		for (auto& station : stations) station->SetPicking3d(false);
+		if (auto target = _ChildFromPath(_selector->CurrentHover())) target->SetPicking3d(true);
 		break;
 	case ACTIONRESULT_INITSELECT:
 		for (auto& station : stations)
@@ -2679,9 +2694,15 @@ void Scene::_UpdateSelection(ActionResultType res)
 			applySelection(_selector->PaintedPathForTest(), select);
 			applySelection(_selector->CurrentHover(), select);
 		}
-		// A drag has entered paint mode: show only the selected state while painting.
+		else if (_selector->IsPaintingMute())
+		{
+			const bool muted = currentMode == SceneSelector::SELECT_MUTE;
+			_SetSelectionMuted(_selector->PaintedPathForTest(), muted);
+			_SetSelectionMuted(_selector->CurrentHover(), muted);
+		}
+		// Paint strokes show committed selection/mute states without hover or press shading.
 		if (currentMode != SceneSelector::SELECT_SELECTADD
-			&& currentMode != SceneSelector::SELECT_SELECTREMOVE && hovering)
+			&& currentMode != SceneSelector::SELECT_SELECTREMOVE && !_selector->IsPaintingMute() && hovering)
 			hovering->SetPicking3d(true);
 
 		break;
@@ -2693,7 +2714,7 @@ void Scene::_UpdateSelection(ActionResultType res)
 		break;
 	}
 	const bool paintingSelection = currentMode == SceneSelector::SELECT_SELECTADD
-		|| currentMode == SceneSelector::SELECT_SELECTREMOVE;
+		|| currentMode == SceneSelector::SELECT_SELECTREMOVE || _selector->IsPaintingMute();
 	if (!paintingSelection && _selector->CurrentSelectDepth() == base::DEPTH_LOOP)
 	{
 		if (auto hovered = _ChildFromPath(_selector->CurrentHover()))
@@ -2728,15 +2749,16 @@ void Scene::_UpdateSelection(ActionResultType res)
 	{
 		if (auto pressed = _ChildFromPath(_selector->CurrentHover()))
 		{
-			const auto pressTakeLoops = [](const std::shared_ptr<LoopTake>& take) {
+			const bool mutePressed = _selector->IsMutePressed();
+			const auto pressTakeLoops = [mutePressed](const std::shared_ptr<LoopTake>& take) {
 				for (const auto& loop : take->GetLoops())
-					if (auto model = loop->Model()) model->SetClickPressed(true);
+					if (auto model = loop->Model()) model->SetClickPressed(true, mutePressed);
 				for (const auto& midiLoop : take->GetMidiLoops())
-					if (auto model = midiLoop->Model()) model->SetClickPressed(true);
+					if (auto model = midiLoop->Model()) model->SetClickPressed(true, mutePressed);
 			};
 			if (auto station = std::dynamic_pointer_cast<Station>(pressed))
 			{
-				station->SetClickPressed(true);
+				station->SetClickPressed(true, mutePressed);
 				for (const auto& take : station->GetLoopTakes())
 					pressTakeLoops(take);
 			}
@@ -2744,12 +2766,12 @@ void Scene::_UpdateSelection(ActionResultType res)
 				pressTakeLoops(take);
 			else if (auto loop = std::dynamic_pointer_cast<Loop>(pressed))
 			{
-				if (auto model = loop->Model()) model->SetClickPressed(true);
+				if (auto model = loop->Model()) model->SetClickPressed(true, mutePressed);
 			}
 			else if (auto take = std::dynamic_pointer_cast<LoopTake>(pressed->Parent()))
 			{
 				for (const auto& midiLoop : take->GetMidiLoops())
-					if (auto model = midiLoop->Model()) model->SetClickPressed(true);
+					if (auto model = midiLoop->Model()) model->SetClickPressed(true, mutePressed);
 			}
 		}
 	}
@@ -2757,9 +2779,7 @@ void Scene::_UpdateSelection(ActionResultType res)
 	// the selector's cached starting state without waiting for another pick.
 	if (auto hovered = _ChildFromPath(_selector->CurrentHover()))
 	{
-		auto tweakState = base::Tweakable::TWEAKSTATE_NONE;
-		if (auto tweakable = std::dynamic_pointer_cast<Tweakable>(hovered))
-			tweakState = tweakable->GetTweakState();
+		const auto tweakState = _SelectionTweakState(hovered);
 		_selector->UpdateCurrentHover(_selector->CurrentHover(),
 			Action::MODIFIER_NONE, hovered->IsSelected(), tweakState);
 	}
@@ -3034,10 +3054,16 @@ void Scene::_PublishAudioStations()
 
 std::shared_ptr<GuiElement> Scene::_ChildFromPath(std::vector<unsigned char> path)
 {
+	std::scoped_lock lock(_sceneMutex);
+	return _ChildFromPathLocked(path);
+}
+
+std::shared_ptr<GuiElement> Scene::_ChildFromPathLocked(const std::vector<unsigned char>& path)
+{
 	if (path.size() < 1)
 		return nullptr;
 
-	const auto stations = SnapshotStations();
+	const auto& stations = _stations;
 	std::shared_ptr<GuiElement> curChild;
 	std::vector<unsigned char> curPath(path);
 

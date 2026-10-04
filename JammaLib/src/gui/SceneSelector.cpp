@@ -53,6 +53,16 @@ bool SceneSelector::IsClickPressed() const
 	return _clickPressed;
 }
 
+bool SceneSelector::IsMutePressed() const
+{
+	return _clickPressed && (SELECT_MUTE == _selectMode || SELECT_UNMUTE == _selectMode);
+}
+
+bool SceneSelector::IsPaintingMute() const
+{
+	return _isSelecting && !_clickPressed && (SELECT_MUTE == _selectMode || SELECT_UNMUTE == _selectMode);
+}
+
 bool SceneSelector::UpdateCurrentHover(std::vector<unsigned char> path,
 	Action::Modifiers modifiers,
 	bool isSelected,
@@ -115,12 +125,13 @@ actions::ActionResult SceneSelector::OnAction(actions::TouchAction action)
 					SELECT_MUTE;
 
 				StartPaintSelection(mode, _currentHover);
+				_clickPressed = true;
+				res.ResultType = actions::ACTIONRESULT_INITSELECT;
 			}
 		}
 	}
 	else if (actions::TouchAction::TouchState::TOUCH_UP == action.State)
 	{
-		_clickPressed = false;
 		if (0 == action.Index)
 		{
 			if ((SELECT_SELECT == _selectMode) ||
@@ -140,7 +151,7 @@ actions::ActionResult SceneSelector::OnAction(actions::TouchAction action)
 				(SELECT_UNMUTE == _selectMode))
 			{
 				res.IsEaten = true;
-				res.ResultType = (SELECT_MUTE == _selectMode) ?
+				res.ResultType = !_clickPressed ? actions::ACTIONRESULT_DEFAULT : (SELECT_MUTE == _selectMode) ?
 					actions::ACTIONRESULT_MUTE :
 					actions::ACTIONRESULT_UNMUTE;
 
@@ -155,16 +166,26 @@ actions::ActionResult SceneSelector::OnAction(actions::TouchAction action)
 actions::ActionResult SceneSelector::OnAction(actions::TouchMoveAction action)
 {
 	auto res = GuiElement::OnAction(action);
-	if (!_isEnabled || !_isVisible || !_isSelecting || 0u == (action.MouseButtonsDown & 1u))
+	if (!_isEnabled || !_isVisible || !_isSelecting)
 		return res;
+	const bool muting = SELECT_MUTE == _selectMode || SELECT_UNMUTE == _selectMode;
+	const auto buttonMask = muting ? 2u : 1u;
+	if (0u == (action.MouseButtonsDown & buttonMask))
+	{
+		// Capture loss cancels a pending click, but keeps already painted states.
+		EndSelection();
+		res.IsEaten = true;
+		return res;
+	}
 
-	if (SELECT_SELECT == _selectMode)
+	if (SELECT_SELECT == _selectMode || (muting && _clickPressed))
 	{
 		const auto dx = action.Position.X - _initPos.X;
 		const auto dy = action.Position.Y - _initPos.Y;
 		if (dx * dx + dy * dy >= 16)
 		{
-			_selectMode = _pressHoverSelected ? SELECT_SELECTREMOVE : SELECT_SELECTADD;
+			if (!muting)
+				_selectMode = _pressHoverSelected ? SELECT_SELECTREMOVE : SELECT_SELECTADD;
 			_clickPressed = false;
 			res.ResultType = actions::ACTIONRESULT_INITSELECT;
 			res.IsEaten = true;

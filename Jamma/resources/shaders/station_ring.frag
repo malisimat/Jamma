@@ -12,6 +12,7 @@ uniform float Highlight;
 uniform float HighlightPass;
 uniform float StationHover;
 uniform float StationPressed;
+uniform float StationMuted;
 uniform vec3 StationStateColor;
 uniform float RingScale;
 uniform float SceneDim;
@@ -24,6 +25,13 @@ vec3 selectionColour(vec3 colour, float selected)
     float dull = clamp(SelectionActive, 0.0, 1.0) * (1.0 - clamp(selected, 0.0, 1.0));
     float luminance = dot(colour, vec3(0.2126, 0.7152, 0.0722));
     return mix(colour, mix(vec3(luminance), colour, 0.25) * 0.72, dull);
+}
+
+vec3 muteColour(vec3 colour)
+{
+    float luminance = clamp(0.60 * dot(colour, vec3(0.2126, 0.7152, 0.0722))
+        + 0.16 * clamp(Highlight, 0.0, 1.0) + 0.24 * clamp(StationHover, 0.0, 1.0), 0.0, 1.0);
+    return vec3(0.07, 0.10, 0.15) + vec3(0.18, 0.23, 0.30) * luminance;
 }
 
 void main()
@@ -59,7 +67,9 @@ void main()
         colour = selectionColour(colour, selected);
         colour = min(colour * (1.0 + (0.70 - 0.38 * selected) * hovered)
             + vec3(0.13 - 0.07 * selected) * hovered, vec3(1.0));
-        colour = mix(colour, vec3(1.0, 0.42, 0.11),
+        if (StationMuted > 0.5) colour = muteColour(colour);
+        vec3 pressColour = StationPressed > 1.5 ? vec3(0.12, 0.42, 0.72) : vec3(1.0, 0.42, 0.11);
+        colour = mix(colour, pressColour,
             0.72 * clamp(StationPressed, 0.0, 1.0));
         ColorOUT = vec4(colour * SceneDim, 1.0);
         return;
@@ -73,7 +83,9 @@ void main()
     charcoal += vec3(0.09, 0.30, 0.34) * clamp(Highlight, 0.0, 1.0);
     charcoal = selectionColour(charcoal, Highlight);
     charcoal += vec3(0.16) * clamp(StationHover, 0.0, 1.0);
-    charcoal = mix(charcoal, vec3(0.50, 0.21, 0.07),
+    if (StationMuted > 0.5) charcoal = muteColour(charcoal);
+    vec3 pressColour = StationPressed > 1.5 ? vec3(0.12, 0.42, 0.72) : vec3(0.50, 0.21, 0.07);
+    charcoal = mix(charcoal, pressColour,
         0.65 * clamp(StationPressed, 0.0, 1.0));
     ColorOUT = vec4(charcoal * SceneDim, 1.0);
 }

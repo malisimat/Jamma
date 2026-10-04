@@ -44,6 +44,8 @@ namespace gui
 		std::vector<unsigned char> CurrentHover() const;
 		std::vector<unsigned char> PaintedPathForTest() const;
 		bool IsClickPressed() const;
+		bool IsMutePressed() const;
+		bool IsPaintingMute() const;
 		bool UpdateCurrentHover(std::vector<unsigned char> path,
 			base::Action::Modifiers modifiers,
 			bool isSelected,

@@ -279,6 +279,8 @@ namespace engine
 		void _InitSize();
 		void _UpdateHudStationAnchors();
 		void _UpdateSelection(actions::ActionResultType res);
+		void _SetSelectionMuted(const std::vector<unsigned char>& path, bool muted);
+		base::Tweakable::TweakState _SelectionTweakState(const std::shared_ptr<base::GuiElement>& target) const;
 		void _AddStation(std::shared_ptr<Station> station, bool publishAudioStations = true);
 		// Pass a locked station list or a snapshot; remote updates can erase entries.
 		static utils::Position3d _StationCentre(const std::vector<std::shared_ptr<Station>>& stations);
@@ -302,6 +304,7 @@ namespace engine
 		void _ConsumeTriggerOutcomes();
 		void _PublishAudioStations();
 		std::shared_ptr<base::GuiElement> _ChildFromPath(std::vector<unsigned char> path);
+		std::shared_ptr<base::GuiElement> _ChildFromPathLocked(const std::vector<unsigned char>& path);
 		void _UpdateSelectDepth(unsigned int depth);
 		void _UpdateRemoteStationsFromSnapshot(const ninjam::NinjamRemoteSnapshot& snapshot);
 		engine::QuantisationPolicy _QuantisationPolicy() const;

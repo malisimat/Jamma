@@ -12,6 +12,7 @@ uniform float Highlight;
 uniform float HighlightPass;
 uniform float StationHover;
 uniform float StationPressed;
+uniform float StationMuted;
 uniform vec3 StationStateColor;
 uniform float SceneDim;
 uniform float SelectionActive;
@@ -89,7 +90,14 @@ void main()
 	base = selectionColour(base, hi);
 	base = min(base * (1.0 + (0.70 - 0.35 * hi) * hover)
 		+ vec3(0.14 - 0.07 * hi) * hover, vec3(1.0));
-	base = mix(base, vec3(0.90, 0.40, 0.13),
+    if (StationMuted > 0.5)
+    {
+        float luminance = clamp(0.60 * dot(base, vec3(0.2126, 0.7152, 0.0722))
+            + 0.16 * hi + 0.24 * hover, 0.0, 1.0);
+        base = vec3(0.07, 0.10, 0.15) + vec3(0.18, 0.23, 0.30) * luminance;
+    }
+    vec3 pressColour = StationPressed > 1.5 ? vec3(0.12, 0.42, 0.72) : vec3(0.90, 0.40, 0.13);
+	base = mix(base, pressColour,
 		0.68 * clamp(StationPressed, 0.0, 1.0));
 
 	ColorOUT = vec4(base * SceneDim, 1.0);
