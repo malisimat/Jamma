@@ -540,6 +540,9 @@ void Window::Render()
 	glClearColor(0.029f, 0.186f, 0.249f, 1.0f);
 	glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
+	// Composite the halo over the skybox, then let scene geometry cover its interior.
+	_scene->DrawBackground(*_drawContext);
+	glDisable(GL_DEPTH_TEST);
 	_highlightPass.SetTexture(_textureContext->GetTexture());
 	_highlightPass.Draw3d(*_drawContext, 1, DrawPass::PASS_SCENE);
 
