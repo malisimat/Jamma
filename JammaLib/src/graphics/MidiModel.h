@@ -141,6 +141,9 @@ namespace graphics
 		void _DrawEditorGrid(GlDrawContext& glCtx);
 
 	private:
+		enum class GeometryDraw { All, Notes, Disc };
+		// Draw3d and DrawMesh use this only on the render thread; no publication needed.
+		GeometryDraw _geometryDraw = GeometryDraw::All;
 		MidiModelParams _midiParams;
 		double _loopIndexFrac;
 		float _editorMorph = 0.0f;

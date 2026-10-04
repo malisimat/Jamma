@@ -116,6 +116,7 @@ namespace engine
 		virtual void Draw(base::DrawContext& ctx) override;
 		virtual void Draw3d(base::DrawContext& ctx, unsigned int numInstances, base::DrawPass pass) override;
 		void DrawBackground(base::DrawContext& ctx);
+		bool HasSelection() const;
 		void UpdateCamera();
 
 		virtual void SetSize(utils::Size2d size) override

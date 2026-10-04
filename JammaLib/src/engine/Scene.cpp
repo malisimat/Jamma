@@ -791,7 +791,7 @@ void Scene::Draw3d(DrawContext& ctx,
 		_quantisationInteraction.Tick(now);
 	}
 
-	glCtx.SetUniform("SelectionActive", _HasSelection() ? 1.0f : 0.0f);
+	glCtx.SetUniform("SelectionActive", PASS_SCENE == pass && _HasSelection() ? 1.0f : 0.0f);
 	glCtx.SetUniform("SceneDim", _loopEditor.SurroundingDim());
 	glCtx.SetUniform("EditorMorph", 0.0f);
 	glCtx.SetUniform("EditorTime", _skyboxStarted
@@ -2443,7 +2443,7 @@ void Scene::_InitSize()
 		1.0f;
 	auto projection = _camera.Projection(ar, _StationCentre(_stations));
 	_viewProj = projection * _camera.ViewMatrix();
-	// _skyboxViewProj is updated in Draw3d(); do not reset it here
+	// _skyboxViewProj is updated in DrawBackground(); do not reset it here
 
 	auto hScale = _sizeParams.Size.Width > 0 ? 2.0f / (float)_sizeParams.Size.Width : 1.0f;
 	auto vScale = _sizeParams.Size.Height > 0 ? 2.0f / (float)_sizeParams.Size.Height : 1.0f;
@@ -3151,6 +3151,12 @@ float Scene::_QuantisationOverlayAlpha(Time now) const
 void Scene::_ApplyQuantisationOverlayAlpha(float alpha)
 {
 	_quantisation.ApplyOverlayAlpha(alpha, _stations);
+}
+
+bool Scene::HasSelection() const
+{
+	std::scoped_lock lock(_sceneMutex);
+	return _HasSelection();
 }
 
 bool Scene::_HasSelection() const

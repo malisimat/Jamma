@@ -1,5 +1,11 @@
 # Merge after the loop grid editor
 
+This is the historical merge procedure and verification record for 2026-10-03.
+The merge is complete. Later commits changed interaction shading, MIDI source
+handling, glow compositing and console startup. The results below apply to the
+merge revision, not to every later feature head. Current review results and
+remaining validation are in [plan.md](plan.md).
+
 ## Reviewed baseline and scope
 
 Reviewed on 2026-10-03 against feature head `a481f37` and local/master plus origin/master `868a209` (PR #133, loop grid editor already merged). Merge **master into feature/mirrorball-graphics**, not the old editor branch. Common ancestor is `8bdd459`. The working tree initially contains only this untracked plan; preserve it. Recheck branch heads before merging. Do not push or change master.
@@ -51,7 +57,7 @@ Read local tasks before each build/test invocation. Incrementally build Jamma an
 - Delegated MIDI, waveform, and station integration in separate sessions, followed by an independent cross-review. Retained master's editor/engine/gesture/undo/console implementations; the engine diff against master is limited to material texture wiring and the graphics matrix/sampler contract in Scene.
 - Corrected both cap-free MIDI disc draw ranges for the chamfer mesh: 16 triangles per segment, rather than master's old 8. Updated the existing tessellation assertion and added cap-free UV coverage and held velocity preview/reset tests with and without selection rings. Highlight waveforms still bind their existing height texture, despite scene-only uploads/material work.
 - MIDI probe illumination is scalar and fades out in the grid. Master's palette, live preview override, cyan selection base, held hue, dark hover/amber held outlines, opacity and depth rules remain. Station coloured state/level surfaces remain unchanged; neutral cap material peaks are bounded before interaction styling.
-- Waveform selection uses a constant, hue-preserving 0.10 pre-interaction peak ceiling. It leaves room for master's cyan selection lift, extra hover lift and orange press; idle colours are unchanged by this ceiling. An expanded numerical sweep of 117,261 palette/state/light/probe cases found no idle/selected separation below 0.04 and selected-plus-hover peaks below 0.7487. The constant ceiling avoids camera-dependent threshold jumps.
+- At the merge revision, waveform selection used a constant, hue-preserving 0.10 pre-interaction peak ceiling and master's cyan selection lift. Its numerical sweep covered that shader only. Later commits replaced this with selection gain and saturation; see [plan.md](plan.md) for the current interaction checks and the neutral-colour regression fix.
 - Incremental Debug x64 JammaLib, Jamma, and native test builds succeeded. Full native suite: **1,177 passed, 1 hardware-dependent MIDI-device test skipped** (1,178 total). No native failures.
 - All **22 shader programs compiled, linked and validated** using a temporary hidden WGL context on NVIDIA OpenGL 4.6 / GeForce GTX 960. Actual fragment readback with controlled geometry and representative level colours distinguished idle/hover/selected/selected-plus-hover/pressed waveforms in playing/recording/muted states (minimum measured channel separation 32/255). MIDI held grid readback retained blue/green/yellow/red velocity hues at 1/32/64/90/127, including master's red plateau at 90 and 127; MIDI ring disc readback distinguished all five interaction states and retained cyan selection/orange press.
 - These GL checks exercise shader pipelines with controlled inputs, not a full interactive recording session. The hands-on checklist above remains open for camera movement, all real geometry/wrap/picker coverage, overlapping held notes, live gesture/undo workflows, and audio/render load. See `doc/plan.md` for the remaining recording-load comparison. Do not claim those checks were completed from build or shader validation alone.

@@ -18,7 +18,7 @@ uniform float SelectionActive;
 uniform sampler2D MaterialProbeSampler;
 
 // uv.x = radial fraction on top/bevel, vertical fraction on side (0=bottom,1=top)
-// uv.y = part kind:  0=deck-top, 1=bevel, 2=side
+// uv.y = part kind:  0=deck-top, 1=bevel, 2=side, 3=rib, 4=bottom
 // Keep the normal palette when selection is empty; retain a little hue otherwise.
 vec3 selectionColour(vec3 colour, float selected)
 {

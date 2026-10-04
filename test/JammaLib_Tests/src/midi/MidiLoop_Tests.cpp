@@ -586,13 +586,14 @@ TEST(LoopTakeMidiTiming, MidiOnlyMasterUsesPressIntervalAndStopPhase)
 	actions::TriggerAction start;
 	start.ActionType = actions::TriggerAction::TRIGGER_REC_START;
 	start.MidiSample = 77732u;
+	start.MidiInputDevices = { "Keys" };
 	start.SetUserConfig(cfg);
 	const auto started = station->OnAction(start);
 	ASSERT_TRUE(started.IsEaten);
 	ASSERT_EQ(1u, station->GetLoopTakes().size());
 	const auto take = station->GetLoopTakes().front();
 	ASSERT_TRUE(take->RecordMidiEvent(
-		MidiEvent::MakeNoteOn(95277u, 0u, 38u, 100u), 95680u));
+		MidiEvent::MakeNoteOn(95277u, 0u, 38u, 100u), "Keys", 95680u));
 
 	clock->Tick(86656u, 0u); // Scene sample 167936, after stop press 164919.
 	actions::TriggerAction end;

@@ -54,6 +54,39 @@ protected:
 	}
 };
 
+TEST_F(SceneRoutingIntegrationTest, HaloSelectionIncludesMidiOnlyModelsAndClearsOnDeselect)
+{
+	auto scene = FreshScene({ Station("Keys") }, {});
+	ASSERT_TRUE(scene);
+	const auto stations = scene->SnapshotStations();
+	ASSERT_EQ(1u, stations.size());
+	auto station = stations.front();
+	auto take = station->AddTake();
+	take->Record({}, station->Name(), { 0u }, { "Keys" });
+	scene->CommitChanges();
+	ASSERT_EQ(1u, take->GetMidiLoops().size());
+	auto model = take->GetMidiLoops().front()->Model();
+	ASSERT_TRUE(model);
+	station->DeSelect();
+	take->DeSelect();
+	EXPECT_FALSE(scene->HasSelection());
+
+	// A MIDI model can be selected independently of its aggregate take state.
+	model->Select();
+	EXPECT_TRUE(scene->HasSelection());
+	model->DeSelect();
+	EXPECT_FALSE(scene->HasSelection());
+	take->Select();
+	EXPECT_TRUE(scene->HasSelection());
+	take->DeSelect();
+	EXPECT_FALSE(scene->HasSelection());
+	station->Select();
+	EXPECT_TRUE(scene->HasSelection());
+	station->DeSelect();
+	EXPECT_FALSE(scene->HasSelection());
+	scene->Shutdown();
+}
+
 TEST_F(SceneRoutingIntegrationTest, FreshScenesResolveReorderedAndAdditionalStationsByName)
 {
 	auto reordered = FreshScene({ Station("Bass"), Station("Drums") },

@@ -124,6 +124,7 @@ MidiModel::~MidiModel()
 void MidiModel::Draw3d(DrawContext& ctx, unsigned int numInstances, base::DrawPass pass)
 {
 	ApplyPendingModelUpdate();
+	_geometryDraw = GeometryDraw::All;
 
 	auto& glCtx = dynamic_cast<GlDrawContext&>(ctx);
 	glCtx.PushMvp(glm::rotate(glm::mat4(1.0),
@@ -187,12 +188,14 @@ void MidiModel::Draw3d(DrawContext& ctx, unsigned int numInstances, base::DrawPa
 		glGetBooleanv(GL_DEPTH_WRITEMASK, &prevDepthMask);
 
 		glDepthMask(GL_TRUE);
+		_geometryDraw = GeometryDraw::Notes;
 		GuiModel::Draw3d(glCtx, numInstances, pass);
 
 		// The morphed ring is the editor's solid backing plane: later scene
 		// geometry must not draw through it. Normal loop rings stay translucent.
 		glDepthMask(_editorActive ? GL_TRUE : GL_FALSE);
 		glCtx.SetUniform("RenderMode", 4);
+		_geometryDraw = GeometryDraw::Disc;
 		GuiModel::Draw3d(glCtx, numInstances, pass);
 
 		_DrawEditorGrid(glCtx);
@@ -466,12 +469,12 @@ void MidiModel::DrawMesh(GLuint shaderProgram, unsigned int drawInstances)
 	const auto geometryPass = glGetUniformLocation(shaderProgram, "GeometryPass");
 	// The ring uses only the curved sides. Notes retain the complete mesh,
 	// including their start and end faces.
-	if (_midiParams.DrawSelectionRing && drawInstances != 0u)
+	if (_geometryDraw != GeometryDraw::Notes && _midiParams.DrawSelectionRing && drawInstances != 0u)
 	{
 		glUniform1i(geometryPass, 1);
 		glDrawArraysInstanced(GL_TRIANGLES, 0, BaseArcSegments * 16u * 3u, 1u);
 	}
-	else if (!_midiParams.DrawSelectionRing && _editorActive && _editorMorph > 0.0f)
+	else if (_geometryDraw != GeometryDraw::Notes && !_midiParams.DrawSelectionRing && _editorActive && _editorMorph > 0.0f)
 	{
 		// Use the same ring mesh and shader as the first stream's backing, without
 		// adding a persistent instance or shifting note/hover/held identities.
@@ -498,7 +501,7 @@ void MidiModel::DrawMesh(GLuint shaderProgram, unsigned int drawInstances)
 		if (shapeEnabled) glEnableVertexAttribArray(ShapeAttribute);
 	}
 	glUniform1i(geometryPass, 2);
-	if (drawInstances > (_midiParams.DrawSelectionRing ? 1u : 0u))
+	if (_geometryDraw != GeometryDraw::Disc && drawInstances > (_midiParams.DrawSelectionRing ? 1u : 0u))
 	{
 		const auto copyLocation = glGetUniformLocation(shaderProgram, "EditorWrapCopy");
 		glUniform1f(copyLocation, 0.0f);

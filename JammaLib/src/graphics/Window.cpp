@@ -534,20 +534,24 @@ void Window::Render()
 	// std::vector<unsigned char> data = _pickContext->GetTexture();
 	// stbi_write_bmp("picker.bmp", _config.Size.Width, _config.Size.Height, 4, data.data());
 
-	_textureContext->Bind();
+	// An empty selection has no halo; avoid both full-screen blur passes.
+	const bool hasSelection = _scene->HasSelection();
+	if (hasSelection)
+	{
+		_textureContext->Bind();
+		glClearColor(1.0f, 1.0f, 1.0f, 0.0f);
+		glClear(GL_COLOR_BUFFER_BIT);
+		_scene->Draw3d(*_textureContext, 1, DrawPass::PASS_HIGHLIGHT);
 
-	glClearColor(1.0f, 1.0f, 1.0f, 0.0f);
-	glClear(GL_COLOR_BUFFER_BIT);
-	_scene->Draw3d(*_textureContext, 1, DrawPass::PASS_HIGHLIGHT);
-
-	// Separable X/Y blur gives a full 2D halo with two linear sampling passes.
-	_highlightBlurContext->Bind();
-	glDisable(GL_DEPTH_TEST);
-	glDisable(GL_BLEND); // Preserve RGBA without applying alpha a second time.
-	_highlightPass.SetTexture(_textureContext->GetTexture());
-	_highlightPass.SetBlurDirection(1.0f, 0.0f);
-	_highlightPass.Draw3d(*_highlightBlurContext, 1, DrawPass::PASS_SCENE);
-	glEnable(GL_BLEND);
+		// Separable X/Y blur gives a full 2D halo with two linear sampling passes.
+		_highlightBlurContext->Bind();
+		glDisable(GL_DEPTH_TEST);
+		glDisable(GL_BLEND); // Preserve RGBA without applying alpha a second time.
+		_highlightPass.SetTexture(_textureContext->GetTexture());
+		_highlightPass.SetBlurDirection(1.0f, 0.0f);
+		_highlightPass.Draw3d(*_highlightBlurContext, 1, DrawPass::PASS_SCENE);
+		glEnable(GL_BLEND);
+	}
 
 	_drawContext->Bind();
 
@@ -556,10 +560,13 @@ void Window::Render()
 
 	// Composite the halo over the skybox, then let scene geometry cover its interior.
 	_scene->DrawBackground(*_drawContext);
-	glDisable(GL_DEPTH_TEST);
-	_highlightPass.SetTexture(_highlightBlurContext->GetTexture());
-	_highlightPass.SetBlurDirection(0.0f, 1.0f);
-	_highlightPass.Draw3d(*_drawContext, 1, DrawPass::PASS_SCENE);
+	if (hasSelection)
+	{
+		glDisable(GL_DEPTH_TEST);
+		_highlightPass.SetTexture(_highlightBlurContext->GetTexture());
+		_highlightPass.SetBlurDirection(0.0f, 1.0f);
+		_highlightPass.Draw3d(*_drawContext, 1, DrawPass::PASS_SCENE);
+	}
 
 	_scene->Draw3d(*_drawContext, 1, DrawPass::PASS_SCENE);
 	_scene->Draw(*_drawContext);
