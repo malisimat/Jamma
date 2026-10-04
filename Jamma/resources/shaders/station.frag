@@ -14,10 +14,19 @@ uniform float StationHover;
 uniform float StationPressed;
 uniform vec3 StationStateColor;
 uniform float SceneDim;
+uniform float SelectionActive;
 uniform sampler2D MaterialProbeSampler;
 
 // uv.x = radial fraction on top/bevel, vertical fraction on side (0=bottom,1=top)
 // uv.y = part kind:  0=deck-top, 1=bevel, 2=side
+// Keep the normal palette when selection is empty; retain a little hue otherwise.
+vec3 selectionColour(vec3 colour, float selected)
+{
+    float dull = clamp(SelectionActive, 0.0, 1.0) * (1.0 - clamp(selected, 0.0, 1.0));
+    float luminance = dot(colour, vec3(0.2126, 0.7152, 0.0722));
+    return mix(colour, mix(vec3(luminance), colour, 0.25) * 0.72, dull);
+}
+
 void main()
 {
 	if (HighlightPass > 0.5)
@@ -77,6 +86,7 @@ void main()
 	float hover = clamp(StationHover, 0.0, 1.0);
 	base = min(base * (1.0 + 1.65 * hi) + vec3(0.08, 0.27, 0.32) * hi,
 		vec3(1.0));
+	base = selectionColour(base, hi);
 	base = min(base * (1.0 + (0.70 - 0.35 * hi) * hover)
 		+ vec3(0.14 - 0.07 * hi) * hover, vec3(1.0));
 	base = mix(base, vec3(0.90, 0.40, 0.13),

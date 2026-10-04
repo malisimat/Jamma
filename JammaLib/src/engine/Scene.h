@@ -326,7 +326,7 @@ namespace engine
 		bool _TrySetMasterFromHover(bool confirm);
 		void _UpdateStationQuantisation(std::shared_ptr<base::GuiElement> candidate, base::SelectDepth depth, bool confirmCandidate);
 		void _ClearStationQuantisation();
-		bool _HasQuantisationSelection() const;
+		bool _HasSelection() const;
 		bool _HasQuantisationHover() const;
 		bool _IsMidiPhaseDragModifier(base::Action::Modifiers modifiers) const noexcept;
 		void _HandleRemoteTempoSnapshot(const ninjam::NinjamRemoteSnapshot& snapshot,

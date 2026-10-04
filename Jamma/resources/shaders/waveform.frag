@@ -20,11 +20,20 @@ uniform float Highlight;
 uniform float HighlightPass;
 uniform float EditorPlayFrac;
 uniform float SceneDim;
+uniform float SelectionActive;
 uniform float EditorActive;
 uniform float EditorTime;
 uniform samplerCube ProbeSampler;
 uniform float ProbeStrength;
 uniform vec3 EditorProbeEye;
+
+// Keep the normal palette when selection is empty; retain a little hue otherwise.
+vec3 selectionColour(vec3 colour, float selected)
+{
+    float dull = clamp(SelectionActive, 0.0, 1.0) * (1.0 - clamp(selected, 0.0, 1.0));
+    float luminance = dot(colour, vec3(0.2126, 0.7152, 0.0722));
+    return mix(colour, mix(vec3(luminance), colour, 0.25) * 0.72, dull);
+}
 
 void main()
 {
@@ -100,6 +109,7 @@ void main()
     float peak = max(max(ColorOUT.r, ColorOUT.g), ColorOUT.b);
     float ceiling = mix(0.82, 1.0, selected);
     ColorOUT.rgb *= min(1.0, ceiling / max(peak, 0.0001));
+    ColorOUT.rgb = selectionColour(ColorOUT.rgb, selected);
     // Hover adds brightness and may reach white, even on a selected waveform.
     ColorOUT.rgb = min(ColorOUT.rgb * (1.0 + 0.45 * hovered)
         + vec3(0.18 * hovered), vec3(1.0));

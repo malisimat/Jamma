@@ -783,6 +783,7 @@ void Scene::Draw3d(DrawContext& ctx,
 		_quantisationInteraction.Tick(now);
 	}
 
+	glCtx.SetUniform("SelectionActive", _HasSelection() ? 1.0f : 0.0f);
 	glCtx.SetUniform("SceneDim", _loopEditor.SurroundingDim());
 	glCtx.SetUniform("EditorMorph", 0.0f);
 	glCtx.SetUniform("EditorTime", _skyboxStarted
@@ -805,6 +806,7 @@ void Scene::Draw3d(DrawContext& ctx,
 	{
 		station->Draw3d(ctx, 1, pass);
 	}
+	glCtx.SetUniform("SelectionActive", 0.0f);
 	glCtx.SetUniform("SceneDim", 1.0f);
 	if (probeId != 0u)
 	{
@@ -3143,7 +3145,7 @@ void Scene::_ApplyQuantisationOverlayAlpha(float alpha)
 	_quantisation.ApplyOverlayAlpha(alpha, _stations);
 }
 
-bool Scene::_HasQuantisationSelection() const
+bool Scene::_HasSelection() const
 {
 	for (const auto& station : _stations)
 	{
@@ -3164,6 +3166,11 @@ bool Scene::_HasQuantisationSelection() const
 			for (const auto& loop : take->GetLoops())
 			{
 				if (loop && loop->IsSelected())
+					return true;
+			}
+			for (const auto& loop : take->GetMidiLoops())
+			{
+				if (loop && loop->Model() && loop->Model()->IsSelected())
 					return true;
 			}
 		}

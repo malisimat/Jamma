@@ -34,6 +34,7 @@ uniform int EditorHeldInstance;
 uniform int EditorBottomPitch;
 uniform int EditorVisibleRows;
 uniform float SceneDim;
+uniform float SelectionActive;
 uniform float EditorActive;
 uniform float EditorGridRadius;
 uniform float EditorWrapCopy;
@@ -49,6 +50,14 @@ const int RenderModePicker = 1;
 const int RenderModeHighlight = 2;
 const int RenderModeNotesOnly = 3;
 const int RenderModeDiscOnly = 4;
+
+// Keep the normal palette when selection is empty; retain a little hue otherwise.
+vec3 selectionColour(vec3 colour, float selected)
+{
+    float dull = clamp(SelectionActive, 0.0, 1.0) * (1.0 - clamp(selected, 0.0, 1.0));
+    float luminance = dot(colour, vec3(0.2126, 0.7152, 0.0722));
+    return mix(colour, mix(vec3(luminance), colour, 0.25) * 0.72, dull);
+}
 
 void main()
 {
@@ -104,6 +113,7 @@ void main()
         discColor *= mix(0.85 + 0.15 * pearl, 1.0, EditorMorphV);
         discColor = min(discColor * (1.0 + 1.75 * selected)
             + vec3(0.12, 0.22, 0.25) * selected, vec3(1.0));
+        discColor = selectionColour(discColor, selected);
         discColor = min(discColor * (1.0 + (0.80 - 0.42 * selected) * hovered)
             + vec3(0.15 - 0.08 * selected) * hovered, vec3(1.0));
         discColor = mix(discColor, vec3(1.0, 0.42, 0.10),
@@ -132,9 +142,19 @@ void main()
         float chrome = dot(texture(TextureSampler, probeUv).rgb,
             vec3(0.2126, 0.7152, 0.0722));
         noteColor *= mix(0.65 + 0.35 * chrome, 1.0, EditorMorphV);
-        noteColor *= 1.0 + 0.15 * clamp(LoopSelected, 0.0, 1.0);
-        noteColor = min(noteColor * (1.0 + 0.20 * LoopHover)
-            + vec3(0.04) * LoopHover, vec3(1.0));
+        float selected = clamp(LoopSelected, 0.0, 1.0);
+        float hovered = clamp(LoopHover, 0.0, 1.0);
+        // Lift the velocity hue, including shadowed faces, without washing it
+        // towards white. Keep the probe modulation underneath both state lifts.
+        noteColor = noteColor * (1.0 + 0.65 * selected)
+            + baseColor * (0.12 * selected);
+        float peak = max(max(noteColor.r, noteColor.g), noteColor.b);
+        noteColor *= mix(1.0, min(1.0, 1.0 / max(peak, 0.0001)), selected);
+        noteColor = selectionColour(noteColor, selected);
+        noteColor = noteColor * (1.0 + 0.45 * hovered)
+            + baseColor * (0.16 * hovered);
+        peak = max(max(noteColor.r, noteColor.g), noteColor.b);
+        noteColor *= mix(1.0, min(1.0, 1.0 / max(peak, 0.0001)), hovered);
         noteColor = mix(noteColor, vec3(1.0, 0.43, 0.10),
             0.75 * clamp(LoopPressed, 0.0, 1.0));
         bool noteHovered = EditorActive > 0.5 && EditorTargetInstance == EditorNoteInstance
@@ -156,7 +176,7 @@ void main()
         float outline = max(timeEdge, rowEdge) * EditorTopFace * max(noteHover, noteDown);
         vec3 edgeColor = noteHeld ? vec3(1.0, 0.63, 0.18) : vec3(0.08, 0.16, 0.20);
         noteColor = mix(noteColor, edgeColor, 0.92 * outline);
-        ColorOUT = vec4(noteColor, 0.88 + 0.12 * max(noteHover, noteDown));
+        ColorOUT = vec4(noteColor, 0.88 + 0.12 * max(max(selected, hovered), max(noteHover, noteDown)));
     }
     if (EditorActive > 0.5)
     {
