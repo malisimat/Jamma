@@ -24,7 +24,8 @@ namespace console
 		ConsoleBroker(const ConsoleBroker&) = delete;
 		ConsoleBroker& operator=(const ConsoleBroker&) = delete;
 		bool Start(const std::wstring& companionPath,
-			std::shared_ptr<CommandMailbox> commands, std::string initialStatus);
+			std::shared_ptr<CommandMailbox> commands, std::string initialStatus,
+			bool activateOnLaunch = true);
 		bool Stop() noexcept;
 		bool Reopen(const std::wstring& companionPath,
 			std::shared_ptr<CommandMailbox> commands, std::string initialStatus);
@@ -47,7 +48,7 @@ namespace console
 		static bool ConnectClient(HANDLE pipe, HANDLE stop, DWORD timeoutMs);
 		static std::wstring FindWindowsTerminal();
 		static UniqueHandle Launch(const std::wstring& application,
-			const std::wstring& arguments, bool newConsole);
+			const std::wstring& arguments, bool newConsole, bool activateOnLaunch);
 		static bool RunAttempt(const std::shared_ptr<State>& state, bool terminal,
 			const std::wstring& terminalPath, const std::vector<std::uint8_t>& userSid);
 		static void Run(const std::shared_ptr<State>& state);
