@@ -1918,6 +1918,7 @@ void Scene::SetHover3d(std::vector<unsigned char> path, Action::Modifiers modifi
 {
 	if (_loopEditor.IsEngaged())
 		return;
+	std::unique_lock lock(_sceneMutex);
 	bool isSelected = false;
 	auto tweakState = base::Tweakable::TweakState::TWEAKSTATE_NONE;
 	std::vector<unsigned char> fullElementPath;
@@ -1933,7 +1934,7 @@ void Scene::SetHover3d(std::vector<unsigned char> path, Action::Modifiers modifi
 	}
 
 	_hoverPath3d = fullElementPath;
-	_hoverElement3d = _ChildFromPath(fullElementPath);
+	_hoverElement3d = _ChildFromPathLocked(fullElementPath);
 	elementPath = fullElementPath;
 	if (auto pickedElement = _hoverElement3d.lock();
 		_selector->CurrentSelectDepth() == base::DEPTH_LOOP && pickedElement)
@@ -1975,12 +1976,12 @@ void Scene::SetHover3d(std::vector<unsigned char> path, Action::Modifiers modifi
 		_lastLoggedHoverPath = elementPath;
 	}
 
-	auto hovering = _ChildFromPath(elementPath);
+	auto hovering = _ChildFromPathLocked(elementPath);
 	if (nullptr != hovering)
 	{
 		isSelected = hovering->IsSelected();
 
-		tweakState = _SelectionTweakState(hovering);
+		tweakState = _SelectionTweakStateLocked(hovering);
 	}
 
 	_selector->UpdateCurrentHover(elementPath,
@@ -1988,8 +1989,9 @@ void Scene::SetHover3d(std::vector<unsigned char> path, Action::Modifiers modifi
 		isSelected,
 		tweakState);
 	_quantisationInteraction.RefreshOverlay(_InteractionContext(),
-		[this](const std::vector<unsigned char>& path) { return _ChildFromPath(path); });
+		[this](const std::vector<unsigned char>& path) { return _ChildFromPathLocked(path); });
 
+	lock.unlock();
 	_UpdateSelection(ACTIONRESULT_DEFAULT);
 
 	auto candidate = (Action::MODIFIER_SHIFT & modifiers) ? _ChildFromPath(elementPath) : nullptr;
@@ -2501,9 +2503,8 @@ void Scene::_UpdateHudStationAnchors()
 	_hudPanel->SetStationAnchors(std::move(anchors));
 }
 
-base::Tweakable::TweakState Scene::_SelectionTweakState(const std::shared_ptr<GuiElement>& target) const
+base::Tweakable::TweakState Scene::_SelectionTweakStateLocked(const std::shared_ptr<GuiElement>& target) const
 {
-	std::scoped_lock lock(_sceneMutex);
 	if (auto station = std::dynamic_pointer_cast<Station>(target))
 		return station->AllTakesMuted() ? Tweakable::TWEAKSTATE_MUTED : Tweakable::TWEAKSTATE_NONE;
 	if (auto tweakable = std::dynamic_pointer_cast<Tweakable>(target))
@@ -2514,11 +2515,10 @@ base::Tweakable::TweakState Scene::_SelectionTweakState(const std::shared_ptr<Gu
 	return Tweakable::TWEAKSTATE_NONE;
 }
 
-void Scene::_SetSelectionMuted(const std::vector<unsigned char>& path, bool muted)
+void Scene::_SetSelectionMutedLocked(const std::vector<unsigned char>& path, bool muted)
 {
-	// Membership can change on the job thread. Resolve and visit the target
-	// under the scene lock; the existing mute flags are atomic for audio readers.
-	std::scoped_lock lock(_sceneMutex);
+	// Caller holds the scene lock across target resolution and membership access.
+	// The existing mute flags are atomic for audio readers.
 	auto target = _ChildFromPathLocked(path);
 	const auto setMuted = [muted](const std::shared_ptr<Tweakable>& tweakable) {
 		if (!tweakable) return;
@@ -2538,11 +2538,12 @@ void Scene::_SetSelectionMuted(const std::vector<unsigned char>& path, bool mute
 void Scene::_UpdateSelection(ActionResultType res)
 {
 	// Called when touch up + down, and when hover updated
-	const auto stations = SnapshotStations();
+	std::scoped_lock lock(_sceneMutex);
+	const auto& stations = _stations;
 	auto currentMode = _selector->CurrentMode();
 	std::shared_ptr<GuiElement> hovering = nullptr;
 	const auto applySelection = [this](const std::vector<unsigned char>& path, bool selected) {
-		auto target = _ChildFromPath(path);
+		auto target = _ChildFromPathLocked(path);
 		if (!target)
 			return;
 		if (_selector->CurrentSelectDepth() == base::DEPTH_STATION)
@@ -2617,7 +2618,7 @@ void Scene::_UpdateSelection(ActionResultType res)
 			for (auto& station : stations)
 				station->SetPicking3d(false);
 
-			hovering = _ChildFromPath(_selector->CurrentHover());
+			hovering = _ChildFromPathLocked(_selector->CurrentHover());
 			if (nullptr != hovering)
 				hovering->SetPicking3d(true);
 
@@ -2626,7 +2627,7 @@ void Scene::_UpdateSelection(ActionResultType res)
 			for (auto& station : stations)
 				station->SetPicking3d(false);
 
-			hovering = _ChildFromPath(_selector->CurrentHover());
+			hovering = _ChildFromPathLocked(_selector->CurrentHover());
 			if (nullptr != hovering)
 				hovering->SetPicking3d(true);
 
@@ -2634,7 +2635,7 @@ void Scene::_UpdateSelection(ActionResultType res)
 		case SceneSelector::SELECT_SELECT:
 			for (auto& station : stations)
 				station->SetPicking3d(false);
-			hovering = _ChildFromPath(_selector->CurrentHover());
+			hovering = _ChildFromPathLocked(_selector->CurrentHover());
 			if (nullptr != hovering)
 				hovering->SetPicking3d(true);
 
@@ -2656,8 +2657,8 @@ void Scene::_UpdateSelection(ActionResultType res)
 			for (auto& station : stations)
 				station->SetPicking3d(false);
 			if (_selector->IsPaintingMute())
-				_SetSelectionMuted(_selector->CurrentHover(), currentMode == SceneSelector::SELECT_MUTE);
-			else if (auto target = _ChildFromPath(_selector->CurrentHover()))
+				_SetSelectionMutedLocked(_selector->CurrentHover(), currentMode == SceneSelector::SELECT_MUTE);
+			else if (auto target = _ChildFromPathLocked(_selector->CurrentHover()))
 				target->SetPicking3d(true);
 
 			break;
@@ -2671,22 +2672,22 @@ void Scene::_UpdateSelection(ActionResultType res)
 		{
 			station->SetPicking3d(false);
 		}
-		hovering = _ChildFromPath(_selector->CurrentHover());
+		hovering = _ChildFromPathLocked(_selector->CurrentHover());
 		if (hovering) hovering->SetPicking3d(true);
 
 		break;
 	case ACTIONRESULT_MUTE:
 	case ACTIONRESULT_UNMUTE:
 		// A click changes only its pressed target; a paint stroke already applied.
-		_SetSelectionMuted(_selector->PaintedPathForTest(), res == ACTIONRESULT_MUTE);
+		_SetSelectionMutedLocked(_selector->PaintedPathForTest(), res == ACTIONRESULT_MUTE);
 		for (auto& station : stations) station->SetPicking3d(false);
-		if (auto target = _ChildFromPath(_selector->CurrentHover())) target->SetPicking3d(true);
+		if (auto target = _ChildFromPathLocked(_selector->CurrentHover())) target->SetPicking3d(true);
 		break;
 	case ACTIONRESULT_INITSELECT:
 		for (auto& station : stations)
 			station->SetPicking3d(false);
 
-		hovering = _ChildFromPath(_selector->CurrentHover());
+		hovering = _ChildFromPathLocked(_selector->CurrentHover());
 		if (currentMode == SceneSelector::SELECT_SELECTADD ||
 			currentMode == SceneSelector::SELECT_SELECTREMOVE)
 		{
@@ -2697,8 +2698,8 @@ void Scene::_UpdateSelection(ActionResultType res)
 		else if (_selector->IsPaintingMute())
 		{
 			const bool muted = currentMode == SceneSelector::SELECT_MUTE;
-			_SetSelectionMuted(_selector->PaintedPathForTest(), muted);
-			_SetSelectionMuted(_selector->CurrentHover(), muted);
+			_SetSelectionMutedLocked(_selector->PaintedPathForTest(), muted);
+			_SetSelectionMutedLocked(_selector->CurrentHover(), muted);
 		}
 		// Paint strokes show committed selection/mute states without hover or press shading.
 		if (currentMode != SceneSelector::SELECT_SELECTADD
@@ -2717,7 +2718,7 @@ void Scene::_UpdateSelection(ActionResultType res)
 		|| currentMode == SceneSelector::SELECT_SELECTREMOVE || _selector->IsPaintingMute();
 	if (!paintingSelection && _selector->CurrentSelectDepth() == base::DEPTH_LOOP)
 	{
-		if (auto hovered = _ChildFromPath(_selector->CurrentHover()))
+		if (auto hovered = _ChildFromPathLocked(_selector->CurrentHover()))
 		{
 			if (auto take = std::dynamic_pointer_cast<LoopTake>(hovered->Parent()))
 			{
@@ -2747,7 +2748,7 @@ void Scene::_UpdateSelection(ActionResultType res)
 	if (_selector->IsClickPressed()
 		&& _selector->CurrentHover() == _selector->PaintedPathForTest())
 	{
-		if (auto pressed = _ChildFromPath(_selector->CurrentHover()))
+		if (auto pressed = _ChildFromPathLocked(_selector->CurrentHover()))
 		{
 			const bool mutePressed = _selector->IsMutePressed();
 			const auto pressTakeLoops = [mutePressed](const std::shared_ptr<LoopTake>& take) {
@@ -2777,15 +2778,15 @@ void Scene::_UpdateSelection(ActionResultType res)
 	}
 	// The picker may keep the same ID after a click or paint stroke, so update
 	// the selector's cached starting state without waiting for another pick.
-	if (auto hovered = _ChildFromPath(_selector->CurrentHover()))
+	if (auto hovered = _ChildFromPathLocked(_selector->CurrentHover()))
 	{
-		const auto tweakState = _SelectionTweakState(hovered);
+		const auto tweakState = _SelectionTweakStateLocked(hovered);
 		_selector->UpdateCurrentHover(_selector->CurrentHover(),
 			Action::MODIFIER_NONE, hovered->IsSelected(), tweakState);
 	}
 
 	_quantisationInteraction.RefreshOverlay(_InteractionContext(),
-		[this](const std::vector<unsigned char>& path) { return _ChildFromPath(path); });
+		[this](const std::vector<unsigned char>& path) { return _ChildFromPathLocked(path); });
 }
 
 void Scene::InitResources(resources::ResourceLib& resourceLib, bool forceInit)

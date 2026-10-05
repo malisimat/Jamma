@@ -87,6 +87,49 @@ TEST_F(SceneRoutingIntegrationTest, HaloSelectionIncludesMidiOnlyModelsAndClears
 	scene->Shutdown();
 }
 
+TEST_F(SceneRoutingIntegrationTest, TakeClicksSelectAndToggleMuteWithoutChangingSibling)
+{
+	auto scene = FreshScene({ Station("Keys") }, {});
+	ASSERT_TRUE(scene);
+	const auto station = scene->SnapshotStations().front();
+	const auto take = station->AddTake();
+	const auto sibling = station->AddTake();
+	scene->CommitChanges();
+	actions::GuiAction view;
+	view.ElementType = actions::GuiAction::ACTIONELEMENT_RADIO;
+	view.Index = 100u;
+	view.Data = actions::GuiAction::GuiInt{ engine::Scene::VIEW_LOOPTAKE };
+	scene->OnAction(view);
+	std::vector<unsigned char> pickPath;
+	for (const auto index : take->GlobalId())
+		pickPath.push_back(static_cast<unsigned char>(index + 1u));
+	scene->SetHover3d(pickPath, base::Action::MODIFIER_NONE);
+
+	actions::TouchAction click;
+	click.Touch = actions::TouchAction::TOUCH_MOUSE;
+	click.Position = { -100, -100 }; // Avoid the 2D controls; use the picked take.
+	click.Modifiers = base::Action::MODIFIER_NONE;
+	click.Index = 0;
+	click.State = actions::TouchAction::TOUCH_DOWN;
+	scene->OnAction(click);
+	click.State = actions::TouchAction::TOUCH_UP;
+	scene->OnAction(click);
+	EXPECT_TRUE(take->IsSelected());
+	EXPECT_FALSE(sibling->IsSelected());
+
+	click.Index = 1;
+	for (const bool muted : { true, false })
+	{
+		click.State = actions::TouchAction::TOUCH_DOWN;
+		scene->OnAction(click);
+		click.State = actions::TouchAction::TOUCH_UP;
+		scene->OnAction(click);
+		EXPECT_EQ(muted, take->IsMuted());
+		EXPECT_FALSE(sibling->IsMuted());
+	}
+	scene->Shutdown();
+}
+
 TEST_F(SceneRoutingIntegrationTest, FreshScenesResolveReorderedAndAdditionalStationsByName)
 {
 	auto reordered = FreshScene({ Station("Bass"), Station("Drums") },

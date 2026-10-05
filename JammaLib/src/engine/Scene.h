@@ -279,8 +279,9 @@ namespace engine
 		void _InitSize();
 		void _UpdateHudStationAnchors();
 		void _UpdateSelection(actions::ActionResultType res);
-		void _SetSelectionMuted(const std::vector<unsigned char>& path, bool muted);
-		base::Tweakable::TweakState _SelectionTweakState(const std::shared_ptr<base::GuiElement>& target) const;
+		// Selection helpers require _sceneMutex throughout hierarchy access.
+		void _SetSelectionMutedLocked(const std::vector<unsigned char>& path, bool muted);
+		base::Tweakable::TweakState _SelectionTweakStateLocked(const std::shared_ptr<base::GuiElement>& target) const;
 		void _AddStation(std::shared_ptr<Station> station, bool publishAudioStations = true);
 		// Pass a locked station list or a snapshot; remote updates can erase entries.
 		static utils::Position3d _StationCentre(const std::vector<std::shared_ptr<Station>>& stations);
