@@ -49,7 +49,7 @@ MidiModelParams::MidiModelParams()
 	  DrawSelectionRing(true),
 	  CenterPitch(60)
 {
-	ModelTextures = { "levels" };
+	ModelTextures = { "probe_chrome", "probe_pearl" };
 	ModelShaders = { "midi_note" };
 	Verts = MidiModel::BuildBaseVerts(MidiModel::BaseArcSegments);
 	Uvs = MidiModel::BuildBaseUvs(MidiModel::BaseArcSegments);
@@ -69,7 +69,7 @@ MidiModelParams::MidiModelParams(gui::GuiModelParams params)
 	  CenterPitch(60)
 {
 	if (ModelTextures.empty())
-		ModelTextures = { "levels" };
+		ModelTextures = { "probe_chrome", "probe_pearl" };
 	if (ModelShaders.empty())
 		ModelShaders = { "midi_note" };
 	if (Verts.empty())
@@ -124,6 +124,7 @@ MidiModel::~MidiModel()
 void MidiModel::Draw3d(DrawContext& ctx, unsigned int numInstances, base::DrawPass pass)
 {
 	ApplyPendingModelUpdate();
+	_geometryDraw = GeometryDraw::All;
 
 	auto& glCtx = dynamic_cast<GlDrawContext&>(ctx);
 	glCtx.PushMvp(glm::rotate(glm::mat4(1.0),
@@ -169,7 +170,8 @@ void MidiModel::Draw3d(DrawContext& ctx, unsigned int numInstances, base::DrawPa
 	default:
 		glCtx.SetUniform("LoopHover", _isPicking3d ? 1.0f : 0.0f);
 		glCtx.SetUniform("LoopSelected", _isSelected ? 1.0f : 0.0f);
-		glCtx.SetUniform("LoopPressed", _clickPressed ? 1.0f : 0.0f);
+		glCtx.SetUniform("LoopPressed", _clickPressed);
+		glCtx.SetUniform("LoopMuted", _muted ? 1.0f : 0.0f);
 		glCtx.SetUniform("DiscAlpha", _midiParams.DiscAlpha);
 		glCtx.SetUniform("RenderMode", 3);
 		break;
@@ -177,22 +179,33 @@ void MidiModel::Draw3d(DrawContext& ctx, unsigned int numInstances, base::DrawPa
 
 	if (base::PASS_SCENE == pass)
 	{
+		auto discProbe = GetTextureAt(1u).lock();
+		glActiveTexture(GL_TEXTURE1);
+		glBindTexture(GL_TEXTURE_2D, discProbe ? discProbe->GetId() : 0u);
+		glActiveTexture(GL_TEXTURE0);
+		glCtx.SetUniform("TextureSampler", 0u);
+		glCtx.SetUniform("DiscProbeSampler", 1u);
 		GLboolean prevDepthMask = GL_TRUE;
 		glGetBooleanv(GL_DEPTH_WRITEMASK, &prevDepthMask);
 
 		glDepthMask(GL_TRUE);
+		_geometryDraw = GeometryDraw::Notes;
 		GuiModel::Draw3d(glCtx, numInstances, pass);
 
 		// The morphed ring is the editor's solid backing plane: later scene
 		// geometry must not draw through it. Normal loop rings stay translucent.
 		glDepthMask(_editorActive ? GL_TRUE : GL_FALSE);
 		glCtx.SetUniform("RenderMode", 4);
+		_geometryDraw = GeometryDraw::Disc;
 		GuiModel::Draw3d(glCtx, numInstances, pass);
 
 		_DrawEditorGrid(glCtx);
 		_DrawAutomation(glCtx);
 
 		glDepthMask(prevDepthMask);
+		glActiveTexture(GL_TEXTURE1);
+		glBindTexture(GL_TEXTURE_2D, 0u);
+		glActiveTexture(GL_TEXTURE0);
 	}
 	else
 	{
@@ -457,12 +470,12 @@ void MidiModel::DrawMesh(GLuint shaderProgram, unsigned int drawInstances)
 	const auto geometryPass = glGetUniformLocation(shaderProgram, "GeometryPass");
 	// The ring uses only the curved sides. Notes retain the complete mesh,
 	// including their start and end faces.
-	if (_midiParams.DrawSelectionRing && drawInstances != 0u)
+	if (_geometryDraw != GeometryDraw::Notes && _midiParams.DrawSelectionRing && drawInstances != 0u)
 	{
 		glUniform1i(geometryPass, 1);
-		glDrawArraysInstanced(GL_TRIANGLES, 0, BaseArcSegments * 8u * 3u, 1u);
+		glDrawArraysInstanced(GL_TRIANGLES, 0, BaseArcSegments * 16u * 3u, 1u);
 	}
-	else if (!_midiParams.DrawSelectionRing && _editorActive && _editorMorph > 0.0f)
+	else if (_geometryDraw != GeometryDraw::Notes && !_midiParams.DrawSelectionRing && _editorActive && _editorMorph > 0.0f)
 	{
 		// Use the same ring mesh and shader as the first stream's backing, without
 		// adding a persistent instance or shifting note/hover/held identities.
@@ -482,14 +495,14 @@ void MidiModel::DrawMesh(GLuint shaderProgram, unsigned int drawInstances)
 			radius * _midiParams.DiscRadialThicknessFactor,
 			radius * _midiParams.DiscHeightFactor, 1.0f);
 		glUniform1i(geometryPass, 1);
-		glDrawArraysInstanced(GL_TRIANGLES, 0, BaseArcSegments * 8u * 3u, 1u);
+		glDrawArraysInstanced(GL_TRIANGLES, 0, BaseArcSegments * 16u * 3u, 1u);
 		glVertexAttrib4fv(TimePitchAttribute, previousTimePitch);
 		glVertexAttrib4fv(ShapeAttribute, previousShape);
 		if (timePitchEnabled) glEnableVertexAttribArray(TimePitchAttribute);
 		if (shapeEnabled) glEnableVertexAttribArray(ShapeAttribute);
 	}
 	glUniform1i(geometryPass, 2);
-	if (drawInstances > (_midiParams.DrawSelectionRing ? 1u : 0u))
+	if (_geometryDraw != GeometryDraw::Disc && drawInstances > (_midiParams.DrawSelectionRing ? 1u : 0u))
 	{
 		const auto copyLocation = glGetUniformLocation(shaderProgram, "EditorWrapCopy");
 		glUniform1f(copyLocation, 0.0f);
@@ -821,27 +834,36 @@ void MidiModel::_DrawAutomation(GlDrawContext& glCtx)
 std::vector<float> MidiModel::BuildBaseVerts(unsigned int segments)
 {
 	std::vector<float> verts;
-	verts.reserve((segments * 8u + 4u) * 9u);
+	if (segments == 0u)
+		return verts;
+	// One shared chamfered cross-section serves every instanced note and disc.
+	constexpr std::array<std::pair<float, float>, 8> profile = {{
+		{ 1.0f, -0.40f }, { 1.0f, 0.40f }, { 0.86f, 0.50f },
+		{ -0.86f, 0.50f }, { -1.0f, 0.40f }, { -1.0f, -0.40f },
+		{ -0.86f, -0.50f }, { 0.86f, -0.50f }
+	}};
+	verts.reserve((segments * profile.size() * 2u + profile.size() * 2u) * 9u);
 
 	for (auto segment = 0u; segment < segments; ++segment)
 	{
 		const auto x1 = static_cast<float>(segment) / static_cast<float>(segments);
 		const auto x2 = static_cast<float>(segment + 1u) / static_cast<float>(segments);
-
-		AddTri(verts, x1, -0.5f,  1.0f, x2, -0.5f,  1.0f, x1,  0.5f,  1.0f);
-		AddTri(verts, x1,  0.5f,  1.0f, x2, -0.5f,  1.0f, x2,  0.5f,  1.0f);
-		AddTri(verts, x1, -0.5f, -1.0f, x1,  0.5f, -1.0f, x2, -0.5f, -1.0f);
-		AddTri(verts, x1,  0.5f, -1.0f, x2,  0.5f, -1.0f, x2, -0.5f, -1.0f);
-		AddTri(verts, x1,  0.5f, -1.0f, x1,  0.5f,  1.0f, x2,  0.5f, -1.0f);
-		AddTri(verts, x1,  0.5f,  1.0f, x2,  0.5f,  1.0f, x2,  0.5f, -1.0f);
-		AddTri(verts, x1, -0.5f, -1.0f, x2, -0.5f, -1.0f, x1, -0.5f,  1.0f);
-		AddTri(verts, x1, -0.5f,  1.0f, x2, -0.5f, -1.0f, x2, -0.5f,  1.0f);
+		for (auto edge = 0u; edge < profile.size(); ++edge)
+		{
+			const auto& a = profile[edge];
+			const auto& b = profile[(edge + 1u) % profile.size()];
+			AddTri(verts, x1, a.second, a.first, x2, a.second, a.first, x1, b.second, b.first);
+			AddTri(verts, x1, b.second, b.first, x2, a.second, a.first, x2, b.second, b.first);
+		}
 	}
 
-	AddTri(verts, 0.0f, -0.5f, -1.0f,  0.0f, -0.5f,  1.0f,  0.0f,  0.5f, -1.0f);
-	AddTri(verts, 0.0f, -0.5f,  1.0f,  0.0f,  0.5f,  1.0f,  0.0f,  0.5f, -1.0f);
-	AddTri(verts, 1.0f, -0.5f, -1.0f,  1.0f,  0.5f, -1.0f,  1.0f,  0.5f,  1.0f);
-	AddTri(verts, 1.0f, -0.5f, -1.0f,  1.0f,  0.5f,  1.0f,  1.0f, -0.5f,  1.0f);
+	for (auto edge = 0u; edge < profile.size(); ++edge)
+	{
+		const auto& a = profile[edge];
+		const auto& b = profile[(edge + 1u) % profile.size()];
+		AddTri(verts, 0.0f, 0.0f, 0.0f, 0.0f, a.second, a.first, 0.0f, b.second, b.first);
+		AddTri(verts, 1.0f, 0.0f, 0.0f, 1.0f, b.second, b.first, 1.0f, a.second, a.first);
+	}
 
 	return verts;
 }
@@ -852,26 +874,26 @@ std::vector<float> MidiModel::BuildBaseUvs(unsigned int segments)
 	if (0u == segments)
 		return uvs;
 
-	uvs.reserve((segments * 8u + 4u) * 6u);
+	constexpr auto profileEdges = 8u;
+	uvs.reserve((segments * profileEdges * 2u + profileEdges * 2u) * 6u);
 
 	for (auto segment = 0u; segment < segments; ++segment)
 	{
 		const auto x1 = static_cast<float>(segment) / static_cast<float>(segments);
 		const auto x2 = static_cast<float>(segment + 1u) / static_cast<float>(segments);
-		for (auto face = 0u; face < 4u; ++face)
+		for (auto face = 0u; face < profileEdges; ++face)
 		{
 			AddUvTri(uvs, x1, 0.0f, x2, 0.0f, x1, 1.0f);
 			AddUvTri(uvs, x1, 1.0f, x2, 0.0f, x2, 1.0f);
 		}
 	}
 
-	// Mark arc end-cap triangles with UV.y = 2.0 so the fragment shader can
-	// discard them for full-circle disc instances (both caps land at the same
-	// world-space angle, leaving a visible seam fin if not discarded).
-	AddUvTri(uvs, 0.0f, 2.0f,  0.0f, 2.0f,  0.0f, 2.0f);
-	AddUvTri(uvs, 0.0f, 2.0f,  0.0f, 2.0f,  0.0f, 2.0f);
-	AddUvTri(uvs, 1.0f, 2.0f,  1.0f, 2.0f,  1.0f, 2.0f);
-	AddUvTri(uvs, 1.0f, 2.0f,  1.0f, 2.0f,  1.0f, 2.0f);
+	// DrawMesh omits these coincident end caps for full-circle discs.
+	for (auto edge = 0u; edge < profileEdges; ++edge)
+	{
+		AddUvTri(uvs, 0.0f, 2.0f, 0.0f, 2.0f, 0.0f, 2.0f);
+		AddUvTri(uvs, 1.0f, 2.0f, 1.0f, 2.0f, 1.0f, 2.0f);
+	}
 
 	return uvs;
 }

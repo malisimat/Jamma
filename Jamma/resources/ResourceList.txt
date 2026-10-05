@@ -1,14 +1,17 @@
 1 grid
 1 levels
+1 probe_chrome
+1 probe_pearl
+1 probe_amber
 2 skybox MVP
 4 sky
 2 texture MVP TextureSampler
 2 texture_tinted MVP TextureSampler TintColor
 2 font MVP TextureSampler
 2 texture_shaded MVP LoopState LoopHover SceneDim
-2 waveform MVP LoopState LoopHover LoopSelected LoopPressed Highlight HighlightPass TextureSampler WaveformSampler WaveformRadius WaveformHeightScale WaveformMinHeight WaveformColorMultiplier WaveformColorScale WaveformUnitMeshRadius EditorMorph EditorPlayFrac SceneDim EditorActive EditorTime ProbeSampler ProbeStrength EditorProbeEye
+2 waveform MVP LoopState LoopHover LoopSelected LoopPressed LoopMuted Highlight HighlightPass TextureSampler WaveformSampler WaveformRadius WaveformHeightScale WaveformMinHeight WaveformColorMultiplier WaveformColorScale WaveformUnitMeshRadius EditorMorph EditorPlayFrac SelectionActive SceneDim EditorActive EditorTime ProbeSampler ProbeStrength EditorProbeEye ModelView ProbeView MaterialProbeSampler
 2 vu MVP DX DY NumInstances InstanceOffset SceneDim
-2 midi_note MVP ObjectId Highlight LoopHover LoopSelected LoopPressed DiscAlpha RenderMode EditorMorph EditorPlayFrac EditorBottomPitch EditorVisibleRows EditorHoverU EditorHoverPitch EditorTargetStart EditorTargetEnd EditorTargetInstance EditorHeldInstance EditorPreviewVelocity SceneDim EditorGridRadius EditorActive EditorTime EditorTimeOrigin ProbeSampler ProbeStrength EditorProbeEye
+2 midi_note MVP ObjectId Highlight LoopHover LoopSelected LoopPressed LoopMuted DiscAlpha RenderMode EditorMorph EditorPlayFrac EditorBottomPitch EditorVisibleRows EditorHoverU EditorHoverPitch EditorTargetStart EditorTargetEnd EditorTargetInstance EditorHeldInstance EditorPreviewVelocity SelectionActive SceneDim EditorGridRadius EditorActive EditorTime EditorTimeOrigin ProbeSampler ProbeStrength EditorProbeEye ModelView TextureSampler DiscProbeSampler
 2 midi_grid MVP EditorGridRadius EditorMorph SceneDim EditorPreviewFirstVertex
 2 automation MVP SceneDim EditorMorph
 2 picker MVP ObjectId WaveformRadius WaveformUnitMeshRadius EditorMorph
@@ -17,9 +20,9 @@
 2 quantisation MVP Highlight OverlayAlpha SceneDim
 2 quantisation_division MVP Highlight OverlayAlpha SceneDim
 2 ctrl_handle MVP Color
-2 station MVP ObjectId Highlight HighlightPass StationHover StationPressed StationLevel SceneDim
+2 station MVP ObjectId Highlight HighlightPass StationHover StationPressed StationMuted StationLevel SelectionActive SceneDim ModelView MaterialProbeSampler StationStateColor
 2 station_picker MVP ObjectId StationLevel
-2 station_ring MVP Highlight HighlightPass StationHover StationPressed StationLevel StationStateColor StationVisualState RingCapY RingDirection RingScale SceneDim
+2 station_ring MVP Highlight HighlightPass StationHover StationPressed StationMuted StationLevel StationStateColor StationVisualState RingCapY RingDirection RingScale SelectionActive SceneDim ModelView MaterialProbeSampler
 2 station_ring_picker MVP ObjectId StationLevel StationVisualState RingCapY RingDirection RingScale
 2 white MVP Highlight
 2 blur

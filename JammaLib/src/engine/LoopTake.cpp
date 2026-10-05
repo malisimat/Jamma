@@ -408,6 +408,8 @@ void LoopTake::Draw3d(DrawContext& ctx,
 	}
 
 	_UpdateMidiModelRotation();
+	for (const auto& loop : _midiLoops)
+		if (loop && loop->Model()) loop->Model()->SetMuted(IsMuted());
 	base::GuiElement::Draw3d(ctx, numInstances, pass);
 }
 
@@ -2613,7 +2615,7 @@ bool LoopTake::RestoreMidiFromExport(const MidiExportState& state)
 		modelParams.Size = { 12, 14 };
 		modelParams.ModelScale = 1.0f;
 		modelParams.DrawSelectionRing = restoredLoops.empty();
-		modelParams.ModelTextures = { "levels" };
+		modelParams.ModelTextures = { "probe_chrome", "probe_pearl" };
 		auto model = std::make_shared<graphics::MidiModel>(modelParams);
 		loop->AttachModel(model);
 		loop->QueueModelUpdateFromEvents(static_cast<std::uint32_t>(state.LoopLengthSamps), true);

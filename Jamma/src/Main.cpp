@@ -795,7 +795,7 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 	{
 		if (!consoleBroker->Start(companionPath, consoleCommands,
 			scene.value()->NinjamConnected() ? "NINJAM connected | last: Ready"
-				: "NINJAM disconnected | last: Ready"))
+				: "NINJAM disconnected | last: Ready", false))
 			std::cerr << "[CONSOLE] Could not start companion beside Jamma.exe.\n";
 	}
 

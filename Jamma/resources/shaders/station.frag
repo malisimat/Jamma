@@ -1,6 +1,7 @@
 #version 330 core
 
 in vec3 Normal;
+in vec3 ProbeNormal;
 in vec2 Uv;
 in vec3 WorldPos;
 flat in float StationLevelOut;
@@ -11,11 +12,22 @@ uniform float Highlight;
 uniform float HighlightPass;
 uniform float StationHover;
 uniform float StationPressed;
+uniform float StationMuted;
 uniform vec3 StationStateColor;
 uniform float SceneDim;
+uniform float SelectionActive;
+uniform sampler2D MaterialProbeSampler;
 
 // uv.x = radial fraction on top/bevel, vertical fraction on side (0=bottom,1=top)
-// uv.y = part kind:  0=deck-top, 1=bevel, 2=side
+// uv.y = part kind:  0=deck-top, 1=bevel, 2=side, 3=rib, 4=bottom
+// Keep the normal palette when selection is empty; retain a little hue otherwise.
+vec3 selectionColour(vec3 colour, float selected)
+{
+    float dull = clamp(SelectionActive, 0.0, 1.0) * (1.0 - clamp(selected, 0.0, 1.0));
+    float luminance = dot(colour, vec3(0.2126, 0.7152, 0.0722));
+    return mix(colour, mix(vec3(luminance), colour, 0.25) * 0.72, dull);
+}
+
 void main()
 {
 	if (HighlightPass > 0.5)
@@ -40,7 +52,7 @@ void main()
 	else if (partKind > 0.5) base = bevelColour;
 
 	// -- side-wall level gradient bands --
-	if (partKind > 1.5)
+	if (partKind > 1.5 && partKind < 2.5)
 	{
 		float heightFrac = clamp(radialFrac, 0.0, 1.0);
 		vec3 lowHue = mix(vec3(0.20, 0.90, 0.22), vec3(0.98, 0.92, 0.18), heightFrac);
@@ -57,15 +69,35 @@ void main()
 	vec3 lightDir  = normalize(vec3(0.3, 1.0, 0.4));
 	float diffuse  = clamp(dot(normalize(Normal), lightDir), 0.0, 1.0);
 	base *= (0.90 + 0.35 * diffuse);
+	if (partKind < 1.5 || partKind > 3.5)
+	{
+		vec3 probe = texture(MaterialProbeSampler, clamp(normalize(ProbeNormal).xy * 0.49 + 0.5, 0.01, 0.99)).rgb;
+		// Reflected light is additive: dark probe regions leave the
+		// diffuse material intact, and highlights brighten neutral caps.
+		base *= 0.34;
+		base += vec3(0.24, 0.27, 0.32) * probe;
+		// Leave headroom for selected cyan and the additional hover lift;
+		// bright reflections must not turn both states solid white.
+		float materialCeiling = mix(0.40, 0.13, clamp(Highlight, 0.0, 1.0));
+		base = min(base, vec3(materialCeiling));
+	}
 
 	// Keep the diffuse and level variation visible beneath the stronger state light.
 	float hi = clamp(Highlight, 0.0, 1.0);
 	float hover = clamp(StationHover, 0.0, 1.0);
 	base = min(base * (1.0 + 1.65 * hi) + vec3(0.08, 0.27, 0.32) * hi,
 		vec3(1.0));
+	base = selectionColour(base, hi);
 	base = min(base * (1.0 + (0.70 - 0.35 * hi) * hover)
 		+ vec3(0.14 - 0.07 * hi) * hover, vec3(1.0));
-	base = mix(base, vec3(0.90, 0.40, 0.13),
+    if (StationMuted > 0.5)
+    {
+        float luminance = clamp(0.60 * dot(base, vec3(0.2126, 0.7152, 0.0722))
+            + 0.16 * hi + 0.24 * hover, 0.0, 1.0);
+        base = vec3(0.07, 0.10, 0.15) + vec3(0.18, 0.23, 0.30) * luminance;
+    }
+    vec3 pressColour = StationPressed > 1.5 ? vec3(0.12, 0.42, 0.72) : vec3(0.90, 0.40, 0.13);
+	base = mix(base, pressColour,
 		0.68 * clamp(StationPressed, 0.0, 1.0));
 
 	ColorOUT = vec4(base * SceneDim, 1.0);

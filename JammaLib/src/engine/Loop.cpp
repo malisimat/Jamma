@@ -74,7 +74,7 @@ Loop::Loop(LoopParams params,
 	LoopModelParams modelParams;
 	modelParams.Size = { 12, 14 };
 	modelParams.ModelScale = 1.0f;
-	modelParams.ModelTextures = { "levels" };
+	modelParams.ModelTextures = { "levels", "probe_pearl" };
 	modelParams.ModelShaders = { "waveform", "picker", "waveform"};
 	_model = std::make_shared<LoopModel>(modelParams);
 
@@ -195,6 +195,7 @@ void Loop::Draw3d(DrawContext& ctx,
 	auto frac = loopLength == 0 ? 0.0 : 1.0 - std::max(0.0, std::min(1.0, ((double)(index % loopLength)) / ((double)loopLength)));
 	_model->SetLoopIndexFrac(frac);
 	_model->SetLoopState(_GetLoopModelState(pass, playState, IsMuted()));
+	_model->SetMuted(IsMuted());
 
 	_modelScreenPos = glCtx.ProjectScreen(pos);
 	glCtx.PushMvp(glm::translate(glm::mat4(1.0), glm::vec3(pos.X, pos.Y, pos.Z)));

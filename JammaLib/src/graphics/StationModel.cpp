@@ -237,9 +237,9 @@ StationModel::BuildDeckBottom(unsigned int numSides, float radius,
 
 		// Winding: center, p0, p1 gives -Y normal.
 		PushTri(verts, uvs,
-			center, uCenter, UV_SIDE,
-			p0, 1.0f, UV_SIDE,
-			p1, 1.0f, UV_SIDE);
+			center, uCenter, UV_BOTTOM,
+			p0, 1.0f, UV_BOTTOM,
+			p1, 1.0f, UV_BOTTOM);
 	}
 
 	return { verts, uvs };
@@ -433,6 +433,7 @@ StationModel::StationModel() :
 	_ringsNeedInitialising(true)
 {
 	_modelParams.ModelShaders = { "station", "station_picker", "station_ring", "station_ring_picker" };
+	_modelParams.ModelTextures = { "probe_amber" };
 	SetVisible(false);
 
 	auto [verts, uvs] = BuildAllGeometry(DefaultNumSides, DeckRadius, DefaultNumRibs);
@@ -609,6 +610,7 @@ void StationModel::Draw3d(DrawContext& ctx,
 	if (!shader || 0u == _vertexArray || 0u == _numTris)
 		return;
 
+	glCtx.SetUniform("StationMuted", _muted ? 1.0f : 0.0f);
 	const auto stationLevel = std::clamp(_stationLevel, 0.0f, 1.0f);
 	const glm::vec3 stationStateColors[] = {
 		{ 0.24f, 0.68f, 0.98f },
@@ -637,24 +639,31 @@ void StationModel::Draw3d(DrawContext& ctx,
 		break;
 	}
 	case base::PASS_HIGHLIGHT:
-			glCtx.SetUniform("Highlight", _stationSelected ? 1.0f : 0.0f);
-			glCtx.SetUniform("HighlightPass", 1.0f);
+		glCtx.SetUniform("Highlight", _stationSelected ? 1.0f : 0.0f);
+		glCtx.SetUniform("HighlightPass", 1.0f);
 		glCtx.SetUniform("StationHover", _stationPicking ? 1.0f : 0.0f);
-		glCtx.SetUniform("StationPressed", _clickPressed ? 1.0f : 0.0f);
-			glCtx.SetUniform("StationLevel", stationLevel);
-			glCtx.SetUniform("StationStateColor", stationStateColors[stationStateIndex]);
-			break;
-		case base::PASS_SCENE:
-		default:
-			glCtx.SetUniform("Highlight", _stationSelected ? 1.0f : 0.0f);
-			glCtx.SetUniform("HighlightPass", 0.0f);
-			glCtx.SetUniform("StationHover", _stationPicking ? 1.0f : 0.0f);
-			glCtx.SetUniform("StationPressed", _clickPressed ? 1.0f : 0.0f);
+		glCtx.SetUniform("StationPressed", _clickPressed);
+		glCtx.SetUniform("StationLevel", stationLevel);
+		glCtx.SetUniform("StationStateColor", stationStateColors[stationStateIndex]);
+		break;
+	case base::PASS_SCENE:
+	default:
+		glCtx.SetUniform("Highlight", _stationSelected ? 1.0f : 0.0f);
+		glCtx.SetUniform("HighlightPass", 0.0f);
+		glCtx.SetUniform("StationHover", _stationPicking ? 1.0f : 0.0f);
+		glCtx.SetUniform("StationPressed", _clickPressed);
 		glCtx.SetUniform("StationLevel", stationLevel);
 		glCtx.SetUniform("StationStateColor", stationStateColors[stationStateIndex]);
 		break;
 	}
 
+	if (pass == base::PASS_SCENE || pass == base::PASS_HIGHLIGHT)
+	{
+		glCtx.SetUniform("MaterialProbeSampler", 0u);
+		auto probeTexture = GetTexture().lock();
+		glActiveTexture(GL_TEXTURE0);
+		glBindTexture(GL_TEXTURE_2D, probeTexture ? probeTexture->GetId() : 0u);
+	}
 	glUseProgram(shader->GetId());
 	shader->SetUniforms(glCtx);
 
@@ -684,17 +693,21 @@ void StationModel::Draw3d(DrawContext& ctx,
 		_DrawRingOccluder(_ringOccluder);
 		glBindVertexArray(0);
 		glUseProgram(0);
+		glBindTexture(GL_TEXTURE_2D, 0u);
 		return;
 	}
 
 	auto ringShader = GetShaderAt(2u).lock();
 	if (!ringShader)
+	{
+		glBindTexture(GL_TEXTURE_2D, 0u);
 		return;
+	}
 
 	glCtx.SetUniform("Highlight", _stationSelected ? 1.0f : 0.0f);
 	glCtx.SetUniform("HighlightPass", pass == base::PASS_HIGHLIGHT ? 1.0f : 0.0f);
 	glCtx.SetUniform("StationHover", _stationPicking ? 1.0f : 0.0f);
-	glCtx.SetUniform("StationPressed", _clickPressed ? 1.0f : 0.0f);
+	glCtx.SetUniform("StationPressed", _clickPressed);
 	glCtx.SetUniform("StationLevel", stationLevel);
 	glCtx.SetUniform("StationStateColor", stationStateColors[stationStateIndex]);
 	glCtx.SetUniform("StationVisualState", static_cast<int>(stationStateIndex));
@@ -713,4 +726,5 @@ void StationModel::Draw3d(DrawContext& ctx,
 	_DrawRingOccluder(_ringOccluder);
 	glBindVertexArray(0);
 	glUseProgram(0);
+	glBindTexture(GL_TEXTURE_2D, 0u);
 }

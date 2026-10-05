@@ -2330,6 +2330,99 @@ TEST(Scene, LoopGridEditorCanSelectMidiLoopAtEverySelectionDepthAndOpenWithE) {
 	EXPECT_EQ(take->GetMidiLoops().front(), scene.LoopGridEditorMidiLoop());
 }
 
+TEST(Scene, MiddleMutePaintAppliesImmediatelySuppressesHoverAndPreservesOtherTakes) {
+	SceneParams params{ base::DrawableParams(), base::MoveableParams(),
+		base::SizeableParams({ 1400u, 900u }) };
+	TestScene scene(params, {});
+	auto station = MakeTestStation("mute-paint");
+	scene.AddStationForTest(station);
+	auto midiTake = station->AddTake();
+	midiTake->Record({}, "station", { 0u, 1u }, { "Keys" });
+	auto audioTake = station->AddTake();
+	audioTake->Record({ 0u }, "station", {}, {});
+	auto untouched = station->AddTake();
+	untouched->Record({}, "station", { 0u }, { "Other" });
+	untouched->Mute();
+	station->CommitChanges();
+	scene.SetSelectionDepthForTest(Scene::VIEW_LOOP);
+	const auto midiModel = midiTake->GetMidiLoops().front()->Model();
+	const auto audioLoop = audioTake->GetLoops().front();
+	const auto pickPath = [](const std::shared_ptr<base::GuiElement>& item) {
+		std::vector<unsigned char> path;
+		for (const auto index : item->GlobalId()) path.push_back(static_cast<unsigned char>(index + 1u));
+		return path;
+	};
+	const auto midiPath = pickPath(midiModel);
+	const auto audioPath = pickPath(audioLoop);
+	const auto down = MakeSceneTouch(TouchAction::TOUCH_DOWN, { 1, 1 }, 1u, 2u);
+	const auto up = MakeSceneTouch(TouchAction::TOUCH_UP, { 6, 1 }, 1u, 0u);
+
+	scene.SetHover3d(midiPath, base::Action::MODIFIER_NONE);
+	scene.OnAction(down);
+	EXPECT_FALSE(midiTake->IsMuted()); // Preview only until drag/release.
+	scene.OnAction(MakeSceneTouchMove({ 6, 1 }, 2u));
+	EXPECT_TRUE(midiTake->IsMuted());
+	EXPECT_FALSE(midiModel->IsPicking3d());
+	EXPECT_FALSE(midiTake->GetMidiLoops()[1]->Model()->IsPicking3d());
+	scene.SetHover3d(audioPath, base::Action::MODIFIER_NONE);
+	EXPECT_TRUE(audioLoop->IsMuted());
+	EXPECT_FALSE(audioLoop->IsPicking3d());
+	scene.SetHover3d(midiPath, base::Action::MODIFIER_NONE);
+	EXPECT_TRUE(midiTake->IsMuted()); // Revisiting never toggles a painted item.
+	scene.OnAction(up);
+	EXPECT_TRUE(midiModel->IsPicking3d());
+	EXPECT_TRUE(midiTake->GetMidiLoops()[1]->Model()->IsPicking3d());
+	EXPECT_TRUE(untouched->IsMuted());
+
+	// The cached MIDI target must resolve its take's muted state for the next stroke.
+	scene.OnAction(down);
+	EXPECT_TRUE(midiTake->IsMuted());
+	scene.OnAction(MakeSceneTouchMove({ 6, 1 }, 2u));
+	EXPECT_FALSE(midiTake->IsMuted());
+	scene.SetHover3d(audioPath, base::Action::MODIFIER_NONE);
+	EXPECT_FALSE(audioLoop->IsMuted());
+	EXPECT_FALSE(audioLoop->IsPicking3d());
+	scene.OnAction(up);
+	EXPECT_TRUE(audioLoop->IsPicking3d());
+	EXPECT_TRUE(untouched->IsMuted());
+
+	// A plain click commits the pressed target even if release occurs elsewhere.
+	scene.SetHover3d(midiPath, base::Action::MODIFIER_NONE);
+	scene.OnAction(down);
+	scene.SetHover3d(audioPath, base::Action::MODIFIER_NONE);
+	scene.OnAction(up);
+	EXPECT_TRUE(midiTake->IsMuted());
+	EXPECT_FALSE(audioLoop->IsMuted());
+	EXPECT_TRUE(untouched->IsMuted());
+}
+
+TEST(Scene, StationMuteClickUsesAggregateTakeState) {
+	SceneParams params{ base::DrawableParams(), base::MoveableParams(),
+		base::SizeableParams({ 1400u, 900u }) };
+	TestScene scene(params, {});
+	auto station = MakeTestStation("mute-station");
+	scene.AddStationForTest(station);
+	auto first = station->AddTake();
+	first->Record({}, "station", { 0u }, { "Keys" });
+	auto second = station->AddTake();
+	second->Record({ 0u }, "station", {}, {});
+	station->CommitChanges();
+	scene.SetSelectionDepthForTest(Scene::VIEW_STATION);
+	scene.SetHover3d({ 1u }, base::Action::MODIFIER_NONE);
+	const auto click = [&scene]() {
+		scene.OnAction(MakeSceneTouch(TouchAction::TOUCH_DOWN, { 1, 1 }, 1u, 2u));
+		scene.OnAction(MakeSceneTouch(TouchAction::TOUCH_UP, { 1, 1 }, 1u, 0u));
+	};
+	click();
+	EXPECT_TRUE(first->IsMuted());
+	EXPECT_TRUE(second->IsMuted());
+	EXPECT_TRUE(station->AllTakesMuted());
+	click();
+	EXPECT_FALSE(first->IsMuted());
+	EXPECT_FALSE(second->IsMuted());
+	EXPECT_FALSE(station->AllTakesMuted());
+}
+
 TEST(Scene, MultiStreamMidiSelectionCountsAsOneEditorCandidate) {
 	SceneParams sceneParams{ base::DrawableParams(), base::MoveableParams(),
 		base::SizeableParams({ 1400u, 900u }) };

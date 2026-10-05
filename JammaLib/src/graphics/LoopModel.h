@@ -61,7 +61,9 @@ namespace engine
 		double LoopIndexFrac() const;
 		void SetLoopIndexFrac(double frac);
 		void SetLoopState(LoopModelState state);
-		void SetClickPressed(bool pressed) noexcept { _clickPressed = pressed; }
+		// Shader press state: 0 = released/painting, 1 = left click, 2 = mute click.
+		void SetClickPressed(bool pressed, bool mute = false) noexcept { _clickPressed = pressed ? (mute ? 2.0f : 1.0f) : 0.0f; }
+		void SetMuted(bool muted) noexcept { _muted = muted; }
 		void SetWaveformColorScale(float scale) noexcept;
 		void SetEditorMorph(float morph) noexcept { _editorMorph = std::clamp(morph, 0.0f, 1.0f); }
 		void SetEditorActive(bool active) noexcept { _editorActive = active; }
@@ -145,7 +147,8 @@ namespace engine
 		float _waveformColorScale;
 		float _editorMorph = 0.0f;
 		bool _editorActive = false;
-		bool _clickPressed = false;
+		float _clickPressed = 0.0f;
+		bool _muted = false;
 		std::mutex _waveformMutex;
 	};
 }

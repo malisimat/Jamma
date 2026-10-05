@@ -37,6 +37,7 @@ namespace graphics
 		ImageFullscreen(ImageFullscreen&& other) :
 			base::Drawable(other._drawParams),
 			_texture(std::move(other._texture)),
+			_blurDirection(other._blurDirection),
 			_vertexArray(std::move(other._vertexArray)),
 			_shaderName(std::move(other._shaderName)),
 			_shader(std::move(other._shader))
@@ -52,6 +53,7 @@ namespace graphics
 			{
 				ReleaseResources();
 				std::swap(_texture, other._texture);
+				std::swap(_blurDirection, other._blurDirection);
 				std::swap(_vertexArray, other._vertexArray);
 				std::swap(_shaderName, other._shaderName),
 				_shader.swap(other._shader);
@@ -65,6 +67,7 @@ namespace graphics
 		virtual void Draw3d(base::DrawContext& ctx, unsigned int numInstances, base::DrawPass pass) override;
 
 		void SetTexture(unsigned int texture);
+		void SetBlurDirection(float x, float y) { _blurDirection = { x, y }; }
 
 	protected:
 		virtual void _InitResources(resources::ResourceLib& resourceLib, bool forceInit) override;
@@ -77,6 +80,7 @@ namespace graphics
 		const int VertexCount = 3;
 
 		unsigned int _texture;
+		std::array<float, 2> _blurDirection{ 1.0f, 0.0f };
 		GLuint _vertexArray;
 		std::string _shaderName;
 		std::weak_ptr<resources::ShaderResource> _shader;

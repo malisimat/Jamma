@@ -76,7 +76,9 @@ namespace graphics
 		void SetLoopIndexFrac(double frac) noexcept;
 		void SetEditorMorph(float morph) noexcept { _editorMorph = std::clamp(morph, 0.0f, 1.0f); }
 		void SetEditorActive(bool active) noexcept { _editorActive = active; }
-		void SetClickPressed(bool pressed) noexcept { _clickPressed = pressed; }
+		// Shader press state: 0 = released/painting, 1 = left click, 2 = mute click.
+		void SetClickPressed(bool pressed, bool mute = false) noexcept { _clickPressed = pressed ? (mute ? 2.0f : 1.0f) : 0.0f; }
+		void SetMuted(bool muted) noexcept { _muted = muted; }
 		void SetEditorPlayFrac(float frac) noexcept { _editorPlayFrac = frac; }
 		void SetEditorPitchRange(int bottomPitch, int visibleRows) noexcept;
 		int EditorBottomPitch() const noexcept { return _editorBottomPitch; }
@@ -141,11 +143,15 @@ namespace graphics
 		void _DrawEditorGrid(GlDrawContext& glCtx);
 
 	private:
+		enum class GeometryDraw { All, Notes, Disc };
+		// Draw3d and DrawMesh use this only on the render thread; no publication needed.
+		GeometryDraw _geometryDraw = GeometryDraw::All;
 		MidiModelParams _midiParams;
 		double _loopIndexFrac;
 		float _editorMorph = 0.0f;
 		bool _editorActive = false;
-		bool _clickPressed = false;
+		float _clickPressed = 0.0f;
+		bool _muted = false;
 		float _editorPlayFrac = 0.0f;
 		int _editorBottomPitch = 24;
 		int _editorVisibleRows = 24;

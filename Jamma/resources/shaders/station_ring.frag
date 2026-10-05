@@ -1,6 +1,7 @@
 #version 330 core
 
 in vec3 Normal;
+in vec3 ProbeNormal;
 in vec2 Uv;
 in vec3 WorldPos;
 flat in float StationLevelOut;
@@ -11,9 +12,27 @@ uniform float Highlight;
 uniform float HighlightPass;
 uniform float StationHover;
 uniform float StationPressed;
+uniform float StationMuted;
 uniform vec3 StationStateColor;
 uniform float RingScale;
 uniform float SceneDim;
+uniform float SelectionActive;
+uniform sampler2D MaterialProbeSampler;
+
+// Keep the normal palette when selection is empty; retain a little hue otherwise.
+vec3 selectionColour(vec3 colour, float selected)
+{
+    float dull = clamp(SelectionActive, 0.0, 1.0) * (1.0 - clamp(selected, 0.0, 1.0));
+    float luminance = dot(colour, vec3(0.2126, 0.7152, 0.0722));
+    return mix(colour, mix(vec3(luminance), colour, 0.25) * 0.72, dull);
+}
+
+vec3 muteColour(vec3 colour)
+{
+    float luminance = clamp(0.60 * dot(colour, vec3(0.2126, 0.7152, 0.0722))
+        + 0.16 * clamp(Highlight, 0.0, 1.0) + 0.24 * clamp(StationHover, 0.0, 1.0), 0.0, 1.0);
+    return vec3(0.07, 0.10, 0.15) + vec3(0.18, 0.23, 0.30) * luminance;
+}
 
 void main()
 {
@@ -45,18 +64,28 @@ void main()
         float hovered = clamp(StationHover, 0.0, 1.0);
         colour = min(colour * (1.0 + 1.20 * selected)
             + vec3(0.12, 0.29, 0.33) * selected, vec3(1.0));
+        colour = selectionColour(colour, selected);
         colour = min(colour * (1.0 + (0.70 - 0.38 * selected) * hovered)
             + vec3(0.13 - 0.07 * selected) * hovered, vec3(1.0));
-        colour = mix(colour, vec3(1.0, 0.42, 0.11),
+        if (StationMuted > 0.5) colour = muteColour(colour);
+        vec3 pressColour = StationPressed > 1.5 ? vec3(0.12, 0.42, 0.72) : vec3(1.0, 0.42, 0.11);
+        colour = mix(colour, pressColour,
             0.72 * clamp(StationPressed, 0.0, 1.0));
         ColorOUT = vec4(colour * SceneDim, 1.0);
         return;
     }
 
+    // Keep the dark diffuse material and add the same reflection response
+    // as the narrow end caps. Black probe pixels contribute no light.
     vec3 charcoal = vec3(0.10, 0.12, 0.14) * (0.58 + 0.40 * diffuse);
+    vec3 probe = texture(MaterialProbeSampler, clamp(normalize(ProbeNormal).xy * 0.49 + 0.5, 0.01, 0.99)).rgb;
+    charcoal += vec3(0.24, 0.27, 0.32) * probe;
     charcoal += vec3(0.09, 0.30, 0.34) * clamp(Highlight, 0.0, 1.0);
+    charcoal = selectionColour(charcoal, Highlight);
     charcoal += vec3(0.16) * clamp(StationHover, 0.0, 1.0);
-    charcoal = mix(charcoal, vec3(0.50, 0.21, 0.07),
+    if (StationMuted > 0.5) charcoal = muteColour(charcoal);
+    vec3 pressColour = StationPressed > 1.5 ? vec3(0.12, 0.42, 0.72) : vec3(0.50, 0.21, 0.07);
+    charcoal = mix(charcoal, pressColour,
         0.65 * clamp(StationPressed, 0.0, 1.0));
     ColorOUT = vec4(charcoal * SceneDim, 1.0);
 }

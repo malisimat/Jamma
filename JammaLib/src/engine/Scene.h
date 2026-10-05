@@ -115,6 +115,8 @@ namespace engine
 		
 		virtual void Draw(base::DrawContext& ctx) override;
 		virtual void Draw3d(base::DrawContext& ctx, unsigned int numInstances, base::DrawPass pass) override;
+		void DrawBackground(base::DrawContext& ctx);
+		bool HasSelection() const;
 		void UpdateCamera();
 
 		virtual void SetSize(utils::Size2d size) override
@@ -277,6 +279,9 @@ namespace engine
 		void _InitSize();
 		void _UpdateHudStationAnchors();
 		void _UpdateSelection(actions::ActionResultType res);
+		// Selection helpers require _sceneMutex throughout hierarchy access.
+		void _SetSelectionMutedLocked(const std::vector<unsigned char>& path, bool muted);
+		base::Tweakable::TweakState _SelectionTweakStateLocked(const std::shared_ptr<base::GuiElement>& target) const;
 		void _AddStation(std::shared_ptr<Station> station, bool publishAudioStations = true);
 		// Pass a locked station list or a snapshot; remote updates can erase entries.
 		static utils::Position3d _StationCentre(const std::vector<std::shared_ptr<Station>>& stations);
@@ -300,6 +305,7 @@ namespace engine
 		void _ConsumeTriggerOutcomes();
 		void _PublishAudioStations();
 		std::shared_ptr<base::GuiElement> _ChildFromPath(std::vector<unsigned char> path);
+		std::shared_ptr<base::GuiElement> _ChildFromPathLocked(const std::vector<unsigned char>& path);
 		void _UpdateSelectDepth(unsigned int depth);
 		void _UpdateRemoteStationsFromSnapshot(const ninjam::NinjamRemoteSnapshot& snapshot);
 		engine::QuantisationPolicy _QuantisationPolicy() const;
@@ -326,7 +332,7 @@ namespace engine
 		bool _TrySetMasterFromHover(bool confirm);
 		void _UpdateStationQuantisation(std::shared_ptr<base::GuiElement> candidate, base::SelectDepth depth, bool confirmCandidate);
 		void _ClearStationQuantisation();
-		bool _HasQuantisationSelection() const;
+		bool _HasSelection() const;
 		bool _HasQuantisationHover() const;
 		bool _IsMidiPhaseDragModifier(base::Action::Modifiers modifiers) const noexcept;
 		void _HandleRemoteTempoSnapshot(const ninjam::NinjamRemoteSnapshot& snapshot,

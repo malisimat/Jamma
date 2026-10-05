@@ -81,12 +81,12 @@ TEST(MidiGridVisual, AppliedReplacementInvalidatesHeldIdentityWithoutViewChanges
 TEST(MidiGridVisual, LongNotesHaveFixedTessellationAndDistinctEnds)
 {
 	const auto vertices = MidiModel::BuildBaseVerts(32u);
-	ASSERT_EQ((32u * 8u + 4u) * 9u, vertices.size());
+	ASSERT_EQ((32u * 16u + 16u) * 9u, vertices.size());
 	EXPECT_FLOAT_EQ(0.0f, vertices[0]);
 	EXPECT_FLOAT_EQ(1.0f / 32.0f, vertices[3u]);
-	const auto capStart = 32u * 8u * 9u;
+	const auto capStart = 32u * 16u * 9u;
 	EXPECT_FLOAT_EQ(0.0f, vertices[capStart]);
-	EXPECT_FLOAT_EQ(1.0f, vertices[capStart + 18u]);
+	EXPECT_FLOAT_EQ(1.0f, vertices[capStart + 9u]);
 }
 
 TEST(MidiGridVisual, ProjectionTracksViewportWithoutChangingLocalCoordinates)

@@ -2,6 +2,7 @@
 
 in float Velocity;
 in float Diff;
+in vec3 ProbeNormal;
 flat in float IsDisc;
 flat in float IsEndCap;
 in float EditorU;
@@ -20,6 +21,7 @@ uniform float Highlight;
 uniform float LoopHover;
 uniform float LoopSelected;
 uniform float LoopPressed;
+uniform float LoopMuted;
 uniform float DiscAlpha;
 uniform int RenderMode;
 uniform int GeometryPass;
@@ -33,10 +35,13 @@ uniform int EditorHeldInstance;
 uniform int EditorBottomPitch;
 uniform int EditorVisibleRows;
 uniform float SceneDim;
+uniform float SelectionActive;
 uniform float EditorActive;
 uniform float EditorGridRadius;
 uniform float EditorWrapCopy;
 uniform float EditorTime;
+uniform sampler2D TextureSampler;
+uniform sampler2D DiscProbeSampler;
 uniform samplerCube ProbeSampler;
 uniform float ProbeStrength;
 uniform vec3 EditorProbeEye;
@@ -46,6 +51,21 @@ const int RenderModePicker = 1;
 const int RenderModeHighlight = 2;
 const int RenderModeNotesOnly = 3;
 const int RenderModeDiscOnly = 4;
+
+// Keep the normal palette when selection is empty; retain a little hue otherwise.
+vec3 selectionColour(vec3 colour, float selected)
+{
+    float dull = clamp(SelectionActive, 0.0, 1.0) * (1.0 - clamp(selected, 0.0, 1.0));
+    float luminance = dot(colour, vec3(0.2126, 0.7152, 0.0722));
+    return mix(colour, mix(vec3(luminance), colour, 0.25) * 0.72, dull);
+}
+
+vec3 muteColour(vec3 colour)
+{
+    float luminance = clamp(0.60 * dot(colour, vec3(0.2126, 0.7152, 0.0722))
+        + 0.16 * clamp(LoopSelected, 0.0, 1.0) + 0.24 * clamp(LoopHover, 0.0, 1.0), 0.0, 1.0);
+    return vec3(0.07, 0.10, 0.15) + vec3(0.18, 0.23, 0.30) * luminance;
+}
 
 void main()
 {
@@ -94,11 +114,19 @@ void main()
         float pressed = clamp(LoopPressed, 0.0, 1.0);
         vec3 discColor = mix(vec3(0.46, 0.53, 0.65),
             vec3(0.06, 0.91, 0.96), selected) * Diff;
+        // Pearl detail modulates the authoritative cyan/neutral base before feedback.
+        vec2 probeUv = clamp(normalize(ProbeNormal).xy * 0.49 + 0.5, 0.01, 0.99);
+        float pearl = dot(texture(DiscProbeSampler, probeUv).rgb,
+            vec3(0.2126, 0.7152, 0.0722));
+        discColor *= mix(0.85 + 0.15 * pearl, 1.0, EditorMorphV);
         discColor = min(discColor * (1.0 + 1.75 * selected)
             + vec3(0.12, 0.22, 0.25) * selected, vec3(1.0));
+        discColor = selectionColour(discColor, selected);
         discColor = min(discColor * (1.0 + (0.80 - 0.42 * selected) * hovered)
             + vec3(0.15 - 0.08 * selected) * hovered, vec3(1.0));
-        discColor = mix(discColor, vec3(1.0, 0.42, 0.10),
+        if (LoopMuted > 0.5) discColor = muteColour(discColor);
+        vec3 pressColour = LoopPressed > 1.5 ? vec3(0.12, 0.42, 0.72) : vec3(1.0, 0.42, 0.10);
+        discColor = mix(discColor, pressColour,
             0.82 * pressed);
         // The ring is blended over the scene; a press needs near-opaque coverage
         // to read as clearly as the solid station mesh.
@@ -118,10 +146,28 @@ void main()
         baseColor = mix(baseColor, hot, smoothstep(0.56, 0.70, Velocity));
         float diffuse = clamp((Diff - 0.15) / 0.85, 0.0, 1.0);
         vec3 noteColor = baseColor * (0.10 + 1.05 * pow(diffuse, 0.72));
-        noteColor *= 1.0 + 0.15 * clamp(LoopSelected, 0.0, 1.0);
-        noteColor = min(noteColor * (1.0 + 0.20 * LoopHover)
-            + vec3(0.04) * LoopHover, vec3(1.0));
-        noteColor = mix(noteColor, vec3(1.0, 0.43, 0.10),
+        // Scalar chrome illumination retains the velocity hue. Fade to the editor's
+        // uniform flat lighting; held/hovered outlines and colours follow afterward.
+        vec2 probeUv = clamp(normalize(ProbeNormal).xy * 0.49 + 0.5, 0.01, 0.99);
+        float chrome = dot(texture(TextureSampler, probeUv).rgb,
+            vec3(0.2126, 0.7152, 0.0722));
+        noteColor *= mix(0.65 + 0.35 * chrome, 1.0, EditorMorphV);
+        float selected = clamp(LoopSelected, 0.0, 1.0);
+        float hovered = clamp(LoopHover, 0.0, 1.0);
+        // Lift the velocity hue, including shadowed faces, without washing it
+        // towards white. Keep the probe modulation underneath both state lifts.
+        noteColor = noteColor * (1.0 + 0.65 * selected)
+            + baseColor * (0.12 * selected);
+        float peak = max(max(noteColor.r, noteColor.g), noteColor.b);
+        noteColor *= mix(1.0, min(1.0, 1.0 / max(peak, 0.0001)), selected);
+        noteColor = selectionColour(noteColor, selected);
+        noteColor = noteColor * (1.0 + 0.45 * hovered)
+            + baseColor * (0.16 * hovered);
+        peak = max(max(noteColor.r, noteColor.g), noteColor.b);
+        noteColor *= mix(1.0, min(1.0, 1.0 / max(peak, 0.0001)), hovered);
+        if (LoopMuted > 0.5) noteColor = muteColour(noteColor);
+        vec3 pressColour = LoopPressed > 1.5 ? vec3(0.12, 0.42, 0.72) : vec3(1.0, 0.43, 0.10);
+        noteColor = mix(noteColor, pressColour,
             0.75 * clamp(LoopPressed, 0.0, 1.0));
         bool noteHovered = EditorActive > 0.5 && EditorTargetInstance == EditorNoteInstance
             && EditorHoverPitch == int(EditorNoteHit.z);
@@ -130,6 +176,7 @@ void main()
         float noteDown = noteHeld ? EditorMorphV : 0.0;
         // Keep the changing velocity hue vivid, with warm pressed-state edges.
         vec3 heldColor = baseColor * (0.65 + 0.35 * diffuse);
+        if (LoopMuted > 0.5) heldColor = muteColour(heldColor);
         noteColor = mix(noteColor, heldColor, noteDown);
         // Let the top clip to white while the sides retain a little depth.
         float whiteLift = mix(0.55, 0.92, EditorTopFace);
@@ -142,7 +189,7 @@ void main()
         float outline = max(timeEdge, rowEdge) * EditorTopFace * max(noteHover, noteDown);
         vec3 edgeColor = noteHeld ? vec3(1.0, 0.63, 0.18) : vec3(0.08, 0.16, 0.20);
         noteColor = mix(noteColor, edgeColor, 0.92 * outline);
-        ColorOUT = vec4(noteColor, 0.88 + 0.12 * max(noteHover, noteDown));
+        ColorOUT = vec4(noteColor, 0.88 + 0.12 * max(max(selected, hovered), max(noteHover, noteDown)));
     }
     if (EditorActive > 0.5)
     {

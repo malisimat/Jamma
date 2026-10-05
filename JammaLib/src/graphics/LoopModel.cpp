@@ -90,16 +90,18 @@ void LoopModel::Draw3d(DrawContext& ctx,
 		glCtx.SetUniform("LoopState", (unsigned int)_modelState);
 		glCtx.SetUniform("LoopHover", _isPicking3d ? 1.0f : 0.0f);
 		glCtx.SetUniform("LoopSelected", _isSelected ? 1.0f : 0.0f);
-		glCtx.SetUniform("LoopPressed", _clickPressed ? 1.0f : 0.0f);
+		glCtx.SetUniform("LoopPressed", _clickPressed);
+		glCtx.SetUniform("LoopMuted", _muted || _modelState == STATE_MUTED ? 1.0f : 0.0f);
 		break;
 	}
 
-	UploadWaveformTexture();
+	if (pass == base::PASS_SCENE)
+		UploadWaveformTexture();
 
-	auto modelTexture = GetTexture();
+	auto texture = pass == base::PASS_SCENE ? GetTexture().lock() : nullptr;
+	auto probeTexture = pass == base::PASS_SCENE ? GetTextureAt(1u).lock() : nullptr;
 	auto modelShader = GetShader();
 
-	auto texture = modelTexture.lock();
 	auto shader = modelShader.lock();
 
 	if (!shader || 0u == _vertexArray)
@@ -108,8 +110,13 @@ void LoopModel::Draw3d(DrawContext& ctx,
 		return;
 	}
 
-	glCtx.SetUniform("TextureSampler", 0u);
-	glCtx.SetUniform("WaveformSampler", 1u);
+	if (pass != base::PASS_PICKER)
+	{
+		glCtx.SetUniform("TextureSampler", 0u);
+		glCtx.SetUniform("WaveformSampler", 1u);
+		glCtx.SetUniform("MaterialProbeSampler", 2u);
+		glCtx.SetUniform("ProbeSampler", 3u);
+	}
 	glCtx.SetUniform("WaveformRadius", waveformRadius);
 	glCtx.SetUniform("WaveformHeightScale", _HeightScale);
 	glCtx.SetUniform("WaveformMinHeight", _MinHeight);
@@ -125,20 +132,40 @@ void LoopModel::Draw3d(DrawContext& ctx,
 
 	glBindVertexArray(_vertexArray);
 
-	glActiveTexture(GL_TEXTURE0);
-	glBindTexture(GL_TEXTURE_2D, texture ? texture->GetId() : 0u);
+	if (pass == base::PASS_SCENE)
+	{
+		glActiveTexture(GL_TEXTURE0);
+		glBindTexture(GL_TEXTURE_2D, texture ? texture->GetId() : 0u);
+		glActiveTexture(GL_TEXTURE2);
+		glBindTexture(GL_TEXTURE_2D, probeTexture ? probeTexture->GetId() : 0u);
+	}
 
-	glActiveTexture(GL_TEXTURE1);
-	glBindTexture(GL_TEXTURE_1D, _waveformTexture);
+	// Highlighting shares the waveform vertex shader and needs its height data,
+	// while picking uses fixed geometry and needs no waveform texture upload.
+	if (pass != base::PASS_PICKER)
+	{
+		glActiveTexture(GL_TEXTURE1);
+		glBindTexture(GL_TEXTURE_1D, _waveformTexture);
+	}
 
 	if (numInstances > 1)
 		glDrawArraysInstanced(GL_TRIANGLES, 0, _numTris * 3, numInstances);
 	else
 		glDrawArrays(GL_TRIANGLES, 0, _numTris * 3);
 
-	glBindTexture(GL_TEXTURE_1D, 0);
-	glActiveTexture(GL_TEXTURE0);
-	glBindTexture(GL_TEXTURE_2D, 0);
+	if (pass == base::PASS_SCENE)
+	{
+		glActiveTexture(GL_TEXTURE2);
+		glBindTexture(GL_TEXTURE_2D, 0);
+		glActiveTexture(GL_TEXTURE0);
+		glBindTexture(GL_TEXTURE_2D, 0);
+	}
+	if (pass != base::PASS_PICKER)
+	{
+		glActiveTexture(GL_TEXTURE1);
+		glBindTexture(GL_TEXTURE_1D, 0);
+		glActiveTexture(GL_TEXTURE0);
+	}
 	glBindVertexArray(0);
 	glUseProgram(0);
 

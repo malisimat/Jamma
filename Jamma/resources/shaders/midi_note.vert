@@ -8,6 +8,7 @@ layout(location = 4) in vec4 InstanceShape;
 
 out float Velocity;
 out float Diff;
+out vec3 ProbeNormal;
 flat out float IsDisc;
 flat out float IsEndCap;
 out float EditorU;
@@ -20,6 +21,7 @@ flat out vec3 EditorNoteHit;
 flat out int EditorNoteInstance;
 
 uniform mat4 MVP;
+uniform mat4 ModelView;
 uniform float EditorMorph;
 uniform int EditorBottomPitch;
 uniform int EditorVisibleRows;
@@ -80,8 +82,26 @@ void main()
     EditorNoteHit = vec3(startFrac, startFrac + durationFrac, pitch);
     EditorNoteInstance = gl_InstanceID;
 
-    // Preserve the circular scene lighting during the transition to the grid.
-    vec3 radialNormal = normalize(vec3(sin(angle), -NormalIN.y * 0.35, cos(angle)));
+    // Preserve outward face signs, including the bottom and note end caps.
+    vec3 tangent = vec3(cos(angle), 0.0, -sin(angle));
+    vec3 radialNormal = normalize(vec3(sin(angle) * NormalIN.z, NormalIN.y,
+        cos(angle) * NormalIN.z) + tangent * NormalIN.x);
+    float topEdge = smoothstep(0.39, 0.5, abs(PositionIN.y));
+    float radialEdge = smoothstep(0.76, 1.0, abs(PositionIN.z));
+    float endEdge = (1.0 - IsDisc) * (1.0 - smoothstep(0.0, 0.035,
+        min(PositionIN.x, 1.0 - PositionIN.x)));
+    vec3 bevelNormal = normalize(radialNormal
+        + vec3(0.0, sign(PositionIN.y) * topEdge * 0.45, 0.0)
+        + vec3(sin(angle), 0.0, cos(angle)) * sign(PositionIN.z) * radialEdge * 0.25
+        + tangent * (PositionIN.x < 0.5 ? -1.0 : 1.0) * endEdge * 0.4);
+    // The backing plane reverses radial Z while notes retain their cross-section.
+    vec3 gridNormal = vec3(NormalIN.x, NormalIN.y,
+        NormalIN.z * (IsDisc > 0.5 ? -1.0 : 1.0));
+    vec3 materialNormal = mix(bevelNormal, gridNormal, EditorMorph);
+    // Opposing ring/grid side normals can cancel midway through the morph.
+    if (dot(materialNormal, materialNormal) < 1e-6)
+        materialNormal = gridNormal;
+    ProbeNormal = normalize(mat3(ModelView) * materialNormal);
     vec3 lightDir = normalize(vec3(0.0, 0.5, -0.3));
     vec4 normScreen = MVP * vec4(radialNormal, 0.0);
     float sceneDiff = 0.15 + clamp(dot(normScreen.xyz, lightDir), 0.0, 0.85);

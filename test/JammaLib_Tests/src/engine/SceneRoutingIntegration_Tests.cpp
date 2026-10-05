@@ -54,6 +54,82 @@ protected:
 	}
 };
 
+TEST_F(SceneRoutingIntegrationTest, HaloSelectionIncludesMidiOnlyModelsAndClearsOnDeselect)
+{
+	auto scene = FreshScene({ Station("Keys") }, {});
+	ASSERT_TRUE(scene);
+	const auto stations = scene->SnapshotStations();
+	ASSERT_EQ(1u, stations.size());
+	auto station = stations.front();
+	auto take = station->AddTake();
+	take->Record({}, station->Name(), { 0u }, { "Keys" });
+	scene->CommitChanges();
+	ASSERT_EQ(1u, take->GetMidiLoops().size());
+	auto model = take->GetMidiLoops().front()->Model();
+	ASSERT_TRUE(model);
+	station->DeSelect();
+	take->DeSelect();
+	EXPECT_FALSE(scene->HasSelection());
+
+	// A MIDI model can be selected independently of its aggregate take state.
+	model->Select();
+	EXPECT_TRUE(scene->HasSelection());
+	model->DeSelect();
+	EXPECT_FALSE(scene->HasSelection());
+	take->Select();
+	EXPECT_TRUE(scene->HasSelection());
+	take->DeSelect();
+	EXPECT_FALSE(scene->HasSelection());
+	station->Select();
+	EXPECT_TRUE(scene->HasSelection());
+	station->DeSelect();
+	EXPECT_FALSE(scene->HasSelection());
+	scene->Shutdown();
+}
+
+TEST_F(SceneRoutingIntegrationTest, TakeClicksSelectAndToggleMuteWithoutChangingSibling)
+{
+	auto scene = FreshScene({ Station("Keys") }, {});
+	ASSERT_TRUE(scene);
+	const auto station = scene->SnapshotStations().front();
+	const auto take = station->AddTake();
+	const auto sibling = station->AddTake();
+	scene->CommitChanges();
+	actions::GuiAction view;
+	view.ElementType = actions::GuiAction::ACTIONELEMENT_RADIO;
+	view.Index = 100u;
+	view.Data = actions::GuiAction::GuiInt{ engine::Scene::VIEW_LOOPTAKE };
+	scene->OnAction(view);
+	std::vector<unsigned char> pickPath;
+	for (const auto index : take->GlobalId())
+		pickPath.push_back(static_cast<unsigned char>(index + 1u));
+	scene->SetHover3d(pickPath, base::Action::MODIFIER_NONE);
+
+	actions::TouchAction click;
+	click.Touch = actions::TouchAction::TOUCH_MOUSE;
+	click.Position = { -100, -100 }; // Avoid the 2D controls; use the picked take.
+	click.Modifiers = base::Action::MODIFIER_NONE;
+	click.Index = 0;
+	click.State = actions::TouchAction::TOUCH_DOWN;
+	scene->OnAction(click);
+	click.State = actions::TouchAction::TOUCH_UP;
+	scene->OnAction(click);
+	EXPECT_TRUE(take->IsSelected());
+	EXPECT_FALSE(sibling->IsSelected());
+
+	click.Index = 1;
+	for (const bool muted : { true, false })
+	{
+		click.State = actions::TouchAction::TOUCH_DOWN;
+		scene->OnAction(click);
+		click.State = actions::TouchAction::TOUCH_UP;
+		scene->OnAction(click);
+		EXPECT_EQ(muted, take->IsMuted());
+		EXPECT_FALSE(sibling->IsMuted());
+	}
+	scene->Shutdown();
+}
+
 TEST_F(SceneRoutingIntegrationTest, FreshScenesResolveReorderedAndAdditionalStationsByName)
 {
 	auto reordered = FreshScene({ Station("Bass"), Station("Drums") },

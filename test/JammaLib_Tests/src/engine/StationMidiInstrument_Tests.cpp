@@ -629,3 +629,42 @@ TEST(StationMidiInstrument, PunchBoundariesEmitLiveMidiTransitionsForSourceAndLi
 	EXPECT_TRUE(plugin->RealtimeFlags[0]);
 	EXPECT_TRUE(plugin->RealtimeFlags[1]);
 }
+
+TEST(StationMidiInstrument, AudioOnlyTriggerDoesNotCreateMidiStreams)
+{
+	for (const auto actionType : { TriggerAction::TRIGGER_REC_START,
+		TriggerAction::TRIGGER_OVERDUB_START })
+	{
+		SCOPED_TRACE(static_cast<int>(actionType));
+		auto station = MakeStation("station-audio-only-trigger");
+		station->SetAllowedMidiChannels({ 1, 4 });
+
+		// Even a MIDI source take must not turn audio-only overdub into MIDI capture.
+		if (actionType == TriggerAction::TRIGGER_OVERDUB_START)
+		{
+			auto sourceTake = MakeMidiTake("source-midi-take");
+			sourceTake->Record({}, station->Name(), { 3u }, { "Keys" });
+			sourceTake->Play(0u, 100u, 0u);
+			station->AddTake(sourceTake);
+			station->CommitChanges();
+		}
+
+		TriggerAction start;
+		start.ActionType = actionType;
+		start.InputChannels = { 0u };
+		start.MidiInputDevices = {};
+		const auto result = station->OnAction(start);
+		ASSERT_TRUE(result.IsEaten);
+		station->CommitChanges();
+
+		std::shared_ptr<LoopTake> targetTake;
+		for (const auto& take : station->GetLoopTakes())
+			if (take && take->Id() == result.TargetId)
+				targetTake = take;
+		ASSERT_NE(nullptr, targetTake);
+		EXPECT_EQ(1u, targetTake->GetLoops().size());
+		EXPECT_TRUE(targetTake->GetMidiLoops().empty());
+		EXPECT_TRUE(targetTake->MidiLoopChannels().empty());
+		EXPECT_TRUE(targetTake->MidiLoopDevices().empty());
+	}
+}

@@ -19,11 +19,12 @@ namespace console
 	{
 		explicit State(std::wstring path, std::wstring windowName,
 			std::shared_ptr<CommandMailbox> commands, std::string initialStatus,
-			bool forceConsoleHost)
+			bool forceConsoleHost, bool activateOnLaunch)
 			: CompanionPath(std::move(path)),
 			TerminalWindowName(windowName + L"-WT"),
 			HostWindowName(windowName + L"-Host"),
 			ForceConsoleHost(forceConsoleHost),
+			ActivateOnLaunch(activateOnLaunch),
 			Commands(std::move(commands)),
 			Events(std::make_shared<OutboundMailbox>()),
 			StopEvent(CreateEventW(nullptr, TRUE, FALSE, nullptr))
@@ -34,6 +35,7 @@ namespace console
 		const std::wstring TerminalWindowName;
 		const std::wstring HostWindowName;
 		const bool ForceConsoleHost;
+		const bool ActivateOnLaunch;
 		std::shared_ptr<CommandMailbox> Commands;
 		std::shared_ptr<OutboundMailbox> Events;
 		UniqueHandle StopEvent;
@@ -194,10 +196,15 @@ namespace console
 	}
 
 	UniqueHandle ConsoleBroker::Launch(const std::wstring& application, const std::wstring& arguments,
-		bool newConsole)
+		bool newConsole, bool activateOnLaunch)
 	{
 		std::wstring command = QuoteWindowsArgument(application) + L" " + arguments;
 		STARTUPINFOW startup{ sizeof(startup) };
+		if (!activateOnLaunch)
+		{
+			startup.dwFlags = STARTF_USESHOWWINDOW;
+			startup.wShowWindow = SW_SHOWNOACTIVATE;
+		}
 		PROCESS_INFORMATION process{};
 		if (!CreateProcessW(application.c_str(), command.data(), nullptr, nullptr,
 			FALSE, newConsole ? CREATE_NEW_CONSOLE : 0,
@@ -222,11 +229,13 @@ namespace console
 		if (terminal)
 		{
 			launchedProcess = Launch(terminalPath, TerminalArguments(state->TerminalWindowName,
-				state->CompanionPath, pipeName, WidenAscii(token)), false);
+				state->CompanionPath, pipeName, WidenAscii(token)), false,
+				state->ActivateOnLaunch);
 		}
 		else launchedProcess = Launch(state->CompanionPath,
 			ConsoleArguments(pipeName, WidenAscii(token)) + L" --title "
-				+ QuoteWindowsArgument(state->HostWindowName), true);
+				+ QuoteWindowsArgument(state->HostWindowName), true,
+				state->ActivateOnLaunch);
 		if (!launchedProcess.Valid()) return false;
 		const auto abandon = [&] {
 			if (!terminal) { TerminateProcess(launchedProcess.Get(), 1); return; }
@@ -354,7 +363,8 @@ namespace console
 	}
 
 	bool ConsoleBroker::Start(const std::wstring& companionPath,
-		std::shared_ptr<CommandMailbox> commands, std::string initialStatus)
+		std::shared_ptr<CommandMailbox> commands, std::string initialStatus,
+		bool activateOnLaunch)
 	{
 		if (_state && !_state->Finished.load(std::memory_order_acquire)) return false;
 		if (!Stop()) return false;
@@ -365,7 +375,7 @@ namespace console
 		const auto windowName = L"Jamma-" + std::to_wstring(GetCurrentProcessId())
 			+ L"-" + WidenAscii(nonce);
 		_state = std::make_shared<State>(companionPath, windowName, std::move(commands),
-			std::move(initialStatus), _forceConsoleHost);
+			std::move(initialStatus), _forceConsoleHost, activateOnLaunch);
 		if (!_state->StopEvent.Valid()) { _state.reset(); return false; }
 		_window = nullptr;
 		_hidden = false;

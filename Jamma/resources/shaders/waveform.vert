@@ -5,12 +5,14 @@ layout(location = 1) in vec2 UvIN;
 layout(location = 2) in vec3 NormalIN;
 
 out vec2 UV;
-out float diff;
+out vec3 ProbeNormal;
+out vec3 ViewPosition;
 out float EditorU;
 out float EditorMorphV;
 out vec3 EditorLocalPosition;
 
 uniform mat4 MVP;
+uniform mat4 ModelView;
 uniform sampler1D WaveformSampler;
 uniform float WaveformRadius;
 uniform float WaveformHeightScale;
@@ -44,14 +46,19 @@ void main()
     float gridY = 3.0 + (length(scaledXZ) - WaveformRadius) * 0.55;
     vec3 gridPosition = vec3((u - 0.5) * WaveformRadius * 2.0, gridY, gridZ);
     EditorLocalPosition = gridPosition;
-    gl_Position = MVP * vec4(mix(vec3(scaledXZ.x, y, scaledXZ.y),
+    vec4 position = vec4(mix(vec3(scaledXZ.x, y, scaledXZ.y),
         gridPosition, EditorMorph), 1.0);
+    gl_Position = MVP * position;
+    // Derivative normals in the fragment shader must follow the final morph.
+    ViewPosition = (ModelView * position).xyz;
     EditorU = u;
     EditorMorphV = EditorMorph;
     float colorV = clamp(0.5 - (y * colorScale * WaveformColorMultiplier), 0.0, 1.0);
     UV = vec2(u, colorV);
-
-    vec3 lightDir = normalize(vec3(0.0, 0.5, -0.3));
-    vec4 normScreen = MVP * vec4(NormalIN, 0.0);
-    diff = 0.1 + clamp(dot(normScreen.xyz, lightDir), 0.0, 0.9);
+    // The waveform can be scaled to zero in Y. Recover its orientation from
+    // the unaffected X/Z axes so probe normals never inherit that scale.
+    vec3 probeX = normalize(ModelView[0].xyz);
+    vec3 probeZ = normalize(ModelView[2].xyz);
+    mat3 probeBasis = mat3(probeX, normalize(cross(probeZ, probeX)), probeZ);
+    ProbeNormal = normalize(probeBasis * NormalIN);
 }
