@@ -792,7 +792,7 @@ void GuiHud::_LayoutPanels()
 		std::max(0, (triggerFooter - static_cast<int>(_TriggerControlSize)) / 2) });
 	_addTriggerButton->SetVisible(railWidth >= static_cast<int>(_TriggerControlSize) && triggerFooter >= static_cast<int>(_TriggerControlSize));
 
-	const int topWidth = std::max(0, railX - marginX - static_cast<int>(_SourcePanelGap));
+	int topWidth = std::max(0, railX - marginX - static_cast<int>(_SourcePanelGap));
 	const int topHeight = std::min(static_cast<int>(_TopStripHeight), std::max(0, height - 2 * marginY));
 	_topStrip->SetPosition({ marginX, std::max(0, height - marginY - topHeight) });
 	_topStrip->SetSize({ static_cast<unsigned int>(topWidth), static_cast<unsigned int>(topHeight) });
@@ -822,6 +822,10 @@ void GuiHud::_LayoutPanels()
 	};
 	audioWidth = std::min(audioWidth, occupiedWidth(audioCount, audioCard));
 	midiWidth = std::min(midiWidth, occupiedWidth(midiCount, midiCard));
+	// Keep the same right anchor, but stop the background growing beyond its contents.
+	topWidth = std::min(topWidth, static_cast<int>(audioWidth + midiWidth) + categoryGap + labelWidth + 2 * padding);
+	_topStrip->SetPosition({ railX - static_cast<int>(_SourcePanelGap) - topWidth, std::max(0, height - marginY - topHeight) });
+	_topStrip->SetSize({ static_cast<unsigned int>(topWidth), static_cast<unsigned int>(topHeight) });
 	_topSourceRow->SetSize({ audioWidth + midiWidth + static_cast<unsigned int>(categoryGap), static_cast<unsigned int>(rowHeight) });
 	for (size_t i = 0; i < _sourceWidgets.size(); ++i)
 	{
