@@ -18,6 +18,7 @@ namespace gui
 		static int VersionColumnWidth(int barWidth) { return std::min(160, std::max(0, barWidth - StatusColumnWidth(barWidth))); }
 		static int MessageColumnWidth(int barWidth) { return std::max(0, barWidth - StatusColumnWidth(barWidth) - VersionColumnWidth(barWidth)); }
 		static constexpr float PanelFillOpacity = 0.80f;
+		static constexpr float HudFillOpacity = 0.35f;
 		static constexpr float PanelTransitionSeconds = 0.22f;
 		static constexpr unsigned int ControlHeight = 36u;
 		static constexpr unsigned int TextPadding = 8u;

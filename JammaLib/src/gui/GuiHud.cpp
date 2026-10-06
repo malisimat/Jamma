@@ -445,7 +445,7 @@ void GuiHud::_BuildPanels()
 	topParams.Texture = "rounded_but_on";
 	topParams.TextureShader = "texture_tinted";
 	topParams.TintColor = GuiStyle::Graphite();
-	topParams.TextureOpacity = 0.35f;
+	topParams.TextureOpacity = GuiStyle::HudFillOpacity;
 	_topStrip = std::make_shared<GuiPanel>(topParams);
 	AddChild(_topStrip);
 
@@ -455,7 +455,7 @@ void GuiHud::_BuildPanels()
 	railParams.TextureShader = "texture_tinted";
 	railParams.Texture = "rounded_but_on";
 	railParams.TintColor = GuiStyle::Graphite();
-	railParams.TextureOpacity = GuiStyle::PanelFillOpacity;
+	railParams.TextureOpacity = GuiStyle::HudFillOpacity;
 	_triggerRail = std::make_shared<GuiPanel>(railParams);
 	AddChild(_triggerRail);
 
