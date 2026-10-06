@@ -793,13 +793,13 @@ void GuiHud::_LayoutPanels()
 	_addTriggerButton->SetVisible(railWidth >= static_cast<int>(_TriggerControlSize) && triggerFooter >= static_cast<int>(_TriggerControlSize));
 
 	int topWidth = std::max(0, railX - marginX - static_cast<int>(_SourcePanelGap));
-	const int topHeight = std::min(static_cast<int>(_TopStripHeight), std::max(0, height - 2 * marginY));
+	int topHeight = std::min(static_cast<int>(_TopStripHeight), std::max(0, height - 2 * marginY));
 	_topStrip->SetPosition({ marginX, std::max(0, height - marginY - topHeight) });
 	_topStrip->SetSize({ static_cast<unsigned int>(topWidth), static_cast<unsigned int>(topHeight) });
 	_topStrip->SetVisible(topWidth > 0 && topHeight > 0);
 	const int padding = std::min(static_cast<int>(_TopStripPadding), std::min(topWidth, topHeight) / 2);
 	const int innerWidth = std::max(0, topWidth - 2 * padding);
-	const int rowHeight = std::min(static_cast<int>(_SourceViewportHeight), std::max(0, topHeight - 2 * padding));
+	int rowHeight = std::min(static_cast<int>(_SourceViewportHeight), std::max(0, topHeight - 2 * padding));
 	_topSourceRow->SetVisible(innerWidth > 0 && rowHeight > 0);
 	const auto audioCount = static_cast<unsigned int>(std::count_if(_sourceEndpoints.begin(), _sourceEndpoints.end(),
 		[](const auto& source) { return source.Kind == io::RigFileRouting::SourceKind::Adc; }));
@@ -822,6 +822,10 @@ void GuiHud::_LayoutPanels()
 	};
 	audioWidth = std::min(audioWidth, occupiedWidth(audioCount, audioCard));
 	midiWidth = std::min(midiWidth, occupiedWidth(midiCount, midiCard));
+	const bool sourceScrolls = audioWidth < occupiedWidth(audioCount, audioCard) || midiWidth < occupiedWidth(midiCount, midiCard);
+	const int desiredRowHeight = static_cast<int>(_SourceButtonHeight + 4u + (sourceScrolls ? _SourceScrollBarHeight : 0u));
+	rowHeight = std::min(rowHeight, desiredRowHeight);
+	topHeight = rowHeight + 2 * padding;
 	// Keep the same right anchor, but stop the background growing beyond its contents.
 	topWidth = std::min(topWidth, static_cast<int>(audioWidth + midiWidth) + categoryGap + labelWidth + 2 * padding);
 	_topStrip->SetPosition({ railX - static_cast<int>(_SourcePanelGap) - topWidth, std::max(0, height - marginY - topHeight) });

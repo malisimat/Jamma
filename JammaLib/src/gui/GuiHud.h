@@ -109,7 +109,7 @@ namespace gui
 	private:
 		static constexpr int _OuterMargin = 8;
 		static constexpr int _TopPosY = 8;
-		static constexpr unsigned int _TopStripHeight = 80u;
+		static constexpr unsigned int _TopStripHeight = 68u;
 		static constexpr unsigned int _TopStripWidth = 760u;
 		static constexpr unsigned int _TopStripMinWidth = 320u;
 		static constexpr unsigned int _TopStripPadding = 8u;
