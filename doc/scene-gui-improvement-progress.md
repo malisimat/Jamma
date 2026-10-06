@@ -345,6 +345,30 @@ a replacement scope. The feature is not complete.
    `HudCableInteractionTests.*`; all 193 selected checks including GPU tests
    passed (5469 ms), with the separate benchmark skipped and an empty GPU error
    log. Incremental native/app builds and the threading audit passed.
+   Scene control-owner checks now cover the retained production widgets after
+   receiver initialization, later child insertion and tree reinitialization.
+   Notifying control setters verify channel limits 0..16 and PageUp/PageDown
+   feedback from the actual MIDI router; phase fractions -1..1 propagate to
+   existing and later stations, and malformed/nonfinite input preserves owner
+   state. CLICK reaches the actual AudioHost owner in both directions. All,
+   Mixed and Off change resolved take policy without overwriting different
+   local grids; a local take edit restores Mixed feedback in the radio. The
+   top selection-depth control reaches Scene too. No hardware stream is opened
+   by these checks, and they do not claim audible output.
+   HUD Add/Delete checks actuate the actual buttons and confirmation popup with
+   real Trigger instances. Cancel submits nothing; confirmed deletion removes
+   only the selected trigger while preserving another trigger's capture route.
+   Supplying a consistent newer routing snapshot through SetRoutingConfig
+   reveals an appended card and clamps/preserves scroll position after deletion
+   and resize. Empty-list Add also works, and all inspected cards remain 100px.
+   This verifies candidate construction and HUD projection, not audio-boundary
+   adoption. Focused reviews found no material issue after strengthening exact
+   scroll preservation/clamp assertions. Incremental native build and threading
+   audit passed. The final selected run includes GUI/GPU checks plus existing
+   MIDI-router override, local-offset publication, transport-phase, external
+   phase correction, NINJAM coordinator and production-boundary regressions:
+   279 checks passed (6984 ms), with only the separate benchmark skipped and an
+   empty GPU error log.
 7. Final requirement audit and HTML completion report: pending.
 
 ## Remaining verification from the plan audit
@@ -355,22 +379,22 @@ than the plan's full live-runtime completion gate.
 
 | Plan requirement | Current evidence | Remaining proof |
 | --- | --- | --- |
-| Real pages, defaults, ownership and stable commands | Production composition and receiver tests; actual All/Off control clicks | Channel override limits/shortcut feedback, local phase owner propagation, CLICK owner state and Mixed-state preservation through initialized Scene controls |
+| Real pages, defaults, ownership and stable commands | Production composition, all retained control-owner paths after initialization/child addition; channel limits/shortcuts, phase propagation, CLICK and local/global grids; actual All/Off clicks | Applied-state feedback during hardware playback |
 | Resize, motion and pointer priority | Actual 480x320/1000x650 resize, reversal and resize during motion; empty-size handler checks; normal/editor modifier input | Actual OS maximize/restore; stationary-pointer hover through moving panel bounds; minimum interactive client size and control usability |
 | Adaptive input rows and full identity | Zero/one/many geometry, 80px floor, widget reuse/offset clamp; measured labels and popup checks | Live playback visual confirmation |
-| Trigger viewport and actions | Fixed 100px cards, clipping, scroll extremes and actual native wheel | Add/Delete confirmation and published list replacement after resize, including reveal/clamp and minimum-window usability |
+| Trigger viewport and actions | Fixed 100px cards, clipping, actual native wheel; Add/Delete/Cancel, empty-list Add and newer snapshot projection with reveal/preserve/clamp after resize | Live routing adoption and minimum-window usability |
 | Retained cable presentation and interactions | Boundary/projection/nested clipping tests, GPU continuations, real HUD body reconnect/cancel/stale-revision checks | Live routing adoption and camera/drag interactions under playback; actual rendered body-hit checks in the final live pass |
 | Panels, popup/edit cleanup and hidden pages | Retained active host, numeric finalization, subtree popup/focus/capture checks; GPU page/opacity snapshots | Full runtime popup/edit/tab exercise under playback; stationary-pointer check noted above |
 | Text, palette and shader scope restoration | Real font metrics, control families/caret/popup rows and nested opacity pixel checks; populated Scene/editor captures | Final visual review during playback |
-| Timing boundaries and real-time safety | Existing command owners retained; no new audio callback policy; threading audits and focused reviews | Remote-follow regression selection and real playback confirmation of relocated settings |
+| Timing boundaries and real-time safety | Existing command owners retained; no new audio callback policy; threading audits/reviews and selected MIDI-router/NINJAM/transport boundary regressions | Real playback confirmation of relocated settings |
 | Same-scene frame distributions and underruns | Shared populated-scene benchmark and historical no-playback baseline pair | Device/rate/buffer details, actual underrun observation, equivalent verified interactions and repeated/interleaved live runs |
 | Reviewed commits and final deliverable | Focused slices committed after review | Requirement-by-requirement completion audit, then the requested HTML completion report and suggested next prompt |
 
 The ASIO device/rate/buffer question remains unanswered. This session still has
 no `node_repl` capability required by the computer-use skill, so foreground
 desktop automation has not been attempted. Neither limitation substitutes for
-the remaining live verification. The next independent checks are the missing
-Scene control bindings, trigger actions, stationary hover and minimum viewport.
+the remaining live verification. The next independent checks are stationary
+hover and minimum viewport usability.
 
 ## Local build setup
 

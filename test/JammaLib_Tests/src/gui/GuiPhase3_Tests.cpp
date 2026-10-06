@@ -10,6 +10,7 @@
 #include "gui/GuiScrollBar.h"
 #include "gui/GuiScrollPanel.h"
 #include "gui/GuiMainPanel.h"
+#include "engine/Scene.h"
 #include "graphics/GlDrawContext.h"
 #include <limits>
 #include <iterator>
@@ -1173,4 +1174,125 @@ TEST(GuiTextGeometry, LegacyWidthTableFontHasExplicitFallbackLineMetrics) {
 	EXPECT_FLOAT_EQ(19.0f, font.Metrics().Ascent);
 	EXPECT_FLOAT_EQ(0.0f, font.Metrics().Descent);
 	EXPECT_FLOAT_EQ(19.0f, font.Metrics().Height());
+}
+
+class GuiSettingsOwnerScene final : public engine::Scene
+{
+public:
+	GuiSettingsOwnerScene() : Scene(engine::SceneParams({ "" }, {}, { 800u, 600u }), io::UserConfig{}) {}
+	std::shared_ptr<gui::GuiMainPanel> Settings() const { return _mainPanel; }
+	std::shared_ptr<gui::GuiMainPanel> Selection() const { return _selectionPanel; }
+	std::shared_ptr<gui::GuiNumericInput> Channel() const { return _midiChannelOverrideInput; }
+	std::shared_ptr<gui::GuiNumericInput> Phase() const { return _transportOffsetInput; }
+	std::shared_ptr<gui::GuiToggle> Click() const { return _ninjamMetronomeToggle; }
+	std::shared_ptr<gui::GuiRadio> Quantisation() const { return _globalMidiQuantRadio; }
+	std::shared_ptr<gui::GuiRadio> Depth() const { return _modeRadio; }
+	unsigned int ForcedChannel() const { return _inputSubsystem->ForcedChannelOverride(); }
+	double PhaseFraction() const { return _transportOffsetLoopFrac; }
+	bool ClickEnabled() const { return _audioEngine->NinjamMetronomeEnabled(); }
+	io::JamFile::GlobalMidiQuantState QuantisationState() const { return _globalMidiQuantState; }
+	unsigned int SelectionDepth() const { return static_cast<unsigned int>(_viewMode); }
+	std::shared_ptr<engine::Station> AddStation()
+	{
+		engine::StationParams params; params.Name = "Settings owner station"; params.Size = { 100, 100 };
+		audio::MergeMixBehaviourParams merge;
+		auto station = std::make_shared<engine::Station>(params, engine::Station::GetMixerParams(params.Size, merge));
+		_AddStation(station); return station;
+	}
+};
+
+class GuiSceneSettingsTests : public ::testing::Test
+{
+protected:
+	void SetUp() override
+	{
+		Scene = std::make_shared<GuiSettingsOwnerScene>(); Scene->InitReceivers();
+		Station = Scene->AddStation(); ASSERT_TRUE(Station);
+		// Production receivers must survive subsequent Init/tree renumbering.
+		Scene->Settings()->AddChild(std::make_shared<base::GuiElement>(base::GuiElementParams{}));
+		Scene->Selection()->Init();
+	}
+	void TearDown() override { Scene->Shutdown(); }
+	std::shared_ptr<GuiSettingsOwnerScene> Scene;
+	std::shared_ptr<engine::Station> Station;
+};
+
+TEST_F(GuiSceneSettingsTests, ChannelLimitsAndShortcutFeedbackReachRouterAfterTreeChanges)
+{
+	Scene->Settings()->SetPage(gui::SettingsPage::Midi);
+	for (const auto value : { -1.0, 0.0, 1.0, 16.0, 17.0 }) {
+		Scene->Channel()->SetValue(value, true);
+		const auto expected = static_cast<unsigned int>(std::clamp(value, 0.0, 16.0));
+		EXPECT_EQ(expected, Scene->ForcedChannel()); EXPECT_DOUBLE_EQ(expected, Scene->Channel()->Value());
+	}
+	Scene->Channel()->SetValue(0.0, true);
+	KeyAction key; key.KeyChar = 0x21u; key.KeyActionType = KeyAction::KEY_DOWN;
+	EXPECT_TRUE(Scene->OnAction(key).IsEaten);
+	EXPECT_EQ(1u, Scene->ForcedChannel()); EXPECT_DOUBLE_EQ(1.0, Scene->Channel()->Value());
+	key.KeyActionType = KeyAction::KEY_UP; EXPECT_TRUE(Scene->OnAction(key).IsEaten);
+	key.KeyChar = 0x22u; key.KeyActionType = KeyAction::KEY_DOWN; EXPECT_TRUE(Scene->OnAction(key).IsEaten);
+	EXPECT_EQ(0u, Scene->ForcedChannel()); EXPECT_DOUBLE_EQ(0.0, Scene->Channel()->Value());
+	key.KeyActionType = KeyAction::KEY_UP; Scene->OnAction(key);
+}
+
+TEST_F(GuiSceneSettingsTests, PhaseOffsetUsesLoopFractionsAndPropagatesToStation)
+{
+	for (const auto value : { -2.0, -1.0, 0.5, 1.0, 2.0 }) {
+		Scene->Phase()->SetValue(value, true);
+		const auto expected = std::clamp(value, -1.0, 1.0);
+		EXPECT_DOUBLE_EQ(expected, Scene->PhaseFraction());
+		EXPECT_DOUBLE_EQ(expected, Station->TransportOffsetLoopFrac());
+		EXPECT_DOUBLE_EQ(expected, Scene->Phase()->Value());
+	}
+	Scene->Phase()->SetValue(std::numeric_limits<double>::quiet_NaN(), true);
+	EXPECT_DOUBLE_EQ(1.0, Scene->PhaseFraction()); EXPECT_DOUBLE_EQ(1.0, Scene->Phase()->Value());
+	for (const auto text : { "nan", "0.5junk" }) {
+		Scene->Phase()->SetText(text, true);
+		EXPECT_DOUBLE_EQ(1.0, Scene->PhaseFraction()); EXPECT_DOUBLE_EQ(1.0, Scene->Phase()->Value());
+	}
+	const auto laterStation = Scene->AddStation();
+	EXPECT_DOUBLE_EQ(1.0, laterStation->TransportOffsetLoopFrac());
+}
+
+TEST_F(GuiSceneSettingsTests, ClickToggleReachesExistingAudioHostOwner)
+{
+	Scene->Click()->SetToggleState(GuiToggleParams::TOGGLE_ON, false);
+	EXPECT_TRUE(Scene->ClickEnabled());
+	Scene->Click()->SetToggleState(GuiToggleParams::TOGGLE_OFF, false);
+	EXPECT_FALSE(Scene->ClickEnabled());
+	Scene->Click()->SetToggleState(GuiToggleParams::TOGGLE_ON, false);
+	EXPECT_TRUE(Scene->ClickEnabled());
+}
+
+TEST_F(GuiSceneSettingsTests, GlobalQuantisationPreservesLocalGridsAndLocalEditUpdatesRadio)
+{
+	const auto first = Station->AddTake(), second = Station->AddTake();
+	ASSERT_TRUE(first); ASSERT_TRUE(second);
+	const auto configure = [](const auto& take, bool enabled, midi::MidiQuantisationFraction fraction) {
+		auto settings = take->MidiQuantisation(); settings.Enabled = enabled; settings.Fraction = fraction;
+		take->SetMidiQuantisation(settings);
+	};
+	configure(first, true, midi::MidiQuantisationFraction::Quarter);
+	configure(second, false, midi::MidiQuantisationFraction::Eighth);
+	const auto firstGrid = first->MidiQuantisation(), secondGrid = second->MidiQuantisation();
+	for (const auto state : { io::JamFile::GlobalMidiQuantState::All, io::JamFile::GlobalMidiQuantState::Mixed,
+		io::JamFile::GlobalMidiQuantState::Off }) {
+		Scene->Quantisation()->SetCurrentValue(static_cast<unsigned int>(state), false);
+		EXPECT_EQ(state, Scene->QuantisationState());
+		EXPECT_EQ(firstGrid, first->MidiQuantisation()); EXPECT_EQ(secondGrid, second->MidiQuantisation());
+		EXPECT_EQ(state != io::JamFile::GlobalMidiQuantState::Off, first->ResolvedMidiQuantisation().Enabled);
+		EXPECT_EQ(state == io::JamFile::GlobalMidiQuantState::All, second->ResolvedMidiQuantisation().Enabled);
+	}
+	Scene->Quantisation()->SetCurrentValue(static_cast<unsigned int>(io::JamFile::GlobalMidiQuantState::All), false);
+	first->SetMidiQuantisationFromUserEdit(firstGrid);
+	EXPECT_EQ(io::JamFile::GlobalMidiQuantState::Mixed, Scene->QuantisationState());
+	EXPECT_EQ(static_cast<unsigned int>(io::JamFile::GlobalMidiQuantState::Mixed), Scene->Quantisation()->CurrentValue());
+}
+
+TEST_F(GuiSceneSettingsTests, SelectionDepthReachesSceneFromTopPanel)
+{
+	for (const auto depth : { engine::Scene::VIEW_LOOP, engine::Scene::VIEW_LOOPTAKE, engine::Scene::VIEW_STATION }) {
+		Scene->Depth()->SetCurrentValue(static_cast<unsigned int>(depth), false);
+		EXPECT_EQ(static_cast<unsigned int>(depth), Scene->SelectionDepth());
+	}
 }

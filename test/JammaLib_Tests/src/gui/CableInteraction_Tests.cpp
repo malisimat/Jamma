@@ -3,6 +3,7 @@
 #include <limits>
 #include "gui/GuiHud.h"
 #include "gui/GuiScrollPanel.h"
+#include "gui/GuiPopupManager.h"
 #include "engine/RigSnapshot.h"
 #include "engine/Trigger.h"
 
@@ -235,7 +236,7 @@ protected:
 			routing->Graph.Triggers.push_back(resolved);
 		}
 		Routing = routing;
-		gui::GuiHudParams params; params.Size = { 1200u, 800u };
+		gui::GuiHudParams params; params.Size = { 1200u, 800u }; params.PopupManager = &Popups;
 		params.SubmitRigEdit = [this](const io::RigFile& candidate) { Submissions.push_back(candidate); return true; };
 		Hud = std::make_shared<gui::GuiHud>(params); Hud->SetRoutingConfig(20u, {}, *Routing);
 		Hud->SetCableRevealHeld(true); Hud->Init();
@@ -270,9 +271,40 @@ protected:
 		up.Index = 0; up.State = actions::TouchAction::TOUCH_UP; up.Position = ReplacementSocket;
 		Hud->OnAction(up);
 	}
+	std::shared_ptr<gui::GuiScrollPanel> TriggerScroll() const
+	{
+		return std::dynamic_pointer_cast<gui::GuiScrollPanel>(Hud->TryGetChild(1)->TryGetChild(1));
+	}
+	void Click(const std::shared_ptr<base::GuiElement>& control, bool popup = false)
+	{
+		ASSERT_TRUE(control); ASSERT_TRUE(control->IsVisible());
+		const auto pos = control->GlobalPosition(); const auto size = control->GetSize();
+		actions::TouchAction touch; touch.Touch = actions::TouchAction::TOUCH_MOUSE; touch.Index = 0;
+		touch.Position = { pos.X + static_cast<int>(size.Width / 2), pos.Y + static_cast<int>(size.Height / 2) };
+		for (const auto state : { actions::TouchAction::TOUCH_DOWN, actions::TouchAction::TOUCH_UP }) {
+			touch.State = state;
+			EXPECT_TRUE(popup ? Popups.OnAction(touch).IsEaten : Hud->OnAction(touch).IsEaten);
+		}
+	}
+	void PublishRig(const io::RigFile& rig)
+	{
+		auto next = std::make_shared<engine::RigSnapshot>(); next->Revision = Routing->Revision + 1; next->Rig = rig;
+		for (size_t index = 0; index < rig.Triggers.size(); ++index) {
+			const auto& saved = rig.Triggers[index];
+			engine::RigSnapshotTrigger runtime{}; runtime.Id = saved.Id; runtime.RigTriggerIndex = index;
+			runtime.Instance = std::make_shared<engine::Trigger>(engine::TriggerParams{});
+			next->Triggers.push_back(runtime);
+			io::RigFileRouting::TriggerResolution resolved{}; resolved.TriggerIndex = index; resolved.TriggerName = saved.Name;
+			for (const auto channel : saved.InputChannels)
+				resolved.Sources.push_back({ io::RigFileRouting::SourceKind::Adc, channel, {}, true });
+			next->Graph.Triggers.push_back(resolved);
+		}
+		Routing = next; Hud->SetRoutingConfig(20u, {}, *Routing);
+	}
 	std::shared_ptr<const engine::RigSnapshot> Routing;
-	std::shared_ptr<gui::GuiHud> Hud;
 	std::vector<io::RigFile> Submissions;
+	gui::GuiPopupManager Popups;
+	std::shared_ptr<gui::GuiHud> Hud;
 	std::vector<CableInteraction::Endpoint> Endpoints;
 	std::vector<CableInteraction::Cable> Cables;
 	utils::Position2d ReplacementSocket{};
@@ -306,6 +338,50 @@ TEST_F(HudCableInteractionTests, ClippedBodyReconnectPreservesOriginalTriggerAnd
 	replacement.Rig.Triggers[11].Id = "replacement-trigger";
 	Hud->SetRoutingConfig(20u, {}, replacement); EXPECT_FALSE(Hud->HasCableDrag());
 	Release(); EXPECT_TRUE(Submissions.empty());
+}
+
+TEST_F(HudCableInteractionTests, AddTriggerRevealsPublishedCardAfterResizeAndSupportsEmptyList)
+{
+	Hud->SetSize({ 640, 320 }); auto scroll = TriggerScroll(); ASSERT_TRUE(scroll);
+	scroll->SetScrollOffset(scroll->MaxScrollOffset());
+	Click(Hud->TryGetChild(1)->TryGetChild(2));
+	ASSERT_EQ(1u, Submissions.size()); ASSERT_EQ(13u, Submissions.back().Triggers.size());
+	EXPECT_FALSE(Submissions.back().Triggers.back().Id.empty());
+	const auto added = Submissions.back(); PublishRig(added); scroll = TriggerScroll();
+	ASSERT_TRUE(scroll->Content()->TryGetChild(12)); EXPECT_FALSE(scroll->Content()->TryGetChild(13));
+	EXPECT_EQ(100u, scroll->Content()->TryGetChild(12)->GetSize().Height);
+	EXPECT_EQ(scroll->MaxScrollOffset(), scroll->ScrollOffset());
+	const auto beforeExpand = scroll->ScrollOffset();
+	Hud->SetSize({ 1200, 800 });
+	EXPECT_EQ((std::min)(beforeExpand, scroll->MaxScrollOffset()), scroll->ScrollOffset());
+	for (unsigned char index = 0; index < 13; ++index)
+		EXPECT_EQ(100u, scroll->Content()->TryGetChild(index)->GetSize().Height);
+	io::RigFile empty = added; empty.Triggers.clear(); PublishRig(empty); Submissions.clear();
+	EXPECT_FALSE(TriggerScroll()->Content()->TryGetChild(0));
+	Click(Hud->TryGetChild(1)->TryGetChild(2)); ASSERT_EQ(1u, Submissions.size());
+	ASSERT_EQ(1u, Submissions.back().Triggers.size()); const auto first = Submissions.back(); PublishRig(first);
+	EXPECT_EQ(100u, TriggerScroll()->Content()->TryGetChild(0)->GetSize().Height);
+}
+
+TEST_F(HudCableInteractionTests, DeleteConfirmationSubmitsOnlySelectedTriggerAndClampsPublishedList)
+{
+	Hud->SetSize({ 640, 320 }); auto scroll = TriggerScroll(); ASSERT_TRUE(scroll);
+	scroll->SetScrollOffset(0);
+	const auto close = scroll->Content()->TryGetChild(0)->TryGetChild(3);
+	Click(close); ASSERT_TRUE(Popups.IsOpen()); EXPECT_EQ(Hud, Popups.OwnerOfTop());
+	Click(Popups.Top()->TryGetChild(4), true); EXPECT_FALSE(Popups.IsOpen()); EXPECT_TRUE(Submissions.empty());
+	Click(close); ASSERT_TRUE(Popups.IsOpen()); scroll->SetScrollOffset(scroll->MaxScrollOffset());
+	Click(Popups.Top()->TryGetChild(5), true); EXPECT_FALSE(Popups.IsOpen());
+	ASSERT_EQ(1u, Submissions.size()); ASSERT_EQ(11u, Submissions.back().Triggers.size());
+	EXPECT_EQ(Routing->Rig.Triggers[1].Id, Submissions.back().Triggers.front().Id);
+	EXPECT_EQ((std::vector<unsigned int>{ 19u }), Submissions.back().Triggers.back().InputChannels);
+	const auto removed = Submissions.back(); PublishRig(removed); scroll = TriggerScroll();
+	EXPECT_EQ(scroll->MaxScrollOffset(), scroll->ScrollOffset());
+	EXPECT_FALSE(scroll->Content()->TryGetChild(11));
+	const auto beforeShrink = scroll->ScrollOffset();
+	Hud->SetSize({ 320, 180 }); EXPECT_EQ(beforeShrink, scroll->ScrollOffset());
+	for (unsigned char index = 0; index < 11; ++index)
+		EXPECT_EQ(100u, scroll->Content()->TryGetChild(index)->GetSize().Height);
 }
 
 class CableInteractionTests : public ::testing::Test
