@@ -109,7 +109,7 @@ namespace gui
 	private:
 		static constexpr int _OuterMargin = 8;
 		static constexpr int _TopPosY = 8;
-		static constexpr unsigned int _TopStripHeight = 108u;
+		static constexpr unsigned int _TopStripHeight = 80u;
 		static constexpr unsigned int _TopStripWidth = 760u;
 		static constexpr unsigned int _TopStripMinWidth = 320u;
 		static constexpr unsigned int _TopStripPadding = 8u;
@@ -201,7 +201,7 @@ namespace gui
 		};
 
 
-		std::shared_ptr<GuiStackPanel> _topStrip;
+		std::shared_ptr<GuiPanel> _topStrip;
 		std::shared_ptr<GuiStackPanel> _topSourceRow;
 		std::shared_ptr<GuiStackPanel> _topInputRow;
 		std::shared_ptr<GuiStackPanel> _topMidiRow;

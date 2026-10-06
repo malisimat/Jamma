@@ -303,8 +303,6 @@ void GuiHud::Draw(base::DrawContext& ctx)
 	if (!_isVisible)
 		return;
 
-	if (_topStrip)
-		_topStrip->ComputeLayout();
 	if (_topSourceRow)
 		_topSourceRow->ComputeLayout();
 	if (_topInputRow)
@@ -430,15 +428,14 @@ void GuiHud::_ReleaseResources()
 
 void GuiHud::_BuildPanels()
 {
-	GuiStackPanelParams topParams;
-	topParams.Direction = StackDirection::Vertical;
-	topParams.Spacing = _TopStripSpacing;
-	topParams.PaddingH = _TopStripPadding;
-	topParams.PaddingV = _TopStripPadding;
+	GuiElementParams topParams;
 	topParams.Size = { _TopStripWidth, _TopStripHeight };
 	topParams.MinSize = { _TopStripMinWidth, _TopStripHeight };
-	// No background on the input strip — only the level elements themselves show.
-	_topStrip = std::make_shared<GuiStackPanel>(topParams);
+	topParams.Texture = "rounded_but_on";
+	topParams.TextureShader = "texture_tinted";
+	topParams.TintColor = GuiStyle::Graphite();
+	topParams.TextureOpacity = 0.35f;
+	_topStrip = std::make_shared<GuiPanel>(topParams);
 	AddChild(_topStrip);
 
 	base::GuiElementParams railParams;
@@ -790,22 +787,15 @@ void GuiHud::_LayoutPanels()
 	_topStrip->SetSize({ static_cast<unsigned int>(topWidth), static_cast<unsigned int>(topHeight) });
 	_topStrip->SetVisible(topWidth > 0 && topHeight > 0);
 	const int padding = std::min(static_cast<int>(_TopStripPadding), std::min(topWidth, topHeight) / 2);
-	_topStrip->SetPadding(padding, padding);
 	const int innerWidth = std::max(0, topWidth - 2 * padding);
-	const int headerHeight = std::min(22, std::max(0, topHeight - 2 * padding));
-	const int rowHeight = std::min(static_cast<int>(_SourceViewportHeight), std::max(0, topHeight - 2 * padding - headerHeight - static_cast<int>(_TopStripSpacing)));
-	if (auto header = _topStrip->TryGetChild(0u))
-	{
-		header->SetSize({ static_cast<unsigned int>(innerWidth), static_cast<unsigned int>(headerHeight) });
-		header->SetVisible(innerWidth >= 40 && headerHeight >= 22);
-	}
-	_topSourceRow->SetSize({ static_cast<unsigned int>(innerWidth), static_cast<unsigned int>(rowHeight) });
+	const int rowHeight = std::min(static_cast<int>(_SourceViewportHeight), std::max(0, topHeight - 2 * padding));
 	_topSourceRow->SetVisible(innerWidth > 0 && rowHeight > 0);
 	const auto audioCount = static_cast<unsigned int>(std::count_if(_sourceEndpoints.begin(), _sourceEndpoints.end(),
 		[](const auto& source) { return source.Kind == io::RigFileRouting::SourceKind::Adc; }));
 	const auto midiCount = static_cast<unsigned int>(_sourceEndpoints.size()) - audioCount;
 	const int categoryGap = audioCount && midiCount ? std::min(static_cast<int>(GuiStackPanelParams::PanelRowSpacing + 4u), innerWidth) : 0;
-	const auto budget = static_cast<unsigned int>(innerWidth - categoryGap);
+	const int labelWidth = innerWidth >= static_cast<int>((audioCount + midiCount) * 84u) + 68 ? 68 : 0;
+	const auto budget = static_cast<unsigned int>(std::max(0, innerWidth - labelWidth - categoryGap));
 	auto audioWidth = audioCount + midiCount ? static_cast<unsigned int>(static_cast<unsigned long long>(budget) * audioCount / (audioCount + midiCount)) : 0u;
 	// Keep a minority category usable too: one minimum-width card plus the
 	// row's 2px padding on each side. Below this budget retain real clipping.
@@ -845,8 +835,13 @@ void GuiHud::_LayoutPanels()
 	};
 	layoutCategory(_topInputRow, _topAudioScroll, audioCount, audioCard, audioWidth);
 	layoutCategory(_topMidiRow, _topMidiScroll, midiCount, midiCard, midiWidth);
-	_topStrip->ComputeLayout();
-	_topSourceRow->SetPosition({ topWidth - padding - static_cast<int>(_topSourceRow->GetSize().Width), _topSourceRow->Position().Y });
+	_topSourceRow->SetPosition({ topWidth - padding - static_cast<int>(_topSourceRow->GetSize().Width), topHeight - padding - rowHeight });
+	if (auto header = _topStrip->TryGetChild(0u))
+	{
+		header->SetPosition({ _topSourceRow->Position().X - labelWidth, topHeight - padding - 28 });
+		header->SetSize({ static_cast<unsigned int>(labelWidth), 22u });
+		header->SetVisible(labelWidth > 0 && rowHeight >= 28);
+	}
 	_topSourceRow->ComputeLayout();
 	_triggerList->ComputeLayout();
 	const int statusWidth = std::min(520, std::max(0, width - 16));
