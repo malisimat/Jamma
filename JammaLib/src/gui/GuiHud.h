@@ -95,6 +95,7 @@ namespace gui
 		static std::vector<CableRoute> BuildCableRoutes(const engine::RoutingGraph& graph);
 		static int RevealScrollOffset(int currentOffset, int viewportHeight,
 			int contentHeight, int itemTop, int itemBottom);
+		static unsigned int SourceCardWidth(unsigned int viewportWidth, unsigned int count);
 		// UI-owned geometry snapshot: visible real snap sockets and presented
 		// curves with original route identity, including decorative continuations.
 		void BuildInteractionGeometry(std::vector<CableInteraction::Endpoint>& endpoints,
@@ -107,7 +108,7 @@ namespace gui
 	private:
 		static constexpr int _OuterMargin = 20;
 		static constexpr int _TopPosY = 18;
-		static constexpr unsigned int _TopStripHeight = 104u;
+		static constexpr unsigned int _TopStripHeight = 108u;
 		static constexpr unsigned int _TopStripWidth = 760u;
 		static constexpr unsigned int _TopStripMinWidth = 320u;
 		static constexpr unsigned int _TopStripPadding = 12u;
@@ -115,15 +116,13 @@ namespace gui
 		static constexpr unsigned int _SourceButtonWidth = 118u;
 		static constexpr unsigned int _SourceButtonHeight = 34u;
 		static constexpr unsigned int _SourceScrollBarHeight = 12u;
-		static constexpr unsigned int _SourceViewportHeight = _SourceButtonHeight + _SourceScrollBarHeight;
+		static constexpr unsigned int _SourceViewportHeight = _SourceButtonHeight + _SourceScrollBarHeight + 4u;
 		static constexpr unsigned int _SourcePanelGap = 8u;
-		static constexpr unsigned int _RightRailWidth = 134u;
+		static constexpr unsigned int _RightRailWidth = 144u;
 		static constexpr unsigned int _RightRailHeight = 460u;
 		static constexpr unsigned int _RightRailMinHeight = 220u;
 		static constexpr unsigned int _RightRailPaddingH = 0u;
 		static constexpr unsigned int _RightRailPaddingV = 12u;
-		static constexpr unsigned int _RightRailOverhang = 34u;
-		static constexpr unsigned int _RightRailTopInset = 60u;
 		static constexpr unsigned int _RightRailSpacing = 10u;
 		static constexpr unsigned int _TriggerButtonWidth = 120u;
 		static constexpr unsigned int _TriggerButtonHeight = 100u;
@@ -152,6 +151,8 @@ namespace gui
 		void _RevealTrigger(size_t triggerIndex);
 		void _RebuildPanels();
 		void _LayoutPanels();
+		void _OpenSourceIdentity(const std::string& identity);
+		void _LayoutSourceIdentity();
 		utils::Rect2d _ContentClip(const std::shared_ptr<GuiScrollPanel>& scroll) const;
 		bool _InitCableShader(resources::ResourceLib& resourceLib);
 		bool _InitCableVertexArray();
@@ -181,7 +182,7 @@ namespace gui
 			unsigned int horizontalInset = 0u) const;
 		std::shared_ptr<GuiButton> _MakeSourceButton(const std::string& text,
 			const glm::vec3& tint,
-			unsigned int width) const;
+			unsigned int width, bool midi, bool available);
 		std::shared_ptr<GuiButton> _MakeTriggerButton(const std::string& text,
 			std::weak_ptr<engine::Trigger> trigger) const;
 		struct SourceWidgets
@@ -211,6 +212,12 @@ namespace gui
 		std::shared_ptr<GuiButton> _addTriggerButton;
 		std::shared_ptr<GuiLabel> _routingStatusLabel;
 		std::shared_ptr<GuiPopup> _deletePopup;
+		// UI-owned read-only identity popup. Rig/job rebuilds do not mutate it;
+		// resize and resource work stay on the existing UI/render paths.
+		std::shared_ptr<GuiPanel> _sourceInfoPanel;
+		std::shared_ptr<GuiScrollPanel> _sourceInfoScroll;
+		std::shared_ptr<GuiLabel> _sourceInfoLabel;
+		std::string _sourceIdentity;
 		std::shared_ptr<base::ActionReceiver> _deletePopupReceiver;
 		std::vector<SourceWidgets> _sourceWidgets;
 		std::vector<TriggerWidgets> _triggerWidgets;

@@ -211,7 +211,7 @@ void GuiScrollPanel::_InitResources(ResourceLib& resourceLib, bool forceInit)
 
 void GuiScrollPanel::Draw(base::DrawContext& ctx)
 {
-	if (!_isVisible)
+	if (!_isVisible || GetSize().Width == 0u || GetSize().Height == 0u)
 		return;
 
 	_UpdateMetrics();
@@ -343,4 +343,11 @@ void GuiScrollPanel::ClearPointerState()
 bool GuiScrollPanel::_IsInViewport(Position2d localPos) const
 {
 	return ContentRect().Contains(localPos);
+}
+
+void GuiScrollPanel::_ReleaseResources()
+{
+	GuiPanel::_ReleaseResources();
+	if (_contentHost) _contentHost->ReleaseResources();
+	if (_scrollBar) _scrollBar->ReleaseResources();
 }

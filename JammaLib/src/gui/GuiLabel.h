@@ -1,6 +1,7 @@
 #pragma once
 
 #include <memory>
+#include <functional>
 #include <atomic>
 #include <mutex>
 #include <algorithm>
@@ -95,6 +96,7 @@ namespace gui
 		int TextInsetX = 0;
 		int TextInsetY = 0;
 		bool CenterHorizontally = false;
+		bool Ellipsize = false;
 	};
 
 	class GuiLabel :
@@ -103,6 +105,9 @@ namespace gui
 	public:
 		GuiLabel(GuiLabelParams guiParams);
 		void SetString(const std::string& str);
+		std::optional<float> MeasureText(const std::string& text) const;
+		static std::string FitText(const std::string& text, float width,
+			const std::function<float(const std::string&)>& measure);
 
 	public:
 		virtual void Draw(base::DrawContext& ctx) override;
@@ -123,6 +128,7 @@ namespace gui
 		std::string _pendingStr;
 		utils::Position2d _textInset;
 		bool _centerHorizontally;
+		bool _ellipsize;
 		mutable std::mutex _stringMutex;
 		std::atomic<bool> _vertexArrayDirty;
 		GLuint _vertexArray;

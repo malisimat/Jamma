@@ -69,6 +69,7 @@ namespace gui
 
 	protected:
 		virtual void _InitResources(resources::ResourceLib& resourceLib, bool forceInit) override;
+		virtual void _ReleaseResources() override;
 
 	private:
 		unsigned int _ContentHeight() const;

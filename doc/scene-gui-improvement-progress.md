@@ -64,11 +64,35 @@ a replacement scope. The feature is not complete.
    Native correctness evidence is recorded; runtime/visual and performance
    checks remain required in slice 6.
 3. Actual HUD viewport layout, adaptive source cards and trigger viewport:
-   pending.
+   implemented. Removed virtual minimum dimensions, nominal input-width cap,
+   rail overhang and unexplained vertical offsets. Viewports use signed,
+   clamped client geometry. Audio/MIDI space is allocated by populated source
+   counts; empty categories reserve no viewport. Cards resize in place between
+   80 and 160 px with full logical row extents when the minimum overflows.
+   Labels reserve meter space, sockets follow card centers, and scroll offsets
+   are preserved/clamped. Trigger cards stay 100 px tall; only viewport height
+   changes. Header/footer controls hide when their real frames cannot fit.
+   Long labels use resolved glyph advances and retained full text for ellipsis.
+   Clicking a source opens a retained, horizontally scrollable identity popup;
+   availability is structured input and an explicit Offline label, not parsed
+   from device names or conveyed solely through colour. Popup state is UI-owned;
+   job-side rig rebuilds do not edit it. Existing published rig inputs and
+   Scene's guarded HUD rebuild path are retained. Fonts remain existing
+   resources, with requested label heights preserved after font selection.
+   Pointer cancellation clears callback press state, and scroll/HUD resource
+   teardown now covers their independently owned content and popup trees.
+   Native tests cover widths, tiny/zero viewports, single-row/socket alignment,
+   widget reuse, scroll clamping, measured ellipsis and identity popup capture/
+   resize/cancel. Final focused code/lifecycle reviews found no material defect.
+   Incremental Debug library, test and app builds passed, and all 153 focused
+   GUI/cable/layout/Scene tests passed (157 ms). Runtime/visual evidence
+   and the smallest supported interactive window size remain slice 6 work.
 4. Production settings pages, command adapters, focus/capture cleanup and
    explicit overlay draw/input priority: pending.
 5. Stable text geometry, scoped opacity, shared palette and frame-time motion:
-   pending.
+   in progress: requested label frames now survive font resolution, and measured
+   ellipsis is available to HUD labels. Common vertical glyph/caret alignment,
+   scoped opacity, palette and motion remain pending.
 6. Integration review, app build, runtime/visual checks during playback and
    baseline/feature performance comparison: pending.
 7. Final requirement audit and HTML completion report: pending.

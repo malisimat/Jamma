@@ -7,6 +7,9 @@
 #include "gui/GuiLabel.h"
 #include "gui/GuiPanel.h"
 #include "gui/GuiScrollPanel.h"
+#include "gui/GuiHud.h"
+#include "gui/GuiPopupManager.h"
+#include "engine/RigSnapshot.h"
 #include "engine/Scene.h"
 
 using base::LayoutSizing;
@@ -563,6 +566,18 @@ TEST(GuiScrollPanel, EmptyAndTinyContentRectsStayWithinPanel)
 	}
 }
 
+TEST(GuiScrollPanel, EmptyViewportSkipsGraphicsWork)
+{
+	gui::GuiScrollPanelParams params;
+	auto scroll = std::make_shared<gui::GuiScrollPanel>(params);
+	base::DrawContext context({ 0u, 0u }, base::DrawContext::SCREEN);
+	for (const auto size : { utils::Size2d{ 0u, 50u }, { 50u, 0u }, { 0u, 0u } })
+	{
+		scroll->SetSize(size);
+		EXPECT_NO_THROW(scroll->Draw(context));
+	}
+}
+
 TEST(GuiScrollPanel, EffectiveRectIncludesNestedScrollTransformsAndWindowClip)
 {
 	gui::GuiScrollPanelParams params;
@@ -598,4 +613,167 @@ TEST(Rect2d, DisjointIntersectionAndHalfOpenEdges)
 	EXPECT_FALSE(rect.Contains({ 5, 13 }));
 	EXPECT_TRUE(rect.Intersected({ 20, 20, 30, 30 }).IsEmpty());
 	EXPECT_TRUE(rect.Intersected({ 0, 0, 0, 0 }).IsEmpty());
+}
+
+TEST(GuiHudLayout, AdaptiveCardWidthsUseAvailableSpaceAndRetainMinimumForScrolling)
+{
+	EXPECT_EQ(0u, gui::GuiHud::SourceCardWidth(500u, 0u));
+	EXPECT_EQ(160u, gui::GuiHud::SourceCardWidth(500u, 1u));
+	EXPECT_EQ(100u, gui::GuiHud::SourceCardWidth(210u, 2u));
+	EXPECT_EQ(80u, gui::GuiHud::SourceCardWidth(169u, 2u));
+	EXPECT_EQ(80u, gui::GuiHud::SourceCardWidth(0u, 100u));
+}
+
+class HudResponsiveLayoutTests : public ::testing::Test
+{
+protected:
+	static std::vector<std::shared_ptr<gui::GuiScrollPanel>> Scrolls(const std::shared_ptr<base::GuiElement>& element)
+	{
+		std::vector<std::shared_ptr<gui::GuiScrollPanel>> result;
+		for (unsigned int index = 0; index < 256; ++index)
+		{
+			const auto child = element->TryGetChild(static_cast<unsigned char>(index));
+			if (!child) break;
+			if (auto scroll = std::dynamic_pointer_cast<gui::GuiScrollPanel>(child)) result.push_back(scroll);
+			const auto nested = Scrolls(child);
+			result.insert(result.end(), nested.begin(), nested.end());
+		}
+		return result;
+	}
+	static engine::RigSnapshot Routing()
+	{
+		engine::RigSnapshot snapshot;
+		snapshot.Revision = 1u;
+		for (size_t index = 0; index < 12; ++index)
+		{
+			io::RigFileRouting::TriggerResolution trigger;
+			trigger.TriggerIndex = index;
+			trigger.TriggerName = "Trigger " + std::to_string(index);
+			snapshot.Graph.Triggers.push_back(trigger);
+		}
+		return snapshot;
+	}
+};
+
+TEST_F(HudResponsiveLayoutTests, ResizeKeepsScrollViewportsInsideActualWindowAndCardsInOneRow)
+{
+	gui::GuiHudParams params;
+	params.Size = { 1600u, 900u };
+	auto hud = std::make_shared<gui::GuiHud>(params);
+	hud->SetRoutingConfig(8u, { "A very long MIDI device identity with ascenders and descenders 123456789" }, Routing());
+	const auto scrolls = Scrolls(hud);
+	ASSERT_EQ(3u, scrolls.size());
+	const auto sourceCard = scrolls[0]->Content()->TryGetChild(0);
+	ASSERT_NE(nullptr, sourceCard);
+	const auto largeWidth = sourceCard->GetSize().Width;
+	for (const auto size : { utils::Size2d{ 500u, 300u }, { 80u, 60u }, { 1u, 1u }, { 0u, 0u }, { 1600u, 900u } })
+	{
+		hud->SetSize(size);
+		for (const auto& scroll : scrolls)
+		{
+			const auto pos = scroll->GlobalPosition();
+			if (scroll->IsVisible())
+			{
+				EXPECT_GE(pos.X, 0);
+				EXPECT_GE(pos.Y, 0);
+				EXPECT_LE(pos.X + static_cast<int>(scroll->GetSize().Width), static_cast<int>(size.Width));
+				EXPECT_LE(pos.Y + static_cast<int>(scroll->GetSize().Height), static_cast<int>(size.Height));
+			}
+			EXPECT_GE(scroll->ScrollOffset(), 0);
+			EXPECT_LE(scroll->ScrollOffset(), scroll->MaxScrollOffset());
+		}
+		for (unsigned char index = 0; index < 8; ++index)
+		{
+			const auto card = scrolls[0]->Content()->TryGetChild(index);
+			ASSERT_NE(nullptr, card);
+			EXPECT_EQ(34u, card->GetSize().Height);
+			EXPECT_GE(card->GetSize().Width, 80u);
+			EXPECT_LE(card->GetSize().Width, 160u);
+			EXPECT_EQ(2, card->Position().Y);
+			const auto socket = card->TryGetChild(2);
+			ASSERT_NE(nullptr, socket);
+			EXPECT_EQ(static_cast<int>(card->GetSize().Width / 2u), socket->Position().X + 12);
+			EXPECT_LE(card->TryGetChild(0)->Position().X + static_cast<int>(card->TryGetChild(0)->GetSize().Width),
+				static_cast<int>(card->GetSize().Width) - 13);
+		}
+		for (unsigned char index = 0; index < 12; ++index)
+			EXPECT_EQ(100u, scrolls[2]->Content()->TryGetChild(index)->GetSize().Height);
+	}
+	EXPECT_EQ(sourceCard.get(), scrolls[0]->Content()->TryGetChild(0).get());
+	EXPECT_EQ(largeWidth, sourceCard->GetSize().Width);
+}
+
+TEST_F(HudResponsiveLayoutTests, ResizeClampsExistingScrollOffsetWithoutRebuildingCards)
+{
+	gui::GuiHudParams params;
+	params.Size = { 600u, 300u };
+	auto hud = std::make_shared<gui::GuiHud>(params);
+	hud->SetRoutingConfig(12u, {}, Routing());
+	const auto scrolls = Scrolls(hud);
+	ASSERT_EQ(2u, scrolls.size());
+	const auto card = scrolls[0]->Content()->TryGetChild(0);
+	for (const auto& scroll : scrolls) scroll->SetScrollOffset(scroll->MaxScrollOffset());
+	hud->SetSize({ 700u, 350u });
+	EXPECT_GT(scrolls[0]->ScrollOffset(), 0);
+	EXPECT_LE(scrolls[0]->ScrollOffset(), scrolls[0]->MaxScrollOffset());
+	hud->SetSize({ 3000u, 2000u });
+	EXPECT_EQ(0, scrolls[0]->ScrollOffset());
+	EXPECT_EQ(0, scrolls[1]->ScrollOffset());
+	EXPECT_EQ(card.get(), scrolls[0]->Content()->TryGetChild(0).get());
+}
+
+TEST_F(HudResponsiveLayoutTests, SourceIdentityPopupUsesExistingCaptureAndStaysWithinResizedWindow)
+{
+	gui::GuiPopupManager popups;
+	gui::GuiHudParams params;
+	params.Size = { 1200u, 800u };
+	params.PopupManager = &popups;
+	auto hud = std::make_shared<gui::GuiHud>(params);
+	hud->SetRoutingConfig(0u, { "Available device named (unavailable)" }, Routing());
+	const auto scrolls = Scrolls(hud);
+	ASSERT_EQ(2u, scrolls.size());
+	const auto card = scrolls[0]->Content()->TryGetChild(0);
+	actions::TouchAction touch;
+	touch.Index = 0;
+	touch.Touch = actions::TouchAction::TOUCH_MOUSE;
+	touch.Position = { 5, 5 };
+	touch.State = actions::TouchAction::TOUCH_DOWN;
+	ASSERT_TRUE(card->OnAction(touch).IsEaten);
+	card->ClearPointerState();
+	touch.State = actions::TouchAction::TOUCH_UP;
+	card->OnAction(touch);
+	EXPECT_FALSE(popups.IsOpen());
+	touch.State = actions::TouchAction::TOUCH_DOWN;
+	ASSERT_TRUE(card->OnAction(touch).IsEaten);
+	touch.State = actions::TouchAction::TOUCH_UP;
+	card->OnAction(touch);
+	ASSERT_TRUE(popups.IsOpen());
+	const auto popup = popups.Top();
+	hud->SetSize({ 240u, 150u });
+	EXPECT_EQ(popup.get(), popups.Top().get());
+	EXPECT_GE(popup->Position().X, 0);
+	EXPECT_GE(popup->Position().Y, 0);
+	EXPECT_LE(popup->Position().X + static_cast<int>(popup->GetSize().Width), 240);
+	EXPECT_LE(popup->Position().Y + static_cast<int>(popup->GetSize().Height), 150);
+	EXPECT_TRUE(popups.OnAction(touch).IsEaten);
+	touch.State = actions::TouchAction::TOUCH_DOWN;
+	touch.Position = { 0, 0 };
+	EXPECT_TRUE(popups.OnAction(touch).IsEaten);
+	EXPECT_FALSE(popups.IsOpen());
+}
+
+TEST(GuiLabel, FitsMeasuredWidthsWithEllipsisAndHandlesEmptyFrames)
+{
+	const auto measure = [](const std::string& text)
+	{
+		float width = 0.0f;
+		for (char ch : text) width += ch == 'W' ? 12.0f : ch == '.' ? 2.0f : 5.0f;
+		return width;
+	};
+	EXPECT_EQ("Wide", gui::GuiLabel::FitText("Wide", 27.0f, measure));
+	EXPECT_EQ("W...", gui::GuiLabel::FitText("WWWW", 20.0f, measure));
+	EXPECT_EQ("...", gui::GuiLabel::FitText("WWWW", 6.0f, measure));
+	EXPECT_EQ(".", gui::GuiLabel::FitText("WWWW", 3.0f, measure));
+	EXPECT_EQ("", gui::GuiLabel::FitText("WWWW", 0.0f, measure));
+	EXPECT_EQ("", gui::GuiLabel::FitText("", 20.0f, measure));
 }
