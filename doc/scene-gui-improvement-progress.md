@@ -222,6 +222,44 @@ a replacement scope. The feature is not complete.
    An ignored source archive of code baseline
    `815dfd309b82d7c22d1e91eb5ccad02dbc188eca` is prepared under `bin/gui-baseline`
    for the same-scene comparison; no performance conclusions have been drawn.
+   The baseline library and native target now build successfully. A shared
+   unchanged benchmark header (SHA-256
+   `936395AB5E76503D44C616AA4B5250241327486DACD1F15C1C2034E702ED9E59`)
+   verifies eight stations, sixteen loaded mono loops with unique take/loop
+   identities, and twenty-four triggers. Both revisions use the same quiet
+   generated PCM sidecar, viewport, resources, Debug configuration, AMD GPU and
+   OpenGL 4.0 core context. The runner reads local tasks, owns a hidden isolated
+   test process, drains logs asynchronously, rejects test failure/skip/stale CSV,
+   and checks 600 fresh rows. Its one-second timeout path was exercised and
+   correctly stopped only the owned process. Final baseline and feature runs
+   were sequential after compilation, passed (25907/25401 ms), and produced
+   empty GL error logs. Raw timings/metadata/logs are local ignored artifacts
+   under each revision's `test/JammaLib_Tests/bin/x64/Debug/gui-benchmark/`.
+   Each workload has 120 measured frames after warmup. Dispatch, Render plus
+   glFinish, swap, and total iteration time are separate. Cable reveal remains
+   held; panel-edge/wheel/pointer scenarios inject common input but do not prove
+   equivalent control effects or successful cable drags. Native resize checks
+   actual dimensions. Swap interval 1 remains enabled and substantially affects
+   total time. Preliminary Render+glFinish p50/p95/p99 (milliseconds):
+
+   | Workload | Baseline | Feature |
+   | --- | --- | --- |
+   | Idle with cables | 14.866 / 16.504 / 18.361 | 14.471 / 16.273 / 19.558 |
+   | Panel edge input | 13.834 / 16.240 / 17.865 | 13.050 / 15.925 / 23.527 |
+   | Wheel input | 14.352 / 16.107 / 16.840 | 14.271 / 16.572 / 22.797 |
+   | Native resize | 15.118 / 19.974 / 25.253 | 14.611 / 19.750 / 24.252 |
+   | Pointer input | 15.425 / 16.231 / 16.551 | 14.740 / 15.990 / 19.704 |
+
+   This single pair is preparation evidence, with ordering/noise and unverified
+   input effects; it establishes no performance budget or live-audio result.
+   Playback was not started and underruns are unmeasured. Full comparison still
+   needs verified interactions under playback and repeated/interleaved runs.
+   Focused benchmark/runner review found no material issue after timing/label
+   corrections. The normal suite passed 183 checks (216 ms), with all four
+   driver/benchmark checks skipped as intended; both opt-in benchmark runs
+   separately passed. ASIO device/rate/buffer details have been requested for
+   the live gate; only registered driver names (MAYA22USB/ASIO4ALL), not hardware
+   connectivity, have been inspected.
    Real foreground desktop interaction/maximize/restore, populated loop playback
    and baseline frame-time/underrun comparison
    remain unverified. The computer-use skill was read, but this session exposes

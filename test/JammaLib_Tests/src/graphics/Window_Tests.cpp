@@ -9,6 +9,7 @@
 #include "gui/GuiNumericInput.h"
 #include <filesystem>
 #include <cstdlib>
+#include "SceneGuiBenchmark.h"
 
 using resources::ResourceLib;
 using graphics::Window;
