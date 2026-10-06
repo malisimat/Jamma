@@ -698,9 +698,9 @@ void Scene::Draw(DrawContext& ctx)
 	for (auto& child : _guiChildren)
 		if (child && child != _mainPanel && child != _selectionPanel)
 			child->Draw(ctx);
-	_label->SetPosition({ std::max(0, static_cast<int>(_sizeParams.Size.Width) - 8 - std::min(520, std::max(0, static_cast<int>(_sizeParams.Size.Width) - 16))) + 8, 16 });
-	_label->SetSize({ static_cast<unsigned int>(std::max(0, std::min(520, static_cast<int>(_sizeParams.Size.Width) - 16) - 16)), 24u });
-	if (_sizeParams.Size.Height >= 104u) _label->Draw(ctx);
+	_label->SetPosition({ std::max(0, static_cast<int>(_sizeParams.Size.Width) - 8 - std::min(520, std::max(0, static_cast<int>(_sizeParams.Size.Width) - 384))) + 8, 16 });
+	_label->SetSize({ static_cast<unsigned int>(std::max(0, std::min(520, static_cast<int>(_sizeParams.Size.Width) - 384) - 16)), 24u });
+	if (_sizeParams.Size.Height >= 104u && _sizeParams.Size.Width >= 424u) _label->Draw(ctx);
 	if (!_popupManager.IsOpen()) _loopEditor.Draw(ctx);
 	_mainPanel->Draw(ctx);
 	_selectionPanel->Draw(ctx);

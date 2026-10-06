@@ -23,11 +23,13 @@ LoopGridEditor::LoopGridEditor(Host host, utils::Size2d size) :
 	_button->SetVisible(false);
 
 	auto feedbackParams = gui::GuiLabelParams::PanelHeader("", 330u);
+	feedbackParams.Ellipsize = true;
 	feedbackParams.Position = { std::max(0, buttonPos.X - 340), buttonPos.Y + 6 };
 	_feedback = std::make_shared<gui::GuiLabel>(feedbackParams);
 	_feedback->Init();
 
 	auto modeParams = gui::GuiLabelParams::PanelHeader("", 260u);
+	modeParams.Ellipsize = true;
 	modeParams.Position = { std::max(0, buttonPos.X - 340), buttonPos.Y - 20 };
 	_modeLabel = std::make_shared<gui::GuiLabel>(modeParams);
 	_modeLabel->Init();
@@ -122,7 +124,7 @@ void LoopGridEditor::_Layout()
 {
 	const auto pos = _ButtonPosition(_size);
 	_button->SetPosition(pos);
-	const int statusWidth = std::min(520, std::max(0, static_cast<int>(_size.Width) - 16));
+	const int statusWidth = std::min(520, std::max(0, static_cast<int>(_size.Width) - 384));
 	const int statusX = std::max(0, static_cast<int>(_size.Width) - 8 - statusWidth);
 	_feedback->SetPosition({ statusX + 8, 86 });
 	_feedback->SetSize({ static_cast<unsigned int>(std::max(0, statusWidth - 16)), 22u });

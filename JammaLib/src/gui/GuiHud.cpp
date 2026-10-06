@@ -844,7 +844,7 @@ void GuiHud::_LayoutPanels()
 	}
 	_topSourceRow->ComputeLayout();
 	_triggerList->ComputeLayout();
-	const int statusWidth = std::min(520, std::max(0, width - 16));
+	const int statusWidth = std::min(520, std::max(0, width - 384));
 	const int statusHeight = std::min(120, std::max(0, height - 16));
 	_statusPanel->SetPosition({ std::max(0, width - 8 - statusWidth), marginY });
 	_statusPanel->SetSize({ static_cast<unsigned int>(statusWidth), static_cast<unsigned int>(statusHeight) });
