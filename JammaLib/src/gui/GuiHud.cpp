@@ -626,7 +626,7 @@ void GuiHud::_BuildTriggerRail()
 	statusPanelParams.Texture = "red";
 	statusPanelParams.TextureShader = "colour";
 	statusPanelParams.TintColor = GuiStyle::Graphite();
-	statusPanelParams.TextureOpacity = 1.0f;
+	statusPanelParams.TextureOpacity = 0.80f;
 	_statusPanel = std::make_shared<GuiHudStatusPanel>(statusPanelParams);
 	_statusPanel->AddChild(_routingStatusLabel);
 	AddChild(_statusPanel);

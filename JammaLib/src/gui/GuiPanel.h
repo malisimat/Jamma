@@ -12,7 +12,7 @@ namespace gui
 		static glm::vec3 Graphite() { return { 0.24f, 0.26f, 0.29f }; }
 		static glm::vec3 Control() { return { 0.88f, 0.57f, 0.30f }; }
 		static glm::vec3 Edge() { return { 0.66f, 0.77f, 0.80f }; }
-		static constexpr int StatusBarHeight = 60;
+		static constexpr int StatusBarHeight = 28;
 		static int StatusBarWidth(int viewportWidth) { return std::max(0, viewportWidth - 368); }
 		static int StatusColumnWidth(int barWidth) { return std::min(220, barWidth); }
 		static int VersionColumnWidth(int barWidth) { return std::min(160, std::max(0, barWidth - StatusColumnWidth(barWidth))); }
