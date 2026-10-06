@@ -287,6 +287,26 @@ a replacement scope. The feature is not complete.
    suite passed 188 checks (3721 ms), with only the separately enabled benchmark
    skipped and an empty GPU error log. The preliminary timings above predate
    these input fixes and are historical preparation evidence.
+   The production-window fixture now loads one real mono audio loop into each
+   of eight stations and restores a completed MIDI note-on/off stream before
+   resource initialization. It verifies loop membership/length, opens the real
+   MIDI editor, waits for readiness using a bounded wall-clock deadline, and
+   renders it with expanded settings. Modified settings presses/releases and
+   panel wheels are consumed; the special engaged-editor HUD path scrolls the
+   real trigger list, and modified All/Off clicks change the take's resolved
+   quantisation state. Editor pitch range/visible rows and MIDI edit revision,
+   event count and timestamps remain unchanged, covering wheel fallthrough as
+   well as note edits. Closing verifies zero morph, closed state and cleared
+   target. Actual captures `production-window-expanded.bmp`,
+   `production-window-midi-editor.bmp` and
+   `production-window-editor-restored.bmp` were visually inspected: loaded
+   models/editor draw beneath settings and restore correctly. This verifies
+   populated rendering and editor input, not hardware playback. Focused review
+   strengthened deadline waits and wheel-state assertions; the final suite
+   passed 188 checks (5207 ms), with the separate benchmark skipped and no GPU
+   errors. The incremental native build passed. Inspection also identified a
+   remaining plan gap: Window clamps zero client dimensions to one and retains
+   old Scene layout when minimized. Zero-viewport handling is the next slice.
 7. Final requirement audit and HTML completion report: pending.
 
 ## Local build setup

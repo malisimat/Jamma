@@ -520,8 +520,21 @@ TEST(GuiRenderEvidence, ProductionWindowSceneResizeAndPanelInput)
 	}
 	resources::ResourceLib resources;
 	io::JamFile jam{}; io::RigFile rig{};
+	const auto fixture = output / "production-fixture";
+	std::filesystem::create_directories(fixture);
+	constexpr unsigned int length = 48000;
+	std::vector<float> samples(length);
+	for (size_t index = 0; index < samples.size(); ++index)
+		samples[index] = 0.0025f * static_cast<float>(std::sin(6.283185307179586 * 220.0 * index / length));
+	ASSERT_TRUE(io::WavReadWriter().Write((fixture / "quiet-tone.wav").wstring(), samples, length, length));
+	jam.MasterLengthSamps = length; jam.QuantiseSamps = 6000;
 	for (unsigned int index = 0; index < 8; ++index) {
 		io::JamFile::Station station{}; station.Name = "Station " + std::to_string(index);
+		io::JamFile::LoopTake savedTake{}; savedTake.Name = station.Name + " Take";
+		io::JamFile::Loop loop{}; loop.Name = "quiet-tone.wav"; loop.Id = savedTake.Name + " Audio";
+		loop.Length = length; loop.Level = 0.25; loop.Speed = 1.0;
+		loop.Mix.Mix = io::JamFile::LoopMix::MIX_WIRE; loop.Mix.Params = std::vector<unsigned long>{ 0, 1 };
+		savedTake.Loops.push_back(loop); station.LoopTakes.push_back(savedTake);
 		jam.Stations.push_back(station);
 	}
 	for (unsigned int index = 0; index < 16; ++index) {
@@ -529,10 +542,23 @@ TEST(GuiRenderEvidence, ProductionWindowSceneResizeAndPanelInput)
 		trigger.StationTarget = jam.Stations[index % jam.Stations.size()].Name;
 		trigger.InputChannels = { index % 8 }; rig.Triggers.push_back(trigger);
 	}
-	const auto loaded = Scene::FromFile(SceneParams({ "" }, {}, base::SizeableParams{ { 1000, 650 }, {} }), jam, rig, L"");
+	const auto loaded = Scene::FromFile(SceneParams({ "" }, {}, base::SizeableParams{ { 1000, 650 }, {} }), jam, rig, fixture.wstring());
 	ASSERT_TRUE(loaded); auto scene = *loaded;
-	auto take = scene->SnapshotStations().front()->AddTake();
-	ASSERT_TRUE(take);
+	scene->CommitChanges();
+	ASSERT_EQ(8u, scene->SnapshotStations().size());
+	for (const auto& station : scene->SnapshotStations()) {
+		ASSERT_EQ(1u, station->GetLoopTakes().size());
+		ASSERT_EQ(1u, station->GetLoopTakes().front()->GetLoops().size());
+		EXPECT_EQ(length, station->GetLoopTakes().front()->GetLoops().front()->LoopLength());
+	}
+	auto take = scene->SnapshotStations().front()->GetLoopTakes().front();
+	engine::LoopTake::MidiExportState midiState; midiState.LoopLengthSamps = length;
+	engine::LoopTake::MidiStreamExport stream; stream.Channel = 0;
+	stream.Loop.LoopLengthSamps = length; stream.Loop.EventCount = 2;
+	stream.Loop.Events[0] = midi::MidiEvent::MakeNoteOn(6000u, 0u, 60u, 96u);
+	stream.Loop.Events[1] = midi::MidiEvent::MakeNoteOff(18000u, 0u, 60u);
+	midiState.Streams.push_back(stream);
+	ASSERT_TRUE(take->RestoreMidiFromExport(midiState));
 	Window window(*scene, resources);
 	ProductionWindowEvidenceCleanup cleanup(window, *scene);
 	// Window::Create can show a modal error on unsupported production formats.
@@ -614,5 +640,57 @@ TEST(GuiRenderEvidence, ProductionWindowSceneResizeAndPanelInput)
 		EXPECT_EQ(index == 2u, take->ResolvedMidiQuantisation().Enabled);
 		EXPECT_FALSE(scene->HasSelection());
 	}
+	take->Select();
+	ASSERT_EQ(1u, take->GetMidiLoops().size());
+	const auto midiLoop = take->GetMidiLoops().front();
+	ASSERT_TRUE(scene->OpenLoopGridEditor(take, {}, midiLoop));
+	const auto openDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+	while (!scene->LoopGridEditorReady() && std::chrono::steady_clock::now() < openDeadline) {
+		window.Render(); glFinish(); window.Swap();
+		std::this_thread::sleep_for(std::chrono::milliseconds(10));
+	}
+	ASSERT_TRUE(scene->LoopGridEditorReady());
+	midi::MidiLoop::EditState before; ASSERT_TRUE(midiLoop->SnapshotForEdit(before));
+	ASSERT_EQ(2u, before.EventCount);
+	ASSERT_TRUE(midiLoop->Model());
+	const auto bottomPitch = midiLoop->Model()->EditorBottomPitch();
+	const auto visibleRows = midiLoop->Model()->EditorVisibleRows();
+	capture("production-window-midi-editor");
+	press.Position = { 300, 100 };
+	press.Modifiers = static_cast<base::Action::Modifiers>(base::Action::MODIFIER_SHIFT | base::Action::MODIFIER_CTRL);
+	press.State = actions::TouchAction::TOUCH_DOWN; EXPECT_TRUE(window.OnAction(press).IsEaten);
+	press.State = actions::TouchAction::TOUCH_UP; EXPECT_TRUE(window.OnAction(press).IsEaten);
+	wheel.Position = press.Position; wheel.Modifiers = press.Modifiers;
+	EXPECT_TRUE(window.OnAction(wheel).IsEaten);
+	// The engaged editor uses a separate HUD input path. Scroll there, then
+	// click real relocated controls with modifiers rather than just the backdrop.
+	(*triggerScroll)->SetScrollOffset(0);
+	wheel.Position = { scrollPosition.X + 60, scrollPosition.Y + 100 };
+	EXPECT_TRUE(window.OnAction(wheel).IsEaten);
+	EXPECT_GT((*triggerScroll)->ScrollOffset(), 0);
+	for (const auto index : { 2u, 0u }) {
+		const auto toggle = radio->TryGetChild(static_cast<unsigned char>(index));
+		const auto pos = toggle->GlobalPosition(); const auto size = toggle->GetSize();
+		press.Position = { pos.X + static_cast<int>(size.Width / 2), pos.Y + static_cast<int>(size.Height / 2) };
+		press.State = actions::TouchAction::TOUCH_DOWN; EXPECT_TRUE(window.OnAction(press).IsEaten);
+		press.State = actions::TouchAction::TOUCH_UP; EXPECT_TRUE(window.OnAction(press).IsEaten);
+		EXPECT_EQ(index == 2u, take->ResolvedMidiQuantisation().Enabled);
+	}
+	EXPECT_TRUE(scene->IsLoopGridEditorOpen()); EXPECT_EQ(midiLoop, scene->LoopGridEditorMidiLoop());
+	EXPECT_EQ(bottomPitch, midiLoop->Model()->EditorBottomPitch());
+	EXPECT_EQ(visibleRows, midiLoop->Model()->EditorVisibleRows());
+	midi::MidiLoop::EditState after; ASSERT_TRUE(midiLoop->SnapshotForEdit(after));
+	EXPECT_EQ(before.Revision, after.Revision); EXPECT_EQ(before.EventCount, after.EventCount);
+	EXPECT_EQ(before.Events[0].sampleOffset, after.Events[0].sampleOffset);
+	EXPECT_EQ(before.Events[1].sampleOffset, after.Events[1].sampleOffset);
+	scene->CloseLoopGridEditor();
+	const auto closeDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+	while (scene->LoopGridEditorMorph() > 0.0f && std::chrono::steady_clock::now() < closeDeadline) {
+		window.Render(); glFinish(); window.Swap();
+		std::this_thread::sleep_for(std::chrono::milliseconds(10));
+	}
+	EXPECT_FLOAT_EQ(0.0f, scene->LoopGridEditorMorph());
+	EXPECT_FALSE(scene->IsLoopGridEditorOpen()); EXPECT_EQ(nullptr, scene->LoopGridEditorMidiLoop());
+	capture("production-window-editor-restored");
 	reveal.KeyActionType = actions::KeyAction::KEY_UP; window.OnAction(reveal);
 }
