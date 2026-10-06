@@ -2,9 +2,9 @@
 
 ## Current status
 
-The implementation is committed. The user has run the app and is happy with the results, with further feedback to be raised in a separate session. Work on the implementation goal has stopped at the user's request.
+The original implementation and the subsequent user-testing refinements are committed. The refinements cover right-aligned input cards, warmer control colours, image expanders, 8px outer margins, a bottom-right status panel and a translucent input background with inline label.
 
-The original scope below remains the reference for what was intended. Formal playback/performance verification and the final completion report remain outstanding; see [current progress](scene-gui-improvement-progress.md).
+The original scope below remains the reference for the initial implementation. See [current progress](scene-gui-improvement-progress.md) for follow-up changes and remaining visual/playback verification.
 
 ## Original intended outcome
 

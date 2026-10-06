@@ -2,9 +2,20 @@
 
 ## Status
 
-The implementation is committed. The user has run the app and is happy with the results, with additional feedback to be raised in a separate session. Work on the implementation goal has stopped at the user's request.
+The original implementation is committed. Follow-up changes from user testing on 6 October 2026 are also committed individually.
 
-The [original plan](scene-gui-improvement-plan.md) remains the scope reference. Implementation acceptance from the user's run does not supply the remaining detailed playback/performance measurements.
+## User-testing refinements
+
+- Audio and MIDI source categories shrink to occupied card widths and align together to the right, with consistent gaps and existing 80?160px card limits and scrolling.
+- Default panel controls use muted amber.
+- Selection/settings handles use the existing GuiRack arrow textures, with horizontal orientation for settings and state-dependent images.
+- Panel borders use 8px screen margins; selection/settings handles overlap the panel rather than reserving an extra strip.
+- A bottom-right status panel contains routing status, editor feedback/mode and Jamma version. The trigger rail ends above it. The Edit Loop button is removed; keyboard editing remains available.
+- HUD inputs have a translucent rounded background and an inline Inputs label that hides when space is limited.
+
+Incremental Debug x64 builds of JammaLib and Jamma pass after these refinements. No new tests were run. The status panel narrows to the space beside settings; very compact clients can hide its text.
+
+These changes require another visual review in the app, especially compact-window overlap and expander appearance. The earlier verification results below refer to the original implementation; no new runtime or playback acceptance is claimed.
 
 ## Implemented
 
@@ -22,7 +33,7 @@ The [original plan](scene-gui-improvement-plan.md) remains the scope reference. 
 
 ## Verification state
 
-- The user has manually run the app and accepted the current results. Their additional feedback has not yet been supplied.
+- The user has manually run the app and accepted the current results. Their additional feedback is recorded and implemented above.
 - Native and dependent app builds pass. The selected regression suite passes 281 checks covering GUI/geometry, owner bindings, MIDI/timing boundaries and actual GPU rendering.
 - Native window checks cover resize, actual maximize/minimize/restore, stationary-pointer hover, normal/editor input priority, popup sizing and compact selection/settings controls.
 - Component checks cover trigger Add/Delete/Cancel, snapshot projection, cable-body reconnect, cancellation and stale revisions. They do not establish adoption during hardware playback.
@@ -36,7 +47,7 @@ The tested compact interactive profile is a 400×240 client, using panel handles
 
 ## Outstanding
 
-1. Review the user's additional feedback in the next session; no specific feedback items have yet been recorded.
+1. Visually review the committed user-testing refinements across large and compact windows.
 2. Complete detailed playback verification of relocated settings and applied-state feedback, routing adoption, cable reconnect/cancel and camera/drag interactions, popup/edit/tab behavior, and compact-window readability.
 3. Measure repeated/interleaved baseline and feature frame-time distributions during playback, animation, scrolling, resize and cable drag, with the same populated scene and ASIO device/rate/buffer/channel configuration. Record actual driver underrun observations. The current ASIO resync flags are not a reliable independent count of hardware underruns or overruns.
 4. Complete the original requirement audit and final HTML completion report if that deliverable is still wanted. Neither has been completed.
