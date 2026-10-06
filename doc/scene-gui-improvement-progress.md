@@ -476,6 +476,27 @@ transitions; this does not require foreground desktop automation. The remaining
 performance gate also requires real underrun observations, not simulated
 playback or an unmeasured zero.
 
+### ASIO measurement limitation
+
+The application currently receives but discards RtAudioStreamStatus in
+[AudioHost.cpp](../JammaLib/src/audio/AudioHost.cpp); its callback heartbeat
+counts callback activity rather than underruns. The bundled ASIO backend in
+[RtAudio.cpp](../JammaLib/lib/rtaudio/RtAudio.cpp) sets one `asioXRun` flag from
+`kAsioResyncRequest`, described there as a driver-reported nonfatal data-loss
+notice. In callbackEvent, the output-underflow branch consumes that flag before
+the input-overflow branch. In duplex mode this cannot independently count both
+directions, and the flag is not a callback-deadline detector. Counting those
+flags could report resync notices, but zero flags would not prove zero hardware
+underruns. No such counter has been added or presented as that proof.
+
+The remaining matched playback runs need the actual selected ASIO device,
+sample rate, buffer size/count and channel configuration, plus the driver's
+underrun diagnostics if it provides them. AudioDevice logs attempted settings
+and publishes the negotiated stream parameters after opening; registry driver
+names alone do not establish connected hardware or a running configuration.
+The existing benchmark explicitly records playback as not started and
+underruns as unmeasured. Its historical timing pair remains preliminary.
+
 ## Local build setup
 
 The worktree initially lacked `vcpkg_installed`. Its dependency tree was copied
