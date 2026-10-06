@@ -27,8 +27,17 @@ GuiMainPanel::GuiMainPanel(GuiMainPanelParams params) : GuiPanel(params),
 	headerParams.Ellipsize = true;
 	_frame->AddChild(std::make_shared<GuiLabel>(headerParams));
 	GuiToggleParams handleParams = GuiToggleParams::PanelPrimary();
-	handleParams.Text = _selectionOnly ? "Selection" : "Settings";
-	handleParams.Size = { 140u, 28u };
+	handleParams.Text = "";
+	handleParams.Texture = "arrow";
+	handleParams.OverTexture = "arrow_over";
+	handleParams.DownTexture = "arrow_down";
+	handleParams.ToggledTexture = "arrowup2";
+	handleParams.ToggledOverTexture = "arrowup2_over";
+	handleParams.ToggledDownTexture = "arrowup2_down";
+	handleParams.Rot90 = !_selectionOnly;
+	handleParams.TextPadding = 0u;
+	handleParams.Size = { 28u, 28u };
+	handleParams.MinSize = handleParams.Size;
 	handleParams.InitState = GuiToggleParams::TOGGLE_ON;
 	handleParams.TintColor = GuiStyle::Control();
 	_handle = std::make_shared<GuiToggle>(handleParams);
@@ -211,7 +220,7 @@ void GuiMainPanel::_Layout()
 	const int panelHeight = std::min(_selectionOnly ? 152 : 320, std::max(0, height - handleHeight - 20));
 	const int handleY = _selectionOnly ? height - handleHeight : 0;
 	_handle->SetPosition({ margin, handleY });
-	_handle->SetSize({ static_cast<unsigned int>(std::min(140, std::max(0, width - 2 * margin))), static_cast<unsigned int>(handleHeight) });
+	_handle->SetSize({ static_cast<unsigned int>(std::min(28, std::max(0, width - 2 * margin))), static_cast<unsigned int>(handleHeight) });
 	_handle->SetVisible(width > 0 && handleHeight > 0);
 	_frame->SetSize({ static_cast<unsigned int>(panelWidth), static_cast<unsigned int>(panelHeight) });
 	_UpdatePresentation();
