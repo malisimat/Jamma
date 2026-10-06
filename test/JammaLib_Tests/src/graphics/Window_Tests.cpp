@@ -463,3 +463,110 @@ TEST(GuiRenderEvidence, ControlFamiliesCaretSelectionPopupAndNestedOpacity)
 	}
 	dropdown->Close(); ordinary->ReleaseResources(); root->ReleaseResources();
 }
+
+class ProductionWindowEvidenceCleanup
+{
+public:
+	ProductionWindowEvidenceCleanup(Window& window, Scene& scene) : Win(window), EngineScene(scene)
+	{
+		std::lock_guard<std::mutex> lock(graphics::GlDeleteQueue::_Mutex());
+		PreviousOwner = graphics::GlDeleteQueue::_RenderThreadId();
+	}
+	~ProductionWindowEvidenceCleanup()
+	{
+		Win.Release(); EngineScene.Shutdown();
+		graphics::GlDeleteQueue::SetRenderThread(PreviousOwner);
+	}
+private:
+	Window& Win;
+	Scene& EngineScene;
+	std::thread::id PreviousOwner{};
+};
+
+TEST(GuiRenderEvidence, ProductionWindowSceneResizeAndPanelInput)
+{
+	const char* directory = std::getenv("JAMMA_RENDER_EVIDENCE_DIR");
+	if (!directory || !*directory || !std::getenv("JAMMA_WINDOW_RENDER_EVIDENCE"))
+		GTEST_SKIP() << "Set JAMMA_RENDER_EVIDENCE_DIR and JAMMA_WINDOW_RENDER_EVIDENCE for the isolated production-window pass.";
+	const std::filesystem::path output(directory);
+	std::filesystem::create_directories(output);
+	{
+		NativeGuiRenderEvidence preflight;
+		ASSERT_TRUE(preflight.Initialize());
+		ASSERT_TRUE(GLEW_VERSION_4_0);
+	}
+	resources::ResourceLib resources;
+	io::JamFile jam{}; io::RigFile rig{};
+	for (unsigned int index = 0; index < 8; ++index) {
+		io::JamFile::Station station{}; station.Name = "Station " + std::to_string(index);
+		jam.Stations.push_back(station);
+	}
+	for (unsigned int index = 0; index < 16; ++index) {
+		io::RigFile::Trigger trigger{}; trigger.Name = "Agjpq trigger " + std::to_string(index);
+		trigger.StationTarget = jam.Stations[index % jam.Stations.size()].Name;
+		trigger.InputChannels = { index % 8 }; rig.Triggers.push_back(trigger);
+	}
+	const auto loaded = Scene::FromFile(SceneParams({ "" }, {}, base::SizeableParams{ { 1000, 650 }, {} }), jam, rig, L"");
+	ASSERT_TRUE(loaded); auto scene = *loaded;
+	auto take = scene->SnapshotStations().front()->AddTake();
+	ASSERT_TRUE(take);
+	Window window(*scene, resources);
+	ProductionWindowEvidenceCleanup cleanup(window, *scene);
+	// Window::Create can show a modal error on unsupported production formats.
+	// Run this test in its own process with an external timeout.
+	ASSERT_EQ(0, window.Create(GetModuleHandleW(nullptr), SW_HIDE));
+	const auto ownedWindow = WindowFromDC(wglGetCurrentDC()); ASSERT_NE(nullptr, ownedWindow);
+	EXPECT_FALSE(IsWindowVisible(ownedWindow));
+	const auto capture = [&](const std::string& name) {
+		window.Render(); glFinish();
+		const auto size = window.GetSize();
+		std::vector<unsigned char> pixels(static_cast<size_t>(size.Width) * size.Height * 4u);
+		glBindFramebuffer(GL_FRAMEBUFFER, 0); glReadBuffer(GL_BACK);
+		glReadPixels(0, 0, size.Width, size.Height, GL_RGBA, GL_UNSIGNED_BYTE, pixels.data());
+		EXPECT_EQ(GL_NO_ERROR, glGetError());
+		EXPECT_GT(NativeGuiRenderEvidence::WhitePixels(pixels, size, { 0, 0, static_cast<int>(size.Width), static_cast<int>(size.Height) }), 100u);
+		EXPECT_GT(NativeGuiRenderEvidence::WhitePixels(pixels, size, { 20, 0, 160, 28 }), 5u);
+		EXPECT_GT(NativeGuiRenderEvidence::WhitePixels(pixels, size, { 20, static_cast<int>(size.Height) - 28,
+			160, static_cast<int>(size.Height) }), 5u);
+		EXPECT_TRUE(NativeGuiRenderEvidence::SaveBmp(output / (name + ".bmp"), size, pixels));
+		window.Swap(); EXPECT_EQ(GL_NO_ERROR, glGetError());
+	};
+	capture("production-window-expanded");
+	auto settings = NativeGuiRenderEvidence::Settings(*scene, { 30, 10 }); ASSERT_TRUE(settings);
+	settings->SetExpanded(false); settings->AdvanceAnimation(0.05f);
+	capture("production-window-closing");
+	settings->SetExpanded(true); settings->AdvanceAnimation(0.05f);
+	const auto progress = settings->TransitionValue();
+	const auto nativeResize = [&](utils::Size2d size) {
+		const auto outer = Window::AdjustSize(size, static_cast<DWORD>(GetWindowLongPtrW(ownedWindow, GWL_STYLE)));
+		ASSERT_TRUE(SetWindowPos(ownedWindow, nullptr, 0, 0, outer.Width, outer.Height, SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE));
+		RECT client{}; ASSERT_TRUE(GetClientRect(ownedWindow, &client));
+		EXPECT_EQ(size.Width, static_cast<unsigned int>(client.right - client.left));
+		EXPECT_EQ(size.Height, static_cast<unsigned int>(client.bottom - client.top));
+		EXPECT_EQ(size.Width, window.GetSize().Width); EXPECT_EQ(size.Height, window.GetSize().Height);
+		EXPECT_EQ(size.Width, scene->GetSize().Width); EXPECT_EQ(size.Height, scene->GetSize().Height);
+	};
+	nativeResize({ 480, 320 }); EXPECT_FLOAT_EQ(progress, settings->TransitionValue());
+	capture("production-window-small");
+	EXPECT_GE(settings->TransitionValue(), progress);
+	nativeResize({ 1000, 650 }); capture("production-window-restored");
+	EXPECT_EQ(1000u, scene->GetSize().Width); EXPECT_EQ(650u, scene->GetSize().Height);
+	actions::TouchAction press; press.Touch = actions::TouchAction::TOUCH_MOUSE;
+	press.State = actions::TouchAction::TOUCH_DOWN; press.Index = 0; press.Position = { 300, 100 };
+	const auto result = window.OnAction(press);
+	EXPECT_TRUE(result.IsEaten); EXPECT_FALSE(scene->HasSelection()); window.CancelMouseCapture();
+	auto frame = settings->TryGetChild(0);
+	auto pageScroll = std::dynamic_pointer_cast<gui::GuiScrollPanel>(frame->TryGetChild(1));
+	ASSERT_TRUE(pageScroll);
+	auto radio = std::dynamic_pointer_cast<gui::GuiRadio>(pageScroll->Content()->TryGetChild(1));
+	ASSERT_TRUE(radio);
+	for (const auto index : { 2u, 0u }) {
+		auto toggle = radio->TryGetChild(static_cast<unsigned char>(index)); ASSERT_TRUE(toggle);
+		const auto pos = toggle->GlobalPosition(); const auto size = toggle->GetSize();
+		press.Position = { pos.X + static_cast<int>(size.Width / 2), pos.Y + static_cast<int>(size.Height / 2) };
+		press.State = actions::TouchAction::TOUCH_DOWN; EXPECT_TRUE(window.OnAction(press).IsEaten);
+		press.State = actions::TouchAction::TOUCH_UP; EXPECT_TRUE(window.OnAction(press).IsEaten);
+		EXPECT_EQ(index == 2u, take->ResolvedMidiQuantisation().Enabled);
+		EXPECT_FALSE(scene->HasSelection());
+	}
+}

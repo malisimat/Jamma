@@ -199,8 +199,31 @@ a replacement scope. The feature is not complete.
    Incremental Debug library/native/app builds passed, all 180 focused checks
    including both GPU passes passed (2676 ms), and the threading audit found
    no hot-path lock/wait or shared-state additions.
-   This is component/shader evidence with synthetic routing. Full Window/Scene
-   composition, native desktop resizing/input, audio playback and baseline frame-time/underrun comparison
+   A third isolated opt-in pass now constructs a plugin-free Scene with eight
+   stations, sixteen triggers and an empty LoopTake, then uses production
+   `Window::Create(SW_HIDE)`, all 90 resources, `Window::Render`, default-framebuffer
+   readback and `Swap`. Four reviewed captures show expanded/closing panels,
+   native 480 x 320 resize, and restoration to 1000 x 650 over the real skybox
+   and station geometry. The window stays hidden. Native `SetWindowPos` must
+   propagate through WM_SIZE (no direct Resize fallback); client, Window and
+   Scene sizes are checked, with exact transition preservation before the next
+   render tick. Edge-handle glyph regions remain nonempty after resizing.
+   Window-level panel input is consumed without scene selection; actual All/Off
+   radio clicks change the LoopTake's resolved MIDI quantisation policy.
+   A scope guard releases Window resources, shuts down Scene and restores prior
+   GL deletion ownership on assertion exits too. This test has a second opt-in
+   `JAMMA_WINDOW_RENDER_EVIDENCE` and runs in an isolated process with a 30-second
+   external timeout because production Create may show a modal driver error.
+   Focused review found no remaining material issue. Incremental Debug native
+   build passed; 183 ordinary checks passed (310 ms), with three GPU checks
+   skipped as intended. An isolated combined pass ran all 186 checks including
+   all GPU/production-window evidence and passed (4481 ms), with an empty GL
+   error log. The audit's only new ownership/lock state is test-only cleanup.
+   An ignored source archive of code baseline
+   `815dfd309b82d7c22d1e91eb5ccad02dbc188eca` is prepared under `bin/gui-baseline`
+   for the same-scene comparison; no performance conclusions have been drawn.
+   Real foreground desktop interaction/maximize/restore, populated loop playback
+   and baseline frame-time/underrun comparison
    remain unverified. The computer-use skill was read, but this session exposes
    no required `node_repl` tool; no desktop automation was attempted.
 7. Final requirement audit and HTML completion report: pending.
