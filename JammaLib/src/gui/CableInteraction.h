@@ -1,6 +1,8 @@
 #pragma once
 
 #include <cstdint>
+#include <array>
+#include <glm/vec2.hpp>
 #include <optional>
 #include <string>
 #include <vector>
@@ -60,6 +62,10 @@ namespace gui
 		};
 
 		static std::vector<int> Spread(int first, int last, size_t count);
+		static constexpr int CurveVertexCount = 24;
+		using Curve = std::array<glm::vec2, 4>;
+		static Curve CurveControls(RouteKind kind, utils::Position2d start, utils::Position2d finish);
+		static glm::vec2 EvaluateCurve(const Curve& curve, float t);
 		static bool HitTest(const Endpoint& endpoint, utils::Position2d point, float radius);
 		static std::optional<size_t> HitEndpoint(const std::vector<Endpoint>& endpoints,
 			utils::Position2d point,

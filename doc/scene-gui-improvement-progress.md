@@ -40,7 +40,12 @@ a replacement scope. The feature is not complete.
    the tested clipping geometry and input gates, not runtime rendering or
    offscreen connection preservation. Those remain subsequent slices.
 2. Cable boundary presentation, valid station projection and shared Bezier
-   rendering/hit geometry: pending.
+   rendering/hit geometry: in progress. Render/hit control points now share one
+   construction path and the same 24-point line strip as the shader. Capture
+   and station curved-hit/chord-miss tests passed; all 140 focused GUI/cable
+   tests passed (111 ms). Incremental Debug library/test builds passed, and
+   focused independent review found no concrete defect. Boundary continuation
+   geometry and projection validity remain pending.
 3. Actual HUD viewport layout, adaptive source cards and trigger viewport:
    pending.
 4. Production settings pages, command adapters, focus/capture cleanup and

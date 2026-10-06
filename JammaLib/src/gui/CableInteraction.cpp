@@ -2,8 +2,32 @@
 
 #include <algorithm>
 #include <cmath>
+#include <glm/geometric.hpp>
 
 using namespace gui;
+
+CableInteraction::Curve CableInteraction::CurveControls(RouteKind kind,
+	utils::Position2d start, utils::Position2d finish)
+{
+	const glm::vec2 a{ start.X, start.Y };
+	const glm::vec2 b{ finish.X, finish.Y };
+	if (kind == RouteKind::Station)
+	{
+		const float pull = std::max(50.0f, std::abs(a.x - b.x) * 0.45f);
+		const float drop = std::max(50.0f, std::abs(a.y - b.y) * 0.45f);
+		return { a, glm::vec2{ a.x - pull, a.y },
+			glm::vec2{ b.x, b.y + (a.y < b.y ? -drop : drop) }, b };
+	}
+	return { a, glm::vec2{ a.x, a.y + std::max(50.0f, (b.y - a.y) * 0.55f) },
+		glm::vec2{ b.x - std::max(50.0f, (b.x - a.x) * 0.40f), b.y }, b };
+}
+
+glm::vec2 CableInteraction::EvaluateCurve(const Curve& curve, float t)
+{
+	const float u = 1.0f - t;
+	return u * u * u * curve[0] + 3.0f * u * u * t * curve[1] +
+		3.0f * u * t * t * curve[2] + t * t * t * curve[3];
+}
 
 std::vector<int> CableInteraction::Spread(int first, int last, size_t count)
 {
@@ -68,18 +92,22 @@ std::optional<size_t> CableInteraction::HitCable(const std::vector<Cable>& cable
 	float nearestDistance = radius * radius;
 	for (size_t i = 0u; i < cables.size(); ++i)
 	{
-		const auto& a = cables[i].Start.Position;
-		const auto& b = cables[i].Finish.Position;
-		const auto dx = static_cast<float>(b.X - a.X);
-		const auto dy = static_cast<float>(b.Y - a.Y);
-		const auto lengthSquared = dx * dx + dy * dy;
-		const auto projection = lengthSquared > 0.0f
-			? std::clamp(((point.X - a.X) * dx + (point.Y - a.Y) * dy) / lengthSquared, 0.0f, 1.0f)
-			: 0.0f;
-		const utils::Position2d closest{
-			static_cast<int>(std::lround(a.X + projection * dx)),
-			static_cast<int>(std::lround(a.Y + projection * dy)) };
-		const auto distance = _DistanceSquared(closest, point);
+		const auto curve = CurveControls(cables[i].Route.Kind, cables[i].Start.Position, cables[i].Finish.Position);
+		const glm::vec2 pointer{ point.X, point.Y };
+		float distance = radius * radius + 1.0f;
+		auto a = curve[0];
+		// Match the shader's sampled line strip, including its vertex count.
+		for (int vertex = 1; vertex < CurveVertexCount; ++vertex)
+		{
+			const auto b = EvaluateCurve(curve, static_cast<float>(vertex) / (CurveVertexCount - 1));
+			const auto delta = b - a;
+			const float lengthSquared = glm::dot(delta, delta);
+			const float fraction = lengthSquared > 0.0f
+				? std::clamp(glm::dot(pointer - a, delta) / lengthSquared, 0.0f, 1.0f) : 0.0f;
+			const auto offset = pointer - (a + fraction * delta);
+			distance = std::min(distance, glm::dot(offset, offset));
+			a = b;
+		}
 		if (distance <= nearestDistance)
 		{
 			nearest = i;

@@ -59,10 +59,32 @@ TEST_F(CableInteractionTests, EndpointHitTestingUsesLargerCircularTargetAndNeare
 TEST_F(CableInteractionTests, CableBodyHitAndClosestEndUseScreenSpace)
 {
 	CableInteraction::Cable cable{ {}, Adc(0u, 0, 0), Input(0u, 100, 0) };
-	EXPECT_EQ(0u, CableInteraction::HitCable({ cable }, { 50, 4 }, 5.0f).value());
-	EXPECT_FALSE(CableInteraction::HitCable({ cable }, { 50, 7 }, 5.0f).has_value());
+	EXPECT_EQ(0u, CableInteraction::HitCable({ cable }, { 31, 19 }, 2.0f).value());
+	EXPECT_FALSE(CableInteraction::HitCable({ cable }, { 50, 0 }, 5.0f).has_value());
 	EXPECT_EQ(CableInteraction::End::Start, CableInteraction::ClosestEnd(cable, { 20, 0 }));
 	EXPECT_EQ(CableInteraction::End::Finish, CableInteraction::ClosestEnd(cable, { 80, 0 }));
+}
+
+TEST_F(CableInteractionTests, CurveControlsPreserveCaptureAndStationTangents)
+{
+	const auto capture = CableInteraction::CurveControls(CableInteraction::RouteKind::Capture, { 0, 0 }, { 100, 0 });
+	EXPECT_FLOAT_EQ(0.0f, capture[1].x);
+	EXPECT_FLOAT_EQ(50.0f, capture[1].y);
+	EXPECT_FLOAT_EQ(50.0f, capture[2].x);
+	EXPECT_FLOAT_EQ(0.0f, capture[2].y);
+	const auto midpoint = CableInteraction::EvaluateCurve(capture, 0.5f);
+	EXPECT_FLOAT_EQ(31.25f, midpoint.x);
+	EXPECT_FLOAT_EQ(18.75f, midpoint.y);
+	const auto station = CableInteraction::CurveControls(CableInteraction::RouteKind::Station, { 100, 0 }, { 0, 100 });
+	EXPECT_FLOAT_EQ(50.0f, station[1].x);
+	EXPECT_FLOAT_EQ(0.0f, station[1].y);
+	EXPECT_FLOAT_EQ(0.0f, station[2].x);
+	EXPECT_FLOAT_EQ(50.0f, station[2].y);
+	CableInteraction::Cable cable{ { 0, 0, CableInteraction::RouteKind::Station },
+		{ CableInteraction::EndpointKind::TriggerOutput, { 100, 0 } },
+		{ CableInteraction::EndpointKind::Station, { 0, 100 } } };
+	EXPECT_TRUE(CableInteraction::HitCable({ cable }, { 31, 31 }, 2.0f));
+	EXPECT_FALSE(CableInteraction::HitCable({ cable }, { 50, 50 }, 5.0f));
 }
 
 TEST_F(CableInteractionTests, SocketHitAndSnapRadiusCannotEscapeContentClip)

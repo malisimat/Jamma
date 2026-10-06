@@ -1563,25 +1563,8 @@ void GuiHud::_AppendCurve(const utils::Position2d& start,
 	const utils::Position2d& end,
 	const glm::vec4& color)
 {
-	const float x0 = static_cast<float>(start.X);
-	const float y0 = static_cast<float>(start.Y);
-	const float x3 = static_cast<float>(end.X);
-	const float y3 = static_cast<float>(end.Y);
-
-	// Departure tangent: leave the source button heading straight down.
-	const float vertDrop = std::max(50.0f, (y3 - y0) * 0.55f);
-	const float cp1x = x0;
-	const float cp1y = y0 + vertDrop;
-
-	// Arrival tangent: arrive at the trigger button heading straight right (from the left).
-	const float horizPull = std::max(50.0f, (x3 - x0) * 0.40f);
-	const float cp2x = x3 - horizPull;
-	const float cp2y = y3;
-
-	_cableControlPoints.push_back(glm::vec4(x0, y0, 0.0f, 0.0f));
-	_cableControlPoints.push_back(glm::vec4(cp1x, cp1y, 0.0f, 0.0f));
-	_cableControlPoints.push_back(glm::vec4(cp2x, cp2y, 0.0f, 0.0f));
-	_cableControlPoints.push_back(glm::vec4(x3, y3, 0.0f, 0.0f));
+	for (const auto& point : CableInteraction::CurveControls(CableInteraction::RouteKind::Capture, start, end))
+		_cableControlPoints.emplace_back(point.x, point.y, 0.0f, 0.0f);
 	_cableColors.push_back(color);
 }
 
@@ -1589,28 +1572,10 @@ void GuiHud::_AppendStationCurve(const utils::Position2d& start,
 	const utils::Position2d& end,
 	const glm::vec4& color)
 {
-	const float x0 = static_cast<float>(start.X);
-	const float y0 = static_cast<float>(start.Y);
-	const float x3 = static_cast<float>(end.X);
-	const float y3 = static_cast<float>(end.Y);
-
-	// Departure tangent: leave the trigger button horizontally toward the station.
-	const float horizPull = std::max(50.0f, std::abs(x0 - x3) * 0.45f);
-	const float cp1x = x0 - horizPull;
-	const float cp1y = y0;
-
-	// Arrival tangent: arrive at the station vertically from the trigger's Y-side.
-	const float vertDrop = std::max(50.0f, std::abs(y0 - y3) * 0.45f);
-	const float cp2x = x3;
-	const float cp2y = y3 + (y0 < y3 ? -vertDrop : vertDrop);
-
-	_cableControlPoints.push_back(glm::vec4(x0, y0, 0.0f, 0.0f));
-	_cableControlPoints.push_back(glm::vec4(cp1x, cp1y, 0.0f, 0.0f));
-	_cableControlPoints.push_back(glm::vec4(cp2x, cp2y, 0.0f, 0.0f));
-	_cableControlPoints.push_back(glm::vec4(x3, y3, 0.0f, 0.0f));
+	for (const auto& point : CableInteraction::CurveControls(CableInteraction::RouteKind::Station, start, end))
+		_cableControlPoints.emplace_back(point.x, point.y, 0.0f, 0.0f);
 	_cableColors.push_back(color);
 }
-
 std::shared_ptr<GuiLabel> GuiHud::_MakeHeader(const std::string& text,
 	unsigned int width,
 	unsigned int horizontalInset) const

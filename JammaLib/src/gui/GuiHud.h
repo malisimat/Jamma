@@ -249,7 +249,7 @@ namespace gui
 		bool _loopEditorMode = false;
 		std::optional<utils::Position2d> _cableHoverPoint;
 		std::vector<StationAnchor> _stationAnchors;
-		static constexpr int _CableSegments = 24;
+		static constexpr int _CableSegments = CableInteraction::CurveVertexCount;
 		static constexpr float _SocketHitRadius = 14.0f;
 		static constexpr float _CableHitRadius = 9.0f;
 		static constexpr float _SnapRadius = 28.0f;
