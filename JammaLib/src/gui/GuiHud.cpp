@@ -869,10 +869,10 @@ void GuiHud::_LayoutPanels()
 	_triggerList->ComputeLayout();
 	const int statusWidth = GuiStyle::StatusBarWidth(width);
 	const int statusHeight = std::min(GuiStyle::StatusBarHeight, height);
-	_statusPanel->SetPosition({ width - statusWidth, 0 });
-	_statusPanel->SetSize({ static_cast<unsigned int>(statusWidth), static_cast<unsigned int>(statusHeight) });
-	_statusPanel->SetVisible(statusWidth > 0 && statusHeight > 0);
-	_routingStatusLabel->SetPosition({ 0, std::max(0, (statusHeight - 22) / 2) });
+	_statusPanel->SetPosition({ 0, 0 });
+	_statusPanel->SetSize({ static_cast<unsigned int>(width), static_cast<unsigned int>(statusHeight) });
+	_statusPanel->SetVisible(width > 0 && statusHeight > 0);
+	_routingStatusLabel->SetPosition({ width - statusWidth, std::max(0, (statusHeight - 22) / 2) });
 	_routingStatusLabel->SetSize({ static_cast<unsigned int>(GuiStyle::StatusColumnWidth(statusWidth)), 22u });
 	_routingStatusLabel->SetVisible(statusWidth > 0 && statusHeight >= 22);
 	if (_revealNewestTrigger && !_triggerNames.empty())
