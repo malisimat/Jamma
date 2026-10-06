@@ -69,6 +69,48 @@ TEST(Window, LostCaptureSendsZeroButtonMoveExactlyOnce)
 	EXPECT_FALSE(window.CancelMouseCapture());
 }
 
+TEST(Window, EmptyClientKeepsActualLayoutAndRejectsPointerInput)
+{
+	CaptureLossScene scene; ResourceLib resources; Window window(scene, resources);
+	for (const auto empty : { utils::Size2d{ 0, 0 }, utils::Size2d{ 0, 480 }, utils::Size2d{ 640, 0 } }) {
+		window.Resize({ 640, 480 });
+		actions::TouchAction down; down.Touch = actions::TouchAction::TOUCH_MOUSE;
+		down.State = actions::TouchAction::TOUCH_DOWN; down.Index = 0; down.Position = { 320, 240 };
+		window.OnAction(down); scene.LastMove.reset();
+		window.Resize(empty);
+		EXPECT_EQ(empty.Width, window.GetSize().Width); EXPECT_EQ(empty.Height, window.GetSize().Height);
+		EXPECT_EQ(empty.Width, scene.GetSize().Width); EXPECT_EQ(empty.Height, scene.GetSize().Height);
+		EXPECT_EQ(640u, window.GetRestoreConfig().Size.Width); EXPECT_EQ(480u, window.GetRestoreConfig().Size.Height);
+		ASSERT_TRUE(scene.LastMove); EXPECT_EQ(0u, scene.LastMove->MouseButtonsDown);
+		EXPECT_FALSE(window.CancelMouseCapture());
+		scene.LastTouch.reset(); scene.LastMove.reset();
+		EXPECT_FALSE(window.OnAction(down).IsEaten);
+		actions::TouchMoveAction move; move.Touch = actions::TouchAction::TOUCH_MOUSE;
+		move.Position = down.Position; EXPECT_FALSE(window.OnAction(move).IsEaten);
+		EXPECT_FALSE(scene.LastTouch); EXPECT_FALSE(scene.LastMove);
+	}
+	window.Resize({ 640, 480 });
+	actions::TouchAction down; down.State = actions::TouchAction::TOUCH_DOWN;
+	window.OnAction(down); EXPECT_TRUE(scene.LastTouch);
+	window.CancelMouseCapture();
+}
+
+TEST(Window, MinimizeAndRestorePreserveFullscreenModeAndWindowedRestoreSize)
+{
+	CaptureLossScene scene; ResourceLib resources; Window window(scene, resources);
+	for (const auto mode : { Window::WINDOWED, Window::FULLSCREEN }) {
+		window.SetWindowState(Window::WINDOWED); window.Resize({ 640, 480 });
+		window.SetWindowState(mode);
+		actions::WindowAction size; size.WindowEventType = actions::WindowAction::SIZE_MINIMISE; size.Size = { 0, 0 };
+		EXPECT_TRUE(window.OnAction(size).IsEaten);
+		EXPECT_EQ(mode == Window::FULLSCREEN ? Window::FULLSCREEN : Window::MINIMISED, window.GetConfig().State);
+		EXPECT_EQ(0u, window.GetSize().Width); EXPECT_EQ(0u, scene.GetSize().Height);
+		size.WindowEventType = actions::WindowAction::SIZE; size.Size = { 640, 480 };
+		EXPECT_TRUE(window.OnAction(size).IsEaten); EXPECT_EQ(mode, window.GetConfig().State);
+		EXPECT_EQ(640u, window.GetRestoreConfig().Size.Width); EXPECT_EQ(480u, window.GetRestoreConfig().Size.Height);
+	}
+}
+
 TEST(Window, RelativePointerRequiresNativeForegroundCapture)
 {
 	CaptureLossScene scene;
@@ -622,6 +664,31 @@ TEST(GuiRenderEvidence, ProductionWindowSceneResizeAndPanelInput)
 	EXPECT_GE(settings->TransitionValue(), progress);
 	nativeResize({ 1000, 650 }); capture("production-window-restored");
 	EXPECT_EQ(1000u, scene->GetSize().Width); EXPECT_EQ(650u, scene->GetSize().Height);
+	// Dispatch native empty-size notifications. Windows enforces its outer-window
+	// minimum on SetWindowPos; notifications still exercise the production handler
+	// for empty/minimized clients without changing that minimum in this test.
+	GLint oldFramebuffer = 0; glGetIntegerv(GL_FRAMEBUFFER_BINDING, &oldFramebuffer);
+	glReadBuffer(GL_BACK); glClearColor(0.125f, 0.25f, 0.5f, 1.0f); glClear(GL_COLOR_BUFFER_BIT);
+	std::array<unsigned char, 4> undrawnPixel{};
+	glReadPixels(0, 0, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, undrawnPixel.data());
+	for (const auto empty : { utils::Size2d{ 0, 0 }, utils::Size2d{ 0, 180 }, utils::Size2d{ 320, 0 } }) {
+		SendMessageW(ownedWindow, WM_SIZE, SIZE_RESTORED, MAKELPARAM(empty.Width, empty.Height));
+		EXPECT_EQ(empty.Width, window.GetSize().Width); EXPECT_EQ(empty.Height, scene->GetSize().Height);
+		window.Render(); window.Swap();
+		GLint framebuffer = 0; glGetIntegerv(GL_FRAMEBUFFER_BINDING, &framebuffer);
+		EXPECT_EQ(oldFramebuffer, framebuffer); EXPECT_EQ(GL_NO_ERROR, glGetError());
+		std::array<unsigned char, 4> pixel{}; glReadPixels(0, 0, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, pixel.data());
+		EXPECT_EQ(undrawnPixel, pixel); // Empty frames must not draw the old scene.
+		EXPECT_FALSE(settings->RouteHitTest({ 30, 10 }));
+	}
+	window.SetWindowState(Window::FULLSCREEN);
+	SendMessageW(ownedWindow, WM_SIZE, SIZE_MINIMIZED, 0);
+	EXPECT_TRUE(window.IsFullscreen()); EXPECT_EQ(0u, window.GetSize().Width); EXPECT_EQ(0u, scene->GetSize().Height);
+	window.Render(); window.Swap(); EXPECT_EQ(GL_NO_ERROR, glGetError());
+	SendMessageW(ownedWindow, WM_SIZE, SIZE_RESTORED, MAKELPARAM(1000, 650));
+	EXPECT_TRUE(window.IsFullscreen()); EXPECT_EQ(1000u, scene->GetSize().Width); EXPECT_EQ(650u, window.GetSize().Height);
+	window.SetWindowState(Window::WINDOWED);
+	nativeResize({ 1000, 650 }); capture("production-window-zero-restored");
 	actions::TouchAction press; press.Touch = actions::TouchAction::TOUCH_MOUSE;
 	press.State = actions::TouchAction::TOUCH_DOWN; press.Index = 0; press.Position = { 300, 100 };
 	const auto result = window.OnAction(press);

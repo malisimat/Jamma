@@ -307,6 +307,27 @@ a replacement scope. The feature is not complete.
    errors. The incremental native build passed. Inspection also identified a
    remaining plan gap: Window clamps zero client dimensions to one and retains
    old Scene layout when minimized. Zero-viewport handling is the next slice.
+   Zero-client handling is now implemented in Window. Logical dimensions retain
+   the reported client size; empty sizes cancel capture before publishing the
+   new layout, preserve the last positive windowed restore size, retain valid
+   GL backing contexts, and skip drawing/swapping and pointer dispatch. Engine
+   changes still commit while the client is empty. Creation clamps only backing
+   allocation dimensions to at least one. WM_SIZE now updates dimensions in
+   fullscreen too, retaining fullscreen mode across minimize/restore rather
+   than silently reverting to windowed mode. No callback/shared-state changes
+   were needed; the hot-path audit reports no new lock/wait or shared-state
+   keywords. Tests cover full/one-axis zero, capture cancellation, input
+   suppression and recovery, restore dimensions, and minimize/restore mode
+   state. The isolated GPU test dispatches empty-size/minimize notifications
+   through the real WM_SIZE handler, verifies unchanged framebuffer binding and
+   a sentinel pixel proving empty frames do not draw stale content, then renders
+   and visually checks `production-window-zero-restored.bmp`. The initial
+   attempted native SetWindowPos resize to zero was rejected by the app's
+   200x200 outer-window minimum (184x161 client here); notification tests are
+   explicitly scoped and do not claim an actual OS minimize/fullscreen cycle.
+   Focused review found no remaining material issue. Incremental native/app
+   builds passed, and all 190 focused checks including GPU tests passed
+   (5076 ms), with the separate benchmark skipped and an empty GPU error log.
 7. Final requirement audit and HTML completion report: pending.
 
 ## Local build setup
