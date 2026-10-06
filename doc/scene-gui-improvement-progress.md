@@ -446,6 +446,25 @@ a replacement scope. The feature is not complete.
    and the GPU error log was empty. Threading audit flagged only the test's
    joined worker, manually reviewed as owning the complete UI/GL lifetime.
    There are no app or engine changes in this verification slice.
+   The shared preliminary benchmark now asserts real trigger scrolling in both
+   code revisions, rather than treating dispatched wheel events as evidence.
+   A source-card press resolves the production HUD through its parent tree;
+   the feature's identity popup is dismissed before timing. The actual trigger
+   viewport supplies wheel coordinates. Each event must be consumed, the first
+   must move the offset, and both extremes must be reached. Sixty one-notch
+   events initially failed (1440px versus a 2106px maximum on the feature), so
+   the matched workload uses two-notch events in both revisions. An unmatched
+   wheel release clears the baseline's retained capture outside the measured
+   frames. Native resize now checks client, Window and Scene dimensions.
+   Metadata identifies these verified effects and explicitly leaves panel-edge
+   and pointer effects unverified; these are not animation/cable-drag proof.
+   Both native builds and the revised isolated runs passed: feature 11984 ms,
+   baseline 12541 ms, 600 fresh CSV rows each and empty error logs. The shared
+   header has identical SHA256
+   `22B2F6A4AFF322DF44CAE5A962B73D9B369B12CD6FFE27C4877F629AB7AB3B86`.
+   Focused review and threading audit found no material issue. This is one
+   preliminary no-playback pair, not a performance conclusion or the final
+   repeated/interleaved playback comparison.
 7. Final requirement audit and HTML completion report: pending.
 
 ## Remaining verification from the plan audit
@@ -464,7 +483,7 @@ than the plan's full live-runtime completion gate.
 | Panels, popup/edit cleanup and hidden pages | Retained active host, numeric finalization, subtree popup/focus/capture checks; GPU page/opacity snapshots; stationary hover and viewport-fitted confirmation geometry/actions/GPU text; compact channel/phase numeric drags and CLICK | Full runtime popup/edit/tab exercise under playback |
 | Text, palette and shader scope restoration | Real font metrics, control families/caret/popup rows and nested opacity pixel checks; populated Scene/editor captures | Final visual review during playback |
 | Timing boundaries and real-time safety | Existing command owners retained; no new audio callback policy; threading audits/reviews and selected MIDI-router/NINJAM/transport boundary regressions | Real playback confirmation of relocated settings |
-| Same-scene frame distributions and underruns | Shared populated-scene benchmark and historical no-playback baseline pair | Device/rate/buffer details, actual underrun observation, equivalent verified interactions and repeated/interleaved live runs |
+| Same-scene frame distributions and underruns | Shared populated-scene benchmark, identical revised harness with verified wheel extremes and native resize, preliminary no-playback pairs | Device/rate/buffer details, actual underrun observation, verified animation/cable drag interactions and repeated/interleaved live runs |
 | Reviewed commits and final deliverable | Focused slices committed after review | Requirement-by-requirement completion audit, then the requested HTML completion report and suggested next prompt |
 
 The ASIO device/rate/buffer question remains unanswered. This session still has

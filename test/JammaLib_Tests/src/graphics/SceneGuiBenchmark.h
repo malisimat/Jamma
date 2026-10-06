@@ -5,6 +5,7 @@
 // modal driver error). Hardware playback is a separate verification gate.
 #include "io/WavReadWriter.h"
 #include "graphics/GlDeleteQueue.h"
+#include "gui/GuiScrollPanel.h"
 #include <filesystem>
 #include <chrono>
 #include <iomanip>
@@ -81,32 +82,55 @@ public:
 		graphics::Window window(*scene, resources); SceneGuiBenchmarkCleanup cleanup(window, *scene);
 		ASSERT_EQ(0, window.Create(GetModuleHandleW(nullptr), SW_HIDE));
 		const auto ownedWindow = WindowFromDC(wglGetCurrentDC()); ASSERT_NE(nullptr, ownedWindow);
+		// Resolve the real HUD through the production input path in both revisions,
+		// rather than assuming the old and new rail have identical coordinates.
+		std::shared_ptr<gui::GuiHud> hud;
+		for (auto element = Click(window, { 600, 582 }).ActiveElement.lock(); element; element = element->Parent())
+			if ((hud = std::dynamic_pointer_cast<gui::GuiHud>(element))) break;
+		ASSERT_TRUE(hud);
+		// A feature source-card release opens its identity popup. Dismiss setup
+		// UI before measuring; the baseline accepts the same Escape release.
+		actions::KeyAction dismiss; dismiss.KeyChar = VK_ESCAPE; dismiss.KeyActionType = actions::KeyAction::KEY_UP;
+		window.OnAction(dismiss);
+		const auto triggerScroll = FindTriggerScroll(hud); ASSERT_TRUE(triggerScroll);
+		ASSERT_GT(triggerScroll->MaxScrollOffset(), 0);
 		std::ofstream metadata(output / "metadata.txt");
 		metadata << "scene=8 stations,16 mono loops,24 triggers,24 logical capture routes\n"
 			<< "renderer=" << glGetString(GL_RENDERER) << "\nversion=" << glGetString(GL_VERSION)
 			<< "\nplayback=not started; underruns unmeasured\nconfiguration=Debug x64\n"
 			<< "swap_interval=1; swap/total may include vsync wait\n"
-			<< "idle=cable reveal held; input scenarios do not assert panel/scroll/cable changes\n";
+			<< "idle=cable reveal held; wheel=verified real trigger viewport, both scroll extremes\n"
+			<< "native_resize=verified client, Window and Scene dimensions\n"
+			<< "panel-edge-input/pointer-input=unverified effects; not proof of animation or cable drag\n";
 		std::ofstream csv(output / "frames.csv"); ASSERT_TRUE(csv.good());
 		csv << "scenario,frame,dispatch_ms,render_gpu_ms,swap_ms,total_ms\n" << std::fixed << std::setprecision(6);
 		actions::KeyAction control; control.KeyChar = VK_OEM_3; control.KeyActionType = actions::KeyAction::KEY_DOWN;
 		window.OnAction(control);
 		for (int frame = 0; frame < 30; ++frame) { window.Render(); glFinish(); window.Swap(); }
-		for (const auto scenario : { "idle-cables", "panel-edge-input", "wheel-input", "native-resize", "pointer-input" })
+		for (const auto scenario : { "idle-cables", "panel-edge-input", "wheel-input", "native-resize", "pointer-input" }) {
+			if (std::string(scenario) == "wheel-input") triggerScroll->SetScrollOffset(0);
 			for (unsigned int frame = 0; frame < 120; ++frame) {
 				const auto begin = std::chrono::steady_clock::now();
 				if (std::string(scenario) == "panel-edge-input" && frame % 30 == 0) Click(window, { 30, 10 });
 				if (std::string(scenario) == "wheel-input") {
 					actions::TouchAction wheel; wheel.Touch = actions::TouchAction::TOUCH_MOUSE;
 					wheel.State = actions::TouchAction::TOUCH_DOWN; wheel.Index = 4;
-					wheel.Value = frame < 60 ? -1 : 1; wheel.Position = { 920, 320 };
-					window.OnAction(wheel);
+					wheel.Value = frame < 60 ? -2 : 2;
+					const auto position = triggerScroll->GlobalPosition(); const auto size = triggerScroll->GetSize();
+					wheel.Position = { position.X + static_cast<int>(size.Width / 2), position.Y + static_cast<int>(size.Height / 2) };
+					ASSERT_TRUE(window.OnAction(wheel).IsEaten);
+					if (frame == 0) ASSERT_GT(triggerScroll->ScrollOffset(), 0);
+					if (frame == 59) ASSERT_EQ(triggerScroll->MaxScrollOffset(), triggerScroll->ScrollOffset());
+					if (frame == 119) ASSERT_EQ(0, triggerScroll->ScrollOffset());
 				}
 				if (std::string(scenario) == "native-resize" && frame % 10 == 0) {
 					const utils::Size2d client = frame % 20 == 0 ? utils::Size2d{ 640, 480 } : utils::Size2d{ 1000, 650 };
 					const auto outer = graphics::Window::AdjustSize(client, static_cast<DWORD>(GetWindowLongPtrW(ownedWindow, GWL_STYLE)));
 					ASSERT_TRUE(SetWindowPos(ownedWindow, nullptr, 0, 0, outer.Width, outer.Height, SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE));
 					ASSERT_EQ(client.Width, window.GetSize().Width); ASSERT_EQ(client.Height, window.GetSize().Height);
+					RECT actual{}; ASSERT_TRUE(GetClientRect(ownedWindow, &actual));
+					ASSERT_EQ(client.Width, static_cast<unsigned int>(actual.right)); ASSERT_EQ(client.Height, static_cast<unsigned int>(actual.bottom));
+					ASSERT_EQ(client.Width, scene->GetSize().Width); ASSERT_EQ(client.Height, scene->GetSize().Height);
 				}
 				if (std::string(scenario) == "pointer-input") {
 					if (frame % 30 == 0) {
@@ -124,6 +148,15 @@ public:
 					<< Milliseconds(end - rendered) << ',' << Milliseconds(end - begin) << '\n';
 				ASSERT_EQ(GL_NO_ERROR, glGetError());
 			}
+			if (std::string(scenario) == "wheel-input") {
+				// The baseline retained wheel focus/capture until release. End the
+				// same wheel sequence in both revisions before another scenario.
+				actions::TouchAction release; release.Touch = actions::TouchAction::TOUCH_MOUSE;
+				release.Index = 4; release.State = actions::TouchAction::TOUCH_UP;
+				const auto position = triggerScroll->GlobalPosition(); release.Position = { position.X + 10, position.Y + 10 };
+				window.OnAction(release);
+			}
+		}
 		control.KeyActionType = actions::KeyAction::KEY_UP; window.OnAction(control);
 		EXPECT_TRUE(csv.good());
 	}
@@ -132,11 +165,24 @@ private:
 	{
 		return std::chrono::duration<double, std::milli>(value).count();
 	}
-	static void Click(graphics::Window& window, utils::Position2d position)
+	static actions::ActionResult Click(graphics::Window& window, utils::Position2d position)
 	{
 		actions::TouchAction touch; touch.Touch = actions::TouchAction::TOUCH_MOUSE;
-		touch.Index = 0; touch.Position = position; touch.State = actions::TouchAction::TOUCH_DOWN; window.OnAction(touch);
+		touch.Index = 0; touch.Position = position; touch.State = actions::TouchAction::TOUCH_DOWN;
+		const auto result = window.OnAction(touch);
 		touch.State = actions::TouchAction::TOUCH_UP; window.OnAction(touch);
+		return result;
+	}
+	static std::shared_ptr<gui::GuiScrollPanel> FindTriggerScroll(const std::shared_ptr<base::GuiElement>& element)
+	{
+		if (auto scroll = std::dynamic_pointer_cast<gui::GuiScrollPanel>(element))
+			if (scroll->Content() && scroll->Content()->TryGetChild(0) && scroll->Content()->TryGetChild(0)->GetSize().Height == 100u)
+				return scroll;
+		for (unsigned int index = 0; index < 256; ++index) {
+			const auto child = element->TryGetChild(static_cast<unsigned char>(index)); if (!child) break;
+			if (auto found = FindTriggerScroll(child)) return found;
+		}
+		return nullptr;
 	}
 };
 
