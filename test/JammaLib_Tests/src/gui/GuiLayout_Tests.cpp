@@ -686,7 +686,7 @@ TEST_F(HudResponsiveLayoutTests, ResizeKeepsScrollViewportsInsideActualWindowAnd
 		{
 			const auto card = scrolls[0]->Content()->TryGetChild(index);
 			ASSERT_NE(nullptr, card);
-			EXPECT_EQ(34u, card->GetSize().Height);
+			EXPECT_EQ(gui::GuiStyle::ControlHeight, card->GetSize().Height);
 			EXPECT_GE(card->GetSize().Width, 80u);
 			EXPECT_LE(card->GetSize().Width, 160u);
 			EXPECT_EQ(2, card->Position().Y);

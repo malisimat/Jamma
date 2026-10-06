@@ -57,6 +57,8 @@ GuiPopup::GuiPopup(const GuiPopupParams& params) :
 	titleParams.MinSize = { 100u, TitleHeight };
 	titleParams.Position = { 20, 170 };
 	titleParams.CenterHorizontally = true;
+	titleParams.VerticalAlign = GuiTextVerticalAlign::Center;
+	titleParams.ClipText = true;
 	_titleLabel = std::make_shared<GuiLabel>(titleParams);
 	AddChild(_titleLabel);
 
@@ -68,6 +70,8 @@ GuiPopup::GuiPopup(const GuiPopupParams& params) :
 		lineParams.MinSize = { 80u, LineHeight };
 		lineParams.Position = { 20, 136 - static_cast<int>(i) * 28 };
 		lineParams.CenterHorizontally = true;
+		lineParams.VerticalAlign = GuiTextVerticalAlign::Top;
+		lineParams.ClipText = true;
 		_lineLabels[i] = std::make_shared<GuiLabel>(lineParams);
 		_lineLabels[i]->SetVisible(false);
 		AddChild(_lineLabels[i]);

@@ -114,7 +114,7 @@ namespace gui
 		static constexpr unsigned int _TopStripPadding = 12u;
 		static constexpr unsigned int _TopStripSpacing = 10u;
 		static constexpr unsigned int _SourceButtonWidth = 118u;
-		static constexpr unsigned int _SourceButtonHeight = 34u;
+		static constexpr unsigned int _SourceButtonHeight = GuiStyle::ControlHeight;
 		static constexpr unsigned int _SourceScrollBarHeight = 12u;
 		static constexpr unsigned int _SourceViewportHeight = _SourceButtonHeight + _SourceScrollBarHeight + 4u;
 		static constexpr unsigned int _SourcePanelGap = 8u;

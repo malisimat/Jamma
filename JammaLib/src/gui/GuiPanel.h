@@ -13,6 +13,8 @@ namespace gui
 		static glm::vec3 Edge() { return { 0.66f, 0.77f, 0.80f }; }
 		static constexpr float PanelFillOpacity = 0.80f;
 		static constexpr float PanelTransitionSeconds = 0.22f;
+		static constexpr unsigned int ControlHeight = 36u;
+		static constexpr unsigned int TextPadding = 8u;
 	};
 	// UI-owned binding adapter. Tree indices stay local; command identity stays
 	// explicit, and the weak owner prevents a binding extending Scene lifetime.

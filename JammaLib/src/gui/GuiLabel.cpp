@@ -17,6 +17,8 @@ GuiLabel::GuiLabel(GuiLabelParams guiParams) :
 	_textInset{ guiParams.TextInsetX, guiParams.TextInsetY },
 	_centerHorizontally(guiParams.CenterHorizontally),
 	_ellipsize(guiParams.Ellipsize),
+	_verticalAlign(guiParams.VerticalAlign),
+	_clipText(guiParams.ClipText),
 	_vertexArrayDirty(true),
 	_vertexArray(0),
 	_vertexBuffers{ 0, 0 },
@@ -97,6 +99,28 @@ utils::Size2d GuiLabel::ContentSize() const
 	};
 }
 
+GuiTextLineFrame GuiLabel::ResolveLineFrame(float height, Font::VerticalMetrics metrics, GuiTextVerticalAlign alignment)
+{
+	float baseline = 0.0f;
+	if (alignment == GuiTextVerticalAlign::Bottom) baseline = -metrics.Descent;
+	else if (alignment == GuiTextVerticalAlign::Center) baseline = (height - metrics.Height()) * 0.5f - metrics.Descent;
+	else if (alignment == GuiTextVerticalAlign::Top) baseline = height - metrics.Ascent;
+	return { baseline, baseline + metrics.Descent, baseline + metrics.Ascent };
+}
+
+std::optional<GuiTextLineFrame> GuiLabel::LineFrame() const
+{
+	if (auto font = _font.lock())
+	{
+		auto line = ResolveLineFrame(static_cast<float>(GetSize().Height), font->Metrics(), _verticalAlign);
+		line.BaselineY += _textInset.Y;
+		line.Bottom += _textInset.Y;
+		line.Top += _textInset.Y;
+		return line;
+	}
+	return std::nullopt;
+}
+
 void GuiLabel::Draw(DrawContext& ctx)
 {
 	if (!IsVisible() || GetSize().Width == 0u || GetSize().Height == 0u)
@@ -116,10 +140,13 @@ void GuiLabel::Draw(DrawContext& ctx)
 	const auto horizontalOffset = _centerHorizontally
 		? std::max(0.0f, (static_cast<float>(GetSize().Width) - textWidth) / 2.0f)
 		: 0.0f;
-	glCtx.PushMvp(glm::translate(glm::mat4(1.0), glm::vec3(pos.X + _textInset.X + horizontalOffset, pos.Y + _textInset.Y, 0.f)));
+	if (_clipText) glCtx.PushScissorRect(GlobalPosition(), GetSize());
+	const auto line = LineFrame().value();
+	glCtx.PushMvp(glm::translate(glm::mat4(1.0), glm::vec3(pos.X + _textInset.X + horizontalOffset, pos.Y + line.BaselineY, 0.f)));
 	
 	font->Draw(glCtx, _vertexArray, (unsigned int)_str.size());
 	glCtx.PopMvp();
+	if (_clipText) glCtx.PopScissorRect();
 }
 
 bool GuiLabel::_ResolveFont(ResourceLib& resourceLib)

@@ -14,10 +14,10 @@ namespace gui
 {
 	struct GuiTextBoxParams : public base::GuiElementParams
 	{
-		static constexpr unsigned int DefaultHeight = 44u;
+		static constexpr unsigned int DefaultHeight = GuiStyle::ControlHeight;
 		static constexpr unsigned int DefaultMinWidth = 60u;
-		static constexpr unsigned int DefaultMinHeight = 34u;
-		static constexpr unsigned int DefaultPadding = 10u;
+		static constexpr unsigned int DefaultMinHeight = GuiStyle::ControlHeight;
+		static constexpr unsigned int DefaultPadding = GuiStyle::TextPadding;
 
 		GuiTextBoxParams()
 		{
@@ -69,6 +69,8 @@ namespace gui
 
 		virtual bool IsTextEditing() const override;
 		virtual bool WantsFocusOnPress() const override;
+		static utils::Rect2d ResolveTextBand(utils::Rect2d labelFrame, GuiTextLineFrame line,
+			float firstAdvance, float lastAdvance);
 		virtual void FinalizeEdits() override;
 
 		using base::GuiElement::OnAction;
@@ -82,6 +84,7 @@ namespace gui
 
 	protected:
 		virtual void _InitResources(resources::ResourceLib& resourceLib, bool forceInit) override;
+		void _ReleaseResources() override;
 
 		// Extension hooks for derived controls (e.g. numeric input).
 		virtual bool _AcceptChar(char c) const;
@@ -110,7 +113,6 @@ namespace gui
 		bool _editing;
 		std::shared_ptr<GuiLabel> _label;
 		base::GuiElement _caretQuad;
-		std::weak_ptr<graphics::Font> _font;
 		std::weak_ptr<base::ActionReceiver> _receiver;
 	};
 }

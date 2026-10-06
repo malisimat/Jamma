@@ -138,8 +138,26 @@ a replacement scope. The feature is not complete.
    render reviews found no material defect. Incremental Debug library, test and
    app builds passed; all 171 focused GUI/cable/layout/Scene checks passed
    (354 ms), and the threading audit found no hot-path lock/wait additions.
-   Shader-backed visual confirmation
-   and common vertical glyph/caret alignment remain pending.
+   Vertical glyph/caret geometry is now implemented: fonts expose cached scaled
+   ascent/descent/line-gap metrics, and labels place a baseline inside a stable
+   frame with explicit baseline/bottom/center/top alignment. Control labels and
+   headers center consistently; standalone baseline placement remains available
+   and popup body rows retain explicit top alignment. Text clipping composes
+   with parent/window scissors. Compact text frames clamp vertical padding to
+   reserve the minimum available font; zero-size frames stay empty. Related
+   button/toggle/text/numeric/dropdown defaults share 36 px height and 8 px
+   padding. Source cards use the same 36 px height with two explicit 16 px text
+   rows; trigger cards remain 100 px. Textbox caret/selection bands and pointer
+   X lookup use the label's clamped frame and currently selected font, including
+   after resize. External textbox/dropdown labels have weak presentation parents
+   for correct global clipping, plus explicit init/release ownership for their
+   labels, list rows and adornments. Pure tests cover alignment, odd/tiny/zero
+   frames, caret/selection clipping, common control defaults and resizing; CPU
+   glyph-bound checks use the actual Inter font at all available sizes. Focused
+   render/lifecycle reviews found no material defect. Incremental Debug library,
+   test and app builds passed, all 178 focused checks passed (247 ms), and the
+   threading audit found no hot-path lock/wait additions. Shader-backed visual
+   confirmation and final palette tuning remain slice 6 work.
 6. Integration review, app build, runtime/visual checks during playback and
    baseline/feature performance comparison: pending.
 7. Final requirement audit and HTML completion report: pending.

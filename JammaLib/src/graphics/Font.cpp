@@ -369,6 +369,13 @@ float Font::GetHeight() const
 	return _params.CharHeight;
 }
 
+Font::VerticalMetrics Font::Metrics() const
+{
+	if (_fontAscent > _fontDescent) return { _fontAscent, _fontDescent, _fontLineGap };
+	// Fonts constructed from legacy width tables have no TTF metrics.
+	return { GetHeight(), 0.0f, 0.0f };
+}
+
 int Font::GetCharNum(char c) const
 {
 	return static_cast<int>(c) - 32;

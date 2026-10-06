@@ -37,6 +37,8 @@ GuiRouter::GuiRouterChannel::GuiRouterChannel(GuiRouterChannelParams params) :
 		"",
 		{}), std::to_string(params.Channel+1));
 
+	labelParams.VerticalAlign = GuiTextVerticalAlign::Center;
+	labelParams.ClipText = true;
 	_label = std::make_shared<GuiLabel>(labelParams);
 	_children.push_back(_label);
 }

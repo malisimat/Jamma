@@ -13,9 +13,9 @@ namespace gui
 	{
 	public:
 		static constexpr unsigned int DefaultWidth = 102u;
-		static constexpr unsigned int DefaultHeight = 34u;
+		static constexpr unsigned int DefaultHeight = GuiStyle::ControlHeight;
 		static constexpr unsigned int DefaultMinWidth = 36u;
-		static constexpr unsigned int DefaultTextPadding = 10u;
+		static constexpr unsigned int DefaultTextPadding = GuiStyle::TextPadding;
 
 		GuiButtonParams() :
 			base::GuiElementParams(0, DrawableParams{ "" },

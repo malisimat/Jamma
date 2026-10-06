@@ -11,6 +11,8 @@
 #include "gui/GuiScrollPanel.h"
 #include "gui/GuiMainPanel.h"
 #include "graphics/GlDrawContext.h"
+#include <limits>
+#include <iterator>
 #include <type_traits>
 
 static_assert(!std::is_copy_constructible_v<graphics::GlDrawContext>);
@@ -1042,4 +1044,133 @@ TEST(GuiOpacity, GlUniformAlwaysHasEffectiveValueIncludingOrdinaryDraws) {
 		EXPECT_FLOAT_EQ(0.25f, std::any_cast<float>(*context.GetUniform("Opacity")));
 	}
 	EXPECT_FLOAT_EQ(1.0f, std::any_cast<float>(*context.GetUniform("Opacity")));
+}
+
+TEST(GuiTextGeometry, FontMetricsPlaceBaselineAndDescendersInsideStableFrame) {
+	const graphics::Font::VerticalMetrics metrics{ 13.0f, -4.0f, 2.0f };
+	EXPECT_FLOAT_EQ(17.0f, metrics.Height());
+	EXPECT_FLOAT_EQ(19.0f, metrics.LineStep());
+	const auto centered = gui::GuiLabel::ResolveLineFrame(24.0f, metrics, gui::GuiTextVerticalAlign::Center);
+	EXPECT_FLOAT_EQ(7.5f, centered.BaselineY);
+	EXPECT_FLOAT_EQ(3.5f, centered.Bottom);
+	EXPECT_FLOAT_EQ(20.5f, centered.Top);
+	EXPECT_FLOAT_EQ(12.0f, (centered.Bottom + centered.Top) * 0.5f);
+	const auto top = gui::GuiLabel::ResolveLineFrame(24.0f, metrics, gui::GuiTextVerticalAlign::Top);
+	EXPECT_FLOAT_EQ(24.0f, top.Top);
+	EXPECT_FLOAT_EQ(7.0f, top.Bottom);
+	const auto bottom = gui::GuiLabel::ResolveLineFrame(24.0f, metrics, gui::GuiTextVerticalAlign::Bottom);
+	EXPECT_FLOAT_EQ(0.0f, bottom.Bottom);
+	EXPECT_FLOAT_EQ(17.0f, bottom.Top);
+	const auto baseline = gui::GuiLabel::ResolveLineFrame(24.0f, metrics, gui::GuiTextVerticalAlign::Baseline);
+	EXPECT_FLOAT_EQ(0.0f, baseline.BaselineY);
+	EXPECT_FLOAT_EQ(-4.0f, baseline.Bottom);
+}
+
+TEST(GuiTextGeometry, CompactRowsReserveAvailableFontHeightAndZeroFramesStayEmpty) {
+	const auto row = gui::GuiLabelParams::ResolveTextFrame(100u, 22u, 10u, 10u, true);
+	EXPECT_EQ(3u, row.PaddingY);
+	EXPECT_EQ(16u, row.TextHeight);
+	EXPECT_EQ(3, row.OffsetY);
+	const auto odd = gui::GuiLabelParams::ResolveTextFrame(101u, 37u, 8u, 8u, true);
+	EXPECT_EQ(21u, odd.TextHeight);
+	EXPECT_EQ(8, odd.OffsetY);
+	const auto empty = gui::GuiLabelParams::ResolveTextFrame(0u, 0u, 10u, 10u, true);
+	EXPECT_EQ(0u, empty.ContentWidth);
+	EXPECT_EQ(0u, empty.TextHeight);
+	EXPECT_EQ(0, empty.OffsetY);
+	const auto tiny = gui::GuiLabelParams::ResolveTextFrame(3u, 1u, 10u, 10u, true);
+	EXPECT_EQ(1u, tiny.PaddingX);
+	EXPECT_EQ(1u, tiny.ContentWidth);
+	EXPECT_EQ(1u, tiny.TextHeight);
+	EXPECT_EQ(0u, tiny.PaddingY);
+}
+
+TEST(GuiTextGeometry, CaretAndSelectionBandsUseFontLineAndClampedLabelFrame) {
+	const utils::Rect2d frame{ 8, 8, 108, 28 };
+	const auto line = gui::GuiLabel::ResolveLineFrame(20.0f, { 13.0f, -4.0f, 0.0f }, gui::GuiTextVerticalAlign::Center);
+	const auto caret = GuiTextBox::ResolveTextBand(frame, line, 12.0f, 14.0f);
+	EXPECT_EQ(20, caret.Left); EXPECT_EQ(22, caret.Right);
+	EXPECT_EQ(9, caret.Bottom); EXPECT_EQ(27, caret.Top);
+	const auto selection = GuiTextBox::ResolveTextBand(frame, line, 5.0f, 20.0f);
+	EXPECT_EQ(caret.Bottom, selection.Bottom);
+	EXPECT_EQ(caret.Top, selection.Top);
+	const auto clipped = GuiTextBox::ResolveTextBand(frame, line, -500.0f, 500.0f);
+	EXPECT_EQ(frame.Left, clipped.Left); EXPECT_EQ(frame.Right, clipped.Right);
+	const auto tall = gui::GuiLabel::ResolveLineFrame(1.0f, { 13.0f, -4.0f, 0.0f }, gui::GuiTextVerticalAlign::Center);
+	const auto tiny = GuiTextBox::ResolveTextBand({ 1, 0, 2, 1 }, tall, 0.0f, 2.0f);
+	EXPECT_EQ(1, tiny.Left); EXPECT_EQ(2, tiny.Right);
+	EXPECT_EQ(0, tiny.Bottom); EXPECT_EQ(1, tiny.Top);
+	EXPECT_TRUE(GuiTextBox::ResolveTextBand({}, line, 0.0f, 2.0f).IsEmpty());
+	EXPECT_TRUE(GuiTextBox::ResolveTextBand(frame, line, std::numeric_limits<float>::infinity(), 2.0f).IsEmpty());
+}
+
+TEST(GuiTextGeometry, RelatedControlsSharePreferredHeightAndHeadersKeepExplicitAlignment) {
+	EXPECT_EQ(gui::GuiStyle::ControlHeight, gui::GuiButtonParams::PanelButton().Size.Height);
+	EXPECT_EQ(gui::GuiStyle::ControlHeight, GuiToggleParams::PanelPrimary().Size.Height);
+	EXPECT_EQ(gui::GuiStyle::ControlHeight, GuiTextBoxParams::PanelInput(100u).Size.Height);
+	EXPECT_EQ(gui::GuiStyle::ControlHeight, GuiNumericInputParams::PanelInput(100u).Size.Height);
+	EXPECT_EQ(gui::GuiStyle::ControlHeight, GuiDropDownParams::PanelInput(100u).Size.Height);
+	EXPECT_EQ(gui::GuiTextVerticalAlign::Center, gui::GuiLabelParams::PanelHeader("Agjpq 0123", 100u).VerticalAlign);
+	EXPECT_EQ(gui::GuiTextVerticalAlign::Center, gui::GuiLabelParams::PanelScrollRow("Agjpq 0123").VerticalAlign);
+	EXPECT_EQ(gui::GuiTextVerticalAlign::Baseline, gui::GuiLabelParams{}.VerticalAlign);
+}
+
+TEST(GuiTextGeometry, ButtonAndRadioLabelsRetainCenteredContentFramesAcrossResize) {
+	auto params = gui::GuiButtonParams::PanelButton();
+	params.Text = "Agjpq 0123";
+	auto button = std::make_shared<gui::GuiButton>(params);
+	button->Init();
+	auto label = std::dynamic_pointer_cast<gui::GuiLabel>(button->TryGetChild(0));
+	ASSERT_NE(nullptr, label);
+	for (const auto size : { utils::Size2d{ 100, 36 }, utils::Size2d{ 3, 1 }, utils::Size2d{ 0, 0 }, utils::Size2d{ 101, 37 } }) {
+		button->SetSize(size);
+		const auto frame = gui::GuiLabelParams::ResolveTextFrame(size.Width, size.Height, params.TextPadding, params.TextPadding, true);
+		EXPECT_EQ(static_cast<int>(frame.PaddingX), label->Position().X);
+		EXPECT_EQ(frame.OffsetY, label->Position().Y);
+		EXPECT_EQ(frame.ContentWidth, label->GetSize().Width);
+		EXPECT_EQ(frame.TextHeight, label->GetSize().Height);
+	}
+	gui::GuiRadioParams radioParams;
+	auto toggle = GuiToggleParams::PanelPrimary(); toggle.Text = "Mixed";
+	radioParams.ToggleParams = { toggle };
+	auto radio = std::make_shared<gui::GuiRadio>(radioParams);
+	radio->Init();
+	auto toggleLabel = std::dynamic_pointer_cast<gui::GuiLabel>(radio->TryGetChild(0)->TryGetChild(0));
+	ASSERT_NE(nullptr, toggleLabel);
+	EXPECT_EQ(label->GetSize().Height - 1u, toggleLabel->GetSize().Height);
+}
+
+TEST(GuiTextGeometry, ActualInterGlyphsFitCenteredLineFramesAtAllAvailableSizes) {
+	std::ifstream input(graphics::Font::GetFontFilename(), std::ios::binary);
+	ASSERT_TRUE(input.good());
+	const std::vector<unsigned char> bytes((std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
+	ASSERT_FALSE(bytes.empty());
+	stbtt_fontinfo info{};
+	ASSERT_NE(0, stbtt_InitFont(&info, bytes.data(), 0));
+	int ascent = 0, descent = 0, gap = 0;
+	stbtt_GetFontVMetrics(&info, &ascent, &descent, &gap);
+	for (const auto size : graphics::FontOptions::FontSizes) {
+		const auto height = graphics::Font::GetPixelHeightForSize(size);
+		const auto scale = stbtt_ScaleForPixelHeight(&info, static_cast<float>(height));
+		const graphics::Font::VerticalMetrics metrics{ ascent * scale, descent * scale, gap * scale };
+		const auto line = gui::GuiLabel::ResolveLineFrame(static_cast<float>(height), metrics, gui::GuiTextVerticalAlign::Center);
+		EXPECT_NEAR(0.0f, line.Bottom, 0.001f);
+		EXPECT_NEAR(static_cast<float>(height), line.Top, 0.001f);
+		for (const unsigned char character : std::string("Agjpq 0123456789")) {
+			int x0 = 0, y0 = 0, x1 = 0, y1 = 0;
+			stbtt_GetCodepointBitmapBox(&info, character, scale, scale, &x0, &y0, &x1, &y1);
+			if (y0 == y1) continue; // Space has no ink.
+			// Raster boxes round outward to whole pixels around the metric line.
+			EXPECT_GE(line.BaselineY - y1, -1.0f) << character << " at " << height;
+			EXPECT_LE(line.BaselineY - y0, static_cast<float>(height) + 1.0f) << character << " at " << height;
+		}
+	}
+}
+
+TEST(GuiTextGeometry, LegacyWidthTableFontHasExplicitFallbackLineMetrics) {
+	graphics::Font font({ 1, 1, 1, 19.0f, 0, 0, graphics::FontOptions::FONT_LARGE },
+		std::vector<float>(graphics::Font::MaxChars, 8.0f), {});
+	EXPECT_FLOAT_EQ(19.0f, font.Metrics().Ascent);
+	EXPECT_FLOAT_EQ(0.0f, font.Metrics().Descent);
+	EXPECT_FLOAT_EQ(19.0f, font.Metrics().Height());
 }

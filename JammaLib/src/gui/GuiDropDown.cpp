@@ -31,6 +31,8 @@ std::shared_ptr<GuiLabel> GuiDropDownList::_MakeRowLabel(const std::string& text
 {
 	GuiLabelParams lp;
 	lp.String = text;
+	lp.VerticalAlign = GuiTextVerticalAlign::Center;
+	lp.ClipText = true;
 	const GuiTextFrame frame = GuiLabelParams::ResolveTextFrame(
 		width,
 		rowHeight,
@@ -101,7 +103,17 @@ void GuiDropDownList::_InitResources(ResourceLib& resourceLib, bool forceInit)
 	GuiElement::_InitResources(resourceLib, forceInit);
 	_highlightQuad.InitResources(resourceLib, forceInit);
 	for (auto& label : _rowLabels)
+	{
+		label->SetParent(shared_from_this());
 		label->InitResources(resourceLib, forceInit);
+	}
+}
+
+void GuiDropDownList::_ReleaseResources()
+{
+	GuiElement::_ReleaseResources();
+	_highlightQuad.ReleaseResources();
+	for (auto& label : _rowLabels) label->ReleaseResources();
 }
 
 void GuiDropDownList::Draw(base::DrawContext& ctx)
@@ -189,6 +201,8 @@ std::shared_ptr<GuiLabel> GuiDropDown::_MakeClosedLabel(const GuiDropDownParams&
 {
 	GuiLabelParams lp;
 	lp.String = (params.InitIndex < params.Items.size()) ? params.Items[params.InitIndex] : std::string();
+	lp.VerticalAlign = GuiTextVerticalAlign::Center;
+	lp.ClipText = true;
 	const GuiTextFrame frame = GuiLabelParams::ResolveTextFrame(
 		params.Size.Width,
 		params.Size.Height,
@@ -315,8 +329,16 @@ void GuiDropDown::SetSize(Size2d size)
 void GuiDropDown::_InitResources(ResourceLib& resourceLib, bool forceInit)
 {
 	GuiElement::_InitResources(resourceLib, forceInit);
+	_label->SetParent(shared_from_this());
 	_label->InitResources(resourceLib, forceInit);
 	_list->InitResources(resourceLib, forceInit);
+}
+
+void GuiDropDown::_ReleaseResources()
+{
+	GuiElement::_ReleaseResources();
+	_label->ReleaseResources();
+	_list->ReleaseResources();
 }
 
 void GuiDropDown::Draw(base::DrawContext& ctx)
