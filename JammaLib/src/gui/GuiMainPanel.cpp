@@ -218,7 +218,7 @@ void GuiMainPanel::_Layout()
 	const int handleHeight = std::min(28, height / 2);
 	const int panelHeight = std::min(_selectionOnly ? 152 : 320, std::max(0, height - 2 * std::min(8, height / 2)));
 	const int handleY = _selectionOnly ? height - std::min(8, height / 2) - handleHeight : std::min(8, height / 2);
-	_handle->SetPosition({ margin, handleY });
+	_handle->SetPosition({ margin + std::max(0, panelWidth - 28), handleY });
 	_handle->SetSize({ static_cast<unsigned int>(std::min(28, std::max(0, width - 2 * margin))), static_cast<unsigned int>(handleHeight) });
 	_handle->SetVisible(width > 0 && handleHeight > 0);
 	_frame->SetSize({ static_cast<unsigned int>(panelWidth), static_cast<unsigned int>(panelHeight) });
@@ -230,7 +230,7 @@ void GuiMainPanel::_Layout()
 	const int titleHeight = std::min(22, std::max(0, panelHeight - 2 * padding));
 	auto title = _frame->TryGetChild(0);
 	title->SetPosition({ padding, std::max(padding, panelHeight - padding - titleHeight) });
-	title->SetSize({ static_cast<unsigned int>(inner), static_cast<unsigned int>(titleHeight) });
+	title->SetSize({ static_cast<unsigned int>(std::max(0, inner - 28)), static_cast<unsigned int>(titleHeight) });
 	const int tabHeight = _selectionOnly ? 0 : std::min(44, std::max(0, panelHeight - 2 * padding - titleHeight));
 	if (_tabScroll)
 	{
