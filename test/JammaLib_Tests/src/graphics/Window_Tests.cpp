@@ -601,13 +601,65 @@ private:
 	std::thread::id PreviousOwner{};
 };
 
-TEST(GuiRenderEvidence, ProductionWindowSceneResizeAndPanelInput)
+class PrivateGuiEvidenceDesktop final
+{
+public:
+	PrivateGuiEvidenceDesktop() = default;
+	PrivateGuiEvidenceDesktop(const PrivateGuiEvidenceDesktop&) = delete;
+	PrivateGuiEvidenceDesktop& operator=(const PrivateGuiEvidenceDesktop&) = delete;
+	~PrivateGuiEvidenceDesktop()
+	{
+		if (!Desktop) return;
+		if (Attached && !SetThreadDesktop(Previous)) {
+			ADD_FAILURE() << "Could not restore test thread desktop: " << GetLastError();
+			return; // Windows must retain a desktop while a thread is attached.
+		}
+		EXPECT_TRUE(CloseDesktop(Desktop));
+	}
+	bool Initialize()
+	{
+		Previous = GetThreadDesktop(GetCurrentThreadId());
+		const auto name = L"JammaGuiEvidence-" + std::to_wstring(GetCurrentProcessId());
+		Desktop = CreateDesktopW(name.c_str(), nullptr, nullptr, 0,
+			DESKTOP_CREATEWINDOW | DESKTOP_CREATEMENU | DESKTOP_READOBJECTS | DESKTOP_WRITEOBJECTS, nullptr);
+		if (!Desktop || !SetThreadDesktop(Desktop)) return false;
+		Attached = true;
+		return IsSeparateFromInput();
+	}
+	bool IsSeparateFromInput() const
+	{
+		const auto input = OpenInputDesktop(0, FALSE, DESKTOP_READOBJECTS);
+		if (!input) return false;
+		std::array<wchar_t, 256> inputName{}, ownName{}; DWORD needed = 0;
+		const bool names = GetUserObjectInformationW(input, UOI_NAME, inputName.data(), sizeof(inputName), &needed)
+			&& GetUserObjectInformationW(Desktop, UOI_NAME, ownName.data(), sizeof(ownName), &needed);
+		const bool closed = CloseDesktop(input) != FALSE;
+		return names && closed && std::wstring(inputName.data()) != std::wstring(ownName.data());
+	}
+private:
+	HDESK Previous = nullptr;
+	HDESK Desktop = nullptr;
+	bool Attached = false;
+};
+
+class ProductionWindowGuiEvidence final
+{
+public:
+	static void Run();
+};
+
+void ProductionWindowGuiEvidence::Run()
 {
 	const char* directory = std::getenv("JAMMA_RENDER_EVIDENCE_DIR");
 	if (!directory || !*directory || !std::getenv("JAMMA_WINDOW_RENDER_EVIDENCE"))
 		GTEST_SKIP() << "Set JAMMA_RENDER_EVIDENCE_DIR and JAMMA_WINDOW_RENDER_EVIDENCE for the isolated production-window pass.";
 	const std::filesystem::path output(directory);
 	std::filesystem::create_directories(output);
+	// Own all test windows on an undisplayed desktop. This permits real OS
+	// maximize/minimize/restore without exposing them on the user's desktop.
+	// Deliberately do not request DESKTOP_SWITCHDESKTOP or call SwitchDesktop.
+	PrivateGuiEvidenceDesktop desktop;
+	ASSERT_TRUE(desktop.Initialize()) << "Private test desktop setup failed: " << GetLastError();
 	{
 		NativeGuiRenderEvidence preflight;
 		ASSERT_TRUE(preflight.Initialize());
@@ -717,6 +769,36 @@ TEST(GuiRenderEvidence, ProductionWindowSceneResizeAndPanelInput)
 	EXPECT_GE(settings->TransitionValue(), progress);
 	nativeResize({ 1000, 650 }); capture("production-window-restored");
 	EXPECT_EQ(1000u, scene->GetSize().Width); EXPECT_EQ(650u, scene->GetSize().Height);
+	const auto restoredClient = window.GetSize();
+	ShowWindow(ownedWindow, SW_MAXIMIZE);
+	ASSERT_TRUE(IsZoomed(ownedWindow)); EXPECT_TRUE(desktop.IsSeparateFromInput());
+	EXPECT_EQ(Window::MAXIMISED, window.GetConfig().State);
+	RECT maximizedClient{}; ASSERT_TRUE(GetClientRect(ownedWindow, &maximizedClient));
+	EXPECT_EQ(static_cast<unsigned int>(maximizedClient.right), window.GetSize().Width);
+	EXPECT_EQ(static_cast<unsigned int>(maximizedClient.right), scene->GetSize().Width);
+	EXPECT_EQ(static_cast<unsigned int>(maximizedClient.bottom), window.GetSize().Height);
+	EXPECT_EQ(static_cast<unsigned int>(maximizedClient.bottom), scene->GetSize().Height);
+	capture("production-window-os-maximized");
+	EXPECT_EQ(0, settings->TryGetChild(1)->GlobalPosition().Y);
+	const auto topHandle = NativeGuiRenderEvidence::Settings(*scene, { 30, static_cast<int>(scene->GetSize().Height) - 10 });
+	ASSERT_TRUE(topHandle);
+	EXPECT_EQ(static_cast<int>(scene->GetSize().Height) - 28, topHandle->TryGetChild(1)->GlobalPosition().Y);
+	ShowWindow(ownedWindow, SW_RESTORE);
+	EXPECT_FALSE(IsZoomed(ownedWindow)); EXPECT_EQ(Window::WINDOWED, window.GetConfig().State);
+	EXPECT_EQ(restoredClient.Width, window.GetSize().Width); EXPECT_EQ(restoredClient.Height, scene->GetSize().Height);
+	EXPECT_EQ(restoredClient.Width, scene->GetSize().Width); EXPECT_EQ(restoredClient.Height, window.GetSize().Height);
+	capture("production-window-os-maximize-restored");
+	ShowWindow(ownedWindow, SW_MINIMIZE);
+	EXPECT_TRUE(IsIconic(ownedWindow)); EXPECT_EQ(Window::MINIMISED, window.GetConfig().State);
+	EXPECT_EQ(0u, window.GetSize().Width); EXPECT_EQ(0u, scene->GetSize().Height);
+	EXPECT_EQ(0u, scene->GetSize().Width); EXPECT_EQ(0u, window.GetSize().Height);
+	window.Render(); window.Swap(); EXPECT_EQ(GL_NO_ERROR, glGetError());
+	ShowWindow(ownedWindow, SW_RESTORE);
+	EXPECT_FALSE(IsIconic(ownedWindow)); EXPECT_EQ(Window::WINDOWED, window.GetConfig().State);
+	EXPECT_EQ(restoredClient.Width, window.GetSize().Width); EXPECT_EQ(restoredClient.Height, scene->GetSize().Height);
+	EXPECT_EQ(restoredClient.Width, scene->GetSize().Width); EXPECT_EQ(restoredClient.Height, window.GetSize().Height);
+	capture("production-window-os-minimize-restored");
+	ShowWindow(ownedWindow, SW_HIDE); EXPECT_FALSE(IsWindowVisible(ownedWindow)); EXPECT_TRUE(desktop.IsSeparateFromInput());
 	// Dispatch native empty-size notifications. Windows enforces its outer-window
 	// minimum on SetWindowPos; notifications still exercise the production handler
 	// for empty/minimized clients without changing that minimum in this test.
@@ -896,6 +978,25 @@ TEST(GuiRenderEvidence, ProductionWindowSceneResizeAndPanelInput)
 	EXPECT_EQ(100u, firstCard->GetSize().Height);
 	EXPECT_GE(firstCard->GlobalPosition().Y, (*triggerScroll)->GlobalPosition().Y);
 	EXPECT_LE(firstCard->GlobalPosition().Y + 100, (*triggerScroll)->GlobalPosition().Y + static_cast<int>((*triggerScroll)->GetSize().Height));
+	clickControl(selection->TryGetChild(1));
+	const auto compactSelectionDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+	while (selection->TransitionValue() < 1.0f && std::chrono::steady_clock::now() < compactSelectionDeadline) {
+		window.Render(); glFinish(); window.Swap(); std::this_thread::sleep_for(std::chrono::milliseconds(10));
+	}
+	ASSERT_FLOAT_EQ(1.0f, selection->TransitionValue());
+	auto selectionViewport = std::dynamic_pointer_cast<gui::GuiScrollPanel>(selection->TryGetChild(0)->TryGetChild(1));
+	ASSERT_TRUE(selectionViewport);
+	auto depth = std::dynamic_pointer_cast<gui::GuiRadio>(selectionViewport->Content()->TryGetChild(0)); ASSERT_TRUE(depth);
+	const auto selectionPosition = selectionViewport->GlobalPosition(); const auto selectionSize = selectionViewport->GetSize();
+	for (const auto index : { 2u, 1u, 0u }) {
+		auto toggle = depth->TryGetChild(static_cast<unsigned char>(index)); ASSERT_TRUE(toggle);
+		const auto position = toggle->GlobalPosition(); const auto size = toggle->GetSize();
+		ASSERT_GE(position.X, selectionPosition.X); ASSERT_GE(position.Y, selectionPosition.Y);
+		ASSERT_LE(position.X + static_cast<int>(size.Width), selectionPosition.X + static_cast<int>(selectionSize.Width));
+		ASSERT_LE(position.Y + static_cast<int>(size.Height), selectionPosition.Y + static_cast<int>(selectionSize.Height));
+		clickControl(toggle); EXPECT_EQ(index, depth->CurrentValue()); EXPECT_FALSE(scene->HasSelection());
+	}
+	capture("production-window-supported-selection");
 	wheel.Value = -1;
 	nativeResize({ 1000, 650 }); pageScroll->SetScrollOffset(0); settleSettings(true);
 	selection->SetExpanded(true); selection->AdvanceAnimation(0.22f);
@@ -952,4 +1053,14 @@ TEST(GuiRenderEvidence, ProductionWindowSceneResizeAndPanelInput)
 	EXPECT_FALSE(scene->IsLoopGridEditorOpen()); EXPECT_EQ(nullptr, scene->LoopGridEditorMidiLoop());
 	capture("production-window-editor-restored");
 	reveal.KeyActionType = actions::KeyAction::KEY_UP; window.OnAction(reveal);
+}
+
+TEST(GuiRenderEvidence, ProductionWindowSceneResizeAndPanelInput)
+{
+	if (!std::getenv("JAMMA_RENDER_EVIDENCE_DIR") || !std::getenv("JAMMA_WINDOW_RENDER_EVIDENCE"))
+		GTEST_SKIP() << "Set both render-evidence variables for the isolated production-window pass.";
+	// The test runner's main thread may already own windows/hooks. A fresh UI
+	// thread can attach before creating any HWND, then owns the whole GL lifetime.
+	std::thread worker(&ProductionWindowGuiEvidence::Run);
+	worker.join();
 }

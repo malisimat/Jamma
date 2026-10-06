@@ -421,6 +421,31 @@ a replacement scope. The feature is not complete.
    found no material defect. Native and dependent app builds, threading audit,
    and the selected 281 checks passed (8784 ms); only the separate benchmark
    was skipped, and the GPU error log was empty.
+   Actual OS maximize/restore and minimize/restore are now exercised on the
+   production Window and populated Scene. The opt-in test creates an
+   undisplayed private Win32 desktop without the SwitchDesktop access right or
+   API, then checks its name remains distinct from the input desktop. A fresh
+   UI thread attaches before GPU/window creation; the runner's main thread was
+   rejected with ERROR_BUSY (170). All HWND/WGL/Scene cleanup finishes on that
+   worker before restoring its original desktop and closing the private one;
+   the parent joins before the test ends. This preserves the user's visible
+   desktop while using real ShowWindow OS transitions. IsZoomed/IsIconic,
+   WM_SIZE-derived configuration, actual client bounds and both Window/Scene
+   dimensions are asserted, as are top/bottom handle anchors. Private-desktop
+   WGL rendering passed on this machine; this remains platform-specific opt-in
+   evidence, with the existing external process timeout retained for failures.
+   Maximize/restore and minimize/restore backbuffer captures were inspected.
+   At the 400x240 compact profile the Selection handle is clicked, expansion
+   settles through actual frames, and all three depth controls fit completely
+   inside their scroll viewport. Window/Scene click routing selects each radio
+   value without selecting scene content. Independent owner behavior remains
+   covered by the Scene checks above. The selection capture was also inspected.
+   Focused review found no material lifetime/race issue; its minor missing
+   cross-dimension assertions were added. Incremental native build passed;
+   281 selected checks passed (8775 ms), the separate benchmark was skipped,
+   and the GPU error log was empty. Threading audit flagged only the test's
+   joined worker, manually reviewed as owning the complete UI/GL lifetime.
+   There are no app or engine changes in this verification slice.
 7. Final requirement audit and HTML completion report: pending.
 
 ## Remaining verification from the plan audit
@@ -432,7 +457,7 @@ than the plan's full live-runtime completion gate.
 | Plan requirement | Current evidence | Remaining proof |
 | --- | --- | --- |
 | Real pages, defaults, ownership and stable commands | Production composition, all retained control-owner paths after initialization/child addition; channel limits/shortcuts, phase propagation, CLICK and local/global grids; actual All/Off clicks | Applied-state feedback during hardware playback |
-| Resize, motion and pointer priority | Actual 320x180/400x240/480x320/1000x650 resize, reversal and resize during motion; stationary-pointer hover; empty-size handler checks; normal/editor modifier input; compact settings controls and OS-minimum handle/render checks | Actual OS maximize/restore; compact selection-depth interaction and final supported-profile visual confirmation under playback |
+| Resize, motion and pointer priority | Actual 320x180/400x240/480x320/1000x650 resize, reversal and resize during motion; stationary-pointer hover; actual OS maximize/minimize/restore on private desktop; empty-size handler checks; normal/editor modifier input; compact settings/selection controls and OS-minimum handle/render checks | Final supported-profile visual confirmation under playback |
 | Adaptive input rows and full identity | Zero/one/many geometry, 80px floor, widget reuse/offset clamp; measured labels and popup checks | Live playback visual confirmation |
 | Trigger viewport and actions | Fixed 100px cards, clipping, actual native wheel; Add/Delete/Cancel, empty-list Add and newer snapshot projection with reveal/preserve/clamp after resize; compact 400x240 header/card/actions and popup checks | Live routing adoption and final minimum-window visual confirmation under playback |
 | Retained cable presentation and interactions | Boundary/projection/nested clipping tests, GPU continuations, real HUD body reconnect/cancel/stale-revision checks | Live routing adoption and camera/drag interactions under playback; actual rendered body-hit checks in the final live pass |
@@ -445,8 +470,11 @@ than the plan's full live-runtime completion gate.
 The ASIO device/rate/buffer question remains unanswered. This session still has
 no `node_repl` capability required by the computer-use skill, so foreground
 desktop automation has not been attempted. Neither limitation substitutes for
-the remaining live verification. Remaining independent checks include the
-compact selection-depth input and actual OS maximize/restore behavior.
+the remaining live verification. Native tests now cover owned production
+windows on an undisplayed private desktop, including actual OS show-state
+transitions; this does not require foreground desktop automation. The remaining
+performance gate also requires real underrun observations, not simulated
+playback or an unmeasured zero.
 
 ## Local build setup
 
