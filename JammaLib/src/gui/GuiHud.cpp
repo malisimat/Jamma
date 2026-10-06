@@ -465,7 +465,7 @@ void GuiHud::_BuildTopStrip()
 	};
 	const unsigned int innerWidth = _TopStripWidth - (_TopStripPadding * 2u);
 	GuiStackPanelParams sourceRowParams = GuiStackPanelParams::PanelHorizontalRow(innerWidth, _SourceViewportHeight);
-	sourceRowParams.Spacing = GuiStackPanelParams::PanelRowSpacing + 4u;
+	sourceRowParams.Spacing = GuiStackPanelParams::PanelRowSpacing - 4u;
 	_topSourceRow = std::make_shared<GuiStackPanel>(sourceRowParams);
 	if (audioCount > 0u)
 	{
@@ -793,7 +793,7 @@ void GuiHud::_LayoutPanels()
 	const auto audioCount = static_cast<unsigned int>(std::count_if(_sourceEndpoints.begin(), _sourceEndpoints.end(),
 		[](const auto& source) { return source.Kind == io::RigFileRouting::SourceKind::Adc; }));
 	const auto midiCount = static_cast<unsigned int>(_sourceEndpoints.size()) - audioCount;
-	const int categoryGap = audioCount && midiCount ? std::min(static_cast<int>(GuiStackPanelParams::PanelRowSpacing + 4u), innerWidth) : 0;
+	const int categoryGap = audioCount && midiCount ? std::min(static_cast<int>(GuiStackPanelParams::PanelRowSpacing - 4u), innerWidth) : 0;
 	const int labelWidth = innerWidth >= static_cast<int>((audioCount + midiCount) * 84u) + 68 ? 68 : 0;
 	const auto budget = static_cast<unsigned int>(std::max(0, innerWidth - labelWidth - categoryGap));
 	auto audioWidth = audioCount + midiCount ? static_cast<unsigned int>(static_cast<unsigned long long>(budget) * audioCount / (audioCount + midiCount)) : 0u;
