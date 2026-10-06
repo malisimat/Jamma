@@ -342,6 +342,8 @@ TEST(GuiRenderEvidence, ProductionPanelsHudAndFontPathsRenderOnActualGpu)
 		trigger.Sources.push_back({ io::RigFileRouting::SourceKind::Adc, static_cast<unsigned int>(index % 8), {}, true });
 		routing.Graph.Triggers.push_back(trigger);
 	}
+	routing.Graph.Triggers.front().Sources.push_back({ io::RigFileRouting::SourceKind::Midi, 0u,
+		"Unavailable Agjpq MIDI identity", false });
 	hud->SetRoutingConfig(8, { "Agjpq 0123 very long MIDI identity", "Offline source identity" }, routing);
 	hud->SetCableRevealHeld(true);
 	hud->Init();
@@ -394,6 +396,26 @@ TEST(GuiRenderEvidence, ProductionPanelsHudAndFontPathsRenderOnActualGpu)
 	render("small-mid-animation");
 	for (int frame = 0; frame < 5; ++frame) { settings->AdvanceAnimation(0.05f); selection->AdvanceAnimation(0.05f); }
 	settings->SetPage(gui::SettingsPage::Timing); render("small-expanded");
+	size = { 400, 240 };
+	settings->SetViewportSize(size); selection->SetViewportSize(size); hud->SetSize(size);
+	settings->SetExpanded(false); selection->SetExpanded(false);
+	for (int frame = 0; frame < 5; ++frame) { settings->AdvanceAnimation(0.05f); selection->AdvanceAnimation(0.05f); }
+	const auto compactHud = render("compact-hud-two-categories");
+	unsigned int sourceViewports = 0;
+	for (const auto& scroll : NativeGuiRenderEvidence::Scrolls(hud)) {
+		const auto card = scroll->Content() ? scroll->Content()->TryGetChild(0) : nullptr;
+		if (!card || card->GetSize().Height == 100u) continue;
+		++sourceViewports; EXPECT_GE(scroll->GetSize().Width, 84u);
+		EXPECT_EQ(80u, card->GetSize().Width);
+		const auto position = card->GlobalPosition(); const auto cardSize = card->GetSize();
+		EXPECT_GE(position.X, scroll->GlobalPosition().X);
+		EXPECT_LE(position.X + static_cast<int>(cardSize.Width), scroll->GlobalPosition().X + static_cast<int>(scroll->GetSize().Width));
+		EXPECT_GT(NativeGuiRenderEvidence::WhitePixels(compactHud, size, { position.X, position.Y,
+			position.X + static_cast<int>(cardSize.Width), position.Y + static_cast<int>(cardSize.Height) }), 5u);
+	}
+	EXPECT_EQ(2u, sourceViewports);
+	settings->SetExpanded(true); selection->SetExpanded(true);
+	for (int frame = 0; frame < 5; ++frame) { settings->AdvanceAnimation(0.05f); selection->AdvanceAnimation(0.05f); }
 	size = { 1280, 720 };
 	settings->SetViewportSize(size); selection->SetViewportSize(size); hud->SetSize(size);
 	const auto restored = render("large-restored");
@@ -824,6 +846,57 @@ TEST(GuiRenderEvidence, ProductionWindowSceneResizeAndPanelInput)
 	capture("production-window-os-minimum");
 	clickControl(settings->TryGetChild(1)); settleSettings(true);
 	clickControl(settings->TryGetChild(1)); settleSettings(false);
+	// Supported compact profile: use the handles to expose settings or HUD,
+	// and scroll complete control frames into view before operating them.
+	nativeResize({ 400, 240 }); settleSettings(true);
+	const auto revealControl = [&](const std::shared_ptr<base::GuiElement>& control) {
+		const auto viewport = pageScroll->GlobalPosition(); const int height = static_cast<int>(pageScroll->GetSize().Height);
+		for (int attempt = 0; attempt < 20; ++attempt) {
+			const int bottom = control->GlobalPosition().Y, top = bottom + static_cast<int>(control->GetSize().Height);
+			if (bottom >= viewport.Y && top <= viewport.Y + height) return;
+			wheel.Position = { viewport.X + 10, viewport.Y + height / 2 }; wheel.Value = bottom < viewport.Y ? -1 : 1;
+			EXPECT_TRUE(window.OnAction(wheel).IsEaten);
+		}
+		ADD_FAILURE() << "Control did not become fully visible in compact page";
+	};
+	const auto dragNumeric = [&](const std::shared_ptr<gui::GuiNumericInput>& input, int delta) {
+		revealControl(input); clickControl(input);
+		press.State = actions::TouchAction::TOUCH_DOWN; EXPECT_TRUE(window.OnAction(press).IsEaten);
+		actions::TouchMoveAction move; move.Touch = actions::TouchAction::TOUCH_MOUSE; move.MouseButtonsDown = 1;
+		move.Position = press.Position + utils::Position2d{ 0, delta }; EXPECT_TRUE(window.OnAction(move).IsEaten);
+		press.Position = move.Position; press.State = actions::TouchAction::TOUCH_UP; EXPECT_TRUE(window.OnAction(press).IsEaten);
+	};
+	clickControl(tabsViewport->Content()->TryGetChild(0)); ASSERT_EQ(gui::SettingsPage::Midi, settings->Page());
+	auto channel = std::dynamic_pointer_cast<gui::GuiNumericInput>(pageScroll->Content()->TryGetChild(1)); ASSERT_TRUE(channel);
+	const auto originalChannel = channel->Value(); dragNumeric(channel, 40); EXPECT_DOUBLE_EQ(originalChannel + 4.0, channel->Value());
+	capture("production-window-supported-midi"); dragNumeric(channel, -40); EXPECT_DOUBLE_EQ(originalChannel, channel->Value());
+	clickControl(tabsViewport->Content()->TryGetChild(1)); ASSERT_EQ(gui::SettingsPage::Timing, settings->Page());
+	revealControl(radio);
+	ASSERT_FALSE(take->MidiQuantisation().Enabled);
+	for (const auto index : { 0u, 1u, 2u }) {
+		clickControl(radio->TryGetChild(static_cast<unsigned char>(index)));
+		EXPECT_EQ(index, radio->CurrentValue());
+		EXPECT_EQ(index == 2u, take->ResolvedMidiQuantisation().Enabled); // This fixture's local grid is off.
+	}
+	capture("production-window-supported-quantisation");
+	auto phase = std::dynamic_pointer_cast<gui::GuiNumericInput>(pageScroll->Content()->TryGetChild(3)); ASSERT_TRUE(phase);
+	const auto originalPhase = phase->Value(); dragNumeric(phase, 10);
+	EXPECT_NEAR(originalPhase + 0.05, phase->Value(), 0.000001);
+	EXPECT_NEAR(phase->Value(), scene->SnapshotStations().front()->TransportOffsetLoopFrac(), 0.000001);
+	capture("production-window-supported-phase"); dragNumeric(phase, -10);
+	EXPECT_NEAR(originalPhase, scene->SnapshotStations().front()->TransportOffsetLoopFrac(), 0.000001);
+	auto click = std::dynamic_pointer_cast<gui::GuiToggle>(pageScroll->Content()->TryGetChild(4)); ASSERT_TRUE(click);
+	revealControl(click); const auto originalClick = click->GetToggleState(); clickControl(click);
+	EXPECT_NE(originalClick, click->GetToggleState()); capture("production-window-supported-click");
+	clickControl(click); EXPECT_EQ(originalClick, click->GetToggleState());
+	clickControl(settings->TryGetChild(1)); settleSettings(false);
+	(*triggerScroll)->SetScrollOffset(0); capture("production-window-supported-hud");
+	EXPECT_GE((*triggerScroll)->GetSize().Height, 100u);
+	const auto firstCard = (*triggerScroll)->Content()->TryGetChild(0); ASSERT_TRUE(firstCard);
+	EXPECT_EQ(100u, firstCard->GetSize().Height);
+	EXPECT_GE(firstCard->GlobalPosition().Y, (*triggerScroll)->GlobalPosition().Y);
+	EXPECT_LE(firstCard->GlobalPosition().Y + 100, (*triggerScroll)->GlobalPosition().Y + static_cast<int>((*triggerScroll)->GetSize().Height));
+	wheel.Value = -1;
 	nativeResize({ 1000, 650 }); pageScroll->SetScrollOffset(0); settleSettings(true);
 	selection->SetExpanded(true); selection->AdvanceAnimation(0.22f);
 	take->Select();

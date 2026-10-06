@@ -363,6 +363,47 @@ TEST_F(HudCableInteractionTests, AddTriggerRevealsPublishedCardAfterResizeAndSup
 	EXPECT_EQ(100u, TriggerScroll()->Content()->TryGetChild(0)->GetSize().Height);
 }
 
+TEST_F(HudCableInteractionTests, SupportedCompactProfileKeepsSourcesAndTriggerActionsReachable)
+{
+	Hud->SetRoutingConfig(1u, { "Agjpq long MIDI device" }, *Routing);
+	Hud->SetSize({ 400u, 240u });
+	std::vector<std::shared_ptr<gui::GuiScrollPanel>> scrolls; Layout(Hud, scrolls);
+	unsigned int sourceRows = 0;
+	for (const auto& sourceScroll : scrolls) {
+		const auto card = sourceScroll->Content() ? sourceScroll->Content()->TryGetChild(0) : nullptr;
+		if (!card || card->GetSize().Height == 100u) continue;
+		++sourceRows;
+		EXPECT_GE(sourceScroll->GetSize().Width, 80u);
+		EXPECT_GE(card->GetSize().Width, 80u);
+		EXPECT_GE(card->GlobalPosition().X, sourceScroll->GlobalPosition().X);
+		EXPECT_LE(card->GlobalPosition().X + static_cast<int>(card->GetSize().Width),
+			sourceScroll->GlobalPosition().X + static_cast<int>(sourceScroll->GetSize().Width));
+	}
+	EXPECT_EQ(2u, sourceRows);
+	auto scroll = TriggerScroll(); ASSERT_TRUE(scroll); EXPECT_GE(scroll->GetSize().Height, 100u);
+	scroll->SetScrollOffset(0);
+	const auto first = scroll->Content()->TryGetChild(0); ASSERT_TRUE(first);
+	EXPECT_EQ(100u, first->GetSize().Height);
+	EXPECT_GE(first->GlobalPosition().Y, scroll->GlobalPosition().Y);
+	EXPECT_LE(first->GlobalPosition().Y + 100, scroll->GlobalPosition().Y + static_cast<int>(scroll->GetSize().Height));
+	EXPECT_TRUE(Hud->TryGetChild(1)->TryGetChild(0)->IsVisible());
+	const auto close = first->TryGetChild(3);
+	Click(close); ASSERT_TRUE(Popups.IsOpen());
+	const auto popup = Popups.Top();
+	EXPECT_GE(popup->Position().X, 0); EXPECT_GE(popup->Position().Y, 0);
+	EXPECT_LE(popup->Position().X + static_cast<int>(popup->GetSize().Width), 400);
+	EXPECT_LE(popup->Position().Y + static_cast<int>(popup->GetSize().Height), 240);
+	Click(popup->TryGetChild(4), true); EXPECT_FALSE(Popups.IsOpen()); EXPECT_TRUE(Submissions.empty());
+	Click(close); ASSERT_TRUE(Popups.IsOpen()); Click(Popups.Top()->TryGetChild(5), true);
+	ASSERT_EQ(1u, Submissions.size()); EXPECT_EQ(11u, Submissions.back().Triggers.size());
+	const auto removed = Submissions.back(); PublishRig(removed); Submissions.clear();
+	Click(Hud->TryGetChild(1)->TryGetChild(2));
+	ASSERT_EQ(1u, Submissions.size()); EXPECT_EQ(12u, Submissions.back().Triggers.size());
+	const auto appended = Submissions.back(); PublishRig(appended); scroll = TriggerScroll();
+	EXPECT_EQ(scroll->MaxScrollOffset(), scroll->ScrollOffset());
+	for (unsigned char index = 0; index < 12; ++index) EXPECT_EQ(100u, scroll->Content()->TryGetChild(index)->GetSize().Height);
+}
+
 TEST_F(HudCableInteractionTests, DeleteConfirmationSubmitsOnlySelectedTriggerAndClampsPublishedList)
 {
 	Hud->SetSize({ 640, 320 }); auto scroll = TriggerScroll(); ASSERT_TRUE(scroll);

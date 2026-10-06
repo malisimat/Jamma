@@ -799,7 +799,12 @@ void GuiHud::_LayoutPanels()
 	const auto midiCount = static_cast<unsigned int>(_sourceEndpoints.size()) - audioCount;
 	const int categoryGap = audioCount && midiCount ? std::min(static_cast<int>(_SourcePanelGap), innerWidth) : 0;
 	const auto budget = static_cast<unsigned int>(innerWidth - categoryGap);
-	const auto audioWidth = audioCount + midiCount ? static_cast<unsigned int>(static_cast<unsigned long long>(budget) * audioCount / (audioCount + midiCount)) : 0u;
+	auto audioWidth = audioCount + midiCount ? static_cast<unsigned int>(static_cast<unsigned long long>(budget) * audioCount / (audioCount + midiCount)) : 0u;
+	// Keep a minority category usable too: one minimum-width card plus the
+	// row's 2px padding on each side. Below this budget retain real clipping.
+	constexpr unsigned int categoryMinimum = 84u;
+	if (audioCount && midiCount && budget >= categoryMinimum * 2u)
+		audioWidth = std::clamp(audioWidth, categoryMinimum, budget - categoryMinimum);
 	const auto midiWidth = midiCount ? budget - audioWidth : 0u;
 	const auto audioCard = SourceCardWidth(audioWidth, audioCount);
 	const auto midiCard = SourceCardWidth(midiWidth, midiCount);

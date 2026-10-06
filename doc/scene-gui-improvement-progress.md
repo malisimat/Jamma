@@ -394,6 +394,33 @@ a replacement scope. The feature is not complete.
    Incremental native and dependent app builds passed. The selected run passed
    280 checks (7985 ms), with only the separate benchmark skipped and an empty
    GPU error log. Hardware playback and underruns remain unmeasured.
+   Further compact-profile checks found a minority-category usability defect:
+   at 384px wide, a retained ADC19 endpoint plus one available ADC and one MIDI
+   source gave MIDI only 54px. Source cards kept their 80px floor, but the
+   proportional viewport split clipped the whole first card. When both
+   categories exist and their shared budget reaches 168px, HUD now reserves at
+   least 84px for each (80px card plus row padding); remaining space follows the
+   existing weighted split. Single-category and smaller real viewports retain
+   their constrained behavior, with no virtual enlargement.
+   The supported compact client profile under review is 400x240, using the
+   persistent handles to expose settings and HUD sequentially. Native input
+   checks scroll entire frames into view, drag MIDI channel 0 to 4 and back,
+   actuate Off/Mixed/All, drag phase to 0.050 and verify Station propagation,
+   restore phase, toggle CLICK both ways, and show a full 100px trigger card.
+   Mixed correctly preserves this fixture's disabled local grid; the harness
+   also respects the existing 0.1-per-pixel MIDI channel drag step. MIDI channel
+   and CLICK are observed through the bound controls here; their independent
+   owner effects are covered by the Scene component checks above.
+   A real-Trigger HUD component check at 400x240 verifies both source-category
+   first-card bounds, header, full trigger card, popup fit, Cancel/Delete/Add
+   candidate submission and newer-snapshot reveal. It does not claim live
+   adoption. A GPU capture adds eight ADC and three MIDI endpoints, including
+   an unavailable MIDI route, and verifies full first-card bounds and rendered
+   text in both categories. The native settings and collapsed-HUD captures
+   were inspected for readability over bright scene content. Focused review
+   found no material defect. Native and dependent app builds, threading audit,
+   and the selected 281 checks passed (8784 ms); only the separate benchmark
+   was skipped, and the GPU error log was empty.
 7. Final requirement audit and HTML completion report: pending.
 
 ## Remaining verification from the plan audit
@@ -405,11 +432,11 @@ than the plan's full live-runtime completion gate.
 | Plan requirement | Current evidence | Remaining proof |
 | --- | --- | --- |
 | Real pages, defaults, ownership and stable commands | Production composition, all retained control-owner paths after initialization/child addition; channel limits/shortcuts, phase propagation, CLICK and local/global grids; actual All/Off clicks | Applied-state feedback during hardware playback |
-| Resize, motion and pointer priority | Actual 320x180/480x320/1000x650 resize, reversal and resize during motion; stationary-pointer hover; empty-size handler checks; normal/editor modifier input; compact tabs/quantisation input and OS-minimum handle/render checks | Actual OS maximize/restore; remaining minimum-size controls and supported interactive profile |
+| Resize, motion and pointer priority | Actual 320x180/400x240/480x320/1000x650 resize, reversal and resize during motion; stationary-pointer hover; empty-size handler checks; normal/editor modifier input; compact settings controls and OS-minimum handle/render checks | Actual OS maximize/restore; compact selection-depth interaction and final supported-profile visual confirmation under playback |
 | Adaptive input rows and full identity | Zero/one/many geometry, 80px floor, widget reuse/offset clamp; measured labels and popup checks | Live playback visual confirmation |
-| Trigger viewport and actions | Fixed 100px cards, clipping, actual native wheel; Add/Delete/Cancel, empty-list Add and newer snapshot projection with reveal/preserve/clamp after resize | Live routing adoption and minimum-window usability |
+| Trigger viewport and actions | Fixed 100px cards, clipping, actual native wheel; Add/Delete/Cancel, empty-list Add and newer snapshot projection with reveal/preserve/clamp after resize; compact 400x240 header/card/actions and popup checks | Live routing adoption and final minimum-window visual confirmation under playback |
 | Retained cable presentation and interactions | Boundary/projection/nested clipping tests, GPU continuations, real HUD body reconnect/cancel/stale-revision checks | Live routing adoption and camera/drag interactions under playback; actual rendered body-hit checks in the final live pass |
-| Panels, popup/edit cleanup and hidden pages | Retained active host, numeric finalization, subtree popup/focus/capture checks; GPU page/opacity snapshots; stationary hover and viewport-fitted confirmation geometry/actions/GPU text | Full runtime popup/edit/tab exercise under playback; minimum-window edit controls |
+| Panels, popup/edit cleanup and hidden pages | Retained active host, numeric finalization, subtree popup/focus/capture checks; GPU page/opacity snapshots; stationary hover and viewport-fitted confirmation geometry/actions/GPU text; compact channel/phase numeric drags and CLICK | Full runtime popup/edit/tab exercise under playback |
 | Text, palette and shader scope restoration | Real font metrics, control families/caret/popup rows and nested opacity pixel checks; populated Scene/editor captures | Final visual review during playback |
 | Timing boundaries and real-time safety | Existing command owners retained; no new audio callback policy; threading audits/reviews and selected MIDI-router/NINJAM/transport boundary regressions | Real playback confirmation of relocated settings |
 | Same-scene frame distributions and underruns | Shared populated-scene benchmark and historical no-playback baseline pair | Device/rate/buffer details, actual underrun observation, equivalent verified interactions and repeated/interleaved live runs |
@@ -419,7 +446,7 @@ The ASIO device/rate/buffer question remains unanswered. This session still has
 no `node_repl` capability required by the computer-use skill, so foreground
 desktop automation has not been attempted. Neither limitation substitutes for
 the remaining live verification. Remaining independent checks include the
-other minimum viewport controls and actual OS maximize/restore behavior.
+compact selection-depth input and actual OS maximize/restore behavior.
 
 ## Local build setup
 
