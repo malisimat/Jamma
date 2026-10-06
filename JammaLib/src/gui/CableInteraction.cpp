@@ -30,7 +30,8 @@ float CableInteraction::_DistanceSquared(utils::Position2d lhs, utils::Position2
 
 bool CableInteraction::HitTest(const Endpoint& endpoint, utils::Position2d point, float radius)
 {
-	return _DistanceSquared(endpoint.Position, point) <= radius * radius;
+	return (!endpoint.HitBounds || endpoint.HitBounds->Contains(point)) &&
+		_DistanceSquared(endpoint.Position, point) <= radius * radius;
 }
 
 std::optional<size_t> CableInteraction::HitEndpoint(const std::vector<Endpoint>& endpoints,
@@ -41,6 +42,8 @@ std::optional<size_t> CableInteraction::HitEndpoint(const std::vector<Endpoint>&
 	float nearestDistance = radius * radius;
 	for (size_t i = 0u; i < endpoints.size(); ++i)
 	{
+		if (!HitTest(endpoints[i], point, radius))
+			continue;
 		const auto distance = _DistanceSquared(endpoints[i].Position, point);
 		if (distance <= nearestDistance)
 		{
@@ -95,8 +98,10 @@ std::optional<std::pair<size_t, CableInteraction::End>> CableInteraction::HitCab
 	{
 		for (const auto end : { End::Start, End::Finish })
 		{
-			const auto distance = _DistanceSquared(
-				end == End::Start ? cables[i].Start.Position : cables[i].Finish.Position, point);
+			const auto& endpoint = end == End::Start ? cables[i].Start : cables[i].Finish;
+			if (!HitTest(endpoint, point, radius))
+				continue;
+			const auto distance = _DistanceSquared(endpoint.Position, point);
 			if (distance < nearestDistance)
 			{
 				nearest = std::make_pair(i, end);
@@ -189,7 +194,7 @@ std::optional<size_t> CableInteraction::NearestViable(const Drag& drag,
 	float nearestDistance = radius * radius;
 	for (size_t i = 0u; i < endpoints.size(); ++i)
 	{
-		if (!Compatible(drag, endpoints[i], rig))
+		if (!Compatible(drag, endpoints[i], rig) || !HitTest(endpoints[i], drag.Pointer, radius))
 			continue;
 		const auto distance = _DistanceSquared(endpoints[i].Position, drag.Pointer);
 		if (distance <= nearestDistance)
@@ -209,9 +214,25 @@ void CableInteraction::Update(Drag& drag,
 	float hysteresis)
 {
 	drag.Pointer = pointer;
-	if (drag.Snap.has_value() && Compatible(drag, drag.Snap.value(), rig) &&
-		HitTest(drag.Snap.value(), pointer, radius + hysteresis))
-		return;
+	if (drag.Snap)
+	{
+		const auto current = std::find_if(endpoints.begin(), endpoints.end(), [&drag](const auto& endpoint)
+		{
+			const auto& saved = *drag.Snap;
+			return endpoint.Kind == saved.Kind && endpoint.TriggerIndex == saved.TriggerIndex &&
+				endpoint.StationIndex == saved.StationIndex && endpoint.StationName == saved.StationName &&
+				endpoint.Source.has_value() == saved.Source.has_value() &&
+				(!endpoint.Source || _SameSource(*endpoint.Source, *saved.Source));
+		});
+		// Scrolling/resizing may move or hide the socket during a captured drag.
+		// Hysteresis applies to the current real socket, never the saved geometry.
+		if (current != endpoints.end() && Compatible(drag, *current, rig) &&
+			HitTest(*current, pointer, radius + hysteresis))
+		{
+			drag.Snap = *current;
+			return;
+		}
+	}
 	const auto nearest = NearestViable(drag, endpoints, rig, radius);
 	drag.Snap = nearest.has_value() ? std::optional<Endpoint>(endpoints[nearest.value()]) : std::nullopt;
 }

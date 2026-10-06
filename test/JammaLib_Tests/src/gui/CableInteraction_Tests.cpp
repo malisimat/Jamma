@@ -65,6 +65,26 @@ TEST_F(CableInteractionTests, CableBodyHitAndClosestEndUseScreenSpace)
 	EXPECT_EQ(CableInteraction::End::Finish, CableInteraction::ClosestEnd(cable, { 80, 0 }));
 }
 
+TEST_F(CableInteractionTests, SocketHitAndSnapRadiusCannotEscapeContentClip)
+{
+	auto source = Adc(2u, 10, 10);
+	source.HitBounds = utils::Rect2d{ 2, 8, 100, 100 };
+	EXPECT_FALSE(CableInteraction::HitTest(source, { 10, 7 }, 14.0f));
+	EXPECT_TRUE(CableInteraction::HitTest(source, { 10, 8 }, 14.0f));
+	EXPECT_FALSE(CableInteraction::HitEndpoint({ source }, { 10, 7 }, 14.0f));
+	const CableInteraction::Cable cable{ {}, source, Input(0u, 100, 100) };
+	EXPECT_FALSE(CableInteraction::HitCableEnd({ cable }, { 10, 7 }, 14.0f));
+	CableInteraction::Drag drag{ { 4u, 0u, CableInteraction::RouteKind::Capture, 0u },
+		CableInteraction::End::Start, Input(0u, 100, 100), {}, { 10, 7 }, {} };
+	EXPECT_FALSE(CableInteraction::NearestViable(drag, { source }, Rig(), 14.0f));
+	CableInteraction::Update(drag, { 10, 8 }, { source }, Rig(), 14.0f, 5.0f);
+	ASSERT_TRUE(drag.Snap);
+	CableInteraction::Update(drag, { 10, 7 }, { source }, Rig(), 14.0f, 5.0f);
+	EXPECT_FALSE(drag.Snap);
+	source.HitBounds = utils::Rect2d{};
+	EXPECT_FALSE(CableInteraction::HitTest(source, source.Position, 14.0f));
+}
+
 TEST_F(CableInteractionTests, RelatedFindsOnlyCablesAttachedToTheHoveredEndpoint)
 {
 	CableInteraction::Cable capture{ {}, Adc(1u, 0, 0), Input(0u, 100, 0) };
@@ -116,6 +136,26 @@ TEST_F(CableInteractionTests, HysteresisRetainsSnapUntilOuterRadiusIsExceeded)
 	EXPECT_EQ(10, drag.Snap->Position.X);
 	CableInteraction::Update(drag, { 35, 0 }, endpoints, rig, 10.0f, 5.0f);
 	EXPECT_EQ(35, drag.Snap->Position.X);
+}
+
+TEST_F(CableInteractionTests, HysteresisUsesCurrentSocketGeometryAndDropsHiddenSockets)
+{
+	CableInteraction::Drag drag{ { 4u, 0u, CableInteraction::RouteKind::Capture, 0u },
+		CableInteraction::End::Start, Input(0u, 100, 100), {}, { 10, 10 }, {} };
+	auto source = Adc(2u, 10, 10);
+	CableInteraction::Update(drag, { 10, 10 }, { source }, Rig(), 14.0f, 5.0f);
+	ASSERT_TRUE(drag.Snap);
+	source.Position = { 20, 10 };
+	CableInteraction::Update(drag, { 10, 10 }, { source }, Rig(), 14.0f, 5.0f);
+	ASSERT_TRUE(drag.Snap);
+	EXPECT_EQ(20, drag.Snap->Position.X);
+	source.HitBounds = utils::Rect2d{ 15, 0, 100, 100 };
+	CableInteraction::Update(drag, { 10, 10 }, { source }, Rig(), 14.0f, 5.0f);
+	EXPECT_FALSE(drag.Snap);
+	CableInteraction::Update(drag, { 20, 10 }, { source }, Rig(), 14.0f, 5.0f);
+	ASSERT_TRUE(drag.Snap);
+	CableInteraction::Update(drag, { 20, 10 }, {}, Rig(), 14.0f, 5.0f);
+	EXPECT_FALSE(drag.Snap);
 }
 
 TEST_F(CableInteractionTests, PreviewLeavesOriginalCableUntouchedAndCancelClearsOnlyDrag)

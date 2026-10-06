@@ -72,6 +72,9 @@ void GuiStackPanel::Draw(base::DrawContext& ctx)
 
 bool GuiStackPanel::RouteHitTest(utils::Position2d localPos)
 {
+	if (!IsVisible() || !IsEnabled())
+		return false;
+
     ComputeLayout();
 
     if (GuiElement::RouteHitTest(localPos))

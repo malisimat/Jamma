@@ -84,6 +84,32 @@ bool GuiScrollPanel::IsScrollBarVisible() const
 	return _scrollBar && _scrollBar->IsVisible();
 }
 
+Rect2d GuiScrollPanel::ContentRect() const
+{
+	const int padding = static_cast<int>(_ContentClipPadding);
+	const int barHeight = _orientation == GuiScrollOrientation::Horizontal && IsScrollBarVisible()
+		? static_cast<int>(_scrollBarWidth) : 0;
+	const int left = std::min(padding, static_cast<int>(ViewportWidth()));
+	const int bottom = std::min(padding + barHeight, static_cast<int>(GetSize().Height));
+	return { left, bottom, std::max(left, static_cast<int>(ViewportWidth()) - padding),
+		std::max(bottom, static_cast<int>(GetSize().Height) - padding) };
+}
+
+Rect2d GuiScrollPanel::EffectiveContentRect(Rect2d windowRect) const
+{
+	if (!IsVisible())
+		return {};
+	auto rect = ContentRect().Translated(GlobalPosition()).Intersected(windowRect);
+	for (auto ancestor = Parent(); ancestor; ancestor = ancestor->Parent())
+	{
+		if (!ancestor->IsVisible())
+			return {};
+		if (auto scroll = dynamic_cast<const GuiScrollPanel*>(ancestor.get()))
+			rect = rect.Intersected(scroll->ContentRect().Translated(scroll->GlobalPosition()));
+	}
+	return rect;
+}
+
 unsigned int GuiScrollPanel::_ContentHeight() const
 {
 	return _content ? _content->GetSize().Height : 0u;
@@ -198,15 +224,10 @@ void GuiScrollPanel::Draw(base::DrawContext& ctx)
 
 	if (_contentHost)
 	{
-		auto clipPos = GlobalPosition();
-		clipPos.X += (int)_ContentClipPadding;
-		clipPos.Y += (int)_ContentClipPadding + (_orientation == GuiScrollOrientation::Horizontal && IsScrollBarVisible() ? (int)_scrollBarWidth : 0);
-
-		const int clipWidth = std::max(0, (int)ViewportWidth() - 2 * (int)_ContentClipPadding);
-		const int clipHeight = std::max(0, (int)ViewportHeight() - 2 * (int)_ContentClipPadding);
-		glCtx.PushScissorRect(clipPos, {
-			(unsigned int)clipWidth,
-			(unsigned int)clipHeight
+		const auto rect = ContentRect().Translated(GlobalPosition());
+		glCtx.PushScissorRect({ rect.Left, rect.Bottom }, {
+			static_cast<unsigned int>(rect.Right - rect.Left),
+			static_cast<unsigned int>(rect.Top - rect.Bottom)
 		});
 
 		_contentHost->Draw(ctx);
@@ -265,6 +286,9 @@ ActionResult GuiScrollPanel::OnAction(TouchAction action)
 
 ActionResult GuiScrollPanel::OnAction(TouchMoveAction action)
 {
+	if (!_isEnabled || !_isVisible)
+		return ActionResult::NoAction();
+
 	if (_draggingScrollBar)
 		return _scrollBar->OnAction(_scrollBar->ParentToLocal(action));
 
@@ -318,13 +342,5 @@ void GuiScrollPanel::ClearPointerState()
 
 bool GuiScrollPanel::_IsInViewport(Position2d localPos) const
 {
-	const int minX = static_cast<int>(_ContentClipPadding);
-	const int minY = static_cast<int>(_ContentClipPadding) + (_orientation == GuiScrollOrientation::Horizontal && IsScrollBarVisible() ? (int)_scrollBarWidth : 0);
-	const int maxX = std::max(minX, static_cast<int>(ViewportWidth()) - static_cast<int>(_ContentClipPadding));
-	const int maxY = std::max(minY, static_cast<int>(GetSize().Height) - static_cast<int>(_ContentClipPadding));
-
-	return (localPos.X >= minX)
-		&& (localPos.X < maxX)
-		&& (localPos.Y >= minY)
-		&& (localPos.Y < maxY);
+	return ContentRect().Contains(localPos);
 }

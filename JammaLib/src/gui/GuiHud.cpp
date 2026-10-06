@@ -327,9 +327,9 @@ void GuiHud::Draw(base::DrawContext& ctx)
 	{
 		if (!scroll)
 			return;
-		auto clipPos = scroll->GlobalPosition();
-		clipPos.Y += static_cast<int>(scroll->GetSize().Height - scroll->ViewportHeight());
-		glCtx.PushScissorRect(clipPos, { scroll->ViewportWidth(), scroll->ViewportHeight() });
+		const auto clip = _ContentClip(scroll);
+		glCtx.PushScissorRect({ clip.Left, clip.Bottom }, {
+			static_cast<unsigned int>(clip.Right - clip.Left), static_cast<unsigned int>(clip.Top - clip.Bottom) });
 		for (size_t i = 0u; i < _sourceWidgets.size(); ++i)
 		{
 			if (_sourceEndpoints[i].Kind != kind)
@@ -343,8 +343,9 @@ void GuiHud::Draw(base::DrawContext& ctx)
 	drawSourceOverlays(_topMidiScroll, io::RigFileRouting::SourceKind::Midi);
 	if (_triggerScroll)
 	{
-		glCtx.PushScissorRect(_triggerScroll->GlobalPosition(),
-			{ _triggerScroll->ViewportWidth(), _triggerScroll->ViewportHeight() });
+		const auto clip = _ContentClip(_triggerScroll);
+		glCtx.PushScissorRect({ clip.Left, clip.Bottom }, {
+			static_cast<unsigned int>(clip.Right - clip.Left), static_cast<unsigned int>(clip.Top - clip.Bottom) });
 		for (const auto& widgets : _triggerWidgets)
 		{
 			_DrawOverlayElement(ctx, widgets.Close);
@@ -1045,15 +1046,15 @@ void GuiHud::_DrawCableSockets(base::DrawContext& ctx)
 			cable.Finish.Kind != CableInteraction::EndpointKind::TriggerOutput)
 			drawEnd(cable, CableInteraction::End::Finish);
 	}
-	const auto drawSourceEnds = [&ctx, &cables, &drawEnd](const std::shared_ptr<GuiScrollPanel>& scroll,
+	const auto drawSourceEnds = [this, &ctx, &cables, &drawEnd](const std::shared_ptr<GuiScrollPanel>& scroll,
 		CableInteraction::EndpointKind kind)
 	{
 		if (!scroll)
 			return;
-		auto clipPos = scroll->GlobalPosition();
-		clipPos.Y += static_cast<int>(scroll->GetSize().Height - scroll->ViewportHeight());
+		const auto clip = _ContentClip(scroll);
 		auto& glCtx = dynamic_cast<GlDrawContext&>(ctx);
-		glCtx.PushScissorRect(clipPos, { scroll->ViewportWidth(), scroll->ViewportHeight() });
+		glCtx.PushScissorRect({ clip.Left, clip.Bottom }, {
+			static_cast<unsigned int>(clip.Right - clip.Left), static_cast<unsigned int>(clip.Top - clip.Bottom) });
 		for (const auto& cable : cables)
 			if (cable.Start.Kind == kind)
 				drawEnd(cable, CableInteraction::End::Start);
@@ -1064,8 +1065,9 @@ void GuiHud::_DrawCableSockets(base::DrawContext& ctx)
 	if (_triggerScroll)
 	{
 		auto& glCtx = dynamic_cast<GlDrawContext&>(ctx);
-		glCtx.PushScissorRect(_triggerScroll->GlobalPosition(),
-			{ _triggerScroll->ViewportWidth(), _triggerScroll->ViewportHeight() });
+		const auto clip = _ContentClip(_triggerScroll);
+		glCtx.PushScissorRect({ clip.Left, clip.Bottom }, {
+			static_cast<unsigned int>(clip.Right - clip.Left), static_cast<unsigned int>(clip.Top - clip.Bottom) });
 		for (const auto& cable : cables)
 		{
 			if (cable.Start.Kind == CableInteraction::EndpointKind::TriggerInput ||
@@ -1358,6 +1360,12 @@ std::vector<GuiHud::CableRoute> GuiHud::BuildCableRoutes(const engine::RoutingGr
 	return routes;
 }
 
+Rect2d GuiHud::_ContentClip(const std::shared_ptr<GuiScrollPanel>& scroll) const
+{
+	return scroll ? scroll->EffectiveContentRect(Rect2d{ 0, 0,
+		static_cast<int>(GetSize().Width), static_cast<int>(GetSize().Height) }.Translated(GlobalPosition())) : Rect2d{};
+}
+
 bool GuiHud::_SourceVisible(size_t index) const
 {
 	if (index >= _sourceEndpoints.size() || index >= _sourceWidgets.size())
@@ -1366,12 +1374,12 @@ bool GuiHud::_SourceVisible(size_t index) const
 		? _topAudioScroll : _topMidiScroll;
 	if (!scroll)
 		return false;
-	const auto center = _sourceWidgets[index].Socket->GlobalPosition();
-	const auto origin = scroll->GlobalPosition();
-	const int socketCenterX = center.X + static_cast<int>(_SocketSize / 2u);
+	const auto center = _sourceWidgets[index].Socket->GlobalPosition() +
+		Position2d{ static_cast<int>(_SocketSize / 2u), static_cast<int>(_SocketSize / 2u) };
+	const auto clip = _ContentClip(scroll);
 	// Keep the whole hit target within its own viewport at the scroll edges.
-	return socketCenterX >= origin.X + static_cast<int>(_SocketHitRadius) &&
-		socketCenterX < origin.X + static_cast<int>(scroll->ViewportWidth()) - static_cast<int>(_SocketHitRadius);
+	return clip.Contains(center) && center.X >= clip.Left + static_cast<int>(_SocketHitRadius) &&
+		center.X < clip.Right - static_cast<int>(_SocketHitRadius);
 }
 
 void GuiHud::_BuildInteractionGeometry(std::vector<CableInteraction::Endpoint>& endpoints,
@@ -1388,26 +1396,26 @@ void GuiHud::_BuildInteractionGeometry(std::vector<CableInteraction::Endpoint>& 
 		endpoints.push_back({ source.Kind == io::RigFileRouting::SourceKind::Adc
 			? CableInteraction::EndpointKind::AdcSource : CableInteraction::EndpointKind::MidiSource,
 			_ElementCenter(_sourceWidgets[i].Socket),
-			std::nullopt, std::nullopt, {}, source, source.Available });
+			std::nullopt, std::nullopt, {}, source, source.Available,
+			_ContentClip(source.Kind == io::RigFileRouting::SourceKind::Adc ? _topAudioScroll : _topMidiScroll)
+				.Translated({ -rootPos.X, -rootPos.Y }) });
 	}
 
 	std::vector<CableInteraction::Endpoint> triggerInputs(_triggerWidgets.size());
 	std::vector<CableInteraction::Endpoint> triggerOutputs(_triggerWidgets.size());
 	std::vector<bool> triggerInputVisible(_triggerWidgets.size(), true);
 	std::vector<bool> triggerOutputVisible(_triggerWidgets.size(), true);
-	const auto scrollPos = _triggerScroll ? _triggerScroll->GlobalPosition() : utils::Position2d{};
-	const int scrollBottom = scrollPos.Y - rootPos.Y;
-	const int scrollTop = scrollBottom + (_triggerScroll ? static_cast<int>(_triggerScroll->ViewportHeight()) : 0);
+	const auto triggerClip = _ContentClip(_triggerScroll).Translated({ -rootPos.X, -rootPos.Y });
 	for (size_t i = 0u; i < _triggerWidgets.size(); ++i)
 	{
 		triggerInputs[i] = { CableInteraction::EndpointKind::TriggerInput,
 			_ElementCenter(_triggerWidgets[i].InputSocket), i };
 		triggerOutputs[i] = { CableInteraction::EndpointKind::TriggerOutput,
 			_ElementCenter(_triggerWidgets[i].OutputSocket), i };
-		triggerInputVisible[i] = !_triggerScroll ||
-			(triggerInputs[i].Position.Y >= scrollBottom && triggerInputs[i].Position.Y <= scrollTop);
-		triggerOutputVisible[i] = !_triggerScroll ||
-			(triggerOutputs[i].Position.Y >= scrollBottom && triggerOutputs[i].Position.Y <= scrollTop);
+		triggerInputs[i].HitBounds = triggerClip;
+		triggerOutputs[i].HitBounds = triggerClip;
+		triggerInputVisible[i] = triggerClip.Contains(triggerInputs[i].Position);
+		triggerOutputVisible[i] = triggerClip.Contains(triggerOutputs[i].Position);
 		if (triggerInputVisible[i])
 			endpoints.push_back(triggerInputs[i]);
 		if (triggerOutputVisible[i])

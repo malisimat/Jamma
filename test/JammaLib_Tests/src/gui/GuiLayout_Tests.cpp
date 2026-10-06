@@ -6,6 +6,7 @@
 #include "gui/GuiButton.h"
 #include "gui/GuiLabel.h"
 #include "gui/GuiPanel.h"
+#include "gui/GuiScrollPanel.h"
 #include "engine/Scene.h"
 
 using base::LayoutSizing;
@@ -499,4 +500,102 @@ TEST(Scene, TouchActionReachesChildGuiPanel)
 	auto res = scene.OnAction(action);
 
 	EXPECT_TRUE(res.IsEaten);
+}
+
+TEST(GuiStackPanel, HiddenOrDisabledParentRejectsVisibleChildren)
+{
+	GuiStackPanelParams params;
+	params.Size = { 100u, 50u };
+	auto stack = std::make_shared<GuiStackPanel>(params);
+	stack->AddChild(std::make_shared<GuiButton>(MakeButtonParams()));
+	stack->ComputeLayout();
+	const auto point = utils::Position2d{ 10, 40 };
+	ASSERT_TRUE(stack->RouteHitTest(point));
+	stack->SetVisible(false);
+	EXPECT_FALSE(stack->RouteHitTest(point));
+	EXPECT_EQ(nullptr, stack->FindTopmostDescendant(point));
+	stack->SetVisible(true);
+	stack->SetEnabled(false);
+	EXPECT_FALSE(stack->RouteHitTest(point));
+}
+
+TEST(GuiScrollPanel, ContentRectExcludesPaddingAndScrollBars)
+{
+	gui::GuiScrollPanelParams params;
+	params.Size = { 100u, 60u };
+	params.ScrollBarWidth = 12u;
+	auto vertical = std::make_shared<gui::GuiScrollPanel>(params);
+	vertical->SetContent(std::make_shared<GuiButton>(MakeButtonParams(80u, 200u)));
+	const auto verticalRect = vertical->ContentRect();
+	EXPECT_EQ(2, verticalRect.Left);
+	EXPECT_EQ(2, verticalRect.Bottom);
+	EXPECT_EQ(86, verticalRect.Right);
+	EXPECT_EQ(58, verticalRect.Top);
+	params.Orientation = gui::GuiScrollOrientation::Horizontal;
+	auto horizontal = std::make_shared<gui::GuiScrollPanel>(params);
+	horizontal->SetContent(std::make_shared<GuiButton>(MakeButtonParams(200u, 40u)));
+	const auto horizontalRect = horizontal->ContentRect();
+	EXPECT_EQ(2, horizontalRect.Left);
+	EXPECT_EQ(14, horizontalRect.Bottom);
+	EXPECT_EQ(98, horizontalRect.Right);
+	EXPECT_EQ(58, horizontalRect.Top);
+	EXPECT_NE(horizontal->Content().get(), horizontal->FindTopmostDescendant({ 1, 30 }).get());
+	EXPECT_EQ(horizontal->Content().get(), horizontal->FindTopmostDescendant({ 10, 30 }).get());
+}
+
+TEST(GuiScrollPanel, EmptyAndTinyContentRectsStayWithinPanel)
+{
+	gui::GuiScrollPanelParams params;
+	params.Size = { 100u, 60u };
+	params.Orientation = gui::GuiScrollOrientation::Horizontal;
+	auto scroll = std::make_shared<gui::GuiScrollPanel>(params);
+	scroll->SetContent(std::make_shared<GuiButton>(MakeButtonParams(200u, 40u)));
+	for (const auto size : { utils::Size2d{ 0u, 0u }, { 1u, 1u }, { 3u, 3u }, { 100u, 10u } })
+	{
+		scroll->SetSize(size);
+		const auto rect = scroll->ContentRect();
+		EXPECT_TRUE(rect.IsEmpty());
+		EXPECT_GE(rect.Left, 0);
+		EXPECT_GE(rect.Bottom, 0);
+		EXPECT_LE(rect.Right, static_cast<int>(size.Width));
+		EXPECT_LE(rect.Top, static_cast<int>(size.Height));
+		EXPECT_FALSE(rect.Contains({ rect.Left, rect.Bottom }));
+	}
+}
+
+TEST(GuiScrollPanel, EffectiveRectIncludesNestedScrollTransformsAndWindowClip)
+{
+	gui::GuiScrollPanelParams params;
+	params.Size = { 100u, 60u };
+	params.Position = { 10, 20 };
+	params.ScrollBarWidth = 12u;
+	auto outer = std::make_shared<gui::GuiScrollPanel>(params);
+	base::GuiElementParams contentParams;
+	contentParams.Size = { 80u, 120u };
+	auto content = std::make_shared<base::GuiElement>(contentParams);
+	params.Position = { 0, 60 };
+	auto inner = std::make_shared<gui::GuiScrollPanel>(params);
+	content->AddChild(inner);
+	outer->SetContent(content);
+	outer->SetScrollOffset(20);
+	const auto rect = inner->EffectiveContentRect({ 0, 0, 70, 70 });
+	EXPECT_EQ(12, rect.Left);
+	EXPECT_EQ(42, rect.Bottom);
+	EXPECT_EQ(70, rect.Right);
+	EXPECT_EQ(70, rect.Top);
+	outer->SetScrollOffset(60);
+	EXPECT_TRUE(inner->EffectiveContentRect({ 0, 0, 70, 70 }).IsEmpty());
+	outer->SetScrollOffset(0);
+	outer->SetVisible(false);
+	EXPECT_TRUE(inner->EffectiveContentRect({ 0, 0, 70, 70 }).IsEmpty());
+}
+
+TEST(Rect2d, DisjointIntersectionAndHalfOpenEdges)
+{
+	const utils::Rect2d rect{ 2, 3, 12, 13 };
+	EXPECT_TRUE(rect.Contains({ 2, 3 }));
+	EXPECT_FALSE(rect.Contains({ 12, 5 }));
+	EXPECT_FALSE(rect.Contains({ 5, 13 }));
+	EXPECT_TRUE(rect.Intersected({ 20, 20, 30, 30 }).IsEmpty());
+	EXPECT_TRUE(rect.Intersected({ 0, 0, 0, 0 }).IsEmpty());
 }

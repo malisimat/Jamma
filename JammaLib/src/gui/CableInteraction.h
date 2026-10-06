@@ -32,6 +32,8 @@ namespace gui
 			std::string StationName;
 			std::optional<io::RigFileRouting::Source> Source;
 			bool Available = true;
+			// Real socket hit/snap bounds, in the same space as Position.
+			std::optional<utils::Rect2d> HitBounds;
 		};
 
 		struct Cable

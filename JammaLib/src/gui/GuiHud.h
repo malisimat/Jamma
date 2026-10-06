@@ -148,6 +148,7 @@ namespace gui
 		void _RevealTrigger(size_t triggerIndex);
 		void _RebuildPanels();
 		void _LayoutPanels();
+		utils::Rect2d _ContentClip(const std::shared_ptr<GuiScrollPanel>& scroll) const;
 		bool _InitCableShader(resources::ResourceLib& resourceLib);
 		bool _InitCableVertexArray();
 		void _DrawCables(base::DrawContext& ctx);
