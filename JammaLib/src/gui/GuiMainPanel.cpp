@@ -36,7 +36,7 @@ GuiMainPanel::GuiMainPanel(GuiMainPanelParams params) : GuiPanel(params),
 	handleParams.ToggledDownTexture = "arrowup2_down";
 	handleParams.Rot90 = !_selectionOnly;
 	handleParams.TextPadding = 0u;
-	handleParams.Size = { 28u, 28u };
+	handleParams.Size = _selectionOnly ? Size2d{ 64u, 20u } : Size2d{ 20u, 64u };
 	handleParams.MinSize = handleParams.Size;
 	handleParams.InitState = GuiToggleParams::TOGGLE_ON;
 	handleParams.TintColor = GuiStyle::Control();
@@ -215,22 +215,22 @@ void GuiMainPanel::_Layout()
 	const int width = static_cast<int>(_viewport.Width), height = static_cast<int>(_viewport.Height);
 	const int margin = std::min(8, width / 2);
 	const int panelWidth = std::min(_selectionOnly ? 448 : 360, std::max(0, width - 2 * margin));
-	const int handleHeight = std::min(28, height / 2);
+	const int handleWidth = std::min(_selectionOnly ? 64 : 20, std::max(0, width - (_selectionOnly ? margin : 0)));
+	const int handleHeight = std::min(_selectionOnly ? 20 : 64, std::max(0, height - (_selectionOnly ? 0 : std::min(8, height / 2))));
 	const int panelHeight = std::min(_selectionOnly ? 152 : 320, std::max(0, height - 2 * std::min(8, height / 2)));
-	const int handleY = _selectionOnly ? height - std::min(8, height / 2) - handleHeight : std::min(8, height / 2);
-	_handle->SetPosition({ margin + std::max(0, panelWidth - 28), handleY });
-	_handle->SetSize({ static_cast<unsigned int>(std::min(28, std::max(0, width - 2 * margin))), static_cast<unsigned int>(handleHeight) });
-	_handle->SetVisible(width > 0 && handleHeight > 0);
+	_handle->SetPosition(_selectionOnly ? Position2d{ margin, height - handleHeight } : Position2d{ 0, std::min(8, height / 2) });
+	_handle->SetSize({ static_cast<unsigned int>(handleWidth), static_cast<unsigned int>(handleHeight) });
+	_handle->SetVisible(handleWidth > 0 && handleHeight > 0);
 	_frame->SetSize({ static_cast<unsigned int>(panelWidth), static_cast<unsigned int>(panelHeight) });
 	_UpdatePresentation();
-	const int padding = std::min(8, std::min(panelWidth, panelHeight) / 2);
+	const int padding = std::min(_selectionOnly ? 8 : 12, std::min(panelWidth, panelHeight) / 2);
 	const int inner = std::max(0, panelWidth - 2 * padding);
 	_edge->SetPosition({ padding, std::max(0, panelHeight - 2) });
 	_edge->SetSize({ static_cast<unsigned int>(inner), static_cast<unsigned int>(std::min(1, panelHeight)) });
 	const int titleHeight = std::min(22, std::max(0, panelHeight - 2 * padding));
 	auto title = _frame->TryGetChild(0);
-	title->SetPosition({ padding, std::max(padding, panelHeight - padding - titleHeight) });
-	title->SetSize({ static_cast<unsigned int>(std::max(0, inner - 28)), static_cast<unsigned int>(titleHeight) });
+	title->SetPosition({ padding + (_selectionOnly ? std::min(64, inner) : 0), std::max(padding, panelHeight - padding - titleHeight) });
+	title->SetSize({ static_cast<unsigned int>(std::max(0, inner - (_selectionOnly ? 64 : 0))), static_cast<unsigned int>(titleHeight) });
 	const int tabHeight = _selectionOnly ? 0 : std::min(44, std::max(0, panelHeight - 2 * padding - titleHeight));
 	if (_tabScroll)
 	{
