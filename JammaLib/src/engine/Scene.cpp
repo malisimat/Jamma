@@ -363,10 +363,7 @@ void Scene::_OpenRemoteTempoPromptIfNeeded()
 		"Remote master interval: " + std::to_string(change.RemoteMasterIntervalLengthSamps) + " samples",
 		"Remote grid step: " + std::to_string(change.RemoteGridStepSamps) + " samples. Apply locally?"
 	});
-	const auto popupSize = _remoteTempoDialog->GetSize();
-	const int x = std::max(0, (static_cast<int>(_sizeParams.Size.Width) - static_cast<int>(popupSize.Width)) / 2);
-	const int y = std::max(0, (static_cast<int>(_sizeParams.Size.Height) - static_cast<int>(popupSize.Height)) / 2);
-	_remoteTempoDialog->SetPosition({ x, y });
+	_remoteTempoDialog->FitToViewport(_sizeParams.Size);
 
 	_popupManager.Open(_remoteTempoDialog);
 	_remoteTempoDialogOpen = true;
@@ -2514,6 +2511,7 @@ bool Scene::_OnUndo(std::shared_ptr<base::ActionUndo> undo)
 void Scene::_InitSize()
 {
 	_loopEditor.SetSize(_sizeParams.Size);
+	if (_remoteTempoDialog) _remoteTempoDialog->FitToViewport(_sizeParams.Size);
 	if (_mainPanel) _mainPanel->SetViewportSize(_sizeParams.Size);
 	if (_selectionPanel) _selectionPanel->SetViewportSize(_sizeParams.Size);
 	auto ar = _sizeParams.Size.Height > 0 ?

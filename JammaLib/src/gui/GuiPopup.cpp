@@ -39,17 +39,18 @@ GuiPopupParams GuiPopupParams::PanelDefault()
 	GuiPopupParams params;
 	params.GuiPassThrough = false;
 	params.TextureShader = "texture_tinted";
-	params.Texture = "rounded_but";
-	params.OverTexture = "rounded_but";
-	params.DownTexture = "rounded_but";
+	params.Texture = "rounded_but_on";
+	params.OverTexture = "rounded_but_on";
+	params.DownTexture = "rounded_but_on";
 	params.Size = { 460u, 210u };
 	params.MinSize = { 460u, 210u };
-	params.TintColor = glm::vec3(0.08f, 0.10f, 0.14f);
+	params.TintColor = GuiStyle::Graphite();
+	params.TextureOpacity = GuiStyle::PanelFillOpacity;
 	return params;
 }
 
 GuiPopup::GuiPopup(const GuiPopupParams& params) :
-	GuiPanel(params)
+	GuiPanel(params), _preferredSize(params.Size)
 {
 	GuiLabelParams titleParams;
 	titleParams.String = "";
@@ -59,6 +60,7 @@ GuiPopup::GuiPopup(const GuiPopupParams& params) :
 	titleParams.CenterHorizontally = true;
 	titleParams.VerticalAlign = GuiTextVerticalAlign::Center;
 	titleParams.ClipText = true;
+	titleParams.Ellipsize = true;
 	_titleLabel = std::make_shared<GuiLabel>(titleParams);
 	AddChild(_titleLabel);
 
@@ -72,11 +74,33 @@ GuiPopup::GuiPopup(const GuiPopupParams& params) :
 		lineParams.CenterHorizontally = true;
 		lineParams.VerticalAlign = GuiTextVerticalAlign::Top;
 		lineParams.ClipText = true;
+		lineParams.Ellipsize = true;
 		_lineLabels[i] = std::make_shared<GuiLabel>(lineParams);
 		_lineLabels[i]->SetVisible(false);
 		AddChild(_lineLabels[i]);
 	}
+	_LayoutContents();
+}
 
+void GuiPopup::SetSize(utils::Size2d size)
+{
+	GuiPanel::SetSize(size);
+	_LayoutContents();
+}
+
+void GuiPopup::FitToViewport(utils::Size2d viewport)
+{
+	const utils::Size2d size{ (std::min)(viewport.Width, _preferredSize.Width),
+		(std::min)(viewport.Height, _preferredSize.Height) };
+	SetSize(size);
+	SetPosition({ static_cast<int>((viewport.Width - size.Width) / 2),
+		static_cast<int>((viewport.Height - size.Height) / 2) });
+}
+
+void GuiPopup::Draw(base::DrawContext& context)
+{
+	if (GetSize().Width == 0 || GetSize().Height == 0) return;
+	GuiPanel::Draw(context);
 }
 
 void GuiPopup::SetTitle(const std::string& text)
@@ -106,6 +130,7 @@ void GuiPopup::SetBodyLines(const std::vector<std::string>& lines)
 			_lineLabels[i]->SetVisible(false);
 		}
 	}
+	_LayoutContents();
 }
 
 void GuiPopup::ConfigureButtons(const GuiPopupButtonConfig& config)
@@ -133,7 +158,7 @@ void GuiPopup::ConfigureButtons(const GuiPopupButtonConfig& config)
 		_buttons.push_back(button);
 	}
 
-	_LayoutButtons();
+	_LayoutContents();
 }
 
 void GuiPopup::SetButtonReceiver(std::shared_ptr<base::ActionReceiver> receiver)
@@ -149,14 +174,53 @@ void GuiPopup::_LayoutButtons()
 		return;
 
 	const int popupWidth = static_cast<int>(GetSize().Width);
-	const int buttonWidth = static_cast<int>(ButtonWidth);
-	const int totalWidth = static_cast<int>(_buttons.size()) * buttonWidth
-		+ static_cast<int>(_buttons.size() - 1u) * ButtonSpacing;
-	int x = std::max(0, popupWidth - ButtonRightInset - totalWidth);
+	const int height = static_cast<int>(GetSize().Height);
+	const int leftInset = (std::min)(20, popupWidth / 2);
+	const int rightInset = (std::min)(popupWidth >= static_cast<int>(_preferredSize.Width) ? ButtonRightInset : leftInset,
+		popupWidth - leftInset);
+	const int available = popupWidth - leftInset - rightInset;
+	const int count = static_cast<int>(_buttons.size());
+	const int gap = count > 1 ? (std::min)(ButtonSpacing, available / (count * 2)) : 0;
+	const int buttonWidth = (std::min)(static_cast<int>(ButtonWidth), (available - gap * (count - 1)) / count);
+	const int buttonHeight = (std::min)(static_cast<int>(ButtonHeight), height);
+	const int y = (std::min)(height >= static_cast<int>(_preferredSize.Height) ? ButtonY : 12, height - buttonHeight);
+	const int totalWidth = count * buttonWidth + (count - 1) * gap;
+	int x = popupWidth - rightInset - totalWidth;
 
 	for (auto& button : _buttons)
 	{
-		button->SetPosition({ x, ButtonY });
-		x += buttonWidth + ButtonSpacing;
+		button->SetPosition({ x, y });
+		button->SetSize({ static_cast<unsigned int>(buttonWidth), static_cast<unsigned int>(buttonHeight) });
+		x += buttonWidth + gap;
+	}
+}
+
+void GuiPopup::_LayoutContents()
+{
+	_LayoutButtons();
+	const int width = static_cast<int>(GetSize().Width), height = static_cast<int>(GetSize().Height);
+	const int padding = (std::min)(20, width / 2);
+	const int titleHeight = (std::min)(static_cast<int>(TitleHeight), height);
+	const int topInset = (std::min)(height >= static_cast<int>(_preferredSize.Height) ? 14 : 8, height - titleHeight);
+	const int titleY = height - topInset - titleHeight;
+	if (_titleLabel) {
+		_titleLabel->SetPosition({ padding, titleY });
+		_titleLabel->SetSize({ static_cast<unsigned int>((std::min)(static_cast<int>(TitleWidth), width - padding * 2)),
+			static_cast<unsigned int>(titleHeight) });
+	}
+	const int bodyTop = (std::max)(0, titleY - 10);
+	const int buttonsTop = _buttons.empty() ? 0 : _buttons.front()->Position().Y + static_cast<int>(_buttons.front()->GetSize().Height);
+	const int bodyBottom = (std::min)(bodyTop, buttonsTop + (height >= static_cast<int>(_preferredSize.Height) ? 12 : 8));
+	const int count = static_cast<int>(std::count_if(_lineLabels.begin(), _lineLabels.end(),
+		[](const auto& label) { return label && label->IsVisible(); }));
+	const int gap = count > 1 ? (std::min)(4, (bodyTop - bodyBottom) / (count * 2)) : 0;
+	const int lineHeight = count ? (std::min)(static_cast<int>(LineHeight), (bodyTop - bodyBottom - gap * (count - 1)) / count) : 0;
+	int row = 0;
+	for (auto& label : _lineLabels) {
+		if (!label) continue;
+		const int y = label->IsVisible() ? bodyTop - lineHeight - row++ * (lineHeight + gap) : bodyBottom;
+		label->SetPosition({ padding, y });
+		label->SetSize({ static_cast<unsigned int>((std::min)(static_cast<int>(LineWidth), width - padding * 2)),
+			static_cast<unsigned int>(label->IsVisible() ? lineHeight : 0) });
 	}
 }

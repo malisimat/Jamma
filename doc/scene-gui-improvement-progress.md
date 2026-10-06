@@ -369,6 +369,31 @@ a replacement scope. The feature is not complete.
    phase correction, NINJAM coordinator and production-boundary regressions:
    279 checks passed (6984 ms), with only the separate benchmark skipped and an
    empty GPU error log.
+   A stationary-pointer check now seeds one pointer event while settings are
+   collapsed, then runs actual render/swap frames during expansion. Hover tracks
+   the current control bounds during motion and settles correctly without more
+   pointer events. Minimum-window investigation found that fixed 460x210 Delete
+   and remote-tempo popups could put their headers outside a short viewport.
+   Both callers now fit and recenter on opening and resize; popup content and
+   action frames adapt to that size and restore the preferred size later.
+   Standard buttons are 128px wide so "Follow server" fits at 320x180. The panel
+   uses the existing opaque texture with the intended effective 0.8 fill.
+   Geometry/action checks cover 320x180, 184x161, 10x10, zero and restoration;
+   actual GPU captures cover the first two and 460x210, including font pixels,
+   action-label measurement and effective fill/opacity restoration. Focused
+   review found no material layout or ownership issue, but correctly noted
+   clipped action text below 320px; containment is not full readability.
+   Actual native 320x180 resizing, after settling the selection panel closed,
+   verifies MIDI/Timing tab clicks, wheel scrolling to All/Off and the real
+   resolved take-policy effects. Collapsed HUD and OS-minimum client captures
+   were inspected. At the OS outer minimum (client 184x161 here), rendering and
+   Settings handle open/close work, while text is cramped. These checks do not
+   establish usability of every control at either minimum profile. The test
+   initially exposed its own incomplete animation settling: a single 220ms
+   advance is deliberately clamped to 100ms. It now waits on actual frames.
+   Incremental native and dependent app builds passed. The selected run passed
+   280 checks (7985 ms), with only the separate benchmark skipped and an empty
+   GPU error log. Hardware playback and underruns remain unmeasured.
 7. Final requirement audit and HTML completion report: pending.
 
 ## Remaining verification from the plan audit
@@ -380,11 +405,11 @@ than the plan's full live-runtime completion gate.
 | Plan requirement | Current evidence | Remaining proof |
 | --- | --- | --- |
 | Real pages, defaults, ownership and stable commands | Production composition, all retained control-owner paths after initialization/child addition; channel limits/shortcuts, phase propagation, CLICK and local/global grids; actual All/Off clicks | Applied-state feedback during hardware playback |
-| Resize, motion and pointer priority | Actual 480x320/1000x650 resize, reversal and resize during motion; empty-size handler checks; normal/editor modifier input | Actual OS maximize/restore; stationary-pointer hover through moving panel bounds; minimum interactive client size and control usability |
+| Resize, motion and pointer priority | Actual 320x180/480x320/1000x650 resize, reversal and resize during motion; stationary-pointer hover; empty-size handler checks; normal/editor modifier input; compact tabs/quantisation input and OS-minimum handle/render checks | Actual OS maximize/restore; remaining minimum-size controls and supported interactive profile |
 | Adaptive input rows and full identity | Zero/one/many geometry, 80px floor, widget reuse/offset clamp; measured labels and popup checks | Live playback visual confirmation |
 | Trigger viewport and actions | Fixed 100px cards, clipping, actual native wheel; Add/Delete/Cancel, empty-list Add and newer snapshot projection with reveal/preserve/clamp after resize | Live routing adoption and minimum-window usability |
 | Retained cable presentation and interactions | Boundary/projection/nested clipping tests, GPU continuations, real HUD body reconnect/cancel/stale-revision checks | Live routing adoption and camera/drag interactions under playback; actual rendered body-hit checks in the final live pass |
-| Panels, popup/edit cleanup and hidden pages | Retained active host, numeric finalization, subtree popup/focus/capture checks; GPU page/opacity snapshots | Full runtime popup/edit/tab exercise under playback; stationary-pointer check noted above |
+| Panels, popup/edit cleanup and hidden pages | Retained active host, numeric finalization, subtree popup/focus/capture checks; GPU page/opacity snapshots; stationary hover and viewport-fitted confirmation geometry/actions/GPU text | Full runtime popup/edit/tab exercise under playback; minimum-window edit controls |
 | Text, palette and shader scope restoration | Real font metrics, control families/caret/popup rows and nested opacity pixel checks; populated Scene/editor captures | Final visual review during playback |
 | Timing boundaries and real-time safety | Existing command owners retained; no new audio callback policy; threading audits/reviews and selected MIDI-router/NINJAM/transport boundary regressions | Real playback confirmation of relocated settings |
 | Same-scene frame distributions and underruns | Shared populated-scene benchmark and historical no-playback baseline pair | Device/rate/buffer details, actual underrun observation, equivalent verified interactions and repeated/interleaved live runs |
@@ -393,8 +418,8 @@ than the plan's full live-runtime completion gate.
 The ASIO device/rate/buffer question remains unanswered. This session still has
 no `node_repl` capability required by the computer-use skill, so foreground
 desktop automation has not been attempted. Neither limitation substitutes for
-the remaining live verification. The next independent checks are stationary
-hover and minimum viewport usability.
+the remaining live verification. Remaining independent checks include the
+other minimum viewport controls and actual OS maximize/restore behavior.
 
 ## Local build setup
 

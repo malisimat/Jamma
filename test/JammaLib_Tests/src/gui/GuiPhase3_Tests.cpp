@@ -256,9 +256,9 @@ TEST(GuiPopup, ConfirmationButtonsArePackedAtTheLowerRightAndDispatch) {
 	ASSERT_NE(nullptr, cancelButton);
 	ASSERT_NE(nullptr, deleteButton);
 	EXPECT_EQ(nullptr, popup->TryGetChild(6u));
-	EXPECT_EQ(208, cancelButton->Position().X);
+	EXPECT_EQ(144, cancelButton->Position().X);
 	EXPECT_EQ(24, cancelButton->Position().Y);
-	EXPECT_EQ(316, deleteButton->Position().X);
+	EXPECT_EQ(284, deleteButton->Position().X);
 	EXPECT_EQ(24, deleteButton->Position().Y);
 
 	auto receiver = std::make_shared<GuiPhase3RecordingGuiReceiver>();
@@ -275,6 +275,39 @@ TEST(GuiPopup, ConfirmationButtonsArePackedAtTheLowerRightAndDispatch) {
 	ASSERT_EQ(2, receiver->ActionCount);
 	ASSERT_TRUE(receiver->LastAction.has_value());
 	EXPECT_EQ(1u, receiver->LastAction->Index);
+}
+
+TEST(GuiPopup, FitsViewportAndKeepsContentAndActionsInsideAfterResize)
+{
+	auto popup = std::make_shared<GuiPopup>();
+	popup->SetTitle("Current server tempo");
+	popup->SetBodyLines({ "Tempo: 120 BPM", "Remote master interval", "Apply locally?" });
+	popup->ConfigureButtons({ { { "Cancel", 2u }, { "Follow server", 1u } } });
+	auto receiver = std::make_shared<GuiPhase3RecordingGuiReceiver>(); popup->SetButtonReceiver(receiver);
+	for (const auto viewport : { utils::Size2d{ 320, 180 }, utils::Size2d{ 184, 161 },
+		utils::Size2d{ 10, 10 }, utils::Size2d{ 0, 0 }, utils::Size2d{ 800, 600 } }) {
+		popup->FitToViewport(viewport);
+		const auto size = popup->GetSize(); const auto position = popup->Position();
+		EXPECT_GE(position.X, 0); EXPECT_GE(position.Y, 0);
+		EXPECT_LE(position.X + static_cast<int>(size.Width), static_cast<int>(viewport.Width));
+		EXPECT_LE(position.Y + static_cast<int>(size.Height), static_cast<int>(viewport.Height));
+		for (unsigned char index = 0; index < 6; ++index) {
+			const auto child = popup->TryGetChild(index); ASSERT_TRUE(child);
+			const auto pos = child->Position(); const auto frame = child->GetSize();
+			EXPECT_GE(pos.X, 0); EXPECT_GE(pos.Y, 0);
+			EXPECT_LE(pos.X + static_cast<int>(frame.Width), static_cast<int>(size.Width));
+			EXPECT_LE(pos.Y + static_cast<int>(frame.Height), static_cast<int>(size.Height));
+		}
+		if (viewport.Width >= 184 && viewport.Height >= 161) {
+			const auto button = popup->TryGetChild(5); const auto pos = button->Position(); const auto frame = button->GetSize();
+			const utils::Position2d point{ pos.X + static_cast<int>(frame.Width / 2), pos.Y + static_cast<int>(frame.Height / 2) };
+			const auto before = receiver->ActionCount;
+			EXPECT_TRUE(popup->OnAction(MakeTouch(TouchAction::TOUCH_DOWN, point)).IsEaten);
+			EXPECT_TRUE(popup->OnAction(MakeTouch(TouchAction::TOUCH_UP, point)).IsEaten);
+			EXPECT_EQ(before + 1, receiver->ActionCount); EXPECT_EQ(1u, receiver->LastAction->Index);
+		}
+	}
+	EXPECT_EQ(460u, popup->GetSize().Width); EXPECT_EQ(210u, popup->GetSize().Height);
 }
 
 // GuiToggle keyboard tests

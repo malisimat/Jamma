@@ -387,6 +387,7 @@ void GuiHud::Draw(base::DrawContext& ctx)
 void GuiHud::SetSize(Size2d size)
 {
 	GuiPanel::SetSize(size);
+	if (_deletePopup) _deletePopup->FitToViewport(size);
 	_LayoutPanels();
 	if (_popupManager && _popupManager->Top() == _sourceInfoPanel)
 		_LayoutSourceIdentity();
@@ -1255,8 +1256,7 @@ void GuiHud::_OpenDeleteConfirmation(size_t triggerIndex)
 	const auto& name = _displayedRig.Triggers[triggerIndex].Name;
 	_deletePopup->SetTitle("Delete trigger?");
 	_deletePopup->SetBodyLines({ "Delete " + name + " and all of its routes?" });
-	_deletePopup->SetPosition({ std::max(0, static_cast<int>(GetSize().Width / 2u) - 230),
-		std::max(0, static_cast<int>(GetSize().Height / 2u) - 105) });
+	_deletePopup->FitToViewport(GetSize());
 	_popupManager->Open(_deletePopup, shared_from_this());
 }
 

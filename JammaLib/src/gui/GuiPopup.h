@@ -37,15 +37,20 @@ namespace gui
 		void SetBodyLines(const std::vector<std::string>& lines);
 		void ConfigureButtons(const GuiPopupButtonConfig& config);
 		void SetButtonReceiver(std::shared_ptr<base::ActionReceiver> receiver);
+		void SetSize(utils::Size2d size) override;
+		void FitToViewport(utils::Size2d viewport);
+		void Draw(base::DrawContext& context) override;
 
 	private:
 		void _LayoutButtons();
+		void _LayoutContents();
 
 		static constexpr unsigned int TitleWidth = 420u;
 		static constexpr unsigned int TitleHeight = 26u;
 		static constexpr unsigned int LineWidth = 420u;
 		static constexpr unsigned int LineHeight = 24u;
-		static constexpr unsigned int ButtonWidth = 96u;
+		// Fits the existing "Follow server" action at the normal font/padding.
+		static constexpr unsigned int ButtonWidth = 128u;
 		static constexpr unsigned int ButtonHeight = 36u;
 		static constexpr unsigned int ButtonMinWidth = 60u;
 		static constexpr int ButtonY = 24;
@@ -56,5 +61,6 @@ namespace gui
 		std::array<std::shared_ptr<GuiLabel>, 3> _lineLabels;
 		std::vector<std::shared_ptr<GuiButton>> _buttons;
 		std::shared_ptr<base::ActionReceiver> _buttonReceiver;
+		utils::Size2d _preferredSize;
 	};
 }

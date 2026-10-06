@@ -526,7 +526,38 @@ TEST(GuiRenderEvidence, ControlFamiliesCaretSelectionPopupAndNestedOpacity)
 		EXPECT_GT(NativeGuiRenderEvidence::WhitePixels(popupPixels, size, { popupPosition.X + 8, y,
 			popupPosition.X + 152, y + static_cast<int>(gui::GuiDropDownParams::DefaultRowHeight) }), 5u);
 	}
-	dropdown->Close(); ordinary->ReleaseResources(); root->ReleaseResources();
+	dropdown->Close();
+	auto confirmation = std::make_shared<gui::GuiPopup>();
+	confirmation->SetTitle("Agjpq Current server tempo");
+	confirmation->SetBodyLines({ "Agjpq 0123 Tempo: 120 BPM", "Agjpq 4567 Remote interval", "Agjpq 8901 Apply locally?" });
+	confirmation->ConfigureButtons({ { { "Cancel", 2u }, { "Follow server", 1u } } });
+	confirmation->Init(); confirmation->InitResources(resources, false);
+	for (const auto viewport : { utils::Size2d{ 320, 180 }, utils::Size2d{ 184, 161 }, utils::Size2d{ 460, 210 } }) {
+		confirmation->FitToViewport(viewport);
+		graphics::GlDrawContext context(viewport, base::DrawContext::TEXTURE); context.Initialise();
+		NativeGuiRenderEvidence::BeginFrame(context, viewport, 0.85f);
+		confirmation->Draw(context); EXPECT_FLOAT_EQ(1.0f, context.Opacity()); glFinish(); EXPECT_EQ(GL_NO_ERROR, glGetError());
+		const auto pixels = context.GetPixels();
+		EXPECT_TRUE(NativeGuiRenderEvidence::SaveBmp(output / ("confirmation-popup-" + std::to_string(viewport.Width) + "x" +
+			std::to_string(viewport.Height) + ".bmp"), viewport, pixels));
+		for (unsigned char index = 0; index < 4; ++index) {
+			const auto label = confirmation->TryGetChild(index); const auto pos = label->GlobalPosition(); const auto frame = label->GetSize();
+			EXPECT_GT(NativeGuiRenderEvidence::WhitePixels(pixels, viewport, { pos.X, pos.Y,
+				pos.X + static_cast<int>(frame.Width), pos.Y + static_cast<int>(frame.Height) }), 5u);
+		}
+		if (viewport.Width >= 320) {
+			const auto label = std::dynamic_pointer_cast<gui::GuiLabel>(confirmation->TryGetChild(5)->TryGetChild(0));
+			ASSERT_TRUE(label); const auto width = label->MeasureText("Follow server"); ASSERT_TRUE(width);
+			EXPECT_LE(*width, static_cast<float>(label->GetSize().Width));
+		}
+		if (viewport.Height < 210)
+			for (unsigned int channel = 0; channel < 3; ++channel) {
+				const auto expected = 255.0f * (gui::GuiStyle::Graphite()[channel] * gui::GuiStyle::PanelFillOpacity +
+					0.85f * (1.0f - gui::GuiStyle::PanelFillOpacity));
+				EXPECT_NEAR(expected, pixels[(52u * viewport.Width + viewport.Width / 2u) * 4u + channel], 2.0f);
+			}
+	}
+	confirmation->ReleaseResources(); ordinary->ReleaseResources(); root->ReleaseResources();
 }
 
 class ProductionWindowEvidenceCleanup
@@ -707,6 +738,94 @@ TEST(GuiRenderEvidence, ProductionWindowSceneResizeAndPanelInput)
 		EXPECT_EQ(index == 2u, take->ResolvedMidiQuantisation().Enabled);
 		EXPECT_FALSE(scene->HasSelection());
 	}
+	// Seed the pointer once while collapsed, then let actual UI frames move a
+	// retained control under it. No further move event may be needed for hover.
+	const auto settleSettings = [&](bool expanded) {
+		settings->SetExpanded(expanded);
+		const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+		while (settings->TransitionValue() != (expanded ? 1.0f : 0.0f) && std::chrono::steady_clock::now() < deadline) {
+			window.Render(); glFinish(); window.Swap(); std::this_thread::sleep_for(std::chrono::milliseconds(10));
+		}
+		EXPECT_FLOAT_EQ(expanded ? 1.0f : 0.0f, settings->TransitionValue());
+	};
+	settleSettings(true);
+	const auto allToggle = radio->TryGetChild(2); ASSERT_TRUE(allToggle);
+	const auto hoverPosition = allToggle->GlobalPosition(); const auto hoverSize = allToggle->GetSize();
+	actions::TouchMoveAction stationary; stationary.Touch = actions::TouchAction::TOUCH_MOUSE;
+	stationary.MouseButtonsDown = 0;
+	stationary.Position = { hoverPosition.X + static_cast<int>(hoverSize.Width / 2),
+		hoverPosition.Y + static_cast<int>(hoverSize.Height / 2) };
+	settleSettings(false); window.OnAction(stationary); window.Render();
+	EXPECT_EQ(base::GuiElement::STATE_NORMAL, allToggle->GetState());
+	settings->SetExpanded(true);
+	bool sawIntermediate = false, sawHoverDuringMotion = false;
+	const auto hoverDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+	while (settings->TransitionValue() < 1.0f && std::chrono::steady_clock::now() < hoverDeadline) {
+		window.Render(); glFinish(); window.Swap();
+		const bool hit = allToggle->RouteHitTest(allToggle->GlobalToLocal(stationary.Position));
+		EXPECT_EQ(hit ? base::GuiElement::STATE_OVER : base::GuiElement::STATE_NORMAL, allToggle->GetState())
+			<< "Panel transition " << settings->TransitionValue();
+		if (settings->TransitionValue() > 0.0f && settings->TransitionValue() < 1.0f) {
+			sawIntermediate = true; sawHoverDuringMotion |= allToggle->GetState() == base::GuiElement::STATE_OVER;
+		}
+		std::this_thread::sleep_for(std::chrono::milliseconds(10));
+	}
+	EXPECT_TRUE(sawIntermediate); EXPECT_TRUE(sawHoverDuringMotion);
+	EXPECT_FLOAT_EQ(1.0f, settings->TransitionValue()); EXPECT_EQ(base::GuiElement::STATE_OVER, allToggle->GetState());
+	capture("production-window-stationary-hover");
+	// Exercise the compact client through the actual native resize and Scene
+	// input path. Collapse selection so its body does not cover settings tabs.
+	auto selection = NativeGuiRenderEvidence::Settings(*scene, { 30, 640 }); ASSERT_TRUE(selection);
+	selection->SetExpanded(false);
+	const auto selectionDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+	while (selection->TransitionValue() > 0.0f && std::chrono::steady_clock::now() < selectionDeadline) {
+		window.Render(); glFinish(); window.Swap(); std::this_thread::sleep_for(std::chrono::milliseconds(10));
+	}
+	ASSERT_FLOAT_EQ(0.0f, selection->TransitionValue());
+	nativeResize({ 320, 180 }); settleSettings(true);
+	const auto clickControl = [&](const std::shared_ptr<base::GuiElement>& control) {
+		const auto position = control->GlobalPosition(); const auto size = control->GetSize();
+		press.Position = { position.X + static_cast<int>(size.Width / 2), position.Y + static_cast<int>(size.Height / 2) };
+		press.State = actions::TouchAction::TOUCH_DOWN; EXPECT_TRUE(window.OnAction(press).IsEaten);
+		press.State = actions::TouchAction::TOUCH_UP; EXPECT_TRUE(window.OnAction(press).IsEaten);
+	};
+	auto tabsViewport = std::dynamic_pointer_cast<gui::GuiScrollPanel>(frame->TryGetChild(2)); ASSERT_TRUE(tabsViewport);
+	for (const auto index : { 0u, 1u }) {
+		clickControl(tabsViewport->Content()->TryGetChild(static_cast<unsigned char>(index)));
+		EXPECT_EQ(index == 0u ? gui::SettingsPage::Midi : gui::SettingsPage::Timing, settings->Page());
+		capture(index == 0u ? "production-window-compact-midi" : "production-window-compact-timing");
+	}
+	const auto pagePosition = pageScroll->GlobalPosition(); const auto pageSize = pageScroll->GetSize();
+	wheel.Position = { pagePosition.X + 10, pagePosition.Y + static_cast<int>(pageSize.Height / 2) };
+	for (int attempt = 0; attempt < 12; ++attempt) {
+		const auto position = allToggle->GlobalPosition(); const auto size = allToggle->GetSize();
+		const int center = position.Y + static_cast<int>(size.Height / 2);
+		if (center >= pagePosition.Y && center < pagePosition.Y + static_cast<int>(pageSize.Height)) break;
+		EXPECT_TRUE(window.OnAction(wheel).IsEaten);
+	}
+	EXPECT_GT(pageScroll->ScrollOffset(), 0);
+	for (const auto index : { 2u, 0u }) {
+		auto toggle = radio->TryGetChild(static_cast<unsigned char>(index));
+		const int center = toggle->GlobalPosition().Y + static_cast<int>(toggle->GetSize().Height / 2);
+		ASSERT_GE(center, pagePosition.Y); ASSERT_LT(center, pagePosition.Y + static_cast<int>(pageSize.Height));
+		clickControl(toggle); EXPECT_EQ(index == 2u, take->ResolvedMidiQuantisation().Enabled);
+	}
+	capture("production-window-compact-quantisation");
+	clickControl(settings->TryGetChild(1)); settleSettings(false);
+	capture("production-window-compact-hud");
+	// The OS outer minimum is a smaller degraded profile: retain reachable
+	// handles and a valid render, without claiming every label is readable.
+	const auto minimum = window.GetMinSize();
+	ASSERT_TRUE(SetWindowPos(ownedWindow, nullptr, 0, 0, minimum.Width, minimum.Height,
+		SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE));
+	RECT minimumClient{}; ASSERT_TRUE(GetClientRect(ownedWindow, &minimumClient));
+	EXPECT_EQ(static_cast<unsigned int>(minimumClient.right), scene->GetSize().Width);
+	EXPECT_EQ(static_cast<unsigned int>(minimumClient.bottom), scene->GetSize().Height);
+	capture("production-window-os-minimum");
+	clickControl(settings->TryGetChild(1)); settleSettings(true);
+	clickControl(settings->TryGetChild(1)); settleSettings(false);
+	nativeResize({ 1000, 650 }); pageScroll->SetScrollOffset(0); settleSettings(true);
+	selection->SetExpanded(true); selection->AdvanceAnimation(0.22f);
 	take->Select();
 	ASSERT_EQ(1u, take->GetMidiLoops().size());
 	const auto midiLoop = take->GetMidiLoops().front();
