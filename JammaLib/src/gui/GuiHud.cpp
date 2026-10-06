@@ -468,7 +468,7 @@ void GuiHud::_BuildTopStrip()
 	};
 	const unsigned int innerWidth = _TopStripWidth - (_TopStripPadding * 2u);
 	GuiStackPanelParams sourceRowParams = GuiStackPanelParams::PanelHorizontalRow(innerWidth, _SourceViewportHeight);
-	sourceRowParams.Spacing = _SourcePanelGap;
+	sourceRowParams.Spacing = GuiStackPanelParams::PanelRowSpacing + 4u;
 	_topSourceRow = std::make_shared<GuiStackPanel>(sourceRowParams);
 	if (audioCount > 0u)
 	{
@@ -797,7 +797,7 @@ void GuiHud::_LayoutPanels()
 	const auto audioCount = static_cast<unsigned int>(std::count_if(_sourceEndpoints.begin(), _sourceEndpoints.end(),
 		[](const auto& source) { return source.Kind == io::RigFileRouting::SourceKind::Adc; }));
 	const auto midiCount = static_cast<unsigned int>(_sourceEndpoints.size()) - audioCount;
-	const int categoryGap = audioCount && midiCount ? std::min(static_cast<int>(_SourcePanelGap), innerWidth) : 0;
+	const int categoryGap = audioCount && midiCount ? std::min(static_cast<int>(GuiStackPanelParams::PanelRowSpacing + 4u), innerWidth) : 0;
 	const auto budget = static_cast<unsigned int>(innerWidth - categoryGap);
 	auto audioWidth = audioCount + midiCount ? static_cast<unsigned int>(static_cast<unsigned long long>(budget) * audioCount / (audioCount + midiCount)) : 0u;
 	// Keep a minority category usable too: one minimum-width card plus the
@@ -805,9 +805,16 @@ void GuiHud::_LayoutPanels()
 	constexpr unsigned int categoryMinimum = 84u;
 	if (audioCount && midiCount && budget >= categoryMinimum * 2u)
 		audioWidth = std::clamp(audioWidth, categoryMinimum, budget - categoryMinimum);
-	const auto midiWidth = midiCount ? budget - audioWidth : 0u;
+	auto midiWidth = midiCount ? budget - audioWidth : 0u;
 	const auto audioCard = SourceCardWidth(audioWidth, audioCount);
 	const auto midiCard = SourceCardWidth(midiWidth, midiCount);
+	// Shrink category viewports to their occupied cards before right-aligning the group.
+	const auto occupiedWidth = [](unsigned int count, unsigned int card) {
+		return count ? count * card + (count - 1u) * GuiStackPanelParams::PanelRowSpacing + 4u : 0u;
+	};
+	audioWidth = std::min(audioWidth, occupiedWidth(audioCount, audioCard));
+	midiWidth = std::min(midiWidth, occupiedWidth(midiCount, midiCard));
+	_topSourceRow->SetSize({ audioWidth + midiWidth + static_cast<unsigned int>(categoryGap), static_cast<unsigned int>(rowHeight) });
 	for (size_t i = 0; i < _sourceWidgets.size(); ++i)
 	{
 		const auto cardWidth = _sourceEndpoints[i].Kind == io::RigFileRouting::SourceKind::Adc ? audioCard : midiCard;
@@ -832,6 +839,7 @@ void GuiHud::_LayoutPanels()
 	layoutCategory(_topInputRow, _topAudioScroll, audioCount, audioCard, audioWidth);
 	layoutCategory(_topMidiRow, _topMidiScroll, midiCount, midiCard, midiWidth);
 	_topStrip->ComputeLayout();
+	_topSourceRow->SetPosition({ topWidth - padding - static_cast<int>(_topSourceRow->GetSize().Width), _topSourceRow->Position().Y });
 	_topSourceRow->ComputeLayout();
 	_triggerList->ComputeLayout();
 	const int statusWidth = std::min(300, std::max(0, railX - 8));
