@@ -392,6 +392,7 @@ namespace engine
 		std::unique_ptr<gui::GuiLabel> _label;
 		std::unique_ptr<gui::SceneSelector> _selector;
 		std::shared_ptr<gui::GuiMainPanel> _mainPanel;
+		std::shared_ptr<gui::GuiMainPanel> _selectionPanel;
 		std::shared_ptr<gui::GuiHud> _hudPanel;
 		std::vector<std::shared_ptr<base::GuiElement>> _guiChildren;
 		gui::GuiFocusManager _focusManager;
@@ -413,6 +414,10 @@ namespace engine
 		std::weak_ptr<base::GuiElement> _touchDownElement;
 		// Whether the touch sequence started on the HUD panel, recorded at touch-down.
 		bool _touchDownIsHud = false;
+		bool _touchDownIsSettings = false;
+		bool _consumeSettingsRelease = false;
+		void _OnSettingsHidden(const std::shared_ptr<base::GuiElement>& subtree);
+		std::optional<actions::ActionResult> _RouteSettingsTouch(actions::TouchAction action);
 		std::weak_ptr<base::GuiElement> _hoverElement3d;
 		std::vector<unsigned char> _hoverPath3d;
 		std::vector<std::weak_ptr<base::GuiElement>> _hoverPath2d;

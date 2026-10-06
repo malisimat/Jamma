@@ -66,6 +66,7 @@ namespace gui
 		virtual bool RouteHitTest(utils::Position2d localPos) override;
 		virtual std::shared_ptr<base::GuiElement> FindTopmostDescendant(utils::Position2d localPos) override;
 		virtual void ClearPointerState() override;
+		virtual void FinalizeEdits() override;
 
 	protected:
 		virtual void _InitResources(resources::ResourceLib& resourceLib, bool forceInit) override;

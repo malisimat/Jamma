@@ -1,209 +1,230 @@
 #include "GuiMainPanel.h"
+#include "GuiLabel.h"
 
-#include <array>
-#include <functional>
-#include <string>
-
-using namespace base;
 using namespace gui;
+using namespace base;
+using namespace actions;
 using namespace utils;
-using namespace resources;
 
-GuiMainPanel::GuiMainPanel(GuiMainPanelParams params) :
-	GuiStackPanel(params),
-	_popupManager(params.PopupManager)
+GuiMainPanel::GuiMainPanel(GuiMainPanelParams params) : GuiPanel(params),
+	_selectionOnly(params.SelectionOnly), _page(params.SelectionOnly ? SettingsPage::Selection : SettingsPage::Timing),
+	_popups(params.PopupManager), _beforeHide(std::move(params.BeforeHide))
 {
-	_guiParams.TextureShader = "texture_tinted";
-	_guiParams.Texture = "rounded_but";
-	SetDirection(StackDirection::Vertical);
-	SetSpacing(_PanelSpacing);
-	SetPadding(_PanelPadding, _PanelPadding);
-	SetPosition({ _PanelPosX, _PanelPosY });
-	SetSize({ _PanelWidth, _PanelHeight });
-	SetMinSize({ _PanelMinWidth, _PanelMinHeight });
-
-	_BuildUpperSection();
-	_BuildLowerSection();
-}
-
-void GuiMainPanel::_BuildUpperSection()
-{
-	const unsigned int sectionWidth = _SectionWidth;
-
-	auto section = std::make_shared<GuiStackPanel>(GuiStackPanelParams{});
-	section->SetDirection(StackDirection::Vertical);
-	section->SetSpacing(_SectionSpacing);
-	section->SetPadding(_SectionPadding, _SectionPadding);
-	section->SetSize({ sectionWidth, _UpperSectionHeight });
-	section->SetMinSize({ sectionWidth, _UpperSectionHeight });
-	AddChild(section);
-
-	section->AddChild(_MakeHeaderLabel("-- Upper --", sectionWidth));
-
+	_guiParams.GuiPassThrough = true;
+	GuiElementParams frameParams;
+	frameParams.GuiPassThrough = false;
+	frameParams.Texture = "rounded_but";
+	frameParams.TextureShader = "texture_tinted";
+	frameParams.TintColor = glm::vec3(0.20f, 0.22f, 0.24f);
+	_frame = std::make_shared<GuiPanel>(frameParams);
+	_children.push_back(_frame);
+	auto headerParams = GuiLabelParams::PanelHeader(_selectionOnly ? "Selection depth" : "Settings", 320u);
+	headerParams.Ellipsize = true;
+	_frame->AddChild(std::make_shared<GuiLabel>(headerParams));
+	GuiToggleParams handleParams = GuiToggleParams::PanelPrimary();
+	handleParams.Text = _selectionOnly ? "Selection" : "Settings";
+	handleParams.Size = { 140u, 28u };
+	handleParams.InitState = GuiToggleParams::TOGGLE_ON;
+	_handle = std::make_shared<GuiToggle>(handleParams);
+	_expandBinding = std::make_shared<GuiCommandReceiver>(_ExpandCommand);
+	_handle->SetReceiver(_expandBinding);
+	_children.push_back(_handle);
+	for (auto& page : _pages)
 	{
-		GuiStackPanelParams hParams = GuiStackPanelParams::PanelHorizontalRow(
-			_SectionContentWidth,
-			_StackRowHeight);
-		auto hStack = std::make_shared<GuiStackPanel>(hParams);
-		const std::array<glm::vec3, 3> buttonTints = {
-			glm::vec3(1.0f, 0.7f, 0.3f),
-			glm::vec3(0.3f, 1.0f, 0.7f),
-			glm::vec3(0.7f, 0.3f, 1.0f)
-		};
-
-		for (std::size_t i = 0; i < buttonTints.size(); ++i)
+		GuiStackPanelParams pageParams;
+		pageParams.PaddingH = 4u;
+		pageParams.PaddingV = 4u;
+		pageParams.Spacing = 8u;
+		pageParams.Size = { 300u, 8u };
+		page = std::make_shared<GuiStackPanel>(pageParams);
+	}
+	for (const auto& setting : params.Settings)
+	{
+		if (!setting.Control || setting.Page >= SettingsPage::Count) continue;
+		auto& page = _pages[static_cast<size_t>(setting.Page)];
+		if (!setting.Label.empty())
 		{
-			auto buttonParams = GuiButtonParams::PanelButton();
-			buttonParams.Text = std::string("Button ") + std::to_string(i + 1);
-			buttonParams.TintColor = buttonTints[i];
-			hStack->AddChild(std::make_shared<GuiButton>(buttonParams));
+			auto label = GuiLabelParams::PanelHeader(setting.Label, 300u);
+			label.Ellipsize = true;
+			page->AddChild(std::make_shared<GuiLabel>(label));
 		}
-
-		section->AddChild(hStack);
+		page->AddChild(setting.Control);
+		_controlSizes.emplace_back(setting.Control, setting.Control->GetSize());
+		auto binding = std::make_shared<GuiCommandReceiver>(setting.Command);
+		setting.Control->SetReceiver(binding);
+		_bindings.push_back(std::move(binding));
 	}
-
-	section->AddChild(_CreateToggleGrid());
-	section->AddChild(_CreateSliderStack());
-}
-
-void GuiMainPanel::_BuildLowerSection()
-{
-	const unsigned int sectionWidth = _SectionWidth;
-
-	auto section = std::make_shared<GuiStackPanel>(GuiStackPanelParams{});
-	section->SetDirection(StackDirection::Vertical);
-	section->SetSpacing(_SectionSpacing);
-	section->SetPadding(_SectionPadding, _SectionPadding);
-	section->SetSize({ sectionWidth, _LowerSectionHeight });
-	section->SetMinSize({ sectionWidth, _LowerSectionHeight });
-	AddChild(section);
-
-	section->AddChild(_MakeHeaderLabel("-- Lower --", sectionWidth));
-
+	GuiScrollPanelParams scrollParams;
+	scrollParams.ScrollBarWidth = 12u;
+	_pageScroll = std::make_shared<GuiScrollPanel>(scrollParams);
+	_pageScroll->SetContent(_pages[static_cast<size_t>(_page)]);
+	_frame->AddChild(_pageScroll);
+	if (!_selectionOnly)
 	{
-		GuiTextBoxParams tp = GuiTextBoxParams::PanelInput(_SectionContentWidth);
-		tp.Padding = _TextBoxPadding;
-		tp.Text = "edit me";
-		section->AddChild(std::make_shared<GuiTextBox>(tp));
-	}
-
-	{
-		GuiNumericInputParams np = GuiNumericInputParams::PanelInput(_SectionContentWidth);
-		np.Padding = _NumericInputPadding;
-		np.Min = 0.0;
-		np.Max = 100.0;
-		np.Step = 0.5;
-		np.InitValue = 42.0;
-		np.Decimals = 1;
-		section->AddChild(std::make_shared<GuiNumericInput>(np));
-	}
-
-	{
-		GuiDropDownParams dp = GuiDropDownParams::PanelInput(_SectionContentWidth);
-		dp.Padding = _DropDownPadding;
-		dp.Items = { "Sine", "Square", "Saw", "Triangle", "Noise" };
-		dp.InitIndex = 0u;
-		auto dd = std::make_shared<GuiDropDown>(dp);
-		if (_popupManager != nullptr)
-			dd->SetPopupManager(_popupManager);
-		section->AddChild(dd);
-	}
-
-	{
-		GuiStackPanelParams cParams = GuiStackPanelParams::PanelContentStack(
-			_SectionContentWidth,
-			_ScrollPanelHeight * 3);
-		auto content = std::make_shared<GuiStackPanel>(cParams);
-		for (int i = 0; i < 12; ++i)
+		GuiRadioParams tabParams;
+		tabParams.InitValue = 1u;
+		tabParams.Size = { 208u, 32u };
+		for (unsigned int index = 0; index < 2; ++index)
 		{
-			content->AddChild(std::make_shared<GuiLabel>(
-				GuiLabelParams::PanelScrollRow("Scroll row " + std::to_string(i + 1), _ScrollRowHorizontalInset)));
+			auto toggle = GuiToggleParams::PanelPrimary();
+			toggle.Text = index == 0 ? "MIDI" : "Timing";
+			toggle.Position = { static_cast<int>(index * 104u), 0 };
+			toggle.Size = { 100u, 32u };
+			tabParams.ToggleParams.push_back(toggle);
 		}
-
-		GuiScrollPanelParams spParams = GuiScrollPanelParams::PanelScroll(
-			_SectionContentWidth,
-			_ScrollPanelHeight);
-		auto scroll = std::make_shared<GuiScrollPanel>(spParams);
-		scroll->SetContent(content);
-		section->AddChild(scroll);
+		_tabs = std::make_shared<GuiRadio>(tabParams);
+		_pageBinding = std::make_shared<GuiCommandReceiver>(_PageCommand);
+		_tabs->SetReceiver(_pageBinding);
+		scrollParams.Orientation = GuiScrollOrientation::Horizontal;
+		_tabScroll = std::make_shared<GuiScrollPanel>(scrollParams);
+		_tabScroll->SetContent(_tabs);
+		_frame->AddChild(_tabScroll);
 	}
+	SetViewportSize(params.Size);
 }
 
-std::shared_ptr<GuiLabel> GuiMainPanel::_MakeHeaderLabel(const std::string& text, unsigned int width)
+void GuiMainPanel::SetCommandOwner(std::weak_ptr<ActionReceiver> owner)
 {
-	return std::make_shared<GuiLabel>(GuiLabelParams::PanelHeader(text, width));
+	for (auto& binding : _bindings) binding->SetOwner(owner);
 }
 
-std::shared_ptr<GuiGrid> GuiMainPanel::_CreateToggleGrid()
+void GuiMainPanel::_InitReceivers()
 {
-	GuiGridParams gp = GuiGridParams::PanelToggleGrid(_SectionContentWidth, _GridHeight);
-	gp.Texture = "";
+	if (_expandBinding) _expandBinding->SetOwner(ActionReceiver::shared_from_this());
+	if (_pageBinding) _pageBinding->SetOwner(ActionReceiver::shared_from_this());
+}
 
-	auto grid = std::make_shared<GuiGrid>(gp);
-	const std::array<std::function<std::shared_ptr<GuiElement>()>, 4> cellCreators = {
-		[]() {
-			auto params = GuiToggleParams::PanelPrimary();
-			params.Text = "Toggle A";
-			params.TintColor = glm::vec3(1.0f, 0.7f, 0.3f);
-			return std::make_shared<GuiToggle>(params);
-		},
-		[]() {
-			auto params = GuiToggleParams::PanelSecondary();
-			params.Text = "Toggle B";
-			params.TintColor = glm::vec3(0.7f, 1.0f, 0.3f);
-			return std::make_shared<GuiToggle>(params);
-		},
-		[]() {
-			auto params = GuiToggleParams::PanelSecondary();
-			params.Text = "Toggle C";
-			params.TintColor = glm::vec3(0.3f, 1.0f, 0.7f);
-			return std::make_shared<GuiToggle>(params);
-		},
-		[]() {
-			auto params = GuiToggleParams::PanelSecondary();
-			params.Text = "Toggle D";
-			params.TintColor = glm::vec3(0.7f, 0.3f, 1.0f);
-			return std::make_shared<GuiToggle>(params);
+void GuiMainPanel::_PrepareHide(const std::shared_ptr<GuiElement>& subtree)
+{
+	subtree->FinalizeEdits();
+	subtree->ClearPointerState();
+	if (_popups) _popups->CloseOwnedBy(subtree);
+	if (_beforeHide) _beforeHide(subtree);
+}
+
+void GuiMainPanel::SetPage(SettingsPage page)
+{
+	if (_selectionOnly || (page != SettingsPage::Midi && page != SettingsPage::Timing) || page == _page) return;
+	_PrepareHide(_pages[static_cast<size_t>(_page)]);
+	_offsets[static_cast<size_t>(_page)] = _pageScroll->ScrollOffset();
+	_page = page;
+	_pageScroll->SetContent(_pages[static_cast<size_t>(_page)]);
+	_tabs->SetCurrentValue(static_cast<unsigned int>(page), true);
+	_Layout();
+	_pageScroll->SetScrollOffset(_offsets[static_cast<size_t>(_page)]);
+}
+
+void GuiMainPanel::SetExpanded(bool expanded)
+{
+	if (_expanded == expanded) return;
+	if (!expanded) _PrepareHide(_frame);
+	_expanded = expanded;
+	_handle->SetToggleState(expanded ? GuiToggleParams::TOGGLE_ON : GuiToggleParams::TOGGLE_OFF, true);
+	_Layout();
+}
+
+ActionResult GuiMainPanel::OnAction(GuiAction action)
+{
+	if (const auto value = std::get_if<GuiAction::GuiInt>(&action.Data))
+	{
+		if (action.Index == _PageCommand) SetPage(static_cast<SettingsPage>(value->Value));
+		else if (action.Index == _ExpandCommand) SetExpanded(value->Value == GuiToggleParams::TOGGLE_ON);
+		else return ActionResult::NoAction();
+		return { true, {}, {}, ACTIONRESULT_DEFAULT, nullptr, {} };
+	}
+	return ActionResult::NoAction();
+}
+
+void GuiMainPanel::SetViewportSize(Size2d viewport)
+{
+	_viewport = viewport;
+	GuiElement::SetSize(viewport);
+	_Layout();
+}
+
+void GuiMainPanel::_Layout()
+{
+	const int width = static_cast<int>(_viewport.Width), height = static_cast<int>(_viewport.Height);
+	const int margin = std::min(20, width / 2);
+	const int panelWidth = std::min(_selectionOnly ? 448 : 360, std::max(0, width - 2 * margin));
+	const int handleHeight = std::min(28, height);
+	const int panelHeight = std::min(_selectionOnly ? 152 : 320, std::max(0, height - handleHeight - 20));
+	const int handleY = _selectionOnly ? height - handleHeight : 0;
+	_handle->SetPosition({ margin, handleY });
+	_handle->SetSize({ static_cast<unsigned int>(std::min(140, std::max(0, width - 2 * margin))), static_cast<unsigned int>(handleHeight) });
+	_handle->SetVisible(width > 0 && handleHeight > 0);
+	_frame->SetPosition({ margin, _selectionOnly ? std::max(0, handleY - panelHeight) : handleHeight });
+	_frame->SetSize({ static_cast<unsigned int>(panelWidth), static_cast<unsigned int>(panelHeight) });
+	_frame->SetVisible(_expanded && panelWidth > 0 && panelHeight > 0);
+	const int padding = std::min(12, std::min(panelWidth, panelHeight) / 2);
+	const int inner = std::max(0, panelWidth - 2 * padding);
+	const int titleHeight = std::min(22, std::max(0, panelHeight - 2 * padding));
+	auto title = _frame->TryGetChild(0);
+	title->SetPosition({ padding, std::max(padding, panelHeight - padding - titleHeight) });
+	title->SetSize({ static_cast<unsigned int>(inner), static_cast<unsigned int>(titleHeight) });
+	const int tabHeight = _selectionOnly ? 0 : std::min(44, std::max(0, panelHeight - 2 * padding - titleHeight));
+	if (_tabScroll)
+	{
+		_tabScroll->SetPosition({ padding, std::max(padding, panelHeight - padding - titleHeight - tabHeight) });
+		_tabScroll->SetSize({ static_cast<unsigned int>(inner), static_cast<unsigned int>(tabHeight) });
+	}
+	const int viewportHeight = std::max(0, panelHeight - 2 * padding - titleHeight - tabHeight - 8);
+	_pageScroll->SetPosition({ padding, padding });
+	_pageScroll->SetSize({ static_cast<unsigned int>(inner), static_cast<unsigned int>(viewportHeight) });
+	auto& page = _pages[static_cast<size_t>(_page)];
+	unsigned int contentHeight = 8u, contentWidth = inner > 8 ? inner - 8u : 0u;
+	for (unsigned int index = 0; index < 256; ++index)
+	{
+		auto child = page->TryGetChild(static_cast<unsigned char>(index));
+		if (!child) break;
+		contentHeight += child->GetSize().Height + 8u;
+		const auto childWidth = static_cast<unsigned int>(std::max(0, inner - 24));
+		if (auto label = std::dynamic_pointer_cast<GuiLabel>(child))
+			label->SetSize({ childWidth, label->GetSize().Height });
+		else if (auto radio = std::dynamic_pointer_cast<GuiRadio>(child))
+		{
+			unsigned int count = 0;
+			while (count < 255 && radio->TryGetChild(static_cast<unsigned char>(count))) ++count;
+			const auto toggleWidth = count ? childWidth / count : 0u;
+			for (unsigned int toggleIndex = 0; toggleIndex < count; ++toggleIndex)
+			{
+				auto toggle = radio->TryGetChild(static_cast<unsigned char>(toggleIndex));
+				toggle->SetPosition({ static_cast<int>(toggleIndex * toggleWidth), 0 });
+				toggle->SetSize({ toggleWidth, toggle->GetSize().Height });
+			}
+			radio->SetSize({ childWidth, radio->GetSize().Height });
 		}
-	};
-
-	for (int ci = 0; ci < 4; ++ci)
-	{
-		GridChildPlacement placement;
-		placement.row = static_cast<unsigned int>(ci / 2);
-		placement.col = static_cast<unsigned int>(ci % 2);
-		placement.hAlign = LayoutHAlign::Fill;
-		placement.vAlign = LayoutVAlign::Fill;
-		grid->AddGridChild(cellCreators[ci](), placement);
+		else
+		{
+			const auto original = std::find_if(_controlSizes.begin(), _controlSizes.end(),
+				[&child](const auto& entry) { return entry.first == child; });
+			if (original != _controlSizes.end())
+				child->SetSize({ std::min(childWidth, original->second.Width), original->second.Height });
+		}
+		contentWidth = std::max(contentWidth, child->GetSize().Width);
 	}
-
-	return grid;
+	page->SetSize({ contentWidth + 8u, contentHeight });
+	page->ComputeLayout();
+	_pageScroll->SetSize(_pageScroll->GetSize());
 }
 
-std::shared_ptr<GuiStackPanel> GuiMainPanel::_CreateSliderStack()
+bool GuiMainPanel::RouteHitTest(Position2d position)
 {
-	GuiStackPanelParams wParams;
-	wParams.Direction = StackDirection::Horizontal;
-	wParams.Spacing = 4u;
-	wParams.WrapContent = true;
-	wParams.Size = { _SectionContentWidth, _WrapStackHeight };
-	wParams.MinSize = { 60u, GuiSliderParams::DefaultHeight };
-	auto wStack = std::make_shared<GuiStackPanel>(wParams);
+	if (!IsVisible() || !IsEnabled()) return false;
+	return _handle->RouteHitTest(_handle->ParentToLocal(position)) ||
+		(_frame->IsVisible() && _frame->RouteHitTest(_frame->ParentToLocal(position)));
+}
 
-	const std::array<std::string, 4> sliderDragTextures = {
-		"blue",
-		"green",
-		"red",
-		"purple"
-	};
+void GuiMainPanel::_InitResources(resources::ResourceLib& resources, bool force)
+{
+	GuiPanel::_InitResources(resources, force);
+	for (auto& page : _pages)
+		if (page != _pageScroll->Content()) page->InitResources(resources, force);
+}
 
-	for (std::size_t i = 0; i < sliderDragTextures.size(); ++i)
-	{
-		const bool isWide = (i + 1u) == sliderDragTextures.size();
-		const unsigned int width = isWide ? GuiSliderParams::WideWidth : GuiSliderParams::DefaultWidth;
-		wStack->AddChild(std::make_shared<GuiSlider>(
-			GuiSliderParams::PanelHorizontal(sliderDragTextures[i], width)));
-	}
-
-	return wStack;
+void GuiMainPanel::_ReleaseResources()
+{
+	GuiPanel::_ReleaseResources();
+	for (auto& page : _pages)
+		if (page && page != _pageScroll->Content()) page->ReleaseResources();
 }

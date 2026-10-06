@@ -270,6 +270,7 @@ namespace engine
 		void RefreshOverlay(const QuantisationInteractionContext& context,
 			const ChildResolver& childResolver);
 		void Tick(Time now);
+		bool OwnsPointer() const noexcept { return _isMidiPhaseDragging || _isFractionDragging; }
 
 		std::optional<actions::ActionResult> TryHandleTouchAction(actions::TouchAction action,
 			unsigned int sampleRate,

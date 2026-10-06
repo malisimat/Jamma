@@ -38,6 +38,9 @@ namespace gui
 	public:
 		double Value() const;
 		void SetValue(double value, bool notify = false);
+		// Keep the last owner-applied value without replacing an in-progress edit.
+		void SynchronizeValueFromOwner(double value);
+		virtual void ClearPointerState() override;
 
 		using GuiTextBox::OnAction;
 		virtual actions::ActionResult OnAction(actions::TouchAction action) override;

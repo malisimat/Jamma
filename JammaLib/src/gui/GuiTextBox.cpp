@@ -199,9 +199,9 @@ void GuiTextBox::_SyncLabel()
 
 void GuiTextBox::_NotifyReceiver(bool commit)
 {
-	auto receiver = _receiver.lock();
+	auto receiver = GetReceiver();
 	if (!receiver)
-		receiver = GetReceiver();
+		receiver = _receiver.lock();
 	if (!receiver)
 		return;
 
@@ -222,6 +222,12 @@ void GuiTextBox::_OnTextChanged()
 void GuiTextBox::_OnCommit()
 {
 	_NotifyReceiver(true);
+}
+
+void GuiTextBox::FinalizeEdits()
+{
+	if (HasFocus()) _OnCommit();
+	GuiElement::FinalizeEdits();
 }
 
 // --------------------------------------------------------------------------

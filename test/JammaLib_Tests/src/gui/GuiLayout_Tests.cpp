@@ -777,3 +777,66 @@ TEST(GuiLabel, FitsMeasuredWidthsWithEllipsisAndHandlesEmptyFrames)
 	EXPECT_EQ("", gui::GuiLabel::FitText("WWWW", 0.0f, measure));
 	EXPECT_EQ("", gui::GuiLabel::FitText("", 20.0f, measure));
 }
+
+TEST(Scene, SettingsOwnModifiedPressAndReleaseWithoutSceneFallthrough) {
+	SceneParams sceneParams({ "" }, {}, { 800u, 600u });
+	Scene scene(sceneParams, io::UserConfig{});
+	TouchAction action;
+	action.Touch = TouchAction::TOUCH_MOUSE;
+	action.Index = 0u;
+	action.Modifiers = static_cast<base::Action::Modifiers>(base::Action::MODIFIER_SHIFT | base::Action::MODIFIER_CTRL);
+	action.Position = { 30, 10 };
+	action.State = TouchAction::TOUCH_DOWN;
+	EXPECT_TRUE(scene.OnAction(action).IsEaten);
+	action.Position = { 500, 300 };
+	action.State = TouchAction::TOUCH_UP;
+	EXPECT_TRUE(scene.OnAction(action).IsEaten);
+}
+
+TEST(Scene, SettingsCaptureCancellationAllowsNextControlToReceivePress) {
+	SceneParams sceneParams({ "" }, {}, { 800u, 600u });
+	Scene scene(sceneParams, io::UserConfig{});
+	auto button = std::make_shared<GuiButton>(MakeButtonParams(80u, 30u));
+	button->SetPosition({ 500, 300 });
+	scene.AddChild(button);
+	TouchAction action;
+	action.Touch = TouchAction::TOUCH_MOUSE;
+	action.Index = 0u;
+	action.Position = { 30, 10 };
+	action.State = TouchAction::TOUCH_DOWN;
+	ASSERT_TRUE(scene.OnAction(action).IsEaten);
+	actions::TouchMoveAction cancel;
+	cancel.Position = action.Position;
+	cancel.MouseButtonsDown = 0u;
+	EXPECT_TRUE(scene.OnAction(cancel).IsEaten);
+	action.Position = { 510, 310 };
+	auto next = scene.OnAction(action);
+	EXPECT_TRUE(next.IsEaten);
+	EXPECT_EQ(button, next.ActiveElement.lock());
+}
+
+TEST(Scene, SettingsHandleCollapsesAndReopensThroughPointerDispatch) {
+	SceneParams sceneParams({ "" }, {}, { 800u, 600u });
+	Scene scene(sceneParams, io::UserConfig{});
+	TouchAction action;
+	action.Touch = TouchAction::TOUCH_MOUSE;
+	action.Index = 0u;
+	action.Position = { 30, 10 };
+	action.State = TouchAction::TOUCH_DOWN;
+	auto down = scene.OnAction(action);
+	ASSERT_TRUE(down.IsEaten);
+	auto active = down.ActiveElement.lock();
+	ASSERT_NE(nullptr, active);
+	auto panel = std::dynamic_pointer_cast<gui::GuiMainPanel>(active->Parent());
+	ASSERT_NE(nullptr, panel);
+	action.State = TouchAction::TOUCH_UP;
+	EXPECT_TRUE(scene.OnAction(action).IsEaten);
+	EXPECT_FALSE(panel->IsExpanded());
+	EXPECT_FALSE(panel->RouteHitTest({ 30, 100 }));
+	action.State = TouchAction::TOUCH_DOWN;
+	EXPECT_TRUE(scene.OnAction(action).IsEaten);
+	action.State = TouchAction::TOUCH_UP;
+	EXPECT_TRUE(scene.OnAction(action).IsEaten);
+	EXPECT_TRUE(panel->IsExpanded());
+	EXPECT_EQ(gui::SettingsPage::Timing, panel->Page());
+}

@@ -274,6 +274,13 @@ void GuiElement::ClearPointerState()
 	}
 }
 
+void GuiElement::FinalizeEdits()
+{
+	for (auto& child : _children)
+		if (child) child->FinalizeEdits();
+	ClearFocus();
+}
+
 std::vector<JobAction> GuiElement::CommitChanges()
 {
 	std::vector<JobAction> jobList = {};

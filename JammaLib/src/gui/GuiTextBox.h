@@ -67,6 +67,7 @@ namespace gui
 
 		virtual bool IsTextEditing() const override;
 		virtual bool WantsFocusOnPress() const override;
+		virtual void FinalizeEdits() override;
 
 		using base::GuiElement::OnAction;
 		virtual void SetSize(utils::Size2d size) override;

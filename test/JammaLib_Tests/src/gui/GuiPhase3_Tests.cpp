@@ -9,6 +9,7 @@
 #include "gui/GuiDropDown.h"
 #include "gui/GuiScrollBar.h"
 #include "gui/GuiScrollPanel.h"
+#include "gui/GuiMainPanel.h"
 #include "actions/KeyAction.h"
 #include "actions/TouchAction.h"
 #include "actions/TouchMoveAction.h"
@@ -741,4 +742,192 @@ TEST(GuiDropDown, SetSelectedIndexClamps) {
 
 	dd->SetSelectedIndex(-5);
 	EXPECT_EQ(0, dd->SelectedIndex());
+}
+
+TEST(GuiNumericInput, FinalizeValidatesEntireFiniteTextThroughScrollContent) {
+	GuiNumericInputParams params;
+	params.Min = -1.0; params.Max = 1.0; params.InitValue = 0.25; params.Decimals = 3;
+	params.Size = { 100, 40 };
+	auto input = std::make_shared<GuiNumericInput>(params);
+	auto scroll = std::make_shared<GuiScrollPanel>(GuiScrollPanelParams{});
+	scroll->SetContent(input);
+	for (const std::string invalid : { "nan", "inf", "0.5garbage", "-" }) {
+		input->SetText(invalid, false);
+		ASSERT_TRUE(input->RequestFocus());
+		scroll->FinalizeEdits();
+		EXPECT_EQ("0.250", input->Text());
+		EXPECT_FALSE(input->HasFocus());
+	}
+	input->SetText("5", false);
+	input->RequestFocus();
+	scroll->FinalizeEdits();
+	EXPECT_DOUBLE_EQ(1.0, input->Value());
+	EXPECT_EQ("1.000", input->Text());
+}
+
+TEST(GuiNumericInput, CancelStopsDragAndHiddenInputCannotRestartIt) {
+	GuiNumericInputParams params;
+	params.Min = 0; params.Max = 100; params.InitValue = 50; params.Step = 1;
+	params.Size = { 100, 40 };
+	auto input = std::make_shared<GuiNumericInput>(params);
+	input->OnAction(MakeTouch(TouchAction::TOUCH_DOWN, { 10, 10 }));
+	input->ClearPointerState();
+	input->OnAction(MakeTouchMove({ 10, 30 }));
+	EXPECT_DOUBLE_EQ(50, input->Value());
+	input->SetVisible(false);
+	input->OnAction(MakeTouch(TouchAction::TOUCH_DOWN, { 10, 10 }));
+	input->SetVisible(true);
+	input->OnAction(MakeTouchMove({ 10, 30 }));
+	EXPECT_DOUBLE_EQ(50, input->Value());
+}
+
+TEST(GuiTextBox, ReplacingReceiverSupersedesCachedReceiver) {
+	auto oldOwner = std::make_shared<GuiPhase3RecordingGuiReceiver>();
+	auto newOwner = std::make_shared<GuiPhase3RecordingGuiReceiver>();
+	GuiTextBoxParams params;
+	params.Receiver = oldOwner;
+	auto input = std::make_shared<GuiTextBox>(params);
+	input->SetText("first", true);
+	const auto previousCount = oldOwner->ActionCount;
+	input->SetReceiver(newOwner);
+	input->SetText("second", true);
+	EXPECT_EQ(previousCount, oldOwner->ActionCount);
+	EXPECT_EQ(1, newOwner->ActionCount);
+}
+
+TEST(GuiMainPanel, RetainedPagesKeepCommandIdentityAfterTreeInitialization) {
+	auto owner = std::make_shared<GuiPhase3RecordingGuiReceiver>();
+	GuiNumericInputParams numericParams;
+	numericParams.Size = { 96, 44 };
+	auto numeric = std::make_shared<GuiNumericInput>(numericParams);
+	gui::GuiRadioParams radioParams;
+	radioParams.Size = { 228, 40 };
+	radioParams.ToggleParams.resize(3);
+	auto radio = std::make_shared<gui::GuiRadio>(radioParams);
+	auto click = std::make_shared<GuiToggle>(GuiToggleParams::PanelPrimary());
+	gui::GuiMainPanelParams params;
+	params.Size = { 800, 600 };
+	params.Settings = {
+		{ gui::SettingsPage::Midi, "Quantisation", radio, 101u },
+		{ gui::SettingsPage::Timing, "Offset", numeric, 7002u },
+		{ gui::SettingsPage::Timing, "", click, 7003u }
+	};
+	auto panel = std::make_shared<gui::GuiMainPanel>(params);
+	panel->Init();
+	panel->SetCommandOwner(owner);
+	panel->Init();
+	EXPECT_EQ(gui::SettingsPage::Timing, panel->Page());
+	numeric->SetValue(0.5, true);
+	ASSERT_TRUE(owner->LastAction);
+	EXPECT_EQ(7002u, owner->LastAction->Index);
+	click->SetToggleState(GuiToggleParams::TOGGLE_ON, false);
+	EXPECT_EQ(7003u, owner->LastAction->Index);
+	panel->SetPage(gui::SettingsPage::Midi);
+	radio->SetCurrentValue(2u, false);
+	EXPECT_EQ(101u, owner->LastAction->Index);
+	EXPECT_EQ(2, std::get<GuiAction::GuiInt>(owner->LastAction->Data).Value);
+	panel->SetPage(gui::SettingsPage::Timing);
+	EXPECT_EQ(numeric, numeric->Parent()->TryGetChild(1));
+	owner.reset();
+	EXPECT_NO_THROW(numeric->SetValue(0.6, true));
+}
+
+TEST(GuiMainPanel, SwitchAndCollapseFinalizeEditsAndOnlyCloseOwnedPopup) {
+	GuiNumericInputParams numericParams;
+	numericParams.Min = -1; numericParams.Max = 1; numericParams.InitValue = 0;
+	numericParams.Size = { 96, 44 };
+	auto numeric = std::make_shared<GuiNumericInput>(numericParams);
+	GuiPopupManager popups;
+	int hideCalls = 0;
+	gui::GuiMainPanelParams params;
+	params.Size = { 800, 600 }; params.PopupManager = &popups;
+	params.BeforeHide = [&hideCalls](const auto&) { ++hideCalls; };
+	params.Settings = { { gui::SettingsPage::Timing, "Offset", numeric, 7002u } };
+	auto panel = std::make_shared<gui::GuiMainPanel>(params);
+	panel->Init();
+	auto unrelated = std::make_shared<base::GuiElement>(base::GuiElementParams{});
+	auto owned = std::make_shared<base::GuiElement>(base::GuiElementParams{});
+	popups.Open(unrelated);
+	popups.Open(owned, numeric);
+	numeric->SetText("9", false); numeric->RequestFocus();
+	panel->SetPage(gui::SettingsPage::Midi);
+	EXPECT_DOUBLE_EQ(1, numeric->Value());
+	EXPECT_FALSE(numeric->HasFocus());
+	EXPECT_EQ(unrelated, popups.Top());
+	EXPECT_EQ(1, hideCalls);
+	panel->SetExpanded(false);
+	EXPECT_EQ(2, hideCalls);
+	EXPECT_EQ(unrelated, popups.Top());
+	EXPECT_TRUE(panel->RouteHitTest({ 25, 10 }));
+	EXPECT_FALSE(panel->RouteHitTest({ 25, 100 }));
+}
+
+TEST(GuiMainPanel, ControlsRecoverTheirWidthsAfterTinyAndZeroViewport) {
+	GuiNumericInputParams numericParams;
+	numericParams.Size = { 96, 44 };
+	auto numeric = std::make_shared<GuiNumericInput>(numericParams);
+	gui::GuiMainPanelParams params;
+	params.Size = { 800, 600 };
+	params.Settings = { { gui::SettingsPage::Timing, "Offset", numeric, 7002u } };
+	auto panel = std::make_shared<gui::GuiMainPanel>(params);
+	panel->Init();
+	panel->SetViewportSize({ 40, 40 });
+	panel->SetViewportSize({ 0, 0 });
+	EXPECT_FALSE(panel->RouteHitTest({ 0, 0 }));
+	panel->SetViewportSize({ 800, 600 });
+	EXPECT_EQ(96u, numeric->GetSize().Width);
+}
+
+TEST(GuiFocusManager, MovingOrClearingFocusFinalizesNumericEdits) {
+	GuiNumericInputParams params;
+	params.Min = 0; params.Max = 16; params.InitValue = 3; params.Decimals = 0;
+	auto input = std::make_shared<GuiNumericInput>(params);
+	auto other = std::make_shared<GuiNumericInput>(params);
+	GuiFocusManager focus;
+	focus.RequestFocus(input);
+	input->SetText("50", false);
+	focus.RequestFocus(other);
+	EXPECT_DOUBLE_EQ(16, input->Value());
+	EXPECT_EQ("16", input->Text());
+	other->SetText("junk", false);
+	focus.ClearFocus();
+	EXPECT_EQ("3", other->Text());
+	EXPECT_EQ(nullptr, focus.CurrentFocus());
+}
+
+TEST(GuiNumericInput, OwnerValueSynchronizationPreservesPendingEditUntilFinalization) {
+	GuiNumericInputParams params;
+	params.Min = -1; params.Max = 1; params.InitValue = 0; params.Decimals = 3;
+	auto input = std::make_shared<GuiNumericInput>(params);
+	input->RequestFocus();
+	input->SetText("-0.", false);
+	input->SynchronizeValueFromOwner(0.25);
+	EXPECT_EQ("-0.", input->Text());
+	EXPECT_DOUBLE_EQ(0.25, input->Value());
+	input->SetText("-", false);
+	input->FinalizeEdits();
+	EXPECT_EQ("0.250", input->Text());
+	input->SynchronizeValueFromOwner(0.5);
+	EXPECT_EQ("0.500", input->Text());
+}
+
+TEST(GuiMainPanel, HandlesAndTabsUseStableInternalCommands) {
+	gui::GuiMainPanelParams params;
+	params.Size = { 800, 600 };
+	auto panel = std::make_shared<gui::GuiMainPanel>(params);
+	panel->Init();
+	auto frame = panel->TryGetChild(0);
+	auto tabs = std::dynamic_pointer_cast<GuiScrollPanel>(frame->TryGetChild(2));
+	ASSERT_NE(nullptr, tabs);
+	auto radio = std::dynamic_pointer_cast<gui::GuiRadio>(tabs->Content());
+	ASSERT_NE(nullptr, radio);
+	radio->SetCurrentValue(0u, false);
+	EXPECT_EQ(gui::SettingsPage::Midi, panel->Page());
+	auto handle = std::dynamic_pointer_cast<GuiToggle>(panel->TryGetChild(1));
+	ASSERT_NE(nullptr, handle);
+	handle->SetToggleState(GuiToggleParams::TOGGLE_OFF, false);
+	EXPECT_FALSE(panel->IsExpanded());
+	handle->SetToggleState(GuiToggleParams::TOGGLE_ON, false);
+	EXPECT_TRUE(panel->IsExpanded());
+	EXPECT_EQ(gui::SettingsPage::Midi, panel->Page());
 }

@@ -345,6 +345,12 @@ bool GuiScrollPanel::_IsInViewport(Position2d localPos) const
 	return ContentRect().Contains(localPos);
 }
 
+void GuiScrollPanel::FinalizeEdits()
+{
+	GuiPanel::FinalizeEdits();
+	if (_contentHost) _contentHost->FinalizeEdits();
+}
+
 void GuiScrollPanel::_ReleaseResources()
 {
 	GuiPanel::_ReleaseResources();

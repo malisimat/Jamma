@@ -14,7 +14,7 @@ namespace gui
 	class GuiFocusManager
 	{
 	public:
-		// Move focus to `element`.  Clears focus on the previous owner first.
+		// Move focus to `element`. Finalizes edits on the previous owner first.
 		// Passing nullptr is equivalent to ClearFocus().  Returns true if the
 		// element accepted focus.
 		bool RequestFocus(const std::shared_ptr<base::GuiElement>& element);

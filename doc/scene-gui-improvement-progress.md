@@ -88,7 +88,31 @@ a replacement scope. The feature is not complete.
    GUI/cable/layout/Scene tests passed (157 ms). Runtime/visual evidence
    and the smallest supported interactive window size remain slice 6 work.
 4. Production settings pages, command adapters, focus/capture cleanup and
-   explicit overlay draw/input priority: pending.
+   explicit overlay draw/input priority: implemented. The retained top panel
+   contains selection depth only. The bottom-left panel starts on Timing and
+   switches between real MIDI and Timing pages. Off/Mixed/All, channel override,
+   local phase offset and CLICK use the existing Scene owners through fixed
+   command relays; tree initialization can renumber controls without changing
+   their commands. Future Audio/Session/Groups composition slots have no fake
+   actions. Standalone radio draw/resource/input/receiver/hover paths are removed.
+   Panels draw above scene/editor/HUD and below popups. New gestures inside their
+   bounds precede editor/modifier/wheel handling; existing captures retain their
+   streams. Settings releases are consumed, including collapse and page-hide
+   cancellation. Windows zero-button cancellation clears capture and drag state.
+   Focus changes and page/collapse transitions explicitly validate pending edits,
+   stop numeric drags and close only descendant-owned popups. Owner updates retain
+   focused text/caret until validation; invalid/partial/nonfinite values revert
+   to the last applied value. Retained controls resize and recover from tiny/zero
+   viewports, and pages keep their own scroll offsets. Panel/page/relay/focus/
+   capture state is UI-owned and tears down with the Scene GUI; no audio callback
+   state or synchronization changes were introduced. The threading audit found
+   no hot-path lock/wait additions, and callback-owned bodies are unchanged.
+   Final focused code reviews found no material defect; pointer-dispatched Scene
+   collapse/reopen and cancellation checks close the remaining coverage gap.
+   Incremental Debug library, native test and app builds passed. All 165 focused
+   GUI/cable/layout/Scene tests passed (161 ms).
+   Animation, shared opacity/palette and live visual confirmation remain slices
+   5 and 6 work.
 5. Stable text geometry, scoped opacity, shared palette and frame-time motion:
    in progress: requested label frames now survive font resolution, and measured
    ellipsis is available to HUD labels. Common vertical glyph/caret alignment,

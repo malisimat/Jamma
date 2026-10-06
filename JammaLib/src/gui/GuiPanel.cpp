@@ -3,6 +3,16 @@
 using namespace base;
 using namespace gui;
 
+actions::ActionResult GuiCommandReceiver::OnAction(actions::GuiAction action)
+{
+	if (auto owner = _owner.lock())
+	{
+		action.Index = _commandIndex;
+		return owner->OnAction(action);
+	}
+	return actions::ActionResult::NoAction();
+}
+
 GuiPanel::GuiPanel(GuiElementParams params) :
 	GuiElement(params)
 {
