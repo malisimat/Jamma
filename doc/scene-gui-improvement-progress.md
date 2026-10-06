@@ -40,7 +40,7 @@ a replacement scope. The feature is not complete.
    the tested clipping geometry and input gates, not runtime rendering or
    offscreen connection preservation. Those remain subsequent slices.
 2. Cable boundary presentation, valid station projection and shared Bezier
-   rendering/hit geometry: in progress. Render/hit control points now share one
+   rendering/hit geometry: implemented. Render/hit control points now share one
    construction path and the same 24-point line strip as the shader. Capture
    and station curved-hit/chord-miss tests passed; all 140 focused GUI/cable
    tests passed (111 ms). Incremental Debug library/test/app builds passed, and
@@ -328,7 +328,49 @@ a replacement scope. The feature is not complete.
    Focused review found no remaining material issue. Incremental native/app
    builds passed, and all 190 focused checks including GPU tests passed
    (5076 ms), with the separate benchmark skipped and an empty GPU error log.
+   Further cable input audit found that native capture cancellation cleared the
+   HUD widget state but left its independent cable drag alive. The engaged
+   editor's special HUD move path also bypassed Scene's ordinary cancellation.
+   GuiHud now cancels its drag when pointer state is cleared and handles
+   zero-button mouse moves before cable updates. Held drags and cable hover
+   identity remain intact. Component checks use real Trigger instances and the
+   production HUD with both cable endpoints clipped; before the fix, both
+   cancellation cases retained the drag and submitted an unwanted candidate on
+   release. After the fix they submit nothing. A third check grabs the displayed
+   curve body, reconnects ADC19 to ADC1 on the original trigger, and verifies a
+   replacement revision cancels stale ownership without submitting an edit.
+   These exercise the actual GUI routing path with a recorded submission
+   callback; they do not prove audio-boundary adoption. Final focused review
+   found no material issue. The expanded filter includes
+   `HudCableInteractionTests.*`; all 193 selected checks including GPU tests
+   passed (5469 ms), with the separate benchmark skipped and an empty GPU error
+   log. Incremental native/app builds and the threading audit passed.
 7. Final requirement audit and HTML completion report: pending.
+
+## Remaining verification from the plan audit
+
+This audit found concrete work still needed; the feature is not complete.
+Existing native/component/GPU evidence is recorded above and remains narrower
+than the plan's full live-runtime completion gate.
+
+| Plan requirement | Current evidence | Remaining proof |
+| --- | --- | --- |
+| Real pages, defaults, ownership and stable commands | Production composition and receiver tests; actual All/Off control clicks | Channel override limits/shortcut feedback, local phase owner propagation, CLICK owner state and Mixed-state preservation through initialized Scene controls |
+| Resize, motion and pointer priority | Actual 480x320/1000x650 resize, reversal and resize during motion; empty-size handler checks; normal/editor modifier input | Actual OS maximize/restore; stationary-pointer hover through moving panel bounds; minimum interactive client size and control usability |
+| Adaptive input rows and full identity | Zero/one/many geometry, 80px floor, widget reuse/offset clamp; measured labels and popup checks | Live playback visual confirmation |
+| Trigger viewport and actions | Fixed 100px cards, clipping, scroll extremes and actual native wheel | Add/Delete confirmation and published list replacement after resize, including reveal/clamp and minimum-window usability |
+| Retained cable presentation and interactions | Boundary/projection/nested clipping tests, GPU continuations, real HUD body reconnect/cancel/stale-revision checks | Live routing adoption and camera/drag interactions under playback; actual rendered body-hit checks in the final live pass |
+| Panels, popup/edit cleanup and hidden pages | Retained active host, numeric finalization, subtree popup/focus/capture checks; GPU page/opacity snapshots | Full runtime popup/edit/tab exercise under playback; stationary-pointer check noted above |
+| Text, palette and shader scope restoration | Real font metrics, control families/caret/popup rows and nested opacity pixel checks; populated Scene/editor captures | Final visual review during playback |
+| Timing boundaries and real-time safety | Existing command owners retained; no new audio callback policy; threading audits and focused reviews | Remote-follow regression selection and real playback confirmation of relocated settings |
+| Same-scene frame distributions and underruns | Shared populated-scene benchmark and historical no-playback baseline pair | Device/rate/buffer details, actual underrun observation, equivalent verified interactions and repeated/interleaved live runs |
+| Reviewed commits and final deliverable | Focused slices committed after review | Requirement-by-requirement completion audit, then the requested HTML completion report and suggested next prompt |
+
+The ASIO device/rate/buffer question remains unanswered. This session still has
+no `node_repl` capability required by the computer-use skill, so foreground
+desktop automation has not been attempted. Neither limitation substitutes for
+the remaining live verification. The next independent checks are the missing
+Scene control bindings, trigger actions, stationary hover and minimum viewport.
 
 ## Local build setup
 

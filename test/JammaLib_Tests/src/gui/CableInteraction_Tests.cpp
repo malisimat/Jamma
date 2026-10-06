@@ -4,6 +4,7 @@
 #include "gui/GuiHud.h"
 #include "gui/GuiScrollPanel.h"
 #include "engine/RigSnapshot.h"
+#include "engine/Trigger.h"
 
 using gui::CableInteraction;
 
@@ -213,6 +214,98 @@ TEST_F(HudCableGeometryTests, PopulatedRoutesAndUnavailableInputsSurviveClipping
 	}
 	EXPECT_LT(firstY, lastY);
 	EXPECT_TRUE(unavailable);
+}
+
+class HudCableInteractionTests : public HudCableGeometryTests
+{
+protected:
+	void SetUp() override
+	{
+		auto routing = std::make_shared<engine::RigSnapshot>(); routing->Revision = 42u;
+		for (unsigned int index = 0; index < 12; ++index) {
+			io::RigFile::Trigger trigger{}; trigger.Id = "trigger-" + std::to_string(index);
+			trigger.Name = trigger.Id; if (index == 11) trigger.InputChannels = { 19u };
+			routing->Rig.Triggers.push_back(trigger);
+			engine::RigSnapshotTrigger runtime{}; runtime.Id = trigger.Id; runtime.RigTriggerIndex = index;
+			runtime.Instance = std::make_shared<engine::Trigger>(engine::TriggerParams{});
+			routing->Triggers.push_back(runtime);
+			io::RigFileRouting::TriggerResolution resolved{};
+			resolved.TriggerIndex = index; resolved.TriggerName = trigger.Name;
+			if (index == 11) resolved.Sources.push_back({ io::RigFileRouting::SourceKind::Adc, 19u, {}, true });
+			routing->Graph.Triggers.push_back(resolved);
+		}
+		Routing = routing;
+		gui::GuiHudParams params; params.Size = { 1200u, 800u };
+		params.SubmitRigEdit = [this](const io::RigFile& candidate) { Submissions.push_back(candidate); return true; };
+		Hud = std::make_shared<gui::GuiHud>(params); Hud->SetRoutingConfig(20u, {}, *Routing);
+		Hud->SetCableRevealHeld(true); Hud->Init();
+		std::vector<std::shared_ptr<gui::GuiScrollPanel>> scrolls; Layout(Hud, scrolls);
+		Hud->BuildInteractionGeometry(Endpoints, Cables); ASSERT_EQ(1u, Cables.size());
+		ASSERT_TRUE(Cables.front().Start.Continuation); ASSERT_TRUE(Cables.front().Finish.Continuation);
+		const auto target = std::find_if(Endpoints.begin(), Endpoints.end(), [](const auto& endpoint) {
+			return endpoint.Source && endpoint.Source->AdcChannel == 1u;
+		});
+		ASSERT_NE(Endpoints.end(), target); ReplacementSocket = target->Position;
+	}
+	void BeginBodyDrag()
+	{
+		const auto curve = CableInteraction::CurveControls(Cables.front().Route.Kind,
+			Cables.front().Start.Position, Cables.front().Finish.Position);
+		const auto point = CableInteraction::EvaluateCurve(curve, 0.15f);
+		actions::TouchAction down; down.Touch = actions::TouchAction::TOUCH_MOUSE;
+		down.Index = 0; down.State = actions::TouchAction::TOUCH_DOWN;
+		down.Position = { static_cast<int>(point.x), static_cast<int>(point.y) };
+		ASSERT_TRUE(CableInteraction::HitCable(Cables, down.Position, 6.0f));
+		ASSERT_TRUE(Hud->OnAction(down).IsEaten); ASSERT_TRUE(Hud->HasCableDrag());
+	}
+	void MoveToReplacement(unsigned int buttons)
+	{
+		actions::TouchMoveAction move; move.Touch = actions::TouchAction::TOUCH_MOUSE;
+		move.MouseButtonsDown = buttons; move.Position = ReplacementSocket;
+		EXPECT_TRUE(Hud->OnAction(move).IsEaten);
+	}
+	void Release()
+	{
+		actions::TouchAction up; up.Touch = actions::TouchAction::TOUCH_MOUSE;
+		up.Index = 0; up.State = actions::TouchAction::TOUCH_UP; up.Position = ReplacementSocket;
+		Hud->OnAction(up);
+	}
+	std::shared_ptr<const engine::RigSnapshot> Routing;
+	std::shared_ptr<gui::GuiHud> Hud;
+	std::vector<io::RigFile> Submissions;
+	std::vector<CableInteraction::Endpoint> Endpoints;
+	std::vector<CableInteraction::Cable> Cables;
+	utils::Position2d ReplacementSocket{};
+};
+
+TEST_F(HudCableInteractionTests, PointerClearingCancelsClippedBodyDragWithoutSubmittingEdit)
+{
+	BeginBodyDrag(); ASSERT_TRUE(Hud->HasCableDrag());
+	MoveToReplacement(1u); EXPECT_TRUE(Hud->HasCableDrag());
+	Hud->ClearPointerState(); EXPECT_FALSE(Hud->HasCableDrag());
+	Release(); EXPECT_TRUE(Submissions.empty());
+}
+
+TEST_F(HudCableInteractionTests, ZeroButtonMoveCancelsClippedBodyDragInEditorHudPath)
+{
+	Hud->SetLoopEditorMode(true);
+	BeginBodyDrag(); ASSERT_TRUE(Hud->HasCableDrag());
+	MoveToReplacement(0u); EXPECT_FALSE(Hud->HasCableDrag());
+	Release(); EXPECT_TRUE(Submissions.empty());
+}
+
+TEST_F(HudCableInteractionTests, ClippedBodyReconnectPreservesOriginalTriggerAndStaleRevisionCancels)
+{
+	BeginBodyDrag(); ASSERT_TRUE(Hud->HasCableDrag()); MoveToReplacement(1u); Release();
+	ASSERT_EQ(1u, Submissions.size());
+	EXPECT_EQ((std::vector<unsigned int>{ 1u }), Submissions.front().Triggers[11].InputChannels);
+	EXPECT_EQ(Routing->Rig.Triggers[11].Id, Submissions.front().Triggers[11].Id);
+	for (size_t index = 0; index < 11; ++index) EXPECT_TRUE(Submissions.front().Triggers[index].InputChannels.empty());
+	Submissions.clear(); BeginBodyDrag(); ASSERT_TRUE(Hud->HasCableDrag());
+	auto replacement = *Routing; ++replacement.Revision;
+	replacement.Rig.Triggers[11].Id = "replacement-trigger";
+	Hud->SetRoutingConfig(20u, {}, replacement); EXPECT_FALSE(Hud->HasCableDrag());
+	Release(); EXPECT_TRUE(Submissions.empty());
 }
 
 class CableInteractionTests : public ::testing::Test

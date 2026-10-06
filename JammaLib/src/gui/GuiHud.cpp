@@ -1047,6 +1047,12 @@ void GuiHud::_CancelCableDrag()
 	_cablesDirty = true;
 }
 
+void GuiHud::ClearPointerState()
+{
+	GuiPanel::ClearPointerState();
+	if (_cableDrag) _CancelCableDrag();
+}
+
 void GuiHud::SetLoopEditorMode(bool enabled)
 {
 	if (_loopEditorMode == enabled) return;
@@ -1312,6 +1318,13 @@ actions::ActionResult GuiHud::OnAction(actions::TouchAction action)
 
 actions::ActionResult GuiHud::OnAction(actions::TouchMoveAction action)
 {
+	// The engaged editor forwards HUD moves before Scene's ordinary capture
+	// routing. Handle native mouse capture loss here as well as via pointer clear.
+	if (_cableDrag && action.Touch == actions::TouchAction::TOUCH_MOUSE && action.MouseButtonsDown == 0u)
+	{
+		ClearPointerState();
+		return { true, {}, {}, actions::ACTIONRESULT_DEFAULT, nullptr, {} };
+	}
 	if (_cableDrag && (_RoutingEditAvailability() != RoutingEditAvailability::Ready ||
 		(_cableDrag->Route.TriggerIndex < _triggers.size() && !_CanEditTrigger(_cableDrag->Route.TriggerIndex))))
 		_CancelCableDrag();
