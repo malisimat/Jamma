@@ -165,13 +165,12 @@ bool GuiMainPanel::AdvanceAnimation(float elapsedSeconds)
 
 void GuiMainPanel::_UpdatePresentation()
 {
-	const int margin = std::min(20, static_cast<int>(_viewport.Width) / 2);
+	const int margin = std::min(8, static_cast<int>(_viewport.Width) / 2);
 	const auto size = _frame->GetSize();
-	const int handleY = _handle->Position().Y;
 	const float hidden = 1.0f - PresentedOpacity();
 	_frame->SetPosition(_selectionOnly
-		? Position2d{ margin, handleY - static_cast<int>(size.Height) + static_cast<int>(std::lround(hidden * (size.Height + _handle->GetSize().Height))) }
-		: Position2d{ margin - static_cast<int>(std::lround(hidden * (size.Width + margin))), static_cast<int>(_handle->GetSize().Height) });
+		? Position2d{ margin, static_cast<int>(_viewport.Height) - margin - static_cast<int>(size.Height) + static_cast<int>(std::lround(hidden * (size.Height + _handle->GetSize().Height))) }
+		: Position2d{ margin - static_cast<int>(std::lround(hidden * (size.Width + margin))), std::min(8, static_cast<int>(_viewport.Height) / 2) });
 	_frame->SetVisible(_transition > 0.0f && size.Width > 0u && size.Height > 0u);
 }
 
@@ -214,17 +213,17 @@ void GuiMainPanel::SetViewportSize(Size2d viewport)
 void GuiMainPanel::_Layout()
 {
 	const int width = static_cast<int>(_viewport.Width), height = static_cast<int>(_viewport.Height);
-	const int margin = std::min(20, width / 2);
+	const int margin = std::min(8, width / 2);
 	const int panelWidth = std::min(_selectionOnly ? 448 : 360, std::max(0, width - 2 * margin));
 	const int handleHeight = std::min(28, height / 2);
-	const int panelHeight = std::min(_selectionOnly ? 152 : 320, std::max(0, height - handleHeight - 20));
-	const int handleY = _selectionOnly ? height - handleHeight : 0;
+	const int panelHeight = std::min(_selectionOnly ? 152 : 320, std::max(0, height - 2 * std::min(8, height / 2)));
+	const int handleY = _selectionOnly ? height - std::min(8, height / 2) - handleHeight : std::min(8, height / 2);
 	_handle->SetPosition({ margin, handleY });
 	_handle->SetSize({ static_cast<unsigned int>(std::min(28, std::max(0, width - 2 * margin))), static_cast<unsigned int>(handleHeight) });
 	_handle->SetVisible(width > 0 && handleHeight > 0);
 	_frame->SetSize({ static_cast<unsigned int>(panelWidth), static_cast<unsigned int>(panelHeight) });
 	_UpdatePresentation();
-	const int padding = std::min(12, std::min(panelWidth, panelHeight) / 2);
+	const int padding = std::min(8, std::min(panelWidth, panelHeight) / 2);
 	const int inner = std::max(0, panelWidth - 2 * padding);
 	_edge->SetPosition({ padding, std::max(0, panelHeight - 2) });
 	_edge->SetSize({ static_cast<unsigned int>(inner), static_cast<unsigned int>(std::min(1, panelHeight)) });
