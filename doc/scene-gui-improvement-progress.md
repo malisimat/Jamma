@@ -184,9 +184,23 @@ a replacement scope. The feature is not complete.
    no hot-path lock/wait additions; its only flagged new ownership/lock state
    belongs to the test context's setup/teardown. Captures and logs are local
    ignored artifacts under `test/JammaLib_Tests/bin/x64/Debug/`.
+   A second opt-in GPU pass now covers buttons, toggles, textboxes, numeric
+   inputs and dropdowns at 17/25/36/43 px heights under a translated parent.
+   Readback asserts visible glyph pixels in all 20 controls and in each of three
+   popup rows. Reviewed captures include ascenders/descenders/digits, focused
+   selection/caret after resizing through all four heights, and dropdown rows
+   with a long clipped label. Every focus-induced RGB change lies inside the
+   baseline-derived caret/underline bands. Nested 0.5 x 0.5 scopes produce the
+   expected 25% blend on an isolated textured centre; an ordinary texture/font
+   control drawn afterward remains pixel-identical to its unfaded reference.
+   Dropdown lists now use the existing opaque-centre rounded skin with an
+   explicit configurable graphite tint, improving row readability over other
+   controls. Focused review found no material resource/lifecycle defect.
+   Incremental Debug library/native/app builds passed, all 180 focused checks
+   including both GPU passes passed (2676 ms), and the threading audit found
+   no hot-path lock/wait or shared-state additions.
    This is component/shader evidence with synthetic routing. Full Window/Scene
-   composition, popup/caret/control-family visual coverage, native desktop
-   resizing/input, audio playback and baseline frame-time/underrun comparison
+   composition, native desktop resizing/input, audio playback and baseline frame-time/underrun comparison
    remain unverified. The computer-use skill was read, but this session exposes
    no required `node_repl` tool; no desktop automation was attempted.
 7. Final requirement audit and HTML completion report: pending.

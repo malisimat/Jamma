@@ -87,7 +87,8 @@ namespace gui
 		unsigned int             InitIndex        = 0u;
 		unsigned int             RowHeight        = DefaultRowHeight;
 		unsigned int             Padding          = DefaultPadding;
-		std::string              ListTexture      = "rounded_but";
+		std::string              ListTexture      = "rounded_but_on";
+		glm::vec3                ListTintColor    = GuiStyle::Graphite();
 		std::string              HighlightTexture = "blue";
 		std::weak_ptr<base::ActionReceiver> Receiver;
 	};

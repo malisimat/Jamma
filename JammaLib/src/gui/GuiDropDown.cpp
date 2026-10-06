@@ -224,6 +224,7 @@ std::shared_ptr<GuiDropDownList> GuiDropDown::_MakeList(const GuiDropDownParams&
 		"", "", "", {});
 	lp.Texture = params.ListTexture;
 	lp.TextureShader = params.TextureShader;
+	lp.TintColor = params.ListTintColor;
 	lp.GuiPassThrough = false;
 	return std::make_shared<GuiDropDownList>(lp,
 		params.Items,

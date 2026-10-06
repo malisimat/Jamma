@@ -5,6 +5,8 @@
 #include "engine/Scene.h"
 #include "graphics/GlDeleteQueue.h"
 #include "resources/ResourcePaths.h"
+#include "gui/GuiDropDown.h"
+#include "gui/GuiNumericInput.h"
 #include <filesystem>
 #include <cstdlib>
 
@@ -223,6 +225,26 @@ public:
 				}
 		return true;
 	}
+	static void BeginFrame(graphics::GlDrawContext& context, utils::Size2d size, float background)
+	{
+		context.Bind(); glDisable(GL_DEPTH_TEST); glEnable(GL_BLEND);
+		glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+		glClearColor(background, background, background, 1.0f); glClear(GL_COLOR_BUFFER_BIT);
+		context.ClearMvp();
+		auto projection = glm::translate(glm::mat4(1.0f), glm::vec3(-1.0f, -1.0f, 0.0f));
+		context.PushMvp(glm::scale(projection, glm::vec3(2.0f / size.Width, 2.0f / size.Height, 1.0f)));
+	}
+	static size_t WhitePixels(const std::vector<unsigned char>& pixels, utils::Size2d size, utils::Rect2d region)
+	{
+		region = region.Intersected({ 0, 0, static_cast<int>(size.Width), static_cast<int>(size.Height) });
+		size_t count = 0;
+		for (int y = region.Bottom; y < region.Top; ++y)
+			for (int x = region.Left; x < region.Right; ++x) {
+				const auto offset = (static_cast<size_t>(y) * size.Width + x) * 4u;
+				if (pixels[offset] > 210 && pixels[offset + 1] > 210 && pixels[offset + 2] > 210) ++count;
+			}
+		return count;
+	}
 private:
 	HWND Wnd = nullptr;
 	HDC Dc = nullptr;
@@ -268,12 +290,7 @@ TEST(GuiRenderEvidence, ProductionPanelsHudAndFontPathsRenderOnActualGpu)
 	const auto render = [&](const std::string& name) {
 		graphics::GlDrawContext context(size, base::DrawContext::TEXTURE);
 		context.Initialise();
-		context.Bind(); glDisable(GL_DEPTH_TEST); glEnable(GL_BLEND); glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-		glClearColor(0.85f, 0.85f, 0.85f, 1.0f); glClear(GL_COLOR_BUFFER_BIT);
-		context.ClearMvp();
-		auto projection = glm::translate(glm::mat4(1.0f), glm::vec3(-1.0f, -1.0f, 0.0f));
-		projection = glm::scale(projection, glm::vec3(2.0f / size.Width, 2.0f / size.Height, 1.0f));
-		context.PushMvp(projection);
+		NativeGuiRenderEvidence::BeginFrame(context, size, 0.85f);
 		hud->Draw(context); settings->Draw(context); selection->Draw(context);
 		// The same texture/font draws follow both fully opaque and fading panels.
 		probe->Draw(context);
@@ -318,4 +335,131 @@ TEST(GuiRenderEvidence, ProductionPanelsHudAndFontPathsRenderOnActualGpu)
 	EXPECT_TRUE(NativeGuiRenderEvidence::SameRegion(expanded, restored, size, { 700, 200, 900, 236 }));
 	probe->ReleaseResources(); settings->ReleaseResources(); selection->ReleaseResources(); hud->ReleaseResources();
 	scene.Shutdown();
+}
+
+class EvidenceTextBox final : public gui::GuiTextBox
+{
+public:
+	using GuiTextBox::GuiTextBox;
+	std::shared_ptr<gui::GuiLabel> Label() const { return _label; }
+};
+
+TEST(GuiRenderEvidence, ControlFamiliesCaretSelectionPopupAndNestedOpacity)
+{
+	const char* directory = std::getenv("JAMMA_RENDER_EVIDENCE_DIR");
+	if (!directory || !*directory) GTEST_SKIP() << "Set JAMMA_RENDER_EVIDENCE_DIR for GPU evidence.";
+	const std::filesystem::path output(directory);
+	std::filesystem::create_directories(output);
+	NativeGuiRenderEvidence gpu;
+	ASSERT_TRUE(gpu.Initialize());
+	resources::ResourceLib resources;
+	ASSERT_TRUE(NativeGuiRenderEvidence::LoadUiResources(resources));
+	const utils::Size2d size{ 900, 600 };
+	gui::GuiPopupManager popups;
+	base::GuiElementParams rootParams;
+	rootParams.Position = { 20, 50 }; rootParams.Size = { 860, 530 };
+	auto root = std::make_shared<gui::GuiPanel>(rootParams);
+	std::shared_ptr<EvidenceTextBox> target;
+	std::shared_ptr<gui::GuiDropDown> dropdown;
+	const std::array<unsigned int, 4> heights{ 17, 25, 36, 43 };
+	for (size_t row = 0; row < heights.size(); ++row) {
+		const int y = 440 - static_cast<int>(row) * 65;
+		auto title = gui::GuiLabelParams::PanelHeader("Height " + std::to_string(heights[row]), 150);
+		title.Position = { 0, y + 45 }; root->AddChild(std::make_shared<gui::GuiLabel>(title));
+		auto button = gui::GuiButtonParams::PanelButton(160);
+		button.Position = { 0, y }; button.Size.Height = heights[row]; button.Text = "Agjpq 0123";
+		root->AddChild(std::make_shared<gui::GuiButton>(button));
+		auto toggle = gui::GuiToggleParams::PanelPrimary();
+		toggle.Position = { 172, y }; toggle.Size = { 160, heights[row] };
+		toggle.Text = "Agjpq toggle"; toggle.InitState = gui::GuiToggleParams::TOGGLE_ON;
+		root->AddChild(std::make_shared<gui::GuiToggle>(toggle));
+		auto text = gui::GuiTextBoxParams::PanelInput(160);
+		text.Position = { 344, y }; text.Size.Height = heights[row]; text.Text = "Agjpq 0123";
+		auto box = std::make_shared<EvidenceTextBox>(text); root->AddChild(box);
+		if (heights[row] == 36) target = box;
+		auto numeric = gui::GuiNumericInputParams::PanelInput(160);
+		numeric.Position = { 516, y }; numeric.Size.Height = heights[row]; numeric.InitValue = 0.57;
+		root->AddChild(std::make_shared<gui::GuiNumericInput>(numeric));
+		auto drop = gui::GuiDropDownParams::PanelInput(160);
+		drop.Position = { 688, y }; drop.Size.Height = heights[row];
+		drop.Items = { "Agjpq 0123", "Tall glyphs pq", "Long identity abcdefghijklmnopqrstuvwxyz" };
+		auto control = std::make_shared<gui::GuiDropDown>(drop);
+		control->SetPopupManager(&popups); root->AddChild(control);
+		if (heights[row] == 43) dropdown = control;
+	}
+	// One opaque textured centre isolates the nested multiplier from glyph/fill
+	// overlap. A later ordinary draw separately checks scope restoration.
+	base::GuiElementParams solid;
+	solid.Position = { 520, 40 }; solid.Size = { 160, 36 };
+	solid.Texture = "rounded_but_on"; solid.TextureShader = "texture_tinted"; solid.TintColor = glm::vec3(1.0f);
+	root->AddChild(std::make_shared<gui::GuiPanel>(solid));
+	auto ordinaryParams = gui::GuiButtonParams::PanelButton(180);
+	ordinaryParams.Position = { 20, 10 }; ordinaryParams.Text = "Opaque Agjpq 0123";
+	auto ordinary = std::make_shared<gui::GuiButton>(ordinaryParams);
+	root->Init(); ordinary->Init();
+	root->InitResources(resources, false); ordinary->InitResources(resources, false);
+	ASSERT_TRUE(target); ASSERT_TRUE(dropdown);
+	const auto render = [&](const std::string& name, bool nested = false) {
+		graphics::GlDrawContext context(size, base::DrawContext::TEXTURE); context.Initialise();
+		NativeGuiRenderEvidence::BeginFrame(context, size, 0.1f);
+		{
+			auto parent = context.WithOpacity(nested ? 0.5f : 1.0f);
+			auto child = context.WithOpacity(nested ? 0.5f : 1.0f);
+			root->Draw(context);
+		}
+		ordinary->Draw(context); popups.Draw(context);
+		EXPECT_FLOAT_EQ(1.0f, context.Opacity()); glFinish(); EXPECT_EQ(GL_NO_ERROR, glGetError());
+		auto pixels = context.GetPixels();
+		EXPECT_TRUE(NativeGuiRenderEvidence::SaveBmp(output / (name + ".bmp"), size, pixels));
+		return pixels;
+	};
+	const auto normal = render("control-families");
+	for (size_t row = 0; row < heights.size(); ++row)
+		for (int column = 0; column < 5; ++column) {
+			const int x = 20 + column * 172, y = 490 - static_cast<int>(row) * 65;
+			EXPECT_GT(NativeGuiRenderEvidence::WhitePixels(normal, size, { x, y, x + 160, y + static_cast<int>(heights[row]) }), 5u)
+				<< "No visible glyphs in control column " << column << " at height " << heights[row];
+		}
+	const auto faded = render("nested-opacity", true);
+	for (unsigned int channel = 0; channel < 3; ++channel)
+		EXPECT_NEAR(255.0f * (0.25f + 0.1f * 0.75f), faded[(108u * size.Width + 620u) * 4u + channel], 2.0f);
+	EXPECT_TRUE(NativeGuiRenderEvidence::SameRegion(normal, faded, size, { 20, 10, 200, 46 }));
+	for (const auto height : { 36u, 17u, 25u, 43u }) {
+		target->SetSize({ 160, height }); target->ClearFocus();
+		const auto unfocused = render("text-unfocused-" + std::to_string(height));
+		target->RequestFocus();
+		actions::KeyAction key; key.KeyActionType = actions::KeyAction::KEY_DOWN;
+		key.KeyChar = VK_END; key.Modifiers = base::Action::MODIFIER_NONE; target->OnAction(key);
+		key.KeyChar = VK_HOME; key.Modifiers = base::Action::MODIFIER_SHIFT; target->OnAction(key);
+		ASSERT_TRUE(target->HasSelection());
+		const auto focused = render("text-selection-" + std::to_string(height));
+		const auto label = target->Label(); const auto font = label->ResolvedFont(); ASSERT_TRUE(font);
+		const auto labelPosition = label->Position(); const auto labelSize = label->GetSize();
+		const utils::Rect2d frame{ labelPosition.X, labelPosition.Y,
+			labelPosition.X + static_cast<int>(labelSize.Width), labelPosition.Y + static_cast<int>(labelSize.Height) };
+		const auto line = label->LineFrame(); ASSERT_TRUE(line);
+		auto selection = gui::GuiTextBox::ResolveTextBand(frame, *line, 0, font->MeasureString(target->Text()));
+		selection.Top = (std::min)(selection.Top, selection.Bottom + 2);
+		const auto caret = gui::GuiTextBox::ResolveTextBand(frame, *line, 0, 2);
+		const auto global = target->GlobalPosition();
+		selection = selection.Translated(global); const auto caretGlobal = caret.Translated(global);
+		size_t changed = 0;
+		for (int y = 0; y < static_cast<int>(size.Height); ++y)
+			for (int x = 0; x < static_cast<int>(size.Width); ++x) {
+				const auto index = (static_cast<size_t>(y) * size.Width + x) * 4u;
+				if (std::equal(unfocused.begin() + index, unfocused.begin() + index + 3u, focused.begin() + index)) continue;
+				++changed;
+				EXPECT_TRUE(selection.Contains({ x, y }) || caretGlobal.Contains({ x, y })) << x << "," << y;
+			}
+		EXPECT_GT(changed, 0u); target->ClearFocus();
+	}
+	dropdown->Open(); ASSERT_TRUE(popups.IsOpen());
+	const auto popupPixels = render("dropdown-popup-rows");
+	const auto popupPosition = popups.Top()->GlobalPosition();
+	for (int row = 0; row < 3; ++row) {
+		const int y = popupPosition.Y + row * gui::GuiDropDownParams::DefaultRowHeight;
+		EXPECT_GT(NativeGuiRenderEvidence::WhitePixels(popupPixels, size, { popupPosition.X + 8, y,
+			popupPosition.X + 152, y + static_cast<int>(gui::GuiDropDownParams::DefaultRowHeight) }), 5u);
+	}
+	dropdown->Close(); ordinary->ReleaseResources(); root->ReleaseResources();
 }
