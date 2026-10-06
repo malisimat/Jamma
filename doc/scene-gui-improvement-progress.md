@@ -43,9 +43,26 @@ a replacement scope. The feature is not complete.
    rendering/hit geometry: in progress. Render/hit control points now share one
    construction path and the same 24-point line strip as the shader. Capture
    and station curved-hit/chord-miss tests passed; all 140 focused GUI/cable
-   tests passed (111 ms). Incremental Debug library/test builds passed, and
+   tests passed (111 ms). Incremental Debug library/test/app builds passed, and
    focused independent review found no concrete defect. Boundary continuation
-   geometry and projection validity remain pending.
+   geometry and projection validity are now implemented. Station anchors use
+   optional floating-point projection with explicit finite/front/depth checks.
+   Presented endpoints clamp to effective scroll/window bounds while retaining
+   actual anchors and original revision/route handles. Source and trigger
+   visibility no longer gates connected route construction. Empty/invalid
+   geometry omits presentation while leaving the routing graph intact.
+   Continuation notches are decorative and socket snapping stays restricted
+   to real visible sockets. Fans contract near visible boundaries and spread
+   along clipped edges continuously. Existing cable drags refresh their fixed
+   displayed endpoint after geometry changes. Shader uploads/draws batch at
+   16 curves to respect the 64-control-point uniform capacity.
+   Geometry tests cover projection rejection, all boundary edges/corners,
+   continuity and marker hit rejection. Real HUD tests cover both ends clipped,
+   scroll restoration, invalid/empty presentation, 41 routes and unavailable
+   input identity. All 147 focused GUI/cable/Scene tests passed (116 ms).
+   Final independent review found no remaining concrete defect in this slice.
+   Native correctness evidence is recorded; runtime/visual and performance
+   checks remain required in slice 6.
 3. Actual HUD viewport layout, adaptive source cards and trigger viewport:
    pending.
 4. Production settings pages, command adapters, focus/capture cleanup and

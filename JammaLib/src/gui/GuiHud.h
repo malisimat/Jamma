@@ -63,7 +63,7 @@ namespace gui
 		{
 			size_t StationIndex = 0u;
 			std::string StationName;
-			utils::Position2d screenPos;
+			std::optional<glm::dvec2> ScreenPosition;
 			glm::vec4 color;
 		};
 
@@ -95,6 +95,10 @@ namespace gui
 		static std::vector<CableRoute> BuildCableRoutes(const engine::RoutingGraph& graph);
 		static int RevealScrollOffset(int currentOffset, int viewportHeight,
 			int contentHeight, int itemTop, int itemBottom);
+		// UI-owned geometry snapshot: visible real snap sockets and presented
+		// curves with original route identity, including decorative continuations.
+		void BuildInteractionGeometry(std::vector<CableInteraction::Endpoint>& endpoints,
+			std::vector<CableInteraction::Cable>& cables) const;
 
 	protected:
 		virtual void _InitResources(resources::ResourceLib& resourceLib, bool forceInit) override;
@@ -156,8 +160,6 @@ namespace gui
 		void _DrawOverlayElement(base::DrawContext& ctx,
 			const std::shared_ptr<base::GuiElement>& element) const;
 		void _RebuildCableVertices();
-		void _BuildInteractionGeometry(std::vector<CableInteraction::Endpoint>& endpoints,
-			std::vector<CableInteraction::Cable>& cables) const;
 		bool _CableVisible(const CableInteraction::Cable& cable) const;
 		void _FilterCableHits(std::vector<CableInteraction::Endpoint>& endpoints,
 			std::vector<CableInteraction::Cable>& cables, utils::Position2d point) const;
@@ -250,6 +252,7 @@ namespace gui
 		std::optional<utils::Position2d> _cableHoverPoint;
 		std::vector<StationAnchor> _stationAnchors;
 		static constexpr int _CableSegments = CableInteraction::CurveVertexCount;
+		static constexpr size_t _CableBatchSize = 16u;
 		static constexpr float _SocketHitRadius = 14.0f;
 		static constexpr float _CableHitRadius = 9.0f;
 		static constexpr float _SnapRadius = 28.0f;

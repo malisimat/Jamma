@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <array>
 #include <glm/vec2.hpp>
+#include <glm/vec4.hpp>
 #include <optional>
 #include <string>
 #include <vector>
@@ -36,6 +37,8 @@ namespace gui
 			bool Available = true;
 			// Real socket hit/snap bounds, in the same space as Position.
 			std::optional<utils::Rect2d> HitBounds;
+			bool Continuation = false;
+			std::optional<glm::dvec2> ActualPosition;
 		};
 
 		struct Cable
@@ -53,6 +56,7 @@ namespace gui
 			std::optional<io::RigFileRouting::Source> OriginalSource;
 			utils::Position2d Pointer{};
 			std::optional<Endpoint> Snap;
+			bool FromCable = false;
 		};
 
 		struct Release
@@ -66,6 +70,16 @@ namespace gui
 		using Curve = std::array<glm::vec2, 4>;
 		static Curve CurveControls(RouteKind kind, utils::Position2d start, utils::Position2d finish);
 		static glm::vec2 EvaluateCurve(const Curve& curve, float t);
+		struct BoundaryPoint
+		{
+			utils::Position2d Position;
+			bool Clipped = false;
+		};
+		// GL clip convention: positive W and depth inside [-W, W]. X/Y may
+		// be offscreen; keep them floating point until bounded for presentation.
+		static std::optional<glm::dvec2> ProjectAnchor(glm::vec4 clip, utils::Size2d window);
+		static std::optional<BoundaryPoint> ResolveBoundary(glm::dvec2 point, utils::Rect2d bounds);
+		static glm::dvec2 FannedPoint(glm::dvec2 point, double offset, bool horizontal, utils::Rect2d bounds);
 		static bool HitTest(const Endpoint& endpoint, utils::Position2d point, float radius);
 		static std::optional<size_t> HitEndpoint(const std::vector<Endpoint>& endpoints,
 			utils::Position2d point,

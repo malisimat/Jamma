@@ -2477,9 +2477,6 @@ void Scene::_UpdateHudStationAnchors()
 	if (!_hudPanel || (_sizeParams.Size.Width == 0) || (_sizeParams.Size.Height == 0))
 		return;
 
-	const float w = static_cast<float>(_sizeParams.Size.Width);
-	const float h = static_cast<float>(_sizeParams.Size.Height);
-
 	std::vector<gui::GuiHud::StationAnchor> anchors;
 	anchors.reserve(_stations.size());
 
@@ -2488,16 +2485,8 @@ void Scene::_UpdateHudStationAnchors()
 		const auto& station = _stations[stationIndex];
 		const auto modelPos = station->TopCapModelPosition();
 		auto clip = _viewProj * glm::vec4(modelPos.X, modelPos.Y, 0.0f, 1.0f);
-		utils::Position2d screenPos{ -9999, -9999 };
-		if (std::abs(clip.w) > 1e-6f)
-		{
-			auto ndc = glm::vec3(clip) / clip.w;
-			screenPos = {
-				static_cast<int>((ndc.x + 1.0f) * 0.5f * w),
-				static_cast<int>((ndc.y + 1.0f) * 0.5f * h)
-			};
-		}
-		anchors.push_back({ stationIndex, station->Name(), screenPos, glm::vec4(0.85f, 0.90f, 0.95f, 0.45f) });
+		anchors.push_back({ stationIndex, station->Name(),
+			gui::CableInteraction::ProjectAnchor(clip, _sizeParams.Size), glm::vec4(0.85f, 0.90f, 0.95f, 0.45f) });
 	}
 
 	_hudPanel->SetStationAnchors(std::move(anchors));

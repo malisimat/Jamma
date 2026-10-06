@@ -1,7 +1,219 @@
 #include "gtest/gtest.h"
 #include "gui/CableInteraction.h"
+#include <limits>
+#include "gui/GuiHud.h"
+#include "gui/GuiScrollPanel.h"
+#include "engine/RigSnapshot.h"
 
 using gui::CableInteraction;
+
+TEST(CableGeometry, BoundaryResolutionKeepsVisiblePointsAndClampsEveryEdge)
+{
+	const utils::Rect2d bounds{ 10, 20, 100, 200 };
+	const auto visible = CableInteraction::ResolveBoundary({ 40, 50 }, bounds);
+	ASSERT_TRUE(visible);
+	EXPECT_EQ((utils::Position2d{ 40, 50 }), visible->Position);
+	EXPECT_FALSE(visible->Clipped);
+	for (const auto& point : { glm::dvec2{ -1e100, 50 }, { 1e100, 50 }, { 40, -1e100 }, { 40, 1e100 },
+		{ -1e100, -1e100 }, { -1e100, 1e100 }, { 1e100, -1e100 }, { 1e100, 1e100 } })
+	{
+		const auto endpoint = CableInteraction::ResolveBoundary(point, bounds);
+		ASSERT_TRUE(endpoint);
+		EXPECT_TRUE(endpoint->Clipped);
+		EXPECT_TRUE(bounds.Contains(endpoint->Position));
+	}
+	EXPECT_EQ(10, CableInteraction::ResolveBoundary({ -1e100, 50 }, bounds)->Position.X);
+	EXPECT_EQ(99, CableInteraction::ResolveBoundary({ 1e100, 50 }, bounds)->Position.X);
+	EXPECT_EQ(20, CableInteraction::ResolveBoundary({ 40, -1e100 }, bounds)->Position.Y);
+	EXPECT_EQ(199, CableInteraction::ResolveBoundary({ 40, 1e100 }, bounds)->Position.Y);
+	EXPECT_FALSE(CableInteraction::ResolveBoundary({ 10, 50 }, bounds)->Clipped);
+	EXPECT_EQ(10, CableInteraction::ResolveBoundary({ 9.99, 50 }, bounds)->Position.X);
+	EXPECT_FALSE(CableInteraction::ResolveBoundary({ 50, 50 }, {}));
+	EXPECT_FALSE(CableInteraction::ResolveBoundary({ std::numeric_limits<double>::infinity(), 0 }, bounds));
+	EXPECT_FALSE(CableInteraction::ResolveBoundary({ 0, std::numeric_limits<double>::quiet_NaN() }, bounds));
+}
+
+TEST(CableGeometry, ProjectionAcceptsOffscreenAnchorsButRejectsInvalidDepth)
+{
+	const utils::Size2d window{ 100u, 200u };
+	const auto center = CableInteraction::ProjectAnchor({ 0, 0, 0, 1 }, window);
+	ASSERT_TRUE(center);
+	EXPECT_DOUBLE_EQ(50.0, center->x);
+	EXPECT_DOUBLE_EQ(100.0, center->y);
+	const auto distant = CableInteraction::ProjectAnchor({ -1e30f, 1e30f, 0, 1 }, window);
+	ASSERT_TRUE(distant);
+	EXPECT_LT(distant->x, -1e30);
+	EXPECT_GT(distant->y, 1e30);
+	EXPECT_TRUE(CableInteraction::ResolveBoundary(*distant, { 0, 0, 100, 200 }));
+	EXPECT_FALSE(CableInteraction::ProjectAnchor({ 0, 0, 0, -1 }, window));
+	EXPECT_FALSE(CableInteraction::ProjectAnchor({ 0, 0, 0, 0 }, window));
+	EXPECT_FALSE(CableInteraction::ProjectAnchor({ 0, 0, -1.01f, 1 }, window));
+	EXPECT_FALSE(CableInteraction::ProjectAnchor({ 0, 0, 1.01f, 1 }, window));
+	EXPECT_FALSE(CableInteraction::ProjectAnchor({ 0, 0, 0, 1 }, {}));
+	const float invalid = std::numeric_limits<float>::quiet_NaN();
+	for (const auto& clip : { glm::vec4{ invalid, 0, 0, 1 }, { 0, invalid, 0, 1 },
+		{ 0, 0, invalid, 1 }, { 0, 0, 0, invalid } })
+		EXPECT_FALSE(CableInteraction::ProjectAnchor(clip, window));
+}
+
+TEST(CableGeometry, ClippedFansSeparateAlongEdgesAndApproachVisibleSocketsContinuously)
+{
+	const utils::Rect2d bounds{ 0, 0, 100, 100 };
+	const auto low = CableInteraction::ResolveBoundary(CableInteraction::FannedPoint({ -1000, 50 }, -7, true, bounds), bounds);
+	const auto high = CableInteraction::ResolveBoundary(CableInteraction::FannedPoint({ -1000, 50 }, 7, true, bounds), bounds);
+	ASSERT_TRUE(low);
+	ASSERT_TRUE(high);
+	EXPECT_EQ(0, low->Position.X);
+	EXPECT_EQ(0, high->Position.X);
+	EXPECT_EQ(43, low->Position.Y);
+	EXPECT_EQ(57, high->Position.Y);
+	const auto above = CableInteraction::ResolveBoundary(CableInteraction::FannedPoint({ 50, 1000 }, 7, false, bounds), bounds);
+	EXPECT_EQ(57, above->Position.X);
+	EXPECT_EQ(99, above->Position.Y);
+	const auto entering = CableInteraction::FannedPoint({ -0.00001, 50 }, 7, true, bounds);
+	const auto visible = CableInteraction::FannedPoint({ 0, 50 }, 7, true, bounds);
+	EXPECT_NEAR(visible.x, entering.x, 0.0001);
+	EXPECT_NEAR(visible.y, entering.y, 0.0001);
+	for (const auto offset : { -7.0, 7.0 })
+	{
+		const auto nearRight = CableInteraction::ResolveBoundary(CableInteraction::FannedPoint({ 95, 50 }, offset, true, bounds), bounds);
+		ASSERT_TRUE(nearRight);
+		EXPECT_FALSE(nearRight->Clipped);
+		EXPECT_GE(nearRight->Position.X, 91);
+		EXPECT_LE(nearRight->Position.X, 99);
+		const auto nearTop = CableInteraction::ResolveBoundary(CableInteraction::FannedPoint({ 50, 95 }, offset, false, bounds), bounds);
+		ASSERT_TRUE(nearTop);
+		EXPECT_FALSE(nearTop->Clipped);
+	}
+}
+
+class HudCableGeometryTests : public ::testing::Test
+{
+protected:
+	static void Layout(const std::shared_ptr<base::GuiElement>& element,
+		std::vector<std::shared_ptr<gui::GuiScrollPanel>>& scrolls)
+	{
+		if (auto stack = std::dynamic_pointer_cast<gui::GuiStackPanel>(element))
+			stack->ComputeLayout();
+		if (auto scroll = std::dynamic_pointer_cast<gui::GuiScrollPanel>(element))
+		{
+			scrolls.push_back(scroll);
+			if (scroll->Content()) Layout(scroll->Content(), scrolls);
+		}
+		for (unsigned int index = 0; index < 256; ++index)
+		{
+			const auto child = element->TryGetChild(static_cast<unsigned char>(index));
+			if (!child) break;
+			Layout(child, scrolls);
+		}
+	}
+};
+
+TEST_F(HudCableGeometryTests, BothScrolledEndsAndStationBoundaryRetainOriginalRouteIdentity)
+{
+	gui::GuiHudParams params;
+	params.Size = { 1200u, 800u };
+	auto hud = std::make_shared<gui::GuiHud>(params);
+	engine::RigSnapshot snapshot;
+	snapshot.Revision = 42u;
+	for (size_t index = 0; index < 12; ++index)
+	{
+		io::RigFileRouting::TriggerResolution trigger;
+		trigger.TriggerIndex = index;
+		trigger.TriggerName = "Trigger " + std::to_string(index);
+		if (index == 0) trigger.StationIndex = 0u;
+		if (index == 11) trigger.Sources.push_back({ io::RigFileRouting::SourceKind::Adc, 19u, {}, true });
+		snapshot.Graph.Triggers.push_back(trigger);
+	}
+	hud->SetRoutingConfig(20u, {}, snapshot);
+	hud->SetStationAnchors({ { 0u, "A", glm::dvec2{ -1e30, 400 }, glm::vec4{ 1.0f } } });
+	std::vector<std::shared_ptr<gui::GuiScrollPanel>> scrolls;
+	Layout(hud, scrolls);
+	std::vector<CableInteraction::Endpoint> endpoints;
+	std::vector<CableInteraction::Cable> cables;
+	hud->BuildInteractionGeometry(endpoints, cables);
+	ASSERT_EQ(2u, cables.size());
+	const auto capture = std::find_if(cables.begin(), cables.end(), [](const auto& cable) { return cable.Route.Kind == CableInteraction::RouteKind::Capture; });
+	ASSERT_NE(cables.end(), capture);
+	EXPECT_TRUE(capture->Start.Continuation);
+	EXPECT_TRUE(capture->Finish.Continuation);
+	EXPECT_EQ(42u, capture->Route.Revision);
+	EXPECT_EQ(11u, capture->Route.TriggerIndex);
+	EXPECT_EQ(19u, capture->Start.Source->AdcChannel);
+	EXPECT_TRUE(cables.front().Finish.Continuation);
+	EXPECT_EQ(0, cables.front().Finish.Position.X);
+	for (const auto& endpoint : endpoints) EXPECT_FALSE(endpoint.Continuation);
+	for (const auto& scroll : scrolls) scroll->SetScrollOffset(scroll->MaxScrollOffset());
+	hud->SetStationAnchors({ { 0u, "A", glm::dvec2{ 400, 400 }, glm::vec4{ 1.0f } } });
+	hud->BuildInteractionGeometry(endpoints, cables);
+	ASSERT_EQ(2u, cables.size());
+	EXPECT_FALSE(cables.back().Start.Continuation);
+	EXPECT_FALSE(cables.back().Finish.Continuation);
+	EXPECT_EQ(42u, cables.back().Route.Revision);
+	EXPECT_EQ(11u, cables.back().Route.TriggerIndex);
+	hud->SetStationAnchors({ { 0u, "A", std::nullopt, glm::vec4{ 1.0f } } });
+	hud->BuildInteractionGeometry(endpoints, cables);
+	ASSERT_EQ(1u, cables.size());
+	EXPECT_EQ(CableInteraction::RouteKind::Capture, cables.front().Route.Kind);
+	EXPECT_EQ(2u, gui::GuiHud::BuildCableRoutes(snapshot.Graph).size());
+	hud->SetSize({ 0u, 0u });
+	hud->BuildInteractionGeometry(endpoints, cables);
+	EXPECT_TRUE(cables.empty());
+	EXPECT_TRUE(endpoints.empty());
+	EXPECT_EQ(2u, gui::GuiHud::BuildCableRoutes(snapshot.Graph).size());
+}
+
+TEST_F(HudCableGeometryTests, PopulatedRoutesAndUnavailableInputsSurviveClippingWithBoundedFans)
+{
+	gui::GuiHudParams params;
+	params.Size = { 1200u, 800u };
+	auto hud = std::make_shared<gui::GuiHud>(params);
+	engine::RigSnapshot snapshot;
+	snapshot.Revision = 43u;
+	for (size_t index = 0; index < 20; ++index)
+	{
+		io::RigFileRouting::TriggerResolution trigger;
+		trigger.TriggerIndex = index;
+		trigger.TriggerName = "Trigger " + std::to_string(index);
+		trigger.StationIndex = 0u;
+		trigger.Sources.push_back({ io::RigFileRouting::SourceKind::Adc, static_cast<unsigned int>(index), {}, true });
+		if (index == 19) trigger.Sources.push_back({ io::RigFileRouting::SourceKind::Midi, 0u, "Missing", false });
+		snapshot.Graph.Triggers.push_back(trigger);
+	}
+	hud->SetRoutingConfig(20u, {}, snapshot);
+	hud->SetStationAnchors({ { 0u, "A", glm::dvec2{ -1e30, 400 }, glm::vec4{ 1.0f } } });
+	std::vector<std::shared_ptr<gui::GuiScrollPanel>> scrolls;
+	Layout(hud, scrolls);
+	std::vector<CableInteraction::Endpoint> endpoints;
+	std::vector<CableInteraction::Cable> cables;
+	hud->BuildInteractionGeometry(endpoints, cables);
+	ASSERT_EQ(41u, cables.size());
+	int firstY = 1000;
+	int lastY = 0;
+	bool unavailable = false;
+	for (const auto& cable : cables)
+	{
+		EXPECT_EQ(43u, cable.Route.Revision);
+		if (cable.Route.Kind == CableInteraction::RouteKind::Station)
+		{
+			EXPECT_TRUE(cable.Finish.Continuation);
+			EXPECT_EQ(0, cable.Finish.Position.X);
+			EXPECT_GE(cable.Finish.Position.Y, 393);
+			EXPECT_LE(cable.Finish.Position.Y, 407);
+			firstY = std::min(firstY, cable.Finish.Position.Y);
+			lastY = std::max(lastY, cable.Finish.Position.Y);
+		}
+		else if (cable.Start.Source->MidiDevice == "Missing")
+		{
+			unavailable = true;
+			EXPECT_FALSE(cable.Start.Available);
+			EXPECT_EQ(19u, cable.Route.TriggerIndex);
+			EXPECT_EQ(1u, cable.Route.RouteIndex);
+		}
+	}
+	EXPECT_LT(firstY, lastY);
+	EXPECT_TRUE(unavailable);
+}
 
 class CableInteractionTests : public ::testing::Test
 {
@@ -63,6 +275,20 @@ TEST_F(CableInteractionTests, CableBodyHitAndClosestEndUseScreenSpace)
 	EXPECT_FALSE(CableInteraction::HitCable({ cable }, { 50, 0 }, 5.0f).has_value());
 	EXPECT_EQ(CableInteraction::End::Start, CableInteraction::ClosestEnd(cable, { 20, 0 }));
 	EXPECT_EQ(CableInteraction::End::Finish, CableInteraction::ClosestEnd(cable, { 80, 0 }));
+}
+
+TEST_F(CableInteractionTests, ContinuationMarkersAreDecorativeAndCannotSnap)
+{
+	auto source = Adc(2u, 10, 10);
+	source.Continuation = true;
+	EXPECT_FALSE(CableInteraction::HitTest(source, { 10, 10 }, 14.0f));
+	EXPECT_FALSE(CableInteraction::HitEndpoint({ source }, { 10, 10 }, 14.0f));
+	const CableInteraction::Cable cable{ {}, source, Input(0u, 100, 100) };
+	EXPECT_FALSE(CableInteraction::HitCableEnd({ cable }, { 10, 10 }, 14.0f));
+	CableInteraction::Drag drag{ { 4u, 0u, CableInteraction::RouteKind::Capture },
+		CableInteraction::End::Start, Input(0u, 100, 100), {}, { 10, 10 }, {} };
+	EXPECT_FALSE(CableInteraction::Compatible(drag, source, Rig()));
+	EXPECT_FALSE(CableInteraction::NearestViable(drag, { source }, Rig(), 14.0f));
 }
 
 TEST_F(CableInteractionTests, CurveControlsPreserveCaptureAndStationTangents)

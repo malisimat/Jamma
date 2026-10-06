@@ -29,6 +29,47 @@ glm::vec2 CableInteraction::EvaluateCurve(const Curve& curve, float t)
 		3.0f * u * t * t * curve[2] + t * t * t * curve[3];
 }
 
+std::optional<glm::dvec2> CableInteraction::ProjectAnchor(glm::vec4 clip, utils::Size2d window)
+{
+	if (window.Width == 0u || window.Height == 0u ||
+		!std::isfinite(clip.x) || !std::isfinite(clip.y) || !std::isfinite(clip.z) || !std::isfinite(clip.w) ||
+		clip.w <= 1e-6f || clip.z < -clip.w || clip.z > clip.w)
+		return std::nullopt;
+	return glm::dvec2{
+		(static_cast<double>(clip.x) / clip.w + 1.0) * 0.5 * window.Width,
+		(static_cast<double>(clip.y) / clip.w + 1.0) * 0.5 * window.Height };
+}
+
+std::optional<CableInteraction::BoundaryPoint> CableInteraction::ResolveBoundary(
+	glm::dvec2 point, utils::Rect2d bounds)
+{
+	if (bounds.IsEmpty() || !std::isfinite(point.x) || !std::isfinite(point.y))
+		return std::nullopt;
+	const bool clipped = point.x < bounds.Left || point.x >= bounds.Right ||
+		point.y < bounds.Bottom || point.y >= bounds.Top;
+	// Clamp before conversion: distant projected anchors cannot overflow pixels.
+	return BoundaryPoint{ {
+		static_cast<int>(std::clamp(point.x, static_cast<double>(bounds.Left), static_cast<double>(bounds.Right - 1))),
+		static_cast<int>(std::clamp(point.y, static_cast<double>(bounds.Bottom), static_cast<double>(bounds.Top - 1))) }, clipped };
+}
+
+glm::dvec2 CableInteraction::FannedPoint(glm::dvec2 point, double offset, bool horizontal, utils::Rect2d bounds)
+{
+	// Turn a fan toward the boundary tangent over its own radius as a socket
+	// leaves view. This preserves separation at distant edges and continuity
+	// at entry, without animation that could detach a visible cable/socket.
+	const double clearance = horizontal
+		? std::min(point.x - bounds.Left, (bounds.Right - 1) - point.x)
+		: std::min(point.y - bounds.Bottom, (bounds.Top - 1) - point.y);
+	const double outside = std::max(0.0, -clearance);
+	const double turn = std::clamp(outside / 7.0, 0.0, 1.0);
+	// A visible socket near the edge contracts its fan symmetrically; a fan
+	// offset alone must never turn that visible socket into a continuation.
+	const double spread = std::clamp(clearance / 7.0, 0.0, 1.0);
+	return point + (horizontal ? glm::dvec2{ offset * spread, offset * turn }
+		: glm::dvec2{ offset * turn, offset * spread });
+}
+
 std::vector<int> CableInteraction::Spread(int first, int last, size_t count)
 {
 	std::vector<int> values;
@@ -54,7 +95,7 @@ float CableInteraction::_DistanceSquared(utils::Position2d lhs, utils::Position2
 
 bool CableInteraction::HitTest(const Endpoint& endpoint, utils::Position2d point, float radius)
 {
-	return (!endpoint.HitBounds || endpoint.HitBounds->Contains(point)) &&
+	return !endpoint.Continuation && (!endpoint.HitBounds || endpoint.HitBounds->Contains(point)) &&
 		_DistanceSquared(endpoint.Position, point) <= radius * radius;
 }
 
@@ -170,7 +211,7 @@ bool CableInteraction::_SameSource(const io::RigFileRouting::Source& lhs,
 
 bool CableInteraction::Compatible(const Drag& drag, const Endpoint& candidate, const io::RigFile& rig)
 {
-	if (!candidate.Available || !drag.Fixed.Available ||
+	if (candidate.Continuation || !candidate.Available || !drag.Fixed.Available ||
 		(candidate.Source.has_value() && !candidate.Source->Available) ||
 		(drag.Fixed.Source.has_value() && !drag.Fixed.Source->Available))
 		return false;
