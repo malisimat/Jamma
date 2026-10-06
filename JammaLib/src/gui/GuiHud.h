@@ -211,6 +211,7 @@ namespace gui
 		std::shared_ptr<GuiScrollPanel> _triggerScroll;
 		std::shared_ptr<GuiStackPanel> _triggerList;
 		std::shared_ptr<GuiButton> _addTriggerButton;
+		std::shared_ptr<GuiPanel> _statusPanel;
 		std::shared_ptr<GuiLabel> _routingStatusLabel;
 		std::shared_ptr<GuiPopup> _deletePopup;
 		// UI-owned read-only identity popup. Rig/job rebuilds do not mutate it;

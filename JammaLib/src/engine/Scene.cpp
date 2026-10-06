@@ -666,7 +666,7 @@ void Scene::Draw(DrawContext& ctx)
 			_midiChannelOverrideInput->SetValue(forcedChannel, false);
 	}
 
-	_label->Draw(ctx);
+
 
 	if (_hudPanel)
 	{
@@ -694,11 +694,14 @@ void Scene::Draw(DrawContext& ctx)
 	if (!midiEditorEngaged)
 		_ctrlHandleOverlay.Draw(ctx);
 
-	if (!_popupManager.IsOpen())
-		_loopEditor.Draw(ctx);
+
 	for (auto& child : _guiChildren)
 		if (child && child != _mainPanel && child != _selectionPanel)
 			child->Draw(ctx);
+	_label->SetPosition({ std::max(0, static_cast<int>(_sizeParams.Size.Width) - 8 - std::min(520, std::max(0, static_cast<int>(_sizeParams.Size.Width) - 16))) + 8, 16 });
+	_label->SetSize({ static_cast<unsigned int>(std::max(0, std::min(520, static_cast<int>(_sizeParams.Size.Width) - 16) - 16)), 24u });
+	if (_sizeParams.Size.Height >= 104u) _label->Draw(ctx);
+	if (!_popupManager.IsOpen()) _loopEditor.Draw(ctx);
 	_mainPanel->Draw(ctx);
 	_selectionPanel->Draw(ctx);
 	_popupManager.Draw(ctx);

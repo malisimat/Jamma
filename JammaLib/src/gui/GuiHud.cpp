@@ -613,7 +613,14 @@ void GuiHud::_BuildTriggerRail()
 	statusParams.Size = { 300u, GuiLabelParams::RowHeight };
 	statusParams.MinSize = { 160u, GuiLabelParams::RowHeight };
 	_routingStatusLabel = std::make_shared<GuiLabel>(statusParams);
-	AddChild(_routingStatusLabel);
+	GuiElementParams statusPanelParams;
+	statusPanelParams.Texture = "rounded_but_on";
+	statusPanelParams.TextureShader = "texture_tinted";
+	statusPanelParams.TintColor = GuiStyle::Graphite();
+	statusPanelParams.TextureOpacity = GuiStyle::PanelFillOpacity;
+	_statusPanel = std::make_shared<GuiPanel>(statusPanelParams);
+	_statusPanel->AddChild(_routingStatusLabel);
+	AddChild(_statusPanel);
 }
 
 void GuiHud::_RebuildPanels()
@@ -756,9 +763,9 @@ void GuiHud::_LayoutPanels()
 	const int marginX = std::min(_OuterMargin, width / 2);
 	const int marginY = std::min(_TopPosY, height / 2);
 	const int railWidth = std::min(static_cast<int>(_RightRailWidth), std::max(0, width - 2 * marginX));
-	const int railHeight = std::max(0, height - 2 * marginY);
+	const int railHeight = std::max(0, height - 2 * marginY - 128);
 	const int railX = std::max(0, width - marginX - railWidth);
-	_triggerRail->SetPosition({ railX, marginY });
+	_triggerRail->SetPosition({ railX, marginY + std::min(128, std::max(0, height - 2 * marginY)) });
 	_triggerRail->SetSize({ static_cast<unsigned int>(railWidth), static_cast<unsigned int>(railHeight) });
 	_triggerRail->SetVisible(railWidth > 0 && railHeight > 0);
 	const int triggerHeader = std::min(34, railHeight);
@@ -842,10 +849,14 @@ void GuiHud::_LayoutPanels()
 	_topSourceRow->SetPosition({ topWidth - padding - static_cast<int>(_topSourceRow->GetSize().Width), _topSourceRow->Position().Y });
 	_topSourceRow->ComputeLayout();
 	_triggerList->ComputeLayout();
-	const int statusWidth = std::min(300, std::max(0, railX - 8));
-	_routingStatusLabel->SetPosition({ std::max(0, railX - statusWidth - 8), marginY });
-	_routingStatusLabel->SetSize({ static_cast<unsigned int>(statusWidth), 24u });
-	_routingStatusLabel->SetVisible(statusWidth >= 40 && height >= 24);
+	const int statusWidth = std::min(520, std::max(0, width - 16));
+	const int statusHeight = std::min(120, std::max(0, height - 16));
+	_statusPanel->SetPosition({ std::max(0, width - 8 - statusWidth), marginY });
+	_statusPanel->SetSize({ static_cast<unsigned int>(statusWidth), static_cast<unsigned int>(statusHeight) });
+	_statusPanel->SetVisible(statusWidth > 0 && statusHeight > 0);
+	_routingStatusLabel->SetPosition({ 8, 30 });
+	_routingStatusLabel->SetSize({ static_cast<unsigned int>(std::max(0, statusWidth - 16)), 24u });
+	_routingStatusLabel->SetVisible(statusWidth >= 40 && statusHeight >= 54);
 	if (_revealNewestTrigger && !_triggerNames.empty())
 	{
 		_RevealTrigger(_triggerNames.size() - 1u);
