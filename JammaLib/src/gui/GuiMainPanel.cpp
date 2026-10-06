@@ -23,9 +23,12 @@ GuiMainPanel::GuiMainPanel(GuiMainPanelParams params) : GuiPanel(params),
 	frameParams.TextureOpacity = GuiStyle::PanelFillOpacity;
 	_frame = std::make_shared<GuiPanel>(frameParams);
 	_children.push_back(_frame);
-	auto headerParams = GuiLabelParams::PanelHeader(_selectionOnly ? "Selection depth" : "Settings", 320u);
-	headerParams.Ellipsize = true;
-	_frame->AddChild(std::make_shared<GuiLabel>(headerParams));
+	if (!_selectionOnly)
+	{
+		auto headerParams = GuiLabelParams::PanelHeader("Settings", 320u);
+		headerParams.Ellipsize = true;
+		_frame->AddChild(std::make_shared<GuiLabel>(headerParams));
+	}
 	GuiToggleParams handleParams = GuiToggleParams::PanelPrimary();
 	handleParams.Text = "";
 	handleParams.Texture = "arrow";
@@ -214,15 +217,48 @@ void GuiMainPanel::_Layout()
 {
 	const int width = static_cast<int>(_viewport.Width), height = static_cast<int>(_viewport.Height);
 	const int margin = std::min(8, width / 2);
-	const int panelWidth = std::min(_selectionOnly ? 448 : 360, std::max(0, width - 2 * margin));
+	const int panelWidth = std::min(_selectionOnly ? 404 : 360, std::max(0, width - 2 * margin));
 	const int handleWidth = std::min(_selectionOnly ? 64 : 20, std::max(0, width - (_selectionOnly ? margin : 0)));
 	const int handleHeight = std::min(_selectionOnly ? 20 : 64, std::max(0, height - (_selectionOnly ? 0 : std::min(8, height / 2))));
-	const int panelHeight = std::min(_selectionOnly ? 152 : 320, std::max(0, height - 2 * std::min(8, height / 2)));
+	const int panelHeight = std::min(_selectionOnly ? 84 : 320, std::max(0, height - 2 * std::min(8, height / 2)));
 	_handle->SetPosition(_selectionOnly ? Position2d{ margin, height - handleHeight } : Position2d{ 0, std::min(8, height / 2) });
 	_handle->SetSize({ static_cast<unsigned int>(handleWidth), static_cast<unsigned int>(handleHeight) });
 	_handle->SetVisible(handleWidth > 0 && handleHeight > 0);
 	_frame->SetSize({ static_cast<unsigned int>(panelWidth), static_cast<unsigned int>(panelHeight) });
 	_UpdatePresentation();
+	if (_selectionOnly)
+	{
+		const int padding = std::min(8, std::min(panelWidth, panelHeight) / 2);
+		const int innerWidth = std::max(0, panelWidth - 2 * padding);
+		const int innerHeight = std::max(0, panelHeight - 2 * padding);
+		auto& page = _pages[static_cast<size_t>(_page)];
+		page->SetPadding(2u, 2u);
+		page->SetSpacing(0u);
+		for (const auto& entry : _controlSizes)
+		{
+			auto radio = std::dynamic_pointer_cast<GuiRadio>(entry.first);
+			if (!radio) continue;
+			unsigned int count = 0;
+			while (count < 255 && radio->TryGetChild(static_cast<unsigned char>(count))) ++count;
+			const auto available = static_cast<unsigned int>(std::max(0, innerWidth - 4));
+			const auto radioWidth = std::min(available, entry.second.Width);
+			for (unsigned int index = 0; index < count; ++index)
+			{
+				auto toggle = radio->TryGetChild(static_cast<unsigned char>(index));
+				const auto left = radioWidth * index / count;
+				const auto right = radioWidth * (index + 1u) / count;
+				toggle->SetPosition({ static_cast<int>(left), 0 });
+				toggle->SetSize({ right - left, entry.second.Height });
+			}
+			radio->SetSize({ radioWidth, entry.second.Height });
+			page->SetSize({ radioWidth + 4u, entry.second.Height + 4u });
+		}
+		page->ComputeLayout();
+		_pageScroll->SetPosition({ padding, padding });
+		_pageScroll->SetSize({ static_cast<unsigned int>(innerWidth), static_cast<unsigned int>(innerHeight) });
+		_edge->SetVisible(false);
+		return;
+	}
 	const int padding = std::min(_selectionOnly ? 8 : 12, std::min(panelWidth, panelHeight) / 2);
 	const int inner = std::max(0, panelWidth - 2 * padding);
 	_edge->SetPosition({ padding, std::max(0, panelHeight - 2) });
