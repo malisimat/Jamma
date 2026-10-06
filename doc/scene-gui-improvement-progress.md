@@ -9,10 +9,10 @@ The original implementation is committed. Follow-up changes from user testing on
 - Audio and MIDI source categories shrink to occupied card widths and align together to the right, with consistent gaps and existing 80?160px card limits and scrolling.
 - Default panel controls use muted amber.
 - Selection/settings handles use existing GuiRack arrow textures and state-dependent images. The top handle is 64x20px at screen top-left (8,0); the settings handle is 20x64px at bottom-left (0,8).
-- Panel borders use 8px screen margins; selection/settings handles overlap the panel rather than reserving an extra strip.
-- The bottom-right status bar is a flat, opaque 60px row flush with the screen edges: fixed status and version columns surround an expanding single-line message column. Separate editor mode text is hidden. The trigger rail ends above it. The Edit Loop button is removed; keyboard editing remains available.
-- HUD inputs have a translucent rounded background fitted to occupied label/card width, with an inline Inputs label that hides when space is limited. Height fits the cards and reserves scrollbar space only when needed.
-- The trigger rail is 132px wide with centrally aligned 112x100px cards, equal 10px side margins and an 8px scrollbar.
+- Panel borders use 8px screen margins; selection/settings handles overlap the panel rather than reserving an extra strip. Selection has no heading and fits its three buttons with equal 10px spacing (8px frame plus 2px content padding), normally 404x84px.
+- The bottom-right status bar is a flat 28px row with 80% background opacity flush with the screen edges: fixed status and version columns surround an expanding single-line message column. The colour shader now uploads vec4 uniforms, fixing the previously invisible background. Separate editor mode text is hidden. The trigger rail ends above it. The Edit Loop button is removed; keyboard editing remains available.
+- HUD inputs have a translucent rounded background fitted to occupied label/card width, with an inline Inputs label that hides when space is limited and has an additional 8px text inset. Height fits the cards and reserves scrollbar space only when needed.
+- The trigger rail is 132px wide with centrally aligned 112x100px cards, equal 10px side margins and an 8px scrollbar. Its rounded graphite background matches the input panel at 35% opacity.
 
 Debug x64 builds of JammaLib and Jamma pass after these refinements. The latest app build uses bin/x64/Debug/GuiReview because the normal Jamma/JammaConsole executables are locked by the running user session; the regular executable still needs relinking after that session exits. No new tests were run. The status panel narrows to the space beside settings; very compact clients can hide its text.
 
