@@ -110,7 +110,7 @@ void GuiLabel::Draw(DrawContext& ctx)
 	if (_vertexArray == 0)
 		return;
 
-	auto glCtx = dynamic_cast<GlDrawContext&>(ctx);
+	auto& glCtx = dynamic_cast<GlDrawContext&>(ctx);
 	auto pos = Position();
 	const auto textWidth = _centerHorizontally ? font->MeasureString(_str) : 0.0f;
 	const auto horizontalOffset = _centerHorizontally

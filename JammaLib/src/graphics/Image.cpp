@@ -50,6 +50,8 @@ void Image::Draw(DrawContext& ctx)
 
 	if (!texture || !shader)
 		return;
+	if (GetSize().Width == 0u || GetSize().Height == 0u) return;
+	auto opacity = ctx.WithOpacity(_imageParams.Opacity);
 
 	auto& glCtx = dynamic_cast<GlDrawContext&>(ctx);
 

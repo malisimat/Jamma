@@ -118,6 +118,7 @@ namespace engine
 		void DrawBackground(base::DrawContext& ctx);
 		bool HasSelection() const;
 		void UpdateCamera();
+		void AdvanceUiAnimations();
 
 		virtual void SetSize(utils::Size2d size) override
 		{
@@ -430,6 +431,7 @@ namespace engine
 		engine::QuantiserController _quantisationInteraction;
 		graphics::Camera _camera;
 		std::optional<Time> _lastCameraUpdateTime;
+		std::optional<Time> _lastPanelAnimationTime;
 		std::thread _jobRunner;
 		std::mutex _jobMutex;
 		std::list<actions::JobAction> _jobList;

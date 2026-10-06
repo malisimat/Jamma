@@ -3,6 +3,7 @@
 #include <memory>
 #include "GuiElement.h"
 #include "GuiLabel.h"
+#include "GuiPanel.h"
 #include "ActionReceiver.h"
 
 namespace gui
@@ -38,6 +39,7 @@ namespace gui
 		{
 			GuiButtonParams params;
 			params.TextureShader = "texture_tinted";
+			params.TintColor = GuiStyle::Control();
 			params.Texture = "rounded_but";
 			params.OverTexture = "rounded_but_over";
 			params.DownTexture = "rounded_but_down";

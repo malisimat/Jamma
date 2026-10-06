@@ -98,6 +98,7 @@ namespace base
 		std::string DownTexture;
 		std::string OutTexture;
 		std::string TextureShader = "texture";
+		float TextureOpacity = 1.0f;
 		glm::vec3 TintColor;
 		LayoutSizing HorizSizing = LayoutSizing::Fixed;
 		LayoutSizing VertSizing  = LayoutSizing::Fixed;

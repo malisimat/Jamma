@@ -497,6 +497,7 @@ void Window::Render()
 	_scene->CommitChanges();
 	_scene->UpdateCamera();
 	_scene->InitResources(_resourceLib, false);
+	_scene->AdvanceUiAnimations();
 
 	const bool needsPick = (_hover3dDirty || _forcePick) && _cachedCursorPosition.has_value();
 	if (needsPick)

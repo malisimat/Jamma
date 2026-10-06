@@ -38,6 +38,10 @@ namespace gui
 		SettingsPage Page() const { return _page; }
 		void SetExpanded(bool expanded);
 		bool IsExpanded() const { return _expanded; }
+		bool AdvanceAnimation(float elapsedSeconds);
+		float TransitionValue() const { return _transition; }
+		float PresentedOpacity() const;
+		void Draw(base::DrawContext& context) override;
 		bool RouteHitTest(utils::Position2d position) override;
 		using GuiPanel::OnAction;
 		actions::ActionResult OnAction(actions::GuiAction action) override;
@@ -48,15 +52,18 @@ namespace gui
 	private:
 		void _Layout();
 		void _PrepareHide(const std::shared_ptr<base::GuiElement>& subtree);
+		void _UpdatePresentation();
 		static constexpr unsigned int _PageCommand = 1u;
 		static constexpr unsigned int _ExpandCommand = 2u;
 		bool _selectionOnly;
 		bool _expanded = true;
+		float _transition = 1.0f;
 		SettingsPage _page;
 		utils::Size2d _viewport{};
 		GuiPopupManager* _popups;
 		std::function<void(const std::shared_ptr<base::GuiElement>&)> _beforeHide;
 		std::shared_ptr<GuiPanel> _frame;
+		std::shared_ptr<GuiPanel> _edge;
 		std::shared_ptr<GuiToggle> _handle;
 		std::shared_ptr<GuiRadio> _tabs;
 		std::shared_ptr<GuiScrollPanel> _tabScroll;

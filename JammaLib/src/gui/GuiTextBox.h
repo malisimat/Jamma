@@ -5,6 +5,7 @@
 #include <optional>
 #include "GuiElement.h"
 #include "GuiLabel.h"
+#include "GuiPanel.h"
 #include "../graphics/Font.h"
 #include "../actions/KeyAction.h"
 #include "../actions/TouchAction.h"
@@ -27,6 +28,7 @@ namespace gui
 		{
 			GuiTextBoxParams params;
 			params.TextureShader = "texture_tinted";
+			params.TintColor = GuiStyle::Control();
 			params.Texture = "rounded_but";
 			params.Size = { width, DefaultHeight };
 			params.MinSize = { DefaultMinWidth, DefaultMinHeight };

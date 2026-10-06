@@ -6,6 +6,14 @@
 
 namespace gui
 {
+	struct GuiStyle
+	{
+		static glm::vec3 Graphite() { return { 0.24f, 0.26f, 0.29f }; }
+		static glm::vec3 Control() { return { 0.57f, 0.65f, 0.69f }; }
+		static glm::vec3 Edge() { return { 0.66f, 0.77f, 0.80f }; }
+		static constexpr float PanelFillOpacity = 0.80f;
+		static constexpr float PanelTransitionSeconds = 0.22f;
+	};
 	// UI-owned binding adapter. Tree indices stay local; command identity stays
 	// explicit, and the weak owner prevents a binding extending Scene lifetime.
 	class GuiCommandReceiver : public base::ActionReceiver

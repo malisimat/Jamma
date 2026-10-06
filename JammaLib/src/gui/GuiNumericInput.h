@@ -17,6 +17,7 @@ namespace gui
 		{
 			GuiNumericInputParams params;
 			params.TextureShader = "texture_tinted";
+			params.TintColor = GuiStyle::Control();
 			params.Texture = "rounded_but";
 			params.Size = { width, DefaultHeight };
 			params.MinSize = { DefaultMinWidth, DefaultMinHeight };

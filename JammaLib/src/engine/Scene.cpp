@@ -167,7 +167,7 @@ Scene::Scene(SceneParams params,
 
 	GuiNumericInputParams midiChannelOverrideParams = GuiNumericInputParams::PanelInput(72u);
 	midiChannelOverrideParams.Index = MidiChannelOverrideControlIndex;
-	midiChannelOverrideParams.Size = { 80, 64 };
+	midiChannelOverrideParams.Size = { 80, GuiNumericInputParams::DefaultHeight };
 	midiChannelOverrideParams.Min = 0.0;
 	midiChannelOverrideParams.Max = 16.0;
 	midiChannelOverrideParams.Step = 0.1;
@@ -178,7 +178,7 @@ Scene::Scene(SceneParams params,
 
 	GuiNumericInputParams transportOffsetParams = GuiNumericInputParams::PanelInput(88u);
 	transportOffsetParams.Index = TransportOffsetControlIndex;
-	transportOffsetParams.Size = { 96, 64 };
+	transportOffsetParams.Size = { 96, GuiNumericInputParams::DefaultHeight };
 	transportOffsetParams.Min = -1.0;
 	transportOffsetParams.Max = 1.0;
 	transportOffsetParams.Step = 0.005;
@@ -191,8 +191,8 @@ Scene::Scene(SceneParams params,
 	metronomeToggleParams.Index = NinjamMetronomeControlIndex;
 	metronomeToggleParams.ToggleIndex = NinjamMetronomeControlIndex;
 	metronomeToggleParams.Text = "CLICK";
-	metronomeToggleParams.Size = { 80, 64 };
-	metronomeToggleParams.MinSize = { 80, 64 };
+	metronomeToggleParams.Size = { 80, GuiToggleParams::DefaultHeight };
+	metronomeToggleParams.MinSize = { 80, GuiToggleParams::DefaultHeight };
 	metronomeToggleParams.InitState = GuiToggleParams::TOGGLE_ON;
 	_ninjamMetronomeToggle = std::make_shared<GuiToggle>(metronomeToggleParams);
 
@@ -240,7 +240,7 @@ Scene::Scene(SceneParams params,
 	mainParams.PopupManager = &_popupManager;
 	mainParams.BeforeHide = [this](const auto& subtree) { _OnSettingsHidden(subtree); };
 	mainParams.Settings = {
-		{ SettingsPage::Midi, "Global MIDI quantisation", _globalMidiQuantRadio, 101u },
+		{ SettingsPage::Timing, "Global MIDI quantisation", _globalMidiQuantRadio, 101u },
 		{ SettingsPage::Midi, "MIDI channel (0 = unchanged)", _midiChannelOverrideInput, MidiChannelOverrideControlIndex },
 		{ SettingsPage::Timing, "Local phase offset (loops)", _transportOffsetInput, TransportOffsetControlIndex },
 		{ SettingsPage::Timing, "", _ninjamMetronomeToggle, NinjamMetronomeControlIndex }
@@ -841,6 +841,19 @@ void Scene::UpdateCamera()
 		_ApplyCameraSelectDepthChange(_camera.PendingSelectDepthChange());
 	if (_isSceneTouching && !_camera.IsBackgroundDragging())
 		_EndBackgroundDrag();
+}
+
+void Scene::AdvanceUiAnimations()
+{
+	// Window calls once per UI frame before deferred hover and drawing.
+	// This clock is independent of the transport/audio callback.
+	const auto now = Timer::GetTime();
+	const float elapsed = _lastPanelAnimationTime
+		? static_cast<float>(Timer::GetElapsedSeconds(*_lastPanelAnimationTime, now)) : 0.0f;
+	_lastPanelAnimationTime = now;
+	const bool mainChanged = _mainPanel && _mainPanel->AdvanceAnimation(elapsed);
+	const bool selectionChanged = _selectionPanel && _selectionPanel->AdvanceAnimation(elapsed);
+	if (mainChanged || selectionChanged) _InvalidateHover2d();
 }
 
 void Scene::_InitResources(ResourceLib& resourceLib, bool forceInit)

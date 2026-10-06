@@ -276,7 +276,8 @@ GuiHud::GuiHud(GuiHudParams params) :
 	GuiElementParams infoParams;
 	infoParams.Texture = "rounded_but";
 	infoParams.TextureShader = "texture_tinted";
-	infoParams.TintColor = glm::vec3(0.15f, 0.17f, 0.19f);
+	infoParams.TintColor = GuiStyle::Graphite();
+	infoParams.TextureOpacity = GuiStyle::PanelFillOpacity;
 	infoParams.GuiPassThrough = false;
 	_sourceInfoPanel = std::make_shared<GuiPanel>(infoParams);
 	auto infoHeader = GuiLabelParams::PanelHeader("Input identity (scroll to read; Esc closes)", 420u);
@@ -444,7 +445,8 @@ void GuiHud::_BuildPanels()
 	railParams.MinSize = { _RightRailWidth - 6u, _RightRailMinHeight };
 	railParams.TextureShader = "texture_tinted";
 	railParams.Texture = "rounded_but";
-	railParams.TintColor = glm::vec3(0.17f, 0.20f, 0.24f);
+	railParams.TintColor = GuiStyle::Graphite();
+	railParams.TextureOpacity = GuiStyle::PanelFillOpacity;
 	_triggerRail = std::make_shared<GuiPanel>(railParams);
 	AddChild(_triggerRail);
 
@@ -1769,7 +1771,7 @@ std::shared_ptr<GuiButton> GuiHud::_MakeSourceButton(const std::string& text,
 	buttonParams.DownTexture = "rounded_but";
 	buttonParams.Size = { width, _SourceButtonHeight };
 	buttonParams.MinSize = { 80u, _SourceButtonHeight };
-	buttonParams.TintColor = glm::vec3(0.12f, 0.13f, 0.14f) + tint * 0.025f;
+	buttonParams.TintColor = GuiStyle::Graphite() * 0.5f + tint * 0.025f;
 	auto button = std::make_shared<GuiHudActionButton>(buttonParams, [this, text]() { _OpenSourceIdentity(text); });
 	const auto identity = available ? text : text.substr(0, text.size() - std::string(" (unavailable)").size());
 	const auto heading = available ? (midi ? "MIDI" : "Audio") : "Offline";

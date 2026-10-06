@@ -114,9 +114,32 @@ a replacement scope. The feature is not complete.
    Animation, shared opacity/palette and live visual confirmation remain slices
    5 and 6 work.
 5. Stable text geometry, scoped opacity, shared palette and frame-time motion:
-   in progress: requested label frames now survive font resolution, and measured
-   ellipsis is available to HUD labels. Common vertical glyph/caret alignment,
-   scoped opacity, palette and motion remain pending.
+   in progress: requested label frames survive font resolution, and measured
+   ellipsis is available to HUD labels. Panels now slide upward/leftward with one
+   normalized transition driving smoothstep position and alpha over 220 ms.
+   Reversal starts at the current value; resize preserves progress and recomputes
+   real anchors. Window advances motion once per UI frame from the monotonic
+   wall clock before deferred hover. Resume intervals clamp at 50 ms; motion
+   updates only presentation position/visibility, with no page-layout or cable
+   rebuild. Idle transitions return without invalidating hover. Closing gates
+   page/tab input immediately while retaining the visible body blocker; persistent
+   edge handles remain opaque, in-window and independent of body motion.
+   UI opacity scopes multiply and restore without heap-backed stacks. Textures,
+   fonts, flat decorations, meters, cables and Ctrl handles declare/apply the
+   effective alpha, including ordinary draws at 1. Per-image panel fill opacity
+   (80%) is separate from transition/text opacity. Graphite/control/edge presets
+   are shared by panels and related HUD/control construction; the panel has a
+   restrained one-pixel accent. The render audit also removed a per-label copy
+   of the owning OpenGL context; GPU contexts are now explicitly noncopyable.
+   Global MIDI quantisation was corrected to the plan's initial Timing page,
+   alongside phase offset and CLICK. Native tests cover nesting/restoration,
+   ordinary uniform defaults, reversal/resume/resize, closing content gates,
+   and hiding during numeric capture with consumed release. Focused motion and
+   render reviews found no material defect. Incremental Debug library, test and
+   app builds passed; all 171 focused GUI/cable/layout/Scene checks passed
+   (354 ms), and the threading audit found no hot-path lock/wait additions.
+   Shader-backed visual confirmation
+   and common vertical glyph/caret alignment remain pending.
 6. Integration review, app build, runtime/visual checks during playback and
    baseline/feature performance comparison: pending.
 7. Final requirement audit and HTML completion report: pending.

@@ -832,6 +832,7 @@ TEST(Scene, SettingsHandleCollapsesAndReopensThroughPointerDispatch) {
 	action.State = TouchAction::TOUCH_UP;
 	EXPECT_TRUE(scene.OnAction(action).IsEaten);
 	EXPECT_FALSE(panel->IsExpanded());
+	for (int frame = 0; frame < 5; ++frame) panel->AdvanceAnimation(0.05f);
 	EXPECT_FALSE(panel->RouteHitTest({ 30, 100 }));
 	action.State = TouchAction::TOUCH_DOWN;
 	EXPECT_TRUE(scene.OnAction(action).IsEaten);
@@ -839,4 +840,35 @@ TEST(Scene, SettingsHandleCollapsesAndReopensThroughPointerDispatch) {
 	EXPECT_TRUE(scene.OnAction(action).IsEaten);
 	EXPECT_TRUE(panel->IsExpanded());
 	EXPECT_EQ(gui::SettingsPage::Timing, panel->Page());
+}
+
+TEST(Scene, HidingSettingsDuringNumericCaptureConsumesTerminatingRelease) {
+	SceneParams sceneParams({ "" }, {}, { 800u, 600u });
+	Scene scene(sceneParams, io::UserConfig{});
+	TouchAction action;
+	action.Touch = TouchAction::TOUCH_MOUSE; action.Index = 0u;
+	action.Position = { 30, 10 }; action.State = TouchAction::TOUCH_DOWN;
+	auto handlePress = scene.OnAction(action);
+	auto active = handlePress.ActiveElement.lock();
+	ASSERT_NE(nullptr, active);
+	auto panel = std::dynamic_pointer_cast<gui::GuiMainPanel>(active->Parent());
+	ASSERT_NE(nullptr, panel);
+	actions::TouchMoveAction cancel;
+	cancel.Position = action.Position; cancel.MouseButtonsDown = 0u;
+	scene.OnAction(cancel);
+	auto scroll = std::dynamic_pointer_cast<gui::GuiScrollPanel>(panel->TryGetChild(0)->TryGetChild(1));
+	ASSERT_NE(nullptr, scroll);
+	auto numeric = std::dynamic_pointer_cast<gui::GuiNumericInput>(scroll->Content()->TryGetChild(3));
+	ASSERT_NE(nullptr, numeric); // Timing retains quantisation, then phase offset.
+	action.Position = numeric->GlobalPosition() + utils::Position2d{ 10, 10 };
+	auto inputPress = scene.OnAction(action);
+	ASSERT_EQ(numeric, inputPress.ActiveElement.lock());
+	numeric->SetText("0.5", false);
+	panel->SetExpanded(false);
+	EXPECT_FALSE(numeric->HasFocus());
+	EXPECT_DOUBLE_EQ(0.5, numeric->Value());
+	action.State = TouchAction::TOUCH_UP;
+	action.Position = { 500, 300 };
+	EXPECT_TRUE(scene.OnAction(action).IsEaten);
+	EXPECT_DOUBLE_EQ(0.5, numeric->Value());
 }

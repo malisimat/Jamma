@@ -1,5 +1,7 @@
 #include "GuiMainPanel.h"
 #include "GuiLabel.h"
+#include "../graphics/GlDrawContext.h"
+#include <cmath>
 
 using namespace gui;
 using namespace base;
@@ -15,7 +17,8 @@ GuiMainPanel::GuiMainPanel(GuiMainPanelParams params) : GuiPanel(params),
 	frameParams.GuiPassThrough = false;
 	frameParams.Texture = "rounded_but";
 	frameParams.TextureShader = "texture_tinted";
-	frameParams.TintColor = glm::vec3(0.20f, 0.22f, 0.24f);
+	frameParams.TintColor = GuiStyle::Graphite();
+	frameParams.TextureOpacity = GuiStyle::PanelFillOpacity;
 	_frame = std::make_shared<GuiPanel>(frameParams);
 	_children.push_back(_frame);
 	auto headerParams = GuiLabelParams::PanelHeader(_selectionOnly ? "Selection depth" : "Settings", 320u);
@@ -25,6 +28,7 @@ GuiMainPanel::GuiMainPanel(GuiMainPanelParams params) : GuiPanel(params),
 	handleParams.Text = _selectionOnly ? "Selection" : "Settings";
 	handleParams.Size = { 140u, 28u };
 	handleParams.InitState = GuiToggleParams::TOGGLE_ON;
+	handleParams.TintColor = GuiStyle::Control();
 	_handle = std::make_shared<GuiToggle>(handleParams);
 	_expandBinding = std::make_shared<GuiCommandReceiver>(_ExpandCommand);
 	_handle->SetReceiver(_expandBinding);
@@ -68,6 +72,7 @@ GuiMainPanel::GuiMainPanel(GuiMainPanelParams params) : GuiPanel(params),
 		{
 			auto toggle = GuiToggleParams::PanelPrimary();
 			toggle.Text = index == 0 ? "MIDI" : "Timing";
+			toggle.TintColor = GuiStyle::Control();
 			toggle.Position = { static_cast<int>(index * 104u), 0 };
 			toggle.Size = { 100u, 32u };
 			tabParams.ToggleParams.push_back(toggle);
@@ -80,6 +85,12 @@ GuiMainPanel::GuiMainPanel(GuiMainPanelParams params) : GuiPanel(params),
 		_tabScroll->SetContent(_tabs);
 		_frame->AddChild(_tabScroll);
 	}
+	GuiElementParams edgeParams;
+	edgeParams.Texture = "rounded_but";
+	edgeParams.TextureShader = "texture_tinted";
+	edgeParams.TintColor = GuiStyle::Edge();
+	_edge = std::make_shared<GuiPanel>(edgeParams);
+	_frame->AddChild(_edge);
 	SetViewportSize(params.Size);
 }
 
@@ -120,7 +131,54 @@ void GuiMainPanel::SetExpanded(bool expanded)
 	if (!expanded) _PrepareHide(_frame);
 	_expanded = expanded;
 	_handle->SetToggleState(expanded ? GuiToggleParams::TOGGLE_ON : GuiToggleParams::TOGGLE_OFF, true);
-	_Layout();
+	_pageScroll->SetEnabled(expanded);
+	if (_tabScroll) _tabScroll->SetEnabled(expanded);
+	_UpdatePresentation();
+}
+
+float GuiMainPanel::PresentedOpacity() const
+{
+	return _transition * _transition * (3.0f - 2.0f * _transition);
+}
+
+bool GuiMainPanel::AdvanceAnimation(float elapsedSeconds)
+{
+	if (!std::isfinite(elapsedSeconds) || elapsedSeconds <= 0.0f) return false;
+	const float target = _expanded ? 1.0f : 0.0f;
+	if (_transition == target) return false;
+	const float step = std::min(elapsedSeconds, 0.05f) / GuiStyle::PanelTransitionSeconds;
+	_transition = _expanded ? std::min(target, _transition + step) : std::max(target, _transition - step);
+	_UpdatePresentation();
+	return true;
+}
+
+void GuiMainPanel::_UpdatePresentation()
+{
+	const int margin = std::min(20, static_cast<int>(_viewport.Width) / 2);
+	const auto size = _frame->GetSize();
+	const int handleY = _handle->Position().Y;
+	const float hidden = 1.0f - PresentedOpacity();
+	_frame->SetPosition(_selectionOnly
+		? Position2d{ margin, handleY - static_cast<int>(size.Height) + static_cast<int>(std::lround(hidden * (size.Height + _handle->GetSize().Height))) }
+		: Position2d{ margin - static_cast<int>(std::lround(hidden * (size.Width + margin))), static_cast<int>(_handle->GetSize().Height) });
+	_frame->SetVisible(_transition > 0.0f && size.Width > 0u && size.Height > 0u);
+}
+
+void GuiMainPanel::Draw(DrawContext& context)
+{
+	if (!IsVisible() || _viewport.Width == 0u || _viewport.Height == 0u) return;
+	auto& glContext = dynamic_cast<graphics::GlDrawContext&>(context);
+	const auto position = Position();
+	glContext.PushMvp(glm::translate(glm::mat4(1.0f), glm::vec3(position.X, position.Y, 0.0f)));
+	glContext.PushScissorRect(GlobalPosition(), _viewport);
+	{
+		auto opacity = context.WithOpacity(PresentedOpacity());
+		_frame->Draw(context);
+	}
+	// The persistent edge handle stays opaque and above the sliding body.
+	_handle->Draw(context);
+	glContext.PopScissorRect();
+	glContext.PopMvp();
 }
 
 ActionResult GuiMainPanel::OnAction(GuiAction action)
@@ -147,17 +205,18 @@ void GuiMainPanel::_Layout()
 	const int width = static_cast<int>(_viewport.Width), height = static_cast<int>(_viewport.Height);
 	const int margin = std::min(20, width / 2);
 	const int panelWidth = std::min(_selectionOnly ? 448 : 360, std::max(0, width - 2 * margin));
-	const int handleHeight = std::min(28, height);
+	const int handleHeight = std::min(28, height / 2);
 	const int panelHeight = std::min(_selectionOnly ? 152 : 320, std::max(0, height - handleHeight - 20));
 	const int handleY = _selectionOnly ? height - handleHeight : 0;
 	_handle->SetPosition({ margin, handleY });
 	_handle->SetSize({ static_cast<unsigned int>(std::min(140, std::max(0, width - 2 * margin))), static_cast<unsigned int>(handleHeight) });
 	_handle->SetVisible(width > 0 && handleHeight > 0);
-	_frame->SetPosition({ margin, _selectionOnly ? std::max(0, handleY - panelHeight) : handleHeight });
 	_frame->SetSize({ static_cast<unsigned int>(panelWidth), static_cast<unsigned int>(panelHeight) });
-	_frame->SetVisible(_expanded && panelWidth > 0 && panelHeight > 0);
+	_UpdatePresentation();
 	const int padding = std::min(12, std::min(panelWidth, panelHeight) / 2);
 	const int inner = std::max(0, panelWidth - 2 * padding);
+	_edge->SetPosition({ padding, std::max(0, panelHeight - 2) });
+	_edge->SetSize({ static_cast<unsigned int>(inner), static_cast<unsigned int>(std::min(1, panelHeight)) });
 	const int titleHeight = std::min(22, std::max(0, panelHeight - 2 * padding));
 	auto title = _frame->TryGetChild(0);
 	title->SetPosition({ padding, std::max(padding, panelHeight - padding - titleHeight) });
@@ -211,6 +270,7 @@ void GuiMainPanel::_Layout()
 bool GuiMainPanel::RouteHitTest(Position2d position)
 {
 	if (!IsVisible() || !IsEnabled()) return false;
+	if (position.X < 0 || position.Y < 0 || position.X >= static_cast<int>(_viewport.Width) || position.Y >= static_cast<int>(_viewport.Height)) return false;
 	return _handle->RouteHitTest(_handle->ParentToLocal(position)) ||
 		(_frame->IsVisible() && _frame->RouteHitTest(_frame->ParentToLocal(position)));
 }

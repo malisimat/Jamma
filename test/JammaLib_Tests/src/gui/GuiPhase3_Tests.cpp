@@ -10,6 +10,11 @@
 #include "gui/GuiScrollBar.h"
 #include "gui/GuiScrollPanel.h"
 #include "gui/GuiMainPanel.h"
+#include "graphics/GlDrawContext.h"
+#include <type_traits>
+
+static_assert(!std::is_copy_constructible_v<graphics::GlDrawContext>);
+static_assert(!std::is_copy_assignable_v<graphics::GlDrawContext>);
 #include "actions/KeyAction.h"
 #include "actions/TouchAction.h"
 #include "actions/TouchMoveAction.h"
@@ -859,6 +864,8 @@ TEST(GuiMainPanel, SwitchAndCollapseFinalizeEditsAndOnlyCloseOwnedPopup) {
 	EXPECT_EQ(2, hideCalls);
 	EXPECT_EQ(unrelated, popups.Top());
 	EXPECT_TRUE(panel->RouteHitTest({ 25, 10 }));
+	EXPECT_TRUE(panel->RouteHitTest({ 25, 100 })); // Sliding body still blocks the scene.
+	for (int frame = 0; frame < 5; ++frame) panel->AdvanceAnimation(0.05f);
 	EXPECT_FALSE(panel->RouteHitTest({ 25, 100 }));
 }
 
@@ -930,4 +937,109 @@ TEST(GuiMainPanel, HandlesAndTabsUseStableInternalCommands) {
 	handle->SetToggleState(GuiToggleParams::TOGGLE_ON, false);
 	EXPECT_TRUE(panel->IsExpanded());
 	EXPECT_EQ(gui::SettingsPage::Midi, panel->Page());
+}
+
+TEST(GuiMainPanel, MotionReversalStartsAtCurrentValueAndIdleDoesNoWork) {
+	gui::GuiMainPanelParams params;
+	params.Size = { 800, 600 };
+	auto panel = std::make_shared<gui::GuiMainPanel>(params);
+	panel->Init();
+	EXPECT_FALSE(panel->AdvanceAnimation(0.016f));
+	panel->SetExpanded(false);
+	EXPECT_FLOAT_EQ(1.0f, panel->TransitionValue());
+	EXPECT_TRUE(panel->AdvanceAnimation(0.05f));
+	const auto value = panel->TransitionValue();
+	const auto position = panel->TryGetChild(0)->Position();
+	const auto opacity = panel->PresentedOpacity();
+	EXPECT_GT(value, 0.0f); EXPECT_LT(value, 1.0f);
+	EXPECT_GT(opacity, 0.0f); EXPECT_LT(opacity, 1.0f);
+	panel->SetExpanded(true);
+	EXPECT_FLOAT_EQ(value, panel->TransitionValue());
+	EXPECT_EQ(position.X, panel->TryGetChild(0)->Position().X);
+	EXPECT_FLOAT_EQ(opacity, panel->PresentedOpacity());
+	EXPECT_TRUE(panel->AdvanceAnimation(0.05f));
+	EXPECT_FLOAT_EQ(1.0f, panel->TransitionValue());
+	EXPECT_FALSE(panel->AdvanceAnimation(0.05f));
+}
+
+TEST(GuiMainPanel, MotionClampsResumeIntervalAndResizePreservesProgress) {
+	gui::GuiMainPanelParams params;
+	params.Size = { 800, 600 }; params.SelectionOnly = true;
+	auto panel = std::make_shared<gui::GuiMainPanel>(params);
+	panel->Init(); panel->SetExpanded(false);
+	panel->AdvanceAnimation(100.0f);
+	const auto value = panel->TransitionValue();
+	EXPECT_NEAR(1.0f - 0.05f / gui::GuiStyle::PanelTransitionSeconds, value, 0.0001f);
+	const auto oldY = panel->TryGetChild(0)->Position().Y;
+	panel->SetViewportSize({ 800, 900 });
+	EXPECT_FLOAT_EQ(value, panel->TransitionValue());
+	EXPECT_EQ(oldY + 300, panel->TryGetChild(0)->Position().Y);
+	EXPECT_TRUE(panel->RouteHitTest({ 25, 890 }));
+	panel->SetViewportSize({ 10, 10 });
+	EXPECT_FLOAT_EQ(value, panel->TransitionValue());
+	const auto handle = panel->TryGetChild(1);
+	EXPECT_GE(handle->Position().Y, 0);
+	EXPECT_LE(handle->Position().Y + static_cast<int>(handle->GetSize().Height), 10);
+	panel->SetViewportSize({ 0, 0 });
+	EXPECT_FALSE(panel->RouteHitTest({ 0, 0 }));
+	EXPECT_FALSE(panel->RouteHitTest({ -1, -1 }));
+}
+
+TEST(GuiMainPanel, ClosingImmediatelyGatesControlsWhileRetainingBodyBlocker) {
+	GuiNumericInputParams numericParams;
+	numericParams.Size = { 96, 44 }; numericParams.Min = -1; numericParams.Max = 1;
+	auto input = std::make_shared<GuiNumericInput>(numericParams);
+	gui::GuiMainPanelParams params;
+	params.Size = { 800, 600 };
+	params.Settings = { { gui::SettingsPage::Timing, "Offset", input, 7002u } };
+	auto panel = std::make_shared<gui::GuiMainPanel>(params);
+	panel->Init();
+	const auto position = input->GlobalPosition() + utils::Position2d{ 10, 10 };
+	ASSERT_EQ(input, panel->FindTopmostDescendant(position));
+	panel->SetExpanded(false);
+	EXPECT_TRUE(panel->RouteHitTest(position));
+	EXPECT_NE(input, panel->FindTopmostDescendant(position));
+	EXPECT_TRUE(panel->OnAction(MakeTouch(TouchAction::TOUCH_DOWN, position)).IsEaten);
+	panel->OnAction(MakeTouchMove(position + utils::Position2d{ 0, 10 }));
+	EXPECT_DOUBLE_EQ(0, input->Value());
+}
+
+TEST(GuiOpacity, NestedScopesMultiplyAndRestoreOnEarlyExit) {
+	base::DrawContext context({ 100, 100 }, base::DrawContext::SCREEN);
+	EXPECT_FLOAT_EQ(1.0f, context.Opacity());
+	{
+		auto parent = context.WithOpacity(0.5f);
+		EXPECT_FLOAT_EQ(0.5f, context.Opacity());
+		{
+			auto child = context.WithOpacity(0.4f);
+			EXPECT_FLOAT_EQ(0.2f, context.Opacity());
+		}
+		EXPECT_FLOAT_EQ(0.5f, context.Opacity());
+		try {
+			auto child = context.WithOpacity(0.25f);
+			throw 1;
+		} catch (int) {}
+		EXPECT_FLOAT_EQ(0.5f, context.Opacity());
+	}
+	EXPECT_FLOAT_EQ(1.0f, context.Opacity());
+	{
+		auto clamped = context.WithOpacity(100.0f);
+		EXPECT_FLOAT_EQ(1.0f, context.Opacity());
+	}
+	{
+		auto clamped = context.WithOpacity(-1.0f);
+		EXPECT_FLOAT_EQ(0.0f, context.Opacity());
+	}
+	EXPECT_FLOAT_EQ(1.0f, context.Opacity());
+}
+
+TEST(GuiOpacity, GlUniformAlwaysHasEffectiveValueIncludingOrdinaryDraws) {
+	graphics::GlDrawContext context({ 100, 100 }, base::DrawContext::SCREEN);
+	ASSERT_TRUE(context.GetUniform("Opacity"));
+	EXPECT_FLOAT_EQ(1.0f, std::any_cast<float>(*context.GetUniform("Opacity")));
+	{
+		auto scope = context.WithOpacity(0.25f);
+		EXPECT_FLOAT_EQ(0.25f, std::any_cast<float>(*context.GetUniform("Opacity")));
+	}
+	EXPECT_FLOAT_EQ(1.0f, std::any_cast<float>(*context.GetUniform("Opacity")));
 }
