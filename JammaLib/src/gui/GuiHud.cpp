@@ -450,8 +450,8 @@ void GuiHud::_BuildPanels()
 	AddChild(_topStrip);
 
 	base::GuiElementParams railParams;
-	railParams.Size = { _RightRailWidth - 6u, _RightRailHeight };
-	railParams.MinSize = { _RightRailWidth - 6u, _RightRailMinHeight };
+	railParams.Size = { _RightRailWidth, _RightRailHeight };
+	railParams.MinSize = { _RightRailWidth, _RightRailMinHeight };
 	railParams.TextureShader = "texture_tinted";
 	railParams.Texture = "rounded_but_on";
 	railParams.TintColor = GuiStyle::Graphite();
@@ -598,6 +598,7 @@ void GuiHud::_BuildTriggerRail()
 	_triggerList->SetSize({ _TriggerButtonWidth, logicalHeight });
 
 	GuiScrollPanelParams scrollParams = GuiScrollPanelParams::PanelScroll(_TriggerButtonWidth, 1u);
+	scrollParams.ScrollBarWidth = 8u;
 	scrollParams.Texture = "";
 	scrollParams.OverTexture = "";
 	scrollParams.DownTexture = "";
@@ -782,6 +783,9 @@ void GuiHud::_LayoutPanels()
 	_triggerScroll->SetPosition({ 0, triggerFooter });
 	_triggerScroll->SetSize({ static_cast<unsigned int>(railWidth), static_cast<unsigned int>(triggerViewport) });
 	_triggerScroll->SetVisible(railWidth > 0 && triggerViewport > 0);
+	const int triggerSidePadding = std::max(0, (railWidth - static_cast<int>(_TriggerButtonWidth)) / 2);
+	_triggerList->SetPadding(static_cast<unsigned int>(triggerSidePadding), 0u);
+	_triggerList->SetSize({ static_cast<unsigned int>(railWidth), _triggerList->GetSize().Height });
 	if (auto header = _triggerRail->TryGetChild(0u))
 	{
 		header->SetPosition({ 0, railHeight - triggerHeader });
