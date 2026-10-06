@@ -1,6 +1,7 @@
 #pragma once
 
 #include <memory>
+#include <algorithm>
 #include "GuiElement.h"
 #include "ActionReceiver.h"
 
@@ -11,6 +12,11 @@ namespace gui
 		static glm::vec3 Graphite() { return { 0.24f, 0.26f, 0.29f }; }
 		static glm::vec3 Control() { return { 0.88f, 0.57f, 0.30f }; }
 		static glm::vec3 Edge() { return { 0.66f, 0.77f, 0.80f }; }
+		static constexpr int StatusBarHeight = 60;
+		static int StatusBarWidth(int viewportWidth) { return std::max(0, viewportWidth - 368); }
+		static int StatusColumnWidth(int barWidth) { return std::min(220, barWidth); }
+		static int VersionColumnWidth(int barWidth) { return std::min(160, std::max(0, barWidth - StatusColumnWidth(barWidth))); }
+		static int MessageColumnWidth(int barWidth) { return std::max(0, barWidth - StatusColumnWidth(barWidth) - VersionColumnWidth(barWidth)); }
 		static constexpr float PanelFillOpacity = 0.80f;
 		static constexpr float PanelTransitionSeconds = 0.22f;
 		static constexpr unsigned int ControlHeight = 36u;

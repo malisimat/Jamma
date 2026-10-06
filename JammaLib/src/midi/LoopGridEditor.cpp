@@ -124,14 +124,14 @@ void LoopGridEditor::_Layout()
 {
 	const auto pos = _ButtonPosition(_size);
 	_button->SetPosition(pos);
-	const int statusWidth = std::min(520, std::max(0, static_cast<int>(_size.Width) - 384));
-	const int statusX = std::max(0, static_cast<int>(_size.Width) - 8 - statusWidth);
-	_feedback->SetPosition({ statusX + 8, 86 });
-	_feedback->SetSize({ static_cast<unsigned int>(std::max(0, statusWidth - 16)), 22u });
-	_feedback->SetVisible(_size.Height >= 128u && statusWidth >= 40);
-	_modeLabel->SetVisible(_size.Height >= 128u && statusWidth >= 40);
-	_modeLabel->SetPosition({ statusX + 8, 62 });
-	_modeLabel->SetSize({ static_cast<unsigned int>(std::max(0, statusWidth - 16)), 22u });
+	const int statusWidth = gui::GuiStyle::StatusBarWidth(static_cast<int>(_size.Width));
+	const int statusX = static_cast<int>(_size.Width) - statusWidth;
+	const int statusHeight = std::min(gui::GuiStyle::StatusBarHeight, static_cast<int>(_size.Height));
+	const int messageWidth = gui::GuiStyle::MessageColumnWidth(statusWidth);
+	_feedback->SetPosition({ statusX + gui::GuiStyle::StatusColumnWidth(statusWidth), std::max(0, (statusHeight - 22) / 2) });
+	_feedback->SetSize({ static_cast<unsigned int>(messageWidth), 22u });
+	_feedback->SetVisible(statusHeight >= 22 && messageWidth > 0);
+	_modeLabel->SetVisible(false);
 
 }
 
@@ -1128,7 +1128,6 @@ void LoopGridEditor::ApplyToModels()
 void LoopGridEditor::Draw(base::DrawContext& ctx)
 {
 	_feedback->Draw(ctx);
-	if (IsOpen()) _modeLabel->Draw(ctx);
 
 	if (IsOpen() && !_midiLoop.expired())
 	{
