@@ -274,7 +274,7 @@ GuiHud::GuiHud(GuiHudParams params) :
 	});
 	_deletePopup->SetButtonReceiver(_deletePopupReceiver);
 	GuiElementParams infoParams;
-	infoParams.Texture = "rounded_but";
+	infoParams.Texture = "rounded_but_on";
 	infoParams.TextureShader = "texture_tinted";
 	infoParams.TintColor = GuiStyle::Graphite();
 	infoParams.TextureOpacity = GuiStyle::PanelFillOpacity;
@@ -444,7 +444,7 @@ void GuiHud::_BuildPanels()
 	railParams.Size = { _RightRailWidth - 6u, _RightRailHeight };
 	railParams.MinSize = { _RightRailWidth - 6u, _RightRailMinHeight };
 	railParams.TextureShader = "texture_tinted";
-	railParams.Texture = "rounded_but";
+	railParams.Texture = "rounded_but_on";
 	railParams.TintColor = GuiStyle::Graphite();
 	railParams.TextureOpacity = GuiStyle::PanelFillOpacity;
 	_triggerRail = std::make_shared<GuiPanel>(railParams);

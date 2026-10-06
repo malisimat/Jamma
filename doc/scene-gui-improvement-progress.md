@@ -159,7 +159,36 @@ a replacement scope. The feature is not complete.
    threading audit found no hot-path lock/wait additions. Shader-backed visual
    confirmation and final palette tuning remain slice 6 work.
 6. Integration review, app build, runtime/visual checks during playback and
-   baseline/feature performance comparison: pending.
+   baseline/feature performance comparison: in progress. An opt-in native
+   render harness now loads the production UI resource list and Inter fonts,
+   creates an owned hidden WGL context, and draws the real Scene-created
+   settings panels plus a populated production HUD into an FBO. GPU readback
+   on the AMD Radeon 880M (OpenGL 4.6 compatibility context) produced seven
+   reviewed captures: Timing/MIDI, closing/collapsed, 320 x 180 during and after
+   animation, and restored 1280 x 720. Exact pixels from an ordinary texture/font
+   control drawn after the panels match across fade/collapse/resize. The harness
+   settles the HUD's existing cable reveal fade before comparison, initializes
+   each tree, rejects pre-existing GL work, and restores global deletion-thread
+   ownership after teardown. Driver-dependent evidence stays opt-in; ordinary
+   native runs skip it. Run from the repository root with
+   `JAMMA_RENDER_EVIDENCE_DIR` set to the output directory and
+   `--gtest_filter=GuiRenderEvidence.*` (read local tasks first).
+   Bright-background visual review caught a real palette defect: the old
+   `rounded_but` texture's centre alpha is only 62/255, washing out an intended
+   80% graphite fill. Settings frames, trigger rail and source identity popup
+   now reuse `rounded_but_on`, whose opaque centre preserves that fill. GPU
+   pixels assert the actual interior alpha composition over the bright clear
+   colour; text remains legible and edge gradients retain existing artwork.
+   Incremental Debug library/native/app builds passed; 179 focused checks,
+   including the GPU evidence pass, passed (877 ms). The threading audit found
+   no hot-path lock/wait additions; its only flagged new ownership/lock state
+   belongs to the test context's setup/teardown. Captures and logs are local
+   ignored artifacts under `test/JammaLib_Tests/bin/x64/Debug/`.
+   This is component/shader evidence with synthetic routing. Full Window/Scene
+   composition, popup/caret/control-family visual coverage, native desktop
+   resizing/input, audio playback and baseline frame-time/underrun comparison
+   remain unverified. The computer-use skill was read, but this session exposes
+   no required `node_repl` tool; no desktop automation was attempted.
 7. Final requirement audit and HTML completion report: pending.
 
 ## Local build setup
