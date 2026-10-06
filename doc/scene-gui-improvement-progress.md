@@ -264,6 +264,29 @@ a replacement scope. The feature is not complete.
    and baseline frame-time/underrun comparison
    remain unverified. The computer-use skill was read, but this session exposes
    no required `node_repl` tool; no desktop automation was attempted.
+   A subsequent production-window scroll check exposed two input ownership
+   defects: wheel events could retain a capture despite having no matching
+   release, and zero-button moves cleared settings captures but left ordinary
+   HUD captures alive. Scene now excludes mouse-wheel events from pointer
+   capture/focus changes and cancels ordinary widget ownership with its pressed
+   state on native capture loss. Existing held gestures keep their owners;
+   keyboard focus survives cancellation. HUD cancellation uses the existing
+   scene mutex protecting HUD input and tree replacement. The threading audit
+   flags this added lock by filename; manual review confirms it is in UI
+   `Scene::OnAction(TouchMoveAction)`, with no callback, tick, or render-lock
+   scope changes. Focused independent review found no material issue.
+   Two regression checks verify that the actual settings handle receives its
+   press/release and collapses after a wheel event or abandoned GUI capture.
+   The production-window check now reveals cables, scrolls the real trigger
+   rail, verifies its offset changes, renders its end offset, then clicks the
+   real Timing controls and verifies quantisation policy changes. Visually
+   inspected local captures `production-window-scrolled.bmp` and
+   `production-window-scroll-end.bmp` show capture/station cable continuations
+   at the rail boundaries over the actual scene. These remain hidden-window,
+   no-playback checks. Incremental native and app builds passed; the focused
+   suite passed 188 checks (3721 ms), with only the separately enabled benchmark
+   skipped and an empty GPU error log. The preliminary timings above predate
+   these input fixes and are historical preparation evidence.
 7. Final requirement audit and HTML completion report: pending.
 
 ## Local build setup

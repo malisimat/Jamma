@@ -946,7 +946,8 @@ std::optional<ActionResult> Scene::_RouteSettingsTouch(TouchAction action)
 		if (!panel || !panel->RouteHitTest(panel->GlobalToLocal(action.Position))) continue;
 		auto result = panel->OnAction(panel->GlobalToLocal(action));
 		result.IsEaten = true;
-		if (action.State == TouchAction::TOUCH_DOWN && action.Index != 4u)
+		if (action.State == TouchAction::TOUCH_DOWN &&
+			!(action.Touch == TouchAction::TOUCH_MOUSE && action.Index == 4))
 		{
 			auto active = result.ActiveElement.lock();
 			if (!active) active = panel;
@@ -966,6 +967,10 @@ std::optional<ActionResult> Scene::_RouteSettingsTouch(TouchAction action)
 ActionResult Scene::OnAction(TouchAction action)
 {
 	ActionResult res;
+	// Wheel events are encoded as DOWN/index 4 and have no matching UP. They
+	// must not become pointer captures or replace keyboard focus.
+	const bool pointerPress = action.State == TouchAction::TOUCH_DOWN &&
+		!(action.Touch == TouchAction::TOUCH_MOUSE && action.Index == 4);
 	action.SetActionTime(Timer::GetTime());
 	action.SetUserConfig(_userConfig);
 	_cursorPos = action.Position;
@@ -1086,14 +1091,14 @@ ActionResult Scene::OnAction(TouchAction action)
 			if (nullptr != res.Undo)
 				_undoHistory.Add(res.Undo);
 
-			if (!_touchDownElement.lock())
+			if (pointerPress && !_touchDownElement.lock())
 			{
 				_touchDownElement = res.ActiveElement;
 				_touchDownIsHud = isHudChild;
 			}
 
 			// Focus follows the pressed control when it wants the keyboard.
-			if (TouchAction::TouchState::TOUCH_DOWN == action.State)
+			if (pointerPress)
 			{
 				auto active = res.ActiveElement.lock();
 				if (active && active->WantsFocusOnPress())
@@ -1115,7 +1120,7 @@ ActionResult Scene::OnAction(TouchAction action)
 			if (nullptr != res.Undo)
 				_undoHistory.Add(res.Undo);
 
-			if (!_touchDownElement.lock())
+			if (pointerPress && !_touchDownElement.lock())
 			{
 				_touchDownElement = res.ActiveElement;
 				_touchDownIsHud = false;
@@ -1216,6 +1221,20 @@ ActionResult Scene::OnAction(TouchMoveAction action)
 
 	if (activeElement)
 	{
+		if (action.Touch == TouchAction::TOUCH_MOUSE && action.MouseButtonsDown == 0u)
+		{
+			// Native capture loss is reported as a zero-button move. Clear the
+			// captured widget and owner together, including HUD captures.
+			if (_touchDownIsHud)
+			{
+				std::scoped_lock lock(_sceneMutex);
+				activeElement->ClearPointerState();
+			}
+			else activeElement->ClearPointerState();
+			_touchDownElement.reset();
+			_touchDownIsHud = false;
+			return { true, {}, {}, ACTIONRESULT_DEFAULT, nullptr, {} };
+		}
 		if (_touchDownIsHud)
 		{
 			std::scoped_lock lock(_sceneMutex);

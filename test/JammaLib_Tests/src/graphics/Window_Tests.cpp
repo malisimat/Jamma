@@ -226,6 +226,28 @@ public:
 				}
 		return true;
 	}
+	static std::shared_ptr<gui::GuiHud> Hud(Scene& scene, utils::Position2d point)
+	{
+		actions::TouchAction down; down.Touch = actions::TouchAction::TOUCH_MOUSE;
+		down.State = actions::TouchAction::TOUCH_DOWN; down.Index = 0; down.Position = point;
+		auto active = scene.OnAction(down).ActiveElement.lock();
+		actions::TouchMoveAction cancel; cancel.Position = point; cancel.MouseButtonsDown = 0;
+		scene.OnAction(cancel);
+		for (auto element = active; element; element = element->Parent())
+			if (auto hud = std::dynamic_pointer_cast<gui::GuiHud>(element)) return hud;
+		return nullptr;
+	}
+	static std::vector<std::shared_ptr<gui::GuiScrollPanel>> Scrolls(const std::shared_ptr<base::GuiElement>& element)
+	{
+		std::vector<std::shared_ptr<gui::GuiScrollPanel>> result;
+		for (unsigned int index = 0; index < 256; ++index) {
+			const auto child = element->TryGetChild(static_cast<unsigned char>(index));
+			if (!child) break;
+			if (auto scroll = std::dynamic_pointer_cast<gui::GuiScrollPanel>(child)) result.push_back(scroll);
+			const auto descendants = Scrolls(child); result.insert(result.end(), descendants.begin(), descendants.end());
+		}
+		return result;
+	}
 	static void BeginFrame(graphics::GlDrawContext& context, utils::Size2d size, float background)
 	{
 		context.Bind(); glDisable(GL_DEPTH_TEST); glEnable(GL_BLEND);
@@ -518,6 +540,9 @@ TEST(GuiRenderEvidence, ProductionWindowSceneResizeAndPanelInput)
 	ASSERT_EQ(0, window.Create(GetModuleHandleW(nullptr), SW_HIDE));
 	const auto ownedWindow = WindowFromDC(wglGetCurrentDC()); ASSERT_NE(nullptr, ownedWindow);
 	EXPECT_FALSE(IsWindowVisible(ownedWindow));
+	actions::KeyAction reveal; reveal.KeyChar = VK_OEM_3; reveal.KeyActionType = actions::KeyAction::KEY_DOWN;
+	window.OnAction(reveal);
+	for (int frame = 0; frame < 7; ++frame) { window.Render(); glFinish(); }
 	const auto capture = [&](const std::string& name) {
 		window.Render(); glFinish();
 		const auto size = window.GetSize();
@@ -533,6 +558,25 @@ TEST(GuiRenderEvidence, ProductionWindowSceneResizeAndPanelInput)
 		window.Swap(); EXPECT_EQ(GL_NO_ERROR, glGetError());
 	};
 	capture("production-window-expanded");
+	auto hud = NativeGuiRenderEvidence::Hud(*scene, { 600, 582 }); ASSERT_TRUE(hud);
+	const auto scrolls = NativeGuiRenderEvidence::Scrolls(hud);
+	auto triggerScroll = std::find_if(scrolls.begin(), scrolls.end(), [](const auto& scroll) {
+		return scroll->Content() && scroll->Content()->TryGetChild(0) &&
+			scroll->Content()->TryGetChild(0)->GetSize().Height == 100u;
+	});
+	ASSERT_NE(scrolls.end(), triggerScroll);
+	ASSERT_GT((*triggerScroll)->MaxScrollOffset(), 0);
+	actions::TouchAction wheel; wheel.Touch = actions::TouchAction::TOUCH_MOUSE;
+	wheel.State = actions::TouchAction::TOUCH_DOWN; wheel.Index = 4; wheel.Value = -1;
+	const auto scrollPosition = (*triggerScroll)->GlobalPosition();
+	wheel.Position = { scrollPosition.X + 60, scrollPosition.Y + 100 };
+	const auto oldOffset = (*triggerScroll)->ScrollOffset();
+	EXPECT_TRUE(window.OnAction(wheel).IsEaten);
+	EXPECT_GT((*triggerScroll)->ScrollOffset(), oldOffset);
+	capture("production-window-scrolled");
+	(*triggerScroll)->SetScrollOffset((*triggerScroll)->MaxScrollOffset());
+	capture("production-window-scroll-end");
+	(*triggerScroll)->SetScrollOffset(0);
 	auto settings = NativeGuiRenderEvidence::Settings(*scene, { 30, 10 }); ASSERT_TRUE(settings);
 	settings->SetExpanded(false); settings->AdvanceAnimation(0.05f);
 	capture("production-window-closing");
@@ -570,4 +614,5 @@ TEST(GuiRenderEvidence, ProductionWindowSceneResizeAndPanelInput)
 		EXPECT_EQ(index == 2u, take->ResolvedMidiQuantisation().Enabled);
 		EXPECT_FALSE(scene->HasSelection());
 	}
+	reveal.KeyActionType = actions::KeyAction::KEY_UP; window.OnAction(reveal);
 }

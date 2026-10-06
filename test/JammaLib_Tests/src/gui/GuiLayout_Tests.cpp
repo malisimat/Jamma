@@ -793,6 +793,52 @@ TEST(Scene, SettingsOwnModifiedPressAndReleaseWithoutSceneFallthrough) {
 	EXPECT_TRUE(scene.OnAction(action).IsEaten);
 }
 
+TEST(Scene, SettingsReceivesNextPressAndReleaseAfterWheelScroll) {
+	Scene scene(SceneParams({ "" }, {}, { 800u, 600u }), io::UserConfig{});
+	gui::GuiScrollPanelParams params;
+	params.Position = { 500, 100 }; params.Size = { 120u, 100u };
+	auto scroll = std::make_shared<gui::GuiScrollPanel>(params);
+	base::GuiElementParams contentParams; contentParams.Size = { 120u, 400u };
+	scroll->SetContent(std::make_shared<base::GuiElement>(contentParams));
+	scene.AddChild(scroll);
+	TouchAction wheel; wheel.Touch = TouchAction::TOUCH_MOUSE;
+	wheel.State = TouchAction::TOUCH_DOWN; wheel.Index = 4; wheel.Value = -1; wheel.Position = { 540, 150 };
+	ASSERT_TRUE(scene.OnAction(wheel).IsEaten);
+	ASSERT_GT(scroll->ScrollOffset(), 0);
+	TouchAction press; press.Touch = TouchAction::TOUCH_MOUSE;
+	press.State = TouchAction::TOUCH_DOWN; press.Index = 0; press.Position = { 30, 10 };
+	const auto down = scene.OnAction(press);
+	ASSERT_TRUE(down.IsEaten);
+	auto owner = down.ActiveElement.lock();
+	while (owner && !std::dynamic_pointer_cast<gui::GuiMainPanel>(owner)) owner = owner->Parent();
+	ASSERT_TRUE(owner);
+	press.State = TouchAction::TOUCH_UP;
+	EXPECT_TRUE(scene.OnAction(press).IsEaten);
+	EXPECT_FALSE(std::dynamic_pointer_cast<gui::GuiMainPanel>(owner)->IsExpanded());
+	EXPECT_FALSE(scene.HasSelection());
+}
+
+TEST(Scene, SettingsReceivesNextControlAfterGuiCaptureCancellation) {
+	Scene scene(SceneParams({ "" }, {}, { 800u, 600u }), io::UserConfig{});
+	auto button = std::make_shared<GuiButton>(MakeButtonParams(80u, 30u));
+	button->SetPosition({ 500, 300 }); scene.AddChild(button);
+	TouchAction press; press.Touch = TouchAction::TOUCH_MOUSE;
+	press.Index = 0; press.State = TouchAction::TOUCH_DOWN; press.Position = { 510, 310 };
+	ASSERT_EQ(button, scene.OnAction(press).ActiveElement.lock());
+	actions::TouchMoveAction cancel; cancel.Touch = TouchAction::TOUCH_MOUSE;
+	cancel.Position = press.Position; cancel.MouseButtonsDown = 0;
+	EXPECT_TRUE(scene.OnAction(cancel).IsEaten);
+	EXPECT_EQ(base::GuiElement::STATE_NORMAL, button->GetState());
+	press.Position = { 30, 10 };
+	const auto down = scene.OnAction(press); ASSERT_TRUE(down.IsEaten);
+	auto owner = down.ActiveElement.lock();
+	while (owner && !std::dynamic_pointer_cast<gui::GuiMainPanel>(owner)) owner = owner->Parent();
+	ASSERT_TRUE(owner);
+	press.State = TouchAction::TOUCH_UP; EXPECT_TRUE(scene.OnAction(press).IsEaten);
+	EXPECT_FALSE(std::dynamic_pointer_cast<gui::GuiMainPanel>(owner)->IsExpanded());
+	EXPECT_FALSE(scene.HasSelection());
+}
+
 TEST(Scene, SettingsCaptureCancellationAllowsNextControlToReceivePress) {
 	SceneParams sceneParams({ "" }, {}, { 800u, 600u });
 	Scene scene(sceneParams, io::UserConfig{});
