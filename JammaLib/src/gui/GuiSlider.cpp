@@ -3,6 +3,8 @@
 #include "glm/ext.hpp"
 #include "../audio/AudioMixer.h"
 #include <cmath>
+#include <algorithm>
+#include <limits>
 
 using namespace gui;
 using namespace utils;
@@ -49,9 +51,7 @@ GuiSlider::GuiSlider(GuiSliderParams params) :
 	_isDragging(false),
 	_initClickPos({ 0,0 }),
 	_initDragPos({ 0,0 }),
-	_initValue(params.InitValue),
-	_valueOffset(0.0),
-		_dragElement([params]() {
+	_dragElement([params]() {
 			GuiElementParams dragParams(0,
 				DrawableParams{ "" },
 				MoveableParams(utils::Position2d{ 0, 0 }, utils::Position3d{ 0, 0, 0 }, 1.0),
@@ -72,6 +72,29 @@ GuiSlider::GuiSlider(GuiSliderParams params) :
 			dragParams.GuiPassThrough = false;
 			return dragParams;
 		}()),
+	_scaleUnityImage(_MakeScaleImageParams("fader_scale_line", { 0, 4 })),
+	_scaleEndpointImage(_MakeScaleImageParams("fader_scale_line", { 0, 4 })),
+	_scaleMajorImage(_MakeScaleImageParams("fader_scale_line", { 0, 4 })),
+	_scaleMinorImage(_MakeScaleImageParams("fader_scale_line", { 0, 4 })),
+	_scaleTrackImage(_MakeScaleImageParams("fader_scale_track", { 8, 0 })),
+	_scaleMarks(),
+	_scaleTrackBounds(),
+	_scaleLayoutValid(false),
+	_scaleLayoutSize({ 0, 0 }),
+	_scaleLayoutHandleSize({ 0, 0 }),
+	_scaleLayoutHandleOffset({ 0, 0 }),
+	_scaleLayoutGap({ 0, 0 }),
+	_scaleLayoutOrientation(GuiSliderParams::SLIDER_VERTICAL),
+	_scaleLayoutScale(GuiSliderParams::SliderScale::Linear),
+	_scaleLayoutMin(0.0),
+	_scaleLayoutMax(0.0),
+	_scaleLayoutMinDecibels(0.0),
+	_scaleLayoutEnabled(false),
+	_scaleImagePanelWidth(std::numeric_limits<unsigned int>::max()),
+	_scaleAppliedTrackBounds(),
+	_scaleTrackSizeApplied(false),
+	_valueOffset(0.0),
+	_initValue(params.InitValue),
 	_mixer()
 {
 	SetValue(params.InitValue);
@@ -107,6 +130,7 @@ void GuiSlider::SetDragParams(utils::Position2d dragOffset,
 	_sliderParams.DragControlSize = dragSize;
 	_sliderParams.DragGap = dragGap;
 	_dragElement.SetSize(dragSize);
+	_scaleLayoutValid = false;
 
 	OnValueChange(true);
 }
@@ -114,6 +138,7 @@ void GuiSlider::SetDragParams(utils::Position2d dragOffset,
 void GuiSlider::SetSize(Size2d size)
 {
 	GuiElement::SetSize(size);
+	_scaleLayoutValid = false;
 
 	OnValueChange(true);
 }
@@ -125,6 +150,64 @@ void GuiSlider::Draw(DrawContext & ctx)
 	auto &glCtx = dynamic_cast<GlDrawContext&>(ctx);
 	auto pos = Position();
 	glCtx.PushMvp(glm::translate(glm::mat4(1.0), glm::vec3(pos.X, pos.Y, 0.f)));
+	if (_isVisible && _sliderParams.ScaleMarksEnabled)
+	{
+		_EnsureScaleLayout();
+		const auto previousTint = glCtx.GetUniform("TintColor");
+		if (_scaleTrackBounds.Valid)
+		{
+			const auto& bounds = _scaleTrackBounds.Bounds;
+			glCtx.PushMvp(glm::translate(glm::mat4(1.0f), glm::vec3(bounds.Left, bounds.Bottom, 0.0f)));
+			glCtx.SetUniform("TintColor", glm::vec3(0.0f));
+			{
+				auto opacity = ctx.WithOpacity(1.0f);
+				_scaleTrackImage.Draw(ctx);
+			}
+			glCtx.PopMvp();
+		}
+
+		for (const auto& mark : _scaleMarks)
+		{
+			auto* image = &_scaleMinorImage;
+			glm::vec3 tint(0xF6 / 255.0f, 0xDD / 255.0f, 0xE6 / 255.0f);
+			float opacity = 0.25f;
+			int inset = 12;
+			switch (mark.Kind)
+			{
+			case ScaleMarkKind::Unity:
+				image = &_scaleUnityImage;
+				tint = glm::vec3(0xFF / 255.0f, 0xC8 / 255.0f, 0x78 / 255.0f);
+				opacity = 0.90f;
+				inset = 8;
+				break;
+			case ScaleMarkKind::Endpoint:
+				image = &_scaleEndpointImage;
+				opacity = 0.65f;
+				inset = 8;
+				break;
+			case ScaleMarkKind::Major:
+				image = &_scaleMajorImage;
+				opacity = 0.45f;
+				break;
+			case ScaleMarkKind::Minor:
+				break;
+			}
+			if (image->GetSize().Width < 6u)
+				continue;
+
+			glCtx.PushMvp(glm::translate(glm::mat4(1.0f), glm::vec3(inset, mark.CentreY - 2, 0.0f)));
+			glCtx.SetUniform("TintColor", tint);
+			{
+				auto scopedOpacity = ctx.WithOpacity(opacity);
+				image->Draw(ctx);
+			}
+			glCtx.PopMvp();
+		}
+		if (previousTint.has_value())
+			glCtx.SetUniform("TintColor", *previousTint);
+		else
+			glCtx.SetUniform("TintColor", glm::vec3(1.0f));
+	}
 	_dragElement.Draw(ctx);
 
 	auto mixer = _mixer.lock();
@@ -213,6 +296,13 @@ ActionResult GuiSlider::OnAction(TouchMoveAction action)
 
 	auto dPos = action.Position - _initClickPos;
 	auto dragPos = _initDragPos + dPos;
+	if (CalcDragLength(_sliderParams, _sizeParams.Size) == 0u || !(_sliderParams.Max > _sliderParams.Min))
+	{
+		// Degenerate layouts preserve the current gain and must not emit an
+		// unchanged slider action to the mixer.
+		res.IsEaten = true;
+		return res;
+	}
 
 	_valueOffset = CalcValueOffset(_sliderParams, _sizeParams.Size, dragPos, _initDragPos, _initValue);
 	std::cout << "InitValue: " << _initValue << ", ValueOffset: " << _valueOffset << " = " << (_initValue + _valueOffset) << std::endl;
@@ -276,6 +366,217 @@ bool GuiSlider::Redo(std::shared_ptr<ActionUndo> undo)
 	return false;
 }
 
+std::vector<GuiSlider::ScaleMark> GuiSlider::BuildScaleMarks(
+	const GuiSliderParams& params,
+	utils::Size2d size)
+{
+	std::vector<ScaleMark> marks;
+	_BuildScaleMarks(params, size, marks);
+	return marks;
+}
+
+void GuiSlider::_BuildScaleMarks(
+	const GuiSliderParams& params,
+	utils::Size2d size,
+	std::vector<ScaleMark>& marks)
+{
+	marks.clear();
+	if (!params.ScaleMarksEnabled || params.Orientation != GuiSliderParams::SLIDER_VERTICAL ||
+		params.Scale != GuiSliderParams::SliderScale::Decibels || params.Min != 0.0 ||
+		!(params.Max >= 1.0) || !(params.MinDecibels < 0.0) ||
+		!std::isfinite(params.MinDecibels) || params.MinDecibels != -60.0 ||
+		!(params.Max > params.Min))
+		return;
+
+	const auto handleHeight = params.DragControlSize.Height;
+	const auto gaps = 2ull * params.DragGap.Height;
+	if (size.Height <= static_cast<unsigned long long>(handleHeight) + gaps)
+		return;
+
+	const auto travel = CalcDragLength(params, size);
+	if (travel == 0u)
+		return;
+
+	const auto maxDecibels = 20.0 * std::log10(params.Max);
+	// The scale grid below is defined for the current rack range (-60 to +16 dB).
+	// If that range changes, its integer index policy must be updated explicitly.
+	if (!std::isfinite(maxDecibels) || std::abs(maxDecibels - 16.0) > 1e-6)
+		return;
+	constexpr double range = 76.0;
+
+	const auto addMark = [&params, size, &marks](double gain, ScaleMarkKind kind)
+	{
+		const auto position = CalcDragPos(params, size, gain);
+		marks.push_back({ position.Y + static_cast<int>(params.DragControlSize.Height / 2u), gain, kind });
+	};
+	if (travel < 114u)
+	{
+		addMark(params.Min, ScaleMarkKind::Endpoint);
+		addMark(1.0, ScaleMarkKind::Unity);
+		addMark(params.Max, ScaleMarkKind::Endpoint);
+	}
+	else
+	{
+		const auto subdivisions = static_cast<unsigned int>(std::clamp(
+			static_cast<int>(std::floor(6.0 * travel / (range * 14.0))), 1, 4));
+		const auto lastGridIndex = 76u * subdivisions / 6u;
+		marks.reserve(lastGridIndex + 2u);
+		for (auto index = 0u; index <= lastGridIndex; ++index)
+		{
+			const auto scaledDecibels = -60 * static_cast<int>(subdivisions) + 6 * static_cast<int>(index);
+			const auto decibels = static_cast<double>(scaledDecibels) / subdivisions;
+			const auto gain = index == 0u ? params.Min : std::pow(10.0, decibels / 20.0);
+			ScaleMarkKind kind = ScaleMarkKind::Minor;
+			if (index == 0u || (index == lastGridIndex && scaledDecibels == 16 * static_cast<int>(subdivisions)))
+				kind = ScaleMarkKind::Endpoint;
+			else if (index == 10u * subdivisions)
+				kind = ScaleMarkKind::Unity;
+			else if (index % (2u * subdivisions) == 0u)
+				kind = ScaleMarkKind::Major;
+		addMark(kind == ScaleMarkKind::Endpoint && index != 0u
+			? params.Max : gain, kind);
+		}
+
+		if (-60 + 6 * static_cast<int>(lastGridIndex) / static_cast<int>(subdivisions) < 16)
+			addMark(params.Max, ScaleMarkKind::Endpoint);
+	}
+
+	const auto priority = [](ScaleMarkKind kind)
+	{
+		switch (kind)
+		{
+		case ScaleMarkKind::Unity: return 4;
+		case ScaleMarkKind::Endpoint: return 3;
+		case ScaleMarkKind::Major: return 2;
+		case ScaleMarkKind::Minor: return 1;
+		}
+		return 0;
+	};
+	std::sort(marks.begin(), marks.end(), [](const auto& a, const auto& b)
+	{
+		return a.CentreY < b.CentreY;
+	});
+	auto uniqueCount = 0u;
+	for (const auto& mark : marks)
+	{
+		if (uniqueCount == 0u || marks[uniqueCount - 1u].CentreY != mark.CentreY)
+			marks[uniqueCount++] = mark;
+		else if (priority(mark.Kind) > priority(marks[uniqueCount - 1u].Kind))
+			marks[uniqueCount - 1u] = mark;
+	}
+	marks.erase(marks.begin() + uniqueCount, marks.end());
+}
+
+GuiSlider::ScaleTrackBounds GuiSlider::BuildScaleTrackBounds(
+	const GuiSliderParams& params,
+	utils::Size2d size)
+{
+	if (!params.ScaleMarksEnabled || params.Orientation != GuiSliderParams::SLIDER_VERTICAL ||
+		params.Scale != GuiSliderParams::SliderScale::Decibels || !(params.Max > params.Min) ||
+		params.Min != 0.0 || params.MinDecibels != -60.0 || !(params.Max >= 1.0))
+		return {};
+	const auto handleHeight = params.DragControlSize.Height;
+	const auto gaps = 2ull * params.DragGap.Height;
+	if (size.Height <= static_cast<unsigned long long>(handleHeight) + gaps)
+		return {};
+	const auto travel = CalcDragLength(params, size);
+	const auto maxDecibels = 20.0 * std::log10(params.Max);
+	if (travel < 4u || !std::isfinite(maxDecibels) || std::abs(maxDecibels - 16.0) > 1e-6)
+		return {};
+	const auto minimum = CalcDragPos(params, size, params.Min);
+	const auto maximum = CalcDragPos(params, size, params.Max);
+	const auto centerX = params.DragControlOffset.X + static_cast<int>(params.DragControlSize.Width / 2u);
+	const auto minimumY = minimum.Y + static_cast<int>(handleHeight / 2u);
+	const auto maximumY = maximum.Y + static_cast<int>(handleHeight / 2u);
+	if (maximumY - minimumY < 4)
+		return {};
+	return { { centerX - 4, minimumY, centerX + 4, maximumY }, true };
+}
+
+graphics::ImageParams GuiSlider::_MakeScaleImageParams(const std::string& texture, utils::Size2d size)
+{
+	return graphics::ImageParams(
+		DrawableParams{ texture },
+		SizeableParams{ size, size },
+		"texture_tinted", false, false, false, 1.0f);
+}
+
+bool GuiSlider::_ScaleLayoutKeyMatches() const
+{
+	return _scaleLayoutValid && _scaleLayoutSize == _sizeParams.Size &&
+		_scaleLayoutHandleSize == _sliderParams.DragControlSize &&
+		_scaleLayoutHandleOffset == _sliderParams.DragControlOffset &&
+		_scaleLayoutGap == _sliderParams.DragGap &&
+		_scaleLayoutOrientation == _sliderParams.Orientation &&
+		_scaleLayoutScale == _sliderParams.Scale && _scaleLayoutMin == _sliderParams.Min &&
+		_scaleLayoutMax == _sliderParams.Max && _scaleLayoutMinDecibels == _sliderParams.MinDecibels &&
+		_scaleLayoutEnabled == _sliderParams.ScaleMarksEnabled;
+}
+
+void GuiSlider::_StoreScaleLayoutKey()
+{
+	_scaleLayoutSize = _sizeParams.Size;
+	_scaleLayoutHandleSize = _sliderParams.DragControlSize;
+	_scaleLayoutHandleOffset = _sliderParams.DragControlOffset;
+	_scaleLayoutGap = _sliderParams.DragGap;
+	_scaleLayoutOrientation = _sliderParams.Orientation;
+	_scaleLayoutScale = _sliderParams.Scale;
+	_scaleLayoutMin = _sliderParams.Min;
+	_scaleLayoutMax = _sliderParams.Max;
+	_scaleLayoutMinDecibels = _sliderParams.MinDecibels;
+	_scaleLayoutEnabled = _sliderParams.ScaleMarksEnabled;
+	_scaleLayoutValid = true;
+}
+
+void GuiSlider::_UpdateScaleImageWidths(unsigned int panelWidth)
+{
+	const auto lineWidth = [panelWidth](unsigned int inset)
+	{
+		if (panelWidth <= 2u * inset)
+			return 0u;
+		const auto width = panelWidth - 2u * inset;
+		return width >= 6u ? width : 0u;
+	};
+	const auto endpointWidth = lineWidth(8u);
+	const auto intermediateWidth = lineWidth(12u);
+	if (_scaleUnityImage.GetSize().Width != endpointWidth)
+		_scaleUnityImage.SetSize({ endpointWidth, 4u });
+	if (_scaleEndpointImage.GetSize().Width != endpointWidth)
+		_scaleEndpointImage.SetSize({ endpointWidth, 4u });
+	if (_scaleMajorImage.GetSize().Width != intermediateWidth)
+		_scaleMajorImage.SetSize({ intermediateWidth, 4u });
+	if (_scaleMinorImage.GetSize().Width != intermediateWidth)
+		_scaleMinorImage.SetSize({ intermediateWidth, 4u });
+}
+
+void GuiSlider::_EnsureScaleLayout()
+{
+	if (_ScaleLayoutKeyMatches())
+		return;
+	if (_scaleImagePanelWidth != _sizeParams.Size.Width)
+	{
+		_UpdateScaleImageWidths(_sizeParams.Size.Width);
+		_scaleImagePanelWidth = _sizeParams.Size.Width;
+	}
+	_BuildScaleMarks(_sliderParams, _sizeParams.Size, _scaleMarks);
+	_scaleTrackBounds = BuildScaleTrackBounds(_sliderParams, _sizeParams.Size);
+	utils::Rect2d trackRect;
+	if (_scaleTrackBounds.Valid)
+		trackRect = _scaleTrackBounds.Bounds;
+	if (!_scaleTrackSizeApplied || trackRect.Left != _scaleAppliedTrackBounds.Left ||
+		trackRect.Bottom != _scaleAppliedTrackBounds.Bottom || trackRect.Right != _scaleAppliedTrackBounds.Right ||
+		trackRect.Top != _scaleAppliedTrackBounds.Top)
+	{
+		const auto trackWidth = trackRect.IsEmpty() ? 0u : static_cast<unsigned int>(trackRect.Right - trackRect.Left);
+		const auto trackHeight = trackRect.IsEmpty() ? 0u : static_cast<unsigned int>(trackRect.Top - trackRect.Bottom);
+		_scaleTrackImage.SetSize({ trackWidth, trackHeight });
+		_scaleAppliedTrackBounds = trackRect;
+		_scaleTrackSizeApplied = true;
+	}
+	_scaleLayoutValid = false;
+	_StoreScaleLayoutKey();
+}
+
 bool GuiSlider::DragHandleIsOverForTest() const noexcept
 {
 	return _dragElement.GetState() == GuiElement::STATE_OVER;
@@ -284,6 +585,15 @@ bool GuiSlider::DragHandleIsOverForTest() const noexcept
 void GuiSlider::_InitResources(ResourceLib& resourceLib, bool forceInit)
 {
 	_dragElement.InitResources(resourceLib, forceInit);
+	if (_sliderParams.ScaleMarksEnabled)
+	{
+		_EnsureScaleLayout();
+		_scaleUnityImage.InitResources(resourceLib, forceInit);
+		_scaleEndpointImage.InitResources(resourceLib, forceInit);
+		_scaleMajorImage.InitResources(resourceLib, forceInit);
+		_scaleMinorImage.InitResources(resourceLib, forceInit);
+		_scaleTrackImage.InitResources(resourceLib, forceInit);
+	}
 	
 	// Initialize mixer's resources (VU meter shaders, vertex buffers, etc.)
 	auto mixer = _mixer.lock();
@@ -296,6 +606,14 @@ void GuiSlider::_InitResources(ResourceLib& resourceLib, bool forceInit)
 void GuiSlider::_ReleaseResources()
 {
 	_dragElement.ReleaseResources();
+	if (_sliderParams.ScaleMarksEnabled)
+	{
+		_scaleUnityImage.ReleaseResources();
+		_scaleEndpointImage.ReleaseResources();
+		_scaleMajorImage.ReleaseResources();
+		_scaleMinorImage.ReleaseResources();
+		_scaleTrackImage.ReleaseResources();
+	}
 	
 	// Release mixer's resources
 	auto mixer = _mixer.lock();

@@ -36,6 +36,8 @@ GuiRack::GuiRack(GuiRackParams params) :
 	_midiChannelToggles(),
 	_rackParams(params)
 {
+	params.Size.Height = std::max(params.Size.Height, _MinimumScaleLayoutHeight);
+	_rackParams.Size = params.Size;
 	_masterPanel = std::make_shared<base::GuiElement>(_GetPanelParams(GuiRackParams::RACK_MASTER, params.Size));
 	_masterSlider = std::make_shared<gui::GuiSlider>(_GetSliderParams(0, params.Size));
 	_channelToggle = std::make_shared<gui::GuiToggle>(_GetToggleParams(GuiRackParams::RACK_CHANNELS, params.Size));
@@ -82,6 +84,9 @@ GuiRack::GuiRack(GuiRackParams params) :
 
 void GuiRack::SetSize(utils::Size2d size)
 {
+	// The silence, unity and maximum anchors need distinct pixel rows even on
+	// compact layouts. This leaves at least three pixels of handle travel.
+	size.Height = std::max(size.Height, _MinimumScaleLayoutHeight);
 	_rackParams.Size = size;
 
 	auto masterPanelParams = _GetPanelParams(GuiRackParams::RACK_MASTER, size);
@@ -393,11 +398,12 @@ gui::GuiSliderParams GuiRack::_GetSliderParams(unsigned int index, utils::Size2d
 	sliderParams.Max = std::pow(10.0, 16.0 / 20.0);
 	sliderParams.Scale = GuiSliderParams::SliderScale::Decibels;
 	sliderParams.MinDecibels = -60.0;
+	sliderParams.ScaleMarksEnabled = true;
 	sliderParams.InitValue = _rackParams.InitLevel;
 	sliderParams.Orientation = GuiSliderParams::SLIDER_VERTICAL;
 
 	sliderParams.Size = sliderSize;
-	sliderParams.MinSize = { std::max(40u,sliderParams.Size.Width), std::max(40u, sliderParams.Size.Height) };
+	sliderParams.MinSize = { std::max(40u,sliderParams.Size.Width), std::max(47u, sliderParams.Size.Height) };
 
 	if (0 == index)
 	{

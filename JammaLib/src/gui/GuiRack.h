@@ -91,6 +91,7 @@ namespace gui
 		static const utils::Size2d _RouterToggleSize;
 		static const unsigned int _RouterTogglePaddingBottom;
 		static const utils::Size2d _DragGap;
+		static constexpr unsigned int _MinimumScaleLayoutHeight = 55u;
 		static constexpr unsigned int _DragHeight = 28u;
 		static constexpr unsigned int _DragOverhang = 2u;
 		static const utils::Size2d _MidiChannelToggleSize;
