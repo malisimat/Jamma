@@ -7,6 +7,8 @@
 #include "gui/GuiLabel.h"
 #include "gui/GuiPanel.h"
 #include "gui/GuiScrollPanel.h"
+#include "gui/GuiMainPanel.h"
+#include "gui/GuiNumericInput.h"
 #include "gui/GuiHud.h"
 #include "gui/GuiPopupManager.h"
 #include "engine/RigSnapshot.h"
@@ -505,6 +507,43 @@ TEST(Scene, TouchActionReachesChildGuiPanel)
 	EXPECT_TRUE(res.IsEaten);
 }
 
+template <typename T>
+static std::shared_ptr<T> FindGuiElement(base::GuiElement& root)
+{
+	// Scroll content is hosted separately from the ordinary child list.
+	if (auto scroll = dynamic_cast<gui::GuiScrollPanel*>(&root))
+	{
+		if (auto content = scroll->Content())
+		{
+			if (auto match = std::dynamic_pointer_cast<T>(content)) return match;
+			if (auto match = FindGuiElement<T>(*content)) return match;
+		}
+	}
+	for (unsigned int index = 0; index <= 255u; ++index)
+	{
+		auto child = root.TryGetChild(static_cast<unsigned char>(index));
+		if (!child) continue;
+		if (auto match = std::dynamic_pointer_cast<T>(child)) return match;
+		if (auto match = FindGuiElement<T>(*child)) return match;
+	}
+	return nullptr;
+}
+
+class SettingsTestScene : public Scene
+{
+public:
+	SettingsTestScene(SceneParams params, io::UserConfig user) : Scene(std::move(params), std::move(user)) {}
+	std::shared_ptr<gui::GuiMainPanel> SettingsPanel() const { return _mainPanel; }
+};
+
+static utils::Position2d SettingsHandleCenter(const std::shared_ptr<gui::GuiMainPanel>& panel)
+{
+	const auto handle = panel->TryGetChild(1u);
+	const auto position = handle->GlobalPosition();
+	const auto size = handle->GetSize();
+	return position + utils::Position2d{ static_cast<int>(size.Width / 2u), static_cast<int>(size.Height / 2u) };
+}
+
 TEST(GuiStackPanel, HiddenOrDisabledParentRejectsVisibleChildren)
 {
 	GuiStackPanelParams params;
@@ -780,12 +819,12 @@ TEST(GuiLabel, FitsMeasuredWidthsWithEllipsisAndHandlesEmptyFrames)
 
 TEST(Scene, SettingsOwnModifiedPressAndReleaseWithoutSceneFallthrough) {
 	SceneParams sceneParams({ "" }, {}, { 800u, 600u });
-	Scene scene(sceneParams, io::UserConfig{});
+	SettingsTestScene scene(sceneParams, io::UserConfig{});
 	TouchAction action;
 	action.Touch = TouchAction::TOUCH_MOUSE;
 	action.Index = 0u;
 	action.Modifiers = static_cast<base::Action::Modifiers>(base::Action::MODIFIER_SHIFT | base::Action::MODIFIER_CTRL);
-	action.Position = { 30, 10 };
+	action.Position = SettingsHandleCenter(scene.SettingsPanel());
 	action.State = TouchAction::TOUCH_DOWN;
 	EXPECT_TRUE(scene.OnAction(action).IsEaten);
 	action.Position = { 500, 300 };
@@ -794,7 +833,8 @@ TEST(Scene, SettingsOwnModifiedPressAndReleaseWithoutSceneFallthrough) {
 }
 
 TEST(Scene, SettingsReceivesNextPressAndReleaseAfterWheelScroll) {
-	Scene scene(SceneParams({ "" }, {}, { 800u, 600u }), io::UserConfig{});
+	SettingsTestScene scene(SceneParams({ "" }, {}, { 800u, 600u }), io::UserConfig{});
+	auto panel = scene.SettingsPanel();
 	gui::GuiScrollPanelParams params;
 	params.Position = { 500, 100 }; params.Size = { 120u, 100u };
 	auto scroll = std::make_shared<gui::GuiScrollPanel>(params);
@@ -806,12 +846,13 @@ TEST(Scene, SettingsReceivesNextPressAndReleaseAfterWheelScroll) {
 	ASSERT_TRUE(scene.OnAction(wheel).IsEaten);
 	ASSERT_GT(scroll->ScrollOffset(), 0);
 	TouchAction press; press.Touch = TouchAction::TOUCH_MOUSE;
-	press.State = TouchAction::TOUCH_DOWN; press.Index = 0; press.Position = { 30, 10 };
+	press.State = TouchAction::TOUCH_DOWN; press.Index = 0; press.Position = SettingsHandleCenter(panel);
 	const auto down = scene.OnAction(press);
 	ASSERT_TRUE(down.IsEaten);
 	auto owner = down.ActiveElement.lock();
 	while (owner && !std::dynamic_pointer_cast<gui::GuiMainPanel>(owner)) owner = owner->Parent();
 	ASSERT_TRUE(owner);
+	ASSERT_EQ(panel, std::dynamic_pointer_cast<gui::GuiMainPanel>(owner));
 	press.State = TouchAction::TOUCH_UP;
 	EXPECT_TRUE(scene.OnAction(press).IsEaten);
 	EXPECT_FALSE(std::dynamic_pointer_cast<gui::GuiMainPanel>(owner)->IsExpanded());
@@ -819,7 +860,8 @@ TEST(Scene, SettingsReceivesNextPressAndReleaseAfterWheelScroll) {
 }
 
 TEST(Scene, SettingsReceivesNextControlAfterGuiCaptureCancellation) {
-	Scene scene(SceneParams({ "" }, {}, { 800u, 600u }), io::UserConfig{});
+	SettingsTestScene scene(SceneParams({ "" }, {}, { 800u, 600u }), io::UserConfig{});
+	auto panel = scene.SettingsPanel();
 	auto button = std::make_shared<GuiButton>(MakeButtonParams(80u, 30u));
 	button->SetPosition({ 500, 300 }); scene.AddChild(button);
 	TouchAction press; press.Touch = TouchAction::TOUCH_MOUSE;
@@ -829,26 +871,27 @@ TEST(Scene, SettingsReceivesNextControlAfterGuiCaptureCancellation) {
 	cancel.Position = press.Position; cancel.MouseButtonsDown = 0;
 	EXPECT_TRUE(scene.OnAction(cancel).IsEaten);
 	EXPECT_EQ(base::GuiElement::STATE_NORMAL, button->GetState());
-	press.Position = { 30, 10 };
+	press.Position = SettingsHandleCenter(panel);
 	const auto down = scene.OnAction(press); ASSERT_TRUE(down.IsEaten);
 	auto owner = down.ActiveElement.lock();
 	while (owner && !std::dynamic_pointer_cast<gui::GuiMainPanel>(owner)) owner = owner->Parent();
 	ASSERT_TRUE(owner);
+	ASSERT_EQ(panel, std::dynamic_pointer_cast<gui::GuiMainPanel>(owner));
 	press.State = TouchAction::TOUCH_UP; EXPECT_TRUE(scene.OnAction(press).IsEaten);
-	EXPECT_FALSE(std::dynamic_pointer_cast<gui::GuiMainPanel>(owner)->IsExpanded());
+	EXPECT_FALSE(panel->IsExpanded());
 	EXPECT_FALSE(scene.HasSelection());
 }
 
 TEST(Scene, SettingsCaptureCancellationAllowsNextControlToReceivePress) {
 	SceneParams sceneParams({ "" }, {}, { 800u, 600u });
-	Scene scene(sceneParams, io::UserConfig{});
+	SettingsTestScene scene(sceneParams, io::UserConfig{});
 	auto button = std::make_shared<GuiButton>(MakeButtonParams(80u, 30u));
 	button->SetPosition({ 500, 300 });
 	scene.AddChild(button);
 	TouchAction action;
 	action.Touch = TouchAction::TOUCH_MOUSE;
 	action.Index = 0u;
-	action.Position = { 30, 10 };
+	action.Position = SettingsHandleCenter(scene.SettingsPanel());
 	action.State = TouchAction::TOUCH_DOWN;
 	ASSERT_TRUE(scene.OnAction(action).IsEaten);
 	actions::TouchMoveAction cancel;
@@ -863,18 +906,18 @@ TEST(Scene, SettingsCaptureCancellationAllowsNextControlToReceivePress) {
 
 TEST(Scene, SettingsHandleCollapsesAndReopensThroughPointerDispatch) {
 	SceneParams sceneParams({ "" }, {}, { 800u, 600u });
-	Scene scene(sceneParams, io::UserConfig{});
+	SettingsTestScene scene(sceneParams, io::UserConfig{});
+	auto panel = scene.SettingsPanel();
 	TouchAction action;
 	action.Touch = TouchAction::TOUCH_MOUSE;
 	action.Index = 0u;
-	action.Position = { 30, 10 };
+	action.Position = SettingsHandleCenter(panel);
 	action.State = TouchAction::TOUCH_DOWN;
 	auto down = scene.OnAction(action);
 	ASSERT_TRUE(down.IsEaten);
 	auto active = down.ActiveElement.lock();
 	ASSERT_NE(nullptr, active);
-	auto panel = std::dynamic_pointer_cast<gui::GuiMainPanel>(active->Parent());
-	ASSERT_NE(nullptr, panel);
+	ASSERT_EQ(panel, active->Parent());
 	action.State = TouchAction::TOUCH_UP;
 	EXPECT_TRUE(scene.OnAction(action).IsEaten);
 	EXPECT_FALSE(panel->IsExpanded());
@@ -890,22 +933,20 @@ TEST(Scene, SettingsHandleCollapsesAndReopensThroughPointerDispatch) {
 
 TEST(Scene, HidingSettingsDuringNumericCaptureConsumesTerminatingRelease) {
 	SceneParams sceneParams({ "" }, {}, { 800u, 600u });
-	Scene scene(sceneParams, io::UserConfig{});
+	SettingsTestScene scene(sceneParams, io::UserConfig{});
+	auto panel = scene.SettingsPanel();
 	TouchAction action;
 	action.Touch = TouchAction::TOUCH_MOUSE; action.Index = 0u;
-	action.Position = { 30, 10 }; action.State = TouchAction::TOUCH_DOWN;
+	action.Position = SettingsHandleCenter(panel); action.State = TouchAction::TOUCH_DOWN;
 	auto handlePress = scene.OnAction(action);
 	auto active = handlePress.ActiveElement.lock();
 	ASSERT_NE(nullptr, active);
-	auto panel = std::dynamic_pointer_cast<gui::GuiMainPanel>(active->Parent());
-	ASSERT_NE(nullptr, panel);
+	ASSERT_EQ(panel, active->Parent());
 	actions::TouchMoveAction cancel;
 	cancel.Position = action.Position; cancel.MouseButtonsDown = 0u;
 	scene.OnAction(cancel);
-	auto scroll = std::dynamic_pointer_cast<gui::GuiScrollPanel>(panel->TryGetChild(0)->TryGetChild(1));
-	ASSERT_NE(nullptr, scroll);
-	auto numeric = std::dynamic_pointer_cast<gui::GuiNumericInput>(scroll->Content()->TryGetChild(3));
-	ASSERT_NE(nullptr, numeric); // Timing retains quantisation, then phase offset.
+	auto numeric = FindGuiElement<gui::GuiNumericInput>(*panel);
+	ASSERT_NE(nullptr, numeric);
 	action.Position = numeric->GlobalPosition() + utils::Position2d{ 10, 10 };
 	auto inputPress = scene.OnAction(action);
 	ASSERT_EQ(numeric, inputPress.ActiveElement.lock());
