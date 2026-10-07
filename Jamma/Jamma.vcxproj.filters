@@ -58,15 +58,6 @@
     <Content Include="resources\textures\font_tiny.tga">
       <Filter>resources\textures</Filter>
     </Content>
-    <Content Include="resources\textures\fader.tga">
-      <Filter>resources\textures</Filter>
-    </Content>
-    <Content Include="resources\textures\fader_back.tga">
-      <Filter>resources\textures</Filter>
-    </Content>
-    <Content Include="resources\textures\fader_over.tga">
-      <Filter>resources\textures</Filter>
-    </Content>
     <Content Include="resources\textures\red.tga">
       <Filter>resources\textures</Filter>
     </Content>

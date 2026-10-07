@@ -2,6 +2,7 @@
 #include "CommonTypes.h"
 #include "glm/ext.hpp"
 #include "../audio/AudioMixer.h"
+#include <cmath>
 
 using namespace gui;
 using namespace utils;
@@ -9,6 +10,38 @@ using namespace base;
 using namespace actions;
 using graphics::GlDrawContext;
 using resources::ResourceLib;
+
+double GuiSliderParams::ValueToFraction(double value) const
+{
+	if (!(Max > Min))
+		return 0.0;
+	if (Scale == SliderScale::Linear)
+		return (value - Min) / (Max - Min);
+	if (!(value > 0.0) || !(Max > 0.0))
+		return 0.0;
+	const auto maxDecibels = 20.0 * std::log10(Max);
+	if (!(maxDecibels > MinDecibels))
+		return 0.0;
+	return std::clamp((20.0 * std::log10(value) - MinDecibels) /
+		(maxDecibels - MinDecibels), 0.0, 1.0);
+}
+
+double GuiSliderParams::FractionToValue(double fraction) const
+{
+	fraction = std::clamp(fraction, 0.0, 1.0);
+	if (fraction <= 0.0 || !(Max > Min))
+		return Min;
+	if (fraction >= 1.0)
+		return Max;
+	if (Scale == SliderScale::Linear)
+		return Min + fraction * (Max - Min);
+	if (!(Max > 0.0))
+		return Min;
+	const auto maxDecibels = 20.0 * std::log10(Max);
+	if (!(maxDecibels > MinDecibels))
+		return Min;
+	return std::pow(10.0, (MinDecibels + fraction * (maxDecibels - MinDecibels)) / 20.0);
+}
 
 GuiSlider::GuiSlider(GuiSliderParams params) :
 	GuiElement(params),
@@ -317,6 +350,29 @@ double GuiSlider::CalcValueOffset(GuiSliderParams params,
 	double dragFrac = 0.0;
 
 	auto dragLength = CalcDragLength(params, size);
+	if (dragLength == 0u || !(params.Max > params.Min))
+		return 0.0;
+
+	if (params.Scale == GuiSliderParams::SliderScale::Decibels)
+	{
+		const auto vertical = params.Orientation == GuiSliderParams::SLIDER_VERTICAL;
+		const auto position = vertical ? dragPos.Y : dragPos.X;
+		const auto initialPosition = vertical ? initDragPos.Y : initDragPos.X;
+		const auto offset = vertical ? params.DragControlOffset.Y : params.DragControlOffset.X;
+		if (position == initialPosition)
+			return 0.0;
+		// Apply pointer motion in dB travel, preserving the exact initial gain
+		// despite the handle's rounded pixel position. Endpoints remain exact.
+		auto fraction = std::clamp(params.ValueToFraction(initValue) +
+			static_cast<double>(position - initialPosition) / dragLength, 0.0, 1.0);
+		if (position <= offset)
+			fraction = 0.0;
+		else if (position - offset >= static_cast<int>(dragLength))
+			fraction = 1.0;
+		if (params.Steps > 0u)
+			fraction = std::round(fraction * params.Steps) / params.Steps;
+		return params.FractionToValue(fraction) - initValue;
+	}
 
 	if (dragLength > 0)
 		dragFrac = GuiSliderParams::SLIDER_VERTICAL == params.Orientation ?
@@ -358,8 +414,7 @@ utils::Position2d GuiSlider::CalcDragPos(GuiSliderParams params,
 	utils::Size2d size,
 	double value)
 {
-	auto valRange = params.Max - params.Min;
-	auto valFrac = (value - params.Min) / valRange;
+	auto valFrac = params.ValueToFraction(value);
 
 	return GuiSliderParams::SLIDER_VERTICAL == params.Orientation ?
 		Position2d{
@@ -378,17 +433,17 @@ unsigned int GuiSlider::CalcDragLength(GuiSliderParams params,
 	if (GuiSliderParams::SLIDER_VERTICAL == params.Orientation)
 	{
 		auto h = params.DragControlSize.Height + (2 * params.DragGap.Height);
-		if (h > size.Height)
-			return size.Height;
+		if (h >= size.Height)
+			return 0u;
 		else
 			return size.Height - h;
 	}
 	else
 	{
 		auto w = params.DragControlSize.Width + (2 * params.DragGap.Width);
-		if (w > params.Size.Width)
-			return params.Size.Width;
+		if (w >= size.Width)
+			return 0u;
 		else
-			return params.Size.Width - w;
+			return size.Width - w;
 	}
 }

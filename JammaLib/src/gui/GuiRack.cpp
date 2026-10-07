@@ -1,6 +1,7 @@
 #include "GuiToggle.h"
 #include "GuiRack.h"
 #include <algorithm>
+#include <cmath>
 using namespace graphics;
 
 using namespace base;
@@ -16,7 +17,7 @@ const utils::Size2d GuiRack::_ChannelToggleSize = { 32, 64 };
 const utils::Size2d GuiRack::_RouterToggleSize = { 64, 32 };
 const unsigned int GuiRack::_RouterTogglePaddingBottom = 8;
 const utils::Size2d GuiRack::_DragGap = { 4, 4 };
-const utils::Size2d GuiRack::_DragSize = { 112, 56 };
+const utils::Size2d GuiRack::_DragSize = { 100, 28 };
 const utils::Size2d GuiRack::_MidiChannelToggleSize = { 42, 42 };
 const utils::Size2d GuiRack::_MidiChannelToggleGap = { 6, 6 };
 const unsigned int GuiRack::_MidiChannelPanelPadding = 8;
@@ -390,7 +391,9 @@ gui::GuiSliderParams GuiRack::_GetSliderParams(unsigned int index, utils::Size2d
 	GuiSliderParams sliderParams;
 	sliderParams.Index = index;
 	sliderParams.Min = 0.0;
-	sliderParams.Max = 6.0;
+	sliderParams.Max = std::pow(10.0, 16.0 / 20.0);
+	sliderParams.Scale = GuiSliderParams::SliderScale::Decibels;
+	sliderParams.MinDecibels = -60.0;
 	sliderParams.InitValue = _rackParams.InitLevel;
 	sliderParams.Orientation = GuiSliderParams::SLIDER_VERTICAL;
 
@@ -413,9 +416,13 @@ gui::GuiSliderParams GuiRack::_GetSliderParams(unsigned int index, utils::Size2d
 	sliderParams.DragControlOffset = { (int)(sliderParams.Size.Width / 2) - (int)(dragSize.Width / 2), (int)_DragGap.Height };
 	sliderParams.DragControlSize = dragSize;
 	sliderParams.DragGap = _DragGap;
-	sliderParams.Texture = "fader_back";
-	sliderParams.DragTexture = "rounded_rect";
-	sliderParams.DragOverTexture = "";
+	sliderParams.Texture = "fader_back_panel";
+	sliderParams.TextureOpacity = 0.55f;
+	sliderParams.OverTexture = "fader_back_panel_over";
+	sliderParams.DownTexture = "fader_back_panel_down";
+	sliderParams.DragTexture = "fader_button";
+	sliderParams.DragOverTexture = "fader_button_over";
+	sliderParams.DragDownTexture = "fader_button_down";
 
 	return sliderParams;
 }

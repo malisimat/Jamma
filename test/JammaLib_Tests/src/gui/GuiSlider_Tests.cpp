@@ -1,6 +1,7 @@
 #include "gtest/gtest.h"
 #include "resources/ResourceLib.h"
 #include "gui/GuiSlider.h"
+#include <cmath>
 
 using base::ActionReceiver;
 using resources::ResourceLib;
@@ -26,6 +27,7 @@ public:
 	};
 	
 	bool IsExpected() { return _expected == _value; }
+	double Value() const { return _value; }
 
 private:
 	double _expected;
@@ -284,4 +286,107 @@ TEST(GuiSlider, ClearingPointerCancelsDragAndDiscardsOffset) {
 	EXPECT_TRUE(receiver->IsExpected());
 	EXPECT_FALSE(slider->OnAction(move).IsEaten);
 	EXPECT_DOUBLE_EQ(0.0, slider->Value());
+}
+
+class DecibelSliderTestData : public GuiSlider
+{
+public:
+	using GuiSlider::CalcDragPos;
+	static GuiSliderParams Params()
+	{
+		GuiSliderParams params;
+		params.Size = { 100u, 112u }; // 76px travel: one pixel per dB.
+		params.DragControlSize = { 100u, 28u };
+		params.DragControlOffset = { 0, 4 };
+		params.DragGap = { 4u, 4u };
+		params.Min = 0.0;
+		params.Max = std::pow(10.0, 16.0 / 20.0);
+		params.Scale = GuiSliderParams::SliderScale::Decibels;
+		params.MinDecibels = -60.0;
+		params.InitValue = 1.0;
+		return params;
+	}
+	static TouchAction Down(int y)
+	{
+		TouchAction action;
+		action.Touch = TouchAction::TOUCH_MOUSE;
+		action.State = TouchAction::TOUCH_DOWN;
+		action.Position = { 50, y };
+		return action;
+	}
+	static TouchMoveAction Move(int y)
+	{
+		TouchMoveAction action;
+		action.Touch = TouchAction::TOUCH_MOUSE;
+		action.Position = { 50, y };
+		return action;
+	}
+};
+
+TEST(GuiSlider, DecibelMappingPlacesUnityAndEndpointsAndSurvivesResize) {
+	const auto params = DecibelSliderTestData::Params();
+	EXPECT_NEAR(60.0 / 76.0, params.ValueToFraction(1.0), 1e-12);
+	EXPECT_DOUBLE_EQ(0.0, params.ValueToFraction(0.0));
+	EXPECT_DOUBLE_EQ(0.0, params.FractionToValue(0.0));
+	EXPECT_DOUBLE_EQ(params.Max, params.FractionToValue(1.0));
+	EXPECT_EQ(4, DecibelSliderTestData::CalcDragPos(params, params.Size, 0.0).Y);
+	EXPECT_EQ(64, DecibelSliderTestData::CalcDragPos(params, params.Size, 1.0).Y);
+	EXPECT_EQ(80, DecibelSliderTestData::CalcDragPos(params, params.Size, params.Max).Y);
+	EXPECT_EQ(124, DecibelSliderTestData::CalcDragPos(params, { 100u, 188u }, 1.0).Y);
+	for (const auto db : { -48.0, -24.0, -6.0, 0.0, 6.0, 16.0 }) {
+		const auto gain = std::pow(10.0, db / 20.0);
+		EXPECT_NEAR(gain, params.FractionToValue(params.ValueToFraction(gain)), 1e-12);
+	}
+}
+
+TEST(GuiSlider, DecibelDraggingSendsLinearGainAndTrackGrabStaysRelative) {
+	const auto params = DecibelSliderTestData::Params();
+	auto slider = std::make_shared<GuiSlider>(params);
+	auto receiver = std::make_shared<MockedSliderReceiver>(1.0);
+	slider->SetReceiver(receiver);
+	// Grab the track away from the handle; no gain jump on mouse down.
+	ASSERT_TRUE(slider->OnAction(DecibelSliderTestData::Down(30)).IsEaten);
+	EXPECT_DOUBLE_EQ(1.0, slider->Value());
+	slider->OnAction(DecibelSliderTestData::Move(30));
+	EXPECT_DOUBLE_EQ(1.0, slider->Value());
+	slider->OnAction(DecibelSliderTestData::Move(36));
+	const auto expected = std::pow(10.0, 6.0 / 20.0);
+	EXPECT_NEAR(expected, slider->Value(), 1e-12);
+	EXPECT_NEAR(expected, receiver->Value(), 1e-12);
+}
+
+TEST(GuiSlider, DecibelDraggingClampsToSilenceAndMaximumAndSupportsUndo) {
+	const auto params = DecibelSliderTestData::Params();
+	auto slider = std::make_shared<GuiSlider>(params);
+	ASSERT_TRUE(slider->OnAction(DecibelSliderTestData::Down(78)).IsEaten);
+	slider->OnAction(DecibelSliderTestData::Move(-100));
+	EXPECT_DOUBLE_EQ(0.0, slider->Value());
+	slider->OnAction(DecibelSliderTestData::Move(500));
+	EXPECT_DOUBLE_EQ(params.Max, slider->Value());
+	auto up = DecibelSliderTestData::Down(500);
+	up.State = TouchAction::TOUCH_UP;
+	const auto result = slider->OnAction(up);
+	ASSERT_TRUE(result.Undo);
+	result.Undo->Undo();
+	EXPECT_DOUBLE_EQ(1.0, slider->Value());
+}
+
+TEST(GuiSlider, DecibelDragDoesNotChangeGainWhenHandleHasNoTravel) {
+	auto params = DecibelSliderTestData::Params();
+	params.Size.Height = 28u;
+	auto slider = std::make_shared<GuiSlider>(params);
+	ASSERT_TRUE(slider->OnAction(DecibelSliderTestData::Down(14)).IsEaten);
+	slider->OnAction(DecibelSliderTestData::Move(24));
+	EXPECT_DOUBLE_EQ(1.0, slider->Value());
+}
+
+TEST(GuiSlider, DecibelDraggingFromRoundedRestoredGainHasNoInitialJump) {
+	auto params = DecibelSliderTestData::Params();
+	params.InitValue = 0.71;
+	auto slider = std::make_shared<GuiSlider>(params);
+	ASSERT_TRUE(slider->OnAction(DecibelSliderTestData::Down(40)).IsEaten);
+	slider->OnAction(DecibelSliderTestData::Move(40));
+	EXPECT_DOUBLE_EQ(0.71, slider->Value());
+	slider->OnAction(DecibelSliderTestData::Move(46));
+	EXPECT_NEAR(0.71 * std::pow(10.0, 6.0 / 20.0), slider->Value(), 1e-12);
 }

@@ -95,10 +95,23 @@ namespace gui
 			SLIDER_HORIZONTAL
 		};
 
+		enum class SliderScale
+		{
+			Linear,
+			Decibels
+		};
+
+		// Values remain linear gain; only handle travel uses decibels.
+		double ValueToFraction(double value) const;
+		double FractionToValue(double fraction) const;
+
 	public:
 		SliderOrientation Orientation;
 		double Min;
 		double Max;
+		SliderScale Scale = SliderScale::Linear;
+		// Decibel faders reserve fraction zero for Min (normally silence).
+		double MinDecibels = -60.0;
 		unsigned int Steps;
 		double InitValue;
 		std::string DragTexture;
