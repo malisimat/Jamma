@@ -17,7 +17,6 @@ const utils::Size2d GuiRack::_ChannelToggleSize = { 32, 64 };
 const utils::Size2d GuiRack::_RouterToggleSize = { 64, 32 };
 const unsigned int GuiRack::_RouterTogglePaddingBottom = 8;
 const utils::Size2d GuiRack::_DragGap = { 4, 4 };
-const utils::Size2d GuiRack::_DragSize = { 100, 28 };
 const utils::Size2d GuiRack::_MidiChannelToggleSize = { 42, 42 };
 const utils::Size2d GuiRack::_MidiChannelToggleGap = { 6, 6 };
 const unsigned int GuiRack::_MidiChannelPanelPadding = 8;
@@ -412,8 +411,12 @@ gui::GuiSliderParams GuiRack::_GetSliderParams(unsigned int index, utils::Size2d
 		};
 	}
 
-	utils::Size2d dragSize = { _DragSize.Width, std::min(_DragSize.Height, sliderSize.Height) };
-	sliderParams.DragControlOffset = { (int)(sliderParams.Size.Width / 2) - (int)(dragSize.Width / 2), (int)_DragGap.Height };
+	// Small overhangs leave clearance within the eight-pixel channel gap.
+	utils::Size2d dragSize = {
+		sliderSize.Width + (2u * _DragOverhang),
+		std::min(_DragHeight, sliderSize.Height)
+	};
+	sliderParams.DragControlOffset = { -static_cast<int>(_DragOverhang), (int)_DragGap.Height };
 	sliderParams.DragControlSize = dragSize;
 	sliderParams.DragGap = _DragGap;
 	sliderParams.Texture = "fader_back_panel";
