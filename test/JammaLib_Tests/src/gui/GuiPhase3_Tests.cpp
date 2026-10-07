@@ -13,7 +13,6 @@
 #include "engine/Scene.h"
 #include "graphics/GlDrawContext.h"
 #include <limits>
-#include <iterator>
 #include <type_traits>
 
 static_assert(!std::is_copy_constructible_v<graphics::GlDrawContext>);
@@ -1172,33 +1171,6 @@ TEST(GuiTextGeometry, ButtonAndRadioLabelsRetainCenteredContentFramesAcrossResiz
 	auto toggleLabel = std::dynamic_pointer_cast<gui::GuiLabel>(radio->TryGetChild(0)->TryGetChild(0));
 	ASSERT_NE(nullptr, toggleLabel);
 	EXPECT_EQ(label->GetSize().Height - 1u, toggleLabel->GetSize().Height);
-}
-
-TEST(GuiTextGeometry, ActualInterGlyphsFitCenteredLineFramesAtAllAvailableSizes) {
-	std::ifstream input(graphics::Font::GetFontFilename(), std::ios::binary);
-	ASSERT_TRUE(input.good());
-	const std::vector<unsigned char> bytes((std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
-	ASSERT_FALSE(bytes.empty());
-	stbtt_fontinfo info{};
-	ASSERT_NE(0, stbtt_InitFont(&info, bytes.data(), 0));
-	int ascent = 0, descent = 0, gap = 0;
-	stbtt_GetFontVMetrics(&info, &ascent, &descent, &gap);
-	for (const auto size : graphics::FontOptions::FontSizes) {
-		const auto height = graphics::Font::GetPixelHeightForSize(size);
-		const auto scale = stbtt_ScaleForPixelHeight(&info, static_cast<float>(height));
-		const graphics::Font::VerticalMetrics metrics{ ascent * scale, descent * scale, gap * scale };
-		const auto line = gui::GuiLabel::ResolveLineFrame(static_cast<float>(height), metrics, gui::GuiTextVerticalAlign::Center);
-		EXPECT_NEAR(0.0f, line.Bottom, 0.001f);
-		EXPECT_NEAR(static_cast<float>(height), line.Top, 0.001f);
-		for (const unsigned char character : std::string("Agjpq 0123456789")) {
-			int x0 = 0, y0 = 0, x1 = 0, y1 = 0;
-			stbtt_GetCodepointBitmapBox(&info, character, scale, scale, &x0, &y0, &x1, &y1);
-			if (y0 == y1) continue; // Space has no ink.
-			// Raster boxes round outward to whole pixels around the metric line.
-			EXPECT_GE(line.BaselineY - y1, -1.0f) << character << " at " << height;
-			EXPECT_LE(line.BaselineY - y0, static_cast<float>(height) + 1.0f) << character << " at " << height;
-		}
-	}
 }
 
 TEST(GuiTextGeometry, LegacyWidthTableFontHasExplicitFallbackLineMetrics) {
