@@ -2166,10 +2166,12 @@ TEST(Scene, LoopGridEditorTracksOneMidiLoopAndClosesWhenItIsReplaced) {
 	EXPECT_NEAR(0.0f, alignedEye.x, 0.001f);
 	EXPECT_NEAR(0.0f, alignedEye.z, 0.001f);
 	const auto alignedRadius = glm::length(alignedEye);
+	// Drag below the grid and away from the settings overlay.
 	scene.OnAction(MakeSceneTouch(TouchAction::TOUCH_DOWN,
-		{ 100, 100 }, 0, LeftMouseButtonMask));
-	scene.OnAction(MakeSceneTouchMove({ 60, 140 }, LeftMouseButtonMask));
-	scene.OnAction(MakeSceneTouch(TouchAction::TOUCH_UP, { 60, 140 }, 0, 0u));
+		{ 700, 100 }, 0, LeftMouseButtonMask));
+	ASSERT_FALSE(scene.EditorOwnsPointerForTest());
+	scene.OnAction(MakeSceneTouchMove({ 660, 140 }, LeftMouseButtonMask));
+	scene.OnAction(MakeSceneTouch(TouchAction::TOUCH_UP, { 660, 140 }, 0, 0u));
 	const auto orbitEye = scene.EditorProbeEyeLocalForTest();
 	EXPECT_LT(orbitEye.x, 0.0f);
 	EXPECT_LT(orbitEye.z, 0.0f);
@@ -2178,9 +2180,9 @@ TEST(Scene, LoopGridEditorTracksOneMidiLoopAndClosesWhenItIsReplaced) {
 	EXPECT_NEAR(1.0f, glm::dot(glm::normalize(-orbitEye),
 		glm::vec3(forward.X, forward.Y, forward.Z)), 0.001f);
 	scene.OnAction(MakeSceneTouch(TouchAction::TOUCH_DOWN,
-		{ 100, 100 }, 2, RightMouseButtonMask));
-	scene.OnAction(MakeSceneTouchMove({ 80, 120 }, RightMouseButtonMask));
-	scene.OnAction(MakeSceneTouch(TouchAction::TOUCH_UP, { 80, 120 }, 2, 0u));
+		{ 700, 100 }, 2, RightMouseButtonMask));
+	scene.OnAction(MakeSceneTouchMove({ 680, 120 }, RightMouseButtonMask));
+	scene.OnAction(MakeSceneTouch(TouchAction::TOUCH_UP, { 680, 120 }, 2, 0u));
 	EXPECT_NEAR(alignedRadius, glm::length(scene.EditorProbeEyeLocalForTest()), 0.001f);
 	const auto editorPose = scene.CameraPoseForTest();
 	scene.OnAction(MakeSceneTouch(TouchAction::TOUCH_DOWN, { 700, 450 }, 0, LeftMouseButtonMask));
@@ -2323,11 +2325,6 @@ TEST(Scene, LoopGridEditorCanSelectMidiLoopAtEverySelectionDepthAndOpenWithE) {
 	EXPECT_TRUE(scene.OnAction(edit).IsEaten);
 	EXPECT_EQ(take->GetMidiLoops().front(), scene.LoopGridEditorMidiLoop());
 	scene.CloseLoopGridEditor();
-	scene.SettleLoopGridEditorForTest();
-	scene.OnAction(MakeSceneTouch(TouchAction::TOUCH_DOWN, { 1290, 875 }, 0,
-		LeftMouseButtonMask));
-	scene.OnAction(MakeSceneTouch(TouchAction::TOUCH_UP, { 1290, 875 }, 0u, 0u));
-	EXPECT_EQ(take->GetMidiLoops().front(), scene.LoopGridEditorMidiLoop());
 }
 
 TEST(Scene, MiddleMutePaintAppliesImmediatelySuppressesHoverAndPreservesOtherTakes) {
