@@ -47,6 +47,17 @@ static GuiRackParams MakeRackParams(unsigned int width = 200, unsigned int heigh
 	return params;
 }
 
+TEST(GuiRack, CompactConstructionAndResizeKeepScaleAnchorsDistinct)
+{
+	GuiRack rack(MakeRackParams(200, 20));
+	EXPECT_GE(rack.GetSize().Height, 55u);
+	EXPECT_GE(rack.GetMasterSlider()->GetSize().Height, 47u);
+	rack.SetNumInputChannels(1);
+	rack.SetSize({ 200, 1 });
+	EXPECT_GE(rack.GetMasterSlider()->GetSize().Height, 47u);
+	EXPECT_GE(rack.GetChannelSlider(0)->GetSize().Height, 47u);
+}
+
 // --- State transition tests ---
 
 TEST(GuiRack, DefaultStateIsMaster) {

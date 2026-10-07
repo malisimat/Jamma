@@ -7,8 +7,11 @@
 #include "resources/ResourcePaths.h"
 #include "gui/GuiDropDown.h"
 #include "gui/GuiNumericInput.h"
+#include "gui/GuiRack.h"
+#include "audio/AudioMixer.h"
 #include <filesystem>
 #include <cstdlib>
+#include <cmath>
 #include "SceneGuiBenchmark.h"
 
 using resources::ResourceLib;
@@ -317,6 +320,121 @@ private:
 	std::thread::id PreviousRenderThread{};
 	bool OwnsDeletes = false;
 };
+
+class FaderEvidenceRack : public gui::GuiRack
+{
+public:
+	FaderEvidenceRack() : GuiRack([] {
+		gui::GuiRackParams params; params.Size = { 106, 320 }; return params;
+	}()) {}
+	using GuiRack::_GetSliderParams;
+};
+
+class FaderEvidenceSlider : public gui::GuiSlider
+{
+public:
+	using GuiSlider::GuiSlider;
+	using GuiSlider::CalcDragPos;
+};
+
+TEST(GuiRenderEvidence, RackFaderScalesStatesHeightsAndResize)
+{
+	const char* directory = std::getenv("JAMMA_RENDER_EVIDENCE_DIR");
+	if (!directory || !*directory) GTEST_SKIP() << "Set JAMMA_RENDER_EVIDENCE_DIR for GPU evidence.";
+	const std::filesystem::path output(directory);
+	std::filesystem::create_directories(output);
+	NativeGuiRenderEvidence gpu;
+	ASSERT_TRUE(gpu.Initialize());
+	resources::ResourceLib resources;
+	ASSERT_TRUE(NativeGuiRenderEvidence::LoadUiResources(resources));
+	FaderEvidenceRack rack;
+	const utils::Size2d viewport{ 500, 820 };
+	std::vector<std::shared_ptr<gui::GuiSlider>> sliders;
+	std::vector<gui::GuiSliderParams> sliderParams;
+	std::vector<std::shared_ptr<audio::AudioMixer>> mixers;
+	for (unsigned int column = 0; column < 6; ++column) {
+		auto params = rack._GetSliderParams(column < 3 ? 0 : 1, { 106, 320 });
+		params.Position = { 20 + static_cast<int>(column) * 78, 20 };
+		auto slider = std::make_shared<FaderEvidenceSlider>(params);
+		auto mixer = std::make_shared<audio::AudioMixer>(audio::AudioMixerParams{});
+		mixer->UpdateVu(0.6f, 256);
+		slider->SetMixer(mixer);
+		slider->Init(); slider->InitResources(resources, false);
+		sliders.push_back(slider); mixers.push_back(mixer);
+		sliderParams.push_back(params);
+	}
+	for (const auto height : { 100u, 260u, 746u }) {
+		for (unsigned int column = 0; column < sliders.size(); ++column) {
+			auto& slider = sliders[column];
+			slider->ClearPointerState();
+			slider->SetSize({ slider->GetSize().Width, height });
+			slider->SetValue(column % 3 == 0 ? 0.0 : column % 3 == 1 ? 1.0 : std::pow(10.0, 16.0 / 20.0), true);
+		}
+		for (const bool handle : { false, true })
+		for (const auto state : { "normal", "over", "down" }) {
+			graphics::GlDrawContext context(viewport, base::DrawContext::TEXTURE);
+			context.Initialise(); NativeGuiRenderEvidence::BeginFrame(context, viewport, 0.12f);
+			for (unsigned int column = 0; column < sliders.size(); ++column) {
+				auto& slider = sliders[column];
+				slider->ClearPointerState();
+				if (std::string(state) != "normal") {
+					actions::TouchMoveAction hover;
+					const auto drag = FaderEvidenceSlider::CalcDragPos(sliderParams[column], slider->GetSize(), slider->Value());
+					hover.Position = handle ? utils::Position2d{ static_cast<int>(slider->GetSize().Width / 2),
+						drag.Y + static_cast<int>(sliderParams[column].DragControlSize.Height / 2) } : utils::Position2d{ 1, 2 };
+					slider->OnAction(hover);
+					EXPECT_EQ(handle, slider->DragHandleIsOverForTest());
+					if (std::string(state) == "down") {
+						actions::TouchAction down;
+						down.Touch = actions::TouchAction::TOUCH_MOUSE; down.State = actions::TouchAction::TOUCH_DOWN;
+						down.Position = hover.Position; slider->OnAction(down);
+					}
+				}
+				const glm::vec3 sentinelTint(0.2f, 0.4f, 0.6f);
+				if (column > 0) context.SetUniform("TintColor", sentinelTint);
+				{
+					auto inheritedOpacity = context.WithOpacity(column == 5 ? 0.5f : 1.0f);
+					slider->Draw(context);
+				}
+				EXPECT_FLOAT_EQ(1.0f, context.Opacity());
+				const auto restoredTint = context.GetUniform("TintColor");
+				ASSERT_TRUE(restoredTint.has_value());
+				EXPECT_EQ(column == 0 ? glm::vec3(1.0f) : sentinelTint,
+					std::any_cast<glm::vec3>(*restoredTint));
+			}
+			glFinish(); EXPECT_EQ(GL_NO_ERROR, glGetError());
+			const auto pixels = context.GetPixels();
+			if (!handle && std::string(state) == "normal") {
+				const auto marks = gui::GuiSlider::BuildScaleMarks(sliderParams[0], sliders[0]->GetSize());
+				const auto unity = std::find_if(marks.begin(), marks.end(), [](const auto& mark) {
+					return mark.Kind == gui::GuiSlider::ScaleMarkKind::Unity;
+				});
+				ASSERT_NE(marks.end(), unity);
+				const auto pixel = [&](int x, int y, unsigned int channel) {
+					return pixels[(static_cast<size_t>(20 + y) * viewport.Width + 20 + x) * 4u + channel];
+				};
+				// Gain zero leaves unity unobscured. These pixel checks also catch stale
+				// mark geometry after each resize, and an accidental screen-Y reversal.
+				EXPECT_GT(pixel(10, unity->CentreY, 0), pixel(10, unity->CentreY, 1));
+				EXPECT_GT(pixel(10, unity->CentreY, 1), pixel(10, unity->CentreY, 2));
+				EXPECT_GT(pixel(10, unity->CentreY, 0), 170);
+				const auto track = gui::GuiSlider::BuildScaleTrackBounds(sliderParams[0], sliders[0]->GetSize());
+				ASSERT_TRUE(track.Valid);
+				int trackY = 40;
+				while (std::any_of(marks.begin(), marks.end(), [trackY](const auto& mark) {
+					return std::abs(mark.CentreY - trackY) <= 2;
+				})) ++trackY;
+				const int centreX = (track.Bounds.Left + track.Bounds.Right) / 2;
+				for (int x = centreX - 2; x < centreX + 2; ++x)
+					EXPECT_LE(pixel(x, trackY, 0), 1); // Allow driver blend rounding.
+				EXPECT_GT(pixel(centreX - 3, trackY, 0), 0);
+				EXPECT_GT(pixel(centreX + 2, trackY, 0), 0);
+			}
+			EXPECT_TRUE(NativeGuiRenderEvidence::SaveBmp(output / ("faders-" + std::to_string(height) +
+				(handle ? "-handle-" : "-panel-") + state + ".bmp"), viewport, pixels));
+		}
+	}
+}
 
 TEST(GuiRenderEvidence, ProductionPanelsHudAndFontPathsRenderOnActualGpu)
 {
