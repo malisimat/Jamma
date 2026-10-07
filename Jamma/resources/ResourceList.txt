@@ -90,3 +90,5 @@
 1 fader_back_panel ninepatch 12 12
 1 fader_back_panel_over ninepatch 12 12
 1 fader_back_panel_down ninepatch 12 12
+1 fader_scale_line ninepatch 3 0
+1 fader_scale_track ninepatch 4 2
