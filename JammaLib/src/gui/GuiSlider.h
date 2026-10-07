@@ -23,6 +23,8 @@ namespace gui
 		static constexpr unsigned int WideWidth = 320u;
 		static constexpr unsigned int DefaultMinWidth = 36u;
 		static constexpr unsigned int DefaultDragWidth = 10u;
+		static constexpr double RackMinDecibels = -48.0;
+		static constexpr double RackMaxDecibels = 20.0;
 
 		GuiSliderParams() :
 			base::GuiElementParams(0, DrawableParams{ "" },
@@ -135,8 +137,7 @@ namespace gui
 		{
 			Endpoint,
 			Unity,
-			Major,
-			Minor
+			Intermediate
 		};
 
 		struct ScaleMark
@@ -211,8 +212,7 @@ namespace gui
 		base::GuiElement _dragElement;
 		graphics::Image _scaleUnityImage;
 		graphics::Image _scaleEndpointImage;
-		graphics::Image _scaleMajorImage;
-		graphics::Image _scaleMinorImage;
+		graphics::Image _scaleIntermediateImage;
 		graphics::Image _scaleTrackImage;
 		std::vector<ScaleMark> _scaleMarks;
 		ScaleTrackBounds _scaleTrackBounds;

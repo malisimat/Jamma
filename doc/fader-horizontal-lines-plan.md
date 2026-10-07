@@ -16,46 +16,46 @@ is approximately 0.479 before inherited panel opacity. Handle opacity is
 independent. The six existing normal/over/down handle and background textures
 retain their 12 by 12 nine-patch insets.
 
-This file is an implementation plan. The dynamic lines and new textures
-are not part of the current appearance change.
+This file describes the implemented scale. The range and intermediate mark
+styling were revised after visual review: all intermediate marks share one
+appearance, and unity sits at 70.6% of handle travel.
 
 ## Gain scale and mandatory positions
 
-Use the implemented rack scale: **-60 dB through +16 dB**, with silence at
+Use the implemented rack scale: **-48 dB through +20 dB**, with silence at
 the bottom endpoint and continuous dragging (`Steps == 0`). The GUI uses
 `GuiSliderParams::SliderScale::Decibels`; the slider's actual values remain
-linear amplitude gain. The maximum has increased slightly from gain 6
-(approximately +15.56 dB) to `pow(10.0, 16.0 / 20.0)` (approximately 6.30957).
+linear amplitude gain. The maximum is `pow(10.0, 20.0 / 20.0)` (gain 10).
 
 `AudioMixer::OnAction` passes the slider value to `SetUnmutedLevel`, and the
 mixer applies that gain to audio. Therefore **0 dB is gain 1**, not slider
 value 0. The bottom endpoint sends gain 0 (negative infinity dB). Any positive
-travel uses the finite -60 dB floor, rising exponentially in gain. This
+travel uses the finite -48 dB floor, rising exponentially in gain. This
 intentional silence detent avoids taking a logarithm of zero. Preserve the
 linear gain values passed to the mixer and stored in persistence.
 
 | Position | Gain | Meaning | Line treatment |
 | --- | ---: | --- | --- |
-| Minimum | 0 | Silence detent at the -60 dB scale endpoint | Major endpoint |
-| Intermediate | 0.003981 | -48 dB | Regular major |
-| Intermediate | 0.015849 | -36 dB | Regular major |
-| Intermediate | 0.063096 | -24 dB | Regular major |
-| Intermediate | 0.251189 | -12 dB | Regular major |
+| Minimum | 0 | Silence detent at the -48 dB scale endpoint | Endpoint |
+| Intermediate | 0.007943 | -42 dB | Intermediate |
+| Intermediate | 0.015849 | -36 dB | Intermediate |
+| Intermediate | 0.063096 | -24 dB | Intermediate |
+| Intermediate | 0.251189 | -12 dB | Intermediate |
 | Unity | 1 | 0 dB | Brightest line, distinct warm accent |
-| Intermediate | 2.511886 | +6 dB | Regular minor |
-| Intermediate | 3.981072 | +12 dB | Regular major |
-| Maximum | 6.309573 | +16 dB | Major endpoint |
+| Intermediate | 2.511886 | +6 dB | Intermediate |
+| Intermediate | 3.981072 | +12 dB | Intermediate |
+| Maximum | 10 | +20 dB | Endpoint |
 
 Generate the full base grid at **6 dB intervals**, so all grid positions are
-evenly spaced in decibels and handle travel, with +16 dB added as an endpoint
-after the +12 dB grid mark. The table above lists examples, not the complete
+evenly spaced in decibels and handle travel, with +20 dB added as an endpoint
+after the +18 dB grid mark. The table above lists examples, not the complete
 grid. If labels are added later, use `20 * log10(gain)` for
 positive gains and display silence separately for 0. No text labels are
 required for the first implementation.
 
 Intermediate horizontal lines are narrower and less opaque than the silence,
-unity and maximum lines. Major and minor intermediate lines share one width;
-minor lines have lower opacity. Beneath the horizontal marks and handle, draw
+unity and maximum lines. All intermediate lines share one width, tint and opacity; only the silence,
+unity and maximum lines receive emphasis. Beneath the horizontal marks and handle, draw
 a 4 px wide black vertical track with rounded caps, centred on the handle
 travel axis and spanning its minimum and maximum centre positions.
 
@@ -63,7 +63,7 @@ travel axis and spanning its minimum and maximum centre positions.
 
 Implement a pure layout helper owned by `GuiSlider`, for example
 `BuildScaleMarks(params, size)`, returning records with integer centre Y,
-gain, and kind (`Endpoint`, `Unity`, `Major`, `Minor`). Enable this scale only
+gain, and kind (`Endpoint`, `Unity`, `Intermediate`). Enable this scale only
 for rack faders through an explicit parameter; generic horizontal panel
 sliders must keep their existing appearance.
 
@@ -85,7 +85,7 @@ the slider's existing MVP translation; no additional screen-Y inversion.
 
 With the current geometry and a background height H, normal travel is
 `H - 28 - 2*4 = H - 36` and centre positions range from 18 to `H - 18`.
-Unity is `18 + round(travel * 60 / 76)`. Check the actual returned layout rather
+Unity is `18 + round(travel * 48 / 68)`. Check the actual returned layout rather
 than assuming these constants if handle geometry changes.
 
 Reject degenerate input before calling the existing mapping: nonpositive
@@ -96,43 +96,46 @@ do not manufacture a travel range or send any audio action.
 
 ## Height-dependent count and spacing
 
-Use 6 dB base intervals from -60 through +12 dB, then add the +16 dB
-endpoint. The final interval is 4 dB; do not redistribute the grid across
-76 dB, which would shift unity and the other meaningful gain marks.
+Use 6 dB base intervals from -48 through +18 dB, then add the +20 dB
+endpoint. The final interval is 2 dB; do not redistribute the grid across
+68 dB, which would shift unity and the other meaningful gain marks.
 When more height exists, subdivide the 6 dB intervals equally and continue
-that finer spacing past +12 dB towards the maximum. Keep +16 dB as an exact
+that finer spacing past +18 dB towards the maximum. Keep +20 dB as an exact
 endpoint, truncating the last interval if needed. Use real arithmetic for
 spacing and dB calculations:
 
 ```text
 targetSpacing = 14 pixels
-subdivisions = clamp(floor(6 * travel / (76 * targetSpacing)), 1, 4)
-lastGridIndex = floor(76 * subdivisions / 6)
-decibels(i) = -60 + 6 * i / subdivisions, i = 0..lastGridIndex
+subdivisions = clamp(floor(6 * travel / (68 * targetSpacing)), 1, 4)
+lastGridIndex = floor(68 * subdivisions / 6)
+decibels(i) = -48 + 6 * i / subdivisions, i = 0..lastGridIndex
 gain(i) = i == 0 ? 0 : pow(10, decibels(i) / 20)
 ```
 
-Append the maximum endpoint if the grid does not already reach +16 dB.
-This produces 14 marks at ordinary heights, 27 when travel reaches 355 px,
-39 at 532 px, and 52 at 710 px, before pixel-row deduplication. The final
-interval may be shorter than the regular spacing. Classify unity by index
-`i == 10 * subdivisions`, endpoints by their boundary positions, and other
-multiples of 12 dB as major (`i % (2 * subdivisions) == 0`); all remaining
-marks are minor. Use integer grid indices for classification, rather than
-floating-point dB equality. The handle stays continuous: do not change
-`Steps` to the number of marks.
+Append the maximum endpoint if the grid does not already reach +20 dB.
+Before pixel filtering this produces 13 base marks, 24 when travel reaches
+318 px, 35 at 476 px, and 47 at 635 px. The final interval may be shorter
+than the regular spacing. Classify unity by integer index `i == 8 * subdivisions`,
+endpoints by their boundary positions, and every remaining mark as intermediate.
+The handle stays continuous (`Steps == 0`).
 
-For short faders with travel below 114 px (less than 6 px for the final
-4 dB interval of the base grid), show only the three mandatory anchors:
-silence, 0 dB, and +16 dB. Omit additional marks rather than crowding a
-small control.
+For short faders with travel below 102 px, show only silence, unity and
+maximum. This keeps the base 6 dB intervals at least 9 px apart when showing
+the full grid. After rounding through `CalcDragPos`, omit any intermediate
+mark within 6 px of the maximum endpoint, rather than hiding the rest of the
+scale to accommodate the short terminal interval. For example, +18 dB is
+omitted at 114 px travel, and +19.5 dB is omitted at 635 px travel.
 
-Round through `CalcDragPos`, then deduplicate coincident pixel rows with
-priority Unity, Endpoint, Major, Minor. Pixel spacing may differ by one pixel
-after rounding; that is expected. For extremely short travel that cannot
-give all mandatory anchors distinct rows, show only the noncolliding anchors
-and enforce a larger minimum layout height in the rack before claiming full
-scale support. Never move the 0 dB line away from gain 1 to make space.
+Deduplicate coincident pixel rows with priority Unity, Endpoint, Intermediate.
+Pixel spacing may differ by one pixel after rounding; that is expected.
+For extremely short travel, retain only noncolliding anchors. The rack
+minimum layout height ensures distinct anchor rows. Never move the 0 dB
+line away from gain 1 to make space.
+
+The -48/+20 dB range puts unity at `48 / 68 = 70.588%` of travel, moving it
+closer to two-thirds without requiring +24 dB (15.85x gain). The maximum is
+10x gain. Positive travel starts at approximately 0.003981 gain, while the
+bottom endpoint remains exactly zero; saved values remain linear gains.
 
 If the range changes later, update the grid policy explicitly: unity remains
 gain 1, the lower finite scale bound comes from `MinDecibels`, the lower
@@ -170,8 +173,7 @@ Starting appearance values (insets apply on each side of the panel):
 | --- | ---: | ---: | --- |
 | Unity | 8 px | 0.90 | Warm amber `#FFC878` |
 | Endpoint | 8 px | 0.65 | Pale rose `#F6DDE6` |
-| Major | 12 px | 0.45 | Pale rose `#F6DDE6` |
-| Minor | 12 px | 0.25 | Pale rose `#F6DDE6` |
+| Intermediate | 12 px | 0.25 | Pale rose `#F6DDE6` |
 
 Clamp line width to the panel's inner bounds; skip lines that cannot fit the
 two caps. The image's local Y is `centreY - 2`, making the visible stroke
@@ -197,8 +199,8 @@ the marks; short faders showing only anchors still show the track when it fits.
 
 ## Rendering and resource lifetime
 
-Add four retained `graphics::Image` instances to `GuiSlider`, one for each
-mark kind, one retained track image, and cached CPU mark records. The four
+Add three retained `graphics::Image` instances to `GuiSlider`, one for each
+mark kind, one retained track image, and cached CPU mark records. The three
 mark images reference `fader_scale_line`; the track image references
 `fader_scale_track`. Initialize and release the images alongside
 `_dragElement` in `_InitResources` and `_ReleaseResources`. All faders share

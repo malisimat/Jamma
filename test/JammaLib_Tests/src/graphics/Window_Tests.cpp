@@ -9,6 +9,7 @@
 #include "gui/GuiNumericInput.h"
 #include "gui/GuiRack.h"
 #include "audio/AudioMixer.h"
+#include <array>
 #include <filesystem>
 #include <cstdlib>
 #include <cmath>
@@ -368,7 +369,8 @@ TEST(GuiRenderEvidence, RackFaderScalesStatesHeightsAndResize)
 			auto& slider = sliders[column];
 			slider->ClearPointerState();
 			slider->SetSize({ slider->GetSize().Width, height });
-			slider->SetValue(column % 3 == 0 ? 0.0 : column % 3 == 1 ? 1.0 : std::pow(10.0, 16.0 / 20.0), true);
+			slider->SetValue(column % 3 == 0 ? 0.0 : column % 3 == 1 ? 1.0 :
+				std::pow(10.0, gui::GuiSliderParams::RackMaxDecibels / 20.0), true);
 		}
 		for (const bool handle : { false, true })
 		for (const auto state : { "normal", "over", "down" }) {
@@ -418,6 +420,22 @@ TEST(GuiRenderEvidence, RackFaderScalesStatesHeightsAndResize)
 				EXPECT_GT(pixel(10, unity->CentreY, 0), pixel(10, unity->CentreY, 1));
 				EXPECT_GT(pixel(10, unity->CentreY, 1), pixel(10, unity->CentreY, 2));
 				EXPECT_GT(pixel(10, unity->CentreY, 0), 170);
+				std::array<int, 3> referenceIntermediateDelta{};
+				bool hasReferenceIntermediate = false;
+				for (const auto& mark : marks) {
+					if (mark.Kind != gui::GuiSlider::ScaleMarkKind::Intermediate) continue;
+					for (unsigned int channel = 0; channel < referenceIntermediateDelta.size(); ++channel) {
+						// Compare each mark against the adjacent unmarked pixel on its left.
+						const auto delta = static_cast<int>(pixel(20, mark.CentreY, channel)) -
+							static_cast<int>(pixel(11, mark.CentreY, channel));
+						if (!hasReferenceIntermediate)
+							referenceIntermediateDelta[channel] = delta;
+						else
+							EXPECT_NEAR(referenceIntermediateDelta[channel], delta, 4);
+					}
+					hasReferenceIntermediate = true;
+				}
+				if (height > 100u) EXPECT_TRUE(hasReferenceIntermediate);
 				const auto track = gui::GuiSlider::BuildScaleTrackBounds(sliderParams[0], sliders[0]->GetSize());
 				ASSERT_TRUE(track.Valid);
 				int trackY = 40;

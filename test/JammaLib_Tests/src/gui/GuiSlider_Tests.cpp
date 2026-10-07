@@ -314,14 +314,14 @@ public:
 	static GuiSliderParams Params()
 	{
 		GuiSliderParams params;
-		params.Size = { 100u, 112u }; // 76px travel: one pixel per dB.
+		params.Size = { 100u, 104u }; // 68px travel: one pixel per dB.
 		params.DragControlSize = { 100u, 28u };
 		params.DragControlOffset = { 0, 4 };
 		params.DragGap = { 4u, 4u };
 		params.Min = 0.0;
-		params.Max = std::pow(10.0, 16.0 / 20.0);
+		params.Max = std::pow(10.0, GuiSliderParams::RackMaxDecibels / 20.0);
 		params.Scale = GuiSliderParams::SliderScale::Decibels;
-		params.MinDecibels = -60.0;
+		params.MinDecibels = GuiSliderParams::RackMinDecibels;
 		params.InitValue = 1.0;
 		return params;
 	}
@@ -344,15 +344,15 @@ public:
 
 TEST(GuiSlider, DecibelMappingPlacesUnityAndEndpointsAndSurvivesResize) {
 	const auto params = DecibelSliderTestData::Params();
-	EXPECT_NEAR(60.0 / 76.0, params.ValueToFraction(1.0), 1e-12);
+	EXPECT_NEAR(48.0 / 68.0, params.ValueToFraction(1.0), 1e-12);
 	EXPECT_DOUBLE_EQ(0.0, params.ValueToFraction(0.0));
 	EXPECT_DOUBLE_EQ(0.0, params.FractionToValue(0.0));
 	EXPECT_DOUBLE_EQ(params.Max, params.FractionToValue(1.0));
 	EXPECT_EQ(4, DecibelSliderTestData::CalcDragPos(params, params.Size, 0.0).Y);
-	EXPECT_EQ(64, DecibelSliderTestData::CalcDragPos(params, params.Size, 1.0).Y);
-	EXPECT_EQ(80, DecibelSliderTestData::CalcDragPos(params, params.Size, params.Max).Y);
-	EXPECT_EQ(124, DecibelSliderTestData::CalcDragPos(params, { 100u, 188u }, 1.0).Y);
-	for (const auto db : { -48.0, -24.0, -6.0, 0.0, 6.0, 16.0 }) {
+	EXPECT_EQ(52, DecibelSliderTestData::CalcDragPos(params, params.Size, 1.0).Y);
+	EXPECT_EQ(72, DecibelSliderTestData::CalcDragPos(params, params.Size, params.Max).Y);
+	EXPECT_EQ(106, DecibelSliderTestData::CalcDragPos(params, { 100u, 180u }, 1.0).Y);
+	for (const auto db : { -42.0, -24.0, -6.0, 0.0, 6.0, 18.0, 20.0 }) {
 		const auto gain = std::pow(10.0, db / 20.0);
 		EXPECT_NEAR(gain, params.FractionToValue(params.ValueToFraction(gain)), 1e-12);
 	}
@@ -361,7 +361,7 @@ TEST(GuiSlider, DecibelMappingPlacesUnityAndEndpointsAndSurvivesResize) {
 TEST(GuiSlider, ScaleMarksAnchorToSilenceUnityAndMaximumHandleCentres) {
 	const auto params = DecibelSliderTestData::ParamsForTravel(114u);
 	const auto marks = DecibelSliderTestData::BuildScaleMarks(params, params.Size);
-	ASSERT_EQ(14u, marks.size());
+	ASSERT_EQ(12u, marks.size());
 
 	const auto* silence = DecibelSliderTestData::FindScaleMark(marks, GuiSlider::ScaleMarkKind::Endpoint);
 	ASSERT_NE(nullptr, silence);
@@ -374,7 +374,7 @@ TEST(GuiSlider, ScaleMarksAnchorToSilenceUnityAndMaximumHandleCentres) {
 	EXPECT_DOUBLE_EQ(1.0, unity->Gain);
 	EXPECT_EQ(DecibelSliderTestData::CalcDragPos(params, params.Size, 1.0).Y + 14,
 		unity->CentreY);
-	EXPECT_EQ(18 + static_cast<int>(std::round(114.0 * 60.0 / 76.0)), unity->CentreY);
+	EXPECT_EQ(18 + static_cast<int>(std::round(114.0 * 48.0 / 68.0)), unity->CentreY);
 
 	const auto maxCentre = DecibelSliderTestData::CalcDragPos(params, params.Size, params.Max).Y + 14;
 	const auto maxEndpoint = std::find_if(marks.begin(), marks.end(), [&params](const auto& mark) {
@@ -383,6 +383,10 @@ TEST(GuiSlider, ScaleMarksAnchorToSilenceUnityAndMaximumHandleCentres) {
 	ASSERT_NE(marks.end(), maxEndpoint);
 	EXPECT_EQ(maxCentre, maxEndpoint->CentreY);
 	EXPECT_DOUBLE_EQ(params.Max, maxEndpoint->Gain);
+	EXPECT_EQ(marks.end(), std::find_if(marks.begin(), marks.end(), [](const auto& mark) {
+		return mark.Kind == GuiSlider::ScaleMarkKind::Intermediate &&
+			std::abs(20.0 * std::log10(mark.Gain) - 18.0) < 1e-9;
+	}));
 	EXPECT_EQ(0u, params.Steps);
 }
 
@@ -390,11 +394,11 @@ TEST(GuiSlider, ScaleMarksUseUniformDecibelSubdivisionsAndKeepThePartialTopInter
 {
 	const auto params = DecibelSliderTestData::ParamsForTravel(355u);
 	const auto marks = DecibelSliderTestData::BuildScaleMarks(params, params.Size);
-	ASSERT_EQ(27u, marks.size());
+	ASSERT_EQ(24u, marks.size());
 
-	for (int index = 0; index <= 25; ++index)
+	for (int index = 0; index <= 22; ++index)
 	{
-		const auto decibels = -60.0 + 3.0 * index;
+		const auto decibels = -48.0 + 3.0 * index;
 		const auto expectedGain = index == 0 ? 0.0 : std::pow(10.0, decibels / 20.0);
 		const auto& mark = marks[static_cast<size_t>(index)];
 		EXPECT_NEAR(expectedGain, mark.Gain, 1e-12);
@@ -402,45 +406,50 @@ TEST(GuiSlider, ScaleMarksUseUniformDecibelSubdivisionsAndKeepThePartialTopInter
 			mark.CentreY);
 		if (index == 0)
 			EXPECT_EQ(GuiSlider::ScaleMarkKind::Endpoint, mark.Kind);
-		else if (index == 20)
+		else if (index == 16)
 			EXPECT_EQ(GuiSlider::ScaleMarkKind::Unity, mark.Kind);
-		else if (index % 4 == 0)
-			EXPECT_EQ(GuiSlider::ScaleMarkKind::Major, mark.Kind);
 		else
-			EXPECT_EQ(GuiSlider::ScaleMarkKind::Minor, mark.Kind);
+			EXPECT_EQ(GuiSlider::ScaleMarkKind::Intermediate, mark.Kind);
 	}
-	EXPECT_NEAR(std::pow(10.0, 15.0 / 20.0), marks[25].Gain, 1e-12);
+	EXPECT_NEAR(std::pow(10.0, 18.0 / 20.0), marks[22].Gain, 1e-12);
 	EXPECT_DOUBLE_EQ(params.Max, marks.back().Gain);
 	EXPECT_EQ(GuiSlider::ScaleMarkKind::Endpoint, marks.back().Kind);
 }
 
 TEST(GuiSlider, ScaleMarkCountsFollowHeightThresholdsAndShortFadersKeepAnchors)
 {
-	const auto shortParams = DecibelSliderTestData::ParamsForTravel(113u);
+	const auto shortParams = DecibelSliderTestData::ParamsForTravel(101u);
 	const auto regularParams = DecibelSliderTestData::ParamsForTravel(114u);
-	const auto belowTwoParams = DecibelSliderTestData::ParamsForTravel(354u);
-	const auto tallParams = DecibelSliderTestData::ParamsForTravel(355u);
-	const auto belowThreeParams = DecibelSliderTestData::ParamsForTravel(531u);
-	const auto tallerParams = DecibelSliderTestData::ParamsForTravel(532u);
-	const auto belowFourParams = DecibelSliderTestData::ParamsForTravel(709u);
-	const auto tallestParams = DecibelSliderTestData::ParamsForTravel(710u);
+	const auto justKeepsEndpoint = DecibelSliderTestData::ParamsForTravel(204u);
+	const auto tallParams = DecibelSliderTestData::ParamsForTravel(318u);
+	const auto tallerParams = DecibelSliderTestData::ParamsForTravel(476u);
+	const auto belowFourParams = DecibelSliderTestData::ParamsForTravel(635u);
+	const auto tallestParams = DecibelSliderTestData::ParamsForTravel(816u);
 	EXPECT_EQ(3u, DecibelSliderTestData::BuildScaleMarks(shortParams, shortParams.Size).size());
-	EXPECT_EQ(14u, DecibelSliderTestData::BuildScaleMarks(regularParams, regularParams.Size).size());
-	EXPECT_EQ(14u, DecibelSliderTestData::BuildScaleMarks(belowTwoParams, belowTwoParams.Size).size());
-	EXPECT_EQ(27u, DecibelSliderTestData::BuildScaleMarks(tallParams, tallParams.Size).size());
-	EXPECT_EQ(27u, DecibelSliderTestData::BuildScaleMarks(belowThreeParams, belowThreeParams.Size).size());
-	EXPECT_EQ(39u, DecibelSliderTestData::BuildScaleMarks(tallerParams, tallerParams.Size).size());
-	EXPECT_EQ(39u, DecibelSliderTestData::BuildScaleMarks(belowFourParams, belowFourParams.Size).size());
-	EXPECT_EQ(52u, DecibelSliderTestData::BuildScaleMarks(tallestParams, tallestParams.Size).size());
+	EXPECT_EQ(12u, DecibelSliderTestData::BuildScaleMarks(regularParams, regularParams.Size).size());
+	EXPECT_EQ(13u, DecibelSliderTestData::BuildScaleMarks(justKeepsEndpoint, justKeepsEndpoint.Size).size());
+	EXPECT_EQ(24u, DecibelSliderTestData::BuildScaleMarks(tallParams, tallParams.Size).size());
+	EXPECT_EQ(35u, DecibelSliderTestData::BuildScaleMarks(tallerParams, tallerParams.Size).size());
+	EXPECT_EQ(46u, DecibelSliderTestData::BuildScaleMarks(belowFourParams, belowFourParams.Size).size());
+	EXPECT_EQ(47u, DecibelSliderTestData::BuildScaleMarks(tallestParams, tallestParams.Size).size());
 
 	const auto regularMarks = DecibelSliderTestData::BuildScaleMarks(regularParams, regularParams.Size);
-	ASSERT_EQ(14u, regularMarks.size());
+	ASSERT_EQ(12u, regularMarks.size());
 	EXPECT_EQ(GuiSlider::ScaleMarkKind::Endpoint, regularMarks.front().Kind);
 	EXPECT_DOUBLE_EQ(0.0, regularMarks.front().Gain);
-	EXPECT_EQ(GuiSlider::ScaleMarkKind::Unity, regularMarks[10].Kind);
-	EXPECT_DOUBLE_EQ(1.0, regularMarks[10].Gain);
+	EXPECT_EQ(GuiSlider::ScaleMarkKind::Unity, regularMarks[8].Kind);
+	EXPECT_DOUBLE_EQ(1.0, regularMarks[8].Gain);
 	EXPECT_EQ(GuiSlider::ScaleMarkKind::Endpoint, regularMarks.back().Kind);
 	EXPECT_DOUBLE_EQ(regularParams.Max, regularMarks.back().Gain);
+	EXPECT_EQ(GuiSlider::ScaleMarkKind::Intermediate, regularMarks[9].Kind);
+	EXPECT_NEAR(std::pow(10.0, 6.0 / 20.0), regularMarks[9].Gain, 1e-12);
+	const auto retainedEndpointGapMarks = DecibelSliderTestData::BuildScaleMarks(
+		justKeepsEndpoint, justKeepsEndpoint.Size);
+	EXPECT_NE(retainedEndpointGapMarks.end(), std::find_if(retainedEndpointGapMarks.begin(),
+		retainedEndpointGapMarks.end(), [](const auto& mark) {
+			return mark.Kind == GuiSlider::ScaleMarkKind::Intermediate &&
+				std::abs(20.0 * std::log10(mark.Gain) - 18.0) < 1e-9;
+		}));
 }
 
 TEST(GuiSlider, ScaleMarksAreOptInAndDegenerateLayoutsReturnNoMarks)
@@ -463,7 +472,7 @@ TEST(GuiSlider, ScaleMarksAreOptInAndDegenerateLayoutsReturnNoMarks)
 
 TEST(GuiSlider, ScaleMarkDeduplicationPrefersUnityOverCoincidentEndpoint)
 {
-	const auto params = DecibelSliderTestData::ParamsForTravel(2u);
+	const auto params = DecibelSliderTestData::ParamsForTravel(1u);
 	const auto marks = DecibelSliderTestData::BuildScaleMarks(params, params.Size);
 	ASSERT_EQ(2u, marks.size());
 	EXPECT_EQ(GuiSlider::ScaleMarkKind::Endpoint, marks.front().Kind);
@@ -525,7 +534,7 @@ TEST(GuiSlider, VisibleScaleKeepsDraggingContinuousBetweenGridMarks)
 	auto slider = std::make_shared<GuiSlider>(params);
 	ASSERT_TRUE(slider->OnAction(DecibelSliderTestData::Down(30)).IsEaten);
 	slider->OnAction(DecibelSliderTestData::Move(31));
-	EXPECT_NEAR(std::pow(10.0, (76.0 / 114.0) / 20.0), slider->Value(), 1e-12);
+	EXPECT_NEAR(std::pow(10.0, (68.0 / 114.0) / 20.0), slider->Value(), 1e-12);
 	EXPECT_EQ(0u, params.Steps);
 }
 

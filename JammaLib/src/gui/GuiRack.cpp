@@ -395,9 +395,9 @@ gui::GuiSliderParams GuiRack::_GetSliderParams(unsigned int index, utils::Size2d
 	GuiSliderParams sliderParams;
 	sliderParams.Index = index;
 	sliderParams.Min = 0.0;
-	sliderParams.Max = std::pow(10.0, 16.0 / 20.0);
+	sliderParams.Max = std::pow(10.0, GuiSliderParams::RackMaxDecibels / 20.0);
 	sliderParams.Scale = GuiSliderParams::SliderScale::Decibels;
-	sliderParams.MinDecibels = -60.0;
+	sliderParams.MinDecibels = GuiSliderParams::RackMinDecibels;
 	sliderParams.ScaleMarksEnabled = true;
 	sliderParams.InitValue = _rackParams.InitLevel;
 	sliderParams.Orientation = GuiSliderParams::SLIDER_VERTICAL;
