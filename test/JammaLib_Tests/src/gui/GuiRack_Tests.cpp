@@ -220,6 +220,53 @@ TEST(GuiRack, SetNumInputChannelsCreatesSliders) {
 	ASSERT_EQ(3u, rack->NumInputChannels());
 }
 
+TEST(GuiRack, RuntimeAddedChannelSliderKeepsParentChainAndPointerRouting)
+{
+	auto params = MakeRackParams();
+	auto rack = std::make_shared<GuiRack>(params);
+	base::GuiElementParams hostParams;
+	hostParams.Size = params.Size;
+	auto host = std::make_shared<base::GuiElement>(hostParams);
+	host->AddChild(rack);
+	rack->SetRackState(GuiRackParams::RACK_CHANNELS, true);
+	rack->SetNumInputChannels(1);
+
+	auto slider = rack->GetChannelSlider(0);
+	ASSERT_NE(nullptr, slider);
+	ASSERT_NE(nullptr, slider->Parent());
+	ASSERT_NE(nullptr, slider->Parent()->Parent());
+	ASSERT_NE(nullptr, slider->Parent()->Parent()->Parent());
+	EXPECT_EQ(rack, slider->Parent()->Parent()->Parent());
+	EXPECT_EQ(host, rack->Parent());
+
+	const auto sliderPosition = slider->GlobalPosition();
+	const utils::Position2d pointerPosition = {
+		sliderPosition.X + static_cast<int>(slider->GetSize().Width / 2),
+		sliderPosition.Y + static_cast<int>(slider->GetSize().Height / 2)
+	};
+	EXPECT_EQ(slider, host->FindTopmostDescendant(pointerPosition));
+
+	actions::TouchMoveAction move;
+	move.Touch = actions::TouchAction::TOUCH_MOUSE;
+	move.Position = pointerPosition;
+	host->OnAction(move);
+	EXPECT_EQ(base::GuiElement::STATE_OVER, slider->GetState());
+
+	actions::TouchAction down;
+	down.Touch = actions::TouchAction::TOUCH_MOUSE;
+	down.State = actions::TouchAction::TOUCH_DOWN;
+	down.Position = pointerPosition;
+	EXPECT_TRUE(host->OnAction(down).IsEaten);
+
+	actions::TouchAction up = down;
+	up.State = actions::TouchAction::TOUCH_UP;
+	EXPECT_TRUE(host->OnAction(up).IsEaten);
+
+	host->ClearPointerState();
+	EXPECT_EQ(base::GuiElement::STATE_NORMAL, slider->GetState());
+	EXPECT_FALSE(slider->DragHandleIsOverForTest());
+}
+
 TEST(GuiRack, SetNumOutputChannels) {
 	auto params = MakeRackParams();
 	auto rack = std::make_shared<GuiRack>(params);

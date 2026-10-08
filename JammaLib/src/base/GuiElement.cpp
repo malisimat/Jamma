@@ -671,7 +671,7 @@ bool GuiElement::_ChildRectHitTest(Position2d localPos) const
 			continue;
 
 		auto childLocal = child->ParentToLocal(localPos);
-		if (Size2d::RectTest(child->GetSize(), childLocal))
+		if (child->RouteHitTest(childLocal))
 			return true;
 	}
 

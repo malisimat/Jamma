@@ -514,7 +514,9 @@ void GuiRack::SetNumInputChannels(unsigned int channels)
 		}
 	}
 
+	_rackParams.NumInputChannels = channels;
 	_router->SetNumInputs(channels);
+	SetSize(_rackParams.Size);
 }
 
 void GuiRack::SetNumOutputChannels(unsigned int channels)
