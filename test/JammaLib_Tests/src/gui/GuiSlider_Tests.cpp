@@ -257,11 +257,52 @@ TEST(GuiSlider, DragHandleRespondsToHover) {
 	slider->OnAction(moveAction);
 
 	ASSERT_TRUE(slider->DragHandleIsOverForTest());
-	EXPECT_EQ(base::GuiElement::STATE_NORMAL, slider->GetState());
+	EXPECT_EQ(base::GuiElement::STATE_OVER, slider->GetState());
 
 	moveAction.Position = { 80, 10 };
 	slider->OnAction(moveAction);
 	EXPECT_FALSE(slider->DragHandleIsOverForTest());
+	EXPECT_EQ(base::GuiElement::STATE_OVER, slider->GetState());
+
+	moveAction.Position = { 10, 10 };
+	slider->OnAction(moveAction);
+	ASSERT_TRUE(slider->DragHandleIsOverForTest());
+	slider->ApplyHoverState(false);
+	EXPECT_FALSE(slider->DragHandleIsOverForTest());
+	EXPECT_EQ(base::GuiElement::STATE_NORMAL, slider->GetState());
+}
+
+TEST(GuiSlider, DragHandleOverhangResolvesAndKeepsTrackHovered) {
+	auto sliderParams = GuiSliderParams();
+	sliderParams.Size = { 100u, 30u };
+	sliderParams.DragControlSize = { 20u, 20u };
+	sliderParams.DragControlOffset = { -4, 5 };
+	sliderParams.InitValue = 0.0;
+	sliderParams.Orientation = GuiSliderParams::SLIDER_VERTICAL;
+	auto slider = std::make_shared<GuiSlider>(sliderParams);
+	slider->SetDragParams({ -4, 5 }, { 20u, 20u }, { 0u, 0u });
+
+	// The thumb extends four pixels to the left of the slider's own rectangle.
+	const utils::Position2d overhangPoint{ -2, 10 };
+	EXPECT_FALSE(slider->HitTest(overhangPoint));
+	EXPECT_TRUE(slider->RouteHitTest(overhangPoint));
+	EXPECT_EQ(slider, slider->FindTopmostDescendant(overhangPoint));
+
+	std::static_pointer_cast<base::GuiElement>(slider)->ApplyHoverPoint(overhangPoint);
+	EXPECT_TRUE(slider->DragHandleIsOverForTest());
+	EXPECT_EQ(base::GuiElement::STATE_OVER, slider->GetState());
+
+	actions::TouchAction down;
+	down.Touch = TouchAction::TOUCH_MOUSE;
+	down.Position = overhangPoint;
+	down.Index = 0;
+	down.State = TouchAction::TOUCH_DOWN;
+	EXPECT_TRUE(slider->OnAction(down).IsEaten);
+	EXPECT_EQ(base::GuiElement::STATE_DOWN, slider->GetState());
+
+	actions::TouchAction up = down;
+	up.State = TouchAction::TOUCH_UP;
+	EXPECT_TRUE(slider->OnAction(up).IsEaten);
 	EXPECT_EQ(base::GuiElement::STATE_OVER, slider->GetState());
 }
 

@@ -235,6 +235,7 @@ ActionResult GuiSlider::OnAction(TouchAction action)
 
 			_initValue = oldValue + _valueOffset;
 			_valueOffset = 0.0;
+			ApplyHoverPoint(action.Position);
 			std::cout << "New InitValue: " << _initValue << ", ValueOffset: " << _valueOffset << " = " << (_initValue + _valueOffset) << std::endl;
 
 			ActionResult res;
@@ -249,13 +250,15 @@ ActionResult GuiSlider::OnAction(TouchAction action)
 	{
 		if (TouchAction::TOUCH_DOWN == action.State)
 		{
-			if (HitTest(action.Position))
+			if (RouteHitTest(action.Position))
 			{
 				std::cout << "Slider DOWN" << std::endl;
 				_isDragging = true;
 				_initClickPos = action.Position;
 				_initDragPos = _dragElement.Position();
 				_valueOffset = 0.0;
+				if (!_HitTest(action.Position))
+					_state = STATE_DOWN;
 
 				ActionResult res;
 				res.IsEaten = true;
@@ -313,8 +316,39 @@ void GuiSlider::ApplyHoverPoint(utils::Position2d localPos)
 {
 	const auto dragLocalPos = _dragElement.ParentToLocal(localPos);
 	const bool dragIsHovered = _dragElement.HitTest(dragLocalPos);
-	GuiElement::ApplyHoverState(!dragIsHovered && _HitTest(localPos));
+	GuiElement::ApplyHoverState(_HitTest(localPos) || dragIsHovered);
 	_dragElement.ApplyHoverState(dragIsHovered);
+}
+
+bool GuiSlider::RouteHitTest(utils::Position2d localPos)
+{
+	if (!IsEnabled() || !IsVisible() || _guiParams.GuiPassThrough)
+		return false;
+
+	const auto dragLocalPos = _dragElement.ParentToLocal(localPos);
+	return GuiElement::RouteHitTest(localPos) || _dragElement.HitTest(dragLocalPos);
+}
+
+std::shared_ptr<base::GuiElement> GuiSlider::FindTopmostDescendant(utils::Position2d localPos)
+{
+	if (_guiParams.GuiPassThrough)
+		return GuiElement::FindTopmostDescendant(localPos);
+
+	if (!RouteHitTest(localPos))
+		return nullptr;
+
+	const auto dragLocalPos = _dragElement.ParentToLocal(localPos);
+	if (_dragElement.HitTest(dragLocalPos))
+		return shared_from_this();
+
+	return GuiElement::FindTopmostDescendant(localPos);
+}
+
+void GuiSlider::ApplyHoverState(bool inside)
+{
+	GuiElement::ApplyHoverState(inside);
+	if (!inside)
+		_dragElement.ApplyHoverState(false);
 }
 
 void GuiSlider::ClearPointerState()
