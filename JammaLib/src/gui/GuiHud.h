@@ -107,6 +107,11 @@ namespace gui
 		virtual void _ReleaseResources() override;
 
 	private:
+		std::vector<std::optional<CableInteraction::Endpoint>> _BuildStationEndpoints(
+			std::vector<CableInteraction::Endpoint>& endpoints) const;
+		static void _FanSourceCableEnds(const std::vector<CableInteraction::Endpoint>& sources,
+			std::vector<CableInteraction::Cable>& cables);
+		static void _PresentCableEnds(std::vector<CableInteraction::Cable>& cables);
 		static constexpr int _OuterMargin = 8;
 		static constexpr int _TopPosY = 8;
 		static constexpr unsigned int _TopStripHeight = 68u;

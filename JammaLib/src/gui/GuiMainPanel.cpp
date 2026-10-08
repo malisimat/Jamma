@@ -227,47 +227,55 @@ void GuiMainPanel::_Layout()
 	_frame->SetSize({ static_cast<unsigned int>(panelWidth), static_cast<unsigned int>(panelHeight) });
 	_UpdatePresentation();
 	if (_selectionOnly)
+		_LayoutSelection(panelWidth, panelHeight);
+	else
+		_LayoutSettings(panelWidth, panelHeight);
+}
+
+void GuiMainPanel::_LayoutSelection(int panelWidth, int panelHeight)
+{
+	const int padding = std::min(8, std::min(panelWidth, panelHeight) / 2);
+	const int innerWidth = std::max(0, panelWidth - 2 * padding);
+	const int innerHeight = std::max(0, panelHeight - 2 * padding);
+	auto& page = _pages[static_cast<size_t>(_page)];
+	page->SetPadding(2u, 2u);
+	page->SetSpacing(0u);
+	for (const auto& entry : _controlSizes)
 	{
-		const int padding = std::min(8, std::min(panelWidth, panelHeight) / 2);
-		const int innerWidth = std::max(0, panelWidth - 2 * padding);
-		const int innerHeight = std::max(0, panelHeight - 2 * padding);
-		auto& page = _pages[static_cast<size_t>(_page)];
-		page->SetPadding(2u, 2u);
-		page->SetSpacing(0u);
-		for (const auto& entry : _controlSizes)
+		auto radio = std::dynamic_pointer_cast<GuiRadio>(entry.first);
+		if (!radio) continue;
+		unsigned int count = 0;
+		while (count < 255 && radio->TryGetChild(static_cast<unsigned char>(count))) ++count;
+		const auto available = static_cast<unsigned int>(std::max(0, innerWidth - 4));
+		const auto radioWidth = std::min(available, entry.second.Width);
+		for (unsigned int index = 0; index < count; ++index)
 		{
-			auto radio = std::dynamic_pointer_cast<GuiRadio>(entry.first);
-			if (!radio) continue;
-			unsigned int count = 0;
-			while (count < 255 && radio->TryGetChild(static_cast<unsigned char>(count))) ++count;
-			const auto available = static_cast<unsigned int>(std::max(0, innerWidth - 4));
-			const auto radioWidth = std::min(available, entry.second.Width);
-			for (unsigned int index = 0; index < count; ++index)
-			{
-				auto toggle = radio->TryGetChild(static_cast<unsigned char>(index));
-				const auto left = radioWidth * index / count;
-				const auto right = radioWidth * (index + 1u) / count;
-				toggle->SetPosition({ static_cast<int>(left), 0 });
-				toggle->SetSize({ right - left, entry.second.Height });
-			}
-			radio->SetSize({ radioWidth, entry.second.Height });
-			page->SetSize({ radioWidth + 4u, entry.second.Height + 4u });
+			auto toggle = radio->TryGetChild(static_cast<unsigned char>(index));
+			const auto left = radioWidth * index / count;
+			const auto right = radioWidth * (index + 1u) / count;
+			toggle->SetPosition({ static_cast<int>(left), 0 });
+			toggle->SetSize({ right - left, entry.second.Height });
 		}
-		page->ComputeLayout();
-		_pageScroll->SetPosition({ padding, padding });
-		_pageScroll->SetSize({ static_cast<unsigned int>(innerWidth), static_cast<unsigned int>(innerHeight) });
-		_edge->SetVisible(false);
-		return;
+		radio->SetSize({ radioWidth, entry.second.Height });
+		page->SetSize({ radioWidth + 4u, entry.second.Height + 4u });
 	}
-	const int padding = std::min(_selectionOnly ? 8 : 12, std::min(panelWidth, panelHeight) / 2);
+	page->ComputeLayout();
+	_pageScroll->SetPosition({ padding, padding });
+	_pageScroll->SetSize({ static_cast<unsigned int>(innerWidth), static_cast<unsigned int>(innerHeight) });
+	_edge->SetVisible(false);
+}
+
+void GuiMainPanel::_LayoutSettings(int panelWidth, int panelHeight)
+{
+	const int padding = std::min(12, std::min(panelWidth, panelHeight) / 2);
 	const int inner = std::max(0, panelWidth - 2 * padding);
 	_edge->SetPosition({ padding, std::max(0, panelHeight - 2) });
 	_edge->SetSize({ static_cast<unsigned int>(inner), static_cast<unsigned int>(std::min(1, panelHeight)) });
 	const int titleHeight = std::min(22, std::max(0, panelHeight - 2 * padding));
 	auto title = _frame->TryGetChild(0);
-	title->SetPosition({ padding + (_selectionOnly ? std::min(64, inner) : 0), std::max(padding, panelHeight - padding - titleHeight) });
-	title->SetSize({ static_cast<unsigned int>(std::max(0, inner - (_selectionOnly ? 64 : 0))), static_cast<unsigned int>(titleHeight) });
-	const int tabHeight = _selectionOnly ? 0 : std::min(44, std::max(0, panelHeight - 2 * padding - titleHeight));
+	title->SetPosition({ padding, std::max(padding, panelHeight - padding - titleHeight) });
+	title->SetSize({ static_cast<unsigned int>(inner), static_cast<unsigned int>(titleHeight) });
+	const int tabHeight = std::min(44, std::max(0, panelHeight - 2 * padding - titleHeight));
 	if (_tabScroll)
 	{
 		_tabScroll->SetPosition({ padding, std::max(padding, panelHeight - padding - titleHeight - tabHeight) });

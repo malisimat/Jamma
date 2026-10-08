@@ -1592,49 +1592,7 @@ void GuiHud::BuildInteractionGeometry(std::vector<CableInteraction::Endpoint>& e
 			endpoints.push_back(triggerOutputs[i]);
 	}
 
-	std::vector<std::vector<size_t>> stationTriggers(_stationAnchors.size());
-	for (const auto& trigger : _routingGraph)
-		if (trigger.TriggerIndex < _triggerWidgets.size() && trigger.StationIndex.has_value())
-		{
-			const auto anchor = std::find_if(_stationAnchors.begin(), _stationAnchors.end(), [&trigger](const auto& value)
-			{
-				return value.StationIndex == trigger.StationIndex.value();
-			});
-			if (anchor != _stationAnchors.end())
-				stationTriggers[static_cast<size_t>(std::distance(_stationAnchors.begin(), anchor))].push_back(trigger.TriggerIndex);
-		}
-
-	std::vector<std::optional<CableInteraction::Endpoint>> stationEnds(_triggerWidgets.size());
-	for (size_t anchorIndex = 0u; anchorIndex < _stationAnchors.size(); ++anchorIndex)
-	{
-		const auto& anchor = _stationAnchors[anchorIndex];
-		if (!anchor.ScreenPosition)
-			continue;
-		const auto offsets = CableInteraction::Spread(-7, 7,
-			stationTriggers[anchorIndex].size());
-		const Rect2d window{ 0, 0, static_cast<int>(GetSize().Width), static_cast<int>(GetSize().Height) };
-		const auto actual = *anchor.ScreenPosition - glm::dvec2{ rootPos.X, rootPos.Y };
-		const auto base = CableInteraction::ResolveBoundary(actual, window);
-		if (!base)
-			continue;
-		for (size_t i = 0u; i < stationTriggers[anchorIndex].size(); ++i)
-		{
-			const auto fanned = CableInteraction::FannedPoint(actual, offsets[i], true, window);
-			const auto point = CableInteraction::ResolveBoundary(fanned, window);
-			if (!point)
-				continue;
-			CableInteraction::Endpoint endpoint{ CableInteraction::EndpointKind::Station,
-				point->Position, stationTriggers[anchorIndex][i], anchor.StationIndex, anchor.StationName,
-				{}, true, window, base->Clipped || point->Clipped, fanned };
-			stationEnds[stationTriggers[anchorIndex][i]] = endpoint;
-			if (!endpoint.Continuation)
-				endpoints.push_back(endpoint);
-		}
-		const auto point = CableInteraction::ResolveBoundary(actual, window);
-		if (point && !point->Clipped)
-			endpoints.push_back({ CableInteraction::EndpointKind::Station,
-				point->Position, std::nullopt, anchor.StationIndex, anchor.StationName, {}, true, window });
-	}
+	const auto stationEnds = _BuildStationEndpoints(endpoints);
 
 	for (const auto& trigger : _routingGraph)
 	{
@@ -1669,6 +1627,64 @@ void GuiHud::BuildInteractionGeometry(std::vector<CableInteraction::Endpoint>& e
 				CableInteraction::RouteKind::Station, 0u }, triggerOutputs[trigger.TriggerIndex],
 				stationEnds[trigger.TriggerIndex].value() });
 	}
+	_FanSourceCableEnds(sources, cables);
+	_PresentCableEnds(cables);
+}
+
+std::vector<std::optional<CableInteraction::Endpoint>> GuiHud::_BuildStationEndpoints(
+	std::vector<CableInteraction::Endpoint>& endpoints) const
+{
+	std::vector<std::optional<CableInteraction::Endpoint>> stationEnds(_triggerWidgets.size());
+	const auto rootPos = GlobalPosition();
+	std::vector<std::vector<size_t>> stationTriggers(_stationAnchors.size());
+	for (const auto& trigger : _routingGraph)
+		if (trigger.TriggerIndex < _triggerWidgets.size() && trigger.StationIndex.has_value())
+		{
+			const auto anchor = std::find_if(_stationAnchors.begin(), _stationAnchors.end(), [&trigger](const auto& value)
+			{
+				return value.StationIndex == trigger.StationIndex.value();
+			});
+			if (anchor != _stationAnchors.end())
+				stationTriggers[static_cast<size_t>(std::distance(_stationAnchors.begin(), anchor))].push_back(trigger.TriggerIndex);
+		}
+
+	for (size_t anchorIndex = 0u; anchorIndex < _stationAnchors.size(); ++anchorIndex)
+	{
+		const auto& anchor = _stationAnchors[anchorIndex];
+		if (!anchor.ScreenPosition)
+			continue;
+		const auto offsets = CableInteraction::Spread(-7, 7,
+			stationTriggers[anchorIndex].size());
+		const Rect2d window{ 0, 0, static_cast<int>(GetSize().Width), static_cast<int>(GetSize().Height) };
+		const auto actual = *anchor.ScreenPosition - glm::dvec2{ rootPos.X, rootPos.Y };
+		const auto base = CableInteraction::ResolveBoundary(actual, window);
+		if (!base)
+			continue;
+		for (size_t i = 0u; i < stationTriggers[anchorIndex].size(); ++i)
+		{
+			const auto fanned = CableInteraction::FannedPoint(actual, offsets[i], true, window);
+			const auto point = CableInteraction::ResolveBoundary(fanned, window);
+			if (!point)
+				continue;
+			CableInteraction::Endpoint endpoint{ CableInteraction::EndpointKind::Station,
+				point->Position, stationTriggers[anchorIndex][i], anchor.StationIndex, anchor.StationName,
+				{}, true, window, base->Clipped || point->Clipped, fanned };
+			stationEnds[stationTriggers[anchorIndex][i]] = endpoint;
+			if (!endpoint.Continuation)
+				endpoints.push_back(endpoint);
+		}
+		const auto point = CableInteraction::ResolveBoundary(actual, window);
+		if (point && !point->Clipped)
+			endpoints.push_back({ CableInteraction::EndpointKind::Station,
+				point->Position, std::nullopt, anchor.StationIndex, anchor.StationName, {}, true, window });
+	}
+
+	return stationEnds;
+}
+
+void GuiHud::_FanSourceCableEnds(const std::vector<CableInteraction::Endpoint>& sources,
+	std::vector<CableInteraction::Cable>& cables)
+{
 	// Each source cable gets its own visible end within the parent socket.
 	for (const auto& sourceEndpoint : sources)
 	{
@@ -1693,6 +1709,10 @@ void GuiHud::BuildInteractionGeometry(std::vector<CableInteraction::Endpoint>& e
 			start.Continuation = !sourceEndpoint.HitBounds->Contains(sourceEndpoint.Position);
 		}
 	}
+}
+
+void GuiHud::_PresentCableEnds(std::vector<CableInteraction::Cable>& cables)
+{
 	const auto present = [](CableInteraction::Endpoint& endpoint)
 	{
 		const auto actual = endpoint.ActualPosition.value_or(glm::dvec2{ endpoint.Position.X, endpoint.Position.Y });

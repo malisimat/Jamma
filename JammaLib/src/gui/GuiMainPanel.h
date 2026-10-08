@@ -51,6 +51,8 @@ namespace gui
 		void _ReleaseResources() override;
 	private:
 		void _Layout();
+		void _LayoutSelection(int panelWidth, int panelHeight);
+		void _LayoutSettings(int panelWidth, int panelHeight);
 		void _PrepareHide(const std::shared_ptr<base::GuiElement>& subtree);
 		void _UpdatePresentation();
 		static constexpr unsigned int _PageCommand = 1u;
