@@ -174,7 +174,7 @@ void GuiMainPanel::_UpdatePresentation()
 	const float hidden = 1.0f - PresentedOpacity();
 	_frame->SetPosition(_selectionOnly
 		? Position2d{ margin, static_cast<int>(_viewport.Height) - margin - static_cast<int>(size.Height) + static_cast<int>(std::lround(hidden * (size.Height + _handle->GetSize().Height))) }
-		: Position2d{ margin - static_cast<int>(std::lround(hidden * (size.Width + margin))), std::min(8, static_cast<int>(_viewport.Height) / 2) });
+		: Position2d{ margin - static_cast<int>(std::lround(hidden * (size.Width + margin))), std::min(GuiStyle::StatusBarHeight + 8, static_cast<int>(_viewport.Height) / 2) });
 	_frame->SetVisible(_transition > 0.0f && size.Width > 0u && size.Height > 0u);
 }
 
@@ -222,7 +222,7 @@ void GuiMainPanel::_Layout()
 	const int handleWidth = std::min(_selectionOnly ? 64 : 20, std::max(0, width - (_selectionOnly ? margin : 0)));
 	const int handleHeight = std::min(_selectionOnly ? 20 : 64, std::max(0, height - (_selectionOnly ? 0 : std::min(8, height / 2))));
 	const int panelHeight = std::min(_selectionOnly ? 84 : 320, std::max(0, height - 2 * std::min(8, height / 2)));
-	_handle->SetPosition(_selectionOnly ? Position2d{ margin, height - handleHeight } : Position2d{ 0, std::min(8, height / 2) });
+	_handle->SetPosition(_selectionOnly ? Position2d{ margin, height - handleHeight } : Position2d{ 0, std::min(GuiStyle::StatusBarHeight + 8, height / 2) });
 	_handle->SetSize({ static_cast<unsigned int>(handleWidth), static_cast<unsigned int>(handleHeight) });
 	_handle->SetVisible(handleWidth > 0 && handleHeight > 0);
 	_frame->SetSize({ static_cast<unsigned int>(panelWidth), static_cast<unsigned int>(panelHeight) });
