@@ -2008,6 +2008,9 @@ void Scene::SetHover3d(std::vector<unsigned char> path, Action::Modifiers modifi
 {
 	if (_loopEditor.IsEngaged())
 		return;
+	// Resolve GUI ownership before taking the scene lock: station snapshots also lock it.
+	std::vector<std::weak_ptr<base::GuiElement>> guiPath;
+	_ResolveHoverPath2d(guiPath);
 	std::unique_lock lock(_sceneMutex);
 	bool isSelected = false;
 	auto tweakState = base::Tweakable::TweakState::TWEAKSTATE_NONE;
@@ -2047,6 +2050,11 @@ void Scene::SetHover3d(std::vector<unsigned char> path, Action::Modifiers modifi
 	}
 
 	elementPath = TrimPath(elementPath, _selector->CurrentSelectDepth() + 1);
+	// Rack controls own the pointer even when the 3D picker sees a model behind them.
+	if (std::any_of(guiPath.begin(), guiPath.end(), [](const auto& element) {
+		return nullptr != std::dynamic_pointer_cast<GuiRack>(element.lock());
+	}))
+		elementPath.clear();
 
 	if (elementPath != _lastLoggedHoverPath)
 	{
@@ -2345,8 +2353,11 @@ void Scene::ApplyDeferredHoverUpdates()
 	_ApplyHoverPath2d(nextPath);
 
 	bool stationHoverPromotedFrom2d = false;
+	const bool rackOwnsHover = std::any_of(nextPath.begin(), nextPath.end(), [](const auto& element) {
+		return nullptr != std::dynamic_pointer_cast<GuiRack>(element.lock());
+	});
 
-	if (!nextPath.empty())
+	if (!nextPath.empty() && !rackOwnsHover)
 	{
 		_hoverPath2dNextSharedScratch.clear();
 		_LockHoverPath(nextPath, _hoverPath2dNextSharedScratch);
@@ -2383,13 +2394,21 @@ void Scene::ApplyDeferredHoverUpdates()
 		}
 	}
 
-	if (!stationHoverPromotedFrom2d && _hoverPath3d.empty() && !_selector->CurrentHover().empty())
+	if (!stationHoverPromotedFrom2d && (rackOwnsHover || _hoverPath3d.empty()) && !_selector->CurrentHover().empty())
 	{
 		_selector->UpdateCurrentHover({ },
 			Action::MODIFIER_NONE,
 			false,
 			base::Tweakable::TweakState::TWEAKSTATE_NONE);
 		_UpdateSelection(ACTIONRESULT_DEFAULT);
+	}
+	else if (!stationHoverPromotedFrom2d && !rackOwnsHover && !_hoverPath3d.empty())
+	{
+		// The picker may keep the same model ID while the pointer leaves a control.
+		auto pickPath = _hoverPath3d;
+		for (auto& segment : pickPath)
+			++segment;
+		SetHover3d(std::move(pickPath), Action::MODIFIER_NONE);
 	}
 
 	_hoverPath2d = std::move(nextPath);
