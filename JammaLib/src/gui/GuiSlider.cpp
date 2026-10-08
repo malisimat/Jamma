@@ -214,6 +214,10 @@ void GuiSlider::Draw(DrawContext & ctx)
 
 ActionResult GuiSlider::OnAction(TouchAction action)
 {
+	// Wheel events have no matching release and cannot own a drag gesture.
+	if (action.Touch == TouchAction::TOUCH_MOUSE && action.Index == 4)
+		return ActionResult::NoAction();
+
 	auto res = GuiElement::OnAction(action);
 
 	//if (res.IsEaten)

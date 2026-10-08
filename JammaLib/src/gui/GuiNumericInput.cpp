@@ -85,6 +85,8 @@ void GuiNumericInput::_OnCommit()
 
 ActionResult GuiNumericInput::OnAction(TouchAction action)
 {
+	if (action.Touch == TouchAction::TOUCH_MOUSE && action.Index == 4)
+		return ActionResult::NoAction();
 	if (!IsVisible() || !IsEnabled()) return ActionResult::NoAction();
 	if (TouchAction::TouchState::TOUCH_DOWN == action.State && HitTest(action.Position))
 	{

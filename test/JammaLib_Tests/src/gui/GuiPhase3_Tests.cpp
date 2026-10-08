@@ -725,6 +725,24 @@ TEST(GuiNumericInput, RejectsNonNumericCharacters) {
 	EXPECT_EQ("1", ni->Text());
 }
 
+TEST(GuiNumericInput, WheelDoesNotStartDragOrRequestFocus) {
+	GuiNumericInputParams params;
+	params.Min = 0.0; params.Max = 100.0; params.Step = 1.0;
+	params.InitValue = 50.0;
+	params.Size = { 100, 24 }; params.MinSize = { 100, 24 };
+	auto input = std::make_shared<GuiNumericInput>(params);
+	auto wheel = MakeTouch(TouchAction::TOUCH_DOWN, { 10, 10 });
+	wheel.Touch = TouchAction::TOUCH_MOUSE;
+	wheel.Index = 4;
+	EXPECT_FALSE(input->OnAction(wheel).IsEaten);
+	EXPECT_FALSE(input->HasFocus());
+	input->OnAction(MakeTouchMove({ 10, 20 }));
+	EXPECT_DOUBLE_EQ(50.0, input->Value());
+	input->OnAction(MakeTouch(TouchAction::TOUCH_DOWN, { 10, 10 }));
+	input->OnAction(MakeTouchMove({ 10, 20 }));
+	EXPECT_DOUBLE_EQ(60.0, input->Value());
+}
+
 TEST(GuiNumericInput, VerticalDragAdjustsValue) {
 	GuiNumericInputParams np;
 	np.Min = 0.0; np.Max = 100.0; np.Step = 1.0;
@@ -898,9 +916,13 @@ TEST(GuiMainPanel, SwitchAndCollapseFinalizeEditsAndOnlyCloseOwnedPopup) {
 	panel->SetExpanded(false);
 	EXPECT_EQ(2, hideCalls);
 	EXPECT_EQ(unrelated, popups.Top());
-	EXPECT_TRUE(panel->RouteHitTest({ 25, 10 }));
+	auto handle = panel->TryGetChild(1);
+	ASSERT_TRUE(handle);
+	const auto handlePoint = handle->Position() + utils::Position2d{ 1, 1 };
+	EXPECT_TRUE(panel->RouteHitTest(handlePoint));
 	EXPECT_TRUE(panel->RouteHitTest({ 25, 100 })); // Sliding body still blocks the scene.
 	for (int frame = 0; frame < 5; ++frame) panel->AdvanceAnimation(0.05f);
+	EXPECT_TRUE(panel->RouteHitTest(handlePoint));
 	EXPECT_FALSE(panel->RouteHitTest({ 25, 100 }));
 }
 

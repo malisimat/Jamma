@@ -36,6 +36,36 @@ private:
 	double _value;
 };
 
+TEST(GuiSlider, WheelDoesNotStartOrInterruptPointerDrag) {
+	auto params = GuiSliderParams::PanelHorizontal("", 120u);
+	params.InitValue = 0.25;
+	auto slider = std::make_shared<GuiSlider>(params);
+	auto wheel = TouchAction();
+	wheel.Touch = TouchAction::TOUCH_MOUSE;
+	wheel.State = TouchAction::TOUCH_DOWN;
+	wheel.Index = 4;
+	wheel.Position = { 20, 10 };
+	EXPECT_FALSE(slider->OnAction(wheel).IsEaten);
+	slider->SetValue(0.5, true);
+	EXPECT_DOUBLE_EQ(slider->Value(), 0.5);
+
+	auto press = wheel;
+	press.Index = 0;
+	ASSERT_TRUE(slider->OnAction(press).IsEaten);
+	auto move = TouchMoveAction();
+	move.Touch = TouchAction::TOUCH_MOUSE;
+	move.Position = { 30, 10 };
+	slider->OnAction(move);
+	const auto draggedValue = slider->Value();
+	EXPECT_GT(draggedValue, 0.5);
+	EXPECT_FALSE(slider->OnAction(wheel).IsEaten);
+	EXPECT_DOUBLE_EQ(slider->Value(), draggedValue);
+	press.State = TouchAction::TOUCH_UP;
+	ASSERT_TRUE(slider->OnAction(press).Undo);
+	slider->SetValue(0.75, true);
+	EXPECT_DOUBLE_EQ(slider->Value(), 0.75);
+}
+
 TEST(GuiSlider, DoesUndo) {
 	auto dragLength = 100;
 	auto dragSize = 20;
