@@ -10,7 +10,7 @@ namespace gui
 	struct GuiStyle
 	{
 		static glm::vec3 Graphite() { return { 0.24f, 0.26f, 0.29f }; }
-		static glm::vec3 Control() { return { 0.88f, 0.57f, 0.30f }; }
+		static glm::vec3 Control() { return { 1.0f, 0.7f, 0.2f }; }
 		static glm::vec3 Edge() { return { 0.66f, 0.77f, 0.80f }; }
 		static constexpr int StatusBarHeight = 28;
 		static int StatusBarWidth(int viewportWidth) { return std::max(0, viewportWidth - 368); }

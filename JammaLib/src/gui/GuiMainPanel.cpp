@@ -42,7 +42,8 @@ GuiMainPanel::GuiMainPanel(GuiMainPanelParams params) : GuiPanel(params),
 	handleParams.Size = _selectionOnly ? Size2d{ 64u, 20u } : Size2d{ 20u, 64u };
 	handleParams.MinSize = handleParams.Size;
 	handleParams.InitState = GuiToggleParams::TOGGLE_ON;
-	handleParams.TintColor = GuiStyle::Control();
+	// Match rack handles: preserve the arrow textures' authored colours.
+	handleParams.TextureShader = "texture";
 	_handle = std::make_shared<GuiToggle>(handleParams);
 	_expandBinding = std::make_shared<GuiCommandReceiver>(_ExpandCommand);
 	_handle->SetReceiver(_expandBinding);
