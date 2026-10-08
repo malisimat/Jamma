@@ -21,7 +21,7 @@ GuiToggle::GuiToggle(GuiToggleParams params) :
 
 void GuiToggle::SetSize(Size2d size)
 {
-	GuiElement::SetSize(size);
+	GuiButton::SetSize(size);
 
 	_toggledTexture.SetSize(_sizeParams.Size);
 	_toggledOverTexture.SetSize(_sizeParams.Size);

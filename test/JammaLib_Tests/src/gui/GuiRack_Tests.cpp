@@ -67,6 +67,51 @@ TEST(GuiRack, DefaultStateIsMaster) {
 	ASSERT_EQ(GuiRackParams::RACK_MASTER, rack->GetRackState());
 }
 
+TEST(GuiRack, SuppressedMasterControlsCannotReceivePointerInput)
+{
+	auto rack = std::make_shared<GuiRack>(MakeRackParams());
+	const auto slider = rack->GetMasterSlider();
+	const auto position = slider->GlobalPosition();
+	const utils::Position2d pointer = { position.X + 10, position.Y + 10 };
+	ASSERT_EQ(slider, rack->FindTopmostDescendant(pointer));
+
+	rack->SetMasterControlsVisible(false);
+	EXPECT_TRUE(rack->IsVisible());
+	EXPECT_EQ(nullptr, rack->FindTopmostDescendant(pointer));
+	rack->SetMasterControlsVisible(true);
+	EXPECT_EQ(slider, rack->FindTopmostDescendant(pointer));
+}
+
+TEST(GuiRack, HidingExpandedRackResetsBothExpansionLevels)
+{
+	auto rack = std::make_shared<GuiRack>(MakeRackParams());
+	for (const auto state : { GuiRackParams::RACK_CHANNELS, GuiRackParams::RACK_ROUTER })
+	{
+		rack->SetRackState(state, true);
+		rack->SetVisible(false);
+		EXPECT_EQ(GuiRackParams::RACK_MASTER, rack->GetRackState());
+		rack->SetVisible(true);
+		EXPECT_EQ(GuiRackParams::RACK_MASTER, rack->GetRackState());
+	}
+}
+
+TEST(GuiRack, ViewportCheckIgnoresSuppressionAndExpandedOverhang)
+{
+	auto rack = std::make_shared<GuiRack>(MakeRackParams());
+	base::GuiElementParams hostParams;
+	auto host = std::make_shared<base::GuiElement>(hostParams);
+	host->AddChild(rack);
+	rack->SetMasterControlsVisible(false);
+	EXPECT_TRUE(rack->IsInView({ 640, 480 }));
+	rack->SetRackState(GuiRackParams::RACK_ROUTER, true);
+	host->SetPosition({ -200, 0 });
+	EXPECT_FALSE(rack->IsInView({ 640, 480 }));
+	host->SetPosition({ -199, 0 });
+	EXPECT_TRUE(rack->IsInView({ 640, 480 }));
+	host->SetVisible(false);
+	EXPECT_FALSE(rack->IsInView({ 640, 480 }));
+}
+
 TEST(GuiRack, InitStateChannels) {
 	auto params = MakeRackParams();
 	params.InitState = GuiRackParams::RACK_CHANNELS;

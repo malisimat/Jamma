@@ -348,6 +348,7 @@ namespace engine
 		void SetRemoteMidiQuantisationGrid(const RemoteTransportGeometry& geometry,
 			std::int64_t originSamps) noexcept;
 		void SetRackVisibility(bool visible);
+		std::shared_ptr<gui::GuiRack> GetGuiRack() const { return _guiRack; }
 		gui::GuiRackParams::RackState GetRackState() const;
 		void CollapseRackToMaster();
 		void CollapseRouterToChannels();

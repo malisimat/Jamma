@@ -652,6 +652,7 @@ void Scene::Draw(DrawContext& ctx)
 	_loopEditor.UpdateUi(_viewProj);
 	std::scoped_lock lock(_sceneMutex);
 	const bool midiEditorEngaged = _loopEditor.IsEngaged() && _loopEditor.TargetMidiLoop();
+	_UpdateRackVisibilityLocked();
 	if (_hudPanel)
 		_hudPanel->SetLoopEditorMode(midiEditorEngaged);
 
@@ -860,6 +861,8 @@ void Scene::AdvanceUiAnimations()
 	const bool mainChanged = _mainPanel && _mainPanel->AdvanceAnimation(elapsed);
 	const bool selectionChanged = _selectionPanel && _selectionPanel->AdvanceAnimation(elapsed);
 	if (mainChanged || selectionChanged) _InvalidateHover2d();
+	std::scoped_lock lock(_sceneMutex);
+	_UpdateRackVisibilityLocked();
 }
 
 void Scene::_InitResources(ResourceLib& resourceLib, bool forceInit)
@@ -2630,6 +2633,59 @@ void Scene::_SetSelectionMutedLocked(const std::vector<unsigned char>& path, boo
 		setMuted(std::dynamic_pointer_cast<LoopTake>(target->Parent()));
 }
 
+void Scene::_UpdateRackVisibilityLocked()
+{
+	// Presentation stays on the UI thread under the existing scene lock.
+	const auto forEachRack = [this](auto&& visit) {
+		for (const auto& station : _stations)
+		{
+			const auto position = station->ModelPosition();
+			const auto clip = _viewProj * glm::vec4(position.X, position.Y, position.Z, 1.0f);
+			const bool stationInView = station->IsVisible() && !_loopEditor.IsEngaged() &&
+				clip.w > 0.0f && clip.z >= -clip.w && clip.z <= clip.w;
+			visit(station->GetGuiRack(), stationInView);
+			for (const auto& take : station->GetLoopTakes())
+				visit(take->GetGuiRack(), stationInView && take->IsVisible());
+		}
+	};
+
+	std::shared_ptr<GuiRack> expanded;
+	forEachRack([&](const std::shared_ptr<GuiRack>& rack, bool ownerInView) {
+		if (!rack || rack->GetRackState() == GuiRackParams::RACK_MASTER) return;
+		if (!ownerInView || !rack->IsInView(_sizeParams.Size) || expanded)
+		{
+			rack->SetRackState(GuiRackParams::RACK_MASTER, true);
+			_InvalidateHover2d();
+		}
+		else
+			expanded = rack;
+	});
+	forEachRack([&](const std::shared_ptr<GuiRack>& rack, bool) {
+		if (!rack) return;
+		const bool visible = !expanded || rack == expanded;
+		if (rack->GetMasterSlider()->Parent()->IsVisible() != visible)
+		{
+			rack->SetMasterControlsVisible(visible);
+			_InvalidateHover2d();
+		}
+	});
+}
+
+void Scene::_CollapseRacksLocked()
+{
+	const auto collapse = [](const std::shared_ptr<GuiRack>& rack) {
+		if (!rack) return;
+		rack->SetRackState(GuiRackParams::RACK_MASTER, true);
+		rack->SetMasterControlsVisible(true);
+	};
+	for (const auto& station : _stations)
+	{
+		collapse(station->GetGuiRack());
+		for (const auto& take : station->GetLoopTakes()) collapse(take->GetGuiRack());
+	}
+	_InvalidateHover2d();
+}
+
 void Scene::_UpdateSelection(ActionResultType res)
 {
 	// Called when touch up + down, and when hover updated
@@ -2641,6 +2697,9 @@ void Scene::_UpdateSelection(ActionResultType res)
 		auto target = _ChildFromPathLocked(path);
 		if (!target)
 			return;
+		// Only committed scene selection reaches here. Rack controls consume
+		// their input before the selector, so editing a rack cannot dismiss it.
+		_CollapseRacksLocked();
 		if (_selector->CurrentSelectDepth() == base::DEPTH_STATION)
 		{
 			if (auto station = std::dynamic_pointer_cast<Station>(target))
@@ -2690,7 +2749,8 @@ void Scene::_UpdateSelection(ActionResultType res)
 		if (selected) target->Select();
 		else target->DeSelect();
 	};
-	const auto clearSelection = [&stations]() {
+	const auto clearSelection = [this, &stations]() {
+		_CollapseRacksLocked();
 		for (const auto& station : stations)
 		{
 			station->DeSelect();

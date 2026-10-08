@@ -130,6 +130,111 @@ TEST_F(SceneRoutingIntegrationTest, TakeClicksSelectAndToggleMuteWithoutChanging
 	scene->Shutdown();
 }
 
+TEST_F(SceneRoutingIntegrationTest, ExpandedRackSuppressesOtherStationsAndRestoresOnLeavingView)
+{
+	auto scene = FreshScene({ Station("Keys"), Station("Bass") }, {});
+	ASSERT_TRUE(scene);
+	scene->SetSize({ 640, 480 });
+	const auto stations = scene->SnapshotStations();
+	const auto rack = stations[0]->GetGuiRack();
+	const auto otherRack = stations[1]->GetGuiRack();
+	rack->SetPosition({ 100, 100 });
+	otherRack->SetPosition({ 300, 100 });
+	rack->SetRackState(gui::GuiRackParams::RACK_CHANNELS, true);
+	scene->AdvanceUiAnimations();
+	ASSERT_EQ(gui::GuiRackParams::RACK_CHANNELS, rack->GetRackState());
+	EXPECT_TRUE(rack->GetMasterSlider()->Parent()->IsVisible());
+	EXPECT_FALSE(otherRack->GetMasterSlider()->Parent()->IsVisible());
+
+	// Closing just the router still leaves an expanded channel rack.
+	rack->SetRackState(gui::GuiRackParams::RACK_ROUTER, true);
+	rack->SetRackState(gui::GuiRackParams::RACK_CHANNELS, true);
+	scene->AdvanceUiAnimations();
+	EXPECT_FALSE(otherRack->GetMasterSlider()->Parent()->IsVisible());
+	rack->SetRackState(gui::GuiRackParams::RACK_MASTER, true);
+	scene->AdvanceUiAnimations();
+	EXPECT_TRUE(otherRack->GetMasterSlider()->Parent()->IsVisible());
+
+	rack->SetRackState(gui::GuiRackParams::RACK_ROUTER, true);
+	rack->SetPosition({ -10000, 100 });
+	scene->AdvanceUiAnimations();
+	EXPECT_EQ(gui::GuiRackParams::RACK_MASTER, rack->GetRackState());
+	EXPECT_TRUE(otherRack->GetMasterSlider()->Parent()->IsVisible());
+	rack->SetPosition({ 100, 100 });
+	scene->AdvanceUiAnimations();
+	EXPECT_EQ(gui::GuiRackParams::RACK_MASTER, rack->GetRackState());
+	scene->Shutdown();
+}
+
+TEST_F(SceneRoutingIntegrationTest, SelectingAnotherTakeCollapsesRackButHoverAndRackInputPreserveIt)
+{
+	auto scene = FreshScene({ Station("Keys") }, {});
+	ASSERT_TRUE(scene);
+	scene->SetSize({ 1280, 900 });
+	const auto station = scene->SnapshotStations().front();
+	const auto take = station->AddTake();
+	const auto sibling = station->AddTake();
+	scene->CommitChanges();
+	actions::GuiAction view;
+	view.ElementType = actions::GuiAction::ACTIONELEMENT_RADIO;
+	view.Index = 100u;
+	view.Data = actions::GuiAction::GuiInt{ engine::Scene::VIEW_LOOPTAKE };
+	scene->OnAction(view);
+	const auto rack = take->GetGuiRack();
+	rack->SetPosition({ 500, 400 });
+	rack->SetRackState(gui::GuiRackParams::RACK_CHANNELS, true);
+	scene->AdvanceUiAnimations();
+	ASSERT_EQ(gui::GuiRackParams::RACK_CHANNELS, rack->GetRackState());
+
+	std::vector<unsigned char> pickPath;
+	for (const auto index : sibling->GlobalId())
+		pickPath.push_back(static_cast<unsigned char>(index + 1u));
+	scene->SetHover3d(pickPath, base::Action::MODIFIER_NONE);
+	EXPECT_EQ(gui::GuiRackParams::RACK_CHANNELS, rack->GetRackState());
+
+	// Exercise the scene's actual press/release capture path for the master.
+	const auto slider = rack->GetMasterSlider();
+	const auto sliderPosition = slider->GlobalPosition();
+	actions::TouchAction click;
+	click.Touch = actions::TouchAction::TOUCH_MOUSE;
+	click.Position = { sliderPosition.X + 10, sliderPosition.Y + 10 };
+	click.Index = 0;
+	click.State = actions::TouchAction::TOUCH_DOWN;
+	const auto rackPress = scene->OnAction(click);
+	ASSERT_TRUE(rackPress.IsEaten);
+	EXPECT_EQ(slider, rackPress.ActiveElement.lock());
+	click.State = actions::TouchAction::TOUCH_UP;
+	scene->OnAction(click);
+	EXPECT_EQ(gui::GuiRackParams::RACK_CHANNELS, rack->GetRackState());
+
+	actions::TouchMoveAction move;
+	move.Touch = actions::TouchAction::TOUCH_MOUSE;
+	move.Position = { -100, -100 };
+	scene->OnAction(move);
+	scene->SetHover3d(pickPath, base::Action::MODIFIER_NONE);
+	click.Position = { -100, -100 };
+	click.State = actions::TouchAction::TOUCH_DOWN;
+	scene->OnAction(click);
+	click.State = actions::TouchAction::TOUCH_UP;
+	scene->OnAction(click);
+	EXPECT_TRUE(sibling->IsSelected());
+	EXPECT_EQ(gui::GuiRackParams::RACK_MASTER, rack->GetRackState());
+	EXPECT_TRUE(sibling->GetGuiRack()->GetMasterSlider()->Parent()->IsVisible());
+
+	// A background click clears selection and restores every master control.
+	rack->SetRackState(gui::GuiRackParams::RACK_ROUTER, true);
+	scene->AdvanceUiAnimations();
+	scene->SetHover3d({}, base::Action::MODIFIER_NONE);
+	click.State = actions::TouchAction::TOUCH_DOWN;
+	scene->OnAction(click);
+	click.State = actions::TouchAction::TOUCH_UP;
+	scene->OnAction(click);
+	EXPECT_FALSE(scene->HasSelection());
+	EXPECT_EQ(gui::GuiRackParams::RACK_MASTER, rack->GetRackState());
+	EXPECT_TRUE(sibling->GetGuiRack()->GetMasterSlider()->Parent()->IsVisible());
+	scene->Shutdown();
+}
+
 TEST_F(SceneRoutingIntegrationTest, FreshScenesResolveReorderedAndAdditionalStationsByName)
 {
 	auto reordered = FreshScene({ Station("Bass"), Station("Drums") },

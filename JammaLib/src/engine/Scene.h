@@ -280,6 +280,8 @@ namespace engine
 		void _InitSize();
 		void _UpdateHudStationAnchors();
 		void _UpdateSelection(actions::ActionResultType res);
+		void _UpdateRackVisibilityLocked();
+		void _CollapseRacksLocked();
 		// Selection helpers require _sceneMutex throughout hierarchy access.
 		void _SetSelectionMutedLocked(const std::vector<unsigned char>& path, bool muted);
 		base::Tweakable::TweakState _SelectionTweakStateLocked(const std::shared_ptr<base::GuiElement>& target) const;

@@ -2,6 +2,7 @@
 #include "GuiRack.h"
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 using namespace graphics;
 
 using namespace base;
@@ -273,6 +274,38 @@ void GuiRack::SetRackState(GuiRackParams::RackState state, bool bypassUpdates)
 	_OnRackChange(0, bypassUpdates);
 }
 
+void GuiRack::SetVisible(bool visible)
+{
+	if (!visible)
+		SetRackState(GuiRackParams::RACK_MASTER, true);
+	GuiElement::SetVisible(visible);
+}
+
+void GuiRack::SetMasterControlsVisible(bool visible)
+{
+	_masterControlsVisible = visible;
+	// Suppression must not overwrite selection-depth visibility or collapse
+	// the rack being edited.
+	_masterPanel->SetVisible(visible || _rackState != GuiRackParams::RACK_MASTER);
+}
+
+bool GuiRack::IsInView(utils::Size2d viewport) const
+{
+	if (!IsVisible())
+		return false;
+	for (auto ancestor = Parent(); ancestor; ancestor = ancestor->Parent())
+		if (!ancestor->IsVisible()) return false;
+
+	// Expanded panels may extend into view after their owner has left it.
+	// Only the persistent master rectangle determines whether the rack is in view.
+	const auto position = GlobalPosition();
+	const auto size = GetSize();
+	return position.X < static_cast<int>(viewport.Width) &&
+		position.Y < static_cast<int>(viewport.Height) &&
+		static_cast<std::int64_t>(position.X) + size.Width > 0 &&
+		static_cast<std::int64_t>(position.Y) + size.Height > 0;
+}
+
 void GuiRack::_InitReceivers()
 {
 	_receiversInitialized = true;
@@ -331,6 +364,8 @@ void GuiRack::_OnRackChange(unsigned int index, bool bypassUpdates)
 		_midiChannelPanel->SetVisible(true);
 		break;
 	}
+
+	SetMasterControlsVisible(_masterControlsVisible);
 
 	//if (_receiver && !bypassUpdates)
 	//{
