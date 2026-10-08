@@ -1609,6 +1609,66 @@ TEST(Scene, HoverTargetsOnlyTheTopmostOverlappingGuiElement) {
 	EXPECT_EQ(base::GuiElement::STATE_NORMAL, topmost->GetState());
 }
 
+TEST(Scene, RackHoverSuppressesModelHoverAndRestoresItOnExit) {
+	SceneParams sceneParams{ base::DrawableParams(), base::MoveableParams(),
+		base::SizeableParams({ 1400u, 900u }) };
+	TestScene scene(sceneParams, {});
+	auto station = MakeTestStation();
+	scene.AddStationForTest(station);
+
+	gui::GuiRackParams rackParams;
+	rackParams.Position = { 800, 500 };
+	rackParams.Size = { 200u, 300u };
+	rackParams.NumInputChannels = 1;
+	auto rack = std::make_shared<gui::GuiRack>(rackParams);
+	station->AddChild(rack);
+	std::vector<unsigned char> pickPath;
+	for (auto index : station->GlobalId())
+		pickPath.push_back(static_cast<unsigned char>(index + 1u));
+
+	scene.OnAction(MakeSceneTouchMove({ -100, -100 }, 0u));
+	scene.SetHover3d(pickPath, base::Action::MODIFIER_NONE);
+	ASSERT_EQ(station, scene.CurrentHoverElementForTest());
+
+	// Background, thumb and expander all belong to the rack, not the model.
+	const auto slider = rack->GetMasterSlider();
+	int thumbY = 0;
+	for (; thumbY < static_cast<int>(slider->GetSize().Height); ++thumbY)
+	{
+		std::static_pointer_cast<base::GuiElement>(slider)->ApplyHoverPoint({ 10, thumbY });
+		if (slider->DragHandleIsOverForTest())
+			break;
+	}
+	ASSERT_LT(thumbY, static_cast<int>(slider->GetSize().Height));
+	slider->ClearPointerState();
+	for (const auto point : { slider->GlobalPosition() + utils::Position2d{ 10, 10 },
+		slider->GlobalPosition() + utils::Position2d{ 10, thumbY },
+		rack->GlobalPosition() + utils::Position2d{ 180, 150 } })
+	{
+		scene.OnAction(MakeSceneTouchMove(point, 0u));
+		scene.ApplyHoverForTest();
+		EXPECT_EQ(nullptr, scene.CurrentHoverElementForTest());
+		// A fresh picker result must not reintroduce hover behind the control.
+		scene.SetHover3d(pickPath, base::Action::MODIFIER_NONE);
+		EXPECT_EQ(nullptr, scene.CurrentHoverElementForTest());
+	}
+	rack->SetRackState(gui::GuiRackParams::RACK_CHANNELS, true);
+	const auto channel = rack->GetChannelSlider(0);
+	scene.OnAction(MakeSceneTouchMove(channel->GlobalPosition() + utils::Position2d{ 10, thumbY }, 0u));
+	scene.ApplyHoverForTest();
+	EXPECT_EQ(base::GuiElement::STATE_OVER, channel->GetState());
+	EXPECT_TRUE(channel->DragHandleIsOverForTest());
+	EXPECT_EQ(nullptr, scene.CurrentHoverElementForTest());
+
+	scene.OnAction(MakeSceneTouchMove({ -100, -100 }, 0u));
+	scene.ApplyHoverForTest();
+	EXPECT_EQ(station, scene.CurrentHoverElementForTest());
+	EXPECT_EQ(base::GuiElement::STATE_NORMAL, slider->GetState());
+	EXPECT_FALSE(slider->DragHandleIsOverForTest());
+	EXPECT_EQ(base::GuiElement::STATE_NORMAL, channel->GetState());
+	EXPECT_FALSE(channel->DragHandleIsOverForTest());
+}
+
 TEST(SceneDrag, LeftDragPansCameraDirectly) {
 	SceneParams sceneParams{ base::DrawableParams(),
 		base::MoveableParams(),
@@ -2166,10 +2226,12 @@ TEST(Scene, LoopGridEditorTracksOneMidiLoopAndClosesWhenItIsReplaced) {
 	EXPECT_NEAR(0.0f, alignedEye.x, 0.001f);
 	EXPECT_NEAR(0.0f, alignedEye.z, 0.001f);
 	const auto alignedRadius = glm::length(alignedEye);
+	// Drag below the grid and away from the settings overlay.
 	scene.OnAction(MakeSceneTouch(TouchAction::TOUCH_DOWN,
-		{ 100, 100 }, 0, LeftMouseButtonMask));
-	scene.OnAction(MakeSceneTouchMove({ 60, 140 }, LeftMouseButtonMask));
-	scene.OnAction(MakeSceneTouch(TouchAction::TOUCH_UP, { 60, 140 }, 0, 0u));
+		{ 700, 100 }, 0, LeftMouseButtonMask));
+	ASSERT_FALSE(scene.EditorOwnsPointerForTest());
+	scene.OnAction(MakeSceneTouchMove({ 660, 140 }, LeftMouseButtonMask));
+	scene.OnAction(MakeSceneTouch(TouchAction::TOUCH_UP, { 660, 140 }, 0, 0u));
 	const auto orbitEye = scene.EditorProbeEyeLocalForTest();
 	EXPECT_LT(orbitEye.x, 0.0f);
 	EXPECT_LT(orbitEye.z, 0.0f);
@@ -2178,9 +2240,9 @@ TEST(Scene, LoopGridEditorTracksOneMidiLoopAndClosesWhenItIsReplaced) {
 	EXPECT_NEAR(1.0f, glm::dot(glm::normalize(-orbitEye),
 		glm::vec3(forward.X, forward.Y, forward.Z)), 0.001f);
 	scene.OnAction(MakeSceneTouch(TouchAction::TOUCH_DOWN,
-		{ 100, 100 }, 2, RightMouseButtonMask));
-	scene.OnAction(MakeSceneTouchMove({ 80, 120 }, RightMouseButtonMask));
-	scene.OnAction(MakeSceneTouch(TouchAction::TOUCH_UP, { 80, 120 }, 2, 0u));
+		{ 700, 100 }, 2, RightMouseButtonMask));
+	scene.OnAction(MakeSceneTouchMove({ 680, 120 }, RightMouseButtonMask));
+	scene.OnAction(MakeSceneTouch(TouchAction::TOUCH_UP, { 680, 120 }, 2, 0u));
 	EXPECT_NEAR(alignedRadius, glm::length(scene.EditorProbeEyeLocalForTest()), 0.001f);
 	const auto editorPose = scene.CameraPoseForTest();
 	scene.OnAction(MakeSceneTouch(TouchAction::TOUCH_DOWN, { 700, 450 }, 0, LeftMouseButtonMask));
@@ -2323,11 +2385,6 @@ TEST(Scene, LoopGridEditorCanSelectMidiLoopAtEverySelectionDepthAndOpenWithE) {
 	EXPECT_TRUE(scene.OnAction(edit).IsEaten);
 	EXPECT_EQ(take->GetMidiLoops().front(), scene.LoopGridEditorMidiLoop());
 	scene.CloseLoopGridEditor();
-	scene.SettleLoopGridEditorForTest();
-	scene.OnAction(MakeSceneTouch(TouchAction::TOUCH_DOWN, { 1290, 875 }, 0,
-		LeftMouseButtonMask));
-	scene.OnAction(MakeSceneTouch(TouchAction::TOUCH_UP, { 1290, 875 }, 0u, 0u));
-	EXPECT_EQ(take->GetMidiLoops().front(), scene.LoopGridEditorMidiLoop());
 }
 
 TEST(Scene, MiddleMutePaintAppliesImmediatelySuppressesHoverAndPreservesOtherTakes) {

@@ -90,15 +90,14 @@ Scene::Scene(SceneParams params,
 	GuiLabelParams labelParams;
 	const std::string versionText = "Jamma v" LIB_VERSION;
 	labelParams.String = versionText;
+	labelParams.Ellipsize = true;
+	labelParams.ClipText = true;
+	labelParams.VerticalAlign = GuiTextVerticalAlign::Center;
 	labelParams.Position = { (int)params.Size.Width - 220, (int)params.Size.Height - 28 };
 	labelParams.ModelPosition = { (float)(int)params.Size.Width - 220.0f, (float)(int)params.Size.Height - 28.0f, 0.0f };
 	labelParams.Size = { 220, 24 };
 	_label = std::make_unique<GuiLabel>(labelParams);
 
-	GuiMainPanelParams mainParams;
-	mainParams.PopupManager = &_popupManager;
-	_mainPanel = std::make_shared<GuiMainPanel>(mainParams);
-	AddChild(_mainPanel);
 
 	GuiHudParams hudParams;
 	hudParams.Size = params.Size;
@@ -126,8 +125,7 @@ Scene::Scene(SceneParams params,
 
 	GuiRadioParams modeRadioParams;
 	modeRadioParams.Index = 100u;
-	modeRadioParams.Size = { 480, 64 };
-	modeRadioParams.Position = { 0, (int)params.Size.Height - (int)modeRadioParams.Size.Height };
+	modeRadioParams.Size = { 384, 64 };
 	std::vector<GuiToggleParams> radioToggleParams;
 
 	for (auto i = 0u; i < 3; i++)
@@ -172,68 +170,46 @@ Scene::Scene(SceneParams params,
 
 	GuiNumericInputParams midiChannelOverrideParams = GuiNumericInputParams::PanelInput(72u);
 	midiChannelOverrideParams.Index = MidiChannelOverrideControlIndex;
-	midiChannelOverrideParams.Position = { 10, (int)modeRadioParams.Position.Y - ((int)modeRadioParams.Size.Height + 4) };
-	midiChannelOverrideParams.ModelPosition = {
-		(float)midiChannelOverrideParams.Position.X,
-		(float)midiChannelOverrideParams.Position.Y,
-		0.0f };
-	midiChannelOverrideParams.Size = { 80, 64 };
+	midiChannelOverrideParams.Size = { 80, GuiNumericInputParams::DefaultHeight };
 	midiChannelOverrideParams.Min = 0.0;
 	midiChannelOverrideParams.Max = 16.0;
 	midiChannelOverrideParams.Step = 0.1;
 	midiChannelOverrideParams.Decimals = 0;
 	midiChannelOverrideParams.InitValue = static_cast<double>(_inputSubsystem->ForcedChannelOverride());
 	_midiChannelOverrideInput = std::make_shared<GuiNumericInput>(midiChannelOverrideParams);
-	AddChild(_midiChannelOverrideInput);
+
 
 	GuiNumericInputParams transportOffsetParams = GuiNumericInputParams::PanelInput(88u);
 	transportOffsetParams.Index = TransportOffsetControlIndex;
-	transportOffsetParams.Position = {
-		midiChannelOverrideParams.Position.X + static_cast<int>(midiChannelOverrideParams.Size.Width) + 8,
-		midiChannelOverrideParams.Position.Y };
-	transportOffsetParams.ModelPosition = {
-		static_cast<float>(transportOffsetParams.Position.X),
-		static_cast<float>(transportOffsetParams.Position.Y),
-		0.0f };
-	transportOffsetParams.Size = { 96, 64 };
+	transportOffsetParams.Size = { 96, GuiNumericInputParams::DefaultHeight };
 	transportOffsetParams.Min = -1.0;
 	transportOffsetParams.Max = 1.0;
 	transportOffsetParams.Step = 0.005;
 	transportOffsetParams.Decimals = 3;
 	transportOffsetParams.InitValue = _transportOffsetLoopFrac;
 	_transportOffsetInput = std::make_shared<GuiNumericInput>(transportOffsetParams);
-	AddChild(_transportOffsetInput);
+
 
 	GuiToggleParams metronomeToggleParams = GuiToggleParams::PanelPrimary();
 	metronomeToggleParams.Index = NinjamMetronomeControlIndex;
 	metronomeToggleParams.ToggleIndex = NinjamMetronomeControlIndex;
 	metronomeToggleParams.Text = "CLICK";
-	metronomeToggleParams.Size = { 80, 64 };
-	metronomeToggleParams.MinSize = { 80, 64 };
-	metronomeToggleParams.Position = {
-		transportOffsetParams.Position.X + static_cast<int>(transportOffsetParams.Size.Width) + 8,
-		transportOffsetParams.Position.Y };
-	metronomeToggleParams.ModelPosition = {
-		static_cast<float>(metronomeToggleParams.Position.X),
-		static_cast<float>(metronomeToggleParams.Position.Y),
-		0.0f };
+	metronomeToggleParams.Size = { 80, GuiToggleParams::DefaultHeight };
+	metronomeToggleParams.MinSize = { 80, GuiToggleParams::DefaultHeight };
 	metronomeToggleParams.InitState = GuiToggleParams::TOGGLE_ON;
 	_ninjamMetronomeToggle = std::make_shared<GuiToggle>(metronomeToggleParams);
-	AddChild(_ninjamMetronomeToggle);
+
 
 	GuiRadioParams globalMidiQuantRadioParams;
 	globalMidiQuantRadioParams.Index = 101u;
 	globalMidiQuantRadioParams.InitValue = static_cast<unsigned int>(_globalMidiQuantState);
 	globalMidiQuantRadioParams.Size = { 228, 40 };
-	globalMidiQuantRadioParams.Position = {
-		modeRadioParams.Position.X + static_cast<int>(modeRadioParams.Size.Width) + 10,
-		(int)params.Size.Height - (int)globalMidiQuantRadioParams.Size.Height - 12
-	};
 
 	std::vector<GuiToggleParams> globalQuantToggleParams;
 	for (auto i = 0u; i < 3; ++i)
 	{
 		GuiToggleParams toggleParams;
+		toggleParams.Text = i == 0 ? "Off" : i == 1 ? "Mixed" : "All";
 		toggleParams.TextureShader = "texture_tinted";
 		toggleParams.Position = { static_cast<int>(i * 76), 0 };
 		toggleParams.Size = { 72, 40 };
@@ -261,6 +237,23 @@ Scene::Scene(SceneParams params,
 	}
 	globalMidiQuantRadioParams.ToggleParams = globalQuantToggleParams;
 	_globalMidiQuantRadio = std::make_shared<GuiRadio>(globalMidiQuantRadioParams);
+
+	GuiMainPanelParams mainParams;
+	mainParams.Size = params.Size;
+	mainParams.PopupManager = &_popupManager;
+	mainParams.BeforeHide = [this](const auto& subtree) { _OnSettingsHidden(subtree); };
+	mainParams.Settings = {
+		{ SettingsPage::Timing, "Global MIDI quantisation", _globalMidiQuantRadio, 101u },
+		{ SettingsPage::Midi, "MIDI channel (0 = unchanged)", _midiChannelOverrideInput, MidiChannelOverrideControlIndex },
+		{ SettingsPage::Timing, "Local phase offset (loops)", _transportOffsetInput, TransportOffsetControlIndex },
+		{ SettingsPage::Timing, "", _ninjamMetronomeToggle, NinjamMetronomeControlIndex }
+	};
+	_mainPanel = std::make_shared<GuiMainPanel>(mainParams);
+	AddChild(_mainPanel);
+	mainParams.SelectionOnly = true;
+	mainParams.Settings = { { SettingsPage::Selection, "", _modeRadio, 100u } };
+	_selectionPanel = std::make_shared<GuiMainPanel>(mainParams);
+	AddChild(_selectionPanel);
 
 	_PublishAudioStations();
 
@@ -373,10 +366,7 @@ void Scene::_OpenRemoteTempoPromptIfNeeded()
 		"Remote master interval: " + std::to_string(change.RemoteMasterIntervalLengthSamps) + " samples",
 		"Remote grid step: " + std::to_string(change.RemoteGridStepSamps) + " samples. Apply locally?"
 	});
-	const auto popupSize = _remoteTempoDialog->GetSize();
-	const int x = std::max(0, (static_cast<int>(_sizeParams.Size.Width) - static_cast<int>(popupSize.Width)) / 2);
-	const int y = std::max(0, (static_cast<int>(_sizeParams.Size.Height) - static_cast<int>(popupSize.Height)) / 2);
-	_remoteTempoDialog->SetPosition({ x, y });
+	_remoteTempoDialog->FitToViewport(_sizeParams.Size);
 
 	_popupManager.Open(_remoteTempoDialog);
 	_remoteTempoDialogOpen = true;
@@ -662,6 +652,7 @@ void Scene::Draw(DrawContext& ctx)
 	_loopEditor.UpdateUi(_viewProj);
 	std::scoped_lock lock(_sceneMutex);
 	const bool midiEditorEngaged = _loopEditor.IsEngaged() && _loopEditor.TargetMidiLoop();
+	_UpdateRackVisibilityLocked();
 	if (_hudPanel)
 		_hudPanel->SetLoopEditorMode(midiEditorEngaged);
 
@@ -679,7 +670,7 @@ void Scene::Draw(DrawContext& ctx)
 			_midiChannelOverrideInput->SetValue(forcedChannel, false);
 	}
 
-	_label->Draw(ctx);
+
 
 	if (_hudPanel)
 	{
@@ -697,10 +688,6 @@ void Scene::Draw(DrawContext& ctx)
 		}
 	}
 
-	for (auto& child : _guiChildren)
-		if (child)
-			child->Draw(ctx);
-
 	if (!midiEditorEngaged)
 	{
 		for (auto& station : _stations)
@@ -708,14 +695,23 @@ void Scene::Draw(DrawContext& ctx)
 	}
 
 	_selector->Draw(ctx);
-	_modeRadio->Draw(ctx);
-	_globalMidiQuantRadio->Draw(ctx);
 	if (!midiEditorEngaged)
 		_ctrlHandleOverlay.Draw(ctx);
 
+
+	for (auto& child : _guiChildren)
+		if (child && child != _mainPanel && child != _selectionPanel)
+			child->Draw(ctx);
+	const int statusWidth = GuiStyle::StatusBarWidth(static_cast<int>(_sizeParams.Size.Width));
+	const int versionWidth = GuiStyle::VersionColumnWidth(statusWidth);
+	const int statusHeight = std::min(GuiStyle::StatusBarHeight, static_cast<int>(_sizeParams.Size.Height));
+	_label->SetPosition({ static_cast<int>(_sizeParams.Size.Width) - versionWidth, std::max(0, (statusHeight - 22) / 2) });
+	_label->SetSize({ static_cast<unsigned int>(versionWidth), 22u });
+	if (versionWidth > 0 && statusHeight >= 22) _label->Draw(ctx);
+	if (!_popupManager.IsOpen()) _loopEditor.Draw(ctx);
+	_mainPanel->Draw(ctx);
+	_selectionPanel->Draw(ctx);
 	_popupManager.Draw(ctx);
-	if (!_popupManager.IsOpen())
-		_loopEditor.Draw(ctx);
 
 	glCtx.PopMvp();
 }
@@ -854,6 +850,21 @@ void Scene::UpdateCamera()
 		_EndBackgroundDrag();
 }
 
+void Scene::AdvanceUiAnimations()
+{
+	// Window calls once per UI frame before deferred hover and drawing.
+	// This clock is independent of the transport/audio callback.
+	const auto now = Timer::GetTime();
+	const float elapsed = _lastPanelAnimationTime
+		? static_cast<float>(Timer::GetElapsedSeconds(*_lastPanelAnimationTime, now)) : 0.0f;
+	_lastPanelAnimationTime = now;
+	const bool mainChanged = _mainPanel && _mainPanel->AdvanceAnimation(elapsed);
+	const bool selectionChanged = _selectionPanel && _selectionPanel->AdvanceAnimation(elapsed);
+	if (mainChanged || selectionChanged) _InvalidateHover2d();
+	std::scoped_lock lock(_sceneMutex);
+	_UpdateRackVisibilityLocked();
+}
+
 void Scene::_InitResources(ResourceLib& resourceLib, bool forceInit)
 {
 	std::scoped_lock lock(_sceneMutex);
@@ -862,8 +873,6 @@ void Scene::_InitResources(ResourceLib& resourceLib, bool forceInit)
 	_label->InitResources(resourceLib, forceInit);
 	_loopEditor.InitResources(resourceLib, forceInit);
 	_selector->InitResources(resourceLib, forceInit);
-	_modeRadio->InitResources(resourceLib, forceInit);
-	_globalMidiQuantRadio->InitResources(resourceLib, forceInit);
 	for (auto& child : _guiChildren)
 		if (child)
 			child->InitResources(resourceLib, forceInit);
@@ -885,8 +894,6 @@ void Scene::_ReleaseResources()
 	_label->ReleaseResources();
 	_loopEditor.ReleaseResources();
 	_selector->ReleaseResources();
-	_modeRadio->ReleaseResources();
-	_globalMidiQuantRadio->ReleaseResources();
 	for (auto& child : _guiChildren)
 		if (child)
 			child->ReleaseResources();
@@ -900,9 +907,79 @@ void Scene::_ReleaseResources()
 	Drawable::_ReleaseResources();
 }
 
+void Scene::_OnSettingsHidden(const std::shared_ptr<GuiElement>& subtree)
+{
+	auto belongs = [&subtree](std::shared_ptr<GuiElement> element)
+	{
+		for (; element; element = element->Parent())
+			if (element == subtree) return true;
+		return false;
+	};
+	if (belongs(_focusManager.CurrentFocus())) _focusManager.ClearFocus();
+	if (belongs(_touchDownElement.lock()))
+	{
+		_touchDownElement.reset();
+		_touchDownIsHud = false;
+		_touchDownIsSettings = false;
+		_consumeSettingsRelease = true;
+	}
+	_InvalidateHover2d();
+}
+
+std::optional<ActionResult> Scene::_RouteSettingsTouch(TouchAction action)
+{
+	if (action.State == TouchAction::TOUCH_UP && _consumeSettingsRelease)
+	{
+		_consumeSettingsRelease = false;
+		return ActionResult{ true, {}, {}, ACTIONRESULT_DEFAULT, nullptr, {} };
+	}
+	if (_touchDownIsSettings)
+	{
+		auto active = _touchDownElement.lock();
+		auto result = active ? active->OnAction(active->GlobalToLocal(action)) : ActionResult::NoAction();
+		if (action.State == TouchAction::TOUCH_UP)
+		{
+			_touchDownElement.reset();
+			_touchDownIsSettings = false;
+			_consumeSettingsRelease = false;
+		}
+		result.IsEaten = true;
+		return result;
+	}
+	// A gesture already owned elsewhere keeps its release and move stream.
+	if (_touchDownElement.lock() || _camera.IsBackgroundDragging() || _isSceneTouching ||
+		_loopEditor.OwnsPointer() || _loopEditor.IsOrbitDragging() || _quantisationInteraction.OwnsPointer())
+		return std::nullopt;
+	for (const auto& panel : { _selectionPanel, _mainPanel })
+	{
+		if (!panel || !panel->RouteHitTest(panel->GlobalToLocal(action.Position))) continue;
+		auto result = panel->OnAction(panel->GlobalToLocal(action));
+		result.IsEaten = true;
+		if (action.State == TouchAction::TOUCH_DOWN &&
+			!(action.Touch == TouchAction::TOUCH_MOUSE && action.Index == 4))
+		{
+			auto active = result.ActiveElement.lock();
+			if (!active) active = panel;
+			_touchDownElement = active;
+			_touchDownIsSettings = true;
+			_touchDownIsHud = false;
+			auto focused = _focusManager.CurrentFocus();
+			if (focused && focused != active) focused->FinalizeEdits();
+			if (active->WantsFocusOnPress()) _focusManager.RequestFocus(active);
+			else _focusManager.ClearFocus();
+		}
+		return result;
+	}
+	return std::nullopt;
+}
+
 ActionResult Scene::OnAction(TouchAction action)
 {
 	ActionResult res;
+	// Wheel events are encoded as DOWN/index 4 and have no matching UP. They
+	// must not become pointer captures or replace keyboard focus.
+	const bool pointerPress = action.State == TouchAction::TOUCH_DOWN &&
+		!(action.Touch == TouchAction::TOUCH_MOUSE && action.Index == 4);
 	action.SetActionTime(Timer::GetTime());
 	action.SetUserConfig(_userConfig);
 	_cursorPos = action.Position;
@@ -917,9 +994,12 @@ ActionResult Scene::OnAction(TouchAction action)
 		{
 			_touchDownElement.reset();
 			_touchDownIsHud = false;
+			_touchDownIsSettings = false;
+			_consumeSettingsRelease = false;
 		}
 		return popupRes;
 	}
+	if (auto settingsResult = _RouteSettingsTouch(action)) return *settingsResult;
 	if (_loopEditor.IsEngaged() && !_loopEditor.OwnsPointer() && !_loopEditor.IsOrbitDragging() && _hudPanel)
 	{
 		std::scoped_lock lock(_sceneMutex);
@@ -1020,14 +1100,14 @@ ActionResult Scene::OnAction(TouchAction action)
 			if (nullptr != res.Undo)
 				_undoHistory.Add(res.Undo);
 
-			if (!_touchDownElement.lock())
+			if (pointerPress && !_touchDownElement.lock())
 			{
 				_touchDownElement = res.ActiveElement;
 				_touchDownIsHud = isHudChild;
 			}
 
 			// Focus follows the pressed control when it wants the keyboard.
-			if (TouchAction::TouchState::TOUCH_DOWN == action.State)
+			if (pointerPress)
 			{
 				auto active = res.ActiveElement.lock();
 				if (active && active->WantsFocusOnPress())
@@ -1040,38 +1120,6 @@ ActionResult Scene::OnAction(TouchAction action)
 		}
 	}
 
-	res = static_cast<std::shared_ptr<base::GuiElement>>(_modeRadio)->OnAction(_modeRadio->ParentToLocal(action));
-
-	if (res.IsEaten)
-	{
-		if (nullptr != res.Undo)
-			_undoHistory.Add(res.Undo);
-
-		if (!_touchDownElement.lock())
-		{
-			_touchDownElement = res.ActiveElement;
-			_touchDownIsHud = false;
-		}
-
-		return res;
-	}
-
-	res = static_cast<std::shared_ptr<base::GuiElement>>(_globalMidiQuantRadio)->OnAction(_globalMidiQuantRadio->ParentToLocal(action));
-
-	if (res.IsEaten)
-	{
-		if (nullptr != res.Undo)
-			_undoHistory.Add(res.Undo);
-
-		if (!_touchDownElement.lock())
-		{
-			_touchDownElement = res.ActiveElement;
-			_touchDownIsHud = false;
-		}
-
-		return res;
-	}
-
 	for (auto& station : SnapshotStations())
 	{
 		res = static_cast<std::shared_ptr<base::GuiElement>>(station)->OnAction(station->ParentToLocal(action));
@@ -1081,7 +1129,7 @@ ActionResult Scene::OnAction(TouchAction action)
 			if (nullptr != res.Undo)
 				_undoHistory.Add(res.Undo);
 
-			if (!_touchDownElement.lock())
+			if (pointerPress && !_touchDownElement.lock())
 			{
 				_touchDownElement = res.ActiveElement;
 				_touchDownIsHud = false;
@@ -1128,6 +1176,37 @@ ActionResult Scene::OnAction(TouchMoveAction action)
 		_loopEditor.CancelInput();
 		return _popupManager.OnAction(action);
 	}
+	if (_consumeSettingsRelease && action.MouseButtonsDown == 0u)
+	{
+		_consumeSettingsRelease = false;
+		return { true, {}, {}, ACTIONRESULT_DEFAULT, nullptr, {} };
+	}
+	if (_touchDownIsSettings)
+	{
+		if (auto active = _touchDownElement.lock())
+		{
+			if (action.MouseButtonsDown == 0u) active->ClearPointerState();
+			else active->OnAction(active->GlobalToLocal(action));
+		}
+		if (action.MouseButtonsDown == 0u)
+		{
+			_touchDownElement.reset();
+			_touchDownIsSettings = false;
+			_consumeSettingsRelease = false;
+			_InvalidateHover2d();
+		}
+		return { true, {}, {}, ACTIONRESULT_DEFAULT, nullptr, {} };
+	}
+	if (!_touchDownElement.lock() && !_camera.IsBackgroundDragging() && !_isSceneTouching &&
+		!_loopEditor.OwnsPointer() && !_loopEditor.IsOrbitDragging() && !_quantisationInteraction.OwnsPointer())
+	{
+		for (const auto& panel : { _selectionPanel, _mainPanel })
+			if (panel && panel->RouteHitTest(panel->GlobalToLocal(action.Position)))
+			{
+				panel->OnAction(panel->GlobalToLocal(action));
+				return { true, {}, {}, ACTIONRESULT_DEFAULT, nullptr, {} };
+			}
+	}
 	if (_loopEditor.IsEngaged() && !_loopEditor.OwnsPointer() && !_loopEditor.IsOrbitDragging() && _hudPanel)
 	{
 		std::scoped_lock lock(_sceneMutex);
@@ -1151,6 +1230,20 @@ ActionResult Scene::OnAction(TouchMoveAction action)
 
 	if (activeElement)
 	{
+		if (action.Touch == TouchAction::TOUCH_MOUSE && action.MouseButtonsDown == 0u)
+		{
+			// Native capture loss is reported as a zero-button move. Clear the
+			// captured widget and owner together, including HUD captures.
+			if (_touchDownIsHud)
+			{
+				std::scoped_lock lock(_sceneMutex);
+				activeElement->ClearPointerState();
+			}
+			else activeElement->ClearPointerState();
+			_touchDownElement.reset();
+			_touchDownIsHud = false;
+			return { true, {}, {}, ACTIONRESULT_DEFAULT, nullptr, {} };
+		}
 		if (_touchDownIsHud)
 		{
 			std::scoped_lock lock(_sceneMutex);
@@ -1494,7 +1587,10 @@ ActionResult Scene::OnAction(GuiAction action)
 		{
 			try
 			{
-				clamped = std::clamp(std::stoi(str->Value), 0, 16);
+				size_t consumed = 0;
+				const int parsed = std::stoi(str->Value, &consumed);
+				clamped = consumed == str->Value.size() ? std::clamp(parsed, 0, 16)
+					: static_cast<int>(_inputSubsystem->ForcedChannelOverride());
 			}
 			catch (...)
 			{
@@ -1511,7 +1607,7 @@ ActionResult Scene::OnAction(GuiAction action)
 		}
 
 		_inputSubsystem->SetForcedChannelOverride(static_cast<std::uint8_t>(clamped), SnapshotStations());
-		_midiChannelOverrideInput->SetValue(static_cast<double>(clamped), false);
+		_midiChannelOverrideInput->SynchronizeValueFromOwner(static_cast<double>(clamped));
 	}
 	else if ((GuiAction::ACTIONELEMENT_RACK == action.ElementType)
 		&& (action.Index == TransportOffsetControlIndex)
@@ -1522,7 +1618,9 @@ ActionResult Scene::OnAction(GuiAction action)
 		{
 			try
 			{
-				value = std::stod(str->Value);
+				size_t consumed = 0;
+				const double parsed = std::stod(str->Value, &consumed);
+				if (consumed == str->Value.size() && std::isfinite(parsed)) value = parsed;
 			}
 			catch (...)
 			{
@@ -1538,7 +1636,8 @@ ActionResult Scene::OnAction(GuiAction action)
 			return ActionResult::NoAction();
 		}
 
-		_SetTransportOffsetLoopFrac(value);
+		_SetTransportOffsetLoopFrac(value, false);
+		_transportOffsetInput->SynchronizeValueFromOwner(_transportOffsetLoopFrac);
 	}
 
 	return ActionResult::NoAction();
@@ -1888,14 +1987,8 @@ void Scene::_ConsumeTriggerOutcomes()
 void Scene::InitReceivers()
 {
 	_selector->SetReceiver(ActionReceiver::shared_from_this());
-	_modeRadio->SetReceiver(ActionReceiver::shared_from_this());
-	if (_midiChannelOverrideInput)
-		_midiChannelOverrideInput->SetReceiver(ActionReceiver::shared_from_this());
-	if (_transportOffsetInput)
-		_transportOffsetInput->SetReceiver(ActionReceiver::shared_from_this());
-	if (_ninjamMetronomeToggle)
-		_ninjamMetronomeToggle->SetReceiver(ActionReceiver::shared_from_this());
-	_globalMidiQuantRadio->SetReceiver(ActionReceiver::shared_from_this());
+	_mainPanel->SetCommandOwner(ActionReceiver::shared_from_this());
+	_selectionPanel->SetCommandOwner(ActionReceiver::shared_from_this());
 	if (_remoteTempoDialog)
 		_remoteTempoDialog->SetButtonReceiver(ActionReceiver::shared_from_this());
 }
@@ -1918,6 +2011,9 @@ void Scene::SetHover3d(std::vector<unsigned char> path, Action::Modifiers modifi
 {
 	if (_loopEditor.IsEngaged())
 		return;
+	// Resolve GUI ownership before taking the scene lock: station snapshots also lock it.
+	std::vector<std::weak_ptr<base::GuiElement>> guiPath;
+	_ResolveHoverPath2d(guiPath);
 	std::unique_lock lock(_sceneMutex);
 	bool isSelected = false;
 	auto tweakState = base::Tweakable::TweakState::TWEAKSTATE_NONE;
@@ -1957,6 +2053,11 @@ void Scene::SetHover3d(std::vector<unsigned char> path, Action::Modifiers modifi
 	}
 
 	elementPath = TrimPath(elementPath, _selector->CurrentSelectDepth() + 1);
+	// Rack controls own the pointer even when the 3D picker sees a model behind them.
+	if (std::any_of(guiPath.begin(), guiPath.end(), [](const auto& element) {
+		return nullptr != std::dynamic_pointer_cast<GuiRack>(element.lock());
+	}))
+		elementPath.clear();
 
 	if (elementPath != _lastLoggedHoverPath)
 	{
@@ -2009,8 +2110,6 @@ void Scene::Reset()
 
 void Scene::InitGui()
 {
-	_modeRadio->Init();
-	_globalMidiQuantRadio->Init();
 	_selector->Init();
 }
 
@@ -2257,8 +2356,11 @@ void Scene::ApplyDeferredHoverUpdates()
 	_ApplyHoverPath2d(nextPath);
 
 	bool stationHoverPromotedFrom2d = false;
+	const bool rackOwnsHover = std::any_of(nextPath.begin(), nextPath.end(), [](const auto& element) {
+		return nullptr != std::dynamic_pointer_cast<GuiRack>(element.lock());
+	});
 
-	if (!nextPath.empty())
+	if (!nextPath.empty() && !rackOwnsHover)
 	{
 		_hoverPath2dNextSharedScratch.clear();
 		_LockHoverPath(nextPath, _hoverPath2dNextSharedScratch);
@@ -2295,13 +2397,21 @@ void Scene::ApplyDeferredHoverUpdates()
 		}
 	}
 
-	if (!stationHoverPromotedFrom2d && _hoverPath3d.empty() && !_selector->CurrentHover().empty())
+	if (!stationHoverPromotedFrom2d && (rackOwnsHover || _hoverPath3d.empty()) && !_selector->CurrentHover().empty())
 	{
 		_selector->UpdateCurrentHover({ },
 			Action::MODIFIER_NONE,
 			false,
 			base::Tweakable::TweakState::TWEAKSTATE_NONE);
 		_UpdateSelection(ACTIONRESULT_DEFAULT);
+	}
+	else if (!stationHoverPromotedFrom2d && !rackOwnsHover && !_hoverPath3d.empty())
+	{
+		// The picker may keep the same model ID while the pointer leaves a control.
+		auto pickPath = _hoverPath3d;
+		for (auto& segment : pickPath)
+			++segment;
+		SetHover3d(std::move(pickPath), Action::MODIFIER_NONE);
 	}
 
 	_hoverPath2d = std::move(nextPath);
@@ -2331,12 +2441,6 @@ void Scene::_ResolveHoverPath2d(std::vector<std::weak_ptr<base::GuiElement>>& ou
 		if (leaf)
 			break;
 	}
-
-	if (!leaf)
-		leaf = resolveTop(std::static_pointer_cast<base::GuiElement>(_modeRadio));
-
-	if (!leaf)
-		leaf = resolveTop(std::static_pointer_cast<base::GuiElement>(_globalMidiQuantRadio));
 
 	if (!leaf)
 	{
@@ -2438,6 +2542,9 @@ bool Scene::_OnUndo(std::shared_ptr<base::ActionUndo> undo)
 void Scene::_InitSize()
 {
 	_loopEditor.SetSize(_sizeParams.Size);
+	if (_remoteTempoDialog) _remoteTempoDialog->FitToViewport(_sizeParams.Size);
+	if (_mainPanel) _mainPanel->SetViewportSize(_sizeParams.Size);
+	if (_selectionPanel) _selectionPanel->SetViewportSize(_sizeParams.Size);
 	auto ar = _sizeParams.Size.Height > 0 ?
 		(float)_sizeParams.Size.Width / (float)_sizeParams.Size.Height :
 		1.0f;
@@ -2467,6 +2574,8 @@ void Scene::_OnLoopGridEditorOpened()
 	_focusManager.ClearFocus();
 	_touchDownElement.reset();
 	_touchDownIsHud = false;
+	_touchDownIsSettings = false;
+	_consumeSettingsRelease = false;
 	_EndBackgroundDrag();
 	_quantisationInteraction.OnCtrlModifierChanged(false, Timer::GetTime(),
 		_InteractionContext(), [this](const std::vector<unsigned char>& path) { return _ChildFromPath(path); });
@@ -2477,9 +2586,6 @@ void Scene::_UpdateHudStationAnchors()
 	if (!_hudPanel || (_sizeParams.Size.Width == 0) || (_sizeParams.Size.Height == 0))
 		return;
 
-	const float w = static_cast<float>(_sizeParams.Size.Width);
-	const float h = static_cast<float>(_sizeParams.Size.Height);
-
 	std::vector<gui::GuiHud::StationAnchor> anchors;
 	anchors.reserve(_stations.size());
 
@@ -2488,16 +2594,8 @@ void Scene::_UpdateHudStationAnchors()
 		const auto& station = _stations[stationIndex];
 		const auto modelPos = station->TopCapModelPosition();
 		auto clip = _viewProj * glm::vec4(modelPos.X, modelPos.Y, 0.0f, 1.0f);
-		utils::Position2d screenPos{ -9999, -9999 };
-		if (std::abs(clip.w) > 1e-6f)
-		{
-			auto ndc = glm::vec3(clip) / clip.w;
-			screenPos = {
-				static_cast<int>((ndc.x + 1.0f) * 0.5f * w),
-				static_cast<int>((ndc.y + 1.0f) * 0.5f * h)
-			};
-		}
-		anchors.push_back({ stationIndex, station->Name(), screenPos, glm::vec4(0.85f, 0.90f, 0.95f, 0.45f) });
+		anchors.push_back({ stationIndex, station->Name(),
+			gui::CableInteraction::ProjectAnchor(clip, _sizeParams.Size), glm::vec4(0.85f, 0.90f, 0.95f, 0.45f) });
 	}
 
 	_hudPanel->SetStationAnchors(std::move(anchors));
@@ -2535,6 +2633,59 @@ void Scene::_SetSelectionMutedLocked(const std::vector<unsigned char>& path, boo
 		setMuted(std::dynamic_pointer_cast<LoopTake>(target->Parent()));
 }
 
+void Scene::_UpdateRackVisibilityLocked()
+{
+	// Presentation stays on the UI thread under the existing scene lock.
+	const auto forEachRack = [this](auto&& visit) {
+		for (const auto& station : _stations)
+		{
+			const auto position = station->ModelPosition();
+			const auto clip = _viewProj * glm::vec4(position.X, position.Y, position.Z, 1.0f);
+			const bool stationInView = station->IsVisible() && !_loopEditor.IsEngaged() &&
+				clip.w > 0.0f && clip.z >= -clip.w && clip.z <= clip.w;
+			visit(station->GetGuiRack(), stationInView);
+			for (const auto& take : station->GetLoopTakes())
+				visit(take->GetGuiRack(), stationInView && take->IsVisible());
+		}
+	};
+
+	std::shared_ptr<GuiRack> expanded;
+	forEachRack([&](const std::shared_ptr<GuiRack>& rack, bool ownerInView) {
+		if (!rack || rack->GetRackState() == GuiRackParams::RACK_MASTER) return;
+		if (!ownerInView || !rack->IsInView(_sizeParams.Size) || expanded)
+		{
+			rack->SetRackState(GuiRackParams::RACK_MASTER, true);
+			_InvalidateHover2d();
+		}
+		else
+			expanded = rack;
+	});
+	forEachRack([&](const std::shared_ptr<GuiRack>& rack, bool) {
+		if (!rack) return;
+		const bool visible = !expanded || rack == expanded;
+		if (rack->GetMasterSlider()->Parent()->IsVisible() != visible)
+		{
+			rack->SetMasterControlsVisible(visible);
+			_InvalidateHover2d();
+		}
+	});
+}
+
+void Scene::_CollapseRacksLocked()
+{
+	const auto collapse = [](const std::shared_ptr<GuiRack>& rack) {
+		if (!rack) return;
+		rack->SetRackState(GuiRackParams::RACK_MASTER, true);
+		rack->SetMasterControlsVisible(true);
+	};
+	for (const auto& station : _stations)
+	{
+		collapse(station->GetGuiRack());
+		for (const auto& take : station->GetLoopTakes()) collapse(take->GetGuiRack());
+	}
+	_InvalidateHover2d();
+}
+
 void Scene::_UpdateSelection(ActionResultType res)
 {
 	// Called when touch up + down, and when hover updated
@@ -2546,6 +2697,9 @@ void Scene::_UpdateSelection(ActionResultType res)
 		auto target = _ChildFromPathLocked(path);
 		if (!target)
 			return;
+		// Only committed scene selection reaches here. Rack controls consume
+		// their input before the selector, so editing a rack cannot dismiss it.
+		_CollapseRacksLocked();
 		if (_selector->CurrentSelectDepth() == base::DEPTH_STATION)
 		{
 			if (auto station = std::dynamic_pointer_cast<Station>(target))
@@ -2595,7 +2749,8 @@ void Scene::_UpdateSelection(ActionResultType res)
 		if (selected) target->Select();
 		else target->DeSelect();
 	};
-	const auto clearSelection = [&stations]() {
+	const auto clearSelection = [this, &stations]() {
+		_CollapseRacksLocked();
 		for (const auto& station : stations)
 		{
 			station->DeSelect();

@@ -1,6 +1,8 @@
 #include "GuiToggle.h"
 #include "GuiRack.h"
 #include <algorithm>
+#include <cmath>
+#include <cstdint>
 using namespace graphics;
 
 using namespace base;
@@ -16,7 +18,6 @@ const utils::Size2d GuiRack::_ChannelToggleSize = { 32, 64 };
 const utils::Size2d GuiRack::_RouterToggleSize = { 64, 32 };
 const unsigned int GuiRack::_RouterTogglePaddingBottom = 8;
 const utils::Size2d GuiRack::_DragGap = { 4, 4 };
-const utils::Size2d GuiRack::_DragSize = { 112, 56 };
 const utils::Size2d GuiRack::_MidiChannelToggleSize = { 42, 42 };
 const utils::Size2d GuiRack::_MidiChannelToggleGap = { 6, 6 };
 const unsigned int GuiRack::_MidiChannelPanelPadding = 8;
@@ -36,6 +37,8 @@ GuiRack::GuiRack(GuiRackParams params) :
 	_midiChannelToggles(),
 	_rackParams(params)
 {
+	params.Size.Height = std::max(params.Size.Height, _MinimumScaleLayoutHeight);
+	_rackParams.Size = params.Size;
 	_masterPanel = std::make_shared<base::GuiElement>(_GetPanelParams(GuiRackParams::RACK_MASTER, params.Size));
 	_masterSlider = std::make_shared<gui::GuiSlider>(_GetSliderParams(0, params.Size));
 	_channelToggle = std::make_shared<gui::GuiToggle>(_GetToggleParams(GuiRackParams::RACK_CHANNELS, params.Size));
@@ -82,6 +85,9 @@ GuiRack::GuiRack(GuiRackParams params) :
 
 void GuiRack::SetSize(utils::Size2d size)
 {
+	// The silence, unity and maximum anchors need distinct pixel rows even on
+	// compact layouts. This leaves at least three pixels of handle travel.
+	size.Height = std::max(size.Height, _MinimumScaleLayoutHeight);
 	_rackParams.Size = size;
 
 	auto masterPanelParams = _GetPanelParams(GuiRackParams::RACK_MASTER, size);
@@ -268,6 +274,38 @@ void GuiRack::SetRackState(GuiRackParams::RackState state, bool bypassUpdates)
 	_OnRackChange(0, bypassUpdates);
 }
 
+void GuiRack::SetVisible(bool visible)
+{
+	if (!visible)
+		SetRackState(GuiRackParams::RACK_MASTER, true);
+	GuiElement::SetVisible(visible);
+}
+
+void GuiRack::SetMasterControlsVisible(bool visible)
+{
+	_masterControlsVisible = visible;
+	// Suppression must not overwrite selection-depth visibility or collapse
+	// the rack being edited.
+	_masterPanel->SetVisible(visible || _rackState != GuiRackParams::RACK_MASTER);
+}
+
+bool GuiRack::IsInView(utils::Size2d viewport) const
+{
+	if (!IsVisible())
+		return false;
+	for (auto ancestor = Parent(); ancestor; ancestor = ancestor->Parent())
+		if (!ancestor->IsVisible()) return false;
+
+	// Expanded panels may extend into view after their owner has left it.
+	// Only the persistent master rectangle determines whether the rack is in view.
+	const auto position = GlobalPosition();
+	const auto size = GetSize();
+	return position.X < static_cast<int>(viewport.Width) &&
+		position.Y < static_cast<int>(viewport.Height) &&
+		static_cast<std::int64_t>(position.X) + size.Width > 0 &&
+		static_cast<std::int64_t>(position.Y) + size.Height > 0;
+}
+
 void GuiRack::_InitReceivers()
 {
 	_receiversInitialized = true;
@@ -326,6 +364,8 @@ void GuiRack::_OnRackChange(unsigned int index, bool bypassUpdates)
 		_midiChannelPanel->SetVisible(true);
 		break;
 	}
+
+	SetMasterControlsVisible(_masterControlsVisible);
 
 	//if (_receiver && !bypassUpdates)
 	//{
@@ -390,12 +430,15 @@ gui::GuiSliderParams GuiRack::_GetSliderParams(unsigned int index, utils::Size2d
 	GuiSliderParams sliderParams;
 	sliderParams.Index = index;
 	sliderParams.Min = 0.0;
-	sliderParams.Max = 6.0;
+	sliderParams.Max = std::pow(10.0, GuiSliderParams::RackMaxDecibels / 20.0);
+	sliderParams.Scale = GuiSliderParams::SliderScale::Decibels;
+	sliderParams.MinDecibels = GuiSliderParams::RackMinDecibels;
+	sliderParams.ScaleMarksEnabled = true;
 	sliderParams.InitValue = _rackParams.InitLevel;
 	sliderParams.Orientation = GuiSliderParams::SLIDER_VERTICAL;
 
 	sliderParams.Size = sliderSize;
-	sliderParams.MinSize = { std::max(40u,sliderParams.Size.Width), std::max(40u, sliderParams.Size.Height) };
+	sliderParams.MinSize = { std::max(40u,sliderParams.Size.Width), std::max(47u, sliderParams.Size.Height) };
 
 	if (0 == index)
 	{
@@ -409,13 +452,21 @@ gui::GuiSliderParams GuiRack::_GetSliderParams(unsigned int index, utils::Size2d
 		};
 	}
 
-	utils::Size2d dragSize = { _DragSize.Width, std::min(_DragSize.Height, sliderSize.Height) };
-	sliderParams.DragControlOffset = { (int)(sliderParams.Size.Width / 2) - (int)(dragSize.Width / 2), (int)_DragGap.Height };
+	// Small overhangs leave clearance within the eight-pixel channel gap.
+	utils::Size2d dragSize = {
+		sliderSize.Width + (2u * _DragOverhang),
+		std::min(_DragHeight, sliderSize.Height)
+	};
+	sliderParams.DragControlOffset = { -static_cast<int>(_DragOverhang), (int)_DragGap.Height };
 	sliderParams.DragControlSize = dragSize;
 	sliderParams.DragGap = _DragGap;
-	sliderParams.Texture = "fader_back";
-	sliderParams.DragTexture = "rounded_rect";
-	sliderParams.DragOverTexture = "";
+	sliderParams.Texture = "fader_back_panel";
+	sliderParams.TextureOpacity = 0.55f;
+	sliderParams.OverTexture = "fader_back_panel_over";
+	sliderParams.DownTexture = "fader_back_panel_down";
+	sliderParams.DragTexture = "fader_button";
+	sliderParams.DragOverTexture = "fader_button_over";
+	sliderParams.DragDownTexture = "fader_button_down";
 
 	return sliderParams;
 }
@@ -498,7 +549,9 @@ void GuiRack::SetNumInputChannels(unsigned int channels)
 		}
 	}
 
+	_rackParams.NumInputChannels = channels;
 	_router->SetNumInputs(channels);
+	SetSize(_rackParams.Size);
 }
 
 void GuiRack::SetNumOutputChannels(unsigned int channels)

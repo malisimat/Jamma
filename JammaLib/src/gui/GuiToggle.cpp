@@ -11,17 +11,17 @@ GuiToggle::GuiToggle(GuiToggleParams params) :
 	GuiButton(params),
 	_toggleIndex(params.ToggleIndex),
 	_toggleState(params.InitState),
-	_toggledTexture(ImageParams(DrawableParams{ params.ToggledTexture }, SizeableParams{ params.Size,params.MinSize }, params.TextureShader, params.Rot90, params.FlipH, params.FlipV)),
-	_toggledOverTexture(ImageParams(DrawableParams{ params.ToggledOverTexture }, SizeableParams{ params.Size,params.MinSize }, params.TextureShader, params.Rot90, params.FlipH, params.FlipV)),
-	_toggledDownTexture(ImageParams(DrawableParams{ params.ToggledDownTexture }, SizeableParams{ params.Size,params.MinSize }, params.TextureShader, params.Rot90, params.FlipH, params.FlipV)),
-	_toggledOutTexture(ImageParams(DrawableParams{ params.ToggledOutTexture }, SizeableParams{ params.Size,params.MinSize }, params.TextureShader, params.Rot90, params.FlipH, params.FlipV)),
+	_toggledTexture(ImageParams(DrawableParams{ params.ToggledTexture }, SizeableParams{ params.Size,params.MinSize }, params.TextureShader, params.Rot90, params.FlipH, params.FlipV, params.TextureOpacity)),
+	_toggledOverTexture(ImageParams(DrawableParams{ params.ToggledOverTexture }, SizeableParams{ params.Size,params.MinSize }, params.TextureShader, params.Rot90, params.FlipH, params.FlipV, params.TextureOpacity)),
+	_toggledDownTexture(ImageParams(DrawableParams{ params.ToggledDownTexture }, SizeableParams{ params.Size,params.MinSize }, params.TextureShader, params.Rot90, params.FlipH, params.FlipV, params.TextureOpacity)),
+	_toggledOutTexture(ImageParams(DrawableParams{ params.ToggledOutTexture }, SizeableParams{ params.Size,params.MinSize }, params.TextureShader, params.Rot90, params.FlipH, params.FlipV, params.TextureOpacity)),
 	_buttonParams(params)
 {
 }
 
 void GuiToggle::SetSize(Size2d size)
 {
-	GuiElement::SetSize(size);
+	GuiButton::SetSize(size);
 
 	_toggledTexture.SetSize(_sizeParams.Size);
 	_toggledOverTexture.SetSize(_sizeParams.Size);

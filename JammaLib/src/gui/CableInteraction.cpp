@@ -2,8 +2,73 @@
 
 #include <algorithm>
 #include <cmath>
+#include <glm/geometric.hpp>
 
 using namespace gui;
+
+CableInteraction::Curve CableInteraction::CurveControls(RouteKind kind,
+	utils::Position2d start, utils::Position2d finish)
+{
+	const glm::vec2 a{ start.X, start.Y };
+	const glm::vec2 b{ finish.X, finish.Y };
+	if (kind == RouteKind::Station)
+	{
+		const float pull = std::max(50.0f, std::abs(a.x - b.x) * 0.45f);
+		const float drop = std::max(50.0f, std::abs(a.y - b.y) * 0.45f);
+		return { a, glm::vec2{ a.x - pull, a.y },
+			glm::vec2{ b.x, b.y + (a.y < b.y ? -drop : drop) }, b };
+	}
+	return { a, glm::vec2{ a.x, a.y + std::max(50.0f, (b.y - a.y) * 0.55f) },
+		glm::vec2{ b.x - std::max(50.0f, (b.x - a.x) * 0.40f), b.y }, b };
+}
+
+glm::vec2 CableInteraction::EvaluateCurve(const Curve& curve, float t)
+{
+	const float u = 1.0f - t;
+	return u * u * u * curve[0] + 3.0f * u * u * t * curve[1] +
+		3.0f * u * t * t * curve[2] + t * t * t * curve[3];
+}
+
+std::optional<glm::dvec2> CableInteraction::ProjectAnchor(glm::vec4 clip, utils::Size2d window)
+{
+	if (window.Width == 0u || window.Height == 0u ||
+		!std::isfinite(clip.x) || !std::isfinite(clip.y) || !std::isfinite(clip.z) || !std::isfinite(clip.w) ||
+		clip.w <= 1e-6f || clip.z < -clip.w || clip.z > clip.w)
+		return std::nullopt;
+	return glm::dvec2{
+		(static_cast<double>(clip.x) / clip.w + 1.0) * 0.5 * window.Width,
+		(static_cast<double>(clip.y) / clip.w + 1.0) * 0.5 * window.Height };
+}
+
+std::optional<CableInteraction::BoundaryPoint> CableInteraction::ResolveBoundary(
+	glm::dvec2 point, utils::Rect2d bounds)
+{
+	if (bounds.IsEmpty() || !std::isfinite(point.x) || !std::isfinite(point.y))
+		return std::nullopt;
+	const bool clipped = point.x < bounds.Left || point.x >= bounds.Right ||
+		point.y < bounds.Bottom || point.y >= bounds.Top;
+	// Clamp before conversion: distant projected anchors cannot overflow pixels.
+	return BoundaryPoint{ {
+		static_cast<int>(std::clamp(point.x, static_cast<double>(bounds.Left), static_cast<double>(bounds.Right - 1))),
+		static_cast<int>(std::clamp(point.y, static_cast<double>(bounds.Bottom), static_cast<double>(bounds.Top - 1))) }, clipped };
+}
+
+glm::dvec2 CableInteraction::FannedPoint(glm::dvec2 point, double offset, bool horizontal, utils::Rect2d bounds)
+{
+	// Turn a fan toward the boundary tangent over its own radius as a socket
+	// leaves view. This preserves separation at distant edges and continuity
+	// at entry, without animation that could detach a visible cable/socket.
+	const double clearance = horizontal
+		? std::min(point.x - bounds.Left, (bounds.Right - 1) - point.x)
+		: std::min(point.y - bounds.Bottom, (bounds.Top - 1) - point.y);
+	const double outside = std::max(0.0, -clearance);
+	const double turn = std::clamp(outside / 7.0, 0.0, 1.0);
+	// A visible socket near the edge contracts its fan symmetrically; a fan
+	// offset alone must never turn that visible socket into a continuation.
+	const double spread = std::clamp(clearance / 7.0, 0.0, 1.0);
+	return point + (horizontal ? glm::dvec2{ offset * spread, offset * turn }
+		: glm::dvec2{ offset * turn, offset * spread });
+}
 
 std::vector<int> CableInteraction::Spread(int first, int last, size_t count)
 {
@@ -30,7 +95,8 @@ float CableInteraction::_DistanceSquared(utils::Position2d lhs, utils::Position2
 
 bool CableInteraction::HitTest(const Endpoint& endpoint, utils::Position2d point, float radius)
 {
-	return _DistanceSquared(endpoint.Position, point) <= radius * radius;
+	return !endpoint.Continuation && (!endpoint.HitBounds || endpoint.HitBounds->Contains(point)) &&
+		_DistanceSquared(endpoint.Position, point) <= radius * radius;
 }
 
 std::optional<size_t> CableInteraction::HitEndpoint(const std::vector<Endpoint>& endpoints,
@@ -41,6 +107,8 @@ std::optional<size_t> CableInteraction::HitEndpoint(const std::vector<Endpoint>&
 	float nearestDistance = radius * radius;
 	for (size_t i = 0u; i < endpoints.size(); ++i)
 	{
+		if (!HitTest(endpoints[i], point, radius))
+			continue;
 		const auto distance = _DistanceSquared(endpoints[i].Position, point);
 		if (distance <= nearestDistance)
 		{
@@ -65,18 +133,22 @@ std::optional<size_t> CableInteraction::HitCable(const std::vector<Cable>& cable
 	float nearestDistance = radius * radius;
 	for (size_t i = 0u; i < cables.size(); ++i)
 	{
-		const auto& a = cables[i].Start.Position;
-		const auto& b = cables[i].Finish.Position;
-		const auto dx = static_cast<float>(b.X - a.X);
-		const auto dy = static_cast<float>(b.Y - a.Y);
-		const auto lengthSquared = dx * dx + dy * dy;
-		const auto projection = lengthSquared > 0.0f
-			? std::clamp(((point.X - a.X) * dx + (point.Y - a.Y) * dy) / lengthSquared, 0.0f, 1.0f)
-			: 0.0f;
-		const utils::Position2d closest{
-			static_cast<int>(std::lround(a.X + projection * dx)),
-			static_cast<int>(std::lround(a.Y + projection * dy)) };
-		const auto distance = _DistanceSquared(closest, point);
+		const auto curve = CurveControls(cables[i].Route.Kind, cables[i].Start.Position, cables[i].Finish.Position);
+		const glm::vec2 pointer{ point.X, point.Y };
+		float distance = radius * radius + 1.0f;
+		auto a = curve[0];
+		// Match the shader's sampled line strip, including its vertex count.
+		for (int vertex = 1; vertex < CurveVertexCount; ++vertex)
+		{
+			const auto b = EvaluateCurve(curve, static_cast<float>(vertex) / (CurveVertexCount - 1));
+			const auto delta = b - a;
+			const float lengthSquared = glm::dot(delta, delta);
+			const float fraction = lengthSquared > 0.0f
+				? std::clamp(glm::dot(pointer - a, delta) / lengthSquared, 0.0f, 1.0f) : 0.0f;
+			const auto offset = pointer - (a + fraction * delta);
+			distance = std::min(distance, glm::dot(offset, offset));
+			a = b;
+		}
 		if (distance <= nearestDistance)
 		{
 			nearest = i;
@@ -95,8 +167,10 @@ std::optional<std::pair<size_t, CableInteraction::End>> CableInteraction::HitCab
 	{
 		for (const auto end : { End::Start, End::Finish })
 		{
-			const auto distance = _DistanceSquared(
-				end == End::Start ? cables[i].Start.Position : cables[i].Finish.Position, point);
+			const auto& endpoint = end == End::Start ? cables[i].Start : cables[i].Finish;
+			if (!HitTest(endpoint, point, radius))
+				continue;
+			const auto distance = _DistanceSquared(endpoint.Position, point);
 			if (distance < nearestDistance)
 			{
 				nearest = std::make_pair(i, end);
@@ -137,7 +211,7 @@ bool CableInteraction::_SameSource(const io::RigFileRouting::Source& lhs,
 
 bool CableInteraction::Compatible(const Drag& drag, const Endpoint& candidate, const io::RigFile& rig)
 {
-	if (!candidate.Available || !drag.Fixed.Available ||
+	if (candidate.Continuation || !candidate.Available || !drag.Fixed.Available ||
 		(candidate.Source.has_value() && !candidate.Source->Available) ||
 		(drag.Fixed.Source.has_value() && !drag.Fixed.Source->Available))
 		return false;
@@ -189,7 +263,7 @@ std::optional<size_t> CableInteraction::NearestViable(const Drag& drag,
 	float nearestDistance = radius * radius;
 	for (size_t i = 0u; i < endpoints.size(); ++i)
 	{
-		if (!Compatible(drag, endpoints[i], rig))
+		if (!Compatible(drag, endpoints[i], rig) || !HitTest(endpoints[i], drag.Pointer, radius))
 			continue;
 		const auto distance = _DistanceSquared(endpoints[i].Position, drag.Pointer);
 		if (distance <= nearestDistance)
@@ -209,9 +283,25 @@ void CableInteraction::Update(Drag& drag,
 	float hysteresis)
 {
 	drag.Pointer = pointer;
-	if (drag.Snap.has_value() && Compatible(drag, drag.Snap.value(), rig) &&
-		HitTest(drag.Snap.value(), pointer, radius + hysteresis))
-		return;
+	if (drag.Snap)
+	{
+		const auto current = std::find_if(endpoints.begin(), endpoints.end(), [&drag](const auto& endpoint)
+		{
+			const auto& saved = *drag.Snap;
+			return endpoint.Kind == saved.Kind && endpoint.TriggerIndex == saved.TriggerIndex &&
+				endpoint.StationIndex == saved.StationIndex && endpoint.StationName == saved.StationName &&
+				endpoint.Source.has_value() == saved.Source.has_value() &&
+				(!endpoint.Source || _SameSource(*endpoint.Source, *saved.Source));
+		});
+		// Scrolling/resizing may move or hide the socket during a captured drag.
+		// Hysteresis applies to the current real socket, never the saved geometry.
+		if (current != endpoints.end() && Compatible(drag, *current, rig) &&
+			HitTest(*current, pointer, radius + hysteresis))
+		{
+			drag.Snap = *current;
+			return;
+		}
+	}
 	const auto nearest = NearestViable(drag, endpoints, rig, radius);
 	drag.Snap = nearest.has_value() ? std::optional<Endpoint>(endpoints[nearest.value()]) : std::nullopt;
 }

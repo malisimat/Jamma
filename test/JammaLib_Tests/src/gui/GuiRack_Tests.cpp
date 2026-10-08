@@ -47,6 +47,17 @@ static GuiRackParams MakeRackParams(unsigned int width = 200, unsigned int heigh
 	return params;
 }
 
+TEST(GuiRack, CompactConstructionAndResizeKeepScaleAnchorsDistinct)
+{
+	GuiRack rack(MakeRackParams(200, 20));
+	EXPECT_GE(rack.GetSize().Height, 55u);
+	EXPECT_GE(rack.GetMasterSlider()->GetSize().Height, 47u);
+	rack.SetNumInputChannels(1);
+	rack.SetSize({ 200, 1 });
+	EXPECT_GE(rack.GetMasterSlider()->GetSize().Height, 47u);
+	EXPECT_GE(rack.GetChannelSlider(0)->GetSize().Height, 47u);
+}
+
 // --- State transition tests ---
 
 TEST(GuiRack, DefaultStateIsMaster) {
@@ -54,6 +65,51 @@ TEST(GuiRack, DefaultStateIsMaster) {
 	auto rack = std::make_shared<GuiRack>(params);
 
 	ASSERT_EQ(GuiRackParams::RACK_MASTER, rack->GetRackState());
+}
+
+TEST(GuiRack, SuppressedMasterControlsCannotReceivePointerInput)
+{
+	auto rack = std::make_shared<GuiRack>(MakeRackParams());
+	const auto slider = rack->GetMasterSlider();
+	const auto position = slider->GlobalPosition();
+	const utils::Position2d pointer = { position.X + 10, position.Y + 10 };
+	ASSERT_EQ(slider, rack->FindTopmostDescendant(pointer));
+
+	rack->SetMasterControlsVisible(false);
+	EXPECT_TRUE(rack->IsVisible());
+	EXPECT_EQ(nullptr, rack->FindTopmostDescendant(pointer));
+	rack->SetMasterControlsVisible(true);
+	EXPECT_EQ(slider, rack->FindTopmostDescendant(pointer));
+}
+
+TEST(GuiRack, HidingExpandedRackResetsBothExpansionLevels)
+{
+	auto rack = std::make_shared<GuiRack>(MakeRackParams());
+	for (const auto state : { GuiRackParams::RACK_CHANNELS, GuiRackParams::RACK_ROUTER })
+	{
+		rack->SetRackState(state, true);
+		rack->SetVisible(false);
+		EXPECT_EQ(GuiRackParams::RACK_MASTER, rack->GetRackState());
+		rack->SetVisible(true);
+		EXPECT_EQ(GuiRackParams::RACK_MASTER, rack->GetRackState());
+	}
+}
+
+TEST(GuiRack, ViewportCheckIgnoresSuppressionAndExpandedOverhang)
+{
+	auto rack = std::make_shared<GuiRack>(MakeRackParams());
+	base::GuiElementParams hostParams;
+	auto host = std::make_shared<base::GuiElement>(hostParams);
+	host->AddChild(rack);
+	rack->SetMasterControlsVisible(false);
+	EXPECT_TRUE(rack->IsInView({ 640, 480 }));
+	rack->SetRackState(GuiRackParams::RACK_ROUTER, true);
+	host->SetPosition({ -200, 0 });
+	EXPECT_FALSE(rack->IsInView({ 640, 480 }));
+	host->SetPosition({ -199, 0 });
+	EXPECT_TRUE(rack->IsInView({ 640, 480 }));
+	host->SetVisible(false);
+	EXPECT_FALSE(rack->IsInView({ 640, 480 }));
 }
 
 TEST(GuiRack, InitStateChannels) {
@@ -207,6 +263,53 @@ TEST(GuiRack, SetNumInputChannelsCreatesSliders) {
 
 	rack->SetNumInputChannels(3);
 	ASSERT_EQ(3u, rack->NumInputChannels());
+}
+
+TEST(GuiRack, RuntimeAddedChannelSliderKeepsParentChainAndPointerRouting)
+{
+	auto params = MakeRackParams();
+	auto rack = std::make_shared<GuiRack>(params);
+	base::GuiElementParams hostParams;
+	hostParams.Size = params.Size;
+	auto host = std::make_shared<base::GuiElement>(hostParams);
+	host->AddChild(rack);
+	rack->SetRackState(GuiRackParams::RACK_CHANNELS, true);
+	rack->SetNumInputChannels(1);
+
+	auto slider = rack->GetChannelSlider(0);
+	ASSERT_NE(nullptr, slider);
+	ASSERT_NE(nullptr, slider->Parent());
+	ASSERT_NE(nullptr, slider->Parent()->Parent());
+	ASSERT_NE(nullptr, slider->Parent()->Parent()->Parent());
+	EXPECT_EQ(rack, slider->Parent()->Parent()->Parent());
+	EXPECT_EQ(host, rack->Parent());
+
+	const auto sliderPosition = slider->GlobalPosition();
+	const utils::Position2d pointerPosition = {
+		sliderPosition.X + static_cast<int>(slider->GetSize().Width / 2),
+		sliderPosition.Y + static_cast<int>(slider->GetSize().Height / 2)
+	};
+	EXPECT_EQ(slider, host->FindTopmostDescendant(pointerPosition));
+
+	actions::TouchMoveAction move;
+	move.Touch = actions::TouchAction::TOUCH_MOUSE;
+	move.Position = pointerPosition;
+	host->OnAction(move);
+	EXPECT_EQ(base::GuiElement::STATE_OVER, slider->GetState());
+
+	actions::TouchAction down;
+	down.Touch = actions::TouchAction::TOUCH_MOUSE;
+	down.State = actions::TouchAction::TOUCH_DOWN;
+	down.Position = pointerPosition;
+	EXPECT_TRUE(host->OnAction(down).IsEaten);
+
+	actions::TouchAction up = down;
+	up.State = actions::TouchAction::TOUCH_UP;
+	EXPECT_TRUE(host->OnAction(up).IsEaten);
+
+	host->ClearPointerState();
+	EXPECT_EQ(base::GuiElement::STATE_NORMAL, slider->GetState());
+	EXPECT_FALSE(slider->DragHandleIsOverForTest());
 }
 
 TEST(GuiRack, SetNumOutputChannels) {

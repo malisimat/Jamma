@@ -245,6 +245,7 @@ const std::vector<unsigned char> GlDrawContext::GetPixels() const
 
 std::optional<std::any> GlDrawContext::GetUniform(std::string name)
 {
+	if (name == "Opacity") return Opacity();
 	if (_MvpUniformName == name)
 		return (name, _mvp);
 	if (name == "ProbeView" && _mvp.size() >= 2u)

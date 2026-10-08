@@ -63,7 +63,7 @@ namespace gui
 		{
 			size_t StationIndex = 0u;
 			std::string StationName;
-			utils::Position2d screenPos;
+			std::optional<glm::dvec2> ScreenPosition;
 			glm::vec4 color;
 		};
 
@@ -82,6 +82,7 @@ namespace gui
 		virtual actions::ActionResult OnAction(actions::TouchAction action) override;
 		virtual actions::ActionResult OnAction(actions::TouchMoveAction action) override;
 		virtual actions::ActionResult OnAction(actions::KeyAction action) override;
+		void ClearPointerState() override;
 		void SetCableRevealHeld(bool held);
 		void SetAudioInputPeak(unsigned int channel, float peak, unsigned int numSamps);
 		void SetMidiInputPeak(unsigned int input, float peak, unsigned int numSamps);
@@ -95,33 +96,41 @@ namespace gui
 		static std::vector<CableRoute> BuildCableRoutes(const engine::RoutingGraph& graph);
 		static int RevealScrollOffset(int currentOffset, int viewportHeight,
 			int contentHeight, int itemTop, int itemBottom);
+		static unsigned int SourceCardWidth(unsigned int viewportWidth, unsigned int count);
+		// UI-owned geometry snapshot: visible real snap sockets and presented
+		// curves with original route identity, including decorative continuations.
+		void BuildInteractionGeometry(std::vector<CableInteraction::Endpoint>& endpoints,
+			std::vector<CableInteraction::Cable>& cables) const;
 
 	protected:
 		virtual void _InitResources(resources::ResourceLib& resourceLib, bool forceInit) override;
 		virtual void _ReleaseResources() override;
 
 	private:
-		static constexpr int _OuterMargin = 20;
-		static constexpr int _TopPosY = 18;
-		static constexpr unsigned int _TopStripHeight = 104u;
+		std::vector<std::optional<CableInteraction::Endpoint>> _BuildStationEndpoints(
+			std::vector<CableInteraction::Endpoint>& endpoints) const;
+		static void _FanSourceCableEnds(const std::vector<CableInteraction::Endpoint>& sources,
+			std::vector<CableInteraction::Cable>& cables);
+		static void _PresentCableEnds(std::vector<CableInteraction::Cable>& cables);
+		static constexpr int _OuterMargin = 8;
+		static constexpr int _TopPosY = 8;
+		static constexpr unsigned int _TopStripHeight = 68u;
 		static constexpr unsigned int _TopStripWidth = 760u;
 		static constexpr unsigned int _TopStripMinWidth = 320u;
-		static constexpr unsigned int _TopStripPadding = 12u;
+		static constexpr unsigned int _TopStripPadding = 8u;
 		static constexpr unsigned int _TopStripSpacing = 10u;
 		static constexpr unsigned int _SourceButtonWidth = 118u;
-		static constexpr unsigned int _SourceButtonHeight = 34u;
+		static constexpr unsigned int _SourceButtonHeight = GuiStyle::ControlHeight;
 		static constexpr unsigned int _SourceScrollBarHeight = 12u;
-		static constexpr unsigned int _SourceViewportHeight = _SourceButtonHeight + _SourceScrollBarHeight;
+		static constexpr unsigned int _SourceViewportHeight = _SourceButtonHeight + _SourceScrollBarHeight + 4u;
 		static constexpr unsigned int _SourcePanelGap = 8u;
-		static constexpr unsigned int _RightRailWidth = 134u;
+		static constexpr unsigned int _RightRailWidth = 132u;
 		static constexpr unsigned int _RightRailHeight = 460u;
 		static constexpr unsigned int _RightRailMinHeight = 220u;
 		static constexpr unsigned int _RightRailPaddingH = 0u;
 		static constexpr unsigned int _RightRailPaddingV = 12u;
-		static constexpr unsigned int _RightRailOverhang = 34u;
-		static constexpr unsigned int _RightRailTopInset = 60u;
 		static constexpr unsigned int _RightRailSpacing = 10u;
-		static constexpr unsigned int _TriggerButtonWidth = 120u;
+		static constexpr unsigned int _TriggerButtonWidth = 112u;
 		static constexpr unsigned int _TriggerButtonHeight = 100u;
 		static constexpr unsigned int _TriggerFooterHeight = 56u;
 		static constexpr unsigned int _TriggerControlSize = 34u;
@@ -148,6 +157,9 @@ namespace gui
 		void _RevealTrigger(size_t triggerIndex);
 		void _RebuildPanels();
 		void _LayoutPanels();
+		void _OpenSourceIdentity(const std::string& identity);
+		void _LayoutSourceIdentity();
+		utils::Rect2d _ContentClip(const std::shared_ptr<GuiScrollPanel>& scroll) const;
 		bool _InitCableShader(resources::ResourceLib& resourceLib);
 		bool _InitCableVertexArray();
 		void _DrawCables(base::DrawContext& ctx);
@@ -155,8 +167,6 @@ namespace gui
 		void _DrawOverlayElement(base::DrawContext& ctx,
 			const std::shared_ptr<base::GuiElement>& element) const;
 		void _RebuildCableVertices();
-		void _BuildInteractionGeometry(std::vector<CableInteraction::Endpoint>& endpoints,
-			std::vector<CableInteraction::Cable>& cables) const;
 		bool _CableVisible(const CableInteraction::Cable& cable) const;
 		void _FilterCableHits(std::vector<CableInteraction::Endpoint>& endpoints,
 			std::vector<CableInteraction::Cable>& cables, utils::Position2d point) const;
@@ -178,7 +188,7 @@ namespace gui
 			unsigned int horizontalInset = 0u) const;
 		std::shared_ptr<GuiButton> _MakeSourceButton(const std::string& text,
 			const glm::vec3& tint,
-			unsigned int width) const;
+			unsigned int width, bool midi, bool available);
 		std::shared_ptr<GuiButton> _MakeTriggerButton(const std::string& text,
 			std::weak_ptr<engine::Trigger> trigger) const;
 		struct SourceWidgets
@@ -196,18 +206,27 @@ namespace gui
 		};
 
 
-		std::shared_ptr<GuiStackPanel> _topStrip;
+		std::shared_ptr<GuiPanel> _topStrip;
+		std::shared_ptr<GuiPanel> _topStripBorder;
 		std::shared_ptr<GuiStackPanel> _topSourceRow;
 		std::shared_ptr<GuiStackPanel> _topInputRow;
 		std::shared_ptr<GuiStackPanel> _topMidiRow;
 		std::shared_ptr<GuiScrollPanel> _topAudioScroll;
 		std::shared_ptr<GuiScrollPanel> _topMidiScroll;
 		std::shared_ptr<GuiPanel> _triggerRail;
+		std::shared_ptr<GuiPanel> _triggerRailBorder;
 		std::shared_ptr<GuiScrollPanel> _triggerScroll;
 		std::shared_ptr<GuiStackPanel> _triggerList;
 		std::shared_ptr<GuiButton> _addTriggerButton;
+		std::shared_ptr<GuiPanel> _statusPanel;
 		std::shared_ptr<GuiLabel> _routingStatusLabel;
 		std::shared_ptr<GuiPopup> _deletePopup;
+		// UI-owned read-only identity popup. Rig/job rebuilds do not mutate it;
+		// resize and resource work stay on the existing UI/render paths.
+		std::shared_ptr<GuiPanel> _sourceInfoPanel;
+		std::shared_ptr<GuiScrollPanel> _sourceInfoScroll;
+		std::shared_ptr<GuiLabel> _sourceInfoLabel;
+		std::string _sourceIdentity;
 		std::shared_ptr<base::ActionReceiver> _deletePopupReceiver;
 		std::vector<SourceWidgets> _sourceWidgets;
 		std::vector<TriggerWidgets> _triggerWidgets;
@@ -248,7 +267,8 @@ namespace gui
 		bool _loopEditorMode = false;
 		std::optional<utils::Position2d> _cableHoverPoint;
 		std::vector<StationAnchor> _stationAnchors;
-		static constexpr int _CableSegments = 24;
+		static constexpr int _CableSegments = CableInteraction::CurveVertexCount;
+		static constexpr size_t _CableBatchSize = 16u;
 		static constexpr float _SocketHitRadius = 14.0f;
 		static constexpr float _CableHitRadius = 9.0f;
 		static constexpr float _SnapRadius = 28.0f;

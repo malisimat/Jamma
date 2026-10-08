@@ -16,6 +16,9 @@ GuiLabel::GuiLabel(GuiLabelParams guiParams) :
 	_pendingStr(guiParams.String),
 	_textInset{ guiParams.TextInsetX, guiParams.TextInsetY },
 	_centerHorizontally(guiParams.CenterHorizontally),
+	_ellipsize(guiParams.Ellipsize),
+	_verticalAlign(guiParams.VerticalAlign),
+	_clipText(guiParams.ClipText),
 	_vertexArrayDirty(true),
 	_vertexArray(0),
 	_vertexBuffers{ 0, 0 },
@@ -28,7 +31,10 @@ GuiLabel::GuiLabel(GuiLabelParams guiParams) :
 
 void GuiLabel::SetSize(utils::Size2d size)
 {
+	const bool widthChanged = GetSize().Width != size.Width;
 	GuiElement::SetSize(size);
+	if (_ellipsize && widthChanged)
+		_vertexArrayDirty.store(true, std::memory_order_release);
 
 	if (nullptr == _resourceLib)
 		return;
@@ -45,6 +51,29 @@ void GuiLabel::SetString(const std::string& str)
 
 	_pendingStr = str;
 	_vertexArrayDirty.store(true, std::memory_order_release);
+}
+
+std::string GuiLabel::FitText(const std::string& text, float width,
+	const std::function<float(const std::string&)>& measure)
+{
+	if (width <= 0.0f) return {};
+	if (measure(text) <= width) return text;
+	std::string suffix = "...";
+	while (!suffix.empty() && measure(suffix) > width) suffix.pop_back();
+	size_t first = 0, last = text.size();
+	while (first < last)
+	{
+		const auto length = first + (last - first + 1) / 2;
+		if (measure(text.substr(0, length) + suffix) <= width) first = length;
+		else last = length - 1;
+	}
+	return text.substr(0, first) + suffix;
+}
+
+std::optional<float> GuiLabel::MeasureText(const std::string& text) const
+{
+	if (auto font = _font.lock()) return font->MeasureString(text);
+	return std::nullopt;
 }
 
 utils::Size2d GuiLabel::ContentSize() const
@@ -70,8 +99,32 @@ utils::Size2d GuiLabel::ContentSize() const
 	};
 }
 
+GuiTextLineFrame GuiLabel::ResolveLineFrame(float height, Font::VerticalMetrics metrics, GuiTextVerticalAlign alignment)
+{
+	float baseline = 0.0f;
+	if (alignment == GuiTextVerticalAlign::Bottom) baseline = -metrics.Descent;
+	else if (alignment == GuiTextVerticalAlign::Center) baseline = (height - metrics.Height()) * 0.5f - metrics.Descent;
+	else if (alignment == GuiTextVerticalAlign::Top) baseline = height - metrics.Ascent;
+	return { baseline, baseline + metrics.Descent, baseline + metrics.Ascent };
+}
+
+std::optional<GuiTextLineFrame> GuiLabel::LineFrame() const
+{
+	if (auto font = _font.lock())
+	{
+		auto line = ResolveLineFrame(static_cast<float>(GetSize().Height), font->Metrics(), _verticalAlign);
+		line.BaselineY += _textInset.Y;
+		line.Bottom += _textInset.Y;
+		line.Top += _textInset.Y;
+		return line;
+	}
+	return std::nullopt;
+}
+
 void GuiLabel::Draw(DrawContext& ctx)
 {
+	if (!IsVisible() || GetSize().Width == 0u || GetSize().Height == 0u)
+		return;
 	auto font = _font.lock();
 
 	if (!font)
@@ -81,16 +134,19 @@ void GuiLabel::Draw(DrawContext& ctx)
 	if (_vertexArray == 0)
 		return;
 
-	auto glCtx = dynamic_cast<GlDrawContext&>(ctx);
+	auto& glCtx = dynamic_cast<GlDrawContext&>(ctx);
 	auto pos = Position();
 	const auto textWidth = _centerHorizontally ? font->MeasureString(_str) : 0.0f;
 	const auto horizontalOffset = _centerHorizontally
 		? std::max(0.0f, (static_cast<float>(GetSize().Width) - textWidth) / 2.0f)
 		: 0.0f;
-	glCtx.PushMvp(glm::translate(glm::mat4(1.0), glm::vec3(pos.X + _textInset.X + horizontalOffset, pos.Y + _textInset.Y, 0.f)));
+	if (_clipText) glCtx.PushScissorRect(GlobalPosition(), GetSize());
+	const auto line = LineFrame().value();
+	glCtx.PushMvp(glm::translate(glm::mat4(1.0), glm::vec3(pos.X + _textInset.X + horizontalOffset, pos.Y + line.BaselineY, 0.f)));
 	
 	font->Draw(glCtx, _vertexArray, (unsigned int)_str.size());
 	glCtx.PopMvp();
+	if (_clipText) glCtx.PopScissorRect();
 }
 
 bool GuiLabel::_ResolveFont(ResourceLib& resourceLib)
@@ -113,10 +169,6 @@ bool GuiLabel::_ResolveFont(ResourceLib& resourceLib)
 	_font = fontOpt.value();
 	_selectedFontSize = selection.Size;
 	_resolvedTextPixelHeight = selection.PixelHeight;
-
-	auto sz = GetSize();
-	if (sz.Height != _resolvedTextPixelHeight)
-		GuiElement::SetSize({ sz.Width, _resolvedTextPixelHeight });
 
 	return (resolvedFont != previousFont)
 		|| (previousFontSize != _selectedFontSize)
@@ -178,6 +230,9 @@ void GuiLabel::SyncVertexArray()
 	auto font = _font.lock();
 	if (!font)
 		return;
+	if (_ellipsize)
+		next = FitText(next, std::max(0.0f, static_cast<float>(GetSize().Width) - _textInset.X),
+			[&font](const std::string& text) { return font->MeasureString(text); });
 
 	graphics::GlDeleteQueue::DeleteBuffers(2, _vertexBuffers);
 	_vertexBuffers[0] = 0;

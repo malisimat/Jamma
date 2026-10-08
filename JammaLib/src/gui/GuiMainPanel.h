@@ -1,63 +1,80 @@
 #pragma once
 
-#include <memory>
-#include <string>
+#include <array>
+#include <functional>
+#include "GuiPanel.h"
 #include "GuiStackPanel.h"
-#include "GuiGrid.h"
 #include "GuiScrollPanel.h"
-#include "GuiDropDown.h"
-#include "GuiNumericInput.h"
-#include "GuiTextBox.h"
-#include "GuiSlider.h"
-#include "GuiButton.h"
-#include "GuiToggle.h"
-#include "GuiLabel.h"
+#include "GuiRadio.h"
 #include "GuiPopupManager.h"
 
 namespace gui
 {
-	struct GuiMainPanelParams : public GuiStackPanelParams
+	enum class SettingsPage : unsigned int { Midi, Timing, Audio, Session, Groups, Selection, Count };
+	struct GuiSettingEntry
 	{
-			GuiPopupManager* PopupManager = nullptr;
+		SettingsPage Page = SettingsPage::Timing;
+		std::string Label;
+		std::shared_ptr<base::GuiElement> Control;
+		unsigned int Command = 0;
+	};
+	struct GuiMainPanelParams : public base::GuiElementParams
+	{
+		GuiPopupManager* PopupManager = nullptr;
+		bool SelectionOnly = false;
+		std::vector<GuiSettingEntry> Settings;
+		std::function<void(const std::shared_ptr<base::GuiElement>&)> BeforeHide;
 	};
 
-	class GuiMainPanel : public GuiStackPanel
+	// UI-owned overlay composition. Scene supplies controls and command identity;
+	// pages retain their widgets, while only the active page enters traversal.
+	class GuiMainPanel : public GuiPanel
 	{
 	public:
 		explicit GuiMainPanel(GuiMainPanelParams params);
-
+		void SetCommandOwner(std::weak_ptr<base::ActionReceiver> owner);
+		void SetViewportSize(utils::Size2d viewport);
+		void SetPage(SettingsPage page);
+		SettingsPage Page() const { return _page; }
+		void SetExpanded(bool expanded);
+		bool IsExpanded() const { return _expanded; }
+		bool AdvanceAnimation(float elapsedSeconds);
+		float TransitionValue() const { return _transition; }
+		float PresentedOpacity() const;
+		void Draw(base::DrawContext& context) override;
+		bool RouteHitTest(utils::Position2d position) override;
+		using GuiPanel::OnAction;
+		actions::ActionResult OnAction(actions::GuiAction action) override;
+	protected:
+		void _InitReceivers() override;
+		void _InitResources(resources::ResourceLib& resources, bool force) override;
+		void _ReleaseResources() override;
 	private:
-		static constexpr unsigned int _PanelWidth = 360u;
-		static constexpr unsigned int _PanelHeight = 576u;
-		static constexpr unsigned int _PanelMinWidth = 160u;
-		static constexpr unsigned int _PanelMinHeight = 560u;
-		static constexpr int _PanelPosX = 20;
-		static constexpr int _PanelPosY = 48;
-		static constexpr unsigned int _PanelPadding = 16u;
-		static constexpr unsigned int _PanelSpacing = 12u;
-		static constexpr unsigned int _SectionWidth = 328u;
-		static constexpr unsigned int _SectionContentWidth = 320u;
-		static constexpr unsigned int _SectionPadding = 4u;
-		static constexpr unsigned int _SectionSpacing = 8u;
-		static constexpr unsigned int _TextBoxPadding = 10u;
-		static constexpr unsigned int _NumericInputPadding = 10u;
-		static constexpr unsigned int _DropDownPadding = 10u;
-		static constexpr unsigned int _ScrollRowHorizontalInset = 10u;
-		static constexpr unsigned int _UpperSectionHeight = 248u;
-		static constexpr unsigned int _LowerSectionHeight = 264u;
-		static constexpr unsigned int _HeaderHeight = 22u;
-		static constexpr unsigned int _StackRowHeight = 38u;
-		static constexpr unsigned int _ControlHeight = 34u;
-		static constexpr unsigned int _GridHeight = 96u;
-		static constexpr unsigned int _WrapStackHeight = 56u;
-		static constexpr unsigned int _ScrollPanelHeight = 120u;
-
-		void _BuildUpperSection();
-		void _BuildLowerSection();
-		std::shared_ptr<GuiLabel> _MakeHeaderLabel(const std::string& text, unsigned int width);
-		std::shared_ptr<GuiGrid> _CreateToggleGrid();
-		std::shared_ptr<GuiStackPanel> _CreateSliderStack();
-
-		GuiPopupManager* _popupManager;
+		void _Layout();
+		void _LayoutSelection(int panelWidth, int panelHeight);
+		void _LayoutSettings(int panelWidth, int panelHeight);
+		void _PrepareHide(const std::shared_ptr<base::GuiElement>& subtree);
+		void _UpdatePresentation();
+		static constexpr unsigned int _PageCommand = 1u;
+		static constexpr unsigned int _ExpandCommand = 2u;
+		bool _selectionOnly;
+		bool _expanded = true;
+		float _transition = 1.0f;
+		SettingsPage _page;
+		utils::Size2d _viewport{};
+		GuiPopupManager* _popups;
+		std::function<void(const std::shared_ptr<base::GuiElement>&)> _beforeHide;
+		std::shared_ptr<GuiPanel> _frame;
+		std::shared_ptr<GuiPanel> _edge;
+		std::shared_ptr<GuiToggle> _handle;
+		std::shared_ptr<GuiRadio> _tabs;
+		std::shared_ptr<GuiScrollPanel> _tabScroll;
+		std::shared_ptr<GuiScrollPanel> _pageScroll;
+		std::array<std::shared_ptr<GuiStackPanel>, static_cast<size_t>(SettingsPage::Count)> _pages;
+		std::array<int, static_cast<size_t>(SettingsPage::Count)> _offsets{};
+		std::vector<std::shared_ptr<GuiCommandReceiver>> _bindings;
+		std::vector<std::pair<std::shared_ptr<base::GuiElement>, utils::Size2d>> _controlSizes;
+		std::shared_ptr<GuiCommandReceiver> _pageBinding;
+		std::shared_ptr<GuiCommandReceiver> _expandBinding;
 	};
 }

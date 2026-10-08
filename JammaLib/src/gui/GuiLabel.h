@@ -1,6 +1,7 @@
 #pragma once
 
 #include <memory>
+#include <functional>
 #include <atomic>
 #include <mutex>
 #include <algorithm>
@@ -11,6 +12,13 @@
 
 namespace gui
 {
+	enum class GuiTextVerticalAlign { Baseline, Bottom, Center, Top };
+	struct GuiTextLineFrame
+	{
+		float BaselineY = 0.0f;
+		float Bottom = 0.0f;
+		float Top = 0.0f;
+	};
 		struct GuiTextFrame
 		{
 			unsigned int PaddingX = 0u;
@@ -45,6 +53,8 @@ namespace gui
 			params.String = text;
 			params.Size = { width, HeaderHeight };
 			params.MinSize = { HeaderMinWidth, HeaderHeight };
+			params.VerticalAlign = GuiTextVerticalAlign::Center;
+			params.ClipText = true;
 			return params;
 		}
 
@@ -59,6 +69,8 @@ namespace gui
 			params.String = text;
 			params.Size = { RowWidth, RowHeight };
 			params.MinSize = { RowMinWidth, RowHeight };
+			params.VerticalAlign = GuiTextVerticalAlign::Center;
+			params.ClipText = true;
 				params.TextInsetX = static_cast<int>(horizontalInset);
 			return params;
 		}
@@ -70,12 +82,15 @@ namespace gui
 				bool centerVertically)
 			{
 				GuiTextFrame frame;
-				const unsigned int safeHeight = std::max(1u, controlHeight);
-				const unsigned int safeWidth = std::max(1u, controlWidth);
+				const unsigned int safeHeight = controlHeight;
+				const unsigned int safeWidth = controlWidth;
 				frame.PaddingX = std::min(paddingX, safeWidth / 2u);
-				frame.PaddingY = std::min(paddingY, safeHeight / 2u);
-				frame.TextHeight = resources::ResourceLib::ResolveTextPixelHeightFromControlBox(safeHeight, frame.PaddingY);
-				frame.ContentWidth = std::max(1u, safeWidth > 2u * frame.PaddingX ? safeWidth - 2u * frame.PaddingX : 1u);
+				// Compact rows still need room for the smallest available font.
+				const unsigned int paddingRoom = safeHeight > graphics::FontOptions::BasePixelHeight
+					? (safeHeight - graphics::FontOptions::BasePixelHeight) / 2u : 0u;
+				frame.PaddingY = std::min(paddingY, paddingRoom);
+				frame.TextHeight = safeHeight - 2u * frame.PaddingY;
+				frame.ContentWidth = safeWidth - 2u * frame.PaddingX;
 
 				if (centerVertically)
 				{
@@ -95,6 +110,9 @@ namespace gui
 		int TextInsetX = 0;
 		int TextInsetY = 0;
 		bool CenterHorizontally = false;
+		bool Ellipsize = false;
+		GuiTextVerticalAlign VerticalAlign = GuiTextVerticalAlign::Baseline;
+		bool ClipText = false;
 	};
 
 	class GuiLabel :
@@ -103,6 +121,13 @@ namespace gui
 	public:
 		GuiLabel(GuiLabelParams guiParams);
 		void SetString(const std::string& str);
+		std::optional<float> MeasureText(const std::string& text) const;
+		static std::string FitText(const std::string& text, float width,
+			const std::function<float(const std::string&)>& measure);
+		static GuiTextLineFrame ResolveLineFrame(float height, graphics::Font::VerticalMetrics metrics,
+			GuiTextVerticalAlign alignment);
+		std::optional<GuiTextLineFrame> LineFrame() const;
+		std::shared_ptr<graphics::Font> ResolvedFont() const { return _font.lock(); }
 
 	public:
 		virtual void Draw(base::DrawContext& ctx) override;
@@ -123,6 +148,9 @@ namespace gui
 		std::string _pendingStr;
 		utils::Position2d _textInset;
 		bool _centerHorizontally;
+		bool _ellipsize;
+		GuiTextVerticalAlign _verticalAlign;
+		bool _clipText;
 		mutable std::mutex _stringMutex;
 		std::atomic<bool> _vertexArrayDirty;
 		GLuint _vertexArray;

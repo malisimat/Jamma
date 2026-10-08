@@ -19,13 +19,14 @@ namespace graphics
 		ImageParams(base::DrawableParams drawParams,
 			base::SizeableParams sizeParams,
 			std::string shader,
-			bool rot90, bool flipH, bool flipV) :
+			bool rot90, bool flipH, bool flipV, float opacity = 1.0f) :
 			base::DrawableParams(drawParams),
 			base::SizeableParams(sizeParams),
 			Rot90(rot90),
 			FlipH(flipH),
 			FlipV(flipV),
-			Shader(shader)
+			Shader(shader),
+			Opacity(opacity)
 		{}
 
 	public:
@@ -33,6 +34,7 @@ namespace graphics
 		bool FlipH;
 		bool FlipV;
 		std::string Shader;
+		float Opacity;
 	};
 
 	class Image :

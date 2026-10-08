@@ -63,6 +63,15 @@ namespace graphics
 	class Font
 	{
 	public:
+		struct VerticalMetrics
+		{
+			float Ascent = 0.0f;
+			float Descent = 0.0f; // Below the baseline is negative.
+			float LineGap = 0.0f;
+			float Height() const { return Ascent - Descent; }
+			float LineStep() const { return Height() + LineGap; }
+		};
+		VerticalMetrics Metrics() const;
 		static constexpr int kGlyphPadding = 2;
 		static constexpr int kGlyphSize = 32;
 		static constexpr int kAtlasWidth = 512;

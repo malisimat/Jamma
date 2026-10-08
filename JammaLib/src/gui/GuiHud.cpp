@@ -26,6 +26,17 @@ using namespace resources;
 
 namespace gui
 {
+	class GuiHudStatusPanel : public GuiPanel
+	{
+	public:
+		explicit GuiHudStatusPanel(base::GuiElementParams params) : GuiPanel(params) {}
+		void Draw(base::DrawContext& ctx) override
+		{
+			auto& glCtx = dynamic_cast<graphics::GlDrawContext&>(ctx);
+			glCtx.SetUniform("Color", glm::vec4(GuiStyle::Graphite(), 1.0f));
+			GuiPanel::Draw(ctx);
+		}
+	};
 	class GuiHudSocket : public base::GuiElement
 	{
 	public:
@@ -76,11 +87,16 @@ namespace gui
 	public:
 		GuiHudActionButton(GuiButtonParams params, std::function<void()> callback) :
 			GuiButton(_Params(std::move(params))), _callback(std::move(callback)) {}
+		void ClearPointerState() override
+		{
+			GuiButton::ClearPointerState();
+			_pressed = false;
+		}
 
 		void Draw(base::DrawContext& ctx) override
 		{
 			const auto previousTint = _guiParams.TintColor;
-			_guiParams.TintColor = IsEnabled() ? glm::vec3(1.0f) : glm::vec3(0.38f);
+			_guiParams.TintColor = IsEnabled() ? previousTint : previousTint * 0.38f;
 			GuiButton::Draw(ctx);
 			_guiParams.TintColor = previousTint;
 		}
@@ -112,7 +128,6 @@ namespace gui
 		static GuiButtonParams _Params(GuiButtonParams params)
 		{
 			params.TextureShader = "texture_tinted";
-			params.TintColor = glm::vec3(1.0f);
 			return params;
 		}
 
@@ -269,6 +284,27 @@ GuiHud::GuiHud(GuiHudParams params) :
 		else { _deleteTriggerIndex.reset(); if (_popupManager) _popupManager->Close(); }
 	});
 	_deletePopup->SetButtonReceiver(_deletePopupReceiver);
+	GuiElementParams infoParams;
+	infoParams.Texture = "rounded_but_on";
+	infoParams.TextureShader = "texture_tinted";
+	infoParams.TintColor = GuiStyle::Graphite();
+	infoParams.TextureOpacity = GuiStyle::PanelFillOpacity;
+	infoParams.GuiPassThrough = false;
+	_sourceInfoPanel = std::make_shared<GuiPanel>(infoParams);
+	auto infoHeader = GuiLabelParams::PanelHeader("Input identity (scroll to read; Esc closes)", 420u);
+	infoHeader.Ellipsize = true;
+	_sourceInfoPanel->AddChild(std::make_shared<GuiLabel>(infoHeader));
+	GuiScrollPanelParams infoScroll;
+	infoScroll.Orientation = GuiScrollOrientation::Horizontal;
+	infoScroll.ScrollBarWidth = 12u;
+	_sourceInfoScroll = std::make_shared<GuiScrollPanel>(infoScroll);
+	GuiLabelParams identityParams;
+	identityParams.Size = { 1u, 28u };
+	identityParams.TextInsetX = 2;
+	identityParams.TextInsetY = 2;
+	_sourceInfoLabel = std::make_shared<GuiLabel>(identityParams);
+	_sourceInfoScroll->SetContent(_sourceInfoLabel);
+	_sourceInfoPanel->AddChild(_sourceInfoScroll);
 	_BuildPanels();
 	SetSize(params.Size);
 }
@@ -278,8 +314,6 @@ void GuiHud::Draw(base::DrawContext& ctx)
 	if (!_isVisible)
 		return;
 
-	if (_topStrip)
-		_topStrip->ComputeLayout();
 	if (_topSourceRow)
 		_topSourceRow->ComputeLayout();
 	if (_topInputRow)
@@ -327,9 +361,9 @@ void GuiHud::Draw(base::DrawContext& ctx)
 	{
 		if (!scroll)
 			return;
-		auto clipPos = scroll->GlobalPosition();
-		clipPos.Y += static_cast<int>(scroll->GetSize().Height - scroll->ViewportHeight());
-		glCtx.PushScissorRect(clipPos, { scroll->ViewportWidth(), scroll->ViewportHeight() });
+		const auto clip = _ContentClip(scroll);
+		glCtx.PushScissorRect({ clip.Left, clip.Bottom }, {
+			static_cast<unsigned int>(clip.Right - clip.Left), static_cast<unsigned int>(clip.Top - clip.Bottom) });
 		for (size_t i = 0u; i < _sourceWidgets.size(); ++i)
 		{
 			if (_sourceEndpoints[i].Kind != kind)
@@ -343,8 +377,9 @@ void GuiHud::Draw(base::DrawContext& ctx)
 	drawSourceOverlays(_topMidiScroll, io::RigFileRouting::SourceKind::Midi);
 	if (_triggerScroll)
 	{
-		glCtx.PushScissorRect(_triggerScroll->GlobalPosition(),
-			{ _triggerScroll->ViewportWidth(), _triggerScroll->ViewportHeight() });
+		const auto clip = _ContentClip(_triggerScroll);
+		glCtx.PushScissorRect({ clip.Left, clip.Bottom }, {
+			static_cast<unsigned int>(clip.Right - clip.Left), static_cast<unsigned int>(clip.Top - clip.Bottom) });
 		for (const auto& widgets : _triggerWidgets)
 		{
 			_DrawOverlayElement(ctx, widgets.Close);
@@ -361,7 +396,10 @@ void GuiHud::Draw(base::DrawContext& ctx)
 void GuiHud::SetSize(Size2d size)
 {
 	GuiPanel::SetSize(size);
+	if (_deletePopup) _deletePopup->FitToViewport(size);
 	_LayoutPanels();
+	if (_popupManager && _popupManager->Top() == _sourceInfoPanel)
+		_LayoutSourceIdentity();
 }
 
 void GuiHud::_InitResources(ResourceLib& resourceLib, bool forceInit)
@@ -373,6 +411,8 @@ void GuiHud::_InitResources(ResourceLib& resourceLib, bool forceInit)
 		vu->InitResources(resourceLib, forceInit);
 	if (_deletePopup)
 		_deletePopup->InitResources(resourceLib, forceInit);
+	_sourceInfoPanel->InitResources(resourceLib, forceInit);
+	_LayoutSourceIdentity();
 	_cableEndIcon->InitResources(resourceLib, forceInit);
 	_stationSocketIcon->InitResources(resourceLib, forceInit);
 
@@ -381,6 +421,7 @@ void GuiHud::_InitResources(ResourceLib& resourceLib, bool forceInit)
 
 void GuiHud::_ReleaseResources()
 {
+	GuiPanel::_ReleaseResources();
 	graphics::GlDeleteQueue::DeleteBuffers(1, &_cableVertexBuffer);
 	_cableVertexBuffer = 0;
 
@@ -391,29 +432,30 @@ void GuiHud::_ReleaseResources()
 		vu->ReleaseResources();
 	if (_deletePopup)
 		_deletePopup->ReleaseResources();
+	_sourceInfoPanel->ReleaseResources();
 	_cableEndIcon->ReleaseResources();
 	_stationSocketIcon->ReleaseResources();
 }
 
 void GuiHud::_BuildPanels()
 {
-	GuiStackPanelParams topParams;
-	topParams.Direction = StackDirection::Vertical;
-	topParams.Spacing = _TopStripSpacing;
-	topParams.PaddingH = _TopStripPadding;
-	topParams.PaddingV = _TopStripPadding;
+	GuiElementParams topParams;
 	topParams.Size = { _TopStripWidth, _TopStripHeight };
 	topParams.MinSize = { _TopStripMinWidth, _TopStripHeight };
-	// No background on the input strip — only the level elements themselves show.
-	_topStrip = std::make_shared<GuiStackPanel>(topParams);
+	topParams.Texture = "panel_fill_flat";
+	topParams.TextureShader = "texture_tinted";
+	topParams.TintColor = GuiStyle::Graphite();
+	topParams.TextureOpacity = GuiStyle::PanelFillOpacity;
+	_topStrip = std::make_shared<GuiPanel>(topParams);
 	AddChild(_topStrip);
 
 	base::GuiElementParams railParams;
-	railParams.Size = { _RightRailWidth - 6u, _RightRailHeight };
-	railParams.MinSize = { _RightRailWidth - 6u, _RightRailMinHeight };
+	railParams.Size = { _RightRailWidth, _RightRailHeight };
+	railParams.MinSize = { _RightRailWidth, _RightRailMinHeight };
 	railParams.TextureShader = "texture_tinted";
-	railParams.Texture = "rounded_but";
-	railParams.TintColor = glm::vec3(0.17f, 0.20f, 0.24f);
+	railParams.Texture = "panel_fill_flat";
+	railParams.TintColor = GuiStyle::Graphite();
+	railParams.TextureOpacity = GuiStyle::HudFillOpacity;
 	_triggerRail = std::make_shared<GuiPanel>(railParams);
 	AddChild(_triggerRail);
 
@@ -423,7 +465,7 @@ void GuiHud::_BuildPanels()
 
 void GuiHud::_BuildTopStrip()
 {
-	_topStrip->AddChild(_MakeHeader("Inputs", _TopStripWidth - (_TopStripPadding * 2u)));
+	_topStrip->AddChild(_MakeHeader("Inputs", _TopStripWidth - (_TopStripPadding * 2u), 8u));
 
 	const auto audioCount = static_cast<unsigned int>(std::count_if(_sourceEndpoints.begin(), _sourceEndpoints.end(),
 		[](const auto& source) { return source.Kind == io::RigFileRouting::SourceKind::Adc; }));
@@ -434,7 +476,7 @@ void GuiHud::_BuildTopStrip()
 	};
 	const unsigned int innerWidth = _TopStripWidth - (_TopStripPadding * 2u);
 	GuiStackPanelParams sourceRowParams = GuiStackPanelParams::PanelHorizontalRow(innerWidth, _SourceViewportHeight);
-	sourceRowParams.Spacing = _SourcePanelGap;
+	sourceRowParams.Spacing = GuiStackPanelParams::PanelRowSpacing - 4u;
 	_topSourceRow = std::make_shared<GuiStackPanel>(sourceRowParams);
 	if (audioCount > 0u)
 	{
@@ -456,7 +498,7 @@ void GuiHud::_BuildTopStrip()
 			label += " (unavailable)";
 		auto button = _MakeSourceButton(label,
 			source.Available ? (isAdc ? glm::vec3(0.92f, 0.52f, 0.24f) : glm::vec3(0.22f, 0.72f, 0.66f)) : glm::vec3(0.50f),
-			_SourceButtonWidth);
+			_SourceButtonWidth, !isAdc, source.Available);
 		auto socket = std::make_shared<GuiHudSocket>(
 			utils::Position2d{ static_cast<int>(_SourceButtonWidth / 2u - _SocketSize / 2u), 0 },
 			_SocketSize,
@@ -502,6 +544,14 @@ void GuiHud::_BuildTopStrip()
 		_topSourceRow->AddChild(_topMidiScroll);
 	}
 	_topStrip->AddChild(_topSourceRow);
+	GuiElementParams borderParams;
+	borderParams.Texture = "rounded_but_hud_border";
+	borderParams.TextureShader = "texture_tinted";
+	borderParams.TintColor = GuiStyle::Graphite();
+	borderParams.TextureOpacity = GuiStyle::HudBorderOpacity;
+	borderParams.GuiPassThrough = true;
+	_topStripBorder = std::make_shared<GuiPanel>(borderParams);
+	_topStrip->AddChild(_topStripBorder);
 }
 
 void GuiHud::_BuildTriggerRail()
@@ -532,6 +582,7 @@ void GuiHud::_BuildTriggerRail()
 		closeParams.Position = { static_cast<int>(_TriggerButtonWidth - _TriggerControlSize - 4u),
 			static_cast<int>(_TriggerButtonHeight - _TriggerControlSize - 4u) };
 		closeParams.TextPadding = 0u;
+		closeParams.TintColor = glm::vec3(1.0f);
 		auto close = std::make_shared<GuiHudActionButton>(closeParams, [this, i]() { _OpenDeleteConfirmation(i); });
 		button->AddChild(close);
 		auto inputSocket = std::make_shared<GuiHudSocket>(
@@ -555,6 +606,7 @@ void GuiHud::_BuildTriggerRail()
 	_triggerList->SetSize({ _TriggerButtonWidth, logicalHeight });
 
 	GuiScrollPanelParams scrollParams = GuiScrollPanelParams::PanelScroll(_TriggerButtonWidth, 1u);
+	scrollParams.ScrollBarWidth = 8u;
 	scrollParams.Texture = "";
 	scrollParams.OverTexture = "";
 	scrollParams.DownTexture = "";
@@ -569,14 +621,31 @@ void GuiHud::_BuildTriggerRail()
 	addParams.Size = { _TriggerControlSize, _TriggerControlSize };
 	addParams.MinSize = addParams.Size;
 	addParams.TextPadding = 0u;
+	addParams.TintColor = glm::vec3(1.0f);
 	_addTriggerButton = std::make_shared<GuiHudActionButton>(addParams, [this]() { _AddTrigger(); });
 	_triggerRail->AddChild(_addTriggerButton);
 
 	GuiLabelParams statusParams = GuiLabelParams::PanelScrollRow("Trigger routing ready", 0u);
+	statusParams.Ellipsize = true;
 	statusParams.Size = { 300u, GuiLabelParams::RowHeight };
 	statusParams.MinSize = { 160u, GuiLabelParams::RowHeight };
 	_routingStatusLabel = std::make_shared<GuiLabel>(statusParams);
-	AddChild(_routingStatusLabel);
+	GuiElementParams statusPanelParams;
+	statusPanelParams.Texture = "red";
+	statusPanelParams.TextureShader = "colour";
+	statusPanelParams.TintColor = GuiStyle::Graphite();
+	statusPanelParams.TextureOpacity = 0.80f;
+	_statusPanel = std::make_shared<GuiHudStatusPanel>(statusPanelParams);
+	_statusPanel->AddChild(_routingStatusLabel);
+	AddChild(_statusPanel);
+	GuiElementParams borderParams;
+	borderParams.Texture = "rounded_but_hud_border";
+	borderParams.TextureShader = "texture_tinted";
+	borderParams.TintColor = GuiStyle::Graphite();
+	borderParams.TextureOpacity = GuiStyle::HudBorderOpacity;
+	borderParams.GuiPassThrough = true;
+	_triggerRailBorder = std::make_shared<GuiPanel>(borderParams);
+	_triggerRail->AddChild(_triggerRailBorder);
 }
 
 void GuiHud::_RebuildPanels()
@@ -589,12 +658,14 @@ void GuiHud::_RebuildPanels()
 	_triggerWidgets.clear();
 	_inputVus.clear();
 	_topStrip.reset();
+	_topStripBorder.reset();
 	_topSourceRow.reset();
 	_topInputRow.reset();
 	_topMidiRow.reset();
 	_topAudioScroll.reset();
 	_topMidiScroll.reset();
 	_triggerRail.reset();
+	_triggerRailBorder.reset();
 	_triggerScroll.reset();
 	_triggerList.reset();
 	_addTriggerButton.reset();
@@ -704,68 +775,134 @@ void GuiHud::SetRoutingConfig(unsigned int audioInputCount,
 	_RebuildPanels();
 }
 
+unsigned int GuiHud::SourceCardWidth(unsigned int viewportWidth, unsigned int count)
+{
+	if (count == 0u) return 0u;
+	const auto gaps = static_cast<unsigned long long>(count - 1u) * GuiStackPanelParams::PanelRowSpacing + 4u;
+	const auto usable = viewportWidth > gaps ? viewportWidth - gaps : 0u;
+	return static_cast<unsigned int>(std::clamp(usable / count, 80ull, 160ull));
+}
+
 void GuiHud::_LayoutPanels()
 {
-	const unsigned int minViewWidth = _TopStripMinWidth + _RightRailWidth + 3u * static_cast<unsigned int>(_OuterMargin);
-	const unsigned int minViewHeight = std::max(_TopStripHeight, _RightRailMinHeight) +
-		2u * static_cast<unsigned int>(_OuterMargin + _TopPosY);
-	const unsigned int viewWidth = std::max(_sizeParams.Size.Width, minViewWidth);
-	const unsigned int viewHeight = std::max(_sizeParams.Size.Height, minViewHeight);
-	const unsigned int topWidth = std::max(_TopStripMinWidth,
-		std::min(_TopStripWidth, viewWidth - _RightRailWidth - 3u * static_cast<unsigned int>(_OuterMargin)));
-	const unsigned int railHeight = std::max(_RightRailMinHeight,
-		viewHeight - 2u * static_cast<unsigned int>(_OuterMargin + _TopPosY));
-
-	const int railPosX = static_cast<int>(viewWidth) - static_cast<int>(_RightRailWidth) - _OuterMargin + _RightRailOverhang;
-	const int topPosX = std::max(_OuterMargin, railPosX - _OuterMargin - static_cast<int>(topWidth));
-	const int topPosY = static_cast<int>(viewHeight) - static_cast<int>(_TopStripHeight) - _TopPosY;
-	_topStrip->SetPosition({ topPosX, topPosY });
-	_topStrip->SetSize({ topWidth, _TopStripHeight });
-
-	const unsigned int innerWidth = topWidth - (_TopStripPadding * 2u);
-	if (auto header = _topStrip->TryGetChild(0u))
-		header->SetSize({ innerWidth, header->GetSize().Height });
-	_topSourceRow->SetSize({ innerWidth, _SourceViewportHeight });
-	const unsigned int midiContentWidth = _topMidiRow ? _topMidiRow->GetSize().Width : 0u;
-	const unsigned int midiViewportWidth = _topAudioScroll && _topMidiScroll
-		? std::min(midiContentWidth, std::max(_SourceButtonWidth, innerWidth / 3u))
-		: (_topMidiScroll ? innerWidth : 0u);
-	const unsigned int audioViewportWidth = _topAudioScroll
-		? innerWidth - midiViewportWidth - (_topMidiScroll ? _SourcePanelGap : 0u) : 0u;
-	if (_topAudioScroll)
-		_topAudioScroll->SetSize({ audioViewportWidth, _SourceViewportHeight });
-	if (_topMidiScroll)
-		_topMidiScroll->SetSize({ midiViewportWidth, _SourceViewportHeight });
-
-	const int railPosY = static_cast<int>(viewHeight) - static_cast<int>(railHeight) - _TopPosY + 42u;
-	_triggerRail->SetPosition({ railPosX, railPosY });
-	_triggerRail->SetSize({ _RightRailWidth - 6u, railHeight - _RightRailTopInset });
-	const auto railInnerHeight = _triggerRail->GetSize().Height;
-	const unsigned int headerHeight = 34u;
-	const unsigned int scrollHeight = railInnerHeight > headerHeight + _TriggerFooterHeight
-		? railInnerHeight - headerHeight - _TriggerFooterHeight : 1u;
-	if (_triggerScroll)
-	{
-		_triggerScroll->SetPosition({ 0, static_cast<int>(_TriggerFooterHeight) });
-		_triggerScroll->SetSize({ _RightRailWidth - 6u, scrollHeight });
-	}
+	const int width = static_cast<int>(GetSize().Width);
+	const int height = static_cast<int>(GetSize().Height);
+	const int marginX = std::min(_OuterMargin, width / 2);
+	const int marginY = std::min(_TopPosY, height / 2);
+	const int railWidth = std::min(static_cast<int>(_RightRailWidth), std::max(0, width - 2 * marginX));
+	const int railHeight = std::max(0, height - marginY - GuiStyle::StatusBarHeight - 8);
+	const int railX = std::max(0, width - marginX - railWidth);
+	_triggerRail->SetPosition({ railX, std::min(GuiStyle::StatusBarHeight + 8, height) });
+	_triggerRail->SetSize({ static_cast<unsigned int>(railWidth), static_cast<unsigned int>(railHeight) });
+	_triggerRailBorder->SetSize({ static_cast<unsigned int>(railWidth), static_cast<unsigned int>(railHeight) });
+	_triggerRail->SetVisible(railWidth > 0 && railHeight > 0);
+	const int triggerHeader = std::min(34, railHeight);
+	const int triggerFooter = std::min(static_cast<int>(_TriggerFooterHeight), railHeight - triggerHeader);
+	const int triggerViewport = std::max(0, railHeight - triggerHeader - triggerFooter);
+	_triggerScroll->SetPosition({ 0, triggerFooter });
+	_triggerScroll->SetSize({ static_cast<unsigned int>(railWidth), static_cast<unsigned int>(triggerViewport) });
+	_triggerScroll->SetVisible(railWidth > 0 && triggerViewport > 0);
+	const int triggerSidePadding = std::max(0, (railWidth - static_cast<int>(_TriggerButtonWidth)) / 2);
+	_triggerList->SetPadding(static_cast<unsigned int>(triggerSidePadding), 0u);
+	_triggerList->SetSize({ static_cast<unsigned int>(railWidth), _triggerList->GetSize().Height });
 	if (auto header = _triggerRail->TryGetChild(0u))
-		header->SetPosition({ 0, static_cast<int>(railInnerHeight - headerHeight) });
-	if (_addTriggerButton)
 	{
-		_addTriggerButton->SetPosition({ static_cast<int>((_RightRailWidth - 6u - _TriggerControlSize) / 2u), 10 });
+		header->SetPosition({ 0, railHeight - triggerHeader });
+		header->SetSize({ static_cast<unsigned int>(railWidth), static_cast<unsigned int>(triggerHeader) });
+		header->SetVisible(railWidth >= 80 && triggerHeader >= 22);
 	}
-	if (_routingStatusLabel)
-		_routingStatusLabel->SetPosition({ railPosX - 310, railPosY + 14 });
+	_addTriggerButton->SetPosition({ std::max(0, (railWidth - static_cast<int>(_TriggerControlSize)) / 2),
+		std::max(0, (triggerFooter - static_cast<int>(_TriggerControlSize)) / 2) });
+	_addTriggerButton->SetVisible(railWidth >= static_cast<int>(_TriggerControlSize) && triggerFooter >= static_cast<int>(_TriggerControlSize));
+
+	int topWidth = std::max(0, railX - marginX - static_cast<int>(_SourcePanelGap));
+	int topHeight = std::min(static_cast<int>(_TopStripHeight), std::max(0, height - 2 * marginY));
+	_topStrip->SetPosition({ marginX, std::max(0, height - marginY - topHeight) });
+	_topStrip->SetSize({ static_cast<unsigned int>(topWidth), static_cast<unsigned int>(topHeight) });
+	_topStripBorder->SetSize({ static_cast<unsigned int>(topWidth), static_cast<unsigned int>(topHeight) });
+	_topStrip->SetVisible(topWidth > 0 && topHeight > 0);
+	const int padding = std::min(static_cast<int>(_TopStripPadding), std::min(topWidth, topHeight) / 2);
+	const int innerWidth = std::max(0, topWidth - 2 * padding);
+	int rowHeight = std::min(static_cast<int>(_SourceViewportHeight), std::max(0, topHeight - 2 * padding));
+	_topSourceRow->SetVisible(innerWidth > 0 && rowHeight > 0);
+	const auto audioCount = static_cast<unsigned int>(std::count_if(_sourceEndpoints.begin(), _sourceEndpoints.end(),
+		[](const auto& source) { return source.Kind == io::RigFileRouting::SourceKind::Adc; }));
+	const auto midiCount = static_cast<unsigned int>(_sourceEndpoints.size()) - audioCount;
+	const int categoryGap = audioCount && midiCount ? std::min(static_cast<int>(GuiStackPanelParams::PanelRowSpacing - 4u), innerWidth) : 0;
+	const int labelWidth = innerWidth >= static_cast<int>((audioCount + midiCount) * 84u) + 76 ? 76 : 0;
+	const auto budget = static_cast<unsigned int>(std::max(0, innerWidth - labelWidth - categoryGap));
+	auto audioWidth = audioCount + midiCount ? static_cast<unsigned int>(static_cast<unsigned long long>(budget) * audioCount / (audioCount + midiCount)) : 0u;
+	// Keep a minority category usable too: one minimum-width card plus the
+	// row's 2px padding on each side. Below this budget retain real clipping.
+	constexpr unsigned int categoryMinimum = 84u;
+	if (audioCount && midiCount && budget >= categoryMinimum * 2u)
+		audioWidth = std::clamp(audioWidth, categoryMinimum, budget - categoryMinimum);
+	auto midiWidth = midiCount ? budget - audioWidth : 0u;
+	const auto audioCard = SourceCardWidth(audioWidth, audioCount);
+	const auto midiCard = SourceCardWidth(midiWidth, midiCount);
+	// Shrink category viewports to their occupied cards before right-aligning the group.
+	const auto occupiedWidth = [](unsigned int count, unsigned int card) {
+		return count ? count * card + (count - 1u) * GuiStackPanelParams::PanelRowSpacing + 4u : 0u;
+	};
+	audioWidth = std::min(audioWidth, occupiedWidth(audioCount, audioCard));
+	midiWidth = std::min(midiWidth, occupiedWidth(midiCount, midiCard));
+	const bool sourceScrolls = audioWidth < occupiedWidth(audioCount, audioCard) || midiWidth < occupiedWidth(midiCount, midiCard);
+	const int desiredRowHeight = static_cast<int>(_SourceButtonHeight + 4u + (sourceScrolls ? _SourceScrollBarHeight : 0u));
+	rowHeight = std::min(rowHeight, desiredRowHeight);
+	topHeight = rowHeight + 2 * padding;
+	// Keep the same right anchor, but stop the background growing beyond its contents.
+	topWidth = std::min(topWidth, static_cast<int>(audioWidth + midiWidth) + categoryGap + labelWidth + 2 * padding);
+	_topStrip->SetPosition({ railX - static_cast<int>(_SourcePanelGap) - topWidth, std::max(0, height - marginY - topHeight) });
+	_topStrip->SetSize({ static_cast<unsigned int>(topWidth), static_cast<unsigned int>(topHeight) });
+	_topStripBorder->SetSize({ static_cast<unsigned int>(topWidth), static_cast<unsigned int>(topHeight) });
+	_topSourceRow->SetSize({ audioWidth + midiWidth + static_cast<unsigned int>(categoryGap), static_cast<unsigned int>(rowHeight) });
+	for (size_t i = 0; i < _sourceWidgets.size(); ++i)
+	{
+		const auto cardWidth = _sourceEndpoints[i].Kind == io::RigFileRouting::SourceKind::Adc ? audioCard : midiCard;
+		auto& widgets = _sourceWidgets[i];
+		widgets.Button->SetSize({ cardWidth, _SourceButtonHeight });
+		widgets.Socket->SetPosition({ static_cast<int>(cardWidth / 2u) - static_cast<int>(_SocketSize / 2u), 0 });
+		for (unsigned char line = 0; line < 2; ++line)
+			if (auto label = widgets.Button->TryGetChild(line))
+				label->SetSize({ cardWidth > 20u ? cardWidth - 20u : 0u, (_SourceButtonHeight - 4u) / 2u });
+	}
+	const auto layoutCategory = [rowHeight](const std::shared_ptr<GuiStackPanel>& row, const std::shared_ptr<GuiScrollPanel>& scroll,
+		unsigned int count, unsigned int cardWidth, unsigned int viewportWidth)
+	{
+		if (!row || !scroll) return;
+		const auto contentWidth = count ? count * cardWidth + (count - 1u) * GuiStackPanelParams::PanelRowSpacing + 4u : 0u;
+		row->SetPadding(2u, 2u);
+		row->SetSize({ contentWidth, _SourceButtonHeight + 4u });
+		row->ComputeLayout();
+		scroll->SetSize({ viewportWidth, static_cast<unsigned int>(rowHeight) });
+		scroll->SetVisible(viewportWidth > 0 && rowHeight > 0);
+	};
+	layoutCategory(_topInputRow, _topAudioScroll, audioCount, audioCard, audioWidth);
+	layoutCategory(_topMidiRow, _topMidiScroll, midiCount, midiCard, midiWidth);
+	_topSourceRow->SetPosition({ topWidth - padding - static_cast<int>(_topSourceRow->GetSize().Width), topHeight - padding - rowHeight });
+	if (auto header = _topStrip->TryGetChild(0u))
+	{
+		header->SetPosition({ _topSourceRow->Position().X - labelWidth, topHeight - padding - 28 });
+		header->SetSize({ static_cast<unsigned int>(labelWidth), 22u });
+		header->SetVisible(labelWidth > 0 && rowHeight >= 28);
+	}
+	_topSourceRow->ComputeLayout();
+	_triggerList->ComputeLayout();
+	const int statusWidth = GuiStyle::StatusBarWidth(width);
+	const int statusHeight = std::min(GuiStyle::StatusBarHeight, height);
+	_statusPanel->SetPosition({ 0, 0 });
+	_statusPanel->SetSize({ static_cast<unsigned int>(width), static_cast<unsigned int>(statusHeight) });
+	_statusPanel->SetVisible(width > 0 && statusHeight > 0);
+	_routingStatusLabel->SetPosition({ width - statusWidth, std::max(0, (statusHeight - 22) / 2) });
+	_routingStatusLabel->SetSize({ static_cast<unsigned int>(GuiStyle::StatusColumnWidth(statusWidth)), 22u });
+	_routingStatusLabel->SetVisible(statusWidth > 0 && statusHeight >= 22);
 	if (_revealNewestTrigger && !_triggerNames.empty())
 	{
 		_RevealTrigger(_triggerNames.size() - 1u);
 		_revealNewestTrigger = false;
 	}
-
 	_cablesDirty = true;
 }
-
 bool GuiHud::_InitCableShader(ResourceLib& resourceLib)
 {
 	auto shaderOpt = resourceLib.GetResource("cable");
@@ -845,10 +982,8 @@ void GuiHud::_DrawCables(base::DrawContext& ctx)
 	const auto program = shader->GetId();
 	glUseProgram(program);
 	shader->SetUniforms(glCtx);
-	glUniform4fv(glGetUniformLocation(program, "CableControlPoints"),
-		static_cast<GLint>(_cableControlPoints.size()),
-		reinterpret_cast<const GLfloat*>(_cableControlPoints.data()));
-	glUniform1i(glGetUniformLocation(program, "CableCount"), static_cast<GLint>(_cableColors.size()));
+	const auto pointsUniform = glGetUniformLocation(program, "CableControlPoints");
+	const auto countUniform = glGetUniformLocation(program, "CableCount");
 	glUniform1i(glGetUniformLocation(program, "SegmentCount"), _CableSegments);
 	glBindVertexArray(_cableVertexArray);
 
@@ -866,11 +1001,18 @@ void GuiHud::_DrawCables(base::DrawContext& ctx)
 		}
 
 		glLineWidth(width);
-		glUniform4fv(colorUniform,
-			static_cast<GLint>(_cableRenderColors.size()),
-			reinterpret_cast<const GLfloat*>(_cableRenderColors.data()));
-		glDrawArraysInstanced(GL_LINE_STRIP, 0, _CableSegments,
-			static_cast<GLsizei>(_cableRenderColors.size()));
+		// cable.vert has 64 control points: four per curve. Retaining clipped
+		// connections must not overflow that uniform array in populated scenes.
+		for (size_t first = 0; first < _cableRenderColors.size(); first += _CableBatchSize)
+		{
+			const auto count = static_cast<GLsizei>(std::min(_CableBatchSize, _cableRenderColors.size() - first));
+			glUniform4fv(pointsUniform, count * 4,
+				reinterpret_cast<const GLfloat*>(_cableControlPoints.data() + first * 4));
+			glUniform4fv(colorUniform, count,
+				reinterpret_cast<const GLfloat*>(_cableRenderColors.data() + first));
+			glUniform1i(countUniform, count);
+			glDrawArraysInstanced(GL_LINE_STRIP, 0, _CableSegments, count);
+		}
 	};
 
 	drawPass(6.5f, 0.52f, 0.95f);
@@ -893,7 +1035,7 @@ actions::ActionResult GuiHud::_BeginCableDrag(Position2d point)
 	_UpdateCableHover(point);
 	std::vector<CableInteraction::Endpoint> endpoints;
 	std::vector<CableInteraction::Cable> cables;
-	_BuildInteractionGeometry(endpoints, cables);
+	BuildInteractionGeometry(endpoints, cables);
 	_FilterCableHits(endpoints, cables, point);
 	const auto canEditTrigger = [this](size_t triggerIndex) { return _CanEditTrigger(triggerIndex); };
 
@@ -918,6 +1060,7 @@ actions::ActionResult GuiHud::_BeginCableDrag(Position2d point)
 			cable.Route.Kind == CableInteraction::RouteKind::Capture ? cable.Start.Source : std::nullopt,
 			point,
 			std::nullopt };
+		_cableDrag->FromCable = true;
 	}
 	else if (const auto endpointIndex = CableInteraction::HitEndpoint(endpoints, point, _SocketHitRadius); endpointIndex.has_value())
 	{
@@ -968,6 +1111,12 @@ void GuiHud::_CancelCableDrag()
 	_cablesDirty = true;
 }
 
+void GuiHud::ClearPointerState()
+{
+	GuiPanel::ClearPointerState();
+	if (_cableDrag) _CancelCableDrag();
+}
+
 void GuiHud::SetLoopEditorMode(bool enabled)
 {
 	if (_loopEditorMode == enabled) return;
@@ -999,10 +1148,15 @@ void GuiHud::_DrawCableSockets(base::DrawContext& ctx)
 {
 	std::vector<CableInteraction::Endpoint> endpoints;
 	std::vector<CableInteraction::Cable> cables;
-	_BuildInteractionGeometry(endpoints, cables);
+	BuildInteractionGeometry(endpoints, cables);
 	for (const auto& anchor : _stationAnchors)
 	{
-		if (anchor.screenPos.X < -1000)
+		if (!anchor.ScreenPosition)
+			continue;
+		const auto root = GlobalPosition();
+		const auto point = CableInteraction::ResolveBoundary(*anchor.ScreenPosition - glm::dvec2{ root.X, root.Y },
+			{ 0, 0, static_cast<int>(GetSize().Width), static_cast<int>(GetSize().Height) });
+		if (!point || point->Clipped)
 			continue;
 		const bool revealed = _cableRevealHeld || std::any_of(cables.begin(), cables.end(),
 			[this, &anchor](const auto& cable) {
@@ -1010,8 +1164,8 @@ void GuiHud::_DrawCableSockets(base::DrawContext& ctx)
 					cable.Finish.StationIndex == anchor.StationIndex && _CableVisible(cable);
 			});
 		_stationSocketIcon->SetVisible(!_loopEditorMode || revealed);
-		_stationSocketIcon->SetPosition({ anchor.screenPos.X - static_cast<int>(_SocketSize / 2u),
-			anchor.screenPos.Y - static_cast<int>(_SocketSize / 2u) });
+		_stationSocketIcon->SetPosition({ point->Position.X - static_cast<int>(_SocketSize / 2u),
+			point->Position.Y - static_cast<int>(_SocketSize / 2u) });
 		const auto highlighted = _hoveredCableEndpoint.has_value() && !_hoveredCableRoute.has_value() &&
 			_hoveredCableEndpoint->Kind == CableInteraction::EndpointKind::Station &&
 			_hoveredCableEndpoint->StationIndex == anchor.StationIndex;
@@ -1030,11 +1184,20 @@ void GuiHud::_DrawCableSockets(base::DrawContext& ctx)
 			_hoveredCableRoute->TriggerIndex == cable.Route.TriggerIndex &&
 			_hoveredCableRoute->Kind == cable.Route.Kind &&
 			_hoveredCableRoute->RouteIndex == cable.Route.RouteIndex;
-		_cableEndIcon->SetTint(cable.Route.Kind == CableInteraction::RouteKind::Capture
+		_cableEndIcon->SetSize(endpoint.Continuation ? Size2d{ 8u, 3u } : Size2d{ _CableEndSize, _CableEndSize });
+		_cableEndIcon->SetTint(endpoint.Continuation ? glm::vec3(0.55f, 0.60f, 0.65f) : cable.Route.Kind == CableInteraction::RouteKind::Capture
 			? glm::vec3(0.86f, 0.24f, 0.26f) : glm::vec3(0.92f, 0.79f, 0.20f));
-		_cableEndIcon->SetHighlighted(selected);
-		_cableEndIcon->SetPosition({ endpoint.Position.X - static_cast<int>(_CableEndSize / 2u),
-			endpoint.Position.Y - static_cast<int>(_CableEndSize / 2u) });
+		_cableEndIcon->SetHighlighted(selected && !endpoint.Continuation);
+		const auto iconSize = _cableEndIcon->GetSize();
+		auto iconPos = Position2d{ endpoint.Position.X - static_cast<int>(iconSize.Width / 2u),
+			endpoint.Position.Y - static_cast<int>(iconSize.Height / 2u) };
+		if (endpoint.Continuation && endpoint.HitBounds)
+		{
+			const auto bounds = *endpoint.HitBounds;
+			iconPos.X = std::clamp(iconPos.X, bounds.Left, std::max(bounds.Left, bounds.Right - static_cast<int>(iconSize.Width)));
+			iconPos.Y = std::clamp(iconPos.Y, bounds.Bottom, std::max(bounds.Bottom, bounds.Top - static_cast<int>(iconSize.Height)));
+		}
+		_cableEndIcon->SetPosition(iconPos);
 		_cableEndIcon->Draw(ctx);
 	};
 	for (const auto& cable : cables)
@@ -1045,15 +1208,15 @@ void GuiHud::_DrawCableSockets(base::DrawContext& ctx)
 			cable.Finish.Kind != CableInteraction::EndpointKind::TriggerOutput)
 			drawEnd(cable, CableInteraction::End::Finish);
 	}
-	const auto drawSourceEnds = [&ctx, &cables, &drawEnd](const std::shared_ptr<GuiScrollPanel>& scroll,
+	const auto drawSourceEnds = [this, &ctx, &cables, &drawEnd](const std::shared_ptr<GuiScrollPanel>& scroll,
 		CableInteraction::EndpointKind kind)
 	{
 		if (!scroll)
 			return;
-		auto clipPos = scroll->GlobalPosition();
-		clipPos.Y += static_cast<int>(scroll->GetSize().Height - scroll->ViewportHeight());
+		const auto clip = _ContentClip(scroll);
 		auto& glCtx = dynamic_cast<GlDrawContext&>(ctx);
-		glCtx.PushScissorRect(clipPos, { scroll->ViewportWidth(), scroll->ViewportHeight() });
+		glCtx.PushScissorRect({ clip.Left, clip.Bottom }, {
+			static_cast<unsigned int>(clip.Right - clip.Left), static_cast<unsigned int>(clip.Top - clip.Bottom) });
 		for (const auto& cable : cables)
 			if (cable.Start.Kind == kind)
 				drawEnd(cable, CableInteraction::End::Start);
@@ -1064,8 +1227,9 @@ void GuiHud::_DrawCableSockets(base::DrawContext& ctx)
 	if (_triggerScroll)
 	{
 		auto& glCtx = dynamic_cast<GlDrawContext&>(ctx);
-		glCtx.PushScissorRect(_triggerScroll->GlobalPosition(),
-			{ _triggerScroll->ViewportWidth(), _triggerScroll->ViewportHeight() });
+		const auto clip = _ContentClip(_triggerScroll);
+		glCtx.PushScissorRect({ clip.Left, clip.Bottom }, {
+			static_cast<unsigned int>(clip.Right - clip.Left), static_cast<unsigned int>(clip.Top - clip.Bottom) });
 		for (const auto& cable : cables)
 		{
 			if (cable.Start.Kind == CableInteraction::EndpointKind::TriggerInput ||
@@ -1155,8 +1319,7 @@ void GuiHud::_OpenDeleteConfirmation(size_t triggerIndex)
 	const auto& name = _displayedRig.Triggers[triggerIndex].Name;
 	_deletePopup->SetTitle("Delete trigger?");
 	_deletePopup->SetBodyLines({ "Delete " + name + " and all of its routes?" });
-	_deletePopup->SetPosition({ std::max(0, static_cast<int>(GetSize().Width / 2u) - 230),
-		std::max(0, static_cast<int>(GetSize().Height / 2u) - 105) });
+	_deletePopup->FitToViewport(GetSize());
 	_popupManager->Open(_deletePopup, shared_from_this());
 }
 
@@ -1218,6 +1381,13 @@ actions::ActionResult GuiHud::OnAction(actions::TouchAction action)
 
 actions::ActionResult GuiHud::OnAction(actions::TouchMoveAction action)
 {
+	// The engaged editor forwards HUD moves before Scene's ordinary capture
+	// routing. Handle native mouse capture loss here as well as via pointer clear.
+	if (_cableDrag && action.Touch == actions::TouchAction::TOUCH_MOUSE && action.MouseButtonsDown == 0u)
+	{
+		ClearPointerState();
+		return { true, {}, {}, actions::ACTIONRESULT_DEFAULT, nullptr, {} };
+	}
 	if (_cableDrag && (_RoutingEditAvailability() != RoutingEditAvailability::Ready ||
 		(_cableDrag->Route.TriggerIndex < _triggers.size() && !_CanEditTrigger(_cableDrag->Route.TriggerIndex))))
 		_CancelCableDrag();
@@ -1230,7 +1400,7 @@ actions::ActionResult GuiHud::OnAction(actions::TouchMoveAction action)
 	}
 	std::vector<CableInteraction::Endpoint> endpoints;
 	std::vector<CableInteraction::Cable> cables;
-	_BuildInteractionGeometry(endpoints, cables);
+	BuildInteractionGeometry(endpoints, cables);
 	std::erase_if(endpoints, [this](const auto& endpoint) {
 		return (endpoint.TriggerIndex && endpoint.Kind != CableInteraction::EndpointKind::Station &&
 			!_CanEditTrigger(*endpoint.TriggerIndex)) ||
@@ -1249,7 +1419,7 @@ void GuiHud::_UpdateCableHover(Position2d point)
 	_cableHoverPoint = point;
 	std::vector<CableInteraction::Endpoint> endpoints;
 	std::vector<CableInteraction::Cable> cables;
-	_BuildInteractionGeometry(endpoints, cables);
+	BuildInteractionGeometry(endpoints, cables);
 	_FilterCableHits(endpoints, cables, point);
 	// In the editor only sockets reveal cables; cable hover cannot sustain reveal.
 	if (_loopEditorMode && !_cableRevealHeld) cables.clear();
@@ -1358,6 +1528,12 @@ std::vector<GuiHud::CableRoute> GuiHud::BuildCableRoutes(const engine::RoutingGr
 	return routes;
 }
 
+Rect2d GuiHud::_ContentClip(const std::shared_ptr<GuiScrollPanel>& scroll) const
+{
+	return scroll ? scroll->EffectiveContentRect(Rect2d{ 0, 0,
+		static_cast<int>(GetSize().Width), static_cast<int>(GetSize().Height) }.Translated(GlobalPosition())) : Rect2d{};
+}
+
 bool GuiHud::_SourceVisible(size_t index) const
 {
 	if (index >= _sourceEndpoints.size() || index >= _sourceWidgets.size())
@@ -1366,54 +1542,100 @@ bool GuiHud::_SourceVisible(size_t index) const
 		? _topAudioScroll : _topMidiScroll;
 	if (!scroll)
 		return false;
-	const auto center = _sourceWidgets[index].Socket->GlobalPosition();
-	const auto origin = scroll->GlobalPosition();
-	const int socketCenterX = center.X + static_cast<int>(_SocketSize / 2u);
+	const auto center = _sourceWidgets[index].Socket->GlobalPosition() +
+		Position2d{ static_cast<int>(_SocketSize / 2u), static_cast<int>(_SocketSize / 2u) };
+	const auto clip = _ContentClip(scroll);
 	// Keep the whole hit target within its own viewport at the scroll edges.
-	return socketCenterX >= origin.X + static_cast<int>(_SocketHitRadius) &&
-		socketCenterX < origin.X + static_cast<int>(scroll->ViewportWidth()) - static_cast<int>(_SocketHitRadius);
+	return clip.Contains(center) && center.X >= clip.Left + static_cast<int>(_SocketHitRadius) &&
+		center.X < clip.Right - static_cast<int>(_SocketHitRadius);
 }
 
-void GuiHud::_BuildInteractionGeometry(std::vector<CableInteraction::Endpoint>& endpoints,
+void GuiHud::BuildInteractionGeometry(std::vector<CableInteraction::Endpoint>& endpoints,
 	std::vector<CableInteraction::Cable>& cables) const
 {
 	endpoints.clear();
 	cables.clear();
 	const auto rootPos = GlobalPosition();
+	std::vector<CableInteraction::Endpoint> sources;
+	sources.reserve(_sourceWidgets.size());
 	for (size_t i = 0u; i < _sourceWidgets.size() && i < _sourceEndpoints.size(); ++i)
 	{
-		if (!_SourceVisible(i))
-			continue;
 		const auto& source = _sourceEndpoints[i];
-		endpoints.push_back({ source.Kind == io::RigFileRouting::SourceKind::Adc
+		sources.push_back({ source.Kind == io::RigFileRouting::SourceKind::Adc
 			? CableInteraction::EndpointKind::AdcSource : CableInteraction::EndpointKind::MidiSource,
 			_ElementCenter(_sourceWidgets[i].Socket),
-			std::nullopt, std::nullopt, {}, source, source.Available });
+			std::nullopt, std::nullopt, {}, source, source.Available,
+			_ContentClip(source.Kind == io::RigFileRouting::SourceKind::Adc ? _topAudioScroll : _topMidiScroll)
+				.Translated({ -rootPos.X, -rootPos.Y }) });
+		if (_SourceVisible(i))
+			endpoints.push_back(sources.back());
 	}
 
 	std::vector<CableInteraction::Endpoint> triggerInputs(_triggerWidgets.size());
 	std::vector<CableInteraction::Endpoint> triggerOutputs(_triggerWidgets.size());
 	std::vector<bool> triggerInputVisible(_triggerWidgets.size(), true);
 	std::vector<bool> triggerOutputVisible(_triggerWidgets.size(), true);
-	const auto scrollPos = _triggerScroll ? _triggerScroll->GlobalPosition() : utils::Position2d{};
-	const int scrollBottom = scrollPos.Y - rootPos.Y;
-	const int scrollTop = scrollBottom + (_triggerScroll ? static_cast<int>(_triggerScroll->ViewportHeight()) : 0);
+	const auto triggerClip = _ContentClip(_triggerScroll).Translated({ -rootPos.X, -rootPos.Y });
 	for (size_t i = 0u; i < _triggerWidgets.size(); ++i)
 	{
 		triggerInputs[i] = { CableInteraction::EndpointKind::TriggerInput,
 			_ElementCenter(_triggerWidgets[i].InputSocket), i };
 		triggerOutputs[i] = { CableInteraction::EndpointKind::TriggerOutput,
 			_ElementCenter(_triggerWidgets[i].OutputSocket), i };
-		triggerInputVisible[i] = !_triggerScroll ||
-			(triggerInputs[i].Position.Y >= scrollBottom && triggerInputs[i].Position.Y <= scrollTop);
-		triggerOutputVisible[i] = !_triggerScroll ||
-			(triggerOutputs[i].Position.Y >= scrollBottom && triggerOutputs[i].Position.Y <= scrollTop);
+		triggerInputs[i].HitBounds = triggerClip;
+		triggerOutputs[i].HitBounds = triggerClip;
+		triggerInputVisible[i] = triggerClip.Contains(triggerInputs[i].Position);
+		triggerOutputVisible[i] = triggerClip.Contains(triggerOutputs[i].Position);
 		if (triggerInputVisible[i])
 			endpoints.push_back(triggerInputs[i]);
 		if (triggerOutputVisible[i])
 			endpoints.push_back(triggerOutputs[i]);
 	}
 
+	const auto stationEnds = _BuildStationEndpoints(endpoints);
+
+	for (const auto& trigger : _routingGraph)
+	{
+		if (trigger.TriggerIndex >= triggerInputs.size())
+			continue;
+		// Connections come from routing identity, independent of socket visibility.
+		{
+			const auto pinY = triggerInputs[trigger.TriggerIndex].Position.Y;
+			const auto ys = CableInteraction::Spread(pinY - _TriggerInputFanHalfHeight,
+				pinY + _TriggerInputFanHalfHeight, trigger.Sources.size());
+			for (size_t routeIndex = 0u; routeIndex < trigger.Sources.size(); ++routeIndex)
+			{
+				const auto& source = trigger.Sources[routeIndex];
+				const auto sourceEndpoint = std::find_if(sources.begin(), sources.end(), [&source](const auto& endpoint)
+				{
+					return endpoint.Source.has_value() && endpoint.Source->Kind == source.Kind &&
+						endpoint.Source->AdcChannel == source.AdcChannel && endpoint.Source->MidiDevice == source.MidiDevice;
+				});
+				if (sourceEndpoint == sources.end())
+					continue;
+				auto input = triggerInputs[trigger.TriggerIndex];
+				input.ActualPosition = CableInteraction::FannedPoint(
+					glm::dvec2{ input.Position.X, input.Position.Y }, ys[routeIndex] - pinY, false, triggerClip);
+				input.Continuation = !triggerInputVisible[trigger.TriggerIndex];
+				cables.push_back({ { _displayedRevision, trigger.TriggerIndex,
+					CableInteraction::RouteKind::Capture, routeIndex }, *sourceEndpoint, input });
+			}
+		}
+		if (trigger.TriggerIndex < stationEnds.size() &&
+			stationEnds[trigger.TriggerIndex].has_value())
+			cables.push_back({ { _displayedRevision, trigger.TriggerIndex,
+				CableInteraction::RouteKind::Station, 0u }, triggerOutputs[trigger.TriggerIndex],
+				stationEnds[trigger.TriggerIndex].value() });
+	}
+	_FanSourceCableEnds(sources, cables);
+	_PresentCableEnds(cables);
+}
+
+std::vector<std::optional<CableInteraction::Endpoint>> GuiHud::_BuildStationEndpoints(
+	std::vector<CableInteraction::Endpoint>& endpoints) const
+{
+	std::vector<std::optional<CableInteraction::Endpoint>> stationEnds(_triggerWidgets.size());
+	const auto rootPos = GlobalPosition();
 	std::vector<std::vector<size_t>> stationTriggers(_stationAnchors.size());
 	for (const auto& trigger : _routingGraph)
 		if (trigger.TriggerIndex < _triggerWidgets.size() && trigger.StationIndex.has_value())
@@ -1426,59 +1648,45 @@ void GuiHud::_BuildInteractionGeometry(std::vector<CableInteraction::Endpoint>& 
 				stationTriggers[static_cast<size_t>(std::distance(_stationAnchors.begin(), anchor))].push_back(trigger.TriggerIndex);
 		}
 
-	std::vector<std::optional<CableInteraction::Endpoint>> stationEnds(_triggerWidgets.size());
 	for (size_t anchorIndex = 0u; anchorIndex < _stationAnchors.size(); ++anchorIndex)
 	{
 		const auto& anchor = _stationAnchors[anchorIndex];
-		if (anchor.screenPos.X < -1000)
+		if (!anchor.ScreenPosition)
 			continue;
-		const auto xs = CableInteraction::Spread(anchor.screenPos.X - 7, anchor.screenPos.X + 7,
+		const auto offsets = CableInteraction::Spread(-7, 7,
 			stationTriggers[anchorIndex].size());
+		const Rect2d window{ 0, 0, static_cast<int>(GetSize().Width), static_cast<int>(GetSize().Height) };
+		const auto actual = *anchor.ScreenPosition - glm::dvec2{ rootPos.X, rootPos.Y };
+		const auto base = CableInteraction::ResolveBoundary(actual, window);
+		if (!base)
+			continue;
 		for (size_t i = 0u; i < stationTriggers[anchorIndex].size(); ++i)
 		{
+			const auto fanned = CableInteraction::FannedPoint(actual, offsets[i], true, window);
+			const auto point = CableInteraction::ResolveBoundary(fanned, window);
+			if (!point)
+				continue;
 			CableInteraction::Endpoint endpoint{ CableInteraction::EndpointKind::Station,
-				{ xs[i], anchor.screenPos.Y }, stationTriggers[anchorIndex][i], anchor.StationIndex, anchor.StationName };
+				point->Position, stationTriggers[anchorIndex][i], anchor.StationIndex, anchor.StationName,
+				{}, true, window, base->Clipped || point->Clipped, fanned };
 			stationEnds[stationTriggers[anchorIndex][i]] = endpoint;
-			endpoints.push_back(endpoint);
+			if (!endpoint.Continuation)
+				endpoints.push_back(endpoint);
 		}
-		endpoints.push_back({ CableInteraction::EndpointKind::Station,
-			anchor.screenPos, std::nullopt, anchor.StationIndex, anchor.StationName });
+		const auto point = CableInteraction::ResolveBoundary(actual, window);
+		if (point && !point->Clipped)
+			endpoints.push_back({ CableInteraction::EndpointKind::Station,
+				point->Position, std::nullopt, anchor.StationIndex, anchor.StationName, {}, true, window });
 	}
 
-	for (const auto& trigger : _routingGraph)
-	{
-		if (trigger.TriggerIndex >= triggerInputs.size())
-			continue;
-		// Keep the cable fan centred on the visible socket, even while scrolling.
-		if (triggerInputVisible[trigger.TriggerIndex])
-		{
-			const auto pinY = triggerInputs[trigger.TriggerIndex].Position.Y;
-			const auto ys = CableInteraction::Spread(pinY - _TriggerInputFanHalfHeight,
-				pinY + _TriggerInputFanHalfHeight, trigger.Sources.size());
-			for (size_t routeIndex = 0u; routeIndex < trigger.Sources.size(); ++routeIndex)
-			{
-				const auto& source = trigger.Sources[routeIndex];
-				const auto sourceEndpoint = std::find_if(endpoints.begin(), endpoints.end(), [&source](const auto& endpoint)
-				{
-					return endpoint.Source.has_value() && endpoint.Source->Kind == source.Kind &&
-						endpoint.Source->AdcChannel == source.AdcChannel && endpoint.Source->MidiDevice == source.MidiDevice;
-				});
-				if (sourceEndpoint == endpoints.end())
-					continue;
-				auto input = triggerInputs[trigger.TriggerIndex];
-				input.Position.Y = ys[routeIndex];
-				cables.push_back({ { _displayedRevision, trigger.TriggerIndex,
-					CableInteraction::RouteKind::Capture, routeIndex }, *sourceEndpoint, input });
-			}
-		}
-		if (triggerOutputVisible[trigger.TriggerIndex] && trigger.TriggerIndex < stationEnds.size() &&
-			stationEnds[trigger.TriggerIndex].has_value())
-			cables.push_back({ { _displayedRevision, trigger.TriggerIndex,
-				CableInteraction::RouteKind::Station, 0u }, triggerOutputs[trigger.TriggerIndex],
-				stationEnds[trigger.TriggerIndex].value() });
-	}
+	return stationEnds;
+}
+
+void GuiHud::_FanSourceCableEnds(const std::vector<CableInteraction::Endpoint>& sources,
+	std::vector<CableInteraction::Cable>& cables)
+{
 	// Each source cable gets its own visible end within the parent socket.
-	for (const auto& sourceEndpoint : endpoints)
+	for (const auto& sourceEndpoint : sources)
 	{
 		if (!sourceEndpoint.Source.has_value())
 			continue;
@@ -1493,8 +1701,32 @@ void GuiHud::_BuildInteractionGeometry(std::vector<CableInteraction::Endpoint>& 
 		const auto xs = CableInteraction::Spread(sourceEndpoint.Position.X - 7,
 			sourceEndpoint.Position.X + 7, routeIndices.size());
 		for (size_t i = 0u; i < routeIndices.size(); ++i)
-			cables[routeIndices[i]].Start.Position.X = xs[i];
+		{
+			auto& start = cables[routeIndices[i]].Start;
+			start.ActualPosition = CableInteraction::FannedPoint(
+				glm::dvec2{ sourceEndpoint.Position.X, sourceEndpoint.Position.Y },
+				xs[i] - sourceEndpoint.Position.X, true, *sourceEndpoint.HitBounds);
+			start.Continuation = !sourceEndpoint.HitBounds->Contains(sourceEndpoint.Position);
+		}
 	}
+}
+
+void GuiHud::_PresentCableEnds(std::vector<CableInteraction::Cable>& cables)
+{
+	const auto present = [](CableInteraction::Endpoint& endpoint)
+	{
+		const auto actual = endpoint.ActualPosition.value_or(glm::dvec2{ endpoint.Position.X, endpoint.Position.Y });
+		const auto point = endpoint.HitBounds ? CableInteraction::ResolveBoundary(actual, *endpoint.HitBounds) : std::nullopt;
+		if (!point)
+			return false;
+		endpoint.ActualPosition = actual;
+		endpoint.Position = point->Position;
+		endpoint.Continuation = endpoint.Continuation || point->Clipped;
+		return true;
+	};
+	// An empty effective viewport has no presentation. The routing graph remains
+	// authoritative and unchanged, and will produce curves when space returns.
+	std::erase_if(cables, [&present](auto& cable) { return !present(cable.Start) || !present(cable.Finish); });
 }
 
 void GuiHud::_RebuildCableVertices()
@@ -1505,7 +1737,20 @@ void GuiHud::_RebuildCableVertices()
 	const glm::vec4 triggerToStationColor(0.92f, 0.79f, 0.20f, 0.88f);
 	std::vector<CableInteraction::Endpoint> endpoints;
 	std::vector<CableInteraction::Cable> cables;
-	_BuildInteractionGeometry(endpoints, cables);
+	BuildInteractionGeometry(endpoints, cables);
+	bool previewRenderable = true;
+	if (_cableDrag && _cableDrag->FromCable)
+	{
+		const auto current = std::find_if(cables.begin(), cables.end(), [this](const auto& cable)
+		{
+			const auto& route = _cableDrag->Route;
+			return cable.Route.Revision == route.Revision && cable.Route.TriggerIndex == route.TriggerIndex &&
+				cable.Route.Kind == route.Kind && cable.Route.RouteIndex == route.RouteIndex;
+		});
+		previewRenderable = current != cables.end();
+		if (previewRenderable)
+			_cableDrag->Fixed = _cableDrag->MovingEnd == CableInteraction::End::Start ? current->Finish : current->Start;
+	}
 	for (const auto& cable : cables)
 	{
 		if (!_CableVisible(cable))
@@ -1526,7 +1771,7 @@ void GuiHud::_RebuildCableVertices()
 			selected ? glm::vec4(glm::min(glm::vec3(triggerToStationColor) * 1.3f, glm::vec3(1.0f)), 1.0f)
 			: triggerToStationColor);
 	}
-	if (_cableDrag.has_value())
+	if (_cableDrag.has_value() && previewRenderable)
 	{
 		const auto preview = CableInteraction::Preview(_cableDrag.value());
 		if (_cableDrag->Route.Kind == CableInteraction::RouteKind::Station)
@@ -1555,25 +1800,8 @@ void GuiHud::_AppendCurve(const utils::Position2d& start,
 	const utils::Position2d& end,
 	const glm::vec4& color)
 {
-	const float x0 = static_cast<float>(start.X);
-	const float y0 = static_cast<float>(start.Y);
-	const float x3 = static_cast<float>(end.X);
-	const float y3 = static_cast<float>(end.Y);
-
-	// Departure tangent: leave the source button heading straight down.
-	const float vertDrop = std::max(50.0f, (y3 - y0) * 0.55f);
-	const float cp1x = x0;
-	const float cp1y = y0 + vertDrop;
-
-	// Arrival tangent: arrive at the trigger button heading straight right (from the left).
-	const float horizPull = std::max(50.0f, (x3 - x0) * 0.40f);
-	const float cp2x = x3 - horizPull;
-	const float cp2y = y3;
-
-	_cableControlPoints.push_back(glm::vec4(x0, y0, 0.0f, 0.0f));
-	_cableControlPoints.push_back(glm::vec4(cp1x, cp1y, 0.0f, 0.0f));
-	_cableControlPoints.push_back(glm::vec4(cp2x, cp2y, 0.0f, 0.0f));
-	_cableControlPoints.push_back(glm::vec4(x3, y3, 0.0f, 0.0f));
+	for (const auto& point : CableInteraction::CurveControls(CableInteraction::RouteKind::Capture, start, end))
+		_cableControlPoints.emplace_back(point.x, point.y, 0.0f, 0.0f);
 	_cableColors.push_back(color);
 }
 
@@ -1581,88 +1809,80 @@ void GuiHud::_AppendStationCurve(const utils::Position2d& start,
 	const utils::Position2d& end,
 	const glm::vec4& color)
 {
-	const float x0 = static_cast<float>(start.X);
-	const float y0 = static_cast<float>(start.Y);
-	const float x3 = static_cast<float>(end.X);
-	const float y3 = static_cast<float>(end.Y);
-
-	// Departure tangent: leave the trigger button horizontally toward the station.
-	const float horizPull = std::max(50.0f, std::abs(x0 - x3) * 0.45f);
-	const float cp1x = x0 - horizPull;
-	const float cp1y = y0;
-
-	// Arrival tangent: arrive at the station vertically from the trigger's Y-side.
-	const float vertDrop = std::max(50.0f, std::abs(y0 - y3) * 0.45f);
-	const float cp2x = x3;
-	const float cp2y = y3 + (y0 < y3 ? -vertDrop : vertDrop);
-
-	_cableControlPoints.push_back(glm::vec4(x0, y0, 0.0f, 0.0f));
-	_cableControlPoints.push_back(glm::vec4(cp1x, cp1y, 0.0f, 0.0f));
-	_cableControlPoints.push_back(glm::vec4(cp2x, cp2y, 0.0f, 0.0f));
-	_cableControlPoints.push_back(glm::vec4(x3, y3, 0.0f, 0.0f));
+	for (const auto& point : CableInteraction::CurveControls(CableInteraction::RouteKind::Station, start, end))
+		_cableControlPoints.emplace_back(point.x, point.y, 0.0f, 0.0f);
 	_cableColors.push_back(color);
 }
-
 std::shared_ptr<GuiLabel> GuiHud::_MakeHeader(const std::string& text,
 	unsigned int width,
 	unsigned int horizontalInset) const
 {
 	auto params = GuiLabelParams::PanelHeader(text, width);
+	params.Ellipsize = true;
 	params.TextInsetX = static_cast<int>(horizontalInset);
 	return std::make_shared<GuiLabel>(params);
 }
 
+void GuiHud::_OpenSourceIdentity(const std::string& identity)
+{
+	if (!_popupManager || GetSize().Width == 0u || GetSize().Height == 0u) return;
+	_sourceIdentity = identity;
+	_sourceInfoLabel->SetString(identity);
+	_LayoutSourceIdentity();
+	_sourceInfoScroll->SetScrollOffset(0);
+	_CancelCableDrag();
+	_popupManager->Open(_sourceInfoPanel, shared_from_this());
+}
+
+void GuiHud::_LayoutSourceIdentity()
+{
+	const auto width = std::min(480u, GetSize().Width);
+	const auto height = std::min(112u, GetSize().Height);
+	_sourceInfoPanel->SetSize({ width, height });
+	_sourceInfoPanel->SetPosition({ static_cast<int>((GetSize().Width - width) / 2u),
+		static_cast<int>((GetSize().Height - height) / 2u) });
+	const unsigned int padding = std::min(12u, std::min(width, height) / 2u);
+	const unsigned int inner = width - 2u * padding;
+	if (auto header = _sourceInfoPanel->TryGetChild(0u))
+	{
+		header->SetPosition({ static_cast<int>(padding), std::max(0, static_cast<int>(height) - static_cast<int>(padding) - 22) });
+		header->SetSize({ inner, 22u });
+		header->SetVisible(height >= 46u);
+	}
+	_sourceInfoScroll->SetPosition({ static_cast<int>(padding), static_cast<int>(padding) });
+	_sourceInfoScroll->SetSize({ inner, height > 46u ? height - 46u : 0u });
+	const auto measured = static_cast<unsigned int>(std::ceil(_sourceInfoLabel->MeasureText(_sourceIdentity).value_or(0.0f)));
+	_sourceInfoLabel->SetSize({ std::max(inner, measured + 4u), 28u });
+	// Content extents changed in place; refresh metrics without replacing the tree.
+	_sourceInfoScroll->SetSize(_sourceInfoScroll->GetSize());
+}
+
 std::shared_ptr<GuiButton> GuiHud::_MakeSourceButton(const std::string& text,
 	const glm::vec3& tint,
-	unsigned int width) const
+	unsigned int width, bool midi, bool available)
 {
 	auto buttonParams = GuiButtonParams::PanelButton(width);
 	buttonParams.Texture = "rounded_but";
 	buttonParams.OverTexture = "rounded_but";
 	buttonParams.DownTexture = "rounded_but";
 	buttonParams.Size = { width, _SourceButtonHeight };
-	buttonParams.MinSize = { 64u, _SourceButtonHeight };
-	buttonParams.TintColor = glm::vec3(0.02f, 0.02f, 0.02f);
-	auto button = std::make_shared<GuiButton>(buttonParams);
-
-	auto trim = [](std::string value)
+	buttonParams.MinSize = { 80u, _SourceButtonHeight };
+	buttonParams.TintColor = GuiStyle::Graphite() * 0.5f + tint * 0.025f;
+	auto button = std::make_shared<GuiHudActionButton>(buttonParams, [this, text]() { _OpenSourceIdentity(text); });
+	const auto identity = available ? text : text.substr(0, text.size() - std::string(" (unavailable)").size());
+	const auto heading = available ? (midi ? "MIDI" : "Audio") : "Offline";
+	const auto name = midi ? identity.substr(5) : identity;
+	const unsigned int lineHeight = (_SourceButtonHeight - 4u) / 2u;
+	for (unsigned int line = 0; line < 2; ++line)
 	{
-		while (!value.empty() && std::isspace(static_cast<unsigned char>(value.front())))
-			value.erase(value.begin());
-		while (!value.empty() && std::isspace(static_cast<unsigned char>(value.back())))
-			value.pop_back();
-		return value;
-	};
-
-	const std::size_t maxLineChars = 8u;
-	std::string line1 = text;
-	std::string line2;
-	if (text.size() > maxLineChars)
-	{
-		std::size_t split = text.rfind(' ', maxLineChars);
-		if (split == std::string::npos || split == 0u)
-			split = maxLineChars;
-		line1 = trim(text.substr(0, split));
-		line2 = trim(text.substr(split));
-		if (line2.size() > maxLineChars)
-			line2 = trim(line2.substr(0, maxLineChars));
-	}
-
-	GuiLabelParams line1Params = GuiLabelParams::PanelScrollRow(line1, 0u);
-	line1Params.Position = { 4, 18 };
-	line1Params.Size = { width - 8u, 14u };
-	button->AddChild(std::make_shared<GuiLabel>(line1Params));
-
-	if (!line2.empty())
-	{
-		GuiLabelParams line2Params = GuiLabelParams::PanelScrollRow(line2, 0u);
-		line2Params.Position = { 4, 4 };
-		line2Params.Size = { width - 8u, 14u };
-		button->AddChild(std::make_shared<GuiLabel>(line2Params));
+		auto labelParams = GuiLabelParams::PanelScrollRow(line == 0 ? heading : name, 0u);
+		labelParams.Position = { 4, static_cast<int>(2u + (1u - line) * lineHeight) };
+		labelParams.Size = { width > 20u ? width - 20u : 0u, lineHeight };
+		labelParams.Ellipsize = true;
+		button->AddChild(std::make_shared<GuiLabel>(labelParams));
 	}
 	return button;
 }
-
 std::shared_ptr<GuiButton> GuiHud::_MakeTriggerButton(const std::string& text,
 	std::weak_ptr<engine::Trigger> trigger) const
 {
@@ -1677,9 +1897,9 @@ std::shared_ptr<GuiButton> GuiHud::_MakeTriggerButton(const std::string& text,
 
 	const int socketPadding = 4;
 	const int pedalSizeW = static_cast<int>(_TriggerButtonWidth * 0.45) - socketPadding;
-	const int pedalSizeH = static_cast<int>(_TriggerButtonHeight * 0.70f);
+	const int pedalSizeH = static_cast<int>(_TriggerButtonHeight) - 38;
 	const int pedalPosX = 16;
-	const int pedalPosY = 14;
+	const int pedalPosY = 8;
 
 	base::GuiElementParams activateParams;
 	activateParams.Position = { pedalPosX, pedalPosY };
@@ -1705,13 +1925,11 @@ std::shared_ptr<GuiButton> GuiHud::_MakeTriggerButton(const std::string& text,
 	button->AddChild(std::make_shared<GuiHudTriggerPedal>(ditchParams, std::move(trigger), false,
 		_displayedRevision, _acceptTriggerInput));
 
-	GuiLabelParams labelParams = GuiLabelParams::PanelScrollRow(text, 12u);
-	const int approxCharWidth = 8;
-	const unsigned int textWidth = std::min(_TriggerButtonWidth - 16u,
-		static_cast<unsigned int>(std::max(40, static_cast<int>(text.size()) * approxCharWidth + 8)));
-	const int textPosX = std::max(0, (static_cast<int>(_TriggerButtonWidth) - static_cast<int>(textWidth)) / 2);
-	labelParams.Position = { textPosX, static_cast<int>(_TriggerButtonHeight) - static_cast<int>(GuiLabelParams::RowHeight) + 12 };
-	labelParams.Size = { textWidth, GuiLabelParams::RowHeight };
+	GuiLabelParams labelParams = GuiLabelParams::PanelScrollRow(text, 0u);
+	labelParams.Position = { static_cast<int>(_SocketSize + 4u), static_cast<int>(_TriggerButtonHeight) - 24 };
+	labelParams.Size = { _TriggerButtonWidth - _SocketSize - _TriggerControlSize - 12u, 18u };
+	labelParams.Ellipsize = true;
+	labelParams.CenterHorizontally = true;
 	button->AddChild(std::make_shared<GuiLabel>(labelParams));
 	return button;
 }

@@ -44,7 +44,7 @@ void GuiNumericInput::SetValue(double value, bool notify)
 
 double GuiNumericInput::_Clamp(double v) const
 {
-	return std::clamp(v, _min, _max);
+	return std::isfinite(v) ? std::clamp(v, _min, _max) : _value;
 }
 
 std::string GuiNumericInput::_Format(double v) const
@@ -69,8 +69,10 @@ void GuiNumericInput::_OnCommit()
 {
 	try
 	{
-		const double parsed = std::stod(_text);
-		_ApplyValue(parsed, false);
+		size_t consumed = 0;
+		const double parsed = std::stod(_text, &consumed);
+		if (consumed == _text.size() && std::isfinite(parsed)) _ApplyValue(parsed, false);
+		else SetText(_Format(_value), false);
 	}
 	catch (...)
 	{
@@ -83,6 +85,9 @@ void GuiNumericInput::_OnCommit()
 
 ActionResult GuiNumericInput::OnAction(TouchAction action)
 {
+	if (action.Touch == TouchAction::TOUCH_MOUSE && action.Index == 4)
+		return ActionResult::NoAction();
+	if (!IsVisible() || !IsEnabled()) return ActionResult::NoAction();
 	if (TouchAction::TouchState::TOUCH_DOWN == action.State && HitTest(action.Position))
 	{
 		_dragging = true;
@@ -100,6 +105,7 @@ ActionResult GuiNumericInput::OnAction(TouchAction action)
 
 ActionResult GuiNumericInput::OnAction(TouchMoveAction action)
 {
+	if (!IsVisible() || !IsEnabled()) return ActionResult::NoAction();
 	if (_dragging)
 	{
 		const int dy = action.Position.Y - _dragStart.Y;
@@ -114,4 +120,17 @@ ActionResult GuiNumericInput::OnAction(TouchMoveAction action)
 	}
 
 	return GuiTextBox::OnAction(action);
+}
+
+void GuiNumericInput::SynchronizeValueFromOwner(double value)
+{
+	if (HasFocus()) _value = _Clamp(value);
+	else SetValue(value, false);
+}
+
+void GuiNumericInput::ClearPointerState()
+{
+	GuiTextBox::ClearPointerState();
+	_dragging = false;
+	_dragMoved = false;
 }

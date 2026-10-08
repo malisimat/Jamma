@@ -10,7 +10,7 @@ bool GuiFocusManager::RequestFocus(const std::shared_ptr<GuiElement>& element)
 		return element != nullptr;
 
 	if (current)
-		current->ClearFocus();
+		current->FinalizeEdits();
 
 	if (!element)
 	{
@@ -31,7 +31,7 @@ bool GuiFocusManager::RequestFocus(const std::shared_ptr<GuiElement>& element)
 void GuiFocusManager::ClearFocus()
 {
 	if (auto current = _focus.lock())
-		current->ClearFocus();
+		current->FinalizeEdits();
 
 	_focus.reset();
 }

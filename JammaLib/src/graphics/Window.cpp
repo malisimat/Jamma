@@ -330,10 +330,13 @@ int Window::Create(HINSTANCE hInstance, int nCmdShow)
 	glEnable(GL_BLEND);
 	glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 
-	_pickContext.emplace(_config.Size, base::DrawContext::ContextTarget::PICKING);
-	_textureContext.emplace(_config.Size, base::DrawContext::ContextTarget::TEXTURE);
-	_highlightBlurContext.emplace(_config.Size, base::DrawContext::ContextTarget::TEXTURE);
-	_drawContext.emplace(_config.Size, base::DrawContext::ContextTarget::SCREEN);
+	// Keep backing allocations valid even if creation reports an empty client.
+	// Logical dimensions remain the actual client dimensions.
+	const utils::Size2d backingSize{ (std::max)(1u, _config.Size.Width), (std::max)(1u, _config.Size.Height) };
+	_pickContext.emplace(backingSize, base::DrawContext::ContextTarget::PICKING);
+	_textureContext.emplace(backingSize, base::DrawContext::ContextTarget::TEXTURE);
+	_highlightBlurContext.emplace(backingSize, base::DrawContext::ContextTarget::TEXTURE);
+	_drawContext.emplace(backingSize, base::DrawContext::ContextTarget::SCREEN);
 
 	LoadResources();
 	InitScene();
@@ -425,14 +428,10 @@ void Window::SetTrackingMouse(bool tracking)
 
 void Window::Resize(Size2d size)
 {
-	if (HasRelativePointer()) CancelMouseCapture();
-	if (size.Width < 1)
-		size.Width = 1;
-	if (size.Height < 1)
-		size.Height = 1;
+	if (HasRelativePointer() || size.Width == 0 || size.Height == 0) CancelMouseCapture();
 
 	_config.Size = size;
-	if (_config.State == WINDOWED)
+	if (_config.State == WINDOWED && size.Width > 0 && size.Height > 0)
 		_restoreConfig.Size = size;
 	_scene->SetSize(size);
 	_lastHoverObjectId = 0;
@@ -450,6 +449,10 @@ void Window::Resize(Size2d size)
 void Window::ApplyPendingResize()
 {
 	if (!_pendingResize.has_value())
+		return;
+	// Retain the last valid backing contexts while the client is empty. The
+	// next nonempty resize replaces this pending size before drawing resumes.
+	if (_pendingResize->Width == 0 || _pendingResize->Height == 0)
 		return;
 
 	if (!GlDeleteQueue::IsRenderThread())
@@ -495,8 +498,10 @@ void Window::Render()
 	ApplyPendingResize();
 
 	_scene->CommitChanges();
+	if (_config.Size.Width == 0 || _config.Size.Height == 0) return;
 	_scene->UpdateCamera();
 	_scene->InitResources(_resourceLib, false);
+	_scene->AdvanceUiAnimations();
 
 	const bool needsPick = (_hover3dDirty || _forcePick) && _cachedCursorPosition.has_value();
 	if (needsPick)
@@ -574,6 +579,7 @@ void Window::Render()
 
 void Window::Swap()
 {
+	if (_config.Size.Width == 0 || _config.Size.Height == 0) return;
 	SwapBuffers(_dc);
 }
 
@@ -618,16 +624,19 @@ ActionResult Window::OnAction(WindowAction winAction)
 	switch (winAction.WindowEventType)
 	{
 	case WindowAction::SIZE:
-		SetWindowState(Window::WINDOWED);
+		if (!IsFullscreen()) SetWindowState(Window::WINDOWED);
 		Resize(winAction.Size);
 		isEaten = true;
 		break;
 	case WindowAction::SIZE_MINIMISE:
-		SetWindowState(Window::MINIMISED);
+		// Fullscreen must survive minimize/restore; empty client dimensions are
+		// enough to suspend drawing without replacing its window mode.
+		if (!IsFullscreen()) SetWindowState(Window::MINIMISED);
+		Resize(winAction.Size);
 		isEaten = true;
 		break;
 	case WindowAction::SIZE_MAXIMISE:
-		SetWindowState(Window::MAXIMISED);
+		if (!IsFullscreen()) SetWindowState(Window::MAXIMISED);
 		Resize(winAction.Size);
 		isEaten = true;
 		break;
@@ -640,6 +649,7 @@ ActionResult Window::OnAction(WindowAction winAction)
 
 ActionResult Window::OnAction(TouchAction touchAction)
 {
+	if (_config.Size.Width == 0 || _config.Size.Height == 0) return ActionResult::NoAction();
 	if (HasRelativePointer() && touchAction.Touch == TouchAction::TOUCH_MOUSE
 		&& touchAction.State == TouchAction::TOUCH_UP && touchAction.Index == _relativeButton)
 	{
@@ -689,6 +699,7 @@ ActionResult Window::OnAction(TouchAction touchAction)
 
 ActionResult Window::OnAction(TouchMoveAction touchAction)
 {
+	if (_config.Size.Width == 0 || _config.Size.Height == 0) return ActionResult::NoAction();
 	_cachedCursorPosition = touchAction.Position;
 	_cachedCursorModifiers = touchAction.Modifiers;
 	if (!touchAction.IsRelative) _hover3dDirty = true;
@@ -918,50 +929,23 @@ LRESULT CALLBACK Window::WindowProcedure(HWND hWindow, UINT message, WPARAM wPar
 	}
 	case WM_SIZE:
 	{
-		if (!window->IsFullscreen())
+		WindowAction winAction;
+		switch (wParam)
 		{
-			WindowAction winAction;
-
-			switch (wParam)
-			{
-			case SIZE_MINIMIZED:
-				winAction.WindowEventType = WindowAction::SIZE_MINIMISE;
-				break;
-			case SIZE_MAXIMIZED:
-				winAction.WindowEventType = WindowAction::SIZE_MAXIMISE;
-				break;
-			default:
-				winAction.WindowEventType = WindowAction::SIZE;
-				break;
-			}
-			winAction.Size = { LOWORD(lParam), HIWORD(lParam) };
-			window->OnAction(winAction);
-			return 0;
+		case SIZE_MINIMIZED:
+			winAction.WindowEventType = WindowAction::SIZE_MINIMISE;
+			break;
+		case SIZE_MAXIMIZED:
+			winAction.WindowEventType = WindowAction::SIZE_MAXIMISE;
+			break;
+		default:
+			winAction.WindowEventType = WindowAction::SIZE;
+			break;
 		}
-
-		// If the device is not nullptr and the WM_SIZE message is not a
-		// SIZE_MINIMIZED event, store the new dimensions so we can
-		// reset the device once sizing has finished.
-		//if (!window->IsFullscreen())
-		//{
-		//	if (/*(_device() != nullptr) &&*/ (wParam != SIZE_MINIMIZED))
-		//	{
-		//		WindowState windowState = WINDOWED;
-
-		//		if (wParam == SIZE_MAXIMIZED)
-		//			windowState = MAXIMISED;
-
-		//		Size2d size = { LOWORD(lParam), HIWORD(lParam) };
-		//		window->Resize(size, windowState);
-
-		//		/*if (wParam == SIZE_MAXIMIZED)
-		//		WinMan->Reset();
-		//		else if ((wParam == SIZE_RESTORED) && (!_resizing))
-		//		WinMan->Reset();*/
-		//	}
-		//}
+		winAction.Size = { LOWORD(lParam), HIWORD(lParam) };
+		window->OnAction(winAction);
+		return 0;
 	}
-	break;
 	case WM_MOVE:
 	{
 		if (window->HasRelativePointer()) window->CancelMouseCapture();

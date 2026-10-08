@@ -52,6 +52,10 @@ namespace gui
 		unsigned int ViewportWidth() const;
 		unsigned int ViewportHeight() const;
 		bool IsScrollBarVisible() const;
+		// Local content bounds shared by drawing, socket clipping and input.
+		utils::Rect2d ContentRect() const;
+		// Global bounds after ancestor scroll clips and the actual window clip.
+		utils::Rect2d EffectiveContentRect(utils::Rect2d windowRect) const;
 
 		using base::GuiElement::OnAction;
 		virtual void SetSize(utils::Size2d size) override;
@@ -62,9 +66,11 @@ namespace gui
 		virtual bool RouteHitTest(utils::Position2d localPos) override;
 		virtual std::shared_ptr<base::GuiElement> FindTopmostDescendant(utils::Position2d localPos) override;
 		virtual void ClearPointerState() override;
+		virtual void FinalizeEdits() override;
 
 	protected:
 		virtual void _InitResources(resources::ResourceLib& resourceLib, bool forceInit) override;
+		virtual void _ReleaseResources() override;
 
 	private:
 		unsigned int _ContentHeight() const;

@@ -29,6 +29,8 @@ GuiLabelParams GuiTextBox::_MakeLabelParams(const GuiTextBoxParams& params)
 {
 	GuiLabelParams lp;
 	lp.String = params.Text;
+	lp.VerticalAlign = GuiTextVerticalAlign::Center;
+	lp.ClipText = true;
 	const GuiTextFrame frame = GuiLabelParams::ResolveTextFrame(
 		params.Size.Width,
 		params.Size.Height,
@@ -50,7 +52,6 @@ GuiTextBox::GuiTextBox(GuiTextBoxParams params) :
 	_editing(false),
 	_label(std::make_shared<GuiLabel>(_MakeLabelParams(params))),
 	_caretQuad(_MakeCaretParams(params.CaretTexture)),
-	_font(),
 	_receiver(params.Receiver)
 {
 }
@@ -168,10 +169,10 @@ void GuiTextBox::_MoveCaret(int delta, bool select)
 
 unsigned int GuiTextBox::_CaretFromLocalX(int localX) const
 {
-	auto font = _font.lock();
+	auto font = _label->ResolvedFont();
 	if (!font || _text.empty())
 		return (unsigned int)_text.size();
-	const float target = (float)(localX - (int)_padding);
+	const float target = static_cast<float>(localX - _label->Position().X);
 
 	unsigned int best = 0;
 	float bestDist = std::abs(target);
@@ -199,9 +200,9 @@ void GuiTextBox::_SyncLabel()
 
 void GuiTextBox::_NotifyReceiver(bool commit)
 {
-	auto receiver = _receiver.lock();
+	auto receiver = GetReceiver();
 	if (!receiver)
-		receiver = GetReceiver();
+		receiver = _receiver.lock();
 	if (!receiver)
 		return;
 
@@ -222,6 +223,12 @@ void GuiTextBox::_OnTextChanged()
 void GuiTextBox::_OnCommit()
 {
 	_NotifyReceiver(true);
+}
+
+void GuiTextBox::FinalizeEdits()
+{
+	if (HasFocus()) _OnCommit();
+	GuiElement::FinalizeEdits();
 }
 
 // --------------------------------------------------------------------------
@@ -337,17 +344,35 @@ std::optional<char> GuiTextBox::VkToChar(unsigned int vk, bool shift)
 void GuiTextBox::_InitResources(ResourceLib& resourceLib, bool forceInit)
 {
 	GuiElement::_InitResources(resourceLib, forceInit);
+	_label->SetParent(shared_from_this());
 	_label->InitResources(resourceLib, forceInit);
 	_caretQuad.InitResources(resourceLib, forceInit);
+}
 
-	auto fontOpt = resourceLib.GetClosestFontForControlBox(_label->GetSize().Height, 0u);
-	if (fontOpt.has_value())
-		_font = fontOpt.value();
+void GuiTextBox::_ReleaseResources()
+{
+	GuiElement::_ReleaseResources();
+	_label->ReleaseResources();
+	_caretQuad.ReleaseResources();
+}
+
+Rect2d GuiTextBox::ResolveTextBand(Rect2d labelFrame, GuiTextLineFrame line, float firstAdvance, float lastAdvance)
+{
+	if (labelFrame.IsEmpty() || !std::isfinite(firstAdvance) || !std::isfinite(lastAdvance) ||
+		!std::isfinite(line.Bottom) || !std::isfinite(line.Top)) return {};
+	const float left = static_cast<float>(labelFrame.Left), right = static_cast<float>(labelFrame.Right);
+	const float bottom = static_cast<float>(labelFrame.Bottom), top = static_cast<float>(labelFrame.Top);
+	return {
+		static_cast<int>(std::floor(std::clamp(left + firstAdvance, left, right))),
+		static_cast<int>(std::floor(std::clamp(bottom + line.Bottom, bottom, top))),
+		static_cast<int>(std::ceil(std::clamp(left + lastAdvance, left, right))),
+		static_cast<int>(std::ceil(std::clamp(bottom + line.Top, bottom, top)))
+	};
 }
 
 void GuiTextBox::Draw(base::DrawContext& ctx)
 {
-	if (!_isVisible)
+	if (!_isVisible || GetSize().Width == 0u || GetSize().Height == 0u)
 		return;
 
 	// Background (own texture) via base; no tree children attached.
@@ -359,26 +384,35 @@ void GuiTextBox::Draw(base::DrawContext& ctx)
 
 	_label->Draw(ctx);
 
-	auto font = _font.lock();
+	auto font = _label->ResolvedFont();
 	if (font && _hasFocus)
 	{
-		const int labelH = (int)_label->GetSize().Height;
+		const auto labelPosition = _label->Position();
+		const auto labelSize = _label->GetSize();
+		const Rect2d labelFrame{ labelPosition.X, labelPosition.Y,
+			labelPosition.X + static_cast<int>(labelSize.Width), labelPosition.Y + static_cast<int>(labelSize.Height) };
+		const auto line = _label->LineFrame().value();
+		auto drawBand = [this, &ctx](Rect2d band)
+		{
+			if (band.IsEmpty()) return;
+			_caretQuad.SetSize({ static_cast<unsigned int>(band.Right - band.Left), static_cast<unsigned int>(band.Top - band.Bottom) });
+			_caretQuad.SetPosition({ band.Left, band.Bottom });
+			_caretQuad.Draw(ctx);
+		};
 
 		// Selection underline.
 		if (HasSelection())
 		{
 			const float x0 = font->MeasureString(_text.substr(0, SelectionStart()));
 			const float x1 = font->MeasureString(_text.substr(0, SelectionStart() + SelectionLength()));
-			_caretQuad.SetSize({ (unsigned int)std::max(1.0f, x1 - x0), 2u });
-			_caretQuad.SetPosition({ (int)_padding + (int)x0, (int)_padding + labelH - 2 });
-			_caretQuad.Draw(ctx);
+			auto underline = ResolveTextBand(labelFrame, line, x0, x1);
+			underline.Top = std::min(underline.Top, underline.Bottom + 2);
+			drawBand(underline);
 		}
 
 		// Caret.
 		const float cx = font->MeasureString(_text.substr(0, _caret));
-		_caretQuad.SetSize({ 2u, (unsigned int)labelH });
-		_caretQuad.SetPosition({ (int)_padding + (int)cx, (int)_padding });
-		_caretQuad.Draw(ctx);
+		drawBand(ResolveTextBand(labelFrame, line, cx, cx + 2.0f));
 	}
 
 	glCtx.PopMvp();

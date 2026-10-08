@@ -28,6 +28,8 @@ namespace graphics
 
 		GlDrawContext(utils::Size2d size, ContextTarget target);
 		~GlDrawContext();
+		GlDrawContext(const GlDrawContext&) = delete;
+		GlDrawContext& operator=(const GlDrawContext&) = delete;
 
 	public:
 		auto GetContextType() -> base::DrawContext::ContextType

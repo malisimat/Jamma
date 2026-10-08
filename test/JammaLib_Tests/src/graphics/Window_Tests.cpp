@@ -1,4 +1,4 @@
-
+#define GLEW_STATIC
 #include "gtest/gtest.h"
 #include "resources/ResourceLib.h"
 #include "graphics/Window.h"
@@ -60,6 +60,48 @@ TEST(Window, LostCaptureSendsZeroButtonMoveExactlyOnce)
 	EXPECT_EQ(0u, scene.LastMove->MouseButtonsDown);
 	EXPECT_EQ(320, scene.LastMove->Position.X);
 	EXPECT_FALSE(window.CancelMouseCapture());
+}
+
+TEST(Window, EmptyClientKeepsActualLayoutAndRejectsPointerInput)
+{
+	CaptureLossScene scene; ResourceLib resources; Window window(scene, resources);
+	for (const auto empty : { utils::Size2d{ 0, 0 }, utils::Size2d{ 0, 480 }, utils::Size2d{ 640, 0 } }) {
+		window.Resize({ 640, 480 });
+		actions::TouchAction down; down.Touch = actions::TouchAction::TOUCH_MOUSE;
+		down.State = actions::TouchAction::TOUCH_DOWN; down.Index = 0; down.Position = { 320, 240 };
+		window.OnAction(down); scene.LastMove.reset();
+		window.Resize(empty);
+		EXPECT_EQ(empty.Width, window.GetSize().Width); EXPECT_EQ(empty.Height, window.GetSize().Height);
+		EXPECT_EQ(empty.Width, scene.GetSize().Width); EXPECT_EQ(empty.Height, scene.GetSize().Height);
+		EXPECT_EQ(640u, window.GetRestoreConfig().Size.Width); EXPECT_EQ(480u, window.GetRestoreConfig().Size.Height);
+		ASSERT_TRUE(scene.LastMove); EXPECT_EQ(0u, scene.LastMove->MouseButtonsDown);
+		EXPECT_FALSE(window.CancelMouseCapture());
+		scene.LastTouch.reset(); scene.LastMove.reset();
+		EXPECT_FALSE(window.OnAction(down).IsEaten);
+		actions::TouchMoveAction move; move.Touch = actions::TouchAction::TOUCH_MOUSE;
+		move.Position = down.Position; EXPECT_FALSE(window.OnAction(move).IsEaten);
+		EXPECT_FALSE(scene.LastTouch); EXPECT_FALSE(scene.LastMove);
+	}
+	window.Resize({ 640, 480 });
+	actions::TouchAction down; down.State = actions::TouchAction::TOUCH_DOWN;
+	window.OnAction(down); EXPECT_TRUE(scene.LastTouch);
+	window.CancelMouseCapture();
+}
+
+TEST(Window, MinimizeAndRestorePreserveFullscreenModeAndWindowedRestoreSize)
+{
+	CaptureLossScene scene; ResourceLib resources; Window window(scene, resources);
+	for (const auto mode : { Window::WINDOWED, Window::FULLSCREEN }) {
+		window.SetWindowState(Window::WINDOWED); window.Resize({ 640, 480 });
+		window.SetWindowState(mode);
+		actions::WindowAction size; size.WindowEventType = actions::WindowAction::SIZE_MINIMISE; size.Size = { 0, 0 };
+		EXPECT_TRUE(window.OnAction(size).IsEaten);
+		EXPECT_EQ(mode == Window::FULLSCREEN ? Window::FULLSCREEN : Window::MINIMISED, window.GetConfig().State);
+		EXPECT_EQ(0u, window.GetSize().Width); EXPECT_EQ(0u, scene.GetSize().Height);
+		size.WindowEventType = actions::WindowAction::SIZE; size.Size = { 640, 480 };
+		EXPECT_TRUE(window.OnAction(size).IsEaten); EXPECT_EQ(mode, window.GetConfig().State);
+		EXPECT_EQ(640u, window.GetRestoreConfig().Size.Width); EXPECT_EQ(480u, window.GetRestoreConfig().Size.Height);
+	}
 }
 
 TEST(Window, RelativePointerRequiresNativeForegroundCapture)

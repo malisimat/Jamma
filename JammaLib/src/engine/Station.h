@@ -195,6 +195,7 @@ namespace engine
 		void ReleaseRetiredAudioStates();
 		std::size_t RetiredAudioStateCount() const noexcept { return _retiredAudioStates.size(); }
 		void SetRackVisibility(bool showStationRack, bool showLoopTakeRacks);
+		std::shared_ptr<gui::GuiRack> GetGuiRack() const { return _guiRack; }
 		std::vector<io::JamFile::VstEntry> VstEntries() const;
 		bool AcceptsLiveMidiChannel(std::uint8_t channel) const noexcept;
 		void SetAllowedMidiChannels(const std::vector<int>& channels);

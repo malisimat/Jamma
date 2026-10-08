@@ -20,13 +20,16 @@ LoopGridEditor::LoopGridEditor(Host host, utils::Size2d size) :
 	buttonParams.Position = buttonPos;
 	_button = std::make_shared<gui::GuiButton>(buttonParams);
 	_button->Init();
+	_button->SetVisible(false);
 
 	auto feedbackParams = gui::GuiLabelParams::PanelHeader("", 330u);
+	feedbackParams.Ellipsize = true;
 	feedbackParams.Position = { std::max(0, buttonPos.X - 340), buttonPos.Y + 6 };
 	_feedback = std::make_shared<gui::GuiLabel>(feedbackParams);
 	_feedback->Init();
 
 	auto modeParams = gui::GuiLabelParams::PanelHeader("", 260u);
+	modeParams.Ellipsize = true;
 	modeParams.Position = { std::max(0, buttonPos.X - 340), buttonPos.Y - 20 };
 	_modeLabel = std::make_shared<gui::GuiLabel>(modeParams);
 	_modeLabel->Init();
@@ -121,8 +124,14 @@ void LoopGridEditor::_Layout()
 {
 	const auto pos = _ButtonPosition(_size);
 	_button->SetPosition(pos);
-	_feedback->SetPosition({ std::max(0, pos.X - 340), pos.Y + 6 });
-	_modeLabel->SetPosition({ std::max(0, pos.X - 340), pos.Y - 20 });
+	const int statusWidth = gui::GuiStyle::StatusBarWidth(static_cast<int>(_size.Width));
+	const int statusX = static_cast<int>(_size.Width) - statusWidth;
+	const int statusHeight = std::min(gui::GuiStyle::StatusBarHeight, static_cast<int>(_size.Height));
+	const int messageWidth = gui::GuiStyle::MessageColumnWidth(statusWidth);
+	_feedback->SetPosition({ statusX + gui::GuiStyle::StatusColumnWidth(statusWidth), std::max(0, (statusHeight - 22) / 2) });
+	_feedback->SetSize({ static_cast<unsigned int>(messageWidth), 22u });
+	_feedback->SetVisible(statusHeight >= 22 && messageWidth > 0);
+	_modeLabel->SetVisible(false);
 
 }
 
@@ -1083,7 +1092,7 @@ void LoopGridEditor::UpdateUi(const glm::mat4& viewProjection)
 		_button->SetText(showsClose ? "Close editor (Esc)" : "Edit loop (E)");
 		_buttonShowsClose = showsClose;
 	}
-	_button->SetVisible(State::Closing != _state);
+	_button->SetVisible(false);
 }
 
 void LoopGridEditor::ApplyToModels()
@@ -1119,14 +1128,13 @@ void LoopGridEditor::ApplyToModels()
 void LoopGridEditor::Draw(base::DrawContext& ctx)
 {
 	_feedback->Draw(ctx);
-	if (IsOpen())
-		_modeLabel->Draw(ctx);
+
 	if (IsOpen() && !_midiLoop.expired())
 	{
 		_channelLabel->Draw(ctx);
 		_channelInput->Draw(ctx);
 	}
-	_button->Draw(ctx);
+
 	if (IsOpen() && _blend > 0.72f)
 	{
 		for (auto& tick : _timeTicks) tick->Draw(ctx);
@@ -1137,7 +1145,7 @@ void LoopGridEditor::Draw(base::DrawContext& ctx)
 
 bool LoopGridEditor::_HandleButton(actions::TouchAction action)
 {
-	if (State::Closing == _state)
+	if (!_button->IsVisible() || State::Closing == _state)
 		return false;
 	const auto inside = _button->HitTest(_button->GlobalToLocal(action.Position));
 	if (actions::TouchAction::TOUCH_DOWN == action.State && 0 == action.Index

@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <functional>
 #include <memory>
+#include <vector>
 #include "../utils/CommonTypes.h"
 #include "../actions/GuiAction.h"
 #include "GuiElement.h"
@@ -22,6 +23,8 @@ namespace gui
 		static constexpr unsigned int WideWidth = 320u;
 		static constexpr unsigned int DefaultMinWidth = 36u;
 		static constexpr unsigned int DefaultDragWidth = 10u;
+		static constexpr double RackMinDecibels = -48.0;
+		static constexpr double RackMaxDecibels = 20.0;
 
 		GuiSliderParams() :
 			base::GuiElementParams(0, DrawableParams{ "" },
@@ -42,7 +45,8 @@ namespace gui
 			DragOutTexture(""),
 			DragControlOffset({ 0,0 }),
 			DragControlSize({ 1,1 }),
-			DragGap({ 0,0 })
+			DragGap({ 0,0 }),
+			ScaleMarksEnabled(false)
 		{
 			GuiPassThrough = false;
 		}
@@ -60,7 +64,8 @@ namespace gui
 			DragOutTexture(""),
 			DragControlOffset({ 0,0 }),
 			DragControlSize({ 1,1 }),
-			DragGap({ 0,0 })
+			DragGap({ 0,0 }),
+			ScaleMarksEnabled(false)
 		{
 			GuiPassThrough = false;
 		}
@@ -95,10 +100,23 @@ namespace gui
 			SLIDER_HORIZONTAL
 		};
 
+		enum class SliderScale
+		{
+			Linear,
+			Decibels
+		};
+
+		// Values remain linear gain; only handle travel uses decibels.
+		double ValueToFraction(double value) const;
+		double FractionToValue(double fraction) const;
+
 	public:
 		SliderOrientation Orientation;
 		double Min;
 		double Max;
+		SliderScale Scale = SliderScale::Linear;
+		// Decibel faders reserve fraction zero for Min (normally silence).
+		double MinDecibels = -60.0;
 		unsigned int Steps;
 		double InitValue;
 		std::string DragTexture;
@@ -108,13 +126,36 @@ namespace gui
 		utils::Position2d DragControlOffset;
 		utils::Size2d DragControlSize;
 		utils::Size2d DragGap;
+		bool ScaleMarksEnabled;
 	};
 
 	class GuiSlider :
 		public base::GuiElement
 	{
 	public:
+		enum class ScaleMarkKind
+		{
+			Endpoint,
+			Unity,
+			Intermediate
+		};
+
+		struct ScaleMark
+		{
+			int CentreY;
+			double Gain;
+			ScaleMarkKind Kind;
+		};
+
+		struct ScaleTrackBounds
+		{
+			utils::Rect2d Bounds;
+			bool Valid = false;
+		};
+
 		GuiSlider(GuiSliderParams guiParams);
+		static std::vector<ScaleMark> BuildScaleMarks(const GuiSliderParams& params, utils::Size2d size);
+		static ScaleTrackBounds BuildScaleTrackBounds(const GuiSliderParams& params, utils::Size2d size);
 
 	public:
 		using base::GuiElement::OnAction;
@@ -132,6 +173,9 @@ namespace gui
 		virtual void Draw(base::DrawContext& ctx) override;
 		virtual actions::ActionResult OnAction(actions::TouchAction action) override;
 		virtual actions::ActionResult OnAction(actions::TouchMoveAction action) override;
+		virtual bool RouteHitTest(utils::Position2d localPos) override;
+		virtual std::shared_ptr<base::GuiElement> FindTopmostDescendant(utils::Position2d localPos) override;
+		virtual void ApplyHoverState(bool inside) override;
 		virtual void ClearPointerState() override;
 		virtual bool Undo(std::shared_ptr<base::ActionUndo> undo) override;
 		virtual bool Redo(std::shared_ptr<base::ActionUndo> undo) override;
@@ -156,6 +200,12 @@ namespace gui
 		static utils::Position2d CalcDragPos(GuiSliderParams params, utils::Size2d size, double value);
 		static unsigned int CalcDragLength(GuiSliderParams params, utils::Size2d size);
 		void OnValueChange(bool bypassUpdate);
+		void _EnsureScaleLayout();
+		static void _BuildScaleMarks(const GuiSliderParams& params, utils::Size2d size, std::vector<ScaleMark>& marks);
+		void _UpdateScaleImageWidths(unsigned int panelWidth);
+		static graphics::ImageParams _MakeScaleImageParams(const std::string& texture, utils::Size2d size);
+		bool _ScaleLayoutKeyMatches() const;
+		void _StoreScaleLayoutKey();
 
 	private:
 		GuiSliderParams _sliderParams;
@@ -163,6 +213,26 @@ namespace gui
 		utils::Position2d _initClickPos;
 		utils::Position2d _initDragPos;
 		base::GuiElement _dragElement;
+		graphics::Image _scaleUnityImage;
+		graphics::Image _scaleEndpointImage;
+		graphics::Image _scaleIntermediateImage;
+		graphics::Image _scaleTrackImage;
+		std::vector<ScaleMark> _scaleMarks;
+		ScaleTrackBounds _scaleTrackBounds;
+		bool _scaleLayoutValid;
+		utils::Size2d _scaleLayoutSize;
+		utils::Size2d _scaleLayoutHandleSize;
+		utils::Position2d _scaleLayoutHandleOffset;
+		utils::Size2d _scaleLayoutGap;
+		GuiSliderParams::SliderOrientation _scaleLayoutOrientation;
+		GuiSliderParams::SliderScale _scaleLayoutScale;
+		double _scaleLayoutMin;
+		double _scaleLayoutMax;
+		double _scaleLayoutMinDecibels;
+		bool _scaleLayoutEnabled;
+		unsigned int _scaleImagePanelWidth;
+		utils::Rect2d _scaleAppliedTrackBounds;
+		bool _scaleTrackSizeApplied;
 		double _valueOffset;
 		double _initValue;
 		std::weak_ptr<audio::AudioMixer> _mixer;

@@ -118,6 +118,7 @@ namespace engine
 		void DrawBackground(base::DrawContext& ctx);
 		bool HasSelection() const;
 		void UpdateCamera();
+		void AdvanceUiAnimations();
 
 		virtual void SetSize(utils::Size2d size) override
 		{
@@ -279,6 +280,8 @@ namespace engine
 		void _InitSize();
 		void _UpdateHudStationAnchors();
 		void _UpdateSelection(actions::ActionResultType res);
+		void _UpdateRackVisibilityLocked();
+		void _CollapseRacksLocked();
 		// Selection helpers require _sceneMutex throughout hierarchy access.
 		void _SetSelectionMutedLocked(const std::vector<unsigned char>& path, bool muted);
 		base::Tweakable::TweakState _SelectionTweakStateLocked(const std::shared_ptr<base::GuiElement>& target) const;
@@ -392,6 +395,7 @@ namespace engine
 		std::unique_ptr<gui::GuiLabel> _label;
 		std::unique_ptr<gui::SceneSelector> _selector;
 		std::shared_ptr<gui::GuiMainPanel> _mainPanel;
+		std::shared_ptr<gui::GuiMainPanel> _selectionPanel;
 		std::shared_ptr<gui::GuiHud> _hudPanel;
 		std::vector<std::shared_ptr<base::GuiElement>> _guiChildren;
 		gui::GuiFocusManager _focusManager;
@@ -413,6 +417,10 @@ namespace engine
 		std::weak_ptr<base::GuiElement> _touchDownElement;
 		// Whether the touch sequence started on the HUD panel, recorded at touch-down.
 		bool _touchDownIsHud = false;
+		bool _touchDownIsSettings = false;
+		bool _consumeSettingsRelease = false;
+		void _OnSettingsHidden(const std::shared_ptr<base::GuiElement>& subtree);
+		std::optional<actions::ActionResult> _RouteSettingsTouch(actions::TouchAction action);
 		std::weak_ptr<base::GuiElement> _hoverElement3d;
 		std::vector<unsigned char> _hoverPath3d;
 		std::vector<std::weak_ptr<base::GuiElement>> _hoverPath2d;
@@ -425,6 +433,7 @@ namespace engine
 		engine::QuantiserController _quantisationInteraction;
 		graphics::Camera _camera;
 		std::optional<Time> _lastCameraUpdateTime;
+		std::optional<Time> _lastPanelAnimationTime;
 		std::thread _jobRunner;
 		std::mutex _jobMutex;
 		std::list<actions::JobAction> _jobList;

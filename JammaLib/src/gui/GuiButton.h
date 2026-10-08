@@ -3,6 +3,7 @@
 #include <memory>
 #include "GuiElement.h"
 #include "GuiLabel.h"
+#include "GuiPanel.h"
 #include "ActionReceiver.h"
 
 namespace gui
@@ -12,9 +13,9 @@ namespace gui
 	{
 	public:
 		static constexpr unsigned int DefaultWidth = 102u;
-		static constexpr unsigned int DefaultHeight = 34u;
+		static constexpr unsigned int DefaultHeight = GuiStyle::ControlHeight;
 		static constexpr unsigned int DefaultMinWidth = 36u;
-		static constexpr unsigned int DefaultTextPadding = 10u;
+		static constexpr unsigned int DefaultTextPadding = GuiStyle::TextPadding;
 
 		GuiButtonParams() :
 			base::GuiElementParams(0, DrawableParams{ "" },
@@ -38,6 +39,7 @@ namespace gui
 		{
 			GuiButtonParams params;
 			params.TextureShader = "texture_tinted";
+			params.TintColor = GuiStyle::Control();
 			params.Texture = "rounded_but";
 			params.OverTexture = "rounded_but_over";
 			params.DownTexture = "rounded_but_down";

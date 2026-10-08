@@ -23,10 +23,10 @@ GuiElement::GuiElement(GuiElementParams params) :
 	_index(params.Index),
 	_guiParams(params),
 	_state(STATE_NORMAL),
-	_texture(ImageParams(DrawableParams{ params.Texture }, SizeableParams{ params.Size,params.MinSize }, params.TextureShader, params.Rot90, params.FlipH, params.FlipV)),
-	_overTexture(ImageParams(DrawableParams{ params.OverTexture }, SizeableParams{ params.Size,params.MinSize }, params.TextureShader, params.Rot90, params.FlipH, params.FlipV)),
-	_downTexture(ImageParams(DrawableParams{ params.DownTexture }, SizeableParams{ params.Size,params.MinSize }, params.TextureShader, params.Rot90, params.FlipH, params.FlipV)),
-	_outTexture(ImageParams(DrawableParams{ params.OutTexture }, SizeableParams{ params.Size,params.MinSize }, params.TextureShader, params.Rot90, params.FlipH, params.FlipV)),
+	_texture(ImageParams(DrawableParams{ params.Texture }, SizeableParams{ params.Size,params.MinSize }, params.TextureShader, params.Rot90, params.FlipH, params.FlipV, params.TextureOpacity)),
+	_overTexture(ImageParams(DrawableParams{ params.OverTexture }, SizeableParams{ params.Size,params.MinSize }, params.TextureShader, params.Rot90, params.FlipH, params.FlipV, params.TextureOpacity)),
+	_downTexture(ImageParams(DrawableParams{ params.DownTexture }, SizeableParams{ params.Size,params.MinSize }, params.TextureShader, params.Rot90, params.FlipH, params.FlipV, params.TextureOpacity)),
+	_outTexture(ImageParams(DrawableParams{ params.OutTexture }, SizeableParams{ params.Size,params.MinSize }, params.TextureShader, params.Rot90, params.FlipH, params.FlipV, params.TextureOpacity)),
 	_gestureState(),
 	_children({})
 {
@@ -272,6 +272,13 @@ void GuiElement::ClearPointerState()
 		if (child)
 			child->ClearPointerState();
 	}
+}
+
+void GuiElement::FinalizeEdits()
+{
+	for (auto& child : _children)
+		if (child) child->FinalizeEdits();
+	ClearFocus();
 }
 
 std::vector<JobAction> GuiElement::CommitChanges()
@@ -664,7 +671,7 @@ bool GuiElement::_ChildRectHitTest(Position2d localPos) const
 			continue;
 
 		auto childLocal = child->ParentToLocal(localPos);
-		if (Size2d::RectTest(child->GetSize(), childLocal))
+		if (child->RouteHitTest(childLocal))
 			return true;
 	}
 

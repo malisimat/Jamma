@@ -98,6 +98,7 @@ namespace base
 		std::string DownTexture;
 		std::string OutTexture;
 		std::string TextureShader = "texture";
+		float TextureOpacity = 1.0f;
 		glm::vec3 TintColor;
 		LayoutSizing HorizSizing = LayoutSizing::Fixed;
 		LayoutSizing VertSizing  = LayoutSizing::Fixed;
@@ -198,6 +199,9 @@ namespace base
 		virtual void ApplyExclusiveHoverPoint(utils::Position2d localPos);
 		// Clears transient pointer presentation before popup capture.
 		virtual void ClearPointerState();
+		// Resolve pending edits before hiding a subtree; pointer/capture teardown
+		// remains a separate operation so callers can consume its release.
+		virtual void FinalizeEdits();
 		void _ApplyTextureTint(graphics::GlDrawContext& ctx) const;
 		std::vector<actions::JobAction> CommitChanges();
 		void SetParent(std::shared_ptr<GuiElement> parent);

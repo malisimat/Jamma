@@ -29,6 +29,7 @@ namespace gui
 		// Close the topmost popup. No-op when empty.
 		void Close();
 		void CloseAll();
+		void CloseOwnedBy(const std::shared_ptr<base::GuiElement>& subtree);
 
 		bool IsOpen() const;
 		std::shared_ptr<base::GuiElement> Top() const;

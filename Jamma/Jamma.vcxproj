@@ -70,6 +70,8 @@
     <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
   </ImportGroup>
   <PropertyGroup Label="UserMacros">
+    <!-- Run MSBuild on launch even when only runtime resources changed. -->
+    <DisableFastUpToDateCheck>true</DisableFastUpToDateCheck>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
     <LinkIncremental>true</LinkIncremental>
@@ -242,6 +244,15 @@
     </ProjectReference>
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+  <!-- Resource-only edits must deploy even when the executable does not relink. -->
+  <Target Name="CopyJammaResources" AfterTargets="Build">
+    <ItemGroup>
+      <JammaRuntimeResource Include="$(ProjectDir)resources\**\*.*" />
+    </ItemGroup>
+    <Copy SourceFiles="@(JammaRuntimeResource)"
+          DestinationFiles="@(JammaRuntimeResource->'$(OutDir)resources\%(RecursiveDir)%(Filename)%(Extension)')"
+          SkipUnchangedFiles="true" />
+  </Target>
   <ImportGroup Label="ExtensionTargets">
   </ImportGroup>
 </Project>

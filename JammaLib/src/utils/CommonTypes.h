@@ -1,5 +1,7 @@
 #pragma once
 
+#include <algorithm>
+
 namespace utils
 {
 	struct Position2d
@@ -54,6 +56,32 @@ namespace utils
 				v.X < vMin.X ? vMin.X : v.X > vMax.X ? vMax.X : v.X,
 				v.Y < vMin.Y ? vMin.Y : v.Y > vMax.Y ? vMax.Y : v.Y
 			};
+		}
+	};
+
+	// Bottom-origin, half-open pixel bounds. Empty intersections stay empty.
+	struct Rect2d
+	{
+		int Left = 0;
+		int Bottom = 0;
+		int Right = 0;
+		int Top = 0;
+
+		bool IsEmpty() const { return Right <= Left || Top <= Bottom; }
+		bool Contains(Position2d point) const
+		{
+			return point.X >= Left && point.X < Right && point.Y >= Bottom && point.Y < Top;
+		}
+		Rect2d Translated(Position2d offset) const
+		{
+			return { Left + offset.X, Bottom + offset.Y, Right + offset.X, Top + offset.Y };
+		}
+		Rect2d Intersected(const Rect2d& other) const
+		{
+			const int left = (std::max)(Left, other.Left);
+			const int bottom = (std::max)(Bottom, other.Bottom);
+			return { left, bottom, (std::max)(left, (std::min)(Right, other.Right)),
+				(std::max)(bottom, (std::min)(Top, other.Top)) };
 		}
 	};
 

@@ -2,8 +2,9 @@
 
 in vec4 ColorFRAG;
 out vec4 ColorOUT;
+uniform float Opacity;
 
 void main()
 {
-    ColorOUT = ColorFRAG;
+    ColorOUT = vec4(ColorFRAG.rgb, ColorFRAG.a * Opacity);
 }

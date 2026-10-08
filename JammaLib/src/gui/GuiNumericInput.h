@@ -17,6 +17,7 @@ namespace gui
 		{
 			GuiNumericInputParams params;
 			params.TextureShader = "texture_tinted";
+			params.TintColor = GuiStyle::Control();
 			params.Texture = "rounded_but";
 			params.Size = { width, DefaultHeight };
 			params.MinSize = { DefaultMinWidth, DefaultMinHeight };
@@ -38,6 +39,9 @@ namespace gui
 	public:
 		double Value() const;
 		void SetValue(double value, bool notify = false);
+		// Keep the last owner-applied value without replacing an in-progress edit.
+		void SynchronizeValueFromOwner(double value);
+		virtual void ClearPointerState() override;
 
 		using GuiTextBox::OnAction;
 		virtual actions::ActionResult OnAction(actions::TouchAction action) override;

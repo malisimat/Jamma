@@ -66,6 +66,9 @@ namespace gui
 		static constexpr unsigned int MidiChannelToggleBaseIndex = 100u;
 
 		virtual void SetSize(utils::Size2d size) override;
+		virtual void SetVisible(bool visible) override;
+		void SetMasterControlsVisible(bool visible);
+		bool IsInView(utils::Size2d viewport) const;
 
 		virtual actions::ActionResult OnAction(actions::GuiAction action) override;
 
@@ -91,7 +94,9 @@ namespace gui
 		static const utils::Size2d _RouterToggleSize;
 		static const unsigned int _RouterTogglePaddingBottom;
 		static const utils::Size2d _DragGap;
-		static const utils::Size2d _DragSize;
+		static constexpr unsigned int _MinimumScaleLayoutHeight = 55u;
+		static constexpr unsigned int _DragHeight = 28u;
+		static constexpr unsigned int _DragOverhang = 2u;
 		static const utils::Size2d _MidiChannelToggleSize;
 		static const utils::Size2d _MidiChannelToggleGap;
 		static const unsigned int _MidiChannelPanelPadding;
@@ -111,6 +116,7 @@ namespace gui
 
 	private:
 		bool _receiversInitialized;
+		bool _masterControlsVisible = true;
 		GuiRackParams::RackState _rackState;
 		std::shared_ptr<base::GuiElement> _masterPanel;
 		std::shared_ptr<gui::GuiSlider> _masterSlider;

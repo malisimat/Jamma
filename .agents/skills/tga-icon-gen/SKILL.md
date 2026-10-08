@@ -129,15 +129,21 @@ To get this:
    transparent corner alone does not disprove the source's full-canvas RGB
    fill. The source alpha and the rendered edge behavior are the meaningful
    checks; do not claim that encoded transparent RGB is preserved exactly.
-6. Only after explicit final confirmation that the staged TGAs are accepted,
-   copy them into `Jamma/resources/textures/` using new, non-existing names.
-   Recheck each destination immediately before copying. Copying into the
-   required texture directory is the explicit confirmation point and may
-   replace an existing texture when iteration is intentional. Only after those
-   copies are accepted, add each new file as a line in
-   `Jamma/resources/ResourceList.txt` (plain `1 <name>`; these are not
-   nine-patch backgrounds). Staging and rendering must not mutate
-   `ResourceList.txt`.
+6. After validating the staged TGAs, copy them into
+   `Jamma/resources/textures/` as part of the requested icon work. No separate
+   final confirmation is required unless the user explicitly requests review
+   before installation. Recheck each destination immediately before copying.
+   If it already exists, rename it first to `<name>_previous.tga` in the same
+   directory so the old and new artwork can be compared. If that backup name
+   exists, use the next unused `<name>_previous_2.tga`, `_previous_3.tga`, etc.;
+   never overwrite a backup. Then copy the staged TGA to the intended name
+   and verify the installed file matches the staged output.
+7. Register each installed texture in `Jamma/resources/ResourceList.txt`:
+   use `1 <name>` for fixed-size icons, or
+   `1 <name> ninepatch <borderX> <borderY>` for stretchable textures using the
+   validated slice coordinates. Update an existing entry rather than adding
+   a duplicate. Comparison backups do not need resource entries. Staging and
+   rendering must not mutate `ResourceList.txt`.
 
 ## Notes
 

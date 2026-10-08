@@ -6,6 +6,7 @@
 #include <vector>
 #include "GuiElement.h"
 #include "GuiLabel.h"
+#include "GuiPanel.h"
 #include "GuiPopupManager.h"
 #include "../actions/KeyAction.h"
 #include "../actions/TouchAction.h"
@@ -36,6 +37,7 @@ namespace gui
 
 	protected:
 		virtual void _InitResources(resources::ResourceLib& resourceLib, bool forceInit) override;
+		void _ReleaseResources() override;
 
 	private:
 		int _RowFromLocalY(int localY) const;
@@ -57,11 +59,11 @@ namespace gui
 
 	struct GuiDropDownParams : public base::GuiElementParams
 	{
-		static constexpr unsigned int DefaultHeight = 44u;
+		static constexpr unsigned int DefaultHeight = GuiStyle::ControlHeight;
 		static constexpr unsigned int DefaultMinWidth = 60u;
-		static constexpr unsigned int DefaultMinHeight = 44u;
+		static constexpr unsigned int DefaultMinHeight = GuiStyle::ControlHeight;
 		static constexpr unsigned int DefaultRowHeight = 22u;
-		static constexpr unsigned int DefaultPadding = 10u;
+		static constexpr unsigned int DefaultPadding = GuiStyle::TextPadding;
 
 		GuiDropDownParams()
 		{
@@ -72,6 +74,7 @@ namespace gui
 		{
 			GuiDropDownParams params;
 			params.TextureShader = "texture_tinted";
+			params.TintColor = GuiStyle::Control();
 			params.Texture = "rounded_but";
 			params.Size = { width, DefaultHeight };
 			params.MinSize = { DefaultMinWidth, DefaultMinHeight };
@@ -84,7 +87,8 @@ namespace gui
 		unsigned int             InitIndex        = 0u;
 		unsigned int             RowHeight        = DefaultRowHeight;
 		unsigned int             Padding          = DefaultPadding;
-		std::string              ListTexture      = "rounded_but";
+		std::string              ListTexture      = "rounded_but_on";
+		glm::vec3                ListTintColor    = GuiStyle::Graphite();
 		std::string              HighlightTexture = "blue";
 		std::weak_ptr<base::ActionReceiver> Receiver;
 	};
@@ -116,6 +120,7 @@ namespace gui
 
 	protected:
 		virtual void _InitResources(resources::ResourceLib& resourceLib, bool forceInit) override;
+		void _ReleaseResources() override;
 
 	private:
 		void _Select(int index, bool notify);

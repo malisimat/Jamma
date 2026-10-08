@@ -1,4 +1,5 @@
 #include "GuiPopupManager.h"
+#include <algorithm>
 
 using namespace gui;
 using namespace actions;
@@ -31,6 +32,17 @@ void GuiPopupManager::Close()
 void GuiPopupManager::CloseAll()
 {
 	_popups.clear();
+}
+
+void GuiPopupManager::CloseOwnedBy(const std::shared_ptr<GuiElement>& subtree)
+{
+	if (!subtree) return;
+	std::erase_if(_popups, [&subtree](const auto& popup)
+	{
+		for (auto owner = popup.Owner.lock(); owner; owner = owner->Parent())
+			if (owner == subtree) return true;
+		return false;
+	});
 }
 
 bool GuiPopupManager::IsOpen() const

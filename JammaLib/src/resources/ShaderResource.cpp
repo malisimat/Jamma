@@ -77,6 +77,11 @@ void ShaderResource::SetUniforms(GlDrawContext& ctx)
 				auto vec = std::any_cast<glm::vec3&>(val);
 				glUniform3f(uniform.second, vec.x, vec.y, vec.z);
 			}
+			else if (val.type() == typeid(glm::vec4))
+			{
+				const auto& vec = std::any_cast<const glm::vec4&>(val);
+				glUniform4f(uniform.second, vec.x, vec.y, vec.z, vec.w);
+			}
 			else if (val.type() == typeid(glm::mat4))
 				glUniformMatrix4fv(uniform.second, 1, GL_FALSE, glm::value_ptr(std::any_cast<glm::mat4&>(val)));
 			else if (val.type() == typeid(std::vector<glm::mat4>))
