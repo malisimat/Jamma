@@ -15,9 +15,8 @@ GuiMainPanel::GuiMainPanel(GuiMainPanelParams params) : GuiPanel(params),
 	_guiParams.GuiPassThrough = true;
 	GuiElementParams frameParams;
 	frameParams.GuiPassThrough = false;
-	// The ordinary button texture has a translucent centre. Use its opaque
-	// variant so PanelFillOpacity defines the actual resting fill alpha.
-	frameParams.Texture = "rounded_but_on";
+	// Share the flatter fill texture with the HUD panels.
+	frameParams.Texture = "panel_fill_flat";
 	frameParams.TextureShader = "texture_tinted";
 	frameParams.TintColor = GuiStyle::Graphite();
 	frameParams.TextureOpacity = GuiStyle::PanelFillOpacity;

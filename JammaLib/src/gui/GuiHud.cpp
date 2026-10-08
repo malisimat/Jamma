@@ -442,10 +442,10 @@ void GuiHud::_BuildPanels()
 	GuiElementParams topParams;
 	topParams.Size = { _TopStripWidth, _TopStripHeight };
 	topParams.MinSize = { _TopStripMinWidth, _TopStripHeight };
-	topParams.Texture = "rounded_but_on";
+	topParams.Texture = "panel_fill_flat";
 	topParams.TextureShader = "texture_tinted";
 	topParams.TintColor = GuiStyle::Graphite();
-	topParams.TextureOpacity = GuiStyle::HudFillOpacity;
+	topParams.TextureOpacity = GuiStyle::PanelFillOpacity;
 	_topStrip = std::make_shared<GuiPanel>(topParams);
 	AddChild(_topStrip);
 
@@ -453,7 +453,7 @@ void GuiHud::_BuildPanels()
 	railParams.Size = { _RightRailWidth, _RightRailHeight };
 	railParams.MinSize = { _RightRailWidth, _RightRailMinHeight };
 	railParams.TextureShader = "texture_tinted";
-	railParams.Texture = "rounded_but_on";
+	railParams.Texture = "panel_fill_flat";
 	railParams.TintColor = GuiStyle::Graphite();
 	railParams.TextureOpacity = GuiStyle::HudFillOpacity;
 	_triggerRail = std::make_shared<GuiPanel>(railParams);
@@ -544,6 +544,14 @@ void GuiHud::_BuildTopStrip()
 		_topSourceRow->AddChild(_topMidiScroll);
 	}
 	_topStrip->AddChild(_topSourceRow);
+	GuiElementParams borderParams;
+	borderParams.Texture = "rounded_but_hud_border";
+	borderParams.TextureShader = "texture_tinted";
+	borderParams.TintColor = GuiStyle::Graphite();
+	borderParams.TextureOpacity = GuiStyle::HudBorderOpacity;
+	borderParams.GuiPassThrough = true;
+	_topStripBorder = std::make_shared<GuiPanel>(borderParams);
+	_topStrip->AddChild(_topStripBorder);
 }
 
 void GuiHud::_BuildTriggerRail()
@@ -630,6 +638,14 @@ void GuiHud::_BuildTriggerRail()
 	_statusPanel = std::make_shared<GuiHudStatusPanel>(statusPanelParams);
 	_statusPanel->AddChild(_routingStatusLabel);
 	AddChild(_statusPanel);
+	GuiElementParams borderParams;
+	borderParams.Texture = "rounded_but_hud_border";
+	borderParams.TextureShader = "texture_tinted";
+	borderParams.TintColor = GuiStyle::Graphite();
+	borderParams.TextureOpacity = GuiStyle::HudBorderOpacity;
+	borderParams.GuiPassThrough = true;
+	_triggerRailBorder = std::make_shared<GuiPanel>(borderParams);
+	_triggerRail->AddChild(_triggerRailBorder);
 }
 
 void GuiHud::_RebuildPanels()
@@ -642,12 +658,14 @@ void GuiHud::_RebuildPanels()
 	_triggerWidgets.clear();
 	_inputVus.clear();
 	_topStrip.reset();
+	_topStripBorder.reset();
 	_topSourceRow.reset();
 	_topInputRow.reset();
 	_topMidiRow.reset();
 	_topAudioScroll.reset();
 	_topMidiScroll.reset();
 	_triggerRail.reset();
+	_triggerRailBorder.reset();
 	_triggerScroll.reset();
 	_triggerList.reset();
 	_addTriggerButton.reset();
@@ -776,6 +794,7 @@ void GuiHud::_LayoutPanels()
 	const int railX = std::max(0, width - marginX - railWidth);
 	_triggerRail->SetPosition({ railX, std::min(GuiStyle::StatusBarHeight + 8, height) });
 	_triggerRail->SetSize({ static_cast<unsigned int>(railWidth), static_cast<unsigned int>(railHeight) });
+	_triggerRailBorder->SetSize({ static_cast<unsigned int>(railWidth), static_cast<unsigned int>(railHeight) });
 	_triggerRail->SetVisible(railWidth > 0 && railHeight > 0);
 	const int triggerHeader = std::min(34, railHeight);
 	const int triggerFooter = std::min(static_cast<int>(_TriggerFooterHeight), railHeight - triggerHeader);
@@ -800,6 +819,7 @@ void GuiHud::_LayoutPanels()
 	int topHeight = std::min(static_cast<int>(_TopStripHeight), std::max(0, height - 2 * marginY));
 	_topStrip->SetPosition({ marginX, std::max(0, height - marginY - topHeight) });
 	_topStrip->SetSize({ static_cast<unsigned int>(topWidth), static_cast<unsigned int>(topHeight) });
+	_topStripBorder->SetSize({ static_cast<unsigned int>(topWidth), static_cast<unsigned int>(topHeight) });
 	_topStrip->SetVisible(topWidth > 0 && topHeight > 0);
 	const int padding = std::min(static_cast<int>(_TopStripPadding), std::min(topWidth, topHeight) / 2);
 	const int innerWidth = std::max(0, topWidth - 2 * padding);
@@ -834,6 +854,7 @@ void GuiHud::_LayoutPanels()
 	topWidth = std::min(topWidth, static_cast<int>(audioWidth + midiWidth) + categoryGap + labelWidth + 2 * padding);
 	_topStrip->SetPosition({ railX - static_cast<int>(_SourcePanelGap) - topWidth, std::max(0, height - marginY - topHeight) });
 	_topStrip->SetSize({ static_cast<unsigned int>(topWidth), static_cast<unsigned int>(topHeight) });
+	_topStripBorder->SetSize({ static_cast<unsigned int>(topWidth), static_cast<unsigned int>(topHeight) });
 	_topSourceRow->SetSize({ audioWidth + midiWidth + static_cast<unsigned int>(categoryGap), static_cast<unsigned int>(rowHeight) });
 	for (size_t i = 0; i < _sourceWidgets.size(); ++i)
 	{

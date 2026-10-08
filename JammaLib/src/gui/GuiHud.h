@@ -202,12 +202,14 @@ namespace gui
 
 
 		std::shared_ptr<GuiPanel> _topStrip;
+		std::shared_ptr<GuiPanel> _topStripBorder;
 		std::shared_ptr<GuiStackPanel> _topSourceRow;
 		std::shared_ptr<GuiStackPanel> _topInputRow;
 		std::shared_ptr<GuiStackPanel> _topMidiRow;
 		std::shared_ptr<GuiScrollPanel> _topAudioScroll;
 		std::shared_ptr<GuiScrollPanel> _topMidiScroll;
 		std::shared_ptr<GuiPanel> _triggerRail;
+		std::shared_ptr<GuiPanel> _triggerRailBorder;
 		std::shared_ptr<GuiScrollPanel> _triggerScroll;
 		std::shared_ptr<GuiStackPanel> _triggerList;
 		std::shared_ptr<GuiButton> _addTriggerButton;
