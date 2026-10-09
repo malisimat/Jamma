@@ -1,61 +1,75 @@
-# Control Overlay
+# Quantisation overlay controls
 
-This document describes the overlay control UI shown while the user holds Ctrl.
+Hold **Ctrl** to ease the edit panel in (120 ms). Other scene controls fade out
+and stop receiving input; release restores them over 420 ms. Rapid modifier
+changes continue from the current opacity. Text entry keeps its contextual keys;
+the E editor keeps Ctrl move, pan/zoom and undo/redo gestures.
 
-The overlay is a direct manipulation layer for quantisation settings. Which handles appear, and what they affect, depends on the current depth selection mode, current selection state, and what the pointer is hovering when Ctrl is first pressed.
+The grey panel has **SHFT** and **DIV** handles. Shift uses blue globally and
+green locally; division uses orange globally and red locally. Dragging shows
+only the active handle and its caption. The bottom status area temporarily shows
+scope, signed shift in ms/samples, or fraction/divisions, including mixed values.
+Normal status returns when the gesture ends.
 
-## Control Types
+## Scope and capture
 
-The overlay currently exposes two control families:
+At the active selection depth, selected targets win; otherwise the relevant
+hovered target wins; otherwise the edit is global. Targets are captured on Ctrl
+press and remain stable until that session/gesture ends. Multiple selected
+targets are supported. A shift drag applies one absolute offset to the captured
+targets, while DIV chooses one fraction; its press feedback reports mixed values.
 
-* Phase offset, shown in blue for global edits and green for selection-local edits. Drag left and right to change MIDI/take quantisation phase.
-* Division factor, shown in orange for global edits and red for selection-local edits. Drag up and down to change MIDI/take quantisation division.
+- Station: SHFT changes station offset; DIV changes the station's current takes.
+- Take: SHFT and DIV change the captured take settings.
+- MIDI loop: SHFT is a stream-local additive offset; DIV is a stream-local
+  fraction/enable override. Sibling MIDI streams keep their settings. A missing
+  override inherits take settings. Audio loops have no paired MIDI stream, so
+  selecting only audio loops shows no MIDI edit handles.
+- Global fallback: SHFT changes the global offset; DIV edits current local takes.
 
-These controls are intentionally simple and should remain consistent across Station, LoopTake, and Loop modes.
+Global Off/All still controls playback enablement; Mixed uses take/loop choices.
+Global, station, take and stream offsets are composed once. Stream overrides
+and local tap base grids are saved separately from the unchanged packed fields.
 
-## Interaction Rules
+Release Ctrl during a drag to retain its capture and grid hold. Mouse release
+ends the gesture. Escape, capture/focus loss and deleted targets release the
+gesture and temporary feedback. Cancelling a settings drag keeps changes already
+published during that drag; unfinished MIDI note previews are discarded.
 
-* Selection always wins over hover when a selection exists for the active depth mode.
-* If nothing is selected, the hovered object at the moment Ctrl is first pressed determines the target scope.
-* If nothing relevant is hovered, the controls fall back to the global quantisation state.
-* The hovered object is sampled when Ctrl is pressed; moving the pointer afterwards should not retarget the active overlay session.
+## Taps and independent grids
 
-## Station Mode
+**Space down** registers one tap and holds grids; key repeat is ignored. **Space
+up** releases the hold without another tap. **Tap tempo (Space)** in Timing uses
+the same timestamped engine action and pulses grids. **Metronome** is separate.
+Ctrl alone does not hold or pulse grids. Space and handle-drag holds compose, so
+releasing one does not hide a grid still held by the other. Focus/session cleanup
+clears stale holds.
 
-When depth selection is set to Station:
+The first tap starts a sequence. A press-to-press gap greater than three seconds
+starts another sequence; exactly three seconds remains in sequence. Invalid
+sample rates or non-increasing timestamps reject that update and restart tap
+smoothing; the accepted geometry remains unchanged. Sample zero is valid.
 
-* If one or more stations are selected, the overlay edits the selected stations regardless of hover state.
-* If no station is selected and a station is hovered when Ctrl is pressed, the overlay edits that hovered station.
-* If no station is selected and no station is hovered, the overlay edits the global phase and all stations.
+One completed local take counts as one performance, including multichannel and
+MIDI-only takes. Remote, incomplete and pre-reclock takes are excluded. With one
+eligible take under local authority, taps reinterpret its integer beat count.
+Half ties round upward; audio grain floors to integer samples, and logical audio
+length is grain × beat count. The physical audio tail remains available and is
+retained by session WAV export. MIDI source events and their original logical
+length stay intact; if rounding adjusts audio length, those MIDI loops keep
+their own period and use the newly published grid.
 
-### Station Mode Targets
+With additional takes, taps change the base grid only. Master/audio construction
+geometry and relative phases stay fixed. Candidates are local grain count (or
+remote BPI) × powers of two, with an optional ×3 triplet factor, capped at 256
+base divisions. Nearest-count ties choose the smaller candidate. Geometry that
+would exceed 8192 cells for a take at 1/32 is rejected with an INFO reason.
 
-* Phase offset: selected stations, hovered station, or global phase.
-* Division factor: selected stations, hovered station, or all stations.
-
-## LoopTake Mode
-
-When depth selection is set to LoopTake:
-
-* If one or more LoopTakes are selected, the overlay edits the selected LoopTakes regardless of hover state.
-* If no LoopTake is selected and a LoopTake is hovered when Ctrl is pressed, the overlay edits that hovered LoopTake.
-* If no LoopTake is selected and no LoopTake is hovered, the overlay edits the global phase and all stations.
-
-### LoopTake Mode Targets
-
-* Phase offset: selected LoopTakes, hovered LoopTake, or global phase.
-* Division factor: selected LoopTakes, hovered LoopTake, or all stations.
-
-## Loop Mode
-
-Loop mode behaves the same as LoopTake mode, except that any loop-level selection is promoted to its parent LoopTake.
-
-In practice, hovering a loop is equivalent to hovering the LoopTake that contains it.
-
-## Behaviour Summary
-
-* Station mode operates on stations.
-* LoopTake mode operates on LoopTakes.
-* Loop mode reuses LoopTake overlay behavior.
-* Selection overrides hover.
-* Hover only matters when nothing is selected for the active depth mode.
+The selected base composes once with each take/stream fraction: effective cells
+per base interval = base divisions × fraction divisor. Without a tap base, local
+fractions refer to local grain; following NINJAM uses the authoritative remote
+beat. A tap base adds density relative to that reference. These references need
+not have equal lengths. Remote BPM/BPI stays authoritative; local taps can choose
+compatible subdivisions, and reclock is rejected until **Stay local** is chosen.
+Repeated remote observations retain the tap base; a changed remote geometry or
+NoSync resets it. Remote authority is never restored from a saved session.

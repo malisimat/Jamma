@@ -19,3 +19,29 @@ The loop grid editor opens one completed audio or MIDI loop as a flattened, time
 - **Ctrl+Z** undoes the last MIDI edit; **Ctrl+Shift+Z** redoes it.
 
 Edits commit once on release. Escape, lost pointer capture, or a changed edit target cancels an in-progress gesture. MIDI events that cannot be mapped unambiguously to source notes are left unchanged.
+
+## Resolution and tap grids
+
+Timing settings retain straight fractions and add **1/3**, **1/6**, and **1/12**.
+The reference is local grain under local timing and remote beat while following
+NINJAM; tap-selected base density also composes with the fraction. Boundaries use
+rounded rational sample arithmetic rather than accumulating a rounded step.
+First and third triplet positions form a 2:1 shuffle; there is no automatic swing.
+
+Space taps work while this editor is open, including with Ctrl held. Text entry
+in CHANNEL keeps Space contextual. Space down holds the grid, repeat is ignored,
+and release starts its fade. Ctrl still owns move and pitch-view gestures.
+
+Changing resolution projects the original notes onto new onset boundaries while
+preserving duration (with existing loop-end clamping). Coarse grids merge visible
+coverage and may hide gaps. Resolution alone does not delete, duplicate or rewrite
+source events. Returning to the original grid recovers the pattern when no note
+edits intervened. Undo/redo tracks source revisions separately and remains valid
+across grid changes. A preview using old geometry is cancelled before it can
+commit stale coordinates.
+
+Loop-depth selection retains the picked MIDI stream identity. Ctrl loop-scope
+settings apply to that stream; take/station settings remain inherited defaults.
+The editor, ordinary overlays and playback use the stream's resolved settings.
+MIDI source logical lengths remain unchanged when a sole-master tap rounds an
+audio boundary; intentional unequal loop periods continue on their own rulers.

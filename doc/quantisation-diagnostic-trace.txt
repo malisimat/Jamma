@@ -1,0 +1,8 @@
+Runtime evidence from the native test executable, 2026-10-09.
+These are real engine fixture records, not a live GUI/audio/NINJAM-server trace.
+
+[quantisation] recording master established: take=station-TK-ba1f8095-9507-4fe4-8fab-20de22a9cf09 authority=local source=default physical=96000 logical=96000 sr=48000 grain=24000 grains=4 bpm=120 policyMinMs=300 policyMaxMs=3000 rounding=floor-grain,exact-product
+[quantisation] tap geometry accepted: take=midi-master generation=0 sr=48000 eligible=1 authority=local source=tap physical=96001 logical=96000 grain=24000 grains=4 bpm=120 gap=24000 fraction=1/4 effectiveCells=16 tail=1 rounding=nearest-beats/up-ties,floor-grain
+[quantisation] tap subdivisions accepted: generation=0 sr=48000 eligible=2 authority=local interval=96000 grain=24000 base=4 requested=12 before=0 gap=8000 gapMs=166.667 bpm=360 fractionDivisors=4..4 effectiveCells=48..48 requestedRatio=12 selected=12 tie=smaller geometry=preserved
+[quantisation] tap subdivisions accepted: generation=0 sr=48000 eligible=1 authority=remote interval=192000 grain=24000 base=8 requested=24 before=0 gap=8000 gapMs=166.667 bpm=360 fractionDivisors=4..4 effectiveCells=96..96 requestedRatio=24 selected=24 tie=smaller geometry=preserved
+[quantisation] tap geometry accepted: take=stereo-midi generation=0 sr=48000 eligible=1 authority=local source=tap physical=96000 logical=96000 grain=32000 grains=3 bpm=90 gap=32000 fraction=1/4 effectiveCells=12 tail=0 rounding=nearest-beats/up-ties,floor-grain

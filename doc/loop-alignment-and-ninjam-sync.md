@@ -204,9 +204,11 @@ BPI, phase, BPM, and command generation. `Scene` forwards it through
 
 ```text
 boundary(k) = origin + round(k * remote interval / divisions)
-divisions = remote BPI * MidiQuantisation::Divisor(fraction)
+divisions = remote BPI * compatible tap density * MidiQuantisation::Divisor(fraction)
 ```
 
+Without a tap override, compatible tap density is one. Its straight/triplet
+candidate multiplier changes the grid while preserving authoritative BPM/BPI.
 It maps each recorded event through the take's transport start, composes user
 offsets once, and publishes an immutable quantised event snapshot off the audio
 callback. Event playback at the audio-thread MIDI cursor therefore uses the
@@ -214,13 +216,12 @@ implemented remote descriptor without changing recorded events or loop lengths.
 `AutomationGlobalSampleOrigin()` remains a separate frozen automation anchor;
 cursor movement is balanced through the LoopTake automation correction.
 
-The visual overlay is not yet equivalent. `QuantisationLoopTakeVisual` still
-contains grain/division-style data rather than the accepted remote descriptor,
-and `Quantiser::ActiveGrid()` does not expose that descriptor to the renderers.
-The divisibility suppression was relaxed, but correct remote-boundary rendering
-for unequal/non-dividing loops and the full live overlay scenario remain
-incomplete or unproven. Do not infer overlay correctness from the implemented
-MIDI event snapping.
+The ordinary visual descriptor now carries the effective interval, base
+divisions and origin. Per-stream visuals resolve loop overrides, and gates use
+the same rational boundary helper as playback/editor geometry. Dense overlays
+sample valid boundaries across the interval up to the existing visual gate cap.
+Live rendered agreement for unequal loops, window sizes and DPI remains
+unverified; see [quantisation validation](quantisation-validation.md).
 
 ## Local geometry and persistence
 

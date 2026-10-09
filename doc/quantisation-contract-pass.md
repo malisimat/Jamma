@@ -30,7 +30,7 @@ are entry points, not reproduced live failures.
   does nothing, up releases. Text entry wins. Ctrl state updates even when the
   editor consumes the action. Space and gesture holds compose independently.
 - Timeout is strictly greater than three seconds. Zero is a valid first sample;
-  invalid/non-increasing inputs do not corrupt an accepted estimate.
+  invalid/non-increasing inputs restart smoothing without changing accepted geometry.
 
 ## Confirmed gaps and research references
 
