@@ -46,6 +46,8 @@ namespace engine
 	class TapTempoTracker
 	{
 	public:
+		static constexpr double GracePeriodSeconds = 2.0;
+
 		// Discards all tap history; call before starting a new tap-tempo session.
 		void Clear() noexcept;
 
@@ -68,8 +70,6 @@ namespace engine
 		double EstimatedGapSamps() const noexcept { return _estimatedGapSamps.value_or(0.0); }
 
 	private:
-		static constexpr double TapTimeoutSecs = 3.0;
-
 		std::optional<std::uint64_t> _lastTapSample;
 		std::optional<double> _estimatedGapSamps;
 	};
@@ -98,6 +98,7 @@ namespace engine
 		void SetGlobalPhaseOffsetSamps(std::int32_t offsetSamps,
 			const std::vector<std::shared_ptr<engine::Station>>& stations);
 
+		// Returns true only when the tap updates quantisation timing or subdivisions.
 		bool HandleTapTempo(std::uint64_t estimatedSampleAt,
 			unsigned int sampleRate,
 			const std::vector<std::shared_ptr<engine::Station>>& stations,
@@ -167,7 +168,6 @@ namespace engine
 		static constexpr double OverlayFadeSeconds = 2.0;
 		static constexpr int PhaseOffsetDragPixelsPerMillisecond = 1;
 		static constexpr std::int64_t StateInactive = 0LL;
-		static constexpr std::int64_t StateHeld = (std::numeric_limits<std::int64_t>::max)();
 		static std::int32_t _ClampPhaseOffset(std::int64_t offsetSamps) noexcept;
 
 		static unsigned int _ClampToUInt(unsigned long value);

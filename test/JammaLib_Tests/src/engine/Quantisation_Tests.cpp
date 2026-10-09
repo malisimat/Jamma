@@ -673,14 +673,48 @@ TEST(QuantisationModel, GateGeometryBuildsHalfFrameInstanceMesh)
 	EXPECT_FLOAT_EQ(312.0f, maxZ);
 }
 
-TEST(Quantisation, TapSequenceZeroAndExactThreeSecondBoundary)
+TEST(Quantisation, TapSequenceRestartsAtTwoSecondsAndDropsOldSmoothing)
 {
-    engine::TapTempoTracker tracker;
+    TapTempoTracker tracker;
     engine::QuantisationPolicy policy;
     EXPECT_FALSE(tracker.TapAtSample(0u, 48000u, 288000ul, policy));
-    ASSERT_TRUE(tracker.TapAtSample(144000u, 48000u, 288000ul, policy));
-    EXPECT_FALSE(tracker.TapAtSample(288001u, 48000u, 288000ul, policy));
+    ASSERT_TRUE(tracker.TapAtSample(48000u, 48000u, 288000ul, policy));
+    ASSERT_TRUE(tracker.TapAtSample(72000u, 48000u, 288000ul, policy));
+    EXPECT_DOUBLE_EQ(36000.0, tracker.EstimatedGapSamps());
+    // Exactly two seconds expires the sequence; repeated lone taps do nothing.
+    EXPECT_FALSE(tracker.TapAtSample(168000u, 48000u, 288000ul, policy));
     EXPECT_FALSE(tracker.HasEstimate());
+    EXPECT_FALSE(tracker.TapAtSample(264001u, 48000u, 288000ul, policy));
+    EXPECT_FALSE(tracker.HasEstimate());
+    ASSERT_TRUE(tracker.TapAtSample(288001u, 48000u, 288000ul, policy));
+    EXPECT_DOUBLE_EQ(24000.0, tracker.EstimatedGapSamps());
+}
+
+TEST(Quantisation, TapSequenceAcceptsGapJustUnderTwoSeconds)
+{
+    TapTempoTracker tracker;
+    engine::QuantisationPolicy policy;
+    EXPECT_FALSE(tracker.TapAtSample(0u, 48000u, 288000ul, policy));
+    EXPECT_TRUE(tracker.TapAtSample(95999u, 48000u, 288000ul, policy));
+}
+
+TEST(Quantisation, OverlayWaitsTwoSecondsAfterPressBeforeFading)
+{
+    engine::Quantiser quantiser;
+    const auto before = utils::Timer::GetTime();
+    quantiser.SetOverlayHeld(true);
+    const auto after = utils::Timer::GetTime();
+    EXPECT_FLOAT_EQ(1.0f, quantiser.OverlayAlpha(after + std::chrono::seconds(20)));
+    quantiser.SetOverlayHeld(false);
+    EXPECT_FLOAT_EQ(1.0f, quantiser.OverlayAlpha(before + std::chrono::seconds(2)));
+    EXPECT_NEAR(0.5f, quantiser.OverlayAlpha(after + std::chrono::seconds(3)), 0.01f);
+    EXPECT_FLOAT_EQ(0.0f, quantiser.OverlayAlpha(after + std::chrono::seconds(4)));
+    quantiser.PulseOverlay();
+    const auto pulse = utils::Timer::GetTime();
+    EXPECT_FLOAT_EQ(1.0f, quantiser.OverlayAlpha(pulse + std::chrono::seconds(1)));
+    EXPECT_NEAR(0.5f, quantiser.OverlayAlpha(pulse + std::chrono::seconds(3)), 0.01f);
+    quantiser.ClearOverlay();
+    EXPECT_FLOAT_EQ(0.0f, quantiser.OverlayAlpha(pulse));
 }
 
 TEST(Quantisation, InvalidOrNonIncreasingTapClearsSmoothing)

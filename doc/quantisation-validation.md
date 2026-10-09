@@ -43,8 +43,9 @@ engine fixture executions; they are not a live GUI or external-server trace.
 - Actual tap handler: completed MIDI-only and multichannel audio+MIDI counting,
   sole beat geometry, preserved MIDI source length, frozen additional-take
   construction/cursors, remote descriptor preservation on repeated observations.
-- Tracker: zero timestamp, strict three-second boundary, timeout, smoothing,
-  non-increasing and invalid inputs. Candidate limits, straight/triplet ties and
+- Tracker: zero timestamp, two-second expiry boundary, timeout, smoothing reset,
+  first-tap radio preservation, overlay grace/fade timing, and non-increasing
+  and invalid inputs. Candidate limits, straight/triplet ties and
   exact requested-count grain rounding have explicit regressions.
 - Source-backed resolution round trips, duration/wrap and rational sample
   boundaries, shuffle placement, legacy fraction ordinals and pack/session

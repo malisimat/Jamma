@@ -45,9 +45,12 @@ Ctrl alone does not hold or pulse grids. Space and handle-drag holds compose, so
 releasing one does not hide a grid still held by the other. Focus/session cleanup
 clears stale holds.
 
-The first tap starts a sequence. A press-to-press gap greater than three seconds
-starts another sequence; exactly three seconds remains in sequence. Invalid
-sample rates or non-increasing timestamps reject that update and restart tap
+The first tap starts a sequence without changing subdivisions or their radio.
+The second tap must arrive within two seconds. A press-to-press gap of two
+seconds or more starts a fresh sequence and discards all previous tap smoothing.
+Grids stay fully visible for two seconds after the latest press, then fade over
+two seconds once no hold remains. Space release does not restart that grace
+period. Invalid sample rates or non-increasing timestamps reject that update and restart tap
 smoothing; the accepted geometry remains unchanged. Sample zero is valid.
 
 One completed local take counts as one performance, including multichannel and

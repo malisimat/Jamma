@@ -1272,12 +1272,21 @@ TEST_F(GuiSceneSettingsTests, FrozenTapSelectsSubdivisionRadio)
 		Station->AddTake(std::make_shared<GuiTapCompletedTake>(params));
 	}
 	Scene->SetFrozenTapClock();
-	EXPECT_TRUE(Scene->TapAt(Time{}));
+	const auto initialSubdivision = Scene->Subdivision()->CurrentValue();
+	EXPECT_FALSE(Scene->TapAt(Time{}));
+	EXPECT_EQ(initialSubdivision, Scene->Subdivision()->CurrentValue());
 	EXPECT_TRUE(Scene->TapAt(Time{} + std::chrono::microseconds(166667)));
 	const auto expected = midi::MidiQuantisationFraction::Third;
 	EXPECT_EQ(midi::MidiQuantisation::FractionDisplayIndex(expected), Scene->Subdivision()->CurrentValue());
 	for (const auto& take : Station->GetLoopTakes())
 		EXPECT_EQ(expected, take->MidiQuantisation().Fraction);
+	EXPECT_FALSE(Scene->TapAt(Time{} + std::chrono::seconds(3)));
+	EXPECT_EQ(midi::MidiQuantisation::FractionDisplayIndex(expected), Scene->Subdivision()->CurrentValue());
+	for (const auto& take : Station->GetLoopTakes())
+		EXPECT_EQ(expected, take->MidiQuantisation().Fraction);
+	EXPECT_TRUE(Scene->TapAt(Time{} + std::chrono::milliseconds(3500)));
+	EXPECT_EQ(midi::MidiQuantisation::FractionDisplayIndex(midi::MidiQuantisationFraction::Whole),
+		Scene->Subdivision()->CurrentValue());
 }
 
 TEST_F(GuiSceneSettingsTests, ChannelLimitsAndShortcutFeedbackReachRouterAfterTreeChanges)

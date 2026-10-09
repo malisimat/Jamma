@@ -331,7 +331,7 @@ bool Quantiser::HandleTapTempo(std::uint64_t estimatedSampleAt,
     {
         std::cout << "[quantisation] tap sequence/no update: sample=" << estimatedSampleAt
             << " generation=" << ReclockGeneration() << " sr=" << sampleRate << " eligible=" << eligible << " authority=" << (remote ? "remote" : "local") << std::endl;
-        return true;
+        return false;
     }
     if (eligible != 1u || remote)
     {
@@ -342,7 +342,7 @@ bool Quantiser::HandleTapTempo(std::uint64_t estimatedSampleAt,
         {
             std::cout << "[quantisation] tap rejected: no valid base geometry generation=" << ReclockGeneration()
                 << " eligible=" << eligible << " sr=" << sampleRate << " interval=" << interval << " grain=" << grain << std::endl;
-            return true;
+            return false;
         }
         const auto previous = ActiveGridDivisions();
         const auto selected = NearestPermittedDivision(base, requestedDivisions);
@@ -352,7 +352,7 @@ bool Quantiser::HandleTapTempo(std::uint64_t estimatedSampleAt,
                     if (take && (static_cast<std::uint64_t>(take->VisualLoopLengthSamps()) * selected + interval - 1u) / interval > 8192u)
                     {
                         std::cout << "[quantisation] tap rejected: effective grid exceeds 8192 cells take=" << take->Id() << std::endl;
-                        return true;
+                        return false;
                     }
         _activeGridDivisions.store(selected, std::memory_order_release);
         _gridSource = remote ? QuantisationGridSource::Remote : QuantisationGridSource::Tap;
@@ -396,7 +396,7 @@ bool Quantiser::HandleTapTempo(std::uint64_t estimatedSampleAt,
         std::cout << "[quantisation] tap geometry rejected: generation=" << ReclockGeneration()
             << " physical=" << original << " logical=" << timing->MasterLoopSamps << " grain=" << timing->SeedSamps
             << " grains=" << timing->Bpi << std::endl;
-        return true;
+        return false;
     }
     // The recording's physical storage remains intact; Loop::Play only changes
     // its logical boundary and retains the recorded tail for a later resolution.
@@ -437,33 +437,25 @@ unsigned int Quantiser::NearestPermittedDivision(unsigned int base, double reque
 
 void Quantiser::PulseOverlay()
 {
-	auto expected = _overlayState.load(std::memory_order_relaxed);
-	do {
-		if (expected == StateHeld)
-			return;
-	} while (!_overlayState.compare_exchange_weak(
-		expected,
-		utils::Timer::GetTime().time_since_epoch().count(),
-		std::memory_order_release,
-		std::memory_order_relaxed));
+	_overlayState.store(utils::Timer::GetTime().time_since_epoch().count(), std::memory_order_release);
 }
 
 void Quantiser::SetOverlayHeld(bool held)
 {
 	if (_spaceOverlayHeld.exchange(held, std::memory_order_acq_rel) == held)
 		return;
-	held = _spaceOverlayHeld.load(std::memory_order_acquire) || _gestureOverlayHeld.load(std::memory_order_acquire);
-	_overlayState.store(
-		held ? StateHeld : utils::Timer::GetTime().time_since_epoch().count(),
-		std::memory_order_release);
+
+	// Space's grace period starts at key-down, not key-up.
+	if (held)
+		PulseOverlay();
 }
 
 void Quantiser::SetGestureOverlayHeld(bool held)
 {
-    if (_gestureOverlayHeld.exchange(held, std::memory_order_acq_rel) == held)
-        return;
-    _overlayState.store((_spaceOverlayHeld.load(std::memory_order_acquire) || _gestureOverlayHeld.load(std::memory_order_acquire)) ? StateHeld :
-        utils::Timer::GetTime().time_since_epoch().count(), std::memory_order_release);
+	if (_gestureOverlayHeld.exchange(held, std::memory_order_acq_rel) == held)
+		return;
+	if (!_spaceOverlayHeld.load(std::memory_order_acquire))
+		PulseOverlay();
 }
 
 void Quantiser::ClearOverlay() noexcept
@@ -476,13 +468,15 @@ void Quantiser::ClearOverlay() noexcept
 float Quantiser::OverlayAlpha(Time now) const
 {
 	const auto state = _overlayState.load(std::memory_order_acquire);
-	if (state == StateHeld)
+	if (_spaceOverlayHeld.load(std::memory_order_acquire) || _gestureOverlayHeld.load(std::memory_order_acquire))
 		return 1.0f;
 	if (state == StateInactive)
 		return 0.0f;
 
 	const auto lastActive = Time(Time::duration(state));
-	const auto elapsed = utils::Timer::GetElapsedSeconds(lastActive, now);
+	const auto elapsed = utils::Timer::GetElapsedSeconds(lastActive, now) - TapTempoTracker::GracePeriodSeconds;
+	if (elapsed <= 0.0)
+		return 1.0f;
 	if (elapsed >= OverlayFadeSeconds)
 		return 0.0f;
 
@@ -834,12 +828,12 @@ std::optional<QuantisationTiming> TapTempoTracker::TapAtSample(std::uint64_t sam
 
 	const auto gap = static_cast<double>(samplePosition - _lastTapSample.value());
 
-	// Reset if the inter-tap gap exceeds the timeout; treat this tap as a fresh first tap.
-	if (sampleRate > 0u && gap > TapTimeoutSecs * static_cast<double>(sampleRate))
+	// Reset if the inter-tap gap reaches the timeout; treat this tap as a fresh first tap.
+	if (sampleRate > 0u && gap >= GracePeriodSeconds * static_cast<double>(sampleRate))
 	{
 		Clear();
 		_lastTapSample = samplePosition;
-		std::cout << "[tap] sequence restarted: timeout >3000ms\n";
+		std::cout << "[tap] sequence restarted: timeout >=2000ms\n";
 		return std::nullopt;
 	}
 
