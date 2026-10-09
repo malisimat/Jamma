@@ -21,9 +21,13 @@ namespace midi
 		Eighth = 3,       // 1/8 * grain
 		Sixteenth = 4,    // 1/16 * grain
 		ThirtySecond = 5, // 1/32 * grain
+		// Append only: these ordinals are stored in packed settings and sessions.
+		Third = 6,        // 1/3 * grain
+		Sixth = 7,        // 1/6 * grain
+		Twelfth = 8,      // 1/12 * grain
 	};
 
-	static constexpr std::uint8_t MidiQuantisationFractionCount = 6u;
+	static constexpr std::uint8_t MidiQuantisationFractionCount = 9u;
 	static constexpr int MidiQuantisationDragPixelsPerStep = 32;
 
 	enum class MidiQuantisationGesture : std::uint8_t
@@ -42,6 +46,7 @@ namespace midi
 		static constexpr std::size_t NoteSlot(std::uint8_t channel, std::uint8_t note) noexcept;
 
 	public:
+		// Stored ordinals, including GUI payloads; use display helpers for presentation.
 		static constexpr int FractionIndex(MidiQuantisationFraction fraction) noexcept
 		{
 			return static_cast<int>(fraction);
@@ -52,9 +57,32 @@ namespace midi
 			if (index < 0)
 				index = 0;
 			else if (index >= static_cast<int>(MidiQuantisationFractionCount))
-				index = static_cast<int>(MidiQuantisationFractionCount) - 1;
+				return MidiQuantisationFraction::ThirtySecond; // Preserve legacy invalid-value fallback.
 
 			return static_cast<MidiQuantisationFraction>(index);
+		}
+
+		// Display/drag order follows increasing density, independent of stored ordinals.
+		static constexpr MidiQuantisationFraction FractionDisplayOrder[] = {
+			MidiQuantisationFraction::Whole, MidiQuantisationFraction::Half,
+			MidiQuantisationFraction::Third, MidiQuantisationFraction::Quarter,
+			MidiQuantisationFraction::Sixth, MidiQuantisationFraction::Eighth,
+			MidiQuantisationFraction::Twelfth, MidiQuantisationFraction::Sixteenth,
+			MidiQuantisationFraction::ThirtySecond
+		};
+
+		static constexpr int FractionDisplayIndex(MidiQuantisationFraction fraction) noexcept
+		{
+			for (int index = 0; index < MidiQuantisationFractionCount; ++index)
+				if (FractionDisplayOrder[index] == fraction)
+					return index;
+			return 0;
+		}
+
+		static constexpr MidiQuantisationFraction ClampFractionDisplayIndex(int index) noexcept
+		{
+			return FractionDisplayOrder[index < 0 ? 0 :
+				(index >= MidiQuantisationFractionCount ? MidiQuantisationFractionCount - 1 : index)];
 		}
 
 		static int DragSteps(int deltaY) noexcept;
@@ -71,6 +99,9 @@ namespace midi
 			case MidiQuantisationFraction::Eighth:       return 8u;
 			case MidiQuantisationFraction::Sixteenth:    return 16u;
 			case MidiQuantisationFraction::ThirtySecond: return 32u;
+			case MidiQuantisationFraction::Third:        return 3u;
+			case MidiQuantisationFraction::Sixth:        return 6u;
+			case MidiQuantisationFraction::Twelfth:      return 12u;
 			}
 			return 1u;
 		}
@@ -85,6 +116,9 @@ namespace midi
 			case MidiQuantisationFraction::Eighth:       return "1/8";
 			case MidiQuantisationFraction::Sixteenth:    return "1/16";
 			case MidiQuantisationFraction::ThirtySecond: return "1/32";
+			case MidiQuantisationFraction::Third:        return "1/3";
+			case MidiQuantisationFraction::Sixth:        return "1/6";
+			case MidiQuantisationFraction::Twelfth:      return "1/12";
 			}
 			return "?";
 		}
@@ -165,6 +199,12 @@ namespace midi
 		// Take-local phase offset in samples. LoopTake composes this with inherited
 		// station/global offsets before publishing settings to MidiLoop.
 		std::int32_t PhaseOffsetSamps = 0;
+		// Live tap base grid, independent of construction grain and persistence.
+		std::uint32_t BaseIntervalSamps = 0u;
+		std::uint32_t BaseDivisions = 0u;
+		constexpr bool HasBaseGrid() const noexcept { return BaseIntervalSamps > 0u && BaseDivisions > 0u; }
+		constexpr std::uint64_t GridInterval() const noexcept { return HasRemoteGrid() ? RemoteIntervalSamps : (HasBaseGrid() ? BaseIntervalSamps : GrainSamps); }
+		constexpr std::uint64_t GridDivisions() const noexcept { return static_cast<std::uint64_t>(HasRemoteGrid() ? (HasBaseGrid() ? BaseDivisions : RemoteBpi) : (HasBaseGrid() ? BaseDivisions : 1u)) * MidiQuantisation::Divisor(Fraction); }
 		// Live NINJAM transport snapshot. These are not persisted in Pack().
 		std::uint32_t RemoteIntervalSamps = 0u;
 		std::uint32_t RemoteBpi = 0u;
@@ -206,6 +246,8 @@ namespace midi
 				&& Fraction == o.Fraction
 				&& GrainSamps == o.GrainSamps
 				&& PhaseOffsetSamps == o.PhaseOffsetSamps
+				&& BaseIntervalSamps == o.BaseIntervalSamps
+				&& BaseDivisions == o.BaseDivisions
 				&& RemoteIntervalSamps == o.RemoteIntervalSamps
 				&& RemoteBpi == o.RemoteBpi
 				&& RemoteOriginSamps == o.RemoteOriginSamps;

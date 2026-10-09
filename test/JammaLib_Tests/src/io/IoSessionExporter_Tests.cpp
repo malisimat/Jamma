@@ -55,7 +55,8 @@ public:
 
 	static std::shared_ptr<Loop> MakeAudioLoop(unsigned long length,
 		unsigned int channel,
-		unsigned long bodyPlayIndex)
+		unsigned long bodyPlayIndex,
+		float amplitudeScale = 1.0f)
 	{
 		LoopParams params;
 		params.Id = "audio-" + std::to_string(channel) + "-" + std::to_string(length);
@@ -68,7 +69,7 @@ public:
 		loop->Record();
 		std::vector<float> samples(constants::MaxLoopFadeSamps + length, 0.0f);
 		for (unsigned long sample = 0ul; sample < length; ++sample)
-			samples[constants::MaxLoopFadeSamps + sample] = static_cast<float>(sample + 1ul);
+			samples[constants::MaxLoopFadeSamps + sample] = static_cast<float>(sample + 1ul) * amplitudeScale;
 		AudioWriteRequest request;
 		request.samples = samples.data();
 		request.numSamps = static_cast<unsigned int>(samples.size());
@@ -348,5 +349,41 @@ TEST(IoSessionExporter, SavesLooplessStationConfigurationWithoutTransport)
 	EXPECT_EQ("configured station", jam->Stations[0].Name);
 
 	manifest.close();
+	std::filesystem::remove_all(dir);
+}
+
+TEST(IoSessionExporter, RoundedLogicalAudioBoundaryRetainsPhysicalTailAfterReload)
+{
+	auto station = IoSessionExporterTest::MakeStation("retained-tail");
+	auto take = IoSessionExporterTest::MakeTake("rounded-take");
+	auto loop = IoSessionExporterTest::MakeAudioLoop(101u, 0u, 37u, 0.005f);
+	const auto recorded = loop->ExportSamples();
+	loop->Play(loop->PlayIndex(), 100u, false);
+	take->AddLoop(loop);
+	take->CommitChanges();
+	station->AddTake(take);
+	station->CommitChanges();
+	const auto dir = IoSessionExporterTest::MakeDirectory();
+	Quantiser quantiser;
+	quantiser.SetClock(std::make_shared<utils::Timer>());
+	quantiser.ApplyTiming({ 25u, 100ul, 4u, 120.0f, 4u }, "retained-tail fixture");
+	std::mutex sceneMutex;
+	ASSERT_TRUE(io::IoSessionExporter::ExportSessionToDirectory({ station }, {}, quantiser,
+		io::JamFile::GlobalMidiQuantState::Off, 0.0, {}, {}, nullptr, sceneMutex, nullptr, dir.wstring()));
+	std::ifstream manifest(dir / "session.jam");
+	std::stringstream text;
+	text << manifest.rdbuf();
+	manifest.close();
+	const auto saved = io::JamFile::FromStream(std::move(text));
+	ASSERT_TRUE(saved);
+	ASSERT_EQ(1u, saved->Stations[0].LoopTakes[0].Loops.size());
+	const auto restored = Loop::FromFile({}, saved->Stations[0].LoopTakes[0].Loops[0], dir.wstring());
+	ASSERT_TRUE(restored);
+	EXPECT_EQ(100u, (*restored)->LoopLength());
+	EXPECT_EQ(101u, (*restored)->PhysicalLoopLength());
+	const auto restoredSamples = (*restored)->ExportSamples(true);
+	ASSERT_EQ(recorded.size(), restoredSamples.size());
+	for (std::size_t index = 0u; index < recorded.size(); ++index)
+		EXPECT_NEAR(recorded[index], restoredSamples[index], 2.0f / 32768.0f); // Existing PCM16 scaling and truncation.
 	std::filesystem::remove_all(dir);
 }

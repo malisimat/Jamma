@@ -524,13 +524,17 @@ std::string Loop::Id() const
 	return _loopParams.Id;
 }
 
-std::vector<float> Loop::ExportSamples() const
+std::vector<float> Loop::ExportSamples(bool retainPhysicalTail) const
 {
 	auto playState = _playState.load(std::memory_order_acquire);
 	auto loopLength = _loopLength.load(std::memory_order_relaxed);
 
 	if ((0 == loopLength) || (STATE_INACTIVE == playState))
 		return {};
+	// Session sidecars retain recorded samples beyond a rounded logical boundary.
+	// The manifest still carries logical length; FromFile restores it after Load.
+	if (retainPhysicalTail)
+		loopLength = (std::max)(loopLength, PhysicalLoopLength());
 
 	std::vector<float> out(loopLength);
 	unsigned long copied = 0;

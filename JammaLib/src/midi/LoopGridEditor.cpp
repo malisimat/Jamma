@@ -209,17 +209,19 @@ bool LoopGridEditor::FindCandidate(std::shared_ptr<engine::LoopTake>& take,
 				{
 					take = candidateTake;
 					audioLoop.reset();
-					midiLoop = _InitialMidiLoop(*candidateTake);
+					midiLoop = candidate;
 					return true;
 				}
 				if (!countedMidiForTake && candidate->Model() && candidate->Model()->IsSelected())
 				{
-					// All channel models share one visible MIDI loop at this depth.
+					// Take selection defaults to its first populated wired stream; a
+					// single selected stream keeps its own identity.
 					countedMidiForTake = true;
 					++fallbackCount;
 					take = candidateTake;
 					audioLoop.reset();
-					midiLoop = _InitialMidiLoop(*candidateTake);
+					const auto initial = _InitialMidiLoop(*candidateTake);
+					midiLoop = initial && initial->Model()->IsSelected() ? initial : candidate;
 				}
 			}
 		}
@@ -933,7 +935,7 @@ void LoopGridEditor::_CheckGesture()
 		|| !_gesture->MatchesPublished(current)
 		|| (_gesture->CapturedNoteIndex() && loop->Model()
 			&& _gestureModelGeneration != loop->Model()->EditorModelGeneration())
-		|| current.Quantisation != take->ResolvedMidiQuantisation()
+		|| current.Quantisation != take->ResolvedMidiQuantisationFor(loop)
 		|| current.QuantisationTransportStartSamps != take->MidiQuantisationTransportStartSamps())
 	{
 		_CancelGesture();

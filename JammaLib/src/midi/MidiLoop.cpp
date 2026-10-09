@@ -1,4 +1,5 @@
 #include "MidiLoop.h"
+#include <limits>
 
 #include <algorithm>
 #include <cmath>
@@ -272,6 +273,7 @@ bool MidiLoop::SnapshotForExport(ExportState& state,
 	std::int32_t anchorCorrection) const noexcept
 {
 	const auto* snapshot = AcquirePlaybackSnapshot();
+	state.LoopQuantisation = _loopQuantisationOverride;
 	state.LoopLengthSamps = snapshot ? snapshot->LoopLengthSamps : _loopLengthSamps;
 	state.AutomationGlobalSampleOrigin = _automationGlobalSampleOrigin
 		+ static_cast<std::uint32_t>(anchorCorrection);
@@ -358,11 +360,15 @@ bool MidiLoop::RestoreFromExport(const ExportState& state) noexcept
 				return false;
 		}
 	}
+	auto restoredQuantisation = ResolveQuantisation(_inheritedQuantisation, state.LoopQuantisation);
+	if (_forcedQuantisationEnabled) restoredQuantisation.Enabled = *_forcedQuantisationEnabled;
 	if (!PublishCompletedEvents(state.Events.data(), state.EventCount,
-		state.LoopLengthSamps, _revision + 1u, _quantisation,
+		state.LoopLengthSamps, _revision + 1u, restoredQuantisation,
 		_quantisationTransportStartSamps))
 		return false;
 
+	_loopQuantisationOverride = state.LoopQuantisation;
+	_quantisation = restoredQuantisation;
 	_eventCount = state.EventCount;
 	for (std::size_t i = 0u; i < _eventCount; ++i)
 		_events[i] = state.Events[i];
@@ -436,6 +442,7 @@ bool MidiLoop::SnapshotForEdit(EditState& state) const noexcept
 	state.EventCount = snapshot->EventCount;
 	state.LoopLengthSamps = snapshot->LoopLengthSamps;
 	state.Revision = snapshot->Revision;
+	state.SourceRevision = snapshot->SourceRevision;
 	state.Quantisation = snapshot->Quantisation;
 	state.QuantisationTransportStartSamps = snapshot->QuantisationTransportStartSamps;
 	std::copy_n(snapshot->Raw.begin(), snapshot->EventCount, state.Events.begin());
@@ -446,6 +453,7 @@ bool MidiLoop::SnapshotForEdit(EditState& state) const noexcept
 bool MidiLoop::PublishEdit(const EditState& state) noexcept
 {
 	if (_state != MidiLoopState::Playing || state.Revision != _revision
+		|| state.SourceRevision != _sourceRevision
 		|| state.LoopLengthSamps != _loopLengthSamps || state.LoopLengthSamps == 0u
 		|| state.Quantisation != _quantisation
 		|| state.QuantisationTransportStartSamps != _quantisationTransportStartSamps
@@ -832,16 +840,48 @@ void MidiLoop::FlushHeldNotes(std::uint32_t atGlobalSample, IMidiSink& sink) noe
 	}
 }
 
-bool MidiLoop::SetQuantisation(const MidiQuantisationSettings& settings,
-	std::uint64_t transportStartSamps)
+MidiQuantisationSettings MidiLoop::ResolveQuantisation(const MidiQuantisationSettings& inherited,
+	const QuantisationOverride& overrides) noexcept
 {
-	if (settings == _quantisation && transportStartSamps == _quantisationTransportStartSamps)
+	auto settings = inherited;
+	if (overrides.Enabled) settings.Enabled = *overrides.Enabled;
+	if (overrides.Fraction) settings.Fraction = *overrides.Fraction;
+	// Offsets compose once at each ownership depth; avoid signed overflow.
+	if (overrides.PhaseOffsetSamps)
+		settings.PhaseOffsetSamps = static_cast<std::int32_t>(std::clamp<std::int64_t>(
+			static_cast<std::int64_t>(inherited.PhaseOffsetSamps) + *overrides.PhaseOffsetSamps,
+			std::numeric_limits<std::int32_t>::min(), std::numeric_limits<std::int32_t>::max()));
+	return settings;
+}
+
+bool MidiLoop::SetLoopQuantisationOverride(const QuantisationOverride& value)
+{
+	const auto previous = _loopQuantisationOverride;
+	_loopQuantisationOverride = value;
+	if (SetQuantisation(_inheritedQuantisation, _quantisationTransportStartSamps, _forcedQuantisationEnabled))
 		return true;
+	_loopQuantisationOverride = previous;
+	return false;
+}
+
+bool MidiLoop::SetQuantisation(const MidiQuantisationSettings& inherited,
+	std::uint64_t transportStartSamps, std::optional<bool> forcedEnabled)
+{
+	auto settings = ResolveQuantisation(inherited, _loopQuantisationOverride);
+	if (forcedEnabled) settings.Enabled = *forcedEnabled;
+	if (settings == _quantisation && transportStartSamps == _quantisationTransportStartSamps)
+	{
+		_inheritedQuantisation = inherited;
+		_forcedQuantisationEnabled = forcedEnabled;
+		return true;
+	}
 	if (_state == MidiLoopState::Playing &&
 		!PublishCompletedEvents(_events.data(), _eventCount, _loopLengthSamps,
-			_revision + 1u, settings, transportStartSamps))
+			_revision + 1u, settings, transportStartSamps, false))
 		return false;
 	_quantisation = settings;
+	_inheritedQuantisation = inherited;
+	_forcedQuantisationEnabled = forcedEnabled;
 	_quantisationTransportStartSamps = transportStartSamps;
 	++_revision;
 	return true;
@@ -866,7 +906,7 @@ void MidiLoop::PublishCompletionWithRetry(const MidiEvent* raw, std::size_t coun
 bool MidiLoop::PublishCompletedEvents(const MidiEvent* raw, std::size_t count,
 	std::uint32_t length, std::uint64_t revision,
 	const MidiQuantisationSettings& quantisation,
-	std::uint64_t transportStart) noexcept
+	std::uint64_t transportStart, bool sourceChanged) noexcept
 {
 	if (count > DefaultCapacity || length == 0u)
 		return false;
@@ -885,6 +925,7 @@ bool MidiLoop::PublishCompletedEvents(const MidiEvent* raw, std::size_t count,
 	snapshot.EventCount = count;
 	snapshot.LoopLengthSamps = length;
 	snapshot.Revision = revision;
+	snapshot.SourceRevision = sourceChanged ? revision : _sourceRevision;
 	snapshot.Quantisation = quantisation;
 	snapshot.QuantisationTransportStartSamps = transportStart;
 	snapshot.QuantisationActive = quantisation.Enabled
@@ -894,6 +935,7 @@ bool MidiLoop::PublishCompletedEvents(const MidiEvent* raw, std::size_t count,
 			length, quantisation, transportStart, snapshot.Quantised.data());
 	_playbackBufferUsed[slot] = true;
 	_playbackSnapshot.store(&snapshot, std::memory_order_seq_cst);
+	_sourceRevision = snapshot.SourceRevision;
 	return true;
 }
 

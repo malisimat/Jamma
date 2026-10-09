@@ -781,3 +781,76 @@ TEST(JamFile, RejectsTraversalAndInvalidLoopBoundsBeforeSidecarLoad)
 	ASSERT_TRUE(parsed.has_value());
 	EXPECT_FALSE(JamFile::Loop::FromJson(std::get<Json::JsonPart>(*parsed)).has_value());
 }
+
+TEST(JamFile, MidiStreamOverridesRoundTripAndAbsentFieldsInherit)
+{
+	JamFile jam{};
+	jam.Version = JamFile::VERSION_V;
+	jam.Name = "override";
+	JamFile::Station station{};
+	station.Name = "station";
+	JamFile::LoopTake take{};
+	take.Name = "take";
+	JamFile::MidiStream first{ "first.jmid", 0u, "device", 480u, 0u };
+	first.MidiQuantEnabled = false;
+	first.MidiQuantFraction = 6;
+	first.PhaseOffsetSamps = -17;
+	take.MidiStreams.push_back(first);
+	take.MidiStreams.push_back({ "second.jmid", 1u, "device", 480u, 0u });
+	station.LoopTakes.push_back(take);
+	jam.Stations.push_back(station);
+	std::stringstream output;
+	ASSERT_TRUE(JamFile::ToStream(jam, output));
+	auto restored = JamFile::FromStream(std::move(output));
+	ASSERT_TRUE(restored.has_value());
+	ASSERT_EQ(2u, restored->Stations[0].LoopTakes[0].MidiStreams.size());
+	const auto& streams = restored->Stations[0].LoopTakes[0].MidiStreams;
+	EXPECT_EQ(first.MidiQuantEnabled, streams[0].MidiQuantEnabled);
+	EXPECT_EQ(first.MidiQuantFraction, streams[0].MidiQuantFraction);
+	EXPECT_EQ(first.PhaseOffsetSamps, streams[0].PhaseOffsetSamps);
+	EXPECT_FALSE(streams[1].MidiQuantEnabled.has_value());
+	EXPECT_FALSE(streams[1].MidiQuantFraction.has_value());
+	EXPECT_FALSE(streams[1].PhaseOffsetSamps.has_value());
+}
+
+TEST(JamFile, TapBaseGridRoundTripAndMissingFields)
+{
+	JamFile jam{};
+	jam.Version = JamFile::VERSION_V;
+	jam.Name = "base-grid";
+	JamFile::Station station{};
+	station.Name = "station";
+	JamFile::LoopTake take{};
+	take.Name = "grid";
+	take.BaseIntervalSamps = 96000ull;
+	take.BaseDivisions = 12u;
+	take.MidiStreams.push_back({ "first.jmid", 0u, "", 480u, 0u });
+	station.LoopTakes.push_back(take);
+	take.BaseIntervalSamps.reset();
+	take.BaseDivisions.reset();
+	station.LoopTakes.push_back(take);
+	jam.Stations.push_back(station);
+	std::stringstream output;
+	ASSERT_TRUE(JamFile::ToStream(jam, output));
+	const auto saved = output.str();
+	auto restored = JamFile::FromStream(std::move(output));
+	ASSERT_TRUE(restored.has_value());
+	ASSERT_EQ(2u, restored->Stations[0].LoopTakes.size());
+	const auto& takes = restored->Stations[0].LoopTakes;
+	ASSERT_TRUE(takes[0].BaseIntervalSamps.has_value());
+	ASSERT_TRUE(takes[0].BaseDivisions.has_value());
+	EXPECT_EQ(96000ull, *takes[0].BaseIntervalSamps);
+	EXPECT_EQ(12u, *takes[0].BaseDivisions);
+	EXPECT_FALSE(takes[1].BaseIntervalSamps.has_value());
+	EXPECT_FALSE(takes[1].BaseDivisions.has_value());
+	const auto malformed = std::regex_replace(saved, std::regex("midiBaseDivisions\":12"), "midiBaseDivisions\":0");
+	auto invalid = JamFile::FromStream(std::stringstream(malformed));
+	ASSERT_TRUE(invalid.has_value());
+	EXPECT_FALSE(invalid->Stations[0].LoopTakes[0].BaseIntervalSamps.has_value());
+	EXPECT_FALSE(invalid->Stations[0].LoopTakes[0].BaseDivisions.has_value());
+	const auto oversized = std::regex_replace(saved, std::regex("midiBaseIntervalSamps\":\"96000\""),
+		"midiBaseIntervalSamps\":\"4294967301\"");
+	auto invalidWide = JamFile::FromStream(std::stringstream(oversized));
+	ASSERT_TRUE(invalidWide);
+	EXPECT_FALSE(invalidWide->Stations[0].LoopTakes[0].BaseIntervalSamps);
+}

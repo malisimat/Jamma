@@ -234,6 +234,11 @@ std::optional<std::shared_ptr<LoopTake>> LoopTake::FromFile(LoopTakeParams takeP
 	auto take = std::make_shared<LoopTake>(takeParams, mixerParams);
 	midi::MidiQuantisationSettings quantisation = take->MidiQuantisation();
 	quantisation.Enabled = takeStruct.MidiQuantEnabled;
+	if (takeStruct.BaseIntervalSamps && takeStruct.BaseDivisions)
+	{
+		quantisation.BaseIntervalSamps = static_cast<std::uint32_t>(*takeStruct.BaseIntervalSamps);
+		quantisation.BaseDivisions = *takeStruct.BaseDivisions;
+	}
 	quantisation.Fraction = midi::MidiQuantisation::ClampFractionIndex(takeStruct.MidiQuantFraction);
 	quantisation.PhaseOffsetSamps = takeStruct.TakePhaseOffsetSamps;
 	take->SetMidiQuantisation(quantisation);
@@ -274,6 +279,8 @@ std::optional<std::shared_ptr<LoopTake>> LoopTake::FromFile(LoopTakeParams takeP
 	midiState.QuantisationTransportStartSamps = takeStruct.MidiQuantTransportStart;
 	midiState.PlayIndex = takeStruct.MidiPlayIndex;
 	midiState.LoopLengthSamps = takeStruct.MidiPlayLength;
+	midiState.BaseIntervalSamps = quantisation.BaseIntervalSamps;
+	midiState.BaseDivisions = quantisation.BaseDivisions;
 	for (const auto& streamStruct : takeStruct.MidiStreams)
 	{
 		std::ifstream stream(std::filesystem::path(dir) / utils::DecodeUtf8(streamStruct.SidecarPath), std::ios::binary);
@@ -306,6 +313,10 @@ std::optional<std::shared_ptr<LoopTake>> LoopTake::FromFile(LoopTakeParams takeP
 		restored.Channel = streamStruct.Channel;
 		restored.Device = streamStruct.Device;
 		restored.Loop.LoopLengthSamps = sidecar->LogicalLength;
+        restored.Loop.LoopQuantisation.Enabled = streamStruct.MidiQuantEnabled;
+        if (streamStruct.MidiQuantFraction)
+            restored.Loop.LoopQuantisation.Fraction = midi::MidiQuantisation::ClampFractionIndex(*streamStruct.MidiQuantFraction);
+        restored.Loop.LoopQuantisation.PhaseOffsetSamps = streamStruct.PhaseOffsetSamps;
 		restored.Loop.AutomationGlobalSampleOrigin = static_cast<std::uint32_t>(sidecar->AutomationGlobalSampleOrigin);
 		restored.Loop.EventCount = sidecar->Events.size();
 		for (std::size_t eventIndex = 0u; eventIndex < sidecar->Events.size(); ++eventIndex)
@@ -1145,7 +1156,7 @@ ActionResult LoopTake::OnAction(JobAction action)
 		for (auto& midiLoop : action.MidiLoops)
 		{
 			if (midiLoop)
-				retry |= !midiLoop->SetQuantisation(settings, MidiQuantisationTransportStartSamps());
+				retry |= !midiLoop->SetQuantisation(settings, MidiQuantisationTransportStartSamps(), _ForcedMidiQuantisationEnabled());
 		}
 		if (retry)
 			_midiQuantisationUpdatePending.store(true, std::memory_order_release);
@@ -1289,7 +1300,10 @@ std::optional<engine::QuantisationLoopTakeVisual> LoopTake::QuantisationVisual()
 		MidiQuantisation().Fraction,
 		resolvedQuantisation.PhaseOffsetSamps,
 		MidiQuantisationTransportStartSamps(),
-		hasMidi && !resolvedQuantisation.HasRemoteGrid()
+		true,
+		static_cast<std::uint32_t>(resolvedQuantisation.GridInterval()),
+		static_cast<std::uint32_t>(resolvedQuantisation.GridDivisions() / midi::MidiQuantisation::Divisor(resolvedQuantisation.Fraction)),
+		resolvedQuantisation.HasRemoteGrid() ? resolvedQuantisation.RemoteOriginSamps : 0
 	};
 }
 
@@ -1304,8 +1318,31 @@ std::vector<engine::QuantisationLoopTakeVisual> LoopTake::QuantisationVisualsFor
 		if (!take)
 			continue;
 
-		if (auto visual = take->QuantisationVisual(); visual.has_value())
-			visuals.push_back(visual.value());
+        auto visual = take->QuantisationVisual();
+        if (!visual) continue;
+        const auto& midiLoops = take->GetMidiLoops();
+        if (midiLoops.empty())
+        {
+            visuals.push_back(*visual);
+            continue;
+        }
+        // Loop-local overrides draw their own grids without changing siblings.
+        for (const auto& loop : midiLoops)
+        {
+            if (!loop || !loop->Model()) continue;
+            auto streamVisual = *visual;
+            const auto settings = loop->Quantisation();
+            streamVisual.LoopLengthSamps = loop->LoopLengthSamps();
+            streamVisual.GrainSamps = settings.GrainSamps;
+            streamVisual.Fraction = settings.Fraction;
+            streamVisual.PhaseOffsetSamps = settings.PhaseOffsetSamps;
+            streamVisual.GridIntervalSamps = static_cast<std::uint32_t>(settings.GridInterval());
+            streamVisual.GridBaseDivisions = static_cast<std::uint32_t>(settings.GridDivisions() / midi::MidiQuantisation::Divisor(settings.Fraction));
+            streamVisual.GridOriginSamps = settings.HasRemoteGrid() ? settings.RemoteOriginSamps : 0;
+            streamVisual.YCenter = loop->Model()->ModelPosition().Y;
+            streamVisual.HalfHeight = (std::max)(8.0f, static_cast<float>(loop->Model()->GetSize().Height) * 0.45f);
+            visuals.push_back(streamVisual);
+        }
 	}
 
 	return visuals;
@@ -1462,7 +1499,7 @@ void LoopTake::Record(std::vector<unsigned int> channels,
 			auto midiModel = std::make_shared<graphics::MidiModel>(modelParams);
 			midiLoop->AttachModel(midiModel);
 			midiLoop->StartRecord();
-			midiLoop->SetQuantisation(ResolvedMidiQuantisation(), MidiQuantisationTransportStartSamps());
+			midiLoop->SetQuantisation(ResolvedMidiQuantisation(), MidiQuantisationTransportStartSamps(), _ForcedMidiQuantisationEnabled());
 			_midiLoops.push_back(midiLoop);
 			_midiLoopChannels.push_back(midiChan);
 			_midiLoopDevices.push_back(midiDevice);
@@ -1817,7 +1854,7 @@ void LoopTake::Play(unsigned long index,
 				- static_cast<std::uint32_t>(_midiVisualPlayIndex.load(std::memory_order_relaxed));
 			// The audio callback may have replaced the provisional transport start
 			// after this loop was armed. EndRecord publishes the final grid once.
-			midiLoop->SetQuantisation(ResolvedMidiQuantisation(), MidiQuantisationTransportStartSamps());
+			midiLoop->SetQuantisation(ResolvedMidiQuantisation(), MidiQuantisationTransportStartSamps(), _ForcedMidiQuantisationEnabled());
 			midiLoop->EndRecord(midiLoopLength, automationGlobalSampleOrigin);
 			midiLoop->QueueModelUpdateFromEvents(midiLoopLength, true);
 		}
@@ -2055,7 +2092,7 @@ void LoopTake::Overdub(std::vector<unsigned int> channels,
 			auto midiModel = std::make_shared<graphics::MidiModel>(modelParams);
 			midiLoop->AttachModel(midiModel);
 			midiLoop->StartRecord();
-			midiLoop->SetQuantisation(ResolvedMidiQuantisation(), MidiQuantisationTransportStartSamps());
+			midiLoop->SetQuantisation(ResolvedMidiQuantisation(), MidiQuantisationTransportStartSamps(), _ForcedMidiQuantisationEnabled());
 			_midiLoops.push_back(midiLoop);
 			_midiLoopChannels.push_back(midiChan);
 			_midiLoopDevices.push_back(midiDevice);
@@ -2535,7 +2572,7 @@ bool LoopTake::PublishMidiEdit(const std::shared_ptr<midi::MidiLoop>& loop,
 	std::scoped_lock midiLock(_midiCaptureMutex);
 	if (!loop || _state.load(std::memory_order_acquire) != STATE_PLAYING
 		|| std::find(_midiLoops.begin(), _midiLoops.end(), loop) == _midiLoops.end()
-		|| edit.Quantisation != ResolvedMidiQuantisation()
+		|| edit.Quantisation != loop->Quantisation()
 		|| edit.QuantisationTransportStartSamps != MidiQuantisationTransportStartSamps()
 		|| !loop->PublishEdit(edit))
 		return false;
@@ -2561,6 +2598,16 @@ bool LoopTake::SnapshotMidiForExport(MidiExportState& state) const
 	exported.PlayIndex = _midiVisualPlayIndex.load(std::memory_order_acquire);
 	exported.LoopLengthSamps = _midiVisualLoopLength.load(std::memory_order_acquire);
 	exported.Quantisation = MidiQuantisation();
+	const auto base = _midiBaseGridPacked.load(std::memory_order_acquire);
+	exported.BaseIntervalSamps = static_cast<std::uint32_t>(base >> 32u);
+	exported.BaseDivisions = static_cast<std::uint32_t>(base);
+	// A saved session starts locally; remote beat geometry belongs to the live
+	// authority lifetime rather than the portable local tap grid.
+	if (ResolvedMidiQuantisation().HasRemoteGrid())
+	{
+		exported.BaseIntervalSamps = 0u;
+		exported.BaseDivisions = 0u;
+	}
 	exported.QuantisationTransportStartSamps = MidiQuantisationTransportStartSamps();
 	exported.Streams.reserve(_midiLoops.size());
 	const auto anchorCorrection = _midiAnchorCorrection.load(std::memory_order_acquire);
@@ -2635,8 +2682,9 @@ bool LoopTake::RestoreMidiFromExport(const MidiExportState& state)
 	_midiAnchorCorrection.store(0, std::memory_order_release);
 	_midiTransportStartSamps.store(state.QuantisationTransportStartSamps, std::memory_order_release);
 	_midiQuantisationPacked.store(state.Quantisation.Pack(), std::memory_order_release);
+	_midiBaseGridPacked.store((static_cast<std::uint64_t>(state.BaseIntervalSamps) << 32u) | state.BaseDivisions, std::memory_order_release);
 	for (const auto& loop : _midiLoops)
-		loop->SetQuantisation(ResolvedMidiQuantisation(), state.QuantisationTransportStartSamps);
+		loop->SetQuantisation(ResolvedMidiQuantisation(), state.QuantisationTransportStartSamps, _ForcedMidiQuantisationEnabled());
 	for (const auto& loop : _midiLoops)
 		if (loop && loop->Model())
 		{
@@ -2816,9 +2864,20 @@ midi::MidiQuantisationSettings LoopTake::MidiQuantisation() const noexcept
 		_midiQuantisationPacked.load(std::memory_order_acquire));
 }
 
+std::optional<bool> LoopTake::_ForcedMidiQuantisationEnabled() const noexcept
+{
+    const auto state = static_cast<io::JamFile::GlobalMidiQuantState>(_globalMidiQuantStatePacked.load(std::memory_order_acquire));
+    if (state == io::JamFile::GlobalMidiQuantState::Off) return false;
+    if (state == io::JamFile::GlobalMidiQuantState::All) return true;
+    return std::nullopt;
+}
+
 midi::MidiQuantisationSettings LoopTake::ResolvedMidiQuantisation() const noexcept
 {
 	auto settings = MidiQuantisation();
+	const auto base = _midiBaseGridPacked.load(std::memory_order_acquire);
+	settings.BaseIntervalSamps = static_cast<std::uint32_t>(base >> 32u);
+	settings.BaseDivisions = static_cast<std::uint32_t>(base);
 	const auto globalState = static_cast<io::JamFile::GlobalMidiQuantState>(
 		_globalMidiQuantStatePacked.load(std::memory_order_acquire));
 	switch (globalState)
@@ -2853,17 +2912,22 @@ midi::MidiQuantisationSettings LoopTake::ResolvedMidiQuantisation() const noexce
 	return settings;
 }
 
+midi::MidiQuantisationSettings LoopTake::ResolvedMidiQuantisationFor(const std::shared_ptr<midi::MidiLoop>& loop) const noexcept
+{
+    auto settings = ResolvedMidiQuantisation();
+    if (loop) settings = midi::MidiLoop::ResolveQuantisation(settings, loop->GetLoopQuantisationOverride());
+    if (const auto forced = _ForcedMidiQuantisationEnabled()) settings.Enabled = *forced;
+    return settings;
+}
+
 void LoopTake::SetGlobalMidiQuantState(io::JamFile::GlobalMidiQuantState state) noexcept
 {
-	const auto previous = ResolvedMidiQuantisation();
-	_globalMidiQuantStatePacked.store(static_cast<std::uint8_t>(state), std::memory_order_release);
-	const auto updated = ResolvedMidiQuantisation();
-
-	if (previous != updated)
-	{
-		_midiQuantisationUpdatePending = true;
-		_changesMade = true;
-	}
+    const auto previous = _globalMidiQuantStatePacked.exchange(static_cast<std::uint8_t>(state), std::memory_order_acq_rel);
+    if (previous != static_cast<std::uint8_t>(state))
+    {
+        _midiQuantisationUpdatePending = true;
+        _changesMade = true;
+    }
 }
 
 void LoopTake::SetMidiQuantisationInheritedPhaseOffset(std::int32_t offsetSamps) noexcept
@@ -2921,6 +2985,31 @@ void LoopTake::CaptureFirstRecordBlockSceneAtAudioBoundary(std::uint64_t sceneSa
 std::uint64_t LoopTake::FirstRecordBlockSceneSamps() const noexcept
 {
 	return _firstRecordBlockSceneSamps.load(std::memory_order_acquire);
+}
+
+bool LoopTake::IsCompletedRecording() const noexcept
+{
+    return _state.load(std::memory_order_acquire) == STATE_PLAYING && VisualLoopLengthSamps() > 0ul;
+}
+
+bool LoopTake::SetMidiLoopQuantisationOverride(const std::shared_ptr<midi::MidiLoop>& loop,
+    const midi::MidiLoop::QuantisationOverride& value)
+{
+    std::scoped_lock midiLock(_midiCaptureMutex);
+    if (std::find(_midiLoops.begin(), _midiLoops.end(), loop) == _midiLoops.end() || !loop) return false;
+    const auto result = loop->SetLoopQuantisationOverride(value);
+    if (result) _changesMade = true;
+    return result;
+}
+
+void LoopTake::SetMidiBaseGrid(std::uint32_t interval, std::uint32_t divisions) noexcept
+{
+    const auto packed = (static_cast<std::uint64_t>(interval) << 32u) | divisions;
+    if (_midiBaseGridPacked.exchange(packed, std::memory_order_acq_rel) != packed)
+    {
+        _midiQuantisationUpdatePending = true;
+        _changesMade = true;
+    }
 }
 
 void LoopTake::SetRemoteMidiQuantisationGrid(const RemoteTransportGeometry& geometry,

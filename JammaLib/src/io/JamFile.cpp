@@ -644,7 +644,11 @@ bool JamFile::ToStream(JamFile jam, std::stringstream& ss)
 			if (i > 0) out += ",";
 			out += "{" + kvStr("sidecar", stream.SidecarPath) + "," + kvUlong("channel", stream.Channel) + ","
 				+ kvStr("device", stream.Device) + "," + kvUlong("logicalLength", stream.LogicalLength) + ","
-				+ kvStr("automationGlobalSampleOrigin", std::to_string(stream.AutomationGlobalSampleOrigin)) + "}";
+				+ kvStr("automationGlobalSampleOrigin", std::to_string(stream.AutomationGlobalSampleOrigin));
+			if (stream.MidiQuantEnabled) out += "," + kvBool("midiQuantEnabled", *stream.MidiQuantEnabled);
+			if (stream.MidiQuantFraction) out += "," + kvInt("midiQuantFraction", *stream.MidiQuantFraction);
+			if (stream.PhaseOffsetSamps) out += "," + kvInt("phaseOffsetSamps", *stream.PhaseOffsetSamps);
+			out += "}";
 		}
 		return out + "]";
 	};
@@ -788,6 +792,11 @@ bool JamFile::ToStream(JamFile jam, std::stringstream& ss)
 			}
 
 			ss << "]";
+			if (take.BaseIntervalSamps && take.BaseDivisions && *take.BaseIntervalSamps > 0u && *take.BaseDivisions > 0u
+				&& *take.BaseIntervalSamps <= (std::numeric_limits<std::uint32_t>::max)()
+				&& *take.BaseDivisions <= *take.BaseIntervalSamps)
+				ss << "," << kvStr("midiBaseIntervalSamps", std::to_string(*take.BaseIntervalSamps))
+					<< "," << kvUlong("midiBaseDivisions", *take.BaseDivisions);
 			ss << "," << kvUlong("midiPlayIndex", take.MidiPlayIndex)
 				<< "," << kvUlong("midiPlayLength", take.MidiPlayLength)
 				<< "," << kvStr("midiQuantTransportStart", std::to_string(take.MidiQuantTransportStart))
@@ -1315,6 +1324,16 @@ std::optional<JamFile::LoopTake> JamFile::LoopTake::FromJson(Json::JsonPart json
 				stream.Channel = *channel;
 				stream.LogicalLength = *length;
 				stream.AutomationGlobalSampleOrigin = *parsedOrigin;
+				const auto enabled = streamJson.KeyValues.find("midiQuantEnabled");
+				if (enabled != streamJson.KeyValues.end() && std::holds_alternative<bool>(enabled->second))
+					stream.MidiQuantEnabled = std::get<bool>(enabled->second);
+				const auto fraction = Json::GetUnsigned(streamJson, "midiQuantFraction");
+				if (fraction && *fraction < midi::MidiQuantisationFractionCount)
+					stream.MidiQuantFraction = static_cast<int>(*fraction);
+				const auto phase = streamJson.KeyValues.find("phaseOffsetSamps");
+				if (phase != streamJson.KeyValues.end())
+					stream.PhaseOffsetSamps = ParseInt32Clamped(phase->second, 0);
+
 				midiStreams.push_back(std::move(stream));
 			}
 			else
@@ -1385,6 +1404,19 @@ std::optional<JamFile::LoopTake> JamFile::LoopTake::FromJson(Json::JsonPart json
 	take.MidiPlayIndex = midiPlayIndex;
 	take.MidiPlayLength = midiPlayLength;
 	take.MidiQuantTransportStart = midiQuantTransportStart;
+	const auto baseIntervalText = Json::GetString(json, "midiBaseIntervalSamps");
+	const auto baseDivisions = Json::GetUnsigned(json, "midiBaseDivisions");
+	const auto baseInterval = baseIntervalText ? ParseStrictUint64(*baseIntervalText) : std::nullopt;
+	// Old manifests omit this pair and inherit the ordinary grain grid. Invalid
+	// or partial geometry also falls back rather than fabricating boundaries.
+	if (baseInterval && *baseInterval > 0u && baseDivisions && *baseDivisions > 0u
+		&& *baseInterval <= (std::numeric_limits<std::uint32_t>::max)()
+		&& *baseDivisions <= *baseInterval)
+	{
+		take.BaseIntervalSamps = *baseInterval;
+		take.BaseDivisions = static_cast<std::uint32_t>(*baseDivisions);
+	}
+
 	take.MidiStreams = std::move(midiStreams);
 	take.AudioRoutes = std::move(audioRoutes);
 	take.HasAudioRoutes = hasAudioRoutes;

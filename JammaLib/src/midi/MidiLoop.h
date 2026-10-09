@@ -145,8 +145,16 @@ namespace midi
 		// Fixed-size transfer object for the lossless native MIDI sidecar.  It is
 		// intentionally bounded by the runtime capacities so malformed input cannot
 		// request additional event or automation storage during restoration.
+		struct QuantisationOverride
+		{
+			std::optional<bool> Enabled;
+			std::optional<MidiQuantisationFraction> Fraction;
+			std::optional<std::int32_t> PhaseOffsetSamps;
+		};
+
 		struct ExportState
 		{
+			QuantisationOverride LoopQuantisation;
 			std::array<MidiEvent, DefaultCapacity> Events{};
 			std::size_t EventCount = 0u;
 			std::uint32_t LoopLengthSamps = 0u;
@@ -161,6 +169,7 @@ namespace midi
 			std::size_t EventCount = 0u;
 			std::uint32_t LoopLengthSamps = 0u;
 			std::uint64_t Revision = 0u;
+			std::uint64_t SourceRevision = 0u;
 			MidiQuantisationSettings Quantisation{};
 			std::uint64_t QuantisationTransportStartSamps = 0u;
 		};
@@ -173,6 +182,7 @@ namespace midi
 			std::size_t EventCount = 0u;
 			std::uint32_t LoopLengthSamps = 0u;
 			std::uint64_t Revision = 0u;
+			std::uint64_t SourceRevision = 0u;
 			bool QuantisationActive = false;
 			MidiQuantisationSettings Quantisation{};
 			std::uint64_t QuantisationTransportStartSamps = 0u;
@@ -332,7 +342,13 @@ namespace midi
 		// buffers are not overwritten or freed until this MidiLoop is destroyed, so
 		// ReadBlock never touches shared ownership or dangling storage.
 		bool SetQuantisation(const MidiQuantisationSettings& settings,
-			std::uint64_t transportStartSamps = 0u);
+			std::uint64_t transportStartSamps = 0u,
+			std::optional<bool> forcedEnabled = std::nullopt);
+		const QuantisationOverride& GetLoopQuantisationOverride() const noexcept { return _loopQuantisationOverride; }
+		// Owner thread only, under the owning take capture mutex. Publishes immediately.
+		bool SetLoopQuantisationOverride(const QuantisationOverride& value);
+		static MidiQuantisationSettings ResolveQuantisation(const MidiQuantisationSettings& inherited,
+			const QuantisationOverride& overrides) noexcept;
 		const MidiQuantisationSettings& Quantisation() const noexcept { return _quantisation; }
 		bool IsQuantisationActive() const noexcept;
 
@@ -357,7 +373,7 @@ namespace midi
 		bool PublishCompletedEvents(const MidiEvent* raw, std::size_t count,
 			std::uint32_t length, std::uint64_t revision,
 			const MidiQuantisationSettings& quantisation,
-			std::uint64_t transportStart) noexcept;
+			std::uint64_t transportStart, bool sourceChanged = true) noexcept;
 		// Owner-side completion only. An active callback reader releases its pool
 		// slot independently; never call this from an audio callback.
 		void PublishCompletionWithRetry(const MidiEvent* raw, std::size_t count,
@@ -419,7 +435,11 @@ namespace midi
 		std::array<std::atomic<std::uint8_t>, TotalNoteSlots> _heldPublished{};
 		std::atomic<bool> _heldFlushRequested{ false };
 		std::atomic<std::shared_ptr<MidiModel>> _model;
+		std::uint64_t _sourceRevision = 0u;
 		MidiQuantisationSettings _quantisation;
+		MidiQuantisationSettings _inheritedQuantisation;
+		QuantisationOverride _loopQuantisationOverride;
+		std::optional<bool> _forcedQuantisationEnabled;
 		std::uint64_t _quantisationTransportStartSamps = 0u;
 		std::array<AutomationLane, MaxAutomationLanes> _lanes{};
 	};

@@ -234,7 +234,7 @@ namespace engine
 			return length > constants::MaxLoopFadeSamps ? length - constants::MaxLoopFadeSamps : 0ul;
 		}
 		static double CalcDrawRadius(unsigned long loopLength);
-		std::vector<float> ExportSamples() const;
+		std::vector<float> ExportSamples(bool retainPhysicalTail = false) const;
 		io::JamFile::Loop ToJamFile(const std::string& wavFilename) const;
 		void SetMixerLevel(double level);
 		void SetMasterVisualScale(float scale) noexcept;

@@ -301,6 +301,8 @@ namespace engine
 			unsigned long PlayIndex = 0ul;
 			unsigned long LoopLengthSamps = 0ul;
 			midi::MidiQuantisationSettings Quantisation;
+			std::uint32_t BaseIntervalSamps = 0u;
+			std::uint32_t BaseDivisions = 0u;
 			std::uint64_t QuantisationTransportStartSamps = 0u;
 		};
 		struct PendingAutomationBinding
@@ -336,6 +338,7 @@ namespace engine
 		void SetMidiQuantisationFromUserEdit(const midi::MidiQuantisationSettings& settings) noexcept;
 		midi::MidiQuantisationSettings MidiQuantisation() const noexcept;
 		midi::MidiQuantisationSettings ResolvedMidiQuantisation() const noexcept;
+		midi::MidiQuantisationSettings ResolvedMidiQuantisationFor(const std::shared_ptr<midi::MidiLoop>& loop) const noexcept;
 		void SetGlobalMidiQuantState(io::JamFile::GlobalMidiQuantState state) noexcept;
 		void SetMidiQuantisationInheritedPhaseOffset(std::int32_t offsetSamps) noexcept;
 		void SetMidiQuantisationTransportStartSamps(std::uint64_t startSamps) noexcept;
@@ -345,6 +348,9 @@ namespace engine
 		std::uint64_t MidiQuantisationTransportStartSamps() const noexcept;
 		void CaptureFirstRecordBlockSceneAtAudioBoundary(std::uint64_t sceneSamps) noexcept;
 		std::uint64_t FirstRecordBlockSceneSamps() const noexcept;
+		bool SetMidiLoopQuantisationOverride(const std::shared_ptr<midi::MidiLoop>& loop, const midi::MidiLoop::QuantisationOverride& value);
+		void SetMidiBaseGrid(std::uint32_t interval, std::uint32_t divisions) noexcept;
+		bool IsCompletedRecording() const noexcept;
 		void SetRemoteMidiQuantisationGrid(const RemoteTransportGeometry& geometry,
 			std::int64_t originSamps) noexcept;
 		void SetRackVisibility(bool visible);
@@ -381,6 +387,7 @@ namespace engine
 		bool _RecordMidiEventUnlocked(const midi::MidiEvent& ev,
 			const std::string& device,
 			std::uint32_t globalSampleNow) noexcept;
+		std::optional<bool> _ForcedMidiQuantisationEnabled() const noexcept;
 		void _UpdateLoops();
 		void _UpdateMidiModels(bool force = false);
 		void _UpdateMidiModelRotation();
@@ -509,6 +516,8 @@ namespace engine
 		std::atomic_bool _midiTransportStartFromAudio{ false };
 		// Seqlock-style publication avoids torn remote-grid reads without placing a
 		// lock or allocation on any real-time path.
+		// Job writer; callback/UI readers consume interval and divisions as one value.
+		std::atomic<std::uint64_t> _midiBaseGridPacked{ 0u };
 		std::atomic<std::uint64_t> _remoteMidiGridSequence{ 0u };
 		std::atomic<std::uint32_t> _remoteMidiIntervalSamps{ 0u };
 		std::atomic<std::uint32_t> _remoteMidiBpi{ 0u };

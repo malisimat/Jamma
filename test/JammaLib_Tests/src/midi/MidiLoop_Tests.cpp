@@ -1217,9 +1217,27 @@ TEST(LoopTakeMidiQuantisation, QuantisationVisualPublishesResolvedPhase) {
 	auto visual = take->QuantisationVisual();
 	ASSERT_TRUE(visual.has_value());
 	EXPECT_EQ(42, visual->PhaseOffsetSamps);
-	EXPECT_FALSE(visual->UseAbsoluteLocalGrid);
+	EXPECT_TRUE(visual->UseAbsoluteLocalGrid);
+	EXPECT_EQ(100u, visual->GridIntervalSamps);
 	EXPECT_EQ(100u, visual->GrainSamps);
 	EXPECT_EQ(10u, visual->LoopGrains);
+}
+
+TEST(LoopTakeMidiQuantisation, ExportKeepsLocalTapBaseButExcludesLiveRemoteBeatGeometry) {
+	auto take = MakeLoopTake("base-export");
+	take->SetMidiBaseGrid(96000u, 12u);
+	engine::LoopTake::MidiExportState exported;
+	ASSERT_TRUE(take->SnapshotMidiForExport(exported));
+	EXPECT_EQ(96000u, exported.BaseIntervalSamps);
+	EXPECT_EQ(12u, exported.BaseDivisions);
+	engine::RemoteTransportGeometry remote;
+	remote.IntervalLengthSamps = 192000u;
+	remote.Bpi = 8u;
+	take->SetRemoteMidiQuantisationGrid(remote, 0);
+	take->SetMidiBaseGrid(192000u, 24u);
+	ASSERT_TRUE(take->SnapshotMidiForExport(exported));
+	EXPECT_EQ(0u, exported.BaseIntervalSamps);
+	EXPECT_EQ(0u, exported.BaseDivisions);
 }
 
 TEST(MidiLoopBuildApi, ReplaceRecordedEventsPreservesPlaybackTiming)
@@ -2642,4 +2660,144 @@ TEST_F(MidiPointerEditorTest, StaleDisplayedInstanceCannotCaptureDifferentSource
 	EXPECT_FALSE(editor->OwnsPointer()); EXPECT_EQ(-1,relativeButton);
 	Relative(0,40,4u); Button(2,false,Pixel(0.15,60),0u);
 	EXPECT_EQ(revision,loop->Revision()); EXPECT_FALSE(history.Undo());
+}
+
+TEST(MidiLoopQuantisation, LoopOverridesComposeOnceAndPreserveSiblings)
+{
+	MidiLoop first;
+	MidiLoop sibling;
+	MidiQuantisationSettings inherited;
+	inherited.Enabled = true;
+	inherited.GrainSamps = 480;
+	inherited.Fraction = MidiQuantisationFraction::Quarter;
+	inherited.PhaseOffsetSamps = 20;
+	ASSERT_TRUE(first.SetQuantisation(inherited));
+	ASSERT_TRUE(sibling.SetQuantisation(inherited));
+	MidiLoop::QuantisationOverride override;
+	override.Enabled = false;
+	override.Fraction = MidiQuantisationFraction::Third;
+	override.PhaseOffsetSamps = -7;
+	ASSERT_TRUE(first.SetLoopQuantisationOverride(override));
+	EXPECT_FALSE(first.Quantisation().Enabled);
+	EXPECT_EQ(MidiQuantisationFraction::Third, first.Quantisation().Fraction);
+	EXPECT_EQ(13, first.Quantisation().PhaseOffsetSamps);
+	ASSERT_TRUE(first.SetQuantisation(inherited));
+	EXPECT_EQ(13, first.Quantisation().PhaseOffsetSamps);
+	EXPECT_EQ(inherited, sibling.Quantisation());
+	ASSERT_TRUE(first.SetLoopQuantisationOverride({}));
+	EXPECT_EQ(inherited, first.Quantisation());
+}
+
+TEST(MidiLoopQuantisation, ExportRestoresOptionalOverrideAndRawEvents)
+{
+	MidiLoop source;
+	source.StartRecord();
+	ASSERT_TRUE(source.RecordEvent(MidiEvent::MakeNoteOn(31u, 0u, 60u, 100u)));
+	source.EndRecord(480u);
+	MidiLoop::QuantisationOverride override;
+	override.Fraction = MidiQuantisationFraction::Third;
+	override.PhaseOffsetSamps = -9;
+	ASSERT_TRUE(source.SetLoopQuantisationOverride(override));
+	auto state = std::make_unique<MidiLoop::ExportState>();
+	ASSERT_TRUE(source.SnapshotForExport(*state));
+	MidiLoop restored;
+	ASSERT_TRUE(restored.RestoreFromExport(*state));
+	EXPECT_EQ(override.Fraction, restored.GetLoopQuantisationOverride().Fraction);
+	EXPECT_EQ(override.PhaseOffsetSamps, restored.GetLoopQuantisationOverride().PhaseOffsetSamps);
+	EXPECT_FALSE(restored.GetLoopQuantisationOverride().Enabled.has_value());
+	MidiEvent event;
+	ASSERT_TRUE(restored.TryGetEvent(0u, event));
+	EXPECT_EQ(31u, event.sampleOffset);
+}
+
+
+TEST(MidiLoopEdit, GridResolutionRoundTripRetainsSourceAndUndoRedo)
+{
+	auto take = MakeLoopTake("resolution-history");
+	take->SetGlobalMidiQuantState(io::JamFile::GlobalMidiQuantState::Mixed);
+	take->Record({}, "station", { 0u }, { "" });
+	take->Play(0u, 100u, 0u);
+	auto loop = take->GetMidiLoops().at(0u);
+	auto original = take->ResolvedMidiQuantisation();
+	original.Enabled = true;
+	original.GrainSamps = 100u;
+	original.Fraction = MidiQuantisationFraction::Quarter;
+	take->SetMidiQuantisation(original);
+	ASSERT_TRUE(loop->SetQuantisation(take->ResolvedMidiQuantisation(), take->MidiQuantisationTransportStartSamps()));
+	MidiLoop::EditState before;
+	ASSERT_TRUE(loop->SnapshotForEdit(before));
+	auto after = before;
+	ASSERT_TRUE(midi::MidiEditOperations::Create(after, 37u, 19u, 0u, 60u));
+	std::uint64_t accepted = 0u;
+	ASSERT_TRUE(take->PublishMidiEdit(loop, after, &accepted));
+	actions::ActionUndoHistory history;
+	auto cursor = std::make_shared<actions::MidiEditRevisionCursor>();
+	history.Add(std::make_shared<actions::MidiLoopEditUndo>(take, loop, before, after, accepted, cursor));
+	MidiLoop::EditState edited;
+	ASSERT_TRUE(loop->SnapshotForEdit(edited));
+	auto coarse = original;
+	coarse.Fraction = MidiQuantisationFraction::Whole;
+	take->SetMidiQuantisation(coarse);
+	ASSERT_TRUE(loop->SetQuantisation(take->ResolvedMidiQuantisation(), take->MidiQuantisationTransportStartSamps()));
+	MidiLoop::EditState changed;
+	ASSERT_TRUE(loop->SnapshotForEdit(changed));
+	EXPECT_EQ(edited.SourceRevision, changed.SourceRevision);
+	EXPECT_NE(edited.Revision, changed.Revision);
+	EXPECT_EQ(37u, changed.Events[0].sampleOffset);
+	EXPECT_FALSE(loop->PublishEdit(edited)); // An old active gesture still cannot commit.
+	ASSERT_TRUE(history.Undo());
+	EXPECT_EQ(0u, loop->EventCount());
+	EXPECT_EQ(coarse, loop->Quantisation());
+	ASSERT_TRUE(history.Redo());
+	take->SetMidiQuantisation(original);
+	ASSERT_TRUE(loop->SetQuantisation(take->ResolvedMidiQuantisation(), take->MidiQuantisationTransportStartSamps()));
+	ASSERT_TRUE(loop->SnapshotForEdit(changed));
+	EXPECT_EQ(edited.EventCount, changed.EventCount);
+	for (std::size_t i = 0u; i < edited.EventCount; ++i)
+	{
+		EXPECT_EQ(edited.Events[i].sampleOffset, changed.Events[i].sampleOffset);
+		EXPECT_EQ(edited.Events[i].status, changed.Events[i].status);
+		EXPECT_EQ(edited.Events[i].data1, changed.Events[i].data1);
+	}
+}
+
+TEST(MidiLoopQuantisation, GlobalOffAndAllTakePrecedenceOverLocalEnabledOverride)
+{
+	MidiLoop loop;
+	MidiQuantisationSettings inherited;
+	inherited.Enabled = true;
+	MidiLoop::QuantisationOverride override;
+	override.Enabled = true;
+	ASSERT_TRUE(loop.SetLoopQuantisationOverride(override));
+	ASSERT_TRUE(loop.SetQuantisation(inherited, 0u, false));
+	EXPECT_FALSE(loop.Quantisation().Enabled);
+	ASSERT_TRUE(loop.SetLoopQuantisationOverride(override));
+	EXPECT_FALSE(loop.Quantisation().Enabled);
+	override.Enabled = false;
+	ASSERT_TRUE(loop.SetLoopQuantisationOverride(override));
+	ASSERT_TRUE(loop.SetQuantisation(inherited, 0u, true));
+	EXPECT_TRUE(loop.Quantisation().Enabled);
+	ASSERT_TRUE(loop.SetQuantisation(inherited));
+	EXPECT_FALSE(loop.Quantisation().Enabled);
+}
+
+TEST(MidiLoopEdit, UndoRejectsAnotherSourceWriterEvenWithIdenticalEvents)
+{
+	auto take = MakeLoopTake("source-epoch-guard");
+	take->Record({}, "station", { 0u }, { "" });
+	take->Play(0u, 100u, 0u);
+	auto loop = take->GetMidiLoops().at(0u);
+	MidiLoop::EditState before;
+	ASSERT_TRUE(loop->SnapshotForEdit(before));
+	auto after = before;
+	ASSERT_TRUE(midi::MidiEditOperations::Create(after, 30u, 10u, 0u, 60u));
+	std::uint64_t accepted = 0u;
+	ASSERT_TRUE(take->PublishMidiEdit(loop, after, &accepted));
+	auto cursor = std::make_shared<actions::MidiEditRevisionCursor>();
+	actions::MidiLoopEditUndo undo(take, loop, before, after, accepted, cursor);
+	MidiLoop::EditState external;
+	ASSERT_TRUE(loop->SnapshotForEdit(external));
+	ASSERT_TRUE(take->PublishMidiEdit(loop, external));
+	EXPECT_FALSE(undo.Undo());
+	EXPECT_EQ(2u, loop->EventCount());
 }

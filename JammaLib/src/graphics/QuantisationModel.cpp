@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <limits>
 #include "glm/ext.hpp"
 #include "GlDrawContext.h"
 #include "../midi/MidiQuantisation.h"
@@ -242,7 +243,7 @@ void QuantisationModel::SetLoopTakeVisuals(unsigned int seedSamps,
 		if (0u == gateCount)
 			continue;
 
-		const auto totalGateCount = gateCount;
+		const auto totalGateCount = visual.GridIntervalSamps ? counts.FractionDivisionCount : gateCount;
 		gateCount = std::clamp(gateCount, 1u, MaxVisibleGates);
 
 		const auto angleStep = static_cast<float>(constants::TWOPI) / static_cast<float>(gateCount);
@@ -266,7 +267,7 @@ void QuantisationModel::SetLoopTakeVisuals(unsigned int seedSamps,
 				static_cast<std::uint64_t>(gate) * totalGateCount / gateCount);
 			const auto gateAngle = visual.UseAbsoluteLocalGrid
 				? loopIndexAngle + static_cast<float>(constants::TWOPI)
-					* static_cast<float>(VisualBoundaryOffsetSamps(visual, boundaryIndex, 1u))
+					* static_cast<float>(VisualBoundaryOffsetSamps(visual, boundaryIndex, midi::MidiQuantisation::Divisor(visual.Fraction)))
 					/ static_cast<float>(visual.LoopLengthSamps)
 				: phaseOffset + (angleStep * static_cast<float>(gate));
 			transforms.push_back(gateAngle);
@@ -293,21 +294,21 @@ QuantisationModel::VisualCounts QuantisationModel::ResolveVisualCounts(const eng
 
 	const auto divisor = midi::MidiQuantisation::Divisor(visual.Fraction);
 	counts.StepSamps = (divisor > 0u) ? (visual.GrainSamps / divisor) : 0u;
-	if (visual.UseAbsoluteLocalGrid)
-	{
-		if ((visual.LoopLengthSamps % visual.GrainSamps) != 0ul)
-			return counts;
-		counts.GrainFrameCount = static_cast<unsigned int>(visual.LoopLengthSamps / visual.GrainSamps);
-		counts.FractionDivisionCount = counts.GrainFrameCount * divisor;
-	}
-	else
-	{
-		counts.GrainFrameCount = visual.LoopGrains;
-		if (counts.GrainFrameCount == 0u && (visual.LoopLengthSamps % visual.GrainSamps) == 0ul)
-			counts.GrainFrameCount = static_cast<unsigned int>(visual.LoopLengthSamps / visual.GrainSamps);
-		if (counts.StepSamps > 0u && (visual.LoopLengthSamps % counts.StepSamps) == 0ul)
-			counts.FractionDivisionCount = static_cast<unsigned int>(visual.LoopLengthSamps / counts.StepSamps);
-	}
+    if (!visual.GridIntervalSamps)
+    {
+        counts.GrainFrameCount = visual.LoopGrains ? visual.LoopGrains : static_cast<unsigned int>(visual.LoopLengthSamps / visual.GrainSamps);
+        if (visual.UseAbsoluteLocalGrid)
+            counts.FractionDivisionCount = counts.GrainFrameCount * divisor;
+        else if (counts.StepSamps && visual.LoopLengthSamps % counts.StepSamps == 0ul)
+            counts.FractionDivisionCount = static_cast<unsigned int>(visual.LoopLengthSamps / counts.StepSamps);
+        return counts;
+    }
+	const auto interval = visual.GridIntervalSamps ? visual.GridIntervalSamps : visual.GrainSamps;
+    const auto base = visual.GridBaseDivisions ? visual.GridBaseDivisions : 1u;
+    // Draw effective cells: construction grain remains a separate measurement.
+    const auto cells = (static_cast<std::uint64_t>(visual.LoopLengthSamps) * base * divisor + interval - 1u) / interval;
+    counts.GrainFrameCount = static_cast<unsigned int>((std::min)(cells, static_cast<std::uint64_t>(MaxVisibleGates)));
+    counts.FractionDivisionCount = static_cast<unsigned int>((std::min)(cells, static_cast<std::uint64_t>((std::numeric_limits<unsigned int>::max)())));
 
 	return counts;
 }
@@ -322,11 +323,13 @@ std::uint32_t QuantisationModel::VisualBoundaryOffsetSamps(
 
 	const auto start = static_cast<std::int64_t>(visual.TransportStartSamps);
 	const auto first = midi::MidiQuantisation::NearestBoundaryIndex(
-		start, visual.GrainSamps, divisionsPerGrain);
+		start - visual.GridOriginSamps, visual.GridIntervalSamps ? visual.GridIntervalSamps : visual.GrainSamps,
+		static_cast<std::uint64_t>(visual.GridBaseDivisions ? visual.GridBaseDivisions : 1u) * divisionsPerGrain);
 	const auto boundary = midi::MidiQuantisation::BoundarySampleAt(
-		first + boundaryIndex, visual.GrainSamps, divisionsPerGrain);
+		first + boundaryIndex, visual.GridIntervalSamps ? visual.GridIntervalSamps : visual.GrainSamps,
+		static_cast<std::uint64_t>(visual.GridBaseDivisions ? visual.GridBaseDivisions : 1u) * divisionsPerGrain);
 	const auto length = static_cast<std::int64_t>(visual.LoopLengthSamps);
-	auto local = (boundary - start + visual.PhaseOffsetSamps) % length;
+	auto local = (visual.GridOriginSamps + boundary - start + visual.PhaseOffsetSamps) % length;
 	if (local < 0)
 		local += length;
 	return static_cast<std::uint32_t>(local);

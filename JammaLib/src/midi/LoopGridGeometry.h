@@ -39,7 +39,7 @@ namespace midi
 			const MidiQuantisationSettings& settings, std::uint64_t transportStart) noexcept
 		{
 			if (!length || !settings.Enabled || settings.PhaseOffsetSamps != 0
-				|| !settings.GrainSamps || settings.HasRemoteGrid()
+				|| !settings.GrainSamps || settings.HasRemoteGrid() || settings.HasBaseGrid()
 				|| length % settings.GrainSamps != 0u)
 				return 0u;
 			const auto grain = settings.GrainSamps;
@@ -68,9 +68,8 @@ namespace midi
 					settings.RemoteOriginSamps < -static_cast<std::int64_t>(ExactLimit))))
 				return std::nullopt;
 			const bool remote = settings.HasRemoteGrid();
-			const std::uint64_t interval = remote ? settings.RemoteIntervalSamps : settings.GrainSamps;
-			const std::uint64_t divisions = static_cast<std::uint64_t>(remote ? settings.RemoteBpi : 1u)
-				* MidiQuantisation::Divisor(settings.Fraction);
+			const std::uint64_t interval = settings.GridInterval();
+			const std::uint64_t divisions = settings.GridDivisions();
 			if (interval == 0u || divisions == 0u || divisions > MaxCells)
 				return std::nullopt;
 			const std::int64_t start = static_cast<std::int64_t>(transportStart);

@@ -11,6 +11,7 @@ using midi::MidiQuantisation;
 using midi::MidiQuantisationSettings;
 using midi::MidiQuantisationGesture;
 using midi::MidiQuantisationGrainCandidates;
+using midi::MidiQuantisationFractionCount;
 
 static constexpr std::uint32_t MidiQuantisationDivisor(MidiQuantisationFraction fraction) noexcept
 {
@@ -109,6 +110,9 @@ TEST(MidiQuantisation, DivisorMatchesFractionName) {
 	EXPECT_EQ(8u, MidiQuantisationDivisor(MidiQuantisationFraction::Eighth));
 	EXPECT_EQ(16u, MidiQuantisationDivisor(MidiQuantisationFraction::Sixteenth));
 	EXPECT_EQ(32u, MidiQuantisationDivisor(MidiQuantisationFraction::ThirtySecond));
+	EXPECT_EQ(3u, MidiQuantisationDivisor(MidiQuantisationFraction::Third));
+	EXPECT_EQ(6u, MidiQuantisationDivisor(MidiQuantisationFraction::Sixth));
+	EXPECT_EQ(12u, MidiQuantisationDivisor(MidiQuantisationFraction::Twelfth));
 }
 
 TEST(MidiQuantisation, FractionLabelsMatchFractions) {
@@ -118,6 +122,9 @@ TEST(MidiQuantisation, FractionLabelsMatchFractions) {
 	EXPECT_STREQ("1/8", MidiQuantisationFractionLabel(MidiQuantisationFraction::Eighth));
 	EXPECT_STREQ("1/16", MidiQuantisationFractionLabel(MidiQuantisationFraction::Sixteenth));
 	EXPECT_STREQ("1/32", MidiQuantisationFractionLabel(MidiQuantisationFraction::ThirtySecond));
+	EXPECT_STREQ("1/3", MidiQuantisationFractionLabel(MidiQuantisationFraction::Third));
+	EXPECT_STREQ("1/6", MidiQuantisationFractionLabel(MidiQuantisationFraction::Sixth));
+	EXPECT_STREQ("1/12", MidiQuantisationFractionLabel(MidiQuantisationFraction::Twelfth));
 }
 
 TEST(MidiQuantisation, StepSampsReturnsZeroWhenDisabledOrNoGrain) {
@@ -162,7 +169,7 @@ TEST(MidiQuantisation, DragFractionResolutionRoundsAndClamps) {
 	EXPECT_EQ(MidiQuantisationFraction::Whole,
 		ResolveMidiQuantisationDragFraction(MidiQuantisationFraction::Whole, 10));
 	EXPECT_EQ(MidiQuantisationFraction::Quarter,
-		ResolveMidiQuantisationDragFraction(MidiQuantisationFraction::Whole, -64));
+		ResolveMidiQuantisationDragFraction(MidiQuantisationFraction::Whole, -96));
 	EXPECT_EQ(MidiQuantisationFraction::Whole,
 		ResolveMidiQuantisationDragFraction(MidiQuantisationFraction::Quarter, 200));
 	EXPECT_EQ(MidiQuantisationFraction::ThirtySecond,
@@ -477,4 +484,86 @@ TEST(MidiQuantisation, PlaybackEventsOrderSameSampleNoteOffBeforeNoteOn) {
 	EXPECT_EQ(200u, result[2].sampleOffset);
 	EXPECT_TRUE(result[2].IsNoteOn());
 	EXPECT_EQ(300u, result[3].sampleOffset);
+}
+
+TEST(MidiQuantisation, FractionDisplayOrderDoesNotChangeStoredOrdinals)
+{
+	const unsigned expectedDivisors[] = { 1u, 2u, 3u, 4u, 6u, 8u, 12u, 16u, 32u };
+	for (int index = 0; index < MidiQuantisationFractionCount; ++index)
+	{
+		const auto fraction = MidiQuantisation::ClampFractionDisplayIndex(index);
+		EXPECT_EQ(expectedDivisors[index], MidiQuantisation::Divisor(fraction));
+		EXPECT_EQ(index, MidiQuantisation::FractionDisplayIndex(fraction));
+		MidiQuantisationSettings settings;
+		settings.Enabled = true;
+		settings.Fraction = fraction;
+		settings.GrainSamps = 44101u;
+		settings.PhaseOffsetSamps = -123;
+		EXPECT_EQ(settings, MidiQuantisationSettings::Unpack(settings.Pack()));
+	}
+	// Previously saved straight fractions retain their exact packed byte.
+	for (int ordinal = 0; ordinal < 6; ++ordinal)
+	{
+		const auto packed = 1ull | (static_cast<std::uint64_t>(ordinal) << 8u) | (48000ull << 16u);
+		EXPECT_EQ(ordinal, MidiQuantisation::FractionIndex(MidiQuantisationSettings::Unpack(packed).Fraction));
+		EXPECT_EQ(packed, MidiQuantisationSettings::Unpack(packed).Pack());
+	}
+	EXPECT_EQ(6, MidiQuantisation::FractionIndex(MidiQuantisationFraction::Third));
+	EXPECT_EQ(7, MidiQuantisation::FractionIndex(MidiQuantisationFraction::Sixth));
+	EXPECT_EQ(8, MidiQuantisation::FractionIndex(MidiQuantisationFraction::Twelfth));
+	EXPECT_EQ(MidiQuantisationFraction::Third,
+		MidiQuantisation::ResolveDragFraction(MidiQuantisationFraction::Half, -32));
+	EXPECT_EQ(MidiQuantisationFraction::Quarter,
+		MidiQuantisation::ResolveDragFraction(MidiQuantisationFraction::Third, -32));
+}
+
+TEST(MidiQuantisation, TripletBoundariesRoundWithoutAccumulatedDrift)
+{
+	for (const auto interval : { 44101u, 48001u })
+	{
+		for (const auto divisions : { 3u, 6u, 12u })
+		{
+			for (int index = -static_cast<int>(divisions); index <= static_cast<int>(divisions * 2u); ++index)
+			{
+				const auto boundary = MidiQuantisation::BoundarySampleAt(index, interval, divisions);
+				EXPECT_EQ(index, MidiQuantisation::NearestBoundaryIndex(boundary, interval, divisions));
+				EXPECT_EQ(boundary + interval,
+					MidiQuantisation::BoundarySampleAt(index + static_cast<int>(divisions), interval, divisions));
+			}
+			EXPECT_EQ(interval, MidiQuantisation::BoundarySampleAt(divisions, interval, divisions));
+		}
+	}
+	EXPECT_EQ(33, MidiQuantisation::BoundarySampleAt(1, 100u, 3u));
+	EXPECT_EQ(67, MidiQuantisation::BoundarySampleAt(2, 100u, 3u));
+	// Halfway ties choose the later boundary, including before the origin.
+	EXPECT_EQ(1, MidiQuantisation::NearestBoundaryIndex(1, 6u, 3u));
+	EXPECT_EQ(0, MidiQuantisation::NearestBoundaryIndex(-1, 6u, 3u));
+}
+
+TEST(MidiQuantisation, TripletShuffleAndResolutionRoundTripPreserveSourceNotes)
+{
+	const MidiEvent source[] = {
+		MidiEvent::MakeNoteOn(0u, 0u, 60u, 100u),
+		MidiEvent::MakeNoteOff(100u, 0u, 60u),
+		MidiEvent::MakeNoteOn(667u, 1u, 62u, 100u),
+		MidiEvent::MakeNoteOff(767u, 1u, 62u)
+	};
+	MidiQuantisationSettings settings;
+	settings.Enabled = true;
+	settings.GrainSamps = 1000u;
+	settings.Fraction = MidiQuantisationFraction::Third;
+	MidiEvent first[4], coarse[4], restored[4];
+	MidiQuantisation::BuildQuantisedPlaybackEvents(source, 4u, 1000u, settings, 0u, first, false);
+	EXPECT_EQ(0u, first[0].sampleOffset);
+	EXPECT_EQ(667u, first[2].sampleOffset);
+	EXPECT_EQ(100u, first[3].sampleOffset - first[2].sampleOffset);
+	settings.Fraction = MidiQuantisationFraction::Whole;
+	MidiQuantisation::BuildQuantisedPlaybackEvents(source, 4u, 1000u, settings, 0u, coarse, false);
+	EXPECT_EQ(0u, coarse[2].sampleOffset);
+	settings.Fraction = MidiQuantisationFraction::Third;
+	MidiQuantisation::BuildQuantisedPlaybackEvents(source, 4u, 1000u, settings, 0u, restored, false);
+	for (int index = 0; index < 4; ++index)
+		EXPECT_EQ(first[index].sampleOffset, restored[index].sampleOffset);
+	EXPECT_EQ(667u, source[2].sampleOffset);
+	EXPECT_EQ(767u, source[3].sampleOffset);
 }
