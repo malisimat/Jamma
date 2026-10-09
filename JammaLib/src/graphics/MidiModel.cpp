@@ -315,23 +315,26 @@ void MidiModel::UpdateEditorGrid(std::uint32_t loopLength,
 			displayedGrid->Boundaries.end()), displayedGrid->Boundaries.end());
 	}
 	_editorGridVertices = BuildEditorGridVertices(displayedGrid ? &*displayedGrid : nullptr,
-		loopLength, _editorBottomPitch, _editorVisibleRows);
+		loopLength, _editorBottomPitch, _editorVisibleRows, settings.Fraction);
 	_editorGridDirty = true;
 }
 
 std::vector<float> MidiModel::BuildEditorGridVertices(const midi::LoopGridGeometry* grid,
-	std::uint32_t loopLength, int bottomPitch, int visibleRows)
+	std::uint32_t loopLength, int bottomPitch, int visibleRows,
+	midi::MidiQuantisationFraction fraction)
 {
 	std::vector<float> vertices;
 	if (visibleRows <= 0 || visibleRows > 128 || bottomPitch < 0 || bottomPitch + visibleRows > 128)
 		return vertices;
 	if (grid && loopLength > 0u)
 	{
+		// One major line per base unit (a grain on the local grid).
+		const auto majorEvery = midi::MidiQuantisation::Divisor(fraction);
 		vertices.reserve((grid->Boundaries.size() + static_cast<std::size_t>(visibleRows) + 1u) * 6u);
 		for (std::size_t i = 0u; i < grid->Boundaries.size(); ++i)
 		{
 			const auto u = static_cast<float>(midi::LoopGridGeometry::SampleU(grid->Boundaries[i], loopLength));
-			const auto weight = i % 4u == 0u || i + 1u == grid->Boundaries.size() ? 1.0f : 0.45f;
+			const auto weight = i % majorEvery == 0u || i + 1u == grid->Boundaries.size() ? 1.0f : 0.45f;
 			vertices.insert(vertices.end(), { u, 0.0f, weight, u, 1.0f, weight });
 		}
 	}

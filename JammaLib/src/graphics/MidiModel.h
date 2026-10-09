@@ -105,7 +105,8 @@ namespace graphics
 		static std::vector<float> BuildBaseVerts(unsigned int segments);
 		static std::vector<float> BuildBaseUvs(unsigned int segments);
 		static std::vector<float> BuildEditorGridVertices(const midi::LoopGridGeometry* grid,
-			std::uint32_t loopLength, int bottomPitch, int visibleRows);
+			std::uint32_t loopLength, int bottomPitch, int visibleRows,
+			midi::MidiQuantisationFraction fraction);
 
 		// Back-pointer to the owning loop so the renderer can read automation lanes.
 		// The loop owns this model (shared_ptr), so the raw pointer outlives the model.
