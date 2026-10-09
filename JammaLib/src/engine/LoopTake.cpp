@@ -1339,8 +1339,8 @@ std::vector<engine::QuantisationLoopTakeVisual> LoopTake::QuantisationVisualsFor
             streamVisual.GridIntervalSamps = static_cast<std::uint32_t>(settings.GridInterval());
             streamVisual.GridBaseDivisions = static_cast<std::uint32_t>(settings.GridDivisions() / midi::MidiQuantisation::Divisor(settings.Fraction));
             streamVisual.GridOriginSamps = settings.HasRemoteGrid() ? settings.RemoteOriginSamps : 0;
-            streamVisual.YCenter = loop->Model()->ModelPosition().Y;
-            streamVisual.HalfHeight = (std::max)(8.0f, static_cast<float>(loop->Model()->GetSize().Height) * 0.45f);
+            // Grids are station-local: keep the take's picker-ring center and
+            // 90% height instead of the MIDI child's take-local geometry.
             visuals.push_back(streamVisual);
         }
 	}

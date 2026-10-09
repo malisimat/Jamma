@@ -13,6 +13,7 @@
 #include "engine/LoopTake.h"
 #include "engine/Loop.h"
 #include "graphics/QuantisationModel.h"
+#include "graphics/MidiModel.h"
 #include "midi/MidiQuantisation.h"
 #include "utils/Timer.h"
 
@@ -800,6 +801,42 @@ static std::shared_ptr<QuantisationContractTake> MakeQuantisationContractTake(co
     return take;
 }
 
+TEST(Quantisation, MidiGridsFollowTakePickerHeightsAndUseTakeHeight)
+{
+    auto first = MakeQuantisationContractTake("first", 96000ul);
+    auto second = MakeQuantisationContractTake("second", 96000ul);
+    first->SetModelPosition({ 0.0f, 100.0f, 0.0f });
+    second->SetModelPosition({ 0.0f, 200.0f, 0.0f });
+    for (const auto& take : { first, second })
+    {
+        auto loop = std::make_shared<midi::MidiLoop>();
+        loop->StartRecord();
+        loop->EndRecord(96000u);
+        auto model = std::make_shared<graphics::MidiModel>(graphics::MidiModelParams{});
+        model->SetModelPosition({ 0.0f, 0.0f, 0.0f });
+        model->SetSize({ 80, 20 });
+        loop->AttachModel(model);
+        take->AddMidi(loop);
+    }
+
+    auto visuals = engine::LoopTake::QuantisationVisualsFor({ first, second });
+    ASSERT_EQ(2u, visuals.size());
+    EXPECT_FLOAT_EQ(100.0f, visuals[0].YCenter);
+    EXPECT_FLOAT_EQ(200.0f, visuals[1].YCenter);
+    EXPECT_FLOAT_EQ(45.0f, visuals[0].HalfHeight);
+    EXPECT_FLOAT_EQ(45.0f, visuals[1].HalfHeight);
+    EXPECT_FLOAT_EQ(10.0f, visuals[1].YCenter - visuals[1].HalfHeight
+        - (visuals[0].YCenter + visuals[0].HalfHeight));
+
+    // Resizing/repositioning a take must also update its grid geometry.
+    second->SetSize({ 100, 160 });
+    second->SetModelPosition({ 0.0f, 260.0f, 0.0f });
+    visuals = engine::LoopTake::QuantisationVisualsFor({ first, second });
+    ASSERT_EQ(2u, visuals.size());
+    EXPECT_FLOAT_EQ(260.0f, visuals[1].YCenter);
+    EXPECT_FLOAT_EQ(72.0f, visuals[1].HalfHeight);
+}
+
 TEST(Quantisation, SoleMidiTapPublishesGridWithoutRewritingSourceLength)
 {
     auto take = MakeQuantisationContractTake("midi-master", 96001ul);
@@ -925,6 +962,16 @@ TEST(Quantisation, MultichannelAudioAndMidiIsOneCompletedTake)
         loops.push_back(loop);
     }
     take->CompleteAudio(loops);
+    take->SetModelPosition({ 0.0f, 100.0f, 0.0f });
+    auto sibling = MakeQuantisationContractTake("audio-sibling", 0ul);
+    sibling->CompleteAudio(loops);
+    sibling->SetModelPosition({ 0.0f, 200.0f, 0.0f });
+    const auto visuals = engine::LoopTake::QuantisationVisualsFor({ take, sibling });
+    ASSERT_EQ(2u, visuals.size());
+    EXPECT_FLOAT_EQ(100.0f, visuals[0].YCenter);
+    EXPECT_FLOAT_EQ(200.0f, visuals[1].YCenter);
+    EXPECT_FLOAT_EQ(45.0f, visuals[0].HalfHeight);
+    EXPECT_FLOAT_EQ(45.0f, visuals[1].HalfHeight);
     auto station = std::make_shared<QuantisationContractStation>();
     station->AddTake(take);
     engine::Quantiser quantiser;
