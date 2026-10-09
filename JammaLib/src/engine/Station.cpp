@@ -1334,7 +1334,11 @@ ActionResult Station::OnAction(TriggerAction action)
 
 			res.IsEaten = true;
 			res.ResultType = actions::ActionResultType::ACTIONRESULT_ACTIVATE;
-			_SetVisualState(StationVisualState::STATIONSTATE_ENDRECORDING);
+			const auto takeState = loopTake ? loopTake.value()->TakeState() : LoopTake::STATE_PLAYINGRECORDING;
+			_SetVisualState(takeState == LoopTake::STATE_PLAYINGRECORDING ||
+				takeState == LoopTake::STATE_OVERDUBBINGRECORDING
+				? StationVisualState::STATIONSTATE_ENDRECORDING
+				: StationVisualState::STATIONSTATE_PLAYING);
 		}
 		break;
 	}

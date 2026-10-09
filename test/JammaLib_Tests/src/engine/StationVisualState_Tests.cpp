@@ -4,6 +4,7 @@
 #include "engine/LoopTake.h"
 #include "engine/Station.h"
 #include "engine/Trigger.h"
+#include "midi/MidiLoop.h"
 #include "utils/Timer.h"
 
 using actions::TriggerAction;
@@ -41,12 +42,95 @@ TEST(StationVisualState, StartsDefault)
 TEST(StationVisualState, RecordingEndRemainsVisibleUntilTheTakeFinishes)
 {
 	auto station = MakeStation("station");
+	io::UserConfig config{};
+	auto start = MakeTriggerAction(TriggerAction::TRIGGER_REC_START);
+	start.InputChannels = { 0u };
+	const auto started = station->OnAction(start);
+	station->CommitChanges();
 
-	station->OnAction(MakeTriggerAction(TriggerAction::TRIGGER_REC_START));
 	EXPECT_EQ(StationVisualState::STATIONSTATE_RECORDING, station->GetVisualState());
 
-	station->OnAction(MakeTriggerAction(TriggerAction::TRIGGER_REC_END, 64u));
+	auto end = MakeTriggerAction(TriggerAction::TRIGGER_REC_END, 64u);
+	end.TargetId = started.TargetId;
+	end.SetUserConfig(config);
+	station->OnAction(end);
 	EXPECT_EQ(StationVisualState::STATIONSTATE_ENDRECORDING, station->GetVisualState());
+	ASSERT_EQ(1u, station->GetLoopTakes().size());
+	EXPECT_EQ(engine::LoopTake::STATE_PLAYINGRECORDING, station->GetLoopTakes()[0]->TakeState());
+}
+
+TEST(StationVisualState, MidiOnlyRecordingFinishesImmediatelyWithAnAudioTailConfigured)
+{
+	auto station = MakeStation("station");
+	station->SetAllowedMidiChannels({ 1 });
+	io::UserConfig config{};
+	ASSERT_GT(config.EndRecordingSamps(0), 0u);
+	auto start = MakeTriggerAction(TriggerAction::TRIGGER_REC_START);
+	start.MidiInputDevices = { "Keys" };
+	const auto started = station->OnAction(start);
+	station->CommitChanges();
+	ASSERT_EQ(1u, station->GetLoopTakes().size());
+	const auto take = station->GetLoopTakes()[0];
+	ASSERT_TRUE(take->GetLoops().empty());
+	ASSERT_FALSE(take->GetMidiLoops().empty());
+
+	auto end = MakeTriggerAction(TriggerAction::TRIGGER_REC_END, 64u);
+	end.TargetId = started.TargetId;
+	end.SetUserConfig(config);
+	station->OnAction(end);
+
+	EXPECT_EQ(engine::LoopTake::STATE_PLAYING, take->TakeState());
+	EXPECT_EQ(StationVisualState::STATIONSTATE_PLAYING, station->GetVisualState());
+	for (const auto& loop : take->GetMidiLoops())
+	{
+		EXPECT_EQ(midi::MidiLoopState::Playing, loop->State());
+		EXPECT_EQ(64u, loop->LoopLengthSamps());
+	}
+}
+
+TEST(StationVisualState, MixedRecordingPreservesAudioTailAndFinalizesMidiImmediately)
+{
+	auto station = MakeStation("station");
+	station->SetAllowedMidiChannels({ 1 });
+	io::UserConfig config{};
+	auto start = MakeTriggerAction(TriggerAction::TRIGGER_REC_START);
+	start.InputChannels = { 0u };
+	start.MidiInputDevices = { "Keys" };
+	const auto started = station->OnAction(start);
+	station->CommitChanges();
+	ASSERT_EQ(1u, station->GetLoopTakes().size());
+	const auto take = station->GetLoopTakes()[0];
+	ASSERT_FALSE(take->GetLoops().empty());
+	ASSERT_FALSE(take->GetMidiLoops().empty());
+
+	auto end = MakeTriggerAction(TriggerAction::TRIGGER_REC_END, 64u);
+	end.TargetId = started.TargetId;
+	end.SetUserConfig(config);
+	station->OnAction(end);
+
+	EXPECT_EQ(engine::LoopTake::STATE_PLAYINGRECORDING, take->TakeState());
+	EXPECT_EQ(StationVisualState::STATIONSTATE_ENDRECORDING, station->GetVisualState());
+	for (const auto& loop : take->GetMidiLoops())
+		EXPECT_EQ(midi::MidiLoopState::Playing, loop->State());
+}
+
+TEST(StationVisualState, MidiOnlyOverdubFinishesImmediatelyWithAnAudioTailConfigured)
+{
+	auto station = MakeStation("station");
+	auto source = station->AddTake();
+	source->Record({}, station->Name(), { 0u });
+	source->Play(0u, 64u, 0u);
+	auto take = station->AddTake();
+	take->Overdub({}, station->Name(), { 0u }, {}, source);
+	station->CommitChanges();
+	ASSERT_EQ(engine::LoopTake::STATE_OVERDUBBING, take->TakeState());
+	ASSERT_FALSE(take->GetMidiLoops().empty());
+
+	take->Play(0u, 64u, 128u);
+
+	EXPECT_EQ(engine::LoopTake::STATE_PLAYING, take->TakeState());
+	for (const auto& loop : take->GetMidiLoops())
+		EXPECT_EQ(midi::MidiLoopState::Playing, loop->State());
 }
 
 TEST(StationVisualState, RecordingEndClearsOnTickWhenNoTakeIsInRecordingTail)

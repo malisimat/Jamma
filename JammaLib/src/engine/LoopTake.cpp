@@ -1767,7 +1767,9 @@ void LoopTake::Play(unsigned long index,
 		: _InitialMidiPlayIndex(loopLength, midiQuantisationErrorSamps);
 	_midiVisualPlayIndex.store(midiPlayIndex, std::memory_order_relaxed);
 	_appliedLocalTransportOffsetSamps = 0;
-	auto continueCapture = (endRecordSamps > 0) || _isPunchInActive.load(std::memory_order_relaxed);
+	// MIDI is finalized at this trigger; only audio needs the delayed-input tail.
+	auto continueCapture = (!_loops.empty() && endRecordSamps > 0) ||
+		_isPunchInActive.load(std::memory_order_relaxed);
 
 	for (auto& loop : _loops)
 	{
