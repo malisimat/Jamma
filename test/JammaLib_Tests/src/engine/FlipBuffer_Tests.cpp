@@ -758,6 +758,49 @@ TEST(LoopTakeCompletionHandoff, CancelledTakeFlushesHeldMidiWithoutReplayingOldS
 	EXPECT_EQ(1u, sink.NoteOffs);
 }
 
+TEST(LoopTakeCompletionHandoff, RestoredContentsPlayBeforeTakeCaptureLifecycle)
+{
+	auto take = MakeLoopTake("restored-contents");
+	take->SetNumBusChannels(1u);
+	audio::WireMixBehaviourParams wire;
+	wire.Channels = {0u};
+	audio::AudioMixerParams mixer;
+	mixer.Behaviour = wire;
+	engine::LoopParams params;
+	auto loop = std::make_shared<engine::Loop>(params, mixer);
+	loop->Record();
+	std::vector<float> samples(constants::MaxLoopFadeSamps + 128u, 0.75f);
+	AudioWriteRequest request;
+	request.samples = samples.data();
+	request.numSamps = static_cast<unsigned int>(samples.size());
+	request.stride = 1u;
+	request.fadeNew = 1.f;
+	request.source = Audible::AUDIOSOURCE_ADC;
+	loop->OnBlockWrite(request, 0);
+	loop->EndWrite(request.numSamps, true);
+	loop->Play(constants::MaxLoopFadeSamps, 128u, false);
+	take->AddLoop(loop);
+	LoopTake::MidiExportState midiState;
+	midiState.LoopLengthSamps = 128u;
+	LoopTake::MidiStreamExport stream;
+	stream.Loop.LoopLengthSamps = 128u;
+	stream.Loop.EventCount = 1u;
+	stream.Loop.Events[0] = midi::MidiEvent::MakeNoteOn(0u, 0u, 60u, 100u);
+	midiState.Streams.push_back(stream);
+	ASSERT_TRUE(take->RestoreMidiFromExport(midiState));
+	take->CommitChanges();
+	EXPECT_EQ(LoopTake::STATE_INACTIVE, take->TakeState());
+	auto audioSink = std::make_shared<CaptureMultiSink>(1u);
+	take->WriteBlock(audioSink, nullptr, 0, 1u);
+	EXPECT_FLOAT_EQ(0.75f, audioSink->Sample(0u));
+	CancelledTakeMidiSink midiSink;
+	EXPECT_EQ(1u, take->ReadMidiBlock(0u, 32u, midiSink));
+	EXPECT_EQ(1u, midiSink.NoteOns);
+	take->CancelCapture();
+	take->ReadMidiBlock(32u, 32u, midiSink);
+	EXPECT_EQ(1u, midiSink.NoteOffs);
+}
+
 TEST(StationFlipBuffer, DitchKeepsBorrowedBuffersUntilSnapshotRetirement)
 {
 	auto station = MakeStation();

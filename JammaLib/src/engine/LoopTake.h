@@ -474,6 +474,9 @@ namespace engine
 		void _InvalidateRecordingCompletion() noexcept;
 		void _SetPresentationMode(PresentationMode mode) noexcept;
 		std::atomic<LoopTakeState> _state;
+		// INACTIVE also describes a newly constructed/restored take. Cancellation
+		// alone suppresses retained callback snapshots and queued lifecycle work.
+		std::atomic<bool> _captureCancelled{ false };
 		std::weak_ptr<LoopTake> _activeBounceSource;
 		std::shared_ptr<base::BounceWriter> _activeBounceWriter;
 		std::string _id;

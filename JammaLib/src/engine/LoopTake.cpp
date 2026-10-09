@@ -459,7 +459,7 @@ unsigned int LoopTake::NumBusChannels() const
 void LoopTake::Zero(unsigned int numSamps,
 	Audible::AudioSourceType source)
 {
-	if (_state.load(std::memory_order_acquire) == STATE_INACTIVE)
+	if (_captureCancelled.load(std::memory_order_acquire))
 		return;
 	auto state = _AudioStateSnapshot();
 	if (!state)
@@ -487,7 +487,7 @@ void LoopTake::WriteBlock(const std::shared_ptr<MultiAudioSink> dest,
 	int indexOffset,
 	unsigned int numSamps)
 {
-	if (_state.load(std::memory_order_acquire) == STATE_INACTIVE)
+	if (_captureCancelled.load(std::memory_order_acquire))
 		return;
 	if (nullptr == dest)
 		return;
@@ -593,7 +593,7 @@ void LoopTake::ProcessActiveBounce(int sourceOffset, unsigned int numSamps)
 
 void LoopTake::EndMultiPlay(unsigned int numSamps)
 {
-	if (_state.load(std::memory_order_acquire) == STATE_INACTIVE)
+	if (_captureCancelled.load(std::memory_order_acquire))
 		return;
 	auto state = _AudioStateSnapshot();
 	if (!state)
@@ -870,7 +870,7 @@ void LoopTake::InvalidateTimingCorrections() noexcept
 bool LoopTake::IsArmed() const
 {
 	auto state = _state.load(std::memory_order_acquire);
-	if (STATE_INACTIVE == state)
+	if (_captureCancelled.load(std::memory_order_acquire))
 		return false;
 	return (STATE_RECORDING == state) ||
 		(STATE_PLAYINGRECORDING == state) ||
@@ -886,7 +886,7 @@ void LoopTake::EndMultiWrite(unsigned int numSamps,
 {
 	// Retired Station snapshots may still route here until the audio reader acknowledges.
 	const auto captureGeneration = _captureGeneration.load(std::memory_order_acquire);
-	if (_state.load(std::memory_order_acquire) == STATE_INACTIVE)
+	if (_captureCancelled.load(std::memory_order_acquire))
 		return;
 	auto audioState = _AudioStateSnapshot();
 	if (!audioState)
@@ -1154,7 +1154,7 @@ ActionResult LoopTake::OnAction(JobAction action)
 	{
 		if (action.CaptureGeneration != 0u &&
 			(action.CaptureGeneration != _captureGeneration.load(std::memory_order_acquire) ||
-			 _state.load(std::memory_order_acquire) == STATE_INACTIVE))
+			 _captureCancelled.load(std::memory_order_acquire)))
 			return {};
 		_UpdateLoops();
 
@@ -1477,6 +1477,7 @@ void LoopTake::Record(std::vector<unsigned int> channels,
 
 	std::scoped_lock midiLock(_midiCaptureMutex);
 	_midiRecordStartSample = midiRecordStartSample;
+	_captureCancelled.store(false, std::memory_order_release);
 
 	_midiTransportStartSamps.store(transportStartSamps, std::memory_order_release);
 	_firstRecordBlockSceneSamps.store(0u, std::memory_order_relaxed);
@@ -1714,7 +1715,7 @@ unsigned int LoopTake::ReadMidiBlock(std::uint32_t globalSample,
 {
 	auto snapshot = _MidiLoopSnapshotState();
 	const auto midiLoopCount = snapshot ? static_cast<unsigned int>(snapshot->size()) : 0u;
-	const bool cancelled = _state.load(std::memory_order_acquire) == STATE_INACTIVE;
+	const bool cancelled = _captureCancelled.load(std::memory_order_acquire);
 	if (IsMuted() && !cancelled)
 		return midiLoopCount;
 
@@ -2027,6 +2028,7 @@ void LoopTake::EndRecording()
 
 void LoopTake::CancelCapture() noexcept
 {
+	_captureCancelled.store(true, std::memory_order_release);
 	_state.store(STATE_INACTIVE, std::memory_order_release);
 	_isPunchInActive.store(false, std::memory_order_release);
 	_isMidiPunchInActive.store(false, std::memory_order_release);
@@ -2091,6 +2093,7 @@ void LoopTake::Overdub(std::vector<unsigned int> channels,
 		return;
 
 	std::scoped_lock midiLock(_midiCaptureMutex);
+	_captureCancelled.store(false, std::memory_order_release);
 
 	_midiTransportStartSamps.store(transportStartSamps, std::memory_order_release);
 	_firstRecordBlockSceneSamps.store(0u, std::memory_order_relaxed);
@@ -2273,7 +2276,7 @@ void LoopTake::TriggerPunchInAudio() noexcept
 void LoopTake::TriggerPunchOutAudio() noexcept
 {
 	const auto state = _state.load(std::memory_order_relaxed);
-	if (STATE_INACTIVE == state)
+	if (_captureCancelled.load(std::memory_order_acquire))
 		return;
 	if (!_isPunchInActive.load(std::memory_order_relaxed) && STATE_PUNCHEDIN != state)
 		return;
@@ -2485,7 +2488,7 @@ const std::shared_ptr<AudioSink> LoopTake::_InputChannel(unsigned int channel,
 {
 	if ((source == Audible::AUDIOSOURCE_ADC || source == Audible::AUDIOSOURCE_MONITOR ||
 		source == Audible::AUDIOSOURCE_BOUNCE) &&
-		_state.load(std::memory_order_acquire) == STATE_INACTIVE)
+		_captureCancelled.load(std::memory_order_acquire))
 		return nullptr;
 	auto state = _AudioStateSnapshot();
 	if (!state)
