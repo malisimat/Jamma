@@ -309,6 +309,7 @@ namespace engine
 
 		gui::GuiRackParams _GetRackParams(utils::Size2d size);
 		std::optional<std::shared_ptr<LoopTake>> _TryGetTake(std::string id);
+		bool _HasRecordingTail() const noexcept;
 		void _WireVuSliders();
 		using MidiVstRoutingSnapshot = midi::MidiVstRoutingSnapshot;
 		static constexpr std::size_t MaxMidiVstRouteOutputs = 4096u;

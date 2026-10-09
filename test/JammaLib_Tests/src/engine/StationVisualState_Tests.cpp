@@ -133,6 +133,54 @@ TEST(StationVisualState, MidiOnlyOverdubFinishesImmediatelyWithAnAudioTailConfig
 		EXPECT_EQ(midi::MidiLoopState::Playing, loop->State());
 }
 
+TEST(StationVisualState, MidiOnlyStopKeepsOtherAudioAndMixedRecordingTailsVisible)
+{
+	for (const bool mixed : { false, true })
+	{
+		SCOPED_TRACE(mixed ? "mixed tail" : "audio tail");
+		auto station = MakeStation("station");
+		station->SetAllowedMidiChannels({ 1 });
+		io::UserConfig config{};
+		auto audioStart = MakeTriggerAction(TriggerAction::TRIGGER_REC_START);
+		audioStart.InputChannels = { 0u };
+		if (mixed)
+			audioStart.MidiInputDevices = { "Keys" };
+		const auto audioStarted = station->OnAction(audioStart);
+		station->CommitChanges();
+		ASSERT_EQ(1u, station->GetLoopTakes().size());
+		const auto audioTake = station->GetLoopTakes()[0];
+
+		auto audioEnd = MakeTriggerAction(TriggerAction::TRIGGER_REC_END, 64u);
+		audioEnd.TargetId = audioStarted.TargetId;
+		audioEnd.SetUserConfig(config);
+		station->OnAction(audioEnd);
+		ASSERT_EQ(engine::LoopTake::STATE_PLAYINGRECORDING, audioTake->TakeState());
+
+		auto midiStart = MakeTriggerAction(TriggerAction::TRIGGER_REC_START);
+		midiStart.MidiInputDevices = { "Keys" };
+		const auto midiStarted = station->OnAction(midiStart);
+		station->CommitChanges();
+		ASSERT_EQ(2u, station->GetLoopTakes().size());
+		const auto midiTake = station->GetLoopTakes()[1];
+		ASSERT_TRUE(midiTake->GetLoops().empty());
+		ASSERT_FALSE(midiTake->GetMidiLoops().empty());
+
+		auto midiEnd = MakeTriggerAction(TriggerAction::TRIGGER_REC_END, 64u);
+		midiEnd.TargetId = midiStarted.TargetId;
+		midiEnd.SetUserConfig(config);
+		station->OnAction(midiEnd);
+		EXPECT_EQ(engine::LoopTake::STATE_PLAYING, midiTake->TakeState());
+		EXPECT_EQ(engine::LoopTake::STATE_PLAYINGRECORDING, audioTake->TakeState());
+		EXPECT_EQ(StationVisualState::STATIONSTATE_ENDRECORDING, station->GetVisualState());
+
+		station->OnTick(utils::Timer::GetTime(), 0u, std::nullopt, std::nullopt);
+		EXPECT_EQ(StationVisualState::STATIONSTATE_ENDRECORDING, station->GetVisualState());
+		audioTake->EndRecording();
+		station->OnTick(utils::Timer::GetTime(), 0u, std::nullopt, std::nullopt);
+		EXPECT_EQ(StationVisualState::STATIONSTATE_PLAYING, station->GetVisualState());
+	}
+}
+
 TEST(StationVisualState, RecordingEndClearsOnTickWhenNoTakeIsInRecordingTail)
 {
 	auto station = MakeStation("station");

@@ -1336,7 +1336,7 @@ ActionResult Station::OnAction(TriggerAction action)
 			res.ResultType = actions::ActionResultType::ACTIONRESULT_ACTIVATE;
 			const auto takeState = loopTake ? loopTake.value()->TakeState() : LoopTake::STATE_PLAYINGRECORDING;
 			_SetVisualState(takeState == LoopTake::STATE_PLAYINGRECORDING ||
-				takeState == LoopTake::STATE_OVERDUBBINGRECORDING
+				takeState == LoopTake::STATE_OVERDUBBINGRECORDING || _HasRecordingTail()
 				? StationVisualState::STATIONSTATE_ENDRECORDING
 				: StationVisualState::STATIONSTATE_PLAYING);
 		}
@@ -1598,23 +1598,24 @@ void Station::_SetVisualState(StationVisualState state) noexcept
 	_publishedVisualState.store(static_cast<std::uint8_t>(state), std::memory_order_release);
 }
 
+bool Station::_HasRecordingTail() const noexcept
+{
+	// The station stays in Record End until every take has finished its audio tail.
+	return std::any_of(_loopTakes.begin(), _loopTakes.end(),
+		[](const std::shared_ptr<LoopTake>& take) {
+			const auto state = take->TakeState();
+			return (LoopTake::STATE_PLAYINGRECORDING == state) ||
+				(LoopTake::STATE_OVERDUBBINGRECORDING == state);
+		});
+}
+
 void Station::OnTick(Time curTime,
 	unsigned int samps,
 	const std::optional<io::UserConfig>& cfg,
 	const std::optional<audio::AudioStreamParams>& params)
 {
-	if (GetVisualState() == StationVisualState::STATIONSTATE_ENDRECORDING)
-	{
-		const auto isEndingRecording = std::any_of(_loopTakes.begin(), _loopTakes.end(),
-			[](const std::shared_ptr<LoopTake>& take) {
-				const auto state = take->TakeState();
-				return (LoopTake::STATE_PLAYINGRECORDING == state) ||
-					(LoopTake::STATE_OVERDUBBINGRECORDING == state);
-			});
-
-		if (!isEndingRecording)
-			_SetVisualState(StationVisualState::STATIONSTATE_PLAYING);
-	}
+	if (GetVisualState() == StationVisualState::STATIONSTATE_ENDRECORDING && !_HasRecordingTail())
+		_SetVisualState(StationVisualState::STATIONSTATE_PLAYING);
 }
 
 void Station::Reset()
