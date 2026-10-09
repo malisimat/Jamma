@@ -17,6 +17,7 @@ namespace midi
 	class MidiGridGesture
 	{
 	public:
+		static constexpr std::uint8_t DefaultCreationVelocity = 100u;
 		enum class Kind { None, Paint, Create, Move, TrimLeft, TrimRight, Velocity, SnappedMove };
 		struct Point
 		{
@@ -57,17 +58,18 @@ namespace midi
 		int ProposedVelocity() const noexcept { return _proposedVelocity; }
 
 		bool Begin(const MidiLoop::EditState& source, Point point, std::uint8_t channel,
-			double pixelsPerSample = 0.0)
+			double pixelsPerSample = 0.0, std::uint8_t velocity = DefaultCreationVelocity)
 		{
 			Cancel();
 			if (!source.LoopLengthSamps || point.Sample >= source.LoopLengthSamps
 				|| source.EventCount > MidiLoop::DefaultCapacity
-				|| point.Pitch > 127u || channel >= 16u) return false;
+				|| point.Pitch > 127u || channel >= 16u || velocity == 0u || velocity > 127u) return false;
 			_before = source;
 			_working = source;
 			_anchor = point;
 			_last = point;
 			_channel = channel;
+			_creationVelocity = velocity;
 			_grid = LoopGridGeometry::Resolve(source.LoopLengthSamps,
 				source.Quantisation, source.QuantisationTransportStartSamps);
 			_targets = MidiGridTargets::Build(source);
@@ -96,7 +98,7 @@ namespace midi
 				source.LoopLengthSamps - point.Sample));
 			_createDefaultDuration = duration;
 			_dirty = MidiEditOperations::Create(_working, point.Sample, duration,
-				channel, point.Pitch);
+				channel, point.Pitch, _creationVelocity);
 			if (_dirty) _preview.push_back({ point.Sample, point.Sample + duration,
 				point.Pitch, true });
 			return _dirty;
@@ -148,7 +150,7 @@ namespace midi
 						+ _createDefaultDuration)
 					: static_cast<std::int64_t>(std::max(point.Sample, _anchor.Sample)) + 1u;
 				_dirty = MidiEditOperations::Create(_working, start,
-					static_cast<std::uint32_t>(end - start), _channel, _anchor.Pitch);
+					static_cast<std::uint32_t>(end - start), _channel, _anchor.Pitch, _creationVelocity);
 				if (_dirty) _preview.push_back({ start,
 					static_cast<std::uint32_t>(end), _anchor.Pitch, true });
 			}
@@ -316,7 +318,7 @@ namespace midi
 			auto start = target.Start;
 			const auto add = [&](std::uint32_t end) {
 				if (start >= end) return true;
-				if (!MidiEditOperations::CreateExact(_working, start, end, _channel, point.Pitch)) return false;
+				if (!MidiEditOperations::CreateExact(_working, start, end, _channel, point.Pitch, _creationVelocity)) return false;
 				_preview.push_back({start, end, point.Pitch, true}); _dirty = true;
 				return true;
 			};
@@ -382,6 +384,7 @@ namespace midi
 		std::uint32_t _start = 0u, _end = 0u;
 		std::uint32_t _createDefaultDuration = 1u;
 		std::uint8_t _pitch = 60u, _channel = 0u;
+		std::uint8_t _creationVelocity = DefaultCreationVelocity;
 		bool _fill = true, _dirty = false, _rejected = false;
 	};
 }

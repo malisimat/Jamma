@@ -141,9 +141,9 @@ void main()
         vec3 warm = vec3(1.0, 0.84, 0.03);
         vec3 hot = vec3(1.0, 0.04, 0.02);
         vec3 baseColor = mix(low, mid, smoothstep(0.0, 0.38, Velocity));
-        baseColor = mix(baseColor, warm, smoothstep(0.38, 0.56, Velocity));
-        // Velocity 90/127 is already at the red end of the palette.
-        baseColor = mix(baseColor, hot, smoothstep(0.56, 0.70, Velocity));
+        baseColor = mix(baseColor, warm, smoothstep(0.38, 0.70, Velocity));
+        // Keep 96-100 yellow/orange; reserve full red for maximum velocity.
+        baseColor = mix(baseColor, hot, smoothstep(0.70, 1.0, Velocity));
         float diffuse = clamp((Diff - 0.15) / 0.85, 0.0, 1.0);
         vec3 noteColor = baseColor * (0.10 + 1.05 * pow(diffuse, 0.72));
         // Scalar chrome illumination retains the velocity hue. Fade to the editor's

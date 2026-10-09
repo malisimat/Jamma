@@ -324,6 +324,7 @@ bool LoopGridEditor::Open(const std::shared_ptr<engine::LoopTake>& take,
 		return false;
 	}
 	_returnCamera = _host.Camera.CaptureEditorReturnState();
+	_creationVelocity = MidiGridGesture::DefaultCreationVelocity;
 	_blend = 0.0f;
 	_pointerOwned = false;
 	_ClearIdleHover(true);
@@ -650,7 +651,7 @@ void LoopGridEditor::_BeginGesture(const actions::TouchAction& action)
 	if (!point || !loop || !loop->SnapshotForEdit(source))
 		return;
 	_gesture = std::make_unique<MidiGridGesture>();
-	if (_gesture->Begin(source, *point, _ChannelOf(loop), _PixelsPerSample(source.LoopLengthSamps)))
+	if (_gesture->Begin(source, *point, _ChannelOf(loop), _PixelsPerSample(source.LoopLengthSamps), _creationVelocity))
 	{
 		_pointerOwned = true;
 		_pointerButton = 0;
@@ -792,6 +793,8 @@ void LoopGridEditor::_PublishGesture()
 		_revisionCursor = std::make_shared<actions::MidiEditRevisionCursor>();
 	_host.Undo.Add(std::make_shared<actions::MidiLoopEditUndo>(take, loop,
 		_gesture->Before(), _gesture->Working(), acceptedRevision, _revisionCursor));
+	if (_gesture->Mode() == MidiGridGesture::Kind::Velocity)
+		_creationVelocity = static_cast<std::uint8_t>(_gesture->ProposedVelocity());
 	_SetFeedback("MIDI edit applied (Ctrl+Z to undo)");
 }
 

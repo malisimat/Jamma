@@ -179,6 +179,8 @@ namespace midi
 		std::optional<LoopGridGeometry> _idleHoverGrid;
 		std::uint64_t _hoverRevision = 0u; // UI-owned; invalidates model-instance targets
 		std::unique_ptr<MidiGridGesture> _gesture;
+		// UI session preference; reset on opening, updated only by committed velocity edits.
+		std::uint8_t _creationVelocity = MidiGridGesture::DefaultCreationVelocity;
 		std::shared_ptr<actions::MidiEditRevisionCursor> _revisionCursor;
 		std::vector<CursorEntry> _revisionCursors;
 		std::string _feedbackText;

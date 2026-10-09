@@ -50,6 +50,49 @@ struct MidiGridGestureFixture
 	}
 };
 
+TEST(MidiGridGesture, CreationUsesDefaultVelocityWithAndWithoutGrid)
+{
+	for (const bool quantised : {false, true})
+	{
+		const auto source = MidiGridGestureFixture::EmptyLoop(quantised);
+		MidiGridGesture gesture;
+		ASSERT_TRUE(gesture.Begin(source, {15u, 60u}, 2u));
+		EXPECT_EQ(100u, gesture.Working().Events[0].data2);
+		ASSERT_TRUE(gesture.Update({35u, 60u}));
+		for (std::size_t i = 0; i < gesture.Working().EventCount; ++i)
+			if (gesture.Working().Events[i].IsNoteOn())
+				EXPECT_EQ(100u, gesture.Working().Events[i].data2);
+	}
+}
+
+TEST(MidiGridGesture, CreationUsesEditedVelocityThroughoutDrag)
+{
+	for (const bool quantised : {false, true})
+	{
+		auto source = MidiGridGestureFixture::EmptyLoop(quantised);
+		ASSERT_TRUE(midi::MidiEditOperations::Create(source, 10u, 10u, 2u, 60u, 75u));
+		MidiGridGesture velocity;
+		ASSERT_TRUE(velocity.BeginVelocity(source, {15u, 60u}));
+		ASSERT_TRUE(velocity.UpdateRelative(-20));
+		ASSERT_EQ(70, velocity.ProposedVelocity());
+		MidiGridGesture creation;
+		ASSERT_TRUE(creation.Begin(velocity.Working(), {35u, 62u}, 2u, 0.0,
+			static_cast<std::uint8_t>(velocity.ProposedVelocity())));
+		ASSERT_TRUE(creation.Update({65u, 62u}));
+		for (std::size_t i = 0; i < creation.Working().EventCount; ++i)
+			if (creation.Working().Events[i].IsNoteOn())
+				EXPECT_EQ(70u, creation.Working().Events[i].data2);
+	}
+}
+
+TEST(MidiGridGesture, CreationRejectsInvalidVelocity)
+{
+	const auto source = MidiGridGestureFixture::EmptyLoop();
+	MidiGridGesture gesture;
+	EXPECT_FALSE(gesture.Begin(source, {15u, 60u}, 0u, 0.0, 0u));
+	EXPECT_FALSE(gesture.Begin(source, {15u, 60u}, 0u, 0.0, 128u));
+}
+
 TEST(MidiGridGesture, PaintsSkippedCellsOnceAndCrossesSeam)
 {
 	auto source = MidiGridGestureFixture::EmptyLoop();
