@@ -586,7 +586,9 @@ void LoopTake::ProcessActiveBounce(int sourceOffset, unsigned int numSamps)
 		return;
 
 	auto target = MultiAudioSink::shared_from_this();
+	_activeBounceWriter->BeginCaptureBlock(numSamps);
 	sourceTake->WriteBlock(target, _activeBounceWriter, sourceOffset, numSamps);
+	_activeBounceWriter->EndCaptureBlock(numSamps);
 }
 
 void LoopTake::EndMultiPlay(unsigned int numSamps)

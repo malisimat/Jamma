@@ -7,6 +7,8 @@ namespace base
 	{
 	public:
 		virtual ~TriggerPunchTarget() = default;
+		// Structural job owner only: freeze prepared capture material before publication.
+		virtual bool HasTriggerAudioCapture() const noexcept { return true; }
 		virtual void SetTriggerSourceMutedAudio(bool muted) noexcept = 0;
 		virtual void TriggerPunchInAudio() noexcept = 0;
 		virtual void TriggerPunchOutAudio() noexcept = 0;

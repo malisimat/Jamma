@@ -152,6 +152,7 @@ namespace engine
 		bool RestoreMixerLevels(double masterLevel, const std::vector<double>& busLevels);
 		bool RestoreAudioRoutes(const std::vector<std::vector<unsigned long>>& routes);
 		LoopTakeState TakeState() const;
+		bool HasTriggerAudioCapture() const noexcept override { return !_backLoops.empty(); }
 		unsigned long NumRecordedSamps() const;
 		unsigned long VisualLoopLengthSamps() const noexcept;
 		unsigned long MidiPlayIndex() const noexcept

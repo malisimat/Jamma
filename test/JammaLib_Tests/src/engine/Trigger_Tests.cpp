@@ -1132,7 +1132,11 @@ TEST(Trigger, BounceWriterFollowsDelayedPunchMixerChanges) {
 	EXPECT_FLOAT_EQ(1.0f, sink->LastBounceLevel);
 	trigger->OnTick(GetTime(), 1u, cfg, std::nullopt);
 	for (int i = 0; i < 200; ++i)
+	{
+		writer->BeginCaptureBlock(64u);
 		writer->WriteBlock(sink, samples, 64u, 0u);
+		writer->EndCaptureBlock(64u);
+	}
 	EXPECT_LT(sink->LastBounceLevel, 0.1f);
 
 	action.KeyActionType = KeyAction::KEY_UP;
@@ -1141,7 +1145,11 @@ TEST(Trigger, BounceWriterFollowsDelayedPunchMixerChanges) {
 	EXPECT_EQ(TriggerAction::TRIGGER_PUNCHIN_END, receiver->Actions()[2].ActionType);
 	trigger->OnTick(GetTime(), punchDelay, cfg, std::nullopt);
 	for (int i = 0; i < 200; ++i)
+	{
+		writer->BeginCaptureBlock(64u);
 		writer->WriteBlock(sink, samples, 64u, 0u);
+		writer->EndCaptureBlock(64u);
+	}
 	EXPECT_GT(sink->LastBounceLevel, 0.9f);
 }
 
@@ -2745,3 +2753,254 @@ TEST(SceneReset, ConnectedEmptyPreservesTimingAndEachDisconnectClearsOnce) {
 }
 
 // FAILS before fix: _DispatchMidiTriggerEvent never called Reset() when ditch
+
+class StereoCaptureSampleSink : public base::MultiAudioSink
+{
+public:
+	void OnBlockWriteChannel(unsigned int channel, const base::AudioWriteRequest& request, int) override
+	{
+		if (channel < 2u && request.numSamps)
+			Samples[channel] = request.fadeNew * request.samples[0] + request.fadeCurrent * Samples[channel];
+	}
+	std::array<float, 2> Samples{ 0.0f, 0.0f };
+};
+
+TEST(Trigger, PreparedStereoEnvelopeAdvancesOncePerCaptureBlock)
+{
+	auto mixer = std::make_shared<audio::AudioMixer>(Trigger::GetOverdubMixerParams({ 0u, 1u }));
+	mixer->SetUnmutedLevel(1.0);
+	auto writer = Trigger::CreateBounceWriter(mixer);
+	auto sink = std::make_shared<StereoCaptureSampleSink>();
+	std::array<float, 64> samples;
+	samples.fill(1.0f);
+	mixer->SetUnmutedLevel(0.0);
+	for (unsigned int block = 0u; block < 200u; ++block)
+	{
+		const auto before = mixer->Level();
+		sink->Samples.fill(0.0f);
+		writer->BeginCaptureBlock(64u);
+		writer->WriteBlock(sink, samples.data(), 64u, 0u);
+		writer->WriteBlock(sink, samples.data(), 64u, 1u);
+		EXPECT_DOUBLE_EQ(before, mixer->Level());
+		EXPECT_FLOAT_EQ(sink->Samples[0], sink->Samples[1]);
+		EXPECT_FLOAT_EQ(static_cast<float>(before), sink->Samples[0]);
+		writer->EndCaptureBlock(64u);
+	}
+	EXPECT_LT(mixer->Level(), 0.1);
+}
+
+TEST(Trigger, NewOverdubUsesIndependentWriterWhileOldDelayedPunchDrains)
+{
+	auto source = std::make_shared<TestTriggerPunchTarget>();
+	auto target = std::make_shared<TestTriggerPunchTarget>();
+	auto receiver = std::make_shared<SequenceTriggerReceiver>(source, target);
+	auto trigger = MakeDefaultTrigger(receiver, 0u);
+	io::UserConfig cfg;
+	cfg.Audio = { "", 48000, 256, 256, 0, 2, 2, 2 };
+	cfg.Loop = { 0 };
+	cfg.Trigger = { 64, 0 };
+	base::Action action;
+	auto press = [&](bool activate, bool down)
+	{
+		ASSERT_TRUE(trigger->QueueExternalControlAction(activate, down, action).IsEaten);
+		TickAndComplete(trigger, 0u, cfg);
+	};
+	press(false, true);
+	press(true, true);
+	press(true, false);
+	press(true, true);
+	ASSERT_EQ(engine::TRIGSTATE_PUNCHEDIN, trigger->GetState());
+	press(true, false);
+	press(false, true);
+	press(true, true);
+	press(true, false);
+	ASSERT_EQ(engine::TRIGSTATE_DEFAULT, trigger->GetState());
+	auto oldWriter = receiver->Actions().front().OverdubWriter;
+	ASSERT_NE(nullptr, oldWriter);
+	press(false, true);
+	press(true, true);
+	ASSERT_EQ(engine::TRIGSTATE_OVERDUBBING, trigger->GetState());
+	std::shared_ptr<base::BounceWriter> newWriter;
+	for (const auto& request : receiver->Actions())
+		if (request.ActionType == TriggerAction::TRIGGER_OVERDUB_START) newWriter = request.OverdubWriter;
+	ASSERT_NE(nullptr, newWriter);
+	EXPECT_NE(oldWriter, newWriter);
+	trigger->OnTick(GetTime(), cfg.Trigger.PreDelay + constants::MaxLoopFadeSamps, cfg, std::nullopt);
+	EXPECT_EQ(1u, target->PunchInCount);
+	EXPECT_EQ(1u, target->PunchOutCount);
+	EXPECT_EQ(engine::TRIGSTATE_OVERDUBBING, trigger->GetState());
+	press(true, false);
+	press(true, true);
+	trigger->OnTick(GetTime(), cfg.Trigger.PreDelay + constants::MaxLoopFadeSamps, cfg, std::nullopt);
+	auto oldSink = std::make_shared<StereoCaptureSampleSink>();
+	auto newSink = std::make_shared<StereoCaptureSampleSink>();
+	std::array<float, 64> samples;
+	samples.fill(1.0f);
+	for (unsigned int block = 0u; block < 200u; ++block)
+	{
+		oldSink->Samples.fill(0.0f);
+		newSink->Samples.fill(0.0f);
+		oldWriter->BeginCaptureBlock(64u);
+		newWriter->BeginCaptureBlock(64u);
+		for (unsigned int channel = 0u; channel < 2u; ++channel)
+		{
+			oldWriter->WriteBlock(oldSink, samples.data(), 64u, channel);
+			newWriter->WriteBlock(newSink, samples.data(), 64u, channel);
+		}
+		oldWriter->EndCaptureBlock(64u);
+		newWriter->EndCaptureBlock(64u);
+		EXPECT_FLOAT_EQ(oldSink->Samples[0], oldSink->Samples[1]);
+		EXPECT_FLOAT_EQ(newSink->Samples[0], newSink->Samples[1]);
+		EXPECT_FLOAT_EQ(1.0f, oldSink->Samples[0]);
+	}
+	EXPECT_LT(newSink->Samples[0], 0.1f);
+
+}
+
+TEST(Trigger, RemovedAndRejectedSessionsDoNotExhaustPreparedCapacity)
+{
+	for (const auto accepts : { false, true })
+	{
+		auto receiver = std::make_shared<ConfigurableTriggerReceiver>(accepts);
+		auto trigger = MakeDefaultTrigger(receiver, 0u);
+		base::Action action;
+		auto press = [&](bool activate, bool down)
+		{
+			ASSERT_TRUE(trigger->QueueExternalControlAction(activate, down, action).IsEaten);
+			TickAndComplete(trigger);
+		};
+		for (unsigned int session = 0u; session < 130u; ++session)
+		{
+			press(true, true);
+			EXPECT_EQ(accepts ? engine::TRIGSTATE_RECORDING : engine::TRIGSTATE_DEFAULT, trigger->GetState());
+			press(true, false);
+			if (accepts) { press(false, true); press(false, false); }
+			EXPECT_EQ(engine::TRIGSTATE_DEFAULT, trigger->GetState());
+		}
+		EXPECT_TRUE(trigger->GetTakes().empty());
+	}
+}
+
+TEST(Trigger, TwoAudioOrMixedTailsFinishIndependentlyWhileNewestCaptureStaysLive)
+{
+	for (const bool mixed : { false, true })
+	{
+		SCOPED_TRACE(mixed ? "mixed" : "audio");
+		StationParams stationParams;
+		stationParams.Name = "independent-tails";
+		stationParams.Size = { 100u, 100u };
+		audio::MergeMixBehaviourParams merge;
+		auto station = std::make_shared<Station>(stationParams, Station::GetMixerParams(stationParams.Size, merge));
+		station->SetAllowedMidiChannels({ 1u });
+		TriggerParams params;
+		params.InputChannels = { 0u, 1u };
+		if (mixed) params.MidiInputDevices = { "Keys" };
+		auto trigger = std::make_shared<Trigger>(params);
+		trigger->SetReceiver(station);
+		io::UserConfig cfg;
+		cfg.Loop = { 0u };
+		base::Action action;
+		auto press = [&](bool down)
+		{
+			ASSERT_TRUE(trigger->QueueExternalControlAction(true, down, action).IsEaten);
+			TickAndComplete(trigger, 0u, cfg);
+			station->CommitChanges();
+		};
+		for (unsigned int recording = 0u; recording < 2u; ++recording)
+		{
+			press(true); press(false);
+			trigger->OnTick(GetTime(), 64u, cfg, std::nullopt);
+			press(true); press(false);
+		}
+		press(true); press(false);
+		const auto takes = station->GetLoopTakes();
+		ASSERT_EQ(3u, takes.size());
+		EXPECT_EQ(LoopTake::STATE_PLAYINGRECORDING, takes[0]->TakeState());
+		EXPECT_EQ(LoopTake::STATE_PLAYINGRECORDING, takes[1]->TakeState());
+		EXPECT_EQ(LoopTake::STATE_RECORDING, takes[2]->TakeState());
+		for (unsigned int tail = 0u; tail < 2u; ++tail)
+		{
+			takes[tail]->EndMultiWrite(cfg.EndRecordingSamps(0u) + 1u, true, base::Audible::AUDIOSOURCE_ADC);
+			bool completed = false;
+			for (const auto& job : takes[tail]->CommitChanges())
+				if (job.JobActionType == actions::JobAction::JOB_ENDRECORDING)
+				{
+					EXPECT_TRUE(takes[tail]->OnAction(job).IsEaten);
+					completed = true;
+				}
+			EXPECT_TRUE(completed);
+			EXPECT_EQ(LoopTake::STATE_PLAYING, takes[tail]->TakeState());
+			EXPECT_EQ(engine::TRIGSTATE_RECORDING, trigger->GetState());
+			EXPECT_EQ(LoopTake::STATE_RECORDING, takes[2]->TakeState());
+		}
+	}
+}
+
+TEST(Trigger, PunchAdmissionReservesDelayedAndStructuralReleaseCapacity)
+{
+	auto source = std::make_shared<TestTriggerPunchTarget>();
+	auto target = std::make_shared<TestTriggerPunchTarget>();
+	auto receiver = std::make_shared<SequenceTriggerReceiver>(source, target);
+	auto trigger = MakeDefaultTrigger(receiver, 0u);
+	io::UserConfig cfg;
+	cfg.Audio = { "", 48000, 256, 256, 0, 2, 2, 2 };
+	cfg.Trigger = { 1000000u, 0u };
+	base::Action action;
+	trigger->QueueExternalControlAction(false, true, action);
+	TickAndComplete(trigger, 0u, cfg);
+	trigger->QueueExternalControlAction(true, true, action);
+	TickAndComplete(trigger, 0u, cfg);
+	trigger->QueueExternalControlAction(true, false, action);
+	trigger->OnTick(GetTime(), 0u, cfg, std::nullopt);
+	unsigned int admitted = 0u;
+	for (unsigned int attempt = 0u; attempt < 40u; ++attempt)
+	{
+		trigger->QueueExternalControlAction(true, true, action);
+		trigger->OnTick(GetTime(), 0u, cfg, std::nullopt);
+		if (trigger->GetState() == engine::TRIGSTATE_PUNCHEDIN) ++admitted;
+		trigger->QueueExternalControlAction(true, false, action);
+		trigger->OnTick(GetTime(), 0u, cfg, std::nullopt);
+		EXPECT_EQ(engine::TRIGSTATE_OVERDUBBING, trigger->GetState());
+	}
+	EXPECT_GT(admitted, 0u);
+	EXPECT_LT(admitted, 40u);
+	trigger->ProcessStructuralActionsOnJob(cfg, std::nullopt);
+	trigger->OnTick(GetTime(), cfg.Trigger.PreDelay + constants::MaxLoopFadeSamps, cfg, std::nullopt);
+	EXPECT_EQ(admitted, target->PunchInCount);
+	EXPECT_EQ(admitted, target->PunchOutCount);
+	EXPECT_EQ(engine::TRIGSTATE_OVERDUBBING, trigger->GetState());
+}
+
+TEST(Trigger, RejectedDitchReleasesRollbackCapacityAfterRestoredCommandsDrain)
+{
+	auto receiver = std::make_shared<ConfigurableTriggerReceiver>(true, actions::DitchDisposition::Failed);
+	auto trigger = MakeDefaultTrigger(receiver, 0u);
+	io::UserConfig cfg;
+	cfg.Audio = { "", 48000, 256, 256, 0, 2, 2, 2 };
+	cfg.Trigger = { 1000000u, 0u };
+	base::Action action;
+	auto press = [&](bool activate, bool down)
+	{
+		ASSERT_TRUE(trigger->QueueExternalControlAction(activate, down, action).IsEaten);
+		TickAndComplete(trigger, 0u, cfg);
+	};
+	press(false, true);
+	press(true, true);
+	press(true, false);
+	for (unsigned int pair = 0u; pair < 32u; ++pair)
+	{
+		press(true, true);
+		ASSERT_EQ(engine::TRIGSTATE_PUNCHEDIN, trigger->GetState());
+		press(true, false);
+	}
+	// This receiver rejects ditch; all delayed commands must be restored.
+	press(false, true);
+	press(false, false);
+	ASSERT_EQ(engine::TRIGSTATE_OVERDUBBING, trigger->GetState());
+	trigger->OnTick(GetTime(), cfg.Trigger.PreDelay + constants::MaxLoopFadeSamps,
+		cfg, std::nullopt);
+	press(true, true);
+	EXPECT_EQ(engine::TRIGSTATE_PUNCHEDIN, trigger->GetState());
+	press(true, false);
+	EXPECT_EQ(engine::TRIGSTATE_OVERDUBBING, trigger->GetState());
+}

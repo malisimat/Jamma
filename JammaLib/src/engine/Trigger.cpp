@@ -30,6 +30,11 @@ namespace engine
 			Write(_mixer, dest, srcBuf, numSamps, destChannel);
 		}
 
+		void EndCaptureBlock(unsigned int numSamps) noexcept override
+		{
+			_mixer->Offset(numSamps);
+		}
+
 		static void Write(const std::shared_ptr<AudioMixer>& mixer,
 			const std::shared_ptr<base::MultiAudioSink>& dest,
 			const float* srcBuf,
@@ -46,7 +51,6 @@ namespace engine
 			request.fadeNew = static_cast<float>(mixer->Level());
 			request.source = base::Audible::AUDIOSOURCE_BOUNCE;
 			dest->OnBlockWriteChannel(destChannel, request, 0);
-			mixer->Offset(numSamps);
 		}
 
 	private:
@@ -446,7 +450,9 @@ void Trigger::OnTick(Time curTime,
 		auto action = _delayedActions[i];
 		action.SampsLeft = samps >= action.SampsLeft ? 0u : action.SampsLeft - samps;
 		if (action.SampsLeft == 0u)
-			_overdubMixer->SetUnmutedLevel(action.Target);
+		{
+			if (action.Mixer) action.Mixer->SetUnmutedLevel(action.Target);
+		}
 		else
 			_delayedActions[pendingMixerActions++] = action;
 	}
@@ -885,6 +891,10 @@ void Trigger::Reset()
 	_pendingDitchDelayedPunchActionCount = 0u;
 	_structuralCommands.Clear();
 	_structuralResults.Clear();
+	// Reset is a stopped-reader operation: erase borrowers before releasing job pins.
+	_loopTakeHistory.fill(RuntimeTriggerTake{});
+	for (auto& session : _captureSessions) session.reset();
+	_captureSessionCount = 0u;
 	for (std::size_t i = 0u; i < _jobTakeHistorySize; ++i)
 	{
 		_jobTakeHistory[i] = TriggerTake{};
@@ -946,6 +956,9 @@ void Trigger::WriteBlock(const std::shared_ptr<MultiAudioSink> dest,
 	unsigned int destChannel)
 {
 	PreparedTriggerBounceWriter::Write(_overdubMixer, dest, srcBuf, numSamps, destChannel);
+	// Preserve the legacy direct writer contract; prepared captures advance per block.
+	if (dest && srcBuf && _overdubMixer)
+		_overdubMixer->Offset(numSamps);
 }
 
 std::optional<std::size_t> Trigger::_FindJobHistory(std::uint64_t token) const noexcept
@@ -1001,6 +1014,22 @@ bool Trigger::_QueueStructuralCommand(TriggerAction::TriggerActionType actionTyp
 	return true;
 }
 
+void Trigger::_SuspendSessionActions(std::uint64_t token) noexcept
+{
+	std::size_t kept = 0u;
+	for (std::size_t i = 0u; i < _delayedActionCount; ++i)
+		if (_delayedActions[i].Token == token)
+			_pendingDitchDelayedActions[_pendingDitchDelayedActionCount++] = _delayedActions[i];
+		else _delayedActions[kept++] = _delayedActions[i];
+	_delayedActionCount = kept;
+	kept = 0u;
+	for (std::size_t i = 0u; i < _delayedPunchActionCount; ++i)
+		if (_delayedPunchActions[i].Token == token)
+			_pendingDitchDelayedPunchActions[_pendingDitchDelayedPunchActionCount++] = _delayedPunchActions[i];
+		else _delayedPunchActions[kept++] = _delayedPunchActions[i];
+	_delayedPunchActionCount = kept;
+}
+
 void Trigger::_FlushDelayedPunchActions(unsigned int samps) noexcept
 {
 	std::size_t write = 0u;
@@ -1026,6 +1055,15 @@ void Trigger::ProcessStructuralActionsOnJob(
 	const std::optional<io::UserConfig>& cfg,
 	const std::optional<audio::AudioStreamParams>& params)
 {
+	// A removed target can be reclaimed only after its result was consumed and
+	// every Station snapshot released its strong pin. The callback never releases owners.
+	for (auto& session : _captureSessions)
+		if (session && session->RetiredByAudio.load(std::memory_order_acquire) &&
+			(!session->TargetTake || session->TargetTake.use_count() == 1))
+		{
+			session.reset();
+			--_captureSessionCount;
+		}
 	StructuralCommand command;
 	if (!_structuralCommands.Peek(command))
 		return;
@@ -1037,6 +1075,7 @@ void Trigger::ProcessStructuralActionsOnJob(
 	{
 		std::shared_ptr<base::ActionReceiver> receiver;
 		const TriggerTake* take = nullptr;
+		CaptureSession* session = nullptr;
 		std::optional<std::size_t> jobHistoryIndex;
 		const bool isStart = command.ActionType == TriggerAction::TRIGGER_REC_START ||
 			command.ActionType == TriggerAction::TRIGGER_OVERDUB_START;
@@ -1049,7 +1088,8 @@ void Trigger::ProcessStructuralActionsOnJob(
 		}
 
 		ActionResult actionResult = ActionResult::NoAction();
-		if (receiver)
+		if (receiver && (!isStart || (_jobTakeHistorySize < _HistoryCapacity &&
+			_captureSessionCount < _HistoryCapacity)))
 		{
 			TriggerAction action;
 			action.ActionType = command.ActionType;
@@ -1066,14 +1106,34 @@ void Trigger::ProcessStructuralActionsOnJob(
 			}
 			if (isStart)
 			{
-				action.InputChannels = _inputChannels;
-				action.MidiInputDevices = _midiInputDevices;
+				auto prepared = std::make_unique<CaptureSession>();
+				prepared->Token = command.HistoryToken;
+				prepared->Receiver = receiver;
+				prepared->AudioChannels = _inputChannels;
+				prepared->MidiDeviceNames = _midiInputDevices;
+				prepared->HasAudioCapture = !_inputChannels.empty() || !cfg || cfg->Audio.NumChannelsIn > 0u;
+				prepared->Mixer = std::make_shared<AudioMixer>(GetOverdubMixerParams(prepared->AudioChannels));
+				prepared->Mixer->SetUnmutedLevel(1.0);
+				prepared->Writer = CreateBounceWriter(prepared->Mixer);
+				session = prepared.get();
+				for (auto& slot : _captureSessions)
+					if (!slot) { slot = std::move(prepared); ++_captureSessionCount; break; }
+				action.InputChannels = session->AudioChannels;
+				action.MidiInputDevices = session->MidiDeviceNames;
 				if (command.ActionType == TriggerAction::TRIGGER_OVERDUB_START)
-					action.OverdubWriter = _overdubWriter;
+					action.OverdubWriter = session->Writer;
 			}
 			if (cfg) action.SetUserConfig(*cfg);
 			if (params) action.SetAudioParams(*params);
 			actionResult = receiver->OnAction(action);
+			if (session)
+			{
+				session->SourceTake = actionResult.TriggerSourceTake.lock();
+				session->TargetTake = actionResult.TriggerTargetTake.lock();
+				if (session->TargetTake) session->HasAudioCapture = session->TargetTake->HasTriggerAudioCapture();
+			}
+			if (isStart && !actionResult.IsEaten && session)
+				session->RetiredByAudio.store(true, std::memory_order_release);
 			if (isStart && actionResult.IsEaten)
 			{
 				if (_jobTakeHistorySize < _HistoryCapacity)
@@ -1126,6 +1186,7 @@ void Trigger::ProcessStructuralActionsOnJob(
 			result.IsEaten = actionResult.IsEaten;
 			result.DitchResult = actionResult.DitchResult;
 			result.HistoryToken = command.HistoryToken;
+			result.Session = session;
 			if (const auto sourceTake = actionResult.TriggerSourceTake.lock())
 				result.SourceTake = sourceTake.get();
 			if (const auto targetTake = actionResult.TriggerTargetTake.lock())
@@ -1163,6 +1224,7 @@ void Trigger::_ApplyStructuralResult(const StructuralResult& result) noexcept
 			auto& take = _loopTakeHistory[_loopTakeHistorySize];
 			take.SourceType = TriggerTake::SOURCE_ADC;
 			take.Token = result.HistoryToken;
+			take.Session = result.Session;
 			take.SourceTake = result.SourceTake;
 			take.TargetTake = result.TargetTake;
 			_activeHistoryIndex = _loopTakeHistorySize++;
@@ -1200,7 +1262,11 @@ void Trigger::_ApplyStructuralResult(const StructuralResult& result) noexcept
 			for (std::size_t i = 0u; i < _loopTakeHistorySize; ++i)
 				if (_loopTakeHistory[i].Token == _pendingHistoryToken) { historyIndex = i; break; }
 			if (historyIndex < _loopTakeHistorySize)
+			{
+				if (auto* session = _loopTakeHistory[historyIndex].Session)
+					session->RetiredByAudio.store(true, std::memory_order_release);
 				_EraseHistory(historyIndex);
+			}
 			_ditchOutcomeCount.fetch_add(1u, std::memory_order_release);
 		}
 		if (result.DitchResult == actions::DitchDisposition::Removed ||
@@ -1216,19 +1282,21 @@ void Trigger::_ApplyStructuralResult(const StructuralResult& result) noexcept
 			_state = _pendingPriorState;
 			_activeHistoryIndex = _pendingPriorActiveIndex;
 			_recordSampCount.fetch_add(_pendingRecordSamps, std::memory_order_relaxed);
-			_delayedActionCount = _pendingDitchDelayedActionCount;
-			for (std::size_t i = 0u; i < _delayedActionCount; ++i)
+			const auto mixerBase = _delayedActionCount;
+			_delayedActionCount += _pendingDitchDelayedActionCount;
+			for (std::size_t i = 0u; i < _pendingDitchDelayedActionCount; ++i)
 			{
-				_delayedActions[i] = _pendingDitchDelayedActions[i];
-				_delayedActions[i].SampsLeft = _pendingRecordSamps >= _delayedActions[i].SampsLeft ?
-					0u : _delayedActions[i].SampsLeft - static_cast<unsigned int>(_pendingRecordSamps);
+				_delayedActions[mixerBase + i] = _pendingDitchDelayedActions[i];
+				_delayedActions[mixerBase + i].SampsLeft = _pendingRecordSamps >= _delayedActions[mixerBase + i].SampsLeft ?
+					0u : _delayedActions[mixerBase + i].SampsLeft - static_cast<unsigned int>(_pendingRecordSamps);
 			}
-			_delayedPunchActionCount = _pendingDitchDelayedPunchActionCount;
-			for (std::size_t i = 0u; i < _delayedPunchActionCount; ++i)
+			const auto punchBase = _delayedPunchActionCount;
+			_delayedPunchActionCount += _pendingDitchDelayedPunchActionCount;
+			for (std::size_t i = 0u; i < _pendingDitchDelayedPunchActionCount; ++i)
 			{
-				_delayedPunchActions[i] = _pendingDitchDelayedPunchActions[i];
-				_delayedPunchActions[i].SampsLeft = _pendingRecordSamps >= _delayedPunchActions[i].SampsLeft ?
-					0u : _delayedPunchActions[i].SampsLeft - static_cast<unsigned int>(_pendingRecordSamps);
+				_delayedPunchActions[punchBase + i] = _pendingDitchDelayedPunchActions[i];
+				_delayedPunchActions[punchBase + i].SampsLeft = _pendingRecordSamps >= _delayedPunchActions[punchBase + i].SampsLeft ?
+					0u : _delayedPunchActions[punchBase + i].SampsLeft - static_cast<unsigned int>(_pendingRecordSamps);
 			}
 		}
 		break;
@@ -1239,6 +1307,9 @@ void Trigger::_ApplyStructuralResult(const StructuralResult& result) noexcept
 	_pendingSequence = 0u;
 	_pendingHistoryToken = 0u;
 	_pendingRecordSamps = 0u;
+	// Restored commands are live again; their backup must not reserve capacity twice.
+	_pendingDitchDelayedActionCount = 0u;
+	_pendingDitchDelayedPunchActionCount = 0u;
 }
 
 void Trigger::_ProcessStructuralResults() noexcept
@@ -1510,7 +1581,6 @@ void Trigger::StartRecording(const std::optional<io::UserConfig>& cfg,
 	(void)cfg;
 	(void)params;
 	_recordSampCount = 0;
-	_delayedActionCount = 0u;
 	_activeHistoryIndex.reset();
 
 	if (_receiver && _loopTakeHistorySize < _HistoryCapacity)
@@ -1547,14 +1617,7 @@ void Trigger::Ditch(const std::optional<io::UserConfig>& cfg,
 			STRUCTURAL_DITCH,
 			_loopTakeHistory[*historyIndex].Token, _recordSampCount))
 	{
-		_pendingDitchDelayedActionCount = _delayedActionCount;
-		std::copy_n(_delayedActions.begin(), _delayedActionCount,
-			_pendingDitchDelayedActions.begin());
-		_pendingDitchDelayedPunchActionCount = _delayedPunchActionCount;
-		std::copy_n(_delayedPunchActions.begin(), _delayedPunchActionCount,
-			_pendingDitchDelayedPunchActions.begin());
-		_delayedActionCount = 0u;
-		_delayedPunchActionCount = 0u;
+		_SuspendSessionActions(_loopTakeHistory[*historyIndex].Token);
 	}
 }
 
@@ -1564,10 +1627,7 @@ void Trigger::StartOverdub(const std::optional<io::UserConfig>& cfg,
 	(void)cfg;
 	(void)params;
 	_recordSampCount = 0;
-	_delayedActionCount = 0u;
-	_delayedPunchActionCount = 0u;
 	_activeHistoryIndex.reset();
-	_overdubMixer->SetUnmutedLevel(1.0);
 
 	if (_receiver && _loopTakeHistorySize < _HistoryCapacity)
 	{
@@ -1601,14 +1661,7 @@ void Trigger::DitchOverdub(const std::optional<io::UserConfig>& cfg,
 			STRUCTURAL_DITCH_OVERDUB,
 			_loopTakeHistory[*historyIndex].Token, _recordSampCount))
 	{
-		_pendingDitchDelayedActionCount = _delayedActionCount;
-		std::copy_n(_delayedActions.begin(), _delayedActionCount,
-			_pendingDitchDelayedActions.begin());
-		_pendingDitchDelayedPunchActionCount = _delayedPunchActionCount;
-		std::copy_n(_delayedPunchActions.begin(), _delayedPunchActionCount,
-			_pendingDitchDelayedPunchActions.begin());
-		_delayedActionCount = 0u;
-		_delayedPunchActionCount = 0u;
+		_SuspendSessionActions(_loopTakeHistory[*historyIndex].Token);
 	}
 }
 
@@ -1618,36 +1671,38 @@ bool Trigger::StartPunchIn(const std::optional<io::UserConfig>& cfg,
 	if (!_activeHistoryIndex || *_activeHistoryIndex >= _loopTakeHistorySize)
 		return false;
 	const auto& history = _loopTakeHistory[*_activeHistoryIndex];
-	const auto hasTargetAudio = !_inputChannels.empty() || !cfg.has_value() ||
-		cfg.value().Audio.NumChannelsIn > 0u;
-	const auto hasTargetMidi = !_midiInputDevices.empty();
+	if (!history.Session) return false;
+	const auto hasTargetAudio = history.Session->HasAudioCapture;
+	const auto hasTargetMidi = !history.Session->MidiDeviceNames.empty();
+	const auto sampsDelay = CalcInputAlignedDelaySamps(cfg, params);
+	const auto targetDelay = CalcPunchStateDelaySamps(cfg);
+	if ((sampsDelay && _delayedActionCount + _pendingDitchDelayedActionCount + 2u > _DelayedActionCapacity) ||
+		(targetDelay && hasTargetAudio && history.TargetTake &&
+		 _delayedPunchActionCount + _pendingDitchDelayedPunchActionCount + 2u > _DelayedActionCapacity))
+		return false;
+	// Reserve the matching release in every bounded queue before admitting punch in.
+	if (_structuralCommands.Size() + 2u >= _StructuralQueueCapacity) return false;
 	if (!_QueueStructuralCommand(TriggerAction::TRIGGER_PUNCHIN_START,
 		STRUCTURAL_NONE, history.Token, _recordSampCount,
 		hasTargetMidi, false, false, hasTargetMidi))
 		return false;
 
 	_state = TRIGSTATE_PUNCHEDIN;
-	auto sampsDelay = CalcInputAlignedDelaySamps(cfg, params);
 	// Mute overdub input immediately; latency compensation applies only to mixer fade
 	if (sampsDelay == 0u)
-		_overdubMixer->SetUnmutedLevel(0.0);
+		history.Session->Mixer->SetUnmutedLevel(0.0);
 	else if (_delayedActionCount < _DelayedActionCapacity)
-		_delayedActions[_delayedActionCount++] = { sampsDelay, 0.0 };
-	else
-		_overdubMixer->SetUnmutedLevel(0.0);
+		_delayedActions[_delayedActionCount++] = { sampsDelay, 0.0, history.Token, history.Session->Mixer.get() };
 
 	if (history.SourceTake) history.SourceTake->SetTriggerSourceMutedAudio(true);
 
-	auto targetDelay = CalcPunchStateDelaySamps(cfg);
 	if (hasTargetAudio && history.TargetTake)
 	{
 		if (0u == targetDelay)
 			history.TargetTake->TriggerPunchInAudio();
 		else if (_delayedPunchActionCount < _DelayedActionCapacity)
 			_delayedPunchActions[_delayedPunchActionCount++] = {
-				history.TargetTake, targetDelay, true };
-		else
-			history.TargetTake->TriggerPunchInAudio();
+				history.TargetTake, targetDelay, true, history.Token };
 	}
 	return true;
 }
@@ -1658,36 +1713,36 @@ bool Trigger::EndPunchIn(const std::optional<io::UserConfig>& cfg,
 	if (!_activeHistoryIndex || *_activeHistoryIndex >= _loopTakeHistorySize)
 		return false;
 	const auto& history = _loopTakeHistory[*_activeHistoryIndex];
-	const auto hasTargetAudio = !_inputChannels.empty() || !cfg.has_value() ||
-		cfg.value().Audio.NumChannelsIn > 0u;
-	const auto hasTargetMidi = !_midiInputDevices.empty();
+	if (!history.Session) return false;
+	const auto hasTargetAudio = history.Session->HasAudioCapture;
+	const auto hasTargetMidi = !history.Session->MidiDeviceNames.empty();
+	const auto sampsDelay = CalcInputAlignedDelaySamps(cfg, params);
+	const auto targetDelay = CalcPunchStateDelaySamps(cfg);
+	if ((sampsDelay && _delayedActionCount + _pendingDitchDelayedActionCount >= _DelayedActionCapacity) ||
+		(targetDelay && hasTargetAudio && history.TargetTake &&
+		 _delayedPunchActionCount + _pendingDitchDelayedPunchActionCount >= _DelayedActionCapacity))
+		return false;
 	if (!_QueueStructuralCommand(TriggerAction::TRIGGER_PUNCHIN_END,
 		STRUCTURAL_NONE, history.Token, _recordSampCount,
 		hasTargetMidi, false, false, hasTargetMidi))
 		return false;
 
 	_state = TRIGSTATE_OVERDUBBING;
-	auto sampsDelay = CalcInputAlignedDelaySamps(cfg, params);
 	// Unmute overdub input immediately; latency compensation applies only to mixer fade
 	if (sampsDelay == 0u)
-		_overdubMixer->SetUnmutedLevel(1.0);
+		history.Session->Mixer->SetUnmutedLevel(1.0);
 	else if (_delayedActionCount < _DelayedActionCapacity)
-		_delayedActions[_delayedActionCount++] = { sampsDelay, 1.0 };
-	else
-		_overdubMixer->SetUnmutedLevel(1.0);
+		_delayedActions[_delayedActionCount++] = { sampsDelay, 1.0, history.Token, history.Session->Mixer.get() };
 
 	if (history.SourceTake) history.SourceTake->SetTriggerSourceMutedAudio(false);
 
-	auto targetDelay = CalcPunchStateDelaySamps(cfg);
 	if (hasTargetAudio && history.TargetTake)
 	{
 		if (0u == targetDelay)
 			history.TargetTake->TriggerPunchOutAudio();
 		else if (_delayedPunchActionCount < _DelayedActionCapacity)
 			_delayedPunchActions[_delayedPunchActionCount++] = {
-				history.TargetTake, targetDelay, false };
-		else
-			history.TargetTake->TriggerPunchOutAudio();
+				history.TargetTake, targetDelay, false, history.Token };
 	}
 	return true;
 }

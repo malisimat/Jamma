@@ -453,6 +453,19 @@ namespace engine
 			bool ApplyToTargetAudio = true;
 			bool ApplyToTargetMidi = true;
 		};
+		struct CaptureSession
+		{
+			std::uint64_t Token = 0u;
+			std::atomic<bool> RetiredByAudio{ false };
+			std::vector<unsigned int> AudioChannels;
+			std::vector<std::string> MidiDeviceNames;
+			bool HasAudioCapture = false;
+			std::shared_ptr<base::ActionReceiver> Receiver;
+			std::shared_ptr<base::TriggerPunchTarget> SourceTake;
+			std::shared_ptr<base::TriggerPunchTarget> TargetTake;
+			std::shared_ptr<audio::AudioMixer> Mixer;
+			std::shared_ptr<base::BounceWriter> Writer;
+		};
 		struct StructuralResult
 		{
 			std::uint64_t Sequence = 0u;
@@ -460,6 +473,7 @@ namespace engine
 			bool IsEaten = false;
 			actions::DitchDisposition DitchResult = actions::DitchDisposition::NotApplicable;
 			std::uint64_t HistoryToken = 0u;
+			CaptureSession* Session = nullptr;
 			base::TriggerPunchTarget* SourceTake = nullptr;
 			base::TriggerPunchTarget* TargetTake = nullptr;
 		};
@@ -467,6 +481,7 @@ namespace engine
 		{
 			decltype(TriggerTake{}.SourceType) SourceType = TriggerTake::SOURCE_ADC;
 			std::uint64_t Token = 0u;
+			CaptureSession* Session = nullptr;
 			base::TriggerPunchTarget* SourceTake = nullptr;
 			base::TriggerPunchTarget* TargetTake = nullptr;
 		};
@@ -474,12 +489,15 @@ namespace engine
 		{
 			unsigned int SampsLeft = 0u;
 			double Target = 0.0;
+			std::uint64_t Token = 0u;
+			audio::AudioMixer* Mixer = nullptr;
 		};
 		struct DelayedPunchAction
 		{
 			base::TriggerPunchTarget* TargetTake = nullptr;
 			unsigned int SampsLeft = 0u;
 			bool IsPunchIn = false;
+			std::uint64_t Token = 0u;
 		};
 		bool _QueueStructuralCommand(actions::TriggerAction::TriggerActionType actionType,
 			StructuralCompletion completion,
@@ -489,6 +507,7 @@ namespace engine
 			bool applyToSourceTake = true,
 			bool applyToTargetAudio = true,
 			bool applyToTargetMidi = true) noexcept;
+		void _SuspendSessionActions(std::uint64_t token) noexcept;
 		void _FlushDelayedPunchActions(unsigned int samps) noexcept;
 		void _ProcessStructuralResults() noexcept;
 		void _ApplyStructuralResult(const StructuralResult& result) noexcept;
@@ -599,6 +618,10 @@ namespace engine
 		std::array<std::uint64_t, _HistoryCapacity> _jobTakeTokens{};
 		std::size_t _jobTakeHistorySize = 0u;
 		std::atomic<std::shared_ptr<const std::vector<TriggerTake>>> _publishedTakeHistory;
+		// Job-owned pins outlive runtime/delayed borrowers. Reclaim after audio removal
+		// acknowledgement and Station snapshot retirement, or stopped-reader Reset.
+		std::array<std::unique_ptr<CaptureSession>, _HistoryCapacity> _captureSessions{};
+		std::size_t _captureSessionCount = 0u;
 		std::shared_ptr<audio::AudioMixer> _overdubMixer;
 		std::shared_ptr<base::BounceWriter> _overdubWriter;
 	};
