@@ -1,3 +1,5 @@
+#include <iomanip>
+#include <sstream>
 #include "Quantiser.h"
 
 #include <algorithm>
@@ -141,6 +143,11 @@ void Quantiser::Clear(bool clearTapTempo, bool preserveTiming)
 	}
 
 	_masterLoop.reset();
+	if (!preserveTiming)
+	{
+		_acceptedRemoteGrid = {};
+		_gridSource.store(QuantisationGridSource::Default, std::memory_order_release);
+	}
 	_armReclock.store(false, std::memory_order_release);
 	_preReclockTakeIds.clear();
 
@@ -158,6 +165,9 @@ void Quantiser::ArmReclock()
 
 void Quantiser::ArmReclock(const std::vector<std::shared_ptr<engine::Station>>& stations)
 {
+	_reclockGeneration.fetch_add(1u, std::memory_order_acq_rel);
+	_acceptedRemoteGrid = {};
+	_gridSource.store(QuantisationGridSource::Default, std::memory_order_release);
 	if (_clock)
 		_clock->Clear();
 	_masterLoop.reset();
@@ -189,6 +199,7 @@ void Quantiser::ApplyTiming(const QuantisationTiming& timing, const char* source
 
 	_effectiveQuantiseSamps.store(timing.SeedSamps, std::memory_order_release);
 	_activeGridDivisions.store(timing.Bpi, std::memory_order_release);
+	_gridSource.store(QuantisationGridSource::Default, std::memory_order_release);
 	_armReclock.store(false, std::memory_order_release);
 
 	std::cout << "Quantisation " << source
@@ -207,15 +218,14 @@ void Quantiser::SetMidiGrain(unsigned int grainSamps,
 	unsigned int takeCount = 0u;
 	for (const auto& station : stations)
 	{
-		if (!station)
+		if (!station || station->IsRemote())
 			continue;
 
 		for (const auto& take : station->GetLoopTakes())
 		{
 			if (!take)
 				continue;
-			// A local/tap update supersedes the live remote descriptor.
-			take->SetRemoteMidiQuantisationGrid({}, 0u);
+			// Grain publication never changes remote timing authority.
 
 			midi::MidiQuantisationSettings settings = take->MidiQuantisation();
 			if (settings.GrainSamps != grainSamps)
@@ -235,6 +245,10 @@ void Quantiser::SetRemoteMidiGrid(const RemoteTransportGeometry& geometry,
 	std::int64_t originSamps,
 	const std::vector<std::shared_ptr<Station>>& stations)
 {
+	const auto changed = _acceptedRemoteGrid.IntervalLengthSamps != geometry.IntervalLengthSamps
+		|| _acceptedRemoteGrid.Bpi != geometry.Bpi;
+	_acceptedRemoteGrid = geometry;
+	_gridSource = geometry.IntervalLengthSamps && geometry.Bpi ? QuantisationGridSource::Remote : QuantisationGridSource::Default;
 	for (const auto& station : stations)
 	{
 		if (!station)
@@ -242,7 +256,10 @@ void Quantiser::SetRemoteMidiGrid(const RemoteTransportGeometry& geometry,
 		for (const auto& take : station->GetLoopTakes())
 		{
 			if (take)
+			{
 				take->SetRemoteMidiQuantisationGrid(geometry, originSamps);
+				if (changed) take->SetMidiBaseGrid(0u, 0u);
+			}
 		}
 	}
 }
@@ -274,128 +291,139 @@ std::int32_t Quantiser::ResolvePhaseOffsetDrag(std::int32_t startOffsetSamps,
 }
 
 bool Quantiser::HandleTapTempo(std::uint64_t estimatedSampleAt,
-	unsigned int sampleRate,
-	const std::vector<std::shared_ptr<Station>>& stations,
-	const io::UserConfig& cfg)
+    unsigned int sampleRate,
+    const std::vector<std::shared_ptr<Station>>& stations,
+    const io::UserConfig& cfg)
 {
-	// First recordings establish their master locally, before a user has used
-	// the hover/master UI. After reclock, only takes created after the arm point
-	// participate; older loops may continue playing on their old rulers.
-	if (_masterLoopLengthSamps.load(std::memory_order_acquire) == 0ul)
-	{
-		std::shared_ptr<Loop> soleLoop;
-		unsigned int musicalLoopCount = 0u;
-		for (const auto& station : stations)
-			if (station && !station->IsRemote())
-				for (const auto& take : station->GetLoopTakes())
-					if (take && take->VisualLoopLengthSamps() > 0ul
-						&& (_preReclockTakeIds.empty()
-							|| std::find(_preReclockTakeIds.begin(), _preReclockTakeIds.end(), take->Id())
-								== _preReclockTakeIds.end()))
-					{
-						++musicalLoopCount;
-						if (!take->GetLoops().empty())
-							soleLoop = take->GetLoops().front();
-					}
-		if (musicalLoopCount == 1u && soleLoop)
-		{
-			_masterLoop = soleLoop;
-			_masterLoopLengthSamps.store(soleLoop->LoopLength(), std::memory_order_release);
-			_masterOriginalBufferLengthSamps.store(soleLoop->PhysicalLoopLength(), std::memory_order_release);
-		}
-	}
+    PulseOverlay();
+    unsigned int eligible = 0u;
+    std::shared_ptr<LoopTake> soleTake;
+    for (const auto& station : stations)
+        if (station && !station->IsRemote())
+            for (const auto& take : station->GetLoopTakes())
+                if (take && take->IsCompletedRecording()
+                    && std::find(_preReclockTakeIds.begin(), _preReclockTakeIds.end(), take->Id()) == _preReclockTakeIds.end())
+                {
+                    ++eligible;
+                    soleTake = take;
+                }
+    const bool remote = _acceptedRemoteGrid.IntervalLengthSamps > 0ul && _acceptedRemoteGrid.Bpi > 0u;
+    if (eligible == 1u && !_masterLoopLengthSamps.load(std::memory_order_acquire))
+    {
+        _masterLoop = soleTake->GetLoops().empty() ? nullptr : soleTake->GetLoops().front();
+        const auto length = soleTake->VisualLoopLengthSamps();
+        _masterLoopLengthSamps.store(length, std::memory_order_release);
+        _masterOriginalBufferLengthSamps.store(_masterLoop ? _masterLoop->PhysicalLoopLength() : length, std::memory_order_release);
+    }
+    const auto original = _masterOriginalBufferLengthSamps.load(std::memory_order_acquire);
+    const auto interval = remote ? _acceptedRemoteGrid.IntervalLengthSamps :
+        (eligible == 1u && original ? original : (_clock ? _clock->SeedSourceLength() : 0ul));
+    std::optional<QuantisationTiming> timing;
+    double requestedDivisions = 0.0;
+    double smoothedGap = 0.0;
+    {
+        std::scoped_lock tapTempoLock(_tapTempoMutex);
+        timing = _tapTempo.TapAtSample(estimatedSampleAt, sampleRate, interval, Policy(cfg));
+        smoothedGap = _tapTempo.EstimatedGapSamps();
+        if (smoothedGap > 0.0) requestedDivisions = interval / smoothedGap;
+    }
+    if (!timing)
+    {
+        std::cout << "[quantisation] tap sequence/no update: sample=" << estimatedSampleAt
+            << " generation=" << ReclockGeneration() << " sr=" << sampleRate << " eligible=" << eligible << " authority=" << (remote ? "remote" : "local") << std::endl;
+        return true;
+    }
+    if (eligible != 1u || remote)
+    {
+        const auto grain = _clock ? _clock->QuantiseSamps() : 0u;
+        const auto base = remote ? _acceptedRemoteGrid.Bpi :
+            (grain && _clock ? static_cast<unsigned int>(_clock->SeedSourceLength() / grain) : 0u);
+        if (!base || !interval)
+        {
+            std::cout << "[quantisation] tap rejected: no valid base geometry generation=" << ReclockGeneration()
+                << " eligible=" << eligible << " sr=" << sampleRate << " interval=" << interval << " grain=" << grain << std::endl;
+            return true;
+        }
+        const auto previous = ActiveGridDivisions();
+        const auto selected = NearestPermittedDivision(base, requestedDivisions);
+        for (const auto& station : stations)
+            if (station && !station->IsRemote())
+                for (const auto& take : station->GetLoopTakes())
+                    if (take && (static_cast<std::uint64_t>(take->VisualLoopLengthSamps()) * selected * 32u + interval - 1u) / interval > 8192u)
+                    {
+                        std::cout << "[quantisation] tap rejected: effective grid exceeds 8192 cells at 1/32 take=" << take->Id() << std::endl;
+                        return true;
+                    }
+        _activeGridDivisions.store(selected, std::memory_order_release);
+        _gridSource = remote ? QuantisationGridSource::Remote : QuantisationGridSource::Tap;
+        for (const auto& station : stations)
+            if (station && !station->IsRemote())
+                for (const auto& take : station->GetLoopTakes())
+                    if (take) take->SetMidiBaseGrid(static_cast<std::uint32_t>(interval), selected);
+        unsigned int minimumDivisor = 32u;
+        unsigned int maximumDivisor = 1u;
+        for (const auto& station : stations)
+            if (station && !station->IsRemote())
+                for (const auto& take : station->GetLoopTakes())
+                    if (take)
+                    {
+                        const auto divisor = midi::MidiQuantisation::Divisor(take->ResolvedMidiQuantisation().Fraction);
+                        minimumDivisor = (std::min)(minimumDivisor, divisor);
+                        maximumDivisor = (std::max)(maximumDivisor, divisor);
+                    }
+        std::cout << "[quantisation] tap subdivisions " << (previous == selected ? "unchanged" : "accepted")
+            << ": generation=" << ReclockGeneration() << " sr=" << sampleRate << " eligible=" << eligible
+            << " authority=" << (remote ? "remote" : "local") << " interval=" << interval
+            << " grain=" << grain << " base=" << base << " requested=" << timing->Bpi
+            << " before=" << previous << " gap=" << smoothedGap << " gapMs=" << (1000.0 * smoothedGap / sampleRate)
+            << " bpm=" << (60.0 * sampleRate / smoothedGap) << " fractionDivisors=" << minimumDivisor << ".." << maximumDivisor
+            << " effectiveCells=" << selected * minimumDivisor << ".." << selected * maximumDivisor
+            << " requestedRatio=" << requestedDivisions << " selected=" << selected << " tie=smaller geometry=preserved" << std::endl;
+        return true;
+    }
+    if (!LocalAudioGeometry::Create(original, timing->MasterLoopSamps, timing->SeedSamps, timing->Bpi))
+    {
+        std::cout << "[quantisation] tap geometry rejected: generation=" << ReclockGeneration()
+            << " physical=" << original << " logical=" << timing->MasterLoopSamps << " grain=" << timing->SeedSamps
+            << " grains=" << timing->Bpi << std::endl;
+        return true;
+    }
+    // The recording's physical storage remains intact; Loop::Play only changes
+    // its logical boundary and retains the recorded tail for a later resolution.
+    for (const auto& loop : soleTake->GetLoops())
+        if (loop) loop->Play(loop->PlayIndex(), timing->MasterLoopSamps, false);
+    soleTake->SetMidiBaseGrid(timing->MasterLoopSamps, timing->Bpi);
+    SetSeedUsesPowers(cfg.Loop.SeedUsesPowers);
+    ApplyTiming(*timing, "tap tempo");
+    _gridSource.store(QuantisationGridSource::Tap, std::memory_order_release);
+    _masterLoopLengthSamps.store(timing->MasterLoopSamps, std::memory_order_release);
+    SetMidiGrain(timing->SeedSamps, "tap tempo", stations);
+    std::cout << "[quantisation] tap geometry accepted: take=" << soleTake->Id()
+        << " generation=" << ReclockGeneration() << " sr=" << sampleRate << " eligible=" << eligible
+        << " authority=local source=tap physical=" << original << " logical=" << timing->MasterLoopSamps
+        << " grain=" << timing->SeedSamps << " grains=" << timing->Bpi << " bpm=" << timing->Bpm
+        << " gap=" << smoothedGap << " fraction=" << midi::MidiQuantisation::FractionLabel(soleTake->ResolvedMidiQuantisation().Fraction)
+        << " effectiveCells=" << soleTake->ResolvedMidiQuantisation().GridDivisions()
+        << " tail=" << original - timing->MasterLoopSamps << " rounding=nearest-beats/up-ties,floor-grain" << std::endl;
+    return true;
+}
 
-	std::optional<QuantisationTiming> timing;
-	{
-		std::scoped_lock tapTempoLock(_tapTempoMutex);
-		const auto masterLoopLengthSamps = _masterLoopLengthSamps.load(std::memory_order_acquire);
-		if (masterLoopLengthSamps == 0ul)
-		{
-			std::cout << "Tap tempo: no master loop, tap ignored" << std::endl;
-			return true;
-		}
-
-		timing = _tapTempo.TapAtSample(estimatedSampleAt,
-			sampleRate,
-			masterLoopLengthSamps,
-			Policy(cfg));
-	}
-
-	if (!timing.has_value())
-	{
-		std::cout << "Tap tempo: first tap" << std::endl;
-		return true;
-	}
-
-	// Only the sole committed local loop in the current reclock generation may
-	// redefine local geometry. A LoopTake is one musical loop regardless of its
-	// number of audio channels.
-	// A LoopTake is one musical loop regardless of its number of audio channels.
-	unsigned int committedLocalLoops = 0u;
-	for (const auto& station : stations)
-		if (station && !station->IsRemote())
-			for (const auto& take : station->GetLoopTakes())
-				if (take && take->VisualLoopLengthSamps() > 0ul
-					&& (_preReclockTakeIds.empty()
-						|| std::find(_preReclockTakeIds.begin(), _preReclockTakeIds.end(), take->Id())
-							== _preReclockTakeIds.end()))
-					++committedLocalLoops;
-
-	const auto originalLength = _masterOriginalBufferLengthSamps.load(std::memory_order_acquire);
-	const auto canResizeMaster = committedLocalLoops == 1u && _masterLoop && originalLength > 0ul;
-	const auto quantisation = cfg.Loop.SeedUsesPowers ? utils::Timer::QUANTISE_POWER : utils::Timer::QUANTISE_MULTIPLE;
-	if (!canResizeMaster)
-	{
-		// Local audio geometry is frozen. Pick the nearest permitted musical
-		// division LocalBPI * 2^p; ties resolve toward the smaller division.
-		const auto localMasterLength = _clock ? _clock->SeedSourceLength() : 0ul;
-		const auto localGrain = _clock ? _clock->QuantiseSamps() : 0u;
-		const auto localBpi = localGrain == 0u ? 0u : static_cast<unsigned int>(localMasterLength / localGrain);
-		if (localBpi == 0u)
-			return true;
-		const auto requested = static_cast<double>(_masterLoopLengthSamps.load(std::memory_order_acquire)) /
-			std::max(1u, timing->SeedSamps);
-		unsigned int best = localBpi;
-		for (unsigned int p = 1u; p < 16u && best <= std::numeric_limits<unsigned int>::max() / 2u; ++p)
-		{
-			const auto candidate = localBpi << p;
-			if (std::abs(static_cast<double>(candidate) - requested) < std::abs(static_cast<double>(best) - requested))
-				best = candidate;
-		}
-		_activeGridDivisions.store(best, std::memory_order_release);
-		return true;
-	}
-
-	if (auto geometry = LocalAudioGeometry::Create(originalLength, timing->MasterLoopSamps,
-		timing->SeedSamps, timing->Bpi); !geometry.has_value())
-		return true;
-
-	// Apply the sole take's logical boundary before publishing the replacement
-	// timer geometry. A take may contain several audio channels, but it is one
-	// musical loop and every channel must retain the same geometry.
-	for (const auto& station : stations)
-	{
-		if (!station || station->IsRemote())
-			continue;
-		for (const auto& take : station->GetLoopTakes())
-		{
-			if (!take)
-				continue;
-			const auto& loops = take->GetLoops();
-			if (std::find(loops.begin(), loops.end(), _masterLoop) == loops.end())
-				continue;
-			for (const auto& loop : loops)
-				if (loop)
-					loop->Play(loop->PlayIndex(), timing->MasterLoopSamps, false);
-			break;
-		}
-	}
-	if (_clock)
-		_clock->SetQuantisation(timing->SeedSamps, quantisation);
-	SetSeedUsesPowers(cfg.Loop.SeedUsesPowers);
-	ApplyTiming(timing.value(), "tap tempo");
-	SetMidiGrain(timing->SeedSamps, "tap tempo", stations);
-	return true;
+unsigned int Quantiser::NearestPermittedDivision(unsigned int base, double requested) noexcept
+{
+    if (!base || !std::isfinite(requested) || requested <= 0.0) return base;
+    unsigned int best = base;
+    // Straight/triplet bases capped at 256, leaving room for the densest 1/32 fraction.
+    for (unsigned int multiplier = 1u; multiplier <= 256u / base; multiplier *= 2u)
+        for (const auto factor : { 1u, 3u })
+        {
+            const auto candidate = static_cast<std::uint64_t>(base) * multiplier * factor;
+            if (candidate > 256u) continue;
+            const auto distance = std::abs(static_cast<double>(candidate) - requested);
+            const auto previous = std::abs(static_cast<double>(best) - requested);
+            if (distance < previous || (distance == previous && candidate < best))
+                best = static_cast<unsigned int>(candidate);
+        }
+    return best;
 }
 
 void Quantiser::PulseOverlay()
@@ -413,13 +441,26 @@ void Quantiser::PulseOverlay()
 
 void Quantiser::SetOverlayHeld(bool held)
 {
+	if (_spaceOverlayHeld.exchange(held, std::memory_order_acq_rel) == held)
+		return;
+	held = _spaceOverlayHeld.load(std::memory_order_acquire) || _gestureOverlayHeld.load(std::memory_order_acquire);
 	_overlayState.store(
 		held ? StateHeld : utils::Timer::GetTime().time_since_epoch().count(),
 		std::memory_order_release);
 }
 
+void Quantiser::SetGestureOverlayHeld(bool held)
+{
+    if (_gestureOverlayHeld.exchange(held, std::memory_order_acq_rel) == held)
+        return;
+    _overlayState.store((_spaceOverlayHeld.load(std::memory_order_acquire) || _gestureOverlayHeld.load(std::memory_order_acquire)) ? StateHeld :
+        utils::Timer::GetTime().time_since_epoch().count(), std::memory_order_release);
+}
+
 void Quantiser::ClearOverlay() noexcept
 {
+	_spaceOverlayHeld = false;
+	_gestureOverlayHeld = false;
 	_overlayState.store(StateInactive, std::memory_order_release);
 }
 
@@ -569,6 +610,8 @@ std::optional<Quantiser::InteractionTarget> Quantiser::_ResolveInteractionTarget
 			}
 		}
 
+		resolved.MasterLengthSamps = resolved.TakeRef->VisualLoopLengthSamps();
+
 		for (const auto& loop : resolved.TakeRef->GetLoops())
 		{
 			if (!loop)
@@ -618,7 +661,7 @@ unsigned int Quantiser::ActiveGridDivisions() const noexcept
 
 QuantisationGrid Quantiser::ActiveGrid() const noexcept
 {
-	return { ActiveGridDivisions(), QuantisationGridSource::Default };
+	return { ActiveGridDivisions(), _gridSource.load(std::memory_order_acquire) };
 }
 
 std::int32_t Quantiser::GlobalPhaseOffsetSamps() const noexcept
@@ -760,6 +803,12 @@ std::optional<QuantisationTiming> TapTempoTracker::TapAtSample(std::uint64_t sam
 	unsigned long masterLoopSamps,
 	const QuantisationPolicy& policy)
 {
+	if (!sampleRate)
+	{
+		Clear();
+		std::cout << "[tap] rejected: invalid sample rate\n";
+		return std::nullopt;
+	}
 	if (!_lastTapSample.has_value())
 	{
 		_lastTapSample = samplePosition;
@@ -769,6 +818,7 @@ std::optional<QuantisationTiming> TapTempoTracker::TapAtSample(std::uint64_t sam
 	if (samplePosition <= _lastTapSample.value())
 	{
 		std::cout << "[tap] rejected: non-increasing\n";
+		Clear();
 		_lastTapSample = samplePosition;
 		return std::nullopt;
 	}
@@ -780,6 +830,7 @@ std::optional<QuantisationTiming> TapTempoTracker::TapAtSample(std::uint64_t sam
 	{
 		Clear();
 		_lastTapSample = samplePosition;
+		std::cout << "[tap] sequence restarted: timeout >3000ms\n";
 		return std::nullopt;
 	}
 
@@ -834,7 +885,13 @@ std::optional<QuantisationTiming> Quantiser::DeduceTapSeedTimingFromMaster(unsig
 	const auto grain = masterLoopSamps / requestedBpi;
 	if (grain == 0ul || grain > std::numeric_limits<unsigned int>::max())
 		return std::nullopt;
-	return _TimingFromSeed(static_cast<unsigned int>(grain), masterLoopSamps, sampleRate);
+	auto timing = _TimingFromSeed(static_cast<unsigned int>(grain), grain * requestedBpi, sampleRate);
+    if (timing)
+    {
+        timing->SeedCount = static_cast<unsigned int>(requestedBpi);
+        timing->Bpi = static_cast<unsigned int>(requestedBpi);
+    }
+    return timing;
 }
 
 	// ── QuantiserController implementation ──

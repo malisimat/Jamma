@@ -274,7 +274,8 @@ namespace engine
 		static void _TrySeedClockFromFirstLoop(const std::shared_ptr<utils::Timer>& clock,
 			unsigned long loopLengthSamps,
 			std::optional<io::UserConfig> cfg,
-			std::optional<audio::AudioStreamParams> params);
+			std::optional<audio::AudioStreamParams> params,
+			const std::string& takeId);
 
 		virtual void _InitReceivers() override;
 		virtual void _InitResources(resources::ResourceLib& resourceLib, bool forceInit) override;

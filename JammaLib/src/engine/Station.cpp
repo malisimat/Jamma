@@ -45,7 +45,8 @@ unsigned int Station::_ResolveSampleRate(std::optional<io::UserConfig> cfg,
 void Station::_TrySeedClockFromFirstLoop(const std::shared_ptr<utils::Timer>& clock,
 	unsigned long loopLengthSamps,
 	std::optional<io::UserConfig> cfg,
-	std::optional<audio::AudioStreamParams> params)
+	std::optional<audio::AudioStreamParams> params,
+	const std::string& takeId)
 {
 	if (!clock)
 		return;
@@ -57,6 +58,15 @@ void Station::_TrySeedClockFromFirstLoop(const std::shared_ptr<utils::Timer>& cl
 		const auto quantisation = policyCfg.Loop.SeedUsesPowers ? utils::Timer::QUANTISE_POWER : utils::Timer::QUANTISE_MULTIPLE;
 		clock->SetQuantisation(timing->GrainSamps, quantisation);
 		clock->SetSeedSourceLength(static_cast<unsigned long>(timing->GrainSamps) * timing->LoopGrains);
+		// Structural recording completion runs on the job owner, never OnTick.
+		std::cout << "[quantisation] recording master established: take=" << takeId
+			<< " authority=local source=default physical=" << loopLengthSamps
+			<< " logical=" << clock->SeedSourceLength() << " sr=" << sampleRate
+			<< " grain=" << timing->GrainSamps << " grains=" << timing->LoopGrains
+			<< " bpm=" << 60.0 * sampleRate / timing->GrainSamps
+			<< " policyMinMs=" << policyCfg.Loop.SeedGrainMinMs
+			<< " policyMaxMs=" << policyCfg.Loop.SeedGrainTargetMaxMs
+			<< " rounding=floor-grain,exact-product" << std::endl;
 	}
 }
 
@@ -1289,7 +1299,8 @@ ActionResult Station::OnAction(TriggerAction action)
 				}
 				else
 				{
-					_TrySeedClockFromFirstLoop(_clock, loopLength, cfg, streamParams);
+					_TrySeedClockFromFirstLoop(_clock, loopLength, cfg, streamParams,
+						loopTake.has_value() ? loopTake.value()->Id() : "none");
 					loopLength = _clock->SeedSourceLength();
 					if (midiOnlyStopSample && loopLength > 0ul)
 					{
@@ -1380,7 +1391,8 @@ ActionResult Station::OnAction(TriggerAction action)
 				}
 				else
 				{
-					_TrySeedClockFromFirstLoop(_clock, action.SampleCount, cfg, streamParams);
+					_TrySeedClockFromFirstLoop(_clock, action.SampleCount, cfg, streamParams,
+						loopTake.has_value() ? loopTake.value()->Id() : "none");
 					loopLength = _clock->SeedSourceLength();
 				}
 			}

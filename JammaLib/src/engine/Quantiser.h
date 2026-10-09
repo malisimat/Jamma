@@ -33,6 +33,8 @@ namespace engine
 	class Station;
 }
 
+namespace midi { class MidiLoop; }
+
 namespace io
 {
 	struct UserConfig;
@@ -63,9 +65,10 @@ namespace engine
 
 		// Returns true once at least two taps have been received and a gap estimate exists.
 		bool HasEstimate() const noexcept;
+		double EstimatedGapSamps() const noexcept { return _estimatedGapSamps.value_or(0.0); }
 
 	private:
-		static constexpr double TapTimeoutSecs = 2.5;
+		static constexpr double TapTimeoutSecs = 3.0;
 
 		std::optional<std::uint64_t> _lastTapSample;
 		std::optional<double> _estimatedGapSamps;
@@ -116,6 +119,7 @@ namespace engine
 
 		void PulseOverlay();
 		void SetOverlayHeld(bool held);
+		void SetGestureOverlayHeld(bool held);
 		void ClearOverlay() noexcept;
 		float OverlayAlpha(Time now) const;
 		void ApplyOverlayAlpha(float alpha,
@@ -123,6 +127,7 @@ namespace engine
 
 		unsigned int EffectiveSamps() const noexcept;
 		unsigned int ActiveGridDivisions() const noexcept;
+		std::uint64_t ReclockGeneration() const noexcept { return _reclockGeneration.load(std::memory_order_acquire); }
 		QuantisationGrid ActiveGrid() const noexcept;
 		std::int32_t GlobalPhaseOffsetSamps() const noexcept;
 		bool IsArmedForReclock() const noexcept;
@@ -155,6 +160,7 @@ namespace engine
 			unsigned long masterLoopSamps,
 			unsigned int sampleRate);
 
+		static unsigned int NearestPermittedDivision(unsigned int base, double requested) noexcept;
 		static QuantisationPolicy Policy(const io::UserConfig& cfg);
 
 	private:
@@ -188,12 +194,17 @@ namespace engine
 
 		std::shared_ptr<utils::Timer> _clock;
 		std::shared_ptr<engine::Loop> _masterLoop;
+		RemoteTransportGeometry _acceptedRemoteGrid{};
+		std::atomic<QuantisationGridSource> _gridSource{ QuantisationGridSource::Default };
 		std::atomic_ulong _masterLoopLengthSamps{ 0ul };
 		std::atomic_ulong _masterOriginalBufferLengthSamps{ 0ul };
 		std::atomic_uint _activeGridDivisions{ 0u };
 		std::atomic_uint _effectiveQuantiseSamps{ 0u };
 		std::atomic_bool _armReclock{ false };
+		std::atomic<std::uint64_t> _reclockGeneration{ 0u };
 		std::atomic<std::int64_t> _overlayState{ StateInactive };
+		std::atomic_bool _spaceOverlayHeld{ false };
+		std::atomic_bool _gestureOverlayHeld{ false };
 		std::mutex _tapTempoMutex;
 		TapTempoTracker _tapTempo;
 		// UI-thread snapshot: takes existing before the current reclock do not
