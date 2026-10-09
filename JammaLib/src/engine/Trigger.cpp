@@ -596,8 +596,10 @@ void Trigger::_ProcessQueuedInputActions(std::uint64_t rigRevision,
 			if (_pendingCompletion != STRUCTURAL_NONE)
 				return;
 			TriggerInputEdge uiEdge, jobEdge, edge;
-			const bool hasUi = _uiInputQueue.Peek(uiEdge);
-			const bool hasJob = _jobInputQueue.Peek(jobEdge);
+			// Producers publish accepted revisions monotonically. A future queue
+			// head remains parked until that committed rig reaches the audio owner.
+			const bool hasUi = _uiInputQueue.Peek(uiEdge) && uiEdge.RigRevision <= rigRevision;
+			const bool hasJob = _jobInputQueue.Peek(jobEdge) && jobEdge.RigRevision <= rigRevision;
 			if (!hasUi && !hasJob)
 				return;
 			if (hasUi && (!hasJob || uiEdge.EventTimeUsec <= jobEdge.EventTimeUsec))
@@ -638,7 +640,9 @@ void Trigger::_ProcessQueuedInputActions(std::uint64_t rigRevision,
 		auto consider = [&](int domain, std::size_t fallbackIndex, bool available,
 			const TriggerInputEdge& candidate)
 		{
-			if (available && (candidate.EventTimeUsec < selectedTime ||
+			// Input dispatch can publish the next rig before its audio boundary.
+			// Preserve that revision's release in both queues and fallback mailboxes.
+			if (available && candidate.RigRevision <= rigRevision && (candidate.EventTimeUsec < selectedTime ||
 				(candidate.EventTimeUsec == selectedTime &&
 					(selectedDomain < 0 || domain < selectedDomain ||
 						(domain == selectedDomain && fallbackIndex < selectedFallback)))))

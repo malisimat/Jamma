@@ -1527,19 +1527,19 @@ TEST(Trigger, FullUiQueueKeepsLatestStateForEachActivateBinding)
 		ASSERT_TRUE(trigger->QueueExternalControlAction(true, false, action, 1u).IsEaten);
 	}
 	action.SetActionTime(OffsetTime(start, 62u));
-	ASSERT_TRUE(trigger->QueueInputEvent(engine::TRIGGER_INPUT_UI, 0u,
+	ASSERT_TRUE(trigger->QueueInputEvent(engine::TRIGGER_INPUT_UI, 2u,
 		engine::TRIGGER_KEY, 70u, 1u, action).IsEaten);
 	action.SetActionTime(OffsetTime(start, 63u));
-	ASSERT_TRUE(trigger->QueueInputEvent(engine::TRIGGER_INPUT_UI, 0u,
+	ASSERT_TRUE(trigger->QueueInputEvent(engine::TRIGGER_INPUT_UI, 2u,
 		engine::TRIGGER_KEY, 70u, 0u, action).IsEaten);
 	action.SetActionTime(OffsetTime(start, 64u));
-	ASSERT_TRUE(trigger->QueueInputEvent(engine::TRIGGER_INPUT_UI, 0u,
+	ASSERT_TRUE(trigger->QueueInputEvent(engine::TRIGGER_INPUT_UI, 2u,
 		engine::TRIGGER_KEY, 71u, 1u, action).IsEaten);
 	ASSERT_EQ(2u, trigger->UiInputDropCount());
 
-	trigger->OnTick(GetTime(), 0u, std::nullopt, std::nullopt, 0u);
-	CompleteQueuedStructuralAction(trigger);
-	CompleteQueuedStructuralAction(trigger);
+	trigger->OnTick(GetTime(), 0u, std::nullopt, std::nullopt, 2u);
+	CompleteQueuedStructuralAction(trigger, std::nullopt, 2u);
+	CompleteQueuedStructuralAction(trigger, std::nullopt, 2u);
 	ASSERT_EQ(2u, receiver->Actions().size());
 	EXPECT_EQ(TriggerAction::TRIGGER_REC_START, receiver->Actions()[0].ActionType);
 	EXPECT_EQ(TriggerAction::TRIGGER_REC_END, receiver->Actions()[1].ActionType);
@@ -3003,4 +3003,58 @@ TEST(Trigger, RejectedDitchReleasesRollbackCapacityAfterRestoredCommandsDrain)
 	EXPECT_EQ(engine::TRIGSTATE_PUNCHEDIN, trigger->GetState());
 	press(true, false);
 	EXPECT_EQ(engine::TRIGSTATE_OVERDUBBING, trigger->GetState());
+}
+
+TEST(Trigger, FutureRigReleaseWaitsForAudioRevisionInBothIngressDomains)
+{
+    for (const auto domain : { engine::TRIGGER_INPUT_UI, engine::TRIGGER_INPUT_JOB })
+    {
+        auto receiver = std::make_shared<SequenceTriggerReceiver>();
+        auto trigger = MakeDefaultTrigger(receiver, 0u);
+        base::Action action;
+        ASSERT_TRUE(trigger->QueueInputEvent(domain, 1u, engine::TRIGGER_KEY,
+            ActivateChar, 1u, action).IsEaten);
+        TickAndComplete(trigger, 0u, std::nullopt, 1u);
+        ASSERT_TRUE(trigger->IsActivateInputDown());
+        ASSERT_TRUE(trigger->QueueInputEvent(domain, 2u, engine::TRIGGER_KEY,
+            ActivateChar, 0u, action).IsEaten);
+        trigger->OnTick(GetTime(), 0u, std::nullopt, std::nullopt, 1u);
+        EXPECT_TRUE(trigger->IsActivateInputDown());
+        trigger->OnTick(GetTime(), 0u, std::nullopt, std::nullopt, 2u);
+        EXPECT_FALSE(trigger->IsActivateInputDown());
+    }
+}
+
+TEST(Trigger, FutureFallbackReleaseWaitsWhileCurrentOtherDomainStillProcesses)
+{
+    auto receiver = std::make_shared<SequenceTriggerReceiver>();
+    auto trigger = MakeDefaultTrigger(receiver, 0u);
+    base::Action action;
+    trigger->QueueExternalControlAction(true, true, action, 1u);
+    TickAndComplete(trigger, 0u, std::nullopt, 1u);
+    ASSERT_TRUE(trigger->IsActivateInputDown());
+    for (unsigned int index = 0u; index < 80u; ++index)
+        trigger->QueueExternalControlAction(true, false, action, 2u);
+    ASSERT_GT(trigger->UiInputDropCount(), 0u);
+    trigger->QueueInputEvent(engine::TRIGGER_INPUT_JOB, 1u, engine::TRIGGER_KEY,
+        DitchChar, 1u, action);
+    trigger->OnTick(GetTime(), 0u, std::nullopt, std::nullopt, 1u);
+    EXPECT_TRUE(trigger->IsActivateInputDown());
+    EXPECT_TRUE(trigger->IsDitchInputDown());
+    trigger->OnTick(GetTime(), 0u, std::nullopt, std::nullopt, 2u);
+    EXPECT_FALSE(trigger->IsActivateInputDown());
+}
+
+TEST(Trigger, SkippedFutureRigReleaseIsDiscardedAsStale)
+{
+    auto receiver = std::make_shared<SequenceTriggerReceiver>();
+    auto trigger = MakeDefaultTrigger(receiver, 0u);
+    base::Action action;
+    trigger->QueueExternalControlAction(true, true, action, 1u);
+    TickAndComplete(trigger, 0u, std::nullopt, 1u);
+    trigger->QueueExternalControlAction(true, false, action, 2u);
+    trigger->OnTick(GetTime(), 0u, std::nullopt, std::nullopt, 1u);
+    EXPECT_TRUE(trigger->IsActivateInputDown());
+    trigger->OnTick(GetTime(), 0u, std::nullopt, std::nullopt, 3u);
+    EXPECT_TRUE(trigger->IsActivateInputDown());
 }
