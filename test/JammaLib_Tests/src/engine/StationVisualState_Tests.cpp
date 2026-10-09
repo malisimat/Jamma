@@ -1,4 +1,6 @@
 #include "gtest/gtest.h"
+#include <atomic>
+#include <thread>
 
 #include "actions/TriggerAction.h"
 #include "engine/LoopTake.h"
@@ -80,7 +82,7 @@ TEST(StationVisualState, MidiOnlyRecordingFinishesImmediatelyWithAnAudioTailConf
 	station->OnAction(end);
 
 	EXPECT_EQ(engine::LoopTake::STATE_PLAYING, take->TakeState());
-	EXPECT_EQ(StationVisualState::STATIONSTATE_PLAYING, station->GetVisualState());
+	EXPECT_EQ(StationVisualState::STATIONSTATE_DEFAULT, station->GetVisualState());
 	for (const auto& loop : take->GetMidiLoops())
 	{
 		EXPECT_EQ(midi::MidiLoopState::Playing, loop->State());
@@ -177,18 +179,18 @@ TEST(StationVisualState, MidiOnlyStopKeepsOtherAudioAndMixedRecordingTailsVisibl
 		EXPECT_EQ(StationVisualState::STATIONSTATE_ENDRECORDING, station->GetVisualState());
 		audioTake->EndRecording();
 		station->OnTick(utils::Timer::GetTime(), 0u, std::nullopt, std::nullopt);
-		EXPECT_EQ(StationVisualState::STATIONSTATE_PLAYING, station->GetVisualState());
+		EXPECT_EQ(StationVisualState::STATIONSTATE_DEFAULT, station->GetVisualState());
 	}
 }
 
-TEST(StationVisualState, RecordingEndClearsOnTickWhenNoTakeIsInRecordingTail)
+TEST(StationVisualState, AbsentTargetEndDoesNotInventARecordingTail)
 {
 	auto station = MakeStation("station");
 	station->OnAction(MakeTriggerAction(TriggerAction::TRIGGER_REC_END, 64u));
-	EXPECT_EQ(StationVisualState::STATIONSTATE_ENDRECORDING, station->GetVisualState());
+	EXPECT_EQ(StationVisualState::STATIONSTATE_DEFAULT, station->GetVisualState());
 
 	station->OnTick(utils::Timer::GetTime(), 0u, std::nullopt, std::nullopt);
-	EXPECT_EQ(StationVisualState::STATIONSTATE_PLAYING, station->GetVisualState());
+	EXPECT_EQ(StationVisualState::STATIONSTATE_DEFAULT, station->GetVisualState());
 }
 
 TEST(StationVisualState, FirstRecordingSeedsAnUninitialisedClock)
@@ -227,13 +229,16 @@ TEST(StationVisualState, OverdubAndPunchInTrackTheirOwnTransitions)
 {
 	auto station = MakeStation("station");
 
-	station->OnAction(MakeTriggerAction(TriggerAction::TRIGGER_OVERDUB_START));
+	const auto started = station->OnAction(MakeTriggerAction(TriggerAction::TRIGGER_OVERDUB_START));
 	EXPECT_EQ(StationVisualState::STATIONSTATE_OVERDUBBING, station->GetVisualState());
 
-	station->OnAction(MakeTriggerAction(TriggerAction::TRIGGER_PUNCHIN_START));
+	auto punch = MakeTriggerAction(TriggerAction::TRIGGER_PUNCHIN_START);
+	punch.TargetId = started.TargetId;
+	station->OnAction(punch);
 	EXPECT_EQ(StationVisualState::STATIONSTATE_PUNCHIN, station->GetVisualState());
 
-	station->OnAction(MakeTriggerAction(TriggerAction::TRIGGER_PUNCHIN_END));
+	punch.ActionType = TriggerAction::TRIGGER_PUNCHIN_END;
+	station->OnAction(punch);
 	EXPECT_EQ(StationVisualState::STATIONSTATE_OVERDUBBING, station->GetVisualState());
 }
 
@@ -279,4 +284,168 @@ TEST(StationVisualState, RetiresRemovedTakeAfterReplacementAudioBoundary)
 	station->AcknowledgeAudioBoundary();
 	station->ReleaseRetiredAudioStates();
 	EXPECT_EQ(0u, station->RetiredAudioStateCount());
+}
+
+TEST(StationVisualState, LatestActiveModeWinsAndEndingNewestRevealsEarlierCapture)
+{
+	for (const bool recordFirst : { false, true })
+	{
+		SCOPED_TRACE(recordFirst);
+		auto station = MakeStation("station");
+		auto record = MakeTriggerAction(TriggerAction::TRIGGER_REC_START);
+		record.InputChannels = { 0u };
+		auto overdub = MakeTriggerAction(TriggerAction::TRIGGER_OVERDUB_START);
+		overdub.InputChannels = { 0u };
+		const auto older = station->OnAction(recordFirst ? record : overdub);
+		station->CommitChanges();
+		const auto newer = station->OnAction(recordFirst ? overdub : record);
+		// New membership and accepted mode are visible before the UI commits.
+		EXPECT_EQ(recordFirst ? StationVisualState::STATIONSTATE_OVERDUBBING
+			: StationVisualState::STATIONSTATE_RECORDING, station->GetVisualState());
+		station->CommitChanges(); // Materialize audio loops before exercising their tail.
+		auto end = MakeTriggerAction(recordFirst ? TriggerAction::TRIGGER_OVERDUB_END
+			: TriggerAction::TRIGGER_REC_END, 64u);
+		end.TargetId = newer.TargetId;
+		end.SetUserConfig(io::UserConfig{});
+		station->OnAction(end);
+		EXPECT_EQ(recordFirst ? StationVisualState::STATIONSTATE_RECORDING
+			: StationVisualState::STATIONSTATE_OVERDUBBING, station->GetVisualState());
+		auto ditch = MakeTriggerAction(TriggerAction::TRIGGER_DITCH);
+		ditch.TargetId = older.TargetId;
+		station->OnAction(ditch);
+		EXPECT_EQ(StationVisualState::STATIONSTATE_ENDRECORDING, station->GetVisualState());
+	}
+}
+
+TEST(StationVisualState, RepeatedAndAbsentPunchDoNotStealRecency)
+{
+	auto station = MakeStation("station");
+	const auto overdub = station->OnAction(MakeTriggerAction(TriggerAction::TRIGGER_OVERDUB_START));
+	auto punch = MakeTriggerAction(TriggerAction::TRIGGER_PUNCHIN_START);
+	punch.TargetId = overdub.TargetId;
+	punch.ApplyToTargetTake = false; // Audio punch is delayed, but logical mode is immediate.
+	station->OnAction(punch);
+	EXPECT_EQ(StationVisualState::STATIONSTATE_PUNCHIN, station->GetVisualState());
+	const auto record = station->OnAction(MakeTriggerAction(TriggerAction::TRIGGER_REC_START));
+	station->OnAction(punch);
+	EXPECT_EQ(StationVisualState::STATIONSTATE_RECORDING, station->GetVisualState());
+	punch.TargetId = "absent";
+	station->OnAction(punch);
+	EXPECT_EQ(StationVisualState::STATIONSTATE_RECORDING, station->GetVisualState());
+	punch.TargetId = overdub.TargetId;
+	punch.ActionType = TriggerAction::TRIGGER_PUNCHIN_END;
+	station->OnAction(punch);
+	EXPECT_EQ(StationVisualState::STATIONSTATE_OVERDUBBING, station->GetVisualState());
+	auto ditch = MakeTriggerAction(TriggerAction::TRIGGER_DITCH);
+	ditch.TargetId = overdub.TargetId;
+	station->OnAction(ditch);
+	EXPECT_EQ(StationVisualState::STATIONSTATE_RECORDING, station->GetVisualState());
+	ditch.TargetId = record.TargetId;
+	station->OnAction(ditch);
+	EXPECT_EQ(StationVisualState::STATIONSTATE_DEFAULT, station->GetVisualState());
+}
+
+TEST(StationVisualState, EqualActiveModesAndDitchOlderKeepNewerVisible)
+{
+	auto station = MakeStation("station");
+	const auto older = station->OnAction(MakeTriggerAction(TriggerAction::TRIGGER_REC_START));
+	const auto newer = station->OnAction(MakeTriggerAction(TriggerAction::TRIGGER_REC_START));
+	auto ditch = MakeTriggerAction(TriggerAction::TRIGGER_DITCH);
+	ditch.TargetId = older.TargetId;
+	station->OnAction(ditch);
+	EXPECT_EQ(StationVisualState::STATIONSTATE_RECORDING, station->GetVisualState());
+	ditch.TargetId = "absent";
+	station->OnAction(ditch);
+	EXPECT_EQ(StationVisualState::STATIONSTATE_RECORDING, station->GetVisualState());
+	ditch.TargetId = newer.TargetId;
+	station->OnAction(ditch);
+	EXPECT_EQ(StationVisualState::STATIONSTATE_DEFAULT, station->GetVisualState());
+}
+
+TEST(StationVisualState, MidiOnlyPunchUsesLogicalModeAndCompletedContentFallsBackToDefault)
+{
+	auto station = MakeStation("station");
+	station->SetAllowedMidiChannels({ 1 });
+	auto start = MakeTriggerAction(TriggerAction::TRIGGER_OVERDUB_START);
+	start.MidiInputDevices = { "Keys" };
+	const auto started = station->OnAction(start);
+	auto punch = MakeTriggerAction(TriggerAction::TRIGGER_PUNCHIN_START);
+	punch.TargetId = started.TargetId;
+	punch.ApplyToTargetAudio = false;
+	station->OnAction(punch);
+	EXPECT_EQ(StationVisualState::STATIONSTATE_PUNCHIN, station->GetVisualState());
+	auto end = MakeTriggerAction(TriggerAction::TRIGGER_OVERDUB_END, 64u);
+	end.TargetId = started.TargetId;
+	end.SetUserConfig(io::UserConfig{});
+	station->OnAction(end);
+	EXPECT_EQ(StationVisualState::STATIONSTATE_DEFAULT, station->GetVisualState());
+	EXPECT_EQ(1u, station->GetLoopTakeSnapshot().size());
+	station->Reset();
+	EXPECT_EQ(StationVisualState::STATIONSTATE_DEFAULT, station->GetVisualState());
+}
+
+TEST(StationVisualState, PresentationPublicationKeepsModeAndSerialCoherent)
+{
+	auto station = MakeStation("station");
+	const auto take = station->AddTake();
+	std::atomic<bool> begin{ false };
+	std::atomic<bool> done{ false };
+	std::atomic<bool> mismatched{ false };
+	std::thread reader([&] {
+		begin.store(true, std::memory_order_release);
+		while (!done.load(std::memory_order_acquire))
+		{
+			const auto observed = take->GetPresentation();
+			if (observed.Serial != 0u && observed.Mode != ((observed.Serial & 1u)
+				? engine::LoopTake::PresentationMode::Record : engine::LoopTake::PresentationMode::Punch))
+				mismatched.store(true, std::memory_order_relaxed);
+			const auto display = station->GetVisualState();
+			if (display != StationVisualState::STATIONSTATE_DEFAULT
+				&& display != StationVisualState::STATIONSTATE_RECORDING
+				&& display != StationVisualState::STATIONSTATE_PUNCHIN)
+				mismatched.store(true, std::memory_order_relaxed);
+		}
+	});
+	while (!begin.load(std::memory_order_acquire)) std::this_thread::yield();
+	for (std::uint64_t serial = 1u; serial <= 10000u; ++serial)
+		take->SetPresentation((serial & 1u) ? engine::LoopTake::PresentationMode::Record
+			: engine::LoopTake::PresentationMode::Punch, serial);
+	done.store(true, std::memory_order_release);
+	reader.join();
+	EXPECT_FALSE(mismatched.load());
+}
+
+TEST(StationVisualState, ImmutableMembershipRemainsSafeAcrossPendingAdditionAndRemoval)
+{
+	auto station = MakeStation("station");
+	std::atomic<unsigned int> phase{ 0u };
+	std::atomic<unsigned int> observed{ 0u };
+	std::atomic<bool> wrong{ false };
+	std::thread reader([&] {
+		for (unsigned int next = 1u; next <= 3u; ++next)
+		{
+			while (phase.load(std::memory_order_acquire) < next) std::this_thread::yield();
+			const auto display = station->GetVisualState();
+			const auto expected = next == 2u ? StationVisualState::STATIONSTATE_RECORDING
+				: StationVisualState::STATIONSTATE_DEFAULT;
+			if (display != expected) wrong.store(true, std::memory_order_relaxed);
+			observed.store(next, std::memory_order_release);
+		}
+	});
+	phase.store(1u, std::memory_order_release);
+	while (observed.load(std::memory_order_acquire) < 1u) std::this_thread::yield();
+	const auto started = station->OnAction(MakeTriggerAction(TriggerAction::TRIGGER_REC_START));
+	const auto oldMembership = station->GetLoopTakeSnapshot();
+	phase.store(2u, std::memory_order_release);
+	while (observed.load(std::memory_order_acquire) < 2u) std::this_thread::yield();
+	auto ditch = MakeTriggerAction(TriggerAction::TRIGGER_DITCH);
+	ditch.TargetId = started.TargetId;
+	station->OnAction(ditch);
+	phase.store(3u, std::memory_order_release);
+	reader.join();
+	EXPECT_FALSE(wrong.load());
+	EXPECT_TRUE(station->GetLoopTakeSnapshot().empty());
+	ASSERT_EQ(1u, oldMembership.size());
+	EXPECT_EQ(started.TargetId, oldMembership.front()->Id());
+	EXPECT_EQ(engine::LoopTake::PresentationMode::Inactive, oldMembership.front()->GetPresentation().Mode);
 }

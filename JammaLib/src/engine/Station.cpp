@@ -1251,7 +1251,7 @@ ActionResult Station::OnAction(TriggerAction action)
 		res.TriggerTargetTake = newLoopTake;
 		res.ResultType = actions::ActionResultType::ACTIONRESULT_ACTIVATE;
 		res.IsEaten = true;
-		_SetVisualState(StationVisualState::STATIONSTATE_RECORDING);
+		_SetTakePresentation(*newLoopTake, LoopTake::PresentationMode::Record);
 		break;
 	}
 	case TriggerAction::TRIGGER_REC_END:
@@ -1334,11 +1334,7 @@ ActionResult Station::OnAction(TriggerAction action)
 
 			res.IsEaten = true;
 			res.ResultType = actions::ActionResultType::ACTIONRESULT_ACTIVATE;
-			const auto takeState = loopTake ? loopTake.value()->TakeState() : LoopTake::STATE_PLAYINGRECORDING;
-			_SetVisualState(takeState == LoopTake::STATE_PLAYINGRECORDING ||
-				takeState == LoopTake::STATE_OVERDUBBINGRECORDING || _HasRecordingTail()
-				? StationVisualState::STATIONSTATE_ENDRECORDING
-				: StationVisualState::STATIONSTATE_PLAYING);
+
 		}
 		break;
 	}
@@ -1363,7 +1359,7 @@ ActionResult Station::OnAction(TriggerAction action)
 		res.TriggerTargetTake = newLoopTake;
 		res.ResultType = actions::ActionResultType::ACTIONRESULT_ACTIVATE;
 		res.IsEaten = true;
-		_SetVisualState(StationVisualState::STATIONSTATE_OVERDUBBING);
+		_SetTakePresentation(*newLoopTake, LoopTake::PresentationMode::Overdub);
 		break;
 	}
 	case TriggerAction::TRIGGER_OVERDUB_END:
@@ -1435,7 +1431,6 @@ ActionResult Station::OnAction(TriggerAction action)
 
 			res.IsEaten = true;
 			res.ResultType = actions::ActionResultType::ACTIONRESULT_ACTIVATE;
-			_SetVisualState(StationVisualState::STATIONSTATE_PLAYING);
 		}
 		break;
 	}
@@ -1457,7 +1452,8 @@ ActionResult Station::OnAction(TriggerAction action)
 
 		res.IsEaten = true;
 		res.ResultType = actions::ActionResultType::ACTIONRESULT_DEFAULT;
-		_SetVisualState(StationVisualState::STATIONSTATE_PUNCHIN);
+		if (loopTake && loopTake.value()->GetPresentation().Mode == LoopTake::PresentationMode::Overdub)
+			_SetTakePresentation(*loopTake.value(), LoopTake::PresentationMode::Punch);
 		break;
 	case TriggerAction::TRIGGER_PUNCHIN_END:
 		if (action.ApplyToTargetTake && action.ApplyToTargetMidi && loopTake.has_value())
@@ -1477,7 +1473,8 @@ ActionResult Station::OnAction(TriggerAction action)
 
 		res.IsEaten = true;
 		res.ResultType = actions::ActionResultType::ACTIONRESULT_DEFAULT;
-		_SetVisualState(StationVisualState::STATIONSTATE_OVERDUBBING);
+		if (loopTake && loopTake.value()->GetPresentation().Mode == LoopTake::PresentationMode::Punch)
+			_SetTakePresentation(*loopTake.value(), LoopTake::PresentationMode::Overdub);
 		break;
 	case TriggerAction::TRIGGER_DITCH:
 		if (loopTake.has_value())
@@ -1505,7 +1502,6 @@ ActionResult Station::OnAction(TriggerAction action)
 
 		res.IsEaten = true;
 		res.ResultType = actions::ActionResultType::ACTIONRESULT_DITCH;
-		_SetVisualState(StationVisualState::STATIONSTATE_DEFAULT);
 		break;
 	case TriggerAction::TRIGGER_DITCH_UNMUTE:
 		if (loopTake.has_value())
@@ -1590,23 +1586,53 @@ ActionResult Station::OnAction(TriggerAction action)
 
 StationVisualState Station::GetVisualState() const noexcept
 {
-	return static_cast<StationVisualState>(_publishedVisualState.load(std::memory_order_acquire));
+	// Only job/UI callers acquire weak takes. The callback neither walks mutable
+	// membership nor owns a display cache; retired audio states retain its borrowers.
+	const auto snapshot = _LoopTakeSnapshotState();
+	StationVisualState visual = StationVisualState::STATIONSTATE_DEFAULT;
+	std::uint64_t newestSerial = 0u;
+	bool hasActive = false;
+	bool hasTail = false;
+	if (snapshot)
+	{
+		for (const auto& weakTake : *snapshot)
+		{
+			const auto take = weakTake.lock();
+			if (!take)
+				continue;
+			const auto presentation = take->GetPresentation();
+			if (presentation.Mode == LoopTake::PresentationMode::Tail)
+			{
+				hasTail = true;
+				continue;
+			}
+			StationVisualState mode;
+			switch (presentation.Mode)
+			{
+			case LoopTake::PresentationMode::Record: mode = StationVisualState::STATIONSTATE_RECORDING; break;
+			case LoopTake::PresentationMode::Overdub: mode = StationVisualState::STATIONSTATE_OVERDUBBING; break;
+			case LoopTake::PresentationMode::Punch: mode = StationVisualState::STATIONSTATE_PUNCHIN; break;
+			default: continue;
+			}
+			if (!hasActive || presentation.Serial > newestSerial)
+			{
+				visual = mode;
+				newestSerial = presentation.Serial;
+				hasActive = true;
+			}
+		}
+	}
+	return hasActive ? visual : hasTail ? StationVisualState::STATIONSTATE_ENDRECORDING
+		: StationVisualState::STATIONSTATE_DEFAULT;
 }
 
-void Station::_SetVisualState(StationVisualState state) noexcept
+void Station::_SetTakePresentation(LoopTake& take, LoopTake::PresentationMode mode) noexcept
 {
-	_publishedVisualState.store(static_cast<std::uint8_t>(state), std::memory_order_release);
-}
-
-bool Station::_HasRecordingTail() const noexcept
-{
-	// The station stays in Record End until every take has finished its audio tail.
-	return std::any_of(_loopTakes.begin(), _loopTakes.end(),
-		[](const std::shared_ptr<LoopTake>& take) {
-			const auto state = take->TakeState();
-			return (LoopTake::STATE_PLAYINGRECORDING == state) ||
-				(LoopTake::STATE_OVERDUBBINGRECORDING == state);
-		});
+	// A repeated punch command is a no-op and must not steal display recency.
+	if (take.GetPresentation().Mode != mode)
+		take.SetPresentation(mode, _nextPresentationSerial++);
+	else if (take.GetPresentation().Serial == 0u)
+		take.SetPresentation(mode, _nextPresentationSerial++);
 }
 
 void Station::OnTick(Time curTime,
@@ -1614,14 +1640,11 @@ void Station::OnTick(Time curTime,
 	const std::optional<io::UserConfig>& cfg,
 	const std::optional<audio::AudioStreamParams>& params)
 {
-	if (GetVisualState() == StationVisualState::STATIONSTATE_ENDRECORDING && !_HasRecordingTail())
-		_SetVisualState(StationVisualState::STATIONSTATE_PLAYING);
 }
 
 void Station::Reset()
 {
 	Jammable::Reset();
-	_SetVisualState(StationVisualState::STATIONSTATE_DEFAULT);
 	{
 		std::scoped_lock lock(_liveHeldMidiMutex);
 		_liveHeldMidi.clear();

@@ -147,8 +147,8 @@ namespace engine
 			const std::optional<io::UserConfig>& cfg,
 			const std::optional<audio::AudioStreamParams>& params) override;
 		virtual void Reset() override;
-				StationVisualState GetVisualState() const noexcept;
-				void _SetVisualState(StationVisualState state) noexcept;
+		// Job/UI presentation query; never called from the audio callback.
+		StationVisualState GetVisualState() const noexcept;
 		
 		const std::vector<std::shared_ptr<LoopTake>>& GetLoopTakes() const
 		{
@@ -309,7 +309,7 @@ namespace engine
 
 		gui::GuiRackParams _GetRackParams(utils::Size2d size);
 		std::optional<std::shared_ptr<LoopTake>> _TryGetTake(std::string id);
-		bool _HasRecordingTail() const noexcept;
+		void _SetTakePresentation(LoopTake& take, LoopTake::PresentationMode mode) noexcept;
 		void _WireVuSliders();
 		using MidiVstRoutingSnapshot = midi::MidiVstRoutingSnapshot;
 		static constexpr std::size_t MaxMidiVstRouteOutputs = 4096u;
@@ -386,8 +386,8 @@ namespace engine
 		std::shared_ptr<QuantisationModel> _quantisationModel;
 		std::shared_ptr<QuantisationDivisionModel> _quantisationDivisionModel;
 		std::shared_ptr<graphics::StationModel> _stationModel;
-				std::atomic<std::uint8_t> _publishedVisualState{
-					static_cast<std::uint8_t>(StationVisualState::STATIONSTATE_DEFAULT) };
+		// Structural job owner orders meaningful accepted capture-mode changes.
+		std::uint64_t _nextPresentationSerial = 1u;
 		std::shared_ptr<gui::GuiRack> _guiRack;
 		std::shared_ptr<audio::AudioMixer> _masterMixer;
 		std::shared_ptr<gui::GuiToggle> _mixerToggle;
