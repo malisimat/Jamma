@@ -2,6 +2,8 @@
 #include "audio/AudioHost.h"
 #include "engine/Station.h"
 #include "gui/GuiHud.h"
+#include <future>
+#include <thread>
 
 namespace audio
 {
@@ -17,7 +19,86 @@ namespace audio
 		{
 			host.PublishRigTriggerTransitionAtAudioBoundary();
 		}
+		static bool EnterCallback(AudioHost& host) noexcept { return host.TryEnterCallback(); }
+		static void LeaveCallback(AudioHost& host) noexcept { host.LeaveCallback(); }
+		static void LateCallback(AudioHost& host, float* output, unsigned int frames,
+			unsigned int channels) noexcept
+		{
+			host._callbackOutputChannels.store(channels, std::memory_order_release);
+			host.AudioCallback(output, nullptr, frames, 0.0, 0u, &host);
+		}
 	};
+}
+
+TEST(AudioCallbackAdmission, ClosingWaitsForAdmittedCallbackAndRejectsLateCallbacks)
+{
+	audio::AudioHost host(io::UserConfig{});
+	EXPECT_TRUE(audio::RigAudioBoundaryTestAccess::EnterCallback(host));
+	EXPECT_FALSE(audio::RigAudioBoundaryTestAccess::EnterCallback(host));
+	host.CloseCallbackAdmission();
+	EXPECT_FALSE(host.CallbackAdmissionIsQuiescent());
+	EXPECT_FALSE(host.ReopenCallbackAdmission());
+	float output[8] = { 1, 1, 1, 1, 1, 1, 1, 1 };
+	audio::RigAudioBoundaryTestAccess::LateCallback(host, output, 4u, 2u);
+	for (const auto sample : output)
+		EXPECT_EQ(0.0f, sample);
+	EXPECT_EQ(0u, host.AudioCallbackHeartbeat());
+	audio::RigAudioBoundaryTestAccess::LeaveCallback(host);
+	EXPECT_TRUE(host.CallbackAdmissionIsQuiescent());
+	EXPECT_FALSE(audio::RigAudioBoundaryTestAccess::EnterCallback(host));
+	EXPECT_TRUE(host.ReopenCallbackAdmission());
+	EXPECT_TRUE(audio::RigAudioBoundaryTestAccess::EnterCallback(host));
+	audio::RigAudioBoundaryTestAccess::LeaveCallback(host);
+}
+
+TEST(AudioCallbackAdmission, RepeatedCloseCannotReopenAnActiveReader)
+{
+	audio::AudioHost host(io::UserConfig{});
+	host.CloseCallbackAdmission();
+	host.CloseCallbackAdmission();
+	EXPECT_TRUE(host.CallbackAdmissionIsQuiescent());
+	EXPECT_TRUE(host.ReopenCallbackAdmission());
+	EXPECT_FALSE(host.ReopenCallbackAdmission());
+	ASSERT_TRUE(audio::RigAudioBoundaryTestAccess::EnterCallback(host));
+	host.CloseCallbackAdmission();
+	host.CloseCallbackAdmission();
+	EXPECT_FALSE(host.CallbackAdmissionIsQuiescent());
+	audio::RigAudioBoundaryTestAccess::LeaveCallback(host);
+	EXPECT_TRUE(host.CallbackAdmissionIsQuiescent());
+}
+
+TEST(AudioCallbackAdmission, QuiescencePublishesExitedReadersPayload)
+{
+	audio::AudioHost host(io::UserConfig{});
+	std::promise<bool> admitted;
+	std::promise<void> releaseReader;
+	auto release = releaseReader.get_future();
+	unsigned int audioOwnedPayload = 0u;
+	std::thread reader([&] {
+		const auto entered = audio::RigAudioBoundaryTestAccess::EnterCallback(host);
+		admitted.set_value(entered);
+		release.wait();
+		if (entered)
+		{
+			audioOwnedPayload = 42u;
+			audio::RigAudioBoundaryTestAccess::LeaveCallback(host);
+		}
+	});
+	EXPECT_TRUE(admitted.get_future().get());
+	host.CloseCallbackAdmission();
+	EXPECT_FALSE(host.CallbackAdmissionIsQuiescent());
+	EXPECT_FALSE(host.ReopenCallbackAdmission());
+	float output[2] = { 1.0f, 1.0f };
+	audio::RigAudioBoundaryTestAccess::LateCallback(host, output, 1u, 2u);
+	EXPECT_EQ(0.0f, output[0]);
+	EXPECT_EQ(0.0f, output[1]);
+	releaseReader.set_value();
+	// Test-only wait: production recovery retries on subsequent job ticks.
+	while (!host.CallbackAdmissionIsQuiescent())
+		std::this_thread::yield();
+	EXPECT_EQ(42u, audioOwnedPayload);
+	reader.join();
+	EXPECT_TRUE(host.ReopenCallbackAdmission());
 }
 
 class RigSnapshotTest : public testing::Test

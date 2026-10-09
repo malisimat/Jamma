@@ -83,6 +83,7 @@ namespace audio
 		const auto prepareForStart = [this](const AudioStreamParams& audioStreamParams)
 		{
 			_preparedStreamParams = audioStreamParams;
+			_callbackOutputChannels.store(audioStreamParams.NumOutputChannels, std::memory_order_release);
 			_ninjamMetronome.Configure(audioStreamParams.SampleRate);
 
 			auto inLatency = (0u == audioStreamParams.InputLatency) ?
@@ -493,6 +494,35 @@ void AudioHost::CaptureMappedSourceAnchorsAfterOffset(
 				station->SetLocalTransportOffsetSamps(localTransportOffsetTargetSamps);
 	}
 
+	void AudioHost::CloseCallbackAdmission() noexcept
+	{
+		_callbackAdmission.fetch_or(_CallbackAdmissionClosed, std::memory_order_acq_rel);
+	}
+
+	bool AudioHost::CallbackAdmissionIsQuiescent() const noexcept
+	{
+		return _callbackAdmission.load(std::memory_order_acquire) == _CallbackAdmissionClosed;
+	}
+
+	bool AudioHost::ReopenCallbackAdmission() noexcept
+	{
+		auto expected = _CallbackAdmissionClosed;
+		return _callbackAdmission.compare_exchange_strong(expected, 0u,
+			std::memory_order_release, std::memory_order_relaxed);
+	}
+
+	bool AudioHost::TryEnterCallback() noexcept
+	{
+		std::uint32_t expected = 0u;
+		return _callbackAdmission.compare_exchange_strong(expected, 1u,
+			std::memory_order_acquire, std::memory_order_relaxed);
+	}
+
+	void AudioHost::LeaveCallback() noexcept
+	{
+		_callbackAdmission.fetch_sub(1u, std::memory_order_release);
+	}
+
 	int AudioHost::AudioCallback(void* outBuffer,
 		void* inBuffer,
 		unsigned int numSamps,
@@ -501,6 +531,15 @@ void AudioHost::CaptureMappedSourceAnchorsAfterOffset(
 		void* userData)
 	{
 		AudioHost* engine = (AudioHost*)userData;
+		if (!engine->TryEnterCallback())
+		{
+			if (outBuffer)
+				std::fill_n(static_cast<float*>(outBuffer),
+					static_cast<std::size_t>(numSamps) *
+					engine->_callbackOutputChannels.load(std::memory_order_acquire), 0.0f);
+			return 0;
+		}
+		CallbackLease callbackLease(*engine);
 		engine->_OnAudio((float*)inBuffer, (float*)outBuffer, numSamps, streamTime);
 		return 0;
 	}

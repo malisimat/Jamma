@@ -73,6 +73,13 @@ namespace audio
 		{
 			return _audioCallbackHeartbeat.load(std::memory_order_relaxed);
 		}
+		// Job owner closes admission before borrowing audio-owned lifecycle state.
+		// A closed gate alone is insufficient: the admitted callback must also leave.
+		// It proves engine-reader quiescence, not driver teardown: stream geometry
+		// and AudioHost lifetime still require the existing driver lifecycle barrier.
+		void CloseCallbackAdmission() noexcept;
+		bool CallbackAdmissionIsQuiescent() const noexcept;
+		bool ReopenCallbackAdmission() noexcept;
 
 		std::shared_ptr<const std::vector<std::shared_ptr<engine::Station>>> GetStationsSnapshot() const { return _audioStations.load(std::memory_order_acquire); }
 		std::uint64_t GetAudioSampleCounter() const { return _audioSampleCounter.load(std::memory_order_relaxed); }
@@ -110,6 +117,18 @@ namespace audio
 
 	private:
 		friend class NinjamAudioBoundaryTestAccess;
+		bool TryEnterCallback() noexcept;
+		void LeaveCallback() noexcept;
+		class CallbackLease
+		{
+		public:
+			explicit CallbackLease(AudioHost& host) noexcept : _host(host) {}
+			~CallbackLease() { _host.LeaveCallback(); }
+			CallbackLease(const CallbackLease&) = delete;
+			CallbackLease& operator=(const CallbackLease&) = delete;
+		private:
+			AudioHost& _host;
+		};
 		// AudioHost exclusively owns this local-only single-writer/single-reader
 		// handoff. Publications coalesce to the latest absolute target, including zero.
 		class LocalTransportOffsetLoopFracMailbox
@@ -201,6 +220,14 @@ namespace audio
 		std::vector<std::shared_ptr<const engine::RigSnapshot>> _retainedRigSnapshots;
 		std::atomic<std::uint64_t> _appliedRigRevision{ 0u };
 		std::atomic<std::uint64_t> _audioCallbackHeartbeat{ 0u };
+		// One callback may own the engine. Close shares the admission word, so a
+		// late callback cannot race a quiescent owner's lifecycle pump.
+		static constexpr std::uint32_t _CallbackAdmissionClosed = 2u;
+		static_assert(std::atomic<std::uint32_t>::is_always_lock_free);
+		std::atomic<std::uint32_t> _callbackAdmission{ 0u };
+		// Rejected callbacks cannot borrow prepared parameters while the job owner
+		// has the gate. This scalar supplies only the output silencing geometry.
+		std::atomic<unsigned int> _callbackOutputChannels{ 0u };
 		std::uint64_t _audioRigRevision = 0u;
 		std::shared_ptr<ninjam::NinjamController> _ninjamController;
 		// Audio-thread owned phase-map geometry. The map is rebased after every
