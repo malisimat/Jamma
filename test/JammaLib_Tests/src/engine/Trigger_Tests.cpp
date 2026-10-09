@@ -3058,3 +3058,60 @@ TEST(Trigger, SkippedFutureRigReleaseIsDiscardedAsStale)
     trigger->OnTick(GetTime(), 0u, std::nullopt, std::nullopt, 3u);
     EXPECT_TRUE(trigger->IsActivateInputDown());
 }
+
+TEST(Trigger, ZeroLengthEndsRetireTheirSessionsWithoutConsumingHistoryCapacity)
+{
+    for (const bool overdub : { false, true })
+    {
+        SCOPED_TRACE(overdub ? "overdub" : "record");
+        auto station = MakeTestStation("zero-length-retirement");
+        TriggerParams params;
+        params.InputChannels = { 0u };
+        auto trigger = std::make_shared<Trigger>(params);
+        trigger->SetReceiver(station);
+        io::UserConfig cfg;
+        cfg.Loop = { 0u };
+        base::Action action;
+        auto press = [&](bool activate, bool down)
+        {
+            trigger->QueueExternalControlAction(activate, down, action);
+            TickAndComplete(trigger, 0u, cfg);
+            station->CommitChanges();
+            station->AcknowledgeAudioBoundary();
+            station->ReleaseRetiredAudioStates();
+        };
+        // Keep an independent earlier audio tail throughout the rapid discarded captures.
+        press(true, true); press(true, false);
+        trigger->OnTick(GetTime(), 64u, cfg, std::nullopt);
+        press(true, true); press(true, false);
+        ASSERT_EQ(1u, trigger->GetTakes().size());
+        const auto olderTake = station->GetLoopTakeSnapshot().front();
+        const auto olderId = olderTake->Id();
+        for (unsigned int capture = 0u; capture < 96u; ++capture)
+        {
+            SCOPED_TRACE(capture);
+            if (overdub) press(false, true);
+            press(true, true); press(true, false);
+            ASSERT_EQ(overdub ? engine::TRIGSTATE_OVERDUBBING : engine::TRIGSTATE_RECORDING,
+                trigger->GetState());
+            ASSERT_EQ(2u, trigger->GetTakes().size());
+            std::weak_ptr<LoopTake> discarded = station->GetLoopTakeSnapshot().back();
+            if (overdub) press(false, true);
+            press(true, true); press(true, false);
+            if (overdub) press(false, false);
+            EXPECT_EQ(engine::TRIGSTATE_DEFAULT, trigger->GetState());
+            ASSERT_EQ(1u, trigger->GetTakes().size());
+            ASSERT_EQ(1u, station->GetLoopTakeSnapshot().size());
+            EXPECT_EQ(olderId, station->GetLoopTakeSnapshot().front()->Id());
+            trigger->ProcessStructuralActionsOnJob(cfg, std::nullopt);
+            EXPECT_TRUE(discarded.expired());
+        }
+        EXPECT_EQ(LoopTake::STATE_PLAYINGRECORDING, olderTake->TakeState());
+        press(true, true); press(true, false);
+        ASSERT_EQ(engine::TRIGSTATE_RECORDING, trigger->GetState());
+        trigger->OnTick(GetTime(), 64u, cfg, std::nullopt);
+        press(true, true); press(true, false);
+        EXPECT_EQ(2u, trigger->GetTakes().size());
+        EXPECT_EQ(engine::TRIGSTATE_DEFAULT, trigger->GetState());
+    }
+}

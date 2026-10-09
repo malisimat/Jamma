@@ -1278,6 +1278,8 @@ ActionResult Station::OnAction(TriggerAction action)
 		{
 			if (loopTake.has_value())
 				_DitchLoopTake(loopTake.value());
+			res.DitchResult = loopTake ? actions::DitchDisposition::Removed :
+				actions::DitchDisposition::AlreadyAbsent;
 
 			res.IsEaten = true;
 			res.ResultType = actions::ActionResultType::ACTIONRESULT_DITCH;
@@ -1371,6 +1373,8 @@ ActionResult Station::OnAction(TriggerAction action)
 		{
 			if (loopTake.has_value())
 				_DitchLoopTake(loopTake.value());
+			res.DitchResult = loopTake ? actions::DitchDisposition::Removed :
+				actions::DitchDisposition::AlreadyAbsent;
 
 			res.IsEaten = true;
 			res.ResultType = actions::ActionResultType::ACTIONRESULT_DITCH;

@@ -1164,8 +1164,10 @@ void Trigger::ProcessStructuralActionsOnJob(
 				if (params) unmute.SetAudioParams(*params);
 				receiver->OnAction(unmute);
 			}
+			const bool discardedEnd = command.Completion == STRUCTURAL_END_RECORDING ||
+				command.Completion == STRUCTURAL_END_OVERDUB;
 			if ((command.ActionType == TriggerAction::TRIGGER_DITCH ||
-				command.ActionType == TriggerAction::TRIGGER_OVERDUB_DITCH) &&
+				command.ActionType == TriggerAction::TRIGGER_OVERDUB_DITCH || discardedEnd) &&
 				(actionResult.DitchResult == actions::DitchDisposition::Removed ||
 				 actionResult.DitchResult == actions::DitchDisposition::AlreadyAbsent) &&
 				jobHistoryIndex)
@@ -1207,6 +1209,11 @@ void Trigger::_EraseHistory(std::size_t index) noexcept
 {
 	if (index >= _loopTakeHistorySize)
 		return;
+	if (_activeHistoryIndex)
+	{
+		if (*_activeHistoryIndex == index) _activeHistoryIndex.reset();
+		else if (*_activeHistoryIndex > index) --*_activeHistoryIndex;
+	}
 	for (auto i = index + 1u; i < _loopTakeHistorySize; ++i)
 		_loopTakeHistory[i - 1u] = std::move(_loopTakeHistory[i]);
 	--_loopTakeHistorySize;
@@ -1246,6 +1253,23 @@ void Trigger::_ApplyStructuralResult(const StructuralResult& result) noexcept
 	case STRUCTURAL_END_OVERDUB:
 		if (result.IsEaten)
 		{
+			if (result.DitchResult == actions::DitchDisposition::Removed ||
+				result.DitchResult == actions::DitchDisposition::AlreadyAbsent)
+			{
+				for (std::size_t i = 0u; i < _loopTakeHistorySize; ++i)
+					if (_loopTakeHistory[i].Token == result.HistoryToken)
+					{
+						// A zero-length end discarded this capture. Remove all of its
+						// delayed borrowers before acknowledging session retirement.
+						_SuspendSessionActions(result.HistoryToken);
+						_pendingDitchDelayedActionCount = 0u;
+						_pendingDitchDelayedPunchActionCount = 0u;
+						auto* session = _loopTakeHistory[i].Session;
+						_EraseHistory(i);
+						if (session) session->RetiredByAudio.store(true, std::memory_order_release);
+						break;
+					}
+			}
 			_state = TRIGSTATE_DEFAULT;
 			_activeHistoryIndex.reset();
 			_activationOutcomeCount.fetch_add(1u, std::memory_order_release);
@@ -1262,14 +1286,16 @@ void Trigger::_ApplyStructuralResult(const StructuralResult& result) noexcept
 		if (result.DitchResult == actions::DitchDisposition::Removed ||
 			result.DitchResult == actions::DitchDisposition::AlreadyAbsent)
 		{
+			_pendingDitchDelayedActionCount = 0u;
+			_pendingDitchDelayedPunchActionCount = 0u;
 			std::size_t historyIndex = _HistoryCapacity;
 			for (std::size_t i = 0u; i < _loopTakeHistorySize; ++i)
 				if (_loopTakeHistory[i].Token == _pendingHistoryToken) { historyIndex = i; break; }
 			if (historyIndex < _loopTakeHistorySize)
 			{
-				if (auto* session = _loopTakeHistory[historyIndex].Session)
-					session->RetiredByAudio.store(true, std::memory_order_release);
+				auto* session = _loopTakeHistory[historyIndex].Session;
 				_EraseHistory(historyIndex);
+				if (session) session->RetiredByAudio.store(true, std::memory_order_release);
 			}
 			_ditchOutcomeCount.fetch_add(1u, std::memory_order_release);
 		}
