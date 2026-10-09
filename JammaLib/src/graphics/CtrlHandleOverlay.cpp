@@ -6,11 +6,20 @@
 #include <gl/glew.h>
 #include "GlDrawContext.h"
 #include "GlDeleteQueue.h"
+#include "../gui/GuiLabel.h"
 
 using namespace graphics;
 using namespace resources;
 
-CtrlHandleOverlay::CtrlHandleOverlay() = default;
+CtrlHandleOverlay::CtrlHandleOverlay()
+{
+	for (int index = 0; index < NumButtons; ++index)
+	{
+		auto params = gui::GuiLabelParams::PanelHeader(index == 0 ? "SHFT" : "DIV", 72u);
+		params.CenterHorizontally = true;
+		_captions[index] = std::make_shared<gui::GuiLabel>(params);
+	}
+}
 
 CtrlHandleOverlay::~CtrlHandleOverlay()
 {
@@ -35,7 +44,7 @@ void CtrlHandleOverlay::SetAnchor(utils::Position2d screenPos, utils::Size2d sce
 
 void CtrlHandleOverlay::SetVisibleButtonCount(int count) noexcept
 {
-	_visibleButtonCount = std::clamp(count, 1, NumButtons);
+	_visibleButtonCount = std::clamp(count, 0, NumButtons);
 	SetAnchor(_anchorPos, _sceneSize);
 }
 
@@ -105,9 +114,11 @@ void CtrlHandleOverlay::InitResources(ResourceLib& resourceLib, bool forceInit)
 
 	_shader = std::dynamic_pointer_cast<ShaderResource>(res);
 
+	for (auto& caption : _captions) caption->InitResources(resourceLib, forceInit);
+
 	// Allocate a VBO large enough to hold all button quads (2 triangles each).
 	constexpr int FloatsPerButton = 6 * 2;  // 6 vertices × 2 floats (x, y)
-	constexpr int TotalFloats = NumButtons * FloatsPerButton;
+	constexpr int TotalFloats = (NumButtons + 1) * FloatsPerButton;
 
 	glGenVertexArrays(1, &_vertexArray);
 	glBindVertexArray(_vertexArray);
@@ -135,12 +146,13 @@ void CtrlHandleOverlay::ReleaseResources()
 		GlDeleteQueue::DeleteVertexArrays(1, &_vertexArray);
 		_vertexArray = 0;
 	}
+	for (auto& caption : _captions) caption->ReleaseResources();
 	_shader.reset();
 }
 
 void CtrlHandleOverlay::Draw(base::DrawContext& ctx)
 {
-	if (_alpha < 0.001f || _vertexArray == 0)
+	if (_alpha < 0.001f || _vertexArray == 0 || _visibleButtonCount == 0)
 		return;
 
 	auto shaderPtr = _shader.lock();
@@ -155,7 +167,7 @@ void CtrlHandleOverlay::Draw(base::DrawContext& ctx)
 
 	// Build all button quads into a local array and upload in one shot.
 	constexpr int FloatsPerButton = 6 * 2;
-	float verts[NumButtons * FloatsPerButton]{};
+	float verts[(NumButtons + 1) * FloatsPerButton]{};
 
 	for (int i = 0; i < _visibleButtonCount; ++i)
 	{
@@ -175,6 +187,13 @@ void CtrlHandleOverlay::Draw(base::DrawContext& ctx)
 		q[10] = x;  q[11] = y2;
 	}
 
+	const float panelRight = panelX + _visibleButtonCount * ButtonW + (_visibleButtonCount - 1) * ButtonGap;
+	float* panel = &verts[NumButtons * FloatsPerButton];
+	const float left = panelX - 6.0f, right = panelRight + 6.0f;
+	const float bottom = panelY - 6.0f, top = panelY + ButtonH + 26.0f;
+	const float panelVerts[] = {left,bottom,right,bottom,right,top,left,bottom,right,top,left,top};
+	std::copy(std::begin(panelVerts), std::end(panelVerts), panel);
+
 	glBindBuffer(GL_ARRAY_BUFFER, _vertexBuffer);
 	glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(verts), verts);
 	glBindBuffer(GL_ARRAY_BUFFER, 0);
@@ -187,9 +206,21 @@ void CtrlHandleOverlay::Draw(base::DrawContext& ctx)
 	glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 
 	const auto colorLoc = glGetUniformLocation(shaderPtr->GetId(), "Color");
+	const auto boundsLoc = glGetUniformLocation(shaderPtr->GetId(), "Bounds");
+	const auto panelLoc = glGetUniformLocation(shaderPtr->GetId(), "Panel");
+	if (_activeButton < 0)
+	{
+		glUniform4f(boundsLoc, left, bottom, right - left, top - bottom);
+		glUniform1i(panelLoc, 1);
+		glUniform4f(colorLoc, 0.23f, 0.23f, 0.23f, _alpha * 0.72f);
+		glDrawArrays(GL_TRIANGLES, NumButtons * 6, 6);
+	}
+	glUniform1i(panelLoc, 0);
 
 	for (int i = 0; i < _visibleButtonCount; ++i)
 	{
+		if (_activeButton >= 0 && i != _activeButton) continue;
+		glUniform4f(boundsLoc, panelX + i * (ButtonW + ButtonGap), panelY, ButtonW, ButtonH);
 		const auto& spec = ButtonSpecs[static_cast<size_t>(i)];
 		const auto scope = _buttonScopes[static_cast<size_t>(i)];
 		const auto hue = (scope == ButtonScope::Global)
@@ -202,6 +233,13 @@ void CtrlHandleOverlay::Draw(base::DrawContext& ctx)
 
 	glBindVertexArray(0);
 	glUseProgram(0);
+	auto opacity = ctx.WithOpacity(_alpha);
+	for (int i = 0; i < _visibleButtonCount; ++i)
+	{
+		if (_activeButton >= 0 && i != _activeButton) continue;
+		_captions[i]->SetPosition({static_cast<int>(panelX + i * (ButtonW + ButtonGap)), static_cast<int>(panelY + ButtonH + 2.0f)});
+		_captions[i]->Draw(ctx);
+	}
 }
 
 glm::vec3 CtrlHandleOverlay::HsvToRgb(float h, float s, float v) noexcept

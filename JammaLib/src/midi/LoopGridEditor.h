@@ -81,6 +81,7 @@ namespace midi
 		// Open or closing: the editor owns input and the 3d picker is suspended.
 		bool IsEngaged() const noexcept { return State::Closed != _state; }
 		bool IsReady() const noexcept;
+		bool IsEditingText() const noexcept { return _channelInput->HasFocus(); }
 		utils::Position2d ChannelControlPosition() const { return _channelInput->Position(); }
 		bool SelectMidiChannel(unsigned int channel); // Human-facing channel 1..16.
 		bool OwnsPointer() const noexcept { return _pointerOwned; }

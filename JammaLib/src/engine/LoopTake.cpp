@@ -2573,6 +2573,7 @@ bool LoopTake::PublishMidiEdit(const std::shared_ptr<midi::MidiLoop>& loop,
 	if (!loop || _state.load(std::memory_order_acquire) != STATE_PLAYING
 		|| std::find(_midiLoops.begin(), _midiLoops.end(), loop) == _midiLoops.end()
 		|| edit.Quantisation != loop->Quantisation()
+		|| edit.Quantisation != ResolvedMidiQuantisationFor(loop)
 		|| edit.QuantisationTransportStartSamps != MidiQuantisationTransportStartSamps()
 		|| !loop->PublishEdit(edit))
 		return false;

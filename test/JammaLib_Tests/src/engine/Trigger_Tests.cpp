@@ -420,6 +420,12 @@ public:
 	}
 
 	bool EditorOwnsPointerForTest() const { return _loopEditor.OwnsPointer(); }
+	bool SpaceHeldForTest() const { return _spaceHeld; }
+	bool CtrlOverlayActiveForTest() const { return _quantisationInteraction.EditModeActive(); }
+	float GridAlphaForTest() const { return _quantisation.OverlayAlpha(Timer::GetTime()); }
+	void ClearGridForTest() { _quantisation.ClearOverlay(); }
+	void FocusTextForTest() { _focusManager.RequestFocus(_midiChannelOverrideInput); }
+	void ClearTextFocusForTest() { _focusManager.ClearFocus(); }
 	glm::vec3 EditorProbeEyeLocalForTest() const { return _loopEditor.ProbeEyeLocal(); }
 
 	bool IsSceneTouchingForTest() const
@@ -2286,6 +2292,72 @@ TEST(Scene, LoopGridEditorTracksOneMidiLoopAndClosesWhenItIsReplaced) {
 	EXPECT_EQ(graphics::Camera::View::Front, scene.CameraViewForTest());
 }
 
+TEST(Scene, SpaceAndCtrlReachPhysicalStateWithEditorOpenAndFocusLossClearsHolds) {
+	SceneParams params{ base::DrawableParams(), base::MoveableParams(), base::SizeableParams({ 1400u, 900u }) };
+	TestScene scene(params, {});
+	scene.StopJobForTest();
+	auto station = MakeTestStation("space-editor");
+	scene.AddStationForTest(station);
+	auto take = station->AddTake();
+	LoopTake::MidiExportState state;
+	state.LoopLengthSamps = 96000u;
+	LoopTake::MidiStreamExport stream;
+	stream.Loop.LoopLengthSamps = 96000u;
+	stream.Loop.EventCount = 2u;
+	stream.Loop.Events[0] = midi::MidiEvent::MakeNoteOn(12000u, 0u, 60u, 100u);
+	stream.Loop.Events[1] = midi::MidiEvent::MakeNoteOff(14000u, 0u, 60u);
+	state.Streams.push_back(stream);
+	ASSERT_TRUE(take->RestoreMidiFromExport(state));
+	take->Select();
+	ASSERT_TRUE(scene.OpenLoopGridEditor(take, {}, take->GetMidiLoops().front()));
+	scene.SettleLoopGridEditorForTest();
+	scene.ClearGridForTest();
+	KeyAction key;
+	key.KeyChar = 17u;
+	key.KeyActionType = KeyAction::KEY_DOWN;
+	scene.OnAction(key);
+	EXPECT_TRUE(scene.CtrlOverlayActiveForTest());
+	EXPECT_FLOAT_EQ(0.0f, scene.GridAlphaForTest());
+	key.KeyChar = 32u;
+	key.Modifiers = base::Action::MODIFIER_CTRL;
+	scene.OnAction(key);
+	scene.OnAction(key); // OS repeat still belongs to the same physical press.
+	EXPECT_TRUE(scene.SpaceHeldForTest());
+	EXPECT_FLOAT_EQ(1.0f, scene.GridAlphaForTest());
+	key.KeyActionType = KeyAction::KEY_UP;
+	scene.OnAction(key);
+	EXPECT_FALSE(scene.SpaceHeldForTest());
+	key.KeyActionType = KeyAction::KEY_DOWN;
+	scene.OnAction(key);
+	scene.OnInputFocusLost();
+	EXPECT_FALSE(scene.SpaceHeldForTest());
+	EXPECT_FALSE(scene.CtrlOverlayActiveForTest());
+}
+
+TEST(Scene, SpaceStartedInTextCannotTurnIntoATapOnRepeatAfterFocusChanges) {
+	SceneParams params{ base::DrawableParams(), base::MoveableParams(), base::SizeableParams({ 1400u, 900u }) };
+	TestScene scene(params, {});
+	scene.StopJobForTest();
+	scene.FocusTextForTest();
+	scene.ClearGridForTest();
+	KeyAction key;
+	key.KeyChar = 17u;
+	key.KeyActionType = KeyAction::KEY_DOWN;
+	scene.OnAction(key);
+	EXPECT_FALSE(scene.CtrlOverlayActiveForTest()); // Text entry owns contextual Ctrl.
+	key.KeyChar = 32u;
+	key.KeyActionType = KeyAction::KEY_DOWN;
+	scene.OnAction(key);
+	EXPECT_TRUE(scene.SpaceHeldForTest());
+	EXPECT_FLOAT_EQ(0.0f, scene.GridAlphaForTest());
+	scene.ClearTextFocusForTest();
+	scene.OnAction(key);
+	EXPECT_FLOAT_EQ(0.0f, scene.GridAlphaForTest());
+	key.KeyActionType = KeyAction::KEY_UP;
+	scene.OnAction(key);
+	EXPECT_FALSE(scene.SpaceHeldForTest());
+}
+
 TEST(Scene, LoopGridEditorPreservesPaintExcursionAndReleaseBeforeNextFrame) {
 	SceneParams sceneParams{ base::DrawableParams(), base::MoveableParams(),
 		base::SizeableParams({ 1400u, 900u }) };
@@ -2480,7 +2552,7 @@ TEST(Scene, StationMuteClickUsesAggregateTakeState) {
 	EXPECT_FALSE(station->AllTakesMuted());
 }
 
-TEST(Scene, MultiStreamMidiSelectionCountsAsOneEditorCandidate) {
+TEST(Scene, MidiStreamSelectionPreservesPickedEditorIdentity) {
 	SceneParams sceneParams{ base::DrawableParams(), base::MoveableParams(),
 		base::SizeableParams({ 1400u, 900u }) };
 	TestScene scene(sceneParams, {});
@@ -2510,14 +2582,14 @@ TEST(Scene, MultiStreamMidiSelectionCountsAsOneEditorCandidate) {
 	scene.SetHover3d(pickPath, base::Action::MODIFIER_NONE);
 	scene.OnAction(MakeSceneTouch(TouchAction::TOUCH_DOWN, { 1, 1 }, 0, LeftMouseButtonMask));
 	scene.OnAction(MakeSceneTouch(TouchAction::TOUCH_UP, { 1, 1 }, 0u, 0u));
-	EXPECT_TRUE(midiLoops[0]->Model()->IsSelected());
+	EXPECT_FALSE(midiLoops[0]->Model()->IsSelected());
 	EXPECT_TRUE(midiLoops[1]->Model()->IsSelected());
 
 	std::shared_ptr<LoopTake> candidateTake;
 	std::shared_ptr<Loop> audioLoop;
 	std::shared_ptr<midi::MidiLoop> midiLoop;
 	ASSERT_TRUE(scene.FindLoopGridEditorCandidateForTest(candidateTake, audioLoop, midiLoop));
-	EXPECT_EQ(midiLoops[0], midiLoop);
+	EXPECT_EQ(midiLoops[1], midiLoop);
 	// Keep the same picker ID after the click: the next drag must start in
 	// subtractive paint mode using the newly selected state.
 	scene.OnAction(MakeSceneTouch(TouchAction::TOUCH_DOWN, { 1, 1 }, 0, LeftMouseButtonMask));
@@ -2530,7 +2602,7 @@ TEST(Scene, MultiStreamMidiSelectionCountsAsOneEditorCandidate) {
 	scene.OnAction(MakeSceneTouch(TouchAction::TOUCH_UP, { 1, 1 }, 0, 0u));
 	scene.SetHover3d({}, base::Action::MODIFIER_NONE);
 	ASSERT_TRUE(scene.FindLoopGridEditorCandidateForTest(candidateTake, audioLoop, midiLoop));
-	EXPECT_EQ(midiLoops[0], midiLoop);
+	EXPECT_EQ(midiLoops[1], midiLoop);
 }
 
 TEST(Scene, MidiEditorDefaultsToFirstPopulatedWiredChannel) {
@@ -2572,7 +2644,7 @@ TEST(Scene, MidiEditorDefaultsToFirstPopulatedWiredChannel) {
 	scene.SetSelectionDepthForTest(Scene::VIEW_LOOP);
 	scene.SetHover3d(path, base::Action::MODIFIER_NONE);
 	ASSERT_TRUE(scene.FindLoopGridEditorCandidateForTest(candidateTake, audioLoop, candidate));
-	EXPECT_EQ(loops[1], candidate);
+	EXPECT_EQ(loops[0], candidate); // Explicit loop hover retains that stream, even when empty.
 }
 
 TEST(CameraView, StationInteriorObservesRevisionWhenStationShiftsIndex) {

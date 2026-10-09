@@ -1370,6 +1370,7 @@ LRESULT CALLBACK Window::WindowProcedure(HWND hWindow, UINT message, WPARAM wPar
 		// clicks aren't treated as modified gestures.
 		window->CancelMouseCapture();
 		window->ClearModifiers();
+		if (window->_scene) window->_scene->OnInputFocusLost();
 		return 0;
 	}
 	case WM_DESTROY:

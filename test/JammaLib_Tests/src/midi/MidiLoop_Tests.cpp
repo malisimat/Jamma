@@ -2761,6 +2761,24 @@ TEST(MidiLoopEdit, GridResolutionRoundTripRetainsSourceAndUndoRedo)
 	}
 }
 
+TEST(MidiLoopEdit, PendingTakeGridRejectsGestureBeforePublication)
+{
+	auto take = MakeLoopTake("pending-grid");
+	take->SetGlobalMidiQuantState(io::JamFile::GlobalMidiQuantState::Mixed);
+	take->Record({}, "station", { 0u }, { "" });
+	take->Play(0u, 100u, 0u);
+	auto loop = take->GetMidiLoops().at(0u);
+	MidiLoop::EditState gesture;
+	ASSERT_TRUE(loop->SnapshotForEdit(gesture));
+	ASSERT_TRUE(midi::MidiEditOperations::Create(gesture, 37u, 19u, 0u, 60u));
+	auto changed = take->MidiQuantisation();
+	changed.Enabled = true;
+	changed.GrainSamps = 100u;
+	take->SetMidiQuantisation(changed); // Job has not republished this grid yet.
+	EXPECT_FALSE(take->PublishMidiEdit(loop, gesture));
+	EXPECT_EQ(0u, loop->EventCount());
+}
+
 TEST(MidiLoopQuantisation, GlobalOffAndAllTakePrecedenceOverLocalEnabledOverride)
 {
 	MidiLoop loop;

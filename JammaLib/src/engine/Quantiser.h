@@ -263,6 +263,10 @@ namespace engine
 		base::SelectDepth SelectDepth = base::SelectDepth::DEPTH_STATION;
 		std::vector<unsigned char> HoverPath;
 		std::vector<unsigned char> HoverPath3d;
+		std::vector<std::shared_ptr<midi::MidiLoop>> SelectedMidiLoops;
+		std::shared_ptr<midi::MidiLoop> HoveredMidiLoop;
+		bool LoopDepthHasAudioTarget = false;
+		unsigned int SampleRate = 0u;
 	};
 
 	class QuantiserController
@@ -282,6 +286,12 @@ namespace engine
 			const ChildResolver& childResolver);
 		void Tick(Time now);
 		bool OwnsPointer() const noexcept { return _isMidiPhaseDragging || _isFractionDragging; }
+		void CancelInteraction(bool resetModifier = false);
+		float EditAlpha() const noexcept { return _overlay.Alpha(); }
+		float PanelAlpha() const noexcept { return _overlay.Alpha(); }
+		bool EditModeActive() const noexcept { return _ctrlHandleHeld || OwnsPointer(); }
+		void CancelInteraction(Time) { CancelInteraction(); }
+		void SetFeedbackSink(std::function<void(const std::string&)> sink) { _feedbackSink = std::move(sink); }
 
 		std::optional<actions::ActionResult> TryHandleTouchAction(actions::TouchAction action,
 			unsigned int sampleRate,
@@ -296,7 +306,8 @@ namespace engine
 		{
 			Global,
 			Station,
-			LoopTake
+			LoopTake,
+			MidiLoop
 		};
 
 		struct MidiPhaseDragTarget
@@ -306,6 +317,7 @@ namespace engine
 			std::shared_ptr<engine::LoopTake> TakeRef;
 			std::vector<std::shared_ptr<engine::Station>> StationTargets;
 			std::vector<std::shared_ptr<engine::LoopTake>> TakeTargets;
+			std::vector<std::shared_ptr<midi::MidiLoop>> MidiTargets;
 		};
 
 		struct CtrlOverlayContext
@@ -371,6 +383,17 @@ namespace engine
 
 		bool _ctrlHandleHeld = false;
 		Time _ctrlHandleReleasedAt;
+		float _transitionStartAlpha = 0.0f;
+		MidiPhaseDragTarget _capturedPhaseTarget;
+		std::vector<std::shared_ptr<engine::LoopTake>> _capturedFractionTargets;
+		bool _capturedDivisionGlobal = true;
+		std::vector<std::shared_ptr<midi::MidiLoop>> _capturedMidiTargets;
+		std::vector<std::shared_ptr<midi::MidiLoop>> _fractionMidiTargets;
+		std::shared_ptr<engine::LoopTake> _OwnerForMidiLoop(const std::shared_ptr<midi::MidiLoop>& loop) const;
+		unsigned int _feedbackSampleRate = 0u;
+		std::function<void(const std::string&)> _feedbackSink;
+		void _ShowPhaseFeedback(unsigned int sampleRate);
+		void _ShowFractionFeedback();
 		std::optional<CtrlOverlayContext> _ctrlOverlayContext;
 		bool _isMidiPhaseDragging = false;
 		utils::Position2d _midiPhaseDragStartPosition;

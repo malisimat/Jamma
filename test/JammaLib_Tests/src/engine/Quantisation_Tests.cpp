@@ -883,3 +883,115 @@ TEST(Quantisation, MultichannelAudioAndMidiIsOneCompletedTake)
     }
 }
 
+TEST(QuantisationController, RapidModifierTransitionsKeepCurrentOpacity)
+{
+	graphics::CtrlHandleOverlay overlay;
+	engine::Quantiser quantiser;
+	std::vector<std::shared_ptr<engine::Station>> stations;
+	engine::QuantiserController controller(overlay, quantiser, stations);
+	engine::QuantisationInteractionContext context;
+	context.CursorPos = { 200, 200 };
+	context.ViewportSize = { 800, 600 };
+	const engine::QuantiserController::ChildResolver resolve = [](const auto&) { return std::shared_ptr<base::GuiElement>{}; };
+	const auto start = utils::Timer::GetTime();
+	controller.OnCtrlModifierChanged(true, start, context, resolve);
+	controller.Tick(start + std::chrono::milliseconds(60));
+	EXPECT_NEAR(0.5f, controller.PanelAlpha(), 0.001f);
+	controller.OnCtrlModifierChanged(false, start + std::chrono::milliseconds(60), context, resolve);
+	controller.Tick(start + std::chrono::milliseconds(60));
+	EXPECT_NEAR(0.5f, controller.PanelAlpha(), 0.001f);
+	controller.Tick(start + std::chrono::milliseconds(210));
+	const auto fading = controller.PanelAlpha();
+	controller.OnCtrlModifierChanged(true, start + std::chrono::milliseconds(210), context, resolve);
+	controller.Tick(start + std::chrono::milliseconds(210));
+	EXPECT_NEAR(fading, controller.PanelAlpha(), 0.001f);
+	controller.Tick(start + std::chrono::milliseconds(330));
+	EXPECT_FLOAT_EQ(1.0f, controller.PanelAlpha());
+	EXPECT_LT(quantiser.OverlayAlpha(start + std::chrono::seconds(10)), 0.001f);
+}
+
+TEST(QuantisationController, CapturedSelectionSurvivesChangesAndCancelPreservesCtrlAndSpace)
+{
+	auto first = MakeQuantisationContractTake("captured", 96000ul);
+	auto second = MakeQuantisationContractTake("hovered", 96000ul);
+	auto station = std::make_shared<QuantisationContractStation>();
+	station->AddTake(first);
+	station->AddTake(second);
+	first->Select();
+	graphics::CtrlHandleOverlay overlay;
+	engine::Quantiser quantiser;
+	std::vector<std::shared_ptr<engine::Station>> stations = { station };
+	engine::QuantiserController controller(overlay, quantiser, stations);
+	engine::QuantisationInteractionContext context;
+	context.SelectDepth = base::DEPTH_LOOPTAKE;
+	context.CursorPos = { 200, 200 };
+	context.ViewportSize = { 800, 600 };
+	const engine::QuantiserController::ChildResolver resolve = [second](const auto&) { return second; };
+	const auto start = utils::Timer::GetTime();
+	controller.OnCtrlModifierChanged(true, start, context, resolve);
+	first->DeSelect();
+	second->Select();
+	actions::TouchAction press;
+	press.State = actions::TouchAction::TOUCH_DOWN;
+	press.Index = 0;
+	press.SetActionTime(start);
+	press.Position = overlay.ButtonCenter(1).value();
+	ASSERT_TRUE(controller.TryHandleTouchAction(press, 48000u, true, context, resolve)->IsEaten);
+	controller.Tick(start);
+	EXPECT_FLOAT_EQ(0.0f, controller.PanelAlpha()); // A press during entry must not jump to full alpha.
+	actions::TouchMoveAction move;
+	move.Position = press.Position;
+	move.Position.Y += 32;
+	controller.TryHandleTouchMove(move, 48000u);
+	EXPECT_EQ(midi::MidiQuantisationFraction::Third, first->MidiQuantisation().Fraction);
+	EXPECT_EQ(midi::MidiQuantisationFraction::Quarter, second->MidiQuantisation().Fraction);
+	quantiser.SetOverlayHeld(true);
+	controller.CancelInteraction();
+	EXPECT_FALSE(controller.OwnsPointer());
+	EXPECT_TRUE(controller.EditModeActive());
+	EXPECT_FLOAT_EQ(1.0f, quantiser.OverlayAlpha(utils::Timer::GetTime() + std::chrono::seconds(20)));
+	quantiser.SetOverlayHeld(false);
+	EXPECT_FLOAT_EQ(0.0f, quantiser.OverlayAlpha(utils::Timer::GetTime() + std::chrono::seconds(20)));
+	controller.CancelInteraction(true);
+	EXPECT_FALSE(controller.EditModeActive());
+}
+
+TEST(QuantisationController, LoopDragChangesCapturedMidiStreamAndDeletionReleasesGesture)
+{
+	auto take = MakeQuantisationContractTake("midi-scope", 96000ul);
+	auto first = std::make_shared<midi::MidiLoop>();
+	auto sibling = std::make_shared<midi::MidiLoop>();
+	take->AddMidi(first);
+	take->AddMidi(sibling);
+	auto station = std::make_shared<QuantisationContractStation>();
+	station->AddTake(take);
+	graphics::CtrlHandleOverlay overlay;
+	engine::Quantiser quantiser;
+	std::vector<std::shared_ptr<engine::Station>> stations = { station };
+	engine::QuantiserController controller(overlay, quantiser, stations);
+	engine::QuantisationInteractionContext context;
+	context.SelectDepth = base::DEPTH_LOOP;
+	context.SelectedMidiLoops = { first };
+	context.HoveredMidiLoop = sibling;
+	context.CursorPos = { 200, 200 };
+	context.ViewportSize = { 800, 600 };
+	const engine::QuantiserController::ChildResolver resolve = [](const auto&) { return std::shared_ptr<base::GuiElement>{}; };
+	controller.OnCtrlModifierChanged(true, utils::Timer::GetTime(), context, resolve);
+	actions::TouchAction press;
+	press.State = actions::TouchAction::TOUCH_DOWN;
+	press.Index = 0;
+	press.Position = overlay.ButtonCenter(1).value();
+	ASSERT_TRUE(controller.TryHandleTouchAction(press, 48000u, true, context, resolve)->IsEaten);
+	actions::TouchMoveAction move;
+	move.Position = press.Position;
+	move.Position.Y += 32;
+	controller.TryHandleTouchMove(move, 48000u);
+	ASSERT_TRUE(first->GetLoopQuantisationOverride().Fraction.has_value());
+	EXPECT_EQ(midi::MidiQuantisationFraction::Third, first->GetLoopQuantisationOverride().Fraction.value());
+	EXPECT_FALSE(sibling->GetLoopQuantisationOverride().Fraction.has_value());
+	stations.clear();
+	controller.Tick(utils::Timer::GetTime());
+	EXPECT_FALSE(controller.OwnsPointer());
+	EXPECT_TRUE(controller.EditModeActive());
+	EXPECT_FLOAT_EQ(0.0f, quantiser.OverlayAlpha(utils::Timer::GetTime() + std::chrono::seconds(20)));
+}

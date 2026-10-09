@@ -3,8 +3,10 @@
 layout(location = 0) in vec2 PositionIN;
 
 uniform mat4 MVP;
+out vec2 PixelPosition;
 
 void main()
 {
+    PixelPosition = PositionIN;
     gl_Position = MVP * vec4(PositionIN.x, PositionIN.y, 0, 1);
 }
