@@ -698,17 +698,18 @@ TEST(Quantisation, TapSequenceAcceptsGapJustUnderTwoSeconds)
     EXPECT_TRUE(tracker.TapAtSample(95999u, 48000u, 288000ul, policy));
 }
 
-TEST(Quantisation, OverlayWaitsTwoSecondsAfterPressBeforeFading)
+TEST(Quantisation, OverlayWaitsTwoSecondsAfterReleaseBeforeFading)
 {
     engine::Quantiser quantiser;
-    const auto before = utils::Timer::GetTime();
     quantiser.SetOverlayHeld(true);
     const auto after = utils::Timer::GetTime();
     EXPECT_FLOAT_EQ(1.0f, quantiser.OverlayAlpha(after + std::chrono::seconds(20)));
+    const auto beforeRelease = utils::Timer::GetTime();
     quantiser.SetOverlayHeld(false);
-    EXPECT_FLOAT_EQ(1.0f, quantiser.OverlayAlpha(before + std::chrono::seconds(2)));
-    EXPECT_NEAR(0.5f, quantiser.OverlayAlpha(after + std::chrono::seconds(3)), 0.01f);
-    EXPECT_FLOAT_EQ(0.0f, quantiser.OverlayAlpha(after + std::chrono::seconds(4)));
+    const auto released = utils::Timer::GetTime();
+    EXPECT_FLOAT_EQ(1.0f, quantiser.OverlayAlpha(beforeRelease + std::chrono::seconds(2)));
+    EXPECT_NEAR(0.5f, quantiser.OverlayAlpha(released + std::chrono::seconds(3)), 0.01f);
+    EXPECT_FLOAT_EQ(0.0f, quantiser.OverlayAlpha(released + std::chrono::seconds(4)));
     quantiser.PulseOverlay();
     const auto pulse = utils::Timer::GetTime();
     EXPECT_FLOAT_EQ(1.0f, quantiser.OverlayAlpha(pulse + std::chrono::seconds(1)));

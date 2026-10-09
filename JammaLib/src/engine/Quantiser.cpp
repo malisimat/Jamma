@@ -445,9 +445,8 @@ void Quantiser::SetOverlayHeld(bool held)
 	if (_spaceOverlayHeld.exchange(held, std::memory_order_acq_rel) == held)
 		return;
 
-	// Space's grace period starts at key-down, not key-up.
-	if (held)
-		PulseOverlay();
+	// Releasing Space starts a fresh grace period after the visible hold.
+	PulseOverlay();
 }
 
 void Quantiser::SetGestureOverlayHeld(bool held)

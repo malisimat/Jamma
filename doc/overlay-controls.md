@@ -48,9 +48,9 @@ clears stale holds.
 The first tap starts a sequence without changing subdivisions or their radio.
 The second tap must arrive within two seconds. A press-to-press gap of two
 seconds or more starts a fresh sequence and discards all previous tap smoothing.
-Grids stay fully visible for two seconds after the latest press, then fade over
-two seconds once no hold remains. Space release does not restart that grace
-period. Invalid sample rates or non-increasing timestamps reject that update and restart tap
+Grids stay fully visible while Space is held and for two seconds after release,
+then fade over two seconds once no hold remains. The Timing tap button starts
+the same grace period on press. Invalid sample rates or non-increasing timestamps reject that update and restart tap
 smoothing; the accepted geometry remains unchanged. Sample zero is valid.
 
 One completed local take counts as one performance, including multichannel and
