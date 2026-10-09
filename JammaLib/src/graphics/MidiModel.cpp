@@ -349,6 +349,8 @@ std::vector<float> MidiModel::BuildEditorGridVertices(const midi::LoopGridGeomet
 
 void MidiModel::UpdateModel(const std::vector<midi::MidiNote>& spans, std::uint32_t loopLengthSamps)
 {
+	// A forced replacement supersedes queued recording geometry as well.
+	_pendingModelUpdate.store(nullptr, std::memory_order_release);
 	_displayLengthSamps.store(loopLengthSamps, std::memory_order_relaxed);
 	auto data = BuildInstanceData(spans, loopLengthSamps);
 	// Instance identity is valid only until the next applied model replacement.

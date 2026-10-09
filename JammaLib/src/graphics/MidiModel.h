@@ -117,6 +117,7 @@ namespace graphics
 		void _InitResources(resources::ResourceLib& resourceLib, bool forceInit) override;
 	void _ReleaseResources() override;
 	void DrawMesh(GLuint shaderProgram, unsigned int drawInstances) override;
+		void ApplyPendingModelUpdate();
 
 	private:
 		friend class MidiModelParams;
@@ -134,7 +135,6 @@ namespace graphics
 			float u1, float v1, float u2, float v2, float u3, float v3);
 		std::shared_ptr<ModelInstanceData> BuildInstanceData(const std::vector<midi::MidiNote>& spans,
 			std::uint32_t loopLengthSamps) const;
-		void ApplyPendingModelUpdate();
 		float PitchOffset(std::uint8_t note) const noexcept;
 
 		// --- Automation curtain rendering ---

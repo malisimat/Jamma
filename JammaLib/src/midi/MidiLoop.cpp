@@ -685,7 +685,9 @@ bool MidiLoop::BuildModelFromEvents(std::uint32_t displayLengthSamps, bool force
 
 	if (!force)
 	{
-		if (!revisionChanged && 0u == _eventCount)
+		// The shared picker ring belongs to the first stream, which may stay
+		// silent while another channel records. Its geometry still follows time.
+		if (!revisionChanged && 0u == _eventCount && MidiLoopState::Recording != _state)
 			return false;
 
 		if (!revisionChanged)

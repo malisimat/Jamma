@@ -525,6 +525,114 @@ TEST(LoopTakeMidiVisualization, PlayFinalizesMidiModelSpans)
 	EXPECT_EQ(1u, midiModel->NoteInstanceCount());
 }
 
+class RecordingMidiModel : public MidiModel
+{
+public:
+	explicit RecordingMidiModel(bool drawRing) :
+		gui::GuiModel(Params(drawRing)), MidiModel(Params(drawRing)) {}
+	using MidiModel::ApplyPendingModelUpdate;
+
+	const std::vector<float>& Attribute(unsigned int index) const
+	{
+		return _backInstanceAttributes.at(index).Data;
+	}
+
+private:
+	static MidiModelParams Params(bool drawRing)
+	{
+		MidiModelParams params;
+		params.DrawSelectionRing = drawRing;
+		return params;
+	}
+};
+
+TEST(LoopTakeMidiVisualization, SilentRecordingRingGrowsThroughUpdateJobs)
+{
+	auto take = MakeLoopTake();
+	take->Record({}, "station", { 0u });
+	auto model = std::make_shared<RecordingMidiModel>(true);
+	take->GetMidiLoops()[0]->AttachModel(model);
+
+	float previousRadius = 50.0f;
+	for (const auto elapsed : { 24000u, 48000u, 96000u })
+	{
+		take->EndMultiWrite(elapsed - take->NumRecordedSamps(), true, Audible::AUDIOSOURCE_ADC);
+		const auto jobs = take->CommitChanges();
+		const auto job = std::find_if(jobs.begin(), jobs.end(), [](const actions::JobAction& action)
+		{
+			return action.JobActionType == actions::JobAction::JOB_UPDATELOOPS;
+		});
+		ASSERT_NE(jobs.end(), job);
+		take->OnAction(*job);
+		model->ApplyPendingModelUpdate();
+		ASSERT_EQ(1u, model->TotalInstanceCount());
+		const auto radius = model->Attribute(1u)[0u];
+		EXPECT_GT(radius, previousRadius);
+		previousRadius = radius;
+		EXPECT_FALSE(take->GetMidiLoops()[0]->UpdateModelFromEvents(elapsed));
+		EXPECT_FALSE(take->GetMidiLoops()[0]->UpdateModelFromEvents(elapsed + 1u));
+	}
+
+	take->Play(0u, 96000u, 0u);
+	EXPECT_FLOAT_EQ(previousRadius, model->Attribute(1u)[0u]);
+}
+
+TEST(LoopTakeMidiVisualization, NotesGrowWithSilentSharedRingDuringRecordingGaps)
+{
+	auto take = MakeLoopTake();
+	take->Record({}, "station", { 0u, 1u });
+	auto ring = std::make_shared<RecordingMidiModel>(true);
+	auto notes = std::make_shared<RecordingMidiModel>(false);
+	take->GetMidiLoops()[0]->AttachModel(ring);
+	take->GetMidiLoops()[1]->AttachModel(notes);
+	ASSERT_TRUE(take->RecordMidiEvent(MidiEvent::MakeNoteOn(0u, 1u, 72u, 100u), 0u));
+	take->EndMultiWrite(2000u, true, Audible::AUDIOSOURCE_ADC);
+	ASSERT_TRUE(take->RecordMidiEvent(MidiEvent::MakeNoteOff(0u, 1u, 72u), 0u));
+
+	float previousRadius = 50.0f;
+	for (const auto elapsed : { 24000u, 48000u, 96000u })
+	{
+		take->EndMultiWrite(elapsed - take->NumRecordedSamps(), true, Audible::AUDIOSOURCE_ADC);
+		actions::JobAction update;
+		update.JobActionType = actions::JobAction::JOB_UPDATELOOPS;
+		take->OnAction(update);
+		ring->ApplyPendingModelUpdate();
+		notes->ApplyPendingModelUpdate();
+		ASSERT_EQ(1u, ring->TotalInstanceCount());
+		ASSERT_EQ(1u, notes->NoteInstanceCount());
+		const auto radius = ring->Attribute(1u)[0u];
+		EXPECT_GT(radius, previousRadius);
+		EXPECT_FLOAT_EQ(radius, notes->Attribute(1u)[0u]);
+		EXPECT_NEAR(radius * 12.0f * 0.035f, notes->Attribute(0u)[2u], 0.0001f);
+		EXPECT_NEAR(radius * 0.035f, notes->Attribute(1u)[1u], 0.0001f);
+		previousRadius = radius;
+	}
+
+	take->Play(0u, 96000u, 0u);
+	EXPECT_FLOAT_EQ(previousRadius, ring->Attribute(1u)[0u]);
+	EXPECT_FLOAT_EQ(previousRadius, notes->Attribute(1u)[0u]);
+}
+
+TEST(LoopTakeMidiVisualization, FinalGeometrySupersedesPendingRecordingGeometry)
+{
+	auto take = MakeLoopTake();
+	take->Record({}, "station", { 0u });
+	auto model = std::make_shared<RecordingMidiModel>(true);
+	take->GetMidiLoops()[0]->AttachModel(model);
+	take->EndMultiWrite(24000u, true, Audible::AUDIOSOURCE_ADC);
+	actions::JobAction update;
+	update.JobActionType = actions::JobAction::JOB_UPDATELOOPS;
+	take->OnAction(update);
+
+	// Finish before the render thread consumes the earlier recording snapshot.
+	take->Play(0u, 96000u, 0u);
+	const auto finalRadius = model->Attribute(1u)[0u];
+	const auto generation = model->EditorModelGeneration();
+	model->ApplyPendingModelUpdate();
+	EXPECT_EQ(generation, model->EditorModelGeneration());
+	EXPECT_FLOAT_EQ(finalRadius, model->Attribute(1u)[0u]);
+}
+
 TEST(LoopTakeMidiVisualization, RecordMatchesConfiguredMidiDevices)
 {
 	auto take = MakeLoopTake();
