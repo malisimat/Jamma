@@ -243,7 +243,7 @@ void QuantisationModel::SetLoopTakeVisuals(unsigned int seedSamps,
 		if (0u == gateCount)
 			continue;
 
-		const auto totalGateCount = visual.GridIntervalSamps ? counts.FractionDivisionCount : gateCount;
+		const auto totalGateCount = gateCount;
 		gateCount = std::clamp(gateCount, 1u, MaxVisibleGates);
 
 		const auto angleStep = static_cast<float>(constants::TWOPI) / static_cast<float>(gateCount);
@@ -267,7 +267,7 @@ void QuantisationModel::SetLoopTakeVisuals(unsigned int seedSamps,
 				static_cast<std::uint64_t>(gate) * totalGateCount / gateCount);
 			const auto gateAngle = visual.UseAbsoluteLocalGrid
 				? loopIndexAngle + static_cast<float>(constants::TWOPI)
-					* static_cast<float>(VisualBoundaryOffsetSamps(visual, boundaryIndex, midi::MidiQuantisation::Divisor(visual.Fraction)))
+					* static_cast<float>(VisualBoundaryOffsetSamps(visual, boundaryIndex, 1u))
 					/ static_cast<float>(visual.LoopLengthSamps)
 				: phaseOffset + (angleStep * static_cast<float>(gate));
 			transforms.push_back(gateAngle);
@@ -305,10 +305,13 @@ QuantisationModel::VisualCounts QuantisationModel::ResolveVisualCounts(const eng
     }
 	const auto interval = visual.GridIntervalSamps ? visual.GridIntervalSamps : visual.GrainSamps;
     const auto base = visual.GridBaseDivisions ? visual.GridBaseDivisions : 1u;
-    // Draw effective cells: construction grain remains a separate measurement.
-    const auto cells = (static_cast<std::uint64_t>(visual.LoopLengthSamps) * base * divisor + interval - 1u) / interval;
-    counts.GrainFrameCount = static_cast<unsigned int>((std::min)(cells, static_cast<std::uint64_t>(MaxVisibleGates)));
-    counts.FractionDivisionCount = static_cast<unsigned int>((std::min)(cells, static_cast<std::uint64_t>((std::numeric_limits<unsigned int>::max)())));
+	// Beat frames follow the base grid. The selected fraction only changes the
+	// subdivision markers, so tap-tempo subdivision changes leave beat geometry fixed.
+	const auto baseCells = (static_cast<std::uint64_t>(visual.LoopLengthSamps) * base + interval - 1u) / interval;
+	const auto fractionCells = (static_cast<std::uint64_t>(visual.LoopLengthSamps) * base * divisor
+		+ interval - 1u) / interval;
+	counts.GrainFrameCount = static_cast<unsigned int>((std::min)(baseCells, static_cast<std::uint64_t>(MaxVisibleGates)));
+	counts.FractionDivisionCount = static_cast<unsigned int>((std::min)(fractionCells, static_cast<std::uint64_t>((std::numeric_limits<unsigned int>::max)())));
 
 	return counts;
 }

@@ -700,7 +700,7 @@ TEST(Quantisation, FrozenGridCandidatesIncludeTripletsAndPreferSmallerTies)
     EXPECT_EQ(12u, engine::Quantiser::NearestPermittedDivision(4u, 12.0));
     EXPECT_EQ(8u, engine::Quantiser::NearestPermittedDivision(4u, 10.0));
     EXPECT_EQ(4u, engine::Quantiser::NearestPermittedDivision(4u, 0.0));
-    EXPECT_EQ(256u, engine::Quantiser::NearestPermittedDivision(4u, 10000.0));
+    EXPECT_EQ(128u, engine::Quantiser::NearestPermittedDivision(4u, 10000.0));
 }
 
 TEST(Quantisation, TapBaseGridComposesFractionWithoutChangingConstructionOrAuthority)
@@ -782,7 +782,7 @@ TEST(Quantisation, SoleMidiTapPublishesGridWithoutRewritingSourceLength)
     EXPECT_EQ(4u, take->ResolvedMidiQuantisation().BaseDivisions);
 }
 
-TEST(Quantisation, AdditionalMidiTakeTapPreservesTransportAndPublishesTripletBase)
+TEST(Quantisation, AdditionalMidiTakeTapPreservesTransportAndSelectsTripletSubdivision)
 {
     auto first = MakeQuantisationContractTake("one", 96000ul);
     auto second = MakeQuantisationContractTake("two", 96000ul);
@@ -793,14 +793,36 @@ TEST(Quantisation, AdditionalMidiTakeTapPreservesTransportAndPublishesTripletBas
     auto clock = std::make_shared<utils::Timer>();
     quantiser.SetClock(clock);
     quantiser.Set(24000u, utils::Timer::QUANTISE_MULTIPLE);
+    quantiser.SetMidiGrain(24000u, "test", { station });
     clock->SetSeedSourceLength(96000ul);
     io::UserConfig config;
     quantiser.HandleTapTempo(0u, 48000u, { station }, config);
     quantiser.HandleTapTempo(8000u, 48000u, { station }, config);
     EXPECT_EQ(24000u, clock->QuantiseSamps());
     EXPECT_EQ(96000ul, clock->SeedSourceLength());
-    EXPECT_EQ(12u, first->ResolvedMidiQuantisation().BaseDivisions);
-    EXPECT_EQ(12u, second->ResolvedMidiQuantisation().BaseDivisions);
+    EXPECT_EQ(12u, quantiser.ActiveGridDivisions());
+    for (const auto& take : { first, second })
+    {
+        const auto settings = take->ResolvedMidiQuantisation();
+        EXPECT_EQ(4u, settings.BaseDivisions);
+        EXPECT_EQ(midi::MidiQuantisationFraction::Third, settings.Fraction);
+        EXPECT_EQ(12u, settings.GridDivisions());
+        EXPECT_EQ(24000u, settings.GrainSamps);
+        EXPECT_EQ(96000ul, take->VisualLoopLengthSamps());
+    }
+    // A new, slower tap sequence changes only the subdivision again.
+    quantiser.HandleTapTempo(200000u, 48000u, { station }, config);
+    quantiser.HandleTapTempo(224000u, 48000u, { station }, config);
+    for (const auto& take : { first, second })
+    {
+        const auto settings = take->ResolvedMidiQuantisation();
+        EXPECT_EQ(4u, settings.BaseDivisions);
+        EXPECT_EQ(midi::MidiQuantisationFraction::Whole, settings.Fraction);
+        EXPECT_EQ(4u, settings.GridDivisions());
+        EXPECT_EQ(96000ul, take->VisualLoopLengthSamps());
+    }
+    EXPECT_EQ(24000u, clock->QuantiseSamps());
+    EXPECT_EQ(96000ul, clock->SeedSourceLength());
 }
 
 TEST(Quantisation, RemoteTapPreservesAcceptedDescriptorAcrossGrainPublication)
@@ -826,7 +848,9 @@ TEST(Quantisation, RemoteTapPreservesAcceptedDescriptorAcrossGrainPublication)
     EXPECT_EQ(192000u, settings.RemoteIntervalSamps);
     EXPECT_EQ(8u, settings.RemoteBpi);
     EXPECT_EQ(431, settings.RemoteOriginSamps);
-    EXPECT_EQ(24u, settings.BaseDivisions);
+    EXPECT_EQ(8u, settings.BaseDivisions);
+    EXPECT_EQ(midi::MidiQuantisationFraction::Third, settings.Fraction);
+    EXPECT_EQ(24u, settings.GridDivisions());
     EXPECT_EQ(96000ul, clock->SeedSourceLength());
 }
 

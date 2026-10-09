@@ -204,11 +204,12 @@ BPI, phase, BPM, and command generation. `Scene` forwards it through
 
 ```text
 boundary(k) = origin + round(k * remote interval / divisions)
-divisions = remote BPI * compatible tap density * MidiQuantisation::Divisor(fraction)
+divisions = remote BPI * MidiQuantisation::Divisor(fraction)
 ```
 
-Without a tap override, compatible tap density is one. Its straight/triplet
-candidate multiplier changes the grid while preserving authoritative BPM/BPI.
+With a frozen local master or remote authority, tapping selects the same
+straight/triplet subdivision fraction shown by the subdivision radio. The base
+grain/beat count stays fixed, preserving local construction and authoritative BPM/BPI.
 It maps each recorded event through the take's transport start, composes user
 offsets once, and publishes an immutable quantised event snapshot off the audio
 callback. Event playback at the audio-thread MIDI cursor therefore uses the

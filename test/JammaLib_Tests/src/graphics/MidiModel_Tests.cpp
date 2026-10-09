@@ -1,5 +1,6 @@
 #include "gtest/gtest.h"
 #include "graphics/MidiModel.h"
+#include "graphics/QuantisationModel.h"
 
 #include <cmath>
 
@@ -23,6 +24,50 @@ TEST(GraphicsMidiModel, SharedArcMeshHasChamferedCrossSectionAndMatchingUvs)
 	EXPECT_TRUE(foundChamfer);
 	EXPECT_TRUE(graphics::MidiModel::BuildBaseVerts(0u).empty());
 	EXPECT_TRUE(graphics::MidiModel::BuildBaseUvs(0u).empty());
+}
+
+TEST(GraphicsQuantisationModel, SubdivisionChangesDoNotMoveBeatGrid)
+{
+	engine::QuantisationLoopTakeVisual quarter{};
+	quarter.LoopLengthSamps = 403u;
+	quarter.GrainSamps = 100u;
+	quarter.LoopGrains = 5u;
+	quarter.Fraction = midi::MidiQuantisationFraction::Quarter;
+	quarter.UseAbsoluteLocalGrid = true;
+	quarter.GridIntervalSamps = 100u;
+	quarter.GridBaseDivisions = 4u;
+	quarter.TransportStartSamps = 17u;
+
+	auto eighth = quarter;
+	eighth.Fraction = midi::MidiQuantisationFraction::Eighth;
+
+	const auto quarterCounts = engine::QuantisationModel::ResolveVisualCounts(quarter);
+	const auto eighthCounts = engine::QuantisationModel::ResolveVisualCounts(eighth);
+	EXPECT_EQ(17u, quarterCounts.GrainFrameCount);
+	EXPECT_EQ(quarterCounts.GrainFrameCount, eighthCounts.GrainFrameCount);
+	EXPECT_EQ(65u, quarterCounts.FractionDivisionCount);
+	EXPECT_EQ(129u, eighthCounts.FractionDivisionCount);
+
+	for (std::uint32_t beat = 0u; beat < quarterCounts.GrainFrameCount; ++beat)
+	{
+		const auto quarterOffset = engine::QuantisationModel::VisualBoundaryOffsetSamps(quarter, beat, 1u);
+		const auto eighthOffset = engine::QuantisationModel::VisualBoundaryOffsetSamps(eighth, beat, 1u);
+		EXPECT_EQ(quarterOffset, eighthOffset);
+	}
+}
+
+TEST(GraphicsQuantisationModel, FractionDivisionCountRoundsFromTheActualGrid)
+{
+	engine::QuantisationLoopTakeVisual visual{};
+	visual.LoopLengthSamps = 101u;
+	visual.GrainSamps = 25u;
+	visual.Fraction = midi::MidiQuantisationFraction::Quarter;
+	visual.GridIntervalSamps = 100u;
+	visual.GridBaseDivisions = 4u;
+
+	const auto counts = engine::QuantisationModel::ResolveVisualCounts(visual);
+	EXPECT_EQ(5u, counts.GrainFrameCount);
+	EXPECT_EQ(17u, counts.FractionDivisionCount);
 }
 
 TEST(GraphicsMidiModel, NoteEndCapsFaceOutward)

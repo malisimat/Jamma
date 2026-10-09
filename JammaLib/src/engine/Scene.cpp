@@ -3440,7 +3440,18 @@ bool Scene::_HandleTapTempo(Time actionTime)
 		_stations,
 		_userConfig);
 	if (handled)
+	{
 		_quantisation.UpdateStationHints(nullptr, _selector->CurrentSelectDepth(), false, _stations);
+		for (const auto& station : _stations)
+			if (station && !station->IsRemote())
+				for (const auto& take : station->GetLoopTakes())
+					if (take && _midiSubdivisionRadio)
+					{
+						_midiSubdivisionRadio->SetCurrentValue(
+							midi::MidiQuantisation::FractionDisplayIndex(take->MidiQuantisation().Fraction), true);
+						return handled;
+					}
+	}
 	return handled;
 }
 

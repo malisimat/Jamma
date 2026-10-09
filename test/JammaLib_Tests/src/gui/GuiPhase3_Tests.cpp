@@ -1214,6 +1214,15 @@ public:
 	std::shared_ptr<gui::GuiToggle> Click() const { return _ninjamMetronomeToggle; }
 	std::shared_ptr<gui::GuiRadio> Quantisation() const { return _globalMidiQuantRadio; }
 	std::shared_ptr<gui::GuiRadio> Depth() const { return _modeRadio; }
+	std::shared_ptr<gui::GuiRadio> Subdivision() const { return _midiSubdivisionRadio; }
+	void SetFrozenTapClock()
+	{
+		auto clock = std::make_shared<utils::Timer>();
+		_quantisation.SetClock(clock);
+		_quantisation.Set(_CurrentSampleRate() / 2u, utils::Timer::QUANTISE_MULTIPLE);
+		clock->SetSeedSourceLength(_CurrentSampleRate() * 2ul);
+	}
+	bool TapAt(Time time) { return _HandleTapTempo(time); }
 	unsigned int ForcedChannel() const { return _inputSubsystem->ForcedChannelOverride(); }
 	double PhaseFraction() const { return _transportOffsetLoopFrac; }
 	bool ClickEnabled() const { return _audioEngine->NinjamMetronomeEnabled(); }
@@ -1243,6 +1252,33 @@ protected:
 	std::shared_ptr<GuiSettingsOwnerScene> Scene;
 	std::shared_ptr<engine::Station> Station;
 };
+
+class GuiTapCompletedTake final : public engine::LoopTake
+{
+public:
+	GuiTapCompletedTake(engine::LoopTakeParams params) :
+		LoopTake(params, LoopTake::GetMixerParams(params.Size, audio::MergeMixBehaviourParams{}))
+	{
+		_midiVisualLoopLength.store(96000ul, std::memory_order_release);
+		_state.store(STATE_PLAYING, std::memory_order_release);
+	}
+};
+
+TEST_F(GuiSceneSettingsTests, FrozenTapSelectsSubdivisionRadio)
+{
+	for (const auto id : { "tap-one", "tap-two" })
+	{
+		engine::LoopTakeParams params; params.Id = id; params.Size = { 100, 100 };
+		Station->AddTake(std::make_shared<GuiTapCompletedTake>(params));
+	}
+	Scene->SetFrozenTapClock();
+	EXPECT_TRUE(Scene->TapAt(Time{}));
+	EXPECT_TRUE(Scene->TapAt(Time{} + std::chrono::microseconds(166667)));
+	const auto expected = midi::MidiQuantisationFraction::Third;
+	EXPECT_EQ(midi::MidiQuantisation::FractionDisplayIndex(expected), Scene->Subdivision()->CurrentValue());
+	for (const auto& take : Station->GetLoopTakes())
+		EXPECT_EQ(expected, take->MidiQuantisation().Fraction);
+}
 
 TEST_F(GuiSceneSettingsTests, ChannelLimitsAndShortcutFeedbackReachRouterAfterTreeChanges)
 {

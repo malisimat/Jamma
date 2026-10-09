@@ -349,9 +349,9 @@ bool Quantiser::HandleTapTempo(std::uint64_t estimatedSampleAt,
         for (const auto& station : stations)
             if (station && !station->IsRemote())
                 for (const auto& take : station->GetLoopTakes())
-                    if (take && (static_cast<std::uint64_t>(take->VisualLoopLengthSamps()) * selected * 32u + interval - 1u) / interval > 8192u)
+                    if (take && (static_cast<std::uint64_t>(take->VisualLoopLengthSamps()) * selected + interval - 1u) / interval > 8192u)
                     {
-                        std::cout << "[quantisation] tap rejected: effective grid exceeds 8192 cells at 1/32 take=" << take->Id() << std::endl;
+                        std::cout << "[quantisation] tap rejected: effective grid exceeds 8192 cells take=" << take->Id() << std::endl;
                         return true;
                     }
         _activeGridDivisions.store(selected, std::memory_order_release);
@@ -359,7 +359,17 @@ bool Quantiser::HandleTapTempo(std::uint64_t estimatedSampleAt,
         for (const auto& station : stations)
             if (station && !station->IsRemote())
                 for (const auto& take : station->GetLoopTakes())
-                    if (take) take->SetMidiBaseGrid(static_cast<std::uint32_t>(interval), selected);
+                    if (take)
+                    {
+                        // A frozen master keeps its grain/beat grid; tapping selects
+                        // the subdivision itself, also shown by the fraction radio.
+                        take->SetMidiBaseGrid(static_cast<std::uint32_t>(interval), base);
+                        auto settings = take->MidiQuantisation();
+                        for (const auto fraction : midi::MidiQuantisation::FractionDisplayOrder)
+                            if (midi::MidiQuantisation::Divisor(fraction) == selected / base)
+                                settings.Fraction = fraction;
+                        take->SetMidiQuantisation(settings);
+                    }
         unsigned int minimumDivisor = 32u;
         unsigned int maximumDivisor = 1u;
         for (const auto& station : stations)
@@ -377,7 +387,7 @@ bool Quantiser::HandleTapTempo(std::uint64_t estimatedSampleAt,
             << " grain=" << grain << " base=" << base << " requested=" << timing->Bpi
             << " before=" << previous << " gap=" << smoothedGap << " gapMs=" << (1000.0 * smoothedGap / sampleRate)
             << " bpm=" << (60.0 * sampleRate / smoothedGap) << " fractionDivisors=" << minimumDivisor << ".." << maximumDivisor
-            << " effectiveCells=" << selected * minimumDivisor << ".." << selected * maximumDivisor
+            << " effectiveCells=" << base * minimumDivisor << ".." << base * maximumDivisor
             << " requestedRatio=" << requestedDivisions << " selected=" << selected << " tie=smaller geometry=preserved" << std::endl;
         return true;
     }
@@ -412,17 +422,16 @@ unsigned int Quantiser::NearestPermittedDivision(unsigned int base, double reque
 {
     if (!base || !std::isfinite(requested) || requested <= 0.0) return base;
     unsigned int best = base;
-    // Straight/triplet bases capped at 256, leaving room for the densest 1/32 fraction.
-    for (unsigned int multiplier = 1u; multiplier <= 256u / base; multiplier *= 2u)
-        for (const auto factor : { 1u, 3u })
-        {
-            const auto candidate = static_cast<std::uint64_t>(base) * multiplier * factor;
-            if (candidate > 256u) continue;
-            const auto distance = std::abs(static_cast<double>(candidate) - requested);
-            const auto previous = std::abs(static_cast<double>(best) - requested);
-            if (distance < previous || (distance == previous && candidate < best))
-                best = static_cast<unsigned int>(candidate);
-        }
+    // Use the same supported straight/triplet subdivisions as the radio.
+    for (const auto fraction : midi::MidiQuantisation::FractionDisplayOrder)
+    {
+        const auto candidate = static_cast<std::uint64_t>(base) * midi::MidiQuantisation::Divisor(fraction);
+        if (candidate > std::numeric_limits<unsigned int>::max()) continue;
+        const auto distance = std::abs(static_cast<double>(candidate) - requested);
+        const auto previous = std::abs(static_cast<double>(best) - requested);
+        if (distance < previous || (distance == previous && candidate < best))
+            best = static_cast<unsigned int>(candidate);
+    }
     return best;
 }
 
