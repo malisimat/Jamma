@@ -1480,21 +1480,6 @@ ActionResult Station::OnAction(TriggerAction action)
 		if (loopTake.has_value())
 		{
 			_DitchLoopTake(loopTake.value());
-
-			auto id = loopTake.value()->Id();
-			auto match = std::find_if(_backLoopTakes.begin(),
-				_backLoopTakes.end(),
-				[&id](const std::shared_ptr<LoopTake>& arg) { return arg->Id() == id; });
-
-			if (match != _backLoopTakes.end())
-			{
-				_backLoopTakes.erase(match);
-				_ArrangeChildren();
-				_flipTakeBuffer = true;
-				_changesMade = true;
-				_PublishLoopTakeSnapshot();
-				_loopTakeRevision.fetch_add(1u, std::memory_order_release);
-			}
 			res.DitchResult = actions::DitchDisposition::Removed;
 		}
 		else
@@ -1644,6 +1629,11 @@ void Station::OnTick(Time curTime,
 
 void Station::Reset()
 {
+	for (const auto& take : GetLoopTakeSnapshot())
+	{
+		take->CancelCapture();
+		take->DetachGuiOwnershipForRetirement();
+	}
 	Jammable::Reset();
 	{
 		std::scoped_lock lock(_liveHeldMidiMutex);
@@ -2661,7 +2651,20 @@ void Station::_DitchLoopTake(std::shared_ptr<LoopTake>& take) noexcept
 			}
 		}
 	}
-	take->Ditch();
+	// A retained callback snapshot may still hold this take. Cancel only its
+	// logical capture; keep loop buffers and writers stable until job/UI retirement.
+	take->CancelCapture();
+	take->DetachGuiOwnershipForRetirement();
+	const auto match = std::find(_backLoopTakes.begin(), _backLoopTakes.end(), take);
+	if (match != _backLoopTakes.end())
+	{
+		_backLoopTakes.erase(match);
+		_ArrangeChildren();
+		_flipTakeBuffer = true;
+		_changesMade = true;
+		_PublishLoopTakeSnapshot();
+		_loopTakeRevision.fetch_add(1u, std::memory_order_release);
+	}
 	RebuildAutomationDispatch();
 }
 

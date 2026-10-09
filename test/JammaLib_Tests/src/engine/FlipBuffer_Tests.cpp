@@ -757,3 +757,105 @@ TEST(LoopTakeCompletionHandoff, CancelledTakeFlushesHeldMidiWithoutReplayingOldS
 	EXPECT_EQ(1u, sink.NoteOns);
 	EXPECT_EQ(1u, sink.NoteOffs);
 }
+
+TEST(StationFlipBuffer, DitchKeepsBorrowedBuffersUntilSnapshotRetirement)
+{
+	auto station = MakeStation();
+	TriggerAction start;
+	start.ActionType = TriggerAction::TRIGGER_REC_START;
+	start.InputChannels = {0u};
+	const auto removed = station->OnAction(start);
+	station->CommitChanges();
+	auto retained = station->GetLoopTakeSnapshot();
+	ASSERT_EQ(1u, retained.size());
+	auto take = retained.front();
+	ASSERT_EQ(1u, take->GetLoops().size());
+	auto loop = take->GetLoops().front();
+	const std::weak_ptr<base::GuiElement> rackLifetime = take->GetGuiRack();
+	const std::weak_ptr<base::GuiElement> modelLifetime = loop->Model();
+	take->EndMultiWrite(32u, true, Audible::AUDIOSOURCE_ADC);
+	const auto physicalLength = loop->PhysicalLoopLength();
+	const auto recorded = take->NumRecordedSamps();
+	const std::weak_ptr<LoopTake> lifetime = take;
+	const auto other = station->OnAction(start);
+	station->CommitChanges();
+	TriggerAction ditch;
+	ditch.ActionType = TriggerAction::TRIGGER_DITCH;
+	ditch.TargetId = removed.TargetId;
+	ASSERT_EQ(actions::DitchDisposition::Removed, station->OnAction(ditch).DitchResult);
+	ASSERT_EQ(1u, take->GetLoops().size());
+	EXPECT_EQ(physicalLength, loop->PhysicalLoopLength());
+	EXPECT_EQ(LoopTake::STATE_INACTIVE, take->TakeState());
+	EXPECT_EQ(engine::StationVisualState::STATIONSTATE_RECORDING, station->GetVisualState());
+	ASSERT_EQ(1u, station->GetLoopTakeSnapshot().size());
+	EXPECT_EQ(other.TargetId, station->GetLoopTakeSnapshot().front()->Id());
+	// A previously acquired callback snapshot can finish using stable resources.
+	take->EndMultiWrite(32u, true, Audible::AUDIOSOURCE_ADC);
+	EXPECT_EQ(recorded, take->NumRecordedSamps());
+	EXPECT_EQ(physicalLength, loop->PhysicalLoopLength());
+	station->CommitChanges();
+	take.reset();
+	retained.clear();
+	station->ReleaseRetiredAudioStates();
+	EXPECT_FALSE(lifetime.expired());
+	station->AcknowledgeAudioBoundary();
+	EXPECT_FALSE(lifetime.expired());
+	// Only the off-callback retirement owner drops the last take reference.
+	station->ReleaseRetiredAudioStates();
+	EXPECT_TRUE(lifetime.expired());
+	EXPECT_TRUE(rackLifetime.expired());
+	EXPECT_FALSE(modelLifetime.expired()); // The explicit loop borrower is still retained.
+	loop.reset();
+	EXPECT_TRUE(modelLifetime.expired());
+}
+
+TEST(StationFlipBuffer, ZeroLengthEndRemovesCancelledTakeWithoutResettingBuffers)
+{
+	for (const bool overdub : {false, true})
+	{
+		auto station = MakeStation();
+		TriggerAction start;
+		start.ActionType = overdub ? TriggerAction::TRIGGER_OVERDUB_START : TriggerAction::TRIGGER_REC_START;
+		start.InputChannels = {0u};
+		const auto started = station->OnAction(start);
+		station->CommitChanges();
+		const auto retained = station->GetLoopTakeSnapshot();
+		ASSERT_EQ(1u, retained.size());
+		ASSERT_EQ(1u, retained.front()->GetLoops().size());
+		TriggerAction end;
+		end.ActionType = overdub ? TriggerAction::TRIGGER_OVERDUB_END : TriggerAction::TRIGGER_REC_END;
+		end.TargetId = started.TargetId;
+		end.SampleCount = 0u;
+		ASSERT_TRUE(station->OnAction(end).IsEaten);
+		EXPECT_TRUE(station->GetLoopTakeSnapshot().empty());
+		EXPECT_EQ(0u, station->NumTakes());
+		EXPECT_EQ(LoopTake::STATE_INACTIVE, retained.front()->TakeState());
+		EXPECT_EQ(1u, retained.front()->GetLoops().size());
+		EXPECT_EQ(engine::StationVisualState::STATIONSTATE_DEFAULT, station->GetVisualState());
+	}
+}
+
+TEST(StationFlipBuffer, ResetCancelsRetainedCaptureWithoutClearingItsBuffers)
+{
+	auto station = MakeStation();
+	TriggerAction start;
+	start.ActionType = TriggerAction::TRIGGER_REC_START;
+	start.InputChannels = {0u};
+	station->OnAction(start);
+	station->CommitChanges();
+	const auto retained = station->GetLoopTakeSnapshot();
+	ASSERT_EQ(1u, retained.size());
+	const auto& take = retained.front();
+	ASSERT_EQ(1u, take->GetLoops().size());
+	take->EndMultiWrite(32u, true, Audible::AUDIOSOURCE_ADC);
+	const auto length = take->GetLoops().front()->PhysicalLoopLength();
+	station->Reset();
+	EXPECT_TRUE(station->GetLoopTakeSnapshot().empty());
+	EXPECT_EQ(LoopTake::STATE_INACTIVE, take->TakeState());
+	EXPECT_FALSE(take->IsArmed());
+	ASSERT_EQ(1u, take->GetLoops().size());
+	take->EndMultiWrite(32u, true, Audible::AUDIOSOURCE_ADC);
+	EXPECT_EQ(length, take->GetLoops().front()->PhysicalLoopLength());
+	EXPECT_FALSE(take->GetGuiRack()->GetReceiver());
+	EXPECT_FALSE(take->GetGuiRack()->Parent());
+}

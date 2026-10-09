@@ -335,8 +335,8 @@ namespace engine
 				std::uint32_t& lastSample,
 				const midi::MidiEvent& event) noexcept;
 
-		// Enqueue NoteOffs for any held MIDI notes then call Ditch().
-		// Must be called from the action thread; NoteOffs use the synthetic queue.
+		// Cancel and remove without resetting resources borrowed by callback snapshots.
+		// Job/UI owners enqueue held NoteOffs; retirement releases resources off callback.
 		void _DitchLoopTake(std::shared_ptr<LoopTake>& take) noexcept;
 
 		// --- Parameter automation dispatch ---

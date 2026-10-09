@@ -488,6 +488,14 @@ void GuiElement::SetParent(std::shared_ptr<GuiElement> parent)
 	_parent = parent;
 }
 
+void GuiElement::DetachGuiOwnershipForRetirement() noexcept
+{
+	for (const auto& child : _children)
+		if (child) child->DetachGuiOwnershipForRetirement();
+	_receiver.reset();
+	_parent.reset();
+}
+
 std::shared_ptr<GuiElement> GuiElement::Parent() const
 {
 	return _parent;
