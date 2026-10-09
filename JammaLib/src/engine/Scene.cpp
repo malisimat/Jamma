@@ -2397,13 +2397,15 @@ void Scene::CommitChanges()
 		}
 
 		_OpenRemoteTempoPromptIfNeeded();
-	}
 
-	for (auto& job : syncJobs)
-	{
-		auto receiver = job.Receiver.lock();
-		if (receiver)
-			receiver->OnAction(job);
+		// Completion/update payloads share structural ownership with start/end/ditch.
+		// Keep validation and mutation under the same off-callback scene lock.
+		for (auto& job : syncJobs)
+		{
+			auto receiver = job.Receiver.lock();
+			if (receiver)
+				receiver->OnAction(job);
+		}
 	}
 
 	// Initialize VSTs on the UI thread after releasing _sceneMutex.

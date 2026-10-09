@@ -1697,7 +1697,7 @@ std::vector<std::shared_ptr<LoopTake>> Station::GetLoopTakeSnapshot() const
 
 unsigned int Station::NumTakes() const
 {
-	return _changesMade ?
+	return _HasUncommittedChanges() ?
 		(unsigned int)_backLoopTakes.size() :
 		(unsigned int)_loopTakes.size();
 }
@@ -1913,7 +1913,7 @@ void Station::SetupBuffers(unsigned int bufSize)
 	_lastBufSize = bufSize;
 	_blockSize = bufSize;
 
-	auto& buffers = (_flipAudioBuffer && _changesMade) ?
+	auto& buffers = (_flipAudioBuffer && _HasUncommittedChanges()) ?
 		_backAudioBuffers :
 		_audioBuffers;
 
@@ -2019,7 +2019,7 @@ void Station::SetNumAdcChannels(unsigned int chans)
 
 void Station::SetNumDacChannels(unsigned int chans)
 {
-	auto& mixers = _flipAudioBuffer && _changesMade ?
+	auto& mixers = _flipAudioBuffer && _HasUncommittedChanges() ?
 		_backAudioMixers :
 		_audioMixers;
 
@@ -2050,7 +2050,7 @@ void Station::SetNumDacChannels(unsigned int chans)
 
 unsigned int Station::NumBusChannels() const
 {
-	return (_changesMade && _flipAudioBuffer) ?
+	return (_HasUncommittedChanges() && _flipAudioBuffer) ?
 		(unsigned int)_backAudioBuffers.size() :
 		(unsigned int)_audioBuffers.size();
 }
@@ -2476,7 +2476,7 @@ std::shared_ptr<const Station::LoopTakeSnapshot> Station::_LoopTakeSnapshotState
 void Station::_PublishLoopTakeSnapshot()
 {
 	auto state = std::make_shared<LoopTakeSnapshot>();
-	const auto& takes = (_changesMade.load(std::memory_order_relaxed) && _flipTakeBuffer) ?
+	const auto& takes = (_HasUncommittedChanges() && _flipTakeBuffer) ?
 		_backLoopTakes :
 		_loopTakes;
 	state->reserve(takes.size());
@@ -2579,7 +2579,7 @@ std::optional<std::shared_ptr<LoopTake>> Station::_TryGetTake(std::string id)
 
 void Station::_CollapseOtherTakeRouters()
 {
-	auto& takes = (_changesMade && _flipTakeBuffer) ?
+	auto& takes = (_HasUncommittedChanges() && _flipTakeBuffer) ?
 		_backLoopTakes :
 		_loopTakes;
 
@@ -2589,7 +2589,7 @@ void Station::_CollapseOtherTakeRouters()
 
 void Station::_CollapseOtherTakeRoutersToChannels()
 {
-	auto& takes = (_changesMade && _flipTakeBuffer) ?
+	auto& takes = (_HasUncommittedChanges() && _flipTakeBuffer) ?
 		_backLoopTakes :
 		_loopTakes;
 

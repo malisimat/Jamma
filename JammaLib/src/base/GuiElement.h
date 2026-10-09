@@ -233,6 +233,13 @@ namespace base
 
 	protected:
 		std::atomic<bool> _changesMade;
+		// UI commit context preserves staged-buffer selection after consuming dirty.
+		std::atomic<bool> _committingChanges{ false };
+		bool _HasUncommittedChanges() const noexcept
+		{
+			return _changesMade.load(std::memory_order_acquire) ||
+				_committingChanges.load(std::memory_order_acquire);
+		}
 		bool _isVisible;
 		bool _isEnabled;
 		bool _isSelected;

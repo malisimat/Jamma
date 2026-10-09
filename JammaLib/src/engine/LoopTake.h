@@ -253,7 +253,13 @@ namespace engine
 			{ return _queuedTimingCorrectionCount.load(std::memory_order_relaxed); }
 		std::uint64_t ConsumedExternalPhaseCorrectionCount() const noexcept
 			{ return _consumedTimingCorrectionCount.load(std::memory_order_relaxed); }
+		enum class PresentationMode : std::uint8_t { Inactive, Record, Overdub, Punch, Tail };
+		struct Presentation { PresentationMode Mode; std::uint64_t Serial; };
+		Presentation GetPresentation() const noexcept;
+		void SetPresentation(PresentationMode mode, std::uint64_t serial) noexcept;
 		void EndRecording();
+		// Atomic logical cancellation; destructive Ditch requires stopped/retired readers.
+		void CancelCapture() noexcept;
 		void Ditch();
 		void Overdub(std::vector<unsigned int> channels,
 			std::string stationName,
@@ -457,8 +463,15 @@ namespace engine
 		static const utils::Size2d _ToggleGap;
 
 		bool _flipLoopBuffer;
-		bool _loopsNeedUpdating;
-		bool _endRecordingCompleted;
+		std::atomic<bool> _loopsNeedUpdating;
+		std::atomic<std::uint64_t> _captureGeneration{ 1u };
+		std::atomic<std::uint64_t> _completionPublishedGeneration{ 0u };
+		std::atomic<std::uint64_t> _pendingCompletionGeneration{ 0u };
+		std::atomic<std::uint64_t> _presentation{ 0u };
+		static_assert(std::atomic<std::uint64_t>::is_always_lock_free);
+		void _PublishRecordingCompletion(std::uint64_t generation) noexcept;
+		void _InvalidateRecordingCompletion() noexcept;
+		void _SetPresentationMode(PresentationMode mode) noexcept;
 		std::atomic<LoopTakeState> _state;
 		std::weak_ptr<LoopTake> _activeBounceSource;
 		std::shared_ptr<base::BounceWriter> _activeBounceWriter;
@@ -468,8 +481,8 @@ namespace engine
 		unsigned int _fadeSamps;
 		LoopTakeSource _sourceType;
 		std::atomic<unsigned long> _recordedSampCount;
-		unsigned int _endRecordSampCount;
-		unsigned int _endRecordSamps;
+		std::atomic<unsigned int> _endRecordSampCount;
+		std::atomic<unsigned int> _endRecordSamps;
 		// Cross-thread cursor: incremented on the audio thread and read by UI/control code.
 		std::atomic<unsigned long> _midiVisualPlayIndex;
 		std::atomic<unsigned long> _midiVisualLoopLength;

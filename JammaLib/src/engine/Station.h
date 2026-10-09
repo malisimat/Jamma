@@ -152,7 +152,7 @@ namespace engine
 		
 		const std::vector<std::shared_ptr<LoopTake>>& GetLoopTakes() const
 		{
-			return (_changesMade && _flipTakeBuffer) ? _backLoopTakes : _loopTakes;
+			return (_HasUncommittedChanges() && _flipTakeBuffer) ? _backLoopTakes : _loopTakes;
 		}
 		std::vector<std::shared_ptr<LoopTake>> GetLoopTakeSnapshot() const;
 		std::uint64_t LoopTakeRevision() const noexcept

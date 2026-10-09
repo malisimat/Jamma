@@ -175,7 +175,6 @@ LoopTake::LoopTake(LoopTakeParams params,
 	MultiAudioSink(),
 	_flipLoopBuffer(false),
 	_loopsNeedUpdating(false),
-	_endRecordingCompleted(false),
 	_state(STATE_INACTIVE),
 	_id(params.Id),
 	_sourceId(""),
@@ -426,7 +425,7 @@ void LoopTake::Draw3d(DrawContext& ctx,
 
 unsigned int LoopTake::NumInputChannels(Audible::AudioSourceType source) const
 {
-	return (_changesMade && _flipLoopBuffer) ?
+	return (_HasUncommittedChanges() && _flipLoopBuffer) ?
 		(unsigned int)_backLoops.size() :
 		(unsigned int)_loops.size();
 }
@@ -438,7 +437,7 @@ unsigned int LoopTake::NumOutputChannels(Audible::AudioSourceType source) const
 	case Audible::AUDIOSOURCE_ADC:
 	case Audible::AUDIOSOURCE_MONITOR:
 	case Audible::AUDIOSOURCE_BOUNCE:
-		return (_changesMade && _flipLoopBuffer) ?
+		return (_HasUncommittedChanges() && _flipLoopBuffer) ?
 			(unsigned int)_backLoops.size() :
 			(unsigned int)_loops.size();
 	case Audible::AUDIOSOURCE_LOOPS:
@@ -460,6 +459,8 @@ unsigned int LoopTake::NumBusChannels() const
 void LoopTake::Zero(unsigned int numSamps,
 	Audible::AudioSourceType source)
 {
+	if (_state.load(std::memory_order_acquire) == STATE_INACTIVE)
+		return;
 	auto state = _AudioStateSnapshot();
 	if (!state)
 		return;
@@ -486,6 +487,8 @@ void LoopTake::WriteBlock(const std::shared_ptr<MultiAudioSink> dest,
 	int indexOffset,
 	unsigned int numSamps)
 {
+	if (_state.load(std::memory_order_acquire) == STATE_INACTIVE)
+		return;
 	if (nullptr == dest)
 		return;
 	
@@ -588,6 +591,8 @@ void LoopTake::ProcessActiveBounce(int sourceOffset, unsigned int numSamps)
 
 void LoopTake::EndMultiPlay(unsigned int numSamps)
 {
+	if (_state.load(std::memory_order_acquire) == STATE_INACTIVE)
+		return;
 	auto state = _AudioStateSnapshot();
 	if (!state)
 		return;
@@ -863,6 +868,8 @@ void LoopTake::InvalidateTimingCorrections() noexcept
 bool LoopTake::IsArmed() const
 {
 	auto state = _state.load(std::memory_order_acquire);
+	if (STATE_INACTIVE == state)
+		return false;
 	return (STATE_RECORDING == state) ||
 		(STATE_PLAYINGRECORDING == state) ||
 		(STATE_OVERDUBBING == state) ||
@@ -875,6 +882,10 @@ void LoopTake::EndMultiWrite(unsigned int numSamps,
 	bool updateIndex,
 	Audible::AudioSourceType source)
 {
+	// Retired Station snapshots may still route here until the audio reader acknowledges.
+	const auto captureGeneration = _captureGeneration.load(std::memory_order_acquire);
+	if (_state.load(std::memory_order_acquire) == STATE_INACTIVE)
+		return;
 	auto audioState = _AudioStateSnapshot();
 	if (!audioState)
 		return;
@@ -891,7 +902,7 @@ void LoopTake::EndMultiWrite(unsigned int numSamps,
 	{
 		_endRecordSampCount += numSamps;
 		if ((_endRecordSampCount >= _endRecordSamps) && !_isPunchInActive.load(std::memory_order_acquire))
-			_endRecordingCompleted = true;
+			_PublishRecordingCompletion(captureGeneration);
 	}
 
 	if (isRecording)
@@ -1139,6 +1150,10 @@ ActionResult LoopTake::OnAction(JobAction action)
 	}
 	case JobAction::JOB_UPDATELOOPS:
 	{
+		if (action.CaptureGeneration != 0u &&
+			(action.CaptureGeneration != _captureGeneration.load(std::memory_order_acquire) ||
+			 _state.load(std::memory_order_acquire) == STATE_INACTIVE))
+			return {};
 		_UpdateLoops();
 
 		ActionResult res;
@@ -1176,6 +1191,11 @@ ActionResult LoopTake::OnAction(JobAction action)
 	break;
 	case JobAction::JOB_ENDRECORDING:
 	{
+		if (action.CaptureGeneration != _captureGeneration.load(std::memory_order_acquire))
+			return {};
+		const auto state = _state.load(std::memory_order_acquire);
+		if (state != STATE_PLAYINGRECORDING && state != STATE_OVERDUBBINGRECORDING)
+			return {};
 		EndRecording();
 		_UpdateLoops();
 		_UpdateMidiModels(true);
@@ -1412,7 +1432,7 @@ void LoopTake::SetupBuffers(unsigned int bufSize)
 	for (auto& loop : _backLoops)
 		loop->SetBlockSize(bufSize);
 
-	auto& buffers = (_flipLoopBuffer && _changesMade) ?
+	auto& buffers = (_flipLoopBuffer && _HasUncommittedChanges()) ?
 		_backAudioBuffers :
 		_audioBuffers;
 
@@ -1460,8 +1480,8 @@ void LoopTake::Record(std::vector<unsigned int> channels,
 	_firstRecordBlockSceneSamps.store(0u, std::memory_order_relaxed);
 	_midiTransportStartFromAudio.store(false, std::memory_order_release);
 	_recordedSampCount = 0;
-	_state.store(STATE_RECORDING, std::memory_order_release);
 
+	_InvalidateRecordingCompletion();
 	_endRecordSampCount = 0;
 	_endRecordSamps = 0;
 	_midiVisualPlayIndex.store(0ul, std::memory_order_relaxed);
@@ -1536,6 +1556,8 @@ void LoopTake::Record(std::vector<unsigned int> channels,
 	//_flipLoopBuffer = true;
 	_loopsNeedUpdating = true;
 	_changesMade = true;
+	_SetPresentationMode(PresentationMode::Record);
+	_state.store(STATE_RECORDING, std::memory_order_release);
 }
 
 bool LoopTake::RecordMidiEvent(const midi::MidiEvent& ev, std::uint32_t globalSampleNow) noexcept
@@ -1690,7 +1712,8 @@ unsigned int LoopTake::ReadMidiBlock(std::uint32_t globalSample,
 {
 	auto snapshot = _MidiLoopSnapshotState();
 	const auto midiLoopCount = snapshot ? static_cast<unsigned int>(snapshot->size()) : 0u;
-	if (IsMuted())
+	const bool cancelled = _state.load(std::memory_order_acquire) == STATE_INACTIVE;
+	if (IsMuted() && !cancelled)
 		return midiLoopCount;
 
 	const auto midiBlockStart = static_cast<std::uint32_t>(
@@ -1710,7 +1733,10 @@ unsigned int LoopTake::ReadMidiBlock(std::uint32_t globalSample,
 			midiBlockStart,
 			globalSample,
 			masterVelocityScale);
-		midiLoop->ReadBlock(midiBlockStart, numSamples, indexedSink);
+		if (cancelled)
+			midiLoop->FlushPlaybackHeldNotes(midiBlockStart, indexedSink);
+		else
+			midiLoop->ReadBlock(midiBlockStart, numSamples, indexedSink);
 	}
 
 	return midiLoopCount;
@@ -1870,6 +1896,7 @@ void LoopTake::Play(unsigned long index,
 	auto recordState = isOverdubbing ? STATE_OVERDUBBINGRECORDING : STATE_PLAYINGRECORDING;
 	auto playState = continueCapture ? recordState : STATE_PLAYING;
 	_state.store(loopLength > 0 ? playState : STATE_INACTIVE, std::memory_order_release);
+	_SetPresentationMode(loopLength > 0 && continueCapture ? PresentationMode::Tail : PresentationMode::Inactive);
 }
 
 bool LoopTake::Select()
@@ -1988,6 +2015,7 @@ void LoopTake::EndRecording()
 		return;
 
 	_state.store(STATE_PLAYING, std::memory_order_release);
+	_SetPresentationMode(PresentationMode::Inactive);
 
 	for (auto& loop : _loops)
 	{
@@ -1995,11 +2023,27 @@ void LoopTake::EndRecording()
 	}
 }
 
+void LoopTake::CancelCapture() noexcept
+{
+	_state.store(STATE_INACTIVE, std::memory_order_release);
+	_isPunchInActive.store(false, std::memory_order_release);
+	_isMidiPunchInActive.store(false, std::memory_order_release);
+	const auto midiSnapshot = _MidiLoopSnapshotState();
+	if (midiSnapshot)
+		for (const auto& weakLoop : *midiSnapshot)
+			if (const auto loop = weakLoop.lock()) loop->RequestHeldFlush();
+	_SetPresentationMode(PresentationMode::Inactive);
+	_InvalidateRecordingCompletion();
+	_loopsNeedUpdating.store(false, std::memory_order_release);
+}
+
 void LoopTake::Ditch()
 {
+	CancelCapture();
 	std::scoped_lock midiLock(_midiCaptureMutex);
 
 	_recordedSampCount = 0;
+	_InvalidateRecordingCompletion();
 	_endRecordSampCount = 0;
 	_endRecordSamps = 0;
 	_midiVisualPlayIndex.store(0ul, std::memory_order_relaxed);
@@ -2050,8 +2094,8 @@ void LoopTake::Overdub(std::vector<unsigned int> channels,
 	_firstRecordBlockSceneSamps.store(0u, std::memory_order_relaxed);
 	_midiTransportStartFromAudio.store(false, std::memory_order_release);
 	_recordedSampCount = 0;
-	_state.store(STATE_OVERDUBBING, std::memory_order_release);
 
+	_InvalidateRecordingCompletion();
 	_endRecordSampCount = 0;
 	_endRecordSamps = 0;
 	_midiVisualPlayIndex.store(0ul, std::memory_order_relaxed);
@@ -2114,6 +2158,8 @@ void LoopTake::Overdub(std::vector<unsigned int> channels,
 
 	_loopsNeedUpdating = true;
 	_changesMade = true;
+	_SetPresentationMode(PresentationMode::Overdub);
+	_state.store(STATE_OVERDUBBING, std::memory_order_release);
 }
 
 void LoopTake::PunchIn(bool applyAudio, bool applyMidi)
@@ -2140,7 +2186,14 @@ void LoopTake::PunchIn(bool applyAudio, bool applyMidi)
 
 	_isPunchInActive.store(true, std::memory_order_release);
 	if (STATE_OVERDUBBING == state)
-		_state.store(STATE_PUNCHEDIN, std::memory_order_release);
+	{
+		auto expected = STATE_OVERDUBBING;
+		if (!_state.compare_exchange_strong(expected, STATE_PUNCHEDIN, std::memory_order_acq_rel))
+		{
+			_isPunchInActive.store(false, std::memory_order_release);
+			return;
+		}
+	}
 
 	for (auto& loop : _loops)
 	{
@@ -2152,6 +2205,7 @@ void LoopTake::PunchOut(bool applyAudio, bool applyMidi)
 {
 	std::scoped_lock midiLock(_midiCaptureMutex);
 
+	const auto captureGeneration = _captureGeneration.load(std::memory_order_acquire);
 	auto state = _state.load(std::memory_order_relaxed);
 	const auto hasAudioPunch = _isPunchInActive.load(std::memory_order_relaxed) || (STATE_PUNCHEDIN == state);
 	const auto hasMidiPunch = _isMidiPunchInActive.load(std::memory_order_relaxed);
@@ -2173,7 +2227,10 @@ void LoopTake::PunchOut(bool applyAudio, bool applyMidi)
 
 	_isPunchInActive.store(false, std::memory_order_release);
 	if (STATE_PUNCHEDIN == state)
-		_state.store(STATE_OVERDUBBING, std::memory_order_release);
+	{
+		auto expected = STATE_PUNCHEDIN;
+		_state.compare_exchange_strong(expected, STATE_OVERDUBBING, std::memory_order_acq_rel);
+	}
 
 	for (auto& loop : _loops)
 	{
@@ -2185,7 +2242,7 @@ void LoopTake::PunchOut(bool applyAudio, bool applyMidi)
 		(STATE_OVERDUBBINGRECORDING == nextState)) &&
 		(_endRecordSampCount >= _endRecordSamps);
 	if (canFinishRecording)
-		_endRecordingCompleted = true;
+		_PublishRecordingCompletion(captureGeneration);
 }
 
 void LoopTake::TriggerPunchInAudio() noexcept
@@ -2197,7 +2254,14 @@ void LoopTake::TriggerPunchInAudio() noexcept
 		return;
 	_isPunchInActive.store(true, std::memory_order_release);
 	if (STATE_OVERDUBBING == state)
-		_state.store(STATE_PUNCHEDIN, std::memory_order_release);
+	{
+		auto expected = STATE_OVERDUBBING;
+		if (!_state.compare_exchange_strong(expected, STATE_PUNCHEDIN, std::memory_order_acq_rel))
+		{
+			_isPunchInActive.store(false, std::memory_order_release);
+			return;
+		}
+	}
 	const auto audioState = _AudioStateSnapshot();
 	if (audioState)
 		for (const auto& weakLoop : audioState->Loops)
@@ -2207,11 +2271,16 @@ void LoopTake::TriggerPunchInAudio() noexcept
 void LoopTake::TriggerPunchOutAudio() noexcept
 {
 	const auto state = _state.load(std::memory_order_relaxed);
+	if (STATE_INACTIVE == state)
+		return;
 	if (!_isPunchInActive.load(std::memory_order_relaxed) && STATE_PUNCHEDIN != state)
 		return;
 	_isPunchInActive.store(false, std::memory_order_release);
 	if (STATE_PUNCHEDIN == state)
-		_state.store(STATE_OVERDUBBING, std::memory_order_release);
+	{
+		auto expected = STATE_PUNCHEDIN;
+		_state.compare_exchange_strong(expected, STATE_OVERDUBBING, std::memory_order_acq_rel);
+	}
 	const auto audioState = _AudioStateSnapshot();
 	if (audioState)
 		for (const auto& weakLoop : audioState->Loops)
@@ -2346,23 +2415,24 @@ std::vector<JobAction> LoopTake::_CommitChanges()
 
 	std::vector<JobAction> jobs;
 
-	if (_loopsNeedUpdating)
+	if (_loopsNeedUpdating.exchange(false, std::memory_order_acq_rel))
 	{
-		_loopsNeedUpdating = false;
 
 		JobAction job;
 		job.JobActionType = JobAction::JOB_UPDATELOOPS;
+		job.CaptureGeneration = _captureGeneration.load(std::memory_order_acquire);
 		job.SourceId = Id();
 		job.Receiver = ActionReceiver::shared_from_this();
 		jobs.push_back(job);
 	}
 
-	if (_endRecordingCompleted)
+	const auto completionGeneration = _pendingCompletionGeneration.exchange(0u, std::memory_order_acq_rel);
+	if (completionGeneration != 0u)
 	{
-		_endRecordingCompleted = false;
 
 		JobAction job;
 		job.JobActionType = JobAction::JOB_ENDRECORDING;
+		job.CaptureGeneration = completionGeneration;
 		job.SourceId = Id();
 		job.Receiver = ActionReceiver::shared_from_this();
 		jobs.push_back(job);
@@ -2411,6 +2481,10 @@ std::vector<JobAction> LoopTake::_CommitChanges()
 const std::shared_ptr<AudioSink> LoopTake::_InputChannel(unsigned int channel,
 	Audible::AudioSourceType source)
 {
+	if ((source == Audible::AUDIOSOURCE_ADC || source == Audible::AUDIOSOURCE_MONITOR ||
+		source == Audible::AUDIOSOURCE_BOUNCE) &&
+		_state.load(std::memory_order_acquire) == STATE_INACTIVE)
+		return nullptr;
 	auto state = _AudioStateSnapshot();
 	if (!state)
 		return nullptr;
@@ -3750,4 +3824,40 @@ std::vector<io::JamFile::VstEntry> LoopTake::VstEntries() const
 	}
 
 	return entries;
+}
+
+LoopTake::Presentation LoopTake::GetPresentation() const noexcept
+{
+	const auto value = _presentation.load(std::memory_order_acquire);
+	return { static_cast<PresentationMode>(value & 7u), value >> 3u };
+}
+void LoopTake::SetPresentation(PresentationMode mode, std::uint64_t serial) noexcept
+{
+	_presentation.store((serial << 3u) | static_cast<std::uint64_t>(mode), std::memory_order_release);
+}
+void LoopTake::_SetPresentationMode(PresentationMode mode) noexcept
+{
+	// All presentation writers are job/UI owners serialized by Scene::_sceneMutex.
+	const auto value = _presentation.load(std::memory_order_acquire);
+	_presentation.store((value & ~std::uint64_t{7u}) | static_cast<std::uint64_t>(mode),
+		std::memory_order_release);
+}
+void LoopTake::_InvalidateRecordingCompletion() noexcept
+{
+	_captureGeneration.fetch_add(1u, std::memory_order_acq_rel);
+	_pendingCompletionGeneration.store(0u, std::memory_order_release);
+}
+void LoopTake::_PublishRecordingCompletion(std::uint64_t generation) noexcept
+{
+	if (generation != _captureGeneration.load(std::memory_order_acquire))
+		return;
+	const auto state = _state.load(std::memory_order_acquire);
+	if (state != STATE_PLAYINGRECORDING && state != STATE_OVERDUBBINGRECORDING)
+		return;
+	auto previous = _completionPublishedGeneration.load(std::memory_order_relaxed);
+	if (previous == generation || !_completionPublishedGeneration.compare_exchange_strong(
+		previous, generation, std::memory_order_acq_rel))
+		return;
+	_pendingCompletionGeneration.store(generation, std::memory_order_release);
+	_changesMade.store(true, std::memory_order_release);
 }

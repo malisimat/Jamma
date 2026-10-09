@@ -723,6 +723,12 @@ bool MidiLoop::BuildModelFromEvents(std::uint32_t displayLengthSamps, bool force
 	return true;
 }
 
+void MidiLoop::FlushPlaybackHeldNotes(std::uint32_t atGlobalSample, IMidiSink& sink) noexcept
+{
+	FlushHeldNotes(atGlobalSample, sink);
+	_heldFlushRequested.exchange(false, std::memory_order_seq_cst);
+}
+
 void MidiLoop::ReadBlock(std::uint32_t globalSample,
                          std::uint32_t numSamples,
                          IMidiSink& sink) noexcept

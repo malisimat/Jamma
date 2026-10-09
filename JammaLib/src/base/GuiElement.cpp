@@ -284,14 +284,14 @@ void GuiElement::FinalizeEdits()
 std::vector<JobAction> GuiElement::CommitChanges()
 {
 	std::vector<JobAction> jobList = {};
-	if (_changesMade)
+	if (_changesMade.exchange(false, std::memory_order_acq_rel))
 	{
+		_committingChanges.store(true, std::memory_order_release);
 		auto jobs = _CommitChanges();
+		_committingChanges.store(false, std::memory_order_release);
 		if (!jobs.empty())
 			jobList.insert(jobList.end(), jobs.begin(), jobs.end());
 	}
-
-	_changesMade = false;
 
 	for (auto& child : _children)
 	{

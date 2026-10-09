@@ -1,9 +1,11 @@
 
 #include "gtest/gtest.h"
+#include <thread>
 #include "base/AudioSink.h"
 #include "actions/TriggerAction.h"
 #include "engine/LoopTake.h"
 #include "engine/Station.h"
+#include "midi/MidiLoop.h"
 
 using actions::GuiAction;
 using actions::TriggerAction;
@@ -41,6 +43,10 @@ public:
 	std::size_t ChildCount() const
 	{
 		return _children.size();
+	}
+	std::shared_ptr<base::AudioSink> CaptureChannel(Audible::AudioSourceType source)
+	{
+		return _InputChannel(0u, source);
 	}
 
 	const std::vector<std::pair<unsigned int, unsigned int>>& Routes() const
@@ -580,4 +586,174 @@ TEST(StationFlipBuffer, DitchOneOfMultipleTakesReducesCount)
 
 	// Front buffer promoted with 1 take.
 	EXPECT_EQ(1u, station->NumTakes());
+}
+
+class CommitPublicationTestTake : public LoopTake
+{
+public:
+	CommitPublicationTestTake(LoopTakeParams params, audio::AudioMixerParams mixerParams)
+		: LoopTake(params, mixerParams) {}
+	void MarkDirty() { _changesMade.store(true, std::memory_order_release); }
+	unsigned Commits = 0u;
+	bool SawCommitContext = false;
+protected:
+	std::vector<actions::JobAction> _CommitChanges() override
+	{
+		++Commits;
+		SawCommitContext = _HasUncommittedChanges();
+		if (Commits == 1u)
+			{
+			// Producer completes during commit; there is no later audio tick.
+			std::thread producer([this] { MarkDirty(); });
+			producer.join();
+		}
+		return {};
+	}
+};
+
+TEST(LoopTakeCompletionHandoff, PublicationDuringCommitSurvivesWithoutAnotherAudioTick)
+{
+	LoopTakeParams params;
+	params.Id = "commit-publication";
+	params.Size = {100, 100};
+	MergeMixBehaviourParams merge;
+	auto take = std::make_shared<CommitPublicationTestTake>(params, LoopTake::GetMixerParams(params.Size, merge));
+	take->MarkDirty();
+	take->CommitChanges();
+	EXPECT_TRUE(take->SawCommitContext);
+	take->CommitChanges();
+	EXPECT_EQ(2u, take->Commits);
+	take->CommitChanges();
+	EXPECT_EQ(2u, take->Commits);
+}
+
+TEST(LoopTakeCompletionHandoff, TailPublishesOnceAndStaleJobCannotFinishReusedTake)
+{
+	auto take = MakeLoopTake("completion-generation");
+	take->Record({0u}, "station");
+	take->CommitChanges();
+	take->Play(0u, 100u, 1u);
+	take->EndMultiWrite(1u, true, Audible::AUDIOSOURCE_ADC);
+	const auto firstJobs = take->CommitChanges();
+	actions::JobAction completion;
+	unsigned completions = 0u;
+	for (const auto& job : firstJobs)
+		if (job.JobActionType == actions::JobAction::JOB_ENDRECORDING)
+		{
+			completion = job;
+			++completions;
+		}
+	ASSERT_EQ(1u, completions);
+	take->EndMultiWrite(1u, true, Audible::AUDIOSOURCE_ADC);
+	for (const auto& job : take->CommitChanges())
+		EXPECT_NE(actions::JobAction::JOB_ENDRECORDING, job.JobActionType);
+	// This test has stopped callback readers before destructive reuse.
+	take->Ditch();
+	EXPECT_EQ(LoopTake::PresentationMode::Inactive, take->GetPresentation().Mode);
+	take->Record({0u}, "station");
+	take->CommitChanges();
+	take->Play(0u, 100u, 10u);
+	take->OnAction(completion);
+	EXPECT_EQ(LoopTake::PresentationMode::Tail, take->GetPresentation().Mode);
+	EXPECT_TRUE(take->IsArmed());
+}
+
+TEST(LoopTakeCompletionHandoff, CancelledPunchCannotRemainArmedOrBeResurrected)
+{
+	auto take = MakeLoopTake("cancelled-punch");
+	take->Overdub({0u}, "station");
+	take->CommitChanges();
+	take->TriggerPunchInAudio();
+	ASSERT_TRUE(take->IsArmed());
+	take->CancelCapture();
+	EXPECT_FALSE(take->IsArmed());
+	EXPECT_EQ(LoopTake::PresentationMode::Inactive, take->GetPresentation().Mode);
+	take->TriggerPunchInAudio();
+	take->TriggerPunchOutAudio();
+	EXPECT_FALSE(take->IsArmed());
+}
+
+TEST(LoopTakeCompletionHandoff, CancelledTakeRejectsStaleSnapshotCaptureAndUpdateJobs)
+{
+	auto take = MakeTestLoopTake("cancelled-snapshot");
+	take->Record({0u}, "station");
+	const auto jobs = take->CommitChanges();
+	ASSERT_EQ(1u, take->GetLoops().size());
+	const auto loop = take->GetLoops().front();
+	ASSERT_TRUE(take->CaptureChannel(Audible::AUDIOSOURCE_ADC));
+	take->EndMultiWrite(32u, true, Audible::AUDIOSOURCE_ADC);
+	const auto length = loop->PhysicalLoopLength();
+	const auto recorded = take->NumRecordedSamps();
+	take->CancelCapture();
+	EXPECT_FALSE(take->CaptureChannel(Audible::AUDIOSOURCE_ADC));
+	EXPECT_FALSE(take->CaptureChannel(Audible::AUDIOSOURCE_MONITOR));
+	EXPECT_FALSE(take->CaptureChannel(Audible::AUDIOSOURCE_BOUNCE));
+	take->Zero(32u, Audible::AUDIOSOURCE_ADC);
+	take->EndMultiWrite(32u, true, Audible::AUDIOSOURCE_ADC);
+	EXPECT_EQ(length, loop->PhysicalLoopLength());
+	EXPECT_EQ(recorded, take->NumRecordedSamps());
+	for (const auto& job : jobs)
+		if (job.JobActionType == actions::JobAction::JOB_UPDATELOOPS)
+			EXPECT_FALSE(take->OnAction(job).IsEaten);
+}
+
+class CancelledTakeMidiSink final : public midi::IMidiOutputSink
+{
+public:
+	void OnEvent(unsigned int, const midi::MidiEvent& event) noexcept override
+	{
+		if (event.IsNoteOn()) ++NoteOns;
+		if (event.IsNoteOff()) ++NoteOffs;
+	}
+	unsigned int NoteOns = 0u;
+	unsigned int NoteOffs = 0u;
+};
+
+class CancelledTakeBounceWriter final : public base::BounceWriter
+{
+public:
+	void WriteBlock(const std::shared_ptr<base::MultiAudioSink>, const float*,
+		unsigned int, unsigned int) override { ++Writes; }
+	unsigned int Writes = 0u;
+};
+
+TEST(LoopTakeCompletionHandoff, CancelledTakeCannotReplayAudioFromRetainedSnapshot)
+{
+	auto take = MakeLoopTake("cancelled-audio-playback");
+	take->Record({0u}, "station");
+	take->CommitChanges();
+	take->EndMultiWrite(100u, true, Audible::AUDIOSOURCE_ADC);
+	take->Play(0u, 100u, 0u);
+	auto sink = std::make_shared<CaptureMultiSink>(1u);
+	auto writer = std::make_shared<CancelledTakeBounceWriter>();
+	take->WriteBlock(sink, writer, 0, 1u);
+	ASSERT_GT(writer->Writes, 0u);
+	writer->Writes = 0u;
+	take->CancelCapture();
+	take->WriteBlock(sink, writer, 0, 1u);
+	take->EndMultiPlay(1u);
+	take->WriteBlock(sink, writer, 0, 1u);
+	EXPECT_EQ(0u, writer->Writes);
+}
+
+TEST(LoopTakeCompletionHandoff, CancelledTakeFlushesHeldMidiWithoutReplayingOldSnapshot)
+{
+	auto take = MakeLoopTake("cancelled-midi-snapshot");
+	take->Record({}, "station", {0u}, {"Keys"});
+	ASSERT_TRUE(take->RecordMidiEvent(midi::MidiEvent::MakeNoteOn(0u, 0u, 60u, 100u), "Keys", 0u));
+	take->Play(0u, 128u, 0u);
+	CancelledTakeMidiSink sink;
+	take->ReadMidiBlock(0u, 32u, sink, 0u);
+	ASSERT_EQ(1u, sink.NoteOns);
+	ASSERT_EQ(0u, sink.NoteOffs);
+	take->CancelCapture();
+	EXPECT_FALSE(take->RecordMidiEvent(midi::MidiEvent::MakeNoteOn(32u, 0u, 62u, 100u), "Keys", 32u));
+	// A retained Station snapshot still calls this take; only its held note is released.
+	take->ReadMidiBlock(32u, 32u, sink, 0u);
+	EXPECT_EQ(1u, sink.NoteOns);
+	EXPECT_EQ(1u, sink.NoteOffs);
+	take->ReadMidiBlock(64u, 128u, sink, 0u);
+	take->ReadMidiBlock(192u, 128u, sink, 0u);
+	EXPECT_EQ(1u, sink.NoteOns);
+	EXPECT_EQ(1u, sink.NoteOffs);
 }

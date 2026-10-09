@@ -262,6 +262,8 @@ namespace midi
 		// Ditch handoff: job side requests callback flush before sampling the held
 		// mirror. Any in-flight callback that emits later sees the request at exit.
 		void RequestHeldFlush() noexcept { _heldFlushRequested.store(true, std::memory_order_seq_cst); }
+		// Callback owner only: cancellation flushes held notes without replaying content.
+		void FlushPlaybackHeldNotes(std::uint32_t atGlobalSample, IMidiSink& sink) noexcept;
 		bool TryGetEvent(std::size_t index, MidiEvent& ev) const noexcept;
 		bool SnapshotForEdit(EditState& state) const noexcept;
 		// Owner thread only, serialized by LoopTake::_midiCaptureMutex. A failed
