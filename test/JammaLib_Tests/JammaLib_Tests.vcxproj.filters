@@ -86,7 +86,7 @@
     <ClCompile Include="src\gui\GuiControls_Tests.cpp">
       <Filter>src\gui</Filter>
     </ClCompile>
-    <ClCompile Include="src\gui\GuiPhase3_Tests.cpp">
+    <ClCompile Include="src\gui\GuiComponents_Tests.cpp">
       <Filter>src\gui</Filter>
     </ClCompile>
     <ClCompile Include="src\gui\GuiRack_Tests.cpp">

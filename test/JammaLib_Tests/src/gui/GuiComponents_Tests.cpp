@@ -47,7 +47,7 @@ using actions::TouchAction;
 using actions::TouchMoveAction;
 using actions::GuiAction;
 
-class GuiPhase3RecordingGuiReceiver : public base::ActionReceiver
+class GuiRecordingActionReceiver : public base::ActionReceiver
 {
 public:
 	actions::ActionResult OnAction(actions::GuiAction action) override
@@ -260,7 +260,7 @@ TEST(GuiPopup, ConfirmationButtonsArePackedAtTheLowerRightAndDispatch) {
 	EXPECT_EQ(284, deleteButton->Position().X);
 	EXPECT_EQ(24, deleteButton->Position().Y);
 
-	auto receiver = std::make_shared<GuiPhase3RecordingGuiReceiver>();
+	auto receiver = std::make_shared<GuiRecordingActionReceiver>();
 	popup->SetButtonReceiver(receiver);
 	popup->OnAction(MakeTouch(TouchAction::TOUCH_DOWN, { 209, 25 }));
 	popup->OnAction(MakeTouch(TouchAction::TOUCH_UP, { 209, 25 }));
@@ -282,7 +282,7 @@ TEST(GuiPopup, FitsViewportAndKeepsContentAndActionsInsideAfterResize)
 	popup->SetTitle("Current server tempo");
 	popup->SetBodyLines({ "Tempo: 120 BPM", "Remote master interval", "Apply locally?" });
 	popup->ConfigureButtons({ { { "Cancel", 2u }, { "Follow server", 1u } } });
-	auto receiver = std::make_shared<GuiPhase3RecordingGuiReceiver>(); popup->SetButtonReceiver(receiver);
+	auto receiver = std::make_shared<GuiRecordingActionReceiver>(); popup->SetButtonReceiver(receiver);
 	for (const auto viewport : { utils::Size2d{ 320, 180 }, utils::Size2d{ 184, 161 },
 		utils::Size2d{ 10, 10 }, utils::Size2d{ 0, 0 }, utils::Size2d{ 800, 600 } }) {
 		popup->FitToViewport(viewport);
@@ -672,7 +672,7 @@ TEST(GuiTextBox, LateBoundReceiverGetsNotifications) {
 	tp.MinSize = { 80, 24 };
 	tp.Index = 17u;
 	auto tb = std::make_shared<GuiTextBox>(tp);
-	auto receiver = std::make_shared<GuiPhase3RecordingGuiReceiver>();
+	auto receiver = std::make_shared<GuiRecordingActionReceiver>();
 	tb->SetReceiver(receiver);
 
 	tb->SetText("23", true);
@@ -840,8 +840,8 @@ TEST(GuiNumericInput, CancelStopsDragAndHiddenInputCannotRestartIt) {
 }
 
 TEST(GuiTextBox, ReplacingReceiverSupersedesCachedReceiver) {
-	auto oldOwner = std::make_shared<GuiPhase3RecordingGuiReceiver>();
-	auto newOwner = std::make_shared<GuiPhase3RecordingGuiReceiver>();
+	auto oldOwner = std::make_shared<GuiRecordingActionReceiver>();
+	auto newOwner = std::make_shared<GuiRecordingActionReceiver>();
 	GuiTextBoxParams params;
 	params.Receiver = oldOwner;
 	auto input = std::make_shared<GuiTextBox>(params);
@@ -854,7 +854,7 @@ TEST(GuiTextBox, ReplacingReceiverSupersedesCachedReceiver) {
 }
 
 TEST(GuiMainPanel, RetainedPagesKeepCommandIdentityAfterTreeInitialization) {
-	auto owner = std::make_shared<GuiPhase3RecordingGuiReceiver>();
+	auto owner = std::make_shared<GuiRecordingActionReceiver>();
 	GuiNumericInputParams numericParams;
 	numericParams.Size = { 96, 44 };
 	auto numeric = std::make_shared<GuiNumericInput>(numericParams);
