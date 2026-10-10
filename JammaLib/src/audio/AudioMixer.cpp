@@ -51,46 +51,63 @@ ActionResult AudioMixer::OnAction(GuiAction action)
 
 bool AudioMixer::Mute()
 {
-	auto isNewState = Tweakable::Mute();
-
-	if (isNewState)
-		_fade->SetTarget(0.0);
-
-	return isNewState;
+	return Tweakable::Mute();
 }
 
 bool AudioMixer::UnMute()
 {
-	auto isNewState = Tweakable::UnMute();
+	return Tweakable::UnMute();
+}
 
-	if (isNewState)
-		_fade->SetTarget(_unmutedFadeTarget);
+bool AudioMixer::IsMuted() const
+{
+	return Tweakable::IsMuted() || IsCaptureSourceMuted();
+}
 
-	return isNewState;
+bool AudioMixer::AllowReplacementPlayback() noexcept
+{
+	if (!_captureSourceMuteControl)
+		return false;
+	const auto revision = _captureSourceMuteControl->ReplacementRevision();
+	const auto previous = _replacementAuditionRevision.exchange(revision, std::memory_order_acq_rel);
+	return previous != revision && _captureSourceMuteControl->IsReplacementMuted();
+}
+
+void AudioMixer::SetCaptureSourceMuteControl(
+	const std::shared_ptr<const CaptureSourceMuteControl>& control) noexcept
+{
+	_captureSourceMuteControl = control;
+}
+
+void AudioMixer::_ApplyFadeTargetAtAudioBoundary() noexcept
+{
+	const double target = IsMuted() ? 0.0 : _unmutedFadeTarget.load(std::memory_order_acquire);
+	if (target == _appliedFadeTarget)
+		return;
+	_appliedFadeTarget = target;
+	_fade->SetTarget(target);
 }
 
 double AudioMixer::Level() const
 {
-	return _fade->Current();
+	return _publishedFadeLevel.load(std::memory_order_acquire);
 }
 
 double AudioMixer::UnmutedLevel() const
 {
-	return _unmutedFadeTarget;
+	return _unmutedFadeTarget.load(std::memory_order_acquire);
 }
 
 void AudioMixer::SetUnmutedLevel(double level)
 {
-	_unmutedFadeTarget = level;
-	
-	if (!IsMuted())
-		_fade->SetTarget(_unmutedFadeTarget);
+	_unmutedFadeTarget.store(level, std::memory_order_release);
 }
 
 void AudioMixer::WriteBlock(const std::shared_ptr<MultiAudioSink>& dest,
 	const float* srcBuf,
 	unsigned int numSamps)
 {
+	_ApplyFadeTargetAtAudioBoundary();
 	if (!_behaviour)
 		return;
 
@@ -115,10 +132,12 @@ void AudioMixer::WriteBlock(const std::shared_ptr<MultiAudioSink>& dest,
 
 void AudioMixer::Offset(unsigned int numSamps)
 {
+	_ApplyFadeTargetAtAudioBoundary();
 	for (auto samp = 0u; samp < numSamps; samp++)
 	{
 		_fade->Next();
 	}
+	_publishedFadeLevel.store(_fade->Current(), std::memory_order_release);
 }
 
 void AudioMixer::SetChannels(std::vector<unsigned int> channels)

@@ -223,6 +223,7 @@ LoopTake::LoopTake(LoopTakeParams params,
 
 LoopTake::~LoopTake()
 {
+	_ReleaseReplacementSourceMute();
 	_DrainVstChain(_vstChain.load(std::memory_order_acquire));
 	_DrainVstChain(_backVstChain);
 }
@@ -1396,6 +1397,7 @@ std::shared_ptr<Loop> LoopTake::AddLoop(unsigned int chan, std::string stationNa
 
 void LoopTake::AddLoop(std::shared_ptr<Loop> loop)
 {
+	loop->SetCaptureSourceMuteControl(_captureSourceMuteControl);
 	_backLoops.push_back(loop);
 	_backAudioBuffers.push_back(std::make_shared<audio::AudioBuffer>(_lastBufSize));
 	
@@ -1716,8 +1718,7 @@ unsigned int LoopTake::ReadMidiBlock(std::uint32_t globalSample,
 	auto snapshot = _MidiLoopSnapshotState();
 	const auto midiLoopCount = snapshot ? static_cast<unsigned int>(snapshot->size()) : 0u;
 	const bool cancelled = _captureCancelled.load(std::memory_order_acquire);
-	if (IsMuted() && !cancelled)
-		return midiLoopCount;
+	const bool flushOnly = cancelled || IsMuted();
 
 	const auto midiBlockStart = static_cast<std::uint32_t>(
 		_midiVisualPlayIndex.load(std::memory_order_relaxed));
@@ -1736,7 +1737,7 @@ unsigned int LoopTake::ReadMidiBlock(std::uint32_t globalSample,
 			midiBlockStart,
 			globalSample,
 			masterVelocityScale);
-		if (cancelled)
+		if (flushOnly)
 			midiLoop->FlushPlaybackHeldNotes(midiBlockStart, indexedSink);
 		else
 			midiLoop->ReadBlock(midiBlockStart, numSamples, indexedSink);
@@ -1950,8 +1951,9 @@ bool LoopTake::Mute()
 bool LoopTake::UnMute()
 {
 	auto isNewState = Tweakable::UnMute();
+	const bool replacementChanged = _captureSourceMuteControl->AllowReplacementPlayback();
 
-	if (isNewState)
+	if (isNewState || replacementChanged)
 	{
 		for (auto& loop : _loops)
 		{
@@ -1959,7 +1961,7 @@ bool LoopTake::UnMute()
 		}
 	}
 
-	return isNewState;
+	return isNewState || replacementChanged;
 }
 
 void LoopTake::SetPickingFromState(EditMode mode, bool flipState)
@@ -1973,10 +1975,9 @@ void LoopTake::SetPickingFromState(EditMode mode, bool flipState)
 		break;
 	case EDIT_MUTE:
 	{
-		auto tweakState = GetTweakState();
+		const bool muted = IsMuted();
 		_isPicking3d = flipState ? 
-			!(TWEAKSTATE_MUTED & tweakState)
-			: (TWEAKSTATE_MUTED & tweakState);
+			!muted : muted;
 		break;
 	}
 	}
@@ -2026,10 +2027,31 @@ void LoopTake::EndRecording()
 	}
 }
 
+void LoopTake::AcquireReplacementSourceMute(const std::shared_ptr<LoopTake>& source) noexcept
+{
+	const auto control = source ? source->_captureSourceMuteControl : nullptr;
+	if (_replacementSourceMuteControl == control)
+		return;
+	_ReleaseReplacementSourceMute();
+	_replacementSourceMuteControl = control;
+	if (_replacementSourceMuteControl)
+		_replacementSourceMuteControl->AcquireReplacement();
+}
+
+void LoopTake::_ReleaseReplacementSourceMute() noexcept
+{
+	if (_replacementSourceMuteControl)
+	{
+		_replacementSourceMuteControl->ReleaseReplacement();
+		_replacementSourceMuteControl.reset();
+	}
+}
+
 void LoopTake::CancelCapture() noexcept
 {
 	_captureCancelled.store(true, std::memory_order_release);
 	_state.store(STATE_INACTIVE, std::memory_order_release);
+	_ReleaseReplacementSourceMute();
 	_isPunchInActive.store(false, std::memory_order_release);
 	_isMidiPunchInActive.store(false, std::memory_order_release);
 	const auto midiSnapshot = _MidiLoopSnapshotState();

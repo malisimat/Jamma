@@ -2487,7 +2487,7 @@ void Scene::ApplyDeferredHoverUpdates()
 			{
 				isSelected = hovering->IsSelected();
 				if (auto tweakable = std::dynamic_pointer_cast<Tweakable>(hovering))
-					tweakState = tweakable->GetTweakState();
+					tweakState = tweakable->IsMuted() ? Tweakable::TWEAKSTATE_MUTED : Tweakable::TWEAKSTATE_NONE;
 			}
 
 			_selector->UpdateCurrentHover(stationPath,
@@ -2714,10 +2714,10 @@ base::Tweakable::TweakState Scene::_SelectionTweakStateLocked(const std::shared_
 	if (auto station = std::dynamic_pointer_cast<Station>(target))
 		return station->AllTakesMuted() ? Tweakable::TWEAKSTATE_MUTED : Tweakable::TWEAKSTATE_NONE;
 	if (auto tweakable = std::dynamic_pointer_cast<Tweakable>(target))
-		return tweakable->GetTweakState();
+		return tweakable->IsMuted() ? Tweakable::TWEAKSTATE_MUTED : Tweakable::TWEAKSTATE_NONE;
 	if (target)
 		if (auto take = std::dynamic_pointer_cast<LoopTake>(target->Parent()))
-			return take->GetTweakState();
+			return take->IsMuted() ? Tweakable::TWEAKSTATE_MUTED : Tweakable::TWEAKSTATE_NONE;
 	return Tweakable::TWEAKSTATE_NONE;
 }
 

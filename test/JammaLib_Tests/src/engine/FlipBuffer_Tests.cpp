@@ -801,6 +801,82 @@ TEST(LoopTakeCompletionHandoff, RestoredContentsPlayBeforeTakeCaptureLifecycle)
 	EXPECT_EQ(1u, midiSink.NoteOffs);
 }
 
+TEST(CaptureSourceMute, SharedClaimsFlushMidiOnceAndPreserveReplacementOwnership)
+{
+	auto source = MakeLoopTake("claimed-midi");
+	source->Record({}, "station", {0u}, {"Keys"});
+	ASSERT_TRUE(source->RecordMidiEvent(midi::MidiEvent::MakeNoteOn(0u, 0u, 60u, 100u), "Keys", 0u));
+	source->Play(0u, 128u, 0u);
+	CancelledTakeMidiSink sink;
+	source->ReadMidiBlock(0u, 32u, sink);
+	ASSERT_EQ(1u, sink.NoteOns);
+	auto first = MakeLoopTake("replacement-one");
+	auto second = MakeLoopTake("replacement-two");
+	first->AcquireReplacementSourceMute(source);
+	first->AcquireReplacementSourceMute(source); // One owned claim, even repeated acknowledgement.
+	second->AcquireReplacementSourceMute(source);
+	source->ReadMidiBlock(32u, 32u, sink);
+	EXPECT_EQ(1u, sink.NoteOffs);
+	first->CancelCapture();
+	EXPECT_TRUE(source->IsMuted());
+	source->ReadMidiBlock(64u, 128u, sink);
+	EXPECT_EQ(1u, sink.NoteOns);
+	EXPECT_EQ(1u, sink.NoteOffs);
+	second.reset();
+	EXPECT_FALSE(source->IsMuted());
+	first->AcquireReplacementSourceMute(source);
+	source->AcquireTriggerSourceMuteAudio();
+	EXPECT_TRUE(source->UnMute());
+	EXPECT_TRUE(source->IsMuted()); // Explicit audition never overrides a live punch owner.
+	source->ReleaseTriggerSourceMuteAudio();
+	EXPECT_FALSE(source->IsMuted());
+	first->AcquireReplacementSourceMute(source); // Replayed acknowledgement cannot re-mute audition.
+	EXPECT_FALSE(source->IsMuted());
+	auto third = MakeLoopTake("new-replacement");
+	third->AcquireReplacementSourceMute(source);
+	EXPECT_TRUE(source->IsMuted());
+	source->SetPickingFromState(base::GuiElement::EDIT_MUTE, true);
+	EXPECT_FALSE(source->IsPicking3d());
+	source->SetStateFromPicking(base::GuiElement::EDIT_MUTE, false);
+	EXPECT_FALSE(source->IsMuted());
+	third->CancelCapture();
+	first->CancelCapture();
+	EXPECT_FALSE(source->IsMuted());
+	source->Mute();
+	source->AcquireTriggerSourceMuteAudio();
+	source->ReleaseTriggerSourceMuteAudio();
+	EXPECT_TRUE(source->IsMuted());
+}
+
+TEST(CaptureSourceMute, IndividualLoopAuditionDoesNotOverrideOtherChannelsOrPunch)
+{
+	auto source = MakeLoopTake("channel-audition-source");
+	source->Record({0u, 1u}, "station");
+	source->CommitChanges();
+	ASSERT_EQ(2u, source->GetLoops().size());
+	auto first = MakeLoopTake("channel-replacement-one");
+	first->AcquireReplacementSourceMute(source);
+	EXPECT_TRUE(source->GetLoops()[0]->IsMuted());
+	EXPECT_TRUE(source->GetLoops()[1]->IsMuted());
+	EXPECT_TRUE(source->GetLoops()[0]->UnMute());
+	EXPECT_FALSE(source->GetLoops()[0]->IsMuted());
+	EXPECT_TRUE(source->GetLoops()[1]->IsMuted());
+	EXPECT_TRUE(source->IsMuted()); // MIDI and the other source channel remain muted.
+	source->AcquireTriggerSourceMuteAudio();
+	EXPECT_TRUE(source->GetLoops()[0]->IsMuted());
+	source->GetLoops()[0]->UnMute();
+	EXPECT_TRUE(source->GetLoops()[0]->IsMuted());
+	source->ReleaseTriggerSourceMuteAudio();
+	EXPECT_FALSE(source->GetLoops()[0]->IsMuted());
+	auto second = MakeLoopTake("channel-replacement-two");
+	second->AcquireReplacementSourceMute(source);
+	EXPECT_TRUE(source->GetLoops()[0]->IsMuted());
+	first->CancelCapture();
+	EXPECT_TRUE(source->GetLoops()[0]->IsMuted());
+	second->CancelCapture();
+	EXPECT_FALSE(source->GetLoops()[0]->IsMuted());
+}
+
 TEST(StationFlipBuffer, DitchKeepsBorrowedBuffersUntilSnapshotRetirement)
 {
 	auto station = MakeStation();

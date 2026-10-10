@@ -214,6 +214,9 @@ namespace engine
 			bool updateIndex) override;
 		virtual bool Mute() override;
 		virtual bool UnMute() override;
+		bool IsMuted() const override;
+		void SetCaptureSourceMuteControl(
+			const std::shared_ptr<const audio::CaptureSourceMuteControl>& control) noexcept;
 		virtual void Reset() override;
 		virtual void Update();
 		void UpdateCapacity();

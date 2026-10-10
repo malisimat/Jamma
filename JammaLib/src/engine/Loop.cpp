@@ -819,14 +819,26 @@ bool Loop::Mute()
 	return isNewState;
 }
 
+bool Loop::IsMuted() const
+{
+	return Tweakable::IsMuted() || _mixer->IsCaptureSourceMuted();
+}
+
+void Loop::SetCaptureSourceMuteControl(
+	const std::shared_ptr<const audio::CaptureSourceMuteControl>& control) noexcept
+{
+	_mixer->SetCaptureSourceMuteControl(control);
+}
+
 bool Loop::UnMute()
 {
 	auto isNewState = Tweakable::UnMute();
+	const bool replacementChanged = _mixer && _mixer->AllowReplacementPlayback();
 
 	if (isNewState && _mixer)
 		_mixer->UnMute();
 
-	return isNewState;
+	return isNewState || replacementChanged;
 }
 
 void Loop::Overdub()

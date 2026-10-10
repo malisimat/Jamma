@@ -1430,8 +1430,8 @@ ActionResult Station::OnAction(TriggerAction action)
 			completedErrorSamps = static_cast<long long>(requestedLength) - static_cast<long long>(loopLength);
 
 			auto sourceLoopTake = _TryGetTake(action.SourceId);
-			if (sourceLoopTake.has_value())
-				sourceLoopTake.value()->Mute();
+			if (sourceLoopTake.has_value() && loopTake.has_value())
+				loopTake.value()->AcquireReplacementSourceMute(sourceLoopTake.value());
 
 			res.IsEaten = true;
 			res.ResultType = actions::ActionResultType::ACTIONRESULT_ACTIVATE;

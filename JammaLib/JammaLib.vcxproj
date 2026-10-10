@@ -269,6 +269,7 @@
     <ClInclude Include="src\base\MultiAudioSource.h" />
     <ClInclude Include="src\audio\AudioBuffer.h" />
     <ClInclude Include="src\audio\AudioMixer.h" />
+    <ClInclude Include="src\audio\CaptureSourceMuteControl.h" />
     <ClInclude Include="lib\rtaudio\include\asio.h" />
     <ClInclude Include="lib\rtaudio\include\asiodrivers.h" />
     <ClInclude Include="lib\rtaudio\include\asiodrvr.h" />

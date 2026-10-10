@@ -260,6 +260,9 @@
     <ClInclude Include="src\gui\GuiLabel.h">
       <Filter>src\gui</Filter>
     </ClInclude>
+    <ClInclude Include="src\audio\CaptureSourceMuteControl.h">
+      <Filter>src\audio</Filter>
+    </ClInclude>
     <ClInclude Include="src\audio\AudioMixer.h">
       <Filter>src\audio</Filter>
     </ClInclude>

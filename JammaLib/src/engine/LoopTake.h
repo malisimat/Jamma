@@ -153,6 +153,21 @@ namespace engine
 		bool RestoreAudioRoutes(const std::vector<std::vector<unsigned long>>& routes);
 		LoopTakeState TakeState() const;
 		bool HasTriggerAudioCapture() const noexcept override { return !_backLoops.empty(); }
+		bool HasPendingTriggerCapture() const noexcept override
+		{
+			const auto state = _state.load(std::memory_order_acquire);
+			return state != STATE_INACTIVE && state != STATE_PLAYING;
+		}
+		bool IsTriggerCaptureInactive() const noexcept override
+			{ return _captureCancelled.load(std::memory_order_acquire); }
+		void AcquireTriggerSourceMuteAudio() noexcept override
+			{ _captureSourceMuteControl->Acquire(); }
+		void ReleaseTriggerSourceMuteAudio() noexcept override
+			{ _captureSourceMuteControl->Release(); }
+		bool IsMuted() const override
+			{ return Tweakable::IsMuted() || _captureSourceMuteControl->IsMuted(); }
+		// Structural owner only; retains a control handle, never the source take.
+		void AcquireReplacementSourceMute(const std::shared_ptr<LoopTake>& source) noexcept;
 		unsigned long NumRecordedSamps() const;
 		unsigned long VisualLoopLengthSamps() const noexcept;
 		unsigned long MidiPlayIndex() const noexcept
@@ -509,6 +524,10 @@ namespace engine
 		std::atomic<bool> _isMidiPunchInActive;
 		std::shared_ptr<gui::GuiRack> _guiRack;
 		std::shared_ptr<audio::AudioMixer> _masterMixer;
+		std::shared_ptr<audio::CaptureSourceMuteControl> _captureSourceMuteControl =
+			std::make_shared<audio::CaptureSourceMuteControl>();
+		std::shared_ptr<audio::CaptureSourceMuteControl> _replacementSourceMuteControl;
+		void _ReleaseReplacementSourceMute() noexcept;
 		float _parentVisualScale = 1.0f;
 		std::vector<std::shared_ptr<Loop>> _loops;
 		std::vector<std::shared_ptr<Loop>> _backLoops;
