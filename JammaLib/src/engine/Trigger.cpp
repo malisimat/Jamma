@@ -1306,6 +1306,17 @@ void Trigger::ProcessStructuralActionsOnJob(
 		}
 
 		ActionResult actionResult = ActionResult::NoAction();
+		// An unbound restored entry with no pinned owners is terminal. Settle it
+		// through the result handshake; audio must retire its borrower before reclaim.
+		if (!receiver && take && command.ActionType == TriggerAction::TRIGGER_DITCH &&
+			command.IsSourceLossCancellation &&
+			std::any_of(_captureSessions.begin(), _captureSessions.end(),
+				[&command](const auto& owned) { return owned && owned->Token == command.HistoryToken &&
+					!owned->Receiver && !owned->TargetTake && !owned->SourceTake; }))
+		{
+			actionResult.IsEaten = true;
+			actionResult.DitchResult = actions::DitchDisposition::AlreadyAbsent;
+		}
 		if (receiver && (!isStart || (_jobTakeHistorySize < _HistoryCapacity &&
 			_captureSessionCount < _HistoryCapacity)))
 		{
@@ -1385,24 +1396,24 @@ void Trigger::ProcessStructuralActionsOnJob(
 				if (params) unmute.SetAudioParams(*params);
 				receiver->OnAction(unmute);
 			}
-			const bool discardedEnd = command.Completion == STRUCTURAL_END_RECORDING ||
-				command.Completion == STRUCTURAL_END_OVERDUB;
-			if ((command.ActionType == TriggerAction::TRIGGER_DITCH ||
-				command.ActionType == TriggerAction::TRIGGER_OVERDUB_DITCH || discardedEnd) &&
-				(actionResult.DitchResult == actions::DitchDisposition::Removed ||
-				 actionResult.DitchResult == actions::DitchDisposition::AlreadyAbsent) &&
-				jobHistoryIndex)
+		}
+		const bool discardedEnd = command.Completion == STRUCTURAL_END_RECORDING ||
+			command.Completion == STRUCTURAL_END_OVERDUB;
+		if ((command.ActionType == TriggerAction::TRIGGER_DITCH ||
+			command.ActionType == TriggerAction::TRIGGER_OVERDUB_DITCH || discardedEnd) &&
+			(actionResult.DitchResult == actions::DitchDisposition::Removed ||
+			 actionResult.DitchResult == actions::DitchDisposition::AlreadyAbsent) &&
+			jobHistoryIndex)
+		{
+			for (auto i = *jobHistoryIndex + 1u; i < _jobTakeHistorySize; ++i)
 			{
-				for (auto i = *jobHistoryIndex + 1u; i < _jobTakeHistorySize; ++i)
-				{
-					_jobTakeHistory[i - 1u] = std::move(_jobTakeHistory[i]);
-					_jobTakeTokens[i - 1u] = _jobTakeTokens[i];
-				}
-				--_jobTakeHistorySize;
-				_jobTakeHistory[_jobTakeHistorySize] = TriggerTake{};
-				_jobTakeTokens[_jobTakeHistorySize] = 0u;
-				_PublishJobHistory();
+				_jobTakeHistory[i - 1u] = std::move(_jobTakeHistory[i]);
+				_jobTakeTokens[i - 1u] = _jobTakeTokens[i];
 			}
+			--_jobTakeHistorySize;
+			_jobTakeHistory[_jobTakeHistorySize] = TriggerTake{};
+			_jobTakeTokens[_jobTakeHistorySize] = 0u;
+			_PublishJobHistory();
 		}
 
 		if (command.Completion != STRUCTURAL_NONE)

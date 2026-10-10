@@ -18,6 +18,11 @@ namespace engine
     class TriggerSourceLossTestAccess
     {
     public:
+        static std::size_t CaptureSessionCount(const Trigger& trigger)
+        {
+            return trigger._captureSessionCount;
+        }
+
         static unsigned int SaturateStructuralQueue(Trigger& trigger)
         {
             Trigger::StructuralCommand command;
@@ -750,6 +755,22 @@ TEST(Trigger, DitchPopsOnlyRemovedOrAlreadyAbsentHistory)
 		else
 			EXPECT_TRUE(trigger->GetTakes().empty());
 	}
+}
+
+TEST(Trigger, OrphanedRestoredHistorySettlesAndReclaimsSession)
+{
+    auto trigger = MakeSharedDefaultTrigger();
+    trigger->RestoreTakes({ { engine::TriggerTake::SOURCE_ADC, "missing-source", "missing-target" } },
+        { { nullptr, nullptr } });
+    ASSERT_TRUE(trigger->HasPendingSourceLoss());
+    ASSERT_EQ(1u, engine::TriggerSourceLossTestAccess::CaptureSessionCount(*trigger));
+    for (unsigned int step = 0u; step < 4u; ++step) TickAndComplete(trigger);
+    EXPECT_FALSE(trigger->HasPendingSourceLoss());
+    EXPECT_TRUE(trigger->GetTakes().empty());
+    EXPECT_EQ(0u, engine::TriggerSourceLossTestAccess::CaptureSessionCount(*trigger));
+    TickAndComplete(trigger);
+    EXPECT_FALSE(trigger->HasPendingSourceLoss());
+    EXPECT_TRUE(trigger->GetTakes().empty());
 }
 
 TEST(Trigger, RestoredHistoryDitchesItsMostRecentTake) {
