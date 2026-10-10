@@ -13,6 +13,23 @@
 #include "io/Json.h"
 #include "io/RigFile.h"
 
+namespace engine
+{
+    class TriggerSourceLossTestAccess
+    {
+    public:
+        static unsigned int SaturateStructuralQueue(Trigger& trigger)
+        {
+            Trigger::StructuralCommand command;
+            command.ActionType = actions::TriggerAction::TRIGGER_PUNCHIN_END;
+            command.Sequence = 10000u;
+            unsigned int count = 0u;
+            while (trigger._structuralCommands.Push(command)) ++count;
+            return count;
+        }
+    };
+}
+
 using base::ActionSender;
 using base::ActionReceiver;
 using engine::Loop;
@@ -3114,4 +3131,334 @@ TEST(Trigger, ZeroLengthEndsRetireTheirSessionsWithoutConsumingHistoryCapacity)
         EXPECT_EQ(2u, trigger->GetTakes().size());
         EXPECT_EQ(engine::TRIGSTATE_DEFAULT, trigger->GetState());
     }
+}
+
+TEST(Trigger, ConfirmedActivationLossCancelsPendingStartBeforeAndAfterJobAcceptance)
+{
+    for (const bool acceptedByJob : { false, true })
+    {
+        SCOPED_TRACE(acceptedByJob);
+        auto station = MakeTestStation("pending-source-loss");
+        TriggerParams params;
+        params.InputChannels = { 0u };
+        auto trigger = std::make_shared<Trigger>(params);
+        trigger->SetReceiver(station);
+        io::UserConfig cfg;
+        base::Action action;
+        trigger->QueueExternalControlAction(true, true, action);
+        trigger->OnTick(GetTime(), 0u, cfg, std::nullopt);
+        if (acceptedByJob) trigger->ProcessStructuralActionsOnJob(cfg, std::nullopt);
+        trigger->ConfirmMidiAvailabilityOnJob({}, { "controller" }, true);
+        // First audio observation can precede the outstanding start result.
+        trigger->OnTick(GetTime(), 0u, cfg, std::nullopt);
+        for (unsigned int step = 0u; step < 4u; ++step)
+            TickAndComplete(trigger, 0u, cfg);
+        EXPECT_EQ(engine::TRIGSTATE_DEFAULT, trigger->GetState());
+        EXPECT_TRUE(trigger->GetTakes().empty());
+        EXPECT_FALSE(trigger->HasPendingSourceLoss());
+        trigger->ConfirmMidiAvailabilityOnJob({ "controller" }, {});
+        trigger->QueueExternalControlAction(true, true, action);
+        TickAndComplete(trigger, 0u, cfg);
+        EXPECT_EQ(engine::TRIGSTATE_RECORDING, trigger->GetState());
+    }
+}
+
+TEST(Trigger, ConfirmedMidiSourceLossPreservesAnotherTriggersLiveCapture)
+{
+    auto lostStation = MakeTestStation("lost-source");
+    auto healthyStation = MakeTestStation("healthy-source");
+    TriggerParams lostParams;
+    lostParams.MidiInputDevices = { "lost" };
+    TriggerParams healthyParams;
+    healthyParams.MidiInputDevices = { "healthy" };
+    auto lost = std::make_shared<Trigger>(lostParams);
+    auto healthy = std::make_shared<Trigger>(healthyParams);
+    lost->SetReceiver(lostStation);
+    healthy->SetReceiver(healthyStation);
+    io::UserConfig cfg;
+    base::Action action;
+    for (auto trigger : { lost, healthy })
+    {
+        trigger->ConfirmMidiAvailabilityOnJob({ "lost", "healthy" }, {});
+        trigger->QueueExternalControlAction(true, true, action);
+        TickAndComplete(trigger, 0u, cfg);
+    }
+    lost->ConfirmMidiAvailabilityOnJob({ "healthy" }, { "lost" }, false, true);
+    healthy->ConfirmMidiAvailabilityOnJob({ "healthy" }, { "lost" });
+    for (unsigned int step = 0u; step < 4u; ++step)
+    {
+        TickAndComplete(lost, 0u, cfg);
+        TickAndComplete(healthy, 0u, cfg);
+    }
+    EXPECT_EQ(engine::TRIGSTATE_DEFAULT, lost->GetState());
+    EXPECT_TRUE(lost->GetTakes().empty());
+    EXPECT_EQ(engine::TRIGSTATE_RECORDING, healthy->GetState());
+    EXPECT_EQ(1u, healthy->GetTakes().size());
+}
+
+TEST(Trigger, LosingOlderTailPreservesNewIndependentPunchAndItsQueuedRelease)
+{
+    auto oldStation = MakeTestStation("old-tail-source");
+    auto healthyStation = MakeTestStation("new-punch-source");
+    TriggerParams params;
+    params.InputChannels = { 0u };
+    params.MidiInputDevices = { "old" };
+    auto trigger = std::make_shared<Trigger>(params);
+    trigger->SetReceiver(oldStation);
+    io::UserConfig cfg;
+    cfg.Trigger = { 0u, 0u };
+    base::Action action;
+    auto press = [&](bool activate, bool down) {
+        trigger->QueueExternalControlAction(activate, down, action);
+        TickAndComplete(trigger, 0u, cfg);
+        oldStation->CommitChanges();
+        healthyStation->CommitChanges();
+    };
+    trigger->ConfirmMidiAvailabilityOnJob({ "old", "healthy" }, {});
+    press(true, true); press(true, false);
+    trigger->OnTick(GetTime(), 64u, cfg, std::nullopt);
+    press(true, true); press(true, false);
+    ASSERT_EQ(1u, trigger->GetTakes().size());
+    ASSERT_EQ(1u, oldStation->GetLoopTakeSnapshot().front()->GetLoops().size());
+    ASSERT_TRUE(oldStation->GetLoopTakeSnapshot().front()->HasPendingTriggerCapture());
+    std::shared_ptr<base::ActionReceiver> receiver = healthyStation;
+    std::vector<unsigned int> channels{ 0u };
+    std::vector<std::string> names{ "healthy" };
+    auto mode = io::RigFile::Trigger::MidiInputMode::Selected;
+    std::shared_ptr<audio::AudioMixer> mixer;
+    std::shared_ptr<base::BounceWriter> writer;
+    // Serialized test boundary installs a distinct bounce source. The older
+    // cancelled target is deliberately not a dependency of this new punch.
+    trigger->ApplyCaptureRouting(receiver, channels, names, mode, mixer, writer);
+    press(true, true); press(true, false);
+    trigger->OnTick(GetTime(), 64u, cfg, std::nullopt);
+    press(true, true); press(true, false);
+    press(false, true);
+    press(true, true); press(true, false);
+    ASSERT_EQ(engine::TRIGSTATE_OVERDUBBING, trigger->GetState());
+    press(true, true);
+    ASSERT_EQ(engine::TRIGSTATE_PUNCHEDIN, trigger->GetState());
+    trigger->QueueExternalControlAction(true, false, action);
+    trigger->ConfirmMidiAvailabilityOnJob({ "healthy" }, { "old" });
+    for (unsigned int step = 0u; step < 4u; ++step) TickAndComplete(trigger, 0u, cfg);
+    EXPECT_EQ(engine::TRIGSTATE_OVERDUBBING, trigger->GetState());
+    EXPECT_FALSE(trigger->IsActivateInputDown());
+    EXPECT_EQ(2u, trigger->GetTakes().size());
+    EXPECT_TRUE(oldStation->GetLoopTakeSnapshot().empty());
+}
+
+TEST(Trigger, OverdubFromRestoredInactiveSourceIsNotMistakenForCancellation)
+{
+    auto station = MakeTestStation("restored-source-overdub");
+    auto source = station->AddTake();
+    source->AddLoop(0u, station->Name());
+    station->CommitChanges();
+    ASSERT_EQ(LoopTake::STATE_INACTIVE, source->TakeState());
+    ASSERT_FALSE(source->IsTriggerCaptureInactive());
+    TriggerParams params;
+    params.InputChannels = { 0u };
+    auto trigger = std::make_shared<Trigger>(params);
+    trigger->SetReceiver(station);
+    io::UserConfig cfg;
+    base::Action action;
+    trigger->QueueExternalControlAction(false, true, action);
+    TickAndComplete(trigger, 0u, cfg);
+    trigger->QueueExternalControlAction(true, true, action);
+    TickAndComplete(trigger, 0u, cfg);
+    for (unsigned int step = 0u; step < 4u; ++step) TickAndComplete(trigger, 0u, cfg);
+    EXPECT_EQ(engine::TRIGSTATE_OVERDUBBING, trigger->GetState());
+    ASSERT_EQ(1u, trigger->GetTakes().size());
+    EXPECT_EQ(source->Id(), trigger->GetTakes().front().SourceTakeId);
+    EXPECT_FALSE(trigger->HasPendingSourceLoss());
+}
+
+TEST(Trigger, EmptyAudioRouteRemainsMidiOnlyAndStreamReplacementCancelsItsPunch)
+{
+    auto station = MakeTestStation("midi-only-stream-replacement");
+    station->SetAllowedMidiChannels({ 1 });
+    auto source = station->AddTake();
+    source->Record({}, station->Name(), { 0u }, { "healthy" });
+    source->Play(0u, 1000u, 0u);
+    station->CommitChanges();
+    TriggerParams params;
+    params.MidiInputDevices = { "healthy" };
+    auto trigger = std::make_shared<Trigger>(params);
+    trigger->SetReceiver(station);
+    io::UserConfig cfg;
+    cfg.Trigger = { 0u, 0u };
+    cfg.Audio.NumChannelsIn = 2u;
+    trigger->ConfirmAudioAvailabilityOnJob(1u, "same-device", 0u);
+    trigger->ConfirmMidiAvailabilityOnJob({ "healthy" }, {});
+    base::Action action;
+    auto press = [&](bool activate, bool down) {
+        trigger->QueueExternalControlAction(activate, down, action);
+        TickAndComplete(trigger, 0u, cfg);
+    };
+    press(false, true);
+    press(true, true); press(true, false);
+    ASSERT_EQ(engine::TRIGSTATE_OVERDUBBING, trigger->GetState());
+    ASSERT_EQ(2u, station->GetLoopTakeSnapshot().size());
+    auto target = station->GetLoopTakeSnapshot().back();
+    EXPECT_TRUE(target->GetLoops().empty());
+    ASSERT_FALSE(target->GetMidiLoops().empty());
+    press(true, true);
+    ASSERT_EQ(engine::TRIGSTATE_PUNCHEDIN, trigger->GetState());
+    trigger->ConfirmAudioAvailabilityOnJob(2u, "same-device", 0u);
+    for (unsigned int step = 0u; step < 4u; ++step) TickAndComplete(trigger, 0u, cfg);
+    EXPECT_EQ(engine::TRIGSTATE_DEFAULT, trigger->GetState());
+    EXPECT_TRUE(trigger->GetTakes().empty());
+    EXPECT_FALSE(trigger->IsActivateInputDown());
+    EXPECT_TRUE(target->IsTriggerCaptureInactive());
+    EXPECT_FALSE(source->IsTriggerCaptureInactive());
+}
+
+TEST(Trigger, ConfirmedLossRemainsPendingWhenStructuralQueueIsFull)
+{
+    auto station = MakeTestStation("queue-full-source-loss");
+    TriggerParams params;
+    params.InputChannels = { 0u };
+    auto trigger = std::make_shared<Trigger>(params);
+    trigger->SetReceiver(station);
+    io::UserConfig cfg;
+    base::Action action;
+    trigger->QueueExternalControlAction(true, true, action);
+    TickAndComplete(trigger, 0u, cfg);
+    ASSERT_EQ(engine::TRIGSTATE_RECORDING, trigger->GetState());
+    ASSERT_GT(engine::TriggerSourceLossTestAccess::SaturateStructuralQueue(*trigger), 0u);
+    trigger->ConfirmMidiAvailabilityOnJob({}, { "controller" }, true);
+    trigger->OnTick(GetTime(), 0u, cfg, std::nullopt);
+    EXPECT_EQ(engine::TRIGSTATE_RECORDING, trigger->GetState());
+    EXPECT_TRUE(trigger->HasPendingSourceLoss());
+    for (unsigned int step = 0u; step < 5u; ++step) TickAndComplete(trigger, 0u, cfg);
+    EXPECT_EQ(engine::TRIGSTATE_DEFAULT, trigger->GetState());
+    EXPECT_TRUE(trigger->GetTakes().empty());
+    EXPECT_FALSE(trigger->HasPendingSourceLoss());
+}
+
+TEST(Trigger, LossDuringPendingEndSettlesBeforeReconnectAndRejectsOldQueuedRelease)
+{
+    auto station = MakeTestStation("pending-end-source-loss");
+    TriggerParams params;
+    params.InputChannels = { 0u };
+    auto trigger = std::make_shared<Trigger>(params);
+    trigger->SetReceiver(station);
+    io::UserConfig cfg;
+    base::Action action;
+    trigger->QueueExternalControlAction(true, true, action);
+    TickAndComplete(trigger, 0u, cfg);
+    station->CommitChanges();
+    ASSERT_EQ(1u, station->GetLoopTakeSnapshot().front()->GetLoops().size());
+    trigger->QueueExternalControlAction(true, false, action);
+    TickAndComplete(trigger, 64u, cfg);
+    trigger->QueueExternalControlAction(true, true, action);
+    trigger->OnTick(GetTime(), 0u, cfg, std::nullopt);
+    trigger->ProcessStructuralActionsOnJob(cfg, std::nullopt);
+    ASSERT_TRUE(station->GetLoopTakeSnapshot().front()->HasPendingTriggerCapture());
+    trigger->QueueExternalControlAction(true, false, action);
+    trigger->ConfirmMidiAvailabilityOnJob({}, { "controller" }, true);
+    for (unsigned int step = 0u; step < 4u; ++step) TickAndComplete(trigger, 0u, cfg);
+    EXPECT_EQ(engine::TRIGSTATE_DEFAULT, trigger->GetState());
+    EXPECT_TRUE(trigger->GetTakes().empty());
+    trigger->ConfirmMidiAvailabilityOnJob({ "controller" }, {});
+    trigger->QueueExternalControlAction(true, true, action);
+    TickAndComplete(trigger, 0u, cfg);
+    EXPECT_EQ(engine::TRIGSTATE_RECORDING, trigger->GetState());
+    EXPECT_TRUE(trigger->IsActivateInputDown());
+    EXPECT_FALSE(trigger->HasPendingSourceLoss());
+}
+
+TEST(Trigger, ConfirmedTailLossStaysStickyAfterCompletionAndPreservesEarlierCompletedHistory)
+{
+    auto station = MakeTestStation("sticky-tail-loss");
+    TriggerParams params;
+    params.InputChannels = { 0u };
+    params.MidiInputDevices = { "lost" };
+    auto trigger = std::make_shared<Trigger>(params);
+    trigger->SetReceiver(station);
+    io::UserConfig cfg;
+    base::Action action;
+    auto press = [&](bool down) {
+        trigger->QueueExternalControlAction(true, down, action);
+        TickAndComplete(trigger, 0u, cfg);
+        station->CommitChanges();
+    };
+    auto record = [&]() {
+        press(true); press(false);
+        trigger->OnTick(GetTime(), 64u, cfg, std::nullopt);
+        press(true); press(false);
+    };
+    trigger->ConfirmMidiAvailabilityOnJob({ "lost" }, {});
+    record();
+    auto completed = station->GetLoopTakeSnapshot().front();
+    completed->EndRecording();
+    ASSERT_FALSE(completed->HasPendingTriggerCapture());
+    record();
+    auto tail = station->GetLoopTakeSnapshot().back();
+    ASSERT_TRUE(tail->HasPendingTriggerCapture());
+    trigger->ConfirmMidiAvailabilityOnJob({}, { "lost" });
+    tail->EndRecording(); // Completion races the already-confirmed request.
+    ASSERT_FALSE(tail->HasPendingTriggerCapture());
+    for (unsigned int step = 0u; step < 4u; ++step) TickAndComplete(trigger, 0u, cfg);
+    ASSERT_EQ(1u, trigger->GetTakes().size());
+    EXPECT_EQ(completed->Id(), trigger->GetTakes().front().TargetTakeId);
+    EXPECT_FALSE(completed->IsTriggerCaptureInactive());
+    EXPECT_TRUE(tail->IsTriggerCaptureInactive());
+}
+
+TEST(Trigger, ConfirmedLossBeforeAcceptedMidiOnlyEndCannotEscapeAsCompletedHistory)
+{
+    auto station = MakeTestStation("sticky-midi-end-loss");
+    station->SetAllowedMidiChannels({ 1 });
+    TriggerParams params;
+    params.MidiInputDevices = { "lost" };
+    auto trigger = std::make_shared<Trigger>(params);
+    trigger->SetReceiver(station);
+    io::UserConfig cfg;
+    base::Action action;
+    trigger->ConfirmMidiAvailabilityOnJob({ "lost" }, {});
+    trigger->QueueExternalControlAction(true, true, action);
+    TickAndComplete(trigger, 0u, cfg);
+    station->CommitChanges();
+    auto target = station->GetLoopTakeSnapshot().front();
+    ASSERT_TRUE(target->GetLoops().empty());
+    ASSERT_FALSE(target->GetMidiLoops().empty());
+    trigger->QueueExternalControlAction(true, false, action);
+    TickAndComplete(trigger, 64u, cfg);
+    trigger->QueueExternalControlAction(true, true, action);
+    trigger->OnTick(GetTime(), 0u, cfg, std::nullopt);
+    trigger->ConfirmMidiAvailabilityOnJob({}, { "lost" });
+    trigger->ProcessStructuralActionsOnJob(cfg, std::nullopt);
+    ASSERT_FALSE(target->HasPendingTriggerCapture());
+    for (unsigned int step = 0u; step < 4u; ++step) TickAndComplete(trigger, 0u, cfg);
+    EXPECT_TRUE(trigger->GetTakes().empty());
+    EXPECT_TRUE(target->IsTriggerCaptureInactive());
+    EXPECT_EQ(engine::TRIGSTATE_DEFAULT, trigger->GetState());
+}
+
+TEST(Trigger, RapidUnpublishedAudioEndKeepsTailAndAllowsIndependentNewCapture)
+{
+    auto station = MakeTestStation("rapid-unpublished-tail");
+    TriggerParams params;
+    params.InputChannels = { 0u };
+    auto trigger = std::make_shared<Trigger>(params);
+    trigger->SetReceiver(station);
+    io::UserConfig cfg;
+    base::Action action;
+    auto press = [&](bool down) {
+        trigger->QueueExternalControlAction(true, down, action);
+        TickAndComplete(trigger, 0u, cfg);
+    };
+    press(true); press(false);
+    trigger->OnTick(GetTime(), 64u, cfg, std::nullopt);
+    press(true); press(false);
+    auto oldTail = station->GetLoopTakeSnapshot().front();
+    ASSERT_TRUE(oldTail->GetLoops().empty()); // No GUI publication yet.
+    ASSERT_TRUE(oldTail->HasPendingTriggerCapture());
+    press(true); press(false);
+    EXPECT_EQ(engine::TRIGSTATE_RECORDING, trigger->GetState());
+    EXPECT_EQ(2u, trigger->GetTakes().size());
+    EXPECT_TRUE(oldTail->HasPendingTriggerCapture());
+    station->CommitChanges();
+    EXPECT_EQ(1u, oldTail->GetLoops().size());
+    EXPECT_EQ(Loop::STATE_PLAYINGRECORDING, oldTail->GetLoops().front()->PlayState());
 }

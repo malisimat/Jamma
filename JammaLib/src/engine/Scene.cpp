@@ -619,10 +619,23 @@ std::optional<std::shared_ptr<Scene>> Scene::FromFile(SceneParams sceneParams,
 		if (saved == jamStruct.TriggerHistories.end())
 			continue;
 		std::vector<TriggerTake> takes;
+		std::vector<std::pair<std::shared_ptr<base::TriggerPunchTarget>,
+			std::shared_ptr<base::TriggerPunchTarget>>> pins;
+		const auto station = std::dynamic_pointer_cast<Station>(runtime.Receiver);
+		const auto restoredTargets = station ? station->GetLoopTakeSnapshot() :
+			std::vector<std::shared_ptr<LoopTake>>{};
+		const auto resolve = [&restoredTargets](const std::string& id) -> std::shared_ptr<base::TriggerPunchTarget> {
+			const auto found = std::find_if(restoredTargets.begin(), restoredTargets.end(),
+				[&id](const auto& take) { return take && take->Id() == id; });
+			return found == restoredTargets.end() ? nullptr : *found;
+		};
 		takes.reserve(saved->Takes.size());
 		for (const auto& take : saved->Takes)
+		{
 			takes.push_back({ static_cast<decltype(TriggerTake{}.SourceType)>(take.SourceType), take.SourceTakeId, take.TargetTakeId });
-		runtime.Instance->RestoreTakes(std::move(takes));
+			pins.emplace_back(resolve(take.SourceTakeId), resolve(take.TargetTakeId));
+		}
+		runtime.Instance->RestoreTakes(std::move(takes), std::move(pins));
 	}
 	for (auto& station : initialStations)
 		scene->_AddStation(std::move(station), false);
@@ -1767,12 +1780,13 @@ void Scene::OnTick(Time curTime,
 	static const std::vector<std::shared_ptr<Station>> emptyStations;
 	const auto& stations = stationsSnapshot ? *stationsSnapshot : emptyStations;
 
-	const auto streamParams = _audioEngine->GetStreamParams();
+	const audio::AudioStreamParams emptyParams{};
+	const auto& streamParams = params ? *params : emptyParams;
 	for (auto& station : stations)
 	{
 		station->OnTick(curTime,
 			samps,
-			_userConfig,
+			cfg,
 			streamParams);
 	}
 }
@@ -1783,6 +1797,7 @@ void Scene::OnJobTick(Time curTime)
 		_inputSubsystem->AcknowledgeRigTriggerInputCloseFromJob();
 	_RefreshMidiIfNeeded();
 	_PumpTriggerStructuralActions();
+	_PumpSourceLossRecovery();
 	_AdvanceRigPublication();
 	_PumpMidi();
 	_PumpSerial();
@@ -1898,6 +1913,7 @@ void Scene::_RefreshMidiIfNeeded()
 	for (const auto& endpoint : result.Connected)
 		if (std::find(connectedNames.begin(), connectedNames.end(), endpoint.Name) == connectedNames.end())
 			connectedNames.push_back(endpoint.Name);
+	_ConfirmMidiConnectionChange(previous->Connection, result, connectedNames);
 	_midiState.store(std::make_shared<const MidiState>(MidiState{ std::move(result), connectedNames }),
 		std::memory_order_release);
 	const auto inputs = _audioEngine->GetStreamParams().NumInputChannels;
@@ -1912,6 +1928,91 @@ void Scene::_RefreshMidiIfNeeded()
 			_hudPanel->SetRoutingConfig(inputs, connectedNames, *runtime);
 		}
 	}
+}
+
+void Scene::_ConfirmMidiConnectionChange(const midi::MidiConnectionResult& previous,
+	const midi::MidiConnectionResult& refreshed, const std::vector<std::string>& connectedNames)
+{
+	if (!refreshed.Inventory.Error.empty()) return;
+	const auto lostNames = midi::MidiDevice::LostConnectedInputNames(previous, refreshed);
+	std::scoped_lock lock(_sceneMutex);
+	const auto accepted = _rigCoordinator.Accepted();
+	if (!accepted) return;
+	for (const auto& runtime : accepted->Triggers)
+	{
+		if (!runtime.Instance || runtime.RigTriggerIndex >= accepted->Rig.Triggers.size()) continue;
+		const auto& configured = accepted->Rig.Triggers[runtime.RigTriggerIndex];
+		const bool activationLost = configured.MidiTrigger &&
+			std::find(lostNames.begin(), lostNames.end(), configured.MidiTrigger->Device) != lostNames.end();
+		const bool captureLost = configured.MidiInputs == io::RigFile::Trigger::MidiInputMode::Selected &&
+			std::any_of(configured.MidiInputDevices.begin(), configured.MidiInputDevices.end(),
+				[&lostNames](const std::string& name) { return std::find(lostNames.begin(), lostNames.end(), name) != lostNames.end(); });
+		runtime.Instance->ConfirmMidiAvailabilityOnJob(connectedNames, lostNames, activationLost, captureLost);
+	}
+	for (const auto& station : _stations)
+		if (station)
+			for (const auto& name : lostNames) station->FlushLiveHeldMidiNotesForDevice(name);
+}
+
+void Scene::_PumpSourceLossRecovery()
+{
+	std::scoped_lock lock(_sceneMutex);
+	if (_isSceneQuitting.load(std::memory_order_acquire)) return;
+	for (const auto& station : _stations)
+		if (station) station->FlushPendingLostLiveMidiNotes();
+	const auto accepted = _rigCoordinator.Accepted();
+	if (!accepted)
+	{
+		// Reset can remove the rig while this job owns admission closure.
+		if (_sourceLossRecoveryGateClosed && _audioEngine->CallbackAdmissionIsQuiescent() &&
+			_audioEngine->ReopenCallbackAdmission()) _sourceLossRecoveryGateClosed = false;
+		return;
+	}
+	const auto pending = [&accepted]() {
+		return std::any_of(accepted->Triggers.begin(), accepted->Triggers.end(),
+			[](const auto& runtime) { return runtime.Instance && runtime.Instance->HasPendingSourceLoss(); });
+	};
+	const auto publicationNeedsAcknowledgement = [this]() {
+		return std::any_of(_stations.begin(), _stations.end(),
+			[](const auto& station) { return station && station->HasUnacknowledgedAudioState(); });
+	};
+	const auto heartbeat = _audioEngine->AudioCallbackHeartbeat();
+	const auto now = std::chrono::steady_clock::now();
+	if (_sourceRecoveryHeartbeatAt == std::chrono::steady_clock::time_point{} || heartbeat != _sourceRecoveryHeartbeat)
+	{
+		_sourceRecoveryHeartbeat = heartbeat;
+		_sourceRecoveryHeartbeatAt = now;
+	}
+	if (!_sourceLossRecoveryGateClosed)
+	{
+		if ((!pending() && !publicationNeedsAcknowledgement()) ||
+			(heartbeat != 0u && now - _sourceRecoveryHeartbeatAt < std::chrono::milliseconds(500))) return;
+		// Heartbeat is only a stalled-reader hint. Admission closure plus the
+		// active-reader acknowledgement below is the authority to borrow fields.
+		_audioEngine->CloseCallbackAdmission();
+		_sourceLossRecoveryGateClosed = true;
+	}
+	if (!_audioEngine->CallbackAdmissionIsQuiescent()) return;
+	_audioEngine->ApplyPendingRigWhileQuiescent();
+	const auto revision = _audioEngine->AppliedRigRevision();
+	const auto streamParams = _audioEngine->GetStreamParams();
+	for (const auto& runtime : accepted->Triggers)
+		if (runtime.Instance)
+		{
+			runtime.Instance->OnTick(Timer::GetTime(), 0u, _userConfig, streamParams, revision);
+			runtime.Instance->ProcessStructuralActionsOnJob(_userConfig, streamParams);
+			runtime.Instance->OnTick(Timer::GetTime(), 0u, _userConfig, streamParams, revision);
+		}
+	_audioEngine->ApplyPendingRigWhileQuiescent();
+	// The gate is the reader acknowledgement when a stopped driver cannot
+	// observe newly published removals. External target pins do not hold it shut.
+	for (const auto& station : _stations)
+		if (station)
+		{
+			station->AcknowledgeAudioBoundary();
+			station->ReleaseRetiredAudioStates();
+		}
+	if (!pending() && _audioEngine->ReopenCallbackAdmission()) _sourceLossRecoveryGateClosed = false;
 }
 
 void Scene::_PumpMidi()
@@ -2215,12 +2316,36 @@ void Scene::InitGui()
 
 void Scene::InitAudio(bool generatedRig, const audio::AsioInventory* inventory)
 {
+	const auto previousMidi = _midiState.load(std::memory_order_acquire);
 	// Setup audio engine which starts device
-	bool started = _audioEngine->Init(_networkService->GetController(), [this](Time streamTime, unsigned int numSamps,
+	bool started = false;
+	{
+		std::scoped_lock lock(_sceneMutex);
+		_audioEngine->CloseCallbackAdmission();
+		_sourceLossRecoveryGateClosed = true;
+		started = _audioEngine->Init(_networkService->GetController(), [this](Time streamTime, unsigned int numSamps,
 		const std::optional<io::UserConfig>& cfg,
 		const std::optional<audio::AudioStreamParams>& params) {
 		this->OnTick(Timer::GetTime(), numSamps, cfg, params);
 	}, generatedRig, inventory);
+		if (!started && !_audioEngine->LastInitReplacedStream())
+		{
+			// Stop failure is unknown availability, not a confirmed replacement.
+			// Preserve the existing capture identities and MIDI connections.
+			if (_audioEngine->CallbackAdmissionIsQuiescent() &&
+				_audioEngine->ReopenCallbackAdmission()) _sourceLossRecoveryGateClosed = false;
+			return;
+		}
+		// Replacing the stream invalidates the common sample clock even when its
+		// display name/channels remain unchanged. New callbacks stay gated until
+		// prior captures have settled through the usual structural result protocol.
+		const auto actual = _audioEngine->GetStreamParams();
+		++_audioStreamEpoch;
+		if (const auto accepted = _rigCoordinator.Accepted())
+			for (const auto& runtime : accepted->Triggers)
+				if (runtime.Instance) runtime.Instance->ConfirmAudioAvailabilityOnJob(
+					_audioStreamEpoch, started ? actual.Name : std::string(), started ? actual.NumInputChannels : 0u);
+	}
 
 	// Share the master transport clock so the audio callback can apply unified
 	// NINJAM timing commands to the Timer and local takes at one boundary.
@@ -2238,6 +2363,7 @@ void Scene::InitAudio(bool generatedRig, const audio::AsioInventory* inventory)
 	}
 	const auto midiState = _midiState.load(std::memory_order_acquire);
 	const auto actualInputs = started ? _audioEngine->GetStreamParams().NumInputChannels : 0u;
+	_ConfirmMidiConnectionChange(previousMidi->Connection, midiState->Connection, midiState->ConnectedNames);
 	if (const auto runtime = _rigCoordinator.RefreshRuntimeAvailability(actualInputs, midiState->ConnectedNames))
 	{
 		_audioEngine->PublishPendingRigSnapshot(runtime);
@@ -2251,6 +2377,7 @@ void Scene::InitAudio(bool generatedRig, const audio::AsioInventory* inventory)
 	}
 
 	CommitChanges();
+	_PumpSourceLossRecovery();
 }
 
 void Scene::SetLogging(io::LoggingConfig config) noexcept
@@ -2305,10 +2432,15 @@ bool Scene::PumpGlobalKeyCapture(actions::KeyAction& action) noexcept
 
 void Scene::Shutdown()
 {
+	{
+		// Recovery borrows callback-owned fields under this same lock. Finish
+		// that borrow before teardown, and prevent a later job reopening admission.
+		std::scoped_lock lock(_sceneMutex);
+		_isSceneQuitting.store(true, std::memory_order_release);
+	}
 	_rigCoordinator.Shutdown();
 	_audioEngine->ClearRigTriggerTransition();
 	_inputSubsystem->CloseRigTriggerInputForever();
-	_isSceneQuitting.store(true, std::memory_order_release);
 	// RtAudio::Stop() waits for an in-flight callback to return.  Do this before
 	// closing an editor or releasing a plugin: the callback can be dispatching
 	// VST processing, MIDI, or recorded parameter automation.

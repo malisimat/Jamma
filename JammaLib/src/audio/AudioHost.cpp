@@ -69,11 +69,21 @@ namespace audio
 		TickCallback tickCallback, bool generatedRig, const AsioInventory* inventory)
 	{
 		std::scoped_lock lock(_audioMutex);
+		_lastInitReplacedStream = false;
 		if (_audioDevice)
 		{
-			_audioDevice->Stop();
+			// Admission protects engine fields; only a successful backend stop
+			// permits replacing the driver and its output-buffer geometry.
+			if (!_audioDevice->TryStop()) return false;
+			_lastInitReplacedStream = true;
+			if ((_callbackAdmission.load(std::memory_order_acquire) & _CallbackAdmissionClosed) != 0u &&
+				!CallbackAdmissionIsQuiescent()) return false;
 			_audioDevice.reset();
+			_publishedStreamParams.store({}, std::memory_order_release);
 		}
+		if ((_callbackAdmission.load(std::memory_order_acquire) & _CallbackAdmissionClosed) != 0u &&
+			!CallbackAdmissionIsQuiescent()) return false;
+		_lastInitReplacedStream = true;
 
 		_ninjamController = ninjamController;
 		_tickCallback = tickCallback;
@@ -130,8 +140,14 @@ namespace audio
 		auto dev = audio::AudioDevice::Open(AudioHost::AudioCallback,
 			[](RtAudioError::Type type, const std::string& err) { std::cout << "[" << type << " RtAudio Error] " << err << std::endl; },
 			_userConfig.Audio, this, generatedRig, inventory, &_asioOpenReport, prepareForStart);
-		if (!dev) return false;
+		if (!dev)
+		{
+			_publishedStreamParams.store({}, std::memory_order_release);
+			return false;
+		}
 		_audioDevice = std::move(*dev);
+		_publishedStreamParams.store(std::make_shared<const AudioStreamParams>(
+			_audioDevice->GetAudioStreamParams()), std::memory_order_release);
 		return true;
 	}
 
@@ -250,7 +266,7 @@ namespace audio
 		for (const auto& routeChange : candidate->TriggerRouteUpdates)
 		{
 			const auto& trigger = routeChange.Instance;
-			if (trigger && !trigger->CanApplyCaptureRouting())
+			if (trigger && !trigger->CanApplyCaptureRouting(routeChange.ReceiverChanged))
 			{
 				_rejectedRigRevision.store(candidateRevision, std::memory_order_release);
 				return;
@@ -509,6 +525,13 @@ void AudioHost::CaptureMappedSourceAnchorsAfterOffset(
 		auto expected = _CallbackAdmissionClosed;
 		return _callbackAdmission.compare_exchange_strong(expected, 0u,
 			std::memory_order_release, std::memory_order_relaxed);
+	}
+
+	bool AudioHost::ApplyPendingRigWhileQuiescent() noexcept
+	{
+		if (!CallbackAdmissionIsQuiescent()) return false;
+		ApplyPendingRigSnapshotAtAudioBoundary();
+		return true;
 	}
 
 	bool AudioHost::TryEnterCallback() noexcept

@@ -54,7 +54,12 @@ bool AudioDevice::Start()
 
 void AudioDevice::Stop()
 {
-	if (!_stream) return;
+	(void)TryStop();
+}
+
+bool AudioDevice::TryStop()
+{
+	if (!_stream) return true;
 	try
 	{
 		if (_stream->isStreamRunning()) _stream->stopStream();
@@ -63,8 +68,10 @@ void AudioDevice::Stop()
 	catch (const RtAudioError& err)
 	{
 		std::cout << "[ASIO] stop failed: " << err.getMessage() << std::endl;
+		return false;
 	}
 	_streamState = StreamState::CLOSED;
+	return true;
 }
 
 bool AudioDevice::Pause()

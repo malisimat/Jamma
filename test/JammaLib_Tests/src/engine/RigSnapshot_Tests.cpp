@@ -758,12 +758,38 @@ TEST_F(RigSnapshotTest, RetainedTriggerRecordsAcrossRealRoutePublicationAndDitch
 	record(coordinator.Accepted()->Revision);
 	ASSERT_EQ(1u, stationA->NumTakes());
 	ASSERT_EQ(1u, stationA->GetLoopTakes()[0]->GetLoops().size());
+	ASSERT_TRUE(stationA->GetLoopTakes()[0]->HasPendingTriggerCapture());
+	EXPECT_TRUE(trigger->CanApplyCaptureRouting(false));
+	EXPECT_FALSE(trigger->CanApplyCaptureRouting(true));
+	{
+		auto destructive = coordinator.Accepted()->Rig;
+		destructive.Triggers[0].StationTarget = "B";
+		ASSERT_EQ(engine::RigCoordinator::EditResult::Pending, coordinator.SubmitCandidate(destructive));
+		const auto rejected = coordinator.Staged();
+		ASSERT_EQ(1u, rejected->TriggerRouteUpdates.size());
+		EXPECT_TRUE(rejected->TriggerRouteUpdates.front().ReceiverChanged);
+		host.RequestRigTriggerTransition(rejected->Revision, coordinator.Accepted(), rejected);
+		audio::RigAudioBoundaryTestAccess::PublishTransition(host);
+		EXPECT_EQ(rejected->Revision, host.RejectedRigRevision());
+		EXPECT_EQ(0u, host.TransitionReadyRigRevision());
+		EXPECT_EQ(engine::RigCoordinator::EditResult::TransitionRejected,
+			coordinator.CompleteTransition(rejected->Revision, false, [](const io::RigFile&) { return true; }));
+		host.ClearRigTriggerTransition();
+		EXPECT_TRUE(stationA->GetLoopTakes()[0]->HasPendingTriggerCapture());
+	}
 	auto candidate = coordinator.Accepted()->Rig;
 	candidate.Triggers[0].InputChannels = { 0u, 1u };
 	publishEdit(candidate);
 	record(coordinator.Accepted()->Revision);
 	ASSERT_EQ(2u, stationA->NumTakes());
 	ASSERT_EQ(2u, stationA->GetLoopTakes()[1]->GetLoops().size());
+	// Moving the receiver remains destructive to an ending capture. Complete
+	// actual tails before this separate edit; same-receiver input edits above
+	// were deliberately published while the earlier tail remained pending.
+	for (const auto& take : stationA->GetLoopTakeSnapshot()) take->EndRecording();
+	trigger->ProcessStructuralActionsOnJob(cfg, std::nullopt);
+	trigger->OnTick(utils::Timer::GetTime(), 0u, cfg, std::nullopt, coordinator.Accepted()->Revision);
+	EXPECT_TRUE(trigger->CanApplyCaptureRouting(true));
 	candidate = coordinator.Accepted()->Rig;
 	candidate.Triggers[0].InputChannels = { 0u };
 	candidate.Triggers[0].StationTarget = "B";
@@ -794,4 +820,45 @@ TEST_F(RigSnapshotTest, RetainedTriggerRecordsAcrossRealRoutePublicationAndDitch
 	ditch();
 	EXPECT_EQ(0u, stationA->NumTakes());
 	EXPECT_EQ(0u, stationB->NumTakes());
+}
+
+TEST_F(RigSnapshotTest, ReplacedTriggerDitchesFrozenHistoryFromItsOriginalReceiver)
+{
+    auto stationA = RuntimeStation("A");
+    auto stationB = RuntimeStation("B");
+    io::RigFile initial{};
+    initial.Triggers = { TriggerDescriptor("original", "A") };
+    engine::RigCoordinator coordinator;
+    ASSERT_TRUE(coordinator.BuildInitial(initial,
+        { StationDescriptor("A"), StationDescriptor("B") }, { stationA, stationB },
+        1u, {}, engine::TriggerParams(), [](const io::RigFile&) { return true; }));
+    auto original = coordinator.Accepted()->Triggers.front().Instance;
+    auto candidate = initial;
+    candidate.Triggers.front().Name = "replacement";
+    candidate.Triggers.front().StationTarget = "B";
+    ASSERT_EQ(engine::RigCoordinator::EditResult::Pending, coordinator.SubmitCandidate(candidate));
+    auto staged = coordinator.Staged();
+    auto replacement = staged->Triggers.front().Instance;
+    ASSERT_NE(original, replacement);
+    auto take = stationA->AddTake();
+    take->AddLoop(0u, stationA->Name());
+    stationA->CommitChanges();
+    original->RestoreTakes({ { engine::TriggerTake::SOURCE_ADC, "", take->Id(), stationA } });
+    ASSERT_EQ(engine::RigCoordinator::EditResult::Pending,
+        coordinator.CompleteTransition(staged->Revision, true,
+            [](const io::RigFile&) { return true; }));
+    ASSERT_EQ(1u, replacement->GetTakes().size());
+    EXPECT_EQ(stationA, replacement->GetTakes().front().Receiver);
+    base::Action action;
+    io::UserConfig cfg;
+    for (const bool down : { true, false })
+    {
+        replacement->QueueExternalControlAction(false, down, action, staged->Revision);
+        replacement->OnTick(utils::Timer::GetTime(), 0u, cfg, std::nullopt, staged->Revision);
+        replacement->ProcessStructuralActionsOnJob(cfg, std::nullopt);
+        replacement->OnTick(utils::Timer::GetTime(), 0u, cfg, std::nullopt, staged->Revision);
+    }
+    EXPECT_TRUE(stationA->GetLoopTakeSnapshot().empty());
+    EXPECT_TRUE(stationB->GetLoopTakeSnapshot().empty());
+    EXPECT_TRUE(replacement->GetTakes().empty());
 }

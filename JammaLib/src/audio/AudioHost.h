@@ -47,6 +47,9 @@ namespace audio
 			TickCallback tickCallback, bool generatedRig = false,
 			const AsioInventory* inventory = nullptr);
 		const AsioOpenReport& GetAsioOpenReport() const noexcept { return _asioOpenReport; }
+		// Serialized lifecycle owner only: false means the previous stream was
+		// retained because replacement could not establish a teardown barrier.
+		bool LastInitReplacedStream() const noexcept { return _lastInitReplacedStream; }
 		void Close();
 
 		void SetStations(std::shared_ptr<const std::vector<std::shared_ptr<engine::Station>>> stations);
@@ -80,6 +83,7 @@ namespace audio
 		void CloseCallbackAdmission() noexcept;
 		bool CallbackAdmissionIsQuiescent() const noexcept;
 		bool ReopenCallbackAdmission() noexcept;
+		bool ApplyPendingRigWhileQuiescent() noexcept;
 
 		std::shared_ptr<const std::vector<std::shared_ptr<engine::Station>>> GetStationsSnapshot() const { return _audioStations.load(std::memory_order_acquire); }
 		std::uint64_t GetAudioSampleCounter() const { return _audioSampleCounter.load(std::memory_order_relaxed); }
@@ -89,7 +93,8 @@ namespace audio
 
 		AudioStreamParams GetStreamParams() const 
 		{ 
-			return _audioDevice ? _audioDevice->GetAudioStreamParams() : AudioStreamParams(); 
+			const auto params = _publishedStreamParams.load(std::memory_order_acquire);
+			return params ? *params : AudioStreamParams{};
 		}
 		
 		AudioDevice* GetDevice() const { return _audioDevice.get(); }
@@ -174,9 +179,12 @@ namespace audio
 		// Prepared before startStream; each failed stream is closed before the next write.
 		// The callback only reads this stable storage while its stream is running.
 		std::optional<AudioStreamParams> _preparedStreamParams;
+		// Off-callback readers copy immutable metadata instead of racing device replacement.
+		std::atomic<std::shared_ptr<const AudioStreamParams>> _publishedStreamParams;
 		std::mutex _audioMutex;
 		std::unique_ptr<AudioDevice> _audioDevice;
 		AsioOpenReport _asioOpenReport;
+		bool _lastInitReplacedStream = false;
 		std::shared_ptr<ChannelMixer> _channelMixer;
 		NinjamMetronome _ninjamMetronome;
 		ninjam::NinjamMetronomeTimingState _ninjamMetronomeTimingState;

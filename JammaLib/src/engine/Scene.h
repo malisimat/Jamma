@@ -260,6 +260,7 @@ namespace engine
 		void ForceUnloadAllVstPlugins();
 		
 	protected:
+		friend class SourceLossIntegrationTestAccess;
 		virtual void _InitResources(resources::ResourceLib& resourceLib, bool forceInit) override;
 		virtual void _ReleaseResources() override;
 
@@ -302,6 +303,9 @@ namespace engine
 		void _JobLoop();
 		void _PumpMidi();
 		void _RefreshMidiIfNeeded();
+		void _ConfirmMidiConnectionChange(const midi::MidiConnectionResult& previous,
+			const midi::MidiConnectionResult& refreshed, const std::vector<std::string>& connectedNames);
+		void _PumpSourceLossRecovery();
 		void _PumpTriggerStructuralActions();
 		void _AdvanceRigPublication();
 		gui::RoutingEditAvailability _RoutingEditAvailability();
@@ -389,6 +393,10 @@ namespace engine
 		std::atomic<bool> _midiRefreshRequested{ false };
 		std::atomic<bool> _midiActive{ false };
 		std::chrono::steady_clock::time_point _lastMidiInventoryCheck{};
+		std::uint64_t _sourceRecoveryHeartbeat = 0u; // Job owner only.
+		std::chrono::steady_clock::time_point _sourceRecoveryHeartbeatAt{};
+		bool _sourceLossRecoveryGateClosed = false; // Serialized by _sceneMutex.
+		std::uint64_t _audioStreamEpoch = 0u; // Serialized lifecycle owner.
 		std::unique_ptr<vst::VstEditorWindowManager> _windowSubsystem;
 		std::unique_ptr<ninjam::NinjamNetworkService> _networkService;
 		engine::Quantiser _quantisation;

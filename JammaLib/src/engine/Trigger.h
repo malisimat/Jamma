@@ -61,6 +61,7 @@ namespace engine
 		TriggerEdge Edge = TRIGGER_EDGE_UP;
 		std::int64_t EventTimeUsec = 0;
 		std::optional<std::uint32_t> MidiSample;
+		std::uint64_t InputGeneration = 0u;
 	};
 
 	class TriggerBinding
@@ -277,6 +278,7 @@ namespace engine
 		public base::ActionSender,
 		public base::BounceWriter
 	{
+		friend class TriggerSourceLossTestAccess;
 	public:
 		static constexpr std::size_t MaxBindingCount = 64u;
 		Trigger(TriggerParams trigParams);
@@ -334,6 +336,13 @@ namespace engine
 		void ProcessStructuralActionsOnJob(
 			const std::optional<io::UserConfig>& cfg,
 			const std::optional<audio::AudioStreamParams>& params);
+		// Serialized structural owner only; failed discovery is not availability.
+		void ConfirmMidiAvailabilityOnJob(const std::vector<std::string>& availableNames,
+			const std::vector<std::string>& lostNames, bool activationEndpointLost = false,
+			bool configuredCaptureSourceLost = false);
+		void ConfirmAudioAvailabilityOnJob(std::uint64_t streamEpoch,
+			const std::string& deviceName, unsigned int availableChannels);
+		bool HasPendingSourceLoss() const noexcept;
 
 		bool AddBinding(DualBinding activate, DualBinding ditch);
 		void RemoveBinding(DualBinding activate, DualBinding ditch);
@@ -358,13 +367,16 @@ namespace engine
 		// Audio-boundary predicate used before replacing a trigger.
 		bool CanEditRouting() const noexcept;
 		// Route updates retain this Trigger and its history, so only input/state must be idle.
-		bool CanApplyCaptureRouting() const noexcept;
+		bool CanApplyCaptureRouting(bool receiverChanged = true) const noexcept;
 		void Reset();
 		std::string Name() const;
 		void SetName(std::string name);
 		std::vector<TriggerTake> GetTakes() const;
 		// Restore only while constructing a scene, before this trigger can tick.
-		void RestoreTakes(std::vector<TriggerTake> takes);
+		// Called before publication; pins correspond to the supplied history entries.
+		void RestoreTakes(std::vector<TriggerTake> takes,
+			std::vector<std::pair<std::shared_ptr<base::TriggerPunchTarget>,
+				std::shared_ptr<base::TriggerPunchTarget>>> pins = {});
 		void WriteBlock(const std::shared_ptr<base::MultiAudioSink> dest,
 			const float* srcBuf,
 			unsigned int numSamps,
@@ -452,14 +464,21 @@ namespace engine
 			bool ApplyToSourceTake = true;
 			bool ApplyToTargetAudio = true;
 			bool ApplyToTargetMidi = true;
+			bool IsSourceLossCancellation = false;
+			std::uint64_t InputGeneration = 0u;
 		};
 		struct CaptureSession
 		{
 			std::uint64_t Token = 0u;
 			std::atomic<bool> RetiredByAudio{ false };
+			std::atomic<bool> CancellationRequested{ false };
+			std::atomic<bool> PublishedToAudio{ false };
 			std::vector<unsigned int> AudioChannels;
 			std::vector<std::string> MidiDeviceNames;
 			bool HasAudioCapture = false;
+			std::uint64_t AudioStreamEpoch = 0u;
+			std::string AudioDeviceName;
+			bool SourceMuteClaimHeld = false; // Callback owned.
 			std::shared_ptr<base::ActionReceiver> Receiver;
 			std::shared_ptr<base::TriggerPunchTarget> SourceTake;
 			std::shared_ptr<base::TriggerPunchTarget> TargetTake;
@@ -506,12 +525,17 @@ namespace engine
 			bool applyToTargetTake = true,
 			bool applyToSourceTake = true,
 			bool applyToTargetAudio = true,
-			bool applyToTargetMidi = true) noexcept;
+			bool applyToTargetMidi = true,
+			bool sourceLossCancellation = false) noexcept;
 		void _SuspendSessionActions(std::uint64_t token) noexcept;
 		void _FlushDelayedPunchActions(unsigned int samps) noexcept;
 		void _ProcessStructuralResults() noexcept;
 		void _ApplyStructuralResult(const StructuralResult& result) noexcept;
 		void _EraseHistory(std::size_t index) noexcept;
+		void _ResetInputAfterSourceLoss() noexcept;
+		bool _ProcessSourceLoss(const std::optional<io::UserConfig>& cfg,
+			const std::optional<audio::AudioStreamParams>& params) noexcept;
+		static void _ReleaseSourceMuteClaim(CaptureSession* session) noexcept;
 		std::optional<std::size_t> _FindJobHistory(std::uint64_t token) const noexcept;
 		void _PublishJobHistory();
 
@@ -536,6 +560,7 @@ namespace engine
 				std::uint64_t& observedSequence) const noexcept;
 			std::atomic<std::uint64_t> Sequence{ 0u };
 			std::atomic<std::uint64_t> RigRevision{ 0u };
+			std::atomic<std::uint64_t> InputGeneration{ 0u };
 			std::atomic<std::uint16_t> BindingIndex{ 0u };
 			std::atomic<std::uint8_t> Control{ 0u };
 			std::atomic<std::uint8_t> Edge{ 0u };
@@ -622,6 +647,22 @@ namespace engine
 		// acknowledgement and Station snapshot retirement, or stopped-reader Reset.
 		std::array<std::unique_ptr<CaptureSession>, _HistoryCapacity> _captureSessions{};
 		std::size_t _captureSessionCount = 0u;
+		// Job scans its pinned sessions; audio scans its own bounded history only
+		// while this consume-before-processing dirty signal announces recovery.
+		std::atomic<bool> _sourceLossScanRequested{ false };
+		std::atomic<std::uint64_t> _inputLossGeneration{ 0u };
+		std::uint64_t _consumedInputLossGeneration = 0u;
+		std::atomic<std::uint64_t> _publishedInputLossGeneration{ 0u };
+		std::atomic<std::uint64_t> _publishedLiveSessionToken{ 0u };
+		std::atomic<bool> _activationReleaseRequested{ false };
+		std::atomic<std::uint64_t> _activationReleaseToken{ 0u };
+		std::atomic<bool> _publishedCapturePending{ false };
+		// Availability payloads remain on the serialized job/UI owner.
+		bool _hasConfirmedMidiAvailability = false;
+		std::vector<std::string> _confirmedMidiNames;
+		std::optional<unsigned int> _confirmedAudioChannels;
+		std::uint64_t _confirmedAudioStreamEpoch = 0u;
+		std::string _confirmedAudioDeviceName;
 		std::shared_ptr<audio::AudioMixer> _overdubMixer;
 		std::shared_ptr<base::BounceWriter> _overdubWriter;
 	};
