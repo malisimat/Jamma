@@ -79,6 +79,7 @@ namespace graphics
 		// Shader press state: 0 = released/painting, 1 = left click, 2 = mute click.
 		void SetClickPressed(bool pressed, bool mute = false) noexcept { _clickPressed = pressed ? (mute ? 2.0f : 1.0f) : 0.0f; }
 		void SetMuted(bool muted) noexcept { _muted = muted; }
+		void SetEditorMasterInterval(std::uint64_t length) noexcept { _editorMasterInterval = length; }
 		void SetEditorPlayFrac(float frac) noexcept { _editorPlayFrac = frac; }
 		void SetEditorPitchRange(int bottomPitch, int visibleRows) noexcept;
 		int EditorBottomPitch() const noexcept { return _editorBottomPitch; }
@@ -158,6 +159,7 @@ namespace graphics
 		float _clickPressed = 0.0f;
 		bool _muted = false;
 		float _editorPlayFrac = 0.0f;
+		std::uint64_t _editorMasterInterval = 0u;
 		int _editorBottomPitch = 24;
 		int _editorVisibleRows = 24;
 		float _editorHoverU = -1.0f;

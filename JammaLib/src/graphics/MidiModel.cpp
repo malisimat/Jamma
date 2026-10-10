@@ -133,6 +133,10 @@ void MidiModel::Draw3d(DrawContext& ctx, unsigned int numInstances, base::DrawPa
 	glCtx.SetUniform("EditorMorph", _editorMorph);
 	glCtx.SetUniform("EditorActive", _editorActive ? 1.0f : 0.0f);
 	glCtx.SetUniform("EditorPlayFrac", _editorPlayFrac);
+	glCtx.SetUniform("EditorMasterCycles", _editorMasterInterval
+		? static_cast<float>(_editorGridLength) / _editorMasterInterval : 0.0f);
+	glCtx.SetUniform("EditorMasterStartPhase", _editorMasterInterval
+		? static_cast<float>(_editorGridTransportStart % _editorMasterInterval) / _editorMasterInterval : 0.0f);
 	glCtx.SetUniform("EditorTimeOrigin", _editorGridLength
 		? static_cast<float>(_editorTimeOrigin) / _editorGridLength : 0.0f);
 	glCtx.SetUniform("EditorSeamHeadEnd", _editorGridLength

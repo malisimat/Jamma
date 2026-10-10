@@ -81,7 +81,8 @@ Scene::Scene(SceneParams params,
 		[this](float aspect) { return _camera.Projection(aspect, _StationCentre(_stations)) * _camera.ViewMatrix(); },
 		[this]() { _OnLoopGridEditorOpened(); },
 		[this](int button, utils::Position2d anchor) { return _beginRelativePointer && _beginRelativePointer(button, anchor); },
-		[this](int button) { if (_endRelativePointer) _endRelativePointer(button); } },
+		[this](int button) { if (_endRelativePointer) _endRelativePointer(button); },
+		[this]() { const auto clock = _quantisation.Clock(); return clock ? clock->SeedSourceLength() : 0ul; } },
 		params.Size)
 {
 	_quantisation.SetClock(std::make_shared<Timer>());

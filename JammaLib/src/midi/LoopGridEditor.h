@@ -49,6 +49,7 @@ namespace midi
 			std::function<void()> OnOpened;
 			std::function<bool(int button, utils::Position2d anchor)> BeginRelativePointer;
 			std::function<void(int button)> EndRelativePointer;
+			std::function<std::uint64_t()> MasterLengthSamps;
 		};
 
 	public:
@@ -190,7 +191,5 @@ namespace midi
 		std::shared_ptr<gui::GuiNumericInput> _channelInput;
 		std::shared_ptr<gui::GuiLabel> _channelLabel;
 		bool _channelDragging = false;
-		std::array<std::shared_ptr<gui::GuiLabel>, 5> _timeTicks;
-		std::array<std::shared_ptr<gui::GuiLabel>, 11> _pitchTicks;
 	};
 }

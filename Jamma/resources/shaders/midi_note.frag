@@ -26,6 +26,8 @@ uniform float DiscAlpha;
 uniform int RenderMode;
 uniform int GeometryPass;
 uniform float EditorPlayFrac;
+uniform float EditorMasterCycles;
+uniform float EditorMasterStartPhase;
 uniform float EditorHoverU;
 uniform int EditorHoverPitch;
 uniform float EditorTargetStart;
@@ -220,6 +222,17 @@ void main()
             float octaveLine = 1.0 - smoothstep(1.0, 1.5, octavePixels);
             ColorOUT.rgb = mix(ColorOUT.rgb, vec3(0.15, 0.30, 0.38),
                 octaveLine * EditorMorphV);
+            if (EditorMasterCycles > 0.0)
+            {
+                // A short cyan tick marks actual master zero, independent of
+                // the loop's physical seam, display rotation, or subdivision.
+                float master = fract(fract(EditorU) * EditorMasterCycles + EditorMasterStartPhase);
+                float pixels = min(master, 1.0 - master)
+                    / max(fwidth(EditorU) * EditorMasterCycles, 1e-6);
+                float marker = (1.0 - smoothstep(1.5, 2.5, pixels))
+                    * (1.0 - smoothstep(0.35, 0.55, EditorPitchRow));
+                ColorOUT.rgb = mix(ColorOUT.rgb, vec3(0.12, 0.85, 0.95), marker * EditorMorphV);
+            }
             if (EditorHoverU >= 0.0 && EditorHoverPitch >= 0)
             {
                 // A negative target start means free timing: glow at the pointer, not a cell.

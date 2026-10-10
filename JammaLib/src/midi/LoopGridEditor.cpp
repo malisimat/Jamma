@@ -49,16 +49,6 @@ LoopGridEditor::LoopGridEditor(Host host, utils::Size2d size) :
 	_channelLabel->Init();
 	_Layout();
 
-	for (auto& tick : _timeTicks)
-	{
-		tick = std::make_shared<gui::GuiLabel>(gui::GuiLabelParams::PanelHeader("", 56u));
-		tick->Init();
-	}
-	for (auto& tick : _pitchTicks)
-	{
-		tick = std::make_shared<gui::GuiLabel>(gui::GuiLabelParams::PanelHeader("", 56u));
-		tick->Init();
-	}
 }
 
 void LoopGridEditor::InitResources(resources::ResourceLib& resourceLib, bool forceInit)
@@ -68,8 +58,6 @@ void LoopGridEditor::InitResources(resources::ResourceLib& resourceLib, bool for
 	_modeLabel->InitResources(resourceLib, forceInit);
 	_channelInput->InitResources(resourceLib, forceInit);
 	_channelLabel->InitResources(resourceLib, forceInit);
-	for (auto& tick : _timeTicks) tick->InitResources(resourceLib, forceInit);
-	for (auto& tick : _pitchTicks) tick->InitResources(resourceLib, forceInit);
 }
 
 void LoopGridEditor::ReleaseResources()
@@ -80,8 +68,6 @@ void LoopGridEditor::ReleaseResources()
 	_modeLabel->ReleaseResources();
 	_channelInput->ReleaseResources();
 	_channelLabel->ReleaseResources();
-	for (auto& tick : _timeTicks) tick->ReleaseResources();
-	for (auto& tick : _pitchTicks) tick->ReleaseResources();
 }
 
 void LoopGridEditor::SetSize(utils::Size2d size)
@@ -1048,33 +1034,6 @@ void LoopGridEditor::UpdateUi(const glm::mat4& viewProjection)
 				}
 			}
 
-			static constexpr const char* timeNames[] = { "0", "1/4", "1/2", "3/4", "END" };
-			for (std::size_t i = 0u; i < _timeTicks.size(); ++i)
-			{
-				const auto u = static_cast<float>(i) / 4.0f;
-				const auto point = graphics::LoopGridProjection::Project(viewProjection, modelMatrix,
-					{ (u - 0.5f) * radius * 2.0f, 0.0f, radius * 0.88f }, width, height);
-				_timeTicks[i]->SetString(point ? timeNames[i] : "");
-				if (point)
-					_timeTicks[i]->SetPosition({ point->X - 14, point->Y - 24 });
-			}
-			for (auto& tick : _pitchTicks) tick->SetString("");
-			if (midiModel)
-			{
-				const auto bottom = midiModel->EditorBottomPitch();
-				const auto rows = midiModel->EditorVisibleRows();
-				for (std::size_t octave = 0u; octave < _pitchTicks.size(); ++octave)
-				{
-					const auto pitch = static_cast<int>(octave * 12u);
-					if (pitch < bottom || pitch > bottom + rows) continue;
-					const auto v = static_cast<float>(pitch - bottom) / rows;
-					const auto point = graphics::LoopGridProjection::Project(viewProjection, modelMatrix,
-						{ -radius * 1.12f, 0.0f, -(v * 2.0f - 1.0f) * radius * 0.78f }, width, height);
-					if (!point) continue;
-					_pitchTicks[octave]->SetString("C" + std::to_string(static_cast<int>(octave) - 1));
-					_pitchTicks[octave]->SetPosition({ point->X - 12, point->Y - 10 });
-				}
-			}
 		}
 	}
 	const auto showsClose = IsOpen();
@@ -1113,6 +1072,7 @@ void LoopGridEditor::ApplyToModels()
 		{
 			model->SetEditorMorph(_blend);
 			model->SetEditorActive(true);
+			model->SetEditorMasterInterval(_host.MasterLengthSamps ? _host.MasterLengthSamps() : 0u);
 			if (const auto take = _take.lock())
 			{
 				const auto length = midiLoop->CompletedLengthForEditor();
@@ -1140,12 +1100,6 @@ void LoopGridEditor::Draw(base::DrawContext& ctx)
 		_channelInput->Draw(ctx);
 	}
 
-	if (IsOpen() && _blend > 0.72f)
-	{
-		for (auto& tick : _timeTicks) tick->Draw(ctx);
-		if (!_midiLoop.expired())
-			for (auto& tick : _pitchTicks) tick->Draw(ctx);
-	}
 }
 
 bool LoopGridEditor::_HandleButton(actions::TouchAction action)
