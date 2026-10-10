@@ -99,12 +99,6 @@ GuiMainPanel::GuiMainPanel(GuiMainPanelParams params) : GuiPanel(params),
 		_tabScroll->SetContent(_tabs);
 		_frame->AddChild(_tabScroll);
 	}
-	GuiElementParams edgeParams;
-	edgeParams.Texture = "rounded_but";
-	edgeParams.TextureShader = "texture_tinted";
-	edgeParams.TintColor = GuiStyle::Edge();
-	_edge = std::make_shared<GuiPanel>(edgeParams);
-	_frame->AddChild(_edge);
 	SetViewportSize(params.Size);
 }
 
@@ -216,11 +210,18 @@ void GuiMainPanel::SetViewportSize(Size2d viewport)
 void GuiMainPanel::_Layout()
 {
 	const int width = static_cast<int>(_viewport.Width), height = static_cast<int>(_viewport.Height);
-	const int margin = std::min(8, width / 2);
+	const int margin = std::min(StandardPanelPadding, width / 2);
 	const int panelWidth = std::min(_selectionOnly ? 404 : 360, std::max(0, width - 2 * margin));
 	const int handleWidth = std::min(_selectionOnly ? 64 : 20, std::max(0, width - (_selectionOnly ? margin : 0)));
-	const int handleHeight = std::min(_selectionOnly ? 20 : 64, std::max(0, height - (_selectionOnly ? 0 : std::min(8, height / 2))));
-	const int panelHeight = std::min(_selectionOnly ? 84 : 320, std::max(0, height - 2 * std::min(8, height / 2)));
+	const int handleHeight = std::min(_selectionOnly ? SelectionHandleHeight : 64, std::max(0, height - (_selectionOnly ? 0 : std::min(StandardPanelPadding, height / 2))));
+	const int selectionPanelHeight = std::min(SelectionPanelHeight,
+		std::max(0, height - 2 * std::min(StandardPanelPadding, height / 2)));
+	const int selectionHandleHeight = std::min(SelectionHandleHeight, std::max(0, height));
+	const int mainPanelBottom = std::min(GuiStyle::StatusBarHeight + StandardPanelPadding, height / 2);
+	const int selectionPanelBottom = height - margin - selectionPanelHeight + selectionHandleHeight;
+	const int panelHeight = _selectionOnly
+		? selectionPanelHeight
+		: std::max(MainPanelMinimumHeight, selectionPanelBottom - MainPanelTopGap - mainPanelBottom);
 	_handle->SetPosition(_selectionOnly ? Position2d{ margin, height - handleHeight } : Position2d{ 0, std::min(GuiStyle::StatusBarHeight + 8, height / 2) });
 	_handle->SetSize({ static_cast<unsigned int>(handleWidth), static_cast<unsigned int>(handleHeight) });
 	_handle->SetVisible(handleWidth > 0 && handleHeight > 0);
@@ -262,15 +263,12 @@ void GuiMainPanel::_LayoutSelection(int panelWidth, int panelHeight)
 	page->ComputeLayout();
 	_pageScroll->SetPosition({ padding, padding });
 	_pageScroll->SetSize({ static_cast<unsigned int>(innerWidth), static_cast<unsigned int>(innerHeight) });
-	_edge->SetVisible(false);
 }
 
 void GuiMainPanel::_LayoutSettings(int panelWidth, int panelHeight)
 {
 	const int padding = std::min(12, std::min(panelWidth, panelHeight) / 2);
 	const int inner = std::max(0, panelWidth - 2 * padding);
-	_edge->SetPosition({ padding, std::max(0, panelHeight - 2) });
-	_edge->SetSize({ static_cast<unsigned int>(inner), static_cast<unsigned int>(std::min(1, panelHeight)) });
 	const int titleHeight = std::min(22, std::max(0, panelHeight - 2 * padding));
 	auto title = _frame->TryGetChild(0);
 	title->SetPosition({ padding, std::max(padding, panelHeight - padding - titleHeight) });
