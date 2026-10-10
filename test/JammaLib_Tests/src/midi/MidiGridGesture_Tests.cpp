@@ -429,7 +429,8 @@ TEST(MidiGridGesture, EnumeratedLocalAndRemoteCellsCanAllBeAddedAndRemoved)
 		for (std::size_t cell = 0; cell + 1 < grid->Boundaries.size(); ++cell)
 		{
 			SCOPED_TRACE(::testing::Message() << remote << ":" << length << ":" << interval << ":" << phase << ":" << transport << ":" << cell);
-			const auto start = grid->Boundaries[cell], end = grid->Boundaries[cell + 1];
+			const auto canonical = grid->SeamHeadEnd && cell == 0u ? grid->Boundaries.size() - 2u : cell;
+			const auto start = grid->Boundaries[canonical], end = grid->Boundaries[canonical + 1];
 			MidiGridGesture add;
 			ASSERT_TRUE(add.Begin(source, {start, 60u, start / static_cast<double>(length)}, 3u));
 			const auto targets = midi::MidiGridTargets::Build(add.Working());
@@ -515,7 +516,7 @@ TEST(MidiGridGesture, WholeGridPaintAndRemoveIncludesPhysicalSeamFragments)
 		for (std::size_t cell = 1; cell + 1 < grid->Boundaries.size(); ++cell)
 			ASSERT_TRUE(add.Update({grid->Boundaries[cell], note, grid->Boundaries[cell] / static_cast<double>(length)}));
 		const auto painted = midi::MidiGridTargets::Build(add.Working());
-		EXPECT_EQ(grid->Boundaries.size() - 1u, painted.Notes.size());
+		EXPECT_EQ(grid->Boundaries.size() - 1u - (grid->SeamHeadEnd ? 1u : 0u), painted.Notes.size());
 		for (auto sample = 0u; sample < length; ++sample)
 			EXPECT_TRUE(painted.Resolve(sample, note, &*grid).NoteIndex);
 		MidiGridGesture remove;
@@ -724,4 +725,54 @@ TEST(MidiGridGesture, VelocityOverlapUsesLastDisplayedChannelAndKeepsControlEven
 	EXPECT_EQ(0xB1u, gesture.Working().Events[4].status);
 	EXPECT_EQ(99u, gesture.Working().Events[4].data2);
 	EXPECT_EQ(0x80u, gesture.Working().Events[4].flags);
+}
+
+TEST(MidiGridGesture, SplitEdgeCellsCreateOneNoteAndShareRemovalAndVelocity)
+{
+	for (const bool remote : {false, true})
+	for (const auto clicked : {0u, 99u})
+	{
+		auto source = MidiGridGestureFixture::EmptyLoop();
+		source.Quantisation.PhaseOffsetSamps = 1;
+		if (remote)
+		{
+			source.Quantisation.RemoteIntervalSamps = 100u;
+			source.Quantisation.RemoteBpi = 10u;
+		}
+		MidiGridGesture add;
+		ASSERT_TRUE(add.Begin(source, {clicked, 60u, clicked / 100.0}, 2u));
+		ASSERT_EQ(1u, add.Working().EventCount);
+		EXPECT_EQ(91u, add.Working().Events[0].sampleOffset);
+		ASSERT_EQ(1u, add.Preview().size());
+		EXPECT_EQ(91u, add.Preview()[0].Start); EXPECT_EQ(101u, add.Preview()[0].End);
+		ASSERT_TRUE(add.Update({clicked == 0u ? 99u : 0u, 60u, clicked == 0u ? 0.99 : 0.0}));
+		EXPECT_EQ(1u, add.Working().EventCount); EXPECT_EQ(1u, add.Preview().size());
+		for (const auto edge : {0u, 99u})
+		{
+			MidiGridGesture velocity;
+			ASSERT_TRUE(velocity.BeginVelocity(add.Working(), {edge, 60u}));
+			EXPECT_EQ(0u, *velocity.CapturedNoteIndex());
+			ASSERT_TRUE(velocity.UpdateRelative(4.0));
+			EXPECT_EQ(101u, velocity.Working().Events[0].data2);
+			MidiGridGesture remove;
+			ASSERT_TRUE(remove.Begin(add.Working(), {edge, 60u}, 2u));
+			EXPECT_EQ(0u, remove.Working().EventCount);
+			ASSERT_EQ(1u, remove.Preview().size());
+			EXPECT_EQ(101u, remove.Preview()[0].End);
+		}
+	}
+}
+
+TEST(MidiGridGesture, ExistingFirstCellNoteHasTheSameIdentityAtBothEdges)
+{
+	auto source = MidiGridGestureFixture::EmptyLoop();
+	source.Quantisation.PhaseOffsetSamps = 1;
+	ASSERT_TRUE(midi::MidiEditOperations::CreateExact(source, 0u, 1u, 2u, 60u, 72u));
+	const auto grid = midi::LoopGridGeometry::Resolve(100u, source.Quantisation, 0u);
+	const auto targets = midi::MidiGridTargets::Build(source);
+	const auto first = targets.Resolve(0u, 60u, &*grid), last = targets.Resolve(99u, 60u, &*grid);
+	ASSERT_TRUE(first.NoteIndex); EXPECT_EQ(first.NoteIndex, last.NoteIndex);
+	MidiGridGesture remove;
+	ASSERT_TRUE(remove.Begin(source, {99u, 60u}, 2u));
+	EXPECT_EQ(0u, remove.Working().EventCount);
 }

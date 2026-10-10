@@ -168,3 +168,19 @@ TEST(LoopGridGeometry, HitZonesAndSpanValidation)
 	EXPECT_FALSE(LoopGridGeometry::ValidNoteSpan(90u, 0u, 100u, 60, 0, 100));
 	EXPECT_FALSE(LoopGridGeometry::ValidNoteSpan(0u, 1u, 100u, 128, 0, 100));
 }
+
+TEST(LoopGridGeometry, OnlySplitRepeatingCellsShareThePhysicalSeam)
+{
+	MidiQuantisationSettings settings;
+	settings.Enabled = true; settings.GrainSamps = 10u; settings.Fraction = MidiQuantisationFraction::Whole;
+	const auto aligned = LoopGridGeometry::Resolve(100u, settings, 0u);
+	ASSERT_TRUE(aligned); EXPECT_EQ(0u, aligned->SeamHeadEnd);
+	settings.PhaseOffsetSamps = 1;
+	const auto split = LoopGridGeometry::Resolve(100u, settings, 0u);
+	ASSERT_TRUE(split); EXPECT_EQ(1u, split->SeamHeadEnd); EXPECT_EQ(91u, split->SeamTailStart);
+	EXPECT_EQ((std::pair{91u, 101u}), split->EditorSpan(0u, 1u));
+	EXPECT_EQ((std::pair{91u, 101u}), split->EditorSpan(91u, 100u));
+	EXPECT_EQ((std::pair{11u, 21u}), split->EditorSpan(11u, 21u));
+	const auto unequal = LoopGridGeometry::Resolve(101u, settings, 0u);
+	ASSERT_TRUE(unequal); EXPECT_EQ(0u, unequal->SeamHeadEnd);
+}

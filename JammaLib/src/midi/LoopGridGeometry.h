@@ -6,6 +6,7 @@
 #include <limits>
 #include <optional>
 #include <vector>
+#include <utility>
 
 #include "MidiQuantisation.h"
 
@@ -32,6 +33,20 @@ namespace midi
 		// This includes a boundary beyond the physical end for non-dividing loops.
 		// Zero-width cells are removed.
 		std::vector<std::uint32_t> Boundaries;
+		// Nonzero only when the two physical edge fragments belong to one
+		// repeating grid cell. These are presentation aliases, not extra events.
+		std::uint32_t SeamHeadEnd = 0u, SeamTailStart = 0u;
+
+		std::pair<std::uint32_t, std::uint32_t> EditorSpan(std::uint32_t start,
+			std::uint32_t end) const noexcept
+		{
+			if (!SeamHeadEnd) return {start, end};
+			if (start < SeamHeadEnd && end <= SeamTailStart)
+				return {SeamTailStart, Boundaries.back() + end};
+			if (start >= SeamTailStart && end == Boundaries.back())
+				return {start, end + SeamHeadEnd};
+			return {start, end};
+		}
 
 		// Presentation only: cut a whole-grain loop at the nearest master grain.
 		// Explicit phase offsets and non-repeating geometry retain physical edges.
@@ -108,6 +123,18 @@ namespace midi
 			grid.Boundaries.push_back(length);
 			std::sort(grid.Boundaries.begin(), grid.Boundaries.end());
 			grid.Boundaries.erase(std::unique(grid.Boundaries.begin(), grid.Boundaries.end()), grid.Boundaries.end());
+			// A repeating sample grid can be cut inside a cell. Do not link edges
+			// for non-repeating lengths: their fragments are different grid cells.
+			if (grid.Boundaries.size() > 2u && static_cast<std::uint64_t>(length) * divisions % interval == 0u)
+			{
+				const auto relative = start - origin - phase;
+				const auto boundary = MidiQuantisation::NearestBoundaryIndex(relative, interval, divisions);
+				if (MidiQuantisation::BoundarySampleAt(boundary, interval, divisions) != relative)
+				{
+					grid.SeamHeadEnd = grid.Boundaries[1u];
+					grid.SeamTailStart = grid.Boundaries[grid.Boundaries.size() - 2u];
+				}
+			}
 			return grid.Boundaries.size() <= MaxCells + 1u ? std::optional<LoopGridGeometry>(std::move(grid)) : std::nullopt;
 		}
 

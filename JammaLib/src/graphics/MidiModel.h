@@ -180,6 +180,7 @@ namespace graphics
 		std::uint64_t _editorGridTransportStart = 0u;
 		std::uint32_t _editorGridLength = 0u;
 		std::uint32_t _editorTimeOrigin = 0u;
+		std::uint32_t _editorSeamHeadEnd = 0u, _editorSeamTailStart = 0u;
 		bool _editorGridSignatureValid = false;
 		bool _editorGridResolved = false;
 		bool _editorGridDirty = true;

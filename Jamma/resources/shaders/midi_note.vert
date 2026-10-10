@@ -27,6 +27,8 @@ uniform int EditorBottomPitch;
 uniform int EditorVisibleRows;
 uniform float EditorGridRadius;
 uniform float EditorTimeOrigin;
+uniform float EditorSeamHeadEnd;
+uniform float EditorSeamTailStart;
 uniform float EditorWrapCopy;
 uniform int EditorHeldInstance;
 uniform float EditorPreviewVelocity;
@@ -58,10 +60,23 @@ void main()
     float rows = max(float(EditorVisibleRows), 1.0);
     float width = EditorGridRadius * 2.0;
     float gridU = startFrac + PositionIN.x * durationFrac;
+    float editorStart = startFrac;
+    float editorDuration = durationFrac;
+    if (IsDisc < 0.5 && EditorSeamHeadEnd > 0.0)
+    {
+        float end = startFrac + durationFrac;
+        if (startFrac < EditorSeamHeadEnd && end <= EditorSeamTailStart + 1e-6)
+        {
+            editorStart = EditorSeamTailStart;
+            editorDuration = 1.0 + end - editorStart;
+        }
+        else if (startFrac >= EditorSeamTailStart - 1e-6 && abs(end - 1.0) < 1e-6)
+            editorDuration += EditorSeamHeadEnd;
+    }
     float displayStart = EditorTimeOrigin > 0.0
-        ? fract(startFrac - EditorTimeOrigin + 1.0) : startFrac;
+        ? fract(editorStart - EditorTimeOrigin + 1.0) : editorStart;
     float displayU = IsDisc > 0.5 ? gridU
-        : displayStart + PositionIN.x * durationFrac + EditorWrapCopy;
+        : displayStart + PositionIN.x * editorDuration + EditorWrapCopy;
     float row = pitch - float(EditorBottomPitch) + 0.5;
     float gridZ = IsDisc > 0.5
         ? -PositionIN.z * EditorGridRadius * 0.78
@@ -73,13 +88,14 @@ void main()
     EditorLocalPosition = gridPosition;
     gl_Position = MVP * vec4(mix(position, gridPosition, EditorMorph), 1.0);
     // Fragment hover/playhead calculations remain in source coordinates.
-    EditorU = IsDisc > 0.5 ? gridU + EditorTimeOrigin : gridU;
+    EditorU = IsDisc > 0.5 ? gridU + EditorTimeOrigin
+        : editorStart + PositionIN.x * editorDuration;
     EditorPitchRow = IsDisc > 0.5
         ? (PositionIN.z + 1.0) * rows * 0.5 : row;
     EditorMorphV = EditorMorph;
     EditorCrossNote = PositionIN.z;
     EditorTopFace = NormalIN.y > 0.5 ? 1.0 : 0.0;
-    EditorNoteHit = vec3(startFrac, startFrac + durationFrac, pitch);
+    EditorNoteHit = vec3(editorStart, editorStart + editorDuration, pitch);
     EditorNoteInstance = gl_InstanceID;
 
     // Preserve outward face signs, including the bottom and note end caps.

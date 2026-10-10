@@ -280,6 +280,11 @@ namespace midi
 			_rejected = true; _working = _before; _preview.clear();
 			return false;
 		}
+		void AppendPreview(std::uint32_t start, std::uint32_t end, std::uint8_t pitch, bool fill)
+		{
+			const auto span = _grid ? _grid->EditorSpan(start, end) : std::pair{start, end};
+			_preview.push_back({span.first, span.second, pitch, fill});
+		}
 		bool Paint(Point point)
 		{
 			const auto target = TargetAt(point);
@@ -291,7 +296,7 @@ namespace midi
 				{
 					// Existing notes crossed by add paint are held too, without editing them.
 					_removed[note.On] = true;
-					_preview.push_back({ note.Start, note.End, note.Pitch, true });
+					AppendPreview(note.Start, note.End, note.Pitch, true);
 					return true;
 				}
 				if (note.Ambiguous) return Reject();
@@ -301,25 +306,29 @@ namespace midi
 				for (std::size_t i = _removed.size(); i-- > 0u;)
 					if (_removed[i] && !MidiEditOperations::RemoveNote(_working, i)) return Reject();
 				_dirty = true;
-				_preview.push_back({note.Start, note.End, note.Pitch, false});
+				AppendPreview(note.Start, note.End, note.Pitch, false);
 				return true;
 			}
 			if (!_fill) return true;
-			const auto cell = _grid->CellAt(point.Sample);
+			const auto physicalCell = _grid->CellAt(point.Sample);
+			// Both fragments paint one canonical source note in the tail cell.
+			const auto cell = _grid->SeamHeadEnd && physicalCell == 0u
+				? _grid->Boundaries.size() - 2u : physicalCell;
 			const auto index = cell * 128u + point.Pitch;
 			if (_visited[index]) return true;
 			_visited[index] = true;
+			const auto cellStart = _grid->Boundaries[cell], cellEnd = _grid->Boundaries[cell + 1u];
 			// Subtract the union of frozen displayed notes, across all channels.
 			std::vector<std::pair<std::uint32_t, std::uint32_t>> covered;
 			for (const auto& note : _targets.Notes)
-				if (note.Pitch == point.Pitch && note.Start < target.End && note.End > target.Start)
-					covered.emplace_back(std::max(note.Start, target.Start), std::min(note.End, target.End));
+				if (note.Pitch == point.Pitch && note.Start < cellEnd && note.End > cellStart)
+					covered.emplace_back(std::max(note.Start, cellStart), std::min(note.End, cellEnd));
 			std::sort(covered.begin(), covered.end());
-			auto start = target.Start;
+			auto start = cellStart;
 			const auto add = [&](std::uint32_t end) {
 				if (start >= end) return true;
 				if (!MidiEditOperations::CreateExact(_working, start, end, _channel, point.Pitch, _creationVelocity)) return false;
-				_preview.push_back({start, end, point.Pitch, true}); _dirty = true;
+				AppendPreview(start, end, point.Pitch, true); _dirty = true;
 				return true;
 			};
 			for (const auto& span : covered)
@@ -327,7 +336,7 @@ namespace midi
 				if (!add(span.first)) return Reject();
 				start = std::max(start, span.second);
 			}
-			if (!add(target.End)) return Reject();
+			if (!add(cellEnd)) return Reject();
 			return true;
 		}
 		bool Traverse(Point point, int seam)

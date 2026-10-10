@@ -135,6 +135,10 @@ void MidiModel::Draw3d(DrawContext& ctx, unsigned int numInstances, base::DrawPa
 	glCtx.SetUniform("EditorPlayFrac", _editorPlayFrac);
 	glCtx.SetUniform("EditorTimeOrigin", _editorGridLength
 		? static_cast<float>(_editorTimeOrigin) / _editorGridLength : 0.0f);
+	glCtx.SetUniform("EditorSeamHeadEnd", _editorGridLength
+		? static_cast<float>(_editorSeamHeadEnd) / _editorGridLength : 0.0f);
+	glCtx.SetUniform("EditorSeamTailStart", _editorGridLength
+		? static_cast<float>(_editorSeamTailStart) / _editorGridLength : 0.0f);
 	glCtx.SetUniform("EditorBottomPitch", _editorBottomPitch);
 	glCtx.SetUniform("EditorVisibleRows", _editorVisibleRows);
 	glCtx.SetUniform("EditorHoverU", _editorHoverU);
@@ -299,6 +303,8 @@ void MidiModel::UpdateEditorGrid(std::uint32_t loopLength,
 	_editorGridTransportStart = transportStart;
 	const auto grid = midi::LoopGridGeometry::Resolve(loopLength, settings, transportStart);
 	_editorGridResolved = grid.has_value();
+	_editorSeamHeadEnd = grid ? grid->SeamHeadEnd : 0u;
+	_editorSeamTailStart = grid ? grid->SeamTailStart : 0u;
 	_editorTimeOrigin = grid ? midi::LoopGridGeometry::DisplayOrigin(loopLength, settings, transportStart) : 0u;
 	auto displayedGrid = grid;
 	if (displayedGrid && _editorTimeOrigin)
@@ -542,7 +548,7 @@ void MidiModel::DrawMesh(GLuint shaderProgram, unsigned int drawInstances)
 		const auto copyLocation = glGetUniformLocation(shaderProgram, "EditorWrapCopy");
 		glUniform1f(copyLocation, 0.0f);
 		glDrawArraysInstanced(GL_TRIANGLES, 0, _numTris * 3u, drawInstances);
-		if (_editorTimeOrigin && _editorMorph >= 1.0f)
+		if ((_editorTimeOrigin || _editorSeamHeadEnd) && _editorMorph >= 1.0f)
 		{
 			// Shifted notes crossing the display seam need their clipped left copy.
 			glUniform1f(copyLocation, -1.0f);
@@ -611,7 +617,7 @@ void MidiModel::_DrawEditorGrid(GlDrawContext& glCtx)
 		for (const auto& preview : _editorPreviewSpans)
 		{
 			if (_editorPreviewLength == 0u || preview.Start >= preview.End
-				|| preview.End > _editorPreviewLength
+				|| preview.End - preview.Start > _editorPreviewLength
 				|| preview.Pitch < _editorBottomPitch
 				|| preview.Pitch >= _editorBottomPitch + _editorVisibleRows) continue;
 			const auto left = static_cast<float>(midi::LoopGridGeometry::DisplaySample(

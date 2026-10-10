@@ -105,8 +105,15 @@ namespace midi
 			Target result{sample, sample + 1u, pitch, std::nullopt};
 			// Last rendered span wins for visible channel overlaps.
 			for (std::size_t i = 0; i < Notes.size(); ++i)
-				if (Notes[i].Pitch == pitch && Notes[i].Start <= sample && sample < Notes[i].End)
-					result = {Notes[i].Start, Notes[i].End, pitch, i};
+			{
+				const auto& note = Notes[i];
+				const auto span = grid ? grid->EditorSpan(note.Start, note.End)
+					: std::pair{note.Start, note.End};
+				const auto displayed = grid && sample < span.first && span.second > grid->Boundaries.back()
+					? static_cast<std::uint64_t>(sample) + grid->Boundaries.back() : sample;
+				if (note.Pitch == pitch && span.first <= displayed && displayed < span.second)
+					result = {note.Start, note.End, pitch, i};
+			}
 			if (!result.NoteIndex && grid)
 			{
 				const auto cell = grid->CellAt(sample);
