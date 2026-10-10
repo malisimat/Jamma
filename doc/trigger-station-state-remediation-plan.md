@@ -1,6 +1,7 @@
 # Trigger and Station state remediation plan
 
-Status: research and independent Sol adversarial plan review complete; implementation and validation pending.
+Status: implementation complete; independent adversarial reviews, integrated native
+tests and affected application builds passed. Final evidence and limits follow.
 
 This plan covers Trigger ownership of recording actions, LoopTake capture lifecycles,
 Station visual aggregation, and interruption by confirmed routing/source loss.
@@ -323,3 +324,256 @@ Pending: implementation commits, regression results, independent code reviews, a
 final thread/hot-path proof. Implementation must record the selected session resource
 handoff, completion idempotence mechanism, and confirmed-disconnect transaction
 boundary here; do not leave these decisions implicit in the final audit.
+
+### Completed foundations
+
+- `2863bd29`: reviewed plan committed before implementation.
+- `5b83f928`: generation-bound, consume-once completion/update publication; dirty
+  publication is consumed before commit and commit context preserves staged buffer
+  selectors. UI synchronous completion/update jobs execute under the existing
+  Scene mutex, serializing validation and mutation with structural cancellation.
+  Cancelled takes reject further capture and playback from retained snapshots;
+  MIDI playback flushes held notes once instead of replaying new notes. Destructive
+  At this historical checkpoint, Station lifetime retirement remained pending;
+  the subsequent committed retirement fix below closes that gap.
+- `fbdf6c2d`: Station display derives from immutable membership and packed per-take
+  logical mode/serial. Active modes have equal recency priority, then tails, then
+  Default. The callback no longer scans mutable Station membership or publishes
+  an independently computed display enum.
+
+Independent Sol implementation review found and corrected inactive punch arming,
+stale punch state resurrection, stale update jobs, cancelled audio/MIDI replay,
+and the Scene completion/cancellation validation race. The combined incremental
+Debug build passed 56 relevant tests (6 completion handoff, 17 Station display,
+7 LoopTake staging, 11 Station staging, 15 Station MIDI instrument). A second
+incremental build with capture-session work in progress passed 279 Trigger,
+Station, LoopTake and MIDI regression tests. The callback admission foundation
+has separately passed 3 tests, including controlled threaded admission/closure,
+release publication and rejected-callback silence. At this historical checkpoint, these later fixes were still
+uncommitted and undergoing independent review; passing tests do not establish
+final lifecycle closure.
+
+Presentation writers are structural job/UI owners serialized by Scene's existing
+mutex. Rendering readers acquire the packed lock-free scalar and immutable weak
+membership snapshot. Completion counters/flags cross callback-to-UI ownership
+through lock-free atomics; emitted jobs carry the observed capture generation.
+Resource reset/reuse requires stopped readers, and cancelled resources remain
+stable through the subsequently implemented Station/session retirement integration.
+
+No live hardware run or thread-sanitizer result is claimed. Historical required
+work: independent review/commits of per-session envelopes and callback admission;
+non-destructive Station removal; confirmed loss, stale-release/revision handling,
+interruption/queue/retirement regressions; final integrated thread and hot-path
+review, broad native tests, and a clean committed tree.
+
+### Subsequent reviewed fixes
+
+- `2b54b0bd`: independent per-capture prepared mixer/writer, frozen routes and
+  strong target/source pins. Delayed commands retain their session token and
+  mixer, new starts preserve older tails, and envelope advancement happens once
+  per capture block across stereo destinations. Punch admission reserves its
+  matching release's bounded queue capacity. Failed/removed sessions reclaim
+  their slots only after audio acknowledgement and Station snapshot retirement.
+  Root adversarial review found and fixed a dangling-else delayed-action error,
+  a reusable-slot exhaustion defect and rollback backup double-counting. The
+  rollback regression failed before its fix and passed afterwards; 293 focused
+  native tests passed after these corrections.
+- `e9dbd917`: callback admission gate proves engine-reader quiescence before an
+  off-callback lifecycle pump. One bounded lock-free CAS admits the callback;
+  its stack lease releases the active bit. Closing and observing a cleared
+  active bit transfers control; rejected late callbacks only silence output.
+  The gate does not prove driver/host destruction or permit changed stream
+  geometry without the existing backend lifecycle barrier.
+- `2a946990`: future-revision queue and fallback edges remain parked until that
+  rig reaches the audio owner, instead of losing releases during a mid-block
+  MIDI refresh. The existing saturation fixture now uses stale revision1 and
+  accepted revision2, matching production's monotonic published revisions.
+- `f4d7cf75`: Station ditch/reset cancels and removes takes while keeping audio
+  buffers, writers and immutable snapshots intact. Removed GUI parent/receiver
+  links are detached off callback to break strong ownership cycles; processing
+  objects remain alive until acknowledged off-callback retirement. Tests cover
+  unchanged borrowed buffers, retained take/rack/loop/model lifetimes, other
+  active takes and zero-length ends. The independent Sol source-loss worker and
+  root adversary reviewed these changes; 88 focused native tests passed.
+
+The service rejected fresh reviewer spawns and completed-reviewer follow-ups with
+`agent thread limit reached`, despite available active capacity. B1/A received a
+fresh independent Sol code review; later foundations received independent root
+adversarial review, and B3 also received an independent Sol peer review. This
+limitation is recorded rather than claiming an extra fresh reviewer ran.
+
+`5c5b87de` also retires discarded zero-length Record/Overdub sessions from both
+job and audio histories after dropping their token-bound delayed borrowers.
+Tests perform 96 discarded captures of each kind while an older tail survives,
+then admit a valid capture and verify weak target retirement. The root adversary
+reviewed acknowledgement ordering and the focused zero-length/rollback tests
+passed (2/2).
+
+A broader 404-test pass subsequently exposed five regressions in treating the
+take's initial `INACTIVE` state as cancellation. Newly constructed or restored
+takes can already contain playable audio/MIDI loops before a take capture
+lifecycle begins. The follow-up uses a separate atomic cancellation flag,
+initially false, published by cancellation and cleared only for valid
+Record/Overdub initialization with the existing stopped-reader reuse contract.
+Cancellation-only snapshot/job suppression and source validity queries use that
+flag; actual live/tail priority still uses recording states. Regression coverage
+includes restored sample output, MIDI note/held-note flush, phase corrections,
+deferred restored quantisation and overdubbing from a restored source.
+
+Further root adversarial review found a real rapid-END lifecycle gap: prepared
+audio loops already existed in the structural back collection, but Play inspected
+the not-yet-published front collection. END before a GUI commit therefore skipped
+the audio tail and left the child's state Recording with logical length zero.
+A subsequent Overdub could also drop unpublished source audio slots. Two new
+regressions reproduced both failures before the fix. Structural Play/EndRecording
+now initialize/finalize the authoritative prepared loops, and structural Overdub
+uses the prepared source slot count. Callback readers continue using their
+immutable published snapshot; no callback back-container access is added.
+This correction is committed separately as `40d92bb8`.
+
+Source mute ownership now uses a prepared, immutable control handle with a
+lock-free atomic claim count. The callback owns transient punch claims and the
+replacement target owns its persistent claim on the structural thread. Neither
+claim changes performer mute flags or retains the source take. Child loop mixers
+bind the handle before publication, preserving full bounce reads while fading
+normal output. Mixer mute/level setters publish atomic desired values; only audio
+sets/advances the fade target and publishes current level once per block. MIDI
+claims use flush-only playback to release held notes once while suppressing new
+notes. Tests verify actual stereo samples, independent concurrent claim owners,
+idempotent replacement ownership and preserved performer mute.
+
+Confirmed endpoint loss flushes only that device's held live notes. Its aggregate
+snapshot is rebuilt from surviving named/anonymous sources; overlapping held
+pitches are preserved. A fixed pending release bitmap retains NoteOffs when the
+synthetic queue is full, with bounded structural-thread retries and suppression
+when a surviving endpoint takes ownership. Reset and allowed-channel filtering
+also maintain anonymous state. This mutex is structural-only; the coarse audit
+script flags its containing Station file, so callback caller review is required.
+
+### Explicit upstream boundary and hardware evidence
+
+The user explicitly prohibits editing upstream RtAudio source. All remediation
+must remain in Jamma wrappers/engine code. Runtime ASIO inventory polling using a
+new RtAudio instance is prohibited here: the vendored ASIO implementation shares
+global driver state and constructor discovery can remove the active driver.
+Heartbeat inactivity can request a recovery handoff, but it never proves reader
+quiescence or confirms physical source loss. The admission gate supplies reader
+proof; successful actual connection reports or accepted stream replacement supply
+source evidence. A driver silently stopping without an exposed confirmed-loss
+notification cannot be identified reliably through the available public API.
+No claim of universal silent ASIO unplug detection is made. Existing backend
+Stop/Pause behaviour is outside this upstream-constrained remediation; confirmed
+MIDI loss recovery must not rely on those calls returning.
+
+### Shared state ownership and retirement
+
+Audio ownership below means the normal admitted callback, or the serialized job
+owner only after closing admission and observing no admitted reader. It never
+means two concurrent owners. Structural operations hold the existing Scene
+serialization lock; locks in these operations do not run in callback callees.
+
+| State | Writers / owner | Readers | Synchronization | Retirement / reset |
+| --- | --- | --- | --- | --- |
+| GuiElement `_changesMade` | Callback and structural producers set dirty; commit owner consumes first | Structural commit and staged-buffer selectors | Atomic consume-before-work exchange | Owning element remains pinned by existing hierarchy/snapshots |
+| GuiElement `_committingChanges` | Structural commit owner | Structural staged-buffer selectors | Atomic bool preserves staged selection during commit | Cleared after commit; callback never selects mutable back containers |
+| Take `_captureGeneration`, `_completionPublishedGeneration`, `_pendingCompletionGeneration` | Structural lifecycle changes generation; audio publishes once for observed generation; commit consumes pending | Audio and structural completion validator | Lock-free generation atomics and tagged JobAction value | Cancellation invalidates generation; valid reuse requires stopped readers |
+| Take `_captureCancelled` | Serialized lifecycle owner | Audio suppression, structural update validator and source validity query | Atomic release/acquire | Initial false allows restored contents; cancellation true; valid Record/Overdub clears under reuse contract |
+| Take `_loopsNeedUpdating`, recording/tail counters and `_endRecordSamps` | Audio increments/publishes; structural lifecycle initializes and consumes | Audio threshold logic and structural/model readers | Atomic scalar values, consume-first dirty exchange | Each take has independent counters; no shared reset across overlapping captures |
+| Take packed `_presentation` | Structural/UI presentation changes under Scene serialization | UI visual reduction | Atomic packed mode/serial | Cancelled/ended take publishes inactive/tail disposition without model writes from audio |
+| Station `_nextPresentationSerial` | Structural owner only | Same structural owner | Existing Scene serialization | Belongs to Station lifetime; callback does not access it |
+| Take structural `_backLoops` | Existing structural owner | Structural Play/EndRecording/Overdub preparation | Existing Scene serialization | Prepared material is initialized before publication; callback still reads immutable front snapshots |
+| Station published membership and `AudioState::OwnedLoopTakes` | Structural snapshot publisher | UI reduction and admitted audio | Existing immutable published snapshots | Strong take pins retired only after completed audio generation, off callback |
+| Station `_anonymousLiveHeldMidi`, `_pendingLostLiveMidiNoteOffs` | Structural MIDI producer/retry owner | Same structural producer | Existing held-note mutex, off callback only | Reset clears; channel filtering clears anonymous notes; successful queue publication or surviving ownership clears pending bits |
+| Trigger prepared `_captureSessions` slots/count | Job owner allocates, resolves pins and reclaims | Audio borrows stable published session pointers | SPSC structural result publishes immutable payload; slot retirement release/acquire | Audio drops all history/delay borrowers before retirement; final source/target/mixer destruction stays off callback |
+| Session frozen receiver, routes, epoch, device name, source/target pins and writer/mixer | Job owner initializes before publication | Audio/history/action processing | Immutable after SPSC publication | Retained until audio token retirement and acknowledged target snapshot retirement |
+| Session `RetiredByAudio`, `PublishedToAudio`, `CancellationRequested` | Audio acknowledges retirement/publication; job may retire a never-published failed start and requests cancellation | Counterpart owner | Lock-free atomic flags | Retirement cannot depend on callback-owned arrays read by job; cancellation survives queue saturation |
+| Session `SourceMuteClaimHeld` | Audio owner only | Same audio owner | Single-owner invariant | Release once before token retirement or stopped-reader Reset; no structural unsynchronized access |
+| Trigger runtime history, delayed mixer/punch arrays, rollback backups and active index | Audio owner only | Same audio owner | Fixed bounded arrays and token identity | Erase only affected token; backup counts cleared before retirement; no allocation or reference-count destruction in callback |
+| Trigger structural commands/results, CaptureGeneration/InputGeneration and disposition | Producer copies values into existing SPSC queue | Opposite owner consumes | Release/acquire queue publication | Queue overflow retains cancellation/release work for retry; payload pins originate from job-owned sessions |
+| Trigger `_sourceLossScanRequested` | Structural producer, audio retry publisher | Audio owner | Atomic consume-before-scan exchange | Cleared only by audio consumption; bounded scan runs only when announced |
+| Trigger `_inputLossGeneration`, `_consumedInputLossGeneration`, `_publishedInputLossGeneration` | Structural producer increments; audio resets bindings and publishes consumption | Input producers, audio and job START validator | Atomic shared generations; consumed value is audio-only | Commands bind originating audio generation; stale physical releases cannot affect a later lifecycle |
+| Trigger `_publishedLiveSessionToken`, `_publishedCapturePending` | Audio publishes live token; job publishes pending capture aggregate | Job loss filter and audio routing guards | Lock-free atomic scalar publications | Old-tail-only loss preserves unaffected live token/raw input; no live mode reset for another token |
+| Trigger `_activationReleaseRequested`, `_activationReleaseToken` | Structural loss producer | Audio owner | Atomic payload followed by release signal | Consumed against matching token; confirmed missing endpoint cancels its live/pending capture |
+| Input queue/fallback `InputGeneration` and revision | Separate UI/job input producers | Audio owner | Existing SPSC queues and atomic fallback seqlock | Future revisions remain parked; past generations/revisions are discarded |
+| Trigger confirmed MIDI names/availability and audio channels/device/epoch | Structural owner only | Structural start validation/preparation | Existing owner serialization; no callback reads of strings/vectors | Inventory errors preserve prior knowledge; valid connection delta or accepted stream replacement updates it |
+| Bounce writer prepared capture-block offset | Audio owner only | Same writer's block writes | Single owner; begin/end hooks once per capture block | Writer pinned by its session/target; independent old/new envelopes preserve multichannel tails |
+| Source control transient and replacement counts | Audio owns transient claims; structural targets own replacement claims | Mixer callback and UI effective mute queries | Lock-free atomic counts | Each owner releases exactly once; control handle has no strong source-take cycle |
+| Source control replacement revision/audition flag | Structural performer/replacement owner | Mixer callback and UI | Lock-free atomic scalar publication | Explicit UnMute auditions current replacements; new replacement reasserts mute; transient claims always win |
+| Take `_captureSourceMuteControl`, `_replacementSourceMuteControl` | Initial control immutable; replacement handle structural-only | Audio reads immutable control; structural owns replacement handle | Prepared immutable binding plus atomic control payload | Cancel/destructor releases replacement handle off callback without retaining source take |
+| Mixer `_replacementAuditionRevision`, `_unmutedFadeTarget` | Structural performer/level setters | Audio fade target calculation and UI | Lock-free atomic desired values | Individual Loop UnMute only auditions current replacement revision; later replacement invalidates it |
+| Mixer `_appliedFadeTarget` and fade interpolation state | Audio owner only after construction | Audio owner only | Single owner, no target writes from UI/job | Construction initializes before publication; writer/session pins preserve lifetime |
+| Mixer `_publishedFadeLevel` | Audio publishes once per block/Offset | UI and other callback mix stages | Lock-free atomic double | No UI reads of mutable interpolation `Current()` remain in AudioMixer |
+| AudioHost `_callbackAdmission` and stack CallbackLease | Callback enters/leaves; serialized lifecycle owner closes/reopens | Callback and lifecycle job | Single bounded admission CAS, release exit, acquire quiescent check | Engine ownership transfers only at closed/no-active state; external target references never block reopen |
+| AudioHost `_callbackOutputChannels` | Lifecycle owner after successful backend stop barrier | Rejected callback silence branch | Atomic scalar | Old geometry retained on unchanged stop failure; gate alone is not driver teardown proof |
+| AudioHost immutable `_publishedStreamParams` and `_lastInitReplacedStream` | Serialized lifecycle owner | Off-callback metadata clients; outcome read by same lifecycle owner | Atomic immutable metadata; outcome owner-only | Failed stop retains prior identities; successful teardown then failed open confirms actual old-stream loss; callback uses its passed stable params reference |
+| Scene heartbeat observation, `_sourceLossRecoveryGateClosed`, `_audioStreamEpoch` | Serialized job/lifecycle owner | Same owner | Existing Scene lock; heartbeat is atomic hint only | Recovery acknowledges Station generations only under proven quiescence, then reopens independently of arbitrary external pins |
+| Restored/replaced history pins | Structural restoration/preparation owner before publication | Subsequent audio token history | Explicit strong pins resolved from each retained receiver's immutable Station membership | Receiver identity preserved; reset/removal retirement follows the same acknowledged session path |
+| Rig routing update `ReceiverChanged` | Structural candidate preparation derives stable resolved StationIndex difference | Audio boundary readiness/apply checks | Immutable value in prepared RigSnapshot | Retired with rig snapshot; safe future source-route edits remain permitted during frozen tails, destructive receiver changes remain busy-rejected |
+
+The automated hotpath audit reports coarse file-level matches for new locks in
+Scene confirmed-connection/recovery/initialization methods and Station scoped
+held-note methods. Manual caller review places all of them off callback. The
+review must cover the complete remediation range, including transitive mixer,
+bounce, token delay, MIDI flush and rejected-callback silence callees; a script
+match is not treated as a callback lock, and the script is not reported clean.
+
+### Final completion record
+
+All remediation steps are implemented and committed. Earlier pending statements
+above are historical checkpoints, not outstanding work.
+
+- `e83c3d49`: distinguish explicit cancellation from restored INACTIVE playback.
+- `09613363`: independently owned source mute claims and callback-owned fades.
+  Performer Take UnMute auditions existing replacement-muted originals; individual
+  Loop UnMute uses a revision-bound override. A later replacement reasserts mute;
+  neither override defeats another capture's transient punch claim. Effective
+  mute picking follows the displayed state.
+- `40d92bb8`: structural playback/end/overdub use prepared loop material before
+  GUI publication. Both rapid-start/end regressions reproduced failure before the
+  fix and passed after it; callback membership remains immutable.
+- `faa9ff83`: confirmed MIDI connection deltas preserve transient refreshes.
+- `5199f1bf`: scoped MIDI release preserves unrelated held notes, retries saturated
+  synthetic queues with a fixed bitmap, and drains retired target playback notes.
+- `e34dfa48`: integrates confirmed source/activation loss, sticky token cancellation,
+  frozen receiver/source sessions, restored history, stale input generation checks,
+  bounded stopped-callback recovery and serialized shutdown. Cancellation marked
+  while capture is pending remains sticky even if completion wins the next turn;
+  already-completed history is excluded when confirmation is first published.
+  Old-tail cancellation preserves newer live input and its real release. Safe
+  future capture route edits are permitted while frozen tails drain; destructive
+  receiver replacement/removal is rejected while owned captures remain pending.
+
+Wrapper TryStop failure preserves the old driver geometry and does not invent
+confirmed source loss. Successful teardown followed by failed opening is a
+replacement/loss outcome. Recovery uses closed admission plus an actual zero
+admitted-reader observation, never a heartbeat or backend state as memory proof.
+External resource pins do not prevent callback admission reopening. No upstream
+or vendored RtAudio file was modified.
+
+Final incremental Debug x64 validation passed **1366/1366 native tests across
+164 suites**, including actual multichannel fade samples, MIDI sink releases,
+controlled concurrency, queue saturation, repeated zero-length captures, restored
+64-take history, pending cancellation, rapid GUI-delayed publication and safe
+routing edits. Jamma and JammaConsole incremental builds also passed. Root
+independently verified the complete native and application output.
+
+The threading-review audit was run. Its coarse added-lock scan reports seven
+locks in Scene structural connection/recovery/init/shutdown and Station structural
+MIDI ledger/retry/retirement methods. These are off-callback false positives, not
+a clean script result. Independent manual caller and allocation review covered
+`c91401e3`'s parent through the final remediation tree: new preparation/metadata
+allocations and locks are off callback; admitted audio adds bounded fixed-array
+work and lock-free scalar operations, with no new mutex, wait, allocation or
+metadata string/shared-snapshot load in the audio path. Interpolation mutation
+has one audio owner and published scalar readers.
+
+Fresh Sol plan and completion/handoff adversaries, separate implementation
+subagents, the independent Sol Station-retirement peer review, and root's vigorous
+per-fix and integration reviews found and corrected concrete issues recorded
+above. Additional fresh final reviewer attempts were rejected by the agent service
+thread limit; this is an evidence limit, not a claimed completed review.
+No live hardware run or thread-sanitizer run is claimed. Silent ASIO unplug remains
+unconfirmable where the public backend API supplies no loss notification; the
+engine cannot forcibly finish a hung admitted callback. Existing overall backend
+shutdown Stop/Pause blocking behaviour is not changed upstream. These limits do
+not weaken the tested ownership, token, snapshot and admission invariants.
