@@ -1650,7 +1650,8 @@ ActionResult Scene::OnAction(GuiAction action)
 		if (auto value = std::get_if<GuiAction::GuiInt>(&action.Data))
 		{
 			const auto fraction = midi::MidiQuantisation::ClampFractionDisplayIndex(value->Value);
-			for (const auto& station : SnapshotStations())
+			std::scoped_lock lock(_sceneMutex);
+			for (const auto& station : _stations)
 				if (station && !station->IsRemote())
 					for (const auto& take : station->GetLoopTakes())
 					{
