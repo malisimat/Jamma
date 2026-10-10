@@ -322,6 +322,48 @@ TEST(IoSessionExporter, ExplicitDirectoryRoundTripsLocalManifestAndSidecars)
 	std::filesystem::remove_all(dir);
 }
 
+TEST(IoSessionExporter, AudioOnlyTakeRestoresTapBaseGridAfterReload)
+{
+	auto station = IoSessionExporterTest::MakeStation("audio-only");
+	auto take = IoSessionExporterTest::MakeTake("tap-base");
+	take->AddLoop(IoSessionExporterTest::MakeAudioLoop(101u, 0u, 0u, 0.005f));
+	take->SetMidiBaseGrid(101u, 4u);
+	take->CommitChanges();
+	station->AddTake(take);
+	station->CommitChanges();
+	const auto dir = IoSessionExporterTest::MakeDirectory();
+	Quantiser quantiser;
+	quantiser.SetClock(std::make_shared<utils::Timer>());
+	quantiser.ApplyTiming({ 25u, 100ul, 4u, 120.0f, 4u }, "audio-only tap-base fixture");
+	std::mutex sceneMutex;
+	ASSERT_TRUE(io::IoSessionExporter::ExportSessionToDirectory({ station }, {}, quantiser,
+		io::JamFile::GlobalMidiQuantState::Off, 0.0, {}, {}, nullptr, sceneMutex, nullptr, dir.wstring()));
+	std::ifstream manifest(dir / "session.jam");
+	ASSERT_TRUE(manifest);
+	std::stringstream contents;
+	contents << manifest.rdbuf();
+	manifest.close();
+	const auto saved = io::JamFile::FromStream(std::move(contents));
+	ASSERT_TRUE(saved);
+	ASSERT_EQ(1u, saved->Stations.size());
+	ASSERT_EQ(1u, saved->Stations[0].LoopTakes.size());
+	const auto& savedTake = saved->Stations[0].LoopTakes[0];
+	ASSERT_EQ(1u, savedTake.Loops.size());
+	ASSERT_TRUE(savedTake.MidiStreams.empty());
+	EXPECT_EQ(101u, savedTake.BaseIntervalSamps);
+	EXPECT_EQ(4u, savedTake.BaseDivisions);
+	LoopTakeParams restoredParams;
+	restoredParams.Id = savedTake.Name;
+	restoredParams.Size = { 80u, 80u };
+	const auto restored = LoopTake::FromFile(restoredParams, savedTake, dir.wstring());
+	ASSERT_TRUE(restored);
+	EXPECT_TRUE((*restored)->GetMidiLoops().empty());
+	const auto settings = (*restored)->ResolvedMidiQuantisation();
+	EXPECT_EQ(101u, settings.BaseIntervalSamps);
+	EXPECT_EQ(4u, settings.BaseDivisions);
+	std::filesystem::remove_all(dir);
+}
+
 TEST(IoSessionExporter, SavesLooplessStationConfigurationWithoutTransport)
 {
 	auto station = IoSessionExporterTest::MakeStation("configured station");

@@ -238,6 +238,7 @@ std::optional<std::shared_ptr<LoopTake>> LoopTake::FromFile(LoopTakeParams takeP
 	{
 		quantisation.BaseIntervalSamps = static_cast<std::uint32_t>(*takeStruct.BaseIntervalSamps);
 		quantisation.BaseDivisions = *takeStruct.BaseDivisions;
+		take->SetMidiBaseGrid(quantisation.BaseIntervalSamps, quantisation.BaseDivisions);
 	}
 	quantisation.Fraction = midi::MidiQuantisation::ClampFractionIndex(takeStruct.MidiQuantFraction);
 	quantisation.PhaseOffsetSamps = takeStruct.TakePhaseOffsetSamps;
