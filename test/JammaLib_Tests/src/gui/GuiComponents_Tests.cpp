@@ -935,6 +935,33 @@ TEST(GuiMainPanel, ControlsRecoverTheirWidthsAfterTinyAndZeroViewport) {
 	params.Settings = { { gui::SettingsPage::Timing, "Offset", numeric, 7002u } };
 	auto panel = std::make_shared<gui::GuiMainPanel>(params);
 	panel->Init();
+	panel->SetViewportSize({ 200, 200 });
+	auto frame = panel->TryGetChild(0);
+	ASSERT_TRUE(frame);
+	auto title = frame->TryGetChild(0);
+	auto tabs = std::dynamic_pointer_cast<GuiScrollPanel>(frame->TryGetChild(2));
+	ASSERT_TRUE(title);
+	ASSERT_TRUE(tabs);
+	for (const auto& element : { title, std::static_pointer_cast<base::GuiElement>(tabs) })
+	{
+		EXPECT_GE(element->GlobalPosition().Y, 0);
+		EXPECT_LE(element->GlobalPosition().Y + static_cast<int>(element->GetSize().Height), 200);
+	}
+	auto midiTab = tabs->Content()->TryGetChild(0);
+	ASSERT_TRUE(midiTab);
+	const auto tabPoint = midiTab->GlobalPosition() + utils::Position2d{ 5, 5 };
+	ASSERT_GE(tabPoint.X, 0);
+	ASSERT_LT(tabPoint.X, 200);
+	ASSERT_GE(tabPoint.Y, 0);
+	ASSERT_LT(tabPoint.Y, 200);
+	EXPECT_TRUE(panel->RouteHitTest(tabPoint));
+	auto down = panel->OnAction(MakeTouch(TouchAction::TOUCH_DOWN, tabPoint));
+	ASSERT_TRUE(down.IsEaten);
+	auto active = down.ActiveElement.lock();
+	ASSERT_EQ(midiTab.get(), active.get());
+	EXPECT_TRUE(active->OnAction(active->GlobalToLocal(MakeTouch(TouchAction::TOUCH_UP, tabPoint))).IsEaten);
+	EXPECT_EQ(gui::SettingsPage::Midi, panel->Page());
+	panel->SetPage(gui::SettingsPage::Timing);
 	panel->SetViewportSize({ 40, 40 });
 	panel->SetViewportSize({ 0, 0 });
 	EXPECT_FALSE(panel->RouteHitTest({ 0, 0 }));

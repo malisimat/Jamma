@@ -221,7 +221,8 @@ void GuiMainPanel::_Layout()
 	const int selectionPanelBottom = height - margin - selectionPanelHeight + selectionHandleHeight;
 	const int panelHeight = _selectionOnly
 		? selectionPanelHeight
-		: std::max(MainPanelMinimumHeight, selectionPanelBottom - MainPanelTopGap - mainPanelBottom);
+		: std::min(std::max(0, height - mainPanelBottom),
+			std::max(MainPanelMinimumHeight, selectionPanelBottom - MainPanelTopGap - mainPanelBottom));
 	_handle->SetPosition(_selectionOnly ? Position2d{ margin, height - handleHeight } : Position2d{ 0, std::min(GuiStyle::StatusBarHeight + 8, height / 2) });
 	_handle->SetSize({ static_cast<unsigned int>(handleWidth), static_cast<unsigned int>(handleHeight) });
 	_handle->SetVisible(handleWidth > 0 && handleHeight > 0);
