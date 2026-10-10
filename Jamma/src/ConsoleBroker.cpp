@@ -431,12 +431,17 @@ namespace console
 			? _state->TerminalWindowName : _state->HostWindowName);
 	}
 
-	void ConsoleBroker::UpdateVisibility() noexcept
+	void ConsoleBroker::UpdateVisibility(HWND appWindow) noexcept
 	{
 		if (!_state || !Connected() || _window) return;
 		const auto window = FindWindow();
 		if (!window) return;
 		_window = window;
+		// WT can activate its window after CreateProcess's no-activate hint.
+		// Repair only our startup console stealing focus, once it is identified.
+		if (!_state->ActivateOnLaunch && GetForegroundWindow() == window
+			&& IsWindow(appWindow))
+			SetForegroundWindow(appWindow);
 		if (_hidden) ShowWindow(window, SW_HIDE);
 	}
 

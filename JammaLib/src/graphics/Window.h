@@ -62,6 +62,7 @@ namespace graphics
 
 	public:
 		void SetWindowHandle(HWND wnd);
+		HWND GetWindowHandle() const noexcept { return _wnd; }
 		void ShowMessage(LPCWSTR message);
 		int Create(HINSTANCE hInstance, int nCmdShow);
 		Config GetConfig() const;
