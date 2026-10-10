@@ -1798,10 +1798,12 @@ void LoopTake::Play(unsigned long index,
 	_midiVisualPlayIndex.store(midiPlayIndex, std::memory_order_relaxed);
 	_appliedLocalTransportOffsetSamps = 0;
 	// MIDI is finalized at this trigger; only audio needs the delayed-input tail.
-	auto continueCapture = (!_loops.empty() && endRecordSamps > 0) ||
+	// The structural owner may process END before the first UI publication.
+	// Prepared loops are authoritative here; callback readers keep their snapshot.
+	auto continueCapture = (!_backLoops.empty() && endRecordSamps > 0) ||
 		_isPunchInActive.load(std::memory_order_relaxed);
 
-	for (auto& loop : _loops)
+	for (auto& loop : _backLoops)
 	{
 		loop->Play(index, loopLength, continueCapture);
 	}
@@ -1810,7 +1812,7 @@ void LoopTake::Play(unsigned long index,
 	{
 		auto shared = 0ul;
 		bool shareLength = true;
-		for (const auto& loop : _loops)
+		for (const auto& loop : _backLoops)
 		{
 			if (!loop)
 				continue;
@@ -2021,7 +2023,7 @@ void LoopTake::EndRecording()
 	_state.store(STATE_PLAYING, std::memory_order_release);
 	_SetPresentationMode(PresentationMode::Inactive);
 
-	for (auto& loop : _loops)
+	for (auto& loop : _backLoops)
 	{
 		loop->EndRecording();
 	}
@@ -2138,8 +2140,7 @@ void LoopTake::Overdub(std::vector<unsigned int> channels,
 
 	// Bounce addresses source loop slots. Preserve those slots when the current
 	// capture route has fewer inputs than the source take.
-	const auto sourceAudioState = sourceTake ? sourceTake->_AudioStateSnapshot() : nullptr;
-	const auto sourceLoopCount = sourceAudioState ? sourceAudioState->Loops.size() : 0u;
+	const auto sourceLoopCount = sourceTake ? sourceTake->_backLoops.size() : 0u;
 	const auto targetLoopCount = (std::max)(channels.size(), sourceLoopCount);
 	_recordInputChannels.resize(targetLoopCount, (std::numeric_limits<unsigned int>::max)());
 	for (size_t loopSlot = 0u; loopSlot < targetLoopCount; ++loopSlot)

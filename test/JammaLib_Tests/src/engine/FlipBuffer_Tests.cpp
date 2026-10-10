@@ -801,6 +801,58 @@ TEST(LoopTakeCompletionHandoff, RestoredContentsPlayBeforeTakeCaptureLifecycle)
 	EXPECT_EQ(1u, midiSink.NoteOffs);
 }
 
+TEST(LoopTakeCompletionHandoff, RapidRecordEndKeepsPreparedAudioAndMixedTails)
+{
+	for (const bool withMidi : {false, true})
+	{
+		auto take = MakeLoopTake(withMidi ? "rapid-mixed" : "rapid-audio");
+		take->Record({0u}, "station", withMidi ? std::vector<unsigned int>{0u} : std::vector<unsigned int>{},
+			withMidi ? std::vector<std::string>{"Keys"} : std::vector<std::string>{});
+		ASSERT_TRUE(take->GetLoops().empty()); // No UI publication between START and END.
+		if (withMidi)
+			ASSERT_TRUE(take->RecordMidiEvent(midi::MidiEvent::MakeNoteOn(0u, 0u, 60u, 100u), "Keys", 0u));
+		take->Play(constants::MaxLoopFadeSamps, 64u, 32u);
+		EXPECT_EQ(LoopTake::STATE_PLAYINGRECORDING, take->TakeState());
+		take->CommitChanges();
+		ASSERT_EQ(1u, take->GetLoops().size());
+		EXPECT_EQ(engine::Loop::STATE_PLAYINGRECORDING, take->GetLoops()[0]->PlayState());
+		EXPECT_EQ(64u, take->GetLoops()[0]->LoopLength());
+		if (withMidi)
+			EXPECT_EQ(midi::MidiLoopState::Playing, take->GetMidiLoopSnapshot()[0]->State());
+		take->EndMultiWrite(32u, true, Audible::AUDIOSOURCE_ADC);
+		take->EndRecording();
+		EXPECT_EQ(LoopTake::STATE_PLAYING, take->TakeState());
+		EXPECT_EQ(engine::Loop::STATE_PLAYING, take->GetLoops()[0]->PlayState());
+	}
+}
+
+TEST(LoopTakeCompletionHandoff, RapidOverdubRetainsUnpublishedSourceAudioSlots)
+{
+	auto source = MakeLoopTake("rapid-source");
+	source->Record({0u, 1u}, "station");
+	source->Play(constants::MaxLoopFadeSamps, 64u, 32u);
+	ASSERT_TRUE(source->GetLoops().empty());
+	auto target = MakeLoopTake("rapid-overdub");
+	target->Overdub({}, "station", {}, {}, source);
+	EXPECT_TRUE(target->HasTriggerAudioCapture());
+	target->Play(constants::MaxLoopFadeSamps, 64u, 64u);
+	EXPECT_EQ(LoopTake::STATE_OVERDUBBINGRECORDING, target->TakeState());
+	source->CommitChanges();
+	target->CommitChanges();
+	ASSERT_EQ(2u, target->GetLoops().size());
+	for (const auto& loop : target->GetLoops())
+		EXPECT_EQ(engine::Loop::STATE_OVERDUBBINGRECORDING, loop->PlayState());
+	source->EndMultiWrite(32u, true, Audible::AUDIOSOURCE_ADC);
+	source->EndRecording();
+	EXPECT_EQ(LoopTake::STATE_PLAYING, source->TakeState());
+	EXPECT_EQ(LoopTake::STATE_OVERDUBBINGRECORDING, target->TakeState());
+	target->EndMultiWrite(64u, true, Audible::AUDIOSOURCE_BOUNCE);
+	target->EndRecording();
+	EXPECT_EQ(LoopTake::STATE_PLAYING, target->TakeState());
+	for (const auto& loop : target->GetLoops())
+		EXPECT_EQ(engine::Loop::STATE_PLAYING, loop->PlayState());
+}
+
 TEST(CaptureSourceMute, SharedClaimsFlushMidiOnceAndPreserveReplacementOwnership)
 {
 	auto source = MakeLoopTake("claimed-midi");
