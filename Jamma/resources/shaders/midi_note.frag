@@ -13,7 +13,6 @@ in vec3 EditorLocalPosition;
 flat in float EditorTopFace;
 flat in vec3 EditorNoteHit;
 flat in int EditorNoteInstance;
-flat in float EditorNoteVisible;
 
 out vec4 ColorOUT;
 
@@ -73,8 +72,6 @@ vec3 muteColour(vec3 colour)
 void main()
 {
     gl_FragDepth = gl_FragCoord.z;
-    if (IsDisc < 0.5 && EditorNoteVisible < 0.5)
-        discard;
     if (EditorWrapCopy != 0.0 && IsDisc > 0.5)
         discard;
     if (EditorMorphV > 0.999 && IsDisc < 0.5 &&

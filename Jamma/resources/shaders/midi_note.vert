@@ -19,7 +19,6 @@ out vec3 EditorLocalPosition;
 flat out float EditorTopFace;
 flat out vec3 EditorNoteHit;
 flat out int EditorNoteInstance;
-flat out float EditorNoteVisible;
 
 uniform mat4 MVP;
 uniform mat4 ModelView;
@@ -76,21 +75,8 @@ void main()
     }
     float displayStart = EditorTimeOrigin > 0.0
         ? fract(editorStart - EditorTimeOrigin + 1.0) : editorStart;
-    float copyStart = displayStart + EditorWrapCopy;
-    float copyEnd = copyStart + editorDuration;
-    float visibleStart = copyStart;
-    float visibleEnd = copyEnd;
-    if (IsDisc < 0.5 && EditorMorph > 0.999)
-    {
-        // Build each visible fragment as a complete cuboid. Fragment clipping
-        // alone leaves the wrap copy without a cap at the physical loop edge.
-        visibleStart = max(copyStart, 0.0);
-        visibleEnd = min(copyEnd, 1.0);
-    }
-    EditorNoteVisible = IsDisc > 0.5 || visibleEnd > visibleStart ? 1.0 : 0.0;
-    float visibleDuration = max(visibleEnd - visibleStart, 0.0);
     float displayU = IsDisc > 0.5 ? gridU
-        : visibleStart + PositionIN.x * visibleDuration;
+        : displayStart + PositionIN.x * editorDuration + EditorWrapCopy;
     float row = pitch - float(EditorBottomPitch) + 0.5;
     float gridZ = IsDisc > 0.5
         ? -PositionIN.z * EditorGridRadius * 0.78
@@ -103,7 +89,7 @@ void main()
     gl_Position = MVP * vec4(mix(position, gridPosition, EditorMorph), 1.0);
     // Fragment hover/playhead calculations remain in source coordinates.
     EditorU = IsDisc > 0.5 ? gridU + EditorTimeOrigin
-        : editorStart + visibleStart - copyStart + PositionIN.x * visibleDuration;
+        : editorStart + PositionIN.x * editorDuration;
     EditorPitchRow = IsDisc > 0.5
         ? (PositionIN.z + 1.0) * rows * 0.5 : row;
     EditorMorphV = EditorMorph;
