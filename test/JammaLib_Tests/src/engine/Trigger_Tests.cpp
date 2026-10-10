@@ -3154,6 +3154,85 @@ TEST(Trigger, ZeroLengthEndsRetireTheirSessionsWithoutConsumingHistoryCapacity)
     }
 }
 
+TEST(Trigger, ActivateRecordsConfiguredMidiLanesWithoutConnectedDevices)
+{
+    for (const bool mixed : { false, true })
+    {
+        for (const bool partiallyConnected : { false, true })
+        {
+            SCOPED_TRACE(mixed);
+            SCOPED_TRACE(partiallyConnected);
+            auto station = MakeTestStation("disconnected-midi-record");
+            station->SetAllowedMidiChannels({ 1 });
+            TriggerParams params;
+            params.MidiInputDevices = { "missing", "keys" };
+            if (mixed) params.InputChannels = { 0u };
+            auto trigger = std::make_shared<Trigger>(params);
+            trigger->SetReceiver(station);
+            io::UserConfig cfg;
+            cfg.Trigger = { 0u, 0u };
+            cfg.Loop = { 0u };
+            cfg.Audio.NumChannelsIn = 2u;
+            trigger->ConfirmAudioAvailabilityOnJob(1u, "audio", 2u);
+            trigger->ConfirmMidiAvailabilityOnJob(
+                partiallyConnected ? std::vector<std::string>{ "keys" } : std::vector<std::string>{}, {});
+            base::Action action;
+            auto press = [&](bool down) {
+                trigger->QueueExternalControlAction(true, down, action);
+                TickAndComplete(trigger, 0u, cfg);
+                station->CommitChanges();
+            };
+            press(true); press(false);
+            ASSERT_EQ(engine::TRIGSTATE_RECORDING, trigger->GetState());
+            ASSERT_EQ(1u, trigger->GetTakes().size());
+            ASSERT_EQ(1u, station->GetLoopTakeSnapshot().size());
+            auto take = station->GetLoopTakeSnapshot().front();
+            EXPECT_EQ(mixed ? 1u : 0u, take->GetLoops().size());
+            ASSERT_EQ(2u, take->GetMidiLoops().size());
+            EXPECT_EQ(params.MidiInputDevices, take->MidiLoopDevices());
+            EXPECT_FALSE(take->RecordMidiEvent(midi::MidiEvent::MakeNoteOn(0u, 0u, 60u, 100u), "unrelated", 0u));
+            trigger->OnTick(GetTime(), 256u, cfg, std::nullopt);
+            press(true); press(false);
+            EXPECT_EQ(engine::TRIGSTATE_DEFAULT, trigger->GetState());
+            ASSERT_EQ(1u, trigger->GetTakes().size());
+            for (const auto& loop : take->GetMidiLoops())
+            {
+                EXPECT_EQ(midi::MidiLoopState::Playing, loop->State());
+                EXPECT_GT(loop->CompletedLengthForEditor(), 0u);
+                EXPECT_EQ(0u, loop->EventCount());
+                midi::MidiLoop::EditState edit;
+                ASSERT_TRUE(loop->SnapshotForEdit(edit));
+                edit.Events[0] = midi::MidiEvent::MakeNoteOn(0u, 0u, 60u, 100u);
+                edit.Events[1] = midi::MidiEvent::MakeNoteOff(1u, 0u, 60u);
+                edit.EventCount = 2u;
+                ASSERT_TRUE(loop->PublishEdit(edit));
+                midi::MidiEvent published;
+                ASSERT_TRUE(loop->TryGetPlaybackEvent(0u, published));
+                EXPECT_TRUE(published.IsNoteOn());
+            }
+        }
+    }
+}
+
+TEST(Trigger, MissingMidiDoesNotBypassInvalidAudioChannelValidation)
+{
+    auto station = MakeTestStation("invalid-mixed-audio");
+    TriggerParams params;
+    params.InputChannels = { 1u };
+    params.MidiInputDevices = { "missing" };
+    auto trigger = std::make_shared<Trigger>(params);
+    trigger->SetReceiver(station);
+    trigger->ConfirmAudioAvailabilityOnJob(1u, "audio", 1u);
+    trigger->ConfirmMidiAvailabilityOnJob({}, {});
+    io::UserConfig cfg;
+    base::Action action;
+    trigger->QueueExternalControlAction(true, true, action);
+    TickAndComplete(trigger, 0u, cfg);
+    EXPECT_EQ(engine::TRIGSTATE_DEFAULT, trigger->GetState());
+    EXPECT_TRUE(trigger->GetTakes().empty());
+    EXPECT_TRUE(station->GetLoopTakeSnapshot().empty());
+}
+
 TEST(Trigger, ConfirmedActivationLossCancelsPendingStartBeforeAndAfterJobAcceptance)
 {
     for (const bool acceptedByJob : { false, true })

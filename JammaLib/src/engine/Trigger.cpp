@@ -1294,9 +1294,9 @@ void Trigger::ProcessStructuralActionsOnJob(
 		const bool startAvailable = !isStart ||
 			(command.InputGeneration == _inputLossGeneration.load(std::memory_order_acquire) &&
 			 (!_confirmedAudioChannels || std::all_of(_inputChannels.begin(), _inputChannels.end(),
-				[this](unsigned int channel) { return channel < *_confirmedAudioChannels; })) &&
-			 (!_hasConfirmedMidiAvailability || std::all_of(_midiInputDevices.begin(), _midiInputDevices.end(),
-				[this](const std::string& name) { return std::find(_confirmedMidiNames.begin(), _confirmedMidiNames.end(), name) != _confirmedMidiNames.end(); })));
+				[this](unsigned int channel) { return channel < *_confirmedAudioChannels; })));
+		// Configured MIDI sources define editable lanes even while disconnected.
+		// A source lost after activation still cancels through InputGeneration.
 		if (isStart && startAvailable)
 			receiver = _receiver;
 		else if ((jobHistoryIndex = _FindJobHistory(command.HistoryToken)))
