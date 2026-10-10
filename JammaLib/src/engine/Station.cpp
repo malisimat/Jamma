@@ -2166,6 +2166,29 @@ void Station::SetLogging(const io::LoggingConfig& config) noexcept
 
 void Station::ForceUnloadAllVstPlugins()
 {
+	// Shutdown owns this thread after audio and job readers have stopped. There
+	// will be no later audio acknowledgement to reclaim retired routing owners.
+	const auto drainState = [](const std::shared_ptr<const AudioState>& state) {
+		if (!state) return;
+		_DrainVstChain(state->MidiChain);
+		for (const auto& destination : state->MidiDestinations)
+			if (destination && destination->Plugin)
+				vst::QueueForUiThreadDestroy(destination->Plugin);
+	};
+	drainState(_audioState.exchange(nullptr, std::memory_order_acq_rel));
+	for (const auto& retired : _retiredAudioStates)
+		drainState(retired.State);
+	_retiredAudioStates.clear();
+	for (const auto& binding : _midiPlaybackBindings)
+	{
+		vst::QueueForUiThreadDestroy(binding->Destination->Plugin);
+		// A removed take may still be pinned by a held playback route.
+		binding->Take->ForceUnloadAllVstPlugins();
+	}
+	_syntheticLiveMidiIngress.Clear();
+	_pendingLostPlaybackMidi.clear();
+	_midiPlaybackBindings.clear();
+	_midiDestinations.clear();
 	auto chain = _vstChain.exchange(nullptr, std::memory_order_acq_rel);
 	_DrainVstChain(std::move(chain));
 	_DrainVstChain(std::move(_backVstChain));

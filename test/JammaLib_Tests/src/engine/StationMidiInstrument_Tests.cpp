@@ -8,6 +8,7 @@
 #include "engine/Station.h"
 #include "midi/MidiLoop.h"
 #include "midi/MidiRouter.h"
+#include "vst/Vst3Plugin.h"
 
 using actions::JobAction;
 using actions::TriggerAction;
@@ -210,6 +211,45 @@ TEST(StationMidiInstrument, LiveMidiIsDeliveredToStationVstPlugin)
 	EXPECT_TRUE(plugin->RealtimeFlags[0]);
 	EXPECT_EQ(64u, plugin->BlockStart);
 	EXPECT_EQ(128u, plugin->BlockSamples);
+}
+
+TEST(StationMidiInstrument, ShutdownReleasesPluginWithoutAnotherAudioBoundary)
+{
+	auto station = MakeStation("shutdown");
+	auto plugin = AddPlugin(station, L"fake-shutdown.dll");
+	std::weak_ptr<vst::IVstPlugin> lifetime = plugin;
+	plugin.reset();
+	station->ForceUnloadAllVstPlugins();
+	vst::DrainUiThreadDestroyQueue();
+	EXPECT_TRUE(lifetime.expired());
+	// Shutdown is also called again from Scene destruction.
+	station->ForceUnloadAllVstPlugins();
+	vst::DrainUiThreadDestroyQueue();
+}
+
+TEST(StationMidiInstrument, ShutdownReleasesRemovedPluginHeldByPlaybackRoute)
+{
+	auto station = MakeStation("shutdown-held-route");
+	auto plugin = AddPlugin(station, L"fake-held-shutdown.dll");
+	AllowAllMidiChannels(station);
+	auto take = MakeMidiTake("held-route");
+	take->Record({}, station->Name(), { 0u }, { "source" });
+	ASSERT_TRUE(take->RecordMidiEvent(MidiEvent::MakeNoteOn(0u, 0u, 60u, 100u), "source", 0u));
+	take->Play(0u, 1000u, 0u);
+	station->AddTake(take);
+	station->CommitChanges();
+	RenderStationBlock(station, 0u);
+	ASSERT_FALSE(plugin->Events.empty());
+	JobAction unload;
+	unload.JobActionType = JobAction::JOB_UNLOADVST;
+	unload.VstIndex = 0u;
+	station->OnAction(unload);
+	station->CommitChanges();
+	std::weak_ptr<vst::IVstPlugin> lifetime = plugin;
+	plugin.reset();
+	station->ForceUnloadAllVstPlugins();
+	vst::DrainUiThreadDestroyQueue();
+	EXPECT_TRUE(lifetime.expired());
 }
 
 TEST(StationMidiInstrument, LostDeviceReleasePreservesHealthyAndAnonymousHeldNotes)
