@@ -2436,11 +2436,13 @@ void Scene::Shutdown()
 		// Recovery borrows callback-owned fields under this same lock. Finish
 		// that borrow before teardown, and prevent a later job reopening admission.
 		std::scoped_lock lock(_sceneMutex);
+		// Publish the permanent close token before the job loop can exit and make
+		// its final acknowledgement. Releasing quit first can strand that token.
+		_inputSubsystem->CloseRigTriggerInputForever();
 		_isSceneQuitting.store(true, std::memory_order_release);
 	}
 	_rigCoordinator.Shutdown();
 	_audioEngine->ClearRigTriggerTransition();
-	_inputSubsystem->CloseRigTriggerInputForever();
 	// RtAudio::Stop() waits for an in-flight callback to return.  Do this before
 	// closing an editor or releasing a plugin: the callback can be dispatching
 	// VST processing, MIDI, or recorded parameter automation.
