@@ -108,6 +108,10 @@ namespace graphics
 			std::uint32_t loopLength, int bottomPitch, int visibleRows,
 			midi::MidiQuantisationFraction fraction);
 
+		static std::vector<float> BuildEditorColumnVertices(const midi::LoopGridGeometry& grid,
+			std::uint32_t loopLength, const midi::MidiQuantisationSettings& settings,
+			std::uint64_t transportStart, std::uint32_t displayOrigin);
+
 		// Back-pointer to the owning loop so the renderer can read automation lanes.
 		// The loop owns this model (shared_ptr), so the raw pointer outlives the model.
 		void SetAutomationSource(const midi::MidiLoop* loop) noexcept { _automationSource = loop; }
@@ -167,6 +171,8 @@ namespace graphics
 		std::vector<midi::MidiNote> _editorNoteSpans;
 		std::uint32_t _editorModelLength = 0u;
 		std::vector<float> _editorGridVertices;
+		std::vector<float> _editorColumnVertices;
+		unsigned int _editorColumnVertexCount = 0u;
 		std::vector<EditorPreviewSpan> _editorPreviewSpans;
 		std::uint32_t _editorPreviewLength = 0u;
 		unsigned int _editorPreviewVertexCount = 0u;

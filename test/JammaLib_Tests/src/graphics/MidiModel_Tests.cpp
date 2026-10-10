@@ -130,3 +130,30 @@ TEST(GraphicsMidiModel, VelocityPreviewPreservesPublishedNotesAndClearsOnReplace
 		EXPECT_EQ(-1, model.EditorPreviewVelocity());
 	}
 }
+
+TEST(GraphicsMidiModel, ColumnBandsResetAtEveryGrainForTripletSubdivisions)
+{
+	for (const auto fraction : {midi::MidiQuantisationFraction::Third, midi::MidiQuantisationFraction::Sixth})
+	{
+		midi::MidiQuantisationSettings settings;
+		settings.Enabled = true; settings.GrainSamps = 60u; settings.Fraction = fraction;
+		const auto divisor = midi::MidiQuantisation::Divisor(fraction);
+		for (const auto transport : {0u, 7u, 67u})
+		{
+			const auto grid = midi::LoopGridGeometry::Resolve(120u, settings, transport);
+			ASSERT_TRUE(grid);
+			const auto vertices = graphics::MidiModel::BuildEditorColumnVertices(*grid, 120u, settings, transport, 0u);
+			for (std::size_t cell = 0; cell + 1u < grid->Boundaries.size(); ++cell)
+			{
+				const auto middle = (grid->Boundaries[cell] + grid->Boundaries[cell + 1u]) / 2u;
+				const auto withinGrain = ((transport + middle) / (60u / divisor)) % divisor;
+				const float expected = withinGrain == 0 ? 3.0f : withinGrain % 2u == 0u ? 2.0f : 0.0f;
+				const auto left = static_cast<float>(grid->Boundaries[cell]) / 120u;
+				float actual = 0.0f;
+				for (std::size_t i = 0; i < vertices.size(); i += 18u)
+					if (vertices[i] == left) actual = vertices[i + 2u];
+				EXPECT_EQ(expected, actual) << "transport=" << transport << " cell=" << cell;
+			}
+		}
+	}
+}

@@ -316,6 +316,8 @@ void MidiModel::UpdateEditorGrid(std::uint32_t loopLength,
 	}
 	_editorGridVertices = BuildEditorGridVertices(displayedGrid ? &*displayedGrid : nullptr,
 		loopLength, _editorBottomPitch, _editorVisibleRows, settings.Fraction);
+	_editorColumnVertices = displayedGrid ? BuildEditorColumnVertices(*displayedGrid,
+		loopLength, settings, transportStart, _editorTimeOrigin) : std::vector<float>{};
 	_editorGridDirty = true;
 }
 
@@ -343,6 +345,34 @@ std::vector<float> MidiModel::BuildEditorGridVertices(const midi::LoopGridGeomet
 		const auto v = static_cast<float>(row) / static_cast<float>(visibleRows);
 		const auto weight = (bottomPitch + row) % 12 == 0 ? 1.0f : 0.35f;
 		vertices.insert(vertices.end(), { 0.0f, v, weight, 1.0f, v, weight });
+	}
+	return vertices;
+}
+
+std::vector<float> MidiModel::BuildEditorColumnVertices(const midi::LoopGridGeometry& grid,
+	std::uint32_t loopLength, const midi::MidiQuantisationSettings& settings,
+	std::uint64_t transportStart, std::uint32_t displayOrigin)
+{
+	std::vector<float> vertices;
+	const auto interval = settings.GridInterval(), divisions = settings.GridDivisions();
+	if (!loopLength || !interval || !divisions) return vertices;
+	const auto divisor = midi::MidiQuantisation::Divisor(settings.Fraction);
+	for (std::size_t cell = 0; cell + 1u < grid.Boundaries.size(); ++cell)
+	{
+		const auto middle = grid.Boundaries[cell] + (grid.Boundaries[cell + 1u] - grid.Boundaries[cell]) / 2u;
+		const auto sample = (static_cast<std::uint64_t>(middle) + displayOrigin) % loopLength;
+		const auto relative = static_cast<std::int64_t>(transportStart + sample)
+			- (settings.HasRemoteGrid() ? settings.RemoteOriginSamps : 0ll) - settings.PhaseOffsetSamps;
+		auto index = midi::MidiQuantisation::NearestBoundaryIndex(relative, interval, divisions);
+		if (midi::MidiQuantisation::BoundarySampleAt(index, interval, divisions) > relative) --index;
+		// Count within the grain, including when the visible edge clips a column.
+		const auto withinGrain = (index % divisor + divisor) % divisor;
+		const auto weight = withinGrain == 0 ? 3.0f : withinGrain % 2 == 0 ? 2.0f : 0.0f;
+		if (!weight) continue;
+		const auto left = static_cast<float>(grid.Boundaries[cell]) / loopLength;
+		const auto right = static_cast<float>(grid.Boundaries[cell + 1u]) / loopLength;
+		vertices.insert(vertices.end(), {left, 0, weight, right, 0, weight, left, 1, weight,
+			left, 1, weight, right, 0, weight, right, 1, weight});
 	}
 	return vertices;
 }
@@ -574,7 +604,9 @@ void MidiModel::_DrawEditorGrid(GlDrawContext& glCtx)
 		return;
 	if (_editorGridDirty)
 	{
-		std::vector<float> vertices = _editorGridVertices;
+		std::vector<float> vertices = _editorColumnVertices;
+		_editorColumnVertexCount = static_cast<unsigned int>(vertices.size() / 3u);
+		vertices.insert(vertices.end(), _editorGridVertices.begin(), _editorGridVertices.end());
 		_editorGridVertexCount = static_cast<unsigned int>(_editorGridVertices.size() / 3u);
 		for (const auto& preview : _editorPreviewSpans)
 		{
@@ -598,7 +630,7 @@ void MidiModel::_DrawEditorGrid(GlDrawContext& glCtx)
 			if (right > 1.0f) append(0.0f, right - 1.0f);
 		}
 		_editorPreviewVertexCount = static_cast<unsigned int>(vertices.size() / 3u)
-			- _editorGridVertexCount;
+			- _editorGridVertexCount - _editorColumnVertexCount;
 		glBindBuffer(GL_ARRAY_BUFFER, _editorGridVbo);
 		glBufferData(GL_ARRAY_BUFFER, vertices.size() * sizeof(float),
 			vertices.data(), GL_DYNAMIC_DRAW);
@@ -612,7 +644,7 @@ void MidiModel::_DrawEditorGrid(GlDrawContext& glCtx)
 	glCtx.PushMvp(glm::translate(glm::mat4(1.0), glm::vec3(pos.X, pos.Y, pos.Z)));
 	glCtx.PushMvp(glm::scale(glm::mat4(1.0), glm::vec3(scale, scale, scale)));
 	glUseProgram(shader->GetId());
-	glCtx.SetUniform("EditorPreviewFirstVertex", static_cast<int>(_editorGridVertexCount));
+	glCtx.SetUniform("EditorPreviewFirstVertex", static_cast<int>(_editorGridVertexCount + _editorColumnVertexCount));
 	shader->SetUniforms(glCtx);
 	GLboolean wasBlend = glIsEnabled(GL_BLEND);
 	GLint oldSrcRgb = GL_ONE, oldDstRgb = GL_ZERO;
@@ -624,13 +656,14 @@ void MidiModel::_DrawEditorGrid(GlDrawContext& glCtx)
 	glEnable(GL_BLEND);
 	glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 	glBindVertexArray(_editorGridVao);
-	glDrawArrays(GL_LINES, 0, _editorGridVertexCount);
+	glDrawArrays(GL_TRIANGLES, 0, _editorColumnVertexCount);
+	glDrawArrays(GL_LINES, _editorColumnVertexCount, _editorGridVertexCount);
 	if (_editorPreviewVertexCount > 0u)
 	{
 		// Held spans must remain visible above tall notes at every velocity.
 		const auto wasDepthTest = glIsEnabled(GL_DEPTH_TEST);
 		glDisable(GL_DEPTH_TEST);
-		glDrawArrays(GL_TRIANGLES, _editorGridVertexCount, _editorPreviewVertexCount);
+		glDrawArrays(GL_TRIANGLES, _editorColumnVertexCount + _editorGridVertexCount, _editorPreviewVertexCount);
 		if (wasDepthTest) glEnable(GL_DEPTH_TEST);
 	}
 	glBindVertexArray(0);

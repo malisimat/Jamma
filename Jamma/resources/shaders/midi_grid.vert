@@ -13,7 +13,7 @@ void main()
 {
     float r = EditorGridRadius;
     gl_Position = MVP * vec4((GridPoint.x - 0.5) * 2.0 * r,
-        GridPoint.z < 0.0 ? 8.0 : 2.0,
+        GridPoint.z < 0.0 ? 8.0 : GridPoint.z > 1.0 ? 1.6 : 2.0,
         -(GridPoint.y * 2.0 - 1.0) * 0.78 * r, 1.0);
     Weight = GridPoint.z;
     // The two preview triangles have the same corner order for every held span.

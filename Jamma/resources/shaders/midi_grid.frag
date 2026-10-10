@@ -11,6 +11,13 @@ void main()
 {
     gl_FragDepth = gl_FragCoord.z * mix(1.0, 0.05, EditorMorph);
     float reveal = smoothstep(0.58, 0.92, EditorMorph);
+    if (Weight > 1.0)
+    {
+        // Subtle column lift preserves the existing black/white pitch bands.
+        ColorOUT = vec4(vec3(0.23, 0.38, 0.48),
+            (Weight > 2.5 ? 0.16 : 0.08) * reveal);
+        return;
+    }
     if (Weight < 0.0)
     {
         // Both add and remove paint share the down state, independent of hover.
