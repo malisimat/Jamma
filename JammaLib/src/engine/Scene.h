@@ -415,7 +415,8 @@ namespace engine
 		std::atomic_bool _quantisationInputResetRequested{ false };
 		io::JamFile::GlobalMidiQuantState _globalMidiQuantState = io::JamFile::GlobalMidiQuantState::Mixed;
 		double _transportOffsetLoopFrac = 0.0;
-		std::unique_ptr<gui::GuiLabel> _label;
+		std::unique_ptr<gui::GuiLabel> _tempoLabel;
+		std::unique_ptr<gui::GuiLabel> _versionLabel;
 		std::unique_ptr<gui::SceneSelector> _selector;
 		std::shared_ptr<gui::GuiMainPanel> _mainPanel;
 		std::shared_ptr<gui::GuiMainPanel> _selectionPanel;

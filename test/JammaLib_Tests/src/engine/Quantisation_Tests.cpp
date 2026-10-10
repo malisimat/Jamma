@@ -295,6 +295,55 @@ TEST(Quantisation, CurrentTempoTimingUsesActiveClockWhenMasterCacheIsUnset)
 // DeduceSeedTiming: seed sizes from master loop length
 // ---------------------------------------------------------------------------
 
+TEST(Quantisation, TempoStatusTracksLocalTimingAndClearsUnavailableValues)
+{
+	engine::Quantiser quantiser;
+	quantiser.SetClock(std::make_shared<utils::Timer>());
+	EXPECT_FALSE(quantiser.CurrentTempoStatus(48000u));
+	quantiser.ApplyTiming(*engine::TimingFromSeedAndMaster(24000u, 192000ul, 48000u), "test");
+	auto tempo = quantiser.CurrentTempoStatus(48000u);
+	ASSERT_TRUE(tempo);
+	EXPECT_FLOAT_EQ(120.0f, tempo->Bpm);
+	EXPECT_EQ(8u, tempo->Bpi);
+	quantiser.ApplyTiming(*engine::TimingFromSeedAndMaster(32000u, 192000ul, 48000u), "test");
+	tempo = quantiser.CurrentTempoStatus(48000u);
+	ASSERT_TRUE(tempo);
+	EXPECT_FLOAT_EQ(90.0f, tempo->Bpm);
+	EXPECT_EQ(6u, tempo->Bpi);
+	quantiser.Clear(true);
+	EXPECT_FALSE(quantiser.CurrentTempoStatus(48000u));
+}
+
+TEST(Quantisation, TempoStatusUsesFullRemoteAuthorityAndReturnsToLocalOnNoSync)
+{
+	engine::Quantiser quantiser;
+	quantiser.SetClock(std::make_shared<utils::Timer>());
+	quantiser.ApplyTiming(*engine::TimingFromSeedAndMaster(24000u, 192000ul, 48000u), "test");
+	// Remote beat spacing need not be a whole sample; deriving BPI from a
+	// rounded grain or a local subdivision would misreport this interval.
+	engine::RemoteTransportGeometry remote;
+	remote.IntervalLengthSamps = 100001ul;
+	remote.Bpm = 201.6f;
+	remote.Bpi = 7u;
+	quantiser.SetRemoteMidiGrid(remote, 0, {});
+	auto tempo = quantiser.CurrentTempoStatus(48000u);
+	ASSERT_TRUE(tempo);
+	EXPECT_FLOAT_EQ(remote.Bpm, tempo->Bpm);
+	EXPECT_EQ(7u, tempo->Bpi);
+	remote.Bpm = 140.5f;
+	remote.Bpi = 13u;
+	quantiser.SetRemoteMidiGrid(remote, 0, {});
+	tempo = quantiser.CurrentTempoStatus(48000u);
+	ASSERT_TRUE(tempo);
+	EXPECT_FLOAT_EQ(remote.Bpm, tempo->Bpm);
+	EXPECT_EQ(13u, tempo->Bpi);
+	quantiser.SetRemoteMidiGrid({}, 0, {});
+	tempo = quantiser.CurrentTempoStatus(48000u);
+	ASSERT_TRUE(tempo);
+	EXPECT_FLOAT_EQ(120.0f, tempo->Bpm);
+	EXPECT_EQ(8u, tempo->Bpi);
+}
+
 TEST(Quantisation, SeedFromMasterNoHalvingNeeded)
 {
 	// A 2 s master is below the 3 s target maximum, but its raw seed BPM is

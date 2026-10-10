@@ -654,6 +654,26 @@ TEST(Rect2d, DisjointIntersectionAndHalfOpenEdges)
 	EXPECT_TRUE(rect.Intersected({ 0, 0, 0, 0 }).IsEmpty());
 }
 
+TEST(GuiHudLayout, StatusBarReservesTempoBeforeMessagesWithoutOverlappingColumns)
+{
+	for (const int viewportWidth : { 0, 80, 160, 240, 320, 500, 800, 1200, 1600 })
+	{
+		const int bar = gui::GuiStyle::StatusBarWidth(viewportWidth);
+		const int tempo = gui::GuiStyle::TempoColumnWidth(bar);
+		const int version = gui::GuiStyle::VersionColumnWidth(bar);
+		const int status = gui::GuiStyle::StatusColumnWidth(bar);
+		const int message = gui::GuiStyle::MessageColumnWidth(bar);
+		EXPECT_GE(tempo, 0);
+		EXPECT_GE(status, 0);
+		EXPECT_GE(message, 0);
+		EXPECT_EQ(viewportWidth, bar);
+		EXPECT_EQ(bar, tempo + status + message + version);
+		EXPECT_EQ(std::min(gui::GuiStyle::TempoColumnMaxWidth, bar), tempo);
+		if (bar >= 320) EXPECT_EQ(160, version);
+		if (bar <= gui::GuiStyle::TempoColumnMaxWidth) EXPECT_EQ(0, status + message + version);
+	}
+}
+
 TEST(GuiHudLayout, AdaptiveCardWidthsUseAvailableSpaceAndRetainMinimumForScrolling)
 {
 	EXPECT_EQ(0u, gui::GuiHud::SourceCardWidth(500u, 0u));

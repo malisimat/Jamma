@@ -128,7 +128,7 @@ void LoopGridEditor::_Layout()
 	const int statusX = static_cast<int>(_size.Width) - statusWidth;
 	const int statusHeight = std::min(gui::GuiStyle::StatusBarHeight, static_cast<int>(_size.Height));
 	const int messageWidth = gui::GuiStyle::MessageColumnWidth(statusWidth);
-	_feedback->SetPosition({ statusX + gui::GuiStyle::StatusColumnWidth(statusWidth), std::max(0, (statusHeight - 22) / 2) });
+	_feedback->SetPosition({ statusX + gui::GuiStyle::TempoColumnWidth(statusWidth) + gui::GuiStyle::StatusColumnWidth(statusWidth), std::max(0, (statusHeight - 22) / 2) });
 	_feedback->SetSize({ static_cast<unsigned int>(messageWidth), 22u });
 	_feedback->SetVisible(statusHeight >= 22 && messageWidth > 0);
 	_modeLabel->SetVisible(false);

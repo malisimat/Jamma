@@ -41,7 +41,7 @@ Scene::Scene(SceneParams params,
 	_skyboxViewProj(glm::mat4()),
 	_skyboxStarted(false),
 	_skyboxStartTime(Timer::GetZero()),
-	_label(nullptr),
+	_tempoLabel(nullptr),
 	_selector(nullptr),
 	_modeRadio(nullptr),
 	_midiChannelOverrideInput(nullptr),
@@ -88,15 +88,16 @@ Scene::Scene(SceneParams params,
 	_quantisation.SetSeedUsesPowers(_userConfig.Loop.SeedUsesPowers);
 
 	GuiLabelParams labelParams;
-	const std::string versionText = "Jamma v" LIB_VERSION;
-	labelParams.String = versionText;
+	labelParams.String = "BPM --- / BPI ---";
 	labelParams.Ellipsize = true;
 	labelParams.ClipText = true;
 	labelParams.VerticalAlign = GuiTextVerticalAlign::Center;
-	labelParams.Position = { (int)params.Size.Width - 220, (int)params.Size.Height - 28 };
-	labelParams.ModelPosition = { (float)(int)params.Size.Width - 220.0f, (float)(int)params.Size.Height - 28.0f, 0.0f };
-	labelParams.Size = { 220, 24 };
-	_label = std::make_unique<GuiLabel>(labelParams);
+	labelParams.Position = { 0, 3 };
+	labelParams.TextInsetX = GuiStyle::TextPadding;
+	labelParams.Size = { GuiStyle::TempoColumnMaxWidth, 22u };
+	_tempoLabel = std::make_unique<GuiLabel>(labelParams);
+	labelParams.String = "Jamma v" LIB_VERSION;
+	_versionLabel = std::make_unique<GuiLabel>(labelParams);
 
 
 	GuiHudParams hudParams;
@@ -747,11 +748,24 @@ void Scene::Draw(DrawContext& ctx)
 	}
 	if (_hudPanel) _hudPanel->Draw(ctx);
 	const int statusWidth = GuiStyle::StatusBarWidth(static_cast<int>(_sizeParams.Size.Width));
-	const int versionWidth = GuiStyle::VersionColumnWidth(statusWidth);
+	const int tempoWidth = GuiStyle::TempoColumnWidth(statusWidth);
+	std::string tempoText = "BPM --- / BPI ---";
+	if (const auto tempo = _quantisation.CurrentTempoStatus(_CurrentSampleRate()))
+	{
+		std::ostringstream text;
+		text << std::fixed << std::setprecision(0) << "BPM " << std::setw(3) << tempo->Bpm
+			<< " / BPI " << std::setw(3) << tempo->Bpi;
+		tempoText = text.str();
+	}
+	_tempoLabel->SetString(tempoText);
 	const int statusHeight = std::min(GuiStyle::StatusBarHeight, static_cast<int>(_sizeParams.Size.Height));
-	_label->SetPosition({ static_cast<int>(_sizeParams.Size.Width) - versionWidth, std::max(0, (statusHeight - 22) / 2) });
-	_label->SetSize({ static_cast<unsigned int>(versionWidth), 22u });
-	if (versionWidth > 0 && statusHeight >= 22) _label->Draw(ctx);
+	_tempoLabel->SetPosition({ 0, std::max(0, (statusHeight - 22) / 2) });
+	_tempoLabel->SetSize({ static_cast<unsigned int>(tempoWidth), 22u });
+	if (tempoWidth > 0 && statusHeight >= 22) _tempoLabel->Draw(ctx);
+	const int versionWidth = GuiStyle::VersionColumnWidth(statusWidth);
+	_versionLabel->SetPosition({ statusWidth - versionWidth, std::max(0, (statusHeight - 22) / 2) });
+	_versionLabel->SetSize({ static_cast<unsigned int>(versionWidth), 22u });
+	if (versionWidth > 0 && statusHeight >= 22) _versionLabel->Draw(ctx);
 	if (!_popupManager.IsOpen()) _loopEditor.Draw(ctx);
 	{
 		auto opacity = ctx.WithOpacity(1.0f - _quantisationInteraction.PanelAlpha());
@@ -919,7 +933,8 @@ void Scene::_InitResources(ResourceLib& resourceLib, bool forceInit)
 	std::scoped_lock lock(_sceneMutex);
 
 	_skybox.InitResources(resourceLib, forceInit);
-	_label->InitResources(resourceLib, forceInit);
+	_tempoLabel->InitResources(resourceLib, forceInit);
+	_versionLabel->InitResources(resourceLib, forceInit);
 	_loopEditor.InitResources(resourceLib, forceInit);
 	_selector->InitResources(resourceLib, forceInit);
 	for (auto& child : _guiChildren)
@@ -940,7 +955,8 @@ void Scene::_InitResources(ResourceLib& resourceLib, bool forceInit)
 void Scene::_ReleaseResources()
 {
 	_skybox.ReleaseResources();
-	_label->ReleaseResources();
+	_tempoLabel->ReleaseResources();
+	_versionLabel->ReleaseResources();
 	_loopEditor.ReleaseResources();
 	_selector->ReleaseResources();
 	for (auto& child : _guiChildren)

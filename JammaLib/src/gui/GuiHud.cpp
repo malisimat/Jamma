@@ -630,7 +630,7 @@ void GuiHud::_BuildTriggerRail()
 	_addTriggerButton = std::make_shared<GuiHudActionButton>(addParams, [this]() { _AddTrigger(); });
 	_triggerRail->AddChild(_addTriggerButton);
 
-	GuiLabelParams statusParams = GuiLabelParams::PanelScrollRow("Trigger routing ready", 0u);
+	GuiLabelParams statusParams = GuiLabelParams::PanelScrollRow("", 0u);
 	statusParams.Ellipsize = true;
 	statusParams.Size = { 300u, GuiLabelParams::RowHeight };
 	statusParams.MinSize = { 160u, GuiLabelParams::RowHeight };
@@ -898,9 +898,9 @@ void GuiHud::_LayoutPanels()
 	_statusPanel->SetPosition({ 0, 0 });
 	_statusPanel->SetSize({ static_cast<unsigned int>(width), static_cast<unsigned int>(statusHeight) });
 	_statusPanel->SetVisible(width > 0 && statusHeight > 0);
-	_routingStatusLabel->SetPosition({ width - statusWidth, std::max(0, (statusHeight - 22) / 2) });
+	_routingStatusLabel->SetPosition({ GuiStyle::TempoColumnWidth(statusWidth), std::max(0, (statusHeight - 22) / 2) });
 	_routingStatusLabel->SetSize({ static_cast<unsigned int>(GuiStyle::StatusColumnWidth(statusWidth)), 22u });
-	_routingStatusLabel->SetVisible(statusWidth > 0 && statusHeight >= 22);
+	_routingStatusLabel->SetVisible(GuiStyle::StatusColumnWidth(statusWidth) > 0 && statusHeight >= 22);
 	if (_revealNewestTrigger && !_triggerNames.empty())
 	{
 		_RevealTrigger(_triggerNames.size() - 1u);
@@ -1306,7 +1306,7 @@ void GuiHud::_UpdateRoutingEditPresentation()
 	_lastRoutingEditAvailability = availability;
 	switch (availability)
 	{
-	case RoutingEditAvailability::Ready: _routingStatusLabel->SetString("Trigger routing ready"); break;
+	case RoutingEditAvailability::Ready: _routingStatusLabel->SetString(""); break;
 	case RoutingEditAvailability::Applying: _routingStatusLabel->SetString("Applying trigger routing..."); break;
 	case RoutingEditAvailability::AudioCallbackInactive: _routingStatusLabel->SetString("Start audio to edit trigger routing"); break;
 	case RoutingEditAvailability::TriggerBusy: _routingStatusLabel->SetString("Finish trigger action to edit routing"); break;

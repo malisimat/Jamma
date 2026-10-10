@@ -693,6 +693,15 @@ std::optional<QuantisationTiming> Quantiser::CurrentTempoTiming(unsigned int sam
 	return TimingFromSeedAndMaster(seedSamps, masterLoopSamps, sampleRate);
 }
 
+std::optional<Quantiser::TempoStatus> Quantiser::CurrentTempoStatus(unsigned int sampleRate) const
+{
+	if (_acceptedRemoteGrid.IntervalLengthSamps > 0ul && _acceptedRemoteGrid.Bpi > 0u)
+		return TempoStatus{ _acceptedRemoteGrid.Bpm, _acceptedRemoteGrid.Bpi };
+	if (const auto timing = CurrentTempoTiming(sampleRate))
+		return TempoStatus{ timing->Bpm, timing->Bpi };
+	return std::nullopt;
+}
+
 void Quantiser::LogNinjamTempoEvent(const char* event,
 	unsigned long masterLoopLengthSamps,
 	unsigned int grainSamps,

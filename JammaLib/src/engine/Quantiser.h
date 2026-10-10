@@ -134,6 +134,14 @@ namespace engine
 		bool IsArmedForReclock() const noexcept;
 		std::shared_ptr<utils::Timer> Clock() const noexcept;
 		std::optional<QuantisationTiming> CurrentTempoTiming(unsigned int sampleRate) const;
+		struct TempoStatus
+		{
+			float Bpm = 0.0f;
+			unsigned int Bpi = 0u;
+		};
+		// Job/UI-side presentation under the Scene lock. Subdivisions do not
+		// change local grain counts or the full accepted remote BPM/BPI.
+		std::optional<TempoStatus> CurrentTempoStatus(unsigned int sampleRate) const;
 
 		static void LogNinjamTempoEvent(const char* event,
 			unsigned long masterLoopLengthSamps,
