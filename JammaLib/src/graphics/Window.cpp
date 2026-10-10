@@ -521,7 +521,7 @@ void Window::Render()
 
 		if (pick.HasValue)
 		{
-			if (pick.ObjectId != _lastHoverObjectId)
+			if (_forcePick || pick.ObjectId != _lastHoverObjectId)
 			{
 				auto path = utils::IdToVec(pick.ObjectId);
 				_scene->SetHover3d(path, _cachedCursorModifiers);
@@ -756,6 +756,13 @@ ActionResult Window::OnAction(KeyAction keyAction)
 
 	_modifiers = (Action::Modifiers)modifiers;
 	keyAction.Modifiers = _modifiers;
+	if (17u == keyAction.KeyChar && KeyAction::KEY_UP == keyAction.KeyActionType)
+	{
+		// Scene freezes hover during Ctrl; restore the current pick even if its ID is unchanged.
+		_cachedCursorModifiers = _modifiers;
+		_hover3dDirty = true;
+		_forcePick = true;
+	}
 	if ((76u == keyAction.KeyChar)
 		&& (KeyAction::KEY_UP == keyAction.KeyActionType)
 		&& (Action::MODIFIER_CTRL & keyAction.Modifiers)

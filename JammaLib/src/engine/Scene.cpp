@@ -1342,6 +1342,7 @@ ActionResult Scene::OnAction(KeyAction action)
 	// Physical modifier transitions must survive contextual editor consumption.
 	if (17u == action.KeyChar)
 	{
+		const bool wasCtrlHeld = _ctrlHeld;
 		_ctrlHeld = actions::KeyAction::KEY_DOWN == action.KeyActionType;
 		const bool contextualText = _focusManager.IsEditingText() || _loopEditor.IsEditingText();
 		{
@@ -1355,9 +1356,24 @@ ActionResult Scene::OnAction(KeyAction action)
 			if (auto active = _touchDownElement.lock()) active->ClearPointerState();
 			_touchDownElement.reset();
 			_touchDownIsHud = _touchDownIsSettings = false;
-			_ApplyHoverPath2d({});
-			_InvalidateHover2d();
+			if (!wasCtrlHeld && HasSelection())
+			{
+				// Targets were captured above; hide hover when editing the selection.
+				_ApplyHoverPath2d({});
+				_hoverPath2d.clear();
+				{
+					std::scoped_lock lock(_sceneMutex);
+					_hoverPath3d.clear();
+					_hoverElement3d.reset();
+					_selector->UpdateCurrentHover({}, Action::MODIFIER_NONE, false,
+						Tweakable::TWEAKSTATE_NONE);
+					for (const auto& station : _stations)
+						station->SetPicking3d(false);
+				}
+			}
 		}
+		if (wasCtrlHeld && !_ctrlHeld)
+			_InvalidateHover2d();
 	}
 	if (32u == action.KeyChar)
 	{
@@ -2226,7 +2242,7 @@ void Scene::AddChild(std::shared_ptr<base::GuiElement> child)
 
 void Scene::SetHover3d(std::vector<unsigned char> path, Action::Modifiers modifiers)
 {
-	if (_loopEditor.IsEngaged())
+	if (_ctrlHeld || _loopEditor.IsEngaged())
 		return;
 	// Resolve GUI ownership before taking the scene lock: station snapshots also lock it.
 	std::vector<std::weak_ptr<base::GuiElement>> guiPath;
@@ -2566,6 +2582,9 @@ void Scene::CommitChanges()
 
 void Scene::ApplyDeferredHoverUpdates()
 {
+	// Ctrl edits the captured targets, so pointer motion must not change their feedback.
+	if (_ctrlHeld)
+		return;
 	// Keep active hover in sync with both deferred 2D hit-testing and latest 3D picker result.
 	if (!_hover2dDirty)
 		return;
