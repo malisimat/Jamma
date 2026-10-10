@@ -43,5 +43,6 @@ namespace actions
 		bool ApplyToSourceTake;
 		bool ApplyToTargetAudio;
 		bool ApplyToTargetMidi;
+		bool IsSourceLossCancellation = false;
 	};
 }

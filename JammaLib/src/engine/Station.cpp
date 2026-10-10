@@ -1483,7 +1483,7 @@ ActionResult Station::OnAction(TriggerAction action)
 	case TriggerAction::TRIGGER_DITCH:
 		if (loopTake.has_value())
 		{
-			_DitchLoopTake(loopTake.value());
+			_DitchLoopTake(loopTake.value(), !action.IsSourceLossCancellation);
 			res.DitchResult = actions::DitchDisposition::Removed;
 		}
 		else
@@ -1642,6 +1642,8 @@ void Station::Reset()
 	{
 		std::scoped_lock lock(_liveHeldMidiMutex);
 		_liveHeldMidi.clear();
+		_anonymousLiveHeldMidi = {};
+		_pendingLostLiveMidiNoteOffs.reset();
 	}
 	if (_stationModel)
 		_stationModel->ResetStationLevel();
@@ -2144,6 +2146,10 @@ void Station::SetAllowedMidiChannels(const std::vector<int>& channels)
 		std::vector<MidiEvent> noteOffs;
 		{
 			std::scoped_lock lock(_liveHeldMidiMutex);
+			for (std::uint8_t channel = 0; channel < 16; ++channel)
+				if ((removedMask & (1u << channel)) != 0u)
+					for (std::uint8_t note = 0; note < 128; ++note)
+						_anonymousLiveHeldMidi.Clear(channel, note);
 			for (auto& [deviceName, heldSnapshot] : _liveHeldMidi)
 			{
 				const bool queueNoteOffs = deviceName.empty();
@@ -2222,6 +2228,10 @@ void Station::ObservePhysicalMidiForRecording(const MidiEvent& event, const std:
 		upsert("");
 		if (!deviceName.empty())
 			upsert(deviceName);
+		else if (event.IsNoteOn())
+			_anonymousLiveHeldMidi.Set(channel, note, event.data2);
+		else
+			_anonymousLiveHeldMidi.Clear(channel, note);
 	}
 
 }
@@ -2236,6 +2246,7 @@ void Station::FlushLiveHeldMidiNotes() noexcept
 		if (liveHeld != _liveHeldMidi.end())
 			heldSnapshot = liveHeld->second;
 		_liveHeldMidi.clear();
+		_anonymousLiveHeldMidi = {};
 	}
 
 	if (heldSnapshot.Held.none())
@@ -2249,6 +2260,60 @@ void Station::FlushLiveHeldMidiNotes() noexcept
 				TryEnqueueSyntheticLiveMidi(MidiEvent::MakeNoteOff(0u, ch, note));
 		}
 	}
+}
+
+void Station::FlushLiveHeldMidiNotesForDevice(const std::string& deviceName) noexcept
+{
+	if (deviceName.empty())
+		return;
+	midi::MidiNoteSnapshot released;
+	{
+		std::scoped_lock lock(_liveHeldMidiMutex);
+		auto lost = std::find_if(_liveHeldMidi.begin(), _liveHeldMidi.end(),
+			[&deviceName](const auto& entry) { return entry.first == deviceName; });
+		if (lost == _liveHeldMidi.end())
+			return;
+		released = lost->second;
+		_liveHeldMidi.erase(lost);
+		auto remaining = _anonymousLiveHeldMidi;
+		for (const auto& entry : _liveHeldMidi)
+			if (!entry.first.empty())
+				for (size_t slot = 0; slot < midi::MidiNote::TotalNoteSlots; ++slot)
+					if (entry.second.Held.test(slot)) {
+						remaining.Held.set(slot);
+						remaining.Velocity[slot] = entry.second.Velocity[slot];
+					}
+		released.Held &= ~remaining.Held;
+		auto aggregate = std::find_if(_liveHeldMidi.begin(), _liveHeldMidi.end(),
+			[](const auto& entry) { return entry.first.empty(); });
+		if (aggregate != _liveHeldMidi.end()) aggregate->second = remaining;
+		_pendingLostLiveMidiNoteOffs |= released.Held;
+	}
+	FlushPendingLostLiveMidiNotes();
+}
+
+void Station::FlushPendingLostLiveMidiNotes() noexcept
+{
+	// Job producer only. Retain release bits across a full synthetic queue;
+	// a surviving endpoint taking ownership of the same note suppresses release.
+	std::scoped_lock lock(_liveHeldMidiMutex);
+	if (_pendingLostLiveMidiNoteOffs.none())
+		return;
+	const auto aggregate = std::find_if(_liveHeldMidi.begin(), _liveHeldMidi.end(),
+		[](const auto& entry) { return entry.first.empty(); });
+	if (aggregate != _liveHeldMidi.end())
+		_pendingLostLiveMidiNoteOffs &= ~aggregate->second.Held;
+	for (std::uint8_t channel = 0; channel < 16; ++channel)
+		for (std::uint8_t note = 0; note < 128; ++note)
+		{
+			const auto slot = midi::MidiNote::NoteSlot(channel, note);
+			if (_pendingLostLiveMidiNoteOffs.test(slot))
+			{
+				if (!TryEnqueueSyntheticLiveMidi(MidiEvent::MakeNoteOff(0u, channel, note)))
+					return;
+				_pendingLostLiveMidiNoteOffs.reset(slot);
+			}
+		}
 }
 
 void Station::SetMidiVstRoute(unsigned int midiOutputIndex, size_t vstIndex)
@@ -2528,6 +2593,13 @@ void Station::AcknowledgeAudioBoundary() noexcept
 		_audioCompletedStateGeneration.store(state->Generation, std::memory_order_release);
 }
 
+bool Station::HasUnacknowledgedAudioState() const noexcept
+{
+	const auto state = _audioState.load(std::memory_order_acquire);
+	return state && state->Generation >
+		_audioCompletedStateGeneration.load(std::memory_order_acquire);
+}
+
 void Station::ReleaseRetiredAudioStates()
 {
 	const auto completed = _audioCompletedStateGeneration.load(std::memory_order_acquire);
@@ -2631,9 +2703,10 @@ void Station::_WireVuSliders()
 	}
 }
 
-void Station::_DitchLoopTake(std::shared_ptr<LoopTake>& take) noexcept
+void Station::_DitchLoopTake(std::shared_ptr<LoopTake>& take, bool flushLiveHeld) noexcept
 {
-	FlushLiveHeldMidiNotes();
+	if (flushLiveHeld)
+		FlushLiveHeldMidiNotes();
 
 	// Flush any held MIDI notes so the VST instrument doesn't get stuck notes.
 	// Events are injected via the synthetic live queue and
@@ -2650,8 +2723,15 @@ void Station::_DitchLoopTake(std::shared_ptr<LoopTake>& take) noexcept
 		{
 			for (std::uint8_t note = 0; note < 128; ++note)
 			{
-				if (held.test(MidiLoop::NoteSlot(ch, note)))
-					TryEnqueueSyntheticLiveMidi(MidiEvent::MakeNoteOff(0u, ch, note));
+				if (held.test(MidiLoop::NoteSlot(ch, note)) &&
+					!TryEnqueueSyntheticLiveMidi(MidiEvent::MakeNoteOff(0u, ch, note)) &&
+					!flushLiveHeld)
+				{
+					// Confirmed cancellation may retire membership before another
+					// playback callback; retain failed releases on the job owner.
+					std::scoped_lock lock(_liveHeldMidiMutex);
+					_pendingLostLiveMidiNoteOffs.set(MidiLoop::NoteSlot(ch, note));
+				}
 			}
 		}
 	}

@@ -192,6 +192,8 @@ namespace engine
 			std::optional<audio::AudioStreamParams> params = std::nullopt);
 		// Let the UI/job thread reclaim old snapshots after callback work, keeping LoopTake destruction off audio.
 		void AcknowledgeAudioBoundary() noexcept;
+		// Job owner only; lets a gate-proven stopped reader acknowledge publication.
+		bool HasUnacknowledgedAudioState() const noexcept;
 		void ReleaseRetiredAudioStates();
 		std::size_t RetiredAudioStateCount() const noexcept { return _retiredAudioStates.size(); }
 		void SetRackVisibility(bool showStationRack, bool showLoopTakeRacks);
@@ -210,6 +212,8 @@ namespace engine
 		void ObservePhysicalMidiForRecording(const midi::MidiEvent& event, const std::string& deviceName);
 		// Emit synthetic NoteOff for currently held live notes and clear held state.
 		void FlushLiveHeldMidiNotes() noexcept;
+		void FlushLiveHeldMidiNotesForDevice(const std::string& deviceName) noexcept;
+		void FlushPendingLostLiveMidiNotes() noexcept;
 		// Replacement semantics: one MIDI output routes to at most one plugin.
 		void SetMidiVstRoute(unsigned int midiOutputIndex, size_t vstIndex);
 		void ClearMidiVstRoutes();
@@ -337,7 +341,7 @@ namespace engine
 
 		// Cancel and remove without resetting resources borrowed by callback snapshots.
 		// Job/UI owners enqueue held NoteOffs; retirement releases resources off callback.
-		void _DitchLoopTake(std::shared_ptr<LoopTake>& take) noexcept;
+		void _DitchLoopTake(std::shared_ptr<LoopTake>& take, bool flushLiveHeld = true) noexcept;
 
 		// --- Parameter automation dispatch ---
 
@@ -450,6 +454,8 @@ namespace engine
 		std::uint32_t _lastSyntheticLiveMidiSample = 0u;
 		mutable std::mutex _liveHeldMidiMutex;
 		std::vector<std::pair<std::string, midi::MidiNoteSnapshot>> _liveHeldMidi;
+		midi::MidiNoteSnapshot _anonymousLiveHeldMidi;
+		std::bitset<midi::MidiNote::TotalNoteSlots> _pendingLostLiveMidiNoteOffs;
 		std::vector<int> _allowedMidiChannels;
 		std::atomic<std::uint16_t> _allowedMidiChannelMask{ 0u };
 		// Route snapshots are published off the audio thread.
