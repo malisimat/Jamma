@@ -275,7 +275,9 @@ namespace engine
 		void SetPresentation(PresentationMode mode, std::uint64_t serial) noexcept;
 		void EndRecording();
 		// Atomic logical cancellation; destructive Ditch requires stopped/retired readers.
-		void CancelCapture() noexcept;
+		void CancelCapture(bool sourceLoss = false) noexcept;
+		bool IsSourceLossCancelled() const noexcept
+			{ return _sourceLossCancelled.load(std::memory_order_acquire); }
 		void Ditch();
 		void Overdub(std::vector<unsigned int> channels,
 			std::string stationName,
@@ -492,6 +494,8 @@ namespace engine
 		// INACTIVE also describes a newly constructed/restored take. Cancellation
 		// alone suppresses retained callback snapshots and queued lifecycle work.
 		std::atomic<bool> _captureCancelled{ false };
+		// Sticky for a retired take: old Station snapshots must never re-emit its MIDI.
+		std::atomic<bool> _sourceLossCancelled{ false };
 		std::weak_ptr<LoopTake> _activeBounceSource;
 		std::shared_ptr<base::BounceWriter> _activeBounceWriter;
 		std::string _id;

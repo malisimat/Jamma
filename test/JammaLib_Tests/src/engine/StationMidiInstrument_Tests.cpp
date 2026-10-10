@@ -1,4 +1,4 @@
-﻿#include "gtest/gtest.h"
+#include "gtest/gtest.h"
 
 #include <array>
 
@@ -237,34 +237,58 @@ TEST(StationMidiInstrument, LostDeviceReleasePreservesHealthyAndAnonymousHeldNot
 
 TEST(StationMidiInstrument, LostDeviceReleaseRetriesAfterSyntheticQueueSaturation)
 {
-    auto station = MakeStation("saturated-source-loss");
-    auto plugin = AddPlugin(station, L"fake-saturated-loss.dll");
-    AllowAllMidiChannels(station);
-    station->ObservePhysicalMidiForRecording(MidiEvent::MakeNoteOn(0u, 0u, 65u, 100u), "lost");
-    unsigned int queued = 0u;
-    while (queued < 10000u && station->TryEnqueueSyntheticLiveMidi(
-        MidiEvent::MakeNoteOn(0u, 0u, 30u, 100u))) ++queued;
-    ASSERT_GT(queued, 0u);
-    ASSERT_LT(queued, 10000u);
-    station->FlushLiveHeldMidiNotesForDevice("lost");
-    RenderStationBlock(station, 0u);
-    plugin->Events.clear();
-    unsigned int releases = 0u;
-    // Production drains a bounded slice per block. Keep that limit intact and
-    // retry while the queued traffic ahead of our release is consumed.
-    for (unsigned int block = 1u; block <= queued + 2u; ++block)
+    for (const bool acceptHealthy : { false, true })
     {
-        station->FlushPendingLostLiveMidiNotes();
-        RenderStationBlock(station, block * 128u);
-        for (const auto& event : plugin->Events)
-            if (event.IsNoteOff() && event.data1 == 65u) ++releases;
+        SCOPED_TRACE(acceptHealthy ? "accepted live owner" : "dropped live owner");
+        auto station = MakeStation("saturated-source-loss");
+        auto plugin = AddPlugin(station, L"fake-saturated-loss.dll");
+        AllowAllMidiChannels(station);
+        station->ObservePhysicalMidiForRecording(MidiEvent::MakeNoteOn(0u, 0u, 65u, 100u), "lost");
+        station->ObservePhysicalMidiForRecording(MidiEvent::MakeNoteOn(0u, 0u, 66u, 100u), "lost");
+        ASSERT_TRUE(station->TryEnqueueImmediateLiveMidi(MidiEvent::MakeNoteOn(0u, 0u, 65u, 100u)));
+        ASSERT_TRUE(station->TryEnqueueImmediateLiveMidi(MidiEvent::MakeNoteOn(0u, 0u, 66u, 100u)));
+        RenderStationBlock(station, 0u);
         plugin->Events.clear();
+        unsigned int queued = 0u;
+        while (queued < 10000u && station->TryEnqueueSyntheticLiveMidi(
+            MidiEvent::MakeNoteOn(1u, 0u, 30u, 100u))) ++queued;
+        ASSERT_GT(queued, 0u);
+        ASSERT_LT(queued, 10000u);
+        station->FlushLiveHeldMidiNotesForDevice("lost");
+        RenderStationBlock(station, 0u);
+        station->FlushPendingLostLiveMidiNotes();
+        unsigned int immediateQueued = 0u;
+        if (!acceptHealthy)
+            while (immediateQueued < 1024u && station->TryEnqueueImmediateLiveMidi(
+                MidiEvent::MakeNoteOn(0u, 0u, 30u, 100u))) ++immediateQueued;
+        // Earlier than the backlogged synthetic traffic, so an accepted owner is
+        // delivered before the queued release. Observation alone cannot claim it.
+        const auto healthy = MidiEvent::MakeNoteOn(0u, 0u, 66u, 100u);
+        station->ObservePhysicalMidiForRecording(healthy, "healthy");
+        ASSERT_EQ(acceptHealthy, station->TryEnqueueImmediateLiveMidi(healthy));
+        plugin->Events.clear();
+        unsigned int releases = 0u;
+        unsigned int sharedReleases = 0u;
+        // Production drains a bounded slice per block. Keep that limit intact and
+        // retry while the queued traffic ahead of our release is consumed.
+        for (unsigned int block = 1u; block <= (queued + immediateQueued + 63u) / 64u + 2u; ++block)
+        {
+            station->FlushPendingLostLiveMidiNotes();
+            RenderStationBlock(station, block * 128u);
+            for (const auto& event : plugin->Events)
+            {
+                if (event.IsNoteOff() && event.data1 == 65u) ++releases;
+                if (event.IsNoteOff() && event.data1 == 66u) ++sharedReleases;
+            }
+            plugin->Events.clear();
+        }
+        EXPECT_EQ(1u, releases);
+        EXPECT_EQ(acceptHealthy ? 0u : 1u, sharedReleases);
+        plugin->Events.clear();
+        station->FlushPendingLostLiveMidiNotes();
+        RenderStationBlock(station, 256u);
+        EXPECT_TRUE(plugin->Events.empty());
     }
-    EXPECT_EQ(1u, releases);
-    plugin->Events.clear();
-    station->FlushPendingLostLiveMidiNotes();
-    RenderStationBlock(station, 256u);
-    EXPECT_TRUE(plugin->Events.empty());
 }
 
 TEST(StationMidiInstrument, SourceLossDitchRetriesRemovedTargetsPlaybackHeldRelease)
@@ -275,8 +299,14 @@ TEST(StationMidiInstrument, SourceLossDitchRetriesRemovedTargetsPlaybackHeldRele
     auto take = MakeMidiTake("removed-held-target");
     take->Record({}, station->Name(), { 0u }, { "lost" });
     ASSERT_TRUE(take->RecordMidiEvent(MidiEvent::MakeNoteOn(0u, 0u, 67u, 100u), "lost", 0u));
+    ASSERT_TRUE(take->RecordMidiEvent(MidiEvent::MakeNoteOn(0u, 0u, 60u, 100u), "lost", 0u));
     take->Play(0u, 1000u, 0u);
     station->AddTake(take);
+    auto healthy = MakeMidiTake("late-healthy-owner");
+    healthy->Record({}, station->Name(), { 0u }, { "healthy" });
+    ASSERT_TRUE(healthy->RecordMidiEvent(MidiEvent::MakeNoteOn(128u, 0u, 60u, 100u), "healthy", 0u));
+    healthy->Play(0u, 10000u, 0u);
+    station->AddTake(healthy);
     station->CommitChanges();
     RenderStationBlock(station, 0u);
     ASSERT_FALSE(plugin->Events.empty());
@@ -292,17 +322,126 @@ TEST(StationMidiInstrument, SourceLossDitchRetriesRemovedTargetsPlaybackHeldRele
     ditch.IsSourceLossCancellation = true;
     EXPECT_EQ(actions::DitchDisposition::Removed, station->OnAction(ditch).DitchResult);
     station->CommitChanges();
-    ASSERT_TRUE(station->GetLoopTakeSnapshot().empty());
+    ASSERT_EQ(1u, station->GetLoopTakeSnapshot().size());
     unsigned int releases = 0u;
-    for (unsigned int block = 1u; block <= queued + 2u; ++block)
+    // The healthy owner starts after cancellation, while the release is queued.
+    for (unsigned int block = 1u; block <= (queued + 63u) / 64u + 2u; ++block)
     {
         station->FlushPendingLostLiveMidiNotes();
         RenderStationBlock(station, block * 128u);
         for (const auto& event : plugin->Events)
+        {
             if (event.IsNoteOff() && event.data1 == 67u) ++releases;
+            EXPECT_FALSE(event.IsNoteOff() && event.data1 == 60u);
+        }
         plugin->Events.clear();
     }
     EXPECT_EQ(1u, releases);
+}
+
+TEST(StationMidiInstrument, SourceLossPlaybackReleasePreservesHealthyOwnershipAcrossPublication)
+{
+    for (const bool healthyPlayback : { false, true })
+    {
+        SCOPED_TRACE(healthyPlayback ? "playback" : "live");
+        auto station = MakeStation("overlapping-playback-loss");
+        auto plugin = AddPlugin(station, L"fake-overlap.dll");
+        AllowAllMidiChannels(station);
+        auto cancelled = MakeMidiTake("cancelled");
+        cancelled->Record({}, station->Name(), { 0u }, { "lost" });
+        ASSERT_TRUE(cancelled->RecordMidiEvent(MidiEvent::MakeNoteOn(0u, 0u, 60u, 100u), "lost", 0u));
+        ASSERT_TRUE(cancelled->RecordMidiEvent(MidiEvent::MakeNoteOn(0u, 0u, 61u, 100u), "lost", 0u));
+        cancelled->Play(0u, 1000u, 0u);
+        station->AddTake(cancelled);
+        if (healthyPlayback)
+        {
+            auto healthy = MakeMidiTake("healthy");
+            healthy->Record({}, station->Name(), { 0u }, { "healthy" });
+            ASSERT_TRUE(healthy->RecordMidiEvent(MidiEvent::MakeNoteOn(0u, 0u, 60u, 100u), "healthy", 0u));
+            healthy->Play(0u, 1000u, 0u);
+            station->AddTake(healthy);
+        }
+        else
+        {
+            const auto on = MidiEvent::MakeNoteOn(0u, 0u, 60u, 100u);
+            station->ObservePhysicalMidiForRecording(on, "healthy");
+            ASSERT_TRUE(station->TryEnqueueImmediateLiveMidi(on));
+        }
+        const auto lostLive = MidiEvent::MakeNoteOn(0u, 0u, 60u, 100u);
+        station->ObservePhysicalMidiForRecording(lostLive, "lost");
+        ASSERT_TRUE(station->TryEnqueueImmediateLiveMidi(lostLive));
+        station->CommitChanges();
+        RenderStationBlock(station, 0u, 64u);
+        plugin->Events.clear();
+        TriggerAction ditch;
+        ditch.ActionType = TriggerAction::TRIGGER_DITCH;
+        ditch.TargetId = cancelled->Id();
+        ditch.IsSourceLossCancellation = true;
+        ASSERT_EQ(actions::DitchDisposition::Removed, station->OnAction(ditch).DitchResult);
+        station->FlushLiveHeldMidiNotesForDevice("lost");
+        // Exercise the old published take list as well as its replacement.
+        RenderStationBlock(station, 64u, 64u);
+        station->CommitChanges();
+        RenderStationBlock(station, 128u, 64u);
+        station->FlushPendingLostLiveMidiNotes();
+        RenderStationBlock(station, 192u, 64u);
+        ASSERT_EQ(1u, plugin->Events.size());
+        EXPECT_TRUE(plugin->Events[0].IsNoteOff());
+        EXPECT_EQ(61u, plugin->Events[0].data1);
+    }
+}
+
+TEST(StationMidiInstrument, SourceLossPlaybackReleaseUsesItsDestination)
+{
+    for (const bool rerouteWhileHeld : { false, true })
+    {
+        SCOPED_TRACE(rerouteWhileHeld ? "rerouted held note" : "original route");
+        auto station = MakeStation("routed-playback-loss");
+        auto livePlugin = AddPlugin(station, L"fake-live-destination.dll");
+        auto playbackPlugin = AddPlugin(station, L"fake-playback-destination.dll");
+        AllowAllMidiChannels(station);
+        station->SetMidiVstRoute(midi::LiveMidiOutputIndex, rerouteWhileHeld ? 1u : 0u);
+        station->SetMidiVstRoute(0u, 1u);
+        auto take = MakeMidiTake("routed-cancelled");
+        take->Record({}, station->Name(), { 0u }, { "lost" });
+        ASSERT_TRUE(take->RecordMidiEvent(MidiEvent::MakeNoteOn(0u, 0u, 60u, 100u), "lost", 0u));
+        take->Play(0u, 1000u, 0u);
+        station->AddTake(take);
+        station->CommitChanges();
+        const auto on = MidiEvent::MakeNoteOn(0u, 0u, 60u, 100u);
+        station->ObservePhysicalMidiForRecording(on, "healthy");
+        ASSERT_TRUE(station->TryEnqueueImmediateLiveMidi(on));
+        RenderStationBlock(station, 0u, 64u);
+        ASSERT_EQ(rerouteWhileHeld ? 0u : 1u, livePlugin->Events.size());
+        ASSERT_EQ(rerouteWhileHeld ? 2u : 1u, playbackPlugin->Events.size());
+        livePlugin->Events.clear();
+        playbackPlugin->Events.clear();
+        if (rerouteWhileHeld)
+        {
+            station->SetMidiVstRoute(0u, 0u);
+            station->SetMidiVstRoute(midi::LiveMidiOutputIndex, 0u);
+            const auto off = MidiEvent::MakeNoteOff(64u, 0u, 60u);
+            station->ObservePhysicalMidiForRecording(off, "healthy");
+            ASSERT_TRUE(station->TryEnqueueImmediateLiveMidi(off));
+            RenderStationBlock(station, 64u, 64u);
+            station->AcknowledgeAudioBoundary();
+            station->ReleaseRetiredAudioStates();
+            livePlugin->Events.clear();
+            playbackPlugin->Events.clear();
+        }
+        TriggerAction ditch;
+        ditch.ActionType = TriggerAction::TRIGGER_DITCH;
+        ditch.TargetId = take->Id();
+        ditch.IsSourceLossCancellation = true;
+        ASSERT_EQ(actions::DitchDisposition::Removed, station->OnAction(ditch).DitchResult);
+        RenderStationBlock(station, 64u, 64u);
+        station->CommitChanges();
+        RenderStationBlock(station, 128u, 64u);
+        EXPECT_TRUE(livePlugin->Events.empty());
+        ASSERT_EQ(1u, playbackPlugin->Events.size());
+        EXPECT_TRUE(playbackPlugin->Events[0].IsNoteOff());
+        EXPECT_EQ(60u, playbackPlugin->Events[0].data1);
+    }
 }
 
 TEST(StationMidiInstrument, LiveMidiAllowedChannelIsDelivered)

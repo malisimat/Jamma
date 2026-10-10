@@ -572,11 +572,10 @@ void Station::WriteBlock(const std::shared_ptr<base::MultiAudioSink> dest,
 
 	_PrepareVstScratch(*state, sampsToRead);
 
-	auto chain = _vstChain.load(std::memory_order_acquire);
-	const auto* routes = _midiVstRoutes.load(std::memory_order_acquire);
+	const auto& chain = state->MidiChain;
 	const bool vstActive = (channelCount > 0u) && chain && chain->IsActive() && (state->VstBlockPtrs.size() >= channelCount);
 
-	_RunVstBlock(chain.get(), routes, *state, vstActive,
+	_RunVstBlock(chain.get(), *state, vstActive,
 		static_cast<unsigned int>(channelCount), sampsToRead, blockStartSample);
 
 	// Drive any wired parameter automation. Runs independently of vstActive so a
@@ -609,6 +608,177 @@ void Station::WriteBlock(const std::shared_ptr<base::MultiAudioSink> dest,
 	_masterMixer->Offset(sampsToRead);
 }
 
+void Station::_PrepareMidiDestinations(AudioState& state)
+{
+	state.MidiChain = _vstChain.load(std::memory_order_acquire);
+	if (!state.MidiChain) return;
+	std::erase_if(_midiDestinations, [](const auto& entry) { return entry.expired(); });
+	std::vector<std::shared_ptr<MidiDestination>> destinations;
+	for (std::size_t index = 0u; index < state.MidiChain->NumPlugins(); ++index)
+	{
+		const auto plugin = state.MidiChain->GetPlugin(index);
+		std::shared_ptr<MidiDestination> destination;
+		for (const auto& weak : _midiDestinations)
+			if (const auto existing = weak.lock(); existing && existing->Plugin == plugin)
+				{ destination = existing; break; }
+		if (!destination)
+		{
+			destination = std::make_shared<MidiDestination>();
+			destination->Plugin = plugin;
+			_midiDestinations.push_back(destination);
+		}
+		destinations.push_back(std::move(destination));
+	}
+	const auto* routes = _midiVstRoutes.load(std::memory_order_acquire);
+	// Preserve the existing broadcast fallback, including partially mapped routes.
+	auto resolve = [&](unsigned int output) {
+		const auto pluginIndex = routes ? routes->PluginForOutput(output) : MidiVstRoutingSnapshot::NoPlugin;
+		if (pluginIndex < destinations.size())
+			return std::vector<std::shared_ptr<MidiDestination>>{ destinations[pluginIndex] };
+		return destinations;
+	};
+	state.LiveMidiDestinations = resolve(LiveMidiOutputIndex);
+	// Route history matters within the current chain. Removed plugins are unloaded
+	// by the structural owner; do not repin their destinations on every publication.
+	state.MidiDestinations = destinations;
+	for (const auto& take : state.OwnedLoopTakes)
+		for (const auto& loop : take->GetMidiLoopSnapshot())
+		{
+			std::vector<std::shared_ptr<MidiPlaybackBinding>> bindings;
+			for (const auto& destination : resolve(static_cast<unsigned int>(state.MidiPlaybackRoutes.size())))
+			{
+				std::shared_ptr<MidiPlaybackBinding> binding;
+				for (const auto& existing : _midiPlaybackBindings)
+					if (existing->Take == take &&
+						existing->Loop == loop && existing->Destination == destination)
+						{ binding = existing; break; }
+				if (!binding)
+				{
+					binding = std::make_shared<MidiPlaybackBinding>();
+					binding->Take = take;
+					binding->Loop = loop;
+					binding->Destination = destination;
+					_midiPlaybackBindings.push_back(binding);
+				}
+				bindings.push_back(std::move(binding));
+			}
+			state.MidiPlaybackRoutes.push_back(std::move(bindings));
+		}
+}
+
+void Station::_DispatchLiveMidi(const AudioState& state, const MidiEvent& event,
+	bool sourceLossNoteOff, std::uint32_t liveNoteOnRevision) noexcept
+{
+	const auto slot = midi::MidiNote::NoteSlot(event.Channel(), event.data1);
+	auto hasNewLiveOwner = [&](const MidiDestination& destination) noexcept {
+		return destination.LiveHeld.test(slot) &&
+			static_cast<std::int32_t>(destination.LiveNoteOnRevision[slot] - liveNoteOnRevision) > 0;
+	};
+	if (event.IsNoteOff())
+	{
+		for (const auto& destination : state.MidiDestinations)
+		{
+			const bool wasHeld = destination->LiveHeld.test(slot);
+			if (sourceLossNoteOff && hasNewLiveOwner(*destination)) continue;
+			destination->LiveHeld.reset(slot);
+			if (wasHeld && (!sourceLossNoteOff || destination->PlaybackOwners[slot] == 0u) &&
+				std::find(state.LiveMidiDestinations.begin(), state.LiveMidiDestinations.end(), destination) == state.LiveMidiDestinations.end() &&
+				destination->Plugin && destination->Plugin->IsLoaded())
+				destination->Plugin->SendMidiEvent(event, true);
+		}
+	}
+	for (const auto& destination : state.LiveMidiDestinations)
+	{
+		if (event.IsNoteOn())
+		{
+			destination->LiveHeld.set(slot);
+			destination->LiveNoteOnRevision[slot] = liveNoteOnRevision;
+		}
+		if (sourceLossNoteOff && (destination->PlaybackOwners[slot] != 0u || hasNewLiveOwner(*destination))) continue;
+		if (destination->Plugin) destination->Plugin->SendMidiEvent(event, true);
+	}
+}
+
+void Station::MidiPlaybackSink::OnEvent(unsigned int outputIndex, const MidiEvent& event) noexcept
+{
+	if (outputIndex >= _state.MidiPlaybackRoutes.size()) return;
+	const auto slot = midi::MidiNote::NoteSlot(event.Channel(), event.data1);
+	for (const auto& binding : _state.MidiPlaybackRoutes[outputIndex])
+	{
+		// Source-loss release owns this ledger until its queued acknowledgement.
+		// Retained take flushes still clear MidiLoop's local state, but emit nothing.
+		if (binding->Take->IsSourceLossCancelled()) continue;
+		auto& destination = *binding->Destination;
+		if (event.IsNoteOn() && !binding->Held.test(slot))
+		{
+			binding->Held.set(slot);
+			++destination.PlaybackOwners[slot];
+			binding->HasHeld.store(true, std::memory_order_release);
+		}
+		else if (event.IsNoteOff() && binding->Held.test(slot))
+		{
+			binding->Held.reset(slot);
+			--destination.PlaybackOwners[slot];
+			binding->HasHeld.store(binding->Held.any(), std::memory_order_release);
+		}
+		if (destination.Plugin) destination.Plugin->SendMidiEvent(event, false);
+	}
+}
+
+bool Station::_ReleaseLostPlaybackMidi(MidiPlaybackBinding& binding, std::uint32_t sample,
+	unsigned int& budget, unsigned int& slotBudget) noexcept
+{
+	auto& destination = *binding.Destination;
+	if (binding.Held.none())
+	{
+		binding.HasHeld.store(false, std::memory_order_release);
+		return true;
+	}
+	while (binding.ReleaseSlot < midi::MidiNote::TotalNoteSlots && budget > 0u && slotBudget > 0u)
+	{
+		const auto slot = binding.ReleaseSlot++;
+		--slotBudget;
+		if (!binding.Held.test(slot)) continue;
+		--budget;
+		binding.Held.reset(slot);
+		--destination.PlaybackOwners[slot];
+		if (binding.EmitSourceLossRelease && destination.PlaybackOwners[slot] == 0u && !destination.LiveHeld.test(slot) &&
+			destination.Plugin && destination.Plugin->IsLoaded())
+			destination.Plugin->SendMidiEvent(MidiEvent::MakeNoteOff(sample,
+				static_cast<std::uint8_t>(slot / 128u), static_cast<std::uint8_t>(slot % 128u)), false);
+	}
+	if (binding.ReleaseSlot < midi::MidiNote::TotalNoteSlots) return false;
+	binding.HasHeld.store(false, std::memory_order_release);
+	return true;
+}
+
+void Station::_QueueLostPlaybackMidi(const std::shared_ptr<LoopTake>& take, bool emitRelease)
+{
+	for (const auto& binding : _midiPlaybackBindings)
+		if (binding->Take == take &&
+			!binding->ReleaseQueued && !binding->ReleaseConsumed.load(std::memory_order_acquire) &&
+			std::find(_pendingLostPlaybackMidi.begin(), _pendingLostPlaybackMidi.end(), binding) == _pendingLostPlaybackMidi.end())
+		{
+			binding->EmitSourceLossRelease = emitRelease;
+			_pendingLostPlaybackMidi.push_back(binding);
+		}
+	_FlushPendingLostPlaybackMidi();
+}
+
+void Station::_FlushPendingLostPlaybackMidi()
+{
+	std::erase_if(_pendingLostPlaybackMidi, [](const auto& binding) {
+		return binding->ReleaseConsumed.load(std::memory_order_acquire);
+	});
+	for (const auto& binding : _pendingLostPlaybackMidi)
+	{
+		if (binding->ReleaseQueued) continue;
+		auto event = MidiEvent::MakeNoteOff(_hasLastSyntheticLiveMidiSample ? _lastSyntheticLiveMidiSample : 0u, 0u, 0u);
+		if (!_TryEnqueueSyntheticMidi({ event, binding.get() })) return;
+		binding->ReleaseQueued = true;
+	}
+}
+
 void Station::_PrepareVstScratch(const AudioState& state, unsigned int sampsToRead) noexcept
 {
 	const auto channelCount = std::min(state.AudioBuffers.size(), state.AudioMixers.size());
@@ -627,7 +797,6 @@ void Station::_PrepareVstScratch(const AudioState& state, unsigned int sampsToRe
 }
 
 void Station::_RunVstBlock(vst::VstChain* chain,
-	const MidiVstRoutingSnapshot* routes,
 	const AudioState& state,
 	bool vstActive,
 	unsigned int channelCount,
@@ -668,12 +837,14 @@ void Station::_RunVstBlock(vst::VstChain* chain,
 	}
 
 	constexpr auto MaxLiveMidiEventsPerBlock = 64u;
+	auto releaseSlotBudget = static_cast<unsigned int>(midi::MidiNote::TotalNoteSlots);
 	for (auto dispatched = 0u; dispatched < MaxLiveMidiEventsPerBlock; ++dispatched)
 	{
 		MidiEvent immediate{};
-		MidiEvent synthetic{};
+		SyntheticMidi syntheticEntry{};
 		const auto hasImmediate = _immediateLiveMidiIngress.Peek(immediate);
-		const auto hasSynthetic = _syntheticLiveMidiIngress.Peek(synthetic);
+		const auto hasSynthetic = _syntheticLiveMidiIngress.Peek(syntheticEntry);
+		const auto& synthetic = syntheticEntry.Event;
 		const auto immediatePosition = hasImmediate
 			? midi::ClassifyMidiSampleInBlock(immediate.sampleOffset, blockStartSample, sampsToRead)
 			: midi::MidiBlockSamplePosition::Future;
@@ -698,7 +869,20 @@ void Station::_RunVstBlock(vst::VstChain* chain,
 
 		MidiEvent liveMidi{};
 		if (chooseSynthetic)
-			_syntheticLiveMidiIngress.Pop(liveMidi);
+		{
+			if (syntheticEntry.Release)
+			{
+				auto budget = MaxLiveMidiEventsPerBlock - dispatched;
+				if (!_ReleaseLostPlaybackMidi(*syntheticEntry.Release, blockStartSample, budget, releaseSlotBudget)) break;
+				dispatched += std::max(1u, MaxLiveMidiEventsPerBlock - dispatched - budget) - 1u;
+				_syntheticLiveMidiIngress.Pop(syntheticEntry);
+				// Last borrower access: job reclamation follows this acknowledgement.
+				syntheticEntry.Release->ReleaseConsumed.store(true, std::memory_order_release);
+				continue;
+			}
+			_syntheticLiveMidiIngress.Pop(syntheticEntry);
+			liveMidi = syntheticEntry.Event;
+		}
 		else
 			_immediateLiveMidiIngress.Pop(liveMidi);
 
@@ -706,14 +890,19 @@ void Station::_RunVstBlock(vst::VstChain* chain,
 			blockStartSample,
 			blockStartSample);
 		if (vstActive)
-			midi::SendMidiToVstChain(chain, routes, liveMidi, true, LiveMidiOutputIndex);
+		{
+			auto revision = syntheticEntry.LiveNoteOnRevision;
+			if (liveMidi.IsNoteOn())
+				revision = _liveNoteOnRevisions[midi::MidiNote::NoteSlot(liveMidi.Channel(), liveMidi.data1)].fetch_add(1u, std::memory_order_release) + 1u;
+			_DispatchLiveMidi(state, liveMidi, chooseSynthetic && syntheticEntry.SourceLossNoteOff, revision);
+		}
 	}
 
 	if (!vstActive)
 		return;
 
 	auto midiOutputIndex = 0u;
-	midi::MidiVstOutputSink midiSink(chain, routes);
+	MidiPlaybackSink midiSink(state);
 	for (const auto& weakTake : state.LoopTakes)
 	{
 		auto take = weakTake.lock();
@@ -1633,9 +1822,11 @@ void Station::OnTick(Time curTime,
 
 void Station::Reset()
 {
+	FlushLiveHeldMidiNotes();
 	for (const auto& take : GetLoopTakeSnapshot())
 	{
 		take->CancelCapture();
+		_QueueLostPlaybackMidi(take, false);
 		take->DetachGuiOwnershipForRetirement();
 	}
 	Jammable::Reset();
@@ -1995,6 +2186,7 @@ void Station::ForceUnloadAllVstPlugins()
 		if (take)
 			take->ForceUnloadAllVstPlugins();
 	}
+	_PublishAudioState();
 }
 
 void Station::SetNumBusChannels(unsigned int chans)
@@ -2193,10 +2385,19 @@ bool Station::TryEnqueueImmediateLiveMidi(const MidiEvent& event) noexcept
 
 bool Station::TryEnqueueSyntheticLiveMidi(const MidiEvent& event) noexcept
 {
-	return _TryEnqueueOrderedLiveMidi(_syntheticLiveMidiIngress,
-		_hasLastSyntheticLiveMidiSample,
-		_lastSyntheticLiveMidiSample,
-		event);
+	return _TryEnqueueSyntheticMidi({ event });
+}
+
+bool Station::_TryEnqueueSyntheticMidi(SyntheticMidi entry) noexcept
+{
+	auto& queued = entry.Event;
+	if (_hasLastSyntheticLiveMidiSample &&
+		midi::MidiSampleDelta(queued.sampleOffset, _lastSyntheticLiveMidiSample) < 0)
+		queued.sampleOffset = _lastSyntheticLiveMidiSample;
+	if (!_syntheticLiveMidiIngress.Push(entry)) return false;
+	_lastSyntheticLiveMidiSample = queued.sampleOffset;
+	_hasLastSyntheticLiveMidiSample = true;
+	return true;
 }
 
 void Station::ObservePhysicalMidiForRecording(const MidiEvent& event, const std::string& deviceName)
@@ -2294,6 +2495,7 @@ void Station::FlushLiveHeldMidiNotesForDevice(const std::string& deviceName) noe
 
 void Station::FlushPendingLostLiveMidiNotes() noexcept
 {
+	_FlushPendingLostPlaybackMidi();
 	// Job producer only. Retain release bits across a full synthetic queue;
 	// a surviving endpoint taking ownership of the same note suppresses release.
 	std::scoped_lock lock(_liveHeldMidiMutex);
@@ -2309,7 +2511,8 @@ void Station::FlushPendingLostLiveMidiNotes() noexcept
 			const auto slot = midi::MidiNote::NoteSlot(channel, note);
 			if (_pendingLostLiveMidiNoteOffs.test(slot))
 			{
-				if (!TryEnqueueSyntheticLiveMidi(MidiEvent::MakeNoteOff(0u, channel, note)))
+				if (!_TryEnqueueSyntheticMidi({ MidiEvent::MakeNoteOff(0u, channel, note), nullptr, true,
+					_liveNoteOnRevisions[slot].load(std::memory_order_acquire) }))
 					return;
 				_pendingLostLiveMidiNoteOffs.reset(slot);
 			}
@@ -2338,6 +2541,7 @@ void Station::SetMidiVstRoute(unsigned int midiOutputIndex, size_t vstIndex)
 	const auto* published = nextRoutes.get();
 	_retainedMidiVstRoutes.push_back(std::move(nextRoutes));
 	_midiVstRoutes.store(published, std::memory_order_release);
+	_PublishAudioState();
 }
 
 void Station::ClearMidiVstRoutes()
@@ -2346,6 +2550,7 @@ void Station::ClearMidiVstRoutes()
 	const auto* published = nextRoutes.get();
 	_retainedMidiVstRoutes.push_back(std::move(nextRoutes));
 	_midiVstRoutes.store(published, std::memory_order_release);
+	_PublishAudioState();
 }
 
 Station::MidiVstRoutingSnapshot Station::SnapshotMidiVstRoutesForExport() const
@@ -2375,6 +2580,7 @@ bool Station::RestoreMidiVstRoutes(const MidiVstRoutingSnapshot& routes,
 	const auto* published = restored.get();
 	_retainedMidiVstRoutes.push_back(std::move(restored));
 	_midiVstRoutes.store(published, std::memory_order_release);
+	_PublishAudioState();
 	return true;
 }
 
@@ -2477,16 +2683,13 @@ std::vector<JobAction> Station::_CommitChanges()
 
 		_WireVuSliders();
 	}
-	if (audioStateChanged)
-	{
-		_PublishAudioState();
-	}
-
 	// Swap in the VST chain if the job thread has delivered a new one.
 	if (_flipVstChain.exchange(false, std::memory_order_acquire))
 	{
 		_vstChain.store(_backVstChain, std::memory_order_release);
+		audioStateChanged = true;
 	}
+	if (audioStateChanged) _PublishAudioState();
 
 	// Detect pending VST load/unload requests and queue a job for them.
 	std::vector<JobAction> jobs;
@@ -2577,6 +2780,7 @@ void Station::_PublishAudioState()
 		state->LoopTakes.push_back(take);
 	state->AudioMixers = _audioMixers;
 	state->AudioBuffers = _audioBuffers;
+	_PrepareMidiDestinations(*state);
 	state->VstBlockScratch.resize(state->AudioBuffers.size() * constants::MaxBlockSize);
 	state->VstBlockPtrs.resize(state->AudioBuffers.size(), nullptr);
 	for (auto i = 0u; i < state->AudioBuffers.size(); i++)
@@ -2609,6 +2813,11 @@ void Station::ReleaseRetiredAudioStates()
 			return retired.State && retired.ReleaseAfterGeneration <= completed;
 		});
 	_retiredAudioStates.erase(keep, _retiredAudioStates.end());
+	// Registry pins also preserve notes delivered under an earlier route. A
+	// binding with held notes survives route/index changes until cancellation.
+	std::erase_if(_midiPlaybackBindings, [](const auto& binding) {
+		return binding.use_count() == 1 && !binding->HasHeld.load(std::memory_order_acquire);
+	});
 }
 
 void Station::_ArrangeChildren()
@@ -2707,11 +2916,18 @@ void Station::_DitchLoopTake(std::shared_ptr<LoopTake>& take, bool flushLiveHeld
 {
 	if (flushLiveHeld)
 		FlushLiveHeldMidiNotes();
+	else
+	{
+		// Publish cancellation before enqueueing releases. A callback already
+		// rendering this take may finish, but its delivered ownership stays on audio.
+		take->CancelCapture(true);
+		_QueueLostPlaybackMidi(take);
+	}
 
 	// Flush any held MIDI notes so the VST instrument doesn't get stuck notes.
 	// Events are injected via the synthetic live queue and
 	// drained by the audio thread on the next WriteBlock call.
-	for (const auto& midiLoop : take->GetMidiLoopSnapshot())
+	if (flushLiveHeld) for (const auto& midiLoop : take->GetMidiLoopSnapshot())
 	{
 		if (!midiLoop)
 			continue;
@@ -2723,21 +2939,15 @@ void Station::_DitchLoopTake(std::shared_ptr<LoopTake>& take, bool flushLiveHeld
 		{
 			for (std::uint8_t note = 0; note < 128; ++note)
 			{
-				if (held.test(MidiLoop::NoteSlot(ch, note)) &&
-					!TryEnqueueSyntheticLiveMidi(MidiEvent::MakeNoteOff(0u, ch, note)) &&
-					!flushLiveHeld)
-				{
-					// Confirmed cancellation may retire membership before another
-					// playback callback; retain failed releases on the job owner.
-					std::scoped_lock lock(_liveHeldMidiMutex);
-					_pendingLostLiveMidiNoteOffs.set(MidiLoop::NoteSlot(ch, note));
-				}
+				if (held.test(MidiLoop::NoteSlot(ch, note)))
+					TryEnqueueSyntheticLiveMidi(MidiEvent::MakeNoteOff(0u, ch, note));
 			}
 		}
 	}
 	// A retained callback snapshot may still hold this take. Cancel only its
 	// logical capture; keep loop buffers and writers stable until job/UI retirement.
 	take->CancelCapture();
+	if (flushLiveHeld) _QueueLostPlaybackMidi(take, false);
 	take->DetachGuiOwnershipForRetirement();
 	const auto match = std::find(_backLoopTakes.begin(), _backLoopTakes.end(), take);
 	if (match != _backLoopTakes.end())
@@ -2787,6 +2997,7 @@ bool Station::LoadVstPluginSynchronously(const std::wstring& path,
 	}
 	replacement->AddPlugin(std::move(plugin));
 	_vstChain.store(std::move(replacement), std::memory_order_release);
+	_PublishAudioState();
 	// Startup still exclusively owns this station.
 	_vstPluginPaths.push_back(path);
 	return true;

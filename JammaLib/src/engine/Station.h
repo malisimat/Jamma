@@ -4,6 +4,8 @@
 // while each take and loop retains its own state, anchors, length, and phase.
 
 #include <atomic>
+#include <array>
+#include <bitset>
 #include <cstdint>
 #include <cstddef>
 #include <limits>
@@ -289,6 +291,34 @@ namespace engine
 			Audible::AudioSourceType source) override;
 		virtual void _ArrangeChildren() override;
 
+		// Prepared/pinned on the structural owner; MIDI ownership is mutated only
+		// by audio dispatch. Counts are per destination, never per changing output index.
+		struct MidiDestination
+		{
+			std::shared_ptr<vst::IVstPlugin> Plugin;
+			std::bitset<midi::MidiNote::TotalNoteSlots> LiveHeld;
+			std::array<std::uint32_t, midi::MidiNote::TotalNoteSlots> LiveNoteOnRevision{};
+			std::array<unsigned int, midi::MidiNote::TotalNoteSlots> PlaybackOwners{};
+		};
+		struct MidiPlaybackBinding
+		{
+			std::shared_ptr<LoopTake> Take;
+			std::shared_ptr<midi::MidiLoop> Loop;
+			std::shared_ptr<MidiDestination> Destination;
+			std::bitset<midi::MidiNote::TotalNoteSlots> Held;
+			std::atomic<bool> HasHeld{ false }; // Audio publishes; job reclaims unused bindings.
+			std::atomic<bool> ReleaseConsumed{ false };
+			std::size_t ReleaseSlot = 0u; // Audio only; preserves the per-block ingress budget.
+			bool ReleaseQueued = false; // Job producer only.
+			bool EmitSourceLossRelease = true; // Frozen before queue publication.
+		};
+		struct SyntheticMidi
+		{
+			midi::MidiEvent Event;
+			MidiPlaybackBinding* Release = nullptr; // Pinned until audio acknowledges.
+			bool SourceLossNoteOff = false;
+			std::uint32_t LiveNoteOnRevision = 0u;
+		};
 		struct AudioState
 		{
 			std::uint64_t Generation = 0u;
@@ -299,7 +329,27 @@ namespace engine
 			std::vector<std::shared_ptr<audio::AudioBuffer>> AudioBuffers;
 			std::vector<float> VstBlockScratch;
 			std::vector<float*> VstBlockPtrs;
+			std::shared_ptr<vst::VstChain> MidiChain;
+			std::vector<std::shared_ptr<MidiDestination>> LiveMidiDestinations;
+			std::vector<std::shared_ptr<MidiDestination>> MidiDestinations;
+			std::vector<std::vector<std::shared_ptr<MidiPlaybackBinding>>> MidiPlaybackRoutes;
 		};
+		class MidiPlaybackSink final : public midi::IMidiOutputSink
+		{
+		public:
+			explicit MidiPlaybackSink(const AudioState& state) noexcept : _state(state) {}
+			void OnEvent(unsigned int outputIndex, const midi::MidiEvent& event) noexcept override;
+		private:
+			const AudioState& _state;
+		};
+		void _PrepareMidiDestinations(AudioState& state);
+		static void _DispatchLiveMidi(const AudioState& state, const midi::MidiEvent& event,
+			bool sourceLossNoteOff, std::uint32_t liveNoteOnRevision) noexcept;
+		static bool _ReleaseLostPlaybackMidi(MidiPlaybackBinding& binding, std::uint32_t sample,
+			unsigned int& budget, unsigned int& slotBudget) noexcept;
+		void _QueueLostPlaybackMidi(const std::shared_ptr<LoopTake>& take, bool emitRelease = true);
+		void _FlushPendingLostPlaybackMidi();
+		bool _TryEnqueueSyntheticMidi(SyntheticMidi entry) noexcept;
 
 		using LoopTakeSnapshot = std::vector<std::weak_ptr<LoopTake>>;
 
@@ -328,7 +378,6 @@ namespace engine
 		// then process the audio block.
 		// When vstActive is false only live MIDI is drained (to prevent queue back-log).
 		void _RunVstBlock(vst::VstChain* chain,
-			const MidiVstRoutingSnapshot* routes,
 			const AudioState& state,
 			bool vstActive,
 			unsigned int channelCount,
@@ -447,7 +496,10 @@ namespace engine
 		mutable std::mutex _vstPathsMutex;
 		std::vector<std::wstring> _vstPluginPaths;
 		midi::MidiQueue<1024> _immediateLiveMidiIngress;
-		midi::MidiQueue<1024> _syntheticLiveMidiIngress;
+		midi::MidiQueue<1024, SyntheticMidi> _syntheticLiveMidiIngress;
+		std::vector<std::weak_ptr<MidiDestination>> _midiDestinations;
+		std::vector<std::shared_ptr<MidiPlaybackBinding>> _midiPlaybackBindings;
+		std::vector<std::shared_ptr<MidiPlaybackBinding>> _pendingLostPlaybackMidi;
 		bool _hasLastImmediateLiveMidiSample = false;
 		std::uint32_t _lastImmediateLiveMidiSample = 0u;
 		bool _hasLastSyntheticLiveMidiSample = false;
@@ -456,6 +508,9 @@ namespace engine
 		std::vector<std::pair<std::string, midi::MidiNoteSnapshot>> _liveHeldMidi;
 		midi::MidiNoteSnapshot _anonymousLiveHeldMidi;
 		std::bitset<midi::MidiNote::TotalNoteSlots> _pendingLostLiveMidiNoteOffs;
+		// Audio publishes delivered live note-ons; job snapshots that revision for
+		// lost-live releases. Dropped ingress must never reserve note ownership.
+		std::array<std::atomic<std::uint32_t>, midi::MidiNote::TotalNoteSlots> _liveNoteOnRevisions{};
 		std::vector<int> _allowedMidiChannels;
 		std::atomic<std::uint16_t> _allowedMidiChannelMask{ 0u };
 		// Route snapshots are published off the audio thread.

@@ -2049,8 +2049,9 @@ void LoopTake::_ReleaseReplacementSourceMute() noexcept
 	}
 }
 
-void LoopTake::CancelCapture() noexcept
+void LoopTake::CancelCapture(bool sourceLoss) noexcept
 {
+	if (sourceLoss) _sourceLossCancelled.store(true, std::memory_order_release);
 	_captureCancelled.store(true, std::memory_order_release);
 	_state.store(STATE_INACTIVE, std::memory_order_release);
 	_ReleaseReplacementSourceMute();
