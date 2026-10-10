@@ -238,7 +238,8 @@ void main()
                 // A negative target start means free timing: glow at the pointer, not a cell.
                 float hover = EditorTargetInstance >= 0 ? 0.0
                     : EditorTargetStart < 0.0 ? 1.0 - smoothstep(0.0, 0.015, abs(EditorU - EditorHoverU))
-                    : (fract(EditorU) >= EditorTargetStart && fract(EditorU) < EditorTargetEnd ? 1.0 : 0.0);
+                    : ((fract(EditorU) >= EditorTargetStart && fract(EditorU) < EditorTargetEnd)
+                        || (EditorTargetEnd > 1.0 && fract(EditorU) + 1.0 < EditorTargetEnd) ? 1.0 : 0.0);
                 float pitchRow = float(EditorHoverPitch - EditorBottomPitch) + 0.5;
                 // Resolved cells fill the complete row with constant intensity.
                 hover *= EditorTargetStart < 0.0

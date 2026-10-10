@@ -117,7 +117,8 @@ namespace midi
 			if (!result.NoteIndex && grid)
 			{
 				const auto cell = grid->CellAt(sample);
-				result.Start = grid->Boundaries[cell]; result.End = grid->Boundaries[cell + 1u];
+				const auto span = grid->EditorSpan(grid->Boundaries[cell], grid->Boundaries[cell + 1u]);
+				result.Start = span.first; result.End = span.second;
 			}
 			return result;
 		}

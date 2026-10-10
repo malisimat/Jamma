@@ -475,8 +475,9 @@ TEST(MidiGridGesture, TargetSpansMatchRenderedPlaybackAndCellEdges)
 		}
 		else
 		{
-			EXPECT_EQ(grid->Boundaries[grid->CellAt(sample)], target.Start);
-			EXPECT_EQ(grid->Boundaries[grid->CellAt(sample) + 1u], target.End);
+			const auto span = grid->EditorSpan(grid->Boundaries[grid->CellAt(sample)],
+				grid->Boundaries[grid->CellAt(sample) + 1u]);
+			EXPECT_EQ(span.first, target.Start); EXPECT_EQ(span.second, target.End);
 		}
 	}
 }
@@ -775,4 +776,70 @@ TEST(MidiGridGesture, ExistingFirstCellNoteHasTheSameIdentityAtBothEdges)
 	MidiGridGesture remove;
 	ASSERT_TRUE(remove.Begin(source, {99u, 60u}, 2u));
 	EXPECT_EQ(0u, remove.Working().EventCount);
+}
+
+TEST(MidiGridGesture, OffMasterLoopEdgesHoverAndPaintTheSameCompleteSubdivision)
+{
+	for (const auto fraction : {midi::MidiQuantisationFraction::Whole,
+		midi::MidiQuantisationFraction::Third, midi::MidiQuantisationFraction::Sixth})
+	for (const auto transport : {1u, 13u, 63u, 99u})
+	{
+		auto source = MidiGridGestureFixture::EmptyLoop();
+		source.LoopLengthSamps = 400u; source.Quantisation.GrainSamps = 100u;
+		source.Quantisation.Fraction = fraction; source.QuantisationTransportStartSamps = transport;
+		const auto grid = midi::LoopGridGeometry::Resolve(400u, source.Quantisation, transport);
+		ASSERT_TRUE(grid);
+		const auto head = grid->SeamHeadEnd, tail = grid->SeamTailStart;
+		ASSERT_GT(head, 0u);
+		const auto empty = midi::MidiGridTargets::Build(source);
+		for (auto sample = 0u; sample < 400u; ++sample)
+		{
+			const auto target = empty.Resolve(sample, 60u, &*grid);
+			const auto cell = grid->CellAt(sample);
+			if (sample < head || sample >= tail)
+			{
+				EXPECT_EQ(tail, target.Start); EXPECT_EQ(400u + head, target.End);
+			}
+			else
+			{
+				EXPECT_EQ(grid->Boundaries[cell], target.Start);
+				EXPECT_EQ(grid->Boundaries[cell + 1u], target.End);
+			}
+		}
+		for (const auto edge : {0u, head - 1u, tail, 399u})
+		{
+			MidiGridGesture add;
+			ASSERT_TRUE(add.Begin(source, {edge, 60u, edge / 400.0}, 0u));
+			ASSERT_EQ(1u, add.Working().EventCount);
+			EXPECT_EQ(tail, add.Working().Events[0].sampleOffset);
+			ASSERT_EQ(1u, add.Preview().size());
+			EXPECT_EQ(tail, add.Preview()[0].Start); EXPECT_EQ(400u + head, add.Preview()[0].End);
+			const auto filled = midi::MidiGridTargets::Build(add.Working());
+			for (auto sample = 0u; sample < 400u; ++sample)
+				EXPECT_EQ(sample < head || sample >= tail, filled.Resolve(sample, 60u, &*grid).NoteIndex.has_value());
+		}
+	}
+}
+
+TEST(MidiGridGesture, UnequalLoopLengthWrapsOnlyAtItsClippedOuterEdges)
+{
+	auto source = MidiGridGestureFixture::EmptyLoop();
+	source.LoopLengthSamps = 403u; source.Quantisation.GrainSamps = 100u;
+	source.Quantisation.Fraction = midi::MidiQuantisationFraction::Quarter;
+	source.QuantisationTransportStartSamps = 13u;
+	const auto grid = midi::LoopGridGeometry::Resolve(403u, source.Quantisation, 13u);
+	ASSERT_TRUE(grid); EXPECT_EQ(12u, grid->SeamHeadEnd); EXPECT_EQ(387u, grid->SeamTailStart);
+	for (std::size_t cell = 1u; cell + 1u < grid->Boundaries.size(); ++cell)
+		EXPECT_EQ(0u, (13u + grid->Boundaries[cell]) % 25u);
+	for (const auto edge : {0u, 11u, 387u, 402u})
+	{
+		MidiGridGesture add;
+		ASSERT_TRUE(add.Begin(source, {edge, 60u}, 0u));
+		ASSERT_EQ(1u, add.Working().EventCount);
+		EXPECT_EQ(387u, add.Working().Events[0].sampleOffset);
+		ASSERT_EQ(1u, add.Preview().size()); EXPECT_EQ(415u, add.Preview()[0].End);
+		const auto targets = midi::MidiGridTargets::Build(add.Working());
+		for (auto sample = 0u; sample < 403u; ++sample)
+			EXPECT_EQ(sample < 12u || sample >= 387u, targets.Resolve(sample, 60u, &*grid).NoteIndex.has_value());
+	}
 }

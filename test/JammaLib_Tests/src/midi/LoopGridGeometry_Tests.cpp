@@ -8,51 +8,22 @@ using midi::LoopGridGeometry;
 using midi::MidiQuantisationFraction;
 using midi::MidiQuantisationSettings;
 
-TEST(LoopGridGeometry, DisplayRotationAlignsOffGridWholeGrainLoopsWithoutChangingSourceGrid)
+TEST(LoopGridGeometry, OffMasterLoopsKeepTheirPhysicalSeamAtTheOuterEdges)
 {
 	MidiQuantisationSettings settings;
-	settings.Enabled = true;
-	settings.GrainSamps = 100u;
+	settings.Enabled = true; settings.GrainSamps = 100u;
 	settings.Fraction = MidiQuantisationFraction::Quarter;
-	for (const auto start : { 13u, 63u, 213u, 263u })
+	for (const auto start : {13u, 63u, 213u, 263u})
 	{
-		const auto origin = LoopGridGeometry::DisplayOrigin(400u, settings, start);
-		EXPECT_EQ(0u, (start + origin) % settings.GrainSamps);
+		EXPECT_EQ(0u, LoopGridGeometry::DisplayOrigin(400u, settings, start));
 		const auto grid = LoopGridGeometry::Resolve(400u, settings, start);
 		ASSERT_TRUE(grid);
-		std::vector<std::uint32_t> displayed;
+		EXPECT_EQ(18u, grid->Boundaries.size());
 		for (std::size_t i = 1u; i + 1u < grid->Boundaries.size(); ++i)
-			displayed.push_back(LoopGridGeometry::DisplaySample(grid->Boundaries[i], 400u, origin));
-		std::sort(displayed.begin(), displayed.end());
-		ASSERT_EQ(16u, displayed.size());
-		for (std::size_t i = 0u; i < displayed.size(); ++i)
-			EXPECT_EQ(i * 25u, displayed[i]);
-		for (std::uint32_t sample = 0; sample < 400u; ++sample)
-			EXPECT_EQ(sample, (LoopGridGeometry::DisplaySample(sample, 400u, origin) + origin) % 400u);
-		EXPECT_EQ(0u, grid->Boundaries.front());
-		EXPECT_EQ(400u, grid->Boundaries.back());
+			EXPECT_EQ(0u, (start + grid->Boundaries[i]) % 25u);
+		EXPECT_EQ(0u, grid->Boundaries.front()); EXPECT_EQ(400u, grid->Boundaries.back());
+		EXPECT_GT(grid->SeamHeadEnd, 0u);
 	}
-}
-
-TEST(LoopGridGeometry, DisplayRotationRetainsExplicitOffsetsFreeTimingAndUnequalGeometry)
-{
-	MidiQuantisationSettings settings;
-	settings.Enabled = true;
-	settings.GrainSamps = 100u;
-	EXPECT_EQ(387u, LoopGridGeometry::DisplayOrigin(400u, settings, 13u));
-	EXPECT_EQ(0u, LoopGridGeometry::DisplayOrigin(0u, settings, 13u));
-	EXPECT_EQ(0u, LoopGridGeometry::DisplayOrigin(401u, settings, 13u));
-	settings.PhaseOffsetSamps = -1;
-	EXPECT_EQ(0u, LoopGridGeometry::DisplayOrigin(400u, settings, 13u));
-	settings.PhaseOffsetSamps = 1;
-	EXPECT_EQ(0u, LoopGridGeometry::DisplayOrigin(400u, settings, 13u));
-	settings.PhaseOffsetSamps = 0;
-	settings.Enabled = false;
-	EXPECT_EQ(0u, LoopGridGeometry::DisplayOrigin(400u, settings, 13u));
-	settings.Enabled = true;
-	settings.RemoteIntervalSamps = 400u;
-	settings.RemoteBpi = 4u;
-	EXPECT_EQ(0u, LoopGridGeometry::DisplayOrigin(400u, settings, 13u));
 }
 
 TEST(LoopGridGeometry, UsesClippedIntegerBoundariesAndLocalLoopLength)
@@ -84,7 +55,7 @@ TEST(LoopGridGeometry, RemoteOriginOverridesLocalGrain)
 	EXPECT_EQ((std::vector<std::uint32_t>{ 0u, 5u, 15u, 25u }), grid->Boundaries);
 }
 
-TEST(LoopGridGeometry, IncludesWrappedSnapsForNonDividingLength)
+TEST(LoopGridGeometry, OutOfRangeSnapsCannotCreateInteriorGridSplits)
 {
 	MidiQuantisationSettings settings;
 	settings.Enabled = true;
@@ -92,12 +63,12 @@ TEST(LoopGridGeometry, IncludesWrappedSnapsForNonDividingLength)
 	settings.Fraction = MidiQuantisationFraction::Whole;
 	const auto grid = LoopGridGeometry::Resolve(11u, settings, 0u);
 	ASSERT_TRUE(grid);
-	// Raw onset 10 snaps to absolute 12, then wraps to local sample 1.
-	EXPECT_EQ((std::vector<std::uint32_t>{ 0u, 1u, 4u, 8u, 11u }), grid->Boundaries);
+	// Absolute boundary 12 is outside this view; it must not become a line at 1.
+	EXPECT_EQ((std::vector<std::uint32_t>{ 0u, 4u, 8u, 11u }), grid->Boundaries);
 	settings.PhaseOffsetSamps = 2;
 	const auto shifted = LoopGridGeometry::Resolve(11u, settings, 0u);
 	ASSERT_TRUE(shifted);
-	EXPECT_EQ((std::vector<std::uint32_t>{ 0u, 2u, 3u, 6u, 10u, 11u }), shifted->Boundaries);
+	EXPECT_EQ((std::vector<std::uint32_t>{ 0u, 2u, 6u, 10u, 11u }), shifted->Boundaries);
 }
 
 TEST(LoopGridGeometry, UnresolvedAndZeroLengthBecomeFreeEditing)
@@ -169,7 +140,7 @@ TEST(LoopGridGeometry, HitZonesAndSpanValidation)
 	EXPECT_FALSE(LoopGridGeometry::ValidNoteSpan(0u, 1u, 100u, 128, 0, 100));
 }
 
-TEST(LoopGridGeometry, OnlySplitRepeatingCellsShareThePhysicalSeam)
+TEST(LoopGridGeometry, OnlyClippedEdgeCellsShareThePhysicalSeam)
 {
 	MidiQuantisationSettings settings;
 	settings.Enabled = true; settings.GrainSamps = 10u; settings.Fraction = MidiQuantisationFraction::Whole;
@@ -182,5 +153,18 @@ TEST(LoopGridGeometry, OnlySplitRepeatingCellsShareThePhysicalSeam)
 	EXPECT_EQ((std::pair{91u, 101u}), split->EditorSpan(91u, 100u));
 	EXPECT_EQ((std::pair{11u, 21u}), split->EditorSpan(11u, 21u));
 	const auto unequal = LoopGridGeometry::Resolve(101u, settings, 0u);
-	ASSERT_TRUE(unequal); EXPECT_EQ(0u, unequal->SeamHeadEnd);
+	ASSERT_TRUE(unequal); EXPECT_EQ(0u, unequal->SeamHeadEnd); // End is a real boundary.
+	const auto clippedUnequal = LoopGridGeometry::Resolve(103u, settings, 0u);
+	ASSERT_TRUE(clippedUnequal); EXPECT_EQ(1u, clippedUnequal->SeamHeadEnd);
+	EXPECT_EQ(101u, clippedUnequal->SeamTailStart);
+}
+
+TEST(LoopGridGeometry, ClippingStillAllowsTheMaximumCellCount)
+{
+	MidiQuantisationSettings settings;
+	settings.Enabled = true; settings.GrainSamps = 1u;
+	settings.Fraction = MidiQuantisationFraction::Whole;
+	const auto grid = LoopGridGeometry::Resolve(8192u, settings, 0u);
+	ASSERT_TRUE(grid); EXPECT_EQ(8193u, grid->Boundaries.size());
+	EXPECT_FALSE(LoopGridGeometry::Resolve(8193u, settings, 0u));
 }
