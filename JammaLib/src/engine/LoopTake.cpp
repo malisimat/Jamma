@@ -1354,7 +1354,7 @@ std::vector<engine::QuantisationLoopTakeVisual> LoopTake::QuantisationVisualsFor
         {
             if (!loop || !loop->Model()) continue;
             auto streamVisual = *visual;
-            const auto settings = loop->Quantisation();
+            const auto settings = take->SnapshotMidiLoopQuantisation(loop);
             streamVisual.LoopLengthSamps = loop->LoopLengthSamps();
             streamVisual.GrainSamps = settings.GrainSamps;
             streamVisual.Fraction = settings.Fraction;
@@ -3024,6 +3024,12 @@ midi::MidiQuantisationSettings LoopTake::ResolvedMidiQuantisationFor(const std::
     if (loop) settings = midi::MidiLoop::ResolveQuantisation(settings, loop->GetLoopQuantisationOverride());
     if (const auto forced = _ForcedMidiQuantisationEnabled()) settings.Enabled = *forced;
     return settings;
+}
+
+midi::MidiQuantisationSettings LoopTake::SnapshotMidiLoopQuantisation(const std::shared_ptr<midi::MidiLoop>& loop) const
+{
+	std::scoped_lock lock(_midiCaptureMutex);
+	return loop->Quantisation();
 }
 
 void LoopTake::SetGlobalMidiQuantState(io::JamFile::GlobalMidiQuantState state) noexcept

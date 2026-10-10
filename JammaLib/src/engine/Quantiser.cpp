@@ -1331,7 +1331,15 @@ ActionResult QuantiserController::_BeginFractionDrag(TouchAction action,
 	_fractionDragStartY = action.Position.Y;
 	_fractionDragMoved = false;
 	_fractionDragTake.reset();
-	_fractionDragStartFraction = !_fractionMidiTargets.empty() ? _fractionMidiTargets.front()->Quantisation().Fraction : _fractionDragTargets.front()->MidiQuantisation().Fraction;
+	if (!_fractionMidiTargets.empty())
+	{
+		const auto& loop = _fractionMidiTargets.front();
+		const auto owner = _OwnerForMidiLoop(loop);
+		if (!owner) return ActionResult::NoAction();
+		_fractionDragStartFraction = owner->SnapshotMidiLoopQuantisation(loop).Fraction;
+	}
+	else
+		_fractionDragStartFraction = _fractionDragTargets.front()->MidiQuantisation().Fraction;
 
 
 	const auto now = utils::Timer::IsZero(action.GetActionTime()) ? utils::Timer::GetTime() : action.GetActionTime();
@@ -1427,7 +1435,7 @@ ActionResult QuantiserController::_EndFractionDrag(TouchAction action)
 			if (const auto owner = _OwnerForMidiLoop(loop))
 			{
 				auto settings = loop->GetLoopQuantisationOverride();
-				settings.Enabled = !loop->Quantisation().Enabled;
+				settings.Enabled = !owner->SnapshotMidiLoopQuantisation(loop).Enabled;
 				owner->SetMidiLoopQuantisationOverride(loop, settings);
 			}
 		}
@@ -1734,15 +1742,28 @@ void engine::QuantiserController::_ShowPhaseFeedback(unsigned int sampleRate)
 void engine::QuantiserController::_ShowFractionFeedback()
 {
 	if (!_feedbackSink || (_fractionDragTargets.empty() && _fractionMidiTargets.empty())) return;
-	const auto settings = !_fractionMidiTargets.empty() ? _fractionMidiTargets.front()->Quantisation() : _fractionDragTargets.front()->MidiQuantisation();
+	midi::MidiQuantisationSettings settings;
+	if (!_fractionMidiTargets.empty())
+	{
+		const auto& loop = _fractionMidiTargets.front();
+		const auto owner = _OwnerForMidiLoop(loop);
+		if (!owner) return;
+		settings = owner->SnapshotMidiLoopQuantisation(loop);
+	}
+	else
+		settings = _fractionDragTargets.front()->MidiQuantisation();
 	const auto mixedTakes = std::any_of(_fractionDragTargets.begin(), _fractionDragTargets.end(), [&settings](const auto& take) {
 		return take && (take->MidiQuantisation().Fraction != settings.Fraction || take->MidiQuantisation().Enabled != settings.Enabled);
 	});
 	std::ostringstream text;
 	text << (!_fractionMidiTargets.empty() ? "Loop" : (_capturedDivisionGlobal ? "Global" : "Selection")) << " DIV " << midi::MidiQuantisation::FractionLabel(settings.Fraction)
 		<< " (" << midi::MidiQuantisation::Divisor(settings.Fraction) << " divisions)";
-	const auto mixedLoops = std::any_of(_fractionMidiTargets.begin(), _fractionMidiTargets.end(), [&settings](const auto& loop) {
-		return loop && (loop->Quantisation().Fraction != settings.Fraction || loop->Quantisation().Enabled != settings.Enabled);
+	const auto mixedLoops = std::any_of(_fractionMidiTargets.begin(), _fractionMidiTargets.end(), [this, &settings](const auto& loop) {
+		if (!loop) return false;
+		const auto owner = _OwnerForMidiLoop(loop);
+		if (!owner) return false;
+		const auto loopSettings = owner->SnapshotMidiLoopQuantisation(loop);
+		return loopSettings.Fraction != settings.Fraction || loopSettings.Enabled != settings.Enabled;
 	});
 	if (mixedTakes || mixedLoops) text << " mixed";
 	if (!_fractionMidiTargets.empty()) text << " / " << _fractionMidiTargets.size() << " loops";

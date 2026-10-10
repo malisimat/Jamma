@@ -363,6 +363,9 @@ namespace engine
 		midi::MidiQuantisationSettings MidiQuantisation() const noexcept;
 		midi::MidiQuantisationSettings ResolvedMidiQuantisation() const noexcept;
 		midi::MidiQuantisationSettings ResolvedMidiQuantisationFor(const std::shared_ptr<midi::MidiLoop>& loop) const noexcept;
+		// UI/job-side copy of current loop settings, including while recording.
+		// Shares the writer lock; never call from the audio callback or under it.
+		midi::MidiQuantisationSettings SnapshotMidiLoopQuantisation(const std::shared_ptr<midi::MidiLoop>& loop) const;
 		void SetGlobalMidiQuantState(io::JamFile::GlobalMidiQuantState state) noexcept;
 		void SetMidiQuantisationInheritedPhaseOffset(std::int32_t offsetSamps) noexcept;
 		void SetMidiQuantisationTransportStartSamps(std::uint64_t startSamps) noexcept;
