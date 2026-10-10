@@ -5,6 +5,35 @@
 
 using midi::MidiDevice;
 
+TEST(MidiDevice, SuccessfulConnectionDeltaIgnoresEnumerationReordering)
+{
+	midi::MidiConnectionResult previous, refreshed;
+	previous.Connected = { { 1u, "Pad", "Pad 1" }, { 2u, "Keys", "Keys 2" } };
+	refreshed.Connected = { { 0u, "Keys", "Keys 0" }, { 4u, "Pad", "Pad 4" } };
+	EXPECT_TRUE(MidiDevice::LostConnectedInputNames(previous, refreshed).empty());
+}
+
+TEST(MidiDevice, SuccessfulConnectionDeltaUsesActualOpenedEndpoints)
+{
+	midi::MidiConnectionResult previous, refreshed;
+	previous.Connected = { { 1u, "Pad", "Pad 1" }, { 2u, "Keys", "Keys 2" } };
+	refreshed.Inventory.Devices = previous.Connected;
+	refreshed.Connected = { previous.Connected[1] };
+	EXPECT_EQ((std::vector<std::string>{ "Pad" }),
+		MidiDevice::LostConnectedInputNames(previous, refreshed));
+	refreshed.Inventory.Error = "transient inventory failure";
+	EXPECT_TRUE(MidiDevice::LostConnectedInputNames(previous, refreshed).empty());
+}
+
+TEST(MidiDevice, SuccessfulConnectionDeltaCoalescesDuplicateNamedEndpointLoss)
+{
+	midi::MidiConnectionResult previous, refreshed;
+	previous.Connected = { { 1u, "Pad", "Pad 1" }, { 2u, "Pad", "Pad 2" } };
+	refreshed.Connected = { previous.Connected[1] };
+	EXPECT_EQ((std::vector<std::string>{ "Pad" }),
+		MidiDevice::LostConnectedInputNames(previous, refreshed));
+}
+
 TEST(MidiDevice, IsClosedBeforeOpen) {
 	MidiDevice device;
 	ASSERT_FALSE(device.IsOpen());

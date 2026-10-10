@@ -10,6 +10,27 @@
 
 using namespace midi;
 
+std::vector<std::string> MidiDevice::LostConnectedInputNames(
+	const MidiConnectionResult& previous, const MidiConnectionResult& refreshed)
+{
+	std::vector<std::string> lost;
+	if (!refreshed.Inventory.Error.empty())
+		return lost;
+	for (const auto& endpoint : previous.Connected)
+	{
+		if (std::find(lost.begin(), lost.end(), endpoint.Name) != lost.end())
+			continue;
+		const auto named = [&](const MidiInputDeviceInfo& device) { return device.Name == endpoint.Name; };
+		const auto oldCount = std::count_if(previous.Connected.begin(), previous.Connected.end(), named);
+		const auto newCount = std::count_if(refreshed.Connected.begin(), refreshed.Connected.end(), named);
+		// Identical named devices have no physical GUID in WinMM. A count drop
+		// confirms loss but cannot identify which configured same-name route died.
+		if (newCount < oldCount)
+			lost.push_back(endpoint.Name);
+	}
+	return lost;
+}
+
 void MidiDevice::_LogMidiMessageDetail(std::ostream& out,
 	const unsigned char* message, std::size_t size)
 {
