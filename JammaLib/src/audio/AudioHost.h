@@ -21,6 +21,7 @@
 #include "../ninjam/NinjamAudioTimingCommand.h"
 #include "../ninjam/NinjamLoopAlignment.h"
 #include "../utils/Timer.h"
+#include "../base/PublishedAudioSnapshot.h"
 
 namespace engine
 {
@@ -31,10 +32,12 @@ namespace audio
 {
 	class NinjamAudioBoundaryTestAccess;
 	class RigAudioBoundaryTestAccess;
+	class AudioHostRealtimeTestAccess;
 
 	class AudioHost
 	{
 		friend class RigAudioBoundaryTestAccess;
+		friend class AudioHostRealtimeTestAccess;
 	public:
 		using TickCallback = std::function<void(Time streamTime, unsigned int numSamps,
 			const std::optional<io::UserConfig>& cfg,
@@ -57,7 +60,7 @@ namespace audio
 		void RequestRigTriggerTransition(std::uint64_t candidateRevision,
 			std::shared_ptr<const engine::RigSnapshot> acceptedSnapshot,
 			std::shared_ptr<const engine::RigSnapshot> candidateSnapshot);
-		void ClearRigTriggerTransition() noexcept;
+		void ClearRigTriggerTransition();
 		std::uint64_t TransitionReadyRigRevision() const noexcept
 		{
 			return _transitionReadyRigRevision.load(std::memory_order_acquire);
@@ -68,6 +71,8 @@ namespace audio
 		}
 		// Call off the audio thread after a newer revision has been acknowledged.
 		void ReleaseRigSnapshotsBefore(std::uint64_t revision);
+		// Called by the job owner to reclaim snapshots after callback leases end.
+		void CollectRetiredSnapshots();
 		std::uint64_t AppliedRigRevision() const noexcept
 		{
 			return _appliedRigRevision.load(std::memory_order_acquire);
@@ -85,7 +90,15 @@ namespace audio
 		bool ReopenCallbackAdmission() noexcept;
 		bool ApplyPendingRigWhileQuiescent() noexcept;
 
-		std::shared_ptr<const std::vector<std::shared_ptr<engine::Station>>> GetStationsSnapshot() const { return _audioStations.load(std::memory_order_acquire); }
+		std::shared_ptr<const std::vector<std::shared_ptr<engine::Station>>>
+			GetStationsSnapshot() const { return _audioStations.load(); }
+		base::PublishedAudioSnapshot<const std::vector<std::shared_ptr<engine::Station>>>::Lease
+			BorrowStationsSnapshot() const noexcept { return _audioStations.borrow(); }
+		// Audio callback only: references the last successfully borrowed station list.
+		const std::vector<std::shared_ptr<engine::Station>>& AudioStationsForCallback() const noexcept
+		{
+			return _lastAudioStations ? *_lastAudioStations : _emptyStations;
+		}
 		std::uint64_t GetAudioSampleCounter() const { return _audioSampleCounter.load(std::memory_order_relaxed); }
 		const midi::MidiClockAnchor& GetMidiClockAnchor() const { return _midiClockAnchor; }
 		midi::MidiClockAnchor& GetMidiClockAnchor_Ref() { return _midiClockAnchor; }
@@ -111,9 +124,10 @@ namespace audio
 		void PublishLocalTransportOffsetLoopFrac(double normalizedLoopFrac) noexcept;
 		// Shares the master transport clock so the audio callback can apply unified
 		// timing commands to it at the same boundary as the local takes.
-		void SetTimingClock(std::shared_ptr<utils::Timer> clock) noexcept
+		void SetTimingClock(std::shared_ptr<utils::Timer> clock)
 		{
-			_timingClock.store(std::move(clock), std::memory_order_release);
+			std::scoped_lock lock(_retainedRigSnapshotsMutex);
+			_timingClock.store(std::move(clock));
 		}
 		float GetAdcPeak(unsigned int channel) const noexcept
 		{
@@ -152,10 +166,17 @@ namespace audio
 
 		bool ApplyDesiredTimingAtAudioBoundary(std::uint64_t blockStartSample,
 			unsigned int sampleRate) noexcept;
+		bool ApplyDesiredTimingAtAudioBoundary(std::uint64_t blockStartSample,
+			unsigned int sampleRate,
+			const std::vector<std::shared_ptr<engine::Station>>* stations,
+			utils::Timer* timingClock) noexcept;
 		void ApplyPendingRigSnapshotAtAudioBoundary() noexcept;
 		void PublishRigTriggerTransitionAtAudioBoundary() noexcept;
 		void ApplyLocalTransportOffsetAtAudioBoundary(
-			const std::vector<std::shared_ptr<engine::Station>>& stations) noexcept;
+			const std::vector<std::shared_ptr<engine::Station>>& stations,
+			utils::Timer* timingClock) noexcept;
+		void PublishAudioCallbackProgress(std::uint64_t blockStartSample,
+			unsigned int numSamps) noexcept;
 		std::optional<std::int64_t> RestoreMappedSourceAtScene(
 			const std::vector<std::shared_ptr<engine::Station>>* stations,
 			std::uint64_t sceneCoordinateSamps) noexcept;
@@ -202,7 +223,9 @@ namespace audio
 		std::atomic<std::uint64_t> _lastAppliedTimingSceneCoordinate{ 0u };
 		std::atomic<long long> _lastAppliedLocalSourceCorrectionSamps{ 0 };
 		LocalTransportOffsetLoopFracMailbox _localTransportOffsetLoopFracMailbox;
-		std::atomic<std::shared_ptr<utils::Timer>> _timingClock;
+		base::PublishedAudioSnapshot<utils::Timer> _timingClock;
+		// Last successful callback lease is the bounded-publication fallback.
+		base::PublishedAudioSnapshot<utils::Timer>::Lease _lastAudioTimingClock;
 		std::uint64_t _ninjamTimingObservationSequence = 0u;
 		double _localTransportOffsetLoopFrac = 0.0;
 		unsigned long _localTransportOffsetMasterLength = 0ul;
@@ -214,14 +237,20 @@ namespace audio
 		static constexpr unsigned int _AdcPeakChannels = 32u;
 		std::array<std::atomic<float>, _AdcPeakChannels> _adcPeaks{};
 
-		std::atomic<std::shared_ptr<const std::vector<std::shared_ptr<engine::Station>>>> _audioStations;
-		// Retain snapshots off audio so callback references cannot become the last owner.
-		std::atomic<std::shared_ptr<const engine::RigSnapshot>> _pendingRigSnapshot;
+		base::PublishedAudioSnapshot<const std::vector<std::shared_ptr<engine::Station>>> _audioStations;
+		// Constructed with AudioHost, so an empty station set never triggers local-static
+		// initialization or STL debug iterator allocation on the audio callback.
+		const std::vector<std::shared_ptr<engine::Station>> _emptyStations;
+		// Declared after its publisher so teardown releases this lease first.
+		base::PublishedAudioSnapshot<const std::vector<std::shared_ptr<engine::Station>>>::Lease
+			_lastAudioStations;
+	// Retain snapshots off audio so callback references cannot become the last owner.
+		base::PublishedAudioSnapshot<const engine::RigSnapshot> _pendingRigSnapshot;
 		// Replacing this handle must not destroy the last snapshot or Trigger on audio.
-		std::shared_ptr<const engine::RigSnapshot> _audioAppliedRigSnapshot;
+		base::PublishedAudioSnapshot<const engine::RigSnapshot>::Lease _audioAppliedRigSnapshot;
 		std::atomic<std::uint64_t> _rigTriggerTransitionRequestRevision{ 0u };
 		std::atomic<std::uint64_t> _rigTriggerTransitionAcceptedRevision{ 0u };
-		std::atomic<std::shared_ptr<const engine::RigSnapshot>> _rigTriggerTransitionCandidate;
+		base::PublishedAudioSnapshot<const engine::RigSnapshot> _rigTriggerTransitionCandidate;
 		std::atomic<std::uint64_t> _transitionReadyRigRevision{ 0u };
 		std::atomic<std::uint64_t> _rejectedRigRevision{ 0u };
 		std::mutex _retainedRigSnapshotsMutex;

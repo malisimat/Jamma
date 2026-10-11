@@ -3,10 +3,58 @@
 #include <atomic>
 #include <chrono>
 #include <future>
+#include <limits>
 #include <stdexcept>
 #include <thread>
 
 #include "ninjam/NinjamSession.h"
+#include "ninjam/NinjamConnection.h"
+
+static_assert(std::atomic<std::uint64_t>::is_always_lock_free,
+	"NINJAM lane publication must use a lock-free 64-bit atomic");
+
+TEST(NinjamLanePacking, ScalarPublicationRoundTripsLaneMetadata)
+{
+	const auto expectRoundTrip = [](const ninjam::NinjamLanePacking& packing)
+	{
+		const auto restored = ninjam::NinjamLanePacking::Unpack(packing.Pack());
+		EXPECT_EQ(packing.LaneCount, restored.LaneCount);
+		EXPECT_EQ(packing.DacPairs, restored.DacPairs);
+		EXPECT_EQ(packing.AdcPairs, restored.AdcPairs);
+		EXPECT_EQ(packing.Modulo, restored.Modulo);
+		EXPECT_EQ(packing.FromFallback, restored.FromFallback);
+		EXPECT_EQ(packing.SlotLimit, restored.SlotLimit);
+	};
+
+	const auto defaults = ninjam::NinjamLanePacking::Unpack(0u);
+	EXPECT_EQ(0u, defaults.LaneCount);
+	EXPECT_EQ(0u, defaults.DacPairs);
+	EXPECT_EQ(0u, defaults.AdcPairs);
+	EXPECT_EQ(0u, defaults.SlotLimit);
+	EXPECT_EQ(0u, defaults.Modulo);
+	EXPECT_EQ(0u, defaults.FromFallback);
+
+	expectRoundTrip(ninjam::NinjamLanePacking{ 0u, 4u, 2u, 0u, 1u, 0u });
+	expectRoundTrip(ninjam::NinjamLanePacking{ 6u, 4u, 2u, 0u, 0u, 8u });
+	expectRoundTrip(ninjam::NinjamLanePacking{ 3u, 4u, 2u, 1u, 1u, 3u });
+	expectRoundTrip(ninjam::NinjamLanePacking{
+		std::numeric_limits<std::uint16_t>::max(),
+		std::numeric_limits<std::uint16_t>::max(),
+		std::numeric_limits<std::uint16_t>::max(),
+		1u,
+		0u,
+		std::numeric_limits<std::uint16_t>::max() });
+
+	const auto maximum = ninjam::NinjamLanePacking::Unpack(
+		ninjam::NinjamLanePacking{
+			0u,
+			std::numeric_limits<std::uint16_t>::max(),
+			std::numeric_limits<std::uint16_t>::max(),
+			1u,
+			0u,
+			std::numeric_limits<std::uint16_t>::max() }.Pack());
+	EXPECT_EQ(std::numeric_limits<std::uint16_t>::max(), maximum.LaneCount);
+}
 
 TEST(NinjamDirectoryDeathTest, ShutdownJoinsWorkerAndRejectsNewRefreshes)
 {

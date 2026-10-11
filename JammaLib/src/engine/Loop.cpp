@@ -443,7 +443,7 @@ void Loop::WriteBlock(const std::shared_ptr<MultiAudioSink> dest,
 
 	if (sampsToWrite > 0)
 	{
-		auto chain = _vstChain.load(std::memory_order_acquire);
+		auto chain = _vstChain.borrow();
 		if (chain && chain->IsActive())
 			chain->ProcessBlock(tempBuf, static_cast<int>(sampsToWrite));
 
@@ -1033,6 +1033,8 @@ std::shared_ptr<vst::IVstPlugin> Loop::GetVstPlugin(size_t index) const
 
 std::vector<JobAction> Loop::_CommitChanges()
 {
+	_vstChain.collect();
+
 	// Swap in a new VST chain when the job thread has delivered one.
 	if (_flipVstChain.exchange(false, std::memory_order_acquire))
 	{

@@ -94,7 +94,6 @@ Station::Station(StationParams params,
 	_backAudioMixers(),
 	_audioBuffers(),
 	_backAudioBuffers(),
-	_audioState(nullptr),
 	_vstChain(nullptr),
 	_backVstChain(nullptr),
 	_flipVstChain(false),
@@ -527,7 +526,7 @@ unsigned int Station::NumOutputChannels(base::Audible::AudioSourceType source) c
 void Station::Zero(unsigned int numSamps,
 	Audible::AudioSourceType source)
 {
-	auto state = _AudioStateSnapshot();
+	auto state = _BorrowAudioState();
 	if (!state)
 		return;
 
@@ -540,8 +539,8 @@ void Station::Zero(unsigned int numSamps,
 		}
 	}
 
-	for (const auto& weakTake : state->LoopTakes)
-		if (auto take = weakTake.lock()) take->Zero(numSamps, source);
+	for (const auto& take : state->OwnedLoopTakes)
+		if (take) take->Zero(numSamps, source);
 }
 
 // Only called when outputting to DAC
@@ -552,13 +551,12 @@ void Station::WriteBlock(const std::shared_ptr<base::MultiAudioSink> dest,
 	std::uint32_t blockStartSample)
 {
 	auto ptr = Sharable::shared_from_this();
-	auto state = _AudioStateSnapshot();
+	auto state = _BorrowAudioState();
 	if (!state)
 		return;
 	auto stationSink = std::dynamic_pointer_cast<MultiAudioSink>(ptr);
-	for (const auto& weakTake : state->LoopTakes)
+	for (const auto& take : state->OwnedLoopTakes)
 	{
-		auto take = weakTake.lock();
 		if (!take)
 			continue;
 
@@ -903,9 +901,8 @@ void Station::_RunVstBlock(vst::VstChain* chain,
 
 	auto midiOutputIndex = 0u;
 	MidiPlaybackSink midiSink(state);
-	for (const auto& weakTake : state.LoopTakes)
+	for (const auto& take : state.OwnedLoopTakes)
 	{
-		auto take = weakTake.lock();
 		if (!take)
 			continue;
 		midiOutputIndex += take->ReadMidiBlock(blockStartSample,
@@ -1116,12 +1113,12 @@ void Station::_RunAutomationDispatch(std::uint32_t blockStartSample,
 
 void Station::EndMultiPlay(unsigned int numSamps)
 {
-	auto state = _AudioStateSnapshot();
+	auto state = _BorrowAudioState();
 	if (!state)
 		return;
 
-	for (const auto& weakTake : state->LoopTakes)
-		if (auto take = weakTake.lock()) take->EndMultiPlay(numSamps);
+	for (const auto& take : state->OwnedLoopTakes)
+		if (take) take->EndMultiPlay(numSamps);
 
 	for (auto& buffer : state->AudioBuffers)
 	{
@@ -1133,69 +1130,69 @@ void Station::EndMultiPlay(unsigned int numSamps)
 void Station::ApplyAcceptedTimingCorrection(long long deltaSamps,
 	std::uint64_t generation) noexcept
 {
-	auto state = _AudioStateSnapshot();
+	auto state = _BorrowAudioState();
 	if (!state)
 		return;
 
-	for (const auto& weakTake : state->LoopTakes)
-		if (auto take = weakTake.lock()) take->ApplyAcceptedTimingCorrection(deltaSamps, generation);
+	for (const auto& take : state->OwnedLoopTakes)
+		if (take) take->ApplyAcceptedTimingCorrection(deltaSamps, generation);
 }
 
 void Station::CaptureSceneAnchors(std::uint64_t sceneCoordinateSamps) noexcept
 {
-	auto state = _AudioStateSnapshot();
+	auto state = _BorrowAudioState();
 	if (!state)
 		return;
 
-	for (const auto& weakTake : state->LoopTakes)
-		if (auto take = weakTake.lock()) take->CaptureSceneAnchors(sceneCoordinateSamps);
+	for (const auto& take : state->OwnedLoopTakes)
+		if (take) take->CaptureSceneAnchors(sceneCoordinateSamps);
 }
 
 void Station::InvalidateSceneAnchors() noexcept
 {
-	auto state = _AudioStateSnapshot();
+	auto state = _BorrowAudioState();
 	if (!state)
 		return;
 
-	for (const auto& weakTake : state->LoopTakes)
-		if (auto take = weakTake.lock()) take->InvalidateSceneAnchors();
+	for (const auto& take : state->OwnedLoopTakes)
+		if (take) take->InvalidateSceneAnchors();
 }
 
 void Station::ResetTimingEpoch() noexcept
 {
-	auto state = _AudioStateSnapshot();
+	auto state = _BorrowAudioState();
 	if (!state)
 		return;
-	for (const auto& weakTake : state->LoopTakes)
-		if (auto take = weakTake.lock()) take->ResetTimingEpoch();
+	for (const auto& take : state->OwnedLoopTakes)
+		if (take) take->ResetTimingEpoch();
 }
 
 void Station::CaptureMappedSourceAnchors(std::int64_t sourceCoordinateSamps) noexcept
 {
-	auto state = _AudioStateSnapshot();
+	auto state = _BorrowAudioState();
 	if (!state)
 		return;
-	for (const auto& weakTake : state->LoopTakes)
-		if (auto take = weakTake.lock()) take->CaptureMappedSourceAnchors(sourceCoordinateSamps);
+	for (const auto& take : state->OwnedLoopTakes)
+		if (take) take->CaptureMappedSourceAnchors(sourceCoordinateSamps);
 }
 
 void Station::RestoreMappedSourceCoordinate(std::int64_t sourceCoordinateSamps) noexcept
 {
-	auto state = _AudioStateSnapshot();
+	auto state = _BorrowAudioState();
 	if (!state)
 		return;
-	for (const auto& weakTake : state->LoopTakes)
-		if (auto take = weakTake.lock()) take->RestoreMappedSourceCoordinate(sourceCoordinateSamps);
+	for (const auto& take : state->OwnedLoopTakes)
+		if (take) take->RestoreMappedSourceCoordinate(sourceCoordinateSamps);
 }
 
 void Station::SetLocalTransportOffsetSamps(long long targetSamps) noexcept
 {
-	auto state = _AudioStateSnapshot();
+	auto state = _BorrowAudioState();
 	if (!state)
 		return;
 
-	for (const auto& weakTake : state->LoopTakes)
-		if (auto take = weakTake.lock()) take->SetLocalTransportOffsetSamps(targetSamps);
+	for (const auto& take : state->OwnedLoopTakes)
+		if (take) take->SetLocalTransportOffsetSamps(targetSamps);
 }
 
 void Station::OnBlockWriteChannel(unsigned int channel,
@@ -1214,12 +1211,12 @@ void Station::OnBlockWriteChannel(unsigned int channel,
 	case Audible::AUDIOSOURCE_MONITOR:
 	case Audible::AUDIOSOURCE_BOUNCE:
 		{
-			auto state = _AudioStateSnapshot();
+			auto state = _BorrowAudioState();
 			if (!state)
 				break;
 
-			for (const auto& weakTake : state->LoopTakes)
-				if (auto take = weakTake.lock()) take->OnBlockWriteChannel(channel, request, writeOffset);
+			for (const auto& take : state->OwnedLoopTakes)
+				if (take) take->OnBlockWriteChannel(channel, request, writeOffset);
 		}
 		break;
 	}
@@ -1229,13 +1226,13 @@ void Station::EndMultiWrite(unsigned int numSamps,
 	bool updateIndex,
 	Audible::AudioSourceType source)
 {
-	auto state = _AudioStateSnapshot();
+	auto state = _BorrowAudioState();
 	if (!state)
 		return;
 
-	for (const auto& weakTake : state->LoopTakes)
+	for (const auto& take : state->OwnedLoopTakes)
 	{
-		if (auto take = weakTake.lock())
+		if (take)
 		{
 			if (take->IsArmed() && take->NumRecordedSamps() == 0ul)
 			{
@@ -2290,23 +2287,20 @@ unsigned int Station::NumBusChannels() const
 }
 
 void Station::OnBounce(unsigned int numSamps,
-	io::UserConfig config,
-	std::optional<audio::AudioStreamParams> params)
+	const io::UserConfig& config,
+	const std::optional<audio::AudioStreamParams>& params)
 {
 	auto outLatency = params.has_value() ? params.value().OutputLatency : 0u;
 	if (0u == outLatency)
 		outLatency = config.Audio.LatencyOut;
 
 	auto sourceOffset = config.OverdubSourceReadOffset(outLatency);
-	auto state = _AudioStateSnapshot();
+	auto state = _BorrowAudioState();
 	if (!state)
 		return;
 
-	for (const auto& weakTake : state->LoopTakes)
-	{
-		if (auto take = weakTake.lock())
-			take->ProcessActiveBounce(sourceOffset, numSamps);
-	}
+	for (const auto& take : state->OwnedLoopTakes)
+		if (take) take->ProcessActiveBounce(sourceOffset, numSamps);
 }
 
 void Station::SetRackVisibility(bool showStationRack, bool showLoopTakeRacks)
@@ -2755,7 +2749,7 @@ std::vector<JobAction> Station::_CommitChanges()
 const std::shared_ptr<AudioSink> Station::_InputChannel(unsigned int channel,
 	Audible::AudioSourceType source)
 {
-	auto state = _AudioStateSnapshot();
+	auto state = _BorrowAudioState();
 	if (!state)
 		return nullptr;
 
@@ -2774,6 +2768,11 @@ const std::shared_ptr<AudioSink> Station::_InputChannel(unsigned int channel,
 std::shared_ptr<const Station::AudioState> Station::_AudioStateSnapshot() const
 {
 	return _audioState.load(std::memory_order_acquire);
+}
+
+base::PublishedAudioSnapshot<const Station::AudioState>::Lease Station::_BorrowAudioState() const noexcept
+{
+	return _audioState.borrow();
 }
 
 std::shared_ptr<const Station::LoopTakeSnapshot> Station::_LoopTakeSnapshotState() const
@@ -2808,27 +2807,28 @@ void Station::_PublishAudioState()
 	state->VstBlockPtrs.resize(state->AudioBuffers.size(), nullptr);
 	for (auto i = 0u; i < state->AudioBuffers.size(); i++)
 		state->VstBlockPtrs[i] = state->VstBlockScratch.data() + (static_cast<size_t>(i) * constants::MaxBlockSize);
-	auto retired = _audioState.exchange(state, std::memory_order_acq_rel);
+	auto retired = _audioState.exchange(std::shared_ptr<const AudioState>(state), std::memory_order_acq_rel);
 	if (retired)
 		_retiredAudioStates.push_back({ state->Generation, std::move(retired) });
 }
 
 void Station::AcknowledgeAudioBoundary() noexcept
 {
-	const auto state = _audioState.load(std::memory_order_acquire);
+	const auto state = _BorrowAudioState();
 	if (state)
 		_audioCompletedStateGeneration.store(state->Generation, std::memory_order_release);
 }
 
 bool Station::HasUnacknowledgedAudioState() const noexcept
 {
-	const auto state = _audioState.load(std::memory_order_acquire);
+	const auto state = _AudioStateSnapshot();
 	return state && state->Generation >
 		_audioCompletedStateGeneration.load(std::memory_order_acquire);
 }
 
 void Station::ReleaseRetiredAudioStates()
 {
+	_audioState.collect();
 	const auto completed = _audioCompletedStateGeneration.load(std::memory_order_acquire);
 	auto keep = std::remove_if(_retiredAudioStates.begin(), _retiredAudioStates.end(),
 		[completed](const RetiredAudioState& retired)

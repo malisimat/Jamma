@@ -1,6 +1,8 @@
 
 #include "gtest/gtest.h"
 #include <thread>
+#include <condition_variable>
+#include <mutex>
 #include "base/AudioSink.h"
 #include "actions/TriggerAction.h"
 #include "engine/LoopTake.h"
@@ -708,6 +710,66 @@ public:
 	unsigned int NoteOns = 0u;
 	unsigned int NoteOffs = 0u;
 };
+
+class BlockingMidiSink final : public midi::IMidiOutputSink
+{
+public:
+	void OnEvent(unsigned int, const midi::MidiEvent&) noexcept override
+	{
+		std::unique_lock<std::mutex> lock(Mutex);
+		Entered = true;
+		Condition.notify_all();
+		Condition.wait(lock, [&] { return Released; });
+	}
+
+	void WaitUntilEntered()
+	{
+		std::unique_lock<std::mutex> lock(Mutex);
+		Condition.wait(lock, [&] { return Entered; });
+	}
+
+	void Release()
+	{
+		std::lock_guard<std::mutex> lock(Mutex);
+		Released = true;
+		Condition.notify_all();
+	}
+
+private:
+	std::mutex Mutex;
+	std::condition_variable Condition;
+	bool Entered = false;
+	bool Released = false;
+};
+
+TEST(LoopTakeMidiSnapshot, RetiredStreamStaysAliveUntilCallbackLeaseEnds)
+{
+	auto take = MakeLoopTake("retired-midi-stream");
+	take->Record({}, "station", {0u}, {"Keys"});
+	ASSERT_TRUE(take->RecordMidiEvent(midi::MidiEvent::MakeNoteOn(0u, 0u, 60u, 100u), "Keys", 0u));
+	take->Play(0u, 128u, 0u);
+	auto midiLoops = take->GetMidiLoopSnapshot();
+	ASSERT_EQ(1u, midiLoops.size());
+	std::weak_ptr<midi::MidiLoop> retiredLoop = midiLoops.front();
+	midiLoops.clear();
+
+	BlockingMidiSink sink;
+	std::thread callback([&] { take->ReadMidiBlock(0u, 1u, sink); });
+	sink.WaitUntilEntered();
+
+	LoopTake::MidiExportState emptyState;
+	const auto replaced = take->RestoreMidiFromExport(emptyState);
+	const auto aliveDuringCallback = !retiredLoop.expired();
+
+	sink.Release();
+	callback.join();
+	ASSERT_TRUE(replaced);
+	EXPECT_TRUE(aliveDuringCallback);
+
+	// A writer-side publication collects the now unprotected retired snapshot.
+	ASSERT_TRUE(take->RestoreMidiFromExport(emptyState));
+	EXPECT_TRUE(retiredLoop.expired());
+}
 
 class CancelledTakeBounceWriter final : public base::BounceWriter
 {

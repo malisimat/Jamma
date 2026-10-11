@@ -85,7 +85,6 @@ namespace graphics
 		int EditorBottomPitch() const noexcept { return _editorBottomPitch; }
 		int EditorVisibleRows() const noexcept { return _editorVisibleRows; }
 		bool EditorGridResolved() const noexcept { return _editorGridResolved; }
-		std::uint32_t EditorTimeOrigin() const noexcept { return _editorTimeOrigin; }
 		void SetEditorHover(float u, int pitch) noexcept;
 		void SetEditorTarget(float startU, float endU, int pitch, int noteIndex) noexcept;
 		void SetEditorHeld(int noteIndex, int proposedVelocity = -1) noexcept;
@@ -111,7 +110,7 @@ namespace graphics
 
 		static std::vector<float> BuildEditorColumnVertices(const midi::LoopGridGeometry& grid,
 			std::uint32_t loopLength, const midi::MidiQuantisationSettings& settings,
-			std::uint64_t transportStart, std::uint32_t displayOrigin);
+			std::uint64_t transportStart);
 
 		// Back-pointer to the owning loop so the renderer can read automation lanes.
 		// The loop owns this model (shared_ptr), so the raw pointer outlives the model.
@@ -181,7 +180,6 @@ namespace graphics
 		midi::MidiQuantisationSettings _editorGridSettings;
 		std::uint64_t _editorGridTransportStart = 0u;
 		std::uint32_t _editorGridLength = 0u;
-		std::uint32_t _editorTimeOrigin = 0u;
 		std::uint32_t _editorSeamHeadEnd = 0u, _editorSeamTailStart = 0u;
 		bool _editorGridSignatureValid = false;
 		bool _editorGridResolved = false;

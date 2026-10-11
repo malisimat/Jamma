@@ -142,7 +142,6 @@ void LoopGridEditor::_ResetTarget()
 std::shared_ptr<MidiLoop> LoopGridEditor::_InitialMidiLoop(const engine::LoopTake& take)
 {
 	std::shared_ptr<MidiLoop> first;
-	// Wiring order determines the default; picker order must not hide recorded events.
 	for (const auto& loop : take.GetMidiLoops())
 	{
 		if (!loop || !loop->Model()) continue;
@@ -158,6 +157,7 @@ bool LoopGridEditor::FindCandidate(std::shared_ptr<engine::LoopTake>& take,
 {
 	const auto hovered = _host.Hovered ? _host.Hovered() : nullptr;
 	std::scoped_lock lock(_host.SceneMutex);
+	const bool selectStreams = !_host.SelectionDepth || _host.SelectionDepth() == base::DEPTH_LOOP;
 	unsigned int fallbackCount = 0u;
 	for (const auto& station : _host.Stations)
 	{
@@ -198,15 +198,16 @@ bool LoopGridEditor::FindCandidate(std::shared_ptr<engine::LoopTake>& take,
 					midiLoop = candidate;
 					return true;
 				}
-				if (!countedMidiForTake && candidate->Model() && candidate->Model()->IsSelected())
+				if (candidate->Model() && candidate->Model()->IsSelected()
+					&& (selectStreams || !countedMidiForTake))
 				{
-					// Take selection defaults to its first populated wired stream; a
-					// single selected stream keeps its own identity.
 					countedMidiForTake = true;
 					++fallbackCount;
 					take = candidateTake;
 					audioLoop.reset();
-					const auto initial = _InitialMidiLoop(*candidateTake);
+					// Whole-take selection has a default channel; loop-depth selection
+					// counts each stream independently and requires disambiguation.
+					const auto initial = selectStreams ? nullptr : _InitialMidiLoop(*candidateTake);
 					midiLoop = initial && initial->Model()->IsSelected() ? initial : candidate;
 				}
 			}
@@ -575,11 +576,8 @@ std::optional<MidiGridGesture::Point> LoopGridEditor::_PointAt(
 	const auto model = loop->Model();
 	const auto pitch = std::clamp(model->EditorBottomPitch()
 		+ static_cast<int>(boundedV * model->EditorVisibleRows()), 0, 127);
-	const auto sample = static_cast<std::uint32_t>((static_cast<std::uint64_t>(
-		LoopGridGeometry::SampleAtU(boundedU, length)) + model->EditorTimeOrigin()) % length);
-	return MidiGridGesture::Point{ sample,
-		static_cast<std::uint8_t>(pitch), model->EditorTimeOrigin()
-			? LoopGridGeometry::SampleU(sample, length) : boundedU, boundedV };
+	const auto sample = LoopGridGeometry::SampleAtU(boundedU, length);
+	return MidiGridGesture::Point{ sample, static_cast<std::uint8_t>(pitch), boundedU, boundedV };
 }
 
 std::uint8_t LoopGridEditor::_ChannelOf(const std::shared_ptr<MidiLoop>& loop) const

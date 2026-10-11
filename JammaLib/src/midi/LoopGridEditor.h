@@ -50,6 +50,7 @@ namespace midi
 			std::function<bool(int button, utils::Position2d anchor)> BeginRelativePointer;
 			std::function<void(int button)> EndRelativePointer;
 			std::function<std::uint64_t()> MasterLengthSamps;
+			std::function<base::SelectDepth()> SelectionDepth;
 		};
 
 	public:

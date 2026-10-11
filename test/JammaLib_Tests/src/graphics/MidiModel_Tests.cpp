@@ -142,7 +142,7 @@ TEST(GraphicsMidiModel, ColumnBandsResetAtEveryGrainForTripletSubdivisions)
 		{
 			const auto grid = midi::LoopGridGeometry::Resolve(120u, settings, transport);
 			ASSERT_TRUE(grid);
-			const auto vertices = graphics::MidiModel::BuildEditorColumnVertices(*grid, 120u, settings, transport, 0u);
+			const auto vertices = graphics::MidiModel::BuildEditorColumnVertices(*grid, 120u, settings, transport);
 			for (std::size_t cell = 0; cell + 1u < grid->Boundaries.size(); ++cell)
 			{
 				const auto middle = (grid->Boundaries[cell] + grid->Boundaries[cell + 1u]) / 2u;

@@ -2,6 +2,9 @@
 #include "audio/AudioHost.h"
 #include "engine/Station.h"
 #include "gui/GuiHud.h"
+#include "base/PublishedAudioSnapshot.h"
+#include "utils/Timer.h"
+#include <array>
 #include <future>
 #include <thread>
 
@@ -21,13 +24,141 @@ namespace audio
 		}
 		static bool EnterCallback(AudioHost& host) noexcept { return host.TryEnterCallback(); }
 		static void LeaveCallback(AudioHost& host) noexcept { host.LeaveCallback(); }
+		static bool ApplyDesiredTiming(AudioHost& host) noexcept
+		{
+			return host.ApplyDesiredTimingAtAudioBoundary(0u, 48000u);
+		}
 		static void LateCallback(AudioHost& host, float* output, unsigned int frames,
 			unsigned int channels) noexcept
 		{
 			host._callbackOutputChannels.store(channels, std::memory_order_release);
 			host.AudioCallback(output, nullptr, frames, 0.0, 0u, &host);
 		}
+		static auto BorrowStations(AudioHost& host) noexcept
+		{
+			return host._audioStations.borrow();
+		}
+		static auto BorrowClock(AudioHost& host) noexcept
+		{
+			return host._timingClock.borrow();
+		}
+		static bool CachedStationReadSucceeded(const AudioHost& host) noexcept
+		{
+			return host._lastAudioStations.ReadSucceeded();
+		}
+		static bool HasCachedStations(const AudioHost& host) noexcept
+		{
+			return static_cast<bool>(host._lastAudioStations);
+		}
+		static bool CachedClockReadSucceeded(const AudioHost& host) noexcept
+		{
+			return host._lastAudioTimingClock.ReadSucceeded();
+		}
+		static bool HasCachedClock(const AudioHost& host) noexcept
+		{
+			return static_cast<bool>(host._lastAudioTimingClock);
+		}
+		static bool AdmissionClosed(const AudioHost& host) noexcept
+		{
+			return (host._callbackAdmission.load(std::memory_order_acquire)
+				& AudioHost::_CallbackAdmissionClosed) != 0u;
+		}
+		static void ConfigureCallback(AudioHost& host, const std::shared_ptr<utils::Timer>& clock)
+		{
+			AudioStreamParams params{};
+			params.SampleRate = 48000u;
+			params.BufSize = 4u;
+			params.NumOutputChannels = 2u;
+			host._preparedStreamParams = params;
+			host._callbackOutputChannels.store(2u, std::memory_order_release);
+			host._tickCallback = [clock](Time, unsigned int frames,
+				const std::optional<io::UserConfig>&,
+				const std::optional<AudioStreamParams>&)
+			{
+				clock->Tick(frames, 0u);
+			};
+		}
+		static void RunBlock(AudioHost& host, float* output) noexcept
+		{
+			host.AudioCallback(output, nullptr, 4u, 0.0, 0u, &host);
+		}
 	};
+}
+
+TEST(AudioCallbackAdmission, SnapshotBorrowFailureReusesLastSuccessfulBlockState)
+{
+	audio::AudioHost host(io::UserConfig{});
+	auto stations = std::make_shared<const std::vector<std::shared_ptr<engine::Station>>>();
+	auto clock = std::make_shared<utils::Timer>();
+	host.SetStations(stations);
+	host.SetTimingClock(clock);
+	audio::RigAudioBoundaryTestAccess::ConfigureCallback(host, clock);
+
+	float output[8]{};
+	audio::RigAudioBoundaryTestAccess::RunBlock(host, output);
+	EXPECT_EQ(4u, host.GetAudioSampleCounter());
+	EXPECT_EQ(4u, clock->SceneSamplePos());
+
+	std::array<base::PublishedAudioSnapshot<const std::vector<std::shared_ptr<engine::Station>>>::Lease, 7u>
+		stationLeases;
+	std::array<base::PublishedAudioSnapshot<utils::Timer>::Lease, 7u> clockLeases;
+	for (auto& lease : stationLeases)
+	{
+		lease = audio::RigAudioBoundaryTestAccess::BorrowStations(host);
+		ASSERT_TRUE(lease.ReadSucceeded());
+	}
+	for (auto& lease : clockLeases)
+	{
+		lease = audio::RigAudioBoundaryTestAccess::BorrowClock(host);
+		ASSERT_TRUE(lease.ReadSucceeded());
+	}
+
+	audio::RigAudioBoundaryTestAccess::RunBlock(host, output);
+	EXPECT_EQ(8u, host.GetAudioSampleCounter());
+	EXPECT_EQ(8u, clock->SceneSamplePos());
+	EXPECT_EQ(2u, host.AudioCallbackHeartbeat());
+
+	for (auto& lease : stationLeases) lease.reset();
+	for (auto& lease : clockLeases) lease.reset();
+	host.SetStations(nullptr);
+	host.SetTimingClock(nullptr);
+	audio::RigAudioBoundaryTestAccess::RunBlock(host, output);
+	EXPECT_TRUE(audio::RigAudioBoundaryTestAccess::CachedStationReadSucceeded(host));
+	EXPECT_FALSE(audio::RigAudioBoundaryTestAccess::HasCachedStations(host));
+	EXPECT_TRUE(audio::RigAudioBoundaryTestAccess::CachedClockReadSucceeded(host));
+	EXPECT_FALSE(audio::RigAudioBoundaryTestAccess::HasCachedClock(host));
+}
+
+TEST(AudioCallbackAdmission, StartupBorrowFailureSilencesButAdvancesPhysicalProgress)
+{
+	audio::AudioHost host(io::UserConfig{});
+	host.SetStations(std::make_shared<const std::vector<std::shared_ptr<engine::Station>>>());
+	auto clock = std::make_shared<utils::Timer>();
+	host.SetTimingClock(clock);
+	audio::RigAudioBoundaryTestAccess::ConfigureCallback(host, clock);
+
+	std::array<base::PublishedAudioSnapshot<const std::vector<std::shared_ptr<engine::Station>>>::Lease, 8u>
+		stationLeases;
+	std::array<base::PublishedAudioSnapshot<utils::Timer>::Lease, 8u> clockLeases;
+	for (auto& lease : stationLeases)
+	{
+		lease = audio::RigAudioBoundaryTestAccess::BorrowStations(host);
+		ASSERT_TRUE(lease.ReadSucceeded());
+	}
+	for (auto& lease : clockLeases)
+	{
+		lease = audio::RigAudioBoundaryTestAccess::BorrowClock(host);
+		ASSERT_TRUE(lease.ReadSucceeded());
+	}
+
+	float output[8];
+	std::fill_n(output, 8u, 1.0f);
+	audio::RigAudioBoundaryTestAccess::RunBlock(host, output);
+	for (const auto sample : output)
+		EXPECT_EQ(0.0f, sample);
+	EXPECT_EQ(4u, host.GetAudioSampleCounter());
+	EXPECT_EQ(4u, clock->SceneSamplePos());
+	EXPECT_EQ(1u, host.AudioCallbackHeartbeat());
 }
 
 TEST(AudioCallbackAdmission, ClosingWaitsForAdmittedCallbackAndRejectsLateCallbacks)
@@ -65,6 +196,60 @@ TEST(AudioCallbackAdmission, RepeatedCloseCannotReopenAnActiveReader)
 	EXPECT_FALSE(host.CallbackAdmissionIsQuiescent());
 	audio::RigAudioBoundaryTestAccess::LeaveCallback(host);
 	EXPECT_TRUE(host.CallbackAdmissionIsQuiescent());
+}
+
+TEST(AudioCallbackAdmission, CloseWaitsForAnAdmittedCallbackBeforeReturning)
+{
+	audio::AudioHost host(io::UserConfig{});
+	ASSERT_TRUE(audio::RigAudioBoundaryTestAccess::EnterCallback(host));
+	std::promise<void> closeStarted;
+	auto closeStartedFuture = closeStarted.get_future();
+	auto closeFinished = std::async(std::launch::async, [&] {
+		closeStarted.set_value();
+		host.Close();
+	});
+	closeStartedFuture.wait();
+	const auto closeDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(1);
+	while (!audio::RigAudioBoundaryTestAccess::AdmissionClosed(host)
+		&& std::chrono::steady_clock::now() < closeDeadline)
+		std::this_thread::yield();
+	const auto admissionWasClosed = audio::RigAudioBoundaryTestAccess::AdmissionClosed(host);
+	const auto returnedWhileCallbackActive = closeFinished.wait_for(std::chrono::milliseconds(20))
+		== std::future_status::ready;
+	audio::RigAudioBoundaryTestAccess::LeaveCallback(host);
+	EXPECT_TRUE(admissionWasClosed);
+	EXPECT_FALSE(returnedWhileCallbackActive);
+	EXPECT_EQ(std::future_status::ready, closeFinished.wait_for(std::chrono::seconds(1)));
+	closeFinished.get();
+	EXPECT_TRUE(host.CallbackAdmissionIsQuiescent());
+	EXPECT_FALSE(audio::RigAudioBoundaryTestAccess::EnterCallback(host));
+}
+
+TEST(AudioCallbackAdmission, DesiredTimingRemainsPendingWhenSnapshotBorrowIsExhausted)
+{
+	audio::AudioHost host(io::UserConfig{});
+	host.SetStations(std::make_shared<const std::vector<std::shared_ptr<engine::Station>>>());
+	std::array<base::PublishedAudioSnapshot<const std::vector<std::shared_ptr<engine::Station>>>::Lease, 8u>
+		leases;
+	for (auto& lease : leases)
+	{
+		lease = host.BorrowStationsSnapshot();
+		ASSERT_TRUE(lease.ReadSucceeded());
+	}
+
+	ninjam::NinjamDesiredTransportState desired{};
+	desired.Version = 1u;
+	desired.SessionEpoch = 1u;
+	desired.LocalFollowPolicy = ninjam::NinjamLocalFollowPolicy::NoSync;
+	host.PublishDesiredTiming(desired);
+	EXPECT_FALSE(audio::RigAudioBoundaryTestAccess::ApplyDesiredTiming(host));
+	EXPECT_FALSE(host.LastAppliedDesiredTiming().has_value());
+
+	for (auto& lease : leases)
+		lease.reset();
+	EXPECT_TRUE(audio::RigAudioBoundaryTestAccess::ApplyDesiredTiming(host));
+	ASSERT_TRUE(host.LastAppliedDesiredTiming().has_value());
+	EXPECT_EQ(1u, host.LastAppliedDesiredTiming()->Version);
 }
 
 TEST(AudioCallbackAdmission, QuiescencePublishesExitedReadersPayload)
@@ -861,4 +1046,150 @@ TEST_F(RigSnapshotTest, ReplacedTriggerDitchesFrozenHistoryFromItsOriginalReceiv
     EXPECT_TRUE(stationA->GetLoopTakeSnapshot().empty());
     EXPECT_TRUE(stationB->GetLoopTakeSnapshot().empty());
     EXPECT_TRUE(replacement->GetTakes().empty());
+}
+
+struct PublishedAudioSnapshotLifetimeProbe
+{
+	PublishedAudioSnapshotLifetimeProbe(unsigned int initialValue,
+		std::atomic<unsigned int>& destructionCount,
+		std::atomic<bool>& destroyedOffWriter,
+		std::thread::id writerThread) noexcept
+		: value(initialValue), complement(~initialValue), destroyed(destructionCount),
+		destroyedOffWriter(destroyedOffWriter), writerThread(writerThread) {}
+	~PublishedAudioSnapshotLifetimeProbe()
+	{
+		if (std::this_thread::get_id() != writerThread)
+			destroyedOffWriter.store(true, std::memory_order_relaxed);
+		destroyed.fetch_add(1u, std::memory_order_relaxed);
+	}
+	unsigned int value;
+	unsigned int complement;
+	std::atomic<unsigned int>& destroyed;
+	std::atomic<bool>& destroyedOffWriter;
+	std::thread::id writerThread;
+};
+
+TEST(PublishedAudioSnapshot, NestedBorrowsKeepRetiredStorageOffAudioUntilCollected)
+{
+	std::atomic<unsigned int> destroyed{ 0u };
+	std::atomic<bool> destroyedOffWriter{ false };
+	base::PublishedAudioSnapshot<const PublishedAudioSnapshotLifetimeProbe> snapshot;
+	const auto writerThread = std::this_thread::get_id();
+	snapshot.store(std::make_shared<PublishedAudioSnapshotLifetimeProbe>(1u, destroyed,
+		destroyedOffWriter, writerThread));
+	auto outer = snapshot.borrow();
+	auto inner = snapshot.borrow();
+	ASSERT_TRUE(outer);
+	ASSERT_TRUE(inner);
+	EXPECT_EQ(1u, outer->value);
+	EXPECT_EQ(1u, inner->value);
+
+	snapshot.store(std::make_shared<PublishedAudioSnapshotLifetimeProbe>(2u, destroyed,
+		destroyedOffWriter, writerThread));
+	EXPECT_EQ(0u, destroyed.load(std::memory_order_relaxed));
+	outer.reset();
+	snapshot.collect();
+	EXPECT_EQ(0u, destroyed.load(std::memory_order_relaxed));
+	inner.reset();
+	EXPECT_EQ(0u, destroyed.load(std::memory_order_relaxed));
+	snapshot.collect();
+	EXPECT_EQ(1u, destroyed.load(std::memory_order_relaxed));
+	EXPECT_FALSE(destroyedOffWriter.load(std::memory_order_relaxed));
+}
+
+TEST(PublishedAudioSnapshot, RepeatedPublicationKeepsBorrowAliveUntilCollection)
+{
+	std::atomic<unsigned int> destroyed{ 0u };
+	std::atomic<bool> destroyedOffWriter{ false };
+	base::PublishedAudioSnapshot<const PublishedAudioSnapshotLifetimeProbe> snapshot;
+	const auto writerThread = std::this_thread::get_id();
+	auto published = std::make_shared<PublishedAudioSnapshotLifetimeProbe>(7u, destroyed,
+		destroyedOffWriter, writerThread);
+	snapshot.store(published);
+	auto lease = snapshot.borrow();
+	ASSERT_TRUE(lease);
+
+	const auto ownersBeforeRepublishing = published.use_count();
+	for (unsigned int publication = 0u; publication < 64u; ++publication)
+		snapshot.store(published);
+	EXPECT_EQ(ownersBeforeRepublishing, published.use_count());
+	snapshot.store(nullptr);
+	published.reset();
+	snapshot.collect();
+	EXPECT_EQ(0u, destroyed.load(std::memory_order_relaxed));
+	EXPECT_EQ(7u, lease->value);
+
+	lease.reset();
+	snapshot.collect();
+	EXPECT_EQ(1u, destroyed.load(std::memory_order_relaxed));
+	EXPECT_FALSE(destroyedOffWriter.load(std::memory_order_relaxed));
+}
+
+TEST(PublishedAudioSnapshot, ReaderCanBorrowWhileWriterReplacesAndCollects)
+{
+	std::atomic<unsigned int> destroyed{ 0u };
+	std::atomic<bool> destroyedOffWriter{ false };
+	base::PublishedAudioSnapshot<const PublishedAudioSnapshotLifetimeProbe> snapshot;
+	const auto writerThread = std::this_thread::get_id();
+	snapshot.store(std::make_shared<PublishedAudioSnapshotLifetimeProbe>(1u, destroyed,
+		destroyedOffWriter, writerThread));
+	std::atomic<bool> running{ true };
+	std::atomic<bool> invalidValue{ false };
+	std::atomic<unsigned int> reads{ 0u };
+	std::thread reader([&] {
+		while (running.load(std::memory_order_relaxed))
+		{
+			auto lease = snapshot.borrow();
+			if (lease)
+			{
+				if ((lease->value ^ lease->complement) != 0xffffffffu)
+					invalidValue.store(true, std::memory_order_relaxed);
+				reads.fetch_add(1u, std::memory_order_relaxed);
+			}
+		}
+	});
+	while (reads.load(std::memory_order_relaxed) == 0u)
+		std::this_thread::yield();
+	for (unsigned int value = 2u; value < 2002u; ++value)
+	{
+		snapshot.store(std::make_shared<PublishedAudioSnapshotLifetimeProbe>(value, destroyed,
+			destroyedOffWriter, writerThread));
+		if ((value & 7u) == 0u)
+			snapshot.collect();
+	}
+	running.store(false, std::memory_order_relaxed);
+	reader.join();
+	snapshot.collect();
+	EXPECT_GT(reads.load(std::memory_order_relaxed), 0u);
+	EXPECT_FALSE(invalidValue.load(std::memory_order_relaxed));
+	EXPECT_FALSE(destroyedOffWriter.load(std::memory_order_relaxed));
+	EXPECT_EQ(2000u, destroyed.load(std::memory_order_relaxed));
+}
+
+TEST(PublishedAudioSnapshot, BoundedSlotsCanBeExhaustedAndReused)
+{
+	base::PublishedAudioSnapshot<const unsigned int> snapshot;
+	auto emptyLease = snapshot.borrow();
+	EXPECT_FALSE(emptyLease);
+	EXPECT_TRUE(emptyLease.ReadSucceeded());
+	snapshot.store(std::make_shared<const unsigned int>(7u));
+	std::array<base::PublishedAudioSnapshot<const unsigned int>::Lease, 8u> leases;
+	for (auto& lease : leases)
+	{
+		lease = snapshot.borrow();
+		ASSERT_TRUE(lease);
+	}
+	auto exhaustedLease = snapshot.borrow();
+	EXPECT_FALSE(exhaustedLease);
+	EXPECT_FALSE(exhaustedLease.ReadSucceeded());
+	snapshot.store(nullptr);
+	auto emptyDuringExhaustion = snapshot.borrow();
+	EXPECT_FALSE(emptyDuringExhaustion);
+	EXPECT_TRUE(emptyDuringExhaustion.ReadSucceeded());
+	leases[3].reset();
+	snapshot.store(std::make_shared<const unsigned int>(7u));
+	auto replacementLease = snapshot.borrow();
+	ASSERT_TRUE(replacementLease);
+	EXPECT_TRUE(replacementLease.ReadSucceeded());
+	EXPECT_EQ(7u, *replacementLease);
 }

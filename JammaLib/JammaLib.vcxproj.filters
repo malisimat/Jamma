@@ -572,6 +572,9 @@
     <ClInclude Include="src\base\Jammable.h">
       <Filter>src\base</Filter>
     </ClInclude>
+    <ClInclude Include="src\base\PublishedAudioSnapshot.h">
+      <Filter>src\base</Filter>
+    </ClInclude>
     <ClInclude Include="src\base\LoggingConfig.h">
       <Filter>src\base</Filter>
     </ClInclude>

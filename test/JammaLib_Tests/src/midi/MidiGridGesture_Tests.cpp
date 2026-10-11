@@ -681,6 +681,39 @@ TEST(MidiGridGesture, SnappedRationalRemoteAndPhaseGridReprojectsExactly)
 	}
 }
 
+TEST(MidiGridGesture, SnappedMoveUsesLocalAndRemoteBaseGridOverrides)
+{
+	for (const bool remote : {false, true})
+	{
+		auto source = MidiGridGestureFixture::EmptyLoop();
+		source.Quantisation.BaseIntervalSamps = 100u;
+		source.Quantisation.BaseDivisions = 3u;
+		if (remote)
+		{
+			source.Quantisation.RemoteIntervalSamps = 100u;
+			source.Quantisation.RemoteBpi = 10u;
+		}
+		ASSERT_TRUE(midi::MidiEditOperations::Create(source, 10u, 5u, 2u, 60u, 73u));
+		const auto interval = source.Quantisation.GridInterval();
+		const auto divisions = source.Quantisation.GridDivisions();
+		ASSERT_EQ(100u, interval);
+		ASSERT_EQ(3u, divisions);
+		const auto destination = static_cast<std::uint32_t>(
+			midi::MidiQuantisation::BoundarySampleAt(1, interval, divisions));
+		ASSERT_EQ(33u, destination); // This boundary is absent from the 10-sample grain grid.
+		ASSERT_TRUE(midi::MidiEditOperations::MoveSnapped(source, 0u, 1u,
+			destination, destination + 5u, 67u));
+
+		const auto targets = midi::MidiGridTargets::Build(source);
+		ASSERT_EQ(1u, targets.Notes.size());
+		EXPECT_EQ(destination, targets.Notes[0].Start);
+		EXPECT_EQ(destination + 5u, targets.Notes[0].End);
+		EXPECT_EQ(67u, targets.Notes[0].Pitch);
+		EXPECT_EQ(5u, source.Events[1].sampleOffset - source.Events[0].sampleOffset);
+		EXPECT_EQ(73u, source.Events[0].data2);
+	}
+}
+
 TEST(MidiPitchViewGesture, ProjectedPanAndZoomKeepAnchorPitch)
 {
 	midi::MidiPitchViewGesture view;

@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <cmath>
 #include <iostream>
+#include <thread>
 
 using namespace engine;
 using namespace utils;
@@ -62,6 +63,9 @@ namespace audio
 
 	AudioHost::~AudioHost()
 	{
+		// AudioDevice must prevent further callback invocations before this host
+		// is destroyed. A failed TryStop closes engine admission and drains the
+		// current callback, but only the backend can guarantee no later userdata call.
 		Close();
 	}
 
@@ -76,8 +80,11 @@ namespace audio
 			// permits replacing the driver and its output-buffer geometry.
 			if (!_audioDevice->TryStop()) return false;
 			_lastInitReplacedStream = true;
-			if ((_callbackAdmission.load(std::memory_order_acquire) & _CallbackAdmissionClosed) != 0u &&
-				!CallbackAdmissionIsQuiescent()) return false;
+			while ((_callbackAdmission.load(std::memory_order_acquire) & 1u) != 0u)
+				std::this_thread::yield();
+			_lastAudioStations.reset();
+			_lastAudioTimingClock.reset();
+			_audioAppliedRigSnapshot.reset();
 			_audioDevice.reset();
 			_publishedStreamParams.store({}, std::memory_order_release);
 		}
@@ -106,7 +113,7 @@ namespace audio
 					audioStreamParams.NumInputChannels,
 					audioStreamParams.NumOutputChannels }));
 
-			auto stationsSnapshot = _audioStations.load(std::memory_order_acquire);
+			auto stationsSnapshot = _audioStations.load();
 			if (stationsSnapshot)
 			{
 				for (auto& station : *stationsSnapshot)
@@ -153,38 +160,48 @@ namespace audio
 
 	void AudioHost::Close()
 	{
-		if (_audioDevice)
-			_audioDevice->Stop();
+		CloseCallbackAdmission();
+		const bool deviceStopped = !_audioDevice || _audioDevice->TryStop();
+		// Closing admission prevents another engine callback from entering. Wait
+		// for an already admitted callback before Scene releases plugin state,
+		// even when the backend could not confirm that its stream stopped.
+		while (!CallbackAdmissionIsQuiescent())
+			std::this_thread::yield();
 
 		std::scoped_lock lock(_audioMutex);
 
-		if (_ninjamController)
+		if (deviceStopped && _ninjamController)
 			_ninjamController->Stop();
 
-		if (_audioDevice)
-			_audioDevice->Stop();
-
-		_pendingRigSnapshot.store(nullptr, std::memory_order_release);
-		_audioAppliedRigSnapshot.reset();
 		{
 			std::scoped_lock retainedLock(_retainedRigSnapshotsMutex);
-			_retainedRigSnapshots.clear();
+			if (deviceStopped && CallbackAdmissionIsQuiescent())
+			{
+				_pendingRigSnapshot.store(nullptr);
+				_audioAppliedRigSnapshot.reset();
+				_lastAudioStations.reset();
+				_lastAudioTimingClock.reset();
+				_retainedRigSnapshots.clear();
+				_pendingRigSnapshot.collect();
+				_rigTriggerTransitionCandidate.collect();
+				_audioStations.collect();
+				_timingClock.collect();
+			}
 		}
 	}
 
 	void AudioHost::SetStations(std::shared_ptr<const std::vector<std::shared_ptr<Station>>> stations)
 	{
-		_audioStations.store(stations, std::memory_order_release);
+		std::scoped_lock lock(_retainedRigSnapshotsMutex);
+		_audioStations.store(stations);
 	}
 
 	void AudioHost::PublishPendingRigSnapshot(std::shared_ptr<const engine::RigSnapshot> snapshot)
 	{
+		std::scoped_lock lock(_retainedRigSnapshotsMutex);
 		if (snapshot)
-		{
-			std::scoped_lock lock(_retainedRigSnapshotsMutex);
 			_retainedRigSnapshots.push_back(snapshot);
-		}
-		_pendingRigSnapshot.store(std::move(snapshot), std::memory_order_release);
+		_pendingRigSnapshot.store(std::move(snapshot));
 	}
 
 	void AudioHost::RequestRigTriggerTransition(std::uint64_t candidateRevision,
@@ -195,31 +212,45 @@ namespace audio
 		_rejectedRigRevision.store(0u, std::memory_order_release);
 		_rigTriggerTransitionAcceptedRevision.store(
 			acceptedSnapshot ? acceptedSnapshot->Revision : 0u, std::memory_order_release);
-		_rigTriggerTransitionCandidate.store(std::move(candidateSnapshot), std::memory_order_release);
+		std::scoped_lock lock(_retainedRigSnapshotsMutex);
+		_rigTriggerTransitionCandidate.store(std::move(candidateSnapshot));
 		_rigTriggerTransitionRequestRevision.store(candidateRevision, std::memory_order_release);
 	}
 
-	void AudioHost::ClearRigTriggerTransition() noexcept
+	void AudioHost::ClearRigTriggerTransition()
 	{
 		_rigTriggerTransitionRequestRevision.store(0u, std::memory_order_release);
 		_rigTriggerTransitionAcceptedRevision.store(0u, std::memory_order_release);
-		_rigTriggerTransitionCandidate.store({}, std::memory_order_release);
+		std::scoped_lock lock(_retainedRigSnapshotsMutex);
+		_rigTriggerTransitionCandidate.store({});
 	}
 
 	void AudioHost::ReleaseRigSnapshotsBefore(std::uint64_t revision)
 	{
+		{
+			std::scoped_lock lock(_retainedRigSnapshotsMutex);
+			_retainedRigSnapshots.erase(std::remove_if(_retainedRigSnapshots.begin(),
+				_retainedRigSnapshots.end(),
+				[revision](const std::shared_ptr<const engine::RigSnapshot>& snapshot)
+				{
+					return snapshot && snapshot->Graph.Revision < revision;
+				}), _retainedRigSnapshots.end());
+		}
+		CollectRetiredSnapshots();
+	}
+
+	void AudioHost::CollectRetiredSnapshots()
+	{
 		std::scoped_lock lock(_retainedRigSnapshotsMutex);
-		_retainedRigSnapshots.erase(std::remove_if(_retainedRigSnapshots.begin(),
-			_retainedRigSnapshots.end(),
-			[revision](const std::shared_ptr<const engine::RigSnapshot>& snapshot)
-			{
-				return snapshot && snapshot->Graph.Revision < revision;
-			}), _retainedRigSnapshots.end());
+		_pendingRigSnapshot.collect();
+		_rigTriggerTransitionCandidate.collect();
+		_audioStations.collect();
+		_timingClock.collect();
 	}
 
 	void AudioHost::ApplyPendingRigSnapshotAtAudioBoundary() noexcept
 	{
-		const auto snapshot = _pendingRigSnapshot.load(std::memory_order_acquire);
+		auto snapshot = _pendingRigSnapshot.borrow();
 		if (!snapshot)
 			return;
 		if (snapshot->Graph.Revision <= _audioRigRevision)
@@ -237,7 +268,7 @@ namespace audio
 		}
 
 		_audioRigRevision = snapshot->Graph.Revision;
-		_audioAppliedRigSnapshot = snapshot;
+		_audioAppliedRigSnapshot = std::move(snapshot);
 		_appliedRigRevision.store(_audioRigRevision, std::memory_order_release);
 	}
 
@@ -247,11 +278,11 @@ namespace audio
 		if (candidateRevision == 0u ||
 			_rigTriggerTransitionAcceptedRevision.load(std::memory_order_acquire) != _audioRigRevision)
 			return;
-		const auto snapshot = _pendingRigSnapshot.load(std::memory_order_acquire);
+		auto snapshot = _pendingRigSnapshot.borrow();
 		if (!snapshot || snapshot->Revision != _audioRigRevision)
 			return;
 
-		const auto candidate = _rigTriggerTransitionCandidate.load(std::memory_order_acquire);
+		auto candidate = _rigTriggerTransitionCandidate.borrow();
 		if (!candidate || candidate->Revision != candidateRevision)
 			return;
 		for (const auto& retired : candidate->TriggerReplacementChecks)
@@ -316,8 +347,22 @@ std::optional<ninjam::NinjamDesiredTimingReceipt> AudioHost::LastAppliedDesiredT
 bool AudioHost::ApplyDesiredTimingAtAudioBoundary(std::uint64_t blockStartSample,
 	unsigned int sampleRate) noexcept
 {
-	_mappedSourceHandledAtCommandBoundary = false;
+	// A failed bounded read must leave the desired state eligible for the next block.
+	const auto stationsSnapshot = _audioStations.borrow();
+	const auto timingClock = _timingClock.borrow();
+	if (!stationsSnapshot.ReadSucceeded() || !timingClock.ReadSucceeded())
+		return false;
+	return ApplyDesiredTimingAtAudioBoundary(blockStartSample, sampleRate,
+		stationsSnapshot.get(), timingClock.get());
+}
+
+bool AudioHost::ApplyDesiredTimingAtAudioBoundary(std::uint64_t blockStartSample,
+	unsigned int sampleRate,
+	const std::vector<std::shared_ptr<engine::Station>>* stations,
+	utils::Timer* timingClock) noexcept
+{
 	const auto desiredValue = _ninjamDesiredTimingMailbox.ReadLatest();
+	_mappedSourceHandledAtCommandBoundary = false;
 	if (!desiredValue.has_value() || desiredValue->Version == 0u)
 		return false;
 	const auto& desired = desiredValue.value();
@@ -331,9 +376,6 @@ bool AudioHost::ApplyDesiredTimingAtAudioBoundary(std::uint64_t blockStartSample
 		&& desired.Generation <= _appliedNinjamTiming.Generation)
 		return false;
 
-	const auto stationsSnapshot = _audioStations.load(std::memory_order_acquire);
-	const auto* stations = stationsSnapshot.get();
-	const auto timingClock = _timingClock.load(std::memory_order_acquire);
 	const auto noSync = desired.LocalFollowPolicy == ninjam::NinjamLocalFollowPolicy::NoSync
 		|| !desired.HasRemoteTiming;
 	const auto resetAuthority = epochChanged || noSync;
@@ -488,13 +530,23 @@ void AudioHost::CaptureMappedSourceAnchorsAfterOffset(
 	_captureMappedSourceAnchorsAfterOffset = false;
 }
 
+void AudioHost::PublishAudioCallbackProgress(std::uint64_t blockStartSample,
+	unsigned int numSamps) noexcept
+{
+	const auto nextSample = blockStartSample + numSamps;
+	_audioSampleCounter.store(nextSample, std::memory_order_release);
+	midi::PublishMidiClockAnchor(_midiClockAnchor, nextSample,
+		std::chrono::duration_cast<std::chrono::microseconds>(
+			std::chrono::steady_clock::now().time_since_epoch()).count());
+}
+
 	void AudioHost::ApplyLocalTransportOffsetAtAudioBoundary(
-		const std::vector<std::shared_ptr<engine::Station>>& stations) noexcept
+		const std::vector<std::shared_ptr<engine::Station>>& stations,
+		utils::Timer* timingClock) noexcept
 	{
 		if (const auto localTransportOffsetLoopFrac = _localTransportOffsetLoopFracMailbox.ConsumeLatest())
 			_localTransportOffsetLoopFrac = localTransportOffsetLoopFrac.value();
 
-		const auto timingClock = _timingClock.load(std::memory_order_acquire);
 		const auto masterLength = timingClock ? timingClock->SeedSourceLength() : 0ul;
 		if (masterLength != _localTransportOffsetMasterLength)
 			_localTransportOffsetMasterLength = masterLength;
@@ -572,19 +624,42 @@ void AudioHost::CaptureMappedSourceAnchorsAfterOffset(
 		unsigned int numSamps,
 		double streamTime)
 	{
+		auto stationsSnapshot = _audioStations.borrow();
+		auto timingClockSnapshot = _timingClock.borrow();
+		if (stationsSnapshot.ReadSucceeded() && timingClockSnapshot.ReadSucceeded())
+		{
+			_lastAudioStations = std::move(stationsSnapshot);
+			_lastAudioTimingClock = std::move(timingClockSnapshot);
+		}
+
+		_mappedSourceHandledAtCommandBoundary = false;
 		_audioCallbackHeartbeat.fetch_add(1u, std::memory_order_relaxed);
+		const auto blockStartSample = _audioSampleCounter.load(std::memory_order_relaxed);
+		if (!_lastAudioStations.ReadSucceeded() || !_lastAudioTimingClock.ReadSucceeded())
+		{
+			if (outBuf)
+				std::fill_n(outBuf, static_cast<std::size_t>(numSamps) *
+					_callbackOutputChannels.load(std::memory_order_acquire), 0.0f);
+			if (_lastAudioTimingClock)
+				_lastAudioTimingClock->AdvanceMusicalTransport();
+			if (_tickCallback)
+				_tickCallback(Timer::GetTime(), numSamps,
+					_tickUserConfig, _preparedStreamParams);
+			PublishAudioCallbackProgress(blockStartSample, numSamps);
+			return;
+		}
+
 		ApplyPendingRigSnapshotAtAudioBoundary();
 		const auto& audioStreamParams = *_preparedStreamParams;
-		const auto blockStartSample = _audioSampleCounter.load(std::memory_order_relaxed);
-		const auto stationsSnapshot = _audioStations.load(std::memory_order_acquire);
-		static const std::vector<std::shared_ptr<Station>> emptyStations;
-		const auto& stations = stationsSnapshot ? *stationsSnapshot : emptyStations;
-		ApplyDesiredTimingAtAudioBoundary(blockStartSample, audioStreamParams.SampleRate);
+		const auto* stationsSnapshotValue = _lastAudioStations.get();
+		const auto& stations = stationsSnapshotValue ? *stationsSnapshotValue : _emptyStations;
+		auto* timingClock = _lastAudioTimingClock.get();
+		ApplyDesiredTimingAtAudioBoundary(blockStartSample, audioStreamParams.SampleRate,
+			stationsSnapshotValue, timingClock);
 
-		const auto timingClock = _timingClock.load(std::memory_order_acquire);
 		if (timingClock)
 			timingClock->AdvanceMusicalTransport();
-		ApplyLocalTransportOffsetAtAudioBoundary(stations);
+		ApplyLocalTransportOffsetAtAudioBoundary(stations, timingClock);
 		// Offset is loop-local, so capture entity anchors only after every local take
 		// has applied it. This is a single post-command fan-out, rather than a
 		// speculative capture before the offset is known.
@@ -630,10 +705,10 @@ void AudioHost::CaptureMappedSourceAnchorsAfterOffset(
 				_channelMixer->WriteToSink(station, numSamps);
 
 				station->SetSourceType(Audible::AUDIOSOURCE_MONITOR);
-				station->OnBounce(numSamps, _userConfig, audioStreamParams);
+				station->OnBounce(numSamps, _userConfig, _preparedStreamParams);
 
 				station->SetSourceType(Audible::AUDIOSOURCE_BOUNCE);
-				station->OnBounce(numSamps, _userConfig, audioStreamParams);
+				station->OnBounce(numSamps, _userConfig, _preparedStreamParams);
 
 				station->EndMultiWrite(numSamps, true, Audible::AUDIOSOURCE_BOUNCE);
 			}
@@ -794,10 +869,6 @@ void AudioHost::CaptureMappedSourceAnchorsAfterOffset(
 		// Decide after Trigger::OnTick so this transition uses the completed boundary's state.
 		PublishRigTriggerTransitionAtAudioBoundary();
 
-		_audioSampleCounter.store(blockStartSample + numSamps, std::memory_order_release);
-		midi::PublishMidiClockAnchor(_midiClockAnchor,
-			blockStartSample + numSamps,
-			std::chrono::duration_cast<std::chrono::microseconds>(
-				std::chrono::steady_clock::now().time_since_epoch()).count());
+		PublishAudioCallbackProgress(blockStartSample, numSamps);
 	}
 }

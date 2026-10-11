@@ -25,6 +25,12 @@ AudioBuffer::~AudioBuffer()
 void AudioBuffer::EndPlay(unsigned int numSamps)
 {
 	auto bufSize = (unsigned int)_buffer.size();
+	if (0 == bufSize)
+	{
+		_playIndex = 0;
+		return;
+	}
+
 	_playIndex += numSamps;
 
 	if (0 == _sampsRecorded)
@@ -41,8 +47,7 @@ void AudioBuffer::EndPlay(unsigned int numSamps)
 		return;
 	}*/
 
-	while (bufSize <= _playIndex)
-		_playIndex -= bufSize;
+	_playIndex %= bufSize;
 }
 
 void AudioBuffer::EndWrite(unsigned int numSamps, bool updateIndex)
@@ -116,10 +121,7 @@ void AudioBuffer::_SetWriteIndex(unsigned int index)
 		return;
 	}
 
-	while (index >= bufSize)
-		index-= bufSize;
-
-	_writeIndex.store(index, std::memory_order_relaxed);
+	_writeIndex.store(index % bufSize, std::memory_order_relaxed);
 }
 
 unsigned int AudioBuffer::SampsRecorded() const

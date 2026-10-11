@@ -21,6 +21,7 @@
 #include "../io/JamFile.h"
 #include "../vst/VstChain.h"
 #include "../base/TriggerPunchTarget.h"
+#include "../base/PublishedAudioSnapshot.h"
 
 using base::Audible;
 
@@ -117,6 +118,9 @@ namespace engine
 		virtual unsigned int NumOutputChannels(Audible::AudioSourceType) const override;
 		virtual void Zero(unsigned int numSamps,
 			Audible::AudioSourceType source) override;
+		virtual void OnBlockWriteChannel(unsigned int channel,
+			const base::AudioWriteRequest& request,
+			int writeOffset) override;
 		void WriteBlock(const std::shared_ptr<base::MultiAudioSink> dest,
 			const std::shared_ptr<base::BounceWriter> bounceWriter,
 			int indexOffset,
@@ -223,7 +227,7 @@ namespace engine
 		// and IVstPlugin::GetLatencySamples.
 		int CurrentVstLatencySamps() const noexcept
 		{
-			auto chain = _vstChain.load(std::memory_order_acquire);
+			auto chain = _vstChain.borrow();
 			return chain ? chain->GetLatencySamples() : 0;
 		}
 
@@ -399,8 +403,8 @@ namespace engine
 
 		struct AudioState
 		{
-			// weak_ptr: AudioState destruction on any thread won't trigger GL destructors
-			std::vector<std::weak_ptr<Loop>> Loops;
+			// Snapshot pins keep retired loops alive until the job thread reclaims the state.
+			std::vector<std::shared_ptr<Loop>> Loops;
 			std::vector<unsigned int> RecordInputChannels;
 			std::vector<std::shared_ptr<audio::AudioMixer>> AudioMixers;
 			std::vector<std::shared_ptr<audio::AudioBuffer>> AudioBuffers;
@@ -408,7 +412,7 @@ namespace engine
 			std::vector<float*> VstBlockPtrs;
 		};
 
-		using MidiLoopSnapshot = std::vector<std::weak_ptr<midi::MidiLoop>>;
+		using MidiLoopSnapshot = std::vector<std::shared_ptr<midi::MidiLoop>>;
 
 		gui::GuiRackParams _GetRackParams(utils::Size2d size);
 		bool _RecordMidiEventUnlocked(const midi::MidiEvent& ev,
@@ -423,8 +427,13 @@ namespace engine
 		void _WireVuSliders();
 		void _PublishMidiLoopSnapshot();
 		std::shared_ptr<const MidiLoopSnapshot> _MidiLoopSnapshotState() const;
+		base::PublishedAudioSnapshot<const MidiLoopSnapshot>::Lease _BorrowMidiLoopSnapshot() const noexcept;
 		void _PublishAudioState();
 		std::shared_ptr<const AudioState> _AudioStateSnapshot() const;
+		base::PublishedAudioSnapshot<const AudioState>::Lease _BorrowAudioState() const noexcept;
+		const std::shared_ptr<base::AudioSink> _InputChannelFromState(const AudioState& state,
+			unsigned int channel,
+			base::AudioSource::AudioSourceType source) const;
 
 	private:
 		static bool _HasMidiQuantisationGestureModifiers(base::Action::Modifiers modifiers) noexcept;
@@ -547,7 +556,7 @@ namespace engine
 		std::optional<std::uint32_t> _midiRecordStartSample;
 		midi::MidiOverdubSession _midiOverdubSession;
 		mutable std::mutex _midiCaptureMutex;
-		std::atomic<std::shared_ptr<const MidiLoopSnapshot>> _midiLoopSnapshot;
+		base::PublishedAudioSnapshot<const MidiLoopSnapshot> _midiLoopSnapshot;
 		std::atomic<std::uint64_t> _midiQuantisationPacked;
 		std::atomic<std::uint8_t> _globalMidiQuantStatePacked{
 			static_cast<std::uint8_t>(io::JamFile::GlobalMidiQuantState::Off)
@@ -570,9 +579,9 @@ namespace engine
 		std::vector<std::shared_ptr<audio::AudioMixer>> _backAudioMixers;
 		std::vector<std::shared_ptr<audio::AudioBuffer>> _audioBuffers;
 		std::vector<std::shared_ptr<audio::AudioBuffer>> _backAudioBuffers;
-		std::atomic<std::shared_ptr<const AudioState>> _audioState;
+		base::PublishedAudioSnapshot<const AudioState> _audioState;
 		// Live VST chain published atomically for lock-free audio-thread reads.
-		std::atomic<std::shared_ptr<vst::VstChain>> _vstChain;
+		base::PublishedAudioSnapshot<vst::VstChain> _vstChain;
 		std::shared_ptr<vst::VstChain> _backVstChain;
 		std::atomic<bool> _flipVstChain{ false };
 		std::vector<std::pair<std::wstring, std::vector<std::uint8_t>>> _pendingVstLoads;

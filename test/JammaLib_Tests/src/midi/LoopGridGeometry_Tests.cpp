@@ -15,7 +15,6 @@ TEST(LoopGridGeometry, OffMasterLoopsKeepTheirPhysicalSeamAtTheOuterEdges)
 	settings.Fraction = MidiQuantisationFraction::Quarter;
 	for (const auto start : {13u, 63u, 213u, 263u})
 	{
-		EXPECT_EQ(0u, LoopGridGeometry::DisplayOrigin(400u, settings, start));
 		const auto grid = LoopGridGeometry::Resolve(400u, settings, start);
 		ASSERT_TRUE(grid);
 		EXPECT_EQ(18u, grid->Boundaries.size());

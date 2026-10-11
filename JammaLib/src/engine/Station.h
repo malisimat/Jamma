@@ -19,6 +19,7 @@
 #include "../graphics/StationModel.h"
 #include "Trigger.h"
 #include "AudioSink.h"
+#include "../base/PublishedAudioSnapshot.h"
 #include "../audio/AudioMixer.h"
 #include "../audio/AudioBuffer.h"
 #include "../base/Jammable.h"
@@ -190,8 +191,8 @@ namespace engine
 		void SetNumDacChannels(unsigned int chans);
 		unsigned int NumBusChannels() const;
 		void OnBounce(unsigned int numSamps,
-			io::UserConfig config,
-			std::optional<audio::AudioStreamParams> params = std::nullopt);
+			const io::UserConfig& config,
+			const std::optional<audio::AudioStreamParams>& params = std::nullopt);
 		// Let the UI/job thread reclaim old snapshots after callback work, keeping LoopTake destruction off audio.
 		void AcknowledgeAudioBoundary() noexcept;
 		// Job owner only; lets a gate-proven stopped reader acknowledge publication.
@@ -360,6 +361,7 @@ namespace engine
 		std::shared_ptr<const LoopTakeSnapshot> _LoopTakeSnapshotState() const;
 		void _PublishAudioState();
 		std::shared_ptr<const AudioState> _AudioStateSnapshot() const;
+		base::PublishedAudioSnapshot<const AudioState>::Lease _BorrowAudioState() const noexcept;
 
 		gui::GuiRackParams _GetRackParams(utils::Size2d size);
 		std::optional<std::shared_ptr<LoopTake>> _TryGetTake(std::string id);
@@ -454,7 +456,7 @@ namespace engine
 		std::vector<std::shared_ptr<audio::AudioMixer>> _backAudioMixers;
 		std::vector<std::shared_ptr<audio::AudioBuffer>> _audioBuffers;
 		std::vector<std::shared_ptr<audio::AudioBuffer>> _backAudioBuffers;
-		std::atomic<std::shared_ptr<const AudioState>> _audioState;
+		base::PublishedAudioSnapshot<const AudioState> _audioState;
 		struct RetiredAudioState
 		{
 			std::uint64_t ReleaseAfterGeneration = 0u;

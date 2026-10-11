@@ -82,7 +82,9 @@ Scene::Scene(SceneParams params,
 		[this]() { _OnLoopGridEditorOpened(); },
 		[this](int button, utils::Position2d anchor) { return _beginRelativePointer && _beginRelativePointer(button, anchor); },
 		[this](int button) { if (_endRelativePointer) _endRelativePointer(button); },
-		[this]() { const auto clock = _quantisation.Clock(); return clock ? clock->SeedSourceLength() : 0ul; } },
+		[this]() { const auto clock = _quantisation.Clock(); return clock ? clock->SeedSourceLength() : 0ul; },
+		[this]() { return static_cast<base::SelectDepth>(_selector ?
+			_selector->CurrentSelectDepth() : base::DEPTH_LOOP); } },
 		params.Size)
 {
 	_quantisation.SetClock(std::make_shared<Timer>());
@@ -1810,23 +1812,20 @@ void Scene::OnTick(Time curTime,
 		clock->Tick(samps, 0u);
 	}
 
-	const auto stationsSnapshot = _audioEngine->GetStationsSnapshot();
-	static const std::vector<std::shared_ptr<Station>> emptyStations;
-	const auto& stations = stationsSnapshot ? *stationsSnapshot : emptyStations;
+	const auto& stations = _audioEngine->AudioStationsForCallback();
 
-	const audio::AudioStreamParams emptyParams{};
-	const auto& streamParams = params ? *params : emptyParams;
 	for (auto& station : stations)
 	{
 		station->OnTick(curTime,
 			samps,
 			cfg,
-			streamParams);
+			params);
 	}
 }
 
 void Scene::OnJobTick(Time curTime)
 {
+	_audioEngine->CollectRetiredSnapshots();
 	if (!_isSceneQuitting.load(std::memory_order_acquire))
 		_inputSubsystem->AcknowledgeRigTriggerInputCloseFromJob();
 	_RefreshMidiIfNeeded();
@@ -3572,12 +3571,9 @@ QuantisationPolicy Scene::_QuantisationPolicy() const
 
 unsigned int Scene::_CurrentSampleRate() const
 {
-	if (_audioEngine->GetDevice())
-	{
-		const auto streamRate = _audioEngine->GetStreamParams().SampleRate;
-		if (streamRate > 0u)
-			return streamRate;
-	}
+	const auto streamRate = _audioEngine->GetStreamParams().SampleRate;
+	if (streamRate > 0u)
+		return streamRate;
 
 	if (_userConfig.Audio.SampleRate > 0u)
 		return _userConfig.Audio.SampleRate;
@@ -3695,9 +3691,10 @@ bool Scene::_HasQuantisationHover() const
 
 bool Scene::_TrySetMasterFromHover(bool confirm)
 {
-	return _quantisation.TrySetMasterFromHover(_ChildFromPath(_selector->CurrentHover()),
+	std::scoped_lock lock(_sceneMutex);
+	return _quantisation.TrySetMasterFromHover(_ChildFromPathLocked(_selector->CurrentHover()),
 		_selector->CurrentSelectDepth(),
-		SnapshotStations(),
+		_stations,
 		_CurrentSampleRate(),
 		_userConfig,
 		confirm);
@@ -3707,7 +3704,8 @@ void Scene::_UpdateStationQuantisation(std::shared_ptr<base::GuiElement> candida
 	base::SelectDepth depth,
 	bool confirmCandidate)
 {
-	_quantisation.UpdateStationHints(candidate, depth, confirmCandidate, SnapshotStations());
+	std::scoped_lock lock(_sceneMutex);
+	_quantisation.UpdateStationHints(candidate, depth, confirmCandidate, _stations);
 }
 
 void Scene::_ClearStationQuantisation()

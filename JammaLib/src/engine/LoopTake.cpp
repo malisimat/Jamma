@@ -197,7 +197,7 @@ LoopTake::LoopTake(LoopTakeParams params,
 	_midiLoopDevices(),
 	_midiRecordHeld(),
 	_midiOverdubSession(),
-	_midiLoopSnapshot(nullptr),
+	_midiLoopSnapshot(),
 	_midiQuantisationPacked(midi::MidiQuantisationSettings().Pack()),
 	_midiInheritedPhaseOffsetSamps(0),
 	_midiTransportStartSamps(0u),
@@ -206,7 +206,7 @@ LoopTake::LoopTake(LoopTakeParams params,
 	_backAudioMixers(),
 	_audioBuffers(),
 	_backAudioBuffers(),
-	_vstChain(nullptr),
+	_vstChain(),
 	_vstPluginPaths(),
 	_vstBlockScratch(),
 	_vstBlockPtrs()
@@ -463,7 +463,7 @@ void LoopTake::Zero(unsigned int numSamps,
 {
 	if (_captureCancelled.load(std::memory_order_acquire))
 		return;
-	auto state = _AudioStateSnapshot();
+	auto state = _BorrowAudioState();
 	if (!state)
 		return;
 
@@ -474,13 +474,26 @@ void LoopTake::Zero(unsigned int numSamps,
 		static_cast<unsigned int>(state->AudioBuffers.size());
 	for (auto chan = 0u; chan < channelCount; chan++)
 	{
-		auto channel = _InputChannel(chan, source);
+		auto channel = _InputChannelFromState(*state, chan, source);
 		if (channel)
 			channel->Zero(numSamps);
 	}
 
-	for (const auto& weakLoop : state->Loops)
-		if (auto loop = weakLoop.lock()) loop->Zero(numSamps);
+	for (const auto& loop : state->Loops)
+		if (loop) loop->Zero(numSamps);
+}
+
+void LoopTake::OnBlockWriteChannel(unsigned int channel,
+	const base::AudioWriteRequest& request,
+	int writeOffset)
+{
+	auto state = _BorrowAudioState();
+	if (!state)
+		return;
+
+	auto destination = _InputChannelFromState(*state, channel, request.source);
+	if (destination)
+		destination->OnBlockWrite(request, writeOffset);
 }
 
 // Only called when outputting to DAC
@@ -501,12 +514,12 @@ void LoopTake::WriteBlock(const std::shared_ptr<MultiAudioSink> dest,
 	auto loopDest = bounceWriter == nullptr ?
 		std::dynamic_pointer_cast<MultiAudioSink>(ptr) :
 		dest;
-	auto state = _AudioStateSnapshot();
+	auto state = _BorrowAudioState();
 	if (!state)
 		return;
 
-	for (const auto& weakLoop : state->Loops)
-		if (auto loop = weakLoop.lock())
+	for (const auto& loop : state->Loops)
+		if (loop)
 			loop->WriteBlock(loopDest, bounceWriter, indexOffset, numSamps);
 
 	if (nullptr != bounceWriter)
@@ -539,7 +552,7 @@ void LoopTake::WriteBlock(const std::shared_ptr<MultiAudioSink> dest,
 			std::copy(srcPtr, srcPtr + sampsToRead, scratch);
 	}
 
-	auto chain = _vstChain.load(std::memory_order_acquire);
+	auto chain = _vstChain.borrow();
 	if (chain && chain->IsActive() && (state->VstBlockPtrs.size() >= channelCount))
 		chain->ProcessBlockMulti(state->VstBlockPtrs.data(), static_cast<int>(channelCount), sampsToRead);
 
@@ -597,12 +610,12 @@ void LoopTake::EndMultiPlay(unsigned int numSamps)
 {
 	if (_captureCancelled.load(std::memory_order_acquire))
 		return;
-	auto state = _AudioStateSnapshot();
+	auto state = _BorrowAudioState();
 	if (!state)
 		return;
 
-	for (const auto& weakLoop : state->Loops)
-		if (auto loop = weakLoop.lock()) loop->EndMultiPlay(numSamps);
+	for (const auto& loop : state->Loops)
+		if (loop) loop->EndMultiPlay(numSamps);
 
 	// Queue-based take-only phase shift (transport offset / global phase offset).
 	// NINJAM connected corrections do NOT use this path; they arrive through the
@@ -613,9 +626,8 @@ void LoopTake::EndMultiPlay(unsigned int numSamps)
 	const auto validCorrection = generation != 0u ? correction : 0;
 	const auto hasCorrection = correction != 0;
 	const auto hasPlayableLoop = std::any_of(state->Loops.begin(), state->Loops.end(),
-		[](const std::weak_ptr<Loop>& weakLoop)
+		[](const std::shared_ptr<Loop>& loop)
 		{
-			auto loop = weakLoop.lock();
 			return loop && loop->LoopLength() > 0ul;
 		});
 	if (hasCorrection && !hasPlayableLoop)
@@ -628,8 +640,8 @@ void LoopTake::EndMultiPlay(unsigned int numSamps)
 	{
 		if (validCorrection != 0)
 			_consumedTimingCorrectionCount.fetch_add(1u, std::memory_order_relaxed);
-		for (const auto& weakLoop : state->Loops)
-			if (auto loop = weakLoop.lock()) loop->ShiftPlayIndex(correction);
+		for (const auto& loop : state->Loops)
+			if (loop) loop->ShiftPlayIndex(correction);
 	}
 
 	for (auto& buffer : state->AudioBuffers)
@@ -675,13 +687,13 @@ void LoopTake::ApplyAcceptedTimingCorrection(long long deltaSamps,
 
 bool LoopTake::_ShiftDirectPlaybackCursors(long long deltaSamps) noexcept
 {
-	auto state = _AudioStateSnapshot();
+	auto state = _BorrowAudioState();
 	bool moved = false;
 	if (state)
 	{
-		for (const auto& weakLoop : state->Loops)
+		for (const auto& loop : state->Loops)
 		{
-			if (auto loop = weakLoop.lock(); loop && loop->LoopLength() > 0ul)
+			if (loop && loop->LoopLength() > 0ul)
 			{
 				loop->ShiftPlayIndex(deltaSamps);
 				moved = true;
@@ -705,12 +717,12 @@ bool LoopTake::_ShiftDirectPlaybackCursors(long long deltaSamps) noexcept
 
 void LoopTake::CaptureSceneAnchors(std::uint64_t sceneCoordinateSamps) noexcept
 {
-	auto state = _AudioStateSnapshot();
+	auto state = _BorrowAudioState();
 	if (state)
 	{
-		for (const auto& weakLoop : state->Loops)
+		for (const auto& loop : state->Loops)
 		{
-			if (auto loop = weakLoop.lock(); loop && loop->LoopLength() > 0ul && !loop->HasSceneAnchor())
+			if (loop && loop->LoopLength() > 0ul && !loop->HasSceneAnchor())
 			{
 				loop->SetSceneAnchor(static_cast<unsigned long>(ninjam::CaptureSceneAnchor(
 					sceneCoordinateSamps, loop->BodyPlayIndex(), loop->LoopLength())));
@@ -729,21 +741,21 @@ void LoopTake::CaptureSceneAnchors(std::uint64_t sceneCoordinateSamps) noexcept
 
 void LoopTake::InvalidateSceneAnchors() noexcept
 {
-	auto state = _AudioStateSnapshot();
+	auto state = _BorrowAudioState();
 	if (state)
 	{
-		for (const auto& weakLoop : state->Loops)
-			if (auto loop = weakLoop.lock()) loop->InvalidateSceneAnchor();
+		for (const auto& loop : state->Loops)
+			if (loop) loop->InvalidateSceneAnchor();
 	}
 	_hasMidiSceneAnchor.store(false, std::memory_order_release);
 }
 
 void LoopTake::CaptureMappedSourceAnchors(std::int64_t sourceCoordinateSamps) noexcept
 {
-	auto state = _AudioStateSnapshot();
+	auto state = _BorrowAudioState();
 	if (state)
-		for (const auto& weakLoop : state->Loops)
-			if (auto loop = weakLoop.lock(); loop && loop->LoopLength() > 0ul)
+		for (const auto& loop : state->Loops)
+			if (loop && loop->LoopLength() > 0ul)
 				loop->SetSceneAnchor(static_cast<unsigned long>(ninjam::PositiveModulo(
 					sourceCoordinateSamps
 					- static_cast<long long>(loop->BodyPlayIndex()), loop->LoopLength())));
@@ -766,10 +778,10 @@ void LoopTake::ResetTimingEpoch() noexcept
 
 void LoopTake::RestoreMappedSourceCoordinate(std::int64_t sourceCoordinateSamps) noexcept
 {
-	auto state = _AudioStateSnapshot();
+	auto state = _BorrowAudioState();
 	if (state)
-		for (const auto& weakLoop : state->Loops)
-			if (auto loop = weakLoop.lock(); loop && loop->LoopLength() > 0ul)
+		for (const auto& loop : state->Loops)
+			if (loop && loop->LoopLength() > 0ul)
 			{
 				const auto length = loop->LoopLength();
 				if (!loop->HasSceneAnchor())
@@ -890,12 +902,12 @@ void LoopTake::EndMultiWrite(unsigned int numSamps,
 	const auto captureGeneration = _captureGeneration.load(std::memory_order_acquire);
 	if (_captureCancelled.load(std::memory_order_acquire))
 		return;
-	auto audioState = _AudioStateSnapshot();
+	auto audioState = _BorrowAudioState();
 	if (!audioState)
 		return;
 
-	for (const auto& weakLoop : audioState->Loops)
-		if (auto loop = weakLoop.lock()) loop->EndWrite(numSamps, updateIndex);
+	for (const auto& loop : audioState->Loops)
+		if (loop) loop->EndWrite(numSamps, updateIndex);
 
 	auto isRecording = IsArmed();
 	auto takeState = _state.load(std::memory_order_acquire);
@@ -1716,8 +1728,7 @@ unsigned int LoopTake::ReadMidiBlock(std::uint32_t globalSample,
 	midi::IMidiOutputSink& sink,
 	unsigned int firstOutputIndex) noexcept
 {
-	auto snapshot = _MidiLoopSnapshotState();
-	const auto midiLoopCount = snapshot ? static_cast<unsigned int>(snapshot->size()) : 0u;
+	auto snapshot = _BorrowMidiLoopSnapshot();
 	const bool cancelled = _captureCancelled.load(std::memory_order_acquire);
 	const bool flushOnly = cancelled || IsMuted();
 
@@ -1728,7 +1739,7 @@ unsigned int LoopTake::ReadMidiBlock(std::uint32_t globalSample,
 
 	for (auto i = 0u; i < snapshot->size(); ++i)
 	{
-		auto midiLoop = (*snapshot)[i].lock();
+		const auto& midiLoop = (*snapshot)[i];
 		if (!midiLoop)
 			continue;
 
@@ -1744,7 +1755,7 @@ unsigned int LoopTake::ReadMidiBlock(std::uint32_t globalSample,
 			midiLoop->ReadBlock(midiBlockStart, numSamples, indexedSink);
 	}
 
-	return midiLoopCount;
+	return static_cast<unsigned int>(snapshot->size());
 }
 
 std::uint32_t LoopTake::ResolveMidiRecordSample(std::uint32_t eventGlobalSample,
@@ -2060,8 +2071,8 @@ void LoopTake::CancelCapture(bool sourceLoss) noexcept
 	_isMidiPunchInActive.store(false, std::memory_order_release);
 	const auto midiSnapshot = _MidiLoopSnapshotState();
 	if (midiSnapshot)
-		for (const auto& weakLoop : *midiSnapshot)
-			if (const auto loop = weakLoop.lock()) loop->RequestHeldFlush();
+		for (const auto& loop : *midiSnapshot)
+			if (loop) loop->RequestHeldFlush();
 	_SetPresentationMode(PresentationMode::Inactive);
 	_InvalidateRecordingCompletion();
 	_loopsNeedUpdating.store(false, std::memory_order_release);
@@ -2292,10 +2303,10 @@ void LoopTake::TriggerPunchInAudio() noexcept
 			return;
 		}
 	}
-	const auto audioState = _AudioStateSnapshot();
+	const auto audioState = _BorrowAudioState();
 	if (audioState)
-		for (const auto& weakLoop : audioState->Loops)
-			if (const auto loop = weakLoop.lock()) loop->PunchIn();
+		for (const auto& loop : audioState->Loops)
+			if (loop) loop->PunchIn();
 }
 
 void LoopTake::TriggerPunchOutAudio() noexcept
@@ -2311,10 +2322,10 @@ void LoopTake::TriggerPunchOutAudio() noexcept
 		auto expected = STATE_PUNCHEDIN;
 		_state.compare_exchange_strong(expected, STATE_OVERDUBBING, std::memory_order_acq_rel);
 	}
-	const auto audioState = _AudioStateSnapshot();
+	const auto audioState = _BorrowAudioState();
 	if (audioState)
-		for (const auto& weakLoop : audioState->Loops)
-			if (const auto loop = weakLoop.lock()) loop->PunchOut();
+		for (const auto& loop : audioState->Loops)
+			if (loop) loop->PunchOut();
 }
 
 void LoopTake::SetTriggerSourceMutedAudio(bool muted) noexcept
@@ -2323,10 +2334,10 @@ void LoopTake::SetTriggerSourceMutedAudio(bool muted) noexcept
 		Tweakable::Mute();
 	else
 		Tweakable::UnMute();
-	const auto audioState = _AudioStateSnapshot();
+	const auto audioState = _BorrowAudioState();
 	if (audioState)
-		for (const auto& weakLoop : audioState->Loops)
-			if (const auto loop = weakLoop.lock())
+		for (const auto& loop : audioState->Loops)
+			if (loop)
 			{
 				if (muted) loop->Mute();
 				else loop->UnMute();
@@ -2394,6 +2405,15 @@ void LoopTake::_InitResources(ResourceLib& resourceLib, bool forceInit)
 
 std::vector<JobAction> LoopTake::_CommitChanges()
 {
+	// Callbacks release their leases independently; periodic collection reclaims
+	// the retired snapshots once the last callback has left them.
+	{
+		std::scoped_lock midiLock(_midiCaptureMutex);
+		_midiLoopSnapshot.collect();
+	}
+	_audioState.collect();
+	_vstChain.collect();
+
 	bool audioStateChanged = false;
 	if (_flipLoopBuffer)
 	{
@@ -2511,35 +2531,42 @@ std::vector<JobAction> LoopTake::_CommitChanges()
 const std::shared_ptr<AudioSink> LoopTake::_InputChannel(unsigned int channel,
 	Audible::AudioSourceType source)
 {
+	auto state = _BorrowAudioState();
+	if (!state)
+		return nullptr;
+	return _InputChannelFromState(*state, channel, source);
+}
+
+const std::shared_ptr<AudioSink> LoopTake::_InputChannelFromState(const AudioState& state,
+	unsigned int channel,
+	base::AudioSource::AudioSourceType source) const
+{
 	if ((source == Audible::AUDIOSOURCE_ADC || source == Audible::AUDIOSOURCE_MONITOR ||
 		source == Audible::AUDIOSOURCE_BOUNCE) &&
 		_captureCancelled.load(std::memory_order_acquire))
 		return nullptr;
-	auto state = _AudioStateSnapshot();
-	if (!state)
-		return nullptr;
 
-	const auto& loops = state->Loops;
-	const auto& audioBuffers = state->AudioBuffers;
+	const auto& loops = state.Loops;
+	const auto& audioBuffers = state.AudioBuffers;
 
 	switch (source)
 	{
 	case Audible::AUDIOSOURCE_ADC:
 	case Audible::AUDIOSOURCE_MONITOR:
-		if (!state->RecordInputChannels.empty())
+		if (!state.RecordInputChannels.empty())
 		{
-			for (size_t loopIndex = 0u; loopIndex < state->RecordInputChannels.size(); ++loopIndex)
-				if ((state->RecordInputChannels[loopIndex] == channel) && (loopIndex < loops.size()))
-					return loops[loopIndex].lock();
+			for (size_t loopIndex = 0u; loopIndex < state.RecordInputChannels.size(); ++loopIndex)
+				if ((state.RecordInputChannels[loopIndex] == channel) && (loopIndex < loops.size()))
+					return loops[loopIndex];
 			return nullptr;
 		}
 		if (channel < loops.size())
-			return loops[channel].lock();
+			return loops[channel];
 
 		break;
 	case Audible::AUDIOSOURCE_BOUNCE:
 		if (channel < loops.size())
-			return loops[channel].lock();
+			return loops[channel];
 
 		break;
 	case Audible::AUDIOSOURCE_LOOPS:
@@ -2562,9 +2589,19 @@ std::shared_ptr<const LoopTake::AudioState> LoopTake::_AudioStateSnapshot() cons
 	return _audioState.load(std::memory_order_acquire);
 }
 
+base::PublishedAudioSnapshot<const LoopTake::AudioState>::Lease LoopTake::_BorrowAudioState() const noexcept
+{
+	return _audioState.borrow();
+}
+
 std::shared_ptr<const LoopTake::MidiLoopSnapshot> LoopTake::_MidiLoopSnapshotState() const
 {
 	return _midiLoopSnapshot.load(std::memory_order_acquire);
+}
+
+base::PublishedAudioSnapshot<const LoopTake::MidiLoopSnapshot>::Lease LoopTake::_BorrowMidiLoopSnapshot() const noexcept
+{
+	return _midiLoopSnapshot.borrow();
 }
 
 std::vector<std::shared_ptr<midi::MidiLoop>> LoopTake::GetMidiLoopSnapshot() const
@@ -2575,10 +2612,10 @@ std::vector<std::shared_ptr<midi::MidiLoop>> LoopTake::GetMidiLoopSnapshot() con
 		return loops;
 
 	loops.reserve(snapshot->size());
-	for (const auto& weakLoop : *snapshot)
+	for (const auto& loop : *snapshot)
 	{
-		if (auto loop = weakLoop.lock())
-			loops.push_back(std::move(loop));
+		if (loop)
+			loops.push_back(loop);
 	}
 
 	return loops;
@@ -2911,9 +2948,8 @@ void LoopTake::_UpdateMidiModels(bool force)
 	if (!snapshot)
 		return;
 
-	for (const auto& weakLoop : *snapshot)
+	for (const auto& midiLoop : *snapshot)
 	{
-		auto midiLoop = weakLoop.lock();
 		if (midiLoop)
 			midiLoop->QueueModelUpdateFromEvents(displayLength, force);
 	}
@@ -2927,9 +2963,8 @@ void LoopTake::_UpdateMidiModelRotation()
 	if (!snapshot)
 		return;
 
-	for (const auto& weakLoop : *snapshot)
+	for (const auto& midiLoop : *snapshot)
 	{
-		auto midiLoop = weakLoop.lock();
 		if (!midiLoop)
 			continue;
 

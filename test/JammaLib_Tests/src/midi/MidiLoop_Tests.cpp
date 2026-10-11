@@ -2518,7 +2518,7 @@ protected:
 		vp = glm::ortho(-70.0f, 70.0f, -70.0f, 70.0f, 1.0f, 1000.0f)
 			* glm::lookAt(glm::vec3(0,400,0), glm::vec3(0), glm::vec3(0,0,-1));
 		editor = std::make_unique<midi::LoopGridEditor>(midi::LoopGridEditor::Host{
-			camera, history, mutex, stations, {}, [this](float) { return vp; }, {},
+			camera, history, mutex, stations, [this] { return hovered; }, [this](float) { return vp; }, {},
 			[this](int button, utils::Position2d) { relativeButton = button; return allowRelative; },
 			[this](int) { relativeButton = -1; ++endCount; }}, utils::Size2d{800u,800u});
 		ASSERT_TRUE(editor->Open(take, nullptr, loop));
@@ -2549,6 +2549,7 @@ protected:
 	std::shared_ptr<Station> station;
 	std::shared_ptr<LoopTake> take;
 	std::shared_ptr<MidiLoop> loop;
+	std::shared_ptr<base::GuiElement> hovered;
 	std::vector<std::shared_ptr<Station>> stations;
 	graphics::Camera camera{graphics::CameraParams(base::MoveableParams(),0u)};
 	actions::ActionUndoHistory history;
@@ -2558,6 +2559,38 @@ protected:
 	int relativeButton=-1, endCount=0;
 	bool allowRelative=true;
 };
+
+TEST_F(MidiPointerEditorTest, MultipleSelectedMidiStreamsRequireHoverDisambiguation)
+{
+	const auto second = take->GetMidiLoops().at(1u);
+	second->Model()->Select();
+	std::shared_ptr<LoopTake> candidateTake;
+	std::shared_ptr<engine::Loop> audioLoop;
+	std::shared_ptr<MidiLoop> midiLoop;
+
+	EXPECT_FALSE(editor->FindCandidate(candidateTake, audioLoop, midiLoop));
+
+	hovered = second->Model();
+	ASSERT_TRUE(editor->FindCandidate(candidateTake, audioLoop, midiLoop));
+	EXPECT_EQ(take, candidateTake);
+	EXPECT_EQ(nullptr, audioLoop);
+	EXPECT_EQ(second, midiLoop);
+}
+
+TEST_F(MidiPointerEditorTest, SoleSelectedNonFirstMidiStreamKeepsItsIdentity)
+{
+	const auto second = take->GetMidiLoops().at(1u);
+	for (const auto& stream : take->GetMidiLoops()) stream->Model()->DeSelect();
+	second->Model()->Select();
+	std::shared_ptr<LoopTake> candidateTake;
+	std::shared_ptr<engine::Loop> audioLoop;
+	std::shared_ptr<MidiLoop> midiLoop;
+
+	ASSERT_TRUE(editor->FindCandidate(candidateTake, audioLoop, midiLoop));
+	EXPECT_EQ(take, candidateTake);
+	EXPECT_EQ(nullptr, audioLoop);
+	EXPECT_EQ(second, midiLoop);
+}
 
 TEST_F(MidiPointerEditorTest, NumericChannelControlCommitsTypedChannel)
 {

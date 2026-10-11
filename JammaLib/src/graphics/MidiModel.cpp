@@ -137,8 +137,6 @@ void MidiModel::Draw3d(DrawContext& ctx, unsigned int numInstances, base::DrawPa
 		? static_cast<float>(_editorGridLength) / _editorMasterInterval : 0.0f);
 	glCtx.SetUniform("EditorMasterStartPhase", _editorMasterInterval
 		? static_cast<float>(_editorGridTransportStart % _editorMasterInterval) / _editorMasterInterval : 0.0f);
-	glCtx.SetUniform("EditorTimeOrigin", _editorGridLength
-		? static_cast<float>(_editorTimeOrigin) / _editorGridLength : 0.0f);
 	glCtx.SetUniform("EditorSeamHeadEnd", _editorGridLength
 		? static_cast<float>(_editorSeamHeadEnd) / _editorGridLength : 0.0f);
 	glCtx.SetUniform("EditorSeamTailStart", _editorGridLength
@@ -309,25 +307,10 @@ void MidiModel::UpdateEditorGrid(std::uint32_t loopLength,
 	_editorGridResolved = grid.has_value();
 	_editorSeamHeadEnd = grid ? grid->SeamHeadEnd : 0u;
 	_editorSeamTailStart = grid ? grid->SeamTailStart : 0u;
-	_editorTimeOrigin = grid ? midi::LoopGridGeometry::DisplayOrigin(loopLength, settings, transportStart) : 0u;
-	auto displayedGrid = grid;
-	if (displayedGrid && _editorTimeOrigin)
-	{
-		// Physical sample zero is an artificial cut, not a master-grid line.
-		displayedGrid->Boundaries.clear();
-		for (std::size_t i = 1u; i + 1u < grid->Boundaries.size(); ++i)
-			displayedGrid->Boundaries.push_back(midi::LoopGridGeometry::DisplaySample(
-				grid->Boundaries[i], loopLength, _editorTimeOrigin));
-		displayedGrid->Boundaries.push_back(0u);
-		displayedGrid->Boundaries.push_back(loopLength);
-		std::sort(displayedGrid->Boundaries.begin(), displayedGrid->Boundaries.end());
-		displayedGrid->Boundaries.erase(std::unique(displayedGrid->Boundaries.begin(),
-			displayedGrid->Boundaries.end()), displayedGrid->Boundaries.end());
-	}
-	_editorGridVertices = BuildEditorGridVertices(displayedGrid ? &*displayedGrid : nullptr,
+	_editorGridVertices = BuildEditorGridVertices(grid ? &*grid : nullptr,
 		loopLength, _editorBottomPitch, _editorVisibleRows, settings.Fraction);
-	_editorColumnVertices = displayedGrid ? BuildEditorColumnVertices(*displayedGrid,
-		loopLength, settings, transportStart, _editorTimeOrigin) : std::vector<float>{};
+	_editorColumnVertices = grid ? BuildEditorColumnVertices(*grid,
+		loopLength, settings, transportStart) : std::vector<float>{};
 	_editorGridDirty = true;
 }
 
@@ -361,7 +344,7 @@ std::vector<float> MidiModel::BuildEditorGridVertices(const midi::LoopGridGeomet
 
 std::vector<float> MidiModel::BuildEditorColumnVertices(const midi::LoopGridGeometry& grid,
 	std::uint32_t loopLength, const midi::MidiQuantisationSettings& settings,
-	std::uint64_t transportStart, std::uint32_t displayOrigin)
+	std::uint64_t transportStart)
 {
 	std::vector<float> vertices;
 	const auto interval = settings.GridInterval(), divisions = settings.GridDivisions();
@@ -370,8 +353,7 @@ std::vector<float> MidiModel::BuildEditorColumnVertices(const midi::LoopGridGeom
 	for (std::size_t cell = 0; cell + 1u < grid.Boundaries.size(); ++cell)
 	{
 		const auto middle = grid.Boundaries[cell] + (grid.Boundaries[cell + 1u] - grid.Boundaries[cell]) / 2u;
-		const auto sample = (static_cast<std::uint64_t>(middle) + displayOrigin) % loopLength;
-		const auto relative = static_cast<std::int64_t>(transportStart + sample)
+		const auto relative = static_cast<std::int64_t>(transportStart + middle)
 			- (settings.HasRemoteGrid() ? settings.RemoteOriginSamps : 0ll) - settings.PhaseOffsetSamps;
 		auto index = midi::MidiQuantisation::NearestBoundaryIndex(relative, interval, divisions);
 		if (midi::MidiQuantisation::BoundarySampleAt(index, interval, divisions) > relative) --index;
@@ -552,7 +534,7 @@ void MidiModel::DrawMesh(GLuint shaderProgram, unsigned int drawInstances)
 		const auto copyLocation = glGetUniformLocation(shaderProgram, "EditorWrapCopy");
 		glUniform1f(copyLocation, 0.0f);
 		glDrawArraysInstanced(GL_TRIANGLES, 0, _numTris * 3u, drawInstances);
-		if ((_editorTimeOrigin || _editorSeamHeadEnd) && _editorMorph >= 1.0f)
+		if (_editorSeamHeadEnd && _editorMorph >= 1.0f)
 		{
 			// Shifted notes crossing the display seam need their clipped left copy.
 			glUniform1f(copyLocation, -1.0f);
@@ -624,8 +606,7 @@ void MidiModel::_DrawEditorGrid(GlDrawContext& glCtx)
 				|| preview.End - preview.Start > _editorPreviewLength
 				|| preview.Pitch < _editorBottomPitch
 				|| preview.Pitch >= _editorBottomPitch + _editorVisibleRows) continue;
-			const auto left = static_cast<float>(midi::LoopGridGeometry::DisplaySample(
-				preview.Start, _editorPreviewLength, _editorTimeOrigin)) / _editorPreviewLength;
+			const auto left = static_cast<float>(preview.Start) / _editorPreviewLength;
 			const auto right = left + static_cast<float>(preview.End - preview.Start) / _editorPreviewLength;
 			const auto bottom = (static_cast<float>(preview.Pitch - _editorBottomPitch) + 0.10f)
 				/ _editorVisibleRows;

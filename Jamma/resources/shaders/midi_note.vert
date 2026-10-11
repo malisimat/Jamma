@@ -26,7 +26,6 @@ uniform float EditorMorph;
 uniform int EditorBottomPitch;
 uniform int EditorVisibleRows;
 uniform float EditorGridRadius;
-uniform float EditorTimeOrigin;
 uniform float EditorSeamHeadEnd;
 uniform float EditorSeamTailStart;
 uniform float EditorWrapCopy;
@@ -73,10 +72,8 @@ void main()
         else if (startFrac >= EditorSeamTailStart - 1e-6 && abs(end - 1.0) < 1e-6)
             editorDuration += EditorSeamHeadEnd;
     }
-    float displayStart = EditorTimeOrigin > 0.0
-        ? fract(editorStart - EditorTimeOrigin + 1.0) : editorStart;
     float displayU = IsDisc > 0.5 ? gridU
-        : displayStart + PositionIN.x * editorDuration + EditorWrapCopy;
+        : editorStart + PositionIN.x * editorDuration + EditorWrapCopy;
     float row = pitch - float(EditorBottomPitch) + 0.5;
     float gridZ = IsDisc > 0.5
         ? -PositionIN.z * EditorGridRadius * 0.78
@@ -88,7 +85,7 @@ void main()
     EditorLocalPosition = gridPosition;
     gl_Position = MVP * vec4(mix(position, gridPosition, EditorMorph), 1.0);
     // Fragment hover/playhead calculations remain in source coordinates.
-    EditorU = IsDisc > 0.5 ? gridU + EditorTimeOrigin
+    EditorU = IsDisc > 0.5 ? gridU
         : editorStart + PositionIN.x * editorDuration;
     EditorPitchRow = IsDisc > 0.5
         ? (PositionIN.z + 1.0) * rows * 0.5 : row;

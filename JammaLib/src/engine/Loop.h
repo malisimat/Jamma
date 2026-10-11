@@ -14,6 +14,7 @@
 #include "GlUtils.h"
 #include "../graphics/LoopModel.h"
 #include "../base/Jammable.h"
+#include "../base/PublishedAudioSnapshot.h"
 #include "../gui/GuiModel.h"
 #include "../io/FileReadWriter.h"
 #include "../io/JamFile.h"
@@ -122,7 +123,7 @@ namespace engine
 			_vu(std::move(other._vu)),
 			_bufferBank(std::move(other._bufferBank)),
 			_monitorBufferBank(std::move(other._monitorBufferBank)),
-			_vstChain(other._vstChain.exchange(nullptr, std::memory_order_acq_rel)),
+			_vstChain(),
 			_backVstChain(std::move(other._backVstChain)),
 			_flipVstChain(other._flipVstChain.load(std::memory_order_relaxed)),
 			_pendingVstLoads(std::move(other._pendingVstLoads)),
@@ -131,6 +132,7 @@ namespace engine
 			_blockSize(other._blockSize),
 			_vstPluginPaths(std::move(other._vstPluginPaths))
 		{
+			_vstChain.store(other._vstChain.exchange(nullptr, std::memory_order_acq_rel), std::memory_order_release);
 			_writeIndex.store(other._writeIndex.load(std::memory_order_relaxed), std::memory_order_relaxed);
 			other._writeIndex.store(0ul, std::memory_order_relaxed);
 			other._visualUpdatesEnabled = true;
@@ -318,7 +320,7 @@ namespace engine
 		// and IVstPlugin::GetLatencySamples.
 		int CurrentVstLatencySamps() const noexcept
 		{
-			auto chain = _vstChain.load(std::memory_order_acquire);
+			auto chain = _vstChain.borrow();
 			return chain ? chain->GetLatencySamples() : 0;
 		}
 
@@ -362,7 +364,7 @@ namespace engine
 		audio::BufferBank _bufferBank;
 		audio::BufferBank _monitorBufferBank;
 		// Live VST chain published atomically for lock-free audio-thread reads.
-		std::atomic<std::shared_ptr<vst::VstChain>> _vstChain;
+		base::PublishedAudioSnapshot<vst::VstChain> _vstChain;
 		std::shared_ptr<vst::VstChain> _backVstChain;
 		std::atomic<bool> _flipVstChain{ false };
 		std::vector<std::pair<std::wstring, std::vector<std::uint8_t>>> _pendingVstLoads;

@@ -71,8 +71,8 @@ namespace midi
 				|| original.Events[offIndex].PairingSlot() != on.PairingSlot())) return false;
 			const auto duration = (hasOff ? original.Events[offIndex].sampleOffset : original.LoopLengthSamps) - on.sampleOffset;
 			const auto& q = original.Quantisation;
-			const auto interval = static_cast<std::uint64_t>(q.HasRemoteGrid() ? q.RemoteIntervalSamps : q.GrainSamps);
-			const auto divisions = static_cast<std::uint64_t>(q.HasRemoteGrid() ? q.RemoteBpi : 1u) * MidiQuantisation::Divisor(q.Fraction);
+			const auto interval = q.GridInterval();
+			const auto divisions = q.GridDivisions();
 			if (!q.Enabled || !interval || !divisions) return false;
 			const auto transport = static_cast<std::int64_t>(original.QuantisationTransportStartSamps);
 			const auto origin = q.HasRemoteGrid() ? q.RemoteOriginSamps : 0ll;

@@ -46,20 +46,8 @@ namespace midi
 			return {start, end};
 		}
 
-		// The editor shows the physical loop extents. Rotating to a nearby grain
-		// would move the clipped seam into the middle of a visible grid cell.
-		static std::uint32_t DisplayOrigin(std::uint32_t,
-			const MidiQuantisationSettings&, std::uint64_t) noexcept
-		{
-			return 0u;
-		}
-
-		static std::uint32_t DisplaySample(std::uint32_t sample, std::uint32_t length,
-			std::uint32_t origin) noexcept
-		{
-			return length ? static_cast<std::uint32_t>((static_cast<std::uint64_t>(sample)
-				+ length - origin) % length) : 0u;
-		}
+		// Editor coordinates stay anchored at physical sample zero. Keep the
+		// clipped seam represented by the edge aliases above, not by rotating it.
 
 		static std::optional<LoopGridGeometry> Resolve(std::uint32_t length,
 			const MidiQuantisationSettings& settings, std::uint64_t transportStart)

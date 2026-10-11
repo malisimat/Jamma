@@ -23,6 +23,20 @@ namespace engine
             scene._audioEngine->CloseCallbackAdmission();
             scene._sourceLossRecoveryGateClosed = true;
         }
+        static void StartRecording(Scene& scene, const std::shared_ptr<Trigger>& trigger,
+            const io::UserConfig& cfg)
+        {
+            // The real job runner also consumes structural commands. Keep the
+            // test's simulated audio/job handoff in the same critical section
+            // as Scene's production structural pump.
+            std::scoped_lock lock(scene._sceneMutex);
+            trigger->AddInputChannel(0u);
+            base::Action action;
+            trigger->QueueExternalControlAction(true, true, action);
+            trigger->OnTick(utils::Timer::GetTime(), 0u, cfg, std::nullopt);
+            trigger->ProcessStructuralActionsOnJob(cfg, std::nullopt);
+            trigger->OnTick(utils::Timer::GetTime(), 0u, cfg, std::nullopt);
+        }
     };
 }
 
@@ -226,19 +240,13 @@ TEST_F(SceneRoutingIntegrationTest, ResetRetiresSixtyFourRestoredHistoryPinsAndA
     station->Reset();
     scene->CommitChanges();
     io::UserConfig cfg;
-    trigger->ProcessStructuralActionsOnJob(cfg, std::nullopt);
     for (unsigned int step = 0u; step < 130u; ++step)
         engine::SourceLossIntegrationTestAccess::Recover(*scene);
     EXPECT_TRUE(trigger->GetTakes().empty());
     EXPECT_FALSE(trigger->HasPendingSourceLoss());
     EXPECT_FALSE(engine::SourceLossIntegrationTestAccess::RecoveryGateIsClosed(*scene));
     EXPECT_TRUE(externallyRetainedTarget->IsTriggerCaptureInactive());
-    trigger->AddInputChannel(0u);
-    base::Action action;
-    trigger->QueueExternalControlAction(true, true, action);
-    trigger->OnTick(utils::Timer::GetTime(), 0u, cfg, std::nullopt);
-    trigger->ProcessStructuralActionsOnJob(cfg, std::nullopt);
-    trigger->OnTick(utils::Timer::GetTime(), 0u, cfg, std::nullopt);
+    engine::SourceLossIntegrationTestAccess::StartRecording(*scene, trigger, cfg);
     EXPECT_EQ(engine::TRIGSTATE_RECORDING, trigger->GetState());
     scene->Shutdown();
 }

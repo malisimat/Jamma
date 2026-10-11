@@ -63,9 +63,10 @@ namespace audio
 		}
 
 		static void ApplyLocalTransportOffset(AudioHost& host,
-			const std::vector<std::shared_ptr<engine::Station>>& stations) noexcept
+			const std::vector<std::shared_ptr<engine::Station>>& stations,
+			Timer* timingClock = nullptr) noexcept
 		{
-			host.ApplyLocalTransportOffsetAtAudioBoundary(stations);
+			host.ApplyLocalTransportOffsetAtAudioBoundary(stations, timingClock);
 		}
 	};
 }
@@ -249,7 +250,7 @@ TEST(AudioHostLocalTransportOffsetPublication, AppliesWhileDisconnectedAndNoSync
 	ASSERT_TRUE(audio::NinjamAudioBoundaryTestAccess::Apply(host, 0u, 48000u));
 
 	host.PublishLocalTransportOffsetLoopFrac(0.25);
-	audio::NinjamAudioBoundaryTestAccess::ApplyLocalTransportOffset(host, stations);
+	audio::NinjamAudioBoundaryTestAccess::ApplyLocalTransportOffset(host, stations, clock.get());
 	EXPECT_EQ(350ul, NinjamProductionBoundaryFixture::AudioPosition(*take));
 	EXPECT_EQ(350ul, take->MidiTimingPosition());
 }

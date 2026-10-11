@@ -261,6 +261,7 @@ namespace engine
 		
 	protected:
 		friend class SourceLossIntegrationTestAccess;
+		friend class audio::AudioHostRealtimeTestAccess;
 		virtual void _InitResources(resources::ResourceLib& resourceLib, bool forceInit) override;
 		virtual void _ReleaseResources() override;
 

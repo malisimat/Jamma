@@ -221,6 +221,7 @@
     <ClInclude Include="src\audio\BufferBank.h" />
     <ClInclude Include="src\actions\JobAction.h" />
     <ClInclude Include="src\base\Jammable.h" />
+    <ClInclude Include="src\base\PublishedAudioSnapshot.h" />
     <ClInclude Include="src\base\LoggingConfig.h" />
     <ClInclude Include="src\audio\FallingValue.h" />
     <ClInclude Include="src\audio\Hanning.h" />
