@@ -9,7 +9,11 @@
 #include "ninjam/NinjamConnection.h"
 #include "ninjam/NinjamTiming.h"
 #include "engine/Quantiser.h"
+#include "engine/Station.h"
+#include "engine/LoopTake.h"
+#include "engine/Loop.h"
 #include "graphics/QuantisationModel.h"
+#include "graphics/MidiModel.h"
 #include "midi/MidiQuantisation.h"
 #include "utils/Timer.h"
 
@@ -290,6 +294,55 @@ TEST(Quantisation, CurrentTempoTimingUsesActiveClockWhenMasterCacheIsUnset)
 // ---------------------------------------------------------------------------
 // DeduceSeedTiming: seed sizes from master loop length
 // ---------------------------------------------------------------------------
+
+TEST(Quantisation, TempoStatusTracksLocalTimingAndClearsUnavailableValues)
+{
+	engine::Quantiser quantiser;
+	quantiser.SetClock(std::make_shared<utils::Timer>());
+	EXPECT_FALSE(quantiser.CurrentTempoStatus(48000u));
+	quantiser.ApplyTiming(*engine::TimingFromSeedAndMaster(24000u, 192000ul, 48000u), "test");
+	auto tempo = quantiser.CurrentTempoStatus(48000u);
+	ASSERT_TRUE(tempo);
+	EXPECT_FLOAT_EQ(120.0f, tempo->Bpm);
+	EXPECT_EQ(8u, tempo->Bpi);
+	quantiser.ApplyTiming(*engine::TimingFromSeedAndMaster(32000u, 192000ul, 48000u), "test");
+	tempo = quantiser.CurrentTempoStatus(48000u);
+	ASSERT_TRUE(tempo);
+	EXPECT_FLOAT_EQ(90.0f, tempo->Bpm);
+	EXPECT_EQ(6u, tempo->Bpi);
+	quantiser.Clear(true);
+	EXPECT_FALSE(quantiser.CurrentTempoStatus(48000u));
+}
+
+TEST(Quantisation, TempoStatusUsesFullRemoteAuthorityAndReturnsToLocalOnNoSync)
+{
+	engine::Quantiser quantiser;
+	quantiser.SetClock(std::make_shared<utils::Timer>());
+	quantiser.ApplyTiming(*engine::TimingFromSeedAndMaster(24000u, 192000ul, 48000u), "test");
+	// Remote beat spacing need not be a whole sample; deriving BPI from a
+	// rounded grain or a local subdivision would misreport this interval.
+	engine::RemoteTransportGeometry remote;
+	remote.IntervalLengthSamps = 100001ul;
+	remote.Bpm = 201.6f;
+	remote.Bpi = 7u;
+	quantiser.SetRemoteMidiGrid(remote, 0, {});
+	auto tempo = quantiser.CurrentTempoStatus(48000u);
+	ASSERT_TRUE(tempo);
+	EXPECT_FLOAT_EQ(remote.Bpm, tempo->Bpm);
+	EXPECT_EQ(7u, tempo->Bpi);
+	remote.Bpm = 140.5f;
+	remote.Bpi = 13u;
+	quantiser.SetRemoteMidiGrid(remote, 0, {});
+	tempo = quantiser.CurrentTempoStatus(48000u);
+	ASSERT_TRUE(tempo);
+	EXPECT_FLOAT_EQ(remote.Bpm, tempo->Bpm);
+	EXPECT_EQ(13u, tempo->Bpi);
+	quantiser.SetRemoteMidiGrid({}, 0, {});
+	tempo = quantiser.CurrentTempoStatus(48000u);
+	ASSERT_TRUE(tempo);
+	EXPECT_FLOAT_EQ(120.0f, tempo->Bpm);
+	EXPECT_EQ(8u, tempo->Bpi);
+}
 
 TEST(Quantisation, SeedFromMasterNoHalvingNeeded)
 {
@@ -668,4 +721,432 @@ TEST(QuantisationModel, GateGeometryBuildsHalfFrameInstanceMesh)
 	EXPECT_FLOAT_EQ(92.0f, maxY);
 	EXPECT_FLOAT_EQ(132.0f, minZ);
 	EXPECT_FLOAT_EQ(312.0f, maxZ);
+}
+
+TEST(Quantisation, TapSequenceRestartsAtTwoSecondsAndDropsOldSmoothing)
+{
+    TapTempoTracker tracker;
+    engine::QuantisationPolicy policy;
+    EXPECT_FALSE(tracker.TapAtSample(0u, 48000u, 288000ul, policy));
+    ASSERT_TRUE(tracker.TapAtSample(48000u, 48000u, 288000ul, policy));
+    ASSERT_TRUE(tracker.TapAtSample(72000u, 48000u, 288000ul, policy));
+    EXPECT_DOUBLE_EQ(36000.0, tracker.EstimatedGapSamps());
+    // Exactly two seconds expires the sequence; repeated lone taps do nothing.
+    EXPECT_FALSE(tracker.TapAtSample(168000u, 48000u, 288000ul, policy));
+    EXPECT_FALSE(tracker.HasEstimate());
+    EXPECT_FALSE(tracker.TapAtSample(264001u, 48000u, 288000ul, policy));
+    EXPECT_FALSE(tracker.HasEstimate());
+    ASSERT_TRUE(tracker.TapAtSample(288001u, 48000u, 288000ul, policy));
+    EXPECT_DOUBLE_EQ(24000.0, tracker.EstimatedGapSamps());
+}
+
+TEST(Quantisation, TapSequenceAcceptsGapJustUnderTwoSeconds)
+{
+    TapTempoTracker tracker;
+    engine::QuantisationPolicy policy;
+    EXPECT_FALSE(tracker.TapAtSample(0u, 48000u, 288000ul, policy));
+    EXPECT_TRUE(tracker.TapAtSample(95999u, 48000u, 288000ul, policy));
+}
+
+TEST(Quantisation, OverlayWaitsTwoSecondsAfterReleaseBeforeFading)
+{
+    engine::Quantiser quantiser;
+    quantiser.SetOverlayHeld(true);
+    const auto after = utils::Timer::GetTime();
+    EXPECT_FLOAT_EQ(1.0f, quantiser.OverlayAlpha(after + std::chrono::seconds(20)));
+    const auto beforeRelease = utils::Timer::GetTime();
+    quantiser.SetOverlayHeld(false);
+    const auto released = utils::Timer::GetTime();
+    EXPECT_FLOAT_EQ(1.0f, quantiser.OverlayAlpha(beforeRelease + std::chrono::seconds(2)));
+    EXPECT_NEAR(0.5f, quantiser.OverlayAlpha(released + std::chrono::seconds(3)), 0.01f);
+    EXPECT_FLOAT_EQ(0.0f, quantiser.OverlayAlpha(released + std::chrono::seconds(4)));
+    quantiser.PulseOverlay();
+    const auto pulse = utils::Timer::GetTime();
+    EXPECT_FLOAT_EQ(1.0f, quantiser.OverlayAlpha(pulse + std::chrono::seconds(1)));
+    EXPECT_NEAR(0.5f, quantiser.OverlayAlpha(pulse + std::chrono::seconds(3)), 0.01f);
+    quantiser.ClearOverlay();
+    EXPECT_FLOAT_EQ(0.0f, quantiser.OverlayAlpha(pulse));
+}
+
+TEST(Quantisation, InvalidOrNonIncreasingTapClearsSmoothing)
+{
+    engine::TapTempoTracker tracker;
+    engine::QuantisationPolicy policy;
+    tracker.TapAtSample(0u, 48000u, 96000ul, policy);
+    ASSERT_TRUE(tracker.TapAtSample(24000u, 48000u, 96000ul, policy));
+    EXPECT_FALSE(tracker.TapAtSample(24000u, 48000u, 96000ul, policy));
+    EXPECT_FALSE(tracker.HasEstimate());
+    EXPECT_FALSE(tracker.TapAtSample(48000u, 0u, 96000ul, policy));
+    EXPECT_FALSE(tracker.HasEstimate());
+}
+
+TEST(Quantisation, FrozenGridCandidatesIncludeTripletsAndPreferSmallerTies)
+{
+    EXPECT_EQ(12u, engine::Quantiser::NearestPermittedDivision(4u, 12.0));
+    EXPECT_EQ(8u, engine::Quantiser::NearestPermittedDivision(4u, 10.0));
+    EXPECT_EQ(4u, engine::Quantiser::NearestPermittedDivision(4u, 0.0));
+    EXPECT_EQ(128u, engine::Quantiser::NearestPermittedDivision(4u, 10000.0));
+}
+
+TEST(Quantisation, TapBaseGridComposesFractionWithoutChangingConstructionOrAuthority)
+{
+    midi::MidiQuantisationSettings settings;
+    settings.Enabled = true;
+    settings.GrainSamps = 24000u;
+    settings.Fraction = midi::MidiQuantisationFraction::Third;
+    settings.BaseIntervalSamps = 96000u;
+    settings.BaseDivisions = 8u;
+    EXPECT_EQ(96000u, settings.GridInterval());
+    EXPECT_EQ(24u, settings.GridDivisions());
+    EXPECT_EQ(24000u, settings.GrainSamps);
+    settings.RemoteIntervalSamps = 192000u;
+    settings.RemoteBpi = 16u;
+    settings.RemoteOriginSamps = 501;
+    EXPECT_EQ(192000u, settings.GridInterval());
+    EXPECT_EQ(24u, settings.GridDivisions());
+    EXPECT_TRUE(settings.HasRemoteGrid());
+    const auto packed = settings.Pack();
+    const auto restored = midi::MidiQuantisationSettings::Unpack(packed);
+    EXPECT_EQ(settings.GrainSamps, restored.GrainSamps);
+    EXPECT_EQ(settings.Fraction, restored.Fraction);
+    EXPECT_FALSE(restored.HasBaseGrid());
+}
+
+class QuantisationContractTake : public engine::LoopTake
+{
+public:
+    QuantisationContractTake(const engine::LoopTakeParams& params) :
+        LoopTake(params, LoopTake::GetMixerParams(params.Size, audio::MergeMixBehaviourParams{})) {}
+    void CompleteAudio(const std::vector<std::shared_ptr<engine::Loop>>& loops)
+    {
+        _loops = loops;
+        _state.store(STATE_PLAYING, std::memory_order_release);
+    }
+    void AddMidi(const std::shared_ptr<midi::MidiLoop>& loop) { _midiLoops.push_back(loop); _PublishMidiLoopSnapshot(); }
+    void CompleteMidi(unsigned long length)
+    {
+        _midiVisualLoopLength.store(length, std::memory_order_release);
+        _state.store(STATE_PLAYING, std::memory_order_release);
+    }
+};
+
+class QuantisationContractStation : public engine::Station
+{
+public:
+    QuantisationContractStation(bool remote = false) :
+        Station(engine::StationParams{}, engine::Station::GetMixerParams({ 100, 100 }, audio::MergeMixBehaviourParams{})), _remote(remote) {}
+    bool IsRemote() const noexcept override { return _remote; }
+private:
+    bool _remote;
+};
+
+static std::shared_ptr<QuantisationContractTake> MakeQuantisationContractTake(const char* id, unsigned long length)
+{
+    engine::LoopTakeParams params;
+    params.Id = id;
+    params.Size = { 100, 100 };
+    auto take = std::make_shared<QuantisationContractTake>(params);
+    take->CompleteMidi(length);
+    return take;
+}
+
+TEST(Quantisation, MidiGridsFollowTakePickerHeightsAndUseTakeHeight)
+{
+    auto first = MakeQuantisationContractTake("first", 96000ul);
+    auto second = MakeQuantisationContractTake("second", 96000ul);
+    first->SetModelPosition({ 0.0f, 100.0f, 0.0f });
+    second->SetModelPosition({ 0.0f, 200.0f, 0.0f });
+    for (const auto& take : { first, second })
+    {
+        auto loop = std::make_shared<midi::MidiLoop>();
+        loop->StartRecord();
+        loop->EndRecord(96000u);
+        auto model = std::make_shared<graphics::MidiModel>(graphics::MidiModelParams{});
+        model->SetModelPosition({ 0.0f, 0.0f, 0.0f });
+        model->SetSize({ 80, 20 });
+        loop->AttachModel(model);
+        take->AddMidi(loop);
+    }
+
+    auto visuals = engine::LoopTake::QuantisationVisualsFor({ first, second });
+    ASSERT_EQ(2u, visuals.size());
+    EXPECT_FLOAT_EQ(100.0f, visuals[0].YCenter);
+    EXPECT_FLOAT_EQ(200.0f, visuals[1].YCenter);
+    EXPECT_FLOAT_EQ(45.0f, visuals[0].HalfHeight);
+    EXPECT_FLOAT_EQ(45.0f, visuals[1].HalfHeight);
+    EXPECT_FLOAT_EQ(10.0f, visuals[1].YCenter - visuals[1].HalfHeight
+        - (visuals[0].YCenter + visuals[0].HalfHeight));
+
+    // Resizing/repositioning a take must also update its grid geometry.
+    second->SetSize({ 100, 160 });
+    second->SetModelPosition({ 0.0f, 260.0f, 0.0f });
+    visuals = engine::LoopTake::QuantisationVisualsFor({ first, second });
+    ASSERT_EQ(2u, visuals.size());
+    EXPECT_FLOAT_EQ(260.0f, visuals[1].YCenter);
+    EXPECT_FLOAT_EQ(72.0f, visuals[1].HalfHeight);
+}
+
+TEST(Quantisation, SoleMidiTapPublishesGridWithoutRewritingSourceLength)
+{
+    auto take = MakeQuantisationContractTake("midi-master", 96001ul);
+    auto station = std::make_shared<QuantisationContractStation>();
+    station->AddTake(take);
+    engine::Quantiser quantiser;
+    auto clock = std::make_shared<utils::Timer>();
+    quantiser.SetClock(clock);
+    io::UserConfig config;
+    quantiser.HandleTapTempo(0u, 48000u, { station }, config);
+    quantiser.HandleTapTempo(24000u, 48000u, { station }, config);
+    EXPECT_EQ(96001ul, take->VisualLoopLengthSamps());
+    EXPECT_EQ(24000u, take->ResolvedMidiQuantisation().GrainSamps);
+    EXPECT_EQ(96000u, take->ResolvedMidiQuantisation().BaseIntervalSamps);
+    EXPECT_EQ(4u, take->ResolvedMidiQuantisation().BaseDivisions);
+}
+
+TEST(Quantisation, AdditionalMidiTakeTapPreservesTransportAndSelectsTripletSubdivision)
+{
+    auto first = MakeQuantisationContractTake("one", 96000ul);
+    auto second = MakeQuantisationContractTake("two", 96000ul);
+    auto station = std::make_shared<QuantisationContractStation>();
+    station->AddTake(first);
+    station->AddTake(second);
+    engine::Quantiser quantiser;
+    auto clock = std::make_shared<utils::Timer>();
+    quantiser.SetClock(clock);
+    quantiser.Set(24000u, utils::Timer::QUANTISE_MULTIPLE);
+    quantiser.SetMidiGrain(24000u, "test", { station });
+    clock->SetSeedSourceLength(96000ul);
+    io::UserConfig config;
+    quantiser.HandleTapTempo(0u, 48000u, { station }, config);
+    quantiser.HandleTapTempo(8000u, 48000u, { station }, config);
+    EXPECT_EQ(24000u, clock->QuantiseSamps());
+    EXPECT_EQ(96000ul, clock->SeedSourceLength());
+    EXPECT_EQ(12u, quantiser.ActiveGridDivisions());
+    for (const auto& take : { first, second })
+    {
+        const auto settings = take->ResolvedMidiQuantisation();
+        EXPECT_EQ(4u, settings.BaseDivisions);
+        EXPECT_EQ(midi::MidiQuantisationFraction::Third, settings.Fraction);
+        EXPECT_EQ(12u, settings.GridDivisions());
+        EXPECT_EQ(24000u, settings.GrainSamps);
+        EXPECT_EQ(96000ul, take->VisualLoopLengthSamps());
+    }
+    // A new, slower tap sequence changes only the subdivision again.
+    quantiser.HandleTapTempo(200000u, 48000u, { station }, config);
+    quantiser.HandleTapTempo(224000u, 48000u, { station }, config);
+    for (const auto& take : { first, second })
+    {
+        const auto settings = take->ResolvedMidiQuantisation();
+        EXPECT_EQ(4u, settings.BaseDivisions);
+        EXPECT_EQ(midi::MidiQuantisationFraction::Whole, settings.Fraction);
+        EXPECT_EQ(4u, settings.GridDivisions());
+        EXPECT_EQ(96000ul, take->VisualLoopLengthSamps());
+    }
+    EXPECT_EQ(24000u, clock->QuantiseSamps());
+    EXPECT_EQ(96000ul, clock->SeedSourceLength());
+}
+
+TEST(Quantisation, RemoteTapPreservesAcceptedDescriptorAcrossGrainPublication)
+{
+    auto take = MakeQuantisationContractTake("local", 96000ul);
+    auto station = std::make_shared<QuantisationContractStation>();
+    station->AddTake(take);
+    engine::Quantiser quantiser;
+    auto clock = std::make_shared<utils::Timer>();
+    quantiser.SetClock(clock);
+    quantiser.Set(24000u, utils::Timer::QUANTISE_MULTIPLE);
+    clock->SetSeedSourceLength(96000ul);
+    engine::RemoteTransportGeometry geometry;
+    geometry.IntervalLengthSamps = 192000ul;
+    geometry.Bpi = 8u;
+    quantiser.SetRemoteMidiGrid(geometry, 431, { station });
+    io::UserConfig config;
+    quantiser.HandleTapTempo(0u, 48000u, { station }, config);
+    quantiser.HandleTapTempo(8000u, 48000u, { station }, config);
+    quantiser.SetMidiGrain(24000u, "activation", { station });
+    quantiser.SetRemoteMidiGrid(geometry, 431, { station });
+    const auto settings = take->ResolvedMidiQuantisation();
+    EXPECT_EQ(192000u, settings.RemoteIntervalSamps);
+    EXPECT_EQ(8u, settings.RemoteBpi);
+    EXPECT_EQ(431, settings.RemoteOriginSamps);
+    EXPECT_EQ(8u, settings.BaseDivisions);
+    EXPECT_EQ(midi::MidiQuantisationFraction::Third, settings.Fraction);
+    EXPECT_EQ(24u, settings.GridDivisions());
+    EXPECT_EQ(96000ul, clock->SeedSourceLength());
+}
+
+TEST(Quantisation, TapSelectedBeatCountSurvivesIntegerGrainRounding)
+{
+    const auto timing = engine::Quantiser::DeduceTapSeedTimingFromMaster(11ul, 1000ul, 48000u);
+    ASSERT_TRUE(timing);
+    EXPECT_EQ(91u, timing->Bpi);
+    EXPECT_EQ(10u, timing->SeedSamps);
+    EXPECT_EQ(910u, timing->MasterLoopSamps);
+}
+
+TEST(Quantisation, MultichannelAudioAndMidiIsOneCompletedTake)
+{
+    auto take = MakeQuantisationContractTake("stereo-midi", 96000ul);
+    std::vector<std::shared_ptr<engine::Loop>> loops;
+    for (unsigned int channel = 0u; channel < 2u; ++channel)
+    {
+        engine::LoopParams params;
+        params.Wav = "tap-test";
+        params.Size = { 80, 80 };
+        audio::WireMixBehaviourParams wire;
+        wire.Channels = { channel };
+        auto loop = std::make_shared<engine::Loop>(params, engine::Loop::GetMixerParams({ 80, 80 }, wire));
+        loop->Record();
+        std::vector<float> samples(constants::MaxLoopFadeSamps + 96000u, 0.25f);
+        base::AudioWriteRequest request;
+        request.samples = samples.data();
+        request.numSamps = static_cast<unsigned int>(samples.size());
+        request.stride = 1u;
+        request.fadeCurrent = 0.0f;
+        request.fadeNew = 1.0f;
+        request.source = base::Audible::AUDIOSOURCE_ADC;
+        loop->OnBlockWrite(request, 0);
+        loop->EndWrite(request.numSamps, true);
+        loop->Play(constants::MaxLoopFadeSamps, 96000ul, false);
+        loops.push_back(loop);
+    }
+    take->CompleteAudio(loops);
+    take->SetModelPosition({ 0.0f, 100.0f, 0.0f });
+    auto sibling = MakeQuantisationContractTake("audio-sibling", 0ul);
+    sibling->CompleteAudio(loops);
+    sibling->SetModelPosition({ 0.0f, 200.0f, 0.0f });
+    const auto visuals = engine::LoopTake::QuantisationVisualsFor({ take, sibling });
+    ASSERT_EQ(2u, visuals.size());
+    EXPECT_FLOAT_EQ(100.0f, visuals[0].YCenter);
+    EXPECT_FLOAT_EQ(200.0f, visuals[1].YCenter);
+    EXPECT_FLOAT_EQ(45.0f, visuals[0].HalfHeight);
+    EXPECT_FLOAT_EQ(45.0f, visuals[1].HalfHeight);
+    auto station = std::make_shared<QuantisationContractStation>();
+    station->AddTake(take);
+    engine::Quantiser quantiser;
+    auto clock = std::make_shared<utils::Timer>();
+    quantiser.SetClock(clock);
+    io::UserConfig config;
+    quantiser.HandleTapTempo(0u, 48000u, { station }, config);
+    quantiser.HandleTapTempo(32000u, 48000u, { station }, config);
+    EXPECT_EQ(32000u, clock->QuantiseSamps());
+    EXPECT_EQ(3u, quantiser.ActiveGridDivisions());
+    for (const auto& loop : loops)
+    {
+        EXPECT_EQ(96000ul, loop->LoopLength());
+        EXPECT_EQ(96000ul, loop->PhysicalLoopLength());
+    }
+}
+
+TEST(QuantisationController, RapidModifierTransitionsKeepCurrentOpacity)
+{
+	graphics::CtrlHandleOverlay overlay;
+	engine::Quantiser quantiser;
+	std::vector<std::shared_ptr<engine::Station>> stations;
+	engine::QuantiserController controller(overlay, quantiser, stations);
+	engine::QuantisationInteractionContext context;
+	context.CursorPos = { 200, 200 };
+	context.ViewportSize = { 800, 600 };
+	const engine::QuantiserController::ChildResolver resolve = [](const auto&) { return std::shared_ptr<base::GuiElement>{}; };
+	const auto start = utils::Timer::GetTime();
+	controller.OnCtrlModifierChanged(true, start, context, resolve);
+	controller.Tick(start + std::chrono::milliseconds(60));
+	EXPECT_NEAR(0.5f, controller.PanelAlpha(), 0.001f);
+	controller.OnCtrlModifierChanged(false, start + std::chrono::milliseconds(60), context, resolve);
+	controller.Tick(start + std::chrono::milliseconds(60));
+	EXPECT_NEAR(0.5f, controller.PanelAlpha(), 0.001f);
+	controller.Tick(start + std::chrono::milliseconds(210));
+	const auto fading = controller.PanelAlpha();
+	controller.OnCtrlModifierChanged(true, start + std::chrono::milliseconds(210), context, resolve);
+	controller.Tick(start + std::chrono::milliseconds(210));
+	EXPECT_NEAR(fading, controller.PanelAlpha(), 0.001f);
+	controller.Tick(start + std::chrono::milliseconds(330));
+	EXPECT_FLOAT_EQ(1.0f, controller.PanelAlpha());
+	EXPECT_LT(quantiser.OverlayAlpha(start + std::chrono::seconds(10)), 0.001f);
+}
+
+TEST(QuantisationController, CapturedSelectionSurvivesChangesAndCancelPreservesCtrlAndSpace)
+{
+	auto first = MakeQuantisationContractTake("captured", 96000ul);
+	auto second = MakeQuantisationContractTake("hovered", 96000ul);
+	auto station = std::make_shared<QuantisationContractStation>();
+	station->AddTake(first);
+	station->AddTake(second);
+	first->Select();
+	graphics::CtrlHandleOverlay overlay;
+	engine::Quantiser quantiser;
+	std::vector<std::shared_ptr<engine::Station>> stations = { station };
+	engine::QuantiserController controller(overlay, quantiser, stations);
+	engine::QuantisationInteractionContext context;
+	context.SelectDepth = base::DEPTH_LOOPTAKE;
+	context.CursorPos = { 200, 200 };
+	context.ViewportSize = { 800, 600 };
+	const engine::QuantiserController::ChildResolver resolve = [second](const auto&) { return second; };
+	const auto start = utils::Timer::GetTime();
+	controller.OnCtrlModifierChanged(true, start, context, resolve);
+	first->DeSelect();
+	second->Select();
+	actions::TouchAction press;
+	press.State = actions::TouchAction::TOUCH_DOWN;
+	press.Index = 0;
+	press.SetActionTime(start);
+	press.Position = overlay.ButtonCenter(1).value();
+	ASSERT_TRUE(controller.TryHandleTouchAction(press, 48000u, true, context, resolve)->IsEaten);
+	controller.Tick(start);
+	EXPECT_FLOAT_EQ(0.0f, controller.PanelAlpha()); // A press during entry must not jump to full alpha.
+	actions::TouchMoveAction move;
+	move.Position = press.Position;
+	move.Position.Y += 32;
+	controller.TryHandleTouchMove(move, 48000u);
+	EXPECT_EQ(midi::MidiQuantisationFraction::Third, first->MidiQuantisation().Fraction);
+	EXPECT_EQ(midi::MidiQuantisationFraction::Quarter, second->MidiQuantisation().Fraction);
+	quantiser.SetOverlayHeld(true);
+	controller.CancelInteraction();
+	EXPECT_FALSE(controller.OwnsPointer());
+	EXPECT_TRUE(controller.EditModeActive());
+	EXPECT_FLOAT_EQ(1.0f, quantiser.OverlayAlpha(utils::Timer::GetTime() + std::chrono::seconds(20)));
+	quantiser.SetOverlayHeld(false);
+	EXPECT_FLOAT_EQ(0.0f, quantiser.OverlayAlpha(utils::Timer::GetTime() + std::chrono::seconds(20)));
+	controller.CancelInteraction(true);
+	EXPECT_FALSE(controller.EditModeActive());
+}
+
+TEST(QuantisationController, LoopDragChangesCapturedMidiStreamAndDeletionReleasesGesture)
+{
+	auto take = MakeQuantisationContractTake("midi-scope", 96000ul);
+	auto first = std::make_shared<midi::MidiLoop>();
+	auto sibling = std::make_shared<midi::MidiLoop>();
+	take->AddMidi(first);
+	take->AddMidi(sibling);
+	auto station = std::make_shared<QuantisationContractStation>();
+	station->AddTake(take);
+	graphics::CtrlHandleOverlay overlay;
+	engine::Quantiser quantiser;
+	std::vector<std::shared_ptr<engine::Station>> stations = { station };
+	engine::QuantiserController controller(overlay, quantiser, stations);
+	engine::QuantisationInteractionContext context;
+	context.SelectDepth = base::DEPTH_LOOP;
+	context.SelectedMidiLoops = { first };
+	context.HoveredMidiLoop = sibling;
+	context.CursorPos = { 200, 200 };
+	context.ViewportSize = { 800, 600 };
+	const engine::QuantiserController::ChildResolver resolve = [](const auto&) { return std::shared_ptr<base::GuiElement>{}; };
+	controller.OnCtrlModifierChanged(true, utils::Timer::GetTime(), context, resolve);
+	actions::TouchAction press;
+	press.State = actions::TouchAction::TOUCH_DOWN;
+	press.Index = 0;
+	press.Position = overlay.ButtonCenter(1).value();
+	ASSERT_TRUE(controller.TryHandleTouchAction(press, 48000u, true, context, resolve)->IsEaten);
+	actions::TouchMoveAction move;
+	move.Position = press.Position;
+	move.Position.Y += 32;
+	controller.TryHandleTouchMove(move, 48000u);
+	ASSERT_TRUE(first->GetLoopQuantisationOverride().Fraction.has_value());
+	EXPECT_EQ(midi::MidiQuantisationFraction::Third, first->GetLoopQuantisationOverride().Fraction.value());
+	EXPECT_FALSE(sibling->GetLoopQuantisationOverride().Fraction.has_value());
+	stations.clear();
+	controller.Tick(utils::Timer::GetTime());
+	EXPECT_FALSE(controller.OwnsPointer());
+	EXPECT_TRUE(controller.EditModeActive());
+	EXPECT_FLOAT_EQ(0.0f, quantiser.OverlayAlpha(utils::Timer::GetTime() + std::chrono::seconds(20)));
 }

@@ -1,6 +1,44 @@
 #include "gtest/gtest.h"
 #include <algorithm>
+#include <filesystem>
+#include <fstream>
 #include "engine/Scene.h"
+#include "io/NativeMidiSidecar.h"
+#include "utils/StringUtils.h"
+
+namespace engine
+{
+    class SourceLossIntegrationTestAccess
+    {
+    public:
+        static void Confirm(Scene& scene, const midi::MidiConnectionResult& previous,
+            const midi::MidiConnectionResult& refreshed, const std::vector<std::string>& names)
+        {
+            scene._ConfirmMidiConnectionChange(previous, refreshed, names);
+        }
+        static void Recover(Scene& scene) { scene._PumpSourceLossRecovery(); }
+        static bool RecoveryGateIsClosed(const Scene& scene) { return scene._sourceLossRecoveryGateClosed; }
+        static void CloseRecoveryGate(Scene& scene)
+        {
+            scene._audioEngine->CloseCallbackAdmission();
+            scene._sourceLossRecoveryGateClosed = true;
+        }
+        static void StartRecording(Scene& scene, const std::shared_ptr<Trigger>& trigger,
+            const io::UserConfig& cfg)
+        {
+            // The real job runner also consumes structural commands. Keep the
+            // test's simulated audio/job handoff in the same critical section
+            // as Scene's production structural pump.
+            std::scoped_lock lock(scene._sceneMutex);
+            trigger->AddInputChannel(0u);
+            base::Action action;
+            trigger->QueueExternalControlAction(true, true, action);
+            trigger->OnTick(utils::Timer::GetTime(), 0u, cfg, std::nullopt);
+            trigger->ProcessStructuralActionsOnJob(cfg, std::nullopt);
+            trigger->OnTick(utils::Timer::GetTime(), 0u, cfg, std::nullopt);
+        }
+    };
+}
 
 class SceneRoutingIntegrationTest : public testing::Test
 {
@@ -85,6 +123,142 @@ TEST_F(SceneRoutingIntegrationTest, HaloSelectionIncludesMidiOnlyModelsAndClears
 	station->DeSelect();
 	EXPECT_FALSE(scene->HasSelection());
 	scene->Shutdown();
+}
+
+TEST_F(SceneRoutingIntegrationTest, ConfiguredMissingMidiSourceCreatesEditableTakeThroughActivateControl)
+{
+    auto configured = Trigger("record", "Keys");
+    configured.MidiInputs = io::RigFile::Trigger::MidiInputMode::Selected;
+    configured.MidiInputDevices = { "missing" };
+    auto scene = FreshScene({ Station("Keys") }, { configured });
+    ASSERT_TRUE(scene);
+    auto trigger = scene->AcceptedRigSnapshot()->Triggers.front().Instance;
+    auto station = scene->SnapshotStations().front();
+    station->SetAllowedMidiChannels({ 1 });
+    // Confirm the real empty inventory, without manually adding a runtime source.
+    engine::SourceLossIntegrationTestAccess::Confirm(*scene, {}, {}, {});
+    io::UserConfig cfg;
+    cfg.Trigger = { 0u, 0u };
+    base::Action action;
+    auto press = [&](bool down) {
+        trigger->QueueExternalControlAction(true, down, action);
+        trigger->OnTick(utils::Timer::GetTime(), 0u, cfg, std::nullopt);
+        trigger->ProcessStructuralActionsOnJob(cfg, std::nullopt);
+        trigger->OnTick(utils::Timer::GetTime(), 0u, cfg, std::nullopt);
+        scene->CommitChanges();
+    };
+    press(true); press(false);
+    ASSERT_EQ(engine::TRIGSTATE_RECORDING, trigger->GetState());
+    ASSERT_EQ(1u, station->GetLoopTakeSnapshot().size());
+    auto take = station->GetLoopTakeSnapshot().front();
+    EXPECT_TRUE(take->GetLoops().empty());
+    ASSERT_EQ(1u, take->GetMidiLoops().size());
+    EXPECT_EQ(std::vector<std::string>{ "missing" }, take->MidiLoopDevices());
+    trigger->OnTick(utils::Timer::GetTime(), 256u, cfg, std::nullopt);
+    press(true); press(false);
+    EXPECT_EQ(engine::TRIGSTATE_DEFAULT, trigger->GetState());
+    EXPECT_GT(take->GetMidiLoops().front()->CompletedLengthForEditor(), 0u);
+    EXPECT_EQ(0u, take->GetMidiLoops().front()->EventCount());
+    scene->Shutdown();
+}
+
+TEST_F(SceneRoutingIntegrationTest, SuccessfulMidiConnectionLossCancelsCaptureThroughStoppedRecovery)
+{
+    auto configured = Trigger("record", "Keys");
+    configured.InputChannels = { 0u };
+    configured.MidiInputs = io::RigFile::Trigger::MidiInputMode::Selected;
+    configured.MidiInputDevices = { "lost" };
+    auto scene = FreshScene({ Station("Keys") }, { configured });
+    ASSERT_TRUE(scene);
+    auto trigger = scene->AcceptedRigSnapshot()->Triggers.front().Instance;
+    ASSERT_TRUE(trigger);
+    // Boundary route setup substitutes actual successfully opened capture names.
+    trigger->AddMidiInputDevice("lost");
+    trigger->AddInputChannel(0u);
+    base::Action action;
+    io::UserConfig cfg;
+    trigger->QueueExternalControlAction(true, true, action);
+    trigger->OnTick(utils::Timer::GetTime(), 0u, cfg, std::nullopt);
+    trigger->ProcessStructuralActionsOnJob(cfg, std::nullopt);
+    trigger->OnTick(utils::Timer::GetTime(), 0u, cfg, std::nullopt);
+    ASSERT_EQ(engine::TRIGSTATE_RECORDING, trigger->GetState());
+    midi::MidiConnectionResult previous;
+    previous.Connected.push_back({ 0u, "lost", "lost 0" });
+    midi::MidiConnectionResult failed;
+    failed.Inventory.Error = "transient inventory failure";
+    engine::SourceLossIntegrationTestAccess::Confirm(*scene, previous, failed, {});
+    EXPECT_FALSE(trigger->HasPendingSourceLoss());
+    midi::MidiConnectionResult reopened;
+    reopened.Connected.push_back({ 7u, "lost", "lost 7" });
+    engine::SourceLossIntegrationTestAccess::Confirm(*scene, previous, reopened, { "lost" });
+    EXPECT_FALSE(trigger->HasPendingSourceLoss());
+    engine::SourceLossIntegrationTestAccess::Confirm(*scene, reopened, {}, {});
+    ASSERT_TRUE(trigger->HasPendingSourceLoss());
+    for (unsigned int step = 0u; step < 4u; ++step)
+        engine::SourceLossIntegrationTestAccess::Recover(*scene);
+    EXPECT_EQ(engine::TRIGSTATE_DEFAULT, trigger->GetState());
+    EXPECT_TRUE(trigger->GetTakes().empty());
+    scene->Shutdown();
+}
+
+TEST_F(SceneRoutingIntegrationTest, ResetRetiresSixtyFourRestoredHistoryPinsAndAllowsRecording)
+{
+    struct SidecarCleanup
+    {
+        std::filesystem::path Path;
+        ~SidecarCleanup() { std::error_code error; std::filesystem::remove(Path, error); }
+    } sidecar{ std::filesystem::temp_directory_path() / ("jamma-source-loss-" + utils::GetGuid() + ".jammidi") };
+    io::NativeMidiSidecar::Stream contents;
+    contents.LogicalLength = 100u;
+    contents.Events.push_back({ 0u, 0x90u, 60u, 100u });
+    {
+        std::ofstream output(sidecar.Path, std::ios::binary);
+        ASSERT_TRUE(output);
+        ASSERT_TRUE(io::NativeMidiSidecar::ToStream(contents, output));
+    }
+    auto descriptor = Station("restored-reset");
+    auto configured = Trigger("restored-trigger", descriptor.Name);
+    configured.Id = "restored-trigger-id";
+    io::JamFile::TriggerHistory history;
+    history.TriggerId = configured.Id;
+    for (unsigned int index = 0u; index < 64u; ++index)
+    {
+        io::JamFile::LoopTake take{};
+        take.Name = "restored-" + std::to_string(index);
+        take.MidiPlayLength = 100u;
+        take.MidiStreams.push_back({ sidecar.Path.string(), 0u, "healthy", 100u, 0u });
+        descriptor.LoopTakes.push_back(take);
+        history.Takes.push_back({ static_cast<unsigned int>(engine::TriggerTake::SOURCE_ADC), "", take.Name });
+    }
+    auto scene = FreshScene({ descriptor }, { configured }, {}, { history });
+    ASSERT_TRUE(scene);
+    auto trigger = scene->AcceptedRigSnapshot()->Triggers.front().Instance;
+    auto station = scene->SnapshotStations().front();
+    ASSERT_EQ(64u, trigger->GetTakes().size());
+    ASSERT_EQ(64u, station->GetLoopTakeSnapshot().size());
+    const auto externallyRetainedTarget = station->GetLoopTakeSnapshot().front();
+    station->Reset();
+    scene->CommitChanges();
+    io::UserConfig cfg;
+    for (unsigned int step = 0u; step < 130u; ++step)
+        engine::SourceLossIntegrationTestAccess::Recover(*scene);
+    EXPECT_TRUE(trigger->GetTakes().empty());
+    EXPECT_FALSE(trigger->HasPendingSourceLoss());
+    EXPECT_FALSE(engine::SourceLossIntegrationTestAccess::RecoveryGateIsClosed(*scene));
+    EXPECT_TRUE(externallyRetainedTarget->IsTriggerCaptureInactive());
+    engine::SourceLossIntegrationTestAccess::StartRecording(*scene, trigger, cfg);
+    EXPECT_EQ(engine::TRIGSTATE_RECORDING, trigger->GetState());
+    scene->Shutdown();
+}
+
+TEST_F(SceneRoutingIntegrationTest, ShutdownPreventsRecoveryFromReopeningAdmission)
+{
+    auto scene = FreshScene({ Station("shutdown") }, {});
+    ASSERT_TRUE(scene);
+    engine::SourceLossIntegrationTestAccess::CloseRecoveryGate(*scene);
+    scene->Shutdown();
+    engine::SourceLossIntegrationTestAccess::Recover(*scene);
+    EXPECT_TRUE(engine::SourceLossIntegrationTestAccess::RecoveryGateIsClosed(*scene));
 }
 
 TEST_F(SceneRoutingIntegrationTest, TakeClicksSelectAndToggleMuteWithoutChangingSibling)

@@ -4,6 +4,8 @@
 // while each take and loop retains its own state, anchors, length, and phase.
 
 #include <atomic>
+#include <array>
+#include <bitset>
 #include <cstdint>
 #include <cstddef>
 #include <limits>
@@ -17,6 +19,7 @@
 #include "../graphics/StationModel.h"
 #include "Trigger.h"
 #include "AudioSink.h"
+#include "../base/PublishedAudioSnapshot.h"
 #include "../audio/AudioMixer.h"
 #include "../audio/AudioBuffer.h"
 #include "../base/Jammable.h"
@@ -147,12 +150,12 @@ namespace engine
 			const std::optional<io::UserConfig>& cfg,
 			const std::optional<audio::AudioStreamParams>& params) override;
 		virtual void Reset() override;
-				StationVisualState GetVisualState() const noexcept;
-				void _SetVisualState(StationVisualState state) noexcept;
+		// Job/UI presentation query; never called from the audio callback.
+		StationVisualState GetVisualState() const noexcept;
 		
 		const std::vector<std::shared_ptr<LoopTake>>& GetLoopTakes() const
 		{
-			return (_changesMade && _flipTakeBuffer) ? _backLoopTakes : _loopTakes;
+			return (_HasUncommittedChanges() && _flipTakeBuffer) ? _backLoopTakes : _loopTakes;
 		}
 		std::vector<std::shared_ptr<LoopTake>> GetLoopTakeSnapshot() const;
 		std::uint64_t LoopTakeRevision() const noexcept
@@ -188,10 +191,12 @@ namespace engine
 		void SetNumDacChannels(unsigned int chans);
 		unsigned int NumBusChannels() const;
 		void OnBounce(unsigned int numSamps,
-			io::UserConfig config,
-			std::optional<audio::AudioStreamParams> params = std::nullopt);
+			const io::UserConfig& config,
+			const std::optional<audio::AudioStreamParams>& params = std::nullopt);
 		// Let the UI/job thread reclaim old snapshots after callback work, keeping LoopTake destruction off audio.
 		void AcknowledgeAudioBoundary() noexcept;
+		// Job owner only; lets a gate-proven stopped reader acknowledge publication.
+		bool HasUnacknowledgedAudioState() const noexcept;
 		void ReleaseRetiredAudioStates();
 		std::size_t RetiredAudioStateCount() const noexcept { return _retiredAudioStates.size(); }
 		void SetRackVisibility(bool showStationRack, bool showLoopTakeRacks);
@@ -210,6 +215,8 @@ namespace engine
 		void ObservePhysicalMidiForRecording(const midi::MidiEvent& event, const std::string& deviceName);
 		// Emit synthetic NoteOff for currently held live notes and clear held state.
 		void FlushLiveHeldMidiNotes() noexcept;
+		void FlushLiveHeldMidiNotesForDevice(const std::string& deviceName) noexcept;
+		void FlushPendingLostLiveMidiNotes() noexcept;
 		// Replacement semantics: one MIDI output routes to at most one plugin.
 		void SetMidiVstRoute(unsigned int midiOutputIndex, size_t vstIndex);
 		void ClearMidiVstRoutes();
@@ -274,7 +281,8 @@ namespace engine
 		static void _TrySeedClockFromFirstLoop(const std::shared_ptr<utils::Timer>& clock,
 			unsigned long loopLengthSamps,
 			std::optional<io::UserConfig> cfg,
-			std::optional<audio::AudioStreamParams> params);
+			std::optional<audio::AudioStreamParams> params,
+			const std::string& takeId);
 
 		virtual void _InitReceivers() override;
 		virtual void _InitResources(resources::ResourceLib& resourceLib, bool forceInit) override;
@@ -284,6 +292,34 @@ namespace engine
 			Audible::AudioSourceType source) override;
 		virtual void _ArrangeChildren() override;
 
+		// Prepared/pinned on the structural owner; MIDI ownership is mutated only
+		// by audio dispatch. Counts are per destination, never per changing output index.
+		struct MidiDestination
+		{
+			std::shared_ptr<vst::IVstPlugin> Plugin;
+			std::bitset<midi::MidiNote::TotalNoteSlots> LiveHeld;
+			std::array<std::uint32_t, midi::MidiNote::TotalNoteSlots> LiveNoteOnRevision{};
+			std::array<unsigned int, midi::MidiNote::TotalNoteSlots> PlaybackOwners{};
+		};
+		struct MidiPlaybackBinding
+		{
+			std::shared_ptr<LoopTake> Take;
+			std::shared_ptr<midi::MidiLoop> Loop;
+			std::shared_ptr<MidiDestination> Destination;
+			std::bitset<midi::MidiNote::TotalNoteSlots> Held;
+			std::atomic<bool> HasHeld{ false }; // Audio publishes; job reclaims unused bindings.
+			std::atomic<bool> ReleaseConsumed{ false };
+			std::size_t ReleaseSlot = 0u; // Audio only; preserves the per-block ingress budget.
+			bool ReleaseQueued = false; // Job producer only.
+			bool EmitSourceLossRelease = true; // Frozen before queue publication.
+		};
+		struct SyntheticMidi
+		{
+			midi::MidiEvent Event;
+			MidiPlaybackBinding* Release = nullptr; // Pinned until audio acknowledges.
+			bool SourceLossNoteOff = false;
+			std::uint32_t LiveNoteOnRevision = 0u;
+		};
 		struct AudioState
 		{
 			std::uint64_t Generation = 0u;
@@ -294,7 +330,27 @@ namespace engine
 			std::vector<std::shared_ptr<audio::AudioBuffer>> AudioBuffers;
 			std::vector<float> VstBlockScratch;
 			std::vector<float*> VstBlockPtrs;
+			std::shared_ptr<vst::VstChain> MidiChain;
+			std::vector<std::shared_ptr<MidiDestination>> LiveMidiDestinations;
+			std::vector<std::shared_ptr<MidiDestination>> MidiDestinations;
+			std::vector<std::vector<std::shared_ptr<MidiPlaybackBinding>>> MidiPlaybackRoutes;
 		};
+		class MidiPlaybackSink final : public midi::IMidiOutputSink
+		{
+		public:
+			explicit MidiPlaybackSink(const AudioState& state) noexcept : _state(state) {}
+			void OnEvent(unsigned int outputIndex, const midi::MidiEvent& event) noexcept override;
+		private:
+			const AudioState& _state;
+		};
+		void _PrepareMidiDestinations(AudioState& state);
+		static void _DispatchLiveMidi(const AudioState& state, const midi::MidiEvent& event,
+			bool sourceLossNoteOff, std::uint32_t liveNoteOnRevision) noexcept;
+		static bool _ReleaseLostPlaybackMidi(MidiPlaybackBinding& binding, std::uint32_t sample,
+			unsigned int& budget, unsigned int& slotBudget) noexcept;
+		void _QueueLostPlaybackMidi(const std::shared_ptr<LoopTake>& take, bool emitRelease = true);
+		void _FlushPendingLostPlaybackMidi();
+		bool _TryEnqueueSyntheticMidi(SyntheticMidi entry) noexcept;
 
 		using LoopTakeSnapshot = std::vector<std::weak_ptr<LoopTake>>;
 
@@ -305,9 +361,11 @@ namespace engine
 		std::shared_ptr<const LoopTakeSnapshot> _LoopTakeSnapshotState() const;
 		void _PublishAudioState();
 		std::shared_ptr<const AudioState> _AudioStateSnapshot() const;
+		base::PublishedAudioSnapshot<const AudioState>::Lease _BorrowAudioState() const noexcept;
 
 		gui::GuiRackParams _GetRackParams(utils::Size2d size);
 		std::optional<std::shared_ptr<LoopTake>> _TryGetTake(std::string id);
+		void _SetTakePresentation(LoopTake& take, LoopTake::PresentationMode mode) noexcept;
 		void _WireVuSliders();
 		using MidiVstRoutingSnapshot = midi::MidiVstRoutingSnapshot;
 		static constexpr std::size_t MaxMidiVstRouteOutputs = 4096u;
@@ -322,7 +380,6 @@ namespace engine
 		// then process the audio block.
 		// When vstActive is false only live MIDI is drained (to prevent queue back-log).
 		void _RunVstBlock(vst::VstChain* chain,
-			const MidiVstRoutingSnapshot* routes,
 			const AudioState& state,
 			bool vstActive,
 			unsigned int channelCount,
@@ -333,9 +390,9 @@ namespace engine
 				std::uint32_t& lastSample,
 				const midi::MidiEvent& event) noexcept;
 
-		// Enqueue NoteOffs for any held MIDI notes then call Ditch().
-		// Must be called from the action thread; NoteOffs use the synthetic queue.
-		void _DitchLoopTake(std::shared_ptr<LoopTake>& take) noexcept;
+		// Cancel and remove without resetting resources borrowed by callback snapshots.
+		// Job/UI owners enqueue held NoteOffs; retirement releases resources off callback.
+		void _DitchLoopTake(std::shared_ptr<LoopTake>& take, bool flushLiveHeld = true) noexcept;
 
 		// --- Parameter automation dispatch ---
 
@@ -384,8 +441,8 @@ namespace engine
 		std::shared_ptr<QuantisationModel> _quantisationModel;
 		std::shared_ptr<QuantisationDivisionModel> _quantisationDivisionModel;
 		std::shared_ptr<graphics::StationModel> _stationModel;
-				std::atomic<std::uint8_t> _publishedVisualState{
-					static_cast<std::uint8_t>(StationVisualState::STATIONSTATE_DEFAULT) };
+		// Structural job owner orders meaningful accepted capture-mode changes.
+		std::uint64_t _nextPresentationSerial = 1u;
 		std::shared_ptr<gui::GuiRack> _guiRack;
 		std::shared_ptr<audio::AudioMixer> _masterMixer;
 		std::shared_ptr<gui::GuiToggle> _mixerToggle;
@@ -399,7 +456,7 @@ namespace engine
 		std::vector<std::shared_ptr<audio::AudioMixer>> _backAudioMixers;
 		std::vector<std::shared_ptr<audio::AudioBuffer>> _audioBuffers;
 		std::vector<std::shared_ptr<audio::AudioBuffer>> _backAudioBuffers;
-		std::atomic<std::shared_ptr<const AudioState>> _audioState;
+		base::PublishedAudioSnapshot<const AudioState> _audioState;
 		struct RetiredAudioState
 		{
 			std::uint64_t ReleaseAfterGeneration = 0u;
@@ -441,13 +498,21 @@ namespace engine
 		mutable std::mutex _vstPathsMutex;
 		std::vector<std::wstring> _vstPluginPaths;
 		midi::MidiQueue<1024> _immediateLiveMidiIngress;
-		midi::MidiQueue<1024> _syntheticLiveMidiIngress;
+		midi::MidiQueue<1024, SyntheticMidi> _syntheticLiveMidiIngress;
+		std::vector<std::weak_ptr<MidiDestination>> _midiDestinations;
+		std::vector<std::shared_ptr<MidiPlaybackBinding>> _midiPlaybackBindings;
+		std::vector<std::shared_ptr<MidiPlaybackBinding>> _pendingLostPlaybackMidi;
 		bool _hasLastImmediateLiveMidiSample = false;
 		std::uint32_t _lastImmediateLiveMidiSample = 0u;
 		bool _hasLastSyntheticLiveMidiSample = false;
 		std::uint32_t _lastSyntheticLiveMidiSample = 0u;
 		mutable std::mutex _liveHeldMidiMutex;
 		std::vector<std::pair<std::string, midi::MidiNoteSnapshot>> _liveHeldMidi;
+		midi::MidiNoteSnapshot _anonymousLiveHeldMidi;
+		std::bitset<midi::MidiNote::TotalNoteSlots> _pendingLostLiveMidiNoteOffs;
+		// Audio publishes delivered live note-ons; job snapshots that revision for
+		// lost-live releases. Dropped ingress must never reserve note ownership.
+		std::array<std::atomic<std::uint32_t>, midi::MidiNote::TotalNoteSlots> _liveNoteOnRevisions{};
 		std::vector<int> _allowedMidiChannels;
 		std::atomic<std::uint16_t> _allowedMidiChannelMask{ 0u };
 		// Route snapshots are published off the audio thread.

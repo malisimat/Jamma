@@ -13,10 +13,14 @@ namespace gui
 		static glm::vec3 Control() { return { 1.0f, 0.7f, 0.2f }; }
 		static glm::vec3 Edge() { return { 0.66f, 0.77f, 0.80f }; }
 		static constexpr int StatusBarHeight = 28;
-		static int StatusBarWidth(int viewportWidth) { return std::max(0, viewportWidth - 368); }
-		static int StatusColumnWidth(int barWidth) { return std::min(220, barWidth); }
-		static int VersionColumnWidth(int barWidth) { return std::min(160, std::max(0, barWidth - StatusColumnWidth(barWidth))); }
-		static int MessageColumnWidth(int barWidth) { return std::max(0, barWidth - StatusColumnWidth(barWidth) - VersionColumnWidth(barWidth)); }
+		static int StatusBarWidth(int viewportWidth) { return std::max(0, viewportWidth); }
+		// Reserve tempo first so narrow windows lose messages before BPM/BPI.
+		// 19px Inter: widest three-digit BPM/BPI text fits with 8px padding.
+		static constexpr int TempoColumnMaxWidth = 160;
+		static int TempoColumnWidth(int barWidth) { return std::min(TempoColumnMaxWidth, barWidth); }
+		static int VersionColumnWidth(int barWidth) { return std::min(160, std::max(0, barWidth - TempoColumnWidth(barWidth))); }
+		static int StatusColumnWidth(int barWidth) { return std::min(220, std::max(0, barWidth - TempoColumnWidth(barWidth) - VersionColumnWidth(barWidth))); }
+		static int MessageColumnWidth(int barWidth) { return std::max(0, barWidth - TempoColumnWidth(barWidth) - StatusColumnWidth(barWidth) - VersionColumnWidth(barWidth)); }
 		static constexpr float PanelFillOpacity = 0.80f;
 		static constexpr float HudFillOpacity = 0.48f;
 		static constexpr float HudBorderOpacity = 0.50f;

@@ -14,8 +14,8 @@
 After edits in audio-thread code, manually inspect these callback-owned functions before finishing a change:
 
 - `Scene::OnTick`
-- `Scene::AudioCallback`
-- `Scene::_OnAudio`
+- `AudioHost::AudioCallback`
+- `AudioHost::_OnAudio`
 - `Loop::WriteBlock`
 - `LoopTake::Zero`
 - `LoopTake::WriteBlock`
@@ -51,3 +51,21 @@ Reject any addition of blocking or lock-based primitives inside those bodies, in
 - Hidden global mutable state.
 - Monolithic functions mixing state changes, I/O, and control flow.
 - Exception-driven control flow in real-time paths.
+
+## Published audio snapshots
+
+`PublishedAudioSnapshot<T>` keeps `shared_ptr` ownership on non-callback
+threads and gives the audio reader a bounded, move-only borrow. Keep
+`load`, `store`, `exchange`, and `collect` off the callback; serialize writer
+calls to `store`, `exchange`, and `collect`. Each snapshot publisher supports
+eight simultaneous leases across all readers, and each `borrow` makes at most
+four publication attempts.
+Check `ReadSucceeded()` to distinguish a successfully read empty publication
+from a bounded read failure; a successful empty lease has no value.
+
+Keep published topology and ownership immutable while a lease can reference
+them. Mutable processor state still requires its own thread ownership or
+atomic publication rules; a lease protects lifetime only. Before
+destroying the snapshot owner, stop its audio reader and release all leases.
+Call `collect` from a writer or another non-callback pump so retired objects
+whose leases ended can be reclaimed even when no further publication occurs.

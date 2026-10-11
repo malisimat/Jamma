@@ -6,6 +6,7 @@
 #include <functional>
 #include <iosfwd>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <vector>
 #include "MidiQueue.h"
@@ -25,6 +26,18 @@ namespace midi
 	{
 		std::vector<MidiInputDeviceInfo> Devices;
 		std::string Error;
+	};
+	class MidiInputEnumerator
+	{
+	public:
+		MidiInputEnumerator();
+		~MidiInputEnumerator();
+		// Off-callback only. Serializes client creation and device queries.
+		MidiInputInventory Inventory();
+
+	private:
+		std::mutex _mutex;
+		std::unique_ptr<rt::midi::RtMidiIn> _client;
 	};
 	enum class MidiConnectionStatus { Disabled, Missing, Ambiguous, Failed, Connected };
 	struct MidiConnectionAttempt
@@ -60,6 +73,10 @@ namespace midi
 
 		static std::vector<MidiInputDeviceInfo> EnumerateInputDevices();
 		static MidiInputInventory InventoryInputDevices();
+		// Job-side comparison of successful actual connections, never inventory
+		// membership. WinMM enumeration indices/suffixes are not stable identities.
+		static std::vector<std::string> LostConnectedInputNames(
+			const MidiConnectionResult& previous, const MidiConnectionResult& refreshed);
 		static std::string BaseInputName(const std::string& portName, unsigned int portId);
 		static std::string ResolveSavedInputName(const std::string& savedName,
 			const std::vector<MidiInputDeviceInfo>& devices);

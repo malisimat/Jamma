@@ -351,44 +351,49 @@ void GuiHud::Draw(base::DrawContext& ctx)
 	auto pos = Position();
 	glCtx.PushMvp(glm::translate(glm::mat4(1.0f), glm::vec3((float)pos.X, (float)pos.Y, 0.0f)));
 
-	for (auto& child : _children)
-		child->Draw(ctx);
-
-	_DrawCables(ctx);
-
-	const auto drawSourceOverlays = [this, &ctx, &glCtx](const std::shared_ptr<GuiScrollPanel>& scroll,
-		io::RigFileRouting::SourceKind kind)
 	{
-		if (!scroll)
-			return;
-		const auto clip = _ContentClip(scroll);
-		glCtx.PushScissorRect({ clip.Left, clip.Bottom }, {
-			static_cast<unsigned int>(clip.Right - clip.Left), static_cast<unsigned int>(clip.Top - clip.Bottom) });
-		for (size_t i = 0u; i < _sourceWidgets.size(); ++i)
+		auto controlsOpacity = ctx.WithOpacity(1.0f - _editModeAlpha);
+		for (auto& child : _children)
+			if (child != _statusPanel) child->Draw(ctx);
+
+		_DrawCables(ctx);
+
+		const auto drawSourceOverlays = [this, &ctx, &glCtx](const std::shared_ptr<GuiScrollPanel>& scroll,
+			io::RigFileRouting::SourceKind kind)
 		{
-			if (_sourceEndpoints[i].Kind != kind)
-				continue;
-			_inputVus[i]->Draw(ctx);
-			_DrawOverlayElement(ctx, _sourceWidgets[i].Socket);
-		}
-		glCtx.PopScissorRect();
-	};
-	drawSourceOverlays(_topAudioScroll, io::RigFileRouting::SourceKind::Adc);
-	drawSourceOverlays(_topMidiScroll, io::RigFileRouting::SourceKind::Midi);
-	if (_triggerScroll)
-	{
-		const auto clip = _ContentClip(_triggerScroll);
-		glCtx.PushScissorRect({ clip.Left, clip.Bottom }, {
-			static_cast<unsigned int>(clip.Right - clip.Left), static_cast<unsigned int>(clip.Top - clip.Bottom) });
-		for (const auto& widgets : _triggerWidgets)
+			if (!scroll)
+				return;
+			const auto clip = _ContentClip(scroll);
+			glCtx.PushScissorRect({ clip.Left, clip.Bottom }, {
+				static_cast<unsigned int>(clip.Right - clip.Left), static_cast<unsigned int>(clip.Top - clip.Bottom) });
+			for (size_t i = 0u; i < _sourceWidgets.size(); ++i)
+			{
+				if (_sourceEndpoints[i].Kind != kind)
+					continue;
+				_inputVus[i]->Draw(ctx);
+				_DrawOverlayElement(ctx, _sourceWidgets[i].Socket);
+			}
+			glCtx.PopScissorRect();
+		};
+		drawSourceOverlays(_topAudioScroll, io::RigFileRouting::SourceKind::Adc);
+		drawSourceOverlays(_topMidiScroll, io::RigFileRouting::SourceKind::Midi);
+		if (_triggerScroll)
 		{
-			_DrawOverlayElement(ctx, widgets.Close);
-			_DrawOverlayElement(ctx, widgets.InputSocket);
-			_DrawOverlayElement(ctx, widgets.OutputSocket);
+			const auto clip = _ContentClip(_triggerScroll);
+			glCtx.PushScissorRect({ clip.Left, clip.Bottom }, {
+				static_cast<unsigned int>(clip.Right - clip.Left), static_cast<unsigned int>(clip.Top - clip.Bottom) });
+			for (const auto& widgets : _triggerWidgets)
+			{
+				_DrawOverlayElement(ctx, widgets.Close);
+				_DrawOverlayElement(ctx, widgets.InputSocket);
+				_DrawOverlayElement(ctx, widgets.OutputSocket);
+			}
+			glCtx.PopScissorRect();
 		}
-		glCtx.PopScissorRect();
+		_DrawCableSockets(ctx);
 	}
-	_DrawCableSockets(ctx);
+	// The status bar keeps its incoming opacity while the surrounding controls fade.
+	if (_statusPanel) _statusPanel->Draw(ctx);
 
 	glCtx.PopMvp();
 }
@@ -625,7 +630,7 @@ void GuiHud::_BuildTriggerRail()
 	_addTriggerButton = std::make_shared<GuiHudActionButton>(addParams, [this]() { _AddTrigger(); });
 	_triggerRail->AddChild(_addTriggerButton);
 
-	GuiLabelParams statusParams = GuiLabelParams::PanelScrollRow("Trigger routing ready", 0u);
+	GuiLabelParams statusParams = GuiLabelParams::PanelScrollRow("", 0u);
 	statusParams.Ellipsize = true;
 	statusParams.Size = { 300u, GuiLabelParams::RowHeight };
 	statusParams.MinSize = { 160u, GuiLabelParams::RowHeight };
@@ -893,9 +898,9 @@ void GuiHud::_LayoutPanels()
 	_statusPanel->SetPosition({ 0, 0 });
 	_statusPanel->SetSize({ static_cast<unsigned int>(width), static_cast<unsigned int>(statusHeight) });
 	_statusPanel->SetVisible(width > 0 && statusHeight > 0);
-	_routingStatusLabel->SetPosition({ width - statusWidth, std::max(0, (statusHeight - 22) / 2) });
+	_routingStatusLabel->SetPosition({ GuiStyle::TempoColumnWidth(statusWidth), std::max(0, (statusHeight - 22) / 2) });
 	_routingStatusLabel->SetSize({ static_cast<unsigned int>(GuiStyle::StatusColumnWidth(statusWidth)), 22u });
-	_routingStatusLabel->SetVisible(statusWidth > 0 && statusHeight >= 22);
+	_routingStatusLabel->SetVisible(GuiStyle::StatusColumnWidth(statusWidth) > 0 && statusHeight >= 22);
 	if (_revealNewestTrigger && !_triggerNames.empty())
 	{
 		_RevealTrigger(_triggerNames.size() - 1u);
@@ -1296,12 +1301,12 @@ void GuiHud::_UpdateRoutingEditPresentation()
 		_triggerWidgets[i].Close->SetEnabled(ready && trigger && trigger->CanEditRouting());
 	}
 
-	if (!_routingStatusLabel || _lastRoutingEditAvailability == availability)
+	if (!_routingStatusLabel || !_quantisationFeedback.empty() || _lastRoutingEditAvailability == availability)
 		return;
 	_lastRoutingEditAvailability = availability;
 	switch (availability)
 	{
-	case RoutingEditAvailability::Ready: _routingStatusLabel->SetString("Trigger routing ready"); break;
+	case RoutingEditAvailability::Ready: _routingStatusLabel->SetString(""); break;
 	case RoutingEditAvailability::Applying: _routingStatusLabel->SetString("Applying trigger routing..."); break;
 	case RoutingEditAvailability::AudioCallbackInactive: _routingStatusLabel->SetString("Start audio to edit trigger routing"); break;
 	case RoutingEditAvailability::TriggerBusy: _routingStatusLabel->SetString("Finish trigger action to edit routing"); break;
@@ -1932,4 +1937,17 @@ std::shared_ptr<GuiButton> GuiHud::_MakeTriggerButton(const std::string& text,
 	labelParams.CenterHorizontally = true;
 	button->AddChild(std::make_shared<GuiLabel>(labelParams));
 	return button;
+}
+
+void gui::GuiHud::SetQuantisationFeedback(const std::string& text)
+{
+	if (_quantisationFeedback == text) return;
+	_quantisationFeedback = text;
+	if (!_routingStatusLabel) return;
+	if (!text.empty()) _routingStatusLabel->SetString(text);
+	else
+	{
+		// Force normal routing status to recover on the next HUD update.
+		_lastRoutingEditAvailability.reset();
+	}
 }

@@ -9,6 +9,8 @@
 #include "../resources/ResourceLib.h"
 #include "../base/DrawContext.h"
 
+namespace gui { class GuiLabel; }
+
 namespace graphics
 {
 	class GlDrawContext;
@@ -35,6 +37,7 @@ namespace graphics
 		// Call this when Ctrl is pressed to pin the panel location.
 		void SetAnchor(utils::Position2d screenPos, utils::Size2d sceneSize) noexcept;
 		void SetVisibleButtonCount(int count) noexcept;
+		void SetActiveButton(int index) noexcept { _activeButton = index; }
 		void SetButtonScope(int index, ButtonScope scope) noexcept;
 		int VisibleButtonCount() const noexcept { return _visibleButtonCount; }
 		int HitTestButton(utils::Position2d pos) const noexcept;
@@ -77,6 +80,8 @@ namespace graphics
 		utils::Position2d _anchorPos{};
 		utils::Size2d _sceneSize{};
 		int _visibleButtonCount = NumButtons;
+		int _activeButton = -1;
+		std::array<std::shared_ptr<gui::GuiLabel>, NumButtons> _captions;
 		std::array<ButtonScope, NumButtons> _buttonScopes = {
 			ButtonScope::Global,
 			ButtonScope::Global

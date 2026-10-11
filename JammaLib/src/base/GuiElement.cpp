@@ -284,14 +284,14 @@ void GuiElement::FinalizeEdits()
 std::vector<JobAction> GuiElement::CommitChanges()
 {
 	std::vector<JobAction> jobList = {};
-	if (_changesMade)
+	if (_changesMade.exchange(false, std::memory_order_acq_rel))
 	{
+		_committingChanges.store(true, std::memory_order_release);
 		auto jobs = _CommitChanges();
+		_committingChanges.store(false, std::memory_order_release);
 		if (!jobs.empty())
 			jobList.insert(jobList.end(), jobs.begin(), jobs.end());
 	}
-
-	_changesMade = false;
 
 	for (auto& child : _children)
 	{
@@ -486,6 +486,14 @@ ActionResult GuiElement::OnAction(TouchMoveAction action)
 void GuiElement::SetParent(std::shared_ptr<GuiElement> parent)
 {
 	_parent = parent;
+}
+
+void GuiElement::DetachGuiOwnershipForRetirement() noexcept
+{
+	for (const auto& child : _children)
+		if (child) child->DetachGuiOwnershipForRetirement();
+	_receiver.reset();
+	_parent.reset();
 }
 
 std::shared_ptr<GuiElement> GuiElement::Parent() const

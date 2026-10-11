@@ -11,6 +11,7 @@
 #include "../actions/GuiAction.h"
 #include "../gui/GuiSlider.h"
 #include "../gui/GuiVu.h"
+#include "CaptureSourceMuteControl.h"
 
 namespace audio
 {
@@ -231,6 +232,17 @@ namespace audio
 		virtual actions::ActionResult OnAction(actions::GuiAction action) override;
 		virtual bool Mute() override;
 		virtual bool UnMute() override;
+		bool IsMuted() const override;
+		bool IsCaptureSourceMuted() const noexcept {
+			return _captureSourceMuteControl &&
+				(_captureSourceMuteControl->IsTransientMuted() ||
+				 (_captureSourceMuteControl->IsReplacementMuted() &&
+				  _replacementAuditionRevision.load(std::memory_order_acquire) !=
+				  _captureSourceMuteControl->ReplacementRevision()));
+		}
+		bool AllowReplacementPlayback() noexcept;
+		// Bind once on the job owner before this mixer is published to audio.
+		void SetCaptureSourceMuteControl(const std::shared_ptr<const CaptureSourceMuteControl>& control) noexcept;
 
 		double Level() const;
 		double UnmutedLevel() const;
@@ -264,7 +276,15 @@ namespace audio
 		static const utils::Size2d _DragGap;
 		static const utils::Size2d _DragSize;
 
-		double _unmutedFadeTarget;
+		std::atomic<double> _unmutedFadeTarget;
+		static_assert(std::atomic<double>::is_always_lock_free);
+		// Immutable after publication. Job/UI publish flags and desired level;
+		// audio alone mutates the fade, then publishes its current level per block.
+		std::shared_ptr<const CaptureSourceMuteControl> _captureSourceMuteControl;
+		std::atomic<std::uint64_t> _replacementAuditionRevision{0u};
+		double _appliedFadeTarget = DefaultLevel; // Audio owner only after publication.
+		std::atomic<double> _publishedFadeLevel{ DefaultLevel };
+		void _ApplyFadeTargetAtAudioBoundary() noexcept;
 		std::unique_ptr<MixBehaviour> _behaviour;
 		std::unique_ptr<InterpolatedValue> _fade;
 		gui::GuiVu _vu;

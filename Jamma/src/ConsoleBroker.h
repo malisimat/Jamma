@@ -31,7 +31,7 @@ namespace console
 			std::shared_ptr<CommandMailbox> commands, std::string initialStatus);
 		bool ToggleVisibility(const std::wstring& companionPath,
 			std::shared_ptr<CommandMailbox> commands, std::string initialStatus);
-		void UpdateVisibility() noexcept;
+		void UpdateVisibility(HWND appWindow) noexcept;
 		bool Connected() const noexcept;
 		bool ConsumeFallbackNotice() noexcept;
 		std::shared_ptr<OutboundMailbox> Events() const noexcept;

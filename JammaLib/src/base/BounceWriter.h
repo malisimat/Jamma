@@ -12,6 +12,9 @@ namespace base
 	public:
 		virtual ~BounceWriter() = default;
 
+		virtual void BeginCaptureBlock(unsigned int numSamps) noexcept {}
+		virtual void EndCaptureBlock(unsigned int numSamps) noexcept {}
+
 		virtual void WriteBlock(const std::shared_ptr<MultiAudioSink> dest,
 			const float* srcBuf,
 			unsigned int numSamps,

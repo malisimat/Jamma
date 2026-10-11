@@ -1,3 +1,5 @@
+#include <iomanip>
+#include <sstream>
 #include "Quantiser.h"
 
 #include <algorithm>
@@ -141,6 +143,11 @@ void Quantiser::Clear(bool clearTapTempo, bool preserveTiming)
 	}
 
 	_masterLoop.reset();
+	if (!preserveTiming)
+	{
+		_acceptedRemoteGrid = {};
+		_gridSource.store(QuantisationGridSource::Default, std::memory_order_release);
+	}
 	_armReclock.store(false, std::memory_order_release);
 	_preReclockTakeIds.clear();
 
@@ -158,6 +165,9 @@ void Quantiser::ArmReclock()
 
 void Quantiser::ArmReclock(const std::vector<std::shared_ptr<engine::Station>>& stations)
 {
+	_reclockGeneration.fetch_add(1u, std::memory_order_acq_rel);
+	_acceptedRemoteGrid = {};
+	_gridSource.store(QuantisationGridSource::Default, std::memory_order_release);
 	if (_clock)
 		_clock->Clear();
 	_masterLoop.reset();
@@ -189,6 +199,7 @@ void Quantiser::ApplyTiming(const QuantisationTiming& timing, const char* source
 
 	_effectiveQuantiseSamps.store(timing.SeedSamps, std::memory_order_release);
 	_activeGridDivisions.store(timing.Bpi, std::memory_order_release);
+	_gridSource.store(QuantisationGridSource::Default, std::memory_order_release);
 	_armReclock.store(false, std::memory_order_release);
 
 	std::cout << "Quantisation " << source
@@ -207,15 +218,14 @@ void Quantiser::SetMidiGrain(unsigned int grainSamps,
 	unsigned int takeCount = 0u;
 	for (const auto& station : stations)
 	{
-		if (!station)
+		if (!station || station->IsRemote())
 			continue;
 
 		for (const auto& take : station->GetLoopTakes())
 		{
 			if (!take)
 				continue;
-			// A local/tap update supersedes the live remote descriptor.
-			take->SetRemoteMidiQuantisationGrid({}, 0u);
+			// Grain publication never changes remote timing authority.
 
 			midi::MidiQuantisationSettings settings = take->MidiQuantisation();
 			if (settings.GrainSamps != grainSamps)
@@ -235,6 +245,10 @@ void Quantiser::SetRemoteMidiGrid(const RemoteTransportGeometry& geometry,
 	std::int64_t originSamps,
 	const std::vector<std::shared_ptr<Station>>& stations)
 {
+	const auto changed = _acceptedRemoteGrid.IntervalLengthSamps != geometry.IntervalLengthSamps
+		|| _acceptedRemoteGrid.Bpi != geometry.Bpi;
+	_acceptedRemoteGrid = geometry;
+	_gridSource = geometry.IntervalLengthSamps && geometry.Bpi ? QuantisationGridSource::Remote : QuantisationGridSource::Default;
 	for (const auto& station : stations)
 	{
 		if (!station)
@@ -242,7 +256,10 @@ void Quantiser::SetRemoteMidiGrid(const RemoteTransportGeometry& geometry,
 		for (const auto& take : station->GetLoopTakes())
 		{
 			if (take)
+			{
 				take->SetRemoteMidiQuantisationGrid(geometry, originSamps);
+				if (changed) take->SetMidiBaseGrid(0u, 0u);
+			}
 		}
 	}
 }
@@ -274,165 +291,191 @@ std::int32_t Quantiser::ResolvePhaseOffsetDrag(std::int32_t startOffsetSamps,
 }
 
 bool Quantiser::HandleTapTempo(std::uint64_t estimatedSampleAt,
-	unsigned int sampleRate,
-	const std::vector<std::shared_ptr<Station>>& stations,
-	const io::UserConfig& cfg)
+    unsigned int sampleRate,
+    const std::vector<std::shared_ptr<Station>>& stations,
+    const io::UserConfig& cfg)
 {
-	// First recordings establish their master locally, before a user has used
-	// the hover/master UI. After reclock, only takes created after the arm point
-	// participate; older loops may continue playing on their old rulers.
-	if (_masterLoopLengthSamps.load(std::memory_order_acquire) == 0ul)
-	{
-		std::shared_ptr<Loop> soleLoop;
-		unsigned int musicalLoopCount = 0u;
-		for (const auto& station : stations)
-			if (station && !station->IsRemote())
-				for (const auto& take : station->GetLoopTakes())
-					if (take && take->VisualLoopLengthSamps() > 0ul
-						&& (_preReclockTakeIds.empty()
-							|| std::find(_preReclockTakeIds.begin(), _preReclockTakeIds.end(), take->Id())
-								== _preReclockTakeIds.end()))
-					{
-						++musicalLoopCount;
-						if (!take->GetLoops().empty())
-							soleLoop = take->GetLoops().front();
-					}
-		if (musicalLoopCount == 1u && soleLoop)
-		{
-			_masterLoop = soleLoop;
-			_masterLoopLengthSamps.store(soleLoop->LoopLength(), std::memory_order_release);
-			_masterOriginalBufferLengthSamps.store(soleLoop->PhysicalLoopLength(), std::memory_order_release);
-		}
-	}
+    PulseOverlay();
+    unsigned int eligible = 0u;
+    std::shared_ptr<LoopTake> soleTake;
+    for (const auto& station : stations)
+        if (station && !station->IsRemote())
+            for (const auto& take : station->GetLoopTakes())
+                if (take && take->IsCompletedRecording()
+                    && std::find(_preReclockTakeIds.begin(), _preReclockTakeIds.end(), take->Id()) == _preReclockTakeIds.end())
+                {
+                    ++eligible;
+                    soleTake = take;
+                }
+    const bool remote = _acceptedRemoteGrid.IntervalLengthSamps > 0ul && _acceptedRemoteGrid.Bpi > 0u;
+    if (eligible == 1u && !_masterLoopLengthSamps.load(std::memory_order_acquire))
+    {
+        _masterLoop = soleTake->GetLoops().empty() ? nullptr : soleTake->GetLoops().front();
+        const auto length = soleTake->VisualLoopLengthSamps();
+        _masterLoopLengthSamps.store(length, std::memory_order_release);
+        _masterOriginalBufferLengthSamps.store(_masterLoop ? _masterLoop->PhysicalLoopLength() : length, std::memory_order_release);
+    }
+    const auto original = _masterOriginalBufferLengthSamps.load(std::memory_order_acquire);
+    const auto interval = remote ? _acceptedRemoteGrid.IntervalLengthSamps :
+        (eligible == 1u && original ? original : (_clock ? _clock->SeedSourceLength() : 0ul));
+    std::optional<QuantisationTiming> timing;
+    double requestedDivisions = 0.0;
+    double smoothedGap = 0.0;
+    {
+        std::scoped_lock tapTempoLock(_tapTempoMutex);
+        timing = _tapTempo.TapAtSample(estimatedSampleAt, sampleRate, interval, Policy(cfg));
+        smoothedGap = _tapTempo.EstimatedGapSamps();
+        if (smoothedGap > 0.0) requestedDivisions = interval / smoothedGap;
+    }
+    if (!timing)
+    {
+        std::cout << "[quantisation] tap sequence/no update: sample=" << estimatedSampleAt
+            << " generation=" << ReclockGeneration() << " sr=" << sampleRate << " eligible=" << eligible << " authority=" << (remote ? "remote" : "local") << std::endl;
+        return false;
+    }
+    if (eligible != 1u || remote)
+    {
+        const auto grain = _clock ? _clock->QuantiseSamps() : 0u;
+        const auto base = remote ? _acceptedRemoteGrid.Bpi :
+            (grain && _clock ? static_cast<unsigned int>(_clock->SeedSourceLength() / grain) : 0u);
+        if (!base || !interval)
+        {
+            std::cout << "[quantisation] tap rejected: no valid base geometry generation=" << ReclockGeneration()
+                << " eligible=" << eligible << " sr=" << sampleRate << " interval=" << interval << " grain=" << grain << std::endl;
+            return false;
+        }
+        const auto previous = ActiveGridDivisions();
+        const auto selected = NearestPermittedDivision(base, requestedDivisions);
+        for (const auto& station : stations)
+            if (station && !station->IsRemote())
+                for (const auto& take : station->GetLoopTakes())
+                    if (take && (static_cast<std::uint64_t>(take->VisualLoopLengthSamps()) * selected + interval - 1u) / interval > 8192u)
+                    {
+                        std::cout << "[quantisation] tap rejected: effective grid exceeds 8192 cells take=" << take->Id() << std::endl;
+                        return false;
+                    }
+        _activeGridDivisions.store(selected, std::memory_order_release);
+        _gridSource = remote ? QuantisationGridSource::Remote : QuantisationGridSource::Tap;
+        for (const auto& station : stations)
+            if (station && !station->IsRemote())
+                for (const auto& take : station->GetLoopTakes())
+                    if (take)
+                    {
+                        // A frozen master keeps its grain/beat grid; tapping selects
+                        // the subdivision itself, also shown by the fraction radio.
+                        take->SetMidiBaseGrid(static_cast<std::uint32_t>(interval), base);
+                        auto settings = take->MidiQuantisation();
+                        for (const auto fraction : midi::MidiQuantisation::FractionDisplayOrder)
+                            if (midi::MidiQuantisation::Divisor(fraction) == selected / base)
+                                settings.Fraction = fraction;
+                        take->SetMidiQuantisation(settings);
+                    }
+        unsigned int minimumDivisor = 32u;
+        unsigned int maximumDivisor = 1u;
+        for (const auto& station : stations)
+            if (station && !station->IsRemote())
+                for (const auto& take : station->GetLoopTakes())
+                    if (take)
+                    {
+                        const auto divisor = midi::MidiQuantisation::Divisor(take->ResolvedMidiQuantisation().Fraction);
+                        minimumDivisor = (std::min)(minimumDivisor, divisor);
+                        maximumDivisor = (std::max)(maximumDivisor, divisor);
+                    }
+        std::cout << "[quantisation] tap subdivisions " << (previous == selected ? "unchanged" : "accepted")
+            << ": generation=" << ReclockGeneration() << " sr=" << sampleRate << " eligible=" << eligible
+            << " authority=" << (remote ? "remote" : "local") << " interval=" << interval
+            << " grain=" << grain << " base=" << base << " requested=" << timing->Bpi
+            << " before=" << previous << " gap=" << smoothedGap << " gapMs=" << (1000.0 * smoothedGap / sampleRate)
+            << " bpm=" << (60.0 * sampleRate / smoothedGap) << " fractionDivisors=" << minimumDivisor << ".." << maximumDivisor
+            << " effectiveCells=" << base * minimumDivisor << ".." << base * maximumDivisor
+            << " requestedRatio=" << requestedDivisions << " selected=" << selected << " tie=smaller geometry=preserved" << std::endl;
+        return true;
+    }
+    if (!LocalAudioGeometry::Create(original, timing->MasterLoopSamps, timing->SeedSamps, timing->Bpi))
+    {
+        std::cout << "[quantisation] tap geometry rejected: generation=" << ReclockGeneration()
+            << " physical=" << original << " logical=" << timing->MasterLoopSamps << " grain=" << timing->SeedSamps
+            << " grains=" << timing->Bpi << std::endl;
+        return false;
+    }
+    // The recording's physical storage remains intact; Loop::Play only changes
+    // its logical boundary and retains the recorded tail for a later resolution.
+    for (const auto& loop : soleTake->GetLoops())
+        if (loop) loop->Play(loop->PlayIndex(), timing->MasterLoopSamps, false);
+    soleTake->SetMidiBaseGrid(timing->MasterLoopSamps, timing->Bpi);
+    SetSeedUsesPowers(cfg.Loop.SeedUsesPowers);
+    ApplyTiming(*timing, "tap tempo");
+    _gridSource.store(QuantisationGridSource::Tap, std::memory_order_release);
+    _masterLoopLengthSamps.store(timing->MasterLoopSamps, std::memory_order_release);
+    SetMidiGrain(timing->SeedSamps, "tap tempo", stations);
+    std::cout << "[quantisation] tap geometry accepted: take=" << soleTake->Id()
+        << " generation=" << ReclockGeneration() << " sr=" << sampleRate << " eligible=" << eligible
+        << " authority=local source=tap physical=" << original << " logical=" << timing->MasterLoopSamps
+        << " grain=" << timing->SeedSamps << " grains=" << timing->Bpi << " bpm=" << timing->Bpm
+        << " gap=" << smoothedGap << " fraction=" << midi::MidiQuantisation::FractionLabel(soleTake->ResolvedMidiQuantisation().Fraction)
+        << " effectiveCells=" << soleTake->ResolvedMidiQuantisation().GridDivisions()
+        << " tail=" << original - timing->MasterLoopSamps << " rounding=nearest-beats/up-ties,floor-grain" << std::endl;
+    return true;
+}
 
-	std::optional<QuantisationTiming> timing;
-	{
-		std::scoped_lock tapTempoLock(_tapTempoMutex);
-		const auto masterLoopLengthSamps = _masterLoopLengthSamps.load(std::memory_order_acquire);
-		if (masterLoopLengthSamps == 0ul)
-		{
-			std::cout << "Tap tempo: no master loop, tap ignored" << std::endl;
-			return true;
-		}
-
-		timing = _tapTempo.TapAtSample(estimatedSampleAt,
-			sampleRate,
-			masterLoopLengthSamps,
-			Policy(cfg));
-	}
-
-	if (!timing.has_value())
-	{
-		std::cout << "Tap tempo: first tap" << std::endl;
-		return true;
-	}
-
-	// Only the sole committed local loop in the current reclock generation may
-	// redefine local geometry. A LoopTake is one musical loop regardless of its
-	// number of audio channels.
-	// A LoopTake is one musical loop regardless of its number of audio channels.
-	unsigned int committedLocalLoops = 0u;
-	for (const auto& station : stations)
-		if (station && !station->IsRemote())
-			for (const auto& take : station->GetLoopTakes())
-				if (take && take->VisualLoopLengthSamps() > 0ul
-					&& (_preReclockTakeIds.empty()
-						|| std::find(_preReclockTakeIds.begin(), _preReclockTakeIds.end(), take->Id())
-							== _preReclockTakeIds.end()))
-					++committedLocalLoops;
-
-	const auto originalLength = _masterOriginalBufferLengthSamps.load(std::memory_order_acquire);
-	const auto canResizeMaster = committedLocalLoops == 1u && _masterLoop && originalLength > 0ul;
-	const auto quantisation = cfg.Loop.SeedUsesPowers ? utils::Timer::QUANTISE_POWER : utils::Timer::QUANTISE_MULTIPLE;
-	if (!canResizeMaster)
-	{
-		// Local audio geometry is frozen. Pick the nearest permitted musical
-		// division LocalBPI * 2^p; ties resolve toward the smaller division.
-		const auto localMasterLength = _clock ? _clock->SeedSourceLength() : 0ul;
-		const auto localGrain = _clock ? _clock->QuantiseSamps() : 0u;
-		const auto localBpi = localGrain == 0u ? 0u : static_cast<unsigned int>(localMasterLength / localGrain);
-		if (localBpi == 0u)
-			return true;
-		const auto requested = static_cast<double>(_masterLoopLengthSamps.load(std::memory_order_acquire)) /
-			std::max(1u, timing->SeedSamps);
-		unsigned int best = localBpi;
-		for (unsigned int p = 1u; p < 16u && best <= std::numeric_limits<unsigned int>::max() / 2u; ++p)
-		{
-			const auto candidate = localBpi << p;
-			if (std::abs(static_cast<double>(candidate) - requested) < std::abs(static_cast<double>(best) - requested))
-				best = candidate;
-		}
-		_activeGridDivisions.store(best, std::memory_order_release);
-		return true;
-	}
-
-	if (auto geometry = LocalAudioGeometry::Create(originalLength, timing->MasterLoopSamps,
-		timing->SeedSamps, timing->Bpi); !geometry.has_value())
-		return true;
-
-	// Apply the sole take's logical boundary before publishing the replacement
-	// timer geometry. A take may contain several audio channels, but it is one
-	// musical loop and every channel must retain the same geometry.
-	for (const auto& station : stations)
-	{
-		if (!station || station->IsRemote())
-			continue;
-		for (const auto& take : station->GetLoopTakes())
-		{
-			if (!take)
-				continue;
-			const auto& loops = take->GetLoops();
-			if (std::find(loops.begin(), loops.end(), _masterLoop) == loops.end())
-				continue;
-			for (const auto& loop : loops)
-				if (loop)
-					loop->Play(loop->PlayIndex(), timing->MasterLoopSamps, false);
-			break;
-		}
-	}
-	if (_clock)
-		_clock->SetQuantisation(timing->SeedSamps, quantisation);
-	SetSeedUsesPowers(cfg.Loop.SeedUsesPowers);
-	ApplyTiming(timing.value(), "tap tempo");
-	SetMidiGrain(timing->SeedSamps, "tap tempo", stations);
-	return true;
+unsigned int Quantiser::NearestPermittedDivision(unsigned int base, double requested) noexcept
+{
+    if (!base || !std::isfinite(requested) || requested <= 0.0) return base;
+    unsigned int best = base;
+    // Use the same supported straight/triplet subdivisions as the radio.
+    for (const auto fraction : midi::MidiQuantisation::FractionDisplayOrder)
+    {
+        const auto candidate = static_cast<std::uint64_t>(base) * midi::MidiQuantisation::Divisor(fraction);
+        if (candidate > std::numeric_limits<unsigned int>::max()) continue;
+        const auto distance = std::abs(static_cast<double>(candidate) - requested);
+        const auto previous = std::abs(static_cast<double>(best) - requested);
+        if (distance < previous || (distance == previous && candidate < best))
+            best = static_cast<unsigned int>(candidate);
+    }
+    return best;
 }
 
 void Quantiser::PulseOverlay()
 {
-	auto expected = _overlayState.load(std::memory_order_relaxed);
-	do {
-		if (expected == StateHeld)
-			return;
-	} while (!_overlayState.compare_exchange_weak(
-		expected,
-		utils::Timer::GetTime().time_since_epoch().count(),
-		std::memory_order_release,
-		std::memory_order_relaxed));
+	_overlayState.store(utils::Timer::GetTime().time_since_epoch().count(), std::memory_order_release);
 }
 
 void Quantiser::SetOverlayHeld(bool held)
 {
-	_overlayState.store(
-		held ? StateHeld : utils::Timer::GetTime().time_since_epoch().count(),
-		std::memory_order_release);
+	if (_spaceOverlayHeld.exchange(held, std::memory_order_acq_rel) == held)
+		return;
+
+	// Releasing Space starts a fresh grace period after the visible hold.
+	PulseOverlay();
+}
+
+void Quantiser::SetGestureOverlayHeld(bool held)
+{
+	if (_gestureOverlayHeld.exchange(held, std::memory_order_acq_rel) == held)
+		return;
+	if (!_spaceOverlayHeld.load(std::memory_order_acquire))
+		PulseOverlay();
 }
 
 void Quantiser::ClearOverlay() noexcept
 {
+	_spaceOverlayHeld = false;
+	_gestureOverlayHeld = false;
 	_overlayState.store(StateInactive, std::memory_order_release);
 }
 
 float Quantiser::OverlayAlpha(Time now) const
 {
 	const auto state = _overlayState.load(std::memory_order_acquire);
-	if (state == StateHeld)
+	if (_spaceOverlayHeld.load(std::memory_order_acquire) || _gestureOverlayHeld.load(std::memory_order_acquire))
 		return 1.0f;
 	if (state == StateInactive)
 		return 0.0f;
 
 	const auto lastActive = Time(Time::duration(state));
-	const auto elapsed = utils::Timer::GetElapsedSeconds(lastActive, now);
+	const auto elapsed = utils::Timer::GetElapsedSeconds(lastActive, now) - TapTempoTracker::GracePeriodSeconds;
+	if (elapsed <= 0.0)
+		return 1.0f;
 	if (elapsed >= OverlayFadeSeconds)
 		return 0.0f;
 
@@ -569,6 +612,8 @@ std::optional<Quantiser::InteractionTarget> Quantiser::_ResolveInteractionTarget
 			}
 		}
 
+		resolved.MasterLengthSamps = resolved.TakeRef->VisualLoopLengthSamps();
+
 		for (const auto& loop : resolved.TakeRef->GetLoops())
 		{
 			if (!loop)
@@ -618,7 +663,7 @@ unsigned int Quantiser::ActiveGridDivisions() const noexcept
 
 QuantisationGrid Quantiser::ActiveGrid() const noexcept
 {
-	return { ActiveGridDivisions(), QuantisationGridSource::Default };
+	return { ActiveGridDivisions(), _gridSource.load(std::memory_order_acquire) };
 }
 
 std::int32_t Quantiser::GlobalPhaseOffsetSamps() const noexcept
@@ -646,6 +691,15 @@ std::optional<QuantisationTiming> Quantiser::CurrentTempoTiming(unsigned int sam
 		masterLoopSamps = _clock->SeedSourceLength();
 	}
 	return TimingFromSeedAndMaster(seedSamps, masterLoopSamps, sampleRate);
+}
+
+std::optional<Quantiser::TempoStatus> Quantiser::CurrentTempoStatus(unsigned int sampleRate) const
+{
+	if (_acceptedRemoteGrid.IntervalLengthSamps > 0ul && _acceptedRemoteGrid.Bpi > 0u)
+		return TempoStatus{ _acceptedRemoteGrid.Bpm, _acceptedRemoteGrid.Bpi };
+	if (const auto timing = CurrentTempoTiming(sampleRate))
+		return TempoStatus{ timing->Bpm, timing->Bpi };
+	return std::nullopt;
 }
 
 void Quantiser::LogNinjamTempoEvent(const char* event,
@@ -760,6 +814,12 @@ std::optional<QuantisationTiming> TapTempoTracker::TapAtSample(std::uint64_t sam
 	unsigned long masterLoopSamps,
 	const QuantisationPolicy& policy)
 {
+	if (!sampleRate)
+	{
+		Clear();
+		std::cout << "[tap] rejected: invalid sample rate\n";
+		return std::nullopt;
+	}
 	if (!_lastTapSample.has_value())
 	{
 		_lastTapSample = samplePosition;
@@ -769,17 +829,19 @@ std::optional<QuantisationTiming> TapTempoTracker::TapAtSample(std::uint64_t sam
 	if (samplePosition <= _lastTapSample.value())
 	{
 		std::cout << "[tap] rejected: non-increasing\n";
+		Clear();
 		_lastTapSample = samplePosition;
 		return std::nullopt;
 	}
 
 	const auto gap = static_cast<double>(samplePosition - _lastTapSample.value());
 
-	// Reset if the inter-tap gap exceeds the timeout; treat this tap as a fresh first tap.
-	if (sampleRate > 0u && gap > TapTimeoutSecs * static_cast<double>(sampleRate))
+	// Reset if the inter-tap gap reaches the timeout; treat this tap as a fresh first tap.
+	if (sampleRate > 0u && gap >= GracePeriodSeconds * static_cast<double>(sampleRate))
 	{
 		Clear();
 		_lastTapSample = samplePosition;
+		std::cout << "[tap] sequence restarted: timeout >=2000ms\n";
 		return std::nullopt;
 	}
 
@@ -834,7 +896,13 @@ std::optional<QuantisationTiming> Quantiser::DeduceTapSeedTimingFromMaster(unsig
 	const auto grain = masterLoopSamps / requestedBpi;
 	if (grain == 0ul || grain > std::numeric_limits<unsigned int>::max())
 		return std::nullopt;
-	return _TimingFromSeed(static_cast<unsigned int>(grain), masterLoopSamps, sampleRate);
+	auto timing = _TimingFromSeed(static_cast<unsigned int>(grain), grain * requestedBpi, sampleRate);
+    if (timing)
+    {
+        timing->SeedCount = static_cast<unsigned int>(requestedBpi);
+        timing->Bpi = static_cast<unsigned int>(requestedBpi);
+    }
+    return timing;
 }
 
 	// ── QuantiserController implementation ──
@@ -855,13 +923,26 @@ void QuantiserController::OnCtrlModifierChanged(bool held,
 	const QuantisationInteractionContext& context,
 	const ChildResolver& childResolver)
 {
-	if (held && !_ctrlHandleHeld)
+	if (held == _ctrlHandleHeld)
+		return;
+	_transitionStartAlpha = _CtrlHandleAlpha(now);
+	_ctrlHandleReleasedAt = now;
+	if (held && !OwnsPointer())
+	{
+		_ctrlOverlayContext.reset();
+		_capturedMidiTargets.clear();
+		if (context.SelectDepth == base::SelectDepth::DEPTH_LOOP)
+		{
+			_capturedMidiTargets = context.SelectedMidiLoops;
+			if (_capturedMidiTargets.empty() && context.HoveredMidiLoop) _capturedMidiTargets.push_back(context.HoveredMidiLoop);
+		}
+		_feedbackSampleRate = context.SampleRate;
 		_CaptureContext(context, childResolver);
-
-	_quantisation.SetOverlayHeld(held);
+		_capturedPhaseTarget = _ResolveMidiPhaseDragTarget(context, childResolver);
+		_capturedFractionTargets = _ResolveFractionDragTargets(context, childResolver);
+		_capturedDivisionGlobal = _capturedMidiTargets.empty() && _IsDivisionGlobalTarget(context, childResolver);
+	}
 	_ctrlHandleHeld = held;
-	if (!held)
-		_ctrlHandleReleasedAt = now;
 	RefreshOverlay(context, childResolver);
 }
 
@@ -884,6 +965,14 @@ void QuantiserController::RefreshOverlay(const QuantisationInteractionContext& c
 
 void QuantiserController::Tick(Time now)
 {
+	bool invalid = false;
+	for (const auto& loop : _fractionMidiTargets) invalid = invalid || !_OwnerForMidiLoop(loop);
+	for (const auto& loop : _midiPhaseDragTarget.MidiTargets) invalid = invalid || !_OwnerForMidiLoop(loop);
+	for (const auto& take : _fractionDragTargets) invalid = invalid || !_StationForTake(take);
+	for (const auto& take : _midiPhaseDragTarget.TakeTargets) invalid = invalid || !_StationForTake(take);
+	for (const auto& station : _midiPhaseDragTarget.StationTargets)
+		invalid = invalid || std::find(_stations.begin(), _stations.end(), station) == _stations.end();
+	if (invalid) CancelInteraction();
 	_ApplyCtrlHandleAlpha(_CtrlHandleAlpha(now));
 }
 
@@ -917,7 +1006,7 @@ std::optional<ActionResult> QuantiserController::TryHandleTouchAction(TouchActio
 
 	if ((TouchAction::TouchState::TOUCH_DOWN != action.State)
 		|| (0 != action.Index)
-		|| !ctrlModifier)
+		|| !ctrlModifier || !_ctrlHandleHeld)
 		return std::nullopt;
 
 	const int hitBtn = _overlay.HitTestButton(action.Position);
@@ -949,7 +1038,7 @@ void QuantiserController::_CaptureContext(const QuantisationInteractionContext& 
 {
 	CtrlOverlayContext captured;
 	captured.Anchor = context.CursorPos;
-	captured.VisibleButtonCount = _VisibleButtonCount(context);
+	captured.VisibleButtonCount = context.SelectDepth == base::SelectDepth::DEPTH_LOOP && context.LoopDepthHasAudioTarget && _capturedMidiTargets.empty() ? 0 : _VisibleButtonCount(context);
 	captured.SelectDepth = context.SelectDepth;
 
 	std::vector<unsigned char> hoverPath = context.HoverPath;
@@ -968,21 +1057,20 @@ void QuantiserController::_CaptureContext(const QuantisationInteractionContext& 
 
 float QuantiserController::_CtrlHandleAlpha(Time now) const
 {
-	if (_ctrlHandleHeld)
-		return 1.0f;
 	if (utils::Timer::IsZero(_ctrlHandleReleasedAt))
 		return 0.0f;
-	static constexpr double FadeSeconds = 0.5;
 	const auto elapsed = utils::Timer::GetElapsedSeconds(_ctrlHandleReleasedAt, now);
-	if (elapsed >= FadeSeconds)
-		return 0.0f;
-	return static_cast<float>(1.0 - elapsed / FadeSeconds);
+	const bool visible = _ctrlHandleHeld || OwnsPointer();
+	const auto duration = visible ? 0.120 : 0.420;
+	const auto progress = static_cast<float>(std::clamp(elapsed / duration, 0.0, 1.0));
+	const auto eased = progress * progress * (3.0f - 2.0f * progress);
+	return _transitionStartAlpha + ((visible ? 1.0f : 0.0f) - _transitionStartAlpha) * eased;
 }
 
 void QuantiserController::_ApplyCtrlHandleAlpha(float alpha)
 {
 	_overlay.SetAlpha(alpha);
-	if ((alpha <= 0.001f) && !_ctrlHandleHeld)
+	if ((alpha <= 0.001f) && !_ctrlHandleHeld && !OwnsPointer())
 		_ctrlOverlayContext = std::nullopt;
 }
 
@@ -1026,11 +1114,11 @@ void QuantiserController::_ApplyOverlayScopes(const QuantisationInteractionConte
 	const ChildResolver& childResolver)
 {
 	_overlay.SetButtonScope(0,
-		_IsPhaseGlobalTarget(context, childResolver)
+		(_ctrlOverlayContext ? _capturedPhaseTarget.Kind == MidiPhaseDragTargetKind::Global : _IsPhaseGlobalTarget(context, childResolver))
 			? graphics::CtrlHandleOverlay::ButtonScope::Global
 			: graphics::CtrlHandleOverlay::ButtonScope::Local);
 	_overlay.SetButtonScope(1,
-		_IsDivisionGlobalTarget(context, childResolver)
+		(_ctrlOverlayContext ? _capturedDivisionGlobal : _IsDivisionGlobalTarget(context, childResolver))
 			? graphics::CtrlHandleOverlay::ButtonScope::Global
 			: graphics::CtrlHandleOverlay::ButtonScope::Local);
 }
@@ -1179,12 +1267,17 @@ ActionResult QuantiserController::_BeginMidiPhaseDrag(TouchAction action,
 	const QuantisationInteractionContext& context,
 	const ChildResolver& childResolver)
 {
+	const auto now = utils::Timer::IsZero(action.GetActionTime()) ? utils::Timer::GetTime() : action.GetActionTime();
+	_transitionStartAlpha = _CtrlHandleAlpha(now);
+	_ctrlHandleReleasedAt = now;
 	_isMidiPhaseDragging = true;
+	_overlay.SetActiveButton(0);
 	_midiPhaseDragStartPosition = action.Position;
-	_midiPhaseDragTarget = _ResolveMidiPhaseDragTarget(context, childResolver);
+	_midiPhaseDragTarget = _ctrlOverlayContext ? _capturedPhaseTarget : _ResolveMidiPhaseDragTarget(context, childResolver);
 	_midiPhaseDragStartOffsetSamps = _MidiPhaseOffsetForTarget(_midiPhaseDragTarget);
-	_quantisation.SetOverlayHeld(true);
+	_quantisation.SetGestureOverlayHeld(true);
 	_quantisation.ApplyOverlayAlpha(1.0f, _stations);
+	_ShowPhaseFeedback(_feedbackSampleRate);
 
 	ActionResult res;
 	res.IsEaten = true;
@@ -1201,6 +1294,7 @@ ActionResult QuantiserController::_UpdateMidiPhaseDrag(TouchMoveAction action,
 		sampleRate);
 	_SetMidiPhaseOffsetForTarget(_midiPhaseDragTarget, offsetSamps);
 	_quantisation.ApplyOverlayAlpha(1.0f, _stations);
+	_ShowPhaseFeedback(sampleRate);
 
 	ActionResult res;
 	res.IsEaten = true;
@@ -1220,9 +1314,14 @@ ActionResult QuantiserController::_EndMidiPhaseDrag(TouchAction action,
 		_SetMidiPhaseOffsetForTarget(_midiPhaseDragTarget, offsetSamps);
 	}
 
+	const auto now = utils::Timer::GetTime();
+	_transitionStartAlpha = _CtrlHandleAlpha(now);
+	_ctrlHandleReleasedAt = now;
 	_isMidiPhaseDragging = false;
+	_overlay.SetActiveButton(-1);
+	if (_feedbackSink) _feedbackSink("");
 	_midiPhaseDragTarget = MidiPhaseDragTarget{};
-	_quantisation.SetOverlayHeld(false);
+	_quantisation.SetGestureOverlayHeld(false);
 	_quantisation.PulseOverlay();
 	_quantisation.ApplyOverlayAlpha(_quantisation.OverlayAlpha(utils::Timer::GetTime()), _stations);
 
@@ -1233,31 +1332,32 @@ ActionResult QuantiserController::_BeginFractionDrag(TouchAction action,
 	const QuantisationInteractionContext& context,
 	const ChildResolver& childResolver)
 {
-	_fractionDragTargets = _ResolveFractionDragTargets(context, childResolver);
-	if (_fractionDragTargets.empty())
+	_fractionMidiTargets = _capturedMidiTargets;
+	_fractionDragTargets = _ctrlOverlayContext ? _capturedFractionTargets : _ResolveFractionDragTargets(context, childResolver);
+	if (_fractionDragTargets.empty() && _fractionMidiTargets.empty())
 		return ActionResult::NoAction();
 
 	_fractionDragStartY = action.Position.Y;
 	_fractionDragMoved = false;
 	_fractionDragTake.reset();
-	_fractionDragStartFraction = _fractionDragTargets.front()->MidiQuantisation().Fraction;
-
-	if (_fractionDragTargets.size() == 1u)
+	if (!_fractionMidiTargets.empty())
 	{
-		auto take = _fractionDragTargets.front();
-		auto res = take->BeginMidiQuantisationGesture(action);
-		if (!res.IsEaten)
-		{
-			_fractionDragTargets.clear();
-			return res;
-		}
-
-		_isFractionDragging = true;
-		_fractionDragTake = take;
-		return res;
+		const auto& loop = _fractionMidiTargets.front();
+		const auto owner = _OwnerForMidiLoop(loop);
+		if (!owner) return ActionResult::NoAction();
+		_fractionDragStartFraction = owner->SnapshotMidiLoopQuantisation(loop).Fraction;
 	}
+	else
+		_fractionDragStartFraction = _fractionDragTargets.front()->MidiQuantisation().Fraction;
 
+
+	const auto now = utils::Timer::IsZero(action.GetActionTime()) ? utils::Timer::GetTime() : action.GetActionTime();
+	_transitionStartAlpha = _CtrlHandleAlpha(now);
+	_ctrlHandleReleasedAt = now;
 	_isFractionDragging = true;
+	_overlay.SetActiveButton(1);
+	_quantisation.SetGestureOverlayHeld(true);
+	_ShowFractionFeedback();
 
 	ActionResult res;
 	res.IsEaten = true;
@@ -1278,7 +1378,7 @@ ActionResult QuantiserController::_UpdateFractionDrag(TouchMoveAction action)
 		return res;
 	}
 
-	if (_fractionDragTargets.empty())
+	if (_fractionDragTargets.empty() && _fractionMidiTargets.empty())
 		return ActionResult::NoAction();
 
 	const auto deltaY = action.Position.Y - _fractionDragStartY;
@@ -1295,6 +1395,17 @@ ActionResult QuantiserController::_UpdateFractionDrag(TouchMoveAction action)
 		take->SetMidiQuantisation(settings);
 	}
 
+	for (const auto& loop : _fractionMidiTargets)
+	{
+		if (const auto owner = _OwnerForMidiLoop(loop))
+		{
+			auto settings = loop->GetLoopQuantisationOverride();
+			settings.Enabled = true;
+			settings.Fraction = fraction;
+			owner->SetMidiLoopQuantisationOverride(loop, settings);
+		}
+	}
+	_ShowFractionFeedback();
 	ActionResult res;
 	res.IsEaten = true;
 	res.ResultType = ACTIONRESULT_DEFAULT;
@@ -1305,21 +1416,38 @@ ActionResult QuantiserController::_EndFractionDrag(TouchAction action)
 {
 	auto take = _fractionDragTake;
 	auto targets = _fractionDragTargets;
+	auto midiTargets = _fractionMidiTargets;
+	_fractionMidiTargets.clear();
 	const auto moved = _fractionDragMoved;
+	const auto now = utils::Timer::GetTime();
+	_transitionStartAlpha = _CtrlHandleAlpha(now);
+	_ctrlHandleReleasedAt = now;
 	_isFractionDragging = false;
 	_fractionDragStartY = 0;
 	_fractionDragTake.reset();
 	_fractionDragTargets.clear();
 	_fractionDragMoved = false;
+	_overlay.SetActiveButton(-1);
+	_quantisation.SetGestureOverlayHeld(false);
+	if (_feedbackSink) _feedbackSink("");
 
 	if (take)
 		return take->OnAction(action);
 
-	if (targets.empty())
+	if (targets.empty() && midiTargets.empty())
 		return ActionResult::NoAction();
 
 	if (!moved)
 	{
+		for (const auto& loop : midiTargets)
+		{
+			if (const auto owner = _OwnerForMidiLoop(loop))
+			{
+				auto settings = loop->GetLoopQuantisationOverride();
+				settings.Enabled = !owner->SnapshotMidiLoopQuantisation(loop).Enabled;
+				owner->SetMidiLoopQuantisationOverride(loop, settings);
+			}
+		}
 		for (const auto& target : targets)
 		{
 			if (!target)
@@ -1416,6 +1544,7 @@ std::vector<std::shared_ptr<LoopTake>> QuantiserController::_ResolveFractionDrag
 	const ChildResolver& childResolver) const
 {
 	const auto depth = _SelectDepth(context);
+	if (depth == base::SelectDepth::DEPTH_LOOP && (!_capturedMidiTargets.empty() || context.LoopDepthHasAudioTarget)) return {};
 	if (depth == base::SelectDepth::DEPTH_STATION)
 	{
 		auto selectedStations = _SelectedStations();
@@ -1452,6 +1581,14 @@ QuantiserController::MidiPhaseDragTarget QuantiserController::_ResolveMidiPhaseD
 	MidiPhaseDragTarget target;
 
 	const auto depth = _SelectDepth(context);
+	if (depth == base::SelectDepth::DEPTH_LOOP && !_capturedMidiTargets.empty())
+	{
+		target.Kind = MidiPhaseDragTargetKind::MidiLoop;
+		target.MidiTargets = _capturedMidiTargets;
+		return target;
+	}
+	if (depth == base::SelectDepth::DEPTH_LOOP && context.LoopDepthHasAudioTarget) return target;
+
 	if (depth == base::SelectDepth::DEPTH_STATION)
 	{
 		auto selectedStations = _SelectedStations();
@@ -1500,6 +1637,8 @@ std::int32_t QuantiserController::_MidiPhaseOffsetForTarget(const MidiPhaseDragT
 {
 	switch (target.Kind)
 	{
+	case MidiPhaseDragTargetKind::MidiLoop:
+		return target.MidiTargets.empty() ? 0 : target.MidiTargets.front()->GetLoopQuantisationOverride().PhaseOffsetSamps.value_or(0);
 	case MidiPhaseDragTargetKind::Station:
 		return target.StationRef ? target.StationRef->StationPhaseOffsetSamps() : 0;
 	case MidiPhaseDragTargetKind::LoopTake:
@@ -1515,6 +1654,17 @@ void QuantiserController::_SetMidiPhaseOffsetForTarget(const MidiPhaseDragTarget
 {
 	switch (target.Kind)
 	{
+	case MidiPhaseDragTargetKind::MidiLoop:
+		for (const auto& loop : target.MidiTargets)
+		{
+			if (const auto owner = _OwnerForMidiLoop(loop))
+			{
+				auto settings = loop->GetLoopQuantisationOverride();
+				settings.PhaseOffsetSamps = offsetSamps;
+				owner->SetMidiLoopQuantisationOverride(loop, settings);
+			}
+		}
+		break;
 	case MidiPhaseDragTargetKind::Station:
 		for (const auto& station : target.StationTargets)
 		{
@@ -1540,3 +1690,105 @@ void QuantiserController::_SetMidiPhaseOffsetForTarget(const MidiPhaseDragTarget
 	}
 }
 } // namespace engine
+
+void engine::QuantiserController::CancelInteraction(bool resetModifier)
+{
+	const auto now = utils::Timer::GetTime();
+	_transitionStartAlpha = _CtrlHandleAlpha(now);
+	_ctrlHandleReleasedAt = now;
+	_isMidiPhaseDragging = false;
+	_isFractionDragging = false;
+	_fractionDragTake.reset();
+	_fractionDragTargets.clear();
+	_fractionMidiTargets.clear();
+	_midiPhaseDragTarget = MidiPhaseDragTarget{};
+	if (resetModifier)
+	{
+		_capturedMidiTargets.clear();
+		_ctrlOverlayContext.reset();
+		_capturedFractionTargets.clear();
+		_capturedPhaseTarget = MidiPhaseDragTarget{};
+		_ctrlHandleHeld = false;
+	}
+	_overlay.SetActiveButton(-1);
+	_quantisation.SetGestureOverlayHeld(false);
+	if (_feedbackSink) _feedbackSink("");
+}
+
+void engine::QuantiserController::_ShowPhaseFeedback(unsigned int sampleRate)
+{
+	if (!_feedbackSink) return;
+	const auto offset = _MidiPhaseOffsetForTarget(_midiPhaseDragTarget);
+	const char* scope = _midiPhaseDragTarget.Kind == MidiPhaseDragTargetKind::Global ? "Global" :
+		(_midiPhaseDragTarget.Kind == MidiPhaseDragTargetKind::Station ? "Station" : (_midiPhaseDragTarget.Kind == MidiPhaseDragTargetKind::MidiLoop ? "Loop" : "Take"));
+	std::ostringstream text;
+	text << scope << " SHFT " << std::showpos;
+	if (sampleRate > 0u) text << std::fixed << std::setprecision(2) << 1000.0 * offset / sampleRate << " ms (" << offset << " samples)";
+	else text << offset << " samples";
+	std::int32_t minimum = offset, maximum = offset;
+	std::size_t count = 1u;
+	auto include = [&](std::int32_t value) { minimum = (std::min)(minimum, value); maximum = (std::max)(maximum, value); };
+	if (_midiPhaseDragTarget.Kind == MidiPhaseDragTargetKind::Station)
+	{
+		count = _midiPhaseDragTarget.StationTargets.size();
+		for (const auto& station : _midiPhaseDragTarget.StationTargets) if (station) include(station->StationPhaseOffsetSamps());
+	}
+	else if (_midiPhaseDragTarget.Kind == MidiPhaseDragTargetKind::LoopTake)
+	{
+		count = _midiPhaseDragTarget.TakeTargets.size();
+		for (const auto& take : _midiPhaseDragTarget.TakeTargets) if (take) include(take->MidiQuantisation().PhaseOffsetSamps);
+	}
+	else if (_midiPhaseDragTarget.Kind == MidiPhaseDragTargetKind::MidiLoop)
+	{
+		count = _midiPhaseDragTarget.MidiTargets.size();
+		for (const auto& loop : _midiPhaseDragTarget.MidiTargets) if (loop) include(loop->GetLoopQuantisationOverride().PhaseOffsetSamps.value_or(0));
+	}
+	if (minimum != maximum) text << " mixed [" << minimum << ", " << maximum << "] samples";
+	if (count > 1u) text << " / " << std::noshowpos << count << " targets";
+	_feedbackSink(text.str());
+}
+
+void engine::QuantiserController::_ShowFractionFeedback()
+{
+	if (!_feedbackSink || (_fractionDragTargets.empty() && _fractionMidiTargets.empty())) return;
+	midi::MidiQuantisationSettings settings;
+	if (!_fractionMidiTargets.empty())
+	{
+		const auto& loop = _fractionMidiTargets.front();
+		const auto owner = _OwnerForMidiLoop(loop);
+		if (!owner) return;
+		settings = owner->SnapshotMidiLoopQuantisation(loop);
+	}
+	else
+		settings = _fractionDragTargets.front()->MidiQuantisation();
+	const auto mixedTakes = std::any_of(_fractionDragTargets.begin(), _fractionDragTargets.end(), [&settings](const auto& take) {
+		return take && (take->MidiQuantisation().Fraction != settings.Fraction || take->MidiQuantisation().Enabled != settings.Enabled);
+	});
+	std::ostringstream text;
+	text << (!_fractionMidiTargets.empty() ? "Loop" : (_capturedDivisionGlobal ? "Global" : "Selection")) << " DIV " << midi::MidiQuantisation::FractionLabel(settings.Fraction)
+		<< " (" << midi::MidiQuantisation::Divisor(settings.Fraction) << " divisions)";
+	const auto mixedLoops = std::any_of(_fractionMidiTargets.begin(), _fractionMidiTargets.end(), [this, &settings](const auto& loop) {
+		if (!loop) return false;
+		const auto owner = _OwnerForMidiLoop(loop);
+		if (!owner) return false;
+		const auto loopSettings = owner->SnapshotMidiLoopQuantisation(loop);
+		return loopSettings.Fraction != settings.Fraction || loopSettings.Enabled != settings.Enabled;
+	});
+	if (mixedTakes || mixedLoops) text << " mixed";
+	if (!_fractionMidiTargets.empty()) text << " / " << _fractionMidiTargets.size() << " loops";
+	if (_fractionDragTargets.size() > 1u) text << " / " << _fractionDragTargets.size() << " takes";
+	_feedbackSink(text.str());
+}
+
+std::shared_ptr<engine::LoopTake> engine::QuantiserController::_OwnerForMidiLoop(const std::shared_ptr<midi::MidiLoop>& loop) const
+{
+	std::shared_ptr<LoopTake> owner;
+	_ForEachTake([&](const auto& station, const auto& take) {
+		if (!owner && !station->IsRemote())
+		{
+			const auto loops = take->GetMidiLoopSnapshot();
+			if (std::find(loops.begin(), loops.end(), loop) != loops.end()) owner = take;
+		}
+	});
+	return owner;
+}

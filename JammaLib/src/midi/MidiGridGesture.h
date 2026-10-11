@@ -17,6 +17,7 @@ namespace midi
 	class MidiGridGesture
 	{
 	public:
+		static constexpr std::uint8_t DefaultCreationVelocity = 100u;
 		enum class Kind { None, Paint, Create, Move, TrimLeft, TrimRight, Velocity, SnappedMove };
 		struct Point
 		{
@@ -57,17 +58,18 @@ namespace midi
 		int ProposedVelocity() const noexcept { return _proposedVelocity; }
 
 		bool Begin(const MidiLoop::EditState& source, Point point, std::uint8_t channel,
-			double pixelsPerSample = 0.0)
+			double pixelsPerSample = 0.0, std::uint8_t velocity = DefaultCreationVelocity)
 		{
 			Cancel();
 			if (!source.LoopLengthSamps || point.Sample >= source.LoopLengthSamps
 				|| source.EventCount > MidiLoop::DefaultCapacity
-				|| point.Pitch > 127u || channel >= 16u) return false;
+				|| point.Pitch > 127u || channel >= 16u || velocity == 0u || velocity > 127u) return false;
 			_before = source;
 			_working = source;
 			_anchor = point;
 			_last = point;
 			_channel = channel;
+			_creationVelocity = velocity;
 			_grid = LoopGridGeometry::Resolve(source.LoopLengthSamps,
 				source.Quantisation, source.QuantisationTransportStartSamps);
 			_targets = MidiGridTargets::Build(source);
@@ -96,7 +98,7 @@ namespace midi
 				source.LoopLengthSamps - point.Sample));
 			_createDefaultDuration = duration;
 			_dirty = MidiEditOperations::Create(_working, point.Sample, duration,
-				channel, point.Pitch);
+				channel, point.Pitch, _creationVelocity);
 			if (_dirty) _preview.push_back({ point.Sample, point.Sample + duration,
 				point.Pitch, true });
 			return _dirty;
@@ -148,7 +150,7 @@ namespace midi
 						+ _createDefaultDuration)
 					: static_cast<std::int64_t>(std::max(point.Sample, _anchor.Sample)) + 1u;
 				_dirty = MidiEditOperations::Create(_working, start,
-					static_cast<std::uint32_t>(end - start), _channel, _anchor.Pitch);
+					static_cast<std::uint32_t>(end - start), _channel, _anchor.Pitch, _creationVelocity);
 				if (_dirty) _preview.push_back({ start,
 					static_cast<std::uint32_t>(end), _anchor.Pitch, true });
 			}
@@ -278,6 +280,11 @@ namespace midi
 			_rejected = true; _working = _before; _preview.clear();
 			return false;
 		}
+		void AppendPreview(std::uint32_t start, std::uint32_t end, std::uint8_t pitch, bool fill)
+		{
+			const auto span = _grid ? _grid->EditorSpan(start, end) : std::pair{start, end};
+			_preview.push_back({span.first, span.second, pitch, fill});
+		}
 		bool Paint(Point point)
 		{
 			const auto target = TargetAt(point);
@@ -289,7 +296,7 @@ namespace midi
 				{
 					// Existing notes crossed by add paint are held too, without editing them.
 					_removed[note.On] = true;
-					_preview.push_back({ note.Start, note.End, note.Pitch, true });
+					AppendPreview(note.Start, note.End, note.Pitch, true);
 					return true;
 				}
 				if (note.Ambiguous) return Reject();
@@ -299,25 +306,29 @@ namespace midi
 				for (std::size_t i = _removed.size(); i-- > 0u;)
 					if (_removed[i] && !MidiEditOperations::RemoveNote(_working, i)) return Reject();
 				_dirty = true;
-				_preview.push_back({note.Start, note.End, note.Pitch, false});
+				AppendPreview(note.Start, note.End, note.Pitch, false);
 				return true;
 			}
 			if (!_fill) return true;
-			const auto cell = _grid->CellAt(point.Sample);
+			const auto physicalCell = _grid->CellAt(point.Sample);
+			// Both fragments paint one canonical source note in the tail cell.
+			const auto cell = _grid->SeamHeadEnd && physicalCell == 0u
+				? _grid->Boundaries.size() - 2u : physicalCell;
 			const auto index = cell * 128u + point.Pitch;
 			if (_visited[index]) return true;
 			_visited[index] = true;
+			const auto cellStart = _grid->Boundaries[cell], cellEnd = _grid->Boundaries[cell + 1u];
 			// Subtract the union of frozen displayed notes, across all channels.
 			std::vector<std::pair<std::uint32_t, std::uint32_t>> covered;
 			for (const auto& note : _targets.Notes)
-				if (note.Pitch == point.Pitch && note.Start < target.End && note.End > target.Start)
-					covered.emplace_back(std::max(note.Start, target.Start), std::min(note.End, target.End));
+				if (note.Pitch == point.Pitch && note.Start < cellEnd && note.End > cellStart)
+					covered.emplace_back(std::max(note.Start, cellStart), std::min(note.End, cellEnd));
 			std::sort(covered.begin(), covered.end());
-			auto start = target.Start;
+			auto start = cellStart;
 			const auto add = [&](std::uint32_t end) {
 				if (start >= end) return true;
-				if (!MidiEditOperations::CreateExact(_working, start, end, _channel, point.Pitch)) return false;
-				_preview.push_back({start, end, point.Pitch, true}); _dirty = true;
+				if (!MidiEditOperations::CreateExact(_working, start, end, _channel, point.Pitch, _creationVelocity)) return false;
+				AppendPreview(start, end, point.Pitch, true); _dirty = true;
 				return true;
 			};
 			for (const auto& span : covered)
@@ -325,7 +336,7 @@ namespace midi
 				if (!add(span.first)) return Reject();
 				start = std::max(start, span.second);
 			}
-			if (!add(target.End)) return Reject();
+			if (!add(cellEnd)) return Reject();
 			return true;
 		}
 		bool Traverse(Point point, int seam)
@@ -382,6 +393,7 @@ namespace midi
 		std::uint32_t _start = 0u, _end = 0u;
 		std::uint32_t _createDefaultDuration = 1u;
 		std::uint8_t _pitch = 60u, _channel = 0u;
+		std::uint8_t _creationVelocity = DefaultCreationVelocity;
 		bool _fill = true, _dirty = false, _rejected = false;
 	};
 }

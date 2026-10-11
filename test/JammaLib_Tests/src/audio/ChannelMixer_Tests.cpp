@@ -1,9 +1,12 @@
 #include <algorithm>
+#include <cmath>
+#include <thread>
 
 #include "gtest/gtest.h"
 #include "resources/ResourceLib.h"
 #include "audio/ChannelMixer.h"
 #include "engine/Trigger.h"
+#include "audio/AudioMixer.h"
 
 using resources::ResourceLib;
 using audio::ChannelMixer;
@@ -130,6 +133,62 @@ protected:
 private:
     std::vector<std::shared_ptr<ChannelMixerMockedSink>> _sinks;
 };
+
+TEST(CaptureSourceMute, SharedClaimsPreserveUserMuteAndStereoFade)
+{
+    auto claims = std::make_shared<audio::CaptureSourceMuteControl>();
+    audio::WireMixBehaviourParams wire;
+    wire.Channels = { 0u, 1u };
+    audio::AudioMixerParams params;
+    params.Behaviour = wire;
+    audio::AudioMixer mixer(params);
+    mixer.SetCaptureSourceMuteControl(claims);
+    auto sink = std::make_shared<MultiChannelCaptureSink>(2u, 32u);
+    const float input[] = { 1.f, 1.f, 1.f, 1.f };
+    claims->Acquire();
+    claims->Acquire();
+    mixer.WriteBlock(sink, input, 4u);
+    EXPECT_NEAR(mixer.Level(), std::pow(0.99, 4), 1e-14);
+    sink->EndMultiWrite(4u, true, base::Audible::AUDIOSOURCE_MIXER);
+    claims->Release();
+    mixer.WriteBlock(sink, input, 4u);
+    EXPECT_NEAR(mixer.Level(), std::pow(0.99, 8), 1e-14);
+    sink->EndMultiWrite(4u, true, base::Audible::AUDIOSOURCE_MIXER);
+    mixer.Mute();
+    claims->Release();
+    mixer.WriteBlock(sink, input, 4u);
+    EXPECT_TRUE(mixer.IsMuted());
+    EXPECT_NEAR(mixer.Level(), std::pow(0.99, 12), 1e-14);
+    sink->EndMultiWrite(4u, true, base::Audible::AUDIOSOURCE_MIXER);
+    mixer.SetUnmutedLevel(0.5);
+    mixer.UnMute();
+    const auto before = mixer.Level();
+    mixer.WriteBlock(sink, input, 4u);
+    EXPECT_NEAR(mixer.Level(), 0.5 + (before - 0.5) * std::pow(0.99, 4), 1e-14);
+    EXPECT_EQ(sink->Samples(0u), sink->Samples(1u));
+    EXPECT_FLOAT_EQ(sink->Samples(0u)[4], static_cast<float>(std::pow(0.99, 4)));
+    EXPECT_FLOAT_EQ(sink->Samples(0u)[12], static_cast<float>(before));
+}
+
+TEST(CaptureSourceMute, ConcurrentIndependentOwnersCannotReleasePersistentClaim)
+{
+    audio::CaptureSourceMuteControl claims;
+    claims.Acquire();
+    std::thread jobOwner([&claims] {
+        for (unsigned int i = 0; i < 10000; ++i) {
+            claims.Acquire();
+            claims.Release();
+        }
+    });
+    for (unsigned int i = 0; i < 10000; ++i) {
+        claims.Acquire();
+        claims.Release();
+        EXPECT_TRUE(claims.IsMuted());
+    }
+    jobOwner.join();
+    claims.Release();
+    EXPECT_FALSE(claims.IsMuted());
+}
 
 TEST(ChannelMixer, PlayWrapsAroundAndMatches)
 {

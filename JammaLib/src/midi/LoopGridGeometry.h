@@ -6,6 +6,7 @@
 #include <limits>
 #include <optional>
 #include <vector>
+#include <utility>
 
 #include "MidiQuantisation.h"
 
@@ -27,34 +28,26 @@ namespace midi
 			}
 		};
 
-		// Includes the two physical loop edges. Interior values are every reachable
-		// snapped onset from raw samples [0, length), wrapped into loop-local time.
-		// This includes a boundary beyond the physical end for non-dividing loops.
-		// Zero-width cells are removed.
+		// Physical loop edges plus actual master subdivision boundaries inside
+		// the loop. Snaps outside the loop must not wrap into extra grid lines.
 		std::vector<std::uint32_t> Boundaries;
+		// Nonzero only when the two physical edge fragments belong to one
+		// clipped edge cell. These are presentation aliases, not extra events.
+		std::uint32_t SeamHeadEnd = 0u, SeamTailStart = 0u;
 
-		// Presentation only: cut a whole-grain loop at the nearest master grain.
-		// Explicit phase offsets and non-repeating geometry retain physical edges.
-		static std::uint32_t DisplayOrigin(std::uint32_t length,
-			const MidiQuantisationSettings& settings, std::uint64_t transportStart) noexcept
+		std::pair<std::uint32_t, std::uint32_t> EditorSpan(std::uint32_t start,
+			std::uint32_t end) const noexcept
 		{
-			if (!length || !settings.Enabled || settings.PhaseOffsetSamps != 0
-				|| !settings.GrainSamps || settings.HasRemoteGrid()
-				|| length % settings.GrainSamps != 0u)
-				return 0u;
-			const auto grain = settings.GrainSamps;
-			const auto phase = transportStart % grain;
-			const auto delta = phase * 2u < grain
-				? -static_cast<std::int64_t>(phase) : static_cast<std::int64_t>(grain - phase);
-			return static_cast<std::uint32_t>((delta % length + length) % length);
+			if (!SeamHeadEnd) return {start, end};
+			if (start < SeamHeadEnd && end <= SeamTailStart)
+				return {SeamTailStart, Boundaries.back() + end};
+			if (start >= SeamTailStart && end == Boundaries.back())
+				return {start, end + SeamHeadEnd};
+			return {start, end};
 		}
 
-		static std::uint32_t DisplaySample(std::uint32_t sample, std::uint32_t length,
-			std::uint32_t origin) noexcept
-		{
-			return length ? static_cast<std::uint32_t>((static_cast<std::uint64_t>(sample)
-				+ length - origin) % length) : 0u;
-		}
+		// Editor coordinates stay anchored at physical sample zero. Keep the
+		// clipped seam represented by the edge aliases above, not by rotating it.
 
 		static std::optional<LoopGridGeometry> Resolve(std::uint32_t length,
 			const MidiQuantisationSettings& settings, std::uint64_t transportStart)
@@ -68,16 +61,15 @@ namespace midi
 					settings.RemoteOriginSamps < -static_cast<std::int64_t>(ExactLimit))))
 				return std::nullopt;
 			const bool remote = settings.HasRemoteGrid();
-			const std::uint64_t interval = remote ? settings.RemoteIntervalSamps : settings.GrainSamps;
-			const std::uint64_t divisions = static_cast<std::uint64_t>(remote ? settings.RemoteBpi : 1u)
-				* MidiQuantisation::Divisor(settings.Fraction);
+			const std::uint64_t interval = settings.GridInterval();
+			const std::uint64_t divisions = settings.GridDivisions();
 			if (interval == 0u || divisions == 0u || divisions > MaxCells)
 				return std::nullopt;
 			const std::int64_t start = static_cast<std::int64_t>(transportStart);
 			const std::int64_t origin = remote ? settings.RemoteOriginSamps : 0;
 			const std::int64_t phase = settings.PhaseOffsetSamps;
 			// Avoid overflow in relative coordinates and BoundarySampleAt's product.
-			const long double firstRelative = static_cast<long double>(start) - origin;
+			const long double firstRelative = static_cast<long double>(start) - origin - phase;
 			const long double lastRelative = firstRelative + length - 1u;
 			if (firstRelative < static_cast<long double>((std::numeric_limits<std::int64_t>::min)()) + 2 * interval ||
 				lastRelative > static_cast<long double>((std::numeric_limits<std::int64_t>::max)()) - 2 * interval ||
@@ -85,10 +77,10 @@ namespace midi
 					static_cast<long double>((std::numeric_limits<std::int64_t>::max)()) - 2 * divisions)
 				return std::nullopt;
 			const auto first = MidiQuantisation::NearestBoundaryIndex(
-				static_cast<std::int64_t>(firstRelative), interval, divisions);
+				static_cast<std::int64_t>(firstRelative), interval, divisions) - 1;
 			const auto last = MidiQuantisation::NearestBoundaryIndex(
-				static_cast<std::int64_t>(lastRelative), interval, divisions);
-			if (last < first || static_cast<std::uint64_t>(last - first) > MaxCells)
+				static_cast<std::int64_t>(lastRelative), interval, divisions) + 1;
+			if (last < first || static_cast<std::uint64_t>(last - first) > MaxCells + 2u)
 				return std::nullopt;
 			const auto productLimit = ((std::numeric_limits<std::int64_t>::max)() -
 				static_cast<std::int64_t>(divisions / 2u)) / static_cast<std::int64_t>(interval);
@@ -102,13 +94,26 @@ namespace midi
 				const long double local = static_cast<long double>(origin)
 					+ MidiQuantisation::BoundarySampleAt(index, interval, divisions) - start + phase;
 				const auto whole = static_cast<std::int64_t>(local);
-				const auto wrapped = (whole % static_cast<std::int64_t>(length) + length) % length;
-				if (wrapped > 0)
-					grid.Boundaries.push_back(static_cast<std::uint32_t>(wrapped));
+				if (whole > 0 && whole < length)
+					grid.Boundaries.push_back(static_cast<std::uint32_t>(whole));
 			}
 			grid.Boundaries.push_back(length);
 			std::sort(grid.Boundaries.begin(), grid.Boundaries.end());
 			grid.Boundaries.erase(std::unique(grid.Boundaries.begin(), grid.Boundaries.end()), grid.Boundaries.end());
+			// Link the two clipped edge fragments without inventing an interior
+			// subdivision, including loops whose length does not repeat the grid.
+			if (grid.Boundaries.size() > 2u)
+			{
+				const auto relative = start - origin - phase;
+				const auto boundary = MidiQuantisation::NearestBoundaryIndex(relative, interval, divisions);
+				const auto endBoundary = MidiQuantisation::NearestBoundaryIndex(relative + length, interval, divisions);
+				if (MidiQuantisation::BoundarySampleAt(boundary, interval, divisions) != relative
+					&& MidiQuantisation::BoundarySampleAt(endBoundary, interval, divisions) != relative + length)
+				{
+					grid.SeamHeadEnd = grid.Boundaries[1u];
+					grid.SeamTailStart = grid.Boundaries[grid.Boundaries.size() - 2u];
+				}
+			}
 			return grid.Boundaries.size() <= MaxCells + 1u ? std::optional<LoopGridGeometry>(std::move(grid)) : std::nullopt;
 		}
 

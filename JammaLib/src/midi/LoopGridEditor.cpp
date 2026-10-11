@@ -49,16 +49,6 @@ LoopGridEditor::LoopGridEditor(Host host, utils::Size2d size) :
 	_channelLabel->Init();
 	_Layout();
 
-	for (auto& tick : _timeTicks)
-	{
-		tick = std::make_shared<gui::GuiLabel>(gui::GuiLabelParams::PanelHeader("", 56u));
-		tick->Init();
-	}
-	for (auto& tick : _pitchTicks)
-	{
-		tick = std::make_shared<gui::GuiLabel>(gui::GuiLabelParams::PanelHeader("", 56u));
-		tick->Init();
-	}
 }
 
 void LoopGridEditor::InitResources(resources::ResourceLib& resourceLib, bool forceInit)
@@ -68,8 +58,6 @@ void LoopGridEditor::InitResources(resources::ResourceLib& resourceLib, bool for
 	_modeLabel->InitResources(resourceLib, forceInit);
 	_channelInput->InitResources(resourceLib, forceInit);
 	_channelLabel->InitResources(resourceLib, forceInit);
-	for (auto& tick : _timeTicks) tick->InitResources(resourceLib, forceInit);
-	for (auto& tick : _pitchTicks) tick->InitResources(resourceLib, forceInit);
 }
 
 void LoopGridEditor::ReleaseResources()
@@ -80,8 +68,6 @@ void LoopGridEditor::ReleaseResources()
 	_modeLabel->ReleaseResources();
 	_channelInput->ReleaseResources();
 	_channelLabel->ReleaseResources();
-	for (auto& tick : _timeTicks) tick->ReleaseResources();
-	for (auto& tick : _pitchTicks) tick->ReleaseResources();
 }
 
 void LoopGridEditor::SetSize(utils::Size2d size)
@@ -128,7 +114,7 @@ void LoopGridEditor::_Layout()
 	const int statusX = static_cast<int>(_size.Width) - statusWidth;
 	const int statusHeight = std::min(gui::GuiStyle::StatusBarHeight, static_cast<int>(_size.Height));
 	const int messageWidth = gui::GuiStyle::MessageColumnWidth(statusWidth);
-	_feedback->SetPosition({ statusX + gui::GuiStyle::StatusColumnWidth(statusWidth), std::max(0, (statusHeight - 22) / 2) });
+	_feedback->SetPosition({ statusX + gui::GuiStyle::TempoColumnWidth(statusWidth) + gui::GuiStyle::StatusColumnWidth(statusWidth), std::max(0, (statusHeight - 22) / 2) });
 	_feedback->SetSize({ static_cast<unsigned int>(messageWidth), 22u });
 	_feedback->SetVisible(statusHeight >= 22 && messageWidth > 0);
 	_modeLabel->SetVisible(false);
@@ -156,7 +142,6 @@ void LoopGridEditor::_ResetTarget()
 std::shared_ptr<MidiLoop> LoopGridEditor::_InitialMidiLoop(const engine::LoopTake& take)
 {
 	std::shared_ptr<MidiLoop> first;
-	// Wiring order determines the default; picker order must not hide recorded events.
 	for (const auto& loop : take.GetMidiLoops())
 	{
 		if (!loop || !loop->Model()) continue;
@@ -172,6 +157,7 @@ bool LoopGridEditor::FindCandidate(std::shared_ptr<engine::LoopTake>& take,
 {
 	const auto hovered = _host.Hovered ? _host.Hovered() : nullptr;
 	std::scoped_lock lock(_host.SceneMutex);
+	const bool selectStreams = !_host.SelectionDepth || _host.SelectionDepth() == base::DEPTH_LOOP;
 	unsigned int fallbackCount = 0u;
 	for (const auto& station : _host.Stations)
 	{
@@ -209,17 +195,20 @@ bool LoopGridEditor::FindCandidate(std::shared_ptr<engine::LoopTake>& take,
 				{
 					take = candidateTake;
 					audioLoop.reset();
-					midiLoop = _InitialMidiLoop(*candidateTake);
+					midiLoop = candidate;
 					return true;
 				}
-				if (!countedMidiForTake && candidate->Model() && candidate->Model()->IsSelected())
+				if (candidate->Model() && candidate->Model()->IsSelected()
+					&& (selectStreams || !countedMidiForTake))
 				{
-					// All channel models share one visible MIDI loop at this depth.
 					countedMidiForTake = true;
 					++fallbackCount;
 					take = candidateTake;
 					audioLoop.reset();
-					midiLoop = _InitialMidiLoop(*candidateTake);
+					// Whole-take selection has a default channel; loop-depth selection
+					// counts each stream independently and requires disambiguation.
+					const auto initial = selectStreams ? nullptr : _InitialMidiLoop(*candidateTake);
+					midiLoop = initial && initial->Model()->IsSelected() ? initial : candidate;
 				}
 			}
 		}
@@ -322,6 +311,7 @@ bool LoopGridEditor::Open(const std::shared_ptr<engine::LoopTake>& take,
 		return false;
 	}
 	_returnCamera = _host.Camera.CaptureEditorReturnState();
+	_creationVelocity = MidiGridGesture::DefaultCreationVelocity;
 	_blend = 0.0f;
 	_pointerOwned = false;
 	_ClearIdleHover(true);
@@ -586,11 +576,8 @@ std::optional<MidiGridGesture::Point> LoopGridEditor::_PointAt(
 	const auto model = loop->Model();
 	const auto pitch = std::clamp(model->EditorBottomPitch()
 		+ static_cast<int>(boundedV * model->EditorVisibleRows()), 0, 127);
-	const auto sample = static_cast<std::uint32_t>((static_cast<std::uint64_t>(
-		LoopGridGeometry::SampleAtU(boundedU, length)) + model->EditorTimeOrigin()) % length);
-	return MidiGridGesture::Point{ sample,
-		static_cast<std::uint8_t>(pitch), model->EditorTimeOrigin()
-			? LoopGridGeometry::SampleU(sample, length) : boundedU, boundedV };
+	const auto sample = LoopGridGeometry::SampleAtU(boundedU, length);
+	return MidiGridGesture::Point{ sample, static_cast<std::uint8_t>(pitch), boundedU, boundedV };
 }
 
 std::uint8_t LoopGridEditor::_ChannelOf(const std::shared_ptr<MidiLoop>& loop) const
@@ -648,7 +635,7 @@ void LoopGridEditor::_BeginGesture(const actions::TouchAction& action)
 	if (!point || !loop || !loop->SnapshotForEdit(source))
 		return;
 	_gesture = std::make_unique<MidiGridGesture>();
-	if (_gesture->Begin(source, *point, _ChannelOf(loop), _PixelsPerSample(source.LoopLengthSamps)))
+	if (_gesture->Begin(source, *point, _ChannelOf(loop), _PixelsPerSample(source.LoopLengthSamps), _creationVelocity))
 	{
 		_pointerOwned = true;
 		_pointerButton = 0;
@@ -790,6 +777,8 @@ void LoopGridEditor::_PublishGesture()
 		_revisionCursor = std::make_shared<actions::MidiEditRevisionCursor>();
 	_host.Undo.Add(std::make_shared<actions::MidiLoopEditUndo>(take, loop,
 		_gesture->Before(), _gesture->Working(), acceptedRevision, _revisionCursor));
+	if (_gesture->Mode() == MidiGridGesture::Kind::Velocity)
+		_creationVelocity = static_cast<std::uint8_t>(_gesture->ProposedVelocity());
 	_SetFeedback("MIDI edit applied (Ctrl+Z to undo)");
 }
 
@@ -933,7 +922,7 @@ void LoopGridEditor::_CheckGesture()
 		|| !_gesture->MatchesPublished(current)
 		|| (_gesture->CapturedNoteIndex() && loop->Model()
 			&& _gestureModelGeneration != loop->Model()->EditorModelGeneration())
-		|| current.Quantisation != take->ResolvedMidiQuantisation()
+		|| current.Quantisation != take->ResolvedMidiQuantisationFor(loop)
 		|| current.QuantisationTransportStartSamps != take->MidiQuantisationTransportStartSamps())
 	{
 		_CancelGesture();
@@ -1043,33 +1032,6 @@ void LoopGridEditor::UpdateUi(const glm::mat4& viewProjection)
 				}
 			}
 
-			static constexpr const char* timeNames[] = { "0", "1/4", "1/2", "3/4", "END" };
-			for (std::size_t i = 0u; i < _timeTicks.size(); ++i)
-			{
-				const auto u = static_cast<float>(i) / 4.0f;
-				const auto point = graphics::LoopGridProjection::Project(viewProjection, modelMatrix,
-					{ (u - 0.5f) * radius * 2.0f, 0.0f, radius * 0.88f }, width, height);
-				_timeTicks[i]->SetString(point ? timeNames[i] : "");
-				if (point)
-					_timeTicks[i]->SetPosition({ point->X - 14, point->Y - 24 });
-			}
-			for (auto& tick : _pitchTicks) tick->SetString("");
-			if (midiModel)
-			{
-				const auto bottom = midiModel->EditorBottomPitch();
-				const auto rows = midiModel->EditorVisibleRows();
-				for (std::size_t octave = 0u; octave < _pitchTicks.size(); ++octave)
-				{
-					const auto pitch = static_cast<int>(octave * 12u);
-					if (pitch < bottom || pitch > bottom + rows) continue;
-					const auto v = static_cast<float>(pitch - bottom) / rows;
-					const auto point = graphics::LoopGridProjection::Project(viewProjection, modelMatrix,
-						{ -radius * 1.12f, 0.0f, -(v * 2.0f - 1.0f) * radius * 0.78f }, width, height);
-					if (!point) continue;
-					_pitchTicks[octave]->SetString("C" + std::to_string(static_cast<int>(octave) - 1));
-					_pitchTicks[octave]->SetPosition({ point->X - 12, point->Y - 10 });
-				}
-			}
 		}
 	}
 	const auto showsClose = IsOpen();
@@ -1108,6 +1070,7 @@ void LoopGridEditor::ApplyToModels()
 		{
 			model->SetEditorMorph(_blend);
 			model->SetEditorActive(true);
+			model->SetEditorMasterInterval(_host.MasterLengthSamps ? _host.MasterLengthSamps() : 0u);
 			if (const auto take = _take.lock())
 			{
 				const auto length = midiLoop->CompletedLengthForEditor();
@@ -1135,12 +1098,6 @@ void LoopGridEditor::Draw(base::DrawContext& ctx)
 		_channelInput->Draw(ctx);
 	}
 
-	if (IsOpen() && _blend > 0.72f)
-	{
-		for (auto& tick : _timeTicks) tick->Draw(ctx);
-		if (!_midiLoop.expired())
-			for (auto& tick : _pitchTicks) tick->Draw(ctx);
-	}
 }
 
 bool LoopGridEditor::_HandleButton(actions::TouchAction action)

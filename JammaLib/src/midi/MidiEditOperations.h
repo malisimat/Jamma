@@ -71,8 +71,8 @@ namespace midi
 				|| original.Events[offIndex].PairingSlot() != on.PairingSlot())) return false;
 			const auto duration = (hasOff ? original.Events[offIndex].sampleOffset : original.LoopLengthSamps) - on.sampleOffset;
 			const auto& q = original.Quantisation;
-			const auto interval = static_cast<std::uint64_t>(q.HasRemoteGrid() ? q.RemoteIntervalSamps : q.GrainSamps);
-			const auto divisions = static_cast<std::uint64_t>(q.HasRemoteGrid() ? q.RemoteBpi : 1u) * MidiQuantisation::Divisor(q.Fraction);
+			const auto interval = q.GridInterval();
+			const auto divisions = q.GridDivisions();
 			if (!q.Enabled || !interval || !divisions) return false;
 			const auto transport = static_cast<std::int64_t>(original.QuantisationTransportStartSamps);
 			const auto origin = q.HasRemoteGrid() ? q.RemoteOriginSamps : 0ll;
@@ -188,13 +188,14 @@ namespace midi
 		// Exact editor timing represents every physical cell, including seam
 		// fragments with no inverse snapped onset. Both endpoints carry the flag.
 		static bool CreateExact(MidiLoop::EditState& state, std::uint32_t start,
-			std::uint32_t end, std::uint8_t channel, std::uint8_t pitch) noexcept
+			std::uint32_t end, std::uint8_t channel, std::uint8_t pitch,
+			std::uint8_t velocity = 96u) noexcept
 		{
 			if (start >= end || end > state.LoopLengthSamps
-				|| channel >= 16u || pitch >= 128u) return false;
+				|| channel >= 16u || pitch >= 128u || velocity == 0u || velocity > 127u) return false;
 			if (state.EventCount > MidiLoop::DefaultCapacity - (end == state.LoopLengthSamps ? 1u : 2u))
 				return false;
-			state.Events[state.EventCount++] = MidiEvent::MakeNoteOn(start, channel, pitch, 96u)
+			state.Events[state.EventCount++] = MidiEvent::MakeNoteOn(start, channel, pitch, velocity)
 				.WithFlags(MidiEvent::ExactTiming);
 			if (end < state.LoopLengthSamps)
 				state.Events[state.EventCount++] = MidiEvent::MakeNoteOff(end, channel, pitch)

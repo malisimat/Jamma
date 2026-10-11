@@ -50,6 +50,11 @@ namespace gui
 		void _InitResources(resources::ResourceLib& resources, bool force) override;
 		void _ReleaseResources() override;
 	private:
+		static constexpr int StandardPanelPadding = 8;
+		static constexpr int MainPanelTopGap = StandardPanelPadding * 3 + 4;
+		static constexpr int MainPanelMinimumHeight = 320;
+		static constexpr int SelectionPanelHeight = 84;
+		static constexpr int SelectionHandleHeight = 20;
 		void _Layout();
 		void _LayoutSelection(int panelWidth, int panelHeight);
 		void _LayoutSettings(int panelWidth, int panelHeight);
@@ -63,10 +68,9 @@ namespace gui
 		SettingsPage _page;
 		utils::Size2d _viewport{};
 		GuiPopupManager* _popups;
-		std::function<void(const std::shared_ptr<base::GuiElement>&)> _beforeHide;
-		std::shared_ptr<GuiPanel> _frame;
-		std::shared_ptr<GuiPanel> _edge;
-		std::shared_ptr<GuiToggle> _handle;
+	std::function<void(const std::shared_ptr<base::GuiElement>&)> _beforeHide;
+	std::shared_ptr<GuiPanel> _frame;
+	std::shared_ptr<GuiToggle> _handle;
 		std::shared_ptr<GuiRadio> _tabs;
 		std::shared_ptr<GuiScrollPanel> _tabScroll;
 		std::shared_ptr<GuiScrollPanel> _pageScroll;

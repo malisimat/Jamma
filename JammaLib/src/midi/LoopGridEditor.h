@@ -49,6 +49,8 @@ namespace midi
 			std::function<void()> OnOpened;
 			std::function<bool(int button, utils::Position2d anchor)> BeginRelativePointer;
 			std::function<void(int button)> EndRelativePointer;
+			std::function<std::uint64_t()> MasterLengthSamps;
+			std::function<base::SelectDepth()> SelectionDepth;
 		};
 
 	public:
@@ -81,6 +83,7 @@ namespace midi
 		// Open or closing: the editor owns input and the 3d picker is suspended.
 		bool IsEngaged() const noexcept { return State::Closed != _state; }
 		bool IsReady() const noexcept;
+		bool IsEditingText() const noexcept { return _channelInput->HasFocus(); }
 		utils::Position2d ChannelControlPosition() const { return _channelInput->Position(); }
 		bool SelectMidiChannel(unsigned int channel); // Human-facing channel 1..16.
 		bool OwnsPointer() const noexcept { return _pointerOwned; }
@@ -178,6 +181,8 @@ namespace midi
 		std::optional<LoopGridGeometry> _idleHoverGrid;
 		std::uint64_t _hoverRevision = 0u; // UI-owned; invalidates model-instance targets
 		std::unique_ptr<MidiGridGesture> _gesture;
+		// UI session preference; reset on opening, updated only by committed velocity edits.
+		std::uint8_t _creationVelocity = MidiGridGesture::DefaultCreationVelocity;
 		std::shared_ptr<actions::MidiEditRevisionCursor> _revisionCursor;
 		std::vector<CursorEntry> _revisionCursors;
 		std::string _feedbackText;
@@ -187,7 +192,5 @@ namespace midi
 		std::shared_ptr<gui::GuiNumericInput> _channelInput;
 		std::shared_ptr<gui::GuiLabel> _channelLabel;
 		bool _channelDragging = false;
-		std::array<std::shared_ptr<gui::GuiLabel>, 5> _timeTicks;
-		std::array<std::shared_ptr<gui::GuiLabel>, 11> _pitchTicks;
 	};
 }

@@ -28,7 +28,7 @@ TEST(MidiGridVisual, ExactBoundariesReachBothSeamEdges)
 	settings.PhaseOffsetSamps = 1;
 	const auto grid = midi::LoopGridGeometry::Resolve(11u, settings, 3u);
 	ASSERT_TRUE(grid);
-	const auto vertices = MidiModel::BuildEditorGridVertices(&*grid, 11u, 48, 24);
+	const auto vertices = MidiModel::BuildEditorGridVertices(&*grid, 11u, 48, 24, settings.Fraction);
 	ASSERT_EQ((grid->Boundaries.size() + 25u) * 6u, vertices.size());
 	for (std::size_t i = 0u; i < grid->Boundaries.size(); ++i)
 	{
@@ -38,9 +38,36 @@ TEST(MidiGridVisual, ExactBoundariesReachBothSeamEdges)
 	}
 	EXPECT_FLOAT_EQ(0.0f, vertices[0]);
 	EXPECT_FLOAT_EQ(1.0f, vertices[(grid->Boundaries.size() - 1u) * 6u]);
+	EXPECT_FLOAT_EQ(1.0f, vertices[(grid->Boundaries.size() - 1u) * 6u + 2u]);
 	EXPECT_FLOAT_EQ(0.0f, vertices[grid->Boundaries.size() * 6u + 1u]);
 	EXPECT_FLOAT_EQ(1.0f, vertices[vertices.size() - 5u]);
 	EXPECT_FLOAT_EQ(1.0f, vertices[vertices.size() - 3u]);
+}
+
+TEST(MidiGridVisual, MajorLinesStayOnGrainsAcrossSubdivisionChanges)
+{
+	midi::MidiQuantisationSettings settings;
+	settings.Enabled = true;
+	settings.GrainSamps = 960u;
+	constexpr auto loopLength = 4u * 960u;
+	for (const auto fraction : midi::MidiQuantisation::FractionDisplayOrder)
+	{
+		SCOPED_TRACE(midi::MidiQuantisation::FractionLabel(fraction));
+		settings.Fraction = fraction;
+		const auto grid = midi::LoopGridGeometry::Resolve(loopLength, settings, 0u);
+		ASSERT_TRUE(grid);
+		const auto vertices = MidiModel::BuildEditorGridVertices(&*grid, loopLength, 48, 24, fraction);
+		ASSERT_EQ((grid->Boundaries.size() + 25u) * 6u, vertices.size());
+		std::size_t majorCount = 0u;
+		for (std::size_t i = 0u; i < grid->Boundaries.size(); ++i)
+		{
+			const bool onGrain = grid->Boundaries[i] % settings.GrainSamps == 0u;
+			EXPECT_FLOAT_EQ(onGrain ? 1.0f : 0.45f, vertices[i * 6u + 2u]);
+			EXPECT_FLOAT_EQ(onGrain ? 1.0f : 0.45f, vertices[i * 6u + 5u]);
+			if (vertices[i * 6u + 2u] == 1.0f) ++majorCount;
+		}
+		EXPECT_EQ(5u, majorCount); // Four grains plus the closing seam edge.
+	}
 }
 
 TEST(MidiGridVisual, HeldTargetUsesRingOffsetAndClampsVelocity)

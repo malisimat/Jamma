@@ -161,6 +161,7 @@ namespace engine
 		bool InitGlobalKeyCapture();
 		void CloseGlobalKeyCapture();
 		bool PumpGlobalKeyCapture(actions::KeyAction& action) noexcept;
+		void OnInputFocusLost();
 		void Shutdown();
 		void SetLogging(io::LoggingConfig config) noexcept;
 		bool IsUiVerbose() const noexcept { return _loggingConfig.Ui == "verbose"; }
@@ -259,6 +260,8 @@ namespace engine
 		void ForceUnloadAllVstPlugins();
 		
 	protected:
+		friend class SourceLossIntegrationTestAccess;
+		friend class audio::AudioHostRealtimeTestAccess;
 		virtual void _InitResources(resources::ResourceLib& resourceLib, bool forceInit) override;
 		virtual void _ReleaseResources() override;
 
@@ -301,6 +304,9 @@ namespace engine
 		void _JobLoop();
 		void _PumpMidi();
 		void _RefreshMidiIfNeeded();
+		void _ConfirmMidiConnectionChange(const midi::MidiConnectionResult& previous,
+			const midi::MidiConnectionResult& refreshed, const std::vector<std::string>& connectedNames);
+		void _PumpSourceLossRecovery();
 		void _PumpTriggerStructuralActions();
 		void _AdvanceRigPublication();
 		gui::RoutingEditAvailability _RoutingEditAvailability();
@@ -308,7 +314,7 @@ namespace engine
 		void _ConsumeTriggerOutcomes();
 		void _PublishAudioStations();
 		std::shared_ptr<base::GuiElement> _ChildFromPath(std::vector<unsigned char> path);
-		std::shared_ptr<base::GuiElement> _ChildFromPathLocked(const std::vector<unsigned char>& path);
+		std::shared_ptr<base::GuiElement> _ChildFromPathLocked(const std::vector<unsigned char>& path) const;
 		void _UpdateSelectDepth(unsigned int depth);
 		void _UpdateRemoteStationsFromSnapshot(const ninjam::NinjamRemoteSnapshot& snapshot);
 		engine::QuantisationPolicy _QuantisationPolicy() const;
@@ -324,6 +330,7 @@ namespace engine
 		float _QuantisationOverlayAlpha(Time now) const;
 		void _ApplyQuantisationOverlayAlpha(float alpha);
 		engine::QuantisationInteractionContext _InteractionContext() const;
+		engine::QuantisationInteractionContext _InteractionContextLocked() const;
 		void _InvalidateHover2d();
 		void _ResolveHoverPath2d(std::vector<std::weak_ptr<base::GuiElement>>& outPath);
 		void _ApplyHoverPath2d(const std::vector<std::weak_ptr<base::GuiElement>>& nextPath);
@@ -349,6 +356,10 @@ namespace engine
 		void _HandleRemoteTempoPromptDecision(bool accept);
 		void _CloseRemoteTempoPrompt();
 		void _OnLoopGridEditorOpened();
+		void _ReleaseQuantisationInput();
+		bool _EditControlsSuppressed() const;
+		std::optional<actions::ActionResult> _RouteQuantisationTouch(actions::TouchAction action);
+		std::optional<actions::ActionResult> _RouteQuantisationMove(actions::TouchMoveAction action);
 
 
 	protected:
@@ -356,6 +367,8 @@ namespace engine
 		static constexpr unsigned int MidiChannelOverrideControlIndex = 7001u;
 		static constexpr unsigned int TransportOffsetControlIndex = 7002u;
 		static constexpr unsigned int NinjamMetronomeControlIndex = 7003u;
+		static constexpr unsigned int TapTempoControlIndex = 7004u;
+		static constexpr unsigned int MidiSubdivisionControlIndex = 7005u;
 		static constexpr unsigned int NinjamRemoteTempoAcceptControlIndex = 7101u;
 		static constexpr unsigned int NinjamRemoteTempoRejectControlIndex = 7102u;
 
@@ -381,6 +394,10 @@ namespace engine
 		std::atomic<bool> _midiRefreshRequested{ false };
 		std::atomic<bool> _midiActive{ false };
 		std::chrono::steady_clock::time_point _lastMidiInventoryCheck{};
+		std::uint64_t _sourceRecoveryHeartbeat = 0u; // Job owner only.
+		std::chrono::steady_clock::time_point _sourceRecoveryHeartbeatAt{};
+		bool _sourceLossRecoveryGateClosed = false; // Serialized by _sceneMutex.
+		std::uint64_t _audioStreamEpoch = 0u; // Serialized lifecycle owner.
 		std::unique_ptr<vst::VstEditorWindowManager> _windowSubsystem;
 		std::unique_ptr<ninjam::NinjamNetworkService> _networkService;
 		engine::Quantiser _quantisation;
@@ -390,9 +407,17 @@ namespace engine
 		std::shared_ptr<gui::GuiNumericInput> _transportOffsetInput;
 		std::shared_ptr<gui::GuiToggle> _ninjamMetronomeToggle;
 		std::shared_ptr<gui::GuiRadio> _globalMidiQuantRadio;
+		std::shared_ptr<gui::GuiRadio> _midiSubdivisionRadio;
+		// Window-thread physical key state; repeats and consumed text taps cannot
+		// become extra tempo taps. Gesture holds are owned by the controller.
+		bool _spaceHeld = false;
+		bool _ctrlHeld = false;
+		std::string _quantisationFeedback;
+		std::atomic_bool _quantisationInputResetRequested{ false };
 		io::JamFile::GlobalMidiQuantState _globalMidiQuantState = io::JamFile::GlobalMidiQuantState::Mixed;
 		double _transportOffsetLoopFrac = 0.0;
-		std::unique_ptr<gui::GuiLabel> _label;
+		std::unique_ptr<gui::GuiLabel> _tempoLabel;
+		std::unique_ptr<gui::GuiLabel> _versionLabel;
 		std::unique_ptr<gui::SceneSelector> _selector;
 		std::shared_ptr<gui::GuiMainPanel> _mainPanel;
 		std::shared_ptr<gui::GuiMainPanel> _selectionPanel;

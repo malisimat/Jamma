@@ -10,6 +10,27 @@
 
 using namespace midi;
 
+std::vector<std::string> MidiDevice::LostConnectedInputNames(
+	const MidiConnectionResult& previous, const MidiConnectionResult& refreshed)
+{
+	std::vector<std::string> lost;
+	if (!refreshed.Inventory.Error.empty())
+		return lost;
+	for (const auto& endpoint : previous.Connected)
+	{
+		if (std::find(lost.begin(), lost.end(), endpoint.Name) != lost.end())
+			continue;
+		const auto named = [&](const MidiInputDeviceInfo& device) { return device.Name == endpoint.Name; };
+		const auto oldCount = std::count_if(previous.Connected.begin(), previous.Connected.end(), named);
+		const auto newCount = std::count_if(refreshed.Connected.begin(), refreshed.Connected.end(), named);
+		// Identical named devices have no physical GUID in WinMM. A count drop
+		// confirms loss but cannot identify which configured same-name route died.
+		if (newCount < oldCount)
+			lost.push_back(endpoint.Name);
+	}
+	return lost;
+}
+
 void MidiDevice::_LogMidiMessageDetail(std::ostream& out,
 	const unsigned char* message, std::size_t size)
 {
@@ -74,18 +95,29 @@ std::vector<MidiInputDeviceInfo> MidiDevice::EnumerateInputDevices()
 
 MidiInputInventory MidiDevice::InventoryInputDevices()
 {
+	MidiInputEnumerator enumerator;
+	return enumerator.Inventory();
+}
+
+MidiInputEnumerator::MidiInputEnumerator() = default;
+MidiInputEnumerator::~MidiInputEnumerator() = default;
+
+MidiInputInventory MidiInputEnumerator::Inventory()
+{
+	std::scoped_lock lock(_mutex);
 	MidiInputInventory inventory;
 
 	try
 	{
-		rt::midi::RtMidiIn midiIn;
-		const auto count = midiIn.getPortCount();
+		if (!_client)
+			_client = std::make_unique<rt::midi::RtMidiIn>();
+		const auto count = _client->getPortCount();
 		inventory.Devices.reserve(count);
 
 		for (unsigned int i = 0; i < count; ++i)
 		{
-			auto portName = midiIn.getPortName(i);
-			inventory.Devices.push_back({ i, BaseInputName(portName, i), std::move(portName) });
+			auto portName = _client->getPortName(i);
+			inventory.Devices.push_back({ i, MidiDevice::BaseInputName(portName, i), std::move(portName) });
 		}
 	}
 	catch (const rt::midi::RtMidiError& err)

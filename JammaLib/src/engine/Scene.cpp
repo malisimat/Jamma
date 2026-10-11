@@ -41,7 +41,7 @@ Scene::Scene(SceneParams params,
 	_skyboxViewProj(glm::mat4()),
 	_skyboxStarted(false),
 	_skyboxStartTime(Timer::GetZero()),
-	_label(nullptr),
+	_tempoLabel(nullptr),
 	_selector(nullptr),
 	_modeRadio(nullptr),
 	_midiChannelOverrideInput(nullptr),
@@ -81,22 +81,26 @@ Scene::Scene(SceneParams params,
 		[this](float aspect) { return _camera.Projection(aspect, _StationCentre(_stations)) * _camera.ViewMatrix(); },
 		[this]() { _OnLoopGridEditorOpened(); },
 		[this](int button, utils::Position2d anchor) { return _beginRelativePointer && _beginRelativePointer(button, anchor); },
-		[this](int button) { if (_endRelativePointer) _endRelativePointer(button); } },
+		[this](int button) { if (_endRelativePointer) _endRelativePointer(button); },
+		[this]() { const auto clock = _quantisation.Clock(); return clock ? clock->SeedSourceLength() : 0ul; },
+		[this]() { return static_cast<base::SelectDepth>(_selector ?
+			_selector->CurrentSelectDepth() : base::DEPTH_LOOP); } },
 		params.Size)
 {
 	_quantisation.SetClock(std::make_shared<Timer>());
 	_quantisation.SetSeedUsesPowers(_userConfig.Loop.SeedUsesPowers);
 
 	GuiLabelParams labelParams;
-	const std::string versionText = "Jamma v" LIB_VERSION;
-	labelParams.String = versionText;
+	labelParams.String = "BPM --- / BPI ---";
 	labelParams.Ellipsize = true;
 	labelParams.ClipText = true;
 	labelParams.VerticalAlign = GuiTextVerticalAlign::Center;
-	labelParams.Position = { (int)params.Size.Width - 220, (int)params.Size.Height - 28 };
-	labelParams.ModelPosition = { (float)(int)params.Size.Width - 220.0f, (float)(int)params.Size.Height - 28.0f, 0.0f };
-	labelParams.Size = { 220, 24 };
-	_label = std::make_unique<GuiLabel>(labelParams);
+	labelParams.Position = { 0, 3 };
+	labelParams.TextInsetX = GuiStyle::TextPadding;
+	labelParams.Size = { GuiStyle::TempoColumnMaxWidth, 22u };
+	_tempoLabel = std::make_unique<GuiLabel>(labelParams);
+	labelParams.String = "Jamma v" LIB_VERSION;
+	_versionLabel = std::make_unique<GuiLabel>(labelParams);
 
 
 	GuiHudParams hudParams;
@@ -193,9 +197,9 @@ Scene::Scene(SceneParams params,
 	GuiToggleParams metronomeToggleParams = GuiToggleParams::PanelPrimary();
 	metronomeToggleParams.Index = NinjamMetronomeControlIndex;
 	metronomeToggleParams.ToggleIndex = NinjamMetronomeControlIndex;
-	metronomeToggleParams.Text = "CLICK";
-	metronomeToggleParams.Size = { 80, GuiToggleParams::DefaultHeight };
-	metronomeToggleParams.MinSize = { 80, GuiToggleParams::DefaultHeight };
+	metronomeToggleParams.Text = "Metronome";
+	metronomeToggleParams.Size = { 120, GuiToggleParams::DefaultHeight };
+	metronomeToggleParams.MinSize = { 120, GuiToggleParams::DefaultHeight };
 	metronomeToggleParams.InitState = GuiToggleParams::TOGGLE_ON;
 	_ninjamMetronomeToggle = std::make_shared<GuiToggle>(metronomeToggleParams);
 
@@ -238,14 +242,34 @@ Scene::Scene(SceneParams params,
 	globalMidiQuantRadioParams.ToggleParams = globalQuantToggleParams;
 	_globalMidiQuantRadio = std::make_shared<GuiRadio>(globalMidiQuantRadioParams);
 
+	auto tapParams = GuiButtonParams::PanelButton(180u);
+	tapParams.Index = TapTempoControlIndex;
+	tapParams.Text = "Tap tempo (Space)";
+	auto tapButton = std::make_shared<GuiButton>(tapParams);
+	GuiRadioParams subdivisionParams;
+	subdivisionParams.Index = MidiSubdivisionControlIndex;
+	subdivisionParams.InitValue = midi::MidiQuantisation::FractionDisplayIndex(midi::MidiQuantisationFraction::Quarter);
+	subdivisionParams.Size = { 450u, 40u };
+	for (int index = 0; index < midi::MidiQuantisationFractionCount; ++index)
+	{
+		auto toggle = GuiToggleParams::PanelPrimary();
+		toggle.Text = midi::MidiQuantisation::FractionLabel(midi::MidiQuantisation::ClampFractionDisplayIndex(index));
+		toggle.Position = { index * 50, 0 };
+		toggle.Size = { 48u, 40u };
+		subdivisionParams.ToggleParams.push_back(toggle);
+	}
+	_midiSubdivisionRadio = std::make_shared<GuiRadio>(subdivisionParams);
+
 	GuiMainPanelParams mainParams;
 	mainParams.Size = params.Size;
 	mainParams.PopupManager = &_popupManager;
 	mainParams.BeforeHide = [this](const auto& subtree) { _OnSettingsHidden(subtree); };
 	mainParams.Settings = {
 		{ SettingsPage::Timing, "Global MIDI quantisation", _globalMidiQuantRadio, 101u },
-		{ SettingsPage::Midi, "MIDI channel (0 = unchanged)", _midiChannelOverrideInput, MidiChannelOverrideControlIndex },
 		{ SettingsPage::Timing, "Local phase offset (loops)", _transportOffsetInput, TransportOffsetControlIndex },
+		{ SettingsPage::Timing, "Subdivision: local grain / remote beat", _midiSubdivisionRadio, MidiSubdivisionControlIndex },
+		{ SettingsPage::Timing, "", tapButton, TapTempoControlIndex },
+		{ SettingsPage::Midi, "MIDI channel (0 = unchanged)", _midiChannelOverrideInput, MidiChannelOverrideControlIndex },
 		{ SettingsPage::Timing, "", _ninjamMetronomeToggle, NinjamMetronomeControlIndex }
 	};
 	_mainPanel = std::make_shared<GuiMainPanel>(mainParams);
@@ -397,6 +421,8 @@ void Scene::_ApplyNinjamTimingUpdate(const ninjam::NinjamTimingUpdate& update)
 		if (update.RemoteGrid.has_value())
 			_quantisation.SetRemoteMidiGrid(update.RemoteGrid->Geometry,
 				update.RemoteGrid->OriginSamps, _stations);
+		else if (desired.Intent == ninjam::NinjamDesiredTimingIntent::NoSync)
+			_quantisation.SetRemoteMidiGrid({}, 0, _stations);
 		if (_audioEngine)
 			_audioEngine->PublishDesiredTiming(desired);
 		if (_loggingConfig.Event == "verbose"
@@ -597,10 +623,23 @@ std::optional<std::shared_ptr<Scene>> Scene::FromFile(SceneParams sceneParams,
 		if (saved == jamStruct.TriggerHistories.end())
 			continue;
 		std::vector<TriggerTake> takes;
+		std::vector<std::pair<std::shared_ptr<base::TriggerPunchTarget>,
+			std::shared_ptr<base::TriggerPunchTarget>>> pins;
+		const auto station = std::dynamic_pointer_cast<Station>(runtime.Receiver);
+		const auto restoredTargets = station ? station->GetLoopTakeSnapshot() :
+			std::vector<std::shared_ptr<LoopTake>>{};
+		const auto resolve = [&restoredTargets](const std::string& id) -> std::shared_ptr<base::TriggerPunchTarget> {
+			const auto found = std::find_if(restoredTargets.begin(), restoredTargets.end(),
+				[&id](const auto& take) { return take && take->Id() == id; });
+			return found == restoredTargets.end() ? nullptr : *found;
+		};
 		takes.reserve(saved->Takes.size());
 		for (const auto& take : saved->Takes)
+		{
 			takes.push_back({ static_cast<decltype(TriggerTake{}.SourceType)>(take.SourceType), take.SourceTakeId, take.TargetTakeId });
-		runtime.Instance->RestoreTakes(std::move(takes));
+			pins.emplace_back(resolve(take.SourceTakeId), resolve(take.TargetTakeId));
+		}
+		runtime.Instance->RestoreTakes(std::move(takes), std::move(pins));
 	}
 	for (auto& station : initialStations)
 		scene->_AddStation(std::move(station), false);
@@ -654,7 +693,11 @@ void Scene::Draw(DrawContext& ctx)
 	const bool midiEditorEngaged = _loopEditor.IsEngaged() && _loopEditor.TargetMidiLoop();
 	_UpdateRackVisibilityLocked();
 	if (_hudPanel)
+	{
 		_hudPanel->SetLoopEditorMode(midiEditorEngaged);
+		_hudPanel->SetQuantisationFeedback(_quantisationFeedback);
+		_hudPanel->SetEditModeAlpha(_quantisationInteraction.PanelAlpha());
+	}
 
 	glDisable(GL_DEPTH_TEST);
 
@@ -690,6 +733,7 @@ void Scene::Draw(DrawContext& ctx)
 
 	if (!midiEditorEngaged)
 	{
+		auto opacity = ctx.WithOpacity(1.0f - _quantisationInteraction.PanelAlpha());
 		for (auto& station : _stations)
 			station->Draw(ctx);
 	}
@@ -699,18 +743,38 @@ void Scene::Draw(DrawContext& ctx)
 		_ctrlHandleOverlay.Draw(ctx);
 
 
-	for (auto& child : _guiChildren)
-		if (child && child != _mainPanel && child != _selectionPanel)
-			child->Draw(ctx);
+	{
+		auto opacity = ctx.WithOpacity(1.0f - _quantisationInteraction.PanelAlpha());
+		for (auto& child : _guiChildren)
+			if (child && child != _mainPanel && child != _selectionPanel && child != _hudPanel)
+				child->Draw(ctx);
+	}
+	if (_hudPanel) _hudPanel->Draw(ctx);
 	const int statusWidth = GuiStyle::StatusBarWidth(static_cast<int>(_sizeParams.Size.Width));
-	const int versionWidth = GuiStyle::VersionColumnWidth(statusWidth);
+	const int tempoWidth = GuiStyle::TempoColumnWidth(statusWidth);
+	std::string tempoText = "BPM --- / BPI ---";
+	if (const auto tempo = _quantisation.CurrentTempoStatus(_CurrentSampleRate()))
+	{
+		std::ostringstream text;
+		text << std::fixed << std::setprecision(0) << "BPM " << std::setw(3) << tempo->Bpm
+			<< " / BPI " << std::setw(3) << tempo->Bpi;
+		tempoText = text.str();
+	}
+	_tempoLabel->SetString(tempoText);
 	const int statusHeight = std::min(GuiStyle::StatusBarHeight, static_cast<int>(_sizeParams.Size.Height));
-	_label->SetPosition({ static_cast<int>(_sizeParams.Size.Width) - versionWidth, std::max(0, (statusHeight - 22) / 2) });
-	_label->SetSize({ static_cast<unsigned int>(versionWidth), 22u });
-	if (versionWidth > 0 && statusHeight >= 22) _label->Draw(ctx);
+	_tempoLabel->SetPosition({ 0, std::max(0, (statusHeight - 22) / 2) });
+	_tempoLabel->SetSize({ static_cast<unsigned int>(tempoWidth), 22u });
+	if (tempoWidth > 0 && statusHeight >= 22) _tempoLabel->Draw(ctx);
+	const int versionWidth = GuiStyle::VersionColumnWidth(statusWidth);
+	_versionLabel->SetPosition({ statusWidth - versionWidth, std::max(0, (statusHeight - 22) / 2) });
+	_versionLabel->SetSize({ static_cast<unsigned int>(versionWidth), 22u });
+	if (versionWidth > 0 && statusHeight >= 22) _versionLabel->Draw(ctx);
 	if (!_popupManager.IsOpen()) _loopEditor.Draw(ctx);
-	_mainPanel->Draw(ctx);
-	_selectionPanel->Draw(ctx);
+	{
+		auto opacity = ctx.WithOpacity(1.0f - _quantisationInteraction.PanelAlpha());
+		_mainPanel->Draw(ctx);
+		_selectionPanel->Draw(ctx);
+	}
 	_popupManager.Draw(ctx);
 
 	glCtx.PopMvp();
@@ -852,6 +916,8 @@ void Scene::UpdateCamera()
 
 void Scene::AdvanceUiAnimations()
 {
+	if (_quantisationInputResetRequested.exchange(false, std::memory_order_acq_rel))
+		_ReleaseQuantisationInput();
 	// Window calls once per UI frame before deferred hover and drawing.
 	// This clock is independent of the transport/audio callback.
 	const auto now = Timer::GetTime();
@@ -870,7 +936,8 @@ void Scene::_InitResources(ResourceLib& resourceLib, bool forceInit)
 	std::scoped_lock lock(_sceneMutex);
 
 	_skybox.InitResources(resourceLib, forceInit);
-	_label->InitResources(resourceLib, forceInit);
+	_tempoLabel->InitResources(resourceLib, forceInit);
+	_versionLabel->InitResources(resourceLib, forceInit);
 	_loopEditor.InitResources(resourceLib, forceInit);
 	_selector->InitResources(resourceLib, forceInit);
 	for (auto& child : _guiChildren)
@@ -891,7 +958,8 @@ void Scene::_InitResources(ResourceLib& resourceLib, bool forceInit)
 void Scene::_ReleaseResources()
 {
 	_skybox.ReleaseResources();
-	_label->ReleaseResources();
+	_tempoLabel->ReleaseResources();
+	_versionLabel->ReleaseResources();
 	_loopEditor.ReleaseResources();
 	_selector->ReleaseResources();
 	for (auto& child : _guiChildren)
@@ -999,8 +1067,15 @@ ActionResult Scene::OnAction(TouchAction action)
 		}
 		return popupRes;
 	}
-	if (auto settingsResult = _RouteSettingsTouch(action)) return *settingsResult;
-	if (_loopEditor.IsEngaged() && !_loopEditor.OwnsPointer() && !_loopEditor.IsOrbitDragging() && _hudPanel)
+	if (_quantisationInteraction.OwnsPointer() || (_EditControlsSuppressed() && !_loopEditor.IsEngaged()))
+	{
+		if (auto overlay = _RouteQuantisationTouch(action))
+			return *overlay;
+		return ActionResult::NoAction();
+	}
+	if (!_EditControlsSuppressed())
+		if (auto settingsResult = _RouteSettingsTouch(action)) return *settingsResult;
+	if (!_EditControlsSuppressed() && _loopEditor.IsEngaged() && !_loopEditor.OwnsPointer() && !_loopEditor.IsOrbitDragging() && _hudPanel)
 	{
 		std::scoped_lock lock(_sceneMutex);
 		auto hudResult = _hudPanel->OnAction(_hudPanel->GlobalToLocal(action));
@@ -1029,11 +1104,7 @@ ActionResult Scene::OnAction(TouchAction action)
 		return res;
 	}
 
-	if (auto overlayRes = _quantisationInteraction.TryHandleTouchAction(action,
-		_CurrentSampleRate(),
-		_IsMidiPhaseDragModifier(action.Modifiers),
-		_InteractionContext(),
-		[this](const std::vector<unsigned char>& path) { return _ChildFromPath(path); });
+	if (auto overlayRes = _RouteQuantisationTouch(action);
 		overlayRes.has_value())
 	{
 		return overlayRes.value();
@@ -1171,6 +1242,16 @@ ActionResult Scene::OnAction(TouchMoveAction action)
 	action.SetUserConfig(_userConfig);
 	_cursorPos = action.Position;
 	_InvalidateHover2d();
+	if (_quantisationInteraction.OwnsPointer())
+	{
+		if (action.MouseButtonsDown == 0u)
+			_quantisationInteraction.CancelInteraction();
+		else if (auto overlay = _RouteQuantisationMove(action))
+			return *overlay;
+		return ActionResult::NoAction();
+	}
+	if (_EditControlsSuppressed() && !_loopEditor.IsEngaged())
+		return ActionResult::NoAction();
 	if (_popupManager.IsOpen())
 	{
 		_loopEditor.CancelInput();
@@ -1197,7 +1278,7 @@ ActionResult Scene::OnAction(TouchMoveAction action)
 		}
 		return { true, {}, {}, ACTIONRESULT_DEFAULT, nullptr, {} };
 	}
-	if (!_touchDownElement.lock() && !_camera.IsBackgroundDragging() && !_isSceneTouching &&
+	if (!_EditControlsSuppressed() && !_touchDownElement.lock() && !_camera.IsBackgroundDragging() && !_isSceneTouching &&
 		!_loopEditor.OwnsPointer() && !_loopEditor.IsOrbitDragging() && !_quantisationInteraction.OwnsPointer())
 	{
 		for (const auto& panel : { _selectionPanel, _mainPanel })
@@ -1207,7 +1288,7 @@ ActionResult Scene::OnAction(TouchMoveAction action)
 				return { true, {}, {}, ACTIONRESULT_DEFAULT, nullptr, {} };
 			}
 	}
-	if (_loopEditor.IsEngaged() && !_loopEditor.OwnsPointer() && !_loopEditor.IsOrbitDragging() && _hudPanel)
+	if (!_EditControlsSuppressed() && _loopEditor.IsEngaged() && !_loopEditor.OwnsPointer() && !_loopEditor.IsOrbitDragging() && _hudPanel)
 	{
 		std::scoped_lock lock(_sceneMutex);
 		auto hudResult = _hudPanel->OnAction(_hudPanel->GlobalToLocal(action));
@@ -1216,8 +1297,7 @@ ActionResult Scene::OnAction(TouchMoveAction action)
 	if (auto editorRes = _loopEditor.OnAction(action))
 		return *editorRes;
 
-	if (auto overlayRes = _quantisationInteraction.TryHandleTouchMove(action,
-		_CurrentSampleRate());
+	if (auto overlayRes = _RouteQuantisationMove(action);
 		overlayRes.has_value())
 	{
 		return overlayRes.value();
@@ -1277,6 +1357,69 @@ ActionResult Scene::OnAction(KeyAction action)
 	action.SetActionTime(Timer::GetTime());
 	action.SetUserConfig(_userConfig);
 	action.SetAudioParams(_audioEngine->GetStreamParams());
+
+	// Physical modifier transitions must survive contextual editor consumption.
+	if (17u == action.KeyChar)
+	{
+		const bool wasCtrlHeld = _ctrlHeld;
+		_ctrlHeld = actions::KeyAction::KEY_DOWN == action.KeyActionType;
+		const bool contextualText = _focusManager.IsEditingText() || _loopEditor.IsEditingText();
+		{
+			std::scoped_lock lock(_sceneMutex);
+			_quantisationInteraction.OnCtrlModifierChanged(_ctrlHeld && !contextualText, action.GetActionTime(),
+				_InteractionContextLocked(), [this](const auto& path) { return _ChildFromPathLocked(path); });
+		}
+		if (_ctrlHeld && !contextualText && !_loopEditor.IsEngaged())
+		{
+			_focusManager.ClearFocus();
+			if (auto active = _touchDownElement.lock()) active->ClearPointerState();
+			_touchDownElement.reset();
+			_touchDownIsHud = _touchDownIsSettings = false;
+			if (!wasCtrlHeld && HasSelection())
+			{
+				// Targets were captured above; hide hover when editing the selection.
+				_ApplyHoverPath2d({});
+				_hoverPath2d.clear();
+				{
+					std::scoped_lock lock(_sceneMutex);
+					_hoverPath3d.clear();
+					_hoverElement3d.reset();
+					_selector->UpdateCurrentHover({}, Action::MODIFIER_NONE, false,
+						Tweakable::TWEAKSTATE_NONE);
+					for (const auto& station : _stations)
+						station->SetPicking3d(false);
+				}
+			}
+		}
+		if (wasCtrlHeld && !_ctrlHeld)
+			_InvalidateHover2d();
+	}
+	if (32u == action.KeyChar)
+	{
+		if (actions::KeyAction::KEY_UP == action.KeyActionType)
+		{
+			_spaceHeld = false;
+			_SetQuantisationOverlayHeld(false);
+		}
+		else if (!_spaceHeld)
+		{
+			_spaceHeld = true;
+			if (!_popupManager.IsOpen() && !_focusManager.IsEditingText() && !_loopEditor.IsEditingText())
+			{
+				_SetQuantisationOverlayHeld(true);
+				_HandleTapTempo(action.GetActionTime());
+			}
+		}
+		// A text consumer still receives Space, but the physical release above
+		// always unwinds a previous hold, even after focus changes.
+		if (!_popupManager.IsOpen() && !_focusManager.IsEditingText() && !_loopEditor.IsEditingText())
+			return ActionResult::NoAction();
+	}
+	if (27u == action.KeyChar && _quantisationInteraction.OwnsPointer())
+	{
+		_quantisationInteraction.CancelInteraction();
+		return ActionResult::NoAction();
+	}
 
 	std::cout << "Key action " << action.KeyActionType << " [" << action.KeyChar << "] IsSytem:" << action.IsSystem << ", Modifiers:" << action.Modifiers << "]" << std::endl;
 	if (_popupManager.IsOpen())
@@ -1347,22 +1490,6 @@ ActionResult Scene::OnAction(KeyAction action)
 		ActionResult result;
 		result.IsEaten = true;
 		return result;
-	}
-
-	if (17 == action.KeyChar)
-	{
-		const bool held = (actions::KeyAction::KEY_DOWN == action.KeyActionType);
-		_quantisationInteraction.OnCtrlModifierChanged(held,
-			Timer::GetTime(),
-			_InteractionContext(),
-			[this](const std::vector<unsigned char>& path) { return _ChildFromPath(path); });
-	}
-
-	if ((32 == action.KeyChar) && (actions::KeyAction::KEY_UP == action.KeyActionType))
-	{
-		_PulseQuantisationOverlay();
-		_HandleTapTempo(action.GetActionTime());
-		return ActionResult::NoAction();
 	}
 
 	if ((82 == action.KeyChar)
@@ -1507,10 +1634,19 @@ ActionResult Scene::OnAction(KeyAction action)
 
 void Scene::_HandleReclockArm()
 {
+	std::scoped_lock lock(_sceneMutex);
+	if (_quantisation.ActiveGrid().Source == QuantisationGridSource::Remote)
+	{
+		std::cout << "[quantisation] reclock rejected: remote authority; choose Stay local first" << std::endl;
+		return;
+	}
 	std::cout << ">> Reclock armed (Ctrl+Shift+R) <<" << std::endl;
-	const auto stations = SnapshotStations();
-	_quantisation.ArmReclock(stations);
-	_quantisation.SetMidiGrain(0u, "reclock arm", stations);
+	_quantisation.ArmReclock(_stations);
+	_quantisation.SetRemoteMidiGrid({}, 0, _stations);
+	_quantisation.SetMidiGrain(0u, "reclock arm", _stations);
+	for (const auto& station : _stations)
+		if (station && !station->IsRemote())
+			for (const auto& take : station->GetLoopTakes()) take->SetMidiBaseGrid(0u, 0u);
 }
 
 ActionResult Scene::_HandleUndo()
@@ -1522,6 +1658,29 @@ ActionResult Scene::_HandleUndo()
 
 ActionResult Scene::OnAction(GuiAction action)
 {
+	if (GuiAction::ACTIONELEMENT_BUTTON == action.ElementType && action.Index == TapTempoControlIndex)
+	{
+		_PulseQuantisationOverlay();
+		_HandleTapTempo(Timer::GetTime());
+		return ActionResult::NoAction();
+	}
+	if (GuiAction::ACTIONELEMENT_RADIO == action.ElementType && action.Index == MidiSubdivisionControlIndex)
+	{
+		if (auto value = std::get_if<GuiAction::GuiInt>(&action.Data))
+		{
+			const auto fraction = midi::MidiQuantisation::ClampFractionDisplayIndex(value->Value);
+			std::scoped_lock lock(_sceneMutex);
+			for (const auto& station : _stations)
+				if (station && !station->IsRemote())
+					for (const auto& take : station->GetLoopTakes())
+					{
+						auto settings = take->MidiQuantisation();
+						settings.Fraction = fraction;
+						take->SetMidiQuantisation(settings);
+					}
+		}
+		return ActionResult::NoAction();
+	}
 	if ((GuiAction::ACTIONELEMENT_BUTTON == action.ElementType)
 		&& (action.Index == NinjamRemoteTempoAcceptControlIndex))
 	{
@@ -1653,26 +1812,25 @@ void Scene::OnTick(Time curTime,
 		clock->Tick(samps, 0u);
 	}
 
-	const auto stationsSnapshot = _audioEngine->GetStationsSnapshot();
-	static const std::vector<std::shared_ptr<Station>> emptyStations;
-	const auto& stations = stationsSnapshot ? *stationsSnapshot : emptyStations;
+	const auto& stations = _audioEngine->AudioStationsForCallback();
 
-	const auto streamParams = _audioEngine->GetStreamParams();
 	for (auto& station : stations)
 	{
 		station->OnTick(curTime,
 			samps,
-			_userConfig,
-			streamParams);
+			cfg,
+			params);
 	}
 }
 
 void Scene::OnJobTick(Time curTime)
 {
+	_audioEngine->CollectRetiredSnapshots();
 	if (!_isSceneQuitting.load(std::memory_order_acquire))
 		_inputSubsystem->AcknowledgeRigTriggerInputCloseFromJob();
 	_RefreshMidiIfNeeded();
 	_PumpTriggerStructuralActions();
+	_PumpSourceLossRecovery();
 	_AdvanceRigPublication();
 	_PumpMidi();
 	_PumpSerial();
@@ -1682,6 +1840,8 @@ void Scene::OnJobTick(Time curTime)
 	{
 		// Keep the station clock synced when local content seeds it without NINJAM.
 		std::scoped_lock lock(_sceneMutex);
+		if (auto clock = _quantisation.Clock(); clock && clock->QuantiseSamps() != _quantisation.EffectiveSamps())
+			_SetMidiQuantisationGrain(clock->QuantiseSamps(), "clock geometry changed");
 		const auto localTiming = _quantisation.CurrentTempoTiming(_CurrentSampleRate());
 		bool hasLocalContent = false;
 		for (const auto& station : _stations)
@@ -1756,7 +1916,7 @@ void Scene::_RefreshMidiIfNeeded()
 	if (!requested && now - _lastMidiInventoryCheck < std::chrono::seconds(1))
 		return;
 	_lastMidiInventoryCheck = now;
-	const auto inventory = midi::MidiDevice::InventoryInputDevices();
+	const auto inventory = _inputSubsystem->InventoryMidiInputs();
 	if (!inventory.Error.empty())
 		return; // A transient inventory error must not tear down working ports.
 	const auto previous = _midiState.load(std::memory_order_acquire);
@@ -1786,6 +1946,7 @@ void Scene::_RefreshMidiIfNeeded()
 	for (const auto& endpoint : result.Connected)
 		if (std::find(connectedNames.begin(), connectedNames.end(), endpoint.Name) == connectedNames.end())
 			connectedNames.push_back(endpoint.Name);
+	_ConfirmMidiConnectionChange(previous->Connection, result, connectedNames);
 	_midiState.store(std::make_shared<const MidiState>(MidiState{ std::move(result), connectedNames }),
 		std::memory_order_release);
 	const auto inputs = _audioEngine->GetStreamParams().NumInputChannels;
@@ -1800,6 +1961,91 @@ void Scene::_RefreshMidiIfNeeded()
 			_hudPanel->SetRoutingConfig(inputs, connectedNames, *runtime);
 		}
 	}
+}
+
+void Scene::_ConfirmMidiConnectionChange(const midi::MidiConnectionResult& previous,
+	const midi::MidiConnectionResult& refreshed, const std::vector<std::string>& connectedNames)
+{
+	if (!refreshed.Inventory.Error.empty()) return;
+	const auto lostNames = midi::MidiDevice::LostConnectedInputNames(previous, refreshed);
+	std::scoped_lock lock(_sceneMutex);
+	const auto accepted = _rigCoordinator.Accepted();
+	if (!accepted) return;
+	for (const auto& runtime : accepted->Triggers)
+	{
+		if (!runtime.Instance || runtime.RigTriggerIndex >= accepted->Rig.Triggers.size()) continue;
+		const auto& configured = accepted->Rig.Triggers[runtime.RigTriggerIndex];
+		const bool activationLost = configured.MidiTrigger &&
+			std::find(lostNames.begin(), lostNames.end(), configured.MidiTrigger->Device) != lostNames.end();
+		const bool captureLost = configured.MidiInputs == io::RigFile::Trigger::MidiInputMode::Selected &&
+			std::any_of(configured.MidiInputDevices.begin(), configured.MidiInputDevices.end(),
+				[&lostNames](const std::string& name) { return std::find(lostNames.begin(), lostNames.end(), name) != lostNames.end(); });
+		runtime.Instance->ConfirmMidiAvailabilityOnJob(connectedNames, lostNames, activationLost, captureLost);
+	}
+	for (const auto& station : _stations)
+		if (station)
+			for (const auto& name : lostNames) station->FlushLiveHeldMidiNotesForDevice(name);
+}
+
+void Scene::_PumpSourceLossRecovery()
+{
+	std::scoped_lock lock(_sceneMutex);
+	if (_isSceneQuitting.load(std::memory_order_acquire)) return;
+	for (const auto& station : _stations)
+		if (station) station->FlushPendingLostLiveMidiNotes();
+	const auto accepted = _rigCoordinator.Accepted();
+	if (!accepted)
+	{
+		// Reset can remove the rig while this job owns admission closure.
+		if (_sourceLossRecoveryGateClosed && _audioEngine->CallbackAdmissionIsQuiescent() &&
+			_audioEngine->ReopenCallbackAdmission()) _sourceLossRecoveryGateClosed = false;
+		return;
+	}
+	const auto pending = [&accepted]() {
+		return std::any_of(accepted->Triggers.begin(), accepted->Triggers.end(),
+			[](const auto& runtime) { return runtime.Instance && runtime.Instance->HasPendingSourceLoss(); });
+	};
+	const auto publicationNeedsAcknowledgement = [this]() {
+		return std::any_of(_stations.begin(), _stations.end(),
+			[](const auto& station) { return station && station->HasUnacknowledgedAudioState(); });
+	};
+	const auto heartbeat = _audioEngine->AudioCallbackHeartbeat();
+	const auto now = std::chrono::steady_clock::now();
+	if (_sourceRecoveryHeartbeatAt == std::chrono::steady_clock::time_point{} || heartbeat != _sourceRecoveryHeartbeat)
+	{
+		_sourceRecoveryHeartbeat = heartbeat;
+		_sourceRecoveryHeartbeatAt = now;
+	}
+	if (!_sourceLossRecoveryGateClosed)
+	{
+		if ((!pending() && !publicationNeedsAcknowledgement()) ||
+			(heartbeat != 0u && now - _sourceRecoveryHeartbeatAt < std::chrono::milliseconds(500))) return;
+		// Heartbeat is only a stalled-reader hint. Admission closure plus the
+		// active-reader acknowledgement below is the authority to borrow fields.
+		_audioEngine->CloseCallbackAdmission();
+		_sourceLossRecoveryGateClosed = true;
+	}
+	if (!_audioEngine->CallbackAdmissionIsQuiescent()) return;
+	_audioEngine->ApplyPendingRigWhileQuiescent();
+	const auto revision = _audioEngine->AppliedRigRevision();
+	const auto streamParams = _audioEngine->GetStreamParams();
+	for (const auto& runtime : accepted->Triggers)
+		if (runtime.Instance)
+		{
+			runtime.Instance->OnTick(Timer::GetTime(), 0u, _userConfig, streamParams, revision);
+			runtime.Instance->ProcessStructuralActionsOnJob(_userConfig, streamParams);
+			runtime.Instance->OnTick(Timer::GetTime(), 0u, _userConfig, streamParams, revision);
+		}
+	_audioEngine->ApplyPendingRigWhileQuiescent();
+	// The gate is the reader acknowledgement when a stopped driver cannot
+	// observe newly published removals. External target pins do not hold it shut.
+	for (const auto& station : _stations)
+		if (station)
+		{
+			station->AcknowledgeAudioBoundary();
+			station->ReleaseRetiredAudioStates();
+		}
+	if (!pending() && _audioEngine->ReopenCallbackAdmission()) _sourceLossRecoveryGateClosed = false;
 }
 
 void Scene::_PumpMidi()
@@ -1987,6 +2233,10 @@ void Scene::_ConsumeTriggerOutcomes()
 void Scene::InitReceivers()
 {
 	_selector->SetReceiver(ActionReceiver::shared_from_this());
+	_quantisationInteraction.SetFeedbackSink([this](const std::string& text) {
+		// UI-owned text; apply to the HUD during the next locked draw.
+		_quantisationFeedback = text;
+	});
 	_mainPanel->SetCommandOwner(ActionReceiver::shared_from_this());
 	_selectionPanel->SetCommandOwner(ActionReceiver::shared_from_this());
 	if (_remoteTempoDialog)
@@ -2009,7 +2259,7 @@ void Scene::AddChild(std::shared_ptr<base::GuiElement> child)
 
 void Scene::SetHover3d(std::vector<unsigned char> path, Action::Modifiers modifiers)
 {
-	if (_loopEditor.IsEngaged())
+	if (_ctrlHeld || _loopEditor.IsEngaged())
 		return;
 	// Resolve GUI ownership before taking the scene lock: station snapshots also lock it.
 	std::vector<std::weak_ptr<base::GuiElement>> guiPath;
@@ -2032,25 +2282,7 @@ void Scene::SetHover3d(std::vector<unsigned char> path, Action::Modifiers modifi
 	_hoverPath3d = fullElementPath;
 	_hoverElement3d = _ChildFromPathLocked(fullElementPath);
 	elementPath = fullElementPath;
-	if (auto pickedElement = _hoverElement3d.lock();
-		_selector->CurrentSelectDepth() == base::DEPTH_LOOP && pickedElement)
-	{
-		if (auto take = std::dynamic_pointer_cast<LoopTake>(pickedElement->Parent()))
-		{
-			for (const auto& midiLoop : take->GetMidiLoops())
-			{
-				if (midiLoop->Model() != pickedElement)
-					continue;
-				if (!take->GetMidiLoops().empty() && take->GetMidiLoops().front()->Model())
-				{
-					elementPath.clear();
-					for (auto index : take->GetMidiLoops().front()->Model()->GlobalId())
-						elementPath.push_back(static_cast<unsigned char>(index));
-				}
-				break;
-			}
-		}
-	}
+	// Keep the picked stream identity; MIDI layers are independent loop targets.
 
 	elementPath = TrimPath(elementPath, _selector->CurrentSelectDepth() + 1);
 	// Rack controls own the pointer even when the 3D picker sees a model behind them.
@@ -2089,7 +2321,7 @@ void Scene::SetHover3d(std::vector<unsigned char> path, Action::Modifiers modifi
 		modifiers,
 		isSelected,
 		tweakState);
-	_quantisationInteraction.RefreshOverlay(_InteractionContext(),
+	_quantisationInteraction.RefreshOverlay(_InteractionContextLocked(),
 		[this](const std::vector<unsigned char>& path) { return _ChildFromPathLocked(path); });
 
 	lock.unlock();
@@ -2101,6 +2333,8 @@ void Scene::SetHover3d(std::vector<unsigned char> path, Action::Modifiers modifi
 
 void Scene::Reset()
 {
+	// Reset also runs on the job thread; the controller/editor belong to UI.
+	_quantisationInputResetRequested.store(true, std::memory_order_release);
 	std::cout << "Reset" << std::endl;
 	_ClearTimingState(true);
 	_ClearStationQuantisation();
@@ -2115,12 +2349,36 @@ void Scene::InitGui()
 
 void Scene::InitAudio(bool generatedRig, const audio::AsioInventory* inventory)
 {
+	const auto previousMidi = _midiState.load(std::memory_order_acquire);
 	// Setup audio engine which starts device
-	bool started = _audioEngine->Init(_networkService->GetController(), [this](Time streamTime, unsigned int numSamps,
+	bool started = false;
+	{
+		std::scoped_lock lock(_sceneMutex);
+		_audioEngine->CloseCallbackAdmission();
+		_sourceLossRecoveryGateClosed = true;
+		started = _audioEngine->Init(_networkService->GetController(), [this](Time streamTime, unsigned int numSamps,
 		const std::optional<io::UserConfig>& cfg,
 		const std::optional<audio::AudioStreamParams>& params) {
 		this->OnTick(Timer::GetTime(), numSamps, cfg, params);
 	}, generatedRig, inventory);
+		if (!started && !_audioEngine->LastInitReplacedStream())
+		{
+			// Stop failure is unknown availability, not a confirmed replacement.
+			// Preserve the existing capture identities and MIDI connections.
+			if (_audioEngine->CallbackAdmissionIsQuiescent() &&
+				_audioEngine->ReopenCallbackAdmission()) _sourceLossRecoveryGateClosed = false;
+			return;
+		}
+		// Replacing the stream invalidates the common sample clock even when its
+		// display name/channels remain unchanged. New callbacks stay gated until
+		// prior captures have settled through the usual structural result protocol.
+		const auto actual = _audioEngine->GetStreamParams();
+		++_audioStreamEpoch;
+		if (const auto accepted = _rigCoordinator.Accepted())
+			for (const auto& runtime : accepted->Triggers)
+				if (runtime.Instance) runtime.Instance->ConfirmAudioAvailabilityOnJob(
+					_audioStreamEpoch, started ? actual.Name : std::string(), started ? actual.NumInputChannels : 0u);
+	}
 
 	// Share the master transport clock so the audio callback can apply unified
 	// NINJAM timing commands to the Timer and local takes at one boundary.
@@ -2138,6 +2396,7 @@ void Scene::InitAudio(bool generatedRig, const audio::AsioInventory* inventory)
 	}
 	const auto midiState = _midiState.load(std::memory_order_acquire);
 	const auto actualInputs = started ? _audioEngine->GetStreamParams().NumInputChannels : 0u;
+	_ConfirmMidiConnectionChange(previousMidi->Connection, midiState->Connection, midiState->ConnectedNames);
 	if (const auto runtime = _rigCoordinator.RefreshRuntimeAvailability(actualInputs, midiState->ConnectedNames))
 	{
 		_audioEngine->PublishPendingRigSnapshot(runtime);
@@ -2151,6 +2410,7 @@ void Scene::InitAudio(bool generatedRig, const audio::AsioInventory* inventory)
 	}
 
 	CommitChanges();
+	_PumpSourceLossRecovery();
 }
 
 void Scene::SetLogging(io::LoggingConfig config) noexcept
@@ -2205,10 +2465,17 @@ bool Scene::PumpGlobalKeyCapture(actions::KeyAction& action) noexcept
 
 void Scene::Shutdown()
 {
+	{
+		// Recovery borrows callback-owned fields under this same lock. Finish
+		// that borrow before teardown, and prevent a later job reopening admission.
+		std::scoped_lock lock(_sceneMutex);
+		// Publish the permanent close token before the job loop can exit and make
+		// its final acknowledgement. Releasing quit first can strand that token.
+		_inputSubsystem->CloseRigTriggerInputForever();
+		_isSceneQuitting.store(true, std::memory_order_release);
+	}
 	_rigCoordinator.Shutdown();
 	_audioEngine->ClearRigTriggerTransition();
-	_inputSubsystem->CloseRigTriggerInputForever();
-	_isSceneQuitting.store(true, std::memory_order_release);
 	// RtAudio::Stop() waits for an in-flight callback to return.  Do this before
 	// closing an editor or releasing a plugin: the callback can be dispatching
 	// VST processing, MIDI, or recorded parameter automation.
@@ -2297,13 +2564,15 @@ void Scene::CommitChanges()
 		}
 
 		_OpenRemoteTempoPromptIfNeeded();
-	}
 
-	for (auto& job : syncJobs)
-	{
-		auto receiver = job.Receiver.lock();
-		if (receiver)
-			receiver->OnAction(job);
+		// Completion/update payloads share structural ownership with start/end/ditch.
+		// Keep validation and mutation under the same off-callback scene lock.
+		for (auto& job : syncJobs)
+		{
+			auto receiver = job.Receiver.lock();
+			if (receiver)
+				receiver->OnAction(job);
+		}
 	}
 
 	// Initialize VSTs on the UI thread after releasing _sceneMutex.
@@ -2330,6 +2599,9 @@ void Scene::CommitChanges()
 
 void Scene::ApplyDeferredHoverUpdates()
 {
+	// Ctrl edits the captured targets, so pointer motion must not change their feedback.
+	if (_ctrlHeld)
+		return;
 	// Keep active hover in sync with both deferred 2D hit-testing and latest 3D picker result.
 	if (!_hover2dDirty)
 		return;
@@ -2385,7 +2657,7 @@ void Scene::ApplyDeferredHoverUpdates()
 			{
 				isSelected = hovering->IsSelected();
 				if (auto tweakable = std::dynamic_pointer_cast<Tweakable>(hovering))
-					tweakState = tweakable->GetTweakState();
+					tweakState = tweakable->IsMuted() ? Tweakable::TWEAKSTATE_MUTED : Tweakable::TWEAKSTATE_NONE;
 			}
 
 			_selector->UpdateCurrentHover(stationPath,
@@ -2425,6 +2697,11 @@ void Scene::_InvalidateHover2d()
 
 void Scene::_ResolveHoverPath2d(std::vector<std::weak_ptr<base::GuiElement>>& outPath)
 {
+	if (_EditControlsSuppressed() && !_loopEditor.IsEngaged())
+	{
+		outPath.clear();
+		return;
+	}
 	outPath.clear();
 
 	auto resolveTop = [this](const std::shared_ptr<base::GuiElement>& root) {
@@ -2566,6 +2843,7 @@ void Scene::_InitSize()
 
 void Scene::_OnLoopGridEditorOpened()
 {
+	_ReleaseQuantisationInput();
 	if (_hudPanel)
 	{
 		std::scoped_lock lock(_sceneMutex);
@@ -2606,10 +2884,10 @@ base::Tweakable::TweakState Scene::_SelectionTweakStateLocked(const std::shared_
 	if (auto station = std::dynamic_pointer_cast<Station>(target))
 		return station->AllTakesMuted() ? Tweakable::TWEAKSTATE_MUTED : Tweakable::TWEAKSTATE_NONE;
 	if (auto tweakable = std::dynamic_pointer_cast<Tweakable>(target))
-		return tweakable->GetTweakState();
+		return tweakable->IsMuted() ? Tweakable::TWEAKSTATE_MUTED : Tweakable::TWEAKSTATE_NONE;
 	if (target)
 		if (auto take = std::dynamic_pointer_cast<LoopTake>(target->Parent()))
-			return take->GetTweakState();
+			return take->IsMuted() ? Tweakable::TWEAKSTATE_MUTED : Tweakable::TWEAKSTATE_NONE;
 	return Tweakable::TWEAKSTATE_NONE;
 }
 
@@ -2714,9 +2992,6 @@ void Scene::_UpdateSelection(ActionResultType res)
 		{
 			if (auto take = std::dynamic_pointer_cast<LoopTake>(target->Parent()))
 			{
-				bool isMidiModel = false;
-				for (const auto& midiLoop : take->GetMidiLoops())
-					isMidiModel |= midiLoop->Model() == target;
 				// A take keeps the aggregate selected state used by the editor, while
 				// individual loop models carry the loop-depth visual selection.
 				if (selected && !take->IsSelected())
@@ -2728,13 +3003,7 @@ void Scene::_UpdateSelection(ActionResultType res)
 						if (auto model = midiLoop->Model(); model && model != target)
 							model->DeSelect();
 				}
-				if (isMidiModel)
-				{
-				for (const auto& midiLoop : take->GetMidiLoops())
-					if (auto model = midiLoop->Model())
-						if (selected) model->Select(); else model->DeSelect();
-			}
-				else if (selected) target->Select(); else target->DeSelect();
+				if (selected) target->Select(); else target->DeSelect();
 				if (!selected && take->IsSelected())
 				{
 					bool anySelected = false;
@@ -2940,7 +3209,7 @@ void Scene::_UpdateSelection(ActionResultType res)
 			Action::MODIFIER_NONE, hovered->IsSelected(), tweakState);
 	}
 
-	_quantisationInteraction.RefreshOverlay(_InteractionContext(),
+	_quantisationInteraction.RefreshOverlay(_InteractionContextLocked(),
 		[this](const std::vector<unsigned char>& path) { return _ChildFromPathLocked(path); });
 }
 
@@ -3108,12 +3377,43 @@ bool Scene::_IsMidiPhaseDragModifier(base::Action::Modifiers modifiers) const no
 
 QuantisationInteractionContext Scene::_InteractionContext() const
 {
+	std::scoped_lock lock(_sceneMutex);
+	return _InteractionContextLocked();
+}
+
+QuantisationInteractionContext Scene::_InteractionContextLocked() const
+{
 	QuantisationInteractionContext context;
 	context.CursorPos = _cursorPos;
 	context.ViewportSize = _sizeParams.Size;
 	context.SelectDepth = _selector->CurrentSelectDepth();
 	context.HoverPath = _selector->CurrentHover();
 	context.HoverPath3d = _hoverPath3d;
+	context.SampleRate = _CurrentSampleRate();
+	if (context.SelectDepth == base::DEPTH_LOOP)
+	{
+		bool anySelected = false;
+		auto hovered = _ChildFromPathLocked(context.HoverPath);
+		if (!hovered) hovered = _ChildFromPathLocked(context.HoverPath3d);
+		for (const auto& station : _stations)
+			if (station && !station->IsRemote())
+				for (const auto& take : station->GetLoopTakes())
+				{
+					for (const auto& loop : take->GetLoops())
+						if (loop)
+						{
+							anySelected |= loop->IsSelected();
+							if (loop->IsSelected() || loop == hovered) context.LoopDepthHasAudioTarget = true;
+						}
+					for (const auto& loop : take->GetMidiLoops())
+						if (auto model = loop->Model())
+						{
+							if (model->IsSelected()) { context.SelectedMidiLoops.push_back(loop); anySelected = true; }
+							if (model == hovered) context.HoveredMidiLoop = loop;
+						}
+				}
+		if (anySelected) context.HoveredMidiLoop.reset();
+	}
 	return context;
 }
 
@@ -3214,7 +3514,7 @@ std::shared_ptr<GuiElement> Scene::_ChildFromPath(std::vector<unsigned char> pat
 	return _ChildFromPathLocked(path);
 }
 
-std::shared_ptr<GuiElement> Scene::_ChildFromPathLocked(const std::vector<unsigned char>& path)
+std::shared_ptr<GuiElement> Scene::_ChildFromPathLocked(const std::vector<unsigned char>& path) const
 {
 	if (path.size() < 1)
 		return nullptr;
@@ -3271,12 +3571,9 @@ QuantisationPolicy Scene::_QuantisationPolicy() const
 
 unsigned int Scene::_CurrentSampleRate() const
 {
-	if (_audioEngine->GetDevice())
-	{
-		const auto streamRate = _audioEngine->GetStreamParams().SampleRate;
-		if (streamRate > 0u)
-			return streamRate;
-	}
+	const auto streamRate = _audioEngine->GetStreamParams().SampleRate;
+	if (streamRate > 0u)
+		return streamRate;
 
 	if (_userConfig.Audio.SampleRate > 0u)
 		return _userConfig.Audio.SampleRate;
@@ -3306,12 +3603,24 @@ void Scene::_ApplyQuantisationTiming(const QuantisationTiming& timing, const cha
 
 bool Scene::_HandleTapTempo(Time actionTime)
 {
+	std::scoped_lock lock(_sceneMutex);
 	const auto handled = _quantisation.HandleTapTempo(_EstimatedAudioSampleAt(actionTime),
 		_CurrentSampleRate(),
-		SnapshotStations(),
+		_stations,
 		_userConfig);
 	if (handled)
-		_UpdateStationQuantisation(nullptr, _selector->CurrentSelectDepth(), false);
+	{
+		_quantisation.UpdateStationHints(nullptr, _selector->CurrentSelectDepth(), false, _stations);
+		for (const auto& station : _stations)
+			if (station && !station->IsRemote())
+				for (const auto& take : station->GetLoopTakes())
+					if (take && _midiSubdivisionRadio)
+					{
+						_midiSubdivisionRadio->SetCurrentValue(
+							midi::MidiQuantisation::FractionDisplayIndex(take->MidiQuantisation().Fraction), true);
+						return handled;
+					}
+	}
 	return handled;
 }
 
@@ -3382,9 +3691,10 @@ bool Scene::_HasQuantisationHover() const
 
 bool Scene::_TrySetMasterFromHover(bool confirm)
 {
-	return _quantisation.TrySetMasterFromHover(_ChildFromPath(_selector->CurrentHover()),
+	std::scoped_lock lock(_sceneMutex);
+	return _quantisation.TrySetMasterFromHover(_ChildFromPathLocked(_selector->CurrentHover()),
 		_selector->CurrentSelectDepth(),
-		SnapshotStations(),
+		_stations,
 		_CurrentSampleRate(),
 		_userConfig,
 		confirm);
@@ -3394,7 +3704,8 @@ void Scene::_UpdateStationQuantisation(std::shared_ptr<base::GuiElement> candida
 	base::SelectDepth depth,
 	bool confirmCandidate)
 {
-	_quantisation.UpdateStationHints(candidate, depth, confirmCandidate, SnapshotStations());
+	std::scoped_lock lock(_sceneMutex);
+	_quantisation.UpdateStationHints(candidate, depth, confirmCandidate, _stations);
 }
 
 void Scene::_ClearStationQuantisation()
@@ -3405,7 +3716,44 @@ void Scene::_ClearStationQuantisation()
 void Scene::SetRelativePointerHost(std::function<bool(int, utils::Position2d)> begin,
 	std::function<void(int)> end)
 {
+	_ReleaseQuantisationInput();
 	_loopEditor.CancelInput();
 	_beginRelativePointer = std::move(begin);
 	_endRelativePointer = std::move(end);
+}
+
+bool Scene::_EditControlsSuppressed() const
+{
+	return _quantisationInteraction.EditModeActive() || _quantisationInteraction.PanelAlpha() > 0.001f;
+}
+
+std::optional<ActionResult> Scene::_RouteQuantisationTouch(TouchAction action)
+{
+	std::scoped_lock lock(_sceneMutex);
+	return _quantisationInteraction.TryHandleTouchAction(action, _CurrentSampleRate(),
+		_ctrlHeld, _InteractionContextLocked(), [this](const auto& path) { return _ChildFromPathLocked(path); });
+}
+
+std::optional<ActionResult> Scene::_RouteQuantisationMove(TouchMoveAction action)
+{
+	std::scoped_lock lock(_sceneMutex);
+	return _quantisationInteraction.TryHandleTouchMove(action, _CurrentSampleRate());
+}
+
+void Scene::_ReleaseQuantisationInput()
+{
+	_spaceHeld = _ctrlHeld = false;
+	_quantisation.SetOverlayHeld(false);
+	_quantisationInteraction.CancelInteraction(true);
+	_quantisationInteraction.OnCtrlModifierChanged(false, Timer::GetTime(),
+		_InteractionContext(), [this](const auto& path) { return _ChildFromPath(path); });
+}
+
+void Scene::OnInputFocusLost()
+{
+	_ReleaseQuantisationInput();
+	_loopEditor.CancelInput();
+	_focusManager.ClearFocus();
+	_ApplyHoverPath2d({});
+	_InvalidateHover2d();
 }

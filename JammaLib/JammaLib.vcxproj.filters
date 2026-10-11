@@ -260,6 +260,9 @@
     <ClInclude Include="src\gui\GuiLabel.h">
       <Filter>src\gui</Filter>
     </ClInclude>
+    <ClInclude Include="src\audio\CaptureSourceMuteControl.h">
+      <Filter>src\audio</Filter>
+    </ClInclude>
     <ClInclude Include="src\audio\AudioMixer.h">
       <Filter>src\audio</Filter>
     </ClInclude>
@@ -567,6 +570,9 @@
       <Filter>src\base</Filter>
     </ClInclude>
     <ClInclude Include="src\base\Jammable.h">
+      <Filter>src\base</Filter>
+    </ClInclude>
+    <ClInclude Include="src\base\PublishedAudioSnapshot.h">
       <Filter>src\base</Filter>
     </ClInclude>
     <ClInclude Include="src\base\LoggingConfig.h">

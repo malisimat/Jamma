@@ -525,6 +525,114 @@ TEST(LoopTakeMidiVisualization, PlayFinalizesMidiModelSpans)
 	EXPECT_EQ(1u, midiModel->NoteInstanceCount());
 }
 
+class RecordingMidiModel : public MidiModel
+{
+public:
+	explicit RecordingMidiModel(bool drawRing) :
+		gui::GuiModel(Params(drawRing)), MidiModel(Params(drawRing)) {}
+	using MidiModel::ApplyPendingModelUpdate;
+
+	const std::vector<float>& Attribute(unsigned int index) const
+	{
+		return _backInstanceAttributes.at(index).Data;
+	}
+
+private:
+	static MidiModelParams Params(bool drawRing)
+	{
+		MidiModelParams params;
+		params.DrawSelectionRing = drawRing;
+		return params;
+	}
+};
+
+TEST(LoopTakeMidiVisualization, SilentRecordingRingGrowsThroughUpdateJobs)
+{
+	auto take = MakeLoopTake();
+	take->Record({}, "station", { 0u });
+	auto model = std::make_shared<RecordingMidiModel>(true);
+	take->GetMidiLoops()[0]->AttachModel(model);
+
+	float previousRadius = 50.0f;
+	for (const auto elapsed : { 24000u, 48000u, 96000u })
+	{
+		take->EndMultiWrite(elapsed - take->NumRecordedSamps(), true, Audible::AUDIOSOURCE_ADC);
+		const auto jobs = take->CommitChanges();
+		const auto job = std::find_if(jobs.begin(), jobs.end(), [](const actions::JobAction& action)
+		{
+			return action.JobActionType == actions::JobAction::JOB_UPDATELOOPS;
+		});
+		ASSERT_NE(jobs.end(), job);
+		take->OnAction(*job);
+		model->ApplyPendingModelUpdate();
+		ASSERT_EQ(1u, model->TotalInstanceCount());
+		const auto radius = model->Attribute(1u)[0u];
+		EXPECT_GT(radius, previousRadius);
+		previousRadius = radius;
+		EXPECT_FALSE(take->GetMidiLoops()[0]->UpdateModelFromEvents(elapsed));
+		EXPECT_FALSE(take->GetMidiLoops()[0]->UpdateModelFromEvents(elapsed + 1u));
+	}
+
+	take->Play(0u, 96000u, 0u);
+	EXPECT_FLOAT_EQ(previousRadius, model->Attribute(1u)[0u]);
+}
+
+TEST(LoopTakeMidiVisualization, NotesGrowWithSilentSharedRingDuringRecordingGaps)
+{
+	auto take = MakeLoopTake();
+	take->Record({}, "station", { 0u, 1u });
+	auto ring = std::make_shared<RecordingMidiModel>(true);
+	auto notes = std::make_shared<RecordingMidiModel>(false);
+	take->GetMidiLoops()[0]->AttachModel(ring);
+	take->GetMidiLoops()[1]->AttachModel(notes);
+	ASSERT_TRUE(take->RecordMidiEvent(MidiEvent::MakeNoteOn(0u, 1u, 72u, 100u), 0u));
+	take->EndMultiWrite(2000u, true, Audible::AUDIOSOURCE_ADC);
+	ASSERT_TRUE(take->RecordMidiEvent(MidiEvent::MakeNoteOff(0u, 1u, 72u), 0u));
+
+	float previousRadius = 50.0f;
+	for (const auto elapsed : { 24000u, 48000u, 96000u })
+	{
+		take->EndMultiWrite(elapsed - take->NumRecordedSamps(), true, Audible::AUDIOSOURCE_ADC);
+		actions::JobAction update;
+		update.JobActionType = actions::JobAction::JOB_UPDATELOOPS;
+		take->OnAction(update);
+		ring->ApplyPendingModelUpdate();
+		notes->ApplyPendingModelUpdate();
+		ASSERT_EQ(1u, ring->TotalInstanceCount());
+		ASSERT_EQ(1u, notes->NoteInstanceCount());
+		const auto radius = ring->Attribute(1u)[0u];
+		EXPECT_GT(radius, previousRadius);
+		EXPECT_FLOAT_EQ(radius, notes->Attribute(1u)[0u]);
+		EXPECT_NEAR(radius * 12.0f * 0.035f, notes->Attribute(0u)[2u], 0.0001f);
+		EXPECT_NEAR(radius * 0.035f, notes->Attribute(1u)[1u], 0.0001f);
+		previousRadius = radius;
+	}
+
+	take->Play(0u, 96000u, 0u);
+	EXPECT_FLOAT_EQ(previousRadius, ring->Attribute(1u)[0u]);
+	EXPECT_FLOAT_EQ(previousRadius, notes->Attribute(1u)[0u]);
+}
+
+TEST(LoopTakeMidiVisualization, FinalGeometrySupersedesPendingRecordingGeometry)
+{
+	auto take = MakeLoopTake();
+	take->Record({}, "station", { 0u });
+	auto model = std::make_shared<RecordingMidiModel>(true);
+	take->GetMidiLoops()[0]->AttachModel(model);
+	take->EndMultiWrite(24000u, true, Audible::AUDIOSOURCE_ADC);
+	actions::JobAction update;
+	update.JobActionType = actions::JobAction::JOB_UPDATELOOPS;
+	take->OnAction(update);
+
+	// Finish before the render thread consumes the earlier recording snapshot.
+	take->Play(0u, 96000u, 0u);
+	const auto finalRadius = model->Attribute(1u)[0u];
+	const auto generation = model->EditorModelGeneration();
+	model->ApplyPendingModelUpdate();
+	EXPECT_EQ(generation, model->EditorModelGeneration());
+	EXPECT_FLOAT_EQ(finalRadius, model->Attribute(1u)[0u]);
+}
+
 TEST(LoopTakeMidiVisualization, RecordMatchesConfiguredMidiDevices)
 {
 	auto take = MakeLoopTake();
@@ -1217,9 +1325,27 @@ TEST(LoopTakeMidiQuantisation, QuantisationVisualPublishesResolvedPhase) {
 	auto visual = take->QuantisationVisual();
 	ASSERT_TRUE(visual.has_value());
 	EXPECT_EQ(42, visual->PhaseOffsetSamps);
-	EXPECT_FALSE(visual->UseAbsoluteLocalGrid);
+	EXPECT_TRUE(visual->UseAbsoluteLocalGrid);
+	EXPECT_EQ(100u, visual->GridIntervalSamps);
 	EXPECT_EQ(100u, visual->GrainSamps);
 	EXPECT_EQ(10u, visual->LoopGrains);
+}
+
+TEST(LoopTakeMidiQuantisation, ExportKeepsLocalTapBaseButExcludesLiveRemoteBeatGeometry) {
+	auto take = MakeLoopTake("base-export");
+	take->SetMidiBaseGrid(96000u, 12u);
+	engine::LoopTake::MidiExportState exported;
+	ASSERT_TRUE(take->SnapshotMidiForExport(exported));
+	EXPECT_EQ(96000u, exported.BaseIntervalSamps);
+	EXPECT_EQ(12u, exported.BaseDivisions);
+	engine::RemoteTransportGeometry remote;
+	remote.IntervalLengthSamps = 192000u;
+	remote.Bpi = 8u;
+	take->SetRemoteMidiQuantisationGrid(remote, 0);
+	take->SetMidiBaseGrid(192000u, 24u);
+	ASSERT_TRUE(take->SnapshotMidiForExport(exported));
+	EXPECT_EQ(0u, exported.BaseIntervalSamps);
+	EXPECT_EQ(0u, exported.BaseDivisions);
 }
 
 TEST(MidiLoopBuildApi, ReplaceRecordedEventsPreservesPlaybackTiming)
@@ -2392,7 +2518,7 @@ protected:
 		vp = glm::ortho(-70.0f, 70.0f, -70.0f, 70.0f, 1.0f, 1000.0f)
 			* glm::lookAt(glm::vec3(0,400,0), glm::vec3(0), glm::vec3(0,0,-1));
 		editor = std::make_unique<midi::LoopGridEditor>(midi::LoopGridEditor::Host{
-			camera, history, mutex, stations, {}, [this](float) { return vp; }, {},
+			camera, history, mutex, stations, [this] { return hovered; }, [this](float) { return vp; }, {},
 			[this](int button, utils::Position2d) { relativeButton = button; return allowRelative; },
 			[this](int) { relativeButton = -1; ++endCount; }}, utils::Size2d{800u,800u});
 		ASSERT_TRUE(editor->Open(take, nullptr, loop));
@@ -2423,6 +2549,7 @@ protected:
 	std::shared_ptr<Station> station;
 	std::shared_ptr<LoopTake> take;
 	std::shared_ptr<MidiLoop> loop;
+	std::shared_ptr<base::GuiElement> hovered;
 	std::vector<std::shared_ptr<Station>> stations;
 	graphics::Camera camera{graphics::CameraParams(base::MoveableParams(),0u)};
 	actions::ActionUndoHistory history;
@@ -2432,6 +2559,38 @@ protected:
 	int relativeButton=-1, endCount=0;
 	bool allowRelative=true;
 };
+
+TEST_F(MidiPointerEditorTest, MultipleSelectedMidiStreamsRequireHoverDisambiguation)
+{
+	const auto second = take->GetMidiLoops().at(1u);
+	second->Model()->Select();
+	std::shared_ptr<LoopTake> candidateTake;
+	std::shared_ptr<engine::Loop> audioLoop;
+	std::shared_ptr<MidiLoop> midiLoop;
+
+	EXPECT_FALSE(editor->FindCandidate(candidateTake, audioLoop, midiLoop));
+
+	hovered = second->Model();
+	ASSERT_TRUE(editor->FindCandidate(candidateTake, audioLoop, midiLoop));
+	EXPECT_EQ(take, candidateTake);
+	EXPECT_EQ(nullptr, audioLoop);
+	EXPECT_EQ(second, midiLoop);
+}
+
+TEST_F(MidiPointerEditorTest, SoleSelectedNonFirstMidiStreamKeepsItsIdentity)
+{
+	const auto second = take->GetMidiLoops().at(1u);
+	for (const auto& stream : take->GetMidiLoops()) stream->Model()->DeSelect();
+	second->Model()->Select();
+	std::shared_ptr<LoopTake> candidateTake;
+	std::shared_ptr<engine::Loop> audioLoop;
+	std::shared_ptr<MidiLoop> midiLoop;
+
+	ASSERT_TRUE(editor->FindCandidate(candidateTake, audioLoop, midiLoop));
+	EXPECT_EQ(take, candidateTake);
+	EXPECT_EQ(nullptr, audioLoop);
+	EXPECT_EQ(second, midiLoop);
+}
 
 TEST_F(MidiPointerEditorTest, NumericChannelControlCommitsTypedChannel)
 {
@@ -2642,4 +2801,162 @@ TEST_F(MidiPointerEditorTest, StaleDisplayedInstanceCannotCaptureDifferentSource
 	EXPECT_FALSE(editor->OwnsPointer()); EXPECT_EQ(-1,relativeButton);
 	Relative(0,40,4u); Button(2,false,Pixel(0.15,60),0u);
 	EXPECT_EQ(revision,loop->Revision()); EXPECT_FALSE(history.Undo());
+}
+
+TEST(MidiLoopQuantisation, LoopOverridesComposeOnceAndPreserveSiblings)
+{
+	MidiLoop first;
+	MidiLoop sibling;
+	MidiQuantisationSettings inherited;
+	inherited.Enabled = true;
+	inherited.GrainSamps = 480;
+	inherited.Fraction = MidiQuantisationFraction::Quarter;
+	inherited.PhaseOffsetSamps = 20;
+	ASSERT_TRUE(first.SetQuantisation(inherited));
+	ASSERT_TRUE(sibling.SetQuantisation(inherited));
+	MidiLoop::QuantisationOverride override;
+	override.Enabled = false;
+	override.Fraction = MidiQuantisationFraction::Third;
+	override.PhaseOffsetSamps = -7;
+	ASSERT_TRUE(first.SetLoopQuantisationOverride(override));
+	EXPECT_FALSE(first.Quantisation().Enabled);
+	EXPECT_EQ(MidiQuantisationFraction::Third, first.Quantisation().Fraction);
+	EXPECT_EQ(13, first.Quantisation().PhaseOffsetSamps);
+	ASSERT_TRUE(first.SetQuantisation(inherited));
+	EXPECT_EQ(13, first.Quantisation().PhaseOffsetSamps);
+	EXPECT_EQ(inherited, sibling.Quantisation());
+	ASSERT_TRUE(first.SetLoopQuantisationOverride({}));
+	EXPECT_EQ(inherited, first.Quantisation());
+}
+
+TEST(MidiLoopQuantisation, ExportRestoresOptionalOverrideAndRawEvents)
+{
+	MidiLoop source;
+	source.StartRecord();
+	ASSERT_TRUE(source.RecordEvent(MidiEvent::MakeNoteOn(31u, 0u, 60u, 100u)));
+	source.EndRecord(480u);
+	MidiLoop::QuantisationOverride override;
+	override.Fraction = MidiQuantisationFraction::Third;
+	override.PhaseOffsetSamps = -9;
+	ASSERT_TRUE(source.SetLoopQuantisationOverride(override));
+	auto state = std::make_unique<MidiLoop::ExportState>();
+	ASSERT_TRUE(source.SnapshotForExport(*state));
+	MidiLoop restored;
+	ASSERT_TRUE(restored.RestoreFromExport(*state));
+	EXPECT_EQ(override.Fraction, restored.GetLoopQuantisationOverride().Fraction);
+	EXPECT_EQ(override.PhaseOffsetSamps, restored.GetLoopQuantisationOverride().PhaseOffsetSamps);
+	EXPECT_FALSE(restored.GetLoopQuantisationOverride().Enabled.has_value());
+	MidiEvent event;
+	ASSERT_TRUE(restored.TryGetEvent(0u, event));
+	EXPECT_EQ(31u, event.sampleOffset);
+}
+
+
+TEST(MidiLoopEdit, GridResolutionRoundTripRetainsSourceAndUndoRedo)
+{
+	auto take = MakeLoopTake("resolution-history");
+	take->SetGlobalMidiQuantState(io::JamFile::GlobalMidiQuantState::Mixed);
+	take->Record({}, "station", { 0u }, { "" });
+	take->Play(0u, 100u, 0u);
+	auto loop = take->GetMidiLoops().at(0u);
+	auto original = take->ResolvedMidiQuantisation();
+	original.Enabled = true;
+	original.GrainSamps = 100u;
+	original.Fraction = MidiQuantisationFraction::Quarter;
+	take->SetMidiQuantisation(original);
+	ASSERT_TRUE(loop->SetQuantisation(take->ResolvedMidiQuantisation(), take->MidiQuantisationTransportStartSamps()));
+	MidiLoop::EditState before;
+	ASSERT_TRUE(loop->SnapshotForEdit(before));
+	auto after = before;
+	ASSERT_TRUE(midi::MidiEditOperations::Create(after, 37u, 19u, 0u, 60u));
+	std::uint64_t accepted = 0u;
+	ASSERT_TRUE(take->PublishMidiEdit(loop, after, &accepted));
+	actions::ActionUndoHistory history;
+	auto cursor = std::make_shared<actions::MidiEditRevisionCursor>();
+	history.Add(std::make_shared<actions::MidiLoopEditUndo>(take, loop, before, after, accepted, cursor));
+	MidiLoop::EditState edited;
+	ASSERT_TRUE(loop->SnapshotForEdit(edited));
+	auto coarse = original;
+	coarse.Fraction = MidiQuantisationFraction::Whole;
+	take->SetMidiQuantisation(coarse);
+	ASSERT_TRUE(loop->SetQuantisation(take->ResolvedMidiQuantisation(), take->MidiQuantisationTransportStartSamps()));
+	MidiLoop::EditState changed;
+	ASSERT_TRUE(loop->SnapshotForEdit(changed));
+	EXPECT_EQ(edited.SourceRevision, changed.SourceRevision);
+	EXPECT_NE(edited.Revision, changed.Revision);
+	EXPECT_EQ(37u, changed.Events[0].sampleOffset);
+	EXPECT_FALSE(loop->PublishEdit(edited)); // An old active gesture still cannot commit.
+	ASSERT_TRUE(history.Undo());
+	EXPECT_EQ(0u, loop->EventCount());
+	EXPECT_EQ(coarse, loop->Quantisation());
+	ASSERT_TRUE(history.Redo());
+	take->SetMidiQuantisation(original);
+	ASSERT_TRUE(loop->SetQuantisation(take->ResolvedMidiQuantisation(), take->MidiQuantisationTransportStartSamps()));
+	ASSERT_TRUE(loop->SnapshotForEdit(changed));
+	EXPECT_EQ(edited.EventCount, changed.EventCount);
+	for (std::size_t i = 0u; i < edited.EventCount; ++i)
+	{
+		EXPECT_EQ(edited.Events[i].sampleOffset, changed.Events[i].sampleOffset);
+		EXPECT_EQ(edited.Events[i].status, changed.Events[i].status);
+		EXPECT_EQ(edited.Events[i].data1, changed.Events[i].data1);
+	}
+}
+
+TEST(MidiLoopEdit, PendingTakeGridRejectsGestureBeforePublication)
+{
+	auto take = MakeLoopTake("pending-grid");
+	take->SetGlobalMidiQuantState(io::JamFile::GlobalMidiQuantState::Mixed);
+	take->Record({}, "station", { 0u }, { "" });
+	take->Play(0u, 100u, 0u);
+	auto loop = take->GetMidiLoops().at(0u);
+	MidiLoop::EditState gesture;
+	ASSERT_TRUE(loop->SnapshotForEdit(gesture));
+	ASSERT_TRUE(midi::MidiEditOperations::Create(gesture, 37u, 19u, 0u, 60u));
+	auto changed = take->MidiQuantisation();
+	changed.Enabled = true;
+	changed.GrainSamps = 100u;
+	take->SetMidiQuantisation(changed); // Job has not republished this grid yet.
+	EXPECT_FALSE(take->PublishMidiEdit(loop, gesture));
+	EXPECT_EQ(0u, loop->EventCount());
+}
+
+TEST(MidiLoopQuantisation, GlobalOffAndAllTakePrecedenceOverLocalEnabledOverride)
+{
+	MidiLoop loop;
+	MidiQuantisationSettings inherited;
+	inherited.Enabled = true;
+	MidiLoop::QuantisationOverride override;
+	override.Enabled = true;
+	ASSERT_TRUE(loop.SetLoopQuantisationOverride(override));
+	ASSERT_TRUE(loop.SetQuantisation(inherited, 0u, false));
+	EXPECT_FALSE(loop.Quantisation().Enabled);
+	ASSERT_TRUE(loop.SetLoopQuantisationOverride(override));
+	EXPECT_FALSE(loop.Quantisation().Enabled);
+	override.Enabled = false;
+	ASSERT_TRUE(loop.SetLoopQuantisationOverride(override));
+	ASSERT_TRUE(loop.SetQuantisation(inherited, 0u, true));
+	EXPECT_TRUE(loop.Quantisation().Enabled);
+	ASSERT_TRUE(loop.SetQuantisation(inherited));
+	EXPECT_FALSE(loop.Quantisation().Enabled);
+}
+
+TEST(MidiLoopEdit, UndoRejectsAnotherSourceWriterEvenWithIdenticalEvents)
+{
+	auto take = MakeLoopTake("source-epoch-guard");
+	take->Record({}, "station", { 0u }, { "" });
+	take->Play(0u, 100u, 0u);
+	auto loop = take->GetMidiLoops().at(0u);
+	MidiLoop::EditState before;
+	ASSERT_TRUE(loop->SnapshotForEdit(before));
+	auto after = before;
+	ASSERT_TRUE(midi::MidiEditOperations::Create(after, 30u, 10u, 0u, 60u));
+	std::uint64_t accepted = 0u;
+	ASSERT_TRUE(take->PublishMidiEdit(loop, after, &accepted));
+	auto cursor = std::make_shared<actions::MidiEditRevisionCursor>();
+	actions::MidiLoopEditUndo undo(take, loop, before, after, accepted, cursor);
+	MidiLoop::EditState external;
+	ASSERT_TRUE(loop->SnapshotForEdit(external));
+	ASSERT_TRUE(take->PublishMidiEdit(loop, external));
+	EXPECT_FALSE(undo.Undo());
+	EXPECT_EQ(2u, loop->EventCount());
 }

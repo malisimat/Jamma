@@ -49,7 +49,7 @@ namespace base
 			return static_cast<TweakState>(_tweakState.load(std::memory_order_relaxed));
 		}
 
-		bool IsMuted() const
+		virtual bool IsMuted() const
 		{
 			return GetTweakState() & TWEAKSTATE_MUTED;
 		}

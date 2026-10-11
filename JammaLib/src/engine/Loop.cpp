@@ -443,7 +443,7 @@ void Loop::WriteBlock(const std::shared_ptr<MultiAudioSink> dest,
 
 	if (sampsToWrite > 0)
 	{
-		auto chain = _vstChain.load(std::memory_order_acquire);
+		auto chain = _vstChain.borrow();
 		if (chain && chain->IsActive())
 			chain->ProcessBlock(tempBuf, static_cast<int>(sampsToWrite));
 
@@ -524,13 +524,17 @@ std::string Loop::Id() const
 	return _loopParams.Id;
 }
 
-std::vector<float> Loop::ExportSamples() const
+std::vector<float> Loop::ExportSamples(bool retainPhysicalTail) const
 {
 	auto playState = _playState.load(std::memory_order_acquire);
 	auto loopLength = _loopLength.load(std::memory_order_relaxed);
 
 	if ((0 == loopLength) || (STATE_INACTIVE == playState))
 		return {};
+	// Session sidecars retain recorded samples beyond a rounded logical boundary.
+	// The manifest still carries logical length; FromFile restores it after Load.
+	if (retainPhysicalTail)
+		loopLength = (std::max)(loopLength, PhysicalLoopLength());
 
 	std::vector<float> out(loopLength);
 	unsigned long copied = 0;
@@ -815,14 +819,26 @@ bool Loop::Mute()
 	return isNewState;
 }
 
+bool Loop::IsMuted() const
+{
+	return Tweakable::IsMuted() || _mixer->IsCaptureSourceMuted();
+}
+
+void Loop::SetCaptureSourceMuteControl(
+	const std::shared_ptr<const audio::CaptureSourceMuteControl>& control) noexcept
+{
+	_mixer->SetCaptureSourceMuteControl(control);
+}
+
 bool Loop::UnMute()
 {
 	auto isNewState = Tweakable::UnMute();
+	const bool replacementChanged = _mixer && _mixer->AllowReplacementPlayback();
 
 	if (isNewState && _mixer)
 		_mixer->UnMute();
 
-	return isNewState;
+	return isNewState || replacementChanged;
 }
 
 void Loop::Overdub()
@@ -1017,6 +1033,8 @@ std::shared_ptr<vst::IVstPlugin> Loop::GetVstPlugin(size_t index) const
 
 std::vector<JobAction> Loop::_CommitChanges()
 {
+	_vstChain.collect();
+
 	// Swap in a new VST chain when the job thread has delivered one.
 	if (_flipVstChain.exchange(false, std::memory_order_acquire))
 	{

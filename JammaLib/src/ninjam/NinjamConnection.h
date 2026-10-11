@@ -52,7 +52,38 @@ namespace ninjam
 		std::uint8_t Modulo = 0;
 		std::uint8_t FromFallback = 0;
 		std::uint16_t SlotLimit = 0;
+
+		// The callback reads this as one native scalar atomic. LaneCount is
+		// derivable from the pair counts and slot limit, leaving room for both
+		// flags in the 64-bit representation.
+		constexpr std::uint64_t Pack() const noexcept
+		{
+			return static_cast<std::uint64_t>(DacPairs)
+				| (static_cast<std::uint64_t>(AdcPairs) << 16u)
+				| (static_cast<std::uint64_t>(SlotLimit) << 32u)
+				| (static_cast<std::uint64_t>(Modulo != 0u) << 48u)
+				| (static_cast<std::uint64_t>(FromFallback != 0u) << 49u);
+		}
+
+		static constexpr NinjamLanePacking Unpack(std::uint64_t packed) noexcept
+		{
+			NinjamLanePacking result{};
+			result.DacPairs = static_cast<std::uint16_t>(packed & 0xffffu);
+			result.AdcPairs = static_cast<std::uint16_t>((packed >> 16u) & 0xffffu);
+			result.SlotLimit = static_cast<std::uint16_t>((packed >> 32u) & 0xffffu);
+			result.Modulo = static_cast<std::uint8_t>((packed >> 48u) & 1u);
+			result.FromFallback = static_cast<std::uint8_t>((packed >> 49u) & 1u);
+			const auto pairCount = static_cast<std::uint32_t>(result.DacPairs)
+				+ static_cast<std::uint32_t>(result.AdcPairs);
+			result.LaneCount = static_cast<std::uint16_t>(pairCount < result.SlotLimit
+				? pairCount
+				: result.SlotLimit);
+			return result;
+		}
 	};
+
+	static_assert(std::atomic<std::uint64_t>::is_always_lock_free,
+		"NINJAM lane publication must use a lock-free 64-bit atomic");
 
 	class NinjamConnection
 	{
@@ -205,7 +236,7 @@ namespace ninjam
 		unsigned int _inLatencySamps = 0u;
 		unsigned int _outLatencySamps = 0u;
 		std::atomic_uint _lastNumFrames{ 0u };
-		std::atomic<NinjamLanePacking> _lanePacking{};
+		std::atomic<std::uint64_t> _lanePacking{ 0u };
 
 		std::vector<std::vector<float>> _outScratch;
 		std::vector<std::vector<float>> _inScratch;

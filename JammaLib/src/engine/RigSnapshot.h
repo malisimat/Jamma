@@ -36,6 +36,9 @@ namespace engine
 	{
 		std::shared_ptr<Trigger> Instance;
 		size_t CandidateIndex = 0u;
+		// Rig edits retain the coordinator's Station inventory/order; this fact
+		// stays valid after the prepared Receiver handle is swapped at publication.
+		bool ReceiverChanged = false;
 	};
 
 	// An outgoing Trigger that must be idle; a matching replacement inherits its history.

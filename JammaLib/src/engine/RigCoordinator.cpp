@@ -113,7 +113,8 @@ RigCoordinator::SnapshotPtr RigCoordinator::_BuildSnapshot(std::uint64_t revisio
 			retainedAcceptedIds.insert(fileTrigger.Id);
 			if (!_EquivalentCaptureRouting(fileTrigger, acceptedSnapshot->Rig.Triggers[acceptedIndex]) ||
 				stationIndex != acceptedSnapshot->Triggers[acceptedIndex].StationIndex)
-				snapshot->TriggerRouteUpdates.push_back({ instance, triggerIndex });
+				snapshot->TriggerRouteUpdates.push_back({ instance, triggerIndex,
+					stationIndex != acceptedSnapshot->Triggers[acceptedIndex].StationIndex });
 		}
 		else
 		{
@@ -266,7 +267,24 @@ RigCoordinator::EditResult RigCoordinator::CompleteTransition(std::uint64_t revi
 	// published history before the replacement can be exposed to audio or input.
 	for (const auto& replacement : candidate->TriggerReplacementChecks)
 		if (replacement.ReplacementInstance)
-			replacement.ReplacementInstance->RestoreTakes(replacement.AcceptedInstance->GetTakes());
+		{
+			auto history = replacement.AcceptedInstance->GetTakes();
+			std::vector<std::pair<std::shared_ptr<base::TriggerPunchTarget>,
+				std::shared_ptr<base::TriggerPunchTarget>>> pins;
+			for (const auto& entry : history)
+			{
+				const auto station = std::dynamic_pointer_cast<Station>(entry.Receiver);
+				const auto targets = station ? station->GetLoopTakeSnapshot() :
+					std::vector<std::shared_ptr<LoopTake>>{};
+				const auto resolve = [&targets](const std::string& id) -> std::shared_ptr<base::TriggerPunchTarget> {
+					const auto found = std::find_if(targets.begin(), targets.end(),
+						[&id](const auto& take) { return take && take->Id() == id; });
+					return found == targets.end() ? nullptr : *found;
+				};
+				pins.emplace_back(resolve(entry.SourceTakeId), resolve(entry.TargetTakeId));
+			}
+			replacement.ReplacementInstance->RestoreTakes(std::move(history), std::move(pins));
+		}
 	_pending.store(candidate, std::memory_order_release);
 	_staged.store({}, std::memory_order_release);
 	return EditResult::Pending;

@@ -205,6 +205,9 @@ namespace base
 		void _ApplyTextureTint(graphics::GlDrawContext& ctx) const;
 		std::vector<actions::JobAction> CommitChanges();
 		void SetParent(std::shared_ptr<GuiElement> parent);
+		// Serialized job/UI retirement only. Break GUI ownership cycles without
+		// clearing children or audio resources retained by callback snapshots.
+		void DetachGuiOwnershipForRetirement() noexcept;
 		std::shared_ptr<GuiElement> Parent() const;
 		actions::TouchAction GlobalToLocal(actions::TouchAction action);
 		actions::TouchAction ParentToLocal(actions::TouchAction action);
@@ -233,6 +236,13 @@ namespace base
 
 	protected:
 		std::atomic<bool> _changesMade;
+		// UI commit context preserves staged-buffer selection after consuming dirty.
+		std::atomic<bool> _committingChanges{ false };
+		bool _HasUncommittedChanges() const noexcept
+		{
+			return _changesMade.load(std::memory_order_acquire) ||
+				_committingChanges.load(std::memory_order_acquire);
+		}
 		bool _isVisible;
 		bool _isEnabled;
 		bool _isSelected;

@@ -13,6 +13,28 @@
 #include "io/Json.h"
 #include "io/RigFile.h"
 
+namespace engine
+{
+    class TriggerSourceLossTestAccess
+    {
+    public:
+        static std::size_t CaptureSessionCount(const Trigger& trigger)
+        {
+            return trigger._captureSessionCount;
+        }
+
+        static unsigned int SaturateStructuralQueue(Trigger& trigger)
+        {
+            Trigger::StructuralCommand command;
+            command.ActionType = actions::TriggerAction::TRIGGER_PUNCHIN_END;
+            command.Sequence = 10000u;
+            unsigned int count = 0u;
+            while (trigger._structuralCommands.Push(command)) ++count;
+            return count;
+        }
+    };
+}
+
 using base::ActionSender;
 using base::ActionReceiver;
 using engine::Loop;
@@ -420,6 +442,12 @@ public:
 	}
 
 	bool EditorOwnsPointerForTest() const { return _loopEditor.OwnsPointer(); }
+	bool SpaceHeldForTest() const { return _spaceHeld; }
+	bool CtrlOverlayActiveForTest() const { return _quantisationInteraction.EditModeActive(); }
+	float GridAlphaForTest() const { return _quantisation.OverlayAlpha(Timer::GetTime()); }
+	void ClearGridForTest() { _quantisation.ClearOverlay(); }
+	void FocusTextForTest() { _focusManager.RequestFocus(_midiChannelOverrideInput); }
+	void ClearTextFocusForTest() { _focusManager.ClearFocus(); }
 	glm::vec3 EditorProbeEyeLocalForTest() const { return _loopEditor.ProbeEyeLocal(); }
 
 	bool IsSceneTouchingForTest() const
@@ -727,6 +755,22 @@ TEST(Trigger, DitchPopsOnlyRemovedOrAlreadyAbsentHistory)
 		else
 			EXPECT_TRUE(trigger->GetTakes().empty());
 	}
+}
+
+TEST(Trigger, OrphanedRestoredHistorySettlesAndReclaimsSession)
+{
+    auto trigger = MakeSharedDefaultTrigger();
+    trigger->RestoreTakes({ { engine::TriggerTake::SOURCE_ADC, "missing-source", "missing-target" } },
+        { { nullptr, nullptr } });
+    ASSERT_TRUE(trigger->HasPendingSourceLoss());
+    ASSERT_EQ(1u, engine::TriggerSourceLossTestAccess::CaptureSessionCount(*trigger));
+    for (unsigned int step = 0u; step < 4u; ++step) TickAndComplete(trigger);
+    EXPECT_FALSE(trigger->HasPendingSourceLoss());
+    EXPECT_TRUE(trigger->GetTakes().empty());
+    EXPECT_EQ(0u, engine::TriggerSourceLossTestAccess::CaptureSessionCount(*trigger));
+    TickAndComplete(trigger);
+    EXPECT_FALSE(trigger->HasPendingSourceLoss());
+    EXPECT_TRUE(trigger->GetTakes().empty());
 }
 
 TEST(Trigger, RestoredHistoryDitchesItsMostRecentTake) {
@@ -1126,7 +1170,11 @@ TEST(Trigger, BounceWriterFollowsDelayedPunchMixerChanges) {
 	EXPECT_FLOAT_EQ(1.0f, sink->LastBounceLevel);
 	trigger->OnTick(GetTime(), 1u, cfg, std::nullopt);
 	for (int i = 0; i < 200; ++i)
+	{
+		writer->BeginCaptureBlock(64u);
 		writer->WriteBlock(sink, samples, 64u, 0u);
+		writer->EndCaptureBlock(64u);
+	}
 	EXPECT_LT(sink->LastBounceLevel, 0.1f);
 
 	action.KeyActionType = KeyAction::KEY_UP;
@@ -1135,7 +1183,11 @@ TEST(Trigger, BounceWriterFollowsDelayedPunchMixerChanges) {
 	EXPECT_EQ(TriggerAction::TRIGGER_PUNCHIN_END, receiver->Actions()[2].ActionType);
 	trigger->OnTick(GetTime(), punchDelay, cfg, std::nullopt);
 	for (int i = 0; i < 200; ++i)
+	{
+		writer->BeginCaptureBlock(64u);
 		writer->WriteBlock(sink, samples, 64u, 0u);
+		writer->EndCaptureBlock(64u);
+	}
 	EXPECT_GT(sink->LastBounceLevel, 0.9f);
 }
 
@@ -1513,19 +1565,19 @@ TEST(Trigger, FullUiQueueKeepsLatestStateForEachActivateBinding)
 		ASSERT_TRUE(trigger->QueueExternalControlAction(true, false, action, 1u).IsEaten);
 	}
 	action.SetActionTime(OffsetTime(start, 62u));
-	ASSERT_TRUE(trigger->QueueInputEvent(engine::TRIGGER_INPUT_UI, 0u,
+	ASSERT_TRUE(trigger->QueueInputEvent(engine::TRIGGER_INPUT_UI, 2u,
 		engine::TRIGGER_KEY, 70u, 1u, action).IsEaten);
 	action.SetActionTime(OffsetTime(start, 63u));
-	ASSERT_TRUE(trigger->QueueInputEvent(engine::TRIGGER_INPUT_UI, 0u,
+	ASSERT_TRUE(trigger->QueueInputEvent(engine::TRIGGER_INPUT_UI, 2u,
 		engine::TRIGGER_KEY, 70u, 0u, action).IsEaten);
 	action.SetActionTime(OffsetTime(start, 64u));
-	ASSERT_TRUE(trigger->QueueInputEvent(engine::TRIGGER_INPUT_UI, 0u,
+	ASSERT_TRUE(trigger->QueueInputEvent(engine::TRIGGER_INPUT_UI, 2u,
 		engine::TRIGGER_KEY, 71u, 1u, action).IsEaten);
 	ASSERT_EQ(2u, trigger->UiInputDropCount());
 
-	trigger->OnTick(GetTime(), 0u, std::nullopt, std::nullopt, 0u);
-	CompleteQueuedStructuralAction(trigger);
-	CompleteQueuedStructuralAction(trigger);
+	trigger->OnTick(GetTime(), 0u, std::nullopt, std::nullopt, 2u);
+	CompleteQueuedStructuralAction(trigger, std::nullopt, 2u);
+	CompleteQueuedStructuralAction(trigger, std::nullopt, 2u);
 	ASSERT_EQ(2u, receiver->Actions().size());
 	EXPECT_EQ(TriggerAction::TRIGGER_REC_START, receiver->Actions()[0].ActionType);
 	EXPECT_EQ(TriggerAction::TRIGGER_REC_END, receiver->Actions()[1].ActionType);
@@ -2286,6 +2338,72 @@ TEST(Scene, LoopGridEditorTracksOneMidiLoopAndClosesWhenItIsReplaced) {
 	EXPECT_EQ(graphics::Camera::View::Front, scene.CameraViewForTest());
 }
 
+TEST(Scene, SpaceAndCtrlReachPhysicalStateWithEditorOpenAndFocusLossClearsHolds) {
+	SceneParams params{ base::DrawableParams(), base::MoveableParams(), base::SizeableParams({ 1400u, 900u }) };
+	TestScene scene(params, {});
+	scene.StopJobForTest();
+	auto station = MakeTestStation("space-editor");
+	scene.AddStationForTest(station);
+	auto take = station->AddTake();
+	LoopTake::MidiExportState state;
+	state.LoopLengthSamps = 96000u;
+	LoopTake::MidiStreamExport stream;
+	stream.Loop.LoopLengthSamps = 96000u;
+	stream.Loop.EventCount = 2u;
+	stream.Loop.Events[0] = midi::MidiEvent::MakeNoteOn(12000u, 0u, 60u, 100u);
+	stream.Loop.Events[1] = midi::MidiEvent::MakeNoteOff(14000u, 0u, 60u);
+	state.Streams.push_back(stream);
+	ASSERT_TRUE(take->RestoreMidiFromExport(state));
+	take->Select();
+	ASSERT_TRUE(scene.OpenLoopGridEditor(take, {}, take->GetMidiLoops().front()));
+	scene.SettleLoopGridEditorForTest();
+	scene.ClearGridForTest();
+	KeyAction key;
+	key.KeyChar = 17u;
+	key.KeyActionType = KeyAction::KEY_DOWN;
+	scene.OnAction(key);
+	EXPECT_TRUE(scene.CtrlOverlayActiveForTest());
+	EXPECT_FLOAT_EQ(0.0f, scene.GridAlphaForTest());
+	key.KeyChar = 32u;
+	key.Modifiers = base::Action::MODIFIER_CTRL;
+	scene.OnAction(key);
+	scene.OnAction(key); // OS repeat still belongs to the same physical press.
+	EXPECT_TRUE(scene.SpaceHeldForTest());
+	EXPECT_FLOAT_EQ(1.0f, scene.GridAlphaForTest());
+	key.KeyActionType = KeyAction::KEY_UP;
+	scene.OnAction(key);
+	EXPECT_FALSE(scene.SpaceHeldForTest());
+	key.KeyActionType = KeyAction::KEY_DOWN;
+	scene.OnAction(key);
+	scene.OnInputFocusLost();
+	EXPECT_FALSE(scene.SpaceHeldForTest());
+	EXPECT_FALSE(scene.CtrlOverlayActiveForTest());
+}
+
+TEST(Scene, SpaceStartedInTextCannotTurnIntoATapOnRepeatAfterFocusChanges) {
+	SceneParams params{ base::DrawableParams(), base::MoveableParams(), base::SizeableParams({ 1400u, 900u }) };
+	TestScene scene(params, {});
+	scene.StopJobForTest();
+	scene.FocusTextForTest();
+	scene.ClearGridForTest();
+	KeyAction key;
+	key.KeyChar = 17u;
+	key.KeyActionType = KeyAction::KEY_DOWN;
+	scene.OnAction(key);
+	EXPECT_FALSE(scene.CtrlOverlayActiveForTest()); // Text entry owns contextual Ctrl.
+	key.KeyChar = 32u;
+	key.KeyActionType = KeyAction::KEY_DOWN;
+	scene.OnAction(key);
+	EXPECT_TRUE(scene.SpaceHeldForTest());
+	EXPECT_FLOAT_EQ(0.0f, scene.GridAlphaForTest());
+	scene.ClearTextFocusForTest();
+	scene.OnAction(key);
+	EXPECT_FLOAT_EQ(0.0f, scene.GridAlphaForTest());
+	key.KeyActionType = KeyAction::KEY_UP;
+	scene.OnAction(key);
+	EXPECT_FALSE(scene.SpaceHeldForTest());
+}
+
 TEST(Scene, LoopGridEditorPreservesPaintExcursionAndReleaseBeforeNextFrame) {
 	SceneParams sceneParams{ base::DrawableParams(), base::MoveableParams(),
 		base::SizeableParams({ 1400u, 900u }) };
@@ -2480,7 +2598,7 @@ TEST(Scene, StationMuteClickUsesAggregateTakeState) {
 	EXPECT_FALSE(station->AllTakesMuted());
 }
 
-TEST(Scene, MultiStreamMidiSelectionCountsAsOneEditorCandidate) {
+TEST(Scene, MidiStreamSelectionPreservesPickedEditorIdentity) {
 	SceneParams sceneParams{ base::DrawableParams(), base::MoveableParams(),
 		base::SizeableParams({ 1400u, 900u }) };
 	TestScene scene(sceneParams, {});
@@ -2510,14 +2628,14 @@ TEST(Scene, MultiStreamMidiSelectionCountsAsOneEditorCandidate) {
 	scene.SetHover3d(pickPath, base::Action::MODIFIER_NONE);
 	scene.OnAction(MakeSceneTouch(TouchAction::TOUCH_DOWN, { 1, 1 }, 0, LeftMouseButtonMask));
 	scene.OnAction(MakeSceneTouch(TouchAction::TOUCH_UP, { 1, 1 }, 0u, 0u));
-	EXPECT_TRUE(midiLoops[0]->Model()->IsSelected());
+	EXPECT_FALSE(midiLoops[0]->Model()->IsSelected());
 	EXPECT_TRUE(midiLoops[1]->Model()->IsSelected());
 
 	std::shared_ptr<LoopTake> candidateTake;
 	std::shared_ptr<Loop> audioLoop;
 	std::shared_ptr<midi::MidiLoop> midiLoop;
 	ASSERT_TRUE(scene.FindLoopGridEditorCandidateForTest(candidateTake, audioLoop, midiLoop));
-	EXPECT_EQ(midiLoops[0], midiLoop);
+	EXPECT_EQ(midiLoops[1], midiLoop);
 	// Keep the same picker ID after the click: the next drag must start in
 	// subtractive paint mode using the newly selected state.
 	scene.OnAction(MakeSceneTouch(TouchAction::TOUCH_DOWN, { 1, 1 }, 0, LeftMouseButtonMask));
@@ -2530,7 +2648,7 @@ TEST(Scene, MultiStreamMidiSelectionCountsAsOneEditorCandidate) {
 	scene.OnAction(MakeSceneTouch(TouchAction::TOUCH_UP, { 1, 1 }, 0, 0u));
 	scene.SetHover3d({}, base::Action::MODIFIER_NONE);
 	ASSERT_TRUE(scene.FindLoopGridEditorCandidateForTest(candidateTake, audioLoop, midiLoop));
-	EXPECT_EQ(midiLoops[0], midiLoop);
+	EXPECT_EQ(midiLoops[1], midiLoop);
 }
 
 TEST(Scene, MidiEditorDefaultsToFirstPopulatedWiredChannel) {
@@ -2572,7 +2690,7 @@ TEST(Scene, MidiEditorDefaultsToFirstPopulatedWiredChannel) {
 	scene.SetSelectionDepthForTest(Scene::VIEW_LOOP);
 	scene.SetHover3d(path, base::Action::MODIFIER_NONE);
 	ASSERT_TRUE(scene.FindLoopGridEditorCandidateForTest(candidateTake, audioLoop, candidate));
-	EXPECT_EQ(loops[1], candidate);
+	EXPECT_EQ(loops[0], candidate); // Explicit loop hover retains that stream, even when empty.
 }
 
 TEST(CameraView, StationInteriorObservesRevisionWhenStationShiftsIndex) {
@@ -2673,3 +2791,774 @@ TEST(SceneReset, ConnectedEmptyPreservesTimingAndEachDisconnectClearsOnce) {
 }
 
 // FAILS before fix: _DispatchMidiTriggerEvent never called Reset() when ditch
+
+class StereoCaptureSampleSink : public base::MultiAudioSink
+{
+public:
+	void OnBlockWriteChannel(unsigned int channel, const base::AudioWriteRequest& request, int) override
+	{
+		if (channel < 2u && request.numSamps)
+			Samples[channel] = request.fadeNew * request.samples[0] + request.fadeCurrent * Samples[channel];
+	}
+	std::array<float, 2> Samples{ 0.0f, 0.0f };
+};
+
+TEST(Trigger, PreparedStereoEnvelopeAdvancesOncePerCaptureBlock)
+{
+	auto mixer = std::make_shared<audio::AudioMixer>(Trigger::GetOverdubMixerParams({ 0u, 1u }));
+	mixer->SetUnmutedLevel(1.0);
+	auto writer = Trigger::CreateBounceWriter(mixer);
+	auto sink = std::make_shared<StereoCaptureSampleSink>();
+	std::array<float, 64> samples;
+	samples.fill(1.0f);
+	mixer->SetUnmutedLevel(0.0);
+	for (unsigned int block = 0u; block < 200u; ++block)
+	{
+		const auto before = mixer->Level();
+		sink->Samples.fill(0.0f);
+		writer->BeginCaptureBlock(64u);
+		writer->WriteBlock(sink, samples.data(), 64u, 0u);
+		writer->WriteBlock(sink, samples.data(), 64u, 1u);
+		EXPECT_DOUBLE_EQ(before, mixer->Level());
+		EXPECT_FLOAT_EQ(sink->Samples[0], sink->Samples[1]);
+		EXPECT_FLOAT_EQ(static_cast<float>(before), sink->Samples[0]);
+		writer->EndCaptureBlock(64u);
+	}
+	EXPECT_LT(mixer->Level(), 0.1);
+}
+
+TEST(Trigger, NewOverdubUsesIndependentWriterWhileOldDelayedPunchDrains)
+{
+	auto source = std::make_shared<TestTriggerPunchTarget>();
+	auto target = std::make_shared<TestTriggerPunchTarget>();
+	auto receiver = std::make_shared<SequenceTriggerReceiver>(source, target);
+	auto trigger = MakeDefaultTrigger(receiver, 0u);
+	io::UserConfig cfg;
+	cfg.Audio = { "", 48000, 256, 256, 0, 2, 2, 2 };
+	cfg.Loop = { 0 };
+	cfg.Trigger = { 64, 0 };
+	base::Action action;
+	auto press = [&](bool activate, bool down)
+	{
+		ASSERT_TRUE(trigger->QueueExternalControlAction(activate, down, action).IsEaten);
+		TickAndComplete(trigger, 0u, cfg);
+	};
+	press(false, true);
+	press(true, true);
+	press(true, false);
+	press(true, true);
+	ASSERT_EQ(engine::TRIGSTATE_PUNCHEDIN, trigger->GetState());
+	press(true, false);
+	press(false, true);
+	press(true, true);
+	press(true, false);
+	ASSERT_EQ(engine::TRIGSTATE_DEFAULT, trigger->GetState());
+	auto oldWriter = receiver->Actions().front().OverdubWriter;
+	ASSERT_NE(nullptr, oldWriter);
+	press(false, true);
+	press(true, true);
+	ASSERT_EQ(engine::TRIGSTATE_OVERDUBBING, trigger->GetState());
+	std::shared_ptr<base::BounceWriter> newWriter;
+	for (const auto& request : receiver->Actions())
+		if (request.ActionType == TriggerAction::TRIGGER_OVERDUB_START) newWriter = request.OverdubWriter;
+	ASSERT_NE(nullptr, newWriter);
+	EXPECT_NE(oldWriter, newWriter);
+	trigger->OnTick(GetTime(), cfg.Trigger.PreDelay + constants::MaxLoopFadeSamps, cfg, std::nullopt);
+	EXPECT_EQ(1u, target->PunchInCount);
+	EXPECT_EQ(1u, target->PunchOutCount);
+	EXPECT_EQ(engine::TRIGSTATE_OVERDUBBING, trigger->GetState());
+	press(true, false);
+	press(true, true);
+	trigger->OnTick(GetTime(), cfg.Trigger.PreDelay + constants::MaxLoopFadeSamps, cfg, std::nullopt);
+	auto oldSink = std::make_shared<StereoCaptureSampleSink>();
+	auto newSink = std::make_shared<StereoCaptureSampleSink>();
+	std::array<float, 64> samples;
+	samples.fill(1.0f);
+	for (unsigned int block = 0u; block < 200u; ++block)
+	{
+		oldSink->Samples.fill(0.0f);
+		newSink->Samples.fill(0.0f);
+		oldWriter->BeginCaptureBlock(64u);
+		newWriter->BeginCaptureBlock(64u);
+		for (unsigned int channel = 0u; channel < 2u; ++channel)
+		{
+			oldWriter->WriteBlock(oldSink, samples.data(), 64u, channel);
+			newWriter->WriteBlock(newSink, samples.data(), 64u, channel);
+		}
+		oldWriter->EndCaptureBlock(64u);
+		newWriter->EndCaptureBlock(64u);
+		EXPECT_FLOAT_EQ(oldSink->Samples[0], oldSink->Samples[1]);
+		EXPECT_FLOAT_EQ(newSink->Samples[0], newSink->Samples[1]);
+		EXPECT_FLOAT_EQ(1.0f, oldSink->Samples[0]);
+	}
+	EXPECT_LT(newSink->Samples[0], 0.1f);
+
+}
+
+TEST(Trigger, RemovedAndRejectedSessionsDoNotExhaustPreparedCapacity)
+{
+	for (const auto accepts : { false, true })
+	{
+		auto receiver = std::make_shared<ConfigurableTriggerReceiver>(accepts);
+		auto trigger = MakeDefaultTrigger(receiver, 0u);
+		base::Action action;
+		auto press = [&](bool activate, bool down)
+		{
+			ASSERT_TRUE(trigger->QueueExternalControlAction(activate, down, action).IsEaten);
+			TickAndComplete(trigger);
+		};
+		for (unsigned int session = 0u; session < 130u; ++session)
+		{
+			press(true, true);
+			EXPECT_EQ(accepts ? engine::TRIGSTATE_RECORDING : engine::TRIGSTATE_DEFAULT, trigger->GetState());
+			press(true, false);
+			if (accepts) { press(false, true); press(false, false); }
+			EXPECT_EQ(engine::TRIGSTATE_DEFAULT, trigger->GetState());
+		}
+		EXPECT_TRUE(trigger->GetTakes().empty());
+	}
+}
+
+TEST(Trigger, TwoAudioOrMixedTailsFinishIndependentlyWhileNewestCaptureStaysLive)
+{
+	for (const bool mixed : { false, true })
+	{
+		SCOPED_TRACE(mixed ? "mixed" : "audio");
+		StationParams stationParams;
+		stationParams.Name = "independent-tails";
+		stationParams.Size = { 100u, 100u };
+		audio::MergeMixBehaviourParams merge;
+		auto station = std::make_shared<Station>(stationParams, Station::GetMixerParams(stationParams.Size, merge));
+		station->SetAllowedMidiChannels({ 1u });
+		TriggerParams params;
+		params.InputChannels = { 0u, 1u };
+		if (mixed) params.MidiInputDevices = { "Keys" };
+		auto trigger = std::make_shared<Trigger>(params);
+		trigger->SetReceiver(station);
+		io::UserConfig cfg;
+		cfg.Loop = { 0u };
+		base::Action action;
+		auto press = [&](bool down)
+		{
+			ASSERT_TRUE(trigger->QueueExternalControlAction(true, down, action).IsEaten);
+			TickAndComplete(trigger, 0u, cfg);
+			station->CommitChanges();
+		};
+		for (unsigned int recording = 0u; recording < 2u; ++recording)
+		{
+			press(true); press(false);
+			trigger->OnTick(GetTime(), 64u, cfg, std::nullopt);
+			press(true); press(false);
+		}
+		press(true); press(false);
+		const auto takes = station->GetLoopTakes();
+		ASSERT_EQ(3u, takes.size());
+		EXPECT_EQ(LoopTake::STATE_PLAYINGRECORDING, takes[0]->TakeState());
+		EXPECT_EQ(LoopTake::STATE_PLAYINGRECORDING, takes[1]->TakeState());
+		EXPECT_EQ(LoopTake::STATE_RECORDING, takes[2]->TakeState());
+		for (unsigned int tail = 0u; tail < 2u; ++tail)
+		{
+			takes[tail]->EndMultiWrite(cfg.EndRecordingSamps(0u) + 1u, true, base::Audible::AUDIOSOURCE_ADC);
+			bool completed = false;
+			for (const auto& job : takes[tail]->CommitChanges())
+				if (job.JobActionType == actions::JobAction::JOB_ENDRECORDING)
+				{
+					EXPECT_TRUE(takes[tail]->OnAction(job).IsEaten);
+					completed = true;
+				}
+			EXPECT_TRUE(completed);
+			EXPECT_EQ(LoopTake::STATE_PLAYING, takes[tail]->TakeState());
+			EXPECT_EQ(engine::TRIGSTATE_RECORDING, trigger->GetState());
+			EXPECT_EQ(LoopTake::STATE_RECORDING, takes[2]->TakeState());
+		}
+	}
+}
+
+TEST(Trigger, PunchAdmissionReservesDelayedAndStructuralReleaseCapacity)
+{
+	auto source = std::make_shared<TestTriggerPunchTarget>();
+	auto target = std::make_shared<TestTriggerPunchTarget>();
+	auto receiver = std::make_shared<SequenceTriggerReceiver>(source, target);
+	auto trigger = MakeDefaultTrigger(receiver, 0u);
+	io::UserConfig cfg;
+	cfg.Audio = { "", 48000, 256, 256, 0, 2, 2, 2 };
+	cfg.Trigger = { 1000000u, 0u };
+	base::Action action;
+	trigger->QueueExternalControlAction(false, true, action);
+	TickAndComplete(trigger, 0u, cfg);
+	trigger->QueueExternalControlAction(true, true, action);
+	TickAndComplete(trigger, 0u, cfg);
+	trigger->QueueExternalControlAction(true, false, action);
+	trigger->OnTick(GetTime(), 0u, cfg, std::nullopt);
+	unsigned int admitted = 0u;
+	for (unsigned int attempt = 0u; attempt < 40u; ++attempt)
+	{
+		trigger->QueueExternalControlAction(true, true, action);
+		trigger->OnTick(GetTime(), 0u, cfg, std::nullopt);
+		if (trigger->GetState() == engine::TRIGSTATE_PUNCHEDIN) ++admitted;
+		trigger->QueueExternalControlAction(true, false, action);
+		trigger->OnTick(GetTime(), 0u, cfg, std::nullopt);
+		EXPECT_EQ(engine::TRIGSTATE_OVERDUBBING, trigger->GetState());
+	}
+	EXPECT_GT(admitted, 0u);
+	EXPECT_LT(admitted, 40u);
+	trigger->ProcessStructuralActionsOnJob(cfg, std::nullopt);
+	trigger->OnTick(GetTime(), cfg.Trigger.PreDelay + constants::MaxLoopFadeSamps, cfg, std::nullopt);
+	EXPECT_EQ(admitted, target->PunchInCount);
+	EXPECT_EQ(admitted, target->PunchOutCount);
+	EXPECT_EQ(engine::TRIGSTATE_OVERDUBBING, trigger->GetState());
+}
+
+TEST(Trigger, RejectedDitchReleasesRollbackCapacityAfterRestoredCommandsDrain)
+{
+	auto receiver = std::make_shared<ConfigurableTriggerReceiver>(true, actions::DitchDisposition::Failed);
+	auto trigger = MakeDefaultTrigger(receiver, 0u);
+	io::UserConfig cfg;
+	cfg.Audio = { "", 48000, 256, 256, 0, 2, 2, 2 };
+	cfg.Trigger = { 1000000u, 0u };
+	base::Action action;
+	auto press = [&](bool activate, bool down)
+	{
+		ASSERT_TRUE(trigger->QueueExternalControlAction(activate, down, action).IsEaten);
+		TickAndComplete(trigger, 0u, cfg);
+	};
+	press(false, true);
+	press(true, true);
+	press(true, false);
+	for (unsigned int pair = 0u; pair < 32u; ++pair)
+	{
+		press(true, true);
+		ASSERT_EQ(engine::TRIGSTATE_PUNCHEDIN, trigger->GetState());
+		press(true, false);
+	}
+	// This receiver rejects ditch; all delayed commands must be restored.
+	press(false, true);
+	press(false, false);
+	ASSERT_EQ(engine::TRIGSTATE_OVERDUBBING, trigger->GetState());
+	trigger->OnTick(GetTime(), cfg.Trigger.PreDelay + constants::MaxLoopFadeSamps,
+		cfg, std::nullopt);
+	press(true, true);
+	EXPECT_EQ(engine::TRIGSTATE_PUNCHEDIN, trigger->GetState());
+	press(true, false);
+	EXPECT_EQ(engine::TRIGSTATE_OVERDUBBING, trigger->GetState());
+}
+
+TEST(Trigger, FutureRigReleaseWaitsForAudioRevisionInBothIngressDomains)
+{
+    for (const auto domain : { engine::TRIGGER_INPUT_UI, engine::TRIGGER_INPUT_JOB })
+    {
+        auto receiver = std::make_shared<SequenceTriggerReceiver>();
+        auto trigger = MakeDefaultTrigger(receiver, 0u);
+        base::Action action;
+        ASSERT_TRUE(trigger->QueueInputEvent(domain, 1u, engine::TRIGGER_KEY,
+            ActivateChar, 1u, action).IsEaten);
+        TickAndComplete(trigger, 0u, std::nullopt, 1u);
+        ASSERT_TRUE(trigger->IsActivateInputDown());
+        ASSERT_TRUE(trigger->QueueInputEvent(domain, 2u, engine::TRIGGER_KEY,
+            ActivateChar, 0u, action).IsEaten);
+        trigger->OnTick(GetTime(), 0u, std::nullopt, std::nullopt, 1u);
+        EXPECT_TRUE(trigger->IsActivateInputDown());
+        trigger->OnTick(GetTime(), 0u, std::nullopt, std::nullopt, 2u);
+        EXPECT_FALSE(trigger->IsActivateInputDown());
+    }
+}
+
+TEST(Trigger, FutureFallbackReleaseWaitsWhileCurrentOtherDomainStillProcesses)
+{
+    auto receiver = std::make_shared<SequenceTriggerReceiver>();
+    auto trigger = MakeDefaultTrigger(receiver, 0u);
+    base::Action action;
+    trigger->QueueExternalControlAction(true, true, action, 1u);
+    TickAndComplete(trigger, 0u, std::nullopt, 1u);
+    ASSERT_TRUE(trigger->IsActivateInputDown());
+    for (unsigned int index = 0u; index < 80u; ++index)
+        trigger->QueueExternalControlAction(true, false, action, 2u);
+    ASSERT_GT(trigger->UiInputDropCount(), 0u);
+    trigger->QueueInputEvent(engine::TRIGGER_INPUT_JOB, 1u, engine::TRIGGER_KEY,
+        DitchChar, 1u, action);
+    trigger->OnTick(GetTime(), 0u, std::nullopt, std::nullopt, 1u);
+    EXPECT_TRUE(trigger->IsActivateInputDown());
+    EXPECT_TRUE(trigger->IsDitchInputDown());
+    trigger->OnTick(GetTime(), 0u, std::nullopt, std::nullopt, 2u);
+    EXPECT_FALSE(trigger->IsActivateInputDown());
+}
+
+TEST(Trigger, SkippedFutureRigReleaseIsDiscardedAsStale)
+{
+    auto receiver = std::make_shared<SequenceTriggerReceiver>();
+    auto trigger = MakeDefaultTrigger(receiver, 0u);
+    base::Action action;
+    trigger->QueueExternalControlAction(true, true, action, 1u);
+    TickAndComplete(trigger, 0u, std::nullopt, 1u);
+    trigger->QueueExternalControlAction(true, false, action, 2u);
+    trigger->OnTick(GetTime(), 0u, std::nullopt, std::nullopt, 1u);
+    EXPECT_TRUE(trigger->IsActivateInputDown());
+    trigger->OnTick(GetTime(), 0u, std::nullopt, std::nullopt, 3u);
+    EXPECT_TRUE(trigger->IsActivateInputDown());
+}
+
+TEST(Trigger, ZeroLengthEndsRetireTheirSessionsWithoutConsumingHistoryCapacity)
+{
+    for (const bool overdub : { false, true })
+    {
+        SCOPED_TRACE(overdub ? "overdub" : "record");
+        auto station = MakeTestStation("zero-length-retirement");
+        TriggerParams params;
+        params.InputChannels = { 0u };
+        auto trigger = std::make_shared<Trigger>(params);
+        trigger->SetReceiver(station);
+        io::UserConfig cfg;
+        cfg.Loop = { 0u };
+        base::Action action;
+        auto press = [&](bool activate, bool down)
+        {
+            trigger->QueueExternalControlAction(activate, down, action);
+            TickAndComplete(trigger, 0u, cfg);
+            station->CommitChanges();
+            station->AcknowledgeAudioBoundary();
+            station->ReleaseRetiredAudioStates();
+        };
+        // Keep an independent earlier audio tail throughout the rapid discarded captures.
+        press(true, true); press(true, false);
+        trigger->OnTick(GetTime(), 64u, cfg, std::nullopt);
+        press(true, true); press(true, false);
+        ASSERT_EQ(1u, trigger->GetTakes().size());
+        const auto olderTake = station->GetLoopTakeSnapshot().front();
+        const auto olderId = olderTake->Id();
+        for (unsigned int capture = 0u; capture < 96u; ++capture)
+        {
+            SCOPED_TRACE(capture);
+            if (overdub) press(false, true);
+            press(true, true); press(true, false);
+            ASSERT_EQ(overdub ? engine::TRIGSTATE_OVERDUBBING : engine::TRIGSTATE_RECORDING,
+                trigger->GetState());
+            ASSERT_EQ(2u, trigger->GetTakes().size());
+            std::weak_ptr<LoopTake> discarded = station->GetLoopTakeSnapshot().back();
+            if (overdub) press(false, true);
+            press(true, true); press(true, false);
+            if (overdub) press(false, false);
+            EXPECT_EQ(engine::TRIGSTATE_DEFAULT, trigger->GetState());
+            ASSERT_EQ(1u, trigger->GetTakes().size());
+            ASSERT_EQ(1u, station->GetLoopTakeSnapshot().size());
+            EXPECT_EQ(olderId, station->GetLoopTakeSnapshot().front()->Id());
+            trigger->ProcessStructuralActionsOnJob(cfg, std::nullopt);
+            EXPECT_TRUE(discarded.expired());
+        }
+        EXPECT_EQ(LoopTake::STATE_PLAYINGRECORDING, olderTake->TakeState());
+        press(true, true); press(true, false);
+        ASSERT_EQ(engine::TRIGSTATE_RECORDING, trigger->GetState());
+        trigger->OnTick(GetTime(), 64u, cfg, std::nullopt);
+        press(true, true); press(true, false);
+        EXPECT_EQ(2u, trigger->GetTakes().size());
+        EXPECT_EQ(engine::TRIGSTATE_DEFAULT, trigger->GetState());
+    }
+}
+
+TEST(Trigger, ActivateRecordsConfiguredMidiLanesWithoutConnectedDevices)
+{
+    for (const bool mixed : { false, true })
+    {
+        for (const bool partiallyConnected : { false, true })
+        {
+            SCOPED_TRACE(mixed);
+            SCOPED_TRACE(partiallyConnected);
+            auto station = MakeTestStation("disconnected-midi-record");
+            station->SetAllowedMidiChannels({ 1 });
+            TriggerParams params;
+            params.MidiInputDevices = { "missing", "keys" };
+            if (mixed) params.InputChannels = { 0u };
+            auto trigger = std::make_shared<Trigger>(params);
+            trigger->SetReceiver(station);
+            io::UserConfig cfg;
+            cfg.Trigger = { 0u, 0u };
+            cfg.Loop = { 0u };
+            cfg.Audio.NumChannelsIn = 2u;
+            trigger->ConfirmAudioAvailabilityOnJob(1u, "audio", 2u);
+            trigger->ConfirmMidiAvailabilityOnJob(
+                partiallyConnected ? std::vector<std::string>{ "keys" } : std::vector<std::string>{}, {});
+            base::Action action;
+            auto press = [&](bool down) {
+                trigger->QueueExternalControlAction(true, down, action);
+                TickAndComplete(trigger, 0u, cfg);
+                station->CommitChanges();
+            };
+            press(true); press(false);
+            ASSERT_EQ(engine::TRIGSTATE_RECORDING, trigger->GetState());
+            ASSERT_EQ(1u, trigger->GetTakes().size());
+            ASSERT_EQ(1u, station->GetLoopTakeSnapshot().size());
+            auto take = station->GetLoopTakeSnapshot().front();
+            EXPECT_EQ(mixed ? 1u : 0u, take->GetLoops().size());
+            ASSERT_EQ(2u, take->GetMidiLoops().size());
+            EXPECT_EQ(params.MidiInputDevices, take->MidiLoopDevices());
+            EXPECT_FALSE(take->RecordMidiEvent(midi::MidiEvent::MakeNoteOn(0u, 0u, 60u, 100u), "unrelated", 0u));
+            trigger->OnTick(GetTime(), 256u, cfg, std::nullopt);
+            press(true); press(false);
+            EXPECT_EQ(engine::TRIGSTATE_DEFAULT, trigger->GetState());
+            ASSERT_EQ(1u, trigger->GetTakes().size());
+            for (const auto& loop : take->GetMidiLoops())
+            {
+                EXPECT_EQ(midi::MidiLoopState::Playing, loop->State());
+                EXPECT_GT(loop->CompletedLengthForEditor(), 0u);
+                EXPECT_EQ(0u, loop->EventCount());
+                midi::MidiLoop::EditState edit;
+                ASSERT_TRUE(loop->SnapshotForEdit(edit));
+                edit.Events[0] = midi::MidiEvent::MakeNoteOn(0u, 0u, 60u, 100u);
+                edit.Events[1] = midi::MidiEvent::MakeNoteOff(1u, 0u, 60u);
+                edit.EventCount = 2u;
+                ASSERT_TRUE(loop->PublishEdit(edit));
+                midi::MidiEvent published;
+                ASSERT_TRUE(loop->TryGetPlaybackEvent(0u, published));
+                EXPECT_TRUE(published.IsNoteOn());
+            }
+        }
+    }
+}
+
+TEST(Trigger, MissingMidiDoesNotBypassInvalidAudioChannelValidation)
+{
+    auto station = MakeTestStation("invalid-mixed-audio");
+    TriggerParams params;
+    params.InputChannels = { 1u };
+    params.MidiInputDevices = { "missing" };
+    auto trigger = std::make_shared<Trigger>(params);
+    trigger->SetReceiver(station);
+    trigger->ConfirmAudioAvailabilityOnJob(1u, "audio", 1u);
+    trigger->ConfirmMidiAvailabilityOnJob({}, {});
+    io::UserConfig cfg;
+    base::Action action;
+    trigger->QueueExternalControlAction(true, true, action);
+    TickAndComplete(trigger, 0u, cfg);
+    EXPECT_EQ(engine::TRIGSTATE_DEFAULT, trigger->GetState());
+    EXPECT_TRUE(trigger->GetTakes().empty());
+    EXPECT_TRUE(station->GetLoopTakeSnapshot().empty());
+}
+
+TEST(Trigger, ConfirmedActivationLossCancelsPendingStartBeforeAndAfterJobAcceptance)
+{
+    for (const bool acceptedByJob : { false, true })
+    {
+        SCOPED_TRACE(acceptedByJob);
+        auto station = MakeTestStation("pending-source-loss");
+        TriggerParams params;
+        params.InputChannels = { 0u };
+        auto trigger = std::make_shared<Trigger>(params);
+        trigger->SetReceiver(station);
+        io::UserConfig cfg;
+        base::Action action;
+        trigger->QueueExternalControlAction(true, true, action);
+        trigger->OnTick(GetTime(), 0u, cfg, std::nullopt);
+        if (acceptedByJob) trigger->ProcessStructuralActionsOnJob(cfg, std::nullopt);
+        trigger->ConfirmMidiAvailabilityOnJob({}, { "controller" }, true);
+        // First audio observation can precede the outstanding start result.
+        trigger->OnTick(GetTime(), 0u, cfg, std::nullopt);
+        for (unsigned int step = 0u; step < 4u; ++step)
+            TickAndComplete(trigger, 0u, cfg);
+        EXPECT_EQ(engine::TRIGSTATE_DEFAULT, trigger->GetState());
+        EXPECT_TRUE(trigger->GetTakes().empty());
+        EXPECT_FALSE(trigger->HasPendingSourceLoss());
+        trigger->ConfirmMidiAvailabilityOnJob({ "controller" }, {});
+        trigger->QueueExternalControlAction(true, true, action);
+        TickAndComplete(trigger, 0u, cfg);
+        EXPECT_EQ(engine::TRIGSTATE_RECORDING, trigger->GetState());
+    }
+}
+
+TEST(Trigger, ConfirmedMidiSourceLossPreservesAnotherTriggersLiveCapture)
+{
+    auto lostStation = MakeTestStation("lost-source");
+    auto healthyStation = MakeTestStation("healthy-source");
+    TriggerParams lostParams;
+    lostParams.MidiInputDevices = { "lost" };
+    TriggerParams healthyParams;
+    healthyParams.MidiInputDevices = { "healthy" };
+    auto lost = std::make_shared<Trigger>(lostParams);
+    auto healthy = std::make_shared<Trigger>(healthyParams);
+    lost->SetReceiver(lostStation);
+    healthy->SetReceiver(healthyStation);
+    io::UserConfig cfg;
+    base::Action action;
+    for (auto trigger : { lost, healthy })
+    {
+        trigger->ConfirmMidiAvailabilityOnJob({ "lost", "healthy" }, {});
+        trigger->QueueExternalControlAction(true, true, action);
+        TickAndComplete(trigger, 0u, cfg);
+    }
+    lost->ConfirmMidiAvailabilityOnJob({ "healthy" }, { "lost" }, false, true);
+    healthy->ConfirmMidiAvailabilityOnJob({ "healthy" }, { "lost" });
+    for (unsigned int step = 0u; step < 4u; ++step)
+    {
+        TickAndComplete(lost, 0u, cfg);
+        TickAndComplete(healthy, 0u, cfg);
+    }
+    EXPECT_EQ(engine::TRIGSTATE_DEFAULT, lost->GetState());
+    EXPECT_TRUE(lost->GetTakes().empty());
+    EXPECT_EQ(engine::TRIGSTATE_RECORDING, healthy->GetState());
+    EXPECT_EQ(1u, healthy->GetTakes().size());
+}
+
+TEST(Trigger, LosingOlderTailPreservesNewIndependentPunchAndItsQueuedRelease)
+{
+    auto oldStation = MakeTestStation("old-tail-source");
+    auto healthyStation = MakeTestStation("new-punch-source");
+    TriggerParams params;
+    params.InputChannels = { 0u };
+    params.MidiInputDevices = { "old" };
+    auto trigger = std::make_shared<Trigger>(params);
+    trigger->SetReceiver(oldStation);
+    io::UserConfig cfg;
+    cfg.Trigger = { 0u, 0u };
+    base::Action action;
+    auto press = [&](bool activate, bool down) {
+        trigger->QueueExternalControlAction(activate, down, action);
+        TickAndComplete(trigger, 0u, cfg);
+        oldStation->CommitChanges();
+        healthyStation->CommitChanges();
+    };
+    trigger->ConfirmMidiAvailabilityOnJob({ "old", "healthy" }, {});
+    press(true, true); press(true, false);
+    trigger->OnTick(GetTime(), 64u, cfg, std::nullopt);
+    press(true, true); press(true, false);
+    ASSERT_EQ(1u, trigger->GetTakes().size());
+    ASSERT_EQ(1u, oldStation->GetLoopTakeSnapshot().front()->GetLoops().size());
+    ASSERT_TRUE(oldStation->GetLoopTakeSnapshot().front()->HasPendingTriggerCapture());
+    std::shared_ptr<base::ActionReceiver> receiver = healthyStation;
+    std::vector<unsigned int> channels{ 0u };
+    std::vector<std::string> names{ "healthy" };
+    auto mode = io::RigFile::Trigger::MidiInputMode::Selected;
+    std::shared_ptr<audio::AudioMixer> mixer;
+    std::shared_ptr<base::BounceWriter> writer;
+    // Serialized test boundary installs a distinct bounce source. The older
+    // cancelled target is deliberately not a dependency of this new punch.
+    trigger->ApplyCaptureRouting(receiver, channels, names, mode, mixer, writer);
+    press(true, true); press(true, false);
+    trigger->OnTick(GetTime(), 64u, cfg, std::nullopt);
+    press(true, true); press(true, false);
+    press(false, true);
+    press(true, true); press(true, false);
+    ASSERT_EQ(engine::TRIGSTATE_OVERDUBBING, trigger->GetState());
+    press(true, true);
+    ASSERT_EQ(engine::TRIGSTATE_PUNCHEDIN, trigger->GetState());
+    trigger->QueueExternalControlAction(true, false, action);
+    trigger->ConfirmMidiAvailabilityOnJob({ "healthy" }, { "old" });
+    for (unsigned int step = 0u; step < 4u; ++step) TickAndComplete(trigger, 0u, cfg);
+    EXPECT_EQ(engine::TRIGSTATE_OVERDUBBING, trigger->GetState());
+    EXPECT_FALSE(trigger->IsActivateInputDown());
+    EXPECT_EQ(2u, trigger->GetTakes().size());
+    EXPECT_TRUE(oldStation->GetLoopTakeSnapshot().empty());
+}
+
+TEST(Trigger, OverdubFromRestoredInactiveSourceIsNotMistakenForCancellation)
+{
+    auto station = MakeTestStation("restored-source-overdub");
+    auto source = station->AddTake();
+    source->AddLoop(0u, station->Name());
+    station->CommitChanges();
+    ASSERT_EQ(LoopTake::STATE_INACTIVE, source->TakeState());
+    ASSERT_FALSE(source->IsTriggerCaptureInactive());
+    TriggerParams params;
+    params.InputChannels = { 0u };
+    auto trigger = std::make_shared<Trigger>(params);
+    trigger->SetReceiver(station);
+    io::UserConfig cfg;
+    base::Action action;
+    trigger->QueueExternalControlAction(false, true, action);
+    TickAndComplete(trigger, 0u, cfg);
+    trigger->QueueExternalControlAction(true, true, action);
+    TickAndComplete(trigger, 0u, cfg);
+    for (unsigned int step = 0u; step < 4u; ++step) TickAndComplete(trigger, 0u, cfg);
+    EXPECT_EQ(engine::TRIGSTATE_OVERDUBBING, trigger->GetState());
+    ASSERT_EQ(1u, trigger->GetTakes().size());
+    EXPECT_EQ(source->Id(), trigger->GetTakes().front().SourceTakeId);
+    EXPECT_FALSE(trigger->HasPendingSourceLoss());
+}
+
+TEST(Trigger, EmptyAudioRouteRemainsMidiOnlyAndStreamReplacementCancelsItsPunch)
+{
+    auto station = MakeTestStation("midi-only-stream-replacement");
+    station->SetAllowedMidiChannels({ 1 });
+    auto source = station->AddTake();
+    source->Record({}, station->Name(), { 0u }, { "healthy" });
+    source->Play(0u, 1000u, 0u);
+    station->CommitChanges();
+    TriggerParams params;
+    params.MidiInputDevices = { "healthy" };
+    auto trigger = std::make_shared<Trigger>(params);
+    trigger->SetReceiver(station);
+    io::UserConfig cfg;
+    cfg.Trigger = { 0u, 0u };
+    cfg.Audio.NumChannelsIn = 2u;
+    trigger->ConfirmAudioAvailabilityOnJob(1u, "same-device", 0u);
+    trigger->ConfirmMidiAvailabilityOnJob({ "healthy" }, {});
+    base::Action action;
+    auto press = [&](bool activate, bool down) {
+        trigger->QueueExternalControlAction(activate, down, action);
+        TickAndComplete(trigger, 0u, cfg);
+    };
+    press(false, true);
+    press(true, true); press(true, false);
+    ASSERT_EQ(engine::TRIGSTATE_OVERDUBBING, trigger->GetState());
+    ASSERT_EQ(2u, station->GetLoopTakeSnapshot().size());
+    auto target = station->GetLoopTakeSnapshot().back();
+    EXPECT_TRUE(target->GetLoops().empty());
+    ASSERT_FALSE(target->GetMidiLoops().empty());
+    press(true, true);
+    ASSERT_EQ(engine::TRIGSTATE_PUNCHEDIN, trigger->GetState());
+    trigger->ConfirmAudioAvailabilityOnJob(2u, "same-device", 0u);
+    for (unsigned int step = 0u; step < 4u; ++step) TickAndComplete(trigger, 0u, cfg);
+    EXPECT_EQ(engine::TRIGSTATE_DEFAULT, trigger->GetState());
+    EXPECT_TRUE(trigger->GetTakes().empty());
+    EXPECT_FALSE(trigger->IsActivateInputDown());
+    EXPECT_TRUE(target->IsTriggerCaptureInactive());
+    EXPECT_FALSE(source->IsTriggerCaptureInactive());
+}
+
+TEST(Trigger, ConfirmedLossRemainsPendingWhenStructuralQueueIsFull)
+{
+    auto station = MakeTestStation("queue-full-source-loss");
+    TriggerParams params;
+    params.InputChannels = { 0u };
+    auto trigger = std::make_shared<Trigger>(params);
+    trigger->SetReceiver(station);
+    io::UserConfig cfg;
+    base::Action action;
+    trigger->QueueExternalControlAction(true, true, action);
+    TickAndComplete(trigger, 0u, cfg);
+    ASSERT_EQ(engine::TRIGSTATE_RECORDING, trigger->GetState());
+    ASSERT_GT(engine::TriggerSourceLossTestAccess::SaturateStructuralQueue(*trigger), 0u);
+    trigger->ConfirmMidiAvailabilityOnJob({}, { "controller" }, true);
+    trigger->OnTick(GetTime(), 0u, cfg, std::nullopt);
+    EXPECT_EQ(engine::TRIGSTATE_RECORDING, trigger->GetState());
+    EXPECT_TRUE(trigger->HasPendingSourceLoss());
+    for (unsigned int step = 0u; step < 5u; ++step) TickAndComplete(trigger, 0u, cfg);
+    EXPECT_EQ(engine::TRIGSTATE_DEFAULT, trigger->GetState());
+    EXPECT_TRUE(trigger->GetTakes().empty());
+    EXPECT_FALSE(trigger->HasPendingSourceLoss());
+}
+
+TEST(Trigger, LossDuringPendingEndSettlesBeforeReconnectAndRejectsOldQueuedRelease)
+{
+    auto station = MakeTestStation("pending-end-source-loss");
+    TriggerParams params;
+    params.InputChannels = { 0u };
+    auto trigger = std::make_shared<Trigger>(params);
+    trigger->SetReceiver(station);
+    io::UserConfig cfg;
+    base::Action action;
+    trigger->QueueExternalControlAction(true, true, action);
+    TickAndComplete(trigger, 0u, cfg);
+    station->CommitChanges();
+    ASSERT_EQ(1u, station->GetLoopTakeSnapshot().front()->GetLoops().size());
+    trigger->QueueExternalControlAction(true, false, action);
+    TickAndComplete(trigger, 64u, cfg);
+    trigger->QueueExternalControlAction(true, true, action);
+    trigger->OnTick(GetTime(), 0u, cfg, std::nullopt);
+    trigger->ProcessStructuralActionsOnJob(cfg, std::nullopt);
+    ASSERT_TRUE(station->GetLoopTakeSnapshot().front()->HasPendingTriggerCapture());
+    trigger->QueueExternalControlAction(true, false, action);
+    trigger->ConfirmMidiAvailabilityOnJob({}, { "controller" }, true);
+    for (unsigned int step = 0u; step < 4u; ++step) TickAndComplete(trigger, 0u, cfg);
+    EXPECT_EQ(engine::TRIGSTATE_DEFAULT, trigger->GetState());
+    EXPECT_TRUE(trigger->GetTakes().empty());
+    trigger->ConfirmMidiAvailabilityOnJob({ "controller" }, {});
+    trigger->QueueExternalControlAction(true, true, action);
+    TickAndComplete(trigger, 0u, cfg);
+    EXPECT_EQ(engine::TRIGSTATE_RECORDING, trigger->GetState());
+    EXPECT_TRUE(trigger->IsActivateInputDown());
+    EXPECT_FALSE(trigger->HasPendingSourceLoss());
+}
+
+TEST(Trigger, ConfirmedTailLossStaysStickyAfterCompletionAndPreservesEarlierCompletedHistory)
+{
+    auto station = MakeTestStation("sticky-tail-loss");
+    TriggerParams params;
+    params.InputChannels = { 0u };
+    params.MidiInputDevices = { "lost" };
+    auto trigger = std::make_shared<Trigger>(params);
+    trigger->SetReceiver(station);
+    io::UserConfig cfg;
+    base::Action action;
+    auto press = [&](bool down) {
+        trigger->QueueExternalControlAction(true, down, action);
+        TickAndComplete(trigger, 0u, cfg);
+        station->CommitChanges();
+    };
+    auto record = [&]() {
+        press(true); press(false);
+        trigger->OnTick(GetTime(), 64u, cfg, std::nullopt);
+        press(true); press(false);
+    };
+    trigger->ConfirmMidiAvailabilityOnJob({ "lost" }, {});
+    record();
+    auto completed = station->GetLoopTakeSnapshot().front();
+    completed->EndRecording();
+    ASSERT_FALSE(completed->HasPendingTriggerCapture());
+    record();
+    auto tail = station->GetLoopTakeSnapshot().back();
+    ASSERT_TRUE(tail->HasPendingTriggerCapture());
+    trigger->ConfirmMidiAvailabilityOnJob({}, { "lost" });
+    tail->EndRecording(); // Completion races the already-confirmed request.
+    ASSERT_FALSE(tail->HasPendingTriggerCapture());
+    for (unsigned int step = 0u; step < 4u; ++step) TickAndComplete(trigger, 0u, cfg);
+    ASSERT_EQ(1u, trigger->GetTakes().size());
+    EXPECT_EQ(completed->Id(), trigger->GetTakes().front().TargetTakeId);
+    EXPECT_FALSE(completed->IsTriggerCaptureInactive());
+    EXPECT_TRUE(tail->IsTriggerCaptureInactive());
+}
+
+TEST(Trigger, ConfirmedLossBeforeAcceptedMidiOnlyEndCannotEscapeAsCompletedHistory)
+{
+    auto station = MakeTestStation("sticky-midi-end-loss");
+    station->SetAllowedMidiChannels({ 1 });
+    TriggerParams params;
+    params.MidiInputDevices = { "lost" };
+    auto trigger = std::make_shared<Trigger>(params);
+    trigger->SetReceiver(station);
+    io::UserConfig cfg;
+    base::Action action;
+    trigger->ConfirmMidiAvailabilityOnJob({ "lost" }, {});
+    trigger->QueueExternalControlAction(true, true, action);
+    TickAndComplete(trigger, 0u, cfg);
+    station->CommitChanges();
+    auto target = station->GetLoopTakeSnapshot().front();
+    ASSERT_TRUE(target->GetLoops().empty());
+    ASSERT_FALSE(target->GetMidiLoops().empty());
+    trigger->QueueExternalControlAction(true, false, action);
+    TickAndComplete(trigger, 64u, cfg);
+    trigger->QueueExternalControlAction(true, true, action);
+    trigger->OnTick(GetTime(), 0u, cfg, std::nullopt);
+    trigger->ConfirmMidiAvailabilityOnJob({}, { "lost" });
+    trigger->ProcessStructuralActionsOnJob(cfg, std::nullopt);
+    ASSERT_FALSE(target->HasPendingTriggerCapture());
+    for (unsigned int step = 0u; step < 4u; ++step) TickAndComplete(trigger, 0u, cfg);
+    EXPECT_TRUE(trigger->GetTakes().empty());
+    EXPECT_TRUE(target->IsTriggerCaptureInactive());
+    EXPECT_EQ(engine::TRIGSTATE_DEFAULT, trigger->GetState());
+}
+
+TEST(Trigger, RapidUnpublishedAudioEndKeepsTailAndAllowsIndependentNewCapture)
+{
+    auto station = MakeTestStation("rapid-unpublished-tail");
+    TriggerParams params;
+    params.InputChannels = { 0u };
+    auto trigger = std::make_shared<Trigger>(params);
+    trigger->SetReceiver(station);
+    io::UserConfig cfg;
+    base::Action action;
+    auto press = [&](bool down) {
+        trigger->QueueExternalControlAction(true, down, action);
+        TickAndComplete(trigger, 0u, cfg);
+    };
+    press(true); press(false);
+    trigger->OnTick(GetTime(), 64u, cfg, std::nullopt);
+    press(true); press(false);
+    auto oldTail = station->GetLoopTakeSnapshot().front();
+    ASSERT_TRUE(oldTail->GetLoops().empty()); // No GUI publication yet.
+    ASSERT_TRUE(oldTail->HasPendingTriggerCapture());
+    press(true); press(false);
+    EXPECT_EQ(engine::TRIGSTATE_RECORDING, trigger->GetState());
+    EXPECT_EQ(2u, trigger->GetTakes().size());
+    EXPECT_TRUE(oldTail->HasPendingTriggerCapture());
+    station->CommitChanges();
+    EXPECT_EQ(1u, oldTail->GetLoops().size());
+    EXPECT_EQ(Loop::STATE_PLAYINGRECORDING, oldTail->GetLoops().front()->PlayState());
+}

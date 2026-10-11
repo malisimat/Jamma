@@ -10,6 +10,7 @@ namespace actions
 	struct MidiEditRevisionCursor
 	{
 		std::uint64_t Revision = 0u;
+		std::uint64_t SourceRevision = 0u;
 	};
 
 	// One accepted editor gesture. Undo and redo use the same take boundary as
@@ -28,7 +29,11 @@ namespace actions
 			_before(std::move(before)), _after(std::move(after)),
 			_cursor(std::move(cursor))
 		{
-			if (_cursor) _cursor->Revision = acceptedRevision;
+			if (_cursor)
+			{
+				_cursor->Revision = acceptedRevision;
+				_cursor->SourceRevision = acceptedRevision;
+			}
 		}
 
 		bool Undo() override { return Apply(_after, _before); }
@@ -38,9 +43,7 @@ namespace actions
 		static bool SameContent(const midi::MidiLoop::EditState& lhs,
 			const midi::MidiLoop::EditState& rhs) noexcept
 		{
-			if (lhs.EventCount != rhs.EventCount || lhs.LoopLengthSamps != rhs.LoopLengthSamps
-				|| lhs.Quantisation != rhs.Quantisation
-				|| lhs.QuantisationTransportStartSamps != rhs.QuantisationTransportStartSamps)
+			if (lhs.EventCount != rhs.EventCount || lhs.LoopLengthSamps != rhs.LoopLengthSamps)
 				return false;
 			for (std::size_t i = 0u; i < lhs.EventCount; ++i)
 			{
@@ -60,14 +63,19 @@ namespace actions
 			if (!take || !loop || !_cursor)
 				return false;
 			midi::MidiLoop::EditState current;
-			if (!loop->SnapshotForEdit(current) || current.Revision != _cursor->Revision
+			if (!loop->SnapshotForEdit(current) || current.SourceRevision != _cursor->SourceRevision
 				|| !SameContent(current, expectedContent)) return false;
 			auto replacement = source;
 			replacement.Revision = current.Revision;
+			replacement.SourceRevision = current.SourceRevision;
+			// History restores source notes under the current grid, never old geometry.
+			replacement.Quantisation = current.Quantisation;
+			replacement.QuantisationTransportStartSamps = current.QuantisationTransportStartSamps;
 			std::uint64_t acceptedRevision = 0u;
 			if (!take->PublishMidiEdit(loop, replacement, &acceptedRevision))
 				return false;
 			_cursor->Revision = acceptedRevision;
+			_cursor->SourceRevision = acceptedRevision;
 			return true;
 		}
 

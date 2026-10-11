@@ -193,7 +193,7 @@ xcopy /y "$(VcpkgInstalledDir)$(VcpkgTriplet)\debug\bin\gtest_main.dll" "$(OutDi
     <ClCompile Include="src\graphics\Window_Tests.cpp" />
     <ClCompile Include="src\gui\GuiControls_Tests.cpp" />
 	<ClCompile Include="src\gui\CableInteraction_Tests.cpp" />
-    <ClCompile Include="src\gui\GuiPhase3_Tests.cpp" />
+    <ClCompile Include="src\gui\GuiComponents_Tests.cpp" />
     <ClCompile Include="src\gui\GuiLayout_Tests.cpp" />
     <ClCompile Include="src\gui\GuiRack_Tests.cpp" />
     <ClCompile Include="src\gui\GuiSlider_Tests.cpp" />

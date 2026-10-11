@@ -47,7 +47,7 @@ using actions::TouchAction;
 using actions::TouchMoveAction;
 using actions::GuiAction;
 
-class GuiPhase3RecordingGuiReceiver : public base::ActionReceiver
+class GuiRecordingActionReceiver : public base::ActionReceiver
 {
 public:
 	actions::ActionResult OnAction(actions::GuiAction action) override
@@ -260,7 +260,7 @@ TEST(GuiPopup, ConfirmationButtonsArePackedAtTheLowerRightAndDispatch) {
 	EXPECT_EQ(284, deleteButton->Position().X);
 	EXPECT_EQ(24, deleteButton->Position().Y);
 
-	auto receiver = std::make_shared<GuiPhase3RecordingGuiReceiver>();
+	auto receiver = std::make_shared<GuiRecordingActionReceiver>();
 	popup->SetButtonReceiver(receiver);
 	popup->OnAction(MakeTouch(TouchAction::TOUCH_DOWN, { 209, 25 }));
 	popup->OnAction(MakeTouch(TouchAction::TOUCH_UP, { 209, 25 }));
@@ -282,7 +282,7 @@ TEST(GuiPopup, FitsViewportAndKeepsContentAndActionsInsideAfterResize)
 	popup->SetTitle("Current server tempo");
 	popup->SetBodyLines({ "Tempo: 120 BPM", "Remote master interval", "Apply locally?" });
 	popup->ConfigureButtons({ { { "Cancel", 2u }, { "Follow server", 1u } } });
-	auto receiver = std::make_shared<GuiPhase3RecordingGuiReceiver>(); popup->SetButtonReceiver(receiver);
+	auto receiver = std::make_shared<GuiRecordingActionReceiver>(); popup->SetButtonReceiver(receiver);
 	for (const auto viewport : { utils::Size2d{ 320, 180 }, utils::Size2d{ 184, 161 },
 		utils::Size2d{ 10, 10 }, utils::Size2d{ 0, 0 }, utils::Size2d{ 800, 600 } }) {
 		popup->FitToViewport(viewport);
@@ -672,7 +672,7 @@ TEST(GuiTextBox, LateBoundReceiverGetsNotifications) {
 	tp.MinSize = { 80, 24 };
 	tp.Index = 17u;
 	auto tb = std::make_shared<GuiTextBox>(tp);
-	auto receiver = std::make_shared<GuiPhase3RecordingGuiReceiver>();
+	auto receiver = std::make_shared<GuiRecordingActionReceiver>();
 	tb->SetReceiver(receiver);
 
 	tb->SetText("23", true);
@@ -840,8 +840,8 @@ TEST(GuiNumericInput, CancelStopsDragAndHiddenInputCannotRestartIt) {
 }
 
 TEST(GuiTextBox, ReplacingReceiverSupersedesCachedReceiver) {
-	auto oldOwner = std::make_shared<GuiPhase3RecordingGuiReceiver>();
-	auto newOwner = std::make_shared<GuiPhase3RecordingGuiReceiver>();
+	auto oldOwner = std::make_shared<GuiRecordingActionReceiver>();
+	auto newOwner = std::make_shared<GuiRecordingActionReceiver>();
 	GuiTextBoxParams params;
 	params.Receiver = oldOwner;
 	auto input = std::make_shared<GuiTextBox>(params);
@@ -854,7 +854,7 @@ TEST(GuiTextBox, ReplacingReceiverSupersedesCachedReceiver) {
 }
 
 TEST(GuiMainPanel, RetainedPagesKeepCommandIdentityAfterTreeInitialization) {
-	auto owner = std::make_shared<GuiPhase3RecordingGuiReceiver>();
+	auto owner = std::make_shared<GuiRecordingActionReceiver>();
 	GuiNumericInputParams numericParams;
 	numericParams.Size = { 96, 44 };
 	auto numeric = std::make_shared<GuiNumericInput>(numericParams);
@@ -935,6 +935,33 @@ TEST(GuiMainPanel, ControlsRecoverTheirWidthsAfterTinyAndZeroViewport) {
 	params.Settings = { { gui::SettingsPage::Timing, "Offset", numeric, 7002u } };
 	auto panel = std::make_shared<gui::GuiMainPanel>(params);
 	panel->Init();
+	panel->SetViewportSize({ 200, 200 });
+	auto frame = panel->TryGetChild(0);
+	ASSERT_TRUE(frame);
+	auto title = frame->TryGetChild(0);
+	auto tabs = std::dynamic_pointer_cast<GuiScrollPanel>(frame->TryGetChild(2));
+	ASSERT_TRUE(title);
+	ASSERT_TRUE(tabs);
+	for (const auto& element : { title, std::static_pointer_cast<base::GuiElement>(tabs) })
+	{
+		EXPECT_GE(element->GlobalPosition().Y, 0);
+		EXPECT_LE(element->GlobalPosition().Y + static_cast<int>(element->GetSize().Height), 200);
+	}
+	auto midiTab = tabs->Content()->TryGetChild(0);
+	ASSERT_TRUE(midiTab);
+	const auto tabPoint = midiTab->GlobalPosition() + utils::Position2d{ 5, 5 };
+	ASSERT_GE(tabPoint.X, 0);
+	ASSERT_LT(tabPoint.X, 200);
+	ASSERT_GE(tabPoint.Y, 0);
+	ASSERT_LT(tabPoint.Y, 200);
+	EXPECT_TRUE(panel->RouteHitTest(tabPoint));
+	auto down = panel->OnAction(MakeTouch(TouchAction::TOUCH_DOWN, tabPoint));
+	ASSERT_TRUE(down.IsEaten);
+	auto active = down.ActiveElement.lock();
+	ASSERT_EQ(midiTab.get(), active.get());
+	EXPECT_TRUE(active->OnAction(active->GlobalToLocal(MakeTouch(TouchAction::TOUCH_UP, tabPoint))).IsEaten);
+	EXPECT_EQ(gui::SettingsPage::Midi, panel->Page());
+	panel->SetPage(gui::SettingsPage::Timing);
 	panel->SetViewportSize({ 40, 40 });
 	panel->SetViewportSize({ 0, 0 });
 	EXPECT_FALSE(panel->RouteHitTest({ 0, 0 }));
@@ -1214,6 +1241,15 @@ public:
 	std::shared_ptr<gui::GuiToggle> Click() const { return _ninjamMetronomeToggle; }
 	std::shared_ptr<gui::GuiRadio> Quantisation() const { return _globalMidiQuantRadio; }
 	std::shared_ptr<gui::GuiRadio> Depth() const { return _modeRadio; }
+	std::shared_ptr<gui::GuiRadio> Subdivision() const { return _midiSubdivisionRadio; }
+	void SetFrozenTapClock()
+	{
+		auto clock = std::make_shared<utils::Timer>();
+		_quantisation.SetClock(clock);
+		_quantisation.Set(_CurrentSampleRate() / 2u, utils::Timer::QUANTISE_MULTIPLE);
+		clock->SetSeedSourceLength(_CurrentSampleRate() * 2ul);
+	}
+	bool TapAt(Time time) { return _HandleTapTempo(time); }
 	unsigned int ForcedChannel() const { return _inputSubsystem->ForcedChannelOverride(); }
 	double PhaseFraction() const { return _transportOffsetLoopFrac; }
 	bool ClickEnabled() const { return _audioEngine->NinjamMetronomeEnabled(); }
@@ -1243,6 +1279,42 @@ protected:
 	std::shared_ptr<GuiSettingsOwnerScene> Scene;
 	std::shared_ptr<engine::Station> Station;
 };
+
+class GuiTapCompletedTake final : public engine::LoopTake
+{
+public:
+	GuiTapCompletedTake(engine::LoopTakeParams params) :
+		LoopTake(params, LoopTake::GetMixerParams(params.Size, audio::MergeMixBehaviourParams{}))
+	{
+		_midiVisualLoopLength.store(96000ul, std::memory_order_release);
+		_state.store(STATE_PLAYING, std::memory_order_release);
+	}
+};
+
+TEST_F(GuiSceneSettingsTests, FrozenTapSelectsSubdivisionRadio)
+{
+	for (const auto id : { "tap-one", "tap-two" })
+	{
+		engine::LoopTakeParams params; params.Id = id; params.Size = { 100, 100 };
+		Station->AddTake(std::make_shared<GuiTapCompletedTake>(params));
+	}
+	Scene->SetFrozenTapClock();
+	const auto initialSubdivision = Scene->Subdivision()->CurrentValue();
+	EXPECT_FALSE(Scene->TapAt(Time{}));
+	EXPECT_EQ(initialSubdivision, Scene->Subdivision()->CurrentValue());
+	EXPECT_TRUE(Scene->TapAt(Time{} + std::chrono::microseconds(166667)));
+	const auto expected = midi::MidiQuantisationFraction::Third;
+	EXPECT_EQ(midi::MidiQuantisation::FractionDisplayIndex(expected), Scene->Subdivision()->CurrentValue());
+	for (const auto& take : Station->GetLoopTakes())
+		EXPECT_EQ(expected, take->MidiQuantisation().Fraction);
+	EXPECT_FALSE(Scene->TapAt(Time{} + std::chrono::seconds(3)));
+	EXPECT_EQ(midi::MidiQuantisation::FractionDisplayIndex(expected), Scene->Subdivision()->CurrentValue());
+	for (const auto& take : Station->GetLoopTakes())
+		EXPECT_EQ(expected, take->MidiQuantisation().Fraction);
+	EXPECT_TRUE(Scene->TapAt(Time{} + std::chrono::milliseconds(3500)));
+	EXPECT_EQ(midi::MidiQuantisation::FractionDisplayIndex(midi::MidiQuantisationFraction::Whole),
+		Scene->Subdivision()->CurrentValue());
+}
 
 TEST_F(GuiSceneSettingsTests, ChannelLimitsAndShortcutFeedbackReachRouterAfterTreeChanges)
 {

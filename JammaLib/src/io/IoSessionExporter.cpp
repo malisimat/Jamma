@@ -193,7 +193,7 @@ namespace io
 							+ "_a" + std::to_string(loopIndex);
 						const auto wavFilename = stem + ".wav";
 
-						auto samples = loop->ExportSamples();
+						auto samples = loop->ExportSamples(true);
 						if (samples.empty())
 							continue;
 
@@ -218,6 +218,12 @@ namespace io
 					jamTake.MidiPlayIndex = midiExport.PlayIndex;
 					jamTake.MidiPlayLength = midiExport.LoopLengthSamps;
 					jamTake.MidiQuantTransportStart = midiExport.QuantisationTransportStartSamps;
+					if (midiExport.BaseIntervalSamps > 0u && midiExport.BaseDivisions > 0u)
+					{
+						jamTake.BaseIntervalSamps = midiExport.BaseIntervalSamps;
+						jamTake.BaseDivisions = midiExport.BaseDivisions;
+					}
+
 					auto resolveAutomationTarget = [&](const vst::IVstPlugin* target,
 						io::JamFile::AutomationLane& lane) -> bool
 					{
@@ -300,6 +306,13 @@ namespace io
 						}
 						jamTake.MidiStreams.push_back({ filename, stream.Channel, stream.Device,
 							stream.Loop.LoopLengthSamps, stream.Loop.AutomationGlobalSampleOrigin });
+						auto& manifestStream = jamTake.MidiStreams.back();
+						const auto& overrides = stream.Loop.LoopQuantisation;
+						manifestStream.MidiQuantEnabled = overrides.Enabled;
+						if (overrides.Fraction)
+							manifestStream.MidiQuantFraction = midi::MidiQuantisation::FractionIndex(*overrides.Fraction);
+						manifestStream.PhaseOffsetSamps = overrides.PhaseOffsetSamps;
+
 						MidiSnapshot midiSnapshot;
 						midiSnapshot.FinalPath = exportDir + L"\\" + utils::DecodeUtf8(filename);
 						midiSnapshot.TemporaryPath = midiSnapshot.FinalPath + L".tmp";

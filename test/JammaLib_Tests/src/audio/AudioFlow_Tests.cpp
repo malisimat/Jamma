@@ -1,15 +1,22 @@
 
 #include <algorithm>
+#include <array>
+#include <atomic>
 #include "gtest/gtest.h"
 #include "resources/ResourceLib.h"
 #include "engine/Station.h"
+#include "engine/Scene.h"
 #include "engine/LoopTake.h"
 #include "engine/Loop.h"
 #include "engine/Trigger.h"
 #include "audio/ChannelMixer.h"
 #include "audio/AudioMixer.h"
+#include "audio/AudioHost.h"
 #include "actions/TriggerAction.h"
 #include "actions/GuiAction.h"
+#ifdef _DEBUG
+#include <crtdbg.h>
+#endif
 
 using engine::Station;
 using engine::StationParams;
@@ -1309,3 +1316,249 @@ TEST(AudioFlow, StationMasterRackLevelReducesOverallOutput)
 		ASSERT_LT(std::abs(reduced[s]), std::abs(baseline[s]));
 	}
 }
+
+#ifdef _DEBUG
+namespace audio
+{
+	class AudioHostRealtimeTestAccess
+	{
+	public:
+		static void Prepare(AudioHost& host,
+			std::shared_ptr<const std::vector<std::shared_ptr<Station>>> stations,
+			const AudioStreamParams& params)
+		{
+			host._preparedStreamParams = params;
+			host._callbackOutputChannels.store(params.NumOutputChannels, std::memory_order_release);
+			host._channelMixer = std::make_shared<ChannelMixer>(ChannelMixerParams{
+				params.BufSize, ChannelMixer::DefaultBufferSize,
+				params.NumInputChannels, params.NumOutputChannels });
+			for (const auto& station : *stations)
+			{
+				station->SetupBuffers(params.BufSize);
+				station->SetSampleRate(static_cast<float>(params.SampleRate));
+				station->SetNumAdcChannels(params.NumInputChannels);
+				station->SetNumDacChannels(params.NumOutputChannels);
+			}
+			host.SetStations(std::move(stations));
+		}
+
+		static int InvokeCallback(AudioHost& host, float* output, float* input,
+			unsigned int frames) noexcept
+		{
+			return AudioHost::AudioCallback(output, input, frames, 0.0, 0u, &host);
+		}
+
+		static void PrepareScene(engine::Scene& scene, const AudioStreamParams& params,
+			bool& tickCallbackCalled)
+		{
+			auto stations = std::make_shared<const std::vector<std::shared_ptr<Station>>>(
+				scene.SnapshotStations());
+			auto& host = *scene._audioEngine;
+			Prepare(host, std::move(stations), params);
+			host._tickCallback = [&scene, &tickCallbackCalled](Time streamTime,
+				unsigned int numSamps, const std::optional<io::UserConfig>& cfg,
+				const std::optional<AudioStreamParams>& streamParams)
+			{
+				tickCallbackCalled = true;
+				scene.OnTick(streamTime, numSamps, cfg, streamParams);
+			};
+		}
+
+		static int InvokeSceneCallback(engine::Scene& scene, float* output,
+			unsigned int frames) noexcept
+		{
+			return AudioHost::AudioCallback(output, nullptr, frames, 0.0, 0u,
+				scene._audioEngine.get());
+		}
+
+		static std::uint64_t SceneSampleCounter(const engine::Scene& scene) noexcept
+		{
+			return scene._audioEngine->GetAudioSampleCounter();
+		}
+
+		static std::size_t SceneCallbackStationCount(const engine::Scene& scene) noexcept
+		{
+			return scene._audioEngine->AudioStationsForCallback().size();
+		}
+	};
+}
+
+class AudioCallbackAllocationProbe
+{
+public:
+	struct Counts
+	{
+		std::size_t Allocations = 0u;
+		std::size_t Reallocations = 0u;
+		std::size_t Frees = 0u;
+	};
+
+	class Scope
+	{
+	public:
+		Scope()
+		{
+			CountsForThread = {};
+			PreviousHook.store(_CrtSetAllocHook(&Hook), std::memory_order_release);
+			ArmedForThread = true;
+		}
+
+		~Scope()
+		{
+			ArmedForThread = false;
+			_CrtSetAllocHook(PreviousHook.load(std::memory_order_acquire));
+		}
+
+		Counts GetCounts() const noexcept { return CountsForThread; }
+
+		Scope(const Scope&) = delete;
+		Scope& operator=(const Scope&) = delete;
+
+	private:
+		static int Hook(int allocationType, void* userData, std::size_t size,
+			int blockType, long requestNumber, const unsigned char* fileName,
+			int lineNumber)
+		{
+			if (ArmedForThread)
+			{
+				if (allocationType == _HOOK_ALLOC)
+					++CountsForThread.Allocations;
+				else if (allocationType == _HOOK_REALLOC)
+					++CountsForThread.Reallocations;
+				else if (allocationType == _HOOK_FREE)
+					++CountsForThread.Frees;
+			}
+
+			const auto previousHook = PreviousHook.load(std::memory_order_acquire);
+			return previousHook
+				? previousHook(allocationType, userData, size, blockType,
+					requestNumber, fileName, lineNumber)
+				: TRUE;
+		}
+
+		static thread_local bool ArmedForThread;
+		static thread_local Counts CountsForThread;
+		static std::atomic<_CRT_ALLOC_HOOK> PreviousHook;
+	};
+};
+
+thread_local bool AudioCallbackAllocationProbe::Scope::ArmedForThread = false;
+thread_local AudioCallbackAllocationProbe::Counts AudioCallbackAllocationProbe::Scope::CountsForThread{};
+std::atomic<_CRT_ALLOC_HOOK> AudioCallbackAllocationProbe::Scope::PreviousHook{ nullptr };
+
+TEST(AudioCallbackRealtime, PreparedCallbackDoesNotAllocateOrFree)
+{
+	io::UserConfig config{};
+	config.Audio.Name = std::string(192u, 'c');
+	config.Audio.SampleRate = 48000u;
+	config.Audio.BufSize = 128u;
+	config.Audio.LatencyIn = 0u;
+	config.Audio.LatencyOut = 0u;
+	config.Audio.NumBuffers = 2u;
+	config.Audio.NumChannelsIn = 1u;
+	config.Audio.NumChannelsOut = 1u;
+	config.Midi.Devices.push_back({ std::string(192u, 'm'), true });
+	config.Midi.Devices.push_back({ std::string(192u, 'n'), false });
+	config.Serial.Devices.push_back({ std::string(192u, 's'), std::string(192u, 'p'), 115200u, true });
+	config.Serial.Devices.push_back({ std::string(192u, 't'), std::string(192u, 'q'), 57600u, false });
+
+	audio::AudioHost host(config);
+	const audio::AudioStreamParams params{
+		std::string(192u, 'd'), 48000u, 2u, 128u, 0u, 0u, 1u, 1u };
+	auto station = MakeStation(1u);
+	auto take = MakeTake();
+	station->AddTake(take);
+	take->Record({}, "allocation-test");
+	station->CommitChanges();
+	auto stations = std::make_shared<const std::vector<std::shared_ptr<Station>>>(
+		std::vector<std::shared_ptr<Station>>{ station });
+	audio::AudioHostRealtimeTestAccess::Prepare(host, stations, params);
+
+	std::array<float, 128u> input{};
+	std::array<float, 128u> output{};
+	input.fill(0.25f);
+	output.fill(1.0f);
+	int callbackResult = -1;
+	AudioCallbackAllocationProbe::Counts counts;
+	{
+		AudioCallbackAllocationProbe::Scope probe;
+		callbackResult = audio::AudioHostRealtimeTestAccess::InvokeCallback(
+			host, output.data(), input.data(), static_cast<unsigned int>(input.size()));
+		counts = probe.GetCounts();
+	}
+
+	EXPECT_EQ(0, callbackResult);
+	EXPECT_EQ(128u, host.GetAudioSampleCounter());
+	for (const auto sample : output)
+		EXPECT_FLOAT_EQ(0.0f, sample);
+	EXPECT_EQ(0u, counts.Allocations);
+	EXPECT_EQ(0u, counts.Reallocations);
+	EXPECT_EQ(0u, counts.Frees);
+}
+
+TEST(AudioCallbackRealtime, AllocationProbeDetectsHeapAllocationAndFree)
+{
+	AudioCallbackAllocationProbe::Counts counts;
+	{
+		AudioCallbackAllocationProbe::Scope probe;
+		auto allocation = std::make_unique<unsigned char[]>(256u);
+		allocation[0] = 42u;
+		allocation.reset();
+		counts = probe.GetCounts();
+	}
+
+	EXPECT_GE(counts.Allocations + counts.Reallocations, 1u);
+	EXPECT_GE(counts.Frees, 1u);
+}
+
+TEST(AudioCallbackRealtime, PreparedCallbackWithSceneTickDoesNotAllocate)
+{
+	io::UserConfig config{};
+	config.Audio.Name = "test-device";
+	config.Audio.SampleRate = 48000u;
+	config.Audio.BufSize = 128u;
+	config.Audio.LatencyIn = 0u;
+	config.Audio.LatencyOut = 0u;
+	config.Audio.NumBuffers = 2u;
+	config.Audio.NumChannelsIn = 1u;
+	config.Audio.NumChannelsOut = 1u;
+
+	io::JamFile jam{};
+	io::JamFile::Station stationDesc{};
+	stationDesc.Name = "Realtime";
+	jam.Stations.push_back(std::move(stationDesc));
+	io::RigFile rig{};
+	rig.User = config;
+	engine::SceneParams sceneParams({ "" }, {}, { 640u, 480u });
+	auto sceneResult = engine::Scene::FromFile(sceneParams, std::move(jam),
+		std::move(rig), L"");
+	ASSERT_TRUE(sceneResult.has_value());
+	auto scene = sceneResult.value();
+
+	const audio::AudioStreamParams params{
+		std::string(192u, 'd'), 48000u, 2u, 128u, 0u, 0u, 1u, 1u };
+	bool tickCallbackCalled = false;
+	audio::AudioHostRealtimeTestAccess::PrepareScene(*scene, params, tickCallbackCalled);
+	std::array<float, 128u> output{};
+	output.fill(1.0f);
+	int callbackResult = -1;
+	AudioCallbackAllocationProbe::Counts counts;
+	{
+		AudioCallbackAllocationProbe::Scope probe;
+		callbackResult = audio::AudioHostRealtimeTestAccess::InvokeSceneCallback(
+			*scene, output.data(), static_cast<unsigned int>(output.size()));
+		counts = probe.GetCounts();
+	}
+
+	EXPECT_EQ(0, callbackResult);
+	EXPECT_TRUE(tickCallbackCalled);
+	EXPECT_EQ(128u, audio::AudioHostRealtimeTestAccess::SceneSampleCounter(*scene));
+	EXPECT_EQ(1u, audio::AudioHostRealtimeTestAccess::SceneCallbackStationCount(*scene));
+	for (const auto sample : output)
+		EXPECT_FLOAT_EQ(0.0f, sample);
+	EXPECT_EQ(0u, counts.Allocations);
+	EXPECT_EQ(0u, counts.Reallocations);
+	EXPECT_EQ(0u, counts.Frees);
+	scene->Shutdown();
+}
+#endif

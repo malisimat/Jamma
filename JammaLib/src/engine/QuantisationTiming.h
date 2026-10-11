@@ -91,6 +91,9 @@ namespace engine
 		std::int32_t PhaseOffsetSamps = 0;
 		std::uint64_t TransportStartSamps = 0u;
 		bool UseAbsoluteLocalGrid = false;
+		std::uint32_t GridIntervalSamps = 0u;
+		std::uint32_t GridBaseDivisions = 0u;
+		std::int64_t GridOriginSamps = 0;
 	};
 
 	struct QuantisationPolicy

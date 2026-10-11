@@ -33,6 +33,8 @@ namespace engine
 	class Station;
 }
 
+namespace midi { class MidiLoop; }
+
 namespace io
 {
 	struct UserConfig;
@@ -44,6 +46,8 @@ namespace engine
 	class TapTempoTracker
 	{
 	public:
+		static constexpr double GracePeriodSeconds = 2.0;
+
 		// Discards all tap history; call before starting a new tap-tempo session.
 		void Clear() noexcept;
 
@@ -63,10 +67,9 @@ namespace engine
 
 		// Returns true once at least two taps have been received and a gap estimate exists.
 		bool HasEstimate() const noexcept;
+		double EstimatedGapSamps() const noexcept { return _estimatedGapSamps.value_or(0.0); }
 
 	private:
-		static constexpr double TapTimeoutSecs = 2.5;
-
 		std::optional<std::uint64_t> _lastTapSample;
 		std::optional<double> _estimatedGapSamps;
 	};
@@ -95,6 +98,7 @@ namespace engine
 		void SetGlobalPhaseOffsetSamps(std::int32_t offsetSamps,
 			const std::vector<std::shared_ptr<engine::Station>>& stations);
 
+		// Returns true only when the tap updates quantisation timing or subdivisions.
 		bool HandleTapTempo(std::uint64_t estimatedSampleAt,
 			unsigned int sampleRate,
 			const std::vector<std::shared_ptr<engine::Station>>& stations,
@@ -116,6 +120,7 @@ namespace engine
 
 		void PulseOverlay();
 		void SetOverlayHeld(bool held);
+		void SetGestureOverlayHeld(bool held);
 		void ClearOverlay() noexcept;
 		float OverlayAlpha(Time now) const;
 		void ApplyOverlayAlpha(float alpha,
@@ -123,11 +128,20 @@ namespace engine
 
 		unsigned int EffectiveSamps() const noexcept;
 		unsigned int ActiveGridDivisions() const noexcept;
+		std::uint64_t ReclockGeneration() const noexcept { return _reclockGeneration.load(std::memory_order_acquire); }
 		QuantisationGrid ActiveGrid() const noexcept;
 		std::int32_t GlobalPhaseOffsetSamps() const noexcept;
 		bool IsArmedForReclock() const noexcept;
 		std::shared_ptr<utils::Timer> Clock() const noexcept;
 		std::optional<QuantisationTiming> CurrentTempoTiming(unsigned int sampleRate) const;
+		struct TempoStatus
+		{
+			float Bpm = 0.0f;
+			unsigned int Bpi = 0u;
+		};
+		// Job/UI-side presentation under the Scene lock. Subdivisions do not
+		// change local grain counts or the full accepted remote BPM/BPI.
+		std::optional<TempoStatus> CurrentTempoStatus(unsigned int sampleRate) const;
 
 		static void LogNinjamTempoEvent(const char* event,
 			unsigned long masterLoopLengthSamps,
@@ -155,13 +169,13 @@ namespace engine
 			unsigned long masterLoopSamps,
 			unsigned int sampleRate);
 
+		static unsigned int NearestPermittedDivision(unsigned int base, double requested) noexcept;
 		static QuantisationPolicy Policy(const io::UserConfig& cfg);
 
 	private:
 		static constexpr double OverlayFadeSeconds = 2.0;
 		static constexpr int PhaseOffsetDragPixelsPerMillisecond = 1;
 		static constexpr std::int64_t StateInactive = 0LL;
-		static constexpr std::int64_t StateHeld = (std::numeric_limits<std::int64_t>::max)();
 		static std::int32_t _ClampPhaseOffset(std::int64_t offsetSamps) noexcept;
 
 		static unsigned int _ClampToUInt(unsigned long value);
@@ -188,12 +202,17 @@ namespace engine
 
 		std::shared_ptr<utils::Timer> _clock;
 		std::shared_ptr<engine::Loop> _masterLoop;
+		RemoteTransportGeometry _acceptedRemoteGrid{};
+		std::atomic<QuantisationGridSource> _gridSource{ QuantisationGridSource::Default };
 		std::atomic_ulong _masterLoopLengthSamps{ 0ul };
 		std::atomic_ulong _masterOriginalBufferLengthSamps{ 0ul };
 		std::atomic_uint _activeGridDivisions{ 0u };
 		std::atomic_uint _effectiveQuantiseSamps{ 0u };
 		std::atomic_bool _armReclock{ false };
+		std::atomic<std::uint64_t> _reclockGeneration{ 0u };
 		std::atomic<std::int64_t> _overlayState{ StateInactive };
+		std::atomic_bool _spaceOverlayHeld{ false };
+		std::atomic_bool _gestureOverlayHeld{ false };
 		std::mutex _tapTempoMutex;
 		TapTempoTracker _tapTempo;
 		// UI-thread snapshot: takes existing before the current reclock do not
@@ -252,6 +271,10 @@ namespace engine
 		base::SelectDepth SelectDepth = base::SelectDepth::DEPTH_STATION;
 		std::vector<unsigned char> HoverPath;
 		std::vector<unsigned char> HoverPath3d;
+		std::vector<std::shared_ptr<midi::MidiLoop>> SelectedMidiLoops;
+		std::shared_ptr<midi::MidiLoop> HoveredMidiLoop;
+		bool LoopDepthHasAudioTarget = false;
+		unsigned int SampleRate = 0u;
 	};
 
 	class QuantiserController
@@ -271,6 +294,12 @@ namespace engine
 			const ChildResolver& childResolver);
 		void Tick(Time now);
 		bool OwnsPointer() const noexcept { return _isMidiPhaseDragging || _isFractionDragging; }
+		void CancelInteraction(bool resetModifier = false);
+		float EditAlpha() const noexcept { return _overlay.Alpha(); }
+		float PanelAlpha() const noexcept { return _overlay.Alpha(); }
+		bool EditModeActive() const noexcept { return _ctrlHandleHeld || OwnsPointer(); }
+		void CancelInteraction(Time) { CancelInteraction(); }
+		void SetFeedbackSink(std::function<void(const std::string&)> sink) { _feedbackSink = std::move(sink); }
 
 		std::optional<actions::ActionResult> TryHandleTouchAction(actions::TouchAction action,
 			unsigned int sampleRate,
@@ -285,7 +314,8 @@ namespace engine
 		{
 			Global,
 			Station,
-			LoopTake
+			LoopTake,
+			MidiLoop
 		};
 
 		struct MidiPhaseDragTarget
@@ -295,6 +325,7 @@ namespace engine
 			std::shared_ptr<engine::LoopTake> TakeRef;
 			std::vector<std::shared_ptr<engine::Station>> StationTargets;
 			std::vector<std::shared_ptr<engine::LoopTake>> TakeTargets;
+			std::vector<std::shared_ptr<midi::MidiLoop>> MidiTargets;
 		};
 
 		struct CtrlOverlayContext
@@ -360,6 +391,17 @@ namespace engine
 
 		bool _ctrlHandleHeld = false;
 		Time _ctrlHandleReleasedAt;
+		float _transitionStartAlpha = 0.0f;
+		MidiPhaseDragTarget _capturedPhaseTarget;
+		std::vector<std::shared_ptr<engine::LoopTake>> _capturedFractionTargets;
+		bool _capturedDivisionGlobal = true;
+		std::vector<std::shared_ptr<midi::MidiLoop>> _capturedMidiTargets;
+		std::vector<std::shared_ptr<midi::MidiLoop>> _fractionMidiTargets;
+		std::shared_ptr<engine::LoopTake> _OwnerForMidiLoop(const std::shared_ptr<midi::MidiLoop>& loop) const;
+		unsigned int _feedbackSampleRate = 0u;
+		std::function<void(const std::string&)> _feedbackSink;
+		void _ShowPhaseFeedback(unsigned int sampleRate);
+		void _ShowFractionFeedback();
 		std::optional<CtrlOverlayContext> _ctrlOverlayContext;
 		bool _isMidiPhaseDragging = false;
 		utils::Position2d _midiPhaseDragStartPosition;

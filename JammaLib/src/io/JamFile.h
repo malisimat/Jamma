@@ -156,6 +156,9 @@ namespace io
 			std::string Device;
 			unsigned long LogicalLength = 0;
 			std::uint64_t AutomationGlobalSampleOrigin = 0;
+			std::optional<bool> MidiQuantEnabled;
+			std::optional<int> MidiQuantFraction;
+			std::optional<std::int32_t> PhaseOffsetSamps;
 		};
 
 		struct MidiRoute
@@ -179,6 +182,8 @@ namespace io
 			unsigned long MidiPlayIndex = 0;
 			unsigned long MidiPlayLength = 0;
 			std::uint64_t MidiQuantTransportStart = 0;
+			std::optional<std::uint64_t> BaseIntervalSamps;
+			std::optional<std::uint32_t> BaseDivisions;
 			std::vector<MidiStream> MidiStreams;
 			// One destination-bus list per audio input (loop) mixer.
 			std::vector<std::vector<unsigned long>> AudioRoutes;

@@ -64,7 +64,7 @@ NinjamConnection::NinjamConnection(std::string host,
 	_workDir(std::move(workDir)),
 	_sampleRate(constants::DefaultSampleRate),
 	_blockSize(constants::DefaultBufferSizeSamps),
-	_lanePacking(NinjamLanePacking{}),
+	_lanePacking(0u),
 	_client(std::make_unique<NJClient>())
 {
 }
@@ -129,7 +129,8 @@ unsigned int NinjamConnection::_InputScratchChannelCapacity() const noexcept
 void NinjamConnection::_RefreshLanePacking()
 {
 	const auto packing = _ResolveLanePacking();
-	const auto previous = _lanePacking.load(std::memory_order_acquire);
+	const auto previous = NinjamLanePacking::Unpack(
+		_lanePacking.load(std::memory_order_acquire));
 
 	const auto changed = (previous.LaneCount != packing.LaneCount)
 		|| (previous.DacPairs != packing.DacPairs)
@@ -141,7 +142,7 @@ void NinjamConnection::_RefreshLanePacking()
 	if (!changed)
 		return;
 
-	_lanePacking.store(packing, std::memory_order_release);
+	_lanePacking.store(packing.Pack(), std::memory_order_release);
 
 	std::cout << "[NINJAM] Local lane packing: lanes=" << packing.LaneCount
 		<< " mode=" << (packing.Modulo ? "modulo" : "direct")
@@ -687,7 +688,8 @@ NinjamRemoteTiming NinjamConnection::ProcessExportBlock(const float* interleaved
 		}
 	}
 
-	const auto packing = _lanePacking.load(std::memory_order_acquire);
+	const auto packing = NinjamLanePacking::Unpack(
+		_lanePacking.load(std::memory_order_acquire));
 	const auto laneCount = static_cast<unsigned int>(packing.LaneCount);
 	const auto laneChannelCount = laneCount * 2u;
 	int localInputChannelCount = 0;
@@ -903,7 +905,8 @@ void NinjamConnection::_ApplyLocalChannels()
 	if (!_isConnected || !_client)
 		return;
 
-	const auto packing = _lanePacking.load(std::memory_order_acquire);
+	const auto packing = NinjamLanePacking::Unpack(
+		_lanePacking.load(std::memory_order_acquire));
 
 	for (auto existingChannel = _client->EnumLocalChannels(0);
 		existingChannel >= 0;

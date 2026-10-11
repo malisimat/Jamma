@@ -26,6 +26,8 @@ uniform float DiscAlpha;
 uniform int RenderMode;
 uniform int GeometryPass;
 uniform float EditorPlayFrac;
+uniform float EditorMasterCycles;
+uniform float EditorMasterStartPhase;
 uniform float EditorHoverU;
 uniform int EditorHoverPitch;
 uniform float EditorTargetStart;
@@ -141,9 +143,9 @@ void main()
         vec3 warm = vec3(1.0, 0.84, 0.03);
         vec3 hot = vec3(1.0, 0.04, 0.02);
         vec3 baseColor = mix(low, mid, smoothstep(0.0, 0.38, Velocity));
-        baseColor = mix(baseColor, warm, smoothstep(0.38, 0.56, Velocity));
-        // Velocity 90/127 is already at the red end of the palette.
-        baseColor = mix(baseColor, hot, smoothstep(0.56, 0.70, Velocity));
+        baseColor = mix(baseColor, warm, smoothstep(0.38, 0.70, Velocity));
+        // Keep 96-100 yellow/orange; reserve full red for maximum velocity.
+        baseColor = mix(baseColor, hot, smoothstep(0.70, 1.0, Velocity));
         float diffuse = clamp((Diff - 0.15) / 0.85, 0.0, 1.0);
         vec3 noteColor = baseColor * (0.10 + 1.05 * pow(diffuse, 0.72));
         // Scalar chrome illumination retains the velocity hue. Fade to the editor's
@@ -220,12 +222,24 @@ void main()
             float octaveLine = 1.0 - smoothstep(1.0, 1.5, octavePixels);
             ColorOUT.rgb = mix(ColorOUT.rgb, vec3(0.15, 0.30, 0.38),
                 octaveLine * EditorMorphV);
+            if (EditorMasterCycles > 0.0)
+            {
+                // A short cyan tick marks actual master zero, independent of
+                // the loop's physical seam, display rotation, or subdivision.
+                float master = fract(fract(EditorU) * EditorMasterCycles + EditorMasterStartPhase);
+                float pixels = min(master, 1.0 - master)
+                    / max(fwidth(EditorU) * EditorMasterCycles, 1e-6);
+                float marker = (1.0 - smoothstep(1.5, 2.5, pixels))
+                    * (1.0 - smoothstep(0.35, 0.55, EditorPitchRow));
+                ColorOUT.rgb = mix(ColorOUT.rgb, vec3(0.12, 0.85, 0.95), marker * EditorMorphV);
+            }
             if (EditorHoverU >= 0.0 && EditorHoverPitch >= 0)
             {
                 // A negative target start means free timing: glow at the pointer, not a cell.
                 float hover = EditorTargetInstance >= 0 ? 0.0
                     : EditorTargetStart < 0.0 ? 1.0 - smoothstep(0.0, 0.015, abs(EditorU - EditorHoverU))
-                    : (fract(EditorU) >= EditorTargetStart && fract(EditorU) < EditorTargetEnd ? 1.0 : 0.0);
+                    : ((fract(EditorU) >= EditorTargetStart && fract(EditorU) < EditorTargetEnd)
+                        || (EditorTargetEnd > 1.0 && fract(EditorU) + 1.0 < EditorTargetEnd) ? 1.0 : 0.0);
                 float pitchRow = float(EditorHoverPitch - EditorBottomPitch) + 0.5;
                 // Resolved cells fill the complete row with constant intensity.
                 hover *= EditorTargetStart < 0.0

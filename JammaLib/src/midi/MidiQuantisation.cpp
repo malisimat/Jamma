@@ -22,8 +22,8 @@ int MidiQuantisation::DragSteps(int deltaY) noexcept
 MidiQuantisationFraction MidiQuantisation::ResolveDragFraction(MidiQuantisationFraction startFraction,
 	int deltaY) noexcept
 {
-	const auto startIndex = FractionIndex(startFraction);
-	return ClampFractionIndex(startIndex + DragSteps(deltaY));
+	const auto startIndex = FractionDisplayIndex(startFraction);
+	return ClampFractionDisplayIndex(startIndex + DragSteps(deltaY));
 }
 
 MidiQuantisationSettings MidiQuantisation::ApplyGesture(const MidiQuantisationSettings& current,
@@ -219,10 +219,8 @@ void MidiQuantisation::BuildQuantisedPlaybackEvents(const MidiEvent* src,
 		return;
 	}
 	const auto remote = settings.HasRemoteGrid();
-	const auto divisions = static_cast<std::uint64_t>(remote ? settings.RemoteBpi : 1u)
-		* Divisor(settings.Fraction);
-	const auto interval = static_cast<std::uint64_t>(remote
-		? settings.RemoteIntervalSamps : settings.GrainSamps);
+	const auto divisions = settings.GridDivisions();
+	const auto interval = settings.GridInterval();
 	const auto origin = remote ? settings.RemoteOriginSamps : 0ll;
 	if (divisions == 0u || interval == 0u)
 	{

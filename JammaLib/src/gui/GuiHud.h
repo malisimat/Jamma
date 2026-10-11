@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <array>
 #include <functional>
 #include <memory>
@@ -91,6 +92,8 @@ namespace gui
 			const engine::RigSnapshot& routing);
 		void SetStationAnchors(std::vector<StationAnchor> anchors);
 		void SetLoopEditorMode(bool enabled);
+		void SetQuantisationFeedback(const std::string& text);
+		void SetEditModeAlpha(float alpha) noexcept { _editModeAlpha = std::clamp(alpha, 0.0f, 1.0f); }
 		bool HasCableDrag() const noexcept { return _cableDrag.has_value(); }
 		bool IsApplying() const { return _RoutingEditAvailability() == RoutingEditAvailability::Applying; }
 		static std::vector<CableRoute> BuildCableRoutes(const engine::RoutingGraph& graph);
@@ -220,6 +223,8 @@ namespace gui
 		std::shared_ptr<GuiButton> _addTriggerButton;
 		std::shared_ptr<GuiPanel> _statusPanel;
 		std::shared_ptr<GuiLabel> _routingStatusLabel;
+		std::string _quantisationFeedback;
+		float _editModeAlpha = 0.0f;
 		std::shared_ptr<GuiPopup> _deletePopup;
 		// UI-owned read-only identity popup. Rig/job rebuilds do not mutate it;
 		// resize and resource work stay on the existing UI/render paths.

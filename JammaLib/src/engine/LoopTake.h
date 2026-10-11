@@ -21,6 +21,7 @@
 #include "../io/JamFile.h"
 #include "../vst/VstChain.h"
 #include "../base/TriggerPunchTarget.h"
+#include "../base/PublishedAudioSnapshot.h"
 
 using base::Audible;
 
@@ -117,6 +118,9 @@ namespace engine
 		virtual unsigned int NumOutputChannels(Audible::AudioSourceType) const override;
 		virtual void Zero(unsigned int numSamps,
 			Audible::AudioSourceType source) override;
+		virtual void OnBlockWriteChannel(unsigned int channel,
+			const base::AudioWriteRequest& request,
+			int writeOffset) override;
 		void WriteBlock(const std::shared_ptr<base::MultiAudioSink> dest,
 			const std::shared_ptr<base::BounceWriter> bounceWriter,
 			int indexOffset,
@@ -152,6 +156,22 @@ namespace engine
 		bool RestoreMixerLevels(double masterLevel, const std::vector<double>& busLevels);
 		bool RestoreAudioRoutes(const std::vector<std::vector<unsigned long>>& routes);
 		LoopTakeState TakeState() const;
+		bool HasTriggerAudioCapture() const noexcept override { return !_backLoops.empty(); }
+		bool HasPendingTriggerCapture() const noexcept override
+		{
+			const auto state = _state.load(std::memory_order_acquire);
+			return state != STATE_INACTIVE && state != STATE_PLAYING;
+		}
+		bool IsTriggerCaptureInactive() const noexcept override
+			{ return _captureCancelled.load(std::memory_order_acquire); }
+		void AcquireTriggerSourceMuteAudio() noexcept override
+			{ _captureSourceMuteControl->Acquire(); }
+		void ReleaseTriggerSourceMuteAudio() noexcept override
+			{ _captureSourceMuteControl->Release(); }
+		bool IsMuted() const override
+			{ return Tweakable::IsMuted() || _captureSourceMuteControl->IsMuted(); }
+		// Structural owner only; retains a control handle, never the source take.
+		void AcquireReplacementSourceMute(const std::shared_ptr<LoopTake>& source) noexcept;
 		unsigned long NumRecordedSamps() const;
 		unsigned long VisualLoopLengthSamps() const noexcept;
 		unsigned long MidiPlayIndex() const noexcept
@@ -207,7 +227,7 @@ namespace engine
 		// and IVstPlugin::GetLatencySamples.
 		int CurrentVstLatencySamps() const noexcept
 		{
-			auto chain = _vstChain.load(std::memory_order_acquire);
+			auto chain = _vstChain.borrow();
 			return chain ? chain->GetLatencySamples() : 0;
 		}
 
@@ -253,7 +273,15 @@ namespace engine
 			{ return _queuedTimingCorrectionCount.load(std::memory_order_relaxed); }
 		std::uint64_t ConsumedExternalPhaseCorrectionCount() const noexcept
 			{ return _consumedTimingCorrectionCount.load(std::memory_order_relaxed); }
+		enum class PresentationMode : std::uint8_t { Inactive, Record, Overdub, Punch, Tail };
+		struct Presentation { PresentationMode Mode; std::uint64_t Serial; };
+		Presentation GetPresentation() const noexcept;
+		void SetPresentation(PresentationMode mode, std::uint64_t serial) noexcept;
 		void EndRecording();
+		// Atomic logical cancellation; destructive Ditch requires stopped/retired readers.
+		void CancelCapture(bool sourceLoss = false) noexcept;
+		bool IsSourceLossCancelled() const noexcept
+			{ return _sourceLossCancelled.load(std::memory_order_acquire); }
 		void Ditch();
 		void Overdub(std::vector<unsigned int> channels,
 			std::string stationName,
@@ -301,6 +329,8 @@ namespace engine
 			unsigned long PlayIndex = 0ul;
 			unsigned long LoopLengthSamps = 0ul;
 			midi::MidiQuantisationSettings Quantisation;
+			std::uint32_t BaseIntervalSamps = 0u;
+			std::uint32_t BaseDivisions = 0u;
 			std::uint64_t QuantisationTransportStartSamps = 0u;
 		};
 		struct PendingAutomationBinding
@@ -336,6 +366,10 @@ namespace engine
 		void SetMidiQuantisationFromUserEdit(const midi::MidiQuantisationSettings& settings) noexcept;
 		midi::MidiQuantisationSettings MidiQuantisation() const noexcept;
 		midi::MidiQuantisationSettings ResolvedMidiQuantisation() const noexcept;
+		midi::MidiQuantisationSettings ResolvedMidiQuantisationFor(const std::shared_ptr<midi::MidiLoop>& loop) const noexcept;
+		// UI/job-side copy of current loop settings, including while recording.
+		// Shares the writer lock; never call from the audio callback or under it.
+		midi::MidiQuantisationSettings SnapshotMidiLoopQuantisation(const std::shared_ptr<midi::MidiLoop>& loop) const;
 		void SetGlobalMidiQuantState(io::JamFile::GlobalMidiQuantState state) noexcept;
 		void SetMidiQuantisationInheritedPhaseOffset(std::int32_t offsetSamps) noexcept;
 		void SetMidiQuantisationTransportStartSamps(std::uint64_t startSamps) noexcept;
@@ -345,6 +379,9 @@ namespace engine
 		std::uint64_t MidiQuantisationTransportStartSamps() const noexcept;
 		void CaptureFirstRecordBlockSceneAtAudioBoundary(std::uint64_t sceneSamps) noexcept;
 		std::uint64_t FirstRecordBlockSceneSamps() const noexcept;
+		bool SetMidiLoopQuantisationOverride(const std::shared_ptr<midi::MidiLoop>& loop, const midi::MidiLoop::QuantisationOverride& value);
+		void SetMidiBaseGrid(std::uint32_t interval, std::uint32_t divisions) noexcept;
+		bool IsCompletedRecording() const noexcept;
 		void SetRemoteMidiQuantisationGrid(const RemoteTransportGeometry& geometry,
 			std::int64_t originSamps) noexcept;
 		void SetRackVisibility(bool visible);
@@ -366,8 +403,8 @@ namespace engine
 
 		struct AudioState
 		{
-			// weak_ptr: AudioState destruction on any thread won't trigger GL destructors
-			std::vector<std::weak_ptr<Loop>> Loops;
+			// Snapshot pins keep retired loops alive until the job thread reclaims the state.
+			std::vector<std::shared_ptr<Loop>> Loops;
 			std::vector<unsigned int> RecordInputChannels;
 			std::vector<std::shared_ptr<audio::AudioMixer>> AudioMixers;
 			std::vector<std::shared_ptr<audio::AudioBuffer>> AudioBuffers;
@@ -375,12 +412,13 @@ namespace engine
 			std::vector<float*> VstBlockPtrs;
 		};
 
-		using MidiLoopSnapshot = std::vector<std::weak_ptr<midi::MidiLoop>>;
+		using MidiLoopSnapshot = std::vector<std::shared_ptr<midi::MidiLoop>>;
 
 		gui::GuiRackParams _GetRackParams(utils::Size2d size);
 		bool _RecordMidiEventUnlocked(const midi::MidiEvent& ev,
 			const std::string& device,
 			std::uint32_t globalSampleNow) noexcept;
+		std::optional<bool> _ForcedMidiQuantisationEnabled() const noexcept;
 		void _UpdateLoops();
 		void _UpdateMidiModels(bool force = false);
 		void _UpdateMidiModelRotation();
@@ -389,8 +427,13 @@ namespace engine
 		void _WireVuSliders();
 		void _PublishMidiLoopSnapshot();
 		std::shared_ptr<const MidiLoopSnapshot> _MidiLoopSnapshotState() const;
+		base::PublishedAudioSnapshot<const MidiLoopSnapshot>::Lease _BorrowMidiLoopSnapshot() const noexcept;
 		void _PublishAudioState();
 		std::shared_ptr<const AudioState> _AudioStateSnapshot() const;
+		base::PublishedAudioSnapshot<const AudioState>::Lease _BorrowAudioState() const noexcept;
+		const std::shared_ptr<base::AudioSink> _InputChannelFromState(const AudioState& state,
+			unsigned int channel,
+			base::AudioSource::AudioSourceType source) const;
 
 	private:
 		static bool _HasMidiQuantisationGestureModifiers(base::Action::Modifiers modifiers) noexcept;
@@ -450,9 +493,21 @@ namespace engine
 		static const utils::Size2d _ToggleGap;
 
 		bool _flipLoopBuffer;
-		bool _loopsNeedUpdating;
-		bool _endRecordingCompleted;
+		std::atomic<bool> _loopsNeedUpdating;
+		std::atomic<std::uint64_t> _captureGeneration{ 1u };
+		std::atomic<std::uint64_t> _completionPublishedGeneration{ 0u };
+		std::atomic<std::uint64_t> _pendingCompletionGeneration{ 0u };
+		std::atomic<std::uint64_t> _presentation{ 0u };
+		static_assert(std::atomic<std::uint64_t>::is_always_lock_free);
+		void _PublishRecordingCompletion(std::uint64_t generation) noexcept;
+		void _InvalidateRecordingCompletion() noexcept;
+		void _SetPresentationMode(PresentationMode mode) noexcept;
 		std::atomic<LoopTakeState> _state;
+		// INACTIVE also describes a newly constructed/restored take. Cancellation
+		// alone suppresses retained callback snapshots and queued lifecycle work.
+		std::atomic<bool> _captureCancelled{ false };
+		// Sticky for a retired take: old Station snapshots must never re-emit its MIDI.
+		std::atomic<bool> _sourceLossCancelled{ false };
 		std::weak_ptr<LoopTake> _activeBounceSource;
 		std::shared_ptr<base::BounceWriter> _activeBounceWriter;
 		std::string _id;
@@ -461,8 +516,8 @@ namespace engine
 		unsigned int _fadeSamps;
 		LoopTakeSource _sourceType;
 		std::atomic<unsigned long> _recordedSampCount;
-		unsigned int _endRecordSampCount;
-		unsigned int _endRecordSamps;
+		std::atomic<unsigned int> _endRecordSampCount;
+		std::atomic<unsigned int> _endRecordSamps;
 		// Cross-thread cursor: incremented on the audio thread and read by UI/control code.
 		std::atomic<unsigned long> _midiVisualPlayIndex;
 		std::atomic<unsigned long> _midiVisualLoopLength;
@@ -485,6 +540,10 @@ namespace engine
 		std::atomic<bool> _isMidiPunchInActive;
 		std::shared_ptr<gui::GuiRack> _guiRack;
 		std::shared_ptr<audio::AudioMixer> _masterMixer;
+		std::shared_ptr<audio::CaptureSourceMuteControl> _captureSourceMuteControl =
+			std::make_shared<audio::CaptureSourceMuteControl>();
+		std::shared_ptr<audio::CaptureSourceMuteControl> _replacementSourceMuteControl;
+		void _ReleaseReplacementSourceMute() noexcept;
 		float _parentVisualScale = 1.0f;
 		std::vector<std::shared_ptr<Loop>> _loops;
 		std::vector<std::shared_ptr<Loop>> _backLoops;
@@ -497,7 +556,7 @@ namespace engine
 		std::optional<std::uint32_t> _midiRecordStartSample;
 		midi::MidiOverdubSession _midiOverdubSession;
 		mutable std::mutex _midiCaptureMutex;
-		std::atomic<std::shared_ptr<const MidiLoopSnapshot>> _midiLoopSnapshot;
+		base::PublishedAudioSnapshot<const MidiLoopSnapshot> _midiLoopSnapshot;
 		std::atomic<std::uint64_t> _midiQuantisationPacked;
 		std::atomic<std::uint8_t> _globalMidiQuantStatePacked{
 			static_cast<std::uint8_t>(io::JamFile::GlobalMidiQuantState::Off)
@@ -509,6 +568,8 @@ namespace engine
 		std::atomic_bool _midiTransportStartFromAudio{ false };
 		// Seqlock-style publication avoids torn remote-grid reads without placing a
 		// lock or allocation on any real-time path.
+		// Job writer; callback/UI readers consume interval and divisions as one value.
+		std::atomic<std::uint64_t> _midiBaseGridPacked{ 0u };
 		std::atomic<std::uint64_t> _remoteMidiGridSequence{ 0u };
 		std::atomic<std::uint32_t> _remoteMidiIntervalSamps{ 0u };
 		std::atomic<std::uint32_t> _remoteMidiBpi{ 0u };
@@ -518,9 +579,9 @@ namespace engine
 		std::vector<std::shared_ptr<audio::AudioMixer>> _backAudioMixers;
 		std::vector<std::shared_ptr<audio::AudioBuffer>> _audioBuffers;
 		std::vector<std::shared_ptr<audio::AudioBuffer>> _backAudioBuffers;
-		std::atomic<std::shared_ptr<const AudioState>> _audioState;
+		base::PublishedAudioSnapshot<const AudioState> _audioState;
 		// Live VST chain published atomically for lock-free audio-thread reads.
-		std::atomic<std::shared_ptr<vst::VstChain>> _vstChain;
+		base::PublishedAudioSnapshot<vst::VstChain> _vstChain;
 		std::shared_ptr<vst::VstChain> _backVstChain;
 		std::atomic<bool> _flipVstChain{ false };
 		std::vector<std::pair<std::wstring, std::vector<std::uint8_t>>> _pendingVstLoads;

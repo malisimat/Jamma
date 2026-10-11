@@ -1133,7 +1133,7 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 		if (scene.value()->PumpGlobalKeyCapture(globalKeyAction))
 			window.OnAction(globalKeyAction);
 
-		consoleBroker->UpdateVisibility();
+		consoleBroker->UpdateVisibility(window.GetWindowHandle());
 		if (window.ConsumeConsoleToggleRequest())
 		{
 			if (companionPath.empty() || !consoleBroker->ToggleVisibility(companionPath, consoleCommands,
