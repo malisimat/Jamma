@@ -85,7 +85,7 @@ std::vector<MidiNote> MidiNote::ExtractSpans(const MidiEvent* events,
 }
 
 void MidiNote::SortMidiEvents(MidiEvent* events,
-	std::size_t eventCount) noexcept
+	std::size_t eventCount, std::uint8_t* unmatchedStarts) noexcept
 {
 	if (nullptr == events || eventCount < 2u)
 		return;
@@ -110,12 +110,15 @@ void MidiNote::SortMidiEvents(MidiEvent* events,
 	for (std::size_t i = 1u; i < eventCount; ++i)
 	{
 		const auto current = events[i];
+		const auto unmatched = unmatchedStarts ? unmatchedStarts[i] : 0u;
 		std::size_t j = i;
 		while (j > 0u && shouldPrecede(current, events[j - 1u]))
 		{
 			events[j] = events[j - 1u];
+			if (unmatchedStarts) unmatchedStarts[j] = unmatchedStarts[j - 1u];
 			--j;
 		}
 		events[j] = current;
+		if (unmatchedStarts) unmatchedStarts[j] = static_cast<std::uint8_t>(unmatched);
 	}
 }

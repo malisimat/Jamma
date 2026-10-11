@@ -48,9 +48,10 @@ namespace midi
 			std::uint32_t loopLengthSamps);
 
 		// Canonical playback order: sampleOffset ascending; same-sample NoteOffs
-		// before NoteOns; stable for equal-priority ties.
+		// before NoteOns; stable for equal-priority ties. Optional unmatched-start
+		// metadata follows its event through the same permutation.
 		static void SortMidiEvents(MidiEvent* events,
-			std::size_t eventCount) noexcept;
+			std::size_t eventCount, std::uint8_t* unmatchedStarts = nullptr) noexcept;
 	};
 
 	struct MidiNoteSnapshot

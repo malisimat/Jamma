@@ -121,8 +121,8 @@ namespace midi
 	//   - All storage is preallocated. RecordEvent / ReadBlock perform no heap allocation.
 	//   - When event capacity is reached during recording, further events are dropped
 	//     (Drop-newest; the recorded loop is what it is).
-	//   - Loop wrap during playback emits synthetic NoteOff for any held notes so no
-	//     stuck notes leak across the wrap.
+	//   - Loop wrap releases paired held notes; unmatched attacks continue until
+	//     a played release or an explicit full flush.
 	class MidiLoop
 	{
 	public:
@@ -179,6 +179,8 @@ namespace midi
 		{
 			std::array<MidiEvent, DefaultCapacity> Raw{};
 			std::array<MidiEvent, DefaultCapacity> Quantised{};
+			std::array<std::uint8_t, DefaultCapacity> RawUnmatchedStarts{};
+			std::array<std::uint8_t, DefaultCapacity> QuantisedUnmatchedStarts{};
 			std::size_t EventCount = 0u;
 			std::uint32_t LoopLengthSamps = 0u;
 			std::uint64_t Revision = 0u;
@@ -234,7 +236,7 @@ namespace midi
 		// Time mapping: loopOffset = globalSample % LoopLengthSamps().
 		// Emitted events' `sampleOffset` is rewritten to the absolute global sample at
 		// which the sink should treat them as occurring. If the block crosses a loop
-		// boundary, held notes are flushed with synthetic NoteOffs at the wrap sample.
+		// boundary, paired held notes are flushed at the wrap sample; unmatched notes continue.
 		void ReadBlock(std::uint32_t globalSample,
 			std::uint32_t numSamples,
 			IMidiSink& sink) noexcept;
@@ -371,7 +373,10 @@ namespace midi
 			std::uint32_t globalBase,
 			const PlaybackSnapshot& snapshot,
 			IMidiSink& sink) noexcept;
-		void FlushHeldNotes(std::uint32_t atGlobalSample, IMidiSink& sink) noexcept;
+		enum class HeldFlushPolicy { All, Seam };
+		void FlushHeldNotes(std::uint32_t atGlobalSample, IMidiSink& sink,
+			HeldFlushPolicy policy = HeldFlushPolicy::All) noexcept;
+		static void ClassifyUnmatchedStarts(PlaybackSnapshot& snapshot) noexcept;
 		bool PublishCompletedEvents(const MidiEvent* raw, std::size_t count,
 			std::uint32_t length, std::uint64_t revision,
 			const MidiQuantisationSettings& quantisation,
@@ -432,6 +437,8 @@ namespace midi
 		std::atomic<MidiLoopState> _state;
 		std::atomic<std::uint32_t> _completedLengthForEditor{ 0u };
 		std::bitset<TotalNoteSlots> _held;
+		// Callback-only state, cleared by played releases and full flushes.
+		std::bitset<TotalNoteSlots> _continuing;
 		// Callback owns _held. Job-side ditch reads this per-slot atomic mirror;
 		// it never mutates callback state or requires a lock.
 		std::array<std::atomic<std::uint8_t>, TotalNoteSlots> _heldPublished{};

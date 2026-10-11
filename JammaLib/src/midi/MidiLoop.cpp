@@ -761,14 +761,10 @@ void MidiLoop::ReadBlock(std::uint32_t globalSample,
 		const std::uint32_t roomInLoop = loopLength - loopOffset;
 		const std::uint32_t segment = (remaining < roomInLoop) ? remaining : roomInLoop;
 
-		// If we are at the very start of a loop iteration, flush any notes that are
-		// still held from the previous iteration. This covers the case where the
-		// previous ReadBlock call ended exactly at the loop boundary, so the
-		// within-block wrap condition (remaining > roomInLoop) was never true and
-		// FlushHeldNotes was never called. Without this, note-ons replay at the top
-		// of each new iteration while the matching note-offs are never sent.
+		// Also handle a previous block ending exactly at the seam.
+		// Only paired held notes are released; continuations survive both paths.
 		if (loopOffset == 0u)
-			FlushHeldNotes(cursor, sink);
+			FlushHeldNotes(cursor, sink, HeldFlushPolicy::Seam);
 
 		// globalBase is the absolute sample corresponding to loopOffset.
 		const std::uint32_t globalBase = cursor - loopOffset;
@@ -779,7 +775,7 @@ void MidiLoop::ReadBlock(std::uint32_t globalSample,
 		{
 			// Wrap boundary: flush held notes at the exact wrap sample.
 			const std::uint32_t wrapSample = globalBase + loopLength;
-			FlushHeldNotes(wrapSample, sink);
+			FlushHeldNotes(wrapSample, sink, HeldFlushPolicy::Seam);
 		}
 
 		cursor += segment;
@@ -798,6 +794,9 @@ void MidiLoop::EmitEventsInRange(std::uint32_t lo,
 {
 	const MidiEvent* events = snapshot.QuantisationActive ? snapshot.Quantised.data() : snapshot.Raw.data();
 
+	const auto& unmatchedStarts = snapshot.QuantisationActive ?
+		snapshot.QuantisedUnmatchedStarts : snapshot.RawUnmatchedStarts;
+
 	// Linear scan: small N expected, and storage is contiguous.
 	for (std::size_t i = 0; i < snapshot.EventCount; ++i)
 	{
@@ -808,6 +807,10 @@ void MidiLoop::EmitEventsInRange(std::uint32_t lo,
 		if (off < lo || off >= hi)
 			continue;
 
+		const auto slot = NoteSlot(src.Channel(), src.data1);
+		if (src.IsNoteOn() && _continuing.test(slot))
+			continue;
+
 		MidiEvent out = src;
 		out.sampleOffset = globalBase + off;
 		sink.OnEvent(out);
@@ -815,19 +818,23 @@ void MidiLoop::EmitEventsInRange(std::uint32_t lo,
 		// Track held notes for wrap flushing.
 		if (src.IsNoteOn())
 		{
-			_held.set(NoteSlot(src.Channel(), src.data1));
-			_heldPublished[NoteSlot(src.Channel(), src.data1)].store(1u, std::memory_order_seq_cst);
+			_held.set(slot);
+			if (unmatchedStarts[i]) _continuing.set(slot);
+			_heldPublished[slot].store(1u, std::memory_order_seq_cst);
 		}
 		else if (src.IsNoteOff())
 		{
-			_held.reset(NoteSlot(src.Channel(), src.data1));
+			_held.reset(slot);
+			_continuing.reset(slot);
 			_heldPublished[NoteSlot(src.Channel(), src.data1)].store(0u, std::memory_order_seq_cst);
 		}
 	}
 }
 
-void MidiLoop::FlushHeldNotes(std::uint32_t atGlobalSample, IMidiSink& sink) noexcept
+void MidiLoop::FlushHeldNotes(std::uint32_t atGlobalSample, IMidiSink& sink,
+	HeldFlushPolicy policy) noexcept
 {
+	if (policy == HeldFlushPolicy::All) _continuing.reset();
 	if (_held.none())
 		return;
 
@@ -836,7 +843,7 @@ void MidiLoop::FlushHeldNotes(std::uint32_t atGlobalSample, IMidiSink& sink) noe
 		for (std::uint8_t note = 0; note < 128; ++note)
 		{
 			const std::size_t slot = NoteSlot(channel, note);
-			if (!_held.test(slot))
+			if (!_held.test(slot) || (policy == HeldFlushPolicy::Seam && _continuing.test(slot)))
 				continue;
 
 			MidiEvent off = MidiEvent::MakeNoteOff(
@@ -911,6 +918,40 @@ void MidiLoop::PublishCompletionWithRetry(const MidiEvent* raw, std::size_t coun
 		std::this_thread::yield();
 }
 
+void MidiLoop::ClassifyUnmatchedStarts(PlaybackSnapshot& snapshot) noexcept
+{
+	// Intrusive fixed-capacity FIFO per source pairing slot. Include capture-tail
+	// releases: an endpoint outside the playable window still pairs its attack.
+	constexpr std::uint16_t End = static_cast<std::uint16_t>(DefaultCapacity);
+	static_assert(DefaultCapacity < std::numeric_limits<std::uint16_t>::max());
+	std::array<std::uint16_t, MidiEvent::PairingSlotCount> heads;
+	std::array<std::uint16_t, MidiEvent::PairingSlotCount> tails;
+	std::array<std::uint16_t, DefaultCapacity> next;
+	heads.fill(End);
+	tails.fill(End);
+	snapshot.RawUnmatchedStarts.fill(0u);
+	for (std::size_t i = 0u; i < snapshot.EventCount; ++i)
+	{
+		const auto& event = snapshot.Raw[i];
+		const auto slot = event.PairingSlot();
+		if (event.IsNoteOn())
+		{
+			const auto index = static_cast<std::uint16_t>(i);
+			next[i] = End;
+			if (heads[slot] == End) heads[slot] = index;
+			else next[tails[slot]] = index;
+			tails[slot] = index;
+			snapshot.RawUnmatchedStarts[i] = 1u;
+		}
+		else if (event.IsNoteOff() && heads[slot] != End)
+		{
+			const auto index = heads[slot];
+			snapshot.RawUnmatchedStarts[index] = 0u;
+			heads[slot] = next[index];
+		}
+	}
+}
+
 bool MidiLoop::PublishCompletedEvents(const MidiEvent* raw, std::size_t count,
 	std::uint32_t length, std::uint64_t revision,
 	const MidiQuantisationSettings& quantisation,
@@ -936,11 +977,16 @@ bool MidiLoop::PublishCompletedEvents(const MidiEvent* raw, std::size_t count,
 	snapshot.SourceRevision = sourceChanged ? revision : _sourceRevision;
 	snapshot.Quantisation = quantisation;
 	snapshot.QuantisationTransportStartSamps = transportStart;
+	ClassifyUnmatchedStarts(snapshot);
 	snapshot.QuantisationActive = quantisation.Enabled
 		&& (quantisation.GrainSamps > 0u || quantisation.HasRemoteGrid()) && count > 0u;
 	if (snapshot.QuantisationActive)
+	{
 		MidiQuantisation::BuildQuantisedPlaybackEvents(snapshot.Raw.data(), count,
-			length, quantisation, transportStart, snapshot.Quantised.data());
+			length, quantisation, transportStart, snapshot.Quantised.data(), false);
+		std::copy_n(snapshot.RawUnmatchedStarts.begin(), count, snapshot.QuantisedUnmatchedStarts.begin());
+		MidiNote::SortMidiEvents(snapshot.Quantised.data(), count, snapshot.QuantisedUnmatchedStarts.data());
+	}
 	_playbackBufferUsed[slot] = true;
 	_playbackSnapshot.store(&snapshot, std::memory_order_seq_cst);
 	_sourceRevision = snapshot.SourceRevision;
