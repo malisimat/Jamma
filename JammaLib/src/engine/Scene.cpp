@@ -1917,7 +1917,7 @@ void Scene::_RefreshMidiIfNeeded()
 	if (!requested && now - _lastMidiInventoryCheck < std::chrono::seconds(1))
 		return;
 	_lastMidiInventoryCheck = now;
-	const auto inventory = midi::MidiDevice::InventoryInputDevices();
+	const auto inventory = _inputSubsystem->InventoryMidiInputs();
 	if (!inventory.Error.empty())
 		return; // A transient inventory error must not tear down working ports.
 	const auto previous = _midiState.load(std::memory_order_acquire);

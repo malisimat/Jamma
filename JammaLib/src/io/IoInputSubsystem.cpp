@@ -29,10 +29,16 @@ namespace io
 	midi::MidiConnectionResult IoInputSubsystem::Init(midi::MidiClockAnchor& midiClockAnchor,
 		unsigned int actualSampleRate, const midi::MidiInputInventory* inventory, bool generatedRig)
 	{
+		const auto currentInventory = inventory ? *inventory : InventoryMidiInputs();
 		auto result = _midiRouter.InitMidi(_userConfig, _loggingConfig,
-			midiClockAnchor, actualSampleRate, inventory, generatedRig);
+			midiClockAnchor, actualSampleRate, &currentInventory, generatedRig);
 		_midiRouter.InitSerial(_userConfig);
 		return result;
+	}
+
+	midi::MidiInputInventory IoInputSubsystem::InventoryMidiInputs()
+	{
+		return _midiEnumerator.Inventory();
 	}
 
 	midi::MidiConnectionResult IoInputSubsystem::RefreshMidi(midi::MidiClockAnchor& midiClockAnchor,

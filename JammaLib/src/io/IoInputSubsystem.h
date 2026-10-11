@@ -25,6 +25,7 @@ namespace io
 
 		IoInputSubsystem(io::UserConfig userConfig, io::LoggingConfig loggingConfig);
 		~IoInputSubsystem();
+		midi::MidiInputInventory InventoryMidiInputs();
 
 		midi::MidiConnectionResult Init(midi::MidiClockAnchor& midiClockAnchor,
 			unsigned int actualSampleRate, const midi::MidiInputInventory* inventory = nullptr,
@@ -79,5 +80,6 @@ namespace io
 		io::UserConfig _userConfig;
 		io::LoggingConfig _loggingConfig;
 		midi::MidiRouter _midiRouter;
+		midi::MidiInputEnumerator _midiEnumerator;
 	};
 }

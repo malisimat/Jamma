@@ -6,6 +6,7 @@
 #include <functional>
 #include <iosfwd>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <vector>
 #include "MidiQueue.h"
@@ -25,6 +26,18 @@ namespace midi
 	{
 		std::vector<MidiInputDeviceInfo> Devices;
 		std::string Error;
+	};
+	class MidiInputEnumerator
+	{
+	public:
+		MidiInputEnumerator();
+		~MidiInputEnumerator();
+		// Off-callback only. Serializes client creation and device queries.
+		MidiInputInventory Inventory();
+
+	private:
+		std::mutex _mutex;
+		std::unique_ptr<rt::midi::RtMidiIn> _client;
 	};
 	enum class MidiConnectionStatus { Disabled, Missing, Ambiguous, Failed, Connected };
 	struct MidiConnectionAttempt
