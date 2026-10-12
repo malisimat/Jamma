@@ -6,7 +6,7 @@ This is Jamma's canonical short reference for core concepts, ownership, and term
 
 | Term | Exact meaning |
 | --- | --- |
-| Scene | The running session's job/UI orchestrator and top-level composition. It manages presentation and wiring across subsystems but should not absorb audio, loop, remote-timing, or persistence ownership. |
+| Scene | The running session's job/UI orchestrator and top-level composition. It owns subsystem lifecycle and session membership/publication, coordinates presentation and cross-subsystem workflows, and supplies context to collaborators. It does not absorb audio-block advancement, loop state, remote timing policy, persistence reconstruction, or detailed UI-control behavior. |
 | Station | A performance/mixing channel and the owner of an ordered set of LoopTakes - typically a single instrument like drums, guitar, etc. It fans audio/timing operations to its takes and can host station-level routing and VST effects/instruments. |
 | LoopTake / take | One recorded performance layer within a Station. It can contain multiple loops in cases where content is multichannel, like stereo keys, drum mics, etc. It owns its recording/playback state, MIDI/audio Loop material, effects, and entity timing anchors. |
 | Loop | One audio or MIDI recording/playback entity within a LoopTake. It owns its audio buffers (or array of events in the case of MIDI Loops), logical length, read/write positions, offsets, fades, and loop-local playback phase. |
@@ -16,17 +16,28 @@ This is Jamma's canonical short reference for core concepts, ownership, and term
 | Overdub | Construct a new Loop consisting of a prior loop plus some amount of new material. It is a recording state/action and does not establish a new master interval. |
 | Punch in/out | Temporarily replace or add material over a bounded part of a Loop being Overdubbed. |
 | Ditch | Discard or cancel the relevant current recording/performance state associated with a Trigger. |
-| AudioHost | The audio-device/callback boundary and owner of block-time application of published engine state. It coordinates callback work but does not own per-loop state or job-side policy. |
+| AudioHost | The audio-device/callback boundary and owner of block-time application of published engine state and block advancement. It uses the shared Timer and published station view but does not own per-loop state or job-side policy. |
 | Timer | The shared musical clock used by the audio engine. It tracks the master interval length, position within that interval, completed interval count, and a separate continuity counter. It does not own per-loop cursors. |
 | Quantiser | The engine service that chooses quantisation geometry and event boundaries. It does not own NINJAM follow policy, transport mapping, or entity playback state. |
-| NINJAM | The remote collaborative-jamming subsystem. Its job side owns remote connection/timing authority and publishes complete desired state; audio application remains with AudioHost. |
+| NINJAM | The remote collaborative-jamming subsystem. Its job-side integration owns connection lifecycle and observations; its serialized timing coordinator owns remote timing authority and publishes complete desired state. A UI prompt presents typed tempo decisions, and audio application remains with AudioHost. |
+| SceneSettingsControls | The GUI-side owner of Scene settings widgets, entries, command identities, and typed decoding of accepted control actions. Scene remains responsible for forwarding accepted changes to their subsystem owners. |
+| HierarchySelection | The engine-side operation that applies committed hierarchy selection and mute state to a caller-provided, caller-locked station view. Scene retains gesture/picking coordination, lock ownership, and editor/rack consequences. |
+| IoSessionLoader | The persistence-side reconstruction boundary that reads saved session data into stations and validated restoration values. Scene retains installation, publication, startup ordering, and recovery behavior. |
+| MidiRefreshPolicy | The value-based policy for MIDI refresh cadence, inventory comparison, and retry decisions. Device operations remain in IoInputSubsystem; Scene/Rig owners retain lifecycle and publication consequences. |
+| NinjamTempoPrompt | The UI-owned tempo proposal popup and displayed proposal identity. It emits typed decisions; the serialized NINJAM coordinator validates proposal identity and owns the decision outcome. |
+| NinjamTimingDiagnosticPresenter | The job-side presentation helper that formats and deduplicates coordinator diagnostics. The coordinator owns diagnostic records; Scene drains and routes them off the audio callback. |
 | Snapshot | An immutable published view used to cross an ownership/thread boundary safely. Publishing a snapshot does not transfer ownership of the underlying subsystem's decisions. |
 
 ## Ownership boundaries
 
-- The NINJAM job side owns connection availability, session epoch, validated remote observations, tempo requests/prompts, follow policy, remote grid, and production of one complete desired transport value. It never mutates Timer or loop cursors directly.
-- Scene is job/UI orchestration. It presents prompts and diagnostics and forwards complete values; it does not reconstruct remote timing authority or format diagnostics on the audio callback.
-- AudioHost owns the audio-block application boundary. It accepts the latest complete desired value, replaces or disciplines Timer, owns the one common remote-to-local map calculation, and sends neutral reset/correction/restore operations down the engine hierarchy.
+- The NINJAM job-side integration owns connection lifecycle and validated observations. Its serialized timing coordinator owns session epoch, remote timing authority, tempo proposal identity and resolution, follow policy, remote grid, and production of one complete desired transport value. The UI-owned `NinjamTempoPrompt` displays proposals and sends typed decisions; neither it nor Scene creates timing authority. The coordinator never mutates Timer or loop cursors directly.
+- Scene owns top-level composition, session membership/publication, subsystem lifecycle ordering, and coordination between subsystem and UI owners. Specialized collaborators own settings controls, committed hierarchy selection, session reconstruction, MIDI refresh decisions, and tempo-prompt presentation. Scene keeps the orchestration decisions that join them and does not duplicate their internal state or behavior.
+- AudioHost owns the audio-block application and advancement boundary. It accepts the latest complete desired value, replaces or disciplines the shared Timer, owns the common remote-to-local map calculation, ticks the clock, advances the published station view, and sends neutral timing operations down the engine hierarchy.
+- `IoSessionLoader` reconstructs saved entities and validated restoration values; Scene installs those values in order and handles rig acceptance, timing setup, publication, and recovery.
+- `MidiRefreshPolicy` decides when an inventory refresh is due and whether a retry is warranted. `IoInputSubsystem` performs enumeration/router operations; Scene and rig owners handle confirmation and resulting input/audio/HUD publication.
+- `HierarchySelection` applies selection/mute changes only through a station view whose locking is owned by the caller. Scene retains the lock and coordinates dependent editor/rack presentation.
+- `SceneSettingsControls` constructs settings UI and decodes control actions into typed changes. Scene forwards accepted changes to the subsystem that owns their effect; GUI classes do not own engine policy.
+- `NinjamTimingDiagnosticPresenter` formats and deduplicates job-side presentation. Diagnostics are owned and recorded by the coordinator; formatting/output never runs in the audio callback.
 - Timer owns the shared musical clock and its continuity counter. It does not own any loop's cursor or remote-follow policy.
 - `Station -> LoopTake -> Loop` owns membership and each entity's length, anchor, audio phase, MIDI event cursor, and automation origin. These objects apply neutral timing operations using their own geometry; they do not own NINJAM policy or the common map.
 - Quantiser owns quantisation choices and boundary calculations. Local grain-based inference and an authoritative remote grid are distinct inputs; Quantiser does not own remote follow policy or transport mapping.
