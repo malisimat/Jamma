@@ -3676,30 +3676,15 @@ void Station::_DitchLoopTake(std::shared_ptr<LoopTake>& take, bool flushLiveHeld
 		_QueueLostPlaybackMidi(take);
 	}
 
-	// Flush any held MIDI notes so the VST instrument doesn't get stuck notes.
-	// Events are injected via the synthetic live queue and
-	// drained by the audio thread on the next WriteBlock call.
+	// Recorded releases must retire their callback-owned binding first. A live
+	// synthetic NoteOff can be suppressed while that binding still owns the
+	// pitch; sampling loop-held notes here cannot replace ownership retirement.
 	if (flushLiveHeld) for (const auto& midiLoop : take->GetMidiLoopSnapshot())
-	{
-		if (!midiLoop)
-			continue;
-		midiLoop->RequestHeldFlush();
-		const auto& held = midiLoop->HeldNotes();
-		if (held.none())
-			continue;
-		for (std::uint8_t ch = 0; ch < 16; ++ch)
-		{
-			for (std::uint8_t note = 0; note < 128; ++note)
-			{
-				if (held.test(MidiLoop::NoteSlot(ch, note)))
-					TryEnqueueSyntheticLiveMidi(MidiEvent::MakeNoteOff(0u, ch, note));
-			}
-		}
-	}
+		if (midiLoop) midiLoop->RequestHeldFlush();
 	// A retained callback snapshot may still hold this take. Cancel only its
 	// logical capture; keep loop buffers and writers stable until job/UI retirement.
 	take->CancelCapture();
-	if (flushLiveHeld) _QueueLostPlaybackMidi(take, false);
+	if (flushLiveHeld) _QueueLostPlaybackMidi(take);
 	take->DetachGuiOwnershipForRetirement();
 	const auto match = std::find(_backLoopTakes.begin(), _backLoopTakes.end(), take);
 	if (match != _backLoopTakes.end())

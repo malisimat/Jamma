@@ -1646,3 +1646,50 @@ TEST(StationMidiInstrument, RejectedPlaybackReleasePreservesVelocity)
 	EXPECT_TRUE(plugin->ProcessedEvents[1].IsNoteOff());
 	EXPECT_EQ(23u, plugin->ProcessedEvents[1].data2);
 }
+
+TEST(StationMidiInstrument, OrdinaryDitchReleasesSharedLiveAndPlaybackVoice)
+{
+	for (const bool recording : { false, true })
+	for (const auto delay : { 0u, 256u })
+	for (const bool rejectRelease : { false, true })
+	{
+		SCOPED_TRACE(testing::Message() << "recording=" << recording
+			<< " delay=" << delay << " rejected=" << rejectRelease);
+		auto station = MakeStation("ordinary-held-ditch");
+		auto plugin = AddPlugin(station, L"fake-ordinary-held-ditch.dll");
+		AllowAllMidiChannels(station);
+		auto take = MakeMidiTake("ordinary-held-ditch-take");
+		take->Record({}, station->Name(), { 0u }, { "Keys" });
+		if (!recording)
+		{
+			ASSERT_TRUE(take->RecordMidiEvent(MidiEvent::MakeNoteOn(0u, 0u, 43u, 100u), "Keys", 0u));
+			take->Play(0u, 10000u, 0u);
+		}
+		station->AddTake(take);
+		station->CommitChanges();
+		ASSERT_TRUE(station->ConfigureRecordedMidiCompensation(delay));
+		const auto liveOn = MidiEvent::MakeNoteOn(0u, 0u, 43u, 90u);
+		station->ObservePhysicalMidiForRecording(liveOn, "Keys");
+		ASSERT_TRUE(station->TryEnqueueImmediateLiveMidi(liveOn));
+		RenderStationBlock(station, 0u);
+		RenderStationBlock(station, 128u);
+		RenderStationBlock(station, 256u);
+		ASSERT_TRUE(std::any_of(plugin->ProcessedEvents.begin(), plugin->ProcessedEvents.end(),
+			[](const auto& event) { return event.IsNoteOn() && event.data1 == 43u; }));
+		plugin->ProcessedEvents.clear();
+		TriggerAction ditch;
+		ditch.ActionType = TriggerAction::TRIGGER_DITCH;
+		ditch.TargetId = take->Id();
+		ASSERT_EQ(actions::DitchDisposition::Removed, station->OnAction(ditch).DitchResult);
+		station->CommitChanges();
+		if (rejectRelease) plugin->MaxAcceptedPerBlock = 0u;
+		RenderStationBlock(station, 384u);
+		plugin->MaxAcceptedPerBlock = static_cast<std::size_t>(-1);
+		RenderStationBlock(station, 512u);
+		RenderStationBlock(station, 640u);
+		EXPECT_TRUE(std::any_of(plugin->ProcessedEvents.begin(), plugin->ProcessedEvents.end(),
+			[](const auto& event) { return event.IsNoteOff() && event.data1 == 43u; }));
+		EXPECT_TRUE(std::none_of(plugin->ProcessedEvents.begin(), plugin->ProcessedEvents.end(),
+			[](const auto& event) { return event.IsNoteOn() && event.data1 == 43u; }));
+	}
+}

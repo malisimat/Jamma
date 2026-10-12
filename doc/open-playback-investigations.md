@@ -595,3 +595,40 @@ activation receipt remain on the job owner.
 - `git diff --check` passed. The hardware executable is
   `Jamma/bin/x64/Debug/Jamma.exe`. Fresh hardware validation of these follow-up
   changes remains to be performed; earlier seam auditions are recorded above.
+
+## 9. Hardware follow-up: activation verified, held-note ditch failure
+
+The supplied follow-up transcript records first-master activation with
+origin 212053, scene 297472, logical length 82640 and phase 2779:
+`(297472 - 212053) mod 82640 = 2779`. The receipt appears later in
+the transcript because the job owner prints it on a subsequent Station commit;
+its scene field is the original callback activation coordinate. The second
+Serum take has length 330560, exactly four times the first master length, and
+the user reports that playback synced well. No
+`Master quantisation target set` line accompanies the Shift-click, so promotion
+was not established by this transcript. Recording cancellation and fresh
+master establishment are present: a recording take is ditched with clockLength=0,
+then its replacement completes at 77824 samples / grain 19456.
+
+The user reports a reliably stuck Bass voice when ditching while a key is held.
+The native reproduction `OrdinaryDitchReleasesSharedLiveAndPlaybackVoice`
+failed in all four completed-playback combinations: compensation delay 0/256
+samples, with/without plugin release rejection. Its four recording-only control
+combinations passed. The source release path explains the failure: the synthetic
+live NoteOff is suppressed while a recorded binding still owns the same pitch;
+ordinary ditch then retires that binding with release emission disabled. The
+last owner disappears without a plugin NoteOff.
+
+Ordinary ditch now retires recorded ownership through the existing callback
+release ledger with release emission enabled. The owner-side loop-held sampling
+and broad synthetic playback NoteOff injection were removed. Live flushing
+stays separate; recorded release targets its retained destination and respects
+remaining audible/live owners. Existing queue and plugin rejection retries are
+retained. No shared variables or callback locks/allocations were added.
+
+All 42 Station MIDI tests pass after the fix, including all eight reproduction
+combinations and existing source-loss, route-removal and shared-owner cases.
+The hot-path audit passes. The complete native run passes **1482 tests / 180
+suites** (49.980 seconds); incremental engine/test and app builds pass with
+zero warnings/errors, and `git diff --check` passes. Hardware confirmation of
+the held-note fix remains outstanding.
