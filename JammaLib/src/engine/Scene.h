@@ -141,7 +141,8 @@ namespace engine
 		virtual void InitResources(resources::ResourceLib& resourceLib, bool forceInit) override;
 		void InitReceivers();
 		void AddChild(std::shared_ptr<base::GuiElement> child);
-		void SetHover3d(std::vector<unsigned char> path, base::Action::Modifiers modifiers);
+		void SetHover3d(std::vector<unsigned char> path, base::Action::Modifiers modifiers,
+			std::optional<utils::Position2d> pointerPosition = std::nullopt);
 		unsigned int Width() const { return _sizeParams.Size.Width; }
 		unsigned int Height() const { return _sizeParams.Size.Height; }
 		void Reset();

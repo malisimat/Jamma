@@ -160,6 +160,10 @@ unsigned int GlDrawContext::GetPixel(utils::Position2d pos)
 {
 	if (SCREEN == _target)
 		return 0;
+	// A synchronous press result supersedes any queued hover from an older
+	// cursor position; it must not arrive later and repaint the wrong target.
+	if (PICKING == _target)
+		_pickReadbackPrimed = false;
 
 	unsigned int objectId = 0;
 	GLuint red, green, blue, alpha;

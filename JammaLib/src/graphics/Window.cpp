@@ -521,12 +521,11 @@ void Window::Render()
 		glClear(GL_COLOR_BUFFER_BIT);
 		_scene->Draw3d(*_pickContext, 1, DrawPass::PASS_PICKER);
 
-		auto pick = _pickContext->GetPixelAsync(_cachedCursorPosition.value());
-		if (!pick.HasValue && _forcePick)
-		{
-			pick.HasValue = true;
-			pick.ObjectId = _pickContext->GetPixel(_cachedCursorPosition.value());
-		}
+		// Forced reads must belong to the current position, never to the
+		// previous asynchronous hover request.
+		const auto pick = _forcePick
+			? GlDrawContext::PixelReadback{ true, _pickContext->GetPixel(_cachedCursorPosition.value()) }
+			: _pickContext->GetPixelAsync(_cachedCursorPosition.value());
 
 		if (pick.HasValue)
 		{
@@ -657,6 +656,61 @@ ActionResult Window::OnAction(WindowAction winAction)
 	return { isEaten };
 }
 
+std::optional<unsigned int> Window::_PickPointerPress(utils::Position2d position)
+{
+	if (!_rc || wglGetCurrentContext() != _rc || !GlDeleteQueue::IsRenderThread() || !_pickContext
+		|| _pickContext->GetTexture() == 0u)
+		return std::nullopt;
+	ApplyPendingResize();
+	// Input runs on the render owner. A fresh picker pass only is enough; a
+	// full frame here would pump unrelated structural/plugin/UI work.
+	GLint drawFramebuffer = 0, readFramebuffer = 0, packBuffer = 0;
+	GLint program = 0, vertexArray = 0, activeTexture = 0;
+	std::array<GLint, 3> textures{};
+	std::array<GLfloat, 4> clearColor{};
+	std::array<GLint, 4> viewport{}, scissorBox{};
+	glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &drawFramebuffer);
+	glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &readFramebuffer);
+	glGetIntegerv(GL_PIXEL_PACK_BUFFER_BINDING, &packBuffer);
+	glGetIntegerv(GL_VIEWPORT, viewport.data());
+	glGetIntegerv(GL_SCISSOR_BOX, scissorBox.data());
+	glGetIntegerv(GL_CURRENT_PROGRAM, &program);
+	glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &vertexArray);
+	glGetIntegerv(GL_ACTIVE_TEXTURE, &activeTexture);
+	glGetFloatv(GL_COLOR_CLEAR_VALUE, clearColor.data());
+	for (unsigned int unit = 0; unit < textures.size(); ++unit)
+	{
+		glActiveTexture(GL_TEXTURE0 + unit);
+		glGetIntegerv(GL_TEXTURE_BINDING_2D, &textures[unit]);
+	}
+	glActiveTexture(GL_TEXTURE0);
+	const auto scissorEnabled = glIsEnabled(GL_SCISSOR_TEST);
+	const auto depthEnabled = glIsEnabled(GL_DEPTH_TEST);
+	_pickContext->Bind();
+	glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+	glClear(GL_COLOR_BUFFER_BIT);
+	_scene->Draw3d(*_pickContext, 1, DrawPass::PASS_PICKER);
+	glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
+	const auto objectId = _pickContext->GetPixel(position);
+	glBindBuffer(GL_PIXEL_PACK_BUFFER, packBuffer);
+	glUseProgram(program);
+	glBindVertexArray(vertexArray);
+	for (unsigned int unit = 0; unit < textures.size(); ++unit)
+	{
+		glActiveTexture(GL_TEXTURE0 + unit);
+		glBindTexture(GL_TEXTURE_2D, textures[unit]);
+	}
+	glActiveTexture(activeTexture);
+	glClearColor(clearColor[0], clearColor[1], clearColor[2], clearColor[3]);
+	glBindFramebuffer(GL_DRAW_FRAMEBUFFER, drawFramebuffer);
+	glBindFramebuffer(GL_READ_FRAMEBUFFER, readFramebuffer);
+	glViewport(viewport[0], viewport[1], viewport[2], viewport[3]);
+	glScissor(scissorBox[0], scissorBox[1], scissorBox[2], scissorBox[3]);
+	if (scissorEnabled) glEnable(GL_SCISSOR_TEST); else glDisable(GL_SCISSOR_TEST);
+	if (depthEnabled) glEnable(GL_DEPTH_TEST); else glDisable(GL_DEPTH_TEST);
+	return objectId;
+}
+
 ActionResult Window::OnAction(TouchAction touchAction)
 {
 	SceneDispatchScope dispatch(*this);
@@ -669,6 +723,18 @@ ActionResult Window::OnAction(TouchAction touchAction)
 	}
 	_cachedCursorPosition = touchAction.Position;
 	_cachedCursorModifiers = touchAction.Modifiers;
+	bool pressPicked = false;
+	if (touchAction.Touch == TouchAction::TOUCH_MOUSE && touchAction.State == TouchAction::TOUCH_DOWN
+		&& touchAction.Index != 4 && _buttonsDown == 0u)
+	{
+		if (const auto objectId = _PickPointerPress(touchAction.Position))
+		{
+			_scene->SetHover3d(utils::IdToVec(*objectId), touchAction.Modifiers, touchAction.Position);
+			_lastHoverObjectId = *objectId;
+			_hover3dDirty = false;
+			pressPicked = true;
+		}
+	}
 	switch (touchAction.Touch)
 	{
 	case TouchAction::TOUCH_MOUSE:
@@ -687,7 +753,7 @@ ActionResult Window::OnAction(TouchAction touchAction)
 			// A delayed notification belongs to the preceding pointer gesture.
 			_captureLossPending = false;
 			_buttonsDown |= (1 << touchAction.Index);
-			_forcePick = true;
+			_forcePick = !pressPicked;
 			break;
 		case TouchAction::TOUCH_UP:
 			_buttonsDown &= ~(1 << touchAction.Index);

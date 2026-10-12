@@ -107,6 +107,10 @@ namespace graphics
 		static ATOM Register(HINSTANCE hInstance);
 		static LRESULT CALLBACK WindowProcedure(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) noexcept;
 
+	protected:
+		// Resolve the current press, not a delayed asynchronous hover readback.
+		virtual std::optional<unsigned int> _PickPointerPress(utils::Position2d position);
+
 	private:
 		class SceneDispatchScope
 		{

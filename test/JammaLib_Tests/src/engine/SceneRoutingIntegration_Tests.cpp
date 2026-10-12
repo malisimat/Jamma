@@ -3,12 +3,33 @@
 #include <filesystem>
 #include <fstream>
 #include "engine/Scene.h"
+#include "gui/SceneSelector.h"
 #include "graphics/Window.h"
 #include "io/NativeMidiSidecar.h"
 #include "utils/StringUtils.h"
 
 namespace engine
 {
+    class PressPickWindow : public graphics::Window
+    {
+    public:
+        PressPickWindow(Scene& scene, resources::ResourceLib& resources) : Window(scene, resources) {}
+        std::vector<unsigned char> PressPath;
+        utils::Position2d PickPosition{};
+        unsigned int PickCount = 0;
+    protected:
+        std::optional<unsigned int> _PickPointerPress(utils::Position2d position) override
+        {
+            PickPosition = position;
+            ++PickCount;
+            if (PressPath.empty()) return 0u; // Cleared picker pixel.
+            unsigned int objectId = 0;
+            for (unsigned int segment = 0; segment < 3u; ++segment)
+                objectId |= (segment < PressPath.size() ? PressPath[segment] : 0xffu) << (16u - 8u * segment);
+            return objectId;
+        }
+    };
+
     class SourceLossIntegrationTestAccess
     {
     public:
@@ -18,6 +39,9 @@ namespace engine
             callback();
         }
         static bool ControlHeld(const Scene& scene) { return scene._ctrlHeld; }
+        static void SelectTakeDepth(Scene& scene) { scene._UpdateSelectDepth(Scene::VIEW_LOOPTAKE); }
+        static bool ItemMutePressed(const Scene& scene) { return scene._selector->IsMutePressed(); }
+        static bool ItemMutePainting(const Scene& scene) { return scene._selector->IsPaintingMute(); }
         static bool BackgroundPreviewActive(const Scene& scene) { return scene._BackgroundMutePreviewActive(); }
         static graphics::Camera::Pose CameraPose(const Scene& scene) { return scene._camera.CurrentPose(); }
         static bool BackgroundMuteOwned(const Scene& scene) { return scene._backgroundMuteGesture.has_value(); }
@@ -601,6 +625,176 @@ TEST_F(SceneRoutingIntegrationTest, GroupFunctionKeyAndFocusLossDoNotReachConfig
     EXPECT_EQ(trigger->GetState(), engine::TRIGSTATE_DEFAULT);
     EXPECT_TRUE(trigger->GetTakes().empty());
     EXPECT_TRUE(scene->SnapshotStations()[0]->GetLoopTakeSnapshot().empty());
+}
+
+TEST_F(SceneRoutingIntegrationTest, InWindowItemMiddlePaintUsesSelectionThresholdWithoutGlobalCapture)
+{
+    for (const bool initiallyMuted : { false, true })
+    {
+        auto scene = FreshScene({ Station("Local") }, {});
+        ASSERT_TRUE(scene);
+        scene->SetSize({ 800, 600 });
+        auto station = scene->SnapshotStations().front();
+        auto audioTake = station->AddTake();
+        audioTake->AddLoop(0u, station->Id());
+        auto midiTake = station->AddTake();
+        midiTake->Record({}, station->Name(), { 0u }, { "Keys" });
+        auto untouched = station->AddTake();
+        untouched->AddLoop(0u, station->Id());
+        scene->CommitChanges();
+        engine::SourceLossIntegrationTestAccess::SelectTakeDepth(*scene);
+        auto audioLoop = audioTake->GetLoops().front();
+        const auto midiModel = midiTake->GetMidiLoops().front()->Model();
+        ASSERT_TRUE(midiModel);
+        audioTake->SetGroupMutedAudio(initiallyMuted);
+        audioLoop->SetGroupMutedAudio(initiallyMuted);
+        midiTake->SetGroupMutedAudio(initiallyMuted);
+        untouched->SetGroupMutedAudio(initiallyMuted);
+        const auto pickPath = [](const auto& item) {
+            std::vector<unsigned char> path;
+            for (const auto index : item->GlobalId()) path.push_back(static_cast<unsigned char>(index + 1u));
+            return path;
+        };
+        const auto audioPath = pickPath(audioLoop);
+        const auto midiPath = pickPath(midiModel);
+        scene->SetHover3d(audioPath, base::Action::MODIFIER_NONE);
+        actions::TouchAction click;
+        click.Touch = actions::TouchAction::TOUCH_MOUSE;
+        click.Position = { 400, 300 }; // Valid client point; the picker reports this actual loop.
+        click.Index = 1;
+        click.MouseButtonsDown = 2u;
+        click.State = actions::TouchAction::TOUCH_DOWN;
+        ASSERT_TRUE(scene->OnAction(click).IsEaten);
+        EXPECT_TRUE(engine::SourceLossIntegrationTestAccess::ItemMutePressed(*scene));
+        EXPECT_FALSE(engine::SourceLossIntegrationTestAccess::ItemMutePainting(*scene));
+        EXPECT_FALSE(engine::SourceLossIntegrationTestAccess::BackgroundMuteOwned(*scene));
+        EXPECT_FALSE(engine::SourceLossIntegrationTestAccess::BackgroundPreviewActive(*scene));
+        EXPECT_EQ(initiallyMuted, audioTake->IsMuted());
+        EXPECT_EQ(initiallyMuted, midiTake->IsMuted());
+        EXPECT_TRUE(audioTake->IsPicking3d());
+        EXPECT_FALSE(midiTake->IsPicking3d());
+        actions::TouchMoveAction move;
+        move.Touch = actions::TouchAction::TOUCH_MOUSE;
+        move.Position = click.Position;
+        move.MouseButtonsDown = 2u;
+        scene->OnAction(move);
+        EXPECT_TRUE(engine::SourceLossIntegrationTestAccess::ItemMutePressed(*scene));
+        move.Position.X += 5;
+        scene->OnAction(move);
+        EXPECT_TRUE(engine::SourceLossIntegrationTestAccess::ItemMutePainting(*scene));
+        EXPECT_FALSE(engine::SourceLossIntegrationTestAccess::ItemMutePressed(*scene));
+        EXPECT_EQ(!initiallyMuted, audioTake->IsMuted());
+        EXPECT_EQ(initiallyMuted, midiTake->IsMuted());
+        EXPECT_EQ(initiallyMuted, untouched->IsMuted());
+        scene->SetHover3d(midiPath, base::Action::MODIFIER_NONE);
+        EXPECT_EQ(!initiallyMuted, midiTake->IsMuted());
+        EXPECT_FALSE(engine::SourceLossIntegrationTestAccess::BackgroundMuteOwned(*scene));
+        EXPECT_FALSE(engine::SourceLossIntegrationTestAccess::BackgroundPreviewActive(*scene));
+        scene->SetHover3d({}, base::Action::MODIFIER_NONE); // Passing through background keeps item paint ownership.
+        EXPECT_FALSE(engine::SourceLossIntegrationTestAccess::BackgroundMuteOwned(*scene));
+        scene->SetHover3d(audioPath, base::Action::MODIFIER_NONE);
+        EXPECT_EQ(!initiallyMuted, audioTake->IsMuted()); // Revisit does not toggle direction.
+        EXPECT_EQ(initiallyMuted, untouched->IsMuted());
+        click.Position = move.Position;
+        click.State = actions::TouchAction::TOUCH_UP;
+        click.MouseButtonsDown = 0u;
+        scene->OnAction(click);
+        EXPECT_FALSE(engine::SourceLossIntegrationTestAccess::ItemMutePainting(*scene));
+        EXPECT_EQ(!initiallyMuted, audioTake->IsMuted());
+        EXPECT_EQ(!initiallyMuted, midiTake->IsMuted());
+        EXPECT_EQ(initiallyMuted, untouched->IsMuted());
+        scene->Shutdown();
+    }
+}
+
+TEST_F(SceneRoutingIntegrationTest, RawStationPickBelowSelectionDepthDoesNotBecomeGlobalMiddleGesture)
+{
+    auto scene = FreshScene({ Station("Local") }, {});
+    ASSERT_TRUE(scene);
+    scene->SetSize({ 800, 600 });
+    auto station = scene->SnapshotStations().front();
+    auto take = station->AddTake();
+    scene->CommitChanges();
+        engine::SourceLossIntegrationTestAccess::SelectTakeDepth(*scene);
+    take->SetGroupMutedAudio(true);
+    std::vector<unsigned char> stationPath;
+    for (const auto index : station->GlobalId()) stationPath.push_back(static_cast<unsigned char>(index + 1u));
+    scene->SetHover3d(stationPath, base::Action::MODIFIER_NONE);
+    actions::TouchAction click;
+    click.Touch = actions::TouchAction::TOUCH_MOUSE;
+    click.Position = { 400, 300 };
+    click.Index = 1;
+    click.MouseButtonsDown = 2u;
+    click.State = actions::TouchAction::TOUCH_DOWN;
+    scene->OnAction(click);
+    EXPECT_FALSE(engine::SourceLossIntegrationTestAccess::BackgroundMuteOwned(*scene));
+    EXPECT_FALSE(engine::SourceLossIntegrationTestAccess::BackgroundPreviewActive(*scene));
+    click.State = actions::TouchAction::TOUCH_UP;
+    click.MouseButtonsDown = 0u;
+    scene->OnAction(click);
+    ASSERT_TRUE(engine::SourceLossIntegrationTestAccess::ApplyMuteBoundary(*scene));
+    EXPECT_TRUE(take->IsMuted());
+    scene->Shutdown();
+}
+
+TEST_F(SceneRoutingIntegrationTest, WindowFreshPressPickWinsOverStaleBackgroundAndItemHover)
+{
+    for (const bool initiallyMuted : { false, true })
+    {
+        auto scene = FreshScene({ Station("Local") }, {});
+        ASSERT_TRUE(scene);
+        resources::ResourceLib resources;
+        engine::PressPickWindow window(*scene, resources);
+        window.Resize({ 800, 600 });
+        auto station = scene->SnapshotStations().front();
+        auto take = station->AddTake();
+        take->AddLoop(0u, station->Id());
+        auto untouched = station->AddTake();
+        scene->CommitChanges();
+        engine::SourceLossIntegrationTestAccess::SelectTakeDepth(*scene);
+        take->SetGroupMutedAudio(initiallyMuted);
+        take->GetLoops().front()->SetGroupMutedAudio(initiallyMuted);
+        untouched->SetGroupMutedAudio(initiallyMuted);
+        for (const auto index : take->GetLoops().front()->GlobalId())
+            window.PressPath.push_back(static_cast<unsigned char>(index + 1u));
+        scene->SetHover3d({}, base::Action::MODIFIER_NONE); // Previous rendered hover was background.
+        actions::TouchAction click;
+        click.Touch = actions::TouchAction::TOUCH_MOUSE;
+        click.Position = { 400, 300 };
+        click.Index = 1;
+        click.State = actions::TouchAction::TOUCH_DOWN;
+        EXPECT_TRUE(window.OnAction(click).IsEaten);
+        EXPECT_EQ(1u, window.PickCount);
+        EXPECT_EQ(click.Position, window.PickPosition);
+        EXPECT_TRUE(engine::SourceLossIntegrationTestAccess::ItemMutePressed(*scene));
+        EXPECT_FALSE(engine::SourceLossIntegrationTestAccess::BackgroundMuteOwned(*scene));
+        EXPECT_FALSE(engine::SourceLossIntegrationTestAccess::BackgroundPreviewActive(*scene));
+        actions::TouchMoveAction move;
+        move.Touch = actions::TouchAction::TOUCH_MOUSE;
+        move.Position = { 405, 300 };
+        move.MouseButtonsDown = 2u;
+        window.OnAction(move);
+        EXPECT_TRUE(engine::SourceLossIntegrationTestAccess::ItemMutePainting(*scene));
+        EXPECT_EQ(!initiallyMuted, take->IsMuted());
+        EXPECT_EQ(initiallyMuted, untouched->IsMuted());
+        click.State = actions::TouchAction::TOUCH_UP;
+        click.Position = move.Position;
+        window.OnAction(click);
+        // The inverse stale-hover case must acquire a genuine background press.
+        window.PressPath.clear();
+        click.Position = { 420, 300 };
+        click.State = actions::TouchAction::TOUCH_DOWN;
+        window.OnAction(click);
+        EXPECT_EQ(2u, window.PickCount);
+        EXPECT_TRUE(engine::SourceLossIntegrationTestAccess::BackgroundMuteOwned(*scene));
+        EXPECT_TRUE(engine::SourceLossIntegrationTestAccess::BackgroundPreviewActive(*scene));
+        click.State = actions::TouchAction::TOUCH_UP;
+        window.OnAction(click);
+        ASSERT_TRUE(engine::SourceLossIntegrationTestAccess::ApplyMuteBoundary(*scene));
+        EXPECT_FALSE(take->IsMuted());
+        EXPECT_FALSE(untouched->IsMuted());
+        scene->Shutdown();
+    }
 }
 
 TEST_F(SceneRoutingIntegrationTest, InWindowBackgroundMuteGesturesPreviewAndApplyOnlyStationaryRelease)

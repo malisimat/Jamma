@@ -2409,10 +2409,16 @@ void Scene::AddChild(std::shared_ptr<base::GuiElement> child)
 	}
 }
 
-void Scene::SetHover3d(std::vector<unsigned char> path, Action::Modifiers modifiers)
+void Scene::SetHover3d(std::vector<unsigned char> path, Action::Modifiers modifiers,
+	std::optional<utils::Position2d> pointerPosition)
 {
 	if (_ctrlHeld || _loopEditor.IsEngaged() || _backgroundMuteGesture)
 		return;
+	if (pointerPosition)
+	{
+		_cursorPos = *pointerPosition;
+		_InvalidateHover2d();
+	}
 	// Resolve GUI ownership before taking the scene lock: station snapshots also lock it.
 	std::vector<std::weak_ptr<base::GuiElement>> guiPath;
 	_ResolveHoverPath2d(guiPath);
