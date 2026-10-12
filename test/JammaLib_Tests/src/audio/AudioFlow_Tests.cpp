@@ -1386,6 +1386,23 @@ namespace audio
 	};
 }
 
+TEST(AudioHostInputMeter, EightChannelInterleavedCaptureReportsPhysicalInputPeaks)
+{
+	audio::AudioHost host(io::UserConfig{});
+	const audio::AudioStreamParams params{ "Focusrite USB ASIO", 44100u, 2u, 64u, 0u, 0u, 8u, 8u };
+	auto stations = std::make_shared<const std::vector<std::shared_ptr<Station>>>();
+	audio::AudioHostRealtimeTestAccess::Prepare(host, stations, params);
+	std::array<float, 64u * 8u> input{};
+	std::array<float, 64u * 8u> output{};
+	input[3u * 8u] = -0.5f; // Physical input 1.
+	input[7u * 8u + 1u] = 0.25f; // Physical input 2.
+	ASSERT_EQ(0, audio::AudioHostRealtimeTestAccess::InvokeCallback(host, output.data(), input.data(), 64u));
+	EXPECT_FLOAT_EQ(0.5f, host.GetAdcPeak(0u));
+	EXPECT_FLOAT_EQ(0.25f, host.GetAdcPeak(1u));
+	for (unsigned int channel = 2u; channel < 8u; ++channel)
+		EXPECT_FLOAT_EQ(0.0f, host.GetAdcPeak(channel));
+}
+
 TEST(AudioHostQuiescence, AdmissionClosesAndDrainsExistingCallback)
 {
 	audio::AudioHost host(io::UserConfig{});

@@ -2461,6 +2461,7 @@ void Scene::InitAudio(bool generatedRig, const audio::AsioInventory* inventory, 
 		// display name/channels remain unchanged. New callbacks stay gated until
 		// prior captures have settled through the usual structural result protocol.
 		const auto actual = _audioEngine->GetStreamParams();
+		if (started) _SetAudioDraftFromStream(actual);
 		++_audioStreamEpoch;
 		if (const auto accepted = _rigCoordinator.Accepted())
 			for (const auto& runtime : accepted->Triggers)
@@ -3882,6 +3883,19 @@ bool Scene::_ValidateAudioDraft(std::string& error) const
 	const auto actual = _audioEngine->GetStreamParams();
 	if (_SessionHasTakes() && _audioDraft.SampleRate != (actual.SampleRate ? actual.SampleRate : _userConfig.Audio.SampleRate)) { error = "Sample rate cannot change while any takes exist"; return false; }
 	return true;
+}
+
+void Scene::_SetAudioDraftFromStream(const audio::AudioStreamParams& params)
+{
+	// Startup may resolve a legacy/default request or negotiate stream geometry.
+	// Show the running configuration without rewriting the accepted rig on disk.
+	_audioDraft.Name = params.Name;
+	_audioDraft.SampleRate = params.SampleRate;
+	_audioDraft.NumChannelsIn = params.NumInputChannels;
+	_audioDraft.NumChannelsOut = params.NumOutputChannels;
+	_audioDraft.BufSize = params.BufSize;
+	_audioDraft.NumBuffers = params.NumBuffers;
+	_devicePageDirty = true;
 }
 
 void Scene::_RebuildDevicePage()

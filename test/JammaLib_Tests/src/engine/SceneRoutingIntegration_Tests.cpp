@@ -11,6 +11,15 @@ namespace engine
     class SourceLossIntegrationTestAccess
     {
     public:
+        static std::string StartedAudioSelection(Scene& scene,
+            const audio::AsioInventory& inventory, const audio::AudioStreamParams& params)
+        {
+            scene._deviceInventory = inventory;
+            scene._SetAudioDraftFromStream(params);
+            scene._RebuildDevicePage();
+            return scene._audioDeviceChoice->SelectedText();
+        }
+        static io::UserConfig::AudioSettings AudioDraft(const Scene& scene) { return scene._audioDraft; }
         static void Confirm(Scene& scene, const midi::MidiConnectionResult& previous,
             const midi::MidiConnectionResult& refreshed, const std::vector<std::string>& names)
         {
@@ -91,6 +100,35 @@ protected:
 		return result;
 	}
 };
+
+TEST_F(SceneRoutingIntegrationTest, StartedAudioSelectionShowsResolvedDeviceAndNegotiatedGeometry)
+{
+	io::RigFile rig{};
+	rig.User.Audio = { "default", 44100u, 64u, 10u, 20u, 4u, 8u, 8u };
+	io::JamFile jam{};
+	jam.Stations = { Station("Mic") };
+	engine::SceneParams params({ "" }, {}, { 640u, 480u });
+	unsigned int saves = 0u;
+	auto created = engine::Scene::FromFile(params, jam, rig, L"",
+		[&saves](const io::RigFile&) { ++saves; return true; });
+	ASSERT_TRUE(created.has_value());
+	auto scene = *created;
+	audio::AsioInventory inventory;
+	inventory.Devices = {{ 0u, "Focusrite USB ASIO", true, "", 18u, 20u, {44100u, 48000u}, 48000u }};
+	const audio::AudioStreamParams actual{ "Focusrite USB ASIO", 48000u, 2u, 128u, 177u, 177u, 8u, 8u };
+	EXPECT_EQ("Focusrite USB ASIO", engine::SourceLossIntegrationTestAccess::StartedAudioSelection(*scene, inventory, actual));
+	const auto draft = engine::SourceLossIntegrationTestAccess::AudioDraft(*scene);
+	EXPECT_EQ(48000u, draft.SampleRate);
+	EXPECT_EQ(128u, draft.BufSize);
+	EXPECT_EQ(2u, draft.NumBuffers);
+	EXPECT_EQ(8u, draft.NumChannelsIn);
+	EXPECT_EQ(8u, draft.NumChannelsOut);
+	ASSERT_TRUE(scene->AcceptedRigSnapshot());
+	EXPECT_EQ("default", scene->AcceptedRigSnapshot()->Rig.User.Audio.Name);
+	EXPECT_EQ(64u, scene->AcceptedRigSnapshot()->Rig.User.Audio.BufSize);
+	EXPECT_EQ(0u, saves);
+	scene->Shutdown();
+}
 
 TEST_F(SceneRoutingIntegrationTest, HaloSelectionIncludesMidiOnlyModelsAndClearsOnDeselect)
 {

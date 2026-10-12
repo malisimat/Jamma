@@ -314,6 +314,7 @@ namespace engine
 		void _ForceGlobalMidiQuantStateMixedOnLocalEdit();
 		void _JobLoop();
 		void _RebuildDevicePage();
+		void _SetAudioDraftFromStream(const audio::AudioStreamParams& params);
 		void _RequestSave(bool chooseFolder);
 		bool _CaptureIsBusy() const;
 		bool _SessionHasTakes() const;
