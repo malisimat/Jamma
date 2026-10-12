@@ -117,6 +117,10 @@ Scene::Scene(SceneParams params,
 		return RequestRigEdit(candidate) == RigCoordinator::EditResult::Pending;
 	};
 	_hudPanel = std::make_shared<GuiHud>(hudParams);
+	// HUD input dispatch already holds _sceneMutex.
+	_hudPanel->SetPerformanceGroupHandler([this](bool selection, GroupCommand command, std::size_t slot) {
+		_ExecuteGroupCommandLocked(selection, command, slot);
+	});
 	AddChild(_hudPanel);
 
 	_EnsureRemoteTempoPromptUi();
@@ -644,6 +648,10 @@ std::optional<std::shared_ptr<Scene>> Scene::FromFile(SceneParams sceneParams,
 	for (auto& station : initialStations)
 		scene->_AddStation(std::move(station), false);
 	scene->_PublishAudioStations();
+	scene->_performanceGroups.Groups().Mute.Restore(jamStruct.MuteGroups,
+		jamStruct.MuteActiveGroup ? std::optional<std::size_t>(*jamStruct.MuteActiveGroup + 1u) : std::nullopt);
+	scene->_performanceGroups.Groups().Selection.Restore(jamStruct.SelectionGroups,
+		jamStruct.SelectionActiveGroup ? std::optional<std::size_t>(*jamStruct.SelectionActiveGroup + 1u) : std::nullopt);
 	scene->_audioEngine->PublishPendingRigSnapshot(acceptedRig);
 	scene->_inputSubsystem->PublishRigInputDispatch(acceptedRig);
 
@@ -929,6 +937,15 @@ void Scene::AdvanceUiAnimations()
 	if (mainChanged || selectionChanged) _InvalidateHover2d();
 	std::scoped_lock lock(_sceneMutex);
 	_UpdateRackVisibilityLocked();
+	_performanceGroups.Acknowledge(_audioEngine->GroupMuteReceipt());
+	_performanceGroups.Pump(_stations, [this](auto application) { _audioEngine->PublishGroupMuteApplication(std::move(application)); });
+	if (_hudPanel)
+	{
+		_hudPanel->RefreshPerformanceGroups(_performanceGroups.Groups());
+		if (_hudPanel->AdvanceGroupAnimation(elapsed)) _InvalidateHover2d();
+		_hudPanel->SetPerformanceGroupFeedback(_performanceGroups.Error());
+		if (_mainPanel) _mainPanel->SetOccupiedTopStripBounds(_hudPanel->OccupiedTopStripBounds());
+	}
 }
 
 void Scene::_InitResources(ResourceLib& resourceLib, bool forceInit)
@@ -1354,6 +1371,10 @@ ActionResult Scene::OnAction(TouchMoveAction action)
 
 ActionResult Scene::OnAction(KeyAction action)
 {
+	// A consumed physical press keeps its release even when focus changes.
+	if (_performanceGroups.ConsumeRelease(action)) return { true, {}, {}, ACTIONRESULT_DEFAULT, nullptr, {} };
+	if (_popupManager.IsOpen() || _focusManager.IsEditingText() || _loopEditor.IsEngaged())
+		_performanceGroups.BlockContextualPress(action);
 	action.SetActionTime(Timer::GetTime());
 	action.SetUserConfig(_userConfig);
 	action.SetAudioParams(_audioEngine->GetStreamParams());
@@ -1481,6 +1502,17 @@ ActionResult Scene::OnAction(KeyAction action)
 	}
 	if (auto editorRes = _loopEditor.TryOpenFromKey(action))
 		return *editorRes;
+	if (!_popupManager.IsOpen() && !_focusManager.IsEditingText() && !_loopEditor.IsEngaged())
+	{
+		std::scoped_lock lock(_sceneMutex);
+		_performanceGroups.Acknowledge(_audioEngine->GroupMuteReceipt());
+		if (_performanceGroups.HandleKey(action, _stations, _GroupSelectionDepthLocked(),
+			[this](auto application) { _audioEngine->PublishGroupMuteApplication(std::move(application)); }))
+		{
+			if (_hudPanel) _hudPanel->RefreshPerformanceGroups(_performanceGroups.Groups());
+			return { true, {}, {}, ACTIONRESULT_DEFAULT, nullptr, {} };
+		}
+	}
 
 	if ((9u == action.KeyChar)
 		&& (actions::KeyAction::KEY_UP == action.KeyActionType)
@@ -1549,7 +1581,7 @@ ActionResult Scene::OnAction(KeyAction action)
 			_audioEngine->GetStreamParams(),
 			_audioEngine->GetDevice(),
 			_sceneMutex,
-			_networkService->GetController());
+			_networkService->GetController(), &_performanceGroups.Groups());
 	}
 
 	// Insert + Ctrl+Shift+L/W/X/[/] - MIDI automation record, learn, wire, delete, lane cycle.
@@ -2836,7 +2868,10 @@ void Scene::_InitSize()
 	_overlayViewProj = glm::scale(_overlayViewProj, glm::vec3(hScale, vScale, 1.0f));
 
 	if (_hudPanel)
+	{
 		_hudPanel->SetSize(_sizeParams.Size);
+		if (_mainPanel) _mainPanel->SetOccupiedTopStripBounds(_hudPanel->OccupiedTopStripBounds());
+	}
 
 	_UpdateHudStationAnchors();
 }
@@ -3504,8 +3539,39 @@ void Scene::_JobLoop()
 
 void Scene::_PublishAudioStations()
 {
+	_performanceGroups.CancelPending();
+	_audioEngine->PublishGroupMuteApplication(nullptr);
 	auto stations = std::make_shared<const std::vector<std::shared_ptr<Station>>>(_stations.begin(), _stations.end());
 	_audioEngine->SetStations(stations);
+}
+
+GroupTargetKind Scene::_GroupSelectionDepthLocked() const
+{
+	const auto depth = _selector->CurrentSelectDepth();
+	return depth == base::DEPTH_STATION ? GroupTargetKind::Station :
+		depth == base::DEPTH_LOOP ? GroupTargetKind::AudioLoop : GroupTargetKind::Take;
+}
+
+void Scene::_RestoreGroupSelectionDepthLocked()
+{
+	const auto active = _performanceGroups.Groups().Selection.ActiveSlot();
+	if (!active) return;
+	const auto snapshot = _performanceGroups.Groups().Selection.Get(*active);
+	if (!snapshot) return;
+	const auto depth = snapshot->Depth == GroupTargetKind::Station ? base::DEPTH_STATION :
+		snapshot->Depth == GroupTargetKind::Take ? base::DEPTH_LOOPTAKE : base::DEPTH_LOOP;
+	_selector->SetSelectDepth(depth);
+	for (const auto& station : _stations) station->SetSelectDepth(depth);
+}
+
+void Scene::_ExecuteGroupCommandLocked(bool selection, GroupCommand command, std::size_t slot)
+{
+	_performanceGroups.Acknowledge(_audioEngine->GroupMuteReceipt());
+	_performanceGroups.Execute(selection, command, slot, _stations, _GroupSelectionDepthLocked(),
+		[this](auto application) { _audioEngine->PublishGroupMuteApplication(std::move(application)); });
+	if (selection && command == GroupCommand::RecallOrStore) _RestoreGroupSelectionDepthLocked();
+	if (_hudPanel) _hudPanel->RefreshPerformanceGroups(_performanceGroups.Groups());
+	_InvalidateHover2d();
 }
 
 std::shared_ptr<GuiElement> Scene::_ChildFromPath(std::vector<unsigned char> path)
@@ -3751,6 +3817,7 @@ void Scene::_ReleaseQuantisationInput()
 
 void Scene::OnInputFocusLost()
 {
+	_performanceGroups.ResetKeys();
 	_ReleaseQuantisationInput();
 	_loopEditor.CancelInput();
 	_focusManager.ClearFocus();

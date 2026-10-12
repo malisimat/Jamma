@@ -207,6 +207,14 @@ void GuiMainPanel::SetViewportSize(Size2d viewport)
 	_Layout();
 }
 
+void GuiMainPanel::SetOccupiedTopStripBounds(Rect2d bounds)
+{
+	if (_occupiedTopStrip.Left == bounds.Left && _occupiedTopStrip.Right == bounds.Right &&
+		_occupiedTopStrip.Bottom == bounds.Bottom && _occupiedTopStrip.Top == bounds.Top) return;
+	_occupiedTopStrip = bounds;
+	_Layout();
+}
+
 void GuiMainPanel::_Layout()
 {
 	const int width = static_cast<int>(_viewport.Width), height = static_cast<int>(_viewport.Height);
@@ -219,10 +227,13 @@ void GuiMainPanel::_Layout()
 	const int selectionHandleHeight = std::min(SelectionHandleHeight, std::max(0, height));
 	const int mainPanelBottom = std::min(GuiStyle::StatusBarHeight + StandardPanelPadding, height / 2);
 	const int selectionPanelBottom = height - margin - selectionPanelHeight + selectionHandleHeight;
-	const int panelHeight = _selectionOnly
+	const int unconstrainedPanelHeight = _selectionOnly
 		? selectionPanelHeight
 		: std::min(std::max(0, height - mainPanelBottom),
 			std::max(MainPanelMinimumHeight, selectionPanelBottom - MainPanelTopGap - mainPanelBottom));
+	const int panelHeight = !_selectionOnly && !_occupiedTopStrip.IsEmpty()
+		? std::min(unconstrainedPanelHeight, std::max(0, _occupiedTopStrip.Bottom - StandardPanelPadding - mainPanelBottom))
+		: unconstrainedPanelHeight;
 	_handle->SetPosition(_selectionOnly ? Position2d{ margin, height - handleHeight } : Position2d{ 0, std::min(GuiStyle::StatusBarHeight + 8, height / 2) });
 	_handle->SetSize({ static_cast<unsigned int>(handleWidth), static_cast<unsigned int>(handleHeight) });
 	_handle->SetVisible(handleWidth > 0 && handleHeight > 0);

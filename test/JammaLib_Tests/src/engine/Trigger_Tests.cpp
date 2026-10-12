@@ -1496,7 +1496,7 @@ TEST(Trigger, NoteOffMidiDitchBindingCompletesOnNextNoteOn) {
 }
 
 
-TEST(Trigger, SceneWithoutPublishedRigDoesNotUseStationTriggerFallback) {
+TEST(Trigger, GroupShortcutWithoutPublishedRigDoesNotUseStationTriggerFallback) {
 	SceneParams sceneParams{ base::DrawableParams(),
 		base::MoveableParams(),
 		base::SizeableParams() };
@@ -1516,7 +1516,8 @@ TEST(Trigger, SceneWithoutPublishedRigDoesNotUseStationTriggerFallback) {
 
 	auto res = scene.OnAction(action);
 
-	EXPECT_FALSE(res.IsEaten);
+	// Digit shortcuts have group priority even without a published trigger rig.
+	EXPECT_TRUE(res.IsEaten);
 	EXPECT_EQ(0u, firstStation->NumTakes());
 	EXPECT_EQ(0u, secondStation->NumTakes());
 }

@@ -16,6 +16,7 @@
 #include <thread>
 #include <unordered_map>
 #include <utility>
+#include "PerformanceGroupController.h"
 #include "../resources/ResourceLib.h"
 #include "../actions/JobAction.h"
 #include "../audio/AudioDevice.h"
@@ -282,6 +283,9 @@ namespace engine
 		bool _OnUndo(std::shared_ptr<base::ActionUndo> undo);
 		void _InitSize();
 		void _UpdateHudStationAnchors();
+		void _ExecuteGroupCommandLocked(bool selection, GroupCommand command, std::size_t slot);
+		GroupTargetKind _GroupSelectionDepthLocked() const;
+		void _RestoreGroupSelectionDepthLocked();
 		void _UpdateSelection(actions::ActionResultType res);
 		void _UpdateRackVisibilityLocked();
 		void _CollapseRacksLocked();
@@ -422,6 +426,7 @@ namespace engine
 		std::shared_ptr<gui::GuiMainPanel> _mainPanel;
 		std::shared_ptr<gui::GuiMainPanel> _selectionPanel;
 		std::shared_ptr<gui::GuiHud> _hudPanel;
+		PerformanceGroupController _performanceGroups; // scene mutex, never audio
 		std::vector<std::shared_ptr<base::GuiElement>> _guiChildren;
 		gui::GuiFocusManager _focusManager;
 		gui::GuiPopupManager _popupManager;

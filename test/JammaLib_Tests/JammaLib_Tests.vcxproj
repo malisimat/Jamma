@@ -179,10 +179,10 @@ xcopy /y "$(VcpkgInstalledDir)$(VcpkgTriplet)\debug\bin\gtest_main.dll" "$(OutDi
     <ClCompile Include="src\engine\StationMidiInstrument_Tests.cpp" />
     <ClCompile Include="src\engine\StationVisualState_Tests.cpp" />
     <ClCompile Include="src\engine\Trigger_Tests.cpp" />
-    <ClCompile Include="src\engine\PerformanceGroups_Tests.cpp" />
-    <ClCompile Include="src\engine\PerformanceGroupService_Tests.cpp" />
 	<ClCompile Include="src\engine\RigSnapshot_Tests.cpp" />
 		<ClCompile Include="src\engine\RigTriggerInputGate_Tests.cpp" />
+	<ClCompile Include="src\engine\PerformanceGroups_Tests.cpp" />
+	<ClCompile Include="src\engine\PerformanceGroupService_Tests.cpp" />
 	<ClCompile Include="src\engine\SceneRoutingIntegration_Tests.cpp" />
     <ClCompile Include="src\engine\Quantisation_Tests.cpp" />
     <ClCompile Include="src\engine\Timer_Tests.cpp" />
@@ -194,6 +194,7 @@ xcopy /y "$(VcpkgInstalledDir)$(VcpkgTriplet)\debug\bin\gtest_main.dll" "$(OutDi
     <ClCompile Include="src\graphics\ResourceLibTextureArgs_Tests.cpp" />
     <ClCompile Include="src\graphics\Window_Tests.cpp" />
     <ClCompile Include="src\gui\GuiControls_Tests.cpp" />
+    <ClCompile Include="src\gui\GuiPerformanceGroupRow_Tests.cpp" />
 	<ClCompile Include="src\gui\CableInteraction_Tests.cpp" />
     <ClCompile Include="src\gui\GuiComponents_Tests.cpp" />
     <ClCompile Include="src\gui\GuiLayout_Tests.cpp" />

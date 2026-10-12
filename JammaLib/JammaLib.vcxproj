@@ -255,6 +255,7 @@
     <ClInclude Include="include\Constants.h" />
     <ClInclude Include="src\gui\SceneSelector.h" />
     <ClInclude Include="src\gui\GuiRadio.h" />
+    <ClInclude Include="src\gui\GuiPerformanceGroupRow.h" />
     <ClInclude Include="src\gui\GuiRack.h" />
     <ClInclude Include="src\utils\VecUtils.h" />
     <ClInclude Include="src\utils\MathUtils.h" />
@@ -330,10 +331,10 @@
     <ClInclude Include="lib\opengl\gl\glxew.h" />
     <ClInclude Include="lib\opengl\gl\wglew.h" />
     <ClInclude Include="lib\opengl\gl\wglext.h" />
-        <ClInclude Include="src\engine\Scene.h" />
+        <ClInclude Include="src\engine\PerformanceGroups.h" />
         <ClInclude Include="src\engine\PerformanceGroupService.h" />
         <ClInclude Include="src\engine\PerformanceGroupController.h" />
-        <ClInclude Include="src\engine\PerformanceGroups.h" />
+        <ClInclude Include="src\engine\Scene.h" />
     <ClInclude Include="src\audio\AudioHost.h" />
     <ClInclude Include="src\audio\NinjamMetronome.h" />
     <ClInclude Include="src\io\IoInputSubsystem.h" />
@@ -384,6 +385,7 @@
     <ClInclude Include="src\vst\Vst3MidiMapping.h" />
     <ClInclude Include="src\vst\VstGlContextScope.h" />
     <ClInclude Include="src\vst\VstChain.h" />
+    <ClInclude Include="src\vst\ReservedMidiEvents.h" />
 
     <ClInclude Include="src\graphics\VstEditorWindow.h" />
     <ClInclude Include="src\engine\Trigger.h" />
@@ -435,6 +437,7 @@
     <ClCompile Include="src\graphics\Camera.cpp" />
     <ClCompile Include="src\gui\SceneSelector.cpp" />
     <ClCompile Include="src\gui\GuiRadio.cpp" />
+    <ClCompile Include="src\gui\GuiPerformanceGroupRow.cpp" />
     <ClCompile Include="src\gui\GuiRack.cpp" />
     <ClCompile Include="src\io\InitFile.cpp" />
     <ClCompile Include="src\io\NetworkSession.cpp" />

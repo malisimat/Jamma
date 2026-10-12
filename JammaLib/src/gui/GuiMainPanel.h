@@ -34,6 +34,7 @@ namespace gui
 		explicit GuiMainPanel(GuiMainPanelParams params);
 		void SetCommandOwner(std::weak_ptr<base::ActionReceiver> owner);
 		void SetViewportSize(utils::Size2d viewport);
+		void SetOccupiedTopStripBounds(utils::Rect2d bounds);
 		void SetPage(SettingsPage page);
 		SettingsPage Page() const { return _page; }
 		void SetExpanded(bool expanded);
@@ -67,6 +68,7 @@ namespace gui
 		float _transition = 1.0f;
 		SettingsPage _page;
 		utils::Size2d _viewport{};
+		utils::Rect2d _occupiedTopStrip{};
 		GuiPopupManager* _popups;
 	std::function<void(const std::shared_ptr<base::GuiElement>&)> _beforeHide;
 	std::shared_ptr<GuiPanel> _frame;

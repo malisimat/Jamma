@@ -1,6 +1,6 @@
 # Mute and selection groups implementation plan
 
-Status: ratified specification, checked against the codebase.
+Status: implemented and validated by native tests and Debug x64 builds; live device/plugin visual checks remain manual.
 Branch: `feature/mute-group`
 Worktree: `C:\Users\matto\Source\Repos\Jamma.worktrees\Jamma-mute-group`
 
@@ -96,7 +96,7 @@ Version recall requests so superseded preparation cannot publish after a newer r
 
 Extend optional JAM records for both nine-slot rows, selection depth, target IDs, mute hierarchy/effective suppression and owner/plugin state blobs. Preserve sparse numbering and valid empty-selection groups. Integrate export/import, validation limits and stable identity restoration. Exclude remote targets. Validate slot ranges, duplicates, unresolved identities and malformed blobs using established loader behavior.
 
-Old JAM files remain loadable with empty group rows. Older entity records receive stable IDs during import as necessary; export writes those IDs for subsequent round trips. Preserve plugin association across load and chain reorder; deleted or unmatched entities must never be matched merely by current array position.
+Old JAM files remain loadable with empty group rows. Legacy take records retain the identity previously stored in Name; other missing entity IDs are assigned during import as necessary; export writes those IDs for subsequent round trips. Preserve plugin association across load and chain reorder; deleted or unmatched entities must never be matched merely by current array position.
 
 ### Widgets and assets
 
@@ -134,7 +134,7 @@ Expose occupied top-strip bounds to settings layout. Update both layout and anim
 
 Existing test homes: `test/JammaLib_Tests/src/gui/GuiLayout_Tests.cpp`, `GuiControls_Tests.cpp`, `GuiComponents_Tests.cpp`; `src/engine/SceneRoutingIntegration_Tests.cpp`, `VstStaging_Tests.cpp`; `src/io/JamFile_Tests.cpp`, `IoSessionExporter_Tests.cpp`; `src/vst/`. Add focused group-model, persistence and lifecycle tests rather than tests that mirror rendering implementation.
 
-This plan incorporates the user's decisions. Implementation and asset generation are subsequent work; no implementation or asset changes have been made as part of this plan update.
+The implementation and validation record below supersedes the initial planning-only status.
 
 ## Implementation review amendments (2026-10-12)
 
@@ -144,3 +144,30 @@ This plan incorporates the user's decisions. Implementation and asset generation
 - Both GetState and SetState require processor exclusion: non-audio execution alone is insufficient. Audit capture as well as restore, including editor/controller calls and automation delivery. Implement and test a bounded audio acknowledgement/owner handoff or compatible staged processor lifecycle before enabling live blob access. Callback participation must never wait, allocate, lock, destroy processors, or serialize blobs. Failed or superseded work must not partially overwrite a stored slot.
 - Bound imported group target counts and total decoded blob bytes before allocating. Validate explicit slots, duplicate slots/IDs, target kinds and blobs; keep legacy fields distinct from the new snapshot records. Define round-trip tests for empty occupied groups and sparse rows.
 - Execution: implement in dependency order, with an independent subagent review for each phase before committing its focused diff. Assets may be prepared independently once their contract is fixed. Re-read local tasks before each build/test. Record checks and any unresolved limitations honestly; completion requires engine, plugins, persistence, input, widgets and assets, not only the slot model.
+
+## Implementation and validation record
+
+Implemented in this session: sparse nine-slot model; persistent station, take, audio/MIDI-loop and plugin identities; local finest-level mute/selection snapshots; dedicated controller and UI retry pump; digit/Shift/Alt and Backspace precedence; coherent audio-boundary mute publication; live plugin state access exclusion and MIDI recovery; optional bounded JAM records; two animated group rows; actual HUD bounds constraining settings; all ten registered textures and editable SVG sources.
+
+The asset state sheet is [performance-group-assets.png](images/performance-group-assets.png). This shows the texture families and tints, rather than an application screenshot. Labels and glyphs are rendered separately. Occupancy uses the filled texture family; last-applied indication uses a separate white cue.
+
+Validation completed:
+
+- Incremental Debug x64 native library/test and Jamma application builds succeeded using the copied local tasks.
+- All **1,440 native tests across 175 suites passed**, including added slot, sparse persistence/blob validation, identity migration, audio/MIDI leaf selection, reordered/deleted targets, running audio-boundary application/retirement, shortcut/focus/rapid inversion, atomic state-access concurrency, MIDI recovery capacity/order, animated hit bounds and capture cancellation tests.
+- Mixer transitions now apply sample-continuous gain with fixed stack scratch during ramps and retain the direct steady-gain path. Bounce uses complementary old/new per-sample coefficients. Both continuity and bounce regression tests pass.
+- Asset validation checked type-2 uncompressed 32-bit bottom-left straight-alpha TGAs, tintable grayscale, alpha edges, aligned states and uniform exact nine-patch slices. Native geometry tests cover small viewports and settings collapse; the asset state sheet was visually inspected.
+- The threading-review audit flagged new Scene input/frame locks and owner VST path-metadata locks because it scans whole-file additions. Manual function review confirmed these are non-audio methods. Added callback code has no host heap allocation, mutex, wait, state-blob call, logging or ownership reclamation.
+
+### Shared-state ownership
+
+| State | Owner / access | Synchronization and teardown |
+| --- | --- | --- |
+| Rows, pending capture/recall, key state, presented geometry | UI owner; Scene serializes UI/job hierarchy access | Existing non-audio Scene mutex. Queued work cancels on topology/session teardown; focus loss clears key latches. |
+| Stable IDs | Assigned on construction/import before publication; non-audio resolution/export | Immutable during publication; no positional matching. Preserve legacy take Name identities and explicit modern IDs. |
+| Prepared mute application | Non-audio writer; callback reads immutable resolved values | PublishedAudioSnapshot borrow; bounded at 32,768 targets. Atomic version receipt; writer collection retires references off audio. Callback stops before publisher destruction. |
+| Plugin exclusive access / generation / pending MIDI recovery | UI state operations; callback and editor entry guards | Bounded atomic guard/reservation, no callback retries or waits. State operations run only when readers are excluded. Instance lifetime remains with existing owners/snapshots. |
+| Reserved MIDI events | Callback owns fixed normal + 16 panic slots | No shared container mutation during exclusive state work; panic request is atomic. Recovery precedes ordinary queued events and survives bypass. |
+| Mixer gain and scratch | Callback owns fade progression and stack scratch; UI publishes mute/target scalars | Existing atomic target/mute publication. No allocation or lock in the new ramp path. |
+
+Manual checks still required on the user's live setup: DPI/display appearance, routing/Ctrl overlays and rapid pointer gestures in the running app; representative VST2/VST3 editors and audible third-party preset behavior. A vendor state call runs synchronously on its UI owner once safely acquired and may take an unpredictable time; skipped processing/MIDI is recovered, but arbitrary plugin presets are not promised click-free. The existing void SetState API retains vendor failure logging rather than claiming verified SDK success.

@@ -10,6 +10,7 @@
 #include "GuiStackPanel.h"
 #include "GuiVu.h"
 #include "CableInteraction.h"
+#include "GuiPerformanceGroupRow.h"
 #include "../io/RigFile.h"
 
 namespace resources
@@ -93,6 +94,11 @@ namespace gui
 		void SetStationAnchors(std::vector<StationAnchor> anchors);
 		void SetLoopEditorMode(bool enabled);
 		void SetQuantisationFeedback(const std::string& text);
+		void SetPerformanceGroupFeedback(const std::string& text);
+		void SetPerformanceGroupHandler(std::function<void(bool, engine::GroupCommand, std::size_t)> handler);
+		void RefreshPerformanceGroups(const engine::PerformanceGroups& groups);
+		bool AdvanceGroupAnimation(float elapsedSeconds);
+		utils::Rect2d OccupiedTopStripBounds() const;
 		void SetEditModeAlpha(float alpha) noexcept { _editModeAlpha = std::clamp(alpha, 0.0f, 1.0f); }
 		bool HasCableDrag() const noexcept { return _cableDrag.has_value(); }
 		bool IsApplying() const { return _RoutingEditAvailability() == RoutingEditAvailability::Applying; }
@@ -210,6 +216,7 @@ namespace gui
 
 
 		std::shared_ptr<GuiPanel> _topStrip;
+		std::array<std::shared_ptr<GuiPerformanceGroupRow>, 2> _groupRows;
 		std::shared_ptr<GuiPanel> _topStripBorder;
 		std::shared_ptr<GuiStackPanel> _topSourceRow;
 		std::shared_ptr<GuiStackPanel> _topInputRow;
@@ -224,6 +231,7 @@ namespace gui
 		std::shared_ptr<GuiPanel> _statusPanel;
 		std::shared_ptr<GuiLabel> _routingStatusLabel;
 		std::string _quantisationFeedback;
+		std::string _performanceGroupFeedback; // UI/job owner under Scene serialization
 		float _editModeAlpha = 0.0f;
 		std::shared_ptr<GuiPopup> _deletePopup;
 		// UI-owned read-only identity popup. Rig/job rebuilds do not mutate it;
