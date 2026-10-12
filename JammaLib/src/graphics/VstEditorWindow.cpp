@@ -218,16 +218,56 @@ bool VstEditorWindow::Create(HINSTANCE hInstance,
 	return true;
 }
 
+void VstEditorWindow::_DeferClose()
+{
+ _closePending = true;
+ // The manager may remove its reference while a state call pumps messages.
+ // Keep HWND userdata alive until the existing timer completes the close.
+ if (!_deferredCloseOwner) _deferredCloseOwner = weak_from_this().lock();
+}
+
+void VstEditorWindow::_TryClosePending()
+{
+ if (!_closePending || _idleActive
+  || (_plugin && _plugin->IsStateOperationActive())) return;
+ Destroy();
+}
+
+void VstEditorWindow::_IdlePlugin()
+{
+ if (_idleActive || !_plugin) return;
+ struct IdleRelease
+ {
+  bool& Active;
+  ~IdleRelease() { Active = false; }
+ };
+ {
+  _idleActive = true;
+  IdleRelease release{_idleActive};
+  const auto plugin = _plugin;
+  plugin->IdleEditor();
+ }
+ _TryClosePending();
+}
 void VstEditorWindow::Destroy()
 {
+	if (_idleActive || (_plugin && _plugin->IsStateOperationActive()))
+	{
+		_DeferClose();
+		return; // Keep the HWND valid until the SDK call has returned.
+	}
+	const auto keepAlive = weak_from_this().lock();
+	const auto deferredOwner = std::move(_deferredCloseOwner);
+	_closePending = false;
+	const auto plugin = _plugin;
 	HWND wnd = _editorWnd.exchange(nullptr, std::memory_order_acq_rel);
 
 	if (wnd)
 	{
 		// CloseEditor (effEditClose) before DestroyWindow so the plugin can
 		// clean up while the HWND is still valid.
-		if (_plugin)
-			_plugin->CloseEditor();
+		if (plugin)
+			plugin->CloseEditor();
 
 		if (IsWindow(wnd))
 			DestroyWindow(wnd);  // WM_DESTROY fires; _editorWnd is null, skips CloseEditor
@@ -292,6 +332,9 @@ LRESULT CALLBACK VstEditorWindow::WindowProcedure(HWND hWnd,
 	if (!self)
 		return DefWindowProc(hWnd, message, wParam, lParam);
 
+	// A plugin may close/prune its editor while pumping messages in this call.
+	const auto keepAlive = self->weak_from_this().lock();
+
 	switch (message)
 	{
 	case WM_ERASEBKGND:
@@ -333,12 +376,18 @@ LRESULT CALLBACK VstEditorWindow::WindowProcedure(HWND hWnd,
 	}
 
 	case MessageVst2Idle:
-		if (self->_plugin)
-			self->_plugin->IdleEditor();
+		self->_IdlePlugin();
 		return 1;
 
 	case WM_CLOSE:
 	{
+		if (self->_idleActive || (self->_plugin && self->_plugin->IsStateOperationActive()))
+		{
+			self->_DeferClose();
+			return 0;
+		}
+		const auto deferredOwner = std::move(self->_deferredCloseOwner);
+		self->_closePending = false;
 		// Atomically take ownership of the HWND before calling CloseEditor.
 		// The exchange guards against re-entrant WM_CLOSE if the plugin pumps
 		// messages internally during effEditClose.
@@ -347,16 +396,17 @@ LRESULT CALLBACK VstEditorWindow::WindowProcedure(HWND hWnd,
 			return 0;
 
 		self->_pluginChildWnd = nullptr;
-		if (self->_plugin)
-			self->_plugin->CloseEditor();
+		const auto plugin = self->_plugin;
+		if (plugin)
+			plugin->CloseEditor();
 
 		DestroyWindow(hWnd);
 		return 0;
 	}
 
 	case WM_TIMER:
-		if (self->_plugin)
-			self->_plugin->IdleEditor();
+		self->_TryClosePending();
+		if (self->IsOpen()) self->_IdlePlugin();
 		return 0;
 
 	case WM_DESTROY:

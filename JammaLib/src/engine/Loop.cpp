@@ -602,15 +602,20 @@ io::JamFile::Loop Loop::ToJamFile(const std::string& wavFilename) const
 		loop.Mix.Params = std::vector<double>{ 0.5, 0.5 };
 	}
 
+	auto chain = _vstChain.load(std::memory_order_acquire);
+	std::vector<std::wstring> paths;
 	{
 		std::lock_guard<std::mutex> lock(_vstPathsMutex);
-		for (size_t i = 0; i < _vstPluginPaths.size(); ++i)
+		paths = _vstPluginPaths;
+	}
+	// Plugin state calls may pump native messages and reenter this owner.
+	{
+		for (size_t i = 0; i < paths.size(); ++i)
 		{
 			io::JamFile::VstEntry entry;
-			entry.Path = utils::EncodeUtf8(_vstPluginPaths[i]);
+			entry.Path = utils::EncodeUtf8(paths[i]);
 			entry.Bypass = false;
 
-			auto chain = _vstChain.load(std::memory_order_acquire);
 			if (chain && i < chain->NumPlugins())
 			{
 				auto plugin = chain->GetPlugin(i);

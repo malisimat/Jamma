@@ -50,13 +50,18 @@ namespace vst
 		const std::string& StateId() const noexcept { return _stateId; }
 		void SetStateId(const std::string& id) { if (!id.empty()) _stateId = id; }
 		std::uint64_t AutomationGeneration() const noexcept { return _stateGeneration.load(std::memory_order_acquire); }
-		bool IsStateOperationActive() const noexcept { return (_stateAccess.load(std::memory_order_acquire) & ExclusiveState) != 0; }
+		bool IsStateOperationActive() const noexcept
+		{
+			return (_stateAccess.load(std::memory_order_acquire) & ExclusiveState) != 0
+				|| _blobSdkActive.load(std::memory_order_acquire);
+		}
 
 		// UI-thread only. A failed bounded acquisition leaves output/state untouched;
 		// the UI pump retries later. Blob calls run while all SDK entry guards are
 		// excluded. Editors and blob work share the same UI owner. No audio wait.
 		bool TryCaptureLiveState(std::vector<std::uint8_t>& output) const
 		{
+			if (_blobSdkActive.load(std::memory_order_acquire)) return false;
 			std::uint32_t expected = 0;
 			if (!_stateAccess.compare_exchange_strong(expected, ExclusiveState, std::memory_order_acq_rel)) return false;
 			ExclusiveRelease release{_stateAccess};
@@ -68,6 +73,7 @@ namespace vst
 		}
 		bool TryRestoreLiveState(const std::vector<std::uint8_t>& blob)
 		{
+			if (_blobSdkActive.load(std::memory_order_acquire)) return false;
 			std::uint32_t expected = 0;
 			if (!_stateAccess.compare_exchange_strong(expected, ExclusiveState, std::memory_order_acq_rel)) return false;
 			ExclusiveRelease release{_stateAccess};
@@ -77,14 +83,15 @@ namespace vst
 		}
 
 	public:
-		// Two atomic operations at most; no retries, waits or allocations.
+		// Bounded atomic operations only; no retries, waits or allocations.
 		class PluginCallGuard
 		{
 		public:
 			explicit PluginCallGuard(const IVstPlugin& plugin, bool midiRecovery = false) noexcept : _access(plugin._stateAccess), _plugin(plugin)
 			{
 				const auto previous = _access.fetch_add(1u, std::memory_order_acq_rel);
-				_entered = !(previous & ExclusiveState);
+				_entered = !(previous & ExclusiveState)
+					&& !plugin._blobSdkActive.load(std::memory_order_acquire);
 				if (!_entered)
 				{
 					if (midiRecovery) _plugin._pendingMidiPanic.store(true, std::memory_order_release);
@@ -111,6 +118,46 @@ namespace vst
 			if (_pendingMidiPanic.exchange(false, std::memory_order_acq_rel)) SendMidiPanicImmediately();
 		}
 	protected:
+		// Raw export/import callers still require audio quiescence. Track their
+		// SDK activity independently of live exclusive entry so pumped editor
+		// calls defer, and live wrappers can invoke the same raw implementation.
+		class BlobSdkCallGuard
+		{
+		public:
+			explicit BlobSdkCallGuard(const IVstPlugin& plugin) noexcept : _active(plugin._blobSdkActive)
+			{
+				bool expected = false;
+				_entered = _active.compare_exchange_strong(expected, true, std::memory_order_acq_rel);
+			}
+			~BlobSdkCallGuard() { if (_entered) _active.store(false, std::memory_order_release); }
+			BlobSdkCallGuard(const BlobSdkCallGuard&) = delete;
+			BlobSdkCallGuard& operator=(const BlobSdkCallGuard&) = delete;
+			explicit operator bool() const noexcept { return _entered; }
+		private:
+			std::atomic<bool>& _active;
+			bool _entered = false;
+		};
+
+		// Non-RT housekeeping mutates adapter metadata read by SDK/audio calls.
+		// A nested message pump or an active reader must defer it, never wait.
+		class ExclusivePluginCallGuard
+		{
+		public:
+			explicit ExclusivePluginCallGuard(const IVstPlugin& plugin) noexcept : _access(plugin._stateAccess)
+			{
+				if (plugin._blobSdkActive.load(std::memory_order_acquire)) return;
+				std::uint32_t expected = 0;
+				_entered = _access.compare_exchange_strong(expected, ExclusiveState, std::memory_order_acq_rel);
+			}
+			~ExclusivePluginCallGuard() { if (_entered) _access.fetch_and(~ExclusiveState, std::memory_order_release); }
+			ExclusivePluginCallGuard(const ExclusivePluginCallGuard&) = delete;
+			ExclusivePluginCallGuard& operator=(const ExclusivePluginCallGuard&) = delete;
+			explicit operator bool() const noexcept { return _entered; }
+		private:
+			std::atomic<std::uint32_t>& _access;
+			bool _entered = false;
+		};
+
 		virtual void SendMidiPanicImmediately() noexcept
 		{
 			for (std::uint8_t channel = 0; channel < 16; ++channel)
@@ -122,6 +169,9 @@ namespace vst
 		// possibly queued note-offs before the next block clears its events. Reader/reset: callback reentry;
 		// scalar atomic, no ownership/destruction crosses the callback.
 		mutable std::atomic<bool> _pendingMidiPanic{false};
+		// Non-RT raw blob owner writes; SDK/editor guards and close timers read.
+		// It marks activity, and does not replace raw callers' audio quiescence.
+		mutable std::atomic<bool> _blobSdkActive{false};
 		static constexpr std::uint32_t ExclusiveState = 0x80000000u;
 		struct ExclusiveRelease
 		{

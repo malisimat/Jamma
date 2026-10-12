@@ -3055,13 +3055,18 @@ std::vector<io::JamFile::VstEntry> Station::VstEntries() const
 	std::vector<io::JamFile::VstEntry> entries;
 
 	auto chain = _vstChain.load(std::memory_order_acquire);
-	std::lock_guard<std::mutex> lock(_vstPathsMutex);
-	entries.reserve(_vstPluginPaths.size());
+	std::vector<std::wstring> paths;
+	{
+		std::lock_guard<std::mutex> lock(_vstPathsMutex);
+		paths = _vstPluginPaths;
+	}
+	// Plugin state calls may pump native messages and reenter this owner.
+	entries.reserve(paths.size());
 
-	for (size_t i = 0; i < _vstPluginPaths.size(); ++i)
+	for (size_t i = 0; i < paths.size(); ++i)
 	{
 		io::JamFile::VstEntry entry;
-		entry.Path = utils::EncodeUtf8(_vstPluginPaths[i]);
+		entry.Path = utils::EncodeUtf8(paths[i]);
 		entry.Bypass = false;
 
 		if (chain && i < chain->NumPlugins())
@@ -3087,11 +3092,16 @@ std::vector<io::JamFile::VstEntry> Station::VstEntries() const
 bool Station::TryGroupVstEntries(std::vector<io::JamFile::VstEntry>& output) const
 {
 	auto chain = _vstChain.load(std::memory_order_acquire);
-	std::lock_guard<std::mutex> lock(_vstPathsMutex);
+	std::vector<std::wstring> paths;
+	{
+		std::lock_guard<std::mutex> lock(_vstPathsMutex);
+		paths = _vstPluginPaths;
+	}
+	// Plugin state calls may pump native messages and reenter this owner.
 	std::vector<io::JamFile::VstEntry> entries;
 	if (chain)
 	{
-		if (chain->NumPlugins() != _vstPluginPaths.size()) return false;
+		if (chain->NumPlugins() != paths.size()) return false;
 		entries.reserve(chain->NumPlugins());
 		for (size_t i = 0; i < chain->NumPlugins(); ++i)
 		{
@@ -3101,7 +3111,7 @@ bool Station::TryGroupVstEntries(std::vector<io::JamFile::VstEntry>& output) con
 			if (!plugin->TryCaptureLiveState(blob)) return false;
 			io::JamFile::VstEntry entry;
 			entry.Id = plugin->StateId();
-			entry.Path = utils::EncodeUtf8(_vstPluginPaths[i]);
+			entry.Path = utils::EncodeUtf8(paths[i]);
 			entry.Bypass = plugin->IsBypassed();
 			entry.State = io::JamFile::VstEntry::EncodeState(blob);
 			entries.push_back(std::move(entry));

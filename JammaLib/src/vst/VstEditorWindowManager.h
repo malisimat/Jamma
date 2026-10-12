@@ -43,6 +43,8 @@ namespace vst
 	private:
 		base::LoggingConfig _loggingConfig;
 		mutable std::mutex _vstEditorWindowsMutex;
-		std::vector<std::unique_ptr<graphics::VstEditorWindow>> _vstEditorWindows;
+		std::vector<std::shared_ptr<graphics::VstEditorWindow>> _vstEditorWindows;
+		// Reservations survive native message pumping during editor creation.
+		std::vector<const IVstPlugin*> _pendingEditorOpens;
 	};
 }

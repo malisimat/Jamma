@@ -7,6 +7,9 @@
 #include "engine/Loop.h"
 #include "vst/ReservedMidiEvents.h"
 #include "engine/LoopTake.h"
+#include "engine/Station.h"
+#include "vst/VstEditorWindowManager.h"
+#include <functional>
 
 using actions::JobAction;
 using engine::Loop;
@@ -338,6 +341,17 @@ public:
  void SetBypassed(bool) noexcept override {}
  bool IsBypassed() const noexcept override { return false; }
  bool Probe() const { PluginCallGuard call(*this); return static_cast<bool>(call); }
+ bool HousekeepingProbe() const { ExclusivePluginCallGuard call(*this); return static_cast<bool>(call); }
+ bool HousekeepingDuringCallback() const
+ {
+  PluginCallGuard callback(*this);
+  return HousekeepingProbe();
+ }
+ bool HousekeepingRejectsReentry() const
+ {
+  ExclusivePluginCallGuard housekeeping(*this);
+  return housekeeping && !Probe() && !HousekeepingProbe();
+ }
  bool CaptureDuringCallback(std::vector<std::uint8_t>& output)
  {
   PluginCallGuard callback(*this);
@@ -366,6 +380,17 @@ TEST(VstStaging, LiveCaptureRejectsActiveCallbackAndPreservesOutput)
  EXPECT_EQ(output, (std::vector<std::uint8_t>{1,2,3}));
  EXPECT_TRUE(plugin.ProbeRejected);
  EXPECT_TRUE(plugin.Probe());
+}
+
+TEST(VstStaging, ControllerHousekeepingDefersActiveReadersAndNestedMessagePump)
+{
+ StateGatePlugin plugin;
+ EXPECT_FALSE(plugin.HousekeepingDuringCallback());
+ EXPECT_TRUE(plugin.HousekeepingRejectsReentry());
+ EXPECT_TRUE(plugin.HousekeepingProbe());
+ EXPECT_TRUE(plugin.Probe());
+ // Housekeeping never changes the saved-state automation generation.
+ EXPECT_EQ(plugin.AutomationGeneration(), 0u);
 }
 
 TEST(VstStaging, FailedLiveCaptureKeepsExistingSnapshot)
@@ -548,4 +573,322 @@ TEST(VstStaging, MidiPanicSurvivesBypassUntilProcessorCanReceiveIt)
  plugin.SetBypassed(false);
  plugin.FlushPendingMidiPanic();
  for (auto count : plugin.Panics) EXPECT_EQ(count, 1u);
+}
+
+// Model plugins that pump native messages during getState: a message can
+// reenter metadata updates on the same owner before state capture returns.
+class ReentrantMetadataPlugin final : public StateGatePlugin
+{
+public:
+ std::function<void()> DuringCapture;
+ std::vector<std::uint8_t> GetState() const override
+ {
+  if (DuringCapture) DuringCapture();
+  return {1, 2, 3};
+ }
+};
+
+class VstMetadataReentryTest : public testing::Test
+{
+protected:
+ template<typename Owner, typename Capture>
+ static void CheckCapture(const std::shared_ptr<Owner>& owner, Capture capture)
+ {
+  auto plugin = std::make_shared<ReentrantMetadataPlugin>();
+  JobAction load;
+  load.JobActionType = JobAction::JOB_LOADVST;
+  load.VstPath = L"reentrant.vst3";
+  load.PreInitPlugin = plugin;
+  owner->OnAction(load);
+  owner->CommitChanges();
+  ASSERT_EQ(owner->GetVstPlugin(0u), plugin);
+
+  bool reentered = false;
+  plugin->DuringCapture = [&owner, &reentered] {
+   JobAction unload;
+   unload.JobActionType = JobAction::JOB_UNLOADVST;
+   unload.VstIndex = 0u;
+   owner->OnAction(unload);
+   reentered = true;
+  };
+  const auto entries = capture(*owner);
+  // The plugin can survive this test in a retired snapshot / destroy queue.
+  plugin->DuringCapture = {};
+  EXPECT_TRUE(reentered);
+  ASSERT_EQ(entries.size(), 1u);
+  EXPECT_EQ(entries[0].Path, "reentrant.vst3");
+  EXPECT_EQ(entries[0].DecodeState(), (std::vector<std::uint8_t>{1, 2, 3}));
+ }
+
+ static std::shared_ptr<engine::Station> MakeStation()
+ {
+  engine::StationParams params;
+  params.Id = "station-vst-reentry";
+  params.Size = {100u, 100u};
+  return std::make_shared<engine::Station>(params,
+   engine::Station::GetMixerParams(params.Size, MergeMixBehaviourParams{}));
+ }
+
+ template<typename Owner>
+ static std::vector<io::JamFile::VstEntry> CaptureGroup(Owner& owner)
+ {
+  std::vector<io::JamFile::VstEntry> entries;
+  EXPECT_TRUE(owner.TryGroupVstEntries(entries));
+  return entries;
+ }
+};
+
+TEST_F(VstMetadataReentryTest, LoopFileCaptureAllowsReentrantMetadataUpdate)
+{
+ CheckCapture(MakeLoop(), [](Loop& loop) { return loop.ToJamFile("loop.wav").VstChain; });
+}
+
+TEST_F(VstMetadataReentryTest, TakeFileCaptureAllowsReentrantMetadataUpdate)
+{
+ CheckCapture(MakeTake(), [](LoopTake& take) { return take.VstEntries(); });
+}
+
+TEST_F(VstMetadataReentryTest, TakeGroupCaptureAllowsReentrantMetadataUpdate)
+{
+ CheckCapture(MakeTake(), [](LoopTake& take) { return CaptureGroup(take); });
+}
+
+TEST_F(VstMetadataReentryTest, StationFileCaptureAllowsReentrantMetadataUpdate)
+{
+ CheckCapture(MakeStation(), [](engine::Station& station) { return station.VstEntries(); });
+}
+
+TEST_F(VstMetadataReentryTest, StationGroupCaptureAllowsReentrantMetadataUpdate)
+{
+ CheckCapture(MakeStation(), [](engine::Station& station) { return CaptureGroup(station); });
+}
+
+class ReentrantEditorDestructionPlugin final : public StateGatePlugin
+{
+public:
+ HWND EditorParent = nullptr;
+ std::function<void()> DuringDestruction;
+ ~ReentrantEditorDestructionPlugin() override
+ {
+  if (DuringDestruction) DuringDestruction();
+ }
+ bool OpenEditor(HWND parent) override
+ {
+  EditorParent = parent;
+  return true;
+ }
+ utils::Size2d GetEditorSize() const noexcept override
+ {
+  // Close while Create still owns a hidden frame, before ShowWindow.
+  // The closed manager entry retains the final plugin reference until prune.
+  SendMessage(EditorParent, WM_CLOSE, 0, 0);
+  return {0, 0};
+ }
+};
+
+TEST(VstStaging, PruningClosedEditorAllowsReentrantPluginDestruction)
+{
+ vst::VstEditorWindowManager manager;
+ bool reentered = false;
+ auto plugin = std::make_shared<ReentrantEditorDestructionPlugin>();
+ plugin->DuringDestruction = [&] {
+  manager.PruneClosedVstEditorWindows();
+  reentered = true;
+ };
+ ASSERT_TRUE(manager.OpenVstEditorForPlugin(plugin));
+ EXPECT_FALSE(IsWindow(plugin->EditorParent));
+ plugin.reset();
+ EXPECT_FALSE(reentered);
+ manager.PruneClosedVstEditorWindows();
+ EXPECT_TRUE(reentered);
+}
+class ReentrantEditorIdlePlugin final : public StateGatePlugin
+{
+public:
+ HWND EditorParent = nullptr;
+ unsigned int IdleCalls = 0;
+ bool OpenEditor(HWND parent) override { EditorParent = parent; return true; }
+ void IdleEditor() noexcept override
+ {
+  ++IdleCalls;
+  if (IdleCalls == 1u)
+  {
+   SendMessage(EditorParent, WM_TIMER, 1, 0);
+   SendMessage(EditorParent, graphics::VstEditorWindow::MessageVst2Idle, 0, 0);
+  }
+ }
+};
+
+TEST(VstStaging, EditorIdleRejectsNestedTimerAndVst2IdleMessages)
+{
+ auto plugin = std::make_shared<ReentrantEditorIdlePlugin>();
+ graphics::VstEditorWindow editor;
+ ASSERT_TRUE(editor.Create(GetModuleHandle(nullptr), plugin));
+ SendMessage(editor.EditorHwnd(), WM_TIMER, 1, 0);
+ EXPECT_EQ(plugin->IdleCalls, 1u);
+ SendMessage(editor.EditorHwnd(), graphics::VstEditorWindow::MessageVst2Idle, 0, 0);
+ EXPECT_EQ(plugin->IdleCalls, 2u);
+ editor.Destroy();
+}
+
+class ReentrantEditorLifetimePlugin final : public StateGatePlugin
+{
+public:
+ HWND EditorParent = nullptr;
+ vst::VstEditorWindowManager* Manager = nullptr;
+ std::weak_ptr<graphics::VstEditorWindow> Editor;
+ bool KeptAliveDuringIdle = false;
+ bool OpenEditor(HWND parent) override { EditorParent = parent; return true; }
+ void IdleEditor() noexcept override
+ {
+  auto* editor = reinterpret_cast<graphics::VstEditorWindow*>(
+   GetWindowLongPtr(EditorParent, GWLP_USERDATA));
+  Editor = editor->weak_from_this();
+  SendMessage(EditorParent, WM_CLOSE, 0, 0);
+  Manager->PruneClosedVstEditorWindows();
+  Manager->CloseAllVstEditorWindows();
+  KeptAliveDuringIdle = !Editor.expired() && IsWindow(EditorParent);
+ }
+};
+
+TEST(VstStaging, EditorSurvivesReentrantClosePruneAndManagerRemovalDuringIdle)
+{
+ vst::VstEditorWindowManager manager;
+ auto plugin = std::make_shared<ReentrantEditorLifetimePlugin>();
+ plugin->Manager = &manager;
+ ASSERT_TRUE(manager.OpenVstEditorForPlugin(plugin));
+ SendMessage(plugin->EditorParent, graphics::VstEditorWindow::MessageVst2Idle, 0, 0);
+ EXPECT_TRUE(plugin->KeptAliveDuringIdle);
+ EXPECT_TRUE(plugin->Editor.expired());
+ EXPECT_FALSE(IsWindow(plugin->EditorParent));
+}
+
+class ReentrantEditorOpenPlugin final : public StateGatePlugin
+{
+public:
+ HWND EditorParent = nullptr;
+ unsigned int OpenCalls = 0;
+ bool NestedResult = true;
+ bool FailOpen = false;
+ std::function<bool()> Reopen;
+ bool OpenEditor(HWND parent) override
+ {
+  EditorParent = parent;
+  ++OpenCalls;
+  // Bound a failing regression rather than overflowing the test's stack.
+  if (OpenCalls == 1u) NestedResult = Reopen();
+  return !FailOpen;
+ }
+ utils::Size2d GetEditorSize() const noexcept override
+ {
+  SendMessage(EditorParent, WM_CLOSE, 0, 0);
+  return {0, 0};
+ }
+};
+
+TEST(VstStaging, ReentrantEditorCreateForSamePluginIsBounded)
+{
+ vst::VstEditorWindowManager manager;
+ auto plugin = std::make_shared<ReentrantEditorOpenPlugin>();
+ std::weak_ptr<ReentrantEditorOpenPlugin> weakPlugin = plugin;
+ plugin->Reopen = [&manager, weakPlugin] { return manager.OpenVstEditorForPlugin(weakPlugin.lock()); };
+ ASSERT_TRUE(manager.OpenVstEditorForPlugin(plugin));
+ EXPECT_FALSE(plugin->NestedResult);
+ EXPECT_EQ(plugin->OpenCalls, 1u);
+ manager.PruneClosedVstEditorWindows();
+ // The pending reservation is released even though the editor closed in Create.
+ EXPECT_TRUE(manager.OpenVstEditorForPlugin(plugin));
+ EXPECT_EQ(plugin->OpenCalls, 2u);
+}
+
+TEST(VstStaging, FailedEditorCreateReleasesPendingReservation)
+{
+ vst::VstEditorWindowManager manager;
+ auto plugin = std::make_shared<ReentrantEditorOpenPlugin>();
+ std::weak_ptr<ReentrantEditorOpenPlugin> weakPlugin = plugin;
+ plugin->Reopen = [&manager, weakPlugin] { return manager.OpenVstEditorForPlugin(weakPlugin.lock()); };
+ plugin->FailOpen = true;
+ EXPECT_FALSE(manager.OpenVstEditorForPlugin(plugin));
+ EXPECT_FALSE(plugin->NestedResult);
+ plugin->FailOpen = false;
+ EXPECT_TRUE(manager.OpenVstEditorForPlugin(plugin));
+ EXPECT_EQ(plugin->OpenCalls, 2u);
+}
+class ReentrantEditorStateClosePlugin final : public StateGatePlugin
+{
+public:
+ HWND EditorParent = nullptr;
+ vst::VstEditorWindowManager* Manager = nullptr;
+ mutable std::weak_ptr<graphics::VstEditorWindow> Editor;
+ mutable bool KeptAliveDuringState = false;
+ mutable bool NestedSdkRejected = false;
+ mutable bool NestedLiveStateRejected = false;
+ unsigned int CloseCalls = 0;
+ bool ClosedDuringState = false;
+ bool OpenEditor(HWND parent) override { EditorParent = parent; return true; }
+ void CloseEditor() override
+ {
+  ++CloseCalls;
+  ClosedDuringState = IsStateOperationActive();
+ }
+ std::vector<std::uint8_t> GetState() const override
+ {
+  BlobSdkCallGuard blobCall(*this);
+  if (!blobCall) return {};
+  NestedSdkRejected = !Probe() && !HousekeepingProbe() && GetState().empty();
+  std::vector<std::uint8_t> nestedOutput{9};
+  NestedLiveStateRejected = !TryCaptureLiveState(nestedOutput)
+   && nestedOutput == std::vector<std::uint8_t>{9};
+  auto* editor = reinterpret_cast<graphics::VstEditorWindow*>(
+   GetWindowLongPtr(EditorParent, GWLP_USERDATA));
+  Editor = editor->weak_from_this();
+  SendMessage(EditorParent, WM_CLOSE, 0, 0);
+  Manager->CloseAllVstEditorWindows();
+  // Repeated pump ticks must neither detach nor continually repost WM_CLOSE.
+  for (unsigned int tick = 0u; tick < 3u; ++tick)
+   SendMessage(EditorParent, WM_TIMER, 1, 0);
+  KeptAliveDuringState = !Editor.expired() && IsWindow(EditorParent) && CloseCalls == 0u;
+  return {1, 2, 3};
+ }
+};
+
+TEST(VstStaging, EditorCloseAndManagerRemovalWaitUntilExclusiveStateCaptureReturns)
+{
+ vst::VstEditorWindowManager manager;
+ auto plugin = std::make_shared<ReentrantEditorStateClosePlugin>();
+ plugin->Manager = &manager;
+ ASSERT_TRUE(manager.OpenVstEditorForPlugin(plugin));
+ std::vector<std::uint8_t> state;
+ ASSERT_TRUE(plugin->TryCaptureLiveState(state));
+ EXPECT_TRUE(plugin->KeptAliveDuringState);
+ EXPECT_FALSE(plugin->Editor.expired());
+ EXPECT_TRUE(IsWindow(plugin->EditorParent));
+ EXPECT_EQ(plugin->CloseCalls, 0u);
+ // The existing timer completes close once the exclusive gate is released.
+ SendMessage(plugin->EditorParent, WM_TIMER, 1, 0);
+ EXPECT_EQ(plugin->CloseCalls, 1u);
+ EXPECT_FALSE(plugin->ClosedDuringState);
+ EXPECT_TRUE(plugin->Editor.expired());
+ EXPECT_FALSE(IsWindow(plugin->EditorParent));
+}
+
+TEST(VstStaging, RawStateCaptureDefersEditorCloseAndRejectsNestedSdkEntry)
+{
+ vst::VstEditorWindowManager manager;
+ auto plugin = std::make_shared<ReentrantEditorStateClosePlugin>();
+ plugin->Manager = &manager;
+ ASSERT_TRUE(manager.OpenVstEditorForPlugin(plugin));
+ EXPECT_EQ(plugin->GetState(), (std::vector<std::uint8_t>{1, 2, 3}));
+ EXPECT_TRUE(plugin->NestedSdkRejected);
+ EXPECT_TRUE(plugin->NestedLiveStateRejected);
+ EXPECT_TRUE(plugin->KeptAliveDuringState);
+ EXPECT_FALSE(plugin->IsStateOperationActive());
+ EXPECT_TRUE(IsWindow(plugin->EditorParent));
+ EXPECT_EQ(plugin->CloseCalls, 0u);
+ SendMessage(plugin->EditorParent, WM_TIMER, 1, 0);
+ EXPECT_EQ(plugin->CloseCalls, 1u);
+ EXPECT_FALSE(plugin->ClosedDuringState);
+ EXPECT_TRUE(plugin->Editor.expired());
+ EXPECT_FALSE(IsWindow(plugin->EditorParent));
+ EXPECT_TRUE(plugin->Probe());
 }

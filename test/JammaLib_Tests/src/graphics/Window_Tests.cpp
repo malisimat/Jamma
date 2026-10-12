@@ -188,3 +188,165 @@ TEST(Window, DeferredCaptureLossDoesNotCancelANewerMousePress)
     EXPECT_TRUE(window.CancelMouseCapture());
     DestroyWindow(host);
 }
+
+class NativeReentryScene final : public Scene
+{
+public:
+	NativeReentryScene() : Scene(SceneParams(base::DrawableParams(),
+		base::MoveableParams(), base::SizeableParams({ 640u, 480u })), {}) {}
+	actions::ActionResult OnAction(actions::KeyAction action) override
+	{
+		++KeyCalls;
+		if (action.KeyChar == 49u)
+		{
+			InsidePluginCall = true;
+			if (Destroy)
+				Window::WindowProcedure(Host, WM_DESTROY, 0, 0);
+			else if (Overflow)
+			{
+				for (unsigned int index = 0u; index < 300u; ++index)
+					Window::WindowProcedure(Host, WM_KEYDOWN, 50u, 0);
+			}
+			else
+			{
+				Window::WindowProcedure(Host, WM_KEYUP, 50u, 0);
+				Window::WindowProcedure(Host, WM_SIZE, SIZE_RESTORED, MAKELPARAM(320, 200));
+				Window::WindowProcedure(Host, WM_MOVE, 0, 0);
+				// This would attempt a nested GL render and Scene lock acquisition.
+				Window::WindowProcedure(Host, WM_SIZING, 0, 0);
+			}
+			EXPECT_EQ(1u, KeyCalls);
+			EXPECT_EQ(640u, Owner->GetSize().Width);
+			InsidePluginCall = false;
+		}
+		else EXPECT_FALSE(InsidePluginCall);
+		return actions::ActionResult::NoAction();
+	}
+	actions::ActionResult OnAction(actions::TouchAction) override
+	{
+		return actions::ActionResult::NoAction();
+	}
+	actions::ActionResult OnAction(actions::TouchMoveAction) override
+	{
+		EXPECT_FALSE(InsidePluginCall);
+		++CancelCalls;
+		return actions::ActionResult::NoAction();
+	}
+	HWND Host = nullptr;
+	Window* Owner = nullptr;
+	bool InsidePluginCall = false;
+	bool Overflow = false;
+	bool Destroy = false;
+	unsigned int CancelCalls = 0u;
+	unsigned int KeyCalls = 0u;
+};
+
+TEST(Window, PluginPumpedInputAndResizeWaitUntilOuterSceneDispatchReturns)
+{
+	NativeReentryScene scene;
+	ResourceLib resources;
+	Window window(scene, resources);
+	const auto host = CreateWindowExW(0, L"STATIC", L"", 0, 0, 0, 0, 0,
+		HWND_MESSAGE, nullptr, GetModuleHandleW(nullptr), nullptr);
+	ASSERT_NE(host, nullptr);
+	SetWindowLongPtrW(host, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(&window));
+	scene.Host = host;
+	scene.Owner = &window;
+	actions::KeyAction key;
+	key.KeyChar = 49u;
+	key.KeyActionType = actions::KeyAction::KEY_DOWN;
+	window.OnAction(key);
+	EXPECT_EQ(1u, scene.KeyCalls);
+	MSG pending{};
+	unsigned int keysDelivered = 0u;
+	unsigned int sizesDelivered = 0u;
+	unsigned int movesDelivered = 0u;
+	while (PeekMessageW(&pending, host, 0, 0, PM_REMOVE))
+	{
+		if (pending.message == WM_KEYUP) ++keysDelivered;
+		if (pending.message == WM_SIZE) ++sizesDelivered;
+		if (pending.message == WM_MOVE) ++movesDelivered;
+		Window::WindowProcedure(host, pending.message, pending.wParam, pending.lParam);
+	}
+	EXPECT_EQ(1u, keysDelivered);
+	EXPECT_EQ(1u, sizesDelivered);
+	EXPECT_EQ(1u, movesDelivered);
+	EXPECT_EQ(2u, scene.KeyCalls);
+	EXPECT_EQ(320u, window.GetSize().Width);
+	EXPECT_EQ(200u, scene.GetSize().Height);
+	DestroyWindow(host);
+}
+
+TEST(Window, NativeReentryOverflowDropsWholeGestureAndRequestsInputReset)
+{
+	NativeReentryScene scene;
+	ResourceLib resources;
+	Window window(scene, resources);
+	const auto host = CreateWindowExW(0, L"STATIC", L"", 0, 0, 0, 0, 0,
+		HWND_MESSAGE, nullptr, GetModuleHandleW(nullptr), nullptr);
+	ASSERT_NE(host, nullptr);
+	SetWindowLongPtrW(host, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(&window));
+	scene.Host = host;
+	scene.Owner = &window;
+	scene.Overflow = true;
+	actions::KeyAction key;
+	key.KeyChar = 49u;
+	key.KeyActionType = actions::KeyAction::KEY_DOWN;
+	window.OnAction(key);
+	MSG pending{};
+	EXPECT_FALSE(PeekMessageW(&pending, host, WM_KEYFIRST, WM_KEYLAST, PM_REMOVE));
+	EXPECT_EQ(1u, scene.KeyCalls);
+	EXPECT_TRUE(window.ProcessDeferredInputLoss());
+	EXPECT_FALSE(window.ProcessDeferredInputLoss());
+	DestroyWindow(host);
+}
+
+class NativeDestroyWindow final : public Window
+{
+public:
+	NativeDestroyWindow(NativeReentryScene& scene, ResourceLib& resources) :
+		Window(scene, resources), _scene(scene) {}
+	using Window::OnAction;
+	actions::ActionResult OnAction(actions::WindowAction action) override
+	{
+		if (action.WindowEventType == actions::WindowAction::DESTROY)
+		{
+			EXPECT_FALSE(_scene.InsidePluginCall);
+			++DestroyCalls;
+		}
+		return Window::OnAction(action);
+	}
+	unsigned int DestroyCalls = 0u;
+private:
+	NativeReentryScene& _scene;
+};
+
+TEST(Window, PluginPumpedNativeDestroyCancelsCaptureAfterSceneDispatchReturns)
+{
+	NativeReentryScene scene;
+	ResourceLib resources;
+	NativeDestroyWindow window(scene, resources);
+	const auto host = CreateWindowExW(0, L"STATIC", L"", 0, 0, 0, 0, 0,
+		HWND_MESSAGE, nullptr, GetModuleHandleW(nullptr), nullptr);
+	ASSERT_NE(host, nullptr);
+	SetWindowLongPtrW(host, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(&window));
+	scene.Host = host;
+	scene.Owner = &window;
+	scene.Destroy = true;
+	actions::TouchAction touch;
+	touch.State = actions::TouchAction::TOUCH_DOWN;
+	window.OnAction(touch);
+	actions::KeyAction key;
+	key.KeyChar = 49u;
+	key.KeyActionType = actions::KeyAction::KEY_DOWN;
+	window.OnAction(key);
+	EXPECT_EQ(1u, scene.CancelCalls);
+	EXPECT_EQ(1u, window.DestroyCalls);
+	EXPECT_FALSE(window.CancelMouseCapture());
+	MSG quit{};
+	// PostQuitMessage is a lazy thread-queue notification, so it need not be
+	// visible while unrelated messages remain. The action/cancellation above
+	// directly verify the deferred teardown contract.
+	PeekMessageW(&quit, nullptr, WM_QUIT, WM_QUIT, PM_REMOVE);
+	DestroyWindow(host);
+}

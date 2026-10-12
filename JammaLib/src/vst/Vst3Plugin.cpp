@@ -670,16 +670,33 @@ public:
 			inputParameterChanges->BeginBlock();
 	}
 
-	void BuildParameterMaps() noexcept
+	// Plugin SDK calls can pump the editor timer even during unpublished load.
+	// Serialize writers with a bounded gate; a nested caller leaves work pending.
+	std::atomic_flag controllerRebuildActive = ATOMIC_FLAG_INIT;
+	class ControllerRebuildGuard
 	{
+	public:
+		explicit ControllerRebuildGuard(std::atomic_flag& active) noexcept : _active(active),
+			_entered(!active.test_and_set(std::memory_order_acquire)) {}
+		~ControllerRebuildGuard() { if (_entered) _active.clear(std::memory_order_release); }
+		explicit operator bool() const noexcept { return _entered; }
+	private:
+		std::atomic_flag& _active;
+		bool _entered;
+	};
+
+	bool BuildParameterMaps() noexcept
+	{
+		ControllerRebuildGuard rebuild(controllerRebuildActive);
+		if (!rebuild) return false;
 		hostIndexToParamId.clear();
 		paramIdToHostIndex.clear();
 		if (!controller)
-			return;
+			return true;
 
 		const auto count = controller->getParameterCount();
 		if (count <= 0)
-			return;
+			return true;
 
 		hostIndexToParamId.resize(static_cast<size_t>(count), static_cast<ParamID>(0));
 		for (int32 i = 0; i < count; ++i)
@@ -691,6 +708,7 @@ public:
 			hostIndexToParamId[static_cast<size_t>(i)] = info.id;
 			paramIdToHostIndex[static_cast<std::uint32_t>(info.id)] = static_cast<unsigned int>(i);
 		}
+		return true;
 	}
 
 	bool TryGetHostIndexForParamId(ParamID paramId, unsigned int& hostIndex) const noexcept
@@ -719,25 +737,24 @@ public:
 	// Vst3MidiMapping::ParameterTable to the audio thread without ever
 	// freeing memory there (see Vst3MidiMapping.h). midiMappingAdoptedSlot is
 	// audio-thread-only bookkeeping, touched only from BeginMidiBlock/
-	// SendMidiEvent. midiMapRebuildRequested / midiMapRebuildMutex serialize
+	// SendMidiEvent. controllerRebuildActive serializes
 	// whichever non-RT thread(s) call RebuildMidiControllerMap() (the editor
-	// idle timer via IdleEditor(), and GetState() via
-	// PollPendingControllerChanges()).
+	// idle timer via IdleEditor(), and explicit non-RT polls).
 	Steinberg::IPtr<Steinberg::Vst::IMidiMapping> midiMapping;
 	Vst3MidiMapping::ParameterTableMailbox midiMappingMailbox;
 	int midiMappingAdoptedSlot = 0;
 	std::atomic<bool> midiMapRebuildRequested{ false };
-	std::mutex midiMapRebuildMutex;
 
 	// Rebuilds the fixed MIDI-controller-to-parameter table from scratch and
 	// publishes it. Not RT-safe; called only from Load(), SetState(), and
-	// PollPendingControllerChanges(). Returns false only when the mailbox
-	// producer slot was not yet free (previous publish not yet adopted by
+	// PollPendingControllerChanges(). Returns false when another rebuild is
+	// active or the producer slot was not yet free (previous publish not adopted by
 	// the audio thread) — the caller should leave the rebuild-requested flag
 	// set so it is retried on the next poll.
 	bool RebuildMidiControllerMap() noexcept
 	{
-		std::lock_guard<std::mutex> lock(midiMapRebuildMutex);
+		ControllerRebuildGuard rebuild(controllerRebuildActive);
+		if (!rebuild) return false;
 
 		if (!midiMapping || !component)
 			return true; // Nothing to build; leave the table empty.
@@ -1434,7 +1451,8 @@ bool Vst3Plugin::Load(const std::wstring& path,
 		std::cout << "[Vst3Plugin] No controller available (editor may not open)" << std::endl;
 	else
 	{
-		_impl->BuildParameterMaps();
+		if (!_impl->BuildParameterMaps())
+			_impl->paramTitlesRebuildRequested.store(true, std::memory_order_release);
 		_impl->controller->setComponentHandler(_impl->componentHandler.get());
 
 		IMidiMapping* rawMidiMapping = nullptr;
@@ -1442,7 +1460,8 @@ bool Vst3Plugin::Load(const std::wstring& path,
 			&& rawMidiMapping)
 		{
 			_impl->midiMapping = IPtr<IMidiMapping>(rawMidiMapping, false);
-			_impl->RebuildMidiControllerMap();
+			if (!_impl->RebuildMidiControllerMap())
+				_impl->midiMapRebuildRequested.store(true, std::memory_order_release);
 			std::cout << "[Vst3Plugin] IMidiMapping available; controller mapping table built" << std::endl;
 		}
 	}
@@ -2059,8 +2078,6 @@ utils::Size2d Vst3Plugin::GetEditorSize() const noexcept
 
 void Vst3Plugin::IdleEditor() noexcept
 {
-	PluginCallGuard stateCall(*this);
-	if (!stateCall) return;
 #ifdef JAMMA_VST3_ENABLED
 	PollPendingControllerChanges();
 #endif
@@ -2068,16 +2085,22 @@ void Vst3Plugin::IdleEditor() noexcept
 
 void Vst3Plugin::PollPendingControllerChanges() const noexcept
 {
-	PluginCallGuard stateCall(*this);
-	if (!stateCall) return;
 #ifdef JAMMA_VST3_ENABLED
-	if (!_impl)
-		return;
+	{
+		PluginCallGuard probe(*this);
+		if (!probe || !_impl) return;
+		if (!_impl->midiMapRebuildRequested.load(std::memory_order_acquire)
+			&& !_impl->paramTitlesRebuildRequested.load(std::memory_order_acquire)
+			&& !_impl->paramValuesRefreshRequested.load(std::memory_order_acquire)) return;
+	}
+	// Release the reader before trying exclusive entry. A failed acquisition
+	// leaves all request flags intact for the next idle; empty polls skip this.
+	ExclusivePluginCallGuard stateCall(*this);
+	if (!stateCall) return;
 
 	if (_impl->midiMapRebuildRequested.exchange(false, std::memory_order_acq_rel))
 	{
-		// RebuildMidiControllerMap() returns false only when the mailbox's
-		// previous publish has not yet been adopted by the audio thread;
+		// A nested rebuild or a mailbox publish not yet adopted by the audio thread
 		// leave the flag set so the next poll retries.
 		if (!_impl->RebuildMidiControllerMap())
 			_impl->midiMapRebuildRequested.store(true, std::memory_order_release);
@@ -2088,7 +2111,8 @@ void Vst3Plugin::PollPendingControllerChanges() const noexcept
 		// Parameter list/titles changed (e.g. after a program change):
 		// rebuild the host-index <-> ParamID maps used by SetParameter/
 		// GetParameter/OnControllerEdit.
-		_impl->BuildParameterMaps();
+		if (!_impl->BuildParameterMaps())
+			_impl->paramTitlesRebuildRequested.store(true, std::memory_order_release);
 	}
 
 	if (_impl->paramValuesRefreshRequested.exchange(false, std::memory_order_acq_rel))
@@ -2121,6 +2145,8 @@ void Vst3Plugin::PollPendingControllerChanges() const noexcept
 
 std::vector<std::uint8_t> Vst3Plugin::GetState() const
 {
+	BlobSdkCallGuard blobCall(*this);
+	if (!blobCall) return {};
 #ifdef JAMMA_VST3_ENABLED
 	if (!_isLoaded || !_impl || !_impl->component)
 		return {};
@@ -2147,6 +2173,8 @@ std::vector<std::uint8_t> Vst3Plugin::GetState() const
 
 void Vst3Plugin::SetState(const std::vector<std::uint8_t>& blob)
 {
+	BlobSdkCallGuard blobCall(*this);
+	if (!blobCall) return;
 #ifdef JAMMA_VST3_ENABLED
 	if (blob.empty() || !_isLoaded || !_impl || !_impl->component)
 		return;
@@ -2183,9 +2211,13 @@ void Vst3Plugin::SetState(const std::vector<std::uint8_t>& blob)
 		}
 
 		// Restored programs may change parameter IDs or MIDI-CC assignments.
-		_impl->BuildParameterMaps();
+		if (!_impl->BuildParameterMaps())
+			_impl->paramTitlesRebuildRequested.store(true, std::memory_order_release);
 		if (_impl->midiMapping)
-			_impl->RebuildMidiControllerMap();
+		{
+			if (!_impl->RebuildMidiControllerMap())
+				_impl->midiMapRebuildRequested.store(true, std::memory_order_release);
+		}
 	}
 #else
 	(void)blob;

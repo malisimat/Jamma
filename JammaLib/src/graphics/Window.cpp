@@ -391,6 +391,7 @@ Action::Modifiers Window::Modifiers() const
 
 void Window::ClearModifiers()
 {
+	SceneDispatchScope dispatch(*this);
 	// Dispatch synthetic key-up events for any modifier we still believe is
 	// held. Routing them through the normal action path resets both the
 	// modifier bitmask and any scene state keyed off those releases (e.g. the
@@ -428,6 +429,7 @@ void Window::SetTrackingMouse(bool tracking)
 
 void Window::Resize(Size2d size)
 {
+	SceneDispatchScope dispatch(*this);
 	if (HasRelativePointer() || size.Width == 0 || size.Height == 0) CancelMouseCapture();
 
 	_config.Size = size;
@@ -494,15 +496,18 @@ Size2d Window::GetSize()
 
 void Window::Render()
 {
+	SceneDispatchScope dispatch(*this);
 	ProcessDeferredInputLoss();
 	GlDeleteQueue::FlushPendingDeletes();
 	ApplyPendingResize();
 
 	_scene->CommitChanges();
+	if (_nativeDestroyPending) return;
 	if (_config.Size.Width == 0 || _config.Size.Height == 0) return;
 	_scene->UpdateCamera();
 	_scene->InitResources(_resourceLib, false);
 	_scene->AdvanceUiAnimations();
+	if (_nativeDestroyPending) return;
 	// A plugin state call can synchronously send WM_KILLFOCUS while Scene's
 	// non-audio lock is held. Drain only after that call and its lock unwind.
 	ProcessDeferredInputLoss();
@@ -623,6 +628,7 @@ void Window::Release()
 
 ActionResult Window::OnAction(WindowAction winAction)
 {
+	SceneDispatchScope dispatch(*this);
 	auto isEaten = false;
 
 	switch (winAction.WindowEventType)
@@ -653,6 +659,7 @@ ActionResult Window::OnAction(WindowAction winAction)
 
 ActionResult Window::OnAction(TouchAction touchAction)
 {
+	SceneDispatchScope dispatch(*this);
 	if (_config.Size.Width == 0 || _config.Size.Height == 0) return ActionResult::NoAction();
 	if (HasRelativePointer() && touchAction.Touch == TouchAction::TOUCH_MOUSE
 		&& touchAction.State == TouchAction::TOUCH_UP && touchAction.Index == _relativeButton)
@@ -705,6 +712,7 @@ ActionResult Window::OnAction(TouchAction touchAction)
 
 ActionResult Window::OnAction(TouchMoveAction touchAction)
 {
+	SceneDispatchScope dispatch(*this);
 	if (_config.Size.Width == 0 || _config.Size.Height == 0) return ActionResult::NoAction();
 	_cachedCursorPosition = touchAction.Position;
 	_cachedCursorModifiers = touchAction.Modifiers;
@@ -715,6 +723,7 @@ ActionResult Window::OnAction(TouchMoveAction touchAction)
 
 bool Window::CancelMouseCapture()
 {
+	SceneDispatchScope dispatch(*this);
 	if (_buttonsDown == 0u && !HasRelativePointer()) return false;
 	EndRelativePointer(_relativeButton);
 	_buttonsDown = 0u;
@@ -732,6 +741,7 @@ bool Window::CancelMouseCapture()
 
 bool Window::ProcessDeferredInputLoss()
 {
+	SceneDispatchScope dispatch(*this);
 	const bool focusLost = _focusLossPending;
 	const bool captureLost = _captureLossPending;
 	_focusLossPending = _captureLossPending = false;
@@ -747,6 +757,7 @@ bool Window::ProcessDeferredInputLoss()
 
 ActionResult Window::OnAction(KeyAction keyAction)
 {
+	SceneDispatchScope dispatch(*this);
 	// Handle modifiers
 	int modifiers = _modifiers;
 
@@ -806,6 +817,7 @@ ActionResult Window::OnAction(KeyAction keyAction)
 
 void Window::ReplaceScene(Scene& scene)
 {
+	SceneDispatchScope dispatch(*this);
 	ProcessDeferredInputLoss();
 	CancelMouseCapture();
 	_scene->SetRelativePointerHost({}, {});
@@ -930,6 +942,83 @@ void Window::InitStyle(WNDCLASSEX& wcex) noexcept
 	wcex.style = CS_HREDRAW | CS_VREDRAW | CS_OWNDC;
 }
 
+Window::SceneDispatchScope::~SceneDispatchScope() noexcept
+{
+	if (--_window._sceneDispatchDepth != 0u) return;
+	if (_window._nativeDestroyPending)
+	{
+		_window._nativeDestroyPending = false;
+		_window._deferredNativeMessageCount = 0u;
+		_window.CancelMouseCapture();
+		WindowAction action;
+		action.WindowEventType = WindowAction::DESTROY;
+		_window.OnAction(action);
+		PostQuitMessage(0);
+		return;
+	}
+	// Plugins can pump the native queue while Scene owns a non-recursive lock.
+	// Repost only after the outer call and all its local locks have unwound.
+	const auto count = _window._deferredNativeMessageCount;
+	_window._deferredNativeMessageCount = 0u;
+	_window._deferredNativeOverflow = false;
+	for (std::size_t index = 0u; index < count; ++index)
+	{
+		const auto& pending = _window._deferredNativeMessages[index];
+		if (IsWindow(pending.WindowHandle))
+			PostMessageW(pending.WindowHandle, pending.Message, pending.WParam, pending.LParam);
+	}
+}
+
+bool Window::_DeferNativeSceneMessage(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam) noexcept
+{
+	if (_sceneDispatchDepth == 0u) return false;
+	switch (message)
+	{
+	case WM_SIZING:
+		// The normal UI frame will draw the resized client after this call returns.
+		return true;
+	case WM_INPUT:
+		// HRAWINPUT belongs to this delivery and cannot be reposted safely.
+		_captureLossPending = true;
+		return true;
+	case WM_DPICHANGED:
+		// lParam points at a RECT whose lifetime ends with this native call.
+		if (HasRelativePointer()) _captureLossPending = true;
+		return true;
+	case WM_DESTROY:
+		_nativeDestroyPending = true;
+		return true;
+	case WM_SIZE: case WM_MOVE:
+	case WM_LBUTTONDOWN: case WM_LBUTTONUP: case WM_LBUTTONDBLCLK:
+	case WM_MBUTTONDOWN: case WM_MBUTTONUP: case WM_MBUTTONDBLCLK:
+	case WM_RBUTTONDOWN: case WM_RBUTTONUP: case WM_RBUTTONDBLCLK:
+	case WM_MOUSEMOVE: case WM_MOUSEWHEEL:
+	case WM_KEYDOWN: case WM_KEYUP: case WM_SYSKEYDOWN: case WM_SYSKEYUP:
+		if (_deferredNativeOverflow) return true;
+		if (message == WM_MOUSEMOVE && _deferredNativeMessageCount != 0u)
+		{
+			auto& previous = _deferredNativeMessages[_deferredNativeMessageCount - 1u];
+			if (previous.Message == WM_MOUSEMOVE && previous.WindowHandle == hwnd)
+			{
+				previous = { hwnd, message, wParam, lParam };
+				return true;
+			}
+		}
+		if (_deferredNativeMessageCount < _deferredNativeMessages.size())
+			_deferredNativeMessages[_deferredNativeMessageCount++] = { hwnd, message, wParam, lParam };
+		else
+		{
+			// Discard the entire partial gesture; never replay an unmatched down.
+			_deferredNativeMessageCount = 0u;
+			_deferredNativeOverflow = true;
+			_focusLossPending = true;
+		}
+		return true;
+	default:
+		return false;
+	}
+}
+
 LRESULT CALLBACK Window::WindowProcedure(HWND hWindow, UINT message, WPARAM wParam, LPARAM lParam) noexcept
 {
 	Window* window = nullptr;
@@ -949,6 +1038,8 @@ LRESULT CALLBACK Window::WindowProcedure(HWND hWindow, UINT message, WPARAM wPar
 
 	if (!window)
 		return DefWindowProc(hWindow, message, wParam, lParam);
+	if (window->_DeferNativeSceneMessage(hWindow, message, wParam, lParam))
+		return message == WM_INPUT ? DefWindowProc(hWindow, message, wParam, lParam) : 0;
 
 	switch (message)
 	{
@@ -1493,7 +1584,16 @@ void Window::_ResamplePointer()
 	_forcePick = true;
 	// Resume hover at the current cursor position after editor teardown.
 	MSG pending{};
-	while (PeekMessage(&pending, _wnd, WM_MOUSEMOVE, WM_MOUSEMOVE, PM_REMOVE)) {}
+	while (PeekMessage(&pending, _wnd, WM_MOUSEMOVE, WM_MOUSEMOVE, PM_REMOVE))
+	{
+		// WM_QUIT bypasses PeekMessage's filters. Preserve shutdown rather than
+		// consuming it while discarding synthetic pointer movements.
+		if (pending.message == WM_QUIT)
+		{
+			PostQuitMessage(static_cast<int>(pending.wParam));
+			break;
+		}
+	}
 	PostMessage(_wnd, WM_MOUSEMOVE, 0, MAKELPARAM(cursor.x, cursor.y));
 }
 

@@ -874,6 +874,8 @@ VstIntPtr __cdecl Vst2Plugin::HostCallback(AEffect* effect,
 
 std::vector<std::uint8_t> Vst2Plugin::GetState() const
 {
+	BlobSdkCallGuard blobCall(*this);
+	if (!blobCall) return {};
 #ifdef JAMMA_VST2_ENABLED
 	if (!_isLoaded || !_effect)
 		return {};
@@ -945,6 +947,8 @@ std::vector<std::uint8_t> Vst2Plugin::GetState() const
 
 void Vst2Plugin::SetState(const std::vector<std::uint8_t>& blob)
 {
+	BlobSdkCallGuard blobCall(*this);
+	if (!blobCall) return;
 #ifdef JAMMA_VST2_ENABLED
 	if (!_isLoaded || !_effect)
 		return;

@@ -11,6 +11,7 @@
 #include <windowsx.h>
 #include <commctrl.h>
 #include <vector>
+#include <array>
 #include <memory>
 #include <optional>
 #include <fstream>
@@ -107,6 +108,21 @@ namespace graphics
 		static LRESULT CALLBACK WindowProcedure(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) noexcept;
 
 	private:
+		class SceneDispatchScope
+		{
+		public:
+			explicit SceneDispatchScope(Window& window) noexcept : _window(window) { ++_window._sceneDispatchDepth; }
+			~SceneDispatchScope() noexcept;
+		private:
+			Window& _window;
+		};
+		struct DeferredNativeMessage { HWND WindowHandle; UINT Message; WPARAM WParam; LPARAM LParam; };
+		bool _DeferNativeSceneMessage(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam) noexcept;
+		unsigned int _sceneDispatchDepth = 0u;
+		std::array<DeferredNativeMessage, 256u> _deferredNativeMessages{};
+		std::size_t _deferredNativeMessageCount = 0u;
+		bool _deferredNativeOverflow = false;
+		bool _nativeDestroyPending = false;
 		void _InstallRelativePointerHost();
 		bool _RelativePointerValid() const;
 		void _RestoreRawInput();
