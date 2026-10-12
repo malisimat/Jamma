@@ -16,6 +16,7 @@
 #include "../midi/MidiEvent.h"
 #include "../utils/CommonTypes.h"
 #include "VstAudioBuffers.h"
+#include "../utils/StringUtils.h"
 
 namespace vst
 {
@@ -44,6 +45,98 @@ namespace vst
 	{
 	public:
 		virtual ~IVstPlugin() = default;
+
+		// Identity is non-RT metadata, assigned before publication/import only.
+		const std::string& StateId() const noexcept { return _stateId; }
+		void SetStateId(const std::string& id) { if (!id.empty()) _stateId = id; }
+		std::uint64_t AutomationGeneration() const noexcept { return _stateGeneration.load(std::memory_order_acquire); }
+		bool IsStateOperationActive() const noexcept { return (_stateAccess.load(std::memory_order_acquire) & ExclusiveState) != 0; }
+
+		// UI-thread only. A failed bounded acquisition leaves output/state untouched;
+		// the UI pump retries later. Blob calls run while all SDK entry guards are
+		// excluded. Editors and blob work share the same UI owner. No audio wait.
+		bool TryCaptureLiveState(std::vector<std::uint8_t>& output) const
+		{
+			std::uint32_t expected = 0;
+			if (!_stateAccess.compare_exchange_strong(expected, ExclusiveState, std::memory_order_acq_rel)) return false;
+			ExclusiveRelease release{_stateAccess};
+			auto blob = GetState();
+			_stateGeneration.fetch_add(1, std::memory_order_release);
+			if (blob.empty()) return false;
+			output = std::move(blob);
+			return true;
+		}
+		bool TryRestoreLiveState(const std::vector<std::uint8_t>& blob)
+		{
+			std::uint32_t expected = 0;
+			if (!_stateAccess.compare_exchange_strong(expected, ExclusiveState, std::memory_order_acq_rel)) return false;
+			ExclusiveRelease release{_stateAccess};
+			SetState(blob);
+			_stateGeneration.fetch_add(1, std::memory_order_release);
+			return true;
+		}
+
+	public:
+		// Two atomic operations at most; no retries, waits or allocations.
+		class PluginCallGuard
+		{
+		public:
+			explicit PluginCallGuard(const IVstPlugin& plugin, bool midiRecovery = false) noexcept : _access(plugin._stateAccess), _plugin(plugin)
+			{
+				const auto previous = _access.fetch_add(1u, std::memory_order_acq_rel);
+				_entered = !(previous & ExclusiveState);
+				if (!_entered)
+				{
+					if (midiRecovery) _plugin._pendingMidiPanic.store(true, std::memory_order_release);
+					_access.fetch_sub(1u, std::memory_order_release);
+				}
+			}
+			~PluginCallGuard() { if (_entered) _access.fetch_sub(1u, std::memory_order_release); }
+			PluginCallGuard(const PluginCallGuard&) = delete;
+			PluginCallGuard& operator=(const PluginCallGuard&) = delete;
+			explicit operator bool() const noexcept { return _entered; }
+		private:
+			std::atomic<std::uint32_t>& _access;
+			const IVstPlugin& _plugin;
+			bool _entered = false;
+		};
+		// Callback owner only, inside an acquired guard. Recover skipped note-offs
+		// before normal MIDI/process delivery. Concrete adapters reserve the panic
+		// events in their fixed buffers and bypass VST3 parameter CC mappings.
+		void RequestMidiPanic() noexcept { _pendingMidiPanic.store(true, std::memory_order_release); }
+		void FlushPendingMidiPanic() noexcept
+		{
+			// Retain recovery while bypassed; queued events are not processed then.
+			if (!IsLoaded() || IsBypassed()) return;
+			if (_pendingMidiPanic.exchange(false, std::memory_order_acq_rel)) SendMidiPanicImmediately();
+		}
+	protected:
+		virtual void SendMidiPanicImmediately() noexcept
+		{
+			for (std::uint8_t channel = 0; channel < 16; ++channel)
+				SendMidiEvent({0, static_cast<std::uint8_t>(0xb0u | channel), 123, 0}, true);
+		}
+	private:
+		// Writers: rejected MIDI/processing guards only; editor and parameter
+		// readers never request panic. Skipped processing conservatively recovers
+		// possibly queued note-offs before the next block clears its events. Reader/reset: callback reentry;
+		// scalar atomic, no ownership/destruction crosses the callback.
+		mutable std::atomic<bool> _pendingMidiPanic{false};
+		static constexpr std::uint32_t ExclusiveState = 0x80000000u;
+		struct ExclusiveRelease
+		{
+			std::atomic<std::uint32_t>& Access;
+			// Preserve a rejected reader's transient count so its decrement cannot
+			// underflow if it overlaps exclusive release.
+			~ExclusiveRelease() { Access.fetch_and(~ExclusiveState, std::memory_order_release); }
+		};
+		// Readers: callback/editor guards. Writer: UI state operation; atomics
+		// serialize entry. Lifetime follows the owner snapshot, no RT reclamation.
+		mutable std::atomic<std::uint32_t> _stateAccess{0};
+		mutable std::atomic<std::uint64_t> _stateGeneration{0};
+		std::string _stateId = utils::GetGuid();
+	public:
+
 
 		// Pre-initialise the plugin DLL on the UI thread before Load() runs on
 		// the job thread. No-op (returns true) when not needed.

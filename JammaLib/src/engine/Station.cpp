@@ -76,6 +76,7 @@ Station::Station(StationParams params,
 	_flipTakeBuffer(false),
 	_flipAudioBuffer(false),
 	_name(params.Name),
+	_id(params.Id.empty() ? utils::GetGuid() : params.Id),
 	_fadeSamps(params.FadeSamps),
 	_lastBufSize(constants::MaxBlockSize),
 	_clock(std::shared_ptr<utils::Timer>()),
@@ -143,13 +144,14 @@ std::optional<std::shared_ptr<Station>> Station::FromFile(StationParams stationP
 	std::cout << "[LOAD] Constructing station " << stationParams.Index << " '" << stationStruct.Name
 		<< "' (takes=" << stationStruct.LoopTakes.size() << ", VSTs=" << stationStruct.VstChain.size() << ")." << std::endl;
 	stationParams.Name = stationStruct.Name;
+	stationParams.Id = stationStruct.Id;
 	auto station = std::make_shared<Station>(stationParams, mixerParams);
 	station->SetStationPhaseOffsetSamps(stationStruct.StationPhaseOffsetSamps);
 	station->SetAllowedMidiChannels(stationStruct.AllowedMidiChannels);
 	for (const auto& vstEntry : stationStruct.VstChain)
 	{
 		std::cout << "[LOAD] Station '" << stationStruct.Name << "': loading VST " << vstEntry.Path << std::endl;
-		if (!station->LoadVstPluginSynchronously(utils::DecodeUtf8(vstEntry.Path), vstEntry.DecodeState(), vstEntry.Bypass))
+		if (!station->LoadVstPluginSynchronously(utils::DecodeUtf8(vstEntry.Path), vstEntry.DecodeState(), vstEntry.Bypass, vstEntry.Id))
 		{
 			// Restore the station and rig target even when this optional processor is missing.
 			std::cout << "[LOAD] Station '" << stationStruct.Name << "': failed VST " << vstEntry.Path
@@ -171,10 +173,12 @@ std::optional<std::shared_ptr<Station>> Station::FromFile(StationParams stationP
 	for (auto takeStruct : stationStruct.LoopTakes)
 	{
 		takeParams.ModelPosition = { (float)gap.Width, (float)(takeCount * takeHeight + gap.Height), 0.0 };
-		// The saved take name is its persisted runtime ID. JobAction deduplication
-		// uses this ID, so omitting it would collapse independent MIDI-
-		// quantisation rebuilds into one job.
-		takeParams.Id = takeStruct.Name;
+		// Legacy descriptors without identity receive one during import. Keep
+		// the display name separate from job deduplication/group identity.
+		// Legacy JAM manifests stored take identity in Name. Retain it so trigger
+		// histories and source references survive migration to the explicit Id.
+		takeParams.Id = !takeStruct.Id.empty() ? takeStruct.Id :
+			!takeStruct.Name.empty() ? takeStruct.Name : utils::GetGuid();
 		auto take = LoopTake::FromFile(takeParams, takeStruct, dir);
 		
 		if (take.has_value())
@@ -1103,10 +1107,14 @@ void Station::_RunAutomationDispatch(std::uint32_t blockStartSample,
 		auto& state = _automationPlaybackState[i];
 		const float val = entry.loop->GetAutomationValueAtCursor(entry.laneIdx, frac, state.cursorIdx);
 
-		if (std::abs(val - state.lastValue) > AutomationEpsilon)
+		const auto generation = entry.plugin->AutomationGeneration();
+		if (generation != state.stateGeneration || std::abs(val - state.lastValue) > AutomationEpsilon)
 		{
+			vst::IVstPlugin::PluginCallGuard call(*entry.plugin);
+			if (!call) continue;
 			entry.plugin->SetParameter(entry.paramIdx, val);
 			state.lastValue = val;
+			state.stateGeneration = generation;
 		}
 	}
 }
@@ -2994,7 +3002,7 @@ void Station::LoadVstPlugin(std::wstring path,
 
 bool Station::LoadVstPluginSynchronously(const std::wstring& path,
 	const std::vector<std::uint8_t>& initialState,
-	bool bypass)
+	bool bypass, const std::string& stateId)
 {
 	// Startup construction completes before Scene::InitAudio publishes this
 	// station, so direct replacement cannot race the callback.
@@ -3006,6 +3014,7 @@ bool Station::LoadVstPluginSynchronously(const std::wstring& path,
 		|| !plugin->Load(path, _sampleRate, _blockSize, hostChannels, vst::HostedLayoutMode::Exact))
 		return false;
 
+	plugin->SetStateId(stateId);
 	if (!initialState.empty())
 		plugin->SetState(initialState);
 	plugin->SetBypassed(bypass);
@@ -3060,6 +3069,8 @@ std::vector<io::JamFile::VstEntry> Station::VstEntries() const
 			auto plugin = chain->GetPlugin(i);
 			if (plugin)
 			{
+				entry.Id = plugin->StateId();
+				entry.Bypass = plugin->IsBypassed();
 				auto blob = plugin->GetState();
 				if (!blob.empty())
 					entry.State = io::JamFile::VstEntry::EncodeState(blob);
@@ -3070,6 +3081,51 @@ std::vector<io::JamFile::VstEntry> Station::VstEntries() const
 	}
 
 	return entries;
+}
+
+
+bool Station::TryGroupVstEntries(std::vector<io::JamFile::VstEntry>& output) const
+{
+	auto chain = _vstChain.load(std::memory_order_acquire);
+	std::lock_guard<std::mutex> lock(_vstPathsMutex);
+	std::vector<io::JamFile::VstEntry> entries;
+	if (chain)
+	{
+		if (chain->NumPlugins() != _vstPluginPaths.size()) return false;
+		entries.reserve(chain->NumPlugins());
+		for (size_t i = 0; i < chain->NumPlugins(); ++i)
+		{
+			auto plugin = chain->GetPlugin(i);
+			if (!plugin) continue;
+			std::vector<std::uint8_t> blob;
+			if (!plugin->TryCaptureLiveState(blob)) return false;
+			io::JamFile::VstEntry entry;
+			entry.Id = plugin->StateId();
+			entry.Path = utils::EncodeUtf8(_vstPluginPaths[i]);
+			entry.Bypass = plugin->IsBypassed();
+			entry.State = io::JamFile::VstEntry::EncodeState(blob);
+			entries.push_back(std::move(entry));
+		}
+	}
+	output = std::move(entries);
+	return true;
+}
+
+bool Station::TryRestoreGroupVstEntry(const io::JamFile::VstEntry& entry)
+{
+	auto chain = _vstChain.load(std::memory_order_acquire);
+	if (!chain || entry.Id.empty()) return true;
+	for (size_t i = 0; i < chain->NumPlugins(); ++i)
+	{
+		auto plugin = chain->GetPlugin(i);
+		if (!plugin || plugin->StateId() != entry.Id) continue;
+		const auto blob = entry.DecodeState();
+		if (!entry.State.empty() && blob.empty()) return true;
+		if (!plugin->TryRestoreLiveState(blob)) return false;
+		plugin->SetBypassed(entry.Bypass);
+		return true;
+	}
+	return true; // Deleted plugins never match a replacement's position.
 }
 
 ActionResult Station::OnAction(JobAction action)

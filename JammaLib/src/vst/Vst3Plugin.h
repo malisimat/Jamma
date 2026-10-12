@@ -151,6 +151,7 @@ namespace vst
 		// precondition Load/Unload already require of their callers).
 		std::vector<std::uint8_t> GetState() const override;
 		void SetState(const std::vector<std::uint8_t>& blob) override;
+		void SendMidiPanicImmediately() noexcept override;
 
 		// Runs the same pending-rebuild housekeeping as IdleEditor() (only
 		// the MIDI controller-mapping table today). Safe to call from any

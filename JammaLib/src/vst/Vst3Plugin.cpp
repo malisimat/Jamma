@@ -6,6 +6,7 @@
 ///////////////////////////////////////////////////////////
 
 #include "Vst3Plugin.h"
+#include "ReservedMidiEvents.h"
 #include "../midi/MidiBlockTiming.h"
 #include "../midi/MidiQueue.h"
 #include "Vst2Plugin.h"
@@ -181,7 +182,6 @@ public:
 	static constexpr int32 MaxEvents = 256;
 
 	FixedEventList() :
-		_count(0),
 		_blockStartSample(0u),
 		_blockNumSamples(0u),
 		_events{}
@@ -195,7 +195,7 @@ public:
 	{
 		_blockStartSample = blockStartSample;
 		_blockNumSamples = numSamples;
-		_count = 0;
+		_events.Clear();
 	}
 
 	std::uint32_t BlockStartSample() const noexcept { return _blockStartSample; }
@@ -225,9 +225,9 @@ public:
 		return placement;
 	}
 
-	void AddMidiEvent(const midi::MidiEvent& midiEvent, bool isRealtime) noexcept
+	void AddMidiEvent(const midi::MidiEvent& midiEvent, bool isRealtime, bool panic = false) noexcept
 	{
-		if (_count >= MaxEvents || 0u == _blockNumSamples)
+		if (0u == _blockNumSamples)
 			return;
 
 		const auto placement = ComputeBlockPlacement(midiEvent, _blockStartSample, _blockNumSamples, isRealtime);
@@ -304,36 +304,31 @@ public:
 			return;
 		}
 
-		_events[static_cast<size_t>(_count++)] = event;
+		_events.Append(event, panic);
 	}
 
-	int32 PLUGIN_API getEventCount() override { return _count; }
+	int32 PLUGIN_API getEventCount() override { return static_cast<int32>(_events.Count()); }
 
 	tresult PLUGIN_API getEvent(int32 index, Event& e) override
 	{
-		if (index < 0 || index >= _count)
+		if (index < 0 || static_cast<std::size_t>(index) >= _events.Count())
 			return kInvalidArgument;
 
-		e = _events[static_cast<size_t>(index)];
+		e = _events.At(static_cast<size_t>(index));
 		return kResultOk;
 	}
 
 	tresult PLUGIN_API addEvent(Event& e) override
 	{
-		if (_count >= MaxEvents)
-			return kOutOfMemory;
-
-		_events[static_cast<size_t>(_count++)] = e;
-		return kResultOk;
+		return _events.Append(e) ? kResultOk : kOutOfMemory;
 	}
 
 	DECLARE_FUNKNOWN_METHODS
 
 private:
-	int32 _count;
 	std::uint32_t _blockStartSample;
 	std::uint32_t _blockNumSamples;
-	std::array<Event, MaxEvents> _events;
+	vst::ReservedMidiEvents<Event, MaxEvents> _events;
 };
 
 IMPLEMENT_FUNKNOWN_METHODS(FixedEventList, IEventList, IEventList::iid)
@@ -1609,6 +1604,9 @@ void Vst3Plugin::ResetLoadedObjects(bool terminateComponent)
 
 void Vst3Plugin::ProcessBlock(float* monoBuf, int32_t numSamples) noexcept
 {
+	PluginCallGuard stateCall(*this, true);
+	if (!stateCall) return;
+	FlushPendingMidiPanic();
 #ifdef JAMMA_VST3_ENABLED
 	if (!_impl)
 		return;
@@ -1641,6 +1639,9 @@ void Vst3Plugin::ProcessBlock(float* monoBuf, int32_t numSamples) noexcept
 
 void Vst3Plugin::ProcessBlockStereo(float* leftBuf, float* rightBuf, int32_t numSamples) noexcept
 {
+	PluginCallGuard stateCall(*this, true);
+	if (!stateCall) return;
+	FlushPendingMidiPanic();
 #ifdef JAMMA_VST3_ENABLED
 	if (!_impl)
 		return;
@@ -1685,6 +1686,9 @@ void Vst3Plugin::ProcessBlockStereo(float* leftBuf, float* rightBuf, int32_t num
 
 void Vst3Plugin::ProcessBlockMulti(float* const* channelBufs, int32_t numChannels, int32_t numSamples) noexcept
 {
+	PluginCallGuard stateCall(*this, true);
+	if (!stateCall) return;
+	FlushPendingMidiPanic();
 #ifdef JAMMA_VST3_ENABLED
 	if (!_impl || !channelBufs)
 		return;
@@ -1720,6 +1724,8 @@ void Vst3Plugin::ProcessBlockMulti(float* const* channelBufs, int32_t numChannel
 
 void Vst3Plugin::SetParameter(unsigned int index, float value) noexcept
 {
+	PluginCallGuard stateCall(*this);
+	if (!stateCall) return;
 #ifdef JAMMA_VST3_ENABLED
 	if (!_impl || !_isLoaded || !_impl->inputParameterChanges)
 		return;
@@ -1743,6 +1749,8 @@ void Vst3Plugin::SetParameter(unsigned int index, float value) noexcept
 
 float Vst3Plugin::GetParameter(unsigned int index) const noexcept
 {
+	PluginCallGuard stateCall(*this);
+	if (!stateCall) return 0.0f;
 #ifdef JAMMA_VST3_ENABLED
 	if (!_impl || !_impl->controller)
 		return 0.0f;
@@ -1761,6 +1769,8 @@ float Vst3Plugin::GetParameter(unsigned int index) const noexcept
 
 void Vst3Plugin::UpdateHostTime(const HostTimeState& state) noexcept
 {
+	PluginCallGuard stateCall(*this);
+	if (!stateCall) return;
 #ifdef JAMMA_VST3_ENABLED
 	if (!_impl)
 		return;
@@ -1791,6 +1801,8 @@ void Vst3Plugin::UpdateHostTime(const HostTimeState& state) noexcept
 
 void Vst3Plugin::OnControllerEdit(std::uint32_t paramId, float normalizedValue) noexcept
 {
+	PluginCallGuard stateCall(*this);
+	if (!stateCall) return;
 #ifdef JAMMA_VST3_ENABLED
 	if (!_impl)
 		return;
@@ -1815,6 +1827,8 @@ void Vst3Plugin::OnControllerEdit(std::uint32_t paramId, float normalizedValue) 
 
 void Vst3Plugin::OnBeginEdit(std::uint32_t paramId) noexcept
 {
+	PluginCallGuard stateCall(*this);
+	if (!stateCall) return;
 #ifdef JAMMA_VST3_ENABLED
 	if (_impl)
 		_impl->BeginGesture(static_cast<ParamID>(paramId));
@@ -1825,6 +1839,8 @@ void Vst3Plugin::OnBeginEdit(std::uint32_t paramId) noexcept
 
 void Vst3Plugin::OnEndEdit(std::uint32_t paramId) noexcept
 {
+	PluginCallGuard stateCall(*this);
+	if (!stateCall) return;
 #ifdef JAMMA_VST3_ENABLED
 	if (_impl)
 		_impl->EndGesture(static_cast<ParamID>(paramId));
@@ -1856,6 +1872,8 @@ void Vst3Plugin::OnRestartComponent(std::int32_t flags) noexcept
 void Vst3Plugin::BeginMidiBlock(std::uint32_t blockStartSample,
 	std::uint32_t numSamples) noexcept
 {
+	PluginCallGuard stateCall(*this, true);
+	if (!stateCall) return;
 #ifdef JAMMA_VST3_ENABLED
 	if (!_impl)
 		return;
@@ -1868,11 +1886,15 @@ void Vst3Plugin::BeginMidiBlock(std::uint32_t blockStartSample,
 #else
 	(void)blockStartSample; (void)numSamples;
 #endif
+	FlushPendingMidiPanic();
 }
 
 void Vst3Plugin::SendMidiEvent(const midi::MidiEvent& event,
 	bool isRealtime) noexcept
 {
+	PluginCallGuard stateCall(*this, true);
+	if (!stateCall) return;
+	FlushPendingMidiPanic();
 #ifdef JAMMA_VST3_ENABLED
 	if (!_impl)
 		return;
@@ -1923,6 +1945,8 @@ void Vst3Plugin::SendMidiEvent(const midi::MidiEvent& event,
 
 bool Vst3Plugin::OpenEditor(HWND parentHwnd)
 {
+	PluginCallGuard stateCall(*this);
+	if (!stateCall) return false;
 #ifdef JAMMA_VST3_ENABLED
 	// Pause real-time audio processing while opening the editor. Some VST3
 	// plug-ins (e.g. Valhalla VSTGUI-based plug-ins) deadlock inside
@@ -2011,6 +2035,8 @@ bool Vst3Plugin::OpenEditor(HWND parentHwnd)
 
 void Vst3Plugin::CloseEditor()
 {
+	PluginCallGuard stateCall(*this);
+	if (!stateCall) return;
 #ifdef JAMMA_VST3_ENABLED
 	if (_impl && _impl->plugView)
 	{
@@ -2033,6 +2059,8 @@ utils::Size2d Vst3Plugin::GetEditorSize() const noexcept
 
 void Vst3Plugin::IdleEditor() noexcept
 {
+	PluginCallGuard stateCall(*this);
+	if (!stateCall) return;
 #ifdef JAMMA_VST3_ENABLED
 	PollPendingControllerChanges();
 #endif
@@ -2040,6 +2068,8 @@ void Vst3Plugin::IdleEditor() noexcept
 
 void Vst3Plugin::PollPendingControllerChanges() const noexcept
 {
+	PluginCallGuard stateCall(*this);
+	if (!stateCall) return;
 #ifdef JAMMA_VST3_ENABLED
 	if (!_impl)
 		return;
@@ -2121,6 +2151,10 @@ void Vst3Plugin::SetState(const std::vector<std::uint8_t>& blob)
 	if (blob.empty() || !_isLoaded || !_impl || !_impl->component)
 		return;
 
+	// Exclusive live restore (or unpublished startup): producers and consumer
+	// cannot touch this queue here. Discard editor edits predating the blob.
+	_impl->controllerEditQueue.Clear();
+	if (_impl->inputParameterChanges) _impl->inputParameterChanges->BeginBlock();
 	Vst3StateBlob::ParsedState parsed;
 	if (!Vst3StateBlob::TryParse(blob, parsed))
 	{
@@ -2205,4 +2239,16 @@ std::shared_ptr<vst::IVstPlugin> vst::MakePluginForPath(const std::wstring& path
 			return std::make_shared<vst::Vst2Plugin>();
 	}
 	return std::make_shared<vst::Vst3Plugin>();
+}
+
+void Vst3Plugin::SendMidiPanicImmediately() noexcept
+{
+#ifdef JAMMA_VST3_ENABLED
+	if (!_impl || !_impl->inputEvents) return;
+	const auto start = _impl->inputEvents->BlockStartSample();
+	const auto count = _impl->inputEvents->BlockNumSamples();
+	if (count == 0u) { RequestMidiPanic(); return; }
+	for (std::uint8_t channel = 0; channel < 16; ++channel)
+		_impl->inputEvents->AddMidiEvent({start, static_cast<std::uint8_t>(0xb0u | channel), 123, 0}, true, true);
+#endif
 }

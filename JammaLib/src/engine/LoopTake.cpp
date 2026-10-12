@@ -176,7 +176,7 @@ LoopTake::LoopTake(LoopTakeParams params,
 	_flipLoopBuffer(false),
 	_loopsNeedUpdating(false),
 	_state(STATE_INACTIVE),
-	_id(params.Id),
+	_id(params.Id.empty() ? utils::GetGuid() : params.Id),
 	_sourceId(""),
 	_lastBufSize(constants::MaxBlockSize),
 	_fadeSamps(params.FadeSamps),
@@ -256,7 +256,7 @@ std::optional<std::shared_ptr<LoopTake>> LoopTake::FromFile(LoopTakeParams takeP
 		{
 			for (const auto& vstEntry : loopStruct.VstChain)
 			{
-				if (!loop.value()->LoadVstPluginSynchronously(utils::DecodeUtf8(vstEntry.Path), vstEntry.DecodeState(), vstEntry.Bypass))
+				if (!loop.value()->LoadVstPluginSynchronously(utils::DecodeUtf8(vstEntry.Path), vstEntry.DecodeState(), vstEntry.Bypass, vstEntry.Id))
 				{
 					std::cout << "Load: failed VST for audio loop " << loopStruct.Name << std::endl;
 					return std::nullopt;
@@ -313,6 +313,7 @@ std::optional<std::shared_ptr<LoopTake>> LoopTake::FromFile(LoopTakeParams takeP
 		LoopTake::MidiStreamExport restored;
 		restored.Channel = streamStruct.Channel;
 		restored.Device = streamStruct.Device;
+		restored.Id = streamStruct.Id;
 		restored.Loop.LoopLengthSamps = sidecar->LogicalLength;
         restored.Loop.LoopQuantisation.Enabled = streamStruct.MidiQuantEnabled;
         if (streamStruct.MidiQuantFraction)
@@ -351,7 +352,7 @@ std::optional<std::shared_ptr<LoopTake>> LoopTake::FromFile(LoopTakeParams takeP
 
 	for (const auto& vstEntry : takeStruct.VstChain)
 	{
-		if (!take->LoadVstPluginSynchronously(utils::DecodeUtf8(vstEntry.Path), vstEntry.DecodeState(), vstEntry.Bypass))
+		if (!take->LoadVstPluginSynchronously(utils::DecodeUtf8(vstEntry.Path), vstEntry.DecodeState(), vstEntry.Bypass, vstEntry.Id))
 		{
 			std::cout << "Load: failed VST for take " << takeStruct.Name << std::endl;
 			return std::nullopt;
@@ -1531,6 +1532,7 @@ void LoopTake::Record(std::vector<unsigned int> channels,
 		for (auto midiChan : midiChannels)
 		{
 			auto midiLoop = std::make_shared<midi::MidiLoop>();
+			midiLoop->SetGroupId(utils::GetGuid());
 			graphics::MidiModelParams modelParams;
 			modelParams.ModelScale = 1.0f;
 			modelParams.DrawSelectionRing = _midiLoops.empty();
@@ -2174,6 +2176,7 @@ void LoopTake::Overdub(std::vector<unsigned int> channels,
 		{
 			auto midiLoop = std::make_shared<midi::MidiLoop>();
 			graphics::MidiModelParams modelParams;
+			midiLoop->SetGroupId(utils::GetGuid());
 			modelParams.ModelScale = 1.0f;
 			modelParams.DrawSelectionRing = _midiLoops.empty();
 			auto midiModel = std::make_shared<graphics::MidiModel>(modelParams);
@@ -2763,6 +2766,7 @@ bool LoopTake::SnapshotMidiForExport(MidiExportState& state) const
 		MidiStreamExport stream;
 		stream.Channel = _midiLoopChannels[i];
 		stream.Device = _midiLoopDevices[i];
+		stream.Id = _midiLoops[i]->Id();
 		if (!_midiLoops[i]->SnapshotForExport(stream.Loop, anchorCorrection))
 			return false;
 		exported.Streams.push_back(std::move(stream));
@@ -2798,6 +2802,7 @@ bool LoopTake::RestoreMidiFromExport(const MidiExportState& state)
 			return false;
 
 		auto loop = std::make_shared<midi::MidiLoop>();
+		loop->SetGroupId(stream.Id.empty() ? utils::GetGuid() : stream.Id);
 		loop->SetSampleRate(_sampleRate);
 		if (!loop->RestoreFromExport(stream.Loop))
 			return false;
@@ -3820,7 +3825,7 @@ void LoopTake::LoadVstPlugin(std::wstring path,
 
 bool LoopTake::LoadVstPluginSynchronously(const std::wstring& path,
 	const std::vector<std::uint8_t>& initialState,
-	bool bypass)
+	bool bypass, const std::string& stateId)
 {
 	// This is only valid while startup owns the take and before it is published
 	// to an audio snapshot.
@@ -3832,6 +3837,7 @@ bool LoopTake::LoadVstPluginSynchronously(const std::wstring& path,
 		|| !plugin->Load(path, _sampleRate, _lastBufSize, hostChannels, vst::HostedLayoutMode::Exact))
 		return false;
 
+	plugin->SetStateId(stateId);
 	if (!initialState.empty())
 		plugin->SetState(initialState);
 	plugin->SetBypassed(bypass);
@@ -3885,6 +3891,8 @@ std::vector<io::JamFile::VstEntry> LoopTake::VstEntries() const
 			auto plugin = chain->GetPlugin(i);
 			if (plugin)
 			{
+				entry.Id = plugin->StateId();
+				entry.Bypass = plugin->IsBypassed();
 				auto blob = plugin->GetState();
 				if (!blob.empty())
 					entry.State = io::JamFile::VstEntry::EncodeState(blob);
@@ -3895,6 +3903,51 @@ std::vector<io::JamFile::VstEntry> LoopTake::VstEntries() const
 	}
 
 	return entries;
+}
+
+
+bool LoopTake::TryGroupVstEntries(std::vector<io::JamFile::VstEntry>& output) const
+{
+	auto chain = _vstChain.load(std::memory_order_acquire);
+	std::lock_guard<std::mutex> lock(_vstPathsMutex);
+	std::vector<io::JamFile::VstEntry> entries;
+	if (chain)
+	{
+		if (chain->NumPlugins() != _vstPluginPaths.size()) return false;
+		entries.reserve(chain->NumPlugins());
+		for (size_t i = 0; i < chain->NumPlugins(); ++i)
+		{
+			auto plugin = chain->GetPlugin(i);
+			if (!plugin) continue;
+			std::vector<std::uint8_t> blob;
+			if (!plugin->TryCaptureLiveState(blob)) return false;
+			io::JamFile::VstEntry entry;
+			entry.Id = plugin->StateId();
+			entry.Path = utils::EncodeUtf8(_vstPluginPaths[i]);
+			entry.Bypass = plugin->IsBypassed();
+			entry.State = io::JamFile::VstEntry::EncodeState(blob);
+			entries.push_back(std::move(entry));
+		}
+	}
+	output = std::move(entries);
+	return true;
+}
+
+bool LoopTake::TryRestoreGroupVstEntry(const io::JamFile::VstEntry& entry)
+{
+	auto chain = _vstChain.load(std::memory_order_acquire);
+	if (!chain || entry.Id.empty()) return true;
+	for (size_t i = 0; i < chain->NumPlugins(); ++i)
+	{
+		auto plugin = chain->GetPlugin(i);
+		if (!plugin || plugin->StateId() != entry.Id) continue;
+		const auto blob = entry.DecodeState();
+		if (!entry.State.empty() && blob.empty()) return true;
+		if (!plugin->TryRestoreLiveState(blob)) return false;
+		plugin->SetBypassed(entry.Bypass);
+		return true;
+	}
+	return true; // Deleted plugins never match a replacement's position.
 }
 
 LoopTake::Presentation LoopTake::GetPresentation() const noexcept

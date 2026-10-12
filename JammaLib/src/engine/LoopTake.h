@@ -143,6 +143,16 @@ namespace engine
 		virtual bool DeSelect() override;
 		virtual bool Mute() override;
 		virtual bool UnMute() override;
+		// Audio-boundary group application changes persistent state only. It never
+		// propagates to new leaves or alters recording-owned source-mute controls.
+		void SetGroupMutedAudio(bool muted) noexcept
+		{
+			if (muted) Tweakable::Mute(); else Tweakable::UnMute();
+		}
+		void SetGroupSelected(bool selected)
+		{
+			if (selected) GuiElement::Select(); else GuiElement::DeSelect();
+		}
 		virtual void SetPickingFromState(EditMode mode, bool flipState) override;
 		virtual void SetStateFromPicking(EditMode mode, bool flipState) override;
 
@@ -202,7 +212,7 @@ namespace engine
 		// Startup-only synchronous counterpart used by JAM reconstruction.
 		bool LoadVstPluginSynchronously(const std::wstring& path,
 			const std::vector<std::uint8_t>& initialState = {},
-			bool bypass = false);
+			bool bypass = false, const std::string& stateId = {});
 		void UnloadVstPlugin(size_t index);
 		void ForceUnloadAllVstPlugins();
 		void SetSampleRate(float sampleRate);
@@ -210,6 +220,8 @@ namespace engine
 		unsigned int GetLastBufSize() const noexcept { return _lastBufSize; }
 		std::shared_ptr<vst::IVstPlugin> GetVstPlugin(size_t index) const;
 		std::vector<io::JamFile::VstEntry> VstEntries() const;
+		bool TryGroupVstEntries(std::vector<io::JamFile::VstEntry>& output) const;
+		bool TryRestoreGroupVstEntry(const io::JamFile::VstEntry& entry);
 
 		// True if plugin is hosted by this take's VST chain. Identity comparison
 		// only; non-RT (reads the published chain). Used to resolve the owner of
@@ -319,6 +331,7 @@ namespace engine
 		const std::vector<std::string>& MidiLoopDevices() const noexcept { return _midiLoopDevices; }
 		struct MidiStreamExport
 		{
+			std::string Id;
 			unsigned int Channel = 0u;
 			std::string Device;
 			midi::MidiLoop::ExportState Loop;
