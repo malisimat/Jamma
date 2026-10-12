@@ -1,33 +1,41 @@
 # Multi-Device MIDI Trigger Rig Configuration
 
-Rig files support multiple configured MIDI input devices. MIDI trigger activation uses one device per trigger, while MIDI loop recording can subscribe to one or more devices independently.
+Rig files support multiple configured MIDI input devices. MIDI activation and ditch bindings select their own devices, while MIDI loop recording can subscribe to one or more devices independently.
 
 ## Example Rig JSON
 
 ```json
 {
+  "version": "2.0",
   "name": "rig",
-  "user": {
-    "audio": { "name": "HDMI", "bufsize": 255, "inlatency": 414, "outlatency": 414, "numchannelsin": 0, "numchannelsout": 10 },
-    "midi": {
-      "devices": [
-        { "name": "TriggerPad", "enabled": true },
-        { "name": "Keys A", "enabled": true },
-        { "name": "Keys B", "enabled": true }
-      ]
-    }
+  "devices": {
+    "audio": { "name": "HDMI", "samplerate": 44100, "bufsize": 255, "inlatency": 414, "outlatency": 414, "numbuffers": 4, "numchannelsin": 0, "numchannelsout": 10 },
+    "midi": [
+      { "id": "trigger-pad", "name": "TriggerPad", "enabled": true },
+      { "id": "keys-a", "name": "Keys A", "enabled": true },
+      { "id": "keys-b", "name": "Keys B", "enabled": true }
+    ],
+    "serial": []
+  },
+  "settings": {
+    "loop": { "fadeSamps": 800, "seedGrainMinMs": 400, "seedGrainTargetMaxMs": 3000, "seedBpmMin": 80, "seedQuantisation": "power" },
+    "trigger": { "preDelaySamps": 400, "debounceMs": 280 },
+    "midi": { "channelOverrideTriggers": false, "channelOverrideLive": true }
   },
   "triggers": [
     {
+      "id": "trigger-1",
       "name": "Trig1",
-      "stationtype": 0,
-      "midiinputdevices": ["Keys A", "Keys B"],
-      "trigger": {
-        "type": "midi",
-        "device": "TriggerPad",
-        "activate": { "kind": "note", "channel": 1, "id": 60 },
-        "ditch": { "kind": "cc", "channel": 1, "id": 64 }
-      }
+      "target": "Keys",
+      "controls": {
+        "activate": [
+          { "source": "midi", "device": "trigger-pad", "button": { "kind": "note", "channel": 1, "id": 60 } }
+        ],
+        "ditch": [
+          { "source": "midi", "device": "trigger-pad", "button": { "kind": "cc", "channel": 1, "id": 64 } }
+        ]
+      },
+      "capture": { "audio": [], "midi": ["keys-a", "keys-b"] }
     }
   ]
 }
@@ -35,17 +43,17 @@ Rig files support multiple configured MIDI input devices. MIDI trigger activatio
 
 ## Behavior and Configuration Reference
 
-- **`user.midi.devices`**: The supported list of MIDI device names and their enabled state. The old single-device `user.midi.name` / `enabled` shape is rejected.
+- **`devices.midi`**: The supported registry of MIDI device IDs, hardware names and enabled states. The application accepts only canonical rig version `2.0`.
 - **Enabled Devices**: Each enabled device gets its own MIDI callback endpoint and ingress queue.
-- **`trigger.device`**: Selects the input device that can activate or ditch that station trigger.
+- **`controls.activate[].device` / `controls.ditch[].device`**: Select the registry ID of the input device for each binding.
 - **MIDI Channel Selection**: Recording channels follow each station's active MIDI channel toggles (`allowedmidichannels` in jam state).
-- **`midiinputdevices`**: Selects the MIDI input devices recorded into MIDI loops. It is opt-in: if omitted or empty, the trigger captures no live MIDI.
+- **`capture.midi`**: Selects the MIDI registry IDs recorded into MIDI loops. An empty list captures no live MIDI; the field must be present.
 - **Device Separation**: The same MIDI channel from different devices is recorded into distinct MIDI loop streams when both devices are listed.
-- **`channel`**: Values in trigger bindings are one-based. Omitting `channel` makes the binding match any channel.
-- **Trigger `kind`**: Supports `note`, `noteoff`, and `cc`.
-  - `note` (aliases: `noteon`, `note-on`, `note on`) uses Note On as press and Note Off (or Note On with velocity 0) as release.
-  - `noteoff` (aliases: `note-off`, `note off`) triggers on Note Off and releases on Note On—the inverse of `note`.
+- **`channel`**: Values in MIDI binding edges or button shorthand are one-based. Set `channel` to `null` to match any channel; the field must be present.
+- **Button `kind`**: Supports `note`, `noteoff`, and `cc` shorthand; saved bindings use explicit `press` / `release` edges with `note` or `cc` kinds and state `1` / `0`.
+  - `note` uses Note On as press and Note Off (or Note On with velocity 0) as release.
+  - `noteoff` triggers on Note Off and releases on Note On—the inverse of `note`.
   - `cc` uses CC values greater than 0 as press and `0` as release.
   - Velocity is ignored for trigger purposes.
-- **Matching**: Device names are matched exactly against configured active MIDI input names. Startup logs report unresolved trigger devices and unresolved loop-record devices.
-- **Overlap**: `device` may match one of the names in `user.midi.devices` if the same controller should both play/record MIDI loops and trigger recording.
+- **Matching**: Hardware names are matched exactly against MIDI input names; `default` selects the first unclaimed input. Startup logs report unavailable devices while retaining their configured selections.
+- **Overlap**: Controls and capture may use the same registry ID. Shared bindings may reach multiple triggers; within one trigger, the earliest defined binding wins and a later conflicting binding is discarded with a warning.
