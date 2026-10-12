@@ -3,6 +3,7 @@
 #include "stdafx.h"
 #include "AudioHost.h"
 #include "../engine/RigSnapshot.h"
+#include "../engine/PerformanceGroupService.h"
 #include "../ninjam/NinjamLoopAlignment.h"
 #include "../utils/Timer.h"
 #include <algorithm>
@@ -246,6 +247,19 @@ namespace audio
 		_rigTriggerTransitionCandidate.collect();
 		_audioStations.collect();
 		_timingClock.collect();
+		if (_groupLatestVersion != 0u && _groupMuteReceipt.load(std::memory_order_acquire) == _groupLatestVersion)
+		{
+			_groupMuteApplication.store(nullptr);
+			_groupLatestVersion = 0u;
+		}
+		_groupMuteApplication.collect();
+	}
+
+	void AudioHost::PublishGroupMuteApplication(std::shared_ptr<const engine::GroupMuteApplication> application)
+	{
+		std::scoped_lock lock(_retainedRigSnapshotsMutex);
+		_groupLatestVersion = application ? application->Version : 0u;
+		_groupMuteApplication.store(std::move(application));
 	}
 
 	void AudioHost::ApplyPendingRigSnapshotAtAudioBoundary() noexcept
@@ -583,7 +597,21 @@ void AudioHost::PublishAudioCallbackProgress(std::uint64_t blockStartSample,
 	{
 		if (!CallbackAdmissionIsQuiescent()) return false;
 		ApplyPendingRigSnapshotAtAudioBoundary();
+		ApplyPendingGroupMuteAtAudioBoundary();
 		return true;
+	}
+
+	void AudioHost::ApplyPendingGroupMuteAtAudioBoundary() noexcept
+	{
+		{
+			auto application = _groupMuteApplication.borrow();
+			if (application && application->Version > _groupAppliedVersion)
+			{
+				application->ApplyAudio();
+				_groupAppliedVersion = application->Version;
+				_groupMuteReceipt.store(_groupAppliedVersion, std::memory_order_release);
+			}
+		}
 	}
 
 	bool AudioHost::TryEnterCallback() noexcept
@@ -651,6 +679,7 @@ void AudioHost::PublishAudioCallbackProgress(std::uint64_t blockStartSample,
 
 		ApplyPendingRigSnapshotAtAudioBoundary();
 		const auto& audioStreamParams = *_preparedStreamParams;
+		ApplyPendingGroupMuteAtAudioBoundary();
 		const auto* stationsSnapshotValue = _lastAudioStations.get();
 		const auto& stations = stationsSnapshotValue ? *stationsSnapshotValue : _emptyStations;
 		auto* timingClock = _lastAudioTimingClock.get();

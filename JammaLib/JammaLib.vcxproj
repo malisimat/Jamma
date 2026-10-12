@@ -331,6 +331,8 @@
     <ClInclude Include="lib\opengl\gl\wglew.h" />
     <ClInclude Include="lib\opengl\gl\wglext.h" />
         <ClInclude Include="src\engine\Scene.h" />
+        <ClInclude Include="src\engine\PerformanceGroupService.h" />
+        <ClInclude Include="src\engine\PerformanceGroupController.h" />
         <ClInclude Include="src\engine\PerformanceGroups.h" />
     <ClInclude Include="src\audio\AudioHost.h" />
     <ClInclude Include="src\audio\NinjamMetronome.h" />
@@ -494,6 +496,8 @@
     <ClCompile Include="src\utils\GlUtils.cpp" />
     <ClCompile Include="src\graphics\GlDrawContext.cpp" />
         <ClCompile Include="src\engine\Scene.cpp" />
+        <ClCompile Include="src\engine\PerformanceGroupService.cpp" />
+        <ClCompile Include="src\engine\PerformanceGroupController.cpp" />
     <ClCompile Include="src\audio\AudioHost.cpp" />
     <ClCompile Include="src\io\IoInputSubsystem.cpp" />
     <ClCompile Include="src\vst\VstEditorWindowManager.cpp" />

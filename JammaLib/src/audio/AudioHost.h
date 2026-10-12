@@ -26,6 +26,7 @@
 namespace engine
 {
 	struct RigSnapshot;
+	struct GroupMuteApplication;
 }
 
 namespace audio
@@ -73,6 +74,8 @@ namespace audio
 		void ReleaseRigSnapshotsBefore(std::uint64_t revision);
 		// Called by the job owner to reclaim snapshots after callback leases end.
 		void CollectRetiredSnapshots();
+		void PublishGroupMuteApplication(std::shared_ptr<const engine::GroupMuteApplication> application);
+		std::uint64_t GroupMuteReceipt() const noexcept { return _groupMuteReceipt.load(std::memory_order_acquire); }
 		std::uint64_t AppliedRigRevision() const noexcept
 		{
 			return _appliedRigRevision.load(std::memory_order_acquire);
@@ -171,6 +174,7 @@ namespace audio
 			const std::vector<std::shared_ptr<engine::Station>>* stations,
 			utils::Timer* timingClock) noexcept;
 		void ApplyPendingRigSnapshotAtAudioBoundary() noexcept;
+		void ApplyPendingGroupMuteAtAudioBoundary() noexcept;
 		void PublishRigTriggerTransitionAtAudioBoundary() noexcept;
 		void ApplyLocalTransportOffsetAtAudioBoundary(
 			const std::vector<std::shared_ptr<engine::Station>>& stations,
@@ -238,6 +242,12 @@ namespace audio
 		std::array<std::atomic<float>, _AdcPeakChannels> _adcPeaks{};
 
 		base::PublishedAudioSnapshot<const std::vector<std::shared_ptr<engine::Station>>> _audioStations;
+		// Serialized job writes; audio borrows transiently and publishes receipt.
+		// Reclaim application references off callback. Stop reader before teardown.
+		base::PublishedAudioSnapshot<const engine::GroupMuteApplication> _groupMuteApplication;
+		std::uint64_t _groupLatestVersion = 0u; // writer only, under retention mutex
+		std::uint64_t _groupAppliedVersion = 0u; // audio only
+		std::atomic<std::uint64_t> _groupMuteReceipt{ 0u };
 		// Constructed with AudioHost, so an empty station set never triggers local-static
 		// initialization or STL debug iterator allocation on the audio callback.
 		const std::vector<std::shared_ptr<engine::Station>> _emptyStations;

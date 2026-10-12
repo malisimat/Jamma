@@ -180,6 +180,7 @@ xcopy /y "$(VcpkgInstalledDir)$(VcpkgTriplet)\debug\bin\gtest_main.dll" "$(OutDi
     <ClCompile Include="src\engine\StationVisualState_Tests.cpp" />
     <ClCompile Include="src\engine\Trigger_Tests.cpp" />
     <ClCompile Include="src\engine\PerformanceGroups_Tests.cpp" />
+    <ClCompile Include="src\engine\PerformanceGroupService_Tests.cpp" />
 	<ClCompile Include="src\engine\RigSnapshot_Tests.cpp" />
 		<ClCompile Include="src\engine\RigTriggerInputGate_Tests.cpp" />
 	<ClCompile Include="src\engine\SceneRoutingIntegration_Tests.cpp" />

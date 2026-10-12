@@ -26,7 +26,8 @@ namespace io
 			const audio::AudioStreamParams& streamParams,
 			audio::AudioDevice* device,
 			std::mutex& sceneMutex,
-			const std::shared_ptr<ninjam::NinjamController>& ninjamController);
+			const std::shared_ptr<ninjam::NinjamController>& ninjamController,
+			const engine::PerformanceGroups* groups = nullptr);
 
 		// Non-UI entry point for the normal paused, scene-locked save workflow.
 		// The manifest is published only after every sidecar has been staged.
@@ -41,6 +42,7 @@ namespace io
 			audio::AudioDevice* device,
 			std::mutex& sceneMutex,
 			const std::shared_ptr<ninjam::NinjamController>& ninjamController,
-			const std::wstring& exportDir);
+			const std::wstring& exportDir,
+			const engine::PerformanceGroups* groups = nullptr);
 	};
 }
