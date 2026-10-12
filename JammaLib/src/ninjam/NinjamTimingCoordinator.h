@@ -208,11 +208,13 @@ namespace ninjam
 		std::optional<NinjamTempoChange> PendingTempoChange() const { return _pendingTempoChange; }
 		std::optional<NinjamTempoProposal> PendingTempoProposal() const;
 		NinjamTimingUpdate ResolveTempoDecision(const NinjamTempoDecision& decision,
-			const std::optional<engine::QuantisationTiming>& localTiming, utils::Timer& clock);
+			const std::optional<engine::QuantisationTiming>& localTiming, utils::Timer& clock,
+			std::chrono::steady_clock::time_point now = std::chrono::steady_clock::now());
 		// Immediate coordinator-local resolution; UI callers must use the token API.
 		NinjamTimingUpdate ResolveTempoChange(bool accept,
 			const std::optional<engine::QuantisationTiming>& localTiming,
-			utils::Timer& clock);
+			utils::Timer& clock,
+			std::chrono::steady_clock::time_point now = std::chrono::steady_clock::now());
 		// Feedback from the network layer after attempting to deliver a tempo
 		// request. A failed send returns the request to Queued so the next interval
 		// boundary re-sends it; success leaves it awaiting server acknowledgement.
@@ -238,7 +240,7 @@ namespace ninjam
 		static std::optional<NinjamTempoChange> _MakeProposal(const NinjamTiming& timing) noexcept;
 		NinjamTimingUpdate _AcceptTempoChange(const NinjamTempoChange& change,
 			const std::optional<engine::QuantisationTiming>& localTiming,
-			utils::Timer& clock);
+			utils::Timer& clock, std::chrono::steady_clock::time_point now);
 		NinjamTimingUpdate _PublishRemoteDesired(const NinjamTempoChange& change,
 			NinjamLocalFollowPolicy policy, NinjamDesiredTimingIntent intent,
 			bool remoteGridChanged) noexcept;
@@ -282,7 +284,7 @@ namespace ninjam
 		bool _noSyncActive = false;
 		NinjamNoSyncReason _lastNoSyncReason = NinjamNoSyncReason::None;
 		std::uint64_t _sessionEpoch = 0u;
-		std::optional<std::chrono::steady_clock::time_point> _lastValidObservationAt;
+		std::optional<std::chrono::steady_clock::time_point> _lastTimingAuthorityRefreshAt;
 		std::optional<std::uint64_t> _lastRemotePhaseDeviceSample;
 		std::uint64_t _lastDiagnosticAppliedSessionEpoch = 0u;
 		std::uint64_t _lastDiagnosticAppliedVersion = 0u;

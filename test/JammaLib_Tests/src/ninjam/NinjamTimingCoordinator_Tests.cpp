@@ -1098,3 +1098,134 @@ TEST(NinjamTimingCoordinator, NoObservationAndInvalidTimingRecoverIdempotently)
 	EXPECT_TRUE(recovered.DesiredTransport.has_value());
 	EXPECT_TRUE(coordinator.IsConnected());
 }
+
+TEST(NinjamTimingCoordinator, InvalidObservationAfterDeadlineRevokesDisplayedProposal) {
+	for (int invalidKind = 0; invalidKind < 4; ++invalidKind) {
+		SCOPED_TRACE(invalidKind);
+		Timer clock;
+		clock.SetSeedSourceLength(384000ul);
+		NinjamTimingCoordinator coordinator;
+		ninjam::NinjamTempoJoinOptions options;
+		options.PromptBeforeApplyingRemoteTempo = true;
+		options.PushLocalTempoOnJoin = false;
+		options.TempoRequestDeadline = std::chrono::seconds(1);
+		coordinator.Connect(options, std::nullopt);
+		const auto start = std::chrono::steady_clock::time_point{};
+		auto timing = MakeTimingTempo(480000u, 100u, 90.0f, 8u);
+		coordinator.Observe(timing, std::nullopt, true, io::UserConfig{}, clock, start);
+		coordinator.Tick(std::nullopt, true, clock, start + std::chrono::seconds(1));
+		const auto displayed = coordinator.PendingTempoProposal();
+		ASSERT_TRUE(displayed);
+
+		switch (invalidKind) {
+		case 0: timing.IsConnected = false; break;
+		case 1: timing.IntervalLengthSamps = 0u; break;
+		case 2: timing.IsValid = false; break;
+		case 3: timing.Bpi = 0u; break;
+		}
+		coordinator.Observe(timing, std::nullopt, true, io::UserConfig{}, clock,
+			start + std::chrono::seconds(2));
+		EXPECT_FALSE(coordinator.PendingTempoProposal());
+		const ninjam::NinjamTempoDecision stale{ displayed->Id, ninjam::NinjamTempoChoice::FollowServer };
+		EXPECT_FALSE(coordinator.ResolveTempoDecision(stale, std::nullopt, clock).DesiredTransport);
+		const auto repeated = coordinator.Observe(timing, std::nullopt, true, io::UserConfig{}, clock,
+			start + std::chrono::seconds(3));
+		EXPECT_FALSE(repeated.DesiredTransport);
+
+		auto fresh = MakeTimingTempo(480000u, 200u, 90.0f, 8u);
+		fresh.DeviceAudioSampleAtObservation = 256u;
+		coordinator.Observe(fresh, std::nullopt, true, io::UserConfig{}, clock,
+			start + std::chrono::seconds(4));
+		const auto replacement = coordinator.PendingTempoProposal();
+		ASSERT_TRUE(replacement);
+		EXPECT_NE(displayed->Id, replacement->Id);
+		EXPECT_FALSE(coordinator.ResolveTempoDecision(stale, std::nullopt, clock).DesiredTransport);
+		EXPECT_TRUE(coordinator.PendingTempoProposal());
+		EXPECT_TRUE(coordinator.ResolveTempoDecision(
+			{ replacement->Id, ninjam::NinjamTempoChoice::FollowServer }, std::nullopt, clock).DesiredTransport);
+	}
+}
+
+TEST(NinjamTimingCoordinator, AcceptedDeadlineProposalExpiresOrInvalidatesAuthority) {
+	for (const bool invalidate : { false, true }) {
+		SCOPED_TRACE(invalidate);
+		Timer clock;
+		clock.SetSeedSourceLength(384000ul);
+		NinjamTimingCoordinator coordinator;
+		ninjam::NinjamTempoJoinOptions options;
+		options.PromptBeforeApplyingRemoteTempo = true;
+		options.PushLocalTempoOnJoin = false;
+		options.TempoRequestDeadline = std::chrono::seconds(1);
+		coordinator.Connect(options, std::nullopt);
+		const auto start = std::chrono::steady_clock::time_point{};
+		auto timing = MakeTimingTempo(480000u, 100u, 90.0f, 8u);
+		coordinator.Observe(timing, std::nullopt, true, io::UserConfig{}, clock, start);
+		coordinator.Tick(std::nullopt, true, clock, start + std::chrono::seconds(1));
+		const auto displayed = coordinator.PendingTempoProposal();
+		ASSERT_TRUE(displayed);
+		const auto acceptedAt = start + std::chrono::seconds(2);
+		const auto accepted = coordinator.ResolveTempoDecision(
+			{ displayed->Id, ninjam::NinjamTempoChoice::FollowServer }, std::nullopt, clock, acceptedAt);
+		ASSERT_TRUE(accepted.DesiredTransport);
+		EXPECT_EQ(ninjam::NinjamDesiredTimingIntent::Replacement, accepted.DesiredTransport->Intent);
+		EXPECT_FALSE(coordinator.PendingTempoProposal());
+		const auto cached = coordinator.Observe(timing, std::nullopt, true, io::UserConfig{}, clock,
+			acceptedAt + std::chrono::milliseconds(999));
+		EXPECT_FALSE(cached.DesiredTransport);
+		EXPECT_FALSE(coordinator.PendingTempoProposal());
+		EXPECT_FALSE(coordinator.Tick(std::nullopt, true, clock,
+			acceptedAt + std::chrono::milliseconds(999)).DesiredTransport);
+
+		NinjamTimingUpdate revoked;
+		if (invalidate) {
+			timing.IsValid = false;
+			revoked = coordinator.Observe(timing, std::nullopt, true, io::UserConfig{}, clock,
+				acceptedAt + std::chrono::seconds(1));
+			EXPECT_FALSE(coordinator.Observe(timing, std::nullopt, true, io::UserConfig{}, clock,
+				acceptedAt + std::chrono::seconds(2)).DesiredTransport);
+		} else {
+			revoked = coordinator.Tick(std::nullopt, true, clock, acceptedAt + std::chrono::seconds(1));
+			EXPECT_FALSE(coordinator.Tick(std::nullopt, true, clock,
+				acceptedAt + std::chrono::seconds(2)).DesiredTransport);
+		}
+		ASSERT_TRUE(revoked.DesiredTransport);
+		EXPECT_EQ(ninjam::NinjamDesiredTimingIntent::NoSync, revoked.DesiredTransport->Intent);
+		EXPECT_EQ(invalidate ? ninjam::NinjamNoSyncReason::InvalidTiming
+			: ninjam::NinjamNoSyncReason::ObservationDeadline, revoked.NoSyncReason);
+	}
+}
+
+TEST(NinjamTimingCoordinator, AcceptedDeadlineProposalResumesOnlyMatchingFreshGeometry) {
+	for (const bool changed : { false, true }) {
+		SCOPED_TRACE(changed);
+		Timer clock;
+		clock.SetSeedSourceLength(384000ul);
+		NinjamTimingCoordinator coordinator;
+		ninjam::NinjamTempoJoinOptions options;
+		options.PromptBeforeApplyingRemoteTempo = true;
+		options.PushLocalTempoOnJoin = false;
+		options.TempoRequestDeadline = std::chrono::seconds(1);
+		coordinator.Connect(options, std::nullopt);
+		const auto start = std::chrono::steady_clock::time_point{};
+		const auto timing = MakeTimingTempo(480000u, 100u, 90.0f, 8u);
+		coordinator.Observe(timing, std::nullopt, true, io::UserConfig{}, clock, start);
+		coordinator.Tick(std::nullopt, true, clock, start + std::chrono::seconds(1));
+		const auto displayed = coordinator.PendingTempoProposal();
+		ASSERT_TRUE(displayed);
+		coordinator.ResolveTempoDecision({ displayed->Id, ninjam::NinjamTempoChoice::FollowServer },
+			std::nullopt, clock, start + std::chrono::seconds(2));
+		auto fresh = MakeTimingTempo(changed ? 576000u : 480000u, 200u, changed ? 100.0f : 90.0f, 8u);
+		fresh.DeviceAudioSampleAtObservation = 256u;
+		const auto recovered = coordinator.Observe(fresh, std::nullopt, true, io::UserConfig{}, clock,
+			start + std::chrono::milliseconds(2100));
+		ASSERT_TRUE(recovered.DesiredTransport);
+		EXPECT_EQ(changed, recovered.PromptForTempoChange);
+		EXPECT_EQ(changed, coordinator.PendingTempoProposal().has_value());
+		EXPECT_EQ(changed ? ninjam::NinjamDesiredTimingIntent::NoSync : ninjam::NinjamDesiredTimingIntent::Replacement,
+			recovered.DesiredTransport->Intent);
+		if (!changed) {
+			EXPECT_EQ(200u, recovered.DesiredTransport->RemoteMasterPhaseSamps);
+			EXPECT_EQ(256u, recovered.DesiredTransport->RemotePhaseDeviceSample);
+		}
+	}
+}

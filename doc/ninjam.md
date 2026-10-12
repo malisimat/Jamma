@@ -92,6 +92,9 @@ proposal revision. The serialized Coordinator validates that token and resolves
 the decision together; stale acceptance or rejection has no effect. Phase-only
 observations keep the token stable. Replacing obsolete UI is cleanup, not a
 rejection, and a release begun on an old prompt cannot activate its replacement.
+Accepting a preserved observation-timeout proposal starts one bounded observation
+grace period; cached timing cannot extend it, and invalid timing revokes both
+pending proposals and accepted authority.
 
 Physical loss, disconnect, observation timeout, and reconnect use the same
 explicit lifecycle. A recovered physical session receives a fresh session
