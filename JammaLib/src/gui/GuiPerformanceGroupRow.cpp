@@ -106,14 +106,14 @@ GuiToggleParams GuiPerformanceGroupRow::_ButtonParams(bool selection, std::size_
     params.ToggledDownTexture = "performance_group_on_down";
     params.TextureShader = "texture_tinted";
     params.TintColor = add ? glm::vec3(1.0f) : selection ? glm::vec3(1.0f, 0.875f, 0.208f) : glm::vec3(0.259f, 0.588f, 1.0f);
-    params.Text = add ? "+" : std::to_string(slot);
+    params.Text = add ? "+" : (selection ? "" : "F") + std::to_string(slot);
     params.TextPadding = 0u;
     params.Size = { 32u, ButtonHeight };
     params.MinSize = { 0u, 0u };
     return params;
 }
 
-GuiPerformanceGroupRow::GuiPerformanceGroupRow(bool selection) : GuiPanel(_Params(selection))
+GuiPerformanceGroupRow::GuiPerformanceGroupRow(bool selection) : GuiPanel(_Params(selection)), _selection(selection)
 {
     auto label = GuiLabelParams::PanelHeader(selection ? "Selection" : "Mute", 84u);
     label.Size.Height = Height;
@@ -172,6 +172,7 @@ void GuiPerformanceGroupRow::SetSlots(const std::array<bool, 9>& occupied, std::
 {
     const bool changed = occupied != _occupied;
     _occupied = occupied;
+    if (changed) _tooltipSlot.reset(); // Add help depends on whether the row is empty.
     _visibleSlots = 0u;
     for (std::size_t i = 0u; i < occupied.size(); ++i)
     {
@@ -304,8 +305,14 @@ void GuiPerformanceGroupRow::DrawTooltip(DrawContext& context, utils::Position2d
     if (!hovered) return;
     if (_tooltipSlot != hovered)
     {
-        _tooltipLabel->SetString(*hovered == 9u ? "Capture current state into the lowest empty slot"
-            : "Click: recall / capture   Shift: overwrite   Alt: clear");
+        const auto key = "F" + std::to_string(*hovered + 1u);
+        const auto text = *hovered == 9u
+            ? (_selection ? std::string("Capture into the lowest empty slot")
+                : _visibleSlots == 0u ? std::string("Empty row: F1 stores; F2-F9 do nothing. + stores.")
+                : std::string("F1-F9: create through next slot; + fills first hole"))
+            : (_selection ? std::string("Click: recall / store   Shift: overwrite   Alt: clear")
+                : key + ": recall/store; Shift+" + key + ": store; Alt+" + key + ": clear");
+        _tooltipLabel->SetString(text);
         _tooltipSlot = hovered;
     }
     auto& gl = dynamic_cast<graphics::GlDrawContext&>(context);

@@ -72,5 +72,6 @@ namespace gui
         std::size_t _visibleSlots = 0u;
         float _elapsed = TransitionSeconds;
         bool _layoutInitialized = false;
+        bool _selection = false;
     };
 }

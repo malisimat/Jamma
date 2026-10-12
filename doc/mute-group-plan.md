@@ -26,7 +26,8 @@ Each row supports slots `1` through `9`, with independent active-group indicatio
 - `+` captures current state into the lowest available empty slot. It fills interior holes before appending. Disable `+` when all nine slots are filled; retain it in the layout as a subdued disabled action.
 - Clicking an occupied numbered slot recalls it. Clicking an empty numbered slot captures current state there.
 - Shift-click creates or overwrites a numbered slot. Alt-click clears it. These operations apply to both rows.
-- Mute shortcuts `1` through `9` recall an occupied slot or capture into an empty slot. Shift+number creates or overwrites; Alt+number clears. `0` does not address a group. Selection groups have no number-key activation.
+- Mute shortcuts `F1` through `F9` recall an occupied slot or capture into an addressable empty slot. Shift+F-key creates or overwrites; Alt+F-key clears an existing slot. Selection groups remain mouse-operated. Digits `0` through `9` continue through normal input routing to configured triggers.
+- Keyboard creation is limited to the row's visible slots plus its next add position. On an empty row, only `F1` may store; `F2` through `F9`, including Shift combinations, do nothing. After slot 1 exists, `F2` may store slot 2. A rejected hidden-slot press queues no capture, changes no mute/plugin state or active indication, and does not cancel another pending operation. Existing sparse slots and visible interior holes remain individually addressable; earlier slots are never auto-filled.
 - Storing directly into a higher slot creates visible empty slots below it. Clearing an interior slot leaves its number visible and unfilled. Remove all trailing empty slots above the highest occupied slot. Numbers never move between stored snapshots.
 - Recall replaces the snapshot's target states; pressing an active button again recalls it again.
 - The last stored/recalled slot stays highlighted until another slot is stored/recalled or that slot is cleared. This indicates the last applied group, rather than continuous equality with live state; manual edits and automation do not overwrite the stored snapshot.
@@ -45,26 +46,28 @@ Full VST state capture/restore uses the existing JAM-compatible plugin blobs, in
 
 ### Appearance and layout
 
-Extend the existing top panel downwards for two group rows beneath its input-source controls. Mute groups are blue; selection groups are bright yellow. Both use rounded holder borders with slight fill and numbered rectangular buttons of matching geometry. The `+` action stays subdued and neutral.
+The existing collapsible top selection panel contains the select-depth radios, then the mute-group row, then the selection-group row. Both complete group rows share the radios' actual laid-out left edge and width, including narrow windows. Mute groups are blue; selection groups are bright yellow. Both use rounded holder borders with slight fill and rectangular buttons of matching geometry. Mute buttons show `F1` through `F9`; selection buttons retain numeric slot labels. The `+` action stays subdued and neutral.
 
-With only slot 1 visible, `1` and `+` each occupy half the usable holder width, with even padding. Divide usable width equally among all visible numbered slots and the trailing `+`. Interior empty slots retain an unfilled numbered presentation. Provide distinct stored, active, empty, hover, pressed and disabled states.
+With only slot 1 visible, its button and `+` each occupy half the usable holder width, with even padding. Divide usable width equally among all visible numbered slots and the trailing `+`. Interior empty slots retain an unfilled numbered presentation. Provide distinct stored, active, empty, hover, pressed and disabled states.
 
 Use 32px button height, 4px holder padding and 8px spacing between rows as layout starting values, consistent with existing style constants and visual verification. Render labels as text separate from the textures. Use dedicated nine-patch textures generated with the tga-icon-gen skill, retaining editable SVG sources and registered slice metadata.
 
 Ease button positions and widths over approximately 120ms when slots are added or removed. Retarget from current presented geometry during rapid changes. Keep hit testing, clipping and pointer capture consistent with animated geometry.
 
-Adjust the settings panel to fit below the taller top panel. Derive the occupied top-panel bounds from the actual source-row and group-row layout, including source scrollbars, rather than duplicating a fixed height. Preserve camera/performance-area layout. Verify small windows, DPI scaling, routing overlays and Ctrl overlay transitions.
+Collapse/expand, clipping, animation and pointer cleanup apply to all three selection-panel rows together. Collapsed group controls cannot draw, retain hover/capture or receive pointer actions; function-key commands still work. Derive selection-panel height and settings avoidance from the combined layout. HUD occupied bounds describe its source controls and scrollbars. Preserve camera/performance-area layout. Verify small windows, DPI scaling, routing overlays and Ctrl overlay transitions.
+
+Hovering an occupied group previews its members through rendering only: members are highlighted and other local items are greyed out. Mute-group members are targets captured as audibly unmuted (including effective parent suppression); selection-group members are captured selected targets. Use a blue cue for mute groups and a yellow cue for selection groups. Hover does not recall the group or alter live mute/selection state; leaving the button or hiding the panel clears the preview.
 
 ## Codebase findings and implementation mapping
 
 | Area | Verified source | Required implementation |
 | --- | --- | --- |
-| Top panel | `JammaLib/src/gui/GuiHud.cpp:791`, `_LayoutPanels`; `GuiHud.h:82`, `SetSize` | Extend `_topStrip` and border. Final height is recomputed from source-row height at lines 859-862; include both group rows in that calculation and retain source controls at the top. |
-| Settings panel | `JammaLib/src/gui/GuiMainPanel.cpp`, `_Layout`, `_UpdatePresentation` | Pass actual occupied top-strip bounds into settings layout so the taller strip constrains settings height/placement, including small viewports. |
+| Top selection panel | `JammaLib/src/gui/GuiMainPanel.cpp`, `_Layout`, `_UpdatePresentation`; `JammaLib/src/engine/Scene.cpp` | Own both group rows in the SelectionOnly panel below its select-depth radios; share its collapse lifecycle, clipping and animation. |
+| Settings panel | `JammaLib/src/gui/GuiMainPanel.cpp`, `_Layout`, `_UpdatePresentation` | Account for selection-panel occupied bounds in settings avoidance; retain actual source-control bounds in the HUD, including small viewports. |
 | UI animation | `JammaLib/src/engine/Scene.cpp:927`; `GuiMainPanel::AdvanceAnimation` | Reuse the elapsed-time UI pump and eased presentation pattern; animate off the audio callback. |
 | Radio controls | `JammaLib/src/gui/GuiRadio.h`, `GuiRadio.cpp` | Existing radio uses fixed toggle children. Add a dedicated group-row widget supporting sparse slots, no active choice, dynamic geometry and a separate action-only `+`. |
 | Input routing | `JammaLib/src/engine/Scene.cpp:1355`, `OnAction(KeyAction)` | Preserve contextual consumers, then route to the dedicated group controller before keyboard triggers. Keep Scene wiring minimal. |
-| Other keyboard input | `JammaLib/src/midi/MidiRouter.cpp:186` | Channel override uses PageUp/PageDown. Configured trigger overlap with digits/Backspace follows the shortcut precedence specified above. |
+| Other keyboard input | `JammaLib/src/midi/MidiRouter.cpp:186` | Channel override uses PageUp/PageDown. Digits remain available to configured triggers; supported F-key group commands and Backspace follow the shortcut precedence above. |
 | Station mute | `JammaLib/src/engine/Scene.cpp:2882-2911` | Existing station selection mute fans out to takes and status uses `AllTakesMuted()`. Reuse owner operations and deduplicate children for Backspace. |
 | Loop and take mute | `JammaLib/src/engine/Loop.h:217-219`, `Loop.cpp:Mute/UnMute`; `base/Tweakable.h`; `engine/LoopTake.h:171` | Preserve loop-level configuration and effective take suppression. Audit mixer transitions rather than assuming loop crossfades smooth mute. |
 | Selection | `JammaLib/src/engine/Scene.cpp:2967`, `_UpdateSelection`; `GuiElement.h:179` | Preserve station propagation, individual loop choices and aggregate take flags. Extract reusable capture/restore behavior into focused classes instead of expanding Scene. |
@@ -104,24 +107,26 @@ Compose each group row from a holder, numbered toggles and a separate neutral ad
 
 Generate rounded nine-patch holder/button art and aligned interactive states using `.agents/skills/tga-icon-gen/SKILL.md`. Keep staged intermediates separate from committed assets. Verify straight-alpha edges, exact slice coordinates and texture dimensions; register assets in `Jamma/resources/ResourceList.txt`. Reuse one geometry with renderer tint where appropriate.
 
-Expose occupied top-strip bounds to settings layout. Update both layout and animated presentation calculations to honor those bounds. Reuse the Scene UI animation pump for group easing; do not add callback-owned GUI work.
+Expose occupied selection-panel and source-strip bounds to settings layout. Update both layout and animated presentation calculations to honor those bounds. Reuse the Scene UI animation pump for group easing; do not add callback-owned GUI work.
 
 ## Implementation sequence
 
 1. Implement/test the nine-slot model and commands: lowest-empty `+`, sparse direct creation, overwrite, interior clear, trailing removal, independent active indication and stable numbering.
 2. Add persistent entity/plugin identity and owner-level capture/restore for complete local mute and selection configuration at the finest defined level. Preserve effective suppression, negative states, selection depth and stale/new-target behavior.
-3. Add the dedicated input/controller integration with minimal Scene wiring. Implement modifier clicks, digit shortcuts, context priority, repeat suppression and deduplicated independent Backspace inversion.
+3. Add the dedicated input/controller integration with minimal Scene wiring. Implement modifier clicks, function-key shortcuts, bounded keyboard creation, context priority, repeat suppression and deduplicated independent Backspace inversion.
 4. Implement JAM-compatible full VST capture and safe live restore through plugin-owner lifecycle coordination. Preserve editor/routing identity, smooth mute transitions, superseding-request order and ongoing automation precedence.
 5. Add JAM group records and identity import/export with old-file compatibility, sparse slot validation and state-blob round-trip tests.
-6. Implement both group-row widgets and eased geometry. Extend the top strip and constrain settings layout using actual occupied bounds.
+6. Implement both group-row widgets and eased geometry. Place both rows below the selection panel's depth radios and constrain settings layout using actual occupied bounds.
 7. Generate, validate and register nine-patch textures with the tga-icon-gen skill; visually verify both tints, neutral `+`, all button states and animated hit testing.
 8. Read the copied local `.vscode/tasks.json` before each build/test run and follow `doc/build.md`. Incrementally build affected JammaLib/app targets and run relevant native tests. Run the threading-review audit and manually inspect affected callback paths. Do not guess MSBuild paths or use Clean/Rebuild without necessity.
 
 ## Acceptance and validation
 
-- First capture shows `1` and `+` at equal widths; filled rows stop at nine groups and disable `+`.
+- First capture shows `F1` (mute) or `1` (selection) and `+` at equal widths; filled rows stop at nine groups and disable `+`.
 - `+` fills the lowest hole; direct higher-slot creation preserves lower empty numbers; clearing trailing slots resizes survivors without renumbering.
-- Both rows support plain, Shift and Alt clicks; only mute groups respond to `1`-`9`. Unsupported modifiers/`0` do not address groups. Manual edits leave last-applied indication intact.
+- Both rows support plain, Shift and Alt clicks; only mute groups respond to `F1`-`F9`. Unsupported modifiers and `F10`-`F12` do not address groups. Digits `0`-`9` remain available downstream. Manual edits leave last-applied indication intact.
+- Empty-row `F2` and Shift+`F2` do nothing, including after the UI pump. `F1` stores first, then `F2` may store; keys beyond the visible slots plus one do nothing. Sparse `F9` recall and visible interior-hole capture remain valid without filling preceding slots.
+- Expanded selection-panel rows follow radios / mute / selection order with shared width and alignment. Collapse hides all rows and clears pointer state; keyboard commands remain active. Hover previews audible mute members or selected selection members without changing live state.
 - Mute recall restores muted and unmuted configuration at individual loop, take and station scope, including effective captured suppression. Local-only capture/recall does not affect remote entities or recording-owned controls.
 - Selection recall restores selected and deselected configuration and depth, preserving loop-level detail and parent aggregates. Empty selection groups remain valid stored slots.
 - Removed/reordered entities/plugins never redirect recall; new targets remain untouched; pending operations cancel on unload and teardown.
@@ -147,7 +152,7 @@ The implementation and validation record below supersedes the initial planning-o
 
 ## Implementation and validation record
 
-Implemented in this session: sparse nine-slot model; persistent station, take, audio/MIDI-loop and plugin identities; local finest-level mute/selection snapshots; dedicated controller and UI retry pump; digit/Shift/Alt and Backspace precedence; coherent audio-boundary mute publication; live plugin state access exclusion and MIDI recovery; optional bounded JAM records; two animated group rows; actual HUD bounds constraining settings; all ten registered textures and editable SVG sources.
+Original implementation record (before the function-key and selection-panel follow-up): sparse nine-slot model; persistent station, take, audio/MIDI-loop and plugin identities; local finest-level mute/selection snapshots; dedicated controller and UI retry pump; digit/Shift/Alt and Backspace precedence; coherent audio-boundary mute publication; live plugin state access exclusion and MIDI recovery; optional bounded JAM records; two animated group rows; actual HUD bounds constraining settings; all ten registered textures and editable SVG sources.
 
 The asset state sheet is [performance-group-assets.png](images/performance-group-assets.png). This shows the texture families and tints, rather than an application screenshot. Labels and glyphs are rendered separately. Occupancy uses the filled texture family; last-applied indication uses a separate white cue.
 
@@ -176,7 +181,7 @@ Manual checks still required on the user's live setup: DPI/display appearance, r
 
 The user's Kontakt 5 exception stack showed SetState synchronously sending WM_KILLFOCUS while Scene::AdvanceUiAnimations held the Scene mutex. Immediate focus cleanup entered Scene::_InteractionContext and attempted to lock that same non-recursive mutex. Window now latches focus/capture-loss notifications on its UI owner and drains them before the UI frame and after the group-state pump returns, outside the Scene lock. Capture-only requests apply only to active gestures and are discarded when a newer press starts.
 
-Group release consumption now survives focus loss so a recalled plugin cannot send the consumed `1` release through to its configured trigger. A fresh contextual or unsupported-modifier press clears stale consumption if the original release went to another window.
+At this stage, group release consumption was changed to survive focus loss so a recalled plugin could not send the consumed digit `1` release through to its configured trigger. The later function-key follow-up retains release ownership for `F1` through `F9` while freeing digits for normal triggering. A fresh contextual or unsupported-modifier press clears stale consumption if the original release went to another window.
 
 Independent review passed. All **1,445 native tests** pass, including synchronous native focus/capture notifications under the held Scene mutex, active pointer cancellation, newer gesture preservation, group/contextual release ownership, and a real published rig with digit `1` assigned to trigger activation. The Debug x64 app rebuild succeeded. The threading audit found no new callback lock/wait additions; all changes are on UI input paths. Live Kontakt confirmation remains user-side.
 
@@ -193,3 +198,16 @@ New shared state is UI-owned: Window dispatch depth, fixed message storage, over
 
 
 Validation: all **1,461 native tests across 176 suites** pass, including 16 added regressions for reentrant owner capture, controller exclusion, nested input/resize/destruction, editor creation/idle/lifetime, and live/raw state close deferral. Debug x64 tests and app incremental builds succeeded. Independent review covered VST2, VST3 and native UI ownership. The whole-file hot-path audit flags four relocated path-metadata lock lines in non-audio capture/export; manual callback inspection confirms no new callback locks, waits, allocations or logging. One earlier full run transiently failed the unchanged trigger-history restoration test; it passed five focused repeats and the final full run. Representative live Kontakt/VST editor behavior remains a manual runtime check.
+
+
+### Follow-up: function keys, selection panel and hover preview (2026-10-12)
+
+Mute buttons now show F1-F9; selection buttons retain numeric slot labels. Shortcut help includes Shift+F-key store and Alt+F-key clear. Keyboard storage addresses visible slots plus their next add position: empty-row F2/Shift+F2 does nothing, while sparse recalls and visible holes remain valid. Digits continue through normal trigger routing. Both rows live below the depth radios inside the collapsible selection panel, sharing their computed width, clipping, animation and pointer cleanup.
+
+Hover preview highlights audible members of mute snapshots in blue and selected members of selection snapshots in yellow, greying other local items through the existing rendering path. Live identities are checked so deleted or reused GUI targets do not inherit stale membership. This is a visual preview and does not apply group state; leaving the button, collapse and hidden ancestors clear it.
+
+Independent source review passed. Final incremental Debug x64 JammaLib, native test and application builds succeeded with zero warnings/errors using freshly read local tasks. The focused run passed **83 tests across 16 suites**; the full native target passed **1,482 tests across 177 suites**. This includes shortcut/creation boundaries, downstream digits, selection-panel layout and pointer cleanup, hover lifecycle/identity, and the updated function-key trigger-fallback regression. Historical counts above describe earlier stages.
+
+The bundled Inter font metrics were checked against the normal 384px-wide row: F-key labels fit the approximately 26px full-row buttons, and shortcut/add help fits the 376px tooltip text area. Existing per-label scissoring and tooltip ellipsis cover narrower widths. When less than 98px remains for settings below selection, layout retains its existing minimum-height fallback to keep settings usable; the two overlays can overlap in very small windows.
+
+Manual verification remains pending for shader compilation/rendering on the user's graphics driver, DPI/display appearance, expanded/collapsed gestures, source/routing overlays, small windows, text/plugin-editor input contexts, and live device/audio behavior. Native tests and font measurements do not establish those runtime checks.
