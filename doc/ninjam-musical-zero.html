@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>One beat. Two clocks. — Jamma timing explained</title>
+<style>
+:root{color-scheme:dark;--bg:#0d1118;--panel:#151c27;--line:#293344;--text:#edf1f7;--muted:#9cabc0;--green:#8ee4be;--red:#ff9a8a;--blue:#91beff;--gold:#eed49b;--mono:ui-monospace,SFMono-Regular,Consolas,monospace}
+*{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;background:var(--bg);color:var(--text);font:16px/1.6 system-ui,-apple-system,"Segoe UI",sans-serif;background-image:radial-gradient(ellipse at 80% 0%,#1c354044,transparent 50%)}button,input,select{font:inherit}button,select{cursor:pointer}button:focus-visible,input:focus-visible,select:focus-visible,a:focus-visible{outline:3px solid var(--blue);outline-offset:4px}a{color:var(--blue)}.wrap{max-width:1180px;margin:auto;padding:0 32px}.top{display:flex;align-items:center;justify-content:space-between;padding:26px 0;border-bottom:1px solid var(--line);font-size:12px;letter-spacing:.12em}.brand{font-weight:800}.tag{color:var(--green);letter-spacing:.04em}.hero{padding:68px 0 36px;max-width:870px}.eyebrow{color:var(--green);font-size:12px;font-weight:700;letter-spacing:.16em;text-transform:uppercase}h1{font-size:clamp(42px,6vw,76px);line-height:1.08;letter-spacing:-.055em;margin:15px 0 24px;font-weight:650}h1 span{color:var(--green)}.lead{font-size:20px;color:#b5c2d4;max-width:730px}.lead strong{color:var(--text);font-weight:550}.pills{display:flex;flex-wrap:wrap;gap:8px;margin-top:24px}.pill{font-size:12px;border:1px solid var(--line);padding:6px 12px;border-radius:30px;color:var(--muted)}.section{margin-top:54px}h2{font-size:30px;line-height:1.2;letter-spacing:-.025em;margin:10px 0 15px}h3{font-size:18px;margin:0 0 10px}p{margin:0 0 14px}.muted{color:var(--muted)}.intro{max-width:760px}.cards{display:grid;grid-template-columns:1fr 1fr;gap:18px;margin-top:24px}.card{background:linear-gradient(135deg,#192231,#151c27);border:1px solid var(--line);padding:26px;border-radius:18px}.card .label{color:var(--blue);font:12px var(--mono);margin-bottom:16px}.card.green .label{color:var(--green)}.clock-value{font:clamp(22px,3vw,34px) var(--mono);margin-bottom:12px;letter-spacing:-.04em}.card p{font-size:14px;color:var(--muted);margin-bottom:0}.eq{font:14px var(--mono);border:1px solid var(--line);border-radius:9px;background:#0e141f;padding:14px 18px;margin:18px 0;overflow:auto}.workbench{border:1px solid #344356;border-radius:22px;background:#121a25;overflow:hidden;box-shadow:0 24px 70px #0004;margin-top:25px}.bench-top{display:flex;justify-content:space-between;gap:14px;align-items:center;padding:22px 26px;border-bottom:1px solid var(--line);flex-wrap:wrap}.bench-title{font-size:15px;font-weight:650}.seg{display:flex;gap:3px;border:1px solid var(--line);background:#0d141f;padding:4px;border-radius:10px}.seg button{border:0;background:transparent;color:var(--muted);padding:8px 16px;border-radius:6px;font-size:13px;font-weight:650}.seg button[aria-pressed="true"]{background:#26352f;color:var(--green)}.seg button.old[aria-pressed="true"]{background:#3e2d2a;color:var(--red)}.bench-body{padding:26px}.controls{display:grid;grid-template-columns:2fr 1fr 1fr;gap:24px}.control label{display:block;font-size:12px;color:var(--muted);margin-bottom:8px}.value{color:var(--text);font:13px var(--mono);float:right}.control input[type=range]{width:100%;accent-color:var(--green);cursor:pointer}.control select{width:100%;background:#1b2533;color:var(--text);border:1px solid var(--line);padding:8px;border-radius:7px}.presets{display:flex;gap:8px;flex-wrap:wrap;margin:18px 0 0}.small-btn{border:1px solid var(--line);background:#1a2432;color:var(--muted);padding:6px 12px;border-radius:7px;font-size:12px}.small-btn:hover{color:var(--text);border-color:#596d84}.chart-viewport{overflow-x:auto}.chart{width:100%;display:block;margin:20px 0 10px;overflow:visible}svg text{font-family:var(--mono);font-size:11px;fill:var(--muted)}.chart-controls{display:flex;justify-content:space-between;gap:12px;align-items:center;flex-wrap:wrap}.chart-controls p{font-size:12px;color:var(--muted);margin:0}.actions{display:flex;gap:8px}.action{background:#24392f;border:1px solid #3d6551;color:var(--green);padding:8px 12px;border-radius:8px;font-size:12px}.action.secondary{background:#1c2838;border-color:#354b65;color:var(--blue)}.result{display:grid;grid-template-columns:1.2fr 1fr;gap:22px;background:#0d141f;padding:22px;border:1px solid var(--line);border-radius:13px;margin-top:22px}.result-number{font:32px var(--mono);color:var(--green);line-height:1.4}.result.bad .result-number{color:var(--red)}.result-title{font-size:12px;letter-spacing:.07em;text-transform:uppercase;color:var(--muted)}.result p{font-size:13px;margin:8px 0 0;color:var(--muted)}.formula{font:12px/1.9 var(--mono);align-self:center;color:#c8d5e6;overflow-wrap:anywhere}.formula b{color:var(--green);font-weight:500}.bad .formula b{color:var(--red)}.note-control{margin-top:14px;max-width:100%;accent-color:var(--blue)!important}.steps{display:grid;grid-template-columns:repeat(3,1fr);gap:18px;margin-top:25px}.step{padding:25px;border-radius:15px;border:1px solid var(--line);background:#151d28}.step .num{font:12px var(--mono);color:var(--green);margin-bottom:15px}.step p{font-size:14px;color:var(--muted)}.compare{display:grid;grid-template-columns:1fr 1fr;gap:18px;margin:25px 0}.codebox{border:1px solid var(--line);border-radius:14px;padding:23px;background:#121a25;overflow:auto}.codebox .caption{font-size:12px;font-weight:650;color:var(--red);margin-bottom:14px}.codebox.good .caption{color:var(--green)}pre{font:13px/1.8 var(--mono);margin:0;white-space:pre-wrap;color:#c6d1e1}.codebox p{font-size:13px;color:var(--muted);margin:14px 0 0}.invariant{padding:20px 24px;border-left:3px solid var(--green);background:#17271f;border-radius:0 12px 12px 0;color:#c4ddcc}.invariant code{color:var(--green);font:14px var(--mono)}.safety{display:grid;grid-template-columns:1fr 1fr;gap:28px;margin:25px 0}.safety-item{display:flex;gap:14px;margin-bottom:20px}.check{color:var(--green);font-size:20px}.safety-item strong{font-size:15px;font-weight:650}.safety-item p{font-size:14px;color:var(--muted);margin:4px 0}.boundary{border:1px solid #524632;background:#242016;padding:25px;border-radius:15px;margin:22px 0}.boundary h3{color:var(--gold)}.boundary p{color:#bcb5a6;font-size:14px}.evidence{display:flex;gap:32px;flex-wrap:wrap;border-top:1px solid var(--line);border-bottom:1px solid var(--line);padding:25px 0;margin-top:35px}.metric strong{display:block;font:30px var(--mono);color:var(--green)}.metric span{font-size:12px;color:var(--muted)}details{border-bottom:1px solid var(--line);padding:18px 0}summary{cursor:pointer;font-weight:550;font-size:15px}details p{font-size:14px;color:var(--muted);margin:14px 0 0;max-width:850px}footer{color:var(--muted);font-size:12px;padding:36px 0 44px}.fine{font-size:12px;color:var(--muted);margin-top:16px}code{font-family:var(--mono);font-size:.9em}.sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0)}
+@media(max-width:760px){.wrap{padding:0 20px}.hero{padding-top:42px}.lead{font-size:18px}.cards,.steps,.compare,.safety,.result{grid-template-columns:1fr}.controls{grid-template-columns:1fr 1fr}.control:first-child{grid-column:1/-1}.bench-body{padding:18px}.bench-top{padding:18px}.tag{display:none}.chart{min-width:740px;min-height:215px}.evidence{gap:20px}h2{font-size:26px}}
+@media(prefers-reduced-motion:reduce){html{scroll-behavior:auto}}
+</style>
+</head>
+<body>
+<div class="wrap">
+<header class="top"><span class="brand">JAMMA / TIMING LAB</span><span class="tag">A standalone, interactive explanation</span></header>
+<main>
+<section class="hero">
+<div class="eyebrow">Understanding the grid-origin fix</div>
+<h1>One beat.<br>Two clocks.<br><span>The right zero.</span></h1>
+<p class="lead">The audio device counts samples since it started. The musical transport counts samples from an accepted interval boundary. <strong>Quantised notes must use the same ruler as their grid.</strong></p>
+<div class="pills"><span class="pill">Same BPM &amp; BPI</span><span class="pill">Same remote phase</span><span class="pill">One corrected coordinate conversion</span><span class="pill">No audio files required</span></div>
+</section>
+<section aria-labelledby="two-clocks">
+<div class="eyebrow">01 / The distinction</div><h2 id="two-clocks">Equal units. Different starting points.</h2>
+<p class="intro muted">Both counters measure samples. That does not make their numbers interchangeable. The device can be running for seconds before a NINJAM join gives Jamma a musical clock.</p>
+<div class="cards">
+<article class="card"><div class="label">DEVICE SAMPLE COUNTER · D</div><div class="clock-value" id="deviceClock">662,528 + M</div><h3>“How much audio has run?”</h3><p>A timestamp for observing remote phase and projecting it to an audio block. Starting the device earlier changes this number.</p></article>
+<article class="card green"><div class="label">MUSICAL TRANSPORT · M</div><div class="clock-value" id="musicClock">0 → 313,600</div><h3>“Where are we in the music?”</h3><p>Timer’s accepted interval begins at musical zero. Capture starts and recorded event offsets are expressed on this ruler. Later intervals add to the absolute musical position.</p></article>
+</div>
+<div class="eq">D = O + M <span class="muted">&nbsp;·&nbsp; O is the device timestamp corresponding to musical zero.</span></div>
+<p class="fine">Here we model a stable, accepted remote transport with a 1:1 source map. Real observations also carry phase, sample rate, epoch and generation.</p>
+</section>
+<section class="section" aria-labelledby="lab-title">
+<div class="eyebrow">02 / Try the conversion</div><h2 id="lab-title">Move the device zero. Keep the music.</h2>
+<p class="intro muted">Drag the first slider. The beat should not move just because the audio device started earlier. The old conversion lets that unrelated timestamp shift the grid.</p>
+<div class="workbench">
+<div class="bench-top"><span class="bench-title">Quantisation / coordinate lab</span><div class="seg" aria-label="Conversion mode"><button class="old" id="oldMode" aria-pressed="false">Before</button><button id="newMode" aria-pressed="true">After</button></div></div>
+<div class="bench-body">
+<div class="controls">
+<div class="control"><label for="origin">Device timestamp at musical zero <span class="value" id="originValue"></span></label><input id="origin" type="range" min="0" max="1200000" value="662528" step="1"></div>
+<div class="control"><label for="tempo">Remote tempo <span class="value" id="tempoValue"></span></label><input id="tempo" type="range" min="80" max="180" value="135" step="1"></div>
+<div class="control"><label for="rate">Device sample rate</label><select id="rate"><option value="44100">44.1 kHz</option><option value="48000">48 kHz</option></select></div>
+</div>
+<div class="presets"><button class="small-btn" data-preset="trace">Trace example</button><button class="small-btn" data-preset="zero">Coincident zeros</button><button class="small-btn" data-preset="beat">Exactly one beat apart</button><button class="small-btn" data-preset="fractional">Fractional beat spacing</button></div>
+<div class="chart-viewport"><svg class="chart" id="chart" viewBox="0 0 960 342" role="img" aria-labelledby="chartTitle chartDesc"><title id="chartTitle">A note snapped using two different grid origins</title><desc id="chartDesc">The device ruler and musical ruler have different zero points. The incorrect grid is shifted; the corrected grid coincides with the musical beats.</desc><g id="chartContent"></g></svg></div>
+<div class="control"><label for="note">Recorded note position <span class="value" id="noteValue"></span></label><input class="note-control" id="note" type="range" min="50" max="350" value="205" step="1"></div>
+<div class="chart-controls"><p>Blue = recorded note &nbsp; · &nbsp; Green = remote beats &nbsp; · &nbsp; Coral = old grid</p><div class="actions"><button class="action secondary" id="motion" aria-pressed="false">Animate clocks</button><button class="action" id="listen">Listen: after</button></div></div>
+<div class="result" id="result" aria-live="polite">
+<div><div class="result-title">Quantised note vs nearest remote beat</div><div class="result-number" id="error"></div><p id="resultText"></p></div>
+<div class="formula" id="formula"></div>
+</div>
+<p class="fine">The audible demo synthesises a high click on the remote beat and a low tone on the selected grid. It illustrates scheduling, not Kontakt, plugin latency or a live NINJAM connection. Before/after are separate listening runs.</p>
+</div></div>
+</section>
+<section class="section" aria-labelledby="change-title">
+<div class="eyebrow">03 / What the code actually changed</div><h2 id="change-title">The grid’s origin. Not the transport.</h2>
+<p class="intro muted">This particular change is in <code>NinjamTimingCoordinator::_PublishRemoteDesired</code>. It changes the origin metadata sent to MIDI quantisation when a remote grid is published.</p>
+<div class="compare">
+<article class="codebox"><div class="caption">BEFORE · a device coordinate fed to musical arithmetic</div><pre>origin = remotePhaseDeviceSample
+       - remoteIntervalPhase;
+
+// Event position is MUSICAL:
+event = captureTransportStart
+      + recordedEventOffset;
+
+snap(event - origin);</pre><p>The origin calculation is meaningful in device samples. Subtracting it from a musical event mixes two rulers.</p></article>
+<article class="codebox good"><div class="caption">AFTER · both operands use the musical ruler</div><pre>origin = 0;
+
+// Event position is still MUSICAL:
+event = captureTransportStart
+      + recordedEventOffset;
+
+snap(event - origin);</pre><p>Accepted Timer geometry defines musical interval boundaries at zero and its interval multiples. The event and its grid now share that origin.</p></article>
+</div>
+<div class="invariant"><strong>The invariant:</strong> <code>event position − grid origin</code> must subtract coordinates from the <em>same domain</em>. A correct device-space implementation would convert the event to device space first, then convert the snapped result back. Musical zero avoids that unnecessary round trip.</div>
+<div class="steps">
+<article class="step"><div class="num">01 / OBSERVE</div><h3>Keep the timestamp.</h3><p>The device sample anchor still says when a remote phase was observed. Jamma uses it to project remote timing to the current callback boundary.</p></article>
+<article class="step"><div class="num">02 / APPLY</div><h3>Establish musical time.</h3><p>Timer’s accepted replacement sets the remote interval length and phase, and starts its interval count at zero. A nonzero current phase is valid; “zero origin” does not mean “rewind to phase zero”.</p></article>
+<article class="step"><div class="num">03 / SNAP</div><h3>Use musical boundaries.</h3><p>Capture start plus event offset gives musical position. Snap it to rounded remote boundaries, convert back to the take, and then compose intentional user offsets.</p></article>
+</div>
+</section>
+<section class="section" aria-labelledby="safety-title">
+<div class="eyebrow">04 / Why this is a safe correction</div><h2 id="safety-title">A narrower change, with an explicit contract.</h2>
+<div class="safety">
+<div>
+<div class="safety-item"><span class="check">✓</span><div><strong>Remote authority is retained.</strong><p>BPM, BPI, interval, phase, observation timestamp and command identity are preserved. This origin change supplies no new tempo or phase authority.</p></div></div>
+<div class="safety-item"><span class="check">✓</span><div><strong>Recorded material is retained.</strong><p>Quantisation derives a playback event snapshot. The origin change does not rewrite raw recorded notes or resize loop buffers.</p></div></div>
+<div class="safety-item"><span class="check">✓</span><div><strong>Device startup becomes irrelevant.</strong><p>Changing O while holding musical timing fixed leaves the corrected snapped event unchanged. Try it above.</p></div></div>
+</div><div>
+<div class="safety-item"><span class="check">✓</span><div><strong>Intentional offsets still exist.</strong><p>User, station and global offsets are composed after snapping. Zero grid origin does not erase those controls.</p></div></div>
+<div class="safety-item"><span class="check">✓</span><div><strong>No new callback synchronisation.</strong><p>The coordinator computes this metadata off the audio callback. The origin correction adds no callback locks, queues, allocations or logging.</p></div></div>
+<div class="safety-item"><span class="check">✓</span><div><strong>The production path is tested.</strong><p>The regression joins with an empty session, creates a take afterwards, records MIDI, and compares scheduled note output with the click boundary.</p></div></div>
+</div></div>
+<div class="evidence"><div class="metric"><strong>18</strong><span>rate / tempo / BPI combinations</span></div><div class="metric"><strong>345</strong><span>relevant tests passed</span></div><div class="metric"><strong>44.1 / 48</strong><span>kHz covered by the new matrix</span></div><div class="metric"><strong>0</strong><span>phase mismatches in 84 live trace snapshots</span></div></div>
+<p class="fine">Evidence from this investigation, not a certification of every configuration. Matrix: 2 sample rates × 3 tempos (100, 135, 137 BPM) × 3 BPI values (1, 16, 32). The live trace preceded the grid-origin change and established steady transport, not audible onset alignment.</p>
+<div class="boundary"><h3>What this does—and what remains separate</h3><p>It removes an unrelated device-epoch shift from MIDI grid arithmetic. It is valid because capture positions already use the accepted musical transport ruler.</p><p>It does not prove arbitrary pre-existing loops on a different source ruler align after a tempo change. Those need the source-map conversion and lifecycle to be checked independently. Fractional beat spacing also requires integer sample rounding; short repeated loop lengths can introduce separate rounding questions.</p><p>Even sample-aligned MIDI scheduling cannot guarantee a Kontakt sample’s audible attack lands exactly on the click. Plugin processing latency, intentional offsets and the sample’s attack are separate from this coordinate fix.</p></div>
+</section>
+<section class="section" aria-labelledby="faq-title"><div class="eyebrow">05 / The useful questions</div><h2 id="faq-title">Keep the boundaries clear.</h2>
+<details open><summary>Did this fix cause the successful “kept time” rerun?</summary><p>No. The earlier stall fix rejected inconsistent startup geometry: a 1000-sample interval paired with tempo metadata that implied a much longer interval. That prevented a poisoned source map. The grid-origin correction was made afterwards, while investigating the constant audible offset.</p></details>
+<details><summary>Was the device-origin calculation itself wrong?</summary><p>No. D minus remote phase is a reasonable device timestamp for an interval boundary. The mistake was treating that device timestamp as an origin for an event already expressed in musical transport samples. Correct numbers can still be used in the wrong coordinate domain.</p></details>
+<details><summary>Why did matching BPM not guarantee alignment?</summary><p>Tempo determines spacing. Origin determines placement. Two grids can repeat at exactly the same rate while every note lands a fixed distance away from a remote beat. At some device offsets the old formula accidentally aligns, which can hide the bug.</p></details>
+<details><summary>What else changed in the alignment fix?</summary><p>Stations now retain the accepted grid for takes created after joining. The metronome also stopped advancing independently by output hardware latency: clicks and local loop audio already share that latency in the same DAC buffer. Clicks now use the same rounded rational beat boundaries as MIDI quantisation. These are distinct fixes; the interactive origin lab isolates only the coordinate issue.</p></details>
+<details><summary>Where can I inspect the implementation?</summary><p><code>JammaLib/src/ninjam/NinjamTimingCoordinator.cpp</code>: grid publication. <code>JammaLib/src/midi/MidiQuantisation.cpp</code>: musical event snapping. <code>JammaLib/src/utils/Timer.cpp</code>: accepted geometry. <code>test/JammaLib_Tests/src/ninjam/NinjamTimingIntegration_Tests.cpp</code>: <code>NewQuantisedTakeAndMetronomeShareMusicalOrigin</code>.</p></details>
+</section>
+</main>
+<footer>Jamma timing lab · Self-contained HTML, CSS, SVG and JavaScript. No network requests, dependencies or session modifications. Open this file directly in a browser.</footer>
+</div>
+<script>
+'use strict';
+const $=id=>document.getElementById(id);
+const state={old:false,playing:false,progress:0,last:0,frame:0,audio:null,audioTimer:null};
+const fmt=n=>Math.round(n).toLocaleString('en-GB');
+function geometry(){const rate=+$('rate').value,bpm=+$('tempo').value,bpi=16,L=Math.round(rate*60*bpi/bpm),step=L/bpi,O=+$('origin').value,note=+$('note').value/100*step;return{rate,bpm,bpi,L,step,O,note};}
+// Mirror the C++ rational rounding, including negative boundary indices.
+function boundary(k,L,d){return Math.floor((k*L+Math.floor(d/2))/d);}
+function snap(value,origin,L,d){const relative=value-origin,whole=Math.floor(relative/L),remainder=relative-whole*L,cell=Math.floor((remainder*d+Math.floor(L/2))/L);return origin+boundary(whole*d+cell,L,d);}
+function svg(tag,attrs={},content=''){return '<'+tag+' '+Object.entries(attrs).map(([k,v])=>k+'="'+v+'"').join(' ')+'>'+content+'</'+tag+'>';}
+function render(){
+ const g=geometry(),correct=snap(g.note,0,g.L,g.bpi),wrong=snap(g.note,g.O,g.L,g.bpi),chosen=state.old?wrong:correct,nearest=snap(chosen,0,g.L,g.bpi),error=chosen-nearest,ms=error/g.rate*1000;
+ $('originValue').textContent=fmt(g.O)+' samples';$('tempoValue').textContent=g.bpm+' BPM';$('noteValue').textContent=(g.note/g.step).toFixed(2)+' beats · '+fmt(g.note)+' samples';
+ $('deviceClock').textContent=fmt(g.O)+' + M';$('musicClock').textContent='0 → '+fmt(g.L);$('oldMode').setAttribute('aria-pressed',String(state.old));$('newMode').setAttribute('aria-pressed',String(!state.old));
+ $('result').classList.toggle('bad',state.old);$('error').textContent=Math.abs(error)<.5?'0 samples':(error>0?'+':'−')+fmt(Math.abs(error))+' samples';
+ $('resultText').textContent=state.old?(Math.abs(error)<.5?'The old grid happens to coincide at this offset. Move the device zero to expose the dependency.':Math.abs(ms).toFixed(2)+' ms '+(error>0?'late':'early')+'. The spacing is right, but the device epoch shifts the grid.'):'The snapped note lands on a remote beat. Moving the device timestamp does not change this result.';
+ $('formula').innerHTML='event M = '+fmt(g.note)+'<br>grid origin = '+fmt(state.old?g.O:0)+' <span class="muted">('+(state.old?'device value used as musical':'musical')+')</span><br>snapped M = <b>'+fmt(chosen)+'</b><br>nearest beat = '+fmt(nearest);
+ $('listen').textContent=state.audio?'Stop sound':'Listen: '+(state.old?'before':'after');$('motion').textContent=state.playing?'Pause clocks':'Animate clocks';$('motion').setAttribute('aria-pressed',String(state.playing));
+ draw(g,correct,wrong,chosen);
+}
+function draw(g,correct,wrong,chosen){
+ const left=146,width=776,x=s=>left+s/g.step/4*width;let out='';
+ const row=(y,label,color)=>{out+=svg('text',{x:0,y:y+4,style:'fill:'+color+';font-size:12px'},label);out+=svg('line',{x1:left,y1:y,x2:922,y2:y,stroke:'#344156'});};
+ row(55,'Device ruler', '#91beff');row(131,'Musical beats','#8ee4be');row(207,'Old grid','#ff9a8a');row(283,'Correct grid','#8ee4be');
+ for(let i=0;i<=4;i++){const pos=boundary(i,g.L,g.bpi),px=x(pos);out+=svg('line',{x1:px,y1:32,x2:px,y2:309,stroke:'#8ee4be',opacity:.11});for(const y of [55,131,283])out+=svg('line',{x1:px,y1:y-8,x2:px,y2:y+8,stroke:y===55?'#91beff':'#8ee4be','stroke-width':2});out+=svg('text',{x:px,y:29,'text-anchor':'middle'},fmt(g.O+pos));out+=svg('text',{x:px,y:157,'text-anchor':'middle',style:'fill:#8ee4be'},i+' beat'+(i===1?'':'s'));out+=svg('text',{x:px,y:327,'text-anchor':'middle'},fmt(pos));}
+ const first=Math.floor(-g.O/g.step)-2;for(let k=first;k<first+10;k++){const pos=g.O+boundary(k,g.L,g.bpi);if(pos>=0&&pos<=4*g.step)out+=svg('line',{x1:x(pos),y1:197,x2:x(pos),y2:217,stroke:'#ff9a8a','stroke-width':2,opacity:state.old?1:.45});}
+ const nx=x(g.note),cx=x(chosen),y=state.old?207:283;out+=svg('line',{x1:nx,y1:86,x2:nx,y2:y,stroke:'#91beff','stroke-dasharray':'4 5',opacity:.6});out+=svg('circle',{cx:nx,cy:89,r:5,fill:'#91beff'});out+=svg('text',{x:nx,y:77,'text-anchor':'middle',style:'fill:#91beff'},'recorded note');out+=svg('path',{d:'M '+nx+' 95 L '+cx+' '+(y-12),stroke:state.old?'#ff9a8a':'#8ee4be','stroke-width':2,fill:'none'});out+=svg('circle',{cx:cx,cy:y,r:7,fill:state.old?'#ff9a8a':'#8ee4be'});out+=svg('text',{x:cx,y:y-22,'text-anchor':'middle',style:'fill:'+(state.old?'#ff9a8a':'#8ee4be')},'snapped note');
+ if(state.playing||state.progress){const px=left+state.progress*width;out+=svg('line',{x1:px,y1:32,x2:px,y2:310,stroke:'#eed49b','stroke-width':2,opacity:.8});const m=Math.round(state.progress*4*g.step);$('deviceClock').textContent=fmt(g.O+m);$('musicClock').textContent=fmt(m)+' / '+fmt(g.L);}
+ $('chartContent').innerHTML=out;
+}
+function stopSound(){if(state.audio){state.audio.close().catch(()=>{});state.audio=null;}clearTimeout(state.audioTimer);render();}
+async function listen(){if(state.audio){stopSound();return;}const Audio=window.AudioContext||window.webkitAudioContext;if(!Audio){$('listen').textContent='Audio unavailable';return;}try{const ctx=new Audio();state.audio=ctx;await ctx.resume();const g=geometry(),beatSeconds=g.step/g.rate,start=ctx.currentTime+.1,duration=8*beatSeconds,offset=state.old?((g.O%g.step)+g.step)%g.step/g.rate:0;
+ const tone=(t,f,volume)=>{const o=ctx.createOscillator(),v=ctx.createGain();o.type=f>500?'sine':'triangle';o.frequency.value=f;v.gain.setValueAtTime(.0001,t);v.gain.exponentialRampToValueAtTime(volume,t+.003);v.gain.exponentialRampToValueAtTime(.0001,t+.065);o.connect(v);v.connect(ctx.destination);o.start(t);o.stop(t+.07);};
+ for(let i=0;i<8;i++)tone(start+i*beatSeconds,i%4===0?1500:1100,.12);for(let t=offset;t<duration;t+=beatSeconds)tone(start+t,160,.18);state.audioTimer=setTimeout(stopSound,(duration+.2)*1000);render();}catch(e){stopSound();$('listen').textContent='Audio unavailable';}}
+function animate(t){if(!state.playing)return;const g=geometry();if(state.last)state.progress=(state.progress+(t-state.last)/(4*g.step/g.rate*1000))%1;state.last=t;render();state.frame=requestAnimationFrame(animate);}
+function toggleMotion(){state.playing=!state.playing;state.last=0;if(state.playing)state.frame=requestAnimationFrame(animate);else cancelAnimationFrame(state.frame);render();}
+function update(){if(state.audio)stopSound();render();}
+['origin','tempo','rate','note'].forEach(id=>$(id).addEventListener('input',update));
+$('oldMode').onclick=()=>{state.old=true;update();};$('newMode').onclick=()=>{state.old=false;update();};$('motion').onclick=toggleMotion;$('listen').onclick=listen;
+document.querySelectorAll('[data-preset]').forEach(b=>b.onclick=()=>{const p=b.dataset.preset;if(p==='trace'){$('tempo').value=135;$('rate').value=44100;$('origin').value=662528;$('note').value=205;}if(p==='zero')$('origin').value=0;if(p==='beat'){$('tempo').value=135;$('rate').value=44100;$('origin').value=19600;}if(p==='fractional'){$('tempo').value=137;$('rate').value=44100;$('origin').value=662528;}update();});
+document.addEventListener('visibilitychange',()=>{if(document.hidden){if(state.playing)toggleMotion();if(state.audio)stopSound();}});
+render();
+</script>
+</body>
+</html>
