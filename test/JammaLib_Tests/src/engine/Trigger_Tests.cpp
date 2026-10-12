@@ -309,6 +309,10 @@ public:
 	void StopJobForTest()
 	{
 		Shutdown();
+		// Keep the deterministic harness usable after joining its worker. This
+		// does not restart production teardown resources or the job thread.
+		_isSceneQuitting.store(false, std::memory_order_release);
+		_sessionReplacing.store(false, std::memory_order_release);
 	}
 
 	void SeedTimingForTest()
@@ -325,6 +329,13 @@ public:
 	bool HasTimingForTest() const
 	{
 		return _quantisation.CurrentTempoTiming(48000u).has_value();
+	}
+
+	void PumpEmptyLocalContentForTest()
+	{
+		// The worker was joined; exercise its timing edge without impersonating
+		// the permanent trigger gate's original job producer.
+		_HandleAudioLocalContentState(false);
 	}
 
 	void ObserveTimingAvailabilityForTest(bool available, std::uint64_t epoch)
@@ -2764,28 +2775,28 @@ TEST(SceneReset, ConnectedEmptyPreservesTimingAndEachDisconnectClearsOnce) {
 
 	scene.SeedTimingForTest();
 	scene.ObserveTimingAvailabilityForTest(true, 1u);
-	scene.OnJobTick(GetTime());
+	scene.PumpEmptyLocalContentForTest();
 	EXPECT_TRUE(scene.HasTimingForTest());
 	EXPECT_FALSE(scene.IsSceneResetForTest());
 
 	scene.ObserveTimingAvailabilityForTest(false, 1u);
-	scene.OnJobTick(GetTime());
+	scene.PumpEmptyLocalContentForTest();
 	EXPECT_FALSE(scene.HasTimingForTest());
 	EXPECT_TRUE(scene.IsSceneResetForTest());
 
 	scene.SeedTimingForTest();
 	ASSERT_TRUE(scene.HasTimingForTest());
-	scene.OnJobTick(GetTime());
+	scene.PumpEmptyLocalContentForTest();
 	EXPECT_TRUE(scene.HasTimingForTest());
 
 	// A fresh physical epoch while still empty preserves newly accepted timing,
 	// and its later loss forms one new clear edge.
 	scene.ObserveTimingAvailabilityForTest(true, 2u);
-	scene.OnJobTick(GetTime());
+	scene.PumpEmptyLocalContentForTest();
 	EXPECT_TRUE(scene.HasTimingForTest());
 	EXPECT_FALSE(scene.IsSceneResetForTest());
 	scene.ObserveTimingAvailabilityForTest(false, 2u);
-	scene.OnJobTick(GetTime());
+	scene.PumpEmptyLocalContentForTest();
 	EXPECT_FALSE(scene.HasTimingForTest());
 	EXPECT_TRUE(scene.IsSceneResetForTest());
 }

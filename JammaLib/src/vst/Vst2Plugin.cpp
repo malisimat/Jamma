@@ -288,6 +288,20 @@ bool Vst2Plugin::Load(const std::wstring& path,
 #endif
 }
 
+bool Vst2Plugin::ReconfigureAudioFormat(float sampleRate, unsigned int blockSize)
+{
+	if (!_isLoaded || !_effect) return true;
+	_effect->dispatcher(_effect, effStopProcess, 0, 0, nullptr, 0.0f);
+	_effect->dispatcher(_effect, effMainsChanged, 0, 0, nullptr, 0.0f);
+	_sampleRate = sampleRate;
+	_blockSize = blockSize;
+	_effect->dispatcher(_effect, effSetSampleRate, 0, 0, nullptr, sampleRate);
+	_effect->dispatcher(_effect, effSetBlockSize, 0, static_cast<VstIntPtr>(blockSize), nullptr, 0.0f);
+	_effect->dispatcher(_effect, effMainsChanged, 0, 1, nullptr, 0.0f);
+	_effect->dispatcher(_effect, effStartProcess, 0, 0, nullptr, 0.0f);
+	return true;
+}
+
 void Vst2Plugin::Unload()
 {
 #ifdef JAMMA_VST2_ENABLED

@@ -539,3 +539,22 @@ TEST(SceneSelector, DragChoosesPaintDirectionFromPressedItem) {
 		EXPECT_FALSE(selector.IsClickPressed());
 	}
 }
+
+TEST(GuiControlsTests, ButtonDispatchesCommandAndPreservesAltModifier)
+{
+	auto receiver = std::make_shared<GuiControlsMockedGuiReceiver>();
+	auto params = MakeButtonParams(7210u); params.DispatchCommand = true;
+	auto button = std::make_shared<GuiButton>(params);
+	button->SetReceiver(receiver);
+	auto down = MakeTouchAction(TouchAction::TOUCH_DOWN, {10,10});
+	auto up = MakeTouchAction(TouchAction::TOUCH_UP, {10,10});
+	up.Modifiers = base::Action::MODIFIER_ALT;
+	button->OnAction(up);
+	EXPECT_EQ(receiver->ActionCount(), 0);
+	button->OnAction(down); button->OnAction(up);
+	ASSERT_EQ(receiver->ActionCount(), 1);
+	EXPECT_EQ(receiver->LastAction().Index, 7210u);
+	EXPECT_EQ(receiver->LastAction().InputModifiers, base::Action::MODIFIER_ALT);
+	button->OnAction(down); button->ClearPointerState(); button->OnAction(up);
+	EXPECT_EQ(receiver->ActionCount(), 1);
+}

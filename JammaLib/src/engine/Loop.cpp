@@ -1022,6 +1022,13 @@ void Loop::UnloadVstPlugin(size_t index)
 	_changesMade = true;
 }
 
+bool Loop::ReconfigureVstFormat(float sampleRate, unsigned int blockSize)
+{
+	const auto chain = _vstChain.load();
+	if (chain && !chain->ReconfigureAudioFormat(sampleRate, blockSize)) return false;
+	return !_backVstChain || _backVstChain == chain || _backVstChain->ReconfigureAudioFormat(sampleRate, blockSize);
+}
+
 std::shared_ptr<vst::IVstPlugin> Loop::GetVstPlugin(size_t index) const
 {
 	auto chain = _vstChain.load(std::memory_order_acquire);

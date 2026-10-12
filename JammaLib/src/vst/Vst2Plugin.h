@@ -59,6 +59,7 @@ namespace vst
 		// Unload the plugin and release all resources.
 		// Do NOT call while ProcessBlock may be running.
 		void Unload() override;
+		bool ReconfigureAudioFormat(float sampleRate, unsigned int blockSize) override;
 
 		// Process numSamples of mono audio in-place.
 		// Real-time safe: no heap allocation, no locks.

@@ -336,8 +336,9 @@ TEST(IoSessionExporter, AudioOnlyTakeRestoresTapBaseGridAfterReload)
 	quantiser.SetClock(std::make_shared<utils::Timer>());
 	quantiser.ApplyTiming({ 25u, 100ul, 4u, 120.0f, 4u }, "audio-only tap-base fixture");
 	std::mutex sceneMutex;
+    audio::AudioStreamParams stream{}; stream.SampleRate = 48000u;
 	ASSERT_TRUE(io::IoSessionExporter::ExportSessionToDirectory({ station }, {}, quantiser,
-		io::JamFile::GlobalMidiQuantState::Off, 0.0, {}, {}, nullptr, sceneMutex, nullptr, dir.wstring()));
+		io::JamFile::GlobalMidiQuantState::Off, 0.0, {}, stream, nullptr, sceneMutex, nullptr, dir.wstring()));
 	std::ifstream manifest(dir / "session.jam");
 	ASSERT_TRUE(manifest);
 	std::stringstream contents;
@@ -410,8 +411,9 @@ TEST(IoSessionExporter, RoundedLogicalAudioBoundaryRetainsPhysicalTailAfterReloa
 	quantiser.SetClock(std::make_shared<utils::Timer>());
 	quantiser.ApplyTiming({ 25u, 100ul, 4u, 120.0f, 4u }, "retained-tail fixture");
 	std::mutex sceneMutex;
+    audio::AudioStreamParams stream{}; stream.SampleRate = 48000u;
 	ASSERT_TRUE(io::IoSessionExporter::ExportSessionToDirectory({ station }, {}, quantiser,
-		io::JamFile::GlobalMidiQuantState::Off, 0.0, {}, {}, nullptr, sceneMutex, nullptr, dir.wstring()));
+		io::JamFile::GlobalMidiQuantState::Off, 0.0, {}, stream, nullptr, sceneMutex, nullptr, dir.wstring()));
 	std::ifstream manifest(dir / "session.jam");
 	std::stringstream text;
 	text << manifest.rdbuf();
@@ -427,5 +429,189 @@ TEST(IoSessionExporter, RoundedLogicalAudioBoundaryRetainsPhysicalTailAfterReloa
 	ASSERT_EQ(recorded.size(), restoredSamples.size());
 	for (std::size_t index = 0u; index < recorded.size(); ++index)
 		EXPECT_NEAR(recorded[index], restoredSamples[index], 2.0f / 32768.0f); // Existing PCM16 scaling and truncation.
+	std::filesystem::remove_all(dir);
+}
+
+TEST(IoSessionExporter, NumberedVersionsOwnDistinctAssetsAndReloadOriginalMaterial)
+{
+    auto station = IoSessionExporterTest::MakeStation("versions");
+    auto take = IoSessionExporterTest::MakeTake("stable-take-id");
+    take->AddLoop(IoSessionExporterTest::MakeAudioLoop(43u, 0u, 13u, 0.01f));
+    take->CommitChanges();
+    station->AddTake(take);
+    station->CommitChanges();
+    Quantiser quantiser;
+    quantiser.SetClock(std::make_shared<utils::Timer>());
+    quantiser.ApplyTiming({ 16u, 128ul, 8u, 120.0f, 4u }, "version fixture");
+    audio::AudioStreamParams stream{};
+    stream.SampleRate = 48000u;
+    stream.NumOutputChannels = 2u;
+    std::mutex mutex;
+    const auto dir = IoSessionExporterTest::MakeDirectory();
+    auto save = [&]() { return io::IoSessionExporter::ExportSessionVersionToDirectory(
+        { station }, {}, quantiser, io::JamFile::GlobalMidiQuantState::Off, 0.0,
+        {}, stream, nullptr, mutex, nullptr, dir.wstring()); };
+    const auto first = save();
+    ASSERT_TRUE(first.Success) << first.Error;
+    EXPECT_TRUE(first.AudioResumed);
+    EXPECT_EQ(L"session-0001.jam", std::filesystem::path(first.Path).filename().wstring());
+    const auto second = save();
+    ASSERT_TRUE(second.Success) << second.Error;
+    EXPECT_EQ(L"session-0002.jam", std::filesystem::path(second.Path).filename().wstring());
+    std::ifstream firstFile(first.Path), secondFile(second.Path);
+    std::stringstream firstBytes, secondBytes;
+    firstBytes << firstFile.rdbuf(); secondBytes << secondFile.rdbuf();
+    firstFile.close(); secondFile.close();
+    const auto firstJam = io::JamFile::FromStream(std::move(firstBytes));
+    const auto secondJam = io::JamFile::FromStream(std::move(secondBytes));
+    ASSERT_TRUE(firstJam); ASSERT_TRUE(secondJam);
+    const auto& firstLoop = firstJam->Stations[0].LoopTakes[0].Loops[0];
+    const auto& secondLoop = secondJam->Stations[0].LoopTakes[0].Loops[0];
+    EXPECT_NE(firstLoop.Name, secondLoop.Name);
+    EXPECT_EQ("stable-take-id", firstJam->Stations[0].LoopTakes[0].Name);
+    const auto restored = Loop::FromFile({}, firstLoop, dir.wstring());
+    ASSERT_TRUE(restored);
+    EXPECT_EQ(43u, (*restored)->LoopLength());
+    EXPECT_EQ(13u, (*restored)->BodyPlayIndex());
+    std::filesystem::remove_all(dir);
+}
+
+TEST(IoSessionExporter, NumberingSkipsGapsAndFailedExportPreservesExistingVersion)
+{
+    const auto dir = IoSessionExporterTest::MakeDirectory();
+    { std::ofstream old(dir / "session-0017.jam"); old << "previous version"; }
+    Quantiser quantiser;
+    quantiser.SetClock(std::make_shared<utils::Timer>());
+    std::mutex mutex;
+    const auto failure = io::IoSessionExporter::ExportSessionVersionToDirectory(
+        {}, {}, quantiser, io::JamFile::GlobalMidiQuantState::Off, 0.0,
+        {}, {}, nullptr, mutex, nullptr, dir.wstring());
+    EXPECT_FALSE(failure.Success);
+    EXPECT_FALSE(failure.Error.empty());
+    EXPECT_EQ(1u, std::distance(std::filesystem::directory_iterator(dir), std::filesystem::directory_iterator{}));
+    auto station = IoSessionExporterTest::MakeStation("empty");
+    auto emptyTake = IoSessionExporterTest::MakeTake("empty-take");
+    station->AddTake(emptyTake);
+    station->CommitChanges();
+    auto routedTake = IoSessionExporterTest::MakeTake("internal-bus-take");
+    routedTake->AddLoop(IoSessionExporterTest::MakeAudioLoop(43u, 0u, 0u, 0.01f));
+    routedTake->CommitChanges();
+    station->AddTake(routedTake);
+    station->CommitChanges();
+    ASSERT_TRUE(routedTake->RestoreAudioRoutes({ { 3u } }));
+    quantiser.ApplyTiming({ 16u, 128ul, 8u, 120.0f, 4u }, "internal bus fixture");
+    ASSERT_TRUE(station->RestoreAudioRoutes({ { 0u, 1u }, {} }));
+    audio::AudioStreamParams stream{}; stream.NumOutputChannels = 1u; stream.SampleRate = 48000u;
+    const auto saved = io::IoSessionExporter::ExportSessionVersionToDirectory(
+        { station }, {}, quantiser, io::JamFile::GlobalMidiQuantState::Off, 0.0,
+        {}, stream, nullptr, mutex, nullptr, dir.wstring());
+    ASSERT_TRUE(saved.Success) << saved.Error;
+    EXPECT_EQ(L"session-0018.jam", std::filesystem::path(saved.Path).filename().wstring());
+    std::ifstream manifest(saved.Path); std::stringstream bytes; bytes << manifest.rdbuf(); manifest.close();
+    const auto jam = io::JamFile::FromStream(std::move(bytes));
+    ASSERT_TRUE(jam);
+    ASSERT_EQ(2u, jam->Stations[0].LoopTakes.size());
+    EXPECT_EQ("empty-take", jam->Stations[0].LoopTakes[0].Name);
+    LoopTakeParams emptyParams; emptyParams.Id = "empty-take"; emptyParams.Size = {80u, 80u};
+    const auto restoredEmpty = LoopTake::FromFile(emptyParams, jam->Stations[0].LoopTakes[0], dir.wstring());
+    ASSERT_TRUE(restoredEmpty.has_value());
+    EXPECT_TRUE(restoredEmpty.value()->GetLoops().empty());
+    EXPECT_EQ(emptyTake->MidiQuantisation().Enabled, restoredEmpty.value()->MidiQuantisation().Enabled);
+    EXPECT_EQ((std::vector<std::vector<unsigned long>>{{3u}}), jam->Stations[0].LoopTakes[1].AudioRoutes);
+    EXPECT_TRUE(jam->Stations[0].HasAudioRoutes);
+    auto retainedRoutes = station->SnapshotAudioRoutesForExport();
+    auto savedRoutes = retainedRoutes; savedRoutes[0] = {0u};
+    EXPECT_EQ(savedRoutes, jam->Stations[0].AudioRoutes);
+    EXPECT_EQ((std::vector<unsigned long>{0u, 1u}), retainedRoutes[0]);
+    std::ifstream previous(dir / "session-0017.jam"); std::string original; std::getline(previous, original); previous.close();
+    EXPECT_EQ("previous version", original);
+    std::filesystem::remove_all(dir);
+}
+
+TEST(IoSessionExporter, CancelAndNumberOverflowDoNotCreateAssets)
+{
+    Quantiser quantiser;
+    std::mutex mutex;
+    auto station = IoSessionExporterTest::MakeStation("empty");
+    const auto cancel = io::IoSessionExporter::ExportSessionVersionToDirectory(
+        {station}, {}, quantiser, io::JamFile::GlobalMidiQuantState::Off, 0.0,
+        {}, {}, nullptr, mutex, nullptr, L"");
+    EXPECT_TRUE(cancel.Cancelled);
+    EXPECT_FALSE(cancel.Success);
+    const auto dir = IoSessionExporterTest::MakeDirectory();
+    { std::ofstream existing(dir / "session-18446744073709551615.jam"); existing << "retained"; }
+    const auto overflow = io::IoSessionExporter::ExportSessionVersionToDirectory(
+        {station}, {}, quantiser, io::JamFile::GlobalMidiQuantState::Off, 0.0,
+        {}, {}, nullptr, mutex, nullptr, dir.wstring());
+    EXPECT_FALSE(overflow.Success);
+    EXPECT_FALSE(overflow.Error.empty());
+    EXPECT_EQ(1u, std::distance(std::filesystem::directory_iterator(dir), std::filesystem::directory_iterator{}));
+    std::filesystem::remove_all(dir);
+}
+
+TEST(IoSessionExporter, StoppedHostRemainsStoppedAndResumeFailureIsSeparateFromFileSuccess)
+{
+    auto station = IoSessionExporterTest::MakeStation("stopped");
+    Quantiser quantiser;
+    quantiser.SetClock(std::make_shared<utils::Timer>());
+    audio::AudioHost host(io::UserConfig{});
+    host.CloseCallbackAdmission(); // Model a previously stopped, closed host.
+    std::mutex mutex;
+    const auto dir = IoSessionExporterTest::MakeDirectory();
+    bool restoredBeforeDisk = false;
+    const auto saved = io::IoSessionExporter::ExportSessionVersionToDirectory(
+        {station}, {}, quantiser, io::JamFile::GlobalMidiQuantState::Off, 0.0,
+        {}, {}, &host, mutex, nullptr, dir.wstring(), [&](std::string& error)
+        {
+            EXPECT_TRUE(host.CallbackAdmissionIsQuiescent());
+            EXPECT_EQ(std::filesystem::directory_iterator{}, std::filesystem::directory_iterator(dir));
+            // The capture Scene mutex must have been released before restoration.
+            const bool unlocked = mutex.try_lock(); EXPECT_TRUE(unlocked);
+            if (unlocked) mutex.unlock();
+            restoredBeforeDisk = true;
+            error = "injected restoration failure";
+            return false;
+        });
+    EXPECT_TRUE(restoredBeforeDisk);
+    EXPECT_TRUE(saved.Success) << saved.Error;
+    EXPECT_FALSE(saved.AudioResumed);
+    EXPECT_NE(std::string::npos, saved.Error.find("injected restoration failure"));
+    EXPECT_TRUE(host.CallbackAdmissionIsQuiescent());
+    EXPECT_TRUE(std::filesystem::exists(saved.Path));
+    std::filesystem::remove_all(dir);
+}
+
+TEST(IoSessionExporter, ConcurrentManifestClaimFailsWithoutOverwritingOrLeavingAttemptAssets)
+{
+	auto station = IoSessionExporterTest::MakeStation("collision");
+	auto take = IoSessionExporterTest::MakeTake("stable");
+	take->AddLoop(IoSessionExporterTest::MakeAudioLoop(43u,0u,0u,0.01f)); take->CommitChanges(); station->AddTake(take); station->CommitChanges();
+	Quantiser quantiser; quantiser.SetClock(std::make_shared<utils::Timer>());
+	quantiser.ApplyTiming({16u,128ul,8u,120.0f,4u}, "collision fixture");
+	std::mutex mutex; audio::AudioStreamParams stream{}; stream.SampleRate=48000u; stream.NumOutputChannels=2u;
+	const auto dir = IoSessionExporterTest::MakeDirectory();
+	{std::ofstream previous(dir/"session-0001.jam"); previous << "previous";}
+	const auto collision = io::IoSessionExporter::ExportSessionVersionToDirectory({station},{},quantiser,
+		io::JamFile::GlobalMidiQuantState::Off,0.0,{},stream,nullptr,mutex,nullptr,dir.wstring(),
+		[&](std::string&) {std::ofstream claimed(dir/"session-0002.jam"); claimed << "other saver"; return true;});
+	EXPECT_FALSE(collision.Success);
+	EXPECT_NE(collision.Error.find("commit failed"), std::string::npos);
+	EXPECT_EQ(2u, std::distance(std::filesystem::directory_iterator(dir), std::filesystem::directory_iterator{}));
+	std::ifstream claim(dir/"session-0002.jam"); std::string bytes; std::getline(claim,bytes); claim.close();
+	EXPECT_EQ(bytes,"other saver");
+	std::filesystem::remove_all(dir);
+}
+TEST(IoSessionExporter, QuiescentEligibilityFailureRestoresAndWritesNothing)
+{
+	Quantiser quantiser; std::mutex mutex; const auto dir = IoSessionExporterTest::MakeDirectory();
+	auto station = IoSessionExporterTest::MakeStation("blocked");
+	audio::AudioHost host(io::UserConfig{}); bool released = false;
+	const auto blocked = io::IoSessionExporter::ExportSessionVersionToDirectory({station},{},quantiser,
+		io::JamFile::GlobalMidiQuantState::Off,0.0,{},{},&host,mutex,nullptr,dir.wstring(),
+		[&](std::string&) {released=true; return true;},
+		[&](std::string& error) {EXPECT_TRUE(host.CallbackAdmissionIsQuiescent()); error="capture won admission"; return false;});
+	EXPECT_FALSE(blocked.Success); EXPECT_TRUE(released); EXPECT_TRUE(blocked.AudioResumed);
+	EXPECT_NE(blocked.Error.find("capture won admission"),std::string::npos);
+	EXPECT_EQ(std::filesystem::directory_iterator(dir),std::filesystem::directory_iterator{});
 	std::filesystem::remove_all(dir);
 }

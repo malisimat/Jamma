@@ -312,6 +312,7 @@ namespace engine
 
 		// Non-RT accessor to retrieve a loaded plugin instance (or nullptr).
 		std::shared_ptr<vst::IVstPlugin> GetVstPlugin(size_t index) const;
+		bool ReconfigureVstFormat(float sampleRate, unsigned int blockSize);
 
 		// Read-only, real-time-safe view of this loop's aggregate VST
 		// processing latency, in samples (sum across the published chain).

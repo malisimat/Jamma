@@ -59,6 +59,8 @@ namespace audio
 		_tickUserConfig(_userConfig),
 		_channelMixer(std::make_shared<audio::ChannelMixer>(audio::ChannelMixerParams{}))
 	{
+		_callbackContext = std::make_unique<CallbackContext>();
+		_callbackContext->Host.store(this, std::memory_order_release);
 	}
 
 	AudioHost::~AudioHost()
@@ -67,13 +69,28 @@ namespace audio
 		// is destroyed. A failed TryStop closes engine admission and drains the
 		// current callback, but only the backend can guarantee no later userdata call.
 		Close();
+		_callbackContext->Host.store(nullptr);
+		while (_callbackContext->Readers.load() != 0u)
+			std::this_thread::yield();
+		const bool stopped = !_audioDevice || _audioDevice->TryStop();
+		if (_backendLifetimeUncertain || !stopped)
+		{
+			// Open may have quarantined a failed candidate without returning a
+			// device. Its backend still owns this context even in that case.
+			if (!stopped) (void)_audioDevice.release();
+			(void)_callbackContext.release();
+		}
 	}
 
 	bool AudioHost::Init(std::shared_ptr<ninjam::NinjamController> ninjamController,
-		TickCallback tickCallback, bool generatedRig, const AsioInventory* inventory)
+		TickCallback tickCallback, bool generatedRig, const AsioInventory* inventory, bool exactSelection)
 	{
 		std::scoped_lock lock(_audioMutex);
+		if (_backendLifetimeUncertain && !_audioDevice) return false;
 		_lastInitReplacedStream = false;
+		const bool admissionWasOpen = (_callbackAdmission.load(std::memory_order_acquire) & _CallbackAdmissionClosed) == 0u;
+		CloseCallbackAdmission();
+		while (!CallbackAdmissionIsQuiescent()) std::this_thread::yield();
 		if (_audioDevice)
 		{
 			// Admission protects engine fields; only a successful backend stop
@@ -97,69 +114,95 @@ namespace audio
 
 		_audioSampleCounter.store(0u, std::memory_order_release);
 		_audioCallbackHeartbeat.store(0u, std::memory_order_release);
-		const auto prepareForStart = [this](const AudioStreamParams& audioStreamParams)
-		{
-			_preparedStreamParams = audioStreamParams;
-			_callbackOutputChannels.store(audioStreamParams.NumOutputChannels, std::memory_order_release);
-			_ninjamMetronome.Configure(audioStreamParams.SampleRate);
-
-			auto inLatency = (0u == audioStreamParams.InputLatency) ?
-				_userConfig.Audio.LatencyIn :
-				audioStreamParams.InputLatency;
-
-			_channelMixer->SetParams(audio::ChannelMixerParams({
-					_userConfig.AdcBufferDelay(inLatency) + audioStreamParams.BufSize,
-					audio::ChannelMixer::DefaultBufferSize,
-					audioStreamParams.NumInputChannels,
-					audioStreamParams.NumOutputChannels }));
-
-			auto stationsSnapshot = _audioStations.load();
-			if (stationsSnapshot)
-			{
-				for (auto& station : *stationsSnapshot)
-				{
-					if (station)
-					{
-						station->SetupBuffers(audioStreamParams.BufSize);
-						station->SetSampleRate(static_cast<float>(audioStreamParams.SampleRate));
-						station->SetNumAdcChannels(audioStreamParams.NumInputChannels);
-						station->SetNumDacChannels(audioStreamParams.NumOutputChannels);
-					}
-				}
-			}
-
-			if (_ninjamController)
-			{
-				auto outLatency = (0u == audioStreamParams.OutputLatency) ?
-					_userConfig.Audio.LatencyOut :
-					audioStreamParams.OutputLatency;
-
-				_ninjamController->SetAudioFormat(
-					audioStreamParams.SampleRate,
-					audioStreamParams.BufSize,
-					audioStreamParams.NumInputChannels,
-					audioStreamParams.NumOutputChannels,
-					inLatency,
-					outLatency);
-			}
-
-		};
-		auto dev = audio::AudioDevice::Open(AudioHost::AudioCallback,
+		const auto prepareForStart = [this](const AudioStreamParams& params) { PrepareStream(params); };
+		if (inventory) _asioInventory = *inventory;
+		else _asioInventory = AudioDevice::DiscoverAsio();
+		auto dev = audio::AudioDevice::Open(AudioHost::BackendAudioCallback,
 			[](RtAudioError::Type type, const std::string& err) { std::cout << "[" << type << " RtAudio Error] " << err << std::endl; },
-			_userConfig.Audio, this, generatedRig, inventory, &_asioOpenReport, prepareForStart);
+			_userConfig.Audio, _callbackContext.get(), generatedRig, &_asioInventory, &_asioOpenReport, prepareForStart, exactSelection);
+		_backendLifetimeUncertain = _asioOpenReport.TeardownUncertain;
+		if (_backendLifetimeUncertain) _callbackRecoveryBlocked.store(true, std::memory_order_release);
 		if (!dev)
 		{
 			_publishedStreamParams.store({}, std::memory_order_release);
 			return false;
 		}
 		_audioDevice = std::move(*dev);
+		_backendLifetimeUncertain = _asioOpenReport.TeardownUncertain;
+		if (_backendLifetimeUncertain) return false;
+		const auto actual = _audioDevice->GetAudioStreamParams();
+		_userConfig.Audio.Name = actual.Name;
+		_userConfig.Audio.SampleRate = actual.SampleRate;
+		_userConfig.Audio.BufSize = actual.BufSize;
+		_userConfig.Audio.NumBuffers = actual.NumBuffers;
+		_userConfig.Audio.NumChannelsIn = actual.NumInputChannels;
+		_userConfig.Audio.NumChannelsOut = actual.NumOutputChannels;
+		_tickUserConfig = _userConfig;
+		if (const auto stations = _audioStations.load())
+			for (const auto& station : *stations)
+				if (station) station->SetNumDacChannels(_audioDevice->GetAudioStreamParams().NumOutputChannels);
 		_publishedStreamParams.store(std::make_shared<const AudioStreamParams>(
 			_audioDevice->GetAudioStreamParams()), std::memory_order_release);
+		_callbackRecoveryBlocked.store(false, std::memory_order_release);
+		if (admissionWasOpen) ReopenCallbackAdmission();
 		return true;
+	}
+
+	void AudioHost::PrepareStream(const AudioStreamParams& audioStreamParams)
+	{
+		if (audioStreamParams.BufSize == 0u || audioStreamParams.BufSize > constants::MaxBlockSize)
+			throw std::runtime_error("Negotiated audio buffer exceeds engine block capacity");
+		_preparedStreamParams = audioStreamParams;
+		_callbackOutputChannels.store(audioStreamParams.NumOutputChannels, std::memory_order_release);
+		_callbackContext->OutputChannels.store(audioStreamParams.NumOutputChannels, std::memory_order_release);
+		_ninjamMetronome.Configure(audioStreamParams.SampleRate);
+
+		auto inLatency = (0u == audioStreamParams.InputLatency) ?
+			_userConfig.Audio.LatencyIn :
+			audioStreamParams.InputLatency;
+
+		_channelMixer->SetParams(audio::ChannelMixerParams({
+				_userConfig.AdcBufferDelay(inLatency) + audioStreamParams.BufSize,
+				(std::max)(audio::ChannelMixer::DefaultBufferSize, audioStreamParams.BufSize),
+				audioStreamParams.NumInputChannels,
+				audioStreamParams.NumOutputChannels }));
+
+		auto stationsSnapshot = _audioStations.load();
+		if (stationsSnapshot)
+		{
+			for (auto& station : *stationsSnapshot)
+			{
+				if (station)
+				{
+					station->SetupBuffers(audioStreamParams.BufSize);
+					station->SetSampleRate(static_cast<float>(audioStreamParams.SampleRate));
+					station->SetNumAdcChannels(audioStreamParams.NumInputChannels);
+					if (!station->ReconfigureVstFormat(static_cast<float>(audioStreamParams.SampleRate), audioStreamParams.BufSize))
+						throw std::runtime_error("Plugin audio format transition failed");
+				}
+			}
+		}
+
+		if (_ninjamController)
+		{
+			auto outLatency = (0u == audioStreamParams.OutputLatency) ?
+				_userConfig.Audio.LatencyOut :
+				audioStreamParams.OutputLatency;
+
+			_ninjamController->SetAudioFormat(
+				audioStreamParams.SampleRate,
+				audioStreamParams.BufSize,
+				audioStreamParams.NumInputChannels,
+				audioStreamParams.NumOutputChannels,
+				inLatency,
+				outLatency);
+		}
+
 	}
 
 	void AudioHost::Close()
 	{
+		std::scoped_lock lock(_audioMutex);
 		CloseCallbackAdmission();
 		const bool deviceStopped = !_audioDevice || _audioDevice->TryStop();
 		// Closing admission prevents another engine callback from entering. Wait
@@ -167,8 +210,6 @@ namespace audio
 		// even when the backend could not confirm that its stream stopped.
 		while (!CallbackAdmissionIsQuiescent())
 			std::this_thread::yield();
-
-		std::scoped_lock lock(_audioMutex);
 
 		if (deviceStopped && _ninjamController)
 			_ninjamController->Stop();
@@ -188,6 +229,176 @@ namespace audio
 				_timingClock.collect();
 			}
 		}
+
+	}
+
+	bool AudioHost::BeginQuiescence(QuiescenceState& state, std::string& error)
+	{
+		std::scoped_lock lock(_audioMutex);
+		error.clear();
+		if (_backendLifetimeUncertain && !_audioDevice) { error = "Backend teardown is unconfirmed; restart the application to recover"; return false; }
+		state.AdmissionWasOpen = (_callbackAdmission.load(std::memory_order_acquire) & _CallbackAdmissionClosed) == 0u;
+		state.WasRunning = _audioDevice && _audioDevice->IsRunning();
+		CloseCallbackAdmission();
+		while (!CallbackAdmissionIsQuiescent()) std::this_thread::yield();
+		if (state.WasRunning && !_audioDevice->Pause())
+		{
+			_callbackRecoveryBlocked.store(true, std::memory_order_release);
+			error = "Audio backend pause failed; callback admission remains closed";
+			return false;
+		}
+		return true;
+	}
+
+	bool AudioHost::EndQuiescence(const QuiescenceState& state, std::string& error)
+	{
+		std::scoped_lock lock(_audioMutex);
+		error.clear();
+		if (_backendLifetimeUncertain) { error = "Backend lifetime is uncertain; audio remains suspended"; return false; }
+		if (!CallbackAdmissionIsQuiescent()) { error = "Audio callback boundary is not quiescent"; return false; }
+		if (state.WasRunning && (!_audioDevice ||
+			(!_audioDevice->IsRunning() && !_audioDevice->Start())))
+		{
+			_callbackRecoveryBlocked.store(true, std::memory_order_release);
+			error = "Audio could not resume; callback admission remains closed";
+			return false;
+		}
+		if (!state.WasRunning && _audioDevice && _audioDevice->IsRunning() && !_audioDevice->Pause())
+		{
+			_callbackRecoveryBlocked.store(true, std::memory_order_release);
+			error = "Audio could not restore its stopped state; callback admission remains closed";
+			return false;
+		}
+		if (state.AdmissionWasOpen && !ReopenCallbackAdmission()) { error = "Callback admission remains blocked after lifecycle failure"; return false; }
+		return true;
+	}
+
+	bool AudioHost::Reconfigure(const io::UserConfig::AudioSettings& settings, std::string& error)
+	{
+		std::scoped_lock lock(_audioMutex);
+		error.clear();
+		if (_backendLifetimeUncertain && !_audioDevice) { error = "Backend teardown is unconfirmed; replacement remains unsafe"; return false; }
+		const auto previousConfig = _userConfig.Audio;
+		const auto previousParams = GetStreamParams();
+		const bool admissionWasOpen = (_callbackAdmission.load(std::memory_order_acquire) & _CallbackAdmissionClosed) == 0u;
+		CloseCallbackAdmission();
+		while (!CallbackAdmissionIsQuiescent()) std::this_thread::yield();
+		const auto stations = _audioStations.load();
+		bool captureBlocked = false;
+		if (_audioAppliedRigSnapshot)
+			for (const auto& trigger : _audioAppliedRigSnapshot->Triggers)
+				if (trigger.Instance && !trigger.Instance->CanApplyCaptureRouting()) captureBlocked = true;
+		if (stations)
+			for (const auto& station : *stations)
+				if (station)
+					for (const auto& take : station->GetLoopTakes())
+						if (take && take->HasPendingTriggerCapture()) captureBlocked = true;
+		if (captureBlocked)
+		{
+			error = "Audio change waits for recording or pending capture";
+			if (admissionWasOpen) ReopenCallbackAdmission();
+			return false;
+		}
+		const auto sessionSampleRate = previousParams.SampleRate != 0u ? previousParams.SampleRate : previousConfig.SampleRate;
+		if (sessionSampleRate != settings.SampleRate && stations)
+			for (const auto& station : *stations)
+				if (station && !station->GetLoopTakes().empty())
+				{
+					error = "Sample rate cannot change while the session contains takes";
+					if (admissionWasOpen) ReopenCallbackAdmission();
+					return false;
+				}
+		if (_audioDevice && !_audioDevice->TryStop())
+		{
+			_backendLifetimeUncertain = true;
+			_callbackRecoveryBlocked.store(true, std::memory_order_release);
+			error = "Audio backend stop/close failed; replacement is unsafe";
+			return false;
+		}
+		_audioDevice.reset();
+		_backendLifetimeUncertain = false;
+		_publishedStreamParams.store({}, std::memory_order_release);
+		const auto discovered = AudioDevice::DiscoverAsio();
+		if (discovered.EnumerationError.empty()) _asioInventory = discovered;
+		const auto openExact = [this](const io::UserConfig::AudioSettings& request) {
+			_userConfig.Audio = request;
+			return AudioDevice::Open(AudioHost::BackendAudioCallback, {}, request,
+				_callbackContext.get(), false, &_asioInventory, &_asioOpenReport,
+				[this](const AudioStreamParams& params) { PrepareStream(params); }, true);
+		};
+		auto candidate = discovered.EnumerationError.empty() ? openExact(settings) :
+			std::optional<std::unique_ptr<AudioDevice>>{};
+		if (!discovered.EnumerationError.empty())
+		{
+			_asioOpenReport = {};
+			AsioAttempt failed;
+			failed.Error = discovered.EnumerationError;
+			_asioOpenReport.Attempts.push_back(std::move(failed));
+		}
+		if (candidate) _audioDevice = std::move(*candidate);
+		if (!_audioDevice || _asioOpenReport.TeardownUncertain)
+		{
+			const auto candidateError = !_asioOpenReport.Attempts.empty() ? _asioOpenReport.Attempts.back().Error : "Audio open failed";
+			_userConfig.Audio = previousConfig;
+			if (_asioOpenReport.TeardownUncertain)
+			{
+				_backendLifetimeUncertain = true;
+			_callbackRecoveryBlocked.store(true, std::memory_order_release);
+				error = candidateError;
+				return false;
+			}
+			auto restoreSettings = previousConfig;
+			if (previousParams.SampleRate != 0u)
+			{
+				restoreSettings.Name = previousParams.Name;
+				restoreSettings.SampleRate = previousParams.SampleRate;
+				restoreSettings.BufSize = previousParams.BufSize;
+				restoreSettings.NumBuffers = previousParams.NumBuffers;
+				restoreSettings.NumChannelsIn = previousParams.NumInputChannels;
+				restoreSettings.NumChannelsOut = previousParams.NumOutputChannels;
+			}
+			auto restored = previousParams.SampleRate == 0u ? std::optional<std::unique_ptr<AudioDevice>>{} : openExact(restoreSettings);
+			if (restored) _audioDevice = std::move(*restored);
+			_userConfig.Audio = previousConfig;
+			if (!_audioDevice || _asioOpenReport.TeardownUncertain)
+			{
+				_backendLifetimeUncertain = _asioOpenReport.TeardownUncertain;
+				_callbackRecoveryBlocked.store(true, std::memory_order_release);
+			error = candidateError + "; restoration failed: " +
+					(!_asioOpenReport.Attempts.empty() ? _asioOpenReport.Attempts.back().Error : "no previous stream");
+				return false;
+			}
+			_publishedStreamParams.store(std::make_shared<const AudioStreamParams>(_audioDevice->GetAudioStreamParams()), std::memory_order_release);
+			_callbackRecoveryBlocked.store(false, std::memory_order_release);
+			if (admissionWasOpen) ReopenCallbackAdmission();
+			error = candidateError + "; previous audio restored";
+			return false;
+		}
+		const auto actual = _audioDevice->GetAudioStreamParams();
+		_userConfig.Audio.Name = actual.Name;
+		_userConfig.Audio.SampleRate = actual.SampleRate;
+		_userConfig.Audio.BufSize = actual.BufSize;
+		_userConfig.Audio.NumBuffers = actual.NumBuffers;
+		_userConfig.Audio.NumChannelsIn = actual.NumInputChannels;
+		_userConfig.Audio.NumChannelsOut = actual.NumOutputChannels;
+		_tickUserConfig = _userConfig;
+		if (stations)
+			for (const auto& station : *stations)
+				if (station) station->SetNumDacChannels(actual.NumOutputChannels);
+		if (sessionSampleRate != actual.SampleRate)
+		{
+			if (const auto clock = _timingClock.load()) { clock->Clear(); clock->ResetMusicalTransport(); }
+			_syncPhaseMap = {};
+			_activeNinjamFollowPolicy = ninjam::NinjamLocalFollowPolicy::NoSync;
+			_localTransportOffsetMasterLength = 0ul;
+			_localTransportOffsetTargetSamps = 0;
+		}
+		midi::PublishMidiClockAnchor(_midiClockAnchor, _audioSampleCounter.load(std::memory_order_relaxed),
+			std::chrono::duration_cast<std::chrono::microseconds>(Timer::GetTime().time_since_epoch()).count());
+		_publishedStreamParams.store(std::make_shared<const AudioStreamParams>(actual), std::memory_order_release);
+		_callbackRecoveryBlocked.store(false, std::memory_order_release);
+		if (admissionWasOpen) ReopenCallbackAdmission();
+		return true;
 	}
 
 	void AudioHost::SetStations(std::shared_ptr<const std::vector<std::shared_ptr<Station>>> stations)
@@ -574,6 +785,7 @@ void AudioHost::PublishAudioCallbackProgress(std::uint64_t blockStartSample,
 
 	bool AudioHost::ReopenCallbackAdmission() noexcept
 	{
+		if (_callbackRecoveryBlocked.load(std::memory_order_acquire)) return false;
 		auto expected = _CallbackAdmissionClosed;
 		return _callbackAdmission.compare_exchange_strong(expected, 0u,
 			std::memory_order_release, std::memory_order_relaxed);
@@ -596,6 +808,20 @@ void AudioHost::PublishAudioCallbackProgress(std::uint64_t blockStartSample,
 	void AudioHost::LeaveCallback() noexcept
 	{
 		_callbackAdmission.fetch_sub(1u, std::memory_order_release);
+	}
+
+	int AudioHost::BackendAudioCallback(void* outBuffer, void* inBuffer,
+		unsigned int numSamps, double streamTime, RtAudioStreamStatus status, void* userData)
+	{
+		auto* context = static_cast<CallbackContext*>(userData);
+		context->Readers.fetch_add(1u);
+		auto* host = context->Host.load();
+		const auto result = host ? AudioCallback(outBuffer, inBuffer, numSamps, streamTime, status, host) : 0;
+		if (!host && outBuffer)
+			std::fill_n(static_cast<float*>(outBuffer), static_cast<std::size_t>(numSamps) *
+				context->OutputChannels.load(std::memory_order_acquire), 0.0f);
+		context->Readers.fetch_sub(1u);
+		return result;
 	}
 
 	int AudioHost::AudioCallback(void* outBuffer,

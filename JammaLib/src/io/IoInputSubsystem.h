@@ -31,9 +31,15 @@ namespace io
 			unsigned int actualSampleRate, const midi::MidiInputInventory* inventory = nullptr,
 			bool generatedRig = false);
 		midi::MidiConnectionResult RefreshMidi(midi::MidiClockAnchor& midiClockAnchor,
-			unsigned int actualSampleRate, const midi::MidiInputInventory& inventory);
+			unsigned int actualSampleRate, const midi::MidiInputInventory& inventory, bool forceRetry = false);
+		midi::MidiConnectionResult ReconcileMidi(const std::vector<UserConfig::MidiSettings>& desired,
+			midi::MidiClockAnchor& midiClockAnchor, unsigned int actualSampleRate,
+			const midi::MidiInputInventory& inventory);
+		void SuspendMidiDispatch();
+		void ResumeMidiDispatch();
 		void SetLogging(io::LoggingConfig loggingConfig) noexcept;
 		void Close();
+		void CloseMidi();
 		void PublishRigInputDispatch(std::shared_ptr<const engine::RigSnapshot> snapshot);
 		void PublishEmptyRigInputDispatch();
 		bool OpenRigTriggerInput(std::uint64_t revision) noexcept;

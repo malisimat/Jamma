@@ -1,6 +1,12 @@
 #include "stdafx.h"
 #include "IoSessionExporter.h"
 #include <algorithm>
+#include <cmath>
+#include <climits>
+#include <filesystem>
+#include <iomanip>
+#include <limits>
+#include <random>
 #include <sstream>
 #include <fstream>
 #include <utility>
@@ -56,24 +62,145 @@ namespace io
 		std::mutex& sceneMutex,
 		const std::shared_ptr<ninjam::NinjamController>& ninjamController,
 		const std::wstring& exportDir)
-	{
-		struct AudioPauseGuard
-		{
-			explicit AudioPauseGuard(audio::AudioDevice* deviceRef) : Device(deviceRef), WasPlaying(deviceRef && deviceRef->Pause()) {}
-			~AudioPauseGuard() { Resume(); }
+    {
+        // Device::Pause cannot establish callback exclusion. Legacy API is
+        // intentionally limited to caller-owned offline material.
+        if (device) return false;
+        return ExportToDirectory(stations, rigSnapshot, quantisation, globalMidiQuantState,
+            transportOffsetLoopFrac, userConfig, streamParams, nullptr, sceneMutex,
+            ninjamController, exportDir, false, {}, {}).Success;
+    }
 
-			void Resume()
-			{
-				if (WasPlaying && Device)
-				{
-					Device->Resume();
-					WasPlaying = false;
-				}
-			}
+	IoSessionExporter::ExportResult IoSessionExporter::ExportSessionVersionToDirectory(const std::vector<std::shared_ptr<Station>>& stations,
+		const std::shared_ptr<const engine::RigSnapshot>& rigSnapshot,
+		const engine::Quantiser& quantisation,
+		io::JamFile::GlobalMidiQuantState globalMidiQuantState,
+		double transportOffsetLoopFrac,
+		const io::UserConfig& userConfig,
+		const audio::AudioStreamParams& streamParams,
+		audio::AudioHost* host,
+		std::mutex& sceneMutex,
+		const std::shared_ptr<ninjam::NinjamController>& ninjamController,
+		const std::wstring& exportDir,
+        const std::function<bool(std::string&)>& afterCapture,
+        const std::function<bool(std::string&)>& beforeCapture)
+    {
+        return ExportToDirectory(stations, rigSnapshot, quantisation, globalMidiQuantState,
+            transportOffsetLoopFrac, userConfig, streamParams, host, sceneMutex,
+            ninjamController, exportDir, true, afterCapture, beforeCapture);
+    }
 
-			audio::AudioDevice* Device;
-			bool WasPlaying;
-		};
+	IoSessionExporter::ExportResult IoSessionExporter::ExportToDirectory(const std::vector<std::shared_ptr<Station>>& stations,
+		const std::shared_ptr<const engine::RigSnapshot>& rigSnapshot,
+		const engine::Quantiser& quantisation,
+		io::JamFile::GlobalMidiQuantState globalMidiQuantState,
+		double transportOffsetLoopFrac,
+		const io::UserConfig& userConfig,
+		const audio::AudioStreamParams& streamParams,
+		audio::AudioHost* host,
+		std::mutex& sceneMutex,
+		const std::shared_ptr<ninjam::NinjamController>& ninjamController,
+		const std::wstring& exportDir, bool numbered,
+        const std::function<bool(std::string&)>& afterCapture,
+        const std::function<bool(std::string&)>& beforeCapture)
+    {
+        ExportResult result;
+        const auto appendError = [&](const std::string& error)
+        {
+            if (!result.Error.empty()) result.Error += "; ";
+            result.Error += error;
+        };
+        // All state below is operation-local, written/read only by the control
+        // owner and destroyed after capture/disk completion. No shared publishers.
+        struct AudioPauseGuard
+        {
+            audio::AudioHost* Host;
+            audio::AudioHost::QuiescenceState State{};
+            bool Active = false;
+            ExportResult& Result;
+            ~AudioPauseGuard() { Resume(); }
+            bool Pause()
+            {
+                if (!Host) return true; // Offline/test material, no callback owner.
+                Active = Host->BeginQuiescence(State, Result.Error);
+                if (!Active) Result.AudioResumed = false; // Failed admission leaves engine explicitly stopped/error.
+                return Active;
+            }
+            void Resume() noexcept
+            {
+                if (!Active) return;
+                Active = false;
+                std::string error;
+                try
+                {
+                    Result.AudioResumed = Host->EndQuiescence(State, error);
+                    if (!Result.AudioResumed) Result.Error += "; audio restoration failed: " + error;
+                }
+                catch (...)
+                {
+                    Result.AudioResumed = false;
+                    // Keep the failure flag even if formatting/allocation failed.
+                }
+            }
+        };
+        struct AttemptFiles
+        {
+            std::vector<std::wstring> Paths;
+            bool Committed = false;
+            ~AttemptFiles()
+            {
+                if (!Committed)
+                    for (const auto& path : Paths) DeleteFileW(path.c_str());
+            }
+            bool Write(const std::wstring& path, const std::string& bytes)
+            {
+                const auto handle = CreateFileW(path.c_str(), GENERIC_WRITE, 0, nullptr,
+                    CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr);
+                if (handle == INVALID_HANDLE_VALUE) return false;
+                // Capacity is reserved before creating any files. Add ownership
+                // immediately after exclusive creation, never for somebody else's file.
+                try { Paths.push_back(path); }
+                catch (...) { CloseHandle(handle); DeleteFileW(path.c_str()); throw; }
+                bool success = true;
+                std::size_t offset = 0;
+                while (offset < bytes.size())
+                {
+                    const auto size = static_cast<DWORD>(std::min<std::size_t>(bytes.size()-offset, 1024u*1024u));
+                    DWORD written = 0;
+                    if (!WriteFile(handle, bytes.data()+offset, size, &written, nullptr) || written != size)
+                    { success = false; break; }
+                    offset += written;
+                }
+                if (!FlushFileBuffers(handle)) success = false;
+                if (!CloseHandle(handle)) success = false;
+                return success;
+            }
+            bool WriteWav(const std::wstring& path, const std::vector<float>& samples, unsigned int sampleRate)
+            {
+                if (!sampleRate || sampleRate > static_cast<unsigned int>(LONG_MAX / 2) ||
+                    samples.empty() || samples.size() > static_cast<std::size_t>((LONG_MAX - 44) / 2)) return false;
+                SoundHeader header = { { 'R','I','F','F' }, 0, { 'W','A','V','E' },
+                    { 'f','m','t',' ' }, 16, 1, 1, 0, 0, 2, 16, { 'd','a','t','a' }, 0 };
+                header.dlength = static_cast<long>(samples.size() * 2);
+                header.flength = header.dlength + 36;
+                header.srate = static_cast<long>(sampleRate);
+                header.bytes_per_sec = header.srate * 2;
+                static_assert(sizeof(SoundHeader) == 44);
+                std::string bytes(reinterpret_cast<const char*>(&header), sizeof(header));
+                bytes.reserve(sizeof(header) + samples.size() * 2);
+                for (const auto value : samples)
+                {
+                    const auto pcm = static_cast<int>(std::clamp(std::isfinite(value) ? value : 0.0f, -1.0f, 1.0f) * 32767.0f);
+                    bytes.push_back(static_cast<char>(pcm & 0xff));
+                    bytes.push_back(static_cast<char>((pcm >> 8) & 0xff));
+                }
+                return Write(path, bytes);
+            }
+        };
+        AttemptFiles files;
+        AudioPauseGuard pause{ host, {}, false, result };
+        try
+        {
 
 		struct LoopSnapshot
 		{
@@ -89,8 +216,45 @@ namespace io
 			NativeMidiSidecar::Stream Stream;
 		};
 
-		if (exportDir.empty())
-			return false;
+		if (exportDir.empty()) { result.Cancelled = true; return result; }
+
+        std::error_code directoryError;
+        if (!std::filesystem::is_directory(exportDir, directoryError) || directoryError)
+        { appendError("Save folder is unavailable"); return result; }
+        std::vector<wchar_t> volumePath(32768, L'\0');
+        if (!GetVolumePathNameW(exportDir.c_str(), volumePath.data(), static_cast<DWORD>(volumePath.size())))
+        { appendError("Cannot establish destination filesystem"); return result; }
+        const auto driveType = GetDriveTypeW(volumePath.data());
+        if (driveType != DRIVE_FIXED && driveType != DRIVE_REMOVABLE && driveType != DRIVE_RAMDISK)
+        { appendError("Atomic save requires a local filesystem"); return result; }
+        std::uint64_t maxVersion = 0;
+        if (numbered)
+        {
+            for (const auto& entry : std::filesystem::directory_iterator(exportDir))
+            {
+                const auto name = entry.path().filename().wstring();
+                if (name.size() < 13 || name.compare(0, 8, L"session-") || name.substr(name.size()-4) != L".jam") continue;
+                const auto digits = name.substr(8, name.size()-12);
+                if (digits.empty() || digits.find_first_not_of(L"0123456789") != std::wstring::npos) continue;
+                std::uint64_t value = 0;
+                for (auto digit : digits)
+                {
+                    if (value > (std::numeric_limits<std::uint64_t>::max() - (digit-L'0')) / 10)
+                    { appendError("Session version exceeds numbering capacity"); return result; }
+                    value = value * 10 + (digit-L'0');
+                }
+                maxVersion = std::max(maxVersion, value);
+            }
+        }
+        if (maxVersion == std::numeric_limits<std::uint64_t>::max())
+        { appendError("Session version numbering exhausted"); return result; }
+        std::ostringstream version;
+        version << "session-" << std::setw(4) << std::setfill('0') << (maxVersion + 1);
+        const auto manifestStem = numbered ? version.str() : std::string("session");
+        std::random_device random;
+        std::ostringstream token;
+        token << manifestStem << "-" << std::hex << GetCurrentProcessId() << "-" << random() << random();
+        const auto assetPrefix = token.str() + "-";
 
 		const auto sampleRate = (streamParams.SampleRate == 0u) ? userConfig.Audio.SampleRate : streamParams.SampleRate;
 
@@ -102,24 +266,48 @@ namespace io
 		// remote timing has no meaning when restoring a local session.
 		(void)ninjamController;
 		jam.TimerTicks = 0;
-		jam.QuantiseSamps = quantisation.EffectiveSamps();
+
 		jam.GlobalMidiQuantStateValue = globalMidiQuantState;
-		jam.GlobalPhaseOffsetSamps = quantisation.GlobalPhaseOffsetSamps();
+
 		jam.TransportOffsetLoopFrac = transportOffsetLoopFrac;
 		jam.Quantisation = utils::Timer::QUANTISE_OFF;
 
 		std::vector<LoopSnapshot> loops;
 		std::vector<MidiSnapshot> midiStreams;
 
-		{
-			AudioPauseGuard pause(device);
+        if (!pause.Pause()) return result;
+        const auto finishCapture = [&]()
+        {
+            pause.Resume();
+            if (afterCapture)
+            {
+                std::string restoreError;
+                const bool restored = afterCapture(restoreError);
+                result.AudioResumed = result.AudioResumed && restored;
+                if (!restored) appendError("Audio restoration failed: " + restoreError);
+            }
+        };
+        if (beforeCapture)
+        {
+            std::string captureError;
+            if (!beforeCapture(captureError))
+            {
+                appendError(captureError.empty() ? "Session capture is unavailable" : captureError);
+                finishCapture();
+                return result;
+            }
+        }
+        const bool captured = [&]() -> bool
+        {
 			std::scoped_lock lock(sceneMutex);
+            jam.QuantiseSamps = quantisation.EffectiveSamps();
+            jam.GlobalPhaseOffsetSamps = quantisation.GlobalPhaseOffsetSamps();
 			const auto clock = quantisation.Clock();
 			const auto hasSavedLoopContent = std::any_of(stations.begin(), stations.end(),
 				[](const std::shared_ptr<Station>& station)
 				{
 					if (!station || station->IsRemote())
-						return false;
+                        return false;
 					const auto& takes = station->GetLoopTakes();
 					return std::any_of(takes.begin(), takes.end(), [](const std::shared_ptr<LoopTake>& take)
 						{ return take && (!take->GetLoops().empty() || !take->GetMidiLoops().empty()); });
@@ -133,7 +321,7 @@ namespace io
 			else if (hasSavedLoopContent)
 			{
 				std::cout << "Export: local master timer is not initialised" << std::endl;
-				return false;
+	            result.Error = "Session capture failed"; return false;
 			}
 			else
 				jam.TransportInitialised = false;
@@ -156,6 +344,8 @@ namespace io
 				jamStation.AllowedMidiChannels = station->AllowedMidiChannels();
 				jamStation.AudioRoutes = station->SnapshotAudioRoutesForExport();
 				jamStation.HasAudioRoutes = true;
+                if (numbered) for (auto& routes : jamStation.AudioRoutes)
+                    std::erase_if(routes, [&](auto channel) { return channel >= streamParams.NumOutputChannels; });
 				const auto routes = station->SnapshotMidiVstRoutesForExport();
 				for (std::size_t outputIndex = 0u; outputIndex < routes.PluginByMidiOutput.size(); ++outputIndex)
 				{
@@ -182,6 +372,8 @@ namespace io
 					jamTake.TakePhaseOffsetSamps = take->MidiQuantisation().PhaseOffsetSamps;
 					jamTake.AudioRoutes = take->SnapshotAudioRoutesForExport();
 					jamTake.HasAudioRoutes = true;
+                    if (numbered) for (auto& routes : jamTake.AudioRoutes)
+                        std::erase_if(routes, [&](auto channel) { return channel >= station->NumBusChannels(); });
 
 					const auto audioLoops = take->GetLoops();
 					for (std::size_t loopIndex = 0u; loopIndex < audioLoops.size(); ++loopIndex)
@@ -189,7 +381,7 @@ namespace io
 						const auto& loop = audioLoops[loopIndex];
 						if (!loop)
 							continue;
-						const auto stem = "s" + std::to_string(stationIndex) + "_t" + std::to_string(takeIndex)
+						const auto stem = assetPrefix + "s" + std::to_string(stationIndex) + "_t" + std::to_string(takeIndex)
 							+ "_a" + std::to_string(loopIndex);
 						const auto wavFilename = stem + ".wav";
 
@@ -213,7 +405,7 @@ namespace io
 					if (!take->SnapshotMidiForExport(midiExport))
 					{
 						std::cout << "Export: could not snapshot MIDI take " << take->Id() << std::endl;
-						return false;
+			            result.Error = "Session capture failed"; return false;
 					}
 					jamTake.MidiPlayIndex = midiExport.PlayIndex;
 					jamTake.MidiPlayLength = midiExport.LoopLengthSamps;
@@ -228,7 +420,7 @@ namespace io
 						io::JamFile::AutomationLane& lane) -> bool
 					{
 						if (!target)
-							return false;
+				            return false;
 						for (std::size_t pluginIndex = 0u; pluginIndex < jamStation.VstChain.size(); ++pluginIndex)
 						{
 							auto plugin = station->GetVstPlugin(pluginIndex);
@@ -266,12 +458,12 @@ namespace io
 								}
 							}
 						}
-						return false;
+			            return false;
 					};
 					for (std::size_t streamIndex = 0u; streamIndex < midiExport.Streams.size(); ++streamIndex)
 					{
 						const auto& stream = midiExport.Streams[streamIndex];
-						const auto stem = "s" + std::to_string(stationIndex) + "_t" + std::to_string(takeIndex)
+						const auto stem = assetPrefix + "s" + std::to_string(stationIndex) + "_t" + std::to_string(takeIndex)
 							+ "_m" + std::to_string(streamIndex);
 						const auto filename = stem + ".jammidi";
 						NativeMidiSidecar::Stream sidecar;
@@ -297,7 +489,7 @@ namespace io
 							if (!resolveAutomationTarget(exportedLane.TargetPlugin, lane))
 							{
 								std::cout << "Export: unresolved automation target in take " << take->Id() << std::endl;
-								return false;
+					            result.Error = "Session capture failed"; return false;
 							}
 							lane.Points.reserve(exportedLane.PointCount);
 							for (std::size_t pointIndex = 0u; pointIndex < exportedLane.PointCount; ++pointIndex)
@@ -320,8 +512,7 @@ namespace io
 						midiStreams.push_back(std::move(midiSnapshot));
 					}
 
-					if (!jamTake.Loops.empty() || !jamTake.MidiStreams.empty())
-						jamStation.LoopTakes.push_back(std::move(jamTake));
+					jamStation.LoopTakes.push_back(std::move(jamTake));
 				}
 
 				jam.Stations.push_back(std::move(jamStation));
@@ -340,83 +531,82 @@ namespace io
 						jam.TriggerHistories.push_back(std::move(history));
 				}
 			}
-		}
+            return true;
+        }();
+        finishCapture();
+        if (!captured) return result;
 
 		if (jam.Stations.empty())
 		{
 			std::cout << "Export: nothing to export" << std::endl;
-			return false;
+            appendError("Session capture or serialization failed"); return result;
 		}
 
 		std::stringstream jamStream;
 		if (!io::JamFile::ToStream(jam, jamStream))
 		{
 			std::cout << "Export: failed to serialize session.jam" << std::endl;
-			return false;
+            appendError("Session capture or serialization failed"); return result;
 		}
 
-		io::WavReadWriter wavWriter;
-		unsigned int wavCount = 0;
-		for (const auto& loop : loops)
-		{
-			if (!wavWriter.Write(loop.TemporaryPath, loop.Samples, (unsigned int)loop.Samples.size(), sampleRate))
-			{
-				std::cout << "Export: failed to write WAV sidecar " << utils::EncodeUtf8(loop.FinalPath) << std::endl;
-				return false;
-			}
-			++wavCount;
-		}
-		for (const auto& midi : midiStreams)
-		{
-			std::ofstream stream(midi.TemporaryPath, std::ios::binary | std::ios::trunc);
-			std::string error;
-			if (!stream || !NativeMidiSidecar::ToStream(midi.Stream, stream, &error))
-			{
-				std::cout << "Export: failed to write MIDI sidecar " << utils::EncodeUtf8(midi.FinalPath)
-					<< ": " << error << std::endl;
-				return false;
-			}
-		}
-
-		const auto jamPath = exportDir + L"\\session.jam";
-		const auto temporaryJamPath = jamPath + L".tmp";
-		const auto wroteJamFile = io::TextReadWriter().Write(temporaryJamPath, jamStream.str(), 0, 0);
-		if (!wroteJamFile)
-		{
-			std::cout << "Export: failed to write session.jam to "
-				<< utils::EncodeUtf8(jamPath) << std::endl;
-			return false;
-		}
-		auto replaceAtomically = [](const std::wstring& temporaryPath, const std::wstring& finalPath) noexcept
-		{
-			return MoveFileExW(temporaryPath.c_str(), finalPath.c_str(),
-				MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) != FALSE;
-		};
-		for (const auto& loop : loops)
-		{
-			if (!replaceAtomically(loop.TemporaryPath, loop.FinalPath))
-			{
-				std::cout << "Export: failed to stage WAV sidecar " << utils::EncodeUtf8(loop.FinalPath) << std::endl;
-				return false;
-			}
-		}
-		for (const auto& midi : midiStreams)
-		{
-			if (!replaceAtomically(midi.TemporaryPath, midi.FinalPath))
-			{
-				std::cout << "Export: failed to stage MIDI sidecar " << utils::EncodeUtf8(midi.FinalPath) << std::endl;
-				return false;
-			}
-		}
-		if (!replaceAtomically(temporaryJamPath, jamPath))
-		{
-			std::cout << "Export: failed to publish session.jam to " << utils::EncodeUtf8(jamPath) << std::endl;
-			return false;
-		}
-
-		std::cout << "Exported " << wavCount << " loop(s) + session.jam to "
-			<< utils::EncodeUtf8(exportDir) << std::endl;
-
-		return true;
-	}
+        // Audio has resumed before serialization and all disk work.
+        // Manifest text is reparsed to verify schema before any publication.
+        std::stringstream validation(jamStream.str());
+        if (!JamFile::FromStream(std::move(validation)))
+        { appendError("Serialized session failed validation"); return result; }
+        files.Paths.reserve(loops.size() * 2 + midiStreams.size() * 2 + 1);
+        for (const auto& loop : loops)
+        {
+            if (!files.WriteWav(loop.TemporaryPath, loop.Samples, sampleRate))
+            { appendError("Failed writing WAV asset"); return result; }
+        }
+        for (const auto& midi : midiStreams)
+        {
+            std::stringstream bytes;
+            std::string error;
+            if (!NativeMidiSidecar::ToStream(midi.Stream, bytes, &error))
+            { appendError("Failed serializing MIDI asset: " + error); return result; }
+            if (!files.Write(midi.TemporaryPath, bytes.str()))
+            { appendError("Failed writing MIDI asset"); return result; }
+        }
+        const auto jamPath = exportDir + L"\\" + utils::DecodeUtf8(manifestStem + ".jam");
+        const auto temporaryJamPath = exportDir + L"\\" + utils::DecodeUtf8(assetPrefix + "manifest.tmp");
+        if (!files.Write(temporaryJamPath, jamStream.str()))
+        { appendError("Failed writing session manifest"); return result; }
+        for (const auto& loop : loops)
+        {
+            if (!MoveFileExW(loop.TemporaryPath.c_str(), loop.FinalPath.c_str(), MOVEFILE_WRITE_THROUGH))
+            { appendError("Failed publishing WAV asset"); return result; }
+            try { files.Paths.push_back(loop.FinalPath); }
+            catch (...) { DeleteFileW(loop.FinalPath.c_str()); throw; }
+        }
+        for (const auto& midi : midiStreams)
+        {
+            if (!MoveFileExW(midi.TemporaryPath.c_str(), midi.FinalPath.c_str(), MOVEFILE_WRITE_THROUGH))
+            { appendError("Failed publishing MIDI asset"); return result; }
+            try { files.Paths.push_back(midi.FinalPath); }
+            catch (...) { DeleteFileW(midi.FinalPath.c_str()); throw; }
+        }
+        result.Path = jamPath;
+        // Same-directory move, without REPLACE_EXISTING or COPY_ALLOWED: a
+        // competing saver cannot replace an existing numbered version.
+        if (!MoveFileExW(temporaryJamPath.c_str(), jamPath.c_str(), MOVEFILE_WRITE_THROUGH))
+        { appendError("Manifest commit failed (possible version collision); retry Save"); return result; }
+        files.Committed = true;
+        result.Success = true;
+        return result;
+        }
+        catch (const std::exception& error)
+        {
+            pause.Resume();
+            result.Error += std::string("; session export failed: ") + error.what();
+            return result;
+        }
+        catch (...)
+        {
+            pause.Resume();
+            result.Error += "; session export failed";
+            return result;
+        }
+    }
 }

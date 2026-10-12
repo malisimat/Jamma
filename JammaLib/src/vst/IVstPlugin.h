@@ -62,6 +62,9 @@ namespace vst
 		// Unload the plugin and release all resources.
 		// Do NOT call while ProcessBlock may be running.
 		virtual void Unload() = 0;
+		// UI/control owner only with processing, MIDI dispatch and job work excluded.
+		// Stops processing, changes geometry, then resumes the existing processor.
+		virtual bool ReconfigureAudioFormat(float sampleRate, unsigned int blockSize) { return !IsLoaded(); }
 
 		// Process numSamples of mono audio in-place.  Real-time safe.
 		virtual void ProcessBlock(float* monoBuf, int32_t numSamples) noexcept = 0;

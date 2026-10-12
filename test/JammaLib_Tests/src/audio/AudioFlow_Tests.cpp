@@ -2,6 +2,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <thread>
 #include "gtest/gtest.h"
 #include "resources/ResourceLib.h"
 #include "engine/Station.h"
@@ -1323,6 +1324,8 @@ namespace audio
 	class AudioHostRealtimeTestAccess
 	{
 	public:
+		static bool Enter(AudioHost& host) noexcept { return host.TryEnterCallback(); }
+		static void Leave(AudioHost& host) noexcept { host.LeaveCallback(); }
 		static void Prepare(AudioHost& host,
 			std::shared_ptr<const std::vector<std::shared_ptr<Station>>> stations,
 			const AudioStreamParams& params)
@@ -1381,6 +1384,32 @@ namespace audio
 			return scene._audioEngine->AudioStationsForCallback().size();
 		}
 	};
+}
+
+TEST(AudioHostQuiescence, AdmissionClosesAndDrainsExistingCallback)
+{
+	audio::AudioHost host(io::UserConfig{});
+	ASSERT_TRUE(audio::AudioHostRealtimeTestAccess::Enter(host));
+	host.CloseCallbackAdmission();
+	EXPECT_FALSE(host.CallbackAdmissionIsQuiescent());
+	EXPECT_FALSE(audio::AudioHostRealtimeTestAccess::Enter(host));
+	std::atomic_bool started{false}, completed{false};
+	audio::AudioHost::QuiescenceState state;
+	std::string error;
+	std::thread owner([&] {
+		started.store(true, std::memory_order_release);
+		EXPECT_TRUE(host.BeginQuiescence(state, error));
+		completed.store(true, std::memory_order_release);
+	});
+	while (!started.load(std::memory_order_acquire)) std::this_thread::yield();
+	EXPECT_FALSE(completed.load(std::memory_order_acquire));
+	audio::AudioHostRealtimeTestAccess::Leave(host);
+	owner.join();
+	EXPECT_TRUE(completed.load(std::memory_order_acquire));
+	EXPECT_TRUE(host.CallbackAdmissionIsQuiescent());
+	EXPECT_FALSE(state.AdmissionWasOpen);
+	EXPECT_TRUE(host.EndQuiescence(state, error));
+	EXPECT_TRUE(host.CallbackAdmissionIsQuiescent());
 }
 
 class AudioCallbackAllocationProbe

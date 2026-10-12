@@ -37,7 +37,15 @@ GuiButton::GuiButton(GuiButtonParams params) :
 
 actions::ActionResult GuiButton::OnAction(actions::TouchAction action)
 {
+	const bool activate = _pressed && action.State == actions::TouchAction::TOUCH_UP && HitTest(action.Position) && _isEnabled && _isVisible;
+	if (action.State == actions::TouchAction::TOUCH_DOWN) _pressed = _isEnabled && _isVisible && HitTest(action.Position);
+	else _pressed = false;
 	auto result = GuiElement::OnAction(action);
+	if (activate && _buttonParams.DispatchCommand && GetReceiver())
+	{
+		actions::GuiAction command; command.Index = _index; command.ElementType = actions::GuiAction::ACTIONELEMENT_BUTTON; command.InputModifiers = action.Modifiers;
+		GetReceiver()->OnAction(command);
+	}
 	if (result.IsEaten && action.State == actions::TouchAction::TOUCH_DOWN && !result.ActiveElement.lock())
 		result.ActiveElement = std::static_pointer_cast<base::GuiElement>(shared_from_this());
 	return result;
@@ -95,4 +103,21 @@ void GuiButton::SetText(const std::string& text)
 
 	_label->SetPosition({ (int)frame.PaddingX, frame.OffsetY });
 	_label->SetSize({ frame.ContentWidth, frame.TextHeight });
+}
+
+actions::ActionResult GuiButton::OnAction(actions::KeyAction action)
+{
+	auto result = GuiElement::OnAction(action);
+	if (_buttonParams.DispatchCommand && result.IsEaten && result.ResultType == actions::ACTIONRESULT_ACTIVATE && GetReceiver())
+	{
+		actions::GuiAction command; command.Index = _index; command.ElementType = actions::GuiAction::ACTIONELEMENT_BUTTON; command.InputModifiers = action.Modifiers;
+		GetReceiver()->OnAction(command);
+	}
+	return result;
+}
+
+void GuiButton::ClearPointerState()
+{
+	_pressed = false;
+	GuiElement::ClearPointerState();
 }

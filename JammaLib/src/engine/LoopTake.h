@@ -206,6 +206,7 @@ namespace engine
 		void UnloadVstPlugin(size_t index);
 		void ForceUnloadAllVstPlugins();
 		void SetSampleRate(float sampleRate);
+		bool ReconfigureVstFormat(float sampleRate, unsigned int blockSize);
 		float GetSampleRate() const noexcept { return _sampleRate; }
 		unsigned int GetLastBufSize() const noexcept { return _lastBufSize; }
 		std::shared_ptr<vst::IVstPlugin> GetVstPlugin(size_t index) const;

@@ -1,5 +1,67 @@
 #include <gtest/gtest.h>
 #include "audio/AudioDevice.h"
+#include "audio/AudioHost.h"
+
+TEST(AudioDeviceNegotiation, ExactSelectionRejectsFallbackAndAmbiguity)
+{
+	audio::AsioInventory inventory;
+	inventory.Devices = { {0u, "first", true, "", 8u, 2u, {48000u}, 48000u},
+		{1u, "selected", true, "", 2u, 8u, {44100u, 48000u}, 48000u} };
+	io::UserConfig::AudioSettings settings{};
+	settings.Name = "selected";
+	settings.SampleRate = 48000u;
+	settings.BufSize = 128u;
+	settings.NumChannelsIn = 2u;
+	settings.NumChannelsOut = 8u;
+	std::string error;
+	EXPECT_EQ(audio::AudioDevice::ValidateExactSelection(inventory, settings, error), 1u);
+	settings.NumChannelsIn = 3u;
+	EXPECT_FALSE(audio::AudioDevice::ValidateExactSelection(inventory, settings, error));
+	settings.NumChannelsIn = 0u; // one-direction streams are independently valid
+	EXPECT_EQ(audio::AudioDevice::ValidateExactSelection(inventory, settings, error), 1u);
+	settings.SampleRate = 96000u;
+	EXPECT_FALSE(audio::AudioDevice::ValidateExactSelection(inventory, settings, error));
+	settings.SampleRate = 48000u;
+	settings.Name = "missing";
+	EXPECT_FALSE(audio::AudioDevice::ValidateExactSelection(inventory, settings, error));
+	settings.Name = "selected";
+	inventory.Devices.push_back(inventory.Devices.back());
+	EXPECT_FALSE(audio::AudioDevice::ValidateExactSelection(inventory, settings, error));
+}
+
+TEST(AudioDeviceNegotiation, ExactSelectionRejectsZeroStreamAndEnumerationFailure)
+{
+	audio::AsioInventory inventory;
+	inventory.Devices = {{0u, "selected", true, "", 2u, 2u, {48000u}, 48000u}};
+	io::UserConfig::AudioSettings settings{};
+	settings.Name = "selected";
+	settings.SampleRate = 48000u;
+	settings.BufSize = 128u;
+	std::string error;
+	EXPECT_FALSE(audio::AudioDevice::ValidateExactSelection(inventory, settings, error));
+	settings.NumChannelsOut = 2u;
+	inventory.EnumerationError = "inventory failed";
+	EXPECT_FALSE(audio::AudioDevice::ValidateExactSelection(inventory, settings, error));
+	EXPECT_EQ(error, "inventory failed");
+}
+
+TEST(AudioHostQuiescence, StoppedHostAndNestedGatePreservePriorState)
+{
+	audio::AudioHost host(io::UserConfig{});
+	audio::AudioHost::QuiescenceState outer, inner;
+	std::string error;
+	ASSERT_TRUE(host.BeginQuiescence(outer, error));
+	EXPECT_FALSE(outer.WasRunning);
+	EXPECT_TRUE(outer.AdmissionWasOpen);
+	EXPECT_TRUE(host.CallbackAdmissionIsQuiescent());
+	ASSERT_TRUE(host.BeginQuiescence(inner, error));
+	EXPECT_FALSE(inner.AdmissionWasOpen);
+	ASSERT_TRUE(host.EndQuiescence(inner, error));
+	EXPECT_TRUE(host.CallbackAdmissionIsQuiescent());
+	ASSERT_TRUE(host.EndQuiescence(outer, error));
+	EXPECT_FALSE(host.CallbackAdmissionIsQuiescent());
+	EXPECT_EQ(host.GetDevice(), nullptr);
+}
 
 TEST(AudioDeviceNegotiation, GeneratedPairsReachStereoAndMono)
 {

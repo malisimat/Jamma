@@ -11,6 +11,9 @@ namespace gui
 		double Max       = 1.0;
 		double Step      = 0.01;   // value change per pixel of drag.
 		double InitValue = 0.0;
+		bool IntegerOnly = false;
+		bool RejectOutOfRange = false;
+		std::function<void()> OnInvalidValue;
 		int    Decimals  = 2;
 
 		static GuiNumericInputParams PanelInput(unsigned int width)
@@ -58,6 +61,8 @@ namespace gui
 
 		static GuiNumericInputParams _WithInitialText(GuiNumericInputParams params);
 
+		bool _integerOnly = false, _rejectOutOfRange = false;
+		std::function<void()> _onInvalidValue;
 		double _min;
 		double _max;
 		double _step;

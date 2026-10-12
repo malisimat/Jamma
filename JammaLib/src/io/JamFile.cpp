@@ -1389,8 +1389,8 @@ std::optional<JamFile::LoopTake> JamFile::LoopTake::FromJson(Json::JsonPart json
 			}
 		}
 	}
-	if (loops.empty() && midiStreams.empty())
-		return std::nullopt;
+	// A named empty take still owns routes, levels, quantisation and plugins.
+	// Preserve that state across saves, including a session with no recordings.
 
 	LoopTake take;
 	take.Name = name;

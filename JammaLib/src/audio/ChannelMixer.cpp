@@ -160,7 +160,11 @@ void ChannelMixer::BufferMixer::SetNumChannels(unsigned int numChans, unsigned i
 		_buffers.resize(numChans);
 
 	for (auto& buf : _buffers)
+	{
 		buf->SetSize(bufSize);
+		// Device-latency scratch must not replay audio from the previous stream.
+		buf->Reset();
+	}
 }
 
 void ChannelMixer::AdcChannelMixer::EndMultiPlay(unsigned int numSamps)

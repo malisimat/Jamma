@@ -5,6 +5,7 @@
 #include <exception>
 #include <iomanip>
 #include <iostream>
+#include <thread>
 
 #include "rtmidi/RtMidi.h"
 
@@ -192,7 +193,12 @@ const MidiInputDeviceInfo* MidiDevice::SelectStartupInput(
 	bool generatedRig, bool& ambiguous) noexcept
 {
 	if (!generatedRig)
-		return SelectUnclaimedExactInput(devices, name, claimedIds, ambiguous);
+	{
+		const auto* selected = SelectUnclaimedExactInput(devices, name, claimedIds, ambiguous);
+		// WinMM exposes no stable physical identity for duplicate names. Current
+		// indices and display suffixes must never resolve a persisted preference.
+		return ambiguous ? nullptr : selected;
+	}
 	ambiguous = std::count_if(devices.begin(), devices.end(),
 		[&name](const MidiInputDeviceInfo& device) { return device.Name == name; }) > 1u;
 	return requestIndex < devices.size() && devices[requestIndex].Name == name
@@ -203,6 +209,11 @@ bool MidiDevice::OpenPort(const MidiInputDeviceInfo& port, MidiMessageCallback c
 	std::string& error, bool loggingVerbose)
 {
 	Close();
+	if (_midiIn)
+	{
+		error = "Previous MIDI backend did not close safely";
+		return false;
+	}
 	_verbosePackets.Clear();
 	_lastVerboseDroppedCount = 0u;
 	_callback = std::move(callback);
@@ -224,20 +235,19 @@ bool MidiDevice::OpenPort(const MidiInputDeviceInfo& port, MidiMessageCallback c
 		_midiIn->ignoreTypes(false, false, false);
 		if (_callback)
 			_midiIn->setCallback(&MidiDevice::_RtMidiCallback, this);
+		_callbackState.store(0u, std::memory_order_release);
 		_midiIn->openPort(port.DeviceId, "Jamma MIDI In");
 	}
 	catch (const rt::midi::RtMidiError& err)
 	{
 		error = err.getMessage();
-		_callback = MidiMessageCallback();
-		_midiIn.reset();
+		Close();
 		return false;
 	}
 	catch (const std::exception& err)
 	{
 		error = err.what();
-		_callback = MidiMessageCallback();
-		_midiIn.reset();
+		Close();
 		return false;
 	}
 	_deviceName = port.Name;
@@ -271,18 +281,37 @@ bool MidiDevice::Open(const std::string& preferredDeviceName,
 
 void MidiDevice::Close()
 {
-	if (!_midiIn)
+	if (!_midiIn || _closeFailed)
 		return;
+	_callbackState.fetch_or(CallbackClosed, std::memory_order_acq_rel);
 
 	try
 	{
-		_midiIn->cancelCallback();
 		if (_midiIn->isPortOpen())
 			_midiIn->closePort();
+		while (_callbackState.load(std::memory_order_acquire) != CallbackClosed)
+			std::this_thread::yield();
+		// cancelCallback mutates RtMidi callback fields; do it only after the
+		// backend has stopped, rather than racing its callback reader.
+		_midiIn->cancelCallback();
 	}
 	catch (const rt::midi::RtMidiError& err)
 	{
 		std::cout << "[MIDI] Error while closing MIDI input: " << err.getMessage() << std::endl;
+		while (_callbackState.load(std::memory_order_acquire) != CallbackClosed)
+			std::this_thread::yield();
+		// Retain callback resources on uncertain backend lifetime. The endpoint's
+		// callback capture retains its owner instead of freeing backend userdata.
+		_closeFailed = true;
+		return;
+	}
+	catch (const std::exception& err)
+	{
+		std::cout << "[MIDI] Error while closing MIDI input: " << err.what() << std::endl;
+		while (_callbackState.load(std::memory_order_acquire) != CallbackClosed)
+			std::this_thread::yield();
+		_closeFailed = true;
+		return;
 	}
 
 	if (_isOpen)
@@ -298,6 +327,19 @@ void MidiDevice::Close()
 	_deviceId = 0u;
 }
 
+void MidiDevice::SuspendCallbacks() noexcept
+{
+	_callbackState.fetch_or(CallbackClosed, std::memory_order_acq_rel);
+	while (_callbackState.load(std::memory_order_acquire) != CallbackClosed)
+		std::this_thread::yield();
+}
+
+void MidiDevice::ResumeCallbacks() noexcept
+{
+	if (_isOpen && _midiIn && !_closeFailed)
+		_callbackState.store(0u, std::memory_order_release);
+}
+
 void MidiDevice::_RtMidiCallback(double deltaSeconds,
                                  std::vector<unsigned char>* message,
                                  void* userData)
@@ -308,7 +350,9 @@ void MidiDevice::_RtMidiCallback(double deltaSeconds,
 		return;
 
 	auto self = reinterpret_cast<MidiDevice*>(userData);
+	if (!self->TryEnterCallback()) return;
 	self->_OnMidiData(*message, deltaSeconds, callbackArrivalMicros);
+	self->LeaveCallback();
 }
 
 void MidiDevice::DrainVerbosePackets(const std::string& configuredName)
@@ -360,4 +404,15 @@ void MidiDevice::_OnMidiData(const std::vector<unsigned char>& message,
 		std::copy_n(message.begin(), packet.Size, packet.Bytes.begin());
 		_verbosePackets.Push(packet);
 	}
+}
+
+bool MidiDevice::TryEnterCallback() noexcept
+{
+	std::uint32_t expected = 0u;
+	return _callbackState.compare_exchange_strong(expected, 1u,
+		std::memory_order_acquire, std::memory_order_relaxed);
+}
+void MidiDevice::LeaveCallback() noexcept
+{
+	_callbackState.fetch_sub(1u, std::memory_order_release);
 }

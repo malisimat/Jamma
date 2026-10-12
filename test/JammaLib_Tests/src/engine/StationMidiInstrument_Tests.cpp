@@ -940,3 +940,90 @@ TEST(StationMidiInstrument, AudioOnlyTriggerDoesNotCreateMidiStreams)
 		EXPECT_TRUE(targetTake->MidiLoopDevices().empty());
 	}
 }
+
+
+TEST(StationMidiInstrument, QuiescentResetReleasesSoundedNoteBeforeJobObservedIt)
+{
+	auto station = MakeStation("quiescent-live-reset");
+	auto plugin = AddPlugin(station, L"fake-reset.dll");
+	AllowAllMidiChannels(station);
+	// Live monitoring wins the race with the job-side physical-note observer.
+	ASSERT_TRUE(station->TryEnqueueImmediateLiveMidi(MidiEvent::MakeNoteOn(0u, 0u, 60u, 100u)));
+	RenderStationBlock(station, 0u);
+	ASSERT_EQ(1u, plugin->Events.size());
+	ASSERT_TRUE(plugin->Events[0].IsNoteOn());
+	plugin->Events.clear();
+	station->ResetLiveMidiWhileQuiescent();
+	EXPECT_TRUE(plugin->Events.empty()); // Delivered after BeginMidiBlock on resume.
+	RenderStationBlock(station, 128u);
+	ASSERT_EQ(1u, plugin->Events.size());
+	EXPECT_TRUE(plugin->Events[0].IsNoteOff());
+	EXPECT_EQ(60u, plugin->Events[0].data1);
+	RenderStationBlock(station, 256u);
+	EXPECT_EQ(1u, plugin->Events.size());
+}
+
+TEST(StationMidiInstrument, QuiescentResetDiscardsFutureNotesAndResetsIngressWatermark)
+{
+	auto station = MakeStation("quiescent-future-reset");
+	auto plugin = AddPlugin(station, L"fake-future-reset.dll");
+	AllowAllMidiChannels(station);
+	ASSERT_TRUE(station->TryEnqueueImmediateLiveMidi(MidiEvent::MakeNoteOn(100000u, 0u, 60u, 100u)));
+	ASSERT_TRUE(station->TryEnqueueSyntheticLiveMidi(MidiEvent::MakeNoteOn(100000u, 0u, 61u, 100u)));
+	station->ResetLiveMidiWhileQuiescent();
+	ASSERT_TRUE(station->TryEnqueueImmediateLiveMidi(MidiEvent::MakeNoteOn(0u, 0u, 62u, 100u)));
+	RenderStationBlock(station, 0u);
+	ASSERT_EQ(1u, plugin->Events.size());
+	EXPECT_TRUE(plugin->Events[0].IsNoteOn());
+	EXPECT_EQ(62u, plugin->Events[0].data1);
+	plugin->Events.clear();
+	RenderStationBlock(station, 100000u);
+	EXPECT_TRUE(plugin->Events.empty());
+}
+
+TEST(StationMidiInstrument, QuiescentLiveResetPreservesOverlappingPlaybackOwnership)
+{
+	auto station = MakeStation("quiescent-playback-reset");
+	auto plugin = AddPlugin(station, L"fake-playback-reset.dll");
+	AllowAllMidiChannels(station);
+	auto take = MakeMidiTake("playback-preserved");
+	take->Record({}, station->Name(), { 0u }, { "playback" });
+	ASSERT_TRUE(take->RecordMidiEvent(MidiEvent::MakeNoteOn(0u, 0u, 60u, 100u), "playback", 0u));
+	take->Play(0u, 1000u, 0u);
+	station->AddTake(take);
+	station->CommitChanges();
+	ASSERT_TRUE(station->TryEnqueueImmediateLiveMidi(MidiEvent::MakeNoteOn(0u, 0u, 60u, 100u)));
+	RenderStationBlock(station, 0u);
+	ASSERT_FALSE(plugin->Events.empty());
+	plugin->Events.clear();
+	station->ResetLiveMidiWhileQuiescent();
+	RenderStationBlock(station, 128u);
+	EXPECT_TRUE(plugin->Events.empty());
+}
+
+
+TEST(StationMidiInstrument, QuiescentResetRetainsQueuedPlaybackSourceLossRelease)
+{
+	auto station = MakeStation("quiescent-playback-release");
+	auto plugin = AddPlugin(station, L"fake-playback-release.dll");
+	AllowAllMidiChannels(station);
+	auto take = MakeMidiTake("lost-playback");
+	take->Record({}, station->Name(), { 0u }, { "lost" });
+	ASSERT_TRUE(take->RecordMidiEvent(MidiEvent::MakeNoteOn(0u, 0u, 67u, 100u), "lost", 0u));
+	take->Play(0u, 1000u, 0u);
+	station->AddTake(take);
+	station->CommitChanges();
+	RenderStationBlock(station, 0u);
+	plugin->Events.clear();
+	TriggerAction ditch;
+	ditch.ActionType = TriggerAction::TRIGGER_DITCH;
+	ditch.TargetId = take->Id();
+	ditch.IsSourceLossCancellation = true;
+	ASSERT_EQ(actions::DitchDisposition::Removed, station->OnAction(ditch).DitchResult);
+	station->CommitChanges();
+	station->ResetLiveMidiWhileQuiescent();
+	RenderStationBlock(station, 128u);
+	ASSERT_EQ(1u, plugin->Events.size());
+	EXPECT_TRUE(plugin->Events[0].IsNoteOff());
+	EXPECT_EQ(67u, plugin->Events[0].data1);
+}

@@ -23,11 +23,16 @@ AudioDevice::AudioDevice(AudioStreamParams params, std::unique_ptr<RtAudio> stre
 			(_stream->isStreamOpen() ? StreamState::STOPPED : StreamState::CLOSED);
 }
 
-AudioDevice::~AudioDevice() { Stop(); }
+AudioDevice::~AudioDevice()
+{
+	// A failed backend barrier cannot authorize destroying driver resources.
+	// AudioHost also quarantines callback userdata on this fatal teardown path.
+	if (!TryStop()) (void)_stream.release();
+}
 
 void AudioDevice::SetDevice(std::unique_ptr<RtAudio> device)
 {
-	Stop();
+	if (!TryStop()) return;
 	_stream = std::move(device);
 	_streamState = _stream && _stream->isStreamRunning() ? StreamState::RUNNING :
 		(_stream && _stream->isStreamOpen() ? StreamState::STOPPED : StreamState::CLOSED);
@@ -38,7 +43,8 @@ bool AudioDevice::Start()
 	if (!_stream) return false;
 	try
 	{
-		_stream->startStream();
+		if (!_stream->isStreamRunning()) _stream->startStream();
+		if (!_stream->isStreamRunning()) return false;
 		_streamState = StreamState::RUNNING;
 		_audioStreamParams.InputLatency = static_cast<unsigned int>(_stream->getInputStreamLatency());
 		_audioStreamParams.OutputLatency = static_cast<unsigned int>(_stream->getOutputStreamLatency());
@@ -47,7 +53,7 @@ bool AudioDevice::Start()
 	catch (const RtAudioError& err)
 	{
 		std::cout << "[ASIO] start failed: " << err.getMessage() << std::endl;
-		_streamState = StreamState::STOPPED;
+		_streamState = _stream->isStreamRunning() ? StreamState::RUNNING : StreamState::STOPPED;
 		return false;
 	}
 }
@@ -63,7 +69,9 @@ bool AudioDevice::TryStop()
 	try
 	{
 		if (_stream->isStreamRunning()) _stream->stopStream();
+		if (_stream->isStreamRunning()) return false;
 		if (_stream->isStreamOpen()) _stream->closeStream();
+		if (_stream->isStreamOpen()) return false;
 	}
 	catch (const RtAudioError& err)
 	{
@@ -77,7 +85,13 @@ bool AudioDevice::TryStop()
 bool AudioDevice::Pause()
 {
 	if (!_stream || !_stream->isStreamRunning()) return false;
-	try { _stream->stopStream(); _streamState = StreamState::PAUSED; return true; }
+	try
+	{
+		_stream->stopStream();
+		if (_stream->isStreamRunning()) return false;
+		_streamState = StreamState::PAUSED;
+		return true;
+	}
 	catch (const RtAudioError& err) { std::cout << "[ASIO] pause failed: " << err.getMessage() << std::endl; return false; }
 }
 
@@ -257,13 +271,23 @@ std::optional<std::unique_ptr<AudioDevice>> AudioDevice::Open(
 	std::function<void(RtAudioError::Type, const std::string&)> onError,
 	io::UserConfig::AudioSettings settings, void* audioSink, bool generatedRig,
 	const AsioInventory* suppliedInventory, AsioOpenReport* report,
-	const std::function<void(const AudioStreamParams&)>& prepareForStart)
+	const std::function<void(const AudioStreamParams&)>& prepareForStart, bool exactSelection)
 {
 	(void)onError; // RtAudio's callback is asynchronous and handled by the host.
 	AsioInventory discovered;
 	if (!suppliedInventory) { discovered = DiscoverAsio(); suppliedInventory = &discovered; }
 	if (report) *report = {};
-	const auto candidateIds = OrderedCandidateIds(*suppliedInventory, settings, generatedRig);
+	std::string validationError;
+	const auto exactId = exactSelection ? ValidateExactSelection(*suppliedInventory, settings, validationError) :
+		std::optional<unsigned int>{};
+	if (exactSelection && !exactId)
+	{
+		if (report) { AsioAttempt failed; failed.Name = settings.Name; failed.Error = validationError;
+			report->Attempts.push_back(std::move(failed)); }
+		return std::nullopt;
+	}
+	const auto candidateIds = exactSelection ? std::vector<unsigned int>{ *exactId } :
+		OrderedCandidateIds(*suppliedInventory, settings, generatedRig);
 
 	// Each generated pass has its own per-driver budget. Try stereo on every
 	// candidate before accepting degraded capture or playback on any candidate.
@@ -285,7 +309,9 @@ std::optional<std::unique_ptr<AudioDevice>> AudioDevice::Open(
 		auto plan = generatedRig ? GeneratedAttemptPlan(candidate->InputChannels,
 			candidate->OutputChannels, rates, pass == 0u, maxAttemptsPerDevice) :
 			std::vector<AsioConfiguration>{};
-		if (!generatedRig)
+		if (exactSelection)
+			plan.push_back({ settings.NumChannelsIn, settings.NumChannelsOut, settings.SampleRate });
+		else if (!generatedRig)
 			for (const auto rate : rates)
 			{
 				if (plan.size() >= maxAttemptsPerDevice) break;
@@ -303,9 +329,18 @@ std::optional<std::unique_ptr<AudioDevice>> AudioDevice::Open(
 				std::cout << "[ASIO] attempt id=" << attempt.DeviceId << " name=" << attempt.Name
 					<< " input=" << inputs << " output=" << outputs << " rate=" << rate
 					<< " buffer=" << settings.BufSize << " buffers=" << settings.NumBuffers << std::endl;
+				std::unique_ptr<AudioDevice> openedDevice;
 				try
 				{
 					auto stream = std::make_unique<RtAudio>(RtAudio::WINDOWS_ASIO);
+					if (exactSelection)
+					{
+						const auto current = stream->getDeviceInfo(candidate->Id);
+						if (!current.probed || current.name != candidate->Name ||
+							inputs > current.inputChannels || outputs > current.outputChannels ||
+							std::find(current.sampleRates.begin(), current.sampleRates.end(), rate) == current.sampleRates.end())
+							throw std::runtime_error("Selected ASIO device changed since enumeration");
+					}
 					RtAudio::StreamParameters inParams;
 					inParams.deviceId = candidate->Id;
 					inParams.nChannels = inputs;
@@ -331,18 +366,17 @@ std::optional<std::unique_ptr<AudioDevice>> AudioDevice::Open(
 							static_cast<unsigned int>(stream->getInputStreamLatency()),
 							static_cast<unsigned int>(stream->getOutputStreamLatency()),
 							inputs, outputs };
+						openedDevice = std::make_unique<AudioDevice>(params, std::move(stream));
 						if (prepareForStart) prepareForStart(params);
 						try
 						{
-							stream->startStream();
-							attempt.Started = stream->isStreamRunning();
+							attempt.Started = openedDevice->Start();
 							if (attempt.Started)
 							{
-								params.InputLatency = static_cast<unsigned int>(stream->getInputStreamLatency());
-								params.OutputLatency = static_cast<unsigned int>(stream->getOutputStreamLatency());
+								params = openedDevice->GetAudioStreamParams();
 								if (report) { report->Attempts.push_back(attempt); report->StartedParams = params; }
 								params.PrintParams();
-								return std::make_unique<AudioDevice>(params, std::move(stream));
+								return openedDevice;
 							}
 							attempt.Error = "stream did not start";
 						}
@@ -350,6 +384,14 @@ std::optional<std::unique_ptr<AudioDevice>> AudioDevice::Open(
 					}
 				}
 				catch (const RtAudioError& err) { attempt.Error = err.getMessage(); }
+				catch (const std::exception& err) { attempt.Error = err.what(); }
+				catch (...) { attempt.Error = "stream preparation failed"; }
+				if (openedDevice && !openedDevice->TryStop())
+				{
+					attempt.Error += "; backend teardown could not be confirmed";
+					if (report) { report->Attempts.push_back(std::move(attempt)); report->TeardownUncertain = true; }
+					return openedDevice;
+				}
 				std::cout << "[ASIO] failed id=" << attempt.DeviceId << " name=" << attempt.Name
 					<< " opened=" << attempt.Opened << " reason=" << attempt.Error << std::endl;
 				if (report) report->Attempts.push_back(std::move(attempt));
@@ -358,4 +400,30 @@ std::optional<std::unique_ptr<AudioDevice>> AudioDevice::Open(
 	}
 	std::cout << "[ASIO] no stream started" << std::endl;
 	return std::nullopt;
+}
+
+std::optional<unsigned int> AudioDevice::ValidateExactSelection(const AsioInventory& inventory,
+	const io::UserConfig::AudioSettings& settings, std::string& error)
+{
+	error.clear();
+	if (!inventory.EnumerationError.empty()) error = inventory.EnumerationError;
+	else if (settings.BufSize == 0u || settings.SampleRate == 0u ||
+		(settings.NumChannelsIn == 0u && settings.NumChannelsOut == 0u))
+		error = "Audio requires a positive buffer/rate and at least one channel";
+	if (!error.empty()) return std::nullopt;
+	const AsioDeviceInfo* selected = nullptr;
+	for (const auto& device : inventory.Devices)
+		if (device.Name == settings.Name)
+		{
+			if (selected) { error = "Selected ASIO device name is ambiguous"; return std::nullopt; }
+			selected = &device;
+		}
+	if (!selected) error = "Selected ASIO device is unavailable";
+	else if (!selected->Probed) error = "Selected ASIO device could not be probed";
+	else if (settings.NumChannelsIn > selected->InputChannels || settings.NumChannelsOut > selected->OutputChannels)
+		error = "Selected channel count exceeds device channels";
+	else if (std::find(selected->SampleRates.begin(), selected->SampleRates.end(), settings.SampleRate) ==
+		selected->SampleRates.end()) error = "Selected sample rate is unavailable";
+	if (!error.empty()) return std::nullopt;
+	return selected->Id;
 }

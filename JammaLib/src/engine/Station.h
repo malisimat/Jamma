@@ -185,6 +185,8 @@ namespace engine
 		void RefreshQuantisationOverlayFromClock();
 		void SetupBuffers(unsigned int bufSize);
 		void SetSampleRate(float sampleRate);
+		// Control/UI owner, with job, MIDI and audio writers excluded.
+		bool ReconfigureVstFormat(float sampleRate, unsigned int blockSize);
 		void SetLogging(const io::LoggingConfig& config) noexcept;
 		void SetNumBusChannels(unsigned int chans);
 		void SetNumAdcChannels(unsigned int chans);
@@ -208,6 +210,9 @@ namespace engine
 		// Called only by the live MIDI dispatcher after route and channel eligibility
 		// have been resolved.
 		bool TryEnqueueImmediateLiveMidi(const midi::MidiEvent& event) noexcept;
+		// UI lifecycle owner only, with audio callback, job and live dispatcher
+		// stopped. Discards stale monitoring input; preserves recorded/playback MIDI.
+		void ResetLiveMidiWhileQuiescent() noexcept;
 		// Called only by the Scene job thread for generated transitions and releases.
 		bool TryEnqueueSyntheticLiveMidi(const midi::MidiEvent& event) noexcept;
 		// Called by the job-thread legacy MIDI path. Recording-held observation must
@@ -298,6 +303,9 @@ namespace engine
 		{
 			std::shared_ptr<vst::IVstPlugin> Plugin;
 			std::bitset<midi::MidiNote::TotalNoteSlots> LiveHeld;
+			// Audio owner consumes; quiescent lifecycle owner marks actual delivered
+			// live notes after all writers drain. Destination lifetime follows snapshots.
+			std::bitset<midi::MidiNote::TotalNoteSlots> PendingLiveReset;
 			std::array<std::uint32_t, midi::MidiNote::TotalNoteSlots> LiveNoteOnRevision{};
 			std::array<unsigned int, midi::MidiNote::TotalNoteSlots> PlaybackOwners{};
 		};

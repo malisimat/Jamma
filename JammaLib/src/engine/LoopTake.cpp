@@ -358,7 +358,10 @@ std::optional<std::shared_ptr<LoopTake>> LoopTake::FromFile(LoopTakeParams takeP
 		}
 	}
 
-	if (!hasAudioLoop && midiState.Streams.empty())
+	// Preserve an intentionally empty take; retain the existing skip behavior
+	// when recorded content was declared but every asset failed to restore.
+	if (!hasAudioLoop && midiState.Streams.empty()
+		&& (!takeStruct.Loops.empty() || !takeStruct.MidiStreams.empty()))
 	{
 		std::cout << "Load: skipped empty take " << takeStruct.Name << std::endl;
 		return std::nullopt;
@@ -1456,6 +1459,7 @@ void LoopTake::SetupBuffers(unsigned int bufSize)
 	for (auto& buf : buffers)
 	{
 		buf->SetSize(bufSize);
+		buf->Reset();
 	}
 }
 
@@ -3764,6 +3768,18 @@ void LoopTake::_ResizeVstScratch(unsigned int channelCount)
 	_vstBlockPtrs.resize(channelCount);
 	for (unsigned int i = 0; i < channelCount; i++)
 		_vstBlockPtrs[i] = _vstBlockScratch.data() + (static_cast<size_t>(i) * constants::MaxBlockSize);
+}
+
+bool LoopTake::ReconfigureVstFormat(float sampleRate, unsigned int blockSize)
+{
+	const auto chain = _vstChain.load();
+	if (chain && !chain->ReconfigureAudioFormat(sampleRate, blockSize)) return false;
+	if (_backVstChain && _backVstChain != chain && !_backVstChain->ReconfigureAudioFormat(sampleRate, blockSize)) return false;
+	for (const auto& loop : _loops)
+		if (loop && !loop->ReconfigureVstFormat(sampleRate, blockSize)) return false;
+	for (const auto& loop : _backLoops)
+		if (loop && !loop->ReconfigureVstFormat(sampleRate, blockSize)) return false;
+	return true;
 }
 
 void LoopTake::SetSampleRate(float sampleRate)

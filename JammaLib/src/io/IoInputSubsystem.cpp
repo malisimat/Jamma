@@ -42,16 +42,32 @@ namespace io
 	}
 
 	midi::MidiConnectionResult IoInputSubsystem::RefreshMidi(midi::MidiClockAnchor& midiClockAnchor,
-		unsigned int actualSampleRate, const midi::MidiInputInventory& inventory)
+		unsigned int actualSampleRate, const midi::MidiInputInventory& inventory, bool forceRetry)
 	{
 		return _midiRouter.InitMidi(_userConfig, _loggingConfig,
-			midiClockAnchor, actualSampleRate, &inventory);
+			midiClockAnchor, actualSampleRate, &inventory, false, forceRetry);
 	}
 
 	void IoInputSubsystem::SetLogging(io::LoggingConfig loggingConfig) noexcept
 	{
 		_loggingConfig = std::move(loggingConfig);
 	}
+
+	midi::MidiConnectionResult IoInputSubsystem::ReconcileMidi(
+		const std::vector<UserConfig::MidiSettings>& desired, midi::MidiClockAnchor& midiClockAnchor,
+		unsigned int actualSampleRate, const midi::MidiInputInventory& inventory)
+	{
+		auto candidate = _userConfig;
+		candidate.Midi.Devices = desired;
+		auto result = _midiRouter.InitMidi(candidate, _loggingConfig, midiClockAnchor,
+			actualSampleRate, &inventory, false, true);
+		if (result.Accepted)
+			_userConfig.Midi.Devices = desired;
+		return result;
+	}
+
+	void IoInputSubsystem::SuspendMidiDispatch() { _midiRouter.SuspendMidiDispatch(); }
+	void IoInputSubsystem::ResumeMidiDispatch() { _midiRouter.ResumeMidiDispatch(); }
 
 	void IoInputSubsystem::Close()
 	{
@@ -265,4 +281,9 @@ namespace io
 	{
 		return _midiRouter.ConsumeMidiInputPeak(deviceName);
 	}
+}
+
+void io::IoInputSubsystem::CloseMidi()
+{
+	_midiRouter.CloseMidi();
 }

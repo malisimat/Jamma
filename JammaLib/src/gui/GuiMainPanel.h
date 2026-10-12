@@ -10,7 +10,7 @@
 
 namespace gui
 {
-	enum class SettingsPage : unsigned int { Midi, Timing, Audio, Session, Groups, Selection, Count };
+	enum class SettingsPage : unsigned int { Audio, Midi, Timing, Session, Groups, Selection, Count };
 	struct GuiSettingEntry
 	{
 		SettingsPage Page = SettingsPage::Timing;
@@ -32,6 +32,8 @@ namespace gui
 	{
 	public:
 		explicit GuiMainPanel(GuiMainPanelParams params);
+		void FinalizePageSettings(SettingsPage page);
+		void ReplacePageSettings(SettingsPage page, const std::vector<GuiSettingEntry>& settings);
 		void SetCommandOwner(std::weak_ptr<base::ActionReceiver> owner);
 		void SetViewportSize(utils::Size2d viewport);
 		void SetPage(SettingsPage page);
@@ -62,6 +64,9 @@ namespace gui
 		void _UpdatePresentation();
 		static constexpr unsigned int _PageCommand = 1u;
 		static constexpr unsigned int _ExpandCommand = 2u;
+		resources::ResourceLib* _pageResources = nullptr; // UI owner; cleared on release.
+		std::weak_ptr<base::ActionReceiver> _commandOwner;
+		std::array<std::vector<std::shared_ptr<GuiCommandReceiver>>, static_cast<size_t>(SettingsPage::Count)> _pageBindings;
 		bool _selectionOnly;
 		bool _expanded = true;
 		float _transition = 1.0f;

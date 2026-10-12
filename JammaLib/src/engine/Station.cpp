@@ -689,6 +689,7 @@ void Station::_DispatchLiveMidi(const AudioState& state, const MidiEvent& event,
 	{
 		if (event.IsNoteOn())
 		{
+			destination->PendingLiveReset.reset(slot);
 			destination->LiveHeld.set(slot);
 			destination->LiveNoteOnRevision[slot] = liveNoteOnRevision;
 		}
@@ -835,6 +836,26 @@ void Station::_RunVstBlock(vst::VstChain* chain,
 	}
 
 	constexpr auto MaxLiveMidiEventsPerBlock = 64u;
+	// Reset releases are staged while quiescent, then delivered after the plugin
+	// begins its block. Sending them on the UI thread would be cleared by Begin.
+	unsigned int resetReleaseBudget = MaxLiveMidiEventsPerBlock;
+	auto resetScanBudget = midi::MidiNote::TotalNoteSlots;
+	if (vstActive)
+		for (const auto& destination : state.MidiDestinations)
+		{
+			if (resetScanBudget == 0u || resetReleaseBudget == 0u) break;
+			if (destination->PendingLiveReset.none()) continue;
+			for (std::size_t slot = 0; slot < midi::MidiNote::TotalNoteSlots && resetReleaseBudget > 0u && resetScanBudget > 0u; ++slot)
+			{
+				--resetScanBudget;
+				if (!destination->PendingLiveReset.test(slot)) continue;
+				destination->PendingLiveReset.reset(slot);
+				--resetReleaseBudget;
+				if (destination->PlaybackOwners[slot] == 0u && destination->Plugin && destination->Plugin->IsLoaded())
+					destination->Plugin->SendMidiEvent(MidiEvent::MakeNoteOff(blockStartSample,
+						static_cast<std::uint8_t>(slot / 128u), static_cast<std::uint8_t>(slot % 128u)), true);
+			}
+		}
 	auto releaseSlotBudget = static_cast<unsigned int>(midi::MidiNote::TotalNoteSlots);
 	for (auto dispatched = 0u; dispatched < MaxLiveMidiEventsPerBlock; ++dispatched)
 	{
@@ -2127,12 +2148,25 @@ void Station::SetupBuffers(unsigned int bufSize)
 	for (auto& buf : buffers)
 	{
 		buf->SetSize(bufSize);
+		buf->Reset();
 	}
 
 	for (auto& take : _loopTakes)
 		take->SetupBuffers(bufSize);
 	for (auto& take : _backLoopTakes)
 		take->SetupBuffers(bufSize);
+}
+
+bool Station::ReconfigureVstFormat(float sampleRate, unsigned int blockSize)
+{
+	const auto chain = _vstChain.load(std::memory_order_acquire);
+	if (chain && !chain->ReconfigureAudioFormat(sampleRate, blockSize)) return false;
+	if (_backVstChain && _backVstChain != chain && !_backVstChain->ReconfigureAudioFormat(sampleRate, blockSize)) return false;
+	for (const auto& take : _loopTakes)
+		if (take && !take->ReconfigureVstFormat(sampleRate, blockSize)) return false;
+	for (const auto& take : _backLoopTakes)
+		if (take && !take->ReconfigureVstFormat(sampleRate, blockSize)) return false;
+	return true;
 }
 
 void Station::SetSampleRate(float sampleRate)
@@ -2398,6 +2432,34 @@ bool Station::TryEnqueueImmediateLiveMidi(const MidiEvent& event) noexcept
 		_hasLastImmediateLiveMidiSample,
 		_lastImmediateLiveMidiSample,
 		event);
+}
+
+void Station::ResetLiveMidiWhileQuiescent() noexcept
+{
+	_immediateLiveMidiIngress.Clear();
+	_hasLastImmediateLiveMidiSample = false;
+	_lastImmediateLiveMidiSample = 0u;
+	// Playback release records carry pinned binding acknowledgements. Retain
+	// them exactly; discard monitoring events, including undelivered NoteOns.
+	std::array<SyntheticMidi, 1024u> playbackReleases{};
+	std::size_t count = 0u;
+	SyntheticMidi entry{};
+	while (_syntheticLiveMidiIngress.Pop(entry))
+		if (entry.Release) playbackReleases[count++] = entry;
+	_syntheticLiveMidiIngress.Clear();
+	_hasLastSyntheticLiveMidiSample = false;
+	_lastSyntheticLiveMidiSample = 0u;
+	for (std::size_t i = 0; i < count; ++i)
+	{
+		playbackReleases[i].Event.sampleOffset = 0u;
+		_TryEnqueueSyntheticMidi(playbackReleases[i]);
+	}
+	for (const auto& weak : _midiDestinations)
+		if (const auto destination = weak.lock())
+		{
+			destination->PendingLiveReset |= destination->LiveHeld;
+			destination->LiveHeld.reset();
+		}
 }
 
 bool Station::TryEnqueueSyntheticLiveMidi(const MidiEvent& event) noexcept

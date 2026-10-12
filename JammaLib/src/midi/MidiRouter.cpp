@@ -420,42 +420,61 @@ MidiConnectionResult MidiRouter::InitMidi(const io::UserConfig& cfg,
 	midi::MidiClockAnchor& midiClockAnchor,
 	unsigned int actualSampleRate,
 	const MidiInputInventory* inventory,
-	bool generatedRig)
+	bool generatedRig, bool forceReconcile)
 {
 	MidiConnectionResult result;
 	result.Inventory = inventory ? *inventory : MidiDevice::InventoryInputDevices();
-	if (!result.Inventory.Error.empty())
-		std::cout << "[MIDI] Inventory failed: " << result.Inventory.Error << std::endl;
-	std::cout << "[MIDI] Inventory: " << result.Inventory.Devices.size() << " input port(s)" << std::endl;
-	for (const auto& device : result.Inventory.Devices)
-		std::cout << "[MIDI]   #" << device.DeviceId << " \"" << device.Name << "\"" << std::endl;
-
 	std::scoped_lock lock(_rigInputPublicationMutex);
-	_CloseMidi();
+	if (!result.Inventory.Error.empty())
+	{
+		// A failed enumeration is not evidence of endpoint loss. Preserve both
+		// working readers and the accepted desired configuration.
+		result = _lastMidiConnectionResult;
+		result.Inventory.Error = inventory ? inventory->Error : "MIDI inventory failed";
+		result.Accepted = false;
+		return result;
+	}
+	std::vector<std::pair<std::string, bool>> desired;
+	for (const auto& configured : cfg.Midi.Devices)
+		desired.emplace_back(configured.Name, configured.Enabled);
+	const auto& priorInventory = _lastMidiConnectionResult.Inventory.Devices;
+	const bool sameInventory = result.Inventory.Devices.size() == priorInventory.size() &&
+		std::equal(result.Inventory.Devices.begin(), result.Inventory.Devices.end(), priorInventory.begin(),
+			[](const MidiInputDeviceInfo& a, const MidiInputDeviceInfo& b) {
+				return a.DeviceId == b.DeviceId && a.Name == b.Name && a.PortName == b.PortName;
+			});
+	if (!forceReconcile && !generatedRig && _lastMidiConnectionResult.Accepted && sameInventory &&
+		desired == _lastMidiDesired && actualSampleRate == _lastMidiSampleRate &&
+		_loggingVerbose == (loggingConfig.Midi == "verbose"))
+		return _lastMidiConnectionResult;
+	const auto previousInputs = _midiInputs.load(std::memory_order_acquire);
+	const auto previousRoutes = _rigInputDispatch.load(std::memory_order_acquire);
+	auto midiInputs = std::make_shared<std::vector<std::shared_ptr<MidiInputEndpoint>>>();
+	try
+	{
+	const auto previousVerbose = _loggingVerbose;
+	_StopLiveMidiDispatcher(false);
+	_ReleaseHeldLiveMidi();
 	_loggingVerbose = loggingConfig.Midi == "verbose";
 
 	const auto initialAnchor = midi::ReadMidiClockAnchor(midiClockAnchor, {});
-	_liveMidiDispatchNotification = std::make_shared<LiveMidiDispatchNotification>();
+	if (!_liveMidiDispatchNotification)
+	{
+		_liveMidiDispatchNotification = std::make_shared<LiveMidiDispatchNotification>();
+		_liveMidiDispatchNotification->WorkEvent = CreateEvent(nullptr, FALSE, FALSE, nullptr);
+		_liveMidiStopEvent = CreateEvent(nullptr, TRUE, FALSE, nullptr);
+	}
 	_channelOverrideTriggers.store(cfg.Midi.ChannelOverrideTriggers, std::memory_order_release);
 	_channelOverrideLive.store(cfg.Midi.ChannelOverrideLive, std::memory_order_release);
-	_liveMidiDispatchNotification->WorkEvent = CreateEvent(nullptr, FALSE, FALSE, nullptr);
-	_liveMidiStopEvent = CreateEvent(nullptr, TRUE, FALSE, nullptr);
 	if (!_liveMidiDispatchNotification->WorkEvent || !_liveMidiStopEvent)
 	{
+		result.Inventory.Error = "Cannot create MIDI dispatcher events";
 		_CloseMidi();
 		return result;
 	}
 	_PublishLiveMidiInputConfig(++_nextLiveMidiRoutingGeneration, ForcedChannelOverride(), cfg.Midi.ChannelOverrideLive);
 
-	if (!generatedRig && cfg.Midi.Devices.empty())
-	{
-		std::cout << "[MIDI] No MIDI devices configured." << std::endl;
-		std::cout << "[MIDI] Active distinct endpoints: 0" << std::endl;
-		return result;
-	}
-
 	const auto sampleRate = actualSampleRate;
-	auto midiInputs = std::make_shared<std::vector<std::shared_ptr<MidiInputEndpoint>>>();
 	std::uint8_t nextSlot = 0u;
 	std::vector<unsigned int> claimedIds;
 	// Generated startup uses the enumerated physical identities. Names alone can
@@ -467,6 +486,7 @@ MidiConnectionResult MidiRouter::InitMidi(const io::UserConfig& cfg,
 		for (const auto& port : result.Inventory.Devices)
 			requestedDevices.push_back({ port.Name, true });
 	}
+	midiInputs->reserve((std::min)(requestedDevices.size(), static_cast<std::size_t>(UnresolvedMidiDeviceSlot)));
 
 	for (size_t requestIndex = 0u; requestIndex < requestedDevices.size(); ++requestIndex)
 	{
@@ -475,7 +495,6 @@ MidiConnectionResult MidiRouter::InitMidi(const io::UserConfig& cfg,
 		attempt.RequestedName = midiConfig.Name;
 		if (!midiConfig.Enabled)
 		{
-			std::cout << "[MIDI] Device \"" << midiConfig.Name << "\" disabled by rig settings." << std::endl;
 			attempt.Status = MidiConnectionStatus::Disabled;
 			result.Attempts.push_back(std::move(attempt));
 			continue;
@@ -483,8 +502,7 @@ MidiConnectionResult MidiRouter::InitMidi(const io::UserConfig& cfg,
 
 		if (nextSlot == UnresolvedMidiDeviceSlot)
 		{
-			std::cout << "[MIDI] Too many enabled MIDI input devices; remaining devices ignored." << std::endl;
-			attempt.Status = MidiConnectionStatus::Failed;
+			attempt.Status = MidiConnectionStatus::CapacityExceeded;
 			attempt.Error = "Too many active MIDI inputs";
 			result.Attempts.push_back(std::move(attempt));
 			continue;
@@ -494,9 +512,8 @@ MidiConnectionResult MidiRouter::InitMidi(const io::UserConfig& cfg,
 			requestedName, claimedIds, requestIndex, generatedRig, attempt.DuplicateName);
 		if (!selected)
 		{
-			attempt.Status = MidiConnectionStatus::Missing;
-			attempt.Error = "No unclaimed exact-name port";
-			std::cout << "[MIDI] Missing input \"" << midiConfig.Name << "\": " << attempt.Error << std::endl;
+			attempt.Status = attempt.DuplicateName ? MidiConnectionStatus::Ambiguous : MidiConnectionStatus::Missing;
+			attempt.Error = attempt.DuplicateName ? "Duplicate name has no stable hardware identity" : "No unclaimed exact-name port";
 			result.Attempts.push_back(std::move(attempt));
 			continue;
 		}
@@ -510,10 +527,33 @@ MidiConnectionResult MidiRouter::InitMidi(const io::UserConfig& cfg,
 		// the same physical port while another matching port is available.
 		claimedIds.push_back(selected->DeviceId);
 
+		std::shared_ptr<MidiInputEndpoint> reused;
+		if (previousInputs && !attempt.DuplicateName && previousVerbose == _loggingVerbose)
+			for (const auto& previous : *previousInputs)
+				if (previous && previous->ConfiguredName == selected->Name &&
+					previous->SampleRate == sampleRate && previous->Device && previous->Device->IsOpen() &&
+					previous->Device->DeviceId() == selected->DeviceId)
+				{ reused = previous; break; }
+		if (reused)
+		{
+			reused->DeviceSlot = nextSlot++;
+			midiInputs->push_back(reused);
+			attempt.Status = MidiConnectionStatus::Connected;
+			result.Connected.push_back(*selected);
+			result.Attempts.push_back(std::move(attempt));
+			continue;
+		}
+		// Close a changed endpoint before opening the same physical port again.
+		if (previousInputs)
+			for (const auto& previous : *previousInputs)
+				if (previous && previous->ConfiguredName == selected->Name && previous->Device)
+					previous->Device->Close();
 		auto endpoint = std::make_shared<MidiInputEndpoint>();
 		endpoint->ConfiguredName = selected->Name;
+		endpoint->SampleRate = sampleRate;
 		endpoint->Device = std::make_unique<midi::MidiDevice>();
 		endpoint->LastClockAnchor = initialAnchor;
+		endpoint->ClockAnchor = &midiClockAnchor;
 
 		std::string openError;
 		auto opened = endpoint->Device->OpenPort(
@@ -526,7 +566,9 @@ MidiConnectionResult MidiRouter::InitMidi(const io::UserConfig& cfg,
 
 				midi::MidiEvent ingress{};
 				const auto timestamp = endpoint->TimestampMapper.Map(deltaSeconds, callbackArrivalMicros);
-				const auto anchor = midi::ReadMidiClockAnchor(*midiClockAnchor, endpoint->LastClockAnchor);
+				auto anchor = midi::ReadMidiClockAnchor(*midiClockAnchor, endpoint->LastClockAnchor);
+				if (anchor.SteadyMicros < endpoint->MinimumClockAnchorMicros)
+					anchor = endpoint->LastClockAnchor;
 				endpoint->LastClockAnchor = anchor;
 				const auto mappedSample = anchor.SteadyMicros > 0
 					? midi::MapMidiTimestampToAudioSample(sampleRate,
@@ -543,7 +585,8 @@ MidiConnectionResult MidiRouter::InitMidi(const io::UserConfig& cfg,
 				ingress.flags = 0u;
 					const auto rigRevision = notification->RigRevision.load(std::memory_order_acquire);
 					endpoint->Ingress.Push({ ingress, rigRevision, timestamp.EventMicros,
-						callbackArrivalMicros, deltaSeconds, timestamp.Source });
+						callbackArrivalMicros, deltaSeconds, timestamp.Source,
+						notification->RigIngressGeneration.load(std::memory_order_acquire) });
 
 				const auto liveEvent = DeriveStationEvent(ingress,
 					_LiveMidiConfigAffectsLive(inputConfig) ? _LiveMidiConfigForcedChannel(inputConfig) : 0u);
@@ -564,21 +607,80 @@ MidiConnectionResult MidiRouter::InitMidi(const io::UserConfig& cfg,
 		}
 
 		endpoint->DeviceSlot = nextSlot++;
+		if (_midiDispatchSuspended) endpoint->Device->SuspendCallbacks();
 		midiInputs->push_back(endpoint);
 		attempt.Status = attempt.DuplicateName ? MidiConnectionStatus::Ambiguous : MidiConnectionStatus::Connected;
 		result.Connected.push_back(*selected);
 		result.Attempts.push_back(std::move(attempt));
 	}
 
+	// Worker has joined, so only callback ingress can still touch retired
+	// endpoints. Close the backend before releasing those callback captures.
+	if (previousInputs)
+		for (const auto& previous : *previousInputs)
+			if (previous && std::find(midiInputs->begin(), midiInputs->end(), previous) == midiInputs->end()
+				&& previous->Device)
+				previous->Device->Close();
 	_midiInputs.store(midiInputs, std::memory_order_release);
 	if (_retainedRigInputSnapshot)
 		_PublishRigInputDispatch(_retainedRigInputSnapshot);
 	_StartLiveMidiDispatcher();
 
-	if (midiInputs->empty())
-		std::cout << "[MIDI] No active MIDI input connection." << std::endl;
-	std::cout << "[MIDI] Active distinct endpoints: " << result.Connected.size() << std::endl;
+	const bool changed = !_lastMidiConnectionResult.Accepted ||
+		result.Attempts.size() != _lastMidiConnectionResult.Attempts.size() ||
+		!std::equal(result.Attempts.begin(), result.Attempts.end(), _lastMidiConnectionResult.Attempts.begin(),
+			[](const MidiConnectionAttempt& a, const MidiConnectionAttempt& b) {
+				return a.RequestedName == b.RequestedName && a.Status == b.Status && a.Error == b.Error;
+			});
+	if (changed)
+		std::cout << "[MIDI] Accepted desired inputs: " << result.Attempts.size()
+			<< ", connected endpoints: " << result.Connected.size() << std::endl;
+	result.Accepted = true;
+	_lastMidiConnectionResult = result;
+	_lastMidiDesired = std::move(desired);
+	_lastMidiSampleRate = actualSampleRate;
 	return result;
+	}
+	catch (const std::exception& error)
+	{
+		// Backend callbacks capture their endpoint. Explicitly close every new
+		// candidate before releasing the candidate vector, including partial opens.
+		for (const auto& candidate : *midiInputs)
+			if (candidate && candidate->Device && (!previousInputs ||
+				std::find(previousInputs->begin(), previousInputs->end(), candidate) == previousInputs->end()))
+				candidate->Device->Close();
+		_midiInputs.store(previousInputs, std::memory_order_release);
+		if (previousInputs)
+			for (std::size_t i = 0; i < previousInputs->size(); ++i)
+			{
+				const auto& input = (*previousInputs)[i];
+				if (!input) continue;
+				input->DeviceSlot = static_cast<std::uint8_t>(i);
+				if (input->Device && !input->Device->IsOpen())
+				{ input->Ingress.Clear(); input->LiveIngress.Clear(); }
+			}
+		_rigInputDispatch.store(previousRoutes, std::memory_order_release);
+		if (_liveMidiDispatchNotification && previousRoutes)
+		{
+			_liveMidiDispatchNotification->RigRevision.store(previousRoutes->Revision, std::memory_order_release);
+			_PublishLiveMidiInputConfig(previousRoutes->LiveMidi.Generation, ForcedChannelOverride(),
+				_channelOverrideLive.load(std::memory_order_acquire));
+		}
+		result = _lastMidiConnectionResult;
+		result.Accepted = false;
+		result.Error = std::string("MIDI reconciliation failed: ") + error.what();
+		result.Connected.erase(std::remove_if(result.Connected.begin(), result.Connected.end(),
+			[&previousInputs](const MidiInputDeviceInfo& device) {
+				return !previousInputs || std::none_of(previousInputs->begin(), previousInputs->end(),
+					[&device](const auto& input) { return input && input->Device && input->Device->IsOpen()
+						&& input->ConfiguredName == device.Name; });
+			}), result.Connected.end());
+		try { _StartLiveMidiDispatcher(); }
+		catch (const std::exception& restartError)
+		{ result.Error += std::string("; live MIDI stopped: ") + restartError.what(); }
+		_lastMidiConnectionResult = result;
+		return result;
+	}
 }
 
 float MidiRouter::ConsumeMidiInputPeak(const std::string& deviceName) noexcept
@@ -603,8 +705,83 @@ void MidiRouter::CloseMidi()
 	_CloseMidi();
 }
 
+void MidiRouter::SuspendMidiDispatch()
+{
+	std::scoped_lock lock(_rigInputPublicationMutex);
+	_midiDispatchSuspended = true;
+	if (_liveMidiDispatchNotification)
+		_liveMidiDispatchNotification->RigIngressGeneration.fetch_add(1u, std::memory_order_acq_rel);
+	// Join the writer before touching held-note state. No application/audio
+	// mutex may be held across this wait.
+	_StopLiveMidiDispatcher(false);
+	const auto inputs = _midiInputs.load(std::memory_order_acquire);
+	if (inputs)
+		for (const auto& input : *inputs)
+			if (input && input->Device) input->Device->SuspendCallbacks();
+	_ReleaseHeldLiveMidi();
+	_PublishEmptyRigInputDispatch();
+}
+
+void MidiRouter::_ReleaseHeldLiveMidi() noexcept
+{
+	// Job/UI lifecycle owner, after dispatcher join and with job excluded.
+	// Events accumulated during the pause are discarded; release already held
+	// notes so a discarded note-off cannot leave an instrument sounding forever.
+	const auto inputs = _midiInputs.load(std::memory_order_acquire);
+	const auto routes = _rigInputDispatch.load(std::memory_order_acquire);
+	if (!inputs || !routes) return;
+	for (const auto& input : *inputs)
+		if (input && input->DeviceSlot < routes->LiveMidi.RecipientsByDeviceSlot.size())
+			for (const auto& recipient : routes->LiveMidi.RecipientsByDeviceSlot[input->DeviceSlot])
+				if (recipient.Station)
+					recipient.Station->FlushLiveHeldMidiNotesForDevice(input->ConfiguredName);
+}
+
+void MidiRouter::ResumeMidiDispatch()
+{
+	std::scoped_lock lock(_rigInputPublicationMutex);
+	if (!_midiDispatchSuspended)
+		return;
+	if (_liveMidiDispatchNotification)
+		_liveMidiDispatchNotification->RigIngressGeneration.fetch_add(1u, std::memory_order_acq_rel);
+	// New generation rejects every event accumulated while session writers
+	// were excluded. Do not replay stale key/note presses after a long save.
+	if (_retainedRigInputSnapshot)
+		_PublishRigInputDispatch(_retainedRigInputSnapshot);
+	const auto inputs = _midiInputs.load(std::memory_order_acquire);
+	const auto nowMicros = std::chrono::duration_cast<std::chrono::microseconds>(
+		std::chrono::steady_clock::now().time_since_epoch()).count();
+	if (inputs)
+		for (const auto& input : *inputs)
+			if (input && input->Device)
+			{
+				input->TimestampMapper.Reset();
+				if (input->ClockAnchor)
+					input->LastClockAnchor = ReadMidiClockAnchor(*input->ClockAnchor, input->LastClockAnchor);
+				input->LastMappedSample = input->LastClockAnchor.Sample;
+				input->LastClockAnchor.SteadyMicros = nowMicros;
+				input->MinimumClockAnchorMicros = nowMicros;
+				input->Ingress.Clear();
+				input->LiveIngress.Clear();
+				input->Device->ResumeCallbacks();
+			}
+	_midiDispatchSuspended = false;
+	try { _StartLiveMidiDispatcher(); }
+	catch (...)
+	{
+		_midiDispatchSuspended = true;
+		if (inputs)
+			for (const auto& input : *inputs)
+				if (input && input->Device) input->Device->SuspendCallbacks();
+		throw;
+	}
+}
+
 void MidiRouter::_CloseMidi()
 {
+	_lastMidiConnectionResult = {};
+	_lastMidiDesired.clear();
+	_lastMidiSampleRate = 0u;
 	_PublishLiveMidiInputConfig(++_nextLiveMidiRoutingGeneration, ForcedChannelOverride(),
 		_channelOverrideLive.load(std::memory_order_acquire));
 	_PublishEmptyRigInputDispatch();
@@ -994,7 +1171,9 @@ MidiRouter::TriggerDispatchSummary MidiRouter::PumpMidi(const std::vector<std::s
 		while (input->Ingress.Pop(queued))
 		{
 			const auto dispatchState = _rigInputDispatch.load(std::memory_order_acquire);
-			if (!dispatchState || !IsCurrentRigIngressRevision(queued.RigRevision, dispatchState->Revision))
+			if (!dispatchState || !IsCurrentRigIngressRevision(queued.RigRevision, dispatchState->Revision) ||
+				!_liveMidiDispatchNotification || queued.RoutingGeneration !=
+				_liveMidiDispatchNotification->RigIngressGeneration.load(std::memory_order_acquire))
 				continue;
 			const auto& ingress = queued.Event;
 			const auto triggerEvent = DeriveStationEvent(ingress,
@@ -1242,19 +1421,22 @@ void MidiRouter::_PublishLiveMidiInputConfig(std::uint32_t generation,
 
 void MidiRouter::_StartLiveMidiDispatcher()
 {
-	if (!_liveMidiDispatchNotification || !_liveMidiDispatchNotification->WorkEvent || !_liveMidiStopEvent)
+	if (_midiDispatchSuspended || _liveMidiDispatchThread.joinable() || !_liveMidiDispatchNotification || !_liveMidiDispatchNotification->WorkEvent || !_liveMidiStopEvent)
 		return;
 
+	ResetEvent(_liveMidiStopEvent);
 	_liveMidiDispatchThread = std::thread([this]() { _LiveMidiDispatchLoop(); });
 }
 
-void MidiRouter::_StopLiveMidiDispatcher()
+void MidiRouter::_StopLiveMidiDispatcher(bool releaseResources)
 {
 	if (_liveMidiStopEvent)
 		SetEvent(_liveMidiStopEvent);
 	if (_liveMidiDispatchThread.joinable())
 		_liveMidiDispatchThread.join();
 
+	if (!releaseResources)
+		return;
 	if (_liveMidiStopEvent)
 		CloseHandle(_liveMidiStopEvent);
 	_liveMidiStopEvent = nullptr;
@@ -1266,17 +1448,17 @@ void MidiRouter::_StopLiveMidiDispatcher()
 void MidiRouter::_LiveMidiDispatchLoop() noexcept
 {
 	_DispatchAvailableLiveMidi();
-	const HANDLE handles[] = { _liveMidiDispatchNotification->WorkEvent, _liveMidiStopEvent };
+	// Stop has priority even if continuous device traffic keeps Work signalled.
+	const HANDLE handles[] = { _liveMidiStopEvent, _liveMidiDispatchNotification->WorkEvent };
 	for (;;)
 	{
 		const auto waitResult = WaitForMultipleObjects(2u, handles, FALSE, INFINITE);
-		if (waitResult == WAIT_OBJECT_0 + 1u || waitResult == WAIT_FAILED)
+		if (waitResult == WAIT_OBJECT_0 || waitResult == WAIT_FAILED)
 			break;
-		if (waitResult != WAIT_OBJECT_0)
+		if (waitResult != WAIT_OBJECT_0 + 1u)
 			continue;
 		_DispatchAvailableLiveMidi();
 	}
-	_DispatchAvailableLiveMidi();
 }
 
 void MidiRouter::_DispatchAvailableLiveMidi() noexcept

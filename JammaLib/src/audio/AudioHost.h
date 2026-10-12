@@ -48,12 +48,22 @@ namespace audio
 
 		bool Init(std::shared_ptr<ninjam::NinjamController> ninjamController,
 			TickCallback tickCallback, bool generatedRig = false,
-			const AsioInventory* inventory = nullptr);
+			const AsioInventory* inventory = nullptr, bool exactSelection = false);
 		const AsioOpenReport& GetAsioOpenReport() const noexcept { return _asioOpenReport; }
 		// Serialized lifecycle owner only: false means the previous stream was
 		// retained because replacement could not establish a teardown barrier.
 		bool LastInitReplacedStream() const noexcept { return _lastInitReplacedStream; }
 		void Close();
+		struct QuiescenceState
+		{
+			bool WasRunning = false;
+			bool AdmissionWasOpen = false;
+		};
+		// Serialized control owner only; caller excludes job/session/MIDI writers.
+		bool BeginQuiescence(QuiescenceState& state, std::string& error);
+		bool EndQuiescence(const QuiescenceState& state, std::string& error);
+		bool Reconfigure(const io::UserConfig::AudioSettings& settings, std::string& error);
+		const AsioInventory& GetAsioInventory() const noexcept { return _asioInventory; }
 
 		void SetStations(std::shared_ptr<const std::vector<std::shared_ptr<engine::Station>>> stations);
 		void PublishPendingRigSnapshot(std::shared_ptr<const engine::RigSnapshot> snapshot);
@@ -137,6 +147,7 @@ namespace audio
 	private:
 		friend class NinjamAudioBoundaryTestAccess;
 		bool TryEnterCallback() noexcept;
+		void PrepareStream(const AudioStreamParams& params);
 		void LeaveCallback() noexcept;
 		class CallbackLease
 		{
@@ -188,6 +199,8 @@ namespace audio
 			double streamTime,
 			RtAudioStreamStatus status,
 			void* userData);
+		static int BackendAudioCallback(void* outBuffer, void* inBuffer,
+			unsigned int numSamps, double streamTime, RtAudioStreamStatus status, void* userData);
 
 		void _OnAudio(float* inBuffer,
 			float* outBuffer,
@@ -205,6 +218,24 @@ namespace audio
 		std::mutex _audioMutex;
 		std::unique_ptr<AudioDevice> _audioDevice;
 		AsioOpenReport _asioOpenReport;
+		AsioInventory _asioInventory; // lifecycle owner writes; UI reads under control exclusion
+		bool _backendLifetimeUncertain = false;
+		// Lifecycle writes; job admission recovery reads. Failure stays closed until explicit recovery.
+		std::atomic<bool> _callbackRecoveryBlocked{false}; // lifecycle owner; blocks resume/replacement until stop is confirmed
+		// A driver that cannot confirm stop retains its callback userdata. The context
+		// fences host access separately from engine admission during final teardown.
+		struct CallbackContext
+		{
+			// Host: lifecycle writer/backend reader; Readers: backend writers/final
+			// teardown reader. Sequential consistency fences late backend ingress
+			// against nulling Host and draining the readers that observed it.
+			// OutputChannels: prepared with the backend stopped; callback reads only
+			// for silence after Host teardown. Quarantined with an uncertain driver.
+			std::atomic<AudioHost*> Host{ nullptr };
+			std::atomic<unsigned int> Readers{ 0u };
+			std::atomic<unsigned int> OutputChannels{ 0u };
+		};
+		std::unique_ptr<CallbackContext> _callbackContext;
 		bool _lastInitReplacedStream = false;
 		std::shared_ptr<ChannelMixer> _channelMixer;
 		NinjamMetronome _ninjamMetronome;

@@ -110,6 +110,7 @@
 	<ClInclude Include="src\engine\RigSnapshot.h">
 	  <Filter>src\engine</Filter>
 	</ClInclude>
+	<ClInclude Include="src\engine\DeviceSelectionSchedule.h"><Filter>src\engine</Filter></ClInclude>
 	<ClInclude Include="src\engine\RigCoordinator.h">
 	  <Filter>src\engine</Filter>
 	</ClInclude>

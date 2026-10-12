@@ -367,6 +367,7 @@
     <ClInclude Include="src\engine\StationRemote.h" />
 	<ClInclude Include="src\engine\RigSnapshot.h" />
 	<ClInclude Include="src\engine\RigCoordinator.h" />
+	<ClInclude Include="src\engine\DeviceSelectionSchedule.h" />
     <ClInclude Include="src\io\JamFile.h" />
 
     <ClInclude Include="src\io\NativeMidiSidecar.h" />

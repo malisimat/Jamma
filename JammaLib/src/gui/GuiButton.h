@@ -50,6 +50,9 @@ namespace gui
 
 	public:
 		std::string Text;
+		// Existing button subclasses dispatch their own actions. Plain command
+		// buttons opt in so one activation cannot submit two different commands.
+		bool DispatchCommand = false;
 		unsigned int TextPadding = DefaultTextPadding;
 	};
 
@@ -61,11 +64,14 @@ namespace gui
 		using base::GuiElement::OnAction;
 		virtual void SetSize(utils::Size2d size) override;
 		virtual actions::ActionResult OnAction(actions::TouchAction action) override;
+		actions::ActionResult OnAction(actions::KeyAction action) override;
+		void ClearPointerState() override;
 		void SetText(const std::string& text);
 
 	private:
 		static GuiLabelParams _MakeLabelParams(const GuiButtonParams& params);
 
+		bool _pressed = false;
 		GuiButtonParams _buttonParams;
 		std::shared_ptr<GuiLabel> _label;
 	};

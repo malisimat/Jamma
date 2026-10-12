@@ -50,6 +50,7 @@ namespace actions
 		~GuiAction();
 
 	public:
+		base::Action::Modifiers InputModifiers = base::Action::MODIFIER_NONE;
 		unsigned int Index;
 		ActionElementType ElementType;
 		GuiData Data;

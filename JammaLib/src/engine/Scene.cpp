@@ -272,6 +272,17 @@ Scene::Scene(SceneParams params,
 		{ SettingsPage::Midi, "MIDI channel (0 = unchanged)", _midiChannelOverrideInput, MidiChannelOverrideControlIndex },
 		{ SettingsPage::Timing, "", _ninjamMetronomeToggle, NinjamMetronomeControlIndex }
 	};
+	_audioDraft = user.Audio;
+	_midiDraft = user.Midi.Devices;
+	_deviceStatus = std::make_shared<GuiLabel>(GuiLabelParams::PanelHeader("Ready", 300u));
+	_activeAudioStatus = std::make_shared<GuiLabel>(GuiLabelParams::PanelHeader("Audio stopped", 300u));
+	_fileStatus = std::make_shared<GuiLabel>(GuiLabelParams::PanelHeader("Choose a folder on first Save", 300u));
+	auto saveParams = GuiButtonParams::PanelButton(240u); saveParams.Text = "Save (Alt: choose folder)"; saveParams.DispatchCommand = true;
+	auto loadParams = GuiButtonParams::PanelButton(240u); loadParams.Text = "Load session"; loadParams.DispatchCommand = true;
+	_saveButton = std::make_shared<GuiButton>(saveParams); _loadButton = std::make_shared<GuiButton>(loadParams);
+	mainParams.Settings.push_back({SettingsPage::Session, "", _saveButton, 7210u});
+	mainParams.Settings.push_back({SettingsPage::Session, "", _loadButton, 7211u});
+	mainParams.Settings.push_back({SettingsPage::Session, "", _fileStatus, 0u});
 	_mainPanel = std::make_shared<GuiMainPanel>(mainParams);
 	AddChild(_mainPanel);
 	mainParams.SelectionOnly = true;
@@ -524,6 +535,8 @@ std::optional<std::shared_ptr<Scene>> Scene::FromFile(SceneParams sceneParams,
 		<< jamStruct.Stations.size() << " station descriptor(s) and " << rigStruct.Triggers.size()
 		<< " rig trigger(s)." << std::endl;
 	auto scene = std::make_shared<Scene>(sceneParams, rigStruct.User);
+	// Candidate restoration excludes its already-started job owner through publication.
+	std::unique_lock candidateLifecycle(scene->_controlLifecycleMutex);
 	scene->_saveRig = std::move(saveRig);
 
 	unsigned int hudAudioInputCount = std::max(1u, rigStruct.User.Audio.NumChannelsIn);
@@ -1043,6 +1056,7 @@ std::optional<ActionResult> Scene::_RouteSettingsTouch(TouchAction action)
 
 ActionResult Scene::OnAction(TouchAction action)
 {
+	if (_isSceneQuitting.load(std::memory_order_acquire) || _controlWriterExclusion.owns_lock()) return ActionResult::NoAction();
 	ActionResult res;
 	// Wheel events are encoded as DOWN/index 4 and have no matching UP. They
 	// must not become pointer captures or replace keyboard focus.
@@ -1238,6 +1252,7 @@ ActionResult Scene::OnAction(TouchAction action)
 
 ActionResult Scene::OnAction(TouchMoveAction action)
 {
+	if (_isSceneQuitting.load(std::memory_order_acquire) || _controlWriterExclusion.owns_lock()) return ActionResult::NoAction();
 	action.SetActionTime(Timer::GetTime());
 	action.SetUserConfig(_userConfig);
 	_cursorPos = action.Position;
@@ -1354,6 +1369,7 @@ ActionResult Scene::OnAction(TouchMoveAction action)
 
 ActionResult Scene::OnAction(KeyAction action)
 {
+	if (_isSceneQuitting.load(std::memory_order_acquire) || _controlWriterExclusion.owns_lock()) return ActionResult::NoAction();
 	action.SetActionTime(Timer::GetTime());
 	action.SetUserConfig(_userConfig);
 	action.SetAudioParams(_audioEngine->GetStreamParams());
@@ -1540,16 +1556,8 @@ ActionResult Scene::OnAction(KeyAction action)
 		&& (actions::KeyAction::KEY_UP == action.KeyActionType)
 		&& (Action::MODIFIER_CTRL & action.Modifiers))
 	{
-		return io::IoSessionExporter::ExportSession(_stations,
-			AcceptedRigSnapshot(),
-			_quantisation,
-			_globalMidiQuantState,
-			_transportOffsetLoopFrac,
-			_userConfig,
-			_audioEngine->GetStreamParams(),
-			_audioEngine->GetDevice(),
-			_sceneMutex,
-			_networkService->GetController());
+		_RequestSave(false);
+		return ActionResult::NoAction();
 	}
 
 	// Insert + Ctrl+Shift+L/W/X/[/] - MIDI automation record, learn, wire, delete, lane cycle.
@@ -1658,6 +1666,65 @@ ActionResult Scene::_HandleUndo()
 
 ActionResult Scene::OnAction(GuiAction action)
 {
+	if (_isSceneQuitting.load(std::memory_order_acquire)) return ActionResult::NoAction();
+	if (_controlWriterExclusion.owns_lock() && (action.Index < 7200u || action.Index >= 8300u)) return ActionResult::NoAction();
+	if (action.Index == 7210u) { _RequestSave((action.InputModifiers & Action::MODIFIER_ALT) != 0); return ActionResult::NoAction(); }
+	if (action.Index == 7211u) { if (_controlOperation == ControlOperation::None) _panelLoadRequested = true; return ActionResult::NoAction(); }
+	if (action.Index == 7205u) { _audioStartRequested = true; _audioSchedule.Changed(DeviceSelectionSchedule::Edit::Format); return ActionResult::NoAction(); }
+	if (action.Index == 7206u) { _devicePageDirty = true; RequestMidiRefresh(); return ActionResult::NoAction(); }
+	if (action.Index == 7207u)
+	{
+		if (_controlOperation != ControlOperation::None || !_rigCoordinator.EditsEnabled()) { _deviceStatus->SetString("Preferences retry waits for other operations"); return ActionResult::NoAction(); }
+		std::unique_lock lifecycle(_controlLifecycleMutex, std::try_to_lock);
+		if (!lifecycle.owns_lock() || !_rigCoordinator.EditsEnabled()) return ActionResult::NoAction();
+		const bool merged = _rigCoordinator.MergeHardwarePreferences(_pendingAudioPersistence, _pendingMidiPersistence);
+		const auto accepted = AcceptedRigSnapshot();
+		if (merged && accepted && SaveRig(accepted->Rig)) { _pendingAudioPersistence.reset(); _pendingMidiPersistence.reset(); _hardwarePersistencePending = false; _deviceStatus->SetString("Preferences saved"); }
+		else _deviceStatus->SetString("Preferences not saved; retry available");
+		return ActionResult::NoAction();
+	}
+	if (action.Index == 7200u)
+	{
+		if (auto value = std::get_if<GuiAction::GuiInt>(&action.Data); value && value->Value >= 0 && size_t(value->Value) < _audioChoiceNames.size())
+		{
+			_audioDraft.Name = _audioChoiceNames[value->Value];
+			_audioSchedule.Changed(DeviceSelectionSchedule::Edit::Device);
+			const auto found = std::find_if(_deviceInventory.Devices.begin(), _deviceInventory.Devices.end(), [this](const auto& d){ return d.Name == _audioDraft.Name; });
+			if (found != _deviceInventory.Devices.end() && found->Probed)
+			{
+				_audioDraft.NumChannelsIn = std::min(_audioDraft.NumChannelsIn, found->InputChannels);
+				_audioDraft.NumChannelsOut = std::min(_audioDraft.NumChannelsOut, found->OutputChannels);
+				if (!_audioDraft.NumChannelsIn && !_audioDraft.NumChannelsOut) { _audioDraft.NumChannelsOut = std::min(2u, found->OutputChannels); if (!_audioDraft.NumChannelsOut) _audioDraft.NumChannelsIn = std::min(2u, found->InputChannels); }
+				if (!_SessionHasTakes() && std::find(found->SampleRates.begin(), found->SampleRates.end(), _audioDraft.SampleRate) == found->SampleRates.end() && !found->SampleRates.empty()) _audioDraft.SampleRate = found->PreferredSampleRate ? found->PreferredSampleRate : found->SampleRates.front();
+			}
+			_devicePageDirty = true;
+		}
+		return ActionResult::NoAction();
+	}
+	if (action.Index >= 7201u && action.Index <= 7204u)
+	{
+		const auto index = action.Index - 7201u;
+		const auto value = static_cast<unsigned int>(_audioInputs[index]->Value());
+		if (index == 0) _audioDraft.NumChannelsIn = value;
+		if (index == 1) _audioDraft.NumChannelsOut = value;
+		if (index == 2) _audioDraft.SampleRate = value;
+		if (index == 3) _audioDraft.BufSize = value;
+		_audioSchedule.Changed(index < 2u ? DeviceSelectionSchedule::Edit::Channels : DeviceSelectionSchedule::Edit::Format);
+		return ActionResult::NoAction();
+	}
+	if (action.Index >= 7300u && action.Index < 8300u)
+	{
+		const auto index = action.Index - 7300u;
+		if (index < _midiChoices.size())
+		{
+			const auto& choice = _midiChoices[index];
+			const bool enabled = choice.second->GetToggleState() == GuiToggleParams::TOGGLE_ON;
+			auto found = std::find_if(_midiDraft.begin(), _midiDraft.end(), [&choice](const auto& d){ return d.Name == choice.first; });
+			if (found == _midiDraft.end()) _midiDraft.push_back({choice.first, enabled}); else found->Enabled = enabled;
+			_midiDraftPending = true;
+		}
+		return ActionResult::NoAction();
+	}
 	if (GuiAction::ACTIONELEMENT_BUTTON == action.ElementType && action.Index == TapTempoControlIndex)
 	{
 		_PulseQuantisationOverlay();
@@ -1825,10 +1892,13 @@ void Scene::OnTick(Time curTime,
 
 void Scene::OnJobTick(Time curTime)
 {
+	std::scoped_lock lifecycle(_controlLifecycleMutex);
+	if (_sessionReplacing.load(std::memory_order_acquire) || _isSceneQuitting.load(std::memory_order_acquire)) return;
 	_audioEngine->CollectRetiredSnapshots();
 	if (!_isSceneQuitting.load(std::memory_order_acquire))
 		_inputSubsystem->AcknowledgeRigTriggerInputCloseFromJob();
-	_RefreshMidiIfNeeded();
+	_ReconcileMidiDeviceRequestOnJob();
+	if (!_controlAdmissionPending.load(std::memory_order_acquire)) _RefreshMidiIfNeeded();
 	_PumpTriggerStructuralActions();
 	_PumpSourceLossRecovery();
 	_AdvanceRigPublication();
@@ -1917,9 +1987,13 @@ void Scene::_RefreshMidiIfNeeded()
 		return;
 	_lastMidiInventoryCheck = now;
 	const auto inventory = _inputSubsystem->InventoryMidiInputs();
-	if (!inventory.Error.empty())
-		return; // A transient inventory error must not tear down working ports.
 	const auto previous = _midiState.load(std::memory_order_acquire);
+	if (!inventory.Error.empty())
+	{
+		// Retain working endpoints/inventory while publishing an actionable error.
+		auto failed = std::make_shared<MidiState>(*previous); failed->Connection.Inventory.Error = inventory.Error;
+		_midiState.store(failed, std::memory_order_release); return;
+	}
 	const auto& oldPorts = previous->Connection.Inventory.Devices;
 	const bool sameInventory = oldPorts.size() == inventory.Devices.size() &&
 		std::equal(oldPorts.begin(), oldPorts.end(), inventory.Devices.begin(),
@@ -1934,14 +2008,21 @@ void Scene::_RefreshMidiIfNeeded()
 					attempt.Status == midi::MidiConnectionStatus::Failed;
 			});
 		if (!requested || !retryable)
+		{
+			if (!previous->Connection.Inventory.Error.empty())
+			{
+				auto recovered = std::make_shared<MidiState>(*previous); recovered->Connection.Inventory.Error.clear();
+				_midiState.store(recovered, std::memory_order_release);
+			}
 			return;
+		}
 	}
 	std::scoped_lock midiLock(_midiLifecycleMutex);
 	if (!_midiActive.load(std::memory_order_acquire) ||
 		_isSceneQuitting.load(std::memory_order_acquire))
 		return;
 	auto result = _inputSubsystem->RefreshMidi(_audioEngine->GetMidiClockAnchor_Ref(),
-		_audioEngine->GetStreamParams().SampleRate, inventory);
+		_audioEngine->GetStreamParams().SampleRate, inventory, requested);
 	std::vector<std::string> connectedNames;
 	for (const auto& endpoint : result.Connected)
 		if (std::find(connectedNames.begin(), connectedNames.end(), endpoint.Name) == connectedNames.end())
@@ -2137,6 +2218,7 @@ void Scene::_AdvanceRigPublication()
 
 RigCoordinator::EditResult Scene::RequestRigEdit(const io::RigFile& candidateRig)
 {
+	if (_controlOperation != ControlOperation::None) return RigCoordinator::EditResult::EditsDisabled;
 	switch (_RoutingEditAvailability())
 	{
 	case gui::RoutingEditAvailability::Applying: return RigCoordinator::EditResult::EditsDisabled;
@@ -2144,6 +2226,8 @@ RigCoordinator::EditResult Scene::RequestRigEdit(const io::RigFile& candidateRig
 	case gui::RoutingEditAvailability::TriggerBusy: return RigCoordinator::EditResult::TriggerBusy;
 	case gui::RoutingEditAvailability::Ready: break;
 	}
+	std::unique_lock lifecycle(_controlLifecycleMutex, std::try_to_lock);
+	if (!lifecycle.owns_lock() || !_rigCoordinator.EditsEnabled()) return RigCoordinator::EditResult::EditsDisabled;
 	const auto accepted = _rigCoordinator.Accepted();
 	const auto result = _rigCoordinator.SubmitCandidate(candidateRig);
 	if (result == RigCoordinator::EditResult::Pending)
@@ -2347,8 +2431,11 @@ void Scene::InitGui()
 	_selector->Init();
 }
 
-void Scene::InitAudio(bool generatedRig, const audio::AsioInventory* inventory)
+void Scene::InitAudio(bool generatedRig, const audio::AsioInventory* inventory, bool exactSelection)
 {
+	std::scoped_lock lifecycle(_controlLifecycleMutex);
+	if (inventory) _deviceInventory = *inventory;
+	_devicePageDirty = true;
 	const auto previousMidi = _midiState.load(std::memory_order_acquire);
 	// Setup audio engine which starts device
 	bool started = false;
@@ -2360,7 +2447,8 @@ void Scene::InitAudio(bool generatedRig, const audio::AsioInventory* inventory)
 		const std::optional<io::UserConfig>& cfg,
 		const std::optional<audio::AudioStreamParams>& params) {
 		this->OnTick(Timer::GetTime(), numSamps, cfg, params);
-	}, generatedRig, inventory);
+	}, generatedRig, inventory, exactSelection);
+		if (_audioEngine->GetAsioInventory().EnumerationError.empty()) _deviceInventory = _audioEngine->GetAsioInventory();
 		if (!started && !_audioEngine->LastInitReplacedStream())
 		{
 			// Stop failure is unknown availability, not a confirmed replacement.
@@ -2465,6 +2553,11 @@ bool Scene::PumpGlobalKeyCapture(actions::KeyAction& action) noexcept
 
 void Scene::Shutdown()
 {
+	_sessionReplacing.store(true, std::memory_order_release);
+	if (_controlWriterExclusion.owns_lock()) _controlWriterExclusion.unlock();
+	// Finish any admitted job tick before borrowing lifecycle state. No scene,
+	// MIDI or application gate mutex is held while acquiring this owner boundary.
+	std::unique_lock lifecycle(_controlLifecycleMutex);
 	{
 		// Recovery borrows callback-owned fields under this same lock. Finish
 		// that borrow before teardown, and prevent a later job reopening admission.
@@ -2481,6 +2574,7 @@ void Scene::Shutdown()
 	// VST processing, MIDI, or recorded parameter automation.
 	CloseAudio();
 	CloseAllVstEditorWindows();
+	lifecycle.unlock(); // Final job acknowledgement must run before join.
 
 	if (_jobRunner.joinable())
 		_jobRunner.join();
@@ -3756,4 +3850,465 @@ void Scene::OnInputFocusLost()
 	_focusManager.ClearFocus();
 	_ApplyHoverPath2d({});
 	_InvalidateHover2d();
+}
+
+bool Scene::_SessionHasTakes() const
+{
+	std::scoped_lock lock(_sceneMutex);
+	for (const auto& station : _stations)
+		if (station && !station->GetLoopTakeSnapshot().empty()) return true;
+	return false;
+}
+
+bool Scene::_CaptureIsBusy() const
+{
+	std::scoped_lock lock(_sceneMutex);
+	const auto rig = AcceptedRigSnapshot();
+	if (rig) for (const auto& runtime : rig->Triggers)
+		if (runtime.Instance && !runtime.Instance->CanApplyCaptureRouting()) return true;
+	for (const auto& station : _stations)
+		if (station && !station->IsRemote()) for (const auto& take : station->GetLoopTakeSnapshot())
+			if (take && take->HasPendingTriggerCapture()) return true;
+	return false;
+}
+
+bool Scene::_ValidateAudioDraft(std::string& error) const
+{
+	const auto found = std::find_if(_deviceInventory.Devices.begin(), _deviceInventory.Devices.end(),
+		[this](const auto& device) { return device.Name == _audioDraft.Name; });
+	if (found == _deviceInventory.Devices.end() || !found->Probed) { error = "Selected audio device is unavailable"; return _audioStartRequested; }
+	if ((!_audioDraft.NumChannelsIn && !_audioDraft.NumChannelsOut) || _audioDraft.NumChannelsIn > found->InputChannels || _audioDraft.NumChannelsOut > found->OutputChannels) { error = "Invalid input/output channel counts"; return false; }
+	if (!_audioDraft.BufSize || !_audioDraft.SampleRate || std::find(found->SampleRates.begin(), found->SampleRates.end(), _audioDraft.SampleRate) == found->SampleRates.end()) { error = "Unsupported sample rate or invalid buffer request"; return false; }
+	const auto actual = _audioEngine->GetStreamParams();
+	if (_SessionHasTakes() && _audioDraft.SampleRate != (actual.SampleRate ? actual.SampleRate : _userConfig.Audio.SampleRate)) { error = "Sample rate cannot change while any takes exist"; return false; }
+	return true;
+}
+
+void Scene::_RebuildDevicePage()
+{
+	_mainPanel->FinalizePageSettings(SettingsPage::Audio);
+	std::vector<GuiSettingEntry> entries;
+	std::vector<GuiSettingEntry> midiEntries;
+	midiEntries.push_back({SettingsPage::Midi, "MIDI channel (0 = unchanged)", _midiChannelOverrideInput, MidiChannelOverrideControlIndex});
+	_audioChoiceNames.clear();
+	auto dropdown = GuiDropDownParams::PanelInput(300u);
+	for (const auto& device : _deviceInventory.Devices)
+	{
+		_audioChoiceNames.push_back(device.Name);
+		dropdown.Items.push_back(device.Name + (device.Probed ? "" : " (unavailable)"));
+	}
+	if (std::find(_audioChoiceNames.begin(), _audioChoiceNames.end(), _audioDraft.Name) == _audioChoiceNames.end())
+	{
+		_audioChoiceNames.push_back(_audioDraft.Name); dropdown.Items.push_back(_audioDraft.Name + " (missing)");
+	}
+	dropdown.InitIndex = static_cast<unsigned int>(std::find(_audioChoiceNames.begin(), _audioChoiceNames.end(), _audioDraft.Name) - _audioChoiceNames.begin());
+	_audioDeviceChoice = std::make_shared<GuiDropDown>(dropdown);
+	_audioDeviceChoice->SetPopupManager(&_popupManager);
+	entries.push_back({SettingsPage::Audio, "ASIO device", _audioDeviceChoice, 7200u});
+	const auto selected = std::find_if(_deviceInventory.Devices.begin(), _deviceInventory.Devices.end(), [this](const auto& device){return device.Name == _audioDraft.Name;});
+	if (selected != _deviceInventory.Devices.end())
+	{
+		std::string details = "Limits: " + std::to_string(selected->InputChannels) + " in / " + std::to_string(selected->OutputChannels) + " out. Rates:";
+		for (const auto rate : selected->SampleRates) details += " " + std::to_string(rate);
+		entries.push_back({SettingsPage::Audio,"",std::make_shared<GuiLabel>(GuiLabelParams::PanelHeader(details,300u)),0u});
+	}
+	const std::array<unsigned int,4> values{_audioDraft.NumChannelsIn, _audioDraft.NumChannelsOut, _audioDraft.SampleRate, _audioDraft.BufSize};
+	std::array<std::string,4> labels{"First N inputs (settles for 3 seconds)", "First N outputs (settles for 3 seconds)", "Sample rate (no takes only)", "Buffer size (requested; negotiated on open)"};
+	if (const auto found = _acceptedBufferSizes.find(_audioDraft.Name); found != _acceptedBufferSizes.end())
+	{
+		labels[3] += " Accepted:"; for (const auto size : found->second) labels[3] += " " + std::to_string(size);
+	}
+	for (unsigned int i = 0; i < 4; ++i)
+	{
+		auto params = GuiNumericInputParams::PanelInput(140u);
+		params.IntegerOnly = true; params.RejectOutOfRange = true;
+		params.OnInvalidValue = [this]() { _deviceStatus->SetString("Enter a valid whole number; value exceeds allowed integer limits"); };
+		params.Min = i < 2u ? 0.0 : 1.0; params.Max = static_cast<double>((std::numeric_limits<unsigned int>::max)()); params.Step = 1.0; params.Decimals = 0; params.InitValue = values[i];
+		_audioInputs[i] = std::make_shared<GuiNumericInput>(params);
+		entries.push_back({SettingsPage::Audio, labels[i], _audioInputs[i], 7201u+i});
+	}
+	entries.push_back({SettingsPage::Audio, "Active stream", _activeAudioStatus, 0u});
+	entries.push_back({SettingsPage::Audio, "Status", _deviceStatus, 0u});
+	auto button = [&](const std::string& text, unsigned int command){ auto params = GuiButtonParams::PanelButton(240u); params.Text = text; params.DispatchCommand = true; entries.push_back({SettingsPage::Audio,"",std::make_shared<GuiButton>(params),command}); };
+	button("Retry / refresh audio request", 7205u); button("Retry saving preferences",7207u);
+	_midiChoices.clear(); _midiChoiceBindings.clear();
+	const auto midi = _midiState.load(std::memory_order_acquire);
+	midiEntries.push_back({SettingsPage::Midi, "", std::make_shared<GuiLabel>(GuiLabelParams::PanelHeader(midi->Connection.Inventory.Error.empty() ? "MIDI input selection" : "MIDI inventory: " + midi->Connection.Inventory.Error, 300u)), 0u});
+	std::vector<std::string> names;
+	for (const auto& device : midi->Connection.Inventory.Devices)
+		if (std::find(names.begin(), names.end(), device.Name) == names.end()) names.push_back(device.Name);
+	for (const auto& desired : _midiDraft)
+		if (std::find(names.begin(), names.end(), desired.Name) == names.end()) names.push_back(desired.Name);
+	std::shared_ptr<GuiStackPanel> midiGroup;
+	for (const auto& name : names)
+	{
+		if (_midiChoices.size() >= 1000u) break;
+		if (_midiChoices.size() % 128u == 0u)
+		{
+			GuiStackPanelParams groupParams; groupParams.Size = {300u, 8u}; groupParams.Spacing = 8u;
+			midiGroup = std::make_shared<GuiStackPanel>(groupParams);
+			midiEntries.push_back({SettingsPage::Midi,"",midiGroup,0u});
+		}
+		auto params = GuiToggleParams::PanelPrimary(); params.Size = {300u,36u}; params.HorizSizing = LayoutSizing::Fill;
+		const auto desired = std::find_if(_midiDraft.begin(), _midiDraft.end(), [&name](const auto& d){ return d.Name == name; });
+		params.InitState = desired != _midiDraft.end() && desired->Enabled ? GuiToggleParams::TOGGLE_ON : GuiToggleParams::TOGGLE_OFF;
+		const auto attempt = std::find_if(midi->Connection.Attempts.begin(), midi->Connection.Attempts.end(), [&name](const auto& a){return a.RequestedName == name;});
+		std::string status = "disabled";
+		if (attempt != midi->Connection.Attempts.end()) switch (attempt->Status)
+		{
+		case midi::MidiConnectionStatus::Connected: status = "connected"; break;
+		case midi::MidiConnectionStatus::Missing: status = "missing"; break;
+		case midi::MidiConnectionStatus::Ambiguous: status = "ambiguous"; break;
+		case midi::MidiConnectionStatus::Failed: status = "failed"; break;
+		case midi::MidiConnectionStatus::CapacityExceeded: status = "capacity exceeded"; break;
+		default: break;
+		}
+		params.Text = name + " (" + status + ")";
+		auto control = std::make_shared<GuiToggle>(params);
+		auto binding = std::make_shared<GuiCommandReceiver>(7300u+static_cast<unsigned int>(_midiChoices.size()), ActionReceiver::shared_from_this());
+		control->SetReceiver(binding); _midiChoiceBindings.push_back(binding);
+		midiGroup->AddChild(control); midiGroup->SetSize({300u, static_cast<unsigned int>((_midiChoices.size() % 128u + 1u) * 44u - 8u)}); midiGroup->ComputeLayout();
+		_midiChoices.emplace_back(name,control);
+	}
+	auto refreshMidi = GuiButtonParams::PanelButton(240u); refreshMidi.Text = "Refresh MIDI devices"; refreshMidi.DispatchCommand = true;
+	midiEntries.push_back({SettingsPage::Midi, "", std::make_shared<GuiButton>(refreshMidi), 7206u});
+	_mainPanel->ReplacePageSettings(SettingsPage::Audio, entries);
+	_mainPanel->ReplacePageSettings(SettingsPage::Midi, midiEntries);
+	_displayedMidiState = midi; _devicePageDirty = false;
+}
+
+void Scene::ReportFileStatus(const std::string& status)
+{
+	_fileStatus->SetString(status);
+	std::cout << "[SESSION scene=" << _sceneIdentity << " operation=" << _controlOperationId << "] " << status << std::endl;
+}
+
+void Scene::_RequestSave(bool chooseFolder)
+{
+	if (_controlOperation != ControlOperation::None || !_rigCoordinator.EditsEnabled()) { ReportFileStatus("Another operation is busy"); return; }
+	if (_CaptureIsBusy()) { ReportFileStatus("Save unavailable during capture or pending actions"); return; }
+	_controlOperation = ControlOperation::Save;
+	auto folder = _sessionSaveFolder;
+	if (chooseFolder || folder.empty()) folder = utils::PickDirectory(L"Choose session save folder");
+	if (folder.empty()) { _controlOperation = ControlOperation::None; return; }
+	_pendingSaveFolder = std::move(folder); _controlOperation = ControlOperation::Save;
+	ReportFileStatus("Waiting to capture session");
+}
+
+bool Scene::ConsumePanelLoadRequest()
+{
+	return std::exchange(_panelLoadRequested, false);
+}
+
+void Scene::PickSessionForLoad()
+{
+	if (_controlOperation != ControlOperation::None || !_rigCoordinator.EditsEnabled()) { ReportFileStatus("Another operation is busy"); return; }
+	if (_CaptureIsBusy()) { ReportFileStatus("Load unavailable during capture or pending actions"); return; }
+	_controlOperation = ControlOperation::Load;
+	try { _pendingLoadPath = utils::PickJamFile(); }
+	catch (...) { _controlOperation = ControlOperation::None; throw; }
+	if (_pendingLoadPath.empty()) _controlOperation = ControlOperation::None;
+}
+
+void Scene::RequestSessionLoad(std::wstring path)
+{
+	if (path.empty()) return;
+	if (_controlOperation != ControlOperation::None || !_rigCoordinator.EditsEnabled()) { ReportFileStatus("Another operation is busy"); return; }
+	if (_CaptureIsBusy()) { ReportFileStatus("Load unavailable during capture or pending actions"); return; }
+	_pendingLoadPath = std::move(path); _controlOperation = ControlOperation::Load;
+}
+
+std::wstring Scene::TakeReadySessionLoad()
+{
+	return _loadReady ? std::exchange(_pendingLoadPath, {}) : std::wstring();
+}
+
+bool Scene::_FinishControlOperation(std::string* restorationError)
+{
+	bool restored = true;
+	if (_controlOperation == ControlOperation::Audio) _audioSchedule.NextChange = std::chrono::steady_clock::now() + std::chrono::milliseconds(500);
+	std::string error;
+	if (_controlPaused && !_audioEngine->EndQuiescence(_controlPause, error))
+	{
+		restored = false;
+		if (restorationError) *restorationError = error;
+		_deviceStatus->SetString("Stopped: " + error); ReportFileStatus("Audio restoration failed: " + error);
+	}
+	if (_controlPaused && restored && _controlPause.AdmissionWasOpen)
+	{
+		std::scoped_lock lock(_sceneMutex);
+		_sourceLossRecoveryGateClosed = false;
+	}
+	_controlPaused = false;
+	try { _inputSubsystem->ResumeMidiDispatch(); }
+	catch (const std::exception& dispatchError)
+	{
+		restored = false;
+		if (restorationError) *restorationError += "; MIDI resume failed: " + std::string(dispatchError.what());
+		_deviceStatus->SetString("MIDI dispatch stopped: " + std::string(dispatchError.what()));
+	}
+	if (_controlInputClosed)
+	{
+		const auto accepted = AcceptedRigSnapshot();
+		if (accepted) _inputSubsystem->OpenRigTriggerInput(accepted->Revision);
+	}
+	_controlInputClosed = false;
+	if (_controlWriterExclusion.owns_lock()) _controlWriterExclusion.unlock();
+	_controlOperation = ControlOperation::None; _loadReady = false;
+	_controlAdmissionPending.store(false, std::memory_order_release);
+	return restored;
+}
+
+void Scene::FinishSessionLoad(bool replaced, const std::string& error)
+{
+	if (replaced)
+	{
+		_sessionReplacing.store(true, std::memory_order_release);
+		_controlPaused = false; _loadReady = false;
+		if (_controlWriterExclusion.owns_lock()) _controlWriterExclusion.unlock();
+		_controlOperation = ControlOperation::None;
+	}
+	else { ReportFileStatus(error.empty() ? "Load failed; current session retained" : error); _FinishControlOperation(); }
+}
+
+void Scene::PumpDeviceAndFileControls()
+{
+	if (_isSceneQuitting.load(std::memory_order_acquire)) return;
+	const bool filesEnabled = _controlOperation == ControlOperation::None && _rigCoordinator.EditsEnabled();
+	_saveButton->SetEnabled(filesEnabled); _loadButton->SetEnabled(filesEnabled);
+	const auto now = std::chrono::steady_clock::now();
+	const auto actual = _audioEngine->GetStreamParams();
+	if (actual.BufSize && !_acceptedBufferSizes.contains(actual.Name)) { _acceptedBufferSizes[actual.Name] = {actual.BufSize}; _devicePageDirty = true; }
+	if (_devicePageDirty || _displayedMidiState != _midiState.load(std::memory_order_acquire)) _RebuildDevicePage();
+	std::ostringstream text;
+	text << actual.Name << " | " << actual.SampleRate << " Hz | " << actual.NumInputChannels << " in / " << actual.NumOutputChannels << " out | buffer " << actual.BufSize;
+	_activeAudioStatus->SetString(text.str());
+	if (_controlOperation == ControlOperation::None)
+	{
+		if (!_rigCoordinator.EditsEnabled()) return;
+		if (_midiDraftPending)
+		{
+			_controlOperation = ControlOperation::Midi; _midiDraftPending = false;
+			++_controlOperationId;
+			_pendingMidiDeviceRequest.store(std::make_shared<const MidiDeviceRequest>(MidiDeviceRequest{_sceneIdentity, _controlOperationId, _midiDraft}), std::memory_order_release);
+		}
+		else if (_audioSchedule.Revision != _audioSchedule.AttemptedRevision && now >= _audioSchedule.NextChange)
+		{
+			if (now < _audioSchedule.ChannelDeadline) { _deviceStatus->SetString("Settling channel counts (3 seconds)"); return; }
+			if (_CaptureIsBusy()) { _deviceStatus->SetString("Waiting for recording/pending capture"); return; }
+			if (!_audioStartRequested && _audioDraft.Name == actual.Name && _audioDraft.SampleRate == actual.SampleRate && _audioDraft.BufSize == actual.BufSize && _audioDraft.NumChannelsIn == actual.NumInputChannels && _audioDraft.NumChannelsOut == actual.NumOutputChannels) { _audioSchedule.AttemptedRevision = _audioSchedule.Revision; return; }
+			std::string error;
+			if (!_ValidateAudioDraft(error)) { _deviceStatus->SetString(error); _audioSchedule.AttemptedRevision = _audioSchedule.Revision; return; }
+			_controlOperation = ControlOperation::Audio;
+		}
+		else return;
+	}
+	if (_controlOperation == ControlOperation::Midi)
+	{
+		if (const auto completion = _completedMidiDeviceRequest.exchange({}, std::memory_order_acq_rel))
+		{
+			if (completion->SceneId != _sceneIdentity || completion->OperationId != _controlOperationId) return;
+			if (completion->Accepted)
+			{
+				if (completion->PreferencesSaved) { _pendingAudioPersistence.reset(); _pendingMidiPersistence.reset(); }
+				else _pendingMidiPersistence = completion->Desired;
+			}
+			_hardwarePersistencePending = _pendingAudioPersistence.has_value() || _pendingMidiPersistence.has_value();
+			_deviceStatus->SetString(completion->Status); _controlOperation = ControlOperation::None; _devicePageDirty = true;
+		}
+		return;
+	}
+	if (_loadReady) return;
+	if (_controlOperation == ControlOperation::Audio && now < _audioSchedule.ChannelDeadline) { _FinishControlOperation(); return; }
+	if (!_controlInputClosed)
+	{
+		const auto accepted = AcceptedRigSnapshot();
+		if (!accepted || !_rigCoordinator.EditsEnabled()) return;
+		_controlRevision = accepted->Revision;
+		if (!_inputSubsystem->RequestCloseRigTriggerInputFromUi(_controlRevision)) return;
+		_controlInputClosed = true; _controlAdmissionPending.store(true, std::memory_order_release); ++_controlOperationId;
+		return; // Job acknowledges on its next turn; never wait under an application lock.
+	}
+	if (!_inputSubsystem->RigTriggerInputReadyForAudioBoundary(_controlRevision)) return;
+	_controlWriterExclusion = std::unique_lock<std::mutex>(_controlLifecycleMutex, std::try_to_lock);
+	if (!_controlWriterExclusion.owns_lock()) return;
+	try
+	{
+	std::string error;
+	if (_controlOperation == ControlOperation::Save)
+	{
+		ReportFileStatus("Capturing/saving session");
+		const auto result = io::IoSessionExporter::ExportSessionVersionToDirectory(_stations, AcceptedRigSnapshot(), _quantisation, _globalMidiQuantState, _transportOffsetLoopFrac, _userConfig, actual, _audioEngine.get(), _sceneMutex, _networkService->GetController(), _pendingSaveFolder,
+			[this](std::string& restoreError) { return _FinishControlOperation(&restoreError); },
+			[this](std::string& eligibilityError)
+			{
+				_inputSubsystem->SuspendMidiDispatch();
+				for (const auto& station : _stations) if (station) station->ResetLiveMidiWhileQuiescent();
+				if (_CaptureIsBusy()) { eligibilityError = "Save unavailable during capture or pending actions"; return false; }
+				return true;
+			});
+		if (result.Success) { _sessionSaveFolder = _pendingSaveFolder; ReportFileStatus("Saved " + utils::EncodeUtf8(result.Path)); }
+		else ReportFileStatus(result.Error);
+		if (!result.AudioResumed) ReportFileStatus("Save outcome: " + utils::EncodeUtf8(result.Path) + "; audio restoration failed: " + result.Error);
+		if (_controlOperation != ControlOperation::None) _FinishControlOperation();
+		return;
+	}
+	if (!_audioEngine->BeginQuiescence(_controlPause, error))
+	{
+		_deviceStatus->SetString("Stopped/error: " + error); ReportFileStatus(error);
+		if (_controlOperation == ControlOperation::Audio) _audioSchedule.AttemptedRevision = _audioSchedule.Revision;
+		_FinishControlOperation(); return;
+	}
+	_controlPaused = true;
+	_inputSubsystem->SuspendMidiDispatch();
+	for (const auto& station : _stations) if (station) station->ResetLiveMidiWhileQuiescent();
+	// With producers excluded and callbacks drained, capture-start wins deterministically.
+	if (_controlOperation != ControlOperation::Midi && _CaptureIsBusy())
+	{
+		if (_controlOperation == ControlOperation::Audio) _deviceStatus->SetString("Waiting for recording");
+		else ReportFileStatus("File operation rejected during capture/pending actions");
+		_FinishControlOperation(); return;
+	}
+	if (_controlOperation == ControlOperation::Load) { _loadReady = true; ReportFileStatus("Loading session"); return; }
+
+	if (_controlOperation == ControlOperation::Audio)
+	{
+		const auto admittedRevision = _audioSchedule.Revision;
+		const auto requested = _audioDraft;
+		_audioSchedule.Attempted(admittedRevision, now);
+		if (!_ValidateAudioDraft(error)) _deviceStatus->SetString(error);
+		else
+		{
+			_deviceStatus->SetString("Changing audio device");
+			const auto oldRate = actual.SampleRate;
+			const bool applied = _audioEngine->Reconfigure(requested, error);
+			const auto acceptedParams = _audioEngine->GetStreamParams();
+			if (applied)
+			{
+				auto settings = requested; settings.Name = acceptedParams.Name; settings.SampleRate = acceptedParams.SampleRate; settings.BufSize = acceptedParams.BufSize; settings.NumBuffers = acceptedParams.NumBuffers; settings.NumChannelsIn = acceptedParams.NumInputChannels; settings.NumChannelsOut = acceptedParams.NumOutputChannels;
+				if (_audioStartRequested) { _controlPause.WasRunning = true; _controlPause.AdmissionWasOpen = true; }
+				_userConfig.Audio = settings;
+				auto& sizes = _acceptedBufferSizes[acceptedParams.Name];
+				if (std::find(sizes.begin(), sizes.end(), acceptedParams.BufSize) == sizes.end()) { if (sizes.size() == 16u) sizes.erase(sizes.begin()); sizes.push_back(acceptedParams.BufSize); }
+				const auto freshInventory = _audioEngine->GetAsioInventory();
+				if (freshInventory.EnumerationError.empty()) _deviceInventory = freshInventory;
+				const auto midiState = _midiState.load(std::memory_order_acquire);
+				// No capture is active and all producers are excluded at this boundary.
+				++_audioStreamEpoch;
+				if (const auto currentRig = AcceptedRigSnapshot())
+					for (const auto& runtime : currentRig->Triggers) if (runtime.Instance)
+						runtime.Instance->ConfirmAudioAvailabilityOnJob(_audioStreamEpoch, acceptedParams.Name, acceptedParams.NumInputChannels);
+				// Reprepare timestamp mappers for accepted device-rate geometry.
+				const auto refreshedMidi = _inputSubsystem->RefreshMidi(_audioEngine->GetMidiClockAnchor_Ref(), acceptedParams.SampleRate, _inputSubsystem->InventoryMidiInputs());
+				std::vector<std::string> newMidiNames;
+				for (const auto& endpoint : refreshedMidi.Connected) newMidiNames.push_back(endpoint.Name);
+				_ConfirmMidiConnectionChange(midiState->Connection, refreshedMidi, newMidiNames);
+				_midiState.store(std::make_shared<const MidiState>(MidiState{refreshedMidi, newMidiNames}), std::memory_order_release);
+				_midiActive.store(true, std::memory_order_release);
+				if (const auto runtime = _rigCoordinator.RefreshRuntimeAvailability(acceptedParams.NumInputChannels, newMidiNames))
+				{
+					_audioEngine->PublishPendingRigSnapshot(runtime); _audioEngine->ApplyPendingRigWhileQuiescent();
+					_inputSubsystem->PublishRigInputDispatch(runtime);
+					_hudPanel->SetRoutingConfig(acceptedParams.NumInputChannels, newMidiNames, *runtime);
+				}
+				if (oldRate != acceptedParams.SampleRate)
+				{
+					_quantisation.Clear(true); _quantisation.Set(0u, Timer::QUANTISE_OFF);
+					_quantisation.SetGlobalPhaseOffsetSamps(0, _stations);
+					for (const auto& station : _stations) if (station) station->SetStationPhaseOffsetSamps(0);
+					_transportOffsetLoopFrac = 0.0; _audioEngine->PublishLocalTransportOffsetLoopFrac(0.0);
+					// Replace pending old-rate authority before admission reopens. The
+					// session owner will publish its fresh format epoch on the job turn.
+					_ApplyNinjamTimingUpdate(_networkService->ResetTempoSyncOnDisconnect());
+				}
+				_pendingAudioPersistence = settings;
+				const bool merged = _rigCoordinator.MergeHardwarePreferences(settings, std::nullopt);
+				const auto rig = AcceptedRigSnapshot(); _hardwarePersistencePending = !merged || !rig || !SaveRig(rig->Rig);
+				if (!_hardwarePersistencePending) { _pendingAudioPersistence.reset(); _pendingMidiPersistence.reset(); }
+				_deviceStatus->SetString(_hardwarePersistencePending ? "Applied, preferences not saved" : (acceptedParams.NumOutputChannels < actual.NumOutputChannels ? "Ready; unavailable output routes disconnected" : "Ready"));
+				if (_audioSchedule.Revision == admittedRevision) _audioDraft = settings;
+				_devicePageDirty = true;
+			}
+			else _deviceStatus->SetString(error);
+			_audioStartRequested = false;
+			std::cout << "[DEVICES scene=" << _sceneIdentity << " operation=" << _controlOperationId << "] audio " << (applied ? "applied " : "failed ")
+				<< "requested='" << requested.Name << "' in=" << requested.NumChannelsIn << " out=" << requested.NumChannelsOut << " rate=" << requested.SampleRate << " buffer=" << requested.BufSize
+				<< " actual='" << acceptedParams.Name << "' in=" << acceptedParams.NumInputChannels << " out=" << acceptedParams.NumOutputChannels << " rate=" << acceptedParams.SampleRate << " buffer=" << acceptedParams.BufSize << " " << error << std::endl;
+		}
+	}
+	if (_controlOperation != ControlOperation::None) _FinishControlOperation();
+	}
+	catch (const std::exception& error)
+	{
+		ReportFileStatus(std::string("Operation failed: ") + error.what());
+		if (_controlOperation == ControlOperation::Audio) _audioSchedule.AttemptedRevision = _audioSchedule.Revision;
+		_FinishControlOperation();
+	}
+}
+
+
+void Scene::_ReconcileMidiDeviceRequestOnJob()
+{
+	// OnJobTick owns _controlLifecycleMutex; complete values are handed off by
+	// UI atomics. Only this job owner mutates MIDI desired selection/endpoints.
+	const auto desired = _pendingMidiDeviceRequest.exchange({}, std::memory_order_acq_rel);
+	if (!desired) return;
+	const auto complete = [this, &desired](std::string status, bool accepted = false, bool saved = false) {
+		std::cout << "[MIDI scene=" << desired->SceneId << " operation=" << desired->OperationId << "] " << status << std::endl;
+		_completedMidiDeviceRequest.store(std::make_shared<const MidiDeviceCompletion>(MidiDeviceCompletion{
+			desired->SceneId, desired->OperationId, std::move(status), accepted, saved, desired->Desired}),
+			std::memory_order_release);
+	};
+	if (_isSceneQuitting.load(std::memory_order_acquire))
+	{
+		complete("MIDI change cancelled: session is stopping");
+		return;
+	}
+	try
+	{
+		std::scoped_lock midiLock(_midiLifecycleMutex);
+		const auto previous = _midiState.load(std::memory_order_acquire);
+		const auto inventory = _inputSubsystem->InventoryMidiInputs();
+		auto result = _inputSubsystem->ReconcileMidi(desired->Desired, _audioEngine->GetMidiClockAnchor_Ref(),
+			(_audioEngine->GetStreamParams().SampleRate ? _audioEngine->GetStreamParams().SampleRate : _userConfig.Audio.SampleRate), inventory);
+		if (!result.Accepted)
+		{
+			const auto error = result.Error.empty() ? (result.Inventory.Error.empty() ? "MIDI reconciliation failed" : result.Inventory.Error) : result.Error;
+			std::vector<std::string> surviving;
+			for (const auto& endpoint : result.Connected) surviving.push_back(endpoint.Name);
+			_ConfirmMidiConnectionChange(previous->Connection, result, surviving);
+			_midiState.store(std::make_shared<const MidiState>(MidiState{std::move(result), surviving}), std::memory_order_release);
+			if (surviving != previous->ConnectedNames)
+				if (const auto runtime = _rigCoordinator.RefreshRuntimeAvailability(_audioEngine->GetStreamParams().NumInputChannels, surviving))
+				{ _audioEngine->PublishPendingRigSnapshot(runtime); _inputSubsystem->PublishRigInputDispatch(runtime); _inputSubsystem->OpenRigTriggerInput(runtime->Revision); }
+			complete(error);
+			return;
+		}
+		_midiActive.store(true, std::memory_order_release);
+		std::vector<std::string> names;
+		for (const auto& endpoint : result.Connected)
+			if (std::find(names.begin(), names.end(), endpoint.Name) == names.end()) names.push_back(endpoint.Name);
+		_ConfirmMidiConnectionChange(previous->Connection, result, names);
+		_midiState.store(std::make_shared<const MidiState>(MidiState{std::move(result), names}), std::memory_order_release);
+		const bool merged = _rigCoordinator.MergeHardwarePreferences(std::nullopt, desired->Desired);
+		const auto rig = AcceptedRigSnapshot();
+		const bool saved = merged && rig && SaveRig(rig->Rig);
+		const auto inputs = _audioEngine->GetStreamParams().NumInputChannels;
+		if (const auto runtime = _rigCoordinator.RefreshRuntimeAvailability(inputs, names))
+		{
+			_audioEngine->PublishPendingRigSnapshot(runtime);
+			_inputSubsystem->PublishRigInputDispatch(runtime);
+			_inputSubsystem->OpenRigTriggerInput(runtime->Revision);
+			if (_hudPanel)
+			{
+				std::scoped_lock sceneLock(_sceneMutex);
+				_hudPanel->SetRoutingConfig(inputs, names, *runtime);
+			}
+		}
+		complete(saved ? "MIDI desired selection accepted" : "MIDI applied, preferences not saved", true, saved);
+	}
+	catch (const std::exception& error)
+	{
+		complete(std::string("MIDI change failed: ") + error.what());
+	}
 }

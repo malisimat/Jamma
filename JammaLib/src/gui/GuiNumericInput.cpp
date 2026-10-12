@@ -19,6 +19,8 @@ GuiNumericInputParams GuiNumericInput::_WithInitialText(GuiNumericInputParams pa
 
 GuiNumericInput::GuiNumericInput(GuiNumericInputParams params) :
 	GuiTextBox(_WithInitialText(params)),
+	_integerOnly(params.IntegerOnly), _rejectOutOfRange(params.RejectOutOfRange),
+	_onInvalidValue(std::move(params.OnInvalidValue)),
 	_min(params.Min),
 	_max(params.Max),
 	_step(params.Step),
@@ -71,13 +73,17 @@ void GuiNumericInput::_OnCommit()
 	{
 		size_t consumed = 0;
 		const double parsed = std::stod(_text, &consumed);
-		if (consumed == _text.size() && std::isfinite(parsed)) _ApplyValue(parsed, false);
-		else SetText(_Format(_value), false);
+		const bool valid = consumed == _text.size() && std::isfinite(parsed) &&
+			(!_integerOnly || std::trunc(parsed) == parsed) &&
+			(!_rejectOutOfRange || (parsed >= _min && parsed <= _max));
+		if (valid) _ApplyValue(parsed, false);
+		else { SetText(_Format(_value), false); if (_onInvalidValue) _onInvalidValue(); }
 	}
 	catch (...)
 	{
 		// Parse failure: revert to the last valid value.
 		SetText(_Format(_value), false);
+		if (_onInvalidValue) _onInvalidValue();
 	}
 
 	GuiTextBox::_OnCommit();
