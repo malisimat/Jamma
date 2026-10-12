@@ -1301,6 +1301,52 @@ double LoopTake::LoopIndexFrac() const noexcept
 	return 0.0;
 }
 
+bool LoopTake::HasCameraContent() const
+{
+	if (_captureCancelled.load(std::memory_order_acquire)) return false;
+	if (IsArmed()) return true;
+	const auto hasAudio = [](const auto& loops) {
+		return std::any_of(loops.begin(), loops.end(), [](const auto& loop) {
+			return loop && loop->LoopLength() > 0ul;
+		});
+	};
+	if (hasAudio(_loops) || hasAudio(_backLoops)) return true;
+	// EventCount can read the MIDI-writer buffer before first publication.
+	std::scoped_lock midiLock(_midiCaptureMutex);
+	std::pair<float, float> point;
+	for (const auto& loop : _midiLoops)
+	{
+		if (!loop) continue;
+		if (loop->EventCount() > 0u) return true;
+		for (size_t lane = 0u; lane < midi::MidiLoop::MaxAutomationLanes; ++lane)
+			if (loop->IsAutomationLaneActive(lane) &&
+				loop->SnapshotAutomationLanePoints(lane, &point, 1u) > 0u) return true;
+	}
+	return false;
+}
+
+graphics::CameraBounds LoopTake::CameraBoundsInParent(float parentVisualScale) const
+{
+	graphics::CameraBounds bounds;
+	const auto takeVisualScale = static_cast<float>(_masterMixer ? _masterMixer->UnmutedLevel() : 1.0);
+	const auto includeAudio = [&](const auto& loops, const auto& mixers) {
+		for (size_t index = 0u; index < loops.size(); ++index)
+		{
+			if (!loops[index] || !loops[index]->IsVisible()) continue;
+			const auto channelScale = index < mixers.size() && mixers[index]
+				? static_cast<float>(mixers[index]->UnmutedLevel()) : 1.0f;
+			bounds.Include(loops[index]->CameraBoundsInParent(takeVisualScale * channelScale * parentVisualScale));
+		}
+	};
+	includeAudio(_loops, _audioMixers);
+	includeAudio(_backLoops, _backAudioMixers);
+	for (const auto& loop : _midiLoops)
+		if (const auto model = loop ? loop->Model() : nullptr; model && model->IsVisible())
+			bounds.Include(model->CameraLocalBounds().Transformed(model->ModelPosition(),
+				static_cast<float>(model->ModelScale())));
+	return bounds.Transformed(ModelPosition(), static_cast<float>(ModelScale()));
+}
+
 float LoopTake::VisualRadius() const noexcept
 {
 	return static_cast<float>(Loop::CalcDrawRadius(VisualLoopLengthSamps()));
@@ -2293,6 +2339,7 @@ void LoopTake::TriggerPunchInAudio() noexcept
 		(STATE_OVERDUBBINGRECORDING != state) &&
 		(STATE_PLAYING != state))
 		return;
+	_cameraAudioPunchRevision.fetch_add(1u, std::memory_order_acq_rel);
 	_isPunchInActive.store(true, std::memory_order_release);
 	if (STATE_OVERDUBBING == state)
 	{
@@ -2300,6 +2347,7 @@ void LoopTake::TriggerPunchInAudio() noexcept
 		if (!_state.compare_exchange_strong(expected, STATE_PUNCHEDIN, std::memory_order_acq_rel))
 		{
 			_isPunchInActive.store(false, std::memory_order_release);
+			_cameraAudioPunchRevision.fetch_add(1u, std::memory_order_release);
 			return;
 		}
 	}
@@ -2307,6 +2355,7 @@ void LoopTake::TriggerPunchInAudio() noexcept
 	if (audioState)
 		for (const auto& loop : audioState->Loops)
 			if (loop) loop->PunchIn();
+	_cameraAudioPunchRevision.fetch_add(1u, std::memory_order_release);
 }
 
 void LoopTake::TriggerPunchOutAudio() noexcept
@@ -2316,6 +2365,7 @@ void LoopTake::TriggerPunchOutAudio() noexcept
 		return;
 	if (!_isPunchInActive.load(std::memory_order_relaxed) && STATE_PUNCHEDIN != state)
 		return;
+	_cameraAudioPunchRevision.fetch_add(1u, std::memory_order_acq_rel);
 	_isPunchInActive.store(false, std::memory_order_release);
 	if (STATE_PUNCHEDIN == state)
 	{
@@ -2326,6 +2376,7 @@ void LoopTake::TriggerPunchOutAudio() noexcept
 	if (audioState)
 		for (const auto& loop : audioState->Loops)
 			if (loop) loop->PunchOut();
+	_cameraAudioPunchRevision.fetch_add(1u, std::memory_order_release);
 }
 
 void LoopTake::SetTriggerSourceMutedAudio(bool muted) noexcept
@@ -3905,6 +3956,7 @@ LoopTake::Presentation LoopTake::GetPresentation() const noexcept
 void LoopTake::SetPresentation(PresentationMode mode, std::uint64_t serial) noexcept
 {
 	_presentation.store((serial << 3u) | static_cast<std::uint64_t>(mode), std::memory_order_release);
+	_PublishCameraCapture();
 }
 void LoopTake::_SetPresentationMode(PresentationMode mode) noexcept
 {
@@ -3912,7 +3964,41 @@ void LoopTake::_SetPresentationMode(PresentationMode mode) noexcept
 	const auto value = _presentation.load(std::memory_order_acquire);
 	_presentation.store((value & ~std::uint64_t{7u}) | static_cast<std::uint64_t>(mode),
 		std::memory_order_release);
+	_PublishCameraCapture();
 }
+void LoopTake::PublishCameraLayerStart()
+{
+	_PublishCameraCapture(true);
+}
+
+void LoopTake::_PublishCameraCapture(bool newLayer)
+{
+	const auto publisher = _cameraRecordingPublisher.lock();
+	if (!publisher) return;
+	const auto audioRevision = _cameraAudioPunchRevision.load(std::memory_order_acquire);
+	if ((audioRevision & 1u) != 0u) return;
+	using Mode = CameraRecordingObservation::Mode;
+	Mode mode = Mode::Inactive;
+	switch (GetPresentation().Mode)
+	{
+	case PresentationMode::Record: mode = Mode::Record; break;
+	case PresentationMode::Overdub: mode = Mode::Overdub; break;
+	case PresentationMode::Punch: mode = Mode::Punch; break;
+	case PresentationMode::Tail: mode = Mode::Tail; break;
+	case PresentationMode::Inactive: break;
+	}
+	const auto take = std::static_pointer_cast<LoopTake>(ActionReceiver::shared_from_this());
+	const bool punched = _isPunchInActive.load(std::memory_order_acquire)
+		|| _isMidiPunchInActive.load(std::memory_order_acquire);
+	if (punched) mode = Mode::Punch;
+	const bool active = IsArmed() || punched;
+	if (audioRevision != _cameraAudioPunchRevision.load(std::memory_order_acquire)) return;
+	_cameraLayerStartOrder = publisher->Observe(take, mode, active, utils::Timer::GetTime(), newLayer,
+		_cameraRecordingGeneration, _cameraLayerStartOrder,
+		audioRevision != _cameraObservedAudioPunchRevision);
+	_cameraObservedAudioPunchRevision = audioRevision;
+}
+
 void LoopTake::_InvalidateRecordingCompletion() noexcept
 {
 	_captureGeneration.fetch_add(1u, std::memory_order_acq_rel);

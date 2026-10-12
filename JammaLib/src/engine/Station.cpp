@@ -387,6 +387,19 @@ void Station::SetSize(utils::Size2d size)
 	_ArrangeChildren();
 }
 
+graphics::CameraBounds Station::CameraDeckBoundsInWorld() const
+{
+	if (!_stationModel) return {};
+	const auto deck = _stationModel->CameraLocalBounds().Transformed(
+		{ 0.0f, _StationModelYOffset, 0.01f }, 1.0f);
+	return deck.Transformed(ModelPosition(), static_cast<float>(ModelScale()));
+}
+
+float Station::CameraTakeVisualScale() const noexcept
+{
+	return _masterMixer ? static_cast<float>(_masterMixer->UnmutedLevel()) : 1.0f;
+}
+
 bool Station::AllTakesMuted() const
 {
 	const auto& takes = GetLoopTakes();
@@ -1438,6 +1451,7 @@ ActionResult Station::OnAction(TriggerAction action)
 		res.ResultType = actions::ActionResultType::ACTIONRESULT_ACTIVATE;
 		res.IsEaten = true;
 		_SetTakePresentation(*newLoopTake, LoopTake::PresentationMode::Record);
+		newLoopTake->PublishCameraLayerStart();
 		break;
 	}
 	case TriggerAction::TRIGGER_REC_END:
@@ -1548,6 +1562,7 @@ ActionResult Station::OnAction(TriggerAction action)
 		res.ResultType = actions::ActionResultType::ACTIONRESULT_ACTIVATE;
 		res.IsEaten = true;
 		_SetTakePresentation(*newLoopTake, LoopTake::PresentationMode::Overdub);
+		newLoopTake->PublishCameraLayerStart();
 		break;
 	}
 	case TriggerAction::TRIGGER_OVERDUB_END:
@@ -1688,6 +1703,8 @@ ActionResult Station::OnAction(TriggerAction action)
 		res.ResultType = actions::ActionResultType::ACTIONRESULT_DEFAULT;
 		break;
 	}
+	if (res.IsEaten && loopTake)
+		loopTake.value()->PublishCameraCaptureObservation();
 	if (res.IsEaten)
 	{
 		const char* actionLabel = nullptr;
@@ -1867,8 +1884,16 @@ std::shared_ptr<LoopTake> Station::AddTake()
 	return take;
 }
 
+void Station::SetCameraRecordingPublisher(const std::shared_ptr<CameraRecordingPublisher>& publisher)
+{
+	_cameraRecordingPublisher = publisher;
+	for (const auto& take : GetLoopTakeSnapshot())
+		take->SetCameraRecordingPublisher(publisher);
+}
+
 void Station::AddTake(std::shared_ptr<LoopTake> take)
 {
+	take->SetCameraRecordingPublisher(_cameraRecordingPublisher);
 	take->SetupBuffers(_lastBufSize);
 	take->SetNumBusChannels(NumBusChannels());
 	take->SetSelectDepth(CurrentSelectDepth());

@@ -22,6 +22,7 @@ namespace actions
 		KeyActionType KeyActionType;
 		unsigned int KeyChar;
 		bool IsSystem;
+		bool IsSynthetic = false;
 		Action::Modifiers Modifiers;
 	};
 }

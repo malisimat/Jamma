@@ -448,6 +448,31 @@ StationModel::StationModel() :
 		UV_STATE_RING_DARK);
 }
 
+CameraBounds StationModel::CameraLocalBounds() const noexcept
+{
+	// station.vert expands the deck by at most 4.5; collars are separate geometry.
+	auto radius = DeckRadius * 4.5f;
+	auto lowY = -(2.0f * BevelHeight + SideHeight);
+	auto highY = 0.0f;
+	for (const auto& point : StateRingProfile)
+	{
+		radius = (std::max)(radius, point.Radius * StateRingScale);
+		lowY = (std::min)(lowY, StateRingTopY + point.Y * StateRingScale);
+		highY = (std::max)(highY, StateRingTopY + point.Y * StateRingScale);
+	}
+	for (const auto& point : StateRingBottomProfile)
+	{
+		radius = (std::max)(radius, point.Radius * StateRingScale);
+		lowY = (std::min)(lowY, StateRingBottomY + point.Y * StateRingScale);
+		highY = (std::max)(highY, StateRingBottomY + point.Y * StateRingScale);
+	}
+	// Instanced occluder bars stay between -15.7 and -3 in cap-local units.
+	radius = (std::max)(radius, StateRingOccluderOuterRadius * StateRingScale);
+	lowY = (std::min)(lowY, StateRingTopY - 15.7f * StateRingScale);
+	highY = (std::max)(highY, StateRingBottomY + 15.7f * StateRingScale);
+	return { { -radius, lowY, -radius }, { radius, highY, radius } };
+}
+
 void StationModel::SetStationState(const std::vector<unsigned int>& stationGlobalId,
 		bool selected,
 		bool picking,

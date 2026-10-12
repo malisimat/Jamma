@@ -13,6 +13,8 @@ namespace actions
 		~TouchMoveAction();
 
 	public:
+		enum class Provenance { DeliveredPointer, PointerRefresh, CaptureCancellation };
+		Provenance Origin = Provenance::DeliveredPointer;
 		TouchAction::TouchType Touch;
 		int Index;
 		unsigned int MouseButtonsDown;

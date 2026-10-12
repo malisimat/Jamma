@@ -114,6 +114,9 @@ namespace engine
 		// Presentation query: callers serialize take membership with the scene lock.
 		bool AllTakesMuted() const;
 		utils::Position3d TopCapModelPosition() const;
+		// Presentation-only; caller holds Scene::_sceneMutex.
+		graphics::CameraBounds CameraDeckBoundsInWorld() const;
+		float CameraTakeVisualScale() const noexcept;
 		virtual	utils::Position2d Position() const override;
 		virtual unsigned int NumInputChannels(base::Audible::AudioSourceType source) const override;
 		virtual unsigned int NumOutputChannels(base::Audible::AudioSourceType source) const override;
@@ -158,6 +161,7 @@ namespace engine
 			return (_HasUncommittedChanges() && _flipTakeBuffer) ? _backLoopTakes : _loopTakes;
 		}
 		std::vector<std::shared_ptr<LoopTake>> GetLoopTakeSnapshot() const;
+		void SetCameraRecordingPublisher(const std::shared_ptr<CameraRecordingPublisher>& publisher);
 		std::uint64_t LoopTakeRevision() const noexcept
 		{
 			return _loopTakeRevision.load(std::memory_order_acquire);
@@ -443,6 +447,8 @@ namespace engine
 		std::shared_ptr<graphics::StationModel> _stationModel;
 		// Structural job owner orders meaningful accepted capture-mode changes.
 		std::uint64_t _nextPresentationSerial = 1u;
+		// Structural owners only; Scene retains the publisher, retirement holds no Scene.
+		std::weak_ptr<CameraRecordingPublisher> _cameraRecordingPublisher;
 		std::shared_ptr<gui::GuiRack> _guiRack;
 		std::shared_ptr<audio::AudioMixer> _masterMixer;
 		std::shared_ptr<gui::GuiToggle> _mixerToggle;

@@ -409,11 +409,13 @@ void Window::ClearModifiers()
 			KeyAction keyAction;
 			keyAction.KeyChar = mk.KeyChar;
 			keyAction.KeyActionType = KeyAction::KEY_UP;
+			keyAction.IsSynthetic = true;
 			OnAction(keyAction);
 		}
 	}
 
 	_modifiers = Action::MODIFIER_NONE;
+	_heldKeys.reset();
 }
 
 bool Window::IsTrackingMouse() const
@@ -431,6 +433,7 @@ void Window::Resize(Size2d size)
 	if (HasRelativePointer() || size.Width == 0 || size.Height == 0) CancelMouseCapture();
 
 	_config.Size = size;
+	_UpdateCameraEligibility();
 	if (_config.State == WINDOWED && size.Width > 0 && size.Height > 0)
 		_restoreConfig.Size = size;
 	_scene->SetSize(size);
@@ -492,11 +495,29 @@ Size2d Window::GetSize()
 	return _config.Size;
 }
 
+void Window::_ReleaseOwnedMouseCapture()
+{
+	_releasingOwnedMouseCapture = true;
+	ReleaseCapture();
+	_releasingOwnedMouseCapture = false;
+}
+
+void Window::_UpdateCameraEligibility()
+{
+	if (!_scene) return;
+	const bool visible = !_wnd || (IsWindowVisible(_wnd) && IsWindowEnabled(_wnd) && !IsIconic(_wnd));
+	const bool validViewport = _config.Size.Width > 0u && _config.Size.Height > 0u;
+	const bool held = _buttonsDown != 0u || _heldKeys.any() || _heldTouches.any()
+		|| HasRelativePointer() || (_wnd && GetCapture() == _wnd) || _resizing || _windowSizeMove;
+	_scene->SetCameraInteractionEligibility(_cameraWindowActive && visible && validViewport, held);
+}
+
 void Window::Render()
 {
 	GlDeleteQueue::FlushPendingDeletes();
 	ApplyPendingResize();
 
+	_UpdateCameraEligibility();
 	_scene->CommitChanges();
 	if (_config.Size.Width == 0 || _config.Size.Height == 0) return;
 	_scene->UpdateCamera();
@@ -649,6 +670,9 @@ ActionResult Window::OnAction(WindowAction winAction)
 
 ActionResult Window::OnAction(TouchAction touchAction)
 {
+	_scene->OnHumanActivity();
+	if (touchAction.Touch == TouchAction::TOUCH_FINGER && touchAction.Index >= 0 && touchAction.Index < 32)
+		_heldTouches.set(static_cast<size_t>(touchAction.Index), touchAction.State == TouchAction::TOUCH_DOWN);
 	if (_config.Size.Width == 0 || _config.Size.Height == 0) return ActionResult::NoAction();
 	if (HasRelativePointer() && touchAction.Touch == TouchAction::TOUCH_MOUSE
 		&& touchAction.State == TouchAction::TOUCH_UP && touchAction.Index == _relativeButton)
@@ -692,13 +716,15 @@ ActionResult Window::OnAction(TouchAction touchAction)
 	if (touchAction.Touch == TouchAction::TOUCH_MOUSE && touchAction.State == TouchAction::TOUCH_UP)
 	{
 		EndRelativePointer(touchAction.Index);
-		if (_buttonsDown == 0u && _wnd && GetCapture() == _wnd) ReleaseCapture();
+		if (_buttonsDown == 0u && _wnd && GetCapture() == _wnd) _ReleaseOwnedMouseCapture();
 	}
 	return result;
 }
 
 ActionResult Window::OnAction(TouchMoveAction touchAction)
 {
+	if (touchAction.Origin == TouchMoveAction::Provenance::DeliveredPointer)
+		_scene->OnHumanActivity();
 	if (_config.Size.Width == 0 || _config.Size.Height == 0) return ActionResult::NoAction();
 	_cachedCursorPosition = touchAction.Position;
 	_cachedCursorModifiers = touchAction.Modifiers;
@@ -709,7 +735,8 @@ ActionResult Window::OnAction(TouchMoveAction touchAction)
 
 bool Window::CancelMouseCapture()
 {
-	if (_buttonsDown == 0u && !HasRelativePointer()) return false;
+	if (_buttonsDown == 0u && !HasRelativePointer() && !_heldTouches.any()) return false;
+	_heldTouches.reset();
 	EndRelativePointer(_relativeButton);
 	_buttonsDown = 0u;
 	TouchMoveAction cancelled;
@@ -718,14 +745,21 @@ bool Window::CancelMouseCapture()
 	cancelled.Position = _cachedCursorPosition.value_or(utils::Position2d{});
 	cancelled.MouseButtonsDown = 0u;
 	cancelled.Modifiers = _modifiers;
+	cancelled.Origin = TouchMoveAction::Provenance::CaptureCancellation;
 	OnAction(cancelled);
 	if (_wnd && GetCapture() == _wnd)
-		ReleaseCapture();
+		_ReleaseOwnedMouseCapture();
 	return true;
 }
 
 ActionResult Window::OnAction(KeyAction keyAction)
 {
+	if (!keyAction.IsSynthetic)
+	{
+		_scene->OnHumanActivity();
+		if (keyAction.KeyChar < _heldKeys.size())
+			_heldKeys.set(keyAction.KeyChar, keyAction.KeyActionType == KeyAction::KEY_DOWN);
+	}
 	// Handle modifiers
 	int modifiers = _modifiers;
 
@@ -1009,6 +1043,9 @@ LRESULT CALLBACK Window::WindowProcedure(HWND hWindow, UINT message, WPARAM wPar
 	}
 	case WM_ENTERSIZEMOVE:
 	{
+		window->_windowSizeMove = true;
+		window->_scene->OnHumanActivity();
+		window->_UpdateCameraEligibility();
 		if (window->IsResizing())
 		{
 			window->SetResizing(false);
@@ -1028,16 +1065,24 @@ LRESULT CALLBACK Window::WindowProcedure(HWND hWindow, UINT message, WPARAM wPar
 	break;
 	case WM_CAPTURECHANGED:
 	{
+		// A completed own release is not external capture loss; held keys remain real.
+		if (window->_releasingOwnedMouseCapture) return 0;
+		window->CancelMouseCapture();
+		window->_heldKeys.reset();
+		window->_heldTouches.reset();
+		window->_windowSizeMove = false;
 		if (window->IsResizing())
 		{
 			window->SetResizing(false);
 			return 0;
 		}
-		window->CancelMouseCapture();
 		return 0;
 	}
 	case WM_EXITSIZEMOVE:
 	{
+		window->_windowSizeMove = false;
+		window->_scene->OnHumanActivity();
+		window->_UpdateCameraEligibility();
 		if (window->IsResizing())
 		{
 			window->SetResizing(false);
@@ -1194,6 +1239,7 @@ LRESULT CALLBACK Window::WindowProcedure(HWND hWindow, UINT message, WPARAM wPar
 	case WM_DPICHANGED:
 		if (window->HasRelativePointer()) window->CancelMouseCapture();
 		break;
+	case PointerRefreshMessage:
 	case WM_MOUSEMOVE:
 	{
 		// Absolute messages include stale and synthetic recenter notifications.
@@ -1204,6 +1250,8 @@ LRESULT CALLBACK Window::WindowProcedure(HWND hWindow, UINT message, WPARAM wPar
 		POINT pt = { x, y };
 
 		TouchMoveAction touchAction;
+		if (message == PointerRefreshMessage)
+			touchAction.Origin = TouchMoveAction::Provenance::PointerRefresh;
 		touchAction.Touch = TouchAction::TOUCH_MOUSE;
 		if (0u != (window->_buttonsDown & (1u << 2)))
 			touchAction.Index = 2;
@@ -1290,6 +1338,13 @@ LRESULT CALLBACK Window::WindowProcedure(HWND hWindow, UINT message, WPARAM wPar
 		if (lParam & (0x01 << 30))
 			repeatkey = true;
 
+		if (repeatkey)
+		{
+			window->_scene->OnHumanActivity();
+			const auto scan = (static_cast<unsigned int>(lParam) >> 16u) & 0xffu;
+			const auto key = scan == 0x29u ? 192u : static_cast<unsigned int>(wParam);
+			if (key < window->_heldKeys.size()) window->_heldKeys.set(key);
+		}
 		if (!repeatkey)
 		{
 			std::cout << "KeyDown " << wParam << "\n";
@@ -1333,6 +1388,13 @@ LRESULT CALLBACK Window::WindowProcedure(HWND hWindow, UINT message, WPARAM wPar
 		if (lParam & (0x01 << 30))
 			repeatkey = true;
 
+		if (repeatkey)
+		{
+			window->_scene->OnHumanActivity();
+			const auto scan = (static_cast<unsigned int>(lParam) >> 16u) & 0xffu;
+			const auto key = scan == 0x29u ? 192u : static_cast<unsigned int>(wParam);
+			if (key < window->_heldKeys.size()) window->_heldKeys.set(key);
+		}
 		if (!repeatkey)
 		{
 			std::cout << "SysKeyDown " << wParam << "\n";
@@ -1368,6 +1430,33 @@ LRESULT CALLBACK Window::WindowProcedure(HWND hWindow, UINT message, WPARAM wPar
 		window->OnAction(keyAction);
 		return 0;
 	}
+	case WM_ACTIVATE:
+	{
+		window->_cameraWindowActive = LOWORD(wParam) != WA_INACTIVE;
+		if (!window->_cameraWindowActive)
+		{
+			window->CancelMouseCapture();
+			window->ClearModifiers();
+		}
+		window->_UpdateCameraEligibility();
+		break;
+	}
+	case WM_SHOWWINDOW:
+	{
+		if (!wParam)
+		{
+			window->CancelMouseCapture();
+			window->ClearModifiers();
+			if (window->_scene) window->_scene->SetCameraInteractionEligibility(false, false);
+		}
+		break;
+	}
+	case WM_SETFOCUS:
+	{
+		window->_cameraWindowActive = true;
+		window->_UpdateCameraEligibility();
+		break;
+	}
 	case WM_KILLFOCUS:
 	{
 		// Key-up events for held modifiers (e.g. Ctrl/Shift) are delivered to
@@ -1375,8 +1464,11 @@ LRESULT CALLBACK Window::WindowProcedure(HWND hWindow, UINT message, WPARAM wPar
 		// window (such as a VST editor) those key-ups never reach us, leaving
 		// the modifier bitmask stuck. Clear it on focus loss so subsequent
 		// clicks aren't treated as modified gestures.
+		window->_windowSizeMove = false;
 		window->CancelMouseCapture();
 		window->ClearModifiers();
+		window->_cameraWindowActive = false;
+		window->_UpdateCameraEligibility();
 		if (window->_scene) window->_scene->OnInputFocusLost();
 		return 0;
 	}
@@ -1467,8 +1559,8 @@ void Window::_ResamplePointer()
 	_forcePick = true;
 	// Resume hover at the current cursor position after editor teardown.
 	MSG pending{};
-	while (PeekMessage(&pending, _wnd, WM_MOUSEMOVE, WM_MOUSEMOVE, PM_REMOVE)) {}
-	PostMessage(_wnd, WM_MOUSEMOVE, 0, MAKELPARAM(cursor.x, cursor.y));
+	while (PeekMessage(&pending, _wnd, PointerRefreshMessage, PointerRefreshMessage, PM_REMOVE)) {}
+	PostMessage(_wnd, PointerRefreshMessage, 0, MAKELPARAM(cursor.x, cursor.y));
 }
 
 void Window::EndRelativePointer(int button)

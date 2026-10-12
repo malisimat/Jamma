@@ -11,6 +11,7 @@
 #include <windowsx.h>
 #include <commctrl.h>
 #include <vector>
+#include <bitset>
 #include <memory>
 #include <optional>
 #include <fstream>
@@ -105,6 +106,9 @@ namespace graphics
 
 	private:
 		void _InstallRelativePointerHost();
+		void _UpdateCameraEligibility();
+		void _ReleaseOwnedMouseCapture();
+		static constexpr UINT PointerRefreshMessage = WM_APP + 0x341u;
 		bool _RelativePointerValid() const;
 		void _RestoreRawInput();
 		void _ResamplePointer();
@@ -128,6 +132,12 @@ namespace graphics
 		bool _trackingMouse;
 		bool _released;
 		unsigned int _buttonsDown;
+		// Window owner only; cleared by existing focus/capture-loss messages.
+		std::bitset<256u> _heldKeys;
+		std::bitset<32u> _heldTouches;
+		bool _cameraWindowActive = true;
+		bool _releasingOwnedMouseCapture = false;
+		bool _windowSizeMove = false;
 		int _relativeButton = -1;
 		POINT _relativeAnchorClient{};
 		POINT _relativeAnchorScreen{};

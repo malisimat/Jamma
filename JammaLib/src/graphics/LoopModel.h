@@ -11,6 +11,7 @@
 #include "../utils/VecUtils.h"
 #include "../audio/BufferBank.h"
 #include "../gui/GuiModel.h"
+#include "CameraBounds.h"
 
 namespace engine
 {
@@ -58,6 +59,8 @@ namespace engine
 	public:
 		virtual void Draw3d(base::DrawContext& ctx, unsigned int numInstances, base::DrawPass pass) override;
 
+		// Non-callback read through the existing waveform publication mutex.
+		graphics::CameraBounds CameraLocalBounds() const;
 		double LoopIndexFrac() const;
 		void SetLoopIndexFrac(double frac);
 		void SetLoopState(LoopModelState state);
@@ -149,6 +152,7 @@ namespace engine
 		bool _editorActive = false;
 		float _clickPressed = 0.0f;
 		bool _muted = false;
-		std::mutex _waveformMutex;
+		float _cameraHalfHeight = 1.0f;
+		mutable std::mutex _waveformMutex;
 	};
 }

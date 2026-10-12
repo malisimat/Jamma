@@ -172,6 +172,14 @@ void LoopModel::Draw3d(DrawContext& ctx,
 	glCtx.PopMvp();
 }
 
+graphics::CameraBounds LoopModel::CameraLocalBounds() const
+{
+	std::lock_guard<std::mutex> waveformLock(_waveformMutex);
+	const auto radius = _waveformRadius * (1.0f + _RadialThicknessFrac);
+	// Symmetric height keeps the centre independent of live waveform amplitude.
+	return { { -radius, -_cameraHalfHeight, -radius }, { radius, _cameraHalfHeight, radius } };
+}
+
 double LoopModel::LoopIndexFrac() const
 {
 	return _loopIndexFrac;
@@ -329,6 +337,7 @@ void LoopModel::UpdateModel(const BufferBank& buffer,
 		}
 	}
 
+	auto cameraHalfHeight = _MinHeight;
 	auto hasWaveformData = clampedDisplayLength > 0ul;
 	auto waveformColorMultiplier = 0.5f / (_HeightScale + _MinHeight);
 	auto& waveformDecimated = _waveformWorkDecimated;
@@ -352,6 +361,7 @@ void LoopModel::UpdateModel(const BufferBank& buffer,
 				maxPeakLevel = maxAbs;
 		}
 
+		cameraHalfHeight = _HeightScale * maxPeakLevel + _MinHeight;
 		const auto peakDenominator = (_HeightScale * std::max(maxPeakLevel, 0.0001f)) + _MinHeight;
 		waveformColorMultiplier = peakDenominator > 0.0f ? (0.5f / peakDenominator) : 0.5f;
 	}
@@ -359,6 +369,7 @@ void LoopModel::UpdateModel(const BufferBank& buffer,
 	{
 		std::lock_guard<std::mutex> waveformLock(_waveformMutex);
 		_waveformRadius = waveformRadius;
+		_cameraHalfHeight = cameraHalfHeight;
 		_hasWaveformData = hasWaveformData;
 		_waveformColorMultiplier = waveformColorMultiplier;
 		_waveformDecimated.swap(waveformDecimated);

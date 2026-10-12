@@ -301,6 +301,8 @@ ActionResult Camera::HandleBackgroundDrag(TouchAction action)
 	{
 		if (BackgroundDragMode::None == mode)
 			return ActionResult::NoAction();
+		CancelAutomaticMotion();
+		_automaticManualPose.reset();
 
 		if (BackgroundDragMode::None == _backgroundDrag.Mode)
 		{
@@ -434,8 +436,11 @@ glm::mat4 Camera::Projection(float aspectRatio, Position3d stationCentre) const
 	if (View::TopDown != _view)
 	{
 		const auto distanceFromStationCentre = std::abs(_pose.Eye.Z - stationCentre.Z);
-		const auto farPlane = std::max(1000.0f, distanceFromStationCentre + 1000.0f);
-		return glm::perspective(glm::radians(80.0f), aspectRatio, 10.0f, farPlane);
+		auto farPlane = std::max(1000.0f, distanceFromStationCentre + 1000.0f);
+		if (_frontVisibleBounds.IsValid())
+			farPlane = (std::max)(farPlane, _pose.Eye.Z - _frontVisibleBounds.Min.Z + 100.0f);
+		return glm::perspective(glm::radians(CameraFraming::FrontFieldOfViewDegrees), aspectRatio,
+			CameraFraming::NearPlane, farPlane);
 	}
 
 	const auto halfFovRadians = glm::radians(32.0f);
@@ -526,6 +531,8 @@ ActionResult Camera::HandleWheel(int wheelNotches,
 	if (_transitioning && !continueTopDownWheelZoom)
 		return _BackgroundDragActionResult();
 
+	CancelAutomaticMotion();
+	_automaticManualPose.reset();
 	const auto focusPoint = FocusPointAtCursor(cursorPosition, viewportWidth, viewportHeight, stationCentre);
 
 	constexpr float frontMinZ = 80.0f;
@@ -580,11 +587,14 @@ void Camera::_ApplyPose(Pose pose) noexcept
 
 void Camera::SetViewTarget(View view, Pose target) noexcept
 {
+	CancelAutomaticMotion();
 	_wheelZoomTransition = false;
 	if (_view != view)
 	{
 		// An interrupted transition has a valid target pose but a transient current pose.
-		_rememberedPoses[_ViewIndex(_view)] = _transitioning ? _transitionTarget : _pose;
+		_rememberedPoses[_ViewIndex(_view)] = _automaticManualPose.value_or(
+			_transitioning ? _transitionTarget : _pose);
+		_automaticManualPose.reset();
 		_hasRememberedPose[_ViewIndex(_view)] = true;
 	}
 	target.Forward = _Normalise(target.Forward);
@@ -599,6 +609,7 @@ void Camera::SetViewTarget(View view, Pose target) noexcept
 
 void Camera::SetEditorPose(Pose pose) noexcept
 {
+	CancelAutomaticMotion();
 	if (!_editorPerspective) return;
 	_ApplyPose(pose);
 	_transitionStart = _pose;
@@ -693,6 +704,64 @@ void Camera::_TickTransition(float deltaSeconds) noexcept
 		_transitioning = false;
 		_wheelZoomTransition = false;
 	}
+}
+
+void Camera::SetAutomaticTarget(Position3d eye) noexcept
+{
+	if (_view != View::Front || _editorPerspective || _transitioning ||
+		!std::isfinite(eye.X) || !std::isfinite(eye.Y) || !std::isfinite(eye.Z)) return;
+	if (!_automaticTarget)
+	{
+		if (!_automaticManualPose) _automaticManualPose = _pose;
+		_EndBackgroundDrag();
+		_automaticVelocity = {};
+	}
+	// Retargeting leaves both pose and velocity intact.
+	_automaticTarget = eye;
+}
+
+void Camera::CancelAutomaticMotion() noexcept
+{
+	_automaticTarget.reset();
+	_automaticVelocity = {};
+}
+
+void Camera::TickAutomaticMotion(float deltaSeconds) noexcept
+{
+	if (!_automaticTarget || !std::isfinite(deltaSeconds) || deltaSeconds <= 0.0f) return;
+	if (_view != View::Front || _editorPerspective || _transitioning)
+	{
+		CancelAutomaticMotion();
+		return;
+	}
+	constexpr double maxFrameSeconds = 0.05;
+	constexpr double maxStepSeconds = 1.0 / 120.0;
+	constexpr double springFrequency = 2.0;
+	constexpr double damping = 2.0 * springFrequency;
+	constexpr double maxSpeed = 480.0;
+	constexpr double maxAcceleration = 960.0;
+	const auto asVector = [](Position3d value) { return glm::dvec3(value.X, value.Y, value.Z); };
+	const auto limited = [](glm::dvec3 value, double maximum) {
+		const auto magnitude = glm::length(value);
+		return magnitude > maximum ? value * (maximum / magnitude) : value;
+	};
+	auto position = asVector(_pose.Eye);
+	auto velocity = asVector(_automaticVelocity);
+	const auto target = asVector(*_automaticTarget);
+	double remaining = (std::min)(static_cast<double>(deltaSeconds), maxFrameSeconds);
+	for (unsigned int step = 0u; step < 6u && remaining > 0.0f; ++step)
+	{
+		const auto seconds = (std::min)(remaining, maxStepSeconds);
+		const auto acceleration = limited((target - position) * (springFrequency * springFrequency)
+			- velocity * damping, maxAcceleration);
+		velocity = limited(velocity + acceleration * seconds, maxSpeed);
+		position += velocity * seconds;
+		remaining -= seconds;
+	}
+	_automaticVelocity = { static_cast<float>(velocity.x), static_cast<float>(velocity.y), static_cast<float>(velocity.z) };
+	auto pose = _pose;
+	pose.Eye = { static_cast<float>(position.x), static_cast<float>(position.y), static_cast<float>(position.z) };
+	_ApplyPose(pose);
 }
 
 void Camera::TickBackgroundDrag(float deltaSeconds)

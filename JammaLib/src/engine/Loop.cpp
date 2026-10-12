@@ -171,6 +171,30 @@ void Loop::SetSize(utils::Size2d size)
 	GuiElement::SetSize(size);
 }
 
+graphics::CameraBounds Loop::CameraBoundsInParent(float parentVisualScale) const
+{
+	if (!_model)
+		return {};
+	auto bounds = _model->CameraLocalBounds();
+	const auto heightScale = std::fabs(static_cast<float>(_mixer->UnmutedLevel()) *
+		parentVisualScale);
+	bounds.Min.Y *= heightScale;
+	bounds.Max.Y *= heightScale;
+	if (_vu)
+	{
+		// VU::CalcLedGeometry has radius/15 thickness; Draw3d stretches its
+		// 1.5-spaced one-unit LEDs by four. Reserve the whole meter, independent of level.
+		const auto vuRadius = bounds.Max.X * 1.02f;
+		const auto vuHalfHeight = static_cast<float>(_vu->GetSize().Height) * 6.0f + 2.0f;
+		graphics::CameraBounds vuBounds{ { -vuRadius, -vuHalfHeight, -vuRadius },
+			{ vuRadius, vuHalfHeight, vuRadius } };
+		auto vuPosition = _vu->ModelPosition();
+		vuPosition.Y *= 4.0f;
+		bounds.Include(vuBounds.Transformed(vuPosition, static_cast<float>(_vu->ModelScale())));
+	}
+	return bounds.Transformed(ModelPosition(), static_cast<float>(ModelScale()));
+}
+
 void Loop::Draw3d(DrawContext& ctx,
 	unsigned int numInstances,
 	base::DrawPass pass)

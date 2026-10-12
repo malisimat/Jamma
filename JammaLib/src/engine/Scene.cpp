@@ -887,6 +887,24 @@ void Scene::Draw3d(DrawContext& ctx,
 	glCtx.PopMvp();
 }
 
+void Scene::OnHumanActivity()
+{
+	_unattendedCamera.HumanActivity(Timer::GetTime());
+	_camera.CancelAutomaticMotion();
+}
+
+void Scene::SetCameraInteractionEligibility(bool windowEligible, bool heldInteraction)
+{
+	if (_cameraWindowEligible != windowEligible)
+	{
+		_unattendedCamera.HumanActivity(Timer::GetTime());
+		_camera.CancelAutomaticMotion();
+		_lastCameraUpdateTime.reset();
+	}
+	_cameraWindowEligible = windowEligible;
+	_cameraHeldInteraction = heldInteraction;
+}
+
 void Scene::UpdateCamera()
 {
 	// Keep camera state on the window thread; audio never reads or advances it.
@@ -896,14 +914,81 @@ void Scene::UpdateCamera()
 		: 0.0f;
 	_lastCameraUpdateTime = now;
 
+	struct TakeFraming
+	{
+		std::weak_ptr<LoopTake> Identity;
+		graphics::CameraBounds Bounds;
+		Position3d Centre;
+	};
+	std::vector<std::weak_ptr<LoopTake>> liveTakes;
+	std::vector<TakeFraming> takeFramings;
+	graphics::CameraBounds overviewBounds;
+	graphics::CameraBounds visibleBounds;
+	std::shared_ptr<const CameraRecordingObservation> recordings;
 	{
 		std::scoped_lock lock(_sceneMutex);
 		for (size_t index = 0u; index < _stations.size(); ++index)
-			_camera.ObserveStation(index, _stations[index], _stations[index]->LoopTakeRevision(), _stations[index]->ModelPosition());
+		{
+			const auto& station = _stations[index];
+			_camera.ObserveStation(index, station, station->LoopTakeRevision(), station->ModelPosition());
+			const auto takes = station->GetLoopTakeSnapshot();
+			const bool visible = station->IsVisible();
+			bool activeStation = false;
+			graphics::CameraBounds stationBounds = visible ? station->CameraDeckBoundsInWorld() : graphics::CameraBounds{};
+			const auto stationPosition = station->ModelPosition();
+			const auto stationScale = static_cast<float>(station->ModelScale());
+			for (const auto& take : takes)
+			{
+				liveTakes.push_back(take);
+				if (!visible || !take->IsVisible() || !take->HasCameraContent()) continue;
+				activeStation = true;
+				const auto bounds = take->CameraBoundsInParent(station->CameraTakeVisualScale())
+					.Transformed(stationPosition, stationScale);
+				const auto centre = stationPosition + take->ModelPosition() * Position3d{ stationScale, stationScale, stationScale };
+				takeFramings.push_back({ take, bounds, centre });
+				stationBounds.Include(bounds);
+			}
+			visibleBounds.Include(stationBounds);
+			if (activeStation) overviewBounds.Include(stationBounds);
+		}
 		_camera.CompleteStationObservation(_stations.size(), _stations.empty()
 			? std::optional<Position3d>{}
 			: std::optional<Position3d>{ _stations.front()->ModelPosition() });
+		recordings = _cameraRecordings->Snapshot();
 	}
+
+	// Release scene/membership locks before policy and physics. These are copied
+	// presentation values, and focus identities must still belong to this scene.
+	_camera.SetFrontVisibleBounds(visibleBounds);
+	const bool eligible = _cameraWindowEligible && !_cameraHeldInteraction
+		&& Width() > 0u && Height() > 0u
+		&& _camera.CurrentView() == graphics::Camera::View::Front
+		&& !_camera.IsTransitioning() && !_loopEditor.IsEngaged()
+		&& !_popupManager.IsOpen();
+	const auto decision = _unattendedCamera.Update(now, eligible, *recordings, liveTakes);
+	if (decision.IsAutomatic())
+	{
+		std::optional<Position3d> target;
+		if (decision.CurrentState != graphics::UnattendedCameraController::State::Overview)
+		{
+			const auto focus = std::find_if(takeFramings.begin(), takeFramings.end(),
+				[&decision](const auto& take) {
+					return CameraRecordingPublisher::SameTake(take.Identity, decision.Focus.Take);
+				});
+			if (focus != takeFramings.end()) target = graphics::CameraFraming::Close(focus->Centre, focus->Bounds);
+		}
+		if (!target) target = graphics::CameraFraming::Overview(overviewBounds,
+			static_cast<float>(Width()) / static_cast<float>(Height()));
+		if (target)
+		{
+			_camera.SetAutomaticTarget(*target);
+			_camera.TickAutomaticMotion(deltaSeconds);
+		}
+		else
+			_camera.CancelAutomaticMotion();
+	}
+	else
+		_camera.CancelAutomaticMotion();
 
 	if (_camera.IsBackgroundDragging() || _camera.IsTransitioning())
 		_camera.TickBackgroundDrag(deltaSeconds);
@@ -2067,6 +2152,11 @@ void Scene::_PumpTriggerStructuralActions()
 	for (const auto& runtime : accepted->Triggers)
 		if (runtime.Instance)
 			runtime.Instance->ProcessStructuralActionsOnJob(_userConfig, streamParams);
+	// Deferred punch transitions publish only a bounded audio revision. Refresh
+	// current capture truth here so even a complete between-frame punch is retained.
+	for (const auto& station : _stations)
+		for (const auto& take : station->GetLoopTakeSnapshot())
+			take->PublishCameraCaptureObservation();
 }
 
 void Scene::_AdvanceRigPublication()
@@ -2225,7 +2315,10 @@ void Scene::_ConsumeTriggerOutcomes()
 				_SetMidiQuantisationGrain(clock->QuantiseSamps(), "loop activated");
 		}
 		if (ditch > observed.second)
+		{
+			std::scoped_lock lock(_sceneMutex);
 			_ResetIfEmpty();
+		}
 		observed = { activation, ditch };
 	}
 }
@@ -2340,6 +2433,8 @@ void Scene::Reset()
 	_ClearStationQuantisation();
 	_quantisation.ClearOverlay();
 	_isSceneReset.store(true, std::memory_order_relaxed);
+	// Reset callers share the structural scene lock, including trigger outcomes.
+	_cameraRecordings->Reset(Timer::GetTime());
 }
 
 void Scene::InitGui()
@@ -3301,6 +3396,7 @@ void Scene::_AddStation(std::shared_ptr<Station> station, bool publishAudioStati
 
 	{
 		std::lock_guard<std::mutex> lock(_sceneMutex);
+		station->SetCameraRecordingPublisher(_cameraRecordings);
 		_stations.push_back(station);
 		_camera.RegisterStation(_stations.size() - 1u, station, station->LoopTakeRevision());
 		if (publishAudioStations)

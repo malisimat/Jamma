@@ -22,6 +22,7 @@
 #include "../audio/ChannelMixer.h"
 #include "../graphics/Image.h"
 #include "../graphics/Camera.h"
+#include "../graphics/UnattendedCameraController.h"
 #include "../graphics/GlDrawContext.h"
 #include "../graphics/Skybox.h"
 #include "../gui/GuiLabel.h"
@@ -118,6 +119,8 @@ namespace engine
 		void DrawBackground(base::DrawContext& ctx);
 		bool HasSelection() const;
 		void UpdateCamera();
+		void OnHumanActivity();
+		void SetCameraInteractionEligibility(bool windowEligible, bool heldInteraction);
 		void AdvanceUiAnimations();
 
 		virtual void SetSize(utils::Size2d size) override
@@ -456,6 +459,11 @@ namespace engine
 		std::vector<unsigned char> _lastLoggedHoverPath;
 		graphics::CtrlHandleOverlay _ctrlHandleOverlay;
 		engine::QuantiserController _quantisationInteraction;
+		// Window-only controller/eligibility; publisher has separate structural ownership.
+		graphics::UnattendedCameraController _unattendedCamera;
+		bool _cameraWindowEligible = true;
+		bool _cameraHeldInteraction = false;
+		std::shared_ptr<CameraRecordingPublisher> _cameraRecordings = std::make_shared<CameraRecordingPublisher>();
 		graphics::Camera _camera;
 		std::optional<Time> _lastCameraUpdateTime;
 		std::optional<Time> _lastPanelAnimationTime;
