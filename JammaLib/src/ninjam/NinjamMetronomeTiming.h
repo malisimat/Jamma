@@ -18,7 +18,6 @@ namespace ninjam
 		float Bpm = 0.0f;
 		unsigned int Bpi = 0u;
 		unsigned int DeviceSampleRate = 0u;
-		unsigned int OutputLatencySamps = 0u;
 		unsigned int NumFrames = 0u;
 	};
 

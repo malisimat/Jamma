@@ -411,6 +411,11 @@ namespace engine
 		gui::GuiPopupManager _popupManager;
 		gui::NinjamTempoPrompt _tempoPrompt;
 		ninjam::NinjamTimingDiagnosticPresenter _ninjamDiagnosticPresenter;
+		// Job-owned diagnostic maxima; no callback reads/writes.
+		std::optional<Time> _ninjamTraceLastJobAt;
+		long long _ninjamTraceMaxJobGapMs = 0;
+		long long _ninjamTraceMaxPumpUs = 0;
+		std::size_t _ninjamTraceJobQueueDepth = 0u;
 		std::uint64_t _ninjamJoinGeneration = 0u;
 		std::uint64_t _ninjamTempoRequestId = 0u;
 		ninjam::TempoRequestState _lastLoggedTempoRequestState = ninjam::TempoRequestState::Idle;

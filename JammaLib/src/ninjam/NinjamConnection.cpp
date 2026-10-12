@@ -977,8 +977,9 @@ void NinjamConnection::_UpdateSnapshot()
 		timing.Bpi = static_cast<unsigned int>(std::max(0, _client->GetBPI()));
 		timing.HasDeviceAudioSampleAtObservation = _hasCompletedAudioSample.load(std::memory_order_relaxed);
 		timing.DeviceAudioSampleAtObservation = _completedAudioSample.load(std::memory_order_relaxed);
-		// NJClient briefly reports an implausible placeholder before the real
-		// CONFIG_CHANGE_NOTIFY arrives, so validate at the publication owner.
+		// NJClient can report a 1000-sample startup interval with otherwise
+		// plausible default BPM/BPI. Require coherent geometry before publishing
+		// authority; both callback and snapshot consumers share this validity flag.
 		timing.IsValid = ninjam::IsValidRemoteTiming(timing.IntervalLengthSamps,
 			timing.SourceSampleRate, timing.Bpm, timing.Bpi,
 			constants::MinPlausibleNinjamBpm, constants::MaxPlausibleNinjamBpm,

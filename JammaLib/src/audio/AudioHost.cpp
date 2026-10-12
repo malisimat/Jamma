@@ -363,7 +363,10 @@ std::optional<ninjam::NinjamDesiredTimingReceipt> AudioHost::LastAppliedDesiredT
 			_lastAppliedDesiredIntent.load(std::memory_order_relaxed),
 			_lastAppliedDesiredPolicy.load(std::memory_order_relaxed),
 			_lastAppliedTimingSceneCoordinate.load(std::memory_order_relaxed),
-			_lastAppliedLocalSourceCorrectionSamps.load(std::memory_order_relaxed)
+			_lastAppliedLocalSourceCorrectionSamps.load(std::memory_order_relaxed),
+			_lastAppliedSourceLengthSamps.load(std::memory_order_relaxed),
+			_lastAppliedRemoteLengthSamps.load(std::memory_order_relaxed),
+			_lastAppliedSourceCoordinateSamps.load(std::memory_order_relaxed)
 		};
 		if (before == _lastAppliedTimingReceiptSequence.load(std::memory_order_acquire))
 			return receipt;
@@ -529,6 +532,9 @@ bool AudioHost::ApplyDesiredTimingAtAudioBoundary(std::uint64_t blockStartSample
 	_lastAppliedDesiredPolicy.store(desired.LocalFollowPolicy, std::memory_order_relaxed);
 	_lastAppliedTimingSceneCoordinate.store(sceneCoordinate, std::memory_order_relaxed);
 	_lastAppliedLocalSourceCorrectionSamps.store(localSourceCorrectionSamps, std::memory_order_relaxed);
+	_lastAppliedSourceLengthSamps.store(_syncPhaseMap.SourceLengthSamps, std::memory_order_relaxed);
+	_lastAppliedRemoteLengthSamps.store(_syncPhaseMap.RemoteLengthSamps, std::memory_order_relaxed);
+	_lastAppliedSourceCoordinateSamps.store(_syncPhaseMap.SourceCoordinateAtOrigin, std::memory_order_relaxed);
 	_lastAppliedTimingReceiptSequence.store(writingReceipt + 1u, std::memory_order_release);
 	return true;
 }
@@ -831,8 +837,8 @@ void AudioHost::PublishAudioCallbackProgress(std::uint64_t blockStartSample,
 					timingInput.Bpm = liveTiming.Bpm;
 					timingInput.Bpi = liveTiming.Bpi;
 					timingInput.DeviceSampleRate = liveTiming.DeviceSampleRate;
-					timingInput.OutputLatencySamps = audioStreamParams.OutputLatency == 0u ?
-						_userConfig.Audio.LatencyOut : audioStreamParams.OutputLatency;
+					// Clicks and local loop audio share this DAC buffer and hardware
+					// latency. Advancing only the click would separate their onsets.
 					timingInput.NumFrames = numSamps;
 
 					const auto metronomeTiming = ninjam::NinjamMetronomeTiming::Compute(

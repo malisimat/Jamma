@@ -12,6 +12,7 @@
 #include "../midi/MidiNote.h"
 #include "../midi/MidiIndexedOutputSink.h"
 #include "../ninjam/NinjamLoopAlignment.h"
+#include "../ninjam/NinjamTiming.h"
 
 bool engine::LoopTake::_HasMidiQuantisationGestureModifiers(base::Action::Modifiers modifiers) noexcept
 {
@@ -806,6 +807,19 @@ void LoopTake::RestoreMappedSourceCoordinate(std::int64_t sourceCoordinateSamps)
 		const auto target = static_cast<unsigned long>(ninjam::PositiveModulo(
 			sourceCoordinateSamps
 			- static_cast<long long>(_midiSceneAnchor.load(std::memory_order_relaxed)), midiLoopLength));
+		// Capture bounded diagnostic work, never format/log on the callback.
+		_mappedMidiRestorePair.store((static_cast<std::uint64_t>(before) << 32u) | target,
+			std::memory_order_relaxed);
+		_mappedMidiRestoreCount.fetch_add(1u, std::memory_order_relaxed);
+		const auto circularMove = ninjam::SignedCircularDifference(before, target, midiLoopLength);
+		if (circularMove != 0)
+			_mappedMidiRestoreChangedCount.fetch_add(1u, std::memory_order_relaxed);
+		if (circularMove < 0)
+		{
+			const auto backstep = static_cast<unsigned int>(-circularMove);
+			if (backstep > _mappedMidiLargestBackstepSamps.load(std::memory_order_relaxed))
+				_mappedMidiLargestBackstepSamps.store(backstep, std::memory_order_relaxed);
+		}
 		_MoveMidiVisualCursor(target, static_cast<long long>(target) - static_cast<long long>(before));
 	}
 }

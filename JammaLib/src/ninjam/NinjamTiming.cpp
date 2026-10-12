@@ -20,9 +20,17 @@ namespace ninjam
 		unsigned int sourceSampleRate, float bpm, unsigned int bpi,
 		float minBpm, float maxBpm, unsigned int minBpi, unsigned int maxBpi) noexcept
 	{
-		return intervalLengthSamps > 0u
-			&& sourceSampleRate > 0u
-			&& IsValidNinjamTempo(bpm, bpi, minBpm, maxBpm, minBpi, maxBpi);
+		if (intervalLengthSamps == 0u || sourceSampleRate == 0u
+			|| !IsValidNinjamTempo(bpm, bpi, minBpm, maxBpm, minBpi, maxBpi))
+			return false;
+
+		const auto expected = static_cast<double>(sourceSampleRate) * 60.0 * bpi / bpm;
+		if (expected < 1.0 || expected > (std::numeric_limits<unsigned int>::max)())
+			return false;
+		// NJClient's startup interval can be 1000 samples with plausible default
+		// BPM/BPI. Never let that placeholder establish the permanent source ruler.
+		// Allow one sample per beat for integer samples-per-beat rounding.
+		return std::abs(static_cast<double>(intervalLengthSamps) - std::round(expected)) <= bpi;
 	}
 
 	unsigned int ScaleSampleRate(unsigned int samples, unsigned int sourceSampleRate,

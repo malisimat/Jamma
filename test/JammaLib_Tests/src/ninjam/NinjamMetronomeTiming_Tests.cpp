@@ -1,4 +1,6 @@
 #include "gtest/gtest.h"
+#include <algorithm>
+#include <vector>
 #include "ninjam/NinjamConnection.h"
 #include "ninjam/NinjamMetronomeTiming.h"
 
@@ -128,18 +130,17 @@ TEST(NinjamMetronomeTiming, UsesCanonicalDeviceRateSamples)
 	EXPECT_EQ(result.Onsets[0].Offset, 100u);
 }
 
-TEST(NinjamMetronomeTiming, AdvancesForOutputLatency)
+TEST(NinjamMetronomeTiming, UsesSameRenderPhaseAsLocalLoops)
 {
 	auto input = MakeInput();
-	input.IntervalPositionSamps = 3900u;
-	input.OutputLatencySamps = 100u;
+	input.IntervalPositionSamps = 3900u; // Both loops and clicks incur the same DAC latency.
 	ninjam::NinjamMetronomeTimingState state;
 
 	const auto result = ninjam::NinjamMetronomeTiming::Compute(input, state);
 
 	ASSERT_TRUE(result.Valid);
 	ASSERT_EQ(result.OnsetCount, 1u);
-	EXPECT_EQ(result.Onsets[0].Offset, 0u);
+	EXPECT_EQ(result.Onsets[0].Offset, 100u);
 }
 
 TEST(NinjamMetronomeTiming, RejectsInvalidGeometry)
@@ -171,4 +172,38 @@ TEST(NinjamMetronomeTiming, TempoChangeStartsFreshGeneration)
 	auto changed = ninjam::NinjamMetronomeTiming::Compute(input, state);
 	EXPECT_TRUE(changed.Valid);
 	EXPECT_TRUE(changed.GenerationReset);
+}
+
+TEST(NinjamMetronomeTiming, RoundedBeatBoundariesEmitExactlyOnceAcrossBlocks)
+{
+	for (const auto interval : { 1001u, 313600u, 193139u })
+	for (const auto bpi : { 1u, 7u, 16u, 32u })
+	{
+		SCOPED_TRACE(::testing::Message() << interval << "/" << bpi);
+		ninjam::NinjamMetronomeTimingInput input;
+		input.IntervalLengthSamps = interval;
+		input.Bpi = bpi;
+		ninjam::NinjamMetronomeTimingState state;
+		std::vector<std::uint64_t> actual;
+		for (std::uint64_t start = 0; start < interval * 2ull; start += input.NumFrames)
+		{
+			input.IntervalPositionSamps = static_cast<unsigned int>(start % interval);
+			input.NumFrames = static_cast<unsigned int>(std::min(512ull, interval * 2ull - start));
+			const auto result = ninjam::NinjamMetronomeTiming::Compute(input, state);
+			for (unsigned int i = 0u; i < result.OnsetCount; ++i)
+				if (!result.Onsets[i].Accent) actual.push_back(start + result.Onsets[i].Offset);
+		}
+		ASSERT_EQ(bpi * 2u, actual.size());
+		for (unsigned int beat = 0u; beat < bpi * 2u; ++beat)
+		{
+			const auto expected = (static_cast<std::uint64_t>(beat) * interval + bpi / 2u) / bpi;
+			EXPECT_EQ(expected, actual[beat]);
+			// A rational boundary rounded down can lie before its exact fraction.
+			input.IntervalPositionSamps = static_cast<unsigned int>(expected % interval);
+			input.NumFrames = 1u;
+			const auto exact = ninjam::NinjamMetronomeTiming::Compute(input, state);
+			ASSERT_GT(exact.OnsetCount, 0u);
+			EXPECT_EQ(0u, exact.Onsets[0].Offset);
+		}
+	}
 }

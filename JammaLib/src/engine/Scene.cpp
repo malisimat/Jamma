@@ -213,6 +213,32 @@ void Scene::_ApplyRemoteTempoPromptDecision()
 
 void Scene::_ApplyNinjamTimingUpdate(const ninjam::NinjamTimingUpdate& update)
 {
+	if (_loggingConfig.Event == "verbose"
+		&& (update.DesiredTransport || update.PromptForTempoChange || update.TempoRequest))
+	{
+		const auto clock = _quantisation.Clock();
+		std::cout << "[NINJAM][Flow] ms=" << std::chrono::duration_cast<std::chrono::milliseconds>(
+			Timer::GetTime().time_since_epoch()).count()
+			<< " reason=" << NinjamTimingCoordinator::NoSyncReasonName(update.NoSyncReason)
+			<< " prompt=" << update.PromptForTempoChange
+			<< " tempoRequest=" << update.TempoRequest.has_value()
+			<< " clock=" << (clock ? clock->SampOffset() : 0u) << '/' << (clock ? clock->SeedSourceLength() : 0ul)
+			<< " grain=" << (clock ? clock->QuantiseSamps() : 0u)
+			<< " scene=" << (clock ? clock->SceneSamplePos() : 0u);
+		if (update.DesiredTransport)
+		{
+			const auto& desired = *update.DesiredTransport;
+			std::cout << " epoch=" << desired.SessionEpoch << " version=" << desired.Version
+				<< " generation=" << desired.Generation << " intent=" << static_cast<unsigned int>(desired.Intent)
+				<< " policy=" << NinjamTimingCoordinator::FollowPolicyName(desired.LocalFollowPolicy)
+				<< " remote=" << desired.RemoteMasterPhaseSamps << '/' << desired.RemoteMasterIntervalLengthSamps
+				<< " bpm=" << desired.TempoBpm << " bpi=" << desired.BeatsPerInterval
+				<< " phaseDevice=" << desired.RemotePhaseDeviceSample;
+		}
+		if (const auto proposal = _networkService->PendingRemoteTempoPrompt())
+			std::cout << " pendingPrompt=1";
+		std::cout << '\n';
+	}
 	if (update.DesiredTransport.has_value())
 	{
 		const auto& desired = update.DesiredTransport.value();
@@ -1379,6 +1405,14 @@ void Scene::OnTick(Time curTime,
 
 void Scene::OnJobTick(Time curTime)
 {
+	const auto verboseTiming = _loggingConfig.Event == "verbose";
+	if (verboseTiming)
+	{
+		if (_ninjamTraceLastJobAt)
+			_ninjamTraceMaxJobGapMs = std::max(_ninjamTraceMaxJobGapMs,
+				std::chrono::duration_cast<std::chrono::milliseconds>(curTime - *_ninjamTraceLastJobAt).count());
+		_ninjamTraceLastJobAt = curTime;
+	}
 	_audioEngine->CollectRetiredSnapshots();
 	if (!_isSceneQuitting.load(std::memory_order_acquire))
 		_inputSubsystem->AcknowledgeRigTriggerInputCloseFromJob();
@@ -1390,7 +1424,11 @@ void Scene::OnJobTick(Time curTime)
 	_PumpSerial();
 	_ConsumeTriggerOutcomes();
 
+	const auto pumpStartedAt = verboseTiming ? Timer::GetTime() : Time{};
 	auto pumpResult = _networkService->GetController()->Pump();
+	if (verboseTiming)
+		_ninjamTraceMaxPumpUs = std::max(_ninjamTraceMaxPumpUs,
+			std::chrono::duration_cast<std::chrono::microseconds>(Timer::GetTime() - pumpStartedAt).count());
 	{
 		// Keep the station clock synced when local content seeds it without NINJAM.
 		std::scoped_lock lock(_sceneMutex);
@@ -1408,6 +1446,11 @@ void Scene::OnJobTick(Time curTime)
 		}
 		if (pumpResult.TimingStatus.Changed)
 		{
+			if (verboseTiming)
+				std::cout << "[NINJAM][SessionEdge] available=" << pumpResult.TimingStatus.IsAvailable
+					<< " epoch=" << pumpResult.TimingStatus.SessionEpoch << " hasLocalContent=" << hasLocalContent
+					<< " localTiming=" << localTiming.has_value()
+					<< " localMaster=" << (localTiming ? localTiming->MasterLoopSamps : 0u) << '\n';
 			_ApplyNinjamTimingUpdate(_networkService->ObserveSessionStatus(
 				pumpResult.TimingStatus, localTiming));
 			if (!pumpResult.TimingStatus.IsAvailable)
@@ -1420,8 +1463,53 @@ void Scene::OnJobTick(Time curTime)
 				localTiming, hasLocalContent, *clock));
 		if (_loggingConfig.Event == "verbose" && _audioEngine)
 		{
-			_ninjamDiagnosticPresenter.Present(_networkService->ObserveAppliedTimingReceipt(
-				_audioEngine->LastAppliedDesiredTiming()), std::cout);
+			const auto receipt = _audioEngine->LastAppliedDesiredTiming();
+			_ninjamDiagnosticPresenter.Present(_networkService->ObserveAppliedTimingReceipt(receipt), std::cout);
+			const auto liveTiming = _audioEngine->LatestNinjamTiming();
+			if (receipt && liveTiming && liveTiming->IsConnected
+				&& _ninjamDiagnosticPresenter.PlaybackTraceDue(curTime))
+			{
+				std::cout << "[NINJAM][JobTrace] hasLocalContent=" << hasLocalContent
+					<< " localTiming=" << localTiming.has_value()
+					<< " localMaster=" << (localTiming ? localTiming->MasterLoopSamps : 0u)
+					<< " localBpm=" << (localTiming ? localTiming->Bpm : 0.0f)
+					<< " localBpi=" << (localTiming ? localTiming->Bpi : 0u)
+					<< " requestState=" << static_cast<unsigned int>(_networkService->TempoJoinRequestState())
+					<< " pendingPrompt=" << _networkService->PendingRemoteTempoPrompt().has_value()
+					<< " maxJobGapMs=" << _ninjamTraceMaxJobGapMs << " maxPumpUs=" << _ninjamTraceMaxPumpUs
+					<< " jobQueueDepthPreviousTick=" << _ninjamTraceJobQueueDepth << '\n';
+				_ninjamTraceMaxJobGapMs = 0;
+				_ninjamTraceMaxPumpUs = 0;
+				if (pumpResult.Snapshot)
+				{
+					const auto& raw = pumpResult.Snapshot->Timing;
+					std::cout << "[NINJAM][RemoteObservation] valid=" << raw.IsValid
+						<< " phase=" << raw.IntervalPositionSamps << '/' << raw.IntervalLengthSamps
+						<< " bpm=" << raw.Bpm << " bpi=" << raw.Bpi << " sr=" << raw.SourceSampleRate
+						<< " expectedInterval=" << ninjam::IntervalSampsFromTempo(raw.Bpm, raw.Bpi, raw.SourceSampleRate)
+						<< " device=" << raw.DeviceAudioSampleAtObservation << '\n';
+				}
+				// Job-owned hierarchy sampling; keep verbose output bounded to four takes.
+				std::array<ninjam::NinjamPlaybackTakeDiagnostic, 4u> takes;
+				std::size_t count = 0u;
+				for (const auto& station : _stations)
+				{
+					if (!station || station->IsRemote()) continue;
+					for (const auto& take : station->GetLoopTakes())
+					{
+						if (!take) continue;
+						if (count == takes.size()) break;
+						const auto restore = take->MappedMidiRestoreDiagnostic();
+						takes[count++] = { station->Name(), take->Id(), take->MidiPlayIndex(),
+							take->MidiLoopLengthSamps(), take->MidiAnchorCorrection(), take->NumRecordedSamps(),
+							restore.BeforeSamps, restore.TargetSamps, restore.Count, restore.ChangedCount,
+							restore.LargestBackstepSamps };
+					}
+					if (count == takes.size()) break;
+				}
+				_ninjamDiagnosticPresenter.PresentPlayback(*liveTiming, *receipt,
+					std::span<const ninjam::NinjamPlaybackTakeDiagnostic>{ takes.data(), count }, std::cout);
+			}
 		}
 		_HandleAudioLocalContentState(hasLocalContent);
 	}
@@ -1433,6 +1521,7 @@ void Scene::OnJobTick(Time curTime)
 
 	{
 		std::scoped_lock lock(_jobMutex);
+		_ninjamTraceJobQueueDepth = _jobList.size();
 
 		if (_jobList.empty())
 			return;

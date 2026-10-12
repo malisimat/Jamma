@@ -354,6 +354,9 @@ NinjamTimingUpdate NinjamTimingCoordinator::Observe(const NinjamTiming& timing,
 
 	if (event->Type == NinjamTimingEventType::GenerationChanged)
 	{
+		_CaptureDiagnostic(NinjamTimingDiagnosticReason::RemoteGeometryGeneration,
+			_desiredVersion, _lastDiagnosticAppliedVersion, event->Generation,
+			timing.IntervalLengthSamps, timing.Bpi);
 		_joinAligned = false;
 		++_diagnostics.PhaseEventsInvalidated;
 		_RecordEmittedCommand(NinjamEmittedCommand::Invalidate, event->Generation);
@@ -377,10 +380,20 @@ NinjamTimingUpdate NinjamTimingCoordinator::Observe(const NinjamTiming& timing,
 			// Do not turn it into an apply-now proposal before the request resolves.
 		}
 		else if (resumingAcceptedAuthority || !_options.PromptBeforeApplyingRemoteTempo || !hasLocalContent)
+		{
+			_CaptureDiagnostic(resumingAcceptedAuthority ? NinjamTimingDiagnosticReason::TempoResumeAccepted
+				: !hasLocalContent ? NinjamTimingDiagnosticReason::TempoAutoAcceptEmpty
+				: NinjamTimingDiagnosticReason::TempoAutoAcceptOptions,
+				_desiredVersion, _lastDiagnosticAppliedVersion, event->Generation,
+				timing.LocalTransport.MasterLengthSamps, timing.IntervalLengthSamps);
 			return _AcceptTempoChange(proposal.value(), localTiming, clock, now);
+		}
 		else if (!_ignoredTempoChange.has_value()
 			|| !_ignoredTempoChange->HasSameProposalIdentity(proposal.value()))
 		{
+			_CaptureDiagnostic(NinjamTimingDiagnosticReason::TempoPromptGeneration,
+				_desiredVersion, _lastDiagnosticAppliedVersion, event->Generation,
+				timing.LocalTransport.MasterLengthSamps, timing.IntervalLengthSamps);
 			_SetPendingTempoChange(proposal.value());
 			update.PromptForTempoChange = true;
 			update.DesiredTransport = _PublishNoSync(NinjamNoSyncReason::None).DesiredTransport;
@@ -512,6 +525,9 @@ NinjamTimingUpdate NinjamTimingCoordinator::_ExpireTempoRequest(
 		return update;
 	}
 
+	_CaptureDiagnostic(NinjamTimingDiagnosticReason::TempoRequestDeadline,
+		_desiredVersion, _lastDiagnosticAppliedVersion, _commandGeneration,
+		hasLocalContent ? 1 : 0, _requestRetries);
 	const bool preservePushedLocalTransport = _requestedTempo.has_value();
 	_requestState = TempoRequestState::Expired;
 	_requestedTempo.reset();
@@ -630,8 +646,10 @@ NinjamTimingUpdate NinjamTimingCoordinator::_PublishRemoteDesired(
 		static_cast<long long>(desired.RemoteMasterPhaseSamps), desired.RemoteMasterIntervalLengthSamps);
 	if (remoteGridChanged)
 	{
-		const auto origin = static_cast<std::int64_t>(change.RemotePhaseDeviceSample)
-			- static_cast<std::int64_t>(change.IntervalPositionSamps);
+		// Events and capture starts use Timer::AbsoluteSamplePos, whose accepted
+		// remote interval starts at musical zero. Device time is only an
+		// observation anchor; its unrelated epoch must never offset this grid.
+		constexpr std::int64_t origin = 0;
 		update.RemoteGrid = NinjamRemoteGridPublication{
 			engine::RemoteTransportGeometry{ change.RemoteMasterIntervalLengthSamps, change.Bpi,
 				change.IntervalPositionSamps, change.Bpm, desired.Generation }, origin };
@@ -819,6 +837,12 @@ const char* NinjamTimingCoordinator::DiagnosticReasonName(
 	case NinjamTimingDiagnosticReason::DesiredApplied: return "desired-applied";
 	case NinjamTimingDiagnosticReason::DesiredApplyLag: return "desired-apply-lag";
 	case NinjamTimingDiagnosticReason::DesiredApplyCaughtUp: return "desired-apply-caught-up";
+	case NinjamTimingDiagnosticReason::RemoteGeometryGeneration: return "remote-geometry-generation";
+	case NinjamTimingDiagnosticReason::TempoAutoAcceptEmpty: return "tempo-auto-accept-empty";
+	case NinjamTimingDiagnosticReason::TempoAutoAcceptOptions: return "tempo-auto-accept-options";
+	case NinjamTimingDiagnosticReason::TempoResumeAccepted: return "tempo-resume-accepted";
+	case NinjamTimingDiagnosticReason::TempoPromptGeneration: return "tempo-prompt-generation";
+	case NinjamTimingDiagnosticReason::TempoRequestDeadline: return "tempo-request-deadline";
 	default: return "unknown";
 	}
 }
@@ -849,4 +873,18 @@ void NinjamTimingCoordinator::_RecordEmittedCommand(NinjamEmittedCommand kind,
 	++_diagnostics.CommandsEmitted;
 	_diagnostics.LastCommandGeneration = generation;
 	_diagnostics.LastCommandType = kind;
+}
+
+const char* NinjamTimingCoordinator::NoSyncReasonName(NinjamNoSyncReason reason) noexcept
+{
+	switch (reason)
+	{
+	case NinjamNoSyncReason::StayLocal: return "stay-local";
+	case NinjamNoSyncReason::Reconnect: return "reconnect";
+	case NinjamNoSyncReason::Disconnect: return "disconnect";
+	case NinjamNoSyncReason::PhysicalLoss: return "physical-loss";
+	case NinjamNoSyncReason::InvalidTiming: return "invalid-timing";
+	case NinjamNoSyncReason::ObservationDeadline: return "observation-deadline";
+	default: return "none";
+	}
 }

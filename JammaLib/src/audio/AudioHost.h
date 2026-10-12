@@ -232,6 +232,11 @@ namespace audio
 			ninjam::NinjamLocalFollowPolicy::NoSync };
 		std::atomic<std::uint64_t> _lastAppliedTimingSceneCoordinate{ 0u };
 		std::atomic<long long> _lastAppliedLocalSourceCorrectionSamps{ 0 };
+		// Audio writer/job readers; bracketed by the existing receipt sequence.
+		// Lifetime follows AudioHost and its stopped-before-destruction callback.
+		std::atomic<unsigned long> _lastAppliedSourceLengthSamps{ 0ul };
+		std::atomic<unsigned long> _lastAppliedRemoteLengthSamps{ 0ul };
+		std::atomic<std::int64_t> _lastAppliedSourceCoordinateSamps{ 0 };
 		LocalTransportOffsetLoopFracMailbox _localTransportOffsetLoopFracMailbox;
 		base::PublishedAudioSnapshot<utils::Timer> _timingClock;
 		// Last successful callback lease is the bounded-publication fallback.

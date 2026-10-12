@@ -178,6 +178,22 @@ namespace engine
 			{ return _midiVisualPlayIndex.load(std::memory_order_relaxed); }
 		unsigned long MidiLoopLengthSamps() const noexcept
 			{ return _midiVisualLoopLength.load(std::memory_order_relaxed); }
+		struct MidiMappedRestoreDiagnostic
+		{
+			unsigned long BeforeSamps = 0ul;
+			unsigned long TargetSamps = 0ul;
+			std::uint64_t Count = 0u;
+			std::uint64_t ChangedCount = 0u;
+			unsigned int LargestBackstepSamps = 0u;
+		};
+		MidiMappedRestoreDiagnostic MappedMidiRestoreDiagnostic() const noexcept
+		{
+			const auto pair = _mappedMidiRestorePair.load(std::memory_order_relaxed);
+			return { static_cast<unsigned long>(pair >> 32u), static_cast<unsigned long>(pair & 0xffffffffu),
+				_mappedMidiRestoreCount.load(std::memory_order_relaxed),
+				_mappedMidiRestoreChangedCount.load(std::memory_order_relaxed),
+				_mappedMidiLargestBackstepSamps.load(std::memory_order_relaxed) };
+		}
 		// Accumulated signed transport correction for MIDI loop phase anchors.
 		std::int32_t MidiAnchorCorrection() const noexcept
 			{ return _midiAnchorCorrection.load(std::memory_order_relaxed); }
@@ -521,6 +537,12 @@ namespace engine
 		// Cross-thread cursor: incremented on the audio thread and read by UI/control code.
 		std::atomic<unsigned long> _midiVisualPlayIndex;
 		std::atomic<unsigned long> _midiVisualLoopLength;
+		// Diagnostic scalars only: audio writer, job readers; lifetime is pinned by
+		// the published take snapshot. The before/target pair is one 64-bit read.
+		std::atomic<std::uint64_t> _mappedMidiRestorePair{ 0u };
+		std::atomic<std::uint64_t> _mappedMidiRestoreCount{ 0u };
+		std::atomic<std::uint64_t> _mappedMidiRestoreChangedCount{ 0u };
+		std::atomic<unsigned int> _mappedMidiLargestBackstepSamps{ 0u };
 		std::atomic<std::int32_t> _midiAnchorCorrection{ 0 };
 		std::atomic<unsigned long> _midiSceneAnchor{ 0ul };
 		std::atomic_bool _hasMidiSceneAnchor{ false };

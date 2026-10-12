@@ -69,6 +69,7 @@ namespace ninjam
 	struct NinjamRemoteGridPublication
 	{
 		engine::RemoteTransportGeometry Geometry;
+		// Origin on the musical transport ruler, not the device sample counter.
 		std::int64_t OriginSamps = 0;
 	};
 
@@ -112,6 +113,12 @@ namespace ninjam
 		DesiredApplied,
 		DesiredApplyLag,
 		DesiredApplyCaughtUp,
+		RemoteGeometryGeneration,
+		TempoAutoAcceptEmpty,
+		TempoAutoAcceptOptions,
+		TempoResumeAccepted,
+		TempoPromptGeneration,
+		TempoRequestDeadline,
 		Count
 	};
 
@@ -229,6 +236,7 @@ namespace ninjam
 		NinjamTimingDiagnostics Diagnostics() const noexcept;
 		static const char* DiagnosticReasonName(NinjamTimingDiagnosticReason reason) noexcept;
 		static const char* FollowPolicyName(NinjamLocalFollowPolicy policy) noexcept;
+		static const char* NoSyncReasonName(NinjamNoSyncReason reason) noexcept;
 		static NinjamLocalFollowPolicy SelectLocalFollowPolicy(
 			const std::optional<engine::QuantisationTiming>& localTiming,
 			float remoteBpm) noexcept;

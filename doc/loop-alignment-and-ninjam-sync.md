@@ -176,7 +176,10 @@ a second authority source.
 ## Follow policies and lifecycle
 
 Remote timing is accepted only when BPM, full BPI, interval, sample rates, and
-both observation anchors are plausible. BPI-less remote observations are
+both observation anchors are plausible. The source interval must also agree
+with `sample rate * 60 * BPI / BPM` within one sample per beat for integer beat
+rounding. A positive startup placeholder (for example, 1000 samples at
+120 BPM/32 BPI) is not a usable ruler and never establishes timing authority. BPI-less remote observations are
 unsupported. Disconnected local BPI inference remains a separate Quantiser
 calculation.
 
@@ -196,9 +199,11 @@ commands is required or preserved.
 ## Remote MIDI grid
 
 An accepted remote replacement publishes `RemoteTransportGeometry` plus a
-remote/device origin. The descriptor carries interval length, full authoritative
+musical transport origin (zero on the accepted Timer ruler). Device samples
+anchor remote observations only; they never provide an event-grid origin. The descriptor carries interval length, full authoritative
 BPI, phase, BPM, and command generation. `Scene` forwards it through
-`Quantiser::SetRemoteMidiGrid` to each local take.
+`Quantiser::SetRemoteMidiGrid` to each station, which retains it for takes created
+after an empty join and clears those defaults when remote authority is removed.
 
 `MidiQuantisation` computes remote boundaries directly:
 
@@ -244,6 +249,26 @@ state defaults to zero; finite signed values are clamped to `[-1,1]`. There is n
 schema/version guard, so an older binary may discard the field on resave. No
 manual older-binary resave test is claimed.
 
+## Verbose playback trace
+
+With event logging set to `verbose`, the job thread emits `[NINJAM][PlaybackTrace]`
+up to twice per second while connected, followed by `[NINJAM][PlaybackTake]`
+for at most four local takes. The trace compares device/scene sample deltas,
+remote and clock phases, source/remote map lengths, the mapped source coordinate
+and the last applied correction. Take lines show MIDI phase/length, accumulated
+anchor correction and recorded samples. The map is projected from the coherent
+audio-boundary receipt; take cursors are separate atomic samples taken on the
+job thread, so they need not describe exactly the same callback boundary.
+These values are diagnostics only and never feed timing authority.
+
+Take lines also report the last mapped restore before/target pair, restore/move
+counts and the largest circular backward restore during the take lifetime.
+`[NINJAM][Flow]`, `[SessionEdge]`, and named timing diagnostics identify authority
+changes, automatic acceptance, prompts and request deadlines. `[RecordEnd]`
+compares clock/grain/cursor values around recording completion. Twice-per-second
+`[RemoteObservation]` lines retain the raw source tuple and expected interval;
+`[JobTrace]` reports job-gap/Pump maxima and the previous tick's queue depth.
+
 ## Real-time and evidence limits
 
 Callback code must remain allocation-free, exception-free, lock-free, and free
@@ -264,3 +289,13 @@ The `.jam` file still serializes the NINJAM password and work directory;
 F-049/F-050 remediation was rejected and these remain accepted residual risks.
 Generic JSON and upstream NJClient limits were not hardened. This review is not
 a broad security certification.
+
+## Rendered metronome alignment
+
+NINJAM clicks use the block-start remote phase and the same rounded rational beat
+boundaries as MIDI quantisation. Local loop audio and clicks share a DAC buffer,
+so output hardware latency is common to both; advancing only clicks by that
+latency would misalign them. Plugin processing latency and sample attack can
+still delay audible instrument output relative to its scheduled MIDI onset.
+The production-boundary regression covers an empty join, later take creation,
+nonzero device epochs, 44.1/48 kHz, multiple tempos/BPI, and note/click agreement.
