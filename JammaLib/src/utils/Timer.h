@@ -68,6 +68,8 @@ namespace utils
 		// invoke it before the Timer is handed to the audio callback.
 		bool InitialiseAbsoluteSamplePos(std::uint64_t absoluteSamplePos) noexcept;
 		void SetMasterLoopIndexFrac(double loopIndexFrac) noexcept;
+		// Sets the current phase using an exact sample index, wrapped to the seed length.
+		void SetMasterLoopSampleOffset(unsigned long sampleOffsetSamps) noexcept;
 		void PublishCommand(const Command& command) noexcept;
 		bool ConsumePendingCommand() noexcept;
 		// Applies a command directly on the audio thread (no mailbox handoff).

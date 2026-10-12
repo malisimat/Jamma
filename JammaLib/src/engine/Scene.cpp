@@ -1861,6 +1861,10 @@ void Scene::OnJobTick(Time curTime)
 			{
 				const auto version = _quantisation.PendingLocalMasterTimingVersion();
 				_audioEngine->CancelLocalMasterTiming(version);
+				for (const auto& station : _stations)
+					if (station && !station->IsRemote())
+						for (const auto& take : station->GetLoopTakes())
+							if (take) take->CancelLocalMasterQuantisationOnOwner();
 				_quantisation.CancelLocalMasterTiming(version);
 			}
 		}

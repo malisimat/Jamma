@@ -1584,3 +1584,43 @@ TEST(StationMidiInstrument, ReroutingAudibleUnmatchedNoteReleasesOldDestination)
 	EXPECT_EQ(60u, oldPlugin->ProcessedEvents[1].data1);
 	EXPECT_TRUE(newPlugin->ProcessedEvents.empty());
 }
+
+class PlaybackReviewStation : public Station
+{
+public:
+	static void CheckFanoutReleaseRetry()
+	{
+	 AudioState state;
+	 auto take=MakeMidiTake("review-fanout");
+	 auto loop=std::make_shared<midi::MidiLoop>();
+	 for (unsigned int i=0;i<2u;++i)
+	 {
+	  auto plugin=std::make_shared<StationMidiInstrumentFakePlugin>();
+	  plugin->Load(L"",44100.f,128u,2u);
+	  auto destination=std::make_shared<MidiDestination>();
+	  destination->Plugin=plugin;
+	  auto binding=std::make_shared<MidiPlaybackBinding>();
+	  binding->Take=take; binding->Loop=loop; binding->Destination=destination;
+	  if(state.MidiPlaybackRoutes.empty()) state.MidiPlaybackRoutes.emplace_back();
+	  state.MidiPlaybackRoutes[0].push_back(binding);
+	 }
+	 MidiPlaybackSink sink(state);
+	 const auto on=MidiEvent::MakeNoteOn(0u,0u,60u,100u);
+	 ASSERT_TRUE(sink.TryOnEvent(0u,on));
+	 auto slow=state.MidiPlaybackRoutes[0][0]->Destination;
+	 slow->ActiveCompensationDelaySamps=256u;
+	 slow->ScheduledCount=MidiDestination::ScheduledCapacity;
+	 const auto off=MidiEvent::MakeNoteOff(64u,0u,60u);
+	 EXPECT_FALSE(sink.TryOnEvent(0u,off));
+	 EXPECT_TRUE(state.MidiPlaybackRoutes[0][0]->Held.test(60u));
+	 EXPECT_FALSE(state.MidiPlaybackRoutes[0][1]->Held.test(60u));
+	 slow->ScheduledCount=0u;
+	 EXPECT_TRUE(sink.TryOnEvent(0u,off));
+	 EXPECT_FALSE(state.MidiPlaybackRoutes[0][0]->Held.test(60u));
+	 EXPECT_EQ(1u,slow->ScheduledCount);
+	}
+};
+TEST(StationMidiInstrument, FullDelayedDestinationRetainsReleaseUntilRetry)
+{
+	PlaybackReviewStation::CheckFanoutReleaseRetry();
+}

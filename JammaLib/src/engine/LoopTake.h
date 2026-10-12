@@ -5,6 +5,7 @@
 
 #include <array>
 #include <atomic>
+#include <bitset>
 #include <cstdint>
 #include <mutex>
 #include <vector>
@@ -189,6 +190,7 @@ namespace engine
 		// Callback-only: resolve a promoted master from the published audio loops,
 		// falling back to this take's MIDI cursor when it has no audio loop.
 		void CompleteLocalMasterQuantisationOnOwner() noexcept;
+		void CancelLocalMasterQuantisationOnOwner() noexcept;
 		bool PrepareLocalMasterQuantisation(unsigned int grainSamps,
 			std::uint64_t rebasedTransportStartSamps) noexcept;
 		bool PreparedMidiQuantisationReadyAtAudioBoundary() const noexcept;
@@ -543,6 +545,7 @@ namespace engine
 		std::atomic<unsigned int> _endRecordSamps;
 		// Cross-thread cursor: incremented on the audio thread and read by UI/control code.
 		std::atomic<bool> _localMasterQuantisationPrepared{ false };
+		std::atomic<std::uint64_t> _preparedLocalMasterBaseGridPacked{ 0u };
 		std::atomic<std::uint64_t> _preparedLocalMasterQuantisationPacked{ 0u };
 		std::atomic<std::uint64_t> _preparedLocalMasterTransportStart{ 0u };
 		std::atomic<unsigned long> _midiVisualPlayIndex;
@@ -578,6 +581,8 @@ namespace engine
 		std::vector<unsigned int> _midiLoopChannels;
 		std::vector<std::string> _midiLoopDevices;
 		std::vector<midi::MidiNoteSnapshot> _midiRecordHeld;
+		// Capture owner only, under _midiCaptureMutex; reset with recording state.
+		std::vector<std::bitset<midi::MidiNote::TotalNoteSlots>> _midiRecordSeededHeld;
 		// Job-thread-owned sample origin for an unseeded first MIDI take.
 		std::optional<std::uint32_t> _midiRecordStartSample;
 		midi::MidiOverdubSession _midiOverdubSession;

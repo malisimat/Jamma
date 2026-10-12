@@ -441,7 +441,7 @@ bool MidiLoop::TryGetPlaybackEvent(std::size_t index, MidiEvent& ev) const noexc
 	if (snapshot)
 	{
 		const bool found = index < snapshot->EventCount;
-		if (found) ev = snapshot->QuantisationActive ? snapshot->Quantised[index] : snapshot->Raw[index];
+		if (found) ev = snapshot->PlaybackViewActive ? snapshot->Quantised[index] : snapshot->Raw[index];
 		ReleasePlaybackSnapshot();
 		return found;
 	}
@@ -697,7 +697,7 @@ bool MidiLoop::BuildModelFromEvents(std::uint32_t displayLengthSamps, bool force
 		// remain visible instead of disappearing.
 		const auto* snapshot = AcquirePlaybackSnapshot();
 		const MidiEvent* eventSource = snapshot ?
-			(snapshot->QuantisationActive ? snapshot->Quantised.data() : snapshot->Raw.data()) : _events.data();
+			(snapshot->PlaybackViewActive ? snapshot->Quantised.data() : snapshot->Raw.data()) : _events.data();
 		std::uint32_t maxOffset = 0u;
 		for (std::size_t i = 0; i < (snapshot ? snapshot->EventCount : _eventCount); ++i)
 			if (eventSource[i].sampleOffset > maxOffset)
@@ -739,7 +739,7 @@ bool MidiLoop::BuildModelFromEvents(std::uint32_t displayLengthSamps, bool force
 	// immutable quantised buffer that the audio thread reads from.
 	const auto* snapshot = AcquirePlaybackSnapshot();
 	const MidiEvent* eventSource = snapshot ?
-		(snapshot->QuantisationActive ? snapshot->Quantised.data() : snapshot->Raw.data()) : _events.data();
+		(snapshot->PlaybackViewActive ? snapshot->Quantised.data() : snapshot->Raw.data()) : _events.data();
 	auto spans = MidiNote::ExtractSpans(eventSource, snapshot ? snapshot->EventCount : _eventCount, effectiveLength);
 	if (snapshot) ReleasePlaybackSnapshot();
 	if (queueUpdate && !force)
@@ -839,9 +839,9 @@ void MidiLoop::EmitEventsInRange(std::uint32_t lo,
 								 const PlaybackSnapshot& snapshot,
                                  IMidiSink& sink) noexcept
 {
-	const MidiEvent* events = snapshot.QuantisationActive ? snapshot.Quantised.data() : snapshot.Raw.data();
+	const MidiEvent* events = snapshot.PlaybackViewActive ? snapshot.Quantised.data() : snapshot.Raw.data();
 
-	const auto& unmatchedStarts = snapshot.QuantisationActive ?
+	const auto& unmatchedStarts = snapshot.PlaybackViewActive ?
 		snapshot.QuantisedUnmatchedStarts : snapshot.RawUnmatchedStarts;
 
 	// Linear scan: small N expected, and storage is contiguous.
@@ -855,7 +855,8 @@ void MidiLoop::EmitEventsInRange(std::uint32_t lo,
 			continue;
 
 		const auto slot = NoteSlot(src.Channel(), src.data1);
-		if (src.IsNoteOn() && (_continuing.test(slot) || _pendingReleases.test(slot)))
+		if (src.IsNoteOn() && (ShouldSuppressContinuedAttack(_continuing.test(slot),
+			_mergedContinuing.test(slot), unmatchedStarts[i]) || _pendingReleases.test(slot)))
 			continue;
 
 		MidiEvent out = src;
@@ -870,13 +871,15 @@ void MidiLoop::EmitEventsInRange(std::uint32_t lo,
 		if (src.IsNoteOn())
 		{
 			_held.set(slot);
-			if (unmatchedStarts[i]) _continuing.set(slot);
+			_continuing.set(slot, unmatchedStarts[i] == NaturalContinuation || unmatchedStarts[i] == MergedContinuation);
+			_mergedContinuing.set(slot, unmatchedStarts[i] == MergedContinuation);
 			_heldPublished[slot].store(1u, std::memory_order_seq_cst);
 		}
 		else if (src.IsNoteOff())
 		{
 			_held.reset(slot);
 			_continuing.reset(slot);
+			_mergedContinuing.reset(slot);
 			_pendingReleases.reset(slot);
 			_heldPublished[NoteSlot(src.Channel(), src.data1)].store(0u, std::memory_order_seq_cst);
 		}
@@ -895,6 +898,7 @@ void MidiLoop::RetryPendingReleases(std::uint32_t atGlobalSample, IMidiSink& sin
 			if (!sink.TryOnEvent(off)) continue;
 			_pendingReleases.reset(slot);
 			_continuing.reset(slot);
+			_mergedContinuing.reset(slot);
 			_held.reset(slot);
 			_heldPublished[slot].store(0u, std::memory_order_seq_cst);
 		}
@@ -905,7 +909,11 @@ void MidiLoop::FlushHeldNotes(std::uint32_t atGlobalSample, IMidiSink& sink,
 {
 	if (_held.none())
 	{
-		if (policy == HeldFlushPolicy::All) _continuing.reset();
+		if (policy == HeldFlushPolicy::All)
+		{
+			_continuing.reset();
+			_mergedContinuing.reset();
+		}
 		return;
 	}
 
@@ -926,6 +934,7 @@ void MidiLoop::FlushHeldNotes(std::uint32_t atGlobalSample, IMidiSink& sink,
 			}
 			_held.reset(slot);
 			_continuing.reset(slot);
+			_mergedContinuing.reset(slot);
 			_pendingReleases.reset(slot);
 			_heldPublished[slot].store(0u, std::memory_order_seq_cst);
 		}
@@ -1000,6 +1009,14 @@ void MidiLoop::CompletePreparedQuantisationOnOwner() noexcept
 	_forcedQuantisationEnabled = _preparedOwnerForcedQuantisationEnabled;
 	_quantisationTransportStartSamps = _preparedOwnerTransportStartSamps;
 	_preparedGridActivated.store(false, std::memory_order_seq_cst);
+}
+
+void MidiLoop::CancelPreparedQuantisationOnOwner() noexcept
+{
+	OwnerPublicationGuard publication(*this);
+	CompletePreparedQuantisationOnOwner();
+	_preparedPlaybackSnapshot.store(nullptr, std::memory_order_seq_cst);
+	_preparedOwnerPending = false;
 }
 
 void MidiLoop::AcquireOwnerPublicationGate() noexcept
@@ -1139,6 +1156,193 @@ void MidiLoop::ClassifyUnmatchedStarts(PlaybackSnapshot& snapshot) noexcept
 	}
 }
 
+bool MidiLoop::MergePlaybackSeamNotes(PlaybackSnapshot& snapshot)
+{
+	struct Span
+	{
+		std::size_t On, Off, Parent;
+		std::int64_t Start, End, Shift = 0;
+		bool Continuous = false;
+		std::size_t Members = 0, First = 0, Release = 0;
+		std::int64_t FirstSample = (std::numeric_limits<std::int64_t>::max)();
+		std::int64_t LastSample = (std::numeric_limits<std::int64_t>::lowest)();
+		unsigned int Rank = 0;
+	};
+	const auto count = snapshot.EventCount;
+	const auto length = static_cast<std::int64_t>(snapshot.LoopLengthSamps);
+	std::vector<Span> spans;
+	spans.reserve(count / 2u);
+	std::array<std::vector<std::size_t>, MidiEvent::PairingSlotCount> pending;
+	std::array<std::size_t, MidiEvent::PairingSlotCount> read{};
+	const auto& grid = snapshot.Quantisation;
+	for (std::size_t i = 0; i < count; ++i)
+	{
+		const auto& event = snapshot.Raw[i];
+		const auto slot = event.PairingSlot();
+		if (event.IsNoteOn())
+		{
+			auto start = static_cast<std::int64_t>(event.sampleOffset);
+			if (snapshot.QuantisationActive && !event.HasExactTiming())
+			{
+				const auto transport = static_cast<std::int64_t>(snapshot.QuantisationTransportStartSamps);
+				const auto origin = grid.HasRemoteGrid() ? grid.RemoteOriginSamps : 0ll;
+				const auto cell = MidiQuantisation::NearestBoundaryIndex(transport + start - origin,
+					grid.GridInterval(), grid.GridDivisions());
+				start = origin + MidiQuantisation::BoundarySampleAt(cell,
+					grid.GridInterval(), grid.GridDivisions()) - transport + grid.PhaseOffsetSamps;
+			}
+			pending[slot].push_back(spans.size());
+			spans.push_back({ i, count, spans.size(), start, start });
+		}
+		else if (event.IsNoteOff() && read[slot] < pending[slot].size())
+		{
+			auto& span = spans[pending[slot][read[slot]++]];
+			span.Off = i;
+			span.End = span.Start + static_cast<std::int64_t>(event.sampleOffset)
+				- snapshot.Raw[span.On].sampleOffset;
+		}
+	}
+	auto find = [&spans](std::size_t index, std::int64_t& shift)
+	{
+		shift = 0;
+		while (spans[index].Parent != index)
+		{
+			shift += spans[index].Shift;
+			index = spans[index].Parent;
+		}
+		return index;
+	};
+	// Compare only compatible endpoints. In particular, an unmatched-only
+	// recording must not scan every possible pair during owner publication.
+	// The surrounding completion/export paths already use substantial stack
+	// storage. Allocate these owner-only lookup tables away from that stack.
+	std::vector<std::vector<std::size_t>> finiteByNote(TotalNoteSlots);
+	std::vector<std::vector<std::size_t>> unmatchedByNote(TotalNoteSlots);
+	for (std::size_t i = 0; i < spans.size(); ++i)
+	{
+		const auto& event = snapshot.Raw[spans[i].On];
+		const auto slot = NoteSlot(event.Channel(), event.data1);
+		if (spans[i].Off == count) unmatchedByNote[slot].push_back(i);
+		else finiteByNote[slot].push_back(i);
+	}
+	// Compare original source repeats before modulo wrapping. Same-repeat
+	// overlaps and endpoints that merely touch never create a merge edge.
+	for (const auto& noteSpans : finiteByNote)
+	for (const auto i : noteSpans)
+	for (const auto j : noteSpans)
+	{
+		const auto& a = spans[i];
+		const auto& b = spans[j];
+		// A self-overlapping sustain must not absorb a shorter articulation
+		// already overlapping it in the same source repeat. Its own repeat
+		// establishes continuity without erasing that legitimate retrigger.
+		if (i != j && (a.End - a.Start > length || b.End - b.Start > length)
+			&& a.Start < b.End && b.Start < a.End) continue;
+		if (snapshot.Raw[a.On].sampleOffset >= length || snapshot.Raw[b.On].sampleOffset >= length
+			|| snapshot.Raw[a.On].Channel() != snapshot.Raw[b.On].Channel()
+			|| snapshot.Raw[a.On].data1 != snapshot.Raw[b.On].data1
+			|| a.End <= a.Start || b.End <= b.Start
+			|| a.Off == count || b.Off == count
+			|| a.Start >= b.End + length || b.Start + length >= a.End) continue;
+		std::int64_t aShift, bShift;
+		const auto aRoot = find(i, aShift);
+		const auto bRoot = find(j, bShift);
+		const auto translation = length + aShift - bShift;
+		if (aRoot == bRoot)
+		{
+			if (translation != 0) spans[aRoot].Continuous = true;
+		}
+		else if (spans[aRoot].Rank < spans[bRoot].Rank)
+		{
+			spans[aRoot].Parent = bRoot;
+			spans[aRoot].Shift = -translation;
+			spans[bRoot].Continuous |= spans[aRoot].Continuous;
+			spans[aRoot].Continuous = false;
+		}
+		else
+		{
+			spans[bRoot].Parent = aRoot;
+			spans[bRoot].Shift = translation;
+			spans[aRoot].Continuous |= spans[bRoot].Continuous;
+			spans[bRoot].Continuous = false;
+			if (spans[aRoot].Rank == spans[bRoot].Rank) ++spans[aRoot].Rank;
+		}
+	}
+	for (std::size_t i = 0; i < spans.size(); ++i)
+	{
+		std::int64_t shift;
+		auto& group = spans[find(i, shift)];
+		const auto start = spans[i].Start + shift;
+		const auto end = spans[i].End + shift;
+		if (group.Members++ == 0 || start < group.FirstSample
+			|| (start == group.FirstSample && snapshot.Raw[spans[i].On].sampleOffset
+				> snapshot.Raw[spans[group.First].On].sampleOffset))
+		{
+			group.First = i;
+			group.FirstSample = start;
+		}
+		if (end > group.LastSample)
+		{
+			group.LastSample = end;
+			if (spans[i].Off != count) group.Release = spans[i].Off;
+		}
+	}
+	bool merged = false;
+	for (std::size_t i = 0; i < spans.size(); ++i)
+	{
+		std::int64_t shift;
+		const auto& group = spans[find(i, shift)];
+		if (group.Members < 2u && !group.Continuous) continue;
+		merged = true;
+		const auto groupStart = ((group.FirstSample % length) + length) % length;
+		const auto memberStart = ((spans[i].Start % length) + length) % length;
+		const bool initialHead = !group.Continuous && memberStart < groupStart
+			&& groupStart + group.LastSample - group.FirstSample >= length;
+		// Retain the initial head articulation; later repeats suppress it while
+		// this group's tail continues. Unrelated source retriggers remain ordinary.
+		snapshot.Quantised[spans[i].On].sampleOffset = initialHead
+			? static_cast<std::uint32_t>(memberStart) : snapshot.LoopLengthSamps;
+		snapshot.QuantisedUnmatchedStarts[spans[i].On] = initialHead ? MergedHead : 0u;
+		if (spans[i].Off != count)
+			snapshot.Quantised[spans[i].Off].sampleOffset = snapshot.LoopLengthSamps;
+	}
+	for (const auto& group : spans)
+	{
+		if (group.Members < 2u && !group.Continuous) continue;
+		const auto on = spans[group.First].On;
+		const auto start = ((group.FirstSample % length) + length) % length;
+		const auto duration = group.LastSample - group.FirstSample;
+		snapshot.Quantised[on].sampleOffset = static_cast<std::uint32_t>(start);
+		snapshot.QuantisedUnmatchedStarts[on] = group.Continuous || start + duration >= length
+			? MergedContinuation : 0u;
+		if (!group.Continuous)
+			snapshot.Quantised[group.Release].sampleOffset = static_cast<std::uint32_t>((start + duration) % length);
+	}
+	// Existing unmatched tails already continue across ordinary seams. A
+	// wrapped tail can coincide with its next-repeat paired head, however.
+	// Suppress that head only when their unwrapped starts are one repeat apart;
+	// its original release still ends the continuation at the recorded time.
+	for (std::size_t slot = 0; slot < TotalNoteSlots; ++slot)
+	for (const auto tailIndex : unmatchedByNote[slot])
+	for (const auto headIndex : finiteByNote[slot])
+	{
+		const auto& tail = spans[tailIndex];
+		const auto& head = spans[headIndex];
+		if (tail.Off != count || head.Off == count || head.End <= head.Start
+			|| tail.Start != head.Start + length
+			|| snapshot.Raw[tail.On].sampleOffset >= length
+			|| snapshot.Raw[head.On].sampleOffset >= length
+			|| snapshot.Raw[tail.On].Channel() != snapshot.Raw[head.On].Channel()
+			|| snapshot.Raw[tail.On].data1 != snapshot.Raw[head.On].data1
+			|| snapshot.Quantised[tail.On].sampleOffset >= length
+			|| snapshot.Quantised[tail.On].sampleOffset != snapshot.Quantised[head.On].sampleOffset) continue;
+		snapshot.Quantised[head.On].sampleOffset = snapshot.LoopLengthSamps;
+		snapshot.QuantisedUnmatchedStarts[head.On] = 0u;
+		merged = true;
+	}
+	return merged;
+}
+
 bool MidiLoop::PublishCompletedEvents(const MidiEvent* raw, std::size_t count,
 	std::uint32_t length, std::uint64_t revision,
 	const MidiQuantisationSettings& quantisation,
@@ -1187,12 +1391,18 @@ bool MidiLoop::PublishCompletedEvents(const MidiEvent* raw, std::size_t count,
 	ClassifyUnmatchedStarts(snapshot);
 	BuildChaseHead(snapshot, false);
 	snapshot.QuantisationActive = effectiveQuantisation.Enabled
-		&& (effectiveQuantisation.GrainSamps > 0u || effectiveQuantisation.HasRemoteGrid()) && count > 0u;
+		&& effectiveQuantisation.GridInterval() > 0u && effectiveQuantisation.GridDivisions() > 0u && count > 0u;
 	if (snapshot.QuantisationActive)
 	{
 		MidiQuantisation::BuildQuantisedPlaybackEvents(snapshot.Raw.data(), count,
 			length, effectiveQuantisation, effectiveTransportStart, snapshot.Quantised.data(), false);
-		std::copy_n(snapshot.RawUnmatchedStarts.begin(), count, snapshot.QuantisedUnmatchedStarts.begin());
+	}
+	else
+		std::copy_n(snapshot.Raw.begin(), count, snapshot.Quantised.begin());
+	std::copy_n(snapshot.RawUnmatchedStarts.begin(), count, snapshot.QuantisedUnmatchedStarts.begin());
+	snapshot.PlaybackViewActive = MergePlaybackSeamNotes(snapshot) || snapshot.QuantisationActive;
+	if (snapshot.PlaybackViewActive)
+	{
 		MidiNote::SortMidiEvents(snapshot.Quantised.data(), count, snapshot.QuantisedUnmatchedStarts.data());
 		BuildChaseHead(snapshot, true);
 	}
@@ -1209,8 +1419,14 @@ bool MidiLoop::PublishCompletedEvents(const MidiEvent* raw, std::size_t count,
 	return true;
 }
 
+bool MidiLoop::ShouldSuppressContinuedAttack(bool continuing, bool merged,
+	std::uint8_t startKind) noexcept
+{
+	return continuing && (!merged || startKind == MergedContinuation || startKind == MergedHead);
+}
+
 void MidiLoop::AdvanceChaseState(ChaseState& state, const MidiEvent& event,
-	bool unmatched) noexcept
+	std::uint8_t startKind) noexcept
 {
 	if (!event.IsNoteOn() && !event.IsNoteOff()) return;
 	const auto slot = NoteSlot(event.Channel(), event.data1);
@@ -1218,11 +1434,13 @@ void MidiLoop::AdvanceChaseState(ChaseState& state, const MidiEvent& event,
 	{
 		state.Held.reset(slot);
 		state.Continuing.reset(slot);
+		state.MergedContinuing.reset(slot);
 		return;
 	}
-	if (state.Continuing.test(slot)) return;
+	if (ShouldSuppressContinuedAttack(state.Continuing.test(slot), state.MergedContinuing.test(slot), startKind)) return;
 	state.Held.set(slot);
-	if (unmatched) state.Continuing.set(slot);
+	state.Continuing.set(slot, startKind == NaturalContinuation || startKind == MergedContinuation);
+	state.MergedContinuing.set(slot, startKind == MergedContinuation);
 	state.Velocity[slot] = event.data2;
 	state.Flags[slot] = event.flags;
 }
@@ -1239,7 +1457,7 @@ void MidiLoop::BuildChaseHead(PlaybackSnapshot& snapshot, bool quantised) noexce
 	{
 		for (std::size_t i = 0u; i < snapshot.EventCount; ++i)
 			if (events[i].sampleOffset < snapshot.LoopLengthSamps)
-				AdvanceChaseState(head, events[i], unmatched[i] != 0u);
+				AdvanceChaseState(head, events[i], unmatched[i]);
 		head.Held &= head.Continuing; // Ordinary paired voices release at the seam.
 	}
 }
@@ -1247,7 +1465,7 @@ void MidiLoop::BuildChaseHead(PlaybackSnapshot& snapshot, bool quantised) noexce
 bool MidiLoop::ChaseAtCursor(std::uint32_t sample, const PlaybackSnapshot& snapshot,
 	IMidiSink& sink) noexcept
 {
-	const bool quantised = snapshot.QuantisationActive;
+	const bool quantised = snapshot.PlaybackViewActive;
 	auto state = quantised ? snapshot.QuantisedChaseHead : snapshot.RawChaseHead;
 	const auto& events = quantised ? snapshot.Quantised : snapshot.Raw;
 	const auto& unmatched = quantised ? snapshot.QuantisedUnmatchedStarts : snapshot.RawUnmatchedStarts;
@@ -1255,7 +1473,7 @@ bool MidiLoop::ChaseAtCursor(std::uint32_t sample, const PlaybackSnapshot& snaps
 	bool accepted = true;
 	for (std::size_t i = 0u; i < snapshot.EventCount; ++i)
 		if (events[i].sampleOffset < offset)
-			AdvanceChaseState(state, events[i], unmatched[i] != 0u);
+			AdvanceChaseState(state, events[i], unmatched[i]);
 	for (std::uint8_t channel = 0u; channel < 16u; ++channel)
 		for (std::uint8_t note = 0u; note < 128u; ++note)
 		{
@@ -1265,7 +1483,8 @@ bool MidiLoop::ChaseAtCursor(std::uint32_t sample, const PlaybackSnapshot& snaps
 				state.Velocity[slot]).WithFlags(state.Flags[slot]);
 			if (!sink.TryOnEvent(attack)) { accepted = false; continue; }
 			_held.set(slot);
-			if (state.Continuing.test(slot)) _continuing.set(slot);
+			_continuing.set(slot, state.Continuing.test(slot));
+			_mergedContinuing.set(slot, state.MergedContinuing.test(slot));
 			_heldPublished[slot].store(1u, std::memory_order_seq_cst);
 		}
 	return accepted;

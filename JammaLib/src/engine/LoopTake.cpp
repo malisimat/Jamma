@@ -1413,13 +1413,40 @@ void LoopTake::CompleteLocalMasterQuantisationOnOwner() noexcept
 		if (loop) loop->CompletePreparedQuantisationOnOwner();
 }
 
+void LoopTake::CancelLocalMasterQuantisationOnOwner() noexcept
+{
+	std::scoped_lock lock(_midiCaptureMutex);
+	std::uint8_t expected = 0u;
+	while (!_promotionTopologyGate.compare_exchange_weak(expected, 2u,
+		std::memory_order_seq_cst))
+	{
+		expected = 0u;
+		std::this_thread::yield();
+	}
+	for (const auto& loop : _midiLoops)
+		if (loop) loop->CancelPreparedQuantisationOnOwner();
+	_localMasterQuantisationPrepared.store(false, std::memory_order_release);
+	_midiQuantisationUpdatePending.store(true, std::memory_order_release);
+	_promotionTopologyGate.store(0u, std::memory_order_seq_cst);
+}
+
 bool LoopTake::PrepareLocalMasterQuantisation(unsigned int grainSamps,
 	std::uint64_t rebasedTransportStartSamps) noexcept
 {
 	std::scoped_lock lock(_midiCaptureMutex);
 	auto settings = MidiQuantisation();
 	settings.GrainSamps = grainSamps;
-	const auto resolved = _ResolvedMidiQuantisation(settings);
+	auto resolved = _ResolvedMidiQuantisation(settings);
+	// A promoted local master replaces the former first-master base grid.
+	// Keep remote authority intact and publish the local reset with activation.
+	if (!resolved.HasRemoteGrid())
+	{
+		resolved.BaseIntervalSamps = 0u;
+		resolved.BaseDivisions = 0u;
+	}
+	_preparedLocalMasterBaseGridPacked.store(
+		(static_cast<std::uint64_t>(resolved.BaseIntervalSamps) << 32u) | resolved.BaseDivisions,
+		std::memory_order_release);
 	_preparedLocalMasterQuantisationPacked.store(settings.Pack(), std::memory_order_release);
 	_preparedLocalMasterTransportStart.store(rebasedTransportStartSamps, std::memory_order_release);
 	_localMasterQuantisationPrepared.store(true, std::memory_order_release);
@@ -1473,6 +1500,8 @@ void LoopTake::ReleasePreparedMidiQuantisationClaimAtAudioBoundary() noexcept
 void LoopTake::ActivatePreparedMidiQuantisationAtAudioBoundary() noexcept
 {
 	if (!_localMasterQuantisationPrepared.load(std::memory_order_acquire)) return;
+	_midiBaseGridPacked.store(_preparedLocalMasterBaseGridPacked.load(std::memory_order_acquire),
+		std::memory_order_release);
 	_midiQuantisationPacked.store(
 		_preparedLocalMasterQuantisationPacked.load(std::memory_order_acquire),
 		std::memory_order_release);
@@ -1723,6 +1752,7 @@ void LoopTake::Record(std::vector<unsigned int> channels,
 	_isPunchInActive.store(false, std::memory_order_relaxed);
 	_isMidiPunchInActive.store(false, std::memory_order_relaxed);
 	_midiRecordHeld.clear();
+	_midiRecordSeededHeld.clear();
 	_backLoops.clear();
 	_recordInputChannels = channels;
 	_RemoveMidiModelChildren();
@@ -1760,6 +1790,7 @@ void LoopTake::Record(std::vector<unsigned int> channels,
 		}
 	}
 	_midiRecordHeld.assign(_midiLoops.size(), midi::MidiNoteSnapshot{});
+	_midiRecordSeededHeld.assign(_midiLoops.size(), {});
 
 	for (std::size_t i = 0u; i < _midiLoops.size(); ++i)
 	{
@@ -1773,8 +1804,9 @@ void LoopTake::Record(std::vector<unsigned int> channels,
 		for (std::uint8_t note = 0u; note < 128u; ++note)
 		{
 			const auto slot = midi::MidiNote::NoteSlot(midiChan, note);
-			if (snap.Held.test(slot) && snap.Velocity[slot] > 0u)
-				_RecordMidiEventUnlocked(midi::MidiEvent::MakeNoteOn(0u, midiChan, note, snap.Velocity[slot]), dev, 0u);
+			if (snap.Held.test(slot) && snap.Velocity[slot] > 0u
+				&& _RecordMidiEventUnlocked(midi::MidiEvent::MakeNoteOn(0u, midiChan, note, snap.Velocity[slot]), dev, 0u))
+				_midiRecordSeededHeld[i].set(slot);
 		}
 	}
 	_PublishMidiLoopSnapshot();
@@ -2095,14 +2127,21 @@ void LoopTake::Play(unsigned long index,
 				const auto slot = midi::MidiNote::NoteSlot(channel, note);
 				if (!held.Held.test(slot))
 					continue;
+				// A first-master note held on both trigger edges crosses the seam.
+				// Its head release closes the tail next repeat; an artificial L-1
+				// release would turn that continuation into two separate attacks.
+				if (_midiRecordStartSample && i < _midiRecordSeededHeld.size()
+					&& _midiRecordSeededHeld[i].test(slot))
+					continue;
 
 				midiLoop->RecordEvent(midi::MidiEvent::MakeNoteOff(heldNoteOffSample, channel, note));
 			}
 		}
 	}
 
-	for (auto& midiLoop : _midiLoops)
+	for (std::size_t i = 0u; i < _midiLoops.size(); ++i)
 	{
+		auto& midiLoop = _midiLoops[i];
 		if (midiLoop->State() == midi::MidiLoopState::Recording)
 		{
 			// Compute the global sample that corresponds to loop-relative position 0 so
@@ -2121,6 +2160,7 @@ void LoopTake::Play(unsigned long index,
 	}
 
 	_midiRecordHeld.clear();
+	_midiRecordSeededHeld.clear();
 
 	auto isOverdubbing = (STATE_OVERDUBBING == state) || (STATE_PUNCHEDIN == state);
 	if (_isPunchInActive.load(std::memory_order_relaxed))
@@ -2308,6 +2348,7 @@ void LoopTake::Ditch()
 	_isPunchInActive.store(false, std::memory_order_relaxed);
 	_isMidiPunchInActive.store(false, std::memory_order_relaxed);
 	_midiRecordHeld.clear();
+	_midiRecordSeededHeld.clear();
 	_midiTransportStartSamps.store(0u, std::memory_order_release);
 	_ResetMidiOverdubSession();
 	for (auto& loop : _loops)
@@ -2330,6 +2371,7 @@ void LoopTake::Ditch()
 	_midiLoopChannels.clear();
 	_midiLoopDevices.clear();
 	_midiRecordHeld.clear();
+	_midiRecordSeededHeld.clear();
 	_PublishMidiLoopSnapshot();
 }
 
@@ -2361,6 +2403,7 @@ void LoopTake::Overdub(std::vector<unsigned int> channels,
 	_isPunchInActive.store(false, std::memory_order_relaxed);
 	_isMidiPunchInActive.store(false, std::memory_order_relaxed);
 	_midiRecordHeld.clear();
+	_midiRecordSeededHeld.clear();
 	_backLoops.clear();
 	_recordInputChannels = channels;
 	_RemoveMidiModelChildren();
@@ -3038,6 +3081,7 @@ bool LoopTake::RestoreMidiFromExport(const MidiExportState& state)
 	_midiLoopChannels = std::move(restoredChannels);
 	_midiLoopDevices = std::move(restoredDevices);
 	_midiRecordHeld.clear();
+	_midiRecordSeededHeld.clear();
 	_ResetMidiOverdubSession();
 	_midiVisualLoopLength.store(state.LoopLengthSamps, std::memory_order_release);
 	_midiVisualPlayIndex.store(state.PlayIndex, std::memory_order_release);

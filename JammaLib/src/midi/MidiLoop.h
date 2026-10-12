@@ -189,6 +189,7 @@ namespace midi
 		{
 			std::bitset<TotalNoteSlots> Held;
 			std::bitset<TotalNoteSlots> Continuing;
+			std::bitset<TotalNoteSlots> MergedContinuing;
 			std::array<std::uint8_t, TotalNoteSlots> Velocity{};
 			std::array<std::uint8_t, TotalNoteSlots> Flags{};
 		};
@@ -206,6 +207,8 @@ namespace midi
 			std::uint64_t Revision = 0u;
 			std::uint64_t SourceRevision = 0u;
 			bool QuantisationActive = false;
+			// Quantised also holds seam-merged playback when quantisation is off.
+			bool PlaybackViewActive = false;
 			MidiQuantisationSettings Quantisation{};
 			std::uint64_t QuantisationTransportStartSamps = 0u;
 		};
@@ -372,6 +375,7 @@ namespace midi
 		// buffers are not overwritten or freed until this MidiLoop is destroyed, so
 		// ReadBlock never touches shared ownership or dangling storage.
 		void CompletePreparedQuantisationOnOwner() noexcept;
+		void CancelPreparedQuantisationOnOwner() noexcept;
 		bool PrepareQuantisation(const MidiQuantisationSettings& settings,
 			std::uint64_t transportStartSamps,
 			std::optional<bool> forcedEnabled = std::nullopt);
@@ -411,7 +415,12 @@ namespace midi
 		void RetryPendingReleases(std::uint32_t atGlobalSample, IMidiSink& sink) noexcept;
 		void FlushHeldNotes(std::uint32_t atGlobalSample, IMidiSink& sink,
 			HeldFlushPolicy policy = HeldFlushPolicy::All) noexcept;
-		static void AdvanceChaseState(ChaseState& state, const MidiEvent& event, bool unmatched) noexcept;
+		static constexpr std::uint8_t NaturalContinuation = 1u;
+		static constexpr std::uint8_t MergedContinuation = 2u;
+		static constexpr std::uint8_t MergedHead = 3u; // Initial head; suppressed only while its merged tail sounds.
+		static bool ShouldSuppressContinuedAttack(bool continuing, bool merged,
+			std::uint8_t startKind) noexcept;
+		static void AdvanceChaseState(ChaseState& state, const MidiEvent& event, std::uint8_t startKind) noexcept;
 		static void BuildChaseHead(PlaybackSnapshot& snapshot, bool quantised) noexcept;
 		bool ChaseAtCursor(std::uint32_t sample, const PlaybackSnapshot& snapshot, IMidiSink& sink) noexcept;
 		static void ClassifyUnmatchedStarts(PlaybackSnapshot& snapshot) noexcept;
@@ -437,6 +446,8 @@ namespace midi
 		// slot independently; never call this from an audio callback.
 		void PublishCompletionWithRetry(const MidiEvent* raw, std::size_t count,
 			std::uint32_t length, std::uint64_t revision) noexcept;
+		// Owner-side only: merge overlapping notes from adjacent source repeats.
+		static bool MergePlaybackSeamNotes(PlaybackSnapshot& snapshot);
 		const PlaybackSnapshot* AcquirePlaybackSnapshot() const noexcept;
 		void ReleasePlaybackSnapshot() const noexcept;
 
@@ -501,6 +512,7 @@ namespace midi
 		std::bitset<TotalNoteSlots> _held;
 		// Callback-only state, cleared by played releases and full flushes.
 		std::bitset<TotalNoteSlots> _continuing;
+		std::bitset<TotalNoteSlots> _mergedContinuing; // Callback only; subset of _continuing.
 		std::bitset<TotalNoteSlots> _pendingReleases; // Callback retries rejected releases.
 		bool _relocationChaseRequested = false; // Callback owner only.
 		std::uint64_t _relocationGeneration = 0u; // Callback owner only.

@@ -138,6 +138,13 @@ void Timer::SetMasterLoopIndexFrac(double loopIndexFrac) noexcept
 	_sampOffset.store(static_cast<unsigned int>(sampleOffset), std::memory_order_release);
 }
 
+void Timer::SetMasterLoopSampleOffset(unsigned long sampleOffsetSamps) noexcept
+{
+	const auto loopLength = _seedSourceLengthSamps.load(std::memory_order_acquire);
+	const auto sampleOffset = loopLength > 0ul ? sampleOffsetSamps % loopLength : 0ul;
+	_sampOffset.store(static_cast<unsigned int>(sampleOffset), std::memory_order_release);
+}
+
 MusicalPosition Timer::LocalMusicalPosition(unsigned int sampleRate) const noexcept
 {
 	const auto masterLength = SeedSourceLength();
