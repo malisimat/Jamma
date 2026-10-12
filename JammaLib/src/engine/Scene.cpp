@@ -1137,7 +1137,7 @@ ActionResult Scene::OnAction(TouchAction action)
 		{
 			const auto gesture = *_backgroundMuteGesture;
 			_backgroundMuteGesture.reset();
-			if (!gesture.Cancelled && action.Position == gesture.PressPosition)
+			if (!gesture.Cancelled && !gesture.Moved && action.Position == gesture.PressPosition)
 			{
 				std::scoped_lock lock(_sceneMutex);
 				_performanceGroups.Acknowledge(_audioEngine->GroupMuteReceipt());
@@ -1336,7 +1336,7 @@ ActionResult Scene::OnAction(TouchAction action)
 		// must not claim its empty space as a control.
 		_ResolveHoverPath2d(_hoverPath2dScratch); // Includes station racks and controls.
 		const bool unmute = action.Index == 1 && action.Modifiers == Action::MODIFIER_NONE;
-		const bool mute = action.Index == 0 && action.Modifiers == Action::MODIFIER_ALT;
+		const bool mute = action.Index == 1 && action.Modifiers == Action::MODIFIER_ALT;
 		const auto buttonMask = (unmute || mute) ? (1u << action.Index) : 0u;
 		// Chords retain their existing camera/selection meaning. An eligible
 		// single-button background press owns its release even after cancellation.
@@ -1365,9 +1365,13 @@ ActionResult Scene::OnAction(TouchMoveAction action)
 			_popupManager.IsOpen() || _EditControlsSuppressed() || _loopEditor.IsEngaged() ||
 			_quantisationInputResetRequested.load(std::memory_order_acquire))
 			_backgroundMuteGesture.reset();
-		else if (action.MouseButtonsDown != buttonMask || action.Position != _backgroundMuteGesture->PressPosition ||
-			(action.IsRelative && action.RelativeDelta != utils::Position2d{}))
+		else if (action.MouseButtonsDown != buttonMask)
 			_backgroundMuteGesture->Cancelled = true;
+		else if (action.Position != _backgroundMuteGesture->PressPosition ||
+			(action.IsRelative && action.RelativeDelta != utils::Position2d{}))
+			// Moving cancels the click, but the captured middle press continues
+			// previewing all local items until release.
+			_backgroundMuteGesture->Moved = true;
 		return { true, {}, {}, ACTIONRESULT_DEFAULT, nullptr, {} };
 	}
 	if (_quantisationInteraction.OwnsPointer())

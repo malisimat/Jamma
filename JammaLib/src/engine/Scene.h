@@ -380,7 +380,7 @@ namespace engine
 		// Window-thread pointer ownership; command and button are latched at a
 		// background press. Any movement cancels the command, retaining ownership
 		// until release so it cannot turn into a camera drag.
-		struct BackgroundMuteGesture { int Button; bool Muted; utils::Position2d PressPosition; bool Cancelled = false; };
+		struct BackgroundMuteGesture { int Button; bool Muted; utils::Position2d PressPosition; bool Cancelled = false; bool Moved = false; };
 		std::optional<BackgroundMuteGesture> _backgroundMuteGesture;
 		bool _BackgroundMutePreviewActive() const;
 		std::atomic_bool _isSceneQuitting;
