@@ -466,6 +466,8 @@ namespace engine
 		std::shared_ptr<CameraRecordingPublisher> _cameraRecordings = std::make_shared<CameraRecordingPublisher>();
 		graphics::Camera _camera;
 		std::optional<Time> _lastCameraUpdateTime;
+		std::optional<Time> _lastCameraDiagnosticTime;
+		std::uint64_t _cameraHumanActivityRevision = 0u;
 		std::optional<Time> _lastPanelAnimationTime;
 		std::thread _jobRunner;
 		std::mutex _jobMutex;

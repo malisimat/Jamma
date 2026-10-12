@@ -19,8 +19,12 @@ namespace graphics
 			engine::CameraRecordingIdentity Focus;
 			bool IsAutomatic() const noexcept { return CurrentState != State::Waiting; }
 		};
-		static constexpr double IdleDelaySeconds = 20.0;
+		static constexpr double IdleDelaySeconds = 8.0;
 		static constexpr double QuietDelaySeconds = 5.0;
+		double IdleSeconds(Time now) const noexcept
+		{
+			return _idleSince ? utils::Timer::GetElapsedSeconds(*_idleSince, now) : 0.0;
+		}
 
 		void HumanActivity(Time now) noexcept
 		{
@@ -28,7 +32,12 @@ namespace graphics
 			_decision = {};
 		}
 
-		Decision Update(Time now, bool eligible,
+		void DiscardRecordingStartsThrough(std::uint64_t startOrder) noexcept
+		{
+			_seenStartOrder = (std::max)(_seenStartOrder, startOrder);
+		}
+
+		Decision Update(Time now, bool eligible, bool heldInteractionInEligibleView,
 			const engine::CameraRecordingObservation& observation,
 			std::span<const std::weak_ptr<engine::LoopTake>> liveTakes) noexcept
 		{
@@ -56,22 +65,33 @@ namespace graphics
 					newestActive = capture.Identity;
 			}
 			const bool newStart = observation.LatestStart.StartOrder > _seenStartOrder;
-			_seenStartOrder = observation.LatestStart.StartOrder;
 			if (!eligible)
 			{
+				// Keep a new start through the held input that may have initiated it,
+				// but discard starts observed in hidden/excluded camera modes.
+				if (!heldInteractionInEligibleView) _seenStartOrder = observation.LatestStart.StartOrder;
 				HumanActivity(now);
 				_wasEligible = false;
 				return _decision;
 			}
+			_seenStartOrder = observation.LatestStart.StartOrder;
 			if (!_wasEligible || !_idleSince)
 			{
 				HumanActivity(now);
 				_wasEligible = true;
 			}
 			const bool entering = !_decision.IsAutomatic();
-			if (entering && utils::Timer::GetElapsedSeconds(*_idleSince, now) < IdleDelaySeconds)
+			const bool newRecordingStart = newStart && valid(observation.LatestStart);
+			if (entering && newRecordingStart)
+			{
+				// Recording may begin during the mouse interaction that makes camera
+				// control ineligible. Preserve that start until release, then focus it
+				// immediately instead of waiting for the unattended overview delay.
+				_decision = { State::RecordingFocus, observation.LatestStart };
+			}
+			else if (entering && utils::Timer::GetElapsedSeconds(*_idleSince, now) < IdleDelaySeconds)
 				return _decision;
-			if (entering)
+			else if (entering)
 			{
 				// A start after the real idle deadline may already have ended during a
 				// frame stall. Completed starts from the manual period are not replayed.
@@ -79,7 +99,7 @@ namespace graphics
 					&& utils::Timer::GetElapsedSeconds(*_idleSince, observation.LatestStartAt) >= IdleDelaySeconds;
 				_decision = { State::Overview, unattendedStart ? observation.LatestStart : newestActive };
 			}
-			else if (newStart && valid(observation.LatestStart))
+			else if (newRecordingStart)
 				_decision.Focus = observation.LatestStart;
 			if (!valid(_decision.Focus)) _decision.Focus = newestActive;
 			if (hasCapture)

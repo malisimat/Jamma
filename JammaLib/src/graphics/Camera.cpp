@@ -736,10 +736,10 @@ void Camera::TickAutomaticMotion(float deltaSeconds) noexcept
 	}
 	constexpr double maxFrameSeconds = 0.05;
 	constexpr double maxStepSeconds = 1.0 / 120.0;
-	constexpr double springFrequency = 2.0;
+	constexpr double springFrequency = 0.75;
 	constexpr double damping = 2.0 * springFrequency;
-	constexpr double maxSpeed = 480.0;
-	constexpr double maxAcceleration = 960.0;
+	constexpr double maxSpeed = 180.0;
+	constexpr double maxAcceleration = 240.0;
 	const auto asVector = [](Position3d value) { return glm::dvec3(value.X, value.Y, value.Z); };
 	const auto limited = [](glm::dvec3 value, double maximum) {
 		const auto magnitude = glm::length(value);
