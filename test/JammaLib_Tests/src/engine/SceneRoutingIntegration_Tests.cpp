@@ -30,6 +30,13 @@ namespace engine
         }
     };
 
+    class RemoteSelectionStation : public Station
+    {
+    public:
+        RemoteSelectionStation(StationParams params, audio::AudioMixerParams mixer) : Station(params, mixer) {}
+        bool IsRemote() const noexcept override { return true; }
+    };
+
     class SourceLossIntegrationTestAccess
     {
     public:
@@ -39,12 +46,19 @@ namespace engine
             callback();
         }
         static bool ControlHeld(const Scene& scene) { return scene._ctrlHeld; }
+        static void SetDepth(Scene& scene, unsigned int depth) { scene._UpdateSelectDepth(depth); }
+        static void AddStation(Scene& scene, const std::shared_ptr<Station>& station)
+        {
+            std::scoped_lock lock(scene._sceneMutex);
+            scene._stations.push_back(station);
+        }
+        static bool SelectionPreviewActive(const Scene& scene) { return scene._BackgroundSelectionPreviewActive(); }
         static void SelectTakeDepth(Scene& scene) { scene._UpdateSelectDepth(Scene::VIEW_LOOPTAKE); }
         static bool ItemMutePressed(const Scene& scene) { return scene._selector->IsMutePressed(); }
         static bool ItemMutePainting(const Scene& scene) { return scene._selector->IsPaintingMute(); }
-        static bool BackgroundPreviewActive(const Scene& scene) { return scene._BackgroundMutePreviewActive(); }
+        static bool BackgroundPreviewActive(const Scene& scene) { return scene._BackgroundPreviewActive(); }
         static graphics::Camera::Pose CameraPose(const Scene& scene) { return scene._camera.CurrentPose(); }
-        static bool BackgroundMuteOwned(const Scene& scene) { return scene._backgroundMuteGesture.has_value(); }
+        static bool BackgroundOwned(const Scene& scene) { return scene._backgroundGesture.has_value(); }
         static bool CameraBackgroundActive(const Scene& scene) { return scene._camera.IsBackgroundDragging(); }
         static bool CameraPointerHeld(const Scene& scene) { return scene._camera.IsBackgroundPointerHeld(); }
         static bool ApplyMuteBoundary(Scene& scene)
@@ -667,7 +681,7 @@ TEST_F(SceneRoutingIntegrationTest, InWindowItemMiddlePaintUsesSelectionThreshol
         ASSERT_TRUE(scene->OnAction(click).IsEaten);
         EXPECT_TRUE(engine::SourceLossIntegrationTestAccess::ItemMutePressed(*scene));
         EXPECT_FALSE(engine::SourceLossIntegrationTestAccess::ItemMutePainting(*scene));
-        EXPECT_FALSE(engine::SourceLossIntegrationTestAccess::BackgroundMuteOwned(*scene));
+        EXPECT_FALSE(engine::SourceLossIntegrationTestAccess::BackgroundOwned(*scene));
         EXPECT_FALSE(engine::SourceLossIntegrationTestAccess::BackgroundPreviewActive(*scene));
         EXPECT_EQ(initiallyMuted, audioTake->IsMuted());
         EXPECT_EQ(initiallyMuted, midiTake->IsMuted());
@@ -688,10 +702,10 @@ TEST_F(SceneRoutingIntegrationTest, InWindowItemMiddlePaintUsesSelectionThreshol
         EXPECT_EQ(initiallyMuted, untouched->IsMuted());
         scene->SetHover3d(midiPath, base::Action::MODIFIER_NONE);
         EXPECT_EQ(!initiallyMuted, midiTake->IsMuted());
-        EXPECT_FALSE(engine::SourceLossIntegrationTestAccess::BackgroundMuteOwned(*scene));
+        EXPECT_FALSE(engine::SourceLossIntegrationTestAccess::BackgroundOwned(*scene));
         EXPECT_FALSE(engine::SourceLossIntegrationTestAccess::BackgroundPreviewActive(*scene));
         scene->SetHover3d({}, base::Action::MODIFIER_NONE); // Passing through background keeps item paint ownership.
-        EXPECT_FALSE(engine::SourceLossIntegrationTestAccess::BackgroundMuteOwned(*scene));
+        EXPECT_FALSE(engine::SourceLossIntegrationTestAccess::BackgroundOwned(*scene));
         scene->SetHover3d(audioPath, base::Action::MODIFIER_NONE);
         EXPECT_EQ(!initiallyMuted, audioTake->IsMuted()); // Revisit does not toggle direction.
         EXPECT_EQ(initiallyMuted, untouched->IsMuted());
@@ -727,7 +741,7 @@ TEST_F(SceneRoutingIntegrationTest, RawStationPickBelowSelectionDepthDoesNotBeco
     click.MouseButtonsDown = 2u;
     click.State = actions::TouchAction::TOUCH_DOWN;
     scene->OnAction(click);
-    EXPECT_FALSE(engine::SourceLossIntegrationTestAccess::BackgroundMuteOwned(*scene));
+    EXPECT_FALSE(engine::SourceLossIntegrationTestAccess::BackgroundOwned(*scene));
     EXPECT_FALSE(engine::SourceLossIntegrationTestAccess::BackgroundPreviewActive(*scene));
     click.State = actions::TouchAction::TOUCH_UP;
     click.MouseButtonsDown = 0u;
@@ -767,7 +781,7 @@ TEST_F(SceneRoutingIntegrationTest, WindowFreshPressPickWinsOverStaleBackgroundA
         EXPECT_EQ(1u, window.PickCount);
         EXPECT_EQ(click.Position, window.PickPosition);
         EXPECT_TRUE(engine::SourceLossIntegrationTestAccess::ItemMutePressed(*scene));
-        EXPECT_FALSE(engine::SourceLossIntegrationTestAccess::BackgroundMuteOwned(*scene));
+        EXPECT_FALSE(engine::SourceLossIntegrationTestAccess::BackgroundOwned(*scene));
         EXPECT_FALSE(engine::SourceLossIntegrationTestAccess::BackgroundPreviewActive(*scene));
         actions::TouchMoveAction move;
         move.Touch = actions::TouchAction::TOUCH_MOUSE;
@@ -786,7 +800,7 @@ TEST_F(SceneRoutingIntegrationTest, WindowFreshPressPickWinsOverStaleBackgroundA
         click.State = actions::TouchAction::TOUCH_DOWN;
         window.OnAction(click);
         EXPECT_EQ(2u, window.PickCount);
-        EXPECT_TRUE(engine::SourceLossIntegrationTestAccess::BackgroundMuteOwned(*scene));
+        EXPECT_TRUE(engine::SourceLossIntegrationTestAccess::BackgroundOwned(*scene));
         EXPECT_TRUE(engine::SourceLossIntegrationTestAccess::BackgroundPreviewActive(*scene));
         click.State = actions::TouchAction::TOUCH_UP;
         window.OnAction(click);
@@ -797,7 +811,7 @@ TEST_F(SceneRoutingIntegrationTest, WindowFreshPressPickWinsOverStaleBackgroundA
     }
 }
 
-TEST_F(SceneRoutingIntegrationTest, InWindowBackgroundMuteGesturesPreviewAndApplyOnlyStationaryRelease)
+TEST_F(SceneRoutingIntegrationTest, InWindowBackgroundGesturesPreviewAndApplyOnlyStationaryRelease)
 {
     auto scene = FreshScene({ Station("Local") }, {});
     ASSERT_TRUE(scene);
@@ -824,7 +838,7 @@ TEST_F(SceneRoutingIntegrationTest, InWindowBackgroundMuteGesturesPreviewAndAppl
             click.MouseButtonsDown = 2u;
             click.State = actions::TouchAction::TOUCH_DOWN;
             ASSERT_TRUE(scene->OnAction(click).IsEaten);
-            ASSERT_TRUE(engine::SourceLossIntegrationTestAccess::BackgroundMuteOwned(*scene));
+            ASSERT_TRUE(engine::SourceLossIntegrationTestAccess::BackgroundOwned(*scene));
             EXPECT_TRUE(engine::SourceLossIntegrationTestAccess::BackgroundPreviewActive(*scene));
             EXPECT_EQ(!mute, take->IsMuted());
             actions::TouchMoveAction move;
@@ -838,7 +852,7 @@ TEST_F(SceneRoutingIntegrationTest, InWindowBackgroundMuteGesturesPreviewAndAppl
                 move.Position.X += 1;
                 scene->OnAction(move);
                 EXPECT_TRUE(engine::SourceLossIntegrationTestAccess::BackgroundPreviewActive(*scene));
-                EXPECT_TRUE(engine::SourceLossIntegrationTestAccess::BackgroundMuteOwned(*scene));
+                EXPECT_TRUE(engine::SourceLossIntegrationTestAccess::BackgroundOwned(*scene));
                 if (movement == 2) // Returning to the origin does not restore the click.
                 {
                     move.Position = click.Position;
@@ -859,7 +873,7 @@ TEST_F(SceneRoutingIntegrationTest, InWindowBackgroundMuteGesturesPreviewAndAppl
             click.Modifiers = base::Action::MODIFIER_NONE; // Command was latched at press.
             click.MouseButtonsDown = 0u;
             EXPECT_TRUE(scene->OnAction(click).IsEaten);
-            EXPECT_FALSE(engine::SourceLossIntegrationTestAccess::BackgroundMuteOwned(*scene));
+            EXPECT_FALSE(engine::SourceLossIntegrationTestAccess::BackgroundOwned(*scene));
             EXPECT_FALSE(engine::SourceLossIntegrationTestAccess::BackgroundPreviewActive(*scene));
             EXPECT_FALSE(engine::SourceLossIntegrationTestAccess::CameraBackgroundActive(*scene));
             const auto after = engine::SourceLossIntegrationTestAccess::CameraPose(*scene);
@@ -894,7 +908,7 @@ TEST_F(SceneRoutingIntegrationTest, NativeBackgroundMiddleAndAltMiddleUseClickCo
         if (mute) graphics::Window::WindowProcedure(host, WM_SYSKEYDOWN, VK_MENU, 1u << 29u);
         graphics::Window::WindowProcedure(host, WM_MBUTTONDOWN,
             MK_MBUTTON, MAKELPARAM(400, 300));
-        EXPECT_TRUE(engine::SourceLossIntegrationTestAccess::BackgroundMuteOwned(*scene));
+        EXPECT_TRUE(engine::SourceLossIntegrationTestAccess::BackgroundOwned(*scene));
         EXPECT_TRUE(engine::SourceLossIntegrationTestAccess::BackgroundPreviewActive(*scene));
         EXPECT_FALSE(engine::SourceLossIntegrationTestAccess::CameraPointerHeld(*scene));
         if (mute) graphics::Window::WindowProcedure(host, WM_SYSKEYUP, VK_MENU, 1u << 29u);
@@ -908,7 +922,7 @@ TEST_F(SceneRoutingIntegrationTest, NativeBackgroundMiddleAndAltMiddleUseClickCo
     scene->Shutdown();
 }
 
-TEST_F(SceneRoutingIntegrationTest, AltLeftBackgroundRetainsCameraGestureAndDoesNotMuteAll)
+TEST_F(SceneRoutingIntegrationTest, NativeAltLeftBackgroundPreviewsAndSelectsAllWithoutMuting)
 {
     auto scene = FreshScene({ Station("Local") }, {});
     ASSERT_TRUE(scene);
@@ -917,11 +931,213 @@ TEST_F(SceneRoutingIntegrationTest, AltLeftBackgroundRetainsCameraGestureAndDoes
     window.Resize({ 800, 600 });
     auto take = scene->SnapshotStations().front()->AddTake();
     scene->CommitChanges();
+    engine::SourceLossIntegrationTestAccess::SelectTakeDepth(*scene);
     scene->SetHover3d({}, base::Action::MODIFIER_NONE);
-    actions::KeyAction alt;
-    alt.KeyChar = VK_MENU;
-    alt.KeyActionType = actions::KeyAction::KEY_DOWN;
-    window.OnAction(alt);
+    const auto host = CreateWindowExW(0, L"STATIC", L"", 0, 0, 0, 0, 0,
+        HWND_MESSAGE, nullptr, GetModuleHandleW(nullptr), nullptr);
+    ASSERT_NE(host, nullptr);
+    SetWindowLongPtrW(host, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(&window));
+    graphics::Window::WindowProcedure(host, WM_SYSKEYDOWN, VK_MENU, 1u << 29u);
+    graphics::Window::WindowProcedure(host, WM_LBUTTONDOWN, MK_LBUTTON, MAKELPARAM(400, 300));
+    EXPECT_TRUE(engine::SourceLossIntegrationTestAccess::BackgroundOwned(*scene));
+    EXPECT_TRUE(engine::SourceLossIntegrationTestAccess::SelectionPreviewActive(*scene));
+    EXPECT_FALSE(engine::SourceLossIntegrationTestAccess::CameraPointerHeld(*scene));
+    EXPECT_FALSE(take->IsSelected());
+    graphics::Window::WindowProcedure(host, WM_SYSKEYUP, VK_MENU, 1u << 29u);
+    graphics::Window::WindowProcedure(host, WM_LBUTTONUP, 0, MAKELPARAM(400, 300));
+    EXPECT_FALSE(engine::SourceLossIntegrationTestAccess::BackgroundPreviewActive(*scene));
+    EXPECT_TRUE(take->IsSelected());
+    EXPECT_FALSE(take->IsMuted());
+    SetWindowLongPtrW(host, GWLP_USERDATA, 0);
+    DestroyWindow(host);
+    scene->Shutdown();
+}
+
+TEST_F(SceneRoutingIntegrationTest, BackgroundSelectAllUsesCurrentDepthAndPreservesMuteAndRemoteSelection)
+{
+    for (const auto depth : { engine::Scene::VIEW_STATION, engine::Scene::VIEW_LOOPTAKE, engine::Scene::VIEW_LOOP })
+    {
+        auto scene = FreshScene({ Station("Local"), Station("Second") }, {});
+        ASSERT_TRUE(scene);
+        scene->SetSize({ 800, 600 });
+        auto station = scene->SnapshotStations().front();
+        auto audioTake = station->AddTake();
+        audioTake->AddLoop(0u, station->Id());
+        auto midiTake = station->AddTake();
+        midiTake->Record({}, station->Name(), { 0u }, { "Keys" });
+        auto emptyTake = station->AddTake();
+        scene->CommitChanges();
+        auto audioLoop = audioTake->GetLoops().front();
+        const auto midiModel = midiTake->GetMidiLoops().front()->Model();
+        ASSERT_TRUE(audioLoop->Model());
+        ASSERT_TRUE(midiModel);
+        audioTake->SetGroupMutedAudio(true);
+        audioLoop->SetGroupMutedAudio(true);
+        midiTake->SetGroupMutedAudio(false);
+        midiTake->AcquireTriggerSourceMuteAudio();
+        engine::StationParams params;
+        params.Id = "remote";
+        params.Size = { 160u, 320u };
+        auto remote = std::make_shared<engine::RemoteSelectionStation>(params,
+            engine::Station::GetMixerParams(params.Size, audio::MergeMixBehaviourParams{}));
+        auto remoteSelected = remote->AddTake();
+        auto remoteUnselected = remote->AddTake();
+        remote->CommitChanges();
+        remote->Select();
+        remoteSelected->Select();
+        remoteUnselected->DeSelect();
+        remoteSelected->SetGroupMutedAudio(true);
+        engine::SourceLossIntegrationTestAccess::AddStation(*scene, remote);
+        engine::SourceLossIntegrationTestAccess::SetDepth(*scene, depth);
+        const auto rack = station->GetGuiRack();
+        rack->SetPosition({ -1000, -1000 });
+        rack->SetRackState(gui::GuiRackParams::RACK_CHANNELS, true);
+        scene->SetHover3d({}, base::Action::MODIFIER_NONE);
+        actions::TouchAction click;
+        click.Touch = actions::TouchAction::TOUCH_MOUSE;
+        click.Position = { 400, 300 };
+        click.Index = 0;
+        click.Modifiers = base::Action::MODIFIER_ALT;
+        click.MouseButtonsDown = 1u;
+        click.State = actions::TouchAction::TOUCH_DOWN;
+        ASSERT_TRUE(scene->OnAction(click).IsEaten);
+        EXPECT_TRUE(engine::SourceLossIntegrationTestAccess::SelectionPreviewActive(*scene));
+        EXPECT_FALSE(audioTake->IsSelected());
+        click.State = actions::TouchAction::TOUCH_UP;
+        click.MouseButtonsDown = 0u;
+        scene->OnAction(click);
+        EXPECT_FALSE(engine::SourceLossIntegrationTestAccess::SelectionPreviewActive(*scene));
+        EXPECT_EQ(depth == engine::Scene::VIEW_STATION, station->IsSelected());
+        EXPECT_EQ(depth == engine::Scene::VIEW_STATION, scene->SnapshotStations()[1]->IsSelected());
+        EXPECT_TRUE(audioTake->IsSelected());
+        EXPECT_TRUE(midiTake->IsSelected());
+        EXPECT_TRUE(audioLoop->IsSelected());
+        EXPECT_TRUE(midiModel->IsSelected());
+        EXPECT_EQ(depth != engine::Scene::VIEW_LOOP, emptyTake->IsSelected());
+        EXPECT_TRUE(audioTake->IsMuted());
+        EXPECT_TRUE(audioLoop->IsMuted());
+        EXPECT_TRUE(midiTake->IsMuted()); // Temporary source suppression survives selection.
+        EXPECT_FALSE(midiTake->GetTweakState() & base::Tweakable::TWEAKSTATE_MUTED);
+        midiTake->ReleaseTriggerSourceMuteAudio();
+        EXPECT_FALSE(midiTake->IsMuted());
+        EXPECT_EQ(gui::GuiRackParams::RACK_MASTER, rack->GetRackState());
+        EXPECT_TRUE(remote->IsSelected());
+        EXPECT_TRUE(remoteSelected->IsSelected());
+        EXPECT_FALSE(remoteUnselected->IsSelected());
+        EXPECT_TRUE(remoteSelected->IsMuted());
+        scene->ApplyDeferredHoverUpdates();
+        EXPECT_TRUE(audioTake->IsSelected()); // Selection survives committed hover refresh.
+        EXPECT_TRUE(midiModel->IsSelected());
+        scene->Shutdown();
+    }
+}
+
+TEST_F(SceneRoutingIntegrationTest, BackgroundSelectAllMovementKeepsPreviewButDoesNotSelectOrPan)
+{
+    auto scene = FreshScene({ Station("Local") }, {});
+    ASSERT_TRUE(scene);
+    scene->SetSize({ 800, 600 });
+    auto take = scene->SnapshotStations().front()->AddTake();
+    scene->CommitChanges();
+    for (const bool returnToOrigin : { false, true })
+    {
+        scene->SetHover3d({}, base::Action::MODIFIER_NONE);
+        const auto pose = engine::SourceLossIntegrationTestAccess::CameraPose(*scene);
+        actions::TouchAction click;
+        click.Touch = actions::TouchAction::TOUCH_MOUSE;
+        click.Position = { 400, 300 };
+        click.Index = 0;
+        click.Modifiers = base::Action::MODIFIER_ALT;
+        click.MouseButtonsDown = 1u;
+        click.State = actions::TouchAction::TOUCH_DOWN;
+        scene->OnAction(click);
+        actions::TouchMoveAction move;
+        move.Touch = actions::TouchAction::TOUCH_MOUSE;
+        move.Position = { 401, 300 };
+        move.MouseButtonsDown = 1u;
+        scene->OnAction(move);
+        if (returnToOrigin) { move.Position = click.Position; scene->OnAction(move); }
+        EXPECT_TRUE(engine::SourceLossIntegrationTestAccess::SelectionPreviewActive(*scene));
+        EXPECT_FALSE(engine::SourceLossIntegrationTestAccess::CameraPointerHeld(*scene));
+        click.Position = move.Position;
+        click.State = actions::TouchAction::TOUCH_UP;
+        click.MouseButtonsDown = 0u;
+        scene->OnAction(click);
+        EXPECT_FALSE(engine::SourceLossIntegrationTestAccess::BackgroundOwned(*scene));
+        EXPECT_FALSE(take->IsSelected());
+        EXPECT_EQ(pose.Eye, engine::SourceLossIntegrationTestAccess::CameraPose(*scene).Eye);
+    }
+    scene->Shutdown();
+}
+
+TEST_F(SceneRoutingIntegrationTest, BackgroundSelectAllCancelsOnLossEscapeResetAndChord)
+{
+    for (int cancellation = 0; cancellation < 5; ++cancellation)
+    {
+        auto scene = FreshScene({ Station("Local") }, {});
+        ASSERT_TRUE(scene);
+        scene->SetSize({ 800, 600 });
+        auto take = scene->SnapshotStations().front()->AddTake();
+        scene->CommitChanges();
+        actions::TouchAction click;
+        click.Touch = actions::TouchAction::TOUCH_MOUSE;
+        click.Position = { 400, 300 };
+        click.Index = 0;
+        click.Modifiers = base::Action::MODIFIER_ALT;
+        click.MouseButtonsDown = 1u;
+        click.State = actions::TouchAction::TOUCH_DOWN;
+        scene->SetHover3d({}, base::Action::MODIFIER_NONE);
+        scene->OnAction(click);
+        ASSERT_TRUE(engine::SourceLossIntegrationTestAccess::SelectionPreviewActive(*scene));
+        if (cancellation == 0)
+        {
+            actions::TouchMoveAction lost;
+            lost.Touch = actions::TouchAction::TOUCH_MOUSE;
+            lost.MouseButtonsDown = 0u;
+            scene->OnAction(lost);
+        }
+        else if (cancellation == 1) scene->OnInputFocusLost();
+        else if (cancellation == 2)
+        {
+            actions::KeyAction escape;
+            escape.KeyChar = 27u;
+            escape.KeyActionType = actions::KeyAction::KEY_DOWN;
+            scene->OnAction(escape);
+        }
+        else if (cancellation == 3) scene->Reset();
+        else
+        {
+            auto chord = click;
+            chord.Index = 1;
+            chord.MouseButtonsDown = 3u;
+            scene->OnAction(chord);
+        }
+        EXPECT_FALSE(engine::SourceLossIntegrationTestAccess::SelectionPreviewActive(*scene));
+        click.State = actions::TouchAction::TOUCH_UP;
+        click.MouseButtonsDown = 0u;
+        scene->OnAction(click);
+        EXPECT_FALSE(engine::SourceLossIntegrationTestAccess::BackgroundOwned(*scene));
+        EXPECT_FALSE(take->IsSelected());
+        scene->Shutdown();
+    }
+}
+
+TEST_F(SceneRoutingIntegrationTest, AltLeftItemSelectsOnlyItsPressedTarget)
+{
+    auto scene = FreshScene({ Station("Local") }, {});
+    ASSERT_TRUE(scene);
+    resources::ResourceLib resources;
+    engine::PressPickWindow window(*scene, resources);
+    window.Resize({ 800, 600 });
+    auto station = scene->SnapshotStations().front();
+    auto take = station->AddTake();
+    take->AddLoop(0u, station->Id());
+    take->CommitChanges();
+    auto other = station->AddTake();
+    scene->CommitChanges();
+    engine::SourceLossIntegrationTestAccess::SelectTakeDepth(*scene);
+    for (const auto index : take->GetLoops().front()->GlobalId())
+        window.PressPath.push_back(static_cast<unsigned char>(index + 1u));
     actions::TouchAction click;
     click.Touch = actions::TouchAction::TOUCH_MOUSE;
     click.Position = { 400, 300 };
@@ -929,13 +1145,11 @@ TEST_F(SceneRoutingIntegrationTest, AltLeftBackgroundRetainsCameraGestureAndDoes
     click.Modifiers = base::Action::MODIFIER_ALT;
     click.State = actions::TouchAction::TOUCH_DOWN;
     window.OnAction(click);
-    EXPECT_FALSE(engine::SourceLossIntegrationTestAccess::BackgroundMuteOwned(*scene));
-    EXPECT_FALSE(engine::SourceLossIntegrationTestAccess::BackgroundPreviewActive(*scene));
-    EXPECT_TRUE(engine::SourceLossIntegrationTestAccess::CameraPointerHeld(*scene));
+    EXPECT_FALSE(engine::SourceLossIntegrationTestAccess::BackgroundOwned(*scene));
     click.State = actions::TouchAction::TOUCH_UP;
     window.OnAction(click);
-    ASSERT_TRUE(engine::SourceLossIntegrationTestAccess::ApplyMuteBoundary(*scene));
-    EXPECT_FALSE(take->IsMuted());
+    EXPECT_TRUE(take->IsSelected());
+    EXPECT_FALSE(other->IsSelected());
     scene->Shutdown();
 }
 
@@ -957,7 +1171,7 @@ TEST_F(SceneRoutingIntegrationTest, BackgroundUnmuteCancelsOnCaptureLossFocusLos
         click.MouseButtonsDown = 2u;
         click.State = actions::TouchAction::TOUCH_DOWN;
         scene->OnAction(click);
-        ASSERT_TRUE(engine::SourceLossIntegrationTestAccess::BackgroundMuteOwned(*scene));
+        ASSERT_TRUE(engine::SourceLossIntegrationTestAccess::BackgroundOwned(*scene));
         if (cancellation == 0)
         {
             actions::TouchMoveAction lost;
@@ -984,7 +1198,7 @@ TEST_F(SceneRoutingIntegrationTest, BackgroundUnmuteCancelsOnCaptureLossFocusLos
         click.State = actions::TouchAction::TOUCH_UP;
         click.MouseButtonsDown = 0u;
         scene->OnAction(click);
-        EXPECT_FALSE(engine::SourceLossIntegrationTestAccess::BackgroundMuteOwned(*scene));
+        EXPECT_FALSE(engine::SourceLossIntegrationTestAccess::BackgroundOwned(*scene));
         ASSERT_TRUE(engine::SourceLossIntegrationTestAccess::ApplyMuteBoundary(*scene));
         EXPECT_TRUE(take->IsMuted()) << cancellation;
         scene->AdvanceUiAnimations();
@@ -1011,7 +1225,7 @@ TEST_F(SceneRoutingIntegrationTest, MiddlePressOnItemAndHudDoesNotAcquireGlobalU
     click.MouseButtonsDown = 2u;
     click.State = actions::TouchAction::TOUCH_DOWN;
     scene->OnAction(click);
-    EXPECT_FALSE(engine::SourceLossIntegrationTestAccess::BackgroundMuteOwned(*scene));
+    EXPECT_FALSE(engine::SourceLossIntegrationTestAccess::BackgroundOwned(*scene));
     click.State = actions::TouchAction::TOUCH_UP;
     click.MouseButtonsDown = 0u;
     scene->OnAction(click);
@@ -1022,7 +1236,7 @@ TEST_F(SceneRoutingIntegrationTest, MiddlePressOnItemAndHudDoesNotAcquireGlobalU
     click.State = actions::TouchAction::TOUCH_DOWN;
     click.MouseButtonsDown = 2u;
     scene->OnAction(click);
-    EXPECT_FALSE(engine::SourceLossIntegrationTestAccess::BackgroundMuteOwned(*scene));
+    EXPECT_FALSE(engine::SourceLossIntegrationTestAccess::BackgroundOwned(*scene));
     scene->OnInputFocusLost();
     scene->Shutdown();
 }
@@ -1064,7 +1278,7 @@ TEST_F(SceneRoutingIntegrationTest, BackgroundMuteStopsUnownedCameraCoastButPres
         click.MouseButtonsDown = 2u;
         click.State = actions::TouchAction::TOUCH_DOWN;
         scene->OnAction(click);
-        ASSERT_TRUE(engine::SourceLossIntegrationTestAccess::BackgroundMuteOwned(*scene));
+        ASSERT_TRUE(engine::SourceLossIntegrationTestAccess::BackgroundOwned(*scene));
         EXPECT_FALSE(engine::SourceLossIntegrationTestAccess::CameraBackgroundActive(*scene));
         click.MouseButtonsDown = 0u;
         click.State = actions::TouchAction::TOUCH_UP;
@@ -1083,7 +1297,7 @@ TEST_F(SceneRoutingIntegrationTest, BackgroundMuteStopsUnownedCameraCoastButPres
     chord.Index = 1;
     chord.MouseButtonsDown = 6u;
     scene->OnAction(chord);
-    EXPECT_FALSE(engine::SourceLossIntegrationTestAccess::BackgroundMuteOwned(*scene));
+    EXPECT_FALSE(engine::SourceLossIntegrationTestAccess::BackgroundOwned(*scene));
     EXPECT_TRUE(engine::SourceLossIntegrationTestAccess::CameraPointerHeld(*scene));
     chord.State = actions::TouchAction::TOUCH_UP;
     chord.MouseButtonsDown = 4u;
