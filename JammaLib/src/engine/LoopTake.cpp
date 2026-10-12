@@ -6,6 +6,7 @@
 #include <filesystem>
 #include <fstream>
 #include <limits>
+#include <thread>
 
 #include "../graphics/MidiModel.h"
 #include "../io/NativeMidiSidecar.h"
@@ -497,13 +498,79 @@ void LoopTake::OnBlockWriteChannel(unsigned int channel,
 }
 
 // Only called when outputting to DAC
+void LoopTake::PollPlaybackPluginChanges() const noexcept
+{
+	const auto chain = _vstChain.load(std::memory_order_acquire);
+	if (chain) chain->PollPendingChanges();
+	const auto state = _AudioStateSnapshot();
+	if (state)
+		for (const auto& loop : state->Loops)
+			if (loop) loop->PollPlaybackPluginChanges();
+}
+
+unsigned int LoopTake::RecordedPlaybackLatencySamps() const noexcept
+{
+	const auto own = static_cast<unsigned int>(std::max(0, CurrentVstLatencySamps()));
+	const auto state = _AudioStateSnapshot();
+	if (!state) return own;
+	auto longest = static_cast<std::uint64_t>(own);
+	for (const auto& loop : state->Loops)
+		if (loop) longest = std::max(longest, static_cast<std::uint64_t>(own) +
+			static_cast<unsigned int>(std::max(0, loop->CurrentVstLatencySamps())));
+	return static_cast<unsigned int>(std::min(longest,
+		static_cast<std::uint64_t>((std::numeric_limits<unsigned int>::max)())));
+}
+
+bool LoopTake::CanConfigureRecordedPlaybackCompensation(
+	unsigned int referenceLatencySamps, unsigned int stationLatencySamps) const noexcept
+{
+	const auto own = static_cast<unsigned int>(std::max(0, CurrentVstLatencySamps()));
+	const auto state = _AudioStateSnapshot();
+	if (!state) return true;
+	for (const auto& loop : state->Loops)
+	{
+		if (!loop) continue;
+		const auto path = static_cast<std::uint64_t>(stationLatencySamps) + own
+			+ static_cast<unsigned int>(std::max(0, loop->CurrentVstLatencySamps()));
+		if (path > referenceLatencySamps
+			|| referenceLatencySamps - path > audio::PlaybackDelay::MaxDelaySamps
+			|| !loop->CanConfigureRecordedPlaybackDelay(
+				static_cast<unsigned int>(referenceLatencySamps - path))) return false;
+	}
+	return true;
+}
+
+bool LoopTake::ConfigureRecordedPlaybackCompensation(
+	unsigned int referenceLatencySamps, unsigned int stationLatencySamps)
+{
+	if (!CanConfigureRecordedPlaybackCompensation(referenceLatencySamps, stationLatencySamps)) return false;
+	const auto own = static_cast<unsigned int>(std::max(0, CurrentVstLatencySamps()));
+	const auto state = _AudioStateSnapshot();
+	if (!state) return true;
+	for (const auto& loop : state->Loops)
+	{
+		if (!loop) continue;
+		const auto path = static_cast<std::uint64_t>(stationLatencySamps) + own
+			+ static_cast<unsigned int>(std::max(0, loop->CurrentVstLatencySamps()));
+		if (!loop->ConfigureRecordedPlaybackDelay(
+			static_cast<unsigned int>(referenceLatencySamps - path))) return false;
+	}
+	return true;
+}
+
 void LoopTake::WriteBlock(const std::shared_ptr<MultiAudioSink> dest,
 	const std::shared_ptr<base::BounceWriter> bounceWriter,
 	int indexOffset,
 	unsigned int numSamps)
 {
 	if (_captureCancelled.load(std::memory_order_acquire))
+	{
+		auto state = _BorrowAudioState();
+		if (state)
+			for (const auto& loop : state->Loops)
+				if (loop) loop->ClearRecordedPlaybackDelay();
 		return;
+	}
 	if (nullptr == dest)
 		return;
 	
@@ -521,6 +588,9 @@ void LoopTake::WriteBlock(const std::shared_ptr<MultiAudioSink> dest,
 	for (const auto& loop : state->Loops)
 		if (loop)
 			loop->WriteBlock(loopDest, bounceWriter, indexOffset, numSamps);
+	if (IsMuted())
+		for (const auto& loop : state->Loops)
+			if (loop) loop->ClearRecordedPlaybackDelay();
 
 	if (nullptr != bounceWriter)
 		return;
@@ -673,7 +743,7 @@ void LoopTake::EndMultiPlay(unsigned int numSamps)
 }
 
 void LoopTake::ApplyAcceptedTimingCorrection(long long deltaSamps,
-	std::uint64_t generation) noexcept
+	std::uint64_t generation, bool relocateMidi) noexcept
 {
 	if (generation == 0u || generation <= _audioTimingGeneration)
 		return;
@@ -682,7 +752,13 @@ void LoopTake::ApplyAcceptedTimingCorrection(long long deltaSamps,
 		return;
 
 	if (_ShiftDirectPlaybackCursors(deltaSamps))
+	{
+		if (relocateMidi) _ClearRelocatedRecordedPlaybackDelay(deltaSamps);
+		if (relocateMidi && _midiVisualLoopLength.load(std::memory_order_relaxed) > 0ul
+			&& deltaSamps % static_cast<long long>(_midiVisualLoopLength.load(std::memory_order_relaxed)) != 0)
+			_RequestMidiRelocationChase();
 		_consumedTimingCorrectionCount.fetch_add(1u, std::memory_order_relaxed);
+	}
 }
 
 bool LoopTake::_ShiftDirectPlaybackCursors(long long deltaSamps) noexcept
@@ -713,6 +789,24 @@ bool LoopTake::_ShiftDirectPlaybackCursors(long long deltaSamps) noexcept
 		moved = true;
 	}
 	return moved;
+}
+
+void LoopTake::_ClearRelocatedRecordedPlaybackDelay(long long deltaSamps) noexcept
+{
+	auto state = _BorrowAudioState();
+	if (!state) return;
+	for (const auto& loop : state->Loops)
+		if (loop && loop->LoopLength() > 0ul
+			&& deltaSamps % static_cast<long long>(loop->LoopLength()) != 0)
+			loop->ClearRecordedPlaybackDelay();
+}
+
+void LoopTake::_RequestMidiRelocationChase() noexcept
+{
+	auto loops = _BorrowMidiLoopSnapshot();
+	if (!loops) return;
+	for (const auto& loop : *loops)
+		if (loop) loop->RequestRelocationChase();
 }
 
 void LoopTake::CaptureSceneAnchors(std::uint64_t sceneCoordinateSamps) noexcept
@@ -850,7 +944,13 @@ void LoopTake::_TryApplyLocalTransportOffset() noexcept
 		return;
 
 	if (_ShiftDirectPlaybackCursors(deltaSamps))
+	{
+		_ClearRelocatedRecordedPlaybackDelay(deltaSamps);
+		const auto midiLength = _midiVisualLoopLength.load(std::memory_order_relaxed);
+		if (midiLength > 0ul && deltaSamps % static_cast<long long>(midiLength) != 0)
+			_RequestMidiRelocationChase();
 		_appliedLocalTransportOffsetSamps = targetSamps;
+	}
 }
 
 void LoopTake::QueueTimingCorrection(long long deltaSamps,
@@ -1181,6 +1281,11 @@ ActionResult LoopTake::OnAction(JobAction action)
 	break;
 	case JobAction::JOB_UPDATEMIDIQUANTISATION:
 	{
+		if (_localMasterQuantisationPrepared.load(std::memory_order_acquire))
+		{
+			_midiQuantisationUpdatePending.store(true, std::memory_order_release);
+			return {};
+		}
 		std::scoped_lock midiLock(_midiCaptureMutex);
 		const auto settings = ResolvedMidiQuantisation();
 		bool retry = false;
@@ -1299,6 +1404,115 @@ double LoopTake::LoopIndexFrac() const noexcept
 	}
 
 	return 0.0;
+}
+
+void LoopTake::CompleteLocalMasterQuantisationOnOwner() noexcept
+{
+	std::scoped_lock lock(_midiCaptureMutex);
+	for (const auto& loop : _midiLoops)
+		if (loop) loop->CompletePreparedQuantisationOnOwner();
+}
+
+bool LoopTake::PrepareLocalMasterQuantisation(unsigned int grainSamps,
+	std::uint64_t rebasedTransportStartSamps) noexcept
+{
+	std::scoped_lock lock(_midiCaptureMutex);
+	auto settings = MidiQuantisation();
+	settings.GrainSamps = grainSamps;
+	const auto resolved = _ResolvedMidiQuantisation(settings);
+	_preparedLocalMasterQuantisationPacked.store(settings.Pack(), std::memory_order_release);
+	_preparedLocalMasterTransportStart.store(rebasedTransportStartSamps, std::memory_order_release);
+	_localMasterQuantisationPrepared.store(true, std::memory_order_release);
+	for (const auto& loop : _midiLoops)
+		if (loop && !loop->PrepareQuantisation(resolved, rebasedTransportStartSamps,
+			_ForcedMidiQuantisationEnabled())) return false;
+	return true;
+}
+
+bool LoopTake::PreparedMidiQuantisationReadyAtAudioBoundary() const noexcept
+{
+	const auto loops = _BorrowMidiLoopSnapshot();
+	if (!loops) return true;
+	for (const auto& loop : *loops)
+		if (loop && !loop->PreparedQuantisationReadyAtAudioBoundary()) return false;
+	return true;
+}
+
+bool LoopTake::TryClaimPreparedMidiQuantisationAtAudioBoundary() noexcept
+{
+	std::uint8_t expected = 0u;
+	if (!_promotionTopologyGate.compare_exchange_strong(expected, 1u,
+		std::memory_order_seq_cst)) return false;
+	_promotionMidiLoopLease = _BorrowMidiLoopSnapshot();
+	if (!_promotionMidiLoopLease.ReadSucceeded())
+	{
+		ReleasePreparedMidiQuantisationClaimAtAudioBoundary();
+		return false;
+	}
+	if (_promotionMidiLoopLease)
+		for (const auto& loop : *_promotionMidiLoopLease)
+			if (loop && !loop->TryClaimPreparedQuantisationAtAudioBoundary())
+			{
+				ReleasePreparedMidiQuantisationClaimAtAudioBoundary();
+				return false;
+			}
+	return true;
+}
+
+void LoopTake::ReleasePreparedMidiQuantisationClaimAtAudioBoundary() noexcept
+{
+	if (_promotionMidiLoopLease)
+		for (const auto& loop : *_promotionMidiLoopLease)
+			if (loop) loop->ReleasePreparedQuantisationClaimAtAudioBoundary();
+	_promotionMidiLoopLease.reset();
+	std::uint8_t expected = 1u;
+	_promotionTopologyGate.compare_exchange_strong(expected, 0u,
+		std::memory_order_seq_cst);
+}
+
+void LoopTake::ActivatePreparedMidiQuantisationAtAudioBoundary() noexcept
+{
+	if (!_localMasterQuantisationPrepared.load(std::memory_order_acquire)) return;
+	_midiQuantisationPacked.store(
+		_preparedLocalMasterQuantisationPacked.load(std::memory_order_acquire),
+		std::memory_order_release);
+	_midiTransportStartSamps.store(
+		_preparedLocalMasterTransportStart.load(std::memory_order_acquire),
+		std::memory_order_release);
+	if (_promotionMidiLoopLease)
+		for (const auto& loop : *_promotionMidiLoopLease)
+			if (loop) loop->ActivatePreparedQuantisationAtAudioBoundary();
+	_localMasterQuantisationPrepared.store(false, std::memory_order_release);
+}
+
+std::optional<std::uint32_t> LoopTake::MasterPhaseAtAudioBoundary(
+	const Loop* targetLoop, std::uint32_t masterLength) const noexcept
+{
+	if (masterLength == 0u) return std::nullopt;
+	const auto state = _BorrowAudioState();
+	if (!state) return std::nullopt;
+	const Loop* representative = nullptr;
+	for (const auto& loop : state->Loops)
+	{
+		if (!loop) continue;
+		if (targetLoop)
+		{
+			if (loop.get() == targetLoop) { representative = loop.get(); break; }
+		}
+		else if (!representative || loop->LoopLength() > representative->LoopLength())
+			representative = loop.get();
+	}
+	if (representative)
+	{
+		const auto phaseFraction = 1.0 - representative->LoopIndexFrac();
+		return static_cast<std::uint32_t>(phaseFraction * masterLength + 0.5) % masterLength;
+	}
+	if (targetLoop) return std::nullopt;
+	const auto midiLength = _midiVisualLoopLength.load(std::memory_order_relaxed);
+	if (midiLength == 0ul) return std::nullopt;
+	const auto midiPhase = _midiVisualPlayIndex.load(std::memory_order_relaxed) % midiLength;
+	return static_cast<std::uint32_t>((static_cast<std::uint64_t>(midiPhase) * masterLength
+		+ midiLength / 2u) / midiLength) % masterLength;
 }
 
 float LoopTake::VisualRadius() const noexcept
@@ -2405,6 +2619,10 @@ void LoopTake::_InitResources(ResourceLib& resourceLib, bool forceInit)
 
 std::vector<JobAction> LoopTake::_CommitChanges()
 {
+	// Plugin latency/controller notifications must be pumped with closed editors.
+	if (const auto chain = _vstChain.load(std::memory_order_acquire))
+		chain->PollPendingChanges();
+
 	// Callbacks release their leases independently; periodic collection reclaims
 	// the retired snapshots once the last callback has left them.
 	{
@@ -2846,7 +3064,23 @@ void LoopTake::_PublishMidiLoopSnapshot()
 	state->reserve(_midiLoops.size());
 	for (const auto& midiLoop : _midiLoops)
 		state->push_back(midiLoop);
+	std::uint8_t expected = 0u;
+	while (!_promotionTopologyGate.compare_exchange_weak(expected, 2u,
+		std::memory_order_seq_cst))
+	{
+		expected = 0u;
+		std::this_thread::yield();
+	}
+	// A loop added after a promotion inherits the grid visible at publication.
+	const auto settings = ResolvedMidiQuantisation();
+	const auto transportStart = MidiQuantisationTransportStartSamps();
+	for (const auto& loop : *state)
+		if (loop)
+			while (!loop->SetQuantisation(settings, transportStart,
+				_ForcedMidiQuantisationEnabled()))
+				std::this_thread::yield();
 	_midiLoopSnapshot.store(std::move(state), std::memory_order_release);
+	_promotionTopologyGate.store(0u, std::memory_order_seq_cst);
 }
 
 void LoopTake::_PublishAudioState()
@@ -3016,7 +3250,12 @@ std::optional<bool> LoopTake::_ForcedMidiQuantisationEnabled() const noexcept
 
 midi::MidiQuantisationSettings LoopTake::ResolvedMidiQuantisation() const noexcept
 {
-	auto settings = MidiQuantisation();
+	return _ResolvedMidiQuantisation(MidiQuantisation());
+}
+
+midi::MidiQuantisationSettings LoopTake::_ResolvedMidiQuantisation(
+	midi::MidiQuantisationSettings settings) const noexcept
+{
 	const auto base = _midiBaseGridPacked.load(std::memory_order_acquire);
 	settings.BaseIntervalSamps = static_cast<std::uint32_t>(base >> 32u);
 	settings.BaseDivisions = static_cast<std::uint32_t>(base);

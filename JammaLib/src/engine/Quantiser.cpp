@@ -511,6 +511,16 @@ bool Quantiser::TrySetMasterFromHover(const std::shared_ptr<base::GuiElement>& h
 	if (!timing.has_value())
 		return false;
 
+	if (_localMasterTimingPublisher && !_localMasterTimingPending)
+	{
+		_previousMasterLoop = _masterLoop;
+		_previousGridSource = _gridSource.load(std::memory_order_acquire);
+		_previousMasterLoopLengthSamps = _masterLoopLengthSamps.load(std::memory_order_acquire);
+		_previousMasterOriginalBufferLengthSamps = _masterOriginalBufferLengthSamps.load(std::memory_order_acquire);
+		_previousActiveGridDivisions = _activeGridDivisions.load(std::memory_order_acquire);
+		_previousEffectiveQuantiseSamps = _effectiveQuantiseSamps.load(std::memory_order_acquire);
+		_previousSeedUsesPowers = _seedUsesPowers;
+	}
 	_masterLoop = target->RepresentativeLoopRef;
 	{
 		std::scoped_lock tapTempoLock(_tapTempoMutex);
@@ -521,15 +531,47 @@ bool Quantiser::TrySetMasterFromHover(const std::shared_ptr<base::GuiElement>& h
 	}
 
 	SetSeedUsesPowers(cfg.Loop.SeedUsesPowers);
-	if (_clock && _masterLoop)
-		_clock->SetMasterLoopIndexFrac(_masterLoop->LoopIndexFrac());
-	ApplyTiming(timing.value(), "master loop");
-	SetMidiGrain(timing->SeedSamps, "master loop", stations);
+	if (_localMasterTimingPublisher)
+	{
+		// The target cursor is sampled from retained audio snapshots at the block
+		// boundary, then installed together with the new geometry.
+		_localMasterTimingPending = true;
+		_pendingMasterTake = target->TakeRef;
+		_pendingLocalMasterTimingVersion = _localMasterTimingPublisher(*timing,
+			_seedUsesPowers ? Timer::QUANTISE_POWER : Timer::QUANTISE_MULTIPLE,
+			target->TakeRef.get(), _masterLoop.get());
+		_effectiveQuantiseSamps.store(timing->SeedSamps, std::memory_order_release);
+		_activeGridDivisions.store(timing->Bpi, std::memory_order_release);
+		_gridSource.store(QuantisationGridSource::Default, std::memory_order_release);
+		_armReclock.store(false, std::memory_order_release);
+	}
+	else
+	{
+		ApplyTiming(*timing, "master loop");
+		if (_clock && target->TakeRef)
+			_clock->SetMasterLoopIndexFrac(target->TakeRef->LoopIndexFrac());
+	}
+	if (!_localMasterTimingPublisher)
+		SetMidiGrain(timing->SeedSamps, "master loop", stations);
 	UpdateStationHints(hovering, depth, confirm, stations);
 
 	std::cout << "Master quantisation target set: depth=" << static_cast<int>(depth)
 		<< " length=" << masterLength << std::endl;
 	return true;
+}
+
+void Quantiser::CancelLocalMasterTiming(std::uint64_t version) noexcept
+{
+	if (!_localMasterTimingPending || _pendingLocalMasterTimingVersion != version) return;
+	_masterLoop = std::move(_previousMasterLoop);
+	_gridSource.store(_previousGridSource, std::memory_order_release);
+	_masterLoopLengthSamps.store(_previousMasterLoopLengthSamps, std::memory_order_release);
+	_masterOriginalBufferLengthSamps.store(_previousMasterOriginalBufferLengthSamps, std::memory_order_release);
+	_activeGridDivisions.store(_previousActiveGridDivisions, std::memory_order_release);
+	_effectiveQuantiseSamps.store(_previousEffectiveQuantiseSamps, std::memory_order_release);
+	_seedUsesPowers = _previousSeedUsesPowers;
+	_pendingMasterTake.reset();
+	_localMasterTimingPending = false;
 }
 
 void Quantiser::UpdateStationHints(const std::shared_ptr<base::GuiElement>& candidate,
@@ -539,10 +581,9 @@ void Quantiser::UpdateStationHints(const std::shared_ptr<base::GuiElement>& cand
 {
 	ClearStationHints(stations);
 
-	if (!_clock || !_clock->IsQuantisable())
+	const auto seed = EffectiveSamps();
+	if (!_clock || seed == 0u)
 		return;
-
-	const auto seed = _clock->QuantiseSamps();
 	const auto masterLengthSamps = _masterLoopLengthSamps.load(std::memory_order_acquire);
 	const auto master = masterLengthSamps > 0ul ? static_cast<unsigned int>(masterLengthSamps) : seed;
 	if (_masterLoop)

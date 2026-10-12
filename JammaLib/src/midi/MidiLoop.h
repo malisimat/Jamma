@@ -30,6 +30,11 @@ namespace midi
 	public:
 		virtual ~IMidiSink() = default;
 		virtual void OnEvent(const MidiEvent& ev) noexcept = 0;
+		virtual bool TryOnEvent(const MidiEvent& ev) noexcept
+		{
+			OnEvent(ev);
+			return true;
+		}
 	};
 
 	class IMidiOutputSink
@@ -37,6 +42,11 @@ namespace midi
 	public:
 		virtual ~IMidiOutputSink() = default;
 		virtual void OnEvent(unsigned int outputIndex, const MidiEvent& ev) noexcept = 0;
+		virtual bool TryOnEvent(unsigned int outputIndex, const MidiEvent& ev) noexcept
+		{
+			OnEvent(outputIndex, ev);
+			return true;
+		}
 	};
 
 
@@ -175,12 +185,22 @@ namespace midi
 		};
 
 	private:
+		struct ChaseState
+		{
+			std::bitset<TotalNoteSlots> Held;
+			std::bitset<TotalNoteSlots> Continuing;
+			std::array<std::uint8_t, TotalNoteSlots> Velocity{};
+			std::array<std::uint8_t, TotalNoteSlots> Flags{};
+		};
+
 		struct PlaybackSnapshot
 		{
 			std::array<MidiEvent, DefaultCapacity> Raw{};
 			std::array<MidiEvent, DefaultCapacity> Quantised{};
 			std::array<std::uint8_t, DefaultCapacity> RawUnmatchedStarts{};
 			std::array<std::uint8_t, DefaultCapacity> QuantisedUnmatchedStarts{};
+			ChaseState RawChaseHead{};
+			ChaseState QuantisedChaseHead{};
 			std::size_t EventCount = 0u;
 			std::uint32_t LoopLengthSamps = 0u;
 			std::uint64_t Revision = 0u;
@@ -237,6 +257,11 @@ namespace midi
 		// Emitted events' `sampleOffset` is rewritten to the absolute global sample at
 		// which the sink should treat them as occurring. If the block crosses a loop
 		// boundary, paired held notes are flushed at the wrap sample; unmatched notes continue.
+		// Callback owner requests a full voice reset and destination-state chase.
+		void RequestRelocationChase() noexcept
+			{ _relocationChaseRequested = true; ++_relocationGeneration; }
+		std::uint64_t RelocationGenerationAtAudioBoundary() const noexcept
+			{ return _relocationGeneration; }
 		void ReadBlock(std::uint32_t globalSample,
 			std::uint32_t numSamples,
 			IMidiSink& sink) noexcept;
@@ -258,6 +283,7 @@ namespace midi
 		std::uint32_t AutomationGlobalSampleOrigin() const noexcept { return _automationGlobalSampleOrigin; }
 		std::uint64_t DroppedEventCount() const noexcept { return _dropped; }
 		std::uint64_t Revision() const noexcept;
+		std::optional<std::uint64_t> PublishedRevisionAtAudioBoundary() const noexcept;
 		// Notes that have been emitted as NoteOn but whose NoteOff has not yet been played.
 		// Used by the ditch path to flush stuck notes before the loop is discarded.
 		std::bitset<TotalNoteSlots> HeldNotes() const noexcept;
@@ -345,6 +371,14 @@ namespace midi
 		// event buffers and publishes a raw pointer for audio-thread readers. Retained
 		// buffers are not overwritten or freed until this MidiLoop is destroyed, so
 		// ReadBlock never touches shared ownership or dangling storage.
+		void CompletePreparedQuantisationOnOwner() noexcept;
+		bool PrepareQuantisation(const MidiQuantisationSettings& settings,
+			std::uint64_t transportStartSamps,
+			std::optional<bool> forcedEnabled = std::nullopt);
+		void ActivatePreparedQuantisationAtAudioBoundary() noexcept;
+		bool PreparedQuantisationReadyAtAudioBoundary() const noexcept;
+		bool TryClaimPreparedQuantisationAtAudioBoundary() noexcept;
+		void ReleasePreparedQuantisationClaimAtAudioBoundary() noexcept;
 		bool SetQuantisation(const MidiQuantisationSettings& settings,
 			std::uint64_t transportStartSamps = 0u,
 			std::optional<bool> forcedEnabled = std::nullopt);
@@ -374,13 +408,31 @@ namespace midi
 			const PlaybackSnapshot& snapshot,
 			IMidiSink& sink) noexcept;
 		enum class HeldFlushPolicy { All, Seam };
+		void RetryPendingReleases(std::uint32_t atGlobalSample, IMidiSink& sink) noexcept;
 		void FlushHeldNotes(std::uint32_t atGlobalSample, IMidiSink& sink,
 			HeldFlushPolicy policy = HeldFlushPolicy::All) noexcept;
+		static void AdvanceChaseState(ChaseState& state, const MidiEvent& event, bool unmatched) noexcept;
+		static void BuildChaseHead(PlaybackSnapshot& snapshot, bool quantised) noexcept;
+		bool ChaseAtCursor(std::uint32_t sample, const PlaybackSnapshot& snapshot, IMidiSink& sink) noexcept;
 		static void ClassifyUnmatchedStarts(PlaybackSnapshot& snapshot) noexcept;
+		class OwnerPublicationGuard
+		{
+		public:
+			explicit OwnerPublicationGuard(MidiLoop& loop) noexcept : _loop(loop)
+				{ _loop.AcquireOwnerPublicationGate(); }
+			~OwnerPublicationGuard() { _loop.ReleaseOwnerPublicationGate(); }
+			OwnerPublicationGuard(const OwnerPublicationGuard&) = delete;
+			OwnerPublicationGuard& operator=(const OwnerPublicationGuard&) = delete;
+		private:
+			MidiLoop& _loop;
+		};
+		void AcquireOwnerPublicationGate() noexcept;
+		void ReleaseOwnerPublicationGate() noexcept;
 		bool PublishCompletedEvents(const MidiEvent* raw, std::size_t count,
 			std::uint32_t length, std::uint64_t revision,
 			const MidiQuantisationSettings& quantisation,
-			std::uint64_t transportStart, bool sourceChanged = true) noexcept;
+			std::uint64_t transportStart, bool sourceChanged = true,
+			bool inheritActiveGrid = false, bool ownerGateHeld = false) noexcept;
 		// Owner-side completion only. An active callback reader releases its pool
 		// slot independently; never call this from an audio callback.
 		void PublishCompletionWithRetry(const MidiEvent* raw, std::size_t count,
@@ -421,6 +473,16 @@ namespace midi
 		std::array<PlaybackSnapshot, 3u> _playbackBuffers{};
 		std::array<bool, 3u> _playbackBufferUsed{};
 		std::atomic<const PlaybackSnapshot*> _playbackSnapshot{ nullptr };
+		std::atomic<const PlaybackSnapshot*> _preparedPlaybackSnapshot{ nullptr };
+		std::atomic<std::uint64_t> _playbackActivationVersion{ 0u };
+		std::atomic<std::uint8_t> _promotionPublicationGate{ 0u }; // 1 callback, 2 owner.
+		bool _prepareNextPublication = false; // Job owner only.
+		bool _preparedOwnerPending = false; // Job owner only.
+		std::atomic<bool> _preparedGridActivated{ false };
+		MidiQuantisationSettings _preparedOwnerQuantisation;
+		MidiQuantisationSettings _preparedOwnerInheritedQuantisation;
+		std::optional<bool> _preparedOwnerForcedQuantisationEnabled;
+		std::uint64_t _preparedOwnerTransportStartSamps = 0u;
 		mutable std::atomic<std::uint32_t> _playbackReaders{ 0u };
 		std::uint64_t _callbackRevision = 0u;
 		std::size_t _eventCount;
@@ -439,6 +501,10 @@ namespace midi
 		std::bitset<TotalNoteSlots> _held;
 		// Callback-only state, cleared by played releases and full flushes.
 		std::bitset<TotalNoteSlots> _continuing;
+		std::bitset<TotalNoteSlots> _pendingReleases; // Callback retries rejected releases.
+		bool _relocationChaseRequested = false; // Callback owner only.
+		std::uint64_t _relocationGeneration = 0u; // Callback owner only.
+		bool _relocationChaseRetry = false; // Callback retries rejected chased attacks.
 		// Callback owns _held. Job-side ditch reads this per-slot atomic mirror;
 		// it never mutates callback state or requires a lock.
 		std::array<std::atomic<std::uint8_t>, TotalNoteSlots> _heldPublished{};

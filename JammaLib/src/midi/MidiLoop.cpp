@@ -180,8 +180,11 @@ void MidiLoop::StartRecord() noexcept
 	_eventCount = 0;
 	_loopLengthSamps = 0;
 	_dropped = 0;
+	AcquireOwnerPublicationGate();
 	_state = MidiLoopState::Recording;
 	_playbackSnapshot.store(nullptr, std::memory_order_seq_cst);
+	_preparedPlaybackSnapshot.store(nullptr, std::memory_order_seq_cst);
+	ReleaseOwnerPublicationGate();
 	++_revision;
 }
 
@@ -264,8 +267,11 @@ void MidiLoop::Reset() noexcept
 	_eventCount = 0;
 	_loopLengthSamps = 0;
 	_dropped = 0;
+	AcquireOwnerPublicationGate();
 	_state = MidiLoopState::Empty;
 	_playbackSnapshot.store(nullptr, std::memory_order_seq_cst);
+	_preparedPlaybackSnapshot.store(nullptr, std::memory_order_seq_cst);
+	ReleaseOwnerPublicationGate();
 	++_revision;
 }
 
@@ -331,6 +337,9 @@ bool MidiLoop::SnapshotForExport(ExportState& state,
 
 bool MidiLoop::RestoreFromExport(const ExportState& state) noexcept
 {
+	OwnerPublicationGuard publication(*this);
+	if (_preparedGridActivated.load(std::memory_order_seq_cst))
+		CompletePreparedQuantisationOnOwner();
 	if (state.LoopLengthSamps == 0u || state.EventCount > _events.size())
 		return false;
 	for (std::size_t i = 0u; i < state.EventCount; ++i)
@@ -360,11 +369,15 @@ bool MidiLoop::RestoreFromExport(const ExportState& state) noexcept
 				return false;
 		}
 	}
-	auto restoredQuantisation = ResolveQuantisation(_inheritedQuantisation, state.LoopQuantisation);
-	if (_forcedQuantisationEnabled) restoredQuantisation.Enabled = *_forcedQuantisationEnabled;
+	const auto activated = _preparedGridActivated.load(std::memory_order_seq_cst);
+	const auto& inherited = activated ? _preparedOwnerInheritedQuantisation : _inheritedQuantisation;
+	const auto& forced = activated ? _preparedOwnerForcedQuantisationEnabled : _forcedQuantisationEnabled;
+	auto restoredQuantisation = ResolveQuantisation(inherited, state.LoopQuantisation);
+	if (forced) restoredQuantisation.Enabled = *forced;
 	if (!PublishCompletedEvents(state.Events.data(), state.EventCount,
 		state.LoopLengthSamps, _revision + 1u, restoredQuantisation,
-		_quantisationTransportStartSamps))
+		activated ? _preparedOwnerTransportStartSamps : _quantisationTransportStartSamps,
+		true, false, true))
 		return false;
 
 	_loopQuantisationOverride = state.LoopQuantisation;
@@ -452,6 +465,9 @@ bool MidiLoop::SnapshotForEdit(EditState& state) const noexcept
 
 bool MidiLoop::PublishEdit(const EditState& state) noexcept
 {
+	OwnerPublicationGuard publication(*this);
+	if (_preparedGridActivated.load(std::memory_order_seq_cst))
+		CompletePreparedQuantisationOnOwner();
 	if (_state != MidiLoopState::Playing || state.Revision != _revision
 		|| state.SourceRevision != _sourceRevision
 		|| state.LoopLengthSamps != _loopLengthSamps || state.LoopLengthSamps == 0u
@@ -560,8 +576,12 @@ bool MidiLoop::PublishEdit(const EditState& state) noexcept
 		if (oldIndex != priorCount || newIndex != state.EventCount) return false;
 	}
 	if (!PublishCompletedEvents(state.Events.data(), state.EventCount,
-		state.LoopLengthSamps, _revision + 1u, _quantisation,
-		_quantisationTransportStartSamps)) return false;
+		state.LoopLengthSamps, _revision + 1u,
+		_preparedGridActivated.load(std::memory_order_seq_cst)
+			? _preparedOwnerQuantisation : _quantisation,
+		_preparedGridActivated.load(std::memory_order_seq_cst)
+			? _preparedOwnerTransportStartSamps : _quantisationTransportStartSamps,
+		true, false, true)) return false;
 	std::copy_n(state.Events.begin(), state.EventCount, _events.begin());
 	_eventCount = state.EventCount;
 	++_revision;
@@ -621,6 +641,15 @@ std::uint64_t MidiLoop::Revision() const noexcept
 {
 	const auto* snapshot = AcquirePlaybackSnapshot();
 	if (!snapshot) return _revision;
+	const auto revision = snapshot->Revision;
+	ReleasePlaybackSnapshot();
+	return revision;
+}
+
+std::optional<std::uint64_t> MidiLoop::PublishedRevisionAtAudioBoundary() const noexcept
+{
+	const auto* snapshot = AcquirePlaybackSnapshot();
+	if (!snapshot) return std::nullopt;
 	const auto revision = snapshot->Revision;
 	ReleasePlaybackSnapshot();
 	return revision;
@@ -725,6 +754,7 @@ bool MidiLoop::BuildModelFromEvents(std::uint32_t displayLengthSamps, bool force
 
 void MidiLoop::FlushPlaybackHeldNotes(std::uint32_t atGlobalSample, IMidiSink& sink) noexcept
 {
+	RetryPendingReleases(atGlobalSample, sink);
 	FlushHeldNotes(atGlobalSample, sink);
 	_heldFlushRequested.exchange(false, std::memory_order_seq_cst);
 }
@@ -733,6 +763,7 @@ void MidiLoop::ReadBlock(std::uint32_t globalSample,
                          std::uint32_t numSamples,
                          IMidiSink& sink) noexcept
 {
+	if (numSamples > 0u) RetryPendingReleases(globalSample, sink);
 	const auto* snapshot = AcquirePlaybackSnapshot();
 	if (!snapshot || 0u == snapshot->LoopLengthSamps || 0u == numSamples)
 	{
@@ -749,6 +780,22 @@ void MidiLoop::ReadBlock(std::uint32_t globalSample,
 	{
 		FlushHeldNotes(globalSample, sink);
 		_callbackRevision = snapshot->Revision;
+	}
+	if (_relocationChaseRequested)
+	{
+		FlushHeldNotes(globalSample, sink);
+		if (_held.any() || _pendingReleases.any())
+		{
+			ReleasePlaybackSnapshot();
+			return; // Retry before reconstructing a new voice.
+		}
+		_heldFlushRequested.exchange(false, std::memory_order_seq_cst);
+		_relocationChaseRetry = !ChaseAtCursor(globalSample, *snapshot, sink);
+		_relocationChaseRequested = false;
+	}
+	else if (_relocationChaseRetry)
+	{
+		_relocationChaseRetry = !ChaseAtCursor(globalSample, *snapshot, sink);
 	}
 
 	std::uint32_t remaining = numSamples;
@@ -808,14 +855,18 @@ void MidiLoop::EmitEventsInRange(std::uint32_t lo,
 			continue;
 
 		const auto slot = NoteSlot(src.Channel(), src.data1);
-		if (src.IsNoteOn() && _continuing.test(slot))
+		if (src.IsNoteOn() && (_continuing.test(slot) || _pendingReleases.test(slot)))
 			continue;
 
 		MidiEvent out = src;
 		out.sampleOffset = globalBase + off;
-		sink.OnEvent(out);
+		if (!sink.TryOnEvent(out))
+		{
+			if (src.IsNoteOff() && _held.test(slot)) _pendingReleases.set(slot);
+			continue;
+		}
 
-		// Track held notes for wrap flushing.
+		// Track only notes delivered to an output for wrap flushing.
 		if (src.IsNoteOn())
 		{
 			_held.set(slot);
@@ -826,17 +877,37 @@ void MidiLoop::EmitEventsInRange(std::uint32_t lo,
 		{
 			_held.reset(slot);
 			_continuing.reset(slot);
+			_pendingReleases.reset(slot);
 			_heldPublished[NoteSlot(src.Channel(), src.data1)].store(0u, std::memory_order_seq_cst);
 		}
 	}
 }
 
+void MidiLoop::RetryPendingReleases(std::uint32_t atGlobalSample, IMidiSink& sink) noexcept
+{
+	if (_pendingReleases.none()) return;
+	for (std::uint8_t channel = 0u; channel < 16u; ++channel)
+		for (std::uint8_t note = 0u; note < 128u; ++note)
+		{
+			const auto slot = NoteSlot(channel, note);
+			if (!_pendingReleases.test(slot)) continue;
+			const auto off = MidiEvent::MakeNoteOff(atGlobalSample, channel, note);
+			if (!sink.TryOnEvent(off)) continue;
+			_pendingReleases.reset(slot);
+			_continuing.reset(slot);
+			_held.reset(slot);
+			_heldPublished[slot].store(0u, std::memory_order_seq_cst);
+		}
+}
+
 void MidiLoop::FlushHeldNotes(std::uint32_t atGlobalSample, IMidiSink& sink,
 	HeldFlushPolicy policy) noexcept
 {
-	if (policy == HeldFlushPolicy::All) _continuing.reset();
 	if (_held.none())
+	{
+		if (policy == HeldFlushPolicy::All) _continuing.reset();
 		return;
+	}
 
 	for (std::uint8_t channel = 0; channel < 16; ++channel)
 	{
@@ -848,8 +919,14 @@ void MidiLoop::FlushHeldNotes(std::uint32_t atGlobalSample, IMidiSink& sink,
 
 			MidiEvent off = MidiEvent::MakeNoteOff(
 				static_cast<std::uint32_t>(atGlobalSample), channel, note);
-			sink.OnEvent(off);
+			if (!sink.TryOnEvent(off))
+			{
+				_pendingReleases.set(slot);
+				continue;
+			}
 			_held.reset(slot);
+			_continuing.reset(slot);
+			_pendingReleases.reset(slot);
 			_heldPublished[slot].store(0u, std::memory_order_seq_cst);
 		}
 	}
@@ -879,9 +956,116 @@ bool MidiLoop::SetLoopQuantisationOverride(const QuantisationOverride& value)
 	return false;
 }
 
+bool MidiLoop::PrepareQuantisation(const MidiQuantisationSettings& settings,
+	std::uint64_t transportStartSamps, std::optional<bool> forcedEnabled)
+{
+	if (_preparedGridActivated.load(std::memory_order_seq_cst))
+		CompletePreparedQuantisationOnOwner();
+	const auto oldQuantisation = _quantisation;
+	const auto oldInherited = _inheritedQuantisation;
+	const auto oldForced = _forcedQuantisationEnabled;
+	const auto oldStart = _quantisationTransportStartSamps;
+	_prepareNextPublication = true;
+	const auto beforeRevision = _revision;
+	auto result = SetQuantisation(settings, transportStartSamps, forcedEnabled);
+	if (result && _state == MidiLoopState::Playing && beforeRevision == _revision)
+	{
+		result = PublishCompletedEvents(_events.data(), _eventCount, _loopLengthSamps,
+			_revision + 1u, _quantisation, _quantisationTransportStartSamps, false);
+		if (result) ++_revision;
+	}
+	if (result)
+	{
+		_preparedOwnerPending = true;
+		_preparedOwnerQuantisation = _quantisation;
+		_preparedOwnerInheritedQuantisation = _inheritedQuantisation;
+		_preparedOwnerForcedQuantisationEnabled = _forcedQuantisationEnabled;
+		_preparedOwnerTransportStartSamps = _quantisationTransportStartSamps;
+	}
+	// Source replacements before activation continue to use the old grid.
+	_quantisation = oldQuantisation;
+	_inheritedQuantisation = oldInherited;
+	_forcedQuantisationEnabled = oldForced;
+	_quantisationTransportStartSamps = oldStart;
+	_prepareNextPublication = false;
+	return result;
+}
+
+void MidiLoop::CompletePreparedQuantisationOnOwner() noexcept
+{
+	if (!_preparedOwnerPending || !_preparedGridActivated.load(std::memory_order_seq_cst)) return;
+	_preparedOwnerPending = false;
+	_quantisation = _preparedOwnerQuantisation;
+	_inheritedQuantisation = _preparedOwnerInheritedQuantisation;
+	_forcedQuantisationEnabled = _preparedOwnerForcedQuantisationEnabled;
+	_quantisationTransportStartSamps = _preparedOwnerTransportStartSamps;
+	_preparedGridActivated.store(false, std::memory_order_seq_cst);
+}
+
+void MidiLoop::AcquireOwnerPublicationGate() noexcept
+{
+	std::uint8_t expected = 0u;
+	while (!_promotionPublicationGate.compare_exchange_weak(expected, 2u,
+		std::memory_order_seq_cst))
+	{
+		expected = 0u;
+		std::this_thread::yield();
+	}
+}
+
+void MidiLoop::ReleaseOwnerPublicationGate() noexcept
+{
+	_promotionPublicationGate.store(0u, std::memory_order_seq_cst);
+}
+
+bool MidiLoop::TryClaimPreparedQuantisationAtAudioBoundary() noexcept
+{
+	std::uint8_t expected = 0u;
+	if (!_promotionPublicationGate.compare_exchange_strong(expected, 1u,
+		std::memory_order_seq_cst)) return false;
+	if (PreparedQuantisationReadyAtAudioBoundary()) return true;
+	ReleasePreparedQuantisationClaimAtAudioBoundary();
+	return false;
+}
+
+void MidiLoop::ReleasePreparedQuantisationClaimAtAudioBoundary() noexcept
+{
+	std::uint8_t expected = 1u;
+	_promotionPublicationGate.compare_exchange_strong(expected, 0u,
+		std::memory_order_seq_cst);
+}
+
+void MidiLoop::ActivatePreparedQuantisationAtAudioBoundary() noexcept
+{
+	// This version brackets the two-pointer handoff for owner-side pool reclamation.
+	_playbackActivationVersion.fetch_add(1u, std::memory_order_seq_cst);
+	const auto* prepared = _preparedPlaybackSnapshot.exchange(nullptr, std::memory_order_seq_cst);
+	if (prepared)
+	{
+		_playbackSnapshot.store(prepared, std::memory_order_seq_cst);
+		_preparedGridActivated.store(true, std::memory_order_seq_cst);
+	}
+	_playbackActivationVersion.fetch_add(1u, std::memory_order_seq_cst);
+}
+
+bool MidiLoop::PreparedQuantisationReadyAtAudioBoundary() const noexcept
+{
+	if (_state.load(std::memory_order_acquire) != MidiLoopState::Playing) return true;
+	_playbackReaders.fetch_add(1u, std::memory_order_seq_cst);
+	const auto* prepared = _preparedPlaybackSnapshot.load(std::memory_order_seq_cst);
+	const auto* active = _playbackSnapshot.load(std::memory_order_seq_cst);
+	const auto ready = prepared && active &&
+		prepared->SourceRevision == active->SourceRevision;
+	ReleasePlaybackSnapshot();
+	return ready;
+}
+
 bool MidiLoop::SetQuantisation(const MidiQuantisationSettings& inherited,
 	std::uint64_t transportStartSamps, std::optional<bool> forcedEnabled)
 {
+	OwnerPublicationGuard publication(*this);
+	if (!_prepareNextPublication && _preparedGridActivated.load(std::memory_order_seq_cst))
+		CompletePreparedQuantisationOnOwner();
 	auto settings = ResolveQuantisation(inherited, _loopQuantisationOverride);
 	if (forcedEnabled) settings.Enabled = *forcedEnabled;
 	if (settings == _quantisation && transportStartSamps == _quantisationTransportStartSamps)
@@ -892,7 +1076,7 @@ bool MidiLoop::SetQuantisation(const MidiQuantisationSettings& inherited,
 	}
 	if (_state == MidiLoopState::Playing &&
 		!PublishCompletedEvents(_events.data(), _eventCount, _loopLengthSamps,
-			_revision + 1u, settings, transportStartSamps, false))
+			_revision + 1u, settings, transportStartSamps, false, false, true))
 		return false;
 	_quantisation = settings;
 	_inheritedQuantisation = inherited;
@@ -907,14 +1091,17 @@ void MidiLoop::PublishCompletionWithRetry(const MidiEvent* raw, std::size_t coun
 {
 	if (length == 0u)
 	{
+		AcquireOwnerPublicationGate();
 		_playbackSnapshot.store(nullptr, std::memory_order_seq_cst);
+		_preparedPlaybackSnapshot.store(nullptr, std::memory_order_seq_cst);
+		ReleaseOwnerPublicationGate();
 		return;
 	}
 
 	// Completion runs on the MIDI owner, never the audio callback. A reader of
 	// one of the fixed buffers can finish independently, making a slot reusable.
 	while (!PublishCompletedEvents(raw, count, length, revision,
-		_quantisation, _quantisationTransportStartSamps))
+		_quantisation, _quantisationTransportStartSamps, true, true))
 		std::this_thread::yield();
 }
 
@@ -955,42 +1142,133 @@ void MidiLoop::ClassifyUnmatchedStarts(PlaybackSnapshot& snapshot) noexcept
 bool MidiLoop::PublishCompletedEvents(const MidiEvent* raw, std::size_t count,
 	std::uint32_t length, std::uint64_t revision,
 	const MidiQuantisationSettings& quantisation,
-	std::uint64_t transportStart, bool sourceChanged) noexcept
+	std::uint64_t transportStart, bool sourceChanged,
+	bool inheritActiveGrid, bool ownerGateHeld) noexcept
 {
 	if (count > DefaultCapacity || length == 0u)
 		return false;
+	if (!ownerGateHeld) AcquireOwnerPublicationGate();
+	const auto handoffBefore = _playbackActivationVersion.load(std::memory_order_seq_cst);
 	const auto* current = _playbackSnapshot.load(std::memory_order_seq_cst);
-	if (_playbackReaders.load(std::memory_order_seq_cst) == 0u)
+	const auto activated = _preparedGridActivated.load(std::memory_order_seq_cst);
+	const auto& effectiveQuantisation = inheritActiveGrid
+		? (current ? current->Quantisation
+			: (activated ? _preparedOwnerQuantisation : quantisation))
+		: quantisation;
+	const auto effectiveTransportStart = inheritActiveGrid
+		? (current ? current->QuantisationTransportStartSamps
+			: (activated ? _preparedOwnerTransportStartSamps : transportStart))
+		: transportStart;
+	const auto* prepared = _preparedPlaybackSnapshot.load(std::memory_order_seq_cst);
+	const auto readers = _playbackReaders.load(std::memory_order_seq_cst);
+	const auto handoffAfter = _playbackActivationVersion.load(std::memory_order_seq_cst);
+	if (readers == 0u && handoffBefore == handoffAfter && (handoffAfter & 1u) == 0u)
 	{
 		for (std::size_t i = 0u; i < _playbackBuffers.size(); ++i)
-			if (&_playbackBuffers[i] != current) _playbackBufferUsed[i] = false;
+			if (&_playbackBuffers[i] != current && &_playbackBuffers[i] != prepared)
+				_playbackBufferUsed[i] = false;
 	}
 	std::size_t slot = _playbackBuffers.size();
 	for (std::size_t i = 0u; i < _playbackBuffers.size(); ++i)
 		if (!_playbackBufferUsed[i]) { slot = i; break; }
-	if (slot == _playbackBuffers.size()) return false;
+	if (slot == _playbackBuffers.size())
+	{
+		if (!ownerGateHeld) ReleaseOwnerPublicationGate();
+		return false;
+	}
 	auto& snapshot = _playbackBuffers[slot];
 	std::copy_n(raw, count, snapshot.Raw.begin());
 	snapshot.EventCount = count;
 	snapshot.LoopLengthSamps = length;
 	snapshot.Revision = revision;
 	snapshot.SourceRevision = sourceChanged ? revision : _sourceRevision;
-	snapshot.Quantisation = quantisation;
-	snapshot.QuantisationTransportStartSamps = transportStart;
+	snapshot.Quantisation = effectiveQuantisation;
+	snapshot.QuantisationTransportStartSamps = effectiveTransportStart;
 	ClassifyUnmatchedStarts(snapshot);
-	snapshot.QuantisationActive = quantisation.Enabled
-		&& (quantisation.GrainSamps > 0u || quantisation.HasRemoteGrid()) && count > 0u;
+	BuildChaseHead(snapshot, false);
+	snapshot.QuantisationActive = effectiveQuantisation.Enabled
+		&& (effectiveQuantisation.GrainSamps > 0u || effectiveQuantisation.HasRemoteGrid()) && count > 0u;
 	if (snapshot.QuantisationActive)
 	{
 		MidiQuantisation::BuildQuantisedPlaybackEvents(snapshot.Raw.data(), count,
-			length, quantisation, transportStart, snapshot.Quantised.data(), false);
+			length, effectiveQuantisation, effectiveTransportStart, snapshot.Quantised.data(), false);
 		std::copy_n(snapshot.RawUnmatchedStarts.begin(), count, snapshot.QuantisedUnmatchedStarts.begin());
 		MidiNote::SortMidiEvents(snapshot.Quantised.data(), count, snapshot.QuantisedUnmatchedStarts.data());
+		BuildChaseHead(snapshot, true);
 	}
 	_playbackBufferUsed[slot] = true;
-	_playbackSnapshot.store(&snapshot, std::memory_order_seq_cst);
+	if (_prepareNextPublication)
+		_preparedPlaybackSnapshot.store(&snapshot, std::memory_order_seq_cst);
+	else
+	{
+		_preparedPlaybackSnapshot.store(nullptr, std::memory_order_seq_cst);
+		_playbackSnapshot.store(&snapshot, std::memory_order_seq_cst);
+	}
 	_sourceRevision = snapshot.SourceRevision;
+	if (!ownerGateHeld) ReleaseOwnerPublicationGate();
 	return true;
+}
+
+void MidiLoop::AdvanceChaseState(ChaseState& state, const MidiEvent& event,
+	bool unmatched) noexcept
+{
+	if (!event.IsNoteOn() && !event.IsNoteOff()) return;
+	const auto slot = NoteSlot(event.Channel(), event.data1);
+	if (event.IsNoteOff())
+	{
+		state.Held.reset(slot);
+		state.Continuing.reset(slot);
+		return;
+	}
+	if (state.Continuing.test(slot)) return;
+	state.Held.set(slot);
+	if (unmatched) state.Continuing.set(slot);
+	state.Velocity[slot] = event.data2;
+	state.Flags[slot] = event.flags;
+}
+
+void MidiLoop::BuildChaseHead(PlaybackSnapshot& snapshot, bool quantised) noexcept
+{
+	auto& head = quantised ? snapshot.QuantisedChaseHead : snapshot.RawChaseHead;
+	head = {};
+	const auto& events = quantised ? snapshot.Quantised : snapshot.Raw;
+	const auto& unmatched = quantised ? snapshot.QuantisedUnmatchedStarts : snapshot.RawUnmatchedStarts;
+	// Two passes establish the stable state entering a repeated loop: a tail
+	// continuation may suppress a paired attack at the next head.
+	for (unsigned int pass = 0u; pass < 2u; ++pass)
+	{
+		for (std::size_t i = 0u; i < snapshot.EventCount; ++i)
+			if (events[i].sampleOffset < snapshot.LoopLengthSamps)
+				AdvanceChaseState(head, events[i], unmatched[i] != 0u);
+		head.Held &= head.Continuing; // Ordinary paired voices release at the seam.
+	}
+}
+
+bool MidiLoop::ChaseAtCursor(std::uint32_t sample, const PlaybackSnapshot& snapshot,
+	IMidiSink& sink) noexcept
+{
+	const bool quantised = snapshot.QuantisationActive;
+	auto state = quantised ? snapshot.QuantisedChaseHead : snapshot.RawChaseHead;
+	const auto& events = quantised ? snapshot.Quantised : snapshot.Raw;
+	const auto& unmatched = quantised ? snapshot.QuantisedUnmatchedStarts : snapshot.RawUnmatchedStarts;
+	const auto offset = sample % snapshot.LoopLengthSamps;
+	bool accepted = true;
+	for (std::size_t i = 0u; i < snapshot.EventCount; ++i)
+		if (events[i].sampleOffset < offset)
+			AdvanceChaseState(state, events[i], unmatched[i] != 0u);
+	for (std::uint8_t channel = 0u; channel < 16u; ++channel)
+		for (std::uint8_t note = 0u; note < 128u; ++note)
+		{
+			const auto slot = NoteSlot(channel, note);
+			if (!state.Held.test(slot) || _held.test(slot)) continue;
+			const auto attack = MidiEvent::MakeNoteOn(sample, channel, note,
+				state.Velocity[slot]).WithFlags(state.Flags[slot]);
+			if (!sink.TryOnEvent(attack)) { accepted = false; continue; }
+			_held.set(slot);
+			if (state.Continuing.test(slot)) _continuing.set(slot);
+			_heldPublished[slot].store(1u, std::memory_order_seq_cst);
+		}
+	return accepted;
 }
 
 void MidiLoop::SetAutomationValueAtFrac(std::size_t laneIdx, double frac, float value) noexcept

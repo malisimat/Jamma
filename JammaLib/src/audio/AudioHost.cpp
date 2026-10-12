@@ -54,6 +54,143 @@ namespace audio
 		_localTransportOffsetLoopFracMailbox.Publish(normalizedLoopFrac);
 	}
 
+	std::uint64_t AudioHost::LocalMasterTimingMailbox::Publish(
+		const LocalMasterTimingRequest& request) noexcept
+	{
+		const auto writing = _sequence.fetch_add(1u, std::memory_order_seq_cst) + 1u;
+		_seedSamps.store(request.SeedSamps, std::memory_order_seq_cst);
+		_masterLengthSamps.store(request.MasterLengthSamps, std::memory_order_seq_cst);
+		_type.store(request.Type, std::memory_order_seq_cst);
+		_targetTake.store(request.TargetTake, std::memory_order_seq_cst);
+		_targetLoop.store(request.TargetLoop, std::memory_order_seq_cst);
+		_sequence.store(writing + 1u, std::memory_order_seq_cst);
+		return writing + 1u;
+	}
+
+	std::optional<AudioHost::LocalMasterTimingRequest>
+	AudioHost::LocalMasterTimingMailbox::ConsumeLatest() noexcept
+	{
+		for (unsigned int attempt = 0u; attempt < 4u; ++attempt)
+		{
+			const auto before = _sequence.load(std::memory_order_seq_cst);
+			if (before == 0u || before == _consumedSequence) return std::nullopt;
+			if ((before & 1u) != 0u) continue;
+			LocalMasterTimingRequest request;
+			request.Version = before;
+			request.SeedSamps = _seedSamps.load(std::memory_order_seq_cst);
+			request.MasterLengthSamps = _masterLengthSamps.load(std::memory_order_seq_cst);
+			request.Type = _type.load(std::memory_order_seq_cst);
+			request.TargetTake = _targetTake.load(std::memory_order_seq_cst);
+			request.TargetLoop = _targetLoop.load(std::memory_order_seq_cst);
+			if (before == _sequence.load(std::memory_order_seq_cst))
+			{
+				return request;
+			}
+		}
+		return std::nullopt;
+	}
+
+	std::uint64_t AudioHost::PublishLocalMasterTiming(unsigned int seedSamps,
+		std::uint32_t masterLengthSamps, utils::Timer::QuantisationType type,
+		const engine::LoopTake* targetTake, const engine::Loop* targetLoop) noexcept
+	{
+		return _localMasterTimingMailbox.Publish({ 0u, seedSamps, masterLengthSamps,
+			type, targetTake, targetLoop });
+	}
+
+	std::optional<AudioHost::LocalMasterTimingReceipt>
+	AudioHost::LastPreparedLocalMasterTiming() const noexcept
+	{
+		for (unsigned int attempt = 0u; attempt < 4u; ++attempt)
+		{
+			const auto before = _localMasterReceiptSequence.load(std::memory_order_seq_cst);
+			if ((before & 1u) != 0u) continue;
+			LocalMasterTimingReceipt receipt{
+				_localMasterReceiptVersion.load(std::memory_order_seq_cst),
+				_localMasterReceiptOldAbsolute.load(std::memory_order_seq_cst),
+				_localMasterReceiptNewPhase.load(std::memory_order_seq_cst),
+				_localMasterReceiptNewLength.load(std::memory_order_seq_cst) };
+			if (before == _localMasterReceiptSequence.load(std::memory_order_seq_cst))
+				return receipt.Version == 0u ? std::nullopt : std::optional{ receipt };
+		}
+		return std::nullopt;
+	}
+
+	void AudioHost::ApplyLocalMasterTimingAtAudioBoundary(
+		const std::vector<std::shared_ptr<engine::Station>>& stations,
+		utils::Timer* timingClock) noexcept
+	{
+		if (!timingClock) return;
+		if (const auto request = _localMasterTimingMailbox.ConsumeLatest(); request)
+		{
+			if (request->Version == _localMasterCancelledVersion.load(std::memory_order_seq_cst))
+				_localMasterTimingMailbox.Acknowledge(request->Version);
+			else if (request->SeedSamps > 0u && request->MasterLengthSamps > 0u)
+			{
+			std::optional<std::uint32_t> phase;
+			for (const auto& station : stations)
+			{
+				if (!station || station->IsRemote()) continue;
+				phase = station->MasterPhaseAtAudioBoundary(request->TargetTake,
+					request->TargetLoop, request->MasterLengthSamps);
+				if (phase) break;
+			}
+			if (phase)
+			{
+				_preparedLocalMasterTiming = *request;
+				_preparedLocalMasterPhase = *phase;
+				_preparedLocalMasterSceneSample = timingClock->SceneSamplePos();
+				_localMasterTimingMailbox.Acknowledge(request->Version);
+				const auto writing = _localMasterReceiptSequence.fetch_add(1u, std::memory_order_seq_cst) + 1u;
+				_localMasterReceiptVersion.store(request->Version, std::memory_order_seq_cst);
+				_localMasterReceiptOldAbsolute.store(timingClock->AbsoluteSamplePos(), std::memory_order_seq_cst);
+				_localMasterReceiptNewPhase.store(*phase, std::memory_order_seq_cst);
+				_localMasterReceiptNewLength.store(request->MasterLengthSamps, std::memory_order_seq_cst);
+				_localMasterReceiptSequence.store(writing + 1u, std::memory_order_seq_cst);
+			}
+		}
+		}
+		const auto& prepared = _preparedLocalMasterTiming;
+		if (prepared.Version == 0u ||
+			_localMasterCancelledVersion.load(std::memory_order_seq_cst) == prepared.Version ||
+			_localMasterCommitVersion.load(std::memory_order_seq_cst) != prepared.Version) return;
+		// The selected master may have been removed after phase capture.
+		bool targetPublished = false;
+		for (const auto& station : stations)
+			if (station && !station->IsRemote() &&
+				station->MasterPhaseAtAudioBoundary(prepared.TargetTake,
+					prepared.TargetLoop, prepared.MasterLengthSamps))
+				targetPublished = true;
+		if (!targetPublished) return;
+		// Preflight the exact published playback membership before changing any grid.
+		bool claimed = true;
+		for (const auto& station : stations)
+			if (station && !station->IsRemote() &&
+				!station->TryClaimPreparedMidiQuantisationAtAudioBoundary())
+				claimed = false;
+		if (!claimed)
+		{
+			for (const auto& station : stations)
+				if (station && !station->IsRemote())
+					station->ReleasePreparedMidiQuantisationClaimAtAudioBoundary();
+			_localMasterPreparationRetryVersion.store(prepared.Version, std::memory_order_seq_cst);
+			return;
+		}
+		const auto elapsed = timingClock->SceneSamplePos() - _preparedLocalMasterSceneSample;
+		const auto phase = static_cast<std::uint32_t>((_preparedLocalMasterPhase + elapsed)
+			% prepared.MasterLengthSamps);
+		for (const auto& station : stations)
+			if (station && !station->IsRemote()) station->ActivatePreparedMidiQuantisationAtAudioBoundary();
+		timingClock->SetQuantisation(prepared.SeedSamps, prepared.Type);
+		timingClock->SetSeedSourceLength(prepared.MasterLengthSamps);
+		timingClock->InitialiseAbsoluteSamplePos(phase);
+		for (const auto& station : stations)
+			if (station && !station->IsRemote())
+				station->ReleasePreparedMidiQuantisationClaimAtAudioBoundary();
+		_localMasterActivatedVersion.store(prepared.Version, std::memory_order_seq_cst);
+		_preparedLocalMasterTiming.Version = 0u;
+	}
+
 	AudioHost::AudioHost(io::UserConfig userConfig) :
 		_userConfig(userConfig),
 		_tickUserConfig(_userConfig),
@@ -478,7 +615,7 @@ bool AudioHost::ApplyDesiredTimingAtAudioBoundary(std::uint64_t blockStartSample
 		if (stations)
 			for (const auto& station : *stations)
 				if (station && !station->IsRemote()) station->ApplyAcceptedTimingCorrection(
-					localSourceCorrectionSamps, desired.Generation);
+					localSourceCorrectionSamps, desired.Generation, geometryChanged || !hadSyncPhaseMap);
 
 		if (geometryChanged)
 			_syncPhaseMap.RemoteLengthSamps = desired.RemoteMasterIntervalLengthSamps;
@@ -654,6 +791,7 @@ void AudioHost::PublishAudioCallbackProgress(std::uint64_t blockStartSample,
 		const auto* stationsSnapshotValue = _lastAudioStations.get();
 		const auto& stations = stationsSnapshotValue ? *stationsSnapshotValue : _emptyStations;
 		auto* timingClock = _lastAudioTimingClock.get();
+		ApplyLocalMasterTimingAtAudioBoundary(stations, timingClock);
 		ApplyDesiredTimingAtAudioBoundary(blockStartSample, audioStreamParams.SampleRate,
 			stationsSnapshotValue, timingClock);
 

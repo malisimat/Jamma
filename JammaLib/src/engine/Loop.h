@@ -25,6 +25,7 @@
 #include "../graphics/GlDrawContext.h"
 #include "../resources/WavResource.h"
 #include "../vst/VstChain.h"
+#include "../audio/PlaybackDelay.h"
 
 namespace engine
 {
@@ -139,6 +140,7 @@ namespace engine
 			other._isPunchInActive.store(false, std::memory_order_relaxed);
 			other._loopParams = LoopParams();
 			other._mixer = std::make_unique<audio::AudioMixer>(audio::AudioMixerParams());
+			other._playbackDelay = std::make_shared<audio::PlaybackDelay>();
 			other._flipVstChain.store(false, std::memory_order_relaxed);
 		}
 
@@ -173,6 +175,7 @@ namespace engine
 				auto chain = _vstChain.exchange(other._vstChain.load(std::memory_order_acquire), std::memory_order_acq_rel);
 				other._vstChain.store(chain, std::memory_order_release);
 				_backVstChain.swap(other._backVstChain);
+				_playbackDelay.swap(other._playbackDelay);
 				bool flip = _flipVstChain.load(std::memory_order_relaxed);
 				_flipVstChain.store(other._flipVstChain.load(std::memory_order_relaxed), std::memory_order_relaxed);
 				other._flipVstChain.store(flip, std::memory_order_relaxed);
@@ -313,11 +316,13 @@ namespace engine
 		// Non-RT accessor to retrieve a loaded plugin instance (or nullptr).
 		std::shared_ptr<vst::IVstPlugin> GetVstPlugin(size_t index) const;
 
-		// Read-only, real-time-safe view of this loop's aggregate VST
-		// processing latency, in samples (sum across the published chain).
-		// Plumb-only for now: not yet folded into any playback-position
-		// compensation -- see doc/ninjam-live-loop-latency-sync-planC.md §2/§7
-		// and IVstPlugin::GetLatencySamples.
+		// Job-owner compensation setup; polling/configuration may allocate or
+		// dispatch to a controller. Clear is callback-only and constant time.
+		void PollPlaybackPluginChanges() const noexcept;
+		bool CanConfigureRecordedPlaybackDelay(unsigned int delaySamps) const;
+		bool ConfigureRecordedPlaybackDelay(unsigned int delaySamps);
+		void ClearRecordedPlaybackDelay() noexcept;
+		// Real-time-safe latency sum of the published loaded, non-bypassed chain.
 		int CurrentVstLatencySamps() const noexcept
 		{
 			auto chain = _vstChain.borrow();
@@ -345,9 +350,8 @@ namespace engine
 		bool _visualUpdatesEnabled;
 		std::atomic<bool> _isPunchInActive;
 		// Current playback position, in samples. Advanced by ReadBlock().
-		// TODO(latency): does not yet account for this loop's VST chain latency
-		// (see CurrentVstLatencySamps()) -- see
-		// doc/ninjam-live-loop-latency-sync-planC.md §2/§7.
+		// Source coordinates exclude plugin latency. Recorded rendering applies
+		// compensation after the loop chain, preserving capture/fade coordinates.
 		std::atomic<unsigned long> _playIndex;
 		std::atomic<unsigned long> _sceneAnchor{ 0ul };
 		std::atomic_bool _hasSceneAnchor{ false };
@@ -365,6 +369,7 @@ namespace engine
 		audio::BufferBank _monitorBufferBank;
 		// Live VST chain published atomically for lock-free audio-thread reads.
 		base::PublishedAudioSnapshot<vst::VstChain> _vstChain;
+		std::shared_ptr<audio::PlaybackDelay> _playbackDelay = std::make_shared<audio::PlaybackDelay>();
 		std::shared_ptr<vst::VstChain> _backVstChain;
 		std::atomic<bool> _flipVstChain{ false };
 		std::vector<std::pair<std::wstring, std::vector<std::uint8_t>>> _pendingVstLoads;

@@ -117,3 +117,23 @@ timing boundaries in [loop alignment and NINJAM sync](loop-alignment-and-ninjam-
 This feature needs no deferred-release scheduler, later-release comparison, or
 recovery of unclamped releases. Broader trigger UX and finite-span seam overlap
 handling remain separate work.
+
+## Implementation outcome
+
+The five required changes are implemented. Source FIFO pairing and raw/quantised
+unmatched-start metadata remain separate from exported MIDI bytes. Both seam
+paths preserve only emitted continuations; full flush paths release them.
+Regression coverage includes completion and overdub publication, replacement,
+editor notes ending at the seam, mute/cancel, retained capture tails, save/load,
+and different block partitions.
+
+The follow-up fidelity fixes in [the investigation](midi-playback-fidelity-investigation.md)
+make sink acceptance part of the emitted-state contract. A rejected or scaled-to-zero
+attack does not establish continuation. Rejected releases remain pending in fixed
+callback state until accepted, and prevent a replacement attack in that slot.
+Deliberate relocation releases old voices and chases destination notes; ordinary
+seams and small timing discipline corrections retain continuity.
+
+Final Debug x64 engine/test and app builds passed. The complete native suite
+passed all 1466 tests in 179 suites; see the investigation for rendered coverage,
+threading review, and the physical-loopback limitation.

@@ -334,6 +334,7 @@ void Vst2Plugin::Unload()
 
 void Vst2Plugin::ProcessBlock(float* monoBuf, int32_t numSamples) noexcept
 {
+	_lastMidiBlockProcessed = false;
 #ifdef JAMMA_VST2_ENABLED
 	_audioThreadId.store(GetCurrentThreadId(), std::memory_order_relaxed);
 
@@ -367,6 +368,7 @@ void Vst2Plugin::ProcessBlock(float* monoBuf, int32_t numSamples) noexcept
 		_inputChannelPtrs.data(),
 		_outputChannelPtrs.data(),
 		numSamples);
+	_lastMidiBlockProcessed = true;
 	_midiEventCount = 0u;
 	_midiEventBlock.numEvents = 0;
 
@@ -381,6 +383,7 @@ void Vst2Plugin::ProcessBlock(float* monoBuf, int32_t numSamples) noexcept
 
 void Vst2Plugin::ProcessBlockStereo(float* leftBuf, float* rightBuf, int32_t numSamples) noexcept
 {
+	_lastMidiBlockProcessed = false;
 #ifdef JAMMA_VST2_ENABLED
 	_audioThreadId.store(GetCurrentThreadId(), std::memory_order_relaxed);
 
@@ -423,6 +426,7 @@ void Vst2Plugin::ProcessBlockStereo(float* leftBuf, float* rightBuf, int32_t num
 		_inputChannelPtrs.data(),
 		_outputChannelPtrs.data(),
 		numSamples);
+	_lastMidiBlockProcessed = true;
 	_midiEventCount = 0u;
 	_midiEventBlock.numEvents = 0;
 
@@ -438,6 +442,7 @@ void Vst2Plugin::ProcessBlockStereo(float* leftBuf, float* rightBuf, int32_t num
 
 void Vst2Plugin::ProcessBlockMulti(float* const* channelBufs, int32_t numChannels, int32_t numSamples) noexcept
 {
+	_lastMidiBlockProcessed = false;
 #ifdef JAMMA_VST2_ENABLED
 	_audioThreadId.store(GetCurrentThreadId(), std::memory_order_relaxed);
 
@@ -474,6 +479,7 @@ void Vst2Plugin::ProcessBlockMulti(float* const* channelBufs, int32_t numChannel
 		_inputChannelPtrs.data(),
 		_outputChannelPtrs.data(),
 		numSamples);
+	_lastMidiBlockProcessed = true;
 	_midiEventCount = 0u;
 	_midiEventBlock.numEvents = 0;
 
@@ -510,6 +516,7 @@ float Vst2Plugin::GetParameter(unsigned int index) const noexcept
 void Vst2Plugin::BeginMidiBlock(std::uint32_t blockStartSample,
 	std::uint32_t numSamples) noexcept
 {
+	_lastMidiBlockProcessed = false;
 #ifdef JAMMA_VST2_ENABLED
 	_midiBlockStartSample = blockStartSample;
 	_midiBlockNumSamples = numSamples;
@@ -529,15 +536,23 @@ void Vst2Plugin::UpdateHostTime(const HostTimeState& state) noexcept
 void Vst2Plugin::SendMidiEvent(const midi::MidiEvent& event,
 	bool isRealtime) noexcept
 {
-#ifdef JAMMA_VST2_ENABLED
-	if (_midiEventCount >= MaxMidiEventsPerBlock || 0u == _midiBlockNumSamples)
-		return;
+	(void)TrySendMidiEvent(event, isRealtime);
+}
 
+bool Vst2Plugin::TrySendMidiEvent(const midi::MidiEvent& event,
+	bool isRealtime) noexcept
+{
+#ifdef JAMMA_VST2_ENABLED
+	if (0u == _midiBlockNumSamples) return false;
 	const auto position = midi::ClassifyMidiSampleInBlock(event.sampleOffset,
 		_midiBlockStartSample, _midiBlockNumSamples);
 	const bool inWindow = position == midi::MidiBlockSamplePosition::Due;
-	if (!inWindow && !isRealtime)
-		return;
+	if (!inWindow && !isRealtime) return false;
+	// Keep capacity for releases without evicting an already accepted attack.
+	constexpr auto ReservedReleases = 64u;
+	if (_midiEventCount >= MaxMidiEventsPerBlock
+		|| (!event.IsNoteOff() && _midiEventCount >= MaxMidiEventsPerBlock - ReservedReleases))
+		return false;
 
 	auto& midiEvent = _midiEvents[_midiEventCount];
 	midiEvent = {};
@@ -564,8 +579,10 @@ void Vst2Plugin::SendMidiEvent(const midi::MidiEvent& event,
 
 	++_midiEventCount;
 	_midiEventBlock.numEvents = static_cast<VstInt32>(_midiEventCount);
+	return true;
 #else
 	(void)event; (void)isRealtime;
+	return false;
 #endif
 }
 

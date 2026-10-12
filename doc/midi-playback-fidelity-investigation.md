@@ -3,8 +3,8 @@
 Investigated 2026-10-12 alongside the MIDI seam continuation implementation.
 This is a source and existing-test review, not a claim of physical DAC/ADC
 verification. The investigation was delegated into independent grid-origin and
-VST delivery/latency reviews. Findings below are separate follow-up work;
-production changes for them are not part of the seam note merge.
+VST delivery/latency reviews. The findings below describe the investigated baseline. The follow-up implementation
+now addresses F1–F6; selected policies and verification are recorded at the end.
 
 ## Answers to the requested questions
 
@@ -232,7 +232,7 @@ paired/unmatched attacks/releases, both signs, different block partitions, and
 remote map changes. Avoid silently treating every transport correction as a
 full flush, which would introduce its own audible retriggers.
 
-## Validation status and priority
+## Original seam validation and follow-up priority
 
 The seam implementation was committed as `8c76364`. Incremental Debug x64
 engine/native-test build passed with zero warnings or errors. The native run
@@ -257,3 +257,91 @@ Define F6's musical policy independently so phase correction does not silently
 change the seam continuation contract. Until then, sample-position correctness
 within a rendered block is supported by code/tests, while audible synchronisation
 across arbitrary plugin paths remains conditional.
+
+## Follow-up implementation and selected policies
+
+- **F1:** local master geometry, phase, and prepared MIDI grids activate together
+  at a callback boundary. Audio and MIDI-only targets supply phase. Existing take
+  anchors are rebased off the callback; versioned preparation and publication
+  claims reject stale source or membership changes instead of mixing snapshots.
+- **F2:** recorded playback uses one reference equal to the longest loaded,
+  non-bypassed plugin path. Audio paths include loop, take, and station chains.
+  Indexed MIDI destinations include only their destination and downstream station
+  plugins. Shorter recorded paths receive the difference once. Hardware output
+  latency is shared and is not added again.
+- **F3:** adapter admission reports acceptance and reserves release capacity.
+  Fixed per-destination ledgers retain rejected releases for bounded retries;
+  loop continuation reflects accepted output rather than attempted dispatch.
+- **F4:** skipped VST3 editor/bypass blocks report non-processing. Route owners
+  recover uncertain notes, and stale MIDI/parameter block points are discarded.
+- **F5:** a positive source attack whose scaled velocity rounds to zero is
+  suppressed. It establishes no held or continuation state, so a later iteration
+  can sound after the level rises. Source velocity-zero releases remain releases.
+- **F6:** deliberate relocation releases old voices and chases notes active at
+  the destination. Chase metadata is prepared outside the callback. Ordinary
+  seams and small automatic timing corrections preserve continuity.
+
+The chosen monitoring policy keeps direct live audio and live MIDI unpadded.
+Recording timestamps, capture compensation, fade prefixes, and event cursors
+retain their separate coordinate domains. Consequently, direct monitoring has
+only the device/plugin latency already inherent in its route; compensated
+recorded playback can arrive later than direct monitoring. Punch-in mute cancels
+host-buffered recorded output immediately; plugin release tails remain plugin
+behaviour. This is intentional live-performance policy rather than universal
+alignment between live input and recorded playback.
+
+VST3 latency is queried at load and refreshed from latency-change notifications
+through a serialized off-callback controller pump, including closed editors.
+Recorded compensation supports a maximum reference of 262144 samples. Excessive
+reports are rejected with a job-side diagnostic rather than silently clamped.
+Audio history is allocated off the callback, published through immutable
+descriptors, and transitioned over 64 samples. Future MIDI uses a fixed 1024-event
+queue with 256 release slots. Delay changes recover old queued/sounding notes at
+a block boundary. Physical driver loopback and instrument-envelope calibration
+remain external validation work.
+
+### Additional capture-phase correction
+
+Rendered positive/negative error-and-correction cases exposed an existing
+`Loop::ShiftPlayIndex` bug. A first-play raw cursor can sit one loop below
+`MaxLoopFadeSamps`; its body phase is `(rawCursor - fadePrefix) mod loopLength`.
+The old below-prefix shortcut used `rawCursor mod loopLength`, which introduced
+a phase jump when the fade prefix was not divisible by the loop length. The
+correction now normalises relative to the fade prefix for both ordinary and
+first-play cursors. The regressions require audio and MIDI impulses to meet on
+the first and second iterations; capture timestamps and stored samples are unchanged.
+
+### Final software verification
+
+- Incremental Debug x64 native-test/engine build passed with no warnings or errors.
+- The complete native suite passed **1466 tests across 179 suites**.
+- Incremental Debug x64 app build passed, including JammaConsole and Jamma.
+- `git diff --check` passed.
+- Independent Sol review found no remaining concrete correctness, callback-cost,
+  or lifetime defect after the final fixes. Luna provided the initial code research.
+
+Rendered tests cover ADC and MIDI capture, nonzero simulated input/output latency
+and pre-delay, fade-prefixed storage, positive/negative quantisation errors and
+phase corrections, loop/take/station serial plugin paths, indexed MIDI suffixes,
+block splits, changing references, mute/seek cancellation, and actual trigger/overdub
+completion. A three-level INT_MAX latency regression verifies saturation and
+rejection rather than wraparound. Promotion tests check audio and MIDI transients,
+including the real MIDI-only take cursor and its next seam. Queue tests cover dense
+adapter admission, rejected releases, skipped processing, fanout, reroute, retirement,
+source replacement/reset, live overlap, and delay changes.
+
+The file-level hot-path audit flags three added owner-side locks in
+`LoopTake::PrepareLocalMasterQuantisation`,
+`LoopTake::CompleteLocalMasterQuantisationOnOwner`, and
+`Scene::_UpdateRecordedPlaybackCompensation`. Their production callers are in
+`Scene::OnJobTick`; they are outside the callback. Manual callback review found
+no new allocations, locks, waits, or logging in the playback changes. Source/grid
+publication and delay allocation/reclamation remain off the callback; readers use
+published snapshots and bounded claims. MIDI queues, due-time ownership, dense
+active-slot lists, and chase/continuation state are callback-owned. Job retirement
+observes atomic ownership pins and acknowledgements rather than callback containers.
+
+Physical DAC/ADC loopback and manual audition with third-party instruments were
+not performed. These tests establish the simulated engine/rendering model; they
+do not measure a real driver or an instrument envelope. Dense mapped controller
+curves still retain the existing bounded-point/coalescing policy described in F4.

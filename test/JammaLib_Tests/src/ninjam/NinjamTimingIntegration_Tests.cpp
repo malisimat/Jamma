@@ -13,6 +13,7 @@
 #include "engine/Loop.h"
 #include "engine/LoopTake.h"
 #include "engine/Station.h"
+#include "midi/MidiLoop.h"
 #include "ninjam/NinjamAudioTimingCommand.h"
 #include "ninjam/NinjamNetworkService.h"
 #include "ninjam/NinjamSession.h"
@@ -33,6 +34,12 @@ namespace audio
 			unsigned int sampleRate) noexcept
 		{
 			return host.ApplyDesiredTimingAtAudioBoundary(blockStartSample, sampleRate);
+		}
+
+		static void ApplyLocalMaster(AudioHost& host,
+			const std::vector<std::shared_ptr<engine::Station>>& stations, Timer* clock) noexcept
+		{
+			host.ApplyLocalMasterTimingAtAudioBoundary(stations, clock);
 		}
 
 		static void ApplyDeferredMapTransition(AudioHost& host) noexcept
@@ -594,4 +601,297 @@ TEST(NinjamTimingProductionBoundary, CommonMapRestoreFansOutAcrossStationsAndUne
 			- static_cast<long long>(take->MidiSceneAnchor()), length)),
 			take->MidiTimingPosition());
 	}
+}
+
+TEST(AudioHostLocalMasterPromotion, PreservesRunningAudioPhaseAtQuarterAndOffGridPositions)
+{
+	for (unsigned long position : { 250ul, 333ul })
+	for (unsigned int newLength : { 1000u, 2000u })
+	{
+		auto take = NinjamProductionBoundaryFixture::MakeTake("promoted-audio", 1000ul, position);
+		auto station = NinjamProductionBoundaryFixture::MakeStation({ take });
+		const std::vector<std::shared_ptr<engine::Station>> stations{ station };
+		audio::AudioHost host{ io::UserConfig{} };
+		auto clock = std::make_shared<Timer>();
+		clock->SetQuantisation(250u, Timer::QUANTISE_POWER);
+		clock->SetSeedSourceLength(1000u);
+		clock->InitialiseAbsoluteSamplePos(125u);
+		host.SetTimingClock(clock);
+		const auto version = host.PublishLocalMasterTiming(newLength / 4u, newLength,
+			Timer::QUANTISE_POWER, take.get(), take->GetLoops().front().get());
+		audio::NinjamAudioBoundaryTestAccess::ApplyLocalMaster(host, stations, clock.get());
+		const auto receipt = host.LastPreparedLocalMasterTiming();
+		ASSERT_TRUE(receipt.has_value());
+		EXPECT_EQ(version, receipt->Version);
+		const auto expectedPhase = static_cast<unsigned int>((position * newLength + 500ul) / 1000ul)
+			% newLength;
+		EXPECT_EQ(expectedPhase, receipt->NewPhaseSamps);
+		EXPECT_EQ(1000ul, clock->SeedSourceLength());
+		EXPECT_EQ(125u, clock->SampOffset());
+		EXPECT_EQ(position, NinjamProductionBoundaryFixture::AudioPosition(*take));
+		const auto rebasedStart = (receipt->NewPhaseSamps + newLength
+			- static_cast<unsigned int>(receipt->OldAbsoluteSamplePos % newLength)) % newLength;
+		ASSERT_TRUE(take->PrepareLocalMasterQuantisation(newLength / 4u, rebasedStart));
+		host.CommitLocalMasterTiming(version);
+		audio::NinjamAudioBoundaryTestAccess::ApplyLocalMaster(host, stations, clock.get());
+		EXPECT_EQ(newLength, clock->SeedSourceLength());
+		EXPECT_EQ(expectedPhase, clock->SampOffset());
+		EXPECT_EQ(position, NinjamProductionBoundaryFixture::AudioPosition(*take));
+		EXPECT_EQ(position, take->MidiTimingPosition());
+	}
+}
+
+TEST(AudioHostLocalMasterPromotion, MidiOnlyTargetSuppliesPhaseAndActivatesGridAtBoundary)
+{
+	engine::LoopTakeParams params;
+	params.Id = "promoted-midi-only";
+	params.Size = { 100, 100 };
+	audio::MergeMixBehaviourParams merge;
+	auto take = std::make_shared<NinjamProductionBoundaryLoopTake>(params,
+		engine::LoopTake::GetMixerParams(params.Size, merge));
+	take->Record({}, "station", { 0u }, { "" });
+	take->Play(0u, 1000u, 0u);
+	take->SetMidiTimingState(250ul, 1000ul);
+	auto loop = take->GetMidiLoops().at(0u);
+	take->SetGlobalMidiQuantState(io::JamFile::GlobalMidiQuantState::All);
+	midi::MidiQuantisationSettings oldGrid;
+	oldGrid.Enabled = true;
+	oldGrid.GrainSamps = 100u;
+	oldGrid.Fraction = midi::MidiQuantisationFraction::Quarter;
+	take->SetMidiQuantisation(oldGrid);
+	ASSERT_TRUE(loop->SetQuantisation(take->ResolvedMidiQuantisation(), 0u));
+	const auto attack = midi::MidiEvent::MakeNoteOn(37u, 0u, 60u, 100u);
+	loop->ReplaceRecordedEvents(&attack, 1u, 1000u);
+	midi::MidiEvent before{};
+	ASSERT_TRUE(loop->TryGetPlaybackEvent(0u, before));
+	EXPECT_EQ(25u, before.sampleOffset);
+	auto station = NinjamProductionBoundaryFixture::MakeStation({ take });
+	// Station attachment applies its global policy to the take. Keep this
+	// fixture quantised across the promotion as an actual audible-grid check.
+	station->SetGlobalMidiQuantState(io::JamFile::GlobalMidiQuantState::All);
+	const std::vector<std::shared_ptr<engine::Station>> stations{ station };
+	audio::AudioHost host{ io::UserConfig{} };
+	auto clock = std::make_shared<Timer>();
+	clock->SetQuantisation(250u, Timer::QUANTISE_POWER);
+	clock->SetSeedSourceLength(1000u);
+	clock->InitialiseAbsoluteSamplePos(125u);
+	host.SetTimingClock(clock);
+	const auto version = host.PublishLocalMasterTiming(500u, 2000u,
+		Timer::QUANTISE_POWER, take.get(), nullptr);
+	audio::NinjamAudioBoundaryTestAccess::ApplyLocalMaster(host, stations, clock.get());
+	const auto receipt = host.LastPreparedLocalMasterTiming();
+	ASSERT_TRUE(receipt.has_value());
+	EXPECT_EQ(500u, receipt->NewPhaseSamps);
+	const auto rebasedStart = (receipt->NewPhaseSamps + 2000u
+		- static_cast<unsigned int>(receipt->OldAbsoluteSamplePos % 2000u)) % 2000u;
+	ASSERT_TRUE(take->PrepareLocalMasterQuantisation(500u, rebasedStart));
+	ASSERT_TRUE(loop->PreparedQuantisationReadyAtAudioBoundary());
+	midi::MidiEvent stillOld{};
+	ASSERT_TRUE(loop->TryGetPlaybackEvent(0u, stillOld));
+	EXPECT_EQ(before.sampleOffset, stillOld.sampleOffset);
+	host.CommitLocalMasterTiming(version);
+	audio::NinjamAudioBoundaryTestAccess::ApplyLocalMaster(host, stations, clock.get());
+	EXPECT_EQ(version, host.LastActivatedLocalMasterTimingVersion());
+	EXPECT_EQ(500u, clock->SampOffset());
+	midi::MidiEvent committed{};
+	ASSERT_TRUE(loop->TryGetPlaybackEvent(0u, committed));
+	EXPECT_EQ(0u, committed.sampleOffset);
+	EXPECT_EQ(250ul, take->MidiTimingPosition());
+	struct EmittedMidi final : midi::IMidiOutputSink
+	{
+		void OnEvent(unsigned int, const midi::MidiEvent& event) noexcept override
+		{
+			Events.push_back(event);
+		}
+		std::vector<midi::MidiEvent> Events;
+	} audible;
+	// The committed event is at body offset zero. The take is still at 250,
+	// so it sounds at the next seam rather than the first post-commit frame.
+	take->ReadMidiBlock(0u, 1u, audible);
+	EXPECT_TRUE(audible.Events.empty());
+	take->EndMultiPlay(1u);
+	take->ReadMidiBlock(1u, 750u, audible);
+	ASSERT_EQ(1u, audible.Events.size());
+	EXPECT_TRUE(audible.Events.front().IsNoteOn());
+	EXPECT_EQ(750u, audible.Events.front().sampleOffset);
+}
+
+TEST(AudioHostLocalMasterPromotion, OffGridMidiAndAudioTransientShareFirstCommittedBlock)
+{
+	constexpr auto length = 1000u;
+	constexpr auto cursor = 250u;
+	engine::LoopTakeParams params;
+	params.Id = "promoted-transients";
+	params.Size = { 100, 100 };
+	audio::MergeMixBehaviourParams merge;
+	auto take = std::make_shared<NinjamProductionBoundaryLoopTake>(params,
+		engine::LoopTake::GetMixerParams(params.Size, merge));
+	take->Record({}, "station", { 0u }, { "" });
+	take->Play(0u, length, 0u);
+	audio::WireMixBehaviourParams wire;
+	wire.Channels = { 0u };
+	engine::LoopParams audioParams;
+	audioParams.Wav = "promoted-audio";
+	audioParams.FadeSamps = constants::DefaultFadeSamps;
+	auto audioLoop = std::make_shared<engine::Loop>(audioParams,
+		engine::Loop::GetMixerParams({ 80, 80 }, wire));
+	audioLoop->Record();
+	std::vector<float> source(constants::MaxLoopFadeSamps + length, 0.0f);
+	source[constants::MaxLoopFadeSamps + cursor] = 1.0f;
+	base::AudioWriteRequest request;
+	request.samples = source.data();
+	request.numSamps = static_cast<unsigned int>(source.size());
+	request.stride = 1u;
+	request.fadeCurrent = 0.0f;
+	request.fadeNew = 1.0f;
+	request.source = base::Audible::AUDIOSOURCE_ADC;
+	audioLoop->OnBlockWrite(request, 0);
+	audioLoop->EndWrite(static_cast<unsigned int>(source.size()), true);
+	audioLoop->Play(constants::MaxLoopFadeSamps, length, false);
+	audioLoop->ShiftPlayIndex(cursor);
+	take->AddLoop(audioLoop);
+	take->CommitChanges();
+	take->SetMidiTimingState(cursor, length);
+	auto midiLoop = take->GetMidiLoops().at(0u);
+	take->SetGlobalMidiQuantState(io::JamFile::GlobalMidiQuantState::All);
+	midi::MidiQuantisationSettings oldGrid;
+	oldGrid.Enabled = true;
+	oldGrid.GrainSamps = 100u;
+	oldGrid.Fraction = midi::MidiQuantisationFraction::Quarter;
+	take->SetMidiQuantisation(oldGrid);
+	ASSERT_TRUE(midiLoop->SetQuantisation(take->ResolvedMidiQuantisation(), 0u));
+	const auto attack = midi::MidiEvent::MakeNoteOn(287u, 0u, 60u, 100u);
+	midiLoop->ReplaceRecordedEvents(&attack, 1u, length);
+	midi::MidiEvent oldEvent{};
+	ASSERT_TRUE(midiLoop->TryGetPlaybackEvent(0u, oldEvent));
+	ASSERT_EQ(275u, oldEvent.sampleOffset);
+	auto station = NinjamProductionBoundaryFixture::MakeStation({ take });
+	station->SetGlobalMidiQuantState(io::JamFile::GlobalMidiQuantState::All);
+	const std::vector<std::shared_ptr<engine::Station>> stations{ station };
+	audio::AudioHost host{ io::UserConfig{} };
+	auto clock = std::make_shared<Timer>();
+	clock->SetQuantisation(250u, Timer::QUANTISE_POWER);
+	clock->SetSeedSourceLength(length);
+	clock->InitialiseAbsoluteSamplePos(125u);
+	host.SetTimingClock(clock);
+	const auto version = host.PublishLocalMasterTiming(500u, 2000u,
+		Timer::QUANTISE_POWER, take.get(), audioLoop.get());
+	audio::NinjamAudioBoundaryTestAccess::ApplyLocalMaster(host, stations, clock.get());
+	const auto receipt = host.LastPreparedLocalMasterTiming();
+	ASSERT_TRUE(receipt.has_value());
+	ASSERT_EQ(500u, receipt->NewPhaseSamps);
+	const auto rebasedStart = (receipt->NewPhaseSamps + 2000u
+		- static_cast<unsigned int>(receipt->OldAbsoluteSamplePos % 2000u)) % 2000u;
+	ASSERT_TRUE(take->PrepareLocalMasterQuantisation(500u, rebasedStart));
+	host.CommitLocalMasterTiming(version);
+	audio::NinjamAudioBoundaryTestAccess::ApplyLocalMaster(host, stations, clock.get());
+	ASSERT_EQ(version, host.LastActivatedLocalMasterTimingVersion());
+	EXPECT_EQ(cursor, audioLoop->BodyPlayIndex());
+	EXPECT_EQ(cursor, take->MidiTimingPosition());
+	midi::MidiEvent committed{};
+	ASSERT_TRUE(midiLoop->TryGetPlaybackEvent(0u, committed));
+	EXPECT_EQ(cursor, committed.sampleOffset);
+	float audioSample = 0.0f;
+	ASSERT_EQ(1u, audioLoop->ReadBlock(&audioSample, 0, 1u));
+	EXPECT_FLOAT_EQ(1.0f, audioSample);
+	struct EmittedMidi final : midi::IMidiOutputSink
+	{
+		void OnEvent(unsigned int index, const midi::MidiEvent& event) noexcept override
+		{
+			OutputIndex = index;
+			Events.push_back(event);
+		}
+		unsigned int OutputIndex = 99u;
+		std::vector<midi::MidiEvent> Events;
+	} audible;
+	take->ReadMidiBlock(0u, 1u, audible);
+	ASSERT_EQ(1u, audible.Events.size());
+	EXPECT_EQ(0u, audible.OutputIndex);
+	EXPECT_TRUE(audible.Events.front().IsNoteOn());
+	EXPECT_EQ(0u, audible.Events.front().sampleOffset);
+}
+
+TEST(AudioHostLocalMasterPromotion, ReplacedMidiSourceDefersClockUntilPreparedAgain)
+{
+	auto take = NinjamProductionBoundaryFixture::MakeTake("stale-midi-stage", 1000ul, 250ul);
+	auto loop = take->GetMidiLoops().at(0u);
+	midi::MidiQuantisationSettings grid;
+	grid.Enabled = true;
+	grid.GrainSamps = 100u;
+	grid.Fraction = midi::MidiQuantisationFraction::Quarter;
+	take->SetMidiQuantisation(grid);
+	ASSERT_TRUE(loop->SetQuantisation(take->ResolvedMidiQuantisation(), 0u));
+	const auto original = midi::MidiEvent::MakeNoteOn(37u, 0u, 60u, 100u);
+	loop->ReplaceRecordedEvents(&original, 1u, 1000u);
+	auto station = NinjamProductionBoundaryFixture::MakeStation({ take });
+	const std::vector<std::shared_ptr<engine::Station>> stations{ station };
+	audio::AudioHost host{ io::UserConfig{} };
+	auto clock = std::make_shared<Timer>();
+	clock->SetQuantisation(250u, Timer::QUANTISE_POWER);
+	clock->SetSeedSourceLength(1000u);
+	clock->InitialiseAbsoluteSamplePos(125u);
+	host.SetTimingClock(clock);
+	const auto version = host.PublishLocalMasterTiming(500u, 2000u,
+		Timer::QUANTISE_POWER, take.get(), take->GetLoops().front().get());
+	audio::NinjamAudioBoundaryTestAccess::ApplyLocalMaster(host, stations, clock.get());
+	const auto receipt = host.LastPreparedLocalMasterTiming();
+	ASSERT_TRUE(receipt.has_value());
+	const auto start = (receipt->NewPhaseSamps + 2000u
+		- static_cast<unsigned int>(receipt->OldAbsoluteSamplePos % 2000u)) % 2000u;
+	ASSERT_TRUE(take->PrepareLocalMasterQuantisation(500u, start));
+	const auto replacement = midi::MidiEvent::MakeNoteOn(80u, 0u, 61u, 90u);
+	loop->ReplaceRecordedEvents(&replacement, 1u, 1000u);
+	EXPECT_FALSE(loop->PreparedQuantisationReadyAtAudioBoundary());
+	host.CommitLocalMasterTiming(version);
+	audio::NinjamAudioBoundaryTestAccess::ApplyLocalMaster(host, stations, clock.get());
+	EXPECT_EQ(1000ul, clock->SeedSourceLength());
+	EXPECT_EQ(125u, clock->SampOffset());
+	midi::MidiEvent current{};
+	ASSERT_TRUE(loop->TryGetPlaybackEvent(0u, current));
+	EXPECT_EQ(61u, current.data1);
+	ASSERT_TRUE(take->PrepareLocalMasterQuantisation(500u, start));
+	audio::NinjamAudioBoundaryTestAccess::ApplyLocalMaster(host, stations, clock.get());
+	EXPECT_EQ(2000ul, clock->SeedSourceLength());
+	EXPECT_EQ(receipt->NewPhaseSamps, clock->SampOffset());
+	ASSERT_TRUE(loop->TryGetPlaybackEvent(0u, current));
+	EXPECT_EQ(61u, current.data1);
+}
+
+TEST(AudioHostLocalMasterPromotion, LatestPreparedTimingReplacesEarlierVersion)
+{
+	auto take = NinjamProductionBoundaryFixture::MakeTake("latest-master", 1000ul, 250ul);
+	auto station = NinjamProductionBoundaryFixture::MakeStation({ take });
+	const std::vector<std::shared_ptr<engine::Station>> stations{ station };
+	audio::AudioHost host{ io::UserConfig{} };
+	auto clock = std::make_shared<Timer>();
+	clock->SetQuantisation(250u, Timer::QUANTISE_POWER);
+	clock->SetSeedSourceLength(1000u);
+	clock->InitialiseAbsoluteSamplePos(125u);
+	host.SetTimingClock(clock);
+	const auto oldVersion = host.PublishLocalMasterTiming(500u, 2000u,
+		Timer::QUANTISE_POWER, take.get(), take->GetLoops().front().get());
+	audio::NinjamAudioBoundaryTestAccess::ApplyLocalMaster(host, stations, clock.get());
+	const auto oldReceipt = host.LastPreparedLocalMasterTiming();
+	ASSERT_TRUE(oldReceipt.has_value());
+	const auto oldStart = (oldReceipt->NewPhaseSamps + 2000u
+		- static_cast<unsigned int>(oldReceipt->OldAbsoluteSamplePos % 2000u)) % 2000u;
+	ASSERT_TRUE(take->PrepareLocalMasterQuantisation(500u, oldStart));
+	const auto newVersion = host.PublishLocalMasterTiming(1000u, 4000u,
+		Timer::QUANTISE_POWER, take.get(), take->GetLoops().front().get());
+	ASSERT_GT(newVersion, oldVersion);
+	audio::NinjamAudioBoundaryTestAccess::ApplyLocalMaster(host, stations, clock.get());
+	const auto newReceipt = host.LastPreparedLocalMasterTiming();
+	ASSERT_TRUE(newReceipt.has_value());
+	EXPECT_EQ(newVersion, newReceipt->Version);
+	EXPECT_EQ(1000u, newReceipt->NewPhaseSamps);
+	host.CommitLocalMasterTiming(oldVersion);
+	audio::NinjamAudioBoundaryTestAccess::ApplyLocalMaster(host, stations, clock.get());
+	EXPECT_EQ(1000ul, clock->SeedSourceLength());
+	const auto newStart = (newReceipt->NewPhaseSamps + 4000u
+		- static_cast<unsigned int>(newReceipt->OldAbsoluteSamplePos % 4000u)) % 4000u;
+	ASSERT_TRUE(take->PrepareLocalMasterQuantisation(1000u, newStart));
+	host.CommitLocalMasterTiming(newVersion);
+	audio::NinjamAudioBoundaryTestAccess::ApplyLocalMaster(host, stations, clock.get());
+	EXPECT_EQ(4000ul, clock->SeedSourceLength());
+	EXPECT_EQ(1000u, clock->SampOffset());
 }

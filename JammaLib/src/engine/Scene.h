@@ -323,6 +323,8 @@ namespace engine
 		void _ApplyQuantisationTiming(const engine::QuantisationTiming& timing, const char* source);
 		void _ClearTimingState(bool clearTapTempo);
 		void _HandleAudioLocalContentState(bool hasLocalContent);
+		void _UpdateRecordedPlaybackCompensation();
+		std::optional<unsigned int> _lastRejectedRecordedLatency; // Job owner, under _sceneMutex.
 		void _ResetIfEmpty();
 		bool _HandleTapTempo(Time actionTime);
 		void _PulseQuantisationOverlay();
@@ -401,6 +403,9 @@ namespace engine
 		std::unique_ptr<vst::VstEditorWindowManager> _windowSubsystem;
 		std::unique_ptr<ninjam::NinjamNetworkService> _networkService;
 		engine::Quantiser _quantisation;
+		std::uint64_t _lastLocalMasterTimingVersion = 0u;
+		std::uint64_t _preparingLocalMasterTimingVersion = 0u;
+		std::uint64_t _preparingLocalMasterTimingDelta = 0u;
 		io::LoggingConfig _loggingConfig;
 		std::shared_ptr<gui::GuiRadio> _modeRadio;
 		std::shared_ptr<gui::GuiNumericInput> _midiChannelOverrideInput;

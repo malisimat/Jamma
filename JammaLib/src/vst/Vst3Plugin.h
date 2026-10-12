@@ -91,6 +91,9 @@ namespace vst
 			std::uint32_t numSamples) noexcept override;
 		void SendMidiEvent(const midi::MidiEvent& event,
 			bool isRealtime) noexcept override;
+		bool TrySendMidiEvent(const midi::MidiEvent& event, bool isRealtime) noexcept override;
+		bool MidiBlockWasProcessed() const noexcept override { return _lastMidiBlockProcessed; }
+		int GetLatencySamples() const noexcept override { return _latencySamples.load(std::memory_order_acquire); }
 		void UpdateHostTime(const HostTimeState& state) noexcept override;
 
 		// Host callback entry point used by the VST3 component handler.
@@ -124,6 +127,7 @@ namespace vst
 		// Called from the editor's idle timer; safe to call at any time
 		// (a no-op when nothing is pending). Must be called from the
 		// main/UI thread only.
+		void PollPendingChanges() const noexcept override { PollPendingControllerChanges(); }
 		void IdleEditor() noexcept override;
 
 		// Returns the size the editor requested, or {0,0} if no editor /
@@ -174,6 +178,11 @@ namespace vst
 		std::atomic<bool> _isActivated;
 		std::string _name;
 		std::atomic<bool> _isBypassed;
+		bool _lastMidiBlockProcessed = false; // Audio callback owner only.
+		// Job/UI polling is serialized; the callback reads only atomic caches.
+		mutable std::mutex _controllerPollMutex;
+		mutable std::atomic<int> _latencySamples{ 0 };
+		mutable std::atomic<bool> _latencyRefreshRequested{ false };
 		std::atomic<bool> _editorOpening;
 		utils::Size2d _editorSize;
 		HMODULE _moduleHandle;

@@ -80,6 +80,10 @@ namespace engine
 		Quantiser() = default;
 
 		void SetClock(std::shared_ptr<utils::Timer> clock);
+		using LocalMasterTimingPublisher = std::function<std::uint64_t(const QuantisationTiming&,
+			utils::Timer::QuantisationType, const LoopTake*, const Loop*)>;
+		void SetLocalMasterTimingPublisher(LocalMasterTimingPublisher publisher)
+			{ _localMasterTimingPublisher = std::move(publisher); }
 		void SetSeedUsesPowers(bool seedUsesPowers) noexcept;
 		void Set(unsigned int samps, utils::Timer::QuantisationType type);
 
@@ -88,6 +92,13 @@ namespace engine
 		void ArmReclock();
 		void ArmReclock(const std::vector<std::shared_ptr<engine::Station>>& stations);
 		void ApplyTiming(const QuantisationTiming& timing, const char* source);
+		bool LocalMasterTimingPending() const noexcept { return _localMasterTimingPending; }
+		std::uint64_t PendingLocalMasterTimingVersion() const noexcept
+			{ return _pendingLocalMasterTimingVersion; }
+		void CompleteLocalMasterTiming() noexcept { _localMasterTimingPending = false; _pendingMasterTake.reset(); _previousMasterLoop.reset(); }
+		const engine::LoopTake* PendingLocalMasterTake() const noexcept
+			{ return _pendingMasterTake.get(); }
+		void CancelLocalMasterTiming(std::uint64_t version) noexcept;
 
 		void SetMidiGrain(unsigned int grainSamps,
 			const char* source,
@@ -201,6 +212,17 @@ namespace engine
 			const std::vector<std::shared_ptr<engine::Station>>& stations) const;
 
 		std::shared_ptr<utils::Timer> _clock;
+		LocalMasterTimingPublisher _localMasterTimingPublisher;
+		bool _localMasterTimingPending = false; // Serialized Scene owner.
+		std::uint64_t _pendingLocalMasterTimingVersion = 0u;
+		std::shared_ptr<engine::LoopTake> _pendingMasterTake;
+		std::shared_ptr<engine::Loop> _previousMasterLoop;
+		QuantisationGridSource _previousGridSource = QuantisationGridSource::Default;
+		unsigned long _previousMasterLoopLengthSamps = 0ul;
+		unsigned long _previousMasterOriginalBufferLengthSamps = 0ul;
+		unsigned int _previousActiveGridDivisions = 0u;
+		unsigned int _previousEffectiveQuantiseSamps = 0u;
+		bool _previousSeedUsesPowers = true;
 		std::shared_ptr<engine::Loop> _masterLoop;
 		RemoteTransportGeometry _acceptedRemoteGrid{};
 		std::atomic<QuantisationGridSource> _gridSource{ QuantisationGridSource::Default };

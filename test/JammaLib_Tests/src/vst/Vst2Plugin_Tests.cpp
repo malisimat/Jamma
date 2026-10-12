@@ -192,4 +192,38 @@ TEST(Vst2PluginHostCallback, ReportsCanonicalHostCanDoSet)
 	EXPECT_FALSE(vst::Vst2Plugin::SupportsHostCanDo("offline"));
 }
 
+TEST(Vst2PluginMidi, ReservesReleasesAndRejectsOutsideWindowBeforeCapacity)
+{
+	vst::Vst2Plugin plugin;
+	plugin.BeginMidiBlock(0u, 128u);
+	const auto attack = midi::MidiEvent::MakeNoteOn(0u, 0u, 60u, 100u);
+	for (unsigned int i = 0u; i < 192u; ++i)
+		ASSERT_TRUE(plugin.TrySendMidiEvent(attack, false));
+	EXPECT_FALSE(plugin.TrySendMidiEvent(attack, false));
+	EXPECT_FALSE(plugin.TrySendMidiEvent(midi::MidiEvent::MakeNoteOff(128u, 0u, 60u), false));
+	const auto release = midi::MidiEvent::MakeNoteOff(0u, 0u, 60u);
+	for (unsigned int i = 0u; i < 64u; ++i)
+		ASSERT_TRUE(plugin.TrySendMidiEvent(release, false));
+	EXPECT_FALSE(plugin.TrySendMidiEvent(release, false));
+	plugin.BeginMidiBlock(128u, 128u);
+	EXPECT_TRUE(plugin.TrySendMidiEvent(midi::MidiEvent::MakeNoteOff(128u, 0u, 60u), false));
+}
+
+
+TEST(Vst2PluginMidi, SkippedProcessDoesNotReportMidiBlockProcessed)
+{
+	vst::Vst2Plugin plugin;
+	float left[8]{};
+	float right[8]{};
+	float* channels[] = { left, right };
+	plugin.BeginMidiBlock(0u, 8u);
+	EXPECT_FALSE(plugin.MidiBlockWasProcessed());
+	plugin.ProcessBlockMulti(channels, 2, 8);
+	EXPECT_FALSE(plugin.MidiBlockWasProcessed());
+	plugin.SetBypassed(true);
+	plugin.BeginMidiBlock(8u, 8u);
+	plugin.ProcessBlockMulti(channels, 2, 8);
+	EXPECT_FALSE(plugin.MidiBlockWasProcessed());
+}
+
 #endif // JAMMA_VST2_ENABLED

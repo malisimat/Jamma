@@ -1,10 +1,12 @@
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <functional>
 #include <limits>
 #include <optional>
 #include "gtest/gtest.h"
 #include "actions/KeyAction.h"
+#include "actions/JobAction.h"
 #include "audio/AudioDevice.h"
 #include "audio/ChannelMixer.h"
 #include "engine/Loop.h"
@@ -13,6 +15,7 @@
 #include "Timer.h"
 #include "engine/Trigger.h"
 #include "io/UserConfig.h"
+#include "vst/IVstPlugin.h"
 
 using actions::KeyAction;
 using audio::AudioStreamParams;
@@ -763,4 +766,93 @@ TEST(Overdub, SeededClock_LateTrigger_LoopAlignedWithSource)
 	else if (alignment.FirstMismatch.has_value())
 		ADD_FAILURE() << "Alignment mismatch at sample " << alignment.FirstMismatch.value()
 			<< " after " << alignment.ComparedBlocks << " aligned blocks";
+}
+
+class OverdubRenderedLatencyEffect final : public vst::IVstPlugin
+{
+public:
+	bool PreInit(const std::wstring&) override { return true; }
+	bool Load(const std::wstring&, float, unsigned int, unsigned int,
+		vst::HostedLayoutMode = vst::HostedLayoutMode::Exact) override
+	{
+		_loaded = true;
+		return true;
+	}
+	void Unload() override { _loaded = false; }
+	void ProcessBlock(float* mono, int32_t count) noexcept override
+	{
+		float* channels[] = { mono };
+		ProcessBlockMulti(channels, 1, count);
+	}
+	void ProcessBlockStereo(float* left, float* right, int32_t count) noexcept override
+	{
+		float* channels[] = { left, right };
+		ProcessBlockMulti(channels, 2, count);
+	}
+	void ProcessBlockMulti(float* const* channels, int32_t numChannels,
+		int32_t count) noexcept override
+	{
+		if (!_loaded || _bypassed || !channels) return;
+		for (auto sample = 0; sample < count; ++sample)
+		{
+			for (auto channel = 0; channel < numChannels && channel < 2; ++channel)
+			{
+				if (!channels[channel]) continue;
+				const auto input = channels[channel][sample];
+				_ring[channel][_writeIndex] = input;
+				channels[channel][sample] = _ring[channel][
+					(_writeIndex + _ring[channel].size() - LatencySamps) % _ring[channel].size()];
+			}
+			_writeIndex = (_writeIndex + 1u) % _ring[0].size();
+		}
+	}
+	void BeginMidiBlock(std::uint32_t, std::uint32_t) noexcept override {}
+	void SendMidiEvent(const midi::MidiEvent&, bool) noexcept override {}
+	void SetParameter(unsigned int, float) noexcept override {}
+	float GetParameter(unsigned int) const noexcept override { return 0.0f; }
+	bool OpenEditor(HWND) override { return false; }
+	void CloseEditor() override {}
+	utils::Size2d GetEditorSize() const noexcept override { return { 0u, 0u }; }
+	bool IsLoaded() const noexcept override { return _loaded; }
+	const std::string& Name() const noexcept override { return _name; }
+	void SetBypassed(bool value) noexcept override { _bypassed = value; }
+	bool IsBypassed() const noexcept override { return _bypassed; }
+	int GetLatencySamples() const noexcept override { return static_cast<int>(LatencySamps); }
+	static constexpr unsigned int LatencySamps = 29u;
+private:
+	bool _loaded = false;
+	bool _bypassed = false;
+	std::string _name = "overdub-rendered-delay";
+	std::array<std::array<float, 64u>, 2u> _ring{};
+	unsigned int _writeIndex = 0u;
+};
+
+TEST(Overdub, CompletedTriggerCaptureAlignsWithSourceAcrossUnequalPluginLatency)
+{
+	const OverdubTestParams params{ 512u, 2u, 137u, 0u, 0 };
+	auto session = CreateOverdubSession(params);
+	AssertOverdubStarted(session);
+	RunOverdubAndTail(session, constants::MaxLoopFadeSamps);
+	ASSERT_EQ(LoopTake::STATE_PLAYING, session.TargetTake->TakeState());
+	ASSERT_EQ(1u, session.TargetTake->GetLoops().size());
+	const auto targetLoop = session.TargetTake->GetLoops().front();
+	auto effect = std::make_shared<OverdubRenderedLatencyEffect>();
+	actions::JobAction load;
+	load.JobActionType = actions::JobAction::JOB_LOADVST;
+	load.VstPath = L"fake-overdub-rendered-delay.dll";
+	load.PreInitPlugin = effect;
+	targetLoop->OnAction(load);
+	targetLoop->CommitChanges();
+	DrainCommitJobs(session.Station);
+	ASSERT_EQ(static_cast<int>(OverdubRenderedLatencyEffect::LatencySamps),
+		targetLoop->CurrentVstLatencySamps());
+	ASSERT_TRUE(session.Station->ConfigureRecordedPlaybackCompensation(
+		OverdubRenderedLatencyEffect::LatencySamps));
+	RouteSourceAndOverdubToStereo(session);
+	const auto probeBlocks = OutputPathDelayBlocks + params.LoopBlocks
+		+ MaxExtraSettleBlocks + 32u;
+	const auto alignment = ProbeStereoAlignment(session, 16u, probeBlocks, false);
+	EXPECT_TRUE(alignment.FoundSteadyStart);
+	EXPECT_FALSE(alignment.FirstMismatch.has_value());
+	EXPECT_GE(alignment.ComparedBlocks, 16u);
 }

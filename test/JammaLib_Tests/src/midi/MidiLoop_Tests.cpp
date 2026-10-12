@@ -14,6 +14,7 @@
 #include "engine/LoopTake.h"
 #include "engine/Quantiser.h"
 #include "midi/MidiLoop.h"
+#include "midi/MidiIndexedOutputSink.h"
 #include "midi/MidiEditOperations.h"
 #include "midi/MidiGridGesture.h"
 #include "midi/LoopGridEditor.h"
@@ -57,6 +58,24 @@ public:
 	std::vector<MidiEvent> events;
 	void OnEvent(const MidiEvent& ev) noexcept override { events.push_back(ev); }
 	void Clear() noexcept { events.clear(); }
+};
+
+class MidiLoopRejectingSink : public IMidiSink
+{
+public:
+	std::vector<MidiEvent> events;
+	unsigned int RejectAttacks = 0u;
+	void OnEvent(const MidiEvent& ev) noexcept override { events.push_back(ev); }
+	bool TryOnEvent(const MidiEvent& ev) noexcept override
+	{
+		if (ev.IsNoteOn() && RejectAttacks > 0u)
+		{
+			--RejectAttacks;
+			return false;
+		}
+		OnEvent(ev);
+		return true;
+	}
 };
 
 class MidiLoopCapturingOutputSink : public IMidiOutputSink
@@ -3101,5 +3120,360 @@ TEST(MidiLoopSeam, SeamReleasesOnlyPairedHeldSlots)
 		EXPECT_EQ(1u, sink.events[2].Channel());
 		EXPECT_TRUE(loop.HeldNotes().test(MidiLoop::NoteSlot(0, 60)));
 		EXPECT_FALSE(loop.HeldNotes().test(MidiLoop::NoteSlot(1, 60)));
+	}
+}
+
+TEST(MidiLoopSeam, RecordingAndOverdubCompletionPublishUnmatchedClassification)
+{
+	for (bool overdub : { false, true })
+	for (bool quantised : { false, true })
+	{
+		MidiLoop loop;
+		MidiQuantisationSettings settings;
+		settings.Enabled = quantised;
+		settings.GrainSamps = 100u;
+		settings.Fraction = MidiQuantisationFraction::Quarter;
+		ASSERT_TRUE(loop.SetQuantisation(settings));
+		loop.StartRecord();
+		const std::array source = { MidiEvent::MakeNoteOn(20u, 0, 60, 80),
+			MidiEvent::MakeNoteOff(120u, 0, 60), MidiEvent::MakeNoteOn(950u, 0, 60, 113) };
+		for (const auto& event : source)
+			ASSERT_TRUE(overdub ? loop.AppendEventForBuild(event) : loop.RecordEvent(event));
+		if (overdub) loop.FinalizeOverdubBase(1000u);
+		else loop.EndRecord(1000u);
+		MidiLoopCapturingSink sink;
+		loop.ReadBlock(0u, 2000u, sink);
+		ASSERT_EQ(5u, sink.events.size());
+		const auto head = quantised ? 25u : 20u;
+		const auto release = head + 100u;
+		EXPECT_EQ(head, sink.events[0].sampleOffset);
+		EXPECT_EQ(release, sink.events[1].sampleOffset);
+		EXPECT_EQ(950u, sink.events[2].sampleOffset);
+		EXPECT_EQ(113u, sink.events[2].data2);
+		EXPECT_EQ(1000u + release, sink.events[3].sampleOffset);
+		EXPECT_EQ(1950u, sink.events[4].sampleOffset);
+		EXPECT_TRUE(loop.HeldNotes().test(MidiLoop::NoteSlot(0u, 60u)));
+	}
+}
+
+TEST(MidiLoopSeam, NonemptyReplacementFlushesContinuationAndPublishesNewPairing)
+{
+	MidiLoop loop;
+	const auto oldAttack = MidiEvent::MakeNoteOn(950u, 0u, 60u, 113u);
+	loop.ReplaceRecordedEvents(&oldAttack, 1u, 1000u);
+	MidiLoopCapturingSink sink;
+	loop.ReadBlock(0u, 1000u, sink);
+	ASSERT_EQ(1u, sink.events.size());
+	EXPECT_TRUE(loop.HeldNotes().test(MidiLoop::NoteSlot(0u, 60u)));
+
+	const std::array replacement = { MidiEvent::MakeNoteOn(20u, 0u, 60u, 80u),
+		MidiEvent::MakeNoteOff(100u, 0u, 60u) };
+	loop.ReplaceRecordedEvents(replacement.data(), replacement.size(), 1000u);
+	sink.Clear();
+	loop.ReadBlock(1000u, 1200u, sink);
+	ASSERT_EQ(5u, sink.events.size());
+	EXPECT_TRUE(sink.events[0].IsNoteOff());
+	EXPECT_EQ(1000u, sink.events[0].sampleOffset);
+	EXPECT_TRUE(sink.events[1].IsNoteOn());
+	EXPECT_EQ(1020u, sink.events[1].sampleOffset);
+	EXPECT_EQ(80u, sink.events[1].data2);
+	EXPECT_EQ(1100u, sink.events[2].sampleOffset);
+	EXPECT_EQ(2020u, sink.events[3].sampleOffset);
+	EXPECT_EQ(2100u, sink.events[4].sampleOffset);
+	EXPECT_TRUE(loop.HeldNotes().none());
+}
+
+TEST(MidiLoopSeam, EditedNoteEndingAtSeamContinuesUntilNextPlayedRelease)
+{
+	MidiLoop loop;
+	const std::array paired = { MidiEvent::MakeNoteOn(20u, 0u, 60u, 80u),
+		MidiEvent::MakeNoteOff(100u, 0u, 60u) };
+	loop.ReplaceRecordedEvents(paired.data(), paired.size(), 1000u);
+	MidiLoop::EditState edit;
+	ASSERT_TRUE(loop.SnapshotForEdit(edit));
+	ASSERT_TRUE(midi::MidiEditOperations::Create(edit, 950u, 50u, 0u, 60u, 113u));
+	ASSERT_EQ(3u, edit.EventCount); // A seam-ending editor note has no source NoteOff.
+	ASSERT_TRUE(loop.PublishEdit(edit));
+	MidiLoopCapturingSink sink;
+	loop.ReadBlock(0u, 2000u, sink);
+	ASSERT_EQ(5u, sink.events.size());
+	const std::array times = { 20u, 100u, 950u, 1100u, 1950u };
+	for (std::size_t i = 0u; i < times.size(); ++i)
+		EXPECT_EQ(times[i], sink.events[i].sampleOffset);
+	EXPECT_EQ(113u, sink.events[2].data2);
+	EXPECT_TRUE(loop.HeldNotes().test(MidiLoop::NoteSlot(0u, 60u)));
+}
+
+TEST(LoopTakeMidiPlayback, MutingAndCancellationFullyReleaseUnmatchedContinuation)
+{
+	for (bool cancel : { false, true })
+	{
+		auto take = MakeLoopTake(cancel ? "cancel-continuation" : "mute-continuation");
+		take->Record({}, "station", { 0u }, { "" });
+		take->Play(0u, 1000u, 0u);
+		const auto loop = take->GetMidiLoops().at(0u);
+		const auto unmatched = MidiEvent::MakeNoteOn(10u, 0u, 60u, 113u);
+		loop->ReplaceRecordedEvents(&unmatched, 1u, 1000u);
+		MidiLoopCapturingOutputSink sink;
+		ASSERT_EQ(1u, take->ReadMidiBlock(0u, 1000u, sink));
+		ASSERT_EQ(1u, sink.events.size());
+		EXPECT_TRUE(sink.events[0].event.IsNoteOn());
+		EXPECT_EQ(10u, sink.events[0].event.sampleOffset);
+		EXPECT_TRUE(loop->HeldNotes().test(MidiLoop::NoteSlot(0u, 60u)));
+
+		if (cancel) take->CancelCapture();
+		else take->Mute();
+		sink.events.clear();
+		ASSERT_EQ(1u, take->ReadMidiBlock(1000u, 64u, sink));
+		ASSERT_EQ(1u, sink.events.size());
+		EXPECT_TRUE(sink.events[0].event.IsNoteOff());
+		EXPECT_EQ(1000u, sink.events[0].event.sampleOffset);
+		EXPECT_TRUE(loop->HeldNotes().none());
+
+		if (!cancel) take->UnMute();
+		sink.events.clear();
+		ASSERT_EQ(1u, take->ReadMidiBlock(1100u, 64u, sink));
+		if (cancel) EXPECT_TRUE(sink.events.empty());
+		else
+		{
+			ASSERT_EQ(1u, sink.events.size());
+			EXPECT_TRUE(sink.events[0].event.IsNoteOn());
+			EXPECT_EQ(1110u, sink.events[0].event.sampleOffset);
+			EXPECT_EQ(113u, sink.events[0].event.data2);
+		}
+	}
+}
+
+TEST(MidiLoopSeam, ScaledZeroAttackDoesNotStartContinuation)
+{
+	for (float level : { 0.0f, 0.001f })
+	{
+		MidiLoop loop;
+		const auto attack = MidiEvent::MakeNoteOn(10u, 0u, 60u, 100u);
+		loop.ReplaceRecordedEvents(&attack, 1u, 1000u);
+		MidiLoopCapturingOutputSink output;
+		midi::MidiIndexedOutputSink quiet(output, 0u, 0u, 0u, level);
+		loop.ReadBlock(0u, 1000u, quiet);
+		EXPECT_TRUE(output.events.empty());
+		EXPECT_TRUE(loop.HeldNotes().none());
+
+		midi::MidiIndexedOutputSink audible(output, 0u, 1000u, 1000u, 1.0f);
+		loop.ReadBlock(1000u, 1000u, audible);
+		ASSERT_EQ(1u, output.events.size());
+		EXPECT_EQ(1010u, output.events[0].event.sampleOffset);
+		EXPECT_EQ(100u, output.events[0].event.data2);
+		EXPECT_TRUE(loop.HeldNotes().test(MidiLoop::NoteSlot(0u, 60u)));
+	}
+}
+
+TEST(MidiLoopRelocation, ChasesPairedNotesAtDestinationWithoutDuplicatingEndpoints)
+{
+	for (unsigned int block : { 1u, 40u })
+	{
+		MidiLoop loop;
+		const std::array source = { MidiEvent::MakeNoteOn(20u, 0u, 60u, 80u),
+			MidiEvent::MakeNoteOff(100u, 0u, 60u) };
+		loop.ReplaceRecordedEvents(source.data(), source.size(), 1000u);
+		MidiLoopCapturingSink sink;
+		loop.RequestRelocationChase();
+		loop.ReadBlock(1050u, block, sink);
+		ASSERT_EQ(1u, sink.events.size());
+		EXPECT_TRUE(sink.events[0].IsNoteOn());
+		EXPECT_EQ(1050u, sink.events[0].sampleOffset);
+		EXPECT_EQ(80u, sink.events[0].data2);
+		EXPECT_TRUE(loop.HeldNotes().test(MidiLoop::NoteSlot(0u, 60u)));
+		sink.Clear();
+		loop.ReadBlock(1100u, 1u, sink);
+		ASSERT_EQ(1u, sink.events.size());
+		EXPECT_TRUE(sink.events[0].IsNoteOff());
+		EXPECT_TRUE(loop.HeldNotes().none());
+		loop.RequestRelocationChase();
+		sink.Clear();
+		loop.ReadBlock(2020u, 1u, sink); // Exact attack position is emitted once.
+		ASSERT_EQ(1u, sink.events.size());
+		EXPECT_TRUE(sink.events[0].IsNoteOn());
+		EXPECT_EQ(2020u, sink.events[0].sampleOffset);
+	}
+}
+
+TEST(MidiLoopRelocation, TailContinuationChasesAcrossBothSeekDirections)
+{
+	for (bool quantised : { false, true })
+	{
+		MidiLoop loop;
+		MidiQuantisationSettings settings;
+		settings.Enabled = quantised;
+		settings.GrainSamps = 100u;
+		settings.Fraction = MidiQuantisationFraction::Quarter;
+		ASSERT_TRUE(loop.SetQuantisation(settings));
+		const std::array source = { MidiEvent::MakeNoteOn(20u, 0u, 60u, 80u),
+			MidiEvent::MakeNoteOff(120u, 0u, 60u),
+			MidiEvent::MakeNoteOn(950u, 0u, 60u, 113u) };
+		loop.ReplaceRecordedEvents(source.data(), source.size(), 1000u);
+		MidiLoopCapturingSink sink;
+		loop.ReadBlock(0u, 960u, sink);
+		ASSERT_EQ(3u, sink.events.size());
+		EXPECT_EQ(950u, sink.events[2].sampleOffset);
+		sink.Clear();
+		loop.RequestRelocationChase();
+		loop.ReadBlock(1050u, 100u, sink); // Forward seek into the carried tail.
+		ASSERT_EQ(3u, sink.events.size());
+		EXPECT_TRUE(sink.events[0].IsNoteOff());
+		EXPECT_EQ(1050u, sink.events[0].sampleOffset);
+		EXPECT_TRUE(sink.events[1].IsNoteOn());
+		EXPECT_EQ(1050u, sink.events[1].sampleOffset);
+		EXPECT_EQ(113u, sink.events[1].data2);
+		EXPECT_EQ(quantised ? 1125u : 1120u, sink.events[2].sampleOffset);
+		sink.Clear();
+		loop.RequestRelocationChase();
+		loop.ReadBlock(1970u, 80u, sink); // Backward phase seek into the tail.
+		ASSERT_EQ(1u, sink.events.size());
+		EXPECT_TRUE(sink.events[0].IsNoteOn());
+		EXPECT_EQ(1970u, sink.events[0].sampleOffset);
+		EXPECT_EQ(113u, sink.events[0].data2);
+		EXPECT_TRUE(loop.HeldNotes().test(MidiLoop::NoteSlot(0u, 60u)));
+	}
+}
+
+TEST(MidiLoopRelocation, UnreleasedNoteChasesAndRetainsOriginalVelocity)
+{
+	MidiLoop loop;
+	const auto attack = MidiEvent::MakeNoteOn(950u, 3u, 64u, 123u).WithFlags(MidiEvent::ExactTiming);
+	loop.ReplaceRecordedEvents(&attack, 1u, 1000u);
+	MidiLoopCapturingSink sink;
+	loop.RequestRelocationChase();
+	loop.ReadBlock(1100u, 900u, sink); // Head of a steady-state iteration.
+	ASSERT_EQ(1u, sink.events.size());
+	EXPECT_EQ(1100u, sink.events[0].sampleOffset);
+	EXPECT_EQ(123u, sink.events[0].data2);
+	EXPECT_EQ(MidiEvent::ExactTiming, sink.events[0].flags);
+	EXPECT_TRUE(loop.HeldNotes().test(MidiLoop::NoteSlot(3u, 64u)));
+}
+
+TEST(LoopTakeMidiTiming, UserOffsetChasesWhileAutomaticCorrectionOnlyMovesPhase)
+{
+	auto take = MakeLoopTake("explicit-midi-relocation");
+	take->Record({}, "station", { 0u }, { "" });
+	take->Play(0u, 1000u, 0u);
+	const std::array source = { MidiEvent::MakeNoteOn(20u, 0u, 60u, 80u),
+		MidiEvent::MakeNoteOff(100u, 0u, 60u) };
+	auto loop = take->GetMidiLoops().at(0u);
+	loop->ReplaceRecordedEvents(source.data(), source.size(), 1000u);
+	take->SetLocalTransportOffsetSamps(50);
+	MidiLoopCapturingOutputSink sink;
+	ASSERT_EQ(1u, take->ReadMidiBlock(500u, 40u, sink));
+	ASSERT_EQ(1u, sink.events.size());
+	EXPECT_EQ(500u, sink.events[0].event.sampleOffset);
+	EXPECT_EQ(80u, sink.events[0].event.data2);
+	EXPECT_TRUE(loop->HeldNotes().test(MidiLoop::NoteSlot(0u, 60u)));
+
+	take->CaptureMappedSourceAnchors(1000);
+	take->RestoreMappedSourceCoordinate(1010); // Routine mapped progress preserves the voice.
+	EXPECT_EQ(60ul, take->MidiPlayIndex());
+	take->ApplyAcceptedTimingCorrection(10, 1u); // Small discipline: preserve the voice.
+	sink.events.clear();
+	ASSERT_EQ(1u, take->ReadMidiBlock(600u, 10u, sink));
+	EXPECT_TRUE(sink.events.empty());
+	take->ApplyAcceptedTimingCorrection(20, 2u, true); // Explicit remote replacement.
+	sink.events.clear();
+	ASSERT_EQ(1u, take->ReadMidiBlock(700u, 10u, sink));
+	ASSERT_EQ(2u, sink.events.size());
+	EXPECT_TRUE(sink.events[0].event.IsNoteOff());
+	EXPECT_TRUE(sink.events[1].event.IsNoteOn());
+	EXPECT_EQ(700u, sink.events[0].event.sampleOffset);
+	EXPECT_EQ(700u, sink.events[1].event.sampleOffset);
+}
+
+TEST(MidiLoopRelocation, RejectedChasedAttackRetriesWithoutRetriggering)
+{
+	MidiLoop loop;
+	const std::array source = { MidiEvent::MakeNoteOn(20u, 0u, 60u, 80u),
+		MidiEvent::MakeNoteOff(100u, 0u, 60u) };
+	loop.ReplaceRecordedEvents(source.data(), source.size(), 1000u);
+	MidiLoopRejectingSink sink;
+	sink.RejectAttacks = 1u;
+	loop.RequestRelocationChase();
+	loop.ReadBlock(1050u, 10u, sink);
+	EXPECT_TRUE(sink.events.empty());
+	EXPECT_TRUE(loop.HeldNotes().none());
+	loop.ReadBlock(1060u, 10u, sink);
+	ASSERT_EQ(1u, sink.events.size());
+	EXPECT_EQ(1060u, sink.events[0].sampleOffset);
+	EXPECT_TRUE(loop.HeldNotes().test(MidiLoop::NoteSlot(0u, 60u)));
+	loop.ReadBlock(1070u, 10u, sink);
+	EXPECT_EQ(1u, sink.events.size());
+	loop.ReadBlock(1100u, 1u, sink);
+	ASSERT_EQ(2u, sink.events.size());
+	EXPECT_TRUE(sink.events[1].IsNoteOff());
+	EXPECT_TRUE(loop.HeldNotes().none());
+}
+
+TEST(MidiLoopQuantisation, PreparedMasterGridStaysInactiveUntilBoundary)
+{
+	MidiLoop loop;
+	MidiQuantisationSettings oldGrid;
+	oldGrid.Enabled = true;
+	oldGrid.GrainSamps = 100u;
+	oldGrid.Fraction = MidiQuantisationFraction::Quarter;
+	ASSERT_TRUE(loop.SetQuantisation(oldGrid));
+	const auto attack = MidiEvent::MakeNoteOn(37u, 0u, 60u, 100u);
+	loop.ReplaceRecordedEvents(&attack, 1u, 1000u);
+	MidiEvent event{};
+	ASSERT_TRUE(loop.TryGetPlaybackEvent(0u, event));
+	ASSERT_EQ(25u, event.sampleOffset);
+	const auto oldRevision = loop.Revision();
+	auto newGrid = oldGrid;
+	newGrid.GrainSamps = 200u;
+	ASSERT_TRUE(loop.PrepareQuantisation(newGrid, 0u));
+	EXPECT_EQ(oldRevision, loop.Revision()); // Only the active snapshot is public before commit.
+	EXPECT_TRUE(loop.PreparedQuantisationReadyAtAudioBoundary());
+	ASSERT_TRUE(loop.TryGetPlaybackEvent(0u, event));
+	EXPECT_EQ(25u, event.sampleOffset);
+	loop.ActivatePreparedQuantisationAtAudioBoundary();
+	ASSERT_TRUE(loop.TryGetPlaybackEvent(0u, event));
+	EXPECT_EQ(50u, event.sampleOffset);
+}
+
+TEST(MidiLoopQuantisation, SourceMutationInvalidatesPreparedMasterGrid)
+{
+	for (unsigned int mutation = 0u; mutation < 3u; ++mutation)
+	{
+		MidiLoop loop;
+		MidiQuantisationSettings oldGrid;
+		oldGrid.Enabled = true;
+		oldGrid.GrainSamps = 100u;
+		oldGrid.Fraction = MidiQuantisationFraction::Quarter;
+		ASSERT_TRUE(loop.SetQuantisation(oldGrid));
+		const auto original = MidiEvent::MakeNoteOn(37u, 0u, 60u, 100u);
+		loop.ReplaceRecordedEvents(&original, 1u, 1000u);
+		auto nextGrid = oldGrid;
+		nextGrid.GrainSamps = 200u;
+		ASSERT_TRUE(loop.PrepareQuantisation(nextGrid, 0u));
+		if (mutation == 0u)
+		{
+			const auto replacement = MidiEvent::MakeNoteOn(80u, 0u, 61u, 90u);
+			loop.ReplaceRecordedEvents(&replacement, 1u, 1000u);
+			EXPECT_FALSE(loop.PreparedQuantisationReadyAtAudioBoundary());
+		}
+		else if (mutation == 1u)
+		{
+			loop.Reset();
+		}
+		else
+		{
+			loop.StartRecord();
+			ASSERT_TRUE(loop.RecordEvent(MidiEvent::MakeNoteOn(80u, 0u, 61u, 90u)));
+			loop.EndRecord(1000u);
+			EXPECT_FALSE(loop.PreparedQuantisationReadyAtAudioBoundary());
+		}
+		loop.ActivatePreparedQuantisationAtAudioBoundary();
+		MidiEvent event{};
+		if (mutation == 1u)
+			EXPECT_FALSE(loop.TryGetPlaybackEvent(0u, event));
+		else
+		{
+			ASSERT_TRUE(loop.TryGetPlaybackEvent(0u, event));
+			EXPECT_EQ(61u, event.data1);
+		}
 	}
 }
