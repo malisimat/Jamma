@@ -136,6 +136,21 @@ void GuiMainPanel::SetCommandOwner(std::weak_ptr<ActionReceiver> owner)
 	for (auto& binding : _bindings) binding->SetOwner(owner);
 }
 
+std::optional<std::pair<bool, std::size_t>> GuiMainPanel::HoveredPerformanceGroup() const
+{
+	if (!_selectionOnly || !_expanded || !IsVisible() || !IsEnabled() || !_frame->IsVisible())
+		return std::nullopt;
+	for (std::size_t i = 0u; i < _groupRows.size(); ++i)
+		if (const auto slot = _groupRows[i]->HoveredSlot()) return std::pair(i == 1u, *slot);
+	return std::nullopt;
+}
+
+void GuiMainPanel::ClearPerformanceGroupPointerState()
+{
+	for (const auto& row : _groupRows)
+		if (row) row->ClearPointerState();
+}
+
 void GuiMainPanel::_InitReceivers()
 {
 	if (_expandBinding) _expandBinding->SetOwner(ActionReceiver::shared_from_this());

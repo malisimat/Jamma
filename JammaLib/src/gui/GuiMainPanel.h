@@ -38,6 +38,8 @@ namespace gui
 		void SetOccupiedTopStripBounds(utils::Rect2d bounds);
 		void SetPerformanceGroupHandler(std::function<void(bool, engine::GroupCommand, std::size_t)> handler);
 		void RefreshPerformanceGroups(const engine::PerformanceGroups& groups);
+		std::optional<std::pair<bool, std::size_t>> HoveredPerformanceGroup() const;
+		void ClearPerformanceGroupPointerState();
 		void SetPage(SettingsPage page);
 		SettingsPage Page() const { return _page; }
 		void SetExpanded(bool expanded);

@@ -50,6 +50,7 @@ namespace gui
         actions::ActionResult OnAction(actions::TouchAction action) override;
         static std::optional<engine::GroupCommand> ClickCommand(base::Action::Modifiers modifiers, bool add);
         std::shared_ptr<GuiPerformanceGroupButton> Button(std::size_t slot) const;
+        std::optional<std::size_t> HoveredSlot() const;
     private:
         struct Geometry { float X = 0.0f; float Width = 0.0f; };
         static base::GuiElementParams _Params(bool selection);

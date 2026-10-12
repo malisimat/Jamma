@@ -54,6 +54,7 @@ void LoopModel::Draw3d(DrawContext& ctx,
 	base::DrawPass pass)
 {
 	auto& glCtx = dynamic_cast<GlDrawContext&>(ctx);
+	glCtx.ApplyGroupPreview(GlobalId());
 
 	glCtx.PushMvp(glm::rotate(glm::mat4(1.0),
 		(float)(constants::TWOPI * _loopIndexFrac) * (1.0f - _editorMorph),

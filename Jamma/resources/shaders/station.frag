@@ -16,6 +16,9 @@ uniform float StationMuted;
 uniform vec3 StationStateColor;
 uniform float SceneDim;
 uniform float SelectionActive;
+// Signed render-only preview: positive member, negative nonmember, zero inactive.
+uniform float GroupPreview;
+uniform vec3 GroupPreviewTint;
 uniform sampler2D MaterialProbeSampler;
 
 // uv.x = radial fraction on top/bevel, vertical fraction on side (0=bottom,1=top)
@@ -23,9 +26,18 @@ uniform sampler2D MaterialProbeSampler;
 // Keep the normal palette when selection is empty; retain a little hue otherwise.
 vec3 selectionColour(vec3 colour, float selected)
 {
+    if (GroupPreview != 0.0) return colour;
     float dull = clamp(SelectionActive, 0.0, 1.0) * (1.0 - clamp(selected, 0.0, 1.0));
     float luminance = dot(colour, vec3(0.2126, 0.7152, 0.0722));
     return mix(colour, mix(vec3(luminance), colour, 0.25) * 0.72, dull);
+}
+
+vec3 groupPreviewColour(vec3 colour)
+{
+    if (GroupPreview == 0.0) return colour;
+    float luminance = dot(colour, vec3(0.2126, 0.7152, 0.0722));
+    if (GroupPreview < 0.0) return vec3(luminance * 0.36);
+    return mix(colour, GroupPreviewTint, 0.32);
 }
 
 void main()
@@ -84,7 +96,7 @@ void main()
 
 	// Keep the diffuse and level variation visible beneath the stronger state light.
 	float hi = clamp(Highlight, 0.0, 1.0);
-	float hover = clamp(StationHover, 0.0, 1.0);
+	float hover = clamp(max(StationHover, GroupPreview), 0.0, 1.0);
 	base = min(base * (1.0 + 1.65 * hi) + vec3(0.08, 0.27, 0.32) * hi,
 		vec3(1.0));
 	base = selectionColour(base, hi);
@@ -100,5 +112,5 @@ void main()
 	base = mix(base, pressColour,
 		0.68 * clamp(StationPressed, 0.0, 1.0));
 
-	ColorOUT = vec4(base * SceneDim, 1.0);
+	ColorOUT = vec4(groupPreviewColour(base) * SceneDim, 1.0);
 }

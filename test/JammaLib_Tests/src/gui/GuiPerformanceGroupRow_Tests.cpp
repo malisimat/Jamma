@@ -2,6 +2,7 @@
 #include "gui/GuiPerformanceGroupRow.h"
 #include "gui/GuiMainPanel.h"
 #include "gui/GuiHud.h"
+#include "graphics/GlDrawContext.h"
 
 class PerformanceGroupGuiTestHelpers
 {
@@ -286,4 +287,80 @@ TEST_F(SelectionGroupPanelTests, CapturedReleaseOutsideScrollClipCancelsPartlyVi
     auto up = add->OnAction(PerformanceGroupGuiTestHelpers::Touch(actions::TouchAction::TOUCH_UP, add->GlobalToLocal(release)));
     EXPECT_TRUE(up.IsEaten);
     EXPECT_EQ(0, calls);
+}
+
+TEST(GuiPerformanceGroups, HoverPreviewRequiresOccupiedVisibleSlotAndClearsWithPointerState)
+{
+    auto row = PerformanceGroupGuiTestHelpers::Row();
+    row->SetSlots({ false, true }, 2u);
+    row->AdvanceAnimation(0.12f);
+    row->Button(1)->ApplyHoverState(true);
+    EXPECT_FALSE(row->HoveredSlot()); // Interior hole is visible but has no snapshot.
+    row->Button(1)->ClearPointerState();
+    row->Button(0)->ApplyHoverState(true);
+    EXPECT_FALSE(row->HoveredSlot()); // Add never previews current state.
+    row->Button(0)->ClearPointerState();
+    row->Button(2)->ApplyHoverState(true);
+    EXPECT_EQ(row->HoveredSlot(), 2u);
+    EXPECT_EQ(row->Button(2)->GetToggleState(), gui::GuiToggleParams::TOGGLE_ON);
+    row->ClearPointerState();
+    EXPECT_FALSE(row->HoveredSlot());
+    row->Button(2)->ApplyHoverState(true);
+    row->SetVisible(false);
+    EXPECT_FALSE(row->HoveredSlot());
+    row->SetVisible(true);
+    row->Button(2)->ApplyHoverState(true);
+    row->SetSlots({}, {});
+    EXPECT_FALSE(row->HoveredSlot());
+}
+
+TEST_F(SelectionGroupPanelTests, HoverPreviewStopsImmediatelyOnCollapseAndHiddenAncestors)
+{
+    engine::PerformanceGroups groups;
+    groups.Mute.Store(1u, {});
+    groups.Selection.Store(1u, {});
+    panel->RefreshPerformanceGroups(groups);
+    panel->AdvanceAnimation(0.12f);
+    mute->Button(1)->ApplyHoverState(true);
+    ASSERT_TRUE(panel->HoveredPerformanceGroup());
+    EXPECT_EQ(*panel->HoveredPerformanceGroup(), std::make_pair(false, std::size_t(1)));
+    panel->SetExpanded(false);
+    EXPECT_FALSE(panel->HoveredPerformanceGroup());
+    panel->SetExpanded(true);
+    panel->AdvanceAnimation(0.30f);
+    EXPECT_FALSE(panel->HoveredPerformanceGroup()); // No resurrected old hover.
+    selection->Button(1)->ApplyHoverState(true);
+    EXPECT_EQ(*panel->HoveredPerformanceGroup(), std::make_pair(true, std::size_t(1)));
+    scroll->SetVisible(false);
+    EXPECT_FALSE(panel->HoveredPerformanceGroup());
+    scroll->SetVisible(true);
+    scroll->SetEnabled(false);
+    EXPECT_FALSE(panel->HoveredPerformanceGroup());
+    scroll->SetEnabled(true);
+    selection->SetPosition({ 0, 10000 });
+    EXPECT_FALSE(panel->HoveredPerformanceGroup()); // Entire button outside ancestor clip.
+}
+
+TEST(GuiPerformanceGroups, RenderPreviewResetsUniformsAndDoesNotTouchActualInteractionState)
+{
+    graphics::GlDrawContext context({ 100u, 100u }, base::DrawContext::SCREEN);
+    const glm::vec3 tint(0.259f, 0.588f, 1.0f);
+    context.SetUniform("LoopSelected", 1.0f);
+    context.SetUniform("LoopMuted", 1.0f);
+    context.SetUniform("LoopHover", 0.0f);
+    context.SetUniform("ObjectId", 123u);
+    context.SetGroupPreview(true, tint, { { { 0u, 1u, 2u }, true }, { { 0u, 1u, 3u }, false } });
+    context.ApplyGroupPreview({ 0u, 1u, 2u });
+    EXPECT_EQ(std::any_cast<float>(*context.GetUniform("GroupPreview")), 1.0f);
+    EXPECT_EQ(std::any_cast<glm::vec3>(*context.GetUniform("GroupPreviewTint")), tint);
+    EXPECT_EQ(context.GroupPreview({ 0u, 1u, 3u }), -1.0f);
+    EXPECT_EQ(context.GroupPreview({ 9u }), -1.0f); // New/uncaptured target.
+    context.SetGroupPreview(false, glm::vec3(1.0f), {});
+    context.ApplyGroupPreview({});
+    EXPECT_EQ(std::any_cast<float>(*context.GetUniform("GroupPreview")), 0.0f);
+    EXPECT_EQ(context.GroupPreview({ 0u, 1u, 2u }), 0.0f);
+    EXPECT_EQ(std::any_cast<float>(*context.GetUniform("LoopSelected")), 1.0f);
+    EXPECT_EQ(std::any_cast<float>(*context.GetUniform("LoopMuted")), 1.0f);
+    EXPECT_EQ(std::any_cast<float>(*context.GetUniform("LoopHover")), 0.0f);
+    EXPECT_EQ(std::any_cast<unsigned int>(*context.GetUniform("ObjectId")), 123u);
 }

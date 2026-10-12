@@ -38,6 +38,9 @@ uniform int EditorBottomPitch;
 uniform int EditorVisibleRows;
 uniform float SceneDim;
 uniform float SelectionActive;
+// Signed render-only preview: positive member, negative nonmember, zero inactive.
+uniform float GroupPreview;
+uniform vec3 GroupPreviewTint;
 uniform float EditorActive;
 uniform float EditorGridRadius;
 uniform float EditorWrapCopy;
@@ -57,6 +60,7 @@ const int RenderModeDiscOnly = 4;
 // Keep the normal palette when selection is empty; retain a little hue otherwise.
 vec3 selectionColour(vec3 colour, float selected)
 {
+    if (GroupPreview != 0.0) return colour;
     float dull = clamp(SelectionActive, 0.0, 1.0) * (1.0 - clamp(selected, 0.0, 1.0));
     float luminance = dot(colour, vec3(0.2126, 0.7152, 0.0722));
     return mix(colour, mix(vec3(luminance), colour, 0.25) * 0.72, dull);
@@ -65,8 +69,16 @@ vec3 selectionColour(vec3 colour, float selected)
 vec3 muteColour(vec3 colour)
 {
     float luminance = clamp(0.60 * dot(colour, vec3(0.2126, 0.7152, 0.0722))
-        + 0.16 * clamp(LoopSelected, 0.0, 1.0) + 0.24 * clamp(LoopHover, 0.0, 1.0), 0.0, 1.0);
+        + 0.16 * clamp(LoopSelected, 0.0, 1.0) + 0.24 * clamp(max(LoopHover, GroupPreview), 0.0, 1.0), 0.0, 1.0);
     return vec3(0.07, 0.10, 0.15) + vec3(0.18, 0.23, 0.30) * luminance;
+}
+
+vec3 groupPreviewColour(vec3 colour)
+{
+    if (GroupPreview == 0.0) return colour;
+    float luminance = dot(colour, vec3(0.2126, 0.7152, 0.0722));
+    if (GroupPreview < 0.0) return vec3(luminance * 0.36);
+    return mix(colour, GroupPreviewTint, 0.32);
 }
 
 void main()
@@ -112,7 +124,7 @@ void main()
     if (IsDisc > 0.5)
     {
         float selected = clamp(LoopSelected, 0.0, 1.0);
-        float hovered = clamp(LoopHover, 0.0, 1.0);
+        float hovered = clamp(max(LoopHover, GroupPreview), 0.0, 1.0);
         float pressed = clamp(LoopPressed, 0.0, 1.0);
         vec3 discColor = mix(vec3(0.46, 0.53, 0.65),
             vec3(0.06, 0.91, 0.96), selected) * Diff;
@@ -155,7 +167,7 @@ void main()
             vec3(0.2126, 0.7152, 0.0722));
         noteColor *= mix(0.65 + 0.35 * chrome, 1.0, EditorMorphV);
         float selected = clamp(LoopSelected, 0.0, 1.0);
-        float hovered = clamp(LoopHover, 0.0, 1.0);
+        float hovered = clamp(max(LoopHover, GroupPreview), 0.0, 1.0);
         // Lift the velocity hue, including shadowed faces, without washing it
         // towards white. Keep the probe modulation underneath both state lifts.
         noteColor = noteColor * (1.0 + 0.65 * selected)
@@ -261,7 +273,7 @@ void main()
         ColorOUT.rgb += playheadTint * (0.22 + 0.78 * EditorMorphV)
             * (core * vec3(0.35, 0.86, 1.0) + trail * vec3(0.025, 0.11, 0.16));
     }
-    ColorOUT.rgb *= mix(SceneDim, 1.0, EditorMorphV);
+    ColorOUT.rgb = groupPreviewColour(ColorOUT.rgb) * mix(SceneDim, 1.0, EditorMorphV);
     if (EditorActive > 0.5)
     {
         float editorDepth = gl_FragCoord.z * mix(1.0, 0.05, EditorMorphV);

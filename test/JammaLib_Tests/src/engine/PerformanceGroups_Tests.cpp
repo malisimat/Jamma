@@ -84,3 +84,68 @@ TEST(PerformanceGroups, EmptySnapshotsAreOccupiedAndRowsHaveIndependentActiveSta
     EXPECT_FALSE(groups.Mute.Store(0u, {}));
     EXPECT_FALSE(groups.Mute.Store(10u, {}));
 }
+
+TEST(PerformanceGroups, PreviewUsesPositiveFlagsAndAggregatesOnlyDescendants)
+{
+    using engine::GroupTargetKind;
+    using engine::PerformanceGroupPreview;
+    const engine::GroupTargetId station{ GroupTargetKind::Station, "s", {}, {} };
+    const engine::GroupTargetId take{ GroupTargetKind::Take, "s", "t", {} };
+    const engine::GroupTargetId audio{ GroupTargetKind::AudioLoop, "s", "t", "a" };
+    const engine::GroupTargetId midi{ GroupTargetKind::MidiLoop, "s", "t", "a" };
+    engine::SelectionGroupSnapshot selection;
+    selection.Targets = { { station, false }, { take, false }, { audio, false }, { midi, true } };
+    EXPECT_TRUE(PerformanceGroupPreview::Contains(selection, station));
+    EXPECT_TRUE(PerformanceGroupPreview::Contains(selection, take));
+    EXPECT_FALSE(PerformanceGroupPreview::Contains(selection, audio));
+    EXPECT_TRUE(PerformanceGroupPreview::Contains(selection, midi));
+    EXPECT_FALSE(PerformanceGroupPreview::Contains(selection, { GroupTargetKind::Take, "s", "other", {} }));
+    selection.Targets[3].Selected = false;
+    selection.Targets[0].Selected = true;
+    EXPECT_FALSE(PerformanceGroupPreview::Contains(selection, audio)); // Parent flag cannot invent a leaf.
+    EXPECT_FALSE(PerformanceGroupPreview::Contains(selection, { GroupTargetKind::Station, "other", {}, {} }));
+    engine::MuteGroupSnapshot mute;
+    mute.Targets = { { station, false, true }, { take, true, true }, { audio, false, true } };
+    EXPECT_FALSE(PerformanceGroupPreview::Contains(mute, station));
+    EXPECT_FALSE(PerformanceGroupPreview::Contains(mute, take));
+    EXPECT_FALSE(PerformanceGroupPreview::Contains(mute, audio));
+    mute.Targets[2].EffectiveMuted = false;
+    EXPECT_TRUE(PerformanceGroupPreview::Contains(mute, station));
+    EXPECT_TRUE(PerformanceGroupPreview::Contains(mute, take));
+    EXPECT_TRUE(PerformanceGroupPreview::Contains(mute, audio));
+    EXPECT_FALSE(PerformanceGroupPreview::AudibleTake(mute, take)); // MIDI follows the saved take, not an audio sibling.
+    EXPECT_FALSE(PerformanceGroupPreview::Contains(mute, midi));
+    EXPECT_TRUE(mute.Targets[1].Muted); // Preview queries do not restore/mutate saved states.
+    EXPECT_FALSE(selection.Targets[3].Selected);
+}
+
+TEST(PerformanceGroups, PreviewAncestorsAggregateOnlySurvivingSavedMembers)
+{
+    using engine::GroupTargetKind;
+    using engine::PerformanceGroupPreview;
+    const engine::GroupTargetId station{ GroupTargetKind::Station, "s", {}, {} };
+    const engine::GroupTargetId take{ GroupTargetKind::Take, "s", "t", {} };
+    const engine::GroupTargetId deleted{ GroupTargetKind::AudioLoop, "s", "t", "deleted" };
+    const engine::GroupTargetId replacement{ GroupTargetKind::AudioLoop, "s", "t", "new" };
+    std::vector<engine::GroupTargetId> live{ station, take, replacement };
+    engine::SelectionGroupSnapshot selection;
+    selection.Targets = { { station, false }, { take, false }, { deleted, true } };
+    EXPECT_FALSE(PerformanceGroupPreview::ContainsLive(selection, station, live));
+    EXPECT_FALSE(PerformanceGroupPreview::ContainsLive(selection, take, live));
+    EXPECT_FALSE(PerformanceGroupPreview::ContainsLive(selection, replacement, live));
+    live.push_back(deleted);
+    EXPECT_TRUE(PerformanceGroupPreview::ContainsLive(selection, station, live));
+    EXPECT_TRUE(PerformanceGroupPreview::ContainsLive(selection, take, live));
+    live.pop_back();
+    selection.Targets[0].Selected = true;
+    EXPECT_TRUE(PerformanceGroupPreview::ContainsLive(selection, station, live)); // Exact station flag survives.
+    EXPECT_FALSE(PerformanceGroupPreview::ContainsLive(selection, take, live));
+    engine::MuteGroupSnapshot mute;
+    mute.Targets = { { station, false, true }, { take, true, true }, { deleted, false, false } };
+    EXPECT_FALSE(PerformanceGroupPreview::ContainsLive(mute, station, live));
+    EXPECT_FALSE(PerformanceGroupPreview::ContainsLive(mute, take, live));
+    live.push_back(deleted);
+    EXPECT_TRUE(PerformanceGroupPreview::ContainsLive(mute, station, live));
+    EXPECT_TRUE(PerformanceGroupPreview::ContainsLive(mute, take, live));
+    EXPECT_FALSE(PerformanceGroupPreview::AudibleTake(mute, take));
+}

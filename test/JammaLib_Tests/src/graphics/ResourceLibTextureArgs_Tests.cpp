@@ -88,3 +88,26 @@ TEST(ResourceLibShaderUniforms, MidiEditorContextUniformsAreRegistered)
 		}
 	}
 }
+
+TEST(ResourceLibShaderUniforms, GroupPreviewUniformsReachAllPerformanceMaterials)
+{
+    auto root = std::filesystem::absolute(__FILE__);
+    for (int parent = 0; parent < 5; ++parent) root = root.parent_path();
+    std::ifstream list(root / "Jamma" / "resources" / "ResourceList.txt");
+    ASSERT_TRUE(list.is_open());
+    std::set<std::string> expected{ "waveform", "midi_note", "station", "station_ring" };
+    std::string line;
+    while (std::getline(list, line))
+    {
+        std::istringstream fields(line);
+        std::string type, name, uniform;
+        fields >> type >> name;
+        if (type != "2" || !expected.contains(name)) continue;
+        std::set<std::string> registered;
+        while (fields >> uniform) registered.insert(uniform);
+        EXPECT_TRUE(registered.contains("GroupPreview")) << name;
+        EXPECT_TRUE(registered.contains("GroupPreviewTint")) << name;
+        expected.erase(name);
+    }
+    EXPECT_TRUE(expected.empty());
+}

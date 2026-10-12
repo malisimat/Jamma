@@ -877,10 +877,62 @@ void Scene::Draw3d(DrawContext& ctx,
 		glActiveTexture(GL_TEXTURE0);
 	}
 	_loopEditor.ApplyToModels();
+	if (_selectionPanel && (!_selectionPanel->IsVisible() || !_selectionPanel->IsEnabled()
+		|| _popupManager.IsOpen() || _loopEditor.IsEngaged() || _EditControlsSuppressed()))
+		_selectionPanel->ClearPerformanceGroupPointerState();
+	const auto hoveredGroup = PASS_SCENE == pass && _selectionPanel && !_popupManager.IsOpen()
+		&& !_loopEditor.IsEngaged() && !_EditControlsSuppressed()
+		? _selectionPanel->HoveredPerformanceGroup() : std::nullopt;
+	const auto& groups = _performanceGroups.Groups();
+	const auto mutePreview = hoveredGroup && !hoveredGroup->first ? groups.Mute.Get(hoveredGroup->second) : nullptr;
+	const auto selectionPreview = hoveredGroup && hoveredGroup->first ? groups.Selection.Get(hoveredGroup->second) : nullptr;
+	std::vector<GroupTargetId> livePreviewTargets;
+	if (mutePreview || selectionPreview)
+		for (const auto& station : _stations)
+		{
+			if (station->IsRemote()) continue;
+			livePreviewTargets.push_back({ GroupTargetKind::Station, station->Id(), {}, {} });
+			for (const auto& take : station->GetLoopTakes())
+			{
+				livePreviewTargets.push_back({ GroupTargetKind::Take, station->Id(), take->Id(), {} });
+				for (const auto& loop : take->GetLoops())
+					livePreviewTargets.push_back({ GroupTargetKind::AudioLoop, station->Id(), take->Id(), loop->Id() });
+				for (const auto& loop : take->GetMidiLoops())
+					livePreviewTargets.push_back({ GroupTargetKind::MidiLoop, station->Id(), take->Id(), loop->Id() });
+			}
+		}
+	const auto member = [&](const GroupTargetId& target) {
+		return mutePreview ? PerformanceGroupPreview::ContainsLive(*mutePreview, target, livePreviewTargets)
+			: selectionPreview && PerformanceGroupPreview::ContainsLive(*selectionPreview, target, livePreviewTargets);
+	};
+	std::map<std::vector<unsigned int>, bool> previewMembers;
+	if (mutePreview || selectionPreview)
+		for (const auto& station : _stations)
+		{
+			if (station->IsRemote()) continue;
+			previewMembers[station->GlobalId()] = member({ GroupTargetKind::Station, station->Id(), {}, {} });
+			for (const auto& take : station->GetLoopTakes())
+			{
+				for (const auto& loop : take->GetLoops())
+					if (const auto model = loop->Model())
+						previewMembers[model->GlobalId()] = member({ GroupTargetKind::AudioLoop, station->Id(), take->Id(), loop->Id() });
+				for (const auto& loop : take->GetMidiLoops())
+					if (const auto model = loop->Model())
+						// MIDI playback mute belongs to the take; mute snapshots
+						// intentionally store no separate MIDI-loop mute flag.
+						previewMembers[model->GlobalId()] = mutePreview
+							? PerformanceGroupPreview::AudibleTake(*mutePreview, { GroupTargetKind::Take, station->Id(), take->Id(), {} })
+							: member({ GroupTargetKind::MidiLoop, station->Id(), take->Id(), loop->Id() });
+			}
+		}
+	glCtx.SetGroupPreview(mutePreview || selectionPreview,
+		selectionPreview ? glm::vec3(1.0f, 0.875f, 0.208f) : glm::vec3(0.259f, 0.588f, 1.0f), std::move(previewMembers));
 	for (auto& station : _stations)
 	{
 		station->Draw3d(ctx, 1, pass);
 	}
+	glCtx.SetGroupPreview(false, glm::vec3(1.0f), {});
+	glCtx.ApplyGroupPreview({});
 	glCtx.SetUniform("SelectionActive", 0.0f);
 	glCtx.SetUniform("SceneDim", 1.0f);
 	if (probeId != 0u)

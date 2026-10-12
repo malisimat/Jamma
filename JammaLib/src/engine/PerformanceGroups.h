@@ -57,6 +57,63 @@ namespace engine
 
     enum class GroupCommand { RecallOrStore, Store, Clear, Add };
 
+    // Preview only: saved negative states describe nonmembers, not membership.
+    // Parents aggregate positive descendants; leaves require their own saved flag.
+    class PerformanceGroupPreview
+    {
+    public:
+        static bool AudibleTake(const MuteGroupSnapshot& snapshot, const GroupTargetId& target)
+        {
+            for (const auto& state : snapshot.Targets)
+                if (state.Target.Kind == GroupTargetKind::Take && state.Target.StationId == target.StationId
+                    && state.Target.TakeId == target.TakeId) return !state.Muted && !state.EffectiveMuted;
+            return false;
+        }
+        static bool Contains(const MuteGroupSnapshot& snapshot, const GroupTargetId& target)
+        {
+            for (const auto& state : snapshot.Targets)
+                if (!state.Muted && !state.EffectiveMuted && Matches(target, state.Target)) return true;
+            return false;
+        }
+        static bool Contains(const SelectionGroupSnapshot& snapshot, const GroupTargetId& target)
+        {
+            for (const auto& state : snapshot.Targets)
+                if (state.Selected && Matches(target, state.Target)) return true;
+            return false;
+        }
+        static bool ContainsLive(const MuteGroupSnapshot& snapshot, const GroupTargetId& target,
+            const std::vector<GroupTargetId>& liveTargets)
+        {
+            for (const auto& state : snapshot.Targets)
+                if (!state.Muted && !state.EffectiveMuted && Matches(target, state.Target)
+                    && IsLive(state.Target, liveTargets)) return true;
+            return false;
+        }
+        static bool ContainsLive(const SelectionGroupSnapshot& snapshot, const GroupTargetId& target,
+            const std::vector<GroupTargetId>& liveTargets)
+        {
+            for (const auto& state : snapshot.Targets)
+                if (state.Selected && Matches(target, state.Target) && IsLive(state.Target, liveTargets)) return true;
+            return false;
+        }
+    private:
+        static bool IsLive(const GroupTargetId& target, const std::vector<GroupTargetId>& liveTargets)
+        {
+            for (const auto& live : liveTargets)
+                if (target.Kind == live.Kind && target.StationId == live.StationId
+                    && target.TakeId == live.TakeId && target.EntityId == live.EntityId) return true;
+            return false;
+        }
+        static bool Matches(const GroupTargetId& target, const GroupTargetId& saved)
+        {
+            if (target.StationId != saved.StationId) return false;
+            if (target.Kind == GroupTargetKind::Station) return true;
+            if (target.TakeId != saved.TakeId) return false;
+            if (target.Kind == GroupTargetKind::Take) return saved.Kind != GroupTargetKind::Station;
+            return target.Kind == saved.Kind && target.EntityId == saved.EntityId;
+        }
+    };
+
     // Owned and accessed exclusively by the Scene job/UI owner. No callback
     // reader: only owner-applied/published target state crosses into audio.
     // Public slot numbers are 1..9, including in serialized records.

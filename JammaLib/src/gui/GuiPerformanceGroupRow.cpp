@@ -267,6 +267,28 @@ bool GuiPerformanceGroupRow::RouteHitTest(utils::Position2d position)
     return IsVisible() && IsEnabled() && utils::Size2d::RectTest(GetSize(), position);
 }
 
+std::optional<std::size_t> GuiPerformanceGroupRow::HoveredSlot() const
+{
+    for (auto ancestor = Parent(); ancestor; ancestor = ancestor->Parent())
+        if (!ancestor->IsVisible() || !ancestor->IsEnabled()) return std::nullopt;
+    if (!IsVisible() || !IsEnabled()) return std::nullopt;
+    for (std::size_t i = 0u; i < _occupied.size(); ++i)
+        if (_occupied[i] && _buttons[i]->IsVisible() && _buttons[i]->IsEnabled()
+            && _buttons[i]->GetState() == STATE_OVER)
+        {
+            const auto size = _buttons[i]->GetSize();
+            auto bounds = utils::Rect2d{ 0, 0, static_cast<int>(size.Width), static_cast<int>(size.Height) }
+                .Translated(_buttons[i]->GlobalPosition());
+            bounds = bounds.Intersected(utils::Rect2d{ 0, 0, static_cast<int>(GetSize().Width), static_cast<int>(GetSize().Height) }
+                .Translated(GlobalPosition()));
+            for (auto ancestor = Parent(); ancestor; ancestor = ancestor->Parent())
+                if (const auto scroll = std::dynamic_pointer_cast<GuiScrollPanel>(ancestor))
+                    bounds = bounds.Intersected(scroll->ContentRect().Translated(scroll->GlobalPosition()));
+            if (!bounds.IsEmpty()) return i + 1u;
+        }
+    return std::nullopt;
+}
+
 ActionResult GuiPerformanceGroupRow::OnAction(TouchAction action)
 {
     if (action.State == TouchAction::TOUCH_DOWN && !RouteHitTest(action.Position)) return ActionResult::NoAction();
