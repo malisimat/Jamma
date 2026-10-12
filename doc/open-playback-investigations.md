@@ -6,34 +6,31 @@ Branch: `feature/midi-loop-seam-merge`
 
 ## Current outcome and review boundary
 
-**The reported first-master MIDI double kick now appears resolved.** After the latest
-implementation and software validation, the user auditioned it and reported:
-“seems like it works!” This is successful listening evidence for the reported
-setup, not an instrumented post-fix timing measurement or validation of every route.
+**Ready to merge within the reviewed MIDI playback scope.** All confirmed
+adversarial-review defects and the hardware-reported held-note ditch failure
+have been fixed and committed. The user confirms the final ditch retest
+“works fine”. Earlier hardware tests confirmed clean first-master seam
+playback with note quantisation enabled/disabled and subsequent-loop sync.
 
-The branch contains earlier committed seam and playback-fidelity work plus the
-latest first-master/grid/overlap fixes in the index. At this handoff:
+- `5ce3812f`: seam playback and initial adversarial-review fixes.
+- `74508f97`: callback-coherent first-master activation, continuation component
+  identity, and release-velocity recovery.
+- `9b9b88bd`: release held MIDI voices when ditching takes.
+- Final complete native validation: **1482 tests / 180 suites, all passed**.
+  Debug engine/test/app builds and hot-path audit passed; no known unresolved
+  merge-blocking defect remains from this review.
 
-- Earlier merged baseline: `cff0082` (quantisation enhancements).
-- `8c76364`: unmatched MIDI note continuation across seams.
-- `fb8cbbc`: seam/fidelity investigation documentation.
-- `9ff58a2`: playback-fidelity F1–F6 fixes and recorded-path latency compensation.
-- HEAD `eb34ab1`: earlier open-investigation documentation.
-- Latest engine and MIDI test changes are staged but **not committed**; this
-  handoff document has unstaged changes. No staging or commit was done for this
-  documentation request.
+Manual Shift-click master promotion was not confirmed by the supplied hardware
+logs; native promotion/cancellation regressions pass. Physical ADC/DAC/plugin
+latency calibration and broader audio/mixed-capture investigations remain
+separate limits, not resolved claims of this MIDI playback change.
 
-Review the committed branch changes and the complete current checkout, not HEAD
-alone. Use `git diff cff0082 HEAD`, `git diff --cached`, and `git diff`; verify
-that the eventual PR base is appropriate. `git diff HEAD` includes both staged
-and unstaged follow-up work. An independent review of the latest changes and
-removal of temporary diagnostics remain before merge.
-
+Sections 1–7 preserve the historical investigation and review results. Their
+references to staged changes, uncommitted work and open findings describe the
+checkouts at those times; sections 8–9 record resolution and final validation.
 The linked [original seam plan](midi-loop-seam-note-merge-plan.md) and
-[fidelity investigation](midi-playback-fidelity-investigation.md) preserve earlier
-research and verification. Their historical exclusions of finite-span overlap
-work, and statements that hardware audition was not performed, describe those
-earlier stages. This handoff records the expanded final scope and current result.
+[fidelity investigation](midi-playback-fidelity-investigation.md) preserve
+earlier research.
 
 ## 1. What we sought to achieve
 
@@ -320,7 +317,10 @@ The full native suite was **not rerun on the latest follow-up state**. The earli
 The user did not specify separate post-fix quantisation-off, audio/mixed, or all
 plugin/device permutations, so those are not recorded as manual passes.
 
-## 5. Outstanding work before PR merge
+## 5. Historical outstanding work before PR merge
+
+The confirmed blockers below were resolved in sections 7–9. The optional
+limits remain as stated.
 
 ### Required completion/review
 
@@ -631,4 +631,4 @@ combinations and existing source-loss, route-removal and shared-owner cases.
 The hot-path audit passes. The complete native run passes **1482 tests / 180
 suites** (49.980 seconds); incremental engine/test and app builds pass with
 zero warnings/errors, and `git diff --check` passes. Hardware confirmation of
-the held-note fix remains outstanding.
+the held-note fix is now confirmed by the user: “great - works fine”.
