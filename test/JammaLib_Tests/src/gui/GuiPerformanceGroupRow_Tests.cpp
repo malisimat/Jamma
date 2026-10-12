@@ -355,6 +355,12 @@ TEST(GuiPerformanceGroups, RenderPreviewResetsUniformsAndDoesNotTouchActualInter
     EXPECT_EQ(std::any_cast<glm::vec3>(*context.GetUniform("GroupPreviewTint")), tint);
     EXPECT_EQ(context.GroupPreview({ 0u, 1u, 3u }), -1.0f);
     EXPECT_EQ(context.GroupPreview({ 9u }), -1.0f); // New/uncaptured target.
+    // A global background preview lights current local models while leaving
+    // remote material, which is absent from the member map, unchanged.
+    context.SetGroupPreview(true, tint, { { { 0u, 1u, 2u }, true } }, false);
+    context.ApplyGroupPreview({ 0u, 1u, 2u });
+    EXPECT_EQ(std::any_cast<float>(*context.GetUniform("GroupPreview")), 1.0f);
+    EXPECT_EQ(context.GroupPreview({ 9u }), 0.0f);
     context.SetGroupPreview(false, glm::vec3(1.0f), {});
     context.ApplyGroupPreview({});
     EXPECT_EQ(std::any_cast<float>(*context.GetUniform("GroupPreview")), 0.0f);

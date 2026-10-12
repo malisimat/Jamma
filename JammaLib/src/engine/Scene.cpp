@@ -886,6 +886,7 @@ void Scene::Draw3d(DrawContext& ctx,
 	const auto& groups = _performanceGroups.Groups();
 	const auto mutePreview = hoveredGroup && !hoveredGroup->first ? groups.Mute.Get(hoveredGroup->second) : nullptr;
 	const auto selectionPreview = hoveredGroup && hoveredGroup->first ? groups.Selection.Get(hoveredGroup->second) : nullptr;
+	const bool backgroundPreview = PASS_SCENE == pass && _BackgroundMutePreviewActive();
 	std::vector<GroupTargetId> livePreviewTargets;
 	if (mutePreview || selectionPreview)
 		for (const auto& station : _stations)
@@ -906,27 +907,27 @@ void Scene::Draw3d(DrawContext& ctx,
 			: selectionPreview && PerformanceGroupPreview::ContainsLive(*selectionPreview, target, livePreviewTargets);
 	};
 	std::map<std::vector<unsigned int>, bool> previewMembers;
-	if (mutePreview || selectionPreview)
+	if (backgroundPreview || mutePreview || selectionPreview)
 		for (const auto& station : _stations)
 		{
 			if (station->IsRemote()) continue;
-			previewMembers[station->GlobalId()] = member({ GroupTargetKind::Station, station->Id(), {}, {} });
+			previewMembers[station->GlobalId()] = backgroundPreview || member({ GroupTargetKind::Station, station->Id(), {}, {} });
 			for (const auto& take : station->GetLoopTakes())
 			{
 				for (const auto& loop : take->GetLoops())
 					if (const auto model = loop->Model())
-						previewMembers[model->GlobalId()] = member({ GroupTargetKind::AudioLoop, station->Id(), take->Id(), loop->Id() });
+						previewMembers[model->GlobalId()] = backgroundPreview || member({ GroupTargetKind::AudioLoop, station->Id(), take->Id(), loop->Id() });
 				for (const auto& loop : take->GetMidiLoops())
 					if (const auto model = loop->Model())
 						// MIDI playback mute belongs to the take; mute snapshots
 						// intentionally store no separate MIDI-loop mute flag.
-						previewMembers[model->GlobalId()] = mutePreview
+						previewMembers[model->GlobalId()] = backgroundPreview || (mutePreview
 							? PerformanceGroupPreview::AudibleTake(*mutePreview, { GroupTargetKind::Take, station->Id(), take->Id(), {} })
-							: member({ GroupTargetKind::MidiLoop, station->Id(), take->Id(), loop->Id() });
+							: member({ GroupTargetKind::MidiLoop, station->Id(), take->Id(), loop->Id() }));
 			}
 		}
-	glCtx.SetGroupPreview(mutePreview || selectionPreview,
-		selectionPreview ? glm::vec3(1.0f, 0.875f, 0.208f) : glm::vec3(0.259f, 0.588f, 1.0f), std::move(previewMembers));
+	glCtx.SetGroupPreview(backgroundPreview || mutePreview || selectionPreview,
+		!backgroundPreview && selectionPreview ? glm::vec3(1.0f, 0.875f, 0.208f) : glm::vec3(0.259f, 0.588f, 1.0f), std::move(previewMembers), !backgroundPreview);
 	for (auto& station : _stations)
 	{
 		station->Draw3d(ctx, 1, pass);
@@ -1107,6 +1108,13 @@ std::optional<ActionResult> Scene::_RouteSettingsTouch(TouchAction action)
 	return std::nullopt;
 }
 
+bool Scene::_BackgroundMutePreviewActive() const
+{
+	return _backgroundMuteGesture && !_backgroundMuteGesture->Cancelled && !_popupManager.IsOpen()
+		&& !_EditControlsSuppressed() && !_loopEditor.IsEngaged()
+		&& !_quantisationInputResetRequested.load(std::memory_order_acquire);
+}
+
 ActionResult Scene::OnAction(TouchAction action)
 {
 	ActionResult res;
@@ -1129,7 +1137,7 @@ ActionResult Scene::OnAction(TouchAction action)
 		{
 			const auto gesture = *_backgroundMuteGesture;
 			_backgroundMuteGesture.reset();
-			if (!gesture.Cancelled)
+			if (!gesture.Cancelled && action.Position == gesture.PressPosition)
 			{
 				std::scoped_lock lock(_sceneMutex);
 				_performanceGroups.Acknowledge(_audioEngine->GroupMuteReceipt());
@@ -1324,20 +1332,19 @@ ActionResult Scene::OnAction(TouchAction action)
 
 	if (pointerPress && action.Touch == TouchAction::TOUCH_MOUSE && !_camera.IsBackgroundPointerHeld() && !_isSceneTouching)
 	{
-		const bool occupiedUi = std::any_of(_guiChildren.begin(), _guiChildren.end(), [&](const auto& child) {
-			return child && child->RouteHitTest(child->GlobalToLocal(action.Position));
-		});
+		// Resolve actual targets: the pass-through HUD spans the viewport but
+		// must not claim its empty space as a control.
 		_ResolveHoverPath2d(_hoverPath2dScratch); // Includes station racks and controls.
 		const bool unmute = action.Index == 1 && action.Modifiers == Action::MODIFIER_NONE;
 		const bool mute = action.Index == 0 && action.Modifiers == Action::MODIFIER_ALT;
 		const auto buttonMask = (unmute || mute) ? (1u << action.Index) : 0u;
 		// Chords retain their existing camera/selection meaning. An eligible
-		// single-button background press owns its release even after movement.
-		if (!occupiedUi && _hoverPath2dScratch.empty() && !_HasQuantisationHover() && (unmute || mute) &&
+		// single-button background press owns its release even after cancellation.
+		if (_hoverPath2dScratch.empty() && !_HasQuantisationHover() && (unmute || mute) &&
 			(action.MouseButtonsDown == 0u || action.MouseButtonsDown == buttonMask))
 		{
 			_camera.CancelBackgroundCoast();
-			_backgroundMuteGesture = BackgroundMuteGesture{ action.Index, mute };
+			_backgroundMuteGesture = BackgroundMuteGesture{ action.Index, mute, action.Position };
 			return { true, {}, {}, ACTIONRESULT_DEFAULT, nullptr, {} };
 		}
 	}
@@ -1358,7 +1365,8 @@ ActionResult Scene::OnAction(TouchMoveAction action)
 			_popupManager.IsOpen() || _EditControlsSuppressed() || _loopEditor.IsEngaged() ||
 			_quantisationInputResetRequested.load(std::memory_order_acquire))
 			_backgroundMuteGesture.reset();
-		else if (action.MouseButtonsDown != buttonMask)
+		else if (action.MouseButtonsDown != buttonMask || action.Position != _backgroundMuteGesture->PressPosition ||
+			(action.IsRelative && action.RelativeDelta != utils::Position2d{}))
 			_backgroundMuteGesture->Cancelled = true;
 		return { true, {}, {}, ACTIONRESULT_DEFAULT, nullptr, {} };
 	}

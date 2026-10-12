@@ -50,17 +50,18 @@ namespace graphics
 		// Render owner only. Replaced per Scene pass under _sceneMutex, cleared
 		// before leaving that pass. No engine/model/audio state is changed.
 		void SetGroupPreview(bool active, glm::vec3 tint,
-			std::map<std::vector<unsigned int>, bool> members)
+			std::map<std::vector<unsigned int>, bool> members, bool dimNonMembers = true)
 		{
 			_groupPreviewActive = active;
 			_groupPreviewTint = tint;
 			_groupPreviewMembers = std::move(members);
+			_groupPreviewDimNonMembers = dimNonMembers;
 		}
 		float GroupPreview(const std::vector<unsigned int>& path) const
 		{
 			if (!_groupPreviewActive) return 0.0f;
 			const auto found = _groupPreviewMembers.find(path);
-			return found != _groupPreviewMembers.end() && found->second ? 1.0f : -1.0f;
+			return found != _groupPreviewMembers.end() && found->second ? 1.0f : _groupPreviewDimNonMembers ? -1.0f : 0.0f;
 		}
 		void ApplyGroupPreview(const std::vector<unsigned int>& path)
 		{
@@ -94,6 +95,7 @@ namespace graphics
 
 		std::map<std::string, std::any> _uniforms;
 		bool _groupPreviewActive = false;
+		bool _groupPreviewDimNonMembers = true;
 		glm::vec3 _groupPreviewTint{1.0f};
 		std::map<std::vector<unsigned int>, bool> _groupPreviewMembers;
 		std::vector<glm::mat4> _mvp;
