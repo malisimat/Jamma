@@ -1,0 +1,60 @@
+#pragma once
+
+#include <cstdint>
+
+namespace audio
+{
+	// V1 prototype tuning. The transform contract is explicit; sidecar versioning
+	// must be frozen only after the deferred listening/performance validation.
+	struct AudioSpectralConfig
+	{
+		static constexpr std::uint32_t TransformVersion = 1u;
+		static constexpr unsigned int WindowSamps = 4096u;
+		static constexpr unsigned int HopSamps = 1024u;
+		static constexpr float MinimumGainDb = -60.0f;
+		static constexpr float MaximumGainDb = 24.0f; // Broadband bar headroom.
+        static constexpr float MinimumSpectralGainDb = -1200.0f;
+        static constexpr float MaximumSpectralGainDb = 1200.0f;
+        static constexpr float SilenceGainDb = -2048.0f; // Finite authored-zero tag.
+        static constexpr double SpectralFloorDb = -90.0;
+        static constexpr double SpectralCeilingDb = 0.0;
+		static constexpr double BrushTimeRadiusSeconds = 0.05;
+		static constexpr double BrushFrequencyRadiusOctaves = 0.25;
+		static constexpr double BrushDbPerSecond = 480.0;
+		static constexpr double StrokeUpdateSeconds = 1.0 / 30.0;
+		static constexpr double BarTimeRadiusSeconds = 0.05;
+		static constexpr double BarSilenceDragPixels = 160.0;
+		static constexpr double BarBoostDragPixels = 160.0;
+		static constexpr unsigned int MaxPlaybackTransitionSamps = 48000u;
+		static constexpr double PlaybackTransitionSeconds = 0.0075;
+		static constexpr double EnvelopeRampSeconds = 0.003;
+		static constexpr double DisplayMinimumFrequencyHz = 20.0;
+		static constexpr float DisplayFloorDb = -90.0f;
+		static constexpr float DisplayCeilingDb = 24.0f;
+		static constexpr float DisplayReferenceMagnitude = 1.0f;
+		static constexpr unsigned int MaxTimeSegments = 2048u;
+		static constexpr unsigned int MaxFrequencySegments = 256u;
+		static constexpr unsigned long SourceCopySamplesPerBlock = 4096ul;
+		static constexpr std::uint64_t MaxSourceBytes = 256ull * 1024ull * 1024ull;
+		static constexpr std::uint64_t MaxWorkingBytes = 512ull * 1024ull * 1024ull;
+		static constexpr std::uint64_t DisplayWorkingBytes = 64ull * 1024ull * 1024ull;
+		static constexpr std::uint64_t MaxHistoryBytes = 64ull * 1024ull * 1024ull;
+	};
+
+	struct AudioSpectralTransformConfig
+	{
+		std::uint32_t Version = AudioSpectralConfig::TransformVersion;
+		unsigned int WindowSamps = AudioSpectralConfig::WindowSamps;
+		unsigned int HopSamps = AudioSpectralConfig::HopSamps;
+		// Periodic Hann analysis/synthesis windows, real float FFT, and explicit
+		// 1/N inverse FFT normalization followed by samplewise sum(window^2).
+		bool IsValid() const noexcept
+		{
+			return Version == AudioSpectralConfig::TransformVersion
+				&& WindowSamps >= 4u && WindowSamps <= 16384u
+				&& (WindowSamps & (WindowSamps - 1u)) == 0u
+				&& HopSamps > 0u && HopSamps <= WindowSamps / 2u;
+		}
+		bool operator==(const AudioSpectralTransformConfig&) const = default;
+	};
+}

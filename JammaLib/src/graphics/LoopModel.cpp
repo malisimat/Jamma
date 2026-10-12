@@ -124,6 +124,7 @@ void LoopModel::Draw3d(DrawContext& ctx,
 	glCtx.SetUniform("WaveformUnitMeshRadius", _UnitMeshRadius);
 	glCtx.SetUniform("WaveformColorScale", _waveformColorScale);
 	glCtx.SetUniform("EditorMorph", _editorMorph);
+	glCtx.SetUniform("SpectralReveal", _spectralReveal);
 	glCtx.SetUniform("EditorActive", _editorActive ? 1.0f : 0.0f);
 	glCtx.SetUniform("EditorPlayFrac", static_cast<float>(std::fmod(1.0 - _loopIndexFrac + 1.0, 1.0)));
 
@@ -298,6 +299,12 @@ void LoopModel::UpdateModel(const BufferBank& buffer,
 	float radius,
 	bool allowUnchangedSkip)
 {
+	if (_usesEditedWaveform)
+	{
+		_hasWaveformUpdateSignature = false;
+		_usesEditedWaveform = false;
+		_lastEditedWaveform.reset();
+	}
 	auto availableSamples = buffer.Length() > offset ? buffer.Length() - offset : 0ul;
 	auto clampedSourceLength = std::min(sourceLoopLength, availableSamples);
 	auto clampedDisplayLength = std::min(displayLoopLength, clampedSourceLength);
@@ -369,6 +376,37 @@ void LoopModel::UpdateModel(const BufferBank& buffer,
 		_lastWaveformOffset = offset;
 		_lastWaveformRadius = waveformRadius;
 	}
+}
+
+void LoopModel::UpdateEditedModel(
+	const std::shared_ptr<const audio::AudioSpectralPlaybackSnapshot>& snapshot, float radius)
+{
+	if (!snapshot) return;
+	static_assert(_WaveformSegments == audio::AudioSpectralPlaybackSnapshot::OverviewSegments);
+	const auto waveformRadius = (std::max)(radius, 1.0f);
+	if (_usesEditedWaveform && _lastEditedWaveform.lock() == snapshot
+		&& std::fabs(waveformRadius - _lastWaveformRadius) <= 0.0001f) return;
+	if (_waveformWorkDecimated.size() != _WaveformSegments)
+		_waveformWorkDecimated.resize(_WaveformSegments);
+	auto peak = 0.0f;
+	for (unsigned int index = 0u; index < _WaveformSegments; ++index)
+	{
+		const auto& range = snapshot->Overview()[index];
+		_waveformWorkDecimated[index] = glm::vec2(range.Minimum, range.Maximum);
+		peak = (std::max)(peak, (std::max)(std::fabs(range.Minimum), std::fabs(range.Maximum)));
+	}
+	{
+		std::lock_guard<std::mutex> waveformLock(_waveformMutex);
+		_waveformRadius = waveformRadius;
+		_hasWaveformData = true;
+		_waveformColorMultiplier = 0.5f / (_HeightScale * (std::max)(peak, 0.0001f) + _MinHeight);
+		_waveformDecimated.swap(_waveformWorkDecimated);
+		_waveformNeedsUpload = true;
+		_lastWaveformRadius = waveformRadius;
+		_hasWaveformUpdateSignature = false;
+	}
+	_usesEditedWaveform = true;
+	_lastEditedWaveform = snapshot;
 }
 
 std::vector<glm::vec2> LoopModel::DecimateWaveform(const BufferBank& buffer, unsigned long offset, unsigned long length, unsigned int numSegments)

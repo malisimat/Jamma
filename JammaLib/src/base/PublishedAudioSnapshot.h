@@ -3,6 +3,7 @@
 #include <array>
 #include <atomic>
 #include <cstdint>
+#include <cstddef>
 #include <memory>
 #include <utility>
 #include <vector>
@@ -114,7 +115,9 @@ namespace base
 
 		// Call off audio, preferably from the writer or its job-thread pump. This
 		// reclaims snapshots whose last audio borrow has ended even without a publish.
-		void collect()
+		// Returns outstanding retirements so a non-callback pump can keep running
+		// after a cancelled publication even when no new value will be stored.
+		std::size_t collect()
 		{
 			for (auto retired = _retired.begin(); retired != _retired.end();)
 			{
@@ -123,6 +126,7 @@ namespace base
 				else
 					++retired;
 			}
+			return _retired.size();
 		}
 
 		Lease borrow() const noexcept

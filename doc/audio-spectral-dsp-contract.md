@@ -1,0 +1,29 @@
+# Audio spectral DSP contract
+
+Status: implemented and covered by native spectral/controller/publication tests. Live GPU/input/listening verification remains pending; persistence is deferred. See [current validation and handover](audio-spectral-editor-handover.md). Older validation-history paragraphs below describe the preceding session.
+
+## Transform and coordinates
+
+AudioSpectralConfig names v1 prototype defaults and limits. Transform version 1 uses 4096-sample periodic Hann windows, a 1024-sample hop, float real KissFFT, explicit 1/N inverse normalization, and samplewise weighted overlap-add normalization by the actual sum of window squared. Frame centres lie on a body-source hop lattice, extending beyond the prefix-fade/body target. Reconstruction clips each frame to its actual target coordinates, rather than wrapping every window contribution into a short loop. This avoids counting repeated wrapped samples as multiple output contributions.
+
+Source body zero is storage offset MaxLoopFadeSamps. Analysis reads captured prefix and physical tail whenever available; only missing context extends the logical body periodically. Reconstruction replaces the prefix-fade region and logical body, preserving earlier prefix and unrelated physical tail exactly. See audio-spectral-source-contract.md for layout and the confirmed equal envelope gain on both existing seam contributors.
+
+## Independent edit layers
+
+AudioSpectralGainField stores finite relative dB values in copy-on-write 32 by 32 tiles, plus a distinct finite authored-silence tag. Ordinary painting now clamps absolute normalized one-sided magnitudes to 0 dB (red) and reaches exact zero at the -90 dB visual floor, following the user clarification on 2026-10-12. The former -60/+24 dB relative brush limits caused quiet bins to plateau below loud bins; they no longer constrain spectral painting. The bar retains its separate +24 dB gain bound. Double gain scaling covers very quiet nonzero originals without overflowing an intermediate float gain; reconstructed coefficients are checked finite before inverse FFT. Zero gain reconstructs authored silence exactly; positive scaling retains original phase, and immutable originals permit boosting back from authored silence. Originally zero coefficients remain zero. Unity reconstruction returns the original source handle without copying or transform arithmetic. The optional forced unity round trip exists for later native normalization validation. Edited inverse transforms preserve finite headroom without global peak normalization or a new limiter.
+
+Ordinary brush exposure integrates the compact oval analytically along each straight pointer segment in source seconds and log-frequency. Elapsed time scales exposure, independent of event count for the same piecewise linear time-parametrized path. Time support uses nearest wrapped distance; callers supply intended unwrapped movement. DC/sub-floor bins use the explicit lower frequency edge.
+
+AudioSpectralEnvelope is a separate immutable dense linear-gain layer. Upward-positive logical drag displacement maps the anchor to exact unity, finite downward range to exact zero, and bounded upward range to boost. Each bar stroke captures its before-envelope once and retains strongest influence and winning target per sample. Equal influence favours later visits. Swept segments interpolate targets, while stationary repeats do not compound. Local ramps operate only on touched feather regions around competing winners; authored centres and untouched samples remain protected. This envelope is not baked into spectral synthesis.
+
+## Ownership and resource bounds
+
+The dedicated worker prepares source storage and analyzes complete immutable sources. AudioSpectralAnalysisJob publishes its immutable result/reason through release/acquire terminal state; cancellation requests no worker wait. The worker has one running job and latest pending job, prioritizes pending source preparation, and destroys bulk payloads outside its queue mutex. Editor close cancels without joining; owner teardown joins off audio. No FFT, dense envelope construction, or reconstruction runs on callback or the input-pump job thread.
+
+The editor preflights estimated memory before source storage preparation. The estimate reserves six full PCM handles, three retained analyses (previous visible, cancelled running, newest), fully materialized gain tiles with overhead, envelope stroke/retained storage, WOLA scratch, display and history budgets. Standalone gain fields also bound full possible tile storage. Limits are initial tuning values, not measured latency guarantees. Unsupported sources receive a useful reason.
+
+The controller rejects analysis results from obsolete source identities/generations and retries after punch/record completion. Previous completed analysis may remain visible while reacquiring; readiness is required before dependent editing/publication. Capture and analysis never postpone punch-in.
+
+## Deferred validation
+
+Native coverage must establish round-trip tolerance, silence/zero-bin semantics, short and non-hop-aligned lengths, context boundaries, envelope dominance/ramps and finite limits. Actual pinned dependency install/linking, toolchain compilation, audible latency and representative memory/performance measurements have not been performed. Future build commands must be taken from this worktree's local .vscode/tasks.json.

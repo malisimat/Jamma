@@ -9,7 +9,7 @@
 2 texture_tinted MVP TextureSampler TintColor Opacity
 2 font MVP TextureSampler Opacity
 2 texture_shaded MVP LoopState LoopHover SceneDim
-2 waveform MVP LoopState LoopHover LoopSelected LoopPressed LoopMuted Highlight HighlightPass TextureSampler WaveformSampler WaveformRadius WaveformHeightScale WaveformMinHeight WaveformColorMultiplier WaveformColorScale WaveformUnitMeshRadius EditorMorph EditorPlayFrac SelectionActive SceneDim EditorActive EditorTime ProbeSampler ProbeStrength EditorProbeEye ModelView ProbeView MaterialProbeSampler
+2 waveform SpectralReveal MVP LoopState LoopHover LoopSelected LoopPressed LoopMuted Highlight HighlightPass TextureSampler WaveformSampler WaveformRadius WaveformHeightScale WaveformMinHeight WaveformColorMultiplier WaveformColorScale WaveformUnitMeshRadius EditorMorph EditorPlayFrac SelectionActive SceneDim EditorActive EditorTime ProbeSampler ProbeStrength EditorProbeEye ModelView ProbeView MaterialProbeSampler
 2 vu MVP DX DY NumInstances InstanceOffset SceneDim Opacity
 2 midi_note MVP ObjectId Highlight LoopHover LoopSelected LoopPressed LoopMuted DiscAlpha RenderMode EditorMorph EditorPlayFrac EditorBottomPitch EditorVisibleRows EditorHoverU EditorHoverPitch EditorTargetStart EditorTargetEnd EditorTargetInstance EditorHeldInstance EditorPreviewVelocity SelectionActive SceneDim EditorGridRadius EditorActive EditorTime EditorSeamHeadEnd EditorSeamTailStart EditorMasterCycles EditorMasterStartPhase ProbeSampler ProbeStrength EditorProbeEye ModelView TextureSampler DiscProbeSampler
 2 midi_grid MVP EditorGridRadius EditorMorph SceneDim EditorPreviewFirstVertex
@@ -94,3 +94,5 @@
 1 fader_back_panel_down ninepatch 12 12
 1 fader_scale_line ninepatch 3 0
 1 fader_scale_track ninepatch 4 2
+
+2 audio_spectral MVP TextureSampler SpectralHeightSampler SpectralRadius SpectralHeightScale SpectralDepthScale SpectralBaseY EditorMorph EditorPlayFrac EditorTime SceneDim SpectralBrush SpectralBrushMode

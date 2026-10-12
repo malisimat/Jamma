@@ -84,7 +84,8 @@ Scene::Scene(SceneParams params,
 		[this](int button) { if (_endRelativePointer) _endRelativePointer(button); },
 		[this]() { const auto clock = _quantisation.Clock(); return clock ? clock->SeedSourceLength() : 0ul; },
 		[this]() { return static_cast<base::SelectDepth>(_selector ?
-			_selector->CurrentSelectDepth() : base::DEPTH_LOOP); } },
+			_selector->CurrentSelectDepth() : base::DEPTH_LOOP); },
+		[this]() { return _logicalPixelScale ? _logicalPixelScale() : 1.0f; } },
 		params.Size)
 {
 	_quantisation.SetClock(std::make_shared<Timer>());
@@ -3714,12 +3715,13 @@ void Scene::_ClearStationQuantisation()
 }
 
 void Scene::SetRelativePointerHost(std::function<bool(int, utils::Position2d)> begin,
-	std::function<void(int)> end)
+	std::function<void(int)> end, std::function<float()> logicalPixelScale)
 {
 	_ReleaseQuantisationInput();
 	_loopEditor.CancelInput();
 	_beginRelativePointer = std::move(begin);
 	_endRelativePointer = std::move(end);
+	_logicalPixelScale = std::move(logicalPixelScale);
 }
 
 bool Scene::_EditControlsSuppressed() const

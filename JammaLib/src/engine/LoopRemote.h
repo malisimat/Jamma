@@ -17,6 +17,8 @@ namespace engine
 
 		virtual std::string ClassName() const override { return "LoopRemote"; }
 		virtual void Update() override;
+		// A live remote ring is never a completed local recording.
+		bool SupportsAudioSpectralEditing() const noexcept override { return false; }
 
 		// Called from the job thread. Resizes buffer to match the ninjam interval.
 		void SetMeasureLength(unsigned int measureLengthSamps);

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <deque>
 #include <functional>
 #include <memory>
 #include <mutex>
@@ -16,6 +17,7 @@
 #include "../base/DrawContext.h"
 #include "../base/GuiElement.h"
 #include "../engine/Loop.h"
+#include "../editor/AudioSpectralEditor.h"
 #include "../engine/LoopTake.h"
 #include "../engine/Station.h"
 #include "../graphics/Camera.h"
@@ -51,6 +53,7 @@ namespace midi
 			std::function<void(int button)> EndRelativePointer;
 			std::function<std::uint64_t()> MasterLengthSamps;
 			std::function<base::SelectDepth()> SelectionDepth;
+			std::function<float()> LogicalPixelScale;
 		};
 
 	public:
@@ -128,6 +131,13 @@ namespace midi
 			bool clampToGrid) const;
 		std::uint8_t _ChannelOf(const std::shared_ptr<MidiLoop>& loop) const;
 		double _PixelsPerSample(std::uint32_t lengthSamps) const;
+		std::optional<std::pair<double, double>> _AudioPointAt(utils::Position2d pixel) const;
+		bool _AudioSurfaceReady() const;
+		bool _AudioGeometryChanged() const;
+		void _MoveAudioStroke(utils::Position2d pixel);
+		void _EndAudioStroke(bool cancel);
+		void _DrainAudioUndo();
+		void _UpdateAudioFootprint(utils::Position2d pixel);
 		void _HandleWheel(const actions::TouchAction& action);
 		void _BeginGesture(const actions::TouchAction& action);
 		bool _BeginSpecialGesture(const actions::TouchAction& action);
@@ -149,6 +159,20 @@ namespace midi
 		std::weak_ptr<engine::Station> _station;
 		std::weak_ptr<engine::LoopTake> _take;
 		std::weak_ptr<engine::Loop> _audioLoop;
+		editor::AudioSpectralEditor _audioEditor;
+		bool _audioStroke = false;
+		std::deque<bool> _pendingAudioUndo; // At most sixteen release-adjacent history keys.
+		bool _audioBroadband = false;
+		bool _audioAttenuate = false;
+		utils::Position2d _audioPointer{};
+		std::optional<std::pair<double, double>> _audioStrokePoint;
+		int _audioAnchorY = 0;
+		float _audioPixelScale = 1.0f;
+		float _audioBarPlaneY = 3.0f;
+		float _audioBarRadius = 100.0f;
+		glm::mat4 _audioBarViewProjection{1.0f};
+		glm::mat4 _audioBarModel{1.0f};
+		glm::mat4 _audioCapturedView{1.0f};
 		std::weak_ptr<MidiLoop> _midiLoop;
 		graphics::Camera::EditorReturnState _returnCamera{};
 		glm::vec3 _orbitCentre{};
@@ -160,6 +184,7 @@ namespace midi
 		utils::Position2d _orbitPointerAnchor{};
 		bool _orbitDragging = false;
 		float _blend = 0.0f;
+		float _audioSurfaceBlend = 0.0f;
 		bool _buttonPressed = false;
 		bool _buttonShowsClose = false;
 		bool _pointerOwned = false;

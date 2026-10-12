@@ -553,4 +553,36 @@
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
   </ImportGroup>
+  <ItemGroup>
+    <ClInclude Include="src\audio\AudioSpectralWorker.h" />
+    <ClInclude Include="src\audio\AudioSpectralResourceBudget.h" />
+    <ClInclude Include="src\audio\AudioSpectralSource.h" />
+    <ClInclude Include="src\editor\AudioSpectralPicking.h" />
+    <ClInclude Include="src\editor\AudioSpectralDisplayJob.h" />
+    <ClInclude Include="src\graphics\AudioSpectralModel.h" />
+    <ClInclude Include="src\audio\AudioSpectralReconstructionJob.h" />
+    <ClInclude Include="src\audio\AudioSpectralEditState.h" />
+    <ClInclude Include="src\audio\AudioSpectralPlaybackSnapshot.h" />
+    <ClInclude Include="src\audio\AudioSpectralConfig.h" />
+    <ClInclude Include="src\audio\AudioSpectralGainField.h" />
+    <ClInclude Include="src\audio\AudioSpectralFft.h" />
+    <ClInclude Include="src\audio\AudioSpectralEnvelope.h" />
+    <ClInclude Include="src\audio\AudioSpectralDsp.h" />
+    <ClInclude Include="src\audio\AudioSpectralAnalysisJob.h" />
+    <ClCompile Include="src\audio\AudioSpectralWorker.cpp" />
+    <ClCompile Include="src\audio\AudioSpectralSource.cpp" />
+    <ClCompile Include="src\editor\AudioSpectralPicking.cpp" />
+    <ClCompile Include="src\editor\AudioSpectralDisplayJob.cpp" />
+    <ClCompile Include="src\graphics\AudioSpectralModel.cpp" />
+    <ClCompile Include="src\audio\AudioSpectralReconstructionJob.cpp" />
+    <ClCompile Include="src\audio\AudioSpectralEditState.cpp" />
+    <ClCompile Include="src\audio\AudioSpectralPlaybackSnapshot.cpp" />
+    <ClCompile Include="src\audio\AudioSpectralGainField.cpp" />
+    <ClCompile Include="src\audio\AudioSpectralFft.cpp" />
+    <ClCompile Include="src\audio\AudioSpectralEnvelope.cpp" />
+    <ClCompile Include="src\audio\AudioSpectralDsp.cpp" />
+    <ClCompile Include="src\audio\AudioSpectralAnalysisJob.cpp" />
+    <ClInclude Include="src\editor\AudioSpectralEditor.h" />
+    <ClCompile Include="src\editor\AudioSpectralEditor.cpp" />
+  </ItemGroup>
 </Project>

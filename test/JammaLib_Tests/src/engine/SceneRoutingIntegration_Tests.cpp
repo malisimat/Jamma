@@ -428,8 +428,34 @@ TEST_F(SceneRoutingIntegrationTest, FreshScenesResolveReorderedAndAdditionalStat
 
 TEST_F(SceneRoutingIntegrationTest, RestoresDistinctHistoriesToTriggersWithSharedStation)
 {
+	struct SidecarCleanup
+	{
+		std::filesystem::path Path;
+		~SidecarCleanup() { std::error_code error; std::filesystem::remove(Path, error); }
+	} sidecar{ std::filesystem::temp_directory_path() / ("jamma-routing-history-" + utils::GetGuid() + ".jammidi") };
+	io::NativeMidiSidecar::Stream contents;
+	contents.LogicalLength = 100u;
+	contents.Events.push_back({ 0u, 0x90u, 60u, 100u });
+	{
+		std::ofstream output(sidecar.Path, std::ios::binary);
+		ASSERT_TRUE(output);
+		ASSERT_TRUE(io::NativeMidiSidecar::ToStream(contents, output));
+	}
+	const auto restoredTake = [&sidecar](const std::string& id)
+	{
+		io::JamFile::LoopTake take{};
+		take.Name = id;
+		take.MidiPlayLength = 100u;
+		take.MidiStreams.push_back({ sidecar.Path.string(), 0u, "routing-history", 100u, 0u });
+		return take;
+	};
 	auto bass = Station("Bass");
 	auto drums = Station("Drums");
+	// Histories must resolve to actual restored takes. Missing targets are
+	// legitimately cancelled by background recovery, outside this test's intent.
+	bass.LoopTakes = { restoredTake("bass-source"), restoredTake("bass-target"),
+		restoredTake("other-source"), restoredTake("other-target") };
+	drums.LoopTakes = { restoredTake("drums-source"), restoredTake("drums-target") };
 	auto drumTrigger = Trigger("drums", "Drums"); drumTrigger.Id = "drums-id";
 	auto firstBassTrigger = Trigger("bass-first", "Bass"); firstBassTrigger.Id = "bass-first-id";
 	auto secondBassTrigger = Trigger("bass-second", "Bass"); secondBassTrigger.Id = "bass-second-id";
@@ -439,6 +465,10 @@ TEST_F(SceneRoutingIntegrationTest, RestoresDistinctHistoriesToTriggersWithShare
 		{ "bass-first-id", { { static_cast<unsigned int>(engine::TriggerTake::SOURCE_ADC), "bass-source", "bass-target" } } },
 		{ "bass-second-id", { { static_cast<unsigned int>(engine::TriggerTake::SOURCE_ADC), "other-source", "other-target" } } } });
 	ASSERT_TRUE(scene);
+	const auto restoredStations = scene->SnapshotStations();
+	ASSERT_EQ(2u, restoredStations.size());
+	ASSERT_EQ(4u, restoredStations[0]->GetLoopTakeSnapshot().size());
+	ASSERT_EQ(2u, restoredStations[1]->GetLoopTakeSnapshot().size());
 	EXPECT_EQ((std::vector<std::pair<std::string, std::size_t>>{ { "Bass", 2u }, { "Drums", 1u } }),
 		Memberships(scene));
 	const auto rig = scene->AcceptedRigSnapshot();

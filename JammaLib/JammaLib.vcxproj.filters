@@ -968,4 +968,101 @@
       <Filter>src\engine</Filter>
     </ClInclude>
   </ItemGroup>
+  <ItemGroup>
+    <Filter Include="src\editor">
+      <UniqueIdentifier>{93a740cb-01ce-48ac-a4ee-804b8d8baaae}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="src\audio\AudioSpectralWorker.h">
+      <Filter>src\audio</Filter>
+    </ClInclude>
+    <ClInclude Include="src\audio\AudioSpectralResourceBudget.h">
+      <Filter>src\audio</Filter>
+    </ClInclude>
+    <ClInclude Include="src\audio\AudioSpectralSource.h">
+      <Filter>src\audio</Filter>
+    </ClInclude>
+    <ClInclude Include="src\editor\AudioSpectralPicking.h">
+      <Filter>src\editor</Filter>
+    </ClInclude>
+    <ClInclude Include="src\editor\AudioSpectralDisplayJob.h">
+      <Filter>src\editor</Filter>
+    </ClInclude>
+    <ClInclude Include="src\graphics\AudioSpectralModel.h">
+      <Filter>src\graphics</Filter>
+    </ClInclude>
+    <ClInclude Include="src\audio\AudioSpectralReconstructionJob.h">
+      <Filter>src\audio</Filter>
+    </ClInclude>
+    <ClInclude Include="src\audio\AudioSpectralEditState.h">
+      <Filter>src\audio</Filter>
+    </ClInclude>
+    <ClInclude Include="src\audio\AudioSpectralPlaybackSnapshot.h">
+      <Filter>src\audio</Filter>
+    </ClInclude>
+    <ClInclude Include="src\audio\AudioSpectralConfig.h">
+      <Filter>src\audio</Filter>
+    </ClInclude>
+    <ClInclude Include="src\audio\AudioSpectralGainField.h">
+      <Filter>src\audio</Filter>
+    </ClInclude>
+    <ClInclude Include="src\audio\AudioSpectralFft.h">
+      <Filter>src\audio</Filter>
+    </ClInclude>
+    <ClInclude Include="src\audio\AudioSpectralEnvelope.h">
+      <Filter>src\audio</Filter>
+    </ClInclude>
+    <ClInclude Include="src\audio\AudioSpectralDsp.h">
+      <Filter>src\audio</Filter>
+    </ClInclude>
+    <ClInclude Include="src\audio\AudioSpectralAnalysisJob.h">
+      <Filter>src\audio</Filter>
+    </ClInclude>
+    <ClCompile Include="src\audio\AudioSpectralWorker.cpp">
+      <Filter>src\audio</Filter>
+    </ClCompile>
+    <ClCompile Include="src\audio\AudioSpectralSource.cpp">
+      <Filter>src\audio</Filter>
+    </ClCompile>
+    <ClCompile Include="src\editor\AudioSpectralPicking.cpp">
+      <Filter>src\editor</Filter>
+    </ClCompile>
+    <ClCompile Include="src\editor\AudioSpectralDisplayJob.cpp">
+      <Filter>src\editor</Filter>
+    </ClCompile>
+    <ClCompile Include="src\graphics\AudioSpectralModel.cpp">
+      <Filter>src\graphics</Filter>
+    </ClCompile>
+    <ClCompile Include="src\audio\AudioSpectralReconstructionJob.cpp">
+      <Filter>src\audio</Filter>
+    </ClCompile>
+    <ClCompile Include="src\audio\AudioSpectralEditState.cpp">
+      <Filter>src\audio</Filter>
+    </ClCompile>
+    <ClCompile Include="src\audio\AudioSpectralPlaybackSnapshot.cpp">
+      <Filter>src\audio</Filter>
+    </ClCompile>
+    <ClCompile Include="src\audio\AudioSpectralGainField.cpp">
+      <Filter>src\audio</Filter>
+    </ClCompile>
+    <ClCompile Include="src\audio\AudioSpectralFft.cpp">
+      <Filter>src\audio</Filter>
+    </ClCompile>
+    <ClCompile Include="src\audio\AudioSpectralEnvelope.cpp">
+      <Filter>src\audio</Filter>
+    </ClCompile>
+    <ClCompile Include="src\audio\AudioSpectralDsp.cpp">
+      <Filter>src\audio</Filter>
+    </ClCompile>
+    <ClCompile Include="src\audio\AudioSpectralAnalysisJob.cpp">
+      <Filter>src\audio</Filter>
+    </ClCompile>
+    <ClInclude Include="src\editor\AudioSpectralEditor.h">
+      <Filter>src\editor</Filter>
+    </ClInclude>
+    <ClCompile Include="src\editor\AudioSpectralEditor.cpp">
+      <Filter>src\editor</Filter>
+    </ClCompile>
+  </ItemGroup>
 </Project>

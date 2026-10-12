@@ -5,6 +5,7 @@
   "dependencies": [
     { "name": "ftxui", "version>=": "6.1.9" },
     { "name": "utf8proc", "version>=": "2.11.3" },
+    { "name": "kissfft", "version>=": "131.2.0" },
     "gtest",
     "libogg",
     "libvorbis",
