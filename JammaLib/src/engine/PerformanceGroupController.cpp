@@ -1,5 +1,6 @@
 #include "PerformanceGroupController.h"
 #include "Station.h"
+#include <algorithm>
 
 using namespace engine;
 
@@ -30,12 +31,12 @@ bool PerformanceGroupController::HandleKey(const actions::KeyAction& action,
         if (!application) { _error = "Mute group target limit exceeded"; _consumed[action.KeyChar] = true; return true; }
         if (!application->Takes.empty())
         {
-            _capture.reset();
             _error.clear();
             // A second physical press can precede the audio receipt. Invert
             // the latest desired flag in that case, never the stale live flag.
             auto revised = std::make_shared<GroupMuteApplication>(*application);
             if (_pendingMute)
+            {
                 for (auto& state : revised->Takes)
                     for (const auto& pending : _pendingMute->Takes)
                         if (pending.Take == state.Take)
@@ -46,6 +47,23 @@ bool PerformanceGroupController::HandleKey(const actions::KeyAction& action,
                                     if (leaf.AudioLoop == loop) leaf.Muted = state.Muted;
                             break;
                         }
+                // Publication supersedes the entire preceding application.
+                // Preserve desired flags outside this selected inversion too.
+                for (const auto& pending : _pendingMute->Takes)
+                    if (std::none_of(revised->Takes.begin(), revised->Takes.end(),
+                        [&](const auto& state) { return state.Take == pending.Take; }))
+                        revised->Takes.push_back(pending);
+                for (const auto& pending : _pendingMute->Loops)
+                    if (std::none_of(revised->Loops.begin(), revised->Loops.end(),
+                        [&](const auto& state) { return state.AudioLoop == pending.AudioLoop; }))
+                        revised->Loops.push_back(pending);
+                if (revised->Takes.size() + revised->Loops.size() > GroupMuteApplication::MaxTargets)
+                {
+                    _error = "Mute group target limit exceeded";
+                    _consumed[action.KeyChar] = true;
+                    return true;
+                }
+            }
             _pendingMute = revised;
             publish(revised);
         }
@@ -72,24 +90,14 @@ bool PerformanceGroupController::HandleKey(const actions::KeyAction& action,
     return true;
 }
 
-bool PerformanceGroupController::CapturePlugins(MuteGroupSnapshot& snapshot,
-    const PerformanceGroupService::Stations& stations)
+bool PerformanceGroupController::SetAllMuted(bool muted, const PerformanceGroupService::Stations& stations,
+    const Publish& publish)
 {
-    for (const auto& station : stations)
-    {
-        if (station->IsRemote()) continue;
-        std::vector<io::JamFile::VstEntry> entries;
-        if (!station->TryGroupVstEntries(entries)) return false;
-        for (const auto& entry : entries)
-            snapshot.Plugins.push_back({ { GroupTargetKind::Station, station->Id(), {}, {} }, entry.Id, entry.Path, entry.State, entry.Bypass });
-        for (const auto& take : station->GetLoopTakes())
-        {
-            entries.clear();
-            if (!take->TryGroupVstEntries(entries)) return false;
-            for (const auto& entry : entries)
-                snapshot.Plugins.push_back({ { GroupTargetKind::Take, station->Id(), take->Id(), {} }, entry.Id, entry.Path, entry.State, entry.Bypass });
-        }
-    }
+    auto application = PerformanceGroupService::PrepareAllMuted(stations, muted, ++_version);
+    if (!application) { _error = "Mute group target limit exceeded"; return false; }
+    _error.clear();
+    _pendingMute = application;
+    publish(std::move(application));
     return true;
 }
 
@@ -101,7 +109,6 @@ bool PerformanceGroupController::Execute(bool selection, GroupCommand command, s
         return _groups.Selection.Execute(command, slot,
             [&] { return std::optional<SelectionGroupSnapshot>(PerformanceGroupService::CaptureSelectionConfiguration(stations, depth)); },
             [&](const auto& snapshot) { PerformanceGroupService::RestoreSelection(snapshot, stations); return true; });
-    _capture.reset();
     if (command == GroupCommand::Add)
     {
         auto empty = _groups.Mute.LowestEmptySlot();
@@ -122,31 +129,13 @@ bool PerformanceGroupController::Execute(bool selection, GroupCommand command, s
         // restoration can rebuild vendor caches and exclude audio processing.
         return _groups.Mute.Execute(command, slot, [] { return std::optional<MuteGroupSnapshot>(); }, [](const auto&) { return true; });
     }
-    _capture = PendingCapture{ slot };
-    Pump(stations, publish);
-    return true;
-}
-
-void PerformanceGroupController::Pump(const PerformanceGroupService::Stations& stations, const Publish& publish)
-{
-    if (_capture)
+    // Vendor state capture excludes processing, even when invoked on the UI
+    // thread. Live groups save only mute flags, which is also all recall applies.
+    auto snapshot = PerformanceGroupService::CaptureMuteConfiguration(stations);
+    if (snapshot.Targets.size() > GroupMuteApplication::MaxTargets)
     {
-        auto snapshot = PerformanceGroupService::CaptureMuteConfiguration(stations);
-        if (snapshot.Targets.size() > GroupMuteApplication::MaxTargets)
-        {
-            _error = "Mute group target limit exceeded";
-            _capture.reset();
-            return;
-        }
-        if (CapturePlugins(snapshot, stations))
-        {
-            _groups.Mute.Store(_capture->Slot, std::move(snapshot));
-            _capture.reset();
-        }
-        else if (++_capture->Attempts >= 120u)
-        {
-            _error = "Unable to capture plugin state for mute group";
-            _capture.reset();
-        }
+        _error = "Mute group target limit exceeded";
+        return false;
     }
+    return _groups.Mute.Store(slot, std::move(snapshot));
 }

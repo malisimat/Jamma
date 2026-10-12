@@ -382,7 +382,6 @@ TEST_F(PerformanceGroupServiceTest, EmptyRowHiddenFunctionKeysAreConsumedWithout
             key.KeyActionType = actions::KeyAction::KEY_DOWN;
             EXPECT_TRUE(controller.HandleKey(key, { station }, engine::GroupTargetKind::Take, publish));
             EXPECT_TRUE(controller.HandleKey(key, { station }, engine::GroupTargetKind::Take, publish));
-            controller.Pump({ station }, publish);
             EXPECT_EQ(controller.Groups().Mute.VisibleSlots(), 0u);
             EXPECT_FALSE(controller.Groups().Mute.ActiveSlot());
             EXPECT_TRUE(controller.Error().empty());
@@ -478,7 +477,6 @@ TEST_F(PerformanceGroupServiceTest, HiddenFunctionKeyAndMissingAltPreservePendin
     const auto original = pending;
     key.KeyChar = 113u;
     ASSERT_TRUE(controller.HandleKey(key, { station }, engine::GroupTargetKind::Take, publish));
-    controller.Pump({ station }, publish);
     EXPECT_EQ(pending, original);
     key.KeyChar = 112u;
     key.Modifiers = base::Action::MODIFIER_ALT;
@@ -509,4 +507,72 @@ TEST_F(PerformanceGroupServiceTest, DigitsAndOtherFunctionKeysRemainAvailableOnB
         EXPECT_FALSE(controller.ConsumeRelease(key));
     }
     EXPECT_EQ(controller.Groups().Mute.VisibleSlots(), 0u);
+}
+
+TEST_F(PerformanceGroupServiceTest, AllMuteFlagsIncludeAudioLeavesAndRetainTemporarySuppressionAndRemoteState)
+{
+    auto local = Station("local");
+    auto take = local->AddTake();
+    take->AddLoop(0u, local->Id());
+    take->CommitChanges();
+    auto loop = take->GetLoops().front();
+    engine::StationParams params;
+    params.Id = "remote";
+    params.Size = { 160u, 320u };
+    auto remote = std::make_shared<RemoteGroupTestStation>(params,
+        engine::Station::GetMixerParams(params.Size, audio::MergeMixBehaviourParams{}));
+    auto remoteTake = remote->AddTake();
+    remoteTake->SetGroupMutedAudio(false);
+    take->AcquireTriggerSourceMuteAudio();
+    auto muted = engine::PerformanceGroupService::PrepareAllMuted({ local, remote }, true, 10u);
+    ASSERT_TRUE(muted);
+    ASSERT_EQ(1u, muted->Takes.size());
+    ASSERT_EQ(1u, muted->Loops.size());
+    muted->ApplyAudio();
+    EXPECT_TRUE(loop->IsMuted());
+    auto audible = engine::PerformanceGroupService::PrepareAllMuted({ local, remote }, false, 11u);
+    ASSERT_TRUE(audible);
+    audible->ApplyAudio();
+    EXPECT_FALSE(take->GetTweakState() & base::Tweakable::TWEAKSTATE_MUTED);
+    EXPECT_TRUE(take->IsMuted());
+    EXPECT_FALSE(loop->GetTweakState() & base::Tweakable::TWEAKSTATE_MUTED);
+    EXPECT_TRUE(loop->IsMuted());
+    EXPECT_FALSE(remoteTake->IsMuted());
+    take->ReleaseTriggerSourceMuteAudio();
+    EXPECT_FALSE(take->IsMuted());
+    EXPECT_FALSE(loop->IsMuted());
+}
+
+TEST_F(PerformanceGroupServiceTest, GlobalMuteThenBackspaceBeforeReceiptPreservesUnselectedDesiredFlags)
+{
+    auto station = Station("local");
+    auto selected = station->AddTake();
+    auto sibling = station->AddTake();
+    selected->AddLoop(0u, station->Id());
+    sibling->AddLoop(1u, station->Id());
+    selected->CommitChanges();
+    sibling->CommitChanges();
+    selected->SetGroupSelected(true);
+    engine::PerformanceGroupController controller;
+    std::shared_ptr<const engine::GroupMuteApplication> pending;
+    auto publish = [&pending](auto application) { pending = std::move(application); };
+    ASSERT_TRUE(controller.SetAllMuted(true, { station }, publish));
+    ASSERT_EQ(1u, pending->Version);
+    controller.Acknowledge(0u);
+    actions::KeyAction key;
+    key.KeyChar = 8u;
+    key.KeyActionType = actions::KeyAction::KEY_DOWN;
+    key.Modifiers = base::Action::MODIFIER_NONE;
+    ASSERT_TRUE(controller.HandleKey(key, { station }, engine::GroupTargetKind::Take, publish));
+    ASSERT_EQ(2u, pending->Version);
+    pending->ApplyAudio();
+    EXPECT_FALSE(selected->IsMuted());
+    EXPECT_FALSE(selected->GetLoops().front()->IsMuted());
+    EXPECT_TRUE(sibling->IsMuted());
+    EXPECT_TRUE(sibling->GetLoops().front()->IsMuted());
+    ASSERT_TRUE(controller.SetAllMuted(false, { station }, publish));
+    EXPECT_EQ(3u, pending->Version);
+    pending->ApplyAudio();
+    EXPECT_FALSE(sibling->IsMuted());
+    EXPECT_FALSE(sibling->GetLoops().front()->IsMuted());
 }

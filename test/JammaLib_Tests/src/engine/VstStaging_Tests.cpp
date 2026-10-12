@@ -434,6 +434,15 @@ public:
  unsigned int RestoreCalls = 0u;
  unsigned int LifecycleCalls = 0u;
  unsigned int BypassCalls = 0u;
+ std::atomic<unsigned int> ProcessCalls{0u};
+ std::atomic<unsigned int> SkippedProcessCalls{0u};
+ void ProcessBlock(float* samples, int32_t count) noexcept override
+ {
+  PluginCallGuard call(*this);
+  if (!call) { ++SkippedProcessCalls; return; }
+  ++ProcessCalls;
+  for (int32_t i = 0; i < count; ++i) samples[i] *= 2.0f;
+ }
  bool Load(const std::wstring&, float, unsigned, unsigned, vst::HostedLayoutMode) override
  {
   ++LifecycleCalls;
@@ -500,13 +509,11 @@ TEST(VstStaging, RapidMuteGroupRecallNeverTouchesStationOrTakePlugins)
    stations, engine::GroupTargetKind::Take, publish));
   ASSERT_TRUE(pending);
   EXPECT_TRUE(pending->Takes[0].Muted);
-  controller.Pump(stations, publish);
   ASSERT_TRUE(controller.Execute(false, engine::GroupCommand::RecallOrStore, 1u,
    stations, engine::GroupTargetKind::Take, publish));
   ASSERT_TRUE(pending);
   EXPECT_FALSE(pending->Takes[0].Muted);
  }
- controller.Pump(stations, publish); // No deferred state restore after busy ends.
  EXPECT_EQ(publications, 2u);
  pending->ApplyAudio();
  EXPECT_FALSE(take->IsMuted());
@@ -525,72 +532,112 @@ TEST(VstStaging, RapidMuteGroupRecallNeverTouchesStationOrTakePlugins)
  }
 }
 
-class PendingGroupCapturePlugin final : public StateGatePlugin
-{
-public:
- mutable unsigned int CaptureCalls = 0u;
- std::vector<std::uint8_t> GetState() const override
- {
-  ++CaptureCalls;
-  return StateGatePlugin::GetState();
- }
-};
-
-TEST(VstStaging, RejectedGroupKeysPreserveBusyCaptureAndErrorFeedback)
+TEST(VstStaging, MuteGroupCreationAndOverwriteNeverCaptureOrInterruptBusyStationAndTakePlugins)
 {
  engine::StationParams params;
- params.Id = "pending-capture-station";
+ params.Id = "mute-store-station";
  params.Size = {100u, 100u};
  auto station = std::make_shared<engine::Station>(params,
   engine::Station::GetMixerParams(params.Size, MergeMixBehaviourParams{}));
- auto plugin = std::make_shared<PendingGroupCapturePlugin>();
- JobAction load;
- load.JobActionType = JobAction::JOB_LOADVST;
- load.VstPath = L"pending-capture.vst3";
- load.PreInitPlugin = plugin;
- station->OnAction(load);
- station->CommitChanges();
- ASSERT_EQ(station->GetVstPlugin(0u), plugin);
+ auto take = station->AddTake();
+ auto stationPlugin = std::make_shared<MuteRecallPlugin>();
+ auto takePlugin = std::make_shared<MuteRecallPlugin>();
+ auto install = [](auto& owner, const auto& plugin) {
+  JobAction load;
+  load.JobActionType = JobAction::JOB_LOADVST;
+  load.VstPath = L"mute-store.vst3";
+  load.PreInitPlugin = plugin;
+  owner->OnAction(load);
+  owner->CommitChanges();
+  ASSERT_EQ(owner->GetVstPlugin(0u), plugin);
+  plugin->LifecycleCalls = plugin->BypassCalls = 0u;
+ };
+ install(station, stationPlugin);
+ install(take, takePlugin);
  engine::PerformanceGroupController controller;
- auto publish = [](auto) { FAIL() << "Store/rejected key must not publish audio work"; };
+ auto publish = [](auto) { FAIL() << "Store must not publish audio work"; };
  actions::KeyAction key;
  key.KeyChar = 112u;
  key.KeyActionType = actions::KeyAction::KEY_DOWN;
  {
-  vst::IVstPlugin::PluginCallGuard busy(*plugin);
+  vst::IVstPlugin::PluginCallGuard stationBusy(*stationPlugin);
+  vst::IVstPlugin::PluginCallGuard takeBusy(*takePlugin);
+  ASSERT_TRUE(static_cast<bool>(stationBusy));
+  ASSERT_TRUE(static_cast<bool>(takeBusy));
   ASSERT_TRUE(controller.HandleKey(key, {station}, engine::GroupTargetKind::Take, publish));
-  EXPECT_EQ(controller.Groups().Mute.Get(1u), nullptr);
-  key.KeyChar = 113u;
-  ASSERT_TRUE(controller.HandleKey(key, {station}, engine::GroupTargetKind::Take, publish));
-  key.KeyChar = 114u;
+  ASSERT_NE(controller.Groups().Mute.Get(1u), nullptr);
+  EXPECT_FALSE(controller.Groups().Mute.Get(1u)->Targets[1].Muted);
+  take->SetGroupMutedAudio(true);
+  ASSERT_TRUE(controller.Execute(false, engine::GroupCommand::Add, 0u,
+   {station}, engine::GroupTargetKind::Take, publish));
+  ASSERT_NE(controller.Groups().Mute.Get(2u), nullptr);
+  EXPECT_TRUE(controller.Groups().Mute.Get(2u)->Targets[1].Muted);
+  key.KeyActionType = actions::KeyAction::KEY_UP;
+  ASSERT_TRUE(controller.ConsumeRelease(key));
+  key.KeyActionType = actions::KeyAction::KEY_DOWN;
   key.Modifiers = base::Action::MODIFIER_SHIFT;
+  ASSERT_TRUE(controller.HandleKey(key, {station}, engine::GroupTargetKind::Take, publish));
+  EXPECT_TRUE(controller.Groups().Mute.Get(1u)->Targets[1].Muted);
+  // Rejected hidden keys preserve the immediately completed store.
+  key.KeyChar = 120u;
+  key.Modifiers = base::Action::MODIFIER_NONE;
   ASSERT_TRUE(controller.HandleKey(key, {station}, engine::GroupTargetKind::Take, publish));
   key.KeyChar = 115u;
   key.Modifiers = base::Action::MODIFIER_ALT;
   ASSERT_TRUE(controller.HandleKey(key, {station}, engine::GroupTargetKind::Take, publish));
+  // The processors remain usable throughout the stores, including while
+  // another callback entry holds its normal shared SDK guard.
+  for (const auto& plugin : {stationPlugin, takePlugin})
+  {
+   float samples[2]{1.0f, -1.0f};
+   plugin->ProcessBlock(samples, 2);
+   EXPECT_FLOAT_EQ(samples[0], 2.0f);
+   EXPECT_FLOAT_EQ(samples[1], -2.0f);
+  }
  }
- controller.Pump({station}, publish);
- ASSERT_NE(controller.Groups().Mute.Get(1u), nullptr);
- EXPECT_EQ(controller.Groups().Mute.ActiveSlot(), 1u);
- EXPECT_EQ(controller.Groups().Mute.Get(2u), nullptr);
- EXPECT_EQ(plugin->CaptureCalls, 1u);
- // Exhaust an explicit retrying store and ensure a rejected press keeps its
- // diagnostic as well as the active slot, instead of entering Execute.
- {
-  vst::IVstPlugin::PluginCallGuard busy(*plugin);
-  ASSERT_TRUE(controller.Execute(false, engine::GroupCommand::Store, 1u,
+ // A nonbusy store catches the old vendor capture path; repeat stores while
+ // processing audio to exercise the cross-thread exclusion regression too.
+ ASSERT_TRUE(controller.Execute(false, engine::GroupCommand::Store, 1u,
+  {station}, engine::GroupTargetKind::Take, publish));
+ std::atomic<bool> stopAudio{false};
+ std::atomic<bool> audioReady{false};
+ std::atomic<bool> samplesIncorrect{false};
+ std::thread audio([&] {
+  do
+  {
+   for (const auto& plugin : {stationPlugin, takePlugin})
+   {
+    float samples[2]{1.0f, -1.0f};
+    plugin->ProcessBlock(samples, 2);
+    if (samples[0] != 2.0f || samples[1] != -2.0f) samplesIncorrect.store(true);
+   }
+   audioReady.store(true);
+  } while (!stopAudio.load());
+ });
+ while (!audioReady.load()) std::this_thread::yield();
+ for (unsigned int i = 0u; i < 64u; ++i)
+  EXPECT_TRUE(controller.Execute(false, engine::GroupCommand::Store, 1u,
    {station}, engine::GroupTargetKind::Take, publish));
-  for (unsigned int attempt = 0u; attempt < 120u; ++attempt)
-   controller.Pump({station}, publish);
- }
- const auto error = controller.Error();
- ASSERT_FALSE(error.empty());
- key.KeyChar = 120u;
- key.Modifiers = base::Action::MODIFIER_NONE;
- ASSERT_TRUE(controller.HandleKey(key, {station}, engine::GroupTargetKind::Take, publish));
- EXPECT_EQ(controller.Error(), error);
+ stopAudio.store(true);
+ audio.join();
+ EXPECT_FALSE(samplesIncorrect.load());
  EXPECT_EQ(controller.Groups().Mute.ActiveSlot(), 1u);
- EXPECT_EQ(plugin->CaptureCalls, 1u);
+ EXPECT_TRUE(controller.Error().empty());
+ EXPECT_TRUE(controller.Groups().Mute.Get(1u)->Plugins.empty());
+ EXPECT_TRUE(controller.Groups().Mute.Get(2u)->Plugins.empty());
+ EXPECT_EQ(station->GetVstPlugin(0u), stationPlugin);
+ EXPECT_EQ(take->GetVstPlugin(0u), takePlugin);
+ for (const auto& plugin : {stationPlugin, takePlugin})
+ {
+  EXPECT_EQ(plugin->CaptureCalls, 0u);
+  EXPECT_EQ(plugin->RestoreCalls, 0u);
+  EXPECT_EQ(plugin->LifecycleCalls, 0u);
+  EXPECT_EQ(plugin->BypassCalls, 0u);
+  EXPECT_EQ(plugin->AutomationGeneration(), 0u);
+  EXPECT_TRUE(plugin->Restored.empty());
+  EXPECT_GE(plugin->ProcessCalls.load(), 2u);
+  EXPECT_EQ(plugin->SkippedProcessCalls.load(), 0u);
+ }
 }
 
 class RaceStateGatePlugin : public StateGatePlugin

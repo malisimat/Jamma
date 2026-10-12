@@ -18,6 +18,14 @@ namespace engine
             callback();
         }
         static bool ControlHeld(const Scene& scene) { return scene._ctrlHeld; }
+        static bool BackgroundMuteOwned(const Scene& scene) { return scene._backgroundMuteGesture.has_value(); }
+        static bool CameraBackgroundActive(const Scene& scene) { return scene._camera.IsBackgroundDragging(); }
+        static bool CameraPointerHeld(const Scene& scene) { return scene._camera.IsBackgroundPointerHeld(); }
+        static bool ApplyMuteBoundary(Scene& scene)
+        {
+            scene._audioEngine->CloseCallbackAdmission();
+            return scene._audioEngine->ApplyPendingRigWhileQuiescent();
+        }
         static void Confirm(Scene& scene, const midi::MidiConnectionResult& previous,
             const midi::MidiConnectionResult& refreshed, const std::vector<std::string>& names)
         {
@@ -591,4 +599,220 @@ TEST_F(SceneRoutingIntegrationTest, GroupFunctionKeyAndFocusLossDoNotReachConfig
     EXPECT_EQ(trigger->GetState(), engine::TRIGSTATE_DEFAULT);
     EXPECT_TRUE(trigger->GetTakes().empty());
     EXPECT_TRUE(scene->SnapshotStations()[0]->GetLoopTakeSnapshot().empty());
+}
+
+TEST_F(SceneRoutingIntegrationTest, BackgroundMuteGesturesLatchButtonAndAllowMovementAndModifierRelease)
+{
+    auto scene = FreshScene({ Station("Local") }, {});
+    ASSERT_TRUE(scene);
+    auto station = scene->SnapshotStations().front();
+    auto take = station->AddTake();
+    take->AddLoop(0u, station->Id());
+    take->CommitChanges();
+    scene->CommitChanges();
+    auto loop = take->GetLoops().front();
+    take->SetGroupMutedAudio(true);
+    loop->SetGroupMutedAudio(true);
+    scene->SetHover3d({}, base::Action::MODIFIER_NONE);
+    actions::TouchAction click;
+    click.Touch = actions::TouchAction::TOUCH_MOUSE;
+    click.Position = { -100, -100 };
+    click.Index = 1;
+    click.MouseButtonsDown = 2u;
+    click.State = actions::TouchAction::TOUCH_DOWN;
+    ASSERT_TRUE(scene->OnAction(click).IsEaten);
+    ASSERT_TRUE(engine::SourceLossIntegrationTestAccess::BackgroundMuteOwned(*scene));
+    EXPECT_TRUE(take->IsMuted());
+    actions::TouchMoveAction move;
+    move.Touch = actions::TouchAction::TOUCH_MOUSE;
+    move.Position = { 350, 250 };
+    move.MouseButtonsDown = 2u;
+    EXPECT_TRUE(scene->OnAction(move).IsEaten);
+    std::vector<unsigned char> itemPath;
+    for (auto index : take->GlobalId()) itemPath.push_back(static_cast<unsigned char>(index + 1u));
+    scene->SetHover3d(itemPath, base::Action::MODIFIER_NONE);
+    click.Position = move.Position;
+    click.Index = 0;
+    click.State = actions::TouchAction::TOUCH_UP;
+    scene->OnAction(click);
+    EXPECT_TRUE(engine::SourceLossIntegrationTestAccess::BackgroundMuteOwned(*scene));
+    click.Index = 1;
+    click.MouseButtonsDown = 0u;
+    scene->OnAction(click);
+    EXPECT_FALSE(engine::SourceLossIntegrationTestAccess::BackgroundMuteOwned(*scene));
+    ASSERT_TRUE(engine::SourceLossIntegrationTestAccess::ApplyMuteBoundary(*scene));
+    EXPECT_FALSE(take->IsMuted());
+    EXPECT_FALSE(loop->IsMuted());
+    EXPECT_FALSE(scene->HasSelection());
+
+    scene->SetHover3d({}, base::Action::MODIFIER_NONE);
+    click.Position = { -100, -100 };
+    click.Index = 0;
+    click.Modifiers = base::Action::MODIFIER_ALT;
+    click.MouseButtonsDown = 1u;
+    click.State = actions::TouchAction::TOUCH_DOWN;
+    scene->OnAction(click);
+    ASSERT_TRUE(engine::SourceLossIntegrationTestAccess::BackgroundMuteOwned(*scene));
+    click.Modifiers = base::Action::MODIFIER_NONE;
+    click.MouseButtonsDown = 0u;
+    click.State = actions::TouchAction::TOUCH_UP;
+    scene->OnAction(click);
+    ASSERT_TRUE(engine::SourceLossIntegrationTestAccess::ApplyMuteBoundary(*scene));
+    EXPECT_TRUE(take->IsMuted());
+    EXPECT_TRUE(loop->IsMuted());
+    scene->Shutdown();
+}
+
+TEST_F(SceneRoutingIntegrationTest, BackgroundUnmuteCancelsOnCaptureLossFocusLossEscapeResetAndChord)
+{
+    auto scene = FreshScene({ Station("Local") }, {});
+    ASSERT_TRUE(scene);
+    auto take = scene->SnapshotStations().front()->AddTake();
+    scene->CommitChanges();
+    for (int cancellation = 0; cancellation < 5; ++cancellation)
+    {
+        take->SetGroupMutedAudio(true);
+        scene->SetHover3d({}, base::Action::MODIFIER_NONE);
+        actions::TouchAction click;
+        click.Touch = actions::TouchAction::TOUCH_MOUSE;
+        click.Position = { -100, -100 };
+        click.Index = 1;
+        click.MouseButtonsDown = 2u;
+        click.State = actions::TouchAction::TOUCH_DOWN;
+        scene->OnAction(click);
+        ASSERT_TRUE(engine::SourceLossIntegrationTestAccess::BackgroundMuteOwned(*scene));
+        if (cancellation == 0)
+        {
+            actions::TouchMoveAction lost;
+            lost.Touch = actions::TouchAction::TOUCH_MOUSE;
+            lost.MouseButtonsDown = 0u;
+            scene->OnAction(lost);
+        }
+        else if (cancellation == 1) scene->OnInputFocusLost();
+        else if (cancellation == 2)
+        {
+            actions::KeyAction escape;
+            escape.KeyChar = 27u;
+            escape.KeyActionType = actions::KeyAction::KEY_DOWN;
+            scene->OnAction(escape);
+        }
+        else if (cancellation == 3) scene->Reset();
+        else
+        {
+            auto chord = click;
+            chord.Index = 0;
+            chord.MouseButtonsDown = 3u;
+            scene->OnAction(chord);
+        }
+        click.State = actions::TouchAction::TOUCH_UP;
+        click.MouseButtonsDown = 0u;
+        scene->OnAction(click);
+        EXPECT_FALSE(engine::SourceLossIntegrationTestAccess::BackgroundMuteOwned(*scene));
+        ASSERT_TRUE(engine::SourceLossIntegrationTestAccess::ApplyMuteBoundary(*scene));
+        EXPECT_TRUE(take->IsMuted()) << cancellation;
+        scene->AdvanceUiAnimations();
+    }
+    scene->Shutdown();
+}
+
+TEST_F(SceneRoutingIntegrationTest, MiddlePressOnItemAndHudDoesNotAcquireGlobalUnmute)
+{
+    auto scene = FreshScene({ Station("Local") }, {});
+    ASSERT_TRUE(scene);
+    auto take = scene->SnapshotStations().front()->AddTake();
+    auto sibling = scene->SnapshotStations().front()->AddTake();
+    scene->CommitChanges();
+    sibling->SetGroupMutedAudio(true);
+    std::vector<unsigned char> itemPath;
+    for (auto index : take->GlobalId()) itemPath.push_back(static_cast<unsigned char>(index + 1u));
+    scene->SetHover3d(itemPath, base::Action::MODIFIER_NONE);
+    actions::TouchAction click;
+    click.Touch = actions::TouchAction::TOUCH_MOUSE;
+    click.Position = { -100, -100 };
+    click.Index = 1;
+    click.MouseButtonsDown = 2u;
+    click.State = actions::TouchAction::TOUCH_DOWN;
+    scene->OnAction(click);
+    EXPECT_FALSE(engine::SourceLossIntegrationTestAccess::BackgroundMuteOwned(*scene));
+    click.State = actions::TouchAction::TOUCH_UP;
+    click.MouseButtonsDown = 0u;
+    scene->OnAction(click);
+    ASSERT_TRUE(engine::SourceLossIntegrationTestAccess::ApplyMuteBoundary(*scene));
+    EXPECT_TRUE(sibling->IsMuted());
+    scene->SetHover3d({}, base::Action::MODIFIER_NONE);
+    click.Position = { 10, 10 };
+    click.State = actions::TouchAction::TOUCH_DOWN;
+    click.MouseButtonsDown = 2u;
+    scene->OnAction(click);
+    EXPECT_FALSE(engine::SourceLossIntegrationTestAccess::BackgroundMuteOwned(*scene));
+    scene->OnInputFocusLost();
+    scene->Shutdown();
+}
+
+TEST_F(SceneRoutingIntegrationTest, BackgroundMuteStopsUnownedCameraCoastButPreservesHeldCameraChord)
+{
+    auto scene = FreshScene({ Station("Local") }, {});
+    ASSERT_TRUE(scene);
+    auto take = scene->SnapshotStations().front()->AddTake();
+    scene->CommitChanges();
+    for (const bool mute : { false, true })
+    {
+        take->SetGroupMutedAudio(!mute);
+        scene->SetHover3d({}, base::Action::MODIFIER_NONE);
+        actions::TouchAction right;
+        right.Touch = actions::TouchAction::TOUCH_MOUSE;
+        right.Position = { -100, -100 };
+        right.Index = 2;
+        right.MouseButtonsDown = 4u;
+        right.State = actions::TouchAction::TOUCH_DOWN;
+        scene->OnAction(right);
+        ASSERT_TRUE(engine::SourceLossIntegrationTestAccess::CameraPointerHeld(*scene));
+        actions::TouchMoveAction move;
+        move.Touch = actions::TouchAction::TOUCH_MOUSE;
+        move.Position = { -50, -80 };
+        move.MouseButtonsDown = 4u;
+        scene->OnAction(move);
+        right.Position = move.Position;
+        right.MouseButtonsDown = 0u;
+        right.Value = 4;
+        right.State = actions::TouchAction::TOUCH_UP;
+        scene->OnAction(right);
+        ASSERT_TRUE(engine::SourceLossIntegrationTestAccess::CameraBackgroundActive(*scene));
+        ASSERT_FALSE(engine::SourceLossIntegrationTestAccess::CameraPointerHeld(*scene));
+        auto click = right;
+        click.Index = mute ? 0 : 1;
+        click.Modifiers = mute ? base::Action::MODIFIER_ALT : base::Action::MODIFIER_NONE;
+        click.MouseButtonsDown = mute ? 1u : 2u;
+        click.State = actions::TouchAction::TOUCH_DOWN;
+        scene->OnAction(click);
+        ASSERT_TRUE(engine::SourceLossIntegrationTestAccess::BackgroundMuteOwned(*scene));
+        EXPECT_FALSE(engine::SourceLossIntegrationTestAccess::CameraBackgroundActive(*scene));
+        click.MouseButtonsDown = 0u;
+        click.State = actions::TouchAction::TOUCH_UP;
+        scene->OnAction(click);
+        ASSERT_TRUE(engine::SourceLossIntegrationTestAccess::ApplyMuteBoundary(*scene));
+        EXPECT_EQ(mute, take->IsMuted());
+    }
+    actions::TouchAction right;
+    right.Touch = actions::TouchAction::TOUCH_MOUSE;
+    right.Position = { -100, -100 };
+    right.Index = 2;
+    right.MouseButtonsDown = 4u;
+    right.State = actions::TouchAction::TOUCH_DOWN;
+    scene->OnAction(right);
+    auto chord = right;
+    chord.Index = 1;
+    chord.MouseButtonsDown = 6u;
+    scene->OnAction(chord);
+    EXPECT_FALSE(engine::SourceLossIntegrationTestAccess::BackgroundMuteOwned(*scene));
+    EXPECT_TRUE(engine::SourceLossIntegrationTestAccess::CameraPointerHeld(*scene));
+    chord.State = actions::TouchAction::TOUCH_UP;
+    chord.MouseButtonsDown = 4u;
+    chord.Value = 2;
+    scene->OnAction(chord);
+    right.State = actions::TouchAction::TOUCH_UP;
+    right.MouseButtonsDown = 0u;
+    right.Value = 4;
+    scene->OnAction(right);
+    scene->Shutdown();
 }

@@ -719,6 +719,17 @@ bool Camera::BackgroundDragWasDragged() const noexcept
 	return _backgroundDrag.Dragged;
 }
 
+bool Camera::IsBackgroundPointerHeld() const noexcept
+{
+	return IsBackgroundDragging() && _backgroundDrag.MouseButtonsDown != 0u;
+}
+
+void Camera::CancelBackgroundCoast() noexcept
+{
+	if (IsBackgroundDragging() && !IsBackgroundPointerHeld())
+		_EndBackgroundDrag();
+}
+
 bool Camera::IsTransitioning() const noexcept
 {
 	return _transitioning;

@@ -45,7 +45,14 @@ vec3 groupPreviewColour(vec3 colour)
     if (GroupPreview == 0.0) return colour;
     float luminance = dot(colour, vec3(0.2126, 0.7152, 0.0722));
     if (GroupPreview < 0.0) return vec3(luminance * 0.36);
-    return mix(colour, GroupPreviewTint, 0.32);
+    // Replace the material as decisively as pressed orange, using saturated
+    // blue/yellow rather than selected cyan or the dark muted blue-grey.
+    // Keep lit faces/reflections visible, with a bright floor even when muted.
+    float tintFloor = min(min(GroupPreviewTint.r, GroupPreviewTint.g), GroupPreviewTint.b);
+    float tintPeak = max(max(GroupPreviewTint.r, GroupPreviewTint.g), GroupPreviewTint.b);
+    vec3 tint = (GroupPreviewTint - vec3(tintFloor)) / max(tintPeak - tintFloor, 0.0001);
+    vec3 previewMaterial = tint * (0.78 + 0.22 * clamp(luminance, 0.0, 1.0));
+    return mix(colour, previewMaterial, 0.90);
 }
 
 void main()

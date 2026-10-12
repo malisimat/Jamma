@@ -377,6 +377,10 @@ namespace engine
 		static constexpr unsigned int NinjamRemoteTempoRejectControlIndex = 7102u;
 
 		bool _isSceneTouching;
+		// Window-thread pointer ownership; command and button are latched at a
+		// background press, independent of release position and modifiers.
+		struct BackgroundMuteGesture { int Button; bool Muted; bool Cancelled = false; };
+		std::optional<BackgroundMuteGesture> _backgroundMuteGesture;
 		std::atomic_bool _isSceneQuitting;
 		std::atomic_bool _isSceneReset;
 		glm::mat4 _viewProj;

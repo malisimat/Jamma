@@ -71,6 +71,8 @@ namespace graphics
 			utils::Position3d stationCentre);
 		void TickBackgroundDrag(float deltaSeconds);
 		bool IsBackgroundDragging() const noexcept;
+		bool IsBackgroundPointerHeld() const noexcept;
+		void CancelBackgroundCoast() noexcept;
 		bool BackgroundDragWasDragged() const noexcept;
 		bool IsTransitioning() const noexcept;
 	View CurrentView() const noexcept;

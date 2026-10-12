@@ -34,6 +34,8 @@ namespace engine
             const MuteGroupSnapshot& snapshot, const Stations& stations, std::uint64_t version);
         static std::shared_ptr<const GroupMuteApplication> PrepareSelectedTakeInversion(
             const Stations& stations, std::uint64_t version);
+        static std::shared_ptr<const GroupMuteApplication> PrepareAllMuted(
+            const Stations& stations, bool muted, std::uint64_t version);
         static std::shared_ptr<Station> ResolveStation(const GroupTargetId& id, const Stations& stations);
         static std::shared_ptr<LoopTake> ResolveTake(const GroupTargetId& id, const Stations& stations);
     };

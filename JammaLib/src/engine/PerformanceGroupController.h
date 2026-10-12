@@ -8,7 +8,7 @@
 namespace engine
 {
     // Scene serializes all access with its non-audio mutex. Key state belongs
-    // to the window thread; pending capture is pumped on that thread.
+    // to the window thread; stores capture mute flags only on that thread.
     class PerformanceGroupController
     {
     public:
@@ -31,18 +31,14 @@ namespace engine
             GroupTargetKind depth, const Publish& publish);
         bool Execute(bool selection, GroupCommand command, std::size_t slot,
             const PerformanceGroupService::Stations& stations, GroupTargetKind depth, const Publish& publish);
-        // UI frame pump for explicit stores; recall never calls plugin state APIs.
-        void Pump(const PerformanceGroupService::Stations& stations, const Publish& publish);
+        bool SetAllMuted(bool muted, const PerformanceGroupService::Stations& stations, const Publish& publish);
         const std::string& Error() const noexcept { return _error; }
         void Acknowledge(std::uint64_t version) { if (_pendingMute && _pendingMute->Version <= version) _pendingMute.reset(); }
-        void CancelPending() { _capture.reset(); _pendingMute.reset(); }
+        void CancelPending() { _pendingMute.reset(); }
     private:
-        struct PendingCapture { std::size_t Slot; unsigned int Attempts = 0u; };
-        static bool CapturePlugins(MuteGroupSnapshot& snapshot, const PerformanceGroupService::Stations& stations);
         PerformanceGroups _groups;
         std::array<bool, 256> _held{};
         std::array<bool, 256> _consumed{};
-        std::optional<PendingCapture> _capture;
         std::uint64_t _version = 0u;
         std::string _error;
         std::shared_ptr<const GroupMuteApplication> _pendingMute;

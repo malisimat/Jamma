@@ -989,7 +989,6 @@ void Scene::AdvanceUiAnimations()
 	if (mainChanged || selectionChanged) _InvalidateHover2d();
 	_UpdateRackVisibilityLocked();
 	_performanceGroups.Acknowledge(_audioEngine->GroupMuteReceipt());
-	_performanceGroups.Pump(_stations, [this](auto application) { _audioEngine->PublishGroupMuteApplication(std::move(application)); });
 	if (_selectionPanel) _selectionPanel->RefreshPerformanceGroups(_performanceGroups.Groups());
 	if (_hudPanel)
 	{
@@ -1119,6 +1118,29 @@ ActionResult Scene::OnAction(TouchAction action)
 	action.SetUserConfig(_userConfig);
 	_cursorPos = action.Position;
 	_InvalidateHover2d();
+	if (_backgroundMuteGesture && (_popupManager.IsOpen() || _EditControlsSuppressed() || _loopEditor.IsEngaged() ||
+		_quantisationInputResetRequested.load(std::memory_order_acquire)))
+		_backgroundMuteGesture.reset();
+	if (_backgroundMuteGesture)
+	{
+		if (action.Touch != TouchAction::TOUCH_MOUSE)
+			_backgroundMuteGesture->Cancelled = true;
+		else if (action.State == TouchAction::TOUCH_UP && action.Index == _backgroundMuteGesture->Button)
+		{
+			const auto gesture = *_backgroundMuteGesture;
+			_backgroundMuteGesture.reset();
+			if (!gesture.Cancelled)
+			{
+				std::scoped_lock lock(_sceneMutex);
+				_performanceGroups.Acknowledge(_audioEngine->GroupMuteReceipt());
+				_performanceGroups.SetAllMuted(gesture.Muted, _stations,
+					[this](auto application) { _audioEngine->PublishGroupMuteApplication(std::move(application)); });
+			}
+		}
+		else if (pointerPress)
+			_backgroundMuteGesture->Cancelled = true;
+		return { true, {}, {}, ACTIONRESULT_DEFAULT, nullptr, {} };
+	}
 	if (_popupManager.IsOpen())
 	{
 		_loopEditor.CancelInput();
@@ -1300,6 +1322,26 @@ ActionResult Scene::OnAction(TouchAction action)
 	if (TouchAction::TouchState::TOUCH_DOWN == action.State)
 		_focusManager.ClearFocus();
 
+	if (pointerPress && action.Touch == TouchAction::TOUCH_MOUSE && !_camera.IsBackgroundPointerHeld() && !_isSceneTouching)
+	{
+		const bool occupiedUi = std::any_of(_guiChildren.begin(), _guiChildren.end(), [&](const auto& child) {
+			return child && child->RouteHitTest(child->GlobalToLocal(action.Position));
+		});
+		_ResolveHoverPath2d(_hoverPath2dScratch); // Includes station racks and controls.
+		const bool unmute = action.Index == 1 && action.Modifiers == Action::MODIFIER_NONE;
+		const bool mute = action.Index == 0 && action.Modifiers == Action::MODIFIER_ALT;
+		const auto buttonMask = (unmute || mute) ? (1u << action.Index) : 0u;
+		// Chords retain their existing camera/selection meaning. An eligible
+		// single-button background press owns its release even after movement.
+		if (!occupiedUi && _hoverPath2dScratch.empty() && !_HasQuantisationHover() && (unmute || mute) &&
+			(action.MouseButtonsDown == 0u || action.MouseButtonsDown == buttonMask))
+		{
+			_camera.CancelBackgroundCoast();
+			_backgroundMuteGesture = BackgroundMuteGesture{ action.Index, mute };
+			return { true, {}, {}, ACTIONRESULT_DEFAULT, nullptr, {} };
+		}
+	}
+
 	return _BeginBackgroundDrag(action);
 }
 
@@ -1309,6 +1351,17 @@ ActionResult Scene::OnAction(TouchMoveAction action)
 	action.SetUserConfig(_userConfig);
 	_cursorPos = action.Position;
 	_InvalidateHover2d();
+	if (_backgroundMuteGesture)
+	{
+		const auto buttonMask = 1u << _backgroundMuteGesture->Button;
+		if (action.Touch != TouchAction::TOUCH_MOUSE || !(action.MouseButtonsDown & buttonMask) ||
+			_popupManager.IsOpen() || _EditControlsSuppressed() || _loopEditor.IsEngaged() ||
+			_quantisationInputResetRequested.load(std::memory_order_acquire))
+			_backgroundMuteGesture.reset();
+		else if (action.MouseButtonsDown != buttonMask)
+			_backgroundMuteGesture->Cancelled = true;
+		return { true, {}, {}, ACTIONRESULT_DEFAULT, nullptr, {} };
+	}
 	if (_quantisationInteraction.OwnsPointer())
 	{
 		if (action.MouseButtonsDown == 0u)
@@ -1421,6 +1474,11 @@ ActionResult Scene::OnAction(TouchMoveAction action)
 
 ActionResult Scene::OnAction(KeyAction action)
 {
+	if (_backgroundMuteGesture && action.KeyActionType == KeyAction::KEY_DOWN && action.KeyChar == 27u)
+	{
+		_backgroundMuteGesture->Cancelled = true;
+		return { true, {}, {}, ACTIONRESULT_DEFAULT, nullptr, {} };
+	}
 	// A consumed physical press keeps its release even when focus changes.
 	if (_performanceGroups.ConsumeRelease(action)) return { true, {}, {}, ACTIONRESULT_DEFAULT, nullptr, {} };
 	if (_popupManager.IsOpen() || _focusManager.IsEditingText() || _loopEditor.IsEngaged())
@@ -2341,7 +2399,7 @@ void Scene::AddChild(std::shared_ptr<base::GuiElement> child)
 
 void Scene::SetHover3d(std::vector<unsigned char> path, Action::Modifiers modifiers)
 {
-	if (_ctrlHeld || _loopEditor.IsEngaged())
+	if (_ctrlHeld || _loopEditor.IsEngaged() || _backgroundMuteGesture)
 		return;
 	// Resolve GUI ownership before taking the scene lock: station snapshots also lock it.
 	std::vector<std::weak_ptr<base::GuiElement>> guiPath;
@@ -2547,6 +2605,7 @@ bool Scene::PumpGlobalKeyCapture(actions::KeyAction& action) noexcept
 
 void Scene::Shutdown()
 {
+	_backgroundMuteGesture.reset();
 	{
 		// Recovery borrows callback-owned fields under this same lock. Finish
 		// that borrow before teardown, and prevent a later job reopening admission.
@@ -2701,7 +2760,7 @@ void Scene::ApplyDeferredHoverUpdates()
 		return;
 	}
 
-	if (_touchDownElement.lock() || _isSceneTouching)
+	if (_touchDownElement.lock() || _isSceneTouching || _backgroundMuteGesture)
 		return;
 
 	_hoverPath2dScratch.clear();
@@ -2928,6 +2987,7 @@ void Scene::_InitSize()
 
 void Scene::_OnLoopGridEditorOpened()
 {
+	_backgroundMuteGesture.reset();
 	_ReleaseQuantisationInput();
 	if (_hudPanel)
 	{
@@ -3858,6 +3918,7 @@ std::optional<ActionResult> Scene::_RouteQuantisationMove(TouchMoveAction action
 
 void Scene::_ReleaseQuantisationInput()
 {
+	_backgroundMuteGesture.reset();
 	_spaceHeld = _ctrlHeld = false;
 	_quantisation.SetOverlayHeld(false);
 	_quantisationInteraction.CancelInteraction(true);
@@ -3867,6 +3928,7 @@ void Scene::_ReleaseQuantisationInput()
 
 void Scene::OnInputFocusLost()
 {
+	_backgroundMuteGesture.reset();
 	_performanceGroups.ResetKeys();
 	_ReleaseQuantisationInput();
 	_loopEditor.CancelInput();

@@ -132,6 +132,28 @@ std::shared_ptr<const GroupMuteApplication> PerformanceGroupService::PrepareMute
     return application;
 }
 
+std::shared_ptr<const GroupMuteApplication> PerformanceGroupService::PrepareAllMuted(
+    const Stations& stations, bool muted, std::uint64_t version)
+{
+    auto application = std::make_shared<GroupMuteApplication>();
+    application->Version = version;
+    for (const auto& station : stations)
+    {
+        if (station->IsRemote()) continue;
+        for (const auto& take : station->GetLoopTakes())
+        {
+            application->Takes.push_back({ take, muted });
+            if (application->Takes.size() + application->Loops.size() > GroupMuteApplication::MaxTargets) return {};
+            for (const auto& loop : take->GetLoops())
+            {
+                application->Loops.push_back({ loop, muted });
+                if (application->Takes.size() + application->Loops.size() > GroupMuteApplication::MaxTargets) return {};
+            }
+        }
+    }
+    return application;
+}
+
 std::shared_ptr<const GroupMuteApplication> PerformanceGroupService::PrepareSelectedTakeInversion(
     const Stations& stations, std::uint64_t version)
 {

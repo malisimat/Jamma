@@ -1,7 +1,7 @@
 # Mute and selection groups implementation plan
 
 Status: implemented and validated by native tests and Debug x64 builds; live device/plugin visual checks remain manual.
-Current recall policy: mute-group switching applies mute flags only. The live-performance follow-up below supersedes the original full VST recall requirements in this plan.
+Current live group policy: storing, overwriting and recalling mute groups use mute flags only and never access vendor plugin state. The live-performance follow-up below supersedes the original full VST group requirements in this plan.
 Branch: `feature/mute-group`
 Worktree: `C:\Users\matto\Source\Repos\Jamma.worktrees\Jamma-mute-group`
 
@@ -184,7 +184,7 @@ Recall prepares mute choices for every current local take and audio loop. Saved 
 
 Mute-group recall no longer restores VST blobs or bypass state, including blobs in previously saved JAM groups. Even restoring state on an existing instance can trigger vendor sample/cache work, block the UI thread and exclude audio processing. Recall only publishes the resolved mute application for the next audio boundary; the UI pump has no pending plugin recall work. Existing instances, editor state and automation continue unchanged.
 
-Explicit store/overwrite (including capture into an empty slot) still captures plugin blobs for persistence compatibility. This is preparation work and can still take time in third-party plugins; it is separate from switching occupied groups. Plugin blob persistence and normal JAM session loading remain unchanged.
+Live store/overwrite (including capture into an empty slot) captures mute flags only and completes immediately without calling plugin state APIs. Capturing vendor blobs excludes audio processing even when requested on the UI thread, so live groups never capture them. Imported legacy group blobs retain persistence compatibility; normal JAM session loading remains unchanged.
 
 A native regression exercises rapid occupied-group switching with both station and take plugins, including busy plugins and a later UI pump. It checks the newest mute publication and verifies no capture, restore, bypass, lifecycle or automation-generation changes.
 
@@ -222,3 +222,13 @@ Independent source review passed. Final incremental Debug x64 JammaLib, native t
 The bundled Inter font metrics were checked against the normal 384px-wide row: F-key labels fit the approximately 26px full-row buttons, and shortcut/add help fits the 376px tooltip text area. Existing per-label scissoring and tooltip ellipsis cover narrower widths. When less than 98px remains for settings below selection, layout retains its existing minimum-height fallback to keep settings usable; the two overlays can overlap in very small windows.
 
 Manual verification remains pending for shader compilation/rendering on the user's graphics driver, DPI/display appearance, expanded/collapsed gestures, source/routing overlays, small windows, text/plugin-editor input contexts, and live device/audio behavior. Native tests and font measurements do not establish those runtime checks.
+
+### Follow-up: uninterrupted storage, background commands and stronger previews (2026-10-12)
+
+Creating or overwriting a mute group no longer reads vendor plugin state or queues retry work. The former UI-side capture acquired exclusive plugin access, which could skip audio processing. Live storage now captures mute flags immediately; imported legacy group blobs and ordinary session loading remain compatible. Audio callback application uses the existing bounded immutable publication and atomic mute flags, with no new callback allocation, mutex or wait.
+
+A plain middle-button press on empty background unmutes all current local takes and audio loops on its matching release. Alt-left press on empty background mutes them all. The press latches the command; movement, release over an item and modifier changes do not alter it. Gestures beginning on items or controls keep their normal behavior. Lost focus/button ownership, Escape, input reset, chords and takeover by popup/editor/quantisation contexts cancel the command. Persistent mute choices change without releasing temporary suppression owned by recording or triggers, or changing remote material. Rapid Backspace inversion preserves pending mute choices outside the selected targets.
+
+Group previews now replace most of the material with bright saturated blue (mute) or yellow (selection), retaining lighting variation and greying nonmembers. This remains distinct from normal orange press, cyan selection and dark muted material; those styles are unchanged when no group preview is active. Live graphics-driver appearance still needs confirmation.
+
+Independent review passed for storage, shaders, gesture ownership and camera-coast handling. Final Debug x64 library, native-test and app builds passed with zero warnings/errors. Storage-focused tests passed 56/56; final gesture/service/camera checks passed 62/62; the full native target passed 1,488 tests across 177 suites. The whole-file hot-path audit flags the Scene mouse-release handler's UI mutex; manual callback review confirms this is off the audio path and all callback bodies remain unchanged. Live vendor-plugin playback during creation/overwrite and the stronger shader appearance remain to be retested on the user's setup.
