@@ -10,6 +10,48 @@
 
 using namespace midi;
 
+std::vector<std::string> MidiDevice::LostConnectedInputIds(
+	const MidiConnectionResult& previous, const MidiConnectionResult& refreshed)
+{
+	std::vector<std::string> lost;
+	if (!refreshed.Inventory.Error.empty())
+		return lost;
+	for (size_t oldIndex = 0u; oldIndex < previous.Connected.size() &&
+		oldIndex < previous.ConnectedRegistryIds.size(); ++oldIndex)
+	{
+		const auto& id = previous.ConnectedRegistryIds[oldIndex];
+		const auto& endpoint = previous.Connected[oldIndex];
+		const auto found = std::find(refreshed.ConnectedRegistryIds.begin(),
+			refreshed.ConnectedRegistryIds.end(), id);
+		const auto named = [&endpoint](const MidiInputDeviceInfo& device) {
+			return device.Name == endpoint.Name;
+		};
+		// WinMM exposes no physical GUID. A duplicate-name count drop cannot
+		// identify the surviving unit; invalidate every affected registry route.
+		bool replaced = std::count_if(refreshed.Connected.begin(), refreshed.Connected.end(), named) <
+			std::count_if(previous.Connected.begin(), previous.Connected.end(), named);
+		if (found == refreshed.ConnectedRegistryIds.end())
+			replaced = true;
+		else
+		{
+			const auto newIndex = static_cast<size_t>(found - refreshed.ConnectedRegistryIds.begin());
+			if (newIndex >= refreshed.Connected.size())
+				replaced = true;
+			else
+			{
+				const auto& current = refreshed.Connected[newIndex];
+				// Enumeration changes may conservatively reset held state. Without
+				// a GUID, apparent continuity must not hide a replaced endpoint.
+				replaced = replaced || current.Name != endpoint.Name ||
+					current.PortName != endpoint.PortName || current.DeviceId != endpoint.DeviceId;
+			}
+		}
+		if (replaced && !id.empty() && std::find(lost.begin(), lost.end(), id) == lost.end())
+			lost.push_back(id);
+	}
+	return lost;
+}
+
 std::vector<std::string> MidiDevice::LostConnectedInputNames(
 	const MidiConnectionResult& previous, const MidiConnectionResult& refreshed)
 {

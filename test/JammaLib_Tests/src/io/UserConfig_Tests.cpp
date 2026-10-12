@@ -42,14 +42,14 @@ TEST(UserConfig, ParsesLoopSettings) {
 }
 
 TEST(UserConfig, ParsesTriggerSettings) {
-	auto str = "{\"preDelay\":42,\"debounceSamps\":59}";
+	auto str = "{\"preDelaySamps\":42,\"debounceMs\":59}";
 	auto testStream = std::stringstream(str);
 	auto json = std::get<Json::JsonPart>(Json::FromStream(std::move(testStream)).value());
 	auto trig = UserConfig::TriggerSettings::FromJson(json);
 
 	ASSERT_TRUE(trig.has_value());
-	ASSERT_EQ(42, trig.value().PreDelay);
-	ASSERT_EQ(59, trig.value().DebounceSamps);
+	ASSERT_EQ(42, trig.value().PreDelaySamps);
+	ASSERT_EQ(59, trig.value().DebounceMs);
 }
 
 TEST(UserConfig, ParsesMidiSettings) {
@@ -134,7 +134,7 @@ TEST(UserConfig, ParsesSerialDeviceList) {
 TEST(UserConfig, ParsesFile) {
 	std::string audio = "{\"name\":\"HDMI\",\"bufsize\":255,\"inlatency\":414,\"outlatency\":414,\"numchannelsin\":0,\"numchannelsout\":10}";
 	std::string loop = "{\"fadeSamps\":54,\"seedGrainMinMs\":400,\"seedGrainTargetMaxMs\":3000,\"seedBpmMin\":80,\"seedQuantisation\":\"power\"}";
-	std::string trigger = "{\"preDelay\":21,\"debounceSamps\":18}";
+	std::string trigger = "{\"preDelaySamps\":21,\"debounceMs\":18}";
 	std::string midi = "{\"devices\":[{\"name\":\"Launchkey\",\"enabled\":true},{\"name\":\"DrumPad\",\"enabled\":false}]}";
 	std::string serial = "{\"devices\":[{\"name\":\"pedal-a\",\"port\":\"COM3\",\"baudrate\":115200,\"enabled\":true},{\"name\":\"pedal-b\",\"port\":\"COM4\",\"baudrate\":57600,\"enabled\":false}]}";
 	
@@ -158,8 +158,8 @@ TEST(UserConfig, ParsesFile) {
 	ASSERT_EQ(80u, cfg.value().Loop.SeedBpmMin);
 	ASSERT_TRUE(cfg.value().Loop.SeedUsesPowers);
 
-	ASSERT_EQ(21, cfg.value().Trigger.PreDelay);
-	ASSERT_EQ(18, cfg.value().Trigger.DebounceSamps);
+	ASSERT_EQ(21, cfg.value().Trigger.PreDelaySamps);
+	ASSERT_EQ(18, cfg.value().Trigger.DebounceMs);
 	ASSERT_EQ(2u, cfg.value().Midi.Devices.size());
 	ASSERT_EQ(0, cfg.value().Midi.Devices[0].Name.compare("Launchkey"));
 	ASSERT_TRUE(cfg.value().Midi.Devices[0].Enabled);
@@ -337,7 +337,7 @@ TEST(StartupConfig, RequiresDistinctNamedStations) {
 	EXPECT_FALSE(io::StartupConfig::ValidateJam(*jam));
 }
 
-TEST(StartupConfig, SelectedRigRequiresExplicitTargetsInSelectedJam) {
+TEST(StartupConfig, SelectedRigRetainsUnavailableTargetsAndRejectsInvalidTargets) {
 	auto rig = io::RigFile::FromStream(std::stringstream(io::RigFile::DefaultJson));
 	auto jam = io::JamFile::FromStream(std::stringstream(io::JamFile::DefaultJson));
 	ASSERT_TRUE(rig.has_value());
@@ -345,9 +345,9 @@ TEST(StartupConfig, SelectedRigRequiresExplicitTargetsInSelectedJam) {
 	rig->Triggers[0].StationTarget = "Station1";
 	EXPECT_TRUE(io::StartupConfig::ValidateRigForJam(*rig, *jam));
 	rig->Triggers[0].StationTarget = "Missing";
-	EXPECT_FALSE(io::StartupConfig::ValidateRigForJam(*rig, *jam));
-	rig->Triggers[0].StationTarget = std::string();
 	EXPECT_TRUE(io::StartupConfig::ValidateRigForJam(*rig, *jam));
+	rig->Triggers[0].StationTarget = std::string();
+	EXPECT_FALSE(io::StartupConfig::ValidateRigForJam(*rig, *jam));
 	rig->Triggers[0].StationTarget.reset();
 	EXPECT_TRUE(io::StartupConfig::ValidateRigForJam(*rig, *jam));
 	jam->Stations.push_back(jam->Stations[0]);
@@ -356,39 +356,31 @@ TEST(StartupConfig, SelectedRigRequiresExplicitTargetsInSelectedJam) {
 
 TEST(StartupConfig, GeneratedRigUsesOpenedInputsAndFirstConnectedMidiWithoutCapture) {
 	auto templateRig = io::RigFile::FromStream(std::stringstream(io::RigFile::DefaultJson));
-	ASSERT_TRUE(templateRig.has_value());
-	for (const unsigned int channels : { 0u, 1u, 2u, 8u }) {
-		const auto rig = io::StartupConfig::GeneratedRig(*templateRig, channels,
-			{ "Failed port skipped", "Second port" });
+	ASSERT_TRUE(templateRig);
+	for (const unsigned int channels : {0u, 1u, 2u, 8u}) {
+		const auto rig = io::StartupConfig::GeneratedRig(*templateRig, channels, {"Failed port skipped", "Second port"});
 		ASSERT_EQ(1u, rig.Triggers.size());
 		const auto& trigger = rig.Triggers.front();
-		EXPECT_EQ("first-run-trigger-1", trigger.Id);
-		ASSERT_TRUE(trigger.StationTarget.has_value());
-		EXPECT_EQ("Station1", *trigger.StationTarget);
-		EXPECT_EQ(std::min(channels, 2u), trigger.InputChannels.size());
-		for (unsigned int index = 0; index < trigger.InputChannels.size(); ++index)
-			EXPECT_EQ(index, trigger.InputChannels[index]);
-		EXPECT_EQ(io::RigFile::Trigger::MidiInputMode::None, trigger.MidiInputs);
-		EXPECT_TRUE(trigger.MidiInputDevices.empty());
-		ASSERT_TRUE(trigger.MidiTrigger.has_value());
-		EXPECT_EQ("Failed port skipped", trigger.MidiTrigger->Device);
-		EXPECT_EQ(io::RigFile::NOTE, trigger.MidiTrigger->Activate.Kind);
-		EXPECT_EQ(0u, trigger.MidiTrigger->Activate.Channel);
-		EXPECT_EQ(1u, trigger.MidiTrigger->Activate.Id);
-		EXPECT_EQ(1u, trigger.MidiTrigger->Activate.State);
-		EXPECT_FALSE(trigger.MidiTrigger->Activate.MatchAnyChannel);
-		EXPECT_EQ(2u, trigger.MidiTrigger->Ditch.Id);
-		std::stringstream stream;
-		ASSERT_TRUE(io::RigFile::ToJsonStream(rig, stream));
-		auto parsed = io::RigFile::FromStream(std::stringstream(stream.str()));
-		ASSERT_TRUE(parsed.has_value());
-		EXPECT_TRUE(io::StartupConfig::ValidateRig(*parsed));
-		EXPECT_EQ(trigger.InputChannels, parsed->Triggers.front().InputChannels);
-		EXPECT_EQ(trigger.MidiTrigger->Device, parsed->Triggers.front().MidiTrigger->Device);
+		EXPECT_EQ("first-run-trigger-1", trigger.Id); ASSERT_TRUE(trigger.StationTarget); EXPECT_EQ("Station1", *trigger.StationTarget);
+		EXPECT_EQ(std::min(channels, 2u), trigger.CaptureInputs.Audio.size());
+		for (unsigned int index = 0u; index < trigger.CaptureInputs.Audio.size(); ++index) EXPECT_EQ(index, trigger.CaptureInputs.Audio[index]);
+		EXPECT_TRUE(trigger.CaptureInputs.Midi.empty());
+		ASSERT_FALSE(trigger.ControlBindings.Activate.empty()); ASSERT_FALSE(trigger.ControlBindings.Ditch.empty());
+		const auto& activate = trigger.ControlBindings.Activate.back();
+		const auto& ditch = trigger.ControlBindings.Ditch.back();
+		EXPECT_EQ(io::RigFile::BindingSource::Midi, activate.Source); EXPECT_EQ("midi-1", activate.Device);
+		ASSERT_EQ(2u, rig.User.Midi.Devices.size()); EXPECT_EQ("Failed port skipped", rig.User.Midi.Devices[0].Name); EXPECT_EQ("midi-1", rig.User.Midi.Devices[0].Id);
+		EXPECT_EQ(io::RigFile::NOTE, activate.Press.Kind); EXPECT_EQ(0u, activate.Press.Channel);
+		EXPECT_EQ(1u, activate.Press.Code); EXPECT_EQ(1u, activate.Press.State); EXPECT_EQ(0u, activate.Release.State);
+		EXPECT_EQ(2u, ditch.Press.Code);
+		std::stringstream stream; ASSERT_TRUE(io::RigFile::ToJsonStream(rig, stream));
+		const auto parsed = io::RigFile::FromStream(std::stringstream(stream.str())); ASSERT_TRUE(parsed);
+		EXPECT_TRUE(io::StartupConfig::ValidateRig(*parsed)); EXPECT_EQ(trigger.CaptureInputs.Audio, parsed->Triggers.front().CaptureInputs.Audio);
+		EXPECT_EQ(activate.Device, parsed->Triggers.front().ControlBindings.Activate.back().Device);
 	}
 	const auto noMidi = io::StartupConfig::GeneratedRig(*templateRig, 0u, {});
 	EXPECT_TRUE(noMidi.User.Midi.Devices.empty());
-	EXPECT_FALSE(noMidi.Triggers.front().MidiTrigger.has_value());
+	EXPECT_TRUE(std::none_of(noMidi.Triggers.front().ControlBindings.Activate.begin(), noMidi.Triggers.front().ControlBindings.Activate.end(), [](const io::RigFile::Binding& binding) { return binding.Source == io::RigFile::BindingSource::Midi; }));
 }
 
 TEST(StartupConfig, GeneratedRigKeepsDuplicateMidiPortsOnReload) {
@@ -440,7 +432,7 @@ TEST(StartupConfig, EmptyJamRoundTripsAsAUsableStationWithoutNinjamCredentials) 
 
 TEST(UserConfig, OverdubTimingHelpersIncludeAndExcludeOutputLatencyAtRightPoints) {
 	UserConfig cfg;
-	cfg.Trigger.PreDelay = 128u;
+	cfg.Trigger.PreDelaySamps = 128u;
 
 	EXPECT_EQ(constants::MaxLoopFadeSamps + 128u, cfg.TriggerLoopAlignmentSamps());
 	EXPECT_EQ(-static_cast<long>(constants::MaxLoopFadeSamps + 128u + 96u),

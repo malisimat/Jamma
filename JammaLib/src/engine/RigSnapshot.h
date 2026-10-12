@@ -22,11 +22,11 @@ namespace engine
 		size_t RigTriggerIndex = 0u;
 		std::shared_ptr<Trigger> Instance;
 		std::optional<size_t> StationIndex;
+		std::shared_ptr<const std::string> DisplayName;
 		// Mutable only so prepared routing vectors can be swapped at the boundary without allocation.
 		mutable std::shared_ptr<base::ActionReceiver> Receiver;
 		mutable std::vector<unsigned int> InputChannels;
 		mutable std::vector<std::string> MidiInputDevices;
-		mutable io::RigFile::Trigger::MidiInputMode MidiInputMode = io::RigFile::Trigger::MidiInputMode::None;
 		mutable std::shared_ptr<audio::AudioMixer> OverdubMixer;
 		mutable std::shared_ptr<base::BounceWriter> OverdubWriter;
 	};
@@ -73,6 +73,12 @@ namespace engine
 	{
 		std::uint64_t Revision = 0u;
 		io::RigFile Rig;
+		io::RigFile::Diagnostics Diagnostics;
+		// Prepared job/UI values, immutable after publication. Availability readers
+		// use this same snapshot rather than racing mutable coordinator caches.
+		unsigned int AvailableAdcChannels = 0u;
+		std::vector<std::string> AvailableMidiDevices;
+		std::optional<std::vector<std::string>> AvailableSerialDevices;
 		RoutingGraph Graph;
 		std::vector<RigSnapshotTrigger> Triggers;
 		std::vector<TriggerReplacementCheck> TriggerReplacementChecks;

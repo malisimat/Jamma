@@ -43,6 +43,7 @@ namespace midi
 	struct MidiConnectionAttempt
 	{
 		std::string RequestedName;
+		std::string RegistryId;
 		std::string ConnectedName;
 		unsigned int DeviceId = 0u;
 		MidiConnectionStatus Status = MidiConnectionStatus::Missing;
@@ -54,6 +55,8 @@ namespace midi
 		MidiInputInventory Inventory;
 		std::vector<MidiConnectionAttempt> Attempts;
 		std::vector<MidiInputDeviceInfo> Connected;
+		// Registry IDs aligned with Connected in successful endpoint order.
+		std::vector<std::string> ConnectedRegistryIds;
 	};
 
 	class MidiDevice
@@ -75,6 +78,8 @@ namespace midi
 		static MidiInputInventory InventoryInputDevices();
 		// Job-side comparison of successful actual connections, never inventory
 		// membership. WinMM enumeration indices/suffixes are not stable identities.
+		static std::vector<std::string> LostConnectedInputIds(
+			const MidiConnectionResult& previous, const MidiConnectionResult& refreshed);
 		static std::vector<std::string> LostConnectedInputNames(
 			const MidiConnectionResult& previous, const MidiConnectionResult& refreshed);
 		static std::string BaseInputName(const std::string& portName, unsigned int portId);

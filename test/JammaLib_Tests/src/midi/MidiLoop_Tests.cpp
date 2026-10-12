@@ -727,7 +727,7 @@ TEST(LoopTakeMidiTiming, MidiOnlyMasterUsesPressIntervalAndStopPhase)
 TEST(LoopTakeMidiTiming, FirstPlaybackStartsAtRecordedStartAfterAudioDelayCompensation)
 {
 	io::UserConfig cfg;
-	cfg.Trigger.PreDelay = 64u;
+	cfg.Trigger.PreDelaySamps = 64u;
 
 	const auto loopLength = 96000ul;
 	const auto playPos = cfg.LoopPlayPos(0, loopLength, 128u);

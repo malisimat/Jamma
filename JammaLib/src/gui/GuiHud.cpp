@@ -770,6 +770,9 @@ void GuiHud::SetRoutingConfig(unsigned int audioInputCount,
 			label += " [target ambiguous]";
 		else if (!resolvedTrigger.StationIndex.has_value())
 			label += " [unbound]";
+		if (std::any_of(resolvedTrigger.ControlSources.begin(), resolvedTrigger.ControlSources.end(),
+			[](const io::RigFileRouting::ControlSource& source) { return source.Available && !*source.Available; }))
+			label += " [control device unavailable]";
 		_triggerNames.push_back(std::move(label));
 	}
 	for (const auto& runtimeTrigger : routing.Triggers)
@@ -1280,7 +1283,13 @@ void GuiHud::_AddTrigger()
 {
 	if (_RoutingEditAvailability() != RoutingEditAvailability::Ready)
 		return;
-	const auto candidate = io::RigFileRouting::WithUnboundTrigger(_displayedRig);
+	io::RigFile::Diagnostics diagnostics;
+	const auto candidate = io::RigFileRouting::WithUnboundTrigger(_displayedRig, &diagnostics);
+	if (candidate.Triggers.size() != _displayedRig.Triggers.size() + 1u)
+	{
+		SetQuantisationFeedback(diagnostics.empty() ? "Could not create trigger" : diagnostics.front().Message);
+		return;
+	}
 	_revealNewestTrigger = _SubmitCandidate(candidate);
 }
 

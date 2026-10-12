@@ -72,7 +72,7 @@ static std::pair<UserConfig, AudioStreamParams> MakeAudioConfig(unsigned int num
 	cfg.Audio.NumChannelsOut = numChans;
 	cfg.Audio.LatencyIn = 0u;
 	cfg.Audio.LatencyOut = 0u;
-	cfg.Trigger.PreDelay = 0u;
+	cfg.Trigger.PreDelaySamps = 0u;
 
 	AudioStreamParams streamParams{};
 	streamParams.SampleRate = cfg.Audio.SampleRate;

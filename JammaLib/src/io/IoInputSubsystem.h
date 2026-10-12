@@ -34,6 +34,8 @@ namespace io
 			unsigned int actualSampleRate, const midi::MidiInputInventory& inventory);
 		void SetLogging(io::LoggingConfig loggingConfig) noexcept;
 		void Close();
+		// Off-callback; use under the same Scene lifecycle serialization as Init/Close.
+		std::vector<std::string> ConnectedSerialDeviceIds() const;
 		void PublishRigInputDispatch(std::shared_ptr<const engine::RigSnapshot> snapshot);
 		void PublishEmptyRigInputDispatch();
 		bool OpenRigTriggerInput(std::uint64_t revision) noexcept;

@@ -24,7 +24,7 @@ namespace constants
 	const unsigned int GrainSamps = 300u;
 	const unsigned int DefaultFadeSamps = 20u;
 	const unsigned int DefaultPreDelaySamps = 0u;
-	const unsigned int DefaultDebounceSamps = 280u;
+	const unsigned int DefaultDebounceMs = 280u;
 	const unsigned int DefaultSeedGrainMinMs = 300u;
 	const unsigned int DefaultSeedGrainTargetMaxMs = 3000u;
 	const unsigned int DefaultSeedBpmMin = 80u;

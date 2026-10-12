@@ -234,9 +234,9 @@ bool CableInteraction::Compatible(const Drag& drag, const Endpoint& candidate, c
 			const auto& trigger = rig.Triggers[triggerIndex];
 			const auto& source = candidate.Source.value();
 			if (source.Kind == io::RigFileRouting::SourceKind::Adc)
-				return std::find(trigger.InputChannels.begin(), trigger.InputChannels.end(), source.AdcChannel) == trigger.InputChannels.end() ||
+				return std::find(trigger.CaptureInputs.Audio.begin(), trigger.CaptureInputs.Audio.end(), source.AdcChannel) == trigger.CaptureInputs.Audio.end() ||
 					(drag.OriginalSource.has_value() && _SameSource(drag.OriginalSource.value(), source));
-			return std::find(trigger.MidiInputDevices.begin(), trigger.MidiInputDevices.end(), source.MidiDevice) == trigger.MidiInputDevices.end() ||
+			return std::find(trigger.CaptureInputs.Midi.begin(), trigger.CaptureInputs.Midi.end(), source.MidiDevice) == trigger.CaptureInputs.Midi.end() ||
 				(drag.OriginalSource.has_value() && _SameSource(drag.OriginalSource.value(), source));
 		}
 		if (candidate.Kind != EndpointKind::TriggerInput || !candidate.TriggerIndex.has_value())
@@ -246,8 +246,8 @@ bool CableInteraction::Compatible(const Drag& drag, const Endpoint& candidate, c
 			return false;
 		const auto& source = drag.Fixed.Source.value();
 		if (source.Kind == io::RigFileRouting::SourceKind::Adc)
-			return std::find(trigger.InputChannels.begin(), trigger.InputChannels.end(), source.AdcChannel) == trigger.InputChannels.end();
-		return std::find(trigger.MidiInputDevices.begin(), trigger.MidiInputDevices.end(), source.MidiDevice) == trigger.MidiInputDevices.end();
+			return std::find(trigger.CaptureInputs.Audio.begin(), trigger.CaptureInputs.Audio.end(), source.AdcChannel) == trigger.CaptureInputs.Audio.end();
+		return std::find(trigger.CaptureInputs.Midi.begin(), trigger.CaptureInputs.Midi.end(), source.MidiDevice) == trigger.CaptureInputs.Midi.end();
 	}
 	if (drag.MovingEnd == End::Start)
 		return candidate.Kind == EndpointKind::TriggerOutput && candidate.TriggerIndex == drag.Route.TriggerIndex;
@@ -326,7 +326,7 @@ CableInteraction::Release CableInteraction::ReleaseToCandidate(const Drag& drag,
 		if (drag.Route.TriggerIndex >= rig.Triggers.size())
 			return {};
 		if (!drag.Snap.has_value())
-			return { io::RigFileRouting::WithStationTarget(rig, drag.Route.TriggerIndex, ""), true };
+			return { io::RigFileRouting::WithStationTarget(rig, drag.Route.TriggerIndex, std::nullopt), true };
 		if (drag.Snap->Kind == EndpointKind::TriggerOutput)
 			return { rig, false };
 		if (!drag.Snap->StationIndex.has_value() || drag.Snap->StationName.empty())

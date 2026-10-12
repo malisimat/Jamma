@@ -126,8 +126,12 @@ public:
 	{
 		auto snapshot = std::make_shared<engine::RigSnapshot>();
 		for (const auto& [id, trigger] : triggers)
-			snapshot->Triggers.push_back({ id, 0u, trigger, std::nullopt, {}, {}, {},
-				io::RigFile::Trigger::MidiInputMode::None, {}, {} });
+		{
+			engine::RigSnapshotTrigger runtime;
+			runtime.Id = id;
+			runtime.Instance = trigger;
+			snapshot->Triggers.push_back(std::move(runtime));
+		}
 		return snapshot;
 	}
 };

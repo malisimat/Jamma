@@ -67,50 +67,47 @@ unsigned int Trigger::EncodeMidiBindingValue(io::RigFile::MidiTriggerEvent kind,
 			(id & 0x7Fu);
 }
 
-DualBinding Trigger::MakeMidiBinding(io::RigFile::MidiTriggerEvent kind,
-	unsigned int channel,
-	unsigned int id,
-	unsigned int state)
+std::optional<std::vector<DualBinding>> Trigger::CompileControlBindings(
+	const std::vector<io::RigFile::Binding>& bindings)
 {
-	DualBinding binding;
-	binding.SetDown(TriggerBinding(TriggerSource::TRIGGER_MIDI,
-		EncodeMidiBindingValue(kind, channel, id),
-		state), true);
-	return binding;
-}
-
-void Trigger::AddMidiBindingForChannels(const io::RigFile::Trigger::MidiTriggerBindingSpec& bindingSpec,
-	const std::function<void(const DualBinding&)>& onBinding)
-{
-	if (bindingSpec.MatchAnyChannel)
+	std::vector<DualBinding> compiled;
+	for (const auto& binding : bindings)
 	{
-		for (auto channel = 0u; channel < 16u; ++channel)
-			onBinding(MakeMidiBinding(bindingSpec.Kind,
-				channel,
-				bindingSpec.Id,
-				bindingSpec.State));
-		return;
+		TriggerSource source;
+		switch (binding.Source)
+		{
+		case io::RigFile::BindingSource::Keyboard: source = TRIGGER_KEY; break;
+		case io::RigFile::BindingSource::Serial: source = TRIGGER_SERIAL; break;
+		case io::RigFile::BindingSource::Midi: source = TRIGGER_MIDI; break;
+		default: return std::nullopt;
+		}
+		if (binding.Press.State > 1u || binding.Release.State > 1u)
+			return std::nullopt;
+		const bool midi = source == TRIGGER_MIDI;
+		if (midi && (binding.Press.Code > 127u || binding.Release.Code > 127u ||
+			(binding.Press.Kind != io::RigFile::NOTE && binding.Press.Kind != io::RigFile::CC) ||
+			(binding.Release.Kind != io::RigFile::NOTE && binding.Release.Kind != io::RigFile::CC) ||
+			binding.Press.Channel != binding.Release.Channel ||
+			(binding.Press.Channel && *binding.Press.Channel > 15u)))
+			return std::nullopt;
+		const auto count = midi && !binding.Press.Channel ? 16u : 1u;
+		if (compiled.size() + count > MaxBindingCount)
+			return std::nullopt;
+		for (unsigned int index = 0u; index < count; ++index)
+		{
+			const auto channel = binding.Press.Channel.value_or(index);
+			const auto device = source == TRIGGER_KEY ? std::string() : binding.Device;
+			const auto press = midi ? EncodeMidiBindingValue(binding.Press.Kind, channel, binding.Press.Code) : binding.Press.Code;
+			const auto release = midi ? EncodeMidiBindingValue(binding.Release.Kind, channel, binding.Release.Code) : binding.Release.Code;
+			compiled.emplace_back(TriggerBinding(source, press, binding.Press.State, device),
+				TriggerBinding(source, release, binding.Release.State, device));
+		}
 	}
-
-	onBinding(MakeMidiBinding(bindingSpec.Kind,
-		bindingSpec.Channel,
-		bindingSpec.Id,
-		bindingSpec.State));
-}
-
-bool Trigger::IsValidMidiBindingSpec(const io::RigFile::Trigger::MidiTriggerBindingSpec& bindingSpec)
-{
-	if (bindingSpec.Id > 127u)
-		return false;
-
-	if (!bindingSpec.MatchAnyChannel && (bindingSpec.Channel > 15u))
-		return false;
-
-	return true;
+	return compiled;
 }
 
 Trigger::Trigger(TriggerParams trigParams) :
-	_name(trigParams.Name),
+	_name(std::make_shared<const std::string>(trigParams.Name)),
 	_activateBindings(trigParams.Activate),
 	_ditchBindings(trigParams.Ditch),
 	_inputChannels(trigParams.InputChannels),
@@ -143,87 +140,23 @@ Trigger::~Trigger()
 {
 }
 
-std::optional<std::shared_ptr<Trigger>> Trigger::FromFile(TriggerParams trigParams, io::RigFile::Trigger trigStruct)
+std::optional<std::shared_ptr<Trigger>> Trigger::FromFile(TriggerParams trigParams,
+	io::RigFile::Trigger definition)
 {
-	trigParams.Name = trigStruct.Name;
-	if (trigStruct.MidiTrigger.has_value() &&
-		(!IsValidMidiBindingSpec(trigStruct.MidiTrigger->Activate) ||
-		 !IsValidMidiBindingSpec(trigStruct.MidiTrigger->Ditch)))
+	// The coordinator supplies the shared-validator's normalized definition.
+	// Build both control lists before constructing any callback-visible state.
+	auto activate = CompileControlBindings(definition.ControlBindings.Activate);
+	auto ditch = CompileControlBindings(definition.ControlBindings.Ditch);
+	if (!activate || !ditch ||
+		trigParams.Activate.size() + activate->size() > MaxBindingCount ||
+		trigParams.Ditch.size() + ditch->size() > MaxBindingCount)
 		return std::nullopt;
-	const auto midiActivateBindingCount = trigStruct.MidiTrigger.has_value() ?
-		(trigStruct.MidiTrigger->Activate.MatchAnyChannel ? 16u : 1u) : 0u;
-	const auto midiDitchBindingCount = trigStruct.MidiTrigger.has_value() ?
-		(trigStruct.MidiTrigger->Ditch.MatchAnyChannel ? 16u : 1u) : 0u;
-	const auto addedBindingCount = trigStruct.TriggerPairs.size() +
-		midiActivateBindingCount + midiDitchBindingCount;
-	if (std::max(trigParams.Activate.size(), trigParams.Ditch.size()) +
-		addedBindingCount > _InputFallbackBindingCapacity)
-		return std::nullopt;
-
-	auto trigger = std::make_shared<Trigger>(trigParams);
-	trigger->_midiInputMode = trigStruct.MidiInputs;
-
-	for (auto trigPair : trigStruct.TriggerPairs)
-	{
-		auto source = trigPair.Source == io::RigFile::TriggerPair::SOURCE_SERIAL ?
-			TriggerSource::TRIGGER_SERIAL :
-			TriggerSource::TRIGGER_KEY;
-		auto device = source == TriggerSource::TRIGGER_SERIAL ? trigPair.Device : std::string();
-
-		auto activate = DualBinding(
-			TriggerBinding{
-				source,
-				trigPair.ActivateDown,
-				1,
-				device
-			},
-			TriggerBinding{
-				source,
-				trigPair.ActivateUp,
-				0,
-				device
-			});
-
-		auto ditch = DualBinding(
-			TriggerBinding{
-				source,
-				trigPair.DitchDown,
-				1,
-				device
-			},
-			TriggerBinding{
-				source,
-				trigPair.DitchUp,
-				0,
-				device
-			});
-
-		if (!trigger->AddBinding(activate, ditch)) return std::nullopt;
-	}
-
-	for (auto inChan : trigStruct.InputChannels)
-		trigger->AddInputChannel(inChan);
-
-	for (const auto& midiDevice : trigStruct.MidiInputDevices)
-		trigger->AddMidiInputDevice(midiDevice);
-
-	if (trigStruct.MidiTrigger.has_value())
-	{
-		bool addedAllBindings = true;
-		AddMidiBindingForChannels(trigStruct.MidiTrigger->Activate,
-			[&trigger, &addedAllBindings](const DualBinding& binding)
-			{
-				addedAllBindings = trigger->AddBinding(binding, DualBinding()) && addedAllBindings;
-			});
-		AddMidiBindingForChannels(trigStruct.MidiTrigger->Ditch,
-			[&trigger, &addedAllBindings](const DualBinding& binding)
-			{
-				addedAllBindings = trigger->AddBinding(DualBinding(), binding) && addedAllBindings;
-			});
-		if (!addedAllBindings) return std::nullopt;
-	}
-
-	return trigger;
+	trigParams.Activate.insert(trigParams.Activate.end(), activate->begin(), activate->end());
+	trigParams.Ditch.insert(trigParams.Ditch.end(), ditch->begin(), ditch->end());
+	trigParams.Name = definition.Name;
+	trigParams.InputChannels = definition.CaptureInputs.Audio;
+	trigParams.MidiInputDevices = definition.CaptureInputs.Midi;
+	return std::make_shared<Trigger>(std::move(trigParams));
 }
 
 audio::BounceMixBehaviourParams Trigger::GetOverdubBehaviourParams(
@@ -406,13 +339,14 @@ ActionResult Trigger::QueueMidiInputEvent(TriggerInputDomain domain,
 	std::uint64_t rigRevision,
 	const midi::MidiEvent& event,
 	const base::Action& action,
-	std::int64_t eventTimeUsec)
+	std::int64_t eventTimeUsec,
+	const std::string& device)
 {
 	unsigned int value = 0u, state = 0u;
 	if (!TryEncodeMidiEvent(event, value, state))
 		return ActionResult::NoAction();
 	return QueueInputEvent(domain, rigRevision, TRIGGER_MIDI, value, state, action,
-		"", eventTimeUsec, event.sampleOffset);
+		device, eventTimeUsec, event.sampleOffset);
 }
 
 void Trigger::OnTick(Time curTime,
@@ -845,14 +779,12 @@ void Trigger::AddMidiInputDevice(std::string device)
 void Trigger::ApplyCaptureRouting(std::shared_ptr<base::ActionReceiver>& receiver,
 	std::vector<unsigned int>& inputChannels,
 	std::vector<std::string>& midiInputDevices,
-	io::RigFile::Trigger::MidiInputMode& midiInputMode,
 	std::shared_ptr<audio::AudioMixer>& overdubMixer,
 	std::shared_ptr<base::BounceWriter>& overdubWriter) noexcept
 {
 	_receiver.swap(receiver);
 	_inputChannels.swap(inputChannels);
 	_midiInputDevices.swap(midiInputDevices);
-	std::swap(_midiInputMode, midiInputMode);
 	_overdubMixer.swap(overdubMixer);
 	_overdubWriter.swap(overdubWriter);
 }
@@ -943,12 +875,18 @@ void Trigger::Reset()
 
 std::string Trigger::Name() const
 {
-	return _name;
+	const auto name = _name.load(std::memory_order_acquire);
+	return name ? *name : std::string();
 }
 
 void Trigger::SetName(std::string name)
 {
-	_name = name;
+	SetName(std::make_shared<const std::string>(std::move(name)));
+}
+
+void Trigger::SetName(std::shared_ptr<const std::string> name) noexcept
+{
+	_name.store(std::move(name), std::memory_order_release);
 }
 
 std::vector<TriggerTake> Trigger::GetTakes() const
@@ -969,7 +907,8 @@ void Trigger::RestoreTakes(std::vector<TriggerTake> takes,
 		const auto token = _nextHistoryToken++;
 		_loopTakeHistory[slot].SourceType = takes[index].SourceType;
 		_loopTakeHistory[slot].Token = token;
-		if (!takes[index].Receiver) takes[index].Receiver = _receiver;
+		// Historical ownership is explicit; the current rig target may differ.
+		// Leave absent owners unresolved rather than ditching an unrelated station.
 		if (index < pins.size())
 		{
 			auto session = std::make_unique<CaptureSession>();

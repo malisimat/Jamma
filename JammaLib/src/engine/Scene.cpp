@@ -529,7 +529,7 @@ std::optional<std::shared_ptr<Scene>> Scene::FromFile(SceneParams sceneParams,
 	unsigned int hudAudioInputCount = std::max(1u, rigStruct.User.Audio.NumChannelsIn);
 	for (const auto& triggerCfg : rigStruct.Triggers)
 	{
-		for (const auto channel : triggerCfg.InputChannels)
+		for (const auto channel : triggerCfg.CaptureInputs.Audio)
 			hudAudioInputCount = std::max(hudAudioInputCount, channel + 1u);
 	}
 
@@ -537,12 +537,12 @@ std::optional<std::shared_ptr<Scene>> Scene::FromFile(SceneParams sceneParams,
 	hudMidiInputs.reserve(rigStruct.User.Midi.Devices.size());
 	for (const auto& device : rigStruct.User.Midi.Devices)
 	{
-		if (device.Enabled && !device.Name.empty())
-			hudMidiInputs.push_back(device.Name);
+		if (device.Enabled && !device.Id.empty())
+			hudMidiInputs.push_back(device.Id);
 	}
 
 	TriggerParams trigParams;
-	trigParams.DebounceMs = rigStruct.User.Trigger.DebounceSamps;
+	trigParams.DebounceMs = rigStruct.User.Trigger.DebounceMs;
 
 	StationParams stationParams;
 	stationParams.Index = 0;
@@ -588,8 +588,8 @@ std::optional<std::shared_ptr<Scene>> Scene::FromFile(SceneParams sceneParams,
 	if (!scene->_rigCoordinator.BuildInitial(rigStruct,
 		initialStationDescriptors,
 		initialStations,
-		rigStruct.User.Audio.NumChannelsIn,
-		hudMidiInputs,
+		0u,
+		{},
 		trigParams,
 		scene->_saveRig))
 	{
@@ -601,7 +601,7 @@ std::optional<std::shared_ptr<Scene>> Scene::FromFile(SceneParams sceneParams,
 		return std::nullopt;
 	for (const auto& trigger : acceptedRig->Graph.Triggers)
 	{
-		const auto target = trigger.TargetName.value_or("<legacy target>");
+		const auto target = trigger.TargetName.value_or("<unbound>");
 		if (trigger.Reason == io::RigFileRouting::Warning::TargetMissing)
 			std::cout << "[LOAD] Warning: trigger '" << trigger.TriggerName << "' target '" << target
 				<< "' was not found; leaving it unconnected." << std::endl;
@@ -614,6 +614,37 @@ std::optional<std::shared_ptr<Scene>> Scene::FromFile(SceneParams sceneParams,
 		std::cout << "Load: no constructible stations" << std::endl;
 		return std::nullopt;
 	}
+	// A rig may have been retargeted since this history was saved. Resolve
+	// recorded take identity across the jam, not only the current rig target.
+	struct RestoredHistoryTarget
+	{
+		std::string Id;
+		std::shared_ptr<Station> Owner;
+		std::shared_ptr<LoopTake> Take;
+	};
+	std::vector<RestoredHistoryTarget> historyTargets;
+	for (const auto& station : initialStations)
+		for (const auto& take : station->GetLoopTakeSnapshot())
+			if (take) historyTargets.push_back({ take->Id(), station, take });
+	const auto resolveHistory = [&historyTargets](const std::string& id)
+		-> std::pair<std::shared_ptr<Station>, std::shared_ptr<LoopTake>>
+	{
+		if (id.empty()) return {};
+		std::pair<std::shared_ptr<Station>, std::shared_ptr<LoopTake>> match;
+		for (const auto& target : historyTargets)
+			if (target.Id == id)
+			{
+				if (match.second)
+				{
+					std::cout << "[LOAD] Warning: history take '" << id << "' is ambiguous; leaving it unresolved." << std::endl;
+					return {};
+				}
+				match = { target.Owner, target.Take };
+			}
+		if (!match.second)
+			std::cout << "[LOAD] Warning: history take '" << id << "' is unavailable." << std::endl;
+		return match;
+	};
 	for (const auto& runtime : acceptedRig->Triggers)
 	{
 		if (!runtime.Instance)
@@ -625,19 +656,16 @@ std::optional<std::shared_ptr<Scene>> Scene::FromFile(SceneParams sceneParams,
 		std::vector<TriggerTake> takes;
 		std::vector<std::pair<std::shared_ptr<base::TriggerPunchTarget>,
 			std::shared_ptr<base::TriggerPunchTarget>>> pins;
-		const auto station = std::dynamic_pointer_cast<Station>(runtime.Receiver);
-		const auto restoredTargets = station ? station->GetLoopTakeSnapshot() :
-			std::vector<std::shared_ptr<LoopTake>>{};
-		const auto resolve = [&restoredTargets](const std::string& id) -> std::shared_ptr<base::TriggerPunchTarget> {
-			const auto found = std::find_if(restoredTargets.begin(), restoredTargets.end(),
-				[&id](const auto& take) { return take && take->Id() == id; });
-			return found == restoredTargets.end() ? nullptr : *found;
-		};
 		takes.reserve(saved->Takes.size());
 		for (const auto& take : saved->Takes)
 		{
-			takes.push_back({ static_cast<decltype(TriggerTake{}.SourceType)>(take.SourceType), take.SourceTakeId, take.TargetTakeId });
-			pins.emplace_back(resolve(take.SourceTakeId), resolve(take.TargetTakeId));
+			const auto source = resolveHistory(take.SourceTakeId);
+			const auto target = resolveHistory(take.TargetTakeId);
+			// The recorded target's station owns ditch. An absent historical
+			// target never guesses the rig's newly selected station.
+			takes.push_back({ static_cast<decltype(TriggerTake{}.SourceType)>(take.SourceType),
+				take.SourceTakeId, take.TargetTakeId, target.first });
+			pins.emplace_back(source.second, target.second);
 		}
 		runtime.Instance->RestoreTakes(std::move(takes), std::move(pins));
 	}
@@ -723,7 +751,7 @@ void Scene::Draw(DrawContext& ctx)
 			_hudPanel->SetAudioInputPeak(channel, _audioEngine->GetAdcPeak(channel), numSamps);
 
 		unsigned int midiInput = 0u;
-		for (const auto& deviceName : _midiState.load(std::memory_order_acquire)->ConnectedNames)
+		for (const auto& deviceName : _midiState.load(std::memory_order_acquire)->ConnectedIds)
 		{
 			_hudPanel->SetMidiInputPeak(midiInput++,
 				_inputSubsystem->ConsumeMidiInputPeak(deviceName),
@@ -1942,15 +1970,13 @@ void Scene::_RefreshMidiIfNeeded()
 		return;
 	auto result = _inputSubsystem->RefreshMidi(_audioEngine->GetMidiClockAnchor_Ref(),
 		_audioEngine->GetStreamParams().SampleRate, inventory);
-	std::vector<std::string> connectedNames;
-	for (const auto& endpoint : result.Connected)
-		if (std::find(connectedNames.begin(), connectedNames.end(), endpoint.Name) == connectedNames.end())
-			connectedNames.push_back(endpoint.Name);
-	_ConfirmMidiConnectionChange(previous->Connection, result, connectedNames);
-	_midiState.store(std::make_shared<const MidiState>(MidiState{ std::move(result), connectedNames }),
+	const auto connectedIds = result.ConnectedRegistryIds;
+	const auto connectedSerialIds = _inputSubsystem->ConnectedSerialDeviceIds();
+	_ConfirmMidiConnectionChange(previous->Connection, result, connectedIds);
+	_midiState.store(std::make_shared<const MidiState>(MidiState{ std::move(result), connectedIds, connectedSerialIds }),
 		std::memory_order_release);
 	const auto inputs = _audioEngine->GetStreamParams().NumInputChannels;
-	if (const auto runtime = _rigCoordinator.RefreshRuntimeAvailability(inputs, connectedNames))
+	if (const auto runtime = _rigCoordinator.RefreshRuntimeAvailability(inputs, connectedIds, connectedSerialIds))
 	{
 		_audioEngine->PublishPendingRigSnapshot(runtime);
 		_inputSubsystem->PublishRigInputDispatch(runtime);
@@ -1958,16 +1984,16 @@ void Scene::_RefreshMidiIfNeeded()
 		if (_hudPanel)
 		{
 			std::scoped_lock sceneLock(_sceneMutex);
-			_hudPanel->SetRoutingConfig(inputs, connectedNames, *runtime);
+			_hudPanel->SetRoutingConfig(inputs, connectedIds, *runtime);
 		}
 	}
 }
 
 void Scene::_ConfirmMidiConnectionChange(const midi::MidiConnectionResult& previous,
-	const midi::MidiConnectionResult& refreshed, const std::vector<std::string>& connectedNames)
+	const midi::MidiConnectionResult& refreshed, const std::vector<std::string>& connectedIds)
 {
 	if (!refreshed.Inventory.Error.empty()) return;
-	const auto lostNames = midi::MidiDevice::LostConnectedInputNames(previous, refreshed);
+	const auto lostIds = midi::MidiDevice::LostConnectedInputIds(previous, refreshed);
 	std::scoped_lock lock(_sceneMutex);
 	const auto accepted = _rigCoordinator.Accepted();
 	if (!accepted) return;
@@ -1975,16 +2001,23 @@ void Scene::_ConfirmMidiConnectionChange(const midi::MidiConnectionResult& previ
 	{
 		if (!runtime.Instance || runtime.RigTriggerIndex >= accepted->Rig.Triggers.size()) continue;
 		const auto& configured = accepted->Rig.Triggers[runtime.RigTriggerIndex];
-		const bool activationLost = configured.MidiTrigger &&
-			std::find(lostNames.begin(), lostNames.end(), configured.MidiTrigger->Device) != lostNames.end();
-		const bool captureLost = configured.MidiInputs == io::RigFile::Trigger::MidiInputMode::Selected &&
-			std::any_of(configured.MidiInputDevices.begin(), configured.MidiInputDevices.end(),
-				[&lostNames](const std::string& name) { return std::find(lostNames.begin(), lostNames.end(), name) != lostNames.end(); });
-		runtime.Instance->ConfirmMidiAvailabilityOnJob(connectedNames, lostNames, activationLost, captureLost);
+		const auto isLost = [&lostIds](const std::string& id) {
+			return std::find(lostIds.begin(), lostIds.end(), id) != lostIds.end();
+		};
+		const auto lostControl = [&](const std::vector<io::RigFile::Binding>& bindings) {
+			return std::any_of(bindings.begin(), bindings.end(), [&](const io::RigFile::Binding& binding) {
+				return binding.Source == io::RigFile::BindingSource::Midi && isLost(binding.Device);
+			});
+		};
+		const bool controlLost = lostControl(configured.ControlBindings.Activate) ||
+			lostControl(configured.ControlBindings.Ditch);
+		const bool captureLost = std::any_of(configured.CaptureInputs.Midi.begin(),
+			configured.CaptureInputs.Midi.end(), isLost);
+		runtime.Instance->ConfirmMidiAvailabilityOnJob(connectedIds, lostIds, controlLost, captureLost);
 	}
 	for (const auto& station : _stations)
 		if (station)
-			for (const auto& name : lostNames) station->FlushLiveHeldMidiNotesForDevice(name);
+			for (const auto& name : lostIds) station->FlushLiveHeldMidiNotesForDevice(name);
 }
 
 void Scene::_PumpSourceLossRecovery()
@@ -2130,7 +2163,7 @@ void Scene::_AdvanceRigPublication()
 		std::scoped_lock lock(_sceneMutex);
 		unsigned int audioInputs = _audioEngine->GetStreamParams().NumInputChannels;
 		const auto midiState = _midiState.load(std::memory_order_acquire);
-		_hudPanel->SetRoutingConfig(audioInputs, midiState->ConnectedNames, *pending);
+		_hudPanel->SetRoutingConfig(audioInputs, midiState->ConnectedIds, *pending);
 	}
 	_inputSubsystem->OpenRigTriggerInput(pending->Revision);
 }
@@ -2146,6 +2179,8 @@ RigCoordinator::EditResult Scene::RequestRigEdit(const io::RigFile& candidateRig
 	}
 	const auto accepted = _rigCoordinator.Accepted();
 	const auto result = _rigCoordinator.SubmitCandidate(candidateRig);
+	if (result == RigCoordinator::EditResult::ReinitialisationRequired)
+		_quantisationFeedback = "Device setup and defaults require scene reinitialisation; reload or restart with the updated rig.";
 	if (result == RigCoordinator::EditResult::Pending)
 	{
 		const auto staged = _rigCoordinator.Staged();
@@ -2396,8 +2431,24 @@ void Scene::InitAudio(bool generatedRig, const audio::AsioInventory* inventory)
 	}
 	const auto midiState = _midiState.load(std::memory_order_acquire);
 	const auto actualInputs = started ? _audioEngine->GetStreamParams().NumInputChannels : 0u;
-	_ConfirmMidiConnectionChange(previousMidi->Connection, midiState->Connection, midiState->ConnectedNames);
-	if (const auto runtime = _rigCoordinator.RefreshRuntimeAvailability(actualInputs, midiState->ConnectedNames))
+	_ConfirmMidiConnectionChange(previousMidi->Connection, midiState->Connection, midiState->ConnectedIds);
+	std::optional<io::UserConfig::AudioSettings> confirmedGeneratedAudio;
+	if (started && generatedRig)
+	{
+		const auto actual = _audioEngine->GetStreamParams();
+		auto settings = _userConfig.Audio;
+		settings.Name = actual.Name;
+		settings.SampleRate = actual.SampleRate;
+		settings.BufSize = actual.BufSize;
+		settings.NumBuffers = actual.NumBuffers;
+		settings.LatencyIn = actual.InputLatency;
+		settings.LatencyOut = actual.OutputLatency;
+		settings.NumChannelsIn = actual.NumInputChannels;
+		settings.NumChannelsOut = actual.NumOutputChannels;
+		confirmedGeneratedAudio = std::move(settings);
+	}
+	if (const auto runtime = _rigCoordinator.RefreshRuntimeAvailability(actualInputs, midiState->ConnectedIds,
+		midiState->ConnectedSerialIds, std::move(confirmedGeneratedAudio)))
 	{
 		_audioEngine->PublishPendingRigSnapshot(runtime);
 		_inputSubsystem->PublishRigInputDispatch(runtime);
@@ -2405,7 +2456,7 @@ void Scene::InitAudio(bool generatedRig, const audio::AsioInventory* inventory)
 		if (_hudPanel)
 		{
 			std::scoped_lock lock(_sceneMutex);
-			_hudPanel->SetRoutingConfig(actualInputs, midiState->ConnectedNames, *runtime);
+			_hudPanel->SetRoutingConfig(actualInputs, midiState->ConnectedIds, *runtime);
 		}
 	}
 

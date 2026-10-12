@@ -225,25 +225,25 @@ std::optional<UserConfig::LoopSettings> UserConfig::LoopSettings::FromJson(Json:
 std::optional<UserConfig::TriggerSettings> UserConfig::TriggerSettings::FromJson(Json::JsonPart json)
 {
 	unsigned int preDelay = constants::DefaultPreDelaySamps;
-	unsigned int debounceSamps = constants::DefaultDebounceSamps;
+	unsigned int debounceMs = constants::DefaultDebounceMs;
 
-	auto iter = json.KeyValues.find("preDelay");
+	auto iter = json.KeyValues.find("preDelaySamps");
 	if (iter != json.KeyValues.end())
 	{
-		if (json.KeyValues["preDelay"].index() == 2)
-			preDelay = std::get<unsigned long>(json.KeyValues["preDelay"]);
+		if (json.KeyValues["preDelaySamps"].index() == 2)
+			preDelay = std::get<unsigned long>(json.KeyValues["preDelaySamps"]);
 	}
 
-	iter = json.KeyValues.find("debounceSamps");
+	iter = json.KeyValues.find("debounceMs");
 	if (iter != json.KeyValues.end())
 	{
-		if (json.KeyValues["debounceSamps"].index() == 2)
-			debounceSamps = std::get<unsigned long>(json.KeyValues["debounceSamps"]);
+		if (json.KeyValues["debounceMs"].index() == 2)
+			debounceMs = std::get<unsigned long>(json.KeyValues["debounceMs"]);
 	}
 
 	TriggerSettings trig;
-	trig.PreDelay = preDelay;
-	trig.DebounceSamps = debounceSamps;
+	trig.PreDelaySamps = preDelay;
+	trig.DebounceMs = debounceMs;
 	return trig;
 }
 
@@ -391,9 +391,9 @@ std::optional<UserConfig::SerialConfig> UserConfig::SerialConfig::FromJson(Json:
 
 // How much to (further) delay input signal from ADC, in samples
 unsigned int UserConfig::AdcBufferDelay(unsigned int inLatency) const {
-	return inLatency > Trigger.PreDelay + constants::MaxLoopFadeSamps ?
+	return inLatency > Trigger.PreDelaySamps + constants::MaxLoopFadeSamps ?
 		0 :
-		Trigger.PreDelay + constants::MaxLoopFadeSamps - inLatency;
+		Trigger.PreDelaySamps + constants::MaxLoopFadeSamps - inLatency;
 }
 
 // How long to continue recording after trigger to end loop recording, in samples
@@ -414,7 +414,7 @@ unsigned long UserConfig::LoopPlayPos(int error,
 	unsigned int outLatency) const {
 	auto loopStart = (unsigned long)constants::MaxLoopFadeSamps;
 	auto fadeSamps = 0u;// Loop.FadeSamps;
-	auto playPos = (loopStart - fadeSamps) + Trigger.PreDelay + outLatency;
+	auto playPos = (loopStart - fadeSamps) + Trigger.PreDelaySamps + outLatency;
 	auto bufSize = loopLength + loopStart;
 	
 	if (loopLength > 0)
@@ -468,7 +468,7 @@ unsigned long UserConfig::LoopPlayPos(int error,
 
 unsigned int UserConfig::TriggerLoopAlignmentSamps() const
 {
-	return Trigger.PreDelay + constants::MaxLoopFadeSamps;
+	return Trigger.PreDelaySamps + constants::MaxLoopFadeSamps;
 }
 
 long UserConfig::OverdubSourceReadOffset(unsigned int outLatency) const

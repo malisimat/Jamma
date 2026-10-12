@@ -262,7 +262,7 @@ namespace audio
 			{
 				auto& trigger = snapshot->Triggers[routeChange.CandidateIndex];
 				trigger.Instance->ApplyCaptureRouting(trigger.Receiver, trigger.InputChannels,
-					trigger.MidiInputDevices, trigger.MidiInputMode,
+					trigger.MidiInputDevices,
 					trigger.OverdubMixer, trigger.OverdubWriter);
 			}
 		}
@@ -288,7 +288,9 @@ namespace audio
 		for (const auto& retired : candidate->TriggerReplacementChecks)
 		{
 			const auto& trigger = retired.AcceptedInstance;
-			if (trigger && !trigger->CanEditRouting())
+			const bool canTransition = !trigger || (retired.ReplacementInstance
+				? trigger->CanApplyCaptureRouting() : trigger->CanEditRouting());
+			if (!canTransition)
 			{
 				_rejectedRigRevision.store(candidateRevision, std::memory_order_release);
 				return;
