@@ -212,6 +212,9 @@
     <ClInclude Include="src\graphics\Shader.h">
       <Filter>src\resources</Filter>
     </ClInclude>
+    <ClInclude Include="src\engine\PerformanceGroups.h">
+      <Filter>src\engine</Filter>
+    </ClInclude>
     <ClInclude Include="src\engine\Scene.h">
       <Filter>src\engine</Filter>
     </ClInclude>

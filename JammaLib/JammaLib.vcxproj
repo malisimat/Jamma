@@ -331,6 +331,7 @@
     <ClInclude Include="lib\opengl\gl\wglew.h" />
     <ClInclude Include="lib\opengl\gl\wglext.h" />
         <ClInclude Include="src\engine\Scene.h" />
+        <ClInclude Include="src\engine\PerformanceGroups.h" />
     <ClInclude Include="src\audio\AudioHost.h" />
     <ClInclude Include="src\audio\NinjamMetronome.h" />
     <ClInclude Include="src\io\IoInputSubsystem.h" />
