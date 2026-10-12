@@ -43,6 +43,47 @@ public:
 	std::optional<actions::TouchAction> LastTouch;
 };
 
+class FunctionKeyScene final : public Scene
+{
+public:
+    FunctionKeyScene() : Scene(SceneParams(base::DrawableParams(),
+        base::MoveableParams(), base::SizeableParams({ 640u, 480u })), {}) {}
+    actions::ActionResult OnAction(actions::KeyAction action) override
+    {
+        Keys.push_back(action);
+        return actions::ActionResult::NoAction();
+    }
+    std::vector<actions::KeyAction> Keys;
+};
+
+TEST(Window, FunctionVirtualKeysAndSystemTransitionsReachSceneUnchanged)
+{
+    FunctionKeyScene scene;
+    ResourceLib resourceLib;
+    Window window(scene, resourceLib);
+    const auto host = CreateWindowExW(0, L"STATIC", L"", 0, 0, 0, 0, 0,
+        HWND_MESSAGE, nullptr, GetModuleHandleW(nullptr), nullptr);
+    ASSERT_NE(host, nullptr);
+    SetWindowLongPtrW(host, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(&window));
+    for (unsigned int key = VK_F1; key <= VK_F9; ++key)
+        for (const bool system : { false, true })
+        {
+            scene.Keys.clear();
+            Window::WindowProcedure(host, system ? WM_SYSKEYDOWN : WM_KEYDOWN, key, 0);
+            Window::WindowProcedure(host, system ? WM_SYSKEYDOWN : WM_KEYDOWN, key,
+                static_cast<LPARAM>(1u << 30u));
+            Window::WindowProcedure(host, system ? WM_SYSKEYUP : WM_KEYUP, key, 0);
+            ASSERT_EQ(scene.Keys.size(), 2u);
+            EXPECT_EQ(scene.Keys[0].KeyChar, key);
+            EXPECT_EQ(scene.Keys[1].KeyChar, key);
+            EXPECT_EQ(scene.Keys[0].KeyActionType, actions::KeyAction::KEY_DOWN);
+            EXPECT_EQ(scene.Keys[1].KeyActionType, actions::KeyAction::KEY_UP);
+            EXPECT_EQ(scene.Keys[0].IsSystem, system);
+            EXPECT_EQ(scene.Keys[1].IsSystem, system);
+        }
+    DestroyWindow(host);
+}
+
 TEST(Window, LostCaptureSendsZeroButtonMoveExactlyOnce)
 {
 	CaptureLossScene scene;

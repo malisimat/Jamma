@@ -208,23 +208,23 @@ TEST_F(PerformanceGroupServiceTest, StationReorderAndDeletionNeverRedirectRecall
     EXPECT_TRUE(replacementTake->IsMuted());
 }
 
-TEST_F(PerformanceGroupServiceTest, DigitCommandsConsumeAltTransitionsAndRejectAmbiguousModifiers)
+TEST_F(PerformanceGroupServiceTest, FunctionKeyCommandsConsumeAltTransitionsAndRejectAmbiguousModifiers)
 {
     engine::PerformanceGroupController controller;
     auto publish = [](auto) {};
     actions::KeyAction action;
-    action.KeyChar = 55u;
+    action.KeyChar = 112u;
     action.Modifiers = base::Action::MODIFIER_NONE;
     action.KeyActionType = actions::KeyAction::KEY_DOWN;
     EXPECT_TRUE(controller.HandleKey(action, {}, engine::GroupTargetKind::Take, publish));
-    EXPECT_NE(controller.Groups().Mute.Get(7u), nullptr);
+    EXPECT_NE(controller.Groups().Mute.Get(1u), nullptr);
     action.KeyActionType = actions::KeyAction::KEY_UP;
     EXPECT_TRUE(controller.ConsumeRelease(action));
     action.Modifiers = base::Action::MODIFIER_ALT;
     action.IsSystem = true;
     action.KeyActionType = actions::KeyAction::KEY_DOWN;
     EXPECT_TRUE(controller.HandleKey(action, {}, engine::GroupTargetKind::Take, publish));
-    EXPECT_EQ(controller.Groups().Mute.Get(7u), nullptr);
+    EXPECT_EQ(controller.Groups().Mute.Get(1u), nullptr);
     action.KeyActionType = actions::KeyAction::KEY_UP;
     EXPECT_TRUE(controller.ConsumeRelease(action));
     action.Modifiers = static_cast<base::Action::Modifiers>(base::Action::MODIFIER_ALT | base::Action::MODIFIER_SHIFT);
@@ -240,7 +240,7 @@ TEST_F(PerformanceGroupServiceTest, ContextualHeldPressCannotActivateOnRepeatAnd
     engine::PerformanceGroupController controller;
     auto publish = [](auto) {};
     actions::KeyAction action;
-    action.KeyChar = 49u;
+    action.KeyChar = 112u;
     action.Modifiers = base::Action::MODIFIER_NONE;
     action.KeyActionType = actions::KeyAction::KEY_DOWN;
     controller.BlockContextualPress(action);
@@ -256,7 +256,7 @@ TEST_F(PerformanceGroupServiceTest, PluginFocusLossRetainsGroupReleaseOwnership)
     engine::PerformanceGroupController controller;
     auto publish = [](auto) {};
     actions::KeyAction key;
-    key.KeyChar = 49u;
+    key.KeyChar = 112u;
     key.KeyActionType = actions::KeyAction::KEY_DOWN;
     ASSERT_TRUE(controller.HandleKey(key, {}, engine::GroupTargetKind::Take, publish));
     controller.ResetKeys(); // Synchronous focus loss during plugin recall.
@@ -270,7 +270,7 @@ TEST_F(PerformanceGroupServiceTest, FreshPressAfterLostGroupReleaseDoesNotStealC
     engine::PerformanceGroupController controller;
     auto publish = [](auto) {};
     actions::KeyAction key;
-    key.KeyChar = 49u;
+    key.KeyChar = 112u;
     key.KeyActionType = actions::KeyAction::KEY_DOWN;
     ASSERT_TRUE(controller.HandleKey(key, {}, engine::GroupTargetKind::Take, publish));
     controller.ResetKeys();
@@ -286,4 +286,150 @@ TEST_F(PerformanceGroupServiceTest, FreshPressAfterLostGroupReleaseDoesNotStealC
     EXPECT_FALSE(controller.HandleKey(key, {}, engine::GroupTargetKind::Take, publish));
     key.KeyActionType = actions::KeyAction::KEY_UP;
     EXPECT_FALSE(controller.ConsumeRelease(key));
+}
+
+TEST_F(PerformanceGroupServiceTest, EmptyRowHiddenFunctionKeysAreConsumedWithoutCreatingOrPublishing)
+{
+    auto station = Station("station-a");
+    auto take = station->AddTake();
+    engine::PerformanceGroupController controller;
+    unsigned int publications = 0u;
+    auto publish = [&publications](auto) { ++publications; };
+    for (const auto modifiers : { base::Action::MODIFIER_NONE, base::Action::MODIFIER_SHIFT,
+        base::Action::MODIFIER_ALT })
+        for (unsigned int keyCode = 113u; keyCode <= 120u; ++keyCode)
+        {
+            actions::KeyAction key;
+            key.KeyChar = keyCode;
+            key.Modifiers = modifiers;
+            key.KeyActionType = actions::KeyAction::KEY_DOWN;
+            EXPECT_TRUE(controller.HandleKey(key, { station }, engine::GroupTargetKind::Take, publish));
+            EXPECT_TRUE(controller.HandleKey(key, { station }, engine::GroupTargetKind::Take, publish));
+            controller.Pump({ station }, publish);
+            EXPECT_EQ(controller.Groups().Mute.VisibleSlots(), 0u);
+            EXPECT_FALSE(controller.Groups().Mute.ActiveSlot());
+            EXPECT_TRUE(controller.Error().empty());
+            EXPECT_FALSE(take->IsMuted());
+            key.KeyActionType = actions::KeyAction::KEY_UP;
+            EXPECT_TRUE(controller.ConsumeRelease(key));
+            EXPECT_FALSE(controller.ConsumeRelease(key));
+        }
+    EXPECT_EQ(publications, 0u);
+}
+
+TEST_F(PerformanceGroupServiceTest, FunctionKeysCreateNextPositionRecallOverwriteAndClear)
+{
+    auto station = Station("station-a");
+    auto take = station->AddTake();
+    engine::PerformanceGroupController controller;
+    unsigned int publications = 0u;
+    auto publish = [&publications](auto application) { ++publications; application->ApplyAudio(); };
+    actions::KeyAction key;
+    key.KeyChar = 112u;
+    key.KeyActionType = actions::KeyAction::KEY_DOWN;
+    ASSERT_TRUE(controller.HandleKey(key, { station }, engine::GroupTargetKind::Take, publish));
+    ASSERT_NE(controller.Groups().Mute.Get(1u), nullptr);
+    key.KeyActionType = actions::KeyAction::KEY_UP;
+    ASSERT_TRUE(controller.ConsumeRelease(key));
+    key.KeyChar = 113u;
+    key.KeyActionType = actions::KeyAction::KEY_DOWN;
+    ASSERT_TRUE(controller.HandleKey(key, { station }, engine::GroupTargetKind::Take, publish));
+    ASSERT_NE(controller.Groups().Mute.Get(2u), nullptr);
+    key.KeyActionType = actions::KeyAction::KEY_UP;
+    ASSERT_TRUE(controller.ConsumeRelease(key));
+    take->SetGroupMutedAudio(true);
+    key.KeyActionType = actions::KeyAction::KEY_DOWN;
+    ASSERT_TRUE(controller.HandleKey(key, { station }, engine::GroupTargetKind::Take, publish));
+    EXPECT_FALSE(take->IsMuted());
+    EXPECT_EQ(publications, 1u);
+    key.KeyActionType = actions::KeyAction::KEY_UP;
+    ASSERT_TRUE(controller.ConsumeRelease(key));
+    take->SetGroupMutedAudio(true);
+    key.Modifiers = base::Action::MODIFIER_SHIFT;
+    key.KeyActionType = actions::KeyAction::KEY_DOWN;
+    ASSERT_TRUE(controller.HandleKey(key, { station }, engine::GroupTargetKind::Take, publish));
+    const auto& overwritten = controller.Groups().Mute.Get(2u)->Targets;
+    ASSERT_EQ(overwritten.size(), 2u);
+    EXPECT_EQ(overwritten[1].Target.Kind, engine::GroupTargetKind::Take);
+    EXPECT_TRUE(overwritten[1].Muted);
+    EXPECT_EQ(publications, 1u);
+    key.KeyActionType = actions::KeyAction::KEY_UP;
+    ASSERT_TRUE(controller.ConsumeRelease(key));
+    key.Modifiers = base::Action::MODIFIER_ALT;
+    key.IsSystem = true;
+    key.KeyActionType = actions::KeyAction::KEY_DOWN;
+    ASSERT_TRUE(controller.HandleKey(key, { station }, engine::GroupTargetKind::Take, publish));
+    EXPECT_EQ(controller.Groups().Mute.Get(2u), nullptr);
+    EXPECT_TRUE(take->IsMuted());
+    EXPECT_EQ(publications, 1u);
+}
+
+TEST_F(PerformanceGroupServiceTest, SparseFunctionKeyRecallAndInteriorCreationPreserveLowestHoleAdd)
+{
+    engine::PerformanceGroupController controller;
+    controller.Groups().Mute.Store(9u, {});
+    unsigned int publications = 0u;
+    auto publish = [&publications](auto) { ++publications; };
+    actions::KeyAction key;
+    key.KeyChar = 120u;
+    key.KeyActionType = actions::KeyAction::KEY_DOWN;
+    ASSERT_TRUE(controller.HandleKey(key, {}, engine::GroupTargetKind::Take, publish));
+    EXPECT_EQ(publications, 1u);
+    EXPECT_EQ(controller.Groups().Mute.ActiveSlot(), 9u);
+    key.KeyChar = 115u;
+    ASSERT_TRUE(controller.HandleKey(key, {}, engine::GroupTargetKind::Take, publish));
+    EXPECT_NE(controller.Groups().Mute.Get(4u), nullptr);
+    EXPECT_EQ(controller.Groups().Mute.Get(1u), nullptr);
+    EXPECT_EQ(controller.Groups().Mute.Get(2u), nullptr);
+    ASSERT_TRUE(controller.Execute(false, engine::GroupCommand::Add, 0u, {}, engine::GroupTargetKind::Take, publish));
+    EXPECT_NE(controller.Groups().Mute.Get(1u), nullptr);
+    EXPECT_EQ(controller.Groups().Mute.Get(2u), nullptr);
+}
+
+TEST_F(PerformanceGroupServiceTest, HiddenFunctionKeyAndMissingAltPreservePendingRecallAndFeedback)
+{
+    auto station = Station("station-a");
+    auto take = station->AddTake();
+    take->SetGroupSelected(true);
+    engine::PerformanceGroupController controller;
+    std::shared_ptr<const engine::GroupMuteApplication> pending;
+    auto publish = [&pending](auto application) { pending = std::move(application); };
+    actions::KeyAction key;
+    key.KeyChar = 8u;
+    key.KeyActionType = actions::KeyAction::KEY_DOWN;
+    ASSERT_TRUE(controller.HandleKey(key, { station }, engine::GroupTargetKind::Take, publish));
+    const auto original = pending;
+    key.KeyChar = 113u;
+    ASSERT_TRUE(controller.HandleKey(key, { station }, engine::GroupTargetKind::Take, publish));
+    controller.Pump({ station }, publish);
+    EXPECT_EQ(pending, original);
+    key.KeyChar = 112u;
+    key.Modifiers = base::Action::MODIFIER_ALT;
+    ASSERT_TRUE(controller.HandleKey(key, { station }, engine::GroupTargetKind::Take, publish));
+    EXPECT_EQ(pending, original);
+    key.KeyChar = 8u;
+    key.KeyActionType = actions::KeyAction::KEY_UP;
+    ASSERT_TRUE(controller.ConsumeRelease(key));
+    key.Modifiers = base::Action::MODIFIER_NONE;
+    key.KeyActionType = actions::KeyAction::KEY_DOWN;
+    ASSERT_TRUE(controller.HandleKey(key, { station }, engine::GroupTargetKind::Take, publish));
+    EXPECT_FALSE(pending->Takes[0].Muted);
+    EXPECT_EQ(pending->Version, original->Version + 1u);
+}
+
+TEST_F(PerformanceGroupServiceTest, DigitsAndOtherFunctionKeysRemainAvailableOnBothTransitions)
+{
+    engine::PerformanceGroupController controller;
+    auto publish = [](auto) { FAIL() << "Unexpected group publication"; };
+    for (const unsigned int keyCode : { 48u, 49u, 50u, 51u, 52u, 53u, 54u, 55u, 56u,
+        57u, 121u, 122u, 123u })
+    {
+        actions::KeyAction key;
+        key.KeyChar = keyCode;
+        key.KeyActionType = actions::KeyAction::KEY_DOWN;
+        EXPECT_FALSE(controller.HandleKey(key, {}, engine::GroupTargetKind::Take, publish));
+        key.KeyActionType = actions::KeyAction::KEY_UP;
+        EXPECT_FALSE(controller.ConsumeRelease(key));
+    }
+    EXPECT_EQ(controller.Groups().Mute.VisibleSlots(), 0u);
 }

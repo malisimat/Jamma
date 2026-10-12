@@ -16,9 +16,9 @@ bool PerformanceGroupController::HandleKey(const actions::KeyAction& action,
     const PerformanceGroupService::Stations& stations, GroupTargetKind depth, const Publish& publish)
 {
     if (action.KeyActionType != actions::KeyAction::KEY_DOWN || action.KeyChar >= _held.size()) return false;
-    const bool number = action.KeyChar >= 49u && action.KeyChar <= 57u;
+    const bool groupKey = action.KeyChar >= 112u && action.KeyChar <= 120u;
     const bool backspace = action.KeyChar == 8u;
-    if (!number && !backspace) return false;
+    if (!groupKey && !backspace) return false;
     if (_held[action.KeyChar]) return _consumed[action.KeyChar];
     _held[action.KeyChar] = true;
     _consumed[action.KeyChar] = false;
@@ -57,7 +57,16 @@ bool PerformanceGroupController::HandleKey(const actions::KeyAction& action,
         else if (modifiers == base::Action::MODIFIER_SHIFT) command = GroupCommand::Store;
         else if (modifiers == base::Action::MODIFIER_ALT) command = GroupCommand::Clear;
         else return false;
-        Execute(false, command, action.KeyChar - 48u, stations, depth, publish);
+        const auto slot = action.KeyChar - 111u;
+        // Keyboard creation mirrors the visible row plus its next add position.
+        // Reject before Execute so a no-op cannot cancel pending work or feedback.
+        const bool exists = _groups.Mute.Get(slot) != nullptr;
+        if (!exists && (command == GroupCommand::Clear || slot > _groups.Mute.VisibleSlots() + 1u))
+        {
+            _consumed[action.KeyChar] = true;
+            return true;
+        }
+        Execute(false, command, slot, stations, depth, publish);
     }
     _consumed[action.KeyChar] = true;
     return true;

@@ -8,6 +8,7 @@
 #include "vst/ReservedMidiEvents.h"
 #include "engine/LoopTake.h"
 #include "engine/Station.h"
+#include "engine/PerformanceGroupController.h"
 #include "vst/VstEditorWindowManager.h"
 #include <functional>
 
@@ -425,6 +426,74 @@ TEST(VstStaging, GroupPluginIdentityDoesNotFollowReplacementPosition)
  EXPECT_EQ(replacement.StateId(), "persisted-plugin");
 }
 
+
+class PendingGroupCapturePlugin final : public StateGatePlugin
+{
+public:
+ mutable unsigned int CaptureCalls = 0u;
+ std::vector<std::uint8_t> GetState() const override
+ {
+  ++CaptureCalls;
+  return StateGatePlugin::GetState();
+ }
+};
+
+TEST(VstStaging, RejectedGroupKeysPreserveBusyCaptureAndErrorFeedback)
+{
+ engine::StationParams params;
+ params.Id = "pending-capture-station";
+ params.Size = {100u, 100u};
+ auto station = std::make_shared<engine::Station>(params,
+  engine::Station::GetMixerParams(params.Size, MergeMixBehaviourParams{}));
+ auto plugin = std::make_shared<PendingGroupCapturePlugin>();
+ JobAction load;
+ load.JobActionType = JobAction::JOB_LOADVST;
+ load.VstPath = L"pending-capture.vst3";
+ load.PreInitPlugin = plugin;
+ station->OnAction(load);
+ station->CommitChanges();
+ ASSERT_EQ(station->GetVstPlugin(0u), plugin);
+ engine::PerformanceGroupController controller;
+ auto publish = [](auto) { FAIL() << "Store/rejected key must not publish audio work"; };
+ actions::KeyAction key;
+ key.KeyChar = 112u;
+ key.KeyActionType = actions::KeyAction::KEY_DOWN;
+ {
+  vst::IVstPlugin::PluginCallGuard busy(*plugin);
+  ASSERT_TRUE(controller.HandleKey(key, {station}, engine::GroupTargetKind::Take, publish));
+  EXPECT_EQ(controller.Groups().Mute.Get(1u), nullptr);
+  key.KeyChar = 113u;
+  ASSERT_TRUE(controller.HandleKey(key, {station}, engine::GroupTargetKind::Take, publish));
+  key.KeyChar = 114u;
+  key.Modifiers = base::Action::MODIFIER_SHIFT;
+  ASSERT_TRUE(controller.HandleKey(key, {station}, engine::GroupTargetKind::Take, publish));
+  key.KeyChar = 115u;
+  key.Modifiers = base::Action::MODIFIER_ALT;
+  ASSERT_TRUE(controller.HandleKey(key, {station}, engine::GroupTargetKind::Take, publish));
+ }
+ controller.Pump({station}, publish);
+ ASSERT_NE(controller.Groups().Mute.Get(1u), nullptr);
+ EXPECT_EQ(controller.Groups().Mute.ActiveSlot(), 1u);
+ EXPECT_EQ(controller.Groups().Mute.Get(2u), nullptr);
+ EXPECT_EQ(plugin->CaptureCalls, 1u);
+ // Exhaust an explicit retrying store and ensure a rejected press keeps its
+ // diagnostic as well as the active slot, instead of entering Execute.
+ {
+  vst::IVstPlugin::PluginCallGuard busy(*plugin);
+  ASSERT_TRUE(controller.Execute(false, engine::GroupCommand::Store, 1u,
+   {station}, engine::GroupTargetKind::Take, publish));
+  for (unsigned int attempt = 0u; attempt < 120u; ++attempt)
+   controller.Pump({station}, publish);
+ }
+ const auto error = controller.Error();
+ ASSERT_FALSE(error.empty());
+ key.KeyChar = 120u;
+ key.Modifiers = base::Action::MODIFIER_NONE;
+ ASSERT_TRUE(controller.HandleKey(key, {station}, engine::GroupTargetKind::Take, publish));
+ EXPECT_EQ(controller.Error(), error);
+ EXPECT_EQ(controller.Groups().Mute.ActiveSlot(), 1u);
+ EXPECT_EQ(plugin->CaptureCalls, 1u);
+}
 
 class RaceStateGatePlugin : public StateGatePlugin
 {

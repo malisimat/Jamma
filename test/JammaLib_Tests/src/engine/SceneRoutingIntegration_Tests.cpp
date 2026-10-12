@@ -566,16 +566,16 @@ TEST_F(SceneRoutingIntegrationTest, PluginFocusLossDefersSceneEntryUntilStateCal
     DestroyWindow(host);
 }
 
-TEST_F(SceneRoutingIntegrationTest, GroupDigitAndFocusLossDoNotReachConfiguredTrigger)
+TEST_F(SceneRoutingIntegrationTest, GroupFunctionKeyAndFocusLossDoNotReachConfiguredTrigger)
 {
     auto triggerConfig = Trigger("Record", "Keys");
-    triggerConfig.TriggerPairs.push_back({ 49u, 49u, 50u, 50u });
+    triggerConfig.TriggerPairs.push_back({ 112u, 112u, 113u, 113u });
     auto scene = FreshScene({ Station("Keys") }, { triggerConfig });
     ASSERT_TRUE(scene);
     const auto rig = scene->AcceptedRigSnapshot();
     ASSERT_TRUE(rig && rig->Triggers.size() == 1u);
     actions::KeyAction key;
-    key.KeyChar = 49u;
+    key.KeyChar = 112u;
     key.KeyActionType = actions::KeyAction::KEY_DOWN;
     EXPECT_TRUE(scene->OnAction(key).IsEaten);
     EXPECT_TRUE(scene->OnAction(key).IsEaten); // Suppressed repeat.
