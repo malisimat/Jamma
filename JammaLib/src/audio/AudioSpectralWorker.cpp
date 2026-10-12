@@ -134,6 +134,16 @@ void AudioSpectralWorker::RequestEditing(std::function<void()> work, std::functi
 	else _wake.notify_one();
 }
 
+void AudioSpectralWorker::CancelPendingEditing()
+{
+    std::shared_ptr<PresentationWork> displaced;
+    {
+        std::scoped_lock lock(_requestMutex);
+        displaced = std::exchange(_queuedEditing, nullptr);
+    }
+    if (displaced && displaced->Cancel) displaced->Cancel();
+    // Release cancelled map storage outside the mutex. Running jobs keep their immutable map.
+}
 void AudioSpectralWorker::RequestContent(const void* owner, std::function<void()> work)
 {
 	auto request = std::make_shared<ContentWork>(ContentWork{ owner, std::move(work) });

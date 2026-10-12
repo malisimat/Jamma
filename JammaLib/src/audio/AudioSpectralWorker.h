@@ -28,7 +28,8 @@ namespace audio
 		// closures run off audio; coalescing/teardown cancel outside the queue lock.
 		void RequestPresentation(std::function<void()> work, std::function<void()> cancel);
 		void RequestEditing(std::function<void()> work, std::function<void()> cancel);
-		void RequestContent(const void* owner, std::function<void()> work);
+		void CancelPendingEditing();
+        void RequestContent(const void* owner, std::function<void()> work);
 
 	private:
 		struct PresentationWork

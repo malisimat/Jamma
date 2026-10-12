@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <cmath>
 #include <new>
+#include <limits>
 
 using namespace audio;
 
@@ -121,14 +122,114 @@ bool AudioSpectralGainField::PaintOvalSegment(const AudioSpectralAnalysis& analy
 }
 
 bool AudioSpectralGainField::_PaintOvalSegment(const AudioSpectralAnalysis& analysis,
-	double startSeconds, double startHz, double endSeconds, double endHz,
-	double elapsedSeconds, bool increase, std::string& reason)
+    double startSeconds, double startHz, double endSeconds, double endHz,
+    double elapsedSeconds, bool increase, std::string& reason)
+{
+    if (_frameCount != analysis.Geometry.FrameCount || _binCount != analysis.Geometry.BinCount)
+    { reason = "Spectral gain field dimensions differ from the source"; return false; }
+    return _VisitOval(analysis, startSeconds, startHz, endSeconds, endHz, elapsedSeconds, reason,
+        [&](std::size_t frame, unsigned int bin, double exposure)
+        { return SetGainDb(frame, bin, GainDbAfterExposure(analysis, frame, bin, GainDb(frame, bin), exposure, increase)); });
+}
+
+float AudioSpectralGainField::GainDbAfterExposure(const AudioSpectralAnalysis& analysis, std::size_t frame,
+    unsigned int bin, float beforeDb, double exposureSeconds, bool increase) noexcept
+{
+    if (!(exposureSeconds > 0.0)) return beforeDb;
+    const auto magnitude = analysis.Magnitude(frame, bin);
+    if (!(magnitude > 0.0)) return beforeDb;
+    const auto originalDb = 20.0 * std::log10(magnitude);
+    const auto silent = beforeDb == AudioSpectralConfig::SilenceGainDb;
+    if (silent && !increase) return beforeDb;
+    const auto currentDb = silent ? AudioSpectralConfig::SpectralFloorDb : originalDb + beforeDb;
+    const auto delta = (std::min)(2400.0, exposureSeconds * AudioSpectralConfig::BrushDbPerSecond);
+    const auto targetDb = increase
+        ? (std::min)(AudioSpectralConfig::SpectralCeilingDb,
+            (std::max)(currentDb, AudioSpectralConfig::SpectralFloorDb) + delta)
+        : currentDb - delta;
+    return !increase && targetDb <= AudioSpectralConfig::SpectralFloorDb
+        ? AudioSpectralConfig::SilenceGainDb : static_cast<float>(targetDb - originalDb);
+}
+
+AudioSpectralGainField::ExposureMap::ExposureMap(std::size_t frames, unsigned int bins)
+    : _frames(frames), _bins(bins), _exposure(frames * bins, 0.0)
+{
+    _dirty.reserve(_exposure.size());
+}
+
+std::unique_ptr<AudioSpectralGainField::ExposureMap> AudioSpectralGainField::ExposureMap::Create(
+    std::size_t frames, unsigned int bins, std::string& reason)
+{
+    reason.clear();
+    if (!frames || !bins || frames > AudioSpectralConfig::MaxWorkingBytes / AudioSpectralConfig::InputMapBytesPerCoefficient / bins
+        || frames > (std::numeric_limits<std::uint32_t>::max)() / bins)
+    { reason = "Spectral input map exceeds its bounded dimensions"; return nullptr; }
+    try { return std::unique_ptr<ExposureMap>(new ExposureMap(frames, bins)); }
+    catch (const std::bad_alloc&) { reason = "Not enough memory for the spectral input map"; return nullptr; }
+}
+
+bool AudioSpectralGainField::ExposureMap::Accumulate(const AudioSpectralAnalysis& analysis,
+    double startSeconds, double startHz, double endSeconds, double endHz, double elapsedSeconds,
+    std::string& reason)
+{
+    reason.clear();
+    if (_frames != analysis.Geometry.FrameCount || _bins != analysis.Geometry.BinCount
+        )
+    { reason = "Spectral input map dimensions differ from the source"; return false; }
+    const auto changed = AudioSpectralGainField::_VisitOval(analysis, startSeconds, startHz,
+        endSeconds, endHz, elapsedSeconds, reason, [&](std::size_t frame, unsigned int bin, double exposure)
+    {
+        const auto index = static_cast<std::uint32_t>(frame * _bins + bin);
+        auto& value = _exposure[index];
+        if (value == 0.0) _dirty.push_back(index); // Full capacity was reserved at creation.
+        value = (std::min)(AudioSpectralConfig::MaximumBrushExposureSeconds, value + exposure); // Beyond 2400 dB, every finite input has saturated.
+        return true;
+    });
+    if (reason.empty()) _elapsed += elapsedSeconds;
+    return changed;
+}
+
+void AudioSpectralGainField::ExposureMap::Clear() noexcept
+{
+    for (const auto index : _dirty) _exposure[index] = 0.0;
+    _dirty.clear();
+    _elapsed = 0.0;
+}
+
+bool AudioSpectralGainField::ApplyExposureMap(const AudioSpectralAnalysis& analysis,
+    const ExposureMap& exposure, bool increase, std::string& reason)
+{
+    reason.clear();
+    if (_frameCount != exposure._frames || _binCount != exposure._bins
+        || _frameCount != analysis.Geometry.FrameCount || _binCount != analysis.Geometry.BinCount)
+    { reason = "Spectral input map dimensions differ from the gain field"; return false; }
+    try
+    {
+        auto candidate = *this;
+        bool changed = false;
+        for (const auto index : exposure._dirty)
+        {
+            const auto frame = index / _binCount;
+            const auto bin = index % _binCount;
+            changed |= candidate.SetGainDb(frame, bin, GainDbAfterExposure(analysis, frame, bin,
+                candidate.GainDb(frame, bin), exposure._exposure[index], increase));
+        }
+        if (changed) *this = std::move(candidate);
+        return changed;
+    }
+    catch (const std::bad_alloc&) { reason = "Not enough memory to apply the spectral input map"; return false; }
+}
+
+template<class Visitor>
+bool AudioSpectralGainField::_VisitOval(const AudioSpectralAnalysis& analysis,
+    double startSeconds, double startHz, double endSeconds, double endHz,
+    double elapsedSeconds, std::string& reason, Visitor&& visit)
 {
 	reason.clear();
 	if (!analysis.Source || !analysis.Source->Layout.IsValid() || !analysis.Transform.IsValid()
-		|| _frameCount != analysis.Geometry.FrameCount || _binCount != analysis.Geometry.BinCount
-		|| analysis.Coefficients.size() / _binCount != _frameCount
-		|| analysis.Coefficients.size() % _binCount != 0u
+		|| analysis.Geometry.FrameCount == 0u || analysis.Geometry.BinCount == 0u
+		|| analysis.Coefficients.size() / analysis.Geometry.BinCount != analysis.Geometry.FrameCount
+		|| analysis.Coefficients.size() % analysis.Geometry.BinCount != 0u
 		|| !std::isfinite(startSeconds) || !std::isfinite(endSeconds)
 		|| !std::isfinite(startHz) || !std::isfinite(endHz) || startHz <= 0.0 || endHz <= 0.0
 		|| !std::isfinite(elapsedSeconds) || elapsedSeconds < 0.0)
@@ -160,10 +261,10 @@ bool AudioSpectralGainField::_PaintOvalSegment(const AudioSpectralAnalysis& anal
 	const auto highHz = (std::min)(nyquist, (std::max)(startHz, endHz) * std::exp2(octaveRadius));
 	const auto firstBin = lowHz <= lower ? 0u
 		: static_cast<unsigned int>(std::ceil(lowHz * analysis.Transform.WindowSamps / sampleRate));
-	const auto lastBin = (std::min)(_binCount - 1u,
+	const auto lastBin = (std::min)(analysis.Geometry.BinCount - 1u,
 		static_cast<unsigned int>(std::floor(highHz * analysis.Transform.WindowSamps / sampleRate)));
 	bool changed = false;
-	for (std::size_t frame = 0u; frame < _frameCount; ++frame)
+	const auto visitFrame = [&](std::size_t frame)
 	{
 		auto time = std::fmod(analysis.Geometry.FrameCentre(frame, analysis.Transform.HopSamps) / sampleRate, period);
 		if (time < 0.0) time += period;
@@ -177,7 +278,7 @@ bool AudioSpectralGainField::_PaintOvalSegment(const AudioSpectralAnalysis& anal
 		}
 		for (unsigned int bin = firstBin; bin <= lastBin; ++bin)
 		{
-			const auto& original = analysis.Coefficients[frame * _binCount + bin];
+			const auto& original = analysis.Coefficients[frame * analysis.Geometry.BinCount + bin];
 			if (original.Real == 0.0f && original.Imaginary == 0.0f) continue;
 			// DC and sub-display-floor bins share the explicit lower visual edge.
 			const auto hz = (std::max)(lower, bin * sampleRate / analysis.Transform.WindowSamps);
@@ -188,24 +289,36 @@ bool AudioSpectralGainField::_PaintOvalSegment(const AudioSpectralAnalysis& anal
 				exposure += _IntegratedOval((time + lastImage * period - startSeconds) / timeRadius,
 					y, -deltaTime / timeRadius, -deltaOctave / octaveRadius, split, 1.0);
 			if (exposure <= 0.0) continue;
-            const auto originalMagnitude = analysis.Magnitude(frame, bin);
-            if (!(originalMagnitude > 0.0)) continue;
-            const auto originalDb = 20.0 * std::log10(originalMagnitude);
-            const auto old = GainDb(frame, bin);
-            const auto silent = old == AudioSpectralConfig::SilenceGainDb;
-            if (silent && !increase) continue;
-            const auto currentDb = silent ? AudioSpectralConfig::SpectralFloorDb : originalDb + old;
-            const auto delta = (std::min)(2400.0, elapsedSeconds * AudioSpectralConfig::BrushDbPerSecond * exposure);
-            // Author absolute magnitudes, retaining original coefficients for recovery.
-            // Boosting silence starts at the visual floor; originally zero bins stay zero.
-            const auto targetDb = increase
-                ? (std::min)(AudioSpectralConfig::SpectralCeilingDb,
-                    (std::max)(currentDb, AudioSpectralConfig::SpectralFloorDb) + delta)
-                : currentDb - delta;
-            const auto next = !increase && targetDb <= AudioSpectralConfig::SpectralFloorDb
-                ? AudioSpectralConfig::SilenceGainDb : static_cast<float>(targetDb - originalDb);
-            changed |= SetGainDb(frame, bin, next);
+            changed |= visit(frame, bin, elapsedSeconds * exposure);
 		}
-	}
+	};
+    const auto firstTime = (std::min)(startSeconds, endSeconds) - timeRadius;
+    const auto lastTime = (std::max)(startSeconds, endSeconds) + timeRadius;
+    if (lastTime - firstTime >= period)
+    {
+        for (std::size_t frame = 0; frame < analysis.Geometry.FrameCount; ++frame) visitFrame(frame);
+    }
+    else
+    {
+        // Only hop-lattice rows intersecting the swept time support are visited.
+        // Context rows outside the body get their corresponding wrapped exposure.
+        const auto firstCentre = analysis.Geometry.FirstFrameCentre / sampleRate;
+        const auto lastCentre = analysis.Geometry.FrameCentre(analysis.Geometry.FrameCount - 1u,
+            analysis.Transform.HopSamps) / sampleRate;
+        const auto firstImage = static_cast<std::int64_t>(std::ceil((firstCentre - lastTime) / period));
+        const auto lastImage = static_cast<std::int64_t>(std::floor((lastCentre - firstTime) / period));
+        for (auto image = firstImage; image <= lastImage; ++image)
+        {
+            const auto firstRow = std::ceil(((firstTime + image * period) * sampleRate
+                - analysis.Geometry.FirstFrameCentre) / analysis.Transform.HopSamps);
+            const auto lastRow = std::floor(((lastTime + image * period) * sampleRate
+                - analysis.Geometry.FirstFrameCentre) / analysis.Transform.HopSamps);
+            if (lastRow < 0 || firstRow >= static_cast<double>(analysis.Geometry.FrameCount)) continue;
+            const auto first = static_cast<std::size_t>((std::max)(0.0, firstRow));
+            const auto last = static_cast<std::size_t>((std::min)(lastRow,
+                static_cast<double>(analysis.Geometry.FrameCount - 1u)));
+            for (auto frame = first; frame <= last; ++frame) visitFrame(frame);
+        }
+    }
 	return changed;
 }

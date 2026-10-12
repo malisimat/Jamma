@@ -54,6 +54,7 @@ std::optional<AudioSpectralMemoryEstimate> AudioSpectralDsp::EstimateWorkingMemo
 	// Layout/config bounds above keep these uint64 calculations below overflow.
 	estimate.WorkingBytes = static_cast<std::uint64_t>(layout.StoredSampleCount()) * sizeof(float) * 6u
 		+ coefficients * sizeof(AudioSpectralFft::Bin) * 3u
+        + coefficients * AudioSpectralConfig::InputMapBytesPerCoefficient
 		+ static_cast<std::uint64_t>(tileRows) * tileColumns
 			* (sizeof(AudioSpectralGainField::Tile) + sizeof(std::shared_ptr<AudioSpectralGainField::Tile>) + 64u) * 6u
 		+ static_cast<std::uint64_t>(layout.LogicalLength) * 64u

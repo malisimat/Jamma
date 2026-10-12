@@ -21,7 +21,10 @@ namespace audio
 		static constexpr double BrushTimeRadiusSeconds = 0.05;
 		static constexpr double BrushFrequencyRadiusOctaves = 0.25;
 		static constexpr double BrushDbPerSecond = 480.0;
+        static constexpr double MaximumBrushExposureSeconds = (MaximumSpectralGainDb - MinimumSpectralGainDb) / BrushDbPerSecond;
 		static constexpr double StrokeUpdateSeconds = 1.0 / 30.0;
+        // Two active maps and at most one cancelled in-flight map; each has reserved dirty indices.
+        static constexpr std::uint64_t InputMapBytesPerCoefficient = 3u * (sizeof(double) + sizeof(std::uint32_t));
 		static constexpr double BarTimeRadiusSeconds = 0.05;
 		static constexpr double BarSilenceDragPixels = 160.0;
 		static constexpr double BarBoostDragPixels = 160.0;

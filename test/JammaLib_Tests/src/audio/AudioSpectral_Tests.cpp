@@ -553,6 +553,99 @@ TEST_F(AudioSpectralTest, AuthoredSpectralSilenceIsExactAndBoostRecoversRetained
         audible |= restored->Samples()[i] != 0.0f;
     EXPECT_TRUE(audible);
 }
+TEST_F(AudioSpectralTest, InputMapRasterizesOnlyTheWrappedBrushSupportAndRecyclesCleanly)
+{
+    std::string reason;
+    for (const auto length : { 1031ul, 48000ul })
+    {
+        const auto analysis = audio::AudioSpectralDsp::Analyze(Source(length), Transform(), reason);
+        ASSERT_TRUE(analysis) << reason;
+        auto input = audio::AudioSpectralGainField::ExposureMap::Create(analysis->Geometry.FrameCount, analysis->Geometry.BinCount, reason);
+        ASSERT_TRUE(input) << reason;
+        auto gains = audio::AudioSpectralGainField::Unity(analysis->Geometry.FrameCount, analysis->Geometry.BinCount, reason);
+        ASSERT_TRUE(gains);
+        const auto period = length / 48000.0;
+        const auto seconds = period - 0.003;
+        ASSERT_TRUE(input->Accumulate(*analysis, seconds, 3000.0, seconds, 3000.0, 0.001, reason));
+        ASSERT_TRUE(gains->ApplyExposureMap(*analysis, *input, true, reason));
+        for (std::size_t frame = 0; frame < gains->FrameCount(); ++frame)
+            for (unsigned int bin = 0; bin < gains->BinCount(); ++bin)
+            {
+                const auto x = std::remainder(analysis->Geometry.FrameCentre(frame, analysis->Transform.HopSamps)
+                    / 48000.0 - seconds, period) / audio::AudioSpectralConfig::BrushTimeRadiusSeconds;
+                const auto hz = (std::max)(20.0, bin * 48000.0 / analysis->Transform.WindowSamps);
+                const auto y = std::log2(hz / 3000.0) / audio::AudioSpectralConfig::BrushFrequencyRadiusOctaves;
+                const auto h = (std::max)(0.0, 1.0 - x*x - y*y);
+                const auto expected = audio::AudioSpectralGainField::GainDbAfterExposure(*analysis, frame, bin, 0.0f, 0.001*h*h, true);
+                EXPECT_NEAR(gains->GainDb(frame, bin), expected, 2e-5f) << length << '/' << frame << '/' << bin;
+            }
+        if (length == 48000ul) EXPECT_LT(input->DirtyCellCount(), gains->FrameCount() * gains->BinCount() / 10);
+        input->Clear();
+        EXPECT_TRUE(input->Empty());
+        EXPECT_EQ(input->ElapsedSeconds(), 0.0);
+        EXPECT_FALSE(gains->ApplyExposureMap(*analysis, *input, true, reason));
+    }
+}
+
+TEST_F(AudioSpectralTest, ThousandsOfMovingSamplesAccumulateWithoutWaitingForReconstruction)
+{
+    const auto loop = RecordedLoop(48000ul);
+    actions::ActionUndoHistory history;
+    const auto worker = std::make_shared<audio::AudioSpectralWorker>();
+    editor::AudioSpectralEditor controller(worker);
+    controller.SetUndoHistory(&history);
+    controller.Open(loop);
+    ASSERT_TRUE(Pump(controller, loop, [&] { return controller.Status() == editor::AudioSpectralEditor::State::Ready; }));
+    const auto before = controller.EditState();
+    std::promise<void> entered, resume;
+    const auto resumed = resume.get_future().share();
+    struct ReleaseWorker { std::promise<void>& Resume; ~ReleaseWorker() { Resume.set_value(); } };
+    {
+        ReleaseWorker release{resume};
+        worker->RequestContent(loop.get(), [&entered, resumed] { entered.set_value(); resumed.wait(); });
+        ASSERT_EQ(entered.get_future().wait_for(std::chrono::seconds(2)), std::future_status::ready);
+        ASSERT_TRUE(controller.BeginStroke(false, false, 0.1, 20.0, 100.0f));
+        for (int update = 0; update < 2000; ++update)
+            controller.MoveStroke(std::pair{0.1 + 0.0005*std::sin(update*0.13), 20.0}, 100.0f);
+        std::this_thread::sleep_for(std::chrono::milliseconds(40));
+        controller.MoveStroke(std::pair{0.1, 20.0}, 100.0f);
+        const auto preview = controller.BrushLevelDb();
+        ASSERT_TRUE(preview);
+        EXPECT_NEAR(*preview, 0.0, 0.001); // UI map reaches red while synthesis is still blocked.
+        EXPECT_EQ(controller.EditState()->Gains, before->Gains); // Immutable committed field hasn't been mutated.
+        EXPECT_EQ(controller.Feedback().find("overloaded"), std::string::npos);
+        controller.EndStroke(false);
+    }
+    ASSERT_TRUE(Pump(controller, loop, [&] { return !controller.HasStroke(); })) << controller.Feedback();
+    EXPECT_FALSE(loop->AudioSpectralEdit()->Gains->IsUnity());
+    ASSERT_TRUE(history.Undo());
+    EXPECT_EQ(loop->AudioSpectralEdit()->Gains, before->Gains);
+    EXPECT_FALSE(history.Undo()); // Every high-resolution sample belongs to one stroke.
+}
+
+TEST_F(AudioSpectralTest, CurvedInputMapMatchesSequentialPaintingAcrossEveryCell)
+{
+    std::string reason;
+    const auto analysis = audio::AudioSpectralDsp::Analyze(Source(48000ul), Transform(), reason);
+    ASSERT_TRUE(analysis) << reason;
+    auto input = audio::AudioSpectralGainField::ExposureMap::Create(analysis->Geometry.FrameCount, analysis->Geometry.BinCount, reason);
+    auto direct = audio::AudioSpectralGainField::Unity(analysis->Geometry.FrameCount, analysis->Geometry.BinCount, reason);
+    ASSERT_TRUE(input); ASSERT_TRUE(direct);
+    auto batched = *direct;
+    double t = 0.5, hz = 1000;
+    for (int step = 0; step < 1000; ++step)
+    {
+        const auto nextT = 0.5 + 0.05*std::sin(step*0.02);
+        const auto nextHz = 1000.0*std::exp2(0.25*std::sin(step*0.013));
+        input->Accumulate(*analysis, t, hz, nextT, nextHz, 0.000001, reason);
+        direct->PaintOvalSegment(*analysis, t, hz, nextT, nextHz, 0.000001, true, reason);
+        t = nextT; hz = nextHz;
+    }
+    ASSERT_TRUE(batched.ApplyExposureMap(*analysis, *input, true, reason)) << reason;
+    for (std::size_t frame = 0; frame < direct->FrameCount(); ++frame)
+        for (unsigned int bin = 0; bin < direct->BinCount(); ++bin)
+            EXPECT_NEAR(batched.GainDb(frame, bin), direct->GainDb(frame, bin), 5e-5f);
+}
 TEST_F(AudioSpectralTest, ProductionTransformStationaryFlowChangesDisplayAndAudibleContent)
 {
 	std::string reason;
@@ -837,6 +930,46 @@ TEST_F(AudioSpectralTest, CommonLoopReadAndBounceUseComposedContentWithoutMoving
 }
 
 // Explicit diagnostic only: Debug timings are evidence, never latency guarantees.
+TEST_F(AudioSpectralTest, DISABLED_ProfileHighFrequencyInputMap)
+{
+    std::string reason;
+    for (const auto seconds : { 2ul, 10ul, 30ul })
+    {
+        const auto source = Source(seconds * 48000ul);
+        const audio::AudioSpectralTransformConfig transform;
+        const auto analysis = audio::AudioSpectralDsp::Analyze(source, transform, reason);
+        ASSERT_TRUE(analysis) << reason;
+        const auto estimate = audio::AudioSpectralDsp::EstimateWorkingMemory(source->Layout, transform, reason);
+        ASSERT_TRUE(estimate) << reason;
+        auto input = audio::AudioSpectralGainField::ExposureMap::Create(analysis->Geometry.FrameCount, analysis->Geometry.BinCount, reason);
+        ASSERT_TRUE(input) << reason;
+        std::vector<double> milliseconds;
+        milliseconds.reserve(1000);
+        double t = 0.5, hz = 18000.0, total = 0;
+        for (int sample = 0; sample < 1000; ++sample)
+        {
+            const auto nextT = 0.5 + 0.04*std::sin(sample*0.02);
+            const auto nextHz = 18000.0*std::exp2(0.1*std::sin(sample*0.013));
+            const auto began = std::chrono::steady_clock::now();
+            input->Accumulate(*analysis, t, hz, nextT, nextHz, 1.0/60.0, reason);
+            const auto elapsed = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - began).count();
+            milliseconds.push_back(elapsed); total += elapsed;
+            t = nextT; hz = nextHz;
+        }
+        std::sort(milliseconds.begin(), milliseconds.end());
+#ifdef _DEBUG
+        constexpr auto configuration = "Debug";
+#else
+        constexpr auto configuration = "Release";
+#endif
+        std::cout << "Input map profile " << configuration << ": loop=" << seconds << "s / 1000 high-frequency pointer samples"
+            << " mean_ms=" << total / milliseconds.size() << " p95_ms=" << milliseconds[950]
+            << " max_ms=" << milliseconds.back() << " dirty_cells=" << input->DirtyCellCount()
+            << " grid_cells=" << analysis->Geometry.FrameCount * analysis->Geometry.BinCount
+            << " admission_MiB=" << estimate->WorkingBytes / (1024.0*1024.0) << std::endl;
+        ASSERT_TRUE(reason.empty()) << reason;
+    }
+}
 TEST_F(AudioSpectralTest, DISABLED_ProfileSpectralPipeline)
 {
 	using Clock = std::chrono::steady_clock;
