@@ -16,7 +16,7 @@ protected:
     }
 };
 
-TEST_F(PerformanceGroupServiceTest, MuteRecallRetainsNegativeStatesAndSkipsNewTargets)
+TEST_F(PerformanceGroupServiceTest, MuteRecallRetainsNegativeStatesAndMutesNewTargets)
 {
     auto station = Station("station-a");
     auto muted = station->AddTake();
@@ -27,7 +27,7 @@ TEST_F(PerformanceGroupServiceTest, MuteRecallRetainsNegativeStatesAndSkipsNewTa
     muted->SetGroupMutedAudio(false);
     audible->SetGroupMutedAudio(true);
     auto newTake = station->AddTake();
-    newTake->SetGroupMutedAudio(true);
+    newTake->SetGroupMutedAudio(false);
     auto application = engine::PerformanceGroupService::PrepareMuteApplication(snapshot, stations, 1u);
     application->ApplyAudio();
     EXPECT_TRUE(muted->IsMuted());
@@ -48,6 +48,83 @@ TEST_F(PerformanceGroupServiceTest, SourceSuppressionBecomesPersistentWithoutRel
     take->ReleaseTriggerSourceMuteAudio();
     EXPECT_TRUE(take->IsMuted());
     EXPECT_TRUE(take->GetTweakState() & base::Tweakable::TWEAKSTATE_MUTED);
+}
+
+TEST_F(PerformanceGroupServiceTest, SwitchingOldAndNewGroupsRestoresOnlyTheirRecordedMaterial)
+{
+    auto station = Station("station-a");
+    auto take = station->AddTake();
+    take->AddLoop(0u, station->Id());
+    take->AddLoop(1u, station->Id());
+    take->CommitChanges();
+    const auto a = take->GetLoops()[0];
+    const auto b = take->GetLoops()[1];
+    const auto original = engine::PerformanceGroupService::CaptureMuteConfiguration({ station });
+
+    take->AddLoop(2u, station->Id());
+    take->CommitChanges();
+    const auto c = take->GetLoops()[2];
+    a->SetGroupMutedAudio(true);
+    b->SetGroupMutedAudio(true);
+    c->SetGroupMutedAudio(false);
+    auto newTake = station->AddTake();
+    newTake->AddLoop(0u, station->Id());
+    newTake->CommitChanges();
+    newTake->SetGroupMutedAudio(false);
+    auto newStation = Station("station-b");
+    auto newStationTake = newStation->AddTake();
+    newStationTake->SetGroupMutedAudio(false);
+    engine::PerformanceGroupService::Stations stations{ station, newStation };
+    const auto later = engine::PerformanceGroupService::CaptureMuteConfiguration(stations);
+    for (std::uint64_t version = 1u; version <= 6u; ++version)
+    {
+        const bool oldGroup = version % 2u != 0u;
+        auto application = engine::PerformanceGroupService::PrepareMuteApplication(
+            oldGroup ? original : later, stations, version);
+        ASSERT_TRUE(application);
+        application->ApplyAudio();
+        EXPECT_EQ(a->IsMuted(), !oldGroup);
+        EXPECT_EQ(b->IsMuted(), !oldGroup);
+        EXPECT_EQ(c->IsMuted(), oldGroup);
+        EXPECT_FALSE(take->IsMuted());
+        EXPECT_EQ(newTake->IsMuted(), oldGroup);
+        EXPECT_EQ(newTake->GetLoops()[0]->IsMuted(), oldGroup);
+        EXPECT_EQ(newStationTake->IsMuted(), oldGroup);
+    }
+}
+
+class RemoteGroupTestStation final : public engine::Station
+{
+public:
+    RemoteGroupTestStation(engine::StationParams params, audio::AudioMixerParams mixer)
+        : engine::Station(params, mixer) {}
+    bool IsRemote() const noexcept override { return true; }
+};
+
+TEST_F(PerformanceGroupServiceTest, EmptyMuteSnapshotMutesAllLocalMaterialAndExcludesRemoteMaterial)
+{
+    auto local = Station("local");
+    auto take = local->AddTake();
+    take->AddLoop(0u, local->Id());
+    take->CommitChanges();
+    const auto loop = take->GetLoops()[0];
+    take->SetGroupMutedAudio(false);
+    loop->SetGroupMutedAudio(false);
+    engine::StationParams params;
+    params.Id = "remote";
+    params.Size = { 160u, 320u };
+    auto remote = std::make_shared<RemoteGroupTestStation>(params,
+        engine::Station::GetMixerParams(params.Size, audio::MergeMixBehaviourParams{}));
+    auto remoteTake = remote->AddTake();
+    remoteTake->SetGroupMutedAudio(false);
+    auto application = engine::PerformanceGroupService::PrepareMuteApplication({}, { local, remote }, 1u);
+    ASSERT_TRUE(application);
+    ASSERT_EQ(application->Takes.size(), 1u);
+    ASSERT_EQ(application->Loops.size(), 1u);
+    application->ApplyAudio();
+    EXPECT_TRUE(take->IsMuted());
+    EXPECT_TRUE(loop->IsMuted());
+    EXPECT_FALSE(remoteTake->IsMuted());
 }
 
 TEST_F(PerformanceGroupServiceTest, SelectionRestoresParentsWithoutChangingNewTakes)
@@ -139,7 +216,7 @@ TEST_F(PerformanceGroupServiceTest, AudioLeafMuteAndSelectionPreserveSiblingChoi
     take->AddLoop(2u, "station-a");
     take->CommitChanges();
     const auto newLeaf = take->GetLoops()[2];
-    newLeaf->SetGroupMutedAudio(true);
+    newLeaf->SetGroupMutedAudio(false);
     newLeaf->Select();
     engine::PerformanceGroupService::PrepareMuteApplication(mute, stations, 1u)->ApplyAudio();
     engine::PerformanceGroupService::RestoreSelection(selection, stations);
@@ -203,7 +280,7 @@ TEST_F(PerformanceGroupServiceTest, StationReorderAndDeletionNeverRedirectRecall
     EXPECT_FALSE(secondTake->IsMuted());
     auto replacement = Station("station-c");
     auto replacementTake = replacement->AddTake();
-    replacementTake->SetGroupMutedAudio(true);
+    replacementTake->SetGroupMutedAudio(false);
     engine::PerformanceGroupService::PrepareMuteApplication(snapshot, { replacement, second }, 2u)->ApplyAudio();
     EXPECT_TRUE(replacementTake->IsMuted());
 }

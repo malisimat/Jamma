@@ -1,6 +1,7 @@
 # Mute and selection groups implementation plan
 
 Status: implemented and validated by native tests and Debug x64 builds; live device/plugin visual checks remain manual.
+Current recall policy: mute-group switching applies mute flags only. The live-performance follow-up below supersedes the original full VST recall requirements in this plan.
 Branch: `feature/mute-group`
 Worktree: `C:\Users\matto\Source\Repos\Jamma.worktrees\Jamma-mute-group`
 
@@ -16,7 +17,7 @@ Keep the hierarchy's mute flags and effective muted result distinct. Record the 
 
 Selection groups capture the complete local selection configuration, including selected and deselected targets at station, take, and individual audio/MIDI-loop level. Restore the captured selection depth and preserve individual loop choices and aggregate parent flags without inadvertently selecting siblings. Mute recall does not change selection; selection recall does not change mute or VST state.
 
-Groups reference stable target and plugin identities, never mutable GUI positions. Recall skips deleted targets/plugins and leaves new targets outside the snapshot unchanged. Do not keep removed entities alive through group references or apply a deleted plugin's state to a replacement occupying its chain position.
+Groups reference stable target and plugin identities, never mutable GUI positions. Recall skips deleted targets/plugins. Mute recall defaults new local takes and audio loops outside the snapshot to muted, reproducing the material heard when the group was stored; selection recall leaves new targets unchanged. Do not keep removed entities alive through group references or apply a deleted plugin's state to a replacement occupying its chain position.
 
 ### Slots and interaction
 
@@ -129,7 +130,7 @@ Expose occupied selection-panel and source-strip bounds to settings layout. Upda
 - Expanded selection-panel rows follow radios / mute / selection order with shared width and alignment. Collapse hides all rows and clears pointer state; keyboard commands remain active. Hover previews audible mute members or selected selection members without changing live state.
 - Mute recall restores muted and unmuted configuration at individual loop, take and station scope, including effective captured suppression. Local-only capture/recall does not affect remote entities or recording-owned controls.
 - Selection recall restores selected and deselected configuration and depth, preserving loop-level detail and parent aggregates. Empty selection groups remain valid stored slots.
-- Removed/reordered entities/plugins never redirect recall; new targets remain untouched; pending operations cancel on unload and teardown.
+- Removed/reordered entities/plugins never redirect recall; new local mute targets default to muted, while new selection targets remain untouched; pending operations cancel on unload and teardown.
 - Backspace inverts each selected take once, including station expansion and overlapping selections. Mixed states invert independently. No selection causes no mute action; text/editor input and key repeats remain correct.
 - Recall has no musical delay and audible mute transitions use verified smoothing. Check existing mixer behavior and add a meaningful discontinuity/ramp test where smoothing changes are needed.
 - VST2/VST3 full state round-trips match JAM state semantics, including chunk/component/controller data; live restore has no callback state-blob calls or processor races. Editor values reflect restoration, automation continues overriding and recall does not record automation.
@@ -176,6 +177,16 @@ Validation completed:
 | Mixer gain and scratch | Callback owns fade progression and stack scratch; UI publishes mute/target scalars | Existing atomic target/mute publication. No allocation or lock in the new ramp path. |
 
 Manual checks still required on the user's live setup: DPI/display appearance, routing/Ctrl overlays and rapid pointer gestures in the running app; representative VST2/VST3 editors and audible third-party preset behavior. A vendor state call runs synchronously on its UI owner once safely acquired and may take an unpredictable time; skipped processing/MIDI is recovered, but arbitrary plugin presets are not promised click-free. The existing void SetState API retains vendor failure logging rather than claiming verified SDK success.
+
+### Follow-up: live-performance mute recall
+
+Recall prepares mute choices for every current local take and audio loop. Saved identities use their captured choices; missing identities default to muted, including later-added stations and takes and later-added loops within an existing take. Remote stations remain excluded. Alternating old and newer groups restores their respective material deterministically. Lookup/traversal stays on the UI/job side and publishes through the existing bounded audio application; no callback synchronization or fade changes are needed.
+
+Mute-group recall no longer restores VST blobs or bypass state, including blobs in previously saved JAM groups. Even restoring state on an existing instance can trigger vendor sample/cache work, block the UI thread and exclude audio processing. Recall only publishes the resolved mute application for the next audio boundary; the UI pump has no pending plugin recall work. Existing instances, editor state and automation continue unchanged.
+
+Explicit store/overwrite (including capture into an empty slot) still captures plugin blobs for persistence compatibility. This is preparation work and can still take time in third-party plugins; it is separate from switching occupied groups. Plugin blob persistence and normal JAM session loading remain unchanged.
+
+A native regression exercises rapid occupied-group switching with both station and take plugins, including busy plugins and a later UI pump. It checks the newest mute publication and verifies no capture, restore, bypass, lifecycle or automation-generation changes.
 
 ### Follow-up: plugin-induced focus reentry
 

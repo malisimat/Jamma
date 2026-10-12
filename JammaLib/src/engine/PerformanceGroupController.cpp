@@ -30,7 +30,7 @@ bool PerformanceGroupController::HandleKey(const actions::KeyAction& action,
         if (!application) { _error = "Mute group target limit exceeded"; _consumed[action.KeyChar] = true; return true; }
         if (!application->Takes.empty())
         {
-            _capture.reset(); _recall.reset();
+            _capture.reset();
             _error.clear();
             // A second physical press can precede the audio receipt. Invert
             // the latest desired flag in that case, never the stale live flag.
@@ -101,7 +101,7 @@ bool PerformanceGroupController::Execute(bool selection, GroupCommand command, s
         return _groups.Selection.Execute(command, slot,
             [&] { return std::optional<SelectionGroupSnapshot>(PerformanceGroupService::CaptureSelectionConfiguration(stations, depth)); },
             [&](const auto& snapshot) { PerformanceGroupService::RestoreSelection(snapshot, stations); return true; });
-    _capture.reset(); _recall.reset();
+    _capture.reset();
     if (command == GroupCommand::Add)
     {
         auto empty = _groups.Mute.LowestEmptySlot();
@@ -118,7 +118,8 @@ bool PerformanceGroupController::Execute(bool selection, GroupCommand command, s
         if (!application) { _error = "Mute group target limit exceeded"; return false; }
         _pendingMute = application;
         publish(std::move(application));
-        _recall = PendingRecall{ snapshot.Plugins };
+        // Live recall only publishes mute flags. Even in-place plugin state
+        // restoration can rebuild vendor caches and exclude audio processing.
         return _groups.Mute.Execute(command, slot, [] { return std::optional<MuteGroupSnapshot>(); }, [](const auto&) { return true; });
     }
     _capture = PendingCapture{ slot };
@@ -147,28 +148,5 @@ void PerformanceGroupController::Pump(const PerformanceGroupService::Stations& s
             _error = "Unable to capture plugin state for mute group";
             _capture.reset();
         }
-    }
-    if (_recall)
-    {
-        while (_recall->Index < _recall->Plugins.size())
-        {
-            const auto& saved = _recall->Plugins[_recall->Index];
-            io::JamFile::VstEntry entry;
-            entry.Id = saved.PluginId; entry.Path = saved.Path; entry.State = saved.State; entry.Bypass = saved.Bypass;
-            bool done = true;
-            if (saved.Owner.Kind == GroupTargetKind::Station)
-            {
-                if (auto station = PerformanceGroupService::ResolveStation(saved.Owner, stations)) done = station->TryRestoreGroupVstEntry(entry);
-            }
-            else if (auto take = PerformanceGroupService::ResolveTake(saved.Owner, stations)) done = take->TryRestoreGroupVstEntry(entry);
-            if (!done)
-            {
-                if (++_recall->Attempts >= 120u) { _error = "Unable to restore plugin state for mute group"; _recall.reset(); }
-                return;
-            }
-            ++_recall->Index;
-            _recall->Attempts = 0u;
-        }
-        _recall.reset();
     }
 }

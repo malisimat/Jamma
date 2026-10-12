@@ -1,6 +1,9 @@
 #include "PerformanceGroupService.h"
 #include "Station.h"
 #include "Loop.h"
+#include <map>
+#include <string_view>
+#include <tuple>
 
 using namespace engine;
 
@@ -100,20 +103,31 @@ std::shared_ptr<const GroupMuteApplication> PerformanceGroupService::PrepareMute
 {
     auto application = std::make_shared<GroupMuteApplication>();
     application->Version = version;
+    // This lookup is temporary UI/job-owned preparation; views never escape
+    // the snapshot. Unknown material was inaudible when the group was stored.
+    using TargetKey = std::tuple<GroupTargetKind, std::string_view, std::string_view, std::string_view>;
+    std::map<TargetKey, bool> savedMute;
     for (const auto& state : snapshot.Targets)
     {
-        auto take = ResolveTake(state.Target, stations);
-        if (!take) continue;
-        if (state.Target.Kind == GroupTargetKind::Take)
-            application->Takes.push_back({ take, state.Muted || state.EffectiveMuted });
-        else if (state.Target.Kind == GroupTargetKind::AudioLoop)
+        const auto& id = state.Target;
+        savedMute[{ id.Kind, id.StationId, id.TakeId, id.EntityId }] = state.Muted || state.EffectiveMuted;
+    }
+    for (const auto& station : stations)
+    {
+        if (station->IsRemote()) continue;
+        for (const auto& take : station->GetLoopTakes())
+        {
+            const auto takeId = take->Id();
+            const auto savedTake = savedMute.find({ GroupTargetKind::Take, station->Id(), takeId, {} });
+            application->Takes.push_back({ take, savedTake == savedMute.end() || savedTake->second });
+            if (application->Takes.size() + application->Loops.size() > GroupMuteApplication::MaxTargets) return {};
             for (const auto& loop : take->GetLoops())
-                if (loop->Id() == state.Target.EntityId)
-                {
-                    application->Loops.push_back({ loop, state.Muted || state.EffectiveMuted });
-                    break;
-                }
-        if (application->Takes.size() + application->Loops.size() > GroupMuteApplication::MaxTargets) return {};
+            {
+                const auto savedLoop = savedMute.find({ GroupTargetKind::AudioLoop, station->Id(), takeId, loop->Id() });
+                application->Loops.push_back({ loop, savedLoop == savedMute.end() || savedLoop->second });
+                if (application->Takes.size() + application->Loops.size() > GroupMuteApplication::MaxTargets) return {};
+            }
+        }
     }
     return application;
 }

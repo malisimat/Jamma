@@ -427,6 +427,104 @@ TEST(VstStaging, GroupPluginIdentityDoesNotFollowReplacementPosition)
 }
 
 
+class MuteRecallPlugin final : public StateGatePlugin
+{
+public:
+ mutable unsigned int CaptureCalls = 0u;
+ unsigned int RestoreCalls = 0u;
+ unsigned int LifecycleCalls = 0u;
+ unsigned int BypassCalls = 0u;
+ bool Load(const std::wstring&, float, unsigned, unsigned, vst::HostedLayoutMode) override
+ {
+  ++LifecycleCalls;
+  return true;
+ }
+ void Unload() override { ++LifecycleCalls; }
+ std::vector<std::uint8_t> GetState() const override
+ {
+  ++CaptureCalls;
+  return StateGatePlugin::GetState();
+ }
+ void SetState(const std::vector<std::uint8_t>& blob) override
+ {
+  ++RestoreCalls;
+  StateGatePlugin::SetState(blob);
+ }
+ void SetBypassed(bool) noexcept override { ++BypassCalls; }
+};
+
+TEST(VstStaging, RapidMuteGroupRecallNeverTouchesStationOrTakePlugins)
+{
+ engine::StationParams params;
+ params.Id = "mute-recall-station";
+ params.Size = {100u, 100u};
+ auto station = std::make_shared<engine::Station>(params,
+  engine::Station::GetMixerParams(params.Size, MergeMixBehaviourParams{}));
+ auto take = station->AddTake();
+ auto stationPlugin = std::make_shared<MuteRecallPlugin>();
+ auto takePlugin = std::make_shared<MuteRecallPlugin>();
+ auto install = [](auto& owner, const auto& plugin) {
+  JobAction load;
+  load.JobActionType = JobAction::JOB_LOADVST;
+  load.VstPath = L"mute-recall.vst3";
+  load.PreInitPlugin = plugin;
+  owner->OnAction(load);
+  owner->CommitChanges();
+  ASSERT_EQ(owner->GetVstPlugin(0u), plugin);
+  plugin->LifecycleCalls = 0u;
+  plugin->BypassCalls = 0u;
+ };
+ install(station, stationPlugin);
+ install(take, takePlugin);
+ engine::PerformanceGroupService::Stations stations{station};
+ auto audible = engine::PerformanceGroupService::CaptureMuteConfiguration(stations);
+ const auto blob = io::JamFile::VstEntry::EncodeState({4, 5});
+ audible.Plugins = {
+  {{engine::GroupTargetKind::Station, station->Id(), {}, {}}, stationPlugin->StateId(), "mute-recall.vst3", blob, true},
+  {{engine::GroupTargetKind::Take, station->Id(), take->Id(), {}}, takePlugin->StateId(), "mute-recall.vst3", blob, true}
+ };
+ auto muted = audible;
+ for (auto& target : muted.Targets) target.Muted = target.EffectiveMuted = true;
+ engine::PerformanceGroupController controller;
+ ASSERT_TRUE(controller.Groups().Mute.Store(1u, audible));
+ ASSERT_TRUE(controller.Groups().Mute.Store(2u, muted));
+ std::shared_ptr<const engine::GroupMuteApplication> pending;
+ unsigned int publications = 0u;
+ auto publish = [&](auto application) { pending = std::move(application); ++publications; };
+ // Recall must remain independent of plugin availability. Leave the first
+ // publication unapplied to model faster input than audio boundaries.
+ {
+  vst::IVstPlugin::PluginCallGuard stationBusy(*stationPlugin);
+  vst::IVstPlugin::PluginCallGuard takeBusy(*takePlugin);
+  ASSERT_TRUE(controller.Execute(false, engine::GroupCommand::RecallOrStore, 2u,
+   stations, engine::GroupTargetKind::Take, publish));
+  ASSERT_TRUE(pending);
+  EXPECT_TRUE(pending->Takes[0].Muted);
+  controller.Pump(stations, publish);
+  ASSERT_TRUE(controller.Execute(false, engine::GroupCommand::RecallOrStore, 1u,
+   stations, engine::GroupTargetKind::Take, publish));
+  ASSERT_TRUE(pending);
+  EXPECT_FALSE(pending->Takes[0].Muted);
+ }
+ controller.Pump(stations, publish); // No deferred state restore after busy ends.
+ EXPECT_EQ(publications, 2u);
+ pending->ApplyAudio();
+ EXPECT_FALSE(take->IsMuted());
+ EXPECT_EQ(controller.Groups().Mute.ActiveSlot(), 1u);
+ EXPECT_TRUE(controller.Error().empty());
+ EXPECT_EQ(station->GetVstPlugin(0u), stationPlugin);
+ EXPECT_EQ(take->GetVstPlugin(0u), takePlugin);
+ for (const auto& plugin : {stationPlugin, takePlugin})
+ {
+  EXPECT_EQ(plugin->CaptureCalls, 0u);
+  EXPECT_EQ(plugin->RestoreCalls, 0u);
+  EXPECT_EQ(plugin->LifecycleCalls, 0u);
+  EXPECT_EQ(plugin->BypassCalls, 0u);
+  EXPECT_EQ(plugin->AutomationGeneration(), 0u);
+  EXPECT_TRUE(plugin->Probe());
+ }
+}
+
 class PendingGroupCapturePlugin final : public StateGatePlugin
 {
 public:
