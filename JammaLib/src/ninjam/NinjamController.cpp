@@ -74,6 +74,10 @@ void NinjamController::Connect(const std::string& host)
 		config = _config.value();
 
 	config.Host = host;
+	// Manual joins also work for scenes without a saved NINJAM identity.
+	// A configured password still requires its matching explicit username.
+	if (config.User.empty() && config.Pass.empty())
+		config.User = "jamma_guest";
 	_config = config;
 
 	std::cout << "[NINJAM] Connecting to " << host << std::endl;

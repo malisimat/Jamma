@@ -135,3 +135,76 @@ TEST(NinjamNetworkServiceTiming, CachedObservationDeadlineNoSyncIsIdempotentAndR
 	EXPECT_TRUE(recovered.DesiredTransport.has_value());
 	EXPECT_TRUE(service.HasConnectedTiming());
 }
+
+TEST(NinjamControllerConnection, ManualJoinWithoutConfigStartsGuestAttempt)
+{
+	ninjam::NinjamController controller;
+	testing::internal::CaptureStdout();
+	controller.Connect("127.0.0.1:1");
+	const auto output = testing::internal::GetCapturedStdout();
+	ASSERT_TRUE(controller.Config().has_value());
+	EXPECT_EQ("jamma_guest", controller.Config()->User);
+	EXPECT_NE(std::string::npos, output.find("Connect attempt 1 to 127.0.0.1:1 as anonymous:jamma_guest"));
+	auto connection = controller.AcquireConnectionUse();
+	ASSERT_TRUE(connection);
+	EXPECT_EQ(ninjam::NinjamConnection::ConnectionState::Connecting, connection->State());
+}
+
+TEST(NinjamControllerConnection, ManualJoinPreservesConfiguredIdentity)
+{
+	ninjam::NinjamController controller;
+	io::JamFile::NinjamConfig config;
+	config.User = "saved-user";
+	config.Pass = "saved-password";
+	config.WorkDir = ".";
+	controller.LoadConfig(config);
+	controller.Connect("127.0.0.1:1");
+	ASSERT_TRUE(controller.Config().has_value());
+	EXPECT_EQ(config.User, controller.Config()->User);
+	EXPECT_EQ(config.Pass, controller.Config()->Pass);
+	EXPECT_EQ(config.WorkDir, controller.Config()->WorkDir);
+	EXPECT_TRUE(controller.AcquireConnectionUse());
+}
+
+TEST(NinjamControllerConnection, PasswordWithoutUsernameReportsFailure)
+{
+	ninjam::NinjamController controller;
+	io::JamFile::NinjamConfig config;
+	config.Pass = "saved-password";
+	controller.LoadConfig(config);
+	testing::internal::CaptureStdout();
+	controller.Connect("127.0.0.1:1");
+	const auto output = testing::internal::GetCapturedStdout();
+	EXPECT_NE(std::string::npos, output.find("Connection failed: Username not configured"));
+	EXPECT_FALSE(controller.AcquireConnectionUse());
+	EXPECT_TRUE(controller.Config()->User.empty());
+}
+
+TEST(NinjamSessionConnection, MissingHostReportsFailure)
+{
+	ninjam::NinjamSession session;
+	io::JamFile::NinjamConfig config;
+	config.User = "test-user";
+	testing::internal::CaptureStdout();
+	session.Start(config);
+	const auto output = testing::internal::GetCapturedStdout();
+	EXPECT_NE(std::string::npos, output.find("Connection failed: Host not configured"));
+	EXPECT_FALSE(ninjam::NinjamConnectionUse(session));
+}
+
+TEST(NinjamSessionConnection, UnavailableWorkDirectoryReportsStartupFailure)
+{
+	ninjam::NinjamSession session;
+	io::JamFile::NinjamConfig config;
+	config.Host = "127.0.0.1:1";
+	config.User = "test-user";
+	// A source file cannot be used as a directory; no network attempt is needed.
+	config.WorkDir = __FILE__;
+	testing::internal::CaptureStdout();
+	session.Start(config);
+	const auto output = testing::internal::GetCapturedStdout();
+	EXPECT_NE(std::string::npos, output.find("Connection failed: NINJAM work directory is unavailable"));
+	ninjam::NinjamConnectionUse connection(session);
+	ASSERT_TRUE(connection);
+	EXPECT_EQ(ninjam::NinjamConnection::ConnectionState::Failed, connection->State());
+}

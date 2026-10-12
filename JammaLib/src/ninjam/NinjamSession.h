@@ -91,7 +91,7 @@ namespace ninjam
 		NinjamSession(const NinjamSession&) = delete;
 		NinjamSession& operator=(const NinjamSession&) = delete;
 
-		// Start the session from config. No-op if host/user are empty.
+		// Start the session from config. Reports missing host/user or startup failure.
 		void Start(const io::JamFile::NinjamConfig& config);
 
 		// Disconnect and clean up. Idempotent.
