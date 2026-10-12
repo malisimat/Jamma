@@ -430,6 +430,13 @@ void Trigger::OnTick(Time curTime,
 	std::uint64_t rigRevision)
 {
 	_ProcessStructuralResults();
+	_ApplyReceiverRemovalAtAudioBoundary();
+	if (_removingReceiver.load(std::memory_order_acquire) == _receiver.get() && _receiver)
+	{
+		_ProcessQueuedInputActions(rigRevision, cfg, params);
+		_PublishTriggerStateSnapshot();
+		return;
+	}
 	if (!_ProcessSourceLoss(cfg, params))
 		_ProcessQueuedInputActions(rigRevision, cfg, params);
 
@@ -545,6 +552,8 @@ bool Trigger::_ApplyInputEdge(const TriggerInputEdge& edge,
 	const std::optional<io::UserConfig>& cfg,
 	const std::optional<audio::AudioStreamParams>& params) noexcept
 {
+	const auto removed = _removingReceiver.load(std::memory_order_acquire);
+	if (removed && removed == _receiver.get()) return false;
 	if (edge.InputGeneration != _inputLossGeneration.load(std::memory_order_acquire))
 		return false;
 	const bool isActivate = edge.Control == TRIGGER_CONTROL_ACTIVATE;
@@ -877,6 +886,85 @@ bool Trigger::IsDitchDown() const
 	return _publishedTriggerDitchDown.load(std::memory_order_acquire);
 }
 
+void Trigger::RequestReceiverRemoval(base::ActionReceiver* receiver) noexcept
+{
+	_receiverRemovalReady.store(false, std::memory_order_relaxed);
+	if (_receiver.get() == receiver) _inputLossGeneration.fetch_add(1u, std::memory_order_release);
+	_removingReceiver.store(receiver, std::memory_order_release);
+}
+
+void Trigger::_ApplyReceiverRemovalAtAudioBoundary() noexcept
+{
+	const auto removed = _removingReceiver.load(std::memory_order_acquire);
+	if (!removed || _receiverRemovalReady.load(std::memory_order_acquire)) return;
+	const bool removingBinding = _receiver.get() == removed;
+	const bool removingActive = _activeHistoryIndex && _loopTakeHistory[*_activeHistoryIndex].Session &&
+		_loopTakeHistory[*_activeHistoryIndex].Session->Receiver.get() == removed;
+	if (removingBinding || removingActive)
+	{
+		// Generation invalidates queued activations; a held release cannot hit a new binding.
+		_ResetInputAfterSourceLoss();
+		_delayedActionCount = _delayedPunchActionCount = 0u;
+		_pendingDitchDelayedActionCount = _pendingDitchDelayedPunchActionCount = 0u;
+		_state = TRIGSTATE_DEFAULT;
+	}
+	if (_pendingCompletion != STRUCTURAL_NONE || !_structuralCommands.Empty() ||
+		!_structuralResults.Empty() || _jobStructuralActionsInFlight.load(std::memory_order_acquire) != 0u) return;
+	for (size_t i = _loopTakeHistorySize; i > 0; --i)
+	{
+		const auto session = _loopTakeHistory[i - 1u].Session;
+		if (_loopTakeHistory[i - 1u].Receiver == removed)
+		{
+			// A trigger may have been rebound while older history still owns
+			// latency-delayed mixer/punch borrowers. Retire those by token even
+			// when its current binding and active capture belong to a survivor.
+			const auto token = _loopTakeHistory[i - 1u].Token;
+			const auto discard = [token](auto& actions, auto& count) noexcept {
+				size_t kept = 0u;
+				for (size_t j = 0u; j < count; ++j)
+					if (actions[j].Token != token) actions[kept++] = actions[j];
+				count = kept;
+			};
+			discard(_delayedActions, _delayedActionCount);
+			discard(_delayedPunchActions, _delayedPunchActionCount);
+			discard(_pendingDitchDelayedActions, _pendingDitchDelayedActionCount);
+			discard(_pendingDitchDelayedPunchActions, _pendingDitchDelayedPunchActionCount);
+			_ReleaseSourceMuteClaim(session);
+			if (session) session->RetiredByAudio.store(true, std::memory_order_release);
+			_EraseHistory(i - 1u);
+		}
+	}
+	if (removingBinding || removingActive)
+	{
+		_sourceLossScanRequested.store(false, std::memory_order_release);
+		_activationReleaseRequested.store(false, std::memory_order_release);
+		_publishedCapturePending.store(false, std::memory_order_release);
+	}
+	_receiverRemovalReady.store(true, std::memory_order_release);
+}
+
+void Trigger::CompleteReceiverRemovalOnJob()
+{
+	if (!ReceiverRemovalReady()) return;
+	const auto removed = _removingReceiver.load(std::memory_order_acquire);
+	size_t kept = 0u;
+	for (size_t i = 0u; i < _jobTakeHistorySize; ++i)
+		if (_jobTakeHistory[i].Receiver.get() != removed)
+		{
+			_jobTakeHistory[kept] = _jobTakeHistory[i];
+			_jobTakeTokens[kept++] = _jobTakeTokens[i];
+		}
+	for (size_t i = kept; i < _jobTakeHistorySize; ++i) { _jobTakeHistory[i] = {}; _jobTakeTokens[i] = 0u; }
+	_jobTakeHistorySize = kept;
+	_PublishJobHistory();
+	for (auto& session : _captureSessions)
+		if (session && session->Receiver.get() == removed && session->RetiredByAudio.load(std::memory_order_acquire))
+		{ session.reset(); --_captureSessionCount; }
+	// Audio removed every borrower before publishing readiness.
+	_removingReceiver.store(nullptr, std::memory_order_release);
+	_receiverRemovalReady.store(false, std::memory_order_release);
+}
+
 void Trigger::Reset()
 {
 	for (auto& session : _captureSessions) _ReleaseSourceMuteClaim(session.get());
@@ -970,6 +1058,7 @@ void Trigger::RestoreTakes(std::vector<TriggerTake> takes,
 		_loopTakeHistory[slot].SourceType = takes[index].SourceType;
 		_loopTakeHistory[slot].Token = token;
 		if (!takes[index].Receiver) takes[index].Receiver = _receiver;
+		_loopTakeHistory[slot].Receiver = takes[index].Receiver.get();
 		if (index < pins.size())
 		{
 			auto session = std::make_unique<CaptureSession>();
@@ -1292,9 +1381,10 @@ void Trigger::ProcessStructuralActionsOnJob(
 		const bool isStart = command.ActionType == TriggerAction::TRIGGER_REC_START ||
 			command.ActionType == TriggerAction::TRIGGER_OVERDUB_START;
 		const bool startAvailable = !isStart ||
+			(_removingReceiver.load(std::memory_order_acquire) != _receiver.get() &&
 			(command.InputGeneration == _inputLossGeneration.load(std::memory_order_acquire) &&
 			 (!_confirmedAudioChannels || std::all_of(_inputChannels.begin(), _inputChannels.end(),
-				[this](unsigned int channel) { return channel < *_confirmedAudioChannels; })));
+				[this](unsigned int channel) { return channel < *_confirmedAudioChannels; }))));
 		// Configured MIDI sources define editable lanes even while disconnected.
 		// A source lost after activation still cancels through InputGeneration.
 		if (isStart && startAvailable)
@@ -1472,6 +1562,7 @@ void Trigger::_ApplyStructuralResult(const StructuralResult& result) noexcept
 			take.SourceType = TriggerTake::SOURCE_ADC;
 			take.Token = result.HistoryToken;
 			take.Session = result.Session;
+			take.Receiver = result.Session ? result.Session->Receiver.get() : nullptr;
 			take.SourceTake = result.SourceTake;
 			take.TargetTake = result.TargetTake;
 			_activeHistoryIndex = _loopTakeHistorySize++;

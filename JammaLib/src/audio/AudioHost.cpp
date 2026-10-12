@@ -82,6 +82,7 @@ namespace audio
 			_lastInitReplacedStream = true;
 			while ((_callbackAdmission.load(std::memory_order_acquire) & 1u) != 0u)
 				std::this_thread::yield();
+			_callbackStations = &_emptyStations;
 			_lastAudioStations.reset();
 			_lastAudioTimingClock.reset();
 			_audioAppliedRigSnapshot.reset();
@@ -179,7 +180,8 @@ namespace audio
 			{
 				_pendingRigSnapshot.store(nullptr);
 				_audioAppliedRigSnapshot.reset();
-				_lastAudioStations.reset();
+				_callbackStations = &_emptyStations;
+			_lastAudioStations.reset();
 				_lastAudioTimingClock.reset();
 				_retainedRigSnapshots.clear();
 				_pendingRigSnapshot.collect();
@@ -190,10 +192,14 @@ namespace audio
 		}
 	}
 
-	void AudioHost::SetStations(std::shared_ptr<const std::vector<std::shared_ptr<Station>>> stations)
+	void AudioHost::SetStations(std::shared_ptr<const std::vector<std::shared_ptr<Station>>> stations, std::uint64_t revision)
 	{
 		std::scoped_lock lock(_retainedRigSnapshotsMutex);
-		_audioStations.store(stations);
+		if (!stations) { _audioStations.store({}); return; }
+		auto inventory = std::make_shared<StationInventory>();
+		if (stations) inventory->assign(stations->begin(), stations->end());
+		inventory->TopologyRevision = revision;
+		_audioStations.store(std::move(inventory));
 	}
 
 	void AudioHost::PublishPendingRigSnapshot(std::shared_ptr<const engine::RigSnapshot> snapshot)
@@ -582,7 +588,14 @@ void AudioHost::PublishAudioCallbackProgress(std::uint64_t blockStartSample,
 	bool AudioHost::ApplyPendingRigWhileQuiescent() noexcept
 	{
 		if (!CallbackAdmissionIsQuiescent()) return false;
+		PublishRigTriggerTransitionAtAudioBoundary();
 		ApplyPendingRigSnapshotAtAudioBoundary();
+		auto stations = _audioStations.borrow();
+		if (stations.ReadSucceeded()) _lastAudioStations = std::move(stations);
+		_callbackStations = _lastAudioStations ? static_cast<const std::vector<std::shared_ptr<Station>>*>(_lastAudioStations.get()) : &_emptyStations;
+		if (_audioAppliedRigSnapshot && _audioAppliedRigSnapshot->TopologyRevision != 0u &&
+			(!_lastAudioStations || _lastAudioStations->TopologyRevision < _audioAppliedRigSnapshot->TopologyRevision))
+			_callbackStations = _audioAppliedRigSnapshot->Stations.get();
 		return true;
 	}
 
@@ -651,7 +664,11 @@ void AudioHost::PublishAudioCallbackProgress(std::uint64_t blockStartSample,
 
 		ApplyPendingRigSnapshotAtAudioBoundary();
 		const auto& audioStreamParams = *_preparedStreamParams;
-		const auto* stationsSnapshotValue = _lastAudioStations.get();
+		const std::vector<std::shared_ptr<Station>>* stationsSnapshotValue = _lastAudioStations.get();
+		if (_audioAppliedRigSnapshot && _audioAppliedRigSnapshot->TopologyRevision != 0u &&
+			(!_lastAudioStations || _lastAudioStations->TopologyRevision < _audioAppliedRigSnapshot->TopologyRevision))
+			stationsSnapshotValue = _audioAppliedRigSnapshot->Stations.get();
+		_callbackStations = stationsSnapshotValue ? stationsSnapshotValue : &_emptyStations;
 		const auto& stations = stationsSnapshotValue ? *stationsSnapshotValue : _emptyStations;
 		auto* timingClock = _lastAudioTimingClock.get();
 		ApplyDesiredTimingAtAudioBoundary(blockStartSample, audioStreamParams.SampleRate,

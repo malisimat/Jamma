@@ -104,6 +104,7 @@ namespace engine
 			const std::vector<std::shared_ptr<engine::Station>>& stations,
 			const io::UserConfig& cfg);
 
+		void DetachStationMaster(const std::shared_ptr<engine::Station>& station);
 		bool TrySetMasterFromHover(const std::shared_ptr<base::GuiElement>& hovering,
 			unsigned int depth,
 			const std::vector<std::shared_ptr<engine::Station>>& stations,

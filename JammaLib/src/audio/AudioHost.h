@@ -26,6 +26,7 @@
 namespace engine
 {
 	struct RigSnapshot;
+	class SourceLossIntegrationTestAccess;
 }
 
 namespace audio
@@ -34,10 +35,16 @@ namespace audio
 	class RigAudioBoundaryTestAccess;
 	class AudioHostRealtimeTestAccess;
 
+	struct StationInventory : std::vector<std::shared_ptr<engine::Station>>
+	{
+		std::uint64_t TopologyRevision = 0u;
+	};
+
 	class AudioHost
 	{
 		friend class RigAudioBoundaryTestAccess;
 		friend class AudioHostRealtimeTestAccess;
+		friend class engine::SourceLossIntegrationTestAccess;
 	public:
 		using TickCallback = std::function<void(Time streamTime, unsigned int numSamps,
 			const std::optional<io::UserConfig>& cfg,
@@ -55,7 +62,7 @@ namespace audio
 		bool LastInitReplacedStream() const noexcept { return _lastInitReplacedStream; }
 		void Close();
 
-		void SetStations(std::shared_ptr<const std::vector<std::shared_ptr<engine::Station>>> stations);
+		void SetStations(std::shared_ptr<const std::vector<std::shared_ptr<engine::Station>>> stations, std::uint64_t revision = 0u);
 		void PublishPendingRigSnapshot(std::shared_ptr<const engine::RigSnapshot> snapshot);
 		void RequestRigTriggerTransition(std::uint64_t candidateRevision,
 			std::shared_ptr<const engine::RigSnapshot> acceptedSnapshot,
@@ -92,12 +99,12 @@ namespace audio
 
 		std::shared_ptr<const std::vector<std::shared_ptr<engine::Station>>>
 			GetStationsSnapshot() const { return _audioStations.load(); }
-		base::PublishedAudioSnapshot<const std::vector<std::shared_ptr<engine::Station>>>::Lease
+		base::PublishedAudioSnapshot<const StationInventory>::Lease
 			BorrowStationsSnapshot() const noexcept { return _audioStations.borrow(); }
 		// Audio callback only: references the last successfully borrowed station list.
 		const std::vector<std::shared_ptr<engine::Station>>& AudioStationsForCallback() const noexcept
 		{
-			return _lastAudioStations ? *_lastAudioStations : _emptyStations;
+			return *_callbackStations;
 		}
 		std::uint64_t GetAudioSampleCounter() const { return _audioSampleCounter.load(std::memory_order_relaxed); }
 		const midi::MidiClockAnchor& GetMidiClockAnchor() const { return _midiClockAnchor; }
@@ -237,12 +244,13 @@ namespace audio
 		static constexpr unsigned int _AdcPeakChannels = 32u;
 		std::array<std::atomic<float>, _AdcPeakChannels> _adcPeaks{};
 
-		base::PublishedAudioSnapshot<const std::vector<std::shared_ptr<engine::Station>>> _audioStations;
+		const std::vector<std::shared_ptr<engine::Station>>* _callbackStations = &_emptyStations; // Audio owner; pinned by a retained lease.
+		base::PublishedAudioSnapshot<const StationInventory> _audioStations;
 		// Constructed with AudioHost, so an empty station set never triggers local-static
 		// initialization or STL debug iterator allocation on the audio callback.
 		const std::vector<std::shared_ptr<engine::Station>> _emptyStations;
 		// Declared after its publisher so teardown releases this lease first.
-		base::PublishedAudioSnapshot<const std::vector<std::shared_ptr<engine::Station>>>::Lease
+		base::PublishedAudioSnapshot<const StationInventory>::Lease
 			_lastAudioStations;
 	// Retain snapshots off audio so callback references cannot become the last owner.
 		base::PublishedAudioSnapshot<const engine::RigSnapshot> _pendingRigSnapshot;

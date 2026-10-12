@@ -33,6 +33,9 @@ namespace engine
 			const TriggerParams& triggerParams,
 			const PersistRig& persistMigration);
 		EditResult SubmitCandidate(const io::RigFile& candidateRig);
+		// Serialized Scene owner, off callback. Normalize against the old inventory.
+		EditResult SubmitInventory(const std::vector<std::shared_ptr<Station>>& stations,
+			std::shared_ptr<Station> removed = {});
 		// Refresh source availability after the audio stream and MIDI inputs actually open.
 		SnapshotPtr RefreshRuntimeAvailability(unsigned int availableAdcChannels,
 			std::vector<std::string> availableMidiDevices);

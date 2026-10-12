@@ -68,6 +68,8 @@
     </Filter>
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="src\engine\StationManagement.h"><Filter>src\engine</Filter></ClInclude>
+    <ClInclude Include="src\gui\GuiStationControls.h"><Filter>src\gui</Filter></ClInclude>
     <ClInclude Include="include\stdafx.h">
       <Filter>include</Filter>
     </ClInclude>

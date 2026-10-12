@@ -18,6 +18,27 @@ namespace engine
     class TriggerSourceLossTestAccess
     {
     public:
+		static void SeedHistoricalDelayedBorrowers(Trigger& trigger, base::ActionReceiver* removed,
+			base::TriggerPunchTarget* removedTarget, base::TriggerPunchTarget* survivorTarget)
+		{
+			trigger._loopTakeHistorySize = 1u;
+			trigger._loopTakeHistory[0].Receiver = removed;
+			trigger._loopTakeHistory[0].Token = 17u;
+			trigger._delayedPunchActions[0] = {removedTarget, 64u, true, 17u};
+			trigger._delayedPunchActions[1] = {survivorTarget, 64u, true, 18u};
+			trigger._delayedPunchActionCount = 2u;
+			trigger._pendingDitchDelayedPunchActions[0] = {removedTarget, 64u, true, 17u};
+			trigger._pendingDitchDelayedPunchActionCount = 1u;
+			trigger._delayedActions[0] = {64u, 0.0, 17u, nullptr};
+			trigger._delayedActionCount = 1u;
+			trigger._pendingDitchDelayedActions[0] = {64u, 0.0, 17u, nullptr};
+			trigger._pendingDitchDelayedActionCount = 1u;
+		}
+		static bool HasRemovedDelayedBorrowers(const Trigger& trigger)
+		{
+			return trigger._delayedActionCount != 0u || trigger._pendingDitchDelayedActionCount != 0u ||
+				trigger._pendingDitchDelayedPunchActionCount != 0u;
+		}
         static std::size_t CaptureSessionCount(const Trigger& trigger)
         {
             return trigger._captureSessionCount;
@@ -3561,4 +3582,25 @@ TEST(Trigger, RapidUnpublishedAudioEndKeepsTailAndAllowsIndependentNewCapture)
     station->CommitChanges();
     EXPECT_EQ(1u, oldTail->GetLoops().size());
     EXPECT_EQ(Loop::STATE_PLAYINGRECORDING, oldTail->GetLoops().front()->PlayState());
+}
+
+TEST(Trigger, HistoricalReceiverRemovalDiscardsDelayedBorrowersWithoutCancellingSurvivor)
+{
+ auto removed = std::make_shared<SequenceTriggerReceiver>();
+ auto survivor = std::make_shared<SequenceTriggerReceiver>();
+ auto removedTarget = std::make_shared<TestTriggerPunchTarget>();
+ auto survivorTarget = std::make_shared<TestTriggerPunchTarget>();
+ auto trigger = MakeDefaultTrigger(survivor, 0u);
+ // Represent completed older history after a rebind: current binding belongs
+ // to a survivor, while latency borrowers still reference the outgoing take.
+ engine::TriggerSourceLossTestAccess::SeedHistoricalDelayedBorrowers(*trigger,
+  removed.get(), removedTarget.get(), survivorTarget.get());
+ trigger->RequestReceiverRemoval(removed.get());
+ trigger->OnTick(GetTime(), 0u, std::nullopt, std::nullopt);
+ ASSERT_TRUE(trigger->ReceiverRemovalReady());
+ EXPECT_FALSE(engine::TriggerSourceLossTestAccess::HasRemovedDelayedBorrowers(*trigger));
+ trigger->CompleteReceiverRemovalOnJob();
+ trigger->OnTick(GetTime(), 128u, std::nullopt, std::nullopt);
+ EXPECT_EQ(0u, removedTarget->PunchInCount);
+ EXPECT_EQ(1u, survivorTarget->PunchInCount);
 }

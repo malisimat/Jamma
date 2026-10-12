@@ -29,6 +29,8 @@ namespace engine
 		mutable io::RigFile::Trigger::MidiInputMode MidiInputMode = io::RigFile::Trigger::MidiInputMode::None;
 		mutable std::shared_ptr<audio::AudioMixer> OverdubMixer;
 		mutable std::shared_ptr<base::BounceWriter> OverdubWriter;
+		// Frozen receiver identity; Receiver is swapped at the audio boundary.
+		std::shared_ptr<base::ActionReceiver> BoundReceiver;
 	};
 
 	// A reused Trigger that receives a capture-route update at the audio boundary.
@@ -36,8 +38,7 @@ namespace engine
 	{
 		std::shared_ptr<Trigger> Instance;
 		size_t CandidateIndex = 0u;
-		// Rig edits retain the coordinator's Station inventory/order; this fact
-		// stays valid after the prepared Receiver handle is swapped at publication.
+		// Frozen comparison of Station identities, valid after Receiver swaps at publication.
 		bool ReceiverChanged = false;
 	};
 
@@ -73,6 +74,11 @@ namespace engine
 	{
 		std::uint64_t Revision = 0u;
 		io::RigFile Rig;
+		std::uint64_t TopologyRevision = 0u; // Survives later rig-only publications.
+		bool MembershipChange = false;
+		std::shared_ptr<const std::vector<std::shared_ptr<Station>>> Stations;
+		std::vector<io::JamFile::Station> StationDescriptors;
+		Station* RemovedStation = nullptr; // Identity only; controller pins outgoing owner until retirement.
 		RoutingGraph Graph;
 		std::vector<RigSnapshotTrigger> Triggers;
 		std::vector<TriggerReplacementCheck> TriggerReplacementChecks;

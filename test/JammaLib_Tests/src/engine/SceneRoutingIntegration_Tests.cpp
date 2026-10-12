@@ -3,7 +3,9 @@
 #include <filesystem>
 #include <fstream>
 #include "engine/Scene.h"
+#include "gui/GuiScrollPanel.h"
 #include "io/NativeMidiSidecar.h"
+#include "io/IoSessionExporter.h"
 #include "utils/StringUtils.h"
 
 namespace engine
@@ -16,7 +18,71 @@ namespace engine
         {
             scene._ConfirmMidiConnectionChange(previous, refreshed, names);
         }
+        static bool Export(Scene& scene, const std::wstring& directory)
+        {
+            return io::IoSessionExporter::ExportSessionToDirectory(scene.SnapshotStations(), scene.AcceptedRigSnapshot(),
+                scene._quantisation, scene._globalMidiQuantState, scene._transportOffsetLoopFrac,
+                scene._userConfig, scene._audioEngine->GetStreamParams(), nullptr, scene._sceneMutex, nullptr, directory);
+        }
+        static void Manage(Scene& scene, bool prepend, std::shared_ptr<Station> remove = {})
+        {
+			// Existing topology tests have no render pump; finish the previous
+			// presentation interval before their next independent operation.
+			FinishMotion(scene);
+			scene._RequestStationControl({prepend, std::move(remove)});
+		}
+		static void FinishMotion(Scene& scene)
+		{ std::scoped_lock lock(scene._sceneMutex); for (const auto& station : scene._stations) station->FinishPresentationMove(); }
+		static bool ControlsAvailable(Scene& scene)
+		{ std::scoped_lock lock(scene._sceneMutex); return scene._StationManagementAvailableLocked(); }
+        static void ConfirmRemoval(Scene& scene) { scene._popupManager.Close(); scene._AcceptStationRemoval(true); }
+        static bool Busy(Scene& scene) { std::scoped_lock lock(scene._sceneMutex); return scene._stationManagement.Busy(); }
         static void Recover(Scene& scene) { scene._PumpSourceLossRecovery(); }
+		static std::shared_ptr<gui::GuiNumericInput> FocusSetting(Scene& scene, bool midiChannel, const std::string& text)
+		{
+			auto field = midiChannel ? scene._midiChannelOverrideInput : scene._transportOffsetInput;
+			// Focus manager and text edit state belong to the window owner. Commit
+			// remains deferred until actual Scene focus loss invokes FinalizeEdits.
+			EXPECT_TRUE(scene._focusManager.RequestFocus(field));
+			field->SetText(text, false);
+			return field;
+		}
+		static unsigned int ForcedChannel(const Scene& scene) { return scene._inputSubsystem->ForcedChannelOverride(); }
+		static void StaleProjection(Scene& scene) { scene._viewProj = glm::mat4(0.0f); }
+		static bool HasCurrentProjection(const Scene& scene)
+		{
+			const auto aspect = static_cast<float>(scene._sizeParams.Size.Width) / scene._sizeParams.Size.Height;
+			const auto current = scene._camera.Projection(aspect, Scene::_StationCentre(scene._stations)) * scene._camera.ViewMatrix();
+			return scene._viewProj == current;
+		}
+		static std::shared_ptr<gui::GuiHud> PrepareHud(Scene& scene)
+		{
+			std::scoped_lock lock(scene._sceneMutex);
+			const bool alreadyClosed = (scene._audioEngine->_callbackAdmission.load(std::memory_order_acquire)
+				& audio::AudioHost::_CallbackAdmissionClosed) != 0u;
+			scene._audioEngine->CloseCallbackAdmission();
+			scene._audioEngine->PublishPendingRigSnapshot(scene._rigCoordinator.Accepted());
+			scene._audioEngine->ApplyPendingRigWhileQuiescent();
+			if (!alreadyClosed) scene._audioEngine->ReopenCallbackAdmission();
+			EXPECT_EQ(scene._rigCoordinator.Accepted()->Revision, scene._audioEngine->AppliedRigRevision());
+			// Supply only the liveness hint. Publication still runs through the real
+			// producer gate, stopped-reader barrier and input acknowledgement.
+			scene._audioEngine->_audioCallbackHeartbeat.store(1u);
+			scene._lastAudioCallbackHeartbeatAt = std::chrono::steady_clock::now();
+			scene._hudPanel->SetCableRevealHeld(true);
+			scene._hudPanel->SetStationAnchors({ {0u, scene._stations[0]->Name(), glm::dvec2{600, 350}, glm::vec4{1.0f}},
+				{1u, scene._stations[1]->Name(), glm::dvec2{800, 350}, glm::vec4{1.0f}} });
+			return scene._hudPanel;
+		}
+		static void AudioBoundary(Scene& scene)
+		{
+			std::scoped_lock lock(scene._sceneMutex);
+			const bool alreadyClosed = (scene._audioEngine->_callbackAdmission.load(std::memory_order_acquire)
+				& audio::AudioHost::_CallbackAdmissionClosed) != 0u;
+			scene._audioEngine->CloseCallbackAdmission();
+			scene._audioEngine->ApplyPendingRigWhileQuiescent();
+			if (!alreadyClosed) scene._audioEngine->ReopenCallbackAdmission();
+		}
         static bool RecoveryGateIsClosed(const Scene& scene) { return scene._sourceLossRecoveryGateClosed; }
         static void CloseRecoveryGate(Scene& scene)
         {
@@ -43,6 +109,20 @@ namespace engine
 class SceneRoutingIntegrationTest : public testing::Test
 {
 protected:
+	static void LayoutHud(const std::shared_ptr<base::GuiElement>& element)
+	{
+		if (auto stack = std::dynamic_pointer_cast<gui::GuiStackPanel>(element)) stack->ComputeLayout();
+		if (auto scroll = std::dynamic_pointer_cast<gui::GuiScrollPanel>(element))
+			if (scroll->Content()) LayoutHud(scroll->Content());
+		for (unsigned int i = 0; i < 256; ++i)
+		{ auto child = element->TryGetChild(static_cast<unsigned char>(i)); if (!child) break; LayoutHud(child); }
+	}
+	static void Settle(const std::shared_ptr<engine::Scene>& scene)
+	{
+		const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+		while ((!scene->CaptureCommittedRig() || engine::SourceLossIntegrationTestAccess::Busy(*scene)) && std::chrono::steady_clock::now() < deadline)
+		{ engine::SourceLossIntegrationTestAccess::AudioBoundary(*scene); scene->CommitChanges(); std::this_thread::sleep_for(std::chrono::milliseconds(20)); }
+	}
 	static io::JamFile::Station Station(std::string name)
 	{
 		io::JamFile::Station station{};
@@ -519,4 +599,216 @@ TEST_F(SceneRoutingIntegrationTest, RoutingEditIsRejectedWhenAudioCallbackIsInac
 	EXPECT_EQ((std::vector<std::pair<std::string, std::size_t>>{ { "Station", 1u } }),
 		Memberships(scene));
 	scene->Shutdown();
+}
+
+TEST_F(SceneRoutingIntegrationTest, StoppedStreamMembershipPreservesSelectionAndRouteIdentity)
+{
+ auto scene = FreshScene({Station("A"), Station("B")}, {Trigger("record", "B")});
+ ASSERT_TRUE(scene);
+ auto before = scene->SnapshotStations();
+ auto trigger = scene->AcceptedRigSnapshot()->Triggers.front().Instance;
+ before[1]->Select();
+ before[0]->SetAllowedMidiChannels({9});
+ engine::SourceLossIntegrationTestAccess::Manage(*scene, true);
+ const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+ while (engine::SourceLossIntegrationTestAccess::Busy(*scene) && std::chrono::steady_clock::now() < deadline)
+ { scene->CommitChanges(); std::this_thread::sleep_for(std::chrono::milliseconds(20)); }
+ auto added = scene->SnapshotStations();
+ ASSERT_EQ(3u, added.size());
+ EXPECT_EQ(before[0], added[1]); EXPECT_EQ(before[1], added[2]);
+ EXPECT_TRUE(before[1]->IsSelected()); EXPECT_FALSE(added[0]->IsSelected());
+ EXPECT_EQ(trigger, scene->AcceptedRigSnapshot()->Triggers.front().Instance);
+ EXPECT_EQ(before[1], scene->AcceptedRigSnapshot()->Triggers.front().BoundReceiver);
+ EXPECT_EQ((std::vector<int>{9}), before[0]->AllowedMidiChannels());
+ engine::SourceLossIntegrationTestAccess::Manage(*scene, false, added[0]);
+ const auto deleteDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+ while (engine::SourceLossIntegrationTestAccess::Busy(*scene) && std::chrono::steady_clock::now() < deleteDeadline)
+ { scene->CommitChanges(); std::this_thread::sleep_for(std::chrono::milliseconds(20)); }
+ EXPECT_EQ(2u, scene->SnapshotStations().size());
+ EXPECT_TRUE(before[1]->IsSelected());
+ scene->Shutdown();
+}
+
+TEST_F(SceneRoutingIntegrationTest, ActiveStationDeletionCancelsAndUnbindsWithoutSelectingNeighbour)
+{
+ auto scene = FreshScene({Station("A"), Station("B")}, {Trigger("record", "A")});
+ ASSERT_TRUE(scene);
+ auto station = scene->SnapshotStations().front();
+ auto trigger = scene->AcceptedRigSnapshot()->Triggers.front().Instance;
+ io::UserConfig cfg{}; cfg.Audio.NumChannelsIn = 1u;
+ engine::SourceLossIntegrationTestAccess::StartRecording(*scene, trigger, cfg);
+ ASSERT_EQ(1u, station->NumTakes());
+ station->Select();
+ engine::SourceLossIntegrationTestAccess::Manage(*scene, false, station);
+ EXPECT_FALSE(engine::SourceLossIntegrationTestAccess::Busy(*scene)); // Consent has not stopped recording.
+ EXPECT_FALSE(station->MembershipRemoving());
+ engine::SourceLossIntegrationTestAccess::ConfirmRemoval(*scene);
+ const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+ while (engine::SourceLossIntegrationTestAccess::Busy(*scene) && std::chrono::steady_clock::now() < deadline)
+ { scene->CommitChanges(); std::this_thread::sleep_for(std::chrono::milliseconds(20)); }
+ EXPECT_EQ(1u, scene->SnapshotStations().size());
+ EXPECT_FALSE(scene->HasSelection());
+ EXPECT_FALSE(scene->AcceptedRigSnapshot()->Triggers.front().BoundReceiver);
+ EXPECT_EQ("", scene->AcceptedRigSnapshot()->Rig.Triggers.front().StationTarget);
+ EXPECT_TRUE(trigger->GetTakes().empty());
+ std::weak_ptr<engine::Station> retired = station;
+ station.reset();
+ const auto retireDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+ while (!retired.expired() && std::chrono::steady_clock::now() < retireDeadline)
+ { scene->CommitChanges(); std::this_thread::sleep_for(std::chrono::milliseconds(20)); }
+ EXPECT_TRUE(retired.expired()) << "Removal must retire without another edit";
+ scene->Shutdown();
+}
+
+TEST_F(SceneRoutingIntegrationTest, SavedJamAndExplicitRigReproduceAddedMembershipAndBindings)
+{
+ auto scene = FreshScene({Station("A")}, {Trigger("record", "A")});
+ ASSERT_TRUE(scene);
+ engine::SourceLossIntegrationTestAccess::Manage(*scene, true);
+ const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+ while (engine::SourceLossIntegrationTestAccess::Busy(*scene) && std::chrono::steady_clock::now() < deadline)
+ { scene->CommitChanges(); std::this_thread::sleep_for(std::chrono::milliseconds(20)); }
+ ASSERT_EQ(2u, scene->SnapshotStations().size());
+ const auto rig = scene->CaptureCommittedRig(); ASSERT_TRUE(rig);
+ std::stringstream rigJson; ASSERT_TRUE(io::RigFile::ToJsonStream(*rig, rigJson));
+ auto savedRig = io::RigFile::FromStream(std::move(rigJson)); ASSERT_TRUE(savedRig);
+ const auto directory = std::filesystem::temp_directory_path() / ("jamma-station-save-" + std::to_string(utils::Timer::GetTime().time_since_epoch().count()));
+ std::filesystem::create_directories(directory);
+ ASSERT_TRUE(engine::SourceLossIntegrationTestAccess::Export(*scene, directory.wstring()));
+ std::ifstream file(directory / "session.jam"); std::stringstream jamJson; jamJson << file.rdbuf(); file.close();
+ auto savedJam = io::JamFile::FromStream(std::move(jamJson)); ASSERT_TRUE(savedJam);
+ EXPECT_EQ(2u, savedJam->Stations.size());
+ EXPECT_EQ((std::vector<int>{1}), savedJam->Stations.front().AllowedMidiChannels);
+ engine::SceneParams params({ "" }, {}, {640u, 480u});
+ auto reloaded = engine::Scene::FromFile(params, *savedJam, *savedRig, directory.wstring()); ASSERT_TRUE(reloaded);
+ EXPECT_EQ(scene->SnapshotStations()[0]->Name(), reloaded.value()->SnapshotStations()[0]->Name());
+ EXPECT_EQ("A", reloaded.value()->AcceptedRigSnapshot()->Rig.Triggers.front().StationTarget); // frozen target lives in Rig
+ reloaded.value()->Shutdown(); scene->Shutdown();
+ std::filesystem::remove_all(directory);
+}
+
+TEST_F(SceneRoutingIntegrationTest, DeletedStationOrphanReconnectsThroughLockedSceneHudDispatch)
+{
+ auto scene = FreshScene({Station("A"), Station("B")}, {Trigger("record", "A")});
+ ASSERT_TRUE(scene);
+ engine::SourceLossIntegrationTestAccess::Manage(*scene, false, scene->SnapshotStations()[0]);
+ Settle(scene);
+ ASSERT_EQ(1u, scene->SnapshotStations().size());
+ ASSERT_FALSE(scene->AcceptedRigSnapshot()->Triggers[0].BoundReceiver);
+ engine::SourceLossIntegrationTestAccess::Manage(*scene, false);
+ Settle(scene);
+ ASSERT_EQ(2u, scene->SnapshotStations().size());
+ const auto replacement = scene->SnapshotStations()[1];
+ scene->SetSize({1200, 800});
+ auto hud = engine::SourceLossIntegrationTestAccess::PrepareHud(*scene);
+ LayoutHud(hud);
+ std::vector<gui::CableInteraction::Endpoint> endpoints;
+ std::vector<gui::CableInteraction::Cable> cables;
+ hud->BuildInteractionGeometry(endpoints, cables);
+ const auto source = std::find_if(endpoints.begin(), endpoints.end(), [](const auto& e) { return e.Kind == gui::CableInteraction::EndpointKind::TriggerOutput; });
+ const auto target = std::find_if(endpoints.begin(), endpoints.end(), [](const auto& e) { return e.Kind == gui::CableInteraction::EndpointKind::Station && e.StationIndex == 1u; });
+ ASSERT_NE(endpoints.end(), source); ASSERT_NE(endpoints.end(), target);
+ actions::TouchAction touch; touch.Touch = actions::TouchAction::TOUCH_MOUSE; touch.Index = 0;
+ touch.Position = source->Position; touch.State = actions::TouchAction::TOUCH_DOWN;
+ EXPECT_TRUE(scene->OnAction(touch).IsEaten);
+ ASSERT_TRUE(hud->HasCableDrag());
+ actions::TouchMoveAction move; move.Touch = actions::TouchAction::TOUCH_MOUSE;
+ move.Position = target->Position; move.MouseButtonsDown = 1u;
+ scene->OnAction(move);
+ touch.Position = target->Position; touch.State = actions::TouchAction::TOUCH_UP;
+ EXPECT_NO_THROW(scene->OnAction(touch));
+ EXPECT_FALSE(hud->HasCableDrag());
+ Settle(scene);
+ EXPECT_EQ(replacement, scene->AcceptedRigSnapshot()->Triggers[0].BoundReceiver);
+ EXPECT_EQ(replacement->Name(), scene->AcceptedRigSnapshot()->Rig.Triggers[0].StationTarget);
+ EXPECT_NO_THROW(scene->OnInputFocusLost());
+ EXPECT_FALSE(hud->HasCableDrag());
+ scene->Shutdown();
+}
+
+TEST_F(SceneRoutingIntegrationTest, PublicRoutingSubmissionAndFocusLossRemainSafe)
+{
+ auto scene = FreshScene({Station("A"), Station("B")}, {Trigger("record", "A")});
+ ASSERT_TRUE(scene);
+ auto hud = engine::SourceLossIntegrationTestAccess::PrepareHud(*scene);
+ auto candidate = scene->AcceptedRigSnapshot()->Rig;
+ candidate.Triggers[0].StationTarget = "B";
+ EXPECT_EQ(engine::RigCoordinator::EditResult::Pending, scene->RequestRigEdit(candidate));
+ EXPECT_NO_THROW(scene->OnInputFocusLost());
+ Settle(scene);
+ EXPECT_EQ(scene->SnapshotStations()[1], scene->AcceptedRigSnapshot()->Triggers[0].BoundReceiver);
+ scene->Shutdown();
+}
+
+TEST_F(SceneRoutingIntegrationTest, FocusLossCommitsMidiChannelSettingOutsideSceneLock)
+{
+ auto scene = FreshScene({Station("A")}, {});
+ ASSERT_TRUE(scene);
+ auto field = engine::SourceLossIntegrationTestAccess::FocusSetting(*scene, true, "7");
+ ASSERT_TRUE(field->HasFocus());
+ EXPECT_EQ(0u, engine::SourceLossIntegrationTestAccess::ForcedChannel(*scene));
+ EXPECT_NO_THROW(scene->OnInputFocusLost());
+ EXPECT_EQ(7u, engine::SourceLossIntegrationTestAccess::ForcedChannel(*scene));
+ EXPECT_DOUBLE_EQ(7.0, field->Value());
+ EXPECT_FALSE(field->HasFocus());
+ scene->Shutdown();
+}
+
+TEST_F(SceneRoutingIntegrationTest, FocusLossCommitsPhaseOffsetSettingOutsideSceneLock)
+{
+ auto scene = FreshScene({Station("A")}, {});
+ ASSERT_TRUE(scene);
+ auto field = engine::SourceLossIntegrationTestAccess::FocusSetting(*scene, false, "0.125");
+ ASSERT_TRUE(field->HasFocus());
+ EXPECT_DOUBLE_EQ(0.0, scene->SnapshotStations()[0]->TransportOffsetLoopFrac());
+ EXPECT_NO_THROW(scene->OnInputFocusLost());
+ EXPECT_DOUBLE_EQ(0.125, scene->SnapshotStations()[0]->TransportOffsetLoopFrac());
+ EXPECT_DOUBLE_EQ(0.125, field->Value());
+ EXPECT_FALSE(field->HasFocus());
+ scene->Shutdown();
+}
+
+TEST_F(SceneRoutingIntegrationTest, StationMotionPreservesFinalTopologyAndAppendLeavesSurvivorsStill)
+{
+ auto scene = FreshScene({Station("A"), Station("B")}, {Trigger("record", "B")});
+ ASSERT_TRUE(scene);
+ const auto original = scene->SnapshotStations();
+ engine::SourceLossIntegrationTestAccess::Manage(*scene, true);
+ Settle(scene);
+ auto prepended = scene->SnapshotStations(); ASSERT_EQ(3u, prepended.size());
+ EXPECT_FLOAT_EQ(-50.0f, prepended[0]->ModelPosition().X);
+ EXPECT_FLOAT_EQ(-650.0f, prepended[0]->PresentationModelPosition().X);
+ EXPECT_FLOAT_EQ(-50.0f, original[0]->PresentationModelPosition().X);
+ EXPECT_FLOAT_EQ(550.0f, original[0]->ModelPosition().X);
+ EXPECT_EQ(original[1], scene->AcceptedRigSnapshot()->Triggers[0].BoundReceiver);
+ EXPECT_FALSE(engine::SourceLossIntegrationTestAccess::ControlsAvailable(*scene));
+ ASSERT_TRUE(scene->CaptureCommittedRig()); // Saved identities are final during motion.
+ engine::SourceLossIntegrationTestAccess::Manage(*scene, false);
+ Settle(scene);
+ auto appended = scene->SnapshotStations(); ASSERT_EQ(4u, appended.size());
+ for (size_t i = 0; i < 3; ++i) EXPECT_FALSE(appended[i]->IsPresentationMoving());
+ EXPECT_FLOAT_EQ(appended[3]->ModelPosition().X + 600.0f, appended[3]->PresentationModelPosition().X);
+ engine::SourceLossIntegrationTestAccess::Manage(*scene, false, appended[0]);
+ Settle(scene);
+ auto deleted = scene->SnapshotStations(); ASSERT_EQ(3u, deleted.size());
+ EXPECT_EQ(original[0], deleted[0]);
+ EXPECT_FLOAT_EQ(-50.0f, deleted[0]->ModelPosition().X);
+ EXPECT_FLOAT_EQ(550.0f, deleted[0]->PresentationModelPosition().X);
+ EXPECT_EQ(original[1], scene->AcceptedRigSnapshot()->Triggers[0].BoundReceiver);
+ engine::SourceLossIntegrationTestAccess::FinishMotion(*scene);
+ EXPECT_TRUE(engine::SourceLossIntegrationTestAccess::ControlsAvailable(*scene));
+ scene->Shutdown();
+}
+
+TEST_F(SceneRoutingIntegrationTest, UiFrameRefreshesCameraProjectionWithoutGraphicsResources)
+{
+ auto scene = FreshScene({Station("A")}, {});
+ ASSERT_TRUE(scene);
+ scene->SetSize({1200, 800});
+ // Represent the previous frame's projection before camera/frame preparation.
+ engine::SourceLossIntegrationTestAccess::StaleProjection(*scene);
+ EXPECT_FALSE(engine::SourceLossIntegrationTestAccess::HasCurrentProjection(*scene));
+ scene->AdvanceUiAnimations();
+ EXPECT_TRUE(engine::SourceLossIntegrationTestAccess::HasCurrentProjection(*scene));
+ scene->Shutdown();
 }

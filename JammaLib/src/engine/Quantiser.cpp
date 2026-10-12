@@ -1792,3 +1792,12 @@ std::shared_ptr<engine::LoopTake> engine::QuantiserController::_OwnerForMidiLoop
 	});
 	return owner;
 }
+
+void engine::Quantiser::DetachStationMaster(const std::shared_ptr<engine::Station>& station)
+{
+	// Scene serializes this reference; transport/grid values intentionally survive.
+	if (!station || !_masterLoop) return;
+	for (const auto& take : station->GetLoopTakeSnapshot())
+		for (const auto& loop : take->GetLoops())
+			if (loop == _masterLoop) { _masterLoop.reset(); return; }
+}

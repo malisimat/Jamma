@@ -32,6 +32,12 @@ namespace gui
 	{
 	public:
 		explicit GuiMainPanel(GuiMainPanelParams params);
+		void SetRigSaveEnabled(bool enabled)
+		{
+			if (!_saveRigButton || _saveRigButton->IsEnabled() == enabled) return;
+			_saveRigButton->SetEnabled(enabled);
+			_saveRigButton->SetText(enabled ? "Save rig as default..." : "Save rig (busy)");
+		}
 		void SetCommandOwner(std::weak_ptr<base::ActionReceiver> owner);
 		void SetViewportSize(utils::Size2d viewport);
 		void SetPage(SettingsPage page);
@@ -62,6 +68,7 @@ namespace gui
 		void _UpdatePresentation();
 		static constexpr unsigned int _PageCommand = 1u;
 		static constexpr unsigned int _ExpandCommand = 2u;
+		std::shared_ptr<GuiButton> _saveRigButton;
 		bool _selectionOnly;
 		bool _expanded = true;
 		float _transition = 1.0f;

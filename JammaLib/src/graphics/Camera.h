@@ -90,6 +90,8 @@ namespace graphics
 		EditorReturnState CaptureEditorReturnState() const noexcept;
 		void RestoreEditorReturnState(const EditorReturnState& state) noexcept;
 		void SetEditorPerspective(bool enabled) noexcept { _editorPerspective = enabled; }
+		void ForgetStation(const std::shared_ptr<const void>& identity) noexcept;
+		void RevealPosition(utils::Position3d position, utils::Size2d viewport, utils::Position3d centre, int margin);
 		void RegisterStation(size_t index, std::shared_ptr<const void> identity, std::uint64_t revision);
 		void ObserveStation(size_t index, std::shared_ptr<const void> identity, std::uint64_t revision, utils::Position3d position);
 		void CompleteStationObservation(size_t stationCount, std::optional<utils::Position3d> firstStation);

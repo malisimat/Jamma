@@ -199,6 +199,7 @@
     <ClCompile Include="src\ConsoleBroker.cpp" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="src\RigDefaultSave.h" />
     <ClInclude Include="include\Main.h" />
   </ItemGroup>
   <ItemGroup>

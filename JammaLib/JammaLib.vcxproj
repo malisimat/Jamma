@@ -216,6 +216,8 @@
     </PreBuildEvent>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClInclude Include="src\engine\StationManagement.h" />
+    <ClInclude Include="src\gui\GuiStationControls.h" />
     <ClInclude Include="src\midi\MidiPitchViewGesture.h" />
     <ClInclude Include="src\actions\ActionResult.h" />
     <ClInclude Include="src\audio\BufferBank.h" />

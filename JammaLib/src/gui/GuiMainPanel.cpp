@@ -72,6 +72,17 @@ GuiMainPanel::GuiMainPanel(GuiMainPanelParams params) : GuiPanel(params),
 		setting.Control->SetReceiver(binding);
 		_bindings.push_back(std::move(binding));
 	}
+	if (!_selectionOnly)
+	{
+		auto save = GuiButtonParams::PanelButton(260u);
+		save.Text = "Save rig as default...";
+		_saveRigButton = std::make_shared<GuiButton>(save);
+		_pages[static_cast<size_t>(SettingsPage::Timing)]->AddChild(_saveRigButton);
+		_controlSizes.emplace_back(_saveRigButton, save.Size);
+		auto binding = std::make_shared<GuiCommandReceiver>(7200u);
+		_saveRigButton->SetReceiver(binding);
+		_bindings.push_back(std::move(binding));
+	}
 	GuiScrollPanelParams scrollParams;
 	scrollParams.ScrollBarWidth = 12u;
 	_pageScroll = std::make_shared<GuiScrollPanel>(scrollParams);

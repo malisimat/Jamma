@@ -114,6 +114,12 @@ namespace engine
 		// Presentation query: callers serialize take membership with the scene lock.
 		bool AllTakesMuted() const;
 		utils::Position3d TopCapModelPosition() const;
+		// Graphics/window owner only. Engine topology and serialization use ModelPosition.
+		utils::Position3d PresentationModelPosition() const;
+		void BeginPresentationMove(float startX);
+		bool AdvancePresentationMove(float elapsedSeconds);
+		void FinishPresentationMove() noexcept;
+		bool IsPresentationMoving() const noexcept { return _presentationOffsetX != 0.0f; }
 		virtual	utils::Position2d Position() const override;
 		virtual unsigned int NumInputChannels(base::Audible::AudioSourceType source) const override;
 		virtual unsigned int NumOutputChannels(base::Audible::AudioSourceType source) const override;
@@ -165,6 +171,10 @@ namespace engine
 		// Returns true if this station receives audio from a remote ninjam user.
 		// Overriding this instead of dynamic_cast keeps the audio callback path safe.
 		virtual bool IsRemote() const noexcept { return false; }
+		void BeginMembershipRemoval(); // Job owner, after input producer closure.
+		void SetMembershipRemoving(bool removing) noexcept { _membershipRemoving.store(removing, std::memory_order_release); }
+		bool MembershipRemoving() const noexcept { return _membershipRemoving.load(std::memory_order_acquire); }
+
 		std::shared_ptr<LoopTake> AddTake();
 		void AddTake(std::shared_ptr<LoopTake> take);
 		unsigned int NumTakes() const;
@@ -514,6 +524,7 @@ namespace engine
 		// lost-live releases. Dropped ingress must never reserve note ownership.
 		std::array<std::atomic<std::uint32_t>, midi::MidiNote::TotalNoteSlots> _liveNoteOnRevisions{};
 		std::vector<int> _allowedMidiChannels;
+		std::atomic<bool> _membershipRemoving{ false }; // Scene owner writes, UI/job readers; station lifetime pins teardown.
 		std::atomic<std::uint16_t> _allowedMidiChannelMask{ 0u };
 		// Route snapshots are published off the audio thread.
 		// The callback reads an immutable snapshot pointer for O(1) lookups.
@@ -532,5 +543,8 @@ namespace engine
 		io::JamFile::GlobalMidiQuantState _globalMidiQuantState = io::JamFile::GlobalMidiQuantState::Off;
 		std::int32_t _globalPhaseOffsetSamps = 0;
 		std::int32_t _stationPhaseOffsetSamps = 0;
+		float _presentationOffsetX = 0.0f; // Window owner; no callback/job access.
+		float _presentationStartOffsetX = 0.0f;
+		float _presentationElapsed = 0.0f;
 	};
 }

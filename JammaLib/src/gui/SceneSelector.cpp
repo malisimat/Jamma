@@ -265,3 +265,12 @@ void SceneSelector::EndSelection()
 	_clickPressed = false;
 	_selectMode = SELECT_NONE;
 }
+
+void gui::SceneSelector::ClearPointerState()
+{
+ GuiElement::ClearPointerState();
+ EndSelection();
+ _clickPressed = false;
+ _currentHover.clear();
+ _paintedPath.clear();
+}

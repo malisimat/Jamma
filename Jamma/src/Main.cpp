@@ -13,6 +13,7 @@
 #include "../../console/LineRing.h"
 #include "../../console/OutboundMailbox.h"
 #include "Main.h"
+#include "RigDefaultSave.h"
 #include "Window.h"
 #include "PathUtils.h"
 #include "../ninjam/NinjamSession.h"
@@ -565,7 +566,7 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 	const bool defaultsExisted = GetFileAttributesW(initPath.c_str()) != INVALID_FILE_ATTRIBUTES;
 	startupLog.Write(std::string("[BOOT] defaults pre-existing=") + (defaultsExisted ? "yes" : "no"));
 	auto defaults = LoadIni(initPath);
-	const bool defaultsValid = defaults.has_value();
+	bool defaultsValid = defaults.has_value();
 	if (!defaultsValid)
 	{
 		if (defaultsExisted)
@@ -723,16 +724,11 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 	const auto generatedDirectory = utils::GetParentDirectory(initPath);
 	const auto generatedRigPath = rigGenerated ? NewGeneratedPath(generatedDirectory, L"default", L".rig") : std::nullopt;
 	const auto generatedRigPublished = std::make_shared<std::atomic<bool>>(false);
-	if (defaults.has_value() && !rigGenerated)
-	{
-		const auto rigPath = defaults->Rig;
-		saveRig = [rigPath](const io::RigFile& candidate) { return SaveRigAtomic(rigPath, candidate); };
-	}
-	else if (generatedRigPath)
+	if (generatedRigPath)
 	{
 		const auto path = *generatedRigPath;
 		saveRig = [path, generatedRigPublished](const io::RigFile& candidate) {
-			const bool saved = generatedRigPublished->load(std::memory_order_acquire) ? SaveRigAtomic(path, candidate) : SaveGeneratedRig(path, candidate);
+			const bool saved = !generatedRigPublished->load(std::memory_order_acquire) && SaveGeneratedRig(path, candidate);
 			if (saved) generatedRigPublished->store(true, std::memory_order_release);
 			return saved;
 		};
@@ -923,6 +919,8 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 		const auto accepted = scene.value()->AcceptedRigSnapshot();
 		std::stringstream acceptedStream;
 		if (accepted) RigFile::ToJsonStream(accepted->Rig, acceptedStream);
+		// First-run publication is explicit and independent of runtime transition acceptance.
+		if (accepted && acceptedStream.str() == finalStream.str() && saveRig) saveRig(accepted->Rig);
 		if (generatedRigPublished->load(std::memory_order_acquire) && acceptedStream.str() == finalStream.str())
 		{
 			defaults->Rig = *generatedRigPath;
@@ -965,7 +963,7 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 			startupLog.Write("[JAM] generated session publication failed");
 		}
 	}
-	const bool rigReadyForDefaults = !rigGenerated ||
+	bool rigReadyForDefaults = !rigGenerated ||
 		(generatedRigPath && defaults->Rig == *generatedRigPath && generatedRigPublished->load(std::memory_order_acquire));
 	const bool jamReadyForDefaults = !jamGenerated || generatedJamPublished;
 	if (!rigReadyForDefaults)
@@ -1030,6 +1028,7 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 		<< " log=" << EncodeUtf8(startupLog.Path());
 	startupLog.Write(startupSummary.str());
 
+	RigDefaultSave rigDefaultSave(GetPath(PATH_ROAMING) + L"\\Jamma", initPath, SaveRigAtomic, UpdateIni);
 	MSG msg;
 	bool active = true;
 	auto lastConsoleStatus = std::chrono::steady_clock::now() - std::chrono::seconds(1);
@@ -1208,6 +1207,9 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 			}
 		}
 
+		if (rigDefaultSave.Poll(*scene.value(), window.GetWindowHandle(), *defaults)) { rigReadyForDefaults = true; defaultsValid = true; }
+		if (!rigDefaultSave.Busy() && scene.value()->ConsumeRigSaveRequest())
+			rigDefaultSave.Start(*scene.value(), window.GetWindowHandle(), *defaults);
 		window.Render();
 		window.Swap();
 
@@ -1222,6 +1224,7 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 	if (consoleBroker) consoleBroker->Stop();
 	scene.value()->Shutdown();
 
+	if (rigDefaultSave.Poll(*scene.value(), window.GetWindowHandle(), *defaults, false)) { rigReadyForDefaults = true; defaultsValid = true; }
 	if (defaultsValid && rigReadyForDefaults && jamReadyForDefaults)
 	{
 		auto savedDefaults = defaults.value();

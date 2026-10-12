@@ -894,3 +894,33 @@ Camera::SelectDepthChange Camera::PendingSelectDepthChange() noexcept
 	_interiorRestorePending = false;
 	return _LeaveStationInteriorSelectDepth();
 }
+
+void graphics::Camera::RevealPosition(utils::Position3d position, utils::Size2d viewport,
+	utils::Position3d centre, int margin)
+{
+	if (!viewport.Width || !viewport.Height) return;
+	const auto clip = Projection(static_cast<float>(viewport.Width) / viewport.Height, centre) * ViewMatrix() *
+		glm::vec4(position.X, position.Y, position.Z, 1.0f);
+	if (clip.w <= 0.0f) return;
+	const auto ndc = glm::vec3(clip) / clip.w;
+	const int x = static_cast<int>((ndc.x + 1.0f) * viewport.Width * 0.5f);
+	const int y = static_cast<int>((ndc.y + 1.0f) * viewport.Height * 0.5f);
+	const int mx = std::min(margin, static_cast<int>(viewport.Width / 2u));
+	const int my = std::min(margin, static_cast<int>(viewport.Height / 2u));
+	const int targetX = std::clamp(x, mx, static_cast<int>(viewport.Width) - mx);
+	const int targetY = std::clamp(y, my, static_cast<int>(viewport.Height) - my);
+	if (targetX == x && targetY == y) return;
+	const auto from = FocusPointAtCursor({x, y}, viewport.Width, viewport.Height, centre);
+	const auto to = FocusPointAtCursor({targetX, targetY}, viewport.Width, viewport.Height, centre);
+	auto pose = CurrentPose();
+	pose.Eye += {from.X - to.X, from.Y - to.Y, from.Z - to.Z};
+	SetViewTarget(CurrentView(), pose);
+}
+
+void graphics::Camera::ForgetStation(const std::shared_ptr<const void>& identity) noexcept
+{
+	// Removal changes observations, never the user's current camera pose.
+	for (auto& station : _observedStations) if (station.Identity == identity) station.Identity.reset();
+	if (_lastChangedStationIdentity == identity) { _lastChangedStationIdentity.reset(); _lastChangedStationPosition.reset(); }
+	if (_interiorFocusIdentity == identity) _interiorFocusIdentity.reset();
+}
