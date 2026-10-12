@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <optional>
 #include "NinjamTiming.h"
+#include "NinjamTempoProposal.h"
 #include "NinjamTimingTracker.h"
 #include "NinjamAudioTimingCommand.h"
 #include "../engine/QuantisationTiming.h"
@@ -46,19 +47,6 @@ namespace ninjam
 		SentAwaitingOutcome,
 		Acknowledged,
 		Expired
-	};
-
-	struct NinjamTempoChange
-	{
-		unsigned int RemoteMasterIntervalLengthSamps = 0u;
-		unsigned int SourceSampleRate = 0u;
-		unsigned int RemoteGridStepSamps = 0u;
-		float Bpm = 0.0f;
-		unsigned int Bpi = 0u;
-		unsigned int IntervalPositionSamps = 0u;
-		std::uint64_t RemotePhaseDeviceSample = 0u;
-
-		bool HasSameProposalIdentity(const NinjamTempoChange& other) const noexcept;
 	};
 
 	struct NinjamTempoRequest
@@ -218,6 +206,10 @@ namespace ninjam
 			utils::Timer& clock,
 			std::chrono::steady_clock::time_point now = std::chrono::steady_clock::now());
 		std::optional<NinjamTempoChange> PendingTempoChange() const { return _pendingTempoChange; }
+		std::optional<NinjamTempoProposal> PendingTempoProposal() const;
+		NinjamTimingUpdate ResolveTempoDecision(const NinjamTempoDecision& decision,
+			const std::optional<engine::QuantisationTiming>& localTiming, utils::Timer& clock);
+		// Immediate coordinator-local resolution; UI callers must use the token API.
 		NinjamTimingUpdate ResolveTempoChange(bool accept,
 			const std::optional<engine::QuantisationTiming>& localTiming,
 			utils::Timer& clock);
@@ -240,6 +232,7 @@ namespace ninjam
 			float remoteBpm) noexcept;
 
 	private:
+		void _SetPendingTempoChange(const NinjamTempoChange& change);
 		static bool _MatchesRequest(const NinjamTiming& timing,
 			const engine::QuantisationTiming& request) noexcept;
 		static std::optional<NinjamTempoChange> _MakeProposal(const NinjamTiming& timing) noexcept;
@@ -267,6 +260,8 @@ namespace ninjam
 			std::uint64_t appliedSessionEpoch = 0u) noexcept;
 		NinjamTimingTracker _tracker;
 		NinjamTempoJoinOptions _options{};
+		// Serialized by the service mutex; never reset revisions across reconnects.
+		std::uint64_t _tempoProposalRevision = 0u;
 		std::optional<NinjamTempoChange> _pendingTempoChange;
 		std::optional<NinjamTempoChange> _ignoredTempoChange;
 		std::optional<NinjamTempoChange> _latestObservedTempoChange;

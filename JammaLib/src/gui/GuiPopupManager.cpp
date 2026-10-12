@@ -29,6 +29,12 @@ void GuiPopupManager::Close()
 		_popups.pop_back();
 }
 
+void GuiPopupManager::Close(const std::shared_ptr<GuiElement>& element)
+{
+	if (!element) return;
+	std::erase_if(_popups, [&element](const auto& popup) { return popup.Element == element; });
+}
+
 void GuiPopupManager::CloseAll()
 {
 	_popups.clear();
@@ -43,6 +49,12 @@ void GuiPopupManager::CloseOwnedBy(const std::shared_ptr<GuiElement>& subtree)
 			if (owner == subtree) return true;
 		return false;
 	});
+}
+
+bool GuiPopupManager::Contains(const std::shared_ptr<GuiElement>& element) const
+{
+	return std::any_of(_popups.begin(), _popups.end(),
+		[&element](const auto& popup) { return popup.Element == element; });
 }
 
 bool GuiPopupManager::IsOpen() const

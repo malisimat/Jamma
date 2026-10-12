@@ -16,6 +16,7 @@ After edits in audio-thread code, manually inspect these callback-owned function
 - `Scene::OnTick`
 - `AudioHost::AudioCallback`
 - `AudioHost::_OnAudio`
+- `AudioHost::AdvanceBlock`
 - `Loop::WriteBlock`
 - `LoopTake::Zero`
 - `LoopTake::WriteBlock`

@@ -72,6 +72,32 @@ namespace audio
 	bool AudioHost::Init(std::shared_ptr<ninjam::NinjamController> ninjamController,
 		TickCallback tickCallback, bool generatedRig, const AsioInventory* inventory)
 	{
+		return _Init(std::move(ninjamController), std::move(tickCallback), {}, generatedRig, inventory);
+	}
+
+	bool AudioHost::InitWithBlockAdvancement(std::shared_ptr<ninjam::NinjamController> controller,
+		std::shared_ptr<utils::Timer> clock, bool generatedRig, const AsioInventory* inventory)
+	{
+		auto advance = [this, clock](Time, unsigned int numSamps,
+			const std::optional<io::UserConfig>& config, const std::optional<AudioStreamParams>& params)
+		{
+			AdvanceBlock(clock.get(), Timer::GetTime(), numSamps, config, params);
+		};
+		return _Init(std::move(controller), std::move(advance), std::move(clock), generatedRig, inventory);
+	}
+
+	void AudioHost::AdvanceBlock(utils::Timer* clock, Time time, unsigned int numSamps,
+		const std::optional<io::UserConfig>& config, const std::optional<AudioStreamParams>& params)
+	{
+		if (clock) clock->Tick(numSamps, 0u);
+		for (const auto& station : AudioStationsForCallback())
+			station->OnTick(time, numSamps, config, params);
+	}
+
+	bool AudioHost::_Init(std::shared_ptr<ninjam::NinjamController> ninjamController,
+		TickCallback tickCallback, std::shared_ptr<utils::Timer> clock,
+		bool generatedRig, const AsioInventory* inventory)
+	{
 		std::scoped_lock lock(_audioMutex);
 		_lastInitReplacedStream = false;
 		if (_audioDevice)
@@ -93,7 +119,9 @@ namespace audio
 		_lastInitReplacedStream = true;
 
 		_ninjamController = ninjamController;
-		_tickCallback = tickCallback;
+		_tickCallback = std::move(tickCallback);
+		// Publish only after the old stream is quiescent and before the new one starts.
+		if (clock) SetTimingClock(std::move(clock));
 
 		_audioSampleCounter.store(0u, std::memory_order_release);
 		_audioCallbackHeartbeat.store(0u, std::memory_order_release);

@@ -1236,12 +1236,12 @@ public:
 	GuiSettingsOwnerScene() : Scene(engine::SceneParams({ "" }, {}, { 800u, 600u }), io::UserConfig{}) {}
 	std::shared_ptr<gui::GuiMainPanel> Settings() const { return _mainPanel; }
 	std::shared_ptr<gui::GuiMainPanel> Selection() const { return _selectionPanel; }
-	std::shared_ptr<gui::GuiNumericInput> Channel() const { return _midiChannelOverrideInput; }
-	std::shared_ptr<gui::GuiNumericInput> Phase() const { return _transportOffsetInput; }
-	std::shared_ptr<gui::GuiToggle> Click() const { return _ninjamMetronomeToggle; }
-	std::shared_ptr<gui::GuiRadio> Quantisation() const { return _globalMidiQuantRadio; }
-	std::shared_ptr<gui::GuiRadio> Depth() const { return _modeRadio; }
-	std::shared_ptr<gui::GuiRadio> Subdivision() const { return _midiSubdivisionRadio; }
+	std::shared_ptr<gui::GuiNumericInput> Channel() const { return _settingsControls->Channel(); }
+	std::shared_ptr<gui::GuiNumericInput> Phase() const { return _settingsControls->Offset(); }
+	std::shared_ptr<gui::GuiToggle> Click() const { return _settingsControls->Metronome(); }
+	std::shared_ptr<gui::GuiRadio> Quantisation() const { return _settingsControls->GlobalQuantisation(); }
+	std::shared_ptr<gui::GuiRadio> Depth() const { return _settingsControls->Mode(); }
+	std::shared_ptr<gui::GuiRadio> Subdivision() const { return _settingsControls->Subdivision(); }
 	void SetFrozenTapClock()
 	{
 		auto clock = std::make_shared<utils::Timer>();

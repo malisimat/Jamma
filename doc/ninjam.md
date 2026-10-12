@@ -85,6 +85,14 @@ presented as `Current server tempo` with `Follow server` and `Stay local`.
   local audio cursor, MIDI event cursor, or automation phase. Local transport
   then free-runs.
 
+The UI-thread `gui::NinjamTempoPrompt` owns popup construction, displayed
+proposal identity, and user dismissal. Scene reconciles the current proposal
+during its UI update and forwards a typed decision carrying session epoch and
+proposal revision. The serialized Coordinator validates that token and resolves
+the decision together; stale acceptance or rejection has no effect. Phase-only
+observations keep the token stable. Replacing obsolete UI is cleanup, not a
+rejection, and a release begun on an old prompt cannot activate its replacement.
+
 Physical loss, disconnect, observation timeout, and reconnect use the same
 explicit lifecycle. A recovered physical session receives a fresh session
 epoch; stale desired values, prompts, maps, and generation gates cannot cross
@@ -132,8 +140,10 @@ transitions are deduplicated.
 
 `NinjamNetworkService` only provides the two mutex-serialized forwarding
 operations needed to configure capture and submit/read AudioHost's existing
-applied receipt. It owns no diagnostic state or formatting. `Scene` drains and
-presents the records on the job thread only when Event logging is `verbose`;
+applied receipt. It owns no diagnostic state or formatting. `Scene` drains the
+records on the job thread only when Event logging is
+`verbose`; `NinjamTimingDiagnosticPresenter` formats them and deduplicates
+presentation by event sequence and overflow summary count;
 there is no hierarchy traversal, string formatting, or output in the audio
 callback. The fixed-capacity and suppression contracts are covered by
 `NinjamTimingDiagnostics.*` in

@@ -19,6 +19,7 @@ namespace gui
 	struct GuiPopupButtonConfig
 	{
 		std::vector<GuiPopupAction> Actions;
+		bool RequirePress = false;
 	};
 
 	struct GuiPopupParams : public base::GuiElementParams

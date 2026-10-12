@@ -192,12 +192,12 @@ namespace ninjam
 		return _timingCoordinator.Tick(localTiming, hasLocalContent, clock, now);
 	}
 
-	NinjamTimingUpdate NinjamNetworkService::ResolveRemoteTempoPromptDecision(bool accept,
+	NinjamTimingUpdate NinjamNetworkService::ResolveRemoteTempoPromptDecision(const NinjamTempoDecision& decision,
 		const std::optional<engine::QuantisationTiming>& localTiming,
 		utils::Timer& clock)
 	{
 		std::scoped_lock lock(_timingMutex);
-		return _timingCoordinator.ResolveTempoChange(accept, localTiming, clock);
+		return _timingCoordinator.ResolveTempoDecision(decision, localTiming, clock);
 	}
 
 	void NinjamNetworkService::SendTempoRequest(const NinjamTempoRequest& request)
@@ -210,10 +210,10 @@ namespace ninjam
 		_timingCoordinator.NotifyTempoRequestSent(sent);
 	}
 
-	std::optional<NinjamTempoChange> NinjamNetworkService::PendingRemoteTempoPrompt() const
+	std::optional<NinjamTempoProposal> NinjamNetworkService::PendingRemoteTempoPrompt() const
 	{
 		std::scoped_lock lock(_timingMutex);
-		return _timingCoordinator.PendingTempoChange();
+		return _timingCoordinator.PendingTempoProposal();
 	}
 
 	bool NinjamNetworkService::HasConnectedTiming() const noexcept

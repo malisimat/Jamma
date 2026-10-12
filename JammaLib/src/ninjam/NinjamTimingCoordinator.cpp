@@ -126,10 +126,10 @@ NinjamTimingUpdate NinjamTimingCoordinator::Connect(const NinjamTempoJoinOptions
 
 NinjamTimingUpdate NinjamTimingCoordinator::Disconnect() noexcept
 {
+	_pendingTempoChange.reset(); // Even an already-local transport invalidates its prompt.
 	if (!_tracker.IsConnected() && _noSyncActive)
 		return {};
 	_tracker.Disconnect();
-	_pendingTempoChange.reset();
 	_ignoredTempoChange.reset();
 	_latestObservedTempoChange.reset();
 	_requestedTempo.reset();
@@ -313,7 +313,7 @@ NinjamTimingUpdate NinjamTimingCoordinator::Observe(const NinjamTiming& timing,
 			}
 			else
 			{
-				_pendingTempoChange = proposal;
+				_SetPendingTempoChange(proposal.value());
 				++_diagnostics.TempoProposals;
 				update.PromptForTempoChange = true;
 			}
@@ -322,7 +322,7 @@ NinjamTimingUpdate NinjamTimingCoordinator::Observe(const NinjamTiming& timing,
 			&& !_ignoredTempoChange->HasSameProposalIdentity(proposal.value()))
 		{
 			_ignoredTempoChange.reset();
-			_pendingTempoChange = proposal;
+			_SetPendingTempoChange(proposal.value());
 			++_diagnostics.TempoProposals;
 			update.PromptForTempoChange = true;
 		}
@@ -372,7 +372,7 @@ NinjamTimingUpdate NinjamTimingCoordinator::Observe(const NinjamTiming& timing,
 		else if (!_ignoredTempoChange.has_value()
 			|| !_ignoredTempoChange->HasSameProposalIdentity(proposal.value()))
 		{
-			_pendingTempoChange = proposal;
+			_SetPendingTempoChange(proposal.value());
 			update.PromptForTempoChange = true;
 			update.DesiredTransport = _PublishNoSync(NinjamNoSyncReason::None).DesiredTransport;
 		}
@@ -412,7 +412,7 @@ NinjamTimingUpdate NinjamTimingCoordinator::Observe(const NinjamTiming& timing,
 			++_diagnostics.TempoRequestsExpired;
 			if (!_options.PromptBeforeApplyingRemoteTempo || !hasLocalContent)
 				return _AcceptTempoChange(proposal.value(), localTiming, clock);
-			_pendingTempoChange = proposal;
+			_SetPendingTempoChange(proposal.value());
 			update.PromptForTempoChange = true;
 			return update;
 		}
@@ -511,7 +511,7 @@ NinjamTimingUpdate NinjamTimingCoordinator::_ExpireTempoRequest(
 		return update;
 	if (!_options.PromptBeforeApplyingRemoteTempo && !hasLocalContent && !preservePushedLocalTransport)
 		return _AcceptTempoChange(_latestObservedTempoChange.value(), localTiming, clock);
-	_pendingTempoChange = _latestObservedTempoChange;
+	_SetPendingTempoChange(_latestObservedTempoChange.value());
 	update.PromptForTempoChange = true;
 	return update;
 }
@@ -519,6 +519,9 @@ NinjamTimingUpdate NinjamTimingCoordinator::_ExpireTempoRequest(
 NinjamTimingUpdate NinjamTimingCoordinator::_EnterNoSync(
 	NinjamNoSyncReason reason, bool clearLatestProposal) noexcept
 {
+	// Deadline prompts intentionally survive; other losses invalidate even when
+	// transport is already local, so a displayed token cannot regain authority.
+	if (reason != NinjamNoSyncReason::ObservationDeadline) _pendingTempoChange.reset();
 	if (_noSyncActive)
 	{
 		if (reason == _lastNoSyncReason)
@@ -534,8 +537,6 @@ NinjamTimingUpdate NinjamTimingCoordinator::_EnterNoSync(
 	_tracker.Disconnect();
 	_ignoredTempoChange.reset();
 	const auto preservesExpiredRequest = reason == NinjamNoSyncReason::ObservationDeadline;
-	if (!preservesExpiredRequest)
-		_pendingTempoChange.reset();
 	if (clearLatestProposal && !preservesExpiredRequest)
 		_latestObservedTempoChange.reset();
 	_requestedTempo.reset();
@@ -661,6 +662,27 @@ NinjamTimingUpdate NinjamTimingCoordinator::_AcceptTempoChange(const NinjamTempo
 	++_diagnostics.TempoAccepted;
 	_RecordEmittedCommand(NinjamEmittedCommand::Replace, generation);
 	return update;
+}
+
+void NinjamTimingCoordinator::_SetPendingTempoChange(const NinjamTempoChange& change)
+{
+	if (!_pendingTempoChange || !_pendingTempoChange->HasSameProposalIdentity(change))
+		++_tempoProposalRevision;
+	_pendingTempoChange = change;
+}
+
+std::optional<NinjamTempoProposal> NinjamTimingCoordinator::PendingTempoProposal() const
+{
+	if (!_pendingTempoChange) return std::nullopt;
+	return NinjamTempoProposal{ { _sessionEpoch, _tempoProposalRevision }, *_pendingTempoChange };
+}
+
+NinjamTimingUpdate NinjamTimingCoordinator::ResolveTempoDecision(const NinjamTempoDecision& decision,
+	const std::optional<engine::QuantisationTiming>& localTiming, utils::Timer& clock)
+{
+	const auto pending = PendingTempoProposal();
+	if (!pending || pending->Id != decision.Id) return {};
+	return ResolveTempoChange(decision.Choice == NinjamTempoChoice::FollowServer, localTiming, clock);
 }
 
 NinjamTimingUpdate NinjamTimingCoordinator::ResolveTempoChange(bool accept,

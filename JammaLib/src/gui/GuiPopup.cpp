@@ -9,16 +9,21 @@ namespace gui
 	class GuiPopupActionButton : public GuiButton
 	{
 	public:
-		GuiPopupActionButton(GuiButtonParams params, unsigned int actionIndex) :
+		GuiPopupActionButton(GuiButtonParams params, unsigned int actionIndex, bool requirePress) :
 			GuiButton(params),
+			_requirePress(requirePress),
 			_actionIndex(actionIndex)
 		{
 		}
 
 		actions::ActionResult OnAction(actions::TouchAction action) override
 		{
+			const bool pressed = _pressed;
 			auto result = GuiButton::OnAction(action);
-			if (result.IsEaten && action.State == actions::TouchAction::TOUCH_UP && _receiver)
+			if (action.State == actions::TouchAction::TOUCH_DOWN) _pressed = result.IsEaten;
+			else if (action.State == actions::TouchAction::TOUCH_UP) _pressed = false;
+			if (result.IsEaten && action.State == actions::TouchAction::TOUCH_UP && _receiver
+				&& (!_requirePress || pressed))
 			{
 				actions::GuiAction buttonAction;
 				buttonAction.ElementType = actions::GuiAction::ACTIONELEMENT_BUTTON;
@@ -29,7 +34,15 @@ namespace gui
 			return result;
 		}
 
+		void ClearPointerState() override
+		{
+			_pressed = false;
+			GuiButton::ClearPointerState();
+		}
+
 	private:
+		bool _pressed = false;
+		bool _requirePress;
 		unsigned int _actionIndex;
 	};
 }
@@ -152,7 +165,7 @@ void GuiPopup::ConfigureButtons(const GuiPopupButtonConfig& config)
 		params.Size = { ButtonWidth, ButtonHeight };
 		params.MinSize = { ButtonMinWidth, ButtonHeight };
 		params.Index = action.Index;
-		auto button = std::make_shared<GuiPopupActionButton>(params, action.Index);
+		auto button = std::make_shared<GuiPopupActionButton>(params, action.Index, config.RequirePress);
 		button->SetReceiver(_buttonReceiver);
 		AddChild(button);
 		_buttons.push_back(button);

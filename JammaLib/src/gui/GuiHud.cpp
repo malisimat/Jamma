@@ -720,6 +720,23 @@ void GuiHud::SetMidiInputPeak(unsigned int input, float peak, unsigned int numSa
 		_inputVus[vuIndex]->SetPeak(peak, numSamps);
 }
 
+void GuiHud::PublishRoutingConfig(unsigned int audioInputCount,
+	std::vector<std::string> midiInputNames,
+	std::shared_ptr<const engine::RigSnapshot> routing)
+{
+	_pendingRoutingPresentation.store(std::make_shared<const RoutingPresentation>(
+		RoutingPresentation{ audioInputCount, std::move(midiInputNames), std::move(routing) }),
+		std::memory_order_release);
+}
+
+bool GuiHud::ApplyPendingRoutingConfig()
+{
+	const auto pending = _pendingRoutingPresentation.exchange({}, std::memory_order_acquire);
+	if (!pending) return false;
+	SetRoutingConfig(pending->AudioInputCount, pending->MidiInputNames, *pending->Routing);
+	return true;
+}
+
 void GuiHud::SetRoutingConfig(unsigned int audioInputCount,
 	std::vector<std::string> midiInputNames,
 	const engine::RigSnapshot& routing)
@@ -728,8 +745,8 @@ void GuiHud::SetRoutingConfig(unsigned int audioInputCount,
 	{
 		_CancelCableDrag();
 		_deleteTriggerIndex.reset();
-		if (_popupManager && _deletePopup && _popupManager->Top() == _deletePopup)
-			_popupManager->Close();
+		if (_popupManager)
+			_popupManager->Close(_deletePopup);
 	}
 	_displayedRevision = routing.Revision;
 	_displayedRig = routing.Rig;

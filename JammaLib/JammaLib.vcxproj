@@ -216,6 +216,12 @@
     </PreBuildEvent>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClInclude Include="src\io\IoSessionLoader.h" />
+    <ClInclude Include="src\midi\MidiRefreshPolicy.h" />
+    <ClInclude Include="src\engine\HierarchySelection.h" />
+    <ClInclude Include="src\gui\SceneSettingsControls.h" />
+    <ClInclude Include="src\gui\NinjamTempoPrompt.h" />
+    <ClInclude Include="src\ninjam\NinjamTempoProposal.h" />
     <ClInclude Include="src\midi\MidiPitchViewGesture.h" />
     <ClInclude Include="src\actions\ActionResult.h" />
     <ClInclude Include="src\audio\BufferBank.h" />
@@ -346,6 +352,7 @@
     <ClInclude Include="src\ninjam\NinjamTiming.h" />
     <ClInclude Include="src\ninjam\NinjamTimingObservationMailbox.h" />
     <ClInclude Include="src\ninjam\NinjamTimingCoordinator.h" />
+    <ClInclude Include="src\ninjam\NinjamTimingDiagnosticPresenter.h" />
 	<ClInclude Include="src\utils\MusicalTransport.h" />
     <ClInclude Include="src\graphics\Shader.h" />
     <ClInclude Include="src\graphics\Image.h" />
@@ -407,6 +414,10 @@
     <ClInclude Include="lib\rtaudio\RtAudio.h" />
   </ItemGroup>
   <ItemGroup>
+    <ClCompile Include="src\io\IoSessionLoader.cpp" />
+    <ClCompile Include="src\engine\HierarchySelection.cpp" />
+    <ClCompile Include="src\gui\SceneSettingsControls.cpp" />
+    <ClCompile Include="src\gui\NinjamTempoPrompt.cpp" />
     <ClCompile Include="src\audio\BufferBank.cpp" />
     <ClCompile Include="src\audio\ChannelMixer.cpp" />
     <ClCompile Include="src\actions\TriggerAction.cpp" />
@@ -500,6 +511,7 @@
     <ClCompile Include="src\ninjam\NinjamTiming.cpp" />
     <ClCompile Include="src\ninjam\NinjamTimingObservationMailbox.cpp" />
     <ClCompile Include="src\ninjam\NinjamTimingCoordinator.cpp" />
+    <ClCompile Include="src\ninjam\NinjamTimingDiagnosticPresenter.cpp" />
     <ClCompile Include="src\io\IoSessionExporter.cpp" />
     <ClCompile Include="src\engine\Station.cpp" />
     <ClCompile Include="src\engine\Loop.cpp" />
