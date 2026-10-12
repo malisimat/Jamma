@@ -20,6 +20,7 @@
 #include "Timer.h"
 #include "../midi/MidiQuantisation.h"
 #include "../audio/AudioMixer.h"
+#include "../engine/PerformanceGroups.h"
 
 namespace io
 {
@@ -96,6 +97,7 @@ namespace io
 			// VST3 component/controller blob — see Vst3StateBlob.h).
 			// Empty string means no saved state for this entry.
 			std::string State;
+			std::string Id;
 
 			static std::optional<VstEntry> FromJson(Json::JsonPart json);
 
@@ -159,6 +161,7 @@ namespace io
 			std::optional<bool> MidiQuantEnabled;
 			std::optional<int> MidiQuantFraction;
 			std::optional<std::int32_t> PhaseOffsetSamps;
+			std::string Id;
 		};
 
 		struct MidiRoute
@@ -190,6 +193,7 @@ namespace io
 			// Presence is distinct from content: an explicit [] disconnects every input,
 			// while a missing field requests legacy one-to-one defaults.
 			bool HasAudioRoutes = false;
+			std::string Id;
 
 			static std::optional<LoopTake> FromJson(Json::JsonPart json);
 		};
@@ -208,6 +212,7 @@ namespace io
 			// One destination-output list per station bus mixer.
 			std::vector<std::vector<unsigned long>> AudioRoutes;
 			bool HasAudioRoutes = false;
+			std::string Id;
 			static std::optional<Station> FromJson(Json::JsonPart json);
 		};
 
@@ -233,6 +238,11 @@ namespace io
 		std::optional<NinjamConfig> Ninjam;
 		std::vector<Station> Stations;
 		std::vector<TriggerHistory> TriggerHistories;
+		std::array<std::optional<engine::MuteGroupSnapshot>, 9> MuteGroups;
+		std::array<std::optional<engine::SelectionGroupSnapshot>, 9> SelectionGroups;
+		// Zero-based active slot; empty rows have no active slot.
+		std::optional<unsigned int> MuteActiveGroup;
+		std::optional<unsigned int> SelectionActiveGroup;
 		unsigned long TimerTicks = 0;
 		unsigned int QuantiseSamps = 1;
 		GlobalMidiQuantState GlobalMidiQuantStateValue = GlobalMidiQuantState::Off;

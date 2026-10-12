@@ -854,3 +854,102 @@ TEST(JamFile, TapBaseGridRoundTripAndMissingFields)
 	ASSERT_TRUE(invalidWide);
 	EXPECT_FALSE(invalidWide->Stations[0].LoopTakes[0].BaseIntervalSamps);
 }
+
+#include "io/PerformanceGroupPersistence.h"
+
+class GroupManifestFixture
+{
+public:
+    static std::optional<JamFile> Read(const std::string& content)
+    {
+        auto parsed = Json::FromStream(std::stringstream(content));
+        if (!parsed || !std::holds_alternative<Json::JsonPart>(*parsed)) return std::nullopt;
+        JamFile jam;
+        if (!io::PerformanceGroupPersistence::Read(std::get<Json::JsonPart>(*parsed), jam)) return std::nullopt;
+        return jam;
+    }
+};
+
+TEST(JamFileGroups, SparseEmptySlotsAndSelectionDepthRoundTrip)
+{
+    JamFile jam;
+    jam.MuteGroups[6] = engine::MuteGroupSnapshot{};
+    jam.SelectionGroups[2] = engine::SelectionGroupSnapshot{};
+    jam.SelectionGroups[2]->Depth = engine::GroupTargetKind::AudioLoop;
+    jam.SelectionGroups[2]->Targets.push_back({ { engine::GroupTargetKind::MidiLoop, "station", "take", "midi" }, false });
+    jam.MuteActiveGroup = 6u;
+    jam.SelectionActiveGroup = 2u;
+    std::stringstream encoded;
+    ASSERT_TRUE(io::PerformanceGroupPersistence::Write(jam, encoded));
+    const auto loaded = GroupManifestFixture::Read("{\"performanceGroups\":" + encoded.str() + "}");
+    ASSERT_TRUE(loaded);
+    ASSERT_TRUE(loaded->MuteGroups[6]);
+    EXPECT_TRUE(loaded->MuteGroups[6]->Targets.empty());
+    EXPECT_FALSE(loaded->MuteGroups[0]);
+    EXPECT_EQ(loaded->MuteActiveGroup, 6u);
+    ASSERT_TRUE(loaded->SelectionGroups[2]);
+    EXPECT_EQ(loaded->SelectionGroups[2]->Depth, engine::GroupTargetKind::AudioLoop);
+    ASSERT_EQ(loaded->SelectionGroups[2]->Targets.size(), 1u);
+    EXPECT_FALSE(loaded->SelectionGroups[2]->Targets[0].Selected);
+}
+
+TEST(JamFileGroups, FullMuteAndPluginBlobRoundTrip)
+{
+    JamFile jam;
+    engine::GroupTargetId owner{ engine::GroupTargetKind::Take, "station", "take", "" };
+    engine::MuteGroupSnapshot snapshot;
+    snapshot.Targets.push_back({ owner, false, true });
+    snapshot.Plugins.push_back({ owner, "plugin-stable-id", "synth.vst3", JamFile::VstEntry::EncodeState({ 0u, 1u, 254u, 255u }), true });
+    jam.MuteGroups[0] = snapshot;
+    std::stringstream encoded;
+    ASSERT_TRUE(io::PerformanceGroupPersistence::Write(jam, encoded));
+    const auto loaded = GroupManifestFixture::Read("{\"performanceGroups\":" + encoded.str() + "}");
+    ASSERT_TRUE(loaded && loaded->MuteGroups[0]);
+    EXPECT_FALSE(loaded->MuteGroups[0]->Targets[0].Muted);
+    EXPECT_TRUE(loaded->MuteGroups[0]->Targets[0].EffectiveMuted);
+    EXPECT_EQ(loaded->MuteGroups[0]->Plugins[0].State, snapshot.Plugins[0].State);
+    EXPECT_EQ(loaded->MuteGroups[0]->Plugins[0].PluginId, "plugin-stable-id");
+    EXPECT_TRUE(loaded->MuteGroups[0]->Plugins[0].Bypass);
+}
+
+TEST(JamFileGroups, LegacyAndMalformedRecords)
+{
+    ASSERT_TRUE(GroupManifestFixture::Read("{}"));
+    EXPECT_FALSE(GroupManifestFixture::Read("{\"performanceGroups\":false}"));
+    EXPECT_FALSE(GroupManifestFixture::Read("{\"performanceGroups\":{\"mute\":[{\"slot\":0,\"targets\":[],\"plugins\":[]}]}}"));
+    EXPECT_FALSE(GroupManifestFixture::Read("{\"performanceGroups\":{\"mute\":[{\"slot\":1,\"targets\":[],\"plugins\":[]},{\"slot\":1,\"targets\":[],\"plugins\":[]}]}}"));
+    EXPECT_FALSE(GroupManifestFixture::Read("{\"performanceGroups\":{\"selection\":[{\"slot\":1,\"depth\":8,\"targets\":[]}]}}"));
+    EXPECT_FALSE(GroupManifestFixture::Read("{\"performanceGroups\":{\"muteActive\":1,\"mute\":[]}}"));
+    EXPECT_FALSE(GroupManifestFixture::Read("{\"performanceGroups\":{\"mute\":[{\"slot\":1,\"targets\":[],\"plugins\":[{\"kind\":1,\"stationId\":\"s\",\"takeId\":\"t\",\"entityId\":\"\",\"pluginId\":\"p\",\"path\":\"v.dll\",\"state\":\"!!!!\",\"bypass\":false}]}]}}"));
+}
+
+TEST(JamFileGroups, RejectsAmbiguousTargetIdentityAndInvalidActiveWrite)
+{
+    JamFile jam;
+    engine::GroupTargetId target{ engine::GroupTargetKind::Take, "s", "t", "" };
+    jam.MuteGroups[0] = engine::MuteGroupSnapshot{};
+    jam.MuteGroups[0]->Targets = { { target, true, true }, { target, false, false } };
+    std::stringstream output;
+    EXPECT_FALSE(io::PerformanceGroupPersistence::Write(jam, output));
+    jam.MuteGroups[0]->Targets.clear();
+    jam.MuteActiveGroup = 8u;
+    EXPECT_FALSE(io::PerformanceGroupPersistence::Write(jam, output));
+}
+
+TEST(JamFileGroups, DuplicateExplicitEntityIdentityIsRejected)
+{
+    JamFile jam;
+    JamFile::Station first, second;
+    first.Id = "same-station";
+    second.Id = "same-station";
+    jam.Stations = { first, second };
+    EXPECT_FALSE(io::PerformanceGroupPersistence::ValidateIdentities(jam));
+    jam.Stations[1].Id = "different-station";
+    JamFile::VstEntry plugin;
+    plugin.Id = "same-plugin";
+    jam.Stations[0].VstChain.push_back(plugin);
+    jam.Stations[1].VstChain.push_back(plugin);
+    EXPECT_FALSE(io::PerformanceGroupPersistence::ValidateIdentities(jam));
+    jam.Stations[1].VstChain[0].Id.clear(); // Legacy missing ID is assigned on construction.
+    EXPECT_TRUE(io::PerformanceGroupPersistence::ValidateIdentities(jam));
+}

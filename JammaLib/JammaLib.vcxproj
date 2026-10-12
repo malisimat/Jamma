@@ -369,6 +369,7 @@
 	<ClInclude Include="src\engine\RigSnapshot.h" />
 	<ClInclude Include="src\engine\RigCoordinator.h" />
     <ClInclude Include="src\io\JamFile.h" />
+    <ClInclude Include="src\io\PerformanceGroupPersistence.h" />
 
     <ClInclude Include="src\io\NativeMidiSidecar.h" />
     <ClInclude Include="src\vst\Vst.h" />
@@ -515,6 +516,7 @@
 	<ClCompile Include="src\engine\RigSnapshot.cpp" />
 	<ClCompile Include="src\engine\RigCoordinator.cpp" />
     <ClCompile Include="src\io\JamFile.cpp" />
+    <ClCompile Include="src\io\PerformanceGroupPersistence.cpp" />
     <ClCompile Include="src\io\NativeMidiSidecar.cpp" />
     <ClCompile Include="src\vst\Vst.cpp" />
     <ClCompile Include="src\vst\Vst3Plugin.cpp" />
