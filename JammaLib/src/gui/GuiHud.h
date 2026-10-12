@@ -10,7 +10,6 @@
 #include "GuiStackPanel.h"
 #include "GuiVu.h"
 #include "CableInteraction.h"
-#include "GuiPerformanceGroupRow.h"
 #include "../io/RigFile.h"
 
 namespace resources
@@ -95,9 +94,6 @@ namespace gui
 		void SetLoopEditorMode(bool enabled);
 		void SetQuantisationFeedback(const std::string& text);
 		void SetPerformanceGroupFeedback(const std::string& text);
-		void SetPerformanceGroupHandler(std::function<void(bool, engine::GroupCommand, std::size_t)> handler);
-		void RefreshPerformanceGroups(const engine::PerformanceGroups& groups);
-		bool AdvanceGroupAnimation(float elapsedSeconds);
 		utils::Rect2d OccupiedTopStripBounds() const;
 		void SetEditModeAlpha(float alpha) noexcept { _editModeAlpha = std::clamp(alpha, 0.0f, 1.0f); }
 		bool HasCableDrag() const noexcept { return _cableDrag.has_value(); }
@@ -216,7 +212,6 @@ namespace gui
 
 
 		std::shared_ptr<GuiPanel> _topStrip;
-		std::array<std::shared_ptr<GuiPerformanceGroupRow>, 2> _groupRows;
 		std::shared_ptr<GuiPanel> _topStripBorder;
 		std::shared_ptr<GuiStackPanel> _topSourceRow;
 		std::shared_ptr<GuiStackPanel> _topInputRow;

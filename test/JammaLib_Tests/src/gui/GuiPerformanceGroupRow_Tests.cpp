@@ -144,3 +144,146 @@ TEST(GuiPerformanceGroups, DisablingAddOrHidingRowCancelsCapturedActivation)
     button->OnAction(PerformanceGroupGuiTestHelpers::Touch(actions::TouchAction::TOUCH_UP, { 12, 12 }));
     EXPECT_EQ(calls, 0);
 }
+
+class SelectionGroupPanelTests : public ::testing::Test
+{
+protected:
+    std::shared_ptr<gui::GuiRadio> radio;
+    std::shared_ptr<gui::GuiMainPanel> panel;
+    std::shared_ptr<gui::GuiScrollPanel> scroll;
+    std::shared_ptr<gui::GuiPerformanceGroupRow> mute, selection;
+    void SetUp() override
+    {
+        gui::GuiRadioParams radios;
+        radios.Size = { 384u, 64u };
+        for (unsigned int index = 0; index < 3; ++index)
+        {
+            gui::GuiToggleParams toggle;
+            toggle.Size = { 128u, 64u };
+            radios.ToggleParams.push_back(toggle);
+        }
+        radio = std::make_shared<gui::GuiRadio>(radios);
+        gui::GuiMainPanelParams params;
+        params.Size = { 800u, 600u };
+        params.SelectionOnly = true;
+        params.Settings = { { gui::SettingsPage::Selection, "", radio, 100u } };
+        panel = std::make_shared<gui::GuiMainPanel>(params);
+        panel->Init();
+        scroll = std::dynamic_pointer_cast<gui::GuiScrollPanel>(panel->TryGetChild(0)->TryGetChild(0));
+        ASSERT_NE(nullptr, scroll);
+        mute = std::dynamic_pointer_cast<gui::GuiPerformanceGroupRow>(scroll->Content()->TryGetChild(1));
+        selection = std::dynamic_pointer_cast<gui::GuiPerformanceGroupRow>(scroll->Content()->TryGetChild(2));
+        ASSERT_NE(nullptr, mute); ASSERT_NE(nullptr, selection);
+        panel->AdvanceAnimation(0.12f);
+    }
+};
+
+TEST_F(SelectionGroupPanelTests, StackSharesActualRadioBoundsForEmptySingleAndFullRows)
+{
+    for (const unsigned int count : { 0u, 1u, 9u })
+    {
+        engine::PerformanceGroups groups;
+        for (unsigned int slot = 1; slot <= count; ++slot)
+        {
+            groups.Mute.Store(slot, {});
+            groups.Selection.Store(slot, {});
+        }
+        panel->RefreshPerformanceGroups(groups);
+        panel->AdvanceAnimation(0.12f);
+        for (const auto& row : { mute, selection })
+        {
+            EXPECT_EQ(radio->GetSize().Width, row->GetSize().Width);
+            EXPECT_EQ(radio->GlobalPosition().X, row->GlobalPosition().X);
+            EXPECT_EQ(count != 0u, row->Button(1)->IsVisible());
+            EXPECT_EQ(count < 9u, row->Button(0)->IsEnabled());
+        }
+        EXPECT_GT(radio->Position().Y, mute->Position().Y + static_cast<int>(mute->GetSize().Height));
+        EXPECT_GT(mute->Position().Y, selection->Position().Y + static_cast<int>(selection->GetSize().Height));
+        if (count < 9u) EXPECT_EQ(mute->Button(0), panel->FindTopmostDescendant(mute->Button(0)->GlobalPosition() + utils::Position2d{ 2, 8 }));
+    }
+}
+
+TEST_F(SelectionGroupPanelTests, CollapseClearsPressAndHoverAndReopenRefreshesRetainedRows)
+{
+    int calls = 0;
+    panel->SetPerformanceGroupHandler([&](bool, engine::GroupCommand, std::size_t) { ++calls; });
+    auto add = mute->Button(0);
+    const auto point = add->GlobalPosition() + utils::Position2d{ 12, 12 };
+    ASSERT_TRUE(panel->OnAction(PerformanceGroupGuiTestHelpers::Touch(actions::TouchAction::TOUCH_DOWN, point)).IsEaten);
+    panel->SetExpanded(false);
+    EXPECT_EQ(base::GuiElement::STATE_NORMAL, add->GetState());
+    EXPECT_FALSE(mute->IsEnabled());
+    add->OnAction(PerformanceGroupGuiTestHelpers::Touch(actions::TouchAction::TOUCH_UP, { 12, 12 }));
+    EXPECT_EQ(0, calls);
+    for (int frame = 0; frame < 6; ++frame) panel->AdvanceAnimation(0.05f);
+    EXPECT_FALSE(panel->TryGetChild(0)->IsVisible());
+    EXPECT_FALSE(panel->RouteHitTest(point));
+    engine::PerformanceGroups groups;
+    groups.Mute.Store(1, {});
+    panel->RefreshPerformanceGroups(groups);
+    panel->AdvanceAnimation(0.12f);
+    panel->SetExpanded(true);
+    for (int frame = 0; frame < 6; ++frame) panel->AdvanceAnimation(0.05f);
+    EXPECT_TRUE(mute->IsEnabled());
+    EXPECT_TRUE(mute->Button(1)->IsVisible());
+    EXPECT_EQ(gui::GuiToggleParams::TOGGLE_ON, mute->Button(1)->GetToggleState());
+    add->OnAction(PerformanceGroupGuiTestHelpers::Touch(actions::TouchAction::TOUCH_UP, { 12, 12 }));
+    EXPECT_EQ(0, calls);
+}
+
+TEST_F(SelectionGroupPanelTests, SmallViewportScrollsWithoutWideningRowsBeyondRadioClip)
+{
+    for (const auto size : { utils::Size2d{ 220u, 120u }, { 80u, 60u }, { 1u, 1u }, { 0u, 0u }, { 800u, 600u } })
+    {
+        panel->SetViewportSize(size);
+        panel->AdvanceAnimation(0.12f);
+        EXPECT_EQ(radio->GetSize().Width, mute->GetSize().Width);
+        EXPECT_EQ(radio->GetSize().Width, selection->GetSize().Width);
+        if (scroll->ViewportWidth() >= 4u) EXPECT_LE(radio->GetSize().Width + 4u, scroll->ViewportWidth());
+        EXPECT_GE(scroll->ScrollOffset(), 0);
+        EXPECT_LE(scroll->ScrollOffset(), scroll->MaxScrollOffset());
+        if (size.Height == 120u) EXPECT_TRUE(scroll->IsScrollBarVisible());
+        if (size.Height == 600u) EXPECT_FALSE(scroll->IsScrollBarVisible());
+    }
+}
+
+TEST_F(SelectionGroupPanelTests, SettingsStayBelowExpandedSelectionWhenViewportHasUsableSpace)
+{
+    gui::GuiMainPanelParams params;
+    params.Size = { 800u, 500u };
+    auto settings = std::make_shared<gui::GuiMainPanel>(params);
+    settings->Init();
+    for (const auto size : { utils::Size2d{ 800u, 500u }, { 800u, 600u }, { 800u, 900u } })
+    {
+        panel->SetViewportSize(size);
+        settings->SetViewportSize(size);
+        const auto selectionFrame = panel->TryGetChild(0);
+        const auto settingsFrame = settings->TryGetChild(0);
+        EXPECT_GT(settingsFrame->GetSize().Height, 0u);
+        EXPECT_LT(settingsFrame->GlobalPosition().Y + static_cast<int>(settingsFrame->GetSize().Height),
+            selectionFrame->GlobalPosition().Y);
+    }
+}
+
+TEST_F(SelectionGroupPanelTests, CapturedReleaseOutsideScrollClipCancelsPartlyVisibleButton)
+{
+    panel->SetViewportSize({ 800u, 150u });
+    panel->AdvanceAnimation(0.12f);
+    auto add = mute->Button(0);
+    const auto clip = scroll->ContentRect().Translated(scroll->GlobalPosition());
+    const auto position = add->GlobalPosition();
+    const auto press = utils::Position2d{ position.X + 12, clip.Bottom + 2 };
+    const auto release = utils::Position2d{ press.X, clip.Bottom - 1 };
+    ASSERT_TRUE(clip.Contains(press));
+    ASSERT_FALSE(clip.Contains(release));
+    ASSERT_TRUE(utils::Size2d::RectTest(add->GetSize(), add->GlobalToLocal(press)));
+    ASSERT_TRUE(utils::Size2d::RectTest(add->GetSize(), add->GlobalToLocal(release)));
+    ASSERT_EQ(add, panel->FindTopmostDescendant(press));
+    int calls = 0;
+    panel->SetPerformanceGroupHandler([&](bool, engine::GroupCommand, std::size_t) { ++calls; });
+    auto down = panel->OnAction(PerformanceGroupGuiTestHelpers::Touch(actions::TouchAction::TOUCH_DOWN, press));
+    ASSERT_EQ(add, down.ActiveElement.lock());
+    auto up = add->OnAction(PerformanceGroupGuiTestHelpers::Touch(actions::TouchAction::TOUCH_UP, add->GlobalToLocal(release)));
+    EXPECT_TRUE(up.IsEaten);
+    EXPECT_EQ(0, calls);
+}

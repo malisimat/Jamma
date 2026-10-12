@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include "../graphics/GlDrawContext.h"
+#include "GuiScrollPanel.h"
 
 using namespace gui;
 using namespace base;
@@ -32,8 +33,16 @@ ActionResult GuiPerformanceGroupButton::OnAction(TouchAction action)
     }
     if (action.Touch == TouchAction::TOUCH_MOUSE && action.Index != 0) return ActionResult::NoAction();
     const bool wasPressed = _pressed;
-    const bool inClip = !row || utils::Size2d::RectTest(row->GetSize(),
-        row->GlobalToLocal(GlobalPosition() + action.Position));
+    const auto globalPoint = GlobalPosition() + action.Position;
+    bool inClip = !row || utils::Size2d::RectTest(row->GetSize(), row->GlobalToLocal(globalPoint));
+    // Scene sends captured releases directly to this button. Recheck every
+    // scroll ancestor so release outside a partially clipped button cancels.
+    for (auto ancestor = Parent(); ancestor; ancestor = ancestor->Parent())
+    {
+        if (!ancestor->IsVisible() || !ancestor->IsEnabled()) inClip = false;
+        if (const auto scroll = std::dynamic_pointer_cast<GuiScrollPanel>(ancestor))
+            inClip = inClip && scroll->ContentRect().Translated(scroll->GlobalPosition()).Contains(globalPoint);
+    }
     if (!inClip && action.State == TouchAction::TOUCH_DOWN) return ActionResult::NoAction();
     auto result = GuiButton::OnAction(action); // Occupancy is model state, never a click toggle.
     if (action.State == TouchAction::TOUCH_DOWN && result.IsEaten)

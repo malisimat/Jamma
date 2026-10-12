@@ -72,6 +72,14 @@ GuiMainPanel::GuiMainPanel(GuiMainPanelParams params) : GuiPanel(params),
 		setting.Control->SetReceiver(binding);
 		_bindings.push_back(std::move(binding));
 	}
+	if (_selectionOnly)
+	{
+		for (std::size_t index = 0; index < _groupRows.size(); ++index)
+		{
+			_groupRows[index] = std::make_shared<GuiPerformanceGroupRow>(index == 1u);
+			_pages[static_cast<size_t>(_page)]->AddChild(_groupRows[index]);
+		}
+	}
 	GuiScrollPanelParams scrollParams;
 	scrollParams.ScrollBarWidth = 12u;
 	_pageScroll = std::make_shared<GuiScrollPanel>(scrollParams);
@@ -100,6 +108,27 @@ GuiMainPanel::GuiMainPanel(GuiMainPanelParams params) : GuiPanel(params),
 		_frame->AddChild(_tabScroll);
 	}
 	SetViewportSize(params.Size);
+}
+
+void GuiMainPanel::SetPerformanceGroupHandler(std::function<void(bool, engine::GroupCommand, std::size_t)> handler)
+{
+	if (!_selectionOnly) return;
+	for (std::size_t i = 0u; i < _groupRows.size(); ++i)
+		_groupRows[i]->SetHandler([handler, i](engine::GroupCommand command, std::size_t slot) {
+			if (handler) handler(i == 1u, command, slot);
+		});
+}
+
+void GuiMainPanel::RefreshPerformanceGroups(const engine::PerformanceGroups& groups)
+{
+	if (!_selectionOnly) return;
+	const auto refresh = [](const auto& model, const auto& widget) {
+		std::array<bool, 9> occupied{};
+		for (std::size_t slot = 1u; slot <= occupied.size(); ++slot) occupied[slot - 1u] = model.Get(slot) != nullptr;
+		widget->SetSlots(occupied, model.ActiveSlot());
+	};
+	refresh(groups.Mute, _groupRows[0]);
+	refresh(groups.Selection, _groupRows[1]);
 }
 
 void GuiMainPanel::SetCommandOwner(std::weak_ptr<ActionReceiver> owner)
@@ -140,6 +169,7 @@ void GuiMainPanel::SetExpanded(bool expanded)
 	_expanded = expanded;
 	_handle->SetToggleState(expanded ? GuiToggleParams::TOGGLE_ON : GuiToggleParams::TOGGLE_OFF, true);
 	_pageScroll->SetEnabled(expanded);
+	for (const auto& row : _groupRows) if (row) row->SetEnabled(expanded);
 	if (_tabScroll) _tabScroll->SetEnabled(expanded);
 	_UpdatePresentation();
 }
@@ -153,7 +183,9 @@ bool GuiMainPanel::AdvanceAnimation(float elapsedSeconds)
 {
 	if (!std::isfinite(elapsedSeconds) || elapsedSeconds <= 0.0f) return false;
 	const float target = _expanded ? 1.0f : 0.0f;
-	if (_transition == target) return false;
+	bool changed = false;
+	for (const auto& row : _groupRows) if (row) changed = row->AdvanceAnimation(elapsedSeconds) || changed;
+	if (_transition == target) return changed;
 	const float step = std::min(elapsedSeconds, 0.05f) / GuiStyle::PanelTransitionSeconds;
 	_transition = _expanded ? std::min(target, _transition + step) : std::max(target, _transition - step);
 	_UpdatePresentation();
@@ -181,6 +213,14 @@ void GuiMainPanel::Draw(DrawContext& context)
 	{
 		auto opacity = context.WithOpacity(PresentedOpacity());
 		_frame->Draw(context);
+	}
+	if (_selectionOnly && _expanded)
+	{
+		auto opacity = context.WithOpacity(PresentedOpacity());
+		for (const auto& row : _groupRows)
+			if (!_pageScroll->EffectiveContentRect({ 0, 0, static_cast<int>(_viewport.Width), static_cast<int>(_viewport.Height) }).Intersected(
+				{ row->GlobalPosition().X, row->GlobalPosition().Y, row->GlobalPosition().X + static_cast<int>(row->GetSize().Width), row->GlobalPosition().Y + static_cast<int>(row->GetSize().Height) }).IsEmpty())
+				row->DrawTooltip(context, GlobalPosition());
 	}
 	// The persistent edge handle stays opaque and above the sliding body.
 	_handle->Draw(context);
@@ -222,15 +262,20 @@ void GuiMainPanel::_Layout()
 	const int panelWidth = std::min(_selectionOnly ? 404 : 360, std::max(0, width - 2 * margin));
 	const int handleWidth = std::min(_selectionOnly ? 64 : 20, std::max(0, width - (_selectionOnly ? margin : 0)));
 	const int handleHeight = std::min(_selectionOnly ? SelectionHandleHeight : 64, std::max(0, height - (_selectionOnly ? 0 : std::min(StandardPanelPadding, height / 2))));
-	const int selectionPanelHeight = std::min(SelectionPanelHeight,
+	const int selectionPanelHeight = std::min(_SelectionPanelHeight(),
 		std::max(0, height - 2 * std::min(StandardPanelPadding, height / 2)));
-	const int selectionHandleHeight = std::min(SelectionHandleHeight, std::max(0, height));
 	const int mainPanelBottom = std::min(GuiStyle::StatusBarHeight + StandardPanelPadding, height / 2);
-	const int selectionPanelBottom = height - margin - selectionPanelHeight + selectionHandleHeight;
+	const int selectionPanelBottom = height - margin - selectionPanelHeight;
+	const int settingsAvailableHeight = std::max(0, selectionPanelBottom - MainPanelTopGap - mainPanelBottom);
+	// Preserve usable settings chrome only when the viewport cannot fit both
+	// overlays. Otherwise scrolling keeps settings entirely below selection.
+	constexpr int settingsChromeHeight = 2 * 12 + 22 + 44 + 8;
+	const int settingsHeight = settingsAvailableHeight >= settingsChromeHeight
+		? settingsAvailableHeight : MainPanelMinimumHeight;
 	const int unconstrainedPanelHeight = _selectionOnly
 		? selectionPanelHeight
 		: std::min(std::max(0, height - mainPanelBottom),
-			std::max(MainPanelMinimumHeight, selectionPanelBottom - MainPanelTopGap - mainPanelBottom));
+			settingsHeight);
 	const int panelHeight = !_selectionOnly && !_occupiedTopStrip.IsEmpty()
 		? std::min(unconstrainedPanelHeight, std::max(0, _occupiedTopStrip.Bottom - StandardPanelPadding - mainPanelBottom))
 		: unconstrainedPanelHeight;
@@ -245,21 +290,37 @@ void GuiMainPanel::_Layout()
 		_LayoutSettings(panelWidth, panelHeight);
 }
 
+int GuiMainPanel::_SelectionPanelHeight() const
+{
+	unsigned int radioHeight = 64u;
+	if (_selectionOnly)
+		for (const auto& entry : _controlSizes)
+			if (std::dynamic_pointer_cast<GuiRadio>(entry.first)) { radioHeight = entry.second.Height; break; }
+	return static_cast<int>(radioHeight + 4u + 2u * GuiPerformanceGroupRow::Height) +
+		2 * SelectionRowGap + 2 * StandardPanelPadding + SelectionHandleHeight;
+}
+
 void GuiMainPanel::_LayoutSelection(int panelWidth, int panelHeight)
 {
-	const int padding = std::min(8, std::min(panelWidth, panelHeight) / 2);
+	const int padding = std::min(StandardPanelPadding, std::min(panelWidth, panelHeight) / 2);
 	const int innerWidth = std::max(0, panelWidth - 2 * padding);
-	const int innerHeight = std::max(0, panelHeight - 2 * padding);
+	const int innerHeight = std::max(0, panelHeight - 2 * padding - SelectionHandleHeight);
 	auto& page = _pages[static_cast<size_t>(_page)];
 	page->SetPadding(2u, 2u);
-	page->SetSpacing(0u);
+	page->SetSpacing(SelectionRowGap);
+	// A short viewport scrolls the complete stack; leave the scrollbar's width
+	// available before distributing the radios so every row shares its clip.
+	const int contentHeight = _SelectionPanelHeight() - 2 * StandardPanelPadding - SelectionHandleHeight;
+	const int barWidth = contentHeight > innerHeight ? 12 : 0;
+	page->SetSize({ static_cast<unsigned int>(std::max(0, innerWidth - barWidth)), static_cast<unsigned int>(contentHeight) });
+	for (const auto& row : _groupRows) row->SetSize({ static_cast<unsigned int>(std::max(0, innerWidth - 4 - barWidth)), GuiPerformanceGroupRow::Height });
 	for (const auto& entry : _controlSizes)
 	{
 		auto radio = std::dynamic_pointer_cast<GuiRadio>(entry.first);
 		if (!radio) continue;
 		unsigned int count = 0;
 		while (count < 255 && radio->TryGetChild(static_cast<unsigned char>(count))) ++count;
-		const auto available = static_cast<unsigned int>(std::max(0, innerWidth - 4));
+		const auto available = static_cast<unsigned int>(std::max(0, innerWidth - 4 - barWidth));
 		const auto radioWidth = std::min(available, entry.second.Width);
 		for (unsigned int index = 0; index < count; ++index)
 		{
@@ -270,7 +331,8 @@ void GuiMainPanel::_LayoutSelection(int panelWidth, int panelHeight)
 			toggle->SetSize({ right - left, entry.second.Height });
 		}
 		radio->SetSize({ radioWidth, entry.second.Height });
-		page->SetSize({ radioWidth + 4u, entry.second.Height + 4u });
+		for (const auto& row : _groupRows) row->SetSize({ radio->GetSize().Width, GuiPerformanceGroupRow::Height });
+		page->SetSize({ radio->GetSize().Width + 4u, static_cast<unsigned int>(contentHeight) });
 	}
 	page->ComputeLayout();
 	_pageScroll->SetPosition({ padding, padding });

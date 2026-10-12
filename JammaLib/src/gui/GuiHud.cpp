@@ -391,7 +391,6 @@ void GuiHud::Draw(base::DrawContext& ctx)
 			glCtx.PopScissorRect();
 		}
 		_DrawCableSockets(ctx);
-		for (const auto& row : _groupRows) row->DrawTooltip(ctx, GlobalPosition());
 	}
 	// The status bar keeps its incoming opacity while the surrounding controls fade.
 	if (_statusPanel) _statusPanel->Draw(ctx);
@@ -406,32 +405,6 @@ void GuiHud::SetSize(Size2d size)
 	_LayoutPanels();
 	if (_popupManager && _popupManager->Top() == _sourceInfoPanel)
 		_LayoutSourceIdentity();
-}
-
-void GuiHud::SetPerformanceGroupHandler(std::function<void(bool, engine::GroupCommand, std::size_t)> handler)
-{
-	for (std::size_t i = 0u; i < _groupRows.size(); ++i)
-		_groupRows[i]->SetHandler([handler, i](engine::GroupCommand command, std::size_t slot) {
-			if (handler) handler(i == 1u, command, slot);
-		});
-}
-
-void GuiHud::RefreshPerformanceGroups(const engine::PerformanceGroups& groups)
-{
-	const auto refresh = [](const auto& model, const auto& widget) {
-		std::array<bool, 9> occupied{};
-		for (std::size_t slot = 1u; slot <= occupied.size(); ++slot) occupied[slot - 1u] = model.Get(slot) != nullptr;
-		widget->SetSlots(occupied, model.ActiveSlot());
-	};
-	refresh(groups.Mute, _groupRows[0]);
-	refresh(groups.Selection, _groupRows[1]);
-}
-
-bool GuiHud::AdvanceGroupAnimation(float elapsedSeconds)
-{
-	bool changed = false;
-	for (const auto& row : _groupRows) changed = row->AdvanceAnimation(elapsedSeconds) || changed;
-	return changed;
 }
 
 Rect2d GuiHud::OccupiedTopStripBounds() const
@@ -506,11 +479,6 @@ void GuiHud::_BuildPanels()
 void GuiHud::_BuildTopStrip()
 {
 	_topStrip->AddChild(_MakeHeader("Inputs", _TopStripWidth - (_TopStripPadding * 2u), 8u));
-	for (std::size_t i = 0u; i < _groupRows.size(); ++i)
-	{
-		if (!_groupRows[i]) _groupRows[i] = std::make_shared<GuiPerformanceGroupRow>(i == 1u);
-		_topStrip->AddChild(_groupRows[i]);
-	}
 
 	const auto audioCount = static_cast<unsigned int>(std::count_if(_sourceEndpoints.begin(), _sourceEndpoints.end(),
 		[](const auto& source) { return source.Kind == io::RigFileRouting::SourceKind::Adc; }));
@@ -862,8 +830,7 @@ void GuiHud::_LayoutPanels()
 	_addTriggerButton->SetVisible(railWidth >= static_cast<int>(_TriggerControlSize) && triggerFooter >= static_cast<int>(_TriggerControlSize));
 
 	int topWidth = std::max(0, railX - marginX - static_cast<int>(_SourcePanelGap));
-	constexpr int groupBlockHeight = 2 * static_cast<int>(GuiPerformanceGroupRow::Height) + 16;
-	int topHeight = std::min(static_cast<int>(_TopStripHeight) + groupBlockHeight, std::max(0, height - 2 * marginY - GuiStyle::StatusBarHeight));
+	int topHeight = std::min(static_cast<int>(_TopStripHeight), std::max(0, height - 2 * marginY - GuiStyle::StatusBarHeight));
 	_topStrip->SetPosition({ marginX, std::max(0, height - marginY - topHeight) });
 	_topStrip->SetSize({ static_cast<unsigned int>(topWidth), static_cast<unsigned int>(topHeight) });
 	_topStripBorder->SetSize({ static_cast<unsigned int>(topWidth), static_cast<unsigned int>(topHeight) });
@@ -896,23 +863,14 @@ void GuiHud::_LayoutPanels()
 	const bool sourceScrolls = audioWidth < occupiedWidth(audioCount, audioCard) || midiWidth < occupiedWidth(midiCount, midiCard);
 	const int desiredRowHeight = static_cast<int>(_SourceButtonHeight + 4u + (sourceScrolls ? _SourceScrollBarHeight : 0u));
 	rowHeight = std::min(rowHeight, desiredRowHeight);
-	const int groupBudget = std::max(0, topHeight - rowHeight - 2 * padding);
-	const int sourceGap = std::min(8, groupBudget);
-	const int rowGap = std::min(8, std::max(0, groupBudget - sourceGap));
-	const int groupRowHeight = std::min(static_cast<int>(GuiPerformanceGroupRow::Height), std::max(0, groupBudget - sourceGap - rowGap) / 2);
-	topHeight = rowHeight + 2 * padding + sourceGap + rowGap + 2 * groupRowHeight;
+	topHeight = rowHeight + 2 * padding;
 	// Keep the same right anchor, but stop the background growing beyond its contents.
 	topWidth = std::min(topWidth, std::max(320, static_cast<int>(audioWidth + midiWidth) + categoryGap + labelWidth + 2 * padding));
 	_topStrip->SetPosition({ railX - static_cast<int>(_SourcePanelGap) - topWidth, std::max(0, height - marginY - topHeight) });
 	_topStrip->SetSize({ static_cast<unsigned int>(topWidth), static_cast<unsigned int>(topHeight) });
 	_topStripBorder->SetSize({ static_cast<unsigned int>(topWidth), static_cast<unsigned int>(topHeight) });
 	_topSourceRow->SetSize({ audioWidth + midiWidth + static_cast<unsigned int>(categoryGap), static_cast<unsigned int>(rowHeight) });
-	for (std::size_t i = 0u; i < _groupRows.size(); ++i)
-	{
-		_groupRows[i]->SetPosition({ padding, padding + (i == 0u ? groupRowHeight + rowGap : 0) });
-		_groupRows[i]->SetSize({ static_cast<unsigned int>(std::max(0, topWidth - 2 * padding)), static_cast<unsigned int>(groupRowHeight) });
-		_groupRows[i]->SetVisible(topWidth > 2 * padding && groupRowHeight >= static_cast<int>(GuiPerformanceGroupRow::Height));
-	}
+
 	for (size_t i = 0; i < _sourceWidgets.size(); ++i)
 	{
 		const auto cardWidth = _sourceEndpoints[i].Kind == io::RigFileRouting::SourceKind::Adc ? audioCard : midiCard;

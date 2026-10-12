@@ -6,6 +6,7 @@
 #include "GuiStackPanel.h"
 #include "GuiScrollPanel.h"
 #include "GuiRadio.h"
+#include "GuiPerformanceGroupRow.h"
 #include "GuiPopupManager.h"
 
 namespace gui
@@ -35,6 +36,8 @@ namespace gui
 		void SetCommandOwner(std::weak_ptr<base::ActionReceiver> owner);
 		void SetViewportSize(utils::Size2d viewport);
 		void SetOccupiedTopStripBounds(utils::Rect2d bounds);
+		void SetPerformanceGroupHandler(std::function<void(bool, engine::GroupCommand, std::size_t)> handler);
+		void RefreshPerformanceGroups(const engine::PerformanceGroups& groups);
 		void SetPage(SettingsPage page);
 		SettingsPage Page() const { return _page; }
 		void SetExpanded(bool expanded);
@@ -54,7 +57,8 @@ namespace gui
 		static constexpr int StandardPanelPadding = 8;
 		static constexpr int MainPanelTopGap = StandardPanelPadding * 3 + 4;
 		static constexpr int MainPanelMinimumHeight = 320;
-		static constexpr int SelectionPanelHeight = 84;
+		static constexpr int SelectionRowGap = 4;
+		int _SelectionPanelHeight() const;
 		static constexpr int SelectionHandleHeight = 20;
 		void _Layout();
 		void _LayoutSelection(int panelWidth, int panelHeight);
@@ -63,6 +67,7 @@ namespace gui
 		void _UpdatePresentation();
 		static constexpr unsigned int _PageCommand = 1u;
 		static constexpr unsigned int _ExpandCommand = 2u;
+		std::array<std::shared_ptr<GuiPerformanceGroupRow>, 2> _groupRows;
 		bool _selectionOnly;
 		bool _expanded = true;
 		float _transition = 1.0f;

@@ -117,10 +117,6 @@ Scene::Scene(SceneParams params,
 		return RequestRigEdit(candidate) == RigCoordinator::EditResult::Pending;
 	};
 	_hudPanel = std::make_shared<GuiHud>(hudParams);
-	// HUD input dispatch already holds _sceneMutex.
-	_hudPanel->SetPerformanceGroupHandler([this](bool selection, GroupCommand command, std::size_t slot) {
-		_ExecuteGroupCommandLocked(selection, command, slot);
-	});
 	AddChild(_hudPanel);
 
 	_EnsureRemoteTempoPromptUi();
@@ -282,6 +278,9 @@ Scene::Scene(SceneParams params,
 	mainParams.Settings = { { SettingsPage::Selection, "", _modeRadio, 100u } };
 	_selectionPanel = std::make_shared<GuiMainPanel>(mainParams);
 	AddChild(_selectionPanel);
+	_selectionPanel->SetPerformanceGroupHandler([this](bool selection, GroupCommand command, std::size_t slot) {
+		_ExecuteGroupCommandLocked(selection, command, slot);
+	});
 
 	_PublishAudioStations();
 
@@ -932,17 +931,16 @@ void Scene::AdvanceUiAnimations()
 	const float elapsed = _lastPanelAnimationTime
 		? static_cast<float>(Timer::GetElapsedSeconds(*_lastPanelAnimationTime, now)) : 0.0f;
 	_lastPanelAnimationTime = now;
+	std::scoped_lock lock(_sceneMutex);
 	const bool mainChanged = _mainPanel && _mainPanel->AdvanceAnimation(elapsed);
 	const bool selectionChanged = _selectionPanel && _selectionPanel->AdvanceAnimation(elapsed);
 	if (mainChanged || selectionChanged) _InvalidateHover2d();
-	std::scoped_lock lock(_sceneMutex);
 	_UpdateRackVisibilityLocked();
 	_performanceGroups.Acknowledge(_audioEngine->GroupMuteReceipt());
 	_performanceGroups.Pump(_stations, [this](auto application) { _audioEngine->PublishGroupMuteApplication(std::move(application)); });
+	if (_selectionPanel) _selectionPanel->RefreshPerformanceGroups(_performanceGroups.Groups());
 	if (_hudPanel)
 	{
-		_hudPanel->RefreshPerformanceGroups(_performanceGroups.Groups());
-		if (_hudPanel->AdvanceGroupAnimation(elapsed)) _InvalidateHover2d();
 		_hudPanel->SetPerformanceGroupFeedback(_performanceGroups.Error());
 		if (_mainPanel) _mainPanel->SetOccupiedTopStripBounds(_hudPanel->OccupiedTopStripBounds());
 	}
@@ -1509,7 +1507,7 @@ ActionResult Scene::OnAction(KeyAction action)
 		if (_performanceGroups.HandleKey(action, _stations, _GroupSelectionDepthLocked(),
 			[this](auto application) { _audioEngine->PublishGroupMuteApplication(std::move(application)); }))
 		{
-			if (_hudPanel) _hudPanel->RefreshPerformanceGroups(_performanceGroups.Groups());
+			if (_selectionPanel) _selectionPanel->RefreshPerformanceGroups(_performanceGroups.Groups());
 			return { true, {}, {}, ACTIONRESULT_DEFAULT, nullptr, {} };
 		}
 	}
@@ -3570,7 +3568,7 @@ void Scene::_ExecuteGroupCommandLocked(bool selection, GroupCommand command, std
 	_performanceGroups.Execute(selection, command, slot, _stations, _GroupSelectionDepthLocked(),
 		[this](auto application) { _audioEngine->PublishGroupMuteApplication(std::move(application)); });
 	if (selection && command == GroupCommand::RecallOrStore) _RestoreGroupSelectionDepthLocked();
-	if (_hudPanel) _hudPanel->RefreshPerformanceGroups(_performanceGroups.Groups());
+	if (_selectionPanel) _selectionPanel->RefreshPerformanceGroups(_performanceGroups.Groups());
 	_InvalidateHover2d();
 }
 
