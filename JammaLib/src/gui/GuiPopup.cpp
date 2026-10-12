@@ -1,4 +1,6 @@
 #include "GuiPopup.h"
+#include <optional>
+#include <utility>
 
 #include <algorithm>
 
@@ -18,10 +20,11 @@ namespace gui
 
 		actions::ActionResult OnAction(actions::TouchAction action) override
 		{
-			const bool pressed = _pressed;
+			const bool pressed = _pressed && _pressed->first == action.Touch && _pressed->second == action.Index;
 			auto result = GuiButton::OnAction(action);
-			if (action.State == actions::TouchAction::TOUCH_DOWN) _pressed = result.IsEaten;
-			else if (action.State == actions::TouchAction::TOUCH_UP) _pressed = false;
+			if (action.State == actions::TouchAction::TOUCH_DOWN && result.IsEaten)
+				_pressed = std::pair{ action.Touch, action.Index };
+			else if (action.State == actions::TouchAction::TOUCH_UP && pressed) _pressed.reset();
 			if (result.IsEaten && action.State == actions::TouchAction::TOUCH_UP && _receiver
 				&& (!_requirePress || pressed))
 			{
@@ -36,12 +39,12 @@ namespace gui
 
 		void ClearPointerState() override
 		{
-			_pressed = false;
+			_pressed.reset();
 			GuiButton::ClearPointerState();
 		}
 
 	private:
-		bool _pressed = false;
+		std::optional<std::pair<actions::TouchAction::TouchType, int>> _pressed;
 		bool _requirePress;
 		unsigned int _actionIndex;
 	};
