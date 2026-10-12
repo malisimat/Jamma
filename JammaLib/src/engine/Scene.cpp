@@ -887,9 +887,27 @@ void Scene::Draw3d(DrawContext& ctx,
 	glCtx.PopMvp();
 }
 
+bool Scene::IsCameraTriggerKey(unsigned int key) const
+{
+	const auto rig = _rigCoordinator.Accepted();
+	if (!rig) return false;
+	for (const auto& trigger : rig->Rig.Triggers)
+		for (const auto& pair : trigger.TriggerPairs)
+			if (key == pair.ActivateDown || key == pair.ActivateUp ||
+				key == pair.DitchDown || key == pair.DitchUp) return true;
+	return false;
+}
+
+void Scene::OnCameraTriggerActivity()
+{
+	// Performance keys restart manual idle timing, but preserve a live wander.
+	if (!_unattendedCamera.IsAutomatic()) OnHumanActivity();
+}
+
 void Scene::OnHumanActivity()
 {
-	_unattendedCamera.HumanActivity(Timer::GetTime());
+	const auto now = Timer::GetTime();
+	_unattendedCamera.HumanActivity(now);
 	++_cameraHumanActivityRevision;
 	_camera.CancelAutomaticMotion();
 }
@@ -900,7 +918,7 @@ void Scene::SetCameraInteractionEligibility(bool windowEligible, bool heldIntera
 	{
 		_unattendedCamera.HumanActivity(Timer::GetTime());
 		const auto recordings = _cameraRecordings->Snapshot();
-		_unattendedCamera.DiscardRecordingStartsThrough(recordings->LatestStart.StartOrder);
+		_unattendedCamera.DiscardRecordingStartsThrough(recordings->LatestStart.StartOrder, recordings->LatestDitchOrder);
 		++_cameraHumanActivityRevision;
 		_camera.CancelAutomaticMotion();
 		_lastCameraUpdateTime.reset();
@@ -929,6 +947,13 @@ void Scene::UpdateCamera()
 	};
 	std::vector<std::weak_ptr<LoopTake>> liveTakes;
 	std::vector<TakeFraming> takeFramings;
+	struct StationFraming
+	{
+		std::weak_ptr<Station> Identity;
+		graphics::CameraBounds Bounds;
+		Position3d Centre;
+	};
+	std::vector<StationFraming> stationFramings;
 	graphics::CameraBounds overviewBounds;
 	graphics::CameraBounds visibleBounds;
 	std::shared_ptr<const CameraRecordingObservation> recordings;
@@ -961,7 +986,11 @@ void Scene::UpdateCamera()
 				takeFramings.push_back({ take, bounds, centre });
 			}
 			visibleBounds.Include(stationBounds);
-			if (visible) overviewBounds.Include(stationBounds);
+			if (visible)
+			{
+				overviewBounds.Include(stationBounds);
+				stationFramings.push_back({ station, stationBounds, stationPosition });
+			}
 		}
 		_camera.CompleteStationObservation(_stations.size(), _stations.empty()
 			? std::optional<Position3d>{}
@@ -981,9 +1010,19 @@ void Scene::UpdateCamera()
 	const auto decision = _unattendedCamera.Update(now, eligible,
 		eligibleExceptHeldInteraction && _cameraHeldInteraction, *recordings, liveTakes);
 	std::optional<Position3d> automaticTarget;
-	if (decision.IsAutomatic())
+	if (eligible && decision.IsAutomatic())
 	{
-		if (decision.CurrentState != graphics::UnattendedCameraController::State::Overview)
+		if (decision.CurrentState == graphics::UnattendedCameraController::State::StationFocus)
+		{
+			const auto station = std::find_if(stationFramings.begin(), stationFramings.end(),
+				[&decision](const auto& framing) {
+					return !framing.Identity.owner_before(decision.Station)
+						&& !decision.Station.owner_before(framing.Identity);
+				});
+			if (station != stationFramings.end())
+				automaticTarget = graphics::CameraFraming::Close(station->Centre, station->Bounds);
+		}
+		else if (decision.CurrentState == graphics::UnattendedCameraController::State::RecordingFocus)
 		{
 			const auto focus = std::find_if(takeFramings.begin(), takeFramings.end(),
 				[&decision](const auto& take) {
@@ -1002,7 +1041,8 @@ void Scene::UpdateCamera()
 			_camera.CancelAutomaticMotion();
 	}
 	else
-		_camera.CancelAutomaticMotion();
+		_camera.CancelAutomaticMotion((eligibleExceptHeldInteraction && _cameraHeldInteraction)
+			|| !recordings->ActiveCaptures.empty());
 
 	if (diagnosticDue)
 	{
@@ -1012,7 +1052,7 @@ void Scene::UpdateCamera()
 			{
 			case graphics::UnattendedCameraController::State::Overview: return "overview";
 			case graphics::UnattendedCameraController::State::RecordingFocus: return "recording-focus";
-			case graphics::UnattendedCameraController::State::QuietHold: return "quiet-hold";
+			case graphics::UnattendedCameraController::State::StationFocus: return "station-focus";
 			default: return "waiting";
 			}
 		};

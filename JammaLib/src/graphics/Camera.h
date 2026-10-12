@@ -73,7 +73,7 @@ namespace graphics
 		void TickBackgroundDrag(float deltaSeconds);
 		void SetAutomaticTarget(utils::Position3d eye) noexcept;
 		void TickAutomaticMotion(float deltaSeconds) noexcept;
-		void CancelAutomaticMotion() noexcept;
+		void CancelAutomaticMotion(bool preserveVelocity = false) noexcept;
 		bool IsAutomatic() const noexcept { return _automaticTarget.has_value(); }
 		void SetFrontVisibleBounds(const CameraBounds& bounds) noexcept { _frontVisibleBounds = bounds; }
 		bool IsBackgroundDragging() const noexcept;
@@ -189,6 +189,7 @@ namespace graphics
 		std::optional<utils::Position3d> _automaticTarget;
 		std::optional<Pose> _automaticManualPose;
 		utils::Position3d _automaticVelocity{};
+		bool _resumeAutomaticVelocity = false;
 		CameraBounds _frontVisibleBounds;
 	};
 }

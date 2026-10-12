@@ -1703,6 +1703,11 @@ ActionResult Station::OnAction(TriggerAction action)
 		res.ResultType = actions::ActionResultType::ACTIONRESULT_DEFAULT;
 		break;
 	}
+	// Applied structural outcome: publish on the serialized owner, never audio.
+	if (res.IsEaten && res.ResultType == actions::ActionResultType::ACTIONRESULT_DITCH
+		&& !action.IsSourceLossCancellation)
+		if (auto publisher = _cameraRecordingPublisher.lock())
+			publisher->ObserveDitch(std::dynamic_pointer_cast<Station>(Sharable::shared_from_this()), utils::Timer::GetTime());
 	if (res.IsEaten && loopTake)
 		loopTake.value()->PublishCameraCaptureObservation();
 	if (res.IsEaten)

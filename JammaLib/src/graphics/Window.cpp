@@ -673,6 +673,7 @@ ActionResult Window::OnAction(TouchAction touchAction)
 	_scene->OnHumanActivity();
 	if (touchAction.Touch == TouchAction::TOUCH_FINGER && touchAction.Index >= 0 && touchAction.Index < 32)
 		_heldTouches.set(static_cast<size_t>(touchAction.Index), touchAction.State == TouchAction::TOUCH_DOWN);
+	_UpdateCameraEligibility();
 	if (_config.Size.Width == 0 || _config.Size.Height == 0) return ActionResult::NoAction();
 	if (HasRelativePointer() && touchAction.Touch == TouchAction::TOUCH_MOUSE
 		&& touchAction.State == TouchAction::TOUCH_UP && touchAction.Index == _relativeButton)
@@ -718,6 +719,8 @@ ActionResult Window::OnAction(TouchAction touchAction)
 		EndRelativePointer(touchAction.Index);
 		if (_buttonsDown == 0u && _wnd && GetCapture() == _wnd) _ReleaseOwnedMouseCapture();
 	}
+	// Publish held state at input time: a press and release can both precede Render.
+	_UpdateCameraEligibility();
 	return result;
 }
 
@@ -756,9 +759,13 @@ ActionResult Window::OnAction(KeyAction keyAction)
 {
 	if (!keyAction.IsSynthetic)
 	{
-		_scene->OnHumanActivity();
+		const bool cameraTrigger = _scene->IsCameraTriggerKey(keyAction.KeyChar);
+		if (!cameraTrigger) _scene->OnHumanActivity();
+		else _scene->OnCameraTriggerActivity();
+		// Trigger holds are performance gestures, not manual camera ownership.
 		if (keyAction.KeyChar < _heldKeys.size())
-			_heldKeys.set(keyAction.KeyChar, keyAction.KeyActionType == KeyAction::KEY_DOWN);
+			_heldKeys.set(keyAction.KeyChar, !cameraTrigger && keyAction.KeyActionType == KeyAction::KEY_DOWN);
+		_UpdateCameraEligibility();
 	}
 	// Handle modifiers
 	int modifiers = _modifiers;
@@ -1340,10 +1347,14 @@ LRESULT CALLBACK Window::WindowProcedure(HWND hWindow, UINT message, WPARAM wPar
 
 		if (repeatkey)
 		{
-			window->_scene->OnHumanActivity();
 			const auto scan = (static_cast<unsigned int>(lParam) >> 16u) & 0xffu;
 			const auto key = scan == 0x29u ? 192u : static_cast<unsigned int>(wParam);
-			if (key < window->_heldKeys.size()) window->_heldKeys.set(key);
+			if (!window->_scene->IsCameraTriggerKey(key))
+			{
+				window->_scene->OnHumanActivity();
+				if (key < window->_heldKeys.size()) window->_heldKeys.set(key);
+			}
+			else window->_scene->OnCameraTriggerActivity();
 		}
 		if (!repeatkey)
 		{
@@ -1390,10 +1401,14 @@ LRESULT CALLBACK Window::WindowProcedure(HWND hWindow, UINT message, WPARAM wPar
 
 		if (repeatkey)
 		{
-			window->_scene->OnHumanActivity();
 			const auto scan = (static_cast<unsigned int>(lParam) >> 16u) & 0xffu;
 			const auto key = scan == 0x29u ? 192u : static_cast<unsigned int>(wParam);
-			if (key < window->_heldKeys.size()) window->_heldKeys.set(key);
+			if (!window->_scene->IsCameraTriggerKey(key))
+			{
+				window->_scene->OnHumanActivity();
+				if (key < window->_heldKeys.size()) window->_heldKeys.set(key);
+			}
+			else window->_scene->OnCameraTriggerActivity();
 		}
 		if (!repeatkey)
 		{

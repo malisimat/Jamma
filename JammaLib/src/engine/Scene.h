@@ -120,6 +120,8 @@ namespace engine
 		bool HasSelection() const;
 		void UpdateCamera();
 		void OnHumanActivity();
+		void OnCameraTriggerActivity();
+		bool IsCameraTriggerKey(unsigned int key) const;
 		void SetCameraInteractionEligibility(bool windowEligible, bool heldInteraction);
 		void AdvanceUiAnimations();
 

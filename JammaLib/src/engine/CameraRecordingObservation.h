@@ -4,12 +4,14 @@
 #include <atomic>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <vector>
 #include "../utils/Timer.h"
 
 namespace engine
 {
 	class LoopTake;
+	class Station;
 
 	struct CameraRecordingIdentity
 	{
@@ -30,6 +32,10 @@ namespace engine
 		Time LastLifecycleChange{};
 		CameraRecordingIdentity LatestStart;
 		Time LatestStartAt{};
+		std::weak_ptr<Station> LatestDitchStation;
+		std::uint64_t LatestDitchOrder = 0u;
+		Time LatestDitchAt{};
+		std::optional<Time> LastCaptureEndAt;
 		std::vector<Capture> ActiveCaptures;
 	};
 
@@ -73,6 +79,7 @@ namespace engine
 				? found == captures.end() || found->CaptureMode != mode
 				: found != captures.end());
 			if (!changed) return startOrder;
+			if (!active && found != captures.end()) _state.LastCaptureEndAt = now;
 			if (active)
 			{
 				if (found == captures.end())
@@ -88,11 +95,28 @@ namespace engine
 			return startOrder;
 		}
 
+		void ObserveDitch(const std::weak_ptr<Station>& station, Time now)
+		{
+			_state.LatestDitchStation = station;
+			_state.LatestDitchOrder = ++_nextStartOrder;
+			_state.LatestDitchAt = now;
+			_Publish();
+		}
+
 		void Reset(Time now)
 		{
 			++_state.SceneGeneration;
 			_state.LatestStart = {};
+			// Empty-session timing reset can immediately follow the final ditch.
+			// Keep that station gesture through the reset; it has no take identity.
+			if (_state.LatestDitchStation.expired() ||
+				utils::Timer::GetElapsedSeconds(_state.LatestDitchAt, now) >= 2.0)
+			{
+				_state.LatestDitchStation.reset();
+				_state.LatestDitchOrder = 0u;
+			}
 			_state.LatestStartAt = {};
+			_state.LastCaptureEndAt.reset();
 			_state.ActiveCaptures.clear();
 			_state.LastLifecycleChange = now;
 			++_state.LifecycleRevision;
