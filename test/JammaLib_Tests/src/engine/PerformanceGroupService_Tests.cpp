@@ -250,3 +250,40 @@ TEST_F(PerformanceGroupServiceTest, ContextualHeldPressCannotActivateOnRepeatAnd
     EXPECT_TRUE(controller.HandleKey(action, {}, engine::GroupTargetKind::Take, publish));
     EXPECT_NE(controller.Groups().Mute.Get(1u), nullptr);
 }
+
+TEST_F(PerformanceGroupServiceTest, PluginFocusLossRetainsGroupReleaseOwnership)
+{
+    engine::PerformanceGroupController controller;
+    auto publish = [](auto) {};
+    actions::KeyAction key;
+    key.KeyChar = 49u;
+    key.KeyActionType = actions::KeyAction::KEY_DOWN;
+    ASSERT_TRUE(controller.HandleKey(key, {}, engine::GroupTargetKind::Take, publish));
+    controller.ResetKeys(); // Synchronous focus loss during plugin recall.
+    key.KeyActionType = actions::KeyAction::KEY_UP;
+    EXPECT_TRUE(controller.ConsumeRelease(key));
+    EXPECT_FALSE(controller.ConsumeRelease(key));
+}
+
+TEST_F(PerformanceGroupServiceTest, FreshPressAfterLostGroupReleaseDoesNotStealContextualRelease)
+{
+    engine::PerformanceGroupController controller;
+    auto publish = [](auto) {};
+    actions::KeyAction key;
+    key.KeyChar = 49u;
+    key.KeyActionType = actions::KeyAction::KEY_DOWN;
+    ASSERT_TRUE(controller.HandleKey(key, {}, engine::GroupTargetKind::Take, publish));
+    controller.ResetKeys();
+    // The old key-up went to the plugin editor. The next physical press is
+    // owned by text/editor input and must retain both of its own transitions.
+    controller.BlockContextualPress(key);
+    key.KeyActionType = actions::KeyAction::KEY_UP;
+    EXPECT_FALSE(controller.ConsumeRelease(key));
+    key.KeyActionType = actions::KeyAction::KEY_DOWN;
+    ASSERT_TRUE(controller.HandleKey(key, {}, engine::GroupTargetKind::Take, publish));
+    controller.ResetKeys();
+    key.Modifiers = base::Action::MODIFIER_CTRL;
+    EXPECT_FALSE(controller.HandleKey(key, {}, engine::GroupTargetKind::Take, publish));
+    key.KeyActionType = actions::KeyAction::KEY_UP;
+    EXPECT_FALSE(controller.ConsumeRelease(key));
+}

@@ -19,9 +19,14 @@ namespace engine
         void BlockContextualPress(const actions::KeyAction& action)
         {
             if (action.KeyChar < _held.size() && action.KeyActionType == actions::KeyAction::KEY_DOWN)
+            {
+                if (!_held[action.KeyChar]) _consumed[action.KeyChar] = false;
                 _held[action.KeyChar] = true;
+            }
         }
-        void ResetKeys() noexcept { _held.fill(false); _consumed.fill(false); }
+        // Focus loss can be sent by a recalled plugin before its group key-up.
+        // Retain release ownership; a fresh down clears stale consumption.
+        void ResetKeys() noexcept { _held.fill(false); }
         bool HandleKey(const actions::KeyAction& action, const PerformanceGroupService::Stations& stations,
             GroupTargetKind depth, const Publish& publish);
         bool Execute(bool selection, GroupCommand command, std::size_t slot,

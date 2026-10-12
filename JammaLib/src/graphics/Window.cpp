@@ -494,6 +494,7 @@ Size2d Window::GetSize()
 
 void Window::Render()
 {
+	ProcessDeferredInputLoss();
 	GlDeleteQueue::FlushPendingDeletes();
 	ApplyPendingResize();
 
@@ -502,6 +503,9 @@ void Window::Render()
 	_scene->UpdateCamera();
 	_scene->InitResources(_resourceLib, false);
 	_scene->AdvanceUiAnimations();
+	// A plugin state call can synchronously send WM_KILLFOCUS while Scene's
+	// non-audio lock is held. Drain only after that call and its lock unwind.
+	ProcessDeferredInputLoss();
 
 	const bool needsPick = (_hover3dDirty || _forcePick) && _cachedCursorPosition.has_value();
 	if (needsPick)
@@ -673,6 +677,8 @@ ActionResult Window::OnAction(TouchAction touchAction)
 		switch (touchAction.State)
 		{
 		case TouchAction::TOUCH_DOWN:
+			// A delayed notification belongs to the preceding pointer gesture.
+			_captureLossPending = false;
 			_buttonsDown |= (1 << touchAction.Index);
 			_forcePick = true;
 			break;
@@ -721,6 +727,21 @@ bool Window::CancelMouseCapture()
 	OnAction(cancelled);
 	if (_wnd && GetCapture() == _wnd)
 		ReleaseCapture();
+	return true;
+}
+
+bool Window::ProcessDeferredInputLoss()
+{
+	const bool focusLost = _focusLossPending;
+	const bool captureLost = _captureLossPending;
+	_focusLossPending = _captureLossPending = false;
+	if (!focusLost && !captureLost) return false;
+	CancelMouseCapture();
+	if (focusLost)
+	{
+		ClearModifiers();
+		if (_scene) _scene->OnInputFocusLost();
+	}
 	return true;
 }
 
@@ -785,6 +806,7 @@ ActionResult Window::OnAction(KeyAction keyAction)
 
 void Window::ReplaceScene(Scene& scene)
 {
+	ProcessDeferredInputLoss();
 	CancelMouseCapture();
 	_scene->SetRelativePointerHost({}, {});
 	_scene->ReleaseResources();
@@ -1033,7 +1055,10 @@ LRESULT CALLBACK Window::WindowProcedure(HWND hWindow, UINT message, WPARAM wPar
 			window->SetResizing(false);
 			return 0;
 		}
-		window->CancelMouseCapture();
+		// ReleaseCapture after a normal mouse-up also sends this notification.
+		// It must not cancel a fresh press received before the next UI frame.
+		if (window->_buttonsDown != 0u || window->HasRelativePointer())
+			window->_captureLossPending = true;
 		return 0;
 	}
 	case WM_EXITSIZEMOVE:
@@ -1375,9 +1400,10 @@ LRESULT CALLBACK Window::WindowProcedure(HWND hWindow, UINT message, WPARAM wPar
 		// window (such as a VST editor) those key-ups never reach us, leaving
 		// the modifier bitmask stuck. Clear it on focus loss so subsequent
 		// clicks aren't treated as modified gestures.
-		window->CancelMouseCapture();
-		window->ClearModifiers();
-		if (window->_scene) window->_scene->OnInputFocusLost();
+		// Plugins may send this synchronously from GetState/SetState. Calling
+		// Scene here would recursively acquire its non-recursive mutex, including
+		// through capture cancellation or synthetic modifier-up dispatch.
+		window->_focusLossPending = true;
 		return 0;
 	}
 	case WM_DESTROY:

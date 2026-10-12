@@ -171,3 +171,11 @@ Validation completed:
 | Mixer gain and scratch | Callback owns fade progression and stack scratch; UI publishes mute/target scalars | Existing atomic target/mute publication. No allocation or lock in the new ramp path. |
 
 Manual checks still required on the user's live setup: DPI/display appearance, routing/Ctrl overlays and rapid pointer gestures in the running app; representative VST2/VST3 editors and audible third-party preset behavior. A vendor state call runs synchronously on its UI owner once safely acquired and may take an unpredictable time; skipped processing/MIDI is recovered, but arbitrary plugin presets are not promised click-free. The existing void SetState API retains vendor failure logging rather than claiming verified SDK success.
+
+### Follow-up: plugin-induced focus reentry
+
+The user's Kontakt 5 exception stack showed SetState synchronously sending WM_KILLFOCUS while Scene::AdvanceUiAnimations held the Scene mutex. Immediate focus cleanup entered Scene::_InteractionContext and attempted to lock that same non-recursive mutex. Window now latches focus/capture-loss notifications on its UI owner and drains them before the UI frame and after the group-state pump returns, outside the Scene lock. Capture-only requests apply only to active gestures and are discarded when a newer press starts.
+
+Group release consumption now survives focus loss so a recalled plugin cannot send the consumed `1` release through to its configured trigger. A fresh contextual or unsupported-modifier press clears stale consumption if the original release went to another window.
+
+Independent review passed. All **1,445 native tests** pass, including synchronous native focus/capture notifications under the held Scene mutex, active pointer cancellation, newer gesture preservation, group/contextual release ownership, and a real published rig with digit `1` assigned to trigger activation. The Debug x64 app rebuild succeeded. The threading audit found no new callback lock/wait additions; all changes are on UI input paths. Live Kontakt confirmation remains user-side.

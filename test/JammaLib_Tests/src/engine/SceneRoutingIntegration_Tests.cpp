@@ -3,6 +3,7 @@
 #include <filesystem>
 #include <fstream>
 #include "engine/Scene.h"
+#include "graphics/Window.h"
 #include "io/NativeMidiSidecar.h"
 #include "utils/StringUtils.h"
 
@@ -11,6 +12,12 @@ namespace engine
     class SourceLossIntegrationTestAccess
     {
     public:
+        static void WhileSceneLocked(Scene& scene, const std::function<void()>& callback)
+        {
+            std::scoped_lock lock(scene._sceneMutex);
+            callback();
+        }
+        static bool ControlHeld(const Scene& scene) { return scene._ctrlHeld; }
         static void Confirm(Scene& scene, const midi::MidiConnectionResult& previous,
             const midi::MidiConnectionResult& refreshed, const std::vector<std::string>& names)
         {
@@ -519,4 +526,69 @@ TEST_F(SceneRoutingIntegrationTest, RoutingEditIsRejectedWhenAudioCallbackIsInac
 	EXPECT_EQ((std::vector<std::pair<std::string, std::size_t>>{ { "Station", 1u } }),
 		Memberships(scene));
 	scene->Shutdown();
+}
+
+TEST_F(SceneRoutingIntegrationTest, PluginFocusLossDefersSceneEntryUntilStateCallUnlocks)
+{
+    auto scene = FreshScene({ Station("Keys") }, {});
+    ASSERT_TRUE(scene);
+    resources::ResourceLib resources;
+    graphics::Window window(*scene, resources);
+    const auto host = CreateWindowExW(0, L"STATIC", L"", 0, 0, 0, 0, 0,
+        HWND_MESSAGE, nullptr, GetModuleHandleW(nullptr), nullptr);
+    ASSERT_NE(host, nullptr);
+    SetWindowLongPtrW(host, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(&window));
+    actions::KeyAction control;
+    control.KeyChar = 17u;
+    control.KeyActionType = actions::KeyAction::KEY_DOWN;
+    window.OnAction(control);
+    ASSERT_TRUE(engine::SourceLossIntegrationTestAccess::ControlHeld(*scene));
+    actions::TouchAction press;
+    press.Touch = actions::TouchAction::TOUCH_MOUSE;
+    press.State = actions::TouchAction::TOUCH_DOWN;
+    press.Index = 0;
+    press.Position = { 320, 240 };
+    window.OnAction(press);
+    // Mirror Kontakt's synchronous native notification inside the Scene-locked
+    // group state pump. Any Scene/capture/modifier dispatch here re-locks Scene.
+    engine::SourceLossIntegrationTestAccess::WhileSceneLocked(*scene, [&] {
+        graphics::Window::WindowProcedure(host, WM_KILLFOCUS, 0, 0);
+        graphics::Window::WindowProcedure(host, WM_CAPTURECHANGED, 0, 0);
+        graphics::Window::WindowProcedure(host, WM_KILLFOCUS, 0, 0);
+        EXPECT_TRUE(engine::SourceLossIntegrationTestAccess::ControlHeld(*scene));
+        EXPECT_EQ(window.Modifiers(), base::Action::MODIFIER_CTRL);
+    });
+    EXPECT_TRUE(window.ProcessDeferredInputLoss());
+    EXPECT_FALSE(window.CancelMouseCapture());
+    EXPECT_FALSE(engine::SourceLossIntegrationTestAccess::ControlHeld(*scene));
+    EXPECT_EQ(window.Modifiers(), base::Action::MODIFIER_NONE);
+    EXPECT_FALSE(window.ProcessDeferredInputLoss());
+    DestroyWindow(host);
+}
+
+TEST_F(SceneRoutingIntegrationTest, GroupDigitAndFocusLossDoNotReachConfiguredTrigger)
+{
+    auto triggerConfig = Trigger("Record", "Keys");
+    triggerConfig.TriggerPairs.push_back({ 49u, 49u, 50u, 50u });
+    auto scene = FreshScene({ Station("Keys") }, { triggerConfig });
+    ASSERT_TRUE(scene);
+    const auto rig = scene->AcceptedRigSnapshot();
+    ASSERT_TRUE(rig && rig->Triggers.size() == 1u);
+    actions::KeyAction key;
+    key.KeyChar = 49u;
+    key.KeyActionType = actions::KeyAction::KEY_DOWN;
+    EXPECT_TRUE(scene->OnAction(key).IsEaten);
+    EXPECT_TRUE(scene->OnAction(key).IsEaten); // Suppressed repeat.
+    scene->OnInputFocusLost();
+    key.KeyActionType = actions::KeyAction::KEY_UP;
+    EXPECT_TRUE(scene->OnAction(key).IsEaten);
+    const auto trigger = rig->Triggers[0].Instance;
+    ASSERT_TRUE(trigger);
+    engine::SourceLossIntegrationTestAccess::WhileSceneLocked(*scene, [&] {
+        trigger->OnTick(utils::Timer::GetTime(), 0u, io::UserConfig{},
+            scene->GetAudioStreamParams(), rig->Revision);
+    });
+    EXPECT_EQ(trigger->GetState(), engine::TRIGSTATE_DEFAULT);
+    EXPECT_TRUE(trigger->GetTakes().empty());
+    EXPECT_TRUE(scene->SnapshotStations()[0]->GetLoopTakeSnapshot().empty());
 }

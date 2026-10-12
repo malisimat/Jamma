@@ -74,6 +74,9 @@ namespace graphics
 		void ClearModifiers();
 		// Propagate OS capture/focus loss so editor pointer transactions cancel.
 		bool CancelMouseCapture();
+		// UI-frame owner only, after external plugin calls have returned. Native
+		// focus/capture notifications only latch requests and never enter Scene.
+		bool ProcessDeferredInputLoss();
 		bool BeginRelativePointer(int button, utils::Position2d anchor);
 		void EndRelativePointer(int button);
 		bool HasRelativePointer() const noexcept { return _relativeButton >= 0; }
@@ -150,6 +153,10 @@ namespace graphics
 		base::Action::Modifiers _modifiers;
 		bool _jamLoadRequested;
 		bool _consoleToggleRequested;
+		// WindowProcedure and Render share the UI thread. No audio reader; these
+		// coalesced requests die with the Window and drain before Scene replacement.
+		bool _focusLossPending = false;
+		bool _captureLossPending = false;
 
 		ImageFullscreen _highlightPass;
 	};

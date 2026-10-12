@@ -21,6 +21,7 @@ bool PerformanceGroupController::HandleKey(const actions::KeyAction& action,
     if (!number && !backspace) return false;
     if (_held[action.KeyChar]) return _consumed[action.KeyChar];
     _held[action.KeyChar] = true;
+    _consumed[action.KeyChar] = false;
     const auto modifiers = action.Modifiers;
     if (backspace)
     {

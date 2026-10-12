@@ -160,3 +160,31 @@ TEST(Window, ConsoleToggleShortcutIsConsumedOnce) {
 	EXPECT_TRUE(window.ConsumeConsoleToggleRequest());
 	EXPECT_FALSE(window.ConsumeConsoleToggleRequest());
 }
+
+TEST(Window, DeferredCaptureLossDoesNotCancelANewerMousePress)
+{
+    CaptureLossScene scene;
+    ResourceLib resources;
+    Window window(scene, resources);
+    const auto host = CreateWindowExW(0, L"STATIC", L"", 0, 0, 0, 0, 0,
+        HWND_MESSAGE, nullptr, GetModuleHandleW(nullptr), nullptr);
+    ASSERT_NE(host, nullptr);
+    SetWindowLongPtrW(host, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(&window));
+    actions::TouchAction touch;
+    touch.Touch = actions::TouchAction::TOUCH_MOUSE;
+    touch.Index = 0;
+    touch.State = actions::TouchAction::TOUCH_DOWN;
+    window.OnAction(touch);
+    touch.State = actions::TouchAction::TOUCH_UP;
+    window.OnAction(touch);
+    // Normal ReleaseCapture notifies after the physical release is complete.
+    Window::WindowProcedure(host, WM_CAPTURECHANGED, 0, 0);
+    EXPECT_FALSE(window.ProcessDeferredInputLoss());
+    touch.State = actions::TouchAction::TOUCH_DOWN;
+    window.OnAction(touch);
+    Window::WindowProcedure(host, WM_CAPTURECHANGED, 0, 0);
+    window.OnAction(touch); // A new gesture supersedes that capture-loss request.
+    EXPECT_FALSE(window.ProcessDeferredInputLoss());
+    EXPECT_TRUE(window.CancelMouseCapture());
+    DestroyWindow(host);
+}
