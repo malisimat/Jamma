@@ -1,4 +1,5 @@
 #include "gtest/gtest.h"
+#include "../../TestPaths.h"
 
 #include <filesystem>
 #include <fstream>
@@ -87,7 +88,7 @@ public:
 	static std::filesystem::path MakeDirectory()
 	{
 		static unsigned int serial = 0u;
-		const auto dir = std::filesystem::temp_directory_path() /
+		const auto dir = TestPaths::FixtureDirectory() /
 			("jamma-export-roundtrip-" + std::to_string(GetCurrentProcessId()) + "-" + std::to_string(++serial));
 		std::filesystem::create_directory(dir);
 		return dir;

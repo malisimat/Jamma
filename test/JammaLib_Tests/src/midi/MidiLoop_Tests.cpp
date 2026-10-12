@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "gtest/gtest.h"
+#include "../../TestPaths.h"
 #include "midi/MidiEvent.h"
 #include "engine/LoopTake.h"
 #include "engine/Quantiser.h"
@@ -1224,7 +1225,7 @@ TEST(LoopTakeMidiQuantisation, LoadedTakesRestoreDistinctPersistedIds) {
 	io::JamFile::Station savedStation;
 	savedStation.Name = "loaded-midi-station";
 	savedStation.LoopTakes.resize(2u);
-	const auto dir = std::filesystem::temp_directory_path() / "jamma-loaded-take-id-test";
+	const auto dir = TestPaths::FixtureDirectory() / "jamma-loaded-take-id-test";
 	std::filesystem::remove_all(dir);
 	std::filesystem::create_directory(dir);
 	for (std::size_t i = 0u; i < savedStation.LoopTakes.size(); ++i)

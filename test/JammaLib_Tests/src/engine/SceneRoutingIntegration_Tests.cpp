@@ -1,4 +1,5 @@
 #include "gtest/gtest.h"
+#include "../../TestPaths.h"
 #include <algorithm>
 #include <filesystem>
 #include <fstream>
@@ -212,7 +213,7 @@ TEST_F(SceneRoutingIntegrationTest, ResetRetiresSixtyFourRestoredHistoryPinsAndA
     {
         std::filesystem::path Path;
         ~SidecarCleanup() { std::error_code error; std::filesystem::remove(Path, error); }
-    } sidecar{ std::filesystem::temp_directory_path() / ("jamma-source-loss-" + utils::GetGuid() + ".jammidi") };
+    } sidecar{ TestPaths::FixtureDirectory() / ("jamma-source-loss-" + utils::GetGuid() + ".jammidi") };
     io::NativeMidiSidecar::Stream contents;
     contents.LogicalLength = 100u;
     contents.Events.push_back({ 0u, 0x90u, 60u, 100u });
