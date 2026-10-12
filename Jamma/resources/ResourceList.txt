@@ -94,3 +94,13 @@
 1 fader_back_panel_down ninepatch 12 12
 1 fader_scale_line ninepatch 3 0
 1 fader_scale_track ninepatch 4 2
+1 performance_group_holder ninepatch 8 8
+1 performance_group ninepatch 5 5
+1 performance_group_over ninepatch 5 5
+1 performance_group_down ninepatch 5 5
+1 performance_group_on ninepatch 5 5
+1 performance_group_on_over ninepatch 5 5
+1 performance_group_on_down ninepatch 5 5
+1 performance_group_add ninepatch 5 5
+1 performance_group_add_over ninepatch 5 5
+1 performance_group_add_down ninepatch 5 5
