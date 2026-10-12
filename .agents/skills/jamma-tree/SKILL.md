@@ -1,6 +1,6 @@
 ---
 name: jamma-tree
-description: Create a Jamma worktree under ../Jamma.worktrees/Jamma-<feature-slug> on a branch named feature/<feature-slug>, then copy repo-local folder contents into the new worktree without overwriting existing files.
+description: Create a Jamma feature worktree, copy repo-local configuration without overwriting existing files, then install x64-windows manifest dependencies into that worktree with isolated vcpkg staging paths.
 ---
 
 # Jamma worktree bootstrap
@@ -14,7 +14,7 @@ PowerShell.
 
 - Infer a short feature slug from the user's prompt. Prefer kebab-case names such as `midi-war`, `hud-ui`, or `vst3-parity`.
 - Work from the main Jamma repository, not the new worktree.
-- Keep the workflow simple: create the worktree, then copy folder contents into it without replacing anything that already exists.
+- Create the worktree, finish copying folder contents without replacing existing files, then install its manifest dependencies locally.
 
 ## Git commands
 
@@ -55,9 +55,47 @@ foreach ($folder in $foldersToCopy) {
 }
 ```
 
+## Install worktree-local dependencies
+
+After all copying succeeds, run vcpkg in manifest mode for the new worktree.
+Use `--triplet x64-windows` (not `--win-x64`). Keep installed dependencies,
+build intermediates, and package staging inside the worktree so concurrent
+sessions do not mutate the same directories. Reuse the available vcpkg tool;
+do not run `vcpkg integrate install`, which changes user-wide integration.
+Do not copy or link another worktree's `vcpkg_installed` directory.
+
+```powershell
+$worktreePath = (Resolve-Path -LiteralPath $worktreePath).Path
+$installedPath = Join-Path $worktreePath "vcpkg_installed"
+$vcpkg = (Get-Command vcpkg -CommandType Application -ErrorAction Stop).Source
+
+Push-Location $worktreePath
+try {
+    & $vcpkg install --triplet x64-windows `
+        "--x-manifest-root=$worktreePath" `
+        "--x-install-root=$installedPath" `
+        "--x-buildtrees-root=$installedPath/.buildtrees" `
+        "--x-packages-root=$installedPath/.packages"
+    if ($LASTEXITCODE -ne 0) {
+        throw "Worktree dependency installation failed (exit $LASTEXITCODE)."
+    }
+} finally {
+    Pop-Location
+}
+```
+
+`Directory.Build.props` already selects the worktree's `vcpkg_installed`
+directory; the staging folders above are also covered by its gitignore entry.
+Check any existing `Directory.Build.local.props` for overrides pointing at
+another repo's installed directory before declaring the worktree ready.
+If vcpkg is unavailable or installation fails, report the incomplete setup
+instead of claiming the worktree is ready to build.
+
+Option reference: [vcpkg common command options](https://learn.microsoft.com/en-us/vcpkg/commands/common-options).
+
 ## Notes
 
 - If the prompt already contains a usable feature name, reuse it directly; otherwise derive a slug by stripping stop words and punctuation.
 - Copy folder contents instead of individual files so future local config can be added without changing the skill.
 - Add more repo-local folders to the copy list as needed; keep the pattern generic.
-- After the copy, the worktree should be ready for build with the local repo config in place.
+- Declare the worktree ready for build only after copying and dependency installation both succeed.
