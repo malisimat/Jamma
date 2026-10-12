@@ -629,11 +629,9 @@ TEST(LoopTakeMidiTiming, FirstMasterRecordsFromMidiPressBeforeAudioTakeIsPublish
 	EXPECT_EQ(200u, LoopTake::ResolveMidiRecordSampleFromTrigger(100u, 0xffff'ff9cu));
 }
 
-TEST(LoopTakeMidiTiming, MidiOnlyMasterUsesPressIntervalAndStopPhase)
+static void CheckFirstMidiMasterBoundary(unsigned int configuredGrain, int stopAge,
+	unsigned int publicationDelay, unsigned int replacement)
 {
-	for (const auto configuredGrain : { 0u, 2048u })
-	for (const auto stopAge : { -55, 3017 })
-	{
 	auto station = MakeStation("midi-master");
 	station->SetVisible(true);
 	station->SetEnabled(true);
@@ -674,14 +672,114 @@ TEST(LoopTakeMidiTiming, MidiOnlyMasterUsesPressIntervalAndStopPhase)
 	EXPECT_EQ(17545u, snare.sampleOffset);
 	const auto expectedLength = static_cast<unsigned long>(expectedTiming->GrainSamps)
 		* expectedTiming->LoopGrains;
-	EXPECT_EQ(expectedLength, clock->SeedSourceLength());
+	EXPECT_EQ(0ul, clock->SeedSourceLength());
+	MidiLoopCapturingOutputSink pendingOutput;
+	take->ReadMidiBlock(static_cast<std::uint32_t>(clock->SceneSamplePos()), 64u, pendingOutput);
+	EXPECT_TRUE(pendingOutput.events.empty());
+	const auto pendingPhase = take->MidiPlayIndex();
+	take->EndMultiPlay(publicationDelay);
+	EXPECT_EQ(pendingPhase, take->MidiPlayIndex());
+	if (replacement == 1u) clock->Clear();
+	if (replacement == 2u)
+	{
+		clock->SetQuantisation(5000u, Timer::QUANTISE_MULTIPLE);
+		clock->SetSeedSourceLength(20000ul);
+		clock->SetMasterLoopSampleOffset(1234ul);
+	}
+	if (replacement == 3u) take->CancelCapture();
+	clock->Tick(publicationDelay, 0u);
+	const auto priorClockPhase = clock->SampOffset();
+	station->CommitChanges();
+	station->ApplyFirstMasterRecordingAtAudioBoundary(*clock);
+	if (replacement == 3u)
+	{
+		EXPECT_EQ(0ul, clock->SeedSourceLength());
+		EXPECT_EQ(pendingPhase, take->MidiPlayIndex());
+		EXPECT_FALSE(clock->PendingRecordingSeedOnOwner());
+		return;
+	}
+	EXPECT_FALSE(take->FirstMasterActivationPending());
+	EXPECT_EQ(replacement == 0u ? expectedLength : (replacement == 2u ? 20000ul : 0ul),
+		clock->SeedSourceLength());
 	EXPECT_EQ(expectedLength, take->GetMidiLoops()[0]->LoopLengthSamps());
-	auto expectedPhase = (static_cast<long long>(physicalLength) - expectedLength + stopAge)
+	auto expectedPhase = (static_cast<long long>(physicalLength) - expectedLength + stopAge + publicationDelay)
 		% static_cast<long long>(expectedLength);
 	if (expectedPhase < 0) expectedPhase += expectedLength;
-	EXPECT_EQ(static_cast<unsigned long>(expectedPhase), clock->SampOffset());
-	EXPECT_EQ(clock->SampOffset(), take->MidiPlayIndex());
-	}
+	EXPECT_EQ(static_cast<unsigned long>(expectedPhase), take->MidiPlayIndex());
+	if (replacement == 0u) EXPECT_EQ(clock->SampOffset(), take->MidiPlayIndex());
+	else EXPECT_EQ(priorClockPhase, clock->SampOffset());
+	EXPECT_EQ(77732u, take->GetMidiLoops()[0]->AutomationGlobalSampleOrigin()
+		+ static_cast<std::uint32_t>(take->MidiAnchorCorrection()));
+	EXPECT_FALSE(clock->PendingRecordingSeedOnOwner());
+	clock->Tick(64u, 0u);
+	take->EndMultiPlay(64u);
+	const auto advanced = clock->SampOffset();
+	station->ApplyFirstMasterRecordingAtAudioBoundary(*clock);
+	EXPECT_EQ(advanced, clock->SampOffset());
+	if (replacement == 0u) EXPECT_EQ(advanced, take->MidiPlayIndex());
+}
+
+TEST(LoopTakeMidiTiming, MidiOnlyMasterUsesPressIntervalAndStopPhase)
+{
+	for (const auto configuredGrain : { 0u, 2048u })
+	for (const auto stopAge : { -55, 3017 })
+	for (const auto publicationDelay : { 0u, 4096u, 200000u })
+		CheckFirstMidiMasterBoundary(configuredGrain, stopAge, publicationDelay, 0u);
+}
+
+TEST(LoopTakeMidiTiming, PendingFirstMasterHonoursCancellationAndReplacement)
+{
+	for (const auto replacement : { 1u, 2u, 3u })
+	for (const auto stopAge : { -55, 3017 })
+	for (const auto publicationDelay : { 0u, 4096u, 200000u })
+		CheckFirstMidiMasterBoundary(2048u, stopAge, publicationDelay, replacement);
+}
+
+TEST(LoopTakeMidiTiming, PendingMasterQuantisesNextCompletion)
+{
+	auto station = MakeStation("reserved-master");
+	station->SetVisible(true);
+	station->SetEnabled(true);
+	station->SetAllowedMidiChannels({ 1 });
+	auto clock = std::make_shared<Timer>();
+	station->SetClock(clock);
+	io::UserConfig cfg{};
+	actions::TriggerAction start;
+	start.ActionType = actions::TriggerAction::TRIGGER_REC_START;
+	start.MidiSample = 77732u;
+	start.MidiInputDevices = { "Keys" };
+	start.SetUserConfig(cfg);
+	const auto first = station->OnAction(start);
+	actions::TriggerAction end;
+	end.ActionType = actions::TriggerAction::TRIGGER_REC_END;
+	end.TargetId = first.TargetId;
+	end.SampleCount = 84928u;
+	end.MidiSample = 164919u;
+	end.SetUserConfig(cfg);
+	station->OnAction(end);
+	const auto reserved = clock->PendingRecordingSeedOnOwner();
+	ASSERT_TRUE(reserved);
+	start.MidiSample = 170000u;
+	const auto second = station->OnAction(start);
+	const auto secondTake = station->GetLoopTakes().back();
+	ASSERT_EQ(second.TargetId, secondTake->Id());
+	EXPECT_FALSE(secondTake->MidiRecordStartSample());
+	end.TargetId = second.TargetId;
+	end.SampleCount = 100000u;
+	end.MidiSample = 300000u;
+	station->OnAction(end);
+	Timer preview;
+	preview.SetQuantisation(reserved->GrainSamps, reserved->Type);
+	preview.SetSeedSourceLength(reserved->LengthSamps);
+	EXPECT_EQ(std::get<0>(preview.QuantiseLength(end.SampleCount)),
+		secondTake->GetMidiLoops().at(0u)->LoopLengthSamps());
+	ASSERT_TRUE(clock->PendingRecordingSeedOnOwner());
+	EXPECT_EQ(reserved->Version, clock->PendingRecordingSeedOnOwner()->Version);
+	EXPECT_EQ(0ul, clock->SeedSourceLength());
+	station->CommitChanges();
+	station->ApplyFirstMasterRecordingAtAudioBoundary(*clock);
+	EXPECT_EQ(reserved->LengthSamps, clock->SeedSourceLength());
+	EXPECT_FALSE(clock->PendingRecordingSeedOnOwner());
 }
 
 TEST(LoopTakeMidiTiming, FirstPlaybackStartsAtRecordedStartAfterAudioDelayCompensation)
@@ -3719,8 +3817,11 @@ TEST(LoopTakeMidiTiming, CancelledPromotionAllowsLaterQuantisationUpdates)
 	EXPECT_EQ(100u,take->GetMidiLoops()[0]->Quantisation().GrainSamps);
 }
 
-TEST(PlaybackReviewProbe, DistinctLongSameRepeatAttacksSurvive)
+TEST(MidiLoopSeam, DistinctLongSameRepeatAttacksSurvive)
 {
+	for (const auto blockSize : { 64u, 1000u, 2000u })
+	for (const bool republish : { false, true })
+	{
 	MidiLoop loop;
 	const std::array source = {
 		MidiEvent::MakeNoteOn(0u, 0u, 36u, 95u).WithFlags(MidiEvent::ExactTiming),
@@ -3729,12 +3830,20 @@ TEST(PlaybackReviewProbe, DistinctLongSameRepeatAttacksSurvive)
 		MidiEvent::MakeNoteOff(1200u, 0u, 36u) };
 	loop.ReplaceRecordedEvents(source.data(), source.size(), 1000u);
 	MidiLoopCapturingSink sink;
-	loop.ReadBlock(0u, 2000u, sink);
+	for (unsigned int at = 0u; at < 2000u; at += blockSize)
+		loop.ReadBlock(at, (std::min)(blockSize, 2000u - at), sink);
 	EXPECT_EQ(2u, std::count_if(sink.events.begin(), sink.events.end(),
 		[](const auto& event) { return event.IsNoteOn() && event.data2 == 88u; }));
+	sink.Clear();
+	if (republish) loop.ReplaceRecordedEvents(source.data(), source.size(), 1000u);
+	loop.RequestRelocationChase();
+	loop.ReadBlock(2025u, 50u, sink);
+	EXPECT_EQ(1u, std::count_if(sink.events.begin(), sink.events.end(),
+		[](const auto& event) { return event.IsNoteOn() && event.data2 == 88u; }));
+	}
 }
 
-TEST(PlaybackReviewProbe, RejectedReleasePreservesItsVelocity)
+TEST(MidiLoopPlayback, RejectedReleasePreservesItsVelocity)
 {
 	class RejectFirstReleaseSink : public MidiLoopCapturingSink
 	{
@@ -3751,14 +3860,18 @@ TEST(PlaybackReviewProbe, RejectedReleasePreservesItsVelocity)
 			return true;
 		}
 	};
+	for (const auto releaseSample : { 10u, 999u })
+	{
 	MidiLoop loop;
 	const std::array source = { MidiEvent::MakeNoteOn(0u, 0u, 60u, 100u),
-		MidiEvent::MakeNoteOff(10u, 0u, 60u, 23u) };
+		MidiEvent::MakeNoteOff(releaseSample, 0u, 60u, 23u) };
 	loop.ReplaceRecordedEvents(source.data(), source.size(), 1000u);
 	RejectFirstReleaseSink sink;
-	loop.ReadBlock(0u, 20u, sink);
-	loop.ReadBlock(20u, 10u, sink);
-	ASSERT_EQ(2u, sink.events.size());
-	EXPECT_TRUE(sink.events[1].IsNoteOff());
-	EXPECT_EQ(23u, sink.events[1].data2);
+	loop.ReadBlock(0u, releaseSample + 1u, sink);
+	loop.ReadBlock(releaseSample + 1u, 10u, sink);
+	const auto release = std::find_if(sink.events.begin(), sink.events.end(),
+		[](const auto& event) { return event.IsNoteOff(); });
+	ASSERT_NE(sink.events.end(), release);
+	EXPECT_EQ(23u, release->data2);
+	}
 }

@@ -192,6 +192,7 @@ namespace midi
 			std::bitset<TotalNoteSlots> MergedContinuing;
 			std::array<std::uint8_t, TotalNoteSlots> Velocity{};
 			std::array<std::uint8_t, TotalNoteSlots> Flags{};
+			std::array<std::uint16_t, TotalNoteSlots> ContinuationRoot{};
 		};
 
 		struct PlaybackSnapshot
@@ -200,6 +201,7 @@ namespace midi
 			std::array<MidiEvent, DefaultCapacity> Quantised{};
 			std::array<std::uint8_t, DefaultCapacity> RawUnmatchedStarts{};
 			std::array<std::uint8_t, DefaultCapacity> QuantisedUnmatchedStarts{};
+			std::array<std::uint16_t, DefaultCapacity> QuantisedContinuationRoots{};
 			ChaseState RawChaseHead{};
 			ChaseState QuantisedChaseHead{};
 			std::size_t EventCount = 0u;
@@ -419,8 +421,9 @@ namespace midi
 		static constexpr std::uint8_t MergedContinuation = 2u;
 		static constexpr std::uint8_t MergedHead = 3u; // Initial head; suppressed only while its merged tail sounds.
 		static bool ShouldSuppressContinuedAttack(bool continuing, bool merged,
-			std::uint8_t startKind) noexcept;
-		static void AdvanceChaseState(ChaseState& state, const MidiEvent& event, std::uint8_t startKind) noexcept;
+			std::uint8_t startKind, std::uint16_t soundingRoot, std::uint16_t attackRoot) noexcept;
+		static void AdvanceChaseState(ChaseState& state, const MidiEvent& event,
+			std::uint8_t startKind, std::uint16_t root) noexcept;
 		static void BuildChaseHead(PlaybackSnapshot& snapshot, bool quantised) noexcept;
 		bool ChaseAtCursor(std::uint32_t sample, const PlaybackSnapshot& snapshot, IMidiSink& sink) noexcept;
 		static void ClassifyUnmatchedStarts(PlaybackSnapshot& snapshot) noexcept;
@@ -481,7 +484,10 @@ namespace midi
 		// increment before loading the pointer and decrement after their last read.
 		// The owner reuses retired buffers only after the reader count reaches zero.
 		// All handoff operations are seq_cst, including the reader's first increment.
-		std::array<PlaybackSnapshot, 3u> _playbackBuffers{};
+		// Preallocate on construction; larger chase/component metadata must not
+		// consume the caller stack during nested completion/export operations.
+		std::unique_ptr<std::array<PlaybackSnapshot, 3u>> _playbackBuffers =
+			std::make_unique<std::array<PlaybackSnapshot, 3u>>();
 		std::array<bool, 3u> _playbackBufferUsed{};
 		std::atomic<const PlaybackSnapshot*> _playbackSnapshot{ nullptr };
 		std::atomic<const PlaybackSnapshot*> _preparedPlaybackSnapshot{ nullptr };
@@ -514,6 +520,8 @@ namespace midi
 		std::bitset<TotalNoteSlots> _continuing;
 		std::bitset<TotalNoteSlots> _mergedContinuing; // Callback only; subset of _continuing.
 		std::bitset<TotalNoteSlots> _pendingReleases; // Callback retries rejected releases.
+		std::array<std::uint8_t, TotalNoteSlots> _pendingReleaseVelocity{};
+		std::array<std::uint16_t, TotalNoteSlots> _continuationRoot{}; // Snapshot-local component identity.
 		bool _relocationChaseRequested = false; // Callback owner only.
 		std::uint64_t _relocationGeneration = 0u; // Callback owner only.
 		bool _relocationChaseRetry = false; // Callback retries rejected chased attacks.

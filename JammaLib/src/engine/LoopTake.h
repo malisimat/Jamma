@@ -268,7 +268,10 @@ namespace engine
 		void Play(unsigned long index,
 			unsigned long loopLength,
 			unsigned int endRecordSamps,
-			int midiQuantisationErrorSamps = 0);
+			int midiQuantisationErrorSamps = 0, bool deferFirstMasterActivation = false);
+		bool FirstMasterActivationPending() const noexcept
+			{ return _firstMasterActivationPending.load(std::memory_order_acquire); }
+		bool ActivateFirstMasterMidiAtAudioBoundary(unsigned long phaseSamps, std::uint32_t recordOrigin) noexcept;
 		void QueueTimingCorrection(long long deltaSamps,
 			std::uint64_t generation,
 			TimingCorrectionReason reason) noexcept;
@@ -545,6 +548,7 @@ namespace engine
 		std::atomic<unsigned int> _endRecordSamps;
 		// Cross-thread cursor: incremented on the audio thread and read by UI/control code.
 		std::atomic<bool> _localMasterQuantisationPrepared{ false };
+		std::atomic<bool> _firstMasterActivationPending{ false };
 		std::atomic<std::uint64_t> _preparedLocalMasterBaseGridPacked{ 0u };
 		std::atomic<std::uint64_t> _preparedLocalMasterQuantisationPacked{ 0u };
 		std::atomic<std::uint64_t> _preparedLocalMasterTransportStart{ 0u };

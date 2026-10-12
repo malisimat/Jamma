@@ -856,14 +856,19 @@ void MidiLoop::EmitEventsInRange(std::uint32_t lo,
 
 		const auto slot = NoteSlot(src.Channel(), src.data1);
 		if (src.IsNoteOn() && (ShouldSuppressContinuedAttack(_continuing.test(slot),
-			_mergedContinuing.test(slot), unmatchedStarts[i]) || _pendingReleases.test(slot)))
+			_mergedContinuing.test(slot), unmatchedStarts[i], _continuationRoot[slot],
+			snapshot.PlaybackViewActive ? snapshot.QuantisedContinuationRoots[i] : 0u) || _pendingReleases.test(slot)))
 			continue;
 
 		MidiEvent out = src;
 		out.sampleOffset = globalBase + off;
 		if (!sink.TryOnEvent(out))
 		{
-			if (src.IsNoteOff() && _held.test(slot)) _pendingReleases.set(slot);
+			if (src.IsNoteOff() && _held.test(slot))
+			{
+				_pendingReleaseVelocity[slot] = src.data2;
+				_pendingReleases.set(slot);
+			}
 			continue;
 		}
 
@@ -873,6 +878,7 @@ void MidiLoop::EmitEventsInRange(std::uint32_t lo,
 			_held.set(slot);
 			_continuing.set(slot, unmatchedStarts[i] == NaturalContinuation || unmatchedStarts[i] == MergedContinuation);
 			_mergedContinuing.set(slot, unmatchedStarts[i] == MergedContinuation);
+			_continuationRoot[slot] = snapshot.PlaybackViewActive ? snapshot.QuantisedContinuationRoots[i] : 0u;
 			_heldPublished[slot].store(1u, std::memory_order_seq_cst);
 		}
 		else if (src.IsNoteOff())
@@ -894,7 +900,7 @@ void MidiLoop::RetryPendingReleases(std::uint32_t atGlobalSample, IMidiSink& sin
 		{
 			const auto slot = NoteSlot(channel, note);
 			if (!_pendingReleases.test(slot)) continue;
-			const auto off = MidiEvent::MakeNoteOff(atGlobalSample, channel, note);
+			const auto off = MidiEvent::MakeNoteOff(atGlobalSample, channel, note, _pendingReleaseVelocity[slot]);
 			if (!sink.TryOnEvent(off)) continue;
 			_pendingReleases.reset(slot);
 			_continuing.reset(slot);
@@ -925,10 +931,12 @@ void MidiLoop::FlushHeldNotes(std::uint32_t atGlobalSample, IMidiSink& sink,
 			if (!_held.test(slot) || (policy == HeldFlushPolicy::Seam && _continuing.test(slot)))
 				continue;
 
+			const auto velocity = _pendingReleases.test(slot) ? _pendingReleaseVelocity[slot] : 0u;
 			MidiEvent off = MidiEvent::MakeNoteOff(
-				static_cast<std::uint32_t>(atGlobalSample), channel, note);
+				static_cast<std::uint32_t>(atGlobalSample), channel, note, velocity);
 			if (!sink.TryOnEvent(off))
 			{
+				_pendingReleaseVelocity[slot] = velocity;
 				_pendingReleases.set(slot);
 				continue;
 			}
@@ -1291,8 +1299,10 @@ bool MidiLoop::MergePlaybackSeamNotes(PlaybackSnapshot& snapshot)
 	for (std::size_t i = 0; i < spans.size(); ++i)
 	{
 		std::int64_t shift;
-		const auto& group = spans[find(i, shift)];
+		const auto root = find(i, shift);
+		const auto& group = spans[root];
 		if (group.Members < 2u && !group.Continuous) continue;
+		snapshot.QuantisedContinuationRoots[spans[i].On] = static_cast<std::uint16_t>(root + 1u);
 		merged = true;
 		const auto groupStart = ((group.FirstSample % length) + length) % length;
 		const auto memberStart = ((spans[i].Start % length) + length) % length;
@@ -1368,19 +1378,19 @@ bool MidiLoop::PublishCompletedEvents(const MidiEvent* raw, std::size_t count,
 	const auto handoffAfter = _playbackActivationVersion.load(std::memory_order_seq_cst);
 	if (readers == 0u && handoffBefore == handoffAfter && (handoffAfter & 1u) == 0u)
 	{
-		for (std::size_t i = 0u; i < _playbackBuffers.size(); ++i)
-			if (&_playbackBuffers[i] != current && &_playbackBuffers[i] != prepared)
+		for (std::size_t i = 0u; i < _playbackBuffers->size(); ++i)
+			if (&(*_playbackBuffers)[i] != current && &(*_playbackBuffers)[i] != prepared)
 				_playbackBufferUsed[i] = false;
 	}
-	std::size_t slot = _playbackBuffers.size();
-	for (std::size_t i = 0u; i < _playbackBuffers.size(); ++i)
+	std::size_t slot = _playbackBuffers->size();
+	for (std::size_t i = 0u; i < _playbackBuffers->size(); ++i)
 		if (!_playbackBufferUsed[i]) { slot = i; break; }
-	if (slot == _playbackBuffers.size())
+	if (slot == _playbackBuffers->size())
 	{
 		if (!ownerGateHeld) ReleaseOwnerPublicationGate();
 		return false;
 	}
-	auto& snapshot = _playbackBuffers[slot];
+	auto& snapshot = (*_playbackBuffers)[slot];
 	std::copy_n(raw, count, snapshot.Raw.begin());
 	snapshot.EventCount = count;
 	snapshot.LoopLengthSamps = length;
@@ -1400,10 +1410,12 @@ bool MidiLoop::PublishCompletedEvents(const MidiEvent* raw, std::size_t count,
 	else
 		std::copy_n(snapshot.Raw.begin(), count, snapshot.Quantised.begin());
 	std::copy_n(snapshot.RawUnmatchedStarts.begin(), count, snapshot.QuantisedUnmatchedStarts.begin());
+	snapshot.QuantisedContinuationRoots.fill(0u);
 	snapshot.PlaybackViewActive = MergePlaybackSeamNotes(snapshot) || snapshot.QuantisationActive;
 	if (snapshot.PlaybackViewActive)
 	{
-		MidiNote::SortMidiEvents(snapshot.Quantised.data(), count, snapshot.QuantisedUnmatchedStarts.data());
+		MidiNote::SortMidiEvents(snapshot.Quantised.data(), count, snapshot.QuantisedUnmatchedStarts.data(),
+			snapshot.QuantisedContinuationRoots.data());
 		BuildChaseHead(snapshot, true);
 	}
 	_playbackBufferUsed[slot] = true;
@@ -1420,13 +1432,16 @@ bool MidiLoop::PublishCompletedEvents(const MidiEvent* raw, std::size_t count,
 }
 
 bool MidiLoop::ShouldSuppressContinuedAttack(bool continuing, bool merged,
-	std::uint8_t startKind) noexcept
+	std::uint8_t startKind, std::uint16_t soundingRoot, std::uint16_t attackRoot) noexcept
 {
-	return continuing && (!merged || startKind == MergedContinuation || startKind == MergedHead);
+	// Natural unmatched notes retain their slot policy. Merged components
+	// suppress only their own repeated root/head, not another articulation.
+	return continuing && (!merged ||
+		((startKind == MergedContinuation || startKind == MergedHead) && soundingRoot == attackRoot));
 }
 
 void MidiLoop::AdvanceChaseState(ChaseState& state, const MidiEvent& event,
-	std::uint8_t startKind) noexcept
+	std::uint8_t startKind, std::uint16_t root) noexcept
 {
 	if (!event.IsNoteOn() && !event.IsNoteOff()) return;
 	const auto slot = NoteSlot(event.Channel(), event.data1);
@@ -1437,12 +1452,14 @@ void MidiLoop::AdvanceChaseState(ChaseState& state, const MidiEvent& event,
 		state.MergedContinuing.reset(slot);
 		return;
 	}
-	if (ShouldSuppressContinuedAttack(state.Continuing.test(slot), state.MergedContinuing.test(slot), startKind)) return;
+	if (ShouldSuppressContinuedAttack(state.Continuing.test(slot), state.MergedContinuing.test(slot),
+		startKind, state.ContinuationRoot[slot], root)) return;
 	state.Held.set(slot);
 	state.Continuing.set(slot, startKind == NaturalContinuation || startKind == MergedContinuation);
 	state.MergedContinuing.set(slot, startKind == MergedContinuation);
 	state.Velocity[slot] = event.data2;
 	state.Flags[slot] = event.flags;
+	state.ContinuationRoot[slot] = root;
 }
 
 void MidiLoop::BuildChaseHead(PlaybackSnapshot& snapshot, bool quantised) noexcept
@@ -1457,7 +1474,8 @@ void MidiLoop::BuildChaseHead(PlaybackSnapshot& snapshot, bool quantised) noexce
 	{
 		for (std::size_t i = 0u; i < snapshot.EventCount; ++i)
 			if (events[i].sampleOffset < snapshot.LoopLengthSamps)
-				AdvanceChaseState(head, events[i], unmatched[i]);
+				AdvanceChaseState(head, events[i], unmatched[i],
+					quantised ? snapshot.QuantisedContinuationRoots[i] : 0u);
 		head.Held &= head.Continuing; // Ordinary paired voices release at the seam.
 	}
 }
@@ -1473,7 +1491,8 @@ bool MidiLoop::ChaseAtCursor(std::uint32_t sample, const PlaybackSnapshot& snaps
 	bool accepted = true;
 	for (std::size_t i = 0u; i < snapshot.EventCount; ++i)
 		if (events[i].sampleOffset < offset)
-			AdvanceChaseState(state, events[i], unmatched[i]);
+			AdvanceChaseState(state, events[i], unmatched[i],
+				quantised ? snapshot.QuantisedContinuationRoots[i] : 0u);
 	for (std::uint8_t channel = 0u; channel < 16u; ++channel)
 		for (std::uint8_t note = 0u; note < 128u; ++note)
 		{
@@ -1485,6 +1504,7 @@ bool MidiLoop::ChaseAtCursor(std::uint32_t sample, const PlaybackSnapshot& snaps
 			_held.set(slot);
 			_continuing.set(slot, state.Continuing.test(slot));
 			_mergedContinuing.set(slot, state.MergedContinuing.test(slot));
+			_continuationRoot[slot] = state.ContinuationRoot[slot];
 			_heldPublished[slot].store(1u, std::memory_order_seq_cst);
 		}
 	return accepted;

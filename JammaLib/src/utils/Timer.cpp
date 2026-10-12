@@ -1,6 +1,7 @@
 // Timer advances local master transport only; remote policy belongs to NINJAM and
 // per-entity phase remains below AudioHost in the engine hierarchy.
 #include "Timer.h"
+#include <algorithm>
 
 using namespace utils;
 
@@ -39,6 +40,44 @@ double Timer::GetElapsedSeconds(Time t1, Time t2)
 	return std::chrono::duration_cast<std::chrono::duration<double>>(t2 - t1).count();
 }
 
+std::shared_ptr<const Timer::RecordingSeed> Timer::PendingRecordingSeedOnOwner() const
+{
+	const auto seed = _recordingSeed.load();
+	return seed && seed->Version > _recordingSeedConsumedVersion.load(std::memory_order_acquire)
+		&& seed->Version > _recordingSeedCancelledVersion.load(std::memory_order_acquire) ? seed : nullptr;
+}
+
+std::shared_ptr<const Timer::RecordingSeed> Timer::ReserveRecordingSeedOnOwner(RecordingSeed seed)
+{
+	_recordingSeed.collect();
+	if (SeedSourceLength() > 0ul || PendingRecordingSeedOnOwner()
+		|| seed.GrainSamps == 0u || seed.LengthSamps == 0ul) return nullptr;
+	seed.Version = ++_recordingSeedOwnerVersion;
+	auto publication = std::make_shared<const RecordingSeed>(seed);
+	_recordingSeed.store(publication);
+	_recordingSeedPublishedVersion.store(seed.Version, std::memory_order_release);
+	return publication;
+}
+
+void Timer::CancelRecordingSeedOnOwner(std::uint64_t version) noexcept
+{
+	_recordingSeedCancelledVersion.store((std::max)(version,
+		_recordingSeedCancelledVersion.load(std::memory_order_relaxed)), std::memory_order_release);
+}
+
+bool Timer::RecordingSeedReadyAtAudioBoundary(std::uint64_t version) const noexcept
+{
+	return version == _recordingSeedPublishedVersion.load(std::memory_order_acquire)
+		&& version > _recordingSeedConsumedVersion.load(std::memory_order_acquire)
+		&& version > _recordingSeedCancelledVersion.load(std::memory_order_acquire);
+}
+
+void Timer::ConsumeRecordingSeedAtAudioBoundary(std::uint64_t version) noexcept
+{
+	if (version > _recordingSeedConsumedVersion.load(std::memory_order_relaxed))
+		_recordingSeedConsumedVersion.store(version, std::memory_order_release);
+}
+
 void Timer::Tick(unsigned int sampsIncrement, unsigned int loopCountIncrement)
 {
 	(void)loopCountIncrement;
@@ -62,6 +101,7 @@ void Timer::Tick(unsigned int sampsIncrement, unsigned int loopCountIncrement)
 
 void Timer::Clear()
 {
+	CancelRecordingSeedOnOwner(_recordingSeedPublishedVersion.load(std::memory_order_acquire));
 	_quantiseSamps.store(0u, std::memory_order_release);
 	_seedSourceLengthSamps.store(0ul, std::memory_order_release);
 	_sampOffset.store(0u, std::memory_order_release);

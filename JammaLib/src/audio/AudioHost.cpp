@@ -791,6 +791,9 @@ void AudioHost::PublishAudioCallbackProgress(std::uint64_t blockStartSample,
 		const auto* stationsSnapshotValue = _lastAudioStations.get();
 		const auto& stations = stationsSnapshotValue ? *stationsSnapshotValue : _emptyStations;
 		auto* timingClock = _lastAudioTimingClock.get();
+		if (timingClock)
+			for (const auto& station : stations)
+				if (station && !station->IsRemote()) station->ApplyFirstMasterRecordingAtAudioBoundary(*timingClock);
 		ApplyLocalMasterTimingAtAudioBoundary(stations, timingClock);
 		ApplyDesiredTimingAtAudioBoundary(blockStartSample, audioStreamParams.SampleRate,
 			stationsSnapshotValue, timingClock);

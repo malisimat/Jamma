@@ -721,7 +721,7 @@ void LoopTake::EndMultiPlay(unsigned int numSamps)
 	}
 
 	const auto midiLoopLength = _midiVisualLoopLength.load(std::memory_order_relaxed);
-	if (midiLoopLength > 0ul)
+	if (midiLoopLength > 0ul && !_firstMasterActivationPending.load(std::memory_order_acquire))
 	{
 		auto midiPlayIndex = _midiVisualPlayIndex.load(std::memory_order_relaxed) + numSamps;
 		while (midiPlayIndex >= midiLoopLength)
@@ -1751,6 +1751,7 @@ void LoopTake::Record(std::vector<unsigned int> channels,
 	_appliedLocalTransportOffsetSamps = 0;
 	_isPunchInActive.store(false, std::memory_order_relaxed);
 	_isMidiPunchInActive.store(false, std::memory_order_relaxed);
+	_firstMasterActivationPending.store(false, std::memory_order_release);
 	_midiRecordHeld.clear();
 	_midiRecordSeededHeld.clear();
 	_backLoops.clear();
@@ -1982,6 +1983,8 @@ unsigned int LoopTake::ReadMidiBlock(std::uint32_t globalSample,
 		_midiVisualPlayIndex.load(std::memory_order_relaxed));
 	if (!snapshot)
 		return 0u;
+	if (_firstMasterActivationPending.load(std::memory_order_acquire) && !flushOnly)
+		return static_cast<unsigned int>(snapshot->size());
 
 	for (auto i = 0u; i < snapshot->size(); ++i)
 	{
@@ -2035,7 +2038,7 @@ std::uint32_t LoopTake::ResolveMidiRecordSampleFromTrigger(
 void LoopTake::Play(unsigned long index,
 	unsigned long loopLength,
 	unsigned int endRecordSamps,
-	int midiQuantisationErrorSamps)
+	int midiQuantisationErrorSamps, bool deferFirstMasterActivation)
 {
 	std::scoped_lock midiLock(_midiCaptureMutex);
 
@@ -2045,6 +2048,7 @@ void LoopTake::Play(unsigned long index,
 		(STATE_PUNCHEDIN != state))
 		return;
 
+	_firstMasterActivationPending.store(deferFirstMasterActivation, std::memory_order_release);
 	_endRecordSampCount = 0;
 	_endRecordSamps = endRecordSamps;
 	_midiVisualLoopLength.store(loopLength, std::memory_order_relaxed);
@@ -2169,6 +2173,24 @@ void LoopTake::Play(unsigned long index,
 	auto playState = continueCapture ? recordState : STATE_PLAYING;
 	_state.store(loopLength > 0 ? playState : STATE_INACTIVE, std::memory_order_release);
 	_SetPresentationMode(loopLength > 0 && continueCapture ? PresentationMode::Tail : PresentationMode::Inactive);
+}
+
+bool LoopTake::ActivateFirstMasterMidiAtAudioBoundary(unsigned long phaseSamps, std::uint32_t recordOrigin) noexcept
+{
+	auto loops = _BorrowMidiLoopSnapshot();
+	if (!loops.ReadSucceeded() || !loops || loops->empty()) return false;
+	// All streams were completed together at the same initial cursor. Keep
+	// automation on the actual trigger ruler when publication was delayed.
+	for (const auto& loop : *loops)
+		if (loop)
+		{
+			_midiAnchorCorrection.store(static_cast<std::int32_t>(
+				recordOrigin - loop->AutomationGlobalSampleOrigin()), std::memory_order_relaxed);
+			break;
+		}
+	_midiVisualPlayIndex.store(phaseSamps, std::memory_order_relaxed);
+	_firstMasterActivationPending.store(false, std::memory_order_release);
+	return true;
 }
 
 bool LoopTake::Select()
@@ -2402,6 +2424,7 @@ void LoopTake::Overdub(std::vector<unsigned int> channels,
 	_appliedLocalTransportOffsetSamps = 0;
 	_isPunchInActive.store(false, std::memory_order_relaxed);
 	_isMidiPunchInActive.store(false, std::memory_order_relaxed);
+	_firstMasterActivationPending.store(false, std::memory_order_release);
 	_midiRecordHeld.clear();
 	_midiRecordSeededHeld.clear();
 	_backLoops.clear();
@@ -3083,6 +3106,7 @@ bool LoopTake::RestoreMidiFromExport(const MidiExportState& state)
 	_midiRecordHeld.clear();
 	_midiRecordSeededHeld.clear();
 	_ResetMidiOverdubSession();
+	_firstMasterActivationPending.store(false, std::memory_order_release);
 	_midiVisualLoopLength.store(state.LoopLengthSamps, std::memory_order_release);
 	_midiVisualPlayIndex.store(state.PlayIndex, std::memory_order_release);
 	_midiAnchorCorrection.store(0, std::memory_order_release);

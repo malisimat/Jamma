@@ -1624,3 +1624,25 @@ TEST(StationMidiInstrument, FullDelayedDestinationRetainsReleaseUntilRetry)
 {
 	PlaybackReviewStation::CheckFanoutReleaseRetry();
 }
+
+TEST(StationMidiInstrument, RejectedPlaybackReleasePreservesVelocity)
+{
+	auto station = MakeStation("release-velocity");
+	auto plugin = AddPlugin(station, L"fake-release-velocity.dll");
+	auto take = MakeMidiTake("release-velocity-take");
+	take->Record({}, station->Name(), { 0u }, { "source" });
+	take->Play(0u, 1000u, 0u);
+	const std::array source{ MidiEvent::MakeNoteOn(0u, 0u, 60u, 100u),
+		MidiEvent::MakeNoteOff(10u, 0u, 60u, 23u) };
+	take->GetMidiLoops().at(0u)->ReplaceRecordedEvents(source.data(), source.size(), 1000u);
+	station->AddTake(take);
+	station->CommitChanges();
+	plugin->MaxAcceptedPerBlock = 1u;
+	RenderStationBlock(station, 0u);
+	ASSERT_EQ(1u, plugin->ProcessedEvents.size());
+	ASSERT_TRUE(plugin->ProcessedEvents[0].IsNoteOn());
+	RenderStationBlock(station, 128u);
+	ASSERT_EQ(2u, plugin->ProcessedEvents.size());
+	EXPECT_TRUE(plugin->ProcessedEvents[1].IsNoteOff());
+	EXPECT_EQ(23u, plugin->ProcessedEvents[1].data2);
+}

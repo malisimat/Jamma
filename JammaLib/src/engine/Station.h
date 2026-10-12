@@ -127,6 +127,7 @@ namespace engine
 		virtual void EndMultiPlay(unsigned int numSamps) override;
 		// Fans one policy-neutral accepted correction out to every local take.
 		// Audio-thread only; called once at the top of the callback block.
+		void ApplyFirstMasterRecordingAtAudioBoundary(utils::Timer& clock) noexcept;
 		void ApplyAcceptedTimingCorrection(long long deltaSamps,
 			std::uint64_t generation, bool relocateMidi = false) noexcept;
 		void CaptureSceneAnchors(std::uint64_t sceneCoordinateSamps) noexcept;
@@ -319,6 +320,7 @@ namespace engine
 			std::array<unsigned int, midi::MidiNote::TotalNoteSlots> RecordedAudibleOwners{}; // Audio delivery time.
 			// Audio callback owner: rejected releases retry in later blocks.
 			std::bitset<midi::MidiNote::TotalNoteSlots> PendingReleases;
+			std::array<std::uint8_t, midi::MidiNote::TotalNoteSlots> PendingReleaseVelocity{};
 			std::bitset<midi::MidiNote::TotalNoteSlots> PluginHeld;
 			std::bitset<midi::MidiNote::TotalNoteSlots> BlockHeldAtStart;
 			std::bitset<midi::MidiNote::TotalNoteSlots> BlockTouched;
@@ -525,6 +527,18 @@ namespace engine
 		std::vector<std::shared_ptr<audio::AudioMixer>> _backAudioMixers;
 		std::vector<std::shared_ptr<audio::AudioBuffer>> _audioBuffers;
 		std::vector<std::shared_ptr<audio::AudioBuffer>> _backAudioBuffers;
+		struct FirstMasterRecording
+		{
+			utils::Timer::RecordingSeed Timing;
+			std::shared_ptr<LoopTake> Take;
+			std::shared_ptr<utils::Timer> Clock;
+		};
+		base::PublishedAudioSnapshot<const FirstMasterRecording> _firstMasterRecording;
+		std::atomic<std::uint64_t> _firstMasterRecordingConsumed{ 0u };
+		// Callback receipt; consumed version releases this coherent owner-side log.
+		std::atomic<std::uint64_t> _firstMasterRecordingScene{ 0u };
+		std::atomic<unsigned long> _firstMasterRecordingPhase{ 0ul };
+		std::atomic<std::uint8_t> _firstMasterRecordingStatus{ 0u };
 		base::PublishedAudioSnapshot<const AudioState> _audioState;
 		std::atomic<std::uint8_t> _promotionTopologyGate{ 0u }; // 1 callback, 2 owner.
 		base::PublishedAudioSnapshot<const AudioState>::Lease _promotionAudioLease; // Callback only.

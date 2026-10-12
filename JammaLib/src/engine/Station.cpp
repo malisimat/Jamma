@@ -1092,8 +1092,10 @@ bool Station::_TryDeliverMidiNow(MidiDestination& destination, const MidiEvent& 
 	const auto slot = midi::MidiNote::NoteSlot(event.Channel(), event.data1);
 	if (event.IsNoteOn() && destination.PendingReleases.test(slot))
 	{
-		const auto release = MidiEvent::MakeNoteOff(event.sampleOffset, event.Channel(), event.data1);
+		const auto release = MidiEvent::MakeNoteOff(event.sampleOffset, event.Channel(), event.data1,
+			destination.PendingReleaseVelocity[slot]);
 		if (!destination.Plugin->TrySendMidiEvent(release, true)) return false;
+		destination.PendingReleaseVelocity[slot] = 0u;
 		destination.PendingReleases.reset(slot);
 		destination.PluginHeld.reset(slot);
 		destination.BlockTouched.set(slot);
@@ -1102,6 +1104,7 @@ bool Station::_TryDeliverMidiNow(MidiDestination& destination, const MidiEvent& 
 	{
 		if (event.IsNoteOff())
 		{
+			destination.PendingReleaseVelocity[slot] = event.data2;
 			destination.PendingReleases.set(slot);
 			return true; // Retained for bounded retry at the next audio block.
 		}
@@ -1111,6 +1114,7 @@ bool Station::_TryDeliverMidiNow(MidiDestination& destination, const MidiEvent& 
 	else if (event.IsNoteOff())
 	{
 		destination.PluginHeld.reset(slot);
+		destination.PendingReleaseVelocity[slot] = 0u;
 		destination.PendingReleases.reset(slot);
 	}
 	if (event.IsNoteOn() || event.IsNoteOff()) destination.BlockTouched.set(slot);
@@ -1132,8 +1136,10 @@ void Station::_DrainPendingMidiReleases(const AudioState& state, std::uint32_t s
 			if (destination->PendingReleases.test(slot))
 			{
 				const auto release = MidiEvent::MakeNoteOff(sample,
-					static_cast<std::uint8_t>(slot / 128u), static_cast<std::uint8_t>(slot % 128u));
+					static_cast<std::uint8_t>(slot / 128u), static_cast<std::uint8_t>(slot % 128u),
+					destination->PendingReleaseVelocity[slot]);
 				if (!destination->Plugin->TrySendMidiEvent(release, true)) break;
+				destination->PendingReleaseVelocity[slot] = 0u;
 				destination->PendingReleases.reset(slot);
 				destination->PluginHeld.reset(slot);
 				destination->BlockTouched.set(slot);
@@ -1262,6 +1268,7 @@ bool Station::_ReleaseLostPlaybackMidi(MidiPlaybackBinding& binding, std::uint32
 		if (binding.EmitSourceLossRelease && destination.PlaybackOwners[slot] == 0u
 			&& destination.RecordedAudibleOwners[slot] == 0u && !destination.LiveHeld.test(slot))
 		{
+			destination.PendingReleaseVelocity[slot] = 0u;
 			destination.PendingReleases.reset(slot); // This explicit release supersedes queued recovery.
 			_TryDeliverMidi(destination, MidiEvent::MakeNoteOff(sample,
 				static_cast<std::uint8_t>(slot / 128u), static_cast<std::uint8_t>(slot % 128u)), true);
@@ -1685,6 +1692,50 @@ void Station::EndMultiPlay(unsigned int numSamps)
 	}
 }
 
+void Station::ApplyFirstMasterRecordingAtAudioBoundary(utils::Timer& clock) noexcept
+{
+	auto request = _firstMasterRecording.borrow();
+	if (!request || request->Clock.get() != &clock
+		|| request->Timing.Version <= _firstMasterRecordingConsumed.load(std::memory_order_relaxed)) return;
+	auto state = _BorrowAudioState();
+	if (!state.ReadSucceeded()) return;
+	const auto take = request->Take.get();
+	const bool present = state && std::any_of(state->OwnedLoopTakes.begin(), state->OwnedLoopTakes.end(),
+		[take](const auto& member) { return member.get() == take; });
+	if (take->IsCaptureCancelled() || !take->FirstMasterActivationPending())
+	{
+		_firstMasterRecordingScene.store(clock.SceneSamplePos(), std::memory_order_relaxed);
+		_firstMasterRecordingPhase.store(take->MidiPlayIndex(), std::memory_order_relaxed);
+		_firstMasterRecordingStatus.store(0u, std::memory_order_relaxed);
+		clock.ConsumeRecordingSeedAtAudioBoundary(request->Timing.Version);
+		_firstMasterRecordingConsumed.store(request->Timing.Version, std::memory_order_release);
+		return;
+	}
+	// A completed take may not have reached the published station membership yet.
+	if (!present || take->HasPendingTriggerCapture() || take->TakeState() != LoopTake::STATE_PLAYING) return;
+	// Trigger stamps and SceneSamplePos share the wrapping device-sample ruler.
+	// A timestamp may be just ahead of this boundary; preserve that signed age.
+	const auto elapsed = static_cast<std::int32_t>(
+		static_cast<std::uint32_t>(clock.SceneSamplePos()) - request->Timing.RecordOrigin);
+	auto phase = static_cast<std::int64_t>(elapsed) % request->Timing.LengthSamps;
+	if (phase < 0) phase += request->Timing.LengthSamps;
+	if (!take->ActivateFirstMasterMidiAtAudioBoundary(static_cast<unsigned long>(phase),
+		request->Timing.RecordOrigin)) return;
+	const bool installMaster = clock.RecordingSeedReadyAtAudioBoundary(request->Timing.Version)
+		&& clock.SeedSourceLength() == 0ul;
+	if (installMaster)
+	{
+		clock.SetQuantisation(request->Timing.GrainSamps, request->Timing.Type);
+		clock.SetSeedSourceLength(request->Timing.LengthSamps);
+		clock.SetMasterLoopSampleOffset(static_cast<unsigned long>(phase));
+	}
+	_firstMasterRecordingScene.store(clock.SceneSamplePos(), std::memory_order_relaxed);
+	_firstMasterRecordingPhase.store(static_cast<unsigned long>(phase), std::memory_order_relaxed);
+	_firstMasterRecordingStatus.store(installMaster ? 1u : 2u, std::memory_order_relaxed);
+	clock.ConsumeRecordingSeedAtAudioBoundary(request->Timing.Version);
+	_firstMasterRecordingConsumed.store(request->Timing.Version, std::memory_order_release);
+}
+
 void Station::ApplyAcceptedTimingCorrection(long long deltaSamps,
 	std::uint64_t generation, bool relocateMidi) noexcept
 {
@@ -1962,25 +2013,24 @@ ActionResult Station::OnAction(TriggerAction action)
 	auto loopTake = _TryGetTake(action.TargetId);
 	const auto priorAudioLoops = loopTake ? loopTake.value()->GetLoops().size() : 0u;
 	const auto priorMidiLoops = loopTake ? loopTake.value()->GetMidiLoops().size() : 0u;
-	const auto transportStart = static_cast<std::int64_t>(_clock ? _clock->AbsoluteSamplePos() : 0ul)
+	const auto pendingSeed = _clock ? _clock->PendingRecordingSeedOnOwner() : nullptr;
+	// Job decisions use reserved geometry until its callback activation. This
+	// avoids treating a second completion as another first master in that gap.
+	auto recordingClock = _clock;
+	if (pendingSeed)
+	{
+		recordingClock = std::make_shared<utils::Timer>();
+		recordingClock->SetQuantisation(pendingSeed->GrainSamps, pendingSeed->Type);
+		recordingClock->SetSeedSourceLength(pendingSeed->LengthSamps);
+	}
+	const auto pendingElapsed = pendingSeed ? static_cast<std::int32_t>(
+		static_cast<std::uint32_t>(_clock->SceneSamplePos()) - pendingSeed->RecordOrigin) : 0;
+	const auto transportStart = static_cast<std::int64_t>(pendingSeed ?
+		(static_cast<std::uint64_t>((std::max)(0, pendingElapsed))) :
+		(_clock ? _clock->AbsoluteSamplePos() : 0ul))
 		+ static_cast<std::int64_t>(TransportOffsetSamps());
 	const auto transportStartSamps = transportStart < 0 ? 0ull :
 		static_cast<std::uint64_t>(transportStart);
-	auto applyLocalMasterMidiGrid = [this](const std::shared_ptr<LoopTake>& take)
-	{
-		if (!take || take->HasTriggerAudioCapture() || take->GetMidiLoops().empty()
-			|| !_clock || IsRemote())
-			return;
-		const auto interval = _clock->SeedSourceLength();
-		const auto grain = _clock->QuantiseSamps();
-		if (interval == 0ul || grain == 0u
-			|| interval > static_cast<unsigned long>((std::numeric_limits<std::uint32_t>::max)()))
-			return;
-
-		const auto divisions = static_cast<std::uint32_t>((std::max)(1ul, interval / grain));
-		take->SetMidiBaseGrid(static_cast<std::uint32_t>(interval), divisions);
-	};
-
 	switch (action.ActionType)
 	{
 	case TriggerAction::TRIGGER_REC_START:
@@ -1996,7 +2046,7 @@ ActionResult Station::OnAction(TriggerAction action)
 		// Before a master clock exists, MIDI timestamps provide the actual press
 		// origin. The take may reach the audio snapshot much later.
 		const auto midiRecordStart = action.MidiSample && _clock &&
-			_clock->SeedSourceLength() == 0ul
+			recordingClock->SeedSourceLength() == 0ul
 			? action.MidiSample : std::nullopt;
 		newLoopTake->Record(action.InputChannels,
 			Name(),
@@ -2005,6 +2055,9 @@ ActionResult Station::OnAction(TriggerAction action)
 			std::move(heldSnapshot),
 			transportStartSamps,
 			midiRecordStart);
+		if (pendingSeed && !newLoopTake->HasTriggerAudioCapture() && !IsRemote())
+			newLoopTake->SetMidiBaseGrid(static_cast<std::uint32_t>(pendingSeed->LengthSamps),
+				static_cast<std::uint32_t>(pendingSeed->LengthSamps / pendingSeed->GrainSamps));
 		res.SourceId = "";
 		res.TargetId = newLoopTake->Id();
 		res.TriggerTargetTake = newLoopTake;
@@ -2017,10 +2070,10 @@ ActionResult Station::OnAction(TriggerAction action)
 	{
 		auto loopLength = action.SampleCount;
 		std::optional<std::uint32_t> midiOnlyStopSample;
-		const bool clockWasSeeded = _clock && _clock->SeedSourceLength() > 0ul;
+		const bool clockWasSeeded = recordingClock && recordingClock->SeedSourceLength() > 0ul;
 		// A first MIDI-only master uses the trigger edges as its physical duration.
 		// Later takes retain their existing callback/counting duration policy.
-		if (!clockWasSeeded && loopTake && !loopTake.value()->HasTriggerAudioCapture()
+		if (!clockWasSeeded && !IsRemote() && loopTake && !loopTake.value()->HasTriggerAudioCapture()
 			&& _clock
 			&& loopTake.value()->MidiRecordStartSample() && action.MidiSample)
 		{
@@ -2047,46 +2100,45 @@ ActionResult Station::OnAction(TriggerAction action)
 		else
 		{
 			auto errorSamps = 0;
-			std::optional<std::int32_t> midiStopAgeSamps;
+			std::shared_ptr<const utils::Timer::RecordingSeed> firstSeed;
+			std::optional<std::uint32_t> midiInitialPhase;
 			auto cfg = action.GetUserConfig();
 			auto streamParams = action.GetAudioParams();
-
 			if (_clock)
 			{
 				if (clockWasSeeded)
 				{
-					auto [quantisedLength, err] = _clock->QuantiseLength(action.SampleCount);
+					auto [quantisedLength, err] = recordingClock->QuantiseLength(action.SampleCount);
 					loopLength = quantisedLength;
 					errorSamps = err;
+				}
+				else if (midiOnlyStopSample && loopTake)
+				{
+					// Infer off callback without touching the live Timer. Publish the
+					// complete geometry and trigger origin after take completion.
+					auto previewClock = std::make_shared<utils::Timer>();
+					_TrySeedClockFromFirstLoop(previewClock, loopLength, cfg, streamParams, loopTake.value()->Id());
+					loopLength = previewClock->SeedSourceLength();
+					firstSeed = _clock->ReserveRecordingSeedOnOwner({ 0u, previewClock->QuantiseSamps(),
+						loopLength, previewClock->Quantisation(), *loopTake.value()->MidiRecordStartSample() });
+					if (firstSeed && !IsRemote())
+						loopTake.value()->SetMidiBaseGrid(static_cast<std::uint32_t>(loopLength),
+							static_cast<std::uint32_t>(loopLength / firstSeed->GrainSamps));
+					errorSamps = static_cast<int>(static_cast<std::int64_t>(requestedLength) - loopLength);
+					if (loopLength > 0ul)
+					{
+						const auto elapsed = static_cast<std::int32_t>(static_cast<std::uint32_t>(
+							_clock->SceneSamplePos()) - *loopTake.value()->MidiRecordStartSample());
+						auto phase = static_cast<std::int64_t>(elapsed) % loopLength;
+						if (phase < 0) phase += loopLength;
+						midiInitialPhase = static_cast<std::uint32_t>(phase);
+					}
 				}
 				else
 				{
 					_TrySeedClockFromFirstLoop(_clock, loopLength, cfg, streamParams,
 						loopTake.has_value() ? loopTake.value()->Id() : "none");
 					loopLength = _clock->SeedSourceLength();
-					if (midiOnlyStopSample)
-						applyLocalMasterMidiGrid(loopTake ? loopTake.value() : nullptr);
-				}
-				if (midiOnlyStopSample && loopLength > 0ul)
-				{
-					if (!clockWasSeeded)
-						errorSamps = static_cast<int>(static_cast<std::int64_t>(requestedLength)
-							- static_cast<std::int64_t>(loopLength));
-					const auto sceneSample = static_cast<std::uint32_t>(_clock->SceneSamplePos());
-					const auto age = static_cast<std::int32_t>(sceneSample - *midiOnlyStopSample);
-					midiStopAgeSamps = age;
-				}
-				if (!clockWasSeeded && midiOnlyStopSample && midiStopAgeSamps && loopLength > 0ul)
-				{
-					// Phase is the trigger-relative elapsed time at the current scene
-					// coordinate. Keep the signed within-callback age: MIDI timestamps
-					// can be ahead of the last published audio boundary.
-					const auto elapsedFromStart = static_cast<std::int64_t>(requestedLength)
-						+ static_cast<std::int64_t>(*midiStopAgeSamps);
-					auto phaseSamps = elapsedFromStart % static_cast<std::int64_t>(loopLength);
-					if (phaseSamps < 0)
-						phaseSamps += static_cast<std::int64_t>(loopLength);
-					_clock->SetMasterLoopSampleOffset(static_cast<unsigned long>(phaseSamps));
 				}
 			}
 			auto playPos = cfg.has_value() ?
@@ -2098,10 +2150,11 @@ ActionResult Station::OnAction(TriggerAction action)
 
 			if (loopTake.has_value())
 			{
-				const auto midiPlayErrorSamps = midiStopAgeSamps && _clock
-					? static_cast<int>(_clock->SampOffset())
-					: errorSamps;
-				loopTake.value()->Play(playPos, loopLength, endRecordSamps, midiPlayErrorSamps);
+				const auto midiPlayErrorSamps = midiInitialPhase ? static_cast<int>(*midiInitialPhase) : errorSamps;
+				loopTake.value()->Play(playPos, loopLength, endRecordSamps, midiPlayErrorSamps, static_cast<bool>(firstSeed));
+				if (firstSeed)
+					_firstMasterRecording.store(std::make_shared<const FirstMasterRecording>(
+						FirstMasterRecording{ *firstSeed, loopTake.value(), _clock }));
 			}
 			completedLength = loopLength;
 			completedErrorSamps = static_cast<long long>(requestedLength) - static_cast<long long>(loopLength);
@@ -2159,9 +2212,9 @@ ActionResult Station::OnAction(TriggerAction action)
 
 			if (_clock)
 			{
-				if (_clock->IsQuantisable())
+				if (recordingClock->IsQuantisable())
 				{
-					auto [quantisedLength, err] = _clock->QuantiseLength(action.SampleCount);
+					auto [quantisedLength, err] = recordingClock->QuantiseLength(action.SampleCount);
 					loopLength = quantisedLength;
 					errorSamps = err;
 				}
@@ -3233,6 +3286,20 @@ void Station::_ReleaseResources()
 
 std::vector<JobAction> Station::_CommitChanges()
 {
+	if (const auto request = _firstMasterRecording.load(); request &&
+		request->Timing.Version <= _firstMasterRecordingConsumed.load(std::memory_order_acquire))
+	{
+		const auto status = _firstMasterRecordingStatus.load(std::memory_order_relaxed);
+		std::cout << "[midi-master] take=" << request->Take->Id()
+			<< " status=" << (status == 1u ? "activated" : (status == 2u ? "playback-only" : "cancelled"))
+			<< " origin=" << request->Timing.RecordOrigin
+			<< " scene=" << _firstMasterRecordingScene.load(std::memory_order_relaxed)
+			<< " logical=" << request->Timing.LengthSamps
+			<< " phase=" << _firstMasterRecordingPhase.load(std::memory_order_relaxed)
+			<< " version=" << request->Timing.Version << '\n';
+		_firstMasterRecording.store(nullptr);
+	}
+	_firstMasterRecording.collect();
 	// Plugin latency/controller notifications must be pumped with closed editors.
 	if (const auto chain = _vstChain.load(std::memory_order_acquire))
 		chain->PollPendingChanges();
@@ -3597,6 +3664,8 @@ void Station::_WireVuSliders()
 
 void Station::_DitchLoopTake(std::shared_ptr<LoopTake>& take, bool flushLiveHeld) noexcept
 {
+	if (const auto request = _firstMasterRecording.load(); request && request->Take == take)
+		request->Clock->CancelRecordingSeedOnOwner(request->Timing.Version);
 	if (flushLiveHeld)
 		FlushLiveHeldMidiNotes();
 	else

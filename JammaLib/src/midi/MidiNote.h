@@ -51,7 +51,8 @@ namespace midi
 		// before NoteOns; stable for equal-priority ties. Optional unmatched-start
 		// metadata follows its event through the same permutation.
 		static void SortMidiEvents(MidiEvent* events,
-			std::size_t eventCount, std::uint8_t* unmatchedStarts = nullptr) noexcept;
+			std::size_t eventCount, std::uint8_t* unmatchedStarts = nullptr,
+			std::uint16_t* continuationRoots = nullptr) noexcept;
 	};
 
 	struct MidiNoteSnapshot

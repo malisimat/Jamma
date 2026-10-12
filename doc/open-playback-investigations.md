@@ -525,3 +525,73 @@ left uncommitted; the initial staged files have not been restaged or replaced.
 A clean full-suite result and resolution of the remaining first-master timing,
 distinct long-root continuation, and release-velocity findings are required before
 calling the branch validated or performing the user's conditional commit.
+
+## 8. Follow-up: hardware evidence and remaining review fixes
+
+The section 7 review fixes were committed as `5ce3812f`. The user then
+reported clean kick playback across the first-master seam with note
+quantisation enabled and disabled, using Focusrite ASIO at 44100 Hz / 512
+samples. The supplied transcript confirms trigger-spanning notes on both
+recording edges and a successful ditch/reset:
+`MIDI timing reset: reason=empty-local clockLength=110364`. The second
+recording establishes fresh geometry (physical 99150 / logical 99148); this
+master establishment is independent of the MIDI note-quantisation toggle.
+The user also reports confidence that subsequent loops quantise to the master.
+These auditions establish the original audible seam fix, not physical latency
+accuracy or every master/cancellation lifecycle.
+
+### Resolution of the three retained findings
+
+- Distinct merged continuation components now carry snapshot-local root identity
+  through event sorting, held state, and relocation chase. Suppression applies
+  only to the sounding component. The former long-note probe is now a regression
+  covering 64/1000/2000-sample partitions, source replacement, and relocation.
+  This overlong synthetic fixture is not export-equivalent: the existing
+  sidecar contract intentionally discards releases outside the playable window.
+  Source replacement retains them; export/restore instead creates unmatched
+  attacks with the existing single-slot continuation policy.
+- Source release velocity is retained in fixed callback-owned arrays in MidiLoop
+  and Station. Synthetic flushes use zero unless a source release is already
+  pending; crossing the seam cannot overwrite its velocity. Tests cover rejected
+  source releases inside a loop and at its last sample, plus plugin rejection.
+- First local MIDI-only master geometry is inferred on the job owner and reserved
+  without mutating the live Timer. An immutable Station request keeps the take
+  and clock alive. Playback waits until its completed take and MIDI streams are
+  published. The callback then installs clock geometry and the take cursor at
+  the same boundary using `(SceneSamplePos - triggerOrigin) mod logicalLength`.
+  Automation receives the same trigger-origin correction. Subsequent owner jobs
+  use reserved geometry during this publication gap. Cancellation or an existing
+  replacement master prevents stale geometry installation; surviving playback
+  can still activate. This change targets the reviewed MIDI-only first-master
+  path; mixed/audio recording completion keeps its existing behavior.
+
+### Shared-state ownership audit
+
+| State | Writer / reader | Synchronization and lifetime |
+| --- | --- | --- |
+| Timer reservation descriptor/version | Job publishes; job reads pending geometry; callback checks scalar version | Immutable owner snapshot; release/acquire published, consumed and cancelled versions; Timer outlives requests |
+| Station activation request | Job publishes; callback borrows | PublishedAudioSnapshot lease; strong take/clock ownership; job collects retired requests |
+| Activation receipt | Callback writes; job prints once | Receipt fields precede release consumed-version; job acquires before reading |
+| Take activation gate/cursor | Job arms; callback applies/unfreezes; restore/record invalidate | Atomic gate; completed-state acquire; immutable take/stream leases |
+| Continuation roots / pending velocities | Owner prepares roots; callback owns held/retry arrays | Fixed snapshot storage, co-permuted sort; existing snapshot publication and reclamation; no callback allocation |
+
+The larger playback snapshots are preallocated on the heap during MidiLoop
+construction, avoiding Windows stack exhaustion without callback allocation.
+The hot-path audit reports no banned lock/wait additions. Manual review confirms
+that request consumption uses bounded borrows, scalar atomics and existing
+callback setters; allocation, reclamation and the concise `[midi-master]`
+activation receipt remain on the job owner.
+
+### Validation
+
+- Final incremental Debug x64 engine/native-test and app builds succeeded with
+  zero warnings/errors.
+- Complete native suite: **1481 tests / 180 suites, all passed** (58.231 seconds).
+  Both former adversarial probes pass. The timing helper covers 12 normal
+  activation combinations and 18 cancellation/replacement combinations, with
+  signed trigger ages and publication delays up to 200000 samples.
+- Hot-path audit passed; manual ownership review found no new callback
+  allocation, locking, waiting, reclamation or logging.
+- `git diff --check` passed. The hardware executable is
+  `Jamma/bin/x64/Debug/Jamma.exe`. Fresh hardware validation of these follow-up
+  changes remains to be performed; earlier seam auditions are recorded above.
