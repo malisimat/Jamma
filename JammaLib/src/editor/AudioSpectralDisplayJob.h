@@ -17,11 +17,14 @@ namespace editor
 		enum class State { Pending, Complete, Failed, Cancelled };
 		AudioSpectralDisplayJob(std::shared_ptr<const audio::AudioSpectralAnalysis> analysis,
 			std::shared_ptr<const audio::AudioSpectralEditState> editState,
-			unsigned int timeSegments, unsigned int frequencySegments);
+			unsigned int timeSegments, unsigned int frequencySegments,
+			graphics::AudioSpectralViewport viewport = {}, std::uint64_t presentationRevision = 0u);
 		const std::shared_ptr<const audio::AudioSpectralAnalysis> Analysis;
 		const std::shared_ptr<const audio::AudioSpectralEditState> EditState;
 		const unsigned int TimeSegments;
 		const unsigned int FrequencySegments;
+		const graphics::AudioSpectralViewport Viewport;
+		const std::uint64_t PresentationRevision;
 		State Status() const noexcept { return _state.load(std::memory_order_acquire); }
 		void Cancel() noexcept; // Off audio; never waits for the worker.
 		std::shared_ptr<const graphics::AudioSpectralDisplay> Result() const noexcept;

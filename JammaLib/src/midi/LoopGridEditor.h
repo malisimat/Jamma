@@ -132,8 +132,8 @@ namespace midi
 		std::uint8_t _ChannelOf(const std::shared_ptr<MidiLoop>& loop) const;
 		double _PixelsPerSample(std::uint32_t lengthSamps) const;
 		std::optional<std::pair<double, double>> _AudioPointAt(utils::Position2d pixel) const;
-		bool _AudioSurfaceReady() const;
-		bool _AudioGeometryChanged() const;
+		bool _AudioSurfaceReady(bool requireCurrentViewport = true) const;
+		bool _AudioGeometryChanged(bool includeViewport = true) const;
 		void _MoveAudioStroke(utils::Position2d pixel);
 		void _EndAudioStroke(bool cancel);
 		void _DrainAudioUndo();
@@ -160,6 +160,12 @@ namespace midi
 		std::weak_ptr<engine::LoopTake> _take;
 		std::weak_ptr<engine::Loop> _audioLoop;
 		editor::AudioSpectralEditor _audioEditor;
+		// UI-only controls/capture. Worker requests copy values; Close cancels capture.
+		editor::AudioSpectralControls _audioControls;
+		bool _audioNavigation = false;
+		bool _audioBandPreview = false;
+		utils::Position2d _audioViewPointerAnchor{};
+		graphics::AudioSpectralViewport _audioCapturedViewport;
 		bool _audioStroke = false;
 		std::deque<bool> _pendingAudioUndo; // At most sixteen release-adjacent history keys.
 		bool _audioBroadband = false;

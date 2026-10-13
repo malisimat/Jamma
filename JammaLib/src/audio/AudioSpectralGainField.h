@@ -30,7 +30,9 @@ namespace audio
 		public:
 			static std::unique_ptr<ExposureMap> Create(std::size_t frames, unsigned int bins, std::string& reason);
 			bool Accumulate(const AudioSpectralAnalysis& analysis, double startSeconds, double startHz,
-				double endSeconds, double endHz, double elapsedSeconds, std::string& reason);
+				double endSeconds, double endHz, double elapsedSeconds, std::string& reason,
+				double timeRadius = AudioSpectralConfig::BrushTimeRadiusSeconds,
+				double frequencyRadius = AudioSpectralConfig::BrushFrequencyRadiusOctaves);
 			bool Empty() const noexcept { return _dirty.empty(); }
 			std::size_t DirtyCellCount() const noexcept { return _dirty.size(); }
 			double ElapsedSeconds() const noexcept { return _elapsed; }
@@ -72,7 +74,8 @@ namespace audio
 			double elapsedSeconds, bool increase, std::string& reason);
 		template<class Visitor>
 		static bool _VisitOval(const AudioSpectralAnalysis& analysis, double startSeconds, double startHz,
-			double endSeconds, double endHz, double elapsedSeconds, std::string& reason, Visitor&& visit);
+			double endSeconds, double endHz, double elapsedSeconds, std::string& reason,
+			double timeRadius, double frequencyRadius, Visitor&& visit);
 		std::size_t _TileIndex(std::size_t frame, unsigned int bin) const noexcept;
 		static double _IntegratedOval(double x, double y, double dx, double dy,
 			double first, double last) noexcept;

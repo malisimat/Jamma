@@ -90,12 +90,13 @@ AudioSpectralEnvelopeStroke::AudioSpectralEnvelopeStroke(
 }
 
 std::unique_ptr<AudioSpectralEnvelopeStroke> AudioSpectralEnvelopeStroke::Begin(
-	std::shared_ptr<const AudioSpectralEnvelope> before, float sampleRate, std::string& reason)
+	std::shared_ptr<const AudioSpectralEnvelope> before, float sampleRate, std::string& reason, double radiusSeconds)
 {
 	reason.clear();
 	// Count E0, raw gains, influence, winner IDs/targets and one moved snapshot.
 	constexpr auto bytesPerSample = 4u * sizeof(float) + sizeof(double) + sizeof(std::uint64_t);
 	if (!before || !std::isfinite(sampleRate) || sampleRate <= 0.0f
+		|| !std::isfinite(radiusSeconds) || radiusSeconds <= 0.0 || radiusSeconds > 2.0
 		|| static_cast<std::uint64_t>(before->Length()) * bytesPerSample > AudioSpectralConfig::MaxWorkingBytes)
 	{
 		reason = "Broadband stroke has invalid geometry or exceeds the editor memory budget";
@@ -104,7 +105,7 @@ std::unique_ptr<AudioSpectralEnvelopeStroke> AudioSpectralEnvelopeStroke::Begin(
 	try
 	{
 		return std::unique_ptr<AudioSpectralEnvelopeStroke>(new AudioSpectralEnvelopeStroke(
-			std::move(before), sampleRate * AudioSpectralConfig::BarTimeRadiusSeconds,
+			std::move(before), sampleRate * radiusSeconds,
 			sampleRate * AudioSpectralConfig::EnvelopeRampSeconds * 0.5));
 	}
 	catch (const std::bad_alloc&)
@@ -119,6 +120,38 @@ unsigned long AudioSpectralEnvelopeStroke::_WrapSample(double integralSample, un
 	auto wrapped = std::fmod(integralSample, static_cast<double>(length));
 	if (wrapped < 0.0) wrapped += length;
 	return static_cast<unsigned long>(wrapped);
+}
+
+bool AudioSpectralEnvelopeStroke::SetRelativeBand(double centreSample, float factor) noexcept
+{
+	const auto maximumGain = AudioSpectralEnvelope::MaximumGain();
+	if (!std::isfinite(centreSample) || std::abs(centreSample) > 0x1p50
+		|| !std::isfinite(factor) || factor < 0.0f || factor > maximumGain) return false;
+	const auto length = static_cast<double>(_before->Length());
+	const auto centre = static_cast<double>(_WrapSample(std::round(centreSample), _before->Length()));
+	bool changed = false;
+	_changedSamples = 0ul;
+	for (unsigned long index = 0ul; index < _before->Length(); ++index)
+	{
+		const auto delta = std::abs(index - centre);
+		const auto distance = (std::min)(delta, length - delta);
+		const auto baseline = _before->GainAt(index);
+		float candidate = baseline;
+		if (factor != 1.0f && distance < _radiusSamps)
+		{
+			const auto fraction = distance / _radiusSamps;
+			const auto shoulder = 1.0 - fraction * fraction;
+			const auto relative = 1.0 + shoulder * shoulder * (static_cast<double>(factor) - 1.0);
+			candidate = static_cast<float>(std::clamp(baseline * relative, 0.0,
+				static_cast<double>(maximumGain)));
+		}
+		changed |= candidate != _gains[index];
+		_changedSamples += candidate != baseline;
+		_gains[index] = candidate;
+		// The single smooth shoulder needs no competing-winner ramps.
+		_winnerIds[index] = 0u;
+	}
+	return changed;
 }
 
 bool AudioSpectralEnvelopeStroke::PaintSegment(double startSample, float startGain,

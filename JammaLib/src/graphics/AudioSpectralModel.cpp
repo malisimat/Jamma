@@ -10,6 +10,23 @@
 
 using namespace graphics;
 
+bool AudioSpectralViewport::IsValid() const noexcept
+{
+	return std::isfinite(Lower) && std::isfinite(Upper) && Lower >= 0.0 && Upper <= 1.0 && Upper > Lower;
+}
+
+double AudioSpectralDisplay::FrequencyAt(double v) const noexcept
+{
+	if (IncludesDc && v <= 0.0) return 0.0;
+	return MinimumFrequencyHz * std::pow(MaximumFrequencyHz / MinimumFrequencyHz, std::clamp(v, 0.0, 1.0));
+}
+
+double AudioSpectralDisplay::FrequencyV(double hz) const noexcept
+{
+	return hz <= MinimumFrequencyHz ? 0.0
+		: std::log2(hz / MinimumFrequencyHz) / std::log2(MaximumFrequencyHz / MinimumFrequencyHz);
+}
+
 bool AudioSpectralDisplay::IsValid() const noexcept
 {
 	if (!SourceIdentity || SourceGeneration == 0u || Revision == 0u
@@ -17,6 +34,8 @@ bool AudioSpectralDisplay::IsValid() const noexcept
 		|| FrequencySegments == 0u || FrequencySegments > audio::AudioSpectralConfig::MaxFrequencySegments
 		|| !(MinimumFrequencyHz > 0.0f) || !std::isfinite(MinimumFrequencyHz)
 		|| !(NyquistHz > MinimumFrequencyHz) || !std::isfinite(NyquistHz)
+		|| !(MaximumFrequencyHz > MinimumFrequencyHz) || !std::isfinite(MaximumFrequencyHz)
+		|| MaximumFrequencyHz > NyquistHz || !Viewport.IsValid() || IncludesDc != (Viewport.Lower == 0.0)
 		|| Heights.size() != static_cast<std::size_t>(TimeSegments + 1u) * (FrequencySegments + 1u))
 		return false;
 	for (const auto height : Heights)
@@ -75,12 +94,13 @@ float AudioSpectralModel::_CompressMagnitude(double magnitude) noexcept
 std::shared_ptr<const AudioSpectralDisplay> AudioSpectralModel::BuildDisplay(
 	const audio::AudioSpectralAnalysis& analysis, const audio::AudioSpectralGainField* gains,
 	const audio::AudioSpectralEnvelope* envelope, std::uint64_t revision,
-	unsigned int timeSegments, unsigned int frequencySegments, std::string& reason, std::stop_token stop)
+	unsigned int timeSegments, unsigned int frequencySegments, std::string& reason, std::stop_token stop,
+	AudioSpectralViewport viewport, std::uint64_t presentationRevision)
 {
 	reason.clear();
 	if (!analysis.Source || !analysis.Source->Identity || analysis.Source->Generation == 0u
 		|| !analysis.Transform.IsValid() || !analysis.Source->Layout.IsValid()
-		|| revision == 0u || timeSegments == 0u || frequencySegments == 0u
+		|| revision == 0u || timeSegments == 0u || frequencySegments == 0u || !viewport.IsValid()
 		|| timeSegments > audio::AudioSpectralConfig::MaxTimeSegments
 		|| frequencySegments > audio::AudioSpectralConfig::MaxFrequencySegments
 		|| analysis.Geometry.FrameCount == 0u
@@ -109,12 +129,16 @@ std::shared_ptr<const AudioSpectralDisplay> AudioSpectralModel::BuildDisplay(
 		display->SourceIdentity = analysis.Source->Identity;
 		display->SourceGeneration = analysis.Source->Generation;
 		display->Revision = revision;
+		display->PresentationRevision = presentationRevision;
+		display->Viewport = viewport;
+		display->IncludesDc = viewport.Lower == 0.0;
 		display->TimeSegments = timeSegments;
 		display->FrequencySegments = frequencySegments;
 		const auto sampleRate = static_cast<double>(analysis.Source->Layout.SampleRate);
 		const auto nyquist = sampleRate * 0.5;
 		const auto lower = (std::min)(audio::AudioSpectralConfig::DisplayMinimumFrequencyHz, nyquist * 0.5);
-		display->MinimumFrequencyHz = static_cast<float>(lower);
+		display->MinimumFrequencyHz = static_cast<float>(lower * std::pow(nyquist / lower, viewport.Lower));
+		display->MaximumFrequencyHz = static_cast<float>(lower * std::pow(nyquist / lower, viewport.Upper));
 		display->NyquistHz = static_cast<float>(nyquist);
 		display->Heights.resize(static_cast<std::size_t>(timeSegments + 1u) * (frequencySegments + 1u));
         // Worker-owned bounded scratch: row mapping is fixed for this display.
@@ -130,8 +154,7 @@ std::shared_ptr<const AudioSpectralDisplay> AudioSpectralModel::BuildDisplay(
         rows.reserve(frequencySegments + 1u);
         for (unsigned int row = 0u; row <= frequencySegments; ++row)
         {
-            const auto hz = row == 0u ? 0.0 : lower * std::pow(nyquist / lower,
-                static_cast<double>(row) / frequencySegments);
+            const auto hz = display->FrequencyAt(static_cast<double>(row) / frequencySegments);
             const auto binPosition = hz * analysis.Transform.WindowSamps / sampleRate;
             const auto firstBin = (std::min)(static_cast<unsigned int>(binPosition), analysis.Geometry.BinCount - 1u);
             rows.push_back({firstBin, (std::min)(firstBin + 1u, analysis.Geometry.BinCount - 1u),
@@ -202,7 +225,9 @@ bool AudioSpectralModel::SetDisplay(std::shared_ptr<const AudioSpectralDisplay> 
 	if (_pendingDisplay && _pendingDisplay->SourceIdentity == display->SourceIdentity
 		&& (_pendingDisplay->SourceGeneration > display->SourceGeneration
 			|| (_pendingDisplay->SourceGeneration == display->SourceGeneration
-				&& _pendingDisplay->Revision >= display->Revision)))
+				&& (_pendingDisplay->Revision > display->Revision
+					|| (_pendingDisplay->Revision == display->Revision
+						&& _pendingDisplay->PresentationRevision >= display->PresentationRevision)))))
 	{
 		reason = "Spectral display revision is obsolete";
 		return false;

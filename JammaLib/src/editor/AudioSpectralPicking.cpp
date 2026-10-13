@@ -98,6 +98,9 @@ std::optional<AudioSpectralPicking::Hit> AudioSpectralPicking::Intersect(
 		|| display->FrequencySegments > audio::AudioSpectralConfig::MaxFrequencySegments
 		|| !std::isfinite(display->MinimumFrequencyHz) || !(display->MinimumFrequencyHz > 0.0f)
 		|| !std::isfinite(display->NyquistHz) || !(display->NyquistHz > display->MinimumFrequencyHz)
+		|| !std::isfinite(display->MaximumFrequencyHz) || !(display->MaximumFrequencyHz > display->MinimumFrequencyHz)
+		|| display->MaximumFrequencyHz > display->NyquistHz || !display->Viewport.IsValid()
+		|| display->IncludesDc != (display->Viewport.Lower == 0.0)
 		|| display->Heights.size() != static_cast<std::size_t>(display->TimeSegments + 1u) * (display->FrequencySegments + 1u))
 		return std::nullopt;
 	const glm::dvec3 origin(localOrigin);

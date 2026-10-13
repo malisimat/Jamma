@@ -8,9 +8,10 @@ using namespace editor;
 AudioSpectralDisplayJob::AudioSpectralDisplayJob(
 	std::shared_ptr<const audio::AudioSpectralAnalysis> analysis,
 	std::shared_ptr<const audio::AudioSpectralEditState> editState,
-	unsigned int timeSegments, unsigned int frequencySegments) :
+	unsigned int timeSegments, unsigned int frequencySegments,
+	graphics::AudioSpectralViewport viewport, std::uint64_t presentationRevision) :
 	Analysis(std::move(analysis)), EditState(std::move(editState)),
-	TimeSegments(timeSegments), FrequencySegments(frequencySegments)
+	TimeSegments(timeSegments), FrequencySegments(frequencySegments), Viewport(viewport), PresentationRevision(presentationRevision)
 {
 }
 
@@ -46,7 +47,7 @@ void AudioSpectralDisplayJob::Run()
 		else
 			_result = graphics::AudioSpectralModel::BuildDisplay(*Analysis, EditState->Gains.get(),
 				EditState->Envelope.get(), EditState->Revision, TimeSegments, FrequencySegments,
-				_reason, _stop.get_token());
+				_reason, _stop.get_token(), Viewport, PresentationRevision);
 	}
 	catch (const std::bad_alloc&)
 	{

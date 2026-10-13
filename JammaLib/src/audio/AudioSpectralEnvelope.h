@@ -36,7 +36,11 @@ namespace audio
 	{
 	public:
 		static std::unique_ptr<AudioSpectralEnvelopeStroke> Begin(
-			std::shared_ptr<const AudioSpectralEnvelope> before, float sampleRate, std::string& reason);
+			std::shared_ptr<const AudioSpectralEnvelope> before, float sampleRate, std::string& reason,
+			double radiusSeconds = AudioSpectralConfig::BarTimeRadiusSeconds);
+		// A stroke uses either anchored relative mode or swept absolute mode below.
+		// Relative targets evaluate against E0, preserving silence and replacing prior targets.
+		bool SetRelativeBand(double centreSample, float factor) noexcept;
 		// Time is explicitly unwrapped. The caller supplies its intended path;
 		// only brush support wraps, never an inferred shortest cursor movement.
 		bool PaintSegment(double startSample, float startGain, double endSample, float endGain) noexcept;

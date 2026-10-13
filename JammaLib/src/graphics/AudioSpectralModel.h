@@ -13,6 +13,14 @@
 
 namespace graphics
 {
+	// Normalized logarithmic source range. UI-owned until copied into a job;
+	// the completed display keeps its own immutable mapping for render/picking.
+	struct AudioSpectralViewport
+	{
+		double Lower = 0.0, Upper = 1.0;
+		bool IsValid() const noexcept;
+		bool operator==(const AudioSpectralViewport&) const = default;
+	};
 	// Row-major vertex heights: time varies fastest; both time endpoints exist.
 	// The DC edge is row zero; positive rows run logarithmically to Nyquist.
 	struct AudioSpectralDisplay
@@ -20,12 +28,18 @@ namespace graphics
 		std::shared_ptr<const audio::AudioSpectralSourceIdentity> SourceIdentity;
 		std::uint64_t SourceGeneration = 0u;
 		std::uint64_t Revision = 0u;
+		std::uint64_t PresentationRevision = 0u;
 		unsigned int TimeSegments = 0u;
 		unsigned int FrequencySegments = 0u;
 		float MinimumFrequencyHz = 0.0f;
 		float NyquistHz = 0.0f;
+		float MaximumFrequencyHz = 0.0f;
+		bool IncludesDc = true;
+		AudioSpectralViewport Viewport;
 		std::vector<float> Heights;
 		bool IsValid() const noexcept;
+		double FrequencyAt(double v) const noexcept;
+		double FrequencyV(double hz) const noexcept;
 	};
 
 	class AudioSpectralModel : public gui::GuiModel
@@ -57,7 +71,8 @@ namespace graphics
 			const audio::AudioSpectralGainField* gains,
 			const audio::AudioSpectralEnvelope* envelope, std::uint64_t revision,
 			unsigned int timeSegments, unsigned int frequencySegments,
-			std::string& reason, std::stop_token stop = {});
+			std::string& reason, std::stop_token stop = {}, AudioSpectralViewport viewport = {},
+			std::uint64_t presentationRevision = 0u);
 		bool SetDisplay(std::shared_ptr<const AudioSpectralDisplay> display, std::string& reason);
 		void SetEditorMorph(float morph);
 		void SetRadius(float radius);

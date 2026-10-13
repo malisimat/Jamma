@@ -128,6 +128,7 @@ bool AudioSpectralGainField::_PaintOvalSegment(const AudioSpectralAnalysis& anal
     if (_frameCount != analysis.Geometry.FrameCount || _binCount != analysis.Geometry.BinCount)
     { reason = "Spectral gain field dimensions differ from the source"; return false; }
     return _VisitOval(analysis, startSeconds, startHz, endSeconds, endHz, elapsedSeconds, reason,
+        AudioSpectralConfig::BrushTimeRadiusSeconds, AudioSpectralConfig::BrushFrequencyRadiusOctaves,
         [&](std::size_t frame, unsigned int bin, double exposure)
         { return SetGainDb(frame, bin, GainDbAfterExposure(analysis, frame, bin, GainDb(frame, bin), exposure, increase)); });
 }
@@ -170,14 +171,15 @@ std::unique_ptr<AudioSpectralGainField::ExposureMap> AudioSpectralGainField::Exp
 
 bool AudioSpectralGainField::ExposureMap::Accumulate(const AudioSpectralAnalysis& analysis,
     double startSeconds, double startHz, double endSeconds, double endHz, double elapsedSeconds,
-    std::string& reason)
+    std::string& reason, double timeRadius, double frequencyRadius)
 {
     reason.clear();
     if (_frames != analysis.Geometry.FrameCount || _bins != analysis.Geometry.BinCount
         )
     { reason = "Spectral input map dimensions differ from the source"; return false; }
     const auto changed = AudioSpectralGainField::_VisitOval(analysis, startSeconds, startHz,
-        endSeconds, endHz, elapsedSeconds, reason, [&](std::size_t frame, unsigned int bin, double exposure)
+        endSeconds, endHz, elapsedSeconds, reason, timeRadius, frequencyRadius,
+        [&](std::size_t frame, unsigned int bin, double exposure)
     {
         const auto index = static_cast<std::uint32_t>(frame * _bins + bin);
         auto& value = _exposure[index];
@@ -223,7 +225,7 @@ bool AudioSpectralGainField::ApplyExposureMap(const AudioSpectralAnalysis& analy
 template<class Visitor>
 bool AudioSpectralGainField::_VisitOval(const AudioSpectralAnalysis& analysis,
     double startSeconds, double startHz, double endSeconds, double endHz,
-    double elapsedSeconds, std::string& reason, Visitor&& visit)
+    double elapsedSeconds, std::string& reason, double timeRadius, double frequencyRadius, Visitor&& visit)
 {
 	reason.clear();
 	if (!analysis.Source || !analysis.Source->Layout.IsValid() || !analysis.Transform.IsValid()
@@ -232,7 +234,9 @@ bool AudioSpectralGainField::_VisitOval(const AudioSpectralAnalysis& analysis,
 		|| analysis.Coefficients.size() % analysis.Geometry.BinCount != 0u
 		|| !std::isfinite(startSeconds) || !std::isfinite(endSeconds)
 		|| !std::isfinite(startHz) || !std::isfinite(endHz) || startHz <= 0.0 || endHz <= 0.0
-		|| !std::isfinite(elapsedSeconds) || elapsedSeconds < 0.0)
+		|| !std::isfinite(elapsedSeconds) || elapsedSeconds < 0.0
+		|| !std::isfinite(timeRadius) || timeRadius <= 0.0 || timeRadius > 2.0
+		|| !std::isfinite(frequencyRadius) || frequencyRadius <= 0.0 || frequencyRadius > 4.0)
 	{
 		reason = "Spectral brush coordinates or gain dimensions are invalid";
 		return false;
@@ -255,8 +259,7 @@ bool AudioSpectralGainField::_VisitOval(const AudioSpectralAnalysis& analysis,
 	endHz = std::clamp(endHz, lower, nyquist);
 	const auto startOctave = std::log2(startHz);
 	const auto deltaOctave = std::log2(endHz) - startOctave;
-	const auto octaveRadius = AudioSpectralConfig::BrushFrequencyRadiusOctaves;
-	const auto timeRadius = AudioSpectralConfig::BrushTimeRadiusSeconds;
+	const auto octaveRadius = frequencyRadius;
 	const auto lowHz = (std::min)(startHz, endHz) * std::exp2(-octaveRadius);
 	const auto highHz = (std::min)(nyquist, (std::max)(startHz, endHz) * std::exp2(octaveRadius));
 	const auto firstBin = lowHz <= lower ? 0u
