@@ -26,7 +26,9 @@ std::shared_ptr<const AudioSpectralPlaybackSnapshot> AudioSpectralPlaybackSnapsh
 		|| !pcm->Source->Layout.IsValid() || revision == 0u
 		|| pcm->Source->Samples.size() != pcm->Source->Layout.StoredSampleCount()
 		|| pcm->Samples().size() != pcm->Source->Layout.StoredSampleCount()
-		|| (envelope && envelope->Length() != pcm->Source->Layout.LogicalLength))
+		|| (envelope && envelope->Length() != pcm->Source->Layout.LogicalLength)
+        || (pcm->EnvelopeComposed && (envelope || pcm->ComposedSpectralRevision != spectralRevision
+            || pcm->ComposedEnvelopeRevision != envelopeRevision)))
 	{
 		reason = "Edited playback content does not match its audio source";
 		return nullptr;

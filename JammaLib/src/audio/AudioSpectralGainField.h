@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <bitset>
 #include <cstddef>
 #include <memory>
 #include <optional>
@@ -12,6 +13,8 @@
 namespace audio
 {
 	struct AudioSpectralAnalysis;
+	class AudioSpectralEnvelope;
+	class AudioSpectralEnvelopeStroke;
 
 	// Value copies share tiles; editing a copy forks only the changed tiles.
 	// Publish const value copies, never mutate a field already handed to a worker.
@@ -20,7 +23,10 @@ namespace audio
 	public:
 		static constexpr unsigned int TileFrames = 32u;
 		static constexpr unsigned int TileBins = 32u;
-		using Tile = std::array<float, TileFrames * TileBins>;
+		struct Tile : std::array<float, TileFrames * TileBins>
+		{
+			std::bitset<TileFrames * TileBins> Owned;
+		};
 		// UI accumulates, then freezes a map for worker application and UI preview.
 		// Only the UI clears/recycles it after the worker's terminal receipt.
 		// Storage is reserved once, so rasterizing a pointer sample cannot allocate.
@@ -51,14 +57,22 @@ namespace audio
 			std::size_t frames, unsigned int bins, std::string& reason);
 		std::size_t FrameCount() const noexcept { return _frameCount; }
 		unsigned int BinCount() const noexcept { return _binCount; }
-		bool IsUnity() const noexcept { return _nonUnityBins == 0u; }
+		bool IsUnity() const noexcept { return _nonUnityBins == 0u && _ownedBins == 0u; }
+		bool HasOwnedCoefficients() const noexcept { return _ownedBins != 0u; }
+		bool IsOwned(std::size_t frame, unsigned int bin) const noexcept;
+		bool FrameHasOwned(std::size_t frame) const noexcept;
+		bool ContentEquals(const AudioSpectralGainField& other) const noexcept;
+		bool SetOwned(std::size_t frame, unsigned int bin, bool owned);
+		static unsigned long EnvelopeIndex(const AudioSpectralAnalysis&, std::size_t frame) noexcept;
+		bool ApplyOwnedBand(const AudioSpectralAnalysis&, const AudioSpectralGainField& before,
+			const AudioSpectralEnvelopeStroke& stroke, std::string& reason);
 		float GainDb(std::size_t frame, unsigned int bin) const noexcept;
         double GainLinear(std::size_t frame, unsigned int bin) const noexcept;
 		bool SetGainDb(std::size_t frame, unsigned int bin, float db);
 		static float GainDbAfterExposure(const AudioSpectralAnalysis& analysis, std::size_t frame,
 			unsigned int bin, float beforeDb, double exposureSeconds, bool increase) noexcept;
 		bool ApplyExposureMap(const AudioSpectralAnalysis& analysis, const ExposureMap& exposure,
-			bool increase, std::string& reason);
+			bool increase, std::string& reason, const AudioSpectralEnvelope* envelope = nullptr);
 
 		// Integrates the compact oval analytically along a straight swept path.
 		// Inputs are body-source seconds and positive Hz; time support wraps.
@@ -87,6 +101,7 @@ namespace audio
 		unsigned int _binCount;
 		unsigned int _binTiles;
 		std::size_t _nonUnityBins = 0u;
+		std::size_t _ownedBins = 0u;
 		std::vector<std::shared_ptr<Tile>> _tiles;
 	};
 }

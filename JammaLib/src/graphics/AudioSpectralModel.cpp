@@ -201,14 +201,14 @@ std::shared_ptr<const AudioSpectralDisplay> AudioSpectralModel::BuildDisplay(
                     sample.Db11 = height(nextFrame, sample.NextBin);
                 }
                 // Preserve height-domain interpolation and per-corner envelope clamp.
-                const auto compressed = [&](double db)
+                const auto compressed = [&](double db, std::size_t frame, unsigned int bin)
                 {
                     if (std::isnan(db)) return std::numeric_limits<float>::quiet_NaN();
-                    return static_cast<float>(std::clamp((db + envelopeDb - audio::AudioSpectralConfig::DisplayFloorDb)
+                    return static_cast<float>(std::clamp((db + (gains && gains->IsOwned(frame, bin) ? 0.0 : envelopeDb) - audio::AudioSpectralConfig::DisplayFloorDb)
                         / (audio::AudioSpectralConfig::DisplayCeilingDb - audio::AudioSpectralConfig::DisplayFloorDb), 0.0, 1.0));
                 };
-                const auto first = std::lerp(compressed(sample.Db00), compressed(sample.Db01), sample.BinWeight);
-                const auto next = std::lerp(compressed(sample.Db10), compressed(sample.Db11), sample.BinWeight);
+                const auto first = std::lerp(compressed(sample.Db00, firstFrame, sample.FirstBin), compressed(sample.Db01, firstFrame, sample.NextBin), sample.BinWeight);
+                const auto next = std::lerp(compressed(sample.Db10, nextFrame, sample.FirstBin), compressed(sample.Db11, nextFrame, sample.NextBin), sample.BinWeight);
                 const auto value = std::lerp(first, next, frameWeight);
 				if (!std::isfinite(value) || value < 0.0)
 				{

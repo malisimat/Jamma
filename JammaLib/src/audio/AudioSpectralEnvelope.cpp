@@ -122,6 +122,19 @@ unsigned long AudioSpectralEnvelopeStroke::_WrapSample(double integralSample, un
 	return static_cast<unsigned long>(wrapped);
 }
 
+double AudioSpectralEnvelope::RelativeGain(double baseline, double factor, double floor, double maximum) noexcept
+{
+    if (factor == 1.0) return baseline;
+    if (factor <= 0.0) return 0.0;
+    return std::clamp((factor > 1.0 ? (std::max)(baseline, floor) : baseline) * factor, 0.0, maximum);
+}
+
+std::optional<double> AudioSpectralEnvelopeStroke::RelativeFactorAt(unsigned long index) const noexcept
+{
+    if (index >= _bestInfluence.size() || _bestInfluence[index] <= 0.0) return std::nullopt;
+    return 1.0 + _bestInfluence[index] * (static_cast<double>(_winningTargets[index]) - 1.0);
+}
+
 bool AudioSpectralEnvelopeStroke::SetRelativeBand(double centreSample, float factor) noexcept
 {
 	const auto maximumGain = AudioSpectralEnvelope::MaximumGain();
@@ -142,8 +155,8 @@ bool AudioSpectralEnvelopeStroke::SetRelativeBand(double centreSample, float fac
 			const auto fraction = distance / _radiusSamps;
 			const auto shoulder = 1.0 - fraction * fraction;
 			const auto relative = 1.0 + shoulder * shoulder * (static_cast<double>(factor) - 1.0);
-			candidate = static_cast<float>(std::clamp(baseline * relative, 0.0,
-				static_cast<double>(maximumGain)));
+			candidate = static_cast<float>(AudioSpectralEnvelope::RelativeGain(baseline, relative,
+                std::pow(10.0, AudioSpectralConfig::SpectralFloorDb / 20.0), maximumGain));
 		}
 		changed |= candidate != _gains[index];
 		_changedSamples += candidate != baseline;
@@ -271,6 +284,7 @@ bool AudioSpectralEnvelopeStroke::ApplyRelativeMap(const RelativeMap& map) noexc
 	_relativeMode = true;
 	bool changed = false;
 	const auto maximum = static_cast<double>(AudioSpectralEnvelope::MaximumGain());
+    const auto floor = std::pow(10.0, AudioSpectralConfig::SpectralFloorDb / 20.0);
 	for (const auto index : map._dirty)
 	{
 		const auto influence = map._influence[index];
@@ -279,8 +293,9 @@ bool AudioSpectralEnvelopeStroke::ApplyRelativeMap(const RelativeMap& map) noexc
 		if (influence < _bestInfluence[index]) continue;
 		const auto target = AudioSpectralEnvelope::TargetFromDragPixels(map._drag[index]);
 		const auto baseline = _before->GainAt(index);
-		const auto candidate = static_cast<float>(std::clamp(baseline
-			* (1.0 + influence * (static_cast<double>(target) - 1.0)), 0.0, maximum));
+		const auto candidate = static_cast<float>(AudioSpectralEnvelope::RelativeGain(baseline,
+            1.0 + influence * (static_cast<double>(target) - 1.0),
+            floor, maximum));
 		const bool wasChanged = _gains[index] != baseline, isChanged = candidate != baseline;
 		if (wasChanged != isChanged) { if (isChanged) ++_changedSamples; else --_changedSamples; }
 		changed |= candidate != _gains[index] || influence != _bestInfluence[index]

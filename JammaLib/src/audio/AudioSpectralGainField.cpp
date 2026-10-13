@@ -1,5 +1,6 @@
 #include "AudioSpectralGainField.h"
 #include "AudioSpectralDsp.h"
+#include "AudioSpectralEnvelope.h"
 
 #include <algorithm>
 #include <cmath>
@@ -49,6 +50,101 @@ float AudioSpectralGainField::GainDb(std::size_t frame, unsigned int bin) const 
 	if (frame >= _frameCount || bin >= _binCount) return 0.0f;
 	const auto& tile = _tiles[_TileIndex(frame, bin)];
 	return tile ? (*tile)[(frame % TileFrames) * TileBins + bin % TileBins] : 0.0f;
+}
+
+bool AudioSpectralGainField::IsOwned(std::size_t frame, unsigned int bin) const noexcept
+{
+    if (frame >= _frameCount || bin >= _binCount) return false;
+    const auto& tile = _tiles[_TileIndex(frame, bin)];
+    return tile && tile->Owned[(frame % TileFrames) * TileBins + bin % TileBins];
+}
+
+bool AudioSpectralGainField::ContentEquals(const AudioSpectralGainField& other) const noexcept
+{
+    if (_frameCount != other._frameCount || _binCount != other._binCount
+        || _ownedBins != other._ownedBins || _nonUnityBins != other._nonUnityBins) return false;
+    for (std::size_t i = 0; i < _tiles.size(); ++i)
+    {
+        if (_tiles[i] == other._tiles[i]) continue;
+        if (_tiles[i] && other._tiles[i])
+        {
+            if (_tiles[i]->Owned != other._tiles[i]->Owned
+                || !std::equal(_tiles[i]->begin(), _tiles[i]->end(), other._tiles[i]->begin())) return false;
+        }
+        else
+        {
+            const auto& tile = _tiles[i] ? _tiles[i] : other._tiles[i];
+            if (tile->Owned.any() || std::any_of(tile->begin(), tile->end(), [](float db) { return db != 0.0f; })) return false;
+        }
+    }
+    return true;
+}
+
+bool AudioSpectralGainField::FrameHasOwned(std::size_t frame) const noexcept
+{
+    if (!_ownedBins || frame >= _frameCount) return false;
+    for (unsigned int column = 0; column < _binTiles; ++column)
+    {
+        const auto& tile = _tiles[(frame / TileFrames) * _binTiles + column];
+        if (!tile || tile->Owned.none()) continue;
+        for (unsigned int bin = 0; bin < TileBins; ++bin)
+            if (tile->Owned[(frame % TileFrames) * TileBins + bin]) return true;
+    }
+    return false;
+}
+
+bool AudioSpectralGainField::SetOwned(std::size_t frame, unsigned int bin, bool owned)
+{
+    if (frame >= _frameCount || bin >= _binCount || IsOwned(frame, bin) == owned) return false;
+    auto& tile = _tiles[_TileIndex(frame, bin)];
+    if (!tile) tile = std::make_shared<Tile>();
+    else if (tile.use_count() != 1u) tile = std::make_shared<Tile>(*tile);
+    tile->Owned[(frame % TileFrames) * TileBins + bin % TileBins] = owned;
+    if (owned) ++_ownedBins; else --_ownedBins;
+    return true;
+}
+
+unsigned long AudioSpectralGainField::EnvelopeIndex(const AudioSpectralAnalysis& analysis, std::size_t frame) noexcept
+{
+    const auto length = static_cast<std::int64_t>(analysis.Source->Layout.LogicalLength);
+    const auto sample = analysis.Geometry.FrameCentre(frame, analysis.Transform.HopSamps) % length;
+    return static_cast<unsigned long>(sample < 0 ? sample + length : sample);
+}
+
+bool AudioSpectralGainField::ApplyOwnedBand(const AudioSpectralAnalysis& analysis,
+    const AudioSpectralGainField& before, const AudioSpectralEnvelopeStroke& stroke, std::string& reason)
+{
+    reason.clear();
+    try
+    {
+        auto candidate = *this;
+        const auto floor = std::pow(10.0, AudioSpectralConfig::SpectralFloorDb / 20.0);
+        bool changed = false;
+        for (std::size_t frame = 0; frame < _frameCount; ++frame)
+        {
+            if (!before.FrameHasOwned(frame)) continue;
+            const auto index = EnvelopeIndex(analysis, frame);
+            const auto factor = stroke.RelativeFactorAt(index);
+            if (!factor) continue;
+            for (unsigned int bin = 0; bin < _binCount; ++bin)
+            {
+                if (!before.IsOwned(frame, bin)) continue;
+                const auto db = before.GainDb(frame, bin);
+                const auto original = analysis.Magnitude(frame, bin);
+                if (!(original > 0.0)) continue;
+                const auto baseline = db == AudioSpectralConfig::SilenceGainDb ? 0.0
+                    : original * before.GainLinear(frame, bin);
+                const auto target = AudioSpectralEnvelope::RelativeGain(baseline, *factor,
+                    floor, AudioSpectralEnvelope::MaximumGain());
+                const auto targetDb = *factor == 1.0 ? db : target == 0.0
+                    ? AudioSpectralConfig::SilenceGainDb : static_cast<float>(20.0 * std::log10(target / original));
+                changed |= candidate.SetGainDb(frame, bin, targetDb);
+            }
+        }
+        if (changed) *this = std::move(candidate);
+        return changed;
+    }
+    catch (const std::bad_alloc&) { reason = "Not enough memory for recovered band targets"; return false; }
 }
 
 double AudioSpectralGainField::GainLinear(std::size_t frame, unsigned int bin) const noexcept
@@ -237,7 +333,7 @@ void AudioSpectralGainField::ExposureMap::Clear() noexcept
 }
 
 bool AudioSpectralGainField::ApplyExposureMap(const AudioSpectralAnalysis& analysis,
-    const ExposureMap& exposure, bool increase, std::string& reason)
+    const ExposureMap& exposure, bool increase, std::string& reason, const AudioSpectralEnvelope* envelope)
 {
     reason.clear();
     if (_frameCount != exposure._frames || _binCount != exposure._bins
@@ -251,8 +347,17 @@ bool AudioSpectralGainField::ApplyExposureMap(const AudioSpectralAnalysis& analy
         {
             const auto frame = index / _binCount;
             const auto bin = index % _binCount;
+            auto beforeDb = candidate.GainDb(frame, bin);
+            const auto mask = envelope ? envelope->GainAt(EnvelopeIndex(analysis, frame)) : 1.0f;
+            if (exposure._exposure[index] > 0.0 && analysis.Magnitude(frame, bin) > 0.0
+                && mask != 1.0f && !candidate.IsOwned(frame, bin))
+            {
+                beforeDb = mask == 0.0f || beforeDb == AudioSpectralConfig::SilenceGainDb
+                    ? AudioSpectralConfig::SilenceGainDb : beforeDb + static_cast<float>(20.0 * std::log10(mask));
+                changed |= candidate.SetOwned(frame, bin, true);
+            }
             changed |= candidate.SetGainDb(frame, bin, GainDbAfterExposure(analysis, frame, bin,
-                candidate.GainDb(frame, bin), exposure._exposure[index], increase));
+                beforeDb, exposure._exposure[index], increase));
         }
         if (changed) *this = std::move(candidate);
         return changed;

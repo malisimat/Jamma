@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <span>
 #include <string>
 #include <vector>
@@ -17,6 +18,7 @@ namespace audio
 		static std::shared_ptr<const AudioSpectralEnvelope> Unity(unsigned long length, std::string& reason);
 		static std::shared_ptr<const AudioSpectralEnvelope> FromGains(std::span<const float> gains, std::string& reason);
 		static float MaximumGain() noexcept;
+		static double RelativeGain(double baseline, double factor, double floor, double maximum) noexcept;
 		static float TargetFromDragPixels(double upwardPositiveLogicalPixels) noexcept;
 		unsigned long Length() const noexcept { return static_cast<unsigned long>(_gains.size()); }
 		float GainAt(unsigned long wrappedIndex) const noexcept { return wrappedIndex < _gains.size() ? _gains[wrappedIndex] : 1.0f; }
@@ -80,6 +82,7 @@ namespace audio
 		// only brush support wraps, never an inferred shortest cursor movement.
 		bool PaintSegment(double startSample, float startGain, double endSample, float endGain) noexcept;
 		std::shared_ptr<const AudioSpectralEnvelope> Snapshot(std::string& reason) const;
+		std::optional<double> RelativeFactorAt(unsigned long index) const noexcept;
 		bool HasChanges() const noexcept { return _changedSamples != 0ul; }
 		std::shared_ptr<const AudioSpectralEnvelope> Before() const noexcept { return _before; }
 

@@ -976,7 +976,12 @@ bool Loop::PublishAudioSpectralPlayback(
 	const auto committed = _audioSpectralEdit.load(std::memory_order_acquire);
 	if (committed && committed->Source->Generation == snapshot->Source().Generation
 		&& (snapshot->EnvelopeRevision != committed->EnvelopeRevision
-			|| snapshot->Envelope != committed->Envelope))
+			|| (snapshot->Pcm->EnvelopeComposed
+                ? snapshot->Pcm->ComposedEnvelope != committed->Envelope
+                    || snapshot->SpectralRevision != committed->SpectralRevision
+                    || snapshot->Pcm->ComposedSpectralRevision != committed->SpectralRevision
+                    || snapshot->Pcm->ComposedEnvelopeRevision != committed->EnvelopeRevision
+                : snapshot->Envelope != committed->Envelope)))
 	{
 		reason = "Edited playback must be composed with the newest broadband envelope";
 		return false;
@@ -987,8 +992,11 @@ bool Loop::PublishAudioSpectralPlayback(
 		if (snapshot->Revision <= current->Revision
 			|| snapshot->SpectralRevision < current->SpectralRevision
 			|| snapshot->EnvelopeRevision < current->EnvelopeRevision
-			|| (snapshot->SpectralRevision == current->SpectralRevision && snapshot->Pcm != current->Pcm)
-			|| (snapshot->EnvelopeRevision == current->EnvelopeRevision && snapshot->Envelope != current->Envelope))
+			|| (snapshot->SpectralRevision == current->SpectralRevision && snapshot->Pcm != current->Pcm
+                && (!snapshot->Pcm->EnvelopeComposed || snapshot->EnvelopeRevision == current->EnvelopeRevision))
+			|| (snapshot->EnvelopeRevision == current->EnvelopeRevision
+                && (snapshot->Pcm->EnvelopeComposed ? snapshot->Pcm->ComposedEnvelope : snapshot->Envelope)
+                    != (current->Pcm->EnvelopeComposed ? current->Pcm->ComposedEnvelope : current->Envelope)))
 		{
 			reason = "Edited playback would replace a newer or inconsistent component revision";
 			return false;

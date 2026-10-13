@@ -111,13 +111,23 @@ void AudioSpectralEditor::_QueuePlayback(const std::shared_ptr<audio::AudioSpect
 			gate->PlaybackFailed.store(false);
 			const auto audible = loop->AudioSpectralPlayback();
 			std::shared_ptr<const audio::AudioSpectralPcm> pcm;
-			if (audible && audible->SpectralRevision == edit->SpectralRevision) pcm = audible->Pcm;
+			const auto composed = edit->Gains->HasOwnedCoefficients();
+            if (audible && audible->Pcm->Source == edit->Source && audible->SpectralRevision == edit->SpectralRevision
+                && (!composed || (audible->EnvelopeRevision == edit->EnvelopeRevision
+                    && audible->Pcm->ComposedEnvelope == edit->Envelope))) pcm = audible->Pcm;
 			else if (edit->Gains->IsUnity()) pcm = std::make_shared<const audio::AudioSpectralPcm>(audio::AudioSpectralPcm{edit->Source, nullptr});
 			else
 			{
 				if (!analysis) analysis = audio::AudioSpectralDsp::Analyze(edit->Source, edit->Transform, reason, stop);
 				if (!analysis) { if (!stop.stop_requested()) gate->PlaybackFailed.store(true); return; }
-				pcm = audio::AudioSpectralDsp::Reconstruct(analysis, *edit->Gains, reason, stop);
+				pcm = audio::AudioSpectralDsp::Reconstruct(analysis, *edit->Gains, reason, stop, false, edit->Envelope);
+                if (pcm && composed)
+                {
+                    auto stamped = std::make_shared<audio::AudioSpectralPcm>(*pcm);
+                    stamped->ComposedSpectralRevision = edit->SpectralRevision;
+                    stamped->ComposedEnvelopeRevision = edit->EnvelopeRevision;
+                    pcm = std::move(stamped);
+                }
 			}
 			if (stop.stop_requested()) return;
 			if (!pcm) { gate->PlaybackFailed.store(true); return; }
@@ -131,7 +141,9 @@ void AudioSpectralEditor::_QueuePlayback(const std::shared_ptr<audio::AudioSpect
 				if (!latest || !loop->IsCurrentAudioSpectralSource(*edit->Source)
 					|| edit->SpectralRevision < gate->SpectralFloor.load()
 					|| (prior && edit->SpectralRevision < prior->SpectralRevision)) return;
-				auto snapshot = audio::AudioSpectralPlaybackSnapshot::Create(pcm, latest->Envelope,
+				if (composed && (latest->SpectralRevision != edit->SpectralRevision
+                    || latest->EnvelopeRevision != edit->EnvelopeRevision || latest->Envelope != edit->Envelope)) return;
+                auto snapshot = audio::AudioSpectralPlaybackSnapshot::Create(pcm, composed ? nullptr : latest->Envelope,
 					prior ? prior->Revision + 1 : 1, edit->SpectralRevision, latest->EnvelopeRevision, reason, stop);
 				if (!snapshot) { if (!stop.stop_requested()) gate->PlaybackFailed.store(true); return; }
 				if (loop->AudioSpectralEdit() != latest) continue;
@@ -663,6 +675,17 @@ void AudioSpectralEditor::_UpdateStroke()
 					if (stroke->Envelope)
 					{
 						const auto changed = stroke->Envelope->ApplyRelativeMap(*receipt->BandInput);
+                        if (stroke->Before->Gains->HasOwnedCoefficients())
+                        {
+                            if (!stroke->Gains) stroke->Gains = std::make_shared<audio::AudioSpectralGainField>(*stroke->Before->Gains);
+                            if (stroke->Gains->ApplyOwnedBand(*stroke->Analysis, *stroke->Before->Gains, *stroke->Envelope, receipt->Reason))
+                            {
+                                receipt->Gains = stroke->Gains->ContentEquals(*stroke->Before->Gains)
+                                    ? stroke->Before->Gains : std::make_shared<const audio::AudioSpectralGainField>(*stroke->Gains);
+                                receipt->Changed = true;
+                                receipt->Envelope = stroke->PublishedEnvelope;
+                            }
+                        }
 						if (changed)
 						{
 							auto snapshot = stroke->Envelope->Snapshot(receipt->Reason);
@@ -683,7 +706,7 @@ void AudioSpectralEditor::_UpdateStroke()
 				else
 				{
 					if (!stroke->Gains) stroke->Gains = std::make_shared<audio::AudioSpectralGainField>(*stroke->Before->Gains);
-					receipt->Changed = stroke->Gains->ApplyExposureMap(*stroke->Analysis, *receipt->InputMap, !stroke->Attenuate, receipt->Reason);
+					receipt->Changed = stroke->Gains->ApplyExposureMap(*stroke->Analysis, *receipt->InputMap, !stroke->Attenuate, receipt->Reason, stroke->Before->Envelope.get());
 					if (receipt->Changed) receipt->Gains = std::make_shared<const audio::AudioSpectralGainField>(*stroke->Gains);
 				}
 			}
@@ -739,8 +762,14 @@ std::optional<double> AudioSpectralEditor::BrushLevelDb() const
             / edit->Source->Layout.SampleRate), 0.0, static_cast<double>(analysis.Geometry.BinCount - 1u)));
     const auto pending = _stroke->InputMap->ExposureAt(frame, bin)
         + (_paintReceipt && _paintReceipt->InputMap ? _paintReceipt->InputMap->ExposureAt(frame, bin) : 0.0);
+    auto beforeDb = edit->Gains->GainDb(frame, bin);
+    const auto mask = !edit->Gains->IsOwned(frame, bin) && edit->Envelope
+        ? edit->Envelope->GainAt(audio::AudioSpectralGainField::EnvelopeIndex(analysis, frame)) : 1.0f;
+    if (mask != 1.0f)
+        beforeDb = mask == 0.0f || beforeDb == audio::AudioSpectralConfig::SilenceGainDb
+            ? audio::AudioSpectralConfig::SilenceGainDb : beforeDb + static_cast<float>(20.0 * std::log10(mask));
     const auto gainDb = audio::AudioSpectralGainField::GainDbAfterExposure(analysis, frame, bin,
-        edit->Gains->GainDb(frame, bin), pending, !_stroke->Attenuate);
+        beforeDb, pending, !_stroke->Attenuate);
     const auto gain = gainDb == audio::AudioSpectralConfig::SilenceGainDb ? 0.0 : std::pow(10.0, gainDb / 20.0);
     const auto magnitude = analysis.Magnitude(frame, bin) * gain;
     return magnitude > 0.0 ? 20.0 * std::log10(magnitude) : -std::numeric_limits<double>::infinity();
@@ -783,7 +812,9 @@ void AudioSpectralEditor::_LogStroke(const char* event)
         << " limit=" << (gain == audio::AudioSpectralConfig::SilenceGainDb || absolute >= 0.99999)
         << " preview_db=" << (preview && std::isfinite(*preview) ? *preview : -999.0)
         << " original_db=" << (magnitude > 0 ? 20.0 * std::log10(magnitude) : -999.0)
-        << " envelope=" << envelope << " composed_db=" << (absolute * envelope > 0 ? 20.0 * std::log10(absolute * envelope) : -999.0)
+        << " envelope=" << envelope << " owned=" << edit->Gains->IsOwned(frame, bin)
+        << " composed_db=" << (absolute * (edit->Gains->IsOwned(frame, bin) ? 1.0 : envelope) > 0
+            ? 20.0 * std::log10(absolute * (edit->Gains->IsOwned(frame, bin) ? 1.0 : envelope)) : -999.0)
         << " edit_spec=" << edit->SpectralRevision << " edit_env=" << edit->EnvelopeRevision
         << " audio_spec=" << (playback ? playback->SpectralRevision : 0)
         << " audio_env=" << (playback ? playback->EnvelopeRevision : 0)

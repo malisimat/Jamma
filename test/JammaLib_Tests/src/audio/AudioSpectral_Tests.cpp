@@ -271,7 +271,7 @@ TEST_F(AudioSpectralTest, RelativeBandPreservesBaselineSilenceWrapAndReversesExa
 	ASSERT_TRUE(stroke->SetRelativeBand(0.25, 2.0f));
 	const auto boosted = stroke->Snapshot(reason);
 	ASSERT_TRUE(boosted);
-	EXPECT_FLOAT_EQ(boosted->GainAt(0), 0.0f);
+	EXPECT_GT(boosted->GainAt(0), 0.0f);
 	EXPECT_FLOAT_EQ(boosted->GainAt(1), audio::AudioSpectralEnvelope::MaximumGain());
 	EXPECT_GT(boosted->GainAt(999), 0.5f);
 	EXPECT_FLOAT_EQ(boosted->GainAt(998), boosted->GainAt(2));
@@ -615,7 +615,7 @@ TEST_F(AudioSpectralTest, ControllerRelativeBandReleaseUndoRedoAndCancellation)
 	ASSERT_TRUE(controller.BeginStroke(true, false, centreSeconds, 1000.0, 100.0f));
 	controller.MoveStroke(std::pair{centreSeconds + 0.01, 1000.0}, 180.0f);
 	ASSERT_TRUE(Pump(controller, loop, [&] { return loop->AudioSpectralEdit()->Envelope != beforeCancel->Envelope; }));
-	EXPECT_FLOAT_EQ(loop->AudioSpectralEdit()->Envelope->GainAt(1200ul), 0.0f); // Relative boost preserves existing silence.
+	EXPECT_FLOAT_EQ(loop->AudioSpectralEdit()->Envelope->GainAt(1200ul), 0.0f); // Sweep starts at neutral; initial zero stays exact.
 	controller.EndStroke(true);
 	ASSERT_TRUE(Pump(controller, loop, [&] { return !controller.HasStroke(); }));
 	EXPECT_EQ(loop->AudioSpectralEdit()->Envelope, beforeCancel->Envelope);
@@ -685,7 +685,7 @@ TEST_F(AudioSpectralTest, ControllerNeutralAndReversedBandRetainNonUnityBaseline
 	ASSERT_TRUE(controller.BeginStroke(true, false, 1200.0 / 48000.0, 1000.0, 100.0f));
 	controller.MoveStroke(std::nullopt, 180.0f);
 	ASSERT_TRUE(Pump(controller, loop, [&] { return controller.EditState()->Envelope != envelope; }));
-	EXPECT_FLOAT_EQ(controller.EditState()->Envelope->GainAt(1200), 0.0f);
+	EXPECT_GT(controller.EditState()->Envelope->GainAt(1200), 0.0f);
 	EXPECT_GT(controller.EditState()->Envelope->GainAt(1199), 0.5f);
 	controller.MoveStroke(std::nullopt, 100.0f);
 	controller.EndStroke(false);
@@ -1420,6 +1420,16 @@ TEST_F(AudioSpectralTest, DISABLED_ProfileSpectralPipeline)
 			<< milliseconds(analysisStart, analysisEnd) << " ms; reconstruction "
 			<< milliseconds(reconstructStart, reconstructEnd) << " ms; envelope construction/snapshot + playback validation/overview "
 			<< milliseconds(envelopeStart, envelopeEnd) << " ms\n";
+        gains->SetOwned(analysis->Geometry.FrameCount/2,80,true);
+        const auto recoveryStart=Clock::now();
+        const auto recovered=audio::AudioSpectralDsp::Reconstruct(analysis,*gains,reason,{},false,envelope);
+        const auto recoveryEnd=Clock::now(); ASSERT_TRUE(recovered) << reason;
+        for(std::size_t frame=0;frame<gains->FrameCount();++frame) gains->SetOwned(frame,80,true);
+        const auto spreadStart=Clock::now();
+        const auto spread=audio::AudioSpectralDsp::Reconstruct(analysis,*gains,reason,{},false,envelope);
+        const auto spreadEnd=Clock::now(); ASSERT_TRUE(spread) << reason;
+        std::cout << "Recovery synthesis " << seconds << "s sparse=" << milliseconds(recoveryStart,recoveryEnd)
+            << "ms all-frames=" << milliseconds(spreadStart,spreadEnd) << "ms\n";
 	}
 }
 
@@ -1509,14 +1519,14 @@ TEST_F(AudioSpectralTest, RelativeSweepPlateauSilenceBoundsAndLocalNeutral)
     auto snapshot = stroke->Snapshot(reason);
     const auto target = audio::AudioSpectralEnvelope::TargetFromDragPixels(80);
     for (unsigned long i = 200; i <= 400; ++i)
-        EXPECT_FLOAT_EQ(snapshot->GainAt(i), baseline[i] * target);
+        EXPECT_FLOAT_EQ(snapshot->GainAt(i), static_cast<float>(audio::AudioSpectralEnvelope::RelativeGain(baseline[i],target,std::pow(10.0,audio::AudioSpectralConfig::SpectralFloorDb/20.0),audio::AudioSpectralEnvelope::MaximumGain())));
     map->Clear();
     ASSERT_TRUE(map->Accumulate(400, 80, 400, 0, path, reason));
     ASSERT_TRUE(stroke->ApplyRelativeMap(*map));
     snapshot = stroke->Snapshot(reason);
     EXPECT_FLOAT_EQ(snapshot->GainAt(400), baseline[400]);
     EXPECT_FLOAT_EQ(snapshot->GainAt(200), baseline[200] * target);
-    EXPECT_FLOAT_EQ(snapshot->GainAt(250), 0.0f);
+    EXPECT_GT(snapshot->GainAt(250), 0.0f);
     EXPECT_FLOAT_EQ(snapshot->GainAt(500), baseline[500]);
     map->Clear();
     ASSERT_TRUE(map->Accumulate(200, 80, 200, 160, path, reason));
@@ -1645,7 +1655,7 @@ TEST_F(AudioSpectralTest, RelativeWinnerMetadataOnlyRepaintRefreshesRampsAndPres
     EXPECT_FLOAT_EQ(refreshed->GainAt(199), static_cast<float>(1.0 + shoulder * shoulder
         * (audio::AudioSpectralEnvelope::TargetFromDragPixels(80) - 1.0))); // Same raw candidate as before repaint.
     for (unsigned long index = 0; index < 199; ++index)
-    { EXPECT_FLOAT_EQ(ramped->GainAt(index), 0.0f); EXPECT_FLOAT_EQ(refreshed->GainAt(index), 0.0f); }
+    { EXPECT_GE(ramped->GainAt(index), 0.0f); EXPECT_GE(refreshed->GainAt(index), ramped->GainAt(index)); }
 }
 
 TEST_F(AudioSpectralTest, RelativeSweptControllerRetainsFullBackloggedPathAndOneUndo)
@@ -1787,4 +1797,180 @@ TEST_F(AudioSpectralTest, DetailAdmissionLeavesRoomForAnotherShortEditedLoop)
     EXPECT_FALSE(reason.empty());
     ASSERT_TRUE(audio::AudioSpectralDsp::SelectTransform(Source(4096ul)->Layout,budget,second,r2,reason)) << reason;
     EXPECT_LE(budget->UsedBytes(),audio::AudioSpectralConfig::MaxWorkingBytes);
+}
+
+TEST_F(AudioSpectralTest, MaskedExposureRecoversOnlyTouchedCoefficientsAndRetainsOriginalSilence)
+{
+    std::string reason;
+    for (const float mask : {0.0f, 1.0e-30f, 0.2f})
+    {
+        const auto analysis = audio::AudioSpectralDsp::Analyze(Source(4096), Transform(), reason);
+        ASSERT_TRUE(analysis) << reason;
+        auto gains = audio::AudioSpectralGainField::Unity(analysis->Geometry.FrameCount, analysis->Geometry.BinCount, reason);
+        const auto envelope = audio::AudioSpectralEnvelope::FromGains(std::vector<float>(4096, mask), reason);
+        auto exposure = audio::AudioSpectralGainField::ExposureMap::Create(gains->FrameCount(), gains->BinCount(), reason);
+        EXPECT_FALSE(gains->ApplyExposureMap(*analysis,*exposure,true,reason,envelope.get()));
+        EXPECT_FALSE(gains->HasOwnedCoefficients());
+        ASSERT_TRUE(exposure->Accumulate(*analysis, 0.03, 1000, 0.03, 1000, 0.01, reason, 0.005, 0.0625));
+        ASSERT_TRUE(gains->ApplyExposureMap(*analysis, *exposure, true, reason, envelope.get()));
+        ASSERT_TRUE(gains->HasOwnedCoefficients());
+        std::size_t picked = gains->FrameCount(); unsigned int pickedBin = 0;
+        for (std::size_t frame=0; frame<gains->FrameCount(); ++frame)
+            for (unsigned int bin=0; bin<gains->BinCount(); ++bin)
+                if (exposure->ExposureAt(frame,bin) > 0.0 && analysis->Magnitude(frame,bin)>0.0)
+                {
+                    EXPECT_TRUE(gains->IsOwned(frame,bin)); picked=frame; pickedBin=bin;
+                }
+                else { EXPECT_FALSE(gains->IsOwned(frame,bin)); EXPECT_FLOAT_EQ(gains->GainDb(frame,bin),0.0f); }
+        ASSERT_LT(picked,gains->FrameCount());
+        const auto before = gains->GainDb(picked,pickedBin);
+        ASSERT_TRUE(gains->ApplyExposureMap(*analysis,*exposure,true,reason,envelope.get()));
+        EXPECT_NEAR(gains->GainDb(picked,pickedBin)-before,60.0*exposure->ExposureAt(picked,pickedBin),0.0001);
+        const auto pcm = audio::AudioSpectralDsp::Reconstruct(analysis,*gains,reason,{},false,envelope);
+        ASSERT_TRUE(pcm) << reason; EXPECT_TRUE(pcm->EnvelopeComposed);
+        EXPECT_EQ(pcm->ComposedEnvelope,envelope);
+        double power=0; for (const auto sample : pcm->Samples()) power+=sample*sample;
+        EXPECT_GT(power,0.0);
+        const auto zero = audio::AudioSpectralDsp::Analyze(Source(4096,true),Transform(),reason);
+        auto silent = audio::AudioSpectralGainField::Unity(zero->Geometry.FrameCount,zero->Geometry.BinCount,reason);
+        EXPECT_FALSE(silent->ApplyExposureMap(*zero,*exposure,true,reason,envelope.get()));
+        EXPECT_FALSE(silent->HasOwnedCoefficients());
+    }
+}
+
+TEST_F(AudioSpectralTest, OwnedCoefficientAltTargetsRecoverFromZeroAndReverseExactly)
+{
+    std::string reason;
+    const auto analysis=audio::AudioSpectralDsp::Analyze(Source(4096),Transform(),reason);
+    auto before=audio::AudioSpectralGainField::Unity(analysis->Geometry.FrameCount,analysis->Geometry.BinCount,reason);
+    const std::size_t frame=20; const unsigned int bin=5;
+    before->SetOwned(frame,bin,true); before->SetGainDb(frame,bin,audio::AudioSpectralConfig::SilenceGainDb);
+    auto gains=*before;
+    const auto unity=audio::AudioSpectralEnvelope::Unity(4096,reason);
+    auto band=audio::AudioSpectralEnvelopeStroke::Begin(unity,48000,reason,0.02);
+    auto map=audio::AudioSpectralEnvelopeStroke::RelativeMap::Create(4096,48000,0.02,reason);
+    audio::AudioSpectralEnvelopeStroke::RelativePath path;
+    const auto centre=audio::AudioSpectralGainField::EnvelopeIndex(*analysis,frame);
+    ASSERT_TRUE(map->Accumulate(centre,80,centre,80,path,reason));
+    band->ApplyRelativeMap(*map);
+    ASSERT_TRUE(gains.ApplyOwnedBand(*analysis,*before,*band,reason));
+    EXPECT_GT(gains.GainLinear(frame,bin),0.0);
+    map->Clear(); ASSERT_TRUE(map->Accumulate(centre,0,centre,0,path,reason)); band->ApplyRelativeMap(*map);
+    ASSERT_TRUE(gains.ApplyOwnedBand(*analysis,*before,*band,reason));
+    EXPECT_EQ(gains.GainDb(frame,bin),before->GainDb(frame,bin)); EXPECT_TRUE(gains.IsOwned(frame,bin));
+    EXPECT_DOUBLE_EQ(audio::AudioSpectralEnvelope::RelativeGain(0,1,1e-5,16),0);
+    EXPECT_DOUBLE_EQ(audio::AudioSpectralEnvelope::RelativeGain(0,2,1e-5,16),2e-5);
+}
+
+TEST_F(AudioSpectralTest, RecoveryTwoToneWolaHasBoundedTransitionSupportAndNoUnrelatedTone)
+{
+    std::string reason;
+    auto source=Source(8192);
+    for (std::size_t i=0;i<source->Samples.size();++i)
+    {
+        const auto t=static_cast<double>(i)-source->Layout.BodyOffset;
+        source->Samples[i]=static_cast<float>(0.2*std::sin(t*2.0*3.14159265358979323846*8.0/256.0)
+            +0.2*std::sin(t*2.0*3.14159265358979323846*32.0/256.0));
+    }
+    const auto analysis=audio::AudioSpectralDsp::Analyze(source,Transform(),reason);
+    ASSERT_TRUE(analysis) << reason;
+    auto gains=audio::AudioSpectralGainField::Unity(analysis->Geometry.FrameCount,analysis->Geometry.BinCount,reason);
+    const auto mute=audio::AudioSpectralEnvelope::FromGains(std::vector<float>(8192,0.0f),reason);
+    auto map=audio::AudioSpectralGainField::ExposureMap::Create(gains->FrameCount(),gains->BinCount(),reason);
+    ASSERT_TRUE(map->Accumulate(*analysis,4096.0/48000.0,1500,4096.0/48000.0,1500,1.5,reason,0.015,0.0625));
+    ASSERT_TRUE(gains->ApplyExposureMap(*analysis,*map,true,reason,mute.get()));
+    const auto pcm=audio::AudioSpectralDsp::Reconstruct(analysis,*gains,reason,{},false,mute);
+    ASSERT_TRUE(pcm) << reason;
+    std::int64_t first=8192,last=0;
+    for (std::size_t frame=0;frame<gains->FrameCount();++frame)
+        if(gains->FrameHasOwned(frame))
+        {
+            first=(std::min)(first,analysis->Geometry.FrameCentre(frame,64)-128);
+            last=(std::max)(last,analysis->Geometry.FrameCentre(frame,64)+128);
+        }
+    double selectedReal=0,selectedImaginary=0,otherReal=0,otherImaginary=0,leakage=0;
+    for(unsigned long i=0;i<8192;++i)
+    {
+        const auto sample=pcm->Samples()[source->Layout.BodyOffset+i];
+        if(static_cast<std::int64_t>(i)<first || static_cast<std::int64_t>(i)>=last)
+            leakage=(std::max)(leakage,std::abs(static_cast<double>(sample)));
+        if(i>=3840 && i<4352)
+        {
+            selectedReal+=sample*std::cos(i*2.0*3.14159265358979323846*8.0/256.0);
+            selectedImaginary+=sample*std::sin(i*2.0*3.14159265358979323846*8.0/256.0);
+            otherReal+=sample*std::cos(i*2.0*3.14159265358979323846*32.0/256.0);
+            otherImaginary+=sample*std::sin(i*2.0*3.14159265358979323846*32.0/256.0);
+        }
+    }
+    const auto selected=std::hypot(selectedReal,selectedImaginary)/256.0;
+    const auto unrelated=std::hypot(otherReal,otherImaginary)/256.0;
+    EXPECT_GT(selected,0.1); EXPECT_LT(unrelated,selected*0.001); EXPECT_EQ(leakage,0.0);
+    std::cout << "Recovery WOLA selected=" << selected << " unrelated=" << unrelated
+        << " outside-support=" << leakage << " support=" << first << "," << last << std::endl;
+    // Every coefficient owned, unity payload: pass1 uses all prefix/body weights.
+    for(std::size_t frame=0;frame<gains->FrameCount();++frame)
+        for(unsigned int bin=0;bin<gains->BinCount();++bin)
+        { gains->SetOwned(frame,bin,true); gains->SetGainDb(frame,bin,0); }
+    const auto roundtrip=audio::AudioSpectralDsp::Reconstruct(analysis,*gains,reason,{},false,mute);
+    ASSERT_TRUE(roundtrip) << reason;
+    for(unsigned long i=analysis->Geometry.TargetFirstStorage;i<analysis->Geometry.TargetFirstStorage+analysis->Geometry.TargetLength;++i)
+        EXPECT_NEAR(roundtrip->Samples()[i],source->Samples[i],2e-6);
+    const auto malformed=audio::AudioSpectralEnvelope::Unity(2,reason);
+    EXPECT_FALSE(audio::AudioSpectralDsp::Reconstruct(analysis,*gains,reason,{},false,malformed));
+}
+
+TEST_F(AudioSpectralTest, ControllerAltSilenceOrdinaryRecoveryUndoRedoReopenAndExactPublicationPair)
+{
+    std::string reason;
+    const auto loop=RecordedLoop(8192);
+    actions::ActionUndoHistory history;
+    editor::AudioSpectralEditor controller;
+    controller.SetUndoHistory(&history); controller.Open(loop);
+    ASSERT_TRUE(Pump(controller,loop,[&]{return controller.Status()==editor::AudioSpectralEditor::State::Ready;}));
+    const auto centre=4096.0/48000.0;
+    ASSERT_TRUE(controller.BeginStroke(true,false,centre,20,100,0.005,0.0625,0.04));
+    controller.MoveStroke(std::pair{centre,20.0},-60); controller.EndStroke(false);
+    ASSERT_TRUE(Pump(controller,loop,[&]{return !controller.HasStroke();}));
+    const auto muted=controller.EditState(); ASSERT_TRUE(muted->Envelope);
+    EXPECT_FLOAT_EQ(muted->Envelope->GainAt(4096),0);
+    ASSERT_TRUE(controller.BeginStroke(false,false,centre,20,0,0.005,0.0625));
+    std::this_thread::sleep_for(std::chrono::milliseconds(60)); controller.MoveStroke(std::pair{centre,20.0},0);
+    controller.EndStroke(false);
+    ASSERT_TRUE(Pump(controller,loop,[&]{return !controller.HasStroke();}));
+    const auto recovered=controller.EditState(); EXPECT_TRUE(recovered->Gains->HasOwnedCoefficients());
+    EXPECT_EQ(recovered->Envelope,muted->Envelope);
+    ASSERT_TRUE(Pump(controller,loop,[&]{const auto p=loop->AudioSpectralPlayback(); return p && p->SpectralRevision==recovered->SpectralRevision && p->EnvelopeRevision==recovered->EnvelopeRevision;}));
+    const auto playback=loop->AudioSpectralPlayback(); EXPECT_FALSE(playback->Envelope);
+    EXPECT_TRUE(playback->Pcm->EnvelopeComposed); EXPECT_EQ(playback->Pcm->ComposedEnvelope,recovered->Envelope);
+    ASSERT_TRUE(history.Undo()); EXPECT_EQ(controller.EditState()->Gains,muted->Gains);
+    ASSERT_TRUE(Pump(controller,loop,[&]{const auto p=loop->AudioSpectralPlayback(); return p && p->SpectralRevision==controller.EditState()->SpectralRevision;}));
+    EXPECT_FALSE(loop->AudioSpectralPlayback()->Pcm->EnvelopeComposed);
+    ASSERT_TRUE(history.Redo()); EXPECT_EQ(controller.EditState()->Gains,recovered->Gains);
+    controller.Close(); controller.Open(loop);
+    ASSERT_TRUE(Pump(controller,loop,[&]{return controller.Status()==editor::AudioSpectralEditor::State::Ready;}));
+    EXPECT_EQ(controller.EditState()->Gains,recovered->Gains);
+    auto stale=std::make_shared<audio::AudioSpectralPcm>(*playback->Pcm);
+    const auto latest=controller.EditState();
+    EXPECT_FALSE(audio::AudioSpectralPlaybackSnapshot::Create(stale,nullptr,99,latest->SpectralRevision,latest->EnvelopeRevision,reason));
+    const auto newEnvelope=audio::AudioSpectralEnvelope::Unity(latest->Source->Layout.LogicalLength,reason);
+    const auto newEdit=audio::AudioSpectralEditState::Create(latest->Source,latest->Transform,latest->Gains,newEnvelope,
+        latest->Revision+1,latest->SpectralRevision,latest->EnvelopeRevision+1,reason);
+    ASSERT_TRUE(loop->PublishAudioSpectralEdit(newEdit,reason));
+    const auto oldPair=audio::AudioSpectralPlaybackSnapshot::Create(stale,nullptr,99,
+        stale->ComposedSpectralRevision,stale->ComposedEnvelopeRevision,reason);
+    ASSERT_TRUE(oldPair) << reason;
+    EXPECT_FALSE(loop->PublishAudioSpectralPlayback(oldPair,reason));
+    EXPECT_FALSE(audio::AudioSpectralPlaybackSnapshot::Create(stale,nullptr,100,
+        newEdit->SpectralRevision,newEdit->EnvelopeRevision,reason));
+}
+
+TEST_F(AudioSpectralTest, OwnershipBitmapAdmissionRetainsThirtySecondBaselineTransform)
+{
+    std::string reason;
+    const audio::AudioSpectralSourceLayout layout{1440000,1440037,8,48000};
+    const auto estimate=audio::AudioSpectralDsp::EstimateWorkingMemory(layout,{1,4096,1024},reason);
+    ASSERT_TRUE(estimate) << reason;
+    EXPECT_LE(estimate->WorkingBytes,audio::AudioSpectralConfig::MaxWorkingBytes);
+    EXPECT_EQ(sizeof(audio::AudioSpectralGainField::Tile),1024*sizeof(float)+128);
+    std::cout << "Ownership 30s baseline peak MiB=" << estimate->WorkingBytes/(1024.0*1024.0) << std::endl;
 }

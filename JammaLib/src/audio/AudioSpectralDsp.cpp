@@ -1,5 +1,6 @@
 #include "AudioSpectralDsp.h"
 #include "AudioSpectralGainField.h"
+#include "AudioSpectralEnvelope.h"
 
 #include <algorithm>
 #include <cmath>
@@ -175,11 +176,13 @@ std::shared_ptr<const AudioSpectralAnalysis> AudioSpectralDsp::Analyze(
 
 std::shared_ptr<const AudioSpectralPcm> AudioSpectralDsp::Reconstruct(
 	const std::shared_ptr<const AudioSpectralAnalysis>& analysis, const AudioSpectralGainField& gains,
-	std::string& reason, std::stop_token stop, bool forceUnityRoundTrip)
+	std::string& reason, std::stop_token stop, bool forceUnityRoundTrip,
+    std::shared_ptr<const AudioSpectralEnvelope> envelope)
 {
 	reason.clear();
 	if (!analysis || !analysis->Source || gains.FrameCount() != analysis->Geometry.FrameCount
-		|| gains.BinCount() != analysis->Geometry.BinCount)
+		|| gains.BinCount() != analysis->Geometry.BinCount
+        || (envelope && envelope->Length() != analysis->Source->Layout.LogicalLength))
 	{
 		reason = "Spectral reconstruction dimensions do not match their source";
 		return nullptr;
@@ -220,9 +223,16 @@ std::shared_ptr<const AudioSpectralPcm> AudioSpectralDsp::Reconstruct(
 		std::vector<double> normalization(geometry.TargetLength, 0.0);
 		std::vector<float> samples(analysis->Transform.WindowSamps);
 		std::vector<AudioSpectralFft::Bin> coefficients(geometry.BinCount);
+        const auto composed = gains.HasOwnedCoefficients();
+        pcm->EnvelopeComposed = composed;
+        if (composed) pcm->ComposedEnvelope = envelope;
+        for (unsigned int pass = 0; pass < (composed ? 2u : 1u); ++pass)
+        {
+        if (pass != 0u) std::fill(sum.begin(), sum.end(), 0.0);
 		for (std::size_t frame = 0u; frame < geometry.FrameCount; ++frame)
 		{
 			if (stop.stop_requested()) { reason = "Audio reconstruction cancelled"; return nullptr; }
+			if (pass == 1u && !gains.FrameHasOwned(frame)) continue;
 			const auto original = analysis->Frame(frame);
 			for (unsigned int bin = 0u; bin < geometry.BinCount; ++bin)
 			{
@@ -233,7 +243,8 @@ std::shared_ptr<const AudioSpectralPcm> AudioSpectralDsp::Reconstruct(
 					reason = "Spectral gain is outside its finite bounds";
 					return nullptr;
 				}
-				const auto gain = gains.GainLinear(frame, bin);
+				const auto gain = composed && gains.IsOwned(frame, bin) != (pass == 1u)
+                    ? 0.0 : gains.GainLinear(frame, bin);
 				// Positive scaling retains original complex direction. Zero coefficients
 				// stay exactly zero; no phase division or iterative phase recovery.
 				coefficients[bin] = { static_cast<float>(original[bin].Real * gain), static_cast<float>(original[bin].Imaginary * gain) };
@@ -251,7 +262,7 @@ std::shared_ptr<const AudioSpectralPcm> AudioSpectralDsp::Reconstruct(
 				if (target < 0 || static_cast<std::uint64_t>(target) >= geometry.TargetLength) continue;
 				const auto window = analysis->Window[i];
 				sum[static_cast<std::size_t>(target)] += static_cast<double>(samples[i]) * window;
-				normalization[static_cast<std::size_t>(target)] += static_cast<double>(window) * window;
+				if (pass == 0u) normalization[static_cast<std::size_t>(target)] += static_cast<double>(window) * window;
 			}
 		}
 		for (unsigned long first = 0ul; first < geometry.TargetLength; first += 4096ul)
@@ -271,9 +282,29 @@ std::shared_ptr<const AudioSpectralPcm> AudioSpectralDsp::Reconstruct(
 					reason = "Spectral reconstruction exceeded finite float range";
 					return nullptr;
 				}
-				(*output)[geometry.TargetFirstStorage + index] = sample;
+				const auto storage = geometry.TargetFirstStorage + index;
+                if (pass == 0u)
+                    (*output)[storage] = composed && envelope ? sample * envelope->GainAt(
+                        analysis->Source->Layout.WrappedBodyIndex(storage)) : sample;
+                else (*output)[storage] += sample;
+                if (!std::isfinite((*output)[storage]))
+                { reason = "Composed spectral output exceeded finite float range"; return nullptr; }
 			}
 		}
+		}
+        // Preserve original physical capture tail semantics when baking the envelope.
+        if (composed && envelope)
+            for (std::size_t storage = 0; storage < output->size(); ++storage)
+                {
+                if ((storage & 4095u) == 0u && stop.stop_requested())
+                { reason = "Audio reconstruction cancelled"; return nullptr; }
+                if (storage < geometry.TargetFirstStorage || storage >= geometry.TargetFirstStorage + geometry.TargetLength)
+                {
+                    (*output)[storage] *= envelope->GainAt(analysis->Source->Layout.WrappedBodyIndex(static_cast<unsigned long>(storage)));
+                    if (!std::isfinite((*output)[storage]))
+                    { reason = "Composed spectral context exceeded finite float range"; return nullptr; }
+                }
+            }
 		// Everything outside prefix fade + body is copied unchanged, including
 		// unrelated physical capture tail and the earlier private prefix.
 		pcm->ProcessedSamples = std::move(output);

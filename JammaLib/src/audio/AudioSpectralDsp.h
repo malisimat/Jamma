@@ -14,6 +14,7 @@
 namespace audio
 {
 	class AudioSpectralGainField;
+	class AudioSpectralEnvelope;
 
 	struct AudioSpectralGeometry
 	{
@@ -55,6 +56,10 @@ namespace audio
 		std::shared_ptr<const AudioSpectralSource> Source;
 		// Empty means exact original PCM, with no STFT arithmetic or float copying.
 		std::shared_ptr<const std::vector<float>> ProcessedSamples;
+		// Non-null only for ownership recovery: synthesis already includes this layer.
+		std::shared_ptr<const AudioSpectralEnvelope> ComposedEnvelope;
+		bool EnvelopeComposed = false;
+		std::uint64_t ComposedSpectralRevision = 0u, ComposedEnvelopeRevision = 0u;
 		bool UsesOriginal() const noexcept { return !ProcessedSamples; }
 		std::span<const float> Samples() const noexcept
 		{
@@ -85,7 +90,8 @@ namespace audio
 		static std::shared_ptr<const AudioSpectralPcm> Reconstruct(
 			const std::shared_ptr<const AudioSpectralAnalysis>& analysis,
 			const AudioSpectralGainField& gains, std::string& reason,
-			std::stop_token stop = {}, bool forceUnityRoundTrip = false);
+			std::stop_token stop = {}, bool forceUnityRoundTrip = false,
+			std::shared_ptr<const AudioSpectralEnvelope> envelope = nullptr);
 
 	private:
 		static float _SourceSample(const AudioSpectralSource& source, std::int64_t bodyIndex) noexcept;
