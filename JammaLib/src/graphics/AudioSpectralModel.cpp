@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <cmath>
 #include <new>
+#include <limits>
 #include <stdexcept>
 #include <utility>
 
@@ -134,19 +135,24 @@ std::shared_ptr<const AudioSpectralDisplay> AudioSpectralModel::BuildDisplay(
 				const auto firstBin = (std::min)(static_cast<unsigned int>(binPosition), analysis.Geometry.BinCount - 1u);
 				const auto nextBin = (std::min)(firstBin + 1u, analysis.Geometry.BinCount - 1u);
 				const auto binWeight = std::clamp(binPosition - firstBin, 0.0, 1.0);
-				const auto magnitude = [&](std::size_t frame, unsigned int bin)
+				const auto height = [&](std::size_t frame, unsigned int bin)
 				{
-					return analysis.Magnitude(frame, bin) * (gains ? gains->GainLinear(frame, bin) : 1.0);
+					const auto magnitude = analysis.Magnitude(frame, bin)
+						* (gains ? gains->GainLinear(frame, bin) : 1.0) * envelopeGain;
+					return !std::isfinite(magnitude) || magnitude < 0.0
+						? std::numeric_limits<float>::quiet_NaN() : _CompressMagnitude(magnitude);
 				};
-				const auto first = std::lerp(magnitude(firstFrame, firstBin), magnitude(firstFrame, nextBin), binWeight);
-				const auto next = std::lerp(magnitude(nextFrame, firstBin), magnitude(nextFrame, nextBin), binWeight);
-				const auto value = std::lerp(first, next, frameWeight) * envelopeGain;
+				// Interpolate visible dB heights: a loud corner must not suddenly
+				// dominate quieter neighbours as its amplitude rises exponentially.
+				const auto first = std::lerp(height(firstFrame, firstBin), height(firstFrame, nextBin), binWeight);
+				const auto next = std::lerp(height(nextFrame, firstBin), height(nextFrame, nextBin), binWeight);
+				const auto value = std::lerp(first, next, frameWeight);
 				if (!std::isfinite(value) || value < 0.0)
 				{
-					reason = "Spectral display contains non-finite magnitudes";
+					reason = "Spectral display contains invalid magnitudes or heights";
 					return nullptr;
 				}
-				display->Heights[row * (timeSegments + 1u) + column] = _CompressMagnitude(value);
+				display->Heights[row * (timeSegments + 1u) + column] = static_cast<float>(value);
 			}
 		}
 		// Duplicate the wrapped time endpoint, rather than dropping the last mesh edge.

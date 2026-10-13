@@ -526,6 +526,74 @@ TEST_F(AudioSpectralTest, AbsoluteCeilingReachesSameLevelFromQuietAndLoudOrigina
     EXPECT_NEAR(quietHeight, 90.0f / 114.0f, 1e-4f);
     EXPECT_NEAR(loudHeight, quietHeight, 1e-4f);
 }
+TEST_F(AudioSpectralTest, EqualExposureRaisesQuietMediumAndLoudHeightsAtTheSameRate)
+{
+    std::string reason;
+    const auto original = audio::AudioSpectralDsp::Analyze(Source(1031ul), Transform(), reason);
+    ASSERT_TRUE(original) << reason;
+    for (const auto db : { -70.0, -35.0, -8.0 })
+    {
+        SCOPED_TRACE(db);
+        auto analysis = *original;
+        const auto amplitude = std::pow(10.0, db / 20.0);
+        for (std::size_t frame = 0; frame < analysis.Geometry.FrameCount; ++frame)
+            for (unsigned int bin = 0; bin < analysis.Geometry.BinCount; ++bin)
+                analysis.Coefficients[frame * analysis.Geometry.BinCount + bin] = {
+                    static_cast<float>(amplitude * analysis.WindowSum
+                        / (bin == 0u || bin + 1u == analysis.Geometry.BinCount ? 1.0 : 2.0)), 0.0f };
+        auto gains = audio::AudioSpectralGainField::Unity(analysis.Geometry.FrameCount, analysis.Geometry.BinCount, reason);
+        ASSERT_TRUE(gains);
+        const auto before = graphics::AudioSpectralModel::BuildDisplay(analysis, &*gains, nullptr, 1, 4, 3, reason);
+        ASSERT_TRUE(before) << reason;
+        ASSERT_TRUE(gains->PaintOvalSegment(analysis, 0.0, 20.0, 0.0, 20.0,
+            audio::AudioSpectralConfig::StrokeUpdateSeconds, true, reason)) << reason;
+        const auto after = graphics::AudioSpectralModel::BuildDisplay(analysis, &*gains, nullptr, 2, 4, 3, reason);
+        ASSERT_TRUE(after) << reason;
+        EXPECT_NEAR(after->Heights[0] - before->Heights[0], 2.0 / 114.0, 1e-6);
+        const auto frame = static_cast<std::size_t>(-analysis.Geometry.FirstFrameCentre / analysis.Transform.HopSamps);
+        EXPECT_NEAR(gains->GainDb(frame, 0), 2.0, 1e-6);
+    }
+}
+
+TEST_F(AudioSpectralTest, ExposureNearCeilingClampsWithoutOvershootAndRemainsReversibleBelowIt)
+{
+    std::string reason;
+    const auto original = audio::AudioSpectralDsp::Analyze(Source(1031ul), Transform(), reason);
+    ASSERT_TRUE(original) << reason;
+    auto analysis = *original;
+    analysis.Coefficients[0] = { static_cast<float>(analysis.WindowSum * std::pow(10.0, -1.0 / 20.0)), 0.0f };
+    const auto boosted = audio::AudioSpectralGainField::GainDbAfterExposure(analysis, 0, 0, 0.0f,
+        audio::AudioSpectralConfig::StrokeUpdateSeconds, true);
+    EXPECT_NEAR(20.0 * std::log10(analysis.Magnitude(0, 0)) + boosted, 0.0, 1e-6);
+    EXPECT_FLOAT_EQ(audio::AudioSpectralGainField::GainDbAfterExposure(analysis, 0, 0, boosted, 1.0, true), boosted);
+    const auto reduced = audio::AudioSpectralGainField::GainDbAfterExposure(analysis, 0, 0, boosted,
+        audio::AudioSpectralConfig::StrokeUpdateSeconds, false);
+    EXPECT_NEAR(reduced, boosted - 2.0, 1e-6);
+}
+
+TEST_F(AudioSpectralTest, DisplayInterpolatesUnequalCornerDbHeightsRatherThanLinearAmplitudes)
+{
+    std::string reason;
+    const auto original = audio::AudioSpectralDsp::Analyze(Source(1031ul), Transform(), reason);
+    ASSERT_TRUE(original) << reason;
+    auto analysis = *original;
+    const auto framePosition = (1031.0 / 4.0 - analysis.Geometry.FirstFrameCentre) / analysis.Transform.HopSamps;
+    const auto frame = static_cast<std::size_t>(framePosition);
+    const auto hz = 20.0 * std::pow(24000.0 / 20.0, 1.0 / 3.0);
+    const auto binPosition = hz * analysis.Transform.WindowSamps / 48000.0;
+    const auto bin = static_cast<unsigned int>(binPosition);
+    const double db[2][2] = { { -70.0, -40.0 }, { -20.0, -5.0 } };
+    for (unsigned int f = 0; f < 2; ++f)
+        for (unsigned int b = 0; b < 2; ++b)
+            analysis.Coefficients[(frame + f) * analysis.Geometry.BinCount + bin + b] = {
+                static_cast<float>(std::pow(10.0, db[f][b] / 20.0) * analysis.WindowSum / 2.0), 0.0f };
+    const auto display = graphics::AudioSpectralModel::BuildDisplay(analysis, nullptr, nullptr, 1, 4, 3, reason);
+    ASSERT_TRUE(display) << reason;
+    const auto expectedDb = std::lerp(std::lerp(db[0][0], db[0][1], binPosition - bin),
+        std::lerp(db[1][0], db[1][1], binPosition - bin), framePosition - frame);
+    EXPECT_NEAR(display->Heights[6], (expectedDb + 90.0) / 114.0, 1e-6);
+}
+
 TEST_F(AudioSpectralTest, AuthoredSpectralSilenceIsExactAndBoostRecoversRetainedOriginal)
 {
     std::string reason;
@@ -607,7 +675,9 @@ TEST_F(AudioSpectralTest, ThousandsOfMovingSamplesAccumulateWithoutWaitingForRec
         ASSERT_TRUE(controller.BeginStroke(false, false, 0.1, 20.0, 100.0f));
         for (int update = 0; update < 2000; ++update)
             controller.MoveStroke(std::pair{0.1 + 0.0005*std::sin(update*0.13), 20.0}, 100.0f);
-        std::this_thread::sleep_for(std::chrono::milliseconds(40));
+        // Allow the configured rate to saturate this -6 dB fixture while the
+        // worker stays blocked; the assertion concerns input ownership, not speed.
+        std::this_thread::sleep_for(std::chrono::duration<double>(12.0 / audio::AudioSpectralConfig::BrushDbPerSecond));
         controller.MoveStroke(std::pair{0.1, 20.0}, 100.0f);
         const auto preview = controller.BrushLevelDb();
         ASSERT_TRUE(preview);

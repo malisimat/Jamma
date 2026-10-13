@@ -20,7 +20,7 @@ namespace audio
         static constexpr double SpectralCeilingDb = 0.0;
 		static constexpr double BrushTimeRadiusSeconds = 0.05;
 		static constexpr double BrushFrequencyRadiusOctaves = 0.25;
-		static constexpr double BrushDbPerSecond = 480.0;
+		static constexpr double BrushDbPerSecond = 60.0; // 2 dB at the nominal 30 Hz publication rate.
         static constexpr double MaximumBrushExposureSeconds = (MaximumSpectralGainDb - MinimumSpectralGainDb) / BrushDbPerSecond;
 		static constexpr double StrokeUpdateSeconds = 1.0 / 30.0;
         // Two active maps and at most one cancelled in-flight map; each has reserved dirty indices.
