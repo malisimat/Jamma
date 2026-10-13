@@ -321,35 +321,113 @@ TEST_F(AudioSpectralTest, SpectralControlsWheelPrecedenceLimitsAndProjectedPanZo
 	EXPECT_DOUBLE_EQ(controls.Viewport.Upper, controls.Viewport.Lower + 0.0625);
 }
 
-TEST_F(AudioSpectralTest, ViewportDisplaySamplesAndPicksItsOwnImmutableFrequencyMapping)
+TEST_F(AudioSpectralTest, NavigationUsesCanonicalDisplayAndClipsPickingToVisibleRectangle)
 {
-	std::string reason;
-	const auto analysis = audio::AudioSpectralDsp::Analyze(Source(48000ul), Transform(), reason);
-	ASSERT_TRUE(analysis);
-	const graphics::AudioSpectralViewport viewport{0.25, 0.75};
-	const auto display = graphics::AudioSpectralModel::BuildDisplay(*analysis, nullptr, nullptr, 1, 16, 8, reason, {}, viewport, 2);
-	ASSERT_TRUE(display) << reason;
-	EXPECT_FALSE(display->IncludesDc);
-	EXPECT_EQ(display->Viewport, viewport);
-	EXPECT_EQ(display->PresentationRevision, 2u);
-	EXPECT_NEAR(display->FrequencyAt(0), 20.0 * std::pow(1200.0, 0.25), 1e-4);
-	EXPECT_NEAR(display->FrequencyAt(1), 20.0 * std::pow(1200.0, 0.75), 1e-3);
-	for (const auto v : {0.0, 0.125, 0.5, 0.875, 1.0}) EXPECT_NEAR(display->FrequencyV(display->FrequencyAt(v)), v, 1e-7);
-	graphics::AudioSpectralModel::Surface surface{display, 100.0f, 1.0f, 0.0f};
-	const auto vertex = graphics::AudioSpectralModel::LocalVertex(surface, 8, 4);
-	const auto hit = editor::AudioSpectralPicking::Intersect(surface, vertex + glm::vec3(0, 200, 0), {0, -1, 0});
-	ASSERT_TRUE(hit);
-	EXPECT_NEAR(display->FrequencyAt(hit->FrequencyV), display->FrequencyAt(0.5), 0.001);
-	// Same edit can publish a new view; an older same-edit receipt is rejected.
-	gui::GuiModelParams params;
-	graphics::AudioSpectralModel model(params, 16, 8);
-	ASSERT_TRUE(model.SetDisplay(display, reason));
-	const auto old = graphics::AudioSpectralModel::BuildDisplay(*analysis, nullptr, nullptr, 1, 16, 8, reason, {}, {}, 1);
-	ASSERT_TRUE(old);
-	EXPECT_FALSE(model.SetDisplay(old, reason));
-	const auto newest = graphics::AudioSpectralModel::BuildDisplay(*analysis, nullptr, nullptr, 1, 16, 8, reason, {}, {0.5, 1.0}, 3);
-	EXPECT_TRUE(model.SetDisplay(newest, reason));
-	EXPECT_EQ(display->Viewport, viewport); // New controls never mutate the prior display mapping.
+    std::string reason;
+    const auto analysis = audio::AudioSpectralDsp::Analyze(Source(48000ul), Transform(), reason);
+    ASSERT_TRUE(analysis);
+    const auto display = graphics::AudioSpectralModel::BuildDisplay(*analysis, nullptr, nullptr, 1, 16, 8, reason, {}, {0.25, 0.75}, 2);
+    ASSERT_TRUE(display) << reason;
+    EXPECT_TRUE(display->IncludesDc);
+    EXPECT_EQ(display->Viewport, graphics::AudioSpectralViewport{});
+    EXPECT_EQ(display->MinimumFrequencyHz, 20.0f);
+    EXPECT_EQ(display->MaximumFrequencyHz, 24000.0f);
+    auto surface = PickingSurface(); surface.Display = display;
+    surface.TimeViewport = {0.23, 0.68}; surface.FrequencyViewport = {0.21, 0.74};
+    const auto hit = editor::AudioSpectralPicking::Intersect(surface, {0, 200, 0}, {0, -1, 0});
+    ASSERT_TRUE(hit);
+    EXPECT_NEAR(hit->TimeU, 0.455, 1e-6);
+    EXPECT_NEAR(hit->FrequencyV, 0.475, 1e-6);
+    EXPECT_EQ(surface.Display, display);
+    EXPECT_FALSE(editor::AudioSpectralPicking::Intersect(surface, {101, 200, 0}, {0, -1, 0}));
+    // Boundary lies inside a cell; picking clips triangles exactly as fragments do.
+    const auto edge = editor::AudioSpectralPicking::Intersect(surface, {-100, 200, 78}, {0, -1, 0});
+    ASSERT_TRUE(edge);
+    EXPECT_NEAR(edge->TimeU, 0.23, 1e-6); EXPECT_NEAR(edge->FrequencyV, 0.21, 1e-6);
+    gui::GuiModelParams params; graphics::AudioSpectralModel model(params, 16, 8);
+    ASSERT_TRUE(model.SetDisplay(display, reason));
+    const auto old = graphics::AudioSpectralModel::BuildDisplay(*analysis, nullptr, nullptr, 1, 16, 8, reason, {}, {}, 1);
+    EXPECT_FALSE(model.SetDisplay(old, reason));
+    model.SetViewport({0.2, 0.5}, {0.3, 0.7});
+    EXPECT_EQ(display->PresentationRevision, 2u); // Renderer view never mutates its source data receipt.
+    const auto outsideVertex = graphics::AudioSpectralModel::LocalVertex(surface, 0, 0);
+    EXPECT_FALSE(editor::AudioSpectralPicking::Intersect(surface, outsideVertex + glm::vec3(0, 200, 0), {0, -1, 0}));
+}
+
+TEST_F(AudioSpectralTest, ZoomPickingIgnoresHiddenHighTriangleBeforeVisibleSurface)
+{
+    auto surface = PickingSurface();
+    auto display = std::make_shared<graphics::AudioSpectralDisplay>(*surface.Display);
+    // Hidden first column is high, visible final half is flat. A horizontal ray
+    // intersects the hidden slope first but must reach the clipped visible edge.
+    for (unsigned int row = 0; row <= display->FrequencySegments; ++row)
+    {
+        display->Heights[row * 5] = display->Heights[row * 5 + 4] = 1.0f;
+        display->Heights[row * 5 + 1] = 1.0f;
+    }
+    surface.Display = display; surface.TimeViewport = {0.4, 0.8};
+    const auto hit = editor::AudioSpectralPicking::Intersect(surface, {-300, 3, 0}, {1, 0, 0});
+    ASSERT_TRUE(hit);
+    EXPECT_GE(hit->TimeU, 0.4 - 1e-6);
+    EXPECT_LE(hit->TimeU, 0.8 + 1e-6);
+    EXPECT_GE(hit->Distance, 200.0 - 1e-6);
+}
+
+TEST_F(AudioSpectralTest, NavigationDoesNotQueueOrCancelPresentationDuringAudioBacklog)
+{
+    const auto loop = RecordedLoop();
+    const auto worker = std::make_shared<audio::AudioSpectralWorker>();
+    editor::AudioSpectralEditor controller(worker); controller.Open(loop);
+    ASSERT_TRUE(Pump(controller, loop, [&] { return controller.HasPreparedSurface(); }));
+    const auto before = controller.EditState();
+    std::promise<void> entered, resume, presented;
+    const auto resumed = resume.get_future().share();
+    std::atomic<bool> cancelled{false};
+    struct ReleaseWorker { std::promise<void>& Resume; ~ReleaseWorker() { Resume.set_value(); } };
+    {
+        ReleaseWorker release{resume};
+        worker->RequestContent(loop.get(), [&entered, resumed] { entered.set_value(); resumed.wait(); });
+        ASSERT_EQ(entered.get_future().wait_for(std::chrono::seconds(2)), std::future_status::ready);
+        worker->RequestPresentation([&presented] { presented.set_value(); }, [&cancelled] { cancelled.store(true); });
+        for (int i = 0; i < 20; ++i)
+        {
+            controller.SetViewport({0.1, 0.5}, {0.2, 0.6}); controller.Update();
+        }
+        EXPECT_FALSE(cancelled.load());
+        EXPECT_EQ(controller.EditState(), before);
+        EXPECT_TRUE(controller.HasPreparedSurface());
+    }
+    EXPECT_EQ(presented.get_future().wait_for(std::chrono::seconds(2)), std::future_status::ready);
+    EXPECT_FALSE(cancelled.load());
+}
+
+TEST_F(AudioSpectralTest, TwoAxisZoomKeepsMouseAnchorsAndWheelModifierPriority)
+{
+    using Controls = editor::AudioSpectralControls;
+    Controls controls;
+    EXPECT_EQ(Controls::WheelBinding(true, true, false), Controls::WheelMode::TimeZoom);
+    controls.TimeViewport = {0.2, 0.8}; controls.Viewport = {0.1, 0.9};
+    controls.BeginZoom(0.25, 0.75);
+    const auto startTime = controls.TimeViewport, startFrequency = controls.Viewport;
+    controls.MoveZoom(-128, 0); EXPECT_EQ(controls.Viewport, startFrequency);
+    controls.MoveZoom(0, -128); EXPECT_EQ(controls.TimeViewport, startTime);
+    controls.Wheel(Controls::WheelMode::Zoom, 1, std::numeric_limits<double>::quiet_NaN());
+    EXPECT_EQ(controls.TimeViewport, startTime);
+    controls.BeginZoom(std::numeric_limits<double>::quiet_NaN(), 0.5); // Invalid begin leaves valid captured anchors intact.
+    controls.MoveZoom(-128, -128);
+    EXPECT_NEAR(controls.TimeViewport.Lower + 0.25 * (controls.TimeViewport.Upper - controls.TimeViewport.Lower), 0.35, 1e-12);
+    EXPECT_NEAR(controls.Viewport.Lower + 0.75 * (controls.Viewport.Upper - controls.Viewport.Lower), 0.7, 1e-12);
+    const auto frequency = controls.Viewport;
+    controls.Wheel(Controls::WheelMode::TimeZoom, 1, 0.25);
+    EXPECT_EQ(controls.Viewport, frequency);
+    EXPECT_NEAR(controls.TimeViewport.Lower + 0.25 * (controls.TimeViewport.Upper - controls.TimeViewport.Lower), 0.35, 1e-12);
+    const auto time = controls.TimeViewport;
+    controls.Wheel(Controls::WheelMode::Zoom, 1, 0.75);
+    EXPECT_EQ(controls.TimeViewport, time);
+    EXPECT_NEAR(controls.Viewport.Lower + 0.75 * (controls.Viewport.Upper - controls.Viewport.Lower), 0.7, 1e-12);
+    controls.MoveZoom(-100000, 100000);
+    EXPECT_NEAR(controls.TimeViewport.Upper - controls.TimeViewport.Lower, 0.0625, 1e-12);
+    EXPECT_EQ(controls.Viewport, graphics::AudioSpectralViewport{});
 }
 
 TEST_F(AudioSpectralTest, PhysicalRadiiChangeSupportButPreserveExposureAndSubdivisionRate)
@@ -1603,10 +1681,12 @@ TEST_F(AudioSpectralTest, FrozenBandProjectionIgnoresYAndPreservesDpiAndClickedT
     const utils::Position2d anchor{300, 220};
     const auto vertical = editor::AudioSpectralPicking::BandTime(clip, 10, 100, anchor, {300, 500}, 900, 600, 0.345, 2);
     ASSERT_TRUE(vertical); EXPECT_DOUBLE_EQ(*vertical, 0.345);
+    const auto zoomed = editor::AudioSpectralPicking::BandTime(clip, 10, 100, anchor, {500, 220}, 900, 600, 0.345, 2, 0.25);
     const auto diagonal = editor::AudioSpectralPicking::BandTime(clip, 10, 100, anchor, {500, 500}, 900, 600, 0.345, 2);
     const auto horizontal = editor::AudioSpectralPicking::BandTime(clip, 10, 100, anchor, {500, 220}, 900, 600, 0.345, 2);
     const auto dpi = editor::AudioSpectralPicking::BandTime(clip, 10, 100, {600, 440}, {1000, 1000}, 1800, 1200, 0.345, 2);
-    ASSERT_TRUE(diagonal && horizontal && dpi);
+    ASSERT_TRUE(diagonal && horizontal && dpi && zoomed);
+    EXPECT_NEAR(*zoomed - 0.345, (*horizontal - 0.345) * 0.25, 1e-6);
     EXPECT_DOUBLE_EQ(*diagonal, *horizontal); EXPECT_DOUBLE_EQ(*diagonal, *dpi);
     EXPECT_GT(*diagonal, *vertical);
 }

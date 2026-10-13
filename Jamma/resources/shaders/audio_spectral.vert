@@ -8,6 +8,7 @@ out float SurfaceHeight;
 out float SurfaceMorph;
 
 uniform mat4 MVP;
+uniform vec4 SpectralViewport;
 uniform sampler2D SpectralHeightSampler;
 uniform float SpectralRadius;
 uniform float SpectralHeightScale;
@@ -26,9 +27,10 @@ void main()
     float angle = 6.283185307179586 * GridUv.x;
     float ringRadius = SpectralRadius * (1.0 + (GridUv.y - 0.5) * 0.10);
     vec3 ring = vec3(sin(angle) * ringRadius, SpectralBaseY, cos(angle) * ringRadius);
-    vec3 rectangle = vec3((GridUv.x - 0.5) * 2.0 * SpectralRadius,
+    vec2 viewUv = (GridUv - SpectralViewport.xz) / (SpectralViewport.yw - SpectralViewport.xz);
+    vec3 rectangle = vec3((viewUv.x - 0.5) * 2.0 * SpectralRadius,
         SpectralBaseY + height * SpectralRadius * SpectralHeightScale,
-        -(GridUv.y * 2.0 - 1.0) * SpectralRadius * SpectralDepthScale);
+        -(viewUv.y * 2.0 - 1.0) * SpectralRadius * SpectralDepthScale);
     vec3 point = mix(ring, rectangle, EditorMorph);
     // Match the selected waveform ring phase; rotation vanishes at the rectangle.
     float rotation = 6.283185307179586 * (1.0 - EditorPlayFrac) * (1.0 - EditorMorph);

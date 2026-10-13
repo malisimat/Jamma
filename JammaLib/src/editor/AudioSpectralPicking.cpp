@@ -100,6 +100,7 @@ std::optional<AudioSpectralPicking::Hit> AudioSpectralPicking::Intersect(
 		|| !std::isfinite(display->NyquistHz) || !(display->NyquistHz > display->MinimumFrequencyHz)
 		|| !std::isfinite(display->MaximumFrequencyHz) || !(display->MaximumFrequencyHz > display->MinimumFrequencyHz)
 		|| display->MaximumFrequencyHz > display->NyquistHz || !display->Viewport.IsValid()
+		|| !surface.TimeViewport.IsValid() || !surface.FrequencyViewport.IsValid()
 		|| display->IncludesDc != (display->Viewport.Lower == 0.0)
 		|| display->Heights.size() != static_cast<std::size_t>(display->TimeSegments + 1u) * (display->FrequencySegments + 1u))
 		return std::nullopt;
@@ -123,8 +124,8 @@ std::optional<AudioSpectralPicking::Hit> AudioSpectralPicking::Intersect(
 	double first = 0.0;
 	double last = std::numeric_limits<double>::infinity();
 	if (!(maximumX > minimumX) || !(maximumZ > minimumZ) || !std::isfinite(maximumY)
-		|| !_Slab(origin.x, direction.x, minimumX, maximumX, first, last)
-		|| !_Slab(origin.z, direction.z, minimumZ, maximumZ, first, last)
+		|| !_Slab(origin.x, direction.x, -surface.Radius, surface.Radius, first, last)
+		|| !_Slab(origin.z, direction.z, -surface.Radius * graphics::AudioSpectralModel::DepthRadiusScale, surface.Radius * graphics::AudioSpectralModel::DepthRadiusScale, first, last)
 		|| !_Slab(origin.y, direction.y, graphics::AudioSpectralModel::SurfaceBaseY, maximumY, first, last))
 		return std::nullopt;
 	std::optional<Hit> best;

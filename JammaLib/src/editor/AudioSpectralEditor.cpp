@@ -207,7 +207,6 @@ void AudioSpectralEditor::Close()
 	for (const auto& job : _displayJobs) job->Cancel();
 	_displayJobs.clear();
 	_requestedDisplayEdit.reset();
-	_viewport = _requestedViewport = {};
 	_presentationRevision = 0u;
 	_model.reset();
 	_surfacePrepared = false;
@@ -431,22 +430,22 @@ void AudioSpectralEditor::_UpdateDisplay()
 		const auto status = (*job)->Status();
 		if (status == AudioSpectralDisplayJob::State::Pending) { ++job; continue; }
 		if (status == AudioSpectralDisplayJob::State::Complete
-			&& (*job)->Viewport == _viewport
+			&& (*job)->Viewport == graphics::AudioSpectralViewport{}
 			&& loop->IsCurrentAudioSpectralSource(*(*job)->Analysis->Source))
 		{
 			if (_model->SetDisplay((*job)->Result(), _feedback)) { _surfacePrepared = true; _displayFailure.clear(); }
 			else _displayFailure = _feedback;
 		}
-		else if (status == AudioSpectralDisplayJob::State::Failed && (*job)->Viewport == _viewport)
+		else if (status == AudioSpectralDisplayJob::State::Failed && (*job)->Viewport == graphics::AudioSpectralViewport{})
 			_displayFailure = (*job)->Reason();
 		job = _displayJobs.erase(job);
 	}
 	const auto edit = EditState();
-	if (edit && (edit != _requestedDisplayEdit || _viewport != _requestedViewport))
+	if (edit && (edit != _requestedDisplayEdit))
 	{
 		_displayFailure.clear();
 		auto job = std::make_shared<AudioSpectralDisplayJob>(_analysis, edit,
-			_model->TimeSegments(), _model->FrequencySegments(), _viewport, ++_presentationRevision);
+			_model->TimeSegments(), _model->FrequencySegments(), graphics::AudioSpectralViewport{}, ++_presentationRevision);
 		_worker->RequestPresentation([job] { job->Run(); }, [job] { job->Cancel(); });
 		// Worker cancellation marks superseded queued work terminal. Retain every
 		// running receipt for explicit source-change/close cancellation, bounded
@@ -456,7 +455,6 @@ void AudioSpectralEditor::_UpdateDisplay()
 			_displayJobs.end());
 		_displayJobs.push_back(std::move(job));
 		_requestedDisplayEdit = edit;
-		_requestedViewport = _viewport;
 	}
 	if (!_surfacePrepared) _feedback = "Preparing spectral surface";
 	if (!_displayFailure.empty()) _feedback = _displayFailure;
@@ -466,10 +464,13 @@ void AudioSpectralEditor::_UpdateDisplay()
 
 void AudioSpectralEditor::SetFrequencyViewport(graphics::AudioSpectralViewport viewport)
 {
-	if (_stroke || !viewport.IsValid() || viewport == _viewport) return;
-	_viewport = viewport;
-	for (const auto& job : _displayJobs) job->Cancel();
-	_UpdateDisplay();
+    SetViewport({}, viewport);
+}
+
+void AudioSpectralEditor::SetViewport(graphics::AudioSpectralViewport time, graphics::AudioSpectralViewport frequency)
+{
+    if (_stroke || !time.IsValid() || !frequency.IsValid()) return;
+    if (_model) _model->SetViewport(time, frequency);
 }
 
 bool AudioSpectralEditor::BeginStroke(bool broadband, bool attenuate, double seconds, double hz, double logicalY,

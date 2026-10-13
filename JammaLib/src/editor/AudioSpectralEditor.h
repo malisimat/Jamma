@@ -21,20 +21,20 @@ namespace engine { class Loop; }
 namespace editor
 {
 	// UI-only gesture values; physical radii are copied once into a stroke.
-	// Viewport values are copied into immutable display requests, never shared mutable.
+	// View bounds are UI-owned; model copies them under its existing render mutex.
 	class AudioSpectralControls
 	{
 	public:
 		double TimeRadius = audio::AudioSpectralConfig::BrushTimeRadiusSeconds;
 		double FrequencyRadius = audio::AudioSpectralConfig::BrushFrequencyRadiusOctaves;
 		double BandRadius = audio::AudioSpectralConfig::BarTimeRadiusSeconds;
-		graphics::AudioSpectralViewport Viewport;
-		enum class WheelMode { Brush, Band, Zoom, Reserved };
+		graphics::AudioSpectralViewport Viewport, TimeViewport;
+		enum class WheelMode { Brush, Band, Zoom, TimeZoom, Reserved };
 		static WheelMode WheelBinding(bool alt, bool shift, bool control) noexcept
-		{ return control ? WheelMode::Reserved : alt ? WheelMode::Band : shift ? WheelMode::Zoom : WheelMode::Brush; }
-		void Wheel(WheelMode mode, double direction) noexcept
+		{ return control ? WheelMode::Reserved : alt && shift ? WheelMode::TimeZoom : alt ? WheelMode::Band : shift ? WheelMode::Zoom : WheelMode::Brush; }
+		void Wheel(WheelMode mode, double direction, double anchorFraction = 0.5) noexcept
 		{
-			if (mode == WheelMode::Reserved || !std::isfinite(direction) || direction == 0.0) return;
+			if (!std::isfinite(anchorFraction) || mode == WheelMode::Reserved || !std::isfinite(direction) || direction == 0.0) return;
 			direction = direction > 0.0 ? 1.0 : -1.0;
 			const auto factor = std::pow(1.2, direction);
 			if (mode == WheelMode::Band) BandRadius = std::clamp(BandRadius * factor, 0.005, 2.0);
@@ -45,13 +45,15 @@ namespace editor
 			}
 			else
 			{
-				const auto span = Viewport.Upper - Viewport.Lower;
+				auto& view = mode == WheelMode::TimeZoom ? TimeViewport : Viewport;
+				const auto span = view.Upper - view.Lower;
 				const auto nextSpan = std::clamp(span - direction * 0.09375, 0.0625, 1.0);
-				SetView(Viewport.Lower + (span - nextSpan) * 0.5, nextSpan);
+				SetAxis(view, view.Lower + (span - nextSpan) * std::clamp(anchorFraction, 0.0, 1.0), nextSpan);
 			}
 		}
 		void BeginView(double anchorFraction) noexcept
 		{
+			if (!std::isfinite(anchorFraction)) return;
 			_startSpan = Viewport.Upper - Viewport.Lower;
 			_anchor = Viewport.Lower + std::clamp(anchorFraction, 0.0, 1.0) * _startSpan;
 		}
@@ -61,7 +63,34 @@ namespace editor
 			const auto span = std::clamp(_startSpan + horizontalLogicalPixels / 1024.0, 0.0625, 1.0);
 			SetView(_anchor - pointerFraction * span, span);
 		}
+
+        void BeginZoom(double timeFraction, double frequencyFraction) noexcept
+        {
+            if (!std::isfinite(timeFraction) || !std::isfinite(frequencyFraction)) return;
+            _startTime = TimeViewport; _startFrequency = Viewport;
+            _timeFraction = std::clamp(timeFraction, 0.0, 1.0);
+            _frequencyFraction = std::clamp(frequencyFraction, 0.0, 1.0);
+        }
+        void MoveZoom(double horizontalPixels, double verticalPixels) noexcept
+        {
+            if (!std::isfinite(horizontalPixels) || !std::isfinite(verticalPixels)) return;
+            const auto apply = [](graphics::AudioSpectralViewport& view, const graphics::AudioSpectralViewport& start, double anchor, double pixels)
+            {
+                if (pixels == 0.0) { view = start; return; }
+                const auto oldSpan = start.Upper - start.Lower;
+                const auto span = std::clamp(oldSpan * std::exp(std::clamp(pixels / 256.0, -20.0, 20.0)), 0.0625, 1.0);
+                SetAxis(view, start.Lower + anchor * (oldSpan - span), span);
+            };
+            apply(TimeViewport, _startTime, _timeFraction, horizontalPixels);
+            apply(Viewport, _startFrequency, _frequencyFraction, verticalPixels);
+        }
 	private:
+        static void SetAxis(graphics::AudioSpectralViewport& view, double lower, double span) noexcept
+        {
+            view.Lower = std::clamp(lower, 0.0, 1.0 - span); view.Upper = view.Lower + span;
+        }
+        graphics::AudioSpectralViewport _startTime, _startFrequency;
+        double _timeFraction = 0.5, _frequencyFraction = 0.5;
 		void SetView(double lower, double span) noexcept
 		{
 			Viewport.Lower = std::clamp(lower, 0.0, 1.0 - span);
@@ -97,6 +126,7 @@ namespace editor
 			double frequencyRadius = audio::AudioSpectralConfig::BrushFrequencyRadiusOctaves,
 			double bandRadius = audio::AudioSpectralConfig::BarTimeRadiusSeconds);
 		void SetFrequencyViewport(graphics::AudioSpectralViewport viewport);
+		void SetViewport(graphics::AudioSpectralViewport time, graphics::AudioSpectralViewport frequency);
 		void MoveStroke(std::optional<std::pair<double, double>> point, double logicalY);
 		void EndStroke(bool cancel);
 		bool HasStroke() const noexcept { return !!_stroke; }
@@ -145,7 +175,6 @@ namespace editor
 		std::shared_ptr<const audio::AudioSpectralEditState> _requestedDisplayEdit;
 		// UI-owned, copied to jobs; worker only reads const request captures.
 		// Close/source teardown cancels all jobs before releasing these requests.
-		graphics::AudioSpectralViewport _viewport, _requestedViewport;
 		std::uint64_t _presentationRevision = 0u;
 		bool _surfacePrepared = false;
 		std::string _displayFailure;

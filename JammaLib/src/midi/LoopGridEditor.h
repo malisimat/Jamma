@@ -131,7 +131,7 @@ namespace midi
 			bool clampToGrid) const;
 		std::uint8_t _ChannelOf(const std::shared_ptr<MidiLoop>& loop) const;
 		double _PixelsPerSample(std::uint32_t lengthSamps) const;
-		std::optional<std::pair<double, double>> _AudioPointAt(utils::Position2d pixel) const;
+		std::optional<std::pair<double, double>> _AudioPointAt(utils::Position2d pixel, bool requireCurrentViewport = true) const;
 		bool _AudioSurfaceReady(bool requireCurrentViewport = true) const;
 		bool _AudioGeometryChanged(bool includeViewport = true) const;
 		void _MoveAudioStroke(utils::Position2d pixel);
@@ -163,9 +163,10 @@ namespace midi
 		// UI-only controls/capture. Worker requests copy values; Close cancels capture.
 		editor::AudioSpectralControls _audioControls;
 		bool _audioNavigation = false;
+        bool _audioTwoAxisZoom = false;
 		bool _audioBandPreview = false;
 		utils::Position2d _audioViewPointerAnchor{};
-		graphics::AudioSpectralViewport _audioCapturedViewport;
+		graphics::AudioSpectralViewport _audioCapturedViewport, _audioCapturedTimeViewport;
 		bool _audioStroke = false;
 		std::deque<bool> _pendingAudioUndo; // At most sixteen release-adjacent history keys.
 		bool _audioBroadband = false;

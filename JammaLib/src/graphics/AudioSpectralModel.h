@@ -13,8 +13,8 @@
 
 namespace graphics
 {
-	// Normalized logarithmic source range. UI-owned until copied into a job;
-	// the completed display keeps its own immutable mapping for render/picking.
+	// Normalized source interval. Requested bounds are UI-owned; the model
+	// captures exact time/frequency bounds with the successful draw for picking.
 	struct AudioSpectralViewport
 	{
 		double Lower = 0.0, Upper = 1.0;
@@ -59,13 +59,15 @@ namespace graphics
 			// Exact transform stack used by the last successful scene draw.
 			glm::mat4 ClipFromLocal{1.0f};
 			bool HasDrawTransform = false;
+			AudioSpectralViewport TimeViewport, FrequencyViewport;
 		};
 
 		explicit AudioSpectralModel(gui::GuiModelParams params,
 			unsigned int timeSegments = DefaultTimeSegments,
 			unsigned int frequencySegments = DefaultFrequencySegments);
 		~AudioSpectralModel();
-		// Worker-only resampling of requested magnitudes; never feeds back into DSP.
+		// Worker-only canonical full-source projection; never feeds back into DSP.
+		// Legacy viewport argument is validated but does not change sampling.
 		static std::shared_ptr<const AudioSpectralDisplay> BuildDisplay(
 			const audio::AudioSpectralAnalysis& analysis,
 			const audio::AudioSpectralGainField* gains,
@@ -77,6 +79,7 @@ namespace graphics
 		void SetEditorMorph(float morph);
 		void SetRadius(float radius);
 		void SetPlayFraction(double fraction);
+		void SetViewport(AudioSpectralViewport time, AudioSpectralViewport frequency);
 		void SetBrush(glm::vec2 centre, glm::vec2 radii, int mode);
 		// Exact data/morph/radius of the last successful scene draw, retained for picking.
 		Surface DisplayedSurface() const;
@@ -110,6 +113,7 @@ namespace graphics
 		std::shared_ptr<const AudioSpectralDisplay> _pendingDisplay;
 		std::shared_ptr<const AudioSpectralDisplay> _uploadedDisplay;
 		Surface _displayedSurface;
+		AudioSpectralViewport _timeViewport, _frequencyViewport; // UI writes/render reads under _surfaceMutex; no audio access.
 		float _radius = 100.0f;
 		float _morph = 0.0f;
 		float _playFraction = 0.0f;

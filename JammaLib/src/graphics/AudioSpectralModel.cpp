@@ -130,15 +130,15 @@ std::shared_ptr<const AudioSpectralDisplay> AudioSpectralModel::BuildDisplay(
 		display->SourceGeneration = analysis.Source->Generation;
 		display->Revision = revision;
 		display->PresentationRevision = presentationRevision;
-		display->Viewport = viewport;
-		display->IncludesDc = viewport.Lower == 0.0;
+		display->Viewport = {}; // Navigation never resamples the immutable full-source grid.
+		display->IncludesDc = true;
 		display->TimeSegments = timeSegments;
 		display->FrequencySegments = frequencySegments;
 		const auto sampleRate = static_cast<double>(analysis.Source->Layout.SampleRate);
 		const auto nyquist = sampleRate * 0.5;
 		const auto lower = (std::min)(audio::AudioSpectralConfig::DisplayMinimumFrequencyHz, nyquist * 0.5);
-		display->MinimumFrequencyHz = static_cast<float>(lower * std::pow(nyquist / lower, viewport.Lower));
-		display->MaximumFrequencyHz = static_cast<float>(lower * std::pow(nyquist / lower, viewport.Upper));
+		display->MinimumFrequencyHz = static_cast<float>(lower);
+		display->MaximumFrequencyHz = static_cast<float>(nyquist);
 		display->NyquistHz = static_cast<float>(nyquist);
 		display->Heights.resize(static_cast<std::size_t>(timeSegments + 1u) * (frequencySegments + 1u));
         // Worker-owned bounded scratch: row mapping is fixed for this display.
@@ -316,9 +316,11 @@ glm::vec3 AudioSpectralModel::LocalVertex(const Surface& surface,
 	const auto angle = static_cast<float>(constants::TWOPI) * u;
 	const auto ringRadius = surface.Radius * (1.0f + (v - 0.5f) * 0.10f);
 	const auto ring = glm::vec3(std::sin(angle) * ringRadius, SurfaceBaseY, std::cos(angle) * ringRadius);
-	const auto rectangle = glm::vec3((u - 0.5f) * surface.Radius * 2.0f,
+	const auto viewU = static_cast<float>((u - static_cast<float>(surface.TimeViewport.Lower)) / (static_cast<float>(surface.TimeViewport.Upper) - static_cast<float>(surface.TimeViewport.Lower)));
+	const auto viewV = static_cast<float>((v - static_cast<float>(surface.FrequencyViewport.Lower)) / (static_cast<float>(surface.FrequencyViewport.Upper) - static_cast<float>(surface.FrequencyViewport.Lower)));
+	const auto rectangle = glm::vec3((viewU - 0.5f) * surface.Radius * 2.0f,
 		SurfaceBaseY + height * surface.Radius * HeightRadiusScale,
-		-(v * 2.0f - 1.0f) * surface.Radius * DepthRadiusScale);
+		-(viewV * 2.0f - 1.0f) * surface.Radius * DepthRadiusScale);
 	const auto point = glm::mix(ring, rectangle, surface.Morph);
 	const auto phase = 1.0f - surface.PlayFraction;
 	const auto rotation = static_cast<float>(constants::TWOPI) * phase * (1.0f - surface.Morph);
@@ -449,6 +451,13 @@ bool AudioSpectralModel::_UploadDisplay()
 	return true;
 }
 
+void AudioSpectralModel::SetViewport(AudioSpectralViewport time, AudioSpectralViewport frequency)
+{
+	if (!time.IsValid() || !frequency.IsValid()) return;
+	std::lock_guard lock(_surfaceMutex);
+	_timeViewport = time; _frequencyViewport = frequency;
+}
+
 void AudioSpectralModel::SetBrush(glm::vec2 centre, glm::vec2 radii, int mode)
 {
 	std::lock_guard lock(_surfaceMutex);
@@ -471,6 +480,7 @@ void AudioSpectralModel::Draw3d(base::DrawContext& ctx, unsigned int numInstance
 	{
 		std::lock_guard lock(_surfaceMutex);
 		surface = { _uploadedDisplay, _radius, _morph, _playFraction };
+		surface.TimeViewport = _timeViewport; surface.FrequencyViewport = _frequencyViewport;
 		playFraction = _playFraction;
 		brushCentre = _brushCentre; brushRadii = _brushRadii; brushMode = _brushMode;
 	}
@@ -493,6 +503,7 @@ void AudioSpectralModel::Draw3d(base::DrawContext& ctx, unsigned int numInstance
 	glCtx.SetUniform("SpectralHeightScale", HeightRadiusScale);
 	glCtx.SetUniform("SpectralDepthScale", DepthRadiusScale);
 	glCtx.SetUniform("SpectralBaseY", SurfaceBaseY);
+	glCtx.SetUniform("SpectralViewport", glm::vec4(surface.TimeViewport.Lower, surface.TimeViewport.Upper, surface.FrequencyViewport.Lower, surface.FrequencyViewport.Upper));
 	glCtx.SetUniform("EditorMorph", surface.Morph);
 	glCtx.SetUniform("EditorPlayFrac", playFraction);
 	glCtx.SetUniform("SpectralBrush", glm::vec4(brushCentre, brushRadii));

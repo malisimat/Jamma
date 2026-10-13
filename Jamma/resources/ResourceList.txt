@@ -95,4 +95,4 @@
 1 fader_scale_line ninepatch 3 0
 1 fader_scale_track ninepatch 4 2
 
-2 audio_spectral MVP TextureSampler SpectralHeightSampler SpectralRadius SpectralHeightScale SpectralDepthScale SpectralBaseY EditorMorph EditorPlayFrac EditorTime SceneDim SpectralBrush SpectralBrushMode
+2 audio_spectral MVP TextureSampler SpectralHeightSampler SpectralRadius SpectralHeightScale SpectralDepthScale SpectralBaseY EditorMorph EditorPlayFrac EditorTime SceneDim SpectralBrush SpectralViewport SpectralBrushMode
