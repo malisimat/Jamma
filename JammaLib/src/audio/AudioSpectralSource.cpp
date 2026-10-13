@@ -25,9 +25,9 @@ unsigned long AudioSpectralSourceLayout::WrappedBodyIndex(unsigned long storageI
 AudioSpectralSourceCapture::AudioSpectralSourceCapture(
 	AudioSpectralSourceLayout layout, std::uint64_t generation,
 	std::shared_ptr<const AudioSpectralSourceIdentity> identity,
-    std::shared_ptr<const AudioSpectralResourceBudget::Reservation> resources) :
+    std::shared_ptr<const AudioSpectralResourceBudget::Reservation> resources, AudioSpectralTransformConfig transform) :
 	_source(std::make_shared<AudioSpectralSource>(AudioSpectralSource{
-		std::move(identity), generation, layout, std::move(resources), {} }))
+		std::move(identity), generation, layout, std::move(resources), {}, transform }))
 {
 }
 

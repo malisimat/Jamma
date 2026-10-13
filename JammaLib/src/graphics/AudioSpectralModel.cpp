@@ -117,6 +117,29 @@ std::shared_ptr<const AudioSpectralDisplay> AudioSpectralModel::BuildDisplay(
 		display->MinimumFrequencyHz = static_cast<float>(lower);
 		display->NyquistHz = static_cast<float>(nyquist);
 		display->Heights.resize(static_cast<std::size_t>(timeSegments + 1u) * (frequencySegments + 1u));
+        // Worker-owned bounded scratch: row mapping is fixed for this display.
+        // Cached corner heights avoid repeating FFT-bin magnitude/gain/log work
+        // when several time vertices fall between the same source frame pair.
+        struct RowSample
+        {
+            unsigned int FirstBin, NextBin;
+            double BinWeight;
+            float H00 = 0.0f, H01 = 0.0f, H10 = 0.0f, H11 = 0.0f;
+        };
+        std::vector<RowSample> rows;
+        rows.reserve(frequencySegments + 1u);
+        for (unsigned int row = 0u; row <= frequencySegments; ++row)
+        {
+            const auto hz = row == 0u ? 0.0 : lower * std::pow(nyquist / lower,
+                static_cast<double>(row) / frequencySegments);
+            const auto binPosition = hz * analysis.Transform.WindowSamps / sampleRate;
+            const auto firstBin = (std::min)(static_cast<unsigned int>(binPosition), analysis.Geometry.BinCount - 1u);
+            rows.push_back({firstBin, (std::min)(firstBin + 1u, analysis.Geometry.BinCount - 1u),
+                std::clamp(binPosition - firstBin, 0.0, 1.0)});
+        }
+        auto cachedFirst = analysis.Geometry.FrameCount;
+        auto cachedNext = analysis.Geometry.FrameCount;
+        auto cachedEnvelope = -1.0f;
 		for (unsigned int column = 0u; column < timeSegments; ++column)
 		{
 			if (stop.stop_requested()) { reason = "Spectral display cancelled"; return nullptr; }
@@ -128,13 +151,7 @@ std::shared_ptr<const AudioSpectralDisplay> AudioSpectralModel::BuildDisplay(
 			const auto envelopeGain = envelope ? envelope->GainAt(static_cast<unsigned long>(bodySample)) : 1.0f;
 			for (unsigned int row = 0u; row <= frequencySegments; ++row)
 			{
-				// DC has an explicit lower edge. All other rows are logarithmic Hz.
-				const auto hz = row == 0u ? 0.0 : lower * std::pow(nyquist / lower,
-					static_cast<double>(row) / frequencySegments);
-				const auto binPosition = hz * analysis.Transform.WindowSamps / sampleRate;
-				const auto firstBin = (std::min)(static_cast<unsigned int>(binPosition), analysis.Geometry.BinCount - 1u);
-				const auto nextBin = (std::min)(firstBin + 1u, analysis.Geometry.BinCount - 1u);
-				const auto binWeight = std::clamp(binPosition - firstBin, 0.0, 1.0);
+                auto& sample = rows[row];
 				const auto height = [&](std::size_t frame, unsigned int bin)
 				{
 					const auto magnitude = analysis.Magnitude(frame, bin)
@@ -142,11 +159,17 @@ std::shared_ptr<const AudioSpectralDisplay> AudioSpectralModel::BuildDisplay(
 					return !std::isfinite(magnitude) || magnitude < 0.0
 						? std::numeric_limits<float>::quiet_NaN() : _CompressMagnitude(magnitude);
 				};
-				// Interpolate visible dB heights: a loud corner must not suddenly
-				// dominate quieter neighbours as its amplitude rises exponentially.
-				const auto first = std::lerp(height(firstFrame, firstBin), height(firstFrame, nextBin), binWeight);
-				const auto next = std::lerp(height(nextFrame, firstBin), height(nextFrame, nextBin), binWeight);
-				const auto value = std::lerp(first, next, frameWeight);
+                if (cachedFirst != firstFrame || cachedNext != nextFrame || cachedEnvelope != envelopeGain)
+                {
+                    sample.H00 = height(firstFrame, sample.FirstBin);
+                    sample.H01 = height(firstFrame, sample.NextBin);
+                    sample.H10 = height(nextFrame, sample.FirstBin);
+                    sample.H11 = height(nextFrame, sample.NextBin);
+                }
+                // Preserve height-domain interpolation and per-corner envelope clamp.
+                const auto first = std::lerp(sample.H00, sample.H01, sample.BinWeight);
+                const auto next = std::lerp(sample.H10, sample.H11, sample.BinWeight);
+                const auto value = std::lerp(first, next, frameWeight);
 				if (!std::isfinite(value) || value < 0.0)
 				{
 					reason = "Spectral display contains invalid magnitudes or heights";
@@ -154,6 +177,7 @@ std::shared_ptr<const AudioSpectralDisplay> AudioSpectralModel::BuildDisplay(
 				}
 				display->Heights[row * (timeSegments + 1u) + column] = static_cast<float>(value);
 			}
+            cachedFirst = firstFrame; cachedNext = nextFrame; cachedEnvelope = envelopeGain;
 		}
 		// Duplicate the wrapped time endpoint, rather than dropping the last mesh edge.
 		for (unsigned int row = 0u; row <= frequencySegments; ++row)

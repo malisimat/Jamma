@@ -296,7 +296,8 @@ void AudioSpectralEditor::Update()
 			}
 		}
 		_state = State::Ready;
-		_feedback = "Audio analysis ready";
+		_feedback = _analysis->Transform.WindowSamps == audio::AudioSpectralConfig::FallbackWindowSamps
+            ? "Audio analysis ready (4096-point analysis)" : "Audio analysis ready";
 		_UpdateDisplay();
 		if (_peakOverload) _feedback = "Edited peaks exceed full scale";
 		if (_stroke)
@@ -319,7 +320,7 @@ void AudioSpectralEditor::Update()
 	{
 		const auto edit = loop->AudioSpectralEdit();
 		_analysisJob = std::make_shared<audio::AudioSpectralAnalysisJob>(
-			_source, edit ? edit->Transform : audio::AudioSpectralTransformConfig{});
+			_source, edit ? edit->Transform : _source->SelectedTransform);
 		_worker->RequestAnalysis(_analysisJob);
 		_state = State::AnalyzingSource;
 		_feedback = "Analyzing audio source";
@@ -351,7 +352,8 @@ void AudioSpectralEditor::Update()
 	}
 	if (_state == State::Unavailable && _unavailableGeneration == loop->AudioSourceGeneration())
 		return;
-	_capture = loop->RequestAudioSpectralSource(_feedback, _resourceBudget);
+	_capture = loop->RequestAudioSpectralSource(_feedback, _resourceBudget,
+        _budgetLayout ? &*_budgetLayout : nullptr);
 	if (!_capture)
 	{
 		_unavailableGeneration = loop->AudioSourceGeneration();
@@ -368,7 +370,7 @@ void AudioSpectralEditor::Update()
 		budgetLayout.FadeSamps = (std::max)(budgetLayout.FadeSamps, _budgetLayout->FadeSamps);
 	}
 	if (!audio::AudioSpectralDsp::EstimateWorkingMemory(
-		budgetLayout, audio::AudioSpectralTransformConfig{}, _feedback))
+		budgetLayout, _capture->SelectedTransform(), _feedback))
 	{
 		loop->CancelAudioSpectralSourceCapture();
 		_capture.reset();

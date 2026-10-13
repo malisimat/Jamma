@@ -9,7 +9,8 @@ namespace audio
 	struct AudioSpectralConfig
 	{
 		static constexpr std::uint32_t TransformVersion = 1u;
-		static constexpr unsigned int WindowSamps = 4096u;
+		static constexpr unsigned int WindowSamps = 8192u;
+		static constexpr unsigned int FallbackWindowSamps = 4096u;
 		static constexpr unsigned int HopSamps = 1024u;
 		static constexpr float MinimumGainDb = -60.0f;
 		static constexpr float MaximumGainDb = 24.0f; // Broadband bar headroom.

@@ -846,7 +846,7 @@ void Loop::SetSampleRate(float sampleRate)
 }
 
 std::shared_ptr<audio::AudioSpectralSourceCapture> Loop::RequestAudioSpectralSource(std::string& reason,
-    const std::shared_ptr<audio::AudioSpectralResourceBudget>& budget)
+    const std::shared_ptr<audio::AudioSpectralResourceBudget>& budget, const audio::AudioSpectralSourceLayout* retainedLayout)
 {
 	reason.clear();
 	CancelAudioSpectralSourceCapture();
@@ -869,19 +869,21 @@ std::shared_ptr<audio::AudioSpectralSourceCapture> Loop::RequestAudioSpectralSou
 		return nullptr;
 	}
 	std::shared_ptr<const audio::AudioSpectralResourceBudget::Reservation> resources;
-    if (budget)
+    auto admissionLayout = layout;
+    if (retainedLayout)
     {
-        const auto estimate = audio::AudioSpectralDsp::EstimateWorkingMemory(
-            layout, audio::AudioSpectralTransformConfig{}, reason);
-        if (!estimate) return nullptr;
-        resources = budget->Reserve(estimate->WorkingBytes, reason);
-        if (!resources) return nullptr;
+        admissionLayout.LogicalLength = (std::max)(admissionLayout.LogicalLength, retainedLayout->LogicalLength);
+        admissionLayout.PhysicalLength = (std::max)(admissionLayout.PhysicalLength, retainedLayout->PhysicalLength);
+        admissionLayout.FadeSamps = (std::max)(admissionLayout.FadeSamps, retainedLayout->FadeSamps);
     }
+    audio::AudioSpectralTransformConfig transform;
+    if (!audio::AudioSpectralDsp::SelectTransform(admissionLayout, budget, transform, resources, reason))
+        return nullptr;
     std::shared_ptr<audio::AudioSpectralSourceCapture> request;
 	try
 	{
 		request = std::make_shared<audio::AudioSpectralSourceCapture>(layout,
-			generation, _audioSourceIdentity, std::move(resources));
+			generation, _audioSourceIdentity, std::move(resources), transform);
 	}
 	catch (const std::bad_alloc&)
 	{

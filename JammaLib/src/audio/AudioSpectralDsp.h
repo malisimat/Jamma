@@ -69,6 +69,13 @@ namespace audio
 		static std::optional<AudioSpectralMemoryEstimate> EstimateWorkingMemory(
 			const AudioSpectralSourceLayout& layout, const AudioSpectralTransformConfig& transform,
 			std::string& reason);
+		// Off-callback admission: preferred transform first, then legacy resolution.
+		// A successful reservation is pinned by the source through worker/history teardown.
+		static bool SelectTransform(const AudioSpectralSourceLayout& layout,
+			const std::shared_ptr<AudioSpectralResourceBudget>& budget,
+			AudioSpectralTransformConfig& transform,
+			std::shared_ptr<const AudioSpectralResourceBudget::Reservation>& resources,
+			std::string& reason);
 		// Worker-only allocation/FFT/synthesis. Cancellation is checked per frame
 		// and bounded sample batches; it is for obsolete sources/teardown, not every paint update.
 		static std::shared_ptr<const AudioSpectralAnalysis> Analyze(

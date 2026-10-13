@@ -4,7 +4,7 @@ Status: implemented and covered by native spectral/controller/publication tests.
 
 ## Transform and coordinates
 
-AudioSpectralConfig names v1 prototype defaults and limits. Transform version 1 uses 4096-sample periodic Hann windows, a 1024-sample hop, float real KissFFT, explicit 1/N inverse normalization, and samplewise weighted overlap-add normalization by the actual sum of window squared. Frame centres lie on a body-source hop lattice, extending beyond the prefix-fade/body target. Reconstruction clips each frame to its actual target coordinates, rather than wrapping every window contribution into a short loop. This avoids counting repeated wrapped samples as multiple output contributions.
+AudioSpectralConfig names v1 prototype defaults and limits. Transform version 1 prefers 8192-sample periodic Hann windows (4096-sample memory fallback), a 1024-sample hop, float real KissFFT, explicit 1/N inverse normalization, and samplewise weighted overlap-add normalization by the actual sum of window squared. Frame centres lie on a body-source hop lattice, extending beyond the prefix-fade/body target. Reconstruction clips each frame to its actual target coordinates, rather than wrapping every window contribution into a short loop. This avoids counting repeated wrapped samples as multiple output contributions.
 
 Source body zero is storage offset MaxLoopFadeSamps. Analysis reads captured prefix and physical tail whenever available; only missing context extends the logical body periodically. Reconstruction replaces the prefix-fade region and logical body, preserving earlier prefix and unrelated physical tail exactly. See audio-spectral-source-contract.md for layout and the confirmed equal envelope gain on both existing seam contributors.
 
@@ -27,3 +27,5 @@ The controller rejects analysis results from obsolete source identities/generati
 ## Deferred validation
 
 Native coverage must establish round-trip tolerance, silence/zero-bin semantics, short and non-hop-aligned lengths, context boundaries, envelope dominance/ramps and finite limits. Actual pinned dependency install/linking, toolchain compilation, audible latency and representative memory/performance measurements have not been performed. Future build commands must be taken from this worktree's local .vscode/tasks.json.
+
+New source admission tries 8192/1024, then explicit 4096/1024 when the conservative per-source estimate or session reservation fails; both retain the 512 MiB cap. Existing edit states retain their exact stored transform. KissFFT plans and scratch remain reused per analysis/reconstruction job; no FFT work moves to audio callbacks.

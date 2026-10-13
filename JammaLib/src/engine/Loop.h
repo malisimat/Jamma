@@ -250,7 +250,8 @@ namespace engine
 		bool CanEditAudioSource() const noexcept;
 		// UI-owner operations. No BufferBank PCM is read by the requesting thread.
 		std::shared_ptr<audio::AudioSpectralSourceCapture> RequestAudioSpectralSource(std::string& reason,
-            const std::shared_ptr<audio::AudioSpectralResourceBudget>& budget = nullptr);
+            const std::shared_ptr<audio::AudioSpectralResourceBudget>& budget = nullptr,
+            const audio::AudioSpectralSourceLayout* retainedLayout = nullptr);
 		void CancelAudioSpectralSourceCapture();
 		bool IsCurrentAudioSpectralSource(const audio::AudioSpectralSource& source) const noexcept;
 		std::uint64_t AudioSourceGeneration() const noexcept

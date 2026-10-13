@@ -39,6 +39,9 @@ namespace audio
 		// Declared before PCM so final destruction frees PCM before releasing admission.
         std::shared_ptr<const AudioSpectralResourceBudget::Reservation> Resources;
         std::vector<float> Samples;
+        // Chosen by UI/request owner before publication; immutable for worker/UI readers.
+        // Source pins the transform and reservation until all jobs/history release it.
+        AudioSpectralTransformConfig SelectedTransform;
 
 		std::span<const float> Body() const noexcept
 		{
@@ -59,9 +62,11 @@ namespace audio
 		// safe on either the UI or callback owner.
 		AudioSpectralSourceCapture(AudioSpectralSourceLayout layout, std::uint64_t generation,
 			std::shared_ptr<const AudioSpectralSourceIdentity> identity,
-            std::shared_ptr<const AudioSpectralResourceBudget::Reservation> resources = nullptr);
+            std::shared_ptr<const AudioSpectralResourceBudget::Reservation> resources = nullptr,
+            AudioSpectralTransformConfig transform = {});
 		void Prepare(); // Dedicated worker only; called once per request.
 		const AudioSpectralSourceLayout& Layout() const noexcept { return _source->Layout; }
+		const AudioSpectralTransformConfig& SelectedTransform() const noexcept { return _source->SelectedTransform; }
 		State Status() const noexcept { return _state.load(std::memory_order_acquire); }
 		void Cancel() noexcept;
 		std::shared_ptr<const AudioSpectralSource> Source() const noexcept;

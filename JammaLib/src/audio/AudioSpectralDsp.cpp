@@ -71,6 +71,32 @@ std::optional<AudioSpectralMemoryEstimate> AudioSpectralDsp::EstimateWorkingMemo
 	return estimate;
 }
 
+bool AudioSpectralDsp::SelectTransform(const AudioSpectralSourceLayout& layout,
+    const std::shared_ptr<AudioSpectralResourceBudget>& budget,
+    AudioSpectralTransformConfig& transform,
+    std::shared_ptr<const AudioSpectralResourceBudget::Reservation>& resources,
+    std::string& reason)
+{
+    resources.reset();
+    for (const auto window : { AudioSpectralConfig::WindowSamps, AudioSpectralConfig::FallbackWindowSamps })
+    {
+        const AudioSpectralTransformConfig candidate{ AudioSpectralConfig::TransformVersion,
+            window, AudioSpectralConfig::HopSamps };
+        const auto estimate = EstimateWorkingMemory(layout, candidate, reason);
+        if (!estimate) continue;
+        if (budget)
+        {
+            resources = budget->Reserve(estimate->WorkingBytes, reason);
+            if (!resources) continue;
+        }
+        transform = candidate;
+        reason = window == AudioSpectralConfig::WindowSamps ? ""
+            : "Using 4096-point spectral analysis to fit the memory budget";
+        return true;
+    }
+    return false;
+}
+
 float AudioSpectralDsp::_SourceSample(const AudioSpectralSource& source, std::int64_t bodyIndex) noexcept
 {
 	const auto storageIndex = static_cast<std::int64_t>(source.Layout.BodyOffset) + bodyIndex;
