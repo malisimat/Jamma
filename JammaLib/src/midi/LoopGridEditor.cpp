@@ -683,14 +683,20 @@ void LoopGridEditor::_MoveAudioStroke(utils::Position2d pixel)
 	{
 		if (_audioBroadband)
 		{
-			point = _audioStrokePoint; // First-click time stays fixed outside the surface.
+			point = _audioStrokePoint;
+            const auto source = _audioEditor.Source();
+            const auto seconds = editor::AudioSpectralPicking::BandTime(_audioBarViewProjection,
+                _audioBarPlaneY, _audioBarRadius, _audioViewPointerAnchor, pixel,
+                static_cast<int>(_size.Width), static_cast<int>(_size.Height), _audioBandAnchorSeconds,
+                source->Layout.LogicalLength / source->Layout.SampleRate);
+            if (seconds && point) point->first = *seconds;
 		}
 		else point = moved ? _AudioPointAt(pixel) : _audioStrokePoint;
 	}
 	// Stationary ordinary holds stay on their authored source coordinate as
 	// heights deform. An outside miss breaks the anchor until actual reentry.
 	_audioStrokePoint = point;
-	_audioEditor.MoveStroke(point, static_cast<float>(pixel.Y) / _audioPixelScale);
+	_audioEditor.MoveStroke(point, static_cast<double>(pixel.Y) / _audioPixelScale);
 	_UpdateAudioFootprint(pixel);
 }
 
@@ -748,11 +754,12 @@ void LoopGridEditor::_HandleWheel(const actions::TouchAction& action)
 			(action.Modifiers & base::Action::MODIFIER_ALT) != 0,
 			(action.Modifiers & base::Action::MODIFIER_SHIFT) != 0,
 			(action.Modifiers & base::Action::MODIFIER_CTRL) != 0);
+		if (mode == editor::AudioSpectralControls::WheelMode::Reserved) return;
 		_audioBandPreview = mode == editor::AudioSpectralControls::WheelMode::Band;
 		_audioControls.Wheel(mode, action.Value);
 		_audioEditor.SetFrequencyViewport(_audioControls.Viewport);
 		_UpdateAudioFootprint(action.Position);
-		_SetFeedback("Wheel: brush; Alt: band; Shift: zoom; Ctrl: frequency pan");
+		_SetFeedback("Wheel: brush; Alt: band; Shift: zoom; Shift-right: view");
 		return;
 	}
 	if (auto loop = _midiLoop.lock())
@@ -1156,7 +1163,7 @@ void LoopGridEditor::UpdateUi(const glm::mat4& viewProjection)
 	_channelLabel->SetVisible(false);
 	if (IsOpen())
 	{
-		std::string mode = "L/R: boost/cut; Alt: band; Wheel: size; Ctrl-R: view";
+		std::string mode = "L/R: boost/cut; Alt: sweep band; Wheel: size; Shift-R: view";
 		if (_audioStroke && _audioBroadband)
 		{
 			const auto target = audio::AudioSpectralEnvelope::TargetFromDragPixels(
@@ -1413,6 +1420,7 @@ std::optional<actions::ActionResult> LoopGridEditor::OnAction(actions::TouchActi
 		if (!_audioLoop.expired())
 		{
 			if (_audioEditor.HasStroke() || (_AudioSurfaceReady(false) && !_AudioSurfaceReady())) return _Eaten();
+			if (action.Modifiers & base::Action::MODIFIER_CTRL) return _Eaten(); // Reserved for future quantisation.
 			_DrainAudioUndo();
 			const auto point = _AudioPointAt(action.Position);
 			if (point)
@@ -1422,6 +1430,8 @@ std::optional<actions::ActionResult> LoopGridEditor::OnAction(actions::TouchActi
 				_audioPixelScale = _host.LogicalPixelScale ? _host.LogicalPixelScale() : 1.0f;
 				if (!std::isfinite(_audioPixelScale) || _audioPixelScale <= 0.0f) _audioPixelScale = 1.0f;
 				_audioAnchorY = action.Position.Y;
+				_audioViewPointerAnchor = action.Position;
+				_audioBandAnchorSeconds = point->first;
 				_audioCapturedView = _host.Camera.ViewMatrix();
 				const auto surface = _audioLoop.lock()->AudioSpectralModel()->DisplayedSurface();
 				_audioCapturedViewport = surface.Display->Viewport;
@@ -1433,7 +1443,7 @@ std::optional<actions::ActionResult> LoopGridEditor::OnAction(actions::TouchActi
 				const auto hit = ray ? editor::AudioSpectralPicking::Intersect(surface, ray->Origin, ray->Direction) : std::nullopt;
 				if (!hit || !ray) return _Eaten();
 				_audioBarPlaneY = (ray->Origin + glm::normalize(ray->Direction) * static_cast<float>(hit->Distance)).y;
-				if (action.Index == 2 && (action.Modifiers & base::Action::MODIFIER_CTRL))
+				if (action.Index == 2 && (action.Modifiers & base::Action::MODIFIER_SHIFT))
 				{
 					_audioControls.Viewport = surface.Display->Viewport;
 					_audioControls.BeginView(hit->FrequencyV);
@@ -1443,7 +1453,7 @@ std::optional<actions::ActionResult> LoopGridEditor::OnAction(actions::TouchActi
 					return _Eaten();
 				}
 				if (_audioEditor.BeginStroke(_audioBroadband, _audioAttenuate, point->first, point->second,
-					static_cast<float>(action.Position.Y) / _audioPixelScale,
+					static_cast<double>(action.Position.Y) / _audioPixelScale,
 					_audioControls.TimeRadius, _audioControls.FrequencyRadius, _audioControls.BandRadius))
 				{
 					_audioStroke = true;

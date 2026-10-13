@@ -30,6 +30,7 @@ namespace audio
 		static constexpr double StrokeUpdateSeconds = 1.0 / 30.0;
         // Two active maps and at most one cancelled in-flight map; each has reserved dirty indices.
         static constexpr std::uint64_t InputMapBytesPerCoefficient = 3u * (sizeof(double) + sizeof(std::uint32_t));
+		static constexpr std::uint64_t BandMapBytesPerSample = 3u * (2u * sizeof(double) + 2u * sizeof(std::uint32_t));
 		static constexpr double BarTimeRadiusSeconds = 0.05;
 		static constexpr double BarSilenceDragPixels = 160.0;
 		static constexpr double BarBoostDragPixels = 160.0;

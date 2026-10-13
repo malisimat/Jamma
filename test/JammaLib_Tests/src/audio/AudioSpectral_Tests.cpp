@@ -287,9 +287,9 @@ TEST_F(AudioSpectralTest, RelativeBandPreservesBaselineSilenceWrapAndReversesExa
 TEST_F(AudioSpectralTest, SpectralControlsWheelPrecedenceLimitsAndProjectedPanZoom)
 {
 	using Controls = editor::AudioSpectralControls;
-	EXPECT_EQ(Controls::WheelBinding(true, true, true), Controls::WheelMode::Band);
-	EXPECT_EQ(Controls::WheelBinding(false, true, true), Controls::WheelMode::Zoom);
-	EXPECT_EQ(Controls::WheelBinding(false, false, true), Controls::WheelMode::Pan);
+	EXPECT_EQ(Controls::WheelBinding(true, true, true), Controls::WheelMode::Reserved);
+	EXPECT_EQ(Controls::WheelBinding(false, true, true), Controls::WheelMode::Reserved);
+	EXPECT_EQ(Controls::WheelBinding(false, false, true), Controls::WheelMode::Reserved);
 	EXPECT_EQ(Controls::WheelBinding(false, false, false), Controls::WheelMode::Brush);
 	Controls controls;
 	const auto band = controls.BandRadius;
@@ -315,10 +315,10 @@ TEST_F(AudioSpectralTest, SpectralControlsWheelPrecedenceLimitsAndProjectedPanZo
 	EXPECT_EQ(controls.Viewport, (graphics::AudioSpectralViewport{0, 1}));
 	for (int i = 0; i < 30; ++i) controls.Wheel(Controls::WheelMode::Zoom, 1);
 	EXPECT_DOUBLE_EQ(controls.Viewport.Upper - controls.Viewport.Lower, 0.0625);
-	for (int i = 0; i < 100; ++i) controls.Wheel(Controls::WheelMode::Pan, 1);
-	EXPECT_DOUBLE_EQ(controls.Viewport.Upper, 1.0);
-	for (int i = 0; i < 100; ++i) controls.Wheel(Controls::WheelMode::Pan, -1);
-	EXPECT_DOUBLE_EQ(controls.Viewport.Lower, 0.0);
+	for (int i = 0; i < 100; ++i) controls.Wheel(Controls::WheelMode::Reserved, 1);
+	EXPECT_DOUBLE_EQ(controls.Viewport.Upper, controls.Viewport.Lower + 0.0625);
+	for (int i = 0; i < 100; ++i) controls.Wheel(Controls::WheelMode::Reserved, -1);
+	EXPECT_DOUBLE_EQ(controls.Viewport.Upper, controls.Viewport.Lower + 0.0625);
 }
 
 TEST_F(AudioSpectralTest, ViewportDisplaySamplesAndPicksItsOwnImmutableFrequencyMapping)
@@ -623,7 +623,7 @@ TEST_F(AudioSpectralTest, ControllerRelativeBandReleaseUndoRedoAndCancellation)
 	EXPECT_FALSE(history.Undo());
 }
 
-TEST_F(AudioSpectralTest, ControllerRelativeBandLatestTargetSurvivesWorkerBacklogAndFixedAnchor)
+TEST_F(AudioSpectralTest, ControllerRelativeVerticalBandSurvivesWorkerBacklogAndFractionalAnchor)
 {
 	const auto loop = RecordedLoop();
 	const auto worker = std::make_shared<audio::AudioSpectralWorker>();
@@ -641,7 +641,7 @@ TEST_F(AudioSpectralTest, ControllerRelativeBandLatestTargetSurvivesWorkerBacklo
 		worker->RequestContent(loop.get(), [&entered, resumed] { entered.set_value(); resumed.wait(); });
 		ASSERT_EQ(entered.get_future().wait_for(std::chrono::seconds(2)), std::future_status::ready);
 		ASSERT_TRUE(controller.BeginStroke(true, false, 1200.25 / 48000.0, 1000.0, 100.0f, 0.05, 0.25, 0.005));
-		controller.MoveStroke(std::pair{3000.0 / 48000.0, 1000.0}, -60.0f);
+		controller.MoveStroke(std::pair{1200.25 / 48000.0, 1000.0}, -60.0f);
 		std::this_thread::sleep_for(std::chrono::duration<double>(audio::AudioSpectralConfig::StrokeUpdateSeconds));
 		controller.Update(); // Freeze an attenuation target while worker remains busy.
 		for (int i = 0; i < 2000; ++i) controller.MoveStroke(std::nullopt, 100.0f + (i % 160));
@@ -655,7 +655,7 @@ TEST_F(AudioSpectralTest, ControllerRelativeBandLatestTargetSurvivesWorkerBacklo
 	const auto after = controller.EditState();
 	ASSERT_TRUE(after->Envelope);
 	EXPECT_FLOAT_EQ(after->Envelope->GainAt(1200), audio::AudioSpectralEnvelope::TargetFromDragPixels(80));
-	EXPECT_FLOAT_EQ(after->Envelope->GainAt(3000), 1.0f); // Later X never moves the first-click band.
+	EXPECT_FLOAT_EQ(after->Envelope->GainAt(3000), 1.0f); // A vertical adjustment leaves distant samples untouched.
 	ASSERT_TRUE(history.Undo());
 	EXPECT_EQ(controller.EditState()->Envelope, before->Envelope);
 	EXPECT_FALSE(history.Undo());
@@ -1491,6 +1491,287 @@ TEST_F(AudioSpectralTest, CachedDisplayMatchesDirectCornersAcrossChangingEnvelop
                 std::lerp(height(frame+1u,bin),height(frame+1u,nextBin),bp-bin),fp-frame);
             EXPECT_NEAR(display->Heights[row*4096u+column],expected,1e-6);
         }
+    }
+}
+
+TEST_F(AudioSpectralTest, RelativeSweepPlateauSilenceBoundsAndLocalNeutral)
+{
+    using Stroke = audio::AudioSpectralEnvelopeStroke;
+    std::string reason;
+    std::vector<float> baseline(1000u, 0.5f); baseline[250] = 0.0f;
+    const auto before = audio::AudioSpectralEnvelope::FromGains(baseline, reason);
+    auto stroke = Stroke::Begin(before, 1000.0f, reason, 0.02);
+    auto map = Stroke::RelativeMap::Create(1000ul, 1000.0f, 0.02, reason);
+    Stroke::RelativePath path;
+    ASSERT_TRUE(map->Accumulate(200, 0, 200, 80, path, reason));
+    ASSERT_TRUE(map->Accumulate(200, 80, 400, 80, path, reason));
+    ASSERT_TRUE(stroke->ApplyRelativeMap(*map));
+    auto snapshot = stroke->Snapshot(reason);
+    const auto target = audio::AudioSpectralEnvelope::TargetFromDragPixels(80);
+    for (unsigned long i = 200; i <= 400; ++i)
+        EXPECT_FLOAT_EQ(snapshot->GainAt(i), baseline[i] * target);
+    map->Clear();
+    ASSERT_TRUE(map->Accumulate(400, 80, 400, 0, path, reason));
+    ASSERT_TRUE(stroke->ApplyRelativeMap(*map));
+    snapshot = stroke->Snapshot(reason);
+    EXPECT_FLOAT_EQ(snapshot->GainAt(400), baseline[400]);
+    EXPECT_FLOAT_EQ(snapshot->GainAt(200), baseline[200] * target);
+    EXPECT_FLOAT_EQ(snapshot->GainAt(250), 0.0f);
+    EXPECT_FLOAT_EQ(snapshot->GainAt(500), baseline[500]);
+    map->Clear();
+    ASSERT_TRUE(map->Accumulate(200, 80, 200, 160, path, reason));
+    ASSERT_TRUE(stroke->ApplyRelativeMap(*map));
+    EXPECT_LE(stroke->Snapshot(reason)->GainAt(200), audio::AudioSpectralEnvelope::MaximumGain());
+}
+
+TEST_F(AudioSpectralTest, RelativeSweepDiagonalSubdivisionIncludesSnapshotFeathersAndHandoffs)
+{
+    using Stroke = audio::AudioSpectralEnvelopeStroke;
+    std::string reason;
+    const auto before = audio::AudioSpectralEnvelope::Unity(1000ul, reason);
+    for (const auto interval : {std::pair{0.25, 0.75}, std::pair{100.25, 500.75}, std::pair{0.0, 1000.0}, std::pair{1000.0, 0.0}})
+    {
+        auto whole = Stroke::Begin(before, 1000.0f, reason, 0.02);
+        auto split = Stroke::Begin(before, 1000.0f, reason, 0.02);
+        auto map = Stroke::RelativeMap::Create(1000ul, 1000.0f, 0.02, reason);
+        Stroke::RelativePath wholePath, splitPath;
+        ASSERT_TRUE(map->Accumulate(interval.first, -80, interval.second, 120, wholePath, reason));
+        whole->ApplyRelativeMap(*map); map->Clear();
+        constexpr int subdivisions = 16;
+        for (int i = 0; i < subdivisions; ++i)
+        {
+            const auto a = static_cast<double>(i) / subdivisions;
+            const auto b = static_cast<double>(i + 1) / subdivisions;
+            ASSERT_TRUE(map->Accumulate(std::lerp(interval.first, interval.second, a), std::lerp(-80.0, 120.0, a),
+                std::lerp(interval.first, interval.second, b), std::lerp(-80.0, 120.0, b), splitPath, reason));
+            if (i % 3 == 0) { split->ApplyRelativeMap(*map); map->Clear(); }
+        }
+        split->ApplyRelativeMap(*map);
+        EXPECT_EQ(splitPath.Winner(), 1u);
+        const auto expected = whole->Snapshot(reason), actual = split->Snapshot(reason);
+        ASSERT_TRUE(expected && actual);
+        for (unsigned long i = 0; i < 1000; ++i) EXPECT_NEAR(actual->GainAt(i), expected->GainAt(i), 1e-6) << i;
+        if (interval.first == 0.0 || interval.second == 0.0)
+            EXPECT_FLOAT_EQ(actual->GainAt(0), audio::AudioSpectralEnvelope::TargetFromDragPixels(120)); // Later seam visit wins.
+    }
+}
+
+TEST_F(AudioSpectralTest, RelativeSweepVerticalMatchesLegacyBandAndReversalUsesLaterEqualWinner)
+{
+    using Stroke = audio::AudioSpectralEnvelopeStroke;
+    std::string reason;
+    std::vector<float> gains(1000ul, 0.5f); gains[0] = 0.0f;
+    const auto before = audio::AudioSpectralEnvelope::FromGains(gains, reason);
+    auto legacy = Stroke::Begin(before, 1000.0f, reason, 0.02);
+    auto swept = Stroke::Begin(before, 1000.0f, reason, 0.02);
+    auto map = Stroke::RelativeMap::Create(1000ul, 1000.0f, 0.02, reason);
+    Stroke::RelativePath path;
+    double previous = 0.0;
+    for (const auto displacement : {80.0, -160.0, 0.0})
+    {
+        ASSERT_TRUE(map->Accumulate(0, previous, 0, displacement, path, reason));
+        swept->ApplyRelativeMap(*map); map->Clear();
+        legacy->SetRelativeBand(0.25, audio::AudioSpectralEnvelope::TargetFromDragPixels(displacement));
+        const auto a = legacy->Snapshot(reason), b = swept->Snapshot(reason);
+        EXPECT_TRUE(std::equal(a->Gains().begin(), a->Gains().end(), b->Gains().begin()));
+        previous = displacement;
+    }
+    EXPECT_EQ(swept->Snapshot(reason), before);
+    ASSERT_TRUE(map->Accumulate(200, 80, 400, 80, path, reason));
+    ASSERT_TRUE(map->Accumulate(400, -160, 200, -160, path, reason));
+    swept->ApplyRelativeMap(*map);
+    const auto reversed = swept->Snapshot(reason);
+    for (unsigned long i = 200; i <= 400; ++i) EXPECT_FLOAT_EQ(reversed->GainAt(i), 0.0f);
+    EXPECT_LT(reversed->GainAt(199), before->GainAt(199));
+    EXPECT_FLOAT_EQ(reversed->GainAt(500), before->GainAt(500));
+}
+
+TEST_F(AudioSpectralTest, FrozenBandProjectionIgnoresYAndPreservesDpiAndClickedTime)
+{
+    const auto clip = glm::perspective(glm::radians(42.0f), 1.5f, 0.1f, 1000.0f)
+        * glm::lookAt(glm::vec3(80, 200, 240), glm::vec3(0, 0, 0), glm::vec3(0, 1, 0));
+    const utils::Position2d anchor{300, 220};
+    const auto vertical = editor::AudioSpectralPicking::BandTime(clip, 10, 100, anchor, {300, 500}, 900, 600, 0.345, 2);
+    ASSERT_TRUE(vertical); EXPECT_DOUBLE_EQ(*vertical, 0.345);
+    const auto diagonal = editor::AudioSpectralPicking::BandTime(clip, 10, 100, anchor, {500, 500}, 900, 600, 0.345, 2);
+    const auto horizontal = editor::AudioSpectralPicking::BandTime(clip, 10, 100, anchor, {500, 220}, 900, 600, 0.345, 2);
+    const auto dpi = editor::AudioSpectralPicking::BandTime(clip, 10, 100, {600, 440}, {1000, 1000}, 1800, 1200, 0.345, 2);
+    ASSERT_TRUE(diagonal && horizontal && dpi);
+    EXPECT_DOUBLE_EQ(*diagonal, *horizontal); EXPECT_DOUBLE_EQ(*diagonal, *dpi);
+    EXPECT_GT(*diagonal, *vertical);
+}
+
+TEST_F(AudioSpectralTest, SharedInputBudgetBoundsCancelledMixedTransitionsAndLowOverlap)
+{
+    for (const auto coefficients : {1000ull, 2000ull, 8000ull})
+    {
+        constexpr std::uint64_t samples = 1000u;
+        const auto shared = (std::max)(coefficients * audio::AudioSpectralConfig::InputMapBytesPerCoefficient,
+            samples * audio::AudioSpectralConfig::BandMapBytesPerSample);
+        EXPECT_GE(shared, coefficients * 12u + samples * 48u);
+        EXPECT_GE(shared, coefficients * 24u + samples * 24u);
+    }
+    std::string reason;
+    const auto source = Source(48000ul);
+    const auto estimate = audio::AudioSpectralDsp::EstimateWorkingMemory(source->Layout, {1u, 4096u, 2048u}, reason);
+    ASSERT_TRUE(estimate) << reason;
+    const auto coefficientBytes = estimate->Geometry.FrameCount * estimate->Geometry.BinCount
+        * audio::AudioSpectralConfig::InputMapBytesPerCoefficient;
+    EXPECT_GT(static_cast<std::uint64_t>(48000ul) * audio::AudioSpectralConfig::BandMapBytesPerSample, coefficientBytes);
+}
+
+TEST_F(AudioSpectralTest, RelativeWinnerMetadataOnlyRepaintRefreshesRampsAndPreservesSilence)
+{
+    using Stroke = audio::AudioSpectralEnvelopeStroke;
+    std::string reason;
+    std::vector<float> baseline(1000ul, 1.0f);
+    std::fill_n(baseline.begin(), 199, 0.0f);
+    const auto before = audio::AudioSpectralEnvelope::FromGains(baseline, reason);
+    auto stroke = Stroke::Begin(before, 1000.0f, reason, 0.05);
+    auto map = Stroke::RelativeMap::Create(1000ul, 1000.0f, 0.05, reason);
+    Stroke::RelativePath path;
+    ASSERT_TRUE(map->Accumulate(179, 0, 179, 0, path, reason));
+    ASSERT_TRUE(map->Accumulate(219, 80, 219, 80, path, reason));
+    stroke->ApplyRelativeMap(*map);
+    const auto ramped = stroke->Snapshot(reason);
+    map->Clear();
+    // The new band wins only baseline-zero samples; every raw gain stays equal.
+    // Matching neighbouring target metadata removes a competing ramp.
+    ASSERT_TRUE(map->Accumulate(179, 80, 179, 80, path, reason));
+    EXPECT_TRUE(stroke->ApplyRelativeMap(*map));
+    const auto refreshed = stroke->Snapshot(reason);
+    EXPECT_NE(ramped->GainAt(199), refreshed->GainAt(199));
+    const auto shoulder = 1.0 - std::pow(20.0 / 50.0, 2);
+    EXPECT_FLOAT_EQ(refreshed->GainAt(199), static_cast<float>(1.0 + shoulder * shoulder
+        * (audio::AudioSpectralEnvelope::TargetFromDragPixels(80) - 1.0))); // Same raw candidate as before repaint.
+    for (unsigned long index = 0; index < 199; ++index)
+    { EXPECT_FLOAT_EQ(ramped->GainAt(index), 0.0f); EXPECT_FLOAT_EQ(refreshed->GainAt(index), 0.0f); }
+}
+
+TEST_F(AudioSpectralTest, RelativeSweptControllerRetainsFullBackloggedPathAndOneUndo)
+{
+    using Stroke = audio::AudioSpectralEnvelopeStroke;
+    const auto loop = RecordedLoop(8192ul);
+    const auto worker = std::make_shared<audio::AudioSpectralWorker>();
+    editor::AudioSpectralEditor controller(worker);
+    actions::ActionUndoHistory history; controller.SetUndoHistory(&history); controller.Open(loop);
+    ASSERT_TRUE(Pump(controller, loop, [&] { return controller.Status() == editor::AudioSpectralEditor::State::Ready; }));
+    const auto before = controller.EditState();
+        ASSERT_EQ(before->Source->Layout.LogicalLength, 8192ul);
+    std::string reason;
+    const auto baseline = audio::AudioSpectralEnvelope::Unity(before->Source->Layout.LogicalLength, reason);
+    auto expected = Stroke::Begin(baseline, 48000.0f, reason, 0.005);
+    auto map = Stroke::RelativeMap::Create(baseline->Length(), 48000.0f, 0.005, reason);
+    Stroke::RelativePath path;
+    std::promise<void> entered, resume;
+    const auto resumed = resume.get_future().share();
+    struct Release { std::promise<void>& Resume; ~Release() { Resume.set_value(); } };
+    {
+        Release release{resume};
+        worker->RequestContent(loop.get(), [&entered, resumed] { entered.set_value(); resumed.wait(); });
+        ASSERT_EQ(entered.get_future().wait_for(std::chrono::seconds(2)), std::future_status::ready);
+        ASSERT_TRUE(controller.BeginStroke(true, false, 1200.0 / 48000.0, 1000, 100, 0.05, 0.25, 0.005));
+        controller.MoveStroke(std::nullopt, 180);
+        ASSERT_TRUE(map->Accumulate(1200, 0, 1200, 80, path, reason));
+        std::this_thread::sleep_for(std::chrono::duration<double>(audio::AudioSpectralConfig::StrokeUpdateSeconds));
+        controller.Update(); // Freeze first map while subsequent path accumulates separately.
+        double sample = 1200, drag = 80;
+        for (const auto next : {std::pair{4000.0, 80.0}, std::pair{6500.0, -80.0}, std::pair{5500.0, 0.0},
+            std::pair{7000.0, 60.0}, std::pair{7200.0, 60.0}})
+        {
+            controller.MoveStroke(std::pair{next.first / 48000.0, 1000.0}, 100 + next.second);
+            ASSERT_TRUE(map->Accumulate(sample, drag, next.first, next.second, path, reason));
+            sample = next.first; drag = next.second;
+        }
+        for (int i = 0; i < 1000; ++i) controller.MoveStroke(std::nullopt, 160); // Stationary holds cannot compound.
+        controller.EndStroke(false);
+        EXPECT_EQ(controller.EditState(), before);
+    }
+    ASSERT_TRUE(Pump(controller, loop, [&] { return !controller.HasStroke(); })) << controller.Feedback();
+    expected->ApplyRelativeMap(*map);
+    const auto desired = expected->Snapshot(reason), actual = controller.EditState()->Envelope;
+    ASSERT_TRUE(actual && desired);
+    for (unsigned long i = 0; i < baseline->Length(); ++i) EXPECT_NEAR(actual->GainAt(i), desired->GainAt(i), 1e-5) << i;
+    EXPECT_FLOAT_EQ(actual->GainAt(3000), audio::AudioSpectralEnvelope::TargetFromDragPixels(80));
+    ASSERT_TRUE(history.Undo()); EXPECT_EQ(controller.EditState()->Envelope, before->Envelope);
+    EXPECT_FALSE(history.Undo());
+}
+
+TEST_F(AudioSpectralTest, CancelledMixedStrokeHandoffsPreserveNewStrokeAndUndo)
+{
+    for (const bool cancelledBand : {true, false})
+    {
+        const auto loop = RecordedLoop(8192ul);
+        const auto worker = std::make_shared<audio::AudioSpectralWorker>();
+        editor::AudioSpectralEditor controller(worker);
+        actions::ActionUndoHistory history; controller.SetUndoHistory(&history); controller.Open(loop);
+        ASSERT_TRUE(Pump(controller, loop, [&] { return controller.Status() == editor::AudioSpectralEditor::State::Ready; }));
+        const auto before = controller.EditState();
+        ASSERT_EQ(before->Source->Layout.LogicalLength, 8192ul);
+        std::promise<void> entered, resume;
+        const auto resumed = resume.get_future().share();
+        struct Release { std::promise<void>& Resume; ~Release() { Resume.set_value(); } };
+        {
+            Release release{resume};
+            worker->RequestContent(loop.get(), [&entered, resumed] { entered.set_value(); resumed.wait(); });
+            ASSERT_EQ(entered.get_future().wait_for(std::chrono::seconds(2)), std::future_status::ready);
+            ASSERT_TRUE(controller.BeginStroke(cancelledBand, false, 1200.0 / 48000.0, 1000, 100));
+            std::this_thread::sleep_for(std::chrono::duration<double>(audio::AudioSpectralConfig::StrokeUpdateSeconds));
+            controller.MoveStroke(std::pair{3000.0 / 48000.0, 1000.0}, 180);
+            controller.EndStroke(true); // Queued receipt dies; UI maps drop before next admission.
+            ASSERT_TRUE(controller.BeginStroke(!cancelledBand, false, 4000.0 / 48000.0, 1000, 100));
+            std::this_thread::sleep_for(std::chrono::duration<double>(audio::AudioSpectralConfig::StrokeUpdateSeconds));
+            controller.MoveStroke(std::pair{6000.0 / 48000.0, 1000.0}, 180);
+            controller.EndStroke(false);
+        }
+        ASSERT_TRUE(Pump(controller, loop, [&] { return !controller.HasStroke(); })) << controller.Feedback();
+        const auto after = controller.EditState();
+        if (cancelledBand) { EXPECT_EQ(after->Envelope, before->Envelope); EXPECT_NE(after->Gains, before->Gains); }
+        else { EXPECT_EQ(after->Gains, before->Gains); ASSERT_TRUE(after->Envelope); EXPECT_GT(after->Envelope->GainAt(6000), 1.0f); }
+        ASSERT_TRUE(history.Undo());
+        EXPECT_EQ(controller.EditState()->Gains, before->Gains); EXPECT_EQ(controller.EditState()->Envelope, before->Envelope);
+        EXPECT_FALSE(history.Undo());
+    }
+}
+
+TEST_F(AudioSpectralTest, InvalidBroadbandPointRetainsCapturedCentreAndOrdinaryMissBreaksPath)
+{
+    const auto loop = RecordedLoop(); editor::AudioSpectralEditor controller; controller.Open(loop);
+    ASSERT_TRUE(Pump(controller, loop, [&] { return controller.Status() == editor::AudioSpectralEditor::State::Ready; }));
+    ASSERT_TRUE(controller.BeginStroke(true, false, 1200.25 / 48000.0, 1000, 100));
+    controller.MoveStroke(std::pair{std::numeric_limits<double>::quiet_NaN(), 1000.0}, -60);
+    controller.EndStroke(false);
+    ASSERT_TRUE(Pump(controller, loop, [&] { return !controller.HasStroke(); }));
+    ASSERT_TRUE(controller.EditState()->Envelope);
+    EXPECT_FLOAT_EQ(controller.EditState()->Envelope->GainAt(1200), 0.0f);
+    ASSERT_TRUE(controller.BeginStroke(false, false, 0.03, 1000, 100));
+    controller.MoveStroke(std::pair{0.04, -1.0}, 100);
+    EXPECT_FALSE(controller.BrushLevelDb().has_value());
+    controller.EndStroke(true);
+}
+
+TEST_F(AudioSpectralTest, DISABLED_RelativeSweepInputPerformanceDiagnostic)
+{
+    using Stroke = audio::AudioSpectralEnvelopeStroke;
+    for (const unsigned long seconds : {2ul, 10ul, 30ul})
+    {
+        std::string reason;
+        const auto length = seconds * 48000ul;
+        auto map = Stroke::RelativeMap::Create(length, 48000.0f, 0.05, reason);
+        ASSERT_TRUE(map) << reason;
+        Stroke::RelativePath path;
+        auto start = std::chrono::steady_clock::now();
+        ASSERT_TRUE(map->Accumulate(0, 80, length, 80, path, reason));
+        const auto full = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+        map->Clear();
+        start = std::chrono::steady_clock::now();
+        constexpr int count = 100;
+        for (int i = 0; i < count; ++i)
+            ASSERT_TRUE(map->Accumulate(static_cast<double>(length) * i / count, 80,
+                static_cast<double>(length) * (i + 1) / count, 80, path, reason));
+        const auto average = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count() / count;
+        std::cout << "RelativeInput Debug " << seconds << " s: full-loop " << full
+            << " ms; 1/100-loop pointer step mean " << average << " ms\n";
     }
 }
 

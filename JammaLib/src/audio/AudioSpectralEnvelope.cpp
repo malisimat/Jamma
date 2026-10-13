@@ -154,6 +154,145 @@ bool AudioSpectralEnvelopeStroke::SetRelativeBand(double centreSample, float fac
 	return changed;
 }
 
+bool AudioSpectralEnvelopeStroke::RelativePath::Next(double start, double startDrag,
+	double end, double endDrag) noexcept
+{
+	const auto dx = end - start;
+	const auto dy = endDrag - startDrag;
+	const auto cross = dx * _dy - dy * _dx;
+	const auto tolerance = 64.0 * std::numeric_limits<double>::epsilon()
+		* ((std::max)(1.0, std::abs(dx * _dy) + std::abs(dy * _dx)));
+	const bool continuation = _winner != 0u && start == _end && startDrag == _endDrag
+		&& dx * _dx > 0.0 && std::abs(cross) <= tolerance;
+	if (!continuation)
+	{
+		if (_winner == std::numeric_limits<std::uint32_t>::max()) return false;
+		++_winner;
+	}
+	_end = end; _endDrag = endDrag; _dx = dx; _dy = dy;
+	return true;
+}
+
+AudioSpectralEnvelopeStroke::RelativeMap::RelativeMap(unsigned long length, double radius) :
+	_influence(length, 0.0), _drag(length, 0.0), _winners(length, 0u), _radius(radius)
+{
+	_dirty.reserve(length);
+}
+
+std::unique_ptr<AudioSpectralEnvelopeStroke::RelativeMap> AudioSpectralEnvelopeStroke::RelativeMap::Create(
+	unsigned long length, float sampleRate, double radiusSeconds, std::string& reason)
+{
+	reason.clear();
+	if (length == 0ul || !std::isfinite(sampleRate) || sampleRate <= 0.0f
+		|| !std::isfinite(radiusSeconds) || radiusSeconds <= 0.0 || radiusSeconds > 2.0
+		|| static_cast<std::uint64_t>(length) * 24u > AudioSpectralConfig::MaxWorkingBytes)
+	{
+		reason = "Relative band input exceeds the spectral memory budget or has invalid geometry";
+		return nullptr;
+	}
+	try { return std::unique_ptr<RelativeMap>(new RelativeMap(length, sampleRate * radiusSeconds)); }
+	catch (const std::bad_alloc&) { reason = "Not enough memory for relative band input"; return nullptr; }
+}
+
+void AudioSpectralEnvelopeStroke::RelativeMap::Clear() noexcept
+{
+	for (const auto index : _dirty) { _influence[index] = 0.0; _winners[index] = 0u; }
+	_dirty.clear();
+}
+
+bool AudioSpectralEnvelopeStroke::RelativeMap::Accumulate(double startSample, double startDrag,
+	double endSample, double endDrag, RelativePath& path, std::string& reason)
+{
+	reason.clear();
+	for (const auto value : {startSample, startDrag, endSample, endDrag})
+		if (!std::isfinite(value) || std::abs(value) > 0x1p50)
+		{ reason = "Relative band input has an invalid coordinate"; return false; }
+	if (!path.Next(startSample, startDrag, endSample, endDrag))
+	{ reason = "Relative band gesture reached its bounded winner limit; finish this stroke"; return false; }
+	const auto first = std::ceil((std::min)(startSample, endSample) - _radius);
+	const auto last = std::floor((std::max)(startSample, endSample) + _radius);
+	const auto length = static_cast<unsigned long>(_influence.size());
+	if (last - first + 1.0 >= length)
+		for (unsigned long index = 0ul; index < length; ++index)
+			_AccumulateSample(index, startSample, startDrag, endSample, endDrag, path.Winner());
+	else
+		for (double index = first; index <= last; index += 1.0)
+			_AccumulateSample(_WrapSample(index, length), startSample, startDrag, endSample, endDrag, path.Winner());
+	return true;
+}
+
+void AudioSpectralEnvelopeStroke::RelativeMap::_AccumulateSample(unsigned long index, double start,
+	double startDrag, double end, double endDrag, std::uint32_t winner) noexcept
+{
+	const auto length = static_cast<double>(_influence.size());
+	const auto low = (std::min)(start, end), high = (std::max)(start, end);
+	double sample, centre;
+	if (low >= 0.0 && high <= length && index >= low && index <= high
+		&& !(index == 0ul && high == length))
+	{
+		// Most centre visits are inside one body: avoid periodic-copy arithmetic.
+		// End==length retains the general path so index zero takes its later visit.
+		sample = centre = index;
+	}
+	else
+	{
+		const auto firstTurn = std::ceil((low - index) / length), lastTurn = std::floor((high - index) / length);
+		if (firstTurn <= lastTurn)
+		{
+			sample = index + (end >= start ? lastTurn : firstTurn) * length;
+			centre = sample;
+		}
+		else
+		{
+			const auto below = index + std::floor((low - index) / length) * length;
+			const auto above = below + length;
+			const bool chooseBelow = low - below < above - high
+				|| (low - below == above - high && end < start);
+			sample = chooseBelow ? below : above;
+			centre = chooseBelow ? low : high;
+		}
+	}
+	const auto distance = std::abs(sample - centre);
+	if (distance >= _radius) return;
+	const auto fraction = distance / _radius;
+	const auto shoulder = 1.0 - fraction * fraction;
+	const auto influence = shoulder * shoulder;
+	if (influence < _influence[index]) return;
+	const auto alpha = start == end ? 1.0 : std::clamp((centre - start) / (end - start), 0.0, 1.0);
+	if (_winners[index] == 0u) _dirty.push_back(index); // Capacity covers every source sample.
+	_influence[index] = influence;
+	_drag[index] = alpha == 0.0 ? startDrag : alpha == 1.0 ? endDrag : startDrag + alpha * (endDrag - startDrag);
+	_winners[index] = winner;
+}
+
+bool AudioSpectralEnvelopeStroke::ApplyRelativeMap(const RelativeMap& map) noexcept
+{
+	if (map._influence.size() != _gains.size()) return false;
+	_relativeMode = true;
+	bool changed = false;
+	const auto maximum = static_cast<double>(AudioSpectralEnvelope::MaximumGain());
+	for (const auto index : map._dirty)
+	{
+		const auto influence = map._influence[index];
+		// Maps are consumed in input order. Equal influence always takes this map;
+		// run IDs describe continuity for ramps, never temporal winner priority.
+		if (influence < _bestInfluence[index]) continue;
+		const auto target = AudioSpectralEnvelope::TargetFromDragPixels(map._drag[index]);
+		const auto baseline = _before->GainAt(index);
+		const auto candidate = static_cast<float>(std::clamp(baseline
+			* (1.0 + influence * (static_cast<double>(target) - 1.0)), 0.0, maximum));
+		const bool wasChanged = _gains[index] != baseline, isChanged = candidate != baseline;
+		if (wasChanged != isChanged) { if (isChanged) ++_changedSamples; else --_changedSamples; }
+		changed |= candidate != _gains[index] || influence != _bestInfluence[index]
+			|| map._winners[index] != _winnerIds[index] || target != _winningTargets[index];
+		_gains[index] = candidate;
+		_bestInfluence[index] = influence;
+		_winnerIds[index] = map._winners[index];
+		_winningTargets[index] = target;
+	}
+	return changed;
+}
+
 bool AudioSpectralEnvelopeStroke::PaintSegment(double startSample, float startGain,
 	double endSample, float endGain) noexcept
 {
@@ -332,6 +471,7 @@ void AudioSpectralEnvelopeStroke::_ApplyLocalRamps(std::vector<float>& gains) co
 		{
 			const auto index = (leftEnd + step) % length;
 			if (_bestInfluence[index] <= 0.0 || _bestInfluence[index] >= 1.0) continue;
+			if (_relativeMode && _before->GainAt(index) == 0.0f) continue; // Relative ramps preserve prior silence.
 			const auto fraction = static_cast<double>(step) / intervals;
 			gains[index] = leftGain == rightGain ? leftGain
 				: static_cast<float>(leftGain + fraction * (static_cast<double>(rightGain) - leftGain));

@@ -29,12 +29,12 @@ namespace editor
 		double FrequencyRadius = audio::AudioSpectralConfig::BrushFrequencyRadiusOctaves;
 		double BandRadius = audio::AudioSpectralConfig::BarTimeRadiusSeconds;
 		graphics::AudioSpectralViewport Viewport;
-		enum class WheelMode { Brush, Band, Zoom, Pan };
+		enum class WheelMode { Brush, Band, Zoom, Reserved };
 		static WheelMode WheelBinding(bool alt, bool shift, bool control) noexcept
-		{ return alt ? WheelMode::Band : shift ? WheelMode::Zoom : control ? WheelMode::Pan : WheelMode::Brush; }
+		{ return control ? WheelMode::Reserved : alt ? WheelMode::Band : shift ? WheelMode::Zoom : WheelMode::Brush; }
 		void Wheel(WheelMode mode, double direction) noexcept
 		{
-			if (!std::isfinite(direction) || direction == 0.0) return;
+			if (mode == WheelMode::Reserved || !std::isfinite(direction) || direction == 0.0) return;
 			direction = direction > 0.0 ? 1.0 : -1.0;
 			const auto factor = std::pow(1.2, direction);
 			if (mode == WheelMode::Band) BandRadius = std::clamp(BandRadius * factor, 0.005, 2.0);
@@ -46,9 +46,8 @@ namespace editor
 			else
 			{
 				const auto span = Viewport.Upper - Viewport.Lower;
-				const auto nextSpan = mode == WheelMode::Zoom ? std::clamp(span - direction * 0.09375, 0.0625, 1.0) : span;
-				SetView(Viewport.Lower + (span - nextSpan) * 0.5
-					+ (mode == WheelMode::Pan ? direction * 3.0 / 128.0 : 0.0), nextSpan);
+				const auto nextSpan = std::clamp(span - direction * 0.09375, 0.0625, 1.0);
+				SetView(Viewport.Lower + (span - nextSpan) * 0.5, nextSpan);
 			}
 		}
 		void BeginView(double anchorFraction) noexcept
@@ -93,12 +92,12 @@ namespace editor
 		std::shared_ptr<const audio::AudioSpectralPlaybackSnapshot> Playback() const;
 		std::shared_ptr<const audio::AudioSpectralAnalysis> Analysis() const noexcept { return _analysis; }
 		void SetUndoHistory(actions::ActionUndoHistory* history) noexcept { _history = history; }
-		bool BeginStroke(bool broadband, bool attenuate, double seconds, double hz, float logicalY,
+		bool BeginStroke(bool broadband, bool attenuate, double seconds, double hz, double logicalY,
 			double timeRadius = audio::AudioSpectralConfig::BrushTimeRadiusSeconds,
 			double frequencyRadius = audio::AudioSpectralConfig::BrushFrequencyRadiusOctaves,
 			double bandRadius = audio::AudioSpectralConfig::BarTimeRadiusSeconds);
 		void SetFrequencyViewport(graphics::AudioSpectralViewport viewport);
-		void MoveStroke(std::optional<std::pair<double, double>> point, float logicalY);
+		void MoveStroke(std::optional<std::pair<double, double>> point, double logicalY);
 		void EndStroke(bool cancel);
 		bool HasStroke() const noexcept { return !!_stroke; }
         std::optional<double> BrushLevelDb() const;

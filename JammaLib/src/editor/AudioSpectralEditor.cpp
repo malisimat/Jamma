@@ -18,9 +18,11 @@ struct AudioSpectralEditor::Stroke
 	std::shared_ptr<audio::AudioSpectralGainField> Gains; // Worker only.
 	std::unique_ptr<audio::AudioSpectralEnvelopeStroke> Envelope; // Worker only.
 	std::shared_ptr<const audio::AudioSpectralEnvelope> PublishedEnvelope; // Worker only.
-	// UI-owned latest target, replaced while busy. Worker captures a value copy;
-	// release/acquire receipt hands back results. Cancellation drops UI ownership.
-	std::optional<float> PendingTarget;
+	// UI-owned path accumulation. Worker reads only the map frozen in its receipt;
+	// release/acquire returns ownership. Cancellation immediately drops UI scratch.
+	std::unique_ptr<audio::AudioSpectralEnvelopeStroke::RelativeMap> BandInput, BandSpare; // UI only until frozen receipt.
+    audio::AudioSpectralEnvelopeStroke::RelativePath BandPath; // UI run provenance survives batches.
+    double BandDrag = 0.0, SampleAlignment = 0.0;
 	// Initialized by UI before handoff and immutable for worker/UI readers.
 	double AnchorSeconds = 0.0;
 	double TimeRadius = audio::AudioSpectralConfig::BrushTimeRadiusSeconds;
@@ -28,7 +30,7 @@ struct AudioSpectralEditor::Stroke
 	double BandRadius = audio::AudioSpectralConfig::BarTimeRadiusSeconds;
     std::unique_ptr<audio::AudioSpectralGainField::ExposureMap> InputMap, SpareMap; // UI-owned except handed-off map.
 	std::optional<std::pair<double, double>> Point;
-	float AnchorY = 0, Target = 1;
+	double AnchorY = 0.0; float Target = 1;
 	bool Broadband = false, Attenuate = false, Released = false;
 	std::chrono::steady_clock::time_point Last = std::chrono::steady_clock::now();
 	std::chrono::steady_clock::time_point LastBatch = Last;
@@ -45,7 +47,8 @@ struct AudioSpectralEditor::PaintReceipt
 	bool Changed = false;
     double ExposureSeconds = 0;
     std::unique_ptr<audio::AudioSpectralGainField::ExposureMap> InputMap; // Frozen for worker/UI readers until terminal release/acquire.
-	std::string Reason;
+	std::unique_ptr<audio::AudioSpectralEnvelopeStroke::RelativeMap> BandInput; // Immutable during worker ownership.
+    std::string Reason;
 };
 
 class AudioSpectralEditor::EditUndo final : public base::ActionUndo
@@ -457,7 +460,7 @@ void AudioSpectralEditor::SetFrequencyViewport(graphics::AudioSpectralViewport v
 	_UpdateDisplay();
 }
 
-bool AudioSpectralEditor::BeginStroke(bool broadband, bool attenuate, double seconds, double hz, float logicalY,
+bool AudioSpectralEditor::BeginStroke(bool broadband, bool attenuate, double seconds, double hz, double logicalY,
 	double timeRadius, double frequencyRadius, double bandRadius)
 {
 	const auto loop = _loop.lock();
@@ -494,13 +497,21 @@ bool AudioSpectralEditor::BeginStroke(bool broadband, bool attenuate, double sec
 		stroke->Analysis = _analysis;
 		stroke->AnchorY = logicalY;
 		stroke->AnchorSeconds = seconds;
+        stroke->SampleAlignment = std::round(seconds * before->Source->Layout.SampleRate) - seconds * before->Source->Layout.SampleRate;
 		stroke->TimeRadius = timeRadius;
 		stroke->FrequencyRadius = frequencyRadius;
 		stroke->BandRadius = bandRadius;
 		stroke->Broadband = broadband;
 		stroke->Attenuate = attenuate;
 		stroke->Point = std::pair{seconds, hz};
-        if (!broadband)
+        if (broadband)
+        {
+            stroke->BandInput = audio::AudioSpectralEnvelopeStroke::RelativeMap::Create(before->Source->Layout.LogicalLength, before->Source->Layout.SampleRate, bandRadius, _feedback);
+            if (!stroke->BandInput) { _editFailure = _feedback; return false; }
+            stroke->BandSpare = audio::AudioSpectralEnvelopeStroke::RelativeMap::Create(before->Source->Layout.LogicalLength, before->Source->Layout.SampleRate, bandRadius, _feedback);
+            if (!stroke->BandSpare) { _editFailure = _feedback; return false; }
+        }
+        else
         {
             stroke->InputMap = audio::AudioSpectralGainField::ExposureMap::Create(_analysis->Geometry.FrameCount, _analysis->Geometry.BinCount, _feedback);
             if (!stroke->InputMap) { _editFailure = _feedback; return false; }
@@ -516,7 +527,7 @@ bool AudioSpectralEditor::BeginStroke(bool broadband, bool attenuate, double sec
 	catch (const std::bad_alloc&) { _feedback = _editFailure = "Not enough memory to begin a stroke"; return false; }
 }
 
-void AudioSpectralEditor::MoveStroke(std::optional<std::pair<double, double>> point, float logicalY)
+void AudioSpectralEditor::MoveStroke(std::optional<std::pair<double, double>> point, double logicalY)
 {
     if (!_stroke || _stroke->Released) return;
     auto& stroke = *_stroke;
@@ -524,17 +535,26 @@ void AudioSpectralEditor::MoveStroke(std::optional<std::pair<double, double>> po
     const auto elapsed = std::chrono::duration<double>(now - stroke.Last).count();
     stroke.Last = now;
     const auto target = audio::AudioSpectralEnvelope::TargetFromDragPixels(logicalY - stroke.AnchorY);
+    if (point && (!std::isfinite(point->first) || !std::isfinite(point->second) || point->second < 0.0)) point.reset();
     if (stroke.Broadband)
     {
-        if (std::isfinite(logicalY) && stroke.Target != target)
+        if (!std::isfinite(logicalY)) return;
+        const auto next = point.value_or(*stroke.Point);
+        const auto drag = logicalY - stroke.AnchorY;
+        if (next.first != stroke.Point->first || drag != stroke.BandDrag)
         {
-            stroke.PendingTarget = target;
+            const auto rate = stroke.Before->Source->Layout.SampleRate;
+            std::string reason;
+            if (!stroke.BandInput->Accumulate(stroke.Point->first * rate + stroke.SampleAlignment,
+                stroke.BandDrag, next.first * rate + stroke.SampleAlignment, drag, stroke.BandPath, reason))
+            { _feedback = _editFailure = reason; EndStroke(true); return; }
+            stroke.Point = next;
+            stroke.BandDrag = drag;
             stroke.Target = target;
         }
         _UpdateStroke();
-        return; // Fixed first-click source time; later X and surface misses do not move it.
+        return;
     }
-    if (point && (!std::isfinite(point->first) || !std::isfinite(point->second) || point->second < 0)) point.reset();
     if (point) point->second = (std::max)(point->second, audio::AudioSpectralConfig::DisplayMinimumFrequencyHz);
     if (point)
     {
@@ -583,7 +603,7 @@ void AudioSpectralEditor::EndStroke(bool cancel)
 		}
 		else if (loop && current) _QueuePlayback(_worker, loop, current, _analysis, _gate);
 		_gate->StrokeActive.store(false);
-        _stroke->InputMap.reset(); _stroke->SpareMap.reset(); // Drop UI scratch even if the worker still pins Stroke.
+        _stroke->InputMap.reset(); _stroke->SpareMap.reset(); _stroke->BandInput.reset(); _stroke->BandSpare.reset(); // Drop UI scratch even if the worker still pins Stroke.
 		_stroke.reset();
 		_paintReceipt.reset();
 		return;
@@ -602,7 +622,7 @@ void AudioSpectralEditor::_UpdateStroke()
 	const auto loop = _loop.lock();
 	if (!loop || !loop->IsCurrentAudioSpectralSource(*_stroke->Before->Source)) { EndStroke(true); return; }
 	if (_paintReceipt) return;
-	if (_stroke->Broadband ? !_stroke->PendingTarget : _stroke->InputMap->Empty())
+	if (_stroke->Broadband ? _stroke->BandInput->Empty() : _stroke->InputMap->Empty())
 	{
 		if (_stroke->Released) _FinishStroke();
 		return;
@@ -613,10 +633,10 @@ void AudioSpectralEditor::_UpdateStroke()
 	_stroke->LastBatch = now;
 	const auto stroke = _stroke;
 	auto receipt = std::make_shared<PaintReceipt>();
-    std::optional<float> target;
     if (stroke->Broadband)
     {
-        target = std::exchange(stroke->PendingTarget, std::nullopt);
+        receipt->BandInput = std::move(stroke->BandInput);
+        stroke->BandInput = std::move(stroke->BandSpare);
     }
     else
     {
@@ -624,7 +644,7 @@ void AudioSpectralEditor::_UpdateStroke()
         stroke->InputMap = std::move(stroke->SpareMap);
     }
     _paintReceipt = receipt;
-	_worker->RequestEditing([stroke, receipt, target]
+	_worker->RequestEditing([stroke, receipt]
 	{
 		try
 		{
@@ -642,8 +662,7 @@ void AudioSpectralEditor::_UpdateStroke()
 					}
 					if (stroke->Envelope)
 					{
-						const auto changed = target && stroke->Envelope->SetRelativeBand(
-							stroke->AnchorSeconds * stroke->Before->Source->Layout.SampleRate, *target);
+						const auto changed = stroke->Envelope->ApplyRelativeMap(*receipt->BandInput);
 						if (changed)
 						{
 							auto snapshot = stroke->Envelope->Snapshot(receipt->Reason);
@@ -684,6 +703,11 @@ void AudioSpectralEditor::_AcceptPaint()
     {
         receipt->InputMap->Clear(); // Terminal acquire: no worker reads remain.
         _stroke->SpareMap = std::move(receipt->InputMap);
+    }
+    if (receipt->BandInput)
+    {
+        receipt->BandInput->Clear();
+        _stroke->BandSpare = std::move(receipt->BandInput);
     }
     _stroke->AppliedSeconds += receipt->ExposureSeconds;
 	if (!receipt->Reason.empty()) { _feedback = _editFailure = receipt->Reason; EndStroke(true); return; }
@@ -754,7 +778,7 @@ void AudioSpectralEditor::_LogStroke(const char* event)
         << " mode=" << (_stroke->Attenuate ? "attenuate" : "boost")
         << " t=" << point.first << " hz=" << point.second << " frame=" << frame << " bin=" << bin
         << " input_s=" << _stroke->InputSeconds << " applied_s=" << _stroke->AppliedSeconds
-        << " pending=" << (_stroke->InputMap ? _stroke->InputMap->DirtyCellCount() : static_cast<std::size_t>(_stroke->PendingTarget.has_value())) << " busy=" << static_cast<bool>(_paintReceipt)
+        << " pending=" << (_stroke->InputMap ? _stroke->InputMap->DirtyCellCount() : static_cast<std::size_t>(_stroke->BandInput && !_stroke->BandInput->Empty())) << " busy=" << static_cast<bool>(_paintReceipt)
         << " gain_db=" << gain << " level_db=" << (absolute > 0 ? 20.0 * std::log10(absolute) : -999.0)
         << " limit=" << (gain == audio::AudioSpectralConfig::SilenceGainDb || absolute >= 0.99999)
         << " preview_db=" << (preview && std::isfinite(*preview) ? *preview : -999.0)
@@ -797,6 +821,6 @@ void AudioSpectralEditor::_FinishStroke()
 		}
 		else _feedback = "Stroke exceeds the spectral Undo memory limit";
 	}
-    _stroke->InputMap.reset(); _stroke->SpareMap.reset(); // Worker closures must not retain completed UI scratch.
+    _stroke->InputMap.reset(); _stroke->SpareMap.reset(); _stroke->BandInput.reset(); _stroke->BandSpare.reset(); // Worker closures must not retain completed UI scratch.
 	_stroke.reset();
 }

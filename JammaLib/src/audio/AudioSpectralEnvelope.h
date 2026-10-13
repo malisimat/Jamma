@@ -35,12 +35,47 @@ namespace audio
 	class AudioSpectralEnvelopeStroke
 	{
 	public:
+		// UI-owned run provenance survives map handoffs. FIFO application, not
+		// these IDs, gives a later equal-influence input priority.
+		class RelativeMap;
+		class RelativePath
+		{
+			friend class RelativeMap;
+		public:
+			bool Next(double start, double startDrag, double end, double endDrag) noexcept;
+			std::uint32_t Winner() const noexcept { return _winner; }
+		private:
+			std::uint32_t _winner = 0u;
+			double _end = 0.0, _endDrag = 0.0, _dx = 0.0, _dy = 0.0;
+		};
+		// Dense bounded scratch: 24 bytes/sample including reserved dirty indices.
+		// UI freezes a map; worker reads it; terminal receipt returns it for reuse.
+		class RelativeMap
+		{
+			friend class AudioSpectralEnvelopeStroke;
+		public:
+			static std::unique_ptr<RelativeMap> Create(unsigned long length, float sampleRate,
+				double radiusSeconds, std::string& reason);
+			bool Accumulate(double startSample, double startDrag, double endSample,
+				double endDrag, RelativePath& path, std::string& reason);
+			bool Empty() const noexcept { return _dirty.empty(); }
+			void Clear() noexcept;
+		private:
+			RelativeMap(unsigned long length, double radius);
+			void _AccumulateSample(unsigned long index, double start, double startDrag,
+				double end, double endDrag, std::uint32_t winner) noexcept;
+			std::vector<double> _influence, _drag;
+			std::vector<std::uint32_t> _winners, _dirty;
+			double _radius;
+		};
 		static std::unique_ptr<AudioSpectralEnvelopeStroke> Begin(
 			std::shared_ptr<const AudioSpectralEnvelope> before, float sampleRate, std::string& reason,
 			double radiusSeconds = AudioSpectralConfig::BarTimeRadiusSeconds);
-		// A stroke uses either anchored relative mode or swept absolute mode below.
+		// One stroke uses exactly one mode: SetRelativeBand, ApplyRelativeMap,
+		// or PaintSegment. Mixing modes/provenance in one stroke is unsupported.
 		// Relative targets evaluate against E0, preserving silence and replacing prior targets.
 		bool SetRelativeBand(double centreSample, float factor) noexcept;
+		bool ApplyRelativeMap(const RelativeMap& map) noexcept;
 		// Time is explicitly unwrapped. The caller supplies its intended path;
 		// only brush support wraps, never an inferred shortest cursor movement.
 		bool PaintSegment(double startSample, float startGain, double endSample, float endGain) noexcept;
@@ -67,5 +102,6 @@ namespace audio
 		double _rampHalfSamps;
 		std::uint64_t _winnerSerial = 0u;
 		unsigned long _changedSamples = 0ul;
+		bool _relativeMode = false; // Single worker owner; never published mutable.
 	};
 }

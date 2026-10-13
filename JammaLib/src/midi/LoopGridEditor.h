@@ -173,6 +173,7 @@ namespace midi
 		utils::Position2d _audioPointer{};
 		std::optional<std::pair<double, double>> _audioStrokePoint;
 		int _audioAnchorY = 0;
+        double _audioBandAnchorSeconds = 0.0;
 		float _audioPixelScale = 1.0f;
 		float _audioBarPlaneY = 3.0f;
 		float _audioBarRadius = 100.0f;

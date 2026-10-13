@@ -60,4 +60,22 @@ High-frequency input-map rasterization, 1000 moving pointer samples near 18 kHz:
 | 10 s | 1.323 / 1.457 / 2.393 | 0.254 / 0.340 / 0.503 |
 | 30 s | 0.656 / 0.738 / 1.009 | 0.251 / 0.292 / 0.591 |
 
-Minimum-brush input remains below 0.6 ms in these runs despite conservative candidate bin bounds; tighter bounds are deferred. Final threading audit and whitespace diff check passed. App resource deployment/build is deferred to the combined phase 2 validation.
+Minimum-brush input remains below 0.6 ms in these runs despite conservative candidate bin bounds; tighter bounds are deferred. Final threading audit and whitespace diff check passed. Combined app deployment/build validation is recorded in phase 2 below.
+
+### Phase 2 implementation and verification
+
+Relative Alt sweeping is implemented with two preallocated winner maps and immutable receipt handoff. Sweeps interpolate double logical Y before converting to relative gain; continuous collinear run provenance survives input subdivision and frozen-map batches. FIFO application gives later equal influence priority. Vertical-only fractional clicks retain the existing rounded sample through one captured alignment offset. Relative local ramps preserve prior silence, and metadata-only winner changes trigger snapshot evaluation even when raw gains remain identical. Shift+right replaces Ctrl navigation; Ctrl wheel/click has priority and is reserved.
+
+Shared input scratch admission is max(36*C,72*N). Active/frozen/cancelled maps and both mixed cancellation directions remain bounded; standard transforms retain their phase 1 admission estimates. The DSP contract records per-field UI/worker ownership, release/acquire handoff, cancellation and teardown. Callback-owned bodies are unchanged; no callback allocations, waits or locks were added.
+
+Debug native library/tests and app builds pass. All 56 enabled spectral tests and 40 MIDI grid/pitch controls tests pass. The extra disabled Alt input diagnostic also passes when explicitly selected. Coverage includes plateau sweeps, nonlinear diagonal subdivision (including .25-to-.75 sample feather boundaries and split handoffs), vertical equivalence, non-unity/silence, reversals, metadata-only ramp changes, worker backlog and one undo, both cancelled mixed stroke transitions, invalid points, frozen projection and DPI equivalence. Threading audit and whitespace checks pass. Deployed Debug fragment and vertex shader SHA256 values match source (3F41B01A468D0926F4AD23994B331415C17E424BB2AF69EF190A72EE08907FC1 and BA63CD078F2A094D752E76F9E38832D872A238A21A704534B3CD2F6ABC05E509 respectively).
+
+Debug Alt map diagnostics (unoptimized build; not comparable to the phase 1 Release timings):
+
+| Loop | Full-loop pointer jump | 1/100-loop pointer-step mean |
+| --- | ---: | ---: |
+| 2 s | 10.17 ms | 0.43 ms |
+| 10 s | 50.12 ms | 0.87 ms |
+| 30 s | 156.53 ms | 1.91 ms |
+
+Large single pointer jumps on long loops can stall Debug UI rasterization. Release Alt input performance remains unmeasured; routine pointer-step means in this diagnostic stay below 2 ms. A body-contained centre fast path avoids periodic-copy arithmetic; wrapped/fractional-edge and multiple-visit cases retain the conservative general path. Whole-loop forward/reverse diagonal subdivision tests protect the later seam-visit rule. These timings were captured without concurrent builds/tests after the fast path; they are CPU diagnostics rather than UI/GPU latency guarantees. Live listening, GPU upload/draw and physical input/visual/DPI acceptance remain outstanding.

@@ -2,6 +2,7 @@
 
 #include <optional>
 #include "../graphics/AudioSpectralModel.h"
+#include "../graphics/LoopGridProjection.h"
 
 namespace editor
 {
@@ -18,6 +19,23 @@ namespace editor
 		// view/model ray supplied by the caller. Opening/closing surfaces reject hits.
 		static std::optional<Hit> Intersect(const graphics::AudioSpectralModel::Surface& surface,
 			glm::vec3 localOrigin, glm::vec3 localDirection) noexcept;
+		// Freeze screen Y at click height: vertical adjustment cannot move time.
+		// The clicked sample remains authoritative despite pixel projection rounding.
+		static std::optional<double> BandTime(const glm::mat4& clipFromLocal,
+			float planeY, float radius, utils::Position2d anchor, utils::Position2d pointer,
+			int width, int height, double clickedSeconds, double duration) noexcept
+		{
+			if (!(radius > 0.0f) || !std::isfinite(radius) || !std::isfinite(duration) || duration <= 0.0
+				|| !std::isfinite(clickedSeconds)) return std::nullopt;
+			pointer.Y = anchor.Y;
+			const auto first = graphics::LoopGridProjection::UnprojectToLocalPlane(clipFromLocal,
+				glm::mat4(1.0f), anchor, width, height, planeY);
+			const auto current = graphics::LoopGridProjection::UnprojectToLocalPlane(clipFromLocal,
+				glm::mat4(1.0f), pointer, width, height, planeY);
+			if (!first || !current) return std::nullopt;
+			return std::clamp(clickedSeconds + static_cast<double>(current->x - first->x) * duration / (2.0 * radius),
+				0.0, duration);
+		}
 
 	private:
 		static bool _Finite(glm::dvec3 value) noexcept;
