@@ -735,8 +735,8 @@ void LoopGridEditor::_UpdateAudioFootprint(utils::Position2d pixel)
 	const auto logRange = std::log2(display->MaximumFrequencyHz / display->MinimumFrequencyHz);
 	const auto v = display->FrequencyV(point->second);
 	model->SetBrush({static_cast<float>(point->first / duration), static_cast<float>(v)},
-		{static_cast<float>((broadband ? _audioControls.BandRadius : _audioControls.TimeRadius) / duration),
-			static_cast<float>(_audioControls.FrequencyRadius / logRange)},
+		{static_cast<float>((broadband ? _audioControls.BandRadius : audio::AudioSpectralGainField::EffectiveTimeRadius(*_audioEditor.Analysis(), _audioControls.TimeRadius)) / duration),
+			static_cast<float>(audio::AudioSpectralGainField::EffectiveFrequencyRadius(*_audioEditor.Analysis(), point->second, _audioControls.FrequencyRadius) / logRange)},
 		broadband ? 3 : (_audioStroke && _audioAttenuate ? 2 : 1));
 }
 void LoopGridEditor::_HandleWheel(const actions::TouchAction& action)

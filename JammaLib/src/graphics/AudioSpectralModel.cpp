@@ -144,11 +144,12 @@ std::shared_ptr<const AudioSpectralDisplay> AudioSpectralModel::BuildDisplay(
         // Worker-owned bounded scratch: row mapping is fixed for this display.
         // Cached corner heights avoid repeating FFT-bin magnitude/gain/log work
         // when several time vertices fall between the same source frame pair.
+        // Cache unclamped dB so changing envelopes only add one column offset.
         struct RowSample
         {
             unsigned int FirstBin, NextBin;
             double BinWeight;
-            float H00 = 0.0f, H01 = 0.0f, H10 = 0.0f, H11 = 0.0f;
+            double Db00 = 0.0, Db01 = 0.0, Db10 = 0.0, Db11 = 0.0;
         };
         std::vector<RowSample> rows;
         rows.reserve(frequencySegments + 1u);
@@ -162,7 +163,6 @@ std::shared_ptr<const AudioSpectralDisplay> AudioSpectralModel::BuildDisplay(
         }
         auto cachedFirst = analysis.Geometry.FrameCount;
         auto cachedNext = analysis.Geometry.FrameCount;
-        auto cachedEnvelope = -1.0f;
 		for (unsigned int column = 0u; column < timeSegments; ++column)
 		{
 			if (stop.stop_requested()) { reason = "Spectral display cancelled"; return nullptr; }
@@ -172,26 +172,43 @@ std::shared_ptr<const AudioSpectralDisplay> AudioSpectralModel::BuildDisplay(
 			const auto nextFrame = (std::min)(firstFrame + 1u, analysis.Geometry.FrameCount - 1u);
 			const auto frameWeight = std::clamp(framePosition - firstFrame, 0.0, 1.0);
 			const auto envelopeGain = envelope ? envelope->GainAt(static_cast<unsigned long>(bodySample)) : 1.0f;
+            const auto envelopeDb = envelopeGain > 0.0f ? 20.0 * std::log10(envelopeGain) : -std::numeric_limits<double>::infinity();
 			for (unsigned int row = 0u; row <= frequencySegments; ++row)
 			{
                 auto& sample = rows[row];
 				const auto height = [&](std::size_t frame, unsigned int bin)
 				{
 					const auto magnitude = analysis.Magnitude(frame, bin)
-						* (gains ? gains->GainLinear(frame, bin) : 1.0) * envelopeGain;
+						* (gains ? gains->GainLinear(frame, bin) : 1.0);
 					return !std::isfinite(magnitude) || magnitude < 0.0
-						? std::numeric_limits<float>::quiet_NaN() : _CompressMagnitude(magnitude);
+						? std::numeric_limits<double>::quiet_NaN()
+                        : magnitude > 0.0 ? 20.0 * std::log10(magnitude / audio::AudioSpectralConfig::DisplayReferenceMagnitude)
+                        : -std::numeric_limits<double>::infinity();
 				};
-                if (cachedFirst != firstFrame || cachedNext != nextFrame || cachedEnvelope != envelopeGain)
+                if (cachedFirst != firstFrame || cachedNext != nextFrame)
                 {
-                    sample.H00 = height(firstFrame, sample.FirstBin);
-                    sample.H01 = height(firstFrame, sample.NextBin);
-                    sample.H10 = height(nextFrame, sample.FirstBin);
-                    sample.H11 = height(nextFrame, sample.NextBin);
+                    if (firstFrame == cachedNext)
+                    {
+                        sample.Db00 = sample.Db10;
+                        sample.Db01 = sample.Db11;
+                    }
+                    else
+                    {
+                        sample.Db00 = height(firstFrame, sample.FirstBin);
+                        sample.Db01 = height(firstFrame, sample.NextBin);
+                    }
+                    sample.Db10 = height(nextFrame, sample.FirstBin);
+                    sample.Db11 = height(nextFrame, sample.NextBin);
                 }
                 // Preserve height-domain interpolation and per-corner envelope clamp.
-                const auto first = std::lerp(sample.H00, sample.H01, sample.BinWeight);
-                const auto next = std::lerp(sample.H10, sample.H11, sample.BinWeight);
+                const auto compressed = [&](double db)
+                {
+                    if (std::isnan(db)) return std::numeric_limits<float>::quiet_NaN();
+                    return static_cast<float>(std::clamp((db + envelopeDb - audio::AudioSpectralConfig::DisplayFloorDb)
+                        / (audio::AudioSpectralConfig::DisplayCeilingDb - audio::AudioSpectralConfig::DisplayFloorDb), 0.0, 1.0));
+                };
+                const auto first = std::lerp(compressed(sample.Db00), compressed(sample.Db01), sample.BinWeight);
+                const auto next = std::lerp(compressed(sample.Db10), compressed(sample.Db11), sample.BinWeight);
                 const auto value = std::lerp(first, next, frameWeight);
 				if (!std::isfinite(value) || value < 0.0)
 				{
@@ -200,7 +217,7 @@ std::shared_ptr<const AudioSpectralDisplay> AudioSpectralModel::BuildDisplay(
 				}
 				display->Heights[row * (timeSegments + 1u) + column] = static_cast<float>(value);
 			}
-            cachedFirst = firstFrame; cachedNext = nextFrame; cachedEnvelope = envelopeGain;
+            cachedFirst = firstFrame; cachedNext = nextFrame;
 		}
 		// Duplicate the wrapped time endpoint, rather than dropping the last mesh edge.
 		for (unsigned int row = 0u; row <= frequencySegments; ++row)

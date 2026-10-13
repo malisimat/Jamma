@@ -45,7 +45,7 @@ namespace graphics
 	class AudioSpectralModel : public gui::GuiModel
 	{
 	public:
-		static constexpr unsigned int DefaultTimeSegments = 1024u;
+		static constexpr unsigned int DefaultTimeSegments = 4095u;
 		static constexpr unsigned int DefaultFrequencySegments = 256u;
 		static constexpr float DepthRadiusScale = 0.78f;
 		static constexpr float HeightRadiusScale = 0.25f;

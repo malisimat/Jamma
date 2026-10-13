@@ -67,6 +67,9 @@ namespace audio
 			double startSeconds, double startHz, double endSeconds, double endHz,
 			double elapsedSeconds, bool increase, std::string& reason);
 
+		static double EffectiveTimeRadius(const AudioSpectralAnalysis&, double radius) noexcept;
+		static double EffectiveFrequencyRadius(const AudioSpectralAnalysis&, double hz, double radius) noexcept;
+
 	private:
 		AudioSpectralGainField(std::size_t frames, unsigned int bins);
 		bool _PaintOvalSegment(const AudioSpectralAnalysis& analysis,
@@ -77,6 +80,7 @@ namespace audio
 			double endSeconds, double endHz, double elapsedSeconds, std::string& reason,
 			double timeRadius, double frequencyRadius, Visitor&& visit);
 		std::size_t _TileIndex(std::size_t frame, unsigned int bin) const noexcept;
+		static double _IntegratedShoulder(double x, double y, double dx, double dy, double first, double last) noexcept;
 		static double _IntegratedOval(double x, double y, double dx, double dy,
 			double first, double last) noexcept;
 		std::size_t _frameCount;

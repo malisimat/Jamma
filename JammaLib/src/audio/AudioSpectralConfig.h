@@ -9,9 +9,13 @@ namespace audio
 	struct AudioSpectralConfig
 	{
 		static constexpr std::uint32_t TransformVersion = 1u;
-		static constexpr unsigned int WindowSamps = 8192u;
-		static constexpr unsigned int FallbackWindowSamps = 4096u;
-		static constexpr unsigned int HopSamps = 1024u;
+		static constexpr unsigned int WindowSamps = 4096u;
+		static constexpr unsigned int PreferredOverlap = 16u; // Tune window/overlap together.
+		static constexpr unsigned int BaselineOverlap = 4u;
+        static_assert(PreferredOverlap >= BaselineOverlap && (PreferredOverlap & (PreferredOverlap - 1u)) == 0u);
+        static_assert(WindowSamps >= PreferredOverlap && (WindowSamps & (WindowSamps - 1u)) == 0u);
+        static constexpr unsigned int BaselineHopSamps = WindowSamps / BaselineOverlap;
+		static constexpr unsigned int HopSamps = WindowSamps / PreferredOverlap;
 		static constexpr float MinimumGainDb = -60.0f;
 		static constexpr float MaximumGainDb = 24.0f; // Broadband bar headroom.
         static constexpr float MinimumSpectralGainDb = -1200.0f;
@@ -36,13 +40,18 @@ namespace audio
 		static constexpr float DisplayFloorDb = -90.0f;
 		static constexpr float DisplayCeilingDb = 24.0f;
 		static constexpr float DisplayReferenceMagnitude = 1.0f;
-		static constexpr unsigned int MaxTimeSegments = 2048u;
+		static constexpr unsigned int MaxTimeSegments = 4095u;
 		static constexpr unsigned int MaxFrequencySegments = 256u;
 		static constexpr unsigned long SourceCopySamplesPerBlock = 4096ul;
 		static constexpr std::uint64_t MaxSourceBytes = 256ull * 1024ull * 1024ull;
 		static constexpr std::uint64_t MaxWorkingBytes = 512ull * 1024ull * 1024ull;
 		static constexpr std::uint64_t DisplayWorkingBytes = 64ull * 1024ull * 1024ull;
 		static constexpr std::uint64_t MaxHistoryBytes = 64ull * 1024ull * 1024ull;
+        // Display/history plus short-source transform, gain and input-map scratch.
+        // Only higher-detail admission leaves this headroom; baseline may use the full cap.
+        static constexpr std::uint64_t ShortSourceWorkingBytes = 32ull * 1024ull * 1024ull;
+        static constexpr std::uint64_t PreferredWorkingBytes = MaxWorkingBytes
+            - DisplayWorkingBytes - MaxHistoryBytes - ShortSourceWorkingBytes;
 	};
 
 	struct AudioSpectralTransformConfig

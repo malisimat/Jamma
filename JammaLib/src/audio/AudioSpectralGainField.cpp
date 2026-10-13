@@ -72,7 +72,7 @@ bool AudioSpectralGainField::SetGainDb(std::size_t frame, unsigned int bin, floa
 	return true;
 }
 
-double AudioSpectralGainField::_IntegratedOval(double x, double y, double dx, double dy,
+double AudioSpectralGainField::_IntegratedShoulder(double x, double y, double dx, double dy,
 	double first, double last) noexcept
 {
 	const auto a = dx * dx + dy * dy;
@@ -100,6 +100,44 @@ double AudioSpectralGainField::_IntegratedOval(double x, double y, double dx, do
 	const auto integral0 = r0 * (1.0 - r0 * r0 * (2.0 / 3.0 - r0 * r0 / 5.0));
 	const auto integral1 = r1 * (1.0 - r1 * r1 * (2.0 / 3.0 - r1 * r1 / 5.0));
 	return std::clamp(h * h * radius * (integral1 - integral0), 0.0, last - first);
+}
+
+double AudioSpectralGainField::EffectiveTimeRadius(const AudioSpectralAnalysis& analysis, double radius) noexcept
+{
+    return (std::max)(radius, analysis.Transform.HopSamps / static_cast<double>(analysis.Source->Layout.SampleRate));
+}
+
+double AudioSpectralGainField::EffectiveFrequencyRadius(const AudioSpectralAnalysis& analysis, double hz, double radius) noexcept
+{
+    const auto spacing = analysis.Source->Layout.SampleRate / static_cast<double>(analysis.Transform.WindowSamps);
+    const auto lower = (std::min)(AudioSpectralConfig::DisplayMinimumFrequencyHz, analysis.Source->Layout.SampleRate * 0.25);
+    // Fixed per-coefficient support: segmentation cannot change the response.
+    return (std::max)(radius, std::log2(1.0 + spacing / (std::max)(lower, hz - spacing)));
+}
+
+double AudioSpectralGainField::_IntegratedOval(double x, double y, double dx, double dy,
+    double first, double last) noexcept
+{
+    constexpr double plateauSquared = 0.5625; // Inner 75% receives the full 60 dB/s.
+    constexpr double shoulderScale = (1.0 - plateauSquared) * (1.0 - plateauSquared);
+    const auto a = dx * dx + dy * dy;
+    if (a < 1.0e-24)
+    {
+        const auto middle = (first + last) * 0.5;
+        const auto q = std::pow(x + dx * middle, 2.0) + std::pow(y + dy * middle, 2.0);
+        return (last - first) * (q <= plateauSquared ? 1.0 : std::pow((std::max)(0.0, 1.0-q), 2.0) / shoulderScale);
+    }
+    auto result = _IntegratedShoulder(x,y,dx,dy,first,last);
+    const auto centre = -(x*dx+y*dy)/a;
+    const auto closest = std::pow(x+dx*centre,2.0)+std::pow(y+dy*centre,2.0);
+    if (closest < plateauSquared)
+    {
+        const auto half = std::sqrt((plateauSquared-closest)/a);
+        const auto lo = (std::max)(first,centre-half);
+        const auto hi = (std::min)(last,centre+half);
+        if (hi > lo) result += (hi-lo)*shoulderScale - _IntegratedShoulder(x,y,dx,dy,lo,hi);
+    }
+    return std::clamp(result / shoulderScale, 0.0, last-first);
 }
 
 bool AudioSpectralGainField::PaintOvalSegment(const AudioSpectralAnalysis& analysis,
@@ -259,7 +297,8 @@ bool AudioSpectralGainField::_VisitOval(const AudioSpectralAnalysis& analysis,
 	endHz = std::clamp(endHz, lower, nyquist);
 	const auto startOctave = std::log2(startHz);
 	const auto deltaOctave = std::log2(endHz) - startOctave;
-	const auto octaveRadius = frequencyRadius;
+	timeRadius = EffectiveTimeRadius(analysis, timeRadius);
+	const auto octaveRadius = EffectiveFrequencyRadius(analysis, lower, frequencyRadius);
 	const auto lowHz = (std::min)(startHz, endHz) * std::exp2(-octaveRadius);
 	const auto highHz = (std::min)(nyquist, (std::max)(startHz, endHz) * std::exp2(octaveRadius));
 	const auto firstBin = lowHz <= lower ? 0u
@@ -285,12 +324,13 @@ bool AudioSpectralGainField::_VisitOval(const AudioSpectralAnalysis& analysis,
 			if (original.Real == 0.0f && original.Imaginary == 0.0f) continue;
 			// DC and sub-display-floor bins share the explicit lower visual edge.
 			const auto hz = (std::max)(lower, bin * sampleRate / analysis.Transform.WindowSamps);
-			const auto y = (std::log2(hz) - startOctave) / octaveRadius;
+			const auto binRadius = EffectiveFrequencyRadius(analysis, hz, frequencyRadius);
+			const auto y = (std::log2(hz) - startOctave) / binRadius;
 			auto exposure = _IntegratedOval((time + firstImage * period - startSeconds) / timeRadius,
-				y, -deltaTime / timeRadius, -deltaOctave / octaveRadius, 0.0, split);
+				y, -deltaTime / timeRadius, -deltaOctave / binRadius, 0.0, split);
 			if (split < 1.0)
 				exposure += _IntegratedOval((time + lastImage * period - startSeconds) / timeRadius,
-					y, -deltaTime / timeRadius, -deltaOctave / octaveRadius, split, 1.0);
+					y, -deltaTime / timeRadius, -deltaOctave / binRadius, split, 1.0);
 			if (exposure <= 0.0) continue;
             changed |= visit(frame, bin, elapsedSeconds * exposure);
 		}

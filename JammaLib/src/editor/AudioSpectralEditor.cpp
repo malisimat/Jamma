@@ -304,8 +304,8 @@ void AudioSpectralEditor::Update()
 			}
 		}
 		_state = State::Ready;
-		_feedback = _analysis->Transform.WindowSamps == audio::AudioSpectralConfig::FallbackWindowSamps
-            ? "Audio analysis ready (4096-point analysis)" : "Audio analysis ready";
+		_feedback = _analysis->Transform.HopSamps != audio::AudioSpectralConfig::HopSamps
+            ? "Audio analysis ready (" + std::to_string(_analysis->Transform.HopSamps) + "-sample time steps)" : "Audio analysis ready";
 		_UpdateDisplay();
 		if (_peakOverload) _feedback = "Edited peaks exceed full scale";
 		if (_stroke)

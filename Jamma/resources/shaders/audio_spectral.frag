@@ -33,13 +33,13 @@ void main()
     float paletteLevel = clamp(height * (114.0 / 90.0), 0.0, 1.0);
     // Emissive colour: only the very bottom fades through dark blue from black.
     vec3 colour = height > 0.0
-        ? spectralColour(paletteLevel) * smoothstep(0.0, 0.12, paletteLevel)
+        ? spectralColour(paletteLevel) * smoothstep(0.0, 0.03, paletteLevel)
         : vec3(0.0);
     // Triangle derivatives use the same interpolated geometry as picking.
     // A restrained fixed local light cue preserves the emissive level palette.
     vec3 normal = normalize(cross(dFdx(SurfacePosition), dFdy(SurfacePosition)));
     float highlight = pow(abs(dot(normal, normalize(vec3(-0.25, 1.0, 0.35)))), 24.0);
-    colour += vec3(0.08) * highlight * smoothstep(0.0, 0.12, paletteLevel) * SurfaceMorph;
+    colour += vec3(0.08) * highlight * smoothstep(0.0, 0.03, paletteLevel) * SurfaceMorph;
     float ahead = fract(SurfaceUv.x - EditorPlayFrac + 1.0);
     float distanceU = min(ahead, 1.0 - ahead);
     float pulse = 0.92 + 0.08 * sin(EditorTime * 3.0);

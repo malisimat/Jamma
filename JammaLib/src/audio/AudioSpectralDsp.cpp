@@ -78,20 +78,22 @@ bool AudioSpectralDsp::SelectTransform(const AudioSpectralSourceLayout& layout,
     std::string& reason)
 {
     resources.reset();
-    for (const auto window : { AudioSpectralConfig::WindowSamps, AudioSpectralConfig::FallbackWindowSamps })
+    for (auto hop = AudioSpectralConfig::HopSamps; hop <= AudioSpectralConfig::BaselineHopSamps; hop *= 2u)
     {
         const AudioSpectralTransformConfig candidate{ AudioSpectralConfig::TransformVersion,
-            window, AudioSpectralConfig::HopSamps };
+            AudioSpectralConfig::WindowSamps, hop };
         const auto estimate = EstimateWorkingMemory(layout, candidate, reason);
         if (!estimate) continue;
+        if (hop != AudioSpectralConfig::BaselineHopSamps
+            && estimate->WorkingBytes > AudioSpectralConfig::PreferredWorkingBytes) continue;
         if (budget)
         {
             resources = budget->Reserve(estimate->WorkingBytes, reason);
             if (!resources) continue;
         }
         transform = candidate;
-        reason = window == AudioSpectralConfig::WindowSamps ? ""
-            : "Using 4096-point spectral analysis to fit the memory budget";
+        reason = hop == AudioSpectralConfig::HopSamps ? ""
+            : "Using " + std::to_string(hop) + "-sample spectral time steps to fit the memory budget";
         return true;
     }
     return false;
