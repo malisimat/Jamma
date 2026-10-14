@@ -9,7 +9,7 @@ Add **Audio**, **MIDI** and **File** pages to the existing main panel. This docu
 - Audio changes wait until no recording, overdub, punch or pending capture action is active. Keep only the latest selection while waiting. A short playback interruption is acceptable.
 - Sample-rate changes are allowed only when the session has **no takes**, including empty takes. Update plugin formats safely while audio is quiescent.
 - Preserve unavailable channel routes in memory only if existing route validation supports this through a small, localized change. Unavailable routes are silent and omitted from saved sessions. Do not add a separate persistent disabled-route model.
-- Save may pause audio while copying session state. The first Save chooses a destination folder; subsequent saves create increasing numbered `.jam` files there. **Alt-click Save** chooses another folder. Ctrl+S uses the same normal Save path.
+- Save may pause audio while copying session state. The first Save chooses a destination folder; subsequent saves create increasing numbered `.jam` files there. **Alt-click Save** or **Ctrl+Shift+S** chooses another folder. Ctrl+S uses the same normal Save path.
 - Load uses the existing `.jam` picker. Cancellation or construction failure retains the current session. Loading does not change hardware preferences.
 
 Hardware preferences belong to the rig save path. Session content and its assets belong to the session exporter. Do not modify vendored RtAudio/RtMidi code or introduce a second exporter, background device worker, or general-purpose transaction framework.

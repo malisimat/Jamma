@@ -1638,12 +1638,12 @@ ActionResult Scene::OnAction(KeyAction action)
 			SnapshotStations());
 	}
 
-	// Ctrl+S - export session to directory.
+	// Ctrl+S saves a numbered session; Ctrl+Shift+S chooses its directory.
 	if ((83 == action.KeyChar)
 		&& (actions::KeyAction::KEY_UP == action.KeyActionType)
 		&& (Action::MODIFIER_CTRL & action.Modifiers))
 	{
-		_RequestSave(false);
+		_RequestSave((action.Modifiers & Action::MODIFIER_SHIFT) != 0);
 		return ActionResult::NoAction();
 	}
 
