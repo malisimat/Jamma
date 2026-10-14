@@ -2,7 +2,7 @@
 
 Prepared branch: `codex/integrate-ready-features` in `C:\Users\matto\Source\Repos\Jamma.worktrees\Jamma-integrate-ready-features`.
 
-**Tested code SHA: `25ffa1fb70d8fb9d3f050f0c65bb07f20ad691c5`**, tree `f1883a60a3af7e30605b444e52115a3157e619e1`. The later handoff-only commit changes no code. Local and HTTPS remote master remain `cff00825781eadb18fefa9504e0893f5d3b8b9ea`. No push, source archive or master promotion occurred. All source worktrees remain available. All four rig-model-cleanup-only commits are excluded.
+**Tested code SHA: `d9eae2298b6dc407e1238c3edaab90be70d4ecc6`**, tree `b38115486f0a641aea70b73e772bf3266c908a6c`. The later handoff-only commit changes no code. Local and HTTPS remote master remain `cff00825781eadb18fefa9504e0893f5d3b8b9ea`. No push, source archive or master promotion occurred. All source worktrees remain available. All four rig-model-cleanup-only commits are excluded.
 
 ## Sources, tree shaking and serial checkpoints
 
@@ -32,17 +32,21 @@ MIDI cleanup removed only obsolete nonvirtual Station/LoopTake readiness wrapper
 
 ## Final validation and review
 
-Incremental x64 Debug and Release engine, native-test and app builds passed. Exact tested tree: Debug **1721/1721** (61.728s), Release **1715/1715** (14.245s), zero failures/skips. Each configuration passed all four WGL tests. Six callback/meter/quiescence probe tests are intentionally `_DEBUG`-only. Baseline master passed1401 full tests.
+Incremental x64 Debug and Release engine, native-test and app builds passed. Exact tested tree: Debug **1722/1722** (62.696s), Release **1716/1716** (14.101s), zero failures/skips. Each configuration passed all four WGL tests. Six callback/meter/quiescence probe tests are intentionally `_DEBUG`-only. Baseline master passed1401 full tests.
 
 One integration writer; independent read-only thread/lifetime and behavior/persistence reviewers rechecked fixes at every checkpoint. A fresh third reviewer passed the complete cumulative result, including clean auto-merges, GL/picking and final editor guards. Hot-path audits ran on uncommitted deltas; reported locks were UI/job ownership, never callback additions. Vendor internals are not certified lock-free. Whitespace checks pass except three required single-space context lines in upstream KissFFT patches; patch syntax was preserved and those files separately checked with blank-at-eol disabled.
 
-Investigated first failures: reconciled private settings IDs/shared editor handle types/test delimiters; repaired shutdown latch, valid saved-history fixtures, old tab assumptions and simulated-vs-real job consumer races. Final full runs pass after the fixes. New test declaration audit against all seven source trees confirms **one new integration test** (actual device/station GUI dispatch), below the per-worktree limit2; existing release/panic/editor/membership tests were extended or reused.
+Investigated first failures: reconciled private settings IDs/shared editor handle types/test delimiters; repaired shutdown latch, valid saved-history fixtures, old tab assumptions and simulated-vs-real job consumer races. Final full runs pass after the fixes. New integration tests total **two**, reaching the per-worktree limit: actual device/station GUI dispatch and legacy numeric-level MIDI reconstruction. Existing release/panic/editor/membership tests were extended or reused.
 
 Commands and all logs/XML are preserved in ignored `bin/integration-validation/`; `run-checkpoint.ps1` rereads local `.vscode/tasks.json` before every build/test, uses its installed MSBuild, `/t:Build`, absolute trailing-backslash SolutionDir and isolated outputs/vcpkg. MIDI cleanup logs remain in that source's same evidence subdirectory.
 
-## Manual acceptance — user results, Load under investigation
+## Load acceptance repair
 
-User reports on 14 October 2026 for the requested Release executable:
+At `d9eae229`, station/take master levels accept finite JSON integers and decimals equivalently, while rejecting bool/string/nonfinite values. The actual `JAM_Files_v5/idio/session.jam` reproduced four stations being skipped and no takes surviving because `masterLevel: 1` was rejected while `1.00` passed. After repair, native reconstruction restores all six stations, four MIDI takes and ten streams with vendor plugins disabled. User files were not changed. The diagnostic private-file test was replaced with a portable regression; both independent reviewers accepted the narrow fix. Updated Debug/Release engine/tests/app builds and full suites passed. Real plugin playback via interactive Load still needs a user retest.
+
+## Manual acceptance — reported passes; repaired Load awaiting retest
+
+User reports on 14 October 2026 for the original tested Release executable (`25ffa1fb`; the latest binary adds the Load repair):
 
 | Check | User result |
 | --- | --- |
@@ -55,9 +59,9 @@ User reports on 14 October 2026 for the requested Release executable:
 | Device selection/switching | NOT TESTED |
 | Station add | NOT TESTED |
 | Load intro session | Loaded successfully |
-| Load `JAM_Files_v5/idio/idio.jam` | NOT SURE: no MIDI playback and no takes shown; investigating manifest/assets/loader |
+| Load `JAM_Files_v5/idio/session.jam` | Originally NOT SURE: no MIDI playback/takes. Parser/reconstruction fixed and verified; interactive retest pending. |
 
-Individual subcases (including station removal/VST teardown, DPI and spectral persistence) are not implied by broad feature PASS reports. Requested the full idio manifest path to diagnose the reported missing material. Master promotion remains held.
-Release executable SHA256: `530D043B60B3C2C23AC7A382D5BDB0F00EA8F34422D0B57A2DC897A5508F34F9`.
+Individual subcases (including station removal/VST teardown, DPI and spectral persistence) are not implied by broad feature PASS reports. The full supplied idio path was inspected read-only. Master promotion remains held.
+Release executable SHA256: `34A29C49BF48565958EC1F5C4064FC0E7B5019DE76D18C0306FCF321C1FD03A4`.
 
 After final acceptance, recheck master freshness, promote with ff-only and build in the main checkout; then consider source-worktree cleanup separately. Neither action was performed here.
