@@ -40,10 +40,24 @@ Investigated first failures: reconciled private settings IDs/shared editor handl
 
 Commands and all logs/XML are preserved in ignored `bin/integration-validation/`; `run-checkpoint.ps1` rereads local `.vscode/tasks.json` before every build/test, uses its installed MSBuild, `/t:Build`, absolute trailing-backslash SolutionDir and isolated outputs/vcpkg. MIDI cleanup logs remain in that source's same evidence subdirectory.
 
-## Manual acceptance — general play PASS; Save NOT RUN
+## Manual acceptance — user results, Load under investigation
 
-User report on 14 October 2026 for the requested Release executable: "PASSes a general play session fine. didn't try save." General play: **PASS**. Save: **NOT RUN**. Specific NINJAM alignment/held-note, device switch/rollback, Load, active removal/VST teardown, group, camera and spectral/DPI scenarios were not individually confirmed. This records a successful general play session, not completion of every targeted acceptance check. Master promotion remains held.
+User reports on 14 October 2026 for the requested Release executable:
 
+| Check | User result |
+| --- | --- |
+| General play session | PASS |
+| Spectral editing | PASS |
+| Alignment / held note | PASS |
+| Camera | PASS |
+| Mute groups | PASS |
+| Save | NOT RUN |
+| Device selection/switching | NOT TESTED |
+| Station add | NOT TESTED |
+| Load intro session | Loaded successfully |
+| Load `JAM_Files_v5/idio/idio.jam` | NOT SURE: no MIDI playback and no takes shown; investigating manifest/assets/loader |
+
+Individual subcases (including station removal/VST teardown, DPI and spectral persistence) are not implied by broad feature PASS reports. Requested the full idio manifest path to diagnose the reported missing material. Master promotion remains held.
 Release executable SHA256: `530D043B60B3C2C23AC7A382D5BDB0F00EA8F34422D0B57A2DC897A5508F34F9`.
 
 After final acceptance, recheck master freshness, promote with ff-only and build in the main checkout; then consider source-worktree cleanup separately. Neither action was performed here.
