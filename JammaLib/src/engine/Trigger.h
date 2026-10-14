@@ -369,6 +369,13 @@ namespace engine
 		// Route updates retain this Trigger and its history, so only input/state must be idle.
 		bool CanApplyCaptureRouting(bool receiverChanged = true) const noexcept;
 		void Reset();
+		// Job owner requests removal after input producers acknowledge closure.
+		// Target stays pinned by the membership candidate until audio/job receipts.
+		void RequestReceiverRemoval(base::ActionReceiver* receiver) noexcept;
+		bool ReceiverRemovalPending() const noexcept { return _removingReceiver.load(std::memory_order_acquire) != nullptr; }
+		bool ReceiverRemovalReady() const noexcept { return _receiverRemovalReady.load(std::memory_order_acquire); }
+		void CompleteReceiverRemovalOnJob();
+
 		std::string Name() const;
 		void SetName(std::string name);
 		std::vector<TriggerTake> GetTakes() const;
@@ -498,6 +505,7 @@ namespace engine
 		};
 		struct RuntimeTriggerTake
 		{
+			base::ActionReceiver* Receiver = nullptr; // Frozen identity; job history/session retains lifetime.
 			decltype(TriggerTake{}.SourceType) SourceType = TriggerTake::SOURCE_ADC;
 			std::uint64_t Token = 0u;
 			CaptureSession* Session = nullptr;
@@ -599,6 +607,12 @@ namespace engine
 		std::atomic<bool> _publishedTriggerDitchDown{ false };
 		std::atomic<bool> _publishedCanEditRouting{ true };
 		std::atomic<bool> _publishedCanApplyCaptureRouting{ true };
+		// Job writes target; audio reads it and publishes readiness after draining results.
+		// Cleared by job only after readiness, while both input producer gates are closed.
+		std::atomic<base::ActionReceiver*> _removingReceiver{ nullptr };
+		std::atomic<bool> _receiverRemovalReady{ false };
+		void _ApplyReceiverRemovalAtAudioBoundary() noexcept;
+
 		std::atomic<std::uint64_t> _activationOutcomeCount{ 0u };
 		std::atomic<std::uint64_t> _ditchOutcomeCount{ 0u };
 		std::string _overdubSourceId;

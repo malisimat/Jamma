@@ -1607,4 +1607,44 @@ TEST(AudioCallbackRealtime, PreparedCallbackWithSceneTickDoesNotAllocate)
 	EXPECT_EQ(0u, counts.Frees);
 	scene->Shutdown();
 }
+
+TEST(AudioCallbackRealtime, MembershipPublicationDuringPlaybackDoesNotAllocateOrFree)
+{
+ io::UserConfig cfg{};
+ audio::AudioHost host(cfg);
+ auto oldStation = MakeStation(1u), survivor = MakeStation(1u);
+ const audio::AudioStreamParams params{"test", 48000u, 2u, 128u, 0u, 0u, 0u, 1u};
+ auto original = std::make_shared<const std::vector<std::shared_ptr<Station>>>(std::vector{oldStation, survivor});
+ audio::AudioHostRealtimeTestAccess::Prepare(host, original, params);
+ std::array<float, 128u> output{};
+ audio::AudioHostRealtimeTestAccess::InvokeCallback(host, output.data(), nullptr, 128u);
+ auto candidate = std::make_shared<engine::RigSnapshot>();
+ candidate->Revision = candidate->Graph.Revision = 2u;
+ candidate->MembershipChange = true;
+ candidate->TopologyRevision = 2u;
+ candidate->Stations = std::make_shared<const std::vector<std::shared_ptr<Station>>>(std::vector{survivor});
+ // Exhaust station leases while retaining the original callback inventory.
+ std::array<base::PublishedAudioSnapshot<const audio::StationInventory>::Lease, 7u> held;
+ for (auto& lease : held) { lease = host.BorrowStationsSnapshot(); ASSERT_TRUE(lease.ReadSucceeded()); }
+ host.PublishPendingRigSnapshot(candidate);
+ AudioCallbackAllocationProbe::Counts counts;
+ {
+  AudioCallbackAllocationProbe::Scope probe;
+  audio::AudioHostRealtimeTestAccess::InvokeCallback(host, output.data(), nullptr, 128u);
+  counts = probe.GetCounts();
+ }
+ EXPECT_EQ(2u, host.AppliedRigRevision());
+ EXPECT_EQ(1u, host.AudioStationsForCallback().size());
+ EXPECT_EQ(0u, counts.Allocations); EXPECT_EQ(0u, counts.Reallocations); EXPECT_EQ(0u, counts.Frees);
+ auto rigOnly = std::make_shared<engine::RigSnapshot>();
+ rigOnly->Revision = rigOnly->Graph.Revision = 3u;
+ rigOnly->TopologyRevision = candidate->TopologyRevision;
+ rigOnly->Stations = candidate->Stations;
+ host.PublishPendingRigSnapshot(rigOnly);
+ audio::AudioHostRealtimeTestAccess::InvokeCallback(host, output.data(), nullptr, 128u);
+ EXPECT_EQ(1u, host.AudioStationsForCallback().size()) << "Later rig edits must not revive the old inventory";
+ for (auto& lease : held) lease.reset();
+ host.SetStations(candidate->Stations, candidate->TopologyRevision);
+ host.CollectRetiredSnapshots();
+}
 #endif

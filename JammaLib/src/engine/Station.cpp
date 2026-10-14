@@ -403,7 +403,7 @@ void Station::Draw3d(base::DrawContext& ctx,
 		return;
 
 	auto& glCtx = dynamic_cast<graphics::GlDrawContext&>(ctx);
-	auto pos = ModelPosition();
+	auto pos = PresentationModelPosition();
 	auto scale = ModelScale();
 
 	_modelScreenPos = glCtx.ProjectScreen(pos);
@@ -466,9 +466,38 @@ void Station::Draw3d(base::DrawContext& ctx,
 
 utils::Position3d Station::TopCapModelPosition() const
 {
-	auto position = ModelPosition();
+	auto position = PresentationModelPosition();
 	position.Y += static_cast<float>(ModelScale() * _StationModelYOffset);
 	return position;
+}
+
+utils::Position3d Station::PresentationModelPosition() const
+{
+	auto position = ModelPosition();
+	position.X += _presentationOffsetX;
+	return position;
+}
+
+void Station::BeginPresentationMove(float startX)
+{
+	_presentationOffsetX = _presentationStartOffsetX = startX - ModelPosition().X;
+	_presentationElapsed = 0.0f;
+}
+
+bool Station::AdvancePresentationMove(float elapsedSeconds)
+{
+	if (!IsPresentationMoving()) return false;
+	_presentationElapsed += std::clamp(elapsedSeconds, 0.0f, 0.05f);
+	const float t = std::min(1.0f, _presentationElapsed / 0.25f);
+	const float eased = t * t * (3.0f - 2.0f * t);
+	_presentationOffsetX = _presentationStartOffsetX * (1.0f - eased);
+	if (t >= 1.0f) FinishPresentationMove();
+	return true; // Includes settling frame, so a stationary cursor is repicked.
+}
+
+void Station::FinishPresentationMove() noexcept
+{
+	_presentationOffsetX = _presentationStartOffsetX = _presentationElapsed = 0.0f;
 }
 
 utils::Position2d Station::Position() const
@@ -1468,7 +1497,7 @@ void Station::_RunVstBlock(vst::VstChain* chain,
 		liveMidi.sampleOffset = midi::RebaseMidiSampleForVstBlock(liveMidi.sampleOffset,
 			blockStartSample,
 			blockStartSample);
-		if (vstActive)
+		if (vstActive && (!MembershipRemoving() || !liveMidi.IsNoteOn()))
 		{
 			auto revision = syntheticEntry.LiveNoteOnRevision;
 			if (liveMidi.IsNoteOn())
@@ -1715,6 +1744,7 @@ void Station::EndMultiPlay(unsigned int numSamps)
 
 void Station::ApplyFirstMasterRecordingAtAudioBoundary(utils::Timer& clock) noexcept
 {
+	if (MembershipRemoving()) return;
 	auto request = _firstMasterRecording.borrow();
 	if (!request || request->Clock.get() != &clock
 		|| request->Timing.Version <= _firstMasterRecordingConsumed.load(std::memory_order_relaxed)) return;
@@ -1898,6 +1928,7 @@ ActionResult Station::OnAction(KeyAction action)
 
 ActionResult Station::OnAction(GuiAction action)
 {
+	if (MembershipRemoving()) return ActionResult::NoAction();
 	const bool isRackAction =
 		(action.ElementType == GuiAction::ACTIONELEMENT_RACK) ||
 		(action.ElementType == GuiAction::ACTIONELEMENT_ROUTER) ||
@@ -2003,6 +2034,7 @@ ActionResult Station::OnAction(GuiAction action)
 
 ActionResult Station::OnAction(TriggerAction action)
 {
+	if (MembershipRemoving()) return ActionResult::NoAction();
 	// Allow completion and punch actions to finish after a station is hidden or disabled.
 	const auto isStart = action.ActionType == TriggerAction::TRIGGER_REC_START ||
 		action.ActionType == TriggerAction::TRIGGER_OVERDUB_START;
@@ -3105,6 +3137,7 @@ void Station::SetAllowedMidiChannels(const std::vector<int>& channels)
 
 bool Station::TryEnqueueImmediateLiveMidi(const MidiEvent& event) noexcept
 {
+	if (MembershipRemoving()) return false;
 	return _TryEnqueueOrderedLiveMidi(_immediateLiveMidiIngress,
 		_hasLastImmediateLiveMidiSample,
 		_lastImmediateLiveMidiSample,
@@ -3141,6 +3174,7 @@ void Station::ResetLiveMidiWhileQuiescent() noexcept
 
 bool Station::TryEnqueueSyntheticLiveMidi(const MidiEvent& event) noexcept
 {
+	if (MembershipRemoving()) return false;
 	return _TryEnqueueSyntheticMidi({ event });
 }
 
@@ -3158,6 +3192,7 @@ bool Station::_TryEnqueueSyntheticMidi(SyntheticMidi entry) noexcept
 
 void Station::ObservePhysicalMidiForRecording(const MidiEvent& event, const std::string& deviceName)
 {
+	if (MembershipRemoving()) return;
 	const auto channelAllowed = AcceptsLiveMidiChannel(event.Channel());
 
 	if (event.IsNoteOn() || event.IsNoteOff())
@@ -3168,6 +3203,7 @@ void Station::ObservePhysicalMidiForRecording(const MidiEvent& event, const std:
 		const auto channel = event.Channel();
 		const auto note = static_cast<std::uint8_t>(event.data1 & 0x7F);
 		std::scoped_lock lock(_liveHeldMidiMutex);
+		if (MembershipRemoving()) return;
 		// Keep one snapshot for "any device" and one snapshot for the actual device.
 		// The empty-name snapshot is for device-agnostic recording; the named one is
 		// for real MIDI input from a specific device.
@@ -3375,6 +3411,7 @@ void Station::_InitResources(resources::ResourceLib& resourceLib, bool forceInit
 
 void Station::_ReleaseResources()
 {
+	FinishPresentationMove();
 	if (_quantisationModel)
 		_quantisationModel->ReleaseResources();
 	if (_quantisationDivisionModel)
@@ -3881,6 +3918,7 @@ std::vector<io::JamFile::VstEntry> Station::VstEntries() const
 
 ActionResult Station::OnAction(JobAction action)
 {
+	if (MembershipRemoving()) return ActionResult::NoAction();
 	switch (action.JobActionType)
 	{
 	case JobAction::JOB_LOADVST:
@@ -3991,4 +4029,12 @@ ActionResult Station::OnAction(JobAction action)
 	}
 
 	return ActionResult::NoAction();
+}
+
+void engine::Station::BeginMembershipRemoval()
+{
+	SetMembershipRemoving(true);
+	if (const auto request = _firstMasterRecording.load())
+		request->Clock->CancelRecordingSeedOnOwner(request->Timing.Version);
+	for (const auto& take : GetLoopTakeSnapshot()) take->CancelCapture();
 }

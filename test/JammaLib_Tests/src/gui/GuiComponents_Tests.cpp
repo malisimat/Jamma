@@ -1044,7 +1044,7 @@ TEST(GuiMainPanel, ControlsRecoverTheirWidthsAfterTinyAndZeroViewport) {
 		EXPECT_GE(element->GlobalPosition().Y, 0);
 		EXPECT_LE(element->GlobalPosition().Y + static_cast<int>(element->GetSize().Height), 200);
 	}
-	auto midiTab = tabs->Content()->TryGetChild(0);
+	auto midiTab = tabs->Content()->TryGetChild(static_cast<unsigned char>(gui::SettingsPage::Midi));
 	ASSERT_TRUE(midiTab);
 	const auto tabPoint = midiTab->GlobalPosition() + utils::Position2d{ 5, 5 };
 	ASSERT_GE(tabPoint.X, 0);
@@ -1109,7 +1109,7 @@ TEST(GuiMainPanel, HandlesAndTabsUseStableInternalCommands) {
 	ASSERT_NE(nullptr, tabs);
 	auto radio = std::dynamic_pointer_cast<gui::GuiRadio>(tabs->Content());
 	ASSERT_NE(nullptr, radio);
-	radio->SetCurrentValue(0u, false);
+	radio->SetCurrentValue(static_cast<unsigned int>(gui::SettingsPage::Midi), false);
 	EXPECT_EQ(gui::SettingsPage::Midi, panel->Page());
 	auto handle = std::dynamic_pointer_cast<GuiToggle>(panel->TryGetChild(1));
 	ASSERT_NE(nullptr, handle);

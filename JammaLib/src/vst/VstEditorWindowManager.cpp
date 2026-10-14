@@ -31,10 +31,17 @@ namespace vst
 
 	void VstEditorWindowManager::PruneClosedVstEditorWindows()
 	{
-		std::scoped_lock lock(_vstEditorWindowsMutex);
-		_vstEditorWindows.erase(std::remove_if(_vstEditorWindows.begin(), _vstEditorWindows.end(), [](const std::unique_ptr<graphics::VstEditorWindow>& window) {
-			return !window || !window->IsOpen();
-		}), _vstEditorWindows.end());
+		std::vector<std::unique_ptr<graphics::VstEditorWindow>> retired;
+		{
+			std::scoped_lock lock(_vstEditorWindowsMutex);
+			for (auto it = _vstEditorWindows.begin(); it != _vstEditorWindows.end();)
+			{
+				if (!*it || !(*it)->IsOpen())
+				{ retired.push_back(std::move(*it)); it = _vstEditorWindows.erase(it); }
+				else ++it;
+			}
+		}
+		// Window destructors are also native/plugin teardown.
 	}
 
 	actions::ActionResult VstEditorWindowManager::EatAction()
@@ -269,4 +276,31 @@ namespace vst
 
 		return false;
 	}
+}
+
+void vst::VstEditorWindowManager::CloseVstEditorsForStation(const std::shared_ptr<engine::Station>& station)
+{
+	if (!station) return;
+	const auto owns = [&](const vst::IVstPlugin* plugin) {
+		for (size_t i = 0u; auto current = station->GetVstPlugin(i); ++i) if (current.get() == plugin) return true;
+		for (const auto& take : station->GetLoopTakeSnapshot())
+		{
+			if (take->OwnsPlugin(plugin)) return true;
+			for (const auto& loop : take->GetLoops())
+				for (size_t i = 0u; auto current = loop->GetVstPlugin(i); ++i) if (current.get() == plugin) return true;
+		}
+		return false;
+	};
+	std::vector<std::unique_ptr<graphics::VstEditorWindow>> closing;
+	{
+		std::scoped_lock lock(_vstEditorWindowsMutex);
+		for (auto it = _vstEditorWindows.begin(); it != _vstEditorWindows.end();)
+		{
+			if (*it && owns((*it)->Plugin().get()))
+			{ closing.push_back(std::move(*it)); it = _vstEditorWindows.erase(it); }
+			else ++it;
+		}
+	}
+	// DestroyWindow/plugin close can reenter Scene focus handling synchronously.
+	for (const auto& window : closing) window->Destroy();
 }

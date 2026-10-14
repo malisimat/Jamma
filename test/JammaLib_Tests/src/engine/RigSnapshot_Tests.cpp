@@ -1,4 +1,8 @@
 #include "engine/RigCoordinator.h"
+#include "engine/StationManagement.h"
+#include "gui/GuiStationControls.h"
+#include <glm/gtc/matrix_transform.hpp>
+#include "../../../../Jamma/src/RigDefaultSave.h"
 #include "audio/AudioHost.h"
 #include "engine/Station.h"
 #include "gui/GuiHud.h"
@@ -99,7 +103,7 @@ TEST(AudioCallbackAdmission, SnapshotBorrowFailureReusesLastSuccessfulBlockState
 	EXPECT_EQ(4u, host.GetAudioSampleCounter());
 	EXPECT_EQ(4u, clock->SceneSamplePos());
 
-	std::array<base::PublishedAudioSnapshot<const std::vector<std::shared_ptr<engine::Station>>>::Lease, 7u>
+	std::array<base::PublishedAudioSnapshot<const audio::StationInventory>::Lease, 7u>
 		stationLeases;
 	std::array<base::PublishedAudioSnapshot<utils::Timer>::Lease, 7u> clockLeases;
 	for (auto& lease : stationLeases)
@@ -137,7 +141,7 @@ TEST(AudioCallbackAdmission, StartupBorrowFailureSilencesButAdvancesPhysicalProg
 	host.SetTimingClock(clock);
 	audio::RigAudioBoundaryTestAccess::ConfigureCallback(host, clock);
 
-	std::array<base::PublishedAudioSnapshot<const std::vector<std::shared_ptr<engine::Station>>>::Lease, 8u>
+	std::array<base::PublishedAudioSnapshot<const audio::StationInventory>::Lease, 8u>
 		stationLeases;
 	std::array<base::PublishedAudioSnapshot<utils::Timer>::Lease, 8u> clockLeases;
 	for (auto& lease : stationLeases)
@@ -229,7 +233,7 @@ TEST(AudioCallbackAdmission, DesiredTimingRemainsPendingWhenSnapshotBorrowIsExha
 {
 	audio::AudioHost host(io::UserConfig{});
 	host.SetStations(std::make_shared<const std::vector<std::shared_ptr<engine::Station>>>());
-	std::array<base::PublishedAudioSnapshot<const std::vector<std::shared_ptr<engine::Station>>>::Lease, 8u>
+	std::array<base::PublishedAudioSnapshot<const audio::StationInventory>::Lease, 8u>
 		leases;
 	for (auto& lease : leases)
 	{
@@ -683,7 +687,7 @@ TEST_F(RigSnapshotTest, RequiresAudioAcknowledgementBeforeInputAndBothBeforeProm
 	EXPECT_FALSE(coordinator.Pending());
 }
 
-TEST_F(RigSnapshotTest, RejectedCandidatesConsumeRevisionsAndPersistenceFailureRollsBack)
+TEST_F(RigSnapshotTest, RejectedCandidatesConsumeRevisionsAndDiskFailureCannotRejectRuntimeEdits)
 {
 	auto station = RuntimeStation("Station");
 	io::RigFile initial{};
@@ -699,12 +703,15 @@ TEST_F(RigSnapshotTest, RejectedCandidatesConsumeRevisionsAndPersistenceFailureR
 			[](const io::RigFile&) { return true; }));
 	ASSERT_EQ(engine::RigCoordinator::EditResult::Pending, coordinator.SubmitCandidate(initial));
 	const auto persistenceRevision = coordinator.Staged()->Revision;
-	EXPECT_EQ(engine::RigCoordinator::EditResult::PersistenceFailed,
+	EXPECT_EQ(engine::RigCoordinator::EditResult::Pending,
 		coordinator.CompleteTransition(persistenceRevision, true,
-			[](const io::RigFile&) { return false; }));
+			[](const io::RigFile&) { ADD_FAILURE() << "Runtime edits must never write a rig"; return false; }));
 	EXPECT_GT(persistenceRevision, rejectedRevision);
 	EXPECT_EQ(accepted, coordinator.Accepted());
-	EXPECT_FALSE(coordinator.Pending());
+	ASSERT_TRUE(coordinator.Pending());
+	coordinator.ApplyPendingAtAudioBoundary();
+	ASSERT_TRUE(coordinator.AcknowledgeInput(persistenceRevision));
+	ASSERT_TRUE(coordinator.PromoteAcknowledged());
 
 	ASSERT_EQ(engine::RigCoordinator::EditResult::Pending, coordinator.SubmitCandidate(initial));
 	const auto successfulRevision = coordinator.Staged()->Revision;
@@ -792,7 +799,7 @@ TEST_F(RigSnapshotTest, ShutdownAndReleaseAreIdempotent)
 	EXPECT_FALSE(coordinator.Pending());
 }
 
-TEST_F(RigSnapshotTest, PersistenceWaitsForFreshTransitionAndRejectionRestoresEdits)
+TEST_F(RigSnapshotTest, RuntimeTransitionsNeverPersistAndRejectionRestoresEdits)
 {
 	auto station = RuntimeStation("Station");
 	io::RigFile rig{};
@@ -817,7 +824,7 @@ TEST_F(RigSnapshotTest, PersistenceWaitsForFreshTransitionAndRejectionRestoresEd
 	EXPECT_EQ(engine::RigCoordinator::EditResult::Pending,
 		coordinator.CompleteTransition(secondRevision, true,
 			[&saves](const io::RigFile&) { ++saves; return true; }));
-	EXPECT_EQ(1u, saves);
+	EXPECT_EQ(0u, saves);
 }
 
 TEST_F(RigSnapshotTest, AudioBoundaryPublishesFreshTriggerTransition)
@@ -1216,4 +1223,274 @@ TEST_F(RigSnapshotTest, HardwarePreferenceMergeRetainsTriggerIdentityAndUnrelate
 	EXPECT_EQ(coordinator.Accepted()->Rig.User.Midi.Devices.front().Name, "missing");
 	EXPECT_TRUE(coordinator.Accepted()->Rig.User.Midi.Devices.front().Enabled);
 	EXPECT_EQ(initial->Rig.User.Audio.Name, rig.User.Audio.Name);
+}
+
+TEST_F(RigSnapshotTest, PrependingPreservesReceiverIdentityAndDoesNotCreateTriggers)
+{
+ auto a = RuntimeStation("A"), b = RuntimeStation("B"), added = RuntimeStation("New");
+ io::RigFile rig{}; rig.Triggers = {TriggerDescriptor("first", std::nullopt), TriggerDescriptor("second", "B")};
+ engine::RigCoordinator coordinator;
+ ASSERT_TRUE(coordinator.BuildInitial(rig, {StationDescriptor("A"), StationDescriptor("B")}, {a, b}, 0u, {}, {}, {}));
+ const auto old = coordinator.Accepted();
+ ASSERT_EQ(engine::RigCoordinator::EditResult::Pending, coordinator.SubmitInventory({added, a, b}));
+ const auto candidate = coordinator.Staged();
+ ASSERT_TRUE(candidate->MembershipChange);
+ EXPECT_EQ(2u, candidate->Triggers.size());
+ EXPECT_EQ(a, candidate->Triggers[0].BoundReceiver);
+ EXPECT_EQ(b, candidate->Triggers[1].BoundReceiver);
+ EXPECT_EQ(1u, candidate->Triggers[0].StationIndex);
+ EXPECT_EQ(2u, candidate->Triggers[1].StationIndex);
+ EXPECT_EQ(old->Triggers[0].Instance, candidate->Triggers[0].Instance);
+ EXPECT_TRUE(candidate->TriggerRouteUpdates.empty());
+ EXPECT_EQ("A", candidate->Rig.Triggers[0].StationTarget);
+ ASSERT_EQ(engine::RigCoordinator::EditResult::Pending, coordinator.CompleteTransition(candidate->Revision, true, {}));
+ coordinator.ApplyPendingAtAudioBoundary();
+ ASSERT_TRUE(coordinator.AcknowledgeInput(candidate->Revision)); ASSERT_TRUE(coordinator.PromoteAcknowledged());
+ EXPECT_EQ(3u, coordinator.Accepted()->Stations->size());
+}
+
+TEST_F(RigSnapshotTest, RemovalExplicitlyUnbindsAndNeverRedirectsToIndexOccupant)
+{
+ auto a = RuntimeStation("A"), b = RuntimeStation("B");
+ io::RigFile rig{}; rig.Triggers = {TriggerDescriptor("first", "A"), TriggerDescriptor("second", "B")};
+ engine::RigCoordinator coordinator;
+ ASSERT_TRUE(coordinator.BuildInitial(rig, {StationDescriptor("A"), StationDescriptor("B")}, {a, b}, 0u, {}, {}, {}));
+ const auto original = coordinator.Accepted();
+ ASSERT_EQ(engine::RigCoordinator::EditResult::Pending, coordinator.SubmitInventory({b}, a));
+ const auto candidate = coordinator.Staged();
+ EXPECT_EQ("", candidate->Rig.Triggers[0].StationTarget);
+ EXPECT_FALSE(candidate->Triggers[0].StationIndex);
+ EXPECT_FALSE(candidate->Triggers[0].BoundReceiver);
+ EXPECT_EQ(original->Triggers[0].Id, candidate->Triggers[0].Id);
+ EXPECT_EQ(b, candidate->Triggers[1].BoundReceiver);
+ ASSERT_EQ(1u, candidate->TriggerRouteUpdates.size());
+ EXPECT_TRUE(candidate->TriggerRouteUpdates[0].ReceiverChanged);
+ EXPECT_EQ(0u, candidate->TriggerRouteUpdates[0].CandidateIndex);
+}
+
+TEST_F(RigSnapshotTest, SameIndexWithNewStationIsAReceiverChange)
+{
+ auto a = RuntimeStation("A"), replacement = RuntimeStation("A");
+ io::RigFile rig{}; rig.Triggers = {TriggerDescriptor("first", "A")};
+ engine::RigCoordinator coordinator;
+ ASSERT_TRUE(coordinator.BuildInitial(rig, {StationDescriptor("A")}, {a}, 0u, {}, {}, {}));
+ // Same display name is not the original receiver identity.
+ ASSERT_EQ(engine::RigCoordinator::EditResult::Pending, coordinator.SubmitInventory({replacement}, a));
+ const auto candidate = coordinator.Staged();
+ EXPECT_FALSE(candidate->Triggers[0].StationIndex);
+ ASSERT_EQ(1u, candidate->TriggerRouteUpdates.size());
+ EXPECT_TRUE(candidate->TriggerRouteUpdates[0].ReceiverChanged);
+}
+
+TEST_F(RigSnapshotTest, RemovalValidationUsesIdentityRevisionAndTakePresence)
+{
+ auto a = RuntimeStation("A"), b = RuntimeStation("B");
+ engine::StationManagement management;
+ management.Target = a; management.Revision = 7u;
+ using Result = engine::StationManagement::Validation;
+ EXPECT_EQ(Result::Ready, management.Validate({a, b}, 7u, false));
+ EXPECT_EQ(Result::FinalStation, management.Validate({a}, 7u, true));
+ EXPECT_EQ(Result::Stale, management.Validate({a, b}, 8u, true));
+ EXPECT_EQ(Result::Stale, management.Validate({RuntimeStation("A"), b}, 7u, true));
+ a->AddTake();
+ EXPECT_EQ(Result::Confirm, management.Validate({a, b}, 7u, false));
+ EXPECT_EQ(Result::Ready, management.Validate({a, b}, 7u, true));
+ management.Cancel();
+ EXPECT_EQ(Result::Stale, management.Validate({a, b}, 7u, true));
+}
+
+TEST_F(RigSnapshotTest, ReceiverRemovalDrainsQueuedStartBeforeRebinding)
+{
+ auto a = RuntimeStation("A");
+ io::RigFile rig{}; rig.Triggers = {TriggerDescriptor("record", "A")};
+ engine::RigCoordinator coordinator;
+ ASSERT_TRUE(coordinator.BuildInitial(rig, {StationDescriptor("A")}, {a}, 1u, {}, {}, {}));
+ auto trigger = coordinator.Accepted()->Triggers[0].Instance;
+ io::UserConfig cfg{}; cfg.Audio.NumChannelsIn = 1u;
+ base::Action action;
+ const auto revision = coordinator.Accepted()->Revision;
+ trigger->QueueExternalControlAction(true, true, action, revision);
+ trigger->OnTick(utils::Timer::GetTime(), 0u, cfg, std::nullopt, revision);
+ trigger->RequestReceiverRemoval(a.get());
+ // A late UI edge carries the new generation, but the outgoing receiver remains unavailable.
+ trigger->QueueExternalControlAction(true, false, action, revision);
+ trigger->QueueExternalControlAction(true, true, action, revision);
+ trigger->ProcessStructuralActionsOnJob(cfg, std::nullopt);
+ trigger->OnTick(utils::Timer::GetTime(), 0u, cfg, std::nullopt, revision);
+ EXPECT_TRUE(trigger->ReceiverRemovalReady());
+ trigger->CompleteReceiverRemovalOnJob();
+ EXPECT_TRUE(trigger->GetTakes().empty());
+ EXPECT_EQ(0u, a->NumTakes());
+ EXPECT_FALSE(trigger->IsActivateInputDown());
+ EXPECT_TRUE(trigger->CanApplyCaptureRouting(true));
+}
+
+TEST_F(RigSnapshotTest, ReceiverRemovalCancelsHeldRecordingAndReleasesHistory)
+{
+ auto a = RuntimeStation("A");
+ io::RigFile rig{}; rig.Triggers = {TriggerDescriptor("record", "A")};
+ engine::RigCoordinator coordinator;
+ ASSERT_TRUE(coordinator.BuildInitial(rig, {StationDescriptor("A")}, {a}, 1u, {}, {}, {}));
+ auto trigger = coordinator.Accepted()->Triggers[0].Instance;
+ io::UserConfig cfg{}; cfg.Audio.NumChannelsIn = 1u;
+ base::Action action;
+ const auto revision = coordinator.Accepted()->Revision;
+ trigger->QueueExternalControlAction(true, true, action, revision);
+ trigger->OnTick(utils::Timer::GetTime(), 0u, cfg, std::nullopt, revision);
+ trigger->ProcessStructuralActionsOnJob(cfg, std::nullopt);
+ trigger->OnTick(utils::Timer::GetTime(), 0u, cfg, std::nullopt, revision);
+ ASSERT_EQ(1u, a->NumTakes());
+ ASSERT_FALSE(trigger->GetTakes().empty());
+ a->BeginMembershipRemoval(); trigger->RequestReceiverRemoval(a.get());
+ trigger->OnTick(utils::Timer::GetTime(), 0u, cfg, std::nullopt, revision);
+ ASSERT_TRUE(trigger->ReceiverRemovalReady());
+ trigger->CompleteReceiverRemovalOnJob();
+ EXPECT_TRUE(trigger->GetTakes().empty());
+ EXPECT_FALSE(trigger->IsActivateInputDown());
+ EXPECT_FALSE(a->GetLoopTakeSnapshot().front()->HasPendingTriggerCapture());
+ EXPECT_TRUE(trigger->CanApplyCaptureRouting(true));
+}
+
+TEST(RigDefaultSaveTest, FilenameMustStayInRigDirectoryAndAvoidReservedNames)
+{
+ const std::filesystem::path directory = L"C:/Roaming/Jamma";
+ EXPECT_TRUE(RigDefaultSave::ValidFilename(directory / L"My rig.rig", directory));
+ for (const auto name : {L"defaults.rig", L"con.rig", L"LPT9.rig", L"profile.tmp.rig", L"wrong.json", L"../other.rig"})
+  EXPECT_FALSE(RigDefaultSave::ValidFilename(directory / name, directory));
+ EXPECT_FALSE(RigDefaultSave::ValidFilename(L"C:/other/rig.rig", directory));
+}
+
+TEST(RigDefaultSaveTest, WriteOrderingAndIndependentFailuresPreserveDefaults)
+{
+ io::RigFile rig{}; rig.Name = "Current rig";
+ io::InitFile defaults{}; defaults.Rig = L"selected.rig"; defaults.Jam = L"performance.jam";
+ defaults.RigLoadType = io::InitFile::LOAD_SPECIFIC; defaults.JamLoadType = io::InitFile::LOAD_LAST;
+ defaults.RigOrigin = "user";
+ std::vector<std::string> steps;
+ auto result = RigDefaultSave::WriteCaptured(rig, defaults, L"isolated-defaults.json",
+  [&](const auto&, const auto& captured) { steps.push_back("rig"); EXPECT_EQ("Current rig", captured.Name); return false; },
+  [&](const auto&, const auto&) { steps.push_back("defaults"); return true; });
+ EXPECT_FALSE(result->RigSaved); EXPECT_FALSE(result->DefaultsSaved);
+ EXPECT_EQ(std::vector<std::string>{"rig"}, steps);
+ steps.clear();
+ result = RigDefaultSave::WriteCaptured(rig, defaults, L"isolated-defaults.json",
+  [&](const auto&, const auto&) { steps.push_back("rig"); return true; },
+  [&](const auto& path, const auto& json) {
+   steps.push_back("defaults"); EXPECT_EQ(L"isolated-defaults.json", path);
+   auto loaded = io::InitFile::FromStream(std::stringstream(json));
+   EXPECT_TRUE(loaded); if (loaded) EXPECT_EQ(defaults.Jam, loaded->Jam);
+   return false;
+  });
+ EXPECT_TRUE(result->RigSaved); EXPECT_FALSE(result->DefaultsSaved);
+ EXPECT_EQ((std::vector<std::string>{"rig", "defaults"}), steps);
+ result = RigDefaultSave::WriteCaptured(rig, defaults, L"isolated-defaults.json",
+  [](const auto&, const auto&) { return true; }, [](const auto&, const auto&) { return true; });
+ EXPECT_TRUE(result->RigSaved); EXPECT_TRUE(result->DefaultsSaved);
+ EXPECT_EQ(defaults.Jam, result->Defaults.Jam);
+ // A runtime topology/routing edit must not become a new startup default
+ // simply because the performer chose different hardware.
+ rig.User.Loop.FadeSamps = 123u;
+ io::RigFile::Trigger trigger{}; trigger.Name = "saved-trigger"; trigger.StationTarget = "saved-station";
+ rig.Triggers.push_back(trigger);
+ auto live = rig; live.Name = "runtime"; live.Triggers.clear(); live.User.Loop.FadeSamps = 999u;
+ live.User.Audio.Name = "new-device"; live.User.Midi.Devices = {{"new-midi", true}};
+ const auto preferences = RigDefaultSave::WithHardwarePreferences(rig, live);
+ EXPECT_EQ(rig.Name, preferences.Name);
+ ASSERT_EQ(1u, preferences.Triggers.size());
+ EXPECT_EQ(trigger.StationTarget, preferences.Triggers.front().StationTarget);
+ EXPECT_EQ(123u, preferences.User.Loop.FadeSamps);
+ EXPECT_EQ("new-device", preferences.User.Audio.Name);
+ ASSERT_EQ(1u, preferences.User.Midi.Devices.size());
+ EXPECT_EQ("new-midi", preferences.User.Midi.Devices.front().Name);
+}
+
+TEST_F(RigSnapshotTest, DisabledFinalBinConsumesPressAndRelease)
+{
+ auto station = RuntimeStation("Only");
+ gui::GuiStationControls controls;
+ const auto view = glm::scale(glm::mat4(1.0f), glm::vec3(0.001f, 0.001f, 0.001f));
+ utils::Size2d viewport{800u, 600u};
+ controls.Update({station}, view, viewport, true, true);
+ auto anchor = station->TopCapModelPosition(); anchor.Y += 65.0f;
+ const auto point = gui::CableInteraction::ProjectAnchor(view * glm::vec4(anchor.X, anchor.Y, anchor.Z, 1.0f), viewport);
+ ASSERT_TRUE(point);
+ actions::TouchAction action; action.Position = {static_cast<int>(point->x), static_cast<int>(point->y)}; action.Index = 0;
+ action.State = actions::TouchAction::TOUCH_DOWN;
+ unsigned activations = 0u;
+ EXPECT_TRUE(controls.Touch(action, [&](auto) { ++activations; }));
+ action.State = actions::TouchAction::TOUCH_UP;
+ EXPECT_TRUE(controls.Touch(action, [&](auto) { ++activations; }));
+ EXPECT_EQ(0u, activations);
+}
+
+TEST_F(RigSnapshotTest, ReleasingCtrlCancelsBinAndConsumesItsRelease)
+{
+ auto station = RuntimeStation("A"), b = RuntimeStation("B");
+ gui::GuiStationControls controls;
+ const auto view = glm::scale(glm::mat4(1.0f), glm::vec3(0.001f, 0.001f, 0.001f));
+ utils::Size2d viewport{800u, 600u};
+ controls.Update({station, b}, view, viewport, true, true);
+ auto anchor = station->TopCapModelPosition(); anchor.Y += 65.0f;
+ const auto point = gui::CableInteraction::ProjectAnchor(view * glm::vec4(anchor.X, anchor.Y, anchor.Z, 1.0f), viewport);
+ ASSERT_TRUE(point);
+ actions::TouchAction action; action.Position = {static_cast<int>(point->x), static_cast<int>(point->y)}; action.Index = 0;
+ unsigned activations = 0u;
+ action.State = actions::TouchAction::TOUCH_DOWN;
+ EXPECT_TRUE(controls.Touch(action, [&](auto) { ++activations; }));
+ controls.CancelBinPress();
+ controls.Update({station, b}, view, viewport, false, true);
+ action.State = actions::TouchAction::TOUCH_UP;
+ EXPECT_TRUE(controls.Touch(action, [&](auto) { ++activations; }));
+ EXPECT_EQ(0u, activations);
+}
+
+TEST_F(RigSnapshotTest, DetachingDeletedMasterPreservesTransportAndGrid)
+{
+ auto station = RuntimeStation("Master");
+ auto take = station->AddTake();
+ engine::LoopParams params; params.Size = {80u, 80u};
+ audio::WireMixBehaviourParams wire; wire.Channels = {0u};
+ auto loop = std::make_shared<engine::Loop>(params, engine::Loop::GetMixerParams(params.Size, wire));
+ loop->Record();
+ std::vector<float> samples(constants::MaxLoopFadeSamps + 48000u, 0.1f);
+ base::AudioWriteRequest request; request.samples = samples.data(); request.numSamps = static_cast<unsigned>(samples.size());
+ request.stride = 1u; request.fadeCurrent = 0.0f; request.fadeNew = 1.0f; request.source = base::Audible::AUDIOSOURCE_ADC;
+ loop->OnBlockWrite(request, 0); loop->EndWrite(request.numSamps, true);
+ loop->Play(constants::MaxLoopFadeSamps, 48000u, false);
+ take->AddLoop(loop); take->CommitChanges(); station->CommitChanges();
+ engine::Quantiser quantiser;
+ auto clock = std::make_shared<utils::Timer>(); quantiser.SetClock(clock);
+ ASSERT_TRUE(quantiser.TrySetMasterFromHover(loop, base::DEPTH_LOOP, {station}, 48000u, io::UserConfig{}, true));
+ ASSERT_TRUE(clock->InitialiseAbsoluteSamplePos(48000u * 7u + 111u));
+ const auto phase = clock->AbsoluteSamplePos(); const auto length = clock->SeedSourceLength();
+ const auto grid = quantiser.ActiveGrid();
+ const auto pins = loop.use_count();
+ quantiser.DetachStationMaster(station);
+ EXPECT_EQ(pins - 1, loop.use_count());
+ EXPECT_EQ(phase, clock->AbsoluteSamplePos()); EXPECT_EQ(length, clock->SeedSourceLength());
+ EXPECT_EQ(grid.DivisionCount, quantiser.ActiveGrid().DivisionCount);
+ EXPECT_EQ(grid.Source, quantiser.ActiveGrid().Source);
+}
+
+TEST_F(RigSnapshotTest, PresentationMoveSharesTopCapPositionAndReportsItsSettlingFrame)
+{
+ auto station = RuntimeStation("Animated");
+ station->SetModelPosition({550.0f, -20.0f, 0.0f});
+ const auto finalCap = station->TopCapModelPosition();
+ station->BeginPresentationMove(-50.0f);
+ EXPECT_FLOAT_EQ(550.0f, station->ModelPosition().X);
+ EXPECT_FLOAT_EQ(-50.0f, station->PresentationModelPosition().X);
+ EXPECT_FLOAT_EQ(finalCap.X - 600.0f, station->TopCapModelPosition().X);
+ EXPECT_TRUE(station->AdvancePresentationMove(-1.0f));
+ EXPECT_FLOAT_EQ(-50.0f, station->PresentationModelPosition().X);
+ float previous = -50.0f;
+ for (unsigned int step = 0u; step < 5u; ++step)
+ {
+  EXPECT_TRUE(station->AdvancePresentationMove(10.0f)); // Long frames are bounded.
+  const float current = station->PresentationModelPosition().X;
+  EXPECT_GE(current, previous); EXPECT_LE(current, 550.0f); previous = current;
+ }
+ EXPECT_FALSE(station->IsPresentationMoving());
+ EXPECT_FLOAT_EQ(550.0f, station->PresentationModelPosition().X);
+ EXPECT_FALSE(station->AdvancePresentationMove(0.05f));
 }

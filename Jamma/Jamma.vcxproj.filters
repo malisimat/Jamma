@@ -6,6 +6,7 @@
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="src\RigDefaultSave.h"><Filter>src</Filter></ClInclude>
     <ClInclude Include="include\Main.h">
       <Filter>include</Filter>
     </ClInclude>

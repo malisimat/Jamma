@@ -500,8 +500,8 @@ void Window::Render()
 	_scene->CommitChanges();
 	if (_config.Size.Width == 0 || _config.Size.Height == 0) return;
 	_scene->UpdateCamera();
+	if (_scene->AdvanceUiAnimations()) _hover3dDirty = _forcePick = true;
 	_scene->InitResources(_resourceLib, false);
-	_scene->AdvanceUiAnimations();
 
 	const bool needsPick = (_hover3dDirty || _forcePick) && _cachedCursorPosition.has_value();
 	if (needsPick)

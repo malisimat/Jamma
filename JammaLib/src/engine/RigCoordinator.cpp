@@ -79,7 +79,9 @@ RigCoordinator::SnapshotPtr RigCoordinator::_BuildSnapshot(std::uint64_t revisio
 	const auto& normalizedRig = resolution.CandidateRig;
 	auto snapshot = std::make_shared<RigSnapshot>();
 	snapshot->Revision = revision;
+	snapshot->TopologyRevision = acceptedSnapshot ? acceptedSnapshot->TopologyRevision : revision;
 	snapshot->Rig = normalizedRig;
+	snapshot->Stations = std::make_shared<const std::vector<std::shared_ptr<Station>>>(stations);
 	snapshot->Graph = { revision, std::move(resolution.Triggers) };
 	snapshot->InputDispatch.Revision = revision;
 	std::unordered_map<std::string, size_t> acceptedById;
@@ -112,9 +114,9 @@ RigCoordinator::SnapshotPtr RigCoordinator::_BuildSnapshot(std::uint64_t revisio
 			instance = acceptedSnapshot->Triggers[acceptedIndex].Instance;
 			retainedAcceptedIds.insert(fileTrigger.Id);
 			if (!_EquivalentCaptureRouting(fileTrigger, acceptedSnapshot->Rig.Triggers[acceptedIndex]) ||
-				stationIndex != acceptedSnapshot->Triggers[acceptedIndex].StationIndex)
+				(stationIndex ? stations[*stationIndex].get() : nullptr) != acceptedSnapshot->Triggers[acceptedIndex].BoundReceiver.get())
 				snapshot->TriggerRouteUpdates.push_back({ instance, triggerIndex,
-					stationIndex != acceptedSnapshot->Triggers[acceptedIndex].StationIndex });
+					(stationIndex ? stations[*stationIndex].get() : nullptr) != acceptedSnapshot->Triggers[acceptedIndex].BoundReceiver.get() });
 		}
 		else
 		{
@@ -147,9 +149,9 @@ RigCoordinator::SnapshotPtr RigCoordinator::_BuildSnapshot(std::uint64_t revisio
 		auto overdubMixer = std::make_shared<audio::AudioMixer>(
 			Trigger::GetOverdubMixerParams(fileTrigger.InputChannels));
 		auto overdubWriter = Trigger::CreateBounceWriter(overdubMixer);
-		snapshot->Triggers.push_back({ fileTrigger.Id, triggerIndex, instance, stationIndex, std::move(receiver),
+		snapshot->Triggers.push_back({ fileTrigger.Id, triggerIndex, instance, stationIndex, receiver,
 			fileTrigger.InputChannels, fileTrigger.MidiInputDevices, fileTrigger.MidiInputs,
-			std::move(overdubMixer), std::move(overdubWriter) });
+			std::move(overdubMixer), std::move(overdubWriter), receiver });
 	}
 	if (acceptedSnapshot)
 	{
@@ -243,6 +245,48 @@ RigCoordinator::EditResult RigCoordinator::SubmitCandidate(const io::RigFile& ca
 	return EditResult::Pending;
 }
 
+RigCoordinator::EditResult RigCoordinator::SubmitInventory(
+	const std::vector<std::shared_ptr<Station>>& stations, std::shared_ptr<Station> removed)
+{
+	bool enabled = true;
+	if (!_editsEnabled.compare_exchange_strong(enabled, false, std::memory_order_acq_rel)) return EditResult::EditsDisabled;
+	const auto accepted = Accepted();
+	if (!accepted || _shuttingDown.load(std::memory_order_acquire))
+	{ _editsEnabled.store(false, std::memory_order_release); return EditResult::TransitionRejected; }
+	auto rig = accepted->Rig;
+	std::vector<io::JamFile::Station> descriptors;
+	for (const auto& station : stations) { io::JamFile::Station descriptor; descriptor.Name = station->Name(); descriptors.push_back(std::move(descriptor)); }
+	for (size_t i = 0; i < rig.Triggers.size(); ++i)
+	{
+		const auto& route = accepted->Triggers[i];
+		const auto receiver = route.BoundReceiver;
+		const auto survivor = std::find(stations.begin(), stations.end(), receiver);
+		// Absent targets invoke legacy index resolution; explicitly unbind instead.
+		if (receiver)
+			rig.Triggers[i].StationTarget = survivor == stations.end() ? std::string{} : (*survivor)->Name();
+		else if (!rig.Triggers[i].StationTarget || std::count_if(stations.begin(), stations.end(),
+			[&](const auto& station) { return station->Name() == *rig.Triggers[i].StationTarget; }) == 1)
+			rig.Triggers[i].StationTarget = std::string{};
+	}
+	auto snapshot = _BuildSnapshot(_AllocateRevision(), rig, descriptors, stations,
+		_availableAdcChannels, _availableMidiDevices, _triggerParams, accepted);
+	if (!snapshot) { _editsEnabled.store(true, std::memory_order_release); return EditResult::ValidationFailed; }
+	for (size_t i = 0u; i < snapshot->Triggers.size(); ++i)
+	{
+		const auto receiver = accepted->Triggers[i].BoundReceiver;
+		const auto expected = std::find(stations.begin(), stations.end(), receiver) == stations.end() ? nullptr : receiver;
+		if (snapshot->Triggers[i].BoundReceiver != expected)
+		{ _editsEnabled.store(true, std::memory_order_release); return EditResult::ValidationFailed; }
+	}
+	auto prepared = std::const_pointer_cast<RigSnapshot>(snapshot);
+	prepared->MembershipChange = true;
+	prepared->TopologyRevision = snapshot->Revision;
+	prepared->StationDescriptors = std::move(descriptors);
+	prepared->RemovedStation = removed.get();
+	_staged.store(std::move(snapshot), std::memory_order_release);
+	return EditResult::Pending;
+}
+
 RigCoordinator::EditResult RigCoordinator::CompleteTransition(std::uint64_t revision,
 	bool acceptedAtAudioBoundary,
 	const PersistRig& persistRig)
@@ -256,13 +300,8 @@ RigCoordinator::EditResult RigCoordinator::CompleteTransition(std::uint64_t revi
 		_editsEnabled.store(!_shuttingDown.load(std::memory_order_acquire), std::memory_order_release);
 		return EditResult::TransitionRejected;
 	}
-	// Persistence remains the final fallible operation before pending publication.
-	if (!persistRig || !persistRig(candidate->Rig))
-	{
-		_staged.store({}, std::memory_order_release);
-		_editsEnabled.store(!_shuttingDown.load(std::memory_order_acquire), std::memory_order_release);
-		return EditResult::PersistenceFailed;
-	}
+	// Performance edits are committed in memory; only explicit saving writes a rig.
+	(void)persistRig;
 	// The old trigger is idle at the accepted audio boundary. Restore its latest
 	// published history before the replacement can be exposed to audio or input.
 	for (const auto& replacement : candidate->TriggerReplacementChecks)
@@ -326,6 +365,11 @@ bool RigCoordinator::PromoteAcknowledged()
 {
 	auto pending = _pending.load(std::memory_order_acquire);
 	if (!pending || AudioAcknowledgement() != pending->Revision || InputAcknowledgement() != pending->Revision) return false;
+	if (pending->MembershipChange)
+	{
+		_stations = *pending->Stations;
+		_stationDescriptors = pending->StationDescriptors;
+	}
 	auto old = _accepted.exchange(pending, std::memory_order_acq_rel);
 	_pending.store({}, std::memory_order_release);
 	if (old)

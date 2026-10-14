@@ -63,6 +63,8 @@
 #include "HierarchySelection.h"
 #include "StationRemote.h"
 #include "RigCoordinator.h"
+#include "StationManagement.h"
+#include "../gui/GuiStationControls.h"
 #include "../actions/ActionUndoHistory.h"
 #include "../midi/LoopGridEditor.h"
 
@@ -122,7 +124,7 @@ namespace engine
 		void DrawBackground(base::DrawContext& ctx);
 		bool HasSelection() const;
 		void UpdateCamera();
-		void AdvanceUiAnimations();
+		bool AdvanceUiAnimations();
 
 		virtual void SetSize(utils::Size2d size) override
 		{
@@ -214,7 +216,15 @@ namespace engine
 		void CloseSerial() {}
 		// UI thread only: reconciles pending topology and popup presentation before rendering.
 		void CommitChanges();
-		bool SaveRig(const io::RigFile& rig) const { return _saveRig && _saveRig(rig); }
+		// Off-callback hardware-only saver; never persists live membership or routing.
+		bool SaveHardwarePreferences(const io::RigFile& rig) const
+		{ return _saveHardwarePreferences && _saveHardwarePreferences(rig); }
+		bool ConsumeRigSaveRequest(); // Main/window thread only.
+		std::optional<io::RigFile> CaptureCommittedRig() const;
+		void QueueExplicitRigSave(std::function<void()> work);
+		void FinishExplicitRigSave();
+		void SetRigSaveDialogOpen(bool open); // Window owner; gates conflicting input.
+
 		RigCoordinator::EditResult RequestRigEdit(const io::RigFile& candidateRig);
 		std::shared_ptr<const RigSnapshot> AcceptedRigSnapshot() const noexcept
 		{
@@ -296,12 +306,21 @@ namespace engine
 		bool _OnUndo(std::shared_ptr<base::ActionUndo> undo);
 		void _InitSize();
 		void _UpdateHudStationAnchors();
+		void _UpdateViewProjectionLocked();
 		void _UpdateSelection(actions::ActionResultType res);
 		void _UpdateRackVisibilityLocked();
 		void _CollapseRacksLocked();
 		// Selection helpers require _sceneMutex throughout hierarchy access.
 		base::Tweakable::TweakState _SelectionTweakStateLocked(const std::shared_ptr<base::GuiElement>& target) const;
+		void _PrepareStation(const std::shared_ptr<Station>& station);
 		void _AddStation(std::shared_ptr<Station> station, bool publishAudioStations = true);
+		void _RequestStationControl(gui::GuiStationControls::Intent intent);
+		void _AcceptStationRemoval(bool consent);
+		void _CommitStationMembershipLocked();
+		RigCoordinator::EditResult _RequestRigEditLocked(const io::RigFile& candidateRig);
+		bool _JobReceiverAvailableLocked(const std::shared_ptr<base::ActionReceiver>& receiver) const;
+		bool _StationManagementAvailableLocked() const;
+
 		// Pass a locked station list or a snapshot; remote updates can erase entries.
 		static utils::Position3d _StationCentre(const std::vector<std::shared_ptr<Station>>& stations);
 		void _CycleCameraView();
@@ -376,6 +395,7 @@ namespace engine
 		void _ApplyRemoteTempoPromptDecision();
 		void _OnLoopGridEditorOpened();
 		void _ReleaseQuantisationInput();
+		void _ReleaseQuantisationInputLocked();
 		bool _EditControlsSuppressed() const;
 		std::optional<actions::ActionResult> _RouteQuantisationTouch(actions::TouchAction action);
 		std::optional<actions::ActionResult> _RouteQuantisationMove(actions::TouchMoveAction action);
@@ -424,6 +444,7 @@ namespace engine
 		std::unique_lock<std::mutex> _controlWriterExclusion;
 		std::atomic<bool> _sessionReplacing{ false }; // UI writes; job reads; dies after join.
 		enum class ControlOperation { None, Audio, Midi, Save, Load };
+		std::function<bool(const io::RigFile&)> _saveHardwarePreferences; // Immutable callback, serialized lifecycle callers; Scene bounds lifetime.
 		ControlOperation _controlOperation = ControlOperation::None;
 		audio::AudioHost::QuiescenceState _controlPause{};
 		bool _controlPaused = false;
@@ -497,6 +518,16 @@ namespace engine
 		ninjam::TempoRequestState _lastLoggedTempoRequestState = ninjam::TempoRequestState::Idle;
 		std::vector<std::shared_ptr<Station>> _stations;
 		RigCoordinator _rigCoordinator;
+		std::vector<std::shared_ptr<Station>> _retiredStations; // Scene mutex; UI reclaims after all callback/job pins release.
+		std::optional<ninjam::NinjamRemoteSnapshot> _deferredRemoteSnapshot; // Scene mutex; latest remote membership while a local change commits.
+		StationManagement _stationManagement; // All access under _sceneMutex; UI teardown.
+		gui::GuiStationControls _stationControls; // Window/render owner only.
+		std::shared_ptr<gui::GuiPopup> _stationDeleteDialog; // Window owner only.
+		bool _rigSaveRequested = false; // Window owner only.
+		std::function<void()> _explicitRigSaveJob; // Scene mutex handoff to existing job owner; drained on shutdown.
+		bool _rigSaveInProgress = false; // Scene mutex; UI completion resets.
+		bool _rigSaveDialogOpen = false; // Protected by _sceneMutex.
+
 		std::uint64_t _rigTransitionRequestedRevision = 0u;
 		std::unordered_map<const Trigger*, std::pair<std::uint64_t, std::uint64_t>> _triggerOutcomeCounts;
 		std::uint64_t _lastAudioCallbackHeartbeat = 0u;
@@ -527,7 +558,6 @@ namespace engine
 		std::list<actions::JobAction> _jobList;
 		mutable std::mutex _sceneMutex;
 		io::UserConfig _userConfig;
-		std::function<bool(const io::RigFile&)> _saveRig;
 		ViewMode _viewMode;
 		utils::Position2d _cursorPos{};
 		std::function<bool(int, utils::Position2d)> _beginRelativePointer;

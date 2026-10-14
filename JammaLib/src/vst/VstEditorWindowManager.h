@@ -19,6 +19,7 @@ namespace vst
 		~VstEditorWindowManager();
 
 		void CloseAllVstEditorWindows();
+		void CloseVstEditorsForStation(const std::shared_ptr<engine::Station>& station);
 		void PruneClosedVstEditorWindows();
 
 		actions::ActionResult HandleVstInsert(const std::wstring& pluginPath,

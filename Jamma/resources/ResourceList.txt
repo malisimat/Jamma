@@ -94,3 +94,10 @@
 1 fader_back_panel_down ninepatch 12 12
 1 fader_scale_line ninepatch 3 0
 1 fader_scale_track ninepatch 4 2
+
+1 station_add
+1 station_add_over
+1 station_add_down
+1 station_bin
+1 station_bin_over
+1 station_bin_down

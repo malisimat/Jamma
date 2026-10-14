@@ -130,7 +130,7 @@ namespace audio
 			std::optional<std::uint32_t> phase;
 			for (const auto& station : stations)
 			{
-				if (!station || station->IsRemote()) continue;
+				if (!station || station->IsRemote() || station->MembershipRemoving()) continue;
 				phase = station->MasterPhaseAtAudioBoundary(request->TargetTake,
 					request->TargetLoop, request->MasterLengthSamps);
 				if (phase) break;
@@ -157,7 +157,7 @@ namespace audio
 		// The selected master may have been removed after phase capture.
 		bool targetPublished = false;
 		for (const auto& station : stations)
-			if (station && !station->IsRemote() &&
+			if (station && !station->IsRemote() && !station->MembershipRemoving() &&
 				station->MasterPhaseAtAudioBoundary(prepared.TargetTake,
 					prepared.TargetLoop, prepared.MasterLengthSamps))
 				targetPublished = true;
@@ -165,7 +165,7 @@ namespace audio
 		// Preflight the exact published playback membership before changing any grid.
 		bool claimed = true;
 		for (const auto& station : stations)
-			if (station && !station->IsRemote() &&
+			if (station && !station->IsRemote() && !station->MembershipRemoving() &&
 				!station->TryClaimPreparedMidiQuantisationAtAudioBoundary())
 				claimed = false;
 		if (!claimed)
@@ -180,7 +180,7 @@ namespace audio
 		const auto phase = static_cast<std::uint32_t>((_preparedLocalMasterPhase + elapsed)
 			% prepared.MasterLengthSamps);
 		for (const auto& station : stations)
-			if (station && !station->IsRemote()) station->ActivatePreparedMidiQuantisationAtAudioBoundary();
+			if (station && !station->IsRemote() && !station->MembershipRemoving()) station->ActivatePreparedMidiQuantisationAtAudioBoundary();
 		timingClock->SetQuantisation(prepared.SeedSamps, prepared.Type);
 		timingClock->SetSeedSourceLength(prepared.MasterLengthSamps);
 		timingClock->InitialiseAbsoluteSamplePos(phase);
@@ -262,6 +262,7 @@ namespace audio
 			_lastInitReplacedStream = true;
 			while ((_callbackAdmission.load(std::memory_order_acquire) & 1u) != 0u)
 				std::this_thread::yield();
+			_callbackStations = &_emptyStations;
 			_lastAudioStations.reset();
 			_lastAudioTimingClock.reset();
 			_audioAppliedRigSnapshot.reset();
@@ -385,7 +386,8 @@ namespace audio
 			{
 				_pendingRigSnapshot.store(nullptr);
 				_audioAppliedRigSnapshot.reset();
-				_lastAudioStations.reset();
+				_callbackStations = &_emptyStations;
+			_lastAudioStations.reset();
 				_lastAudioTimingClock.reset();
 				_retainedRigSnapshots.clear();
 				_pendingRigSnapshot.collect();
@@ -566,10 +568,14 @@ namespace audio
 		return true;
 	}
 
-	void AudioHost::SetStations(std::shared_ptr<const std::vector<std::shared_ptr<Station>>> stations)
+	void AudioHost::SetStations(std::shared_ptr<const std::vector<std::shared_ptr<Station>>> stations, std::uint64_t revision)
 	{
 		std::scoped_lock lock(_retainedRigSnapshotsMutex);
-		_audioStations.store(stations);
+		if (!stations) { _audioStations.store({}); return; }
+		auto inventory = std::make_shared<StationInventory>();
+		if (stations) inventory->assign(stations->begin(), stations->end());
+		inventory->TopologyRevision = revision;
+		_audioStations.store(std::move(inventory));
 	}
 
 	void AudioHost::PublishPendingRigSnapshot(std::shared_ptr<const engine::RigSnapshot> snapshot)
@@ -965,7 +971,14 @@ void AudioHost::PublishAudioCallbackProgress(std::uint64_t blockStartSample,
 	bool AudioHost::ApplyPendingRigWhileQuiescent() noexcept
 	{
 		if (!CallbackAdmissionIsQuiescent()) return false;
+		PublishRigTriggerTransitionAtAudioBoundary();
 		ApplyPendingRigSnapshotAtAudioBoundary();
+		auto stations = _audioStations.borrow();
+		if (stations.ReadSucceeded()) _lastAudioStations = std::move(stations);
+		_callbackStations = _lastAudioStations ? static_cast<const std::vector<std::shared_ptr<Station>>*>(_lastAudioStations.get()) : &_emptyStations;
+		if (_audioAppliedRigSnapshot && _audioAppliedRigSnapshot->TopologyRevision != 0u &&
+			(!_lastAudioStations || _lastAudioStations->TopologyRevision < _audioAppliedRigSnapshot->TopologyRevision))
+			_callbackStations = _audioAppliedRigSnapshot->Stations.get();
 		return true;
 	}
 
@@ -1048,7 +1061,11 @@ void AudioHost::PublishAudioCallbackProgress(std::uint64_t blockStartSample,
 
 		ApplyPendingRigSnapshotAtAudioBoundary();
 		const auto& audioStreamParams = *_preparedStreamParams;
-		const auto* stationsSnapshotValue = _lastAudioStations.get();
+		const std::vector<std::shared_ptr<Station>>* stationsSnapshotValue = _lastAudioStations.get();
+		if (_audioAppliedRigSnapshot && _audioAppliedRigSnapshot->TopologyRevision != 0u &&
+			(!_lastAudioStations || _lastAudioStations->TopologyRevision < _audioAppliedRigSnapshot->TopologyRevision))
+			stationsSnapshotValue = _audioAppliedRigSnapshot->Stations.get();
+		_callbackStations = stationsSnapshotValue ? stationsSnapshotValue : &_emptyStations;
 		const auto& stations = stationsSnapshotValue ? *stationsSnapshotValue : _emptyStations;
 		auto* timingClock = _lastAudioTimingClock.get();
 		if (timingClock)

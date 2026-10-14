@@ -43,6 +43,7 @@ namespace gui
 		void SetSelectDepth(base::SelectDepth level);
 		std::vector<unsigned char> CurrentHover() const;
 		std::vector<unsigned char> PaintedPathForTest() const;
+		void ClearPointerState() override;
 		bool IsClickPressed() const;
 		bool IsMutePressed() const;
 		bool IsPaintingMute() const;

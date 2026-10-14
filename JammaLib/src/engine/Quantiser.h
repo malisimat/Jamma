@@ -106,6 +106,8 @@ namespace engine
 		void SetRemoteMidiGrid(const RemoteTransportGeometry& geometry,
 			std::int64_t originSamps,
 			const std::vector<std::shared_ptr<engine::Station>>& stations);
+		// Scene-serialized setup for a newly added local station.
+		void InitialiseStationMidiGrid(const std::shared_ptr<engine::Station>& station) const;
 		void SetGlobalPhaseOffsetSamps(std::int32_t offsetSamps,
 			const std::vector<std::shared_ptr<engine::Station>>& stations);
 
@@ -115,6 +117,7 @@ namespace engine
 			const std::vector<std::shared_ptr<engine::Station>>& stations,
 			const io::UserConfig& cfg);
 
+		void DetachStationMaster(const std::shared_ptr<engine::Station>& station);
 		bool TrySetMasterFromHover(const std::shared_ptr<base::GuiElement>& hovering,
 			unsigned int depth,
 			const std::vector<std::shared_ptr<engine::Station>>& stations,
@@ -225,6 +228,7 @@ namespace engine
 		bool _previousSeedUsesPowers = true;
 		std::shared_ptr<engine::Loop> _masterLoop;
 		RemoteTransportGeometry _acceptedRemoteGrid{};
+		std::int64_t _acceptedRemoteGridOriginSamps = 0; // Scene-serialized job/UI owner.
 		std::atomic<QuantisationGridSource> _gridSource{ QuantisationGridSource::Default };
 		std::atomic_ulong _masterLoopLengthSamps{ 0ul };
 		std::atomic_ulong _masterOriginalBufferLengthSamps{ 0ul };

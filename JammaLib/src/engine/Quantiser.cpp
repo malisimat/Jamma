@@ -146,6 +146,7 @@ void Quantiser::Clear(bool clearTapTempo, bool preserveTiming)
 	if (!preserveTiming)
 	{
 		_acceptedRemoteGrid = {};
+		_acceptedRemoteGridOriginSamps = 0;
 		_gridSource.store(QuantisationGridSource::Default, std::memory_order_release);
 	}
 	_armReclock.store(false, std::memory_order_release);
@@ -167,6 +168,7 @@ void Quantiser::ArmReclock(const std::vector<std::shared_ptr<engine::Station>>& 
 {
 	_reclockGeneration.fetch_add(1u, std::memory_order_acq_rel);
 	_acceptedRemoteGrid = {};
+	_acceptedRemoteGridOriginSamps = 0;
 	_gridSource.store(QuantisationGridSource::Default, std::memory_order_release);
 	if (_clock)
 		_clock->Clear();
@@ -248,6 +250,7 @@ void Quantiser::SetRemoteMidiGrid(const RemoteTransportGeometry& geometry,
 	const auto changed = _acceptedRemoteGrid.IntervalLengthSamps != geometry.IntervalLengthSamps
 		|| _acceptedRemoteGrid.Bpi != geometry.Bpi;
 	_acceptedRemoteGrid = geometry;
+	_acceptedRemoteGridOriginSamps = originSamps;
 	_gridSource = geometry.IntervalLengthSamps && geometry.Bpi ? QuantisationGridSource::Remote : QuantisationGridSource::Default;
 	for (const auto& station : stations)
 	{
@@ -255,6 +258,12 @@ void Quantiser::SetRemoteMidiGrid(const RemoteTransportGeometry& geometry,
 			continue;
 		station->SetRemoteMidiQuantisationGrid(geometry, originSamps, changed);
 	}
+}
+
+void Quantiser::InitialiseStationMidiGrid(const std::shared_ptr<Station>& station) const
+{
+	if (station && !station->IsRemote())
+		station->SetRemoteMidiQuantisationGrid(_acceptedRemoteGrid, _acceptedRemoteGridOriginSamps, false);
 }
 
 void Quantiser::SetGlobalPhaseOffsetSamps(std::int32_t offsetSamps,
@@ -1825,4 +1834,17 @@ std::shared_ptr<engine::LoopTake> engine::QuantiserController::_OwnerForMidiLoop
 		}
 	});
 	return owner;
+}
+
+void engine::Quantiser::DetachStationMaster(const std::shared_ptr<engine::Station>& station)
+{
+	// Scene serializes this reference; transport/grid values intentionally survive.
+	if (!station) return;
+	for (const auto& take : station->GetLoopTakeSnapshot())
+		for (const auto& loop : take->GetLoops())
+			{
+				if (loop == _masterLoop) _masterLoop.reset();
+				// Cancellation must not restore an identity owned by the removed station.
+				if (loop == _previousMasterLoop) _previousMasterLoop.reset();
+			}
 }
