@@ -30,6 +30,9 @@ namespace editor
 		double BandRadius = audio::AudioSpectralConfig::BarTimeRadiusSeconds;
 		graphics::AudioSpectralViewport Viewport, TimeViewport;
 		enum class WheelMode { Brush, Band, Zoom, TimeZoom, Reserved };
+        enum class DragMode { Paint, Pan, Zoom, Reserved };
+        static DragMode DragBinding(bool right, bool shift, bool control) noexcept
+        { return control ? DragMode::Reserved : shift ? (right ? DragMode::Zoom : DragMode::Pan) : DragMode::Paint; }
 		static WheelMode WheelBinding(bool alt, bool shift, bool control) noexcept
 		{ return control ? WheelMode::Reserved : alt && shift ? WheelMode::TimeZoom : alt ? WheelMode::Band : shift ? WheelMode::Zoom : WheelMode::Brush; }
 		void Wheel(WheelMode mode, double direction, double anchorFraction = 0.5) noexcept
@@ -83,6 +86,15 @@ namespace editor
             };
             apply(TimeViewport, _startTime, _timeFraction, horizontalPixels);
             apply(Viewport, _startFrequency, _frequencyFraction, verticalPixels);
+        }
+        // Source under the captured pointer follows it; preserve both axis spans.
+        void MovePan(double timeFraction, double frequencyFraction) noexcept
+        {
+            if (!std::isfinite(timeFraction) || !std::isfinite(frequencyFraction)) return;
+            const auto timeSpan = _startTime.Upper - _startTime.Lower;
+            const auto frequencySpan = _startFrequency.Upper - _startFrequency.Lower;
+            SetAxis(TimeViewport, _startTime.Lower + (_timeFraction - timeFraction) * timeSpan, timeSpan);
+            SetAxis(Viewport, _startFrequency.Lower + (_frequencyFraction - frequencyFraction) * frequencySpan, frequencySpan);
         }
 	private:
         static void SetAxis(graphics::AudioSpectralViewport& view, double lower, double span) noexcept

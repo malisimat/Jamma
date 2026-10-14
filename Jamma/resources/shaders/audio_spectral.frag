@@ -8,6 +8,7 @@ out vec4 ColorOUT;
 
 uniform sampler2D TextureSampler;
 uniform vec4 SpectralViewport;
+uniform float EditorMorph;
 uniform float EditorPlayFrac;
 uniform float EditorTime;
 uniform float SceneDim;
@@ -29,8 +30,9 @@ vec3 spectralColour(float level)
 }
 void main()
 {
-    // Leave the opening/closing ring intact; clip only the fully rectangular editor.
-    if (SurfaceMorph >= 1.0 && (SurfaceUv.x < SpectralViewport.x || SurfaceUv.x > SpectralViewport.y
+    // Use the uniform: interpolating a constant morph can round below 1 and
+    // sporadically bypass clipping. Leave the opening/closing ring intact.
+    if (EditorMorph >= 1.0 && (SurfaceUv.x < SpectralViewport.x || SurfaceUv.x > SpectralViewport.y
         || SurfaceUv.y < SpectralViewport.z || SurfaceUv.y > SpectralViewport.w)) discard;
     float height = clamp(SurfaceHeight, 0.0, 1.0);
     // Height retains +24 dB headroom; normal full-scale peaks already reach red.

@@ -771,7 +771,7 @@ void LoopGridEditor::_HandleWheel(const actions::TouchAction& action)
         _audioControls.Wheel(mode, action.Value, anchorFraction);
         _audioEditor.SetViewport(_audioControls.TimeViewport, _audioControls.Viewport);
 		_UpdateAudioFootprint(action.Position);
-		_SetFeedback("Wheel: brush; Alt: band; Shift: frequency; Alt-Shift: time; Alt-right: zoom");
+		_SetFeedback("Wheel: brush; Alt: band; Shift: frequency; Alt-Shift: time; Shift-right: zoom; Shift-left: pan");
 		return;
 	}
 	if (auto loop = _midiLoop.lock())
@@ -1175,7 +1175,7 @@ void LoopGridEditor::UpdateUi(const glm::mat4& viewProjection)
 	_channelLabel->SetVisible(false);
 	if (IsOpen())
 	{
-		std::string mode = "L/R: boost/cut; Alt: sweep band; Wheel: size; Shift-R: view";
+		std::string mode = "L/R: boost/cut; Alt: sweep band; Wheel: size; Shift-R: zoom; Shift-L: pan";
 		if (_audioStroke && _audioBroadband)
 		{
 			const auto target = audio::AudioSpectralEnvelope::TargetFromDragPixels(
@@ -1432,7 +1432,10 @@ std::optional<actions::ActionResult> LoopGridEditor::OnAction(actions::TouchActi
 		if (!_audioLoop.expired())
 		{
 			if (_audioEditor.HasStroke() || (_AudioSurfaceReady(false) && !_AudioSurfaceReady())) return _Eaten();
-			if (action.Modifiers & base::Action::MODIFIER_CTRL) return _Eaten(); // Reserved for future quantisation.
+			const auto navigation = editor::AudioSpectralControls::DragBinding(action.Index == 2,
+                (action.Modifiers & base::Action::MODIFIER_SHIFT) != 0,
+                (action.Modifiers & base::Action::MODIFIER_CTRL) != 0);
+            if (navigation == editor::AudioSpectralControls::DragMode::Reserved) return _Eaten(); // Future quantisation.
 			_DrainAudioUndo();
 			const auto point = _AudioPointAt(action.Position);
 			if (point)
@@ -1456,15 +1459,14 @@ std::optional<actions::ActionResult> LoopGridEditor::OnAction(actions::TouchActi
 				const auto hit = ray ? editor::AudioSpectralPicking::Intersect(surface, ray->Origin, ray->Direction) : std::nullopt;
 				if (!hit || !ray) return _Eaten();
 				_audioBarPlaneY = (ray->Origin + glm::normalize(ray->Direction) * static_cast<float>(hit->Distance)).y;
-				if (action.Index == 2 && (action.Modifiers & (base::Action::MODIFIER_ALT | base::Action::MODIFIER_SHIFT)))
+				if (navigation != editor::AudioSpectralControls::DragMode::Paint)
 				{
 					_audioControls.Viewport = surface.FrequencyViewport;
                     _audioControls.TimeViewport = surface.TimeViewport;
-                    _audioTwoAxisZoom = (action.Modifiers & base::Action::MODIFIER_ALT) != 0;
+                    _audioPan = navigation == editor::AudioSpectralControls::DragMode::Pan;
                     const auto timeFraction = (hit->TimeU - surface.TimeViewport.Lower) / (surface.TimeViewport.Upper - surface.TimeViewport.Lower);
                     const auto frequencyFraction = (hit->FrequencyV - surface.FrequencyViewport.Lower) / (surface.FrequencyViewport.Upper - surface.FrequencyViewport.Lower);
-                    if (_audioTwoAxisZoom) _audioControls.BeginZoom(timeFraction, frequencyFraction);
-                    else _audioControls.BeginView(frequencyFraction);
+                    _audioControls.BeginZoom(timeFraction, frequencyFraction);
 					_audioViewPointerAnchor = action.Position;
 					_audioNavigation = _pointerOwned = true;
 					_pointerButton = action.Index;
@@ -1526,16 +1528,18 @@ std::optional<actions::ActionResult> LoopGridEditor::OnAction(actions::TouchMove
 	{
 		if (_audioNavigation)
 		{
-			const auto local = graphics::LoopGridProjection::UnprojectToLocalPlane(_audioBarViewProjection,
-				_audioBarModel, action.Position, static_cast<int>(_size.Width), static_cast<int>(_size.Height), _audioBarPlaneY);
-			if (!local) return _Eaten();
-			const auto fraction = 0.5 - local->z / (2.0 * graphics::AudioSpectralModel::DepthRadiusScale * _audioBarRadius);
-			if (_audioTwoAxisZoom)
-                _audioControls.MoveZoom((action.Position.X - _audioViewPointerAnchor.X) / _audioPixelScale,
-                    (action.Position.Y - _audioViewPointerAnchor.Y) / _audioPixelScale);
-            else _audioControls.MoveView((action.Position.X - _audioViewPointerAnchor.X) / _audioPixelScale, fraction);
+            if (_audioPan)
+            {
+                const auto local = graphics::LoopGridProjection::UnprojectToLocalPlane(_audioBarViewProjection,
+                    _audioBarModel, action.Position, static_cast<int>(_size.Width), static_cast<int>(_size.Height), _audioBarPlaneY);
+                if (!local) return _Eaten();
+                _audioControls.MovePan(0.5 + local->x / (2.0 * _audioBarRadius),
+                    0.5 - local->z / (2.0 * graphics::AudioSpectralModel::DepthRadiusScale * _audioBarRadius));
+            }
+            else _audioControls.MoveZoom((action.Position.X - _audioViewPointerAnchor.X) / _audioPixelScale,
+                (action.Position.Y - _audioViewPointerAnchor.Y) / _audioPixelScale);
             _audioEditor.SetViewport(_audioControls.TimeViewport, _audioControls.Viewport);
-            _SetFeedback(_audioTwoAxisZoom ? "Zoom: horizontal time, vertical frequency" : "Frequency view: vertical pan, horizontal zoom");
+            _SetFeedback(_audioPan ? "Pan: time and frequency" : "Zoom: horizontal time, vertical frequency");
 			return _Eaten();
 		}
 		if (_audioStroke) { _MoveAudioStroke(action.Position); return _Eaten(); }

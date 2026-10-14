@@ -2361,3 +2361,26 @@ TEST_F(AudioSpectralTest, DISABLED_ProfileAuthoritativeBrushBatch)
         }
     }
 }
+
+TEST_F(AudioSpectralTest, ShiftNavigationPansBothAxesWithoutChangingSpans)
+{
+    using Controls = editor::AudioSpectralControls;
+    EXPECT_EQ(Controls::DragBinding(true, true, false), Controls::DragMode::Zoom);
+    EXPECT_EQ(Controls::DragBinding(false, true, false), Controls::DragMode::Pan);
+    EXPECT_EQ(Controls::DragBinding(true, false, false), Controls::DragMode::Paint);
+    EXPECT_EQ(Controls::DragBinding(false, true, true), Controls::DragMode::Reserved);
+    Controls controls;
+    controls.TimeViewport = {0.2, 0.6}; controls.Viewport = {0.3, 0.8};
+    controls.BeginZoom(0.5, 0.5);
+    controls.MovePan(0.75, 0.25);
+    EXPECT_NEAR(controls.TimeViewport.Lower, 0.1, 1e-12);
+    EXPECT_NEAR(controls.Viewport.Lower, 0.425, 1e-12);
+    EXPECT_NEAR(controls.TimeViewport.Upper - controls.TimeViewport.Lower, 0.4, 1e-12);
+    EXPECT_NEAR(controls.Viewport.Upper - controls.Viewport.Lower, 0.5, 1e-12);
+    const auto time = controls.TimeViewport, frequency = controls.Viewport;
+    controls.MovePan(std::numeric_limits<double>::quiet_NaN(), 0.5);
+    EXPECT_EQ(controls.TimeViewport, time); EXPECT_EQ(controls.Viewport, frequency);
+    controls.MovePan(-100, 100);
+    EXPECT_NEAR(controls.TimeViewport.Upper, 1, 1e-12);
+    EXPECT_NEAR(controls.Viewport.Lower, 0, 1e-12);
+}

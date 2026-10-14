@@ -691,11 +691,11 @@ void Scene::Draw(DrawContext& ctx)
 {
 	_loopEditor.UpdateUi(_viewProj);
 	std::scoped_lock lock(_sceneMutex);
-	const bool midiEditorEngaged = _loopEditor.IsEngaged() && _loopEditor.TargetMidiLoop();
+	const bool loopEditorEngaged = _loopEditor.IsEngaged();
 	_UpdateRackVisibilityLocked();
 	if (_hudPanel)
 	{
-		_hudPanel->SetLoopEditorMode(midiEditorEngaged);
+		_hudPanel->SetLoopEditorMode(loopEditorEngaged);
 		_hudPanel->SetQuantisationFeedback(_quantisationFeedback);
 		_hudPanel->SetEditModeAlpha(_quantisationInteraction.PanelAlpha());
 	}
@@ -732,7 +732,7 @@ void Scene::Draw(DrawContext& ctx)
 		}
 	}
 
-	if (!midiEditorEngaged)
+	if (!loopEditorEngaged)
 	{
 		auto opacity = ctx.WithOpacity(1.0f - _quantisationInteraction.PanelAlpha());
 		for (auto& station : _stations)
@@ -740,7 +740,7 @@ void Scene::Draw(DrawContext& ctx)
 	}
 
 	_selector->Draw(ctx);
-	if (!midiEditorEngaged)
+	if (!loopEditorEngaged)
 		_ctrlHandleOverlay.Draw(ctx);
 
 
@@ -2848,7 +2848,7 @@ void Scene::_OnLoopGridEditorOpened()
 	if (_hudPanel)
 	{
 		std::scoped_lock lock(_sceneMutex);
-		_hudPanel->SetLoopEditorMode(static_cast<bool>(_loopEditor.TargetMidiLoop()));
+		_hudPanel->SetLoopEditorMode(_loopEditor.IsEngaged());
 	}
 	_focusManager.ClearFocus();
 	_touchDownElement.reset();

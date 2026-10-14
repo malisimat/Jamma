@@ -163,7 +163,7 @@ namespace midi
 		// UI-only controls/capture. Worker requests copy values; Close cancels capture.
 		editor::AudioSpectralControls _audioControls;
 		bool _audioNavigation = false;
-        bool _audioTwoAxisZoom = false;
+        bool _audioPan = false;
 		bool _audioBandPreview = false;
 		utils::Position2d _audioViewPointerAnchor{};
 		graphics::AudioSpectralViewport _audioCapturedViewport, _audioCapturedTimeViewport;

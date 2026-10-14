@@ -69,7 +69,7 @@ Phase 1 Release follow-up: incremental library/tests build succeeded and all 61 
 
 The display projection is now canonical across the full source: view changes do not resample its vertices. Requested time/frequency bounds are copied into the last successfully drawn Surface, with the exact draw matrix and height handle. GPU rectangle vertices and CPU LocalVertex use matching float affine arithmetic; fragment clipping and picking slabs clip the visible rectangle, while cell traversal and returned UV remain in full-source coordinates. Opening/closing rings remain unclipped. Navigation changes only renderer bounds and preserves pending content/presentation jobs and the height texture.
 
-Controls: Alt-left remains swept broadband editing. Alt-right uses horizontal time zoom and vertical frequency zoom, anchored at the clicked position in logical pixels. Shift-right retains vertical frequency pan and horizontal frequency zoom. Shift-wheel zooms frequency at the mouse; Alt+Shift-wheel zooms time. Repeated wheel events before the next draw use the retained draw's visible fraction, preserving the anchor across requested spans. Plain/Alt wheel retain brush/band radius; Ctrl has priority and remains reserved. Captured broadband time projection includes the captured time span.
+Controls: Alt-left remains swept broadband editing. Shift-right uses horizontal time zoom and vertical frequency zoom, anchored at the clicked position in logical pixels. Shift-left pans both time and frequency without changing either zoom span. Shift-wheel zooms frequency at the mouse; Alt+Shift-wheel zooms time. Repeated wheel events before the next draw use the retained draw's visible fraction, preserving the anchor across requested spans. Plain/Alt wheel retain brush/band radius; Ctrl has priority and remains reserved. Captured broadband time projection includes the captured time span.
 
 Thread ownership: requested bounds are written by UI and read by rendering under the existing model surface mutex; picking reads the copied last-successful Surface. No worker or audio callback accesses mutable bounds. Model destruction follows its existing lifecycle; no new waits, callbacks, allocations or locks were added to audio hot paths. View changes add only scalar storage.
 
@@ -117,3 +117,10 @@ Representative stationary default brush batch (50 ms time radius, .25 octave rad
 | 30 s | 1,865 | .464 / .467 ms | .162 / .169 ms | 1.024 / 1.016 ms |
 
 This diagnostic passed after a final Release test-only incremental build. The main Debug/Release suite predates only this disabled diagnostic; production source and enabled tests are identical to their validated binaries. Local projection is roughly 1 ms in these cases while audio may take tens or hundreds of milliseconds. No 60 FPS GPU or end-to-end latency claim follows from this CPU measurement.
+
+
+### UI follow-up
+
+Clipping uses the non-interpolated EditorMorph uniform so fully open fragments cannot bypass the clip test due to perspective interpolation rounding. Shift-right now zooms both axes; Shift-left pans both axes on the captured mesh plane. Alt-left retains broadband editing and Ctrl stays reserved. Engaged spectral and MIDI editors now share station 2D/HUD/control-overlay suppression. These changes do not queue display rebuilds or touch audio callbacks. Native control coverage checks modifier priority, two-axis pan, unchanged spans, clamping and invalid coordinates; live GPU clipping remains a manual acceptance check.
+
+Follow-up validation: Debug library, tests and app builds passed with no warnings or errors; all 70 spectral and 46 MIDI grid/pitch-view tests passed. Deployed spectral fragment SHA-256 matches source. Independent navigation review and diff whitespace checks passed.
