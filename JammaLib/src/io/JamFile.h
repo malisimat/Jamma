@@ -256,5 +256,7 @@ namespace io
 		// which remains legacy compatibility metadata only.
 		unsigned long MasterLengthSamps = 1;
 		std::uint64_t AbsoluteSamplePos = 0;
+	private:
+		static std::optional<double> ParseFiniteNumber(const Json::JsonValue& value) noexcept;
 	};
 }

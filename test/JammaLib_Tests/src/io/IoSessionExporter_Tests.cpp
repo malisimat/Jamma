@@ -3,6 +3,7 @@
 #include <filesystem>
 #include <fstream>
 #include <mutex>
+#include <limits>
 #include <optional>
 #include <sstream>
 
@@ -638,4 +639,53 @@ TEST(IoSessionExporter, PreservesSparseGroupRowsAndRuntimeIdentity)
     ASSERT_TRUE(jam->MuteGroups[7]);
     EXPECT_TRUE(jam->MuteGroups[7]->Targets.empty());
     EXPECT_EQ(jam->MuteActiveGroup, 7u);
+}
+
+TEST(IoSessionExporter, RestoresLegacyMidiSessionMaterial)
+{
+    struct DirectoryCleanup
+    {
+        std::filesystem::path Path;
+        ~DirectoryCleanup() { std::error_code error; std::filesystem::remove_all(Path, error); }
+    } directory{IoSessionExporterTest::MakeDirectory()};
+    io::NativeMidiSidecar::Stream sidecar;
+    sidecar.LogicalLength = 100u;
+    sidecar.AutomationGlobalSampleOrigin = 4294862704u;
+    sidecar.Events = {{0u, 0x90u, 60u, 100u}, {50u, 0x80u, 60u, 0u}};
+    {
+        std::ofstream output(directory.Path / "notes.jammidi", std::ios::binary);
+        ASSERT_TRUE(io::NativeMidiSidecar::ToStream(sidecar, output));
+    }
+    for (const std::string level : {"1", "1.00", "0", "-1", "-0.5"})
+    {
+        SCOPED_TRACE(level);
+        // Legacy/user-normalized JSON can spell an integral level without a dot.
+        const auto manifest = std::string(R"({"formatVersion":"0.3.0","name":"numeric-levels","transport":{"initialized":true,"masterLengthSamps":100,"quantiseSamps":25,"absoluteSamplePos":"0"},"stations":[{"name":"keys","masterLevel":)")
+            + level + R"(,"takes":[{"name":"saved-take","masterLevel":)" + level
+            + R"(,"busLevels":[],"loops":[],"midiPlayIndex":0,"midiPlayLength":100,"midiQuantTransportStart":"1127936","midiStreams":[{"sidecar":"notes.jammidi","channel":0,"device":"legacy-input","logicalLength":100,"automationGlobalSampleOrigin":"4294862704"}]}]}]})";
+        auto jam = io::JamFile::FromStream(std::stringstream(manifest));
+        ASSERT_TRUE(jam);
+        ASSERT_EQ(1u, jam->Stations.size());
+        const auto& descriptor = jam->Stations.front();
+        ASSERT_EQ(1u, descriptor.LoopTakes.size());
+        EXPECT_DOUBLE_EQ(std::stod(level), descriptor.MasterLevel);
+        EXPECT_DOUBLE_EQ(std::stod(level), descriptor.LoopTakes.front().MasterLevel);
+        StationParams params; params.Size = {136u, 300u};
+        auto station = Station::FromFile(params, Station::GetMixerParams(params.Size, audio::MergeMixBehaviourParams{}), descriptor, directory.Path.wstring());
+        ASSERT_TRUE(station);
+        (*station)->CommitChanges();
+        const auto takes = (*station)->GetLoopTakeSnapshot();
+        ASSERT_EQ(1u, takes.size());
+        ASSERT_EQ(1u, takes.front()->GetMidiLoops().size());
+        EXPECT_EQ(2u, takes.front()->GetMidiLoops().front()->EventCount());
+    }
+    for (const auto& invalid : {io::Json::JsonValue(true), io::Json::JsonValue(std::string("1")),
+        io::Json::JsonValue(std::numeric_limits<double>::infinity()), io::Json::JsonValue(std::numeric_limits<double>::quiet_NaN())})
+    {
+        io::Json::JsonPart object;
+        object.KeyValues["name"] = std::string("invalid-level");
+        object.KeyValues["masterLevel"] = invalid;
+        EXPECT_FALSE(io::JamFile::Station::FromJson(object));
+        EXPECT_FALSE(io::JamFile::LoopTake::FromJson(object));
+    }
 }

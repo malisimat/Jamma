@@ -23,6 +23,20 @@ using audio::BehaviourParams;
 
 const std::string JamFile::DefaultJson = "{\"name\":\"default\",\"ninjam\":{\"host\":\"ninjam.com:2049\",\"user\":\"jamma_guest\",\"pass\":\"\",\"workdir\":\"\"},\"stations\":[{\"name\":\"Station1\",\"stationtype\":0,\"takes\":[]}],\"quantisesamps\":1,\"quantisation\":\"off\"}";
 
+std::optional<double> JamFile::ParseFiniteNumber(const Json::JsonValue& value) noexcept
+{
+	// JSON integer and decimal spellings describe the same mixer level.
+	double number = 0.0;
+	switch (value.index())
+	{
+	case 1: number = static_cast<double>(std::get<long>(value)); break;
+	case 2: number = static_cast<double>(std::get<unsigned long>(value)); break;
+	case 3: number = std::get<double>(value); break;
+	default: return std::nullopt;
+	}
+	return std::isfinite(number) ? std::optional<double>{number} : std::nullopt;
+}
+
 std::int32_t JamFile::ParseInt32Clamped(const Json::JsonValue& value, std::int32_t fallback) noexcept
 {
 	long long parsed = fallback;
@@ -1199,8 +1213,9 @@ std::optional<JamFile::LoopTake> JamFile::LoopTake::FromJson(Json::JsonPart json
 		return std::nullopt;
 	if ((iter = json.KeyValues.find("masterLevel")) != json.KeyValues.end())
 	{
-		if (iter->second.index() != 3 || !std::isfinite(std::get<double>(iter->second))) return std::nullopt;
-		masterLevel = std::get<double>(iter->second);
+		const auto level = ParseFiniteNumber(iter->second);
+		if (!level) return std::nullopt;
+		masterLevel = *level;
 	}
 	if ((iter = json.KeyValues.find("busLevels")) != json.KeyValues.end())
 	{
@@ -1610,8 +1625,9 @@ std::optional<JamFile::Station> JamFile::Station::FromJson(Json::JsonPart json)
 		return std::nullopt;
 	if ((iter = json.KeyValues.find("masterLevel")) != json.KeyValues.end())
 	{
-		if (iter->second.index() != 3 || !std::isfinite(std::get<double>(iter->second))) return std::nullopt;
-		masterLevel = std::get<double>(iter->second);
+		const auto level = ParseFiniteNumber(iter->second);
+		if (!level) return std::nullopt;
+		masterLevel = *level;
 	}
 	if ((iter = json.KeyValues.find("busLevels")) != json.KeyValues.end())
 	{
