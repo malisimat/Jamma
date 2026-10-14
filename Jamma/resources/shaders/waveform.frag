@@ -26,6 +26,7 @@ uniform float SelectionActive;
 uniform float GroupPreview;
 uniform vec3 GroupPreviewTint;
 uniform float EditorActive;
+uniform float SpectralReveal;
 uniform float EditorTime;
 uniform samplerCube ProbeSampler;
 uniform float ProbeStrength;
@@ -57,6 +58,7 @@ vec3 groupPreviewColour(vec3 colour)
 
 void main()
 {
+    if (SpectralReveal >= 1.0) discard;
     gl_FragDepth = gl_FragCoord.z;
     if (HighlightPass > 0.5)
     {
@@ -170,4 +172,5 @@ void main()
     ColorOUT.rgb = groupPreviewColour(ColorOUT.rgb) * mix(SceneDim, 1.0, EditorMorphV);
     if (EditorActive > 0.5)
         gl_FragDepth = gl_FragCoord.z * mix(1.0, 0.05, EditorMorphV);
+    ColorOUT.a *= 1.0 - clamp(SpectralReveal, 0.0, 1.0);
 }

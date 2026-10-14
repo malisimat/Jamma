@@ -19,6 +19,7 @@ namespace actions
 	public:
 		void Add(std::shared_ptr<base::ActionUndo> action);
 		void Clear();
+		void Remove(const std::shared_ptr<base::ActionUndo>& action);
 
 		bool Undo();
 		bool Redo();

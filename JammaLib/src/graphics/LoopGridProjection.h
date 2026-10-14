@@ -46,10 +46,15 @@ namespace graphics
 				halfHeight / tanHalfFov) + 40.0f;
 		}
 
-		// Screen coordinates use the app's bottom-left pixel origin.
-		static std::optional<glm::vec3> UnprojectToLocalPlane(
+		struct LocalRay
+		{
+			glm::vec3 Origin;
+			glm::vec3 Direction; // Near-to-far vector; length preserves the clip span.
+		};
+
+		static std::optional<LocalRay> UnprojectToLocalRay(
 			const glm::mat4& viewProjection, const glm::mat4& model,
-			utils::Position2d pixel, int width, int height, float planeY) noexcept
+			utils::Position2d pixel, int width, int height) noexcept
 		{
 			if (width <= 0 || height <= 0) return std::nullopt;
 			const auto inverse = glm::inverse(viewProjection * model);
@@ -62,6 +67,20 @@ namespace graphics
 			const auto nearLocal = glm::vec3(nearPoint) / nearPoint.w;
 			const auto farLocal = glm::vec3(farPoint) / farPoint.w;
 			const auto delta = farLocal - nearLocal;
+			for (unsigned int axis = 0u; axis < 3u; ++axis)
+				if (!std::isfinite(nearLocal[axis]) || !std::isfinite(delta[axis])) return std::nullopt;
+			return LocalRay{ nearLocal, delta };
+		}
+
+		// Screen coordinates use the app's bottom-left pixel origin.
+		static std::optional<glm::vec3> UnprojectToLocalPlane(
+			const glm::mat4& viewProjection, const glm::mat4& model,
+			utils::Position2d pixel, int width, int height, float planeY) noexcept
+		{
+			const auto ray = UnprojectToLocalRay(viewProjection, model, pixel, width, height);
+			if (!ray) return std::nullopt;
+			const auto nearLocal = ray->Origin;
+			const auto delta = ray->Direction;
 			if (std::abs(delta.y) < 1e-7f) return std::nullopt;
 			const auto distance = (planeY - nearLocal.y) / delta.y;
 			if (distance < 0.0f || distance > 1.0f) return std::nullopt;

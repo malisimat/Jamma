@@ -1,0 +1,63 @@
+#pragma once
+
+#include <condition_variable>
+#include <functional>
+#include <memory>
+#include <mutex>
+#include <thread>
+#include <deque>
+#include "AudioSpectralSource.h"
+#include "AudioSpectralAnalysisJob.h"
+
+namespace spectral
+{
+	// Dedicated non-audio worker. Never allocate source PCM or perform FFT work
+	// on UI/Scene trigger job threads. Normal editor close cancels without joining.
+	class AudioSpectralWorker
+	{
+	public:
+		AudioSpectralWorker();
+		~AudioSpectralWorker(); // Joins only at editor-owner teardown.
+		AudioSpectralWorker(const AudioSpectralWorker&) = delete;
+		AudioSpectralWorker& operator=(const AudioSpectralWorker&) = delete;
+		void PrepareSource(std::shared_ptr<AudioSpectralSourceCapture> request);
+		void RequestAnalysis(std::shared_ptr<AudioSpectralAnalysisJob> job);
+		// Opaque non-GL CPU work with cooperative bounded cancellation. Both
+		// closures run off audio; coalescing/teardown cancel outside the queue lock.
+		void RequestPresentation(std::function<void()> work, std::function<void()> cancel);
+		// Cancel is QUEUED-only. Running edits own frozen input until Run exits;
+        // their owner supplies cooperative cancellation, teardown joins off audio.
+        void RequestEditing(std::function<void()> work, std::function<void()> cancel);
+		void CancelPendingEditing();
+        void RequestContent(const void* owner, std::function<void()> work);
+
+	private:
+		struct PresentationWork
+		{
+			std::function<void()> Run;
+			std::function<void()> Cancel;
+		};
+		void _Run();
+		void _RunVisual();
+		// Queue/current handles and stopping flag share this UI/worker-only mutex.
+		// One current payload and one latest queued payload of each kind are pinned;
+		// only one current job per lane allocates. Reservations cover concurrent
+		// audio/visual scratch and additionally retained results.
+		std::mutex _requestMutex;
+		std::condition_variable _wake;
+		std::shared_ptr<AudioSpectralSourceCapture> _queuedSource;
+		std::shared_ptr<AudioSpectralSourceCapture> _currentSource;
+		std::shared_ptr<AudioSpectralAnalysisJob> _queuedAnalysis;
+		std::shared_ptr<AudioSpectralAnalysisJob> _currentAnalysis;
+		std::shared_ptr<PresentationWork> _queuedPresentation;
+		std::shared_ptr<PresentationWork> _currentPresentation;
+		std::shared_ptr<PresentationWork> _queuedEditing;
+		std::shared_ptr<PresentationWork> _currentEditing;
+		struct ContentWork { const void* Owner; std::function<void()> Run; };
+		std::deque<std::shared_ptr<ContentWork>> _queuedContent;
+		bool _preferEditing = true; // Visual worker only, under queue mutex: alternate edit/display.
+		bool _stopping = false;
+		std::thread _thread;
+		std::thread _visualThread; // Serialized edit/display lane; never performs FFT/PCM work.
+	};
+}

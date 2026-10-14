@@ -1688,7 +1688,11 @@ void Window::_InstallRelativePointerHost()
 {
 	_scene->SetRelativePointerHost(
 		[this](int button, utils::Position2d anchor) { return BeginRelativePointer(button, anchor); },
-		[this](int button) { EndRelativePointer(button); });
+		[this](int button) { EndRelativePointer(button); },
+		[this]() {
+			const auto dpi = _wnd ? GetDpiForWindow(_wnd) : 0u;
+			return dpi > 0u ? static_cast<float>(dpi) / 96.0f : 1.0f;
+		});
 }
 
 bool Window::_RelativePointerValid() const

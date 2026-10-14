@@ -10,6 +10,7 @@
 #include "../utils/ArrayUtils.h"
 #include "../utils/VecUtils.h"
 #include "../audio/BufferBank.h"
+#include "../spectral/AudioSpectralPlaybackSnapshot.h"
 #include "../gui/GuiModel.h"
 #include "CameraBounds.h"
 
@@ -69,12 +70,16 @@ namespace engine
 		void SetMuted(bool muted) noexcept { _muted = muted; }
 		void SetWaveformColorScale(float scale) noexcept;
 		void SetEditorMorph(float morph) noexcept { _editorMorph = std::clamp(morph, 0.0f, 1.0f); }
+		void SetSpectralReveal(float reveal) noexcept { _spectralReveal = std::clamp(reveal, 0.0f, 1.0f); }
 		void SetEditorActive(bool active) noexcept { _editorActive = active; }
 		void UpdateModel(const audio::BufferBank& buffer,
 			unsigned long loopLength,
 			unsigned long offset,
 			float radius,
 			bool allowUnchangedSkip = false);
+		// UI-owned bounded upload preparation from worker-decimated immutable audio.
+		void UpdateEditedModel(const std::shared_ptr<const spectral::AudioSpectralPlaybackSnapshot>& snapshot,
+			float radius);
 		void UpdateModel(const audio::BufferBank& buffer,
 			unsigned long sourceLoopLength,
 			unsigned long displayLoopLength,
@@ -143,11 +148,14 @@ namespace engine
 		std::vector<glm::vec2> _waveformDecimated;
 		std::vector<glm::vec2> _waveformWorkDecimated;
 		bool _hasWaveformUpdateSignature;
+		std::weak_ptr<const spectral::AudioSpectralPlaybackSnapshot> _lastEditedWaveform;
+		bool _usesEditedWaveform = false;
 		unsigned long _lastWaveformSourceLength;
 		unsigned long _lastWaveformDisplayLength;
 		unsigned long _lastWaveformOffset;
 		float _lastWaveformRadius;
 		float _waveformColorScale;
+		float _spectralReveal = 0.0f;
 		float _editorMorph = 0.0f;
 		bool _editorActive = false;
 		float _clickPressed = 0.0f;

@@ -239,7 +239,7 @@ namespace engine
 		}
 		void ApplyDeferredHoverUpdates();
 		void SetRelativePointerHost(std::function<bool(int, utils::Position2d)> begin,
-			std::function<void(int)> end);
+			std::function<void(int)> end, std::function<float()> logicalPixelScale = {});
 		// UI-thread editor seam, forwarded to midi::LoopGridEditor.
 		bool OpenLoopGridEditor(const std::shared_ptr<LoopTake>& take,
 			const std::shared_ptr<Loop>& audioLoop,
@@ -590,6 +590,7 @@ namespace engine
 		utils::Position2d _cursorPos{};
 		std::function<bool(int, utils::Position2d)> _beginRelativePointer;
 		std::function<void(int)> _endRelativePointer;
+		std::function<float()> _logicalPixelScale;
 		// Declared last: it holds references to the members above.
 		midi::LoopGridEditor _loopEditor;
 	};

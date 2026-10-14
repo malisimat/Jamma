@@ -388,6 +388,8 @@ TEST_F(SceneRoutingIntegrationTest, SuccessfulMidiConnectionLossCancelsCaptureTh
     ASSERT_TRUE(scene);
     auto trigger = scene->AcceptedRigSnapshot()->Triggers.front().Instance;
     ASSERT_TRUE(trigger);
+    // This fixture simulates the job/audio owners; exclude the real job runner.
+    auto jobExclusion = engine::SourceLossIntegrationTestAccess::ExcludeJob(*scene);
     // Boundary route setup substitutes actual successfully opened capture names.
     trigger->AddMidiInputDevice("lost");
     trigger->AddInputChannel(0u);
@@ -414,6 +416,7 @@ TEST_F(SceneRoutingIntegrationTest, SuccessfulMidiConnectionLossCancelsCaptureTh
         engine::SourceLossIntegrationTestAccess::Recover(*scene);
     EXPECT_EQ(engine::TRIGSTATE_DEFAULT, trigger->GetState());
     EXPECT_TRUE(trigger->GetTakes().empty());
+    jobExclusion.unlock();
     scene->Shutdown();
 }
 
@@ -683,6 +686,10 @@ TEST_F(SceneRoutingIntegrationTest, RestoresDistinctHistoriesToTriggersWithShare
 		{ "bass-first-id", { { static_cast<unsigned int>(engine::TriggerTake::SOURCE_ADC), "bass-source", "bass-target" } } },
 		{ "bass-second-id", { { static_cast<unsigned int>(engine::TriggerTake::SOURCE_ADC), "other-source", "other-target" } } } });
 	ASSERT_TRUE(scene);
+	const auto restoredStations = scene->SnapshotStations();
+	ASSERT_EQ(2u, restoredStations.size());
+	ASSERT_EQ(4u, restoredStations[0]->GetLoopTakeSnapshot().size());
+	ASSERT_EQ(2u, restoredStations[1]->GetLoopTakeSnapshot().size());
 	EXPECT_EQ((std::vector<std::pair<std::string, std::size_t>>{ { "Bass", 2u }, { "Drums", 1u } }),
 		Memberships(scene));
 	const auto rig = scene->AcceptedRigSnapshot();

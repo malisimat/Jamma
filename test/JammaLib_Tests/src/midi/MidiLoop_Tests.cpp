@@ -2933,6 +2933,10 @@ TEST_F(MidiPointerEditorTest, FailedAnchorAndCaptureLossLeaveSourceAndUndoUnchan
 	EXPECT_FALSE(editor->OwnsPointer()); EXPECT_EQ(-1,relativeButton);
 	EXPECT_EQ(-1,loop->Model()->EditorHeldInstance());
 	Button(2,false,pixel,0u); EXPECT_EQ(revision,loop->Revision()); EXPECT_FALSE(history.Undo());
+	take->CancelCapture();
+	editor->Tick(0.0f);
+	EXPECT_FALSE(editor->IsOpen());
+	EXPECT_FALSE(editor->OwnsPointer());
 }
 
 TEST_F(MidiPointerEditorTest, ControlMoveReplacesOnReleaseAndUndoRestoresBothNotes)
@@ -3009,6 +3013,10 @@ TEST_F(MidiPointerEditorTest, ModelReplacementAndResizeCancelCapturedEdit)
 	editor->SetSize({640u,480u});
 	EXPECT_FALSE(editor->OwnsPointer()); EXPECT_EQ(-1,relativeButton);
 	EXPECT_EQ(revision,loop->Revision()); EXPECT_FALSE(history.Undo());
+	station->SetMembershipRemoving(true);
+	editor->Tick(0.0f);
+	EXPECT_FALSE(editor->IsOpen());
+	EXPECT_FALSE(editor->OwnsPointer());
 }
 
 TEST_F(MidiPointerEditorTest, ControlNoteWithoutGridRejectsInsteadOfPainting)

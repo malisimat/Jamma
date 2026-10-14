@@ -1,6 +1,7 @@
 #include "Loop.h"
 #include <algorithm>
 #include <cmath>
+#include <new>
 
 namespace engine
 {
@@ -162,6 +163,15 @@ AudioMixerParams Loop::GetMixerParams(utils::Size2d loopSize,
 	return mixerParams;
 }
 
+void Loop::SetAudioSpectralModel(std::shared_ptr<graphics::AudioSpectralModel> model)
+{
+	if (_audioSpectralModel == model) return;
+	if (_audioSpectralModel)
+		_children.erase(std::remove(_children.begin(), _children.end(), _audioSpectralModel), _children.end());
+	_audioSpectralModel = std::move(model);
+	if (_audioSpectralModel) _children.push_back(_audioSpectralModel);
+}
+
 void Loop::SetSize(utils::Size2d size)
 {
 	auto mixerParams = GetMixerParams(size,
@@ -229,13 +239,30 @@ void Loop::Draw3d(DrawContext& ctx,
 	if (PASS_SCENE == pass)
 		_vu->Draw3d(ctx, 1, pass);
 
+	const auto spectralVisible = _audioSpectralModel && _audioSpectralModel->IsAvailable();
+	_model->SetSpectralReveal(spectralVisible ? _audioSpectralMorph : 0.0f);
 	const auto visualHeightScale = static_cast<float>(_mixer->UnmutedLevel()) * _masterVisualScale;
 	_model->SetWaveformColorScale(visualHeightScale);
 	glCtx.PushMvp(glm::scale(glm::mat4(1.0f), glm::vec3(1.0f, visualHeightScale, 1.0f)));
 	
+	GLboolean depthWrites = GL_TRUE;
+	const auto fadingWaveform = PASS_SCENE == pass && spectralVisible && _audioSpectralMorph > 0.0f;
+	if (fadingWaveform)
+	{
+		glGetBooleanv(GL_DEPTH_WRITEMASK, &depthWrites);
+		glDepthMask(GL_FALSE);
+	}
 	_model->Draw3d(ctx, 1, pass);
+	if (fadingWaveform) glDepthMask(depthWrites);
 	
 	glCtx.PopMvp();
+	if (_audioSpectralModel && _audioSpectralMorph > 0.0f)
+	{
+		_audioSpectralModel->SetRadius(static_cast<float>(CalcDrawRadius(loopLength) * _DrawRadiusScale()));
+		_audioSpectralModel->SetPlayFraction(loopLength == 0ul ? 0.0
+			: static_cast<double>(BodyPlayIndex()) / loopLength);
+		_audioSpectralModel->Draw3d(ctx, numInstances, pass);
+	}
 	glCtx.PopMvp();
 	glCtx.PopMvp();
 }
@@ -295,6 +322,8 @@ void Loop::OnBlockWrite(const base::AudioWriteRequest& request, int writeOffset)
 	}
 	else
 	{
+		if (request.numSamps > 0u)
+			_InvalidateAudioSource();
 		for (unsigned int i = 0; i < request.numSamps; i++)
 		{
 			auto samp = request.samples[i * request.stride];
@@ -349,6 +378,7 @@ unsigned int Loop::ReadBlock(float* outBuf,
 	if (!isPlaying || (0 == loopLength))
 		return 0;
 
+	const auto sourceGeneration = AudioSourceGeneration();
 	auto peak = 0.0f;
 	auto bufBankSize = _bufferBank.Length();
 	auto bufSize = loopLength + constants::MaxLoopFadeSamps;
@@ -393,13 +423,13 @@ unsigned int Loop::ReadBlock(float* outBuf,
 
 			if (index < bufBankSize)
 			{
-				auto samp = _bufferBank[index];
+				auto samp = _ReadAudioSpectralSample(index, i, sourceGeneration);
 
 				if (isXfade)
 				{
 					auto xfadeIndex = (startIndex + i) - (bufSize - _loopParams.FadeSamps);
 					auto xfadeBufIndex = constants::MaxLoopFadeSamps + xfadeIndex - _loopParams.FadeSamps;
-					auto xfadeSamp = _bufferBank[xfadeBufIndex];
+					auto xfadeSamp = _ReadAudioSpectralSample(xfadeBufIndex, i, sourceGeneration);
 
 					samp = _hanning->Mix(xfadeSamp, samp, xfadeIndex);
 				}
@@ -426,7 +456,7 @@ unsigned int Loop::ReadBlock(float* outBuf,
 		{
 			if (index < bufBankSize)
 			{
-				outBuf[i] = _bufferBank[index];
+				outBuf[i] = _ReadAudioSpectralSample(index, i, sourceGeneration);
 
 				if (std::abs(outBuf[i]) > peak)
 					peak = std::abs(outBuf[i]);
@@ -517,6 +547,8 @@ void Loop::WriteBlock(const std::shared_ptr<MultiAudioSink> dest,
 
 void Loop::EndMultiPlay(unsigned int numSamps)
 {
+	_CopyAudioSpectralSourceAtAudioBoundary();
+	_AdvanceAudioSpectralPlayback(numSamps);
 	auto playState = _playState.load(std::memory_order_relaxed);
 	auto loopLength = _loopLength.load(std::memory_order_relaxed);
 	auto isPlaying = (STATE_PLAYING == playState) ||
@@ -585,6 +617,11 @@ std::string Loop::Id() const
 }
 
 std::vector<float> Loop::ExportSamples(bool retainPhysicalTail) const
+{
+	return ExportOriginalSamplesQuiescent(retainPhysicalTail);
+}
+
+std::vector<float> Loop::ExportOriginalSamplesQuiescent(bool retainPhysicalTail) const
 {
 	auto playState = _playState.load(std::memory_order_acquire);
 	auto loopLength = _loopLength.load(std::memory_order_relaxed);
@@ -722,6 +759,8 @@ void Loop::ForceUnloadAllVstPlugins()
 
 bool Loop::Load(const io::WavReadWriter& readWriter)
 {
+	// Startup/exclusive operation: no audio reader may use this Loop during Load.
+	_InvalidateAudioSource();
 	auto loadOpt = readWriter.Read(utils::DecodeUtf8(_loopParams.Wav), constants::MaxLoopBufferSize);
 
 	if (!loadOpt.has_value())
@@ -783,6 +822,8 @@ void Loop::Play(unsigned long index,
 	auto logicalBufSize = loopLength + constants::MaxLoopFadeSamps;
 	auto effectiveBufSize = std::min(logicalBufSize, physBufSize);
 	_playIndex.store((effectiveBufSize > 0 && index >= effectiveBufSize) ? (effectiveBufSize - 1) : index, std::memory_order_relaxed);
+	if (_loopLength.load(std::memory_order_relaxed) != loopLength)
+		_InvalidateAudioSource();
 	_loopLength.store(loopLength, std::memory_order_relaxed);
 	if (_isPunchInActive.load(std::memory_order_relaxed))
 		continueRecording = true;
@@ -808,6 +849,7 @@ void Loop::Play(unsigned long index,
 
 void Loop::Reset()
 {
+	_InvalidateAudioSource();
 	_isPunchInActive.store(false, std::memory_order_relaxed);
 
 	_writeIndex.store(0ul, std::memory_order_relaxed);
@@ -836,6 +878,310 @@ void Loop::RefreshVisualModel()
 		return;
 
 	_UpdateLoopModel();
+}
+
+bool Loop::CanEditAudioSource() const noexcept
+{
+	if (!SupportsAudioSpectralEditing()
+		|| _playState.load(std::memory_order_acquire) != STATE_PLAYING
+		|| _isPunchInActive.load(std::memory_order_acquire))
+		return false;
+
+	const auto length = _loopLength.load(std::memory_order_relaxed);
+	return length > 0ul && length <= PhysicalLoopLength();
+}
+
+spectral::AudioSpectralSourceLayout Loop::_AudioSpectralSourceLayout() const noexcept
+{
+	return { _loopLength.load(std::memory_order_relaxed), PhysicalLoopLength(),
+		_hanning->Size(), _sampleRate.load(std::memory_order_relaxed) };
+}
+
+void Loop::_InvalidateAudioSource() noexcept
+{
+	_audioSourceGeneration.fetch_add(1u, std::memory_order_acq_rel);
+	_changesMade.store(true, std::memory_order_release);
+}
+
+void Loop::SetSampleRate(float sampleRate)
+{
+	// Device configuration is changed with its callback stopped.
+	if (_sampleRate.load(std::memory_order_relaxed) != sampleRate)
+		_InvalidateAudioSource();
+	_sampleRate.store(sampleRate, std::memory_order_relaxed);
+}
+
+std::shared_ptr<spectral::AudioSpectralSourceCapture> Loop::RequestAudioSpectralSource(std::string& reason,
+    const std::shared_ptr<spectral::AudioSpectralResourceBudget>& budget, const spectral::AudioSpectralSourceLayout* retainedLayout)
+{
+	reason.clear();
+	CancelAudioSpectralSourceCapture();
+	if (!CanEditAudioSource())
+	{
+		reason = "Finish recording or punch before editing";
+		return nullptr;
+	}
+	const auto generation = _audioSourceGeneration.load(std::memory_order_acquire);
+	const auto layout = _AudioSpectralSourceLayout();
+	if (!layout.IsValid())
+	{
+		reason = "Audio source layout is unavailable";
+		return nullptr;
+	}
+	if (static_cast<std::uint64_t>(layout.StoredSampleCount()) * sizeof(float)
+		> spectral::AudioSpectralSourceCapture::MaxSourceBytes)
+	{
+		reason = "Audio source exceeds the editor memory budget";
+		return nullptr;
+	}
+	std::shared_ptr<const spectral::AudioSpectralResourceBudget::Reservation> resources;
+    auto admissionLayout = layout;
+    if (retainedLayout)
+    {
+        admissionLayout.LogicalLength = (std::max)(admissionLayout.LogicalLength, retainedLayout->LogicalLength);
+        admissionLayout.PhysicalLength = (std::max)(admissionLayout.PhysicalLength, retainedLayout->PhysicalLength);
+        admissionLayout.FadeSamps = (std::max)(admissionLayout.FadeSamps, retainedLayout->FadeSamps);
+    }
+    spectral::AudioSpectralTransformConfig transform;
+    if (!spectral::AudioSpectralDsp::SelectTransform(admissionLayout, budget, transform, resources, reason))
+        return nullptr;
+    std::shared_ptr<spectral::AudioSpectralSourceCapture> request;
+	try
+	{
+		request = std::make_shared<spectral::AudioSpectralSourceCapture>(layout,
+			generation, _audioSourceIdentity, std::move(resources), transform);
+	}
+	catch (const std::bad_alloc&)
+	{
+		reason = "Not enough memory to capture the audio source";
+		return nullptr;
+	}
+	{
+		std::scoped_lock lock(_audioSourcePublicationMutex);
+		_audioSourceCapture.store(request);
+	}
+	return request;
+}
+
+void Loop::CancelAudioSpectralSourceCapture()
+{
+	std::scoped_lock lock(_audioSourcePublicationMutex);
+	if (const auto request = _audioSourceCapture.load())
+		request->Cancel();
+	_audioSourceCapture.store(nullptr);
+	_changesMade = true; // Pump retirement after the callback releases its borrow.
+}
+
+std::size_t Loop::_CollectAudioSourceCaptures()
+{
+	std::scoped_lock lock(_audioSourcePublicationMutex);
+	const auto edit = _audioSpectralEdit.load(std::memory_order_acquire);
+	if (edit && edit->Source->Generation != AudioSourceGeneration())
+		_audioSpectralEdit.store(nullptr, std::memory_order_release);
+	const auto playback = _audioSpectralPlayback.load();
+	if (playback && playback->Source().Generation != AudioSourceGeneration())
+		_audioSpectralPlayback.store(nullptr);
+	return _audioSourceCapture.collect() + _audioSpectralPlayback.collect();
+}
+
+bool Loop::PublishAudioSpectralEdit(
+	std::shared_ptr<const spectral::AudioSpectralEditState> state, std::string& reason)
+{
+	reason.clear();
+	if (!state || !IsCurrentAudioSpectralSource(*state->Source))
+	{
+		reason = "Audio edit belongs to an obsolete or unavailable source";
+		return false;
+	}
+	std::scoped_lock lock(_audioSourcePublicationMutex);
+	const auto current = _audioSpectralEdit.load(std::memory_order_acquire);
+	if (current && current->Source->Generation == state->Source->Generation)
+	{
+		if (state->Revision <= current->Revision || state->Transform != current->Transform
+			|| state->SpectralRevision < current->SpectralRevision
+			|| state->EnvelopeRevision < current->EnvelopeRevision
+			|| (state->SpectralRevision == current->SpectralRevision && state->Gains != current->Gains)
+			|| (state->EnvelopeRevision == current->EnvelopeRevision && state->Envelope != current->Envelope))
+		{
+			reason = "Audio edit would replace a newer or inconsistent component revision";
+			return false;
+		}
+	}
+	if (!IsCurrentAudioSpectralSource(*state->Source))
+	{
+		reason = "Audio source changed before edit publication";
+		return false;
+	}
+	_audioSpectralEdit.store(std::move(state), std::memory_order_release);
+	_changesMade = true;
+	return true;
+}
+
+std::shared_ptr<const spectral::AudioSpectralEditState> Loop::AudioSpectralEdit() const
+{
+	const auto state = _audioSpectralEdit.load(std::memory_order_acquire);
+	return state && IsCurrentAudioSpectralSource(*state->Source) ? state : nullptr;
+}
+
+bool Loop::PublishAudioSpectralPlayback(
+	std::shared_ptr<const spectral::AudioSpectralPlaybackSnapshot> snapshot, std::string& reason)
+{
+	reason.clear();
+	if (!snapshot || !IsCurrentAudioSpectralSource(snapshot->Source()))
+	{
+		reason = "Edited playback belongs to an obsolete or unavailable source";
+		return false;
+	}
+	std::scoped_lock lock(_audioSourcePublicationMutex);
+	if (snapshot->Source().Generation == _minimumAudioSpectralGeneration.load(std::memory_order_acquire)
+        && snapshot->SpectralRevision < _minimumAudioSpectralRevision.load(std::memory_order_acquire))
+	{
+		reason = "Edited playback was superseded by Undo or stroke cancellation";
+		return false;
+	}
+	const auto committed = _audioSpectralEdit.load(std::memory_order_acquire);
+	if (committed && committed->Source->Generation == snapshot->Source().Generation
+		&& (snapshot->EnvelopeRevision != committed->EnvelopeRevision
+			|| (snapshot->Pcm->EnvelopeComposed
+                ? snapshot->Pcm->ComposedEnvelope != committed->Envelope
+                    || snapshot->SpectralRevision != committed->SpectralRevision
+                    || snapshot->Pcm->ComposedSpectralRevision != committed->SpectralRevision
+                    || snapshot->Pcm->ComposedEnvelopeRevision != committed->EnvelopeRevision
+                : snapshot->Envelope != committed->Envelope)))
+	{
+		reason = "Edited playback must be composed with the newest broadband envelope";
+		return false;
+	}
+	const auto current = _audioSpectralPlayback.load();
+	if (current && current->Source().Generation == snapshot->Source().Generation)
+	{
+		if (snapshot->Revision <= current->Revision
+			|| snapshot->SpectralRevision < current->SpectralRevision
+			|| snapshot->EnvelopeRevision < current->EnvelopeRevision
+			|| (snapshot->SpectralRevision == current->SpectralRevision && snapshot->Pcm != current->Pcm
+                && (!snapshot->Pcm->EnvelopeComposed || snapshot->EnvelopeRevision == current->EnvelopeRevision))
+			|| (snapshot->EnvelopeRevision == current->EnvelopeRevision
+                && (snapshot->Pcm->EnvelopeComposed ? snapshot->Pcm->ComposedEnvelope : snapshot->Envelope)
+                    != (current->Pcm->EnvelopeComposed ? current->Pcm->ComposedEnvelope : current->Envelope)))
+		{
+			reason = "Edited playback would replace a newer or inconsistent component revision";
+			return false;
+		}
+	}
+	// A writer can invalidate after this check. The callback independently checks
+	// generation before using/adopting a snapshot; punch never takes this mutex.
+	if (!IsCurrentAudioSpectralSource(snapshot->Source()))
+	{
+		reason = "Audio source changed before edited playback publication";
+		return false;
+	}
+	_audioSpectralPlayback.store(std::move(snapshot));
+	_changesMade = true;
+	return true;
+}
+
+void Loop::InvalidateAudioSpectralResultsBefore(std::uint64_t spectralRevision,
+    std::uint64_t expectedGeneration)
+{
+	// Serialize against the final publication check, without involving the audio
+	// callback. Callback adoption only reads the scalar floor.
+	std::scoped_lock lock(_audioSourcePublicationMutex);
+	if (expectedGeneration != AudioSourceGeneration()) return;
+    const auto floor = expectedGeneration == _minimumAudioSpectralGeneration.load(std::memory_order_relaxed)
+        ? _minimumAudioSpectralRevision.load(std::memory_order_relaxed) : 0u;
+	_minimumAudioSpectralRevision.store((std::max)(floor, spectralRevision), std::memory_order_release);
+    // Tag protects a new source if punch invalidates during this method.
+    _minimumAudioSpectralGeneration.store(expectedGeneration, std::memory_order_release);
+}
+
+std::shared_ptr<const spectral::AudioSpectralPlaybackSnapshot> Loop::AudioSpectralPlayback() const
+{
+	const auto snapshot = _audioSpectralPlayback.load();
+	return snapshot && IsCurrentAudioSpectralSource(snapshot->Source()) ? snapshot : nullptr;
+}
+
+std::vector<float> Loop::ExportAudioSpectralSamples(
+	const spectral::AudioSpectralPlaybackSnapshot& snapshot, bool retainPhysicalTail)
+{
+	const auto& layout = snapshot.Source().Layout;
+	const auto length = retainPhysicalTail ? layout.PhysicalLength : layout.LogicalLength;
+	std::vector<float> output(length);
+	for (unsigned long index = 0ul; index < length; ++index)
+		output[index] = snapshot.SampleAt(layout.BodyOffset + index);
+	return output;
+}
+
+void Loop::_AdvanceAudioSpectralPlayback(unsigned int numSamps) noexcept
+{
+	const auto generation = _audioSourceGeneration.load(std::memory_order_acquire);
+	if (_activeAudioSpectral && _activeAudioSpectral->Source().Generation != generation)
+	{
+		_previousAudioSpectral.reset();
+		_activeAudioSpectral.reset();
+		_audioSpectralTransitionSamps = 0u;
+		_audioSpectralTransitionProgress = 0u;
+		_appliedAudioSpectralRevision.store(0u, std::memory_order_release);
+	}
+	if (_audioSpectralTransitionSamps != 0u)
+	{
+		const auto remaining = _audioSpectralTransitionSamps - _audioSpectralTransitionProgress;
+		_audioSpectralTransitionProgress += (std::min)(remaining, numSamps);
+		if (_audioSpectralTransitionProgress < _audioSpectralTransitionSamps) return;
+		_previousAudioSpectral.reset();
+		_audioSpectralTransitionSamps = 0u;
+	}
+	auto pending = _audioSpectralPlayback.borrow();
+	if (!pending || pending->Source().Generation != generation || !CanEditAudioSource()
+		|| (pending->Source().Generation == _minimumAudioSpectralGeneration.load(std::memory_order_acquire)
+            && pending->SpectralRevision < _minimumAudioSpectralRevision.load(std::memory_order_acquire))
+		|| (_activeAudioSpectral && pending->Revision <= _activeAudioSpectral->Revision))
+		return;
+	_previousAudioSpectral = std::move(_activeAudioSpectral);
+	_activeAudioSpectral = std::move(pending);
+	_audioSpectralTransitionProgress = 0u;
+	_audioSpectralTransitionSamps = static_cast<unsigned int>(std::clamp(
+		static_cast<double>(_activeAudioSpectral->Source().Layout.SampleRate)
+			* spectral::AudioSpectralConfig::PlaybackTransitionSeconds,
+		1.0, static_cast<double>(spectral::AudioSpectralConfig::MaxPlaybackTransitionSamps)));
+	_appliedAudioSpectralRevision.store(_activeAudioSpectral->Revision, std::memory_order_release);
+	// Releasing a Lease only clears its scalar hazard. Publisher retains ownership
+	// and CommitChanges collects off audio after the transition/read has ended.
+}
+
+float Loop::_ReadAudioSpectralSample(unsigned long storageIndex,
+	unsigned int blockOffset, std::uint64_t generation) const noexcept
+{
+	const auto original = [this, storageIndex]() noexcept
+	{
+		return _bufferBank[storageIndex]; // ReadBlock already bounds the body index.
+	};
+	if (!_activeAudioSpectral || _activeAudioSpectral->Source().Generation != generation)
+		return original();
+	const auto current = _activeAudioSpectral->SampleAt(storageIndex);
+	if (_audioSpectralTransitionSamps == 0u
+		|| (_activeAudioSpectral->UsesOriginal()
+			&& (!_previousAudioSpectral || _previousAudioSpectral->UsesOriginal()))) return current;
+	const auto position = static_cast<std::uint64_t>(_audioSpectralTransitionProgress) + blockOffset;
+	if (position >= _audioSpectralTransitionSamps) return current;
+	const auto previous = _previousAudioSpectral ? _previousAudioSpectral->SampleAt(storageIndex) : original();
+	const auto weight = static_cast<double>(position) / _audioSpectralTransitionSamps;
+	// Double convex sum avoids float subtraction overflow for opposite large peaks.
+	return static_cast<float>(static_cast<double>(previous) * (1.0 - weight) + current * weight);
+}
+
+bool Loop::IsCurrentAudioSpectralSource(const spectral::AudioSpectralSource& source) const noexcept
+{
+	return source.Identity.get() == _audioSourceIdentity.get()
+		&& source.Generation == _audioSourceGeneration.load(std::memory_order_acquire)
+		&& CanEditAudioSource() && source.Layout == _AudioSpectralSourceLayout();
+}
+
+void Loop::_CopyAudioSpectralSourceAtAudioBoundary() noexcept
+{
+	auto request = _audioSourceCapture.borrow();
+	if (!request) return; // A bounded borrow failure simply retries on the next block.
+	request->CopyAtAudioBoundary(_bufferBank, _AudioSpectralSourceLayout(),
+		_audioSourceGeneration.load(std::memory_order_acquire), CanEditAudioSource());
 }
 
 bool Loop::CanRefreshVisualModel() const noexcept
@@ -934,6 +1280,7 @@ void Loop::PunchIn()
 		(STATE_PLAYING != playState))
 		return;
 
+	_InvalidateAudioSource();
 	_isPunchInActive.store(true, std::memory_order_release);
 	if (STATE_OVERDUBBING == playState)
 		_playState.store(STATE_PUNCHEDIN, std::memory_order_release);
@@ -1036,6 +1383,13 @@ void Loop::_ForceUpdateLoopModel()
 	auto offset = isRecording ? 0ul : constants::MaxLoopFadeSamps;
 
 	auto radius = (float)(CalcDrawRadius(displayLength) * _DrawRadiusScale());
+	if (!isRecording)
+		if (const auto edited = AudioSpectralPlayback())
+		{
+			_model->UpdateEditedModel(edited, radius);
+			_vu->UpdateModel(radius);
+			return;
+		}
 	auto& bufBank = isRecording ? _monitorBufferBank : _bufferBank;
 	_ApplyLoopVisualModel(bufBank, actualLength, displayLength, offset, radius);
 }
@@ -1118,6 +1472,18 @@ std::vector<JobAction> Loop::_CommitChanges()
 	if (const auto chain = _vstChain.load(std::memory_order_acquire))
 		chain->PollPendingChanges();
 
+	// UI commit also receives publications after editor close and closed-Loop Undo.
+	// Keep the acquired immutable value through overview upload preparation; a
+	// source invalidation here must never make this path fall back to bank reads.
+	if (_visualUpdatesEnabled)
+		if (const auto playback = AudioSpectralPlayback())
+		{
+			const auto radius = static_cast<float>(CalcDrawRadius(playback->Source().Layout.LogicalLength) * _DrawRadiusScale());
+			_model->UpdateEditedModel(playback, radius);
+			_vu->UpdateModel(radius);
+		}
+	if (_CollectAudioSourceCaptures() != 0u)
+		_changesMade = true;
 	_vstChain.collect();
 
 	// Swap in a new VST chain when the job thread has delivered one.

@@ -1,4 +1,5 @@
 #include "ActionUndoHistory.h"
+#include <algorithm>
 
 using namespace actions;
 using base::ActionUndo;
@@ -23,6 +24,12 @@ void actions::ActionUndoHistory::Clear()
 {
 	_poppedHistory.clear();
 	_history.clear();
+}
+
+void actions::ActionUndoHistory::Remove(const std::shared_ptr<ActionUndo>& action)
+{
+	std::erase(_history, action);
+	std::erase(_poppedHistory, action);
 }
 
 bool actions::ActionUndoHistory::Undo()

@@ -583,4 +583,34 @@
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
   </ImportGroup>
+  <ItemGroup>
+    <ClInclude Include="src\spectral\AudioSpectralWorker.h" />
+    <ClInclude Include="src\spectral\AudioSpectralResourceBudget.h" />
+    <ClInclude Include="src\spectral\AudioSpectralSource.h" />
+    <ClInclude Include="src\spectral\AudioSpectralPicking.h" />
+    <ClInclude Include="src\spectral\AudioSpectralDisplayJob.h" />
+    <ClInclude Include="src\graphics\AudioSpectralModel.h" />
+    <ClInclude Include="src\spectral\AudioSpectralEditState.h" />
+    <ClInclude Include="src\spectral\AudioSpectralPlaybackSnapshot.h" />
+    <ClInclude Include="src\spectral\AudioSpectralConfig.h" />
+    <ClInclude Include="src\spectral\AudioSpectralGainField.h" />
+    <ClInclude Include="src\spectral\AudioSpectralFft.h" />
+    <ClInclude Include="src\spectral\AudioSpectralEnvelope.h" />
+    <ClInclude Include="src\spectral\AudioSpectralDsp.h" />
+    <ClInclude Include="src\spectral\AudioSpectralAnalysisJob.h" />
+    <ClCompile Include="src\spectral\AudioSpectralWorker.cpp" />
+    <ClCompile Include="src\spectral\AudioSpectralSource.cpp" />
+    <ClCompile Include="src\spectral\AudioSpectralPicking.cpp" />
+    <ClCompile Include="src\spectral\AudioSpectralDisplayJob.cpp" />
+    <ClCompile Include="src\graphics\AudioSpectralModel.cpp" />
+    <ClCompile Include="src\spectral\AudioSpectralEditState.cpp" />
+    <ClCompile Include="src\spectral\AudioSpectralPlaybackSnapshot.cpp" />
+    <ClCompile Include="src\spectral\AudioSpectralGainField.cpp" />
+    <ClCompile Include="src\spectral\AudioSpectralFft.cpp" />
+    <ClCompile Include="src\spectral\AudioSpectralEnvelope.cpp" />
+    <ClCompile Include="src\spectral\AudioSpectralDsp.cpp" />
+    <ClCompile Include="src\spectral\AudioSpectralAnalysisJob.cpp" />
+    <ClInclude Include="src\spectral\AudioSpectralEditor.h" />
+    <ClCompile Include="src\spectral\AudioSpectralEditor.cpp" />
+  </ItemGroup>
 </Project>
