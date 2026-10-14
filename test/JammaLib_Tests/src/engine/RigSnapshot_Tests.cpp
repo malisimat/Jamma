@@ -1193,3 +1193,27 @@ TEST(PublishedAudioSnapshot, BoundedSlotsCanBeExhaustedAndReused)
 	EXPECT_TRUE(replacementLease.ReadSucceeded());
 	EXPECT_EQ(7u, *replacementLease);
 }
+
+TEST_F(RigSnapshotTest, HardwarePreferenceMergeRetainsTriggerIdentityAndUnrelatedEdits)
+{
+	io::RigFile rig{};
+	rig.Triggers = {TriggerDescriptor("trigger", "Station")};
+	rig.User.Loop.FadeSamps = 123u;
+	rig.User.Audio.LatencyIn = 27u;
+	auto station = RuntimeStation("Station");
+	engine::RigCoordinator coordinator;
+	ASSERT_TRUE(coordinator.BuildInitial(rig, {StationDescriptor("Station")}, {station}, 0u, {}, engine::TriggerParams(), [](const auto&) {return true;}));
+	const auto initial = coordinator.Accepted();
+	auto audio = rig.User.Audio; audio.Name = "device"; audio.BufSize = 256u;
+	ASSERT_TRUE(coordinator.MergeHardwarePreferences(audio, std::nullopt));
+	const auto applied = coordinator.Accepted();
+	EXPECT_EQ(applied->Rig.User.Loop.FadeSamps, 123u);
+	EXPECT_EQ(applied->Rig.User.Audio.LatencyIn, 27u);
+	EXPECT_EQ(applied->Triggers.front().Instance, initial->Triggers.front().Instance);
+	std::vector<io::UserConfig::MidiSettings> desired{{"missing",true}};
+	ASSERT_TRUE(coordinator.MergeHardwarePreferences(std::nullopt, desired));
+	EXPECT_EQ(coordinator.Accepted()->Rig.User.Audio.Name, "device");
+	EXPECT_EQ(coordinator.Accepted()->Rig.User.Midi.Devices.front().Name, "missing");
+	EXPECT_TRUE(coordinator.Accepted()->Rig.User.Midi.Devices.front().Enabled);
+	EXPECT_EQ(initial->Rig.User.Audio.Name, rig.User.Audio.Name);
+}

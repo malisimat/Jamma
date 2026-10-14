@@ -87,8 +87,11 @@ namespace midi
 			midi::MidiClockAnchor& midiClockAnchor,
 			unsigned int actualSampleRate,
 			const MidiInputInventory* inventory = nullptr,
-			bool generatedRig = false);
+			bool generatedRig = false, bool forceReconcile = false);
 		void CloseMidi();
+		// Off callback, caller excludes Scene job/UI writers before suspension.
+		void SuspendMidiDispatch();
+		void ResumeMidiDispatch();
 		void PublishRigInputDispatch(std::shared_ptr<const engine::RigSnapshot> snapshot);
 		void PublishEmptyRigInputDispatch();
 		bool OpenRigTriggerInput(std::uint64_t revision) noexcept;
@@ -175,6 +178,7 @@ namespace midi
 		{
 			std::uint8_t DeviceSlot = 0u;
 			std::string ConfiguredName;
+			unsigned int SampleRate = 0u;
 			std::unique_ptr<midi::MidiDevice> Device;
 			struct RigMidiIngressEvent
 			{
@@ -184,10 +188,14 @@ namespace midi
 				std::int64_t CallbackArrivalMicros = 0;
 				double DriverDeltaSeconds = 0.0;
 				MidiTimestampSource TimestampSource = MidiTimestampSource::InitialArrival;
+				std::uint32_t RoutingGeneration = 0u;
 			};
 			midi::MidiQueue<1024, RigMidiIngressEvent> Ingress;
 			midi::MidiQueue<1024, LiveMidiIngressEvent> LiveIngress;
 			MidiClockAnchorSnapshot LastClockAnchor;
+			MidiClockAnchor* ClockAnchor = nullptr;
+			// Callback owned; lifecycle resets only with backend ingress drained.
+			std::int64_t MinimumClockAnchorMicros = 0;
 			MidiDriverTimestampMapper TimestampMapper;
 			std::uint64_t LastMappedSample = 0u;
 			std::uint32_t NextLiveSequence = 0u;
@@ -199,6 +207,9 @@ namespace midi
 		{
 			std::atomic<std::uint64_t> InputConfig{ 0u };
 			std::atomic<std::uint64_t> RigRevision{ 0u };
+			// Lifecycle writer increments for an explicit writer suspension;
+			// backend callback stamps and job reader rejects delayed actions.
+			std::atomic<std::uint32_t> RigIngressGeneration{ 1u };
 			HANDLE WorkEvent = nullptr;
 		};
 
@@ -234,9 +245,10 @@ namespace midi
 			const std::vector<unsigned char>& hoverPath,
 			const std::shared_ptr<engine::LoopTake>& hoveredTake) const;
 		void _StartLiveMidiDispatcher();
-		void _StopLiveMidiDispatcher();
+		void _StopLiveMidiDispatcher(bool releaseResources = true);
 		void _LiveMidiDispatchLoop() noexcept;
 		void _DispatchAvailableLiveMidi() noexcept;
+		void _ReleaseHeldLiveMidi() noexcept;
 		void _CloseMidi();
 		void _PublishRigInputDispatch(std::shared_ptr<const engine::RigSnapshot> snapshot);
 		void _PublishEmptyRigInputDispatch();
@@ -270,6 +282,12 @@ namespace midi
 		std::thread _liveMidiDispatchThread;
 		HANDLE _liveMidiStopEvent = nullptr;
 		std::uint32_t _nextLiveMidiRoutingGeneration = 0u;
+		// Lifecycle/UI and reconciliation job access only under publication mutex.
+		// The worker is joined before endpoint slots or route topology are changed.
+		bool _midiDispatchSuspended = false;
+		MidiConnectionResult _lastMidiConnectionResult;
+		std::vector<std::pair<std::string, bool>> _lastMidiDesired;
+		unsigned int _lastMidiSampleRate = 0u;
 		bool _loggingVerbose = false;
 		std::vector<std::unique_ptr<io::SerialDevice>> _serialDevices;
 		midi::MidiQueue<256, SerialIngressEvent> _serialIngress;

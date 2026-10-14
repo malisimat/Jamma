@@ -381,6 +381,7 @@ static const char* MidiStatusText(midi::MidiConnectionStatus status) noexcept
 	case midi::MidiConnectionStatus::Ambiguous: return "ambiguous";
 	case midi::MidiConnectionStatus::Failed: return "failed";
 	case midi::MidiConnectionStatus::Connected: return "connected";
+	case midi::MidiConnectionStatus::CapacityExceeded: return "capacity-exceeded";
 	}
 	return "unknown";
 }
@@ -1030,6 +1031,7 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 		<< " log=" << EncodeUtf8(startupLog.Path());
 	startupLog.Write(startupSummary.str());
 
+	if (!jamGenerated && defaults) scene.value()->SetSessionSaveFolder(utils::GetParentDirectory(defaults->Jam));
 	MSG msg;
 	bool active = true;
 	auto lastConsoleStatus = std::chrono::steady_clock::now() - std::chrono::seconds(1);
@@ -1142,69 +1144,47 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 				std::cerr << "[CONSOLE] Could not toggle companion beside Jamma.exe.\n";
 		}
 
-		if (window.ConsumeJamLoadRequest())
+		const bool windowLoadRequested = window.ConsumeJamLoadRequest();
+		const bool panelLoadRequested = scene.value()->ConsumePanelLoadRequest();
+		if (windowLoadRequested || panelLoadRequested)
 		{
-			const bool paused = scene.value()->PauseAudio();
-			if (!paused)
-				scene.value()->CloseAudio();
-
-			const auto jamPath = utils::PickJamFile();
-			if (jamPath.empty())
+			// Resolve the picker before admission/suspension; cancel changes nothing.
+			scene.value()->PickSessionForLoad();
+		}
+		scene.value()->PumpDeviceAndFileControls();
+		const auto pendingJamPath = scene.value()->TakeReadySessionLoad();
+		if (!pendingJamPath.empty())
+		{
+			std::optional<std::shared_ptr<Scene>> replacement;
+			std::string loadError;
+			try
 			{
-				if (paused)
-					scene.value()->ResumeAudio();
-				else
-					scene.value()->InitAudio();
+				auto selectedJam = LoadJamFile(pendingJamPath);
+				if (selectedJam)
+				{
+					const auto activeRig = scene.value()->AcceptedRigSnapshot();
+					replacement = Scene::FromFile(sceneParams, std::move(*selectedJam),
+						activeRig ? activeRig->Rig : rig, utils::GetParentDirectory(pendingJamPath), saveRig);
+				}
 			}
+			catch (const std::exception& error) { loadError = error.what(); }
+			catch (...) { loadError = "Unknown construction error"; }
+			if (!replacement)
+				scene.value()->FinishSessionLoad(false, "Load failed; current session retained: " + loadError);
 			else
 			{
-				std::optional<std::shared_ptr<Scene>> replacement;
-				try
-				{
-					auto selectedJam = LoadJamFile(jamPath);
-					if (selectedJam.has_value())
-					{
-						const auto activeRig = scene.value()->AcceptedRigSnapshot();
-						replacement = Scene::FromFile(sceneParams, std::move(selectedJam.value()),
-							activeRig ? activeRig->Rig : rig,
-							utils::GetParentDirectory(jamPath), saveRig);
-					}
-				}
-				catch (const std::exception& error)
-				{
-					std::cerr << "Load JAM failed: " << error.what() << std::endl;
-				}
-				catch (...)
-				{
-					std::cerr << "Load JAM failed with an unknown error" << std::endl;
-				}
-
-				if (!replacement.has_value())
-				{
-					std::cerr << "Load JAM failed; keeping the current session: " << EncodeUtf8(jamPath) << std::endl;
-					if (paused)
-						scene.value()->ResumeAudio();
-					else
-						scene.value()->InitAudio();
-				}
-				else
-				{
-					if (defaults.has_value())
-						replacement.value()->SetLogging(defaults.value().Logging);
-
-					{
-						// Editors, queued jobs, and plugin instances belong to the outgoing
-						// JAM. Tear them down completely before binding the window to the
-						// already-constructed replacement Scene.
-						scene.value()->Shutdown();
-						window.ReplaceScene(*replacement.value());
-						scene = std::move(replacement);
-					}
-					vst::DrainUiThreadDestroyQueue();
-
-					scene.value()->InitGlobalKeyCapture();
-					scene.value()->InitAudio();
-				}
+				if (defaults) replacement.value()->SetLogging(defaults->Logging);
+				scene.value()->FinishSessionLoad(true);
+				scene.value()->Shutdown();
+				window.ReplaceScene(*replacement.value());
+				scene = std::move(replacement);
+				vst::DrainUiThreadDestroyQueue();
+				scene.value()->SetSessionSaveFolder(utils::GetParentDirectory(pendingJamPath));
+				scene.value()->InitGlobalKeyCapture();
+				// Preserve rig hardware choices and inventory across loaded content.
+				scene.value()->InitAudio(false, nullptr, true);
+				const bool started = scene.value()->GetAsioOpenReport().StartedParams.has_value();
+				scene.value()->ReportFileStatus(started ? "Loaded session (check log for asset warnings)" : "Loaded session; audio stopped, retry available");
 			}
 		}
 

@@ -80,12 +80,12 @@ GuiMainPanel::GuiMainPanel(GuiMainPanelParams params) : GuiPanel(params),
 	if (!_selectionOnly)
 	{
 		GuiRadioParams tabParams;
-		tabParams.InitValue = 1u;
-		tabParams.Size = { 208u, 32u };
-		for (unsigned int index = 0; index < 2; ++index)
+		tabParams.InitValue = static_cast<unsigned int>(SettingsPage::Timing);
+		tabParams.Size = { 416u, 32u };
+		for (unsigned int index = 0; index < 4; ++index)
 		{
 			auto toggle = GuiToggleParams::PanelPrimary();
-			toggle.Text = index == 0 ? "MIDI" : "Timing";
+			toggle.Text = std::array<std::string, 4>{ "Audio", "MIDI", "Timing", "File" }[index];
 			toggle.TintColor = GuiStyle::Control();
 			toggle.Position = { static_cast<int>(index * 104u), 0 };
 			toggle.Size = { 100u, 32u };
@@ -104,7 +104,9 @@ GuiMainPanel::GuiMainPanel(GuiMainPanelParams params) : GuiPanel(params),
 
 void GuiMainPanel::SetCommandOwner(std::weak_ptr<ActionReceiver> owner)
 {
+	_commandOwner = owner;
 	for (auto& binding : _bindings) binding->SetOwner(owner);
+	for (auto& page : _pageBindings) for (auto& binding : page) binding->SetOwner(owner);
 }
 
 void GuiMainPanel::_InitReceivers()
@@ -123,7 +125,7 @@ void GuiMainPanel::_PrepareHide(const std::shared_ptr<GuiElement>& subtree)
 
 void GuiMainPanel::SetPage(SettingsPage page)
 {
-	if (_selectionOnly || (page != SettingsPage::Midi && page != SettingsPage::Timing) || page == _page) return;
+	if (_selectionOnly || (page > SettingsPage::Session) || page == _page) return;
 	_PrepareHide(_pages[static_cast<size_t>(_page)]);
 	_offsets[static_cast<size_t>(_page)] = _pageScroll->ScrollOffset();
 	_page = page;
@@ -330,6 +332,7 @@ bool GuiMainPanel::RouteHitTest(Position2d position)
 
 void GuiMainPanel::_InitResources(resources::ResourceLib& resources, bool force)
 {
+	_pageResources = &resources;
 	GuiPanel::_InitResources(resources, force);
 	for (auto& page : _pages)
 		if (page != _pageScroll->Content()) page->InitResources(resources, force);
@@ -337,7 +340,41 @@ void GuiMainPanel::_InitResources(resources::ResourceLib& resources, bool force)
 
 void GuiMainPanel::_ReleaseResources()
 {
+	_pageResources = nullptr;
 	GuiPanel::_ReleaseResources();
 	for (auto& page : _pages)
 		if (page && page != _pageScroll->Content()) page->ReleaseResources();
+}
+
+void GuiMainPanel::ReplacePageSettings(SettingsPage pageId, const std::vector<GuiSettingEntry>& settings)
+{
+	if (pageId >= SettingsPage::Count) return;
+	const auto index = static_cast<size_t>(pageId);
+	_PrepareHide(_pages[index]);
+	auto oldPage = _pages[index];
+	_controlSizes.erase(std::remove_if(_controlSizes.begin(), _controlSizes.end(),
+		[&oldPage](const auto& item) { return item.first->Parent() == oldPage; }), _controlSizes.end());
+	_pageBindings[index].clear();
+	GuiStackPanelParams params;
+	params.PaddingH = 4u; params.PaddingV = 4u; params.Spacing = 8u; params.Size = {300u, 8u};
+	auto page = std::make_shared<GuiStackPanel>(params);
+	for (const auto& setting : settings)
+	{
+		if (!setting.Control) continue;
+		if (!setting.Label.empty()) page->AddChild(std::make_shared<GuiLabel>(GuiLabelParams::PanelHeader(setting.Label, 300u)));
+		page->AddChild(setting.Control);
+		_controlSizes.emplace_back(setting.Control, setting.Control->GetSize());
+		auto binding = std::make_shared<GuiCommandReceiver>(setting.Command, _commandOwner);
+		setting.Control->SetReceiver(binding);
+		_pageBindings[index].push_back(binding);
+	}
+	_pages[index] = page;
+	if (_page == pageId) _pageScroll->SetContent(page);
+	if (_pageResources) page->InitResources(*_pageResources, true);
+	_Layout();
+}
+
+void GuiMainPanel::FinalizePageSettings(SettingsPage page)
+{
+	if (page < SettingsPage::Count) _PrepareHide(_pages[static_cast<size_t>(page)]);
 }

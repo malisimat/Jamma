@@ -208,3 +208,20 @@ TEST(NinjamSessionConnection, UnavailableWorkDirectoryReportsStartupFailure)
 	ASSERT_TRUE(connection);
 	EXPECT_EQ(ninjam::NinjamConnection::ConnectionState::Failed, connection->State());
 }
+
+TEST(NinjamSessionTiming, FormatRateChangeInvalidatesOldEpochOnceWithoutChangingConnection)
+{
+	ninjam::NinjamSession session;
+	session.SetAudioFormat(48000u,64u,2u,2u,0u,0u);
+	auto initial = session.ObservePhysicalAvailability(true);
+	ASSERT_TRUE(initial.IsAvailable);
+	session.SetAudioFormat(48000u,128u,2u,2u,0u,0u);
+	EXPECT_FALSE(session.ObservePhysicalAvailability(true).Changed);
+	session.SetAudioFormat(44100u,128u,2u,2u,0u,0u);
+	const auto invalidated = session.ObservePhysicalAvailability(true);
+	EXPECT_TRUE(invalidated.Changed); EXPECT_FALSE(invalidated.IsAvailable);
+	const auto fresh = session.ObservePhysicalAvailability(true);
+	EXPECT_TRUE(fresh.Changed); EXPECT_TRUE(fresh.IsAvailable);
+	EXPECT_EQ(fresh.SessionEpoch, initial.SessionEpoch + 1u);
+	EXPECT_FALSE(session.ObservePhysicalAvailability(true).Changed);
+}

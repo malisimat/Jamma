@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -39,7 +40,7 @@ namespace midi
 		std::mutex _mutex;
 		std::unique_ptr<rt::midi::RtMidiIn> _client;
 	};
-	enum class MidiConnectionStatus { Disabled, Missing, Ambiguous, Failed, Connected };
+	enum class MidiConnectionStatus { Disabled, Missing, Ambiguous, Failed, Connected, CapacityExceeded };
 	struct MidiConnectionAttempt
 	{
 		std::string RequestedName;
@@ -54,6 +55,8 @@ namespace midi
 		MidiInputInventory Inventory;
 		std::vector<MidiConnectionAttempt> Attempts;
 		std::vector<MidiInputDeviceInfo> Connected;
+		bool Accepted = false;
+		std::string Error; // Reconciliation/worker failure; inventory errors remain separate.
 	};
 
 	class MidiDevice
@@ -98,10 +101,14 @@ namespace midi
 			MidiMessageCallback callback,
 			bool loggingVerbose = false);
 		void Close();
+		// Lifecycle owner only: stop callback writes and drain admitted callbacks.
+		// Retains the backend connection for resumable session writer exclusion.
+		void SuspendCallbacks() noexcept;
+		void ResumeCallbacks() noexcept;
 		// Single consumer: call from the MIDI pump, never from the device callback.
 		void DrainVerbosePackets(const std::string& configuredName);
 
-		bool IsOpen() const noexcept { return _isOpen; }
+		bool IsOpen() const noexcept { return _isOpen && !_closeFailed; }
 		const std::string& DeviceName() const noexcept { return _deviceName; }
 		unsigned int DeviceId() const noexcept { return _deviceId; }
 
@@ -117,10 +124,21 @@ namespace midi
 
 		std::unique_ptr<rt::midi::RtMidiIn> _midiIn;
 		bool _isOpen;
+		bool _closeFailed = false;
 		std::string _deviceName;
 		unsigned int _deviceId;
 		bool _loggingVerbose;
 		MidiMessageCallback _callback;
+		// Lifecycle owner closes admission before backend stop. Callback readers
+		// drain before callback state is cleared; destruction follows backend close.
+		// One admission word orders closure against reader entry; separate counters
+		// would allow reset to race a callback observing the old open flag.
+		friend class MidiDeviceCallbackTestAccess;
+		bool TryEnterCallback() noexcept;
+		void LeaveCallback() noexcept;
+		static constexpr std::uint32_t CallbackClosed = 2u;
+		static_assert(std::atomic<std::uint32_t>::is_always_lock_free);
+		std::atomic<std::uint32_t> _callbackState{ CallbackClosed };
 		struct VerbosePacket
 		{
 			std::array<unsigned char, 256> Bytes{};

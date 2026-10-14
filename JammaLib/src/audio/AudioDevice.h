@@ -68,6 +68,7 @@ namespace audio
 	{
 		std::vector<AsioAttempt> Attempts;
 		std::optional<AudioStreamParams> StartedParams;
+		bool TeardownUncertain = false;
 	};
 
 	struct AsioConfiguration
@@ -101,6 +102,8 @@ namespace audio
 		bool TryStop();
 		bool Pause();
 		bool Resume();
+		bool IsRunning() const { return _stream && _stream->isStreamRunning(); }
+		bool IsOpen() const { return _stream && _stream->isStreamOpen(); }
 		AudioStreamParams GetAudioStreamParams();
 
 	private:
@@ -117,7 +120,10 @@ namespace audio
 			bool generatedRig = false,
 			const AsioInventory* inventory = nullptr,
 			AsioOpenReport* report = nullptr,
-			const std::function<void(const AudioStreamParams&)>& prepareForStart = {});
+			const std::function<void(const AudioStreamParams&)>& prepareForStart = {},
+			bool exactSelection = false);
+		static std::optional<unsigned int> ValidateExactSelection(const AsioInventory& inventory,
+			const io::UserConfig::AudioSettings& settings, std::string& error);
 		static AsioInventory DiscoverAsio();
 		static std::vector<unsigned int> OrderedCandidateIds(const AsioInventory& inventory,
 			const io::UserConfig::AudioSettings& settings, bool generatedRig);

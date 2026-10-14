@@ -11,15 +11,31 @@ namespace engine
     class SourceLossIntegrationTestAccess
     {
     public:
+        static std::unique_lock<std::mutex> ExcludeJob(Scene& scene)
+        { return std::unique_lock(scene._controlLifecycleMutex); }
+        static std::string StartedAudioSelection(Scene& scene,
+            const audio::AsioInventory& inventory, const audio::AudioStreamParams& params)
+        {
+            scene._deviceInventory = inventory;
+            scene._SetAudioDraftFromStream(params);
+            scene._RebuildDevicePage();
+            return scene._audioDeviceChoice->SelectedText();
+        }
+        static io::UserConfig::AudioSettings AudioDraft(const Scene& scene) { return scene._audioDraft; }
         static void Confirm(Scene& scene, const midi::MidiConnectionResult& previous,
             const midi::MidiConnectionResult& refreshed, const std::vector<std::string>& names)
         {
             scene._ConfirmMidiConnectionChange(previous, refreshed, names);
         }
         static void Recover(Scene& scene) { scene._PumpSourceLossRecovery(); }
-        static bool RecoveryGateIsClosed(const Scene& scene) { return scene._sourceLossRecoveryGateClosed; }
+        static bool RecoveryGateIsClosed(Scene& scene)
+        {
+            std::scoped_lock lock(scene._sceneMutex);
+            return scene._sourceLossRecoveryGateClosed;
+        }
         static void CloseRecoveryGate(Scene& scene)
         {
+            std::scoped_lock lock(scene._sceneMutex);
             scene._audioEngine->CloseCallbackAdmission();
             scene._sourceLossRecoveryGateClosed = true;
         }
@@ -92,6 +108,35 @@ protected:
 	}
 };
 
+TEST_F(SceneRoutingIntegrationTest, StartedAudioSelectionShowsResolvedDeviceAndNegotiatedGeometry)
+{
+	io::RigFile rig{};
+	rig.User.Audio = { "default", 44100u, 64u, 10u, 20u, 4u, 8u, 8u };
+	io::JamFile jam{};
+	jam.Stations = { Station("Mic") };
+	engine::SceneParams params({ "" }, {}, { 640u, 480u });
+	unsigned int saves = 0u;
+	auto created = engine::Scene::FromFile(params, jam, rig, L"",
+		[&saves](const io::RigFile&) { ++saves; return true; });
+	ASSERT_TRUE(created.has_value());
+	auto scene = *created;
+	audio::AsioInventory inventory;
+	inventory.Devices = {{ 0u, "Focusrite USB ASIO", true, "", 18u, 20u, {44100u, 48000u}, 48000u }};
+	const audio::AudioStreamParams actual{ "Focusrite USB ASIO", 48000u, 2u, 128u, 177u, 177u, 8u, 8u };
+	EXPECT_EQ("Focusrite USB ASIO", engine::SourceLossIntegrationTestAccess::StartedAudioSelection(*scene, inventory, actual));
+	const auto draft = engine::SourceLossIntegrationTestAccess::AudioDraft(*scene);
+	EXPECT_EQ(48000u, draft.SampleRate);
+	EXPECT_EQ(128u, draft.BufSize);
+	EXPECT_EQ(2u, draft.NumBuffers);
+	EXPECT_EQ(8u, draft.NumChannelsIn);
+	EXPECT_EQ(8u, draft.NumChannelsOut);
+	ASSERT_TRUE(scene->AcceptedRigSnapshot());
+	EXPECT_EQ("default", scene->AcceptedRigSnapshot()->Rig.User.Audio.Name);
+	EXPECT_EQ(64u, scene->AcceptedRigSnapshot()->Rig.User.Audio.BufSize);
+	EXPECT_EQ(0u, saves);
+	scene->Shutdown();
+}
+
 TEST_F(SceneRoutingIntegrationTest, HaloSelectionIncludesMidiOnlyModelsAndClearsOnDeselect)
 {
 	auto scene = FreshScene({ Station("Keys") }, {});
@@ -132,6 +177,8 @@ TEST_F(SceneRoutingIntegrationTest, ConfiguredMissingMidiSourceCreatesEditableTa
     configured.MidiInputDevices = { "missing" };
     auto scene = FreshScene({ Station("Keys") }, { configured });
     ASSERT_TRUE(scene);
+    // This test simulates both owners; exclude the real structural job consumer.
+    auto jobExclusion = engine::SourceLossIntegrationTestAccess::ExcludeJob(*scene);
     auto trigger = scene->AcceptedRigSnapshot()->Triggers.front().Instance;
     auto station = scene->SnapshotStations().front();
     station->SetAllowedMidiChannels({ 1 });
@@ -159,6 +206,7 @@ TEST_F(SceneRoutingIntegrationTest, ConfiguredMissingMidiSourceCreatesEditableTa
     EXPECT_EQ(engine::TRIGSTATE_DEFAULT, trigger->GetState());
     EXPECT_GT(take->GetMidiLoops().front()->CompletedLengthForEditor(), 0u);
     EXPECT_EQ(0u, take->GetMidiLoops().front()->EventCount());
+    jobExclusion.unlock();
     scene->Shutdown();
 }
 
@@ -428,8 +476,36 @@ TEST_F(SceneRoutingIntegrationTest, FreshScenesResolveReorderedAndAdditionalStat
 
 TEST_F(SceneRoutingIntegrationTest, RestoresDistinctHistoriesToTriggersWithSharedStation)
 {
+	// Restoration must pin real saved material; nonexistent IDs are correctly
+	// retired by the independently running source-loss owner.
+	struct SidecarCleanup
+	{
+		std::filesystem::path Path;
+		~SidecarCleanup() { std::error_code error; std::filesystem::remove(Path, error); }
+	} sidecar{ std::filesystem::temp_directory_path() / ("jamma-history-" + utils::GetGuid() + ".jammidi") };
+	io::NativeMidiSidecar::Stream contents;
+	contents.LogicalLength = 100u;
+	contents.Events.push_back({ 0u, 0x90u, 60u, 100u });
+	{
+		std::ofstream output(sidecar.Path, std::ios::binary);
+		ASSERT_TRUE(output);
+		ASSERT_TRUE(io::NativeMidiSidecar::ToStream(contents, output));
+	}
+	const auto addSavedTakes = [&sidecar](io::JamFile::Station& descriptor, std::initializer_list<const char*> names)
+	{
+		for (const auto name : names)
+		{
+			io::JamFile::LoopTake take{};
+			take.Name = name;
+			take.MidiPlayLength = 100u;
+			take.MidiStreams.push_back({ sidecar.Path.string(), 0u, "healthy", 100u, 0u });
+			descriptor.LoopTakes.push_back(std::move(take));
+		}
+	};
 	auto bass = Station("Bass");
 	auto drums = Station("Drums");
+	addSavedTakes(bass, { "bass-source", "bass-target", "other-source", "other-target" });
+	addSavedTakes(drums, { "drums-source", "drums-target" });
 	auto drumTrigger = Trigger("drums", "Drums"); drumTrigger.Id = "drums-id";
 	auto firstBassTrigger = Trigger("bass-first", "Bass"); firstBassTrigger.Id = "bass-first-id";
 	auto secondBassTrigger = Trigger("bass-second", "Bass"); secondBassTrigger.Id = "bass-second-id";

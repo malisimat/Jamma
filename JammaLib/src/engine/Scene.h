@@ -28,11 +28,15 @@
 #include "../gui/NinjamTempoPrompt.h"
 #include "../gui/GuiFocusManager.h"
 #include "../gui/SceneSettingsControls.h"
+#include "../gui/GuiNumericInput.h"
+#include "../gui/GuiDropdown.h"
+#include "../gui/GuiToggle.h"
 #include "../gui/GuiPopupManager.h"
 #include "../gui/SceneSelector.h"
 #include "../gui/GuiMainPanel.h"
 #include "../gui/GuiHud.h"
 #include "../io/JamFile.h"
+#include "DeviceSelectionSchedule.h"
 #include "../io/RigFile.h"
 #include "../io/InitFile.h"
 #include "../io/SerialDevice.h"
@@ -145,8 +149,17 @@ namespace engine
 		unsigned int Height() const { return _sizeParams.Size.Height; }
 		void Reset();
 		void InitGui();
+		// Main/UI owner only. One operation spans admission through restoration.
+		void PumpDeviceAndFileControls();
+		void RequestSessionLoad(std::wstring path);
+		void PickSessionForLoad();
+		bool ConsumePanelLoadRequest();
+		std::wstring TakeReadySessionLoad();
+		void FinishSessionLoad(bool replaced, const std::string& error = {});
+		void SetSessionSaveFolder(std::wstring folder) { _sessionSaveFolder = std::move(folder); }
+		void ReportFileStatus(const std::string& status);
 		void InitAudio(bool generatedRig = false,
-			const audio::AsioInventory* inventory = nullptr);
+			const audio::AsioInventory* inventory = nullptr, bool exactSelection = false);
 		const audio::AsioOpenReport& GetAsioOpenReport() const noexcept
 		{
 			return _audioEngine->GetAsioOpenReport();
@@ -194,7 +207,7 @@ namespace engine
 		{
 			std::scoped_lock midiLock(_midiLifecycleMutex);
 			_midiActive.store(false, std::memory_order_release);
-			_inputSubsystem->Close();
+			_inputSubsystem->CloseMidi();
 		}
 		void RequestMidiRefresh() noexcept { _midiRefreshRequested.store(true, std::memory_order_release); }
 		void InitSerial() {}
@@ -302,6 +315,14 @@ namespace engine
 		void _ApplyGlobalMidiQuantStateToAllLoopTakes();
 		void _ForceGlobalMidiQuantStateMixedOnLocalEdit();
 		void _JobLoop();
+		void _RebuildDevicePage();
+		void _SetAudioDraftFromStream(const audio::AudioStreamParams& params);
+		void _RequestSave(bool chooseFolder);
+		bool _CaptureIsBusy() const;
+		bool _SessionHasTakes() const;
+		bool _ValidateAudioDraft(std::string& error) const;
+		bool _FinishControlOperation(std::string* restorationError = nullptr);
+		void _ReconcileMidiDeviceRequestOnJob();
 		void _PumpMidi();
 		void _RefreshMidiIfNeeded();
 		void _ConfirmMidiConnectionChange(const midi::MidiConnectionResult& previous,
@@ -381,6 +402,56 @@ namespace engine
 			std::vector<std::string> ConnectedNames;
 		};
 		std::atomic<std::shared_ptr<const MidiState>> _midiState = std::make_shared<const MidiState>();
+		// UI lifecycle owner uses try_lock after trigger gate acknowledgement.
+		// Job holds this for its complete tick; callback never accesses it.
+		std::mutex _controlLifecycleMutex;
+		// UI publishes complete desired set; job exchanges/accepts it and publishes completion.
+		struct MidiDeviceRequest
+		{
+			std::uint64_t SceneId = 0u, OperationId = 0u;
+			std::vector<io::UserConfig::MidiSettings> Desired;
+		};
+		struct MidiDeviceCompletion
+		{
+			std::uint64_t SceneId = 0u, OperationId = 0u;
+			std::string Status;
+			bool Accepted = false, PreferencesSaved = false;
+			std::vector<io::UserConfig::MidiSettings> Desired;
+		};
+		std::atomic<std::shared_ptr<const MidiDeviceRequest>> _pendingMidiDeviceRequest;
+		std::atomic<std::shared_ptr<const MidiDeviceCompletion>> _completedMidiDeviceRequest;
+		std::atomic<bool> _controlAdmissionPending{false};
+		std::unique_lock<std::mutex> _controlWriterExclusion;
+		std::atomic<bool> _sessionReplacing{ false }; // UI writes; job reads; dies after join.
+		enum class ControlOperation { None, Audio, Midi, Save, Load };
+		ControlOperation _controlOperation = ControlOperation::None;
+		audio::AudioHost::QuiescenceState _controlPause{};
+		bool _controlPaused = false;
+		bool _controlInputClosed = false;
+		std::uint64_t _controlRevision = 0u;
+		std::uint64_t _controlOperationId = 0u;
+		inline static std::atomic<std::uint64_t> _nextSceneIdentity{1u};
+		const std::uint64_t _sceneIdentity = _nextSceneIdentity.fetch_add(1u);
+		// All remaining drafts, deadlines, widgets/results and paths are UI-only.
+		io::UserConfig::AudioSettings _audioDraft{};
+		DeviceSelectionSchedule _audioSchedule;
+		bool _audioStartRequested = false;
+		std::unordered_map<std::string, std::vector<unsigned int>> _acceptedBufferSizes;
+		audio::AsioInventory _deviceInventory;
+		std::vector<std::string> _audioChoiceNames;
+		std::shared_ptr<gui::GuiDropDown> _audioDeviceChoice;
+		std::array<std::shared_ptr<gui::GuiNumericInput>,4> _audioInputs;
+		std::shared_ptr<gui::GuiLabel> _deviceStatus, _activeAudioStatus, _fileStatus;
+		std::shared_ptr<gui::GuiButton> _saveButton, _loadButton;
+		std::vector<std::pair<std::string,std::shared_ptr<gui::GuiToggle>>> _midiChoices;
+		std::vector<std::shared_ptr<gui::GuiCommandReceiver>> _midiChoiceBindings;
+		std::vector<io::UserConfig::MidiSettings> _midiDraft;
+		std::optional<io::UserConfig::AudioSettings> _pendingAudioPersistence;
+		std::optional<std::vector<io::UserConfig::MidiSettings>> _pendingMidiPersistence;
+		bool _midiDraftPending = false, _devicePageDirty = true, _hardwarePersistencePending = false;
+		std::shared_ptr<const MidiState> _displayedMidiState;
+		std::wstring _sessionSaveFolder, _pendingSaveFolder, _pendingLoadPath;
+		bool _panelLoadRequested = false, _loadReady = false;
 		std::mutex _midiLifecycleMutex;
 		std::atomic<bool> _midiRefreshRequested{ false };
 		std::atomic<bool> _midiActive{ false };

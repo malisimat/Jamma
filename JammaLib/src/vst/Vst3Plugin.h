@@ -64,6 +64,7 @@ namespace vst
 		// Unload the plugin and release all resources.
 		// Do NOT call while ProcessBlock may be running.
 		void Unload() override;
+		bool ReconfigureAudioFormat(float sampleRate, unsigned int blockSize) override;
 
 		// Process numSamples of mono audio in-place.
 		// monoBuf is read and overwritten. Stereo plugin output is folded back to

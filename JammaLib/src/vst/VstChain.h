@@ -43,6 +43,12 @@ namespace vst
 		std::shared_ptr<IVstPlugin> GetPlugin(size_t index) const;
 
 		size_t NumPlugins() const noexcept { return _plugins.size(); }
+		bool ReconfigureAudioFormat(float sampleRate, unsigned int blockSize)
+		{
+			for (const auto& plugin : _plugins)
+				if (plugin && !plugin->ReconfigureAudioFormat(sampleRate, blockSize)) return false;
+			return true;
+		}
 
 		// Returns true if plugin is one of the instances held by this chain.
 		// Identity comparison only (never dereferences). Not RT-safe (walks the

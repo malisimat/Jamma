@@ -1,7 +1,12 @@
+#include <future>
+#include <thread>
+#include <algorithm>
 #include <unordered_set>
 
 #include "gtest/gtest.h"
 #include "midi/MidiDevice.h"
+#include "midi/MidiRouter.h"
+#include "io/UserConfig.h"
 
 using midi::MidiDevice;
 
@@ -110,4 +115,81 @@ TEST(MidiDevice, EnumeratesInputDevices) {
 	{
 		ASSERT_TRUE(ids.insert(d.DeviceId).second);
 	}
+}
+
+TEST(MidiDevice, PersistedDuplicateNamesNeverGuessAnEnumerationIndex) {
+	std::vector<midi::MidiInputDeviceInfo> ports{ { 2u, "Pad" }, { 5u, "Pad" } };
+	bool ambiguous = false;
+	EXPECT_EQ(nullptr, MidiDevice::SelectStartupInput(ports, "Pad", {}, 0u, false, ambiguous));
+	EXPECT_TRUE(ambiguous);
+	std::reverse(ports.begin(), ports.end());
+	EXPECT_EQ(nullptr, MidiDevice::SelectStartupInput(ports, "Pad", {}, 0u, false, ambiguous));
+	EXPECT_TRUE(ambiguous);
+	EXPECT_EQ("Pad", MidiDevice::ResolveSavedInputName("Pad 2", ports));
+	EXPECT_EQ(nullptr, MidiDevice::SelectStartupInput(ports,
+		MidiDevice::ResolveSavedInputName("Pad 2", ports), {}, 0u, false, ambiguous));
+}
+
+TEST(MidiDevice, ReconciliationRetainsAcceptedSelectionAcrossInventoryFailure) {
+	midi::MidiRouter router;
+	io::UserConfig config;
+	config.Midi.Devices = { { "Missing keys", true }, { "Disabled pad", false } };
+	midi::MidiClockAnchor clock;
+	midi::MidiInputInventory inventory;
+	const auto accepted = router.InitMidi(config, {}, clock, 48000u, &inventory);
+	ASSERT_TRUE(accepted.Accepted);
+	ASSERT_EQ(2u, accepted.Attempts.size());
+	EXPECT_EQ(midi::MidiConnectionStatus::Missing, accepted.Attempts[0].Status);
+	EXPECT_EQ(midi::MidiConnectionStatus::Disabled, accepted.Attempts[1].Status);
+	inventory.Error = "inventory unavailable";
+	config.Midi.Devices.clear();
+	const auto failed = router.InitMidi(config, {}, clock, 48000u, &inventory);
+	EXPECT_FALSE(failed.Accepted);
+	ASSERT_EQ(2u, failed.Attempts.size());
+	EXPECT_EQ("Missing keys", failed.Attempts[0].RequestedName);
+	EXPECT_EQ("inventory unavailable", failed.Inventory.Error);
+	router.SuspendMidiDispatch();
+	router.SuspendMidiDispatch();
+	router.ResumeMidiDispatch();
+	router.ResumeMidiDispatch();
+}
+
+TEST(MidiDevice, ReconciliationReportsAmbiguousWithoutOpeningEitherPort) {
+	midi::MidiRouter router;
+	io::UserConfig config;
+	config.Midi.Devices = { { "Pad", true } };
+	midi::MidiClockAnchor clock;
+	midi::MidiInputInventory inventory;
+	inventory.Devices = { { 2u, "Pad", "Pad 2" }, { 5u, "Pad", "Pad 5" } };
+	const auto result = router.InitMidi(config, {}, clock, 48000u, &inventory);
+	ASSERT_TRUE(result.Accepted);
+	ASSERT_EQ(1u, result.Attempts.size());
+	EXPECT_EQ(midi::MidiConnectionStatus::Ambiguous, result.Attempts[0].Status);
+	EXPECT_TRUE(result.Connected.empty());
+}
+
+namespace midi
+{
+	class MidiDeviceCallbackTestAccess
+	{
+	public:
+		static void OpenGate(MidiDevice& device) { device._callbackState.store(0u); }
+		static bool Enter(MidiDevice& device) { return device.TryEnterCallback(); }
+		static void Leave(MidiDevice& device) { device.LeaveCallback(); }
+		static bool Closed(MidiDevice& device) { return (device._callbackState.load() & MidiDevice::CallbackClosed) != 0u; }
+	};
+}
+TEST(MidiDeviceTests, CallbackCloseSharesAdmissionWordAndDrainsReader)
+{
+	midi::MidiDevice device;
+	midi::MidiDeviceCallbackTestAccess::OpenGate(device);
+	ASSERT_TRUE(midi::MidiDeviceCallbackTestAccess::Enter(device));
+	auto suspended = std::async(std::launch::async, [&] {device.SuspendCallbacks();});
+	while (!midi::MidiDeviceCallbackTestAccess::Closed(device)) std::this_thread::yield();
+	EXPECT_FALSE(midi::MidiDeviceCallbackTestAccess::Enter(device));
+	EXPECT_EQ(suspended.wait_for(std::chrono::milliseconds(0)), std::future_status::timeout);
+	midi::MidiDeviceCallbackTestAccess::Leave(device);
+	EXPECT_EQ(suspended.wait_for(std::chrono::seconds(1)), std::future_status::ready);
+	suspended.get();
+	EXPECT_FALSE(midi::MidiDeviceCallbackTestAccess::Enter(device));
 }

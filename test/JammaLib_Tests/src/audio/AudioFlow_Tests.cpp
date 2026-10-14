@@ -2,6 +2,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <thread>
 #include "gtest/gtest.h"
 #include "resources/ResourceLib.h"
 #include "engine/Station.h"
@@ -1323,6 +1324,8 @@ namespace audio
 	class AudioHostRealtimeTestAccess
 	{
 	public:
+		static bool Enter(AudioHost& host) noexcept { return host.TryEnterCallback(); }
+		static void Leave(AudioHost& host) noexcept { host.LeaveCallback(); }
 		static void Prepare(AudioHost& host,
 			std::shared_ptr<const std::vector<std::shared_ptr<Station>>> stations,
 			const AudioStreamParams& params)
@@ -1381,6 +1384,49 @@ namespace audio
 			return scene._audioEngine->AudioStationsForCallback().size();
 		}
 	};
+}
+
+TEST(AudioHostInputMeter, EightChannelInterleavedCaptureReportsPhysicalInputPeaks)
+{
+	audio::AudioHost host(io::UserConfig{});
+	const audio::AudioStreamParams params{ "Focusrite USB ASIO", 44100u, 2u, 64u, 0u, 0u, 8u, 8u };
+	auto stations = std::make_shared<const std::vector<std::shared_ptr<Station>>>();
+	audio::AudioHostRealtimeTestAccess::Prepare(host, stations, params);
+	std::array<float, 64u * 8u> input{};
+	std::array<float, 64u * 8u> output{};
+	input[3u * 8u] = -0.5f; // Physical input 1.
+	input[7u * 8u + 1u] = 0.25f; // Physical input 2.
+	ASSERT_EQ(0, audio::AudioHostRealtimeTestAccess::InvokeCallback(host, output.data(), input.data(), 64u));
+	EXPECT_FLOAT_EQ(0.5f, host.GetAdcPeak(0u));
+	EXPECT_FLOAT_EQ(0.25f, host.GetAdcPeak(1u));
+	for (unsigned int channel = 2u; channel < 8u; ++channel)
+		EXPECT_FLOAT_EQ(0.0f, host.GetAdcPeak(channel));
+}
+
+TEST(AudioHostQuiescence, AdmissionClosesAndDrainsExistingCallback)
+{
+	audio::AudioHost host(io::UserConfig{});
+	ASSERT_TRUE(audio::AudioHostRealtimeTestAccess::Enter(host));
+	host.CloseCallbackAdmission();
+	EXPECT_FALSE(host.CallbackAdmissionIsQuiescent());
+	EXPECT_FALSE(audio::AudioHostRealtimeTestAccess::Enter(host));
+	std::atomic_bool started{false}, completed{false};
+	audio::AudioHost::QuiescenceState state;
+	std::string error;
+	std::thread owner([&] {
+		started.store(true, std::memory_order_release);
+		EXPECT_TRUE(host.BeginQuiescence(state, error));
+		completed.store(true, std::memory_order_release);
+	});
+	while (!started.load(std::memory_order_acquire)) std::this_thread::yield();
+	EXPECT_FALSE(completed.load(std::memory_order_acquire));
+	audio::AudioHostRealtimeTestAccess::Leave(host);
+	owner.join();
+	EXPECT_TRUE(completed.load(std::memory_order_acquire));
+	EXPECT_TRUE(host.CallbackAdmissionIsQuiescent());
+	EXPECT_FALSE(state.AdmissionWasOpen);
+	EXPECT_TRUE(host.EndQuiescence(state, error));
+	EXPECT_TRUE(host.CallbackAdmissionIsQuiescent());
 }
 
 class AudioCallbackAllocationProbe

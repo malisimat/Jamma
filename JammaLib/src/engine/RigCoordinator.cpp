@@ -360,3 +360,25 @@ void RigCoordinator::ReleaseAfterReadersStopped()
 	_stationDescriptors.clear();
 	_availableMidiDevices.clear();
 }
+
+bool RigCoordinator::MergeHardwarePreferences(const std::optional<io::UserConfig::AudioSettings>& audio,
+	const std::optional<std::vector<io::UserConfig::MidiSettings>>& midi)
+{
+	// Caller excludes job and callback writers; merging the latest accepted value
+	// preserves unrelated rig edits and does not replace Trigger identities.
+	if (!EditsEnabled() || _shuttingDown.load(std::memory_order_acquire)) return false;
+	const auto accepted = Accepted();
+	if (!accepted) return false;
+	auto rig = accepted->Rig;
+	if (audio) rig.User.Audio = *audio;
+	if (midi) rig.User.Midi.Devices = *midi;
+	// Rebuild from immutable descriptors; never copy mutable route vectors that
+	// a callback may still be swapping while consuming an older publication.
+	auto updated = _BuildSnapshot(accepted->Revision, rig, _stationDescriptors, _stations,
+		_availableAdcChannels, _availableMidiDevices, _triggerParams, accepted);
+	if (!updated) return false;
+	_accepted.store(updated, std::memory_order_release);
+	std::scoped_lock lock(_retiringMutex);
+	_retiring.push_back(accepted);
+	return true;
+}

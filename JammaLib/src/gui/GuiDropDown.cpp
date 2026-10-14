@@ -279,7 +279,7 @@ void GuiDropDown::_Select(int index, bool notify)
 
 	if (notify)
 	{
-		if (auto receiver = _receiver.lock())
+		if (auto receiver = GetReceiver() ? GetReceiver() : _receiver.lock())
 		{
 			GuiAction action;
 			action.Index = _index;

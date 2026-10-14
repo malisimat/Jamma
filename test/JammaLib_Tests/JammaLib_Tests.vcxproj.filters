@@ -35,7 +35,8 @@
     <ClCompile Include="src\audio\BufferBank_Tests.cpp">
       <Filter>src\audio</Filter>
     </ClCompile>
-    <ClCompile Include="src\engine\JobAction_Tests.cpp">
+    <ClCompile Include="src\engine\DeviceSelectionSchedule_Tests.cpp"><Filter>src\engine</Filter></ClCompile>
+	<ClCompile Include="src\engine\JobAction_Tests.cpp">
       <Filter>src\engine</Filter>
     </ClCompile>
     <ClCompile Include="src\engine\FlipBuffer_Tests.cpp">

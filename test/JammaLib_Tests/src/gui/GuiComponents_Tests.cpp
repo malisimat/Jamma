@@ -1492,3 +1492,20 @@ TEST_F(GuiSceneSettingsTests, SelectionDepthReachesSceneFromTopPanel)
 		EXPECT_EQ(static_cast<unsigned int>(depth), Scene->SelectionDepth());
 	}
 }
+
+TEST(GuiNumericInput, HardwareInputsRejectFractionAndOverflowRatherThanCoerce)
+{
+	GuiNumericInputParams params;
+	params.Min = 1.0; params.Max = 4294967295.0; params.InitValue = 256.0; params.Decimals = 0;
+	params.IntegerOnly = true; params.RejectOutOfRange = true;
+	int invalid = 0; params.OnInvalidValue = [&] { ++invalid; };
+	auto input = std::make_shared<GuiNumericInput>(params);
+	ASSERT_TRUE(input->RequestFocus());
+	input->SetText("4294967296", false); input->OnAction(MakeKey(0x0D));
+	EXPECT_DOUBLE_EQ(input->Value(), 256.0);
+	input->SetText("64.5", false); input->OnAction(MakeKey(0x0D));
+	EXPECT_DOUBLE_EQ(input->Value(), 256.0);
+	input->SetText("512", false); input->OnAction(MakeKey(0x0D));
+	EXPECT_DOUBLE_EQ(input->Value(), 512.0);
+	EXPECT_EQ(invalid, 2);
+}

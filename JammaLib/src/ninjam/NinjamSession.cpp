@@ -542,6 +542,7 @@ void NinjamSession::SetAudioFormat(unsigned int sampleRate,
 	unsigned int inLatencySamps,
 	unsigned int outLatencySamps)
 {
+	const bool sampleRateChanged = _audioSampleRate != sampleRate;
 	_audioSampleRate = sampleRate;
 	_audioBlockSize = blockSize;
 	_audioNumInputChannels = numInputChannels;
@@ -552,6 +553,8 @@ void NinjamSession::SetAudioFormat(unsigned int sampleRate,
 	NinjamConnectionUse conn(*this);
 	if (conn)
 		conn->SetAudioFormat(sampleRate, blockSize, numInputChannels, numOutputChannels, inLatencySamps, outLatencySamps);
+	// Existing session-epoch ownership invalidates old sample-unit observations.
+	if (sampleRateChanged) _forceUnavailableEdge.store(true, std::memory_order_release);
 }
 
 NinjamRemoteTiming NinjamSession::ProcessExportBlock(const float* interleavedDacOutput,

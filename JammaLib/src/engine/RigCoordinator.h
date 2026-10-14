@@ -32,6 +32,8 @@ namespace engine
 			const std::vector<std::string>& availableMidiDevices,
 			const TriggerParams& triggerParams,
 			const PersistRig& persistMigration);
+		bool MergeHardwarePreferences(const std::optional<io::UserConfig::AudioSettings>& audio,
+			const std::optional<std::vector<io::UserConfig::MidiSettings>>& midi);
 		EditResult SubmitCandidate(const io::RigFile& candidateRig);
 		// Refresh source availability after the audio stream and MIDI inputs actually open.
 		SnapshotPtr RefreshRuntimeAvailability(unsigned int availableAdcChannels,

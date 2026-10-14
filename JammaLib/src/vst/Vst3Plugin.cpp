@@ -1486,6 +1486,32 @@ bool Vst3Plugin::Load(const std::wstring& path,
 #endif
 }
 
+bool Vst3Plugin::ReconfigureAudioFormat(float sampleRate, unsigned int blockSize)
+{
+#ifdef JAMMA_VST3_ENABLED
+	if (!_impl || !_impl->processor || !_impl->component) return true;
+	using namespace Steinberg;
+	using namespace Steinberg::Vst;
+	_isActivated.store(false, std::memory_order_release);
+	if (_impl->processorProcessing && _impl->processor->setProcessing(false) != kResultOk) return false;
+	_impl->processorProcessing = false;
+	if (_impl->componentActive && _impl->component->setActive(false) != kResultOk) return false;
+	_impl->componentActive = false;
+	ProcessSetup setup{};
+	setup.processMode = kRealtime;
+	setup.symbolicSampleSize = kSample32;
+	setup.maxSamplesPerBlock = static_cast<int32>(blockSize);
+	setup.sampleRate = sampleRate;
+	if (_impl->processor->setupProcessing(setup) != kResultOk) return false;
+	if (_impl->component->setActive(true) != kResultOk) return false;
+	_impl->componentActive = true;
+	if (_impl->processor->setProcessing(true) != kResultOk) return false;
+	_impl->processorProcessing = true;
+	_isActivated.store(true, std::memory_order_release);
+#endif
+	return true;
+}
+
 void Vst3Plugin::Unload()
 {
 #ifdef JAMMA_VST3_ENABLED

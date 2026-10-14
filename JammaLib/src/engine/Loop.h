@@ -315,6 +315,7 @@ namespace engine
 
 		// Non-RT accessor to retrieve a loaded plugin instance (or nullptr).
 		std::shared_ptr<vst::IVstPlugin> GetVstPlugin(size_t index) const;
+		bool ReconfigureVstFormat(float sampleRate, unsigned int blockSize);
 
 		// Job-owner compensation setup; polling/configuration may allocate or
 		// dispatch to a controller. Clear is callback-only and constant time.
