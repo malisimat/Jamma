@@ -1,5 +1,7 @@
 #include "Skybox.h"
 #include "GlDeleteQueue.h"
+#include <cmath>
+#include <glm/gtc/matrix_transform.hpp>
 #include <gl/glew.h>
 #include <gl/gl.h>
 
@@ -59,6 +61,17 @@ void Skybox::InitResources(ResourceLib& resourceLib, bool forceInit)
 		valid = _InitVertexArray();
 
 	_initialised = valid;
+}
+
+glm::mat4 Skybox::AnimationTransform(float elapsedSeconds) noexcept
+{
+	auto yaw   = glm::radians(2.0f * std::sin(0.047f * elapsedSeconds) + 1.5f * std::sin(0.031f * elapsedSeconds + 1.1f));
+	auto pitch = glm::radians(1.5f * std::sin(0.053f * elapsedSeconds + 2.3f) + 1.0f * std::sin(0.019f * elapsedSeconds + 0.7f));
+	auto roll  = glm::radians(0.8f * std::sin(0.037f * elapsedSeconds + 1.8f));
+	auto R = glm::rotate(glm::mat4(1.0f), yaw,   glm::vec3(0.0f, 1.0f, 0.0f));
+	R = glm::rotate(R, pitch, glm::vec3(1.0f, 0.0f, 0.0f));
+	R = glm::rotate(R, roll,  glm::vec3(0.0f, 0.0f, 1.0f));
+	return R;
 }
 
 void Skybox::Draw(GlDrawContext& ctx)

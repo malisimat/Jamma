@@ -39,21 +39,24 @@ NinjamMetronomeTimingResult NinjamMetronomeTiming::Compute(const NinjamMetronome
 	// The interval is the authoritative remote timing geometry applied to local
 	// loops.  Derive every beat from it rather than from the separately reported
 	// BPM, which can briefly be stale while the server applies a tempo change.
-	const auto phaseStart = static_cast<std::uint64_t>(input.IntervalPositionSamps)
-		+ input.OutputLatencySamps;
+	const auto phaseStart = static_cast<std::uint64_t>(input.IntervalPositionSamps);
 	const auto phaseEnd = phaseStart + input.NumFrames - 1u;
 	const auto intervalLength = static_cast<std::uint64_t>(input.IntervalLengthSamps);
 	const auto bpi = static_cast<std::uint64_t>(input.Bpi);
 
 	const auto addBeatOnsets = [&result, phaseStart, phaseEnd, intervalLength, bpi]() {
-		auto beat = (phaseStart * bpi + intervalLength - 1u) / intervalLength;
+		// Match the rounded rational boundaries used by MIDI quantisation.
+		// Begin with the preceding rational beat so a rounded onset exactly
+		// at block start is neither skipped nor emitted in two adjacent blocks.
+		auto beat = phaseStart * bpi / intervalLength;
 		while (result.OnsetCount < NinjamMetronomeTimingResult::MaxOnsets)
 		{
-			const auto boundary = (beat * intervalLength) / bpi;
+			const auto boundary = (beat * intervalLength + bpi / 2u) / bpi;
 			if (boundary > phaseEnd)
 				break;
-			result.Onsets[result.OnsetCount++] = {
-				static_cast<unsigned int>(boundary - phaseStart), false };
+			if (boundary >= phaseStart)
+				result.Onsets[result.OnsetCount++] = {
+					static_cast<unsigned int>(boundary - phaseStart), false };
 			++beat;
 		}
 	};

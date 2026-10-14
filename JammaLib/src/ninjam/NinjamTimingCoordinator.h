@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <optional>
 #include "NinjamTiming.h"
+#include "NinjamTempoProposal.h"
 #include "NinjamTimingTracker.h"
 #include "NinjamAudioTimingCommand.h"
 #include "../engine/QuantisationTiming.h"
@@ -48,19 +49,6 @@ namespace ninjam
 		Expired
 	};
 
-	struct NinjamTempoChange
-	{
-		unsigned int RemoteMasterIntervalLengthSamps = 0u;
-		unsigned int SourceSampleRate = 0u;
-		unsigned int RemoteGridStepSamps = 0u;
-		float Bpm = 0.0f;
-		unsigned int Bpi = 0u;
-		unsigned int IntervalPositionSamps = 0u;
-		std::uint64_t RemotePhaseDeviceSample = 0u;
-
-		bool HasSameProposalIdentity(const NinjamTempoChange& other) const noexcept;
-	};
-
 	struct NinjamTempoRequest
 	{
 		float Bpm = 0.0f;
@@ -81,6 +69,7 @@ namespace ninjam
 	struct NinjamRemoteGridPublication
 	{
 		engine::RemoteTransportGeometry Geometry;
+		// Origin on the musical transport ruler, not the device sample counter.
 		std::int64_t OriginSamps = 0;
 	};
 
@@ -124,6 +113,12 @@ namespace ninjam
 		DesiredApplied,
 		DesiredApplyLag,
 		DesiredApplyCaughtUp,
+		RemoteGeometryGeneration,
+		TempoAutoAcceptEmpty,
+		TempoAutoAcceptOptions,
+		TempoResumeAccepted,
+		TempoPromptGeneration,
+		TempoRequestDeadline,
 		Count
 	};
 
@@ -218,9 +213,15 @@ namespace ninjam
 			utils::Timer& clock,
 			std::chrono::steady_clock::time_point now = std::chrono::steady_clock::now());
 		std::optional<NinjamTempoChange> PendingTempoChange() const { return _pendingTempoChange; }
+		std::optional<NinjamTempoProposal> PendingTempoProposal() const;
+		NinjamTimingUpdate ResolveTempoDecision(const NinjamTempoDecision& decision,
+			const std::optional<engine::QuantisationTiming>& localTiming, utils::Timer& clock,
+			std::chrono::steady_clock::time_point now = std::chrono::steady_clock::now());
+		// Immediate coordinator-local resolution; UI callers must use the token API.
 		NinjamTimingUpdate ResolveTempoChange(bool accept,
 			const std::optional<engine::QuantisationTiming>& localTiming,
-			utils::Timer& clock);
+			utils::Timer& clock,
+			std::chrono::steady_clock::time_point now = std::chrono::steady_clock::now());
 		// Feedback from the network layer after attempting to deliver a tempo
 		// request. A failed send returns the request to Queued so the next interval
 		// boundary re-sends it; success leaves it awaiting server acknowledgement.
@@ -235,17 +236,19 @@ namespace ninjam
 		NinjamTimingDiagnostics Diagnostics() const noexcept;
 		static const char* DiagnosticReasonName(NinjamTimingDiagnosticReason reason) noexcept;
 		static const char* FollowPolicyName(NinjamLocalFollowPolicy policy) noexcept;
+		static const char* NoSyncReasonName(NinjamNoSyncReason reason) noexcept;
 		static NinjamLocalFollowPolicy SelectLocalFollowPolicy(
 			const std::optional<engine::QuantisationTiming>& localTiming,
 			float remoteBpm) noexcept;
 
 	private:
+		void _SetPendingTempoChange(const NinjamTempoChange& change);
 		static bool _MatchesRequest(const NinjamTiming& timing,
 			const engine::QuantisationTiming& request) noexcept;
 		static std::optional<NinjamTempoChange> _MakeProposal(const NinjamTiming& timing) noexcept;
 		NinjamTimingUpdate _AcceptTempoChange(const NinjamTempoChange& change,
 			const std::optional<engine::QuantisationTiming>& localTiming,
-			utils::Timer& clock);
+			utils::Timer& clock, std::chrono::steady_clock::time_point now);
 		NinjamTimingUpdate _PublishRemoteDesired(const NinjamTempoChange& change,
 			NinjamLocalFollowPolicy policy, NinjamDesiredTimingIntent intent,
 			bool remoteGridChanged) noexcept;
@@ -267,6 +270,8 @@ namespace ninjam
 			std::uint64_t appliedSessionEpoch = 0u) noexcept;
 		NinjamTimingTracker _tracker;
 		NinjamTempoJoinOptions _options{};
+		// Serialized by the service mutex; never reset revisions across reconnects.
+		std::uint64_t _tempoProposalRevision = 0u;
 		std::optional<NinjamTempoChange> _pendingTempoChange;
 		std::optional<NinjamTempoChange> _ignoredTempoChange;
 		std::optional<NinjamTempoChange> _latestObservedTempoChange;
@@ -287,7 +292,7 @@ namespace ninjam
 		bool _noSyncActive = false;
 		NinjamNoSyncReason _lastNoSyncReason = NinjamNoSyncReason::None;
 		std::uint64_t _sessionEpoch = 0u;
-		std::optional<std::chrono::steady_clock::time_point> _lastValidObservationAt;
+		std::optional<std::chrono::steady_clock::time_point> _lastTimingAuthorityRefreshAt;
 		std::optional<std::uint64_t> _lastRemotePhaseDeviceSample;
 		std::uint64_t _lastDiagnosticAppliedSessionEpoch = 0u;
 		std::uint64_t _lastDiagnosticAppliedVersion = 0u;

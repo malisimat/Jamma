@@ -420,7 +420,12 @@ void NinjamSession::Start(const io::JamFile::NinjamConfig& config)
 	_forceUnavailableEdge.store(true, std::memory_order_release);
 
 	if (config.Host.empty() || config.User.empty())
+	{
+		std::cout << "[NINJAM] Connection failed: "
+			<< (config.Host.empty() ? "Host not configured" : "Username not configured")
+			<< std::endl;
 		return;
+	}
 
 	auto conn = std::make_unique<NinjamConnection>(
 		config.Host, config.User, config.Pass, config.WorkDir);
@@ -436,7 +441,10 @@ void NinjamSession::Start(const io::JamFile::NinjamConfig& config)
 	std::cout << "[NINJAM] Auto-connect enabled from JAM config" << std::endl;
 	std::cout << "[NINJAM] Type a message and press Enter to chat" << std::endl;
 
-	conn->Connect();
+	if (!conn->Connect())
+	{
+		std::cout << "[NINJAM] Connection failed: " << conn->LastError() << std::endl;
+	}
 
 	{
 		std::scoped_lock lifecycleLock(_lifecycleMutex);

@@ -276,6 +276,103 @@ TEST(GuiPopup, ConfirmationButtonsArePackedAtTheLowerRightAndDispatch) {
 	EXPECT_EQ(1u, receiver->LastAction->Index);
 }
 
+
+TEST(GuiPopup, RequiredPressRejectsAnotherPointerRelease) {
+	auto popup = std::make_shared<GuiPopup>();
+	popup->ConfigureButtons({ { { "Follow server", 1u } }, true });
+	auto receiver = std::make_shared<GuiRecordingActionReceiver>();
+	popup->SetButtonReceiver(receiver);
+	const auto button = popup->TryGetChild(4u);
+	ASSERT_TRUE(button);
+	const auto point = button->Position() + utils::Position2d{ 10, 10 };
+	auto down = MakeTouch(TouchAction::TOUCH_DOWN, point);
+	down.Touch = TouchAction::TOUCH_FINGER;
+	down.Index = 1;
+	popup->OnAction(down);
+	auto up = down;
+	up.State = TouchAction::TOUCH_UP;
+	up.Index = 2;
+	popup->OnAction(up);
+	EXPECT_EQ(0, receiver->ActionCount);
+	up.Index = 1;
+	popup->OnAction(up);
+	EXPECT_EQ(1, receiver->ActionCount);
+}
+
+TEST(GuiPopupManager, InterruptedRequiredPressCannotConfirmOnLaterRelease) {
+	GuiPopupManager host;
+	auto popup = std::make_shared<GuiPopup>();
+	popup->ConfigureButtons({ { { "Follow server", 1u } }, true });
+	auto receiver = std::make_shared<GuiRecordingActionReceiver>();
+	popup->SetButtonReceiver(receiver);
+	const auto button = popup->TryGetChild(4u);
+	ASSERT_TRUE(button);
+	const auto point = popup->Position() + button->Position() + utils::Position2d{ 10, 10 };
+	host.Open(popup);
+	host.OnAction(MakeTouch(TouchAction::TOUCH_DOWN, point));
+	host.OnAction(MakeTouch(TouchAction::TOUCH_UP, { -1, -1 }));
+	host.OnAction(MakeTouch(TouchAction::TOUCH_UP, point));
+	EXPECT_EQ(0, receiver->ActionCount);
+
+	host.OnAction(MakeTouch(TouchAction::TOUCH_DOWN, point));
+	host.Open(std::make_shared<GuiPopup>());
+	host.Close();
+	host.OnAction(MakeTouch(TouchAction::TOUCH_UP, point));
+	EXPECT_EQ(0, receiver->ActionCount);
+
+	host.OnAction(MakeTouch(TouchAction::TOUCH_DOWN, point));
+	host.OnAction(MakeTouch(TouchAction::TOUCH_UP, point));
+	EXPECT_EQ(1, receiver->ActionCount);
+}
+
+
+TEST(GuiPopupManager, ReleaseOverAnotherButtonDisarmsRequiredPress) {
+	GuiPopupManager host;
+	auto popup = std::make_shared<GuiPopup>();
+	popup->ConfigureButtons({ { { "Cancel", 2u }, { "Follow server", 1u } }, true });
+	auto receiver = std::make_shared<GuiRecordingActionReceiver>();
+	popup->SetButtonReceiver(receiver);
+	const auto cancel = popup->TryGetChild(4u);
+	const auto follow = popup->TryGetChild(5u);
+	ASSERT_TRUE(cancel);
+	ASSERT_TRUE(follow);
+	const auto cancelPoint = popup->Position() + cancel->Position() + utils::Position2d{ 10, 10 };
+	const auto followPoint = popup->Position() + follow->Position() + utils::Position2d{ 10, 10 };
+	host.Open(popup);
+	host.OnAction(MakeTouch(TouchAction::TOUCH_DOWN, cancelPoint));
+	host.OnAction(MakeTouch(TouchAction::TOUCH_UP, followPoint));
+	host.OnAction(MakeTouch(TouchAction::TOUCH_UP, cancelPoint));
+	EXPECT_EQ(0, receiver->ActionCount);
+	host.OnAction(MakeTouch(TouchAction::TOUCH_DOWN, followPoint));
+	host.OnAction(MakeTouch(TouchAction::TOUCH_UP, followPoint));
+	EXPECT_EQ(1, receiver->ActionCount);
+}
+
+
+TEST(GuiPopupManager, MouseCaptureLossDisarmsRequiredPress) {
+	GuiPopupManager host;
+	auto popup = std::make_shared<GuiPopup>();
+	popup->ConfigureButtons({ { { "Follow server", 1u } }, true });
+	auto receiver = std::make_shared<GuiRecordingActionReceiver>();
+	popup->SetButtonReceiver(receiver);
+	const auto button = popup->TryGetChild(4u);
+	ASSERT_TRUE(button);
+	const auto point = popup->Position() + button->Position() + utils::Position2d{ 10, 10 };
+	host.Open(popup);
+	host.OnAction(MakeTouch(TouchAction::TOUCH_DOWN, point));
+	auto move = MakeTouchMove(point);
+	move.MouseButtonsDown = 0u;
+	host.OnAction(move);
+	host.OnAction(MakeTouch(TouchAction::TOUCH_UP, point));
+	EXPECT_EQ(0, receiver->ActionCount);
+
+	host.OnAction(MakeTouch(TouchAction::TOUCH_DOWN, point));
+	move.MouseButtonsDown = 1u;
+	host.OnAction(move);
+	host.OnAction(MakeTouch(TouchAction::TOUCH_UP, point));
+	EXPECT_EQ(1, receiver->ActionCount);
+}
+
 TEST(GuiPopup, FitsViewportAndKeepsContentAndActionsInsideAfterResize)
 {
 	auto popup = std::make_shared<GuiPopup>();
@@ -1236,12 +1333,12 @@ public:
 	GuiSettingsOwnerScene() : Scene(engine::SceneParams({ "" }, {}, { 800u, 600u }), io::UserConfig{}) {}
 	std::shared_ptr<gui::GuiMainPanel> Settings() const { return _mainPanel; }
 	std::shared_ptr<gui::GuiMainPanel> Selection() const { return _selectionPanel; }
-	std::shared_ptr<gui::GuiNumericInput> Channel() const { return _midiChannelOverrideInput; }
-	std::shared_ptr<gui::GuiNumericInput> Phase() const { return _transportOffsetInput; }
-	std::shared_ptr<gui::GuiToggle> Click() const { return _ninjamMetronomeToggle; }
-	std::shared_ptr<gui::GuiRadio> Quantisation() const { return _globalMidiQuantRadio; }
-	std::shared_ptr<gui::GuiRadio> Depth() const { return _modeRadio; }
-	std::shared_ptr<gui::GuiRadio> Subdivision() const { return _midiSubdivisionRadio; }
+	std::shared_ptr<gui::GuiNumericInput> Channel() const { return _settingsControls->Channel(); }
+	std::shared_ptr<gui::GuiNumericInput> Phase() const { return _settingsControls->Offset(); }
+	std::shared_ptr<gui::GuiToggle> Click() const { return _settingsControls->Metronome(); }
+	std::shared_ptr<gui::GuiRadio> Quantisation() const { return _settingsControls->GlobalQuantisation(); }
+	std::shared_ptr<gui::GuiRadio> Depth() const { return _settingsControls->Mode(); }
+	std::shared_ptr<gui::GuiRadio> Subdivision() const { return _settingsControls->Subdivision(); }
 	void SetFrozenTapClock()
 	{
 		auto clock = std::make_shared<utils::Timer>();

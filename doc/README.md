@@ -5,6 +5,7 @@
 - [Build and Test Guide](build.md)
 - [Performance Console](performance-console.md)
 - [Real-Time Audio Guidance](realtime-audio.md)
+- [Jamma Concepts and Glossary](glossary.md)
 - [Loop Grid Editor](loop-grid-editor.md)
 - [Multi-Device MIDI Trigger Rig Configuration](midi-trigger-mapping.md)
 - [Ninjam Integration Guide](ninjam.md)
@@ -13,18 +14,21 @@
 ## Project Structure
 
 - `Jamma`: Application shell, startup, and top-level wiring.
-- `JammaLib`: Engine, loop model, audio behavior, rendering/audio support layers.
+- `JammaLib`: Engine, loop model, audio behavior, rendering/audio support layers, and domain-specific orchestration collaborators.
 - `test/JammaLib_Tests`: Native GoogleTest coverage for engine/audio behavior.
 
 ## Core Domain Model
 
 The looping model is hierarchical:
 
-- `Station`: Top-level loop station state and coordination.
+- `Scene`: Session composition, subsystem lifecycle, and cross-subsystem coordination.
+- `Station`: Top-level performance/mixing channel and coordination.
 - `LoopTake`: A take/layer grouping within a station.
 - `Loop`: Underlying sample data and playback/record behavior.
 
-This structure helps isolate responsibilities while keeping composition simple.
+`Scene` coordinates these owners without taking over their audio-block,
+per-entity, or persistence responsibilities. The [glossary](glossary.md)
+defines the ownership boundaries and terms used throughout the codebase.
 
 ## High-Level Architecture
 

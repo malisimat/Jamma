@@ -61,7 +61,9 @@ namespace ninjam
 	// query and the periodic snapshot so a placeholder tempo the snapshot rejects
 	// cannot slip through the live path (§2.9). Bounds default to the plausible
 	// NINJAM tempo range (mirrors constants::*PlausibleNinjam*); callers may pass
-	// tighter values. Kept self-contained so the test project (which does not add
+	// tighter values. Interval must agree with BPM/BPI/sample rate within one
+	// sample per beat, allowing integer beat rounding but rejecting startup rulers.
+	// Kept self-contained so the test project (which does not add
 	// JammaLib\include to its search path) can include this header freely.
 	bool IsValidRemoteTiming(unsigned int intervalLengthSamps,
 		unsigned int sourceSampleRate,

@@ -446,7 +446,7 @@ public:
 	bool CtrlOverlayActiveForTest() const { return _quantisationInteraction.EditModeActive(); }
 	float GridAlphaForTest() const { return _quantisation.OverlayAlpha(Timer::GetTime()); }
 	void ClearGridForTest() { _quantisation.ClearOverlay(); }
-	void FocusTextForTest() { _focusManager.RequestFocus(_midiChannelOverrideInput); }
+	void FocusTextForTest() { _focusManager.RequestFocus(_settingsControls->Channel()); }
 	void ClearTextFocusForTest() { _focusManager.ClearFocus(); }
 	glm::vec3 EditorProbeEyeLocalForTest() const { return _loopEditor.ProbeEyeLocal(); }
 

@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <functional>
 #include <memory>
 #include <string>
@@ -87,6 +88,13 @@ namespace gui
 		void SetCableRevealHeld(bool held);
 		void SetAudioInputPeak(unsigned int channel, float peak, unsigned int numSamps);
 		void SetMidiInputPeak(unsigned int input, float peak, unsigned int numSamps);
+		// Off-callback producers publish complete, latest-substitutable presentation data.
+		void PublishRoutingConfig(unsigned int audioInputCount,
+			std::vector<std::string> midiInputNames,
+			std::shared_ptr<const engine::RigSnapshot> routing);
+		// UI thread only, before resource traversal and meter updates.
+		bool ApplyPendingRoutingConfig();
+		// UI thread only (or initial setup before UI use).
 		void SetRoutingConfig(unsigned int audioInputCount,
 			std::vector<std::string> midiInputNames,
 			const engine::RigSnapshot& routing);
@@ -209,6 +217,18 @@ namespace gui
 		};
 
 
+		struct RoutingPresentation
+		{
+			unsigned int AudioInputCount;
+			std::vector<std::string> MidiInputNames;
+			std::shared_ptr<const engine::RigSnapshot> Routing;
+		};
+		// Job/UI producers are serialized by Scene::_sceneMutex; UI consumes by exchange.
+		// Pending updates coalesce, retaining immutable rig topology until consumption.
+		// No callback access. Scene joins its job thread before HUD destruction, which
+		// releases any unconsumed publication on the UI thread. All widgets remain UI-owned.
+		std::atomic<std::shared_ptr<const RoutingPresentation>> _pendingRoutingPresentation;
+
 		std::shared_ptr<GuiPanel> _topStrip;
 		std::shared_ptr<GuiPanel> _topStripBorder;
 		std::shared_ptr<GuiStackPanel> _topSourceRow;
@@ -226,7 +246,7 @@ namespace gui
 		std::string _quantisationFeedback;
 		float _editModeAlpha = 0.0f;
 		std::shared_ptr<GuiPopup> _deletePopup;
-		// UI-owned read-only identity popup. Rig/job rebuilds do not mutate it;
+		// UI-owned read-only identity popup. Routing rebuilds do not mutate it;
 		// resize and resource work stay on the existing UI/render paths.
 		std::shared_ptr<GuiPanel> _sourceInfoPanel;
 		std::shared_ptr<GuiScrollPanel> _sourceInfoScroll;

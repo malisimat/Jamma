@@ -11,6 +11,9 @@ void GuiPopupManager::Open(std::shared_ptr<GuiElement> element,
 	if (!element)
 		return;
 
+	// Covering a popup interrupts any gesture that began on its buttons.
+	if (auto top = Top()) top->ClearPointerState();
+
 	// Clear the owner's pointer state before the popup captures input.
 	if (owner)
 	{
@@ -26,11 +29,25 @@ void GuiPopupManager::Open(std::shared_ptr<GuiElement> element,
 void GuiPopupManager::Close()
 {
 	if (!_popups.empty())
+	{
+		_popups.back().Element->ClearPointerState();
 		_popups.pop_back();
+	}
+}
+
+void GuiPopupManager::Close(const std::shared_ptr<GuiElement>& element)
+{
+	if (!element) return;
+	std::erase_if(_popups, [&element](const auto& popup) {
+		if (popup.Element != element) return false;
+		popup.Element->ClearPointerState();
+		return true;
+	});
 }
 
 void GuiPopupManager::CloseAll()
 {
+	for (const auto& popup : _popups) popup.Element->ClearPointerState();
 	_popups.clear();
 }
 
@@ -40,9 +57,19 @@ void GuiPopupManager::CloseOwnedBy(const std::shared_ptr<GuiElement>& subtree)
 	std::erase_if(_popups, [&subtree](const auto& popup)
 	{
 		for (auto owner = popup.Owner.lock(); owner; owner = owner->Parent())
-			if (owner == subtree) return true;
+			if (owner == subtree)
+			{
+				popup.Element->ClearPointerState();
+				return true;
+			}
 		return false;
 	});
+}
+
+bool GuiPopupManager::Contains(const std::shared_ptr<GuiElement>& element) const
+{
+	return std::any_of(_popups.begin(), _popups.end(),
+		[&element](const auto& popup) { return popup.Element == element; });
 }
 
 bool GuiPopupManager::IsOpen() const
@@ -79,7 +106,15 @@ ActionResult GuiPopupManager::OnAction(TouchAction action)
 	const bool inside = top->HitTest(local.Position);
 
 	if (inside)
-		return top->OnAction(local);
+	{
+		auto result = top->OnAction(local);
+		// Child dispatch stops at the first consumer; release also disarms siblings.
+		if (action.State == TouchAction::TOUCH_UP) top->ClearPointerState();
+		return result;
+	}
+
+	// Releases outside never reach the buttons, so cancel their retained press.
+	if (action.State == TouchAction::TOUCH_UP) top->ClearPointerState();
 
 	// Outside press dismisses the topmost popup and consumes the event so it
 	// does not activate whatever sits beneath the popup.
@@ -95,6 +130,9 @@ ActionResult GuiPopupManager::OnAction(TouchMoveAction action)
 		return ActionResult::NoAction();
 
 	auto top = _popups.back().Element;
+	// Native capture loss is represented by a mouse move with no held buttons.
+	if (action.Touch == TouchAction::TOUCH_MOUSE && action.MouseButtonsDown == 0u)
+		top->ClearPointerState();
 	top->OnAction(top->ParentToLocal(action));
 
 	// Capture move events while open so hover does not leak to the scene.

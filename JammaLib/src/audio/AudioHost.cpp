@@ -72,6 +72,32 @@ namespace audio
 	bool AudioHost::Init(std::shared_ptr<ninjam::NinjamController> ninjamController,
 		TickCallback tickCallback, bool generatedRig, const AsioInventory* inventory)
 	{
+		return _Init(std::move(ninjamController), std::move(tickCallback), {}, generatedRig, inventory);
+	}
+
+	bool AudioHost::InitWithBlockAdvancement(std::shared_ptr<ninjam::NinjamController> controller,
+		std::shared_ptr<utils::Timer> clock, bool generatedRig, const AsioInventory* inventory)
+	{
+		auto advance = [this, clock](Time, unsigned int numSamps,
+			const std::optional<io::UserConfig>& config, const std::optional<AudioStreamParams>& params)
+		{
+			AdvanceBlock(clock.get(), Timer::GetTime(), numSamps, config, params);
+		};
+		return _Init(std::move(controller), std::move(advance), std::move(clock), generatedRig, inventory);
+	}
+
+	void AudioHost::AdvanceBlock(utils::Timer* clock, Time time, unsigned int numSamps,
+		const std::optional<io::UserConfig>& config, const std::optional<AudioStreamParams>& params)
+	{
+		if (clock) clock->Tick(numSamps, 0u);
+		for (const auto& station : AudioStationsForCallback())
+			station->OnTick(time, numSamps, config, params);
+	}
+
+	bool AudioHost::_Init(std::shared_ptr<ninjam::NinjamController> ninjamController,
+		TickCallback tickCallback, std::shared_ptr<utils::Timer> clock,
+		bool generatedRig, const AsioInventory* inventory)
+	{
 		std::scoped_lock lock(_audioMutex);
 		_lastInitReplacedStream = false;
 		if (_audioDevice)
@@ -93,7 +119,9 @@ namespace audio
 		_lastInitReplacedStream = true;
 
 		_ninjamController = ninjamController;
-		_tickCallback = tickCallback;
+		_tickCallback = std::move(tickCallback);
+		// Publish only after the old stream is quiescent and before the new one starts.
+		if (clock) SetTimingClock(std::move(clock));
 
 		_audioSampleCounter.store(0u, std::memory_order_release);
 		_audioCallbackHeartbeat.store(0u, std::memory_order_release);
@@ -335,7 +363,10 @@ std::optional<ninjam::NinjamDesiredTimingReceipt> AudioHost::LastAppliedDesiredT
 			_lastAppliedDesiredIntent.load(std::memory_order_relaxed),
 			_lastAppliedDesiredPolicy.load(std::memory_order_relaxed),
 			_lastAppliedTimingSceneCoordinate.load(std::memory_order_relaxed),
-			_lastAppliedLocalSourceCorrectionSamps.load(std::memory_order_relaxed)
+			_lastAppliedLocalSourceCorrectionSamps.load(std::memory_order_relaxed),
+			_lastAppliedSourceLengthSamps.load(std::memory_order_relaxed),
+			_lastAppliedRemoteLengthSamps.load(std::memory_order_relaxed),
+			_lastAppliedSourceCoordinateSamps.load(std::memory_order_relaxed)
 		};
 		if (before == _lastAppliedTimingReceiptSequence.load(std::memory_order_acquire))
 			return receipt;
@@ -501,6 +532,9 @@ bool AudioHost::ApplyDesiredTimingAtAudioBoundary(std::uint64_t blockStartSample
 	_lastAppliedDesiredPolicy.store(desired.LocalFollowPolicy, std::memory_order_relaxed);
 	_lastAppliedTimingSceneCoordinate.store(sceneCoordinate, std::memory_order_relaxed);
 	_lastAppliedLocalSourceCorrectionSamps.store(localSourceCorrectionSamps, std::memory_order_relaxed);
+	_lastAppliedSourceLengthSamps.store(_syncPhaseMap.SourceLengthSamps, std::memory_order_relaxed);
+	_lastAppliedRemoteLengthSamps.store(_syncPhaseMap.RemoteLengthSamps, std::memory_order_relaxed);
+	_lastAppliedSourceCoordinateSamps.store(_syncPhaseMap.SourceCoordinateAtOrigin, std::memory_order_relaxed);
 	_lastAppliedTimingReceiptSequence.store(writingReceipt + 1u, std::memory_order_release);
 	return true;
 }
@@ -803,8 +837,8 @@ void AudioHost::PublishAudioCallbackProgress(std::uint64_t blockStartSample,
 					timingInput.Bpm = liveTiming.Bpm;
 					timingInput.Bpi = liveTiming.Bpi;
 					timingInput.DeviceSampleRate = liveTiming.DeviceSampleRate;
-					timingInput.OutputLatencySamps = audioStreamParams.OutputLatency == 0u ?
-						_userConfig.Audio.LatencyOut : audioStreamParams.OutputLatency;
+					// Clicks and local loop audio share this DAC buffer and hardware
+					// latency. Advancing only the click would separate their onsets.
 					timingInput.NumFrames = numSamps;
 
 					const auto metronomeTiming = ninjam::NinjamMetronomeTiming::Compute(

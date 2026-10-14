@@ -23,6 +23,8 @@ namespace graphics
 	public:
 		void InitResources(resources::ResourceLib& resourceLib, bool forceInit);
 		void Draw(GlDrawContext& ctx);
+		// Pure animation transform; Scene owns the elapsed time and camera composition.
+		static glm::mat4 AnimationTransform(float elapsedSeconds) noexcept;
 		unsigned int CubemapId() const noexcept;
 		void ReleaseResources();
 

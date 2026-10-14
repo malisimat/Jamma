@@ -253,14 +253,7 @@ void Quantiser::SetRemoteMidiGrid(const RemoteTransportGeometry& geometry,
 	{
 		if (!station)
 			continue;
-		for (const auto& take : station->GetLoopTakes())
-		{
-			if (take)
-			{
-				take->SetRemoteMidiQuantisationGrid(geometry, originSamps);
-				if (changed) take->SetMidiBaseGrid(0u, 0u);
-			}
-		}
+		station->SetRemoteMidiQuantisationGrid(geometry, originSamps, changed);
 	}
 }
 

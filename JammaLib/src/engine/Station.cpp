@@ -1474,6 +1474,8 @@ ActionResult Station::OnAction(TriggerAction action)
 		{
 			auto errorSamps = 0;
 			std::optional<std::uint32_t> midiStopAgeSamps;
+			const auto clockBefore = _clock ? _clock->ObserveTransport() : utils::Timer::TransportObservation{};
+			const auto grainBefore = _clock ? _clock->QuantiseSamps() : 0u;
 			auto cfg = action.GetUserConfig();
 			auto streamParams = action.GetAudioParams();
 
@@ -1515,7 +1517,27 @@ ActionResult Station::OnAction(TriggerAction action)
 			{
 				const auto midiPlayErrorSamps = midiStopAgeSamps && _clock
 					? static_cast<int>(_clock->SampOffset()) : errorSamps;
+				const auto midiBefore = loopTake.value()->MidiPlayIndex();
 				loopTake.value()->Play(playPos, loopLength, endRecordSamps, midiPlayErrorSamps);
+				if (_loggingConfig.Event == "verbose")
+				{
+					const auto clockAfter = _clock ? _clock->ObserveTransport() : utils::Timer::TransportObservation{};
+					const auto grid = loopTake.value()->ResolvedMidiQuantisation();
+					std::cout << "[NINJAM][RecordEnd] station=\"" << Name() << "\" take=" << loopTake.value()->Id()
+						<< " requested=" << action.SampleCount << " length=" << loopLength
+						<< " recorded=" << loopTake.value()->NumRecordedSamps()
+						<< " clockBefore=" << clockBefore.MasterPhaseSamps << '/' << clockBefore.MasterLengthSamps
+						<< " clockAfter=" << clockAfter.MasterPhaseSamps << '/' << clockAfter.MasterLengthSamps
+						<< " grainBefore=" << grainBefore << " grainAfter=" << (_clock ? _clock->QuantiseSamps() : 0u)
+						<< " scene=" << clockAfter.SceneSamplePos << " midiBefore=" << midiBefore
+						<< " midiAfter=" << loopTake.value()->MidiPlayIndex() << " midiError=" << midiPlayErrorSamps
+						<< " endTail=" << endRecordSamps
+						<< " gridEnabled=" << grid.Enabled << " gridInterval=" << grid.GridInterval()
+						<< " gridDivisions=" << grid.GridDivisions() << " remoteGrid=" << grid.HasRemoteGrid()
+						<< " gridOrigin=" << grid.RemoteOriginSamps
+						<< " captureTransportStart=" << loopTake.value()->MidiQuantisationTransportStartSamps()
+						<< " gridOffset=" << grid.PhaseOffsetSamps << '\n';
+				}
 			}
 			completedLength = loopLength;
 			completedErrorSamps = static_cast<long long>(requestedLength) - static_cast<long long>(loopLength);
@@ -1867,6 +1889,23 @@ std::shared_ptr<LoopTake> Station::AddTake()
 	return take;
 }
 
+void Station::SetRemoteMidiQuantisationGrid(const RemoteTransportGeometry& geometry,
+	std::int64_t originSamps, bool resetBaseGrid)
+{
+	_remoteMidiGrid = geometry;
+	_remoteMidiGridOriginSamps = originSamps;
+	const auto apply = [&](const auto& takes) {
+		for (const auto& take : takes)
+			if (take)
+			{
+				take->SetRemoteMidiQuantisationGrid(geometry, originSamps);
+				if (resetBaseGrid) take->SetMidiBaseGrid(0u, 0u);
+			}
+	};
+	apply(_loopTakes);
+	apply(_backLoopTakes);
+}
+
 void Station::AddTake(std::shared_ptr<LoopTake> take)
 {
 	take->SetupBuffers(_lastBufSize);
@@ -1875,6 +1914,7 @@ void Station::AddTake(std::shared_ptr<LoopTake> take)
 	take->SetLogging(_loggingConfig);
 	take->SetReceiver(ActionReceiver::shared_from_this());
 	take->SetGlobalMidiQuantState(_globalMidiQuantState);
+	take->SetRemoteMidiQuantisationGrid(_remoteMidiGrid, _remoteMidiGridOriginSamps);
 	take->SetInitialLocalTransportOffsetSamps(TransportOffsetSamps());
 	_backLoopTakes.push_back(take);
 	_ApplyMidiQuantisationPhaseOffset();

@@ -26,7 +26,7 @@ namespace gui
 		std::function<void(const std::shared_ptr<base::GuiElement>&)> BeforeHide;
 	};
 
-	// UI-owned overlay composition. Scene supplies controls and command identity;
+	// UI-owned overlay composition. The caller supplies controls and command identity;
 	// pages retain their widgets, while only the active page enters traversal.
 	class GuiMainPanel : public GuiPanel
 	{

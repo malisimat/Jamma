@@ -25,16 +25,13 @@
 #include "../graphics/GlDrawContext.h"
 #include "../graphics/Skybox.h"
 #include "../gui/GuiLabel.h"
-#include "../gui/GuiButton.h"
-#include "../gui/GuiPopup.h"
+#include "../gui/NinjamTempoPrompt.h"
 #include "../gui/GuiFocusManager.h"
-#include "../gui/GuiNumericInput.h"
-#include "../gui/GuiToggle.h"
+#include "../gui/SceneSettingsControls.h"
 #include "../gui/GuiPopupManager.h"
 #include "../gui/SceneSelector.h"
 #include "../gui/GuiMainPanel.h"
 #include "../gui/GuiHud.h"
-#include "../gui/GuiRadio.h"
 #include "../io/JamFile.h"
 #include "../io/RigFile.h"
 #include "../io/InitFile.h"
@@ -43,8 +40,10 @@
 #include "../audio/AudioHost.h"
 #include "../io/IoInputSubsystem.h"
 #include "../ninjam/NinjamNetworkService.h"
+#include "../ninjam/NinjamTimingDiagnosticPresenter.h"
 #include "../vst/VstEditorWindowManager.h"
 #include "../midi/MidiDevice.h"
+#include "../midi/MidiRefreshPolicy.h"
 #include "../midi/MidiRouter.h"
 #include "../graphics/VstEditorWindow.h"
 #include "../graphics/CtrlHandleOverlay.h"
@@ -57,6 +56,7 @@
 #include "Sizeable.h"
 #include "GuiElement.h"
 #include "Station.h"
+#include "HierarchySelection.h"
 #include "StationRemote.h"
 #include "RigCoordinator.h"
 #include "../actions/ActionUndoHistory.h"
@@ -199,6 +199,7 @@ namespace engine
 		void RequestMidiRefresh() noexcept { _midiRefreshRequested.store(true, std::memory_order_release); }
 		void InitSerial() {}
 		void CloseSerial() {}
+		// UI thread only: reconciles pending topology and popup presentation before rendering.
 		void CommitChanges();
 		bool SaveRig(const io::RigFile& rig) const { return _saveRig && _saveRig(rig); }
 		RigCoordinator::EditResult RequestRigEdit(const io::RigFile& candidateRig);
@@ -286,7 +287,6 @@ namespace engine
 		void _UpdateRackVisibilityLocked();
 		void _CollapseRacksLocked();
 		// Selection helpers require _sceneMutex throughout hierarchy access.
-		void _SetSelectionMutedLocked(const std::vector<unsigned char>& path, bool muted);
 		base::Tweakable::TweakState _SelectionTweakStateLocked(const std::shared_ptr<base::GuiElement>& target) const;
 		void _AddStation(std::shared_ptr<Station> station, bool publishAudioStations = true);
 		// Pass a locked station list or a snapshot; remote updates can erase entries.
@@ -349,12 +349,8 @@ namespace engine
 			const std::optional<engine::QuantisationTiming>& localTiming,
 			bool hasLocalContent);
 		void _ApplyNinjamTimingUpdate(const ninjam::NinjamTimingUpdate& update);
-		void _LogNinjamTimingDiagnostics(const ninjam::NinjamTimingDiagnostics& diagnostics);
 		void _LogNinjamTempoJoinState();
-		void _EnsureRemoteTempoPromptUi();
-		void _OpenRemoteTempoPromptIfNeeded();
-		void _HandleRemoteTempoPromptDecision(bool accept);
-		void _CloseRemoteTempoPrompt();
+		void _ApplyRemoteTempoPromptDecision();
 		void _OnLoopGridEditorOpened();
 		void _ReleaseQuantisationInput();
 		bool _EditControlsSuppressed() const;
@@ -364,13 +360,6 @@ namespace engine
 
 	protected:
 		static constexpr std::uint8_t  UnresolvedMidiDeviceSlot       = 0xffu;
-		static constexpr unsigned int MidiChannelOverrideControlIndex = 7001u;
-		static constexpr unsigned int TransportOffsetControlIndex = 7002u;
-		static constexpr unsigned int NinjamMetronomeControlIndex = 7003u;
-		static constexpr unsigned int TapTempoControlIndex = 7004u;
-		static constexpr unsigned int MidiSubdivisionControlIndex = 7005u;
-		static constexpr unsigned int NinjamRemoteTempoAcceptControlIndex = 7101u;
-		static constexpr unsigned int NinjamRemoteTempoRejectControlIndex = 7102u;
 
 		bool _isSceneTouching;
 		std::atomic_bool _isSceneQuitting;
@@ -393,7 +382,7 @@ namespace engine
 		std::mutex _midiLifecycleMutex;
 		std::atomic<bool> _midiRefreshRequested{ false };
 		std::atomic<bool> _midiActive{ false };
-		std::chrono::steady_clock::time_point _lastMidiInventoryCheck{};
+		midi::MidiRefreshPolicy _midiRefreshPolicy; // Job owner only; shutdown joins the job reader.
 		std::uint64_t _sourceRecoveryHeartbeat = 0u; // Job owner only.
 		std::chrono::steady_clock::time_point _sourceRecoveryHeartbeatAt{};
 		bool _sourceLossRecoveryGateClosed = false; // Serialized by _sceneMutex.
@@ -402,12 +391,7 @@ namespace engine
 		std::unique_ptr<ninjam::NinjamNetworkService> _networkService;
 		engine::Quantiser _quantisation;
 		io::LoggingConfig _loggingConfig;
-		std::shared_ptr<gui::GuiRadio> _modeRadio;
-		std::shared_ptr<gui::GuiNumericInput> _midiChannelOverrideInput;
-		std::shared_ptr<gui::GuiNumericInput> _transportOffsetInput;
-		std::shared_ptr<gui::GuiToggle> _ninjamMetronomeToggle;
-		std::shared_ptr<gui::GuiRadio> _globalMidiQuantRadio;
-		std::shared_ptr<gui::GuiRadio> _midiSubdivisionRadio;
+		std::unique_ptr<gui::SceneSettingsControls> _settingsControls;
 		// Window-thread physical key state; repeats and consumed text taps cannot
 		// become extra tempo taps. Gesture holds are owned by the controller.
 		bool _spaceHeld = false;
@@ -425,13 +409,16 @@ namespace engine
 		std::vector<std::shared_ptr<base::GuiElement>> _guiChildren;
 		gui::GuiFocusManager _focusManager;
 		gui::GuiPopupManager _popupManager;
-		bool _remoteTempoDialogOpen = false;
-		std::uint64_t _lastPresentedNinjamDiagnosticSequence = 0u;
-		std::uint64_t _lastPresentedNinjamDiagnosticOverflowCount = 0u;
+		gui::NinjamTempoPrompt _tempoPrompt;
+		ninjam::NinjamTimingDiagnosticPresenter _ninjamDiagnosticPresenter;
+		// Job-owned diagnostic maxima; no callback reads/writes.
+		std::optional<Time> _ninjamTraceLastJobAt;
+		long long _ninjamTraceMaxJobGapMs = 0;
+		long long _ninjamTraceMaxPumpUs = 0;
+		std::size_t _ninjamTraceJobQueueDepth = 0u;
 		std::uint64_t _ninjamJoinGeneration = 0u;
 		std::uint64_t _ninjamTempoRequestId = 0u;
 		ninjam::TempoRequestState _lastLoggedTempoRequestState = ninjam::TempoRequestState::Idle;
-		std::shared_ptr<gui::GuiPopup> _remoteTempoDialog;
 		std::vector<std::shared_ptr<Station>> _stations;
 		RigCoordinator _rigCoordinator;
 		std::uint64_t _rigTransitionRequestedRevision = 0u;

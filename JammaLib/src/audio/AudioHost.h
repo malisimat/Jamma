@@ -49,6 +49,13 @@ namespace audio
 		bool Init(std::shared_ptr<ninjam::NinjamController> ninjamController,
 			TickCallback tickCallback, bool generatedRig = false,
 			const AsioInventory* inventory = nullptr);
+		// The exact shared clock is retained in the prepared callback, not copied per block.
+		// Its instance is fixed for this stream; timing geometry still changes at the boundary.
+		bool InitWithBlockAdvancement(std::shared_ptr<ninjam::NinjamController> controller,
+			std::shared_ptr<utils::Timer> clock, bool generatedRig = false, const AsioInventory* inventory = nullptr);
+		// Callback-only compatibility seam: caller retains clock; stations use our existing lease.
+		void AdvanceBlock(utils::Timer* clock, Time time, unsigned int numSamps,
+			const std::optional<io::UserConfig>& config, const std::optional<AudioStreamParams>& params);
 		const AsioOpenReport& GetAsioOpenReport() const noexcept { return _asioOpenReport; }
 		// Serialized lifecycle owner only: false means the previous stream was
 		// retained because replacement could not establish a teardown barrier.
@@ -122,6 +129,7 @@ namespace audio
 		void PublishDesiredTiming(const ninjam::NinjamDesiredTransportState& desired);
 		std::optional<ninjam::NinjamDesiredTimingReceipt> LastAppliedDesiredTiming() const noexcept;
 		void PublishLocalTransportOffsetLoopFrac(double normalizedLoopFrac) noexcept;
+		// Internally advanced streams keep this same Timer instance until reinitialization.
 		// Shares the master transport clock so the audio callback can apply unified
 		// timing commands to it at the same boundary as the local takes.
 		void SetTimingClock(std::shared_ptr<utils::Timer> clock)
@@ -136,6 +144,8 @@ namespace audio
 
 	private:
 		friend class NinjamAudioBoundaryTestAccess;
+		bool _Init(std::shared_ptr<ninjam::NinjamController> controller, TickCallback tickCallback,
+			std::shared_ptr<utils::Timer> clock, bool generatedRig, const AsioInventory* inventory);
 		bool TryEnterCallback() noexcept;
 		void LeaveCallback() noexcept;
 		class CallbackLease
@@ -222,6 +232,11 @@ namespace audio
 			ninjam::NinjamLocalFollowPolicy::NoSync };
 		std::atomic<std::uint64_t> _lastAppliedTimingSceneCoordinate{ 0u };
 		std::atomic<long long> _lastAppliedLocalSourceCorrectionSamps{ 0 };
+		// Audio writer/job readers; bracketed by the existing receipt sequence.
+		// Lifetime follows AudioHost and its stopped-before-destruction callback.
+		std::atomic<unsigned long> _lastAppliedSourceLengthSamps{ 0ul };
+		std::atomic<unsigned long> _lastAppliedRemoteLengthSamps{ 0ul };
+		std::atomic<std::int64_t> _lastAppliedSourceCoordinateSamps{ 0 };
 		LocalTransportOffsetLoopFracMailbox _localTransportOffsetLoopFracMailbox;
 		base::PublishedAudioSnapshot<utils::Timer> _timingClock;
 		// Last successful callback lease is the bounded-publication fallback.

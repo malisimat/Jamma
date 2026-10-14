@@ -53,10 +53,10 @@ namespace ninjam
 			bool hasLocalContent,
 			utils::Timer& clock,
 			std::chrono::steady_clock::time_point now = std::chrono::steady_clock::now());
-		NinjamTimingUpdate ResolveRemoteTempoPromptDecision(bool accept,
+		NinjamTimingUpdate ResolveRemoteTempoPromptDecision(const NinjamTempoDecision& decision,
 			const std::optional<engine::QuantisationTiming>& localTiming,
 			utils::Timer& clock);
-		std::optional<NinjamTempoChange> PendingRemoteTempoPrompt() const;
+		std::optional<NinjamTempoProposal> PendingRemoteTempoPrompt() const;
 		void SendTempoRequest(const NinjamTempoRequest& request);
 		bool HasConnectedTiming() const noexcept;
 		TempoRequestState TempoJoinRequestState() const noexcept;

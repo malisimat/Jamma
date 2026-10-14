@@ -175,6 +175,8 @@ namespace engine
 		void ClearQuantisationParams();
 		void SetQuantisationOverlayAlpha(float alpha) noexcept;
 		void SetGlobalMidiQuantState(io::JamFile::GlobalMidiQuantState state) noexcept;
+		void SetRemoteMidiQuantisationGrid(const RemoteTransportGeometry& geometry,
+			std::int64_t originSamps, bool resetBaseGrid);
 		void SetTransportOffsetLoopFrac(double loopFrac) noexcept;
 		double TransportOffsetLoopFrac() const noexcept { return _transportOffsetLoopFrac.load(std::memory_order_relaxed); }
 		std::int32_t TransportOffsetSamps() const noexcept;
@@ -530,6 +532,11 @@ namespace engine
 		bool _pendingQuantisationConfirm = false;
 		float _quantisationOverlayAlpha = 0.0f;
 		io::JamFile::GlobalMidiQuantState _globalMidiQuantState = io::JamFile::GlobalMidiQuantState::Off;
+		// Structural owner only, serialized with AddTake by Scene/Trigger ownership.
+		// Callback reads each take's existing atomic grid publication, never these
+		// retained defaults. Station teardown follows callback shutdown.
+		RemoteTransportGeometry _remoteMidiGrid;
+		std::int64_t _remoteMidiGridOriginSamps = 0;
 		std::int32_t _globalPhaseOffsetSamps = 0;
 		std::int32_t _stationPhaseOffsetSamps = 0;
 	};

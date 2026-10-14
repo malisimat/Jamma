@@ -28,10 +28,13 @@ namespace gui
 
 		// Close the topmost popup. No-op when empty.
 		void Close();
+		// Remove this popup wherever it is in the stack, preserving other entries.
+		void Close(const std::shared_ptr<base::GuiElement>& element);
 		void CloseAll();
 		void CloseOwnedBy(const std::shared_ptr<base::GuiElement>& subtree);
 
 		bool IsOpen() const;
+		bool Contains(const std::shared_ptr<base::GuiElement>& element) const;
 		std::shared_ptr<base::GuiElement> Top() const;
 		std::shared_ptr<base::GuiElement> OwnerOfTop() const;
 

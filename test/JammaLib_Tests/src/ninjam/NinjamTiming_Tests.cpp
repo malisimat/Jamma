@@ -313,9 +313,9 @@ TEST(NinjamTiming, InvalidRemoteTimingClearsIntervalFields)
 
 TEST(NinjamTiming, SharedValidityAcceptsPlausibleTiming)
 {
-	EXPECT_TRUE(ninjam::IsValidRemoteTiming(22050u, 44100u, 120.0f, 8u));
-	EXPECT_TRUE(ninjam::IsValidRemoteTiming(22050u, 44100u, 20.0f, 1u));
-	EXPECT_TRUE(ninjam::IsValidRemoteTiming(22050u, 44100u, 400.0f, 32u));
+	EXPECT_TRUE(ninjam::IsValidRemoteTiming(176400u, 44100u, 120.0f, 8u));
+	EXPECT_TRUE(ninjam::IsValidRemoteTiming(132300u, 44100u, 20.0f, 1u));
+	EXPECT_TRUE(ninjam::IsValidRemoteTiming(211680u, 44100u, 400.0f, 32u));
 }
 
 TEST(NinjamTimingInput, RejectsNonFiniteTempoWithoutEgress)
@@ -355,8 +355,8 @@ TEST(NinjamTimingInput, RejectsNonFiniteTempoWithoutEgress)
 	EXPECT_FALSE(ninjam::IsValidNinjamTempo(120.0f, (std::numeric_limits<int>::max)()));
 	EXPECT_FALSE(disconnected.RequestServerTempo(120.0f, (std::numeric_limits<int>::max)()));
 
-	EXPECT_TRUE(ninjam::IsValidRemoteTiming(intervalLengthSamps, sourceSampleRate, minBpm, 1u));
-	EXPECT_TRUE(ninjam::IsValidRemoteTiming(intervalLengthSamps, sourceSampleRate, maxBpm, 32u));
+	EXPECT_TRUE(ninjam::IsValidRemoteTiming(132300u, sourceSampleRate, minBpm, 1u));
+	EXPECT_TRUE(ninjam::IsValidRemoteTiming(211680u, sourceSampleRate, maxBpm, 32u));
 	EXPECT_EQ(144000u, ninjam::IntervalSampsFromTempo(minBpm, 1u, conversionSampleRate));
 	EXPECT_EQ(230400u, ninjam::IntervalSampsFromTempo(maxBpm, 32u, conversionSampleRate));
 	EXPECT_EQ((std::numeric_limits<unsigned int>::max)(), ninjam::IntervalSampsFromTempo(
@@ -395,4 +395,29 @@ TEST(NinjamTiming, SharedValidityRejectsPlaceholderTempo)
 	EXPECT_FALSE(ninjam::IsValidRemoteTiming(22050u, 44100u, 120.0f, 64u));
 	EXPECT_FALSE(ninjam::IsValidRemoteTiming(0u, 44100u, 120.0f, 8u));
 	EXPECT_FALSE(ninjam::IsValidRemoteTiming(22050u, 0u, 120.0f, 8u));
+}
+
+TEST(NinjamTiming, RejectsStartupIntervalWithPlausibleTempo)
+{
+	EXPECT_FALSE(ninjam::IsValidRemoteTiming(1000u, 44100u, 120.0f, 32u));
+	EXPECT_TRUE(ninjam::IsValidRemoteTiming(705600u, 44100u, 120.0f, 32u));
+	EXPECT_TRUE(ninjam::IsValidRemoteTiming(313600u, 44100u, 135.0f, 16u));
+	EXPECT_FALSE(ninjam::IsValidRemoteTiming(313600u, 48000u, 135.0f, 16u));
+}
+
+TEST(NinjamTiming, AcceptsIntegerBeatRoundingButRejectsInconsistentGeometry)
+{
+	for (const auto sampleRate : { 44100u, 48000u })
+	{
+		for (const auto bpi : { 1u, 8u, 16u, 32u })
+		{
+			constexpr auto bpm = 137.0f;
+			const auto interval = ninjam::IntervalSampsFromTempo(bpm, bpi, sampleRate);
+			const auto integerBeatInterval = static_cast<unsigned int>(sampleRate * 60.0 / bpm) * bpi;
+			EXPECT_TRUE(ninjam::IsValidRemoteTiming(interval, sampleRate, bpm, bpi));
+			EXPECT_TRUE(ninjam::IsValidRemoteTiming(integerBeatInterval, sampleRate, bpm, bpi));
+			EXPECT_FALSE(ninjam::IsValidRemoteTiming(interval + bpi + 1u, sampleRate, bpm, bpi));
+			EXPECT_FALSE(ninjam::IsValidRemoteTiming(interval - bpi - 1u, sampleRate, bpm, bpi));
+		}
+	}
 }

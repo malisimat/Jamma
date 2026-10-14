@@ -59,6 +59,10 @@ namespace ninjam
 		NinjamLocalFollowPolicy Policy = NinjamLocalFollowPolicy::NoSync;
 		std::uint64_t SceneCoordinateSamps = 0u;
 		long long LocalSourceCorrectionSamps = 0;
+		// Diagnostic map geometry at SceneCoordinateSamps; never timing authority.
+		unsigned long SourceLengthSamps = 0ul;
+		unsigned long RemoteLengthSamps = 0ul;
+		std::int64_t SourceCoordinateSamps = 0;
 	};
 
 	// The integration owner is the sole writer and the audio callback is the sole
