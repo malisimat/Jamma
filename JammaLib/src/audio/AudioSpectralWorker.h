@@ -27,7 +27,9 @@ namespace audio
 		// Opaque non-GL CPU work with cooperative bounded cancellation. Both
 		// closures run off audio; coalescing/teardown cancel outside the queue lock.
 		void RequestPresentation(std::function<void()> work, std::function<void()> cancel);
-		void RequestEditing(std::function<void()> work, std::function<void()> cancel);
+		// Cancel is QUEUED-only. Running edits own frozen input until Run exits;
+        // their owner supplies cooperative cancellation, teardown joins off audio.
+        void RequestEditing(std::function<void()> work, std::function<void()> cancel);
 		void CancelPendingEditing();
         void RequestContent(const void* owner, std::function<void()> work);
 
@@ -38,9 +40,11 @@ namespace audio
 			std::function<void()> Cancel;
 		};
 		void _Run();
+		void _RunVisual();
 		// Queue/current handles and stopping flag share this UI/worker-only mutex.
 		// One current payload and one latest queued payload of each kind are pinned;
-		// only the current job allocates. Editor budgets additional retained results.
+		// only one current job per lane allocates. Reservations cover concurrent
+		// audio/visual scratch and additionally retained results.
 		std::mutex _requestMutex;
 		std::condition_variable _wake;
 		std::shared_ptr<AudioSpectralSourceCapture> _queuedSource;
@@ -55,9 +59,9 @@ namespace audio
 		std::shared_ptr<PresentationWork> _currentEditing;
 		struct ContentWork { const void* Owner; std::function<void()> Run; };
 		std::deque<std::shared_ptr<ContentWork>> _queuedContent;
-		bool _preferReconstruction = false; // Worker only: alternate ready display/synthesis.
-		bool _preferEditing = true; // At most one edit batch before a ready content/display job.
+		bool _preferEditing = true; // Visual worker only, under queue mutex: alternate edit/display.
 		bool _stopping = false;
 		std::thread _thread;
+		std::thread _visualThread; // Serialized edit/display lane; never performs FFT/PCM work.
 	};
 }

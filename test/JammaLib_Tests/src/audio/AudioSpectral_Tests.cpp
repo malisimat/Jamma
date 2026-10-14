@@ -725,9 +725,14 @@ TEST_F(AudioSpectralTest, ControllerRelativeVerticalBandSurvivesWorkerBacklogAnd
 		for (int i = 0; i < 2000; ++i) controller.MoveStroke(std::nullopt, 100.0f + (i % 160));
 		controller.MoveStroke(std::nullopt, 180.0f); // Latest replaces every intervening target.
 		controller.SetFrequencyViewport({0.25, 0.75}); // Rejected during captured edit.
-		EXPECT_EQ(controller.EditState(), before);
+		EXPECT_EQ(controller.EditState()->Source, before->Source);
 		EXPECT_EQ(controller.Feedback().find("overloaded"), std::string::npos);
 		controller.EndStroke(false);
+        // Authoritative input AND CPU presentation finish before blocked synthesis.
+        ASSERT_TRUE(Pump(controller, loop, [&] { return !controller.HasStroke()
+            && controller.PreparedDisplayRevision() == controller.EditState()->Revision; }));
+        ASSERT_TRUE(controller.EditState()->Envelope);
+        EXPECT_FALSE(controller.EditState()->Envelope->IsUnity());
 	}
 	ASSERT_TRUE(Pump(controller, loop, [&] { return !controller.HasStroke(); })) << controller.Feedback();
 	const auto after = controller.EditState();
@@ -819,6 +824,9 @@ TEST_F(AudioSpectralTest, StationaryExposureAccumulatesWhileContentWorkerIsBlock
 		controller.MoveStroke(std::pair{0.0, 20.0}, 100.0f);
 		EXPECT_EQ(controller.Feedback().find("overloaded"), std::string::npos);
 		controller.EndStroke(false);
+        ASSERT_TRUE(Pump(controller, loop, [&] { return !controller.HasStroke()
+            && controller.PreparedDisplayRevision() == controller.EditState()->Revision; }));
+        EXPECT_FALSE(controller.EditState()->Gains->IsUnity());
 	}
 	ASSERT_TRUE(Pump(controller, loop, [&] { return !controller.HasStroke(); })) << controller.Feedback();
 	painted = loop->AudioSpectralEdit();
@@ -2053,4 +2061,303 @@ TEST_F(AudioSpectralTest, OwnershipBitmapAdmissionRetainsThirtySecondBaselineTra
     EXPECT_LE(estimate->WorkingBytes,audio::AudioSpectralConfig::MaxWorkingBytes);
     EXPECT_EQ(sizeof(audio::AudioSpectralGainField::Tile),1024*sizeof(float)+128);
     std::cout << "Ownership 30s baseline peak MiB=" << estimate->WorkingBytes/(1024.0*1024.0) << std::endl;
+}
+
+TEST_F(AudioSpectralTest, IncrementalProjectionEqualsFullForOwnedEnvelopeAndSeamChanges)
+{
+    std::string reason;
+    const auto analysis = audio::AudioSpectralDsp::Analyze(Source(1031ul), Transform(), reason);
+    ASSERT_TRUE(analysis) << reason;
+    auto gains = audio::AudioSpectralGainField::Unity(analysis->Geometry.FrameCount, analysis->Geometry.BinCount, reason);
+    ASSERT_TRUE(gains);
+    auto cache = std::make_shared<editor::AudioSpectralDisplayJob::Cache>();
+    auto envelope = audio::AudioSpectralEnvelope::Unity(analysis->Source->Layout.LogicalLength, reason);
+    std::uint64_t revision = 1;
+    const auto makeEdit = [&] {
+        return audio::AudioSpectralEditState::Create(analysis->Source, analysis->Transform,
+            std::make_shared<const audio::AudioSpectralGainField>(*gains), envelope, revision, revision, revision, reason);
+    };
+    auto edit = makeEdit(); ASSERT_TRUE(edit) << reason;
+    editor::AudioSpectralDisplayJob first(analysis, edit, 127, 64, {}, 1, cache);
+    first.Run(); ASSERT_TRUE(first.Result()) << first.Reason();
+    auto previous = first.Result();
+    for (unsigned int scenario = 0; scenario < 4; ++scenario)
+    {
+        SCOPED_TRACE(scenario);
+        editor::AudioSpectralDisplayJob::Damage damage;
+        damage.BaselineRevision = revision++;
+        damage.TargetRevision = revision;
+        const auto frame = scenario == 1 ? static_cast<std::size_t>(-analysis->Geometry.FirstFrameCentre / analysis->Transform.HopSamps)
+            : analysis->Geometry.FrameCount / 2;
+        const auto bin = scenario == 1 ? 0u : 20u;
+        gains->SetGainDb(frame, bin, scenario == 0 ? 5.0f : -13.0f);
+        gains->SetOwned(frame, bin, scenario >= 2);
+        damage.FirstFrame = damage.LastFrame = frame;
+        damage.FirstBin = damage.LastBin = bin;
+        if (scenario >= 2)
+        {
+            const auto stroke = audio::AudioSpectralEnvelopeStroke::Begin(envelope, 48000, reason, 0.004);
+            ASSERT_TRUE(stroke);
+            stroke->PaintSegment(0, scenario == 2 ? 0.0f : 1.0f, 700, scenario == 2 ? 0.25f : 1.0f);
+            const auto next = stroke->Snapshot(reason); ASSERT_TRUE(next);
+            for (unsigned long sample = 0; sample < next->Gains().size(); ++sample)
+                if (next->GainAt(sample) != envelope->GainAt(sample))
+                { damage.FirstSample = (std::min)(damage.FirstSample, sample); damage.LastSample = sample; }
+            envelope = next;
+        }
+        edit = makeEdit(); ASSERT_TRUE(edit) << reason;
+        editor::AudioSpectralDisplayJob job(analysis, edit, 127, 64, {}, revision, cache, damage);
+        job.Run(); const auto incremental = job.Result(); ASSERT_TRUE(incremental) << job.Reason();
+        const auto full = graphics::AudioSpectralModel::BuildDisplay(*analysis, &*gains, envelope.get(), revision, 127, 64, reason);
+        ASSERT_TRUE(full) << reason;
+        EXPECT_EQ(incremental->Heights, full->Heights);
+        EXPECT_TRUE(incremental->CanSubUpload(*previous, true));
+        auto skipped = *previous; ++skipped.Revision;
+        EXPECT_FALSE(incremental->CanSubUpload(skipped, true));
+        EXPECT_TRUE(incremental->IsValid());
+        previous = incremental;
+    }
+    // Unknown/skipped baseline cannot accidentally copy an unchanged stale cache.
+    ++revision; gains->SetGainDb(2, 15, 11);
+    edit = makeEdit();
+    editor::AudioSpectralDisplayJob unknown(analysis, edit, 127, 64, {}, revision, cache);
+    unknown.Run(); ASSERT_TRUE(unknown.Result());
+    EXPECT_EQ(unknown.Result()->BaselineRevision, 0u);
+    EXPECT_EQ(unknown.Result()->Heights,
+        graphics::AudioSpectralModel::BuildDisplay(*analysis, &*gains, envelope.get(), revision, 127, 64, reason)->Heights);
+}
+
+TEST_F(AudioSpectralTest, PublicIncrementalProjectionRejectsMalformedBaselineAndDamage)
+{
+    std::string reason;
+    const auto analysis = audio::AudioSpectralDsp::Analyze(Source(1031ul), Transform(), reason);
+    ASSERT_TRUE(analysis);
+    const auto valid = graphics::AudioSpectralModel::BuildDisplay(*analysis, nullptr, nullptr, 1, 16, 8, reason);
+    ASSERT_TRUE(valid);
+    auto invalid = std::make_shared<graphics::AudioSpectralDisplay>(*valid);
+    invalid->Heights.pop_back();
+    EXPECT_FALSE(graphics::AudioSpectralModel::BuildDisplay(*analysis, nullptr, nullptr, 2, 16, 8, reason, {}, {}, 2, invalid, {}));
+    EXPECT_FALSE(graphics::AudioSpectralModel::BuildDisplay(*analysis, nullptr, nullptr, 2, 16, 8, reason, {}, {}, 2, valid, {{0,17,0,8}}));
+    invalid = std::make_shared<graphics::AudioSpectralDisplay>(*valid);
+    invalid->DirtyRectangles = {{4,3,0,8}};
+    gui::GuiModelParams params; graphics::AudioSpectralModel model(params,16,8);
+    EXPECT_FALSE(model.SetDisplay(invalid, reason));
+    // Even valid arbitrary damage metadata cannot assert full change coverage.
+    invalid = std::make_shared<graphics::AudioSpectralDisplay>(*valid);
+    invalid->Revision=2; invalid->BaselineRevision=1; invalid->DirtyRectangles={{1,1,1,1}};
+    invalid->Heights[2*(16+1)+2]=0.4f;
+    EXPECT_TRUE(model.SetDisplay(invalid,reason));
+    EXPECT_FALSE(invalid->CanSubUpload(*valid));
+}
+
+TEST_F(AudioSpectralTest, WorkerTeardownDoesNotPublishRunningEditCancellationBeforeRunExits)
+{
+    auto worker = std::make_shared<audio::AudioSpectralWorker>();
+    std::promise<void> entered, resume;
+    auto resumed = resume.get_future().share();
+    std::atomic<unsigned int> cancellations = 0;
+    worker->RequestEditing([&] { entered.set_value(); resumed.wait(); }, [&] { ++cancellations; });
+    ASSERT_EQ(entered.get_future().wait_for(std::chrono::seconds(2)), std::future_status::ready);
+    auto teardown = std::async(std::launch::async, [worker = std::move(worker)]() mutable { worker.reset(); });
+    EXPECT_EQ(teardown.wait_for(std::chrono::milliseconds(50)), std::future_status::timeout);
+    EXPECT_EQ(cancellations.load(), 0u);
+    resume.set_value();
+    EXPECT_EQ(teardown.wait_for(std::chrono::seconds(2)), std::future_status::ready);
+    EXPECT_EQ(cancellations.load(), 0u);
+}
+
+TEST_F(AudioSpectralTest, UndoAfterSkippedPresentationCannotReuseDamageForDifferentTarget)
+{
+    std::string reason;
+    const auto analysis = audio::AudioSpectralDsp::Analyze(Source(1031ul), Transform(), reason);
+    ASSERT_TRUE(analysis);
+    auto gains = audio::AudioSpectralGainField::Unity(analysis->Geometry.FrameCount,analysis->Geometry.BinCount,reason);
+    auto original = std::make_shared<const audio::AudioSpectralGainField>(*gains);
+    gains->SetGainDb(analysis->Geometry.FrameCount / 2, 20, -20);
+    const auto first = audio::AudioSpectralEditState::Create(analysis->Source,analysis->Transform,
+        std::make_shared<const audio::AudioSpectralGainField>(*gains),nullptr,1,1,1,reason);
+    auto cache = std::make_shared<editor::AudioSpectralDisplayJob::Cache>();
+    editor::AudioSpectralDisplayJob displayed(analysis,first,127,64,{},1,cache);
+    displayed.Run(); ASSERT_TRUE(displayed.Result());
+    editor::AudioSpectralDisplayJob::Damage stale;
+    stale.BaselineRevision=1; stale.TargetRevision=2;
+    stale.FirstFrame=stale.LastFrame=2; stale.FirstBin=stale.LastBin=10;
+    const auto restored = audio::AudioSpectralEditState::Create(analysis->Source,analysis->Transform,original,nullptr,3,3,1,reason);
+    editor::AudioSpectralDisplayJob undo(analysis,restored,127,64,{},3,cache,stale);
+    undo.Run(); ASSERT_TRUE(undo.Result());
+    EXPECT_EQ(undo.Result()->BaselineRevision,0u);
+    EXPECT_EQ(undo.Result()->Heights,graphics::AudioSpectralModel::BuildDisplay(*analysis,original.get(),nullptr,3,127,64,reason)->Heights);
+}
+
+TEST_F(AudioSpectralTest, DISABLED_ProfileResponsiveVisualLane)
+{
+    using Clock = std::chrono::steady_clock;
+    std::string reason;
+    for (const auto seconds : {2ul,10ul,30ul})
+    {
+        const auto source = Source(seconds * 48000ul);
+        audio::AudioSpectralTransformConfig transform;
+        std::shared_ptr<const audio::AudioSpectralResourceBudget::Reservation> reservation;
+        ASSERT_TRUE(audio::AudioSpectralDsp::SelectTransform(source->Layout,nullptr,transform,reservation,reason));
+        const auto analysis = audio::AudioSpectralDsp::Analyze(source,transform,reason); ASSERT_TRUE(analysis);
+        for (const auto owned : {false,true})
+        {
+            auto gains = audio::AudioSpectralGainField::Unity(analysis->Geometry.FrameCount,analysis->Geometry.BinCount,reason);
+            const auto frame=analysis->Geometry.FrameCount/2;
+            const auto bin=80u;
+            gains->SetOwned(frame,bin,owned);
+            std::vector<double> fullTimes, localTimes, editTimes;
+            auto cache=std::make_shared<editor::AudioSpectralDisplayJob::Cache>();
+            for (std::uint64_t revision=1;revision<=5;++revision)
+            {
+                const auto editStart=Clock::now();
+                gains->SetGainDb(frame,bin,static_cast<float>(revision));
+                const auto edit=audio::AudioSpectralEditState::Create(source,transform,
+                    std::make_shared<const audio::AudioSpectralGainField>(*gains),nullptr,revision,revision,1,reason);
+                editTimes.push_back(std::chrono::duration<double,std::milli>(Clock::now()-editStart).count());
+                editor::AudioSpectralDisplayJob::Damage damage;
+                if(revision>1) {damage.BaselineRevision=revision-1;damage.TargetRevision=revision;
+                    damage.FirstFrame=damage.LastFrame=frame;damage.FirstBin=damage.LastBin=bin;}
+                const auto localStart=Clock::now();
+                editor::AudioSpectralDisplayJob local(analysis,edit,4095,256,{},revision,cache,damage);
+                local.Run(); ASSERT_TRUE(local.Result())<<local.Reason();
+                if(revision>1) localTimes.push_back(std::chrono::duration<double,std::milli>(Clock::now()-localStart).count());
+                const auto fullStart=Clock::now();
+                const auto full=graphics::AudioSpectralModel::BuildDisplay(*analysis,&*gains,nullptr,revision,4095,256,reason);
+                ASSERT_TRUE(full);
+                fullTimes.push_back(std::chrono::duration<double,std::milli>(Clock::now()-fullStart).count());
+                EXPECT_EQ(local.Result()->Heights,full->Heights);
+            }
+            double ownedBandMilliseconds = 0;
+            {
+                const auto before=*gains;
+                const auto unity=audio::AudioSpectralEnvelope::Unity(source->Layout.LogicalLength,reason);
+                const auto band=audio::AudioSpectralEnvelopeStroke::Begin(unity,48000,reason,0.01);
+                const auto bandStart=Clock::now();
+                auto input=audio::AudioSpectralEnvelopeStroke::RelativeMap::Create(source->Layout.LogicalLength,48000,0.01,reason);
+                audio::AudioSpectralEnvelopeStroke::RelativePath path;
+                const auto centre=static_cast<double>(audio::AudioSpectralGainField::EnvelopeIndex(*analysis,frame));
+                ASSERT_TRUE(input->Accumulate(centre,0,centre,-80,path,reason));
+                ASSERT_TRUE(band->ApplyRelativeMap(*input));
+                audio::AudioSpectralGainField::ChangeBounds bounds;
+                EXPECT_EQ(gains->ApplyOwnedBand(*analysis,before,*band,reason,&bounds),owned);
+                const auto envelope=band->Snapshot(reason);
+                editor::AudioSpectralDisplayJob::Damage damage;
+                damage.BaselineRevision=5;damage.TargetRevision=6;
+                damage.FirstFrame=bounds.FirstFrame;damage.LastFrame=bounds.LastFrame;
+                damage.FirstBin=bounds.FirstBin;damage.LastBin=bounds.LastBin;
+                for(unsigned long sample=0;sample<envelope->Gains().size();++sample)
+                    if(envelope->GainAt(sample)!=1.0f)
+                    {damage.FirstSample=(std::min)(damage.FirstSample,sample);damage.LastSample=sample;}
+                const auto edit=audio::AudioSpectralEditState::Create(source,transform,
+                    std::make_shared<const audio::AudioSpectralGainField>(*gains),envelope,6,6,2,reason);
+                editor::AudioSpectralDisplayJob job(analysis,edit,4095,256,{},6,cache,damage);
+                job.Run();ASSERT_TRUE(job.Result());
+                ownedBandMilliseconds=std::chrono::duration<double,std::milli>(Clock::now()-bandStart).count();
+                EXPECT_EQ(job.Result()->Heights,graphics::AudioSpectralModel::BuildDisplay(*analysis,&*gains,envelope.get(),6,4095,256,reason)->Heights);
+            }
+            const auto median=[](std::vector<double> values){std::sort(values.begin(),values.end());return values[values.size()/2];};
+            std::cout<<"Visual lane profile "<<seconds<<"s hop="<<transform.HopSamps<<" owned="<<owned
+                <<" edit="<<median(editTimes)<<"ms full="<<median(fullTimes)<<"ms local="<<median(localTimes)
+                <<"ms band-edit/snapshot/projection="<<ownedBandMilliseconds<<"ms (includes 4.016 MiB immutable height copy; CPU only)\n";
+        }
+    }
+}
+
+TEST_F(AudioSpectralTest, OwnedBandReportsActualChangedBoundsAndProjectsExactly)
+{
+    std::string reason;
+    const auto analysis=audio::AudioSpectralDsp::Analyze(Source(1031ul),Transform(),reason); ASSERT_TRUE(analysis);
+    auto gains=audio::AudioSpectralGainField::Unity(analysis->Geometry.FrameCount,analysis->Geometry.BinCount,reason);
+    const auto frame=analysis->Geometry.FrameCount/2;
+    gains->SetOwned(frame,20,true); gains->SetGainDb(frame,20,-10);
+    const auto before=*gains;
+    auto envelope=audio::AudioSpectralEnvelope::Unity(1031ul,reason);
+    const auto stroke=audio::AudioSpectralEnvelopeStroke::Begin(envelope,48000,reason,0.001);
+    auto cache=std::make_shared<editor::AudioSpectralDisplayJob::Cache>();
+    auto input=audio::AudioSpectralEnvelopeStroke::RelativeMap::Create(1031ul,48000,0.001,reason);
+    audio::AudioSpectralEnvelopeStroke::RelativePath path;
+    const auto centre=static_cast<double>(audio::AudioSpectralGainField::EnvelopeIndex(*analysis,frame));
+    const auto makeEdit=[&](std::uint64_t revision){return audio::AudioSpectralEditState::Create(analysis->Source,analysis->Transform,
+        std::make_shared<const audio::AudioSpectralGainField>(*gains),envelope,revision,revision,revision,reason);};
+    editor::AudioSpectralDisplayJob initial(analysis,makeEdit(1),127,64,{},1,cache);
+    initial.Run(); ASSERT_TRUE(initial.Result());
+    for(const auto revision:{2u,3u})
+    {
+        input->Clear();
+        ASSERT_TRUE(input->Accumulate(centre,revision==2?0.0:-160.0,centre,revision==2?-160.0:0.0,path,reason));
+        ASSERT_TRUE(stroke->ApplyRelativeMap(*input));
+        audio::AudioSpectralGainField::ChangeBounds bounds;
+        ASSERT_TRUE(gains->ApplyOwnedBand(*analysis,before,*stroke,reason,&bounds));
+        EXPECT_EQ(bounds.FirstFrame,frame); EXPECT_EQ(bounds.LastFrame,frame);
+        EXPECT_EQ(bounds.FirstBin,20u); EXPECT_EQ(bounds.LastBin,20u);
+        const auto next=stroke->Snapshot(reason); ASSERT_TRUE(next);
+        editor::AudioSpectralDisplayJob::Damage damage;
+        damage.BaselineRevision=revision-1;damage.TargetRevision=revision;
+        damage.FirstFrame=bounds.FirstFrame;damage.LastFrame=bounds.LastFrame;
+        damage.FirstBin=bounds.FirstBin;damage.LastBin=bounds.LastBin;
+        for(unsigned long sample=0;sample<1031;++sample)
+            if(next->GainAt(sample)!=envelope->GainAt(sample))
+            {damage.FirstSample=(std::min)(damage.FirstSample,sample);damage.LastSample=sample;}
+        envelope=next;
+        editor::AudioSpectralDisplayJob job(analysis,makeEdit(revision),127,64,{},revision,cache,damage);
+        job.Run(); ASSERT_TRUE(job.Result());
+        EXPECT_EQ(job.Result()->Heights,graphics::AudioSpectralModel::BuildDisplay(*analysis,&*gains,envelope.get(),revision,127,64,reason)->Heights);
+    }
+    EXPECT_TRUE(gains->ContentEquals(before));
+}
+
+TEST_F(AudioSpectralTest, DISABLED_ProfileAuthoritativeBrushBatch)
+{
+    using Clock=std::chrono::steady_clock;
+    const auto elapsed=[](Clock::time_point start){return std::chrono::duration<double,std::milli>(Clock::now()-start).count();};
+    const auto median=[](std::vector<double> values){std::sort(values.begin(),values.end());return values[values.size()/2];};
+    std::string reason;
+    for(const auto seconds:{2ul,10ul,30ul})
+    {
+        const auto source=Source(seconds*48000ul);
+        audio::AudioSpectralTransformConfig transform;
+        std::shared_ptr<const audio::AudioSpectralResourceBudget::Reservation> reservation;
+        ASSERT_TRUE(audio::AudioSpectralDsp::SelectTransform(source->Layout,nullptr,transform,reservation,reason));
+        const auto analysis=audio::AudioSpectralDsp::Analyze(source,transform,reason);ASSERT_TRUE(analysis);
+        for(const auto recover:{false,true})
+        {
+            auto gains=audio::AudioSpectralGainField::Unity(analysis->Geometry.FrameCount,analysis->Geometry.BinCount,reason);
+            const auto input=audio::AudioSpectralGainField::ExposureMap::Create(analysis->Geometry.FrameCount,analysis->Geometry.BinCount,reason);
+            ASSERT_TRUE(gains);ASSERT_TRUE(input);
+            const auto envelope=recover?audio::AudioSpectralEnvelope::FromGains(std::vector<float>(source->Layout.LogicalLength,0.0f),reason):nullptr;
+            auto cache=std::make_shared<editor::AudioSpectralDisplayJob::Cache>();
+            const auto makeEdit=[&](std::uint64_t revision){return audio::AudioSpectralEditState::Create(source,transform,
+                std::make_shared<const audio::AudioSpectralGainField>(*gains),envelope,revision,revision,1,reason);};
+            editor::AudioSpectralDisplayJob first(analysis,makeEdit(1),4095,256,{},1,cache);
+            first.Run();ASSERT_TRUE(first.Result());
+            std::vector<double> inputs,applications,projections;
+            for(std::uint64_t revision=2;revision<=6;++revision)
+            {
+                input->Clear();
+                const auto inputStart=Clock::now();
+                ASSERT_TRUE(input->Accumulate(*analysis,0.5,18000,0.5,18000,1.0/60.0,reason));
+                inputs.push_back(elapsed(inputStart));
+                audio::AudioSpectralGainField::ChangeBounds bounds;
+                const auto applyStart=Clock::now();
+                ASSERT_TRUE(gains->ApplyExposureMap(*analysis,*input,true,reason,envelope.get(),&bounds));
+                const auto edit=makeEdit(revision);ASSERT_TRUE(edit);
+                applications.push_back(elapsed(applyStart));
+                editor::AudioSpectralDisplayJob::Damage damage;
+                damage.BaselineRevision=revision-1;damage.TargetRevision=revision;
+                damage.FirstFrame=bounds.FirstFrame;damage.LastFrame=bounds.LastFrame;
+                damage.FirstBin=bounds.FirstBin;damage.LastBin=bounds.LastBin;
+                const auto displayStart=Clock::now();
+                editor::AudioSpectralDisplayJob job(analysis,edit,4095,256,{},revision,cache,damage);
+                job.Run();ASSERT_TRUE(job.Result());
+                projections.push_back(elapsed(displayStart));
+                const auto full=graphics::AudioSpectralModel::BuildDisplay(*analysis,&*gains,envelope.get(),revision,4095,256,reason);
+                ASSERT_TRUE(full);EXPECT_EQ(job.Result()->Heights,full->Heights);
+            }
+            EXPECT_EQ(gains->HasOwnedCoefficients(),recover);
+            std::cout<<"Brush batch profile "<<seconds<<"s recover="<<recover<<" dirty="<<input->DirtyCellCount()
+                <<" input="<<median(inputs)<<"ms apply+snapshot="<<median(applications)<<"ms projection="<<median(projections)
+                <<"ms (default 50ms/.25oct brush, 18kHz, 60Hz exposure, CPU only)\n";
+        }
+    }
 }

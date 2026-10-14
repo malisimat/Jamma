@@ -11,6 +11,8 @@
 #include "../audio/AudioSpectralGainField.h"
 #include "../audio/AudioSpectralEnvelope.h"
 
+namespace editor { class AudioSpectralDisplayJob; }
+
 namespace graphics
 {
 	// Normalized source interval. Requested bounds are UI-owned; the model
@@ -25,6 +27,10 @@ namespace graphics
 	// The DC edge is row zero; positive rows run logarithmically to Nyquist.
 	struct AudioSpectralDisplay
 	{
+        struct Rectangle { unsigned int Left, Right, Bottom, Top; };
+        std::uint64_t BaselineRevision = 0;
+        std::vector<Rectangle> DirtyRectangles;
+        bool CanSubUpload(const AudioSpectralDisplay& baseline, bool trustedDamage = false) const noexcept;
 		std::shared_ptr<const audio::AudioSpectralSourceIdentity> SourceIdentity;
 		std::uint64_t SourceGeneration = 0u;
 		std::uint64_t Revision = 0u;
@@ -74,7 +80,14 @@ namespace graphics
 			const audio::AudioSpectralEnvelope* envelope, std::uint64_t revision,
 			unsigned int timeSegments, unsigned int frequencySegments,
 			std::string& reason, std::stop_token stop = {}, AudioSpectralViewport viewport = {},
-			std::uint64_t presentationRevision = 0u);
+			std::uint64_t presentationRevision = 0u,
+            std::shared_ptr<const AudioSpectralDisplay> baseline = nullptr,
+            std::vector<AudioSpectralDisplay::Rectangle> rectangles = {});
+        static std::vector<AudioSpectralDisplay::Rectangle> ProjectDamage(
+            const audio::AudioSpectralAnalysis&, const AudioSpectralDisplay&,
+            std::size_t firstFrame, std::size_t lastFrame, unsigned int firstBin, unsigned int lastBin,
+            unsigned long firstSample, unsigned long lastSample);
+        bool SetCompletedDisplay(const editor::AudioSpectralDisplayJob&, std::string& reason);
 		bool SetDisplay(std::shared_ptr<const AudioSpectralDisplay> display, std::string& reason);
 		void SetEditorMorph(float morph);
 		void SetRadius(float radius);
@@ -98,8 +111,15 @@ namespace graphics
 		void _ReleaseResources() override;
 
 	private:
+        friend class editor::AudioSpectralDisplayJob;
+        static std::shared_ptr<const AudioSpectralDisplay> _BuildDisplay(
+            const audio::AudioSpectralAnalysis&, const audio::AudioSpectralGainField*,
+            const audio::AudioSpectralEnvelope*, std::uint64_t, unsigned int, unsigned int,
+            std::string&, std::stop_token, AudioSpectralViewport, std::uint64_t,
+            std::shared_ptr<const AudioSpectralDisplay>, std::vector<AudioSpectralDisplay::Rectangle>);
 		static gui::GuiModelParams _ModelParams(gui::GuiModelParams params);
 		static float _CompressMagnitude(double magnitude) noexcept;
+        bool _SetDisplay(std::shared_ptr<const AudioSpectralDisplay>, std::string& reason, bool trustedDamage);
 		bool _UploadDisplay();
 		void _Fail(std::string reason);
 		const unsigned int _timeSegments;
@@ -111,6 +131,7 @@ namespace graphics
 		unsigned int _heightTexture = 0u;
 		mutable std::mutex _surfaceMutex; // UI/render/worker only; never audio.
 		std::shared_ptr<const AudioSpectralDisplay> _pendingDisplay;
+        bool _pendingTrustedDamage = false; // Set only by completed worker jobs, under surface mutex.
 		std::shared_ptr<const AudioSpectralDisplay> _uploadedDisplay;
 		Surface _displayedSurface;
 		AudioSpectralViewport _timeViewport, _frequencyViewport; // UI writes/render reads under _surfaceMutex; no audio access.

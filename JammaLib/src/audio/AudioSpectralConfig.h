@@ -27,7 +27,8 @@ namespace audio
 		static constexpr double BrushFrequencyRadiusOctaves = 0.25;
 		static constexpr double BrushDbPerSecond = 60.0; // 2 dB at the nominal 30 Hz publication rate.
         static constexpr double MaximumBrushExposureSeconds = (MaximumSpectralGainDb - MinimumSpectralGainDb) / BrushDbPerSecond;
-		static constexpr double StrokeUpdateSeconds = 1.0 / 30.0;
+		static constexpr double StrokeUpdateSeconds = 1.0 / 30.0; // Audible queue cadence.
+        static constexpr double VisualUpdateSeconds = 1.0 / 60.0;
         // Two active maps and at most one cancelled in-flight map; each has reserved dirty indices.
         static constexpr std::uint64_t InputMapBytesPerCoefficient = 3u * (sizeof(double) + sizeof(std::uint32_t));
 		static constexpr std::uint64_t BandMapBytesPerSample = 3u * (2u * sizeof(double) + 2u * sizeof(std::uint32_t));

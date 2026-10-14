@@ -112,7 +112,7 @@ unsigned long AudioSpectralGainField::EnvelopeIndex(const AudioSpectralAnalysis&
 }
 
 bool AudioSpectralGainField::ApplyOwnedBand(const AudioSpectralAnalysis& analysis,
-    const AudioSpectralGainField& before, const AudioSpectralEnvelopeStroke& stroke, std::string& reason)
+    const AudioSpectralGainField& before, const AudioSpectralEnvelopeStroke& stroke, std::string& reason, ChangeBounds* changes)
 {
     reason.clear();
     try
@@ -120,6 +120,7 @@ bool AudioSpectralGainField::ApplyOwnedBand(const AudioSpectralAnalysis& analysi
         auto candidate = *this;
         const auto floor = std::pow(10.0, AudioSpectralConfig::SpectralFloorDb / 20.0);
         bool changed = false;
+        ChangeBounds bounds;
         for (std::size_t frame = 0; frame < _frameCount; ++frame)
         {
             if (!before.FrameHasOwned(frame)) continue;
@@ -138,10 +139,11 @@ bool AudioSpectralGainField::ApplyOwnedBand(const AudioSpectralAnalysis& analysi
                     floor, AudioSpectralEnvelope::MaximumGain());
                 const auto targetDb = *factor == 1.0 ? db : target == 0.0
                     ? AudioSpectralConfig::SilenceGainDb : static_cast<float>(20.0 * std::log10(target / original));
-                changed |= candidate.SetGainDb(frame, bin, targetDb);
+                if (candidate.SetGainDb(frame, bin, targetDb))
+                { changed = true; bounds.Include(frame, bin); }
             }
         }
-        if (changed) *this = std::move(candidate);
+        if (changed) { *this = std::move(candidate); if (changes) *changes = bounds; }
         return changed;
     }
     catch (const std::bad_alloc&) { reason = "Not enough memory for recovered band targets"; return false; }
@@ -333,7 +335,7 @@ void AudioSpectralGainField::ExposureMap::Clear() noexcept
 }
 
 bool AudioSpectralGainField::ApplyExposureMap(const AudioSpectralAnalysis& analysis,
-    const ExposureMap& exposure, bool increase, std::string& reason, const AudioSpectralEnvelope* envelope)
+    const ExposureMap& exposure, bool increase, std::string& reason, const AudioSpectralEnvelope* envelope, ChangeBounds* changes)
 {
     reason.clear();
     if (_frameCount != exposure._frames || _binCount != exposure._bins
@@ -343,23 +345,26 @@ bool AudioSpectralGainField::ApplyExposureMap(const AudioSpectralAnalysis& analy
     {
         auto candidate = *this;
         bool changed = false;
+        ChangeBounds bounds;
         for (const auto index : exposure._dirty)
         {
             const auto frame = index / _binCount;
             const auto bin = index % _binCount;
             auto beforeDb = candidate.GainDb(frame, bin);
+            bool cellChanged = false;
             const auto mask = envelope ? envelope->GainAt(EnvelopeIndex(analysis, frame)) : 1.0f;
             if (exposure._exposure[index] > 0.0 && analysis.Magnitude(frame, bin) > 0.0
                 && mask != 1.0f && !candidate.IsOwned(frame, bin))
             {
                 beforeDb = mask == 0.0f || beforeDb == AudioSpectralConfig::SilenceGainDb
                     ? AudioSpectralConfig::SilenceGainDb : beforeDb + static_cast<float>(20.0 * std::log10(mask));
-                changed |= candidate.SetOwned(frame, bin, true);
+                cellChanged |= candidate.SetOwned(frame, bin, true);
             }
-            changed |= candidate.SetGainDb(frame, bin, GainDbAfterExposure(analysis, frame, bin,
+            cellChanged |= candidate.SetGainDb(frame, bin, GainDbAfterExposure(analysis, frame, bin,
                 beforeDb, exposure._exposure[index], increase));
+            if (cellChanged) { changed = true; bounds.Include(frame, bin); }
         }
-        if (changed) *this = std::move(candidate);
+        if (changed) { *this = std::move(candidate); if (changes) *changes = bounds; }
         return changed;
     }
     catch (const std::bad_alloc&) { reason = "Not enough memory to apply the spectral input map"; return false; }

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <algorithm>
 #include <bitset>
 #include <cstddef>
 #include <memory>
@@ -21,7 +22,17 @@ namespace audio
 	class AudioSpectralGainField
 	{
 	public:
-		static constexpr unsigned int TileFrames = 32u;
+		struct ChangeBounds
+        {
+            std::size_t FirstFrame = static_cast<std::size_t>(-1), LastFrame = 0;
+            unsigned int FirstBin = static_cast<unsigned int>(-1), LastBin = 0;
+            void Include(std::size_t frame, unsigned int bin) noexcept
+            {
+                FirstFrame = (std::min)(FirstFrame, frame); LastFrame = (std::max)(LastFrame, frame);
+                FirstBin = (std::min)(FirstBin, bin); LastBin = (std::max)(LastBin, bin);
+            }
+        };
+        static constexpr unsigned int TileFrames = 32u;
 		static constexpr unsigned int TileBins = 32u;
 		struct Tile : std::array<float, TileFrames * TileBins>
 		{
@@ -65,14 +76,14 @@ namespace audio
 		bool SetOwned(std::size_t frame, unsigned int bin, bool owned);
 		static unsigned long EnvelopeIndex(const AudioSpectralAnalysis&, std::size_t frame) noexcept;
 		bool ApplyOwnedBand(const AudioSpectralAnalysis&, const AudioSpectralGainField& before,
-			const AudioSpectralEnvelopeStroke& stroke, std::string& reason);
+			const AudioSpectralEnvelopeStroke& stroke, std::string& reason, ChangeBounds* changes = nullptr);
 		float GainDb(std::size_t frame, unsigned int bin) const noexcept;
         double GainLinear(std::size_t frame, unsigned int bin) const noexcept;
 		bool SetGainDb(std::size_t frame, unsigned int bin, float db);
 		static float GainDbAfterExposure(const AudioSpectralAnalysis& analysis, std::size_t frame,
 			unsigned int bin, float beforeDb, double exposureSeconds, bool increase) noexcept;
 		bool ApplyExposureMap(const AudioSpectralAnalysis& analysis, const ExposureMap& exposure,
-			bool increase, std::string& reason, const AudioSpectralEnvelope* envelope = nullptr);
+			bool increase, std::string& reason, const AudioSpectralEnvelope* envelope = nullptr, ChangeBounds* changes = nullptr);
 
 		// Integrates the compact oval analytically along a straight swept path.
 		// Inputs are body-source seconds and positive Hz; time support wraps.

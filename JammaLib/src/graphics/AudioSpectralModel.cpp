@@ -1,4 +1,5 @@
 #include "AudioSpectralModel.h"
+#include "../editor/AudioSpectralDisplayJob.h"
 #include "GlDeleteQueue.h"
 
 #include <algorithm>
@@ -38,6 +39,9 @@ bool AudioSpectralDisplay::IsValid() const noexcept
 		|| MaximumFrequencyHz > NyquistHz || !Viewport.IsValid() || IncludesDc != (Viewport.Lower == 0.0)
 		|| Heights.size() != static_cast<std::size_t>(TimeSegments + 1u) * (FrequencySegments + 1u))
 		return false;
+    for (const auto& rectangle : DirtyRectangles)
+        if (rectangle.Left > rectangle.Right || rectangle.Right > TimeSegments
+            || rectangle.Bottom > rectangle.Top || rectangle.Top > FrequencySegments) return false;
 	for (const auto height : Heights)
 		if (!std::isfinite(height) || height < 0.0f || height > 1.0f) return false;
 	for (unsigned int row = 0u; row <= FrequencySegments; ++row)
@@ -95,7 +99,23 @@ std::shared_ptr<const AudioSpectralDisplay> AudioSpectralModel::BuildDisplay(
 	const audio::AudioSpectralAnalysis& analysis, const audio::AudioSpectralGainField* gains,
 	const audio::AudioSpectralEnvelope* envelope, std::uint64_t revision,
 	unsigned int timeSegments, unsigned int frequencySegments, std::string& reason, std::stop_token stop,
-	AudioSpectralViewport viewport, std::uint64_t presentationRevision)
+	AudioSpectralViewport viewport, std::uint64_t presentationRevision,
+    std::shared_ptr<const AudioSpectralDisplay> baseline, std::vector<AudioSpectralDisplay::Rectangle> rectangles)
+{
+    // Public callers can supply arbitrary matrices; validate before indexing or
+    // forwarding them to the provenance-controlled worker cache path.
+    if (baseline && !baseline->IsValid())
+    { reason = "Invalid spectral display baseline"; return nullptr; }
+    return _BuildDisplay(analysis, gains, envelope, revision, timeSegments, frequencySegments,
+        reason, stop, viewport, presentationRevision, std::move(baseline), std::move(rectangles));
+}
+
+std::shared_ptr<const AudioSpectralDisplay> AudioSpectralModel::_BuildDisplay(
+	const audio::AudioSpectralAnalysis& analysis, const audio::AudioSpectralGainField* gains,
+	const audio::AudioSpectralEnvelope* envelope, std::uint64_t revision,
+	unsigned int timeSegments, unsigned int frequencySegments, std::string& reason, std::stop_token stop,
+	AudioSpectralViewport viewport, std::uint64_t presentationRevision,
+    std::shared_ptr<const AudioSpectralDisplay> baseline, std::vector<AudioSpectralDisplay::Rectangle> rectangles)
 {
 	reason.clear();
 	if (!analysis.Source || !analysis.Source->Identity || analysis.Source->Generation == 0u
@@ -123,9 +143,23 @@ std::shared_ptr<const AudioSpectralDisplay> AudioSpectralModel::BuildDisplay(
 		if (reason.empty()) reason = "Spectral display frame geometry is invalid";
 		return nullptr;
 	}
+    for (const auto& rectangle : rectangles)
+        if (rectangle.Left > rectangle.Right || rectangle.Right > timeSegments
+            || rectangle.Bottom > rectangle.Top || rectangle.Top > frequencySegments)
+        { reason = "Invalid spectral display damage rectangle"; return nullptr; }
 	try
 	{
-		auto display = std::make_shared<AudioSpectralDisplay>();
+		const auto incremental = baseline && baseline->SourceIdentity == analysis.Source->Identity
+            && baseline->SourceGeneration == analysis.Source->Generation
+            && baseline->TimeSegments == timeSegments && baseline->FrequencySegments == frequencySegments
+            && baseline->Viewport == AudioSpectralViewport{} && baseline->IncludesDc
+            && baseline->NyquistHz == analysis.Source->Layout.SampleRate * 0.5f
+            && baseline->MaximumFrequencyHz == baseline->NyquistHz
+            && baseline->MinimumFrequencyHz == static_cast<float>((std::min)(audio::AudioSpectralConfig::DisplayMinimumFrequencyHz,
+                static_cast<double>(analysis.Source->Layout.SampleRate) * 0.25));
+        auto display = incremental ? std::make_shared<AudioSpectralDisplay>(*baseline) : std::make_shared<AudioSpectralDisplay>();
+        display->BaselineRevision = incremental ? baseline->Revision : 0;
+        display->DirtyRectangles = incremental ? std::move(rectangles) : std::vector<AudioSpectralDisplay::Rectangle>{};
 		display->SourceIdentity = analysis.Source->Identity;
 		display->SourceGeneration = analysis.Source->Generation;
 		display->Revision = revision;
@@ -150,6 +184,8 @@ std::shared_ptr<const AudioSpectralDisplay> AudioSpectralModel::BuildDisplay(
             unsigned int FirstBin, NextBin;
             double BinWeight;
             double Db00 = 0.0, Db01 = 0.0, Db10 = 0.0, Db11 = 0.0;
+            bool Owned00 = false, Owned01 = false, Owned10 = false, Owned11 = false;
+            std::size_t CachedFirst = static_cast<std::size_t>(-1), CachedNext = static_cast<std::size_t>(-1);
         };
         std::vector<RowSample> rows;
         rows.reserve(frequencySegments + 1u);
@@ -161,19 +197,28 @@ std::shared_ptr<const AudioSpectralDisplay> AudioSpectralModel::BuildDisplay(
             rows.push_back({firstBin, (std::min)(firstBin + 1u, analysis.Geometry.BinCount - 1u),
                 std::clamp(binPosition - firstBin, 0.0, 1.0)});
         }
-        auto cachedFirst = analysis.Geometry.FrameCount;
-        auto cachedNext = analysis.Geometry.FrameCount;
+        const auto anyOwned = gains && gains->HasOwnedCoefficients();
+
 		for (unsigned int column = 0u; column < timeSegments; ++column)
 		{
 			if (stop.stop_requested()) { reason = "Spectral display cancelled"; return nullptr; }
-			const auto bodySample = static_cast<double>(column) * analysis.Source->Layout.LogicalLength / timeSegments;
+			unsigned int firstRow = frequencySegments + 1u, lastRow = 0u;
+            if (incremental)
+            {
+                for (const auto& rect : display->DirtyRectangles)
+                    if (column >= rect.Left && column <= rect.Right)
+                    { firstRow = (std::min)(firstRow, rect.Bottom); lastRow = (std::max)(lastRow, rect.Top); }
+                if (firstRow > lastRow) continue;
+            }
+            else { firstRow = 0; lastRow = frequencySegments; }
+            const auto bodySample = static_cast<double>(column) * analysis.Source->Layout.LogicalLength / timeSegments;
 			const auto framePosition = (bodySample - analysis.Geometry.FirstFrameCentre) / analysis.Transform.HopSamps;
 			const auto firstFrame = (std::min)(static_cast<std::size_t>(framePosition), analysis.Geometry.FrameCount - 1u);
 			const auto nextFrame = (std::min)(firstFrame + 1u, analysis.Geometry.FrameCount - 1u);
 			const auto frameWeight = std::clamp(framePosition - firstFrame, 0.0, 1.0);
 			const auto envelopeGain = envelope ? envelope->GainAt(static_cast<unsigned long>(bodySample)) : 1.0f;
             const auto envelopeDb = envelopeGain > 0.0f ? 20.0 * std::log10(envelopeGain) : -std::numeric_limits<double>::infinity();
-			for (unsigned int row = 0u; row <= frequencySegments; ++row)
+			for (unsigned int row = firstRow; row <= lastRow; ++row)
 			{
                 auto& sample = rows[row];
 				const auto height = [&](std::size_t frame, unsigned int bin)
@@ -185,30 +230,36 @@ std::shared_ptr<const AudioSpectralDisplay> AudioSpectralModel::BuildDisplay(
                         : magnitude > 0.0 ? 20.0 * std::log10(magnitude / audio::AudioSpectralConfig::DisplayReferenceMagnitude)
                         : -std::numeric_limits<double>::infinity();
 				};
-                if (cachedFirst != firstFrame || cachedNext != nextFrame)
+                if (sample.CachedFirst != firstFrame || sample.CachedNext != nextFrame)
                 {
-                    if (firstFrame == cachedNext)
+                    if (firstFrame == sample.CachedNext)
                     {
                         sample.Db00 = sample.Db10;
                         sample.Db01 = sample.Db11;
+                        sample.Owned00 = sample.Owned10; sample.Owned01 = sample.Owned11;
                     }
                     else
                     {
                         sample.Db00 = height(firstFrame, sample.FirstBin);
                         sample.Db01 = height(firstFrame, sample.NextBin);
+                        sample.Owned00 = anyOwned && gains->IsOwned(firstFrame, sample.FirstBin);
+                        sample.Owned01 = anyOwned && gains->IsOwned(firstFrame, sample.NextBin);
                     }
                     sample.Db10 = height(nextFrame, sample.FirstBin);
                     sample.Db11 = height(nextFrame, sample.NextBin);
+                    sample.Owned10 = anyOwned && gains->IsOwned(nextFrame, sample.FirstBin);
+                    sample.Owned11 = anyOwned && gains->IsOwned(nextFrame, sample.NextBin);
+                    sample.CachedFirst = firstFrame; sample.CachedNext = nextFrame;
                 }
                 // Preserve height-domain interpolation and per-corner envelope clamp.
-                const auto compressed = [&](double db, std::size_t frame, unsigned int bin)
+                const auto compressed = [&](double db, bool owned)
                 {
                     if (std::isnan(db)) return std::numeric_limits<float>::quiet_NaN();
-                    return static_cast<float>(std::clamp((db + (gains && gains->IsOwned(frame, bin) ? 0.0 : envelopeDb) - audio::AudioSpectralConfig::DisplayFloorDb)
+                    return static_cast<float>(std::clamp((db + (owned ? 0.0 : envelopeDb) - audio::AudioSpectralConfig::DisplayFloorDb)
                         / (audio::AudioSpectralConfig::DisplayCeilingDb - audio::AudioSpectralConfig::DisplayFloorDb), 0.0, 1.0));
                 };
-                const auto first = std::lerp(compressed(sample.Db00, firstFrame, sample.FirstBin), compressed(sample.Db01, firstFrame, sample.NextBin), sample.BinWeight);
-                const auto next = std::lerp(compressed(sample.Db10, nextFrame, sample.FirstBin), compressed(sample.Db11, nextFrame, sample.NextBin), sample.BinWeight);
+                const auto first = std::lerp(compressed(sample.Db00, sample.Owned00), compressed(sample.Db01, sample.Owned01), sample.BinWeight);
+                const auto next = std::lerp(compressed(sample.Db10, sample.Owned10), compressed(sample.Db11, sample.Owned11), sample.BinWeight);
                 const auto value = std::lerp(first, next, frameWeight);
 				if (!std::isfinite(value) || value < 0.0)
 				{
@@ -217,12 +268,11 @@ std::shared_ptr<const AudioSpectralDisplay> AudioSpectralModel::BuildDisplay(
 				}
 				display->Heights[row * (timeSegments + 1u) + column] = static_cast<float>(value);
 			}
-            cachedFirst = firstFrame; cachedNext = nextFrame;
 		}
 		// Duplicate the wrapped time endpoint, rather than dropping the last mesh edge.
 		for (unsigned int row = 0u; row <= frequencySegments; ++row)
 			display->Heights[row * (timeSegments + 1u) + timeSegments] = display->Heights[row * (timeSegments + 1u)];
-		if (!display->IsValid()) { reason = "Spectral display frequency range is unavailable"; return nullptr; }
+		if (!incremental && !display->IsValid()) { reason = "Spectral display frequency range is unavailable"; return nullptr; }
 		return display;
 	}
 	catch (const std::bad_alloc&) { reason = "Not enough memory for the spectral display"; }
@@ -238,6 +288,21 @@ bool AudioSpectralModel::SetDisplay(std::shared_ptr<const AudioSpectralDisplay> 
 		reason = "Spectral display does not match the fixed surface topology";
 		return false;
 	}
+    return _SetDisplay(std::move(display), reason, false);
+}
+
+bool AudioSpectralModel::SetCompletedDisplay(const editor::AudioSpectralDisplayJob& job, std::string& reason)
+{
+    const auto display = job.Result();
+    if (!display || display->TimeSegments != _timeSegments || display->FrequencySegments != _frequencySegments)
+    { reason = "Completed spectral display does not match the topology"; return false; }
+    // Only the job's validated immutable builder result reaches this path.
+    return _SetDisplay(display, reason, true);
+}
+
+bool AudioSpectralModel::_SetDisplay(std::shared_ptr<const AudioSpectralDisplay> display, std::string& reason, bool trustedDamage)
+{
+    reason.clear();
 	std::lock_guard lock(_surfaceMutex);
 	if (_pendingDisplay && _pendingDisplay->SourceIdentity == display->SourceIdentity
 		&& (_pendingDisplay->SourceGeneration > display->SourceGeneration
@@ -250,6 +315,7 @@ bool AudioSpectralModel::SetDisplay(std::shared_ptr<const AudioSpectralDisplay> 
 		return false;
 	}
 	_pendingDisplay = std::move(display);
+    _pendingTrustedDamage = trustedDamage;
 	return true;
 }
 
@@ -394,24 +460,18 @@ void AudioSpectralModel::_ReleaseResources()
 bool AudioSpectralModel::_UploadDisplay()
 {
 	std::shared_ptr<const AudioSpectralDisplay> pending, uploaded;
+    bool trustedDamage = false;
 	{
 		std::lock_guard lock(_surfaceMutex);
 		pending = _pendingDisplay;
 		uploaded = _uploadedDisplay;
+        trustedDamage = _pendingTrustedDamage;
 	}
 	if (!pending || _heightTexture == 0u) return false;
 	if (pending == uploaded) return true;
-	unsigned int left = _timeSegments + 1u, right = 0u, bottom = _frequencySegments + 1u, top = 0u;
-	for (unsigned int row = 0u; row <= _frequencySegments; ++row)
-		for (unsigned int column = 0u; column <= _timeSegments; ++column)
-		{
-			const auto index = row * (_timeSegments + 1u) + column;
-			if (uploaded && pending->Heights[index] == uploaded->Heights[index]) continue;
-			left = (std::min)(left, column); right = (std::max)(right, column);
-			bottom = (std::min)(bottom, row); top = (std::max)(top, row);
-		}
-	if (left <= right && bottom <= top)
-	{
+    const auto subUpload = uploaded && pending->CanSubUpload(*uploaded, trustedDamage);
+    if (!subUpload || !pending->DirtyRectangles.empty())
+    {
 		GLint alignment = 0, rowLength = 0, unpackBuffer = 0, skipPixels = 0, skipRows = 0;
 		glGetIntegerv(GL_UNPACK_ALIGNMENT, &alignment);
 		glGetIntegerv(GL_UNPACK_ROW_LENGTH, &rowLength);
@@ -425,9 +485,17 @@ bool AudioSpectralModel::_UploadDisplay()
 		glPixelStorei(GL_UNPACK_SKIP_ROWS, 0);
 		glActiveTexture(GL_TEXTURE1);
 		glBindTexture(GL_TEXTURE_2D, _heightTexture);
-		glTexSubImage2D(GL_TEXTURE_2D, 0, left, bottom, right - left + 1u, top - bottom + 1u,
-			GL_RED, GL_FLOAT, pending->Heights.data() + bottom * (_timeSegments + 1u) + left);
-		const auto error = glGetError();
+        GLenum error = GL_NO_ERROR;
+        const auto upload = [&](const AudioSpectralDisplay::Rectangle& rectangle)
+        {
+            glTexSubImage2D(GL_TEXTURE_2D, 0, rectangle.Left, rectangle.Bottom,
+                rectangle.Right - rectangle.Left + 1u, rectangle.Top - rectangle.Bottom + 1u,
+                GL_RED, GL_FLOAT, pending->Heights.data() + rectangle.Bottom * (_timeSegments + 1u) + rectangle.Left);
+            const auto currentError = glGetError();
+            if (currentError != GL_NO_ERROR) error = currentError;
+        };
+        if (subUpload) for (const auto& rectangle : pending->DirtyRectangles) upload(rectangle);
+        else upload({0, _timeSegments, 0, _frequencySegments});
 		glBindTexture(GL_TEXTURE_2D, 0);
 		glActiveTexture(GL_TEXTURE0);
 		glPixelStorei(GL_UNPACK_ALIGNMENT, alignment);
@@ -534,4 +602,54 @@ void AudioSpectralModel::Draw3d(base::DrawContext& ctx, unsigned int numInstance
 	std::lock_guard lock(_surfaceMutex);
 	_displayedSurface = std::move(surface);
 	_unavailableReason.clear();
+}
+
+bool AudioSpectralDisplay::CanSubUpload(const AudioSpectralDisplay& baseline, bool trustedDamage) const noexcept
+{
+    return trustedDamage && BaselineRevision != 0 && BaselineRevision == baseline.Revision
+        && SourceIdentity == baseline.SourceIdentity && SourceGeneration == baseline.SourceGeneration
+        && TimeSegments == baseline.TimeSegments && FrequencySegments == baseline.FrequencySegments;
+}
+
+std::vector<AudioSpectralDisplay::Rectangle> AudioSpectralModel::ProjectDamage(
+    const audio::AudioSpectralAnalysis& analysis, const AudioSpectralDisplay& display,
+    std::size_t firstFrame, std::size_t lastFrame, unsigned int firstBin, unsigned int lastBin,
+    unsigned long firstSample, unsigned long lastSample)
+{
+    std::vector<AudioSpectralDisplay::Rectangle> result;
+    unsigned int bottom = display.FrequencySegments + 1, top = 0;
+    for (unsigned int row = 0; row <= display.FrequencySegments && firstFrame <= lastFrame; ++row)
+    {
+        const auto position = display.FrequencyAt(static_cast<double>(row) / display.FrequencySegments)
+            * analysis.Transform.WindowSamps / analysis.Source->Layout.SampleRate;
+        const auto first = (std::min)(static_cast<unsigned int>(position), analysis.Geometry.BinCount - 1u);
+        const auto next = (std::min)(first + 1u, analysis.Geometry.BinCount - 1u);
+        if (first <= lastBin && next >= firstBin) { bottom = (std::min)(bottom, row); top = row; }
+    }
+    const auto append = [&](unsigned int firstRow, unsigned int lastRow, bool coefficients)
+    {
+        unsigned int left = display.TimeSegments + 1u, right = 0;
+        for (unsigned int column = 0; column < display.TimeSegments; ++column)
+        {
+            const auto sample = static_cast<double>(column) * analysis.Source->Layout.LogicalLength / display.TimeSegments;
+            bool affected;
+            if (coefficients)
+            {
+                const auto position = (sample - analysis.Geometry.FirstFrameCentre) / analysis.Transform.HopSamps;
+                const auto first = (std::min)(static_cast<std::size_t>(position), analysis.Geometry.FrameCount - 1u);
+                const auto next = (std::min)(first + 1u, analysis.Geometry.FrameCount - 1u);
+                affected = first <= lastFrame && next >= firstFrame;
+            }
+            else affected = static_cast<unsigned long>(sample) >= firstSample && static_cast<unsigned long>(sample) <= lastSample;
+            if (affected) { left = (std::min)(left, column); right = column; }
+        }
+        if (left <= right)
+        {
+            result.push_back({left, right, firstRow, lastRow});
+            if (left == 0) result.push_back({display.TimeSegments, display.TimeSegments, firstRow, lastRow});
+        }
+    };
+    if (bottom <= top) append(bottom, top, true);
+    if (firstSample <= lastSample) append(0, display.FrequencySegments, false);
+    return result;
 }

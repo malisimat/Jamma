@@ -111,6 +111,7 @@ namespace editor
 		void Close();
 		void Update();
 		bool HasPreparedSurface() const noexcept { return _surfacePrepared; }
+        std::uint64_t PreparedDisplayRevision() const noexcept { return _preparedDisplayRevision; }
 		State Status() const noexcept { return _state; }
 		const std::string& Feedback() const noexcept { return _feedback; }
 		// Previous complete content can remain visible while reacquiring. Callers
@@ -173,10 +174,13 @@ namespace editor
 		std::shared_ptr<graphics::AudioSpectralModel> _model;
 		std::deque<std::shared_ptr<AudioSpectralDisplayJob>> _displayJobs;
 		std::shared_ptr<const audio::AudioSpectralEditState> _requestedDisplayEdit;
+        std::shared_ptr<AudioSpectralDisplayJob::Cache> _displayCache = std::make_shared<AudioSpectralDisplayJob::Cache>();
+        AudioSpectralDisplayJob::Damage _displayDamage; // UI receipt metadata, copied before worker handoff.
 		// UI-owned, copied to jobs; worker only reads const request captures.
 		// Close/source teardown cancels all jobs before releasing these requests.
 		std::uint64_t _presentationRevision = 0u;
 		bool _surfacePrepared = false;
+        std::uint64_t _preparedDisplayRevision = 0;
 		std::string _displayFailure;
 		void _UpdateDisplay();
 		std::shared_ptr<const audio::AudioSpectralEditState> _initialEdit;

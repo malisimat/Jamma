@@ -32,6 +32,7 @@ struct AudioSpectralEditor::Stroke
 	std::optional<std::pair<double, double>> Point;
 	double AnchorY = 0.0; float Target = 1;
 	bool Broadband = false, Attenuate = false, Released = false;
+    std::chrono::steady_clock::time_point LastAudio = std::chrono::steady_clock::time_point::min();
 	std::chrono::steady_clock::time_point Last = std::chrono::steady_clock::now();
 	std::chrono::steady_clock::time_point LastBatch = Last;
     std::chrono::steady_clock::time_point LastDiagnostic = Last;
@@ -45,6 +46,7 @@ struct AudioSpectralEditor::PaintReceipt
 	std::shared_ptr<const audio::AudioSpectralGainField> Gains;
 	std::shared_ptr<const audio::AudioSpectralEnvelope> Envelope;
 	bool Changed = false;
+    AudioSpectralDisplayJob::Damage Damage;
     double ExposureSeconds = 0;
     std::unique_ptr<audio::AudioSpectralGainField::ExposureMap> InputMap; // Frozen for worker/UI readers until terminal release/acquire.
 	std::unique_ptr<audio::AudioSpectralEnvelopeStroke::RelativeMap> BandInput; // Immutable during worker ownership.
@@ -207,9 +209,11 @@ void AudioSpectralEditor::Close()
 	for (const auto& job : _displayJobs) job->Cancel();
 	_displayJobs.clear();
 	_requestedDisplayEdit.reset();
+        _displayCache = std::make_shared<AudioSpectralDisplayJob::Cache>();
+        _displayDamage = {};
 	_presentationRevision = 0u;
 	_model.reset();
-	_surfacePrepared = false;
+	_surfacePrepared = false; _preparedDisplayRevision = 0;
 	_displayFailure.clear();
 	if (_capture) _capture->Cancel();
 	if (_analysisJob) _analysisJob->Cancel();
@@ -246,6 +250,8 @@ void AudioSpectralEditor::Update()
 	std::erase_if(_gates, [](const auto& entry) { return entry.second.expired(); });
 	_AcceptPaint();
 	_LogStroke();
+    // Retire/schedule presentation before another mutable edit batch can fork tiles.
+    _UpdateDisplay();
 	_UpdateStroke();
 	if (_closing && !_stroke)
 	{
@@ -270,6 +276,8 @@ void AudioSpectralEditor::Update()
 		for (const auto& job : _displayJobs) job->Cancel();
 		_displayJobs.clear();
 		_requestedDisplayEdit.reset();
+        _displayCache = std::make_shared<AudioSpectralDisplayJob::Cache>();
+        _displayDamage = {};
 		_analysisJob.reset();
 		_capture.reset();
 		_state = State::WaitingForSource;
@@ -433,7 +441,7 @@ void AudioSpectralEditor::_UpdateDisplay()
 			&& (*job)->Viewport == graphics::AudioSpectralViewport{}
 			&& loop->IsCurrentAudioSpectralSource(*(*job)->Analysis->Source))
 		{
-			if (_model->SetDisplay((*job)->Result(), _feedback)) { _surfacePrepared = true; _displayFailure.clear(); }
+			if (_model->SetCompletedDisplay(**job, _feedback)) { _surfacePrepared = true; _preparedDisplayRevision = (*job)->Result()->Revision; _displayFailure.clear(); }
 			else _displayFailure = _feedback;
 		}
 		else if (status == AudioSpectralDisplayJob::State::Failed && (*job)->Viewport == graphics::AudioSpectralViewport{})
@@ -445,7 +453,7 @@ void AudioSpectralEditor::_UpdateDisplay()
 	{
 		_displayFailure.clear();
 		auto job = std::make_shared<AudioSpectralDisplayJob>(_analysis, edit,
-			_model->TimeSegments(), _model->FrequencySegments(), graphics::AudioSpectralViewport{}, ++_presentationRevision);
+			_model->TimeSegments(), _model->FrequencySegments(), graphics::AudioSpectralViewport{}, ++_presentationRevision, _displayCache, _displayDamage);
 		_worker->RequestPresentation([job] { job->Run(); }, [job] { job->Cancel(); });
 		// Worker cancellation marks superseded queued work terminal. Retain every
 		// running receipt for explicit source-change/close cancellation, bounded
@@ -642,7 +650,7 @@ void AudioSpectralEditor::_UpdateStroke()
 	}
 	const auto now = std::chrono::steady_clock::now();
 	if (!_stroke->Released
-		&& std::chrono::duration<double>(now - _stroke->LastBatch).count() < audio::AudioSpectralConfig::StrokeUpdateSeconds) return;
+		&& std::chrono::duration<double>(now - _stroke->LastBatch).count() < audio::AudioSpectralConfig::VisualUpdateSeconds) return;
 	_stroke->LastBatch = now;
 	const auto stroke = _stroke;
 	auto receipt = std::make_shared<PaintReceipt>();
@@ -679,11 +687,14 @@ void AudioSpectralEditor::_UpdateStroke()
                         if (stroke->Before->Gains->HasOwnedCoefficients())
                         {
                             if (!stroke->Gains) stroke->Gains = std::make_shared<audio::AudioSpectralGainField>(*stroke->Before->Gains);
-                            if (stroke->Gains->ApplyOwnedBand(*stroke->Analysis, *stroke->Before->Gains, *stroke->Envelope, receipt->Reason))
+                            audio::AudioSpectralGainField::ChangeBounds changes;
+                            if (stroke->Gains->ApplyOwnedBand(*stroke->Analysis, *stroke->Before->Gains, *stroke->Envelope, receipt->Reason, &changes))
                             {
                                 receipt->Gains = stroke->Gains->ContentEquals(*stroke->Before->Gains)
                                     ? stroke->Before->Gains : std::make_shared<const audio::AudioSpectralGainField>(*stroke->Gains);
                                 receipt->Changed = true;
+                                receipt->Damage.FirstFrame = changes.FirstFrame; receipt->Damage.LastFrame = changes.LastFrame;
+                                receipt->Damage.FirstBin = changes.FirstBin; receipt->Damage.LastBin = changes.LastBin;
                                 receipt->Envelope = stroke->PublishedEnvelope;
                             }
                         }
@@ -697,7 +708,13 @@ void AudioSpectralEditor::_UpdateStroke()
 							};
 							if (snapshot && !same(snapshot, stroke->PublishedEnvelope))
 							{
-								receipt->Envelope = same(snapshot, stroke->Before->Envelope) ? stroke->Before->Envelope : snapshot;
+								// Comparing actual published samples includes local ramp and seam changes.
+                                const auto previous = stroke->PublishedEnvelope ? stroke->PublishedEnvelope : stroke->Before->Envelope;
+                                for (unsigned long sample = 0; sample < snapshot->Gains().size(); ++sample)
+                                    if (snapshot->Gains()[sample] != (previous ? previous->GainAt(sample) : 1.0f))
+                                    { receipt->Damage.FirstSample = (std::min)(receipt->Damage.FirstSample, sample);
+                                      receipt->Damage.LastSample = sample; }
+                                receipt->Envelope = same(snapshot, stroke->Before->Envelope) ? stroke->Before->Envelope : snapshot;
 								stroke->PublishedEnvelope = receipt->Envelope;
 								receipt->Changed = true;
 							}
@@ -707,8 +724,14 @@ void AudioSpectralEditor::_UpdateStroke()
 				else
 				{
 					if (!stroke->Gains) stroke->Gains = std::make_shared<audio::AudioSpectralGainField>(*stroke->Before->Gains);
-					receipt->Changed = stroke->Gains->ApplyExposureMap(*stroke->Analysis, *receipt->InputMap, !stroke->Attenuate, receipt->Reason, stroke->Before->Envelope.get());
-					if (receipt->Changed) receipt->Gains = std::make_shared<const audio::AudioSpectralGainField>(*stroke->Gains);
+					audio::AudioSpectralGainField::ChangeBounds changes;
+                    receipt->Changed = stroke->Gains->ApplyExposureMap(*stroke->Analysis, *receipt->InputMap, !stroke->Attenuate, receipt->Reason, stroke->Before->Envelope.get(), &changes);
+					if (receipt->Changed)
+                    {
+                        receipt->Gains = std::make_shared<const audio::AudioSpectralGainField>(*stroke->Gains);
+                        receipt->Damage.FirstFrame = changes.FirstFrame; receipt->Damage.LastFrame = changes.LastFrame;
+                        receipt->Damage.FirstBin = changes.FirstBin; receipt->Damage.LastBin = changes.LastBin;
+                    }
 				}
 			}
 		}
@@ -745,7 +768,16 @@ void AudioSpectralEditor::_AcceptPaint()
 		current->EnvelopeRevision + _stroke->Broadband, _feedback);
 	if (!edit || !loop->PublishAudioSpectralEdit(edit, _feedback)) { EndStroke(true); return; }
 	_stroke->Latest = edit;
-	_QueuePlayback(_worker, loop, edit, _analysis, _gate);
+    receipt->Damage.BaselineRevision = current->Revision;
+    receipt->Damage.TargetRevision = edit->Revision;
+    _displayDamage = receipt->Damage;
+    const auto now = std::chrono::steady_clock::now();
+    if (_stroke->LastAudio == std::chrono::steady_clock::time_point::min()
+        || std::chrono::duration<double>(now - _stroke->LastAudio).count() >= audio::AudioSpectralConfig::StrokeUpdateSeconds)
+    {
+        _stroke->LastAudio = now;
+        _QueuePlayback(_worker, loop, edit, _analysis, _gate);
+    }
 }
 
 std::optional<double> AudioSpectralEditor::BrushLevelDb() const
@@ -827,6 +859,9 @@ void AudioSpectralEditor::_FinishStroke()
 	if (!_stroke) return;
 	_LogStroke("finish");
     const auto before = _stroke->Before, after = _stroke->Latest;
+    // A final accepted revision must converge even if the last visual batch was
+    // inside the audio throttle interval; RequestContent coalesces the duplicate.
+    if (after != before) _QueuePlayback(_worker, _loop, after, _analysis, _gate);
 	_gate->StrokeActive.store(false);
 	if (_history && (before->Gains != after->Gains || before->Envelope != after->Envelope))
 	{

@@ -15,10 +15,23 @@ namespace editor
 	{
 	public:
 		enum class State { Pending, Complete, Failed, Cancelled };
+        class Cache
+        {
+            friend class AudioSpectralDisplayJob;
+            std::shared_ptr<const graphics::AudioSpectralDisplay> Display; // Visual-worker only; builder provenance.
+        };
+        struct Damage
+        {
+            std::uint64_t BaselineRevision = 0, TargetRevision = 0;
+            std::size_t FirstFrame = static_cast<std::size_t>(-1), LastFrame = 0;
+            unsigned int FirstBin = static_cast<unsigned int>(-1), LastBin = 0;
+            unsigned long FirstSample = static_cast<unsigned long>(-1), LastSample = 0;
+        };
 		AudioSpectralDisplayJob(std::shared_ptr<const audio::AudioSpectralAnalysis> analysis,
 			std::shared_ptr<const audio::AudioSpectralEditState> editState,
 			unsigned int timeSegments, unsigned int frequencySegments,
-			graphics::AudioSpectralViewport viewport = {}, std::uint64_t presentationRevision = 0u);
+			graphics::AudioSpectralViewport viewport = {}, std::uint64_t presentationRevision = 0u,
+            std::shared_ptr<Cache> cache = nullptr, Damage damage = {});
 		const std::shared_ptr<const audio::AudioSpectralAnalysis> Analysis;
 		const std::shared_ptr<const audio::AudioSpectralEditState> EditState;
 		const unsigned int TimeSegments;
@@ -38,5 +51,7 @@ namespace editor
 		std::stop_source _stop;
 		std::shared_ptr<const graphics::AudioSpectralDisplay> _result;
 		std::string _reason;
+        std::shared_ptr<Cache> _cache;
+        Damage _damage;
 	};
 }
