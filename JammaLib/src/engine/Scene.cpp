@@ -154,6 +154,9 @@ Scene::Scene(SceneParams params,
 	mainParams.Settings = _settingsControls->SelectionEntries();
 	_selectionPanel = std::make_shared<GuiMainPanel>(mainParams);
 	AddChild(_selectionPanel);
+	_selectionPanel->SetPerformanceGroupHandler([this](bool selection, GroupCommand command, std::size_t slot) {
+		_ExecuteGroupCommandLocked(selection, command, slot);
+	});
 
 	_PublishAudioStations();
 
@@ -365,6 +368,10 @@ std::optional<std::shared_ptr<Scene>> Scene::FromFile(SceneParams sceneParams,
 	for (auto& station : loaded.Stations)
 		scene->_AddStation(std::move(station), false);
 	scene->_PublishAudioStations();
+	scene->_performanceGroups.Groups().Mute.Restore(jamStruct.MuteGroups,
+		jamStruct.MuteActiveGroup ? std::optional<std::size_t>(*jamStruct.MuteActiveGroup + 1u) : std::nullopt);
+	scene->_performanceGroups.Groups().Selection.Restore(jamStruct.SelectionGroups,
+		jamStruct.SelectionActiveGroup ? std::optional<std::size_t>(*jamStruct.SelectionActiveGroup + 1u) : std::nullopt);
 	scene->_audioEngine->PublishPendingRigSnapshot(acceptedRig);
 	scene->_inputSubsystem->PublishRigInputDispatch(acceptedRig);
 
@@ -582,10 +589,64 @@ void Scene::Draw3d(DrawContext& ctx,
 		glActiveTexture(GL_TEXTURE0);
 	}
 	_loopEditor.ApplyToModels();
+	if (_selectionPanel && (!_selectionPanel->IsVisible() || !_selectionPanel->IsEnabled()
+		|| _popupManager.IsOpen() || _loopEditor.IsEngaged() || _EditControlsSuppressed()))
+		_selectionPanel->ClearPerformanceGroupPointerState();
+	const auto hoveredGroup = PASS_SCENE == pass && _selectionPanel && !_popupManager.IsOpen()
+		&& !_loopEditor.IsEngaged() && !_EditControlsSuppressed()
+		? _selectionPanel->HoveredPerformanceGroup() : std::nullopt;
+	const auto& groups = _performanceGroups.Groups();
+	const auto mutePreview = hoveredGroup && !hoveredGroup->first ? groups.Mute.Get(hoveredGroup->second) : nullptr;
+	const auto selectionPreview = hoveredGroup && hoveredGroup->first ? groups.Selection.Get(hoveredGroup->second) : nullptr;
+	const bool backgroundPreview = PASS_SCENE == pass && _BackgroundPreviewActive();
+	std::vector<GroupTargetId> livePreviewTargets;
+	if (mutePreview || selectionPreview)
+		for (const auto& station : _stations)
+		{
+			if (station->IsRemote()) continue;
+			livePreviewTargets.push_back({ GroupTargetKind::Station, station->Id(), {}, {} });
+			for (const auto& take : station->GetLoopTakes())
+			{
+				livePreviewTargets.push_back({ GroupTargetKind::Take, station->Id(), take->Id(), {} });
+				for (const auto& loop : take->GetLoops())
+					livePreviewTargets.push_back({ GroupTargetKind::AudioLoop, station->Id(), take->Id(), loop->Id() });
+				for (const auto& loop : take->GetMidiLoops())
+					livePreviewTargets.push_back({ GroupTargetKind::MidiLoop, station->Id(), take->Id(), loop->Id() });
+			}
+		}
+	const auto member = [&](const GroupTargetId& target) {
+		return mutePreview ? PerformanceGroupPreview::ContainsLive(*mutePreview, target, livePreviewTargets)
+			: selectionPreview && PerformanceGroupPreview::ContainsLive(*selectionPreview, target, livePreviewTargets);
+	};
+	std::map<std::vector<unsigned int>, bool> previewMembers;
+	if (backgroundPreview || mutePreview || selectionPreview)
+		for (const auto& station : _stations)
+		{
+			if (station->IsRemote()) continue;
+			previewMembers[station->GlobalId()] = backgroundPreview || member({ GroupTargetKind::Station, station->Id(), {}, {} });
+			for (const auto& take : station->GetLoopTakes())
+			{
+				for (const auto& loop : take->GetLoops())
+					if (const auto model = loop->Model())
+						previewMembers[model->GlobalId()] = backgroundPreview || member({ GroupTargetKind::AudioLoop, station->Id(), take->Id(), loop->Id() });
+				for (const auto& loop : take->GetMidiLoops())
+					if (const auto model = loop->Model())
+						// MIDI playback mute belongs to the take; mute snapshots
+						// intentionally store no separate MIDI-loop mute flag.
+						previewMembers[model->GlobalId()] = backgroundPreview || (mutePreview
+							? PerformanceGroupPreview::AudibleTake(*mutePreview, { GroupTargetKind::Take, station->Id(), take->Id(), {} })
+							: member({ GroupTargetKind::MidiLoop, station->Id(), take->Id(), loop->Id() }));
+			}
+		}
+	const bool selectionTint = backgroundPreview ? _BackgroundSelectionPreviewActive() : selectionPreview != nullptr;
+	glCtx.SetGroupPreview(backgroundPreview || mutePreview || selectionPreview,
+		selectionTint ? glm::vec3(1.0f, 0.875f, 0.208f) : glm::vec3(0.259f, 0.588f, 1.0f), std::move(previewMembers), !backgroundPreview);
 	for (auto& station : _stations)
 	{
 		station->Draw3d(ctx, 1, pass);
 	}
+	glCtx.SetGroupPreview(false, glm::vec3(1.0f), {});
+	glCtx.ApplyGroupPreview({});
 	glCtx.SetUniform("SelectionActive", 0.0f);
 	glCtx.SetUniform("SceneDim", 1.0f);
 	if (probeId != 0u)
@@ -636,10 +697,10 @@ bool Scene::AdvanceUiAnimations()
 	const float elapsed = _lastPanelAnimationTime
 		? static_cast<float>(Timer::GetElapsedSeconds(*_lastPanelAnimationTime, now)) : 0.0f;
 	_lastPanelAnimationTime = now;
+	std::scoped_lock lock(_sceneMutex);
 	const bool mainChanged = _mainPanel && _mainPanel->AdvanceAnimation(elapsed);
 	const bool selectionChanged = _selectionPanel && _selectionPanel->AdvanceAnimation(elapsed);
 	if (mainChanged || selectionChanged) _InvalidateHover2d();
-	std::scoped_lock lock(_sceneMutex);
 	bool stationsMoved = false;
 	for (const auto& station : _stations) stationsMoved |= station->AdvancePresentationMove(elapsed);
 	_UpdateViewProjectionLocked();
@@ -649,6 +710,13 @@ bool Scene::AdvanceUiAnimations()
 		_InvalidateHover2d();
 	}
 	_UpdateRackVisibilityLocked();
+	_performanceGroups.Acknowledge(_audioEngine->GroupMuteReceipt());
+	if (_selectionPanel) _selectionPanel->RefreshPerformanceGroups(_performanceGroups.Groups());
+	if (_hudPanel)
+	{
+		_hudPanel->SetPerformanceGroupFeedback(_performanceGroups.Error());
+		if (_mainPanel) _mainPanel->SetOccupiedTopStripBounds(_hudPanel->OccupiedTopStripBounds());
+	}
 	return stationsMoved;
 }
 
@@ -764,6 +832,24 @@ std::optional<ActionResult> Scene::_RouteSettingsTouch(TouchAction action)
 	return std::nullopt;
 }
 
+bool Scene::_BackgroundPreviewActive() const
+{
+	return _backgroundGesture && !_backgroundGesture->Cancelled && !_popupManager.IsOpen()
+		&& !_EditControlsSuppressed() && !_loopEditor.IsEngaged()
+		&& !_quantisationInputResetRequested.load(std::memory_order_acquire);
+}
+
+bool Scene::_BackgroundSelectionPreviewActive() const
+{
+	return _BackgroundPreviewActive() && _backgroundGesture->Command == BackgroundCommand::SelectAll;
+}
+
+void Scene::_SelectAllLocalLocked()
+{
+	_CollapseRacksLocked();
+	HierarchySelection::SelectAllLocal(HierarchySelection::LockedStations(_stations), _selector->CurrentSelectDepth());
+}
+
 ActionResult Scene::OnAction(TouchAction action)
 {
 	if (_isSceneQuitting.load(std::memory_order_acquire) || _controlWriterExclusion.owns_lock()) return ActionResult::NoAction();
@@ -777,6 +863,40 @@ ActionResult Scene::OnAction(TouchAction action)
 	_cursorPos = action.Position;
 	_InvalidateHover2d();
 	if (_rigSaveDialogOpen) return { true, {}, {}, ACTIONRESULT_DEFAULT, nullptr, {} };
+	if (_backgroundGesture && (_popupManager.IsOpen() || _EditControlsSuppressed() || _loopEditor.IsEngaged() ||
+		_quantisationInputResetRequested.load(std::memory_order_acquire)))
+		_backgroundGesture.reset();
+	if (_backgroundGesture)
+	{
+		if (action.Touch != TouchAction::TOUCH_MOUSE)
+			_backgroundGesture->Cancelled = true;
+		else if (action.State == TouchAction::TOUCH_UP && action.Index == _backgroundGesture->Button)
+		{
+			const auto gesture = *_backgroundGesture;
+			_backgroundGesture.reset();
+			if (!gesture.Cancelled && !gesture.Moved && action.Position == gesture.PressPosition)
+			{
+				{
+					std::scoped_lock lock(_sceneMutex);
+					if (gesture.Command == BackgroundCommand::SelectAll) _SelectAllLocalLocked();
+					else
+					{
+						_performanceGroups.Acknowledge(_audioEngine->GroupMuteReceipt());
+						_performanceGroups.SetAllMuted(gesture.Command == BackgroundCommand::MuteAll, _stations,
+							[this](auto application) { _PublishGroupMuteApplication(std::move(application)); });
+					}
+				}
+				if (gesture.Command == BackgroundCommand::SelectAll)
+				{
+					_InvalidateHover2d();
+					_UpdateSelection(ACTIONRESULT_DEFAULT);
+				}
+			}
+		}
+		else if (pointerPress)
+			_backgroundGesture->Cancelled = true;
+		return { true, {}, {}, ACTIONRESULT_DEFAULT, nullptr, {} };
+	}
 	if (_popupManager.IsOpen())
 	{
 		_loopEditor.CancelInput();
@@ -962,6 +1082,27 @@ ActionResult Scene::OnAction(TouchAction action)
 	if (TouchAction::TouchState::TOUCH_DOWN == action.State)
 		_focusManager.ClearFocus();
 
+	if (pointerPress && action.Touch == TouchAction::TOUCH_MOUSE && !_camera.IsBackgroundPointerHeld() && !_isSceneTouching)
+	{
+		// Resolve actual targets: the pass-through HUD spans the viewport but
+		// must not claim its empty space as a control.
+		_ResolveHoverPath2d(_hoverPath2dScratch); // Includes station racks and controls.
+		const bool unmute = action.Index == 1 && action.Modifiers == Action::MODIFIER_NONE;
+		const bool mute = action.Index == 1 && action.Modifiers == Action::MODIFIER_ALT;
+		const bool select = action.Index == 0 && action.Modifiers == Action::MODIFIER_ALT;
+		const auto buttonMask = (unmute || mute || select) ? (1u << action.Index) : 0u;
+		// Chords retain their existing camera/selection meaning. An eligible
+		// single-button background press owns its release even after cancellation.
+		if (_hoverPath2dScratch.empty() && !_HasQuantisationHover() && (unmute || mute || select) &&
+			(action.MouseButtonsDown == 0u || action.MouseButtonsDown == buttonMask))
+		{
+			_camera.CancelBackgroundCoast();
+			_backgroundGesture = BackgroundGesture{ action.Index,
+				select ? BackgroundCommand::SelectAll : mute ? BackgroundCommand::MuteAll : BackgroundCommand::UnmuteAll, action.Position };
+			return { true, {}, {}, ACTIONRESULT_DEFAULT, nullptr, {} };
+		}
+	}
+
 	return _BeginBackgroundDrag(action);
 }
 
@@ -972,6 +1113,22 @@ ActionResult Scene::OnAction(TouchMoveAction action)
 	action.SetUserConfig(_userConfig);
 	_cursorPos = action.Position;
 	_InvalidateHover2d();
+	if (_backgroundGesture)
+	{
+		const auto buttonMask = 1u << _backgroundGesture->Button;
+		if (action.Touch != TouchAction::TOUCH_MOUSE || !(action.MouseButtonsDown & buttonMask) ||
+			_popupManager.IsOpen() || _EditControlsSuppressed() || _loopEditor.IsEngaged() ||
+			_quantisationInputResetRequested.load(std::memory_order_acquire))
+			_backgroundGesture.reset();
+		else if (action.MouseButtonsDown != buttonMask)
+			_backgroundGesture->Cancelled = true;
+		else if (action.Position != _backgroundGesture->PressPosition ||
+			(action.IsRelative && action.RelativeDelta != utils::Position2d{}))
+			// Moving cancels the click, but the captured background press continues
+			// previewing all local items until release.
+			_backgroundGesture->Moved = true;
+		return { true, {}, {}, ACTIONRESULT_DEFAULT, nullptr, {} };
+	}
 	if (!_popupManager.IsOpen() && !_loopEditor.IsEngaged() && _stationControls.Move(action))
 		return { true, {}, {}, ACTIONRESULT_DEFAULT, nullptr, {} };
 	if (_quantisationInteraction.OwnsPointer())
@@ -1086,6 +1243,15 @@ ActionResult Scene::OnAction(TouchMoveAction action)
 
 ActionResult Scene::OnAction(KeyAction action)
 {
+	if (_backgroundGesture && action.KeyActionType == KeyAction::KEY_DOWN && action.KeyChar == 27u)
+	{
+		_backgroundGesture->Cancelled = true;
+		return { true, {}, {}, ACTIONRESULT_DEFAULT, nullptr, {} };
+	}
+	// A consumed physical press keeps its release even when focus changes.
+	if (_performanceGroups.ConsumeRelease(action)) return { true, {}, {}, ACTIONRESULT_DEFAULT, nullptr, {} };
+	if (_rigSaveDialogOpen || _controlWriterExclusion.owns_lock() || _popupManager.IsOpen() || _focusManager.IsEditingText() || _loopEditor.IsEngaged())
+		_performanceGroups.BlockContextualPress(action);
 	if (_isSceneQuitting.load(std::memory_order_acquire) || _controlWriterExclusion.owns_lock()) return ActionResult::NoAction();
 	action.SetActionTime(Timer::GetTime());
 	action.SetUserConfig(_userConfig);
@@ -1221,6 +1387,17 @@ ActionResult Scene::OnAction(KeyAction action)
 	}
 	if (auto editorRes = _loopEditor.TryOpenFromKey(action))
 		return *editorRes;
+	if (!_popupManager.IsOpen() && !_focusManager.IsEditingText() && !_loopEditor.IsEngaged())
+	{
+		std::scoped_lock lock(_sceneMutex);
+		_performanceGroups.Acknowledge(_audioEngine->GroupMuteReceipt());
+		if (_performanceGroups.HandleKey(action, _stations, _GroupSelectionDepthLocked(),
+			[this](auto application) { _PublishGroupMuteApplication(std::move(application)); }))
+		{
+			if (_selectionPanel) _selectionPanel->RefreshPerformanceGroups(_performanceGroups.Groups());
+			return { true, {}, {}, ACTIONRESULT_DEFAULT, nullptr, {} };
+		}
+	}
 
 	if ((9u == action.KeyChar)
 		&& (actions::KeyAction::KEY_UP == action.KeyActionType)
@@ -2160,10 +2337,16 @@ void Scene::AddChild(std::shared_ptr<base::GuiElement> child)
 	}
 }
 
-void Scene::SetHover3d(std::vector<unsigned char> path, Action::Modifiers modifiers)
+void Scene::SetHover3d(std::vector<unsigned char> path, Action::Modifiers modifiers,
+	std::optional<utils::Position2d> pointerPosition)
 {
-	if (_ctrlHeld || _loopEditor.IsEngaged())
+	if (_ctrlHeld || _loopEditor.IsEngaged() || _backgroundGesture)
 		return;
+	if (pointerPosition)
+	{
+		_cursorPos = *pointerPosition;
+		_InvalidateHover2d();
+	}
 	// Resolve GUI ownership before taking the scene lock: station snapshots also lock it.
 	std::vector<std::weak_ptr<base::GuiElement>> guiPath;
 	_ResolveHoverPath2d(guiPath);
@@ -2371,6 +2554,7 @@ void Scene::Shutdown()
 	// Finish any admitted job tick before borrowing lifecycle state. No scene,
 	// MIDI or application gate mutex is held while acquiring this owner boundary.
 	std::unique_lock lifecycle(_controlLifecycleMutex);
+	_backgroundGesture.reset();
 	{
 		// Recovery borrows callback-owned fields under this same lock. Finish
 		// that borrow before teardown, and prevent a later job reopening admission.
@@ -2558,7 +2742,7 @@ void Scene::ApplyDeferredHoverUpdates()
 		return;
 	}
 
-	if (_touchDownElement.lock() || _isSceneTouching)
+	if (_touchDownElement.lock() || _isSceneTouching || _backgroundGesture)
 		return;
 
 	_hoverPath2dScratch.clear();
@@ -2775,13 +2959,17 @@ void Scene::_InitSize()
 	_overlayViewProj = glm::scale(_overlayViewProj, glm::vec3(hScale, vScale, 1.0f));
 
 	if (_hudPanel)
+	{
 		_hudPanel->SetSize(_sizeParams.Size);
+		if (_mainPanel) _mainPanel->SetOccupiedTopStripBounds(_hudPanel->OccupiedTopStripBounds());
+	}
 
 	_UpdateHudStationAnchors();
 }
 
 void Scene::_OnLoopGridEditorOpened()
 {
+	_backgroundGesture.reset();
 	_ReleaseQuantisationInput();
 	if (_hudPanel)
 	{
@@ -3395,8 +3583,39 @@ void Scene::_JobLoop()
 
 void Scene::_PublishAudioStations()
 {
+	_performanceGroups.CancelPending();
+	_audioEngine->PublishGroupMuteApplication(nullptr);
 	auto stations = std::make_shared<const std::vector<std::shared_ptr<Station>>>(_stations.begin(), _stations.end());
 	_audioEngine->SetStations(stations, _rigCoordinator.Accepted() ? _rigCoordinator.Accepted()->TopologyRevision : 0u);
+}
+
+GroupTargetKind Scene::_GroupSelectionDepthLocked() const
+{
+	const auto depth = _selector->CurrentSelectDepth();
+	return depth == base::DEPTH_STATION ? GroupTargetKind::Station :
+		depth == base::DEPTH_LOOP ? GroupTargetKind::AudioLoop : GroupTargetKind::Take;
+}
+
+void Scene::_RestoreGroupSelectionDepthLocked()
+{
+	const auto active = _performanceGroups.Groups().Selection.ActiveSlot();
+	if (!active) return;
+	const auto snapshot = _performanceGroups.Groups().Selection.Get(*active);
+	if (!snapshot) return;
+	const auto depth = snapshot->Depth == GroupTargetKind::Station ? base::DEPTH_STATION :
+		snapshot->Depth == GroupTargetKind::Take ? base::DEPTH_LOOPTAKE : base::DEPTH_LOOP;
+	_selector->SetSelectDepth(depth);
+	for (const auto& station : _stations) station->SetSelectDepth(depth);
+}
+
+void Scene::_ExecuteGroupCommandLocked(bool selection, GroupCommand command, std::size_t slot)
+{
+	_performanceGroups.Acknowledge(_audioEngine->GroupMuteReceipt());
+	_performanceGroups.Execute(selection, command, slot, _stations, _GroupSelectionDepthLocked(),
+		[this](auto application) { _PublishGroupMuteApplication(std::move(application)); });
+	if (selection && command == GroupCommand::RecallOrStore) _RestoreGroupSelectionDepthLocked();
+	if (_selectionPanel) _selectionPanel->RefreshPerformanceGroups(_performanceGroups.Groups());
+	_InvalidateHover2d();
 }
 
 std::shared_ptr<GuiElement> Scene::_ChildFromPath(std::vector<unsigned char> path)
@@ -3613,6 +3832,7 @@ void Scene::_ReleaseQuantisationInput()
 
 void Scene::_ReleaseQuantisationInputLocked()
 {
+	_backgroundGesture.reset();
 	_spaceHeld = _ctrlHeld = false;
 	_quantisation.SetOverlayHeld(false);
 	_quantisationInteraction.CancelInteraction(true);
@@ -3627,6 +3847,7 @@ void Scene::OnInputFocusLost()
 	_focusManager.ClearFocus();
 	std::scoped_lock lock(_sceneMutex);
 	_stationControls.Cancel();
+	_performanceGroups.ResetKeys();
 	_ReleaseQuantisationInputLocked();
 	if (_hudPanel) _hudPanel->ClearPointerState();
 	_touchDownElement.reset();
@@ -3948,7 +4169,7 @@ void Scene::PumpDeviceAndFileControls()
 				for (const auto& station : _stations) if (station) station->ResetLiveMidiWhileQuiescent();
 				if (_CaptureIsBusy()) { eligibilityError = "Save unavailable during capture or pending actions"; return false; }
 				return true;
-			});
+			}, &_performanceGroups.Groups());
 		if (result.Success) { _sessionSaveFolder = _pendingSaveFolder; ReportFileStatus("Saved " + utils::EncodeUtf8(result.Path)); }
 		else ReportFileStatus(result.Error);
 		if (!result.AudioResumed) ReportFileStatus("Save outcome: " + utils::EncodeUtf8(result.Path) + "; audio restoration failed: " + result.Error);
@@ -4216,6 +4437,10 @@ void Scene::_CommitStationMembershipLocked()
 		return;
 	}
 	if (!_stationManagement.Committed || !_stationManagement.Candidate) return;
+	_performanceGroups.Acknowledge(_audioEngine->GroupMuteReceipt());
+	_performanceGroups.CancelPending();
+	_audioEngine->PublishGroupMuteApplication(nullptr);
+	_backgroundGesture.reset();
 	const auto removed = _stationManagement.Target;
 	const auto affectedBindings = _stationManagement.Candidate->TriggerRouteUpdates.size();
 	if (removed)
@@ -4310,4 +4535,12 @@ bool Scene::_JobReceiverAvailableLocked(const std::shared_ptr<base::ActionReceiv
 	// A detached engine child no longer has a membership owner. Late plugin or
 	// structural jobs may release their values, but cannot mutate that hierarchy.
 	return !std::dynamic_pointer_cast<LoopTake>(receiver) && !std::dynamic_pointer_cast<Loop>(receiver);
+}
+
+void Scene::_PublishGroupMuteApplication(std::shared_ptr<const GroupMuteApplication> application)
+{
+	if (!application) { _audioEngine->PublishGroupMuteApplication(nullptr); return; }
+	auto stamped = std::make_shared<GroupMuteApplication>(*application);
+	if (const auto rig = AcceptedRigSnapshot()) stamped->TopologyRevision = rig->TopologyRevision;
+	_audioEngine->PublishGroupMuteApplication(std::move(stamped));
 }

@@ -15,6 +15,7 @@
 #include <memory>
 #include <windows.h>
 #include "IVstPlugin.h"
+#include "ReservedMidiEvents.h"
 #include "VstGlContextScope.h"
 #include "../../include/Constants.h"
 
@@ -134,6 +135,7 @@ namespace vst
 		// Not RT-safe; call from a non-RT thread only.
 		std::vector<std::uint8_t> GetState() const override;
 		void SetState(const std::vector<std::uint8_t>& blob) override;
+		void SendMidiPanicImmediately() noexcept override;
 
 		static bool SupportsHostCanDo(const char* canDo) noexcept
 		{
@@ -157,7 +159,7 @@ namespace vst
 			{
 				VstInt32 numEvents;
 				VstIntPtr reserved;
-				VstEvent* events[MaxMidiEventsPerBlock];
+				VstEvent* events[MaxMidiEventsPerBlock + 16u];
 			};
 
 		// Host callback dispatched by the plugin back to us.
@@ -174,11 +176,10 @@ namespace vst
 		bool _InstantiateEffect(const std::wstring& path);
 
 		AEffect* _effect;
-			std::array<VstMidiEvent, MaxMidiEventsPerBlock> _midiEvents;
+			ReservedMidiEvents<VstMidiEvent, MaxMidiEventsPerBlock> _midiEvents;
 			MidiEventBlock _midiEventBlock;
 			std::uint32_t _midiBlockStartSample;
 			std::uint32_t _midiBlockNumSamples;
-			std::uint32_t _midiEventCount;
 			VstTimeInfo _timeInfo;
 #endif
 		float _sampleRate;

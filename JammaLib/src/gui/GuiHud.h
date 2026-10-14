@@ -101,6 +101,8 @@ namespace gui
 		void SetStationAnchors(std::vector<StationAnchor> anchors);
 		void SetLoopEditorMode(bool enabled);
 		void SetQuantisationFeedback(const std::string& text);
+		void SetPerformanceGroupFeedback(const std::string& text);
+		utils::Rect2d OccupiedTopStripBounds() const;
 		void SetEditModeAlpha(float alpha) noexcept { _editModeAlpha = std::clamp(alpha, 0.0f, 1.0f); }
 		bool HasCableDrag() const noexcept { return _cableDrag.has_value(); }
 		bool IsApplying() const { return _RoutingEditAvailability() == RoutingEditAvailability::Applying; }
@@ -244,6 +246,7 @@ namespace gui
 		std::shared_ptr<GuiPanel> _statusPanel;
 		std::shared_ptr<GuiLabel> _routingStatusLabel;
 		std::string _quantisationFeedback;
+		std::string _performanceGroupFeedback; // UI/job owner under Scene serialization
 		float _editModeAlpha = 0.0f;
 		std::shared_ptr<GuiPopup> _deletePopup;
 		// UI-owned read-only identity popup. Routing rebuilds do not mutate it;

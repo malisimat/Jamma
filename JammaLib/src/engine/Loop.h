@@ -220,6 +220,7 @@ namespace engine
 		virtual bool Mute() override;
 		virtual bool UnMute() override;
 		bool IsMuted() const override;
+		void SetGroupMutedAudio(bool muted) noexcept;
 		void SetCaptureSourceMuteControl(
 			const std::shared_ptr<const audio::CaptureSourceMuteControl>& control) noexcept;
 		virtual void Reset() override;
@@ -305,7 +306,7 @@ namespace engine
 		// loop can enter an audio snapshot.
 		bool LoadVstPluginSynchronously(const std::wstring& path,
 			const std::vector<std::uint8_t>& initialState = {},
-			bool bypass = false);
+			bool bypass = false, const std::string& stateId = {});
 		void UnloadVstPlugin(size_t index);
 		void ForceUnloadAllVstPlugins();
 		void SetSampleRate(float sampleRate) { _sampleRate = sampleRate; }

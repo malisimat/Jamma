@@ -6,6 +6,7 @@
 ///////////////////////////////////////////////////////////
 
 #include "Vst3Plugin.h"
+#include "ReservedMidiEvents.h"
 #include "../midi/MidiBlockTiming.h"
 #include "../midi/MidiQueue.h"
 #include "Vst2Plugin.h"
@@ -181,7 +182,6 @@ public:
 	static constexpr int32 MaxEvents = 256;
 
 	FixedEventList() :
-		_count(0),
 		_blockStartSample(0u),
 		_blockNumSamples(0u),
 		_events{}
@@ -195,7 +195,7 @@ public:
 	{
 		_blockStartSample = blockStartSample;
 		_blockNumSamples = numSamples;
-		_count = 0;
+		_events.Clear();
 	}
 
 	std::uint32_t BlockStartSample() const noexcept { return _blockStartSample; }
@@ -225,13 +225,13 @@ public:
 		return placement;
 	}
 
-	bool AddMidiEvent(const midi::MidiEvent& midiEvent, bool isRealtime) noexcept
+	bool AddMidiEvent(const midi::MidiEvent& midiEvent, bool isRealtime, bool panic = false) noexcept
 	{
 		const auto placement = ComputeBlockPlacement(midiEvent, _blockStartSample, _blockNumSamples, isRealtime);
 		if (!placement.Accepted) return false;
 		// Reserve release slots without displacing an accepted attack.
 		constexpr int32 ReservedReleases = 64;
-		if (_count >= MaxEvents || (!midiEvent.IsNoteOff() && _count >= MaxEvents - ReservedReleases))
+		if (!panic && (_events.NormalCount() >= MaxEvents || (!midiEvent.IsNoteOff() && _events.NormalCount() >= MaxEvents - ReservedReleases)))
 			return false;
 
 		Event event{};
@@ -304,38 +304,32 @@ public:
 			return false;
 		}
 
-		_events[static_cast<size_t>(_count++)] = event;
-		return true;
+		return _events.Append(event, panic);
 	}
 
-	void ClearEvents() noexcept { _count = 0; }
-	int32 PLUGIN_API getEventCount() override { return _count; }
+	void ClearEvents() noexcept { _events.Clear(); }
+	int32 PLUGIN_API getEventCount() override { return static_cast<int32>(_events.Count()); }
 
 	tresult PLUGIN_API getEvent(int32 index, Event& e) override
 	{
-		if (index < 0 || index >= _count)
+		if (index < 0 || static_cast<std::size_t>(index) >= _events.Count())
 			return kInvalidArgument;
 
-		e = _events[static_cast<size_t>(index)];
+		e = _events.At(static_cast<size_t>(index));
 		return kResultOk;
 	}
 
 	tresult PLUGIN_API addEvent(Event& e) override
 	{
-		if (_count >= MaxEvents)
-			return kOutOfMemory;
-
-		_events[static_cast<size_t>(_count++)] = e;
-		return kResultOk;
+		return _events.Append(e) ? kResultOk : kOutOfMemory;
 	}
 
 	DECLARE_FUNKNOWN_METHODS
 
 private:
-	int32 _count;
 	std::uint32_t _blockStartSample;
 	std::uint32_t _blockNumSamples;
-	std::array<Event, MaxEvents> _events;
+	vst::ReservedMidiEvents<Event, MaxEvents> _events;
 };
 
 IMPLEMENT_FUNKNOWN_METHODS(FixedEventList, IEventList, IEventList::iid)
@@ -677,16 +671,33 @@ public:
 			inputParameterChanges->BeginBlock();
 	}
 
-	void BuildParameterMaps() noexcept
+	// Plugin SDK calls can pump the editor timer even during unpublished load.
+	// Serialize writers with a bounded gate; a nested caller leaves work pending.
+	std::atomic_flag controllerRebuildActive = ATOMIC_FLAG_INIT;
+	class ControllerRebuildGuard
 	{
+	public:
+		explicit ControllerRebuildGuard(std::atomic_flag& active) noexcept : _active(active),
+			_entered(!active.test_and_set(std::memory_order_acquire)) {}
+		~ControllerRebuildGuard() { if (_entered) _active.clear(std::memory_order_release); }
+		explicit operator bool() const noexcept { return _entered; }
+	private:
+		std::atomic_flag& _active;
+		bool _entered;
+	};
+
+	bool BuildParameterMaps() noexcept
+	{
+		ControllerRebuildGuard rebuild(controllerRebuildActive);
+		if (!rebuild) return false;
 		hostIndexToParamId.clear();
 		paramIdToHostIndex.clear();
 		if (!controller)
-			return;
+			return true;
 
 		const auto count = controller->getParameterCount();
 		if (count <= 0)
-			return;
+			return true;
 
 		hostIndexToParamId.resize(static_cast<size_t>(count), static_cast<ParamID>(0));
 		for (int32 i = 0; i < count; ++i)
@@ -698,6 +709,7 @@ public:
 			hostIndexToParamId[static_cast<size_t>(i)] = info.id;
 			paramIdToHostIndex[static_cast<std::uint32_t>(info.id)] = static_cast<unsigned int>(i);
 		}
+		return true;
 	}
 
 	bool TryGetHostIndexForParamId(ParamID paramId, unsigned int& hostIndex) const noexcept
@@ -726,25 +738,24 @@ public:
 	// Vst3MidiMapping::ParameterTable to the audio thread without ever
 	// freeing memory there (see Vst3MidiMapping.h). midiMappingAdoptedSlot is
 	// audio-thread-only bookkeeping, touched only from BeginMidiBlock/
-	// SendMidiEvent. midiMapRebuildRequested / midiMapRebuildMutex serialize
+	// SendMidiEvent. controllerRebuildActive serializes
 	// whichever non-RT thread(s) call RebuildMidiControllerMap() (the editor
-	// idle timer via IdleEditor(), and GetState() via
-	// PollPendingControllerChanges()).
+	// idle timer via IdleEditor(), and explicit non-RT polls).
 	Steinberg::IPtr<Steinberg::Vst::IMidiMapping> midiMapping;
 	Vst3MidiMapping::ParameterTableMailbox midiMappingMailbox;
 	int midiMappingAdoptedSlot = 0;
 	std::atomic<bool> midiMapRebuildRequested{ false };
-	std::mutex midiMapRebuildMutex;
 
 	// Rebuilds the fixed MIDI-controller-to-parameter table from scratch and
 	// publishes it. Not RT-safe; called only from Load(), SetState(), and
-	// PollPendingControllerChanges(). Returns false only when the mailbox
-	// producer slot was not yet free (previous publish not yet adopted by
+	// PollPendingControllerChanges(). Returns false when another rebuild is
+	// active or the producer slot was not yet free (previous publish not adopted by
 	// the audio thread) — the caller should leave the rebuild-requested flag
 	// set so it is retried on the next poll.
 	bool RebuildMidiControllerMap() noexcept
 	{
-		std::lock_guard<std::mutex> lock(midiMapRebuildMutex);
+		ControllerRebuildGuard rebuild(controllerRebuildActive);
+		if (!rebuild) return false;
 
 		if (!midiMapping || !component)
 			return true; // Nothing to build; leave the table empty.
@@ -1441,7 +1452,8 @@ bool Vst3Plugin::Load(const std::wstring& path,
 		std::cout << "[Vst3Plugin] No controller available (editor may not open)" << std::endl;
 	else
 	{
-		_impl->BuildParameterMaps();
+		if (!_impl->BuildParameterMaps())
+			_impl->paramTitlesRebuildRequested.store(true, std::memory_order_release);
 		_impl->controller->setComponentHandler(_impl->componentHandler.get());
 
 		IMidiMapping* rawMidiMapping = nullptr;
@@ -1449,7 +1461,8 @@ bool Vst3Plugin::Load(const std::wstring& path,
 			&& rawMidiMapping)
 		{
 			_impl->midiMapping = IPtr<IMidiMapping>(rawMidiMapping, false);
-			_impl->RebuildMidiControllerMap();
+			if (!_impl->RebuildMidiControllerMap())
+				_impl->midiMapRebuildRequested.store(true, std::memory_order_release);
 			std::cout << "[Vst3Plugin] IMidiMapping available; controller mapping table built" << std::endl;
 		}
 	}
@@ -1642,6 +1655,10 @@ void Vst3Plugin::ResetLoadedObjects(bool terminateComponent)
 
 void Vst3Plugin::ProcessBlock(float* monoBuf, int32_t numSamples) noexcept
 {
+	_lastMidiBlockProcessed = false;
+	PluginCallGuard stateCall(*this, true);
+	if (!stateCall) return;
+	FlushPendingMidiPanic();
 #ifdef JAMMA_VST3_ENABLED
 	if (!_impl)
 		return;
@@ -1663,7 +1680,7 @@ void Vst3Plugin::ProcessBlock(float* monoBuf, int32_t numSamples) noexcept
 	_impl->processData.numSamples = numSamples;
 
 	_impl->PrepareProcessBlock();
-	_impl->processor->process(_impl->processData);
+	_lastMidiBlockProcessed = _impl->processor->process(_impl->processData) == kResultOk;
 	_impl->inputParameterChanges->BeginBlock();
 
 	FoldOutputToMono(_impl->outputChannelPtrs.data(), _impl->outputChannels, numSamples, monoBuf);
@@ -1674,6 +1691,10 @@ void Vst3Plugin::ProcessBlock(float* monoBuf, int32_t numSamples) noexcept
 
 void Vst3Plugin::ProcessBlockStereo(float* leftBuf, float* rightBuf, int32_t numSamples) noexcept
 {
+	_lastMidiBlockProcessed = false;
+	PluginCallGuard stateCall(*this, true);
+	if (!stateCall) return;
+	FlushPendingMidiPanic();
 #ifdef JAMMA_VST3_ENABLED
 	if (!_impl)
 		return;
@@ -1706,7 +1727,7 @@ void Vst3Plugin::ProcessBlockStereo(float* leftBuf, float* rightBuf, int32_t num
 
 	_impl->processData.numSamples = numSamples;
 	_impl->PrepareProcessBlock();
-	_impl->processor->process(_impl->processData);
+	_lastMidiBlockProcessed = _impl->processor->process(_impl->processData) == kResultOk;
 	_impl->inputParameterChanges->BeginBlock();
 
 	float* outputChannels[] = { leftBuf, rightBuf };
@@ -1718,8 +1739,11 @@ void Vst3Plugin::ProcessBlockStereo(float* leftBuf, float* rightBuf, int32_t num
 
 void Vst3Plugin::ProcessBlockMulti(float* const* channelBufs, int32_t numChannels, int32_t numSamples) noexcept
 {
-#ifdef JAMMA_VST3_ENABLED
 	_lastMidiBlockProcessed = false;
+	PluginCallGuard stateCall(*this, true);
+	if (!stateCall) return;
+	FlushPendingMidiPanic();
+#ifdef JAMMA_VST3_ENABLED
 	if (!_impl || !channelBufs)
 		return;
 
@@ -1761,6 +1785,8 @@ void Vst3Plugin::ProcessBlockMulti(float* const* channelBufs, int32_t numChannel
 
 void Vst3Plugin::SetParameter(unsigned int index, float value) noexcept
 {
+	PluginCallGuard stateCall(*this);
+	if (!stateCall) return;
 #ifdef JAMMA_VST3_ENABLED
 	if (!_impl || !_isLoaded || !_impl->inputParameterChanges)
 		return;
@@ -1784,6 +1810,8 @@ void Vst3Plugin::SetParameter(unsigned int index, float value) noexcept
 
 float Vst3Plugin::GetParameter(unsigned int index) const noexcept
 {
+	PluginCallGuard stateCall(*this);
+	if (!stateCall) return 0.0f;
 #ifdef JAMMA_VST3_ENABLED
 	if (!_impl || !_impl->controller)
 		return 0.0f;
@@ -1802,6 +1830,8 @@ float Vst3Plugin::GetParameter(unsigned int index) const noexcept
 
 void Vst3Plugin::UpdateHostTime(const HostTimeState& state) noexcept
 {
+	PluginCallGuard stateCall(*this);
+	if (!stateCall) return;
 #ifdef JAMMA_VST3_ENABLED
 	if (!_impl)
 		return;
@@ -1832,6 +1862,8 @@ void Vst3Plugin::UpdateHostTime(const HostTimeState& state) noexcept
 
 void Vst3Plugin::OnControllerEdit(std::uint32_t paramId, float normalizedValue) noexcept
 {
+	PluginCallGuard stateCall(*this);
+	if (!stateCall) return;
 #ifdef JAMMA_VST3_ENABLED
 	if (!_impl)
 		return;
@@ -1856,6 +1888,8 @@ void Vst3Plugin::OnControllerEdit(std::uint32_t paramId, float normalizedValue) 
 
 void Vst3Plugin::OnBeginEdit(std::uint32_t paramId) noexcept
 {
+	PluginCallGuard stateCall(*this);
+	if (!stateCall) return;
 #ifdef JAMMA_VST3_ENABLED
 	if (_impl)
 		_impl->BeginGesture(static_cast<ParamID>(paramId));
@@ -1866,6 +1900,8 @@ void Vst3Plugin::OnBeginEdit(std::uint32_t paramId) noexcept
 
 void Vst3Plugin::OnEndEdit(std::uint32_t paramId) noexcept
 {
+	PluginCallGuard stateCall(*this);
+	if (!stateCall) return;
 #ifdef JAMMA_VST3_ENABLED
 	if (_impl)
 		_impl->EndGesture(static_cast<ParamID>(paramId));
@@ -1899,6 +1935,9 @@ void Vst3Plugin::OnRestartComponent(std::int32_t flags) noexcept
 void Vst3Plugin::BeginMidiBlock(std::uint32_t blockStartSample,
 	std::uint32_t numSamples) noexcept
 {
+	_lastMidiBlockProcessed = false;
+	PluginCallGuard stateCall(*this, true);
+	if (!stateCall) return;
 #ifdef JAMMA_VST3_ENABLED
 	if (!_impl)
 		return;
@@ -1911,6 +1950,7 @@ void Vst3Plugin::BeginMidiBlock(std::uint32_t blockStartSample,
 #else
 	(void)blockStartSample; (void)numSamples;
 #endif
+	FlushPendingMidiPanic();
 }
 
 void Vst3Plugin::SendMidiEvent(const midi::MidiEvent& event,
@@ -1922,6 +1962,9 @@ void Vst3Plugin::SendMidiEvent(const midi::MidiEvent& event,
 bool Vst3Plugin::TrySendMidiEvent(const midi::MidiEvent& event,
 	bool isRealtime) noexcept
 {
+	PluginCallGuard stateCall(*this, true);
+	if (!stateCall) return false;
+	FlushPendingMidiPanic();
 #ifdef JAMMA_VST3_ENABLED
 	if (!_impl) return false;
 
@@ -1971,6 +2014,8 @@ bool Vst3Plugin::TrySendMidiEvent(const midi::MidiEvent& event,
 
 bool Vst3Plugin::OpenEditor(HWND parentHwnd)
 {
+	PluginCallGuard stateCall(*this);
+	if (!stateCall) return false;
 #ifdef JAMMA_VST3_ENABLED
 	std::lock_guard<std::mutex> pollLock(_controllerPollMutex);
 	// Pause real-time audio processing while opening the editor. Some VST3
@@ -2060,6 +2105,8 @@ bool Vst3Plugin::OpenEditor(HWND parentHwnd)
 
 void Vst3Plugin::CloseEditor()
 {
+	PluginCallGuard stateCall(*this);
+	if (!stateCall) return;
 #ifdef JAMMA_VST3_ENABLED
 	_editorOpening.store(true, std::memory_order_release);
 	struct ResetOnExit {
@@ -2096,11 +2143,20 @@ void Vst3Plugin::IdleEditor() noexcept
 void Vst3Plugin::PollPendingControllerChanges() const noexcept
 {
 #ifdef JAMMA_VST3_ENABLED
-	// Editor SDK calls may pump UI messages and reenter the idle timer.
+	// Controller SDK calls can reenter editor idle.
 	if (_editorOpening.load(std::memory_order_acquire)) return;
 	std::lock_guard<std::mutex> pollLock(_controllerPollMutex);
-	if (!_impl)
-		return;
+	{
+		PluginCallGuard probe(*this);
+		if (!probe || !_impl) return;
+		if (!_impl->midiMapRebuildRequested.load(std::memory_order_acquire)
+			&& !_impl->paramTitlesRebuildRequested.load(std::memory_order_acquire)
+			&& !_impl->paramValuesRefreshRequested.load(std::memory_order_acquire)) return;
+	}
+	// Release the reader before trying exclusive entry. A failed acquisition
+	// leaves all request flags intact for the next idle; empty polls skip this.
+	ExclusivePluginCallGuard stateCall(*this);
+	if (!stateCall) return;
 
 	if (_latencyRefreshRequested.exchange(false, std::memory_order_acq_rel) && _impl->processor)
 		_latencySamples.store(static_cast<int>(std::min<std::uint32_t>(
@@ -2109,8 +2165,7 @@ void Vst3Plugin::PollPendingControllerChanges() const noexcept
 
 	if (_impl->midiMapRebuildRequested.exchange(false, std::memory_order_acq_rel))
 	{
-		// RebuildMidiControllerMap() returns false only when the mailbox's
-		// previous publish has not yet been adopted by the audio thread;
+		// A nested rebuild or a mailbox publish not yet adopted by the audio thread
 		// leave the flag set so the next poll retries.
 		if (!_impl->RebuildMidiControllerMap())
 			_impl->midiMapRebuildRequested.store(true, std::memory_order_release);
@@ -2121,7 +2176,8 @@ void Vst3Plugin::PollPendingControllerChanges() const noexcept
 		// Parameter list/titles changed (e.g. after a program change):
 		// rebuild the host-index <-> ParamID maps used by SetParameter/
 		// GetParameter/OnControllerEdit.
-		_impl->BuildParameterMaps();
+		if (!_impl->BuildParameterMaps())
+			_impl->paramTitlesRebuildRequested.store(true, std::memory_order_release);
 	}
 
 	if (_impl->paramValuesRefreshRequested.exchange(false, std::memory_order_acq_rel))
@@ -2154,6 +2210,8 @@ void Vst3Plugin::PollPendingControllerChanges() const noexcept
 
 std::vector<std::uint8_t> Vst3Plugin::GetState() const
 {
+	BlobSdkCallGuard blobCall(*this);
+	if (!blobCall) return {};
 #ifdef JAMMA_VST3_ENABLED
 	if (!_isLoaded || !_impl || !_impl->component)
 		return {};
@@ -2180,10 +2238,16 @@ std::vector<std::uint8_t> Vst3Plugin::GetState() const
 
 void Vst3Plugin::SetState(const std::vector<std::uint8_t>& blob)
 {
+	BlobSdkCallGuard blobCall(*this);
+	if (!blobCall) return;
 #ifdef JAMMA_VST3_ENABLED
 	if (blob.empty() || !_isLoaded || !_impl || !_impl->component)
 		return;
 
+	// Exclusive live restore (or unpublished startup): producers and consumer
+	// cannot touch this queue here. Discard editor edits predating the blob.
+	_impl->controllerEditQueue.Clear();
+	if (_impl->inputParameterChanges) _impl->inputParameterChanges->BeginBlock();
 	Vst3StateBlob::ParsedState parsed;
 	if (!Vst3StateBlob::TryParse(blob, parsed))
 	{
@@ -2212,9 +2276,13 @@ void Vst3Plugin::SetState(const std::vector<std::uint8_t>& blob)
 		}
 
 		// Restored programs may change parameter IDs or MIDI-CC assignments.
-		_impl->BuildParameterMaps();
+		if (!_impl->BuildParameterMaps())
+			_impl->paramTitlesRebuildRequested.store(true, std::memory_order_release);
 		if (_impl->midiMapping)
-			_impl->RebuildMidiControllerMap();
+		{
+			if (!_impl->RebuildMidiControllerMap())
+				_impl->midiMapRebuildRequested.store(true, std::memory_order_release);
+		}
 	}
 #else
 	(void)blob;
@@ -2268,4 +2336,16 @@ std::shared_ptr<vst::IVstPlugin> vst::MakePluginForPath(const std::wstring& path
 			return std::make_shared<vst::Vst2Plugin>();
 	}
 	return std::make_shared<vst::Vst3Plugin>();
+}
+
+void Vst3Plugin::SendMidiPanicImmediately() noexcept
+{
+#ifdef JAMMA_VST3_ENABLED
+	if (!_impl || !_impl->inputEvents) return;
+	const auto start = _impl->inputEvents->BlockStartSample();
+	const auto count = _impl->inputEvents->BlockNumSamples();
+	if (count == 0u) { RequestMidiPanic(); return; }
+	for (std::uint8_t channel = 0; channel < 16; ++channel)
+		_impl->inputEvents->AddMidiEvent({start, static_cast<std::uint8_t>(0xb0u | channel), 123, 0}, true, true);
+#endif
 }

@@ -156,12 +156,12 @@ namespace vst
 		// precondition Load/Unload already require of their callers).
 		std::vector<std::uint8_t> GetState() const override;
 		void SetState(const std::vector<std::uint8_t>& blob) override;
+		void SendMidiPanicImmediately() noexcept override;
 
 		// Runs the same pending-rebuild housekeeping as IdleEditor() (only
 		// the MIDI controller-mapping table today). Safe to call from any
-		// non-RT thread; internally serialized against IdleEditor(). No-op
-		// if nothing is pending. GetState() calls this itself so plugins
-		// without an open editor still save a reasonably fresh mapping.
+		// non-RT thread; bounded exclusive entry defers while any SDK/audio
+		// call or state operation is active. Pending work survives deferral.
 		void PollPendingControllerChanges() const noexcept;
 
 	private:

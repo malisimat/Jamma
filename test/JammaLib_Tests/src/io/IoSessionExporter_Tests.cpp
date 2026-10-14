@@ -95,7 +95,8 @@ public:
 
 	static std::optional<io::JamFile> ExportManifest(
 		const std::vector<std::shared_ptr<Station>>& stations,
-		const std::shared_ptr<const engine::RigSnapshot>& rigSnapshot = {})
+		const std::shared_ptr<const engine::RigSnapshot>& rigSnapshot = {},
+		const engine::PerformanceGroups* groups = nullptr)
 	{
 		Quantiser quantiser;
 		quantiser.SetClock(std::make_shared<utils::Timer>());
@@ -105,7 +106,7 @@ public:
 		const auto dir = MakeDirectory();
 		const bool exported = io::IoSessionExporter::ExportSessionToDirectory(stations, rigSnapshot, quantiser,
 			io::JamFile::GlobalMidiQuantState::Off, 0.0, user, stream, nullptr,
-			sceneMutex, nullptr, dir.wstring());
+			sceneMutex, nullptr, dir.wstring(), groups);
 		std::optional<io::JamFile> jam;
 		if (exported)
 		{
@@ -614,4 +615,27 @@ TEST(IoSessionExporter, QuiescentEligibilityFailureRestoresAndWritesNothing)
 	EXPECT_NE(blocked.Error.find("capture won admission"),std::string::npos);
 	EXPECT_EQ(std::filesystem::directory_iterator(dir),std::filesystem::directory_iterator{});
 	std::filesystem::remove_all(dir);
+}
+
+TEST(IoSessionExporter, PreservesSparseGroupRowsAndRuntimeIdentity)
+{
+    auto station = IoSessionExporterTest::MakeStation("groups");
+    engine::PerformanceGroups groups;
+    engine::SelectionGroupSnapshot selection;
+    selection.Depth = engine::GroupTargetKind::Station;
+    selection.Targets.push_back({ { engine::GroupTargetKind::Station, station->Id(), {}, {} }, true });
+    groups.Selection.Store(4u, selection);
+    groups.Mute.Store(8u, {});
+    const auto jam = IoSessionExporterTest::ExportManifest({ station }, {}, &groups);
+    ASSERT_TRUE(jam);
+    ASSERT_EQ(jam->Stations.size(), 1u);
+    EXPECT_EQ(jam->Stations[0].Id, station->Id());
+    ASSERT_TRUE(jam->SelectionGroups[3]);
+    EXPECT_FALSE(jam->SelectionGroups[0]);
+    EXPECT_EQ(jam->SelectionGroups[3]->Targets[0].Target.StationId, station->Id());
+    EXPECT_EQ(jam->SelectionGroups[3]->Depth, engine::GroupTargetKind::Station);
+    EXPECT_EQ(jam->SelectionActiveGroup, 3u);
+    ASSERT_TRUE(jam->MuteGroups[7]);
+    EXPECT_TRUE(jam->MuteGroups[7]->Targets.empty());
+    EXPECT_EQ(jam->MuteActiveGroup, 7u);
 }

@@ -127,6 +127,7 @@ void MidiModel::Draw3d(DrawContext& ctx, unsigned int numInstances, base::DrawPa
 	_geometryDraw = GeometryDraw::All;
 
 	auto& glCtx = dynamic_cast<GlDrawContext&>(ctx);
+	glCtx.ApplyGroupPreview(GlobalId());
 	glCtx.PushMvp(glm::rotate(glm::mat4(1.0),
 		(float)(constants::TWOPI * _loopIndexFrac) * (1.0f - _editorMorph),
 		glm::vec3(0.0f, 1.0f, 0.0f)));

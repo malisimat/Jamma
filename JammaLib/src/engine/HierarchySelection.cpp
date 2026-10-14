@@ -103,3 +103,32 @@ base::Tweakable::TweakState HierarchySelection::TweakState(const LockedStations&
 			return take->IsMuted() ? Tweakable::TWEAKSTATE_MUTED : Tweakable::TWEAKSTATE_NONE;
 	return Tweakable::TWEAKSTATE_NONE;
 }
+
+void HierarchySelection::SelectAllLocal(const LockedStations& view, base::SelectDepth depth)
+{
+	for (const auto& station : view.Stations)
+	{
+		if (station->IsRemote()) continue;
+		if (depth == base::DEPTH_STATION) station->Select(); else station->DeSelect();
+		for (const auto& take : station->GetLoopTakes())
+		{
+			const bool hasSelectedLoop = std::any_of(take->GetLoops().begin(), take->GetLoops().end(),
+				[](const auto& loop) { return loop->Model() != nullptr; }) ||
+				std::any_of(take->GetMidiLoops().begin(), take->GetMidiLoops().end(),
+					[](const auto& loop) { return loop->Model() != nullptr; });
+			// Aggregate selection can fan to children, so set it before correcting
+			// individual leaves; loop depth keeps only selectable take ownership.
+			take->SetGroupSelected(depth != base::DEPTH_LOOP || hasSelectedLoop);
+			for (const auto& loop : take->GetLoops())
+			{
+				const bool valid = loop->Model() != nullptr;
+				if (valid) loop->Select(); else loop->DeSelect();
+			}
+			for (const auto& loop : take->GetMidiLoops())
+				if (auto model = loop->Model())
+				{
+					model->Select();
+				}
+		}
+	}
+}

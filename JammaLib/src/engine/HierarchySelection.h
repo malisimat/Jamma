@@ -25,6 +25,7 @@ namespace engine
 		static std::shared_ptr<base::GuiElement> Resolve(const LockedStations& view, const std::vector<unsigned char>& path);
 		static void SetSelected(const LockedStations& view, const std::shared_ptr<base::GuiElement>& target,
 			base::SelectDepth depth, bool selected);
+		static void SelectAllLocal(const LockedStations& view, base::SelectDepth depth);
 		static void Clear(const LockedStations& view);
 		static void SetMuted(const LockedStations& view, const std::vector<unsigned char>& path, bool muted);
 		static base::Tweakable::TweakState TweakState(const LockedStations& view,

@@ -391,6 +391,7 @@ Action::Modifiers Window::Modifiers() const
 
 void Window::ClearModifiers()
 {
+	SceneDispatchScope dispatch(*this);
 	// Dispatch synthetic key-up events for any modifier we still believe is
 	// held. Routing them through the normal action path resets both the
 	// modifier bitmask and any scene state keyed off those releases (e.g. the
@@ -428,6 +429,7 @@ void Window::SetTrackingMouse(bool tracking)
 
 void Window::Resize(Size2d size)
 {
+	SceneDispatchScope dispatch(*this);
 	if (HasRelativePointer() || size.Width == 0 || size.Height == 0) CancelMouseCapture();
 
 	_config.Size = size;
@@ -494,14 +496,21 @@ Size2d Window::GetSize()
 
 void Window::Render()
 {
+	SceneDispatchScope dispatch(*this);
+	ProcessDeferredInputLoss();
 	GlDeleteQueue::FlushPendingDeletes();
 	ApplyPendingResize();
 
 	_scene->CommitChanges();
+	if (_nativeDestroyPending) return;
 	if (_config.Size.Width == 0 || _config.Size.Height == 0) return;
 	_scene->UpdateCamera();
 	if (_scene->AdvanceUiAnimations()) _hover3dDirty = _forcePick = true;
 	_scene->InitResources(_resourceLib, false);
+	if (_nativeDestroyPending) return;
+	// A plugin state call can synchronously send WM_KILLFOCUS while Scene's
+	// non-audio lock is held. Drain only after that call and its lock unwind.
+	ProcessDeferredInputLoss();
 
 	const bool needsPick = (_hover3dDirty || _forcePick) && _cachedCursorPosition.has_value();
 	if (needsPick)
@@ -512,12 +521,11 @@ void Window::Render()
 		glClear(GL_COLOR_BUFFER_BIT);
 		_scene->Draw3d(*_pickContext, 1, DrawPass::PASS_PICKER);
 
-		auto pick = _pickContext->GetPixelAsync(_cachedCursorPosition.value());
-		if (!pick.HasValue && _forcePick)
-		{
-			pick.HasValue = true;
-			pick.ObjectId = _pickContext->GetPixel(_cachedCursorPosition.value());
-		}
+		// Forced reads must belong to the current position, never to the
+		// previous asynchronous hover request.
+		const auto pick = _forcePick
+			? GlDrawContext::PixelReadback{ true, _pickContext->GetPixel(_cachedCursorPosition.value()) }
+			: _pickContext->GetPixelAsync(_cachedCursorPosition.value());
 
 		if (pick.HasValue)
 		{
@@ -619,6 +627,7 @@ void Window::Release()
 
 ActionResult Window::OnAction(WindowAction winAction)
 {
+	SceneDispatchScope dispatch(*this);
 	auto isEaten = false;
 
 	switch (winAction.WindowEventType)
@@ -647,8 +656,64 @@ ActionResult Window::OnAction(WindowAction winAction)
 	return { isEaten };
 }
 
+std::optional<unsigned int> Window::_PickPointerPress(utils::Position2d position)
+{
+	if (!_rc || wglGetCurrentContext() != _rc || !GlDeleteQueue::IsRenderThread() || !_pickContext
+		|| _pickContext->GetTexture() == 0u)
+		return std::nullopt;
+	ApplyPendingResize();
+	// Input runs on the render owner. A fresh picker pass only is enough; a
+	// full frame here would pump unrelated structural/plugin/UI work.
+	GLint drawFramebuffer = 0, readFramebuffer = 0, packBuffer = 0;
+	GLint program = 0, vertexArray = 0, activeTexture = 0;
+	std::array<GLint, 3> textures{};
+	std::array<GLfloat, 4> clearColor{};
+	std::array<GLint, 4> viewport{}, scissorBox{};
+	glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &drawFramebuffer);
+	glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &readFramebuffer);
+	glGetIntegerv(GL_PIXEL_PACK_BUFFER_BINDING, &packBuffer);
+	glGetIntegerv(GL_VIEWPORT, viewport.data());
+	glGetIntegerv(GL_SCISSOR_BOX, scissorBox.data());
+	glGetIntegerv(GL_CURRENT_PROGRAM, &program);
+	glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &vertexArray);
+	glGetIntegerv(GL_ACTIVE_TEXTURE, &activeTexture);
+	glGetFloatv(GL_COLOR_CLEAR_VALUE, clearColor.data());
+	for (unsigned int unit = 0; unit < textures.size(); ++unit)
+	{
+		glActiveTexture(GL_TEXTURE0 + unit);
+		glGetIntegerv(GL_TEXTURE_BINDING_2D, &textures[unit]);
+	}
+	glActiveTexture(GL_TEXTURE0);
+	const auto scissorEnabled = glIsEnabled(GL_SCISSOR_TEST);
+	const auto depthEnabled = glIsEnabled(GL_DEPTH_TEST);
+	_pickContext->Bind();
+	glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+	glClear(GL_COLOR_BUFFER_BIT);
+	_scene->Draw3d(*_pickContext, 1, DrawPass::PASS_PICKER);
+	glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
+	const auto objectId = _pickContext->GetPixel(position);
+	glBindBuffer(GL_PIXEL_PACK_BUFFER, packBuffer);
+	glUseProgram(program);
+	glBindVertexArray(vertexArray);
+	for (unsigned int unit = 0; unit < textures.size(); ++unit)
+	{
+		glActiveTexture(GL_TEXTURE0 + unit);
+		glBindTexture(GL_TEXTURE_2D, textures[unit]);
+	}
+	glActiveTexture(activeTexture);
+	glClearColor(clearColor[0], clearColor[1], clearColor[2], clearColor[3]);
+	glBindFramebuffer(GL_DRAW_FRAMEBUFFER, drawFramebuffer);
+	glBindFramebuffer(GL_READ_FRAMEBUFFER, readFramebuffer);
+	glViewport(viewport[0], viewport[1], viewport[2], viewport[3]);
+	glScissor(scissorBox[0], scissorBox[1], scissorBox[2], scissorBox[3]);
+	if (scissorEnabled) glEnable(GL_SCISSOR_TEST); else glDisable(GL_SCISSOR_TEST);
+	if (depthEnabled) glEnable(GL_DEPTH_TEST); else glDisable(GL_DEPTH_TEST);
+	return objectId;
+}
+
 ActionResult Window::OnAction(TouchAction touchAction)
 {
+	SceneDispatchScope dispatch(*this);
 	if (_config.Size.Width == 0 || _config.Size.Height == 0) return ActionResult::NoAction();
 	if (HasRelativePointer() && touchAction.Touch == TouchAction::TOUCH_MOUSE
 		&& touchAction.State == TouchAction::TOUCH_UP && touchAction.Index == _relativeButton)
@@ -658,6 +723,18 @@ ActionResult Window::OnAction(TouchAction touchAction)
 	}
 	_cachedCursorPosition = touchAction.Position;
 	_cachedCursorModifiers = touchAction.Modifiers;
+	bool pressPicked = false;
+	if (touchAction.Touch == TouchAction::TOUCH_MOUSE && touchAction.State == TouchAction::TOUCH_DOWN
+		&& touchAction.Index != 4 && _buttonsDown == 0u)
+	{
+		if (const auto objectId = _PickPointerPress(touchAction.Position))
+		{
+			_scene->SetHover3d(utils::IdToVec(*objectId), touchAction.Modifiers, touchAction.Position);
+			_lastHoverObjectId = *objectId;
+			_hover3dDirty = false;
+			pressPicked = true;
+		}
+	}
 	switch (touchAction.Touch)
 	{
 	case TouchAction::TOUCH_MOUSE:
@@ -673,8 +750,10 @@ ActionResult Window::OnAction(TouchAction touchAction)
 		switch (touchAction.State)
 		{
 		case TouchAction::TOUCH_DOWN:
+			// A delayed notification belongs to the preceding pointer gesture.
+			_captureLossPending = false;
 			_buttonsDown |= (1 << touchAction.Index);
-			_forcePick = true;
+			_forcePick = !pressPicked;
 			break;
 		case TouchAction::TOUCH_UP:
 			_buttonsDown &= ~(1 << touchAction.Index);
@@ -699,6 +778,7 @@ ActionResult Window::OnAction(TouchAction touchAction)
 
 ActionResult Window::OnAction(TouchMoveAction touchAction)
 {
+	SceneDispatchScope dispatch(*this);
 	if (_config.Size.Width == 0 || _config.Size.Height == 0) return ActionResult::NoAction();
 	_cachedCursorPosition = touchAction.Position;
 	_cachedCursorModifiers = touchAction.Modifiers;
@@ -709,6 +789,7 @@ ActionResult Window::OnAction(TouchMoveAction touchAction)
 
 bool Window::CancelMouseCapture()
 {
+	SceneDispatchScope dispatch(*this);
 	if (_buttonsDown == 0u && !HasRelativePointer()) return false;
 	EndRelativePointer(_relativeButton);
 	_buttonsDown = 0u;
@@ -724,8 +805,25 @@ bool Window::CancelMouseCapture()
 	return true;
 }
 
+bool Window::ProcessDeferredInputLoss()
+{
+	SceneDispatchScope dispatch(*this);
+	const bool focusLost = _focusLossPending;
+	const bool captureLost = _captureLossPending;
+	_focusLossPending = _captureLossPending = false;
+	if (!focusLost && !captureLost) return false;
+	CancelMouseCapture();
+	if (focusLost)
+	{
+		ClearModifiers();
+		if (_scene) _scene->OnInputFocusLost();
+	}
+	return true;
+}
+
 ActionResult Window::OnAction(KeyAction keyAction)
 {
+	SceneDispatchScope dispatch(*this);
 	// Handle modifiers
 	int modifiers = _modifiers;
 
@@ -785,6 +883,8 @@ ActionResult Window::OnAction(KeyAction keyAction)
 
 void Window::ReplaceScene(Scene& scene)
 {
+	SceneDispatchScope dispatch(*this);
+	ProcessDeferredInputLoss();
 	CancelMouseCapture();
 	_scene->SetRelativePointerHost({}, {});
 	_scene->ReleaseResources();
@@ -908,6 +1008,83 @@ void Window::InitStyle(WNDCLASSEX& wcex) noexcept
 	wcex.style = CS_HREDRAW | CS_VREDRAW | CS_OWNDC;
 }
 
+Window::SceneDispatchScope::~SceneDispatchScope() noexcept
+{
+	if (--_window._sceneDispatchDepth != 0u) return;
+	if (_window._nativeDestroyPending)
+	{
+		_window._nativeDestroyPending = false;
+		_window._deferredNativeMessageCount = 0u;
+		_window.CancelMouseCapture();
+		WindowAction action;
+		action.WindowEventType = WindowAction::DESTROY;
+		_window.OnAction(action);
+		PostQuitMessage(0);
+		return;
+	}
+	// Plugins can pump the native queue while Scene owns a non-recursive lock.
+	// Repost only after the outer call and all its local locks have unwound.
+	const auto count = _window._deferredNativeMessageCount;
+	_window._deferredNativeMessageCount = 0u;
+	_window._deferredNativeOverflow = false;
+	for (std::size_t index = 0u; index < count; ++index)
+	{
+		const auto& pending = _window._deferredNativeMessages[index];
+		if (IsWindow(pending.WindowHandle))
+			PostMessageW(pending.WindowHandle, pending.Message, pending.WParam, pending.LParam);
+	}
+}
+
+bool Window::_DeferNativeSceneMessage(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam) noexcept
+{
+	if (_sceneDispatchDepth == 0u) return false;
+	switch (message)
+	{
+	case WM_SIZING:
+		// The normal UI frame will draw the resized client after this call returns.
+		return true;
+	case WM_INPUT:
+		// HRAWINPUT belongs to this delivery and cannot be reposted safely.
+		_captureLossPending = true;
+		return true;
+	case WM_DPICHANGED:
+		// lParam points at a RECT whose lifetime ends with this native call.
+		if (HasRelativePointer()) _captureLossPending = true;
+		return true;
+	case WM_DESTROY:
+		_nativeDestroyPending = true;
+		return true;
+	case WM_SIZE: case WM_MOVE:
+	case WM_LBUTTONDOWN: case WM_LBUTTONUP: case WM_LBUTTONDBLCLK:
+	case WM_MBUTTONDOWN: case WM_MBUTTONUP: case WM_MBUTTONDBLCLK:
+	case WM_RBUTTONDOWN: case WM_RBUTTONUP: case WM_RBUTTONDBLCLK:
+	case WM_MOUSEMOVE: case WM_MOUSEWHEEL:
+	case WM_KEYDOWN: case WM_KEYUP: case WM_SYSKEYDOWN: case WM_SYSKEYUP:
+		if (_deferredNativeOverflow) return true;
+		if (message == WM_MOUSEMOVE && _deferredNativeMessageCount != 0u)
+		{
+			auto& previous = _deferredNativeMessages[_deferredNativeMessageCount - 1u];
+			if (previous.Message == WM_MOUSEMOVE && previous.WindowHandle == hwnd)
+			{
+				previous = { hwnd, message, wParam, lParam };
+				return true;
+			}
+		}
+		if (_deferredNativeMessageCount < _deferredNativeMessages.size())
+			_deferredNativeMessages[_deferredNativeMessageCount++] = { hwnd, message, wParam, lParam };
+		else
+		{
+			// Discard the entire partial gesture; never replay an unmatched down.
+			_deferredNativeMessageCount = 0u;
+			_deferredNativeOverflow = true;
+			_focusLossPending = true;
+		}
+		return true;
+	default:
+		return false;
+	}
+}
+
 LRESULT CALLBACK Window::WindowProcedure(HWND hWindow, UINT message, WPARAM wParam, LPARAM lParam) noexcept
 {
 	Window* window = nullptr;
@@ -927,6 +1104,8 @@ LRESULT CALLBACK Window::WindowProcedure(HWND hWindow, UINT message, WPARAM wPar
 
 	if (!window)
 		return DefWindowProc(hWindow, message, wParam, lParam);
+	if (window->_DeferNativeSceneMessage(hWindow, message, wParam, lParam))
+		return message == WM_INPUT ? DefWindowProc(hWindow, message, wParam, lParam) : 0;
 
 	switch (message)
 	{
@@ -1033,7 +1212,10 @@ LRESULT CALLBACK Window::WindowProcedure(HWND hWindow, UINT message, WPARAM wPar
 			window->SetResizing(false);
 			return 0;
 		}
-		window->CancelMouseCapture();
+		// ReleaseCapture after a normal mouse-up also sends this notification.
+		// It must not cancel a fresh press received before the next UI frame.
+		if (window->_buttonsDown != 0u || window->HasRelativePointer())
+			window->_captureLossPending = true;
 		return 0;
 	}
 	case WM_EXITSIZEMOVE:
@@ -1375,9 +1557,10 @@ LRESULT CALLBACK Window::WindowProcedure(HWND hWindow, UINT message, WPARAM wPar
 		// window (such as a VST editor) those key-ups never reach us, leaving
 		// the modifier bitmask stuck. Clear it on focus loss so subsequent
 		// clicks aren't treated as modified gestures.
-		window->CancelMouseCapture();
-		window->ClearModifiers();
-		if (window->_scene) window->_scene->OnInputFocusLost();
+		// Plugins may send this synchronously from GetState/SetState. Calling
+		// Scene here would recursively acquire its non-recursive mutex, including
+		// through capture cancellation or synthetic modifier-up dispatch.
+		window->_focusLossPending = true;
 		return 0;
 	}
 	case WM_DESTROY:
@@ -1467,7 +1650,16 @@ void Window::_ResamplePointer()
 	_forcePick = true;
 	// Resume hover at the current cursor position after editor teardown.
 	MSG pending{};
-	while (PeekMessage(&pending, _wnd, WM_MOUSEMOVE, WM_MOUSEMOVE, PM_REMOVE)) {}
+	while (PeekMessage(&pending, _wnd, WM_MOUSEMOVE, WM_MOUSEMOVE, PM_REMOVE))
+	{
+		// WM_QUIT bypasses PeekMessage's filters. Preserve shutdown rather than
+		// consuming it while discarding synthetic pointer movements.
+		if (pending.message == WM_QUIT)
+		{
+			PostQuitMessage(static_cast<int>(pending.wParam));
+			break;
+		}
+	}
 	PostMessage(_wnd, WM_MOUSEMOVE, 0, MAKELPARAM(cursor.x, cursor.y));
 }
 

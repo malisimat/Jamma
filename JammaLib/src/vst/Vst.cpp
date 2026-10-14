@@ -11,6 +11,7 @@ namespace vst
 		unsigned int parameterIndex,
 		float value) noexcept
 	{
+		if (plugin && plugin->IsStateOperationActive()) return;
 		_lastTouchedParam.Plugin.store(plugin, std::memory_order_relaxed);
 		_lastTouchedParam.ParameterIndex.store(parameterIndex, std::memory_order_relaxed);
 		_lastTouchedParam.Value.store(value, std::memory_order_relaxed);

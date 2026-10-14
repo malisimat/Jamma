@@ -15,7 +15,7 @@ namespace vst
 
 	void VstEditorWindowManager::CloseAllVstEditorWindows()
 	{
-		std::vector<std::unique_ptr<graphics::VstEditorWindow>> windows;
+		std::vector<std::shared_ptr<graphics::VstEditorWindow>> windows;
 		{
 			std::scoped_lock lock(_vstEditorWindowsMutex);
 			windows = std::move(_vstEditorWindows);
@@ -31,17 +31,15 @@ namespace vst
 
 	void VstEditorWindowManager::PruneClosedVstEditorWindows()
 	{
-		std::vector<std::unique_ptr<graphics::VstEditorWindow>> retired;
+		std::vector<std::shared_ptr<graphics::VstEditorWindow>> retired;
 		{
 			std::scoped_lock lock(_vstEditorWindowsMutex);
-			for (auto it = _vstEditorWindows.begin(); it != _vstEditorWindows.end();)
-			{
-				if (!*it || !(*it)->IsOpen())
-				{ retired.push_back(std::move(*it)); it = _vstEditorWindows.erase(it); }
-				else ++it;
-			}
+			for (auto& window : _vstEditorWindows)
+				if (window && !window->IsOpen()) retired.push_back(std::move(window));
+			std::erase_if(_vstEditorWindows, [](const auto& window) { return !window; });
 		}
-		// Window destructors are also native/plugin teardown.
+		// Releasing the last plugin reference can run third-party teardown.
+		// Keep it outside the manager mutex, even for an already closed HWND.
 	}
 
 	actions::ActionResult VstEditorWindowManager::EatAction()
@@ -153,56 +151,64 @@ namespace vst
 
 	bool VstEditorWindowManager::OpenVstEditorForPlugin(const std::shared_ptr<vst::IVstPlugin>& plugin)
 	{
-		if (!plugin || !plugin->IsLoaded())
+		const auto ownedPlugin = plugin;
+		if (!ownedPlugin || !ownedPlugin->IsLoaded())
 			return false;
 
+		// Only inspect ownership under the mutex. Native activation and plugin
+		// close calls can synchronously pump messages back into this manager.
+		struct PendingOpenRelease
+		{
+			std::mutex& Mutex;
+			std::vector<const IVstPlugin*>& Pending;
+			const IVstPlugin* Plugin;
+			~PendingOpenRelease()
+			{
+				std::scoped_lock lock(Mutex);
+				std::erase(Pending, Plugin);
+			}
+		};
+		HWND existingHwnd = nullptr;
 		{
 			std::scoped_lock lock(_vstEditorWindowsMutex);
+			if (std::find(_pendingEditorOpens.begin(), _pendingEditorOpens.end(), ownedPlugin.get()) != _pendingEditorOpens.end())
+				return false; // The original request owns creation until it returns.
+			_pendingEditorOpens.push_back(ownedPlugin.get());
 			for (const auto& window : _vstEditorWindows)
-			{
-				if (!window || !window->IsOpen())
-					continue;
-
-				if (window->Plugin().get() == plugin.get())
+				if (window && window->IsOpen() && window->Plugin().get() == ownedPlugin.get())
 				{
-					if (const auto hwnd = window->EditorHwnd())
-					{
-						if (IsIconic(hwnd))
-							ShowWindow(hwnd, SW_RESTORE);
-						SetForegroundWindow(hwnd);
-					}
-					return true;
+					existingHwnd = window->EditorHwnd();
+					break;
 				}
-			}
+		}
+		PendingOpenRelease pendingRelease{_vstEditorWindowsMutex, _pendingEditorOpens, ownedPlugin.get()};
+		if (existingHwnd)
+		{
+			if (IsIconic(existingHwnd)) ShowWindow(existingHwnd, SW_RESTORE);
+			SetForegroundWindow(existingHwnd);
+			return true;
 		}
 
-		auto window = std::make_unique<graphics::VstEditorWindow>();
+		auto window = std::make_shared<graphics::VstEditorWindow>();
 		const auto hInstance = GetModuleHandle(nullptr);
-		if (!window->Create(hInstance, plugin))
+		if (!window->Create(hInstance, ownedPlugin))
 			return false;
 
 		{
 			std::scoped_lock lock(_vstEditorWindowsMutex);
 			for (const auto& existingWindow : _vstEditorWindows)
-			{
-				if (!existingWindow || !existingWindow->IsOpen())
-					continue;
-
-				if (existingWindow->Plugin().get() == plugin.get())
+				if (existingWindow && existingWindow->IsOpen() && existingWindow->Plugin().get() == ownedPlugin.get())
 				{
-					if (const auto hwnd = existingWindow->EditorHwnd())
-					{
-						if (IsIconic(hwnd))
-							ShowWindow(hwnd, SW_RESTORE);
-						SetForegroundWindow(hwnd);
-					}
-
-					window->Destroy();
-					return true;
+					existingHwnd = existingWindow->EditorHwnd();
+					break;
 				}
-			}
-
-			_vstEditorWindows.push_back(std::move(window));
+			if (!existingHwnd) _vstEditorWindows.push_back(std::move(window));
+		}
+		if (existingHwnd)
+		{
+			window->Destroy();
+			if (IsIconic(existingHwnd)) ShowWindow(existingHwnd, SW_RESTORE);
+			SetForegroundWindow(existingHwnd);
 		}
 		return true;
 	}
@@ -291,7 +297,7 @@ void vst::VstEditorWindowManager::CloseVstEditorsForStation(const std::shared_pt
 		}
 		return false;
 	};
-	std::vector<std::unique_ptr<graphics::VstEditorWindow>> closing;
+	std::vector<std::shared_ptr<graphics::VstEditorWindow>> closing;
 	{
 		std::scoped_lock lock(_vstEditorWindowsMutex);
 		for (auto it = _vstEditorWindows.begin(); it != _vstEditorWindows.end();)

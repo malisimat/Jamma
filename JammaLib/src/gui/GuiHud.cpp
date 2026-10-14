@@ -407,6 +407,14 @@ void GuiHud::SetSize(Size2d size)
 		_LayoutSourceIdentity();
 }
 
+Rect2d GuiHud::OccupiedTopStripBounds() const
+{
+	if (!_topStrip || !_topStrip->IsVisible()) return {};
+	const auto position = _topStrip->GlobalPosition();
+	const auto size = _topStrip->GetSize();
+	return { position.X, position.Y, position.X + static_cast<int>(size.Width), position.Y + static_cast<int>(size.Height) };
+}
+
 void GuiHud::_InitResources(ResourceLib& resourceLib, bool forceInit)
 {
 	auto valid = _InitCableShader(resourceLib);
@@ -630,7 +638,8 @@ void GuiHud::_BuildTriggerRail()
 	_addTriggerButton = std::make_shared<GuiHudActionButton>(addParams, [this]() { _AddTrigger(); });
 	_triggerRail->AddChild(_addTriggerButton);
 
-	GuiLabelParams statusParams = GuiLabelParams::PanelScrollRow("", 0u);
+	GuiLabelParams statusParams = GuiLabelParams::PanelScrollRow(
+		_performanceGroupFeedback.empty() ? _quantisationFeedback : _performanceGroupFeedback, 0u);
 	statusParams.Ellipsize = true;
 	statusParams.Size = { 300u, GuiLabelParams::RowHeight };
 	statusParams.MinSize = { 160u, GuiLabelParams::RowHeight };
@@ -838,7 +847,7 @@ void GuiHud::_LayoutPanels()
 	_addTriggerButton->SetVisible(railWidth >= static_cast<int>(_TriggerControlSize) && triggerFooter >= static_cast<int>(_TriggerControlSize));
 
 	int topWidth = std::max(0, railX - marginX - static_cast<int>(_SourcePanelGap));
-	int topHeight = std::min(static_cast<int>(_TopStripHeight), std::max(0, height - 2 * marginY));
+	int topHeight = std::min(static_cast<int>(_TopStripHeight), std::max(0, height - 2 * marginY - GuiStyle::StatusBarHeight));
 	_topStrip->SetPosition({ marginX, std::max(0, height - marginY - topHeight) });
 	_topStrip->SetSize({ static_cast<unsigned int>(topWidth), static_cast<unsigned int>(topHeight) });
 	_topStripBorder->SetSize({ static_cast<unsigned int>(topWidth), static_cast<unsigned int>(topHeight) });
@@ -873,11 +882,12 @@ void GuiHud::_LayoutPanels()
 	rowHeight = std::min(rowHeight, desiredRowHeight);
 	topHeight = rowHeight + 2 * padding;
 	// Keep the same right anchor, but stop the background growing beyond its contents.
-	topWidth = std::min(topWidth, static_cast<int>(audioWidth + midiWidth) + categoryGap + labelWidth + 2 * padding);
+	topWidth = std::min(topWidth, std::max(320, static_cast<int>(audioWidth + midiWidth) + categoryGap + labelWidth + 2 * padding));
 	_topStrip->SetPosition({ railX - static_cast<int>(_SourcePanelGap) - topWidth, std::max(0, height - marginY - topHeight) });
 	_topStrip->SetSize({ static_cast<unsigned int>(topWidth), static_cast<unsigned int>(topHeight) });
 	_topStripBorder->SetSize({ static_cast<unsigned int>(topWidth), static_cast<unsigned int>(topHeight) });
 	_topSourceRow->SetSize({ audioWidth + midiWidth + static_cast<unsigned int>(categoryGap), static_cast<unsigned int>(rowHeight) });
+
 	for (size_t i = 0; i < _sourceWidgets.size(); ++i)
 	{
 		const auto cardWidth = _sourceEndpoints[i].Kind == io::RigFileRouting::SourceKind::Adc ? audioCard : midiCard;
@@ -1318,7 +1328,7 @@ void GuiHud::_UpdateRoutingEditPresentation()
 		_triggerWidgets[i].Close->SetEnabled(ready && trigger && trigger->CanEditRouting());
 	}
 
-	if (!_routingStatusLabel || !_quantisationFeedback.empty() || _lastRoutingEditAvailability == availability)
+	if (!_routingStatusLabel || !_performanceGroupFeedback.empty() || !_quantisationFeedback.empty() || _lastRoutingEditAvailability == availability)
 		return;
 	_lastRoutingEditAvailability = availability;
 	switch (availability)
@@ -1961,10 +1971,20 @@ void gui::GuiHud::SetQuantisationFeedback(const std::string& text)
 	if (_quantisationFeedback == text) return;
 	_quantisationFeedback = text;
 	if (!_routingStatusLabel) return;
-	if (!text.empty()) _routingStatusLabel->SetString(text);
+	if (!text.empty() && _performanceGroupFeedback.empty()) _routingStatusLabel->SetString(text);
 	else
 	{
 		// Force normal routing status to recover on the next HUD update.
 		_lastRoutingEditAvailability.reset();
 	}
+}
+
+void GuiHud::SetPerformanceGroupFeedback(const std::string& text)
+{
+	if (_performanceGroupFeedback == text) return;
+	_performanceGroupFeedback = text;
+	if (!_routingStatusLabel) return;
+	if (!text.empty()) _routingStatusLabel->SetString(text);
+	else if (!_quantisationFeedback.empty()) _routingStatusLabel->SetString(_quantisationFeedback);
+	else _lastRoutingEditAvailability.reset();
 }

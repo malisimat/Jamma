@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <memory>
 #include <optional>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -217,6 +218,9 @@ namespace midi
 
 	public:
 		MidiLoop() noexcept;
+		// Job owner assigns once before stream publication; audio never accesses it.
+		const std::string& Id() const noexcept { return _groupId; }
+		void SetGroupId(std::string id) { _groupId = std::move(id); }
 
 		// State transitions
 		void StartRecord() noexcept;
@@ -408,6 +412,7 @@ namespace midi
 
 	private:
 		bool BuildModelFromEvents(std::uint32_t displayLengthSamps, bool force, bool queueUpdate);
+		std::string _groupId;
 		void EmitEventsInRange(std::uint32_t lo,
 			std::uint32_t hi,
 			std::uint32_t globalBase,

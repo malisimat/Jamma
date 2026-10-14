@@ -1,5 +1,7 @@
 
 #include "gtest/gtest.h"
+#include <array>
+#include <cmath>
 #include "audio/AudioMixer.h"
 
 using audio::WireMixBehaviour;
@@ -341,4 +343,68 @@ for (const auto& call : sink->Calls)
 EXPECT_FLOAT_EQ(0.3f, call.FadeNew);
 EXPECT_FLOAT_EQ(0.7f, call.FadeCurrent);
 }
+}
+
+class MixerRampSink : public base::MultiAudioSink
+{
+public:
+    std::array<float, 1024> Samples{};
+    unsigned int NumInputChannels(base::Audible::AudioSourceType) const override { return 1u; }
+    void OnBlockWriteChannel(unsigned int, const AudioWriteRequest& request, int offset) override
+    {
+        for (unsigned int i = 0u; i < request.numSamps; ++i)
+            Samples[static_cast<std::size_t>(offset) + i] = request.samples[i] * request.fadeNew
+                + Samples[static_cast<std::size_t>(offset) + i] * request.fadeCurrent;
+    }
+protected:
+    const std::shared_ptr<AudioSink> _InputChannel(unsigned int, base::Audible::AudioSourceType) override { return {}; }
+};
+
+TEST(AudioMixerRamp, MuteAndUnmuteAreSampleContinuousAcrossBlocksAndScratchChunks)
+{
+    audio::AudioMixerParams params;
+    params.Behaviour = WireMixBehaviourParams({ 0u });
+    audio::AudioMixer mixer(params);
+    auto sink = std::make_shared<MixerRampSink>();
+    std::array<float, 1024> ones;
+    ones.fill(1.0f);
+    mixer.Mute();
+    mixer.WriteBlock(sink, ones.data(), 1024u);
+    EXPECT_FLOAT_EQ(sink->Samples[0], 1.0f);
+    for (std::size_t i = 1u; i < 1024u; ++i)
+    {
+        EXPECT_LT(sink->Samples[i], sink->Samples[i - 1u]);
+        EXPECT_LT(sink->Samples[i - 1u] - sink->Samples[i], 0.011f);
+    }
+    const auto mutedLast = sink->Samples.back();
+    mixer.UnMute();
+    mixer.WriteBlock(sink, ones.data(), 1024u);
+    EXPECT_LT(std::abs(sink->Samples[0] - mutedLast), 0.00001f);
+    for (std::size_t i = 1u; i < 1024u; ++i)
+    {
+        EXPECT_GT(sink->Samples[i], sink->Samples[i - 1u]);
+        EXPECT_LT(sink->Samples[i] - sink->Samples[i - 1u], 0.011f);
+    }
+}
+
+TEST(AudioMixerRamp, BounceRetainsComplementaryDestinationFade)
+{
+    audio::AudioMixerParams params;
+    BounceMixBehaviourParams bounce;
+    bounce.Channels = { 0u };
+    params.Behaviour = bounce;
+    audio::AudioMixer mixer(params);
+    auto sink = std::make_shared<MixerRampSink>();
+    sink->Samples.fill(2.0f);
+    std::array<float, 1024> ones;
+    ones.fill(1.0f);
+    mixer.Mute();
+    mixer.WriteBlock(sink, ones.data(), 1024u);
+    EXPECT_FLOAT_EQ(sink->Samples[0], 1.0f);
+    for (std::size_t i = 1u; i < 1024u; ++i)
+    {
+        EXPECT_GT(sink->Samples[i], sink->Samples[i - 1u]);
+        EXPECT_LT(sink->Samples[i] - sink->Samples[i - 1u], 0.011f);
+    }
+    EXPECT_NEAR(sink->Samples.back(), 2.0f, 0.0001f);
 }

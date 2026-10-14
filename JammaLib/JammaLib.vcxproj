@@ -263,6 +263,7 @@
     <ClInclude Include="include\Constants.h" />
     <ClInclude Include="src\gui\SceneSelector.h" />
     <ClInclude Include="src\gui\GuiRadio.h" />
+    <ClInclude Include="src\gui\GuiPerformanceGroupRow.h" />
     <ClInclude Include="src\gui\GuiRack.h" />
     <ClInclude Include="src\utils\VecUtils.h" />
     <ClInclude Include="src\utils\MathUtils.h" />
@@ -339,6 +340,9 @@
     <ClInclude Include="lib\opengl\gl\glxew.h" />
     <ClInclude Include="lib\opengl\gl\wglew.h" />
     <ClInclude Include="lib\opengl\gl\wglext.h" />
+        <ClInclude Include="src\engine\PerformanceGroups.h" />
+        <ClInclude Include="src\engine\PerformanceGroupService.h" />
+        <ClInclude Include="src\engine\PerformanceGroupController.h" />
         <ClInclude Include="src\engine\Scene.h" />
     <ClInclude Include="src\audio\AudioHost.h" />
     <ClInclude Include="src\audio\NinjamMetronome.h" />
@@ -379,6 +383,7 @@
 	<ClInclude Include="src\engine\RigCoordinator.h" />
 	<ClInclude Include="src\engine\DeviceSelectionSchedule.h" />
     <ClInclude Include="src\io\JamFile.h" />
+    <ClInclude Include="src\io\PerformanceGroupPersistence.h" />
 
     <ClInclude Include="src\io\NativeMidiSidecar.h" />
     <ClInclude Include="src\vst\Vst.h" />
@@ -391,6 +396,7 @@
     <ClInclude Include="src\vst\Vst3MidiMapping.h" />
     <ClInclude Include="src\vst\VstGlContextScope.h" />
     <ClInclude Include="src\vst\VstChain.h" />
+    <ClInclude Include="src\vst\ReservedMidiEvents.h" />
 
     <ClInclude Include="src\graphics\VstEditorWindow.h" />
     <ClInclude Include="src\engine\Trigger.h" />
@@ -446,6 +452,7 @@
     <ClCompile Include="src\graphics\Camera.cpp" />
     <ClCompile Include="src\gui\SceneSelector.cpp" />
     <ClCompile Include="src\gui\GuiRadio.cpp" />
+    <ClCompile Include="src\gui\GuiPerformanceGroupRow.cpp" />
     <ClCompile Include="src\gui\GuiRack.cpp" />
     <ClCompile Include="src\io\InitFile.cpp" />
     <ClCompile Include="src\io\NetworkSession.cpp" />
@@ -507,6 +514,8 @@
     <ClCompile Include="src\utils\GlUtils.cpp" />
     <ClCompile Include="src\graphics\GlDrawContext.cpp" />
         <ClCompile Include="src\engine\Scene.cpp" />
+        <ClCompile Include="src\engine\PerformanceGroupService.cpp" />
+        <ClCompile Include="src\engine\PerformanceGroupController.cpp" />
     <ClCompile Include="src\audio\AudioHost.cpp" />
     <ClCompile Include="src\io\IoInputSubsystem.cpp" />
     <ClCompile Include="src\vst\VstEditorWindowManager.cpp" />
@@ -530,6 +539,7 @@
 	<ClCompile Include="src\engine\RigSnapshot.cpp" />
 	<ClCompile Include="src\engine\RigCoordinator.cpp" />
     <ClCompile Include="src\io\JamFile.cpp" />
+    <ClCompile Include="src\io\PerformanceGroupPersistence.cpp" />
     <ClCompile Include="src\io\NativeMidiSidecar.cpp" />
     <ClCompile Include="src\vst\Vst.cpp" />
     <ClCompile Include="src\vst\Vst3Plugin.cpp" />

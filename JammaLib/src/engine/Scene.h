@@ -16,6 +16,7 @@
 #include <thread>
 #include <unordered_map>
 #include <utility>
+#include "PerformanceGroupController.h"
 #include "../resources/ResourceLib.h"
 #include "../actions/JobAction.h"
 #include "../audio/AudioDevice.h"
@@ -146,7 +147,8 @@ namespace engine
 		virtual void InitResources(resources::ResourceLib& resourceLib, bool forceInit) override;
 		void InitReceivers();
 		void AddChild(std::shared_ptr<base::GuiElement> child);
-		void SetHover3d(std::vector<unsigned char> path, base::Action::Modifiers modifiers);
+		void SetHover3d(std::vector<unsigned char> path, base::Action::Modifiers modifiers,
+			std::optional<utils::Position2d> pointerPosition = std::nullopt);
 		unsigned int Width() const { return _sizeParams.Size.Width; }
 		unsigned int Height() const { return _sizeParams.Size.Height; }
 		void Reset();
@@ -307,6 +309,10 @@ namespace engine
 		void _InitSize();
 		void _UpdateHudStationAnchors();
 		void _UpdateViewProjectionLocked();
+		void _PublishGroupMuteApplication(std::shared_ptr<const GroupMuteApplication> application);
+		void _ExecuteGroupCommandLocked(bool selection, GroupCommand command, std::size_t slot);
+		GroupTargetKind _GroupSelectionDepthLocked() const;
+		void _RestoreGroupSelectionDepthLocked();
 		void _UpdateSelection(actions::ActionResultType res);
 		void _UpdateRackVisibilityLocked();
 		void _CollapseRacksLocked();
@@ -405,6 +411,15 @@ namespace engine
 		static constexpr std::uint8_t  UnresolvedMidiDeviceSlot       = 0xffu;
 
 		bool _isSceneTouching;
+		// Window-thread pointer ownership; command and button are latched at a
+		// background press. Any movement cancels the command, retaining ownership
+		// until release so it cannot turn into a camera drag.
+		enum class BackgroundCommand { UnmuteAll, MuteAll, SelectAll };
+		struct BackgroundGesture { int Button; BackgroundCommand Command; utils::Position2d PressPosition; bool Cancelled = false; bool Moved = false; };
+		std::optional<BackgroundGesture> _backgroundGesture;
+		bool _BackgroundPreviewActive() const;
+		bool _BackgroundSelectionPreviewActive() const;
+		void _SelectAllLocalLocked();
 		std::atomic_bool _isSceneQuitting;
 		std::atomic_bool _isSceneReset;
 		glm::mat4 _viewProj;
@@ -503,6 +518,7 @@ namespace engine
 		std::shared_ptr<gui::GuiMainPanel> _mainPanel;
 		std::shared_ptr<gui::GuiMainPanel> _selectionPanel;
 		std::shared_ptr<gui::GuiHud> _hudPanel;
+		PerformanceGroupController _performanceGroups; // scene mutex, never audio
 		std::vector<std::shared_ptr<base::GuiElement>> _guiChildren;
 		gui::GuiFocusManager _focusManager;
 		gui::GuiPopupManager _popupManager;

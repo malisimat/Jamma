@@ -98,6 +98,9 @@
     <ClInclude Include="src\vst\VstDiagnostics.h">
       <Filter>src\vst</Filter>
     </ClInclude>
+    <ClInclude Include="src\vst\ReservedMidiEvents.h">
+      <Filter>src\vst</Filter>
+    </ClInclude>
     <ClInclude Include="src\vst\VstChain.h">
       <Filter>src\vst</Filter>
     </ClInclude>
@@ -221,6 +224,15 @@
     </ClInclude>
     <ClInclude Include="src\graphics\Shader.h">
       <Filter>src\resources</Filter>
+    </ClInclude>
+    <ClInclude Include="src\engine\PerformanceGroups.h">
+      <Filter>src\engine</Filter>
+    </ClInclude>
+    <ClInclude Include="src\engine\PerformanceGroupService.h">
+      <Filter>src\engine</Filter>
+    </ClInclude>
+    <ClInclude Include="src\engine\PerformanceGroupController.h">
+      <Filter>src\engine</Filter>
     </ClInclude>
     <ClInclude Include="src\engine\Scene.h">
       <Filter>src\engine</Filter>
@@ -465,6 +477,9 @@
     <ClInclude Include="src\io\FileReadWriter.h">
       <Filter>src\io</Filter>
     </ClInclude>
+    <ClInclude Include="src\io\PerformanceGroupPersistence.h">
+      <Filter>src\io</Filter>
+    </ClInclude>
     <ClInclude Include="src\io\JamFile.h">
       <Filter>src\io</Filter>
     </ClInclude>
@@ -577,6 +592,9 @@
       <Filter>src\gui</Filter>
     </ClInclude>
     <ClInclude Include="src\gui\GuiRadio.h">
+      <Filter>src\gui</Filter>
+    </ClInclude>
+    <ClInclude Include="src\gui\GuiPerformanceGroupRow.h">
       <Filter>src\gui</Filter>
     </ClInclude>
     <ClInclude Include="src\base\GuiElement.h">
@@ -693,6 +711,12 @@
     </ClCompile>
     <ClCompile Include="src\graphics\Shader.cpp">
       <Filter>src\graphics</Filter>
+    </ClCompile>
+    <ClCompile Include="src\engine\PerformanceGroupService.cpp">
+      <Filter>src\engine</Filter>
+    </ClCompile>
+    <ClCompile Include="src\engine\PerformanceGroupController.cpp">
+      <Filter>src\engine</Filter>
     </ClCompile>
     <ClCompile Include="src\engine\Scene.cpp">
       <Filter>src\engine</Filter>
@@ -862,6 +886,9 @@
     <ClCompile Include="src\actions\JobAction.cpp">
       <Filter>src\actions</Filter>
     </ClCompile>
+    <ClCompile Include="src\io\PerformanceGroupPersistence.cpp">
+      <Filter>src\io</Filter>
+    </ClCompile>
     <ClCompile Include="src\io\JamFile.cpp">
       <Filter>src\io</Filter>
     </ClCompile>
@@ -974,6 +1001,9 @@
       <Filter>src\gui</Filter>
     </ClCompile>
     <ClCompile Include="src\gui\GuiRadio.cpp">
+      <Filter>src\gui</Filter>
+    </ClCompile>
+    <ClCompile Include="src\gui\GuiPerformanceGroupRow.cpp">
       <Filter>src\gui</Filter>
     </ClCompile>
     <ClCompile Include="src\base\GuiElement.cpp">

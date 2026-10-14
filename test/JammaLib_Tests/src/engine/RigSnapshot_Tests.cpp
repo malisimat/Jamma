@@ -5,6 +5,7 @@
 #include "../../../../Jamma/src/RigDefaultSave.h"
 #include "audio/AudioHost.h"
 #include "engine/Station.h"
+#include "engine/PerformanceGroupService.h"
 #include "gui/GuiHud.h"
 #include "base/PublishedAudioSnapshot.h"
 #include "utils/Timer.h"
@@ -87,6 +88,55 @@ namespace audio
 			host.AudioCallback(output, nullptr, 4u, 0.0, 0u, &host);
 		}
 	};
+}
+
+TEST(PerformanceGroupBoundary, RunningCallbackAppliesNewestPublicationAndJobCollectsOwnership)
+{
+	audio::AudioHost host(io::UserConfig{});
+	auto stations = std::make_shared<const std::vector<std::shared_ptr<engine::Station>>>();
+	auto clock = std::make_shared<utils::Timer>();
+	host.SetStations(stations);
+	host.SetTimingClock(clock);
+	audio::RigAudioBoundaryTestAccess::ConfigureCallback(host, clock);
+	engine::StationParams params;
+	params.Size = { 160u, 320u };
+	auto station = std::make_shared<engine::Station>(params,
+		engine::Station::GetMixerParams(params.Size, audio::MergeMixBehaviourParams{}));
+	auto take = station->AddTake();
+	auto first = std::make_shared<engine::GroupMuteApplication>();
+	first->Version = 1u;
+	first->Takes.push_back({ take, true });
+	host.PublishGroupMuteApplication(first);
+	EXPECT_FALSE(take->IsMuted());
+	float output[8]{};
+	audio::RigAudioBoundaryTestAccess::RunBlock(host, output);
+	EXPECT_TRUE(take->IsMuted());
+	EXPECT_EQ(host.GroupMuteReceipt(), 1u);
+	std::weak_ptr<const engine::GroupMuteApplication> lifetime = first;
+	first.reset();
+	host.CollectRetiredSnapshots();
+	EXPECT_TRUE(lifetime.expired());
+	// Two newer publications before a block apply only the latest desired value.
+	auto second = std::make_shared<engine::GroupMuteApplication>();
+	second->Version = 2u;
+	second->Takes.push_back({ take, true });
+	host.PublishGroupMuteApplication(second);
+	auto third = std::make_shared<engine::GroupMuteApplication>();
+	third->Version = 3u;
+	third->Takes.push_back({ take, false });
+	host.PublishGroupMuteApplication(third);
+	audio::RigAudioBoundaryTestAccess::RunBlock(host, output);
+	EXPECT_FALSE(take->IsMuted());
+	EXPECT_EQ(host.GroupMuteReceipt(), 3u);
+	// Membership-stamped work cannot apply against a different accepted rig.
+	auto stale = std::make_shared<engine::GroupMuteApplication>();
+	stale->Version = 4u;
+	stale->TopologyRevision = 99u;
+	stale->Takes.push_back({ take, true });
+	host.PublishGroupMuteApplication(stale);
+	audio::RigAudioBoundaryTestAccess::RunBlock(host, output);
+	EXPECT_FALSE(take->IsMuted());
+	EXPECT_EQ(host.GroupMuteReceipt(), 3u);
 }
 
 TEST(AudioCallbackAdmission, SnapshotBorrowFailureReusesLastSuccessfulBlockState)

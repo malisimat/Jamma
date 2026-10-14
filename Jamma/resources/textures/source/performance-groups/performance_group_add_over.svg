@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32" data-slice="5" data-filled="true">
+  <!-- Straight edges use whole pixels. Centre starts at radius=5; 2px border.
+       RGB fills the complete canvas before the final silhouette/hole mask.
+       Labels, plus glyph and active cue belong to the widget, never this patch. -->
+  <defs><mask id="silhouette" maskUnits="userSpaceOnUse" x="0" y="0" width="32" height="32">
+    <rect width="32" height="32" fill="black"/>
+    <rect width="32" height="32" rx="5" fill="white"/>
+
+  </mask></defs>
+  <g mask="url(#silhouette)">
+    <rect width="32" height="32" fill="#b4b4b4"/>
+    <rect x="2" y="2" width="28" height="28" rx="3" fill="#2a2a2a"/>
+  </g>
+</svg>

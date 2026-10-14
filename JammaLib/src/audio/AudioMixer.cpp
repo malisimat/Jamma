@@ -111,23 +111,49 @@ void AudioMixer::WriteBlock(const std::shared_ptr<MultiAudioSink>& dest,
 	if (!_behaviour)
 		return;
 
-	auto fadeLevel = (float)_fade->Current();
-
-	if (_vu.IsVisible())
+	float peak = 0.0f;
+	const bool trackPeak = _vu.IsVisible();
+	if (_fade->IsSettled())
 	{
-		// Integrate peak tracking into the mixing loop to avoid a second pass.
-		auto peak = 0.0f;
-		for (auto i = 0u; i < numSamps; i++)
-		{
-			auto absSamp = std::abs(srcBuf[i]);
-			if (absSamp > peak)
-				peak = absSamp;
-		}
-		_vu.SetPeak(peak * fadeLevel, numSamps);
+		_fade->Jump(_appliedFadeTarget);
+		const auto level = static_cast<float>(_fade->Current());
+		if (trackPeak)
+			for (auto i = 0u; i < numSamps; ++i) peak = std::max(peak, std::abs(srcBuf[i] * level));
+		_behaviour->ApplyBlock(dest, srcBuf, level, numSamps, 0u);
 	}
-
-	_behaviour->ApplyBlock(dest, srcBuf, fadeLevel, numSamps, 0);
-	Offset(numSamps);
+	else if (dynamic_cast<const BounceMixBehaviour*>(_behaviour.get()))
+	{
+		// Bounce crossfades existing destination content with the source; scaling
+		// only the source would discard its complementary destination envelope.
+		for (auto i = 0u; i < numSamps; ++i)
+		{
+			const auto level = static_cast<float>(_fade->Current());
+			_behaviour->ApplyBlock(dest, srcBuf + i, level, 1u, i);
+			_fade->Next();
+			if (trackPeak) peak = std::max(peak, std::abs(srcBuf[i] * level));
+		}
+	}
+	else
+	{
+		// Fixed stack scratch preserves sample-continuous gain without allocating
+		// or extending every destination's write protocol. Steady gain keeps the
+		// existing direct block path. All channels share the same gain envelope.
+		float scaled[256];
+		for (auto offset = 0u; offset < numSamps;)
+		{
+			const auto count = std::min(256u, numSamps - offset);
+			for (auto i = 0u; i < count; ++i)
+			{
+				scaled[i] = srcBuf[offset + i] * static_cast<float>(_fade->Current());
+				_fade->Next();
+				if (trackPeak) peak = std::max(peak, std::abs(scaled[i]));
+			}
+			_behaviour->ApplyBlock(dest, scaled, 1.0f, count, offset);
+			offset += count;
+		}
+	}
+	if (trackPeak) _vu.SetPeak(peak, numSamps);
+	_publishedFadeLevel.store(_fade->Current(), std::memory_order_release);
 }
 
 void AudioMixer::Offset(unsigned int numSamps)

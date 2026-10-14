@@ -6,6 +6,7 @@
 ///////////////////////////////////////////////////////////
 
 #include "JamFile.h"
+#include "PerformanceGroupPersistence.h"
 #include <algorithm>
 #include <cctype>
 #include <cmath>
@@ -213,6 +214,7 @@ std::optional<JamFile> JamFile::FromStream(std::stringstream ss)
 		}
 	}
 
+	if (!PerformanceGroupPersistence::Read(jamParams, jam)) return std::nullopt;
 	iter = jamParams.KeyValues.find("triggerHistories");
 	if (iter != jamParams.KeyValues.end())
 	{
@@ -479,11 +481,13 @@ std::optional<JamFile> JamFile::FromStream(std::stringstream ss)
 		std::cout << "JamFile: no constructible stations" << std::endl;
 		return std::nullopt;
 	}
+	if (!PerformanceGroupPersistence::ValidateIdentities(jam)) return std::nullopt;
 	return jam;
 }
 
 bool JamFile::ToStream(JamFile jam, std::stringstream& ss)
 {
+	if (!PerformanceGroupPersistence::ValidateIdentities(jam)) return false;
 	auto escapeJsonString = [](const std::string& s) -> std::string {
 		std::string escaped;
 		escaped.reserve(s.size());
@@ -620,6 +624,7 @@ bool JamFile::ToStream(JamFile jam, std::stringstream& ss)
 
 	auto vstEntryToJson = [&](const JamFile::VstEntry& entry) -> std::string {
 		std::string out = "{" + kvStr("path", entry.Path)
+			+ "," + kvStr("id", entry.Id)
 			+ "," + kvBool("bypass", entry.Bypass)
 			+ "," + kvStr("state", entry.State);
 		out += "}";
@@ -642,7 +647,7 @@ bool JamFile::ToStream(JamFile jam, std::stringstream& ss)
 		{
 			const auto& stream = streams[i];
 			if (i > 0) out += ",";
-			out += "{" + kvStr("sidecar", stream.SidecarPath) + "," + kvUlong("channel", stream.Channel) + ","
+			out += "{" + kvStr("id", stream.Id) + "," + kvStr("sidecar", stream.SidecarPath) + "," + kvUlong("channel", stream.Channel) + ","
 				+ kvStr("device", stream.Device) + "," + kvUlong("logicalLength", stream.LogicalLength) + ","
 				+ kvStr("automationGlobalSampleOrigin", std::to_string(stream.AutomationGlobalSampleOrigin));
 			if (stream.MidiQuantEnabled) out += "," + kvBool("midiQuantEnabled", *stream.MidiQuantEnabled);
@@ -738,7 +743,7 @@ bool JamFile::ToStream(JamFile jam, std::stringstream& ss)
 	{
 		const auto& station = jam.Stations[stationIndex];
 		if (stationIndex > 0) ss << ",";
-		ss << "{" << kvStr("name", station.Name) << ","
+		ss << "{" << kvStr("id", station.Id) << "," << kvStr("name", station.Name) << ","
 			<< kvUlong("stationtype", station.StationType) << ","
 			<< kvDouble("masterLevel", station.MasterLevel) << ","
 			<< quoted("busLevels") << ":[";
@@ -755,7 +760,7 @@ bool JamFile::ToStream(JamFile jam, std::stringstream& ss)
 		{
 			const auto& take = station.LoopTakes[takeIndex];
 			if (takeIndex > 0) ss << ",";
-			ss << "{" << kvStr("name", take.Name) << ","
+			ss << "{" << kvStr("id", take.Id) << "," << kvStr("name", take.Name) << ","
 				<< kvDouble("masterLevel", take.MasterLevel) << ","
 				<< quoted("busLevels") << ":[";
 			for (size_t busIndex = 0; busIndex < take.BusLevels.size(); ++busIndex)
@@ -836,7 +841,9 @@ bool JamFile::ToStream(JamFile jam, std::stringstream& ss)
 		}
 		ss << "]}";
 	}
-	ss << "]}";
+	std::stringstream groupStream;
+	if (!PerformanceGroupPersistence::Write(jam, groupStream)) return false;
+	ss << "]," << quoted("performanceGroups") << ":" << groupStream.str() << "}";
 	return true;
 }
 
@@ -886,6 +893,7 @@ std::optional<JamFile::NinjamConfig> JamFile::NinjamConfig::FromJson(Json::JsonP
 std::optional<JamFile::VstEntry> JamFile::VstEntry::FromJson(Json::JsonPart json)
 {
 	VstEntry entry;
+	entry.Id = Json::GetString(json, "id").value_or("");
 
 	auto iter = json.KeyValues.find("path");
 	if (iter != json.KeyValues.end())
@@ -1319,6 +1327,7 @@ std::optional<JamFile::LoopTake> JamFile::LoopTake::FromJson(Json::JsonPart json
 			if (parsedOrigin.has_value())
 			{
 				MidiStream stream;
+				stream.Id = Json::GetString(streamJson, "id").value_or("");
 				stream.SidecarPath = *sidecar;
 				stream.Device = device.value_or("");
 				stream.Channel = *channel;
@@ -1393,6 +1402,7 @@ std::optional<JamFile::LoopTake> JamFile::LoopTake::FromJson(Json::JsonPart json
 	// Preserve that state across saves, including a session with no recordings.
 
 	LoopTake take;
+	take.Id = Json::GetString(json, "id").value_or("");
 	take.Name = name;
 	take.MasterLevel = masterLevel;
 	take.BusLevels = std::move(busLevels);
@@ -1623,6 +1633,7 @@ std::optional<JamFile::Station> JamFile::Station::FromJson(Json::JsonPart json)
 	}
 
 	Station station;
+	station.Id = Json::GetString(json, "id").value_or("");
 	station.Name = name;
 	station.StationType = stationType;
 	station.MasterLevel = masterLevel;

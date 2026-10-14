@@ -34,7 +34,7 @@ namespace graphics
 	//   editorWnd->Create(hInstance, plugin);
 	//   ...
 	//   editorWnd->Destroy();
-	class VstEditorWindow
+	class VstEditorWindow : public std::enable_shared_from_this<VstEditorWindow>
 	{
 	public:
 		static constexpr UINT MessageVst2SizeWindow = WM_APP + 0x120;
@@ -84,5 +84,13 @@ namespace graphics
 		void _CaptureChildWindows(std::vector<HWND>& outChildren) const;
 		void _RefreshTrackedPluginChild() noexcept;
 		void _ResizeFrameToClient(unsigned int clientWidth, unsigned int clientHeight) noexcept;
+		void _IdlePlugin();
+		// UI owner only: a plugin idle call can pump another timer/idle message.
+		bool _idleActive = false;
+		bool _closePending = false;
+		// Released by the UI timer once the SDK call allows safe detachment.
+		std::shared_ptr<VstEditorWindow> _deferredCloseOwner;
+		void _DeferClose();
+		void _TryClosePending();
 	};
 }

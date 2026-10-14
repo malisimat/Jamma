@@ -68,6 +68,7 @@ Loop::Loop(LoopParams params,
 	_model(nullptr),
 	_bufferBank(BufferBank())
 {
+	if (_loopParams.Id.empty()) _loopParams.Id = utils::GetGuid();
 	_mixer = std::make_unique<AudioMixer>(mixerParams);
 	_hanning = std::make_unique<Hanning>(params.FadeSamps);
 
@@ -126,7 +127,7 @@ std::optional<std::shared_ptr<Loop>> Loop::FromFile(LoopParams loopParams, io::J
 		behaviour);
 
 	loopParams.Wav = utils::EncodeUtf8(dir) + "/" + loopStruct.Name;
-	loopParams.Id = loopStruct.Id.empty() ? loopStruct.Name : loopStruct.Id;
+	loopParams.Id = loopStruct.Id.empty() ? utils::GetGuid() : loopStruct.Id;
 	loopParams.Channel = loopStruct.Channel;
 	auto loop = std::make_shared<Loop>(loopParams, mixerParams);
 
@@ -636,20 +637,26 @@ io::JamFile::Loop Loop::ToJamFile(const std::string& wavFilename) const
 		loop.Mix.Params = std::vector<double>{ 0.5, 0.5 };
 	}
 
+	auto chain = _vstChain.load(std::memory_order_acquire);
+	std::vector<std::wstring> paths;
 	{
 		std::lock_guard<std::mutex> lock(_vstPathsMutex);
-		for (size_t i = 0; i < _vstPluginPaths.size(); ++i)
+		paths = _vstPluginPaths;
+	}
+	// Plugin state calls may pump native messages and reenter this owner.
+	{
+		for (size_t i = 0; i < paths.size(); ++i)
 		{
 			io::JamFile::VstEntry entry;
-			entry.Path = utils::EncodeUtf8(_vstPluginPaths[i]);
+			entry.Path = utils::EncodeUtf8(paths[i]);
 			entry.Bypass = false;
 
-			auto chain = _vstChain.load(std::memory_order_acquire);
 			if (chain && i < chain->NumPlugins())
 			{
 				auto plugin = chain->GetPlugin(i);
 				if (plugin)
 				{
+					entry.Id = plugin->StateId();
 					auto blob = plugin->GetState();
 					if (!blob.empty())
 						entry.State = io::JamFile::VstEntry::EncodeState(blob);
@@ -859,6 +866,13 @@ bool Loop::IsMuted() const
 	return Tweakable::IsMuted() || _mixer->IsCaptureSourceMuted();
 }
 
+void Loop::SetGroupMutedAudio(bool muted) noexcept
+{
+	// Group recall never releases recording-owned replacement suppression.
+	if (muted) Tweakable::Mute(); else Tweakable::UnMute();
+	if (_mixer) { if (muted) _mixer->Mute(); else _mixer->UnMute(); }
+}
+
 void Loop::SetCaptureSourceMuteControl(
 	const std::shared_ptr<const audio::CaptureSourceMuteControl>& control) noexcept
 {
@@ -1022,7 +1036,7 @@ void Loop::LoadVstPlugin(std::wstring path,
 
 bool Loop::LoadVstPluginSynchronously(const std::wstring& path,
 	const std::vector<std::uint8_t>& initialState,
-	bool bypass)
+	bool bypass, const std::string& stateId)
 {
 	// Scene::FromFile calls this before Scene::InitAudio, so no callback can
 	// retain the old chain while this non-RT construction is in progress.
@@ -1031,6 +1045,7 @@ bool Loop::LoadVstPluginSynchronously(const std::wstring& path,
 		|| !plugin->Load(path, _sampleRate, _blockSize, 1u, vst::HostedLayoutMode::MonoFlexible))
 		return false;
 
+	plugin->SetStateId(stateId);
 	if (!initialState.empty())
 		plugin->SetState(initialState);
 	plugin->SetBypassed(bypass);

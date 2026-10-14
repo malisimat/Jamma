@@ -1,8 +1,16 @@
 
 #include "gtest/gtest.h"
+#include <thread>
+#include <atomic>
+#include <array>
 #include "actions/JobAction.h"
 #include "engine/Loop.h"
+#include "vst/ReservedMidiEvents.h"
 #include "engine/LoopTake.h"
+#include "engine/Station.h"
+#include "engine/PerformanceGroupController.h"
+#include "vst/VstEditorWindowManager.h"
+#include <functional>
 
 using actions::JobAction;
 using engine::Loop;
@@ -307,4 +315,795 @@ TEST(VstStaging, LoopTake_SetupBuffers_UpdatesOwnBufSize)
 	take->SetupBuffers(targetBufSize);
 
 	EXPECT_EQ(take->GetLastBufSize(), targetBufSize);
+}
+
+
+class StateGatePlugin : public vst::IVstPlugin
+{
+public:
+ mutable bool ProbeRejected = false;
+ bool ReturnEmpty = false;
+ std::vector<std::uint8_t> Restored;
+ bool PreInit(const std::wstring&) override { return true; }
+ bool Load(const std::wstring&, float, unsigned, unsigned, vst::HostedLayoutMode) override { return true; }
+ void Unload() override {}
+ void ProcessBlock(float*, int32_t) noexcept override {}
+ void ProcessBlockStereo(float*, float*, int32_t) noexcept override {}
+ void ProcessBlockMulti(float* const*, int32_t, int32_t) noexcept override {}
+ void SetParameter(unsigned, float) noexcept override {}
+ float GetParameter(unsigned) const noexcept override { return 0; }
+ void BeginMidiBlock(std::uint32_t, std::uint32_t) noexcept override {}
+ void SendMidiEvent(const midi::MidiEvent&, bool) noexcept override {}
+ bool OpenEditor(HWND) override { return false; }
+ void CloseEditor() override {}
+ utils::Size2d GetEditorSize() const noexcept override { return {0,0}; }
+ bool IsLoaded() const noexcept override { return true; }
+ const std::string& Name() const noexcept override { return StateId(); }
+ void SetBypassed(bool) noexcept override {}
+ bool IsBypassed() const noexcept override { return false; }
+ bool Probe() const { PluginCallGuard call(*this); return static_cast<bool>(call); }
+ bool HousekeepingProbe() const { ExclusivePluginCallGuard call(*this); return static_cast<bool>(call); }
+ bool HousekeepingDuringCallback() const
+ {
+  PluginCallGuard callback(*this);
+  return HousekeepingProbe();
+ }
+ bool HousekeepingRejectsReentry() const
+ {
+  ExclusivePluginCallGuard housekeeping(*this);
+  return housekeeping && !Probe() && !HousekeepingProbe();
+ }
+ bool CaptureDuringCallback(std::vector<std::uint8_t>& output)
+ {
+  PluginCallGuard callback(*this);
+  return callback && TryCaptureLiveState(output);
+ }
+ std::vector<std::uint8_t> GetState() const override
+ {
+  ProbeRejected = !Probe();
+  return ReturnEmpty ? std::vector<std::uint8_t>{} : std::vector<std::uint8_t>{1,2,3};
+ }
+ void SetState(const std::vector<std::uint8_t>& blob) override
+ {
+  ProbeRejected = !Probe();
+  Restored = blob;
+  vst::PublishLastTouchedParameter(this, 2, 0.75f);
+ }
+};
+
+TEST(VstStaging, LiveCaptureRejectsActiveCallbackAndPreservesOutput)
+{
+ StateGatePlugin plugin;
+ std::vector<std::uint8_t> output{9};
+ EXPECT_FALSE(plugin.CaptureDuringCallback(output));
+ EXPECT_EQ(output, (std::vector<std::uint8_t>{9}));
+ EXPECT_TRUE(plugin.TryCaptureLiveState(output));
+ EXPECT_EQ(output, (std::vector<std::uint8_t>{1,2,3}));
+ EXPECT_TRUE(plugin.ProbeRejected);
+ EXPECT_TRUE(plugin.Probe());
+}
+
+TEST(VstStaging, ControllerHousekeepingDefersActiveReadersAndNestedMessagePump)
+{
+ StateGatePlugin plugin;
+ EXPECT_FALSE(plugin.HousekeepingDuringCallback());
+ EXPECT_TRUE(plugin.HousekeepingRejectsReentry());
+ EXPECT_TRUE(plugin.HousekeepingProbe());
+ EXPECT_TRUE(plugin.Probe());
+ // Housekeeping never changes the saved-state automation generation.
+ EXPECT_EQ(plugin.AutomationGeneration(), 0u);
+}
+
+TEST(VstStaging, FailedLiveCaptureKeepsExistingSnapshot)
+{
+ StateGatePlugin plugin;
+ plugin.ReturnEmpty = true;
+ std::vector<std::uint8_t> output{9};
+ EXPECT_FALSE(plugin.TryCaptureLiveState(output));
+ EXPECT_EQ(output, (std::vector<std::uint8_t>{9}));
+ EXPECT_TRUE(plugin.Probe());
+}
+
+TEST(VstStaging, LiveRestoreExcludesSdkCallsInvalidatesAutomationAndSuppressesRecording)
+{
+ StateGatePlugin plugin;
+ const auto sequence = vst::_lastTouchedParam.Sequence.load();
+ const auto generation = plugin.AutomationGeneration();
+ EXPECT_TRUE(plugin.TryRestoreLiveState({4,5}));
+ EXPECT_EQ(plugin.Restored, (std::vector<std::uint8_t>{4,5}));
+ EXPECT_TRUE(plugin.ProbeRejected);
+ EXPECT_GT(plugin.AutomationGeneration(), generation);
+ EXPECT_EQ(vst::_lastTouchedParam.Sequence.load(), sequence);
+ EXPECT_TRUE(plugin.Probe());
+}
+
+TEST(VstStaging, GroupPluginIdentityDoesNotFollowReplacementPosition)
+{
+ StateGatePlugin original;
+ StateGatePlugin replacement;
+ EXPECT_NE(original.StateId(), replacement.StateId());
+ replacement.SetStateId("persisted-plugin");
+ EXPECT_EQ(replacement.StateId(), "persisted-plugin");
+}
+
+
+class MuteRecallPlugin final : public StateGatePlugin
+{
+public:
+ mutable unsigned int CaptureCalls = 0u;
+ unsigned int RestoreCalls = 0u;
+ unsigned int LifecycleCalls = 0u;
+ unsigned int BypassCalls = 0u;
+ std::atomic<unsigned int> ProcessCalls{0u};
+ std::atomic<unsigned int> SkippedProcessCalls{0u};
+ void ProcessBlock(float* samples, int32_t count) noexcept override
+ {
+  PluginCallGuard call(*this);
+  if (!call) { ++SkippedProcessCalls; return; }
+  ++ProcessCalls;
+  for (int32_t i = 0; i < count; ++i) samples[i] *= 2.0f;
+ }
+ bool Load(const std::wstring&, float, unsigned, unsigned, vst::HostedLayoutMode) override
+ {
+  ++LifecycleCalls;
+  return true;
+ }
+ void Unload() override { ++LifecycleCalls; }
+ std::vector<std::uint8_t> GetState() const override
+ {
+  ++CaptureCalls;
+  return StateGatePlugin::GetState();
+ }
+ void SetState(const std::vector<std::uint8_t>& blob) override
+ {
+  ++RestoreCalls;
+  StateGatePlugin::SetState(blob);
+ }
+ void SetBypassed(bool) noexcept override { ++BypassCalls; }
+};
+
+TEST(VstStaging, RapidMuteGroupRecallNeverTouchesStationOrTakePlugins)
+{
+ engine::StationParams params;
+ params.Id = "mute-recall-station";
+ params.Size = {100u, 100u};
+ auto station = std::make_shared<engine::Station>(params,
+  engine::Station::GetMixerParams(params.Size, MergeMixBehaviourParams{}));
+ auto take = station->AddTake();
+ auto stationPlugin = std::make_shared<MuteRecallPlugin>();
+ auto takePlugin = std::make_shared<MuteRecallPlugin>();
+ auto install = [](auto& owner, const auto& plugin) {
+  JobAction load;
+  load.JobActionType = JobAction::JOB_LOADVST;
+  load.VstPath = L"mute-recall.vst3";
+  load.PreInitPlugin = plugin;
+  owner->OnAction(load);
+  owner->CommitChanges();
+  ASSERT_EQ(owner->GetVstPlugin(0u), plugin);
+  plugin->LifecycleCalls = 0u;
+  plugin->BypassCalls = 0u;
+ };
+ install(station, stationPlugin);
+ install(take, takePlugin);
+ engine::PerformanceGroupService::Stations stations{station};
+ auto audible = engine::PerformanceGroupService::CaptureMuteConfiguration(stations);
+ const auto blob = io::JamFile::VstEntry::EncodeState({4, 5});
+ audible.Plugins = {
+  {{engine::GroupTargetKind::Station, station->Id(), {}, {}}, stationPlugin->StateId(), "mute-recall.vst3", blob, true},
+  {{engine::GroupTargetKind::Take, station->Id(), take->Id(), {}}, takePlugin->StateId(), "mute-recall.vst3", blob, true}
+ };
+ auto muted = audible;
+ for (auto& target : muted.Targets) target.Muted = target.EffectiveMuted = true;
+ engine::PerformanceGroupController controller;
+ ASSERT_TRUE(controller.Groups().Mute.Store(1u, audible));
+ ASSERT_TRUE(controller.Groups().Mute.Store(2u, muted));
+ std::shared_ptr<const engine::GroupMuteApplication> pending;
+ unsigned int publications = 0u;
+ auto publish = [&](auto application) { pending = std::move(application); ++publications; };
+ // Recall must remain independent of plugin availability. Leave the first
+ // publication unapplied to model faster input than audio boundaries.
+ {
+  vst::IVstPlugin::PluginCallGuard stationBusy(*stationPlugin);
+  vst::IVstPlugin::PluginCallGuard takeBusy(*takePlugin);
+  ASSERT_TRUE(controller.Execute(false, engine::GroupCommand::RecallOrStore, 2u,
+   stations, engine::GroupTargetKind::Take, publish));
+  ASSERT_TRUE(pending);
+  EXPECT_TRUE(pending->Takes[0].Muted);
+  ASSERT_TRUE(controller.Execute(false, engine::GroupCommand::RecallOrStore, 1u,
+   stations, engine::GroupTargetKind::Take, publish));
+  ASSERT_TRUE(pending);
+  EXPECT_FALSE(pending->Takes[0].Muted);
+ }
+ EXPECT_EQ(publications, 2u);
+ pending->ApplyAudio();
+ EXPECT_FALSE(take->IsMuted());
+ EXPECT_EQ(controller.Groups().Mute.ActiveSlot(), 1u);
+ EXPECT_TRUE(controller.Error().empty());
+ EXPECT_EQ(station->GetVstPlugin(0u), stationPlugin);
+ EXPECT_EQ(take->GetVstPlugin(0u), takePlugin);
+ for (const auto& plugin : {stationPlugin, takePlugin})
+ {
+  EXPECT_EQ(plugin->CaptureCalls, 0u);
+  EXPECT_EQ(plugin->RestoreCalls, 0u);
+  EXPECT_EQ(plugin->LifecycleCalls, 0u);
+  EXPECT_EQ(plugin->BypassCalls, 0u);
+  EXPECT_EQ(plugin->AutomationGeneration(), 0u);
+  EXPECT_TRUE(plugin->Probe());
+ }
+}
+
+TEST(VstStaging, MuteGroupCreationAndOverwriteNeverCaptureOrInterruptBusyStationAndTakePlugins)
+{
+ engine::StationParams params;
+ params.Id = "mute-store-station";
+ params.Size = {100u, 100u};
+ auto station = std::make_shared<engine::Station>(params,
+  engine::Station::GetMixerParams(params.Size, MergeMixBehaviourParams{}));
+ auto take = station->AddTake();
+ auto stationPlugin = std::make_shared<MuteRecallPlugin>();
+ auto takePlugin = std::make_shared<MuteRecallPlugin>();
+ auto install = [](auto& owner, const auto& plugin) {
+  JobAction load;
+  load.JobActionType = JobAction::JOB_LOADVST;
+  load.VstPath = L"mute-store.vst3";
+  load.PreInitPlugin = plugin;
+  owner->OnAction(load);
+  owner->CommitChanges();
+  ASSERT_EQ(owner->GetVstPlugin(0u), plugin);
+  plugin->LifecycleCalls = plugin->BypassCalls = 0u;
+ };
+ install(station, stationPlugin);
+ install(take, takePlugin);
+ engine::PerformanceGroupController controller;
+ auto publish = [](auto) { FAIL() << "Store must not publish audio work"; };
+ actions::KeyAction key;
+ key.KeyChar = 112u;
+ key.KeyActionType = actions::KeyAction::KEY_DOWN;
+ {
+  vst::IVstPlugin::PluginCallGuard stationBusy(*stationPlugin);
+  vst::IVstPlugin::PluginCallGuard takeBusy(*takePlugin);
+  ASSERT_TRUE(static_cast<bool>(stationBusy));
+  ASSERT_TRUE(static_cast<bool>(takeBusy));
+  ASSERT_TRUE(controller.HandleKey(key, {station}, engine::GroupTargetKind::Take, publish));
+  ASSERT_NE(controller.Groups().Mute.Get(1u), nullptr);
+  EXPECT_FALSE(controller.Groups().Mute.Get(1u)->Targets[1].Muted);
+  take->SetGroupMutedAudio(true);
+  ASSERT_TRUE(controller.Execute(false, engine::GroupCommand::Add, 0u,
+   {station}, engine::GroupTargetKind::Take, publish));
+  ASSERT_NE(controller.Groups().Mute.Get(2u), nullptr);
+  EXPECT_TRUE(controller.Groups().Mute.Get(2u)->Targets[1].Muted);
+  key.KeyActionType = actions::KeyAction::KEY_UP;
+  ASSERT_TRUE(controller.ConsumeRelease(key));
+  key.KeyActionType = actions::KeyAction::KEY_DOWN;
+  key.Modifiers = base::Action::MODIFIER_SHIFT;
+  ASSERT_TRUE(controller.HandleKey(key, {station}, engine::GroupTargetKind::Take, publish));
+  EXPECT_TRUE(controller.Groups().Mute.Get(1u)->Targets[1].Muted);
+  // Rejected hidden keys preserve the immediately completed store.
+  key.KeyChar = 120u;
+  key.Modifiers = base::Action::MODIFIER_NONE;
+  ASSERT_TRUE(controller.HandleKey(key, {station}, engine::GroupTargetKind::Take, publish));
+  key.KeyChar = 115u;
+  key.Modifiers = base::Action::MODIFIER_ALT;
+  ASSERT_TRUE(controller.HandleKey(key, {station}, engine::GroupTargetKind::Take, publish));
+  // The processors remain usable throughout the stores, including while
+  // another callback entry holds its normal shared SDK guard.
+  for (const auto& plugin : {stationPlugin, takePlugin})
+  {
+   float samples[2]{1.0f, -1.0f};
+   plugin->ProcessBlock(samples, 2);
+   EXPECT_FLOAT_EQ(samples[0], 2.0f);
+   EXPECT_FLOAT_EQ(samples[1], -2.0f);
+  }
+ }
+ // A nonbusy store catches the old vendor capture path; repeat stores while
+ // processing audio to exercise the cross-thread exclusion regression too.
+ ASSERT_TRUE(controller.Execute(false, engine::GroupCommand::Store, 1u,
+  {station}, engine::GroupTargetKind::Take, publish));
+ std::atomic<bool> stopAudio{false};
+ std::atomic<bool> audioReady{false};
+ std::atomic<bool> samplesIncorrect{false};
+ std::thread audio([&] {
+  do
+  {
+   for (const auto& plugin : {stationPlugin, takePlugin})
+   {
+    float samples[2]{1.0f, -1.0f};
+    plugin->ProcessBlock(samples, 2);
+    if (samples[0] != 2.0f || samples[1] != -2.0f) samplesIncorrect.store(true);
+   }
+   audioReady.store(true);
+  } while (!stopAudio.load());
+ });
+ while (!audioReady.load()) std::this_thread::yield();
+ for (unsigned int i = 0u; i < 64u; ++i)
+  EXPECT_TRUE(controller.Execute(false, engine::GroupCommand::Store, 1u,
+   {station}, engine::GroupTargetKind::Take, publish));
+ stopAudio.store(true);
+ audio.join();
+ EXPECT_FALSE(samplesIncorrect.load());
+ EXPECT_EQ(controller.Groups().Mute.ActiveSlot(), 1u);
+ EXPECT_TRUE(controller.Error().empty());
+ EXPECT_TRUE(controller.Groups().Mute.Get(1u)->Plugins.empty());
+ EXPECT_TRUE(controller.Groups().Mute.Get(2u)->Plugins.empty());
+ EXPECT_EQ(station->GetVstPlugin(0u), stationPlugin);
+ EXPECT_EQ(take->GetVstPlugin(0u), takePlugin);
+ for (const auto& plugin : {stationPlugin, takePlugin})
+ {
+  EXPECT_EQ(plugin->CaptureCalls, 0u);
+  EXPECT_EQ(plugin->RestoreCalls, 0u);
+  EXPECT_EQ(plugin->LifecycleCalls, 0u);
+  EXPECT_EQ(plugin->BypassCalls, 0u);
+  EXPECT_EQ(plugin->AutomationGeneration(), 0u);
+  EXPECT_TRUE(plugin->Restored.empty());
+  EXPECT_GE(plugin->ProcessCalls.load(), 2u);
+  EXPECT_EQ(plugin->SkippedProcessCalls.load(), 0u);
+ }
+}
+
+class RaceStateGatePlugin : public StateGatePlugin
+{
+public:
+ mutable std::atomic<unsigned> ActiveSdk{0};
+ mutable std::atomic<bool> Overlap{false};
+ mutable std::atomic<bool> StateEntered{false};
+ mutable std::atomic<bool> ReleaseState{false};
+ std::atomic<bool> CallbackEntered{false};
+ std::atomic<bool> ReleaseCallback{false};
+ bool HoldState = false;
+ bool GuardedCallback(bool hold)
+ {
+  PluginCallGuard call(*this);
+  if (!call) return false;
+  if (ActiveSdk.fetch_add(1) != 0) Overlap.store(true);
+  CallbackEntered.store(true);
+  while (hold && !ReleaseCallback.load()) std::this_thread::yield();
+  ActiveSdk.fetch_sub(1);
+  return true;
+ }
+ std::vector<std::uint8_t> GetState() const override
+ {
+  if (ActiveSdk.fetch_add(1) != 0) Overlap.store(true);
+  StateEntered.store(true);
+  while (HoldState && !ReleaseState.load()) std::this_thread::yield();
+  ActiveSdk.fetch_sub(1);
+  return {1,2,3};
+ }
+};
+
+TEST(VstStaging, TwoThreadLiveStateGateNeverOverlapsCallbackSdkRegion)
+{
+ RaceStateGatePlugin plugin;
+ std::vector<std::uint8_t> output{9};
+ std::thread callback([&] { plugin.GuardedCallback(true); });
+ while (!plugin.CallbackEntered.load()) std::this_thread::yield();
+ const bool captureWhileCallback = plugin.TryCaptureLiveState(output);
+ plugin.ReleaseCallback.store(true);
+ callback.join();
+ EXPECT_FALSE(captureWhileCallback);
+ EXPECT_EQ(output, (std::vector<std::uint8_t>{9}));
+ plugin.HoldState = true;
+ bool callbackWhileCapture = true;
+ std::thread retry([&] {
+  while (!plugin.StateEntered.load()) std::this_thread::yield();
+  callbackWhileCapture = plugin.GuardedCallback(false);
+  plugin.ReleaseState.store(true);
+ });
+ const bool captured = plugin.TryCaptureLiveState(output);
+ retry.join();
+ EXPECT_TRUE(captured);
+ EXPECT_FALSE(callbackWhileCapture);
+ EXPECT_FALSE(plugin.Overlap.load());
+ EXPECT_TRUE(plugin.GuardedCallback(false));
+}
+
+class PanicStateGatePlugin : public StateGatePlugin
+{
+public:
+ std::array<unsigned,16> Panics{};
+ bool Bypassed = false;
+ void SetBypassed(bool value) noexcept override { Bypassed = value; }
+ bool IsBypassed() const noexcept override { return Bypassed; }
+ void SetState(const std::vector<std::uint8_t>& blob) override
+ {
+  StateGatePlugin::SetState(blob);
+  PluginCallGuard lostMidi(*this, true);
+  ProbeRejected = !static_cast<bool>(lostMidi);
+ }
+ void SendMidiEvent(const midi::MidiEvent& event, bool) noexcept override
+ {
+  if (event.MessageType() == 0xb0 && event.data1 == 123) ++Panics[event.Channel()];
+ }
+};
+
+TEST(VstStaging, SkippedCallbackRecoversAllChannelsOnceBeforeNormalDelivery)
+{
+ PanicStateGatePlugin plugin;
+ EXPECT_TRUE(plugin.TryRestoreLiveState({1})); // SetState explicitly attempts guarded callback entry.
+ EXPECT_TRUE(plugin.ProbeRejected);
+ {
+  vst::IVstPlugin::PluginCallGuard call(plugin);
+  ASSERT_TRUE(static_cast<bool>(call));
+  plugin.FlushPendingMidiPanic();
+  plugin.FlushPendingMidiPanic();
+ }
+ for (auto count : plugin.Panics) EXPECT_EQ(count, 1u);
+}
+
+TEST(VstStaging, CaptureInvalidatesAutomationAfterExclusiveCallbackSkip)
+{
+ StateGatePlugin plugin;
+ std::vector<std::uint8_t> output;
+ const auto generation = plugin.AutomationGeneration();
+ EXPECT_TRUE(plugin.TryCaptureLiveState(output));
+ EXPECT_GT(plugin.AutomationGeneration(), generation);
+ EXPECT_TRUE(plugin.ProbeRejected);
+}
+
+
+TEST(VstStaging, ReservedPanicEventsPreserveFullSameBlockMidiAndRejectOverflow)
+{
+ vst::ReservedMidiEvents<midi::MidiEvent, 2> events;
+ const auto noteOn = midi::MidiEvent::MakeNoteOn(7, 0, 60, 100);
+ const auto noteOff = midi::MidiEvent::MakeNoteOff(8, 0, 60);
+ ASSERT_TRUE(events.Append(noteOn));
+ ASSERT_TRUE(events.Append(noteOff));
+ EXPECT_FALSE(events.Append(noteOn));
+ for (std::uint8_t channel = 0; channel < 16; ++channel)
+  ASSERT_TRUE(events.Append({0, static_cast<std::uint8_t>(0xb0u | channel), 123, 0}, true));
+ EXPECT_EQ(events.Count(), 18u);
+ EXPECT_EQ(events.NormalCount(), 2u);
+ EXPECT_EQ(events.At(0).data1, 123u);
+ EXPECT_TRUE(events.At(16).IsNoteOn());
+ EXPECT_TRUE(events.At(17).IsNoteOff());
+ EXPECT_EQ(events.At(17).sampleOffset, 8u);
+ EXPECT_FALSE(events.Append({0,0xb0,123,0}, true));
+ events.Clear();
+ EXPECT_TRUE(events.Append(noteOff));
+ EXPECT_EQ(events.Count(), 1u);
+}
+
+
+TEST(VstStaging, CaptureWithOnlyRejectedParameterReadDoesNotInterruptHeldNotes)
+{
+ PanicStateGatePlugin plugin;
+ std::vector<std::uint8_t> state;
+ ASSERT_TRUE(plugin.TryCaptureLiveState(state));
+ EXPECT_TRUE(plugin.ProbeRejected);
+ vst::IVstPlugin::PluginCallGuard call(plugin);
+ ASSERT_TRUE(static_cast<bool>(call));
+ plugin.FlushPendingMidiPanic();
+ for (auto count : plugin.Panics) EXPECT_EQ(count, 0u);
+}
+
+
+TEST(VstStaging, MidiPanicSurvivesBypassUntilProcessorCanReceiveIt)
+{
+ PanicStateGatePlugin plugin;
+ ASSERT_TRUE(plugin.TryRestoreLiveState({1}));
+ plugin.SetBypassed(true);
+ vst::IVstPlugin::PluginCallGuard call(plugin);
+ ASSERT_TRUE(static_cast<bool>(call));
+ plugin.FlushPendingMidiPanic();
+ for (auto count : plugin.Panics) EXPECT_EQ(count, 0u);
+ plugin.SetBypassed(false);
+ plugin.FlushPendingMidiPanic();
+ for (auto count : plugin.Panics) EXPECT_EQ(count, 1u);
+}
+
+// Model plugins that pump native messages during getState: a message can
+// reenter metadata updates on the same owner before state capture returns.
+class ReentrantMetadataPlugin final : public StateGatePlugin
+{
+public:
+ std::function<void()> DuringCapture;
+ std::vector<std::uint8_t> GetState() const override
+ {
+  if (DuringCapture) DuringCapture();
+  return {1, 2, 3};
+ }
+};
+
+class VstMetadataReentryTest : public testing::Test
+{
+protected:
+ template<typename Owner, typename Capture>
+ static void CheckCapture(const std::shared_ptr<Owner>& owner, Capture capture)
+ {
+  auto plugin = std::make_shared<ReentrantMetadataPlugin>();
+  JobAction load;
+  load.JobActionType = JobAction::JOB_LOADVST;
+  load.VstPath = L"reentrant.vst3";
+  load.PreInitPlugin = plugin;
+  owner->OnAction(load);
+  owner->CommitChanges();
+  ASSERT_EQ(owner->GetVstPlugin(0u), plugin);
+
+  bool reentered = false;
+  plugin->DuringCapture = [&owner, &reentered] {
+   JobAction unload;
+   unload.JobActionType = JobAction::JOB_UNLOADVST;
+   unload.VstIndex = 0u;
+   owner->OnAction(unload);
+   reentered = true;
+  };
+  const auto entries = capture(*owner);
+  // The plugin can survive this test in a retired snapshot / destroy queue.
+  plugin->DuringCapture = {};
+  EXPECT_TRUE(reentered);
+  ASSERT_EQ(entries.size(), 1u);
+  EXPECT_EQ(entries[0].Path, "reentrant.vst3");
+  EXPECT_EQ(entries[0].DecodeState(), (std::vector<std::uint8_t>{1, 2, 3}));
+ }
+
+ static std::shared_ptr<engine::Station> MakeStation()
+ {
+  engine::StationParams params;
+  params.Id = "station-vst-reentry";
+  params.Size = {100u, 100u};
+  return std::make_shared<engine::Station>(params,
+   engine::Station::GetMixerParams(params.Size, MergeMixBehaviourParams{}));
+ }
+
+ template<typename Owner>
+ static std::vector<io::JamFile::VstEntry> CaptureGroup(Owner& owner)
+ {
+  std::vector<io::JamFile::VstEntry> entries;
+  EXPECT_TRUE(owner.TryGroupVstEntries(entries));
+  return entries;
+ }
+};
+
+TEST_F(VstMetadataReentryTest, LoopFileCaptureAllowsReentrantMetadataUpdate)
+{
+ CheckCapture(MakeLoop(), [](Loop& loop) { return loop.ToJamFile("loop.wav").VstChain; });
+}
+
+TEST_F(VstMetadataReentryTest, TakeFileCaptureAllowsReentrantMetadataUpdate)
+{
+ CheckCapture(MakeTake(), [](LoopTake& take) { return take.VstEntries(); });
+}
+
+TEST_F(VstMetadataReentryTest, TakeGroupCaptureAllowsReentrantMetadataUpdate)
+{
+ CheckCapture(MakeTake(), [](LoopTake& take) { return CaptureGroup(take); });
+}
+
+TEST_F(VstMetadataReentryTest, StationFileCaptureAllowsReentrantMetadataUpdate)
+{
+ CheckCapture(MakeStation(), [](engine::Station& station) { return station.VstEntries(); });
+}
+
+TEST_F(VstMetadataReentryTest, StationGroupCaptureAllowsReentrantMetadataUpdate)
+{
+ CheckCapture(MakeStation(), [](engine::Station& station) { return CaptureGroup(station); });
+}
+
+class ReentrantEditorDestructionPlugin final : public StateGatePlugin
+{
+public:
+ HWND EditorParent = nullptr;
+ std::function<void()> DuringDestruction;
+ ~ReentrantEditorDestructionPlugin() override
+ {
+  if (DuringDestruction) DuringDestruction();
+ }
+ bool OpenEditor(HWND parent) override
+ {
+  EditorParent = parent;
+  return true;
+ }
+ utils::Size2d GetEditorSize() const noexcept override
+ {
+  // Close while Create still owns a hidden frame, before ShowWindow.
+  // The closed manager entry retains the final plugin reference until prune.
+  SendMessage(EditorParent, WM_CLOSE, 0, 0);
+  return {0, 0};
+ }
+};
+
+TEST(VstStaging, PruningClosedEditorAllowsReentrantPluginDestruction)
+{
+ vst::VstEditorWindowManager manager;
+ bool reentered = false;
+ auto plugin = std::make_shared<ReentrantEditorDestructionPlugin>();
+ plugin->DuringDestruction = [&] {
+  manager.PruneClosedVstEditorWindows();
+  reentered = true;
+ };
+ ASSERT_TRUE(manager.OpenVstEditorForPlugin(plugin));
+ EXPECT_FALSE(IsWindow(plugin->EditorParent));
+ plugin.reset();
+ EXPECT_FALSE(reentered);
+ manager.PruneClosedVstEditorWindows();
+ EXPECT_TRUE(reentered);
+}
+class ReentrantEditorIdlePlugin final : public StateGatePlugin
+{
+public:
+ HWND EditorParent = nullptr;
+ unsigned int IdleCalls = 0;
+ bool OpenEditor(HWND parent) override { EditorParent = parent; return true; }
+ void IdleEditor() noexcept override
+ {
+  ++IdleCalls;
+  if (IdleCalls == 1u)
+  {
+   SendMessage(EditorParent, WM_TIMER, 1, 0);
+   SendMessage(EditorParent, graphics::VstEditorWindow::MessageVst2Idle, 0, 0);
+  }
+ }
+};
+
+TEST(VstStaging, EditorIdleRejectsNestedTimerAndVst2IdleMessages)
+{
+ auto plugin = std::make_shared<ReentrantEditorIdlePlugin>();
+ graphics::VstEditorWindow editor;
+ ASSERT_TRUE(editor.Create(GetModuleHandle(nullptr), plugin));
+ SendMessage(editor.EditorHwnd(), WM_TIMER, 1, 0);
+ EXPECT_EQ(plugin->IdleCalls, 1u);
+ SendMessage(editor.EditorHwnd(), graphics::VstEditorWindow::MessageVst2Idle, 0, 0);
+ EXPECT_EQ(plugin->IdleCalls, 2u);
+ editor.Destroy();
+}
+
+class ReentrantEditorLifetimePlugin final : public StateGatePlugin
+{
+public:
+ HWND EditorParent = nullptr;
+ vst::VstEditorWindowManager* Manager = nullptr;
+ std::weak_ptr<graphics::VstEditorWindow> Editor;
+ bool KeptAliveDuringIdle = false;
+ bool OpenEditor(HWND parent) override { EditorParent = parent; return true; }
+ void IdleEditor() noexcept override
+ {
+  auto* editor = reinterpret_cast<graphics::VstEditorWindow*>(
+   GetWindowLongPtr(EditorParent, GWLP_USERDATA));
+  Editor = editor->weak_from_this();
+  SendMessage(EditorParent, WM_CLOSE, 0, 0);
+  Manager->PruneClosedVstEditorWindows();
+  Manager->CloseAllVstEditorWindows();
+  KeptAliveDuringIdle = !Editor.expired() && IsWindow(EditorParent);
+ }
+};
+
+TEST(VstStaging, EditorSurvivesReentrantClosePruneAndManagerRemovalDuringIdle)
+{
+ vst::VstEditorWindowManager manager;
+ auto plugin = std::make_shared<ReentrantEditorLifetimePlugin>();
+ plugin->Manager = &manager;
+ ASSERT_TRUE(manager.OpenVstEditorForPlugin(plugin));
+ SendMessage(plugin->EditorParent, graphics::VstEditorWindow::MessageVst2Idle, 0, 0);
+ EXPECT_TRUE(plugin->KeptAliveDuringIdle);
+ EXPECT_TRUE(plugin->Editor.expired());
+ EXPECT_FALSE(IsWindow(plugin->EditorParent));
+}
+
+class ReentrantEditorOpenPlugin final : public StateGatePlugin
+{
+public:
+ HWND EditorParent = nullptr;
+ unsigned int OpenCalls = 0;
+ bool NestedResult = true;
+ bool FailOpen = false;
+ std::function<bool()> Reopen;
+ bool OpenEditor(HWND parent) override
+ {
+  EditorParent = parent;
+  ++OpenCalls;
+  // Bound a failing regression rather than overflowing the test's stack.
+  if (OpenCalls == 1u) NestedResult = Reopen();
+  return !FailOpen;
+ }
+ utils::Size2d GetEditorSize() const noexcept override
+ {
+  SendMessage(EditorParent, WM_CLOSE, 0, 0);
+  return {0, 0};
+ }
+};
+
+TEST(VstStaging, ReentrantEditorCreateForSamePluginIsBounded)
+{
+ vst::VstEditorWindowManager manager;
+ auto plugin = std::make_shared<ReentrantEditorOpenPlugin>();
+ std::weak_ptr<ReentrantEditorOpenPlugin> weakPlugin = plugin;
+ plugin->Reopen = [&manager, weakPlugin] { return manager.OpenVstEditorForPlugin(weakPlugin.lock()); };
+ ASSERT_TRUE(manager.OpenVstEditorForPlugin(plugin));
+ EXPECT_FALSE(plugin->NestedResult);
+ EXPECT_EQ(plugin->OpenCalls, 1u);
+ manager.PruneClosedVstEditorWindows();
+ // The pending reservation is released even though the editor closed in Create.
+ EXPECT_TRUE(manager.OpenVstEditorForPlugin(plugin));
+ EXPECT_EQ(plugin->OpenCalls, 2u);
+}
+
+TEST(VstStaging, FailedEditorCreateReleasesPendingReservation)
+{
+ vst::VstEditorWindowManager manager;
+ auto plugin = std::make_shared<ReentrantEditorOpenPlugin>();
+ std::weak_ptr<ReentrantEditorOpenPlugin> weakPlugin = plugin;
+ plugin->Reopen = [&manager, weakPlugin] { return manager.OpenVstEditorForPlugin(weakPlugin.lock()); };
+ plugin->FailOpen = true;
+ EXPECT_FALSE(manager.OpenVstEditorForPlugin(plugin));
+ EXPECT_FALSE(plugin->NestedResult);
+ plugin->FailOpen = false;
+ EXPECT_TRUE(manager.OpenVstEditorForPlugin(plugin));
+ EXPECT_EQ(plugin->OpenCalls, 2u);
+}
+class ReentrantEditorStateClosePlugin final : public StateGatePlugin
+{
+public:
+ HWND EditorParent = nullptr;
+ vst::VstEditorWindowManager* Manager = nullptr;
+ mutable std::weak_ptr<graphics::VstEditorWindow> Editor;
+ mutable bool KeptAliveDuringState = false;
+ mutable bool NestedSdkRejected = false;
+ mutable bool NestedLiveStateRejected = false;
+ unsigned int CloseCalls = 0;
+ bool ClosedDuringState = false;
+ bool OpenEditor(HWND parent) override { EditorParent = parent; return true; }
+ void CloseEditor() override
+ {
+  ++CloseCalls;
+  ClosedDuringState = IsStateOperationActive();
+ }
+ std::vector<std::uint8_t> GetState() const override
+ {
+  BlobSdkCallGuard blobCall(*this);
+  if (!blobCall) return {};
+  NestedSdkRejected = !Probe() && !HousekeepingProbe() && GetState().empty();
+  std::vector<std::uint8_t> nestedOutput{9};
+  NestedLiveStateRejected = !TryCaptureLiveState(nestedOutput)
+   && nestedOutput == std::vector<std::uint8_t>{9};
+  auto* editor = reinterpret_cast<graphics::VstEditorWindow*>(
+   GetWindowLongPtr(EditorParent, GWLP_USERDATA));
+  Editor = editor->weak_from_this();
+  SendMessage(EditorParent, WM_CLOSE, 0, 0);
+  Manager->CloseAllVstEditorWindows();
+  // Repeated pump ticks must neither detach nor continually repost WM_CLOSE.
+  for (unsigned int tick = 0u; tick < 3u; ++tick)
+   SendMessage(EditorParent, WM_TIMER, 1, 0);
+  KeptAliveDuringState = !Editor.expired() && IsWindow(EditorParent) && CloseCalls == 0u;
+  return {1, 2, 3};
+ }
+};
+
+TEST(VstStaging, EditorCloseAndManagerRemovalWaitUntilExclusiveStateCaptureReturns)
+{
+ vst::VstEditorWindowManager manager;
+ auto plugin = std::make_shared<ReentrantEditorStateClosePlugin>();
+ plugin->Manager = &manager;
+ ASSERT_TRUE(manager.OpenVstEditorForPlugin(plugin));
+ std::vector<std::uint8_t> state;
+ ASSERT_TRUE(plugin->TryCaptureLiveState(state));
+ EXPECT_TRUE(plugin->KeptAliveDuringState);
+ EXPECT_FALSE(plugin->Editor.expired());
+ EXPECT_TRUE(IsWindow(plugin->EditorParent));
+ EXPECT_EQ(plugin->CloseCalls, 0u);
+ // The existing timer completes close once the exclusive gate is released.
+ SendMessage(plugin->EditorParent, WM_TIMER, 1, 0);
+ EXPECT_EQ(plugin->CloseCalls, 1u);
+ EXPECT_FALSE(plugin->ClosedDuringState);
+ EXPECT_TRUE(plugin->Editor.expired());
+ EXPECT_FALSE(IsWindow(plugin->EditorParent));
+}
+
+TEST(VstStaging, RawStateCaptureDefersEditorCloseAndRejectsNestedSdkEntry)
+{
+ vst::VstEditorWindowManager manager;
+ auto plugin = std::make_shared<ReentrantEditorStateClosePlugin>();
+ plugin->Manager = &manager;
+ ASSERT_TRUE(manager.OpenVstEditorForPlugin(plugin));
+ EXPECT_EQ(plugin->GetState(), (std::vector<std::uint8_t>{1, 2, 3}));
+ EXPECT_TRUE(plugin->NestedSdkRejected);
+ EXPECT_TRUE(plugin->NestedLiveStateRejected);
+ EXPECT_TRUE(plugin->KeptAliveDuringState);
+ EXPECT_FALSE(plugin->IsStateOperationActive());
+ EXPECT_TRUE(IsWindow(plugin->EditorParent));
+ EXPECT_EQ(plugin->CloseCalls, 0u);
+ SendMessage(plugin->EditorParent, WM_TIMER, 1, 0);
+ EXPECT_EQ(plugin->CloseCalls, 1u);
+ EXPECT_FALSE(plugin->ClosedDuringState);
+ EXPECT_TRUE(plugin->Editor.expired());
+ EXPECT_FALSE(IsWindow(plugin->EditorParent));
+ EXPECT_TRUE(plugin->Probe());
 }

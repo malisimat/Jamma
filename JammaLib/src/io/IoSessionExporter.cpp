@@ -31,7 +31,8 @@ namespace io
 		const audio::AudioStreamParams& streamParams,
 		audio::AudioDevice* device,
 		std::mutex& sceneMutex,
-		const std::shared_ptr<ninjam::NinjamController>& ninjamController)
+		const std::shared_ptr<ninjam::NinjamController>& ninjamController,
+		const engine::PerformanceGroups* groups)
 	{
 		const auto exportDir = utils::PickDirectory(L"Choose export directory");
 		if (exportDir.empty())
@@ -47,7 +48,8 @@ namespace io
 			device,
 			sceneMutex,
 			ninjamController,
-			exportDir);
+			exportDir,
+			groups);
 		return actions::ActionResult::NoAction();
 	}
 
@@ -61,14 +63,14 @@ namespace io
 		audio::AudioDevice* device,
 		std::mutex& sceneMutex,
 		const std::shared_ptr<ninjam::NinjamController>& ninjamController,
-		const std::wstring& exportDir)
+		const std::wstring& exportDir, const engine::PerformanceGroups* groups)
     {
         // Device::Pause cannot establish callback exclusion. Legacy API is
         // intentionally limited to caller-owned offline material.
         if (device) return false;
         return ExportToDirectory(stations, rigSnapshot, quantisation, globalMidiQuantState,
             transportOffsetLoopFrac, userConfig, streamParams, nullptr, sceneMutex,
-            ninjamController, exportDir, false, {}, {}).Success;
+            ninjamController, exportDir, false, {}, {}, groups).Success;
     }
 
 	IoSessionExporter::ExportResult IoSessionExporter::ExportSessionVersionToDirectory(const std::vector<std::shared_ptr<Station>>& stations,
@@ -83,11 +85,11 @@ namespace io
 		const std::shared_ptr<ninjam::NinjamController>& ninjamController,
 		const std::wstring& exportDir,
         const std::function<bool(std::string&)>& afterCapture,
-        const std::function<bool(std::string&)>& beforeCapture)
+        const std::function<bool(std::string&)>& beforeCapture, const engine::PerformanceGroups* groups)
     {
         return ExportToDirectory(stations, rigSnapshot, quantisation, globalMidiQuantState,
             transportOffsetLoopFrac, userConfig, streamParams, host, sceneMutex,
-            ninjamController, exportDir, true, afterCapture, beforeCapture);
+            ninjamController, exportDir, true, afterCapture, beforeCapture, groups);
     }
 
 	IoSessionExporter::ExportResult IoSessionExporter::ExportToDirectory(const std::vector<std::shared_ptr<Station>>& stations,
@@ -102,7 +104,7 @@ namespace io
 		const std::shared_ptr<ninjam::NinjamController>& ninjamController,
 		const std::wstring& exportDir, bool numbered,
         const std::function<bool(std::string&)>& afterCapture,
-        const std::function<bool(std::string&)>& beforeCapture)
+        const std::function<bool(std::string&)>& beforeCapture, const engine::PerformanceGroups* groups)
     {
         ExportResult result;
         const auto appendError = [&](const std::string& error)
@@ -302,6 +304,17 @@ namespace io
 			std::scoped_lock lock(sceneMutex);
             jam.QuantiseSamps = quantisation.EffectiveSamps();
             jam.GlobalPhaseOffsetSamps = quantisation.GlobalPhaseOffsetSamps();
+		if (groups)
+		{
+			for (std::size_t slot = 1u; slot <= 9u; ++slot)
+			{
+				if (const auto snapshot = groups->Mute.Get(slot)) jam.MuteGroups[slot - 1u] = *snapshot;
+				if (const auto snapshot = groups->Selection.Get(slot)) jam.SelectionGroups[slot - 1u] = *snapshot;
+			}
+			if (const auto active = groups->Mute.ActiveSlot()) jam.MuteActiveGroup = static_cast<unsigned int>(*active - 1u);
+			if (const auto active = groups->Selection.ActiveSlot()) jam.SelectionActiveGroup = static_cast<unsigned int>(*active - 1u);
+		}
+
 			const auto clock = quantisation.Clock();
 			const auto hasSavedLoopContent = std::any_of(stations.begin(), stations.end(),
 				[](const std::shared_ptr<Station>& station)
@@ -335,6 +348,7 @@ namespace io
 					continue;
 
 				io::JamFile::Station jamStation;
+				jamStation.Id = station->Id();
 				jamStation.Name = station->Name();
 				jamStation.StationType = 0;
 				jamStation.MasterLevel = station->MasterLevelForExport();
@@ -363,6 +377,7 @@ namespace io
 					if (!take)
 						continue;
 					io::JamFile::LoopTake jamTake;
+					jamTake.Id = take->Id();
 					jamTake.Name = take->Id();
 					jamTake.MasterLevel = take->MasterLevelForExport();
 					jamTake.BusLevels = take->BusLevelsForExport();
@@ -499,6 +514,7 @@ namespace io
 						jamTake.MidiStreams.push_back({ filename, stream.Channel, stream.Device,
 							stream.Loop.LoopLengthSamps, stream.Loop.AutomationGlobalSampleOrigin });
 						auto& manifestStream = jamTake.MidiStreams.back();
+						manifestStream.Id = stream.Id;
 						const auto& overrides = stream.Loop.LoopQuantisation;
 						manifestStream.MidiQuantEnabled = overrides.Enabled;
 						if (overrides.Fraction)

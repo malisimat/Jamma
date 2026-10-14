@@ -85,7 +85,10 @@ void VstChain::ProcessBlock(float* monoBuf, int numSamps) noexcept
 	for (const auto& p : _plugins)
 	{
 		if (p)
-			p->ProcessBlock(monoBuf, static_cast<int32_t>(numSamps));
+		{
+			IVstPlugin::PluginCallGuard call(*p, true);
+			if (call) { p->FlushPendingMidiPanic(); p->ProcessBlock(monoBuf, static_cast<int32_t>(numSamps)); }
+		}
 	}
 }
 
@@ -100,7 +103,10 @@ void VstChain::ProcessBlockStereo(float* leftBuf, float* rightBuf, int numSamps)
 	for (const auto& p : _plugins)
 	{
 		if (p)
-			p->ProcessBlockStereo(leftBuf, rightBuf, static_cast<int32_t>(numSamps));
+		{
+			IVstPlugin::PluginCallGuard call(*p, true);
+			if (call) { p->FlushPendingMidiPanic(); p->ProcessBlockStereo(leftBuf, rightBuf, static_cast<int32_t>(numSamps)); }
+		}
 	}
 }
 
@@ -116,7 +122,10 @@ void VstChain::ProcessBlockMulti(float* const* channelBufs, int numChannels, int
 	for (const auto& p : _plugins)
 	{
 		if (p)
-			p->ProcessBlockMulti(channelBufs, numChannels, static_cast<int32_t>(numSamps));
+		{
+			IVstPlugin::PluginCallGuard call(*p, true);
+			if (call) { p->FlushPendingMidiPanic(); p->ProcessBlockMulti(channelBufs, numChannels, static_cast<int32_t>(numSamps)); }
+		}
 	}
 }
 
@@ -125,7 +134,10 @@ void VstChain::BeginMidiBlock(std::uint32_t blockStartSample, std::uint32_t numS
 	for (const auto& p : _plugins)
 	{
 		if (p)
-			p->BeginMidiBlock(blockStartSample, numSamples);
+		{
+			IVstPlugin::PluginCallGuard call(*p, true);
+			if (call) { p->BeginMidiBlock(blockStartSample, numSamples); p->FlushPendingMidiPanic(); }
+		}
 	}
 }
 
@@ -134,7 +146,10 @@ void VstChain::UpdateHostTime(const HostTimeState& state) noexcept
 	for (const auto& p : _plugins)
 	{
 		if (p)
-			p->UpdateHostTime(state);
+		{
+			IVstPlugin::PluginCallGuard call(*p);
+			if (call) p->UpdateHostTime(state);
+		}
 	}
 }
 
@@ -143,12 +158,18 @@ void VstChain::SendMidiEvent(const midi::MidiEvent& event, bool isRealtime) noex
 	for (const auto& p : _plugins)
 	{
 		if (p)
-			p->SendMidiEvent(event, isRealtime);
+		{
+			IVstPlugin::PluginCallGuard call(*p, true);
+			if (call) { p->FlushPendingMidiPanic(); p->SendMidiEvent(event, isRealtime); }
+		}
 	}
 }
 
 void VstChain::SendMidiEventToPlugin(size_t index, const midi::MidiEvent& event, bool isRealtime) noexcept
 {
 	if (index < _plugins.size() && _plugins[index])
-		_plugins[index]->SendMidiEvent(event, isRealtime);
+	{
+		IVstPlugin::PluginCallGuard call(*_plugins[index], true);
+		if (call) { _plugins[index]->FlushPendingMidiPanic(); _plugins[index]->SendMidiEvent(event, isRealtime); }
+	}
 }

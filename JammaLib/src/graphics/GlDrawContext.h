@@ -47,6 +47,28 @@ namespace graphics
 		std::optional<std::any> GetUniform(std::string name);
 		void SetUniform(const std::string& name, std::any val);
 
+		// Render owner only. Replaced per Scene pass under _sceneMutex, cleared
+		// before leaving that pass. No engine/model/audio state is changed.
+		void SetGroupPreview(bool active, glm::vec3 tint,
+			std::map<std::vector<unsigned int>, bool> members, bool dimNonMembers = true)
+		{
+			_groupPreviewActive = active;
+			_groupPreviewTint = tint;
+			_groupPreviewMembers = std::move(members);
+			_groupPreviewDimNonMembers = dimNonMembers;
+		}
+		float GroupPreview(const std::vector<unsigned int>& path) const
+		{
+			if (!_groupPreviewActive) return 0.0f;
+			const auto found = _groupPreviewMembers.find(path);
+			return found != _groupPreviewMembers.end() && found->second ? 1.0f : _groupPreviewDimNonMembers ? -1.0f : 0.0f;
+		}
+		void ApplyGroupPreview(const std::vector<unsigned int>& path)
+		{
+			SetUniform("GroupPreview", GroupPreview(path));
+			SetUniform("GroupPreviewTint", _groupPreviewTint);
+		}
+
 		void PushMvp(const glm::mat4 mat) noexcept;
 		void PopMvp() noexcept;
 		void ClearMvp() noexcept;
@@ -72,6 +94,10 @@ namespace graphics
 		const std::string _MvpUniformName = "MVP";
 
 		std::map<std::string, std::any> _uniforms;
+		bool _groupPreviewActive = false;
+		bool _groupPreviewDimNonMembers = true;
+		glm::vec3 _groupPreviewTint{1.0f};
+		std::map<std::vector<unsigned int>, bool> _groupPreviewMembers;
 		std::vector<glm::mat4> _mvp;
 		std::vector<ScissorRect> _scissorStack;
 		unsigned int _frameBuffer;

@@ -64,6 +64,7 @@ namespace engine
 
 	public:
 		std::string Name;
+		std::string Id;
 		unsigned int FadeSamps;
 		unsigned int NumBusChannels;
 		float StationLevelFallRate;
@@ -180,6 +181,7 @@ namespace engine
 		void AddTake(std::shared_ptr<LoopTake> take);
 		unsigned int NumTakes() const;
 		std::string Name() const;
+		const std::string& Id() const noexcept { return _id; }
 		void SetName(std::string name);
 		void SetClock(std::shared_ptr<utils::Timer> clock);
 		void SetQuantisationParams(std::optional<engine::QuantisationParams> params, bool confirm = false);
@@ -231,6 +233,8 @@ namespace engine
 		void SetRackVisibility(bool showStationRack, bool showLoopTakeRacks);
 		std::shared_ptr<gui::GuiRack> GetGuiRack() const { return _guiRack; }
 		std::vector<io::JamFile::VstEntry> VstEntries() const;
+		bool TryGroupVstEntries(std::vector<io::JamFile::VstEntry>& output) const;
+		bool TryRestoreGroupVstEntry(const io::JamFile::VstEntry& entry);
 		bool AcceptsLiveMidiChannel(std::uint8_t channel) const noexcept;
 		void SetAllowedMidiChannels(const std::vector<int>& channels);
 		const std::vector<int>& AllowedMidiChannels() const noexcept { return _allowedMidiChannels; }
@@ -269,7 +273,7 @@ namespace engine
 		// Startup-only synchronous counterpart used before Scene::InitAudio().
 		bool LoadVstPluginSynchronously(const std::wstring& path,
 			const std::vector<std::uint8_t>& initialState = {},
-			bool bypass = false);
+			bool bypass = false, const std::string& stateId = {});
 		void UnloadVstPlugin(size_t index);
 		void ForceUnloadAllVstPlugins();
 
@@ -509,6 +513,7 @@ namespace engine
 		struct AutomationPlaybackState
 		{
 			std::uint16_t cursorIdx = 0u;
+			std::uint64_t stateGeneration = 0;
 			float         lastValue = -2.0f;  // sentinel: force first write
 		};
 		static constexpr std::size_t MaxAutomationDispatches = 64u;
@@ -525,6 +530,7 @@ namespace engine
 		bool _flipTakeBuffer;
 		bool _flipAudioBuffer;
 		std::string _name;
+		const std::string _id;
 		unsigned int _fadeSamps;
 		unsigned int _lastBufSize;
 		std::shared_ptr<utils::Timer> _clock;

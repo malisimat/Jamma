@@ -596,6 +596,7 @@ void StationModel::Draw3d(DrawContext& ctx,
 		return;
 
 	auto& glCtx = dynamic_cast<GlDrawContext&>(ctx);
+	glCtx.ApplyGroupPreview(_stationGlobalId.empty() ? GlobalId() : _stationGlobalId);
 
 	// Stash pass so GetShader() returns the right one.
 	_lastPass = pass;

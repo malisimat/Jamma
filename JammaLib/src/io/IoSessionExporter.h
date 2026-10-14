@@ -44,7 +44,7 @@ namespace io
             const std::shared_ptr<ninjam::NinjamController>& ninjamController,
             const std::wstring& exportDir,
             const std::function<bool(std::string&)>& afterCapture = {},
-            const std::function<bool(std::string&)>& beforeCapture = {});
+            const std::function<bool(std::string&)>& beforeCapture = {}, const engine::PerformanceGroups* groups = nullptr);
 
 		static actions::ActionResult ExportSession(const std::vector<std::shared_ptr<engine::Station>>& stations,
 			const std::shared_ptr<const engine::RigSnapshot>& rigSnapshot,
@@ -55,7 +55,8 @@ namespace io
 			const audio::AudioStreamParams& streamParams,
 			audio::AudioDevice* device,
 			std::mutex& sceneMutex,
-			const std::shared_ptr<ninjam::NinjamController>& ninjamController);
+			const std::shared_ptr<ninjam::NinjamController>& ninjamController,
+			const engine::PerformanceGroups* groups = nullptr);
 
 		// Legacy offline/test entry point; rejects a non-null AudioDevice because
         // device pause alone does not prove callback quiescence.
@@ -72,7 +73,7 @@ namespace io
 			audio::AudioDevice* device,
 			std::mutex& sceneMutex,
 			const std::shared_ptr<ninjam::NinjamController>& ninjamController,
-			const std::wstring& exportDir);
+			const std::wstring& exportDir, const engine::PerformanceGroups* groups = nullptr);
     private:
         static ExportResult ExportToDirectory(const std::vector<std::shared_ptr<engine::Station>>& stations,
             const std::shared_ptr<const engine::RigSnapshot>& rigSnapshot,
@@ -86,6 +87,6 @@ namespace io
             const std::shared_ptr<ninjam::NinjamController>& ninjamController,
             const std::wstring& exportDir, bool numbered,
             const std::function<bool(std::string&)>& afterCapture,
-            const std::function<bool(std::string&)>& beforeCapture);
+            const std::function<bool(std::string&)>& beforeCapture, const engine::PerformanceGroups* groups);
 	};
 }

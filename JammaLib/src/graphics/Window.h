@@ -11,6 +11,7 @@
 #include <windowsx.h>
 #include <commctrl.h>
 #include <vector>
+#include <array>
 #include <memory>
 #include <optional>
 #include <fstream>
@@ -74,6 +75,9 @@ namespace graphics
 		void ClearModifiers();
 		// Propagate OS capture/focus loss so editor pointer transactions cancel.
 		bool CancelMouseCapture();
+		// UI-frame owner only, after external plugin calls have returned. Native
+		// focus/capture notifications only latch requests and never enter Scene.
+		bool ProcessDeferredInputLoss();
 		bool BeginRelativePointer(int button, utils::Position2d anchor);
 		void EndRelativePointer(int button);
 		bool HasRelativePointer() const noexcept { return _relativeButton >= 0; }
@@ -103,7 +107,26 @@ namespace graphics
 		static ATOM Register(HINSTANCE hInstance);
 		static LRESULT CALLBACK WindowProcedure(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) noexcept;
 
+	protected:
+		// Resolve the current press, not a delayed asynchronous hover readback.
+		virtual std::optional<unsigned int> _PickPointerPress(utils::Position2d position);
+
 	private:
+		class SceneDispatchScope
+		{
+		public:
+			explicit SceneDispatchScope(Window& window) noexcept : _window(window) { ++_window._sceneDispatchDepth; }
+			~SceneDispatchScope() noexcept;
+		private:
+			Window& _window;
+		};
+		struct DeferredNativeMessage { HWND WindowHandle; UINT Message; WPARAM WParam; LPARAM LParam; };
+		bool _DeferNativeSceneMessage(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam) noexcept;
+		unsigned int _sceneDispatchDepth = 0u;
+		std::array<DeferredNativeMessage, 256u> _deferredNativeMessages{};
+		std::size_t _deferredNativeMessageCount = 0u;
+		bool _deferredNativeOverflow = false;
+		bool _nativeDestroyPending = false;
 		void _InstallRelativePointerHost();
 		bool _RelativePointerValid() const;
 		void _RestoreRawInput();
@@ -150,6 +173,10 @@ namespace graphics
 		base::Action::Modifiers _modifiers;
 		bool _jamLoadRequested;
 		bool _consoleToggleRequested;
+		// WindowProcedure and Render share the UI thread. No audio reader; these
+		// coalesced requests die with the Window and drain before Scene replacement.
+		bool _focusLossPending = false;
+		bool _captureLossPending = false;
 
 		ImageFullscreen _highlightPass;
 	};
