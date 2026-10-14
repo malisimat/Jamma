@@ -3420,15 +3420,6 @@ const std::shared_ptr<AudioSink> Station::_InputChannel(unsigned int channel,
 	return nullptr;
 }
 
-bool Station::PreparedMidiQuantisationReadyAtAudioBoundary() const noexcept
-{
-	const auto state = _BorrowAudioState();
-	if (!state) return true;
-	for (const auto& take : state->OwnedLoopTakes)
-		if (take && !take->PreparedMidiQuantisationReadyAtAudioBoundary()) return false;
-	return true;
-}
-
 bool Station::TryClaimPreparedMidiQuantisationAtAudioBoundary() noexcept
 {
 	std::uint8_t expected = 0u;

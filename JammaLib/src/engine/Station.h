@@ -185,7 +185,6 @@ namespace engine
 		std::int32_t StationPhaseOffsetSamps() const noexcept { return _stationPhaseOffsetSamps; }
 		void RefreshQuantisationOverlayFromClock();
 		// Callback-only lookup through the retained audio take snapshot.
-		bool PreparedMidiQuantisationReadyAtAudioBoundary() const noexcept;
 		bool TryClaimPreparedMidiQuantisationAtAudioBoundary() noexcept;
 		void ReleasePreparedMidiQuantisationClaimAtAudioBoundary() noexcept;
 		void ActivatePreparedMidiQuantisationAtAudioBoundary() noexcept;

@@ -1456,15 +1456,6 @@ bool LoopTake::PrepareLocalMasterQuantisation(unsigned int grainSamps,
 	return true;
 }
 
-bool LoopTake::PreparedMidiQuantisationReadyAtAudioBoundary() const noexcept
-{
-	const auto loops = _BorrowMidiLoopSnapshot();
-	if (!loops) return true;
-	for (const auto& loop : *loops)
-		if (loop && !loop->PreparedQuantisationReadyAtAudioBoundary()) return false;
-	return true;
-}
-
 bool LoopTake::TryClaimPreparedMidiQuantisationAtAudioBoundary() noexcept
 {
 	std::uint8_t expected = 0u;

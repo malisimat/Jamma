@@ -193,7 +193,6 @@ namespace engine
 		void CancelLocalMasterQuantisationOnOwner() noexcept;
 		bool PrepareLocalMasterQuantisation(unsigned int grainSamps,
 			std::uint64_t rebasedTransportStartSamps) noexcept;
-		bool PreparedMidiQuantisationReadyAtAudioBoundary() const noexcept;
 		bool TryClaimPreparedMidiQuantisationAtAudioBoundary() noexcept;
 		void ReleasePreparedMidiQuantisationClaimAtAudioBoundary() noexcept;
 		void ActivatePreparedMidiQuantisationAtAudioBoundary() noexcept;
