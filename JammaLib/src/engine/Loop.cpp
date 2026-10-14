@@ -825,7 +825,7 @@ bool Loop::CanEditAudioSource() const noexcept
 	return length > 0ul && length <= PhysicalLoopLength();
 }
 
-audio::AudioSpectralSourceLayout Loop::_AudioSpectralSourceLayout() const noexcept
+spectral::AudioSpectralSourceLayout Loop::_AudioSpectralSourceLayout() const noexcept
 {
 	return { _loopLength.load(std::memory_order_relaxed), PhysicalLoopLength(),
 		_hanning->Size(), _sampleRate.load(std::memory_order_relaxed) };
@@ -845,8 +845,8 @@ void Loop::SetSampleRate(float sampleRate)
 	_sampleRate.store(sampleRate, std::memory_order_relaxed);
 }
 
-std::shared_ptr<audio::AudioSpectralSourceCapture> Loop::RequestAudioSpectralSource(std::string& reason,
-    const std::shared_ptr<audio::AudioSpectralResourceBudget>& budget, const audio::AudioSpectralSourceLayout* retainedLayout)
+std::shared_ptr<spectral::AudioSpectralSourceCapture> Loop::RequestAudioSpectralSource(std::string& reason,
+    const std::shared_ptr<spectral::AudioSpectralResourceBudget>& budget, const spectral::AudioSpectralSourceLayout* retainedLayout)
 {
 	reason.clear();
 	CancelAudioSpectralSourceCapture();
@@ -863,12 +863,12 @@ std::shared_ptr<audio::AudioSpectralSourceCapture> Loop::RequestAudioSpectralSou
 		return nullptr;
 	}
 	if (static_cast<std::uint64_t>(layout.StoredSampleCount()) * sizeof(float)
-		> audio::AudioSpectralSourceCapture::MaxSourceBytes)
+		> spectral::AudioSpectralSourceCapture::MaxSourceBytes)
 	{
 		reason = "Audio source exceeds the editor memory budget";
 		return nullptr;
 	}
-	std::shared_ptr<const audio::AudioSpectralResourceBudget::Reservation> resources;
+	std::shared_ptr<const spectral::AudioSpectralResourceBudget::Reservation> resources;
     auto admissionLayout = layout;
     if (retainedLayout)
     {
@@ -876,13 +876,13 @@ std::shared_ptr<audio::AudioSpectralSourceCapture> Loop::RequestAudioSpectralSou
         admissionLayout.PhysicalLength = (std::max)(admissionLayout.PhysicalLength, retainedLayout->PhysicalLength);
         admissionLayout.FadeSamps = (std::max)(admissionLayout.FadeSamps, retainedLayout->FadeSamps);
     }
-    audio::AudioSpectralTransformConfig transform;
-    if (!audio::AudioSpectralDsp::SelectTransform(admissionLayout, budget, transform, resources, reason))
+    spectral::AudioSpectralTransformConfig transform;
+    if (!spectral::AudioSpectralDsp::SelectTransform(admissionLayout, budget, transform, resources, reason))
         return nullptr;
-    std::shared_ptr<audio::AudioSpectralSourceCapture> request;
+    std::shared_ptr<spectral::AudioSpectralSourceCapture> request;
 	try
 	{
-		request = std::make_shared<audio::AudioSpectralSourceCapture>(layout,
+		request = std::make_shared<spectral::AudioSpectralSourceCapture>(layout,
 			generation, _audioSourceIdentity, std::move(resources), transform);
 	}
 	catch (const std::bad_alloc&)
@@ -919,7 +919,7 @@ std::size_t Loop::_CollectAudioSourceCaptures()
 }
 
 bool Loop::PublishAudioSpectralEdit(
-	std::shared_ptr<const audio::AudioSpectralEditState> state, std::string& reason)
+	std::shared_ptr<const spectral::AudioSpectralEditState> state, std::string& reason)
 {
 	reason.clear();
 	if (!state || !IsCurrentAudioSpectralSource(*state->Source))
@@ -951,14 +951,14 @@ bool Loop::PublishAudioSpectralEdit(
 	return true;
 }
 
-std::shared_ptr<const audio::AudioSpectralEditState> Loop::AudioSpectralEdit() const
+std::shared_ptr<const spectral::AudioSpectralEditState> Loop::AudioSpectralEdit() const
 {
 	const auto state = _audioSpectralEdit.load(std::memory_order_acquire);
 	return state && IsCurrentAudioSpectralSource(*state->Source) ? state : nullptr;
 }
 
 bool Loop::PublishAudioSpectralPlayback(
-	std::shared_ptr<const audio::AudioSpectralPlaybackSnapshot> snapshot, std::string& reason)
+	std::shared_ptr<const spectral::AudioSpectralPlaybackSnapshot> snapshot, std::string& reason)
 {
 	reason.clear();
 	if (!snapshot || !IsCurrentAudioSpectralSource(snapshot->Source()))
@@ -1028,14 +1028,14 @@ void Loop::InvalidateAudioSpectralResultsBefore(std::uint64_t spectralRevision,
     _minimumAudioSpectralGeneration.store(expectedGeneration, std::memory_order_release);
 }
 
-std::shared_ptr<const audio::AudioSpectralPlaybackSnapshot> Loop::AudioSpectralPlayback() const
+std::shared_ptr<const spectral::AudioSpectralPlaybackSnapshot> Loop::AudioSpectralPlayback() const
 {
 	const auto snapshot = _audioSpectralPlayback.load();
 	return snapshot && IsCurrentAudioSpectralSource(snapshot->Source()) ? snapshot : nullptr;
 }
 
 std::vector<float> Loop::ExportAudioSpectralSamples(
-	const audio::AudioSpectralPlaybackSnapshot& snapshot, bool retainPhysicalTail)
+	const spectral::AudioSpectralPlaybackSnapshot& snapshot, bool retainPhysicalTail)
 {
 	const auto& layout = snapshot.Source().Layout;
 	const auto length = retainPhysicalTail ? layout.PhysicalLength : layout.LogicalLength;
@@ -1075,8 +1075,8 @@ void Loop::_AdvanceAudioSpectralPlayback(unsigned int numSamps) noexcept
 	_audioSpectralTransitionProgress = 0u;
 	_audioSpectralTransitionSamps = static_cast<unsigned int>(std::clamp(
 		static_cast<double>(_activeAudioSpectral->Source().Layout.SampleRate)
-			* audio::AudioSpectralConfig::PlaybackTransitionSeconds,
-		1.0, static_cast<double>(audio::AudioSpectralConfig::MaxPlaybackTransitionSamps)));
+			* spectral::AudioSpectralConfig::PlaybackTransitionSeconds,
+		1.0, static_cast<double>(spectral::AudioSpectralConfig::MaxPlaybackTransitionSamps)));
 	_appliedAudioSpectralRevision.store(_activeAudioSpectral->Revision, std::memory_order_release);
 	// Releasing a Lease only clears its scalar hazard. Publisher retains ownership
 	// and CommitChanges collects off audio after the transition/read has ended.
@@ -1103,7 +1103,7 @@ float Loop::_ReadAudioSpectralSample(unsigned long storageIndex,
 	return static_cast<float>(static_cast<double>(previous) * (1.0 - weight) + current * weight);
 }
 
-bool Loop::IsCurrentAudioSpectralSource(const audio::AudioSpectralSource& source) const noexcept
+bool Loop::IsCurrentAudioSpectralSource(const spectral::AudioSpectralSource& source) const noexcept
 {
 	return source.Identity.get() == _audioSourceIdentity.get()
 		&& source.Generation == _audioSourceGeneration.load(std::memory_order_acquire)

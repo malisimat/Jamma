@@ -5,11 +5,11 @@
 #include <memory>
 #include <span>
 #include <vector>
-#include "BufferBank.h"
+#include "../audio/BufferBank.h"
 #include "AudioSpectralConfig.h"
 #include "AudioSpectralResourceBudget.h"
 
-namespace audio
+namespace spectral
 {
 	struct AudioSpectralSourceLayout
 	{
@@ -30,7 +30,7 @@ namespace audio
 	struct AudioSpectralSourceIdentity {};
 
 	// Once a capture completes, only const ownership escapes to analysis/export.
-	// Samples retain the exact BufferBank layout: prefix, logical body, physical tail.
+	// Samples retain the exact audio::BufferBank layout: prefix, logical body, physical tail.
 	struct AudioSpectralSource
 	{
 		std::shared_ptr<const AudioSpectralSourceIdentity> Identity;
@@ -73,7 +73,7 @@ namespace audio
 
 		// Only the Loop's audio-boundary hook may call this. The request's topology
 		// never changes; callback-only progress/PCM become immutable before Complete.
-		void CopyAtAudioBoundary(const BufferBank& buffer,
+		void CopyAtAudioBoundary(const audio::BufferBank& buffer,
 			const AudioSpectralSourceLayout& layout, std::uint64_t generation,
 			bool eligible) noexcept;
 

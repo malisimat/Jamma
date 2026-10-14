@@ -3,11 +3,11 @@
 #include <new>
 #include <utility>
 
-using namespace editor;
+using namespace spectral;
 
 AudioSpectralDisplayJob::AudioSpectralDisplayJob(
-	std::shared_ptr<const audio::AudioSpectralAnalysis> analysis,
-	std::shared_ptr<const audio::AudioSpectralEditState> editState,
+	std::shared_ptr<const AudioSpectralAnalysis> analysis,
+	std::shared_ptr<const AudioSpectralEditState> editState,
 	unsigned int timeSegments, unsigned int frequencySegments,
 	graphics::AudioSpectralViewport viewport, std::uint64_t presentationRevision, std::shared_ptr<Cache> cache, Damage damage) :
 	Analysis(std::move(analysis)), EditState(std::move(editState)),

@@ -1,5 +1,5 @@
 #include "AudioSpectralModel.h"
-#include "../editor/AudioSpectralDisplayJob.h"
+#include "../spectral/AudioSpectralDisplayJob.h"
 #include "GlDeleteQueue.h"
 
 #include <algorithm>
@@ -31,8 +31,8 @@ double AudioSpectralDisplay::FrequencyV(double hz) const noexcept
 bool AudioSpectralDisplay::IsValid() const noexcept
 {
 	if (!SourceIdentity || SourceGeneration == 0u || Revision == 0u
-		|| TimeSegments == 0u || TimeSegments > audio::AudioSpectralConfig::MaxTimeSegments
-		|| FrequencySegments == 0u || FrequencySegments > audio::AudioSpectralConfig::MaxFrequencySegments
+		|| TimeSegments == 0u || TimeSegments > spectral::AudioSpectralConfig::MaxTimeSegments
+		|| FrequencySegments == 0u || FrequencySegments > spectral::AudioSpectralConfig::MaxFrequencySegments
 		|| !(MinimumFrequencyHz > 0.0f) || !std::isfinite(MinimumFrequencyHz)
 		|| !(NyquistHz > MinimumFrequencyHz) || !std::isfinite(NyquistHz)
 		|| !(MaximumFrequencyHz > MinimumFrequencyHz) || !std::isfinite(MaximumFrequencyHz)
@@ -62,8 +62,8 @@ AudioSpectralModel::AudioSpectralModel(gui::GuiModelParams params,
 	GuiModel(_ModelParams(std::move(params))),
 	_timeSegments(timeSegments), _frequencySegments(frequencySegments)
 {
-	if (_timeSegments == 0u || _timeSegments > audio::AudioSpectralConfig::MaxTimeSegments
-		|| _frequencySegments == 0u || _frequencySegments > audio::AudioSpectralConfig::MaxFrequencySegments)
+	if (_timeSegments == 0u || _timeSegments > spectral::AudioSpectralConfig::MaxTimeSegments
+		|| _frequencySegments == 0u || _frequencySegments > spectral::AudioSpectralConfig::MaxFrequencySegments)
 		throw std::invalid_argument("Spectral surface topology exceeds its fixed limits");
 	_grid.reserve(static_cast<std::size_t>(_timeSegments + 1u) * (_frequencySegments + 1u));
 	_indices.reserve(static_cast<std::size_t>(_timeSegments) * _frequencySegments * 6u);
@@ -85,19 +85,9 @@ AudioSpectralModel::~AudioSpectralModel()
 	_ReleaseResources();
 }
 
-float AudioSpectralModel::_CompressMagnitude(double magnitude) noexcept
-{
-	if (!(magnitude > 0.0)) return 0.0f;
-	const auto db = 20.0 * std::log10(magnitude / audio::AudioSpectralConfig::DisplayReferenceMagnitude);
-	return static_cast<float>(std::clamp(
-		(db - audio::AudioSpectralConfig::DisplayFloorDb)
-			/ (audio::AudioSpectralConfig::DisplayCeilingDb - audio::AudioSpectralConfig::DisplayFloorDb),
-		0.0, 1.0));
-}
-
 std::shared_ptr<const AudioSpectralDisplay> AudioSpectralModel::BuildDisplay(
-	const audio::AudioSpectralAnalysis& analysis, const audio::AudioSpectralGainField* gains,
-	const audio::AudioSpectralEnvelope* envelope, std::uint64_t revision,
+	const spectral::AudioSpectralAnalysis& analysis, const spectral::AudioSpectralGainField* gains,
+	const spectral::AudioSpectralEnvelope* envelope, std::uint64_t revision,
 	unsigned int timeSegments, unsigned int frequencySegments, std::string& reason, std::stop_token stop,
 	AudioSpectralViewport viewport, std::uint64_t presentationRevision,
     std::shared_ptr<const AudioSpectralDisplay> baseline, std::vector<AudioSpectralDisplay::Rectangle> rectangles)
@@ -111,8 +101,8 @@ std::shared_ptr<const AudioSpectralDisplay> AudioSpectralModel::BuildDisplay(
 }
 
 std::shared_ptr<const AudioSpectralDisplay> AudioSpectralModel::_BuildDisplay(
-	const audio::AudioSpectralAnalysis& analysis, const audio::AudioSpectralGainField* gains,
-	const audio::AudioSpectralEnvelope* envelope, std::uint64_t revision,
+	const spectral::AudioSpectralAnalysis& analysis, const spectral::AudioSpectralGainField* gains,
+	const spectral::AudioSpectralEnvelope* envelope, std::uint64_t revision,
 	unsigned int timeSegments, unsigned int frequencySegments, std::string& reason, std::stop_token stop,
 	AudioSpectralViewport viewport, std::uint64_t presentationRevision,
     std::shared_ptr<const AudioSpectralDisplay> baseline, std::vector<AudioSpectralDisplay::Rectangle> rectangles)
@@ -121,8 +111,8 @@ std::shared_ptr<const AudioSpectralDisplay> AudioSpectralModel::_BuildDisplay(
 	if (!analysis.Source || !analysis.Source->Identity || analysis.Source->Generation == 0u
 		|| !analysis.Transform.IsValid() || !analysis.Source->Layout.IsValid()
 		|| revision == 0u || timeSegments == 0u || frequencySegments == 0u || !viewport.IsValid()
-		|| timeSegments > audio::AudioSpectralConfig::MaxTimeSegments
-		|| frequencySegments > audio::AudioSpectralConfig::MaxFrequencySegments
+		|| timeSegments > spectral::AudioSpectralConfig::MaxTimeSegments
+		|| frequencySegments > spectral::AudioSpectralConfig::MaxFrequencySegments
 		|| analysis.Geometry.FrameCount == 0u
 		|| analysis.Geometry.BinCount != analysis.Transform.WindowSamps / 2u + 1u
 		|| !(analysis.WindowSum > 0.0) || !std::isfinite(analysis.WindowSum)
@@ -135,7 +125,7 @@ std::shared_ptr<const AudioSpectralDisplay> AudioSpectralModel::_BuildDisplay(
 		reason = "Spectral display source, dimensions or revision are invalid";
 		return nullptr;
 	}
-	const auto estimate = audio::AudioSpectralDsp::EstimateWorkingMemory(
+	const auto estimate = spectral::AudioSpectralDsp::EstimateWorkingMemory(
 		analysis.Source->Layout, analysis.Transform, reason);
 	if (!estimate || analysis.Geometry.FirstFrameCentre != estimate->Geometry.FirstFrameCentre
 		|| analysis.Geometry.FrameCount != estimate->Geometry.FrameCount)
@@ -155,7 +145,7 @@ std::shared_ptr<const AudioSpectralDisplay> AudioSpectralModel::_BuildDisplay(
             && baseline->Viewport == AudioSpectralViewport{} && baseline->IncludesDc
             && baseline->NyquistHz == analysis.Source->Layout.SampleRate * 0.5f
             && baseline->MaximumFrequencyHz == baseline->NyquistHz
-            && baseline->MinimumFrequencyHz == static_cast<float>((std::min)(audio::AudioSpectralConfig::DisplayMinimumFrequencyHz,
+            && baseline->MinimumFrequencyHz == static_cast<float>((std::min)(spectral::AudioSpectralConfig::DisplayMinimumFrequencyHz,
                 static_cast<double>(analysis.Source->Layout.SampleRate) * 0.25));
         auto display = incremental ? std::make_shared<AudioSpectralDisplay>(*baseline) : std::make_shared<AudioSpectralDisplay>();
         display->BaselineRevision = incremental ? baseline->Revision : 0;
@@ -170,7 +160,7 @@ std::shared_ptr<const AudioSpectralDisplay> AudioSpectralModel::_BuildDisplay(
 		display->FrequencySegments = frequencySegments;
 		const auto sampleRate = static_cast<double>(analysis.Source->Layout.SampleRate);
 		const auto nyquist = sampleRate * 0.5;
-		const auto lower = (std::min)(audio::AudioSpectralConfig::DisplayMinimumFrequencyHz, nyquist * 0.5);
+		const auto lower = (std::min)(spectral::AudioSpectralConfig::DisplayMinimumFrequencyHz, nyquist * 0.5);
 		display->MinimumFrequencyHz = static_cast<float>(lower);
 		display->MaximumFrequencyHz = static_cast<float>(nyquist);
 		display->NyquistHz = static_cast<float>(nyquist);
@@ -227,7 +217,7 @@ std::shared_ptr<const AudioSpectralDisplay> AudioSpectralModel::_BuildDisplay(
 						* (gains ? gains->GainLinear(frame, bin) : 1.0);
 					return !std::isfinite(magnitude) || magnitude < 0.0
 						? std::numeric_limits<double>::quiet_NaN()
-                        : magnitude > 0.0 ? 20.0 * std::log10(magnitude / audio::AudioSpectralConfig::DisplayReferenceMagnitude)
+                        : magnitude > 0.0 ? 20.0 * std::log10(magnitude / spectral::AudioSpectralConfig::DisplayReferenceMagnitude)
                         : -std::numeric_limits<double>::infinity();
 				};
                 if (sample.CachedFirst != firstFrame || sample.CachedNext != nextFrame)
@@ -255,8 +245,8 @@ std::shared_ptr<const AudioSpectralDisplay> AudioSpectralModel::_BuildDisplay(
                 const auto compressed = [&](double db, bool owned)
                 {
                     if (std::isnan(db)) return std::numeric_limits<float>::quiet_NaN();
-                    return static_cast<float>(std::clamp((db + (owned ? 0.0 : envelopeDb) - audio::AudioSpectralConfig::DisplayFloorDb)
-                        / (audio::AudioSpectralConfig::DisplayCeilingDb - audio::AudioSpectralConfig::DisplayFloorDb), 0.0, 1.0));
+                    return static_cast<float>(std::clamp((db + (owned ? 0.0 : envelopeDb) - spectral::AudioSpectralConfig::DisplayFloorDb)
+                        / (spectral::AudioSpectralConfig::DisplayCeilingDb - spectral::AudioSpectralConfig::DisplayFloorDb), 0.0, 1.0));
                 };
                 const auto first = std::lerp(compressed(sample.Db00, sample.Owned00), compressed(sample.Db01, sample.Owned01), sample.BinWeight);
                 const auto next = std::lerp(compressed(sample.Db10, sample.Owned10), compressed(sample.Db11, sample.Owned11), sample.BinWeight);
@@ -291,7 +281,7 @@ bool AudioSpectralModel::SetDisplay(std::shared_ptr<const AudioSpectralDisplay> 
     return _SetDisplay(std::move(display), reason, false);
 }
 
-bool AudioSpectralModel::SetCompletedDisplay(const editor::AudioSpectralDisplayJob& job, std::string& reason)
+bool AudioSpectralModel::SetCompletedDisplay(const spectral::AudioSpectralDisplayJob& job, std::string& reason)
 {
     const auto display = job.Result();
     if (!display || display->TimeSegments != _timeSegments || display->FrequencySegments != _frequencySegments)
@@ -343,12 +333,6 @@ AudioSpectralModel::Surface AudioSpectralModel::DisplayedSurface() const
 {
 	std::lock_guard lock(_surfaceMutex);
 	return _displayedSurface;
-}
-
-std::shared_ptr<const AudioSpectralDisplay> AudioSpectralModel::Displayed() const
-{
-	std::lock_guard lock(_surfaceMutex);
-	return _displayedSurface.Display;
 }
 
 bool AudioSpectralModel::IsAvailable() const
@@ -612,7 +596,7 @@ bool AudioSpectralDisplay::CanSubUpload(const AudioSpectralDisplay& baseline, bo
 }
 
 std::vector<AudioSpectralDisplay::Rectangle> AudioSpectralModel::ProjectDamage(
-    const audio::AudioSpectralAnalysis& analysis, const AudioSpectralDisplay& display,
+    const spectral::AudioSpectralAnalysis& analysis, const AudioSpectralDisplay& display,
     std::size_t firstFrame, std::size_t lastFrame, unsigned int firstBin, unsigned int lastBin,
     unsigned long firstSample, unsigned long lastSample)
 {

@@ -8,9 +8,8 @@
 #include <deque>
 #include "AudioSpectralSource.h"
 #include "AudioSpectralAnalysisJob.h"
-#include "AudioSpectralReconstructionJob.h"
 
-namespace audio
+namespace spectral
 {
 	// Dedicated non-audio worker. Never allocate source PCM or perform FFT work
 	// on UI/Scene trigger job threads. Normal editor close cancels without joining.
@@ -23,7 +22,6 @@ namespace audio
 		AudioSpectralWorker& operator=(const AudioSpectralWorker&) = delete;
 		void PrepareSource(std::shared_ptr<AudioSpectralSourceCapture> request);
 		void RequestAnalysis(std::shared_ptr<AudioSpectralAnalysisJob> job);
-		void RequestReconstruction(std::shared_ptr<AudioSpectralReconstructionJob> job);
 		// Opaque non-GL CPU work with cooperative bounded cancellation. Both
 		// closures run off audio; coalescing/teardown cancel outside the queue lock.
 		void RequestPresentation(std::function<void()> work, std::function<void()> cancel);
@@ -51,8 +49,6 @@ namespace audio
 		std::shared_ptr<AudioSpectralSourceCapture> _currentSource;
 		std::shared_ptr<AudioSpectralAnalysisJob> _queuedAnalysis;
 		std::shared_ptr<AudioSpectralAnalysisJob> _currentAnalysis;
-		std::shared_ptr<AudioSpectralReconstructionJob> _queuedReconstruction;
-		std::shared_ptr<AudioSpectralReconstructionJob> _currentReconstruction;
 		std::shared_ptr<PresentationWork> _queuedPresentation;
 		std::shared_ptr<PresentationWork> _currentPresentation;
 		std::shared_ptr<PresentationWork> _queuedEditing;

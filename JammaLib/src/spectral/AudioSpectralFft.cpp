@@ -9,7 +9,7 @@
 #include <vector>
 #include <kissfft/kiss_fftr.h>
 
-using namespace audio;
+using namespace spectral;
 
 // The installed header defaults to float; reject conflicting build definitions.
 static_assert(std::is_same_v<kiss_fft_scalar, float>);
@@ -60,11 +60,6 @@ AudioSpectralFft::~AudioSpectralFft() = default;
 bool AudioSpectralFft::IsValid() const noexcept
 {
 	return _state != nullptr;
-}
-
-unsigned int AudioSpectralFft::WindowSize() const noexcept
-{
-	return _state ? _state->WindowSize : 0u;
 }
 
 float AudioSpectralFft::InverseNormalization() const noexcept

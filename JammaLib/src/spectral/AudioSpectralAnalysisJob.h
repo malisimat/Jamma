@@ -8,7 +8,7 @@
 #include "AudioSpectralEditState.h"
 #include "AudioSpectralPlaybackSnapshot.h"
 
-namespace audio
+namespace spectral
 {
 	// Metadata is immutable after construction. A single worker writes Result/
 	// Reason before a release terminal-state publication; UI readers acquire it.

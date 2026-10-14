@@ -8,7 +8,7 @@
 #include <utility>
 #include "AudioSpectralConfig.h"
 
-namespace audio
+namespace spectral
 {
 	// One explicit owner per session/editor. Admissions and final token destruction
 	// are off audio; immutable sources pin their reservation through jobs/history.

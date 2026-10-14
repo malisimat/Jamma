@@ -4,7 +4,7 @@
 #include <cmath>
 #include <new>
 
-using namespace audio;
+using namespace spectral;
 
 bool AudioSpectralSourceLayout::IsValid() const noexcept
 {
@@ -65,7 +65,7 @@ std::shared_ptr<const AudioSpectralSource> AudioSpectralSourceCapture::Source() 
 	return Status() == State::Complete ? _source : nullptr;
 }
 
-void AudioSpectralSourceCapture::CopyAtAudioBoundary(const BufferBank& buffer,
+void AudioSpectralSourceCapture::CopyAtAudioBoundary(const audio::BufferBank& buffer,
 	const AudioSpectralSourceLayout& layout, std::uint64_t generation, bool eligible) noexcept
 {
 	const auto state = Status();
@@ -85,7 +85,7 @@ void AudioSpectralSourceCapture::CopyAtAudioBoundary(const BufferBank& buffer,
 	while (_copied < end)
 	{
 		const auto count = (std::min)(end - _copied,
-			BufferBank::_BufferBankSize - _copied % BufferBank::_BufferBankSize);
+			audio::BufferBank::_BufferBankSize - _copied % audio::BufferBank::_BufferBankSize);
 		const auto* samples = buffer.BlockPtr(_copied);
 		if (!samples)
 		{

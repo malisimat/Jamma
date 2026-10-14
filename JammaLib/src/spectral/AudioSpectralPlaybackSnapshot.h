@@ -8,7 +8,7 @@
 #include "AudioSpectralDsp.h"
 #include "AudioSpectralEnvelope.h"
 
-namespace audio
+namespace spectral
 {
 	// Complete immutable content revision. Envelope-only revisions share PCM.
 	// Create and owning destruction are off audio; callbacks borrow SampleAt().

@@ -124,3 +124,12 @@ This diagnostic passed after a final Release test-only incremental build. The ma
 Clipping uses the non-interpolated EditorMorph uniform so fully open fragments cannot bypass the clip test due to perspective interpolation rounding. Shift-right now zooms both axes; Shift-left pans both axes on the captured mesh plane. Alt-left retains broadband editing and Ctrl stays reserved. Engaged spectral and MIDI editors now share station 2D/HUD/control-overlay suppression. These changes do not queue display rebuilds or touch audio callbacks. Native control coverage checks modifier priority, two-axis pan, unchanged spans, clamping and invalid coordinates; live GPU clipping remains a manual acceptance check.
 
 Follow-up validation: Debug library, tests and app builds passed with no warnings or errors; all 70 spectral and 46 MIDI grid/pitch-view tests passed. Deployed spectral fragment SHA-256 matches source. Independent navigation review and diff whitespace checks passed.
+
+
+### Feature cleanup
+
+All non-rendering AudioSpectral types now use namespace `spectral` and reside under `JammaLib/src/spectral`. Model/display/viewport rendering types remain in `graphics`. Removed unused reconstruction jobs/queue, obsolete absolute and direct brush painting APIs, old view controls, write-only stroke state, development logging/counters, unused FFT/model/config accessors and the temporary resume checkpoint. Kept narrow accepted-display revision observability for the blocked-audio regression and forced unity reconstruction for FFT/WOLA correctness coverage.
+
+All five disabled performance diagnostics were removed. Controller tests use a smaller fixed topology through the same validated model path; production defaults are unchanged, and a production-topology test remains. Required recovery, cancellation, ownership, publication, Undo and local-ramp tests remain. The shader-manifest test reads source resources independently of cwd; the prior failure was reproduced from the test-project directory and the fixed test passes there.
+
+Debug spectral coverage: 67 passing tests, 5.410 seconds versus the previous 70-test 23.168-second baseline. Release: 67 passing tests in 2.641 seconds. All 58 related MIDI grid/pitch-view/loop-model Debug tests passed. Debug library/tests/app and Release library/tests builds passed without warnings or errors. Independent namespace/dead-code/threading reviews and the hot-path audit passed. No audio callback behavior or synchronization changed.

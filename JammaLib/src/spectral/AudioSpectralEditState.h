@@ -7,7 +7,7 @@
 #include "AudioSpectralGainField.h"
 #include "AudioSpectralEnvelope.h"
 
-namespace audio
+namespace spectral
 {
 	// Committed editing content, independent of the audible preview's progress.
 	// Value replacement is off audio; source/gain/envelope handles are immutable.

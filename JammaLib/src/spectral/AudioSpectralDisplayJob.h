@@ -4,10 +4,10 @@
 #include <memory>
 #include <stop_token>
 #include <string>
-#include "../audio/AudioSpectralEditState.h"
+#include "AudioSpectralEditState.h"
 #include "../graphics/AudioSpectralModel.h"
 
-namespace editor
+namespace spectral
 {
 	// Immutable request, one worker-owned result. No GL calls occur in Run;
 	// UI/render readers acquire Complete before receiving const display data.
@@ -27,13 +27,13 @@ namespace editor
             unsigned int FirstBin = static_cast<unsigned int>(-1), LastBin = 0;
             unsigned long FirstSample = static_cast<unsigned long>(-1), LastSample = 0;
         };
-		AudioSpectralDisplayJob(std::shared_ptr<const audio::AudioSpectralAnalysis> analysis,
-			std::shared_ptr<const audio::AudioSpectralEditState> editState,
+		AudioSpectralDisplayJob(std::shared_ptr<const AudioSpectralAnalysis> analysis,
+			std::shared_ptr<const AudioSpectralEditState> editState,
 			unsigned int timeSegments, unsigned int frequencySegments,
 			graphics::AudioSpectralViewport viewport = {}, std::uint64_t presentationRevision = 0u,
             std::shared_ptr<Cache> cache = nullptr, Damage damage = {});
-		const std::shared_ptr<const audio::AudioSpectralAnalysis> Analysis;
-		const std::shared_ptr<const audio::AudioSpectralEditState> EditState;
+		const std::shared_ptr<const AudioSpectralAnalysis> Analysis;
+		const std::shared_ptr<const AudioSpectralEditState> EditState;
 		const unsigned int TimeSegments;
 		const unsigned int FrequencySegments;
 		const graphics::AudioSpectralViewport Viewport;

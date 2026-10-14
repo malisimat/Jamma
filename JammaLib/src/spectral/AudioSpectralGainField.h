@@ -11,7 +11,7 @@
 #include <vector>
 #include "AudioSpectralConfig.h"
 
-namespace audio
+namespace spectral
 {
 	struct AudioSpectralAnalysis;
 	class AudioSpectralEnvelope;
@@ -52,7 +52,6 @@ namespace audio
 				double frequencyRadius = AudioSpectralConfig::BrushFrequencyRadiusOctaves);
 			bool Empty() const noexcept { return _dirty.empty(); }
 			std::size_t DirtyCellCount() const noexcept { return _dirty.size(); }
-			double ElapsedSeconds() const noexcept { return _elapsed; }
 			double ExposureAt(std::size_t frame, unsigned int bin) const noexcept
 			{ return frame < _frames && bin < _bins ? _exposure[frame * _bins + bin] : 0.0; }
 			void Clear() noexcept;
@@ -62,7 +61,6 @@ namespace audio
 			unsigned int _bins;
 			std::vector<double> _exposure;
 			std::vector<std::uint32_t> _dirty;
-			double _elapsed = 0.0;
 		};
 		static std::optional<AudioSpectralGainField> Unity(
 			std::size_t frames, unsigned int bins, std::string& reason);
@@ -85,21 +83,11 @@ namespace audio
 		bool ApplyExposureMap(const AudioSpectralAnalysis& analysis, const ExposureMap& exposure,
 			bool increase, std::string& reason, const AudioSpectralEnvelope* envelope = nullptr, ChangeBounds* changes = nullptr);
 
-		// Integrates the compact oval analytically along a straight swept path.
-		// Inputs are body-source seconds and positive Hz; time support wraps.
-		// Caller supplies intended unwrapped movement (at most one loop per segment).
-		bool PaintOvalSegment(const AudioSpectralAnalysis& analysis,
-			double startSeconds, double startHz, double endSeconds, double endHz,
-			double elapsedSeconds, bool increase, std::string& reason);
-
 		static double EffectiveTimeRadius(const AudioSpectralAnalysis&, double radius) noexcept;
 		static double EffectiveFrequencyRadius(const AudioSpectralAnalysis&, double hz, double radius) noexcept;
 
 	private:
 		AudioSpectralGainField(std::size_t frames, unsigned int bins);
-		bool _PaintOvalSegment(const AudioSpectralAnalysis& analysis,
-			double startSeconds, double startHz, double endSeconds, double endHz,
-			double elapsedSeconds, bool increase, std::string& reason);
 		template<class Visitor>
 		static bool _VisitOval(const AudioSpectralAnalysis& analysis, double startSeconds, double startHz,
 			double endSeconds, double endHz, double elapsedSeconds, std::string& reason,

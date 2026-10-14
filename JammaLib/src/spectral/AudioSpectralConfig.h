@@ -2,10 +2,10 @@
 
 #include <cstdint>
 
-namespace audio
+namespace spectral
 {
-	// V1 prototype tuning. The transform contract is explicit; sidecar versioning
-	// must be frozen only after the deferred listening/performance validation.
+	// Transform tuning and bounded working-set limits. Future sidecar persistence
+	// must version this contract before changing saved transform semantics.
 	struct AudioSpectralConfig
 	{
 		static constexpr std::uint32_t TransformVersion = 1u;
@@ -16,7 +16,6 @@ namespace audio
         static_assert(WindowSamps >= PreferredOverlap && (WindowSamps & (WindowSamps - 1u)) == 0u);
         static constexpr unsigned int BaselineHopSamps = WindowSamps / BaselineOverlap;
 		static constexpr unsigned int HopSamps = WindowSamps / PreferredOverlap;
-		static constexpr float MinimumGainDb = -60.0f;
 		static constexpr float MaximumGainDb = 24.0f; // Broadband bar headroom.
         static constexpr float MinimumSpectralGainDb = -1200.0f;
         static constexpr float MaximumSpectralGainDb = 1200.0f;

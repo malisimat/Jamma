@@ -4,7 +4,7 @@
 #include "../graphics/AudioSpectralModel.h"
 #include "../graphics/LoopGridProjection.h"
 
-namespace editor
+namespace spectral
 {
 	class AudioSpectralPicking
 	{

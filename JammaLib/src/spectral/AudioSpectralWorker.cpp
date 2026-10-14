@@ -1,7 +1,7 @@
 #include "AudioSpectralWorker.h"
 #include <utility>
 
-using namespace audio;
+using namespace spectral;
 
 AudioSpectralWorker::AudioSpectralWorker() :
 	_thread([this] { _Run(); })
@@ -22,12 +22,9 @@ AudioSpectralWorker::~AudioSpectralWorker()
 	std::shared_ptr<AudioSpectralSourceCapture> currentSource;
 	std::shared_ptr<AudioSpectralAnalysisJob> queuedAnalysis;
 	std::shared_ptr<AudioSpectralAnalysisJob> currentAnalysis;
-	std::shared_ptr<AudioSpectralReconstructionJob> queuedReconstruction;
-	std::shared_ptr<AudioSpectralReconstructionJob> currentReconstruction;
 	std::shared_ptr<PresentationWork> queuedPresentation;
 	std::shared_ptr<PresentationWork> currentPresentation;
 	std::shared_ptr<PresentationWork> editing;
-	std::shared_ptr<PresentationWork> currentEditing;
 	std::deque<std::shared_ptr<ContentWork>> content;
 	{
 		std::scoped_lock lock(_requestMutex);
@@ -36,20 +33,15 @@ AudioSpectralWorker::~AudioSpectralWorker()
 		queuedAnalysis = std::exchange(_queuedAnalysis, nullptr);
 		currentSource = _currentSource;
 		currentAnalysis = _currentAnalysis;
-		queuedReconstruction = std::exchange(_queuedReconstruction, nullptr);
-		currentReconstruction = _currentReconstruction;
 		queuedPresentation = std::exchange(_queuedPresentation, nullptr);
 		currentPresentation = _currentPresentation;
 		editing = std::exchange(_queuedEditing, nullptr);
-		currentEditing = _currentEditing;
 		content.swap(_queuedContent);
 	}
 	if (queuedSource) queuedSource->Cancel();
 	if (currentSource) currentSource->Cancel();
 	if (queuedAnalysis) queuedAnalysis->Cancel();
 	if (currentAnalysis) currentAnalysis->Cancel();
-	if (queuedReconstruction) queuedReconstruction->Cancel();
-	if (currentReconstruction) currentReconstruction->Cancel();
 	if (queuedPresentation && queuedPresentation->Cancel) queuedPresentation->Cancel();
 	if (currentPresentation && currentPresentation->Cancel) currentPresentation->Cancel();
 	if (editing && editing->Cancel) editing->Cancel();
@@ -91,23 +83,6 @@ void AudioSpectralWorker::RequestAnalysis(std::shared_ptr<AudioSpectralAnalysisJ
 	else _wake.notify_all();
 	// New queued work never cancels an almost-finished running analysis. Source
 	// invalidation is explicit through the owner's job.Cancel() operation.
-}
-
-void AudioSpectralWorker::RequestReconstruction(std::shared_ptr<AudioSpectralReconstructionJob> job)
-{
-	if (!job) return;
-	std::shared_ptr<AudioSpectralReconstructionJob> displaced;
-	bool stopping;
-	{
-		std::scoped_lock lock(_requestMutex);
-		stopping = _stopping;
-		if (!stopping) displaced = std::exchange(_queuedReconstruction, job);
-	}
-	if (displaced && displaced != job) displaced->Cancel();
-	if (stopping) job->Cancel();
-	else _wake.notify_all();
-	// Paint updates replace queued revisions, never a useful running revision.
-	// The owner explicitly cancels obsolete source work through job.Cancel().
 }
 
 void AudioSpectralWorker::RequestPresentation(std::function<void()> work, std::function<void()> cancel)
@@ -174,11 +149,10 @@ void AudioSpectralWorker::_Run()
 	{
 		std::shared_ptr<AudioSpectralSourceCapture> source;
 		std::shared_ptr<AudioSpectralAnalysisJob> analysis;
-		std::shared_ptr<AudioSpectralReconstructionJob> reconstruction;
 		std::shared_ptr<ContentWork> content;
 		{
 			std::unique_lock lock(_requestMutex);
-			_wake.wait(lock, [this] { return _stopping || _queuedSource || _queuedAnalysis || _queuedReconstruction || !_queuedContent.empty(); });
+			_wake.wait(lock, [this] { return _stopping || _queuedSource || _queuedAnalysis || !_queuedContent.empty(); });
 			if (_stopping) return;
 			if (_queuedSource)
 			{
@@ -195,21 +169,14 @@ void AudioSpectralWorker::_Run()
 				content = std::move(_queuedContent.front());
 				_queuedContent.pop_front();
 			}
-			else
-			{
-				reconstruction = std::exchange(_queuedReconstruction, nullptr);
-				_currentReconstruction = reconstruction;
-			}
 		}
 		if (source) source->Prepare();
 		else if (analysis) analysis->Run();
 		else if (content) content->Run();
-		else reconstruction->Run();
 		{
 			std::scoped_lock lock(_requestMutex);
 			if (source) _currentSource.reset();
 			else if (analysis) _currentAnalysis.reset();
-			else if (reconstruction) _currentReconstruction.reset();
 		}
 		// Local handles retain the payload across reset; bulk destruction happens
 		// here, outside the queue lock, on the worker rather than audio.

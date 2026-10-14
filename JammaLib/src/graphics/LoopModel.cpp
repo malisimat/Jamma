@@ -379,10 +379,10 @@ void LoopModel::UpdateModel(const BufferBank& buffer,
 }
 
 void LoopModel::UpdateEditedModel(
-	const std::shared_ptr<const audio::AudioSpectralPlaybackSnapshot>& snapshot, float radius)
+	const std::shared_ptr<const spectral::AudioSpectralPlaybackSnapshot>& snapshot, float radius)
 {
 	if (!snapshot) return;
-	static_assert(_WaveformSegments == audio::AudioSpectralPlaybackSnapshot::OverviewSegments);
+	static_assert(_WaveformSegments == spectral::AudioSpectralPlaybackSnapshot::OverviewSegments);
 	const auto waveformRadius = (std::max)(radius, 1.0f);
 	if (_usesEditedWaveform && _lastEditedWaveform.lock() == snapshot
 		&& std::fabs(waveformRadius - _lastWaveformRadius) <= 0.0001f) return;

@@ -3,7 +3,7 @@
 #include <memory>
 #include <span>
 
-namespace audio
+namespace spectral
 {
 	// Worker-owned real float FFT. Construct, transform and destroy off callback.
 	// One instance is reusable scratch for one worker, not a concurrent service.
@@ -24,7 +24,6 @@ namespace audio
 		AudioSpectralFft& operator=(const AudioSpectralFft&) = delete;
 
 		bool IsValid() const noexcept;
-		unsigned int WindowSize() const noexcept;
 		// Forward is unscaled; Inverse applies 1/N exactly once.
 		float InverseNormalization() const noexcept;
 		// Exact spans: N samples and N/2+1 positive-frequency bins.

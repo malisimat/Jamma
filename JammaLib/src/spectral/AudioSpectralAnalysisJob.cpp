@@ -3,7 +3,7 @@
 #include <new>
 #include <utility>
 
-using namespace audio;
+using namespace spectral;
 
 AudioSpectralAnalysisJob::AudioSpectralAnalysisJob(
 	std::shared_ptr<const AudioSpectralSource> source, AudioSpectralTransformConfig transform) :

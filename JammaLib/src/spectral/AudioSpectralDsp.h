@@ -11,7 +11,7 @@
 #include "AudioSpectralFft.h"
 #include "AudioSpectralSource.h"
 
-namespace audio
+namespace spectral
 {
 	class AudioSpectralGainField;
 	class AudioSpectralEnvelope;

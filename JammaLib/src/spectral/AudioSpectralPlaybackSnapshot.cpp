@@ -6,7 +6,7 @@
 #include <limits>
 #include <utility>
 
-using namespace audio;
+using namespace spectral;
 
 AudioSpectralPlaybackSnapshot::AudioSpectralPlaybackSnapshot(
 	std::shared_ptr<const AudioSpectralPcm> pcm, std::shared_ptr<const AudioSpectralEnvelope> envelope,

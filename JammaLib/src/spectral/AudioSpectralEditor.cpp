@@ -4,61 +4,54 @@
 #include <cmath>
 #include <new>
 #include <utility>
-#include <iostream>
-#include <string_view>
 #include <limits>
 
-using namespace editor;
+using namespace spectral;
 
 struct AudioSpectralEditor::Stroke
 {
-	std::shared_ptr<const audio::AudioSpectralEditState> Before;
-	std::shared_ptr<const audio::AudioSpectralEditState> Latest;
-	std::shared_ptr<const audio::AudioSpectralAnalysis> Analysis;
-	std::shared_ptr<audio::AudioSpectralGainField> Gains; // Worker only.
-	std::unique_ptr<audio::AudioSpectralEnvelopeStroke> Envelope; // Worker only.
-	std::shared_ptr<const audio::AudioSpectralEnvelope> PublishedEnvelope; // Worker only.
+	std::shared_ptr<const AudioSpectralEditState> Before;
+	std::shared_ptr<const AudioSpectralEditState> Latest;
+	std::shared_ptr<const AudioSpectralAnalysis> Analysis;
+	std::shared_ptr<AudioSpectralGainField> Gains; // Worker only.
+	std::unique_ptr<AudioSpectralEnvelopeStroke> Envelope; // Worker only.
+	std::shared_ptr<const AudioSpectralEnvelope> PublishedEnvelope; // Worker only.
 	// UI-owned path accumulation. Worker reads only the map frozen in its receipt;
 	// release/acquire returns ownership. Cancellation immediately drops UI scratch.
-	std::unique_ptr<audio::AudioSpectralEnvelopeStroke::RelativeMap> BandInput, BandSpare; // UI only until frozen receipt.
-    audio::AudioSpectralEnvelopeStroke::RelativePath BandPath; // UI run provenance survives batches.
+	std::unique_ptr<AudioSpectralEnvelopeStroke::RelativeMap> BandInput, BandSpare; // UI only until frozen receipt.
+    AudioSpectralEnvelopeStroke::RelativePath BandPath; // UI run provenance survives batches.
     double BandDrag = 0.0, SampleAlignment = 0.0;
 	// Initialized by UI before handoff and immutable for worker/UI readers.
-	double AnchorSeconds = 0.0;
-	double TimeRadius = audio::AudioSpectralConfig::BrushTimeRadiusSeconds;
-	double FrequencyRadius = audio::AudioSpectralConfig::BrushFrequencyRadiusOctaves;
-	double BandRadius = audio::AudioSpectralConfig::BarTimeRadiusSeconds;
-    std::unique_ptr<audio::AudioSpectralGainField::ExposureMap> InputMap, SpareMap; // UI-owned except handed-off map.
+	double TimeRadius = AudioSpectralConfig::BrushTimeRadiusSeconds;
+	double FrequencyRadius = AudioSpectralConfig::BrushFrequencyRadiusOctaves;
+    std::unique_ptr<AudioSpectralGainField::ExposureMap> InputMap, SpareMap; // UI-owned except handed-off map.
 	std::optional<std::pair<double, double>> Point;
-	double AnchorY = 0.0; float Target = 1;
+	double AnchorY = 0.0;
 	bool Broadband = false, Attenuate = false, Released = false;
     std::chrono::steady_clock::time_point LastAudio = std::chrono::steady_clock::time_point::min();
 	std::chrono::steady_clock::time_point Last = std::chrono::steady_clock::now();
 	std::chrono::steady_clock::time_point LastBatch = Last;
-    std::chrono::steady_clock::time_point LastDiagnostic = Last;
-    double InputSeconds = 0, AppliedSeconds = 0;
 };
 
 struct AudioSpectralEditor::PaintReceipt
 {
 	std::atomic<bool> Complete{false};
 	std::atomic<bool> Cancelled{false};
-	std::shared_ptr<const audio::AudioSpectralGainField> Gains;
-	std::shared_ptr<const audio::AudioSpectralEnvelope> Envelope;
+	std::shared_ptr<const AudioSpectralGainField> Gains;
+	std::shared_ptr<const AudioSpectralEnvelope> Envelope;
 	bool Changed = false;
     AudioSpectralDisplayJob::Damage Damage;
-    double ExposureSeconds = 0;
-    std::unique_ptr<audio::AudioSpectralGainField::ExposureMap> InputMap; // Frozen for worker/UI readers until terminal release/acquire.
-	std::unique_ptr<audio::AudioSpectralEnvelopeStroke::RelativeMap> BandInput; // Immutable during worker ownership.
+    std::unique_ptr<AudioSpectralGainField::ExposureMap> InputMap; // Frozen for worker/UI readers until terminal release/acquire.
+	std::unique_ptr<AudioSpectralEnvelopeStroke::RelativeMap> BandInput; // Immutable during worker ownership.
     std::string Reason;
 };
 
 class AudioSpectralEditor::EditUndo final : public base::ActionUndo
 {
 public:
-	EditUndo(std::weak_ptr<engine::Loop> loop, std::shared_ptr<audio::AudioSpectralWorker> worker,
-		std::shared_ptr<const audio::AudioSpectralEditState> before,
-		std::shared_ptr<const audio::AudioSpectralEditState> after, std::shared_ptr<RevisionGate> gate)
+	EditUndo(std::weak_ptr<engine::Loop> loop, std::shared_ptr<AudioSpectralWorker> worker,
+		std::shared_ptr<const AudioSpectralEditState> before,
+		std::shared_ptr<const AudioSpectralEditState> after, std::shared_ptr<RevisionGate> gate)
 		: ActionUndo({}), _loop(std::move(loop)), _worker(std::move(worker)),
 		_before(std::move(before)), _after(std::move(after)), _gate(std::move(gate)) {}
 	bool Undo() override { return Apply(_after, _before); }
@@ -69,15 +62,15 @@ public:
 		return loop && loop->IsCurrentAudioSpectralSource(*_before->Source);
 	}
 private:
-	bool Apply(const std::shared_ptr<const audio::AudioSpectralEditState>& expected,
-		const std::shared_ptr<const audio::AudioSpectralEditState>& target)
+	bool Apply(const std::shared_ptr<const AudioSpectralEditState>& expected,
+		const std::shared_ptr<const AudioSpectralEditState>& target)
 	{
 		const auto loop = _loop.lock();
 		if (!loop || _gate->StrokeActive.load() || !loop->IsCurrentAudioSpectralSource(*target->Source)) return false;
 		const auto current = loop->AudioSpectralEdit();
 		if (!current || current->Gains != expected->Gains || current->Envelope != expected->Envelope) return false;
 		std::string reason;
-		auto next = audio::AudioSpectralEditState::Create(target->Source, target->Transform, target->Gains, target->Envelope,
+		auto next = AudioSpectralEditState::Create(target->Source, target->Transform, target->Gains, target->Envelope,
 			current->Revision + 1, current->SpectralRevision + (current->Gains != target->Gains),
 			current->EnvelopeRevision + (current->Envelope != target->Envelope), reason);
 		if (!next) return false;
@@ -90,14 +83,14 @@ private:
 		return true;
 	}
 	std::weak_ptr<engine::Loop> _loop;
-	std::shared_ptr<audio::AudioSpectralWorker> _worker;
-	std::shared_ptr<const audio::AudioSpectralEditState> _before, _after;
+	std::shared_ptr<AudioSpectralWorker> _worker;
+	std::shared_ptr<const AudioSpectralEditState> _before, _after;
 	std::shared_ptr<RevisionGate> _gate;
 };
 
-void AudioSpectralEditor::_QueuePlayback(const std::shared_ptr<audio::AudioSpectralWorker>& worker,
-	std::weak_ptr<engine::Loop> weakLoop, std::shared_ptr<const audio::AudioSpectralEditState> edit,
-	std::shared_ptr<const audio::AudioSpectralAnalysis> analysis, std::shared_ptr<RevisionGate> gate)
+void AudioSpectralEditor::_QueuePlayback(const std::shared_ptr<AudioSpectralWorker>& worker,
+	std::weak_ptr<engine::Loop> weakLoop, std::shared_ptr<const AudioSpectralEditState> edit,
+	std::shared_ptr<const AudioSpectralAnalysis> analysis, std::shared_ptr<RevisionGate> gate)
 {
 	const auto owner = weakLoop.lock();
 	if (!owner || !edit) return;
@@ -112,20 +105,20 @@ void AudioSpectralEditor::_QueuePlayback(const std::shared_ptr<audio::AudioSpect
 			std::string reason;
 			gate->PlaybackFailed.store(false);
 			const auto audible = loop->AudioSpectralPlayback();
-			std::shared_ptr<const audio::AudioSpectralPcm> pcm;
+			std::shared_ptr<const AudioSpectralPcm> pcm;
 			const auto composed = edit->Gains->HasOwnedCoefficients();
             if (audible && audible->Pcm->Source == edit->Source && audible->SpectralRevision == edit->SpectralRevision
                 && (!composed || (audible->EnvelopeRevision == edit->EnvelopeRevision
                     && audible->Pcm->ComposedEnvelope == edit->Envelope))) pcm = audible->Pcm;
-			else if (edit->Gains->IsUnity()) pcm = std::make_shared<const audio::AudioSpectralPcm>(audio::AudioSpectralPcm{edit->Source, nullptr});
+			else if (edit->Gains->IsUnity()) pcm = std::make_shared<const AudioSpectralPcm>(AudioSpectralPcm{edit->Source, nullptr});
 			else
 			{
-				if (!analysis) analysis = audio::AudioSpectralDsp::Analyze(edit->Source, edit->Transform, reason, stop);
+				if (!analysis) analysis = AudioSpectralDsp::Analyze(edit->Source, edit->Transform, reason, stop);
 				if (!analysis) { if (!stop.stop_requested()) gate->PlaybackFailed.store(true); return; }
-				pcm = audio::AudioSpectralDsp::Reconstruct(analysis, *edit->Gains, reason, stop, false, edit->Envelope);
+				pcm = AudioSpectralDsp::Reconstruct(analysis, *edit->Gains, reason, stop, false, edit->Envelope);
                 if (pcm && composed)
                 {
-                    auto stamped = std::make_shared<audio::AudioSpectralPcm>(*pcm);
+                    auto stamped = std::make_shared<AudioSpectralPcm>(*pcm);
                     stamped->ComposedSpectralRevision = edit->SpectralRevision;
                     stamped->ComposedEnvelopeRevision = edit->EnvelopeRevision;
                     pcm = std::move(stamped);
@@ -145,7 +138,7 @@ void AudioSpectralEditor::_QueuePlayback(const std::shared_ptr<audio::AudioSpect
 					|| (prior && edit->SpectralRevision < prior->SpectralRevision)) return;
 				if (composed && (latest->SpectralRevision != edit->SpectralRevision
                     || latest->EnvelopeRevision != edit->EnvelopeRevision || latest->Envelope != edit->Envelope)) return;
-                auto snapshot = audio::AudioSpectralPlaybackSnapshot::Create(pcm, composed ? nullptr : latest->Envelope,
+                auto snapshot = AudioSpectralPlaybackSnapshot::Create(pcm, composed ? nullptr : latest->Envelope,
 					prior ? prior->Revision + 1 : 1, edit->SpectralRevision, latest->EnvelopeRevision, reason, stop);
 				if (!snapshot) { if (!stop.stop_requested()) gate->PlaybackFailed.store(true); return; }
 				if (loop->AudioSpectralEdit() != latest) continue;
@@ -189,7 +182,7 @@ void AudioSpectralEditor::Open(const std::shared_ptr<engine::Loop>& loop)
 		gui::GuiModelParams params;
 		params.ModelScale = 1.0f;
 		params.ModelTextures = { "levels" };
-		_model = std::make_shared<graphics::AudioSpectralModel>(params);
+		_model = std::make_shared<graphics::AudioSpectralModel>(params, _timeSegments, _frequencySegments);
 		loop->SetAudioSpectralModel(_model);
 	}
 	_state = State::WaitingForSource;
@@ -249,7 +242,6 @@ void AudioSpectralEditor::Update()
 	}
 	std::erase_if(_gates, [](const auto& entry) { return entry.second.expired(); });
 	_AcceptPaint();
-	_LogStroke();
     // Retire/schedule presentation before another mutable edit batch can fork tiles.
     _UpdateDisplay();
 	_UpdateStroke();
@@ -292,8 +284,8 @@ void AudioSpectralEditor::Update()
 	if (_analysisJob)
 	{
 		const auto status = _analysisJob->Status();
-		if (status == audio::AudioSpectralAnalysisJob::State::Pending) return;
-		if (status == audio::AudioSpectralAnalysisJob::State::Complete)
+		if (status == AudioSpectralAnalysisJob::State::Pending) return;
+		if (status == AudioSpectralAnalysisJob::State::Complete)
 		{
 			_analysis = _analysisJob->Result();
 			_budgetLayout = _analysis->Source->Layout;
@@ -303,7 +295,7 @@ void AudioSpectralEditor::Update()
 			_initialEdit = _analysisJob->EditState();
 			_initialPlayback = _analysisJob->Playback();
 		}
-		else if (status == audio::AudioSpectralAnalysisJob::State::Failed)
+		else if (status == AudioSpectralAnalysisJob::State::Failed)
 		{
 			_feedback = _analysisJob->Reason();
 			_unavailableGeneration = loop->AudioSourceGeneration();
@@ -326,7 +318,7 @@ void AudioSpectralEditor::Update()
 			}
 		}
 		_state = State::Ready;
-		_feedback = _analysis->Transform.HopSamps != audio::AudioSpectralConfig::HopSamps
+		_feedback = _analysis->Transform.HopSamps != AudioSpectralConfig::HopSamps
             ? "Audio analysis ready (" + std::to_string(_analysis->Transform.HopSamps) + "-sample time steps)" : "Audio analysis ready";
 		_UpdateDisplay();
 		if (_peakOverload) _feedback = "Edited peaks exceed full scale";
@@ -349,7 +341,7 @@ void AudioSpectralEditor::Update()
 	if (_source && loop->IsCurrentAudioSpectralSource(*_source))
 	{
 		const auto edit = loop->AudioSpectralEdit();
-		_analysisJob = std::make_shared<audio::AudioSpectralAnalysisJob>(
+		_analysisJob = std::make_shared<AudioSpectralAnalysisJob>(
 			_source, edit ? edit->Transform : _source->SelectedTransform);
 		_worker->RequestAnalysis(_analysisJob);
 		_state = State::AnalyzingSource;
@@ -358,10 +350,10 @@ void AudioSpectralEditor::Update()
 	}
 	if (_capture)
 	{
-		if (_capture->Status() == audio::AudioSpectralSourceCapture::State::Preparing
-			|| _capture->Status() == audio::AudioSpectralSourceCapture::State::Pending)
+		if (_capture->Status() == AudioSpectralSourceCapture::State::Preparing
+			|| _capture->Status() == AudioSpectralSourceCapture::State::Pending)
 			return;
-		const auto failed = _capture->Status() == audio::AudioSpectralSourceCapture::State::Failed;
+		const auto failed = _capture->Status() == AudioSpectralSourceCapture::State::Failed;
 		const auto captured = _capture->Source();
 		loop->CancelAudioSpectralSourceCapture();
 		_capture.reset();
@@ -399,7 +391,7 @@ void AudioSpectralEditor::Update()
 		budgetLayout.PhysicalLength = (std::max)(budgetLayout.PhysicalLength, _budgetLayout->PhysicalLength);
 		budgetLayout.FadeSamps = (std::max)(budgetLayout.FadeSamps, _budgetLayout->FadeSamps);
 	}
-	if (!audio::AudioSpectralDsp::EstimateWorkingMemory(
+	if (!AudioSpectralDsp::EstimateWorkingMemory(
 		budgetLayout, _capture->SelectedTransform(), _feedback))
 	{
 		loop->CancelAudioSpectralSourceCapture();
@@ -414,14 +406,14 @@ void AudioSpectralEditor::Update()
 	_feedback = "Preparing audio source";
 }
 
-std::shared_ptr<const audio::AudioSpectralEditState> AudioSpectralEditor::EditState() const
+std::shared_ptr<const AudioSpectralEditState> AudioSpectralEditor::EditState() const
 {
 	if (const auto loop = _loop.lock())
 		if (const auto state = loop->AudioSpectralEdit()) return state;
 	return _initialEdit;
 }
 
-std::shared_ptr<const audio::AudioSpectralPlaybackSnapshot> AudioSpectralEditor::Playback() const
+std::shared_ptr<const AudioSpectralPlaybackSnapshot> AudioSpectralEditor::Playback() const
 {
 	if (const auto loop = _loop.lock())
 		if (const auto snapshot = loop->AudioSpectralPlayback()) return snapshot;
@@ -470,11 +462,6 @@ void AudioSpectralEditor::_UpdateDisplay()
 	if (!reason.empty()) _feedback = reason;
 }
 
-void AudioSpectralEditor::SetFrequencyViewport(graphics::AudioSpectralViewport viewport)
-{
-    SetViewport({}, viewport);
-}
-
 void AudioSpectralEditor::SetViewport(graphics::AudioSpectralViewport time, graphics::AudioSpectralViewport frequency)
 {
     if (_stroke || !time.IsValid() || !frequency.IsValid()) return;
@@ -492,11 +479,11 @@ bool AudioSpectralEditor::BeginStroke(bool broadband, bool attenuate, double sec
 		|| !std::isfinite(timeRadius) || timeRadius <= 0.0 || timeRadius > 2.0
 		|| !std::isfinite(frequencyRadius) || frequencyRadius <= 0.0 || frequencyRadius > 4.0
 		|| !std::isfinite(bandRadius) || bandRadius <= 0.0 || bandRadius > 2.0) return false;
-	hz = (std::max)(hz, audio::AudioSpectralConfig::DisplayMinimumFrequencyHz);
+	hz = (std::max)(hz, AudioSpectralConfig::DisplayMinimumFrequencyHz);
 	const auto tiles = ((before->Gains->FrameCount() + 31) / 32) * ((before->Gains->BinCount() + 31) / 32);
 	const std::uint64_t historyBytes = broadband ? static_cast<std::uint64_t>(before->Source->Layout.LogicalLength) * sizeof(float) * 2
-		: tiles * sizeof(audio::AudioSpectralGainField::Tile) * 2;
-	if (historyBytes > audio::AudioSpectralConfig::MaxHistoryBytes)
+		: tiles * sizeof(AudioSpectralGainField::Tile) * 2;
+	if (historyBytes > AudioSpectralConfig::MaxHistoryBytes)
 	{
 		_feedback = "This stroke cannot fit the spectral Undo memory budget";
 		_editFailure = _feedback;
@@ -517,26 +504,24 @@ bool AudioSpectralEditor::BeginStroke(bool broadband, bool attenuate, double sec
 		stroke->PublishedEnvelope = before->Envelope;
 		stroke->Analysis = _analysis;
 		stroke->AnchorY = logicalY;
-		stroke->AnchorSeconds = seconds;
         stroke->SampleAlignment = std::round(seconds * before->Source->Layout.SampleRate) - seconds * before->Source->Layout.SampleRate;
 		stroke->TimeRadius = timeRadius;
 		stroke->FrequencyRadius = frequencyRadius;
-		stroke->BandRadius = bandRadius;
 		stroke->Broadband = broadband;
 		stroke->Attenuate = attenuate;
 		stroke->Point = std::pair{seconds, hz};
         if (broadband)
         {
-            stroke->BandInput = audio::AudioSpectralEnvelopeStroke::RelativeMap::Create(before->Source->Layout.LogicalLength, before->Source->Layout.SampleRate, bandRadius, _feedback);
+            stroke->BandInput = AudioSpectralEnvelopeStroke::RelativeMap::Create(before->Source->Layout.LogicalLength, before->Source->Layout.SampleRate, bandRadius, _feedback);
             if (!stroke->BandInput) { _editFailure = _feedback; return false; }
-            stroke->BandSpare = audio::AudioSpectralEnvelopeStroke::RelativeMap::Create(before->Source->Layout.LogicalLength, before->Source->Layout.SampleRate, bandRadius, _feedback);
+            stroke->BandSpare = AudioSpectralEnvelopeStroke::RelativeMap::Create(before->Source->Layout.LogicalLength, before->Source->Layout.SampleRate, bandRadius, _feedback);
             if (!stroke->BandSpare) { _editFailure = _feedback; return false; }
         }
         else
         {
-            stroke->InputMap = audio::AudioSpectralGainField::ExposureMap::Create(_analysis->Geometry.FrameCount, _analysis->Geometry.BinCount, _feedback);
+            stroke->InputMap = AudioSpectralGainField::ExposureMap::Create(_analysis->Geometry.FrameCount, _analysis->Geometry.BinCount, _feedback);
             if (!stroke->InputMap) { _editFailure = _feedback; return false; }
-            stroke->SpareMap = audio::AudioSpectralGainField::ExposureMap::Create(_analysis->Geometry.FrameCount, _analysis->Geometry.BinCount, _feedback);
+            stroke->SpareMap = AudioSpectralGainField::ExposureMap::Create(_analysis->Geometry.FrameCount, _analysis->Geometry.BinCount, _feedback);
             if (!stroke->InputMap || !stroke->SpareMap) { _editFailure = _feedback; return false; }
         }
 		_stroke = std::move(stroke);
@@ -555,7 +540,6 @@ void AudioSpectralEditor::MoveStroke(std::optional<std::pair<double, double>> po
     const auto now = std::chrono::steady_clock::now();
     const auto elapsed = std::chrono::duration<double>(now - stroke.Last).count();
     stroke.Last = now;
-    const auto target = audio::AudioSpectralEnvelope::TargetFromDragPixels(logicalY - stroke.AnchorY);
     if (point && (!std::isfinite(point->first) || !std::isfinite(point->second) || point->second < 0.0)) point.reset();
     if (stroke.Broadband)
     {
@@ -571,12 +555,11 @@ void AudioSpectralEditor::MoveStroke(std::optional<std::pair<double, double>> po
             { _feedback = _editFailure = reason; EndStroke(true); return; }
             stroke.Point = next;
             stroke.BandDrag = drag;
-            stroke.Target = target;
         }
         _UpdateStroke();
         return;
     }
-    if (point) point->second = (std::max)(point->second, audio::AudioSpectralConfig::DisplayMinimumFrequencyHz);
+    if (point) point->second = (std::max)(point->second, AudioSpectralConfig::DisplayMinimumFrequencyHz);
     if (point)
     {
         const auto from = stroke.Point.value_or(*point);
@@ -587,12 +570,10 @@ void AudioSpectralEditor::MoveStroke(std::optional<std::pair<double, double>> po
             stroke.InputMap->Accumulate(*stroke.Analysis, from.first, from.second, point->first,
                 point->second, exposure, reason, stroke.TimeRadius, stroke.FrequencyRadius);
             if (!reason.empty()) { _feedback = _editFailure = reason; EndStroke(true); return; }
-            stroke.InputSeconds += exposure;
         }
     }
     // An outside miss breaks the path; reentry never bridges an unpainted gap.
     stroke.Point = point;
-    stroke.Target = target;
     _UpdateStroke();
 }
 void AudioSpectralEditor::EndStroke(bool cancel)
@@ -605,13 +586,12 @@ void AudioSpectralEditor::EndStroke(bool cancel)
 		_gate->WorkStop = std::stop_source{};
 		if (_paintReceipt) _paintReceipt->Cancelled.store(true);
         _worker->CancelPendingEditing();
-		_LogStroke("cancel");
         const auto before = _stroke->Before;
 		const auto current = loop ? loop->AudioSpectralEdit() : nullptr;
 		if (loop && current && loop->IsCurrentAudioSpectralSource(*before->Source)
 			&& (current->Gains != before->Gains || current->Envelope != before->Envelope))
 		{
-			auto restored = audio::AudioSpectralEditState::Create(before->Source, before->Transform,
+			auto restored = AudioSpectralEditState::Create(before->Source, before->Transform,
 				before->Gains, before->Envelope, current->Revision + 1,
 				current->SpectralRevision + (current->Gains != before->Gains),
 				current->EnvelopeRevision + (current->Envelope != before->Envelope), _feedback);
@@ -650,7 +630,7 @@ void AudioSpectralEditor::_UpdateStroke()
 	}
 	const auto now = std::chrono::steady_clock::now();
 	if (!_stroke->Released
-		&& std::chrono::duration<double>(now - _stroke->LastBatch).count() < audio::AudioSpectralConfig::VisualUpdateSeconds) return;
+		&& std::chrono::duration<double>(now - _stroke->LastBatch).count() < AudioSpectralConfig::VisualUpdateSeconds) return;
 	_stroke->LastBatch = now;
 	const auto stroke = _stroke;
 	auto receipt = std::make_shared<PaintReceipt>();
@@ -669,7 +649,6 @@ void AudioSpectralEditor::_UpdateStroke()
 	{
 		try
 		{
-			if (receipt->InputMap) receipt->ExposureSeconds = receipt->InputMap->ElapsedSeconds();
             if (!receipt->Cancelled.load())
 			{
 				if (stroke->Broadband)
@@ -677,21 +656,21 @@ void AudioSpectralEditor::_UpdateStroke()
 					if (!stroke->Envelope)
 					{
 						auto envelope = stroke->Before->Envelope;
-						if (!envelope) envelope = audio::AudioSpectralEnvelope::Unity(stroke->Before->Source->Layout.LogicalLength, receipt->Reason);
-						if (envelope) stroke->Envelope = audio::AudioSpectralEnvelopeStroke::Begin(envelope,
-							stroke->Before->Source->Layout.SampleRate, receipt->Reason, stroke->BandRadius);
+						if (!envelope) envelope = AudioSpectralEnvelope::Unity(stroke->Before->Source->Layout.LogicalLength, receipt->Reason);
+						if (envelope) stroke->Envelope = AudioSpectralEnvelopeStroke::Begin(envelope,
+							stroke->Before->Source->Layout.SampleRate, receipt->Reason);
 					}
 					if (stroke->Envelope)
 					{
 						const auto changed = stroke->Envelope->ApplyRelativeMap(*receipt->BandInput);
                         if (stroke->Before->Gains->HasOwnedCoefficients())
                         {
-                            if (!stroke->Gains) stroke->Gains = std::make_shared<audio::AudioSpectralGainField>(*stroke->Before->Gains);
-                            audio::AudioSpectralGainField::ChangeBounds changes;
+                            if (!stroke->Gains) stroke->Gains = std::make_shared<AudioSpectralGainField>(*stroke->Before->Gains);
+                            AudioSpectralGainField::ChangeBounds changes;
                             if (stroke->Gains->ApplyOwnedBand(*stroke->Analysis, *stroke->Before->Gains, *stroke->Envelope, receipt->Reason, &changes))
                             {
                                 receipt->Gains = stroke->Gains->ContentEquals(*stroke->Before->Gains)
-                                    ? stroke->Before->Gains : std::make_shared<const audio::AudioSpectralGainField>(*stroke->Gains);
+                                    ? stroke->Before->Gains : std::make_shared<const AudioSpectralGainField>(*stroke->Gains);
                                 receipt->Changed = true;
                                 receipt->Damage.FirstFrame = changes.FirstFrame; receipt->Damage.LastFrame = changes.LastFrame;
                                 receipt->Damage.FirstBin = changes.FirstBin; receipt->Damage.LastBin = changes.LastBin;
@@ -723,12 +702,12 @@ void AudioSpectralEditor::_UpdateStroke()
 				}
 				else
 				{
-					if (!stroke->Gains) stroke->Gains = std::make_shared<audio::AudioSpectralGainField>(*stroke->Before->Gains);
-					audio::AudioSpectralGainField::ChangeBounds changes;
+					if (!stroke->Gains) stroke->Gains = std::make_shared<AudioSpectralGainField>(*stroke->Before->Gains);
+					AudioSpectralGainField::ChangeBounds changes;
                     receipt->Changed = stroke->Gains->ApplyExposureMap(*stroke->Analysis, *receipt->InputMap, !stroke->Attenuate, receipt->Reason, stroke->Before->Envelope.get(), &changes);
 					if (receipt->Changed)
                     {
-                        receipt->Gains = std::make_shared<const audio::AudioSpectralGainField>(*stroke->Gains);
+                        receipt->Gains = std::make_shared<const AudioSpectralGainField>(*stroke->Gains);
                         receipt->Damage.FirstFrame = changes.FirstFrame; receipt->Damage.LastFrame = changes.LastFrame;
                         receipt->Damage.FirstBin = changes.FirstBin; receipt->Damage.LastBin = changes.LastBin;
                     }
@@ -756,13 +735,12 @@ void AudioSpectralEditor::_AcceptPaint()
         receipt->BandInput->Clear();
         _stroke->BandSpare = std::move(receipt->BandInput);
     }
-    _stroke->AppliedSeconds += receipt->ExposureSeconds;
 	if (!receipt->Reason.empty()) { _feedback = _editFailure = receipt->Reason; EndStroke(true); return; }
 	const auto loop = _loop.lock();
 	if (!receipt->Changed || !loop) return;
 	const auto current = EditState();
 	if (!current || !loop->IsCurrentAudioSpectralSource(*_stroke->Before->Source)) { EndStroke(true); return; }
-	auto edit = audio::AudioSpectralEditState::Create(current->Source, current->Transform,
+	auto edit = AudioSpectralEditState::Create(current->Source, current->Transform,
 		receipt->Gains ? receipt->Gains : current->Gains, _stroke->Broadband ? receipt->Envelope : current->Envelope,
 		current->Revision + 1, current->SpectralRevision + !!receipt->Gains,
 		current->EnvelopeRevision + _stroke->Broadband, _feedback);
@@ -773,7 +751,7 @@ void AudioSpectralEditor::_AcceptPaint()
     _displayDamage = receipt->Damage;
     const auto now = std::chrono::steady_clock::now();
     if (_stroke->LastAudio == std::chrono::steady_clock::time_point::min()
-        || std::chrono::duration<double>(now - _stroke->LastAudio).count() >= audio::AudioSpectralConfig::StrokeUpdateSeconds)
+        || std::chrono::duration<double>(now - _stroke->LastAudio).count() >= AudioSpectralConfig::StrokeUpdateSeconds)
     {
         _stroke->LastAudio = now;
         _QueuePlayback(_worker, loop, edit, _analysis, _gate);
@@ -790,74 +768,26 @@ std::optional<double> AudioSpectralEditor::BrushLevelDb() const
     const auto frame = static_cast<std::size_t>(std::clamp(std::round(
         (point.first * edit->Source->Layout.SampleRate - analysis.Geometry.FirstFrameCentre) / analysis.Transform.HopSamps),
         0.0, static_cast<double>(analysis.Geometry.FrameCount - 1u)));
-    const auto bin = point.second <= audio::AudioSpectralConfig::DisplayMinimumFrequencyHz ? 0u
+    const auto bin = point.second <= AudioSpectralConfig::DisplayMinimumFrequencyHz ? 0u
         : static_cast<unsigned int>(std::clamp(std::round(point.second * analysis.Transform.WindowSamps
             / edit->Source->Layout.SampleRate), 0.0, static_cast<double>(analysis.Geometry.BinCount - 1u)));
     const auto pending = _stroke->InputMap->ExposureAt(frame, bin)
         + (_paintReceipt && _paintReceipt->InputMap ? _paintReceipt->InputMap->ExposureAt(frame, bin) : 0.0);
     auto beforeDb = edit->Gains->GainDb(frame, bin);
     const auto mask = !edit->Gains->IsOwned(frame, bin) && edit->Envelope
-        ? edit->Envelope->GainAt(audio::AudioSpectralGainField::EnvelopeIndex(analysis, frame)) : 1.0f;
+        ? edit->Envelope->GainAt(AudioSpectralGainField::EnvelopeIndex(analysis, frame)) : 1.0f;
     if (mask != 1.0f)
-        beforeDb = mask == 0.0f || beforeDb == audio::AudioSpectralConfig::SilenceGainDb
-            ? audio::AudioSpectralConfig::SilenceGainDb : beforeDb + static_cast<float>(20.0 * std::log10(mask));
-    const auto gainDb = audio::AudioSpectralGainField::GainDbAfterExposure(analysis, frame, bin,
+        beforeDb = mask == 0.0f || beforeDb == AudioSpectralConfig::SilenceGainDb
+            ? AudioSpectralConfig::SilenceGainDb : beforeDb + static_cast<float>(20.0 * std::log10(mask));
+    const auto gainDb = AudioSpectralGainField::GainDbAfterExposure(analysis, frame, bin,
         beforeDb, pending, !_stroke->Attenuate);
-    const auto gain = gainDb == audio::AudioSpectralConfig::SilenceGainDb ? 0.0 : std::pow(10.0, gainDb / 20.0);
+    const auto gain = gainDb == AudioSpectralConfig::SilenceGainDb ? 0.0 : std::pow(10.0, gainDb / 20.0);
     const auto magnitude = analysis.Magnitude(frame, bin) * gain;
     return magnitude > 0.0 ? 20.0 * std::log10(magnitude) : -std::numeric_limits<double>::infinity();
-}
-void AudioSpectralEditor::_LogStroke(const char* event)
-{
-    if (!_stroke || _stroke->Broadband) return;
-    const auto now = std::chrono::steady_clock::now();
-    if (std::string_view(event) == "tick"
-        && std::chrono::duration<double>(now - _stroke->LastDiagnostic).count() < 1.0) return;
-    _stroke->LastDiagnostic = now;
-    const auto edit = EditState();
-    const auto analysis = _stroke->Analysis;
-    if (!edit || !analysis) return;
-    const auto point = _stroke->Point.value_or(std::pair{0.0, 20.0});
-    const auto sample = point.first * edit->Source->Layout.SampleRate;
-    const auto frame = static_cast<std::size_t>(std::clamp(std::round(
-        (sample - analysis->Geometry.FirstFrameCentre) / analysis->Transform.HopSamps),
-        0.0, static_cast<double>(analysis->Geometry.FrameCount - 1u)));
-    const auto bin = point.second <= audio::AudioSpectralConfig::DisplayMinimumFrequencyHz ? 0u
-        : static_cast<unsigned int>(std::clamp(std::round(point.second * analysis->Transform.WindowSamps
-            / edit->Source->Layout.SampleRate), 0.0, static_cast<double>(analysis->Geometry.BinCount - 1u)));
-    const auto gain = edit->Gains->GainDb(frame, bin);
-    const auto magnitude = analysis->Magnitude(frame, bin);
-    const auto absolute = magnitude * edit->Gains->GainLinear(frame, bin);
-    const auto envelope = edit->Envelope ? edit->Envelope->GainAt(static_cast<unsigned long>(std::clamp(sample,
-        0.0, static_cast<double>(edit->Source->Layout.LogicalLength - 1u)))) : 1.0f;
-    const auto playback = Playback();
-    const auto surface = _model ? _model->Displayed() : nullptr;
-    const auto preview = BrushLevelDb();
-    std::cout << "[SpectralStroke] event=" << event << " generation=" << edit->Source->Generation
-        << " length_s=" << edit->Source->Layout.LogicalLength / edit->Source->Layout.SampleRate
-        << " rate_db_s=" << audio::AudioSpectralConfig::BrushDbPerSecond
-        << " policy=exposure-map-v1"
-        << " mode=" << (_stroke->Attenuate ? "attenuate" : "boost")
-        << " t=" << point.first << " hz=" << point.second << " frame=" << frame << " bin=" << bin
-        << " input_s=" << _stroke->InputSeconds << " applied_s=" << _stroke->AppliedSeconds
-        << " pending=" << (_stroke->InputMap ? _stroke->InputMap->DirtyCellCount() : static_cast<std::size_t>(_stroke->BandInput && !_stroke->BandInput->Empty())) << " busy=" << static_cast<bool>(_paintReceipt)
-        << " gain_db=" << gain << " level_db=" << (absolute > 0 ? 20.0 * std::log10(absolute) : -999.0)
-        << " limit=" << (gain == audio::AudioSpectralConfig::SilenceGainDb || absolute >= 0.99999)
-        << " preview_db=" << (preview && std::isfinite(*preview) ? *preview : -999.0)
-        << " original_db=" << (magnitude > 0 ? 20.0 * std::log10(magnitude) : -999.0)
-        << " envelope=" << envelope << " owned=" << edit->Gains->IsOwned(frame, bin)
-        << " composed_db=" << (absolute * (edit->Gains->IsOwned(frame, bin) ? 1.0 : envelope) > 0
-            ? 20.0 * std::log10(absolute * (edit->Gains->IsOwned(frame, bin) ? 1.0 : envelope)) : -999.0)
-        << " edit_spec=" << edit->SpectralRevision << " edit_env=" << edit->EnvelopeRevision
-        << " audio_spec=" << (playback ? playback->SpectralRevision : 0)
-        << " audio_env=" << (playback ? playback->EnvelopeRevision : 0)
-        << " display_edit=" << (surface ? surface->Revision : 0)
-        << " paused=" << !_stroke->Point.has_value() << std::endl;
 }
 void AudioSpectralEditor::_FinishStroke()
 {
 	if (!_stroke) return;
-	_LogStroke("finish");
     const auto before = _stroke->Before, after = _stroke->Latest;
     // A final accepted revision must converge even if the last visual batch was
     // inside the audio throttle interval; RequestContent coalesces the duplicate.
@@ -868,19 +798,19 @@ void AudioSpectralEditor::_FinishStroke()
 		// Conservative complete-value accounting: COW sharing may use less. Trim
 		// oldest spectral history only; other application Undo entries are retained.
 		const auto tiles = ((after->Gains->FrameCount() + 31) / 32) * ((after->Gains->BinCount() + 31) / 32);
-		const std::uint64_t bytes = before->Gains != after->Gains ? tiles * sizeof(audio::AudioSpectralGainField::Tile) * 2
+		const std::uint64_t bytes = before->Gains != after->Gains ? tiles * sizeof(AudioSpectralGainField::Tile) * 2
 			: static_cast<std::uint64_t>(after->Source->Layout.LogicalLength) * sizeof(float) * 2;
 		std::uint64_t used = 0;
 		std::erase_if(_historyRecords, [](const auto& record) { return record.Action.expired(); });
 		for (const auto& record : _historyRecords) used += record.Bytes;
-		while (!_historyRecords.empty() && used + bytes > audio::AudioSpectralConfig::MaxHistoryBytes)
+		while (!_historyRecords.empty() && used + bytes > AudioSpectralConfig::MaxHistoryBytes)
 		{
 			const auto oldest = _historyRecords.front();
 			if (auto action = oldest.Action.lock()) _history->Remove(action);
 			used -= oldest.Bytes;
 			_historyRecords.pop_front();
 		}
-		if (bytes <= audio::AudioSpectralConfig::MaxHistoryBytes)
+		if (bytes <= AudioSpectralConfig::MaxHistoryBytes)
 		{
 			auto undo = std::make_shared<EditUndo>(_loop, _worker, before, after, _gate);
 			_history->Add(undo);

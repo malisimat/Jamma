@@ -8,7 +8,7 @@
 #include <vector>
 #include "AudioSpectralConfig.h"
 
-namespace audio
+namespace spectral
 {
 	// Immutable dense source-time gains. Construction and ownership stay off audio;
 	// a callback borrows the envelope and performs one bounded indexed read.
@@ -71,28 +71,17 @@ namespace audio
 			double _radius;
 		};
 		static std::unique_ptr<AudioSpectralEnvelopeStroke> Begin(
-			std::shared_ptr<const AudioSpectralEnvelope> before, float sampleRate, std::string& reason,
-			double radiusSeconds = AudioSpectralConfig::BarTimeRadiusSeconds);
-		// One stroke uses exactly one mode: SetRelativeBand, ApplyRelativeMap,
-		// or PaintSegment. Mixing modes/provenance in one stroke is unsupported.
-		// Relative targets evaluate against E0, preserving silence and replacing prior targets.
-		bool SetRelativeBand(double centreSample, float factor) noexcept;
-		bool ApplyRelativeMap(const RelativeMap& map) noexcept;
-		// Time is explicitly unwrapped. The caller supplies its intended path;
-		// only brush support wraps, never an inferred shortest cursor movement.
-		bool PaintSegment(double startSample, float startGain, double endSample, float endGain) noexcept;
+			std::shared_ptr<const AudioSpectralEnvelope> before, float sampleRate, std::string& reason);
+        // Cumulative relative targets evaluate against captured E0.
+        bool ApplyRelativeMap(const RelativeMap& map) noexcept;
 		std::shared_ptr<const AudioSpectralEnvelope> Snapshot(std::string& reason) const;
 		std::optional<double> RelativeFactorAt(unsigned long index) const noexcept;
-		bool HasChanges() const noexcept { return _changedSamples != 0ul; }
-		std::shared_ptr<const AudioSpectralEnvelope> Before() const noexcept { return _before; }
 
 		// Snapshot adds finite local ramps at competing-winner boundaries, only
 		// within touched feather samples. Authored and untouched samples are protected.
 
 	private:
-		AudioSpectralEnvelopeStroke(std::shared_ptr<const AudioSpectralEnvelope> before, double radiusSamps, double rampHalfSamps);
-		void _PaintSample(unsigned long index, double startSample, float startGain,
-			double endSample, float endGain) noexcept;
+		AudioSpectralEnvelopeStroke(std::shared_ptr<const AudioSpectralEnvelope> before, double rampHalfSamps);
 		bool _IsRampBoundary(unsigned long leftIndex) const noexcept;
 		void _ApplyLocalRamps(std::vector<float>& gains) const noexcept;
 		static unsigned long _WrapSample(double integralSample, unsigned long length) noexcept;
@@ -101,10 +90,7 @@ namespace audio
 		std::vector<double> _bestInfluence;
 		std::vector<std::uint64_t> _winnerIds;
 		std::vector<float> _winningTargets;
-		double _radiusSamps;
 		double _rampHalfSamps;
-		std::uint64_t _winnerSerial = 0u;
 		unsigned long _changedSamples = 0ul;
-		bool _relativeMode = false; // Single worker owner; never published mutable.
 	};
 }

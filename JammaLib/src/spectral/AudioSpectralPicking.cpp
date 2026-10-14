@@ -6,7 +6,7 @@
 #include <initializer_list>
 #include <utility>
 
-using namespace editor;
+using namespace spectral;
 
 bool AudioSpectralPicking::_Finite(glm::dvec3 value) noexcept
 {
@@ -94,8 +94,8 @@ std::optional<AudioSpectralPicking::Hit> AudioSpectralPicking::Intersect(
 	if (!display || surface.Morph != 1.0f || !std::isfinite(surface.Radius) || surface.Radius <= 0.0f || !std::isfinite(surface.PlayFraction)
 		|| !display->SourceIdentity || display->SourceGeneration == 0u || display->Revision == 0u
 		|| display->TimeSegments == 0u || display->FrequencySegments == 0u
-		|| display->TimeSegments > audio::AudioSpectralConfig::MaxTimeSegments
-		|| display->FrequencySegments > audio::AudioSpectralConfig::MaxFrequencySegments
+		|| display->TimeSegments > AudioSpectralConfig::MaxTimeSegments
+		|| display->FrequencySegments > AudioSpectralConfig::MaxFrequencySegments
 		|| !std::isfinite(display->MinimumFrequencyHz) || !(display->MinimumFrequencyHz > 0.0f)
 		|| !std::isfinite(display->NyquistHz) || !(display->NyquistHz > display->MinimumFrequencyHz)
 		|| !std::isfinite(display->MaximumFrequencyHz) || !(display->MaximumFrequencyHz > display->MinimumFrequencyHz)

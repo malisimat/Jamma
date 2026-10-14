@@ -7,7 +7,7 @@
 #include <new>
 #include <stdexcept>
 
-using namespace audio;
+using namespace spectral;
 
 std::span<const AudioSpectralFft::Bin> AudioSpectralAnalysis::Frame(std::size_t index) const noexcept
 {

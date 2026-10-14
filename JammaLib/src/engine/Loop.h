@@ -20,9 +20,9 @@
 #include "../io/FileReadWriter.h"
 #include "../io/JamFile.h"
 #include "../audio/BufferBank.h"
-#include "../audio/AudioSpectralSource.h"
-#include "../audio/AudioSpectralEditState.h"
-#include "../audio/AudioSpectralPlaybackSnapshot.h"
+#include "../spectral/AudioSpectralSource.h"
+#include "../spectral/AudioSpectralEditState.h"
+#include "../spectral/AudioSpectralPlaybackSnapshot.h"
 #include "../audio/AudioMixer.h"
 #include "../audio/Hanning.h"
 #include "../graphics/VU.h"
@@ -249,34 +249,34 @@ namespace engine
 		virtual bool SupportsAudioSpectralEditing() const noexcept { return true; }
 		bool CanEditAudioSource() const noexcept;
 		// UI-owner operations. No BufferBank PCM is read by the requesting thread.
-		std::shared_ptr<audio::AudioSpectralSourceCapture> RequestAudioSpectralSource(std::string& reason,
-            const std::shared_ptr<audio::AudioSpectralResourceBudget>& budget = nullptr,
-            const audio::AudioSpectralSourceLayout* retainedLayout = nullptr);
+		std::shared_ptr<spectral::AudioSpectralSourceCapture> RequestAudioSpectralSource(std::string& reason,
+            const std::shared_ptr<spectral::AudioSpectralResourceBudget>& budget = nullptr,
+            const spectral::AudioSpectralSourceLayout* retainedLayout = nullptr);
 		void CancelAudioSpectralSourceCapture();
-		bool IsCurrentAudioSpectralSource(const audio::AudioSpectralSource& source) const noexcept;
+		bool IsCurrentAudioSpectralSource(const spectral::AudioSpectralSource& source) const noexcept;
 		std::uint64_t AudioSourceGeneration() const noexcept
 		{
 			return _audioSourceGeneration.load(std::memory_order_acquire);
 		}
 		bool PublishAudioSpectralEdit(
-			std::shared_ptr<const audio::AudioSpectralEditState> state, std::string& reason);
-		std::shared_ptr<const audio::AudioSpectralEditState> AudioSpectralEdit() const;
+			std::shared_ptr<const spectral::AudioSpectralEditState> state, std::string& reason);
+		std::shared_ptr<const spectral::AudioSpectralEditState> AudioSpectralEdit() const;
 		// Off-audio publication. Reject stale source/component revisions; callback
 		// leases keep active/transition content alive without owning destruction.
 		bool PublishAudioSpectralPlayback(
-			std::shared_ptr<const audio::AudioSpectralPlaybackSnapshot> snapshot, std::string& reason);
+			std::shared_ptr<const spectral::AudioSpectralPlaybackSnapshot> snapshot, std::string& reason);
 		// UI-owned Undo/cancellation barrier; existing audible content may remain
 		// until a newer result is ready, but older queued results cannot be adopted.
 		void InvalidateAudioSpectralResultsBefore(std::uint64_t spectralRevision,
             std::uint64_t expectedGeneration);
-		std::shared_ptr<const audio::AudioSpectralPlaybackSnapshot> AudioSpectralPlayback() const;
+		std::shared_ptr<const spectral::AudioSpectralPlaybackSnapshot> AudioSpectralPlayback() const;
 		std::uint64_t AppliedAudioSpectralRevision() const noexcept
 		{
 			return _appliedAudioSpectralRevision.load(std::memory_order_acquire);
 		}
 		// Immutable edited output export; no mutable bank reads and gain applied once.
 		static std::vector<float> ExportAudioSpectralSamples(
-			const audio::AudioSpectralPlaybackSnapshot& snapshot, bool retainPhysicalTail = false);
+			const spectral::AudioSpectralPlaybackSnapshot& snapshot, bool retainPhysicalTail = false);
 		// Recorded storage length is an upper bound for any logical loop length.
 		// It intentionally remains distinct after first-master tail normalisation.
 		unsigned long PhysicalLoopLength() const noexcept
@@ -396,18 +396,18 @@ namespace engine
 		static_assert(std::atomic<std::uint64_t>::is_always_lock_free);
 		static_assert(std::atomic<float>::is_always_lock_free);
 		std::atomic<std::uint64_t> _audioSourceGeneration{ 1u };
-		const std::shared_ptr<const audio::AudioSpectralSourceIdentity> _audioSourceIdentity =
-			std::make_shared<const audio::AudioSpectralSourceIdentity>();
+		const std::shared_ptr<const spectral::AudioSpectralSourceIdentity> _audioSourceIdentity =
+			std::make_shared<const spectral::AudioSpectralSourceIdentity>();
 		// Serializes publication/collection on non-audio UI/configuration threads.
 		std::mutex _audioSourcePublicationMutex;
-		base::PublishedAudioSnapshot<audio::AudioSpectralSourceCapture> _audioSourceCapture;
+		base::PublishedAudioSnapshot<spectral::AudioSpectralSourceCapture> _audioSourceCapture;
 
 		// Edit owner/export/UI only; atomic shared ownership is never used by audio.
-		std::atomic<std::shared_ptr<const audio::AudioSpectralEditState>> _audioSpectralEdit;
-		base::PublishedAudioSnapshot<const audio::AudioSpectralPlaybackSnapshot> _audioSpectralPlayback;
+		std::atomic<std::shared_ptr<const spectral::AudioSpectralEditState>> _audioSpectralEdit;
+		base::PublishedAudioSnapshot<const spectral::AudioSpectralPlaybackSnapshot> _audioSpectralPlayback;
 		// Audio reader only. Declared after publisher so leases release before it.
-		base::PublishedAudioSnapshot<const audio::AudioSpectralPlaybackSnapshot>::Lease _activeAudioSpectral;
-		base::PublishedAudioSnapshot<const audio::AudioSpectralPlaybackSnapshot>::Lease _previousAudioSpectral;
+		base::PublishedAudioSnapshot<const spectral::AudioSpectralPlaybackSnapshot>::Lease _activeAudioSpectral;
+		base::PublishedAudioSnapshot<const spectral::AudioSpectralPlaybackSnapshot>::Lease _previousAudioSpectral;
 		unsigned int _audioSpectralTransitionSamps = 0u;
 		unsigned int _audioSpectralTransitionProgress = 0u;
 		std::atomic<std::uint64_t> _appliedAudioSpectralRevision{ 0u };
@@ -456,7 +456,7 @@ namespace engine
 		void _CopyAudioSpectralSourceAtAudioBoundary() noexcept;
 		void _AdvanceAudioSpectralPlayback(unsigned int numSamps) noexcept;
 		float _ReadAudioSpectralSample(unsigned long storageIndex, unsigned int blockOffset, std::uint64_t generation) const noexcept;
-		audio::AudioSpectralSourceLayout _AudioSpectralSourceLayout() const noexcept;
+		spectral::AudioSpectralSourceLayout _AudioSpectralSourceLayout() const noexcept;
 		static void _DrainVstChain(std::shared_ptr<vst::VstChain> chain);
 	};
 }

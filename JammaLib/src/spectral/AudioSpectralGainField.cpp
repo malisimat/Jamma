@@ -7,7 +7,7 @@
 #include <new>
 #include <limits>
 
-using namespace audio;
+using namespace spectral;
 
 AudioSpectralGainField::AudioSpectralGainField(std::size_t frames, unsigned int bins) :
 	_frameCount(frames), _binCount(bins), _binTiles((bins - 1u) / TileBins + 1u),
@@ -238,37 +238,6 @@ double AudioSpectralGainField::_IntegratedOval(double x, double y, double dx, do
     return std::clamp(result / shoulderScale, 0.0, last-first);
 }
 
-bool AudioSpectralGainField::PaintOvalSegment(const AudioSpectralAnalysis& analysis,
-	double startSeconds, double startHz, double endSeconds, double endHz,
-	double elapsedSeconds, bool increase, std::string& reason)
-{
-	try
-	{
-		auto candidate = *this;
-		const auto changed = candidate._PaintOvalSegment(analysis, startSeconds, startHz,
-			endSeconds, endHz, elapsedSeconds, increase, reason);
-		if (changed) *this = std::move(candidate);
-		return changed;
-	}
-	catch (const std::bad_alloc&)
-	{
-		reason = "Not enough memory for this spectral brush update";
-		return false; // Original tiles are unchanged; never publish a partial update.
-	}
-}
-
-bool AudioSpectralGainField::_PaintOvalSegment(const AudioSpectralAnalysis& analysis,
-    double startSeconds, double startHz, double endSeconds, double endHz,
-    double elapsedSeconds, bool increase, std::string& reason)
-{
-    if (_frameCount != analysis.Geometry.FrameCount || _binCount != analysis.Geometry.BinCount)
-    { reason = "Spectral gain field dimensions differ from the source"; return false; }
-    return _VisitOval(analysis, startSeconds, startHz, endSeconds, endHz, elapsedSeconds, reason,
-        AudioSpectralConfig::BrushTimeRadiusSeconds, AudioSpectralConfig::BrushFrequencyRadiusOctaves,
-        [&](std::size_t frame, unsigned int bin, double exposure)
-        { return SetGainDb(frame, bin, GainDbAfterExposure(analysis, frame, bin, GainDb(frame, bin), exposure, increase)); });
-}
-
 float AudioSpectralGainField::GainDbAfterExposure(const AudioSpectralAnalysis& analysis, std::size_t frame,
     unsigned int bin, float beforeDb, double exposureSeconds, bool increase) noexcept
 {
@@ -323,7 +292,6 @@ bool AudioSpectralGainField::ExposureMap::Accumulate(const AudioSpectralAnalysis
         value = (std::min)(AudioSpectralConfig::MaximumBrushExposureSeconds, value + exposure); // Beyond 2400 dB, every finite input has saturated.
         return true;
     });
-    if (reason.empty()) _elapsed += elapsedSeconds;
     return changed;
 }
 
@@ -331,7 +299,6 @@ void AudioSpectralGainField::ExposureMap::Clear() noexcept
 {
     for (const auto index : _dirty) _exposure[index] = 0.0;
     _dirty.clear();
-    _elapsed = 0.0;
 }
 
 bool AudioSpectralGainField::ApplyExposureMap(const AudioSpectralAnalysis& analysis,
