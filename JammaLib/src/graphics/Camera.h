@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Moveable.h"
+#include "CameraFraming.h"
 #include "../actions/ActionResult.h"
 #include "../actions/TouchAction.h"
 #include "../actions/TouchMoveAction.h"
@@ -70,6 +71,11 @@ namespace graphics
 			unsigned int viewportHeight,
 			utils::Position3d stationCentre);
 		void TickBackgroundDrag(float deltaSeconds);
+		void SetAutomaticTarget(utils::Position3d eye) noexcept;
+		void TickAutomaticMotion(float deltaSeconds) noexcept;
+		void CancelAutomaticMotion(bool preserveVelocity = false) noexcept;
+		bool IsAutomatic() const noexcept { return _automaticTarget.has_value(); }
+		void SetFrontVisibleBounds(const CameraBounds& bounds) noexcept { _frontVisibleBounds = bounds; }
 		bool IsBackgroundDragging() const noexcept;
 		bool IsBackgroundPointerHeld() const noexcept;
 		void CancelBackgroundCoast() noexcept;
@@ -183,5 +189,11 @@ namespace graphics
 		bool _interiorSelectDepthChanged = false;
 		bool _interiorRestorePending = false;
 		bool _editorPerspective = false;
+		// Window owner only. Targets never overwrite remembered manual view poses.
+		std::optional<utils::Position3d> _automaticTarget;
+		std::optional<Pose> _automaticManualPose;
+		utils::Position3d _automaticVelocity{};
+		bool _resumeAutomaticVelocity = false;
+		CameraBounds _frontVisibleBounds;
 	};
 }

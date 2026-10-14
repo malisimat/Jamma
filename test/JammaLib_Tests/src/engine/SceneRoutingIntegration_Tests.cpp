@@ -1065,6 +1065,8 @@ TEST_F(SceneRoutingIntegrationTest, PluginFocusLossDefersSceneEntryUntilStateCal
     engine::SourceLossIntegrationTestAccess::WhileSceneLocked(*scene, [&] {
         graphics::Window::WindowProcedure(host, WM_KILLFOCUS, 0, 0);
         graphics::Window::WindowProcedure(host, WM_CAPTURECHANGED, 0, 0);
+        graphics::Window::WindowProcedure(host, WM_ACTIVATE, WA_INACTIVE, 0);
+        graphics::Window::WindowProcedure(host, WM_SHOWWINDOW, FALSE, 0);
         graphics::Window::WindowProcedure(host, WM_KILLFOCUS, 0, 0);
         EXPECT_TRUE(engine::SourceLossIntegrationTestAccess::ControlHeld(*scene));
         EXPECT_EQ(window.Modifiers(), base::Action::MODIFIER_CTRL);

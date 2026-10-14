@@ -471,6 +471,18 @@
     <ClInclude Include="src\base\Audible.h">
       <Filter>src\base</Filter>
     </ClInclude>
+    <ClInclude Include="src\engine\CameraRecordingObservation.h">
+      <Filter>src\engine</Filter>
+    </ClInclude>
+    <ClInclude Include="src\graphics\UnattendedCameraController.h">
+      <Filter>src\graphics</Filter>
+    </ClInclude>
+    <ClInclude Include="src\graphics\CameraBounds.h">
+      <Filter>src\graphics</Filter>
+    </ClInclude>
+    <ClInclude Include="src\graphics\CameraFraming.h">
+      <Filter>src\graphics</Filter>
+    </ClInclude>
     <ClInclude Include="src\graphics\Camera.h">
       <Filter>src\engine</Filter>
     </ClInclude>

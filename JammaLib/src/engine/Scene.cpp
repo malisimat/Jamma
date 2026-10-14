@@ -660,6 +660,46 @@ void Scene::Draw3d(DrawContext& ctx,
 	glCtx.PopMvp();
 }
 
+bool Scene::IsCameraTriggerKey(unsigned int key) const
+{
+	const auto rig = _rigCoordinator.Accepted();
+	if (!rig) return false;
+	for (const auto& trigger : rig->Rig.Triggers)
+		for (const auto& pair : trigger.TriggerPairs)
+			if (key == pair.ActivateDown || key == pair.ActivateUp ||
+				key == pair.DitchDown || key == pair.DitchUp) return true;
+	return false;
+}
+
+void Scene::OnCameraTriggerActivity()
+{
+	// Performance keys restart manual idle timing, but preserve a live wander.
+	if (!_unattendedCamera.IsAutomatic()) OnHumanActivity();
+}
+
+void Scene::OnHumanActivity()
+{
+	const auto now = Timer::GetTime();
+	_unattendedCamera.HumanActivity(now);
+	++_cameraHumanActivityRevision;
+	_camera.CancelAutomaticMotion();
+}
+
+void Scene::SetCameraInteractionEligibility(bool windowEligible, bool heldInteraction)
+{
+	if (_cameraWindowEligible != windowEligible)
+	{
+		_unattendedCamera.HumanActivity(Timer::GetTime());
+		const auto recordings = _cameraRecordings->Snapshot();
+		_unattendedCamera.DiscardRecordingStartsThrough(recordings->LatestStart.StartOrder, recordings->LatestDitchOrder);
+		++_cameraHumanActivityRevision;
+		_camera.CancelAutomaticMotion();
+		_lastCameraUpdateTime.reset();
+	}
+	_cameraWindowEligible = windowEligible;
+	_cameraHeldInteraction = heldInteraction;
+}
+
 void Scene::UpdateCamera()
 {
 	// Keep camera state on the window thread; audio never reads or advances it.
@@ -668,14 +708,157 @@ void Scene::UpdateCamera()
 		? std::clamp(static_cast<float>(Timer::GetElapsedSeconds(*_lastCameraUpdateTime, now)), 0.0f, 0.05f)
 		: 0.0f;
 	_lastCameraUpdateTime = now;
+	const bool diagnosticDue = !_lastCameraDiagnosticTime ||
+		Timer::GetElapsedSeconds(*_lastCameraDiagnosticTime, now) >= 2.0;
+	if (diagnosticDue) _lastCameraDiagnosticTime = now;
 
+	struct TakeFraming
+	{
+		std::weak_ptr<LoopTake> Identity;
+		graphics::CameraBounds Bounds;
+		Position3d Centre;
+	};
+	std::vector<std::weak_ptr<LoopTake>> liveTakes;
+	std::vector<TakeFraming> takeFramings;
+	struct StationFraming
+	{
+		std::weak_ptr<Station> Identity;
+		graphics::CameraBounds Bounds;
+		Position3d Centre;
+	};
+	std::vector<StationFraming> stationFramings;
+	graphics::CameraBounds overviewBounds;
+	graphics::CameraBounds visibleBounds;
+	std::shared_ptr<const CameraRecordingObservation> recordings;
+	size_t visibleContentTakeCount = 0u;
+	size_t allContentTakeCount = 0u;
+	bool controlsAvailable = false;
 	{
 		std::scoped_lock lock(_sceneMutex);
 		for (size_t index = 0u; index < _stations.size(); ++index)
-			_camera.ObserveStation(index, _stations[index], _stations[index]->LoopTakeRevision(), _stations[index]->ModelPosition());
+		{
+			const auto& station = _stations[index];
+			if (station->MembershipRemoving()) continue;
+			_camera.ObserveStation(index, station, station->LoopTakeRevision(), station->PresentationModelPosition());
+			const auto takes = station->GetLoopTakeSnapshot();
+			const bool visible = station->IsVisible();
+			graphics::CameraBounds stationBounds = visible ? station->CameraDeckBoundsInWorld() : graphics::CameraBounds{};
+			const auto stationPosition = station->PresentationModelPosition();
+			const auto stationScale = static_cast<float>(station->ModelScale());
+			for (const auto& take : takes)
+			{
+				if (take->IsCaptureCancelled()) continue;
+				liveTakes.push_back(take);
+				const bool hasCameraContent = diagnosticDue && take->HasCameraContent();
+				if (hasCameraContent) ++allContentTakeCount;
+				if (!visible || !take->IsVisible()) continue;
+				auto bounds = take->CameraBoundsInParent(station->CameraTakeVisualScale())
+					.Transformed(stationPosition, stationScale);
+				const auto centre = stationPosition + take->ModelPosition() * Position3d{ stationScale, stationScale, stationScale };
+				// Empty takes still have a meaningful transformed origin for overview framing.
+				bounds.Include(centre);
+				stationBounds.Include(bounds);
+				if (hasCameraContent) ++visibleContentTakeCount;
+				takeFramings.push_back({ take, bounds, centre });
+			}
+			visibleBounds.Include(stationBounds);
+			if (visible)
+			{
+				overviewBounds.Include(stationBounds);
+				stationFramings.push_back({ station, stationBounds, stationPosition });
+			}
+		}
 		_camera.CompleteStationObservation(_stations.size(), _stations.empty()
 			? std::optional<Position3d>{}
 			: std::optional<Position3d>{ _stations.front()->ModelPosition() });
+		controlsAvailable = !_rigSaveDialogOpen && !_rigSaveInProgress && !_stationManagement.Busy()
+			&& _controlOperation == ControlOperation::None && !_controlWriterExclusion.owns_lock();
+		recordings = _cameraRecordings->Snapshot();
+	}
+
+	// Release scene/membership locks before policy and physics. These are copied
+	// presentation values, and focus identities must still belong to this scene.
+	_camera.SetFrontVisibleBounds(visibleBounds);
+	const bool eligibleExceptHeldInteraction = controlsAvailable && _cameraWindowEligible
+		&& Width() > 0u && Height() > 0u
+		&& _camera.CurrentView() == graphics::Camera::View::Front
+		&& !_camera.IsTransitioning() && !_loopEditor.IsEngaged()
+		&& !_popupManager.IsOpen();
+	const bool eligible = eligibleExceptHeldInteraction && !_cameraHeldInteraction;
+	const auto decision = _unattendedCamera.Update(now, eligible,
+		eligibleExceptHeldInteraction && _cameraHeldInteraction, *recordings, liveTakes);
+	std::optional<Position3d> automaticTarget;
+	if (eligible && decision.IsAutomatic())
+	{
+		if (decision.CurrentState == graphics::UnattendedCameraController::State::StationFocus)
+		{
+			const auto station = std::find_if(stationFramings.begin(), stationFramings.end(),
+				[&decision](const auto& framing) {
+					return !framing.Identity.owner_before(decision.Station)
+						&& !decision.Station.owner_before(framing.Identity);
+				});
+			if (station != stationFramings.end())
+				automaticTarget = graphics::CameraFraming::Close(station->Centre, station->Bounds);
+		}
+		else if (decision.CurrentState == graphics::UnattendedCameraController::State::RecordingFocus)
+		{
+			const auto focus = std::find_if(takeFramings.begin(), takeFramings.end(),
+				[&decision](const auto& take) {
+					return CameraRecordingPublisher::SameTake(take.Identity, decision.Focus.Take);
+				});
+			if (focus != takeFramings.end()) automaticTarget = graphics::CameraFraming::Close(focus->Centre, focus->Bounds);
+		}
+		if (!automaticTarget) automaticTarget = graphics::CameraFraming::Overview(overviewBounds,
+			static_cast<float>(Width()) / static_cast<float>(Height()));
+		if (automaticTarget)
+		{
+			_camera.SetAutomaticTarget(*automaticTarget);
+			_camera.TickAutomaticMotion(deltaSeconds);
+		}
+		else
+			_camera.CancelAutomaticMotion();
+	}
+	else
+		_camera.CancelAutomaticMotion((eligibleExceptHeldInteraction && _cameraHeldInteraction)
+			|| !recordings->ActiveCaptures.empty());
+
+	if (diagnosticDue)
+	{
+		const auto stateName = [](graphics::UnattendedCameraController::State state)
+		{
+			switch (state)
+			{
+			case graphics::UnattendedCameraController::State::Overview: return "overview";
+			case graphics::UnattendedCameraController::State::RecordingFocus: return "recording-focus";
+			case graphics::UnattendedCameraController::State::StationFocus: return "station-focus";
+			default: return "waiting";
+			}
+		};
+		const auto eye = _camera.CurrentPose().Eye;
+		std::clog << "[camera-auto] idle_s=" << _unattendedCamera.IdleSeconds(now)
+			<< " eligible=" << eligible
+			<< " gates{window=" << _cameraWindowEligible << ",held=" << _cameraHeldInteraction
+			<< ",viewport=" << (Width() > 0u && Height() > 0u)
+			<< ",front=" << (_camera.CurrentView() == graphics::Camera::View::Front)
+			<< ",transition=" << _camera.IsTransitioning()
+			<< ",editor=" << _loopEditor.IsEngaged() << ",popup=" << _popupManager.IsOpen() << '}'
+			<< " activity_rev=" << _cameraHumanActivityRevision
+			<< " scene_gen=" << recordings->SceneGeneration
+			<< " latest_start=" << recordings->LatestStart.StartOrder
+			<< " latest_age_s=" << (recordings->LatestStart.StartOrder == 0u ? -1.0
+				: Timer::GetElapsedSeconds(recordings->LatestStartAt, now))
+			<< " captures=" << recordings->ActiveCaptures.size()
+			<< " content_takes=" << allContentTakeCount
+			<< " visible_content_takes=" << visibleContentTakeCount
+			<< " live_takes=" << liveTakes.size()
+			<< " decision=" << stateName(decision.CurrentState)
+			<< " focus_order=" << decision.Focus.StartOrder
+			<< " target=";
+		if (automaticTarget)
+			std::clog << '(' << automaticTarget->X << ',' << automaticTarget->Y << ',' << automaticTarget->Z << ')';
+		else
+			std::clog << "none";
+		std::clog << " eye=(" << eye.X << ',' << eye.Y << ',' << eye.Z << ") delta_s=" << deltaSeconds << std::endl;
 	}
 
 	if (_camera.IsBackgroundDragging() || _camera.IsTransitioning())
@@ -703,9 +886,11 @@ bool Scene::AdvanceUiAnimations()
 	if (mainChanged || selectionChanged) _InvalidateHover2d();
 	bool stationsMoved = false;
 	for (const auto& station : _stations) stationsMoved |= station->AdvancePresentationMove(elapsed);
+	const auto previousViewProjection = _viewProj;
 	_UpdateViewProjectionLocked();
+	const bool cameraMoved = previousViewProjection != _viewProj;
 	_UpdateHudStationAnchors();
-	if (stationsMoved)
+	if (stationsMoved || cameraMoved)
 	{
 		_InvalidateHover2d();
 	}
@@ -717,7 +902,7 @@ bool Scene::AdvanceUiAnimations()
 		_hudPanel->SetPerformanceGroupFeedback(_performanceGroups.Error());
 		if (_mainPanel) _mainPanel->SetOccupiedTopStripBounds(_hudPanel->OccupiedTopStripBounds());
 	}
-	return stationsMoved;
+	return stationsMoved || cameraMoved;
 }
 
 void Scene::_InitResources(ResourceLib& resourceLib, bool forceInit)
@@ -2101,6 +2286,11 @@ void Scene::_PumpTriggerStructuralActions()
 	for (const auto& runtime : accepted->Triggers)
 		if (runtime.Instance)
 			runtime.Instance->ProcessStructuralActionsOnJob(_userConfig, streamParams);
+	// Deferred punch transitions publish only a bounded audio revision. Refresh
+	// current capture truth here so even a complete between-frame punch is retained.
+	for (const auto& station : _stations)
+		for (const auto& take : station->GetLoopTakeSnapshot())
+			take->PublishCameraCaptureObservation();
 }
 
 void Scene::_AdvanceRigPublication()
@@ -2307,7 +2497,10 @@ void Scene::_ConsumeTriggerOutcomes()
 				_SetMidiQuantisationGrain(clock->QuantiseSamps(), "loop activated");
 		}
 		if (ditch > observed.second)
+		{
+			std::scoped_lock lock(_sceneMutex);
 			_ResetIfEmpty();
+		}
 		observed = { activation, ditch };
 	}
 }
@@ -2426,6 +2619,8 @@ void Scene::Reset()
 	_ClearStationQuantisation();
 	_quantisation.ClearOverlay();
 	_isSceneReset.store(true, std::memory_order_relaxed);
+	// Reset callers share the structural scene lock, including trigger outcomes.
+	_cameraRecordings->Reset(Timer::GetTime());
 }
 
 void Scene::InitGui()
@@ -3350,6 +3545,7 @@ std::vector<std::shared_ptr<Station>> Scene::SnapshotStations() const
 
 void Scene::_PrepareStation(const std::shared_ptr<Station>& station)
 {
+	station->SetCameraRecordingPublisher(_cameraRecordings);
 	station->SetReceiver(ActionReceiver::shared_from_this());
 	station->SetLogging(_loggingConfig);
 	station->SetClock(_quantisation.Clock());

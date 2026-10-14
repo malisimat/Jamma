@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "../gui/GuiModel.h"
+#include "CameraBounds.h"
 #include "../midi/MidiNote.h"
 #include "../midi/LoopGridGeometry.h"
 #include "../midi/MidiQuantisation.h"
@@ -72,6 +73,7 @@ namespace graphics
 	public:
 		virtual void Draw3d(base::DrawContext& ctx, unsigned int numInstances, base::DrawPass pass) override;
 
+		CameraBounds CameraLocalBounds() const noexcept;
 		double LoopIndexFrac() const noexcept { return _loopIndexFrac; }
 		void SetLoopIndexFrac(double frac) noexcept;
 		void SetEditorMorph(float morph) noexcept { _editorMorph = std::clamp(morph, 0.0f, 1.0f); }

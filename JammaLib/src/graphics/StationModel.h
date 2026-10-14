@@ -6,6 +6,7 @@
 #include <tuple>
 #include <vector>
 #include "../gui/GuiModel.h"
+#include "CameraBounds.h"
 
 namespace graphics
 {
@@ -30,6 +31,7 @@ namespace graphics
 	{
 	public:
 		StationModel();
+		CameraBounds CameraLocalBounds() const noexcept;
 
 		// Copy
 		StationModel(const StationModel&) = delete;

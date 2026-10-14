@@ -11,6 +11,8 @@
 #include <vector>
 #include <memory>
 #include "Loop.h"
+#include "CameraRecordingObservation.h"
+#include "../graphics/CameraBounds.h"
 #include "../engine/Quantiser.h"
 #include "../midi/MidiLoop.h"
 #include "../midi/MidiOverdub.h"
@@ -225,6 +227,9 @@ namespace engine
 		std::optional<std::uint32_t> MasterPhaseAtAudioBoundary(
 			const Loop* targetLoop, std::uint32_t masterLength) const noexcept;
 		float VisualRadius() const noexcept;
+		// Presentation accessors: non-audio callers hold Scene::_sceneMutex.
+		bool HasCameraContent() const;
+		graphics::CameraBounds CameraBoundsInParent(float parentVisualScale = 1.0f) const;
 		std::optional<engine::QuantisationLoopTakeVisual> QuantisationVisual() const noexcept;
 		static std::vector<engine::QuantisationLoopTakeVisual> QuantisationVisualsFor(
 			const std::vector<std::shared_ptr<LoopTake>>& takes);
@@ -328,6 +333,14 @@ namespace engine
 		enum class PresentationMode : std::uint8_t { Inactive, Record, Overdub, Punch, Tail };
 		struct Presentation { PresentationMode Mode; std::uint64_t Serial; };
 		Presentation GetPresentation() const noexcept;
+		void SetCameraRecordingPublisher(std::weak_ptr<CameraRecordingPublisher> publisher) noexcept
+		{
+			const auto owner = publisher.lock();
+			_cameraRecordingGeneration = owner ? owner->Snapshot()->SceneGeneration : 0u;
+			_cameraRecordingPublisher = std::move(publisher);
+		}
+		void PublishCameraLayerStart();
+		void PublishCameraCaptureObservation() { _PublishCameraCapture(); }
 		void SetPresentation(PresentationMode mode, std::uint64_t serial) noexcept;
 		void EndRecording();
 		// Atomic logical cancellation; destructive Ditch requires stopped/retired readers.
@@ -559,6 +572,17 @@ namespace engine
 		void _PublishRecordingCompletion(std::uint64_t generation) noexcept;
 		void _InvalidateRecordingCompletion() noexcept;
 		void _SetPresentationMode(PresentationMode mode) noexcept;
+		void _PublishCameraCapture(bool newLayer = false);
+		// Structural owners under Scene::_sceneMutex only; never touched by audio.
+		std::weak_ptr<CameraRecordingPublisher> _cameraRecordingPublisher;
+		std::uint64_t _cameraRecordingGeneration = 0u;
+		std::uint64_t _cameraLayerStartOrder = 0u;
+		std::uint64_t _cameraObservedAudioPunchRevision = 0u;
+		// Audio is the sole writer of this bounded odd/even revision. Job/UI
+		// observes it off callback; no ownership, clocks or camera calls cross back.
+		// Lifetime is this take, pinned by the existing callback snapshot/session.
+		static_assert(std::atomic<std::uint64_t>::is_always_lock_free);
+		std::atomic<std::uint64_t> _cameraAudioPunchRevision{ 0u };
 		std::atomic<LoopTakeState> _state;
 		// INACTIVE also describes a newly constructed/restored take. Cancellation
 		// alone suppresses retained callback snapshots and queued lifecycle work.

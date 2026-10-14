@@ -228,6 +228,8 @@ namespace engine
 		void UpdateCapacity();
 		void RefreshVisualModel();
 		std::shared_ptr<LoopModel> Model() const noexcept { return _model; }
+		// Presentation-only, called with the scene/layout read ownership on the window thread.
+		graphics::CameraBounds CameraBoundsInParent(float parentVisualScale = 1.0f) const;
 		bool CanRefreshVisualModel() const noexcept;
 
 		unsigned int LoopChannel() const;

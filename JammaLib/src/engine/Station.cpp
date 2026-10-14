@@ -392,6 +392,19 @@ void Station::SetSize(utils::Size2d size)
 	_ArrangeChildren();
 }
 
+graphics::CameraBounds Station::CameraDeckBoundsInWorld() const
+{
+	if (!_stationModel) return {};
+	const auto deck = _stationModel->CameraLocalBounds().Transformed(
+		{ 0.0f, _StationModelYOffset, 0.01f }, 1.0f);
+	return deck.Transformed(PresentationModelPosition(), static_cast<float>(ModelScale()));
+}
+
+float Station::CameraTakeVisualScale() const noexcept
+{
+	return _masterMixer ? static_cast<float>(_masterMixer->UnmutedLevel()) : 1.0f;
+}
+
 bool Station::AllTakesMuted() const
 {
 	const auto& takes = GetLoopTakes();
@@ -2125,6 +2138,7 @@ ActionResult Station::OnAction(TriggerAction action)
 		res.ResultType = actions::ActionResultType::ACTIONRESULT_ACTIVATE;
 		res.IsEaten = true;
 		_SetTakePresentation(*newLoopTake, LoopTake::PresentationMode::Record);
+		newLoopTake->PublishCameraLayerStart();
 		break;
 	}
 	case TriggerAction::TRIGGER_REC_END:
@@ -2270,6 +2284,7 @@ ActionResult Station::OnAction(TriggerAction action)
 		res.ResultType = actions::ActionResultType::ACTIONRESULT_ACTIVATE;
 		res.IsEaten = true;
 		_SetTakePresentation(*newLoopTake, LoopTake::PresentationMode::Overdub);
+		newLoopTake->PublishCameraLayerStart();
 		break;
 	}
 	case TriggerAction::TRIGGER_OVERDUB_END:
@@ -2408,6 +2423,13 @@ ActionResult Station::OnAction(TriggerAction action)
 		res.ResultType = actions::ActionResultType::ACTIONRESULT_DEFAULT;
 		break;
 	}
+	// Applied structural outcome: publish on the serialized owner, never audio.
+	if (res.IsEaten && res.ResultType == actions::ActionResultType::ACTIONRESULT_DITCH
+		&& !action.IsSourceLossCancellation)
+		if (auto publisher = _cameraRecordingPublisher.lock())
+			publisher->ObserveDitch(std::dynamic_pointer_cast<Station>(Sharable::shared_from_this()), utils::Timer::GetTime());
+	if (res.IsEaten && loopTake)
+		loopTake.value()->PublishCameraCaptureObservation();
 	if (res.IsEaten)
 	{
 		const char* actionLabel = nullptr;
@@ -2604,8 +2626,16 @@ void Station::SetRemoteMidiQuantisationGrid(const RemoteTransportGeometry& geome
 	apply(_backLoopTakes);
 }
 
+void Station::SetCameraRecordingPublisher(const std::shared_ptr<CameraRecordingPublisher>& publisher)
+{
+	_cameraRecordingPublisher = publisher;
+	for (const auto& take : _loopTakes) take->SetCameraRecordingPublisher(publisher);
+	for (const auto& take : _backLoopTakes) take->SetCameraRecordingPublisher(publisher);
+}
+
 void Station::AddTake(std::shared_ptr<LoopTake> take)
 {
+	take->SetCameraRecordingPublisher(_cameraRecordingPublisher);
 	take->SetupBuffers(_lastBufSize);
 	take->SetNumBusChannels(NumBusChannels());
 	take->SetSelectDepth(CurrentSelectDepth());

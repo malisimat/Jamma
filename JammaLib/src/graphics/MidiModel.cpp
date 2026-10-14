@@ -121,6 +121,30 @@ MidiModel::~MidiModel()
 	_ReleaseResources();
 }
 
+CameraBounds MidiModel::CameraLocalBounds() const noexcept
+{
+	// Include both pending display length and applied instance geometry while an update waits for draw.
+	const auto length = (std::max)(_displayLengthSamps.load(std::memory_order_relaxed), _editorModelLength);
+	const auto radius = length == 0u ? 50.0f : static_cast<float>(std::clamp(
+		70.0 * std::log(static_cast<double>(length)) - 600.0, 50.0, 400.0));
+	auto outerRadius = radius * (1.0f + std::fabs(_midiParams.RadialThickness));
+	if (_midiParams.DrawSelectionRing)
+		outerRadius = (std::max)(outerRadius, radius *
+			(std::fabs(_midiParams.DiscRadiusFactor) + std::fabs(_midiParams.DiscRadialThicknessFactor)));
+	// PitchOffset is clamped to +/-0.9; the chamfer profile reaches +/-0.5 in Y.
+	auto halfHeight = radius * (0.9f + std::fabs(_midiParams.NoteHeight) * 0.5f);
+	if (_midiParams.DrawSelectionRing)
+		halfHeight = (std::max)(halfHeight, radius * std::fabs(_midiParams.DiscHeightFactor) * 0.5f);
+	if (_automationSource)
+	{
+		// Reserve every lane's envelope, independently of live automation values.
+		outerRadius = (std::max)(outerRadius, radius * 1.5f *
+			(1.05f + static_cast<float>(midi::MidiLoop::MaxAutomationLanes - 1u) * 0.045f));
+		halfHeight = (std::max)(halfHeight, radius * 0.64f);
+	}
+	return { { -outerRadius, -halfHeight, -outerRadius }, { outerRadius, halfHeight, outerRadius } };
+}
+
 void MidiModel::Draw3d(DrawContext& ctx, unsigned int numInstances, base::DrawPass pass)
 {
 	ApplyPendingModelUpdate();

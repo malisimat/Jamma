@@ -23,6 +23,7 @@
 #include "../audio/ChannelMixer.h"
 #include "../graphics/Image.h"
 #include "../graphics/Camera.h"
+#include "../graphics/UnattendedCameraController.h"
 #include "../graphics/GlDrawContext.h"
 #include "../graphics/Skybox.h"
 #include "../gui/GuiLabel.h"
@@ -126,6 +127,10 @@ namespace engine
 		bool HasSelection() const;
 		void UpdateCamera();
 		bool AdvanceUiAnimations();
+		void OnHumanActivity();
+		void OnCameraTriggerActivity();
+		bool IsCameraTriggerKey(unsigned int key) const;
+		void SetCameraInteractionEligibility(bool windowEligible, bool heldInteraction);
 
 		virtual void SetSize(utils::Size2d size) override
 		{
@@ -566,8 +571,15 @@ namespace engine
 		std::vector<unsigned char> _lastLoggedHoverPath;
 		graphics::CtrlHandleOverlay _ctrlHandleOverlay;
 		engine::QuantiserController _quantisationInteraction;
+		// Window-only controller/eligibility; publisher has separate structural ownership.
+		graphics::UnattendedCameraController _unattendedCamera;
+		bool _cameraWindowEligible = true;
+		bool _cameraHeldInteraction = false;
+		std::shared_ptr<CameraRecordingPublisher> _cameraRecordings = std::make_shared<CameraRecordingPublisher>();
 		graphics::Camera _camera;
 		std::optional<Time> _lastCameraUpdateTime;
+		std::optional<Time> _lastCameraDiagnosticTime;
+		std::uint64_t _cameraHumanActivityRevision = 0u;
 		std::optional<Time> _lastPanelAnimationTime;
 		std::thread _jobRunner;
 		std::mutex _jobMutex;
