@@ -5,6 +5,7 @@
 
 #include <array>
 #include <atomic>
+#include <bitset>
 #include <cstdint>
 #include <mutex>
 #include <vector>
@@ -162,6 +163,8 @@ namespace engine
 			const auto state = _state.load(std::memory_order_acquire);
 			return state != STATE_INACTIVE && state != STATE_PLAYING;
 		}
+		bool IsCaptureCancelled() const noexcept
+			{ return _captureCancelled.load(std::memory_order_acquire); }
 		bool IsTriggerCaptureInactive() const noexcept override
 			{ return _captureCancelled.load(std::memory_order_acquire); }
 		void AcquireTriggerSourceMuteAudio() noexcept override
@@ -200,6 +203,17 @@ namespace engine
 		const std::atomic<std::int32_t>* MidiAnchorCorrectionPtr() const noexcept
 			{ return &_midiAnchorCorrection; }
 		double LoopIndexFrac() const noexcept;
+		// Callback-only: resolve a promoted master from the published audio loops,
+		// falling back to this take's MIDI cursor when it has no audio loop.
+		void CompleteLocalMasterQuantisationOnOwner() noexcept;
+		void CancelLocalMasterQuantisationOnOwner() noexcept;
+		bool PrepareLocalMasterQuantisation(unsigned int grainSamps,
+			std::uint64_t rebasedTransportStartSamps) noexcept;
+		bool TryClaimPreparedMidiQuantisationAtAudioBoundary() noexcept;
+		void ReleasePreparedMidiQuantisationClaimAtAudioBoundary() noexcept;
+		void ActivatePreparedMidiQuantisationAtAudioBoundary() noexcept;
+		std::optional<std::uint32_t> MasterPhaseAtAudioBoundary(
+			const Loop* targetLoop, std::uint32_t masterLength) const noexcept;
 		float VisualRadius() const noexcept;
 		std::optional<engine::QuantisationLoopTakeVisual> QuantisationVisual() const noexcept;
 		static std::vector<engine::QuantisationLoopTakeVisual> QuantisationVisualsFor(
@@ -241,6 +255,12 @@ namespace engine
 		// Plumb-only for now: not yet folded into any playback-position
 		// compensation -- see doc/ninjam-live-loop-latency-sync-planC.md §2/§7
 		// and IVstPlugin::GetLatencySamples.
+		void PollPlaybackPluginChanges() const noexcept;
+		unsigned int RecordedPlaybackLatencySamps() const noexcept;
+		bool CanConfigureRecordedPlaybackCompensation(unsigned int referenceLatencySamps,
+			unsigned int stationLatencySamps) const noexcept;
+		bool ConfigureRecordedPlaybackCompensation(unsigned int referenceLatencySamps,
+			unsigned int stationLatencySamps);
 		int CurrentVstLatencySamps() const noexcept
 		{
 			auto chain = _vstChain.borrow();
@@ -263,7 +283,10 @@ namespace engine
 		void Play(unsigned long index,
 			unsigned long loopLength,
 			unsigned int endRecordSamps,
-			int midiQuantisationErrorSamps = 0);
+			int midiQuantisationErrorSamps = 0, bool deferFirstMasterActivation = false);
+		bool FirstMasterActivationPending() const noexcept
+			{ return _firstMasterActivationPending.load(std::memory_order_acquire); }
+		bool ActivateFirstMasterMidiAtAudioBoundary(unsigned long phaseSamps, std::uint32_t recordOrigin) noexcept;
 		void QueueTimingCorrection(long long deltaSamps,
 			std::uint64_t generation,
 			TimingCorrectionReason reason) noexcept;
@@ -272,7 +295,7 @@ namespace engine
 		// already been interpreted by AudioHost; this engine operation only keeps
 		// its generation gate and shifts each entity by the common signed delta.
 		void ApplyAcceptedTimingCorrection(long long deltaSamps,
-			std::uint64_t generation) noexcept;
+			std::uint64_t generation, bool relocateMidi = false) noexcept;
 		void CaptureSceneAnchors(std::uint64_t sceneCoordinateSamps) noexcept;
 		void InvalidateSceneAnchors() noexcept;
 		void ResetTimingEpoch() noexcept;
@@ -441,6 +464,8 @@ namespace engine
 		double _MidiLoopIndexFrac() const noexcept;
 		void _RemoveMidiModelChildren();
 		void _WireVuSliders();
+		midi::MidiQuantisationSettings _ResolvedMidiQuantisation(
+			midi::MidiQuantisationSettings settings) const noexcept;
 		void _PublishMidiLoopSnapshot();
 		std::shared_ptr<const MidiLoopSnapshot> _MidiLoopSnapshotState() const;
 		base::PublishedAudioSnapshot<const MidiLoopSnapshot>::Lease _BorrowMidiLoopSnapshot() const noexcept;
@@ -470,6 +495,8 @@ namespace engine
 	protected:
 		void _ResizeVstScratch(unsigned int channelCount);
 		bool _ShiftDirectPlaybackCursors(long long deltaSamps) noexcept;
+		void _RequestMidiRelocationChase() noexcept;
+		void _ClearRelocatedRecordedPlaybackDelay(long long deltaSamps) noexcept;
 		void _TryApplyLocalTransportOffset() noexcept;
 		static long long _OffsetDelta(long long targetSamps, long long appliedSamps) noexcept;
 		void _LogMidiQuantisationFractionChange(midi::MidiQuantisationFraction previous,
@@ -535,6 +562,11 @@ namespace engine
 		std::atomic<unsigned int> _endRecordSampCount;
 		std::atomic<unsigned int> _endRecordSamps;
 		// Cross-thread cursor: incremented on the audio thread and read by UI/control code.
+		std::atomic<bool> _localMasterQuantisationPrepared{ false };
+		std::atomic<bool> _firstMasterActivationPending{ false };
+		std::atomic<std::uint64_t> _preparedLocalMasterBaseGridPacked{ 0u };
+		std::atomic<std::uint64_t> _preparedLocalMasterQuantisationPacked{ 0u };
+		std::atomic<std::uint64_t> _preparedLocalMasterTransportStart{ 0u };
 		std::atomic<unsigned long> _midiVisualPlayIndex;
 		std::atomic<unsigned long> _midiVisualLoopLength;
 		// Diagnostic scalars only: audio writer, job readers; lifetime is pinned by
@@ -574,11 +606,15 @@ namespace engine
 		std::vector<unsigned int> _midiLoopChannels;
 		std::vector<std::string> _midiLoopDevices;
 		std::vector<midi::MidiNoteSnapshot> _midiRecordHeld;
+		// Capture owner only, under _midiCaptureMutex; reset with recording state.
+		std::vector<std::bitset<midi::MidiNote::TotalNoteSlots>> _midiRecordSeededHeld;
 		// Job-thread-owned sample origin for an unseeded first MIDI take.
 		std::optional<std::uint32_t> _midiRecordStartSample;
 		midi::MidiOverdubSession _midiOverdubSession;
 		mutable std::mutex _midiCaptureMutex;
 		base::PublishedAudioSnapshot<const MidiLoopSnapshot> _midiLoopSnapshot;
+		std::atomic<std::uint8_t> _promotionTopologyGate{ 0u }; // 1 callback, 2 owner.
+		base::PublishedAudioSnapshot<const MidiLoopSnapshot>::Lease _promotionMidiLoopLease; // Callback only.
 		std::atomic<std::uint64_t> _midiQuantisationPacked;
 		std::atomic<std::uint8_t> _globalMidiQuantStatePacked{
 			static_cast<std::uint8_t>(io::JamFile::GlobalMidiQuantState::Off)

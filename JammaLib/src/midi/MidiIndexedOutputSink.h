@@ -16,6 +16,7 @@ namespace midi
 			float velocityScale = 1.0f) noexcept;
 
 		void OnEvent(const MidiEvent& ev) noexcept override;
+		bool TryOnEvent(const MidiEvent& ev) noexcept override;
 
 	private:
 		IMidiOutputSink& _outputSink;

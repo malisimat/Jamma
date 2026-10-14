@@ -225,14 +225,14 @@ public:
 		return placement;
 	}
 
-	void AddMidiEvent(const midi::MidiEvent& midiEvent, bool isRealtime) noexcept
+	bool AddMidiEvent(const midi::MidiEvent& midiEvent, bool isRealtime) noexcept
 	{
-		if (_count >= MaxEvents || 0u == _blockNumSamples)
-			return;
-
 		const auto placement = ComputeBlockPlacement(midiEvent, _blockStartSample, _blockNumSamples, isRealtime);
-		if (!placement.Accepted)
-			return;
+		if (!placement.Accepted) return false;
+		// Reserve release slots without displacing an accepted attack.
+		constexpr int32 ReservedReleases = 64;
+		if (_count >= MaxEvents || (!midiEvent.IsNoteOff() && _count >= MaxEvents - ReservedReleases))
+			return false;
 
 		Event event{};
 		event.busIndex = 0;
@@ -301,12 +301,14 @@ public:
 		}
 		else
 		{
-			return;
+			return false;
 		}
 
 		_events[static_cast<size_t>(_count++)] = event;
+		return true;
 	}
 
+	void ClearEvents() noexcept { _count = 0; }
 	int32 PLUGIN_API getEventCount() override { return _count; }
 
 	tresult PLUGIN_API getEvent(int32 index, Event& e) override
@@ -1470,6 +1472,9 @@ bool Vst3Plugin::Load(const std::wstring& path,
 			std::cout << "[Vst3Plugin] ConnectionPoint not available on component/controller" << std::endl;
 	}
 
+	_latencySamples.store(static_cast<int>(std::min<std::uint32_t>(
+		_impl->processor->getLatencySamples(), static_cast<std::uint32_t>(std::numeric_limits<int>::max()))),
+		std::memory_order_release);
 	_isLoaded = true;
 	std::cout << "[Vst3Plugin] Loaded: " << _name << std::endl;
 	return true;
@@ -1485,6 +1490,7 @@ void Vst3Plugin::Unload()
 {
 #ifdef JAMMA_VST3_ENABLED
 	CloseEditor();
+	std::lock_guard<std::mutex> pollLock(_controllerPollMutex);
 
 	if (_impl)
 	{
@@ -1512,6 +1518,7 @@ void Vst3Plugin::Unload()
 #endif
 
 	_isLoaded = false;
+	_latencySamples.store(0, std::memory_order_release);
 	_name.clear();
 	_editorSize = { 0, 0 };
 }
@@ -1686,12 +1693,19 @@ void Vst3Plugin::ProcessBlockStereo(float* leftBuf, float* rightBuf, int32_t num
 void Vst3Plugin::ProcessBlockMulti(float* const* channelBufs, int32_t numChannels, int32_t numSamples) noexcept
 {
 #ifdef JAMMA_VST3_ENABLED
+	_lastMidiBlockProcessed = false;
 	if (!_impl || !channelBufs)
 		return;
 
+	if (_editorOpening.load(std::memory_order_acquire))
+	{
+		// Discard this suppressed block, including mapped controller points.
+		if (_impl->inputEvents) _impl->inputEvents->ClearEvents();
+		if (_impl->inputParameterChanges) _impl->inputParameterChanges->BeginBlock();
+		return;
+	}
 	if (!_isLoaded || !_isActivated.load(std::memory_order_acquire)
-		|| _isBypassed.load(std::memory_order_relaxed)
-		|| _editorOpening.load(std::memory_order_acquire))
+		|| _isBypassed.load(std::memory_order_relaxed))
 		return;
 
 	if (_impl->inputChannelPtrs.empty() || _impl->outputChannelPtrs.empty())
@@ -1710,7 +1724,8 @@ void Vst3Plugin::ProcessBlockMulti(float* const* channelBufs, int32_t numChannel
 	CopyMultiToInputBuffers(channelBufs, numChannels, numSamples, _impl->inputChannelPtrs.data(), _impl->inputChannels);
 	_impl->processData.numSamples = numSamples;
 	_impl->PrepareProcessBlock();
-	_impl->processor->process(_impl->processData);
+	const auto result = _impl->processor->process(_impl->processData);
+	_lastMidiBlockProcessed = result == kResultOk;
 	_impl->inputParameterChanges->BeginBlock();
 	CopyOutputToMulti(_impl->outputChannelPtrs.data(), _impl->outputChannels, numSamples, channelBufs, numChannels);
 #else
@@ -1848,6 +1863,8 @@ void Vst3Plugin::OnRestartComponent(std::int32_t flags) noexcept
 		_impl->paramTitlesRebuildRequested.store(true, std::memory_order_release);
 	if (flags & kParamValuesChanged)
 		_impl->paramValuesRefreshRequested.store(true, std::memory_order_release);
+	if (flags & kLatencyChanged)
+		_latencyRefreshRequested.store(true, std::memory_order_release);
 #else
 	(void)flags;
 #endif
@@ -1873,9 +1890,14 @@ void Vst3Plugin::BeginMidiBlock(std::uint32_t blockStartSample,
 void Vst3Plugin::SendMidiEvent(const midi::MidiEvent& event,
 	bool isRealtime) noexcept
 {
+	(void)TrySendMidiEvent(event, isRealtime);
+}
+
+bool Vst3Plugin::TrySendMidiEvent(const midi::MidiEvent& event,
+	bool isRealtime) noexcept
+{
 #ifdef JAMMA_VST3_ENABLED
-	if (!_impl)
-		return;
+	if (!_impl) return false;
 
 	// Try mapped delivery (CC / channel pressure / pitch bend with an
 	// IMidiMapping assignment) as an automation parameter point first. Reuses
@@ -1900,7 +1922,7 @@ void Vst3Plugin::SendMidiEvent(const midi::MidiEvent& event,
 				if (queue)
 				{
 					int32 pointIndex = -1;
-					queue->addPoint(placement.SampleOffset, static_cast<ParamValue>(controllerValue.NormalizedValue), pointIndex);
+					return queue->addPoint(placement.SampleOffset, static_cast<ParamValue>(controllerValue.NormalizedValue), pointIndex) == kResultOk;
 				}
 				// If the fixed parameter queue is full, addParameterData()
 				// returns null and the point is silently dropped — consistent
@@ -1908,22 +1930,23 @@ void Vst3Plugin::SendMidiEvent(const midi::MidiEvent& event,
 				// file. Either way, a mapping exists, so never also emit a
 				// duplicate legacy CC/pressure/bend event below.
 			}
-			return;
+			return false;
 		}
 	}
 
 	// No mapping (or not a CC/pressure/bend message): preserve the existing
 	// legacy MIDI event representation.
-	if (_impl->inputEvents)
-		_impl->inputEvents->AddMidiEvent(event, isRealtime);
+	return _impl->inputEvents && _impl->inputEvents->AddMidiEvent(event, isRealtime);
 #else
 	(void)event; (void)isRealtime;
+	return false;
 #endif
 }
 
 bool Vst3Plugin::OpenEditor(HWND parentHwnd)
 {
 #ifdef JAMMA_VST3_ENABLED
+	std::lock_guard<std::mutex> pollLock(_controllerPollMutex);
 	// Pause real-time audio processing while opening the editor. Some VST3
 	// plug-ins (e.g. Valhalla VSTGUI-based plug-ins) deadlock inside
 	// IPlugView::attached() if process() runs concurrently because their
@@ -2012,6 +2035,12 @@ bool Vst3Plugin::OpenEditor(HWND parentHwnd)
 void Vst3Plugin::CloseEditor()
 {
 #ifdef JAMMA_VST3_ENABLED
+	_editorOpening.store(true, std::memory_order_release);
+	struct ResetOnExit {
+		std::atomic<bool>& flag;
+		~ResetOnExit() { flag.store(false, std::memory_order_release); }
+	} resetOnExit{ _editorOpening };
+	std::lock_guard<std::mutex> pollLock(_controllerPollMutex);
 	if (_impl && _impl->plugView)
 	{
 		// removed() may switch the current GL context; restore ours after.
@@ -2041,8 +2070,16 @@ void Vst3Plugin::IdleEditor() noexcept
 void Vst3Plugin::PollPendingControllerChanges() const noexcept
 {
 #ifdef JAMMA_VST3_ENABLED
+	// Editor SDK calls may pump UI messages and reenter the idle timer.
+	if (_editorOpening.load(std::memory_order_acquire)) return;
+	std::lock_guard<std::mutex> pollLock(_controllerPollMutex);
 	if (!_impl)
 		return;
+
+	if (_latencyRefreshRequested.exchange(false, std::memory_order_acq_rel) && _impl->processor)
+		_latencySamples.store(static_cast<int>(std::min<std::uint32_t>(
+			_impl->processor->getLatencySamples(), static_cast<std::uint32_t>(std::numeric_limits<int>::max()))),
+			std::memory_order_release);
 
 	if (_impl->midiMapRebuildRequested.exchange(false, std::memory_order_acq_rel))
 	{

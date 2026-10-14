@@ -92,6 +92,18 @@ namespace vst
 		virtual void SendMidiEvent(const midi::MidiEvent& event,
 			bool isRealtime) noexcept = 0;
 
+		// False means the fixed input queue rejected this event.
+		virtual bool TrySendMidiEvent(const midi::MidiEvent& event, bool isRealtime) noexcept
+		{
+			SendMidiEvent(event, isRealtime);
+			return true;
+		}
+		// Queried by the route owner after ProcessBlockMulti.
+		virtual bool MidiBlockWasProcessed() const noexcept { return true; }
+
+		// Non-RT host pump, also used when the editor is closed.
+		virtual void PollPendingChanges() const noexcept {}
+
 		// Open the plugin's GUI editor as a child of parentHwnd.
 		// Must be called from the main/UI thread only.
 		virtual bool OpenEditor(HWND parentHwnd) = 0;
@@ -114,14 +126,11 @@ namespace vst
 		virtual void SetBypassed(bool bypass) noexcept = 0;
 		virtual bool IsBypassed() const noexcept = 0;
 
-		// Reports the plugin's inherent processing latency (plugin delay
-		// compensation / PDC), in samples, as advertised by the plugin itself
-		// (VST2: AEffect::initialDelay; VST3: 0 for now -- not yet wired to a
-		// VST3 latency query). Real-time safe: a plain field read, no
-		// dispatch. Plumb-only for now -- not yet folded into LoopPlayPos,
-		// Loop::_playIndex, the MIDI cursor, or NINJAM export lane timing;
-		// see doc/ninjam-live-loop-latency-sync-planC.md §2 VST latency
-		// plumbing and the // TODO(latency): markers at those seams.
+		// Advertised inherent processing latency in samples. VST2 reads
+		// AEffect::initialDelay; VST3 reads a cached processor latency refreshed
+		// off the callback after notifications. Real-time safe, with no dispatch.
+		// Recorded rendering compensates path differences outside source cursors;
+		// direct monitoring and NINJAM export retain their own timing domains.
 		virtual int GetLatencySamples() const noexcept { return 0; }
 
 		// Capture the full plugin state as an opaque byte blob.

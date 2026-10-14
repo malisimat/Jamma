@@ -7,6 +7,7 @@
 
 #include "VstChain.h"
 #include <algorithm>
+#include <limits>
 
 using namespace vst;
 
@@ -48,15 +49,26 @@ bool VstChain::IsActive() const noexcept
 
 int VstChain::GetLatencySamples() const noexcept
 {
-	auto total = 0;
+	return GetLatencySamplesFrom(0u);
+}
 
-	for (const auto& p : _plugins)
+int VstChain::GetLatencySamplesFrom(std::size_t firstPlugin) const noexcept
+{
+	int total = 0;
+	for (auto index = firstPlugin; index < _plugins.size(); ++index)
 	{
-		if (p)
-			total += p->GetLatencySamples();
+		const auto& plugin = _plugins[index];
+		if (!plugin || !plugin->IsLoaded() || plugin->IsBypassed()) continue;
+		const auto latency = std::max(0, plugin->GetLatencySamples());
+		total += std::min(latency, (std::numeric_limits<int>::max)() - total);
 	}
-
 	return total;
+}
+
+void VstChain::PollPendingChanges() const noexcept
+{
+	for (const auto& plugin : _plugins)
+		if (plugin) plugin->PollPendingChanges();
 }
 
 void VstChain::ProcessBlock(float* monoBuf, int numSamps) noexcept

@@ -62,9 +62,13 @@ namespace vst
 		bool IsActive() const noexcept;
 
 		// Sum of GetLatencySamples() across all plugins in the chain (series
-		// processing accumulates latency additively). Real-time safe. Plumb-only
-		// for now -- see IVstPlugin::GetLatencySamples.
+		// processing accumulates latency additively). Bypassed/unloaded plugins
+		// contribute no delay. Negative reports are ignored; sums saturate.
 		int GetLatencySamples() const noexcept;
+		// MIDI injected at a plugin incurs only its remaining serial path.
+		int GetLatencySamplesFrom(std::size_t firstPlugin) const noexcept;
+		// Job/UI pump, including plugins whose editors are closed. Never callback.
+		void PollPendingChanges() const noexcept;
 
 		// Apply all active plugins in series to numSamps of mono audio.
 		// monoBuf is modified in-place.

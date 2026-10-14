@@ -288,6 +288,9 @@
     <ClInclude Include="src\audio\AudioBuffer.h">
       <Filter>src\audio</Filter>
     </ClInclude>
+    <ClInclude Include="src\audio\PlaybackDelay.h">
+      <Filter>src\audio</Filter>
+    </ClInclude>
     <ClInclude Include="src\audio\ChannelMixer.h">
       <Filter>src\audio</Filter>
     </ClInclude>

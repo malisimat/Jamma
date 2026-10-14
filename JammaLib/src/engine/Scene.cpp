@@ -1,6 +1,7 @@
 // Scene wires job/UI concerns and off-callback presentation; it does not reconstruct
 // NINJAM timing authority or mutate Timer/loop timing at the audio boundary.
 #include "Scene.h"
+#include "../audio/PlaybackDelay.h"
 #include <algorithm>
 #include <cassert>
 #include <iostream>
@@ -84,6 +85,12 @@ Scene::Scene(SceneParams params,
 		params.Size)
 {
 	_quantisation.SetClock(std::make_shared<Timer>());
+	_quantisation.SetLocalMasterTimingPublisher([this](const QuantisationTiming& timing,
+		Timer::QuantisationType type, const LoopTake* take, const Loop* loop)
+	{
+		return _audioEngine->PublishLocalMasterTiming(timing.SeedSamps,
+			timing.MasterLoopSamps, type, take, loop);
+	});
 	_quantisation.SetSeedUsesPowers(_userConfig.Loop.SeedUsesPowers);
 
 	GuiLabelParams labelParams;
@@ -1423,6 +1430,7 @@ void Scene::OnJobTick(Time curTime)
 	_PumpMidi();
 	_PumpSerial();
 	_ConsumeTriggerOutcomes();
+	_UpdateRecordedPlaybackCompensation();
 
 	const auto pumpStartedAt = verboseTiming ? Timer::GetTime() : Time{};
 	auto pumpResult = _networkService->GetController()->Pump();
@@ -1432,7 +1440,72 @@ void Scene::OnJobTick(Time curTime)
 	{
 		// Keep the station clock synced when local content seeds it without NINJAM.
 		std::scoped_lock lock(_sceneMutex);
-		if (auto clock = _quantisation.Clock(); clock && clock->QuantiseSamps() != _quantisation.EffectiveSamps())
+		if (_quantisation.LocalMasterTimingPending())
+		{
+			const auto* target = _quantisation.PendingLocalMasterTake();
+			bool present = false;
+			for (const auto& station : _stations)
+				if (station && !station->IsRemote())
+					for (const auto& take : station->GetLoopTakes())
+						if (take.get() == target) present = true;
+			if (!present && _audioEngine->LastActivatedLocalMasterTimingVersion() <
+				_quantisation.PendingLocalMasterTimingVersion())
+			{
+				const auto version = _quantisation.PendingLocalMasterTimingVersion();
+				_audioEngine->CancelLocalMasterTiming(version);
+				for (const auto& station : _stations)
+					if (station && !station->IsRemote())
+						for (const auto& take : station->GetLoopTakes())
+							if (take) take->CancelLocalMasterQuantisationOnOwner();
+				_quantisation.CancelLocalMasterTiming(version);
+			}
+		}
+		if (const auto receipt = _audioEngine->LastPreparedLocalMasterTiming();
+			receipt && _quantisation.LocalMasterTimingPending() &&
+			receipt->Version == _quantisation.PendingLocalMasterTimingVersion() &&
+			(receipt->Version > _lastLocalMasterTimingVersion ||
+			(_audioEngine->LocalMasterPreparationRetryVersion() == receipt->Version &&
+				_audioEngine->LastActivatedLocalMasterTimingVersion() < receipt->Version)))
+		{
+			const auto length = static_cast<std::uint64_t>(receipt->NewMasterLengthSamps);
+			if (_preparingLocalMasterTimingVersion != receipt->Version)
+			{
+				_preparingLocalMasterTimingVersion = receipt->Version;
+				_preparingLocalMasterTimingDelta =
+					(static_cast<std::uint64_t>(receipt->NewPhaseSamps) + length
+						- receipt->OldAbsoluteSamplePos % length) % length;
+			}
+			bool prepared = true;
+			for (const auto& station : _stations)
+			{
+				if (!station || station->IsRemote()) continue;
+				for (const auto& take : station->GetLoopTakes())
+					if (take)
+						prepared &= take->PrepareLocalMasterQuantisation(
+							_quantisation.EffectiveSamps(),
+							(take->MidiQuantisationTransportStartSamps() % length +
+								_preparingLocalMasterTimingDelta) % length);
+			}
+			if (prepared)
+			{
+				_lastLocalMasterTimingVersion = receipt->Version;
+				_audioEngine->CommitLocalMasterTiming(receipt->Version);
+			}
+		}
+		if (_quantisation.LocalMasterTimingPending() &&
+			_audioEngine->LastActivatedLocalMasterTimingVersion() >=
+				_quantisation.PendingLocalMasterTimingVersion() &&
+			_quantisation.PendingLocalMasterTimingVersion() != 0u)
+		{
+			for (const auto& station : _stations)
+				if (station && !station->IsRemote())
+					for (const auto& take : station->GetLoopTakes())
+						if (take)
+							take->CompleteLocalMasterQuantisationOnOwner();
+			_quantisation.CompleteLocalMasterTiming();
+		}
+		if (auto clock = _quantisation.Clock(); clock && !_quantisation.LocalMasterTimingPending() &&
+			clock->QuantiseSamps() != _quantisation.EffectiveSamps())
 			_SetMidiQuantisationGrain(clock->QuantiseSamps(), "clock geometry changed");
 		const auto localTiming = _quantisation.CurrentTempoTiming(_CurrentSampleRate());
 		bool hasLocalContent = false;
@@ -1547,6 +1620,34 @@ void Scene::OnJobTick(Time curTime)
 	// Destroy PreInit'd VST plugins on the UI thread that initialized them.
 	if (job.PreInitPlugin)
 		vst::QueueForUiThreadDestroy(std::move(job.PreInitPlugin));
+}
+
+void Scene::_UpdateRecordedPlaybackCompensation()
+{
+	std::scoped_lock lock(_sceneMutex);
+	unsigned int reference = 0u;
+	for (const auto& station : _stations)
+	{
+		if (!station) continue;
+		station->PollPlaybackPluginChanges();
+		reference = std::max(reference, station->RecordedPlaybackLatencySamps());
+	}
+	if (reference > audio::PlaybackDelay::MaxDelaySamps)
+	{
+		if (_lastRejectedRecordedLatency != reference)
+			std::cerr << "Recorded playback latency exceeds the supported compensation budget: "
+				<< reference << " samples" << std::endl;
+		_lastRejectedRecordedLatency = reference;
+		return;
+	}
+	// Preflight the whole graph before publishing a newer reference. A running
+	// audio transition may defer it; MIDI must keep the current reference too.
+	for (const auto& station : _stations)
+		if (station && !station->CanConfigureRecordedPlaybackCompensation(reference)) return;
+	bool published = true;
+	for (const auto& station : _stations)
+		if (station) published &= station->ConfigureRecordedPlaybackCompensation(reference);
+	if (published) _lastRejectedRecordedLatency.reset();
 }
 
 void Scene::_RefreshMidiIfNeeded()

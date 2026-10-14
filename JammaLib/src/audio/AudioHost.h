@@ -31,6 +31,7 @@ namespace engine
 namespace audio
 {
 	class NinjamAudioBoundaryTestAccess;
+	class LocalMasterPromotionSafetyTestAccess;
 	class RigAudioBoundaryTestAccess;
 	class AudioHostRealtimeTestAccess;
 
@@ -129,6 +130,25 @@ namespace audio
 		void PublishDesiredTiming(const ninjam::NinjamDesiredTransportState& desired);
 		std::optional<ninjam::NinjamDesiredTimingReceipt> LastAppliedDesiredTiming() const noexcept;
 		void PublishLocalTransportOffsetLoopFrac(double normalizedLoopFrac) noexcept;
+		struct LocalMasterTimingReceipt
+		{
+			std::uint64_t Version = 0u;
+			std::uint64_t OldAbsoluteSamplePos = 0u;
+			std::uint32_t NewPhaseSamps = 0u;
+			std::uint32_t NewMasterLengthSamps = 0u;
+		};
+		void CancelLocalMasterTiming(std::uint64_t version) noexcept
+			{ _localMasterCancelledVersion.store(version, std::memory_order_seq_cst); }
+		void CommitLocalMasterTiming(std::uint64_t version) noexcept
+			{ _localMasterCommitVersion.store(version, std::memory_order_seq_cst); }
+		std::uint64_t PublishLocalMasterTiming(unsigned int seedSamps,
+			std::uint32_t masterLengthSamps, utils::Timer::QuantisationType type,
+			const engine::LoopTake* targetTake, const engine::Loop* targetLoop) noexcept;
+		std::optional<LocalMasterTimingReceipt> LastPreparedLocalMasterTiming() const noexcept;
+		std::uint64_t LocalMasterPreparationRetryVersion() const noexcept
+			{ return _localMasterPreparationRetryVersion.load(std::memory_order_seq_cst); }
+		std::uint64_t LastActivatedLocalMasterTimingVersion() const noexcept
+			{ return _localMasterActivatedVersion.load(std::memory_order_seq_cst); }
 		// Internally advanced streams keep this same Timer instance until reinitialization.
 		// Shares the master transport clock so the audio callback can apply unified
 		// timing commands to it at the same boundary as the local takes.
@@ -146,6 +166,7 @@ namespace audio
 		friend class NinjamAudioBoundaryTestAccess;
 		bool _Init(std::shared_ptr<ninjam::NinjamController> controller, TickCallback tickCallback,
 			std::shared_ptr<utils::Timer> clock, bool generatedRig, const AsioInventory* inventory);
+		friend class LocalMasterPromotionSafetyTestAccess;
 		bool TryEnterCallback() noexcept;
 		void LeaveCallback() noexcept;
 		class CallbackLease
@@ -174,6 +195,33 @@ namespace audio
 			std::uint64_t _consumedSequence = 0u;
 		};
 
+		struct LocalMasterTimingRequest
+		{
+			std::uint64_t Version = 0u;
+			unsigned int SeedSamps = 0u;
+			std::uint32_t MasterLengthSamps = 0u;
+			utils::Timer::QuantisationType Type = utils::Timer::QUANTISE_OFF;
+			const engine::LoopTake* TargetTake = nullptr;
+			const engine::Loop* TargetLoop = nullptr;
+		};
+		class LocalMasterTimingMailbox
+		{
+		public:
+			std::uint64_t Publish(const LocalMasterTimingRequest& request) noexcept;
+			std::optional<LocalMasterTimingRequest> ConsumeLatest() noexcept;
+			void Acknowledge(std::uint64_t version) noexcept { _consumedSequence = version; }
+		private:
+			std::atomic<std::uint64_t> _sequence{ 0u };
+			std::atomic<unsigned int> _seedSamps{ 0u };
+			std::atomic<std::uint32_t> _masterLengthSamps{ 0u };
+			std::atomic<utils::Timer::QuantisationType> _type{ utils::Timer::QUANTISE_OFF };
+			std::atomic<const engine::LoopTake*> _targetTake{ nullptr };
+			std::atomic<const engine::Loop*> _targetLoop{ nullptr };
+			std::uint64_t _consumedSequence = 0u; // callback owner
+		};
+		void ApplyLocalMasterTimingAtAudioBoundary(
+			const std::vector<std::shared_ptr<engine::Station>>& stations,
+			utils::Timer* timingClock) noexcept;
 		bool ApplyDesiredTimingAtAudioBoundary(std::uint64_t blockStartSample,
 			unsigned int sampleRate) noexcept;
 		bool ApplyDesiredTimingAtAudioBoundary(std::uint64_t blockStartSample,
@@ -238,6 +286,19 @@ namespace audio
 		std::atomic<unsigned long> _lastAppliedRemoteLengthSamps{ 0ul };
 		std::atomic<std::int64_t> _lastAppliedSourceCoordinateSamps{ 0 };
 		LocalTransportOffsetLoopFracMailbox _localTransportOffsetLoopFracMailbox;
+		LocalMasterTimingMailbox _localMasterTimingMailbox;
+		LocalMasterTimingRequest _preparedLocalMasterTiming{}; // Callback owner.
+		std::uint64_t _preparedLocalMasterSceneSample = 0u;
+		std::uint32_t _preparedLocalMasterPhase = 0u;
+		std::atomic<std::uint64_t> _localMasterCommitVersion{ 0u };
+		std::atomic<std::uint64_t> _localMasterCancelledVersion{ 0u };
+		std::atomic<std::uint64_t> _localMasterActivatedVersion{ 0u };
+		std::atomic<std::uint64_t> _localMasterPreparationRetryVersion{ 0u };
+		std::atomic<std::uint64_t> _localMasterReceiptSequence{ 0u };
+		std::atomic<std::uint64_t> _localMasterReceiptVersion{ 0u };
+		std::atomic<std::uint64_t> _localMasterReceiptOldAbsolute{ 0u };
+		std::atomic<std::uint32_t> _localMasterReceiptNewPhase{ 0u };
+		std::atomic<std::uint32_t> _localMasterReceiptNewLength{ 0u };
 		base::PublishedAudioSnapshot<utils::Timer> _timingClock;
 		// Last successful callback lease is the bounded-publication fallback.
 		base::PublishedAudioSnapshot<utils::Timer>::Lease _lastAudioTimingClock;

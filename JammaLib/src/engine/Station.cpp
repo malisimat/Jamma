@@ -3,6 +3,7 @@
 #include <cmath>
 #include <limits>
 #include <memory>
+#include <thread>
 #include "../midi/MidiBlockTiming.h"
 #include "../midi/MidiRouter.h"
 #include "../utils/MathUtils.h"
@@ -606,10 +607,133 @@ void Station::WriteBlock(const std::shared_ptr<base::MultiAudioSink> dest,
 	_masterMixer->Offset(sampsToRead);
 }
 
+int Station::CurrentVstLatencySamps() const noexcept
+{
+	const auto chain = _vstChain.load(std::memory_order_acquire);
+	return chain ? chain->GetLatencySamples() : 0;
+}
+
+void Station::PollPlaybackPluginChanges() const noexcept
+{
+	const auto state = _AudioStateSnapshot();
+	if (!state) return;
+	if (state->MidiChain) state->MidiChain->PollPendingChanges();
+	for (const auto& take : state->OwnedLoopTakes)
+		if (take) take->PollPlaybackPluginChanges();
+}
+
+unsigned int Station::RecordedPlaybackLatencySamps() const noexcept
+{
+	const auto stationLatency = static_cast<unsigned int>(std::max(0, CurrentVstLatencySamps()));
+	const auto state = _AudioStateSnapshot();
+	if (!state) return stationLatency;
+	auto longest = static_cast<std::uint64_t>(stationLatency);
+	for (const auto& take : state->OwnedLoopTakes)
+		if (take) longest = std::max(longest,
+			static_cast<std::uint64_t>(stationLatency) + take->RecordedPlaybackLatencySamps());
+	return static_cast<unsigned int>(std::min(longest,
+		static_cast<std::uint64_t>((std::numeric_limits<unsigned int>::max)())));
+}
+
+bool Station::CanConfigureRecordedPlaybackCompensation(unsigned int referenceLatencySamps) const noexcept
+{
+	constexpr unsigned int MaxCompensationSamps = 262144u;
+	const auto stationLatency = static_cast<unsigned int>(std::max(0, CurrentVstLatencySamps()));
+	const auto state = _AudioStateSnapshot();
+	if (!state) return true;
+	for (const auto& take : state->OwnedLoopTakes)
+		if (take && !take->CanConfigureRecordedPlaybackCompensation(
+			referenceLatencySamps, stationLatency)) return false;
+	if (!state->MidiChain) return true;
+	for (auto index = std::size_t{ 0u }; index < state->MidiDestinations.size(); ++index)
+	{
+		const auto remaining = static_cast<unsigned int>(std::max(0, state->MidiChain->GetLatencySamplesFrom(index)));
+		if (remaining > referenceLatencySamps
+			|| referenceLatencySamps - remaining > MaxCompensationSamps) return false;
+	}
+	return true;
+}
+
+bool Station::ConfigureRecordedPlaybackCompensation(unsigned int referenceLatencySamps)
+{
+	if (!CanConfigureRecordedPlaybackCompensation(referenceLatencySamps)) return false;
+	const auto stationLatency = static_cast<unsigned int>(std::max(0, CurrentVstLatencySamps()));
+	const auto state = _AudioStateSnapshot();
+	if (!state) return true;
+	for (const auto& take : state->OwnedLoopTakes)
+		if (take && !take->ConfigureRecordedPlaybackCompensation(
+			referenceLatencySamps, stationLatency)) return false;
+	return ConfigureRecordedMidiCompensation(referenceLatencySamps);
+}
+
+bool Station::ConfigureRecordedMidiCompensation(unsigned int referenceLatencySamps) noexcept
+{
+	constexpr unsigned int MaxCompensationSamps = 262144u;
+	const auto state = _AudioStateSnapshot();
+	if (!state || !state->MidiChain) return true;
+	for (auto index = std::size_t{ 0u }; index < state->MidiDestinations.size(); ++index)
+	{
+		const auto remaining = std::max(0, state->MidiChain->GetLatencySamplesFrom(index));
+		if (static_cast<unsigned int>(remaining) > referenceLatencySamps
+			|| referenceLatencySamps - static_cast<unsigned int>(remaining) > MaxCompensationSamps)
+			return false;
+	}
+	for (auto index = std::size_t{ 0u }; index < state->MidiDestinations.size(); ++index)
+	{
+		const auto remaining = std::max(0, state->MidiChain->GetLatencySamplesFrom(index));
+		const auto delay = referenceLatencySamps - static_cast<unsigned int>(remaining);
+		auto& destination = *state->MidiDestinations[index];
+		if (destination.CompensationDelaySamps.load(std::memory_order_relaxed) != delay)
+		{
+			destination.CompensationDelaySamps.store(delay, std::memory_order_release);
+			destination.CompensationEpoch.fetch_add(1u, std::memory_order_release);
+		}
+	}
+	return true;
+}
+
 void Station::_PrepareMidiDestinations(AudioState& state)
 {
 	state.MidiChain = _vstChain.load(std::memory_order_acquire);
-	if (!state.MidiChain) return;
+	const auto previous = _AudioStateSnapshot();
+	auto queueRemovedBindings = [&]() {
+		if (!previous) return;
+		for (const auto& routes : previous->MidiPlaybackRoutes)
+			for (const auto& binding : routes)
+			{
+				if (!binding || binding->ReleaseQueued
+					|| binding->ReleaseConsumed.load(std::memory_order_acquire)) continue;
+				bool stillRouted = false;
+				for (const auto& currentRoutes : state.MidiPlaybackRoutes)
+					for (const auto& current : currentRoutes) stillRouted |= current == binding;
+				if (stillRouted
+					|| std::find(_pendingLostPlaybackMidi.begin(), _pendingLostPlaybackMidi.end(), binding)
+						!= _pendingLostPlaybackMidi.end()) continue;
+				binding->EmitSourceLossRelease = true;
+				_pendingLostPlaybackMidi.push_back(binding);
+			}
+		_FlushPendingLostPlaybackMidi();
+	};
+	auto retainRetired = [&]() {
+		auto retain = [&](const std::shared_ptr<MidiDestination>& candidate) {
+			if (!candidate
+				|| std::find(state.MidiDestinations.begin(), state.MidiDestinations.end(), candidate) != state.MidiDestinations.end()
+				|| std::find(state.RetiredMidiDestinations.begin(), state.RetiredMidiDestinations.end(), candidate) != state.RetiredMidiDestinations.end()) return;
+			state.RetiredMidiDestinations.push_back(candidate);
+		};
+		if (previous)
+			for (const auto& destination : previous->MidiDestinations) retain(destination);
+		for (const auto& binding : _midiPlaybackBindings)
+			if (binding->QueuedEvents.load(std::memory_order_acquire) > 0u) retain(binding->Destination);
+	};
+	if (!state.MidiChain)
+	{
+		retainRetired();
+		queueRemovedBindings();
+		for (const auto& binding : _midiPlaybackBindings)
+			binding->RoutingActive.store(false, std::memory_order_release);
+		return;
+	}
 	std::erase_if(_midiDestinations, [](const auto& entry) { return entry.expired(); });
 	std::vector<std::shared_ptr<MidiDestination>> destinations;
 	for (std::size_t index = 0u; index < state.MidiChain->NumPlugins(); ++index)
@@ -662,6 +786,388 @@ void Station::_PrepareMidiDestinations(AudioState& state)
 			}
 			state.MidiPlaybackRoutes.push_back(std::move(bindings));
 		}
+	for (const auto& binding : _midiPlaybackBindings)
+	{
+		bool active = false;
+		for (const auto& routes : state.MidiPlaybackRoutes)
+			for (const auto& route : routes)
+				active |= route == binding;
+		binding->RoutingActive.store(active, std::memory_order_release);
+	}
+	retainRetired();
+	queueRemovedBindings();
+}
+
+bool Station::_TryDeliverMidi(MidiDestination& destination, const MidiEvent& event,
+	bool isRealtime, MidiPlaybackBinding* owner) noexcept
+{
+	if (isRealtime) return owner
+		? _TryDeliverRecordedMidiNow(destination, event, *owner, true)
+		: _TryDeliverMidiNow(destination, event, true);
+	const auto delay = destination.ActiveCompensationDelaySamps;
+	if (delay == 0u) return owner
+		? _TryDeliverRecordedMidiNow(destination, event, *owner, false)
+		: _TryDeliverMidiNow(destination, event, false);
+	if (!destination.Plugin || !destination.Plugin->IsLoaded()) return event.IsNoteOff();
+	const auto& scheduled = destination.Scheduled;
+	const auto count = destination.ScheduledCount;
+	if (count >= MidiDestination::ScheduledCapacity
+		|| (!event.IsNoteOff() && count >= MidiDestination::ScheduledCapacity
+			- MidiDestination::ScheduledReleaseReserve)) return false;
+	MidiDestination::ScheduledMidi entry;
+	entry.Event = event;
+	entry.Event.sampleOffset += delay; // Modular sample-clock arithmetic.
+	entry.IsRealtime = isRealtime;
+	entry.Owner = owner;
+	if (owner) owner->QueuedEvents.fetch_add(1u, std::memory_order_release);
+	entry.Sequence = ++destination.ScheduleSequence;
+	auto precedes = [](const MidiDestination::ScheduledMidi& left,
+		const MidiDestination::ScheduledMidi& right) noexcept {
+		const auto delta = midi::MidiSampleDelta(left.Event.sampleOffset,
+			right.Event.sampleOffset);
+		if (delta != 0) return delta < 0;
+		if (left.Event.IsNoteOff() != right.Event.IsNoteOff()) return left.Event.IsNoteOff();
+		return left.Sequence < right.Sequence;
+	};
+	auto index = destination.ScheduledCount++;
+	while (index > 0u)
+	{
+		const auto parent = (index - 1u) / 2u;
+		if (!precedes(entry, scheduled[parent])) break;
+		destination.Scheduled[index] = scheduled[parent];
+		index = parent;
+	}
+	destination.Scheduled[index] = entry;
+	return true;
+}
+
+void Station::_DrainScheduledMidi(const AudioState& state,
+	std::uint32_t blockStartSample, unsigned int numSamps) noexcept
+{
+	for (const auto& destination : state.MidiDestinations)
+	{
+		if (!destination) continue;
+		auto precedes = [](const MidiDestination::ScheduledMidi& left,
+			const MidiDestination::ScheduledMidi& right) noexcept {
+			const auto delta = midi::MidiSampleDelta(left.Event.sampleOffset,
+				right.Event.sampleOffset);
+			if (delta != 0) return delta < 0;
+			if (left.Event.IsNoteOff() != right.Event.IsNoteOff()) return left.Event.IsNoteOff();
+			return left.Sequence < right.Sequence;
+		};
+		while (destination->ScheduledCount > 0u
+			&& midi::ClassifyMidiSampleInBlock(destination->Scheduled[0].Event.sampleOffset,
+				blockStartSample, numSamps) != midi::MidiBlockSamplePosition::Future)
+		{
+			auto entry = destination->Scheduled[0];
+			auto last = destination->Scheduled[--destination->ScheduledCount];
+			auto parent = std::size_t{ 0u };
+			while (parent * 2u + 1u < destination->ScheduledCount)
+			{
+				auto child = parent * 2u + 1u;
+				if (child + 1u < destination->ScheduledCount
+					&& precedes(destination->Scheduled[child + 1u], destination->Scheduled[child])) ++child;
+				if (!precedes(destination->Scheduled[child], last)) break;
+				destination->Scheduled[parent] = destination->Scheduled[child];
+				parent = child;
+			}
+			if (destination->ScheduledCount > 0u) destination->Scheduled[parent] = last;
+			if (midi::ClassifyMidiSampleInBlock(entry.Event.sampleOffset,
+				blockStartSample, numSamps) == midi::MidiBlockSamplePosition::Late)
+				entry.Event.sampleOffset = blockStartSample;
+			const bool delivered = entry.Owner
+				? _TryDeliverRecordedMidiNow(*destination, entry.Event, *entry.Owner, entry.IsRealtime)
+				: _TryDeliverMidiNow(*destination, entry.Event, entry.IsRealtime);
+			if (!delivered && entry.Event.IsNoteOn() && entry.Owner)
+			{
+				if (entry.Owner->Loop) entry.Owner->Loop->RequestHeldFlush();
+				_RecoverCancelledScheduledMidi(*destination,
+					_CancelScheduledMidiForOwner(*destination, entry.Owner));
+			}
+			if (entry.Owner) entry.Owner->QueuedEvents.fetch_sub(1u, std::memory_order_release);
+		}
+	}
+}
+
+std::bitset<midi::MidiNote::TotalNoteSlots> Station::_CancelScheduledMidiForOwner(MidiDestination& destination,
+	MidiPlaybackBinding* owner) noexcept
+{
+	std::bitset<midi::MidiNote::TotalNoteSlots> affected;
+	if (!owner || destination.ScheduledCount == 0u) return affected;
+	owner->QueuedEvents.fetch_add(1u, std::memory_order_release); // Pin through heap compaction.
+	_DropRecordedAudibleOwner(destination, *owner);
+	for (auto index = std::size_t{ 0u }; index < destination.ScheduledCount;)
+	{
+		if (destination.Scheduled[index].Owner != owner) { ++index; continue; }
+		const auto& removed = destination.Scheduled[index];
+		if (removed.Event.IsNoteOn() || removed.Event.IsNoteOff())
+			affected.set(midi::MidiNote::NoteSlot(removed.Event.Channel(), removed.Event.data1));
+		owner->QueuedEvents.fetch_sub(1u, std::memory_order_release);
+		destination.Scheduled[index] = destination.Scheduled[--destination.ScheduledCount];
+	}
+	auto precedes = [](const MidiDestination::ScheduledMidi& left,
+		const MidiDestination::ScheduledMidi& right) noexcept {
+		const auto delta = midi::MidiSampleDelta(left.Event.sampleOffset,
+			right.Event.sampleOffset);
+		if (delta != 0) return delta < 0;
+		if (left.Event.IsNoteOff() != right.Event.IsNoteOff()) return left.Event.IsNoteOff();
+		return left.Sequence < right.Sequence;
+	};
+	for (auto root = destination.ScheduledCount / 2u; root > 0u;)
+	{
+		--root;
+		const auto entry = destination.Scheduled[root];
+		auto parent = root;
+		while (parent * 2u + 1u < destination.ScheduledCount)
+		{
+			auto child = parent * 2u + 1u;
+			if (child + 1u < destination.ScheduledCount
+				&& precedes(destination.Scheduled[child + 1u], destination.Scheduled[child])) ++child;
+			if (!precedes(destination.Scheduled[child], entry)) break;
+			destination.Scheduled[parent] = destination.Scheduled[child];
+			parent = child;
+		}
+		destination.Scheduled[parent] = entry;
+	}
+	owner->QueuedEvents.fetch_sub(1u, std::memory_order_release);
+	return affected;
+}
+
+void Station::_RecoverCancelledScheduledMidi(MidiDestination& destination,
+	const std::bitset<midi::MidiNote::TotalNoteSlots>& affected) noexcept
+{
+	if (affected.none()) return;
+	destination.RecoveringCompensationChange = true;
+	for (auto slot = std::size_t{ 0u }; slot < midi::MidiNote::TotalNoteSlots; ++slot)
+		if (affected.test(slot) && destination.PluginHeld.test(slot)
+			&& destination.PlaybackOwners[slot] == 0u
+			&& destination.RecordedAudibleOwners[slot] == 0u
+			&& !destination.LiveHeld.test(slot))
+			destination.PendingReleases.set(slot);
+}
+
+void Station::_InvalidateScheduledMidiAtBlockStart(const AudioState& state, bool forceCancel) noexcept
+{
+	// Retired plugins are outside the active chain; their future notes must never drain.
+	for (const auto& destination : state.RetiredMidiDestinations)
+	{
+		if (!destination) continue;
+		for (auto index = std::size_t{ 0u }; index < destination->ScheduledCount; ++index)
+		{
+			if (auto* owner = destination->Scheduled[index].Owner)
+			{
+				if (owner->Loop) owner->Loop->RequestHeldFlush();
+				_DropRecordedAudibleOwner(*destination, *owner);
+				owner->QueuedEvents.fetch_sub(1u, std::memory_order_release);
+			}
+		}
+		destination->ScheduledCount = 0u;
+	}
+	if (!state.RetiredMidiDestinations.empty())
+		state.RetiredMidiQueueCancelled.store(true, std::memory_order_release);
+	for (const auto& routes : state.MidiPlaybackRoutes)
+		for (const auto& binding : routes)
+		{
+			if (!binding || !binding->Loop || !binding->Destination) continue;
+			const auto revision = binding->Loop->PublishedRevisionAtAudioBoundary();
+			const auto relocation = binding->Loop->RelocationGenerationAtAudioBoundary();
+			const bool changed = (binding->HasObservedSourceState
+				&& (static_cast<bool>(revision) != binding->HasObservedSourceRevision
+					|| (revision && *revision != binding->ObservedSourceRevision)))
+				|| relocation != binding->ObservedRelocationGeneration;
+			binding->HasObservedSourceState = true;
+			binding->HasObservedSourceRevision = revision.has_value();
+			if (revision) binding->ObservedSourceRevision = *revision;
+			binding->ObservedRelocationGeneration = relocation;
+			binding->CancelScheduledThisBlock = changed || binding->Take->IsMuted()
+				|| binding->Take->IsCaptureCancelled();
+			if (changed) binding->Loop->RequestHeldFlush();
+		}
+	// A removed route can still own future entries in a destination retained by the new graph.
+	for (const auto& destination : state.MidiDestinations)
+	{
+		if (!destination) continue;
+		const bool bypassed = destination->Plugin && destination->Plugin->IsBypassed();
+		const bool bypassStarted = bypassed && !destination->LastBypassed;
+		destination->LastBypassed = bypassed;
+		std::bitset<midi::MidiNote::TotalNoteSlots> affected;
+		auto retained = std::size_t{ 0u };
+		for (auto index = std::size_t{ 0u }; index < destination->ScheduledCount; ++index)
+		{
+			const auto entry = destination->Scheduled[index];
+			auto* owner = entry.Owner;
+			if (owner && (forceCancel || bypassStarted
+				|| !owner->RoutingActive.load(std::memory_order_acquire)
+				|| owner->CancelScheduledThisBlock))
+			{
+				if (owner->Loop) owner->Loop->RequestHeldFlush();
+				_DropRecordedAudibleOwner(*destination, *owner);
+				if (entry.Event.IsNoteOn() || entry.Event.IsNoteOff())
+					affected.set(midi::MidiNote::NoteSlot(entry.Event.Channel(), entry.Event.data1));
+				owner->QueuedEvents.fetch_sub(1u, std::memory_order_release);
+			}
+			else destination->Scheduled[retained++] = entry;
+		}
+		if (retained != destination->ScheduledCount)
+		{
+			destination->ScheduledCount = retained;
+			auto precedes = [](const MidiDestination::ScheduledMidi& left,
+				const MidiDestination::ScheduledMidi& right) noexcept {
+				const auto delta = midi::MidiSampleDelta(left.Event.sampleOffset, right.Event.sampleOffset);
+				if (delta != 0) return delta < 0;
+				if (left.Event.IsNoteOff() != right.Event.IsNoteOff()) return left.Event.IsNoteOff();
+				return left.Sequence < right.Sequence;
+			};
+			for (auto root = retained / 2u; root > 0u;)
+			{
+				--root;
+				const auto entry = destination->Scheduled[root];
+				auto parent = root;
+				while (parent * 2u + 1u < retained)
+				{
+					auto child = parent * 2u + 1u;
+					if (child + 1u < retained && precedes(destination->Scheduled[child + 1u], destination->Scheduled[child])) ++child;
+					if (!precedes(destination->Scheduled[child], entry)) break;
+					destination->Scheduled[parent] = destination->Scheduled[child];
+					parent = child;
+				}
+				destination->Scheduled[parent] = entry;
+			}
+			_RecoverCancelledScheduledMidi(*destination, affected);
+		}
+	}
+}
+
+void Station::_DropRecordedAudibleOwner(MidiDestination& destination, MidiPlaybackBinding& owner,
+	bool emitRelease) noexcept
+{
+	if (owner.AudibleSlotCount == 0u) return;
+	for (auto index = std::size_t{ 0u }; index < owner.AudibleSlotCount; ++index)
+	{
+		const auto slot = owner.AudibleSlots[index];
+		owner.AudibleHeld.reset(slot);
+		if (destination.RecordedAudibleOwners[slot] > 0u)
+			--destination.RecordedAudibleOwners[slot];
+		if (emitRelease && destination.RecordedAudibleOwners[slot] == 0u
+			&& !destination.LiveHeld.test(slot) && destination.PluginHeld.test(slot))
+			destination.PendingReleases.set(slot);
+	}
+	owner.AudibleSlotCount = 0u;
+}
+
+bool Station::_TryDeliverRecordedMidiNow(MidiDestination& destination, const MidiEvent& event,
+	MidiPlaybackBinding& owner, bool isRealtime) noexcept
+{
+	if (!event.IsNoteOn() && !event.IsNoteOff())
+		return _TryDeliverMidiNow(destination, event, isRealtime);
+	const auto slot = midi::MidiNote::NoteSlot(event.Channel(), event.data1);
+	if (event.IsNoteOn())
+	{
+		if (!_TryDeliverMidiNow(destination, event, isRealtime)) return false;
+		if (!owner.AudibleHeld.test(slot))
+		{
+			owner.AudibleHeld.set(slot);
+			owner.AudibleSlotPositions[slot] = static_cast<std::uint16_t>(owner.AudibleSlotCount);
+			owner.AudibleSlots[owner.AudibleSlotCount++] = static_cast<std::uint16_t>(slot);
+			++destination.RecordedAudibleOwners[slot];
+		}
+		return true;
+	}
+	if (!owner.AudibleHeld.test(slot)) return true;
+	if (destination.RecordedAudibleOwners[slot] == 1u && !destination.LiveHeld.test(slot)
+		&& !_TryDeliverMidiNow(destination, event, isRealtime)) return false;
+	owner.AudibleHeld.reset(slot);
+	const auto index = owner.AudibleSlotPositions[slot];
+	const auto moved = owner.AudibleSlots[--owner.AudibleSlotCount];
+	owner.AudibleSlots[index] = moved;
+	owner.AudibleSlotPositions[moved] = index;
+	--destination.RecordedAudibleOwners[slot];
+	return true;
+}
+
+bool Station::_TryDeliverMidiNow(MidiDestination& destination, const MidiEvent& event,
+	bool isRealtime) noexcept
+{
+	if (!destination.Plugin || !destination.Plugin->IsLoaded()) return event.IsNoteOff();
+	const auto slot = midi::MidiNote::NoteSlot(event.Channel(), event.data1);
+	if (event.IsNoteOn() && destination.PendingReleases.test(slot))
+	{
+		const auto release = MidiEvent::MakeNoteOff(event.sampleOffset, event.Channel(), event.data1,
+			destination.PendingReleaseVelocity[slot]);
+		if (!destination.Plugin->TrySendMidiEvent(release, true)) return false;
+		destination.PendingReleaseVelocity[slot] = 0u;
+		destination.PendingReleases.reset(slot);
+		destination.PluginHeld.reset(slot);
+		destination.BlockTouched.set(slot);
+	}
+	if (!destination.Plugin->TrySendMidiEvent(event, isRealtime))
+	{
+		if (event.IsNoteOff())
+		{
+			destination.PendingReleaseVelocity[slot] = event.data2;
+			destination.PendingReleases.set(slot);
+			return true; // Retained for bounded retry at the next audio block.
+		}
+		return false;
+	}
+	if (event.IsNoteOn()) destination.PluginHeld.set(slot);
+	else if (event.IsNoteOff())
+	{
+		destination.PluginHeld.reset(slot);
+		destination.PendingReleaseVelocity[slot] = 0u;
+		destination.PendingReleases.reset(slot);
+	}
+	if (event.IsNoteOn() || event.IsNoteOff()) destination.BlockTouched.set(slot);
+	return true;
+}
+
+void Station::_DrainPendingMidiReleases(const AudioState& state, std::uint32_t sample) noexcept
+{
+	constexpr unsigned int MaxRecoveryReleasesPerDestination = 64u;
+	for (const auto& destination : state.MidiDestinations)
+	{
+		if (!destination || !destination->Plugin || !destination->Plugin->IsLoaded()
+			|| destination->PendingReleases.none()) continue;
+		auto budget = MaxRecoveryReleasesPerDestination;
+		auto scanned = std::size_t{ 0u };
+		while (budget > 0u && scanned < midi::MidiNote::TotalNoteSlots)
+		{
+			const auto slot = destination->ReleaseCursor;
+			if (destination->PendingReleases.test(slot))
+			{
+				const auto release = MidiEvent::MakeNoteOff(sample,
+					static_cast<std::uint8_t>(slot / 128u), static_cast<std::uint8_t>(slot % 128u),
+					destination->PendingReleaseVelocity[slot]);
+				if (!destination->Plugin->TrySendMidiEvent(release, true)) break;
+				destination->PendingReleaseVelocity[slot] = 0u;
+				destination->PendingReleases.reset(slot);
+				destination->PluginHeld.reset(slot);
+				destination->BlockTouched.set(slot);
+				--budget;
+			}
+			destination->ReleaseCursor = (slot + 1u) % midi::MidiNote::TotalNoteSlots;
+			++scanned;
+		}
+	}
+}
+
+void Station::_RecoverSkippedMidiBlocks(const AudioState& state) noexcept
+{
+	for (const auto& destination : state.MidiDestinations)
+	{
+		if (!destination || !destination->Plugin || destination->Plugin->MidiBlockWasProcessed()) continue;
+		// All accepted events in this block were discarded by the adapter.
+		destination->PendingReleases |= destination->BlockHeldAtStart | destination->BlockTouched;
+		for (const auto& routes : state.MidiPlaybackRoutes)
+			for (const auto& binding : routes)
+				if (binding && binding->Destination == destination)
+					_DropRecordedAudibleOwner(*destination, *binding);
+		destination->PluginHeld.reset();
+		for (const auto& routes : state.MidiPlaybackRoutes)
+			for (const auto& binding : routes)
+				if (binding && binding->Destination == destination && binding->Loop)
+					binding->Loop->RequestHeldFlush();
+	}
 }
 
 void Station::_DispatchLiveMidi(const AudioState& state, const MidiEvent& event,
@@ -679,54 +1185,73 @@ void Station::_DispatchLiveMidi(const AudioState& state, const MidiEvent& event,
 			const bool wasHeld = destination->LiveHeld.test(slot);
 			if (sourceLossNoteOff && hasNewLiveOwner(*destination)) continue;
 			destination->LiveHeld.reset(slot);
-			if (wasHeld && (!sourceLossNoteOff || destination->PlaybackOwners[slot] == 0u) &&
-				std::find(state.LiveMidiDestinations.begin(), state.LiveMidiDestinations.end(), destination) == state.LiveMidiDestinations.end() &&
-				destination->Plugin && destination->Plugin->IsLoaded())
-				destination->Plugin->SendMidiEvent(event, true);
+			if (wasHeld && destination->RecordedAudibleOwners[slot] == 0u &&
+				std::find(state.LiveMidiDestinations.begin(), state.LiveMidiDestinations.end(), destination) == state.LiveMidiDestinations.end())
+				_TryDeliverMidi(*destination, event, true);
 		}
 	}
 	for (const auto& destination : state.LiveMidiDestinations)
 	{
-		if (event.IsNoteOn())
+		if (event.IsNoteOff() && (destination->RecordedAudibleOwners[slot] != 0u
+			|| (sourceLossNoteOff && hasNewLiveOwner(*destination)))) continue;
+		if (_TryDeliverMidi(*destination, event, true) && event.IsNoteOn())
 		{
 			destination->LiveHeld.set(slot);
 			destination->LiveNoteOnRevision[slot] = liveNoteOnRevision;
 		}
-		if (sourceLossNoteOff && (destination->PlaybackOwners[slot] != 0u || hasNewLiveOwner(*destination))) continue;
-		if (destination->Plugin) destination->Plugin->SendMidiEvent(event, true);
 	}
 }
 
 void Station::MidiPlaybackSink::OnEvent(unsigned int outputIndex, const MidiEvent& event) noexcept
 {
-	if (outputIndex >= _state.MidiPlaybackRoutes.size()) return;
+	(void)TryOnEvent(outputIndex, event);
+}
+
+bool Station::MidiPlaybackSink::TryOnEvent(unsigned int outputIndex, const MidiEvent& event) noexcept
+{
+	if (outputIndex >= _state.MidiPlaybackRoutes.size()) return false;
 	const auto slot = midi::MidiNote::NoteSlot(event.Channel(), event.data1);
+	// Every destination must retain a release before the source forgets it.
+	// Attacks still establish source state if any destination accepts them.
+	bool accepted = event.IsNoteOff();
 	for (const auto& binding : _state.MidiPlaybackRoutes[outputIndex])
 	{
-		// Source-loss release owns this ledger until its queued acknowledgement.
-		// Retained take flushes still clear MidiLoop's local state, but emit nothing.
-		if (binding->Take->IsSourceLossCancelled()) continue;
+		if (binding->Take->IsSourceLossCancelled() && event.IsNoteOn()) continue;
 		auto& destination = *binding->Destination;
-		if (event.IsNoteOn() && !binding->Held.test(slot))
+		const bool suppressSource = binding->Take->IsMuted() || binding->Take->IsSourceLossCancelled();
+		if (suppressSource && event.IsNoteOff())
+			Station::_RecoverCancelledScheduledMidi(destination,
+				Station::_CancelScheduledMidiForOwner(destination, binding.get()));
+		if (event.IsNoteOff() && !binding->Held.test(slot))
+			continue;
+		const bool immediateRelease = event.IsNoteOff() && destination.RecoveringCompensationChange;
+		const bool delivered = Station::_TryDeliverMidi(destination, event,
+			suppressSource || immediateRelease, binding.get());
+		if (event.IsNoteOff()) accepted &= delivered;
+		else accepted |= delivered;
+		if (event.IsNoteOn() && delivered && !binding->Held.test(slot))
 		{
 			binding->Held.set(slot);
 			++destination.PlaybackOwners[slot];
 			binding->HasHeld.store(true, std::memory_order_release);
 		}
-		else if (event.IsNoteOff() && binding->Held.test(slot))
+		else if (event.IsNoteOff() && delivered && binding->Held.test(slot))
 		{
 			binding->Held.reset(slot);
 			--destination.PlaybackOwners[slot];
 			binding->HasHeld.store(binding->Held.any(), std::memory_order_release);
 		}
-		if (destination.Plugin) destination.Plugin->SendMidiEvent(event, false);
 	}
+	return accepted;
 }
 
 bool Station::_ReleaseLostPlaybackMidi(MidiPlaybackBinding& binding, std::uint32_t sample,
 	unsigned int& budget, unsigned int& slotBudget) noexcept
 {
 	auto& destination = *binding.Destination;
+	_DropRecordedAudibleOwner(destination, binding, false);
+	const auto cancelled = _CancelScheduledMidiForOwner(destination, &binding);
+	if (binding.EmitSourceLossRelease) _RecoverCancelledScheduledMidi(destination, cancelled);
 	if (binding.Held.none())
 	{
 		binding.HasHeld.store(false, std::memory_order_release);
@@ -740,10 +1265,14 @@ bool Station::_ReleaseLostPlaybackMidi(MidiPlaybackBinding& binding, std::uint32
 		--budget;
 		binding.Held.reset(slot);
 		--destination.PlaybackOwners[slot];
-		if (binding.EmitSourceLossRelease && destination.PlaybackOwners[slot] == 0u && !destination.LiveHeld.test(slot) &&
-			destination.Plugin && destination.Plugin->IsLoaded())
-			destination.Plugin->SendMidiEvent(MidiEvent::MakeNoteOff(sample,
-				static_cast<std::uint8_t>(slot / 128u), static_cast<std::uint8_t>(slot % 128u)), false);
+		if (binding.EmitSourceLossRelease && destination.PlaybackOwners[slot] == 0u
+			&& destination.RecordedAudibleOwners[slot] == 0u && !destination.LiveHeld.test(slot))
+		{
+			destination.PendingReleaseVelocity[slot] = 0u;
+			destination.PendingReleases.reset(slot); // This explicit release supersedes queued recovery.
+			_TryDeliverMidi(destination, MidiEvent::MakeNoteOff(sample,
+				static_cast<std::uint8_t>(slot / 128u), static_cast<std::uint8_t>(slot % 128u)), true);
+		}
 	}
 	if (binding.ReleaseSlot < midi::MidiNote::TotalNoteSlots) return false;
 	binding.HasHeld.store(false, std::memory_order_release);
@@ -832,6 +1361,37 @@ void Station::_RunVstBlock(vst::VstChain* chain,
 		}
 		chain->UpdateHostTime(hostTime);
 		chain->BeginMidiBlock(blockStartSample, sampsToRead);
+		for (const auto& destination : state.MidiDestinations)
+		{
+			destination->RecoveringCompensationChange = false;
+			const auto epoch = destination->CompensationEpoch.load(std::memory_order_acquire);
+			if (epoch != destination->AppliedCompensationEpoch)
+			{
+				const auto recordedHeld = destination->PluginHeld & ~destination->LiveHeld;
+				for (const auto& routes : state.MidiPlaybackRoutes)
+					for (const auto& binding : routes)
+						if (binding && binding->Destination == destination)
+							_DropRecordedAudibleOwner(*destination, *binding);
+				const bool affected = destination->ScheduledCount > 0u || recordedHeld.any();
+				for (auto index = std::size_t{ 0u }; index < destination->ScheduledCount; ++index)
+					if (auto* owner = destination->Scheduled[index].Owner)
+						owner->QueuedEvents.fetch_sub(1u, std::memory_order_release);
+				destination->ScheduledCount = 0u;
+				destination->PendingReleases |= recordedHeld;
+				destination->ActiveCompensationDelaySamps = destination->CompensationDelaySamps.load(std::memory_order_acquire);
+				destination->AppliedCompensationEpoch = epoch;
+				destination->RecoveringCompensationChange = affected;
+				if (affected)
+					for (const auto& routes : state.MidiPlaybackRoutes)
+						for (const auto& binding : routes)
+							if (binding && binding->Destination == destination && binding->Loop)
+								binding->Loop->RequestHeldFlush();
+			}
+			destination->BlockHeldAtStart = destination->PluginHeld;
+			destination->BlockTouched.reset();
+		}
+		_InvalidateScheduledMidiAtBlockStart(state);
+		_DrainPendingMidiReleases(state, blockStartSample);
 	}
 
 	constexpr auto MaxLiveMidiEventsPerBlock = 64u;
@@ -897,7 +1457,10 @@ void Station::_RunVstBlock(vst::VstChain* chain,
 	}
 
 	if (!vstActive)
+	{
+		_InvalidateScheduledMidiAtBlockStart(state, true);
 		return;
+	}
 
 	auto midiOutputIndex = 0u;
 	MidiPlaybackSink midiSink(state);
@@ -911,7 +1474,9 @@ void Station::_RunVstBlock(vst::VstChain* chain,
 			midiOutputIndex);
 	}
 
+	_DrainScheduledMidi(state, blockStartSample, sampsToRead);
 	chain->ProcessBlockMulti(state.VstBlockPtrs.data(), static_cast<int>(channelCount), sampsToRead);
+	_RecoverSkippedMidiBlocks(state);
 }
 
 bool Station::_TryEnqueueOrderedLiveMidi(midi::MidiQueue<1024>& queue,
@@ -1127,15 +1692,59 @@ void Station::EndMultiPlay(unsigned int numSamps)
 	}
 }
 
+void Station::ApplyFirstMasterRecordingAtAudioBoundary(utils::Timer& clock) noexcept
+{
+	auto request = _firstMasterRecording.borrow();
+	if (!request || request->Clock.get() != &clock
+		|| request->Timing.Version <= _firstMasterRecordingConsumed.load(std::memory_order_relaxed)) return;
+	auto state = _BorrowAudioState();
+	if (!state.ReadSucceeded()) return;
+	const auto take = request->Take.get();
+	const bool present = state && std::any_of(state->OwnedLoopTakes.begin(), state->OwnedLoopTakes.end(),
+		[take](const auto& member) { return member.get() == take; });
+	if (take->IsCaptureCancelled() || !take->FirstMasterActivationPending())
+	{
+		_firstMasterRecordingScene.store(clock.SceneSamplePos(), std::memory_order_relaxed);
+		_firstMasterRecordingPhase.store(take->MidiPlayIndex(), std::memory_order_relaxed);
+		_firstMasterRecordingStatus.store(0u, std::memory_order_relaxed);
+		clock.ConsumeRecordingSeedAtAudioBoundary(request->Timing.Version);
+		_firstMasterRecordingConsumed.store(request->Timing.Version, std::memory_order_release);
+		return;
+	}
+	// A completed take may not have reached the published station membership yet.
+	if (!present || take->HasPendingTriggerCapture() || take->TakeState() != LoopTake::STATE_PLAYING) return;
+	// Trigger stamps and SceneSamplePos share the wrapping device-sample ruler.
+	// A timestamp may be just ahead of this boundary; preserve that signed age.
+	const auto elapsed = static_cast<std::int32_t>(
+		static_cast<std::uint32_t>(clock.SceneSamplePos()) - request->Timing.RecordOrigin);
+	auto phase = static_cast<std::int64_t>(elapsed) % request->Timing.LengthSamps;
+	if (phase < 0) phase += request->Timing.LengthSamps;
+	if (!take->ActivateFirstMasterMidiAtAudioBoundary(static_cast<unsigned long>(phase),
+		request->Timing.RecordOrigin)) return;
+	const bool installMaster = clock.RecordingSeedReadyAtAudioBoundary(request->Timing.Version)
+		&& clock.SeedSourceLength() == 0ul;
+	if (installMaster)
+	{
+		clock.SetQuantisation(request->Timing.GrainSamps, request->Timing.Type);
+		clock.SetSeedSourceLength(request->Timing.LengthSamps);
+		clock.SetMasterLoopSampleOffset(static_cast<unsigned long>(phase));
+	}
+	_firstMasterRecordingScene.store(clock.SceneSamplePos(), std::memory_order_relaxed);
+	_firstMasterRecordingPhase.store(static_cast<unsigned long>(phase), std::memory_order_relaxed);
+	_firstMasterRecordingStatus.store(installMaster ? 1u : 2u, std::memory_order_relaxed);
+	clock.ConsumeRecordingSeedAtAudioBoundary(request->Timing.Version);
+	_firstMasterRecordingConsumed.store(request->Timing.Version, std::memory_order_release);
+}
+
 void Station::ApplyAcceptedTimingCorrection(long long deltaSamps,
-	std::uint64_t generation) noexcept
+	std::uint64_t generation, bool relocateMidi) noexcept
 {
 	auto state = _BorrowAudioState();
 	if (!state)
 		return;
 
 	for (const auto& take : state->OwnedLoopTakes)
-		if (take) take->ApplyAcceptedTimingCorrection(deltaSamps, generation);
+		if (take) take->ApplyAcceptedTimingCorrection(deltaSamps, generation, relocateMidi);
 }
 
 void Station::CaptureSceneAnchors(std::uint64_t sceneCoordinateSamps) noexcept
@@ -1404,10 +2013,24 @@ ActionResult Station::OnAction(TriggerAction action)
 	auto loopTake = _TryGetTake(action.TargetId);
 	const auto priorAudioLoops = loopTake ? loopTake.value()->GetLoops().size() : 0u;
 	const auto priorMidiLoops = loopTake ? loopTake.value()->GetMidiLoops().size() : 0u;
-	const auto transportStart = static_cast<std::int64_t>(_clock ? _clock->AbsoluteSamplePos() : 0ul)
+	const auto pendingSeed = _clock ? _clock->PendingRecordingSeedOnOwner() : nullptr;
+	// Job decisions use reserved geometry until its callback activation. This
+	// avoids treating a second completion as another first master in that gap.
+	auto recordingClock = _clock;
+	if (pendingSeed)
+	{
+		recordingClock = std::make_shared<utils::Timer>();
+		recordingClock->SetQuantisation(pendingSeed->GrainSamps, pendingSeed->Type);
+		recordingClock->SetSeedSourceLength(pendingSeed->LengthSamps);
+	}
+	const auto pendingElapsed = pendingSeed ? static_cast<std::int32_t>(
+		static_cast<std::uint32_t>(_clock->SceneSamplePos()) - pendingSeed->RecordOrigin) : 0;
+	const auto transportStart = static_cast<std::int64_t>(pendingSeed ?
+		(static_cast<std::uint64_t>((std::max)(0, pendingElapsed))) :
+		(_clock ? _clock->AbsoluteSamplePos() : 0ul))
 		+ static_cast<std::int64_t>(TransportOffsetSamps());
-	const auto transportStartSamps = transportStart < 0 ? 0ull : static_cast<std::uint64_t>(transportStart);
-
+	const auto transportStartSamps = transportStart < 0 ? 0ull :
+		static_cast<std::uint64_t>(transportStart);
 	switch (action.ActionType)
 	{
 	case TriggerAction::TRIGGER_REC_START:
@@ -1422,7 +2045,8 @@ ActionResult Station::OnAction(TriggerAction action)
 		auto newLoopTake = AddTake();
 		// Before a master clock exists, MIDI timestamps provide the actual press
 		// origin. The take may reach the audio snapshot much later.
-		const auto midiRecordStart = _clock && _clock->SeedSourceLength() == 0ul
+		const auto midiRecordStart = action.MidiSample && _clock &&
+			recordingClock->SeedSourceLength() == 0ul
 			? action.MidiSample : std::nullopt;
 		newLoopTake->Record(action.InputChannels,
 			Name(),
@@ -1431,7 +2055,9 @@ ActionResult Station::OnAction(TriggerAction action)
 			std::move(heldSnapshot),
 			transportStartSamps,
 			midiRecordStart);
-
+		if (pendingSeed && !newLoopTake->HasTriggerAudioCapture() && !IsRemote())
+			newLoopTake->SetMidiBaseGrid(static_cast<std::uint32_t>(pendingSeed->LengthSamps),
+				static_cast<std::uint32_t>(pendingSeed->LengthSamps / pendingSeed->GrainSamps));
 		res.SourceId = "";
 		res.TargetId = newLoopTake->Id();
 		res.TriggerTargetTake = newLoopTake;
@@ -1444,10 +2070,11 @@ ActionResult Station::OnAction(TriggerAction action)
 	{
 		auto loopLength = action.SampleCount;
 		std::optional<std::uint32_t> midiOnlyStopSample;
-		// MIDI-only first takes must use the same two press timestamps as their
-		// note positions. Trigger::SampleCount starts on a later audio tick.
-		if (loopTake && loopTake.value()->GetLoops().empty()
-			&& _clock && !_clock->IsQuantisable()
+		const bool clockWasSeeded = recordingClock && recordingClock->SeedSourceLength() > 0ul;
+		// A first MIDI-only master uses the trigger edges as its physical duration.
+		// Later takes retain their existing callback/counting duration policy.
+		if (!clockWasSeeded && !IsRemote() && loopTake && !loopTake.value()->HasTriggerAudioCapture()
+			&& _clock
 			&& loopTake.value()->MidiRecordStartSample() && action.MidiSample)
 		{
 			const auto midiElapsed = static_cast<std::int32_t>(
@@ -1473,37 +2100,47 @@ ActionResult Station::OnAction(TriggerAction action)
 		else
 		{
 			auto errorSamps = 0;
-			std::optional<std::uint32_t> midiStopAgeSamps;
+			std::shared_ptr<const utils::Timer::RecordingSeed> firstSeed;
+			std::optional<std::uint32_t> midiInitialPhase;
 			const auto clockBefore = _clock ? _clock->ObserveTransport() : utils::Timer::TransportObservation{};
 			const auto grainBefore = _clock ? _clock->QuantiseSamps() : 0u;
 			auto cfg = action.GetUserConfig();
 			auto streamParams = action.GetAudioParams();
-
 			if (_clock)
 			{
-				if (_clock->IsQuantisable())
+				if (clockWasSeeded)
 				{
-					auto [quantisedLength, err] = _clock->QuantiseLength(action.SampleCount);
+					auto [quantisedLength, err] = recordingClock->QuantiseLength(action.SampleCount);
 					loopLength = quantisedLength;
 					errorSamps = err;
+				}
+				else if (midiOnlyStopSample && loopTake)
+				{
+					// Infer off callback without touching the live Timer. Publish the
+					// complete geometry and trigger origin after take completion.
+					auto previewClock = std::make_shared<utils::Timer>();
+					_TrySeedClockFromFirstLoop(previewClock, loopLength, cfg, streamParams, loopTake.value()->Id());
+					loopLength = previewClock->SeedSourceLength();
+					firstSeed = _clock->ReserveRecordingSeedOnOwner({ 0u, previewClock->QuantiseSamps(),
+						loopLength, previewClock->Quantisation(), *loopTake.value()->MidiRecordStartSample() });
+					if (firstSeed && !IsRemote())
+						loopTake.value()->SetMidiBaseGrid(static_cast<std::uint32_t>(loopLength),
+							static_cast<std::uint32_t>(loopLength / firstSeed->GrainSamps));
+					errorSamps = static_cast<int>(static_cast<std::int64_t>(requestedLength) - loopLength);
+					if (loopLength > 0ul)
+					{
+						const auto elapsed = static_cast<std::int32_t>(static_cast<std::uint32_t>(
+							_clock->SceneSamplePos()) - *loopTake.value()->MidiRecordStartSample());
+						auto phase = static_cast<std::int64_t>(elapsed) % loopLength;
+						if (phase < 0) phase += loopLength;
+						midiInitialPhase = static_cast<std::uint32_t>(phase);
+					}
 				}
 				else
 				{
 					_TrySeedClockFromFirstLoop(_clock, loopLength, cfg, streamParams,
 						loopTake.has_value() ? loopTake.value()->Id() : "none");
 					loopLength = _clock->SeedSourceLength();
-					if (midiOnlyStopSample && loopLength > 0ul)
-					{
-						const auto age = static_cast<std::int32_t>(
-							static_cast<std::uint32_t>(_clock->SceneSamplePos()) - *midiOnlyStopSample);
-						if (age >= 0)
-						{
-							midiStopAgeSamps = static_cast<std::uint32_t>(age);
-							const auto phaseSamps = static_cast<unsigned long>(age) % loopLength;
-							_clock->SetMasterLoopIndexFrac(1.0 -
-								static_cast<double>(phaseSamps) / static_cast<double>(loopLength));
-						}
-					}
 				}
 			}
 			auto playPos = cfg.has_value() ?
@@ -1515,10 +2152,12 @@ ActionResult Station::OnAction(TriggerAction action)
 
 			if (loopTake.has_value())
 			{
-				const auto midiPlayErrorSamps = midiStopAgeSamps && _clock
-					? static_cast<int>(_clock->SampOffset()) : errorSamps;
 				const auto midiBefore = loopTake.value()->MidiPlayIndex();
-				loopTake.value()->Play(playPos, loopLength, endRecordSamps, midiPlayErrorSamps);
+				const auto midiPlayErrorSamps = midiInitialPhase ? static_cast<int>(*midiInitialPhase) : errorSamps;
+				loopTake.value()->Play(playPos, loopLength, endRecordSamps, midiPlayErrorSamps, static_cast<bool>(firstSeed));
+				if (firstSeed)
+					_firstMasterRecording.store(std::make_shared<const FirstMasterRecording>(
+						FirstMasterRecording{ *firstSeed, loopTake.value(), _clock }));
 				if (_loggingConfig.Event == "verbose")
 				{
 					const auto clockAfter = _clock ? _clock->ObserveTransport() : utils::Timer::TransportObservation{};
@@ -1595,9 +2234,9 @@ ActionResult Station::OnAction(TriggerAction action)
 
 			if (_clock)
 			{
-				if (_clock->IsQuantisable())
+				if (recordingClock->IsQuantisable())
 				{
-					auto [quantisedLength, err] = _clock->QuantiseLength(action.SampleCount);
+					auto [quantisedLength, err] = recordingClock->QuantiseLength(action.SampleCount);
 					loopLength = quantisedLength;
 					errorSamps = err;
 				}
@@ -1620,10 +2259,8 @@ ActionResult Station::OnAction(TriggerAction action)
 			}
 
 			auto playPos = cfg.has_value() ?
-				// TODO(latency): playPos compensates for hardware outLatency only.
-				// Fold in the loop's aggregate VST latency (Loop::CurrentVstLatencySamps())
-				// once loop-driven VST PDC is compensated -- see
-				// doc/ninjam-live-loop-latency-sync-planC.md §2/§7.
+				// Keep the capture cursor in hardware time. Recorded playback plugin
+				// latency is compensated at rendering, not in this source position.
 				cfg.value().LoopPlayPos(errorSamps, loopLength, outLatency) :
 				0;
 			auto endRecordSamps = cfg.has_value() ?
@@ -2689,6 +3326,24 @@ void Station::_ReleaseResources()
 
 std::vector<JobAction> Station::_CommitChanges()
 {
+	if (const auto request = _firstMasterRecording.load(); request &&
+		request->Timing.Version <= _firstMasterRecordingConsumed.load(std::memory_order_acquire))
+	{
+		const auto status = _firstMasterRecordingStatus.load(std::memory_order_relaxed);
+		std::cout << "[midi-master] take=" << request->Take->Id()
+			<< " status=" << (status == 1u ? "activated" : (status == 2u ? "playback-only" : "cancelled"))
+			<< " origin=" << request->Timing.RecordOrigin
+			<< " scene=" << _firstMasterRecordingScene.load(std::memory_order_relaxed)
+			<< " logical=" << request->Timing.LengthSamps
+			<< " phase=" << _firstMasterRecordingPhase.load(std::memory_order_relaxed)
+			<< " version=" << request->Timing.Version << '\n';
+		_firstMasterRecording.store(nullptr);
+	}
+	_firstMasterRecording.collect();
+	// Plugin latency/controller notifications must be pumped with closed editors.
+	if (const auto chain = _vstChain.load(std::memory_order_acquire))
+		chain->PollPendingChanges();
+
 	ReleaseRetiredAudioStates();
 	bool audioStateChanged = false;
 	if (_flipTakeBuffer)
@@ -2805,6 +3460,57 @@ const std::shared_ptr<AudioSink> Station::_InputChannel(unsigned int channel,
 	return nullptr;
 }
 
+bool Station::TryClaimPreparedMidiQuantisationAtAudioBoundary() noexcept
+{
+	std::uint8_t expected = 0u;
+	if (!_promotionTopologyGate.compare_exchange_strong(expected, 1u,
+		std::memory_order_seq_cst)) return false;
+	_promotionAudioLease = _BorrowAudioState();
+	if (!_promotionAudioLease.ReadSucceeded())
+	{
+		ReleasePreparedMidiQuantisationClaimAtAudioBoundary();
+		return false;
+	}
+	if (_promotionAudioLease)
+		for (const auto& take : _promotionAudioLease->OwnedLoopTakes)
+			if (take && !take->TryClaimPreparedMidiQuantisationAtAudioBoundary())
+			{
+				ReleasePreparedMidiQuantisationClaimAtAudioBoundary();
+				return false;
+			}
+	return true;
+}
+
+void Station::ReleasePreparedMidiQuantisationClaimAtAudioBoundary() noexcept
+{
+	if (_promotionAudioLease)
+		for (const auto& take : _promotionAudioLease->OwnedLoopTakes)
+			if (take) take->ReleasePreparedMidiQuantisationClaimAtAudioBoundary();
+	_promotionAudioLease.reset();
+	std::uint8_t expected = 1u;
+	_promotionTopologyGate.compare_exchange_strong(expected, 0u,
+		std::memory_order_seq_cst);
+}
+
+void Station::ActivatePreparedMidiQuantisationAtAudioBoundary() noexcept
+{
+	if (_promotionAudioLease)
+		for (const auto& take : _promotionAudioLease->OwnedLoopTakes)
+			if (take) take->ActivatePreparedMidiQuantisationAtAudioBoundary();
+}
+
+std::optional<std::uint32_t> Station::MasterPhaseAtAudioBoundary(
+	const LoopTake* targetTake, const Loop* targetLoop,
+	std::uint32_t masterLength) const noexcept
+{
+	const auto state = _BorrowAudioState();
+	if (!state) return std::nullopt;
+	for (const auto& take : state->OwnedLoopTakes)
+		if (take.get() == targetTake)
+			return take->MasterPhaseAtAudioBoundary(targetLoop, masterLength);
+	return std::nullopt;
+}
+
 std::shared_ptr<const Station::AudioState> Station::_AudioStateSnapshot() const
 {
 	return _audioState.load(std::memory_order_acquire);
@@ -2847,7 +3553,15 @@ void Station::_PublishAudioState()
 	state->VstBlockPtrs.resize(state->AudioBuffers.size(), nullptr);
 	for (auto i = 0u; i < state->AudioBuffers.size(); i++)
 		state->VstBlockPtrs[i] = state->VstBlockScratch.data() + (static_cast<size_t>(i) * constants::MaxBlockSize);
+	std::uint8_t expected = 0u;
+	while (!_promotionTopologyGate.compare_exchange_weak(expected, 2u,
+		std::memory_order_seq_cst))
+	{
+		expected = 0u;
+		std::this_thread::yield();
+	}
 	auto retired = _audioState.exchange(std::shared_ptr<const AudioState>(state), std::memory_order_acq_rel);
+	_promotionTopologyGate.store(0u, std::memory_order_seq_cst);
 	if (retired)
 		_retiredAudioStates.push_back({ state->Generation, std::move(retired) });
 }
@@ -2879,8 +3593,12 @@ void Station::ReleaseRetiredAudioStates()
 	// Registry pins also preserve notes delivered under an earlier route. A
 	// binding with held notes survives route/index changes until cancellation.
 	std::erase_if(_midiPlaybackBindings, [](const auto& binding) {
-		return binding.use_count() == 1 && !binding->HasHeld.load(std::memory_order_acquire);
+		return binding.use_count() == 1 && !binding->HasHeld.load(std::memory_order_acquire)
+			&& binding->QueuedEvents.load(std::memory_order_acquire) == 0u;
 	});
+	const auto current = _AudioStateSnapshot();
+	if (current && current->RetiredMidiQueueCancelled.load(std::memory_order_acquire))
+		_PublishAudioState(); // Off callback: drop one-generation retirement pins.
 }
 
 void Station::_ArrangeChildren()
@@ -2977,6 +3695,8 @@ void Station::_WireVuSliders()
 
 void Station::_DitchLoopTake(std::shared_ptr<LoopTake>& take, bool flushLiveHeld) noexcept
 {
+	if (const auto request = _firstMasterRecording.load(); request && request->Take == take)
+		request->Clock->CancelRecordingSeedOnOwner(request->Timing.Version);
 	if (flushLiveHeld)
 		FlushLiveHeldMidiNotes();
 	else
@@ -2987,30 +3707,15 @@ void Station::_DitchLoopTake(std::shared_ptr<LoopTake>& take, bool flushLiveHeld
 		_QueueLostPlaybackMidi(take);
 	}
 
-	// Flush any held MIDI notes so the VST instrument doesn't get stuck notes.
-	// Events are injected via the synthetic live queue and
-	// drained by the audio thread on the next WriteBlock call.
+	// Recorded releases must retire their callback-owned binding first. A live
+	// synthetic NoteOff can be suppressed while that binding still owns the
+	// pitch; sampling loop-held notes here cannot replace ownership retirement.
 	if (flushLiveHeld) for (const auto& midiLoop : take->GetMidiLoopSnapshot())
-	{
-		if (!midiLoop)
-			continue;
-		midiLoop->RequestHeldFlush();
-		const auto& held = midiLoop->HeldNotes();
-		if (held.none())
-			continue;
-		for (std::uint8_t ch = 0; ch < 16; ++ch)
-		{
-			for (std::uint8_t note = 0; note < 128; ++note)
-			{
-				if (held.test(MidiLoop::NoteSlot(ch, note)))
-					TryEnqueueSyntheticLiveMidi(MidiEvent::MakeNoteOff(0u, ch, note));
-			}
-		}
-	}
+		if (midiLoop) midiLoop->RequestHeldFlush();
 	// A retained callback snapshot may still hold this take. Cancel only its
 	// logical capture; keep loop buffers and writers stable until job/UI retirement.
 	take->CancelCapture();
-	if (flushLiveHeld) _QueueLostPlaybackMidi(take, false);
+	if (flushLiveHeld) _QueueLostPlaybackMidi(take);
 	take->DetachGuiOwnershipForRetirement();
 	const auto match = std::find(_backLoopTakes.begin(), _backLoopTakes.end(), take);
 	if (match != _backLoopTakes.end())

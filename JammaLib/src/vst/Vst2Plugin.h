@@ -79,6 +79,9 @@ namespace vst
 		void SendMidiEvent(const midi::MidiEvent& event,
 			bool isRealtime) noexcept override;
 
+		bool TrySendMidiEvent(const midi::MidiEvent& event, bool isRealtime) noexcept override;
+		bool MidiBlockWasProcessed() const noexcept override { return _lastMidiBlockProcessed; }
+
 		// Update host transport/tempo context for the next ProcessBlock call.
 		// Called once per block on the audio thread before BeginMidiBlock.
 		// Real-time safe: plain struct copy, no allocation.
@@ -193,6 +196,7 @@ namespace vst
 		std::atomic<DWORD> _audioThreadId;
 		std::string _name;
 		std::atomic<bool> _isBypassed;
+		bool _lastMidiBlockProcessed = false; // Audio callback owner only.
 		utils::Size2d _editorSize;
 		std::atomic<HWND> _editorParentHwnd;
 		std::atomic<bool> _isEditorOpen;

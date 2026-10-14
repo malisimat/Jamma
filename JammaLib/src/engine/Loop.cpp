@@ -422,6 +422,27 @@ unsigned int Loop::ReadBlock(float* outBuf,
 }
 
 // Only called when outputting to DAC
+void Loop::PollPlaybackPluginChanges() const noexcept
+{
+	const auto chain = _vstChain.load(std::memory_order_acquire);
+	if (chain) chain->PollPendingChanges();
+}
+
+bool Loop::CanConfigureRecordedPlaybackDelay(unsigned int delaySamps) const
+{
+	return _playbackDelay && _playbackDelay->CanConfigure(delaySamps);
+}
+
+bool Loop::ConfigureRecordedPlaybackDelay(unsigned int delaySamps)
+{
+	return _playbackDelay && _playbackDelay->Configure(delaySamps);
+}
+
+void Loop::ClearRecordedPlaybackDelay() noexcept
+{
+	if (_playbackDelay) _playbackDelay->Clear();
+}
+
 void Loop::WriteBlock(const std::shared_ptr<MultiAudioSink> dest,
 	const std::shared_ptr<base::BounceWriter> bounceWriter,
 	int sampOffset,
@@ -432,7 +453,10 @@ void Loop::WriteBlock(const std::shared_ptr<MultiAudioSink> dest,
 	auto loopLength = _loopLength.load(std::memory_order_relaxed);
 	auto playState = _playState.load(std::memory_order_relaxed);
 	if (0 == loopLength)
+	{
+		ClearRecordedPlaybackDelay();
 		return;
+	}
 
 	if (STATE_RECORDING == playState)
 		_mixer->Offset(numSamps);
@@ -440,12 +464,22 @@ void Loop::WriteBlock(const std::shared_ptr<MultiAudioSink> dest,
 	// Read source data from BufferBank into stack-allocated temp buffer
 	float tempBuf[constants::MaxBlockSize];
 	auto sampsToWrite = ReadBlock(tempBuf, sampOffset, numSamps);
+	if (sampsToWrite == 0u && bounceWriter == nullptr)
+		ClearRecordedPlaybackDelay();
 
 	if (sampsToWrite > 0)
 	{
 		auto chain = _vstChain.borrow();
 		if (chain && chain->IsActive())
 			chain->ProcessBlock(tempBuf, static_cast<int>(sampsToWrite));
+
+		// Only rendered playback is delayed; bounce and source capture keep
+		// their original sample coordinates.
+		if (bounceWriter == nullptr && _playbackDelay)
+		{
+			if (IsMuted()) _playbackDelay->Clear();
+			else _playbackDelay->Process(tempBuf, sampsToWrite);
+		}
 
 		// Route to destination via mixer or trigger
 		// (both ultimately call dest->OnBlockWriteChannel)
@@ -498,9 +532,10 @@ void Loop::ShiftPlayIndex(long long deltaSamps) noexcept
 		return;
 
 	const auto playIndex = _playIndex.load(std::memory_order_relaxed);
-	const auto bodyIndex = (playIndex >= constants::MaxLoopFadeSamps)
-		? (playIndex - constants::MaxLoopFadeSamps) % loopLength
-		: playIndex % loopLength;
+	// First-play cursors may sit one body before the fade prefix. Resolve
+	// them against the same playable-body origin as ReadBlock.
+	const auto bodyIndex = (static_cast<unsigned long long>(playIndex % loopLength)
+		+ loopLength - (constants::MaxLoopFadeSamps % loopLength)) % loopLength;
 	const auto length = static_cast<long long>(loopLength);
 	auto shifted = (static_cast<long long>(bodyIndex) + (deltaSamps % length)) % length;
 	if (shifted < 0)
@@ -1033,6 +1068,10 @@ std::shared_ptr<vst::IVstPlugin> Loop::GetVstPlugin(size_t index) const
 
 std::vector<JobAction> Loop::_CommitChanges()
 {
+	// Plugin latency/controller notifications must be pumped with closed editors.
+	if (const auto chain = _vstChain.load(std::memory_order_acquire))
+		chain->PollPendingChanges();
+
 	_vstChain.collect();
 
 	// Swap in a new VST chain when the job thread has delivered one.

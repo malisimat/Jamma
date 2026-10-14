@@ -7,6 +7,7 @@
 #include <chrono>
 #include <tuple>
 #include "MusicalTransport.h"
+#include "../base/PublishedAudioSnapshot.h"
 
 typedef std::chrono::time_point<std::chrono::steady_clock> Time;
 
@@ -30,6 +31,21 @@ namespace utils
 			QUANTISE_MULTIPLE,
 			QUANTISE_POWER
 		};
+
+		// Owner-side reservation; live geometry/phase are installed by AudioHost.
+		struct RecordingSeed
+		{
+			std::uint64_t Version = 0u;
+			unsigned int GrainSamps = 0u;
+			unsigned long LengthSamps = 0ul;
+			QuantisationType Type = QUANTISE_OFF;
+			std::uint32_t RecordOrigin = 0u;
+		};
+		std::shared_ptr<const RecordingSeed> PendingRecordingSeedOnOwner() const;
+		std::shared_ptr<const RecordingSeed> ReserveRecordingSeedOnOwner(RecordingSeed seed);
+		void CancelRecordingSeedOnOwner(std::uint64_t version) noexcept;
+		bool RecordingSeedReadyAtAudioBoundary(std::uint64_t version) const noexcept;
+		void ConsumeRecordingSeedAtAudioBoundary(std::uint64_t version) noexcept;
 
 		enum class CommandType : std::uint8_t
 		{
@@ -68,6 +84,8 @@ namespace utils
 		// invoke it before the Timer is handed to the audio callback.
 		bool InitialiseAbsoluteSamplePos(std::uint64_t absoluteSamplePos) noexcept;
 		void SetMasterLoopIndexFrac(double loopIndexFrac) noexcept;
+		// Sets the current phase using an exact sample index, wrapped to the seed length.
+		void SetMasterLoopSampleOffset(unsigned long sampleOffsetSamps) noexcept;
 		void PublishCommand(const Command& command) noexcept;
 		bool ConsumePendingCommand() noexcept;
 		// Applies a command directly on the audio thread (no mailbox handoff).
@@ -122,6 +140,11 @@ namespace utils
 		MusicalPosition CurrentMusicalPosition(unsigned int sampleRate) const noexcept;
 
 	private:
+		base::PublishedAudioSnapshot<const RecordingSeed> _recordingSeed;
+		std::uint64_t _recordingSeedOwnerVersion = 0u; // Serialized job owner.
+		std::atomic<std::uint64_t> _recordingSeedPublishedVersion{ 0u };
+		std::atomic<std::uint64_t> _recordingSeedConsumedVersion{ 0u }; // Callback writes.
+		std::atomic<std::uint64_t> _recordingSeedCancelledVersion{ 0u }; // Clear cancels pending work.
 		std::atomic<std::uint64_t> _loopCount;
 		std::atomic<std::uint64_t> _sceneSamplePos{ 0u };
 		std::atomic_uint _sampOffset;

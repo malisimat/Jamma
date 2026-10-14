@@ -101,3 +101,93 @@ TEST(VstAudioBuffers, CopyMultiToInputBuffersCopiesEveryChannel)
 	EXPECT_FLOAT_EQ(5.0f, dest2[0]);
 	EXPECT_FLOAT_EQ(6.0f, dest2[1]);
 }
+#include "vst/VstChain.h"
+#include <limits>
+
+class LatencyTestPlugin final : public vst::IVstPlugin
+{
+public:
+	int Latency = 0;
+	bool Loaded = true;
+	bool Bypassed = false;
+	mutable unsigned int PollCount = 0u;
+	bool PreInit(const std::wstring&) override { return true; }
+	bool Load(const std::wstring&, float, unsigned int, unsigned int, vst::HostedLayoutMode) override { return true; }
+	void Unload() override { Loaded = false; }
+	void ProcessBlock(float*, int32_t) noexcept override {}
+	void ProcessBlockStereo(float*, float*, int32_t) noexcept override {}
+	void ProcessBlockMulti(float* const*, int32_t, int32_t) noexcept override {}
+	void SetParameter(unsigned int, float) noexcept override {}
+	float GetParameter(unsigned int) const noexcept override { return 0.0f; }
+	void BeginMidiBlock(std::uint32_t, std::uint32_t) noexcept override {}
+	void SendMidiEvent(const midi::MidiEvent&, bool) noexcept override {}
+	bool OpenEditor(HWND) override { return false; }
+	void CloseEditor() override {}
+	utils::Size2d GetEditorSize() const noexcept override { return { 0u, 0u }; }
+	bool IsLoaded() const noexcept override { return Loaded; }
+	const std::string& Name() const noexcept override { return PluginName; }
+	void SetBypassed(bool bypassed) noexcept override { Bypassed = bypassed; }
+	bool IsBypassed() const noexcept override { return Bypassed; }
+	int GetLatencySamples() const noexcept override { return Latency; }
+	void PollPendingChanges() const noexcept override { ++PollCount; }
+private:
+	std::string PluginName = "latency-test";
+};
+
+TEST(VstPathLatency, IndexedMidiRouteIncludesOnlyDestinationAndDownstreamDelay)
+{
+	vst::VstChain chain;
+	for (int delay : { 13, 29, 47 })
+	{
+	 auto plugin = std::make_shared<LatencyTestPlugin>();
+	 plugin->Latency = delay;
+	 chain.AddPlugin(plugin);
+	}
+	EXPECT_EQ(89, chain.GetLatencySamples());
+	EXPECT_EQ(76, chain.GetLatencySamplesFrom(1u));
+	EXPECT_EQ(47, chain.GetLatencySamplesFrom(2u));
+	EXPECT_EQ(0, chain.GetLatencySamplesFrom(3u));
+}
+
+TEST(VstPathLatency, BypassedUnloadedAndNegativeReportsContributeNoDelay)
+{
+	vst::VstChain chain;
+	auto first = std::make_shared<LatencyTestPlugin>();
+	auto second = std::make_shared<LatencyTestPlugin>();
+	first->Latency = 13;
+	second->Latency = 29;
+	chain.AddPlugin(first);
+	chain.AddPlugin(second);
+	EXPECT_EQ(42, chain.GetLatencySamples());
+	first->SetBypassed(true);
+	EXPECT_EQ(29, chain.GetLatencySamples());
+	second->Loaded = false;
+	EXPECT_EQ(0, chain.GetLatencySamples());
+	second->Loaded = true;
+	second->Latency = -1;
+	EXPECT_EQ(0, chain.GetLatencySamples());
+	first->SetBypassed(false);
+	first->Latency = 17;
+	EXPECT_EQ(17, chain.GetLatencySamples());
+}
+
+TEST(VstPathLatency, ExcessiveReportsSaturateWithoutSignedOverflow)
+{
+	vst::VstChain chain;
+	for (auto i = 0u; i < 2u; ++i)
+	{
+	 auto plugin = std::make_shared<LatencyTestPlugin>();
+	 plugin->Latency = (std::numeric_limits<int>::max)();
+	 chain.AddPlugin(plugin);
+	}
+	EXPECT_EQ((std::numeric_limits<int>::max)(), chain.GetLatencySamples());
+}
+
+TEST(VstPathLatency, NotificationPumpVisitsLoadedPluginsWithClosedEditors)
+{
+	vst::VstChain chain;
+	auto plugin = std::make_shared<LatencyTestPlugin>();
+	chain.AddPlugin(plugin);
+	chain.PollPendingChanges();
+	EXPECT_EQ(1u, plugin->PollCount);
+}

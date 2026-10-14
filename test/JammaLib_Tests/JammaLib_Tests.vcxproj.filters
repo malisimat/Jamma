@@ -11,6 +11,9 @@
     <ClCompile Include="src\audio\AudioFlow_Tests.cpp">
       <Filter>src\audio</Filter>
     </ClCompile>
+    <ClCompile Include="src\audio\RecordedPlaybackLatency_Tests.cpp">
+      <Filter>src\audio</Filter>
+    </ClCompile>
     <ClCompile Include="src\audio\Overdub_Tests.cpp">
       <Filter>src\audio</Filter>
     </ClCompile>
@@ -165,6 +168,9 @@
       <Filter>src\ninjam</Filter>
     </ClCompile>
     <ClCompile Include="src\ninjam\NinjamMetronomeTiming_Tests.cpp">
+      <Filter>src\ninjam</Filter>
+    </ClCompile>
+    <ClCompile Include="src\ninjam\LocalMasterPromotionSafety_Tests.cpp">
       <Filter>src\ninjam</Filter>
     </ClCompile>
     <ClCompile Include="src\ninjam\NinjamTiming_Tests.cpp">

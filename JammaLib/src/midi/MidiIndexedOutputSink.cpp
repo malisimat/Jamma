@@ -19,6 +19,11 @@ namespace midi
 
 	void MidiIndexedOutputSink::OnEvent(const MidiEvent& ev) noexcept
 	{
+		(void)TryOnEvent(ev);
+	}
+
+	bool MidiIndexedOutputSink::TryOnEvent(const MidiEvent& ev) noexcept
+	{
 		MidiEvent mapped = ev;
 		mapped.sampleOffset = _outputBlockStart + (ev.sampleOffset - _midiBlockStart);
 		if (mapped.IsNoteOn())
@@ -27,7 +32,10 @@ namespace midi
 				static_cast<float>(mapped.data2) * _velocityScale + 0.5f);
 			mapped.data2 = static_cast<std::uint8_t>(
 				std::clamp(scaledVelocity, 0, 127));
+			// A positive source attack that becomes velocity zero would be a MIDI
+			// release. Do not deliver it or mark the source note as sounding.
+			if (!mapped.IsNoteOn()) return false;
 		}
-		_outputSink.OnEvent(_outputIndex, mapped);
+		return _outputSink.TryOnEvent(_outputIndex, mapped);
 	}
 }
