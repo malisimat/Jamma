@@ -158,6 +158,21 @@ AudioSpectralEditor::~AudioSpectralEditor()
 	Close();
 }
 
+void AudioSpectralEditor::InitMeshResources(bool forceInit)
+{
+	if (forceInit) ReleaseMeshResources();
+	// A failed startup upload is retried on model initialization, which reports
+	// failure through the existing unavailable path.
+	try { _mesh->Prepare(); }
+	catch (const std::exception&) {}
+}
+
+void AudioSpectralEditor::ReleaseMeshResources()
+{
+	if (_model) _model->ReleaseResources();
+	_mesh->Release();
+}
+
 void AudioSpectralEditor::Open(const std::shared_ptr<engine::Loop>& loop)
 {
 	if (_stroke)
@@ -182,7 +197,7 @@ void AudioSpectralEditor::Open(const std::shared_ptr<engine::Loop>& loop)
 		gui::GuiModelParams params;
 		params.ModelScale = 1.0f;
 		params.ModelTextures = { "levels" };
-		_model = std::make_shared<graphics::AudioSpectralModel>(params, _timeSegments, _frequencySegments);
+		_model = std::make_shared<graphics::AudioSpectralModel>(params, _mesh);
 		loop->SetAudioSpectralModel(_model);
 	}
 	_state = State::WaitingForSource;

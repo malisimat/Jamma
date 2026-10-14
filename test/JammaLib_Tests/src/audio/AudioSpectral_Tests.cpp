@@ -1,4 +1,6 @@
+#define GLEW_STATIC
 #include "gtest/gtest.h"
+#include "graphics/GlDeleteQueue.h"
 #include "spectral/AudioSpectralDsp.h"
 #include "spectral/AudioSpectralEnvelope.h"
 #include "spectral/AudioSpectralGainField.h"
@@ -23,6 +25,231 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+
+TEST(AudioSpectralTopologyTest, MatchesOriginalCompleteTopology)
+{
+	for (const auto dimensions : { std::pair{1u, 1u}, std::pair{17u, 9u},
+		std::pair{graphics::AudioSpectralModel::DefaultTimeSegments, graphics::AudioSpectralModel::DefaultFrequencySegments} })
+	{
+		const auto [time, frequency] = dimensions;
+		const auto oldStart = std::chrono::steady_clock::now();
+		std::vector<glm::vec2> grid;
+		std::vector<unsigned int> indices;
+		grid.reserve(static_cast<std::size_t>(time + 1u) * (frequency + 1u));
+		indices.reserve(static_cast<std::size_t>(time) * frequency * 6u);
+		for (unsigned int row = 0u; row <= frequency; ++row)
+			for (unsigned int column = 0u; column <= time; ++column)
+				grid.emplace_back(static_cast<float>(column) / time, static_cast<float>(row) / frequency);
+		for (unsigned int row = 0u; row < frequency; ++row)
+			for (unsigned int column = 0u; column < time; ++column)
+			{
+				const auto a = row * (time + 1u) + column;
+				const auto b = a + time + 1u;
+				indices.insert(indices.end(), {a, a + 1u, b, a + 1u, b + 1u, b});
+			}
+		const auto oldEnd = std::chrono::steady_clock::now();
+		const auto owner = std::make_shared<const graphics::AudioSpectralTopology>(time, frequency);
+		const auto& topology = *owner;
+		const auto newEnd = std::chrono::steady_clock::now();
+		EXPECT_EQ(topology.TimeSegments(), time);
+		EXPECT_EQ(topology.FrequencySegments(), frequency);
+		EXPECT_EQ(topology.Grid(), grid);
+		EXPECT_EQ(topology.Indices(), indices); // Complete ordering also proves every cell diagonal.
+		EXPECT_EQ(topology.Indices().size(), static_cast<std::size_t>(time) * frequency * 6u);
+		EXPECT_LT(*std::max_element(topology.Indices().begin(), topology.Indices().end()), topology.Grid().size());
+		if (time == graphics::AudioSpectralModel::DefaultTimeSegments)
+		{
+			// Informational measurements in gtest XML; never a timing threshold.
+			RecordProperty("original_cpu_topology_ms", std::to_string(std::chrono::duration<double, std::milli>(oldEnd - oldStart).count()));
+			RecordProperty("retained_cpu_topology_ms", std::to_string(std::chrono::duration<double, std::milli>(newEnd - oldEnd).count()));
+			std::vector<double> modelTimes;
+			for (unsigned int open = 0; open != 6u; ++open)
+			{
+				const auto start = std::chrono::steady_clock::now();
+				graphics::AudioSpectralModel model(gui::GuiModelParams{}, owner);
+				const auto end = std::chrono::steady_clock::now();
+				EXPECT_EQ(model.Topology()->Grid().data(), topology.Grid().data());
+				EXPECT_EQ(model.Topology()->Indices().data(), topology.Indices().data());
+				modelTimes.push_back(std::chrono::duration<double, std::milli>(end - start).count());
+			}
+			RecordProperty("first_shared_model_cpu_ms", std::to_string(modelTimes.front()));
+			std::sort(modelTimes.begin() + 1, modelTimes.end());
+			RecordProperty("reopened_shared_model_cpu_median_ms", std::to_string(modelTimes[3]));
+		}
+	}
+}
+
+TEST(AudioSpectralTopologyTest, ValidatesBeforeAllocation)
+{
+	EXPECT_THROW(graphics::AudioSpectralTopology(0u, 8u), std::invalid_argument);
+	EXPECT_THROW(graphics::AudioSpectralTopology(8u, 0u), std::invalid_argument);
+	EXPECT_THROW(graphics::AudioSpectralTopology(spectral::AudioSpectralConfig::MaxTimeSegments + 1u, 8u), std::invalid_argument);
+	EXPECT_THROW(graphics::AudioSpectralTopology(8u, spectral::AudioSpectralConfig::MaxFrequencySegments + 1u), std::invalid_argument);
+	EXPECT_THROW(graphics::AudioSpectralModel(gui::GuiModelParams{}, std::shared_ptr<const graphics::AudioSpectralTopology>{}), std::invalid_argument);
+}
+
+class AudioSpectralMeshGlTest : public testing::Test
+{
+protected:
+	HWND _window = nullptr;
+	HDC _dc = nullptr;
+	HGLRC _context = nullptr;
+	class Model final : public graphics::AudioSpectralModel
+	{
+	public:
+		using AudioSpectralModel::AudioSpectralModel;
+		unsigned int VertexArray() const noexcept { return _vertexArray; }
+	};
+	void SetUp() override
+	{
+		_window = CreateWindowA("STATIC", "Spectral mesh resource test", WS_POPUP, 0, 0, 16, 16, nullptr, nullptr, GetModuleHandle(nullptr), nullptr);
+		ASSERT_NE(_window, nullptr);
+		_dc = GetDC(_window);
+		PIXELFORMATDESCRIPTOR format{};
+		format.nSize = sizeof(format); format.nVersion = 1;
+		format.dwFlags = PFD_DRAW_TO_WINDOW | PFD_SUPPORT_OPENGL | PFD_DOUBLEBUFFER;
+		format.iPixelType = PFD_TYPE_RGBA; format.cColorBits = 32; format.cDepthBits = 24;
+		const auto pixelFormat = ChoosePixelFormat(_dc, &format);
+		ASSERT_NE(pixelFormat, 0);
+		ASSERT_TRUE(SetPixelFormat(_dc, pixelFormat, &format));
+		_context = wglCreateContext(_dc);
+		ASSERT_NE(_context, nullptr);
+		ASSERT_TRUE(wglMakeCurrent(_dc, _context));
+		if (glewInit() != GLEW_OK || !GLEW_VERSION_3_3) GTEST_SKIP() << "OpenGL 3.3 is required for spectral model integration";
+		while (glGetError() != GL_NO_ERROR) {}
+		graphics::GlDeleteQueue::SetRenderThread(std::this_thread::get_id());
+	}
+	void TearDown() override
+	{
+		graphics::GlDeleteQueue::FlushPendingDeletes();
+		graphics::GlDeleteQueue::SetRenderThread({});
+		wglMakeCurrent(nullptr, nullptr);
+		if (_context) wglDeleteContext(_context);
+		if (_dc) ReleaseDC(_window, _dc);
+		if (_window) DestroyWindow(_window);
+	}
+};
+
+TEST_F(AudioSpectralMeshGlTest, UploadsOncePerGenerationAndRetainsBuffersUntilLastUser)
+{
+	const auto topology = std::make_shared<const graphics::AudioSpectralTopology>(17u, 9u);
+	graphics::AudioSpectralMeshResource mesh(topology);
+	auto first = mesh.Prepare();
+	ASSERT_NE(first, nullptr);
+	EXPECT_EQ(mesh.Prepare(), first);
+	EXPECT_TRUE(first->IsCurrent());
+	std::vector<unsigned int> uploaded(topology->Indices().size());
+	glBindBuffer(GL_ARRAY_BUFFER, first->IndexBuffer());
+	glGetBufferSubData(GL_ARRAY_BUFFER, 0, uploaded.size() * sizeof(unsigned int), uploaded.data());
+	EXPECT_EQ(uploaded, topology->Indices());
+	std::vector<glm::vec2> grid(topology->Grid().size());
+	glBindBuffer(GL_ARRAY_BUFFER, first->GridBuffer());
+	glGetBufferSubData(GL_ARRAY_BUFFER, 0, grid.size() * sizeof(glm::vec2), grid.data());
+	EXPECT_EQ(grid, topology->Grid());
+	glBindBuffer(GL_ARRAY_BUFFER, 0);
+	mesh.Release();
+	const auto oldGrid = first->GridBuffer(), oldIndex = first->IndexBuffer();
+	EXPECT_TRUE(glIsBuffer(oldGrid)); EXPECT_TRUE(glIsBuffer(oldIndex));
+	auto second = mesh.Prepare();
+	EXPECT_NE(second, first);
+	EXPECT_NE(second->GridBuffer(), oldGrid);
+	EXPECT_NE(second->IndexBuffer(), oldIndex);
+	first.reset();
+	EXPECT_FALSE(glIsBuffer(oldGrid)); EXPECT_FALSE(glIsBuffer(oldIndex));
+	const auto newGrid = second->GridBuffer(), newIndex = second->IndexBuffer();
+	second.reset();
+	EXPECT_TRUE(glIsBuffer(newGrid)); EXPECT_TRUE(glIsBuffer(newIndex));
+	mesh.Release();
+	EXPECT_FALSE(glIsBuffer(newGrid)); EXPECT_FALSE(glIsBuffer(newIndex));
+	EXPECT_EQ(glGetError(), GL_NO_ERROR);
+}
+
+TEST_F(AudioSpectralMeshGlTest, ModelsOwnIndependentVaosAndSurviveForceReinitialization)
+{
+	resources::ResourceLib resources;
+	ASSERT_TRUE(resources.LoadResource(resources::TEXTURE, "levels", {}));
+	ASSERT_TRUE(resources.LoadResource(resources::SHADER, "audio_spectral", {}));
+	const auto mesh = std::make_shared<graphics::AudioSpectralMeshResource>(
+		std::make_shared<const graphics::AudioSpectralTopology>(17u, 9u));
+	auto buffers = mesh->Prepare(); // Startup upload before either model exists.
+	Model first(gui::GuiModelParams{}, mesh), second(gui::GuiModelParams{}, mesh);
+	first.InitResources(resources, true); second.InitResources(resources, true);
+	ASSERT_NE(first.VertexArray(), 0u); ASSERT_NE(second.VertexArray(), 0u);
+	EXPECT_NE(first.VertexArray(), second.VertexArray());
+	for (const auto vao : { first.VertexArray(), second.VertexArray() })
+	{
+		glBindVertexArray(vao);
+		GLint grid = 0, indices = 0;
+		glGetVertexAttribiv(0u, GL_VERTEX_ATTRIB_ARRAY_BUFFER_BINDING, &grid);
+		glGetIntegerv(GL_ELEMENT_ARRAY_BUFFER_BINDING, &indices);
+		EXPECT_EQ(grid, buffers->GridBuffer()); EXPECT_EQ(indices, buffers->IndexBuffer());
+	}
+	glBindVertexArray(0);
+	first.ReleaseResources();
+	EXPECT_TRUE(glIsVertexArray(second.VertexArray()));
+	EXPECT_TRUE(glIsBuffer(buffers->GridBuffer()));
+	second.InitResources(resources, true); // Model-only force reset reuses static generation.
+	EXPECT_EQ(mesh->Prepare(), buffers);
+	second.ReleaseResources();
+	mesh->Release(); // Orderly owner reset creates a fresh immutable generation.
+	auto replacement = mesh->Prepare();
+	EXPECT_NE(replacement, buffers);
+	const auto oldGrid = buffers->GridBuffer();
+	EXPECT_TRUE(glIsBuffer(oldGrid));
+	first.InitResources(resources, true);
+	glBindVertexArray(first.VertexArray());
+	GLint newGrid = 0;
+	glGetVertexAttribiv(0u, GL_VERTEX_ATTRIB_ARRAY_BUFFER_BINDING, &newGrid);
+	EXPECT_EQ(newGrid, replacement->GridBuffer());
+	glBindVertexArray(0);
+	buffers.reset(); EXPECT_FALSE(glIsBuffer(oldGrid));
+	first.ReleaseResources(); replacement.reset(); mesh->Release();
+	resources.ClearResources();
+	EXPECT_EQ(glGetError(), GL_NO_ERROR);
+}
+
+TEST_F(AudioSpectralMeshGlTest, MissingContextAndFailedUploadCanRetry)
+{
+	graphics::AudioSpectralMeshResource mesh(std::make_shared<const graphics::AudioSpectralTopology>(8u, 4u));
+	ASSERT_TRUE(wglMakeCurrent(nullptr, nullptr));
+	EXPECT_EQ(mesh.Prepare(), nullptr);
+	ASSERT_TRUE(wglMakeCurrent(_dc, _context));
+	glBindBuffer(GL_TEXTURE_2D, 0); // Deterministic GL error exercises failed upload cleanup.
+	EXPECT_THROW(mesh.Prepare(), std::runtime_error);
+	EXPECT_EQ(glGetError(), GL_NO_ERROR);
+	EXPECT_NE(mesh.Prepare(), nullptr);
+	mesh.Release();
+	EXPECT_EQ(glGetError(), GL_NO_ERROR);
+}
+
+TEST_F(AudioSpectralMeshGlTest, UnrelatedContextNeverReceivesOldBufferDeletion)
+{
+	graphics::AudioSpectralMeshResource mesh(std::make_shared<const graphics::AudioSpectralTopology>(8u, 4u));
+	auto first = mesh.Prepare();
+	ASSERT_NE(first, nullptr);
+	const auto otherContext = wglCreateContext(_dc);
+	ASSERT_NE(otherContext, nullptr);
+	ASSERT_TRUE(wglMakeCurrent(_dc, otherContext));
+	EXPECT_FALSE(first->IsCurrent());
+	EXPECT_THROW(mesh.Prepare(), std::runtime_error); // Reject a live foreign context.
+	graphics::AudioSpectralMeshResource otherMesh(mesh.Topology());
+	auto second = otherMesh.Prepare();
+	ASSERT_NE(second, nullptr);
+	EXPECT_NE(second, first);
+	ASSERT_TRUE(wglMakeCurrent(_dc, _context));
+	EXPECT_EQ(mesh.Prepare(), first); // Rejection kept the original generation intact.
+	mesh.Release();
+	ASSERT_TRUE(wglMakeCurrent(_dc, otherContext));
+	first.reset(); // Old IDs must not delete identically numbered buffers here.
+	EXPECT_TRUE(glIsBuffer(second->GridBuffer()));
+	EXPECT_TRUE(glIsBuffer(second->IndexBuffer()));
+	second.reset(); otherMesh.Release();
+	EXPECT_EQ(glGetError(), GL_NO_ERROR);
+	ASSERT_TRUE(wglMakeCurrent(_dc, _context));
+	wglDeleteContext(otherContext);
+	EXPECT_NE(mesh.Prepare(), nullptr);
+	mesh.Release();
+}
 
 class AudioSpectralTest : public testing::Test
 {
@@ -120,6 +347,52 @@ protected:
 		return { display, 100.0f, 1.0f, 0.0f };
 	}
 };
+
+TEST_F(AudioSpectralTest, EditorSharesStartupTopologyAcrossFreshModelsAndOtherLoops)
+{
+	const auto worker = std::make_shared<spectral::AudioSpectralWorker>();
+	const auto loop = RecordedLoop();
+	const auto other = RecordedLoop();
+	std::shared_ptr<graphics::AudioSpectralModel> retained;
+	std::weak_ptr<const graphics::AudioSpectralTopology> lifetime;
+	{
+		spectral::AudioSpectralEditor editor(worker, 17u, 9u);
+		editor.Open(loop);
+		retained = loop->AudioSpectralModel();
+		ASSERT_NE(retained, nullptr);
+		lifetime = retained->Topology();
+		const auto* grid = retained->Topology()->Grid().data();
+		const auto* indices = retained->Topology()->Indices().data();
+		editor.Close(); editor.Open(loop);
+		ASSERT_NE(loop->AudioSpectralModel(), retained);
+		EXPECT_EQ(loop->AudioSpectralModel()->Topology(), retained->Topology());
+		editor.Close(); editor.Open(other);
+		EXPECT_EQ(other->AudioSpectralModel()->Topology(), retained->Topology());
+		EXPECT_EQ(other->AudioSpectralModel()->Topology()->Grid().data(), grid);
+		EXPECT_EQ(other->AudioSpectralModel()->Topology()->Indices().data(), indices);
+		editor.Close();
+		loop->SetAudioSpectralModel(nullptr); other->SetAudioSpectralModel(nullptr);
+	}
+	EXPECT_FALSE(lifetime.expired()); // A model outliving the editor retains backing arrays.
+	retained.reset();
+	EXPECT_TRUE(lifetime.expired());
+	spectral::AudioSpectralEditor replacement(worker, 17u, 9u);
+	replacement.Open(other);
+	EXPECT_NE(other->AudioSpectralModel(), nullptr);
+}
+
+TEST_F(AudioSpectralTest, SharedTopologyDoesNotShareDisplayAcceptanceState)
+{
+	const auto topology = std::make_shared<const graphics::AudioSpectralTopology>(4u, 2u);
+	graphics::AudioSpectralModel first(gui::GuiModelParams{}, topology), second(gui::GuiModelParams{}, topology);
+	auto oldDisplay = std::make_shared<graphics::AudioSpectralDisplay>(*PickingSurface().Display);
+	auto newDisplay = std::make_shared<graphics::AudioSpectralDisplay>(*oldDisplay);
+	newDisplay->Revision = 2u;
+	std::string reason;
+	ASSERT_TRUE(first.SetDisplay(newDisplay, reason));
+	EXPECT_FALSE(first.SetDisplay(oldDisplay, reason));
+	EXPECT_TRUE(second.SetDisplay(oldDisplay, reason));
+}
 
 TEST_F(AudioSpectralTest, UnityRoundTripCoversShortAndNonHopLengthsAndPreservesContext)
 {

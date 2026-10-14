@@ -54,6 +54,7 @@ LoopGridEditor::LoopGridEditor(Host host, utils::Size2d size) :
 
 void LoopGridEditor::InitResources(resources::ResourceLib& resourceLib, bool forceInit)
 {
+	_audioEditor.InitMeshResources(forceInit);
 	_button->InitResources(resourceLib, forceInit);
 	_feedback->InitResources(resourceLib, forceInit);
 	_modeLabel->InitResources(resourceLib, forceInit);
@@ -64,6 +65,7 @@ void LoopGridEditor::InitResources(resources::ResourceLib& resourceLib, bool for
 void LoopGridEditor::ReleaseResources()
 {
 	CancelInput();
+	_audioEditor.ReleaseMeshResources();
 	_button->ReleaseResources();
 	_feedback->ReleaseResources();
 	_modeLabel->ReleaseResources();

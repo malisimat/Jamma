@@ -1,6 +1,5 @@
 #include "AudioSpectralModel.h"
 #include "../spectral/AudioSpectralDisplayJob.h"
-#include "GlDeleteQueue.h"
 
 #include <algorithm>
 #include <cmath>
@@ -57,27 +56,103 @@ gui::GuiModelParams AudioSpectralModel::_ModelParams(gui::GuiModelParams params)
 	return params;
 }
 
-AudioSpectralModel::AudioSpectralModel(gui::GuiModelParams params,
-	unsigned int timeSegments, unsigned int frequencySegments) :
-	GuiModel(_ModelParams(std::move(params))),
+AudioSpectralTopology::AudioSpectralTopology(unsigned int timeSegments, unsigned int frequencySegments) :
 	_timeSegments(timeSegments), _frequencySegments(frequencySegments)
 {
 	if (_timeSegments == 0u || _timeSegments > spectral::AudioSpectralConfig::MaxTimeSegments
 		|| _frequencySegments == 0u || _frequencySegments > spectral::AudioSpectralConfig::MaxFrequencySegments)
 		throw std::invalid_argument("Spectral surface topology exceeds its fixed limits");
-	_grid.reserve(static_cast<std::size_t>(_timeSegments + 1u) * (_frequencySegments + 1u));
-	_indices.reserve(static_cast<std::size_t>(_timeSegments) * _frequencySegments * 6u);
+	_grid.resize(static_cast<std::size_t>(_timeSegments + 1u) * (_frequencySegments + 1u));
+	_indices.resize(static_cast<std::size_t>(_timeSegments) * _frequencySegments * 6u);
+	// Resize creates writable elements; no vector growth after acquiring this pointer.
+	auto* index = _indices.data();
+	auto* vertex = _grid.data();
 	for (unsigned int row = 0u; row <= _frequencySegments; ++row)
 		for (unsigned int column = 0u; column <= _timeSegments; ++column)
-			_grid.emplace_back(static_cast<float>(column) / _timeSegments,
+			*vertex++ = glm::vec2(static_cast<float>(column) / _timeSegments,
 				static_cast<float>(row) / _frequencySegments);
 	for (unsigned int row = 0u; row < _frequencySegments; ++row)
 		for (unsigned int column = 0u; column < _timeSegments; ++column)
 		{
 			const auto a = row * (_timeSegments + 1u) + column;
 			const auto b = a + _timeSegments + 1u;
-			_indices.insert(_indices.end(), { a, a + 1u, b, a + 1u, b + 1u, b });
+			*index++ = a;
+			*index++ = a + 1u;
+			*index++ = b;
+			*index++ = a + 1u;
+			*index++ = b + 1u;
+			*index++ = b;
 		}
+}
+
+AudioSpectralModel::AudioSpectralModel(gui::GuiModelParams params,
+	unsigned int timeSegments, unsigned int frequencySegments) :
+	AudioSpectralModel(std::move(params), std::make_shared<const AudioSpectralTopology>(timeSegments, frequencySegments))
+{}
+
+AudioSpectralModel::AudioSpectralModel(gui::GuiModelParams params,
+	std::shared_ptr<const AudioSpectralTopology> topology) :
+	AudioSpectralModel(std::move(params), std::make_shared<AudioSpectralMeshResource>(std::move(topology)))
+{}
+
+AudioSpectralModel::AudioSpectralModel(gui::GuiModelParams params,
+	std::shared_ptr<AudioSpectralMeshResource> mesh) :
+	GuiModel(_ModelParams(std::move(params))),
+	_topology(mesh ? mesh->Topology() : throw std::invalid_argument("Spectral surface requires mesh")),
+	_mesh(std::move(mesh)),
+	_timeSegments(_topology->TimeSegments()), _frequencySegments(_topology->FrequencySegments()),
+	_grid(_topology->Grid()), _indices(_topology->Indices())
+{}
+
+AudioSpectralMeshResource::AudioSpectralMeshResource(std::shared_ptr<const AudioSpectralTopology> topology) :
+	_topology(topology ? std::move(topology) : throw std::invalid_argument("Spectral surface requires topology"))
+{}
+
+std::shared_ptr<const AudioSpectralMeshBuffers> AudioSpectralMeshResource::Prepare()
+{
+	if (!wglGetCurrentContext()) return nullptr;
+	if (_buffers && !_buffers->IsCurrent())
+		throw std::runtime_error("Release the spectral mesh in its owning context before context replacement");
+	if (!_buffers)
+		_buffers = std::make_shared<const AudioSpectralMeshBuffers>(*_topology);
+	return _buffers;
+}
+
+AudioSpectralMeshBuffers::AudioSpectralMeshBuffers(const AudioSpectralTopology& topology) :
+	_context(wglGetCurrentContext())
+{
+	if (!_context) throw std::runtime_error("Spectral mesh upload requires a current GL context");
+	GLint arrayBuffer = 0;
+	glGetIntegerv(GL_ARRAY_BUFFER_BINDING, &arrayBuffer);
+	glGenBuffers(1, &_gridBuffer);
+	glGenBuffers(1, &_indexBuffer);
+	// Upload both with ARRAY_BUFFER: avoid changing any current VAO's EBO binding.
+	glBindBuffer(GL_ARRAY_BUFFER, _gridBuffer);
+	glBufferData(GL_ARRAY_BUFFER, topology.Grid().size() * sizeof(glm::vec2), topology.Grid().data(), GL_STATIC_DRAW);
+	glBindBuffer(GL_ARRAY_BUFFER, _indexBuffer);
+	glBufferData(GL_ARRAY_BUFFER, topology.Indices().size() * sizeof(unsigned int), topology.Indices().data(), GL_STATIC_DRAW);
+	glBindBuffer(GL_ARRAY_BUFFER, arrayBuffer);
+	if (_gridBuffer == 0u || _indexBuffer == 0u || glGetError() != GL_NO_ERROR)
+	{
+		glDeleteBuffers(1, &_gridBuffer);
+		glDeleteBuffers(1, &_indexBuffer);
+		_gridBuffer = _indexBuffer = 0u;
+		throw std::runtime_error("Unable to upload the static spectral mesh");
+	}
+}
+
+bool AudioSpectralMeshBuffers::IsCurrent() const noexcept
+{
+	return _context && _context == wglGetCurrentContext();
+}
+
+AudioSpectralMeshBuffers::~AudioSpectralMeshBuffers()
+{
+	// Scene releases resources before context destruction. If the context is
+	// lost/unrelated, never enqueue stale IDs: its teardown reclaims its objects.
+	if (!IsCurrent()) return;
+	glDeleteBuffers(1, &_gridBuffer);
+	glDeleteBuffers(1, &_indexBuffer);
 }
 
 AudioSpectralModel::~AudioSpectralModel()
@@ -386,7 +461,7 @@ void AudioSpectralModel::_InitResources(resources::ResourceLib& resourceLib, boo
 		_Fail("Spectral shader or levels palette is unavailable");
 		return;
 	}
-	if (_vertexArray != 0u && _heightTexture != 0u && !forceInit) return;
+	if (_vertexArray != 0u && _heightTexture != 0u && !forceInit && _resourceContext == wglGetCurrentContext()) return;
 	_ReleaseResources();
 	GLint maxTextureSize = 0, vertexTextures = 0;
 	glGetIntegerv(GL_MAX_TEXTURE_SIZE, &maxTextureSize);
@@ -397,16 +472,18 @@ void AudioSpectralModel::_InitResources(resources::ResourceLib& resourceLib, boo
 		_Fail("GPU cannot sample the configured spectral height texture");
 		return;
 	}
+	try { _meshBuffers = _mesh->Prepare(); }
+	catch (const std::exception& error) { _Fail(error.what()); return; }
+	if (!_meshBuffers) return;
+	_resourceContext = wglGetCurrentContext();
+	_gridBuffer = _meshBuffers->GridBuffer();
+	_indexBuffer = _meshBuffers->IndexBuffer();
 	glGenVertexArrays(1, &_vertexArray);
-	glGenBuffers(1, &_gridBuffer);
-	glGenBuffers(1, &_indexBuffer);
 	glBindVertexArray(_vertexArray);
 	glBindBuffer(GL_ARRAY_BUFFER, _gridBuffer);
-	glBufferData(GL_ARRAY_BUFFER, _grid.size() * sizeof(glm::vec2), _grid.data(), GL_STATIC_DRAW);
 	glEnableVertexAttribArray(0);
 	glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, sizeof(glm::vec2), nullptr);
 	glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, _indexBuffer);
-	glBufferData(GL_ELEMENT_ARRAY_BUFFER, _indices.size() * sizeof(unsigned int), _indices.data(), GL_STATIC_DRAW);
 	glBindVertexArray(0);
 	glBindBuffer(GL_ARRAY_BUFFER, 0);
 	glGenTextures(1, &_heightTexture);
@@ -431,11 +508,14 @@ void AudioSpectralModel::_InitResources(resources::ResourceLib& resourceLib, boo
 
 void AudioSpectralModel::_ReleaseResources()
 {
-	GlDeleteQueue::DeleteTextures(1, &_heightTexture);
-	GlDeleteQueue::DeleteBuffers(1, &_gridBuffer);
-	GlDeleteQueue::DeleteBuffers(1, &_indexBuffer);
-	GlDeleteQueue::DeleteVertexArrays(1, &_vertexArray);
+	if (_resourceContext && _resourceContext == wglGetCurrentContext())
+	{
+		glDeleteTextures(1, &_heightTexture);
+		glDeleteVertexArrays(1, &_vertexArray);
+	}
 	_heightTexture = _gridBuffer = _indexBuffer = _vertexArray = 0u;
+	_resourceContext = nullptr;
+	_meshBuffers.reset(); // VAO must be detached before releasing shared buffers.
 	std::lock_guard lock(_surfaceMutex);
 	_uploadedDisplay.reset();
 	_displayedSurface.Display.reset();

@@ -15,6 +15,52 @@ namespace spectral { class AudioSpectralDisplayJob; }
 
 namespace graphics
 {
+	// CPU-only immutable mesh. An editor prepares one during startup and retains
+	// its roughly 32 MiB arrays across opens; dynamic display/GL state stays per model.
+	class AudioSpectralTopology final
+	{
+	public:
+		AudioSpectralTopology(unsigned int timeSegments, unsigned int frequencySegments);
+		unsigned int TimeSegments() const noexcept { return _timeSegments; }
+		unsigned int FrequencySegments() const noexcept { return _frequencySegments; }
+		const std::vector<glm::vec2>& Grid() const noexcept { return _grid; }
+		const std::vector<unsigned int>& Indices() const noexcept { return _indices; }
+	private:
+		const unsigned int _timeSegments, _frequencySegments;
+		std::vector<glm::vec2> _grid;
+		std::vector<unsigned int> _indices;
+	};
+
+	// Immutable upload generation tied to one window GL context. Models retain
+	// their generation until their VAO is detached, including during force reset.
+	class AudioSpectralMeshBuffers final
+	{
+	public:
+		explicit AudioSpectralMeshBuffers(const AudioSpectralTopology& topology);
+		~AudioSpectralMeshBuffers();
+		AudioSpectralMeshBuffers(const AudioSpectralMeshBuffers&) = delete;
+		AudioSpectralMeshBuffers& operator=(const AudioSpectralMeshBuffers&) = delete;
+		bool IsCurrent() const noexcept;
+		unsigned int GridBuffer() const noexcept { return _gridBuffer; }
+		unsigned int IndexBuffer() const noexcept { return _indexBuffer; }
+	private:
+		HGLRC _context = nullptr;
+		unsigned int _gridBuffer = 0u, _indexBuffer = 0u;
+	};
+
+	// Editor-owned cache; GPU methods are current-context/render-thread only.
+	class AudioSpectralMeshResource final
+	{
+	public:
+		explicit AudioSpectralMeshResource(std::shared_ptr<const AudioSpectralTopology> topology);
+		const std::shared_ptr<const AudioSpectralTopology>& Topology() const noexcept { return _topology; }
+		std::shared_ptr<const AudioSpectralMeshBuffers> Prepare();
+		void Release() { _buffers.reset(); }
+	private:
+		const std::shared_ptr<const AudioSpectralTopology> _topology;
+		std::shared_ptr<const AudioSpectralMeshBuffers> _buffers;
+	};
+
 	// Normalized source interval. Requested bounds are UI-owned; the model
 	// captures exact time/frequency bounds with the successful draw for picking.
 	struct AudioSpectralViewport
@@ -71,6 +117,9 @@ namespace graphics
 		explicit AudioSpectralModel(gui::GuiModelParams params,
 			unsigned int timeSegments = DefaultTimeSegments,
 			unsigned int frequencySegments = DefaultFrequencySegments);
+		AudioSpectralModel(gui::GuiModelParams params, std::shared_ptr<const AudioSpectralTopology> topology);
+		AudioSpectralModel(gui::GuiModelParams params, std::shared_ptr<AudioSpectralMeshResource> mesh);
+		const std::shared_ptr<const AudioSpectralTopology>& Topology() const noexcept { return _topology; }
 		~AudioSpectralModel();
 		// Worker-only canonical full-source projection; never feeds back into DSP.
 		// Legacy viewport argument is validated but does not change sampling.
@@ -120,10 +169,14 @@ namespace graphics
         bool _SetDisplay(std::shared_ptr<const AudioSpectralDisplay>, std::string& reason, bool trustedDamage);
 		bool _UploadDisplay();
 		void _Fail(std::string reason);
+		const std::shared_ptr<const AudioSpectralTopology> _topology;
+		const std::shared_ptr<AudioSpectralMeshResource> _mesh;
+		std::shared_ptr<const AudioSpectralMeshBuffers> _meshBuffers;
+		HGLRC _resourceContext = nullptr;
 		const unsigned int _timeSegments;
 		const unsigned int _frequencySegments;
-		std::vector<glm::vec2> _grid;
-		std::vector<unsigned int> _indices;
+		const std::vector<glm::vec2>& _grid;
+		const std::vector<unsigned int>& _indices;
 		unsigned int _gridBuffer = 0u;
 		unsigned int _indexBuffer = 0u;
 		unsigned int _heightTexture = 0u;

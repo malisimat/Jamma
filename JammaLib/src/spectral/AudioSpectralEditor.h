@@ -101,8 +101,12 @@ namespace spectral
 		explicit AudioSpectralEditor(std::shared_ptr<AudioSpectralWorker> worker = std::make_shared<AudioSpectralWorker>(),
             unsigned int timeSegments = graphics::AudioSpectralModel::DefaultTimeSegments,
             unsigned int frequencySegments = graphics::AudioSpectralModel::DefaultFrequencySegments)
-            : _worker(std::move(worker)), _timeSegments(timeSegments), _frequencySegments(frequencySegments) {}
+            : _worker(std::move(worker)), _timeSegments(timeSegments), _frequencySegments(frequencySegments),
+              _mesh(std::make_shared<graphics::AudioSpectralMeshResource>(
+                  std::make_shared<const graphics::AudioSpectralTopology>(timeSegments, frequencySegments))) {}
         ~AudioSpectralEditor();
+		void InitMeshResources(bool forceInit);
+		void ReleaseMeshResources();
 		void Open(const std::shared_ptr<engine::Loop>& loop);
 		void Close();
 		void Update();
@@ -149,6 +153,9 @@ namespace spectral
 		void _AcceptPaint();
 		std::shared_ptr<AudioSpectralWorker> _worker;
         const unsigned int _timeSegments, _frequencySegments;
+		// Synchronous startup preparation: Open never builds/copies these arrays,
+		// and Close retains them. There is no warmup job or UI readiness wait.
+		const std::shared_ptr<graphics::AudioSpectralMeshResource> _mesh;
 		std::shared_ptr<AudioSpectralResourceBudget> _resourceBudget = std::make_shared<AudioSpectralResourceBudget>();
 		std::shared_ptr<Stroke> _stroke;
 		std::shared_ptr<PaintReceipt> _paintReceipt;
