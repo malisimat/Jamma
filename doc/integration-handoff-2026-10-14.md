@@ -40,9 +40,9 @@ Investigated first failures: reconciled private settings IDs/shared editor handl
 
 Commands and all logs/XML are preserved in ignored `bin/integration-validation/`; `run-checkpoint.ps1` rereads local `.vscode/tasks.json` before every build/test, uses its installed MSBuild, `/t:Build`, absolute trailing-backslash SolutionDir and isolated outputs/vcpkg. MIDI cleanup logs remain in that source's same evidence subdirectory.
 
-## Manual acceptance — NOT RUN / awaiting user results
+## Manual acceptance — general play PASS; Save NOT RUN
 
-Requested short checks on `Jamma\bin\x64\Release\Jamma.exe` from this checkout: audible NINJAM alignment/held-note ditch; Focusrite meters/switch/rollback and Save/Load; active station removal/Cancel with actual VST editor; group keys/previews/topology persistence; idle camera recording/stop/ditch; spectral read/bounce/punch/reopen/Undo/DPI/context behavior. Automated success does not substitute for these listening/hardware/input results. No manual PASS is claimed.
+User report on 14 October 2026 for the requested Release executable: "PASSes a general play session fine. didn't try save." General play: **PASS**. Save: **NOT RUN**. Specific NINJAM alignment/held-note, device switch/rollback, Load, active removal/VST teardown, group, camera and spectral/DPI scenarios were not individually confirmed. This records a successful general play session, not completion of every targeted acceptance check. Master promotion remains held.
 
 Release executable SHA256: `530D043B60B3C2C23AC7A382D5BDB0F00EA8F34422D0B57A2DC897A5508F34F9`.
 
