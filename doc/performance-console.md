@@ -3,8 +3,9 @@
 Jamma's command/log window is a native Windows window within `Jamma.exe`.
 It needs no companion executable, Windows Terminal profile, or terminal host.
 The main window renders its first frame before the console is created. With
-`consoleautostart` enabled (the default), the console appears in the background
-without changing focus. Clicking it later activates it normally.
+`consoleautostart` enabled (the default), the console appears directly behind
+Jamma's main window without changing focus or sinking below every other app.
+Clicking it later activates it normally.
 
 Set `consoleautostart` to `false` in Jamma's defaults JSON to start with the
 console hidden. In the main Jamma window, **Ctrl+`** shows or hides it.
@@ -31,6 +32,9 @@ and **Ctrl+V**. **Enter** submits a single command. Input is limited to
 submissions retain the draft. Console keyboard navigation does not trigger
 Jamma's global Insert/Page Up/Page Down performance actions.
 
+The console uses dark grey surfaces and bright input/status text, with a dark
+title bar and rounded outer corners where Windows supports them. Standard
+window movement, resizing and close controls remain available.
 The status row shows NINJAM connection state and the latest event/result.
 The layout follows window size and DPI changes. History and capture are
 bounded; capture overflow produces a visible loss notice. The transcript keeps

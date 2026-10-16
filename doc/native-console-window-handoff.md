@@ -77,10 +77,11 @@ one trailing backslash. Reproduce using that local configuration and the
 commands in [build.md](build.md); focused native tests use
 `--gtest_filter="NativeConsoleWindow.*:ConsoleSession.*:ConsoleCommand.*:InitFile.*:Window.ConsoleToggleShortcutIsConsumedOnce"`.
 
-## Remaining manual acceptance
+## Manual acceptance completed
 
-These interactions have not been certified by this run. Automated control
-tests and source ordering do not establish every desktop/hardware interaction.
+On 16 October 2026 the user confirmed that all manual tests below passed
+perfectly. Two follow-ups were requested: darken the complete console surface
+and place passive startup display behind Jamma rather than every desktop window.
 
 1. Launch the Release Jamma.exe through Explorer and a Start-menu shortcut.
    Confirm the main window renders first and automatic console display leaves

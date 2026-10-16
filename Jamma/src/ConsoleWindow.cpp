@@ -2,7 +2,9 @@
 #include "../../console/CommandMailbox.h"
 #include <CommCtrl.h>
 #include <Richedit.h>
+#include <dwmapi.h>
 #include <algorithm>
+#pragma comment(lib, "dwmapi.lib")
 
 namespace console
 {
@@ -33,22 +35,31 @@ namespace console
 	bool ConsoleWindow::CreateHidden(HINSTANCE instance)
 	{
 		if (_window) return true;
+		_backgroundBrush = CreateSolidBrush(BackgroundColor);
+		_inputBrush = CreateSolidBrush(InputColor);
+		if (!_backgroundBrush || !_inputBrush) { Destroy(); return false; }
 		_richEdit = LoadLibraryExW(L"Msftedit.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
-		if (!_richEdit) return false;
+		if (!_richEdit) { Destroy(); return false; }
 		WNDCLASSEXW cls{ sizeof(cls) };
 		cls.lpfnWndProc = WindowProc; cls.hInstance = instance;
 		cls.hCursor = LoadCursor(nullptr, IDC_ARROW);
-		cls.hbrBackground = GetSysColorBrush(COLOR_BTNFACE);
 		cls.lpszClassName = L"JammaNativeCommandWindow";
 		if (!RegisterClassExW(&cls) && GetLastError() != ERROR_CLASS_ALREADY_EXISTS)
 		{ Destroy(); return false; }
 		_window = CreateWindowExW(0, cls.lpszClassName, L"Jamma Commands", WS_OVERLAPPEDWINDOW,
 			CW_USEDEFAULT, CW_USEDEFAULT, 850, 520, nullptr, nullptr, instance, this);
 		if (!_window) { Destroy(); return false; }
-		_transcript = CreateWindowExW(WS_EX_CLIENTEDGE, MSFTEDIT_CLASS, L"",
+		// Optional system decoration: older Windows simply rejects unsupported attributes.
+		const BOOL dark = TRUE;
+		DwmSetWindowAttribute(_window, DWMWA_USE_IMMERSIVE_DARK_MODE, &dark, sizeof(dark));
+		const DWM_WINDOW_CORNER_PREFERENCE corners = DWMWCP_ROUND;
+		DwmSetWindowAttribute(_window, DWMWA_WINDOW_CORNER_PREFERENCE, &corners, sizeof(corners));
+		DwmSetWindowAttribute(_window, DWMWA_CAPTION_COLOR, &BackgroundColor, sizeof(BackgroundColor));
+		DwmSetWindowAttribute(_window, DWMWA_TEXT_COLOR, &TextColor, sizeof(TextColor));
+		_transcript = CreateWindowExW(0, MSFTEDIT_CLASS, L"",
 			WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_VSCROLL | ES_MULTILINE | ES_READONLY | ES_NOHIDESEL,
 			0, 0, 0, 0, _window, reinterpret_cast<HMENU>(1), instance, nullptr);
-		_input = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"",
+		_input = CreateWindowExW(0, L"EDIT", L"",
 			WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL,
 			0, 0, 0, 0, _window, reinterpret_cast<HMENU>(2), instance, nullptr);
 		_status = CreateWindowExW(0, L"STATIC", L"", WS_CHILD | WS_VISIBLE | SS_LEFT | SS_NOPREFIX,
@@ -60,7 +71,7 @@ namespace console
 		SendMessageW(_input, EM_SETLIMITTEXT, CommandMailbox::MaxTextBytes, 0);
 		SendMessageW(_transcript, EM_EXLIMITTEXT, 0, MaxHistoryUnits + 2 * CommandMailbox::MaxTextBytes);
 		SendMessageW(_transcript, EM_SETUNDOLIMIT, 0, 0);
-		SendMessageW(_transcript, EM_SETBKGNDCOLOR, 0, RGB(24, 27, 33));
+		SendMessageW(_transcript, EM_SETBKGNDCOLOR, 0, BackgroundColor);
 		SetFontForDpi(GetDpiForWindow(_window));
 		Layout(); UpdateStatus(false); return true;
 	}
@@ -70,14 +81,20 @@ namespace console
 		_window = _transcript = _input = _status = nullptr;
 		if (_font) DeleteObject(_font);
 		_font = nullptr;
+		if (_backgroundBrush) DeleteObject(_backgroundBrush);
+		if (_inputBrush) DeleteObject(_inputBrush);
+		_backgroundBrush = _inputBrush = nullptr;
 		if (_richEdit) FreeLibrary(_richEdit);
 		_richEdit = nullptr;
 		_entries.clear(); _units = 0; _shownStatus.clear();
 	}
-	void ConsoleWindow::ShowPassive() noexcept
+	void ConsoleWindow::ShowPassive(HWND mainWindow) noexcept
 	{
-		if (_window) SetWindowPos(_window, HWND_BOTTOM, 0, 0, 0, 0,
-			SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
+		// Insert directly behind Jamma, preserving the order of other applications
+		// (including any foreground app above Jamma) without taking focus.
+		if (_window) SetWindowPos(_window, mainWindow, 0, 0, 0, 0,
+			SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW
+			| (IsWindow(mainWindow) ? 0 : SWP_NOZORDER));
 	}
 	void ConsoleWindow::Toggle() noexcept
 	{
@@ -269,6 +286,21 @@ namespace console
 		{
 			switch (message)
 			{
+			case WM_ERASEBKGND:
+			{
+				RECT rect{}; GetClientRect(window, &rect);
+				FillRect(reinterpret_cast<HDC>(wParam), &rect, self->_backgroundBrush);
+				return 1;
+			}
+			case WM_CTLCOLOREDIT:
+			case WM_CTLCOLORSTATIC:
+			{
+				const auto dc = reinterpret_cast<HDC>(wParam);
+				const bool input = reinterpret_cast<HWND>(lParam) == self->_input;
+				SetTextColor(dc, TextColor);
+				SetBkColor(dc, input ? InputColor : BackgroundColor);
+				return reinterpret_cast<LRESULT>(input ? self->_inputBrush : self->_backgroundBrush);
+			}
 			case WM_CLOSE: ShowWindow(window, SW_HIDE); return 0;
 			case WM_SETFOCUS: if (self->_input) SetFocus(self->_input); return 0;
 			case WM_SIZE: self->Layout(); return 0;

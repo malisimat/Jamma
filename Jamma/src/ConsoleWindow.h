@@ -18,7 +18,7 @@ namespace console
 		ConsoleWindow& operator=(const ConsoleWindow&) = delete;
 		bool CreateHidden(HINSTANCE instance);
 		void Destroy() noexcept;
-		void ShowPassive() noexcept;
+		void ShowPassive(HWND mainWindow) noexcept;
 		void Toggle() noexcept;
 		bool Created() const noexcept { return _window != nullptr; }
 		bool Foreground() const noexcept;
@@ -35,6 +35,9 @@ namespace console
 		static std::wstring Widen(std::string_view text);
 		static bool CommandText(std::wstring_view wide, std::string& text);
 		static COLORREF LineColor(std::string_view line) noexcept;
+		static constexpr COLORREF BackgroundColor = RGB(24, 27, 33);
+		static constexpr COLORREF InputColor = RGB(35, 39, 47);
+		static constexpr COLORREF TextColor = RGB(232, 235, 240);
 		void Layout();
 		void SetFontForDpi(UINT dpi);
 		void Submit();
@@ -45,6 +48,7 @@ namespace console
 		HMODULE _richEdit = nullptr;
 		HWND _window = nullptr, _transcript = nullptr, _input = nullptr, _status = nullptr;
 		HFONT _font = nullptr;
+		HBRUSH _backgroundBrush = nullptr, _inputBrush = nullptr;
 		UINT _dpi = 96;
 		std::deque<LONG> _entries;
 		LONG _units = 0;

@@ -1203,7 +1203,7 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 			if (!consoleWindow.CreateHidden(hInstance))
 				std::cerr << "[CONSOLE] Could not create native command window.\n";
 			else if (pendingConsoleToggle) consoleWindow.Toggle();
-			else if (!explicitConsoleAction && defaults && defaults->ConsoleAutoStart) consoleWindow.ShowPassive();
+			else if (!explicitConsoleAction && defaults && defaults->ConsoleAutoStart) consoleWindow.ShowPassive(window.GetWindowHandle());
 		}
 
 		// Destroy any VST plugins that failed to load on the job thread.

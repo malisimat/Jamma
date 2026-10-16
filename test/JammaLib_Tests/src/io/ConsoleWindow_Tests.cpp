@@ -93,7 +93,7 @@ TEST_F(NativeConsoleWindow, CreatesHiddenAndCloseHidesWithoutQuitOrLostHistory)
 	EXPECT_EQ(GetWindow(window, GW_OWNER), nullptr);
 	EXPECT_EQ(GetWindowLongPtrW(window, GWL_EXSTYLE) & WS_EX_NOACTIVATE, 0);
 	const auto foreground = GetForegroundWindow();
-	View.ShowPassive();
+	View.ShowPassive(nullptr);
 	EXPECT_TRUE(IsWindowVisible(window));
 	EXPECT_EQ(GetForegroundWindow(), foreground);
 	SendMessageW(window, WM_CLOSE, 0, 0);
@@ -107,6 +107,52 @@ TEST_F(NativeConsoleWindow, CreatesHiddenAndCloseHidesWithoutQuitOrLostHistory)
 	View.Destroy(); EXPECT_FALSE(IsWindow(window)); EXPECT_FALSE(IsWindow(transcript));
 	ASSERT_TRUE(View.CreateHidden(GetModuleHandleW(nullptr)));
 	EXPECT_EQ(Access::Units(View), 0);
+}
+
+TEST_F(NativeConsoleWindow, PassiveDisplayInsertsBehindMainWithoutSinkingBelowOtherWindows)
+{
+	struct TestWindows
+	{
+		HWND Below = nullptr, Main = nullptr, Above = nullptr;
+		~TestWindows()
+		{
+			if (Above) DestroyWindow(Above);
+			if (Main) DestroyWindow(Main);
+			if (Below) DestroyWindow(Below);
+		}
+	} windows;
+	const auto create = [] {
+		return CreateWindowExW(0, L"STATIC", L"Console z-order test", WS_OVERLAPPEDWINDOW,
+			0, 0, 100, 100, nullptr, nullptr, GetModuleHandleW(nullptr), nullptr);
+	};
+	windows.Below = create(); windows.Main = create(); windows.Above = create();
+	ASSERT_NE(windows.Below, nullptr); ASSERT_NE(windows.Main, nullptr); ASSERT_NE(windows.Above, nullptr);
+	constexpr UINT flags = SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW;
+	// Arrange above -> main -> below without activating any test window.
+	SetWindowPos(windows.Below, HWND_TOP, 0, 0, 0, 0, flags);
+	SetWindowPos(windows.Main, HWND_TOP, 0, 0, 0, 0, flags);
+	SetWindowPos(windows.Above, HWND_TOP, 0, 0, 0, 0, flags);
+	const auto foreground = GetForegroundWindow();
+	const auto focus = GetFocus();
+	View.ShowPassive(windows.Main);
+	const auto consoleWindow = Access::Window(View);
+	EXPECT_TRUE(IsWindowVisible(consoleWindow));
+	struct ZOrder
+	{
+		std::array<HWND, 4> Expected;
+		std::vector<HWND> Actual;
+	} order{{ windows.Above, windows.Main, consoleWindow, windows.Below }, {}};
+	// Windows may insert native helper windows (for example IME windows) between
+	// these handles. Verify application-window order rather than raw adjacency.
+	ASSERT_TRUE(EnumWindows([](HWND window, LPARAM context) -> BOOL {
+		auto& order = *reinterpret_cast<ZOrder*>(context);
+		for (const auto expected : order.Expected)
+			if (window == expected) { order.Actual.push_back(window); break; }
+		return TRUE;
+	}, reinterpret_cast<LPARAM>(&order)));
+	EXPECT_EQ(order.Actual, (std::vector<HWND>{ windows.Above, windows.Main, consoleWindow, windows.Below }));
+	EXPECT_EQ(GetForegroundWindow(), foreground);
+	EXPECT_EQ(GetFocus(), focus);
 }
 
 TEST_F(NativeConsoleWindow, UnicodeSelectionAndViewportStayStableWhileOutputArrives)
@@ -273,4 +319,29 @@ TEST_F(NativeConsoleWindow, NativeInputPasteReplacesSelectionAndRejectsMultiline
 	Enter();
 	auto command = Commands.Take(); ASSERT_TRUE(command);
 	EXPECT_EQ(command->Text.size(), 4096);
+}
+
+TEST_F(NativeConsoleWindow, DarkSurfacesAndBrightInputAndStatusText)
+{
+	const auto window = Access::Window(View);
+	const auto dc = GetDC(window);
+	ASSERT_NE(dc, nullptr);
+	for (const auto control : { Access::Input(View), Access::Status(View) })
+	{
+		const bool input = control == Access::Input(View);
+		const auto brush = reinterpret_cast<HBRUSH>(SendMessageW(window,
+			input ? WM_CTLCOLOREDIT : WM_CTLCOLORSTATIC,
+			reinterpret_cast<WPARAM>(dc), reinterpret_cast<LPARAM>(control)));
+		EXPECT_EQ(GetTextColor(dc), RGB(232, 235, 240));
+		const auto background = input ? RGB(35, 39, 47) : RGB(24, 27, 33);
+		EXPECT_EQ(GetBkColor(dc), background);
+		LOGBRUSH details{};
+		EXPECT_EQ(GetObjectW(brush, sizeof(details), &details), sizeof(details));
+		EXPECT_EQ(details.lbColor, background);
+	}
+	ReleaseDC(window, dc);
+	EXPECT_EQ(SendMessageW(Access::Transcript(View), EM_SETBKGNDCOLOR, 0, RGB(24, 27, 33)),
+		static_cast<LRESULT>(RGB(24, 27, 33)));
+	EXPECT_EQ(GetWindowLongPtrW(Access::Input(View), GWL_EXSTYLE) & WS_EX_CLIENTEDGE, 0);
+	EXPECT_EQ(GetWindowLongPtrW(Access::Transcript(View), GWL_EXSTYLE) & WS_EX_CLIENTEDGE, 0);
 }
