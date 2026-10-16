@@ -1333,7 +1333,7 @@ public:
 	GuiSettingsOwnerScene() : Scene(engine::SceneParams({ "" }, {}, { 800u, 600u }), io::UserConfig{}) {}
 	std::shared_ptr<gui::GuiMainPanel> Settings() const { return _mainPanel; }
 	std::shared_ptr<gui::GuiMainPanel> Selection() const { return _selectionPanel; }
-	std::shared_ptr<gui::GuiNumericInput> Channel() const { return _settingsControls->Channel(); }
+	std::shared_ptr<gui::GuiMidiChannelOverride> Channel() const { return _settingsControls->Channel(); }
 	std::shared_ptr<gui::GuiNumericInput> Phase() const { return _settingsControls->Offset(); }
 	std::shared_ptr<gui::GuiToggle> Click() const { return _settingsControls->Metronome(); }
 	std::shared_ptr<gui::GuiRadio> Quantisation() const { return _settingsControls->GlobalQuantisation(); }
@@ -1415,20 +1415,131 @@ TEST_F(GuiSceneSettingsTests, FrozenTapSelectsSubdivisionRadio)
 
 TEST_F(GuiSceneSettingsTests, ChannelLimitsAndShortcutFeedbackReachRouterAfterTreeChanges)
 {
+	Station->SetAllowedMidiChannels({ 2, 5, 11 });
 	Scene->Settings()->SetPage(gui::SettingsPage::Midi);
-	for (const auto value : { -1.0, 0.0, 1.0, 16.0, 17.0 }) {
-		Scene->Channel()->SetValue(value, true);
-		const auto expected = static_cast<unsigned int>(std::clamp(value, 0.0, 16.0));
-		EXPECT_EQ(expected, Scene->ForcedChannel()); EXPECT_DOUBLE_EQ(expected, Scene->Channel()->Value());
+	const auto expectChannel = [&](unsigned int expected) {
+		EXPECT_EQ(expected, Scene->ForcedChannel());
+		EXPECT_EQ(expected, Scene->Channel()->Channel());
+		for (unsigned int index = 0u; index < 16u; ++index)
+		{
+			auto toggle = std::dynamic_pointer_cast<GuiToggle>(Scene->Channel()->TryGetChild(static_cast<unsigned char>(index)));
+			ASSERT_TRUE(toggle);
+			EXPECT_EQ(expected == index + 1u ? GuiToggleParams::TOGGLE_ON : GuiToggleParams::TOGGLE_OFF,
+				toggle->GetToggleState());
+		}
+	};
+	for (unsigned int channel = 1u; channel <= 16u; ++channel) {
+		auto toggle = std::dynamic_pointer_cast<GuiToggle>(Scene->Channel()->TryGetChild(static_cast<unsigned char>(channel - 1u)));
+		toggle->SetToggleState(GuiToggleParams::TOGGLE_ON, false);
+		expectChannel(channel);
 	}
-	Scene->Channel()->SetValue(0.0, true);
+	// Active click clears the override; it does not select another channel.
+	auto active = std::dynamic_pointer_cast<GuiToggle>(Scene->Channel()->TryGetChild(15));
+	active->SetToggleState(GuiToggleParams::TOGGLE_OFF, false);
+	expectChannel(0u);
+	Scene->Settings()->SetPage(gui::SettingsPage::Timing);
+	Scene->Settings()->SetExpanded(false);
 	KeyAction key; key.KeyChar = 0x21u; key.KeyActionType = KeyAction::KEY_DOWN;
 	EXPECT_TRUE(Scene->OnAction(key).IsEaten);
-	EXPECT_EQ(1u, Scene->ForcedChannel()); EXPECT_DOUBLE_EQ(1.0, Scene->Channel()->Value());
+	expectChannel(1u);
+	Scene->OnAction(key); expectChannel(1u); // Key repeat remains suppressed while held.
+	key.KeyChar = 0x22u; Scene->OnAction(key); expectChannel(0u); // Both keys reset.
+	key.KeyActionType = KeyAction::KEY_UP; Scene->OnAction(key);
+	key.KeyChar = 0x21u; Scene->OnAction(key);
+	Scene->Settings()->SetExpanded(true);
+	Scene->Settings()->SetPage(gui::SettingsPage::Midi);
+	for (unsigned int channel = 1u; channel <= 18u; ++channel)
+	{
+		key.KeyActionType = KeyAction::KEY_DOWN; Scene->OnAction(key);
+		expectChannel(std::min(channel, 16u));
+		key.KeyActionType = KeyAction::KEY_UP; Scene->OnAction(key);
+	}
+	key.KeyChar = 0x22u;
+	for (int channel = 15; channel >= -1; --channel)
+	{
+		key.KeyActionType = KeyAction::KEY_DOWN; Scene->OnAction(key);
+		expectChannel(static_cast<unsigned int>(std::max(channel, 0)));
+		key.KeyActionType = KeyAction::KEY_UP; Scene->OnAction(key);
+	}
+	key.KeyChar = 0x21u; key.KeyActionType = KeyAction::KEY_DOWN; Scene->OnAction(key);
+	expectChannel(1u);
 	key.KeyActionType = KeyAction::KEY_UP; EXPECT_TRUE(Scene->OnAction(key).IsEaten);
 	key.KeyChar = 0x22u; key.KeyActionType = KeyAction::KEY_DOWN; EXPECT_TRUE(Scene->OnAction(key).IsEaten);
-	EXPECT_EQ(0u, Scene->ForcedChannel()); EXPECT_DOUBLE_EQ(0.0, Scene->Channel()->Value());
+	expectChannel(0u);
 	key.KeyActionType = KeyAction::KEY_UP; Scene->OnAction(key);
+	EXPECT_EQ((std::vector<int>{ 2, 5, 11 }), Station->AllowedMidiChannels());
+}
+
+TEST_F(GuiSceneSettingsTests, SettingsFitNaturalWidthsAndWrapChoicesInsideNarrowViewport)
+{
+	const auto panel = Scene->Settings();
+	for (const auto viewport : { utils::Size2d{800u, 600u}, utils::Size2d{280u, 400u}, utils::Size2d{0u, 0u}, utils::Size2d{800u, 600u} })
+	{
+		panel->SetViewportSize(viewport);
+		if (viewport.Width == 280u)
+		{
+			panel->SetPage(gui::SettingsPage::Midi);
+			panel->ReplacePageSettings(gui::SettingsPage::Midi,
+				{{ gui::SettingsPage::Midi, "MIDI channel override", Scene->Channel(), 7001u }});
+		}
+		const auto frame = panel->TryGetChild(0);
+		ASSERT_TRUE(frame);
+		EXPECT_LE(frame->GetSize().Width, viewport.Width);
+		for (const auto page : { gui::SettingsPage::Midi, gui::SettingsPage::Timing })
+		{
+			panel->SetPage(page);
+			const auto radio = page == gui::SettingsPage::Midi
+				? std::static_pointer_cast<gui::GuiRadio>(Scene->Channel()) : Scene->Subdivision();
+			unsigned int count = 0u;
+			while (auto toggle = radio->TryGetChild(static_cast<unsigned char>(count)))
+			{
+				EXPECT_GE(toggle->Position().X, 0); EXPECT_GE(toggle->Position().Y, 0);
+				EXPECT_LE(static_cast<unsigned int>(toggle->Position().X) + toggle->GetSize().Width, radio->GetSize().Width);
+				EXPECT_LE(static_cast<unsigned int>(toggle->Position().Y) + toggle->GetSize().Height, radio->GetSize().Height);
+				++count;
+			}
+			if (viewport.Width == 800u) EXPECT_EQ(page == gui::SettingsPage::Midi ? 28u : 40u, radio->GetSize().Height);
+			if (viewport.Width == 280u) EXPECT_GT(radio->GetSize().Height, page == gui::SettingsPage::Midi ? 28u : 40u);
+		}
+		if (viewport.Width > 0u)
+			for (const auto page : { gui::SettingsPage::Audio, gui::SettingsPage::Midi, gui::SettingsPage::Timing, gui::SettingsPage::Session })
+			{
+				panel->SetPage(page);
+				const auto scroll = std::dynamic_pointer_cast<GuiScrollPanel>(frame->TryGetChild(1));
+				ASSERT_TRUE(scroll);
+				const auto clip = scroll->ContentRect().Translated(scroll->GlobalPosition());
+				for (unsigned int index = 0u; index < 256u; ++index)
+				{
+					const auto child = scroll->Content()->TryGetChild(static_cast<unsigned char>(index));
+					if (!child) break;
+					EXPECT_GE(child->GlobalPosition().X, clip.Left);
+					EXPECT_LE(child->GlobalPosition().X + static_cast<int>(child->GetSize().Width), clip.Right);
+				}
+			}
+	}
+	const auto frame = panel->TryGetChild(0);
+	EXPECT_GE(frame->GetSize().Width, 498u);
+	const auto tabs = std::dynamic_pointer_cast<GuiScrollPanel>(frame->TryGetChild(2));
+	ASSERT_TRUE(tabs); EXPECT_FALSE(tabs->IsScrollBarVisible());
+	const auto previousWidth = frame->GetSize().Width;
+	auto wider = std::make_shared<GuiButton>(GuiButtonParams::PanelButton(520u));
+	panel->ReplacePageSettings(gui::SettingsPage::Audio, {{gui::SettingsPage::Audio, "Wide section", wider, 9000u}});
+	EXPECT_GT(frame->GetSize().Width, previousWidth);
+	EXPECT_EQ(520u, wider->GetSize().Width);
+}
+
+TEST(GuiMidiChannelOverride, PresentationRefreshDoesNotDispatchActions)
+{
+	gui::SceneSettingsControls controls(0u, 0.0, io::JamFile::GlobalMidiQuantState::Mixed);
+	const auto receiver = std::make_shared<GuiRecordingActionReceiver>();
+	controls.Channel()->SetReceiver(receiver);
+	controls.Channel()->Init();
+	for (const auto channel : { 1u, 16u, 0u, 0u })
+	{
+		controls.RefreshChannelPresentation(static_cast<std::uint8_t>(channel));
+		EXPECT_EQ(channel, controls.Channel()->Channel());
+	}
+	EXPECT_EQ(0, receiver->ActionCount);
 }
 
 TEST_F(GuiSceneSettingsTests, PhaseOffsetUsesLoopFractionsAndPropagatesToStation)

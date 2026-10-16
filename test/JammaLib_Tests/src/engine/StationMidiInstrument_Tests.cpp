@@ -8,6 +8,7 @@
 #include "actions/TriggerAction.h"
 #include "base/AudioSink.h"
 #include "engine/Station.h"
+#include "engine/Scene.h"
 #include "midi/MidiLoop.h"
 #include "midi/MidiRouter.h"
 #include "vst/Vst3Plugin.h"
@@ -311,6 +312,46 @@ TEST(StationMidiInstrument, ShutdownReleasesRemovedPluginHeldByPlaybackRoute)
 	station->ForceUnloadAllVstPlugins();
 	vst::DrainUiThreadDestroyQueue();
 	EXPECT_TRUE(lifetime.expired());
+}
+
+class ChannelOverrideSettingsScene final : public engine::Scene
+{
+public:
+	ChannelOverrideSettingsScene() : Scene(engine::SceneParams({ "" }, {}, { 800u, 600u }), io::UserConfig{}) {}
+	void Attach(const std::shared_ptr<Station>& station) { _AddStation(station); }
+	const auto& ChannelControl() const { return _settingsControls->Channel(); }
+	void RefreshChannel() { _settingsControls->RefreshChannelPresentation(ChannelControl()->Channel()); }
+};
+
+TEST(StationMidiInstrument, SettingsOverrideChangesFlushHeldNotesAndPresentationDoesNot)
+{
+	auto scene = std::make_shared<ChannelOverrideSettingsScene>();
+	scene->InitReceivers();
+	auto station = MakeStation("override-settings");
+	auto plugin = AddPlugin(station, L"fake-channel-override.dll");
+	AllowAllMidiChannels(station);
+	scene->Attach(station);
+	station->ObservePhysicalMidiForRecording(MidiEvent::MakeNoteOn(0u, 0u, 60u, 100u), "keyboard");
+	auto channel = std::dynamic_pointer_cast<gui::GuiToggle>(scene->ChannelControl()->TryGetChild(6));
+	ASSERT_TRUE(channel);
+	channel->SetToggleState(gui::GuiToggleParams::TOGGLE_ON, false);
+	EXPECT_EQ(7u, scene->ChannelControl()->Channel());
+	RenderStationBlock(station, 0u);
+	ASSERT_EQ(1u, plugin->Events.size());
+	EXPECT_TRUE(plugin->Events.front().IsNoteOff());
+	EXPECT_EQ(0u, plugin->Events.front().Channel());
+	plugin->Events.clear();
+	station->ObservePhysicalMidiForRecording(MidiEvent::MakeNoteOn(0u, 6u, 62u, 100u), "keyboard");
+	scene->RefreshChannel();
+	RenderStationBlock(station, 128u);
+	EXPECT_TRUE(plugin->Events.empty());
+	channel->SetToggleState(gui::GuiToggleParams::TOGGLE_OFF, false);
+	EXPECT_EQ(0u, scene->ChannelControl()->Channel());
+	RenderStationBlock(station, 256u);
+	ASSERT_EQ(1u, plugin->Events.size());
+	EXPECT_TRUE(plugin->Events.front().IsNoteOff());
+	EXPECT_EQ(6u, plugin->Events.front().Channel());
+	scene->Shutdown();
 }
 
 TEST(StationMidiInstrument, LostDeviceReleasePreservesHealthyAndAnonymousHeldNotes)

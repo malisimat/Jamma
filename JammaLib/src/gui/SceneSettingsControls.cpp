@@ -5,6 +5,53 @@
 using namespace gui;
 using actions::GuiAction;
 
+GuiRadioParams GuiMidiChannelOverride::_Params(std::uint8_t channel)
+{
+	GuiRadioParams params;
+	params.Size = { 448u, 28u };
+	params.InitValue = channel == 0u ? UnchangedIndex : std::min<unsigned int>(channel, 16u) - 1u;
+	for (unsigned int index = 0u; index < 16u; ++index)
+	{
+		auto toggle = GuiToggleParams::PanelPrimary();
+		toggle.Text = std::to_string(index + 1u);
+		toggle.TextPadding = 2u;
+		toggle.Position = { static_cast<int>(index * 28u), 0 };
+		toggle.Size = { 28u, 28u };
+		toggle.MinSize = toggle.Size;
+		params.ToggleParams.push_back(toggle);
+	}
+	return params;
+}
+
+GuiMidiChannelOverride::GuiMidiChannelOverride(std::uint8_t channel) : GuiRadio(_Params(channel)) {}
+
+std::uint8_t GuiMidiChannelOverride::Channel() const
+{
+	return CurrentValue() < UnchangedIndex ? static_cast<std::uint8_t>(CurrentValue() + 1u) : 0u;
+}
+
+void GuiMidiChannelOverride::SetChannel(std::uint8_t channel)
+{
+	SetCurrentValue(channel == 0u ? UnchangedIndex : std::min<unsigned int>(channel, 16u) - 1u, true);
+}
+
+actions::ActionResult GuiMidiChannelOverride::OnAction(GuiAction action)
+{
+	if (action.ElementType != GuiAction::ACTIONELEMENT_TOGGLE || action.Index >= UnchangedIndex)
+		return actions::ActionResult::NoAction();
+	SetCurrentValue(CurrentValue() == action.Index ? UnchangedIndex : action.Index, true);
+	if (_receiver)
+	{
+		GuiAction change;
+		change.ElementType = GuiAction::ACTIONELEMENT_RADIO;
+		change.Index = _index;
+		change.Data = GuiAction::GuiInt(Channel());
+		_receiver->OnAction(change);
+	}
+	return { true, std::to_string(_index), "", actions::ACTIONRESULT_RADIO, nullptr,
+		std::static_pointer_cast<base::GuiElement>(shared_from_this()) };
+}
+
 SceneSettingsControls::SceneSettingsControls(std::uint8_t channel, double offset,
 	io::JamFile::GlobalMidiQuantState quantisation)
 {
@@ -53,15 +100,7 @@ SceneSettingsControls::SceneSettingsControls(std::uint8_t channel, double offset
 	modeRadioParams.ToggleParams = radioToggleParams;
 	_modeRadio = std::make_shared<GuiRadio>(modeRadioParams);
 
-	GuiNumericInputParams midiChannelOverrideParams = GuiNumericInputParams::PanelInput(72u);
-	midiChannelOverrideParams.Index = MidiChannelOverrideControlIndex;
-	midiChannelOverrideParams.Size = { 80, GuiNumericInputParams::DefaultHeight };
-	midiChannelOverrideParams.Min = 0.0;
-	midiChannelOverrideParams.Max = 16.0;
-	midiChannelOverrideParams.Step = 0.1;
-	midiChannelOverrideParams.Decimals = 0;
-	midiChannelOverrideParams.InitValue = static_cast<double>(channel);
-	_midiChannelOverrideInput = std::make_shared<GuiNumericInput>(midiChannelOverrideParams);
+	_midiChannelOverride = std::make_shared<GuiMidiChannelOverride>(channel);
 
 
 	GuiNumericInputParams transportOffsetParams = GuiNumericInputParams::PanelInput(88u);
@@ -150,7 +189,8 @@ std::vector<GuiSettingEntry> SceneSettingsControls::SettingsEntries() const
 		{ SettingsPage::Timing, "Local phase offset (loops)", _transportOffsetInput, TransportOffsetControlIndex },
 		{ SettingsPage::Timing, "Subdivision: local grain / remote beat", _midiSubdivisionRadio, MidiSubdivisionControlIndex },
 		{ SettingsPage::Timing, "", _tapButton, TapTempoControlIndex },
-		{ SettingsPage::Midi, "MIDI channel (0 = unchanged)", _midiChannelOverrideInput, MidiChannelOverrideControlIndex },
+		{ SettingsPage::Midi, "MIDI channel override", _midiChannelOverride, MidiChannelOverrideControlIndex },
+		{ SettingsPage::Midi, "", std::make_shared<GuiLabel>(GuiLabelParams::PanelHeader("All off = unchanged", 300u)), 0u },
 		{ SettingsPage::Timing, "", _ninjamMetronomeToggle, NinjamMetronomeControlIndex }
 	};
 }
@@ -161,7 +201,7 @@ std::vector<GuiSettingEntry> SceneSettingsControls::SelectionEntries() const
 }
 
 std::optional<SceneSettingsControls::Change> SceneSettingsControls::Decode(const GuiAction& action,
-	std::uint8_t acceptedChannel, double acceptedOffset) const
+	double acceptedOffset) const
 {
 	if (action.ElementType == GuiAction::ACTIONELEMENT_BUTTON && action.Index == TapTempoControlIndex)
 		return TapTempo{};
@@ -169,6 +209,8 @@ std::optional<SceneSettingsControls::Change> SceneSettingsControls::Decode(const
 	{
 		if (action.ElementType == GuiAction::ACTIONELEMENT_RADIO)
 		{
+			if (action.Index == MidiChannelOverrideControlIndex)
+				return ChannelChange{ static_cast<std::uint8_t>(std::clamp(value->Value, 0, 16)) };
 			if (action.Index == 100u) return ViewModeChange{ static_cast<unsigned int>(std::clamp(value->Value, 0, 2)) };
 			if (action.Index == 101u)
 			{
@@ -184,27 +226,6 @@ std::optional<SceneSettingsControls::Change> SceneSettingsControls::Decode(const
 			return MetronomeChange{ value->Value == GuiToggleParams::TOGGLE_ON };
 	}
 	if (action.ElementType != GuiAction::ACTIONELEMENT_RACK) return std::nullopt;
-	if (action.Index == MidiChannelOverrideControlIndex)
-	{
-		int channel = acceptedChannel;
-		if (auto text = std::get_if<GuiAction::GuiString>(&action.Data))
-		{
-			try
-			{
-				size_t consumed = 0;
-				const int parsed = std::stoi(text->Value, &consumed);
-				if (consumed == text->Value.size()) channel = std::clamp(parsed, 0, 16);
-			}
-			catch (...) { /* Retain the accepted channel during invalid edits. */ }
-		}
-		else if (auto number = std::get_if<GuiAction::GuiDouble>(&action.Data))
-		{
-			// Clamp in floating point before conversion; nonfinite values retain the owner value.
-			if (std::isfinite(number->Value)) channel = static_cast<int>(std::clamp(number->Value + 0.5, 0.0, 16.0));
-		}
-		else return std::nullopt;
-		return ChannelChange{ static_cast<std::uint8_t>(channel) };
-	}
 	if (action.Index == TransportOffsetControlIndex)
 	{
 		double offset = acceptedOffset;
@@ -227,6 +248,6 @@ std::optional<SceneSettingsControls::Change> SceneSettingsControls::Decode(const
 
 void SceneSettingsControls::RefreshChannelPresentation(std::uint8_t channel)
 {
-	if (!_midiChannelOverrideInput->HasFocus() && _midiChannelOverrideInput->Value() != channel)
-		_midiChannelOverrideInput->SetValue(channel, false);
+	if (_midiChannelOverride->Channel() != channel)
+		_midiChannelOverride->SetChannel(channel);
 }
