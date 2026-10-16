@@ -1,9 +1,15 @@
+#include "../../../console/DiagnosticThread.h"
 #include "AudioDevice.h"
 #include <cmath>
 #include <limits>
 #include <set>
 
 using namespace audio;
+
+void AudioDevice::ReportBackendError(RtAudioError::Type type, const std::string& message) noexcept
+{
+	console::DiagnosticThread::BackendError(static_cast<int>(type), message);
+}
 
 void AudioStreamParams::PrintParams()
 {
@@ -273,7 +279,7 @@ std::optional<std::unique_ptr<AudioDevice>> AudioDevice::Open(
 	const AsioInventory* suppliedInventory, AsioOpenReport* report,
 	const std::function<void(const AudioStreamParams&)>& prepareForStart, bool exactSelection)
 {
-	(void)onError; // RtAudio's callback is asynchronous and handled by the host.
+	(void)onError; // The bounded backend mailbox handles callbacks, including asynchronous faults.
 	AsioInventory discovered;
 	if (!suppliedInventory) { discovered = DiscoverAsio(); suppliedInventory = &discovered; }
 	if (report) *report = {};
@@ -354,7 +360,7 @@ std::optional<std::unique_ptr<AudioDevice>> AudioDevice::Open(
 					auto bufferSize = settings.BufSize;
 					stream->openStream(outputs ? &outParams : nullptr, inputs ? &inParams : nullptr,
 						RTAUDIO_FLOAT32, rate, &bufferSize, *onAudio.target<RtAudioCallback>(),
-						audioSink, &options, nullptr);
+						audioSink, &options, &AudioDevice::ReportBackendError);
 					attempt.Opened = stream->isStreamOpen();
 					if (!attempt.Opened) { attempt.Error = "stream did not open"; }
 					else

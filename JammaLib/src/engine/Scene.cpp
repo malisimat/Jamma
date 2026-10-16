@@ -1,10 +1,13 @@
+#include "../../../console/DiagnosticThread.h"
 // Scene wires job/UI concerns and off-callback presentation; it does not reconstruct
 // NINJAM timing authority or mutate Timer/loop timing at the audio boundary.
 #include "Scene.h"
 #include "../audio/PlaybackDelay.h"
 #include <algorithm>
 #include <cassert>
+#include <cstdio>
 #include <iostream>
+#include <iterator>
 #include <cmath>
 #include <iomanip>
 #include <sstream>
@@ -161,9 +164,9 @@ Scene::Scene(SceneParams params,
 
 	_PublishAudioStations();
 
+	_startupJobDiagnostics = params.StartupDiagnostics;
 	_jobRunner = std::thread([this, onStart = params.OnJobThreadStart]() {
-		if (onStart) onStart();
-		this->_JobLoop();
+		this->_JobLoop(std::move(onStart));
 	});
 }
 
@@ -1900,6 +1903,21 @@ void Scene::OnTick(Time curTime,
 	_audioEngine->AdvanceBlock(_quantisation.Clock().get(), curTime, samps, cfg, params);
 }
 
+void Scene::_QueueJobs(std::vector<actions::JobAction> jobs)
+{
+	std::scoped_lock lock(_jobMutex);
+	// Stamp origin before publication. Active and queued jobs never change origin.
+	for (auto& job : jobs) job.StartupDiagnostic = _startupJobDiagnostics;
+	_jobList.insert(_jobList.end(), std::make_move_iterator(jobs.begin()), std::make_move_iterator(jobs.end()));
+}
+
+void Scene::CompleteStartupWhenIdle(std::function<void()> complete)
+{
+	std::scoped_lock lock(_jobMutex);
+	_startupJobDiagnostics = false;
+	_startupComplete = std::move(complete);
+}
+
 void Scene::OnJobTick(Time curTime)
 {
 	std::scoped_lock lifecycle(_controlLifecycleMutex);
@@ -2093,7 +2111,10 @@ void Scene::OnJobTick(Time curTime)
 		_ninjamTraceJobQueueDepth = _jobList.size();
 
 		if (_jobList.empty())
+		{
+			if (auto complete = std::exchange(_startupComplete, {})) complete();
 			return;
+		}
 
 		job = _jobList.front();
 		_jobList.pop_front();
@@ -2109,10 +2130,20 @@ void Scene::OnJobTick(Time curTime)
 		}
 	}
 
+	console::DiagnosticThread::StartupScope startupDiagnostic(job.StartupDiagnostic);
+	try
 	{
 		std::scoped_lock lock(_sceneMutex);
 		auto receiver = job.Receiver.lock();
 		if (receiver && _JobReceiverAvailableLocked(receiver)) receiver->OnAction(job);
+	}
+	catch (const std::exception& error)
+	{
+		_FailJobThread("receiver", error.what(), &job);
+	}
+	catch (...)
+	{
+		_FailJobThread("receiver", "unknown exception", &job);
 	}
 
 	// Destroy PreInit'd VST plugins on the UI thread that initialized them.
@@ -2945,11 +2976,7 @@ void Scene::CommitChanges()
 		}
 	}
 
-	if (!jobList.empty())
-	{
-		std::scoped_lock lock(_jobMutex);
-		_jobList.insert(_jobList.end(), jobList.begin(), jobList.end());
-	}
+	if (!jobList.empty()) _QueueJobs(std::move(jobList));
 
 	if (hoverChanged)
 		_InvalidateHover2d();
@@ -3803,17 +3830,69 @@ void Scene::_ResetIfEmpty()
 	Reset();
 }
 
-void Scene::_JobLoop()
+void Scene::_FailJobThread(const char* stage, const char* detail, const actions::JobAction* job) noexcept
 {
-	while (!_isSceneQuitting.load(std::memory_order_acquire))
+	// Only the job owner writes the record. UI owns device teardown and joining.
+	_sessionReplacing.store(true, std::memory_order_release);
+	if (JobThreadFailed()) return;
+	int formatted = std::snprintf(_jobThreadFailureDetail.data(), _jobThreadFailureDetail.size(),
+		"[ERROR][job] stage=%s; worker stopped; shutdown requested; exception=%s", stage, detail);
+	if (job)
 	{
-		OnJobTick(Timer::GetTime());
-		std::this_thread::sleep_for(std::chrono::milliseconds(20));
+		try
+		{
+			const auto path = utils::EncodeUtf8(job->VstPath);
+			formatted = std::snprintf(_jobThreadFailureDetail.data(), _jobThreadFailureDetail.size(),
+				"[ERROR][job] stage=%s action=%d plugin='%s'; worker stopped; shutdown requested; exception=%s",
+				stage, static_cast<int>(job->JobActionType), path.c_str(), detail);
+		}
+		catch (...) {} // Keep the bounded stage/detail record if path conversion fails.
 	}
-	std::function<void()> save;
-	{ std::scoped_lock lock(_sceneMutex); save = std::move(_explicitRigSaveJob); }
-	if (save) save();
-	// Final job-producer barrier for permanent ingress closure.
+	if (formatted < 0 || static_cast<std::size_t>(formatted) >= _jobThreadFailureDetail.size())
+	{
+		constexpr std::string_view marker = " [detail truncated]";
+		auto end = _jobThreadFailureDetail.size() - 1 - marker.size();
+		while (end && (static_cast<unsigned char>(_jobThreadFailureDetail[end]) & 0xc0) == 0x80) --end;
+		std::copy(marker.begin(), marker.end(), _jobThreadFailureDetail.data() + end);
+		_jobThreadFailureDetail[end + marker.size()] = 0;
+	}
+	// Publish after all writes; this record never changes and survives ring loss/join.
+	_jobThreadFailed.store(true, std::memory_order_release);
+	try
+	{
+		std::optional<console::DiagnosticThread::StartupScope> origin;
+		if (job) origin.emplace(job->StartupDiagnostic);
+		std::cerr << _jobThreadFailureDetail.data() << std::endl;
+	}
+	catch (...) {} // The owner's modal/direct-file fallback never uses this stream.
+}
+
+void Scene::_JobLoop(std::function<void()> onStart) noexcept
+{
+	const char* stage = "initialize";
+	try
+	{
+		if (onStart) onStart();
+		stage = "pump";
+		while (!_isSceneQuitting.load(std::memory_order_acquire) && !JobThreadFailed())
+		{
+			OnJobTick(Timer::GetTime());
+			std::this_thread::sleep_for(std::chrono::milliseconds(20));
+		}
+		if (!JobThreadFailed())
+		{
+			stage = "final-save";
+			std::function<void()> save;
+			{ std::scoped_lock lock(_sceneMutex); save = std::move(_explicitRigSaveJob); }
+			if (save) save();
+		}
+	}
+	catch (const std::exception& error) { _FailJobThread(stage, error.what()); }
+	catch (...) { _FailJobThread(stage, "unknown exception"); }
+	// A failed worker cannot pump structural work. Wait only for UI Shutdown's
+	// permanent input-close publication, then preserve the final producer barrier.
+	while (!_isSceneQuitting.load(std::memory_order_acquire))
+		std::this_thread::sleep_for(std::chrono::milliseconds(20));
 	_inputSubsystem->AcknowledgeRigTriggerInputCloseFromJob();
 }
 

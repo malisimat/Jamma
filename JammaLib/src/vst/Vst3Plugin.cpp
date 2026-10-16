@@ -20,6 +20,7 @@
 #include <cstring>
 #include <cwctype>
 #include <iostream>
+#include <filesystem>
 #include <limits>
 #include <mutex>
 #include <string>
@@ -907,6 +908,41 @@ Vst3Plugin::~Vst3Plugin()
 	Unload();
 }
 
+std::wstring Vst3Plugin::ResolveModulePath(const std::wstring& path, std::error_code& error)
+{
+	std::filesystem::path candidate(path);
+	if (!std::filesystem::is_directory(candidate, error)) return path;
+	// A trailing separator has an empty filename; preserve the outer path in
+	// persistence and normalize only this temporary Windows x64 load target.
+	while (candidate.filename().empty() && candidate.parent_path() != candidate)
+		candidate = candidate.parent_path();
+	return (candidate / L"Contents" / L"x86_64-win" / candidate.filename()).wstring();
+}
+
+bool Vst3Plugin::LoadModule(const std::wstring& path, const char* stage)
+{
+	_requestedModulePath = path;
+	std::error_code error;
+	_resolvedModulePath = ResolveModulePath(path, error);
+	// Missing direct files still go through LoadLibraryW for its native error.
+	if (error && error != std::errc::no_such_file_or_directory)
+	{
+		std::cerr << "[ERROR][VST3] requested='" << utils::EncodeUtf8(path)
+			<< "' resolved='" << utils::EncodeUtf8(_resolvedModulePath)
+			<< "' stage=" << stage << "/resolve windows-error=" << error.value()
+			<< " message=" << error.message() << "; plugin skipped" << std::endl;
+		return false;
+	}
+	_moduleHandle = LoadLibraryW(_resolvedModulePath.c_str());
+	if (_moduleHandle) return true;
+	const auto windowsError = GetLastError();
+	std::cerr << "[ERROR][VST3] requested='" << utils::EncodeUtf8(path)
+		<< "' resolved='" << utils::EncodeUtf8(_resolvedModulePath)
+		<< "' stage=" << stage << "/LoadLibraryW windows-error=" << windowsError
+		<< " message=" << std::system_category().message(windowsError) << "; plugin skipped" << std::endl;
+	return false;
+}
+
 bool Vst3Plugin::PreInit(const std::wstring& path)
 {
 #ifdef JAMMA_VST3_ENABLED
@@ -923,12 +959,7 @@ bool Vst3Plugin::PreInit(const std::wstring& path)
 	std::cout << "[Vst3Plugin] PreInit (main thread): path='"
 		<< utils::EncodeUtf8(path) << "'" << std::endl;
 
-	_moduleHandle = LoadLibraryW(path.c_str());
-	if (!_moduleHandle)
-	{
-		std::cerr << "[Vst3Plugin] PreInit: LoadLibraryW failed: " << GetLastError() << std::endl;
-		return false;
-	}
+	if (!LoadModule(path, "PreInit")) return false;
 
 	// Call InitDll() if exported (VST3 spec says hosts SHOULD call it).
 	// This is paired with ExitDll() in Unload().
@@ -947,7 +978,10 @@ bool Vst3Plugin::PreInit(const std::wstring& path)
 	auto getFactory = reinterpret_cast<GetFactoryProc>(GetProcAddress(_moduleHandle, "GetPluginFactory"));
 	if (!getFactory)
 	{
-		std::cerr << "[Vst3Plugin] PreInit: GetPluginFactory not found" << std::endl;
+		const auto windowsError = GetLastError();
+		std::cerr << "[ERROR][VST3] requested='" << utils::EncodeUtf8(_requestedModulePath)
+			<< "' resolved='" << utils::EncodeUtf8(_resolvedModulePath)
+			<< "' stage=PreInit/GetPluginFactory windows-error=" << windowsError << "; export missing, plugin skipped" << std::endl;
 		if (_impl->moduleInitialized)
 		{
 			using ExitModuleFunc = bool (PLUGIN_API*)();
@@ -963,7 +997,7 @@ bool Vst3Plugin::PreInit(const std::wstring& path)
 	IPluginFactory* rawFactory = getFactory();
 	if (!rawFactory)
 	{
-		std::cerr << "[Vst3Plugin] PreInit: GetPluginFactory() returned null" << std::endl;
+		std::cerr << "[ERROR][VST3] requested=\"" << utils::EncodeUtf8(_requestedModulePath) << "\" resolved=\"" << utils::EncodeUtf8(_resolvedModulePath) << "\" [Vst3Plugin] PreInit: GetPluginFactory() returned null" << std::endl;
 		if (_impl->moduleInitialized)
 		{
 			using ExitModuleFunc = bool (PLUGIN_API*)();
@@ -1003,7 +1037,7 @@ bool Vst3Plugin::PreInit(const std::wstring& path)
 
 	if (!found)
 	{
-		std::cerr << "[Vst3Plugin] PreInit: no audio effect class found in plugin" << std::endl;
+		std::cerr << "[ERROR][VST3] requested=\"" << utils::EncodeUtf8(_requestedModulePath) << "\" resolved=\"" << utils::EncodeUtf8(_resolvedModulePath) << "\" [Vst3Plugin] PreInit: no audio effect class found in plugin" << std::endl;
 		_impl->factory = nullptr;
 		if (_impl->moduleInitialized)
 		{
@@ -1023,7 +1057,7 @@ bool Vst3Plugin::PreInit(const std::wstring& path)
 	if (_impl->factory->createInstance(componentCid, IComponent::iid, (void**)&rawComponent) != kResultOk
 		|| !rawComponent)
 	{
-		std::cerr << "[Vst3Plugin] PreInit: createInstance(IComponent) failed" << std::endl;
+		std::cerr << "[ERROR][VST3] requested=\"" << utils::EncodeUtf8(_requestedModulePath) << "\" resolved=\"" << utils::EncodeUtf8(_resolvedModulePath) << "\" [Vst3Plugin] PreInit: createInstance(IComponent) failed" << std::endl;
 		_impl->factory = nullptr;
 		if (_impl->moduleInitialized)
 		{
@@ -1040,7 +1074,7 @@ bool Vst3Plugin::PreInit(const std::wstring& path)
 
 	if (_impl->component->initialize(_impl->hostApplication) != kResultOk)
 	{
-		std::cerr << "[Vst3Plugin] PreInit: IComponent::initialize() failed" << std::endl;
+		std::cerr << "[ERROR][VST3] requested=\"" << utils::EncodeUtf8(_requestedModulePath) << "\" resolved=\"" << utils::EncodeUtf8(_resolvedModulePath) << "\" [Vst3Plugin] PreInit: IComponent::initialize() failed" << std::endl;
 		_impl->component = nullptr;
 		_impl->factory = nullptr;
 		if (_impl->moduleInitialized)
@@ -1090,12 +1124,7 @@ bool Vst3Plugin::Load(const std::wstring& path,
 	// 1. Load the DLL — skip if PreInit() already loaded it on the main thread
 	if (!_moduleHandle)
 	{
-		_moduleHandle = LoadLibraryW(path.c_str());
-		if (!_moduleHandle)
-		{
-			std::cerr << "[Vst3Plugin] LoadLibraryW failed: " << GetLastError() << std::endl;
-			return false;
-		}
+		if (!LoadModule(path, "Load")) return false;
 
 		// Call InitDll() if exported and we didn't already do so in PreInit().
 		using InitModuleFunc = bool (PLUGIN_API*)();
@@ -1120,7 +1149,10 @@ bool Vst3Plugin::Load(const std::wstring& path,
 			GetProcAddress(_moduleHandle, "GetPluginFactory"));
 		if (!getFactory)
 		{
-			std::cerr << "[Vst3Plugin] GetPluginFactory not found" << std::endl;
+			const auto windowsError = GetLastError();
+			std::cerr << "[ERROR][VST3] requested='" << utils::EncodeUtf8(_requestedModulePath)
+				<< "' resolved='" << utils::EncodeUtf8(_resolvedModulePath)
+				<< "' stage=Load/GetPluginFactory windows-error=" << windowsError << "; export missing, plugin skipped" << std::endl;
 			Unload();
 			return false;
 		}
@@ -1128,7 +1160,7 @@ bool Vst3Plugin::Load(const std::wstring& path,
 		IPluginFactory* rawFactory = getFactory();
 		if (!rawFactory)
 		{
-			std::cerr << "[Vst3Plugin] GetPluginFactory() returned null" << std::endl;
+			std::cerr << "[ERROR][VST3] requested=\"" << utils::EncodeUtf8(_requestedModulePath) << "\" resolved=\"" << utils::EncodeUtf8(_resolvedModulePath) << "\" [Vst3Plugin] GetPluginFactory() returned null" << std::endl;
 			Unload();
 			return false;
 		}
@@ -1177,7 +1209,7 @@ bool Vst3Plugin::Load(const std::wstring& path,
 
 		if (!found)
 		{
-			std::cerr << "[Vst3Plugin] No audio effect class found in plugin" << std::endl;
+			std::cerr << "[ERROR][VST3] requested=\"" << utils::EncodeUtf8(_requestedModulePath) << "\" resolved=\"" << utils::EncodeUtf8(_resolvedModulePath) << "\" [Vst3Plugin] No audio effect class found in plugin" << std::endl;
 			return cleanupFailedLoad();
 		}
 
@@ -1192,7 +1224,7 @@ bool Vst3Plugin::Load(const std::wstring& path,
 		if (factory->createInstance(componentCid, IComponent::iid, (void**)&rawComponent) != kResultOk
 			|| !rawComponent)
 		{
-			std::cerr << "[Vst3Plugin] createInstance(IComponent) failed" << std::endl;
+			std::cerr << "[ERROR][VST3] requested=\"" << utils::EncodeUtf8(_requestedModulePath) << "\" resolved=\"" << utils::EncodeUtf8(_resolvedModulePath) << "\" [Vst3Plugin] createInstance(IComponent) failed" << std::endl;
 			return cleanupFailedLoad();
 		}
 		_impl->component = IPtr<IComponent>(rawComponent, false);
@@ -1200,7 +1232,7 @@ bool Vst3Plugin::Load(const std::wstring& path,
 		// 5. Initialize the component
 		if (_impl->component->initialize(_impl->hostApplication) != kResultOk)
 		{
-			std::cerr << "[Vst3Plugin] IComponent::initialize() failed" << std::endl;
+			std::cerr << "[ERROR][VST3] requested=\"" << utils::EncodeUtf8(_requestedModulePath) << "\" resolved=\"" << utils::EncodeUtf8(_resolvedModulePath) << "\" [Vst3Plugin] IComponent::initialize() failed" << std::endl;
 			return cleanupFailedLoad();
 		}
 		_impl->componentInitialized = true;
@@ -1249,7 +1281,7 @@ bool Vst3Plugin::Load(const std::wstring& path,
 	if (_impl->component->queryInterface(IAudioProcessor::iid, (void**)&rawProcessor) != kResultOk
 		|| !rawProcessor)
 	{
-		std::cerr << "[Vst3Plugin] queryInterface(IAudioProcessor) failed" << std::endl;
+		std::cerr << "[ERROR][VST3] requested=\"" << utils::EncodeUtf8(_requestedModulePath) << "\" resolved=\"" << utils::EncodeUtf8(_resolvedModulePath) << "\" [Vst3Plugin] queryInterface(IAudioProcessor) failed" << std::endl;
 		return cleanupFailedLoad();
 	}
 	_impl->processor = IPtr<IAudioProcessor>(rawProcessor, false);
@@ -1299,7 +1331,7 @@ bool Vst3Plugin::Load(const std::wstring& path,
 
 	if (!IsHostedLayoutCompatible(hostedLayout, _impl->inputChannels, _impl->outputChannels))
 	{
-		std::cerr << "[Vst3Plugin] Incompatible negotiated layout: requested=" << hostedLayout.RequestedChannels
+		std::cerr << "[ERROR][VST3] requested=\"" << utils::EncodeUtf8(_requestedModulePath) << "\" resolved=\"" << utils::EncodeUtf8(_resolvedModulePath) << "\" [Vst3Plugin] Incompatible negotiated layout: requested=" << hostedLayout.RequestedChannels
 			<< ", input=" << _impl->inputChannels
 			<< ", output=" << _impl->outputChannels << std::endl;
 		return cleanupFailedLoad();
@@ -1314,7 +1346,7 @@ bool Vst3Plugin::Load(const std::wstring& path,
 
 	if (_impl->processor->setupProcessing(setup) != kResultOk)
 	{
-		std::cerr << "[Vst3Plugin] setupProcessing() failed" << std::endl;
+		std::cerr << "[ERROR][VST3] requested=\"" << utils::EncodeUtf8(_requestedModulePath) << "\" resolved=\"" << utils::EncodeUtf8(_resolvedModulePath) << "\" [Vst3Plugin] setupProcessing() failed" << std::endl;
 		return cleanupFailedLoad();
 	}
 
@@ -1346,7 +1378,7 @@ bool Vst3Plugin::Load(const std::wstring& path,
 	}
 	else
 	{
-		std::cerr << "[Vst3Plugin] Activation failed (setActive=" << activeRes
+		std::cerr << "[ERROR][VST3] requested=\"" << utils::EncodeUtf8(_requestedModulePath) << "\" resolved=\"" << utils::EncodeUtf8(_resolvedModulePath) << "\" [Vst3Plugin] Activation failed (setActive=" << activeRes
 			<< ", setProcessing=" << processingRes << "); tearing down" << std::endl;
 
 		// Reverse whichever transition succeeded, in the mandated teardown
@@ -1440,7 +1472,7 @@ bool Vst3Plugin::Load(const std::wstring& path,
 					// rather than leaving a half-initialized controller object
 					// that would later receive a spurious terminate() (or none
 					// at all — either is a lifecycle bug).
-					std::cerr << "[Vst3Plugin] Separate controller initialize() failed; continuing processor-only" << std::endl;
+					std::cerr << "[ERROR][VST3] requested=\"" << utils::EncodeUtf8(_requestedModulePath) << "\" resolved=\"" << utils::EncodeUtf8(_resolvedModulePath) << "\" [Vst3Plugin] Separate controller initialize() failed; continuing processor-only" << std::endl;
 					_impl->controller->terminate();
 					_impl->controller = nullptr;
 				}
@@ -1494,7 +1526,7 @@ bool Vst3Plugin::Load(const std::wstring& path,
 
 #else
 	(void)path; (void)sampleRate; (void)blockSize; (void)numChannels;
-	std::cerr << "[Vst3Plugin] VST3 support not compiled in (define JAMMA_VST3_ENABLED)" << std::endl;
+	std::cerr << "[ERROR][VST3] requested=\"" << utils::EncodeUtf8(_requestedModulePath) << "\" resolved=\"" << utils::EncodeUtf8(_resolvedModulePath) << "\" [Vst3Plugin] VST3 support not compiled in (define JAMMA_VST3_ENABLED)" << std::endl;
 	return false;
 #endif
 }
@@ -2217,8 +2249,14 @@ std::vector<std::uint8_t> Vst3Plugin::GetState() const
 		return {};
 
 	MemoryIBStream componentStream;
-	if (_impl->component->getState(&componentStream) != kResultOk)
+	const auto stateResult = _impl->component->getState(&componentStream);
+	if (stateResult != kResultOk)
+	{
+		std::cerr << "[ERROR][VST3] requested='" << utils::EncodeUtf8(_requestedModulePath)
+			<< "' resolved='" << utils::EncodeUtf8(_resolvedModulePath)
+			<< "' stage=GetState/IComponent::getState sdk-result=" << stateResult << "; plugin state unavailable" << std::endl;
 		return {};
+	}
 
 	std::vector<std::uint8_t> controllerState;
 	if (_impl->controller)
@@ -2251,14 +2289,14 @@ void Vst3Plugin::SetState(const std::vector<std::uint8_t>& blob)
 	Vst3StateBlob::ParsedState parsed;
 	if (!Vst3StateBlob::TryParse(blob, parsed))
 	{
-		std::cerr << "[Vst3Plugin] SetState: malformed or unrecognised state blob" << std::endl;
+		std::cerr << "[ERROR][VST3] requested=\"" << utils::EncodeUtf8(_requestedModulePath) << "\" resolved=\"" << utils::EncodeUtf8(_resolvedModulePath) << "\" [Vst3Plugin] SetState: malformed or unrecognised state blob" << std::endl;
 		return;
 	}
 
 	MemoryIBStream componentStream(parsed.ComponentState.data(), parsed.ComponentState.size());
 	if (_impl->component->setState(&componentStream) != kResultOk)
 	{
-		std::cerr << "[Vst3Plugin] SetState: IComponent::setState failed" << std::endl;
+		std::cerr << "[ERROR][VST3] requested=\"" << utils::EncodeUtf8(_requestedModulePath) << "\" resolved=\"" << utils::EncodeUtf8(_resolvedModulePath) << "\" [Vst3Plugin] SetState: IComponent::setState failed" << std::endl;
 		return; // Do not touch the controller with an unrestored component.
 	}
 
@@ -2266,13 +2304,13 @@ void Vst3Plugin::SetState(const std::vector<std::uint8_t>& blob)
 	{
 		MemoryIBStream componentStreamForController(parsed.ComponentState.data(), parsed.ComponentState.size());
 		if (_impl->controller->setComponentState(&componentStreamForController) != kResultOk)
-			std::cerr << "[Vst3Plugin] SetState: IEditController::setComponentState failed" << std::endl;
+			std::cerr << "[ERROR][VST3] requested=\"" << utils::EncodeUtf8(_requestedModulePath) << "\" resolved=\"" << utils::EncodeUtf8(_resolvedModulePath) << "\" [Vst3Plugin] SetState: IEditController::setComponentState failed" << std::endl;
 
 		if (!parsed.ControllerState.empty())
 		{
 			MemoryIBStream controllerStream(parsed.ControllerState.data(), parsed.ControllerState.size());
 			if (_impl->controller->setState(&controllerStream) != kResultOk)
-				std::cerr << "[Vst3Plugin] SetState: IEditController::setState failed" << std::endl;
+				std::cerr << "[ERROR][VST3] requested=\"" << utils::EncodeUtf8(_requestedModulePath) << "\" resolved=\"" << utils::EncodeUtf8(_resolvedModulePath) << "\" [Vst3Plugin] SetState: IEditController::setState failed" << std::endl;
 		}
 
 		// Restored programs may change parameter IDs or MIDI-CC assignments.

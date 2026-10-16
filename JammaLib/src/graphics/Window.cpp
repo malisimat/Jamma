@@ -966,9 +966,9 @@ void APIENTRY Window::MessageCallback(GLenum source,
 {
 	if ((131185 != id) || (33361 != type))
 	{
-		fprintf(stderr, "GL CALLBACK: %s type = 0x%x, severity = 0x%x, message = %s\n",
-			(type == GL_DEBUG_TYPE_ERROR ? "** GL ERROR **" : ""),
-			type, severity, message);
+		std::cerr << (type == GL_DEBUG_TYPE_ERROR ? "[ERROR]" : "[WARNING]")
+			<< "[OpenGL] callback type=" << type << " severity=" << severity
+			<< " id=" << id << " message=" << (message ? message : "<none>") << std::endl;
 	}
 }
 

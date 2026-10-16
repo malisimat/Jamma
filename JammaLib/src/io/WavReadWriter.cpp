@@ -120,14 +120,15 @@ FILE* WavReadWriter::OpenSoundIn(char *fileName, struct SoundHeader *hdr)
 
 		if (myfile == NULL)
 		{
-			std::cout << "Open (Read) wav file error\n";
+			const auto error = errno;
+			std::cerr << "[ERROR][WAV] read-open path=\"" << fileName << "\" errno=" << error << "; material skipped" << std::endl;
 		}
 		else
 			fread(hdr, 1, 44, myfile);
 	}
 	else
 	{
-		std::cout << "You must specify a valid .wav file name\n";
+		std::cerr << "[ERROR][WAV] invalid path=\"" << fileName << "\"; expected .wav" << std::endl;
 		myfile = 0;
 	}
 
@@ -146,7 +147,7 @@ FILE *WavReadWriter::OpenSoundOut(char *fileName, struct SoundHeader *hdr)
 
 		if (err != 0)
 		{
-			std::cout << "Open (Write) wav file error\n";
+			std::cerr << "[ERROR][WAV] write-open path=\"" << fileName << "\" errno=" << err << std::endl;
 			myfile = 0;
 		}
 		else
@@ -154,7 +155,7 @@ FILE *WavReadWriter::OpenSoundOut(char *fileName, struct SoundHeader *hdr)
 	}
 	else
 	{
-		std::cout << "You must specify a valid .wav file name\n";
+		std::cerr << "[ERROR][WAV] invalid path=\"" << fileName << "\"; expected .wav" << std::endl;
 		myfile = 0;
 	}
 

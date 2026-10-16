@@ -25,7 +25,8 @@ namespace utils
 	// Returns the chosen path, or an empty wstring if the user cancelled.
 	std::wstring PickDirectory(const std::wstring& title = L"Choose export directory");
 	// Shows a native file-picker dialog for VST plugins.
-	// Returns the chosen file path, or an empty wstring if the user cancelled.
+	// Opening a .vst3 folder selects its outer bundle; files retain normal behavior.
+	// Returns the chosen plugin path, or an empty wstring if the user cancelled.
 	std::wstring PickFile(const std::wstring& title = L"Choose VST plugin");
 	// Shows a native file-picker restricted to Jamma session manifests.
 	std::wstring PickJamFile(const std::wstring& title = L"Load JAM session");

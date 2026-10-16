@@ -1,3 +1,4 @@
+#include "../../../console/DiagnosticThread.h"
 // Sole block-boundary timing applicator; job-side policy arrives as complete values,
 // while Station/LoopTake/Loop retain entity-specific geometry and phase.
 #include "stdafx.h"
@@ -1050,6 +1051,8 @@ void AudioHost::PublishAudioCallbackProgress(std::uint64_t blockStartSample,
 		RtAudioStreamStatus status,
 		void* userData)
 	{
+		console::DiagnosticThread::RealtimeScope diagnosticScope;
+		console::DiagnosticThread::AudioStatus(status);
 		AudioHost* engine = (AudioHost*)userData;
 		if (!engine->TryEnterCallback())
 		{

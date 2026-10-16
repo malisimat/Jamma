@@ -1,3 +1,4 @@
+#include "../utils/StringUtils.h"
 ///////////////////////////////////////////////////////////
 //
 // Author 2024 Matt Jones
@@ -59,7 +60,8 @@ bool Vst2Plugin::PreInit(const std::wstring& path)
 	_moduleHandle = LoadLibraryW(path.c_str());
 	if (!_moduleHandle)
 	{
-		std::cerr << "[Vst2Plugin] PreInit: LoadLibraryW failed: " << GetLastError() << std::endl;
+		const auto windowsError = GetLastError();
+		std::cerr << "[ERROR][VST2] stage=PreInit/LoadLibraryW requested=\"" << utils::EncodeUtf8(path) << "\" windows-error=" << windowsError << std::endl;
 		return false;
 	}
 
@@ -107,14 +109,17 @@ bool Vst2Plugin::_InstantiateEffect(const std::wstring& path)
 
 	if (!mainProc)
 	{
-		std::cerr << "[Vst2Plugin] InstantiateEffect: no VST2 entry-point found" << std::endl;
+		const auto windowsError = GetLastError();
+		std::cerr << "[ERROR][VST2] requested='" << utils::EncodeUtf8(path)
+			<< "' stage=InstantiateEffect/GetProcAddress windows-error=" << windowsError << "; no VST2 entry-point found" << std::endl;
 		return false;
 	}
 
 	_effect = mainProc(Vst2Plugin::HostCallback);
 	if (!_effect || (_effect->magic != kEffectMagic))
 	{
-		std::cerr << "[Vst2Plugin] InstantiateEffect: VSTPluginMain returned null or wrong magic" << std::endl;
+		std::cerr << "[ERROR][VST2] requested='" << utils::EncodeUtf8(path)
+			<< "' stage=InstantiateEffect/VSTPluginMain returned null or wrong magic; plugin skipped" << std::endl;
 		_effect = nullptr;
 		return false;
 	}
@@ -200,7 +205,8 @@ bool Vst2Plugin::Load(const std::wstring& path,
 		_moduleHandle = LoadLibraryW(path.c_str());
 		if (!_moduleHandle)
 		{
-			std::cerr << "[Vst2Plugin] Load: LoadLibraryW failed: " << GetLastError() << std::endl;
+			const auto windowsError = GetLastError();
+			std::cerr << "[ERROR][VST2] stage=Load/LoadLibraryW requested=\"" << utils::EncodeUtf8(path) << "\" windows-error=" << windowsError << std::endl;
 			return false;
 		}
 	}

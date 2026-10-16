@@ -13,6 +13,7 @@
 #include <mutex>
 #include <optional>
 #include <shared_mutex>
+#include <string_view>
 #include <thread>
 #include <unordered_map>
 #include <utility>
@@ -79,6 +80,7 @@ namespace engine
 	{
 	public:
 		std::function<void()> OnJobThreadStart;
+		bool StartupDiagnostics = false;
 		SceneParams(base::DrawableParams drawParams,
 			base::MoveableParams moveParams,
 			base::SizeableParams sizeParams) :
@@ -149,6 +151,8 @@ namespace engine
 			const std::optional<io::UserConfig>& cfg,
 			const std::optional<audio::AudioStreamParams>& params) override;
 		virtual void OnJobTick(Time curTime);
+		// UI arms after first render; job owner completes after queued startup work.
+		void CompleteStartupWhenIdle(std::function<void()> complete);
 		virtual void InitResources(resources::ResourceLib& resourceLib, bool forceInit) override;
 		void InitReceivers();
 		void AddChild(std::shared_ptr<base::GuiElement> child);
@@ -185,6 +189,8 @@ namespace engine
 		bool PumpGlobalKeyCapture(actions::KeyAction& action) noexcept;
 		void OnInputFocusLost();
 		void Shutdown();
+		bool JobThreadFailed() const noexcept { return _jobThreadFailed.load(std::memory_order_acquire); }
+		std::string_view JobThreadFailureDetail() const noexcept { return JobThreadFailed() ? std::string_view(_jobThreadFailureDetail.data()) : std::string_view{}; }
 		void SetLogging(io::LoggingConfig config) noexcept;
 		bool IsUiVerbose() const noexcept { return _loggingConfig.Ui == "verbose"; }
 		void InitMidi(bool generatedRig = false)
@@ -288,6 +294,7 @@ namespace engine
 		
 	protected:
 		friend class SourceLossIntegrationTestAccess;
+		friend class SceneStartupDiagnosticTestAccess;
 		friend class audio::AudioHostRealtimeTestAccess;
 		virtual void _InitResources(resources::ResourceLib& resourceLib, bool forceInit) override;
 		virtual void _ReleaseResources() override;
@@ -340,7 +347,9 @@ namespace engine
 		void _SetTransportOffsetLoopFrac(double loopFrac, bool updateInput = true);
 		void _ApplyGlobalMidiQuantStateToAllLoopTakes();
 		void _ForceGlobalMidiQuantStateMixedOnLocalEdit();
-		void _JobLoop();
+		void _JobLoop(std::function<void()> onStart) noexcept;
+		void _FailJobThread(const char* stage, const char* detail, const actions::JobAction* job = nullptr) noexcept;
+		void _QueueJobs(std::vector<actions::JobAction> jobs);
 		void _RebuildDevicePage();
 		void _SetAudioDraftFromStream(const audio::AudioStreamParams& params);
 		void _RequestSave(bool chooseFolder);
@@ -422,6 +431,8 @@ namespace engine
 		bool _BackgroundSelectionPreviewActive() const;
 		void _SelectAllLocalLocked();
 		std::atomic_bool _isSceneQuitting;
+		std::atomic_bool _jobThreadFailed{false}; // Publishes the immutable failure detail to UI; lifetime ends after join.
+		std::array<char, 4096> _jobThreadFailureDetail{}; // Job writes once, before release-publishing failure.
 		std::atomic_bool _isSceneReset;
 		glm::mat4 _viewProj;
 		glm::mat4 _overlayViewProj;
@@ -589,6 +600,8 @@ namespace engine
 		std::thread _jobRunner;
 		std::mutex _jobMutex;
 		std::list<actions::JobAction> _jobList;
+		std::function<void()> _startupComplete; // Protected by _jobMutex; callback never reads.
+		bool _startupJobDiagnostics = false; // Initial queue admission, protected by _jobMutex.
 		mutable std::mutex _sceneMutex;
 		io::UserConfig _userConfig;
 		ViewMode _viewMode;

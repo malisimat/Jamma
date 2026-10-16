@@ -46,6 +46,7 @@ namespace actions
 
 		JobType JobActionType;
 		std::uint64_t CaptureGeneration = 0u;
+		bool StartupDiagnostic = false; // Origin metadata; excluded from action identity.
 		std::string SourceId;
 		std::weak_ptr<base::ActionReceiver> Receiver;
 
