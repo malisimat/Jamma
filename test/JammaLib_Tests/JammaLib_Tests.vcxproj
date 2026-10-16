@@ -214,6 +214,7 @@ xcopy /y "$(VcpkgInstalledDir)$(VcpkgTriplet)\debug\bin\gtest_main.dll" "$(OutDi
       <ForcedIncludeFiles></ForcedIncludeFiles>
     </ClCompile>
     <ClCompile Include="src\io\ConsoleSession_Tests.cpp" />
+    <ClCompile Include="src\io\DiagnosticRouting_Tests.cpp" />
     <ClCompile Include="src\io\RigFile_Tests.cpp" />
     <ClCompile Include="src\io\UserConfig_Tests.cpp" />
     <ClCompile Include="src\midi\MidiDevice_Tests.cpp" />

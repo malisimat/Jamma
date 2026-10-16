@@ -7,25 +7,117 @@
 #include <array>
 #include <thread>
 #include <vector>
-TEST(ConsoleSession, CaptureOnlySinkKeepsOptedInLinesAndBoundsOverflow)
+TEST(ConsoleSession, CaptureDefaultsToWorkersAndFlushesThreadExitAndEachStream)
 {
 	console::LineRing ring;
 	{
 		console::ConsoleCapture capture(ring);
 		console::ConsoleCapture::EnableForCurrentThread(true);
-		std::cout << "visible\n";
-		console::ConsoleCapture::EnableForCurrentThread(false);
-		std::cout << "unopted\n";
-		console::ConsoleCapture::EnableForCurrentThread(true);
-		std::cout << std::string(console::LineRing::MaxLineBytes + 1, 'x') << '\n';
-		console::ConsoleCapture::EnableForCurrentThread(false);
-		capture.Stop();
+		std::cout << "out partial";
+		std::cerr << "error line\n";
+		std::clog << "clog line\n";
+		std::cout << std::flush;
+		std::thread worker([] { std::cout << "worker tail"; });
+		worker.join();
+		std::cout << "shutdown tail";
 	}
-	const auto captured = ring.Take();
-	ASSERT_TRUE(captured);
-	EXPECT_EQ(*captured, "visible");
+	std::vector<std::string> captured;
+	while (auto line = ring.Take()) captured.push_back(*line);
+	EXPECT_NE(std::find(captured.begin(), captured.end(), "error line"), captured.end());
+	EXPECT_NE(std::find(captured.begin(), captured.end(), "clog line"), captured.end());
+	EXPECT_NE(std::find(captured.begin(), captured.end(), "out partial"), captured.end());
+	EXPECT_NE(std::find(captured.begin(), captured.end(), "worker tail"), captured.end());
+	EXPECT_NE(std::find(captured.begin(), captured.end(), "shutdown tail"), captured.end());
+	EXPECT_EQ(captured.size(), 5u);
+}
+
+TEST(ConsoleSession, CaptureSplitsLargeUtf8LinesWithoutTruncation)
+{
+	console::LineRing ring;
+	std::string text(console::LineRing::MaxLineBytes - 1, 'x');
+	text += "\xF0\x9F\x8E\xB5";
+	text += std::string(5000, 'y');
+	{
+		console::ConsoleCapture capture(ring);
+		std::cout << text << '\n';
+	}
+	std::string result;
+	while (auto line = ring.Take())
+	{
+		ASSERT_LE(line->size(), console::LineRing::MaxLineBytes);
+		ASSERT_FALSE(line->empty());
+		EXPECT_NE(static_cast<unsigned char>(line->front()) & 0xc0, 0x80);
+		result += *line;
+	}
+	EXPECT_EQ(result, text);
+	EXPECT_EQ(ring.ConsumeDropped(), 0u);
+}
+
+TEST(ConsoleSession, CaptureStartupTeeSurvivesSaturationAndStopsBeforeRuntime)
+{
+	console::LineRing ring;
+	std::vector<std::string> startup;
+	{
+		console::ConsoleCapture capture(ring, [&](std::string_view line) { startup.emplace_back(line); });
+		std::thread worker([] { for (int index = 0; index < 300; ++index) std::cout << "startup worker\n"; });
+		worker.join();
+		std::cout << "startup partial";
+		capture.CompleteStartup();
+		while (ring.Take()) {}
+		std::cout << "runtime\n";
+		capture.CompleteStartup(); // Repeated completion cannot flush runtime fragments.
+	}
+	EXPECT_EQ(startup.size(), 301u);
+	EXPECT_EQ(startup.back(), "startup partial");
+	EXPECT_GT(ring.ConsumeDropped(), 0u);
+	EXPECT_EQ(ring.Take(), "runtime");
 	EXPECT_FALSE(ring.Take());
-	EXPECT_EQ(ring.ConsumeDropped(), 1u);
+}
+
+TEST(ConsoleSession, CaptureSupportsConcurrentProducersAndReopenWithLivingWorker)
+{
+	console::LineRing first, second;
+	std::atomic<bool> wrote{false}, exit{false};
+	std::thread worker;
+	{
+		console::ConsoleCapture capture(first);
+		worker = std::thread([&] {
+			std::cout << "first partial";
+			wrote.store(true);
+			while (!exit.load()) std::this_thread::yield();
+		});
+		while (!wrote.load()) std::this_thread::yield();
+	}
+	EXPECT_EQ(first.Take(), "first partial");
+	{
+		console::ConsoleCapture capture(second);
+		std::vector<std::thread> producers;
+		for (int i = 0; i < 4; ++i) producers.emplace_back([i] {
+			for (int j = 0; j < 20; ++j) { const auto line = std::to_string(i) + ":" + std::to_string(j) + "\n"; std::cout.write(line.data(), line.size()); }
+		});
+		for (auto& producer : producers) producer.join();
+		exit.store(true); worker.join();
+	}
+	std::size_t count = 0;
+	while (second.Take()) ++count;
+	EXPECT_EQ(count + second.ConsumeDropped(), 80u);
+}
+
+TEST(ConsoleSession, RealtimeCaptureSuppressesBeforeThreadRegistration)
+{
+	console::LineRing ring;
+	{
+		console::ConsoleCapture capture(ring);
+		std::thread callback([] {
+			console::DiagnosticThread::RealtimeScope scope;
+			std::cout << "unexpected callback output\n";
+		});
+		callback.join();
+		std::cout << "owner output\n";
+	}
+	EXPECT_GT(console::DiagnosticThread::ConsumeSuppressed(), 0u);
+	EXPECT_EQ(ring.Take(), "owner output");
+	EXPECT_FALSE(ring.Take());
 }
 
 TEST(ConsoleSession, CaptureRingBoundsLinesAndReportsOverflow)

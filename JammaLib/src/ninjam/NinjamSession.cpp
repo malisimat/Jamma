@@ -681,7 +681,14 @@ bool NinjamSession::RefreshPublicServerDirectoryAsync(std::function<void()> onCo
 					if (onComplete) onComplete();
 				});
 			}
-			catch (...) {} // Callback/fetch failures must not terminate the process.
+			catch (const std::exception& error)
+			{
+				WithPublicServerOutput([&] { std::cerr << "[ERROR][NINJAM] server refresh/callback: " << error.what() << std::endl; });
+			}
+			catch (...)
+			{
+				WithPublicServerOutput([] { std::cerr << "[ERROR][NINJAM] server refresh/callback: unknown exception" << std::endl; });
+			}
 		});
 	}
 	catch (...) { _PublicServerListFetchInFlight = false; throw; }

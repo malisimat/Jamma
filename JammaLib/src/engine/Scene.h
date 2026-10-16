@@ -79,6 +79,7 @@ namespace engine
 	{
 	public:
 		std::function<void()> OnJobThreadStart;
+		bool StartupDiagnostics = false;
 		SceneParams(base::DrawableParams drawParams,
 			base::MoveableParams moveParams,
 			base::SizeableParams sizeParams) :
@@ -149,6 +150,8 @@ namespace engine
 			const std::optional<io::UserConfig>& cfg,
 			const std::optional<audio::AudioStreamParams>& params) override;
 		virtual void OnJobTick(Time curTime);
+		// UI arms after first render; job owner completes after queued startup work.
+		void CompleteStartupWhenIdle(std::function<void()> complete);
 		virtual void InitResources(resources::ResourceLib& resourceLib, bool forceInit) override;
 		void InitReceivers();
 		void AddChild(std::shared_ptr<base::GuiElement> child);
@@ -288,6 +291,7 @@ namespace engine
 		
 	protected:
 		friend class SourceLossIntegrationTestAccess;
+		friend class SceneStartupDiagnosticTestAccess;
 		friend class audio::AudioHostRealtimeTestAccess;
 		virtual void _InitResources(resources::ResourceLib& resourceLib, bool forceInit) override;
 		virtual void _ReleaseResources() override;
@@ -341,6 +345,7 @@ namespace engine
 		void _ApplyGlobalMidiQuantStateToAllLoopTakes();
 		void _ForceGlobalMidiQuantStateMixedOnLocalEdit();
 		void _JobLoop();
+		void _QueueJobs(std::vector<actions::JobAction> jobs);
 		void _RebuildDevicePage();
 		void _SetAudioDraftFromStream(const audio::AudioStreamParams& params);
 		void _RequestSave(bool chooseFolder);
@@ -589,6 +594,8 @@ namespace engine
 		std::thread _jobRunner;
 		std::mutex _jobMutex;
 		std::list<actions::JobAction> _jobList;
+		std::function<void()> _startupComplete; // Protected by _jobMutex; callback never reads.
+		bool _startupJobDiagnostics = false; // Initial queue admission, protected by _jobMutex.
 		mutable std::mutex _sceneMutex;
 		io::UserConfig _userConfig;
 		ViewMode _viewMode;

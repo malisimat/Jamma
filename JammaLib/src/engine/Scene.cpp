@@ -1,3 +1,4 @@
+#include "../../../console/DiagnosticThread.h"
 // Scene wires job/UI concerns and off-callback presentation; it does not reconstruct
 // NINJAM timing authority or mutate Timer/loop timing at the audio boundary.
 #include "Scene.h"
@@ -5,6 +6,7 @@
 #include <algorithm>
 #include <cassert>
 #include <iostream>
+#include <iterator>
 #include <cmath>
 #include <iomanip>
 #include <sstream>
@@ -161,6 +163,7 @@ Scene::Scene(SceneParams params,
 
 	_PublishAudioStations();
 
+	_startupJobDiagnostics = params.StartupDiagnostics;
 	_jobRunner = std::thread([this, onStart = params.OnJobThreadStart]() {
 		if (onStart) onStart();
 		this->_JobLoop();
@@ -1900,6 +1903,21 @@ void Scene::OnTick(Time curTime,
 	_audioEngine->AdvanceBlock(_quantisation.Clock().get(), curTime, samps, cfg, params);
 }
 
+void Scene::_QueueJobs(std::vector<actions::JobAction> jobs)
+{
+	std::scoped_lock lock(_jobMutex);
+	// Stamp origin before publication. Active and queued jobs never change origin.
+	for (auto& job : jobs) job.StartupDiagnostic = _startupJobDiagnostics;
+	_jobList.insert(_jobList.end(), std::make_move_iterator(jobs.begin()), std::make_move_iterator(jobs.end()));
+}
+
+void Scene::CompleteStartupWhenIdle(std::function<void()> complete)
+{
+	std::scoped_lock lock(_jobMutex);
+	_startupJobDiagnostics = false;
+	_startupComplete = std::move(complete);
+}
+
 void Scene::OnJobTick(Time curTime)
 {
 	std::scoped_lock lifecycle(_controlLifecycleMutex);
@@ -2093,7 +2111,10 @@ void Scene::OnJobTick(Time curTime)
 		_ninjamTraceJobQueueDepth = _jobList.size();
 
 		if (_jobList.empty())
+		{
+			if (auto complete = std::exchange(_startupComplete, {})) complete();
 			return;
+		}
 
 		job = _jobList.front();
 		_jobList.pop_front();
@@ -2109,10 +2130,22 @@ void Scene::OnJobTick(Time curTime)
 		}
 	}
 
+	console::DiagnosticThread::StartupScope startupDiagnostic(job.StartupDiagnostic);
+	try
 	{
 		std::scoped_lock lock(_sceneMutex);
 		auto receiver = job.Receiver.lock();
 		if (receiver && _JobReceiverAvailableLocked(receiver)) receiver->OnAction(job);
+	}
+	catch (const std::exception& error)
+	{
+		std::cerr << "[ERROR][job] action=" << job.JobActionType << " plugin='"
+			<< utils::EncodeUtf8(job.VstPath) << "' exception=" << error.what() << "; job failed" << std::endl;
+	}
+	catch (...)
+	{
+		std::cerr << "[ERROR][job] action=" << job.JobActionType << " plugin='"
+			<< utils::EncodeUtf8(job.VstPath) << "' unknown exception; job failed" << std::endl;
 	}
 
 	// Destroy PreInit'd VST plugins on the UI thread that initialized them.
@@ -2945,11 +2978,7 @@ void Scene::CommitChanges()
 		}
 	}
 
-	if (!jobList.empty())
-	{
-		std::scoped_lock lock(_jobMutex);
-		_jobList.insert(_jobList.end(), jobList.begin(), jobList.end());
-	}
+	if (!jobList.empty()) _QueueJobs(std::move(jobList));
 
 	if (hoverChanged)
 		_InvalidateHover2d();

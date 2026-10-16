@@ -107,6 +107,7 @@ namespace audio
 		AudioStreamParams GetAudioStreamParams();
 
 	private:
+		static void ReportBackendError(RtAudioError::Type type, const std::string& message) noexcept;
 		AudioStreamParams _audioStreamParams;
 		std::unique_ptr<RtAudio> _stream;
 		StreamState _streamState;

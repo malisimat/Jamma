@@ -20,6 +20,7 @@
 #include "../io/InitFile.h"
 #include "../io/StartupConfig.h"
 #include "ConsoleCapture.h"
+#include "StartupLog.h"
 #include "../vst/Vst3Plugin.h"
 #include <objbase.h>
 #include <dbt.h>
@@ -325,57 +326,6 @@ io::JamFile EmptyJam()
 	return jam;
 }
 
-// Startup diagnostics contain only configuration paths, device names, and outcomes.
-// Each launch rotates a bounded history before defaults or hardware are read.
-class StartupLog
-{
-public:
-	explicit StartupLog(const std::wstring& defaultsPath)
-	{
-		const auto directory = std::filesystem::path(defaultsPath).parent_path();
-		std::error_code error;
-		std::filesystem::create_directories(directory, error);
-		if (error) return;
-		_path = (directory / L"startup.log").wstring();
-		const auto oldest = _path + L".3";
-		DeleteFileW(oldest.c_str());
-		for (int index = 2; index >= 1; --index)
-		{
-			const auto from = _path + L"." + std::to_wstring(index);
-			const auto to = _path + L"." + std::to_wstring(index + 1);
-			MoveFileExW(from.c_str(), to.c_str(), MOVEFILE_REPLACE_EXISTING);
-		}
-		MoveFileExW(_path.c_str(), (_path + L".1").c_str(), MOVEFILE_REPLACE_EXISTING);
-		_file = CreateFileW(_path.c_str(), GENERIC_WRITE, FILE_SHARE_READ, nullptr, CREATE_ALWAYS,
-			FILE_ATTRIBUTE_NORMAL, nullptr);
-	}
-
-	~StartupLog() { if (_file != INVALID_HANDLE_VALUE) CloseHandle(_file); }
-	StartupLog(const StartupLog&) = delete;
-	StartupLog& operator=(const StartupLog&) = delete;
-
-	void Write(const std::string& line)
-	{
-		std::cout << line << std::endl;
-		if (_file == INVALID_HANDLE_VALUE || _bytes >= MaxBytes) return;
-		const auto text = line + "\r\n";
-		if (_bytes + text.size() > MaxBytes) return;
-		DWORD written = 0;
-		if (WriteFile(_file, text.data(), static_cast<DWORD>(text.size()), &written, nullptr))
-			_bytes += written;
-		FlushFileBuffers(_file);
-	}
-
-	const std::wstring& Path() const noexcept { return _path; }
-	bool Available() const noexcept { return _file != INVALID_HANDLE_VALUE; }
-
-private:
-	static constexpr size_t MaxBytes = 1024u * 1024u;
-	std::wstring _path;
-	HANDLE _file = INVALID_HANDLE_VALUE;
-	size_t _bytes = 0u;
-};
-
 static const char* MidiStatusText(midi::MidiConnectionStatus status) noexcept
 {
 	switch (status)
@@ -503,8 +453,39 @@ static bool SaveGeneratedJam(const std::wstring& path, const io::JamFile& jam)
 
 int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLine, int nCmdShow)
 {
+	const auto initPath = ResolveIniPath();
+	console::StartupLog startupLog(initPath);
 	auto consoleLines = std::make_shared<console::LineRing>();
-	console::ConsoleCapture capture(*consoleLines);
+	console::ConsoleCapture capture(*consoleLines, [&](std::string_view line) {
+		startupLog.Append(line);
+		if (auto failure = startupLog.TakeFailure(); !failure.empty())
+		{
+			consoleLines->Publish(failure);
+			OutputDebugStringA(failure.c_str()); // No recursive stream logging.
+		}
+	});
+	const auto drainBackendDiagnostics = [] {
+		if (auto fault = console::DiagnosticThread::TakeBackendError())
+		{
+			console::DiagnosticThread::StartupScope origin(fault->Startup);
+			std::cerr << (fault->Type <= static_cast<int>(RtAudioError::DEBUG_WARNING) ? "[WARNING]" : "[ERROR]")
+				<< "[ASIO] backend type=" << fault->Type << " message="
+				<< std::string_view(fault->Text.data(), fault->Length) << std::endl;
+		}
+		if (const auto status = console::DiagnosticThread::ConsumeStartupAudioStatus())
+		{
+			console::DiagnosticThread::StartupScope origin;
+			std::cerr << "[WARNING][ASIO] callback stream status=" << status << " (input overflow/output underflow)" << std::endl;
+		}
+		if (const auto lost = console::DiagnosticThread::ConsumeBackendDropped())
+			std::cerr << "[WARNING][ASIO] backend diagnostics dropped/truncated=" << lost << std::endl;
+		if (const auto status = console::DiagnosticThread::ConsumeAudioStatus())
+			std::cerr << "[WARNING][ASIO] callback stream status=" << status << " (input overflow/output underflow)" << std::endl;
+		if (const auto suppressed = console::DiagnosticThread::ConsumeSuppressed())
+			std::cerr << "[WARNING][diagnostics] suppressed " << suppressed << " callback stream writes; use bounded subsystem fault events" << std::endl;
+	};
+	try
+	{
 	struct DirectoryShutdown
 	{
 		~DirectoryShutdown() { ninjam::NinjamSession::ShutdownPublicServerDirectory(); }
@@ -538,13 +519,10 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 	console::CommandMailbox consoleCommands;
 	console::ConsoleWindow consoleWindow(consoleCommands);
 	console::GlobalKeyGate globalConsoleKeys;
-	const auto initPath = ResolveIniPath();
-	StartupLog startupLog(initPath);
 	NetworkSession socketSession;
 	if (!socketSession.IsInitialised())
 	{
 		startupLog.Write("[NINJAM] Failed to initialise socket library");
-		std::cerr << "[NINJAM] Failed to initialise socket library" << std::endl;
 		return -1;
 	}
 
@@ -568,7 +546,6 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 	{
 		if (defaultsExisted)
 		{
-			startupLog.Write("[BOOT] existing defaults invalid or unreadable; preserving original");
 			std::cerr << "[BOOT] Existing defaults.json is invalid or unreadable; preserving it and using in-memory defaults." << std::endl;
 		}
 		else
@@ -585,6 +562,7 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 	SceneParams sceneParams(DrawableParams{ "" },
 		MoveableParams{ {0, 0}, {0, 0, 0}, 1.0 },
 		SizeableParams{ 1400, 1000 });
+	sceneParams.StartupDiagnostics = true;
 	sceneParams.OnJobThreadStart = [] {
 		console::ConsoleCapture::EnableForCurrentThread(true);
 	};
@@ -742,12 +720,10 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 		}
 		catch (const std::exception& error)
 		{
-			startupLog.Write(std::string("[BOOT] Scene creation failed: ") + error.what());
 			std::cerr << "[BOOT] Scene creation failed: " << error.what() << std::endl;
 		}
 		catch (...)
 		{
-			startupLog.Write("[BOOT] Scene creation failed with an unknown error.");
 			std::cerr << "[BOOT] Scene creation failed with an unknown error." << std::endl;
 		}
 		return std::nullopt;
@@ -772,11 +748,11 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 	}
 	if (scene.value()->SnapshotStations().empty())
 	{
-		startupLog.Write("[BOOT] Scene has no constructed Station.");
 		std::cerr << "[BOOT] Scene has no constructed Station." << std::endl;
 		return -1;
 	}
 
+	sceneParams.StartupDiagnostics = false; // Runtime replacement jobs have runtime origin.
 	if (defaults.has_value())
 		scene.value()->SetLogging(defaults.value().Logging);
 	ResourceLib resourceLib;
@@ -1009,6 +985,10 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 	RigDefaultSave rigDefaultSave(GetPath(PATH_ROAMING) + L"\\Jamma", initPath, SaveRigAtomic, UpdateIni);
 	MSG msg{};
 	bool active = true;
+	const auto startupDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
+	bool startupCompletionArmed = false;
+	bool startupCaptureFinished = false;
+	const auto startupJobsFinished = std::make_shared<std::atomic<bool>>(false);
 	bool consoleCreationAttempted = false;
 	bool pendingConsoleToggle = false;
 	bool explicitConsoleAction = false;
@@ -1056,6 +1036,20 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 		// Only admit another command after its ordered output has reached the view.
 		// At most two ring snapshots, one echo/result and a loss notice are pending;
 		// results cannot be lost when a command generates more output than the ring.
+		drainBackendDiagnostics();
+		if (!startupCaptureFinished)
+		{
+			if (startupJobsFinished->load(std::memory_order_acquire))
+			{
+				capture.CompleteStartup("[BOOT] startup restore and initial jobs complete");
+				startupCaptureFinished = true;
+			}
+			else if (std::chrono::steady_clock::now() >= startupDeadline)
+			{
+				capture.CompleteStartup("[WARNING][BOOT] startup diagnostic window timed out after 30 seconds; later output remains in console");
+				startupCaptureFinished = true;
+			}
+		}
 		std::size_t drainedThisFrame = 0;
 		auto captureConsoleLines = [&] {
 			pendingCaptureLoss += consoleLines->ConsumeDropped();
@@ -1182,6 +1176,13 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 			rigDefaultSave.Start(*scene.value(), window.GetWindowHandle(), *defaults);
 		window.Render();
 		window.Swap();
+		if (!startupCompletionArmed)
+		{
+			startupCompletionArmed = true;
+			scene.value()->CompleteStartupWhenIdle([startupJobsFinished] {
+				startupJobsFinished->store(true, std::memory_order_release);
+			});
+		}
 		if (!consoleCreationAttempted)
 		{
 			consoleCreationAttempted = true;
@@ -1221,17 +1222,29 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 	// Final drain for any plugins queued after the last render iteration.
 	vst::DrainUiThreadDestroyQueue();
 
-	// Join the opted-in Scene job thread before restoring global stream buffers.
+	// Join Scene and directory workers before restoring global stream buffers.
 	ninjam::NinjamSession::ShutdownPublicServerDirectory();
 	scene.reset();
-	console::ConsoleCapture::EnableForCurrentThread(false);
-	capture.Stop();
 
 	// Drain once more for any failed-load plugins queued late during Scene teardown.
 	vst::DrainUiThreadDestroyQueue();
 
 	if (uiComInitialized)
 		CoUninitialize();
+	drainBackendDiagnostics();
+	capture.Stop();
 
 	return (int)msg.wParam;
+	}
+	catch (const std::exception& error)
+	{
+		drainBackendDiagnostics();
+		std::cerr << "[ERROR][app] unexpected startup/runtime exception: " << error.what() << std::endl;
+	}
+	catch (...)
+	{
+		drainBackendDiagnostics();
+		std::cerr << "[ERROR][app] unexpected startup/runtime exception; exiting" << std::endl;
+	}
+	return -1;
 }

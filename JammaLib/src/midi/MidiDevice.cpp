@@ -1,3 +1,4 @@
+#include "../../../console/DiagnosticThread.h"
 #include "MidiDevice.h"
 
 #include <algorithm>
@@ -395,6 +396,7 @@ void MidiDevice::_RtMidiCallback(double deltaSeconds,
                                  std::vector<unsigned char>* message,
                                  void* userData)
 {
+	console::DiagnosticThread::RealtimeScope diagnosticScope;
 	const auto callbackArrivalMicros = std::chrono::duration_cast<std::chrono::microseconds>(
 		std::chrono::steady_clock::now().time_since_epoch()).count();
 	if ((nullptr == userData) || (nullptr == message))
