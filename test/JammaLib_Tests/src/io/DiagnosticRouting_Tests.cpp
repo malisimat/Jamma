@@ -149,6 +149,7 @@ namespace engine
 	class SceneStartupDiagnosticTestAccess
 	{
 	public:
+		static bool Quitting(Scene& scene) { return scene._isSceneQuitting.load(std::memory_order_acquire); }
 		static void Enqueue(Scene& scene, actions::JobAction job)
 		{
 			std::vector<actions::JobAction> jobs;
@@ -304,3 +305,80 @@ TEST(ConsoleSession, ExplicitBackendOriginOverridesOpenStartupWindowAndNestedSco
 	EXPECT_EQ(Thread::ConsumeStartupAudioStatus(), 5u);
 	EXPECT_EQ(startup, (std::vector<std::string>{"explicit startup", "unspecified during startup"}));
 }
+class ThrowingDiagnosticReceiver : public base::ActionReceiver
+{
+public:
+	actions::ActionResult OnAction(actions::JobAction) override { throw std::runtime_error("receiver exploded"); }
+};
+class JobThreadFailures : public testing::TestWithParam<int> {};
+TEST_P(JobThreadFailures, PublicCallbackFailureStopsWorkerAndOwnerShutdownJoins)
+{
+	console::LineRing ring;
+	console::ConsoleCapture capture(ring);
+	auto rig = io::RigFile::FromStream(std::stringstream(io::RigFile::DefaultJson)).value();
+	rig.Triggers.clear(); rig.User.Midi.Devices.clear();
+	io::JamFile jam{};
+	io::JamFile::Station station{}; station.Name = "Failure station"; jam.Stations.push_back(station);
+	engine::SceneParams params({ "" }, {}, {640u, 480u});
+	std::atomic<bool> release{false};
+	const int mode = GetParam();
+	params.OnJobThreadStart = [&] {
+		if (mode == 1) throw std::runtime_error("initialization exploded");
+		if (mode == 3) throw 7;
+		if (mode == 2)
+		{
+			const auto limit = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+			while (!release.load(std::memory_order_acquire) && std::chrono::steady_clock::now() < limit)
+				std::this_thread::yield();
+		}
+	};
+	auto created = engine::Scene::FromFile(params, jam, rig, L"", [](const auto&) { return true; });
+	ASSERT_TRUE(created);
+	auto scene = *created;
+	std::atomic<unsigned> calls{0};
+	auto receiver = std::make_shared<ThrowingDiagnosticReceiver>();
+	if (mode == 4)
+	{
+		actions::JobAction job; job.JobActionType = actions::JobAction::JOB_UPDATELOOPS; job.Receiver = receiver;
+		job.VstPath = L"test-receiver.vst3";
+		engine::SceneStartupDiagnosticTestAccess::Enqueue(*scene, std::move(job));
+	}
+	if (mode == 0 || mode == 2)
+		scene->QueueExplicitRigSave([&] { ++calls; throw std::runtime_error("save exploded"); });
+	if (mode == 2)
+	{
+		// The owner is inside Shutdown before the worker reaches final-save.
+		std::thread signal([&] {
+			const auto limit = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+			while (!engine::SceneStartupDiagnosticTestAccess::Quitting(*scene) && std::chrono::steady_clock::now() < limit)
+				std::this_thread::yield();
+			release.store(true, std::memory_order_release);
+		});
+		scene->Shutdown();
+		signal.join();
+	}
+	else
+	{
+		const auto limit = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+		while (!scene->JobThreadFailed() && std::chrono::steady_clock::now() < limit) std::this_thread::yield();
+		EXPECT_TRUE(scene->JobThreadFailed());
+		// Same public failure notification checked by the app UI before its normal
+		// Shutdown path. Work queued after failure must never run, including save.
+		scene->QueueExplicitRigSave([&] { calls.fetch_add(100); });
+		scene->OnJobTick(std::chrono::steady_clock::now());
+		scene->Shutdown();
+	}
+	EXPECT_TRUE(scene->JobThreadFailed());
+	scene->Shutdown(); // repeated UI/destructor teardown remains safe
+	EXPECT_EQ(calls.load(), mode == 0 || mode == 2 ? 1u : 0u);
+	unsigned errors = 0;
+	while (auto line = ring.Take())
+	{
+		if (line->find("[ERROR][job]") == std::string::npos) continue;
+		++errors;
+		EXPECT_NE(line->find("worker stopped; shutdown requested"), std::string::npos);
+		EXPECT_NE(line->find(mode == 2 ? "stage=final-save" : mode == 0 ? "stage=pump" : mode == 4 ? "stage=receiver" : "stage=initialize"), std::string::npos);
+	}
+	EXPECT_EQ(errors, 1u);
+}
+INSTANTIATE_TEST_SUITE_P(ConsoleSession, JobThreadFailures, testing::Values(0, 1, 2, 3, 4));

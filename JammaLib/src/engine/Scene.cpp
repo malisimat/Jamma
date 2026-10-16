@@ -165,8 +165,7 @@ Scene::Scene(SceneParams params,
 
 	_startupJobDiagnostics = params.StartupDiagnostics;
 	_jobRunner = std::thread([this, onStart = params.OnJobThreadStart]() {
-		if (onStart) onStart();
-		this->_JobLoop();
+		this->_JobLoop(std::move(onStart));
 	});
 }
 
@@ -2139,13 +2138,11 @@ void Scene::OnJobTick(Time curTime)
 	}
 	catch (const std::exception& error)
 	{
-		std::cerr << "[ERROR][job] action=" << job.JobActionType << " plugin='"
-			<< utils::EncodeUtf8(job.VstPath) << "' exception=" << error.what() << "; job failed" << std::endl;
+		_FailJobThread("receiver", error.what(), &job);
 	}
 	catch (...)
 	{
-		std::cerr << "[ERROR][job] action=" << job.JobActionType << " plugin='"
-			<< utils::EncodeUtf8(job.VstPath) << "' unknown exception; job failed" << std::endl;
+		_FailJobThread("receiver", "unknown exception", &job);
 	}
 
 	// Destroy PreInit'd VST plugins on the UI thread that initialized them.
@@ -3832,17 +3829,48 @@ void Scene::_ResetIfEmpty()
 	Reset();
 }
 
-void Scene::_JobLoop()
+void Scene::_FailJobThread(const char* stage, const char* detail, const actions::JobAction* job) noexcept
 {
-	while (!_isSceneQuitting.load(std::memory_order_acquire))
+	// The job owner stops mutation; the UI owns device teardown and joining.
+	_sessionReplacing.store(true, std::memory_order_release);
+	if (_jobThreadFailed.exchange(true, std::memory_order_acq_rel)) return;
+	try
 	{
-		OnJobTick(Timer::GetTime());
-		std::this_thread::sleep_for(std::chrono::milliseconds(20));
+		std::optional<console::DiagnosticThread::StartupScope> origin;
+		if (job) origin.emplace(job->StartupDiagnostic);
+		std::cerr << "[ERROR][job] stage=" << stage;
+		if (job) std::cerr << " action=" << job->JobActionType << " plugin='" << utils::EncodeUtf8(job->VstPath) << "'";
+		std::cerr << " exception=" << detail << "; worker stopped; shutdown requested" << std::endl;
 	}
-	std::function<void()> save;
-	{ std::scoped_lock lock(_sceneMutex); save = std::move(_explicitRigSaveJob); }
-	if (save) save();
-	// Final job-producer barrier for permanent ingress closure.
+	catch (...) {} // A failed diagnostic sink must not escape the thread boundary.
+}
+
+void Scene::_JobLoop(std::function<void()> onStart) noexcept
+{
+	const char* stage = "initialize";
+	try
+	{
+		if (onStart) onStart();
+		stage = "pump";
+		while (!_isSceneQuitting.load(std::memory_order_acquire) && !JobThreadFailed())
+		{
+			OnJobTick(Timer::GetTime());
+			std::this_thread::sleep_for(std::chrono::milliseconds(20));
+		}
+		if (!JobThreadFailed())
+		{
+			stage = "final-save";
+			std::function<void()> save;
+			{ std::scoped_lock lock(_sceneMutex); save = std::move(_explicitRigSaveJob); }
+			if (save) save();
+		}
+	}
+	catch (const std::exception& error) { _FailJobThread(stage, error.what()); }
+	catch (...) { _FailJobThread(stage, "unknown exception"); }
+	// A failed worker cannot pump structural work. Wait only for UI Shutdown's
+	// permanent input-close publication, then preserve the final producer barrier.
+	while (!_isSceneQuitting.load(std::memory_order_acquire))
+		std::this_thread::sleep_for(std::chrono::milliseconds(20));
 	_inputSubsystem->AcknowledgeRigTriggerInputCloseFromJob();
 }
 

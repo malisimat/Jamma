@@ -188,6 +188,7 @@ namespace engine
 		bool PumpGlobalKeyCapture(actions::KeyAction& action) noexcept;
 		void OnInputFocusLost();
 		void Shutdown();
+		bool JobThreadFailed() const noexcept { return _jobThreadFailed.load(std::memory_order_acquire); }
 		void SetLogging(io::LoggingConfig config) noexcept;
 		bool IsUiVerbose() const noexcept { return _loggingConfig.Ui == "verbose"; }
 		void InitMidi(bool generatedRig = false)
@@ -344,7 +345,8 @@ namespace engine
 		void _SetTransportOffsetLoopFrac(double loopFrac, bool updateInput = true);
 		void _ApplyGlobalMidiQuantStateToAllLoopTakes();
 		void _ForceGlobalMidiQuantStateMixedOnLocalEdit();
-		void _JobLoop();
+		void _JobLoop(std::function<void()> onStart) noexcept;
+		void _FailJobThread(const char* stage, const char* detail, const actions::JobAction* job = nullptr) noexcept;
 		void _QueueJobs(std::vector<actions::JobAction> jobs);
 		void _RebuildDevicePage();
 		void _SetAudioDraftFromStream(const audio::AudioStreamParams& params);
@@ -427,6 +429,7 @@ namespace engine
 		bool _BackgroundSelectionPreviewActive() const;
 		void _SelectAllLocalLocked();
 		std::atomic_bool _isSceneQuitting;
+		std::atomic_bool _jobThreadFailed{false}; // Job writes; UI polls then calls Shutdown; lifetime ends after join.
 		std::atomic_bool _isSceneReset;
 		glm::mat4 _viewProj;
 		glm::mat4 _overlayViewProj;

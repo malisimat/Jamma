@@ -999,6 +999,7 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 	std::size_t pendingCaptureLoss = 0;
 	while (active)
 	{
+		if (scene.value()->JobThreadFailed()) break; // UI owns orderly stop and join below.
 		// Dispatch one message before checking the budget so queued work always progresses.
 		constexpr auto messagePumpBudget = std::chrono::milliseconds(2);
 		const auto messagePumpStart = std::chrono::steady_clock::now();
@@ -1206,8 +1207,9 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 	consoleWindow.Destroy();
 	scene.value()->Shutdown();
 
-	if (rigDefaultSave.Poll(*scene.value(), window.GetWindowHandle(), *defaults, false)) { rigReadyForDefaults = true; defaultsValid = true; hardwareDefaults->store(std::make_shared<const io::InitFile>(*defaults), std::memory_order_release); }
-	if (defaultsValid && rigReadyForDefaults && jamReadyForDefaults)
+	const bool jobThreadFailed = scene.value()->JobThreadFailed();
+	if (!jobThreadFailed && rigDefaultSave.Poll(*scene.value(), window.GetWindowHandle(), *defaults, false)) { rigReadyForDefaults = true; defaultsValid = true; hardwareDefaults->store(std::make_shared<const io::InitFile>(*defaults), std::memory_order_release); }
+	if (!jobThreadFailed && defaultsValid && rigReadyForDefaults && jamReadyForDefaults)
 	{
 		auto savedDefaults = defaults.value();
 		const auto restoreConfig = window.GetRestoreConfig();
@@ -1237,7 +1239,7 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 	drainBackendDiagnostics();
 	capture.Stop();
 
-	return (int)msg.wParam;
+	return jobThreadFailed ? 1 : (int)msg.wParam;
 	}
 	catch (const std::exception& error)
 	{
