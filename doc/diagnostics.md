@@ -14,7 +14,7 @@ first rendered Scene has drained its initial job queue, including queued plugin
 loads. Initial jobs retain explicit startup origin through completion, so their late
 failures still reach the file. A 30-second window after startup enters the UI loop
 bounds the general tee if jobs keep arriving; its expiry emits a warning. A blocked UI cannot drain diagnostics
-or enforce that deadline until it resumes. Runtime UI/jobs stay in the console even when queued behind a slow startup job. Early orderly returns flush pending startup text before closing the log.
+or enforce that deadline until it resumes. Explicit runtime scopes/jobs stay in the console even while the general startup window remains open. Unspecified producers inherit that window; explicit startup producers retain file attribution after it closes. Early orderly returns flush pending startup text before closing the log.
 
 The file rotates through startup.log.1, .2 and .3 and is capped at 1 MiB per launch.
 Directory, rotation, open, write, flush and size-limit failures report once through

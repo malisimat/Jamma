@@ -27,15 +27,20 @@ namespace console
 		private:
 			bool _previous;
 		};
+		enum class StartupOrigin { Unspecified, Startup, Runtime };
 		class StartupScope
 		{
 		public:
-			explicit StartupScope(bool startup = true) noexcept : _previous(_startupThread) { _startupThread = startup; }
+			explicit StartupScope(bool startup = true) noexcept : _previous(_startupThread) { _startupThread = startup ? StartupOrigin::Startup : StartupOrigin::Runtime; }
 			~StartupScope() { _startupThread = _previous; }
 		private:
-			bool _previous;
+			StartupOrigin _previous;
 		};
-		static bool StartupOwned() noexcept { return _startupThread; }
+		static bool StartupOwned() noexcept { return _startupThread == StartupOrigin::Startup; }
+		static bool StartupAttributed(bool general) noexcept
+		{
+			return _startupThread == StartupOrigin::Unspecified ? general : StartupOwned();
+		}
 		static void StartupWindow(bool active) noexcept { _startupWindow.store(active, std::memory_order_relaxed); }
 		// One bounded mailbox: producers never wait for the consumer or each other.
 		static void BackendError(int type, std::string_view text) noexcept
@@ -44,7 +49,7 @@ namespace console
 			if (!_backendState.compare_exchange_strong(empty, 1, std::memory_order_acquire))
 			{ _backendDropped.fetch_add(1, std::memory_order_relaxed); return; }
 			_backend.Type = type;
-			_backend.Startup = _startupThread || _startupWindow.load(std::memory_order_relaxed);
+			_backend.Startup = StartupAttributed(_startupWindow.load(std::memory_order_relaxed));
 			_backend.Length = (std::min)(text.size(), _backend.Text.size());
 			if (_backend.Length < text.size())
 				while (_backend.Length && (static_cast<unsigned char>(text[_backend.Length]) & 0xc0) == 0x80) --_backend.Length;
@@ -64,7 +69,7 @@ namespace console
 		static void AudioStatus(unsigned status) noexcept
 		{
 			if (!status) return;
-			auto& target = (_startupThread || _startupWindow.load(std::memory_order_relaxed)) ? _startupAudioStatus : _audioStatus;
+			auto& target = StartupAttributed(_startupWindow.load(std::memory_order_relaxed)) ? _startupAudioStatus : _audioStatus;
 			target.fetch_or(status, std::memory_order_relaxed);
 		}
 		static unsigned ConsumeAudioStatus() noexcept { return _audioStatus.exchange(0); }
@@ -79,7 +84,8 @@ namespace console
 		static inline BackendDiagnostic _backend;
 		static inline std::atomic<unsigned> _backendState{0}, _audioStatus{0}, _startupAudioStatus{0};
 		static inline std::atomic<std::size_t> _backendDropped{0};
-		static inline thread_local bool _realtime = false, _startupThread = false;
+		static inline thread_local bool _realtime = false;
+		static inline thread_local StartupOrigin _startupThread = StartupOrigin::Unspecified;
 		static inline std::atomic<bool> _startupWindow{false};
 		static inline std::atomic<std::size_t> _suppressed{0};
 	};

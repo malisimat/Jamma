@@ -480,7 +480,10 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 		if (const auto lost = console::DiagnosticThread::ConsumeBackendDropped())
 			std::cerr << "[WARNING][ASIO] backend diagnostics dropped/truncated=" << lost << std::endl;
 		if (const auto status = console::DiagnosticThread::ConsumeAudioStatus())
+		{
+			console::DiagnosticThread::StartupScope origin(false);
 			std::cerr << "[WARNING][ASIO] callback stream status=" << status << " (input overflow/output underflow)" << std::endl;
+		}
 		if (const auto suppressed = console::DiagnosticThread::ConsumeSuppressed())
 			std::cerr << "[WARNING][diagnostics] suppressed " << suppressed << " callback stream writes; use bounded subsystem fault events" << std::endl;
 	};

@@ -148,7 +148,7 @@ namespace console
 			std::scoped_lock lock(_state->Mutex);
 			if (!_state->Active) return;
 			auto& pending = _thread.Streams[stream];
-			const bool startup = _state->GeneralStartup || DiagnosticThread::StartupOwned();
+			const bool startup = DiagnosticThread::StartupAttributed(_state->GeneralStartup);
 			if (pending.Length && pending.Startup != startup) _state->Publish(pending);
 			for (std::streamsize at = 0; at < size; ++at)
 			{

@@ -174,7 +174,8 @@ public:
 		return actions::ActionResult::NoAction();
 	}
 };
-TEST(ConsoleSession, DelayedStartupJobsRetainOriginWhileInterleavedRuntimeJobsStayConsoleOnly)
+class StartupJobOrigins : public testing::TestWithParam<bool> {};
+TEST_P(StartupJobOrigins, InterleavedJobsRespectExplicitOrigin)
 {
 	console::LineRing ring;
 	std::vector<std::string> startup;
@@ -210,8 +211,11 @@ TEST(ConsoleSession, DelayedStartupJobsRetainOriginWhileInterleavedRuntimeJobsSt
 	enqueue("runtime job");
 	// Directly close the global window: this simulates the 30s deadline without
 	// waiting in the test while the first startup job remains in flight.
-	capture.CompleteStartup("startup window expired");
-	std::cout << "runtime UI failure\n";
+	if (GetParam()) capture.CompleteStartup("startup window expired");
+	{
+		console::DiagnosticThread::StartupScope runtime(false);
+		std::cout << "runtime UI failure\n";
+	}
 	receiver->Release.store(true, std::memory_order_release);
 	while (!finished.load(std::memory_order_acquire) && std::chrono::steady_clock::now() < deadline)
 		std::this_thread::yield();
@@ -224,6 +228,7 @@ TEST(ConsoleSession, DelayedStartupJobsRetainOriginWhileInterleavedRuntimeJobsSt
 	EXPECT_EQ(std::find(startup.begin(), startup.end(), "runtime job failure"), startup.end());
 	EXPECT_EQ(std::find(startup.begin(), startup.end(), "runtime UI failure"), startup.end());
 }
+INSTANTIATE_TEST_SUITE_P(ConsoleSession, StartupJobOrigins, testing::Bool());
 TEST(ConsoleSession, BackendEventsKeepStartupOriginUntilDrainedAfterWindowEnds)
 {
 	while (console::DiagnosticThread::TakeBackendError()) {}
@@ -269,4 +274,33 @@ TEST(ConsoleSession, StartupOriginChangeFlushesPartialWithoutTeeingRuntimeTail)
 	EXPECT_EQ(ring.Take(), "late startup partial");
 	EXPECT_EQ(ring.Take(), "runtime partial");
 	EXPECT_FALSE(ring.Take());
+}
+
+TEST(ConsoleSession, ExplicitBackendOriginOverridesOpenStartupWindowAndNestedScopesRestore)
+{
+	using Thread = console::DiagnosticThread;
+	while (Thread::TakeBackendError()) {}
+	Thread::ConsumeAudioStatus(); Thread::ConsumeStartupAudioStatus();
+	console::LineRing ring;
+	std::vector<std::string> startup;
+	console::ConsoleCapture capture(ring, [&](std::string_view line) { startup.emplace_back(line); });
+	const auto drain = [&](bool expectedStartup) {
+		auto event = Thread::TakeBackendError(); ASSERT_TRUE(event);
+		EXPECT_EQ(event->Startup, expectedStartup);
+		Thread::StartupScope origin(event->Startup);
+		std::cerr << std::string_view(event->Text.data(), event->Length) << '\n';
+	};
+	{
+		Thread::StartupScope runtime(false);
+		Thread::BackendError(8, "runtime during startup"); Thread::AudioStatus(2); drain(false);
+		{
+			Thread::StartupScope startup;
+			Thread::BackendError(8, "explicit startup"); Thread::AudioStatus(1); drain(true);
+		}
+		Thread::BackendError(8, "runtime after nested startup"); drain(false);
+	}
+	Thread::BackendError(8, "unspecified during startup"); Thread::AudioStatus(4); drain(true);
+	EXPECT_EQ(Thread::ConsumeAudioStatus(), 2u);
+	EXPECT_EQ(Thread::ConsumeStartupAudioStatus(), 5u);
+	EXPECT_EQ(startup, (std::vector<std::string>{"explicit startup", "unspecified during startup"}));
 }
