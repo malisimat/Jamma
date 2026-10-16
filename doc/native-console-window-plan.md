@@ -72,3 +72,10 @@ Before deleting shared helpers, search the whole solution and deployment scripts
 - `Jamma/Jamma.vcxproj` and `Jamma.sln`: app source/project dependencies to update when removing the companion.
 
 Use these file and API names as orientation rather than line-number instructions; implementation should follow the branch's current structure when the work begins.
+
+## Implementation checkpoint
+
+Implemented and independently reviewed at `fcf15fbb`. Debug and Release app,
+engine and native-test builds passed; full suites passed 1685 and 1679 tests
+respectively. See [validation evidence and manual acceptance](native-console-window-handoff.md)
+before merging into the integration branch.
