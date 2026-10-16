@@ -10,6 +10,7 @@
 #include "../../console/GlobalKeyGate.h"
 #include "../../console/CommandMailbox.h"
 #include "../../console/CommandParsing.h"
+#include "../../console/Help.h"
 #include "../../console/LineRing.h"
 #include "Main.h"
 #include "RigDefaultSave.h"
@@ -53,14 +54,15 @@ using namespace utils;
 // ---------------------------------------------------------------------------
 // Known public NINJAM servers
 // ---------------------------------------------------------------------------
-static void PrintNinjamHelp()
+static void PrintNinjamServers()
 {
 	auto servers = ninjam::NinjamSession::GetReachablePublicServers();
 	std::ostringstream output;
 	output << "[NINJAM] Commands:\n"
-	          << "[NINJAM]   /  /?  /help        Show this help and server list\n"
+	          << "[NINJAM]   /ninjam  /n          List/refresh public servers\n"
+	          << "[NINJAM]   /  /?  /help         General help and controls (offline)\n"
 	          << "[NINJAM]   /c <n>  /connect <n> Connect to server by number\n"
-	          << "[NINJAM]   /d  /q  /quit        Disconnect from current server\n"
+	          << "[NINJAM]   /d /q /quit /exit /disconnect  Disconnect\n"
 	          << "[NINJAM] Servers:\n";
 	for (std::size_t i = 0; i < servers.size(); ++i)
 	{
@@ -85,11 +87,17 @@ static bool HandleSlashCommand(const std::string& msg, Scene* scene)
 	const auto parsed = console::ParseCommand(msg);
 	if (parsed.Kind == console::CommandKind::Chat) return false;
 
-	if (parsed.Kind == console::CommandKind::Help)
+	if (console::TryWriteGeneralHelp(parsed, std::cout))
+	{
+		std::cout << std::flush;
+		return true;
+	}
+
+	if (parsed.Kind == console::CommandKind::Ninjam)
 	{
 		const auto snapshot = ninjam::NinjamSession::GetPublicServerDirectorySnapshot();
 		const bool refreshStarted = ninjam::NinjamSession::RefreshPublicServerDirectoryAsync(
-			PrintNinjamHelp,
+			PrintNinjamServers,
 			[] { console::ConsoleCapture::EnableForCurrentThread(true); },
 			[] { WriteConsoleEventLine("[NINJAM] Refreshing live metadata from autosong.ninjam.com..."); });
 		if (!refreshStarted && (snapshot.RefreshInFlight || !snapshot.HasLiveData))
@@ -98,7 +106,7 @@ static bool HandleSlashCommand(const std::string& msg, Scene* scene)
 		}
 		else if (!refreshStarted)
 		{
-			PrintNinjamHelp();
+			PrintNinjamServers();
 		}
 		return true;
 	}
@@ -107,7 +115,7 @@ static bool HandleSlashCommand(const std::string& msg, Scene* scene)
 	{
 		if (parsed.Arguments.empty())
 		{
-			WriteConsoleEventLine("[NINJAM] Usage: /c <number>  (type / for list)");
+			WriteConsoleEventLine("[NINJAM] Usage: /c <number> or /connect <number>  (type /ninjam or /n for list)");
 			return true;
 		}
 		const int idx = parsed.ServerNumber;
@@ -118,14 +126,14 @@ static bool HandleSlashCommand(const std::string& msg, Scene* scene)
 
 		if (serverCount == 0)
 		{
-			WriteConsoleEventLine("[NINJAM] No reachable servers in the current list  (type / to refresh)");
+			WriteConsoleEventLine("[NINJAM] No reachable servers in the current list  (type /ninjam or /n to refresh)");
 			return true;
 		}
 
 		if (idx < 1 || idx > serverCount)
 		{
 			WriteConsoleEventLine("[NINJAM] Server number must be 1-"
-				+ std::to_string(serverCount) + "  (type / for list)");
+				+ std::to_string(serverCount) + "  (type /ninjam or /n for list)");
 			return true;
 		}
 		if (scene)
@@ -149,8 +157,8 @@ static bool HandleSlashCommand(const std::string& msg, Scene* scene)
 		return true;
 	}
 
-	WriteConsoleEventLine("[NINJAM] Unknown command /" + parsed.Verb
-		+ "  (type / for help)");
+	WriteConsoleEventLine("[CONSOLE] Unknown command /" + parsed.Verb
+		+ "  (type / or /help for controls; /ninjam or /n for servers)");
 	return true;
 }
 using namespace io;

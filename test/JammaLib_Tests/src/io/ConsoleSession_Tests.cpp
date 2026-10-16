@@ -1,11 +1,13 @@
 #include "../../../../console/CommandMailbox.h"
 #include "../../../../console/CommandParsing.h"
+#include "../../../../console/Help.h"
 #include "../../../../console/GlobalKeyGate.h"
 #include "../../../../console/LineRing.h"
 #include "../../../../Jamma/src/ConsoleCapture.h"
 #include <gtest/gtest.h>
 #include <array>
 #include <thread>
+#include <sstream>
 #include <vector>
 TEST(ConsoleSession, CaptureDefaultsToWorkersAndFlushesThreadExitAndEachStream)
 {
@@ -170,6 +172,8 @@ TEST(ConsoleCommand, PreservesHelpConnectDisconnectAndChatMeanings)
 {
 	for (const auto* text : { "/", "/?", "/help", "/HELP" })
 		EXPECT_EQ(console::ParseCommand(text).Kind, console::CommandKind::Help);
+	for (const auto* text : { "/n", "/ninjam", "/NINJAM" })
+		EXPECT_EQ(console::ParseCommand(text).Kind, console::CommandKind::Ninjam);
 	for (const auto* text : { "/d", "/q", "/quit", "/exit", "/disconnect" })
 		EXPECT_EQ(console::ParseCommand(text).Kind, console::CommandKind::Disconnect);
 	const auto connect = console::ParseCommand("/CONNECT   2more");
@@ -180,6 +184,55 @@ TEST(ConsoleCommand, PreservesHelpConnectDisconnectAndChatMeanings)
 	EXPECT_EQ(console::ParseCommand("/mute").Kind, console::CommandKind::Unknown);
 	EXPECT_EQ(console::ParseCommand("hello").Kind, console::CommandKind::Chat);
 	EXPECT_EQ(console::ParseCommand("").Kind, console::CommandKind::Chat);
+}
+
+TEST(ConsoleCommand, GeneralHelpAliasesWriteTheSameCompleteOfflineReference)
+{
+	for (const auto* text : { "/", "/help", "/?", "/HELP" })
+	{
+		std::ostringstream output;
+		// No Scene, NINJAM directory or device exists on this path.
+		ASSERT_TRUE(console::TryWriteGeneralHelp(console::ParseCommand(text), output));
+		EXPECT_EQ(output.str(), console::GeneralHelpText);
+	}
+	for (const auto* command : { "/n", "/ninjam", "/c 1", "/disconnect", "hello", "/unknown" })
+	{
+		std::ostringstream output;
+		EXPECT_FALSE(console::TryWriteGeneralHelp(console::ParseCommand(command), output));
+		EXPECT_TRUE(output.str().empty());
+	}
+	const auto help = console::GeneralHelpText;
+	for (const auto* binding : { "/ninjam", "/connect", "/disconnect", "/quit", "/exit",
+		"Ctrl+`", "F1-F9", "Shift+F1-F9", "Alt+F1-F9", "Middle-click", "Alt+middle-click",
+		"Double-left-click", "unity (0 dB)", "16 channel override toggles", "unchanged/pass-through",
+		"PageUp", "PageDown", "Hold Insert", "Ctrl+Shift+[", "Shift+right-drag", "CONFIGURABLE" })
+		EXPECT_NE(help.find(binding), std::string_view::npos) << binding;
+}
+
+TEST(ConsoleCommand, GeneralHelpDescribesMidiPointerContexts)
+{
+	// Match LoopGridEditor::_BeginSpecialGesture: right on empty grid enters
+	// pitch view; Ctrl+left there is reserved, while off-grid drags can orbit.
+	const auto help = console::GeneralHelpText;
+	for (const auto* binding : {
+		"Right-drag empty MIDI grid pans pitch vertically and zooms horizontally.",
+		"Ctrl+left-drag on empty MIDI grid has no action.",
+		"Start a left/right drag off the MIDI grid to orbit." })
+		EXPECT_NE(help.find(binding), std::string_view::npos) << binding;
+}
+
+TEST(ConsoleCommand, GeneralHelpFitsCaptureWithoutDroppingLines)
+{
+	console::LineRing ring;
+	{
+		console::ConsoleCapture capture(ring);
+		ASSERT_TRUE(console::TryWriteGeneralHelp(console::ParseCommand("/help"), std::cout));
+		std::cout << std::flush;
+	}
+	std::string text;
+	while (auto line = ring.Take()) text += *line + '\n';
+	EXPECT_EQ(text, console::GeneralHelpText);
+	EXPECT_EQ(ring.ConsumeDropped(), 0u);
 }
 TEST(ConsoleSession, OwnerQueuePreservesOrderAndClosesPendingWork)
 {

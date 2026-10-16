@@ -33,6 +33,7 @@ Detailed guides on setup, building, testing, and advanced configurations live in
 - **[Jamma Concepts and Glossary](doc/glossary.md)**: Plain-language definitions for Scene, Station, LoopTake, Loop, recording actions, timing, quantisation, and NINJAM tempo following.
 - **[Overlay Control UI](doc/overlay-controls.md)**: Instructions for the Ctrl-held overlay controls, target selection rules, and quantisation handle behavior.
 - **[Loop Grid Editor](doc/loop-grid-editor.md)**: Opening a loop and MIDI editing controls, including note, velocity, pitch-view, and undo gestures.
+- **[Console and Controls Reference](doc/performance-console.md)**: Type `/help` or press F1 in the console for all controls, or `/ninjam` (`/n`) for public servers. Ctrl plus backtick in the main window opens the console.
 - **[Multi-Device MIDI Trigger Rig Config](doc/midi-trigger-mapping.md)**: Rig file mapping for multiple MIDI devices, channels, and activation mappings.
 - **[Ninjam Integration Guide](doc/ninjam.md)**: Vendored files structure, reference dependencies, and update steps.
 - **[VS Code Tasks Setup](doc/vscode-tasks.example.json)**: Local configurations for automating MSBuild.

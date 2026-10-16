@@ -1,10 +1,12 @@
 #include "../../../../Jamma/src/ConsoleWindow.h"
 #include "../../../../console/CommandMailbox.h"
+#include "../../../../console/Help.h"
 #include <Richedit.h>
 #include <gtest/gtest.h>
 #include <array>
 #include <vector>
 #include <objbase.h>
+#include <sstream>
 
 namespace console
 {
@@ -276,6 +278,7 @@ TEST_F(NativeConsoleWindow, CommandValidationRejectsControlsMalformedUnicodeAndM
 TEST_F(NativeConsoleWindow, ResizeDpiHelpAndStatusUseNativeControls)
 {
 	const auto window = Access::Window(View), input = Access::Input(View);
+	EXPECT_NE(Text(window).find(L"/help or F1"), std::wstring::npos);
 	RECT old{}; GetWindowRect(input, &old);
 	SetWindowPos(window, nullptr, 0, 0, 1000, 600, SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
 	RECT resized{}; GetWindowRect(input, &resized);
@@ -284,8 +287,16 @@ TEST_F(NativeConsoleWindow, ResizeDpiHelpAndStatusUseNativeControls)
 	SendMessageW(window, WM_DPICHANGED, MAKEWPARAM(144, 144), reinterpret_cast<LPARAM>(&dpiBounds));
 	RECT scaled{}; GetWindowRect(input, &scaled);
 	EXPECT_GT(scaled.bottom - scaled.top, resized.bottom - resized.top);
-	SendMessageW(input, WM_KEYDOWN, VK_F1, 0);
-	auto command = Commands.Take(); ASSERT_TRUE(command); EXPECT_EQ(command->Text, "/help");
+	SetWindowTextW(input, L"unfinished chat");
+	for (const auto control : { input, Access::Transcript(View) })
+	{
+		SendMessageW(control, WM_KEYDOWN, VK_F1, 0);
+		auto command = Commands.Take(); ASSERT_TRUE(command); EXPECT_EQ(command->Text, "/help");
+		std::ostringstream output;
+		EXPECT_TRUE(console::TryWriteGeneralHelp(console::ParseCommand(command->Text), output));
+		EXPECT_EQ(output.str(), console::GeneralHelpText);
+		EXPECT_EQ(Text(input), L"unfinished chat");
+	}
 	Append("[NINJAM] latest event"); View.UpdateStatus(true);
 	EXPECT_NE(Text(Access::Status(View)).find(L"connected | [NINJAM] latest event"), std::wstring::npos);
 	const auto transcript = Access::Transcript(View);

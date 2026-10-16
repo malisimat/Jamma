@@ -2,11 +2,43 @@
 
 #include "actions/KeyAction.h"
 #include "midi/MidiRouter.h"
+#include "midi/MidiLoop.h"
 
 static constexpr unsigned int PageUpKey = 0x21u;
 static constexpr unsigned int PageDownKey = 0x22u;
 static const std::vector<std::shared_ptr<engine::Station>> kEmptyStations{};
 using KeyActionType = decltype(actions::KeyAction::KEY_UP);
+
+TEST(MidiRouterAutomationKeys, BracketVirtualKeysCycleAndWrapInsteadOfWindowsOrMenuKeys)
+{
+	midi::MidiRouter router;
+	actions::KeyAction action;
+	action.KeyActionType = actions::KeyAction::KEY_DOWN;
+	action.Modifiers = static_cast<base::Action::Modifiers>(base::Action::MODIFIER_CTRL | base::Action::MODIFIER_SHIFT);
+	for (const auto key : { VK_LWIN, VK_APPS })
+	{
+		action.KeyChar = key;
+		EXPECT_FALSE(router.HandleAutomationKey(action, {}, {}, {}).IsEaten);
+	}
+	testing::internal::CaptureStdout();
+	action.KeyChar = VK_OEM_4; // The same virtual key Window forwards for '['.
+	EXPECT_TRUE(router.HandleAutomationKey(action, {}, {}, {}).IsEaten);
+	action.KeyChar = VK_OEM_6;
+	EXPECT_TRUE(router.HandleAutomationKey(action, {}, {}, {}).IsEaten);
+	EXPECT_TRUE(router.HandleAutomationKey(action, {}, {}, {}).IsEaten);
+	const auto output = testing::internal::GetCapturedStdout();
+	const auto expected = ">> Selected automation lane " + std::to_string(midi::MidiLoop::MaxAutomationLanes - 1u)
+		+ " <<\n>> Selected automation lane 0 <<\n>> Selected automation lane 1 <<\n";
+	EXPECT_EQ(output, expected);
+	action.KeyActionType = actions::KeyAction::KEY_UP;
+	EXPECT_FALSE(router.HandleAutomationKey(action, {}, {}, {}).IsEaten);
+	action.KeyActionType = actions::KeyAction::KEY_DOWN;
+	for (const auto modifiers : { base::Action::MODIFIER_NONE, base::Action::MODIFIER_CTRL, base::Action::MODIFIER_SHIFT })
+	{
+		action.Modifiers = modifiers;
+		EXPECT_FALSE(router.HandleAutomationKey(action, {}, {}, {}).IsEaten);
+	}
+}
 
 static actions::KeyAction AltPageKey(unsigned int keyChar, KeyActionType keyActionType)
 {

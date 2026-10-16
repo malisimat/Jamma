@@ -1,6 +1,6 @@
 # Loop grid editor
 
-The loop grid editor opens one completed audio or MIDI loop as a flattened, time-oriented view. Audio loops are view-only. MIDI edits are previewed while dragging, committed when the gesture ends, and included in undo/redo and saved sessions.
+The loop grid editor opens one completed audio or MIDI loop as a flattened, time-oriented view. Audio loops support spectral painting; MIDI loops support note editing. Edits are previewed while dragging, committed when the gesture ends, and included in undo/redo and saved sessions. Type `/help` in the [performance console](performance-console.md) for the complete controls reference.
 
 ## Open and close
 
@@ -13,12 +13,21 @@ The loop grid editor opens one completed audio or MIDI loop as a flattened, time
 - At take or station depth, opening the MIDI editor defaults to the first wired channel containing events, or the first wired channel when all are empty. At loop depth, it keeps the selected stream; hover to disambiguate multiple selected streams.
 - **CHANNEL** is the numeric beside the grid, anchored to its projected boundary as the view rotates. It selects the recorded input layer by its channel number (1–16). Type a number and press **Enter**, or drag the number vertically. Unavailable channels leave the current layer selected and show a message. New notes use the selected layer's input channel. Switching channels cancels an unfinished gesture; each loop retains its undo/redo history.
 - **Left-drag** adds notes when starting on an empty cell, or removes note coverage when starting on an occupied cell. With quantisation off, click empty space to create a note; drag a note body to move it, or drag an edge to trim it.
-- **Right-drag a note** to change its velocity. Right-drag on empty space orbits the editor view.
-- **Ctrl+left-drag a note** moves it by grid cells and semitones when a grid is available. **Ctrl+left-drag empty space** pans and zooms the visible pitch range without changing MIDI.
+- **Right-drag a note** to change its velocity. **Right-drag empty MIDI grid** pans pitch vertically and zooms horizontally. Start a left/right drag off the MIDI grid to orbit the editor view.
+- **Ctrl+left-drag a note** moves it by grid cells and semitones when a grid is available. **Ctrl+left-drag on empty MIDI grid** has no action.
 - **Mouse wheel** scrolls the visible pitch range; **Shift+mouse wheel** zooms it.
 - **Ctrl+Z** undoes the last MIDI edit; **Ctrl+Shift+Z** redoes it.
 
 Edits commit once on release. Escape, lost pointer capture, or a changed edit target cancels an in-progress gesture. MIDI events that cannot be mapped unambiguously to source notes are left unchanged.
+
+## Audio spectral editing
+
+On the audio surface, left-drag boosts and right-drag cuts. Alt-left-drag sweeps
+a broadband band. Wheel changes brush size, Alt-wheel changes band width,
+Shift-wheel zooms frequency and Alt-Shift-wheel zooms time. Shift-left-drag pans
+time/frequency; Shift-right-drag zooms both axes. Start a drag off the audio
+surface to orbit. Ctrl pointer/wheel gestures are reserved. Ctrl+Z undoes and
+Ctrl+Shift+Z redoes audio edits. Editor gestures require a mouse.
 
 ## Resolution and tap grids
 
@@ -30,7 +39,7 @@ First and third triplet positions form a 2:1 shuffle; there is no automatic swin
 
 Space taps work while this editor is open, including with Ctrl held. Text entry
 in CHANNEL keeps Space contextual. Space down holds the grid, repeat is ignored,
-and release starts its fade. Ctrl still owns move and pitch-view gestures.
+and release starts its fade. Ctrl moves notes; right-drag on empty MIDI grid controls the pitch view.
 
 Changing resolution projects the original notes onto new onset boundaries while
 preserving duration (with existing loop-end clamping). Coarse grids merge visible
