@@ -120,6 +120,8 @@ void LoopModel::Draw3d(DrawContext& ctx,
 	}
 	glCtx.SetUniform("WaveformRadius", waveformRadius);
 	glCtx.SetUniform("WaveformHeightScale", _HeightScale);
+	glCtx.SetUniform("WaveformDisplayScale", _DisplayScale);
+	glCtx.SetUniform("WaveformSceneScale", _sceneHeightScale);
 	glCtx.SetUniform("WaveformMinHeight", _MinHeight);
 	glCtx.SetUniform("WaveformColorMultiplier", waveformColorMultiplier);
 	glCtx.SetUniform("WaveformUnitMeshRadius", _UnitMeshRadius);
@@ -179,7 +181,8 @@ graphics::CameraBounds LoopModel::CameraLocalBounds() const
 	std::lock_guard<std::mutex> waveformLock(_waveformMutex);
 	const auto radius = _waveformRadius * (1.0f + _RadialThicknessFrac);
 	// Symmetric height keeps the centre independent of live waveform amplitude.
-	return { { -radius, -_cameraHalfHeight, -radius }, { radius, _cameraHalfHeight, radius } };
+	const auto height = _cameraHalfHeight * _sceneHeightScale;
+	return { { -radius, -height, -radius }, { radius, height, radius } };
 }
 
 double LoopModel::LoopIndexFrac() const
@@ -369,7 +372,7 @@ void LoopModel::UpdateModel(const BufferBank& buffer,
 				maxPeakLevel = maxAbs;
 		}
 
-		cameraHalfHeight = _HeightScale * maxPeakLevel + _MinHeight;
+		cameraHalfHeight = _HeightScale * maxPeakLevel * _DisplayScale + _MinHeight;
 		const auto peakDenominator = (_HeightScale * std::max(maxPeakLevel, 0.0001f)) + _MinHeight;
 		waveformColorMultiplier = peakDenominator > 0.0f ? (0.5f / peakDenominator) : 0.5f;
 	}
@@ -410,6 +413,7 @@ void LoopModel::UpdateEditedModel(
 	{
 		std::lock_guard<std::mutex> waveformLock(_waveformMutex);
 		_waveformRadius = waveformRadius;
+		_cameraHalfHeight = _HeightScale * peak * _DisplayScale + _MinHeight;
 		_hasWaveformData = true;
 		_waveformColorMultiplier = 0.5f / (_HeightScale * (std::max)(peak, 0.0001f) + _MinHeight);
 		_waveformDecimated.swap(_waveformWorkDecimated);
@@ -749,4 +753,22 @@ LoopModel::CalcGrainGeometry(const BufferBank& buffer,
 	uvs.push_back(angle2 / (float)constants::TWOPI); uvs.push_back(yToUv(yMin));
 
 	return std::make_tuple(verts, uvs, yMin, yMax);
+}
+
+float LoopModel::SceneInnerRadius() const
+{
+	std::lock_guard<std::mutex> waveformLock(_waveformMutex);
+	return _waveformRadius * (1.0f - _RadialThicknessFrac);
+}
+
+float LoopModel::UnfittedHalfHeight() const
+{
+	std::lock_guard<std::mutex> waveformLock(_waveformMutex);
+	return _cameraHalfHeight;
+}
+
+float LoopModel::FitSceneHeight(float largestHalfHeight, float bandHeight) noexcept
+{
+	return largestHalfHeight > 0.0f
+		? std::clamp(bandHeight * 0.5f / largestHalfHeight, 0.0f, 1.0f) : 1.0f;
 }

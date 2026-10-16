@@ -131,23 +131,24 @@ CameraBounds MidiModel::CameraLocalBounds() const noexcept
 	if (_midiParams.DrawSelectionRing)
 		outerRadius = (std::max)(outerRadius, radius *
 			(std::fabs(_midiParams.DiscRadiusFactor) + std::fabs(_midiParams.DiscRadialThicknessFactor)));
-	// PitchOffset is clamped to +/-0.9; the chamfer profile reaches +/-0.5 in Y.
-	auto halfHeight = radius * (0.9f + std::fabs(_midiParams.NoteHeight) * 0.5f);
+	// Note volumes fit the explicit take band, independently of radius.
+	auto halfHeight = _sceneHeight * 0.5f;
 	if (_midiParams.DrawSelectionRing)
-		halfHeight = (std::max)(halfHeight, radius * std::fabs(_midiParams.DiscHeightFactor) * 0.5f);
+		halfHeight = (std::max)(halfHeight, (std::min)(radius * std::fabs(_midiParams.DiscHeightFactor), _sceneHeight * 0.12f) * 0.5f);
 	if (_automationSource)
 	{
 		// Reserve every lane's envelope, independently of live automation values.
 		outerRadius = (std::max)(outerRadius, radius * 1.5f *
 			(1.05f + static_cast<float>(midi::MidiLoop::MaxAutomationLanes - 1u) * 0.045f));
-		halfHeight = (std::max)(halfHeight, radius * 0.64f);
+		halfHeight = (std::max)(halfHeight, (std::min)(radius * 0.64f, _sceneHeight * 0.5f));
 	}
 	return { { -outerRadius, -halfHeight, -outerRadius }, { outerRadius, halfHeight, outerRadius } };
 }
 
 void MidiModel::Draw3d(DrawContext& ctx, unsigned int numInstances, base::DrawPass pass)
 {
-	ApplyPendingModelUpdate();
+	if (!_scenePrepared) ApplyPendingModelUpdate();
+	_scenePrepared = false;
 	_geometryDraw = GeometryDraw::All;
 
 	auto& glCtx = dynamic_cast<GlDrawContext&>(ctx);
@@ -155,6 +156,12 @@ void MidiModel::Draw3d(DrawContext& ctx, unsigned int numInstances, base::DrawPa
 	glCtx.PushMvp(glm::rotate(glm::mat4(1.0),
 		(float)(constants::TWOPI * _loopIndexFrac) * (1.0f - _editorMorph),
 		glm::vec3(0.0f, 1.0f, 0.0f)));
+	const auto fitted = FitPitch(_sceneRange.Empty() ? 60 : _sceneRange.Low, _sceneHeight, _sceneRange);
+	glCtx.SetUniform("SceneLowPitch", _sceneRange.Empty() ? 60 : _sceneRange.Low);
+	glCtx.SetUniform("SceneLowCenter", fitted.first);
+	glCtx.SetUniform("SceneNoteHeight", fitted.second);
+	glCtx.SetUniform("ScenePitchStep", _sceneHeight / static_cast<float>(_sceneRange.Empty() ? 1 : _sceneRange.High - _sceneRange.Low + 1));
+	glCtx.SetUniform("SceneBandHeight", _sceneHeight);
 	glCtx.SetUniform("EditorMorph", _editorMorph);
 	glCtx.SetUniform("EditorActive", _editorActive ? 1.0f : 0.0f);
 	glCtx.SetUniform("EditorPlayFrac", _editorPlayFrac);
@@ -407,6 +414,7 @@ void MidiModel::UpdateModel(const std::vector<midi::MidiNote>& spans, std::uint3
 	SetEditorPreview({}, loopLengthSamps);
 	_editorNoteSpans = std::move(data->EditorNotes);
 	_editorModelLength = data->LoopLength;
+	_contentRange = data->Range;
 	_backNoteInstanceCount = data->NoteCount;
 	SetInstanceAttributes(std::move(data->Attributes), data->InstanceCount);
 }
@@ -484,6 +492,8 @@ std::shared_ptr<MidiModel::ModelInstanceData> MidiModel::BuildInstanceData(const
 		// pitch needed to place every row on the unwrapped grid.
 		shapeData.push_back(-static_cast<float>(span.Note) - 1.0f);
 		data->EditorNotes.push_back(span);
+		data->Range.Low = (std::min)(data->Range.Low, static_cast<int>(span.Note));
+		data->Range.High = (std::max)(data->Range.High, static_cast<int>(span.Note));
 		++noteCount;
 	}
 
@@ -508,6 +518,7 @@ void MidiModel::ApplyPendingModelUpdate()
 	SetEditorPreview({}, _displayLengthSamps.load(std::memory_order_relaxed));
 	_editorNoteSpans = std::move(pending->EditorNotes);
 	_editorModelLength = pending->LoopLength;
+	_contentRange = pending->Range;
 	_backNoteInstanceCount = pending->NoteCount;
 	SetInstanceAttributes(std::move(pending->Attributes), pending->InstanceCount);
 }
@@ -798,7 +809,7 @@ void MidiModel::_DrawAutomation(GlDrawContext& glCtx)
 
 	const double rawRadius = 70.0 * std::log(static_cast<double>(lengthSamps)) - 600.0;
 	const float baseRadius = static_cast<float>(std::clamp(rawRadius, 50.0, 400.0));
-	const float laneHeight = baseRadius * 0.64f;
+	const float laneHeight = (std::min)(baseRadius * 0.64f, _sceneHeight * 0.5f);
 	const bool recording = midi::MidiRouter::IsAutomationRecordHeld();
 	const float playFrac = static_cast<float>(_loopIndexFrac);
 
@@ -957,4 +968,37 @@ float MidiModel::PitchOffset(std::uint8_t note) const noexcept
 	const auto delta = static_cast<int>(note) - static_cast<int>(_midiParams.CenterPitch);
 	const auto offset = static_cast<float>(delta) * _midiParams.PitchStep;
 	return std::clamp(offset, -0.9f, 0.9f);
+}
+
+MidiModel::PitchRange MidiModel::PrepareSceneGeometry()
+{
+	ApplyPendingModelUpdate();
+	_scenePrepared = true;
+	return _contentRange;
+}
+
+void MidiModel::SetSceneLayout(float height, PitchRange range) noexcept
+{
+	_sceneHeight = (std::max)(height, 0.001f);
+	_sceneRange = range;
+}
+
+std::pair<float, float> MidiModel::FitPitch(int pitch, float height, PitchRange range) noexcept
+{
+	if (range.Empty()) range = { 60, 60 };
+	const auto safeHeight = (std::max)(height, 0.001f);
+	const auto cell = safeHeight / static_cast<float>(range.High - range.Low + 1);
+	// The mesh reaches +/-0.5 in Y. Leave 8% of each semitone cell as a gap.
+	return { -safeHeight * 0.5f + (static_cast<float>(pitch - range.Low) + 0.5f) * cell, cell * 0.92f };
+}
+
+float MidiModel::SceneInnerRadius() const noexcept
+{
+	const auto length = _editorModelLength;
+	const auto radius = length == 0u ? 50.0f : static_cast<float>(std::clamp(
+		70.0 * std::log(static_cast<double>(length)) - 600.0, 50.0, 400.0));
+	auto inner = radius * (1.0f - std::fabs(_midiParams.RadialThickness));
+	if (_midiParams.DrawSelectionRing)
+		inner = (std::min)(inner, radius * (_midiParams.DiscRadiusFactor - _midiParams.DiscRadialThicknessFactor));
+	return (std::max)(0.0f, inner * static_cast<float>(ModelScale()));
 }

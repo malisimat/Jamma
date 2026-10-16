@@ -20,6 +20,11 @@ flat out float EditorTopFace;
 flat out vec3 EditorNoteHit;
 flat out int EditorNoteInstance;
 
+uniform int SceneLowPitch;
+uniform float SceneLowCenter;
+uniform float ScenePitchStep;
+uniform float SceneNoteHeight;
+uniform float SceneBandHeight;
 uniform mat4 MVP;
 uniform mat4 ModelView;
 uniform float EditorMorph;
@@ -49,13 +54,15 @@ void main()
     float angle = TwoPi * (startFrac + (PositionIN.x * durationFrac));
     float radius = InstanceShape.x + (PositionIN.z * InstanceShape.y);
     float height = InstanceShape.z;
+    float pitch = -InstanceShape.w - 1.0;
+    float sceneHeight = IsDisc > 0.5 ? min(height, SceneBandHeight * 0.12) : SceneNoteHeight;
+    float sceneCenter = IsDisc > 0.5 ? 0.0 : SceneLowCenter + (pitch - float(SceneLowPitch)) * ScenePitchStep;
 
     vec3 position = vec3( 
         sin(angle) * radius,
-        pitchOffset + (PositionIN.y * height),
+        sceneCenter + (PositionIN.y * sceneHeight),
         cos(angle) * radius);
 
-    float pitch = -InstanceShape.w - 1.0;
     float rows = max(float(EditorVisibleRows), 1.0);
     float width = EditorGridRadius * 2.0;
     float gridU = startFrac + PositionIN.x * durationFrac;

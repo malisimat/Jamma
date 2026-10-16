@@ -53,6 +53,13 @@ namespace graphics
 			bool operator==(const EditorPreviewSpan&) const = default;
 		};
 
+	public:
+		struct PitchRange
+		{
+			int Low = 127, High = 0;
+			bool Empty() const noexcept { return Low > High; }
+			bool operator==(const PitchRange&) const = default;
+		};
 	private:
 		struct ModelInstanceData
 		{
@@ -61,6 +68,7 @@ namespace graphics
 			unsigned int NoteCount = 0u;
 			std::vector<midi::MidiNote> EditorNotes;
 			std::uint32_t LoopLength = 0u;
+			PitchRange Range;
 		};
 
 	public:
@@ -74,6 +82,11 @@ namespace graphics
 		virtual void Draw3d(base::DrawContext& ctx, unsigned int numInstances, base::DrawPass pass) override;
 
 		CameraBounds CameraLocalBounds() const noexcept;
+		// Render-owned: consume every stream before calculating the take's shared range.
+		PitchRange PrepareSceneGeometry();
+		void SetSceneLayout(float height, PitchRange range) noexcept;
+		static std::pair<float, float> FitPitch(int pitch, float height, PitchRange range) noexcept;
+		float SceneInnerRadius() const noexcept;
 		double LoopIndexFrac() const noexcept { return _loopIndexFrac; }
 		void SetLoopIndexFrac(double frac) noexcept;
 		void SetEditorMorph(float morph) noexcept { _editorMorph = std::clamp(morph, 0.0f, 1.0f); }
@@ -154,6 +167,11 @@ namespace graphics
 		// Draw3d and DrawMesh use this only on the render thread; no publication needed.
 		GeometryDraw _geometryDraw = GeometryDraw::All;
 		MidiModelParams _midiParams;
+		// UI/render state, serialized with scene presentation; never read by audio.
+		PitchRange _sceneRange;
+		PitchRange _contentRange;
+		float _sceneHeight = 100.0f;
+		bool _scenePrepared = false;
 		double _loopIndexFrac;
 		float _editorMorph = 0.0f;
 		bool _editorActive = false;

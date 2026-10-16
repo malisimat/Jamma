@@ -506,3 +506,25 @@ TEST(LoopModelWaveform, UpdateModelThrottlesRecordingCadence)
 	model.UpdateModel(buffer, interval * 2ul, interval * 2ul, 0ul, 120.0f, false);
 	EXPECT_TRUE(model.WaveformNeedsUpload());
 }
+
+TEST(LoopModelVisualBounds, ExaggerationAndSharedBandFitPreserveRelativeAmplitude)
+{
+	auto quietBuffer = MakeBuffer(32), loudBuffer = MakeBuffer(32);
+	quietBuffer[0] = -0.1f; quietBuffer[1] = 0.2f;
+	loudBuffer[0] = -0.4f; loudBuffer[1] = 0.8f;
+	GraphicsTestLoopModel quiet, loud;
+	quiet.UpdateModel(quietBuffer, 32, 0, 100);
+	loud.UpdateModel(loudBuffer, 32, 0, 120);
+	EXPECT_NEAR(27.0f, quiet.UnfittedHalfHeight(), 0.001f);
+	EXPECT_NEAR(105.0f, loud.UnfittedHalfHeight(), 0.001f);
+	const auto scale = LoopModel::FitSceneHeight(loud.UnfittedHalfHeight(), 80.0f);
+	quiet.SetSceneHeightScale(scale); loud.SetSceneHeightScale(scale);
+	EXPECT_NEAR(40.0f, loud.CameraLocalBounds().Max.Y, 0.001f);
+	EXPECT_NEAR(27.0f / 105.0f, quiet.CameraLocalBounds().Max.Y / loud.CameraLocalBounds().Max.Y, 0.001f);
+	EXPECT_FLOAT_EQ(1.0f, LoopModel::FitSceneHeight(105.0f, 300.0f));
+	EXPECT_FLOAT_EQ(1.0f, LoopModel::FitSceneHeight(0.0f, 0.0f));
+	EXPECT_FLOAT_EQ(0.0f, LoopModel::FitSceneHeight(105.0f, 0.0f));
+	// Display fitting neither rewrites the samples nor moves the radial picker gap.
+	EXPECT_FLOAT_EQ(-0.4f, loudBuffer[0]); EXPECT_FLOAT_EQ(0.8f, loudBuffer[1]);
+	EXPECT_FLOAT_EQ(114.0f, loud.SceneInnerRadius());
+}

@@ -62,6 +62,10 @@ namespace engine
 
 		// Non-callback read through the existing waveform publication mutex.
 		graphics::CameraBounds CameraLocalBounds() const;
+		float SceneInnerRadius() const;
+		float UnfittedHalfHeight() const;
+		void SetSceneHeightScale(float scale) noexcept { _sceneHeightScale = std::clamp(scale, 0.0f, 1.0f); }
+		static float FitSceneHeight(float largestHalfHeight, float bandHeight) noexcept;
 		double LoopIndexFrac() const;
 		void SetLoopIndexFrac(double frac);
 		void SetLoopState(LoopModelState state);
@@ -130,6 +134,7 @@ namespace engine
 		static const float _MinHeight;
 		static const float _RadialThicknessFrac;
 		static const float _HeightScale;
+		static constexpr float _DisplayScale = 1.3f;
 		static const float _UnitMeshRadius;
 		static constexpr unsigned int _WaveformSegments = 2048u;
 		static constexpr unsigned int _WaveformPboCount = 2u;
@@ -161,6 +166,7 @@ namespace engine
 		float _clickPressed = 0.0f;
 		bool _muted = false;
 		float _cameraHalfHeight = 1.0f;
+		float _sceneHeightScale = 1.0f;
 		mutable std::mutex _waveformMutex;
 	};
 }

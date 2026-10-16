@@ -3743,7 +3743,7 @@ void Station::_ArrangeChildren()
 	auto numTakes = (unsigned int)_backLoopTakes.size();
 
 	auto takeHeight = _CalcTakeHeight(_sizeParams.Size.Height, numTakes);
-	utils::Size2d takeSize = { _sizeParams.Size.Width - (2 * _Gap.Width), takeHeight - (2 * _Gap.Height) };
+	utils::Size2d takeSize = { _sizeParams.Size.Width - (2 * _Gap.Width), static_cast<unsigned int>((std::max)(1, static_cast<int>(takeHeight) - 2 * static_cast<int>(_Gap.Height))) };
 
 	auto takeCount = 0;
 	for (auto& take : _backLoopTakes)

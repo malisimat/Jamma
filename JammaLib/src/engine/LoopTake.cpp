@@ -217,6 +217,7 @@ LoopTake::LoopTake(LoopTakeParams params,
 	_guiRack = std::make_shared<gui::GuiRack>(_GetRackParams(params.Size));
 
 	_children.push_back(_guiRack);
+	_takeCore = std::make_shared<graphics::TakeCoreModel>();
 
 	_WireVuSliders();
 	_PublishMidiLoopSnapshot();
@@ -425,9 +426,71 @@ void LoopTake::Draw3d(DrawContext& ctx,
 		_backLoops[i]->SetMasterVisualScale(takeVisualScale * channelVisualScale * _parentVisualScale);
 	}
 
+	// One amplitude multiplier for every audio channel in this take. This only
+	// contracts a dense/loud layer enough to fit; relative channel levels survive.
+	float largestHalfHeight = 0.0f;
+	const auto measureAudio = [&](const auto& loops, const auto& mixers) {
+		for (size_t i = 0; i < loops.size(); ++i)
+			if (const auto& loop = loops[i]; loop && loop->Model())
+			{
+				const auto channelGain = i < mixers.size() && mixers[i] ? mixers[i]->UnmutedLevel() : 1.0;
+				const auto parentGain = static_cast<float>(channelGain) * takeVisualScale * _parentVisualScale;
+				largestHalfHeight = (std::max)(largestHalfHeight, loop->UnfittedVisualHalfHeight(parentGain));
+			}
+	};
+	measureAudio(_loops, _audioMixers);
+	measureAudio(_backLoops, _backAudioMixers);
+	const auto bandHeight = static_cast<float>(GetSize().Height) * 0.94f;
+	const auto sceneHeightScale = LoopModel::FitSceneHeight(largestHalfHeight, bandHeight);
+	for (const auto& loop : _loops) if (loop && loop->Model()) loop->Model()->SetSceneHeightScale(sceneHeightScale);
+	for (const auto& loop : _backLoops) if (loop && loop->Model()) loop->Model()->SetSceneHeightScale(sceneHeightScale);
+
+	// Apply all immutable note snapshots before choosing a shared pitch mapping.
+	graphics::MidiModel::PitchRange range;
+	for (const auto& loop : _midiLoops)
+		if (const auto model = loop ? loop->Model() : nullptr)
+		{
+			const auto stream = model->PrepareSceneGeometry();
+			if (!stream.Empty())
+			{
+				range.Low = (std::min)(range.Low, stream.Low);
+				range.High = (std::max)(range.High, stream.High);
+			}
+		}
+	for (const auto& loop : _midiLoops)
+		if (const auto model = loop ? loop->Model() : nullptr)
+			model->SetSceneLayout(static_cast<float>(GetSize().Height) * 0.94f /
+				static_cast<float>(model->ModelScale()), range);
 	_UpdateMidiModelRotation();
 	for (const auto& loop : _midiLoops)
 		if (loop && loop->Model()) loop->Model()->SetMuted(IsMuted());
+	float nearest = std::numeric_limits<float>::max();
+	for (const auto& loop : _loops)
+		if (loop && loop->Model())
+		{
+			// Use the published mesh radius, including remote-loop scaling.
+			nearest = (std::min)(nearest, loop->Model()->SceneInnerRadius() * static_cast<float>(loop->ModelScale()));
+		}
+	for (const auto& loop : _midiLoops)
+		if (const auto model = loop ? loop->Model() : nullptr)
+			nearest = (std::min)(nearest, model->SceneInnerRadius());
+	const auto coreRadius = graphics::TakeCoreModel::OuterRadius(
+		nearest == std::numeric_limits<float>::max() ? 40.0f : nearest);
+	_takeCore->SetLayout(coreRadius, (std::min)(5.0f, static_cast<float>(GetSize().Height) * 0.08f),
+		CurrentSelectDepth() == base::SelectDepth::DEPTH_LOOP);
+	_takeCore->SetState(GlobalId(), IsSelected(), _isPicking3d, IsMuted());
+	_takeCore->SetVisible(CurrentSelectDepth() != base::SelectDepth::DEPTH_STATION && coreRadius > 0.0f);
+	if (_isVisible && pass == base::PASS_SCENE)
+	{
+		auto& glCtx = dynamic_cast<graphics::GlDrawContext&>(ctx);
+		const auto pos = ModelPosition();
+		const auto scale = static_cast<float>(ModelScale());
+		glCtx.PushMvp(glm::translate(glm::mat4(1.0f), glm::vec3(pos.X, pos.Y, pos.Z)));
+		glCtx.PushMvp(glm::scale(glm::mat4(1.0f), glm::vec3(scale)));
+		_takeCore->Draw3d(ctx, 1u, pass);
+		glCtx.PopMvp();
+		glCtx.PopMvp();
+	}
 	base::GuiElement::Draw3d(ctx, numInstances, pass);
 }
 
@@ -1596,6 +1659,7 @@ graphics::CameraBounds LoopTake::CameraBoundsInParent(float parentVisualScale) c
 		if (const auto model = loop ? loop->Model() : nullptr; model && model->IsVisible())
 			bounds.Include(model->CameraLocalBounds().Transformed(model->ModelPosition(),
 				static_cast<float>(model->ModelScale())));
+	if (_takeCore && _takeCore->IsVisible()) bounds.Include(_takeCore->CameraLocalBounds());
 	return bounds.Transformed(ModelPosition(), static_cast<float>(ModelScale()));
 }
 
@@ -2739,6 +2803,19 @@ void LoopTake::_InitReceivers()
 	_guiRack->SetReceiver(ActionReceiver::shared_from_this());
 }
 
+void LoopTake::InitResources(ResourceLib& resourceLib, bool forceInit)
+{
+	GuiElement::InitResources(resourceLib, forceInit);
+	// The decorative surface stays outside the interactive child/index hierarchy.
+	_takeCore->InitResources(resourceLib, forceInit);
+}
+
+void LoopTake::_ReleaseResources()
+{
+	GuiElement::_ReleaseResources();
+	_takeCore->ReleaseResources();
+}
+
 void LoopTake::_InitResources(ResourceLib& resourceLib, bool forceInit)
 {
 	GuiElement::_InitResources(resourceLib, forceInit);
@@ -3247,7 +3324,8 @@ void LoopTake::_ArrangeChildren()
 	if (0 == numVisualRings)
 		return;
 
-	utils::Size2d loopSize = { _sizeParams.Size.Width - (2 * _Gap.Width), _sizeParams.Size.Height - (2 * _Gap.Height) };
+	utils::Size2d loopSize = { static_cast<unsigned int>((std::max)(1, static_cast<int>(_sizeParams.Size.Width) - 2 * static_cast<int>(_Gap.Width))),
+		static_cast<unsigned int>((std::max)(1, static_cast<int>(_sizeParams.Size.Height) - 2 * static_cast<int>(_Gap.Height))) };
 
 	auto loopCount = 0u;
 	auto dScale = 0.1;
@@ -3275,6 +3353,8 @@ void LoopTake::_ArrangeChildren()
 
 		midiModel->SetModelPosition({ 0.0f, 0.0f, 0.0f });
 		midiModel->SetModelScale(1.0 + (loopCount * dScale) - (dTotalScale * 0.5));
+		midiModel->SetSceneLayout(static_cast<float>(GetSize().Height) * 0.94f /
+			static_cast<float>(midiModel->ModelScale()), {});
 
 	}
 }

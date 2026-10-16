@@ -239,6 +239,7 @@ namespace engine
 		std::shared_ptr<LoopModel> Model() const noexcept { return _model; }
 		// Presentation-only, called with the scene/layout read ownership on the window thread.
 		graphics::CameraBounds CameraBoundsInParent(float parentVisualScale = 1.0f) const;
+		float UnfittedVisualHalfHeight(float parentVisualScale) const;
 		void SetAudioSpectralMorph(float morph) noexcept { _audioSpectralMorph = std::clamp(morph, 0.0f, 1.0f); }
 		// UI/render owner only; never called from audio. Lazy editor-only geometry.
 		void SetAudioSpectralModel(std::shared_ptr<graphics::AudioSpectralModel> model);

@@ -206,6 +206,12 @@ graphics::CameraBounds Loop::CameraBoundsInParent(float parentVisualScale) const
 	return bounds.Transformed(ModelPosition(), static_cast<float>(ModelScale()));
 }
 
+float Loop::UnfittedVisualHalfHeight(float parentVisualScale) const
+{
+	return _model ? _model->UnfittedHalfHeight() * std::fabs(static_cast<float>(_mixer->UnmutedLevel()) *
+		parentVisualScale * static_cast<float>(ModelScale())) : 0.0f;
+}
+
 void Loop::Draw3d(DrawContext& ctx,
 	unsigned int numInstances,
 	base::DrawPass pass)

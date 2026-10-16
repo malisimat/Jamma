@@ -13,6 +13,7 @@
 #include "Loop.h"
 #include "CameraRecordingObservation.h"
 #include "../graphics/CameraBounds.h"
+#include "../graphics/StationModel.h"
 #include "../engine/Quantiser.h"
 #include "../midi/MidiLoop.h"
 #include "../midi/MidiOverdub.h"
@@ -116,6 +117,7 @@ namespace engine
 		virtual std::string ClassName() const override { return "LoopTake"; }
 		virtual MultiAudioPlugType MultiAudioPlug() const override { return MULTIAUDIOPLUG_BOTH; }
 		virtual void SetSize(utils::Size2d size) override;
+		void InitResources(resources::ResourceLib& resourceLib, bool forceInit = false) override;
 		virtual void Draw3d(base::DrawContext& ctx, unsigned int numInstances, base::DrawPass pass) override;
 		virtual unsigned int NumInputChannels(Audible::AudioSourceType) const override;
 		virtual unsigned int NumOutputChannels(Audible::AudioSourceType) const override;
@@ -462,6 +464,7 @@ namespace engine
 
 		virtual void _InitReceivers() override;
 		virtual void _InitResources(resources::ResourceLib& resourceLib, bool forceInit) override;
+		void _ReleaseResources() override;
 		virtual std::vector<actions::JobAction> _CommitChanges() override;
 		virtual const std::shared_ptr<base::AudioSink> _InputChannel(unsigned int channel,
 			base::AudioSource::AudioSourceType source) override;
@@ -631,6 +634,7 @@ namespace engine
 		std::atomic<bool> _isPunchInActive;
 		std::atomic<bool> _isMidiPunchInActive;
 		std::shared_ptr<gui::GuiRack> _guiRack;
+		std::shared_ptr<graphics::TakeCoreModel> _takeCore;
 		std::shared_ptr<audio::AudioMixer> _masterMixer;
 		std::shared_ptr<audio::CaptureSourceMuteControl> _captureSourceMuteControl =
 			std::make_shared<audio::CaptureSourceMuteControl>();
