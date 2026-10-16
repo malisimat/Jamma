@@ -1,5 +1,7 @@
 #include "gtest/gtest.h"
 #include "actions/GuiAction.h"
+#include "actions/TouchAction.h"
+#include "actions/TouchMoveAction.h"
 #include "engine/LoopTake.h"
 #include "engine/Station.h"
 
@@ -205,4 +207,43 @@ TEST(StationRack, StationMeterBindingsRefreshWhenAudioChannelsAreRebuilt)
 	ASSERT_EQ(slider, station->Rack()->GetChannelSlider(0u));
 	ASSERT_EQ(station->ChannelMixer(0u), slider->Mixer());
 	EXPECT_NE(oldMixer, slider->Mixer()); EXPECT_FLOAT_EQ(0.0f, slider->Mixer()->VuPeakLevel());
+}
+
+TEST(StationRack, CapturedDragRetainsPublishedGainAcrossAncestorCancellationAndUndo)
+{
+	for (const bool disableAncestor : {false, true})
+	for (const bool moveWhileUnavailable : {false, true})
+	{
+		StationParams params; params.Size = {200u, 200u};
+		auto station = std::make_shared<MeterBindingTestStation>(params);
+		station->Init(); station->SetSelectDepth(base::SelectDepth::DEPTH_STATION);
+		const auto slider = station->Rack()->GetMasterSlider();
+		slider->SetValue(0.25);
+		ASSERT_DOUBLE_EQ(0.25, station->MasterMixer()->UnmutedLevel());
+		actions::TouchAction touch;
+		touch.Position = {10, 10}; touch.State = actions::TouchAction::TOUCH_DOWN;
+		const auto press = slider->OnAction(touch);
+		const auto captured = press.ActiveElement.lock(); ASSERT_EQ(slider, captured);
+		actions::TouchMoveAction move; move.Position = {10, 20};
+		captured->OnAction(move);
+		const auto publishedGain = station->MasterMixer()->UnmutedLevel();
+		ASSERT_GT(publishedGain, 0.25); ASSERT_DOUBLE_EQ(publishedGain, slider->Value());
+		if (disableAncestor) station->SetEnabled(false);
+		else station->SetSelectDepth(base::SelectDepth::DEPTH_LOOPTAKE); // Tab-equivalent rack hide.
+		if (moveWhileUnavailable)
+		{
+			move.Position = {10, 40}; EXPECT_TRUE(captured->OnAction(move).IsEaten);
+			EXPECT_DOUBLE_EQ(publishedGain, station->MasterMixer()->UnmutedLevel());
+		}
+		touch.Position = {10, 20}; touch.State = actions::TouchAction::TOUCH_UP;
+		const auto release = captured->OnAction(touch);
+		EXPECT_TRUE(release.IsEaten); ASSERT_TRUE(release.Undo);
+		EXPECT_DOUBLE_EQ(publishedGain, slider->Value());
+		EXPECT_DOUBLE_EQ(publishedGain, station->MasterMixer()->UnmutedLevel());
+		station->SetEnabled(true); station->SetSelectDepth(base::SelectDepth::DEPTH_STATION);
+		EXPECT_DOUBLE_EQ(publishedGain, slider->Value());
+		ASSERT_TRUE(release.Undo->Undo());
+		EXPECT_DOUBLE_EQ(0.25, slider->Value());
+		EXPECT_DOUBLE_EQ(0.25, station->MasterMixer()->UnmutedLevel());
+	}
 }

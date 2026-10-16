@@ -233,11 +233,21 @@ ActionResult GuiSlider::OnAction(TouchAction action)
 	if (action.Touch == TouchAction::TOUCH_MOUSE && action.Index == 4)
 		return ActionResult::NoAction();
 	// Scene can deliver a captured release directly after a rack or another
-	// ancestor disappeared. Such a release must cancel, not commit, the gesture.
+	// ancestor disappeared. Cancel a pending reset, but retain drag values that
+	// were already published: a hidden receiver cannot accept a rollback.
 	if (!_InteractionAvailable())
 	{
 		auto cancelled = ActionResult::NoAction();
 		cancelled.IsEaten = _isDragging;
+		if (_isDragging)
+		{
+			const auto previous = _initValue;
+			_initValue += _valueOffset;
+			_valueOffset = 0.0;
+			_isDragging = false;
+			if (_initValue != previous)
+				cancelled.Undo = std::make_shared<GuiActionUndo>(previous, GuiElement::shared_from_this());
+		}
 		ClearPointerState();
 		return cancelled;
 	}
