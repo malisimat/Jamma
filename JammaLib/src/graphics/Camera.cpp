@@ -301,8 +301,9 @@ ActionResult Camera::HandleBackgroundDrag(TouchAction action)
 	{
 		if (BackgroundDragMode::None == mode)
 			return ActionResult::NoAction();
-		CancelAutomaticMotion();
-		_automaticManualPose.reset();
+		// A stationary background click may only clear selection. Preserve the
+		// wander velocity and manual return pose until this becomes navigation.
+		CancelAutomaticMotion(true);
 
 		if (BackgroundDragMode::None == _backgroundDrag.Mode)
 		{
@@ -405,6 +406,8 @@ ActionResult Camera::UpdateBackgroundDrag(TouchMoveAction action)
 		|| (nextCameraPosition.Z != previousCameraPosition.Z))
 	{
 		_backgroundDrag.Dragged = true;
+		CancelAutomaticMotion();
+		_automaticManualPose.reset();
 	}
 
 	_ApplyBackgroundDragPosition(nextCameraPosition);

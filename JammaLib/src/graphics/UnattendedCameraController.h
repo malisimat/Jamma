@@ -82,7 +82,9 @@ namespace graphics
 					HumanActivity(now);
 				else if (!_idleSince)
 					HumanActivity(now);
-				_wasEligible = false;
+				// Held input pauses motion, but only an explicit HumanActivity
+				// notification restarts idle timing, so selection keeps its deadline.
+				if (!heldInteractionInEligibleView) _wasEligible = false;
 				return _decision;
 			}
 			_seenStartOrder = observation.LatestStart.StartOrder;

@@ -129,6 +129,7 @@ namespace engine
 		bool AdvanceUiAnimations();
 		void OnHumanActivity();
 		void OnCameraTriggerActivity();
+		bool PreservesCameraIdleForKey(unsigned int key) const noexcept;
 		bool IsCameraTriggerKey(unsigned int key) const;
 		void SetCameraInteractionEligibility(bool windowEligible, bool heldInteraction);
 
@@ -315,6 +316,8 @@ namespace engine
 		GroupTargetKind _GroupSelectionDepthLocked() const;
 		void _RestoreGroupSelectionDepthLocked();
 		void _UpdateSelection(actions::ActionResultType res);
+		actions::ActionResult _OnPointerAction(actions::TouchAction action);
+		actions::ActionResult _OnPointerMove(actions::TouchMoveAction action);
 		void _UpdateRackVisibilityLocked();
 		void _CollapseRacksLocked();
 		// Selection helpers require _sceneMutex throughout hierarchy access.
@@ -585,6 +588,8 @@ namespace engine
 		std::optional<Time> _lastCameraUpdateTime;
 		std::optional<Time> _lastCameraDiagnosticTime;
 		std::uint64_t _cameraHumanActivityRevision = 0u;
+		// Window owner only: selection/group clicks retain their gesture classification through release.
+		bool _cameraPointerPreservesIdle = false;
 		std::optional<Time> _lastPanelAnimationTime;
 		std::thread _jobRunner;
 		std::mutex _jobMutex;

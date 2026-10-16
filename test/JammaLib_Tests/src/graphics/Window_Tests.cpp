@@ -3,11 +3,222 @@
 #include "resources/ResourceLib.h"
 #include "graphics/Window.h"
 #include "engine/Scene.h"
+#include "engine/Station.h"
+#include "gui/GuiScrollPanel.h"
 
 using resources::ResourceLib;
 using graphics::Window;
 using engine::Scene;
 using engine::SceneParams;
+
+class CameraActivityScene final : public Scene
+{
+public:
+	CameraActivityScene() : Scene(SceneParams(base::DrawableParams(), base::MoveableParams(),
+		base::SizeableParams({ 1400u, 900u })), {}) {}
+	void ArmIdle(bool automatic)
+	{
+		graphics::Camera::Pose pose;
+		pose.Eye = { 0.0f, 0.0f, 420.0f };
+		_camera.SetViewTarget(graphics::Camera::View::Front, pose);
+		for (unsigned int tick = 0u; tick < 8u; ++tick) _camera.TickBackgroundDrag(0.05f);
+		_idleStart = utils::Timer::GetTime() - std::chrono::milliseconds(7900);
+		const auto observation = _cameraRecordings->Snapshot();
+		_unattendedCamera.HumanActivity(_idleStart);
+		_unattendedCamera.Update(_idleStart, true, false, *observation, {});
+		if (automatic) _unattendedCamera.Update(_idleStart + std::chrono::seconds(8), true, false, *observation, {});
+	}
+	bool AutomaticAtOriginalDeadline()
+	{
+		return _unattendedCamera.Update(_idleStart + std::chrono::milliseconds(8100),
+			_cameraWindowEligible && !_cameraHeldInteraction,
+			_cameraWindowEligible && _cameraHeldInteraction, *_cameraRecordings->Snapshot(), {}).IsAutomatic();
+	}
+	bool Automatic() const { return _unattendedCamera.IsAutomatic(); }
+	std::uint64_t ActivityRevision() const { return _cameraHumanActivityRevision; }
+	void AddStation(const std::shared_ptr<engine::Station>& station) { _AddStation(station); }
+	std::shared_ptr<gui::GuiPerformanceGroupRow> GroupRow(std::size_t row)
+	{
+		std::vector<std::shared_ptr<gui::GuiPerformanceGroupRow>> rows;
+		CollectRows(_selectionPanel, rows);
+		return row < rows.size() ? rows[row] : nullptr;
+	}
+private:
+	static void CollectRows(const std::shared_ptr<base::GuiElement>& element,
+		std::vector<std::shared_ptr<gui::GuiPerformanceGroupRow>>& rows)
+	{
+		if (auto row = std::dynamic_pointer_cast<gui::GuiPerformanceGroupRow>(element)) rows.push_back(row);
+		if (auto scroll = std::dynamic_pointer_cast<gui::GuiScrollPanel>(element))
+			if (scroll->Content()) CollectRows(scroll->Content(), rows);
+		for (unsigned int index = 0u; index < 256u; ++index)
+		{
+			auto child = element->TryGetChild(static_cast<unsigned char>(index));
+			if (!child) break;
+			CollectRows(child, rows);
+		}
+	}
+	Time _idleStart;
+};
+
+class CameraActivityWindow final : public Window
+{
+public:
+	CameraActivityWindow(Scene& scene, ResourceLib& resources) : Window(scene, resources) {}
+	std::vector<unsigned char> PressPath;
+protected:
+	std::optional<unsigned int> _PickPointerPress(utils::Position2d) override
+	{
+		if (PressPath.empty()) return 0u;
+		unsigned int objectId = 0u;
+		for (unsigned int segment = 0u; segment < 3u; ++segment)
+			objectId |= (segment < PressPath.size() ? PressPath[segment] : 0xffu) << (16u - 8u * segment);
+		return objectId;
+	}
+};
+
+TEST(CameraIdle, PerformanceKeysAndNativeRepeatsPreserveDeadlineAndActiveWander)
+{
+	CameraActivityScene scene;
+	ResourceLib resources;
+	CameraActivityWindow window(scene, resources);
+	const auto host = CreateWindowExW(0, L"STATIC", L"", 0, 0, 0, 0, 0,
+		HWND_MESSAGE, nullptr, GetModuleHandleW(nullptr), nullptr);
+	ASSERT_NE(host, nullptr);
+	SetWindowLongPtrW(host, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(&window));
+	for (const bool automatic : { false, true })
+		for (const bool system : { false, true })
+			for (const auto key : { VK_F1, VK_F2, VK_F9, VK_BACK, VK_SPACE, VK_OEM_3, VK_SHIFT, VK_CONTROL, VK_MENU })
+			{
+				SCOPED_TRACE(key);
+				scene.ArmIdle(automatic);
+				const auto revision = scene.ActivityRevision();
+				for (unsigned int press = 0u; press < 3u; ++press)
+				{
+					Window::WindowProcedure(host, system ? WM_SYSKEYDOWN : WM_KEYDOWN, key, 0);
+					Window::WindowProcedure(host, system ? WM_SYSKEYDOWN : WM_KEYDOWN, key, static_cast<LPARAM>(1u << 30u));
+					EXPECT_EQ(automatic, scene.Automatic());
+					Window::WindowProcedure(host, system ? WM_SYSKEYUP : WM_KEYUP, key, 0);
+				}
+				EXPECT_EQ(revision, scene.ActivityRevision());
+				EXPECT_TRUE(scene.AutomaticAtOriginalDeadline());
+			}
+	DestroyWindow(host);
+}
+
+TEST(CameraIdle, PointerSelectionDeselectMuteAndBackgroundClicksPreserveDeadline)
+{
+	CameraActivityScene scene;
+	ResourceLib resources;
+	CameraActivityWindow window(scene, resources);
+	engine::StationParams params;
+	params.Name = "camera-selection";
+	params.Size = { 100u, 100u };
+	audio::MergeMixBehaviourParams merge;
+	auto station = std::make_shared<engine::Station>(params, engine::Station::GetMixerParams(params.Size, merge));
+	scene.AddStation(station);
+	for (const bool automatic : { false, true })
+		for (const int button : { 0, 1 })
+		{
+			scene.ArmIdle(automatic);
+			const auto revision = scene.ActivityRevision();
+			for (unsigned int press = 0u; press < 3u; ++press)
+			{
+				window.PressPath.clear();
+				for (const auto index : station->GlobalId()) window.PressPath.push_back(static_cast<unsigned char>(index + 1u));
+				actions::TouchAction action;
+				action.Touch = actions::TouchAction::TOUCH_MOUSE;
+				action.Index = button;
+				action.Position = { 800, 500 };
+				action.State = actions::TouchAction::TOUCH_DOWN;
+				window.OnAction(action);
+				// Render-side policy may run while a selection/mute press is held.
+				scene.AutomaticAtOriginalDeadline();
+				action.State = actions::TouchAction::TOUCH_UP;
+				window.OnAction(action);
+				if (button == 0) EXPECT_TRUE(station->IsSelected());
+				window.PressPath.clear();
+				action.Index = 0;
+				action.State = actions::TouchAction::TOUCH_DOWN;
+				window.OnAction(action);
+				action.State = actions::TouchAction::TOUCH_UP;
+				window.OnAction(action);
+				EXPECT_FALSE(station->IsSelected());
+			}
+			EXPECT_EQ(revision, scene.ActivityRevision());
+			EXPECT_TRUE(scene.AutomaticAtOriginalDeadline());
+		}
+}
+
+TEST(CameraIdle, GroupButtonsPreserveDeadlineFromPressThroughRelease)
+{
+	CameraActivityScene scene;
+	ResourceLib resources;
+	CameraActivityWindow window(scene, resources);
+	for (const bool automatic : { false, true })
+		for (std::size_t rowIndex = 0u; rowIndex < 2u; ++rowIndex)
+		{
+			auto row = scene.GroupRow(rowIndex);
+			ASSERT_TRUE(row);
+			scene.ArmIdle(automatic);
+			const auto revision = scene.ActivityRevision();
+			for (const auto slot : { 0u, 1u, 1u })
+			{
+				row->AdvanceAnimation(1.0f);
+				auto button = row->Button(slot);
+				ASSERT_TRUE(button->IsVisible());
+				actions::TouchAction action;
+				action.Touch = actions::TouchAction::TOUCH_MOUSE;
+				action.Index = 0;
+				action.Position = button->GlobalPosition() + utils::Position2d{ 4, 4 };
+				action.State = actions::TouchAction::TOUCH_DOWN;
+				EXPECT_TRUE(window.OnAction(action).IsEaten);
+				scene.AutomaticAtOriginalDeadline();
+				action.State = actions::TouchAction::TOUCH_UP;
+				EXPECT_TRUE(window.OnAction(action).IsEaten);
+			}
+			EXPECT_EQ(revision, scene.ActivityRevision());
+			EXPECT_TRUE(scene.AutomaticAtOriginalDeadline());
+		}
+}
+
+TEST(CameraIdle, CameraDragWheelAndViewKeysRestartIdle)
+{
+	CameraActivityScene scene;
+	ResourceLib resources;
+	CameraActivityWindow window(scene, resources);
+	for (const bool automatic : { false, true })
+	{
+		scene.ArmIdle(automatic);
+		actions::TouchAction action;
+		action.Touch = actions::TouchAction::TOUCH_MOUSE;
+		action.Index = 0;
+		action.Position = { 800, 500 };
+		action.State = actions::TouchAction::TOUCH_DOWN;
+		window.OnAction(action);
+		actions::TouchMoveAction move;
+		move.Touch = actions::TouchAction::TOUCH_MOUSE;
+		move.MouseButtonsDown = 1u;
+		move.Position = { 840, 520 };
+		window.OnAction(move);
+		action.State = actions::TouchAction::TOUCH_UP;
+		window.OnAction(action);
+		EXPECT_FALSE(scene.AutomaticAtOriginalDeadline());
+
+		scene.ArmIdle(automatic);
+		action.Index = 4;
+		action.State = actions::TouchAction::TOUCH_DOWN;
+		action.Value = -1;
+		window.OnAction(action);
+		EXPECT_FALSE(scene.AutomaticAtOriginalDeadline());
+
+		scene.ArmIdle(automatic);
+		actions::KeyAction key;
+		key.KeyChar = VK_TAB;
+		key.KeyActionType = actions::KeyAction::KEY_UP;
+		window.OnAction(key);
+		EXPECT_FALSE(scene.AutomaticAtOriginalDeadline());
+	}
+}
 
 TEST(Window, IsInitiallyWindowed) {
 	auto sceneParams = SceneParams(base::DrawableParams(),
