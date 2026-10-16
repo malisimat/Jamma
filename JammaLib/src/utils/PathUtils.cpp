@@ -9,6 +9,7 @@
 #include <shobjidl_core.h>
 #include <wrl/client.h>
 #include "PathUtils.h"
+#include "VstFileDialogEvents.h"
 
 std::wstring utils::GetPath(PathType pathType)
 {
@@ -131,8 +132,20 @@ std::wstring utils::PickFile(const std::wstring& title)
 	dialog->SetFileTypes(static_cast<UINT>(std::size(filters)), filters);
 	dialog->SetFileTypeIndex(1);
 
-	if (SUCCEEDED(dialog->Show(nullptr)))
+	auto events = Microsoft::WRL::Make<VstFileDialogEvents>();
+	DWORD cookie = 0;
+	const bool advised = events && SUCCEEDED(dialog->Advise(events.Get(), &cookie));
+	if (!advised)
+		std::cerr << "[WARNING][VST picker] bundle selection unavailable; direct files remain selectable" << std::endl;
+	ComPtr<IFileDialogCustomize> customize;
+	if (advised && SUCCEEDED(dialog.As(&customize)))
+		customize->AddText(100, L"Open a plugin file, or double-click a .vst3 folder to select its bundle.");
+	const auto shown = dialog->Show(nullptr);
+	if (advised) dialog->Unadvise(cookie);
+	if (SUCCEEDED(shown))
 	{
+		// Close(S_OK) from a folder event has no GetResult; the event owns that path.
+		if (advised && !events->SelectedBundle().empty()) return events->SelectedBundle();
 		ComPtr<IShellItem> item;
 		if (SUCCEEDED(dialog->GetResult(&item)))
 		{

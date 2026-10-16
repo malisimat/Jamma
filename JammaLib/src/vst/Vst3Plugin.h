@@ -12,6 +12,7 @@
 #include <memory>
 #include <mutex>
 #include <vector>
+#include <system_error>
 #include <windows.h>
 #include "../../include/Constants.h"
 #include "../utils/CommonTypes.h"
@@ -165,6 +166,10 @@ namespace vst
 		void PollPendingControllerChanges() const noexcept;
 
 	private:
+		friend struct Vst3PluginTestAccess;
+		static std::wstring ResolveModulePath(const std::wstring& path, std::error_code& error);
+		bool LoadModule(const std::wstring& path, const char* stage);
+		std::wstring _requestedModulePath, _resolvedModulePath; // Non-RT lifecycle owner only.
 		friend void QueueForUiThreadDestroy(std::shared_ptr<IVstPlugin> plugin);
 		friend std::size_t DrainUiThreadDestroyQueue() noexcept;
 		static std::mutex& _UiDestroyQueueMutex() noexcept;

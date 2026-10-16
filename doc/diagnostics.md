@@ -76,3 +76,21 @@ only output successfully written before the failure.
   completion and timeout serialize on the capture mutex. Backend records retain
   origin at production; status masks keep startup/runtime observations separate.
   The audio callback never accesses Scene startup queue state.
+- VST picker handler: shell/UI thread only; local ComPtr and Advise references
+  retain it through Show, then Unadvise releases the shell's reference. The handler
+  retains no dialog pointer. Initial remembered-folder events cannot select a
+  bundle; only subsequent navigation does.
+
+VST3 bundle resolution is a non-callback lifecycle operation. A directory resolves
+only the Windows x64 layout `<bundle>/Contents/x86_64-win/<bundle-name>`; direct
+module files retain their path. Both PreInit and standalone Load use that target.
+The outer path remains in the existing saved plugin list. Missing modules and
+invalid/wrong-architecture binaries fail recoverably with requested/resolved
+paths, stage, and Windows error; other bundle architectures/layouts are unsupported.
+
+The runtime VST picker keeps normal file selection. Double-clicking or opening a
+.vst3 directory selects its outer bundle instead of navigating inside it. The
+initial remembered folder is ignored by this policy, and cancelling returns no
+selection. The hint in the picker describes both choices. This uses the shell's
+[folder navigation event](https://learn.microsoft.com/en-us/windows/win32/api/shobjidl_core/nf-shobjidl_core-ifiledialogevents-onfolderchanging)
+and [Close callback behavior](https://learn.microsoft.com/en-us/windows/win32/api/shobjidl_core/nf-shobjidl_core-ifiledialog-close).
