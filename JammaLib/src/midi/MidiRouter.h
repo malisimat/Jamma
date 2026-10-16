@@ -104,6 +104,9 @@ namespace midi
 		float ConsumeMidiInputPeak(const std::string& deviceName) noexcept;
 		void InitSerial(const io::UserConfig& cfg);
 		void CloseSerial();
+		// Off-callback lifecycle read: callers serialize against Init/CloseSerial
+		// through Scene lifecycle ownership. CloseSerial joins readers and clears devices.
+		std::vector<std::string> ConnectedSerialDeviceIds() const;
 
 		TriggerDispatchSummary PumpMidi(const std::vector<std::shared_ptr<engine::Station>>& stations,
 			std::uint64_t globalSampleNow,
@@ -177,6 +180,8 @@ namespace midi
 		struct MidiInputEndpoint
 		{
 			std::uint8_t DeviceSlot = 0u;
+			// Immutable registry ID assigned before endpoint publication. Init/Close
+			// own lifecycle; job/live/UI readers share the published endpoint lifetime.
 			std::string ConfiguredName;
 			unsigned int SampleRate = 0u;
 			std::unique_ptr<midi::MidiDevice> Device;
@@ -286,7 +291,7 @@ namespace midi
 		// The worker is joined before endpoint slots or route topology are changed.
 		bool _midiDispatchSuspended = false;
 		MidiConnectionResult _lastMidiConnectionResult;
-		std::vector<std::pair<std::string, bool>> _lastMidiDesired;
+		std::vector<io::UserConfig::MidiSettings> _lastMidiDesired;
 		unsigned int _lastMidiSampleRate = 0u;
 		bool _loggingVerbose = false;
 		std::vector<std::unique_ptr<io::SerialDevice>> _serialDevices;

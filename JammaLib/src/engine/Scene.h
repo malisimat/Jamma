@@ -194,13 +194,9 @@ namespace engine
 				_audioEngine->GetStreamParams().SampleRate,
 				_midiInputInventory ? &*_midiInputInventory : nullptr, generatedRig);
 			_midiInputInventory.reset();
-			std::vector<std::string> connectedNames;
-			connectedNames.reserve(result.Connected.size());
-			for (const auto& endpoint : result.Connected)
-				if (std::find(connectedNames.begin(), connectedNames.end(), endpoint.Name) == connectedNames.end())
-					connectedNames.push_back(endpoint.Name);
+			const auto connectedIds = result.ConnectedRegistryIds;
 			_midiState.store(
-				std::make_shared<const MidiState>(MidiState{ std::move(result), std::move(connectedNames) }),
+				std::make_shared<const MidiState>(MidiState{ std::move(result), connectedIds, _inputSubsystem->ConnectedSerialDeviceIds() }),
 				std::memory_order_release);
 			_midiActive.store(true, std::memory_order_release);
 		}
@@ -356,7 +352,7 @@ namespace engine
 		void _PumpMidi();
 		void _RefreshMidiIfNeeded();
 		void _ConfirmMidiConnectionChange(const midi::MidiConnectionResult& previous,
-			const midi::MidiConnectionResult& refreshed, const std::vector<std::string>& connectedNames);
+			const midi::MidiConnectionResult& refreshed, const std::vector<std::string>& connectedIds);
 		void _PumpSourceLossRecovery();
 		void _PumpTriggerStructuralActions();
 		void _AdvanceRigPublication();
@@ -439,7 +435,10 @@ namespace engine
 		struct MidiState
 		{
 			midi::MidiConnectionResult Connection;
-			std::vector<std::string> ConnectedNames;
+			std::vector<std::string> ConnectedIds;
+			// Collected under _midiLifecycleMutex with MIDI setup; immutable after
+			// publication, so availability readers never touch mutable serial ports.
+			std::vector<std::string> ConnectedSerialIds;
 		};
 		std::atomic<std::shared_ptr<const MidiState>> _midiState = std::make_shared<const MidiState>();
 		// UI lifecycle owner uses try_lock after trigger gate acknowledgement.
@@ -484,7 +483,13 @@ namespace engine
 		std::array<std::shared_ptr<gui::GuiNumericInput>,4> _audioInputs;
 		std::shared_ptr<gui::GuiLabel> _deviceStatus, _activeAudioStatus, _fileStatus;
 		std::shared_ptr<gui::GuiButton> _saveButton, _loadButton;
-		std::vector<std::pair<std::string,std::shared_ptr<gui::GuiToggle>>> _midiChoices;
+		struct MidiDeviceChoice
+		{
+			std::string HardwareName;
+			std::string RegistryId; // Empty only for an unregistered inventory choice.
+			std::shared_ptr<gui::GuiToggle> Toggle;
+		};
+		std::vector<MidiDeviceChoice> _midiChoices;
 		std::vector<std::shared_ptr<gui::GuiCommandReceiver>> _midiChoiceBindings;
 		std::vector<io::UserConfig::MidiSettings> _midiDraft;
 		std::optional<io::UserConfig::AudioSettings> _pendingAudioPersistence;

@@ -234,8 +234,13 @@ static bool UpdateIni(const std::wstring& finalPath, const std::string& data)
 static bool SaveRigAtomic(const std::wstring& finalPath, const io::RigFile& rig)
 {
 	std::stringstream json;
-	if (!io::RigFile::ToJsonStream(rig, json))
+	const auto normalized = io::RigFile::Normalize(rig);
+	if (!normalized || !io::RigFile::ToJsonStream(*normalized, json))
 		return false;
+	// Validate the exact bytes before opening the staging file. A malformed
+	// candidate must never replace a curated rig, including invalid UTF-8.
+	const auto parsed = io::RigFile::FromStream(std::stringstream(json.str()));
+	if (!parsed || *parsed != *normalized) return false;
 	return UpdateIni(finalPath, json.str());
 }
 
@@ -420,7 +425,11 @@ std::optional<io::RigFile> LoadRig(io::InitFile& ini, bool& readable)
 	auto [rigJson, numChars, unused] = std::move(res.value());
 
 	std::stringstream ss(rigJson);
-	auto parsed = RigFile::FromStream(std::move(ss));
+	RigFile::Diagnostics diagnostics;
+	auto parsed = RigFile::FromStream(std::move(ss), &diagnostics);
+	for (const auto& diagnostic : diagnostics)
+		std::cerr << "[RIG] " << (diagnostic.Level == RigFile::Severity::Error ? "Error: " : "Warning: ")
+			<< diagnostic.Path << ": " << diagnostic.Message << std::endl;
 	if (parsed.has_value() && !io::StartupConfig::ValidateRig(*parsed))
 		parsed.reset();
 	return parsed;
@@ -619,12 +628,9 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 		const bool rigExists = GetFileAttributesW(defaults->Rig.c_str()) != INVALID_FILE_ATTRIBUTES;
 		bool rigReadable = false;
 		auto rigOpt = LoadRig(defaults.value(), rigReadable);
-		if (rigOpt && !jamGenerated && !io::StartupConfig::ValidateRigForJam(*rigOpt, jam))
-		{
-			startupLog.Write("[RIG] selected rig has unresolved Station target(s); preserving original and generating recovery rig path=" +
-				EncodeUtf8(defaults->Rig));
-			rigOpt.reset();
-		}
+		// Unavailable station targets remain in the complete canonical rig.
+		// Recovery is reserved for unreadable or invalid definitions, never a
+		// different jam or disconnected hardware. Load/close do not save the rig.
 		const auto rigDecision = io::StartupConfig::Decide(
 			io::StartupConfig::Classify(rigExists, rigReadable, rigOpt.has_value()), defaults->RigOrigin);
 		rigGenerated = rigDecision.Generate;
@@ -665,19 +671,6 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 		std::cout << device.ProbeError << std::endl;
 	}
 	const auto midiInventory = midi::MidiDevice::InventoryInputDevices();
-	if (!rigGenerated)
-	{
-		for (auto& device : rig.User.Midi.Devices)
-			device.Name = midi::MidiDevice::ResolveSavedInputName(device.Name, midiInventory.Devices);
-		for (auto& trigger : rig.Triggers)
-		{
-			for (auto& name : trigger.MidiInputDevices)
-				name = midi::MidiDevice::ResolveSavedInputName(name, midiInventory.Devices);
-			if (trigger.MidiTrigger)
-				trigger.MidiTrigger->Device = midi::MidiDevice::ResolveSavedInputName(
-					trigger.MidiTrigger->Device, midiInventory.Devices);
-		}
-	}
 	startupLog.Write("[MIDI] inventory=" + std::to_string(midiInventory.Devices.size()) +
 		(midiInventory.Error.empty() ? "" : " error=" + midiInventory.Error));
 	std::cout << "[MIDI] Discovered " << midiInventory.Devices.size() << " input(s) " << midiInventory.Error << std::endl;
@@ -862,22 +855,14 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 	if (rigGenerated && asioReport.StartedParams && generatedRigPath)
 	{
 		const auto& actual = *asioReport.StartedParams;
-		std::vector<std::string> connectedMidi;
-		for (const auto& device : scene.value()->GetMidiConnectionResult().Connected)
-			connectedMidi.push_back(device.Name);
-		auto finalRig = io::StartupConfig::GeneratedRig(rig, actual.NumInputChannels, connectedMidi,
-			jamGenerated ? "Station1" : jamForPublication.Stations.front().Name);
-		finalRig.User.Audio.Name = actual.Name;
-		finalRig.User.Audio.SampleRate = actual.SampleRate;
-		finalRig.User.Audio.BufSize = actual.BufSize;
-		finalRig.User.Audio.NumBuffers = actual.NumBuffers;
-		finalRig.User.Audio.LatencyIn = actual.InputLatency;
-		finalRig.User.Audio.LatencyOut = actual.OutputLatency;
-		finalRig.User.Audio.NumChannelsIn = actual.NumInputChannels;
-		finalRig.User.Audio.NumChannelsOut = actual.NumOutputChannels;
+		const auto connection = scene.value()->GetMidiConnectionResult();
+		const auto acceptedBeforeFinalisation = scene.value()->AcceptedRigSnapshot();
+		const auto& openedRig = acceptedBeforeFinalisation ? acceptedBeforeFinalisation->Rig : rig;
+		auto finalRig = io::StartupConfig::WithOpenedInputs(openedRig, actual.NumInputChannels,
+			connection.ConnectedRegistryIds, jamGenerated ? "Station1" : jamForPublication.Stations.front().Name);
 
 		std::stringstream initialStream, finalStream;
-		RigFile::ToJsonStream(rig, initialStream);
+		RigFile::ToJsonStream(openedRig, initialStream);
 		RigFile::ToJsonStream(finalRig, finalStream);
 		if (initialStream.str() == finalStream.str())
 		{
@@ -994,10 +979,10 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 		std::ostringstream route;
 		route << "[RIG] trigger='" << trigger.Name << "' id='" << trigger.Id
 			<< "' station='" << (trigger.StationTarget ? *trigger.StationTarget : "none") << "' adc=";
-		for (const auto channel : trigger.InputChannels)
+		for (const auto channel : trigger.CaptureInputs.Audio)
 			route << channel << "(physical " << channel + 1u << "),";
 		route << " loop-midi=";
-		for (const auto& name : trigger.MidiInputDevices) route << "'" << name << "',";
+		for (const auto& name : trigger.CaptureInputs.Midi) route << "'" << name << "',";
 		startupLog.Write(route.str());
 	}
 	std::ostringstream startupSummary;

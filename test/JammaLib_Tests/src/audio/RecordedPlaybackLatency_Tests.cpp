@@ -380,7 +380,7 @@ static void VerifyRecordedCaptureOriginWithHardwareRuler(bool returningOutput,
 	constexpr auto preDelay = 17u;
 	constexpr auto referenceLatency = 47u;
 	io::UserConfig cfg;
-	cfg.Trigger.PreDelay = preDelay;
+	cfg.Trigger.PreDelaySamps = preDelay;
 	engine::StationParams stationParams;
 	stationParams.Name = returningOutput ? "overdub-capture-ruler" : "record-capture-ruler";
 	stationParams.Size = { 200, 200 };

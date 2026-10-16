@@ -19,7 +19,7 @@ namespace engine
 	public:
 		using SnapshotPtr = std::shared_ptr<const RigSnapshot>;
 		using PersistRig = std::function<bool(const io::RigFile&)>;
-		enum class EditResult { Pending, EditsDisabled, AudioCallbackInactive, TriggerBusy, TransitionRejected, ValidationFailed, PersistenceFailed };
+		enum class EditResult { Pending, EditsDisabled, AudioCallbackInactive, TriggerBusy, TransitionRejected, ValidationFailed, PersistenceFailed, ReinitialisationRequired };
 
 		RigCoordinator() = default;
 		RigCoordinator(const RigCoordinator&) = delete;
@@ -40,7 +40,9 @@ namespace engine
 			std::shared_ptr<Station> removed = {});
 		// Refresh source availability after the audio stream and MIDI inputs actually open.
 		SnapshotPtr RefreshRuntimeAvailability(unsigned int availableAdcChannels,
-			std::vector<std::string> availableMidiDevices);
+			std::vector<std::string> availableMidiDevices,
+			std::optional<std::vector<std::string>> availableSerialDevices = std::nullopt,
+			std::optional<io::UserConfig::AudioSettings> confirmedGeneratedAudio = std::nullopt);
 		EditResult CompleteTransition(std::uint64_t revision,
 			bool acceptedAtAudioBoundary,
 			const PersistRig& persistRig);
@@ -60,14 +62,6 @@ namespace engine
 		void ReleaseAfterReadersStopped();
 
 	private:
-		static bool _Equivalent(const io::RigFile::TriggerPair& lhs,
-			const io::RigFile::TriggerPair& rhs) noexcept;
-		static bool _Equivalent(const io::RigFile::Trigger::MidiTriggerBindingSpec& lhs,
-			const io::RigFile::Trigger::MidiTriggerBindingSpec& rhs) noexcept;
-		static bool _Equivalent(const io::RigFile::Trigger::MidiTriggerBinding& lhs,
-			const io::RigFile::Trigger::MidiTriggerBinding& rhs) noexcept;
-		static bool _Equivalent(const io::RigFile::Trigger& lhs,
-			const io::RigFile::Trigger& rhs) noexcept;
 		static bool _EquivalentActivation(const io::RigFile::Trigger& lhs,
 			const io::RigFile::Trigger& rhs) noexcept;
 		static bool _EquivalentCaptureRouting(const io::RigFile::Trigger& lhs,
@@ -79,7 +73,8 @@ namespace engine
 			unsigned int availableAdcChannels,
 			const std::vector<std::string>& availableMidiDevices,
 			const TriggerParams& triggerParams,
-			const SnapshotPtr& acceptedSnapshot);
+			const SnapshotPtr& acceptedSnapshot,
+			const std::vector<std::string>* availableSerialDevices = nullptr);
 		std::uint64_t _AllocateRevision() noexcept;
 
 		// Retire snapshots only after audio and input readers stop, to keep teardown off their threads.
@@ -95,8 +90,6 @@ namespace engine
 		std::vector<SnapshotPtr> _retiring;
 		std::vector<io::JamFile::Station> _stationDescriptors;
 		std::vector<std::shared_ptr<Station>> _stations;
-		unsigned int _availableAdcChannels = 0u;
-		std::vector<std::string> _availableMidiDevices;
 		TriggerParams _triggerParams;
 	};
 }

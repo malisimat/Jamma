@@ -112,7 +112,11 @@ static void SendMidiEvent(const std::shared_ptr<Trigger>& trigger, const midi::M
 {
 	base::Action midiAction;
 	midiAction.SetActionTime(t);
-	trigger->OnEvent(event, midiAction);
+	const auto eventMicros = std::chrono::duration_cast<std::chrono::microseconds>(
+		t.time_since_epoch()).count();
+	trigger->QueueMidiInputEvent(engine::TRIGGER_INPUT_JOB, 0u,
+		event, midiAction, eventMicros, "TriggerPad");
+	TickAndComplete(trigger);
 }
 
 class MockedTriggerReceiver :
@@ -603,19 +607,34 @@ std::shared_ptr<Trigger> MakeSharedDefaultTrigger(unsigned int debounceMs = 0u)
 	return std::make_shared<Trigger>(trigParams);
 }
 
-std::shared_ptr<Trigger> MakeTriggerFromRigJson(const std::string& jsonText,
+static io::RigFile::Trigger MakeMidiRigTrigger(const std::string& name,
+	unsigned int activateState = 1u,
+	io::RigFile::MidiTriggerEvent ditchKind = io::RigFile::CC,
+	unsigned int ditchCode = 64u,
+	unsigned int ditchState = 1u)
+{
+	io::RigFile::Trigger definition;
+	definition.Id = "test-trigger";
+	definition.Name = name;
+	definition.ControlBindings.Activate.push_back({
+		io::RigFile::BindingSource::Midi, "TriggerPad",
+		{60u, activateState, io::RigFile::NOTE, 0u},
+		{60u, 1u - activateState, io::RigFile::NOTE, 0u}
+	});
+	definition.ControlBindings.Ditch.push_back({
+		io::RigFile::BindingSource::Midi, "TriggerPad",
+		{ditchCode, ditchState, ditchKind, 0u},
+		{ditchCode, 1u - ditchState, ditchKind, 0u}
+	});
+	return definition;
+}
+
+std::shared_ptr<Trigger> MakeTriggerFromRigDefinition(const io::RigFile::Trigger& definition,
 	unsigned int debounceMs = 0u)
 {
-	auto testStream = std::stringstream(jsonText);
-	auto json = std::get<io::Json::JsonPart>(io::Json::FromStream(std::move(testStream)).value());
-	auto trigStruct = io::RigFile::Trigger::FromJson(json);
-	EXPECT_TRUE(trigStruct.has_value());
-	if (!trigStruct.has_value())
-		return nullptr;
-
 	TriggerParams trigParams;
 	trigParams.DebounceMs = debounceMs;
-	auto trigger = Trigger::FromFile(trigParams, trigStruct.value());
+	auto trigger = Trigger::FromFile(trigParams, definition);
 	EXPECT_TRUE(trigger.has_value());
 	return trigger.has_value() ? trigger.value() : nullptr;
 }
@@ -688,10 +707,9 @@ TEST(Trigger, CaptureEditsAndStationMovesKeepDitchHistoryInRecordingOrder)
 		std::vector<unsigned int> channels)
 	{
 		std::vector<std::string> midiDevices;
-		auto midiMode = io::RigFile::Trigger::MidiInputMode::None;
 		auto mixer = std::make_shared<audio::AudioMixer>(Trigger::GetOverdubMixerParams(channels));
 		auto writer = Trigger::CreateBounceWriter(mixer);
-		trigger->ApplyCaptureRouting(receiver, channels, midiDevices, midiMode, mixer, writer);
+		trigger->ApplyCaptureRouting(receiver, channels, midiDevices, mixer, writer);
 	};
 	auto press = [&](bool activate, bool down)
 	{
@@ -751,10 +769,9 @@ TEST(Trigger, RejectedStartDoesNotEndAnOlderHistoryEntry)
 	std::shared_ptr<base::ActionReceiver> route = rejectedReceiver;
 	std::vector<unsigned int> channels{ 0u };
 	std::vector<std::string> midiDevices;
-	auto midiMode = io::RigFile::Trigger::MidiInputMode::None;
 	auto mixer = std::make_shared<audio::AudioMixer>(Trigger::GetOverdubMixerParams(channels));
 	auto writer = Trigger::CreateBounceWriter(mixer);
-	trigger->ApplyCaptureRouting(route, channels, midiDevices, midiMode, mixer, writer);
+	trigger->ApplyCaptureRouting(route, channels, midiDevices, mixer, writer);
 	press(true); press(false); press(true); press(false);
 
 	EXPECT_EQ(engine::TRIGSTATE_DEFAULT, trigger->GetState());
@@ -810,8 +827,8 @@ TEST(Trigger, RestoredHistoryDitchesItsMostRecentTake) {
 	auto trigger = MakeSharedDefaultTrigger();
 	trigger->SetReceiver(receiver);
 	trigger->RestoreTakes({
-		{ engine::TriggerTake::SOURCE_ADC, "source-take", "older-take" },
-		{ engine::TriggerTake::SOURCE_LOOPTAKE, "older-take", "latest-take" }
+		{ engine::TriggerTake::SOURCE_ADC, "source-take", "older-take", receiver },
+		{ engine::TriggerTake::SOURCE_LOOPTAKE, "older-take", "latest-take", receiver }
 	});
 
 	base::Action action;
@@ -827,6 +844,29 @@ TEST(Trigger, RestoredHistoryDitchesItsMostRecentTake) {
 	EXPECT_EQ("older-take", receiver->Actions()[1].TargetId);
 	ASSERT_EQ(1u, trigger->GetTakes().size());
 	EXPECT_EQ("older-take", trigger->GetTakes()[0].TargetTakeId);
+}
+
+TEST(Trigger, RestoredHistoryDitchesOriginalStationAfterCaptureTargetChanges)
+{
+	auto original = std::make_shared<SequenceTriggerReceiver>();
+	auto replacement = std::make_shared<SequenceTriggerReceiver>();
+	auto trigger = MakeSharedDefaultTrigger();
+	trigger->RestoreTakes({
+		{engine::TriggerTake::SOURCE_ADC, "recorded-source", "recorded-target", original}
+	});
+	trigger->SetReceiver(replacement);
+	base::Action action;
+	ASSERT_TRUE(trigger->QueueExternalControlAction(false, true, action).IsEaten);
+	TickAndComplete(trigger);
+	ASSERT_TRUE(trigger->QueueExternalControlAction(false, false, action).IsEaten);
+	TickAndComplete(trigger);
+	ASSERT_EQ(2u, original->Actions().size());
+	EXPECT_EQ(TriggerAction::TRIGGER_DITCH, original->Actions()[0].ActionType);
+	EXPECT_EQ("recorded-target", original->Actions()[0].TargetId);
+	EXPECT_EQ(TriggerAction::TRIGGER_DITCH_UNMUTE, original->Actions()[1].ActionType);
+	EXPECT_EQ("recorded-source", original->Actions()[1].TargetId);
+	EXPECT_TRUE(replacement->Actions().empty());
+	EXPECT_TRUE(trigger->GetTakes().empty());
 }
 
 TEST(Trigger, ResetClearsPublishedDitchState) {
@@ -881,13 +921,14 @@ TEST(Trigger, SerialBindingFromRigOnlyMatchesSerialSource) {
 	engine::TriggerParams trigParams;
 	auto rigTrigger = io::RigFile::Trigger();
 	rigTrigger.Name = "serial";
-	rigTrigger.TriggerPairs.push_back({
-		0u,
-		0u,
-		1u,
-		1u,
-		io::RigFile::TriggerPair::SOURCE_SERIAL,
-		"pedal-a"
+	rigTrigger.Id = "serial-trigger";
+	rigTrigger.ControlBindings.Activate.push_back({
+		io::RigFile::BindingSource::Serial, "pedal-a",
+		{0u, 1u}, {0u, 0u}
+	});
+	rigTrigger.ControlBindings.Ditch.push_back({
+		io::RigFile::BindingSource::Serial, "pedal-a",
+		{1u, 1u}, {1u, 0u}
 	});
 
 	auto triggerOpt = Trigger::FromFile(trigParams, rigTrigger);
@@ -912,6 +953,33 @@ TEST(Trigger, SerialBindingFromRigOnlyMatchesSerialSource) {
 	EXPECT_TRUE(receiver->GetLastMatched());
 	EXPECT_EQ(1, receiver->GetNumTimesCalled());
 	EXPECT_EQ(actions::ACTIONRESULT_ACTIVATE, serialRes.ResultType);
+}
+
+TEST(Trigger, IndependentReleaseEventKeepsItsConfiguredPressPair)
+{
+	io::RigFile::Trigger definition;
+	definition.Id = "paired-key"; definition.Name = "paired-key";
+	definition.ControlBindings.Activate.push_back({io::RigFile::BindingSource::Keyboard, "keyboard",
+		{70u, 1u}, {71u, 0u}});
+	TriggerParams params; params.DebounceMs = 0u;
+	const auto created = Trigger::FromFile(params, definition);
+	ASSERT_TRUE(created);
+	auto receiver = std::make_shared<SequenceTriggerReceiver>();
+	const auto trigger = *created; trigger->SetReceiver(receiver);
+	base::Action action;
+	EXPECT_TRUE(trigger->OnEvent(engine::TRIGGER_KEY, 70u, 1u, action).IsEaten);
+	ASSERT_EQ(1u, receiver->Actions().size());
+	EXPECT_TRUE(trigger->IsActivateInputDown());
+	EXPECT_FALSE(trigger->OnEvent(engine::TRIGGER_KEY, 70u, 0u, action).IsEaten);
+	EXPECT_TRUE(trigger->IsActivateInputDown());
+	EXPECT_FALSE(trigger->OnEvent(engine::TRIGGER_KEY, 70u, 1u, action).IsEaten);
+	EXPECT_EQ(1u, receiver->Actions().size());
+	EXPECT_TRUE(trigger->OnEvent(engine::TRIGGER_KEY, 71u, 0u, action).IsEaten);
+	EXPECT_FALSE(trigger->IsActivateInputDown());
+	EXPECT_TRUE(trigger->OnEvent(engine::TRIGGER_KEY, 70u, 1u, action).IsEaten);
+	ASSERT_EQ(2u, receiver->Actions().size());
+	EXPECT_EQ(TriggerAction::TRIGGER_REC_START, receiver->Actions()[0].ActionType);
+	EXPECT_EQ(TriggerAction::TRIGGER_REC_END, receiver->Actions()[1].ActionType);
 }
 
 TEST(Trigger, NoReleaseSkipsAction) {
@@ -1196,7 +1264,7 @@ TEST(Trigger, BounceWriterFollowsDelayedPunchMixerChanges) {
 	ASSERT_GE(receiver->Actions().size(), 2u);
 	EXPECT_EQ(TriggerAction::TRIGGER_PUNCHIN_START, receiver->Actions()[1].ActionType);
 	EXPECT_EQ(engine::TRIGSTATE_PUNCHEDIN, trigger->GetState());
-	const auto punchDelay = cfg.Trigger.PreDelay + constants::MaxLoopFadeSamps;
+	const auto punchDelay = cfg.Trigger.PreDelaySamps + constants::MaxLoopFadeSamps;
 	trigger->OnTick(GetTime(), punchDelay - 1u, cfg, std::nullopt);
 	writer->WriteBlock(sink, samples, 64u, 0u);
 	EXPECT_FLOAT_EQ(1.0f, sink->LastBounceLevel);
@@ -1293,7 +1361,7 @@ TEST(Trigger, EndOverdubPreservesDelayedPunchActions) {
 	EXPECT_EQ(0u, targetTake->PunchOutCount);
 
 	// Flush delayed audio work; it remains valid after the job-side overdub end.
-	trigger->OnTick(GetTime(), cfg.Trigger.PreDelay + constants::MaxLoopFadeSamps, cfg, std::nullopt);
+	trigger->OnTick(GetTime(), cfg.Trigger.PreDelaySamps + constants::MaxLoopFadeSamps, cfg, std::nullopt);
 	trigger->ProcessStructuralActionsOnJob(cfg, std::nullopt);
 
 	auto actionsAfterTick = receiver->Actions();
@@ -1365,7 +1433,7 @@ TEST(Trigger, MixedAudioMidiPunchDelaysAudioTargetButNotMidiTarget) {
 	EXPECT_EQ(0u, targetTake->PunchInCount);
 	EXPECT_EQ(0u, targetTake->PunchOutCount);
 
-	trigger->OnTick(GetTime(), cfg.Trigger.PreDelay + constants::MaxLoopFadeSamps, cfg, std::nullopt);
+	trigger->OnTick(GetTime(), cfg.Trigger.PreDelaySamps + constants::MaxLoopFadeSamps, cfg, std::nullopt);
 	trigger->ProcessStructuralActionsOnJob(cfg, std::nullopt);
 
 	auto actionsAfterTick = receiver->Actions();
@@ -1376,15 +1444,11 @@ TEST(Trigger, MixedAudioMidiPunchDelaysAudioTargetButNotMidiTarget) {
 
 TEST(Trigger, MidiBindingsDriveRecordAndDitchActions) {
 	auto receiver = std::make_shared<SequenceTriggerReceiver>();
-	auto str = "{\"name\":\"TrigMidi\",\"stationtype\":0,\"trigger\":{\"type\":\"midi\",\"device\":\"TriggerPad\",\"activate\":{\"kind\":\"note\",\"channel\":1,\"id\":60},\"ditch\":{\"kind\":\"cc\",\"channel\":1,\"id\":64}}}";
-	auto testStream = std::stringstream(str);
-	auto json = std::get<io::Json::JsonPart>(io::Json::FromStream(std::move(testStream)).value());
-	auto trigStruct = io::RigFile::Trigger::FromJson(json);
-	ASSERT_TRUE(trigStruct.has_value());
+	auto trigStruct = MakeMidiRigTrigger("TrigMidi");
 
 	TriggerParams trigParams;
 	trigParams.DebounceMs = 0u;
-	auto trigger = Trigger::FromFile(trigParams, trigStruct.value());
+	auto trigger = Trigger::FromFile(trigParams, trigStruct);
 	ASSERT_TRUE(trigger.has_value());
 	trigger.value()->SetReceiver(receiver);
 
@@ -1408,8 +1472,7 @@ TEST(Trigger, MidiBindingsDriveRecordAndDitchActions) {
 
 TEST(Trigger, QueuedMidiDebounceUsesDriverEventTimeInsteadOfPumpActionTime)
 {
-	const auto json = "{\"name\":\"TimedMidi\",\"stationtype\":0,\"trigger\":{\"type\":\"midi\",\"device\":\"TriggerPad\",\"activate\":{\"kind\":\"note\",\"channel\":1,\"id\":60},\"ditch\":{\"kind\":\"cc\",\"channel\":1,\"id\":64}}}";
-	auto trigger = MakeTriggerFromRigJson(json, 20u);
+	auto trigger = MakeTriggerFromRigDefinition(MakeMidiRigTrigger("TimedMidi"), 20u);
 	ASSERT_NE(nullptr, trigger);
 	auto receiver = std::make_shared<SequenceTriggerReceiver>();
 	trigger->SetReceiver(receiver);
@@ -1420,7 +1483,7 @@ TEST(Trigger, QueuedMidiDebounceUsesDriverEventTimeInsteadOfPumpActionTime)
 	base::Action action;
 	action.SetActionTime(start);
 	ASSERT_TRUE(trigger->QueueMidiInputEvent(engine::TRIGGER_INPUT_JOB, 0u,
-		midi::MidiEvent::MakeNoteOn(0u, 0u, 60u, 100u), action, eventMicros).IsEaten);
+		midi::MidiEvent::MakeNoteOn(0u, 0u, 60u, 100u), action, eventMicros, "TriggerPad").IsEaten);
 	trigger->OnTick(OffsetTime(start, 1u), 0u, std::nullopt, std::nullopt);
 	EXPECT_TRUE(trigger->IsActivateInputDown());
 	CompleteQueuedStructuralAction(trigger);
@@ -1429,13 +1492,13 @@ TEST(Trigger, QueuedMidiDebounceUsesDriverEventTimeInsteadOfPumpActionTime)
 	// Pump delay exceeds debounce, but the driver's note-off is only 5 ms later.
 	action.SetActionTime(OffsetTime(start, 100u));
 	ASSERT_TRUE(trigger->QueueMidiInputEvent(engine::TRIGGER_INPUT_JOB, 0u,
-		midi::MidiEvent::MakeNoteOff(0u, 0u, 60u), action, eventMicros + 5000).IsEaten);
+		midi::MidiEvent::MakeNoteOff(0u, 0u, 60u), action, eventMicros + 5000, "TriggerPad").IsEaten);
 	trigger->OnTick(OffsetTime(start, 6u), 0u, std::nullopt, std::nullopt);
 
 	// A second press still falls within 20 ms of the driver-timed release.
 	action.SetActionTime(OffsetTime(start, 200u));
 	ASSERT_TRUE(trigger->QueueMidiInputEvent(engine::TRIGGER_INPUT_JOB, 0u,
-		midi::MidiEvent::MakeNoteOn(0u, 0u, 60u, 100u), action, eventMicros + 10000).IsEaten);
+		midi::MidiEvent::MakeNoteOn(0u, 0u, 60u, 100u), action, eventMicros + 10000, "TriggerPad").IsEaten);
 	trigger->OnTick(OffsetTime(start, 11u), 0u, std::nullopt, std::nullopt);
 	trigger->ProcessStructuralActionsOnJob(std::nullopt, std::nullopt);
 	EXPECT_EQ(1u, receiver->Actions().size());
@@ -1443,8 +1506,7 @@ TEST(Trigger, QueuedMidiDebounceUsesDriverEventTimeInsteadOfPumpActionTime)
 
 TEST(Trigger, QueuedMidiPressSampleReachesRecordStartAndEnd)
 {
-	const auto json = "{\"name\":\"TimedMidi\",\"stationtype\":0,\"trigger\":{\"type\":\"midi\",\"device\":\"TriggerPad\",\"activate\":{\"kind\":\"note\",\"channel\":1,\"id\":60},\"ditch\":{\"kind\":\"cc\",\"channel\":1,\"id\":64}}}";
-	auto trigger = MakeTriggerFromRigJson(json, 0u);
+	auto trigger = MakeTriggerFromRigDefinition(MakeMidiRigTrigger("TimedMidi"), 0u);
 	ASSERT_NE(nullptr, trigger);
 	auto receiver = std::make_shared<SequenceTriggerReceiver>();
 	trigger->SetReceiver(receiver);
@@ -1452,16 +1514,16 @@ TEST(Trigger, QueuedMidiPressSampleReachesRecordStartAndEnd)
 	const auto eventMicros = std::chrono::duration_cast<std::chrono::microseconds>(
 		GetTime().time_since_epoch()).count();
 	ASSERT_TRUE(trigger->QueueMidiInputEvent(engine::TRIGGER_INPUT_JOB, 0u,
-		midi::MidiEvent::MakeNoteOn(1000u, 0u, 60u, 100u), action, eventMicros).IsEaten);
+		midi::MidiEvent::MakeNoteOn(1000u, 0u, 60u, 100u), action, eventMicros, "TriggerPad").IsEaten);
 	TickAndComplete(trigger);
 	ASSERT_EQ(1u, receiver->Actions().size());
 	EXPECT_EQ(1000u, receiver->Actions()[0].MidiSample);
 
 	ASSERT_TRUE(trigger->QueueMidiInputEvent(engine::TRIGGER_INPUT_JOB, 0u,
-		midi::MidiEvent::MakeNoteOff(1100u, 0u, 60u), action, eventMicros + 1000).IsEaten);
+		midi::MidiEvent::MakeNoteOff(1100u, 0u, 60u), action, eventMicros + 1000, "TriggerPad").IsEaten);
 	TickAndComplete(trigger);
 	ASSERT_TRUE(trigger->QueueMidiInputEvent(engine::TRIGGER_INPUT_JOB, 0u,
-		midi::MidiEvent::MakeNoteOn(4000u, 0u, 60u, 100u), action, eventMicros + 2000).IsEaten);
+		midi::MidiEvent::MakeNoteOn(4000u, 0u, 60u, 100u), action, eventMicros + 2000, "TriggerPad").IsEaten);
 	TickAndComplete(trigger);
 	ASSERT_EQ(2u, receiver->Actions().size());
 	EXPECT_EQ(TriggerAction::TRIGGER_REC_END, receiver->Actions()[1].ActionType);
@@ -1470,15 +1532,11 @@ TEST(Trigger, QueuedMidiPressSampleReachesRecordStartAndEnd)
 
 TEST(Trigger, NoteOffMidiActivateBindingStartsAndEndsRecordingOnRelease) {
 	auto receiver = std::make_shared<SequenceTriggerReceiver>();
-	auto str = "{\"name\":\"TrigMidi\",\"stationtype\":0,\"trigger\":{\"type\":\"midi\",\"device\":\"TriggerPad\",\"activate\":{\"kind\":\"noteoff\",\"channel\":1,\"id\":60},\"ditch\":{\"kind\":\"cc\",\"channel\":1,\"id\":64}}}";
-	auto testStream = std::stringstream(str);
-	auto json = std::get<io::Json::JsonPart>(io::Json::FromStream(std::move(testStream)).value());
-	auto trigStruct = io::RigFile::Trigger::FromJson(json);
-	ASSERT_TRUE(trigStruct.has_value());
+	auto trigStruct = MakeMidiRigTrigger("TrigMidi", 0u);
 
 	TriggerParams trigParams;
 	trigParams.DebounceMs = 0u;
-	auto trigger = Trigger::FromFile(trigParams, trigStruct.value());
+	auto trigger = Trigger::FromFile(trigParams, trigStruct);
 	ASSERT_TRUE(trigger.has_value());
 	trigger.value()->SetReceiver(receiver);
 
@@ -1499,15 +1557,11 @@ TEST(Trigger, NoteOffMidiActivateBindingStartsAndEndsRecordingOnRelease) {
 
 TEST(Trigger, NoteOffMidiDitchBindingCompletesOnNextNoteOn) {
 	auto receiver = std::make_shared<SequenceTriggerReceiver>();
-	auto str = "{\"name\":\"TrigMidi\",\"stationtype\":0,\"trigger\":{\"type\":\"midi\",\"device\":\"TriggerPad\",\"activate\":{\"kind\":\"note\",\"channel\":1,\"id\":60},\"ditch\":{\"kind\":\"noteoff\",\"channel\":1,\"id\":61}}}";
-	auto testStream = std::stringstream(str);
-	auto json = std::get<io::Json::JsonPart>(io::Json::FromStream(std::move(testStream)).value());
-	auto trigStruct = io::RigFile::Trigger::FromJson(json);
-	ASSERT_TRUE(trigStruct.has_value());
+	auto trigStruct = MakeMidiRigTrigger("TrigMidi", 1u, io::RigFile::NOTE, 61u, 0u);
 
 	TriggerParams trigParams;
 	trigParams.DebounceMs = 0u;
-	auto trigger = Trigger::FromFile(trigParams, trigStruct.value());
+	auto trigger = Trigger::FromFile(trigParams, trigStruct);
 	ASSERT_TRUE(trigger.has_value());
 	trigger.value()->SetReceiver(receiver);
 
@@ -2756,25 +2810,8 @@ TEST(CameraView, StationResetUpdatesLoopTakeRevision) {
 }
 
 TEST(Trigger, TriggerFromFileRejectsInvalidMidiBindingSpecsFromNonJsonCallers) {
-	io::RigFile::Trigger trigStruct{};
-	trigStruct.Name = "TrigMidi";
-	trigStruct.StationType = 0u;
-	trigStruct.MidiTrigger = io::RigFile::Trigger::MidiTriggerBinding{};
-	trigStruct.MidiTrigger->Device = "default";
-	trigStruct.MidiTrigger->Activate = {
-		io::RigFile::MidiTriggerEvent::NOTE,
-		0u,
-		128u,
-		1u,
-		false
-	};
-	trigStruct.MidiTrigger->Ditch = {
-		io::RigFile::MidiTriggerEvent::CC,
-		0u,
-		64u,
-		1u,
-		false
-	};
+	auto trigStruct = MakeMidiRigTrigger("TrigMidi");
+	trigStruct.ControlBindings.Activate.front().Press.Code = 128u;
 
 	TriggerParams trigParams;
 	trigParams.DebounceMs = 0u;
@@ -2896,13 +2933,13 @@ TEST(Trigger, NewOverdubUsesIndependentWriterWhileOldDelayedPunchDrains)
 		if (request.ActionType == TriggerAction::TRIGGER_OVERDUB_START) newWriter = request.OverdubWriter;
 	ASSERT_NE(nullptr, newWriter);
 	EXPECT_NE(oldWriter, newWriter);
-	trigger->OnTick(GetTime(), cfg.Trigger.PreDelay + constants::MaxLoopFadeSamps, cfg, std::nullopt);
+	trigger->OnTick(GetTime(), cfg.Trigger.PreDelaySamps + constants::MaxLoopFadeSamps, cfg, std::nullopt);
 	EXPECT_EQ(1u, target->PunchInCount);
 	EXPECT_EQ(1u, target->PunchOutCount);
 	EXPECT_EQ(engine::TRIGSTATE_OVERDUBBING, trigger->GetState());
 	press(true, false);
 	press(true, true);
-	trigger->OnTick(GetTime(), cfg.Trigger.PreDelay + constants::MaxLoopFadeSamps, cfg, std::nullopt);
+	trigger->OnTick(GetTime(), cfg.Trigger.PreDelaySamps + constants::MaxLoopFadeSamps, cfg, std::nullopt);
 	auto oldSink = std::make_shared<StereoCaptureSampleSink>();
 	auto newSink = std::make_shared<StereoCaptureSampleSink>();
 	std::array<float, 64> samples;
@@ -3036,7 +3073,7 @@ TEST(Trigger, PunchAdmissionReservesDelayedAndStructuralReleaseCapacity)
 	EXPECT_GT(admitted, 0u);
 	EXPECT_LT(admitted, 40u);
 	trigger->ProcessStructuralActionsOnJob(cfg, std::nullopt);
-	trigger->OnTick(GetTime(), cfg.Trigger.PreDelay + constants::MaxLoopFadeSamps, cfg, std::nullopt);
+	trigger->OnTick(GetTime(), cfg.Trigger.PreDelaySamps + constants::MaxLoopFadeSamps, cfg, std::nullopt);
 	EXPECT_EQ(admitted, target->PunchInCount);
 	EXPECT_EQ(admitted, target->PunchOutCount);
 	EXPECT_EQ(engine::TRIGSTATE_OVERDUBBING, trigger->GetState());
@@ -3068,7 +3105,7 @@ TEST(Trigger, RejectedDitchReleasesRollbackCapacityAfterRestoredCommandsDrain)
 	press(false, true);
 	press(false, false);
 	ASSERT_EQ(engine::TRIGSTATE_OVERDUBBING, trigger->GetState());
-	trigger->OnTick(GetTime(), cfg.Trigger.PreDelay + constants::MaxLoopFadeSamps,
+	trigger->OnTick(GetTime(), cfg.Trigger.PreDelaySamps + constants::MaxLoopFadeSamps,
 		cfg, std::nullopt);
 	press(true, true);
 	EXPECT_EQ(engine::TRIGSTATE_PUNCHEDIN, trigger->GetState());
@@ -3357,12 +3394,11 @@ TEST(Trigger, LosingOlderTailPreservesNewIndependentPunchAndItsQueuedRelease)
     std::shared_ptr<base::ActionReceiver> receiver = healthyStation;
     std::vector<unsigned int> channels{ 0u };
     std::vector<std::string> names{ "healthy" };
-    auto mode = io::RigFile::Trigger::MidiInputMode::Selected;
     std::shared_ptr<audio::AudioMixer> mixer;
     std::shared_ptr<base::BounceWriter> writer;
     // Serialized test boundary installs a distinct bounce source. The older
     // cancelled target is deliberately not a dependency of this new punch.
-    trigger->ApplyCaptureRouting(receiver, channels, names, mode, mixer, writer);
+    trigger->ApplyCaptureRouting(receiver, channels, names, mixer, writer);
     press(true, true); press(true, false);
     trigger->OnTick(GetTime(), 64u, cfg, std::nullopt);
     press(true, true); press(true, false);

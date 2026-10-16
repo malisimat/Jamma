@@ -159,6 +159,11 @@ namespace io
 		_globalKeyHook = nullptr;
 	}
 
+	std::vector<std::string> IoInputSubsystem::ConnectedSerialDeviceIds() const
+	{
+		return _midiRouter.ConnectedSerialDeviceIds();
+	}
+
 	bool IoInputSubsystem::PumpGlobalKeyCapture(actions::KeyAction& action) noexcept
 	{
 		const auto pumpOne = [&action](unsigned int vk,

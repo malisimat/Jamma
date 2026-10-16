@@ -25,6 +25,7 @@ namespace io
 		static ReconstructedSession Reconstruct(const JamFile& jam, const RigFile& rig, const std::wstring& directory);
 		// Exactly once on the loading thread, on a fresh rig before input/audio publication.
 		static void RestoreTriggerHistories(const std::vector<JamFile::TriggerHistory>& histories,
-			const engine::RigSnapshot& initialRig);
+			const engine::RigSnapshot& initialRig,
+			const std::vector<std::shared_ptr<engine::Station>>& stations);
 	};
 }
