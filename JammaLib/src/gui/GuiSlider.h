@@ -213,6 +213,7 @@ namespace gui
 
 	private:
 		GuiSliderParams _sliderParams;
+		bool _InteractionAvailable() const;
 		bool _isDragging;
 		bool _resetOnRelease = false;
 		bool _clickMoved = false;

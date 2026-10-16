@@ -544,6 +544,64 @@ TEST(GuiSlider, MeterRebindingUsesNewSourceAndDoesNotRetainRetiredMixer)
 	slider->SetMixer(nullptr); EXPECT_FALSE(slider->Mixer());
 }
 
+TEST(GuiSlider, CapturedDoubleClickReleaseAfterRackHideCancelsReset)
+{
+	for (const bool moveWhileHidden : {false, true})
+	{
+		gui::GuiRackParams params; params.Size = {200u, 200u};
+		auto rack = std::make_shared<gui::GuiRack>(params); rack->Init();
+		const auto slider = rack->GetMasterSlider();
+		slider->SetValue(0.25, true);
+		const auto point = utils::Position2d{10, 10};
+		FaderClickTestData::Click(slider, 0, point);
+		const auto press = slider->OnAction(FaderClickTestData::Pointer(TouchAction::TOUCH_DOWN, 100, point));
+		const auto captured = press.ActiveElement.lock(); ASSERT_EQ(slider, captured);
+		rack->SetVisible(false); ASSERT_TRUE(slider->IsVisible());
+		EXPECT_FALSE(slider->RouteHitTest(point));
+		if (moveWhileHidden)
+		{
+			auto move = DecibelSliderTestData::Move(60);
+			EXPECT_TRUE(captured->OnAction(move).IsEaten);
+			EXPECT_DOUBLE_EQ(0.25, slider->Value());
+		}
+		const auto release = captured->OnAction(FaderClickTestData::Pointer(TouchAction::TOUCH_UP, 110, point));
+		EXPECT_TRUE(release.IsEaten); EXPECT_FALSE(release.Undo);
+		EXPECT_DOUBLE_EQ(0.25, slider->Value());
+		rack->SetVisible(true);
+		FaderClickTestData::Click(slider, 200, point); EXPECT_DOUBLE_EQ(0.25, slider->Value());
+		FaderClickTestData::Click(slider, 300, point); EXPECT_DOUBLE_EQ(1.0, slider->Value());
+	}
+}
+
+TEST(GuiSlider, CapturedDoubleClickReleaseAfterAncestorDisableCancelsReset)
+{
+	for (const bool moveWhileDisabled : {false, true})
+	{
+		auto ancestor = std::make_shared<base::GuiElement>(base::GuiElementParams{});
+		gui::GuiRackParams params; params.Size = {200u, 200u};
+		auto rack = std::make_shared<gui::GuiRack>(params); ancestor->AddChild(rack); ancestor->Init();
+		const auto slider = rack->GetMasterSlider(); slider->SetValue(0.25, true);
+		const auto point = utils::Position2d{10, 10};
+		FaderClickTestData::Click(slider, 0, point);
+		const auto press = slider->OnAction(FaderClickTestData::Pointer(TouchAction::TOUCH_DOWN, 100, point));
+		const auto captured = press.ActiveElement.lock(); ASSERT_EQ(slider, captured);
+		ancestor->SetEnabled(false); ASSERT_TRUE(rack->IsEnabled()); ASSERT_TRUE(slider->IsEnabled());
+		EXPECT_FALSE(slider->RouteHitTest(point));
+		if (moveWhileDisabled)
+		{
+			auto move = DecibelSliderTestData::Move(60);
+			EXPECT_TRUE(captured->OnAction(move).IsEaten);
+			EXPECT_DOUBLE_EQ(0.25, slider->Value());
+		}
+		const auto release = captured->OnAction(FaderClickTestData::Pointer(TouchAction::TOUCH_UP, 110, point));
+		EXPECT_TRUE(release.IsEaten); EXPECT_FALSE(release.Undo);
+		EXPECT_DOUBLE_EQ(0.25, slider->Value());
+		ancestor->SetEnabled(true);
+		FaderClickTestData::Click(slider, 200, point); EXPECT_DOUBLE_EQ(0.25, slider->Value());
+		FaderClickTestData::Click(slider, 300, point); EXPECT_DOUBLE_EQ(1.0, slider->Value());
+	}
+}
+
 TEST(GuiSlider, DoubleClickPublishesUnityThroughExistingMixerSmoothing)
 {
 	audio::AudioMixerParams params;

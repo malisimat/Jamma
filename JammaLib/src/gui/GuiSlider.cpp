@@ -232,14 +232,20 @@ ActionResult GuiSlider::OnAction(TouchAction action)
 	// Wheel events have no matching release and cannot own a drag gesture.
 	if (action.Touch == TouchAction::TOUCH_MOUSE && action.Index == 4)
 		return ActionResult::NoAction();
+	// Scene can deliver a captured release directly after a rack or another
+	// ancestor disappeared. Such a release must cancel, not commit, the gesture.
+	if (!_InteractionAvailable())
+	{
+		auto cancelled = ActionResult::NoAction();
+		cancelled.IsEaten = _isDragging;
+		ClearPointerState();
+		return cancelled;
+	}
 
 	auto res = GuiElement::OnAction(action);
 
 	//if (res.IsEaten)
 	//	return res;
-
-	if (!_isEnabled || !_isVisible)
-		return res;
 
 	_dragElement.OnAction(_dragElement.ParentToLocal(action));
 
@@ -314,8 +320,14 @@ ActionResult GuiSlider::OnAction(TouchMoveAction action)
 {
 	ActionResult res = ActionResult::NoAction();
 
-	if (!_isEnabled || !_isVisible)
+	if (!_InteractionAvailable())
+	{
+		res.IsEaten = _isDragging;
+		_hasLastClick = false;
+		_resetOnRelease = false;
+		_clickMoved = true;
 		return res;
+	}
 
 	if (!_isDragging)
 	{
@@ -371,9 +383,17 @@ void GuiSlider::ApplyHoverPoint(utils::Position2d localPos)
 	_dragElement.ApplyHoverState(dragIsHovered);
 }
 
+bool GuiSlider::_InteractionAvailable() const
+{
+	if (!IsEnabled() || !IsVisible()) return false;
+	for (auto ancestor = Parent(); ancestor; ancestor = ancestor->Parent())
+		if (!ancestor->IsEnabled() || !ancestor->IsVisible()) return false;
+	return true;
+}
+
 bool GuiSlider::RouteHitTest(utils::Position2d localPos)
 {
-	if (!IsEnabled() || !IsVisible() || _guiParams.GuiPassThrough)
+	if (!_InteractionAvailable() || _guiParams.GuiPassThrough)
 		return false;
 
 	const auto dragLocalPos = _dragElement.ParentToLocal(localPos);
