@@ -39,7 +39,7 @@ First and third triplet positions form a 2:1 shuffle; there is no automatic swin
 
 Space taps work while this editor is open, including with Ctrl held. Text entry
 in CHANNEL keeps Space contextual. Space down holds the grid, repeat is ignored,
-and release starts its fade. Ctrl still owns move and pitch-view gestures.
+and release starts its fade. Ctrl moves notes; right-drag on empty MIDI grid controls the pitch view.
 
 Changing resolution projects the original notes onto new onset boundaries while
 preserving duration (with existing loop-end clamping). Coarse grids merge visible
