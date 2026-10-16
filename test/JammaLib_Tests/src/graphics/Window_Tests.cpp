@@ -220,6 +220,72 @@ TEST(CameraIdle, CameraDragWheelAndViewKeysRestartIdle)
 	}
 }
 
+TEST(CameraFrontZoom, FitsLargeOneSidedStationRowsAtWideAndNarrowAspectRatios)
+{
+	for (const auto viewport : { utils::Size2d{ 1600u, 900u }, utils::Size2d{ 450u, 1000u } })
+	{
+		graphics::Camera camera(graphics::CameraParams(base::MoveableParams(), 0u));
+		graphics::CameraBounds bounds;
+		// Thirty stations, including fitted take/core/waveform extents rather
+		// than just their origins. A one-sided row also exercises panned framing.
+		bounds.Include(utils::Position3d{ -300.0f, -235.0f, -300.0f });
+		bounds.Include(utils::Position3d{ 29.0f * 600.0f + 300.0f, 235.0f, 300.0f });
+		camera.SetFrontVisibleBounds(bounds);
+		const utils::Position2d centre{ static_cast<int>(viewport.Width / 2u), static_cast<int>(viewport.Height / 2u) };
+		const auto settle = [&camera]() { for (unsigned int tick = 0u; tick < 8u; ++tick) camera.TickBackgroundDrag(0.05f); };
+		for (unsigned int notch = 0u; notch < 40u; ++notch)
+		{
+			camera.HandleWheel(-1, centre, viewport.Width, viewport.Height, {});
+			settle();
+		}
+		const auto distantPose = camera.CurrentPose();
+		EXPECT_GT(distantPose.Eye.Z, 1350.0f);
+		const auto matrix = camera.Projection(static_cast<float>(viewport.Width) / viewport.Height, {}) * camera.ViewMatrix();
+		for (const auto x : { bounds.Min.X, bounds.Max.X })
+			for (const auto y : { bounds.Min.Y, bounds.Max.Y })
+				for (const auto z : { bounds.Min.Z, bounds.Max.Z })
+				{
+					const auto clip = matrix * glm::vec4(x, y, z, 1.0f);
+					ASSERT_GT(clip.w, 0.0f);
+					const auto ndc = glm::vec3(clip) / clip.w;
+					EXPECT_LT(std::abs(ndc.x), 0.90f);
+					EXPECT_LT(std::abs(ndc.y), 0.90f);
+					EXPECT_GT(ndc.z, -1.0f);
+					EXPECT_LT(ndc.z, 1.0f); // Far-plane coverage shared by render/picking passes.
+				}
+
+		// Off-centre cursor zoom must retain the same world-plane hit even when
+		// far-plane homogeneous W is smaller than the old rejection threshold.
+		const utils::Position2d cursor{ static_cast<int>(viewport.Width * 3u / 4u), static_cast<int>(viewport.Height / 3u) };
+		const auto focus = camera.FocusPointAtCursor(cursor, viewport.Width, viewport.Height, {});
+		EXPECT_GT(std::abs(focus.X), 1000.0f);
+		camera.HandleWheel(1, cursor, viewport.Width, viewport.Height, {});
+		for (unsigned int tick = 0u; tick < 4u; ++tick)
+		{
+			camera.TickBackgroundDrag(0.05f);
+			const auto clip = camera.Projection(static_cast<float>(viewport.Width) / viewport.Height, {})
+				* camera.ViewMatrix() * glm::vec4(focus.X, focus.Y, focus.Z, 1.0f);
+			EXPECT_NEAR(cursor.X, (clip.x / clip.w + 1.0f) * viewport.Width * 0.5f, 1.0f);
+			EXPECT_NEAR(cursor.Y, (clip.y / clip.w + 1.0f) * viewport.Height * 0.5f, 1.0f);
+		}
+		const auto manualPose = camera.CurrentPose();
+		for (unsigned int view = 0u; view < 3u; ++view)
+		{
+			camera.CycleView({}, {}, {}, {}, {}, false);
+			settle();
+		}
+		EXPECT_EQ(graphics::Camera::View::Front, camera.CurrentView());
+		EXPECT_FLOAT_EQ(manualPose.Eye.Z, camera.CurrentPose().Eye.Z);
+		EXPECT_FLOAT_EQ(manualPose.Eye.X, camera.CurrentPose().Eye.X);
+		for (unsigned int notch = 0u; notch < 40u; ++notch)
+		{
+			camera.HandleWheel(1, centre, viewport.Width, viewport.Height, {});
+			settle();
+		}
+		EXPECT_FLOAT_EQ(80.0f, camera.CurrentPose().Eye.Z);
+	}
+}
+
 TEST(Window, IsInitiallyWindowed) {
 	auto sceneParams = SceneParams(base::DrawableParams(),
 		base::MoveableParams(),

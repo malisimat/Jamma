@@ -481,7 +481,9 @@ Position3d Camera::FocusPointAtCursor(Position2d cursorPosition,
 	const auto ndcY = (2.0f * static_cast<float>(cursorPosition.Y) / height) - 1.0f;
 	const auto inverseViewProjection = glm::inverse(Projection(aspectRatio, stationCentre) * ViewMatrix());
 	const auto nearHomogeneous = inverseViewProjection * glm::vec4(ndcX, ndcY, -1.0f, 1.0f);
-	const auto farHomogeneous = inverseViewProjection * glm::vec4(ndcX, ndcY, 1.0f, 1.0f);
+	// A point inside the frustum defines the same ray without the vanishing
+	// homogeneous W at a distant far plane (large Front sessions).
+	const auto farHomogeneous = inverseViewProjection * glm::vec4(ndcX, ndcY, 0.0f, 1.0f);
 	if ((std::abs(nearHomogeneous.w) < 0.0001f) || (std::abs(farHomogeneous.w) < 0.0001f))
 		return stationCentre;
 
@@ -552,9 +554,26 @@ ActionResult Camera::HandleWheel(int wheelNotches,
 	auto target = continueTopDownWheelZoom ? _transitionTarget : _pose;
 	if (View::Front == _view)
 	{
+		const auto aspectRatio = viewportHeight > 0u ? static_cast<float>(viewportWidth) / viewportHeight : 1.0f;
+		auto zoomBounds = _frontVisibleBounds;
+		if (zoomBounds.IsValid())
+		{
+			// Fit around the current sight line, including one-sided station rows;
+			// manual wheel zoom deliberately does not recenter the camera.
+			zoomBounds.Include(Position3d{ 2.0f * _pose.Eye.X - _frontVisibleBounds.Min.X,
+				2.0f * _pose.Eye.Y - _frontVisibleBounds.Min.Y, _frontVisibleBounds.Min.Z });
+			zoomBounds.Include(Position3d{ 2.0f * _pose.Eye.X - _frontVisibleBounds.Max.X,
+				2.0f * _pose.Eye.Y - _frontVisibleBounds.Max.Y, _frontVisibleBounds.Max.Z });
+		}
+		const auto overview = CameraFraming::Overview(zoomBounds, aspectRatio);
+		// Retain the original close-range feel, and derive extra capacity from
+		// rendered content and aspect ratio. A shrinking session must not snap an
+		// already distant manual/remembered pose toward its new limit.
+		const auto maxZ = (std::max)({ frontMaxZ, overview ? overview->Z : frontMaxZ, _pose.Eye.Z });
 		const auto cameraDistance = std::abs(_pose.Eye.Z - stationCentre.Z);
-		const auto wheelZoomStep = wheelZoomStepAtDistance(cameraDistance, frontMinZ, frontMaxZ);
-		target.Eye.Z = std::clamp(target.Eye.Z - (static_cast<float>(wheelNotches) * wheelZoomStep), frontMinZ, frontMaxZ);
+		const auto wheelZoomStep = (std::max)(wheelZoomStepAtDistance(cameraDistance, frontMinZ, frontMaxZ),
+			cameraDistance * (farWheelZoomStep / frontMaxZ));
+		target.Eye.Z = std::clamp(target.Eye.Z - (static_cast<float>(wheelNotches) * wheelZoomStep), frontMinZ, maxZ);
 		const auto oldDistance = std::abs(_pose.Eye.Z - focusPoint.Z);
 		const auto newDistance = std::abs(target.Eye.Z - focusPoint.Z);
 		const auto scaleRatio = oldDistance > 0.0001f ? newDistance / oldDistance : 1.0f;
