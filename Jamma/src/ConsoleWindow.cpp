@@ -350,5 +350,3 @@ namespace console
 		return RGB(236, 202, 112);
 	}
 }
-
-

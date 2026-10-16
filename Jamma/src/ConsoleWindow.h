@@ -56,5 +56,3 @@ namespace console
 		std::wstring _last = L"Ready - F1 for help", _shownStatus;
 	};
 }
-
-

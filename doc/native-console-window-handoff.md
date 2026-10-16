@@ -3,7 +3,8 @@
 Implementation branch: `codex/native-command-window`, based on
 `codex/integrate-ready-features` at `5ee471a2`. Reviewed implementation:
 `fcf15fbb9003432439c4117be2f33ffe7654f3fd`. The subsequent handoff commit changes
-documentation only. No merge or push has been performed.
+documentation only. This original checkpoint was subsequently accepted and
+merged locally; see the follow-up record below. No push has been performed.
 
 ## Result and review
 
@@ -104,13 +105,33 @@ and place passive startup display behind Jamma rather than every desktop window.
 6. Resize the console and move it between monitors with different DPI. Check
    input, selection and transcript layout, including a small/narrow window.
 
-After acceptance, merge into `codex/integrate-ready-features` and rerun its
-combined build/regression checks. Keep master promotion separate.
+## Accepted follow-up and integration
 
-Suggested follow-up prompt:
+Separate subagents made the two surgical fixes, followed by an independent
+review with no actionable findings. Commit `0371a7fe` adds dark grey window,
+input and status surfaces with bright input/status text, removes pale client
+edges, and requests supported DWM dark caption and rounded outer corners.
+The standard move/resize/close frame and native scrollbar remain. DWM
+decoration is best effort on Windows versions that support each attribute.
 
-> Read doc/native-console-window-handoff.md and run the remaining manual
-> acceptance checks with me on codex/native-command-window. Record precise
-> passes/failures, fix any regressions on this branch, and rerun affected tests.
-> Once acceptance passes, merge into codex/integrate-ready-features and verify
-> the combined result. Do not push or promote master.
+Passive startup now inserts the console directly behind the main Jamma HWND
+with `SWP_NOACTIVATE`, preserving the relative order of other applications.
+No owner/topmost relationship or ongoing desktop reordering is introduced.
+New native tests cover the surface/text colors and application window order,
+foreground and keyboard focus. The window-order test tolerates intervening
+native helper HWNDs. Focused Debug and Release checks each passed 32/32.
+
+Merge `047ee8a0` integrates the accepted feature into
+`codex/integrate-ready-features`. Master remains at `cff00825`; nothing was
+pushed. The user's manual acceptance above covers the original implementation;
+the follow-up appearance has automated control coverage and independent source
+review, but has not received a fresh user visual check.
+
+Combined-branch verification passed incremental x64 Debug and Release app and
+native-test builds, followed by **1687/1687 Debug** and **1681/1681 Release**
+tests with zero failures, disabled tests or errors. The six-test difference is
+the existing Debug-only callback probes. Logs/XML are in
+`bin/native-console-validation/combined-*`; whitespace checks passed after
+removing pre-existing trailing blank lines in the new console files.
+The final Release executable SHA256 is
+`BE3FC054F55DFDC6B5CC390838E43CCB704F17519B0DC6B309B3F0A84CA18E57`.
