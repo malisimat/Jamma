@@ -509,6 +509,7 @@ void Loop::WriteBlock(const std::shared_ptr<MultiAudioSink> dest,
 	auto playState = _playState.load(std::memory_order_relaxed);
 	if (0 == loopLength)
 	{
+		_mixer->UpdateVu(0.0f, numSamps);
 		ClearRecordedPlaybackDelay();
 		return;
 	}
@@ -543,6 +544,8 @@ void Loop::WriteBlock(const std::shared_ptr<MultiAudioSink> dest,
 		else
 			bounceWriter->WriteBlock(dest, tempBuf, sampsToWrite, LoopChannel());
 	}
+	else
+		_mixer->UpdateVu(0.0f, numSamps);
 }
 
 void Loop::EndMultiPlay(unsigned int numSamps)

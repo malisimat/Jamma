@@ -114,6 +114,7 @@ void GuiSlider::SetValue(double value, bool bypassUpdates)
 {
 	if (_isDragging)
 		return;
+	_hasLastClick = false;
 
 	_initValue = value;
 	_valueOffset = 0.0;
@@ -136,14 +137,28 @@ void GuiSlider::SetDragParams(utils::Position2d dragOffset,
 
 void GuiSlider::SetSize(Size2d size)
 {
+	if (size.Width != GetSize().Width || size.Height != GetSize().Height) _hasLastClick = false;
 	GuiElement::SetSize(size);
 	_scaleLayoutValid = false;
 
 	OnValueChange(true);
 }
 
+void GuiSlider::SetVisible(bool visible)
+{
+	if (!visible) ClearPointerState();
+	GuiElement::SetVisible(visible);
+}
+
+void GuiSlider::SetEnabled(bool enabled)
+{
+	if (!enabled) ClearPointerState();
+	GuiElement::SetEnabled(enabled);
+}
+
 void GuiSlider::Draw(DrawContext & ctx)
 {
+	if (!IsVisible()) return;
 	GuiElement::Draw(ctx);
 
 	auto &glCtx = dynamic_cast<GlDrawContext&>(ctx);
@@ -206,7 +221,7 @@ void GuiSlider::Draw(DrawContext & ctx)
 	_dragElement.Draw(ctx);
 
 	auto mixer = _mixer.lock();
-	if (mixer)
+	if (mixer && _vuVisible)
 		mixer->DrawVu(ctx, GetSize());
 
 	glCtx.PopMvp();
@@ -217,14 +232,30 @@ ActionResult GuiSlider::OnAction(TouchAction action)
 	// Wheel events have no matching release and cannot own a drag gesture.
 	if (action.Touch == TouchAction::TOUCH_MOUSE && action.Index == 4)
 		return ActionResult::NoAction();
+	// Scene can deliver a captured release directly after a rack or another
+	// ancestor disappeared. Cancel a pending reset, but retain drag values that
+	// were already published: a hidden receiver cannot accept a rollback.
+	if (!_InteractionAvailable())
+	{
+		auto cancelled = ActionResult::NoAction();
+		cancelled.IsEaten = _isDragging;
+		if (_isDragging)
+		{
+			const auto previous = _initValue;
+			_initValue += _valueOffset;
+			_valueOffset = 0.0;
+			_isDragging = false;
+			if (_initValue != previous)
+				cancelled.Undo = std::make_shared<GuiActionUndo>(previous, GuiElement::shared_from_this());
+		}
+		ClearPointerState();
+		return cancelled;
+	}
 
 	auto res = GuiElement::OnAction(action);
 
 	//if (res.IsEaten)
 	//	return res;
-
-	if (!_isEnabled || !_isVisible)
-		return res;
 
 	_dragElement.OnAction(_dragElement.ParentToLocal(action));
 
@@ -234,13 +265,22 @@ ActionResult GuiSlider::OnAction(TouchAction action)
 		{
 			_isDragging = false;
 			auto oldValue = _initValue;
-
-			std::cout << "Slider UP" << std::endl;
-
-			_initValue = oldValue + _valueOffset;
+			_clickMoved = _clickMoved || std::abs(action.Position.X - _initClickPos.X) > GetSystemMetrics(SM_CXDOUBLECLK) / 2 ||
+				std::abs(action.Position.Y - _initClickPos.Y) > GetSystemMetrics(SM_CYDOUBLECLK) / 2;
+			if (_clickMoved || !RouteHitTest(action.Position)) _resetOnRelease = false;
+			_hasLastClick = !_resetOnRelease && _mouseClick && !_clickMoved && RouteHitTest(action.Position) &&
+				action.GetActionTime() >= _clickStartTime &&
+				action.GetActionTime() - _clickStartTime <= std::chrono::milliseconds(GetDoubleClickTime());
+			if (_hasLastClick)
+			{
+				_lastClickTime = _clickStartTime;
+				_lastClickPos = _initClickPos;
+			}
+			_initValue = _resetOnRelease ? 1.0 : oldValue + _valueOffset;
 			_valueOffset = 0.0;
+			if (_resetOnRelease) OnValueChange(false);
+			_resetOnRelease = false;
 			ApplyHoverPoint(action.Position);
-			std::cout << "New InitValue: " << _initValue << ", ValueOffset: " << _valueOffset << " = " << (_initValue + _valueOffset) << std::endl;
 
 			ActionResult res;
 			res.IsEaten = true;
@@ -256,7 +296,16 @@ ActionResult GuiSlider::OnAction(TouchAction action)
 		{
 			if (RouteHitTest(action.Position))
 			{
-				std::cout << "Slider DOWN" << std::endl;
+				_mouseClick = action.Touch == TouchAction::TOUCH_MOUSE && action.Index == 0;
+				_clickStartTime = action.GetActionTime();
+				_resetOnRelease = _sliderParams.ResetToUnityOnDoubleClick && _sliderParams.Min <= 1.0 &&
+					_sliderParams.Max >= 1.0 && _mouseClick && _hasLastClick &&
+					_clickStartTime >= _lastClickTime &&
+					_clickStartTime - _lastClickTime <= std::chrono::milliseconds(GetDoubleClickTime()) &&
+					std::abs(action.Position.X - _lastClickPos.X) <= GetSystemMetrics(SM_CXDOUBLECLK) / 2 &&
+					std::abs(action.Position.Y - _lastClickPos.Y) <= GetSystemMetrics(SM_CYDOUBLECLK) / 2;
+				_hasLastClick = false;
+				_clickMoved = false;
 				_isDragging = true;
 				_initClickPos = action.Position;
 				_initDragPos = _dragElement.Position();
@@ -281,8 +330,14 @@ ActionResult GuiSlider::OnAction(TouchMoveAction action)
 {
 	ActionResult res = ActionResult::NoAction();
 
-	if (!_isEnabled || !_isVisible)
+	if (!_InteractionAvailable())
+	{
+		res.IsEaten = _isDragging;
+		_hasLastClick = false;
+		_resetOnRelease = false;
+		_clickMoved = true;
 		return res;
+	}
 
 	if (!_isDragging)
 	{
@@ -295,6 +350,18 @@ ActionResult GuiSlider::OnAction(TouchMoveAction action)
 
 	if (!_isDragging)
 		return res;
+	// Ignore click jitter. A deliberate second-press drag keeps normal dragging.
+	if (_resetOnRelease)
+	{
+		const auto delta = action.Position - _initClickPos;
+		if (std::abs(delta.X) <= GetSystemMetrics(SM_CXDOUBLECLK) / 2 &&
+			std::abs(delta.Y) <= GetSystemMetrics(SM_CYDOUBLECLK) / 2)
+		{
+			res.IsEaten = true;
+			return res;
+		}
+		_resetOnRelease = false;
+	}
 
 	auto dPos = action.Position - _initClickPos;
 	auto dragPos = _initDragPos + dPos;
@@ -307,7 +374,9 @@ ActionResult GuiSlider::OnAction(TouchMoveAction action)
 	}
 
 	_valueOffset = CalcValueOffset(_sliderParams, _sizeParams.Size, dragPos, _initDragPos, _initValue);
-	std::cout << "InitValue: " << _initValue << ", ValueOffset: " << _valueOffset << " = " << (_initValue + _valueOffset) << std::endl;
+	_clickMoved = _clickMoved || _valueOffset != 0.0 ||
+		std::abs(dPos.X) > GetSystemMetrics(SM_CXDOUBLECLK) / 2 ||
+		std::abs(dPos.Y) > GetSystemMetrics(SM_CYDOUBLECLK) / 2;
 
 	OnValueChange(false);
 
@@ -324,9 +393,17 @@ void GuiSlider::ApplyHoverPoint(utils::Position2d localPos)
 	_dragElement.ApplyHoverState(dragIsHovered);
 }
 
+bool GuiSlider::_InteractionAvailable() const
+{
+	if (!IsEnabled() || !IsVisible()) return false;
+	for (auto ancestor = Parent(); ancestor; ancestor = ancestor->Parent())
+		if (!ancestor->IsEnabled() || !ancestor->IsVisible()) return false;
+	return true;
+}
+
 bool GuiSlider::RouteHitTest(utils::Position2d localPos)
 {
-	if (!IsEnabled() || !IsVisible() || _guiParams.GuiPassThrough)
+	if (!_InteractionAvailable() || _guiParams.GuiPassThrough)
 		return false;
 
 	const auto dragLocalPos = _dragElement.ParentToLocal(localPos);
@@ -357,6 +434,8 @@ void GuiSlider::ApplyHoverState(bool inside)
 
 void GuiSlider::ClearPointerState()
 {
+	_hasLastClick = false;
+	_resetOnRelease = false;
 	GuiElement::ClearPointerState();
 	_dragElement.ClearPointerState();
 	if (_isDragging)
@@ -680,6 +759,7 @@ void GuiSlider::OnValueChange(bool bypassUpdates)
 
 void GuiSlider::SetMixer(std::shared_ptr<audio::AudioMixer> mixer)
 {
+	if (_mixer.lock() == mixer) return;
 	_mixer = mixer;
 	// Reinitialize if the mixer was connected after GL resources were created.
 	if (mixer)
@@ -688,9 +768,7 @@ void GuiSlider::SetMixer(std::shared_ptr<audio::AudioMixer> mixer)
 
 void GuiSlider::SetVuVisible(bool visible)
 {
-	auto mixer = _mixer.lock();
-	if (mixer)
-		mixer->SetVuVisible(visible);
+	_vuVisible = visible;
 }
 
 double GuiSlider::CalcValueOffset(GuiSliderParams params,

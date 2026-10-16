@@ -381,6 +381,17 @@ TEST(BlockApi, LoopBlockWriteAndRead) {
 	}
 }
 
+TEST(BlockApi, InactiveLoopMeterPublishesSilenceAndDecaysHeldPeak)
+{
+	LoopParams params; audio::AudioMixerParams mixerParams;
+	Loop loop(params, mixerParams);
+	loop.Mixer()->UpdateVu(1.0f, 1u);
+	for (unsigned int block = 0u; block < 1000u; ++block) loop.WriteBlock(nullptr, nullptr, 0, 64u);
+	EXPECT_FLOAT_EQ(0.0f, loop.Mixer()->VuPeakLevel());
+	EXPECT_FLOAT_EQ(0.0f, loop.Mixer()->VuLevel());
+	EXPECT_FLOAT_EQ(0.0f, loop.Mixer()->VuHoldLevel());
+}
+
 TEST(BlockApi, LoopReadBlock) {
 	auto blockSize = 32u;
 	auto loopLength = 2ul * blockSize;

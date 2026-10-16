@@ -103,6 +103,10 @@ void GuiVu::Draw(DrawContext& ctx)
 void GuiVu::SetPeak(float peak, unsigned int numSamps)
 {
 	_peakValue.store(peak, std::memory_order_relaxed);
+	// Inactive loops still publish silence. Once both envelopes have decayed,
+	// avoid a sample loop for every idle meter on every callback.
+	if (peak == 0.0f && _value.Current() == 0.0 && _value.HoldValue() == 0.0)
+		return;
 	_value.SetTarget((double)peak);
 	// Advance the falling value by one step per sample, matching the VU::SetValue convention.
 	for (auto i = 0u; i < numSamps; i++)

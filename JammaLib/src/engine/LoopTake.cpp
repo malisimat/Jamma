@@ -4120,13 +4120,16 @@ void LoopTake::_WireVuSliders()
 
 	auto masterSlider = _guiRack->GetMasterSlider();
 	if (masterSlider)
+		// This meters the take's audio output after its master gain. MIDI-only
+		// takes scale note velocity; their shared instrument audio belongs to Station.
 		masterSlider->SetMixer(_masterMixer);
 
-	for (auto i = 0u; i < _audioMixers.size(); i++)
+	for (auto i = 0u; i < _guiRack->NumInputChannels(); i++)
 	{
 		auto slider = _guiRack->GetChannelSlider(i);
 		if (slider)
-			slider->SetMixer(_audioMixers[i]);
+			// Channel controls change Loop gain in OnAction, before the take bus.
+			slider->SetMixer(i < _loops.size() && _loops[i] ? _loops[i]->Mixer() : nullptr);
 	}
 }
 

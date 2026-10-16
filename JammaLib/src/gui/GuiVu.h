@@ -53,7 +53,8 @@ namespace gui
 		// Called from the render thread.
 		void Draw(base::DrawContext& ctx);
 
-		// Called from the audio thread (protected by Scene's audio mutex).
+		// Single producer (audio for mixer meters, UI for HUD meters).
+		// Publishes scalar levels; never reads UI visibility.
 		void SetPeak(float peak, unsigned int numSamps);
 		float PeakValue() const noexcept;
 		float DisplayValue() const noexcept;
@@ -73,14 +74,14 @@ namespace gui
 		static unsigned int _CalcTotalLeds(unsigned int height);
 		unsigned int _CalcCurrentLeds(double value, unsigned int totalLeds) const;
 
-		bool _isVisible;
+		bool _isVisible; // Render/UI owner only, including IsVisible().
 		utils::Position2d _position;
 		utils::Size2d     _size;
 
-		// FallingValue is confined to the audio thread; only SetPeak() may touch it.
+		// FallingValue is confined to this instance's producer; only SetPeak() touches it.
 		audio::FallingValue _value;
 
-		// Atomic snapshots written by the audio thread and read by the render thread.
+		// Atomic snapshots written by the producer and read by the render thread.
 		std::atomic<float> _peakValue;
 		std::atomic<float> _displayValue;
 		std::atomic<float> _displayHold;
