@@ -127,6 +127,7 @@ namespace gui
 		utils::Size2d DragControlSize;
 		utils::Size2d DragGap;
 		bool ScaleMarksEnabled;
+		bool ResetToUnityOnDoubleClick = false;
 	};
 
 	class GuiSlider :
@@ -170,6 +171,8 @@ namespace gui
 		virtual std::string ClassName() const { return "GuiSlider"; }
 
 		virtual	void SetSize(utils::Size2d size) override;
+		void SetVisible(bool visible) override;
+		void SetEnabled(bool enabled) override;
 		virtual void Draw(base::DrawContext& ctx) override;
 		virtual actions::ActionResult OnAction(actions::TouchAction action) override;
 		virtual actions::ActionResult OnAction(actions::TouchMoveAction action) override;
@@ -184,6 +187,7 @@ namespace gui
 
 		// VU meter — connects this slider to its owning AudioMixer for display.
 		void SetMixer(std::shared_ptr<audio::AudioMixer> mixer);
+		std::shared_ptr<audio::AudioMixer> Mixer() const { return _mixer.lock(); }
 		void SetVuVisible(bool visible);
 
 	protected:
@@ -210,6 +214,13 @@ namespace gui
 	private:
 		GuiSliderParams _sliderParams;
 		bool _isDragging;
+		bool _resetOnRelease = false;
+		bool _clickMoved = false;
+		bool _hasLastClick = false;
+		bool _mouseClick = false;
+		Time _clickStartTime{};
+		Time _lastClickTime{};
+		utils::Position2d _lastClickPos{};
 		utils::Position2d _initClickPos;
 		utils::Position2d _initDragPos;
 		base::GuiElement _dragElement;
@@ -236,5 +247,6 @@ namespace gui
 		double _valueOffset;
 		double _initValue;
 		std::weak_ptr<audio::AudioMixer> _mixer;
+		bool _vuVisible = true; // UI owner only; never gates audio publication.
 	};
 }
