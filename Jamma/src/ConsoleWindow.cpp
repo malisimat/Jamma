@@ -46,7 +46,7 @@ namespace console
 		cls.lpszClassName = L"JammaNativeCommandWindow";
 		if (!RegisterClassExW(&cls) && GetLastError() != ERROR_CLASS_ALREADY_EXISTS)
 		{ Destroy(); return false; }
-		_window = CreateWindowExW(0, cls.lpszClassName, L"Jamma Commands", WS_OVERLAPPEDWINDOW,
+		_window = CreateWindowExW(0, cls.lpszClassName, L"Jamma Commands - /help or F1 for controls", WS_OVERLAPPEDWINDOW,
 			CW_USEDEFAULT, CW_USEDEFAULT, 850, 520, nullptr, nullptr, instance, this);
 		if (!_window) { Destroy(); return false; }
 		// Optional system decoration: older Windows simply rejects unsupported attributes.

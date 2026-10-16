@@ -158,7 +158,7 @@ actions::ActionResult MidiRouter::HandleAutomationKey(const actions::KeyAction& 
 		std::cout << ">> Automation lane " << static_cast<int>(laneIdx) << " cleared <<" << std::endl;
 		return eaten;
 	}
-	case 91: // '['
+	case VK_OEM_4: // '[' virtual key from Window, not the ASCII character value.
 	{
 		auto laneIdx = _selectedLaneIndex.load(std::memory_order_relaxed);
 		laneIdx = (laneIdx == 0u)
@@ -168,7 +168,7 @@ actions::ActionResult MidiRouter::HandleAutomationKey(const actions::KeyAction& 
 		std::cout << ">> Selected automation lane " << static_cast<int>(laneIdx) << " <<" << std::endl;
 		return eaten;
 	}
-	case 93: // ']'
+	case VK_OEM_6: // ']'
 	{
 		auto laneIdx = _selectedLaneIndex.load(std::memory_order_relaxed);
 		laneIdx = static_cast<std::uint8_t>((laneIdx + 1u) % midi::MidiLoop::MaxAutomationLanes);

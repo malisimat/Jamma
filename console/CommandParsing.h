@@ -9,7 +9,7 @@
 
 namespace console
 {
-	enum class CommandKind { Chat, Help, Connect, Disconnect, Unknown };
+	enum class CommandKind { Chat, Help, Ninjam, Connect, Disconnect, Unknown };
 	struct ParsedCommand
 	{
 		CommandKind Kind;
@@ -32,6 +32,8 @@ namespace console
 		while (!args.empty() && args.front() == ' ') args.erase(0, 1);
 		if (verb.empty() || verb == "?" || verb == "help")
 			return { CommandKind::Help, std::move(verb), std::move(args) };
+		if (verb == "n" || verb == "ninjam")
+			return { CommandKind::Ninjam, std::move(verb), std::move(args) };
 		if (verb == "c" || verb == "connect")
 		{
 			int number = 0;

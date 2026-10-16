@@ -1,6 +1,6 @@
 # Loop grid editor
 
-The loop grid editor opens one completed audio or MIDI loop as a flattened, time-oriented view. Audio loops are view-only. MIDI edits are previewed while dragging, committed when the gesture ends, and included in undo/redo and saved sessions.
+The loop grid editor opens one completed audio or MIDI loop as a flattened, time-oriented view. Audio loops support spectral painting; MIDI loops support note editing. Edits are previewed while dragging, committed when the gesture ends, and included in undo/redo and saved sessions. Type `/help` in the [performance console](performance-console.md) for the complete controls reference.
 
 ## Open and close
 
@@ -19,6 +19,15 @@ The loop grid editor opens one completed audio or MIDI loop as a flattened, time
 - **Ctrl+Z** undoes the last MIDI edit; **Ctrl+Shift+Z** redoes it.
 
 Edits commit once on release. Escape, lost pointer capture, or a changed edit target cancels an in-progress gesture. MIDI events that cannot be mapped unambiguously to source notes are left unchanged.
+
+## Audio spectral editing
+
+On the audio surface, left-drag boosts and right-drag cuts. Alt-left-drag sweeps
+a broadband band. Wheel changes brush size, Alt-wheel changes band width,
+Shift-wheel zooms frequency and Alt-Shift-wheel zooms time. Shift-left-drag pans
+time/frequency; Shift-right-drag zooms both axes. Start a drag off the audio
+surface to orbit. Ctrl pointer/wheel gestures are reserved. Ctrl+Z undoes and
+Ctrl+Shift+Z redoes audio edits. Editor gestures require a mouse.
 
 ## Resolution and tap grids
 
