@@ -156,7 +156,8 @@ void MidiModel::Draw3d(DrawContext& ctx, unsigned int numInstances, base::DrawPa
 	glCtx.PushMvp(glm::rotate(glm::mat4(1.0),
 		(float)(constants::TWOPI * _loopIndexFrac) * (1.0f - _editorMorph),
 		glm::vec3(0.0f, 1.0f, 0.0f)));
-	const auto fitted = FitPitch(_sceneRange.Empty() ? 60 : _sceneRange.Low, _sceneHeight, _sceneRange);
+	const auto fitted = FitPitch(_sceneRange.Empty() ? 60 : _sceneRange.Low, _sceneHeight, _sceneRange,
+		static_cast<float>(ModelScale()));
 	glCtx.SetUniform("SceneLowPitch", _sceneRange.Empty() ? 60 : _sceneRange.Low);
 	glCtx.SetUniform("SceneLowCenter", fitted.first);
 	glCtx.SetUniform("SceneNoteHeight", fitted.second);
@@ -983,13 +984,20 @@ void MidiModel::SetSceneLayout(float height, PitchRange range) noexcept
 	_sceneRange = range;
 }
 
-std::pair<float, float> MidiModel::FitPitch(int pitch, float height, PitchRange range) noexcept
+std::pair<float, float> MidiModel::FitPitch(int pitch, float height, PitchRange range,
+	float modelScale) noexcept
 {
 	if (range.Empty()) range = { 60, 60 };
 	const auto safeHeight = (std::max)(height, 0.001f);
 	const auto cell = safeHeight / static_cast<float>(range.High - range.Low + 1);
 	// The mesh reaches +/-0.5 in Y. Leave 8% of each semitone cell as a gap.
-	return { -safeHeight * 0.5f + (static_cast<float>(pitch - range.Low) + 0.5f) * cell, cell * 0.92f };
+	auto noteHeight = cell * 0.92f;
+	if (range.Low == range.High)
+	{
+		// Dense stacks also keep a lone pitch below one quarter of its band.
+		noteHeight = (std::min)(safeHeight * 0.25f, MaxSinglePitchHeight / (std::max)(std::fabs(modelScale), 0.001f));
+	}
+	return { -safeHeight * 0.5f + (static_cast<float>(pitch - range.Low) + 0.5f) * cell, noteHeight };
 }
 
 float MidiModel::SceneInnerRadius() const noexcept

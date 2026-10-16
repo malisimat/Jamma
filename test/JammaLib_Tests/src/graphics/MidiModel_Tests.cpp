@@ -224,7 +224,7 @@ TEST(GraphicsMidiModel, EveryRenderedOuterFaceFitsStackedTakeBandsAfterRadialSca
 					for (const auto pitch : {range.Low, (range.Low + range.High) / 2, range.High})
 					{
 						const auto centre = take * spacing;
-						const auto fitted = graphics::MidiModel::FitPitch(pitch, height / radialScale, range);
+						const auto fitted = graphics::MidiModel::FitPitch(pitch, height / radialScale, range, radialScale);
 						for (size_t vertex = 1; vertex < mesh.size(); vertex += 3)
 						{
 							const auto outerFace = centre + (fitted.first + mesh[vertex] * fitted.second) * radialScale;
@@ -233,4 +233,18 @@ TEST(GraphicsMidiModel, EveryRenderedOuterFaceFitsStackedTakeBandsAfterRadialSca
 						}
 					}
 	}
+}
+
+TEST(GraphicsMidiModel, SinglePitchHeightIsCappedInTakeCoordinatesAndShrinksWithBand)
+{
+	for (const auto height : {1.0f, 12.0f, 90.0f, 220.0f, 450.0f})
+		for (const auto radialScale : {0.8f, 1.2f, 2.4f})
+		{
+			const auto fitted = graphics::MidiModel::FitPitch(72, height / radialScale, {72, 72}, radialScale);
+			const auto renderedHeight = fitted.second * radialScale;
+			EXPECT_FLOAT_EQ(0.0f, fitted.first);
+			EXPECT_NEAR((std::min)(height * 0.25f, 18.0f), renderedHeight, 0.0001f);
+			EXPECT_LE(renderedHeight, height * 0.25f + 0.0001f);
+			EXPECT_GT(renderedHeight, 0.0f);
+		}
 }

@@ -85,7 +85,12 @@ namespace graphics
 		// Render-owned: consume every stream before calculating the take's shared range.
 		PitchRange PrepareSceneGeometry();
 		void SetSceneLayout(float height, PitchRange range) noexcept;
-		static std::pair<float, float> FitPitch(int pitch, float height, PitchRange range) noexcept;
+		// A lone pitch stays readable without becoming a take-height wall. The cap
+		// is in rendered take units, independent of loop duration/radial scale,
+		// and is further limited to one quarter of the usable band.
+		static constexpr float MaxSinglePitchHeight = 18.0f;
+		static std::pair<float, float> FitPitch(int pitch, float height, PitchRange range,
+			float modelScale = 1.0f) noexcept;
 		float SceneInnerRadius() const noexcept;
 		double LoopIndexFrac() const noexcept { return _loopIndexFrac; }
 		void SetLoopIndexFrac(double frac) noexcept;
