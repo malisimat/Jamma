@@ -6,12 +6,11 @@
 ///////////////////////////////////////////////////////////
 
 #include "NetworkSession.h"
-#include "ConsoleBroker.h"
-#include "ConsoleLaunch.h"
+#include "ConsoleWindow.h"
+#include "../../console/GlobalKeyGate.h"
 #include "../../console/CommandMailbox.h"
 #include "../../console/CommandParsing.h"
 #include "../../console/LineRing.h"
-#include "../../console/OutboundMailbox.h"
 #include "Main.h"
 #include "RigDefaultSave.h"
 #include "Window.h"
@@ -21,7 +20,6 @@
 #include "../io/InitFile.h"
 #include "../io/StartupConfig.h"
 #include "ConsoleCapture.h"
-#include "ConsoleStatus.h"
 #include "../vst/Vst3Plugin.h"
 #include <objbase.h>
 #include <dbt.h>
@@ -526,22 +524,11 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 	const HRESULT uiComInit = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
 	const bool uiComInitialized = SUCCEEDED(uiComInit);
 
-	// ConsoleCapture is active before startup logging. All companion commands
-	// are serialized on this app thread, which owns Scene replacement.
-	auto consoleCommands = std::make_shared<console::CommandMailbox>();
-	std::unique_ptr<console::ConsoleBroker> consoleBroker;
-	std::wstring companionPath;
-	{
-		std::wstring modulePath(32768, L'\0');
-		const auto length = GetModuleFileNameW(nullptr, modulePath.data(),
-			static_cast<DWORD>(modulePath.size()));
-		if (length && length < modulePath.size())
-		{
-			modulePath.resize(length);
-			companionPath = console::SiblingCompanionPath(modulePath);
-		}
-	}
-
+	// Commands and controls have the same app/UI owner. Scene is resolved only
+	// when the main loop executes a command, including after session replacement.
+	console::CommandMailbox consoleCommands;
+	console::ConsoleWindow consoleWindow(consoleCommands);
+	console::GlobalKeyGate globalConsoleKeys;
 	const auto initPath = ResolveIniPath();
 	StartupLog startupLog(initPath);
 	NetworkSession socketSession;
@@ -799,15 +786,6 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 
 	if (defaults.has_value())
 		scene.value()->SetLogging(defaults.value().Logging);
-	consoleBroker = std::make_unique<console::ConsoleBroker>(defaults && defaults->ConsoleForceConhost);
-	if (defaults && defaults->ConsoleAutoStart && !companionPath.empty())
-	{
-		if (!consoleBroker->Start(companionPath, consoleCommands,
-			scene.value()->NinjamConnected() ? "NINJAM connected | last: Ready"
-				: "NINJAM disconnected | last: Ready", false))
-			std::cerr << "[CONSOLE] Could not start companion beside Jamma.exe.\n";
-	}
-
 	ResourceLib resourceLib;
 	Window window(*(scene.value()), resourceLib);
 
@@ -1044,12 +1022,13 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 	if (!jamGenerated && defaults) scene.value()->SetSessionSaveFolder(utils::GetParentDirectory(defaults->Jam));
 	hardwareDefaults->store(std::make_shared<const io::InitFile>(*defaults), std::memory_order_release);
 	RigDefaultSave rigDefaultSave(GetPath(PATH_ROAMING) + L"\\Jamma", initPath, SaveRigAtomic, UpdateIni);
-	MSG msg;
+	MSG msg{};
 	bool active = true;
-	auto lastConsoleStatus = std::chrono::steady_clock::now() - std::chrono::seconds(1);
+	bool consoleCreationAttempted = false;
+	bool pendingConsoleToggle = false;
+	bool explicitConsoleAction = false;
+	std::deque<std::string> pendingConsoleOutput;
 	std::size_t pendingCaptureLoss = 0;
-	std::deque<std::string> recentConsoleLines;
-	std::shared_ptr<console::OutboundMailbox> replayedConsoleEvents;
 	while (active)
 	{
 		// Dispatch one message before checking the budget so queued work always progresses.
@@ -1061,101 +1040,114 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 				scene.value()->RequestMidiRefresh();
 			if (msg.message == WM_QUIT)
 			{
-				consoleCommands->Close();
-				if (consoleBroker) consoleBroker->Stop();
+				consoleCommands.Close();
+				consoleWindow.Destroy();
 				scene.value()->Shutdown();
 				vst::DrainUiThreadDestroyQueue();
 				active = false;
 				break;
 			}
 
-			TranslateMessage(&msg);
-			DispatchMessage(&msg);
+			bool dispatch = true;
+			if (msg.message == WM_KEYDOWN || msg.message == WM_KEYUP
+				|| msg.message == WM_SYSKEYDOWN || msg.message == WM_SYSKEYUP)
+			{
+				const bool down = msg.message == WM_KEYDOWN || msg.message == WM_SYSKEYDOWN;
+				dispatch = globalConsoleKeys.Observe(static_cast<unsigned>(msg.wParam), down,
+					consoleWindow.Contains(msg.hwnd), msg.hwnd == window.GetWindowHandle(),
+					(msg.lParam & (1LL << 30)) != 0);
+			}
+			if (dispatch)
+			{
+				TranslateMessage(&msg);
+				DispatchMessage(&msg);
+			}
 			if (std::chrono::steady_clock::now() - messagePumpStart >= messagePumpBudget)
 				break;
 		}
 
 		if (!active)
 			break;
-		if (consoleBroker && consoleBroker->ConsumeFallbackNotice())
-			std::cout << "[CONSOLE] Windows Terminal unavailable; using Console Host." << std::endl;
-		auto consoleEvents = consoleBroker ? consoleBroker->Events() : nullptr;
-		if (consoleEvents && consoleEvents != replayedConsoleEvents)
-		{
-			for (const auto& line : recentConsoleLines)
-				consoleEvents->Publish({ console::MessageType::Event, 0, line });
-			replayedConsoleEvents = consoleEvents;
-		}
-		auto drainConsoleLines = [&] {
-			for (unsigned drained = 0; drained < console::LineRing::Capacity; ++drained)
+		// Only admit another command after its ordered output has reached the view.
+		// At most two ring snapshots, one echo/result and a loss notice are pending;
+		// results cannot be lost when a command generates more output than the ring.
+		std::size_t drainedThisFrame = 0;
+		auto captureConsoleLines = [&] {
+			pendingCaptureLoss += consoleLines->ConsumeDropped();
+			if (pendingCaptureLoss)
+			{
+				pendingConsoleOutput.push_back("[CONSOLE] Lost " + std::to_string(pendingCaptureLoss) + " log entries (capture overflow)");
+				pendingCaptureLoss = 0;
+			}
+			for (unsigned captured = 0; captured < console::LineRing::Capacity; ++captured)
 			{
 				auto line = consoleLines->Take();
 				if (!line) break;
-				if (!console::ValidUtf8(*line)) ++pendingCaptureLoss;
-				else
-				{
-					if (recentConsoleLines.size() == 256) recentConsoleLines.pop_front();
-					recentConsoleLines.push_back(*line);
-					if (consoleEvents)
-						consoleEvents->Publish({ console::MessageType::Event, 0, std::move(*line) });
-				}
+				pendingConsoleOutput.push_back(std::move(*line));
 			}
-			pendingCaptureLoss += consoleLines->ConsumeDropped();
-			if (pendingCaptureLoss && consoleEvents
-				&& consoleEvents->ReportLoss(pendingCaptureLoss))
-				pendingCaptureLoss = 0;
 		};
-		drainConsoleLines();
-		for (unsigned handled = 0; handled < 8; ++handled)
-		{
-			auto submission = consoleCommands->Take();
-			if (!submission) break;
-			std::string result = "Command handled";
-			try
+		auto drainConsoleLines = [&] {
+			std::vector<std::string> batch;
+			batch.reserve(console::ConsoleWindow::MaxAppendEntries);
+			while (!pendingConsoleOutput.empty() && drainedThisFrame < console::ConsoleWindow::MaxAppendEntries)
 			{
-				if (!HandleSlashCommand(submission->Text, scene.value().get()))
+				batch.push_back(std::move(pendingConsoleOutput.front()));
+				pendingConsoleOutput.pop_front();
+				++drainedThisFrame;
+			}
+			consoleWindow.Append(batch);
+		};
+		if (consoleWindow.Created())
+		{
+			if (pendingConsoleOutput.empty())
+			{
+				captureConsoleLines();
+				// A command uses the current Scene and its result remains behind all
+				// accepted synchronous log output. One command per frame also bounds work.
+				if (auto submission = consoleCommands.Take())
 				{
-					result = scene.value()->SendNinjamChat(submission->Text)
-						? "Chat sent" : "Chat not sent";
+					pendingConsoleOutput.push_back("[CONSOLE] > " + submission->Text);
+					std::string result = "Command handled";
+					try
+					{
+						if (!HandleSlashCommand(submission->Text, scene.value().get()))
+							result = scene.value()->SendNinjamChat(submission->Text) ? "Chat sent" : "Chat not sent";
+					}
+					catch (const std::exception& error) { result = std::string("Command failed: ") + error.what(); }
+					catch (...) { result = "Command failed"; }
+					captureConsoleLines();
+					if (result.size() > console::CommandMailbox::MaxTextBytes)
+					{
+						auto end = console::CommandMailbox::MaxTextBytes;
+						// Keep the last accepted UTF-8 character complete when bounding errors.
+						while (end && (static_cast<unsigned char>(result[end]) & 0xc0) == 0x80) --end;
+						result.resize(end);
+					}
+					pendingConsoleOutput.push_back("[CONSOLE] " + result);
 				}
 			}
-			catch (const std::exception& error)
-			{
-				result = std::string("Command failed: ") + error.what();
-			}
-			catch (...) { result = "Command failed"; }
-			drainConsoleLines(); // Synchronous output precedes its correlated result.
-			submission->Completion->set_value(std::move(result));
+			drainConsoleLines();
 		}
-		drainConsoleLines();
-		const auto statusNow = std::chrono::steady_clock::now();
-		if (consoleEvents && console::StatusUpdateDue(lastConsoleStatus, statusNow))
-		{
-			auto lastEvent = consoleEvents->LatestEvent();
-			if (lastEvent.size() > 200)
-			{
-				lastEvent.resize(200);
-				while (!console::ValidUtf8(lastEvent)) lastEvent.pop_back();
-			}
-			consoleEvents->SetStatus(std::string(scene.value()->NinjamConnected()
-				? "NINJAM connected" : "NINJAM disconnected")
-				+ " | last: " + lastEvent);
-			lastConsoleStatus = statusNow;
-		}
+		consoleWindow.UpdateStatus(scene.value()->NinjamConnected());
 
 		actions::KeyAction globalKeyAction;
-		if (scene.value()->PumpGlobalKeyCapture(globalKeyAction))
-			window.OnAction(globalKeyAction);
+		for (unsigned tracked = 0; tracked < 3 && scene.value()->PumpGlobalKeyCapture(globalKeyAction); ++tracked)
+			if (globalConsoleKeys.Forward(globalKeyAction.KeyChar,
+				globalKeyAction.KeyActionType == actions::KeyAction::KEY_DOWN, consoleWindow.Foreground()))
+				window.OnAction(globalKeyAction);
 
-		consoleBroker->UpdateVisibility(window.GetWindowHandle());
 		if (window.ConsumeConsoleToggleRequest())
 		{
-			if (companionPath.empty() || !consoleBroker->ToggleVisibility(companionPath, consoleCommands,
-				scene.value()->NinjamConnected() ? "NINJAM connected | last: Ready"
-					: "NINJAM disconnected | last: Ready"))
-				std::cerr << "[CONSOLE] Could not toggle companion beside Jamma.exe.\n";
+			explicitConsoleAction = true;
+			if (consoleCreationAttempted)
+			{
+				// Retry only for an explicit user action, never once per frame.
+				if (!consoleWindow.Created() && !consoleWindow.CreateHidden(hInstance))
+					std::cerr << "[CONSOLE] Could not create native command window.\n";
+				else consoleWindow.Toggle();
+			}
+			else pendingConsoleToggle = !pendingConsoleToggle;
 		}
-
 		const bool windowLoadRequested = window.ConsumeJamLoadRequest();
 		const bool panelLoadRequested = scene.value()->ConsumePanelLoadRequest();
 		if (windowLoadRequested || panelLoadRequested)
@@ -1205,6 +1197,14 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 			rigDefaultSave.Start(*scene.value(), window.GetWindowHandle(), *defaults);
 		window.Render();
 		window.Swap();
+		if (!consoleCreationAttempted)
+		{
+			consoleCreationAttempted = true;
+			if (!consoleWindow.CreateHidden(hInstance))
+				std::cerr << "[CONSOLE] Could not create native command window.\n";
+			else if (pendingConsoleToggle) consoleWindow.Toggle();
+			else if (!explicitConsoleAction && defaults && defaults->ConsoleAutoStart) consoleWindow.ShowPassive();
+		}
 
 		// Destroy any VST plugins that failed to load on the job thread.
 		// They were PreInit'd on this thread, so cleanup must run here too.
@@ -1213,8 +1213,8 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 
 	// Shutdown stops the audio callback before it closes VST editor windows and
 	// releases their plugins, while this main thread's COM STA is still valid.
-	consoleCommands->Close();
-	if (consoleBroker) consoleBroker->Stop();
+	consoleCommands.Close();
+	consoleWindow.Destroy();
 	scene.value()->Shutdown();
 
 	if (rigDefaultSave.Poll(*scene.value(), window.GetWindowHandle(), *defaults, false)) { rigReadyForDefaults = true; defaultsValid = true; hardwareDefaults->store(std::make_shared<const io::InitFile>(*defaults), std::memory_order_release); }

@@ -1,17 +1,12 @@
-#include "../../../../console/SessionGate.h"
-#include "../../../../Jamma/src/ConsoleLaunch.h"
 #include "../../../../console/CommandMailbox.h"
-#include "../../../../console/OutboundMailbox.h"
 #include "../../../../console/CommandParsing.h"
+#include "../../../../console/GlobalKeyGate.h"
 #include "../../../../console/LineRing.h"
 #include "../../../../Jamma/src/ConsoleCapture.h"
-#include "../../../../Jamma/src/ConsoleStatus.h"
 #include <gtest/gtest.h>
 #include <array>
-#include <chrono>
 #include <thread>
 #include <vector>
-
 TEST(ConsoleSession, CaptureOnlySinkKeepsOptedInLinesAndBoundsOverflow)
 {
 	console::LineRing ring;
@@ -31,190 +26,6 @@ TEST(ConsoleSession, CaptureOnlySinkKeepsOptedInLinesAndBoundsOverflow)
 	EXPECT_EQ(*captured, "visible");
 	EXPECT_FALSE(ring.Take());
 	EXPECT_EQ(ring.ConsumeDropped(), 1u);
-}
-
-TEST(ConsoleSession, StatusCadenceUsesMonotonicOneSecondBoundary)
-{
-	using Clock = std::chrono::steady_clock;
-	const auto last = Clock::time_point{};
-	EXPECT_FALSE(console::StatusUpdateDue(last, last));
-	EXPECT_FALSE(console::StatusUpdateDue(last, last + std::chrono::milliseconds(999)));
-	EXPECT_TRUE(console::StatusUpdateDue(last, last + std::chrono::seconds(1)));
-	EXPECT_TRUE(console::StatusUpdateDue(last, last + std::chrono::seconds(2)));
-}
-
-TEST(ConsoleSession, AuthenticatesOneClientAndIncreasingRequests)
-{
-	console::SessionGate gate;
-	gate.Begin("one-time-token");
-	EXPECT_FALSE(gate.AcceptRequest(1));
-	EXPECT_FALSE(gate.AcceptHello("wrong", true));
-	EXPECT_FALSE(gate.AcceptHello("one-time-token", false));
-	ASSERT_TRUE(gate.AcceptHello("one-time-token", true));
-	EXPECT_FALSE(gate.AcceptHello("one-time-token", true));
-	EXPECT_TRUE(gate.AcceptRequest(1));
-	EXPECT_FALSE(gate.AcceptRequest(1));
-	EXPECT_FALSE(gate.AcceptRequest(0));
-	EXPECT_TRUE(gate.AcceptRequest(3));
-	EXPECT_FALSE(gate.AcceptRequest(2));
-}
-
-TEST(ConsoleSession, DisconnectAndFreshGenerationRejectStaleClient)
-{
-	console::SessionGate gate;
-	gate.Begin("old");
-	ASSERT_TRUE(gate.AcceptHello("old", true));
-	ASSERT_TRUE(gate.AcceptRequest(7));
-	gate.Disconnect();
-	EXPECT_FALSE(gate.AcceptRequest(8));
-	EXPECT_FALSE(gate.AcceptHello("old", true));
-	gate.Begin("fresh");
-	EXPECT_FALSE(gate.AcceptHello("old", true));
-	ASSERT_TRUE(gate.AcceptHello("fresh", true));
-	EXPECT_TRUE(gate.AcceptRequest(1));
-}
-
-TEST(ConsoleSession, ShutdownRejectsPendingAndFutureRequests)
-{
-	console::SessionGate gate;
-	gate.Begin("token");
-	ASSERT_TRUE(gate.AcceptHello("token", true));
-	ASSERT_TRUE(gate.AcceptRequest(1));
-	gate.StopAccepting();
-	EXPECT_FALSE(gate.AcceptRequest(2));
-	gate.Disconnect();
-	EXPECT_FALSE(gate.AcceptHello("token", true));
-}
-
-TEST(ConsoleSession, BufferedRequestAfterStopCannotPassGate)
-{
-	console::SessionGate gate;
-	gate.Begin("token");
-	ASSERT_TRUE(gate.AcceptHello("token", true));
-	EXPECT_FALSE(gate.AcceptRequest(1, true));
-	EXPECT_FALSE(gate.AcceptRequest(2));
-}
-
-TEST(ConsoleSession, ShutdownOrdersPipeAndChildCleanup)
-{
-	console::SessionGate gate;
-	gate.Begin("token");
-	ASSERT_TRUE(gate.AcceptHello("token", true));
-	std::vector<std::string> operations;
-	console::FinishSession(gate, true, true,
-		[&] {
-			EXPECT_FALSE(gate.AcceptRequest(1));
-			operations.push_back("shutdown frame");
-		},
-		[&] {
-			operations.push_back("wait child");
-			return false;
-		},
-		[&] { operations.push_back("terminate child"); });
-	EXPECT_EQ(operations,
-		(std::vector<std::string>{ "shutdown frame", "wait child", "terminate child" }));
-	EXPECT_FALSE(gate.Authenticated());
-	EXPECT_FALSE(gate.AcceptHello("token", true));
-	operations.clear();
-	console::FinishSession(gate, false, false,
-		[&] { operations.push_back("shutdown frame"); },
-		[&] { operations.push_back("wait child"); return true; },
-		[&] { operations.push_back("terminate child"); });
-	EXPECT_TRUE(operations.empty());
-}
-
-TEST(ConsoleSession, MailboxOrdersSubmissionsAndClosesPendingWork)
-{
-	console::CommandMailbox mailbox;
-	auto first = mailbox.Submit("/help");
-	auto second = mailbox.Submit("chat");
-	ASSERT_TRUE(first);
-	ASSERT_TRUE(second);
-	auto taken = mailbox.Take();
-	ASSERT_TRUE(taken);
-	EXPECT_EQ(taken->Text, "/help");
-	taken->Completion->set_value("help shown");
-	EXPECT_EQ(first->get(), "help shown");
-	mailbox.Close();
-	EXPECT_EQ(second->get(), "Console shutting down");
-	EXPECT_FALSE(mailbox.Submit("later"));
-	EXPECT_FALSE(mailbox.Take());
-}
-
-TEST(ConsoleSession, MailboxBoundsTextAndPendingCount)
-{
-	console::CommandMailbox mailbox;
-	EXPECT_FALSE(mailbox.Submit(std::string(console::CommandMailbox::MaxTextBytes + 1, 'x')));
-	for (std::size_t index = 0; index < console::CommandMailbox::Capacity; ++index)
-		ASSERT_TRUE(mailbox.Submit("chat"));
-	EXPECT_FALSE(mailbox.Submit("overflow"));
-	mailbox.Close();
-}
-
-TEST(ConsoleSession, InFlightOwnerCommandFinishesAfterIntakeCloses)
-{
-	console::CommandMailbox mailbox;
-	auto pending = mailbox.Submit("/connect 2");
-	ASSERT_TRUE(pending);
-	auto inFlight = mailbox.Take();
-	ASSERT_TRUE(inFlight);
-	mailbox.Close();
-	EXPECT_EQ(pending->wait_for(std::chrono::milliseconds(0)), std::future_status::timeout);
-	EXPECT_FALSE(mailbox.Submit("new"));
-	inFlight->Completion->set_value("Connection requested");
-	EXPECT_EQ(pending->get(), "Connection requested");
-}
-
-TEST(ConsoleSession, OutboundOrdersEventsReportsLossAndCoalescesStatus)
-{
-	console::OutboundMailbox mailbox;
-	mailbox.SetStatus("connecting");
-	mailbox.SetStatus("connected");
-	for (std::size_t index = 0; index < console::OutboundMailbox::Capacity; ++index)
-		ASSERT_TRUE(mailbox.Publish({ console::MessageType::Event, 0,
-			std::to_string(index) }));
-	EXPECT_FALSE(mailbox.Publish({ console::MessageType::Event, 0, "dropped" }));
-	std::atomic<bool> stopping{ false };
-	auto status = mailbox.Take(stopping);
-	ASSERT_TRUE(status);
-	EXPECT_EQ(status->Type, console::MessageType::StatusSnapshot);
-	EXPECT_EQ(status->Text, "connected");
-	for (std::size_t index = 0; index < console::OutboundMailbox::Capacity; ++index)
-	{
-		auto event = mailbox.Take(stopping);
-		ASSERT_TRUE(event);
-		EXPECT_EQ(event->Text, std::to_string(index));
-	}
-	auto notice = mailbox.Take(stopping);
-	ASSERT_TRUE(notice);
-	EXPECT_NE(notice->Text.find("Lost 1 events"), std::string::npos);
-	ASSERT_TRUE(mailbox.Publish({ console::MessageType::Event, 0, "after" }));
-	const auto last = mailbox.Take(stopping);
-	ASSERT_TRUE(last);
-	EXPECT_EQ(last->Text, "after");
-	mailbox.Close();
-	EXPECT_FALSE(mailbox.Publish({ console::MessageType::Event, 0, "late" }));
-}
-
-TEST(ConsoleSession, OutboundPreservesCommandResultUnderOverflow)
-{
-	console::OutboundMailbox mailbox;
-	std::atomic<bool> stopping{ false };
-	ASSERT_TRUE(mailbox.PublishResult({ console::MessageType::CommandResult, 7, "first" },
-		[&] { return stopping.load(); }));
-	for (std::size_t index = 1; index < console::OutboundMailbox::Capacity; ++index)
-		ASSERT_TRUE(mailbox.Publish({ console::MessageType::Event, 0, "old" }));
-	ASSERT_TRUE(mailbox.PublishResult({ console::MessageType::CommandResult, 8, "second" },
-		[&] { return stopping.load(); }));
-	std::vector<std::uint64_t> resultIds;
-	for (std::size_t index = 0; index < console::OutboundMailbox::Capacity + 1; ++index)
-	{
-		auto message = mailbox.Take(stopping);
-		ASSERT_TRUE(message);
-		if (message->Type == console::MessageType::CommandResult)
-			resultIds.push_back(message->RequestId);
-	}
-	EXPECT_EQ(resultIds, (std::vector<std::uint64_t>{ 7, 8 }));
 }
 
 TEST(ConsoleSession, CaptureRingBoundsLinesAndReportsOverflow)
@@ -263,20 +74,6 @@ TEST(ConsoleSession, CaptureRingOrdersConcurrentProducerLines)
 	EXPECT_EQ(received + ring.ConsumeDropped(), 200u);
 }
 
-TEST(ConsoleSession, CaptureLossSurvivesFullOutboundQueueWithoutNewEvents)
-{
-	console::OutboundMailbox mailbox;
-	for (std::size_t index = 0; index < console::OutboundMailbox::Capacity; ++index)
-		ASSERT_TRUE(mailbox.Publish({ console::MessageType::Event, 0, "queued" }));
-	ASSERT_TRUE(mailbox.ReportLoss(3));
-	std::atomic<bool> stopping{ false };
-	for (std::size_t index = 0; index < console::OutboundMailbox::Capacity; ++index)
-		ASSERT_TRUE(mailbox.Take(stopping));
-	auto notice = mailbox.Take(stopping);
-	ASSERT_TRUE(notice);
-	EXPECT_NE(notice->Text.find("Lost 3 events"), std::string::npos);
-}
-
 TEST(ConsoleCommand, PreservesHelpConnectDisconnectAndChatMeanings)
 {
 	for (const auto* text : { "/", "/?", "/help", "/HELP" })
@@ -292,121 +89,123 @@ TEST(ConsoleCommand, PreservesHelpConnectDisconnectAndChatMeanings)
 	EXPECT_EQ(console::ParseCommand("hello").Kind, console::CommandKind::Chat);
 	EXPECT_EQ(console::ParseCommand("").Kind, console::CommandKind::Chat);
 }
-
+TEST(ConsoleSession, OwnerQueuePreservesOrderAndClosesPendingWork)
+{
+	console::CommandMailbox mailbox;
+	ASSERT_TRUE(mailbox.Submit("/help"));
+	ASSERT_TRUE(mailbox.Submit("chat"));
+	auto first = mailbox.Take();
+	ASSERT_TRUE(first);
+	EXPECT_EQ(first->Text, "/help");
+	auto second = mailbox.Take();
+	ASSERT_TRUE(second);
+	EXPECT_EQ(second->Text, "chat");
+	EXPECT_FALSE(mailbox.Take());
+	ASSERT_TRUE(mailbox.Submit("pending"));
+	mailbox.Close();
+	EXPECT_FALSE(mailbox.Submit("late"));
+	EXPECT_FALSE(mailbox.Take());
+}
+TEST(ConsoleSession, OwnerQueueBoundsTextAndCount)
+{
+	console::CommandMailbox mailbox;
+	EXPECT_FALSE(mailbox.Submit(std::string(console::CommandMailbox::MaxTextBytes + 1, 'x')));
+	for (std::size_t index = 0; index < console::CommandMailbox::Capacity; ++index)
+		ASSERT_TRUE(mailbox.Submit("chat"));
+	EXPECT_FALSE(mailbox.Submit("overflow"));
+}
 TEST(ConsoleCommand, QueuedSubmissionUsesReplacementOwner)
 {
 	console::CommandMailbox mailbox;
 	struct FakeScene { std::vector<std::string> Chats; } oldScene, replacement;
-	auto pending = mailbox.Submit("hello");
-	ASSERT_TRUE(pending);
+	ASSERT_TRUE(mailbox.Submit("hello"));
 	FakeScene* current = &oldScene;
-	current = &replacement; // The app replaces Scene before taking the command.
+	current = &replacement;
 	auto submission = mailbox.Take();
 	ASSERT_TRUE(submission);
 	if (console::ParseCommand(submission->Text).Kind == console::CommandKind::Chat)
 		current->Chats.push_back(submission->Text);
-	submission->Completion->set_value("Chat sent");
 	EXPECT_TRUE(oldScene.Chats.empty());
 	EXPECT_EQ(replacement.Chats, (std::vector<std::string>{ "hello" }));
-	EXPECT_EQ(pending->get(), "Chat sent");
+}
+TEST(ConsoleCommand, ConsoleFocusSwallowsPressesButReleasesForwardedHolds)
+{
+	for (const unsigned key : { 0x2d, 0x21, 0x22 })
+	{
+		console::GlobalKeyGate gate;
+		EXPECT_TRUE(gate.Forward(key, true, false));
+		EXPECT_TRUE(gate.Forward(key, false, true));
+		EXPECT_FALSE(gate.Forward(key, true, true));
+		EXPECT_FALSE(gate.Forward(key, false, true));
+		EXPECT_FALSE(gate.Forward(key, true, true));
+		EXPECT_FALSE(gate.Forward(key, false, false));
+		EXPECT_TRUE(gate.Forward(key, true, false));
+		EXPECT_TRUE(gate.Forward(key, false, false));
+	}
 }
 
-TEST(ConsoleLaunch, QuotesSpacesQuotesAndTrailingBackslashes)
+TEST(ConsoleCommand, NativeMainPressGetsReleaseWhenConsoleActivatesBeforeGlobalPump)
 {
-	EXPECT_EQ(console::QuoteWindowsArgument(L"C:\\Program Files\\JammaConsole.exe"),
-		L"\"C:\\Program Files\\JammaConsole.exe\"");
-	EXPECT_EQ(console::QuoteWindowsArgument(L"a\"b"), L"\"a\\\"b\"");
-	EXPECT_EQ(console::QuoteWindowsArgument(L"a\\"), L"\"a\\\\\"");
+	for (const unsigned key : { 0x2d, 0x21, 0x22 })
+	{
+		console::GlobalKeyGate gate;
+		EXPECT_TRUE(gate.Observe(key, true, false, true, false));
+		EXPECT_FALSE(gate.Forward(key, true, true));
+		EXPECT_TRUE(gate.Observe(key, false, true, false, false));
+		EXPECT_TRUE(gate.Forward(key, false, true));
+		EXPECT_TRUE(gate.Forward(key, true, false));
+		EXPECT_TRUE(gate.Forward(key, false, false));
+	}
+}
+TEST(ConsoleCommand, ConsolePressCannotLeakNativeOrGlobalActionsAfterFocusTransfer)
+{
+	for (const unsigned key : { 0x2d, 0x21, 0x22 })
+	{
+		console::GlobalKeyGate gate;
+		EXPECT_TRUE(gate.Observe(key, true, true, false, false));
+		EXPECT_FALSE(gate.Forward(key, true, false));
+		EXPECT_FALSE(gate.Observe(key, true, false, true, true));
+		EXPECT_FALSE(gate.Observe(key, false, false, true, false));
+		EXPECT_FALSE(gate.Forward(key, false, false));
+		EXPECT_TRUE(gate.Observe(key, true, false, true, false));
+		EXPECT_TRUE(gate.Forward(key, true, false));
+		EXPECT_TRUE(gate.Observe(key, false, false, true, false));
+		EXPECT_FALSE(gate.Forward(key, false, false));
+	}
+}
+TEST(ConsoleCommand, ConsoleReleaseBeforeGlobalPumpClearsSuppressionForNextPress)
+{
+	console::GlobalKeyGate gate;
+	EXPECT_TRUE(gate.Observe(0x2d, true, true, false, false));
+	EXPECT_TRUE(gate.Observe(0x2d, false, true, false, false));
+	// Fast down/up may coalesce to no global transition. The next physical
+	// press can arrive in another app and must keep the existing global behavior.
+	EXPECT_TRUE(gate.Forward(0x2d, true, false));
+	EXPECT_TRUE(gate.Forward(0x2d, false, false));
 }
 
-TEST(ConsoleLaunch, FallsBackOnMissingLaunchOrHandshake)
+TEST(ConsoleCommand, CompletedNativeHoldCannotCreateLaterConsoleReleaseAction)
 {
-	std::vector<console::LaunchHost> attempts;
-	int notices = 0;
-	auto tryHost = [&](console::LaunchHost host) {
-		attempts.push_back(host);
-		return host == console::LaunchHost::ConsoleHost;
-	};
-	EXPECT_EQ(console::RunLaunchPlan(true, tryHost, [] { return false; },
-		[&] { ++notices; }), console::LaunchOutcome::ConsoleHost);
-	ASSERT_EQ(attempts.size(), 2u);
-	EXPECT_EQ(attempts[0], console::LaunchHost::WindowsTerminal);
-	EXPECT_EQ(attempts[1], console::LaunchHost::ConsoleHost);
-	EXPECT_EQ(notices, 1);
-	attempts.clear();
-	EXPECT_EQ(console::RunLaunchPlan(false, tryHost, [] { return false; },
-		[&] { ++notices; }), console::LaunchOutcome::ConsoleHost);
-	ASSERT_EQ(attempts.size(), 1u);
-	EXPECT_EQ(attempts[0], console::LaunchHost::ConsoleHost);
+	console::GlobalKeyGate gate;
+	EXPECT_TRUE(gate.Observe(0x2d, true, false, true, false));
+	EXPECT_TRUE(gate.Observe(0x2d, false, false, true, false));
+	// Native down/up already dispatched before any global pump transition.
+	EXPECT_TRUE(gate.Observe(0x2d, true, true, false, false));
+	EXPECT_FALSE(gate.Forward(0x2d, true, true));
+	EXPECT_TRUE(gate.Observe(0x2d, false, true, false, false));
+	EXPECT_FALSE(gate.Forward(0x2d, false, true));
 }
 
-TEST(ConsoleLaunch, ForcedConsoleHostSkipsTerminalDetectionAndAttempt)
+TEST(ConsoleCommand, NativeMainHoldStillReleasesAfterConsoleAndMainFocusRoundTrip)
 {
-	int detections = 0;
-	const auto terminal = console::DetectTerminalUnlessForced(true, [&] {
-		++detections;
-		return std::wstring(L"C:\\wt.exe");
-	});
-	EXPECT_TRUE(terminal.empty());
-	EXPECT_EQ(detections, 0);
-	EXPECT_EQ(console::DetectTerminalUnlessForced(false, [&] {
-		++detections;
-		return std::wstring(L"C:\\wt.exe");
-	}), L"C:\\wt.exe");
-	EXPECT_EQ(detections, 1);
-	std::vector<console::LaunchHost> attempts;
-	EXPECT_EQ(console::RunLaunchPlan(!terminal.empty(),
-		[&](console::LaunchHost host) {
-			attempts.push_back(host);
-			return true;
-		}, [] { return false; }, [] {}), console::LaunchOutcome::ConsoleHost);
-	ASSERT_EQ(attempts.size(), 1u);
-	EXPECT_EQ(attempts[0], console::LaunchHost::ConsoleHost);
-}
-
-TEST(ConsoleLaunch, NeverCreatesFallbackAfterStopOrAcceptedTerminal)
-{
-	int attempts = 0;
-	int notices = 0;
-	EXPECT_EQ(console::RunLaunchPlan(true,
-		[&](console::LaunchHost) { ++attempts; return false; },
-		[] { return true; }, [&] { ++notices; }), console::LaunchOutcome::Stopped);
-	EXPECT_EQ(attempts, 1);
-	EXPECT_EQ(notices, 0);
-	EXPECT_EQ(console::RunLaunchPlan(true,
-		[&](console::LaunchHost) { ++attempts; return true; },
-		[] { return false; }, [&] { ++notices; }), console::LaunchOutcome::WindowsTerminal);
-	EXPECT_EQ(attempts, 2);
-	EXPECT_EQ(notices, 0);
-}
-
-TEST(ConsoleLaunch, ReopenKeepsLiveGenerationAndNeverStartsAfterFailedStop)
-{
-	int stopped = 0;
-	int started = 0;
-	const auto stop = [&] { ++stopped; return true; };
-	const auto start = [&] { ++started; return true; };
-	EXPECT_TRUE(console::RunReopenPlan(true, stop, start));
-	EXPECT_TRUE(console::RunReopenPlan(true, stop, start));
-	EXPECT_EQ(stopped, 0);
-	EXPECT_EQ(started, 0);
-	EXPECT_TRUE(console::RunReopenPlan(false, stop, start));
-	EXPECT_EQ(stopped, 1);
-	EXPECT_EQ(started, 1);
-	EXPECT_FALSE(console::RunReopenPlan(false,
-		[&] { ++stopped; return false; }, start));
-	EXPECT_EQ(stopped, 2);
-	EXPECT_EQ(started, 1);
-}
-
-TEST(ConsoleLaunch, BuildsTerminalAndConsoleArgumentsFromAbsoluteSibling)
-{
-	const auto companion = console::SiblingCompanionPath(L"C:\\Program Files\\Jamma\\Jamma.exe");
-	EXPECT_EQ(companion, L"C:\\Program Files\\Jamma\\JammaConsole.exe");
-	const auto terminal = console::TerminalArguments(L"Jamma-123", companion,
-		L"\\\\.\\pipe\\JammaConsole-123", L"abc");
-	EXPECT_EQ(terminal,
-		L"-w \"Jamma-123\" --size 100,30 --suppressApplicationTitle --title \"Jamma-123\" \"C:\\Program Files\\Jamma\\JammaConsole.exe\" --pipe \"\\\\.\\pipe\\JammaConsole-123\" --token \"abc\" --title \"Jamma-123\"");
-	EXPECT_EQ(console::ConsoleArguments(L"pipe", L"abc"),
-		L"--pipe \"pipe\" --token \"abc\"");
+	for (const unsigned key : { 0x2d, 0x21, 0x22 })
+	{
+		console::GlobalKeyGate gate;
+		EXPECT_TRUE(gate.Observe(key, true, false, true, false));
+		EXPECT_FALSE(gate.Forward(key, true, true));
+		// Main already received the initial press. Console activation suppressed
+		// its duplicate global down, but a later native main release is required.
+		EXPECT_TRUE(gate.Observe(key, false, false, true, false));
+		EXPECT_FALSE(gate.Forward(key, false, false));
+	}
 }

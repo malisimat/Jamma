@@ -1,48 +1,40 @@
 # Performance console
 
-Jamma starts `JammaConsole.exe` automatically when `consoleautostart` is true
-(the default). The companion opens in a dedicated Windows Terminal window when
-`wt.exe` is available. If Terminal is missing or its launch fails, Jamma tries
-the built-in Windows Console Host. Terminal is optional; install it from the
-[official Windows Terminal instructions](https://learn.microsoft.com/en-us/windows/terminal/install)
-if you want its fonts and appearance. A custom Terminal profile is optional;
-Jamma passes its own title and command line at launch.
-In Windows Terminal, **Ctrl+Shift+mouse wheel** adjusts background opacity
-when that [Terminal interaction setting](https://learn.microsoft.com/en-us/windows/terminal/customize-settings/interaction)
-is enabled. Optional profile appearance settings include `opacity` and
-`useAcrylic`; Jamma does not edit Terminal settings.
+Jamma's command/log window is a native Windows window within `Jamma.exe`.
+It needs no companion executable, Windows Terminal profile, or terminal host.
+The main window renders its first frame before the console is created. With
+`consoleautostart` enabled (the default), the console appears in the background
+without changing focus. Clicking it later activates it normally.
 
-Keep `JammaConsole.exe` beside `Jamma.exe` when copying a build. The Jamma
-project builds the companion as a dependency into the same configuration output
-directory. Copy the runtime DLLs from that directory too, including
-`utf8proc.dll`. There is no repository installer or release packaging script.
-
-The startup preference is `consoleautostart` in Jamma's defaults JSON. Set it
-to `false` before launching Jamma to leave the companion closed initially.
-For testing, set `consoleforceconhost` to `true` in the same file to skip
-Windows Terminal detection and always launch the companion in Console Host.
-Its default is `false`; the setting also applies when reopening the companion.
-In the Jamma window, press **Ctrl+`** to hide or show the companion. Hiding it
-keeps its session and transcript. Closing the companion window itself ends that
-session; the next **Ctrl+`** starts a fresh one. The preference controls startup
-only; opening the console manually does not change it. Jamma closes its
-companion when Jamma exits.
+Set `consoleautostart` to `false` in Jamma's defaults JSON to start with the
+console hidden. In the main Jamma window, **Ctrl+`** shows or hides it.
+Closing the console also hides it, retaining its transcript and input until
+Jamma exits. Jamma continues capturing output while the console is hidden.
+The obsolete `consoleforceconhost` preference is ignored.
 
 Type `/`, `/?`, or `/help` for the server list and command help. `/c <number>`
 or `/connect <number>` connects using a number from that list. `/d`, `/q`,
 `/quit`, `/exit`, and `/disconnect` disconnect. Lines without a leading slash
-are NINJAM chat; unknown slash commands show a hint.
+are NINJAM chat; unknown slash commands show a hint. **F1** requests help.
+Commands execute on Jamma's app thread and use the current session.
 
-In the companion, **F1** shows NINJAM command help and the server list. Arrow keys and
-Page Up/Down scroll the transcript; **Ctrl+F** returns to the newest entry.
-The prompt supports caret and word editing. **Ctrl+V** pastes validated text;
-**Ctrl+C** copies selected prompt or transcript text. A left drag selects text
-when the terminal delivers mouse reports. Otherwise, use keyboard editing or
-the host's native selection. Console Host may render fonts, emoji, and mouse
-interaction differently from Windows Terminal.
+The transcript uses severity and subsystem colors. Use the scroll bar, mouse
+wheel, or native text navigation to browse history. Drag to select text,
+double-click to select a word, and press **Ctrl+C** to copy. **Tab** moves
+between transcript and input. Incoming output preserves selection and the
+position of retained text while browsing; the view follows new output when
+already at the bottom without a selection.
 
-The companion retains at most 64 MiB and 100,000 logical transcript entries.
-Closing its window and reopening it starts a fresh screen; Jamma replays its last 256
-captured output lines from memory, then streams new output. Commands already
-executed are not replayed. Restarting Jamma clears that in-memory history.
-Status and event loss are reported in the companion when connected.
+The input supports ordinary Windows caret editing, selection, **Ctrl+C**,
+and **Ctrl+V**. **Enter** submits a single command. Input is limited to
+4096 UTF-8 bytes; invalid text and multiline paste are rejected. Rejected
+submissions retain the draft. Console keyboard navigation does not trigger
+Jamma's global Insert/Page Up/Page Down performance actions.
+
+The status row shows NINJAM connection state and the latest event/result.
+The layout follows window size and DPI changes. History and capture are
+bounded; capture overflow produces a visible loss notice. The transcript keeps
+at most 2048 logical entries and 256 Ki UTF-16 units, trimming complete oldest
+entries when either limit is reached. At most 32 entries are appended per main
+loop iteration so bursts do not cause an unbounded UI update. Restarting Jamma
+clears this in-memory history.
