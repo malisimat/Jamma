@@ -13,11 +13,11 @@
 | --- | --- |
 | A01 | Selection, mute groups, cable reveal and tap tempo preserve the camera wander deadline; actual camera navigation still resets it. |
 | A02 | `/`, `/help`, `/?` and console F1 show immediate offline help; `/n` and `/ninjam` retain server enumeration and refresh. Native console and performance-window F1 contexts are documented. Corrected the existing automation bracket shortcut comparisons to Windows virtual keys. |
-| A03 | Settings width follows real content and tabs/controls wrap in narrow viewports. |
+| A03 | Settings width follows real content; controls wrap and tabs scroll in narrow viewports. |
 | A04 | Front zoom fits larger and one-sided station layouts at wide and narrow aspect ratios. The unspecified optional secondary-view extension remains pending identification. |
 | A05 | Bounded console capture, startup.log routing, backend diagnostics and retained worker-failure delivery cover the audited startup/runtime failure paths. See `doc/diagnostics.md` for precise sink and stream limits. |
 | A07 | Double-clicking a gain fader returns it to exact unity through the normal smoothing/undo path. |
-| A08 | Decorative discs/annuli mark each take or loop layer without becoming interactive picking targets. |
+| A08 | One decorative disc or annulus per take marks its layer in take or loop mode without becoming an interactive picking target. |
 | A09 | Visible gain faders use live, source-specific meters. MIDI-only take master controls note velocity into a shared station instrument, so it has no independently attributable audio meter. |
 | A10 | Sixteen compact, mutually exclusive MIDI override toggles; all off means unchanged/pass-through. PageUp/PageDown, reset chord and held-note flushing remain connected to the existing router. |
 | A11 | Windows VST3 outer bundle directories resolve to their x64 internal module at both load stages while retaining original saved paths and direct-file/VST2 behavior. |
