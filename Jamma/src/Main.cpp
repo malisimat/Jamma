@@ -21,6 +21,7 @@
 #include "../io/StartupConfig.h"
 #include "ConsoleCapture.h"
 #include "StartupLog.h"
+#include "JobFailureNotice.h"
 #include "../vst/Vst3Plugin.h"
 #include <objbase.h>
 #include <dbt.h>
@@ -997,9 +998,16 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 	bool explicitConsoleAction = false;
 	std::deque<std::string> pendingConsoleOutput;
 	std::size_t pendingCaptureLoss = 0;
+	JobFailureNotice jobFailureNotice;
+	const auto workerFailurePath = JobFailureNotice::FallbackPath(initPath);
+	const auto retainExitConsole = [&] {
+		if (consoleWindow.Created()) JobFailureNotice::Drain(*consoleLines, pendingConsoleOutput, [&](const std::string& line) {
+			consoleWindow.Append(std::span<const std::string>(&line, 1));
+		});
+	};
 	while (active)
 	{
-		if (scene.value()->JobThreadFailed()) break; // UI owns orderly stop and join below.
+		if (scene.value()->JobThreadFailed()) { retainExitConsole(); break; } // UI owns orderly stop and join below.
 		// Dispatch one message before checking the budget so queued work always progresses.
 		constexpr auto messagePumpBudget = std::chrono::milliseconds(2);
 		const auto messagePumpStart = std::chrono::steady_clock::now();
@@ -1163,6 +1171,7 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 				if (defaults) replacement.value()->SetLogging(defaults->Logging);
 				scene.value()->FinishSessionLoad(true);
 				scene.value()->Shutdown();
+				if (scene.value()->JobThreadFailed()) break; // Keep outgoing failure for owner notification below.
 				window.ReplaceScene(*replacement.value());
 				scene = std::move(replacement);
 				vst::DrainUiThreadDestroyQueue();
@@ -1204,10 +1213,15 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 	// Shutdown stops the audio callback before it closes VST editor windows and
 	// releases their plugins, while this main thread's COM STA is still valid.
 	consoleCommands.Close();
-	consoleWindow.Destroy();
 	scene.value()->Shutdown();
+	retainExitConsole();
+	consoleWindow.Destroy();
 
 	const bool jobThreadFailed = scene.value()->JobThreadFailed();
+	jobFailureNotice.Report(scene.value()->JobThreadFailureDetail(),
+		[&](std::string_view detail) { return JobFailureNotice::Show(window.GetWindowHandle(), detail); },
+		[&](std::string_view detail) { return JobFailureNotice::Persist(workerFailurePath.c_str(), detail); },
+		JobFailureNotice::Debug);
 	if (!jobThreadFailed && rigDefaultSave.Poll(*scene.value(), window.GetWindowHandle(), *defaults, false)) { rigReadyForDefaults = true; defaultsValid = true; hardwareDefaults->store(std::make_shared<const io::InitFile>(*defaults), std::memory_order_release); }
 	if (!jobThreadFailed && defaultsValid && rigReadyForDefaults && jamReadyForDefaults)
 	{

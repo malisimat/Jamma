@@ -5,6 +5,7 @@
 #include "../audio/PlaybackDelay.h"
 #include <algorithm>
 #include <cassert>
+#include <cstdio>
 #include <iostream>
 #include <iterator>
 #include <cmath>
@@ -3831,18 +3832,39 @@ void Scene::_ResetIfEmpty()
 
 void Scene::_FailJobThread(const char* stage, const char* detail, const actions::JobAction* job) noexcept
 {
-	// The job owner stops mutation; the UI owns device teardown and joining.
+	// Only the job owner writes the record. UI owns device teardown and joining.
 	_sessionReplacing.store(true, std::memory_order_release);
-	if (_jobThreadFailed.exchange(true, std::memory_order_acq_rel)) return;
+	if (JobThreadFailed()) return;
+	int formatted = std::snprintf(_jobThreadFailureDetail.data(), _jobThreadFailureDetail.size(),
+		"[ERROR][job] stage=%s; worker stopped; shutdown requested; exception=%s", stage, detail);
+	if (job)
+	{
+		try
+		{
+			const auto path = utils::EncodeUtf8(job->VstPath);
+			formatted = std::snprintf(_jobThreadFailureDetail.data(), _jobThreadFailureDetail.size(),
+				"[ERROR][job] stage=%s action=%d plugin='%s'; worker stopped; shutdown requested; exception=%s",
+				stage, static_cast<int>(job->JobActionType), path.c_str(), detail);
+		}
+		catch (...) {} // Keep the bounded stage/detail record if path conversion fails.
+	}
+	if (formatted < 0 || static_cast<std::size_t>(formatted) >= _jobThreadFailureDetail.size())
+	{
+		constexpr std::string_view marker = " [detail truncated]";
+		auto end = _jobThreadFailureDetail.size() - 1 - marker.size();
+		while (end && (static_cast<unsigned char>(_jobThreadFailureDetail[end]) & 0xc0) == 0x80) --end;
+		std::copy(marker.begin(), marker.end(), _jobThreadFailureDetail.data() + end);
+		_jobThreadFailureDetail[end + marker.size()] = 0;
+	}
+	// Publish after all writes; this record never changes and survives ring loss/join.
+	_jobThreadFailed.store(true, std::memory_order_release);
 	try
 	{
 		std::optional<console::DiagnosticThread::StartupScope> origin;
 		if (job) origin.emplace(job->StartupDiagnostic);
-		std::cerr << "[ERROR][job] stage=" << stage;
-		if (job) std::cerr << " action=" << job->JobActionType << " plugin='" << utils::EncodeUtf8(job->VstPath) << "'";
-		std::cerr << " exception=" << detail << "; worker stopped; shutdown requested" << std::endl;
+		std::cerr << _jobThreadFailureDetail.data() << std::endl;
 	}
-	catch (...) {} // A failed diagnostic sink must not escape the thread boundary.
+	catch (...) {} // The owner's modal/direct-file fallback never uses this stream.
 }
 
 void Scene::_JobLoop(std::function<void()> onStart) noexcept

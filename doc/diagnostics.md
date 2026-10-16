@@ -48,7 +48,7 @@ the callbacks.
 Raw C stdout/stderr from third-party code, wide streams, OutputDebugString from
 third parties, separate processes, and arbitrary SDK-specific logging callbacks
 are not redirected. Catchable C++ exceptions are diagnosed at app/job/refresh
-boundaries. Any unexpected Scene worker exception reports once, stops job mutation and notifies the UI to run normal Shutdown. The failed worker waits off callback for Shutdown to publish permanent ingress closure, acknowledges it, and joins; final-save failures also remain inside this boundary. No failed structural pump is retried. Access violations, process termination, driver crashes, stack
+boundaries. Any unexpected Scene worker exception reports once, stops job mutation and notifies the UI to run normal Shutdown. The failed worker waits off callback for Shutdown to publish permanent ingress closure, acknowledges it, and joins; final-save failures also remain inside this boundary. No failed structural pump is retried. The worker retains one immutable failure record (4096 bytes including terminator, with an explicit truncation marker) before publishing failure. After join the UI presents it in a modal, independent of console lifetime or ring overflow. If the modal is unavailable, direct Win32 I/O writes/flushes `worker-failure.log` beside the selected defaults file; `JAMMA_DEFAULTS_PATH` therefore redirects this fallback too. The fallback replaces only the previous failure record. If that sink also fails, direct debugger output receives the detail. These exit sinks bypass captured streams. Access violations, process termination, driver crashes, stack
 corruption and arbitrary plugin crashes have no recovery guarantee. No fatal
 handler flushes iostream state: its locks/allocators may already be compromised.
 Use the Windows debugger/crash reporting for fatal failures; startup.log contains
@@ -67,7 +67,7 @@ only output successfully written before the failure.
   -> ready -> reading -> idle; release/acquire publishes complete records. Only
   the successful writer/reader accesses its payload. Occupied producers drop and
   increment the atomic loss count; teardown needs no resources.
-- Scene job failure: the job owner publishes an atomic failure flag; UI reads it each loop and invokes Shutdown, which publishes the permanent-close token before joining. The worker performs no more pumps/saves after failure and waits only for that token. UI acquires lifecycle ownership after any admitted tick unwinds; the worker never calls Shutdown or joins itself. Teardown joins before the flag owner is destroyed.
+- Scene job failure: the job owner publishes an atomic failure flag; UI reads it each loop and invokes Shutdown, which publishes the permanent-close token before joining. The worker performs no more pumps/saves after failure and waits only for that token. UI acquires lifecycle ownership after any admitted tick unwinds; the worker never calls Shutdown or joins itself. The single job owner writes the fixed failure detail once before release-publishing the flag; UI acquires the flag before reading and the payload never changes. Teardown joins before the flag/record owner is destroyed. JobFailureNotice is UI-owned; its once-only modal/file/debug delivery runs after join with the Scene and main window still alive.
 - Scene startup completion: UI arms under the existing job mutex after the first
   frame. The job owner consumes it after its queue empties; Scene shutdown joins
   that owner before capture destruction. Queue origin is stamped under the job

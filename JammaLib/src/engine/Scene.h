@@ -13,6 +13,7 @@
 #include <mutex>
 #include <optional>
 #include <shared_mutex>
+#include <string_view>
 #include <thread>
 #include <unordered_map>
 #include <utility>
@@ -189,6 +190,7 @@ namespace engine
 		void OnInputFocusLost();
 		void Shutdown();
 		bool JobThreadFailed() const noexcept { return _jobThreadFailed.load(std::memory_order_acquire); }
+		std::string_view JobThreadFailureDetail() const noexcept { return JobThreadFailed() ? std::string_view(_jobThreadFailureDetail.data()) : std::string_view{}; }
 		void SetLogging(io::LoggingConfig config) noexcept;
 		bool IsUiVerbose() const noexcept { return _loggingConfig.Ui == "verbose"; }
 		void InitMidi(bool generatedRig = false)
@@ -429,7 +431,8 @@ namespace engine
 		bool _BackgroundSelectionPreviewActive() const;
 		void _SelectAllLocalLocked();
 		std::atomic_bool _isSceneQuitting;
-		std::atomic_bool _jobThreadFailed{false}; // Job writes; UI polls then calls Shutdown; lifetime ends after join.
+		std::atomic_bool _jobThreadFailed{false}; // Publishes the immutable failure detail to UI; lifetime ends after join.
+		std::array<char, 4096> _jobThreadFailureDetail{}; // Job writes once, before release-publishing failure.
 		std::atomic_bool _isSceneReset;
 		glm::mat4 _viewProj;
 		glm::mat4 _overlayViewProj;

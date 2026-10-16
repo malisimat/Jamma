@@ -1,6 +1,9 @@
 #include "../../../../JammaLib/src/engine/Scene.h"
 #include "../../../../Jamma/src/StartupLog.h"
 #include "../../../../Jamma/src/ConsoleCapture.h"
+#include "../../../../Jamma/src/JobFailureNotice.h"
+#include "../../../../Jamma/src/ConsoleWindow.h"
+#include "../../../../console/CommandMailbox.h"
 #include <gtest/gtest.h>
 #include <filesystem>
 #include <fstream>
@@ -336,6 +339,22 @@ TEST_P(JobThreadFailures, PublicCallbackFailureStopsWorkerAndOwnerShutdownJoins)
 	ASSERT_TRUE(created);
 	auto scene = *created;
 	std::atomic<unsigned> calls{0};
+	console::CommandMailbox commands;
+	console::ConsoleWindow view(commands);
+	std::vector<std::string> retained;
+	std::deque<std::string> pending;
+	const auto drainToView = [&] {
+		JobFailureNotice::Drain(ring, pending, [&](const std::string& line) {
+			retained.push_back(line); view.Append(std::span<const std::string>(&line, 1));
+		});
+	};
+	if (mode == 0 || mode == 2 || mode == 5)
+	{
+		ASSERT_TRUE(view.CreateHidden(GetModuleHandleW(nullptr)));
+		capture.CompleteStartup();
+		drainToView(); // Last ordinary UI drain precedes either failure ordering.
+		retained.clear();
+	}
 	auto receiver = std::make_shared<ThrowingDiagnosticReceiver>();
 	if (mode == 4)
 	{
@@ -343,11 +362,13 @@ TEST_P(JobThreadFailures, PublicCallbackFailureStopsWorkerAndOwnerShutdownJoins)
 		job.VstPath = L"test-receiver.vst3";
 		engine::SceneStartupDiagnosticTestAccess::Enqueue(*scene, std::move(job));
 	}
-	if (mode == 0 || mode == 2)
-		scene->QueueExplicitRigSave([&] { ++calls; throw std::runtime_error("save exploded"); });
+	if (mode == 0 || mode == 2 || mode == 5)
+		scene->QueueExplicitRigSave([&] { ++calls; throw std::runtime_error(mode == 5 ? std::string(10000, 'x') : "save exploded"); });
 	if (mode == 2)
 	{
-		// The owner is inside Shutdown before the worker reaches final-save.
+		// Console is already gone when Shutdown runs the throwing final save.
+		view.Destroy();
+		for (std::size_t i = 0; i < console::LineRing::Capacity; ++i) ASSERT_TRUE(ring.Publish("saturated console"));
 		std::thread signal([&] {
 			const auto limit = std::chrono::steady_clock::now() + std::chrono::seconds(3);
 			while (!engine::SceneStartupDiagnosticTestAccess::Quitting(*scene) && std::chrono::steady_clock::now() < limit)
@@ -367,18 +388,69 @@ TEST_P(JobThreadFailures, PublicCallbackFailureStopsWorkerAndOwnerShutdownJoins)
 		scene->QueueExplicitRigSave([&] { calls.fetch_add(100); });
 		scene->OnJobTick(std::chrono::steady_clock::now());
 		scene->Shutdown();
+		if (mode == 0) drainToView(); // Runtime failure retained before view teardown.
+		view.Destroy();
 	}
 	EXPECT_TRUE(scene->JobThreadFailed());
 	scene->Shutdown(); // repeated UI/destructor teardown remains safe
-	EXPECT_EQ(calls.load(), mode == 0 || mode == 2 ? 1u : 0u);
+	EXPECT_EQ(calls.load(), mode == 0 || mode == 2 || mode == 5 ? 1u : 0u);
+	// Delivery is independent of both the destroyed console and its undrained
+	// ring. The immutable detail remains readable before and after join.
+	const auto detail = scene->JobThreadFailureDetail();
+	ASSERT_FALSE(detail.empty());
+	unsigned presented = 0, fallback = 0;
+	std::string delivered;
+	JobFailureNotice notice;
+	const auto show = [&](std::string_view message) {
+		EXPECT_FALSE(view.Created()); ++presented; delivered = message; return true;
+	};
+	notice.Report(detail, show, [&](auto) { ++fallback; return false; }, [](auto) {});
+	notice.Report(detail, show, [&](auto) { ++fallback; return false; }, [](auto) {});
+	EXPECT_EQ(presented, 1u); EXPECT_EQ(fallback, 0u);
+	EXPECT_EQ(delivered, detail);
+	if (mode == 5) { EXPECT_LE(detail.size(), 4095u); EXPECT_TRUE(detail.ends_with(" [detail truncated]")); }
+	if (mode == 2) EXPECT_TRUE(retained.empty()); // No post-destroy transcript drain.
 	unsigned errors = 0;
-	while (auto line = ring.Take())
+	while (auto line = ring.Take()) retained.push_back(std::move(*line));
+	for (const auto& value : retained)
 	{
+		const auto* line = &value;
 		if (line->find("[ERROR][job]") == std::string::npos) continue;
 		++errors;
 		EXPECT_NE(line->find("worker stopped; shutdown requested"), std::string::npos);
-		EXPECT_NE(line->find(mode == 2 ? "stage=final-save" : mode == 0 ? "stage=pump" : mode == 4 ? "stage=receiver" : "stage=initialize"), std::string::npos);
+		EXPECT_NE(line->find(mode == 2 ? "stage=final-save" : (mode == 0 || mode == 5) ? "stage=pump" : mode == 4 ? "stage=receiver" : "stage=initialize"), std::string::npos);
 	}
-	EXPECT_EQ(errors, 1u);
+	EXPECT_EQ(errors, mode == 2 ? 0u : 1u);
+	if (mode == 2) EXPECT_GT(ring.ConsumeDropped(), 0u);
 }
-INSTANTIATE_TEST_SUITE_P(ConsoleSession, JobThreadFailures, testing::Values(0, 1, 2, 3, 4));
+INSTANTIATE_TEST_SUITE_P(ConsoleSession, JobThreadFailures, testing::Values(0, 1, 2, 3, 4, 5));
+TEST_F(DiagnosticFiles, OwnerFailureNoticePersistsWhenModalFailsWithoutUsingCapturedStreams)
+{
+	console::LineRing ring;
+	console::ConsoleCapture capture(ring);
+	capture.CompleteStartup();
+	const std::string detail = "[ERROR][job] stage=final-save exception=test; shutdown requested";
+	const auto path = std::filesystem::path(JobFailureNotice::FallbackPath((Directory / L"defaults.json").wstring()));
+	EXPECT_EQ(path.parent_path(), Directory); EXPECT_EQ(path.filename(), L"worker-failure.log");
+	JobFailureNotice notice;
+	unsigned presented = 0, debugged = 0;
+	notice.Report(detail, [&](auto) -> bool { ++presented; throw std::runtime_error("modal unavailable"); },
+		[&](auto text) { return JobFailureNotice::Persist(path.c_str(), text); }, [&](auto) { ++debugged; });
+	std::ifstream file(path, std::ios::binary);
+	EXPECT_EQ(std::string(std::istreambuf_iterator<char>(file), {}), detail);
+	EXPECT_EQ(presented, 1u); EXPECT_EQ(debugged, 0u);
+	EXPECT_FALSE(ring.Take()); // No recursive stdout/stderr failure report.
+}
+TEST_F(DiagnosticFiles, OwnerFailureNoticeUsesDirectDebugFallbackIfModalAndFileFail)
+{
+	console::LineRing ring;
+	console::ConsoleCapture capture(ring);
+	capture.CompleteStartup();
+	std::string delivered;
+	JobFailureNotice notice;
+	notice.Report("retained worker detail", [](auto) { return false; },
+		[&](auto text) { return JobFailureNotice::Persist(Directory.c_str(), text); },
+		[&](auto text) { delivered = text; });
+	EXPECT_EQ(delivered, "retained worker detail");
+	EXPECT_FALSE(ring.Take());
+}
