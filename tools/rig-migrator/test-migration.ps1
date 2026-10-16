@@ -179,3 +179,5 @@ Write-Json (Join-Path $recovery '.rig-migration-transaction.json') ([ordered]@{T
 $null = Run $recoverySource $recovery @() 1
 Check ((Hash $target) -ceq $independentHash -and (Test-Path (Join-Path $recovery '.rig-migration-transaction.json'))) 'missing original backup blocks recovery without discarding journal'
 Write-Host "Migration regression checks: $script:checks passed. Retained fixtures and logs: $root"
+# Expected converter failures must not leak their native exit code to CI.
+exit 0
