@@ -7,6 +7,8 @@ layout(location = 2) in vec3 NormalIN;
 uniform mat4 MVP;
 uniform mat4 ModelView;
 uniform float StationLevel;
+uniform float TakeCore;
+uniform float TakeCoreThickness;
 
 out vec3 Normal;
 out vec3 ProbeNormal;
@@ -27,10 +29,12 @@ void main()
     float radiusScale = 0.5 + 4.0 * stationLevel * radialProfile;
 
     vec3 pos = PositionIN;
-    pos.xz *= radiusScale;
+    pos.xz *= TakeCore > 0.5 ? 1.0 : radiusScale;
+    if (TakeCore > 0.5) pos.y *= TakeCoreThickness;
 
     vec3 normal = NormalIN;
-    if (UvIN.y > 0.5 && UvIN.y < 1.5)
+    if (TakeCore > 0.5) normal.y /= max(TakeCoreThickness, 0.00001);
+    if (TakeCore < 0.5 && UvIN.y > 0.5 && UvIN.y < 1.5)
     {
         // The bevel drops 10 units over a 2-unit radial run. Keep the deck
         // and side normals separate so their hard edges remain visible.

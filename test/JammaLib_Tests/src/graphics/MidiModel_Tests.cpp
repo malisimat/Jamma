@@ -157,3 +157,94 @@ TEST(GraphicsMidiModel, ColumnBandsResetAtEveryGrainForTripletSubdivisions)
 		}
 	}
 }
+
+TEST(GraphicsMidiModel, PitchFitContainsWholeChamferedVolumesAndPreservesSemitones)
+{
+	for (const auto height : {1.0f, 45.0f, 220.0f})
+		for (const auto range : {graphics::MidiModel::PitchRange{60, 62}, {36, 60}, {0, 127}, {70, 70}})
+		{
+			const auto low = graphics::MidiModel::FitPitch(range.Low, height, range);
+			const auto high = graphics::MidiModel::FitPitch(range.High, height, range);
+			EXPECT_GE(low.first - low.second * 0.5f, -height * 0.5f);
+			EXPECT_LE(high.first + high.second * 0.5f, height * 0.5f);
+			EXPECT_FLOAT_EQ(low.second, high.second);
+			if (range.Low == range.High) EXPECT_FLOAT_EQ(0.0f, low.first);
+			else
+			{
+				const auto next = graphics::MidiModel::FitPitch(range.Low + 1, height, range);
+				EXPECT_NEAR((high.first - low.first) / (range.High - range.Low), next.first - low.first, 0.0001f);
+			}
+		}
+	EXPECT_GT(graphics::MidiModel::FitPitch(60, 100, {60, 62}).second,
+		graphics::MidiModel::FitPitch(60, 100, {48, 72}).second * 8.0f);
+	const auto empty = graphics::MidiModel::FitPitch(60, 100, {});
+	EXPECT_FLOAT_EQ(0.0f, empty.first);
+	EXPECT_TRUE(std::isfinite(empty.second));
+}
+
+TEST(GraphicsMidiModel, QueuedContentPublishesRangeWithInstancesAndRefreshesAfterReplacement)
+{
+	graphics::MidiModel model(graphics::MidiModelParams{});
+	const midi::MidiNote low{ 0, 10, 0, 36, 80, 0 }, high{ 10, 10, 0, 84, 80, 0 };
+	model.QueueModelUpdate({low, high}, 100);
+	EXPECT_EQ((graphics::MidiModel::PitchRange{36, 84}), model.PrepareSceneGeometry());
+	EXPECT_EQ(2u, model.NoteInstanceCount());
+	EXPECT_TRUE(model.EditorNoteMatches(1, high, 100));
+	model.UpdateModel({low}, 100); // edit, undo and reload use the same forced replacement
+	EXPECT_EQ((graphics::MidiModel::PitchRange{36, 36}), model.PrepareSceneGeometry());
+	model.QueueModelUpdate({}, 100);
+	EXPECT_TRUE(model.PrepareSceneGeometry().Empty());
+	EXPECT_EQ(0u, model.NoteInstanceCount());
+}
+
+TEST(GraphicsMidiModel, SharedBandCancelsDifferentRadialScales)
+{
+	graphics::MidiModel first(graphics::MidiModelParams{}), second(graphics::MidiModelParams{});
+	first.SetModelScale(0.8); second.SetModelScale(1.2);
+	first.SetSceneLayout(200.0f / 0.8f, {36, 84});
+	second.SetSceneLayout(200.0f / 1.2f, {36, 84});
+	EXPECT_NEAR(100.0f, first.CameraLocalBounds().Max.Y * first.ModelScale(), 0.001f);
+	EXPECT_NEAR(100.0f, second.CameraLocalBounds().Max.Y * second.ModelScale(), 0.001f);
+	const auto a = graphics::MidiModel::FitPitch(60, 200 / 0.8f, {36, 84});
+	const auto b = graphics::MidiModel::FitPitch(60, 200 / 1.2f, {36, 84});
+	EXPECT_NEAR(a.first * 0.8f, b.first * 1.2f, 0.001f);
+	EXPECT_NEAR(a.second * 0.8f, b.second * 1.2f, 0.001f);
+}
+
+TEST(GraphicsMidiModel, EveryRenderedOuterFaceFitsStackedTakeBandsAfterRadialScale)
+{
+	const auto mesh = graphics::MidiModel::BuildBaseVerts(2u);
+	for (const auto takeCount : {2, 4, 16})
+	{
+		const auto spacing = 470.0f / takeCount;
+		const auto height = (std::max)(1.0f, spacing - 18.0f) * 0.94f;
+		for (int take = 0; take < takeCount; ++take)
+			for (const auto radialScale : {0.8f, 1.2f, 2.4f})
+				for (const auto range : {graphics::MidiModel::PitchRange{60, 62}, {36, 60}, {0, 127}, {70, 70}})
+					for (const auto pitch : {range.Low, (range.Low + range.High) / 2, range.High})
+					{
+						const auto centre = take * spacing;
+						const auto fitted = graphics::MidiModel::FitPitch(pitch, height / radialScale, range, radialScale);
+						for (size_t vertex = 1; vertex < mesh.size(); vertex += 3)
+						{
+							const auto outerFace = centre + (fitted.first + mesh[vertex] * fitted.second) * radialScale;
+							EXPECT_GE(outerFace, centre - height * 0.5f - 0.0001f);
+							EXPECT_LE(outerFace, centre + height * 0.5f + 0.0001f);
+						}
+					}
+	}
+}
+
+TEST(GraphicsMidiModel, SinglePitchHeightIsCappedInTakeCoordinatesAndShrinksWithBand)
+{
+	for (const auto height : {1.0f, 12.0f, 90.0f, 220.0f, 450.0f})
+		for (const auto radialScale : {0.8f, 1.2f, 2.4f})
+		{
+			const auto fitted = graphics::MidiModel::FitPitch(72, height / radialScale, {72, 72}, radialScale);
+			const auto renderedHeight = fitted.second * radialScale;
+			EXPECT_FLOAT_EQ(0.0f, fitted.first);
+			EXPECT_NEAR((std::min)(height * 0.25f, 18.0f), renderedHeight, 0.0001f);
+			EXPECT_LE(renderedHeight, height * 0.25f + 0.0001f);
+			EXPECT_GT(renderedHeight, 0.0f);
+		}
+}

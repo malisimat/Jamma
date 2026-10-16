@@ -636,6 +636,7 @@ void StationModel::Draw3d(DrawContext& ctx,
 	if (!shader || 0u == _vertexArray || 0u == _numTris)
 		return;
 
+	glCtx.SetUniform("TakeCore", 0.0f);
 	glCtx.SetUniform("StationMuted", _muted ? 1.0f : 0.0f);
 	const auto stationLevel = std::clamp(_stationLevel, 0.0f, 1.0f);
 	const glm::vec3 stationStateColors[] = {
@@ -753,4 +754,97 @@ void StationModel::Draw3d(DrawContext& ctx,
 	glBindVertexArray(0);
 	glUseProgram(0);
 	glBindTexture(GL_TEXTURE_2D, 0u);
+}
+
+TakeCoreModel::TakeCoreModel() : GuiModel(gui::GuiModelParams{})
+{
+	_modelParams.ModelShaders = { "station" };
+	_modelParams.ModelTextures = { "probe_amber" };
+	auto [verts, uvs] = BuildGeometry(false);
+	SetGeometry(std::move(verts), std::move(uvs));
+	SetVisible(false);
+}
+
+TakeCoreModel::~TakeCoreModel()
+{
+	_ReleaseResources();
+}
+
+void TakeCoreModel::_ReleaseResources()
+{
+	// A retired take can die off the window thread. Queue deletion even without
+	// a current context; normal resource recreation uses this same path.
+	GlDeleteQueue::DeleteBuffers(3, _vertexBuffer);
+	std::fill(std::begin(_vertexBuffer), std::end(_vertexBuffer), 0u);
+	if (!_instanceBuffers.empty())
+	{
+		GlDeleteQueue::DeleteBuffers(static_cast<GLsizei>(_instanceBuffers.size()), _instanceBuffers.data());
+		_instanceBuffers.clear();
+	}
+	GlDeleteQueue::DeleteVertexArrays(1, &_vertexArray);
+	_vertexArray = 0u;
+}
+
+std::tuple<std::vector<float>, std::vector<float>> TakeCoreModel::BuildGeometry(bool annular)
+{
+	// Closed beveled profile; a tiny centre avoids degenerate triangles/normals.
+	const auto inner = annular ? 0.30f : 0.001f;
+	RingProfilePoint profile[] = {
+		{ inner, 0.32f }, { inner + 0.025f, 0.5f }, { 0.96f, 0.5f },
+		{ 1.0f, 0.25f }, { 1.0f, -0.25f }, { 0.96f, -0.5f },
+		{ inner + 0.025f, -0.5f }, { inner, -0.32f }, { inner, 0.32f }
+	};
+	std::reverse(std::begin(profile), std::end(profile));
+	return StationModel::BuildLathedProfileGeometry(64u, profile, 0.0f, false, 0.0f);
+}
+
+float TakeCoreModel::OuterRadius(float nearestMaterial) noexcept
+{
+	// Leave a readily visible gap even for short loops and small remote loops.
+	return (std::max)(0.0f, (std::min)(nearestMaterial * 0.68f, nearestMaterial - 12.0f));
+}
+
+void TakeCoreModel::SetLayout(float radius, float height, bool annular)
+{
+	if (_annular != annular)
+	{
+		_annular = annular;
+		auto [verts, uvs] = BuildGeometry(annular);
+		SetGeometry(std::move(verts), std::move(uvs));
+	}
+	SetModelScale((std::max)(radius, 0.001f));
+	_height = (std::max)(height, 0.001f);
+}
+
+void TakeCoreModel::SetState(const std::vector<unsigned int>& ownerId, bool selected, bool hover, bool muted)
+{
+	_ownerId = ownerId;
+	_isSelected = selected;
+	_hover = hover;
+	_muted = muted;
+}
+
+CameraBounds TakeCoreModel::CameraLocalBounds() const noexcept
+{
+	const auto radius = static_cast<float>(ModelScale());
+	return { { -radius, -_height * 0.5f, -radius }, { radius, _height * 0.5f, radius } };
+}
+
+void TakeCoreModel::Draw3d(base::DrawContext& ctx, unsigned int instances, base::DrawPass pass)
+{
+	// Decorative surfaces never write picker/highlight buffers or change hit areas.
+	if (!_isVisible || pass != base::PASS_SCENE) return;
+	auto& glCtx = dynamic_cast<GlDrawContext&>(ctx);
+	glCtx.ApplyGroupPreview(_ownerId);
+	glCtx.SetUniform("TakeCore", 1.0f);
+	glCtx.SetUniform("TakeCoreThickness", _height / static_cast<float>(ModelScale()));
+	glCtx.SetUniform("Highlight", _isSelected ? 1.0f : 0.0f);
+	glCtx.SetUniform("HighlightPass", 0.0f);
+	glCtx.SetUniform("StationHover", _hover ? 1.0f : 0.0f);
+	glCtx.SetUniform("StationMuted", _muted ? 1.0f : 0.0f);
+	glCtx.SetUniform("StationPressed", 0.0f);
+	glCtx.SetUniform("StationLevel", 0.0f);
+	glCtx.SetUniform("MaterialProbeSampler", 0u);
+	GuiModel::Draw3d(ctx, instances, pass);
+	glCtx.SetUniform("TakeCore", 0.0f);
 }

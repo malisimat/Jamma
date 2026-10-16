@@ -111,3 +111,34 @@ TEST(ResourceLibShaderUniforms, GroupPreviewUniformsReachAllPerformanceMaterials
     }
     EXPECT_TRUE(expected.empty());
 }
+
+TEST(ResourceLibShaderUniforms, TakeCoreAndWaveformLayoutUniformsAreRegistered)
+{
+	auto root = std::filesystem::absolute(__FILE__);
+	for (int parent = 0; parent < 5; ++parent) root = root.parent_path();
+	const auto resources = root / "Jamma" / "resources";
+	std::ifstream list(resources / "ResourceList.txt");
+	ASSERT_TRUE(list.is_open());
+	std::set<std::string> expected{ "waveform", "station", "picker" };
+	std::string line;
+	const std::regex declaration(R"(^[ \t]*uniform[ \t]+\w+[ \t]+(\w+)[ \t]*;)",
+		std::regex::ECMAScript | std::regex::multiline);
+	while (std::getline(list, line))
+	{
+		std::istringstream fields(line);
+		std::string type, name, uniform;
+		fields >> type >> name;
+		if (type != "2" || !expected.contains(name)) continue;
+		std::set<std::string> registered;
+		while (fields >> uniform) registered.insert(uniform);
+		std::ifstream shader(resources / "shaders" / (name + ".vert"));
+		ASSERT_TRUE(shader.is_open());
+		std::ostringstream text; text << shader.rdbuf();
+		const auto source = text.str();
+		for (auto match = std::sregex_iterator(source.begin(), source.end(), declaration);
+			match != std::sregex_iterator(); ++match)
+			EXPECT_TRUE(registered.contains((*match)[1].str())) << name << ": " << (*match)[1].str();
+		expected.erase(name);
+	}
+	EXPECT_TRUE(expected.empty());
+}

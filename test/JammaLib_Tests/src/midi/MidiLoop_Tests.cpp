@@ -499,6 +499,69 @@ private:
 	}
 };
 
+TEST(LoopTakeMidiVisualization, RecordingSnapshotsRefitExistingNotesWhenPitchExtremesGrow)
+{
+	MidiLoop loop;
+	auto model = std::make_shared<RecordingMidiModel>(false);
+	constexpr float takeHeight = 120.0f, radialScale = 0.8f;
+	constexpr auto displayInterval = constants::DefaultSampleRate / 30u + 1u;
+	model->SetModelScale(radialScale);
+	loop.AttachModel(model);
+	loop.StartRecord();
+	ASSERT_TRUE(loop.RecordEvent(MidiEvent::MakeNoteOn(100u, 0u, 60u, 90u)));
+
+	// MIDI ingress and periodic jobs use this throttled, immutable snapshot path.
+	// Each display interval just exceeds 1/30 second; nothing forces a synchronous rebuild.
+	auto generation = model->EditorModelGeneration();
+	ASSERT_TRUE(loop.QueueModelUpdateFromEvents(displayInterval, false));
+	EXPECT_EQ(generation, model->EditorModelGeneration());
+	EXPECT_EQ(0u, model->NoteInstanceCount());
+	// A new source event cannot mutate the already queued model snapshot.
+	ASSERT_TRUE(loop.RecordEvent(MidiEvent::MakeNoteOn(displayInterval + 10u, 0u, 58u, 90u)));
+	const auto singleRange = model->PrepareSceneGeometry();
+	EXPECT_EQ((MidiModel::PitchRange{60, 60}), singleRange);
+	EXPECT_EQ(++generation, model->EditorModelGeneration());
+	ASSERT_EQ(1u, model->NoteInstanceCount());
+	model->SetSceneLayout(takeHeight / radialScale, singleRange);
+	const auto single = MidiModel::FitPitch(60, takeHeight / radialScale, singleRange, radialScale);
+	EXPECT_FLOAT_EQ(0.0f, single.first);
+	EXPECT_NEAR(18.0f, single.second * radialScale, 0.0001f);
+
+	ASSERT_TRUE(loop.QueueModelUpdateFromEvents(2u * displayInterval, false));
+	EXPECT_EQ(generation, model->EditorModelGeneration());
+	EXPECT_EQ(1u, model->NoteInstanceCount());
+	const auto lowRange = model->PrepareSceneGeometry();
+	EXPECT_EQ((MidiModel::PitchRange{58, 60}), lowRange);
+	EXPECT_EQ(++generation, model->EditorModelGeneration());
+	EXPECT_EQ(2u, model->NoteInstanceCount());
+	model->SetSceneLayout(takeHeight / radialScale, lowRange);
+	const auto previous = MidiModel::FitPitch(60, takeHeight / radialScale, lowRange, radialScale);
+	EXPECT_GT(previous.first, single.first); // The already recorded note moves with the new scale.
+
+	ASSERT_TRUE(loop.RecordEvent(MidiEvent::MakeNoteOn(2u * displayInterval + 10u, 0u, 84u, 90u)));
+	ASSERT_TRUE(loop.QueueModelUpdateFromEvents(3u * displayInterval, false));
+	EXPECT_EQ(generation, model->EditorModelGeneration());
+	EXPECT_EQ(2u, model->NoteInstanceCount());
+	const auto fullRange = model->PrepareSceneGeometry();
+	EXPECT_EQ((MidiModel::PitchRange{58, 84}), fullRange);
+	EXPECT_EQ(++generation, model->EditorModelGeneration());
+	EXPECT_EQ(3u, model->NoteInstanceCount());
+	model->SetSceneLayout(takeHeight / radialScale, fullRange);
+	const auto current = MidiModel::FitPitch(60, takeHeight / radialScale, fullRange, radialScale);
+	EXPECT_LT(current.first, previous.first);
+	EXPECT_LT(current.second, previous.second);
+	const auto lowest = MidiModel::FitPitch(58, takeHeight / radialScale, fullRange, radialScale);
+	const auto highest = MidiModel::FitPitch(84, takeHeight / radialScale, fullRange, radialScale);
+	EXPECT_GE((lowest.first - lowest.second * 0.5f) * radialScale, -takeHeight * 0.5f);
+	EXPECT_LE((highest.first + highest.second * 0.5f) * radialScale, takeHeight * 0.5f);
+	EXPECT_NEAR((highest.first - lowest.first) / 26.0f,
+		(current.first - lowest.first) / 2.0f, 0.0001f); // Semitones keep their proportional spacing.
+	EXPECT_FLOAT_EQ(-61.0f, model->Attribute(1u)[4u + 3u]); // Original pitch/event identity survives refitting.
+	EXPECT_EQ(generation, model->EditorModelGeneration());
+	EXPECT_EQ(fullRange, model->PrepareSceneGeometry()); // No queued content means no frame-by-frame rebuild.
+	EXPECT_EQ(generation, model->EditorModelGeneration());
+}
+
 TEST(LoopTakeMidiVisualization, SilentRecordingRingGrowsThroughUpdateJobs)
 {
 	auto take = MakeLoopTake();

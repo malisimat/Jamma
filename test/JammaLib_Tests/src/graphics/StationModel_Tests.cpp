@@ -2,6 +2,7 @@
 #include <cmath>
 #include "gtest/gtest.h"
 #include "graphics/StationModel.h"
+#include <glm/geometric.hpp>
 
 using graphics::StationModel;
 
@@ -207,4 +208,39 @@ TEST(StationModel_Rings, OccluderPrismHasTwoBarsAndScalesWithRadius)
 	EXPECT_EQ(smallerVerts.size(), verts.size());
 	EXPECT_EQ(smallerUvs.size(), uvs.size());
 	EXPECT_NE(smallerVerts, verts);
+}
+
+TEST(StationModel_TakeCore, ClosedBeveledDiscAndAnnulusStayInsideClearance)
+{
+	for (const bool annular : {false, true})
+	{
+		const auto [verts, uvs] = graphics::TakeCoreModel::BuildGeometry(annular);
+		ASSERT_FALSE(verts.empty());
+		EXPECT_EQ(verts.size() / 3u, uvs.size() / 2u);
+		bool topFacesUp = false, bottomFacesDown = false;
+		for (size_t i = 0; i + 8u < verts.size(); i += 9u)
+		{
+			const glm::vec3 a(verts[i], verts[i + 1], verts[i + 2]);
+			const glm::vec3 b(verts[i + 3], verts[i + 4], verts[i + 5]);
+			const glm::vec3 c(verts[i + 6], verts[i + 7], verts[i + 8]);
+			const auto normal = glm::cross(b - a, c - a);
+			EXPECT_GT(glm::length(normal), 0.0000001f);
+			if (a.y == 0.5f && b.y == 0.5f && c.y == 0.5f) { EXPECT_GT(normal.y, 0); topFacesUp = true; }
+			if (a.y == -0.5f && b.y == -0.5f && c.y == -0.5f) { EXPECT_LT(normal.y, 0); bottomFacesDown = true; }
+			for (const auto v : {a, b, c})
+			{
+				EXPECT_LE(std::hypot(v.x, v.z), 1.00001f);
+				EXPECT_LE(std::fabs(v.y), 0.5f);
+				if (annular) EXPECT_GE(std::hypot(v.x, v.z), 0.29999f);
+			}
+		}
+		EXPECT_TRUE(topFacesUp); EXPECT_TRUE(bottomFacesDown);
+	}
+	for (const auto nearest : {0.0f, 10.0f, 25.0f, 100.0f, 400.0f})
+	{
+		const auto radius = graphics::TakeCoreModel::OuterRadius(nearest);
+		EXPECT_GE(radius, 0);
+		EXPECT_LE(radius, nearest * 0.68f);
+		if (nearest >= 12) EXPECT_LE(radius, nearest - 12.0f);
+	}
 }

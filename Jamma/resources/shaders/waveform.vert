@@ -16,6 +16,8 @@ uniform mat4 ModelView;
 uniform sampler1D WaveformSampler;
 uniform float WaveformRadius;
 uniform float WaveformHeightScale;
+uniform float WaveformDisplayScale;
+uniform float WaveformSceneScale;
 uniform float WaveformMinHeight;
 uniform float WaveformColorMultiplier;
 uniform float WaveformUnitMeshRadius;
@@ -32,7 +34,10 @@ void main()
 
     float yMin = (WaveformHeightScale * minMax.x) - WaveformMinHeight;
     float yMax = (WaveformHeightScale * minMax.y) + WaveformMinHeight;
-    float y = PositionIN.y >= 0.0 ? yMax : yMin;
+    float sourceY = PositionIN.y >= 0.0 ? yMax : yMin;
+    float y = (PositionIN.y >= 0.0
+        ? WaveformHeightScale * minMax.y * WaveformDisplayScale + WaveformMinHeight
+        : WaveformHeightScale * minMax.x * WaveformDisplayScale - WaveformMinHeight) * WaveformSceneScale;
     float colorScale = max(WaveformColorScale, 0.0);
 
     float safeUnitRadius = max(WaveformUnitMeshRadius, 0.0001);
@@ -41,7 +46,7 @@ void main()
 
     // The two UV seam vertices share the ring position but end at opposite
     // grid edges. No vertex buffer changes during the transition.
-    float gridZ = clamp(y / max(WaveformHeightScale, 0.0001), -1.0, 1.0)
+    float gridZ = clamp(sourceY / max(WaveformHeightScale, 0.0001), -1.0, 1.0)
         * WaveformRadius * 0.78;
     float gridY = 3.0 + (length(scaledXZ) - WaveformRadius) * 0.55;
     vec3 gridPosition = vec3((u - 0.5) * WaveformRadius * 2.0, gridY, gridZ);
@@ -53,7 +58,7 @@ void main()
     ViewPosition = (ModelView * position).xyz;
     EditorU = u;
     EditorMorphV = EditorMorph;
-    float colorV = clamp(0.5 - (y * colorScale * WaveformColorMultiplier), 0.0, 1.0);
+    float colorV = clamp(0.5 - (sourceY * colorScale * WaveformColorMultiplier), 0.0, 1.0);
     UV = vec2(u, colorV);
     // The waveform can be scaled to zero in Y. Recover its orientation from
     // the unaffected X/Z axes so probe normals never inherit that scale.

@@ -10,6 +10,28 @@
 
 namespace graphics
 {
+	// Decorative take surface. Uses the existing station material and resource lifecycle.
+	class TakeCoreModel : public gui::GuiModel
+	{
+	public:
+		TakeCoreModel();
+		~TakeCoreModel();
+		void SetLayout(float radius, float height, bool annular);
+		void SetState(const std::vector<unsigned int>& ownerId, bool selected, bool hover, bool muted);
+		CameraBounds CameraLocalBounds() const noexcept;
+		void Draw3d(base::DrawContext& ctx, unsigned int instances, base::DrawPass pass) override;
+		static std::tuple<std::vector<float>, std::vector<float>> BuildGeometry(bool annular);
+		static float OuterRadius(float nearestMaterial) noexcept;
+	protected:
+		void _ReleaseResources() override;
+	private:
+		std::vector<unsigned int> _ownerId;
+		bool _annular = false;
+		bool _hover = false;
+		bool _muted = false;
+		float _height = 4.0f;
+	};
+
 	struct RingProfilePoint
 	{
 		float Radius;
