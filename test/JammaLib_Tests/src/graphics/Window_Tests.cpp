@@ -220,6 +220,28 @@ TEST(CameraIdle, CameraDragWheelAndViewKeysRestartIdle)
 	}
 }
 
+TEST(CameraIdle, RepeatedMouseMoveAtSamePixelPreservesDeadline)
+{
+	CameraActivityScene scene;
+	ResourceLib resources;
+	CameraActivityWindow window(scene, resources);
+	actions::TouchMoveAction move;
+	move.Touch = actions::TouchAction::TOUCH_MOUSE;
+	move.Position = { 800, 500 };
+	window.OnAction(move);
+	for (const bool automatic : { false, true })
+	{
+		scene.ArmIdle(automatic);
+		const auto revision = scene.ActivityRevision();
+		for (unsigned int repeat = 0u; repeat < 3u; ++repeat) window.OnAction(move);
+		EXPECT_EQ(revision, scene.ActivityRevision());
+		EXPECT_TRUE(scene.AutomaticAtOriginalDeadline());
+	}
+	move.Position = { 801, 500 };
+	window.OnAction(move);
+	EXPECT_FALSE(scene.AutomaticAtOriginalDeadline());
+}
+
 TEST(CameraFrontZoom, FitsLargeOneSidedStationRowsAtWideAndNarrowAspectRatios)
 {
 	for (const auto viewport : { utils::Size2d{ 1600u, 900u }, utils::Size2d{ 450u, 1000u } })

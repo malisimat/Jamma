@@ -806,6 +806,11 @@ ActionResult Window::OnAction(TouchMoveAction touchAction)
 {
 	SceneDispatchScope dispatch(*this);
 	if (_config.Size.Width == 0 || _config.Size.Height == 0) return ActionResult::NoAction();
+	// Windows can redeliver WM_MOUSEMOVE at the same pixel without physical
+	// pointer movement. Keep hover updates, but do not restart camera idle.
+	if (!touchAction.IsRelative && touchAction.Origin == TouchMoveAction::Provenance::DeliveredPointer
+		&& _cachedCursorPosition && touchAction.Position == *_cachedCursorPosition)
+		touchAction.Origin = TouchMoveAction::Provenance::PointerRefresh;
 	_cachedCursorPosition = touchAction.Position;
 	_cachedCursorModifiers = touchAction.Modifiers;
 	if (!touchAction.IsRelative) _hover3dDirty = true;
