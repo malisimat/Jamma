@@ -120,9 +120,11 @@ LOOP EDITOR (E; completed, non-empty loops only)
     Release commits an edit; lost capture/changed target cancels unfinished previews.
   MIDI: left-drag paints notes or erases occupied coverage on the active grid.
     With quantisation off: click empty space adds; drag a note moves; drag an edge trims.
-    Right-drag a note changes velocity; right-drag empty space orbits the view.
-    Ctrl+left-drag a note moves by grid cells/semitones; Ctrl+left-drag empty space
-    pans/zooms pitch (horizontal zoom, vertical pan). Wheel scrolls pitch;
+    Right-drag a note changes velocity.
+    Right-drag empty MIDI grid pans pitch vertically and zooms horizontally.
+    Ctrl+left-drag a note moves by grid cells/semitones.
+    Ctrl+left-drag on empty MIDI grid has no action.
+    Start a left/right drag off the MIDI grid to orbit. Wheel scrolls pitch;
     Shift+wheel zooms pitch. CHANNEL: type 1-16 + Enter or drag to choose a wired layer.
   Audio spectral surface: left-drag boosts, right-drag cuts; Alt+left-drag sweeps
     a broadband band. Wheel changes brush size; Alt+wheel changes band width;

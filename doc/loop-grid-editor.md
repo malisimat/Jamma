@@ -13,8 +13,8 @@ The loop grid editor opens one completed audio or MIDI loop as a flattened, time
 - At take or station depth, opening the MIDI editor defaults to the first wired channel containing events, or the first wired channel when all are empty. At loop depth, it keeps the selected stream; hover to disambiguate multiple selected streams.
 - **CHANNEL** is the numeric beside the grid, anchored to its projected boundary as the view rotates. It selects the recorded input layer by its channel number (1–16). Type a number and press **Enter**, or drag the number vertically. Unavailable channels leave the current layer selected and show a message. New notes use the selected layer's input channel. Switching channels cancels an unfinished gesture; each loop retains its undo/redo history.
 - **Left-drag** adds notes when starting on an empty cell, or removes note coverage when starting on an occupied cell. With quantisation off, click empty space to create a note; drag a note body to move it, or drag an edge to trim it.
-- **Right-drag a note** to change its velocity. Right-drag on empty space orbits the editor view.
-- **Ctrl+left-drag a note** moves it by grid cells and semitones when a grid is available. **Ctrl+left-drag empty space** pans and zooms the visible pitch range without changing MIDI.
+- **Right-drag a note** to change its velocity. **Right-drag empty MIDI grid** pans pitch vertically and zooms horizontally. Start a left/right drag off the MIDI grid to orbit the editor view.
+- **Ctrl+left-drag a note** moves it by grid cells and semitones when a grid is available. **Ctrl+left-drag on empty MIDI grid** has no action.
 - **Mouse wheel** scrolls the visible pitch range; **Shift+mouse wheel** zooms it.
 - **Ctrl+Z** undoes the last MIDI edit; **Ctrl+Shift+Z** redoes it.
 

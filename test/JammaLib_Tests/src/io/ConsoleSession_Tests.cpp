@@ -209,6 +209,18 @@ TEST(ConsoleCommand, GeneralHelpAliasesWriteTheSameCompleteOfflineReference)
 		EXPECT_NE(help.find(binding), std::string_view::npos) << binding;
 }
 
+TEST(ConsoleCommand, GeneralHelpDescribesMidiPointerContexts)
+{
+	// Match LoopGridEditor::_BeginSpecialGesture: right on empty grid enters
+	// pitch view; Ctrl+left there is reserved, while off-grid drags can orbit.
+	const auto help = console::GeneralHelpText;
+	for (const auto* binding : {
+		"Right-drag empty MIDI grid pans pitch vertically and zooms horizontally.",
+		"Ctrl+left-drag on empty MIDI grid has no action.",
+		"Start a left/right drag off the MIDI grid to orbit." })
+		EXPECT_NE(help.find(binding), std::string_view::npos) << binding;
+}
+
 TEST(ConsoleCommand, GeneralHelpFitsCaptureWithoutDroppingLines)
 {
 	console::LineRing ring;
