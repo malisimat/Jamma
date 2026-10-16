@@ -57,6 +57,7 @@ namespace gui
 		float TransitionValue() const { return _transition; }
 		float PresentedOpacity() const;
 		void Draw(base::DrawContext& context) override;
+		void InitResources(resources::ResourceLib& resources, bool force) override;
 		bool RouteHitTest(utils::Position2d position) override;
 		using GuiPanel::OnAction;
 		actions::ActionResult OnAction(actions::GuiAction action) override;
@@ -71,6 +72,7 @@ namespace gui
 		static constexpr int MainPanelMinimumHeight = 320;
 		static constexpr int SelectionRowGap = 4;
 		int _SelectionPanelHeight() const;
+		int _SettingsPanelWidth() const;
 		static constexpr int SelectionHandleHeight = 20;
 		void _Layout();
 		void _LayoutSelection(int panelWidth, int panelHeight);

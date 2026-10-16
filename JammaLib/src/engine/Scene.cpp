@@ -1553,12 +1553,7 @@ ActionResult Scene::OnAction(KeyAction action)
 	if (auto overrideRes = _inputSubsystem->HandleChannelOverrideKey(action, SnapshotStations());
 		overrideRes.IsEaten)
 	{
-		if (_settingsControls->Channel())
-		{
-			_settingsControls->Channel()->SetValue(
-				static_cast<double>(_inputSubsystem->ForcedChannelOverride()),
-				false);
-		}
+		_settingsControls->RefreshChannelPresentation(_inputSubsystem->ForcedChannelOverride());
 		return overrideRes;
 	}
 
@@ -1845,7 +1840,7 @@ ActionResult Scene::OnAction(GuiAction action)
 		return ActionResult::NoAction();
 	}
 	using Settings = SceneSettingsControls;
-	const auto change = _settingsControls->Decode(action, _inputSubsystem->ForcedChannelOverride(), _transportOffsetLoopFrac);
+	const auto change = _settingsControls->Decode(action, _transportOffsetLoopFrac);
 	if (!change) return ActionResult::NoAction();
 	if (auto view = std::get_if<Settings::ViewModeChange>(&*change))
 	{
@@ -1877,7 +1872,7 @@ ActionResult Scene::OnAction(GuiAction action)
 	else if (auto channel = std::get_if<Settings::ChannelChange>(&*change))
 	{
 		_inputSubsystem->SetForcedChannelOverride(channel->Value, SnapshotStations());
-		_settingsControls->Channel()->SynchronizeValueFromOwner(channel->Value);
+		_settingsControls->RefreshChannelPresentation(_inputSubsystem->ForcedChannelOverride());
 	}
 	else if (auto offset = std::get_if<Settings::OffsetChange>(&*change))
 	{

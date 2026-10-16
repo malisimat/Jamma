@@ -143,9 +143,9 @@ namespace engine
             std::scoped_lock lock(scene._sceneMutex);
             return scene._sourceLossRecoveryGateClosed;
         }
-		static std::shared_ptr<gui::GuiNumericInput> FocusSetting(Scene& scene, bool midiChannel, const std::string& text)
+		static std::shared_ptr<gui::GuiNumericInput> FocusSetting(Scene& scene, const std::string& text)
 		{
-			auto field = midiChannel ? scene._settingsControls->Channel() : scene._settingsControls->Offset();
+			auto field = scene._settingsControls->Offset();
 			// Focus manager and text edit state belong to the window owner. Commit
 			// remains deferred until actual Scene focus loss invokes FinalizeEdits.
 			EXPECT_TRUE(scene._focusManager.RequestFocus(field));
@@ -931,17 +931,17 @@ TEST_F(SceneRoutingIntegrationTest, PublicRoutingSubmissionAndFocusLossRemainSaf
  scene->Shutdown();
 }
 
-TEST_F(SceneRoutingIntegrationTest, FocusLossCommitsMidiChannelSettingOutsideSceneLock)
+TEST_F(SceneRoutingIntegrationTest, FocusLossPreservesMidiChannelToggleSelection)
 {
  auto scene = FreshScene({Station("A")}, {});
  ASSERT_TRUE(scene);
- auto field = engine::SourceLossIntegrationTestAccess::FocusSetting(*scene, true, "7");
- ASSERT_TRUE(field->HasFocus());
- EXPECT_EQ(0u, engine::SourceLossIntegrationTestAccess::ForcedChannel(*scene));
+ actions::GuiAction action;
+ action.ElementType = actions::GuiAction::ACTIONELEMENT_RADIO; action.Index = 7001u;
+ action.Data = actions::GuiAction::GuiInt(7);
+ scene->OnAction(action);
+ EXPECT_EQ(7u, engine::SourceLossIntegrationTestAccess::ForcedChannel(*scene));
  EXPECT_NO_THROW(scene->OnInputFocusLost());
  EXPECT_EQ(7u, engine::SourceLossIntegrationTestAccess::ForcedChannel(*scene));
- EXPECT_DOUBLE_EQ(7.0, field->Value());
- EXPECT_FALSE(field->HasFocus());
  scene->Shutdown();
 }
 
@@ -949,7 +949,7 @@ TEST_F(SceneRoutingIntegrationTest, FocusLossCommitsPhaseOffsetSettingOutsideSce
 {
  auto scene = FreshScene({Station("A")}, {});
  ASSERT_TRUE(scene);
- auto field = engine::SourceLossIntegrationTestAccess::FocusSetting(*scene, false, "0.125");
+ auto field = engine::SourceLossIntegrationTestAccess::FocusSetting(*scene, "0.125");
  ASSERT_TRUE(field->HasFocus());
  EXPECT_DOUBLE_EQ(0.0, scene->SnapshotStations()[0]->TransportOffsetLoopFrac());
  EXPECT_NO_THROW(scene->OnInputFocusLost());
