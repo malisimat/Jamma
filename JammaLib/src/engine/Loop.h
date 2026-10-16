@@ -297,6 +297,8 @@ namespace engine
 		std::vector<float> ExportOriginalSamplesQuiescent(bool retainPhysicalTail = false) const;
 		io::JamFile::Loop ToJamFile(const std::string& wavFilename) const;
 		void SetMixerLevel(double level);
+		// UI wiring keeps a weak reference; this Loop owns the post-gain source.
+		std::shared_ptr<audio::AudioMixer> Mixer() const noexcept { return _mixer; }
 		void SetMasterVisualScale(float scale) noexcept;
 		void SetVisualUpdatesEnabled(bool enabled);
 		bool Load(const io::WavReadWriter& readWriter);

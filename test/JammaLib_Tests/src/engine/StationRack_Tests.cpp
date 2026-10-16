@@ -38,6 +38,8 @@ public:
 	{
 		_guiRack->SetRackState(state, true);
 	}
+	const auto& Rack() const { return _guiRack; }
+	const auto& BusMixer(unsigned int index) const { return _audioMixers.at(index); }
 };
 
 static std::shared_ptr<StationRackTestLoopTake> MakeTestLoopTake(const std::string& id)
@@ -146,4 +148,61 @@ TEST(StationRack, ChannelsOpenCollapsesStagedRouterSiblingToChannels)
 
 	EXPECT_EQ(gui::GuiRackParams::RACK_CHANNELS, take0->GetRackState());
 	EXPECT_EQ(gui::GuiRackParams::RACK_CHANNELS, take1->GetRackState());
+}
+
+TEST(StationRack, TakeChannelMetersFollowTheControlledLoopGain)
+{
+	auto take = MakeTestLoopTake("meter-take");
+	take->Record({0u, 1u}, "meter-station", {}, {}); take->CommitChanges();
+	ASSERT_EQ(2u, take->GetLoops().size());
+	for (unsigned int index = 0u; index < 2u; ++index)
+	{
+		const auto loop = take->GetLoops()[index];
+		const auto slider = take->Rack()->GetChannelSlider(index);
+		ASSERT_TRUE(slider); ASSERT_EQ(loop->Mixer(), slider->Mixer());
+		EXPECT_NE(take->BusMixer(index), slider->Mixer());
+		const auto amplitude = index == 0u ? 0.8f : 0.125f;
+		const auto count = constants::MaxLoopFadeSamps + 32u;
+		std::vector<float> samples(count, amplitude);
+		base::AudioWriteRequest request;
+		request.samples = samples.data(); request.numSamps = count; request.stride = 1u;
+		request.fadeCurrent = 0.0f; request.fadeNew = 1.0f; request.source = base::Audible::AUDIOSOURCE_ADC;
+		loop->OnBlockWrite(request, 0); loop->EndWrite(count, true);
+		loop->Play(constants::MaxLoopFadeSamps, 32u, false);
+		slider->SetValue(index == 0u ? 0.25 : 1.0);
+		loop->Mixer()->Offset(4096u);
+		loop->WriteBlock(nullptr, nullptr, 0, 32u);
+		EXPECT_FLOAT_EQ(index == 0u ? 0.2f : 0.125f, slider->Mixer()->VuPeakLevel());
+	}
+	for (const auto depth : {base::SelectDepth::DEPTH_STATION, base::SelectDepth::DEPTH_LOOPTAKE, base::SelectDepth::DEPTH_LOOP})
+	{
+		take->SetSelectDepth(depth); take->SetRackVisibility(true);
+		take->Rack()->SetRackState(gui::GuiRackParams::RACK_CHANNELS, true);
+		EXPECT_FLOAT_EQ(0.2f, take->Rack()->GetChannelSlider(0u)->Mixer()->VuPeakLevel());
+		EXPECT_FLOAT_EQ(0.125f, take->Rack()->GetChannelSlider(1u)->Mixer()->VuPeakLevel());
+	}
+}
+
+class MeterBindingTestStation final : public Station
+{
+public:
+	explicit MeterBindingTestStation(StationParams params) : Station(params, Station::GetMixerParams(params.Size, MergeMixBehaviourParams{})) {}
+	const auto& Rack() const { return _guiRack; }
+	const auto& MasterMixer() const { return _masterMixer; }
+	const auto& ChannelMixer(unsigned int index) const { return _audioMixers.at(index); }
+};
+
+TEST(StationRack, StationMeterBindingsRefreshWhenAudioChannelsAreRebuilt)
+{
+	StationParams params; params.Size = {200u, 200u};
+	auto station = std::make_shared<MeterBindingTestStation>(params);
+	station->SetNumDacChannels(2u); station->SetNumBusChannels(2u); station->CommitChanges();
+	ASSERT_EQ(station->MasterMixer(), station->Rack()->GetMasterSlider()->Mixer());
+	const auto slider = station->Rack()->GetChannelSlider(0u);
+	ASSERT_TRUE(slider); ASSERT_EQ(station->ChannelMixer(0u), slider->Mixer());
+	const auto oldMixer = slider->Mixer(); oldMixer->UpdateVu(1.0f, 1u);
+	station->SetNumBusChannels(3u); station->CommitChanges();
+	ASSERT_EQ(slider, station->Rack()->GetChannelSlider(0u));
+	ASSERT_EQ(station->ChannelMixer(0u), slider->Mixer());
+	EXPECT_NE(oldMixer, slider->Mixer()); EXPECT_FLOAT_EQ(0.0f, slider->Mixer()->VuPeakLevel());
 }

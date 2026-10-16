@@ -134,6 +134,39 @@ private:
     std::vector<std::shared_ptr<ChannelMixerMockedSink>> _sinks;
 };
 
+TEST(AudioMixerMeter, PublishesPostGainWhileHiddenAndDecaysToSilence)
+{
+    audio::AudioMixerParams params;
+    audio::WireMixBehaviourParams wire; wire.Channels = {0u}; params.Behaviour = wire;
+    audio::AudioMixer mixer(params);
+    mixer.SetUnmutedLevel(0.5); mixer.Offset(4096u);
+    mixer.SetVuVisible(false);
+    const float input[] = {-0.8f, 0.1f, 0.2f, -0.4f};
+    auto sink = std::make_shared<MultiChannelCaptureSink>(1u, 64u);
+    mixer.WriteBlock(sink, input, 4u);
+    EXPECT_FLOAT_EQ(0.4f, mixer.VuPeakLevel());
+    EXPECT_FLOAT_EQ(0.4f, mixer.VuLevel());
+    EXPECT_FLOAT_EQ(0.4f, mixer.VuHoldLevel());
+    EXPECT_FLOAT_EQ(-0.4f, sink->Samples(0u)[0]);
+    const float silence[64]{};
+    for (unsigned int block = 0u; block < 1000u; ++block) mixer.WriteBlock(sink, silence, 64u);
+    EXPECT_FLOAT_EQ(0.0f, mixer.VuPeakLevel());
+    EXPECT_FLOAT_EQ(0.0f, mixer.VuLevel());
+    EXPECT_FLOAT_EQ(0.0f, mixer.VuHoldLevel());
+}
+
+TEST(AudioMixerMeter, DistinctChannelsAndMuteUseTheirOwnSmoothedSignal)
+{
+    audio::AudioMixerParams params;
+    audio::WireMixBehaviourParams wire; wire.Channels = {0u}; params.Behaviour = wire;
+    audio::AudioMixer first(params), second(params);
+    const float loud[] = {0.8f, -0.4f}, quiet[] = {0.125f, -0.0625f};
+    first.WriteBlock(nullptr, loud, 2u); second.WriteBlock(nullptr, quiet, 2u);
+    EXPECT_FLOAT_EQ(0.8f, first.VuPeakLevel()); EXPECT_FLOAT_EQ(0.125f, second.VuPeakLevel());
+    second.Mute(); second.Offset(4096u); second.WriteBlock(nullptr, quiet, 2u);
+    EXPECT_FLOAT_EQ(0.0f, second.VuPeakLevel()); EXPECT_FLOAT_EQ(0.8f, first.VuPeakLevel());
+}
+
 TEST(CaptureSourceMute, SharedClaimsPreserveUserMuteAndStereoFade)
 {
     auto claims = std::make_shared<audio::CaptureSourceMuteControl>();
