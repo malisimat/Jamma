@@ -15,18 +15,18 @@ IoSessionLoader::ReconstructedSession IoSessionLoader::Reconstruct(const JamFile
 	result.HudAudioInputCount = std::max(1u, rig.User.Audio.NumChannelsIn);
 	for (const auto& triggerCfg : rig.Triggers)
 	{
-		for (const auto channel : triggerCfg.InputChannels)
+		for (const auto channel : triggerCfg.CaptureInputs.Audio)
 			result.HudAudioInputCount = std::max(result.HudAudioInputCount, channel + 1u);
 	}
 
 	result.HudMidiInputs.reserve(rig.User.Midi.Devices.size());
 	for (const auto& device : rig.User.Midi.Devices)
 	{
-		if (device.Enabled && !device.Name.empty())
-			result.HudMidiInputs.push_back(device.Name);
+		if (device.Enabled && !device.Id.empty())
+			result.HudMidiInputs.push_back(device.Id);
 	}
 
-	result.TriggerParameters.DebounceMs = rig.User.Trigger.DebounceSamps;
+	result.TriggerParameters.DebounceMs = rig.User.Trigger.DebounceMs;
 
 	StationParams stationParams;
 	stationParams.Index = 0;
@@ -73,8 +73,28 @@ IoSessionLoader::ReconstructedSession IoSessionLoader::Reconstruct(const JamFile
 }
 
 void IoSessionLoader::RestoreTriggerHistories(const std::vector<JamFile::TriggerHistory>& histories,
-	const RigSnapshot& initialRig)
+	const RigSnapshot& initialRig, const std::vector<std::shared_ptr<Station>>& stations)
 {
+	// History refers to take identity in the saved session, even when the rig
+	// has since selected a different station. Never guess an unavailable owner.
+	const auto resolve = [&stations](const std::string& id)
+		-> std::pair<std::shared_ptr<Station>, std::shared_ptr<LoopTake>> {
+		if (id.empty()) return {};
+		std::pair<std::shared_ptr<Station>, std::shared_ptr<LoopTake>> match;
+		for (const auto& station : stations)
+			for (const auto& take : station->GetLoopTakeSnapshot())
+				if (take && take->Id() == id)
+				{
+					if (match.second)
+					{
+						std::cout << "[LOAD] Warning: ambiguous history take '" << id << "'." << std::endl;
+						return {};
+					}
+					match = {station, take};
+				}
+		if (!match.second) std::cout << "[LOAD] Warning: unavailable history take '" << id << "'." << std::endl;
+		return match;
+	};
 	for (const auto& runtime : initialRig.Triggers)
 	{
 		if (!runtime.Instance)
@@ -86,19 +106,13 @@ void IoSessionLoader::RestoreTriggerHistories(const std::vector<JamFile::Trigger
 		std::vector<TriggerTake> takes;
 		std::vector<std::pair<std::shared_ptr<base::TriggerPunchTarget>,
 			std::shared_ptr<base::TriggerPunchTarget>>> pins;
-		const auto station = std::dynamic_pointer_cast<Station>(runtime.Receiver);
-		const auto restoredTargets = station ? station->GetLoopTakeSnapshot() :
-			std::vector<std::shared_ptr<LoopTake>>{};
-		const auto resolve = [&restoredTargets](const std::string& id) -> std::shared_ptr<base::TriggerPunchTarget> {
-			const auto found = std::find_if(restoredTargets.begin(), restoredTargets.end(),
-				[&id](const auto& take) { return take && take->Id() == id; });
-			return found == restoredTargets.end() ? nullptr : *found;
-		};
 		takes.reserve(saved->Takes.size());
 		for (const auto& take : saved->Takes)
 		{
-			takes.push_back({ static_cast<decltype(TriggerTake{}.SourceType)>(take.SourceType), take.SourceTakeId, take.TargetTakeId });
-			pins.emplace_back(resolve(take.SourceTakeId), resolve(take.TargetTakeId));
+			const auto source = resolve(take.SourceTakeId);
+			const auto target = resolve(take.TargetTakeId);
+			takes.push_back({ static_cast<decltype(TriggerTake{}.SourceType)>(take.SourceType), take.SourceTakeId, take.TargetTakeId, target.first });
+			pins.emplace_back(source.second, target.second);
 		}
 		runtime.Instance->RestoreTakes(std::move(takes), std::move(pins));
 	}

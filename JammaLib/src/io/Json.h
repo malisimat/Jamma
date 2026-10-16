@@ -22,9 +22,9 @@ namespace io
 	public:
 		struct JsonArray;
 		struct JsonPart;
-		typedef std::variant<bool, long, unsigned long, double, std::string, JsonArray, JsonPart> JsonValue;
-		typedef std::variant<bool, long, unsigned long, double, std::string> JsonScalar;
-		typedef std::variant<std::vector<bool>, std::vector<long>, std::vector<unsigned long>, std::vector<double>, std::vector<std::string>, std::vector<JsonPart>> JsonArrayType;
+		typedef std::variant<bool, long, unsigned long, double, std::string, JsonArray, JsonPart, std::monostate> JsonValue;
+		typedef std::variant<bool, long, unsigned long, double, std::string, std::monostate> JsonScalar;
+		typedef std::variant<std::vector<bool>, std::vector<long>, std::vector<unsigned long>, std::vector<double>, std::vector<std::string>, std::vector<JsonPart>, std::vector<std::monostate>> JsonArrayType;
 
 		struct JsonArray
 		{
@@ -35,9 +35,12 @@ namespace io
 		struct JsonPart
 		{
 			std::map<std::string, JsonValue> KeyValues;
+			// Strict parsing records textual order; legacy parsing leaves this empty.
+			std::vector<std::string> KeyOrder;
 		};
 
 		static std::optional<JsonValue> FromStream(std::stringstream ss);
+		static std::optional<JsonValue> FromStrictStream(std::stringstream ss);
 		static bool ToStream(JsonValue json, std::stringstream& ss);
 
 		static bool IsAllDigits(std::string str, bool includePeriod);
@@ -47,6 +50,7 @@ namespace io
 		static std::string NormaliseStringArrayValue(std::string value);
 
 	protected:
+		class StrictReader;
 		enum JsonScalarType
 		{
 			JSON_UNKNOWN,

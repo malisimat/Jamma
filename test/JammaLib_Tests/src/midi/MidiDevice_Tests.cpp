@@ -39,6 +39,27 @@ TEST(MidiDevice, SuccessfulConnectionDeltaCoalescesDuplicateNamedEndpointLoss)
 		MidiDevice::LostConnectedInputNames(previous, refreshed));
 }
 
+TEST(MidiDevice, ConnectionLossUsesRegistryIdentityDespiteHardwareReuseAndReordering)
+{
+	midi::MidiConnectionResult previous, refreshed;
+	previous.Connected = {{1u, "Pad", "Pad 1"}, {2u, "Keys", "Keys 2"}};
+	previous.ConnectedRegistryIds = {"pad-control", "keys-capture"};
+	refreshed.Connected = {previous.Connected[1], previous.Connected[0]};
+	refreshed.ConnectedRegistryIds = {"keys-capture", "pad-control"};
+	EXPECT_TRUE(MidiDevice::LostConnectedInputIds(previous, refreshed).empty());
+	// Reusing the same physical endpoint for a new registry entry must still
+	// cancel captures owned by the old ID before admitting the replacement.
+	refreshed.ConnectedRegistryIds[1] = "new-pad-control";
+	EXPECT_EQ((std::vector<std::string>{"pad-control"}), MidiDevice::LostConnectedInputIds(previous, refreshed));
+	// Without physical GUIDs an index/name-suffix change also invalidates held
+	// state conservatively, even when the configured registry IDs are retained.
+	refreshed.Connected = {{0u, "Keys", "Keys 0"}, {4u, "Pad", "Pad 4"}};
+	refreshed.ConnectedRegistryIds = {"keys-capture", "pad-control"};
+	EXPECT_EQ((std::vector<std::string>{"pad-control", "keys-capture"}), MidiDevice::LostConnectedInputIds(previous, refreshed));
+	refreshed.Inventory.Error = "transient enumeration failure";
+	EXPECT_TRUE(MidiDevice::LostConnectedInputIds(previous, refreshed).empty());
+}
+
 TEST(MidiDevice, IsClosedBeforeOpen) {
 	MidiDevice device;
 	ASSERT_FALSE(device.IsOpen());
@@ -192,4 +213,18 @@ TEST(MidiDeviceTests, CallbackCloseSharesAdmissionWordAndDrainsReader)
 	EXPECT_EQ(suspended.wait_for(std::chrono::seconds(1)), std::future_status::ready);
 	suspended.get();
 	EXPECT_FALSE(midi::MidiDeviceCallbackTestAccess::Enter(device));
+}
+TEST(MidiDevice, DefaultSelectorUsesFirstUnclaimedInputForSavedRigs)
+{
+	const std::vector<midi::MidiInputDeviceInfo> ports = {
+		{2u, "Keys", "Keys 2"}, {5u, "Pad", "Pad 5"}};
+	bool ambiguous = true;
+	const auto* first = midi::MidiDevice::SelectStartupInput(ports, "default", {}, 0u, false, ambiguous);
+	ASSERT_NE(nullptr, first); EXPECT_EQ(2u, first->DeviceId); EXPECT_FALSE(ambiguous);
+	const auto* next = midi::MidiDevice::SelectStartupInput(ports, "default", {2u}, 1u, false, ambiguous);
+	ASSERT_NE(nullptr, next); EXPECT_EQ(5u, next->DeviceId); EXPECT_FALSE(ambiguous);
+	EXPECT_EQ(nullptr, midi::MidiDevice::SelectStartupInput(ports, "default", {2u, 5u}, 0u, false, ambiguous));
+	EXPECT_FALSE(ambiguous);
+	EXPECT_EQ(nullptr, midi::MidiDevice::SelectStartupInput({}, "default", {}, 0u, false, ambiguous));
+	EXPECT_FALSE(ambiguous);
 }

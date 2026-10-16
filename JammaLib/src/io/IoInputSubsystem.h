@@ -40,6 +40,8 @@ namespace io
 		void SetLogging(io::LoggingConfig loggingConfig) noexcept;
 		void Close();
 		void CloseMidi();
+		// Off-callback; use under the same Scene lifecycle serialization as Init/Close.
+		std::vector<std::string> ConnectedSerialDeviceIds() const;
 		void PublishRigInputDispatch(std::shared_ptr<const engine::RigSnapshot> snapshot);
 		void PublishEmptyRigInputDispatch();
 		bool OpenRigTriggerInput(std::uint64_t revision) noexcept;

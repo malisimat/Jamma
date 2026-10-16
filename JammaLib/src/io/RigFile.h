@@ -1,19 +1,10 @@
-///////////////////////////////////////////////////////////
-//
-// Author 2019 Matt Jones
-// Subject to the MIT license, see LICENSE file.
-//
-///////////////////////////////////////////////////////////
-
 #pragma once
 
-#include <vector>
-#include <stack>
-#include <map>
+#include <cstddef>
 #include <optional>
-#include <variant>
-#include <iostream>
 #include <sstream>
+#include <string>
+#include <vector>
 #include "Json.h"
 #include "UserConfig.h"
 #include "JamFile.h"
@@ -22,91 +13,101 @@ namespace io
 {
 	struct RigFile
 	{
-		static constexpr const char* CurrentVersion = "1.0";
+		static constexpr const char* CurrentVersion = "2.0";
+		static constexpr const char* KeyboardDevice = "keyboard";
+		static constexpr std::size_t MaxControlBindings = 64u;
+		static constexpr std::size_t MaxTriggers = 256u;
 
-		enum MidiTriggerEvent
+		enum MidiTriggerEvent { NOTE, CC };
+		enum class BindingSource { Keyboard, Serial, Midi };
+		enum class Control { Activate, Ditch };
+
+		struct EdgeMatcher
 		{
-			NOTE,
-			CC
+			// For MIDI, Code is a note/controller ID and State is normalised 0/1.
+			unsigned int Code = 0u;
+			unsigned int State = 0u;
+			MidiTriggerEvent Kind = NOTE;
+			// MIDI channels are zero-based internally; null means any channel.
+			std::optional<unsigned int> Channel;
+			bool operator==(const EdgeMatcher&) const = default;
 		};
 
-		static std::optional<RigFile> FromStream(std::stringstream ss);
-		static bool ToStream(RigFile jam, std::stringstream& ss);
-		static bool ToJsonStream(const RigFile& rig, std::stringstream& ss);
-		static const std::string DefaultJson;
-
-
-		struct TriggerPair
+		struct Binding
 		{
-			enum BindingSource
-			{
-				SOURCE_KEYBOARD,
-				SOURCE_SERIAL
-			};
+			BindingSource Source = BindingSource::Keyboard;
+			std::string Device = KeyboardDevice;
+			EdgeMatcher Press;
+			EdgeMatcher Release;
+			bool operator==(const Binding&) const = default;
+		};
 
-			unsigned int ActivateDown;
-			unsigned int ActivateUp;
-			unsigned int DitchDown;
-			unsigned int DitchUp;
-			BindingSource Source = SOURCE_KEYBOARD;
-			std::string Device;
+		struct Controls
+		{
+			std::vector<Binding> Activate;
+			std::vector<Binding> Ditch;
+			// Preserve textual control-section order without a second editable
+			// priority setting. Each list retains its own binding order.
+			Control First = Control::Activate;
+			bool operator==(const Controls&) const = default;
+		};
 
-			static std::optional<TriggerPair> FromJson(Json::JsonPart json);
+		struct Capture
+		{
+			std::vector<unsigned int> Audio;
+			std::vector<std::string> Midi;
+			bool operator==(const Capture&) const = default;
 		};
 
 		struct Trigger
 		{
-			enum class MidiInputMode
-			{
-				None,
-				Selected
-			};
-			struct MidiTriggerBindingSpec
-			{
-				MidiTriggerEvent Kind;
-				unsigned int Channel;
-				unsigned int Id;
-				unsigned int State;
-				bool MatchAnyChannel;
-
-				static std::optional<MidiTriggerBindingSpec> FromJson(Json::JsonPart json);
-			};
-
-			struct MidiTriggerBinding
-			{
-				std::string Device;
-				MidiTriggerBindingSpec Activate;
-				MidiTriggerBindingSpec Ditch;
-
-				static std::optional<MidiTriggerBinding> FromJson(Json::JsonPart json);
-			};
-
-			// Routing normalization fills empty IDs from legacy files.
 			std::string Id;
 			std::string Name;
-			unsigned int StationType;
-			std::vector<TriggerPair> TriggerPairs;
-			std::vector<unsigned int> InputChannels;
-			std::vector<std::string> MidiInputDevices;
 			std::optional<std::string> StationTarget;
-			// Live MIDI capture is opt-in: an empty device list captures no MIDI.
-			MidiInputMode MidiInputs = MidiInputMode::None;
-			std::optional<MidiTriggerBinding> MidiTrigger;
-
-			static std::optional<Trigger> FromJson(Json::JsonPart json);
+			Controls ControlBindings;
+			Capture CaptureInputs;
+			bool operator==(const Trigger&) const = default;
 		};
 
-		// Store versions as strings so migrations do not depend on enum ordinals.
+		enum class Severity { Warning, Error };
+		struct Diagnostic
+		{
+			Severity Level = Severity::Error;
+			std::string Path;
+			std::string Message;
+		};
+		using Diagnostics = std::vector<Diagnostic>;
+
+		// Canonical-only reader. Diagnostics describe fields; absent hardware and
+		// stations are resolved separately and are not configuration errors.
+		static std::optional<RigFile> FromStream(std::stringstream ss, Diagnostics* diagnostics = nullptr);
+		static bool ToStream(RigFile rig, std::stringstream& ss);
+		static bool ToJsonStream(const RigFile& rig, std::stringstream& ss, Diagnostics* diagnostics = nullptr);
+		static bool Validate(const RigFile& rig, Diagnostics* diagnostics = nullptr);
+		// Off-thread normalisation removes whole later conflicting bindings so
+		// no retained binding can lose one of its press/release edges.
+		static std::optional<RigFile> Normalize(const RigFile& rig, Diagnostics* diagnostics = nullptr);
+		static bool BindingsOverlap(const Binding& lhs, const Binding& rhs) noexcept;
+		static const std::string DefaultJson;
+
 		std::string Version = CurrentVersion;
 		std::string Name;
+		// One settings aggregate: serialises as devices + settings, not user.
+		// Endpoint configuration remains solely in Audio/Midi/Serial.
 		UserConfig User;
 		std::vector<Trigger> Triggers;
+		bool operator==(const RigFile&) const = default;
+
+	private:
+		class Reader;
+		static bool EdgesOverlap(BindingSource source, const EdgeMatcher& lhs,
+			const EdgeMatcher& rhs) noexcept;
 	};
 
 	struct RigFileRouting
 	{
 		enum class SourceKind { Adc, Midi };
-		enum class Warning { None, LegacyStationTargetMigrated, TargetMissing, TargetAmbiguous };
+		enum class Warning { None, TargetMissing, TargetAmbiguous };
 
 		struct Source
 		{
@@ -115,7 +116,12 @@ namespace io
 			std::string MidiDevice;
 			bool Available = false;
 		};
-
+		struct ControlSource
+		{
+			RigFile::BindingSource Kind;
+			std::string Device;
+			std::optional<bool> Available;
+		};
 		struct TriggerResolution
 		{
 			size_t TriggerIndex = 0u;
@@ -123,25 +129,28 @@ namespace io
 			std::optional<std::string> TargetName;
 			std::optional<size_t> StationIndex;
 			std::vector<Source> Sources;
+			std::vector<ControlSource> ControlSources;
 			Warning Reason = Warning::None;
 		};
-
 		struct Resolution
 		{
 			RigFile CandidateRig;
 			std::vector<TriggerResolution> Triggers;
+			RigFile::Diagnostics Diagnostics;
 			bool RequiresSave = false;
 			bool IsValid = true;
 		};
-
+		// availableMidiDevices are opened registry IDs, never hardware selectors.
 		static Resolution Resolve(const RigFile& rig,
 			const std::vector<JamFile::Station>& stations,
 			unsigned int availableAdcChannels,
-			const std::vector<std::string>& availableMidiDevices);
+			const std::vector<std::string>& availableMidiDevices,
+			const std::vector<std::string>* availableSerialDevices = nullptr);
 		static std::string NextTriggerName(const RigFile& rig);
-		static RigFile WithUnboundTrigger(const RigFile& rig);
+		static RigFile WithUnboundTrigger(const RigFile& rig, RigFile::Diagnostics* diagnostics = nullptr);
 		static std::optional<RigFile> WithoutTrigger(const RigFile& rig, size_t triggerIndex);
-		static std::optional<RigFile> WithStationTarget(const RigFile& rig, size_t triggerIndex, std::string target);
+		static std::optional<RigFile> WithStationTarget(const RigFile& rig, size_t triggerIndex,
+			std::optional<std::string> target);
 		static std::optional<RigFile> WithAdcInput(const RigFile& rig, size_t triggerIndex, unsigned int channel);
 		static std::optional<RigFile> WithoutAdcInput(const RigFile& rig, size_t triggerIndex, unsigned int channel);
 		static std::optional<RigFile> WithMidiInput(const RigFile& rig, size_t triggerIndex, std::string device);

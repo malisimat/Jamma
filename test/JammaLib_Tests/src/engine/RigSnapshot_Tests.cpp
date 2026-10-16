@@ -343,6 +343,13 @@ TEST(AudioCallbackAdmission, QuiescencePublishesExitedReadersPayload)
 class RigSnapshotTest : public testing::Test
 {
 protected:
+	static io::RigFile EmptyRig()
+	{
+		auto rig = io::RigFile::FromStream(std::stringstream(io::RigFile::DefaultJson)).value();
+		rig.Triggers.clear();
+		return rig;
+	}
+
 	static io::JamFile::Station StationDescriptor(std::string name)
 	{
 		io::JamFile::Station station{};
@@ -351,15 +358,21 @@ protected:
 	}
 
 	static io::RigFile::Trigger TriggerDescriptor(std::string name,
-		std::optional<std::string> target,
-		io::RigFile::Trigger::MidiInputMode midiMode = io::RigFile::Trigger::MidiInputMode::None)
+		std::optional<std::string> target)
 	{
 		io::RigFile::Trigger trigger{};
 		trigger.Id = name + "-id";
 		trigger.Name = std::move(name);
 		trigger.StationTarget = std::move(target);
-		trigger.MidiInputs = midiMode;
 		return trigger;
+	}
+
+	static io::RigFile::Binding KeyboardButton(unsigned int key)
+	{
+		io::RigFile::Binding binding;
+		binding.Press = { key, 1u };
+		binding.Release = { key, 0u };
+		return binding;
 	}
 
 	static std::shared_ptr<engine::Station> RuntimeStation(std::string name)
@@ -371,6 +384,14 @@ protected:
 		return std::make_shared<engine::Station>(params, engine::Station::GetMixerParams(params.Size, merge));
 	}
 
+	static void ConfigureMidiRegistry(io::RigFile& rig, const std::vector<std::string>& ids)
+	{
+		for (const auto& id : ids)
+			if (std::none_of(rig.User.Midi.Devices.begin(), rig.User.Midi.Devices.end(),
+				[&id](const auto& device) { return device.Id == id; }))
+				rig.User.Midi.Devices.push_back({ id, true, id });
+	}
+
 	static engine::RigCoordinator::SnapshotPtr BuildSnapshot(const io::RigFile& rig,
 		const std::vector<io::JamFile::Station>& descriptors,
 		unsigned int adcChannels,
@@ -379,8 +400,12 @@ protected:
 		std::vector<std::shared_ptr<engine::Station>> stations;
 		for (const auto& descriptor : descriptors)
 			stations.push_back(RuntimeStation(descriptor.Name));
+		auto canonical = rig;
+		ConfigureMidiRegistry(canonical, midiDevices);
+		for (const auto& trigger : canonical.Triggers)
+			ConfigureMidiRegistry(canonical, trigger.CaptureInputs.Midi);
 		engine::RigCoordinator coordinator;
-		if (!coordinator.BuildInitial(rig, descriptors, stations, adcChannels, midiDevices,
+		if (!coordinator.BuildInitial(canonical, descriptors, stations, adcChannels, midiDevices,
 			engine::TriggerParams(), [](const io::RigFile&) { return false; }))
 			return {};
 		return coordinator.Accepted();
@@ -389,12 +414,12 @@ protected:
 
 TEST_F(RigSnapshotTest, BuildsEveryTriggerAndResolvesTargetsByName)
 {
-	io::RigFile rig{};
+	auto rig = EmptyRig();
 	rig.Triggers = {
 		TriggerDescriptor("to-drums", "Drums"),
 		TriggerDescriptor("to-bass", "Bass"),
 		TriggerDescriptor("missing", "Missing"),
-		TriggerDescriptor("unbound", std::string())
+		TriggerDescriptor("unbound", std::nullopt)
 	};
 	const std::vector<io::JamFile::Station> stations = {
 		StationDescriptor("Bass"),
@@ -416,9 +441,9 @@ TEST_F(RigSnapshotTest, BuildsEveryTriggerAndResolvesTargetsByName)
 	EXPECT_EQ(io::RigFileRouting::Warning::None, runtime->Graph.Triggers[3].Reason);
 }
 
-TEST_F(RigSnapshotTest, ResolvesLegacyTargetAndKeepsNormalizedRuntimeIdentity)
+TEST_F(RigSnapshotTest, NullTargetStaysUnboundAndKeepsRuntimeIdentity)
 {
-	io::RigFile rig{};
+	auto rig = EmptyRig();
 	rig.Triggers = { TriggerDescriptor("legacy", std::nullopt) };
 
 	const auto runtime = BuildSnapshot(rig,
@@ -428,15 +453,15 @@ TEST_F(RigSnapshotTest, ResolvesLegacyTargetAndKeepsNormalizedRuntimeIdentity)
 
 	ASSERT_TRUE(runtime);
 	ASSERT_EQ(1u, runtime->Triggers.size());
-	EXPECT_EQ(0u, runtime->Triggers[0].StationIndex.value());
-	EXPECT_EQ("Station", runtime->Rig.Triggers[0].StationTarget.value());
+	EXPECT_FALSE(runtime->Triggers[0].StationIndex.has_value());
+	EXPECT_FALSE(runtime->Rig.Triggers[0].StationTarget.has_value());
 	EXPECT_FALSE(runtime->Rig.Triggers[0].Id.empty());
-	EXPECT_EQ(io::RigFileRouting::Warning::LegacyStationTargetMigrated, runtime->Graph.Triggers[0].Reason);
+	EXPECT_EQ(io::RigFileRouting::Warning::None, runtime->Graph.Triggers[0].Reason);
 }
 
-TEST_F(RigSnapshotTest, StartupMigrationDoesNotPersistSelectedRig)
+TEST_F(RigSnapshotTest, StartupNormalizationDoesNotPersistSelectedRig)
 {
-	io::RigFile rig{};
+	auto rig = EmptyRig();
 	rig.Triggers = { TriggerDescriptor("legacy", std::nullopt) };
 	unsigned int writes = 0u;
 	auto station = RuntimeStation("Station");
@@ -445,15 +470,15 @@ TEST_F(RigSnapshotTest, StartupMigrationDoesNotPersistSelectedRig)
 		engine::TriggerParams(), [&writes](const io::RigFile&) { ++writes; return true; }));
 	EXPECT_EQ(0u, writes);
 	ASSERT_TRUE(coordinator.Accepted());
-	EXPECT_EQ("Station", coordinator.Accepted()->Rig.Triggers[0].StationTarget.value());
+	EXPECT_FALSE(coordinator.Accepted()->Rig.Triggers[0].StationTarget.has_value());
 }
 
 TEST_F(RigSnapshotTest, RuntimeAvailabilityUsesOpenedInputsWithoutRewritingSelectedRig)
 {
-	io::RigFile rig{};
+	auto rig = EmptyRig();
 	rig.User.Audio.NumChannelsIn = 4u;
 	auto trigger = TriggerDescriptor("capture", "Station");
-	trigger.InputChannels = { 0u, 3u };
+	trigger.CaptureInputs.Audio = { 0u, 3u };
 	rig.Triggers = { trigger };
 	auto station = RuntimeStation("Station");
 	engine::RigCoordinator coordinator;
@@ -465,7 +490,7 @@ TEST_F(RigSnapshotTest, RuntimeAvailabilityUsesOpenedInputsWithoutRewritingSelec
 	const auto runtime = coordinator.RefreshRuntimeAvailability(1u, {});
 	ASSERT_TRUE(runtime);
 	EXPECT_EQ(4u, runtime->Rig.User.Audio.NumChannelsIn);
-	EXPECT_EQ(std::vector<unsigned int>({ 0u, 3u }), runtime->Rig.Triggers[0].InputChannels);
+	EXPECT_EQ(std::vector<unsigned int>({ 0u, 3u }), runtime->Rig.Triggers[0].CaptureInputs.Audio);
 	ASSERT_EQ(2u, runtime->Graph.Triggers[0].Sources.size());
 	EXPECT_TRUE(runtime->Graph.Triggers[0].Sources[0].Available);
 	EXPECT_FALSE(runtime->Graph.Triggers[0].Sources[1].Available);
@@ -475,12 +500,49 @@ TEST_F(RigSnapshotTest, RuntimeAvailabilityUsesOpenedInputsWithoutRewritingSelec
 	EXPECT_FALSE(coordinator.Staged()->Graph.Triggers[0].Sources[1].Available);
 }
 
+TEST_F(RigSnapshotTest, ReopenedRegistryInputRestoresCaptureWithoutReplacingTriggerOrSavedSelectors)
+{
+	auto rig = EmptyRig();
+	rig.User.Midi.Devices = {{"Hardware keys 0", true, "keys"}};
+	auto definition = TriggerDescriptor("record", "Station");
+	definition.CaptureInputs.Midi = {"keys"};
+	definition.ControlBindings.Activate.push_back({io::RigFile::BindingSource::Midi, "keys",
+		{60u, 1u, io::RigFile::NOTE, 0u}, {60u, 0u, io::RigFile::NOTE, 0u}});
+	rig.Triggers = {definition};
+	auto station = RuntimeStation("Station");
+	engine::RigCoordinator coordinator;
+	unsigned int writes = 0u;
+	ASSERT_TRUE(coordinator.BuildInitial(rig, {StationDescriptor("Station")}, {station}, 0u, {}, {},
+		[&](const auto&) { ++writes; return true; }));
+	const auto initial = coordinator.Accepted();
+	ASSERT_EQ(1u, initial->Graph.Triggers[0].Sources.size());
+	EXPECT_FALSE(initial->Graph.Triggers[0].Sources[0].Available);
+	const auto reopened = coordinator.RefreshRuntimeAvailability(0u, {"keys"});
+	ASSERT_TRUE(reopened);
+	EXPECT_TRUE(reopened->Graph.Triggers[0].Sources[0].Available);
+	ASSERT_EQ(1u, reopened->InputDispatch.LiveMidi.size());
+	EXPECT_EQ("keys", reopened->InputDispatch.LiveMidi[0].DeviceName);
+	ASSERT_EQ(1u, reopened->InputDispatch.LiveMidi[0].Recipients.size());
+	EXPECT_EQ(station, reopened->InputDispatch.LiveMidi[0].Recipients[0]);
+	EXPECT_EQ(initial->Triggers[0].Instance, reopened->Triggers[0].Instance);
+	EXPECT_EQ(rig, reopened->Rig);
+	const auto missingAgain = coordinator.RefreshRuntimeAvailability(0u, {});
+	ASSERT_TRUE(missingAgain);
+	EXPECT_FALSE(missingAgain->Graph.Triggers[0].Sources[0].Available);
+	EXPECT_EQ(initial->Triggers[0].Instance, missingAgain->Triggers[0].Instance);
+	EXPECT_EQ(rig, missingAgain->Rig); EXPECT_EQ(0u, writes);
+	std::stringstream serialized;
+	ASSERT_TRUE(io::RigFile::ToJsonStream(missingAgain->Rig, serialized));
+	const auto reloaded = io::RigFile::FromStream(std::move(serialized));
+	ASSERT_TRUE(reloaded); EXPECT_EQ(rig, *reloaded);
+}
+
 TEST_F(RigSnapshotTest, RetainsUnavailableSourcesWithoutCreatingWildcardMidiRoutes)
 {
-	io::RigFile rig{};
-	auto first = TriggerDescriptor("first", "Shared", io::RigFile::Trigger::MidiInputMode::Selected);
-	first.InputChannels = { 0u, 3u };
-	first.MidiInputDevices = { "Missing keyboard" };
+	auto rig = EmptyRig();
+	auto first = TriggerDescriptor("first", "Shared");
+	first.CaptureInputs.Audio = { 0u, 3u };
+	first.CaptureInputs.Midi = { "Missing keyboard" };
 	auto second = TriggerDescriptor("second", "Shared");
 	rig.Triggers = { first, second };
 
@@ -505,11 +567,11 @@ TEST_F(RigSnapshotTest, RetainsUnavailableSourcesWithoutCreatingWildcardMidiRout
 
 TEST_F(RigSnapshotTest, LiveMidiEligibilityRequiresAnExplicitDeviceSelection)
 {
-	auto noneConfig = TriggerDescriptor("none", "Station", io::RigFile::Trigger::MidiInputMode::None);
-	auto selectedConfig = TriggerDescriptor("selected", "Station", io::RigFile::Trigger::MidiInputMode::Selected);
-	selectedConfig.MidiInputDevices = { "Keys" };
+	auto noneConfig = TriggerDescriptor("none", "Station");
+	auto selectedConfig = TriggerDescriptor("selected", "Station");
+	selectedConfig.CaptureInputs.Midi = { "Keys" };
 
-	io::RigFile rig{};
+	auto rig = EmptyRig();
 	rig.Triggers = { noneConfig, selectedConfig };
 	const auto snapshot = BuildSnapshot(rig, { StationDescriptor("Station") }, 0u,
 		{ "Keys", "Other" });
@@ -524,11 +586,12 @@ TEST_F(RigSnapshotTest, CaptureAndStationEditsReuseTriggerAndStageNewMidiDispatc
 {
 	auto firstStation = RuntimeStation("First");
 	auto secondStation = RuntimeStation("Second");
-	io::RigFile initial{};
-	auto trigger = TriggerDescriptor("record", "First", io::RigFile::Trigger::MidiInputMode::Selected);
-	trigger.InputChannels = { 0u };
-	trigger.MidiInputDevices = { "Keys A" };
+	auto initial = EmptyRig();
+	auto trigger = TriggerDescriptor("record", "First");
+	trigger.CaptureInputs.Audio = { 0u };
+	trigger.CaptureInputs.Midi = { "Keys A" };
 	initial.Triggers = { trigger };
+	ConfigureMidiRegistry(initial, { "Keys A", "Keys B" });
 	engine::RigCoordinator coordinator;
 	ASSERT_TRUE(coordinator.BuildInitial(initial,
 		{ StationDescriptor("First"), StationDescriptor("Second") },
@@ -538,8 +601,8 @@ TEST_F(RigSnapshotTest, CaptureAndStationEditsReuseTriggerAndStageNewMidiDispatc
 	ASSERT_TRUE(accepted);
 
 	auto candidate = initial;
-	candidate.Triggers[0].InputChannels.push_back(1u);
-	candidate.Triggers[0].MidiInputDevices = { "Keys B" };
+	candidate.Triggers[0].CaptureInputs.Audio.push_back(1u);
+	candidate.Triggers[0].CaptureInputs.Midi = { "Keys B" };
 	candidate.Triggers[0].StationTarget = "Second";
 	ASSERT_EQ(engine::RigCoordinator::EditResult::Pending, coordinator.SubmitCandidate(candidate));
 	const auto staged = coordinator.Staged();
@@ -558,7 +621,7 @@ TEST_F(RigSnapshotTest, CaptureAndStationEditsReuseTriggerAndStageNewMidiDispatc
 
 TEST_F(RigSnapshotTest, ReorderPreservesStableTriggerInstancesAndDisplayOrder)
 {
-	io::RigFile initial{};
+	auto initial = EmptyRig();
 	initial.Triggers = {
 		TriggerDescriptor("first", "Station"),
 		TriggerDescriptor("second", "Station")
@@ -583,7 +646,7 @@ TEST_F(RigSnapshotTest, ReorderPreservesStableTriggerInstancesAndDisplayOrder)
 
 TEST_F(RigSnapshotTest, DeletionAndActivationReplacementAreClassifiedByStableId)
 {
-	io::RigFile initial{};
+	auto initial = EmptyRig();
 	initial.Triggers = {
 		TriggerDescriptor("first", "Station"),
 		TriggerDescriptor("second", "Station")
@@ -607,7 +670,7 @@ TEST_F(RigSnapshotTest, DeletionAndActivationReplacementAreClassifiedByStableId)
 		coordinator.CompleteTransition(staged->Revision, false, [](const io::RigFile&) { return true; }));
 
 	auto replacement = accepted->Rig;
-	replacement.Triggers[0].Name = "changed activation";
+	replacement.Triggers[0].ControlBindings.Activate.push_back(KeyboardButton(65u));
 	ASSERT_EQ(engine::RigCoordinator::EditResult::Pending, coordinator.SubmitCandidate(replacement));
 	staged = coordinator.Staged();
 	ASSERT_TRUE(staged);
@@ -619,7 +682,7 @@ TEST_F(RigSnapshotTest, DeletionAndActivationReplacementAreClassifiedByStableId)
 
 TEST_F(RigSnapshotTest, DuplicateTriggerIdsFailInitialAndCandidateValidation)
 {
-	io::RigFile duplicate{};
+	auto duplicate = EmptyRig();
 	duplicate.Triggers = {
 		TriggerDescriptor("first", "Station"),
 		TriggerDescriptor("second", "Station")
@@ -630,7 +693,7 @@ TEST_F(RigSnapshotTest, DuplicateTriggerIdsFailInitialAndCandidateValidation)
 	EXPECT_FALSE(invalid.BuildInitial(duplicate, { StationDescriptor("Station") }, { station }, 0u, {},
 		engine::TriggerParams(), [](const io::RigFile&) { return true; }));
 
-	io::RigFile valid{};
+	auto valid = EmptyRig();
 	valid.Triggers = { TriggerDescriptor("first", "Station") };
 	engine::RigCoordinator coordinator;
 	ASSERT_TRUE(coordinator.BuildInitial(valid, { StationDescriptor("Station") }, { station }, 0u, {},
@@ -679,7 +742,7 @@ TEST_F(RigSnapshotTest, SnapshotOwnsCompleteTriggerListIndependentOfStationReset
 {
 	auto station = RuntimeStation("Station");
 	const auto descriptor = StationDescriptor("Station");
-	io::RigFile initial{};
+	auto initial = EmptyRig();
 	initial.Triggers = { TriggerDescriptor("first", "Station") };
 	engine::RigCoordinator coordinator;
 	ASSERT_TRUE(coordinator.BuildInitial(initial, { descriptor }, { station }, 0u, {},
@@ -692,7 +755,7 @@ TEST_F(RigSnapshotTest, SnapshotOwnsCompleteTriggerListIndependentOfStationReset
 	station->Reset();
 	EXPECT_EQ(retainedTrigger, accepted->Triggers[0].Instance);
 
-	io::RigFile replacement{};
+	auto replacement = EmptyRig();
 	ASSERT_EQ(engine::RigCoordinator::EditResult::Pending,
 		coordinator.SubmitCandidate(replacement));
 	const auto staged = coordinator.Staged();
@@ -709,13 +772,13 @@ TEST_F(RigSnapshotTest, SnapshotOwnsCompleteTriggerListIndependentOfStationReset
 TEST_F(RigSnapshotTest, RequiresAudioAcknowledgementBeforeInputAndBothBeforePromotion)
 {
 	auto station = RuntimeStation("Station");
-	io::RigFile initial{};
+	auto initial = EmptyRig();
 	initial.Triggers = { TriggerDescriptor("first", "Station") };
 	engine::RigCoordinator coordinator;
 	ASSERT_TRUE(coordinator.BuildInitial(initial, { StationDescriptor("Station") }, { station }, 0u, {},
 		engine::TriggerParams(), [](const io::RigFile&) { return true; }));
 	const auto acceptedRevision = coordinator.Accepted()->Revision;
-	io::RigFile candidate{};
+	auto candidate = EmptyRig();
 	candidate.Triggers = { TriggerDescriptor("replacement", "Station") };
 	ASSERT_EQ(engine::RigCoordinator::EditResult::Pending,
 		coordinator.SubmitCandidate(candidate));
@@ -740,7 +803,7 @@ TEST_F(RigSnapshotTest, RequiresAudioAcknowledgementBeforeInputAndBothBeforeProm
 TEST_F(RigSnapshotTest, RejectedCandidatesConsumeRevisionsAndDiskFailureCannotRejectRuntimeEdits)
 {
 	auto station = RuntimeStation("Station");
-	io::RigFile initial{};
+	auto initial = EmptyRig();
 	initial.Triggers = { TriggerDescriptor("accepted", "Station") };
 	engine::RigCoordinator coordinator;
 	ASSERT_TRUE(coordinator.BuildInitial(initial, { StationDescriptor("Station") }, { station }, 0u, {},
@@ -775,7 +838,7 @@ TEST_F(RigSnapshotTest, RejectedCandidatesConsumeRevisionsAndDiskFailureCannotRe
 TEST_F(RigSnapshotTest, RapidSecondEditIsRejectedUntilFirstEditPromotes)
 {
 	auto station = RuntimeStation("Station");
-	io::RigFile initial{};
+	auto initial = EmptyRig();
 	initial.Triggers = { TriggerDescriptor("accepted", "Station") };
 	engine::RigCoordinator coordinator;
 	ASSERT_TRUE(coordinator.BuildInitial(initial, { StationDescriptor("Station") }, { station }, 0u, {},
@@ -803,7 +866,7 @@ TEST_F(RigSnapshotTest, ShutdownDuringTransitionOrPendingCannotPublishCandidate)
 	auto makeCoordinator = [this]()
 	{
 		auto coordinator = std::make_unique<engine::RigCoordinator>();
-		io::RigFile initial{};
+		auto initial = EmptyRig();
 		initial.Triggers = { TriggerDescriptor("accepted", "Station") };
 		const auto station = RuntimeStation("Station");
 		if (!coordinator->BuildInitial(initial, { StationDescriptor("Station") }, { station }, 0u, {},
@@ -832,7 +895,7 @@ TEST_F(RigSnapshotTest, ShutdownDuringTransitionOrPendingCannotPublishCandidate)
 TEST_F(RigSnapshotTest, ShutdownAndReleaseAreIdempotent)
 {
 	auto station = RuntimeStation("Station");
-	io::RigFile rig{};
+	auto rig = EmptyRig();
 	rig.Triggers = { TriggerDescriptor("accepted", "Station") };
 	engine::RigCoordinator coordinator;
 	ASSERT_TRUE(coordinator.BuildInitial(rig, { StationDescriptor("Station") }, { station }, 0u, {},
@@ -852,7 +915,7 @@ TEST_F(RigSnapshotTest, ShutdownAndReleaseAreIdempotent)
 TEST_F(RigSnapshotTest, RuntimeTransitionsNeverPersistAndRejectionRestoresEdits)
 {
 	auto station = RuntimeStation("Station");
-	io::RigFile rig{};
+	auto rig = EmptyRig();
 	rig.Triggers = { TriggerDescriptor("accepted", "Station") };
 	engine::RigCoordinator coordinator;
 	ASSERT_TRUE(coordinator.BuildInitial(rig, { StationDescriptor("Station") }, { station }, 0u, {},
@@ -879,7 +942,7 @@ TEST_F(RigSnapshotTest, RuntimeTransitionsNeverPersistAndRejectionRestoresEdits)
 
 TEST_F(RigSnapshotTest, AudioBoundaryPublishesFreshTriggerTransition)
 {
-	io::RigFile rig{};
+	auto rig = EmptyRig();
 	rig.Triggers = { TriggerDescriptor("accepted", "Station") };
 	const auto snapshot = BuildSnapshot(rig, { StationDescriptor("Station") }, 0u, {});
 	ASSERT_TRUE(snapshot);
@@ -911,7 +974,7 @@ TEST_F(RigSnapshotTest, AudioBoundaryPublishesFreshTriggerTransition)
 TEST_F(RigSnapshotTest, ReplacementKeepsLatestHistoryForTheSameTriggerId)
 {
 	auto station = RuntimeStation("Station");
-	io::RigFile initial{};
+	auto initial = EmptyRig();
 	initial.Triggers = { TriggerDescriptor("original", "Station") };
 	engine::RigCoordinator coordinator;
 	ASSERT_TRUE(coordinator.BuildInitial(initial, { StationDescriptor("Station") }, { station }, 0u, {},
@@ -919,6 +982,7 @@ TEST_F(RigSnapshotTest, ReplacementKeepsLatestHistoryForTheSameTriggerId)
 	const auto original = coordinator.Accepted()->Triggers[0].Instance;
 	auto edited = initial;
 	edited.Triggers[0].Name = "renamed";
+	edited.Triggers[0].ControlBindings.Activate.push_back(KeyboardButton(65u));
 	ASSERT_EQ(engine::RigCoordinator::EditResult::Pending, coordinator.SubmitCandidate(edited));
 	const auto staged = coordinator.Staged();
 	ASSERT_TRUE(staged);
@@ -927,7 +991,7 @@ TEST_F(RigSnapshotTest, ReplacementKeepsLatestHistoryForTheSameTriggerId)
 	EXPECT_TRUE(replacement->GetTakes().empty());
 
 	// History can change after staging, up to the accepted audio boundary.
-	original->RestoreTakes({ { engine::TriggerTake::SOURCE_ADC, "source", "target" } });
+	original->RestoreTakes({ { engine::TriggerTake::SOURCE_ADC, "source", "target", station } });
 	ASSERT_EQ(engine::RigCoordinator::EditResult::Pending,
 		coordinator.CompleteTransition(staged->Revision, true,
 			[](const io::RigFile&) { return true; }));
@@ -945,8 +1009,8 @@ TEST_F(RigSnapshotTest, RetainedTriggerRecordsAcrossRealRoutePublicationAndDitch
 	const std::vector<io::JamFile::Station> stationFiles{
 		StationDescriptor("A"), StationDescriptor("B") };
 	auto descriptor = TriggerDescriptor("record", "A");
-	descriptor.InputChannels = { 0u };
-	io::RigFile initial{};
+	descriptor.CaptureInputs.Audio = { 0u };
+	auto initial = EmptyRig();
 	initial.Triggers = { descriptor };
 	engine::RigCoordinator coordinator;
 	ASSERT_TRUE(coordinator.BuildInitial(initial, stationFiles, { stationA, stationB },
@@ -1020,7 +1084,7 @@ TEST_F(RigSnapshotTest, RetainedTriggerRecordsAcrossRealRoutePublicationAndDitch
 		EXPECT_TRUE(stationA->GetLoopTakes()[0]->HasPendingTriggerCapture());
 	}
 	auto candidate = coordinator.Accepted()->Rig;
-	candidate.Triggers[0].InputChannels = { 0u, 1u };
+	candidate.Triggers[0].CaptureInputs.Audio = { 0u, 1u };
 	publishEdit(candidate);
 	record(coordinator.Accepted()->Revision);
 	ASSERT_EQ(2u, stationA->NumTakes());
@@ -1033,7 +1097,7 @@ TEST_F(RigSnapshotTest, RetainedTriggerRecordsAcrossRealRoutePublicationAndDitch
 	trigger->OnTick(utils::Timer::GetTime(), 0u, cfg, std::nullopt, coordinator.Accepted()->Revision);
 	EXPECT_TRUE(trigger->CanApplyCaptureRouting(true));
 	candidate = coordinator.Accepted()->Rig;
-	candidate.Triggers[0].InputChannels = { 0u };
+	candidate.Triggers[0].CaptureInputs.Audio = { 0u };
 	candidate.Triggers[0].StationTarget = "B";
 	publishEdit(candidate);
 	record(coordinator.Accepted()->Revision);
@@ -1068,7 +1132,7 @@ TEST_F(RigSnapshotTest, ReplacedTriggerDitchesFrozenHistoryFromItsOriginalReceiv
 {
     auto stationA = RuntimeStation("A");
     auto stationB = RuntimeStation("B");
-    io::RigFile initial{};
+    auto initial = EmptyRig();
     initial.Triggers = { TriggerDescriptor("original", "A") };
     engine::RigCoordinator coordinator;
     ASSERT_TRUE(coordinator.BuildInitial(initial,
@@ -1077,6 +1141,7 @@ TEST_F(RigSnapshotTest, ReplacedTriggerDitchesFrozenHistoryFromItsOriginalReceiv
     auto original = coordinator.Accepted()->Triggers.front().Instance;
     auto candidate = initial;
     candidate.Triggers.front().Name = "replacement";
+    candidate.Triggers.front().ControlBindings.Activate.push_back(KeyboardButton(65u));
     candidate.Triggers.front().StationTarget = "B";
     ASSERT_EQ(engine::RigCoordinator::EditResult::Pending, coordinator.SubmitCandidate(candidate));
     auto staged = coordinator.Staged();
@@ -1253,7 +1318,7 @@ TEST(PublishedAudioSnapshot, BoundedSlotsCanBeExhaustedAndReused)
 
 TEST_F(RigSnapshotTest, HardwarePreferenceMergeRetainsTriggerIdentityAndUnrelatedEdits)
 {
-	io::RigFile rig{};
+	auto rig = EmptyRig();
 	rig.Triggers = {TriggerDescriptor("trigger", "Station")};
 	rig.User.Loop.FadeSamps = 123u;
 	rig.User.Audio.LatencyIn = 27u;
@@ -1267,7 +1332,7 @@ TEST_F(RigSnapshotTest, HardwarePreferenceMergeRetainsTriggerIdentityAndUnrelate
 	EXPECT_EQ(applied->Rig.User.Loop.FadeSamps, 123u);
 	EXPECT_EQ(applied->Rig.User.Audio.LatencyIn, 27u);
 	EXPECT_EQ(applied->Triggers.front().Instance, initial->Triggers.front().Instance);
-	std::vector<io::UserConfig::MidiSettings> desired{{"missing",true}};
+	std::vector<io::UserConfig::MidiSettings> desired{{"missing",true,"missing-input"}};
 	ASSERT_TRUE(coordinator.MergeHardwarePreferences(std::nullopt, desired));
 	EXPECT_EQ(coordinator.Accepted()->Rig.User.Audio.Name, "device");
 	EXPECT_EQ(coordinator.Accepted()->Rig.User.Midi.Devices.front().Name, "missing");
@@ -1278,7 +1343,7 @@ TEST_F(RigSnapshotTest, HardwarePreferenceMergeRetainsTriggerIdentityAndUnrelate
 TEST_F(RigSnapshotTest, PrependingPreservesReceiverIdentityAndDoesNotCreateTriggers)
 {
  auto a = RuntimeStation("A"), b = RuntimeStation("B"), added = RuntimeStation("New");
- io::RigFile rig{}; rig.Triggers = {TriggerDescriptor("first", std::nullopt), TriggerDescriptor("second", "B")};
+ auto rig = EmptyRig(); rig.Triggers = {TriggerDescriptor("first", "A"), TriggerDescriptor("second", "B")};
  engine::RigCoordinator coordinator;
  ASSERT_TRUE(coordinator.BuildInitial(rig, {StationDescriptor("A"), StationDescriptor("B")}, {a, b}, 0u, {}, {}, {}));
  const auto old = coordinator.Accepted();
@@ -1302,13 +1367,13 @@ TEST_F(RigSnapshotTest, PrependingPreservesReceiverIdentityAndDoesNotCreateTrigg
 TEST_F(RigSnapshotTest, RemovalExplicitlyUnbindsAndNeverRedirectsToIndexOccupant)
 {
  auto a = RuntimeStation("A"), b = RuntimeStation("B");
- io::RigFile rig{}; rig.Triggers = {TriggerDescriptor("first", "A"), TriggerDescriptor("second", "B")};
+ auto rig = EmptyRig(); rig.Triggers = {TriggerDescriptor("first", "A"), TriggerDescriptor("second", "B")};
  engine::RigCoordinator coordinator;
  ASSERT_TRUE(coordinator.BuildInitial(rig, {StationDescriptor("A"), StationDescriptor("B")}, {a, b}, 0u, {}, {}, {}));
  const auto original = coordinator.Accepted();
  ASSERT_EQ(engine::RigCoordinator::EditResult::Pending, coordinator.SubmitInventory({b}, a));
  const auto candidate = coordinator.Staged();
- EXPECT_EQ("", candidate->Rig.Triggers[0].StationTarget);
+ EXPECT_FALSE(candidate->Rig.Triggers[0].StationTarget);
  EXPECT_FALSE(candidate->Triggers[0].StationIndex);
  EXPECT_FALSE(candidate->Triggers[0].BoundReceiver);
  EXPECT_EQ(original->Triggers[0].Id, candidate->Triggers[0].Id);
@@ -1321,7 +1386,7 @@ TEST_F(RigSnapshotTest, RemovalExplicitlyUnbindsAndNeverRedirectsToIndexOccupant
 TEST_F(RigSnapshotTest, SameIndexWithNewStationIsAReceiverChange)
 {
  auto a = RuntimeStation("A"), replacement = RuntimeStation("A");
- io::RigFile rig{}; rig.Triggers = {TriggerDescriptor("first", "A")};
+ auto rig = EmptyRig(); rig.Triggers = {TriggerDescriptor("first", "A")};
  engine::RigCoordinator coordinator;
  ASSERT_TRUE(coordinator.BuildInitial(rig, {StationDescriptor("A")}, {a}, 0u, {}, {}, {}));
  // Same display name is not the original receiver identity.
@@ -1352,7 +1417,7 @@ TEST_F(RigSnapshotTest, RemovalValidationUsesIdentityRevisionAndTakePresence)
 TEST_F(RigSnapshotTest, ReceiverRemovalDrainsQueuedStartBeforeRebinding)
 {
  auto a = RuntimeStation("A");
- io::RigFile rig{}; rig.Triggers = {TriggerDescriptor("record", "A")};
+ auto rig = EmptyRig(); rig.Triggers = {TriggerDescriptor("record", "A")};
  engine::RigCoordinator coordinator;
  ASSERT_TRUE(coordinator.BuildInitial(rig, {StationDescriptor("A")}, {a}, 1u, {}, {}, {}));
  auto trigger = coordinator.Accepted()->Triggers[0].Instance;
@@ -1378,7 +1443,7 @@ TEST_F(RigSnapshotTest, ReceiverRemovalDrainsQueuedStartBeforeRebinding)
 TEST_F(RigSnapshotTest, ReceiverRemovalCancelsHeldRecordingAndReleasesHistory)
 {
  auto a = RuntimeStation("A");
- io::RigFile rig{}; rig.Triggers = {TriggerDescriptor("record", "A")};
+ auto rig = EmptyRig(); rig.Triggers = {TriggerDescriptor("record", "A")};
  engine::RigCoordinator coordinator;
  ASSERT_TRUE(coordinator.BuildInitial(rig, {StationDescriptor("A")}, {a}, 1u, {}, {}, {}));
  auto trigger = coordinator.Accepted()->Triggers[0].Instance;

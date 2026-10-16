@@ -434,9 +434,7 @@ MidiConnectionResult MidiRouter::InitMidi(const io::UserConfig& cfg,
 		result.Accepted = false;
 		return result;
 	}
-	std::vector<std::pair<std::string, bool>> desired;
-	for (const auto& configured : cfg.Midi.Devices)
-		desired.emplace_back(configured.Name, configured.Enabled);
+	auto desired = cfg.Midi.Devices;
 	const auto& priorInventory = _lastMidiConnectionResult.Inventory.Devices;
 	const bool sameInventory = result.Inventory.Devices.size() == priorInventory.size() &&
 		std::equal(result.Inventory.Devices.begin(), result.Inventory.Devices.end(), priorInventory.begin(),
@@ -477,15 +475,9 @@ MidiConnectionResult MidiRouter::InitMidi(const io::UserConfig& cfg,
 	const auto sampleRate = actualSampleRate;
 	std::uint8_t nextSlot = 0u;
 	std::vector<unsigned int> claimedIds;
-	// Generated startup uses the enumerated physical identities. Names alone can
-	// collapse distinct ports when a driver exposes duplicate display names.
-	std::vector<io::UserConfig::MidiSettings> requestedDevices = cfg.Midi.Devices;
-	if (generatedRig)
-	{
-		requestedDevices.clear();
-		for (const auto& port : result.Inventory.Devices)
-			requestedDevices.push_back({ port.Name, true });
-	}
+	// Generated startup already assigned IDs in inventory order. Retain those
+	// IDs even when only a subset of physical endpoints opens successfully.
+	const auto& requestedDevices = cfg.Midi.Devices;
 	midiInputs->reserve((std::min)(requestedDevices.size(), static_cast<std::size_t>(UnresolvedMidiDeviceSlot)));
 
 	for (size_t requestIndex = 0u; requestIndex < requestedDevices.size(); ++requestIndex)
@@ -493,6 +485,8 @@ MidiConnectionResult MidiRouter::InitMidi(const io::UserConfig& cfg,
 		const auto& midiConfig = requestedDevices[requestIndex];
 		MidiConnectionAttempt attempt;
 		attempt.RequestedName = midiConfig.Name;
+		attempt.RegistryId = midiConfig.Id.empty() && generatedRig
+			? "midi-" + std::to_string(requestIndex + 1u) : midiConfig.Id;
 		if (!midiConfig.Enabled)
 		{
 			attempt.Status = MidiConnectionStatus::Disabled;
@@ -507,9 +501,8 @@ MidiConnectionResult MidiRouter::InitMidi(const io::UserConfig& cfg,
 			result.Attempts.push_back(std::move(attempt));
 			continue;
 		}
-		const auto requestedName = MidiDevice::ResolveSavedInputName(midiConfig.Name, result.Inventory.Devices);
 		const auto* selected = MidiDevice::SelectStartupInput(result.Inventory.Devices,
-			requestedName, claimedIds, requestIndex, generatedRig, attempt.DuplicateName);
+			midiConfig.Name, claimedIds, requestIndex, generatedRig, attempt.DuplicateName);
 		if (!selected)
 		{
 			attempt.Status = attempt.DuplicateName ? MidiConnectionStatus::Ambiguous : MidiConnectionStatus::Missing;
@@ -530,8 +523,9 @@ MidiConnectionResult MidiRouter::InitMidi(const io::UserConfig& cfg,
 		std::shared_ptr<MidiInputEndpoint> reused;
 		if (previousInputs && !attempt.DuplicateName && previousVerbose == _loggingVerbose)
 			for (const auto& previous : *previousInputs)
-				if (previous && previous->ConfiguredName == selected->Name &&
+				if (previous && previous->ConfiguredName == attempt.RegistryId &&
 					previous->SampleRate == sampleRate && previous->Device && previous->Device->IsOpen() &&
+					previous->Device->DeviceName() == selected->Name &&
 					previous->Device->DeviceId() == selected->DeviceId)
 				{ reused = previous; break; }
 		if (reused)
@@ -540,16 +534,17 @@ MidiConnectionResult MidiRouter::InitMidi(const io::UserConfig& cfg,
 			midiInputs->push_back(reused);
 			attempt.Status = MidiConnectionStatus::Connected;
 			result.Connected.push_back(*selected);
+			result.ConnectedRegistryIds.push_back(attempt.RegistryId);
 			result.Attempts.push_back(std::move(attempt));
 			continue;
 		}
 		// Close a changed endpoint before opening the same physical port again.
 		if (previousInputs)
 			for (const auto& previous : *previousInputs)
-				if (previous && previous->ConfiguredName == selected->Name && previous->Device)
+				if (previous && previous->Device && previous->Device->DeviceId() == selected->DeviceId)
 					previous->Device->Close();
 		auto endpoint = std::make_shared<MidiInputEndpoint>();
-		endpoint->ConfiguredName = selected->Name;
+		endpoint->ConfiguredName = attempt.RegistryId;
 		endpoint->SampleRate = sampleRate;
 		endpoint->Device = std::make_unique<midi::MidiDevice>();
 		endpoint->LastClockAnchor = initialAnchor;
@@ -611,6 +606,7 @@ MidiConnectionResult MidiRouter::InitMidi(const io::UserConfig& cfg,
 		midiInputs->push_back(endpoint);
 		attempt.Status = attempt.DuplicateName ? MidiConnectionStatus::Ambiguous : MidiConnectionStatus::Connected;
 		result.Connected.push_back(*selected);
+		result.ConnectedRegistryIds.push_back(attempt.RegistryId);
 		result.Attempts.push_back(std::move(attempt));
 	}
 
@@ -630,7 +626,7 @@ MidiConnectionResult MidiRouter::InitMidi(const io::UserConfig& cfg,
 		result.Attempts.size() != _lastMidiConnectionResult.Attempts.size() ||
 		!std::equal(result.Attempts.begin(), result.Attempts.end(), _lastMidiConnectionResult.Attempts.begin(),
 			[](const MidiConnectionAttempt& a, const MidiConnectionAttempt& b) {
-				return a.RequestedName == b.RequestedName && a.Status == b.Status && a.Error == b.Error;
+				return a.RequestedName == b.RequestedName && a.RegistryId == b.RegistryId && a.Status == b.Status && a.Error == b.Error;
 			});
 	if (changed)
 		std::cout << "[MIDI] Accepted desired inputs: " << result.Attempts.size()
@@ -669,12 +665,20 @@ MidiConnectionResult MidiRouter::InitMidi(const io::UserConfig& cfg,
 		result = _lastMidiConnectionResult;
 		result.Accepted = false;
 		result.Error = std::string("MIDI reconciliation failed: ") + error.what();
-		result.Connected.erase(std::remove_if(result.Connected.begin(), result.Connected.end(),
-			[&previousInputs](const MidiInputDeviceInfo& device) {
-				return !previousInputs || std::none_of(previousInputs->begin(), previousInputs->end(),
-					[&device](const auto& input) { return input && input->Device && input->Device->IsOpen()
-						&& input->ConfiguredName == device.Name; });
-			}), result.Connected.end());
+		// Keep hardware descriptors and registry IDs aligned on partial recovery.
+		for (auto i = result.Connected.size(); i-- > 0u;)
+		{
+			const auto& device = result.Connected[i];
+			const auto& id = result.ConnectedRegistryIds[i];
+			const bool open = previousInputs && std::any_of(previousInputs->begin(), previousInputs->end(),
+				[&](const auto& input) { return input && input->Device && input->Device->IsOpen() &&
+					input->ConfiguredName == id && input->Device->DeviceId() == device.DeviceId; });
+			if (!open)
+			{
+				result.Connected.erase(result.Connected.begin() + i);
+				result.ConnectedRegistryIds.erase(result.ConnectedRegistryIds.begin() + i);
+			}
+		}
 		try { _StartLiveMidiDispatcher(); }
 		catch (const std::exception& restartError)
 		{ result.Error += std::string("; live MIDI stopped: ") + restartError.what(); }
@@ -975,6 +979,14 @@ void MidiRouter::InitSerial(const io::UserConfig& cfg)
 
 	if (0u == activeConnections)
 		std::cout << "[Serial] No active serial trigger connections." << std::endl;
+}
+
+std::vector<std::string> MidiRouter::ConnectedSerialDeviceIds() const
+{
+	std::vector<std::string> ids;
+	for (const auto& device : _serialDevices)
+		if (device && device->IsOpen()) ids.push_back(device->DeviceName());
+	return ids;
 }
 
 void MidiRouter::CloseSerial()
@@ -1370,7 +1382,7 @@ MidiRouter::TriggerDispatchSummary MidiRouter::_DispatchMidiTriggerEvent(std::ui
 			continue;
 
 		auto res = route.Trigger->QueueMidiInputEvent(engine::TRIGGER_INPUT_JOB,
-			routes->Revision, event, triggerAction, eventSteadyMicros);
+			routes->Revision, event, triggerAction, eventSteadyMicros, route.DeviceName);
 		if (!res.IsEaten)
 			continue;
 

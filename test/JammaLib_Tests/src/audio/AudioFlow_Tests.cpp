@@ -1574,6 +1574,7 @@ TEST(AudioCallbackRealtime, PreparedCallbackWithSceneTickDoesNotAllocate)
 	stationDesc.Name = "Realtime";
 	jam.Stations.push_back(std::move(stationDesc));
 	io::RigFile rig{};
+	rig.Name = "Realtime rig";
 	rig.User = config;
 	engine::SceneParams sceneParams({ "" }, {}, { 640u, 480u });
 	auto sceneResult = engine::Scene::FromFile(sceneParams, std::move(jam),

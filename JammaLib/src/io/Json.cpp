@@ -8,11 +8,295 @@
 #include "Json.h"
 
 #include <exception>
+#include <cmath>
+#include <algorithm>
+#include <locale>
 #include <cctype>
 #include <limits>
 #include <string>
+#include <type_traits>
 
 using namespace io;
+
+// Rig persistence uses this reader; legacy Jam files retain FromStream semantics.
+class Json::StrictReader
+{
+public:
+	explicit StrictReader(std::stringstream& stream) : Stream(stream) {}
+
+	std::optional<JsonValue> Read()
+	{
+		auto value = ReadValue(0u);
+		SkipSpace();
+		if (!value || Stream.peek() != std::char_traits<char>::eof())
+			return std::nullopt;
+		return value;
+	}
+
+private:
+	std::stringstream& Stream;
+	static constexpr unsigned int MaxDepth = 64u;
+
+	void SkipSpace()
+	{
+		while (Stream.peek() == ' ' || Stream.peek() == '\t' ||
+			Stream.peek() == '\r' || Stream.peek() == '\n')
+			Stream.get();
+	}
+
+	bool Consume(char expected)
+	{
+		if (Stream.peek() != expected)
+			return false;
+		Stream.get();
+		return true;
+	}
+
+	bool ReadHex(unsigned int& value)
+	{
+		value = 0u;
+		for (unsigned int i = 0u; i < 4u; ++i)
+		{
+			const auto ch = Stream.get();
+			unsigned int digit;
+			if (ch >= '0' && ch <= '9') digit = ch - '0';
+			else if (ch >= 'a' && ch <= 'f') digit = ch - 'a' + 10u;
+			else if (ch >= 'A' && ch <= 'F') digit = ch - 'A' + 10u;
+			else return false;
+			value = (value << 4u) | digit;
+		}
+		return true;
+	}
+
+	static void AppendUtf8(std::string& text, unsigned int point)
+	{
+		if (point <= 0x7fu) text.push_back(static_cast<char>(point));
+		else if (point <= 0x7ffu)
+		{
+			text.push_back(static_cast<char>(0xc0u | (point >> 6u)));
+			text.push_back(static_cast<char>(0x80u | (point & 0x3fu)));
+		}
+		else if (point <= 0xffffu)
+		{
+			text.push_back(static_cast<char>(0xe0u | (point >> 12u)));
+			text.push_back(static_cast<char>(0x80u | ((point >> 6u) & 0x3fu)));
+			text.push_back(static_cast<char>(0x80u | (point & 0x3fu)));
+		}
+		else
+		{
+			text.push_back(static_cast<char>(0xf0u | (point >> 18u)));
+			text.push_back(static_cast<char>(0x80u | ((point >> 12u) & 0x3fu)));
+			text.push_back(static_cast<char>(0x80u | ((point >> 6u) & 0x3fu)));
+			text.push_back(static_cast<char>(0x80u | (point & 0x3fu)));
+		}
+	}
+
+	std::optional<std::string> ReadString()
+	{
+		if (!Consume('"')) return std::nullopt;
+		std::string text;
+		for (;;)
+		{
+			const auto ch = Stream.get();
+			if (ch == std::char_traits<char>::eof() || ch < 0x20)
+				return std::nullopt;
+			if (ch == '"') return text;
+			if (ch != '\\')
+			{
+				if (ch < 0x80)
+					text.push_back(static_cast<char>(ch));
+				else
+				{
+					unsigned int count;
+					unsigned int point;
+					unsigned int minimum;
+					if (ch >= 0xc2 && ch <= 0xdf) { count = 1u; point = ch & 0x1f; minimum = 0x80u; }
+					else if (ch >= 0xe0 && ch <= 0xef) { count = 2u; point = ch & 0x0f; minimum = 0x800u; }
+					else if (ch >= 0xf0 && ch <= 0xf4) { count = 3u; point = ch & 0x07; minimum = 0x10000u; }
+					else return std::nullopt;
+					for (unsigned int i = 0u; i < count; ++i)
+					{
+						const auto next = Stream.get();
+						if (next < 0x80 || next > 0xbf) return std::nullopt;
+						point = (point << 6u) | (next & 0x3f);
+					}
+					if (point < minimum || point > 0x10ffffu ||
+						(point >= 0xd800u && point <= 0xdfffu))
+						return std::nullopt;
+					AppendUtf8(text, point);
+				}
+				continue;
+			}
+			switch (Stream.get())
+			{
+			case '"': text.push_back('"'); break;
+			case '\\': text.push_back('\\'); break;
+			case '/': text.push_back('/'); break;
+			case 'b': text.push_back('\b'); break;
+			case 'f': text.push_back('\f'); break;
+			case 'n': text.push_back('\n'); break;
+			case 'r': text.push_back('\r'); break;
+			case 't': text.push_back('\t'); break;
+			case 'u':
+			{
+				unsigned int point;
+				if (!ReadHex(point)) return std::nullopt;
+				if (point >= 0xd800u && point <= 0xdbffu)
+				{
+					unsigned int low;
+					if (!Consume('\\') || !Consume('u') || !ReadHex(low) ||
+						low < 0xdc00u || low > 0xdfffu)
+						return std::nullopt;
+					point = 0x10000u + ((point - 0xd800u) << 10u) + low - 0xdc00u;
+				}
+				else if (point >= 0xdc00u && point <= 0xdfffu)
+					return std::nullopt;
+				AppendUtf8(text, point);
+				break;
+			}
+			default: return std::nullopt;
+			}
+		}
+	}
+
+	std::optional<JsonValue> ReadNumber()
+	{
+		std::string token;
+		if (Consume('-')) token.push_back('-');
+		if (Consume('0')) token.push_back('0');
+		else
+		{
+			if (Stream.peek() < '1' || Stream.peek() > '9') return std::nullopt;
+			do { token.push_back(static_cast<char>(Stream.get())); }
+			while (Stream.peek() >= '0' && Stream.peek() <= '9');
+		}
+		bool floating = false;
+		if (Consume('.'))
+		{
+			floating = true;
+			token.push_back('.');
+			if (Stream.peek() < '0' || Stream.peek() > '9') return std::nullopt;
+			do { token.push_back(static_cast<char>(Stream.get())); }
+			while (Stream.peek() >= '0' && Stream.peek() <= '9');
+		}
+		if (Stream.peek() == 'e' || Stream.peek() == 'E')
+		{
+			floating = true;
+			token.push_back(static_cast<char>(Stream.get()));
+			if (Stream.peek() == '+' || Stream.peek() == '-')
+				token.push_back(static_cast<char>(Stream.get()));
+			if (Stream.peek() < '0' || Stream.peek() > '9') return std::nullopt;
+			do { token.push_back(static_cast<char>(Stream.get())); }
+			while (Stream.peek() >= '0' && Stream.peek() <= '9');
+		}
+		try
+		{
+			if (!floating)
+			{
+				if (token.front() == '-')
+				{
+					const auto value = std::stoll(token);
+					if (value >= (std::numeric_limits<long>::min)() &&
+						value <= (std::numeric_limits<long>::max)())
+						return static_cast<long>(value);
+				}
+				else
+				{
+					const auto value = std::stoull(token);
+					if (value <= (std::numeric_limits<unsigned long>::max)())
+						return static_cast<unsigned long>(value);
+				}
+			}
+		}
+		catch (const std::exception&) {}
+		std::stringstream number(token);
+		number.imbue(std::locale::classic());
+		double value;
+		if (!(number >> value) || !std::isfinite(value)) return std::nullopt;
+		return value;
+	}
+
+	static bool AppendArray(JsonArray& array, const JsonValue& value)
+	{
+		return std::visit([&array](const auto& item) -> bool
+		{
+			using ValueType = std::decay_t<decltype(item)>;
+			if constexpr (std::is_same_v<ValueType, JsonArray>) return false;
+			else
+			{
+				using VectorType = std::vector<ValueType>;
+				if (array.Length == 0u) array.Array = VectorType{};
+				auto values = std::get_if<VectorType>(&array.Array);
+				if (!values || array.Length == (std::numeric_limits<unsigned int>::max)())
+					return false;
+				values->push_back(item);
+				++array.Length;
+				return true;
+			}
+		}, value);
+	}
+
+	std::optional<JsonValue> ReadValue(unsigned int depth)
+	{
+		if (depth > MaxDepth) return std::nullopt;
+		SkipSpace();
+		if (Stream.peek() == '"')
+		{
+			auto value = ReadString();
+			if (!value) return std::nullopt;
+			return *value;
+		}
+		if (Consume('{'))
+		{
+			JsonPart object;
+			SkipSpace();
+			if (Consume('}')) return object;
+			for (;;)
+			{
+				SkipSpace();
+				auto key = ReadString();
+				SkipSpace();
+				if (!key || !Consume(':')) return std::nullopt;
+				auto value = ReadValue(depth + 1u);
+				if (!value || !object.KeyValues.emplace(*key, *value).second)
+					return std::nullopt;
+				object.KeyOrder.push_back(*key);
+				SkipSpace();
+				if (Consume('}')) return object;
+				if (!Consume(',')) return std::nullopt;
+			}
+		}
+		if (Consume('['))
+		{
+			JsonArray array{0u, std::vector<bool>{}};
+			SkipSpace();
+			if (Consume(']')) return array;
+			for (;;)
+			{
+				auto value = ReadValue(depth + 1u);
+				if (!value || !AppendArray(array, *value)) return std::nullopt;
+				SkipSpace();
+				if (Consume(']')) return array;
+				if (!Consume(',')) return std::nullopt;
+			}
+		}
+		if (Stream.peek() == '-' || (Stream.peek() >= '0' && Stream.peek() <= '9'))
+			return ReadNumber();
+		std::string literal;
+		while (Stream.peek() >= 'a' && Stream.peek() <= 'z')
+			literal.push_back(static_cast<char>(Stream.get()));
+		if (literal == "true") return true;
+		if (literal == "false") return false;
+		if (literal == "null") return std::monostate{};
+		return std::nullopt;
+	}
+};
+
+std::optional<Json::JsonValue> Json::FromStrictStream(std::stringstream ss)
+{
+	return StrictReader(ss).Read();
+}
+
 
 std::optional<Json::JsonValue> Json::FromStream(std::stringstream ss)
 {
@@ -67,7 +351,12 @@ bool Json::WriteValue(const JsonValue& json, std::stringstream& ss)
 	return std::visit([&ss](const auto& value) -> bool
 		{
 			using ValueType = std::decay_t<decltype(value)>;
-			if constexpr (std::is_same_v<ValueType, bool>)
+			if constexpr (std::is_same_v<ValueType, std::monostate>)
+			{
+				ss << "null";
+				return true;
+			}
+			else if constexpr (std::is_same_v<ValueType, bool>)
 			{
 				ss << (value ? "true" : "false");
 				return true;
@@ -105,15 +394,22 @@ bool Json::WriteValue(const JsonValue& json, std::stringstream& ss)
 			{
 				ss << '{';
 				bool first = true;
-				for (const auto& keyValue : value.KeyValues)
+				auto writeMember = [&](const auto& keyValue)
 				{
-					if (!first)
-						ss << ',';
+					if (!first) ss << ',';
 					first = false;
 					WriteString(keyValue.first, ss);
 					ss << ':';
 					WriteValue(keyValue.second, ss);
+				};
+				for (const auto& key : value.KeyOrder)
+				{
+					const auto member = value.KeyValues.find(key);
+					if (member != value.KeyValues.end()) writeMember(*member);
 				}
+				for (const auto& keyValue : value.KeyValues)
+					if (std::find(value.KeyOrder.begin(), value.KeyOrder.end(), keyValue.first) == value.KeyOrder.end())
+						writeMember(keyValue);
 				ss << '}';
 				return true;
 			}

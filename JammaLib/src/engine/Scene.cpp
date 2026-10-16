@@ -339,8 +339,8 @@ std::optional<std::shared_ptr<Scene>> Scene::FromFile(SceneParams sceneParams,
 	if (!scene->_rigCoordinator.BuildInitial(rigStruct,
 		loaded.StationDescriptors,
 		loaded.Stations,
-		rigStruct.User.Audio.NumChannelsIn,
-		loaded.HudMidiInputs,
+		0u,
+		{},
 		loaded.TriggerParameters,
 		{}))
 	{
@@ -352,7 +352,7 @@ std::optional<std::shared_ptr<Scene>> Scene::FromFile(SceneParams sceneParams,
 		return std::nullopt;
 	for (const auto& trigger : acceptedRig->Graph.Triggers)
 	{
-		const auto target = trigger.TargetName.value_or("<legacy target>");
+		const auto target = trigger.TargetName.value_or("<unbound>");
 		if (trigger.Reason == io::RigFileRouting::Warning::TargetMissing)
 			std::cout << "[LOAD] Warning: trigger '" << trigger.TriggerName << "' target '" << target
 				<< "' was not found; leaving it unconnected." << std::endl;
@@ -365,7 +365,7 @@ std::optional<std::shared_ptr<Scene>> Scene::FromFile(SceneParams sceneParams,
 		std::cout << "Load: no constructible stations" << std::endl;
 		return std::nullopt;
 	}
-	IoSessionLoader::RestoreTriggerHistories(jamStruct.TriggerHistories, *acceptedRig);
+	IoSessionLoader::RestoreTriggerHistories(jamStruct.TriggerHistories, *acceptedRig, loaded.Stations);
 	for (auto& station : loaded.Stations)
 		scene->_AddStation(std::move(station), false);
 	scene->_PublishAudioStations();
@@ -447,7 +447,7 @@ void Scene::Draw(DrawContext& ctx)
 			_hudPanel->SetAudioInputPeak(channel, _audioEngine->GetAdcPeak(channel), numSamps);
 
 		unsigned int midiInput = 0u;
-		for (const auto& deviceName : _midiState.load(std::memory_order_acquire)->ConnectedNames)
+		for (const auto& deviceName : _midiState.load(std::memory_order_acquire)->ConnectedIds)
 		{
 			_hudPanel->SetMidiInputPeak(midiInput++,
 				_inputSubsystem->ConsumeMidiInputPeak(deviceName),
@@ -666,9 +666,10 @@ bool Scene::IsCameraTriggerKey(unsigned int key) const
 	const auto rig = _rigCoordinator.Accepted();
 	if (!rig) return false;
 	for (const auto& trigger : rig->Rig.Triggers)
-		for (const auto& pair : trigger.TriggerPairs)
-			if (key == pair.ActivateDown || key == pair.ActivateUp ||
-				key == pair.DitchDown || key == pair.DitchUp) return true;
+		for (const auto* bindings : { &trigger.ControlBindings.Activate, &trigger.ControlBindings.Ditch })
+			for (const auto& binding : *bindings)
+				if (binding.Source == io::RigFile::BindingSource::Keyboard &&
+					(key == binding.Press.Code || key == binding.Release.Code)) return true;
 	return false;
 }
 
@@ -1815,10 +1816,25 @@ ActionResult Scene::OnAction(GuiAction action)
 		const auto index = action.Index - 7300u;
 		if (index < _midiChoices.size())
 		{
-			const auto& choice = _midiChoices[index];
-			const bool enabled = choice.second->GetToggleState() == GuiToggleParams::TOGGLE_ON;
-			auto found = std::find_if(_midiDraft.begin(), _midiDraft.end(), [&choice](const auto& d){ return d.Name == choice.first; });
-			if (found == _midiDraft.end()) _midiDraft.push_back({choice.first, enabled}); else found->Enabled = enabled;
+			auto& choice = _midiChoices[index];
+			const bool enabled = choice.Toggle->GetToggleState() == GuiToggleParams::TOGGLE_ON;
+			auto found = std::find_if(_midiDraft.begin(), _midiDraft.end(), [&choice](const auto& d){ return d.Id == choice.RegistryId; });
+			if (found == _midiDraft.end())
+			{
+				std::string id;
+				const auto rig = _rigCoordinator.Accepted();
+				for (size_t suffix = 1u;; ++suffix)
+				{
+					id = "midi-" + std::to_string(suffix);
+					const bool midiCollision = std::any_of(_midiDraft.begin(), _midiDraft.end(), [&](const auto& device) { return device.Id == id; });
+					const bool serialCollision = rig && std::any_of(rig->Rig.User.Serial.Devices.begin(), rig->Rig.User.Serial.Devices.end(),
+						[&](const auto& device) { return device.Name == id; });
+					if (id != io::RigFile::KeyboardDevice && !midiCollision && !serialCollision) break;
+				}
+				choice.RegistryId = id;
+				_midiDraft.push_back({choice.HardwareName, enabled, std::move(id)});
+			}
+			else found->Enabled = enabled;
 			_midiDraftPending = true;
 		}
 		return ActionResult::NoAction();
@@ -2162,32 +2178,30 @@ void Scene::_RefreshMidiIfNeeded()
 		return;
 	auto result = _inputSubsystem->RefreshMidi(_audioEngine->GetMidiClockAnchor_Ref(),
 		_audioEngine->GetStreamParams().SampleRate, inventory, requested);
-	std::vector<std::string> connectedNames;
-	for (const auto& endpoint : result.Connected)
-		if (std::find(connectedNames.begin(), connectedNames.end(), endpoint.Name) == connectedNames.end())
-			connectedNames.push_back(endpoint.Name);
-	_ConfirmMidiConnectionChange(previous->Connection, result, connectedNames);
-	_midiState.store(std::make_shared<const MidiState>(MidiState{ std::move(result), connectedNames }),
+	const auto connectedIds = result.ConnectedRegistryIds;
+	const auto serialIds = _inputSubsystem->ConnectedSerialDeviceIds();
+	_ConfirmMidiConnectionChange(previous->Connection, result, connectedIds);
+	_midiState.store(std::make_shared<const MidiState>(MidiState{ std::move(result), connectedIds, serialIds }),
 		std::memory_order_release);
 	const auto inputs = _audioEngine->GetStreamParams().NumInputChannels;
 	std::scoped_lock sceneLock(_sceneMutex);
-	if (const auto runtime = _rigCoordinator.RefreshRuntimeAvailability(inputs, connectedNames))
+	if (const auto runtime = _rigCoordinator.RefreshRuntimeAvailability(inputs, connectedIds, serialIds))
 	{
 		_audioEngine->PublishPendingRigSnapshot(runtime);
 		_inputSubsystem->PublishRigInputDispatch(runtime);
 		_inputSubsystem->OpenRigTriggerInput(runtime->Revision);
 		if (_hudPanel)
 		{
-			_hudPanel->PublishRoutingConfig(inputs, connectedNames, runtime);
+			_hudPanel->PublishRoutingConfig(inputs, connectedIds, runtime);
 		}
 	}
 }
 
 void Scene::_ConfirmMidiConnectionChange(const midi::MidiConnectionResult& previous,
-	const midi::MidiConnectionResult& refreshed, const std::vector<std::string>& connectedNames)
+	const midi::MidiConnectionResult& refreshed, const std::vector<std::string>& connectedIds)
 {
 	if (!refreshed.Inventory.Error.empty()) return;
-	const auto lostNames = midi::MidiDevice::LostConnectedInputNames(previous, refreshed);
+	const auto lostIds = midi::MidiDevice::LostConnectedInputIds(previous, refreshed);
 	std::scoped_lock lock(_sceneMutex);
 	const auto accepted = _rigCoordinator.Accepted();
 	if (!accepted) return;
@@ -2195,16 +2209,23 @@ void Scene::_ConfirmMidiConnectionChange(const midi::MidiConnectionResult& previ
 	{
 		if (!runtime.Instance || runtime.RigTriggerIndex >= accepted->Rig.Triggers.size()) continue;
 		const auto& configured = accepted->Rig.Triggers[runtime.RigTriggerIndex];
-		const bool activationLost = configured.MidiTrigger &&
-			std::find(lostNames.begin(), lostNames.end(), configured.MidiTrigger->Device) != lostNames.end();
-		const bool captureLost = configured.MidiInputs == io::RigFile::Trigger::MidiInputMode::Selected &&
-			std::any_of(configured.MidiInputDevices.begin(), configured.MidiInputDevices.end(),
-				[&lostNames](const std::string& name) { return std::find(lostNames.begin(), lostNames.end(), name) != lostNames.end(); });
-		runtime.Instance->ConfirmMidiAvailabilityOnJob(connectedNames, lostNames, activationLost, captureLost);
+		const auto isLost = [&lostIds](const std::string& id) {
+			return std::find(lostIds.begin(), lostIds.end(), id) != lostIds.end();
+		};
+		const auto lostControl = [&](const std::vector<io::RigFile::Binding>& bindings) {
+			return std::any_of(bindings.begin(), bindings.end(), [&](const io::RigFile::Binding& binding) {
+				return binding.Source == io::RigFile::BindingSource::Midi && isLost(binding.Device);
+			});
+		};
+		const bool controlLost = lostControl(configured.ControlBindings.Activate) ||
+			lostControl(configured.ControlBindings.Ditch);
+		const bool captureLost = std::any_of(configured.CaptureInputs.Midi.begin(),
+			configured.CaptureInputs.Midi.end(), isLost);
+		runtime.Instance->ConfirmMidiAvailabilityOnJob(connectedIds, lostIds, controlLost, captureLost);
 	}
 	for (const auto& station : _stations)
 		if (station)
-			for (const auto& name : lostNames) station->FlushLiveHeldMidiNotesForDevice(name);
+			for (const auto& name : lostIds) station->FlushLiveHeldMidiNotesForDevice(name);
 }
 
 void Scene::_PumpSourceLossRecovery()
@@ -2394,7 +2415,7 @@ void Scene::_AdvanceRigPublication()
 		// Routing is published under the surrounding Scene lock; UI owns widgets.
 		unsigned int audioInputs = _audioEngine->GetStreamParams().NumInputChannels;
 		const auto midiState = _midiState.load(std::memory_order_acquire);
-		_hudPanel->PublishRoutingConfig(audioInputs, midiState->ConnectedNames, pending);
+		_hudPanel->PublishRoutingConfig(audioInputs, midiState->ConnectedIds, pending);
 	}
 	if (!pending->MembershipChange) _inputSubsystem->OpenRigTriggerInput(pending->Revision);
 }
@@ -2419,6 +2440,8 @@ RigCoordinator::EditResult Scene::_RequestRigEditLocked(const io::RigFile& candi
 	if (!lifecycle.owns_lock() || !_rigCoordinator.EditsEnabled()) return RigCoordinator::EditResult::EditsDisabled;
 	const auto accepted = _rigCoordinator.Accepted();
 	const auto result = _rigCoordinator.SubmitCandidate(candidateRig);
+	if (result == RigCoordinator::EditResult::ReinitialisationRequired)
+		_quantisationFeedback = "Device setup and defaults require scene reinitialisation; reload or restart with the updated rig.";
 	if (result == RigCoordinator::EditResult::Pending)
 	{
 		const auto staged = _rigCoordinator.Staged();
@@ -2676,8 +2699,24 @@ void Scene::InitAudio(bool generatedRig, const audio::AsioInventory* inventory, 
 	}
 	const auto midiState = _midiState.load(std::memory_order_acquire);
 	const auto actualInputs = started ? _audioEngine->GetStreamParams().NumInputChannels : 0u;
-	_ConfirmMidiConnectionChange(previousMidi->Connection, midiState->Connection, midiState->ConnectedNames);
-	if (const auto runtime = _rigCoordinator.RefreshRuntimeAvailability(actualInputs, midiState->ConnectedNames))
+	_ConfirmMidiConnectionChange(previousMidi->Connection, midiState->Connection, midiState->ConnectedIds);
+	std::optional<io::UserConfig::AudioSettings> confirmedGeneratedAudio;
+	if (started && generatedRig)
+	{
+		const auto actual = _audioEngine->GetStreamParams();
+		auto settings = _userConfig.Audio;
+		settings.Name = actual.Name;
+		settings.SampleRate = actual.SampleRate;
+		settings.BufSize = actual.BufSize;
+		settings.NumBuffers = actual.NumBuffers;
+		settings.LatencyIn = actual.InputLatency;
+		settings.LatencyOut = actual.OutputLatency;
+		settings.NumChannelsIn = actual.NumInputChannels;
+		settings.NumChannelsOut = actual.NumOutputChannels;
+		confirmedGeneratedAudio = std::move(settings);
+	}
+	if (const auto runtime = _rigCoordinator.RefreshRuntimeAvailability(actualInputs, midiState->ConnectedIds,
+		midiState->ConnectedSerialIds, std::move(confirmedGeneratedAudio)))
 	{
 		_audioEngine->PublishPendingRigSnapshot(runtime);
 		_inputSubsystem->PublishRigInputDispatch(runtime);
@@ -2685,7 +2724,7 @@ void Scene::InitAudio(bool generatedRig, const audio::AsioInventory* inventory, 
 		if (_hudPanel)
 		{
 			std::scoped_lock lock(_sceneMutex);
-			_hudPanel->PublishRoutingConfig(actualInputs, midiState->ConnectedNames, runtime);
+			_hudPanel->PublishRoutingConfig(actualInputs, midiState->ConnectedIds, runtime);
 		}
 	}
 
@@ -4153,13 +4192,14 @@ void Scene::_RebuildDevicePage()
 	_midiChoices.clear(); _midiChoiceBindings.clear();
 	const auto midi = _midiState.load(std::memory_order_acquire);
 	midiEntries.push_back({SettingsPage::Midi, "", std::make_shared<GuiLabel>(GuiLabelParams::PanelHeader(midi->Connection.Inventory.Error.empty() ? "MIDI input selection" : "MIDI inventory: " + midi->Connection.Inventory.Error, 300u)), 0u});
-	std::vector<std::string> names;
+	// Existing registry entries remain independent even when hardware selectors
+	// coincide. Inventory-only choices acquire their ID when first selected.
+	auto choices = _midiDraft;
 	for (const auto& device : midi->Connection.Inventory.Devices)
-		if (std::find(names.begin(), names.end(), device.Name) == names.end()) names.push_back(device.Name);
-	for (const auto& desired : _midiDraft)
-		if (std::find(names.begin(), names.end(), desired.Name) == names.end()) names.push_back(desired.Name);
+		if (std::none_of(choices.begin(), choices.end(), [&](const auto& choice) { return choice.Name == device.Name; }))
+			choices.push_back({device.Name, false, {}});
 	std::shared_ptr<GuiStackPanel> midiGroup;
-	for (const auto& name : names)
+	for (const auto& choice : choices)
 	{
 		if (_midiChoices.size() >= 1000u) break;
 		if (_midiChoices.size() % 128u == 0u)
@@ -4169,9 +4209,9 @@ void Scene::_RebuildDevicePage()
 			midiEntries.push_back({SettingsPage::Midi,"",midiGroup,0u});
 		}
 		auto params = GuiToggleParams::PanelPrimary(); params.Size = {300u,36u}; params.HorizSizing = LayoutSizing::Fill;
-		const auto desired = std::find_if(_midiDraft.begin(), _midiDraft.end(), [&name](const auto& d){ return d.Name == name; });
-		params.InitState = desired != _midiDraft.end() && desired->Enabled ? GuiToggleParams::TOGGLE_ON : GuiToggleParams::TOGGLE_OFF;
-		const auto attempt = std::find_if(midi->Connection.Attempts.begin(), midi->Connection.Attempts.end(), [&name](const auto& a){return a.RequestedName == name;});
+		params.InitState = choice.Enabled ? GuiToggleParams::TOGGLE_ON : GuiToggleParams::TOGGLE_OFF;
+		const auto attempt = std::find_if(midi->Connection.Attempts.begin(), midi->Connection.Attempts.end(),
+			[&choice](const auto& a){return !choice.Id.empty() && a.RegistryId == choice.Id;});
 		std::string status = "disabled";
 		if (attempt != midi->Connection.Attempts.end()) switch (attempt->Status)
 		{
@@ -4182,12 +4222,12 @@ void Scene::_RebuildDevicePage()
 		case midi::MidiConnectionStatus::CapacityExceeded: status = "capacity exceeded"; break;
 		default: break;
 		}
-		params.Text = name + " (" + status + ")";
+		params.Text = choice.Name + (choice.Id.empty() ? "" : " [" + choice.Id + "]") + " (" + status + ")";
 		auto control = std::make_shared<GuiToggle>(params);
 		auto binding = std::make_shared<GuiCommandReceiver>(7300u+static_cast<unsigned int>(_midiChoices.size()), ActionReceiver::shared_from_this());
 		control->SetReceiver(binding); _midiChoiceBindings.push_back(binding);
 		midiGroup->AddChild(control); midiGroup->SetSize({300u, static_cast<unsigned int>((_midiChoices.size() % 128u + 1u) * 44u - 8u)}); midiGroup->ComputeLayout();
-		_midiChoices.emplace_back(name,control);
+		_midiChoices.push_back({choice.Name, choice.Id, control});
 	}
 	auto refreshMidi = GuiButtonParams::PanelButton(240u); refreshMidi.Text = "Refresh MIDI devices"; refreshMidi.DispatchCommand = true;
 	midiEntries.push_back({SettingsPage::Midi, "", std::make_shared<GuiButton>(refreshMidi), 7206u});
@@ -4421,12 +4461,12 @@ void Scene::PumpDeviceAndFileControls()
 						runtime.Instance->ConfirmAudioAvailabilityOnJob(_audioStreamEpoch, acceptedParams.Name, acceptedParams.NumInputChannels);
 				// Reprepare timestamp mappers for accepted device-rate geometry.
 				const auto refreshedMidi = _inputSubsystem->RefreshMidi(_audioEngine->GetMidiClockAnchor_Ref(), acceptedParams.SampleRate, _inputSubsystem->InventoryMidiInputs());
-				std::vector<std::string> newMidiNames;
-				for (const auto& endpoint : refreshedMidi.Connected) newMidiNames.push_back(endpoint.Name);
+				const auto newMidiNames = refreshedMidi.ConnectedRegistryIds;
+				const auto serialIds = _inputSubsystem->ConnectedSerialDeviceIds();
 				_ConfirmMidiConnectionChange(midiState->Connection, refreshedMidi, newMidiNames);
-				_midiState.store(std::make_shared<const MidiState>(MidiState{refreshedMidi, newMidiNames}), std::memory_order_release);
+				_midiState.store(std::make_shared<const MidiState>(MidiState{refreshedMidi, newMidiNames, serialIds}), std::memory_order_release);
 				_midiActive.store(true, std::memory_order_release);
-				if (const auto runtime = _rigCoordinator.RefreshRuntimeAvailability(acceptedParams.NumInputChannels, newMidiNames))
+				if (const auto runtime = _rigCoordinator.RefreshRuntimeAvailability(acceptedParams.NumInputChannels, newMidiNames, serialIds))
 				{
 					_audioEngine->PublishPendingRigSnapshot(runtime); _audioEngine->ApplyPendingRigWhileQuiescent();
 					_inputSubsystem->PublishRigInputDispatch(runtime);
@@ -4495,25 +4535,24 @@ void Scene::_ReconcileMidiDeviceRequestOnJob()
 		if (!result.Accepted)
 		{
 			const auto error = result.Error.empty() ? (result.Inventory.Error.empty() ? "MIDI reconciliation failed" : result.Inventory.Error) : result.Error;
-			std::vector<std::string> surviving;
-			for (const auto& endpoint : result.Connected) surviving.push_back(endpoint.Name);
+			const auto surviving = result.ConnectedRegistryIds;
+			const auto serialIds = _inputSubsystem->ConnectedSerialDeviceIds();
 			_ConfirmMidiConnectionChange(previous->Connection, result, surviving);
-			_midiState.store(std::make_shared<const MidiState>(MidiState{std::move(result), surviving}), std::memory_order_release);
-			if (surviving != previous->ConnectedNames)
+			_midiState.store(std::make_shared<const MidiState>(MidiState{std::move(result), surviving, serialIds}), std::memory_order_release);
+			if (surviving != previous->ConnectedIds)
 			{
 				std::scoped_lock sceneLock(_sceneMutex);
-				if (const auto runtime = _rigCoordinator.RefreshRuntimeAvailability(_audioEngine->GetStreamParams().NumInputChannels, surviving))
+				if (const auto runtime = _rigCoordinator.RefreshRuntimeAvailability(_audioEngine->GetStreamParams().NumInputChannels, surviving, serialIds))
 				{ _audioEngine->PublishPendingRigSnapshot(runtime); _inputSubsystem->PublishRigInputDispatch(runtime); _inputSubsystem->OpenRigTriggerInput(runtime->Revision); }
 			}
 			complete(error);
 			return;
 		}
 		_midiActive.store(true, std::memory_order_release);
-		std::vector<std::string> names;
-		for (const auto& endpoint : result.Connected)
-			if (std::find(names.begin(), names.end(), endpoint.Name) == names.end()) names.push_back(endpoint.Name);
+		const auto names = result.ConnectedRegistryIds;
+		const auto serialIds = _inputSubsystem->ConnectedSerialDeviceIds();
 		_ConfirmMidiConnectionChange(previous->Connection, result, names);
-		_midiState.store(std::make_shared<const MidiState>(MidiState{std::move(result), names}), std::memory_order_release);
+		_midiState.store(std::make_shared<const MidiState>(MidiState{std::move(result), names, serialIds}), std::memory_order_release);
 		bool merged = false;
 		std::shared_ptr<const RigSnapshot> rig;
 		{
@@ -4525,7 +4564,7 @@ void Scene::_ReconcileMidiDeviceRequestOnJob()
 		const auto inputs = _audioEngine->GetStreamParams().NumInputChannels;
 		{
 		std::scoped_lock sceneLock(_sceneMutex);
-		if (const auto runtime = _rigCoordinator.RefreshRuntimeAvailability(inputs, names))
+		if (const auto runtime = _rigCoordinator.RefreshRuntimeAvailability(inputs, names, serialIds))
 		{
 			_audioEngine->PublishPendingRigSnapshot(runtime);
 			_inputSubsystem->PublishRigInputDispatch(runtime);

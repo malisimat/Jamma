@@ -1,4 +1,5 @@
 #include "gtest/gtest.h"
+#include "../../TestPaths.h"
 #include <algorithm>
 #include <filesystem>
 #include <fstream>
@@ -237,9 +238,9 @@ protected:
 	static io::RigFile::Trigger Trigger(std::string name, std::string target)
 	{
 		io::RigFile::Trigger trigger{};
+		trigger.Id = name + "-id";
 		trigger.Name = std::move(name);
-		trigger.StationTarget = std::move(target);
-		trigger.MidiInputs = io::RigFile::Trigger::MidiInputMode::None;
+		if (!target.empty()) trigger.StationTarget = std::move(target);
 		return trigger;
 	}
 
@@ -251,8 +252,13 @@ protected:
 		io::JamFile jam{};
 		jam.Stations = std::move(stations);
 		jam.TriggerHistories = std::move(histories);
-		io::RigFile rig{};
+		auto rig = io::RigFile::FromStream(std::stringstream(io::RigFile::DefaultJson)).value();
 		rig.Triggers = std::move(triggers);
+		for (const auto& trigger : rig.Triggers)
+			for (const auto& id : trigger.CaptureInputs.Midi)
+				if (std::none_of(rig.User.Midi.Devices.begin(), rig.User.Midi.Devices.end(),
+					[&id](const auto& device) { return device.Id == id; }))
+					rig.User.Midi.Devices.push_back({ id, true, id });
 		engine::SceneParams params({ "" }, {}, { 640u, 480u });
 		auto scene = engine::Scene::FromFile(params, std::move(jam), std::move(rig), L"", std::move(saveRig));
 		return scene.has_value() ? scene.value() : nullptr;
@@ -279,6 +285,7 @@ protected:
 TEST_F(SceneRoutingIntegrationTest, StartedAudioSelectionShowsResolvedDeviceAndNegotiatedGeometry)
 {
 	io::RigFile rig{};
+	rig.Name = "Audio selection";
 	rig.User.Audio = { "default", 44100u, 64u, 10u, 20u, 4u, 8u, 8u };
 	io::JamFile jam{};
 	jam.Stations = { Station("Mic") };
@@ -341,8 +348,7 @@ TEST_F(SceneRoutingIntegrationTest, HaloSelectionIncludesMidiOnlyModelsAndClears
 TEST_F(SceneRoutingIntegrationTest, ConfiguredMissingMidiSourceCreatesEditableTakeThroughActivateControl)
 {
     auto configured = Trigger("record", "Keys");
-    configured.MidiInputs = io::RigFile::Trigger::MidiInputMode::Selected;
-    configured.MidiInputDevices = { "missing" };
+    configured.CaptureInputs.Midi = { "missing" };
     auto scene = FreshScene({ Station("Keys") }, { configured });
     ASSERT_TRUE(scene);
     // This test simulates both owners; exclude the real structural job consumer.
@@ -381,9 +387,8 @@ TEST_F(SceneRoutingIntegrationTest, ConfiguredMissingMidiSourceCreatesEditableTa
 TEST_F(SceneRoutingIntegrationTest, SuccessfulMidiConnectionLossCancelsCaptureThroughStoppedRecovery)
 {
     auto configured = Trigger("record", "Keys");
-    configured.InputChannels = { 0u };
-    configured.MidiInputs = io::RigFile::Trigger::MidiInputMode::Selected;
-    configured.MidiInputDevices = { "lost" };
+    configured.CaptureInputs.Audio = { 0u };
+    configured.CaptureInputs.Midi = { "lost" };
     auto scene = FreshScene({ Station("Keys") }, { configured });
     ASSERT_TRUE(scene);
     auto trigger = scene->AcceptedRigSnapshot()->Triggers.front().Instance;
@@ -402,12 +407,14 @@ TEST_F(SceneRoutingIntegrationTest, SuccessfulMidiConnectionLossCancelsCaptureTh
     ASSERT_EQ(engine::TRIGSTATE_RECORDING, trigger->GetState());
     midi::MidiConnectionResult previous;
     previous.Connected.push_back({ 0u, "lost", "lost 0" });
+    previous.ConnectedRegistryIds = { "lost" };
     midi::MidiConnectionResult failed;
     failed.Inventory.Error = "transient inventory failure";
     engine::SourceLossIntegrationTestAccess::Confirm(*scene, previous, failed, {});
     EXPECT_FALSE(trigger->HasPendingSourceLoss());
     midi::MidiConnectionResult reopened;
-    reopened.Connected.push_back({ 7u, "lost", "lost 7" });
+    reopened.Connected = previous.Connected;
+    reopened.ConnectedRegistryIds = previous.ConnectedRegistryIds;
     engine::SourceLossIntegrationTestAccess::Confirm(*scene, previous, reopened, { "lost" });
     EXPECT_FALSE(trigger->HasPendingSourceLoss());
     engine::SourceLossIntegrationTestAccess::Confirm(*scene, reopened, {}, {});
@@ -426,7 +433,7 @@ TEST_F(SceneRoutingIntegrationTest, ResetRetiresSixtyFourRestoredHistoryPinsAndA
     {
         std::filesystem::path Path;
         ~SidecarCleanup() { std::error_code error; std::filesystem::remove(Path, error); }
-    } sidecar{ std::filesystem::temp_directory_path() / ("jamma-source-loss-" + utils::GetGuid() + ".jammidi") };
+    } sidecar{ TestPaths::FixtureDirectory() / ("jamma-source-loss-" + utils::GetGuid() + ".jammidi") };
     io::NativeMidiSidecar::Stream contents;
     contents.LogicalLength = 100u;
     contents.Events.push_back({ 0u, 0x90u, 60u, 100u });
@@ -444,6 +451,7 @@ TEST_F(SceneRoutingIntegrationTest, ResetRetiresSixtyFourRestoredHistoryPinsAndA
     {
         io::JamFile::LoopTake take{};
         take.Name = "restored-" + std::to_string(index);
+        // Station::FromFile uses this persisted name as LoopTakeParams::Id.
         take.MidiPlayLength = 100u;
         take.MidiStreams.push_back({ sidecar.Path.string(), 0u, "healthy", 100u, 0u });
         descriptor.LoopTakes.push_back(take);
@@ -456,6 +464,8 @@ TEST_F(SceneRoutingIntegrationTest, ResetRetiresSixtyFourRestoredHistoryPinsAndA
     ASSERT_EQ(64u, trigger->GetTakes().size());
     ASSERT_EQ(64u, station->GetLoopTakeSnapshot().size());
     const auto externallyRetainedTarget = station->GetLoopTakeSnapshot().front();
+    ASSERT_EQ(history.Takes.front().TargetTakeId, externallyRetainedTarget->Id());
+    ASSERT_EQ(station, trigger->GetTakes().front().Receiver);
     station->Reset();
     scene->CommitChanges();
     io::UserConfig cfg;
@@ -733,7 +743,7 @@ TEST_F(SceneRoutingIntegrationTest, FreshScenesLeaveRenamedMissingAmbiguousAndFe
 	fewer->Shutdown();
 }
 
-TEST_F(SceneRoutingIntegrationTest, InitialMigrationKeepsLegacyRuntimeRouteWithoutSaving)
+TEST_F(SceneRoutingIntegrationTest, InitialNullTargetRemainsUnboundWithoutSaving)
 {
 	auto legacy = Trigger("legacy", "");
 	legacy.StationTarget.reset();
@@ -745,7 +755,7 @@ TEST_F(SceneRoutingIntegrationTest, InitialMigrationKeepsLegacyRuntimeRouteWitho
 	});
 	ASSERT_TRUE(scene);
 	EXPECT_EQ(0u, saves);
-	EXPECT_EQ((std::vector<std::pair<std::string, std::size_t>>{ { "Station", 1u } }), Memberships(scene));
+	EXPECT_EQ((std::vector<std::pair<std::string, std::size_t>>{ { "Station", 0u } }), Memberships(scene));
 	scene->Shutdown();
 }
 
@@ -826,7 +836,7 @@ TEST_F(SceneRoutingIntegrationTest, ActiveStationDeletionCancelsAndUnbindsWithou
  EXPECT_EQ(1u, scene->SnapshotStations().size());
  EXPECT_FALSE(scene->HasSelection());
  EXPECT_FALSE(scene->AcceptedRigSnapshot()->Triggers.front().BoundReceiver);
- EXPECT_EQ("", scene->AcceptedRigSnapshot()->Rig.Triggers.front().StationTarget);
+ EXPECT_FALSE(scene->AcceptedRigSnapshot()->Rig.Triggers.front().StationTarget);
  EXPECT_TRUE(trigger->GetTakes().empty());
  std::weak_ptr<engine::Station> retired = station;
  station.reset();
@@ -1089,7 +1099,10 @@ TEST_F(SceneRoutingIntegrationTest, PluginFocusLossDefersSceneEntryUntilStateCal
 TEST_F(SceneRoutingIntegrationTest, GroupFunctionKeyAndFocusLossDoNotReachConfiguredTrigger)
 {
     auto triggerConfig = Trigger("Record", "Keys");
-    triggerConfig.TriggerPairs.push_back({ 112u, 112u, 113u, 113u });
+    triggerConfig.ControlBindings.Activate.push_back({io::RigFile::BindingSource::Keyboard, "keyboard",
+        {112u, 1u}, {112u, 0u}});
+    triggerConfig.ControlBindings.Ditch.push_back({io::RigFile::BindingSource::Keyboard, "keyboard",
+        {113u, 1u}, {113u, 0u}});
     auto scene = FreshScene({ Station("Keys") }, { triggerConfig });
     ASSERT_TRUE(scene);
     const auto rig = scene->AcceptedRigSnapshot();

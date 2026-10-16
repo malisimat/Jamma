@@ -223,9 +223,11 @@ protected:
 	void SetUp() override
 	{
 		auto routing = std::make_shared<engine::RigSnapshot>(); routing->Revision = 42u;
+		routing->Rig = io::RigFile::FromStream(std::stringstream(io::RigFile::DefaultJson)).value();
+		routing->Rig.Triggers.clear();
 		for (unsigned int index = 0; index < 12; ++index) {
 			io::RigFile::Trigger trigger{}; trigger.Id = "trigger-" + std::to_string(index);
-			trigger.Name = trigger.Id; if (index == 11) trigger.InputChannels = { 19u };
+			trigger.Name = trigger.Id; if (index == 11) trigger.CaptureInputs.Audio = { 19u };
 			routing->Rig.Triggers.push_back(trigger);
 			engine::RigSnapshotTrigger runtime{}; runtime.Id = trigger.Id; runtime.RigTriggerIndex = index;
 			runtime.Instance = std::make_shared<engine::Trigger>(engine::TriggerParams{});
@@ -295,7 +297,7 @@ protected:
 			runtime.Instance = std::make_shared<engine::Trigger>(engine::TriggerParams{});
 			next->Triggers.push_back(runtime);
 			io::RigFileRouting::TriggerResolution resolved{}; resolved.TriggerIndex = index; resolved.TriggerName = saved.Name;
-			for (const auto channel : saved.InputChannels)
+			for (const auto channel : saved.CaptureInputs.Audio)
 				resolved.Sources.push_back({ io::RigFileRouting::SourceKind::Adc, channel, {}, true });
 			next->Graph.Triggers.push_back(resolved);
 		}
@@ -330,9 +332,9 @@ TEST_F(HudCableInteractionTests, ClippedBodyReconnectPreservesOriginalTriggerAnd
 {
 	BeginBodyDrag(); ASSERT_TRUE(Hud->HasCableDrag()); MoveToReplacement(1u); Release();
 	ASSERT_EQ(1u, Submissions.size());
-	EXPECT_EQ((std::vector<unsigned int>{ 1u }), Submissions.front().Triggers[11].InputChannels);
+	EXPECT_EQ((std::vector<unsigned int>{ 1u }), Submissions.front().Triggers[11].CaptureInputs.Audio);
 	EXPECT_EQ(Routing->Rig.Triggers[11].Id, Submissions.front().Triggers[11].Id);
-	for (size_t index = 0; index < 11; ++index) EXPECT_TRUE(Submissions.front().Triggers[index].InputChannels.empty());
+	for (size_t index = 0; index < 11; ++index) EXPECT_TRUE(Submissions.front().Triggers[index].CaptureInputs.Audio.empty());
 	Submissions.clear(); BeginBodyDrag(); ASSERT_TRUE(Hud->HasCableDrag());
 	auto replacement = *Routing; ++replacement.Revision;
 	replacement.Rig.Triggers[11].Id = "replacement-trigger";
@@ -415,7 +417,7 @@ TEST_F(HudCableInteractionTests, DeleteConfirmationSubmitsOnlySelectedTriggerAnd
 	Click(Popups.Top()->TryGetChild(5), true); EXPECT_FALSE(Popups.IsOpen());
 	ASSERT_EQ(1u, Submissions.size()); ASSERT_EQ(11u, Submissions.back().Triggers.size());
 	EXPECT_EQ(Routing->Rig.Triggers[1].Id, Submissions.back().Triggers.front().Id);
-	EXPECT_EQ((std::vector<unsigned int>{ 19u }), Submissions.back().Triggers.back().InputChannels);
+	EXPECT_EQ((std::vector<unsigned int>{ 19u }), Submissions.back().Triggers.back().CaptureInputs.Audio);
 	const auto removed = Submissions.back(); PublishRig(removed); scroll = TriggerScroll();
 	EXPECT_EQ(scroll->MaxScrollOffset(), scroll->ScrollOffset());
 	EXPECT_FALSE(scroll->Content()->TryGetChild(11));
@@ -430,18 +432,18 @@ class CableInteractionTests : public ::testing::Test
 protected:
 	static io::RigFile Rig()
 	{
-		io::RigFile rig;
+		auto rig = io::RigFile::FromStream(std::stringstream(io::RigFile::DefaultJson)).value();
+		rig.Triggers.clear();
 		rig.Triggers.resize(2u);
 		rig.Triggers[0].Id = "trigger-1-id";
 		rig.Triggers[0].Name = "Trigger-1";
-		rig.Triggers[0].InputChannels = { 1u };
-		rig.Triggers[0].MidiInputs = io::RigFile::Trigger::MidiInputMode::Selected;
-		rig.Triggers[0].MidiInputDevices = { "Keys" };
+		rig.Triggers[0].CaptureInputs.Audio = { 1u };
+		rig.User.Midi.Devices = { { "Keys", true, "Keys" } };
+		rig.Triggers[0].CaptureInputs.Midi = { "Keys" };
 		rig.Triggers[0].StationTarget = "A";
 		rig.Triggers[1].Name = "Trigger-2";
 		rig.Triggers[1].Id = "trigger-2-id";
-		rig.Triggers[1].MidiInputs = io::RigFile::Trigger::MidiInputMode::None;
-		rig.Triggers[1].StationTarget = "";
+		rig.Triggers[1].StationTarget.reset();
 		return rig;
 	}
 
@@ -634,12 +636,12 @@ TEST_F(CableInteractionTests, ReleaseEmptySpaceRemovesCaptureAndSnapReplacesIt)
 		CableInteraction::End::Start, Input(0u, 100, 0), Adc(1u, 0, 0).Source, { 0, 0 }, {} };
 	auto removed = CableInteraction::ReleaseToCandidate(drag, rig);
 	ASSERT_TRUE(removed.Candidate.has_value());
-	EXPECT_TRUE(removed.Candidate->Triggers[0].InputChannels.empty());
+	EXPECT_TRUE(removed.Candidate->Triggers[0].CaptureInputs.Audio.empty());
 	EXPECT_EQ("trigger-1-id", removed.Candidate->Triggers[0].Id);
 	drag.Snap = Adc(2u, 0, 0);
 	auto replaced = CableInteraction::ReleaseToCandidate(drag, rig);
 	ASSERT_TRUE(replaced.Candidate.has_value());
-	EXPECT_EQ((std::vector<unsigned int>{ 2u }), replaced.Candidate->Triggers[0].InputChannels);
+	EXPECT_EQ((std::vector<unsigned int>{ 2u }), replaced.Candidate->Triggers[0].CaptureInputs.Audio);
 	EXPECT_EQ("trigger-1-id", replaced.Candidate->Triggers[0].Id);
 }
 
@@ -650,7 +652,7 @@ TEST_F(CableInteractionTests, ReleaseSourceToTriggerCreatesCaptureRoute)
 		CableInteraction::End::Finish, Adc(3u, 0, 0), {}, { 100, 0 }, Input(1u, 100, 0) };
 	auto release = CableInteraction::ReleaseToCandidate(drag, rig);
 	ASSERT_TRUE(release.Candidate.has_value());
-	EXPECT_EQ((std::vector<unsigned int>{ 3u }), release.Candidate->Triggers[1].InputChannels);
+	EXPECT_EQ((std::vector<unsigned int>{ 3u }), release.Candidate->Triggers[1].CaptureInputs.Audio);
 }
 
 TEST_F(CableInteractionTests, ReleaseTriggerInputEndUnplugsOrMovesExistingCaptureRoute)
@@ -660,13 +662,13 @@ TEST_F(CableInteractionTests, ReleaseTriggerInputEndUnplugsOrMovesExistingCaptur
 		CableInteraction::End::Finish, Adc(1u, 0, 0), Adc(1u, 0, 0).Source, { 100, 0 }, {} };
 	const auto unplugged = CableInteraction::ReleaseToCandidate(drag, rig);
 	ASSERT_TRUE(unplugged.Candidate.has_value());
-	EXPECT_TRUE(unplugged.Candidate->Triggers[0].InputChannels.empty());
+	EXPECT_TRUE(unplugged.Candidate->Triggers[0].CaptureInputs.Audio.empty());
 
 	drag.Snap = Input(1u, 100, 0);
 	const auto moved = CableInteraction::ReleaseToCandidate(drag, rig);
 	ASSERT_TRUE(moved.Candidate.has_value());
-	EXPECT_TRUE(moved.Candidate->Triggers[0].InputChannels.empty());
-	EXPECT_EQ((std::vector<unsigned int>{ 1u }), moved.Candidate->Triggers[1].InputChannels);
+	EXPECT_TRUE(moved.Candidate->Triggers[0].CaptureInputs.Audio.empty());
+	EXPECT_EQ((std::vector<unsigned int>{ 1u }), moved.Candidate->Triggers[1].CaptureInputs.Audio);
 	EXPECT_EQ("trigger-1-id", moved.Candidate->Triggers[0].Id);
 	EXPECT_EQ("trigger-2-id", moved.Candidate->Triggers[1].Id);
 }
@@ -691,14 +693,13 @@ TEST_F(CableInteractionTests, ExplicitMidiDeviceCanBeCreatedAndRemoved)
 		CableInteraction::End::Finish, keys, {}, { 100, 0 }, Input(1u, 100, 0) };
 	auto created = CableInteraction::ReleaseToCandidate(create, rig);
 	ASSERT_TRUE(created.Candidate.has_value());
-	EXPECT_EQ(io::RigFile::Trigger::MidiInputMode::Selected, created.Candidate->Triggers[1].MidiInputs);
-	EXPECT_EQ((std::vector<std::string>{ "Keys" }), created.Candidate->Triggers[1].MidiInputDevices);
+	EXPECT_EQ((std::vector<std::string>{ "Keys" }), created.Candidate->Triggers[1].CaptureInputs.Midi);
 
 	CableInteraction::Drag remove{ { 5u, 1u, CableInteraction::RouteKind::Capture, 0u },
 		CableInteraction::End::Start, Input(1u, 100, 0), keys.Source, { 0, 0 }, {} };
 	auto removed = CableInteraction::ReleaseToCandidate(remove, created.Candidate.value());
 	ASSERT_TRUE(removed.Candidate.has_value());
-	EXPECT_EQ(io::RigFile::Trigger::MidiInputMode::None, removed.Candidate->Triggers[1].MidiInputs);
+	EXPECT_TRUE(removed.Candidate->Triggers[1].CaptureInputs.Midi.empty());
 }
 
 TEST_F(CableInteractionTests, StationCompatibilityAcceptsOnlyCorrectDirection)
@@ -723,7 +724,7 @@ TEST_F(CableInteractionTests, StationReleaseMovesOrUnplugsSingleTarget)
 		CableInteraction::End::Finish, output, {}, { 100, 0 }, {} };
 	auto unplugged = CableInteraction::ReleaseToCandidate(drag, rig);
 	ASSERT_TRUE(unplugged.Candidate.has_value());
-	EXPECT_EQ("", unplugged.Candidate->Triggers[0].StationTarget.value());
+	EXPECT_FALSE(unplugged.Candidate->Triggers[0].StationTarget.has_value());
 	drag.Snap = CableInteraction::Endpoint{ CableInteraction::EndpointKind::Station,
 		{ 100, 0 }, {}, 1u, "B" };
 	auto moved = CableInteraction::ReleaseToCandidate(drag, rig);

@@ -280,7 +280,7 @@ namespace engine
 	{
 		friend class TriggerSourceLossTestAccess;
 	public:
-		static constexpr std::size_t MaxBindingCount = 64u;
+		static constexpr std::size_t MaxBindingCount = io::RigFile::MaxControlBindings;
 		Trigger(TriggerParams trigParams);
 		~Trigger();
 
@@ -317,7 +317,8 @@ namespace engine
 			std::uint64_t rigRevision,
 			const midi::MidiEvent& event,
 			const base::Action& action,
-			std::int64_t eventTimeUsec);
+			std::int64_t eventTimeUsec,
+			const std::string& device = "");
 		virtual void OnTick(Time curTime,
 			unsigned int samps,
 			const std::optional<io::UserConfig>& cfg,
@@ -355,11 +356,9 @@ namespace engine
 		void ApplyCaptureRouting(std::shared_ptr<base::ActionReceiver>& receiver,
 			std::vector<unsigned int>& inputChannels,
 			std::vector<std::string>& midiInputDevices,
-			io::RigFile::Trigger::MidiInputMode& midiInputMode,
 			std::shared_ptr<audio::AudioMixer>& overdubMixer,
 			std::shared_ptr<base::BounceWriter>& overdubWriter) noexcept;
 		const std::vector<std::string>& MidiInputDevices() const noexcept { return _midiInputDevices; }
-		io::RigFile::Trigger::MidiInputMode MidiInputMode() const noexcept { return _midiInputMode; }
 		TriggerState GetState() const;
 		bool IsActivateInputDown() const;
 		bool IsDitchInputDown() const;
@@ -378,6 +377,8 @@ namespace engine
 
 		std::string Name() const;
 		void SetName(std::string name);
+		// Prepared job/UI presentation publication; no callback readers.
+		void SetName(std::shared_ptr<const std::string> name) noexcept;
 		std::vector<TriggerTake> GetTakes() const;
 		// Restore only while constructing a scene, before this trigger can tick.
 		// Called before publication; pins correspond to the supplied history entries.
@@ -399,13 +400,8 @@ namespace engine
 		static unsigned int EncodeMidiBindingValue(io::RigFile::MidiTriggerEvent kind,
 			unsigned int channel,
 			unsigned int id);
-		static DualBinding MakeMidiBinding(io::RigFile::MidiTriggerEvent kind,
-			unsigned int channel,
-			unsigned int id,
-			unsigned int state);
-		static void AddMidiBindingForChannels(const io::RigFile::Trigger::MidiTriggerBindingSpec& bindingSpec,
-			const std::function<void(const DualBinding&)>& onBinding);
-		static bool IsValidMidiBindingSpec(const io::RigFile::Trigger::MidiTriggerBindingSpec& bindingSpec);
+		static std::optional<std::vector<DualBinding>> CompileControlBindings(
+			const std::vector<io::RigFile::Binding>& bindings);
 		static bool TryEncodeMidiEvent(const midi::MidiEvent& event,
 			unsigned int& outValue,
 			unsigned int& outState);
@@ -548,7 +544,9 @@ namespace engine
 		void _PublishJobHistory();
 
 	private:
-		std::string _name;
+		// Immutable presentation value: serialized job/UI writer; job logging
+		// readers only. Audio never loads it. Readers stop before Trigger teardown.
+		std::atomic<std::shared_ptr<const std::string>> _name;
 		double _debounceTimeMs;
 		std::vector<DualBinding> _activateBindings;
 		std::vector<DualBinding> _ditchBindings;
@@ -599,7 +597,6 @@ namespace engine
 		std::uint64_t _consumedJobFallbackPublicationCount = 0u;
 		std::vector<unsigned int> _inputChannels;
 		std::vector<std::string> _midiInputDevices;
-		io::RigFile::Trigger::MidiInputMode _midiInputMode = io::RigFile::Trigger::MidiInputMode::None;
 		TriggerState _state;
 		std::atomic<std::uint8_t> _publishedTriggerState{ static_cast<std::uint8_t>(TRIGSTATE_DEFAULT) };
 		std::atomic<bool> _publishedActivateInputDown{ false };

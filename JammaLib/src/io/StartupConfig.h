@@ -1,11 +1,6 @@
-///////////////////////////////////////////////////////////
-//
-// Subject to the MIT license, see LICENSE file.
-//
-///////////////////////////////////////////////////////////
-
 #pragma once
 
+#include <algorithm>
 #include <string_view>
 #include <unordered_set>
 #include <utility>
@@ -15,21 +10,10 @@
 
 namespace io
 {
-	// Pure startup decisions. Callers perform filesystem reads and semantic
-	// validation before passing their results here; neither file depends on the
-	// other one's validity.
 	struct StartupConfig
 	{
 		static constexpr std::string_view GeneratedOrigin = "generated-v1";
-
-		enum class FileState
-		{
-			Valid,
-			Missing,
-			Unreadable,
-			Invalid
-		};
-
+		enum class FileState { Valid, Missing, Unreadable, Invalid };
 		struct Decision
 		{
 			FileState State;
@@ -38,94 +22,82 @@ namespace io
 			bool Recovery;
 			bool PublishedGenerated;
 		};
-
 		static constexpr FileState Classify(bool exists, bool readable, bool valid) noexcept
 		{
-			return !exists ? FileState::Missing
-				: !readable ? FileState::Unreadable
-				: valid ? FileState::Valid : FileState::Invalid;
+			return !exists ? FileState::Missing : !readable ? FileState::Unreadable :
+				valid ? FileState::Valid : FileState::Invalid;
 		}
-
 		static constexpr Decision Decide(FileState state, std::string_view origin) noexcept
 		{
 			const bool valid = state == FileState::Valid;
 			return { state, valid, !valid, state == FileState::Unreadable || state == FileState::Invalid,
 				valid && origin == GeneratedOrigin };
 		}
-
-		static bool ValidateRig(const RigFile& rig)
-		{
-			const auto& audio = rig.User.Audio;
-			if (rig.Name.empty() || audio.Name.empty() || audio.SampleRate == 0u ||
-				audio.BufSize == 0u || audio.NumBuffers == 0u || audio.NumChannelsOut == 0u ||
-				rig.Triggers.empty())
-				return false;
-			std::unordered_set<std::string> names;
-			std::unordered_set<std::string> ids;
-			for (const auto& trigger : rig.Triggers)
-			{
-				if (trigger.Name.empty() || !names.insert(trigger.Name).second ||
-					(!trigger.Id.empty() && !ids.insert(trigger.Id).second))
-					return false;
-			}
-			return true;
-		}
-
+		static bool ValidateRig(const RigFile& rig) { return RigFile::Validate(rig); }
 		static bool ValidateJam(const JamFile& jam)
 		{
-			if (jam.Stations.empty())
-				return false;
+			if (jam.Stations.empty()) return false;
 			std::unordered_set<std::string> names;
 			for (const auto& station : jam.Stations)
-				if (station.Name.empty() || !names.insert(station.Name).second)
-					return false;
+				if (station.Name.empty() || !names.insert(station.Name).second) return false;
 			return true;
 		}
-
-		// Explicit empty targets are intentionally unbound. Absent targets keep
-		// the legacy positional migration path and are validated when Scene loads.
+		// Missing/ambiguous rig connections are availability, not malformed data.
+		// Never replace a curated rig merely because a different jam is loaded.
 		static bool ValidateRigForJam(const RigFile& rig, const JamFile& jam)
 		{
-			if (!ValidateRig(rig) || !ValidateJam(jam))
-				return false;
-			std::unordered_set<std::string> stationNames;
-			stationNames.reserve(jam.Stations.size());
-			for (const auto& station : jam.Stations)
-				stationNames.insert(station.Name);
-			for (const auto& trigger : rig.Triggers)
-				if (trigger.StationTarget && !trigger.StationTarget->empty() &&
-					!stationNames.contains(*trigger.StationTarget))
-					return false;
-			return true;
+			return ValidateRig(rig) && ValidateJam(jam);
 		}
-
-		// The first-run route is based on opened endpoints, never advertised ports.
-		static RigFile GeneratedRig(const RigFile& templateRig,
-			unsigned int inputChannels, const std::vector<std::string>& connectedMidi,
-			const std::string& stationTarget = "Station1")
+		static RigFile GeneratedRig(const RigFile& templateRig, unsigned int inputChannels,
+			const std::vector<std::string>& midiHardwareNames, const std::string& stationTarget = "Station1")
 		{
-			RigFile rig = templateRig;
+			auto rig = templateRig;
 			rig.Name = "First-run rig";
 			rig.User.Midi.Devices.clear();
-			for (const auto& name : connectedMidi)
-				rig.User.Midi.Devices.push_back({ name, true });
-			auto& trigger = rig.Triggers.front();
-			trigger.Id = "first-run-trigger-1";
-			trigger.Name = "Trig1";
-			trigger.StationTarget = stationTarget;
-			trigger.InputChannels.clear();
-			for (unsigned int channel = 0; channel < inputChannels && channel < 2u; ++channel)
-				trigger.InputChannels.push_back(channel);
-			trigger.MidiInputs = RigFile::Trigger::MidiInputMode::None;
-			trigger.MidiInputDevices.clear();
-			trigger.MidiTrigger.reset();
-			if (!connectedMidi.empty())
+			std::vector<std::string> registryIds;
+			for (size_t i = 0u; i < midiHardwareNames.size(); ++i)
 			{
-				RigFile::Trigger::MidiTriggerBinding binding{};
-				binding.Device = connectedMidi.front();
-				binding.Activate = { RigFile::NOTE, 0u, 1u, 1u, false };
-				binding.Ditch = { RigFile::NOTE, 0u, 2u, 1u, false };
-				trigger.MidiTrigger = std::move(binding);
+				const auto id = "midi-" + std::to_string(i + 1u);
+				rig.User.Midi.Devices.push_back({ midiHardwareNames[i], true, id });
+				registryIds.push_back(id);
+			}
+			if (rig.Triggers.empty()) rig.Triggers.emplace_back();
+			rig.Triggers.front().Id = "first-run-trigger-1";
+			rig.Triggers.front().Name = "Trig1";
+			return WithOpenedInputs(rig, inputChannels, registryIds, stationTarget);
+		}
+		// Keep registry IDs/configuration stable when opening only a subset of
+		// generated requests. Successful endpoint IDs are not renumbered.
+		static RigFile WithOpenedInputs(const RigFile& source, unsigned int inputChannels,
+			const std::vector<std::string>& connectedRegistryIds, const std::string& stationTarget)
+		{
+			auto rig = source;
+			if (rig.Triggers.empty()) return rig;
+			auto& trigger = rig.Triggers.front();
+			trigger.StationTarget = stationTarget;
+			trigger.CaptureInputs.Audio.clear();
+			for (unsigned int channel = 0u; channel < inputChannels && channel < 2u; ++channel)
+				trigger.CaptureInputs.Audio.push_back(channel);
+			trigger.CaptureInputs.Midi.clear();
+			auto removeMidi = [](std::vector<RigFile::Binding>& bindings) {
+				std::erase_if(bindings, [](const RigFile::Binding& binding) {
+					return binding.Source == RigFile::BindingSource::Midi;
+				});
+			};
+			removeMidi(trigger.ControlBindings.Activate);
+			removeMidi(trigger.ControlBindings.Ditch);
+			if (!connectedRegistryIds.empty())
+			{
+				auto button = [&](unsigned int note) {
+					RigFile::Binding binding;
+					binding.Source = RigFile::BindingSource::Midi;
+					binding.Device = connectedRegistryIds.front();
+					binding.Press = { note, 1u, RigFile::NOTE, 0u };
+					binding.Release = { note, 0u, RigFile::NOTE, 0u };
+					return binding;
+				};
+				trigger.ControlBindings.Activate.push_back(button(1u));
+				trigger.ControlBindings.Ditch.push_back(button(2u));
 			}
 			return rig;
 		}

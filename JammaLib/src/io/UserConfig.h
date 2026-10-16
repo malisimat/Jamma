@@ -23,6 +23,7 @@ namespace io
 	struct UserConfig
 	{
 		static std::optional<UserConfig> FromJson(Json::JsonPart json);
+		bool operator==(const UserConfig&) const = default;
 
 		struct SeedLoopTiming
 		{
@@ -44,6 +45,7 @@ namespace io
 			unsigned int NumChannelsOut; // The number of output channels used in current scene
 
 			static std::optional<AudioSettings> FromJson(Json::JsonPart json);
+			bool operator==(const AudioSettings&) const = default;
 		};
 
 		struct LoopSettings
@@ -55,22 +57,26 @@ namespace io
 			bool SeedUsesPowers = true; // true => 1x,2x,4x... ; false => 1x,2x,3x...
 
 			static std::optional<LoopSettings> FromJson(Json::JsonPart json);
+			bool operator==(const LoopSettings&) const = default;
 		};
 
 		struct TriggerSettings
 		{
-			unsigned int PreDelay; // How many samples to push trigger point to left (positive is earlier trig)
-			unsigned int DebounceSamps; // How many samples over which to prevent trigger bounce
+			unsigned int PreDelaySamps = constants::DefaultPreDelaySamps; // Advance input alignment by this many samples
+			unsigned int DebounceMs = constants::DefaultDebounceMs; // Input bounce threshold, in milliseconds
 
 			static std::optional<TriggerSettings> FromJson(Json::JsonPart json);
+			bool operator==(const TriggerSettings&) const = default;
 		};
 
 		struct MidiSettings
 		{
-			std::string Name = "default"; // Preferred MIDI input device name
+			std::string Name = "default"; // Hardware selector; default selects the first unclaimed port
 			bool Enabled = true;
+			std::string Id; // Stable registry reference used by controls/capture and recorded streams
 
 			static std::optional<MidiSettings> FromJson(Json::JsonPart json);
+			bool operator==(const MidiSettings&) const = default;
 		};
 
 		struct MidiConfig
@@ -80,6 +86,7 @@ namespace io
 			bool ChannelOverrideLive = true;
 
 			static std::optional<MidiConfig> FromJson(Json::JsonPart json);
+			bool operator==(const MidiConfig&) const = default;
 		};
 
 		struct SerialSettings
@@ -90,6 +97,7 @@ namespace io
 			bool Enabled = false;
 
 			static std::optional<SerialSettings> FromJson(Json::JsonPart json);
+			bool operator==(const SerialSettings&) const = default;
 		};
 
 		struct SerialConfig
@@ -97,6 +105,7 @@ namespace io
 			std::vector<SerialSettings> Devices;
 
 			static std::optional<SerialConfig> FromJson(Json::JsonPart json);
+			bool operator==(const SerialConfig&) const = default;
 		};
 
 		// How much to (further) delay input signal from ADC, in samples
