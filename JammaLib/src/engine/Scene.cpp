@@ -682,6 +682,15 @@ void Scene::OnCameraTriggerActivity()
 	if (!_unattendedCamera.IsAutomatic()) OnHumanActivity();
 }
 
+bool Scene::PreservesCameraIdleForKey(unsigned int key) const noexcept
+{
+	// Modifiers alone do not navigate; the eventual modified action owns activity.
+	if (key == 16u || key == 17u || key == 18u) return true;
+	if (_popupManager.IsOpen() || _focusManager.IsEditingText() || _loopEditor.IsEditingText()) return false;
+	return key == 32u || key == 192u || key == 96u
+		|| key == 8u || (key >= 112u && key <= 120u);
+}
+
 void Scene::OnHumanActivity()
 {
 	const auto now = Timer::GetTime();
@@ -1042,6 +1051,16 @@ void Scene::_SelectAllLocalLocked()
 
 ActionResult Scene::OnAction(TouchAction action)
 {
+	if (action.State == TouchAction::TOUCH_DOWN) _cameraPointerPreservesIdle = false;
+	const auto result = _OnPointerAction(action);
+	if (std::dynamic_pointer_cast<gui::GuiPerformanceGroupButton>(_touchDownElement.lock()))
+		_cameraPointerPreservesIdle = true;
+	if (!_cameraPointerPreservesIdle) OnHumanActivity();
+	return result;
+}
+
+ActionResult Scene::_OnPointerAction(TouchAction action)
+{
 	if (_isSceneQuitting.load(std::memory_order_acquire) || _controlWriterExclusion.owns_lock()) return ActionResult::NoAction();
 	ActionResult res;
 	// Wheel events are encoded as DOWN/index 4 and have no matching UP. They
@@ -1255,6 +1274,7 @@ ActionResult Scene::OnAction(TouchAction action)
 
 	if (res.IsEaten)
 	{
+		_cameraPointerPreservesIdle = true;
 		if (nullptr != res.Undo)
 			_undoHistory.Add(res.Undo);
 
@@ -1289,6 +1309,7 @@ ActionResult Scene::OnAction(TouchAction action)
 			_camera.CancelBackgroundCoast();
 			_backgroundGesture = BackgroundGesture{ action.Index,
 				select ? BackgroundCommand::SelectAll : mute ? BackgroundCommand::MuteAll : BackgroundCommand::UnmuteAll, action.Position };
+			_cameraPointerPreservesIdle = true;
 			return { true, {}, {}, ACTIONRESULT_DEFAULT, nullptr, {} };
 		}
 	}
@@ -1297,6 +1318,14 @@ ActionResult Scene::OnAction(TouchAction action)
 }
 
 ActionResult Scene::OnAction(TouchMoveAction action)
+{
+	const auto result = _OnPointerMove(action);
+	if (action.Origin == TouchMoveAction::Provenance::DeliveredPointer
+		&& (!_cameraPointerPreservesIdle || action.MouseButtonsDown == 0u)) OnHumanActivity();
+	return result;
+}
+
+ActionResult Scene::_OnPointerMove(TouchMoveAction action)
 {
 	if (_isSceneQuitting.load(std::memory_order_acquire) || _controlWriterExclusion.owns_lock()) return ActionResult::NoAction();
 	action.SetActionTime(Timer::GetTime());
@@ -3753,6 +3782,8 @@ QuantisationInteractionContext Scene::_InteractionContextLocked() const
 
 ActionResult Scene::_BeginBackgroundDrag(actions::TouchAction action)
 {
+	// A background click only deselects. Activity begins when it actually pans.
+	_cameraPointerPreservesIdle = true;
 	auto res = _camera.HandleBackgroundDrag(action);
 	_isSceneTouching = _camera.IsBackgroundDragging();
 	return res;
@@ -3761,6 +3792,7 @@ ActionResult Scene::_BeginBackgroundDrag(actions::TouchAction action)
 ActionResult Scene::_UpdateBackgroundDrag(actions::TouchMoveAction action)
 {
 	auto res = _camera.UpdateBackgroundDrag(action);
+	if (_camera.BackgroundDragWasDragged()) _cameraPointerPreservesIdle = false;
 	if (!_camera.IsBackgroundDragging())
 		_EndBackgroundDrag();
 

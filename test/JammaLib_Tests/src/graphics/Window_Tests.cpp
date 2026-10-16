@@ -3,11 +3,288 @@
 #include "resources/ResourceLib.h"
 #include "graphics/Window.h"
 #include "engine/Scene.h"
+#include "engine/Station.h"
+#include "gui/GuiScrollPanel.h"
 
 using resources::ResourceLib;
 using graphics::Window;
 using engine::Scene;
 using engine::SceneParams;
+
+class CameraActivityScene final : public Scene
+{
+public:
+	CameraActivityScene() : Scene(SceneParams(base::DrawableParams(), base::MoveableParams(),
+		base::SizeableParams({ 1400u, 900u })), {}) {}
+	void ArmIdle(bool automatic)
+	{
+		graphics::Camera::Pose pose;
+		pose.Eye = { 0.0f, 0.0f, 420.0f };
+		_camera.SetViewTarget(graphics::Camera::View::Front, pose);
+		for (unsigned int tick = 0u; tick < 8u; ++tick) _camera.TickBackgroundDrag(0.05f);
+		_idleStart = utils::Timer::GetTime() - std::chrono::milliseconds(7900);
+		const auto observation = _cameraRecordings->Snapshot();
+		_unattendedCamera.HumanActivity(_idleStart);
+		_unattendedCamera.Update(_idleStart, true, false, *observation, {});
+		if (automatic) _unattendedCamera.Update(_idleStart + std::chrono::seconds(8), true, false, *observation, {});
+	}
+	bool AutomaticAtOriginalDeadline()
+	{
+		return _unattendedCamera.Update(_idleStart + std::chrono::milliseconds(8100),
+			_cameraWindowEligible && !_cameraHeldInteraction,
+			_cameraWindowEligible && _cameraHeldInteraction, *_cameraRecordings->Snapshot(), {}).IsAutomatic();
+	}
+	bool Automatic() const { return _unattendedCamera.IsAutomatic(); }
+	std::uint64_t ActivityRevision() const { return _cameraHumanActivityRevision; }
+	void AddStation(const std::shared_ptr<engine::Station>& station) { _AddStation(station); }
+	std::shared_ptr<gui::GuiPerformanceGroupRow> GroupRow(std::size_t row)
+	{
+		std::vector<std::shared_ptr<gui::GuiPerformanceGroupRow>> rows;
+		CollectRows(_selectionPanel, rows);
+		return row < rows.size() ? rows[row] : nullptr;
+	}
+private:
+	static void CollectRows(const std::shared_ptr<base::GuiElement>& element,
+		std::vector<std::shared_ptr<gui::GuiPerformanceGroupRow>>& rows)
+	{
+		if (auto row = std::dynamic_pointer_cast<gui::GuiPerformanceGroupRow>(element)) rows.push_back(row);
+		if (auto scroll = std::dynamic_pointer_cast<gui::GuiScrollPanel>(element))
+			if (scroll->Content()) CollectRows(scroll->Content(), rows);
+		for (unsigned int index = 0u; index < 256u; ++index)
+		{
+			auto child = element->TryGetChild(static_cast<unsigned char>(index));
+			if (!child) break;
+			CollectRows(child, rows);
+		}
+	}
+	Time _idleStart;
+};
+
+class CameraActivityWindow final : public Window
+{
+public:
+	CameraActivityWindow(Scene& scene, ResourceLib& resources) : Window(scene, resources) {}
+	std::vector<unsigned char> PressPath;
+protected:
+	std::optional<unsigned int> _PickPointerPress(utils::Position2d) override
+	{
+		if (PressPath.empty()) return 0u;
+		unsigned int objectId = 0u;
+		for (unsigned int segment = 0u; segment < 3u; ++segment)
+			objectId |= (segment < PressPath.size() ? PressPath[segment] : 0xffu) << (16u - 8u * segment);
+		return objectId;
+	}
+};
+
+TEST(CameraIdle, PerformanceKeysAndNativeRepeatsPreserveDeadlineAndActiveWander)
+{
+	CameraActivityScene scene;
+	ResourceLib resources;
+	CameraActivityWindow window(scene, resources);
+	const auto host = CreateWindowExW(0, L"STATIC", L"", 0, 0, 0, 0, 0,
+		HWND_MESSAGE, nullptr, GetModuleHandleW(nullptr), nullptr);
+	ASSERT_NE(host, nullptr);
+	SetWindowLongPtrW(host, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(&window));
+	for (const bool automatic : { false, true })
+		for (const bool system : { false, true })
+			for (const auto key : { VK_F1, VK_F2, VK_F9, VK_BACK, VK_SPACE, VK_OEM_3, VK_SHIFT, VK_CONTROL, VK_MENU })
+			{
+				SCOPED_TRACE(key);
+				scene.ArmIdle(automatic);
+				const auto revision = scene.ActivityRevision();
+				for (unsigned int press = 0u; press < 3u; ++press)
+				{
+					Window::WindowProcedure(host, system ? WM_SYSKEYDOWN : WM_KEYDOWN, key, 0);
+					Window::WindowProcedure(host, system ? WM_SYSKEYDOWN : WM_KEYDOWN, key, static_cast<LPARAM>(1u << 30u));
+					EXPECT_EQ(automatic, scene.Automatic());
+					Window::WindowProcedure(host, system ? WM_SYSKEYUP : WM_KEYUP, key, 0);
+				}
+				EXPECT_EQ(revision, scene.ActivityRevision());
+				EXPECT_TRUE(scene.AutomaticAtOriginalDeadline());
+			}
+	DestroyWindow(host);
+}
+
+TEST(CameraIdle, PointerSelectionDeselectMuteAndBackgroundClicksPreserveDeadline)
+{
+	CameraActivityScene scene;
+	ResourceLib resources;
+	CameraActivityWindow window(scene, resources);
+	engine::StationParams params;
+	params.Name = "camera-selection";
+	params.Size = { 100u, 100u };
+	audio::MergeMixBehaviourParams merge;
+	auto station = std::make_shared<engine::Station>(params, engine::Station::GetMixerParams(params.Size, merge));
+	scene.AddStation(station);
+	for (const bool automatic : { false, true })
+		for (const int button : { 0, 1 })
+		{
+			scene.ArmIdle(automatic);
+			const auto revision = scene.ActivityRevision();
+			for (unsigned int press = 0u; press < 3u; ++press)
+			{
+				window.PressPath.clear();
+				for (const auto index : station->GlobalId()) window.PressPath.push_back(static_cast<unsigned char>(index + 1u));
+				actions::TouchAction action;
+				action.Touch = actions::TouchAction::TOUCH_MOUSE;
+				action.Index = button;
+				action.Position = { 800, 500 };
+				action.State = actions::TouchAction::TOUCH_DOWN;
+				window.OnAction(action);
+				// Render-side policy may run while a selection/mute press is held.
+				scene.AutomaticAtOriginalDeadline();
+				action.State = actions::TouchAction::TOUCH_UP;
+				window.OnAction(action);
+				if (button == 0) EXPECT_TRUE(station->IsSelected());
+				window.PressPath.clear();
+				action.Index = 0;
+				action.State = actions::TouchAction::TOUCH_DOWN;
+				window.OnAction(action);
+				action.State = actions::TouchAction::TOUCH_UP;
+				window.OnAction(action);
+				EXPECT_FALSE(station->IsSelected());
+			}
+			EXPECT_EQ(revision, scene.ActivityRevision());
+			EXPECT_TRUE(scene.AutomaticAtOriginalDeadline());
+		}
+}
+
+TEST(CameraIdle, GroupButtonsPreserveDeadlineFromPressThroughRelease)
+{
+	CameraActivityScene scene;
+	ResourceLib resources;
+	CameraActivityWindow window(scene, resources);
+	for (const bool automatic : { false, true })
+		for (std::size_t rowIndex = 0u; rowIndex < 2u; ++rowIndex)
+		{
+			auto row = scene.GroupRow(rowIndex);
+			ASSERT_TRUE(row);
+			scene.ArmIdle(automatic);
+			const auto revision = scene.ActivityRevision();
+			for (const auto slot : { 0u, 1u, 1u })
+			{
+				row->AdvanceAnimation(1.0f);
+				auto button = row->Button(slot);
+				ASSERT_TRUE(button->IsVisible());
+				actions::TouchAction action;
+				action.Touch = actions::TouchAction::TOUCH_MOUSE;
+				action.Index = 0;
+				action.Position = button->GlobalPosition() + utils::Position2d{ 4, 4 };
+				action.State = actions::TouchAction::TOUCH_DOWN;
+				EXPECT_TRUE(window.OnAction(action).IsEaten);
+				scene.AutomaticAtOriginalDeadline();
+				action.State = actions::TouchAction::TOUCH_UP;
+				EXPECT_TRUE(window.OnAction(action).IsEaten);
+			}
+			EXPECT_EQ(revision, scene.ActivityRevision());
+			EXPECT_TRUE(scene.AutomaticAtOriginalDeadline());
+		}
+}
+
+TEST(CameraIdle, CameraDragWheelAndViewKeysRestartIdle)
+{
+	CameraActivityScene scene;
+	ResourceLib resources;
+	CameraActivityWindow window(scene, resources);
+	for (const bool automatic : { false, true })
+	{
+		scene.ArmIdle(automatic);
+		actions::TouchAction action;
+		action.Touch = actions::TouchAction::TOUCH_MOUSE;
+		action.Index = 0;
+		action.Position = { 800, 500 };
+		action.State = actions::TouchAction::TOUCH_DOWN;
+		window.OnAction(action);
+		actions::TouchMoveAction move;
+		move.Touch = actions::TouchAction::TOUCH_MOUSE;
+		move.MouseButtonsDown = 1u;
+		move.Position = { 840, 520 };
+		window.OnAction(move);
+		action.State = actions::TouchAction::TOUCH_UP;
+		window.OnAction(action);
+		EXPECT_FALSE(scene.AutomaticAtOriginalDeadline());
+
+		scene.ArmIdle(automatic);
+		action.Index = 4;
+		action.State = actions::TouchAction::TOUCH_DOWN;
+		action.Value = -1;
+		window.OnAction(action);
+		EXPECT_FALSE(scene.AutomaticAtOriginalDeadline());
+
+		scene.ArmIdle(automatic);
+		actions::KeyAction key;
+		key.KeyChar = VK_TAB;
+		key.KeyActionType = actions::KeyAction::KEY_UP;
+		window.OnAction(key);
+		EXPECT_FALSE(scene.AutomaticAtOriginalDeadline());
+	}
+}
+
+TEST(CameraFrontZoom, FitsLargeOneSidedStationRowsAtWideAndNarrowAspectRatios)
+{
+	for (const auto viewport : { utils::Size2d{ 1600u, 900u }, utils::Size2d{ 450u, 1000u } })
+	{
+		graphics::Camera camera(graphics::CameraParams(base::MoveableParams(), 0u));
+		graphics::CameraBounds bounds;
+		// Thirty stations, including fitted take/core/waveform extents rather
+		// than just their origins. A one-sided row also exercises panned framing.
+		bounds.Include(utils::Position3d{ -300.0f, -235.0f, -300.0f });
+		bounds.Include(utils::Position3d{ 29.0f * 600.0f + 300.0f, 235.0f, 300.0f });
+		camera.SetFrontVisibleBounds(bounds);
+		const utils::Position2d centre{ static_cast<int>(viewport.Width / 2u), static_cast<int>(viewport.Height / 2u) };
+		const auto settle = [&camera]() { for (unsigned int tick = 0u; tick < 8u; ++tick) camera.TickBackgroundDrag(0.05f); };
+		for (unsigned int notch = 0u; notch < 40u; ++notch)
+		{
+			camera.HandleWheel(-1, centre, viewport.Width, viewport.Height, {});
+			settle();
+		}
+		const auto distantPose = camera.CurrentPose();
+		EXPECT_GT(distantPose.Eye.Z, 1350.0f);
+		const auto matrix = camera.Projection(static_cast<float>(viewport.Width) / viewport.Height, {}) * camera.ViewMatrix();
+		for (const auto x : { bounds.Min.X, bounds.Max.X })
+			for (const auto y : { bounds.Min.Y, bounds.Max.Y })
+				for (const auto z : { bounds.Min.Z, bounds.Max.Z })
+				{
+					const auto clip = matrix * glm::vec4(x, y, z, 1.0f);
+					ASSERT_GT(clip.w, 0.0f);
+					const auto ndc = glm::vec3(clip) / clip.w;
+					EXPECT_LT(std::abs(ndc.x), 0.90f);
+					EXPECT_LT(std::abs(ndc.y), 0.90f);
+					EXPECT_GT(ndc.z, -1.0f);
+					EXPECT_LT(ndc.z, 1.0f); // Far-plane coverage shared by render/picking passes.
+				}
+
+		// Off-centre cursor zoom must retain the same world-plane hit even when
+		// far-plane homogeneous W is smaller than the old rejection threshold.
+		const utils::Position2d cursor{ static_cast<int>(viewport.Width * 3u / 4u), static_cast<int>(viewport.Height / 3u) };
+		const auto focus = camera.FocusPointAtCursor(cursor, viewport.Width, viewport.Height, {});
+		EXPECT_GT(std::abs(focus.X), 1000.0f);
+		camera.HandleWheel(1, cursor, viewport.Width, viewport.Height, {});
+		for (unsigned int tick = 0u; tick < 4u; ++tick)
+		{
+			camera.TickBackgroundDrag(0.05f);
+			const auto clip = camera.Projection(static_cast<float>(viewport.Width) / viewport.Height, {})
+				* camera.ViewMatrix() * glm::vec4(focus.X, focus.Y, focus.Z, 1.0f);
+			EXPECT_NEAR(cursor.X, (clip.x / clip.w + 1.0f) * viewport.Width * 0.5f, 1.0f);
+			EXPECT_NEAR(cursor.Y, (clip.y / clip.w + 1.0f) * viewport.Height * 0.5f, 1.0f);
+		}
+		const auto manualPose = camera.CurrentPose();
+		for (unsigned int view = 0u; view < 3u; ++view)
+		{
+			camera.CycleView({}, {}, {}, {}, {}, false);
+			settle();
+		}
+		EXPECT_EQ(graphics::Camera::View::Front, camera.CurrentView());
+		EXPECT_FLOAT_EQ(manualPose.Eye.Z, camera.CurrentPose().Eye.Z);
+		EXPECT_FLOAT_EQ(manualPose.Eye.X, camera.CurrentPose().Eye.X);
+		for (unsigned int notch = 0u; notch < 40u; ++notch)
+		{
+			camera.HandleWheel(1, centre, viewport.Width, viewport.Height, {});
+			settle();
+		}
+		EXPECT_FLOAT_EQ(80.0f, camera.CurrentPose().Eye.Z);
+	}
+}
 
 TEST(Window, IsInitiallyWindowed) {
 	auto sceneParams = SceneParams(base::DrawableParams(),
