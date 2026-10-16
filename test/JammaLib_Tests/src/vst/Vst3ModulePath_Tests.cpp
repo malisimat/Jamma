@@ -109,6 +109,7 @@ class NativeVstDialogRun
 {
 public:
 	enum class Action { NavigateBundle, AcceptFile, Cancel };
+	static void Phase(const char* phase) { std::cerr << "[native-dialog-test] ms=" << GetTickCount64() << " thread=" << GetCurrentThreadId() << " phase=" << phase << std::endl; }
 	struct Result
 	{
 		HRESULT Shown = E_FAIL;
@@ -119,11 +120,15 @@ public:
 	static Result Run(const std::filesystem::path& initial, const std::filesystem::path& target, Action action)
 	{
 		Result result;
+		Phase("CoInitializeEx/begin");
 		const auto initialized = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+		Phase("CoInitializeEx/end");
 		if (FAILED(initialized)) { result.Shown = initialized; return result; }
-		struct ComLifetime { ~ComLifetime() { CoUninitialize(); } } com;
+		struct ComLifetime { ~ComLifetime() { Phase("CoUninitialize/begin"); CoUninitialize(); Phase("CoUninitialize/end"); } } com;
 		Microsoft::WRL::ComPtr<IFileOpenDialog> dialog;
+		Phase("CoCreateInstance/begin");
 		result.Shown = CoCreateInstance(CLSID_FileOpenDialog, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&dialog));
+		Phase("CoCreateInstance/end");
 		if (FAILED(result.Shown)) return result;
 		GUID isolatedClient{};
 		result.Shown = CoCreateGuid(&isolatedClient);
@@ -134,7 +139,9 @@ public:
 		Microsoft::WRL::ComPtr<IShellItem> initialFolder;
 		result.Shown = SHCreateItemFromParsingName(initial.c_str(), nullptr, IID_PPV_ARGS(&initialFolder));
 		if (FAILED(result.Shown)) return result;
+		Phase("SetInitialFolder/begin");
 		dialog->SetFolder(initialFolder.Get());
+		Phase("SetInitialFolder/end");
 		if (action == Action::AcceptFile || (!target.empty() && action == Action::Cancel))
 			dialog->SetFileName(target.filename().c_str());
 		auto events = Microsoft::WRL::Make<utils::VstFileDialogEvents>();
@@ -143,7 +150,9 @@ public:
 		if (FAILED(result.Shown)) return result;
 		{
 			NativeVstDialogRun script(dialog.Get(), events.Get(), target, action, result);
+			Phase("Show/begin");
 			result.Shown = script._timer ? dialog->Show(nullptr) : E_FAIL;
+			Phase("Show/end");
 		}
 		result.Bundle = events->SelectedBundle();
 		Microsoft::WRL::ComPtr<IShellItem> selected;
@@ -154,8 +163,15 @@ public:
 			if (SUCCEEDED(selected->GetDisplayName(SIGDN_FILESYSPATH, &raw)))
 			{ result.File = raw; CoTaskMemFree(raw); }
 		}
+		Phase("Unadvise/begin");
 		dialog->Unadvise(cookie);
+		Phase("Unadvise/end");
+		Phase("ClearClientData/begin");
 		dialog->ClearClientData();
+		Phase("ClearClientData/end");
+		Phase("DialogRelease/begin");
+		dialog.Reset();
+		Phase("DialogRelease/end");
 		return result;
 	}
 private:
@@ -179,14 +195,17 @@ private:
 		if (script->_ticks < 4 || script->_ticks % 4) return;
 		if (script->_action == Action::Cancel)
 		{
-			if (SUCCEEDED(script->_dialog->Close(HRESULT_FROM_WIN32(ERROR_CANCELLED))))
+			// Exercise the user's close action on the dialog's owning STA. Close()
+			// can return success from this timer before Show actually dismisses it.
+			Microsoft::WRL::ComPtr<IOleWindow> window;
+			HWND handle = nullptr;
+			if (!script->_cancelPosted && SUCCEEDED(script->_dialog->QueryInterface(IID_PPV_ARGS(&window))) &&
+				SUCCEEDED(window->GetWindow(&handle)) && IsWindowVisible(handle) && PostMessageW(handle, WM_CLOSE, 0, 0))
 			{
-				// Close is accepted; the shell can finish asynchronously. Do not
-				// mistake slow teardown for an unhandled/unattended dialog.
-				KillTimer(nullptr, script->_timer);
-				script->_timer = 0;
+				Phase("CancelWindowClose/posted");
+				script->_cancelPosted = true;
 			}
-			return;
+			return; // Keep the watchdog until Show returns and the owner kills it.
 		}
 		if (script->_action == Action::NavigateBundle)
 		{
@@ -211,6 +230,7 @@ private:
 	Result& _result;
 	UINT_PTR _timer = 0;
 	unsigned _ticks = 0;
+	bool _cancelPosted = false;
 	static inline thread_local NativeVstDialogRun* _active = nullptr;
 };
 TEST_F(Vst3ModuleFiles, NativePickerNavigationClosesWithOuterBundleAndNoFileResult)
