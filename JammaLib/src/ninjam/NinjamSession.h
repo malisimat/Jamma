@@ -58,7 +58,7 @@ namespace ninjam
 	// that Scene stays free of those concerns.
 	// Chat I/O is driven externally: the caller sends messages via SendChat()
 	// and inbound messages are surfaced through std::cout (which the
-	// application-level ConsoleTui may intercept).
+	// application-level ConsoleCapture may intercept).
 	class NinjamSession
 	{
 	public:

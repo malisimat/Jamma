@@ -50,6 +50,5 @@ namespace io
 		utils::Size2d WinSize{ 1400u, 1000u };
 		LoggingConfig Logging;
 		bool ConsoleAutoStart = true;
-		bool ConsoleForceConhost = false;
 	};
 }
