@@ -888,7 +888,7 @@ TEST(TriggerPredelayStation, ZeroReportedHardwareLatencyUsesConfiguredSourceAge)
 
 TEST(TriggerPredelayStation, FirstAudioAndMixedMasterReserveCompensatedOrigin)
 {
-    for (const auto delay : {80.0, -80.0})
+    for (const auto delay : {0.0, 80.0, -80.0})
     for (const auto withMidi : {false, true})
     {
         SCOPED_TRACE(delay);
@@ -905,7 +905,10 @@ TEST(TriggerPredelayStation, FirstAudioAndMixedMasterReserveCompensatedOrigin)
         auto take = station->GetLoopTakes().back();
         take->CommitChanges();
         station->CommitChanges();
-        auto current = trigger;
+        // START publication can lag its admitted edge. The callback counter
+        // then understates duration; first-master length must use edge stamps.
+        constexpr auto handoffDelay = 4096u;
+        auto current = trigger + handoffDelay;
         const auto advance = [&](std::uint32_t end) {
             std::vector<float> input(128u, 0.0f);
             while (current < end)
@@ -930,13 +933,14 @@ TEST(TriggerPredelayStation, FirstAudioAndMixedMasterReserveCompensatedOrigin)
         stop.ActionType = actions::TriggerAction::TRIGGER_REC_END;
         stop.TargetId = started.TargetId;
         stop.MidiSample = trigger + 48000u;
-        stop.SampleCount = 48000u;
+        stop.SampleCount = 48000u - handoffDelay;
         ASSERT_TRUE(station->OnAction(stop).IsEaten);
         // Geometry and its compensated zero are committed together by the
         // callback after source coverage and topology publication are ready.
         EXPECT_EQ(0ul, clock->SeedSourceLength());
         const auto seed = clock->PendingRecordingSeedOnOwner();
         ASSERT_TRUE(seed);
+        ASSERT_EQ(48000u, seed->LengthSamps);
         EXPECT_EQ(trigger - static_cast<std::uint32_t>(static_cast<std::int32_t>(delay * 48.0)),
             seed->RecordOrigin);
         EXPECT_GT(seed->LengthSamps, 0ul);
@@ -960,6 +964,69 @@ TEST(TriggerPredelayStation, FirstAudioAndMixedMasterReserveCompensatedOrigin)
         EXPECT_EQ(expected, take->MidiPlayIndex());
         ASSERT_EQ(1u, take->GetLoops().size());
         EXPECT_EQ(expected, take->GetLoops().front()->BodyPlayIndex());
+    }
+}
+
+TEST(TriggerPredelayStation, FirstAudioMasterPlaysReadyRangesBeforeTailCompletion)
+{
+    for (const auto delay : {80.0, -80.0})
+    {
+        SCOPED_TRACE(delay);
+        auto station = TriggerPredelayStationTest::MakeStation();
+        auto clock = std::make_shared<Timer>();
+        station->SetClock(clock);
+        constexpr auto trigger = 100000u;
+        constexpr auto length = 192000u;
+        constexpr auto block = 128u;
+        auto start = TriggerPredelayStationTest::Start(trigger, delay);
+        start.InputChannels = {0u};
+        start.MidiInputDevices.clear();
+        const auto started = station->OnAction(start);
+        ASSERT_TRUE(started.IsEaten);
+        auto take = station->GetLoopTakes().back();
+        take->CommitChanges();
+        station->CommitChanges();
+        std::vector<float> input(block, 0.25f);
+        for (auto current = trigger; current < trigger + length; current += block)
+        {
+            station->BeginCaptureAudioBoundary(current, current, 0u);
+            base::AudioWriteRequest request;
+            request.samples = input.data();
+            request.numSamps = block;
+            request.stride = 1u;
+            request.fadeNew = 1.0f;
+            request.source = base::Audible::AUDIOSOURCE_ADC;
+            take->OnBlockWriteChannel(0u, request, 0);
+            take->EndMultiWrite(block, true, base::Audible::AUDIOSOURCE_ADC);
+            take->EndMultiPlay(block);
+        }
+        station->BeginCaptureAudioBoundary(trigger + length, trigger + length, 0u);
+        auto stop = start;
+        stop.ActionType = actions::TriggerAction::TRIGGER_REC_END;
+        stop.TargetId = started.TargetId;
+        stop.MidiSample = trigger + length;
+        stop.SampleCount = length;
+        ASSERT_TRUE(station->OnAction(stop).IsEaten);
+        station->BeginCaptureAudioBoundary(trigger + length, trigger + length, 0u);
+        station->ApplyFirstMasterRecordingAtAudioBoundary(*clock, trigger + length);
+        ASSERT_EQ(LoopTake::STATE_PLAYINGRECORDING, take->TakeState());
+        EXPECT_FALSE(take->FirstMasterActivationPending());
+        EXPECT_EQ(length, clock->SeedSourceLength());
+        ASSERT_EQ(1u, take->GetLoops().size());
+        const auto loop = take->GetLoops().front();
+        EXPECT_FALSE(loop->TriggerCaptureComplete());
+        std::vector<float> output(block, 0.0f);
+        if (delay > 0.0)
+        {
+            ASSERT_TRUE(take->AudioCaptureReady(block));
+            ASSERT_EQ(block, loop->ReadBlock(output.data(), 0, block));
+            EXPECT_FLOAT_EQ(0.25f, output.front());
+        }
+        else
+        {
+            EXPECT_FALSE(take->AudioCaptureReady(block));
+            EXPECT_EQ(0u, loop->ReadBlock(output.data(), 0, block));
+        }
     }
 }
 

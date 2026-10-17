@@ -2530,6 +2530,7 @@ void LoopTake::CompleteMidiIngressPump(std::uint32_t deviceSample)
 
 bool LoopTake::ActivateFirstMasterMidiAtAudioBoundary(unsigned long phaseSamps, std::uint32_t recordOrigin) noexcept
 {
+	if (_triggerCaptureConfigured && !_capturePlaybackPrepared.load(std::memory_order_acquire)) return false;
 	auto loops = _BorrowMidiLoopSnapshot();
 	if (!loops.ReadSucceeded()) return false;
 	// All streams were completed together at the same initial cursor. Keep

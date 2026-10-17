@@ -1783,8 +1783,11 @@ void Station::ApplyFirstMasterRecordingAtAudioBoundary(utils::Timer& clock, std:
 		_firstMasterRecordingConsumed.store(request->Timing.Version, std::memory_order_release);
 		return;
 	}
-	// A completed take may not have reached the published station membership yet.
-	if (!present || take->HasPendingTriggerCapture() || take->TakeState() != LoopTake::STATE_PLAYING) return;
+	// Activate transport while the audio tail is still recording. Playback checks
+	// source readiness per range; full capture completion must not gate it.
+	const auto takeState = take->TakeState();
+	if (!present || (takeState != LoopTake::STATE_PLAYING
+		&& takeState != LoopTake::STATE_PLAYINGRECORDING)) return;
 	// Trigger stamps are device samples; Scene/transport are separate rulers.
 	// A timestamp may be just ahead of this boundary; preserve that signed age.
 	const auto rawOrigin = take->CaptureTiming().TriggerSample.value_or(
@@ -2248,20 +2251,20 @@ ActionResult Station::OnAction(TriggerAction action)
 	case TriggerAction::TRIGGER_REC_END:
 	{
 		auto loopLength = action.SampleCount;
-		std::optional<std::uint32_t> midiOnlyStopSample;
+		std::optional<std::uint32_t> firstMasterStopSample;
 		const bool clockWasSeeded = recordingClock && recordingClock->SeedSourceLength() > 0ul;
-		// A first MIDI-only master uses the trigger edges as its physical duration.
+		// Every first local master uses trigger edges, excluding START handoff delay.
 		// Later takes retain their existing callback/counting duration policy.
-		if (!clockWasSeeded && !IsRemote() && loopTake && !loopTake.value()->HasTriggerAudioCapture()
+		if (!clockWasSeeded && !IsRemote() && loopTake
 			&& _clock
 			&& loopTake.value()->MidiRecordStartSample() && action.MidiSample)
 		{
-			const auto midiElapsed = static_cast<std::int32_t>(
-				*action.MidiSample - *loopTake.value()->MidiRecordStartSample());
-			if (midiElapsed > 0)
+			const auto triggerElapsed = midi::MidiSampleDelta(
+				*action.MidiSample, *loopTake.value()->MidiRecordStartSample());
+			if (triggerElapsed > 0)
 			{
-				loopLength = static_cast<unsigned long>(midiElapsed);
-				midiOnlyStopSample = action.MidiSample;
+				loopLength = static_cast<unsigned long>(triggerElapsed);
+				firstMasterStopSample = action.MidiSample;
 			}
 		}
 
@@ -2293,7 +2296,7 @@ ActionResult Station::OnAction(TriggerAction action)
 					loopLength = quantisedLength;
 					errorSamps = err;
 				}
-				else if (midiOnlyStopSample && loopTake)
+				else if (firstMasterStopSample && loopTake)
 				{
 					// Infer off callback without touching the live Timer. Publish the
 					// complete geometry and trigger origin after take completion.
