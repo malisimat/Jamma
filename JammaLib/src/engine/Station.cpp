@@ -2815,6 +2815,16 @@ void Station::AddTake(std::shared_ptr<LoopTake> take)
 	_loopTakeRevision.fetch_add(1u, std::memory_order_release);
 }
 
+bool Station::DitchTake(const std::shared_ptr<LoopTake>& take) noexcept
+{
+	if (!take) return false;
+	const auto found = std::find(_backLoopTakes.begin(), _backLoopTakes.end(), take);
+	if (found == _backLoopTakes.end()) return false;
+	auto target = *found;
+	_DitchLoopTake(target);
+	return true;
+}
+
 std::vector<std::shared_ptr<LoopTake>> Station::GetLoopTakeSnapshot() const
 {
 	std::vector<std::shared_ptr<LoopTake>> takes;

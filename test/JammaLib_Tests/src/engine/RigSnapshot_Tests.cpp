@@ -1525,7 +1525,7 @@ TEST_F(RigSnapshotTest, DisabledFinalBinConsumesPressAndRelease)
  gui::GuiStationControls controls;
  const auto view = glm::scale(glm::mat4(1.0f), glm::vec3(0.001f, 0.001f, 0.001f));
  utils::Size2d viewport{800u, 600u};
- controls.Update({station}, view, viewport, true, true);
+ controls.Update({station}, view, viewport, true, true, false, true);
  auto anchor = station->TopCapModelPosition(); anchor.Y += 65.0f;
  const auto point = gui::CableInteraction::ProjectAnchor(view * glm::vec4(anchor.X, anchor.Y, anchor.Z, 1.0f), viewport);
  ASSERT_TRUE(point);
@@ -1544,7 +1544,7 @@ TEST_F(RigSnapshotTest, ReleasingCtrlCancelsBinAndConsumesItsRelease)
  gui::GuiStationControls controls;
  const auto view = glm::scale(glm::mat4(1.0f), glm::vec3(0.001f, 0.001f, 0.001f));
  utils::Size2d viewport{800u, 600u};
- controls.Update({station, b}, view, viewport, true, true);
+ controls.Update({station, b}, view, viewport, true, true, false, true);
  auto anchor = station->TopCapModelPosition(); anchor.Y += 65.0f;
  const auto point = gui::CableInteraction::ProjectAnchor(view * glm::vec4(anchor.X, anchor.Y, anchor.Z, 1.0f), viewport);
  ASSERT_TRUE(point);
@@ -1553,7 +1553,7 @@ TEST_F(RigSnapshotTest, ReleasingCtrlCancelsBinAndConsumesItsRelease)
  action.State = actions::TouchAction::TOUCH_DOWN;
  EXPECT_TRUE(controls.Touch(action, [&](auto) { ++activations; }));
  controls.CancelBinPress();
- controls.Update({station, b}, view, viewport, false, true);
+ controls.Update({station, b}, view, viewport, false, true, false, true);
  action.State = actions::TouchAction::TOUCH_UP;
  EXPECT_TRUE(controls.Touch(action, [&](auto) { ++activations; }));
  EXPECT_EQ(0u, activations);

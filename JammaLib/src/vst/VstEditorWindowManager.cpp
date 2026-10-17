@@ -310,3 +310,26 @@ void vst::VstEditorWindowManager::CloseVstEditorsForStation(const std::shared_pt
 	// DestroyWindow/plugin close can reenter Scene focus handling synchronously.
 	for (const auto& window : closing) window->Destroy();
 }
+
+void vst::VstEditorWindowManager::CloseVstEditorsForTake(const std::shared_ptr<engine::LoopTake>& take)
+{
+	if (!take) return;
+	const auto owns = [&](const vst::IVstPlugin* plugin) {
+		if (take->OwnsPlugin(plugin)) return true;
+		for (const auto& loop : take->GetLoops())
+			for (size_t i = 0u; auto current = loop->GetVstPlugin(i); ++i) if (current.get() == plugin) return true;
+		return false;
+	};
+	std::vector<std::shared_ptr<graphics::VstEditorWindow>> closing;
+	{
+		std::scoped_lock lock(_vstEditorWindowsMutex);
+		for (auto it = _vstEditorWindows.begin(); it != _vstEditorWindows.end();)
+		{
+			if (*it && owns((*it)->Plugin().get()))
+			{ closing.push_back(std::move(*it)); it = _vstEditorWindows.erase(it); }
+			else ++it;
+		}
+	}
+	// DestroyWindow/plugin close can reenter Scene focus handling synchronously.
+	for (const auto& window : closing) window->Destroy();
+}

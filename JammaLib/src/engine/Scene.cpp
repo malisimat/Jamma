@@ -873,6 +873,11 @@ bool Scene::AdvanceUiAnimations()
 	_UpdateViewProjectionLocked();
 	const bool cameraMoved = previousViewProjection != _viewProj;
 	_UpdateHudStationAnchors();
+	const auto depth = _selector->CurrentSelectDepth();
+	const bool stationDitchVisible = depth == base::DEPTH_STATION;
+	const bool takeDitchVisible = depth == base::DEPTH_LOOPTAKE || depth == base::DEPTH_LOOP;
+	_stationControls.Update(_stations, _viewProj, _sizeParams.Size, _ctrlHeld, stationDitchVisible, takeDitchVisible,
+		_StationManagementAvailableLocked());
 	if (stationsMoved || cameraMoved)
 	{
 		_InvalidateHover2d();
@@ -926,6 +931,7 @@ void Scene::_ReleaseResources()
 	_ctrlHandleOverlay.ReleaseResources();
 	_stationControls.ReleaseResources();
 	if (_stationDeleteDialog) _stationDeleteDialog->ReleaseResources();
+	if (_takeDitchDialog) _takeDitchDialog->ReleaseResources();
 	for (const auto& station : _retiredStations) station->ReleaseResources();
 
 	for (auto& station : SnapshotStations())
@@ -1080,6 +1086,7 @@ ActionResult Scene::_OnPointerAction(TouchAction action)
 		_loopEditor.CancelInput();
 		auto popupRes = _popupManager.OnAction(action);
 		_ApplyRemoteTempoPromptDecision();
+		if (_takeDitchDialog && !_popupManager.IsOpen()) _CancelTakeDitch();
 		if (_stationDeleteDialog && !_popupManager.IsOpen())
 		{ std::scoped_lock lock(_sceneMutex); if (!_stationManagement.Busy()) _stationManagement.Cancel(); }
 		if (TouchAction::TOUCH_UP == action.State)
@@ -1092,7 +1099,10 @@ ActionResult Scene::_OnPointerAction(TouchAction action)
 		return popupRes;
 	}
 	if (!_loopEditor.IsEngaged() && !_quantisationInteraction.OwnsPointer() &&
-		_stationControls.Touch(action, [this](auto intent) { _RequestStationControl(std::move(intent)); }))
+		_stationControls.Touch(action, [this](auto intent) {
+			if (intent.Take) _RequestTakeDitch(std::move(intent));
+			else _RequestStationControl(std::move(intent));
+		}))
 		return { true, {}, {}, ACTIONRESULT_DEFAULT, nullptr, {} };
 	if (_quantisationInteraction.OwnsPointer() || (_EditControlsSuppressed() && !_loopEditor.IsEngaged()))
 	{
@@ -1507,6 +1517,13 @@ ActionResult Scene::OnAction(KeyAction action)
 		return ActionResult::NoAction();
 	}
 
+	if (_popupManager.Top() == _takeDitchDialog && _takeDitchDialog &&
+		action.KeyChar == 13u && action.KeyActionType == KeyAction::KEY_UP)
+	{
+		_popupManager.Close();
+		_CancelTakeDitch();
+		return { true, {}, {}, ACTIONRESULT_DEFAULT, nullptr, {} };
+	}
 	if (_popupManager.Top() == _stationDeleteDialog && _stationDeleteDialog &&
 		action.KeyChar == 13u && action.KeyActionType == KeyAction::KEY_UP)
 	{
@@ -1520,6 +1537,7 @@ ActionResult Scene::OnAction(KeyAction action)
 		_loopEditor.CancelInput();
 		auto popupRes = _popupManager.OnAction(action);
 		_ApplyRemoteTempoPromptDecision();
+		if (_takeDitchDialog && !_popupManager.IsOpen()) _CancelTakeDitch();
 		if (_stationDeleteDialog && !_popupManager.IsOpen())
 		{ std::scoped_lock lock(_sceneMutex); if (!_stationManagement.Busy()) _stationManagement.Cancel(); }
 		if (_loopEditor.IsEngaged())
@@ -1770,6 +1788,14 @@ ActionResult Scene::OnAction(GuiAction action)
 	}
 	if (action.ElementType == GuiAction::ACTIONELEMENT_BUTTON && action.Index == GuiMainPanel::SaveRigDefaultControlIndex)
 	{ _rigSaveRequested = true; return ActionResult::NoAction(); }
+	if (action.ElementType == GuiAction::ACTIONELEMENT_BUTTON &&
+		(action.Index == GuiStationControls::CancelTakeDitchControlIndex || action.Index == GuiStationControls::ConfirmTakeDitchControlIndex))
+	{
+		_popupManager.Close(_takeDitchDialog);
+		if (action.Index == GuiStationControls::ConfirmTakeDitchControlIndex) _ConfirmTakeDitch();
+		else _CancelTakeDitch();
+		return ActionResult::NoAction();
+	}
 	if (action.ElementType == GuiAction::ACTIONELEMENT_BUTTON &&
 		(action.Index == GuiStationControls::CancelRemovalControlIndex || action.Index == GuiStationControls::DeleteRemovalControlIndex))
 	{
@@ -3536,9 +3562,13 @@ void Scene::InitResources(resources::ResourceLib& resourceLib, bool forceInit)
 		std::scoped_lock lock(_sceneMutex);
 		if (_stationManagement.Added) _stationManagement.Added->InitResources(resourceLib, false);
 		if (_stationDeleteDialog) _stationDeleteDialog->InitResources(resourceLib, false);
+		if (_takeDitchDialog) _takeDitchDialog->InitResources(resourceLib, false);
 		// Motion and camera updates precede this one control layout/init pass.
 		_UpdateViewProjectionLocked();
-		_stationControls.Update(_stations, _viewProj, _sizeParams.Size, _ctrlHeld,
+		const auto depth = _selector->CurrentSelectDepth();
+		const bool stationDitchVisible = depth == base::DEPTH_STATION;
+		const bool takeDitchVisible = depth == base::DEPTH_LOOPTAKE || depth == base::DEPTH_LOOP;
+		_stationControls.Update(_stations, _viewProj, _sizeParams.Size, _ctrlHeld, stationDitchVisible, takeDitchVisible,
 			_StationManagementAvailableLocked());
 		_stationControls.InitResources(resourceLib);
 		if (_hudPanel)
@@ -4713,6 +4743,55 @@ void Scene::_RequestStationControl(gui::GuiStationControls::Intent intent)
 	_stationManagement.Candidate = _rigCoordinator.Staged();
 	_stationManagement.Added = std::move(station);
 	_rigTransitionRequestedRevision = 0u;
+}
+
+void Scene::_RequestTakeDitch(gui::GuiStationControls::Intent intent)
+{
+	std::scoped_lock lock(_sceneMutex);
+	if (!_StationManagementAvailableLocked() || _popupManager.IsOpen() || !intent.TakeStation || !intent.Take ||
+		std::find(_stations.begin(), _stations.end(), intent.TakeStation) == _stations.end()) return;
+	const auto& takes = intent.TakeStation->GetLoopTakes();
+	if (std::find(takes.begin(), takes.end(), intent.Take) == takes.end()) return;
+	_takeDitchStation = std::move(intent.TakeStation);
+	_takeDitchTake = std::move(intent.Take);
+	if (_takeDitchDialog) _takeDitchDialog->ReleaseResources();
+	_takeDitchDialog = std::make_shared<GuiPopup>();
+	_takeDitchDialog->SetTitle("Ditch this take?");
+	_takeDitchDialog->SetBodyLines({"The whole LoopTake and all its loops will be removed.", "Active recording will be cancelled.", "This cannot be undone."});
+	_takeDitchDialog->ConfigureButtons({{{"Cancel", GuiStationControls::CancelTakeDitchControlIndex}, {"Ditch take", GuiStationControls::ConfirmTakeDitchControlIndex}}});
+	_takeDitchDialog->SetButtonReceiver(ActionReceiver::shared_from_this());
+	_takeDitchDialog->FitToViewport(_sizeParams.Size);
+	_popupManager.Open(_takeDitchDialog);
+}
+
+void Scene::_CancelTakeDitch()
+{
+	std::scoped_lock lock(_sceneMutex);
+	_takeDitchTake.reset();
+	_takeDitchStation.reset();
+}
+
+void Scene::_ConfirmTakeDitch()
+{
+	std::shared_ptr<LoopTake> ditched;
+	{
+		std::scoped_lock lock(_sceneMutex);
+		auto station = std::move(_takeDitchStation);
+		auto take = std::move(_takeDitchTake);
+		if (!station || !take || std::find(_stations.begin(), _stations.end(), station) == _stations.end()) return;
+		if (station->DitchTake(take))
+		{
+			take->DeSelect();
+			_CollapseRacksLocked();
+			_InvalidateHover2d();
+			ditched = std::move(take);
+		}
+	}
+	if (ditched)
+	{
+		// Native window teardown may synchronously reenter scene focus handling.
+		_windowSubsystem->CloseVstEditorsForTake(ditched);
+	}
 }
 
 void Scene::_AcceptStationRemoval(bool consent)

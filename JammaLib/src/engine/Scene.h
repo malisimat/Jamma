@@ -332,6 +332,9 @@ namespace engine
 		void _PrepareStation(const std::shared_ptr<Station>& station);
 		void _AddStation(std::shared_ptr<Station> station, bool publishAudioStations = true);
 		void _RequestStationControl(gui::GuiStationControls::Intent intent);
+		void _RequestTakeDitch(gui::GuiStationControls::Intent intent);
+		void _CancelTakeDitch();
+		void _ConfirmTakeDitch();
 		void _AcceptStationRemoval(bool consent);
 		void _CommitStationMembershipLocked();
 		RigCoordinator::EditResult _RequestRigEditLocked(const io::RigFile& candidateRig);
@@ -563,6 +566,11 @@ namespace engine
 		StationManagement _stationManagement; // All access under _sceneMutex; UI teardown.
 		gui::GuiStationControls _stationControls; // Window/render owner only.
 		std::shared_ptr<gui::GuiPopup> _stationDeleteDialog; // Window owner only.
+		std::shared_ptr<gui::GuiPopup> _takeDitchDialog; // Window owner only.
+		// Window-owned confirmation pins; request/cancel/confirm serialize with job edits via _sceneMutex.
+		// Released on cancel, successful/stale confirmation, or Scene teardown.
+		std::shared_ptr<Station> _takeDitchStation;
+		std::shared_ptr<LoopTake> _takeDitchTake;
 		bool _rigSaveRequested = false; // Window owner only.
 		std::function<void()> _explicitRigSaveJob; // Scene mutex handoff to existing job owner; drained on shutdown.
 		bool _rigSaveInProgress = false; // Scene mutex; UI completion resets.

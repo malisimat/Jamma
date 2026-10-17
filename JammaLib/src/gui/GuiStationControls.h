@@ -13,9 +13,18 @@ namespace gui
 	public:
 		static constexpr unsigned int CancelRemovalControlIndex = 8401u;
 		static constexpr unsigned int DeleteRemovalControlIndex = 8402u;
-		struct Intent { bool Prepend = false; std::shared_ptr<engine::Station> Remove; };
+		static constexpr unsigned int CancelTakeDitchControlIndex = 8403u;
+		static constexpr unsigned int ConfirmTakeDitchControlIndex = 8404u;
+		struct Intent
+		{
+			bool Prepend = false;
+			std::shared_ptr<engine::Station> Remove;
+			std::shared_ptr<engine::Station> TakeStation;
+			std::shared_ptr<engine::LoopTake> Take;
+		};
 		void Update(const std::vector<std::shared_ptr<engine::Station>>& stations,
-			const glm::mat4& view, utils::Size2d viewport, bool ctrl, bool enabled)
+			const glm::mat4& view, utils::Size2d viewport, bool ctrl,
+			bool stationDitchVisible, bool takeDitchVisible, bool enabled)
 		{
 			_enabled = enabled;
 			if (!ctrl) CancelBinPress();
@@ -28,8 +37,12 @@ namespace gui
 				// Keep real camera-projected anchors, including offscreen endpoints.
 				const int x = static_cast<int>(projected->x), y = static_cast<int>(projected->y);
 				auto old = std::find_if(_controls.begin(), _controls.end(), [&](const auto& c) {
-					return c.Bin == bin && c.Action.Remove == intent.Remove && c.Action.Prepend == intent.Prepend; });
+					return c.Bin == bin && c.Action.Remove == intent.Remove &&
+						c.Action.TakeStation == intent.TakeStation && c.Action.Take == intent.Take &&
+						c.Action.Prepend == intent.Prepend; });
 				auto button = old == _controls.end() ? MakeButton(bin) : old->Button;
+				if (old == _controls.end() && _resources)
+					button->InitResources(*_resources, false);
 				const int half = bin ? 24 : 32;
 				button->SetPosition({x - half, y - half});
 				button->SetEnabled(enabled && active);
@@ -41,19 +54,42 @@ namespace gui
 				{
 					if (!first) first = station;
 					last = station;
-					if (ctrl) { auto p = station->TopCapModelPosition(); p.Y += 65.0f; add(p, {false, station}, true, locals > 1u); }
+					if (ctrl && stationDitchVisible)
+					{
+						auto p = station->TopCapModelPosition(); p.Y += 65.0f;
+						add(p, {false, station, {}, {}}, true, locals > 1u);
+					}
+					if (ctrl && takeDitchVisible)
+					{
+						const auto stationPosition = station->PresentationModelPosition();
+						const auto stationScale = static_cast<float>(station->ModelScale());
+						for (const auto& take : station->GetLoopTakes())
+						{
+							if (!take || !take->IsVisible()) continue;
+							auto p = stationPosition + take->ModelPosition() * utils::Position3d{stationScale, stationScale, stationScale};
+							p.Y += 65.0f * stationScale;
+							add(p, {false, {}, station, take}, true, !take->IsCaptureCancelled());
+						}
+					}
 				}
 			if (first)
 			{
 				auto left = first->PresentationModelPosition(); left.X -= 600.0f;
 				auto right = last->PresentationModelPosition(); right.X += 600.0f;
-				add(left, {true, {}}, false, locals < io::JamFile::MaxStations);
-				add(right, {false, {}}, false, locals < io::JamFile::MaxStations);
+				add(left, {true, {}, {}, {}}, false, locals < io::JamFile::MaxStations);
+				add(right, {false, {}, {}, {}}, false, locals < io::JamFile::MaxStations);
 			}
+			if (_pressed && std::none_of(next.begin(), next.end(), [&](const auto& current) {
+				return current.Button == _pressed->Button;
+			}))
+				Cancel();
+			for (auto& old : _controls)
+				if (std::none_of(next.begin(), next.end(), [&](const auto& current) { return current.Button == old.Button; }))
+					old.Button->ReleaseResources();
 			_controls = std::move(next);
 		}
 		void InitResources(resources::ResourceLib& resources)
-		{ for (auto& c : _controls) c.Button->InitResources(resources, false); }
+		{ _resources = &resources; for (auto& c : _controls) c.Button->InitResources(resources, false); }
 		void Draw(base::DrawContext& ctx)
 	{
 		for (auto& c : _controls)
@@ -104,7 +140,7 @@ namespace gui
 		}
 		void CancelBinPress() { if (_pressed && _pressed->Bin) { _cancelledRelease = true; Cancel(); } }
 		void Cancel() { if (_pressed) { _cancelledRelease = true; _pressed->Button->ClearPointerState(); } _pressed.reset(); }
-		void ReleaseResources() { Cancel(); for (auto& c : _controls) c.Button->ReleaseResources(); }
+		void ReleaseResources() { Cancel(); for (auto& c : _controls) c.Button->ReleaseResources(); _resources = nullptr; }
 	private:
 		static bool HitButton(const GuiButton& button, utils::Position2d position)
 	{
@@ -124,6 +160,7 @@ namespace gui
 		struct Control { std::shared_ptr<GuiButton> Button; Intent Action; bool Bin; };
 		std::vector<Control> _controls;
 		std::optional<Control> _pressed;
+		resources::ResourceLib* _resources = nullptr; // Render-thread resource owner.
 		bool _enabled = true;
 		bool _cancelledRelease = false;
 	};

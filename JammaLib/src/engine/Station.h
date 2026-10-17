@@ -188,6 +188,9 @@ namespace engine
 
 		std::shared_ptr<LoopTake> AddTake();
 		void AddTake(std::shared_ptr<LoopTake> take);
+		// Window/job owner only while Scene::_sceneMutex serializes topology changes.
+		// Audio readers retain the published AudioState until its callback lease ends.
+		bool DitchTake(const std::shared_ptr<LoopTake>& take) noexcept;
 		unsigned int NumTakes() const;
 		std::string Name() const;
 		const std::string& Id() const noexcept { return _id; }
