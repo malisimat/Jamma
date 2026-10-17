@@ -37,6 +37,7 @@ Treat this as a real-time audio codebase: prefer predictable, low-latency-safe b
 
 - For behavior changes in JammaLib, add or update tests when practical.
 - Run the relevant native test target after engine changes.
+- Keep unit tests hermetic: inject machine dependencies and use bounded, test-owned state and files.
 - Detailed test commands and troubleshooting live in doc/build.md.
 
 ## Investigation Guidance
