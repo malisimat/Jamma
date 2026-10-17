@@ -299,3 +299,40 @@ latency would misalign them. Plugin processing latency and sample attack can
 still delay audible instrument output relative to its scheduled MIDI onset.
 The production-boundary regression covers an empty join, later take creation,
 nonzero device epochs, 44.1/48 kHz, multiple tempos/BPI, and note/click agreement.
+
+
+## Trigger capture origin and transport origin
+
+Trigger capture has its own frozen content origin. See
+[trigger predelay implementation](trigger-predelay-implementation.md) for the
+capture ledger, bounded ingress contract, persistence and ownership audit.
+For admitted device edge `T`, signed adjustment `D`, final length `L` and current
+device boundary `A`, keep these phases separate:
+
+```text
+first-master phase    = floor_mod(A - T + D, L)
+take content phase    = floor_mod(A - T + D, L)
+physical event E      -> floor_mod(E - T + D, L)
+```
+
+A positive D moves content zero earlier. The first take defines master zero at
+that compensated origin `T-D`; subsequent takes map the same compensated origin
+rule onto the established transport without moving master zero.
+The first master measures raw admitted STOP minus START, then applies the existing
+length policy. Deferred publication or input-tail completion only changes the
+boundary where playback becomes available. It must use the content phase at that
+boundary, without restarting at zero or adding first-capture delay.
+
+AudioHost supplies the current device block start before MONITOR/ADC/bounce
+routing and before first-master activation. Scene and absolute Timer observations
+from that boundary provide coordinate correspondence for grid conversion. Use
+`MidiSampleDelta` for wrapping device timestamps; never subtract a Scene position
+from a device timestamp. MIDI event quantisation maps through the content origin;
+automation retains its separately frozen global origin and correction.
+
+The selected physical pass is `[T-s, T+L-s)`, where positive D admits a bounded
+10 ms earlier seam guard and zero/negative D use s=0. Selection precedes wrapping;
+it is not a second pass. Captured audio and MIDI positions are baked into content
+space before persistence. Remote follow therefore shifts each entity's existing
+content cursor with its own length and anchor, using the same map above. It does
+not reapply rig predelay or reinterpret a baked session after a rig edit.

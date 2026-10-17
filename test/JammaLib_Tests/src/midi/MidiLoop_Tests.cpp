@@ -373,6 +373,236 @@ TEST(MidiLoop, EventsBeyondLoopLengthAreNotPlayed) {
 	ASSERT_EQ(60u, sink.events[0].data1);
 }
 
+TEST(MidiLoopTriggerCapture, FiltersPhysicalWindowBeforeSignedRotation)
+{
+	for (const auto rotation : { -200ll, 0ll, 200ll })
+	{
+		MidiLoop loop;
+		loop.StartRecord();
+		ASSERT_TRUE(loop.RecordEvent(MidiEvent::MakeNoteOn(250u, 2u, 36u, 97u)));
+		ASSERT_TRUE(loop.RecordEvent(MidiEvent::MakeNoteOff(300u, 2u, 36u, 23u)));
+		ASSERT_TRUE(loop.RecordEvent(MidiEvent::MakeNoteOn(1000u, 2u, 38u, 110u)));
+		ASSERT_TRUE(loop.RecordEvent(MidiEvent::MakeNoteOff(1010u, 2u, 38u)));
+		ASSERT_TRUE(loop.NormalizeTriggerCapture(1000u, rotation));
+		loop.EndRecord(1000u);
+		MidiLoop::ExportState saved;
+		ASSERT_TRUE(loop.SnapshotForExport(saved));
+		ASSERT_EQ(2u, saved.EventCount);
+		EXPECT_EQ(static_cast<std::uint32_t>(250 + rotation), saved.Events[0].sampleOffset);
+		EXPECT_EQ(97u, saved.Events[0].data2);
+		EXPECT_EQ(23u, saved.Events[1].data2);
+	}
+}
+
+TEST(MidiLoopTriggerCapture, RotatesWholeNoteAcrossSeamAndSurvivesReload)
+{
+	for (const auto rotation : { -200ll, 200ll })
+	{
+		MidiLoop source;
+		source.StartRecord();
+		const auto onset = rotation < 0 ? 100u : 700u;
+		ASSERT_TRUE(source.RecordEvent(MidiEvent::MakeNoteOn(onset, 0u, 36u, 95u)));
+		ASSERT_TRUE(source.RecordEvent(MidiEvent::MakeNoteOff(onset + 200u, 0u, 36u, 41u)));
+		ASSERT_TRUE(source.NormalizeTriggerCapture(1000u, rotation));
+		source.EndRecord(1000u);
+		MidiLoop::ExportState saved;
+		ASSERT_TRUE(source.SnapshotForExport(saved));
+		ASSERT_EQ(2u, saved.EventCount);
+		EXPECT_TRUE(saved.Events[0].IsNoteOff());
+		EXPECT_EQ(100u, saved.Events[0].sampleOffset);
+		EXPECT_TRUE(saved.Events[1].IsNoteOn());
+		EXPECT_EQ(900u, saved.Events[1].sampleOffset);
+		const auto spans = midi::MidiNote::ExtractSpans(saved.Events.data(), saved.EventCount, 1000u);
+		ASSERT_EQ(1u, spans.size());
+		EXPECT_EQ(900u, spans[0].StartSample);
+		EXPECT_EQ(200u, spans[0].DurationSamples);
+		io::NativeMidiSidecar::Stream asset;
+		asset.LogicalLength = 1000u;
+		for (std::size_t i = 0u; i < saved.EventCount; ++i)
+		{
+			const auto& event = saved.Events[i];
+			asset.Events.push_back({event.sampleOffset, event.status, event.data1, event.data2, event.flags});
+		}
+		std::stringstream bytes(std::ios::in | std::ios::out | std::ios::binary);
+		ASSERT_TRUE(io::NativeMidiSidecar::ToStream(asset, bytes));
+		bytes.seekg(0);
+		const auto loaded = io::NativeMidiSidecar::FromStream(bytes);
+		ASSERT_TRUE(loaded);
+		for (std::size_t i = 0u; i < saved.EventCount; ++i)
+		{
+			const auto& event = loaded->Events[i];
+			saved.Events[i] = {event.SampleOffset, event.Status, event.Data1, event.Data2, event.Flags};
+		}
+		MidiLoop restored;
+		ASSERT_TRUE(restored.RestoreFromExport(saved));
+		for (auto* loop : { &source, &restored })
+		{
+			MidiLoopCapturingSink sink;
+			loop->ReadBlock(800u, 500u, sink);
+			ASSERT_EQ(2u, sink.events.size());
+			EXPECT_TRUE(sink.events[0].IsNoteOn());
+			EXPECT_EQ(900u, sink.events[0].sampleOffset);
+			EXPECT_TRUE(sink.events[1].IsNoteOff());
+			EXPECT_EQ(1100u, sink.events[1].sampleOffset);
+			EXPECT_EQ(41u, sink.events[1].data2);
+		}
+	}
+}
+
+TEST(MidiLoopTriggerCapture, GuardRetainsMeasuredEarlyOnsets)
+{
+	struct Case { std::int64_t EventMinusTrigger; std::int64_t Delay; std::uint32_t Seam; std::uint32_t Expected; };
+	for (const auto test : { Case{-3713, 3793, 4234u, 80u},
+		Case{-4052, 3793, 4234u, 99741u}, Case{0, 3793, 4234u, 3793u} })
+	{
+		MidiLoop loop;
+		loop.StartRecord();
+		const auto physical = static_cast<std::uint32_t>(test.EventMinusTrigger + test.Seam);
+		ASSERT_TRUE(loop.RecordEvent(MidiEvent::MakeNoteOn(physical, 0u, 36u, 100u)));
+		ASSERT_TRUE(loop.RecordEvent(MidiEvent::MakeNoteOff(physical + 500u, 0u, 36u)));
+		ASSERT_TRUE(loop.NormalizeTriggerCapture(100000u, test.Delay - test.Seam));
+		loop.EndRecord(100000u);
+		MidiLoop::ExportState saved;
+		ASSERT_TRUE(loop.SnapshotForExport(saved));
+		ASSERT_EQ(2u, saved.EventCount);
+		const auto attack = std::find_if(saved.Events.begin(), saved.Events.begin() + saved.EventCount,
+			[](const auto& event) { return event.IsNoteOn(); });
+		ASSERT_NE(saved.Events.begin() + saved.EventCount, attack);
+		EXPECT_EQ(test.Expected, attack->sampleOffset);
+	}
+}
+
+TEST(MidiLoopTriggerCapture, NegativeDelayRotatesPhysicalHeldReleaseAndPreservesEqualTimeOrder)
+{
+	MidiLoop loop;
+	loop.StartRecord();
+	ASSERT_TRUE(loop.RecordEvent(MidiEvent::MakeNoteOn(0u, 0u, 36u, 100u)));
+	// LoopTake supplies the physical source-end release before normalization.
+	ASSERT_TRUE(loop.RecordEvent(MidiEvent::MakeNoteOff(999u, 0u, 36u, 17u)));
+	ASSERT_TRUE(loop.RecordEvent(MidiEvent{500u, 0xb0u, 1u, 11u}));
+	ASSERT_TRUE(loop.RecordEvent(MidiEvent{500u, 0xb0u, 1u, 22u}));
+	ASSERT_TRUE(loop.NormalizeTriggerCapture(1000u, -200));
+	loop.EndRecord(1000u);
+	MidiLoop::ExportState saved;
+	ASSERT_TRUE(loop.SnapshotForExport(saved));
+	ASSERT_EQ(4u, saved.EventCount);
+	EXPECT_EQ(300u, saved.Events[0].sampleOffset);
+	EXPECT_EQ(11u, saved.Events[0].data2);
+	EXPECT_EQ(300u, saved.Events[1].sampleOffset);
+	EXPECT_EQ(22u, saved.Events[1].data2);
+	EXPECT_TRUE(saved.Events[2].IsNoteOff());
+	EXPECT_EQ(799u, saved.Events[2].sampleOffset);
+	EXPECT_EQ(17u, saved.Events[2].data2);
+	EXPECT_TRUE(saved.Events[3].IsNoteOn());
+	EXPECT_EQ(800u, saved.Events[3].sampleOffset);
+	MidiLoopCapturingSink sink;
+	loop.ReadBlock(800u, 1000u, sink);
+	const auto release = std::find_if(sink.events.begin(), sink.events.end(),
+		[](const auto& event) { return event.IsNoteOff(); });
+	ASSERT_NE(sink.events.end(), release);
+	EXPECT_EQ(1799u, release->sampleOffset);
+}
+
+TEST(MidiLoopTriggerCapture, QuantisedCircularNoteUsesSameEditorAndPlaybackEndpoints)
+{
+	MidiLoop loop;
+	loop.StartRecord();
+	ASSERT_TRUE(loop.RecordEvent(MidiEvent::MakeNoteOn(100u, 0u, 36u, 100u)));
+	ASSERT_TRUE(loop.RecordEvent(MidiEvent::MakeNoteOff(300u, 0u, 36u)));
+	ASSERT_TRUE(loop.NormalizeTriggerCapture(1000u, -200));
+	loop.EndRecord(1000u);
+	MidiQuantisationSettings settings;
+	settings.Enabled = true;
+	settings.GrainSamps = 200u;
+	settings.Fraction = MidiQuantisationFraction::Whole;
+	ASSERT_TRUE(loop.SetQuantisation(settings));
+	MidiLoop::EditState state;
+	ASSERT_TRUE(loop.SnapshotForEdit(state));
+	const auto targets = midi::MidiGridTargets::Build(state);
+	ASSERT_EQ(1u, targets.Notes.size());
+	EXPECT_EQ(0u, targets.Notes[0].Start);
+	EXPECT_EQ(200u, targets.Notes[0].End);
+	EXPECT_LT(targets.Notes[0].Off, state.EventCount);
+	MidiLoopCapturingSink sink;
+	loop.ReadBlock(0u, 300u, sink);
+	ASSERT_EQ(2u, sink.events.size());
+	EXPECT_TRUE(sink.events[0].IsNoteOn());
+	EXPECT_EQ(0u, sink.events[0].sampleOffset);
+	EXPECT_TRUE(sink.events[1].IsNoteOff());
+	EXPECT_EQ(200u, sink.events[1].sampleOffset);
+	EXPECT_TRUE(midi::MidiEditOperations::RemoveNote(state, targets.Notes[0].On));
+	EXPECT_EQ(0u, state.EventCount);
+}
+
+TEST(MidiLoopTriggerCapture, CircularOverdubPreservesOneAttackAndPunchesBothSidesOfSeam)
+{
+	for (const auto rotation : {-200ll, 200ll})
+	for (const auto targetLength : {1000u, 2000u})
+	for (const bool punched : {false, true})
+	{
+		MidiLoop source;
+		source.StartRecord();
+		const auto onset = rotation < 0 ? 100u : 700u;
+		ASSERT_TRUE(source.RecordEvent(MidiEvent::MakeNoteOn(onset, 0u, 36u, 93u)));
+		ASSERT_TRUE(source.RecordEvent(MidiEvent::MakeNoteOff(onset + 200u, 0u, 36u)));
+		ASSERT_TRUE(source.NormalizeTriggerCapture(1000u, rotation));
+		source.EndRecord(1000u);
+		MidiLoop::ExportState saved;
+		ASSERT_TRUE(source.SnapshotForExport(saved));
+		const midi::MidiPunchWindow window{50u, 80u};
+		midi::MidiOverdubRenderParams params;
+		params.SourceEvents = saved.Events.data();
+		params.SourceEventCount = saved.EventCount;
+		params.SourceLoopLengthSamps = 1000u;
+		params.TargetLoopLengthSamps = targetLength;
+		params.PunchWindows = punched ? &window : nullptr;
+		params.PunchWindowCount = punched ? 1u : 0u;
+		std::array<MidiEvent, MidiLoop::DefaultCapacity> built;
+		const auto count = midi::BuildMidiOverdubBaseEvents(params, built.data(), built.size());
+		const auto notes = midi::MidiNote::ExtractSpans(built.data(), count, targetLength);
+		ASSERT_EQ(targetLength / 1000u + (punched ? 1u : 0u), notes.size());
+		std::uint32_t duration = 0u;
+		for (const auto& note : notes)
+		{
+			duration += note.DurationSamples;
+			EXPECT_NE(0u, note.StartSample); // Crossing a repeat cannot fabricate an attack.
+		}
+		EXPECT_EQ(200u * (targetLength / 1000u) - (punched ? 30u : 0u), duration);
+		// Final take normalization may rotate an already circular source pair.
+		MidiLoop target;
+		target.StartRecord();
+		for (std::size_t i = 0u; i < count; ++i) ASSERT_TRUE(target.RecordEvent(built[i]));
+		ASSERT_TRUE(target.NormalizeTriggerCapture(targetLength, 0));
+		target.EndRecord(targetLength);
+		MidiLoop::ExportState roundtrip;
+		ASSERT_TRUE(target.SnapshotForExport(roundtrip));
+		const auto restoredNotes = midi::MidiNote::ExtractSpans(roundtrip.Events.data(), roundtrip.EventCount, targetLength);
+		std::uint32_t restoredDuration = 0u;
+		for (const auto& note : restoredNotes) restoredDuration += note.DurationSamples;
+		EXPECT_EQ(duration, restoredDuration);
+	}
+}
+
+TEST(MidiLoopTriggerCapture, LoopTakeOverdubRebaseKeepsCircularDuration)
+{
+	auto source = MakeLoopTake("circular-source");
+	source->Record({}, "station", {0u}, {""});
+	source->Play(0u, 1000u, 0u);
+	const std::array events{
+		MidiEvent::MakeNoteOff(100u, 0u, 36u).WithFlags(MidiEvent::TriggerSeamEndpoint),
+		MidiEvent::MakeNoteOn(900u, 0u, 36u, 93u).WithFlags(MidiEvent::TriggerSeamEndpoint)};
+	source->GetMidiLoops()[0]->ReplaceRecordedEvents(events.data(), events.size(), 1000u);
+	auto target = MakeLoopTake("circular-target");
+	target->Overdub({}, "station", {0u}, {""}, source);
+	target->Play(0u, 1000u, 0u);
+	MidiLoop::ExportState saved;
+	ASSERT_TRUE(target->GetMidiLoops()[0]->SnapshotForExport(saved));
+	const auto notes = midi::MidiNote::ExtractSpans(saved.Events.data(), saved.EventCount, 1000u);
+	ASSERT_EQ(1u, notes.size());
+	EXPECT_EQ(900u, notes[0].StartSample);
+	EXPECT_EQ(200u, notes[0].DurationSamples);
+}
+
 TEST(MidiLoop, SnapshotForExportSkipsEventsOutsidePlayableWindow) {
 	MidiLoop loop;
 	loop.StartRecord();
@@ -703,7 +933,10 @@ static void CheckFirstMidiMasterBoundary(unsigned int configuredGrain, int stopA
 	auto clock = std::make_shared<Timer>();
 	station->SetClock(clock);
 	if (configuredGrain > 0u) clock->SetQuantisation(configuredGrain, Timer::QUANTISE_POWER);
-	clock->Tick(81280u, 0u);
+	clock->Tick(70000u, 0u);
+	station->BeginCaptureAudioBoundary(70000u, clock->SceneSamplePos(), clock->AbsoluteSamplePos());
+	clock->Tick(11280u, 0u);
+	station->BeginCaptureAudioBoundary(81280u, clock->SceneSamplePos(), clock->AbsoluteSamplePos());
 
 	io::UserConfig cfg = {};
 	const auto physicalLength = 164919u - 77732u;
@@ -722,6 +955,8 @@ static void CheckFirstMidiMasterBoundary(unsigned int configuredGrain, int stopA
 		MidiEvent::MakeNoteOn(95277u, 0u, 38u, 100u), "Keys", 95680u));
 
 	clock->Tick(static_cast<unsigned int>(164919 + stopAge - 81280), 0u);
+	station->BeginCaptureAudioBoundary(static_cast<std::uint32_t>(164919 + stopAge),
+		clock->SceneSamplePos(), clock->AbsoluteSamplePos());
 	actions::TriggerAction end;
 	end.ActionType = actions::TriggerAction::TRIGGER_REC_END;
 	end.TargetId = started.TargetId;
@@ -736,12 +971,16 @@ static void CheckFirstMidiMasterBoundary(unsigned int configuredGrain, int stopA
 	EXPECT_EQ(17545u, snare.sampleOffset);
 	const auto expectedLength = static_cast<unsigned long>(expectedTiming->GrainSamps)
 		* expectedTiming->LoopGrains;
+	const auto completionBoundary = 77732u + expectedLength + 4410u;
+	const auto stoppedBoundary = static_cast<unsigned int>(164919 + stopAge);
+	const auto activationDelay = (std::max)(publicationDelay,
+		completionBoundary > stoppedBoundary ? static_cast<unsigned int>(completionBoundary - stoppedBoundary) : 0u);
 	EXPECT_EQ(0ul, clock->SeedSourceLength());
 	MidiLoopCapturingOutputSink pendingOutput;
 	take->ReadMidiBlock(static_cast<std::uint32_t>(clock->SceneSamplePos()), 64u, pendingOutput);
 	EXPECT_TRUE(pendingOutput.events.empty());
 	const auto pendingPhase = take->MidiPlayIndex();
-	take->EndMultiPlay(publicationDelay);
+	take->EndMultiPlay(activationDelay);
 	EXPECT_EQ(pendingPhase, take->MidiPlayIndex());
 	if (replacement == 1u) clock->Clear();
 	if (replacement == 2u)
@@ -751,10 +990,13 @@ static void CheckFirstMidiMasterBoundary(unsigned int configuredGrain, int stopA
 		clock->SetMasterLoopSampleOffset(1234ul);
 	}
 	if (replacement == 3u) take->CancelCapture();
-	clock->Tick(publicationDelay, 0u);
+	clock->Tick(activationDelay, 0u);
+	const auto activationBoundary = stoppedBoundary + activationDelay;
+	station->BeginCaptureAudioBoundary(activationBoundary, clock->SceneSamplePos(), clock->AbsoluteSamplePos());
+	station->CompleteMidiIngressPump(activationBoundary);
 	const auto priorClockPhase = clock->SampOffset();
 	station->CommitChanges();
-	station->ApplyFirstMasterRecordingAtAudioBoundary(*clock);
+	station->ApplyFirstMasterRecordingAtAudioBoundary(*clock, activationBoundary);
 	if (replacement == 3u)
 	{
 		EXPECT_EQ(0ul, clock->SeedSourceLength());
@@ -766,7 +1008,7 @@ static void CheckFirstMidiMasterBoundary(unsigned int configuredGrain, int stopA
 	EXPECT_EQ(replacement == 0u ? expectedLength : (replacement == 2u ? 20000ul : 0ul),
 		clock->SeedSourceLength());
 	EXPECT_EQ(expectedLength, take->GetMidiLoops()[0]->LoopLengthSamps());
-	auto expectedPhase = (static_cast<long long>(physicalLength) - expectedLength + stopAge + publicationDelay)
+	auto expectedPhase = (static_cast<long long>(physicalLength) - expectedLength + stopAge + activationDelay)
 		% static_cast<long long>(expectedLength);
 	if (expectedPhase < 0) expectedPhase += expectedLength;
 	EXPECT_EQ(static_cast<unsigned long>(expectedPhase), take->MidiPlayIndex());
@@ -778,7 +1020,7 @@ static void CheckFirstMidiMasterBoundary(unsigned int configuredGrain, int stopA
 	clock->Tick(64u, 0u);
 	take->EndMultiPlay(64u);
 	const auto advanced = clock->SampOffset();
-	station->ApplyFirstMasterRecordingAtAudioBoundary(*clock);
+	station->ApplyFirstMasterRecordingAtAudioBoundary(*clock, activationBoundary + 64u);
 	EXPECT_EQ(advanced, clock->SampOffset());
 	if (replacement == 0u) EXPECT_EQ(advanced, take->MidiPlayIndex());
 }
@@ -789,6 +1031,106 @@ TEST(LoopTakeMidiTiming, MidiOnlyMasterUsesPressIntervalAndStopPhase)
 	for (const auto stopAge : { -55, 3017 })
 	for (const auto publicationDelay : { 0u, 4096u, 200000u })
 		CheckFirstMidiMasterBoundary(configuredGrain, stopAge, publicationDelay, 0u);
+}
+
+TEST(LoopTakeMidiTiming, PositivePredelayFirstMasterPersistsFinalQuantisationOrigin)
+{
+	constexpr std::uint32_t trigger = 77732u;
+	constexpr std::uint32_t rawLength = 87187u;
+	constexpr std::uint32_t delay = 3793u;
+	auto station = MakeStation("predelay-persisted-master");
+	station->SetVisible(true);
+	station->SetEnabled(true);
+	station->SetAllowedMidiChannels({1u});
+	station->SetGlobalMidiQuantState(io::JamFile::GlobalMidiQuantState::Mixed);
+	auto clock = std::make_shared<Timer>();
+	clock->SetQuantisation(2048u, Timer::QUANTISE_POWER);
+	station->SetClock(clock);
+	clock->Tick(70000u, 0u);
+	station->BeginCaptureAudioBoundary(70000u, clock->SceneSamplePos(), clock->AbsoluteSamplePos());
+	clock->Tick(11280u, 0u);
+	station->BeginCaptureAudioBoundary(81280u, clock->SceneSamplePos(), clock->AbsoluteSamplePos());
+	// A kick arrives just after the compensated downbeat, before the late pedal.
+	station->ObservePhysicalMidiForRecording(MidiEvent::MakeNoteOn(trigger - delay + 80u, 0u, 36u, 99u), "Keys");
+	station->ObservePhysicalMidiForRecording(MidiEvent::MakeNoteOff(trigger - delay + 280u, 0u, 36u), "Keys");
+	io::UserConfig config;
+	config.Audio.SampleRate = 44100u;
+	const auto inferred = config.DeduceLoopTiming(rawLength, 44100u);
+	ASSERT_TRUE(inferred);
+	const auto length = static_cast<std::uint32_t>(inferred->GrainSamps * inferred->LoopGrains);
+	ASSERT_NE(2048u, inferred->GrainSamps);
+	actions::TriggerAction start;
+	start.ActionType = actions::TriggerAction::TRIGGER_REC_START;
+	start.MidiSample = trigger;
+	start.PreDelayMs = 86.0;
+	start.MidiInputDevices = {"Keys"};
+	start.SetUserConfig(config);
+	const auto started = station->OnAction(start);
+	ASSERT_TRUE(started.IsEaten);
+	const auto take = station->GetLoopTakes().back();
+	MidiQuantisationSettings provisional;
+	provisional.Enabled = true;
+	provisional.GrainSamps = 2048u;
+	provisional.Fraction = MidiQuantisationFraction::Quarter;
+	take->SetMidiQuantisation(provisional);
+	actions::TriggerAction stop = start;
+	stop.ActionType = actions::TriggerAction::TRIGGER_REC_END;
+	stop.TargetId = started.TargetId;
+	stop.MidiSample = trigger + rawLength;
+	stop.SampleCount = rawLength;
+	ASSERT_TRUE(station->OnAction(stop).IsEaten);
+	station->CompleteMidiIngressPump(trigger + length + 4410u);
+	ASSERT_FALSE(take->MidiTriggerCapturePending());
+	station->CommitChanges();
+	const auto boundary = trigger + length * 2u + 1234u;
+	clock->Tick(boundary - 81280u, 0u);
+	station->BeginCaptureAudioBoundary(boundary, clock->SceneSamplePos(), clock->AbsoluteSamplePos());
+	station->ApplyFirstMasterRecordingAtAudioBoundary(*clock, boundary);
+	ASSERT_FALSE(take->FirstMasterActivationPending());
+	ASSERT_EQ(1u, take->GetMidiLoops().size());
+	const auto& loop = take->GetMidiLoops().front();
+	ASSERT_TRUE(loop->IsQuantisationActive());
+	MidiLoop::EditState original;
+	ASSERT_TRUE(loop->SnapshotForEdit(original));
+	ASSERT_EQ(2u, original.EventCount);
+	EXPECT_EQ(80u, original.Events[0].sampleOffset);
+	EXPECT_EQ(0u, original.QuantisationTransportStartSamps);
+	EXPECT_EQ(take->MidiPlayIndex(), clock->AbsoluteSamplePos() % length);
+	MidiEvent originalCooked;
+	ASSERT_TRUE(loop->TryGetPlaybackEvent(0u, originalCooked));
+	EXPECT_TRUE(originalCooked.IsNoteOn());
+	EXPECT_EQ(0u, originalCooked.sampleOffset);
+	LoopTake::MidiExportState saved;
+	ASSERT_TRUE(take->SnapshotMidiForExport(saved));
+	EXPECT_EQ(original.QuantisationTransportStartSamps, saved.QuantisationTransportStartSamps);
+	EXPECT_EQ(original.QuantisationTransportStartSamps, take->MidiQuantisationTransportStartSamps());
+	// Session MIDI state reconstructs the final grid without the trigger or rig.
+	auto restored = MakeLoopTake("predelay-restored-master");
+	restored->SetGlobalMidiQuantState(io::JamFile::GlobalMidiQuantState::Mixed);
+	ASSERT_TRUE(restored->RestoreMidiFromExport(saved));
+	const auto& restoredLoop = restored->GetMidiLoops().front();
+	MidiLoop::EditState reloaded;
+	ASSERT_TRUE(restoredLoop->SnapshotForEdit(reloaded));
+	EXPECT_EQ(original.QuantisationTransportStartSamps, reloaded.QuantisationTransportStartSamps);
+	ASSERT_EQ(original.EventCount, reloaded.EventCount);
+	for (std::size_t i = 0u; i < original.EventCount; ++i)
+	{
+		EXPECT_EQ(original.Events[i].sampleOffset, reloaded.Events[i].sampleOffset);
+		MidiEvent before, after;
+		ASSERT_TRUE(loop->TryGetPlaybackEvent(i, before));
+		ASSERT_TRUE(restoredLoop->TryGetPlaybackEvent(i, after));
+		EXPECT_EQ(before.sampleOffset, after.sampleOffset);
+		EXPECT_EQ(before.status, after.status);
+	}
+	MidiLoopCapturingOutputSink before, after;
+	take->ReadMidiBlock(boundary, length, before);
+	restored->ReadMidiBlock(boundary, length, after);
+	ASSERT_EQ(2u, before.events.size());
+	ASSERT_EQ(before.events.size(), after.events.size());
+	EXPECT_TRUE(before.events[0].event.IsNoteOn());
+	EXPECT_EQ(trigger + length * 3u - delay, before.events[0].event.sampleOffset);
+	for (std::size_t i = 0u; i < before.events.size(); ++i)
+		EXPECT_EQ(before.events[i].event.sampleOffset, after.events[i].event.sampleOffset);
 }
 
 TEST(LoopTakeMidiTiming, PendingFirstMasterHonoursCancellationAndReplacement)
@@ -808,9 +1150,13 @@ TEST(LoopTakeMidiTiming, PendingMasterQuantisesNextCompletion)
 	auto clock = std::make_shared<Timer>();
 	station->SetClock(clock);
 	io::UserConfig cfg{};
+	cfg.Audio.SampleRate = 44100u;
+	station->BeginCaptureAudioBoundary(70000u, 70000u, 0u);
+	station->ObservePhysicalMidiForRecording(MidiEvent::MakeNoteOff(70000u, 0u, 36u), "Keys");
 	actions::TriggerAction start;
 	start.ActionType = actions::TriggerAction::TRIGGER_REC_START;
 	start.MidiSample = 77732u;
+	start.PreDelayMs = 86.0;
 	start.MidiInputDevices = { "Keys" };
 	start.SetUserConfig(cfg);
 	const auto first = station->OnAction(start);
@@ -821,17 +1167,23 @@ TEST(LoopTakeMidiTiming, PendingMasterQuantisesNextCompletion)
 	end.MidiSample = 164919u;
 	end.SetUserConfig(cfg);
 	station->OnAction(end);
+	station->CompleteMidiIngressPump(170000u);
 	const auto reserved = clock->PendingRecordingSeedOnOwner();
 	ASSERT_TRUE(reserved);
+	EXPECT_EQ(77732u - 3793u, reserved->RecordOrigin);
+	station->BeginCaptureAudioBoundary(170000u, 170000u, 0u);
 	start.MidiSample = 170000u;
 	const auto second = station->OnAction(start);
 	const auto secondTake = station->GetLoopTakes().back();
 	ASSERT_EQ(second.TargetId, secondTake->Id());
-	EXPECT_FALSE(secondTake->MidiRecordStartSample());
+	EXPECT_EQ(170000u, secondTake->MidiRecordStartSample());
+	ASSERT_TRUE(secondTake->CaptureTiming().ContentTransportOrigin);
+	EXPECT_EQ(170000 - 77732, *secondTake->CaptureTiming().ContentTransportOrigin);
 	end.TargetId = second.TargetId;
 	end.SampleCount = 100000u;
 	end.MidiSample = 300000u;
 	station->OnAction(end);
+	station->CompleteMidiIngressPump(310000u);
 	Timer preview;
 	preview.SetQuantisation(reserved->GrainSamps, reserved->Type);
 	preview.SetSeedSourceLength(reserved->LengthSamps);
@@ -841,7 +1193,7 @@ TEST(LoopTakeMidiTiming, PendingMasterQuantisesNextCompletion)
 	EXPECT_EQ(reserved->Version, clock->PendingRecordingSeedOnOwner()->Version);
 	EXPECT_EQ(0ul, clock->SeedSourceLength());
 	station->CommitChanges();
-	station->ApplyFirstMasterRecordingAtAudioBoundary(*clock);
+	station->ApplyFirstMasterRecordingAtAudioBoundary(*clock, 310000u);
 	EXPECT_EQ(reserved->LengthSamps, clock->SeedSourceLength());
 	EXPECT_FALSE(clock->PendingRecordingSeedOnOwner());
 }

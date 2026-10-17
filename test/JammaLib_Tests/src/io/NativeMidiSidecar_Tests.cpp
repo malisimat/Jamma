@@ -86,7 +86,7 @@ TEST(NativeMidiSidecar, ExactEditorFlagsRoundTripAndLegacyEventsDefaultToRecorde
 	const auto old = io::NativeMidiSidecar::FromStream(oldBytes);
 	ASSERT_TRUE(old);
 	EXPECT_EQ(0u, old->Events[0].Flags); EXPECT_EQ(0u, old->Events[1].Flags);
-	stream.Events[0].Flags = 2u;
+	stream.Events[0].Flags = 4u;
 	std::stringstream invalid;
 	EXPECT_FALSE(io::NativeMidiSidecar::ToStream(stream, invalid));
 }

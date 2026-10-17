@@ -263,6 +263,7 @@ namespace engine
 		std::vector<unsigned int> InputChannels;
 		std::vector<std::string> MidiInputDevices;
 		unsigned int DebounceMs = 0u;
+		double PreDelayMs = 0.0;
 	};
 
 	enum TriggerState
@@ -327,7 +328,8 @@ namespace engine
 			unsigned int samps,
 			const std::optional<io::UserConfig>& cfg,
 			const std::optional<audio::AudioStreamParams>& params,
-			std::uint64_t rigRevision);
+			std::uint64_t rigRevision,
+			std::optional<std::uint32_t> blockStartSample = std::nullopt);
 		std::uint64_t UiInputDropCount() const noexcept { return _uiInputQueue.DroppedCount(); }
 		std::uint64_t JobInputDropCount() const noexcept { return _jobInputQueue.DroppedCount(); }
 		std::uint64_t StructuralCommandDropCount() const noexcept { return _structuralCommandDropCount.load(std::memory_order_acquire); }
@@ -463,6 +465,7 @@ namespace engine
 			std::uint64_t HistoryToken = 0u;
 			unsigned long SampleCount = 0u;
 			std::optional<std::uint32_t> MidiSample;
+			double PreDelayMs = 0.0;
 			bool ApplyToTargetTake = true;
 			bool ApplyToSourceTake = true;
 			bool ApplyToTargetAudio = true;
@@ -548,6 +551,8 @@ namespace engine
 		// readers only. Audio never loads it. Readers stop before Trigger teardown.
 		std::atomic<std::shared_ptr<const std::string>> _name;
 		double _debounceTimeMs;
+		// Immutable after construction; copied by audio into the bounded job handoff.
+		const double _preDelayMs;
 		std::vector<DualBinding> _activateBindings;
 		std::vector<DualBinding> _ditchBindings;
 		static constexpr std::uint16_t _DirectBindingIndex = (std::numeric_limits<std::uint16_t>::max)();
@@ -618,6 +623,9 @@ namespace engine
 		// (relaxed) gives a coherent snapshot without locks on the RT path.
 		std::atomic<unsigned long> _recordSampCount;
 		std::optional<std::uint32_t> _currentInputMidiSample;
+		// Audio-owned admission boundary. Untimestamped controls retain this value
+		// through debounce; their unknown physical press time is not sample-exact.
+		std::optional<std::uint32_t> _currentAudioBlockStartSample;
 		std::optional<std::uint32_t> _debouncedActivateMidiSample;
 		Time _lastActivateTime;
 		Time _lastDitchTime;

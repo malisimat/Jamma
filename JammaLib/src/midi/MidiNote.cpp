@@ -1,5 +1,6 @@
 #include "MidiNote.h"
 
+#include <algorithm>
 #include <array>
 
 using namespace midi;
@@ -36,6 +37,8 @@ std::vector<MidiNote> MidiNote::ExtractSpans(const MidiEvent* events,
 	spans.reserve(eventCount / 2u);
 
 	std::array<ActiveNote, MidiEvent::PairingSlotCount> activeNotes{};
+	std::vector<std::vector<const MidiEvent*>> crossingOn(MidiEvent::PairingSlotCount);
+	std::vector<std::vector<const MidiEvent*>> crossingOff(MidiEvent::PairingSlotCount);
 
 	for (std::size_t i = 0; i < eventCount; ++i)
 	{
@@ -46,6 +49,12 @@ std::vector<MidiNote> MidiNote::ExtractSpans(const MidiEvent* events,
 		const auto channel = ev.Channel();
 		const auto note = static_cast<std::uint8_t>(ev.data1 & 0x7F);
 		const auto slot = ev.PairingSlot();
+		if (ev.flags & MidiEvent::TriggerSeamEndpoint)
+		{
+			if (ev.IsNoteOn()) crossingOn[slot].push_back(&ev);
+			else if (ev.IsNoteOff()) crossingOff[slot].push_back(&ev);
+			continue;
+		}
 		auto& active = activeNotes[slot];
 
 		if (ev.IsNoteOn())
@@ -81,6 +90,16 @@ std::vector<MidiNote> MidiNote::ExtractSpans(const MidiEvent* events,
 		AddSpan(spans, active.StartSample, loopLengthSamps, channel, note, active.Velocity, active.Flags);
 	}
 
+	for (std::size_t slot = 0u; slot < crossingOn.size(); ++slot)
+		for (std::size_t i = 0u; i < (std::min)(crossingOn[slot].size(), crossingOff[slot].size()); ++i)
+		{
+			const auto& on = *crossingOn[slot][i];
+			const auto& off = *crossingOff[slot][i];
+			const auto duration = static_cast<std::uint64_t>(loopLengthSamps) - on.sampleOffset + off.sampleOffset;
+			if (duration == 0u || duration > loopLengthSamps) continue;
+			spans.push_back(MidiNote{on.sampleOffset, static_cast<std::uint32_t>(duration),
+				on.Channel(), on.data1, on.data2, on.flags});
+		}
 	return spans;
 }
 

@@ -11,7 +11,8 @@ bool RigCoordinator::_EquivalentActivation(const io::RigFile::Trigger& lhs,
 {
 	// Names are presentation. Control-section order has already been resolved
 	// by normalization into these independent, conflict-free lists.
-	return lhs.ControlBindings.Activate == rhs.ControlBindings.Activate &&
+	return lhs.PreDelayMs == rhs.PreDelayMs &&
+		lhs.ControlBindings.Activate == rhs.ControlBindings.Activate &&
 		lhs.ControlBindings.Ditch == rhs.ControlBindings.Ditch;
 }
 

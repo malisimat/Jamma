@@ -27,7 +27,7 @@ struct MidiOverdubActiveNote
 struct MidiOverdubSourceSpan
 {
 	std::uint32_t Start = 0u;
-	std::uint32_t End = 0u;
+	std::uint64_t End = 0u;
 	std::uint8_t Channel = 0u;
 	std::uint8_t Note = 0u;
 	std::uint8_t Velocity = 0u;
@@ -127,6 +127,19 @@ static std::size_t BuildSourceSpans(const MidiEvent* sourceEvents,
 {
 	if (!sourceEvents || !outSpans || outCapacity == 0u || sourceLoopLength == 0u)
 		return 0u;
+	if (std::any_of(sourceEvents, sourceEvents + sourceEventCount,
+		[](const auto& event) { return (event.flags & MidiEvent::TriggerSeamEndpoint) != 0u; }))
+	{
+		const auto notes = MidiNote::ExtractSpans(sourceEvents, sourceEventCount, sourceLoopLength);
+		const auto count = (std::min)(notes.size(), outCapacity);
+		for (std::size_t i = 0u; i < count; ++i)
+		{
+			const auto& note = notes[i];
+			outSpans[i] = {note.StartSample, static_cast<std::uint64_t>(note.StartSample) + note.DurationSamples,
+				note.Channel, note.Note, note.Velocity, note.Flags};
+		}
+		return count;
+	}
 
 	std::array<MidiOverdubActiveNote, MidiEvent::PairingSlotCount> activeNotes{};
 	std::size_t spanCount = 0u;
@@ -261,6 +274,41 @@ std::size_t midi::BuildMidiOverdubBaseEvents(const MidiOverdubRenderParams& para
 		for (std::size_t i = 0u; i < spanCount; ++i)
 		{
 			const auto& span = spans[i];
+			if (span.Flags & MidiEvent::TriggerSeamEndpoint)
+			{
+				// Keep one complete physical note across the target seam. Project
+				// punch windows onto the unwrapped span before baking endpoints.
+				const bool wrap = params.TargetLoopLengthSamps % params.SourceLoopLengthSamps == 0u;
+				const auto emit = [&](std::uint64_t first, std::uint64_t end)
+				{
+					if (first >= end) return true;
+					const auto onset = static_cast<std::uint32_t>(first % params.TargetLoopLengthSamps);
+					const auto release = static_cast<std::uint32_t>(wrap ? end % params.TargetLoopLengthSamps : end);
+					auto flags = static_cast<std::uint8_t>(span.Flags & ~MidiEvent::TriggerSeamEndpoint);
+					if (wrap && onset + end - first >= params.TargetLoopLengthSamps) flags |= MidiEvent::TriggerSeamEndpoint;
+					return AppendEvent(MidiEvent::MakeNoteOn(onset, span.Channel, span.Note, span.Velocity).WithFlags(flags), outEvents, outCapacity, outCount)
+						&& AppendEvent(MidiEvent::MakeNoteOff(release, span.Channel, span.Note).WithFlags(flags), outEvents, outCapacity, outCount);
+				};
+				const auto render = [&](std::uint64_t cursor, std::uint64_t stop)
+				{
+					for (unsigned int pass = 0u; pass < 2u && cursor < stop; ++pass)
+					for (std::size_t w = 0u; w < windowCount && cursor < stop; ++w)
+					{
+						const auto first = static_cast<std::uint64_t>(windows[w].Start) + static_cast<std::uint64_t>(pass) * params.TargetLoopLengthSamps;
+						const auto end = static_cast<std::uint64_t>(windows[w].End) + static_cast<std::uint64_t>(pass) * params.TargetLoopLengthSamps;
+						if (end <= cursor || first >= stop) continue;
+						if (first > cursor && !emit(cursor, (std::min)(first, stop))) return false;
+						cursor = (std::min)((std::max)(cursor, end), stop);
+					}
+					return emit(cursor, stop);
+				};
+				if (!wrap && repeatStart == 0u && !render(0u,
+					(std::min)(span.End - params.SourceLoopLengthSamps, static_cast<std::uint64_t>(params.TargetLoopLengthSamps)))) goto finalize;
+				const auto stop = wrap ? repeatStart + span.End
+					: (std::min)(repeatStart + span.End, static_cast<std::uint64_t>(params.TargetLoopLengthSamps));
+				if (!render(repeatStart + span.Start, stop)) goto finalize;
+				continue;
+			}
 			auto spanStart = repeatStart + span.Start;
 			auto spanEnd = repeatStart + span.End;
 			if (spanStart >= params.TargetLoopLengthSamps)

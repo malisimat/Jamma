@@ -7,6 +7,7 @@
 #include <string>
 #include <memory>
 #include <mutex>
+#include <limits>
 #include "ActionReceiver.h"
 #include "../base/BounceWriter.h"
 #include "Tweakable.h"
@@ -345,6 +346,16 @@ namespace engine
 			_playIndex.store(constants::MaxLoopFadeSamps + (index % length), std::memory_order_relaxed);
 		}
 		void EndRecording();
+		// Capture cursor uses signed physical storage coordinates. Configure before
+		// publication; cursor/coverage are callback-owned, completion is job-owned.
+		void ConfigureTriggerCapture(std::int64_t begin, bool requireAdc, bool requireBounce, bool requirePunchAdc = true) noexcept;
+		void SetTriggerCaptureCursor(std::int64_t cursor) noexcept;
+		bool SetTriggerCaptureLength(unsigned long length) noexcept;
+		bool TriggerCaptureComplete() const noexcept;
+		bool TriggerCaptureCoverageValid() const noexcept { return _triggerCaptureCoverageValid.load(std::memory_order_acquire); }
+		bool TriggerCaptureReady(unsigned long bodyPhase, unsigned int count) const noexcept;
+		void NormalizeTriggerCapture();
+
 		void Ditch();
 		void Overdub();
 		void PunchIn();
@@ -426,6 +437,18 @@ namespace engine
 		std::atomic<std::uint64_t> _minimumAudioSpectralRevision{ 0u };
         std::atomic<std::uint64_t> _minimumAudioSpectralGeneration{ 0u };
 
+		bool _triggerCapture = false;
+		bool _triggerCaptureRequiresAdc = true;
+		bool _triggerCaptureRequiresBounce = false;
+		bool _triggerPunchRequiresAdc = true;
+		std::int64_t _triggerCaptureBegin = 0;
+		std::int64_t _triggerCaptureCursor = 0; // callback only
+		std::int64_t _triggerAdcBlockThrough = 0; // callback only
+		std::atomic<bool> _triggerCaptureCoverageValid{ true };
+		std::atomic<std::int64_t> _triggerCaptureEnd{ (std::numeric_limits<std::int64_t>::max)() };
+		std::atomic<std::int64_t> _triggerAdcThrough{ 0 };
+		std::atomic<std::int64_t> _triggerBounceThrough{ 0 };
+		std::atomic<bool> _triggerCaptureNormalized{ false };
 		bool _visualUpdatesEnabled;
 		std::atomic<bool> _isPunchInActive;
 		// Current playback position, in samples. Advanced by ReadBlock().

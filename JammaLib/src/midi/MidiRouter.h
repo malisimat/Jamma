@@ -170,6 +170,7 @@ namespace midi
 			std::uint32_t expirySample) noexcept;
 
 	private:
+        friend class MidiRouterCaptureTestAccess;
 		static constexpr std::uint8_t UnresolvedMidiDeviceSlot = 0xffu;
 		static constexpr std::size_t MaxLiveMidiEventsPerDispatchPass = 1024u;
 		static constexpr std::uint64_t LiveInputConfigChannelMask = 0xffu;

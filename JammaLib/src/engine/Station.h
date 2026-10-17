@@ -137,7 +137,10 @@ namespace engine
 		virtual void EndMultiPlay(unsigned int numSamps) override;
 		// Fans one policy-neutral accepted correction out to every local take.
 		// Audio-thread only; called once at the top of the callback block.
-		void ApplyFirstMasterRecordingAtAudioBoundary(utils::Timer& clock) noexcept;
+		void ApplyFirstMasterRecordingAtAudioBoundary(utils::Timer& clock, std::uint32_t blockStartSample = 0u) noexcept;
+		void BeginCaptureAudioBoundary(std::uint32_t blockStartSample, std::uint64_t sceneSample, std::uint64_t absoluteSample,
+            std::optional<std::uint32_t> earliestPhysicalSample = std::nullopt) noexcept;
+		void CompleteMidiIngressPump(std::uint32_t deviceSample, bool overflow = false);
 		void ApplyAcceptedTimingCorrection(long long deltaSamps,
 			std::uint64_t generation, bool relocateMidi = false) noexcept;
 		void CaptureSceneAnchors(std::uint64_t sceneCoordinateSamps) noexcept;
@@ -624,6 +627,29 @@ namespace engine
 		std::uint32_t _lastSyntheticLiveMidiSample = 0u;
 		mutable std::mutex _liveHeldMidiMutex;
 		std::vector<std::pair<std::string, midi::MidiNoteSnapshot>> _liveHeldMidi;
+		struct RecentPhysicalMidi
+		{
+			midi::MidiEvent Event;
+			std::string Device;
+			std::uint8_t PriorDeviceVelocity = 0u;
+			std::uint8_t PriorAnyVelocity = 0u;
+			std::uint64_t Sequence = 0u;
+		};
+		// Structural/MIDI job owner; guarded with the existing held-state mutex.
+		std::vector<RecentPhysicalMidi> _recentPhysicalMidi;
+		std::vector<std::weak_ptr<LoopTake>> _midiCaptureTargets;
+		std::optional<std::uint32_t> _midiHistoryDroppedThroughSample;
+		std::uint64_t _physicalMidiSequence = 0u;
+		// Coherent correspondence: callback writes, structural owner reads via
+		// the existing Timer observation plus this device boundary publication.
+		std::atomic<std::uint32_t> _captureDeviceBoundary{ 0u };
+        std::atomic<std::uint64_t> _captureAbsoluteBoundary{ 0u };
+        std::atomic<std::uint32_t> _captureBoundaryRevision{ 0u };
+        std::atomic<std::uint32_t> _captureEarliestPhysicalSample{ 0u };
+        std::atomic<bool> _captureHistoryEpochKnown{ false };
+        std::atomic<bool> _midiFormatEpochPending{ true };
+        std::atomic<bool> _midiFormatEpochKnown{ false };
+        std::atomic<std::uint32_t> _midiFormatEpochSample{ 0u };
 		midi::MidiNoteSnapshot _anonymousLiveHeldMidi;
 		std::bitset<midi::MidiNote::TotalNoteSlots> _pendingLostLiveMidiNoteOffs;
 		// Audio publishes delivered live note-ons; job snapshots that revision for

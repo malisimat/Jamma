@@ -20,6 +20,7 @@ namespace constants
 	constexpr auto TWOPI = 6.283185307179586476925286766559;
 	const unsigned int MaxBlockSize = 4096u;
 	const unsigned int MaxLoopFadeSamps = 70000u;
+	constexpr unsigned int MaxTriggerPreDelayMs = 200u;
 	const unsigned long MaxLoopBufferSize = 40000000ul;
 	const unsigned int GrainSamps = 300u;
 	const unsigned int DefaultFadeSamps = 20u;

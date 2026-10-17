@@ -19,7 +19,7 @@ Rig files support multiple configured MIDI input devices. MIDI activation and di
   },
   "settings": {
     "loop": { "fadeSamps": 800, "seedGrainMinMs": 400, "seedGrainTargetMaxMs": 3000, "seedBpmMin": 80, "seedQuantisation": "power" },
-    "trigger": { "preDelaySamps": 400, "debounceMs": 280 },
+    "trigger": { "debounceMs": 280 },
     "midi": { "channelOverrideTriggers": false, "channelOverrideLive": true }
   },
   "triggers": [
@@ -57,3 +57,28 @@ Rig files support multiple configured MIDI input devices. MIDI activation and di
   - Velocity is ignored for trigger purposes.
 - **Matching**: Hardware names are matched exactly against MIDI input names; `default` selects the first unclaimed input. Startup logs report unavailable devices while retaining their configured selections.
 - **Overlap**: Controls and capture may use the same registry ID. Shared bindings may reach multiple triggers; within one trigger, the earliest defined binding wins and a later conflicting binding is discarded with a warning.
+
+## Trigger predelay
+
+Each trigger may specify signed fractional `preDelayMs` in `[-200, 200]`;
+missing values mean zero. Positive values put content zero earlier than the
+admitted trigger edge, so a coincident onset is that distance into the loop.
+Negative values wrap that onset into the loop tail. The active audio stream
+sample rate determines the rounded sample count, which is frozen at START and
+retained through STOP. Trigger-to-trigger duration and live MIDI timestamps do
+not change. Keyboard and serial edges without a coherent clock anchor use their
+admitting callback boundary; their unknown physical press time is not sample exact.
+
+A fixed 200 ms history reserve supplies earlier input independently of each
+trigger's setting. It is not a rig field or the default content adjustment.
+The final loop must be longer than the absolute adjustment and its selected
+history window; too-short captures fail rather than silently clamp timing.
+A positive adjustment admits up to 10 ms of additional earlier seam history,
+bounded by the same 200 ms reserve. This guard changes source admission, not
+content position or playback phase. Timing edits replace idle trigger instances
+through the existing rig transition; already active takes keep frozen timing.
+
+Legacy `settings.trigger.preDelaySamps: 0` is accepted with a deprecation warning
+and omitted on save. Nonzero legacy values require explicit per-trigger
+`preDelayMs`. Mixing that deprecated global field with per-trigger declarations
+is rejected. MIDI device timestamp-offset configuration is unsupported.

@@ -8,6 +8,7 @@
 #include "UserConfig.h"
 #include "../engine/Quantiser.h"
 #include <limits>
+#include <cmath>
 
 using namespace io;
 
@@ -58,6 +59,7 @@ std::optional<UserConfig> UserConfig::FromJson(Json::JsonPart json)
 
 			if (trigOpt.has_value())
 				cfg.Trigger = trigOpt.value();
+			else return std::nullopt;
 		}
 	}
 
@@ -224,14 +226,13 @@ std::optional<UserConfig::LoopSettings> UserConfig::LoopSettings::FromJson(Json:
 
 std::optional<UserConfig::TriggerSettings> UserConfig::TriggerSettings::FromJson(Json::JsonPart json)
 {
-	unsigned int preDelay = constants::DefaultPreDelaySamps;
 	unsigned int debounceMs = constants::DefaultDebounceMs;
 
 	auto iter = json.KeyValues.find("preDelaySamps");
 	if (iter != json.KeyValues.end())
 	{
-		if (json.KeyValues["preDelaySamps"].index() == 2)
-			preDelay = std::get<unsigned long>(json.KeyValues["preDelaySamps"]);
+		const auto legacy = std::get_if<unsigned long>(&iter->second);
+		if (!legacy || *legacy != 0ul) return std::nullopt;
 	}
 
 	iter = json.KeyValues.find("debounceMs");
@@ -242,7 +243,6 @@ std::optional<UserConfig::TriggerSettings> UserConfig::TriggerSettings::FromJson
 	}
 
 	TriggerSettings trig;
-	trig.PreDelaySamps = preDelay;
 	trig.DebounceMs = debounceMs;
 	return trig;
 }
@@ -389,11 +389,33 @@ std::optional<UserConfig::SerialConfig> UserConfig::SerialConfig::FromJson(Json:
 
 
 
-// How much to (further) delay input signal from ADC, in samples
-unsigned int UserConfig::AdcBufferDelay(unsigned int inLatency) const {
-	return inLatency > Trigger.PreDelaySamps + constants::MaxLoopFadeSamps ?
-		0 :
-		Trigger.PreDelaySamps + constants::MaxLoopFadeSamps - inLatency;
+// Checked conversion: milliseconds remain canonical until capture begins.
+std::optional<std::int32_t> UserConfig::TriggerPreDelaySamples(double milliseconds, unsigned int sampleRate) noexcept
+{
+	if (!std::isfinite(milliseconds) || milliseconds < -static_cast<double>(constants::MaxTriggerPreDelayMs) ||
+		milliseconds > constants::MaxTriggerPreDelayMs || sampleRate == 0u) return std::nullopt;
+	const auto samples = std::round(milliseconds * static_cast<double>(sampleRate) / 1000.0);
+	if (samples < (std::numeric_limits<std::int32_t>::min)() ||
+		samples > (std::numeric_limits<std::int32_t>::max)()) return std::nullopt;
+	const auto capacity = TriggerHistorySamples(sampleRate);
+	if (!capacity || std::abs(samples) > *capacity ||
+		samples < -static_cast<double>(constants::MaxLoopFadeSamps)) return std::nullopt;
+	return static_cast<std::int32_t>(samples);
+}
+
+std::optional<unsigned int> UserConfig::TriggerHistorySamples(unsigned int sampleRate) noexcept
+{
+	if (sampleRate == 0u) return std::nullopt;
+	const auto samples = std::ceil(constants::MaxTriggerPreDelayMs * static_cast<double>(sampleRate) / 1000.0);
+	// Both the signed storage cursor and its retained fade prefix must fit.
+	if (samples > (std::numeric_limits<std::int32_t>::max)() - constants::MaxLoopFadeSamps ||
+		samples + constants::MaxLoopFadeSamps >= constants::MaxLoopBufferSize) return std::nullopt;
+	return static_cast<unsigned int>(samples);
+}
+
+unsigned int UserConfig::AdcBufferDelay(unsigned int inLatency, unsigned int sampleRate) const {
+	const auto alignment = TriggerLoopAlignmentSamps(sampleRate);
+	return inLatency >= alignment ? 0u : alignment - inLatency;
 }
 
 // How long to continue recording after trigger to end loop recording, in samples
@@ -414,7 +436,7 @@ unsigned long UserConfig::LoopPlayPos(int error,
 	unsigned int outLatency) const {
 	auto loopStart = (unsigned long)constants::MaxLoopFadeSamps;
 	auto fadeSamps = 0u;// Loop.FadeSamps;
-	auto playPos = (loopStart - fadeSamps) + Trigger.PreDelaySamps + outLatency;
+	auto playPos = (loopStart - fadeSamps) + outLatency;
 	auto bufSize = loopLength + loopStart;
 	
 	if (loopLength > 0)
@@ -466,14 +488,15 @@ unsigned long UserConfig::LoopPlayPos(int error,
 	return playPos;
 }
 
-unsigned int UserConfig::TriggerLoopAlignmentSamps() const
+unsigned int UserConfig::TriggerLoopAlignmentSamps(unsigned int sampleRate) const
 {
-	return Trigger.PreDelaySamps + constants::MaxLoopFadeSamps;
+	const auto rate = sampleRate ? sampleRate : (Audio.SampleRate ? Audio.SampleRate : constants::DefaultSampleRate);
+	return constants::MaxLoopFadeSamps + TriggerHistorySamples(rate).value_or(0u);
 }
 
-long UserConfig::OverdubSourceReadOffset(unsigned int outLatency) const
+long UserConfig::OverdubSourceReadOffset(unsigned int outLatency, unsigned int sampleRate) const
 {
-	return -static_cast<long>(TriggerLoopAlignmentSamps() + outLatency);
+	return -static_cast<long>(TriggerLoopAlignmentSamps(sampleRate) + outLatency);
 }
 
 unsigned long UserConfig::OverdubPlayPos(int error, unsigned long loopLength) const

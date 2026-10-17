@@ -36,6 +36,7 @@ namespace actions
 		std::string SourceId;
 		unsigned long SampleCount;
 		std::optional<std::uint32_t> MidiSample;
+		double PreDelayMs = 0.0;
 		std::vector<unsigned int> InputChannels;
 		std::vector<std::string> MidiInputDevices;
 		std::shared_ptr<base::BounceWriter> OverdubWriter;

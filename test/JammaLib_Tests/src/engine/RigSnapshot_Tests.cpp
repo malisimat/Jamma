@@ -1609,3 +1609,24 @@ TEST_F(RigSnapshotTest, PresentationMoveSharesTopCapPositionAndReportsItsSettlin
  EXPECT_FLOAT_EQ(550.0f, station->PresentationModelPosition().X);
  EXPECT_FALSE(station->AdvancePresentationMove(0.05f));
 }
+
+TEST_F(RigSnapshotTest, PredelayEditRequiresTriggerReplacementAndAudioAcceptance)
+{
+	auto rig = EmptyRig();
+	rig.Triggers = { TriggerDescriptor("capture", std::nullopt) };
+	engine::RigCoordinator coordinator;
+	ASSERT_TRUE(coordinator.BuildInitial(rig, {}, {}, 0u, {}, engine::TriggerParams(), {}));
+	const auto previous = coordinator.Accepted()->Triggers.front().Instance;
+	rig.Triggers.front().PreDelayMs = -0.125;
+	ASSERT_EQ(engine::RigCoordinator::EditResult::Pending, coordinator.SubmitCandidate(rig));
+	const auto staged = coordinator.Staged();
+	ASSERT_TRUE(staged);
+	ASSERT_EQ(1u, staged->TriggerReplacementChecks.size());
+	EXPECT_EQ(previous, staged->TriggerReplacementChecks.front().AcceptedInstance);
+	EXPECT_NE(previous, staged->Triggers.front().Instance);
+	EXPECT_DOUBLE_EQ(-0.125, staged->Rig.Triggers.front().PreDelayMs);
+	EXPECT_EQ(engine::RigCoordinator::EditResult::TransitionRejected,
+		coordinator.CompleteTransition(staged->Revision, false, {}));
+	EXPECT_EQ(previous, coordinator.Accepted()->Triggers.front().Instance);
+	EXPECT_DOUBLE_EQ(0.0, coordinator.Accepted()->Rig.Triggers.front().PreDelayMs);
+}

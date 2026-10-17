@@ -61,6 +61,14 @@ public:
 			if (integer && *integer <= (std::numeric_limits<unsigned int>::max)()) { result = static_cast<unsigned int>(*integer); return true; }
 			return Error(path + "." + key, "Expected unsigned integer");
 		}
+		else if constexpr (std::is_same_v<T, double>)
+		{
+			if (const auto item = std::get_if<double>(value)) result = *item;
+			else if (const auto item = std::get_if<long>(value)) result = static_cast<double>(*item);
+			else if (const auto item = std::get_if<unsigned long>(value)) result = static_cast<double>(*item);
+			else return Error(path + "." + key, "Expected finite signed milliseconds");
+			return true;
+		}
 		else
 		{
 			const auto item = std::get_if<T>(value);
@@ -142,8 +150,9 @@ public:
 	}
 	bool ReadTrigger(const Json::JsonPart& part, const std::string& path, Trigger& trigger)
 	{
-		if (!Keys(part, path, {"id", "name", "target", "controls", "capture"}) ||
+		if (!Keys(part, path, {"id", "name", "target", "controls", "capture", "preDelayMs"}) ||
 			!Scalar(part, "id", path, trigger.Id) || !Scalar(part, "name", path, trigger.Name)) return false;
+		if (part.KeyValues.contains("preDelayMs") && !Scalar(part, "preDelayMs", path, trigger.PreDelayMs)) return false;
 		const auto target = Field(part, "target", path);
 		if (!target) return false;
 		if (const auto name = std::get_if<std::string>(target)) trigger.StationTarget = *name;
@@ -205,11 +214,22 @@ public:
 			!Scalar(*loop, "seedQuantisation", "$.settings.loop", quantisation)) return std::nullopt;
 		if (quantisation != "power" && quantisation != "multiple") { Error("$.settings.loop.seedQuantisation", "Expected power or multiple"); return std::nullopt; }
 		l.SeedUsesPowers = quantisation == "power";
-		if (!Keys(*trigger, "$.settings.trigger", {"preDelaySamps", "debounceMs"}) || !Scalar(*trigger, "preDelaySamps", "$.settings.trigger", rig.User.Trigger.PreDelaySamps) ||
+		if (!Keys(*trigger, "$.settings.trigger", {"preDelaySamps", "debounceMs"}) ||
 			!Scalar(*trigger, "debounceMs", "$.settings.trigger", rig.User.Trigger.DebounceMs)) return std::nullopt;
 		if (!Keys(*midiSettings, "$.settings.midi", {"channelOverrideTriggers", "channelOverrideLive"}) ||
 			!Scalar(*midiSettings, "channelOverrideTriggers", "$.settings.midi", rig.User.Midi.ChannelOverrideTriggers) ||
 			!Scalar(*midiSettings, "channelOverrideLive", "$.settings.midi", rig.User.Midi.ChannelOverrideLive)) return std::nullopt;
+		if (trigger->KeyValues.contains("preDelaySamps"))
+		{
+			unsigned int legacy = 0u;
+			if (!Scalar(*trigger, "preDelaySamps", "$.settings.trigger", legacy)) return std::nullopt;
+			if (legacy != 0u) { Error("$.settings.trigger.preDelaySamps", "Nonzero legacy predelay is unsupported; express signed preDelayMs on each relevant trigger"); return std::nullopt; }
+			const auto legacyTriggers = Array<Json::JsonPart>(Field(*root, "triggers", "$"), "$.triggers");
+			if (!legacyTriggers) return std::nullopt;
+			for (const auto& entry : *legacyTriggers)
+				if (entry.KeyValues.contains("preDelayMs")) { Error("$.settings.trigger.preDelaySamps", "Legacy global predelay conflicts with per-trigger preDelayMs; remove the deprecated global field"); return std::nullopt; }
+			Add(Output, Severity::Warning, "$.settings.trigger.preDelaySamps", "Deprecated zero predelay migrated to per-trigger default zero");
+		}
 		const auto midi = Array<Json::JsonPart>(Field(*devices, "midi", "$.devices"), "$.devices.midi");
 		const auto serial = Array<Json::JsonPart>(Field(*devices, "serial", "$.devices"), "$.devices.serial");
 		const auto triggers = Array<Json::JsonPart>(Field(*root, "triggers", "$"), "$.triggers");
@@ -280,8 +300,10 @@ std::optional<RigFile> RigFile::Normalize(const RigFile& rig, Diagnostics* diagn
 	if (!require(loop.SeedGrainMinMs > 0u, "$.settings.loop.seedGrainMinMs", "Minimum grain must be positive") ||
 		!require(loop.SeedGrainTargetMaxMs >= loop.SeedGrainMinMs, "$.settings.loop.seedGrainTargetMaxMs", "Maximum grain must be at least minimum grain") ||
 		!require(loop.SeedBpmMin > 0u, "$.settings.loop.seedBpmMin", "Minimum BPM must be positive") ||
-		!require(rig.User.Trigger.PreDelaySamps <= (std::numeric_limits<unsigned int>::max)() - constants::MaxLoopFadeSamps,
-			"$.settings.trigger.preDelaySamps", "Alignment sample count overflows")) return std::nullopt;
+		!require(rig.User.Trigger.PreDelaySamps == 0u,
+			"$.settings.trigger.preDelaySamps", "Nonzero legacy predelay is unsupported; express preDelayMs on each relevant trigger") ||
+		!require(UserConfig::TriggerHistorySamples(audio.SampleRate).has_value(),
+			"$.devices.audio.samplerate", "Trigger history capacity exceeds supported sample storage")) return std::nullopt;
 	std::unordered_set<std::string> registry{KeyboardDevice};
 	std::unordered_set<std::string> midiIds;
 	std::unordered_set<std::string> serialIds;
@@ -311,7 +333,9 @@ std::optional<RigFile> RigFile::Normalize(const RigFile& rig, Diagnostics* diagn
 	{
 		auto& trigger = candidate.Triggers[i];
 		const auto path = "$.triggers[" + std::to_string(i) + "]";
-		if (!require(Reader::ValidText(trigger.Id), path + ".id", "Trigger ID must be nonempty UTF-8 without NUL") ||
+		if (!require(UserConfig::TriggerPreDelaySamples(trigger.PreDelayMs, audio.SampleRate).has_value(),
+			path + ".preDelayMs", "Expected finite signed milliseconds in [-200,200] fitting the retained fade prefix and sample storage") ||
+			!require(Reader::ValidText(trigger.Id), path + ".id", "Trigger ID must be nonempty UTF-8 without NUL") ||
 			!require(triggerIds.insert(trigger.Id).second, path + ".id", "Trigger ID must be unique") ||
 			!require(Reader::ValidText(trigger.Name), path + ".name", "Trigger name must be nonempty UTF-8 without NUL") ||
 			!require(triggerNames.insert(trigger.Name).second, path + ".name", "Trigger name must be unique") ||
@@ -441,7 +465,7 @@ bool RigFile::ToJsonStream(const RigFile& rig, std::stringstream& ss, Diagnostic
 	const auto& l = user.Loop;
 	Part loop{{{"fadeSamps", integer(l.FadeSamps)}, {"seedGrainMinMs", integer(l.SeedGrainMinMs)}, {"seedGrainTargetMaxMs", integer(l.SeedGrainTargetMaxMs)},
 		{"seedBpmMin", integer(l.SeedBpmMin)}, {"seedQuantisation", std::string(l.SeedUsesPowers ? "power" : "multiple")}}};
-	Part triggerSettings{{{"preDelaySamps", integer(user.Trigger.PreDelaySamps)}, {"debounceMs", integer(user.Trigger.DebounceMs)}}};
+	Part triggerSettings{{{"debounceMs", integer(user.Trigger.DebounceMs)}}};
 	Part midiSettings{{{"channelOverrideTriggers", user.Midi.ChannelOverrideTriggers}, {"channelOverrideLive", user.Midi.ChannelOverrideLive}}};
 	Part devices{{{"audio", audio}, {"midi", array(std::move(midi))}, {"serial", array(std::move(serial))}}};
 	Part settings{{{"loop", loop}, {"trigger", triggerSettings}, {"midi", midiSettings}}};
@@ -452,11 +476,14 @@ bool RigFile::ToJsonStream(const RigFile& rig, std::stringstream& ss, Diagnostic
 		controls.KeyOrder = trigger.ControlBindings.First == Control::Activate ? std::vector<std::string>{"activate", "ditch"} : std::vector<std::string>{"ditch", "activate"};
 		std::vector<unsigned long> channels(trigger.CaptureInputs.Audio.begin(), trigger.CaptureInputs.Audio.end());
 		Part capture{{{"audio", array(std::move(channels))}, {"midi", array(trigger.CaptureInputs.Midi)}}};
-		triggers.push_back(Part{{{"id", trigger.Id}, {"name", trigger.Name},
+		triggers.push_back(Part{{{"id", trigger.Id}, {"name", trigger.Name}, {"preDelayMs", trigger.PreDelayMs},
 			{"target", trigger.StationTarget ? Json::JsonValue(*trigger.StationTarget) : Json::JsonValue(std::monostate{})}, {"controls", controls}, {"capture", capture}}});
 	}
 	Part root{{{"version", value.Version}, {"name", value.Name}, {"devices", devices}, {"settings", settings}, {"triggers", array(std::move(triggers))}}};
-	return Json::ToStream(root, ss) && ss.good();
+	const auto previousPrecision = ss.precision((std::numeric_limits<double>::max_digits10));
+	const auto written = Json::ToStream(root, ss) && ss.good();
+	ss.precision(previousPrecision);
+	return written;
 }
 
 bool RigFile::ToStream(RigFile rig, std::stringstream& ss)
@@ -647,7 +674,7 @@ const std::string RigFile::DefaultJson = R"json({
   },
   "settings":{
     "loop":{"fadeSamps":800,"seedGrainMinMs":400,"seedGrainTargetMaxMs":3000,"seedBpmMin":80,"seedQuantisation":"power"},
-    "trigger":{"preDelaySamps":400,"debounceMs":280},
+    "trigger":{"debounceMs":280},
     "midi":{"channelOverrideTriggers":false,"channelOverrideLive":true}
   },
   "triggers":[{

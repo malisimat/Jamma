@@ -261,6 +261,77 @@ void MidiLoop::EndRecord(std::uint32_t loopLengthSamps, std::uint32_t startGloba
 	_completedLengthForEditor.store(loopLengthSamps, std::memory_order_release);
 }
 
+bool MidiLoop::NormalizeTriggerCapture(std::uint32_t length, std::int64_t rotation)
+{
+	if (length == 0u || _state != MidiLoopState::Recording) return false;
+	rotation %= static_cast<std::int64_t>(length);
+	std::size_t count = 0u;
+	for (std::size_t i = 0u; i < _eventCount; ++i)
+		if (_events[i].sampleOffset < length) _events[count++] = _events[i];
+	_eventCount = count;
+	MidiNote::SortMidiEvents(_events.data(), count);
+	constexpr auto End = static_cast<std::uint16_t>(DefaultCapacity);
+	std::array<std::uint16_t, MidiEvent::PairingSlotCount> heads, tails;
+	std::array<std::uint16_t, DefaultCapacity> next;
+	std::vector<std::vector<std::size_t>> crossingOn(MidiEvent::PairingSlotCount), crossingOff(MidiEvent::PairingSlotCount);
+	heads.fill(End);
+	tails.fill(End);
+	const auto rotate = [length, rotation](std::uint32_t sample)
+	{
+		auto shifted = (static_cast<std::int64_t>(sample) + rotation) % length;
+		if (shifted < 0) shifted += length;
+		return static_cast<std::uint32_t>(shifted);
+	};
+	// Pair in physical time before wrapping. Discarded tail onsets cannot
+	// become attacks at content zero, and wrapped releases retain their pair.
+	for (std::size_t i = 0u; i < count; ++i)
+	{
+		auto& event = _events[i];
+		const bool wasCrossing = (event.flags & TriggerSeamEndpoint) != 0u;
+		event.flags &= static_cast<std::uint8_t>(~TriggerSeamEndpoint);
+		const auto slot = event.PairingSlot();
+		if (wasCrossing)
+		{
+			if (event.IsNoteOn()) crossingOn[slot].push_back(i);
+			else if (event.IsNoteOff()) crossingOff[slot].push_back(i);
+			continue;
+		}
+		if (event.IsNoteOn())
+		{
+			next[i] = End;
+			if (heads[slot] == End) heads[slot] = static_cast<std::uint16_t>(i);
+			else next[tails[slot]] = static_cast<std::uint16_t>(i);
+			tails[slot] = static_cast<std::uint16_t>(i);
+		}
+		else if (event.IsNoteOff() && heads[slot] != End)
+		{
+			const auto on = heads[slot];
+			heads[slot] = next[on];
+			if (rotate(_events[on].sampleOffset) > rotate(event.sampleOffset))
+			{
+				_events[on].flags |= TriggerSeamEndpoint;
+				event.flags |= TriggerSeamEndpoint;
+			}
+		}
+	}
+	for (std::size_t slot = 0u; slot < crossingOn.size(); ++slot)
+		for (std::size_t i = 0u; i < (std::min)(crossingOn[slot].size(), crossingOff[slot].size()); ++i)
+		{
+			auto& on = _events[crossingOn[slot][i]];
+			auto& off = _events[crossingOff[slot][i]];
+			if (rotate(on.sampleOffset) >= rotate(off.sampleOffset))
+			{
+				on.flags |= TriggerSeamEndpoint;
+				off.flags |= TriggerSeamEndpoint;
+			}
+		}
+	for (std::size_t i = 0u; i < count; ++i)
+		_events[i].sampleOffset = rotate(_events[i].sampleOffset);
+	MidiNote::SortMidiEvents(_events.data(), count);
+	++_revision;
+	return true;
+}
+
 void MidiLoop::Reset() noexcept
 {
 	_completedLengthForEditor.store(0u, std::memory_order_release);
@@ -1148,6 +1219,7 @@ void MidiLoop::ClassifyUnmatchedStarts(PlaybackSnapshot& snapshot) noexcept
 		const auto slot = event.PairingSlot();
 		if (event.IsNoteOn())
 		{
+			if (event.flags & TriggerSeamEndpoint) continue;
 			const auto index = static_cast<std::uint16_t>(i);
 			next[i] = End;
 			if (heads[slot] == End) heads[slot] = index;
@@ -1155,7 +1227,7 @@ void MidiLoop::ClassifyUnmatchedStarts(PlaybackSnapshot& snapshot) noexcept
 			tails[slot] = index;
 			snapshot.RawUnmatchedStarts[i] = 1u;
 		}
-		else if (event.IsNoteOff() && heads[slot] != End)
+		else if (event.IsNoteOff() && !(event.flags & TriggerSeamEndpoint) && heads[slot] != End)
 		{
 			const auto index = heads[slot];
 			snapshot.RawUnmatchedStarts[index] = 0u;
@@ -1181,6 +1253,8 @@ bool MidiLoop::MergePlaybackSeamNotes(PlaybackSnapshot& snapshot)
 	std::vector<Span> spans;
 	spans.reserve(count / 2u);
 	std::array<std::vector<std::size_t>, MidiEvent::PairingSlotCount> pending;
+	std::vector<std::vector<std::size_t>> crossing(MidiEvent::PairingSlotCount);
+	std::vector<std::vector<std::size_t>> crossingReleases(MidiEvent::PairingSlotCount);
 	std::array<std::size_t, MidiEvent::PairingSlotCount> read{};
 	const auto& grid = snapshot.Quantisation;
 	for (std::size_t i = 0; i < count; ++i)
@@ -1199,9 +1273,12 @@ bool MidiLoop::MergePlaybackSeamNotes(PlaybackSnapshot& snapshot)
 				start = origin + MidiQuantisation::BoundarySampleAt(cell,
 					grid.GridInterval(), grid.GridDivisions()) - transport + grid.PhaseOffsetSamps;
 			}
-			pending[slot].push_back(spans.size());
+			if (event.flags & TriggerSeamEndpoint) crossing[slot].push_back(spans.size());
+			else pending[slot].push_back(spans.size());
 			spans.push_back({ i, count, spans.size(), start, start });
 		}
+		else if (event.IsNoteOff() && (event.flags & TriggerSeamEndpoint))
+			crossingReleases[slot].push_back(i);
 		else if (event.IsNoteOff() && read[slot] < pending[slot].size())
 		{
 			auto& span = spans[pending[slot][read[slot]++]];
@@ -1210,6 +1287,14 @@ bool MidiLoop::MergePlaybackSeamNotes(PlaybackSnapshot& snapshot)
 				- snapshot.Raw[span.On].sampleOffset;
 		}
 	}
+	for (std::size_t slot = 0u; slot < crossing.size(); ++slot)
+		for (std::size_t i = 0u; i < (std::min)(crossing[slot].size(), crossingReleases[slot].size()); ++i)
+		{
+			auto& span = spans[crossing[slot][i]];
+			span.Off = crossingReleases[slot][i];
+			span.End = span.Start + length + static_cast<std::int64_t>(snapshot.Raw[span.Off].sampleOffset)
+				- snapshot.Raw[span.On].sampleOffset;
+		}
 	auto find = [&spans](std::size_t index, std::int64_t& shift)
 	{
 		shift = 0;
@@ -1296,6 +1381,23 @@ bool MidiLoop::MergePlaybackSeamNotes(PlaybackSnapshot& snapshot)
 		}
 	}
 	bool merged = false;
+	for (std::size_t i = 0u; i < spans.size(); ++i)
+	{
+		const auto& span = spans[i];
+		if (!(snapshot.Raw[span.On].flags & TriggerSeamEndpoint) || span.Off == count) continue;
+		const auto start = ((span.Start % length) + length) % length;
+		const auto duration = span.End - span.Start;
+		snapshot.Quantised[span.On].sampleOffset = static_cast<std::uint32_t>(start);
+		snapshot.Quantised[span.Off].sampleOffset = static_cast<std::uint32_t>((start + duration) % length);
+		if (start + duration < length)
+		{
+			snapshot.Quantised[span.On].flags &= static_cast<std::uint8_t>(~TriggerSeamEndpoint);
+			snapshot.Quantised[span.Off].flags &= static_cast<std::uint8_t>(~TriggerSeamEndpoint);
+		}
+		snapshot.QuantisedUnmatchedStarts[span.On] = start + duration >= length ? MergedContinuation : 0u;
+		snapshot.QuantisedContinuationRoots[span.On] = static_cast<std::uint16_t>(i + 1u);
+		merged = true;
+	}
 	for (std::size_t i = 0; i < spans.size(); ++i)
 	{
 		std::int64_t shift;

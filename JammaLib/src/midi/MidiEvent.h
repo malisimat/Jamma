@@ -23,6 +23,8 @@ namespace midi
 		std::uint8_t  flags = 0u; // Jamma metadata, never sent as a MIDI byte
 
 		static constexpr std::uint8_t ExactTiming = 1u;
+		// Baked circular endpoint pairing, persisted with normalized trigger notes.
+		static constexpr std::uint8_t TriggerSeamEndpoint = 2u;
 		// One slot per (timing class, channel, note).
 		static constexpr std::size_t PairingSlotCount = 2u * 16u * 128u;
 		constexpr bool HasExactTiming() const noexcept { return (flags & ExactTiming) != 0u; }

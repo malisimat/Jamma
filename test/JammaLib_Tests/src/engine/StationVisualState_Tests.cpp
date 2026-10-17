@@ -61,13 +61,14 @@ TEST(StationVisualState, RecordingEndRemainsVisibleUntilTheTakeFinishes)
 	EXPECT_EQ(engine::LoopTake::STATE_PLAYINGRECORDING, station->GetLoopTakes()[0]->TakeState());
 }
 
-TEST(StationVisualState, MidiOnlyRecordingFinishesImmediatelyWithAnAudioTailConfigured)
+TEST(StationVisualState, MidiOnlyRecordingFinishesAfterMidiCoverageWithoutAudioTailDelay)
 {
 	auto station = MakeStation("station");
 	station->SetAllowedMidiChannels({ 1 });
 	io::UserConfig config{};
 	ASSERT_GT(config.EndRecordingSamps(0), 0u);
 	auto start = MakeTriggerAction(TriggerAction::TRIGGER_REC_START);
+	start.MidiSample = 0u;
 	start.MidiInputDevices = { "Keys" };
 	const auto started = station->OnAction(start);
 	station->CommitChanges();
@@ -77,9 +78,13 @@ TEST(StationVisualState, MidiOnlyRecordingFinishesImmediatelyWithAnAudioTailConf
 	ASSERT_FALSE(take->GetMidiLoops().empty());
 
 	auto end = MakeTriggerAction(TriggerAction::TRIGGER_REC_END, 64u);
+	end.MidiSample = 64u;
 	end.TargetId = started.TargetId;
 	end.SetUserConfig(config);
 	station->OnAction(end);
+	EXPECT_TRUE(take->MidiTriggerCapturePending());
+	station->CompleteMidiIngressPump(64u + 4410u);
+	EXPECT_FALSE(take->MidiTriggerCapturePending());
 
 	EXPECT_EQ(engine::LoopTake::STATE_PLAYING, take->TakeState());
 	EXPECT_EQ(StationVisualState::STATIONSTATE_DEFAULT, station->GetVisualState());
@@ -90,13 +95,14 @@ TEST(StationVisualState, MidiOnlyRecordingFinishesImmediatelyWithAnAudioTailConf
 	}
 }
 
-TEST(StationVisualState, MixedRecordingPreservesAudioTailAndFinalizesMidiImmediately)
+TEST(StationVisualState, MixedRecordingPreservesAudioTailAfterMidiCoverageFinishes)
 {
 	auto station = MakeStation("station");
 	station->SetAllowedMidiChannels({ 1 });
 	io::UserConfig config{};
 	auto start = MakeTriggerAction(TriggerAction::TRIGGER_REC_START);
 	start.InputChannels = { 0u };
+	start.MidiSample = 0u;
 	start.MidiInputDevices = { "Keys" };
 	const auto started = station->OnAction(start);
 	station->CommitChanges();
@@ -106,9 +112,13 @@ TEST(StationVisualState, MixedRecordingPreservesAudioTailAndFinalizesMidiImmedia
 	ASSERT_FALSE(take->GetMidiLoops().empty());
 
 	auto end = MakeTriggerAction(TriggerAction::TRIGGER_REC_END, 64u);
+	end.MidiSample = 64u;
 	end.TargetId = started.TargetId;
 	end.SetUserConfig(config);
 	station->OnAction(end);
+	EXPECT_TRUE(take->MidiTriggerCapturePending());
+	station->CompleteMidiIngressPump(64u + 4410u);
+	EXPECT_FALSE(take->MidiTriggerCapturePending());
 
 	EXPECT_EQ(engine::LoopTake::STATE_PLAYINGRECORDING, take->TakeState());
 	EXPECT_EQ(StationVisualState::STATIONSTATE_ENDRECORDING, station->GetVisualState());
@@ -193,7 +203,7 @@ TEST(StationVisualState, AbsentTargetEndDoesNotInventARecordingTail)
 	EXPECT_EQ(StationVisualState::STATIONSTATE_DEFAULT, station->GetVisualState());
 }
 
-TEST(StationVisualState, FirstRecordingSeedsAnUninitialisedClock)
+TEST(StationVisualState, FirstRecordingReservesGeometryForAudioBoundaryActivation)
 {
 	auto station = MakeStation("station");
 	auto clock = std::make_shared<utils::Timer>();
@@ -220,9 +230,12 @@ TEST(StationVisualState, FirstRecordingSeedsAnUninitialisedClock)
 	end.SetAudioParams(stream);
 	const auto endResult = station->OnAction(end);
 	ASSERT_TRUE(endResult.IsEaten);
-	EXPECT_EQ(expected->GrainSamps, clock->QuantiseSamps());
+	EXPECT_EQ(0ul, clock->SeedSourceLength());
+	const auto seed = clock->PendingRecordingSeedOnOwner();
+	ASSERT_TRUE(seed);
+	EXPECT_EQ(expected->GrainSamps, seed->GrainSamps);
 	EXPECT_EQ(static_cast<unsigned long>(expected->GrainSamps) * expected->LoopGrains,
-		clock->SeedSourceLength());
+		seed->LengthSamps);
 }
 
 TEST(StationVisualState, OverdubAndPunchInTrackTheirOwnTransitions)

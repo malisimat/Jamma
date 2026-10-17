@@ -66,6 +66,7 @@ namespace io
 			std::optional<std::string> StationTarget;
 			Controls ControlBindings;
 			Capture CaptureInputs;
+			double PreDelayMs = 0.0; // Signed content origin adjustment; frozen per capture.
 			bool operator==(const Trigger&) const = default;
 		};
 

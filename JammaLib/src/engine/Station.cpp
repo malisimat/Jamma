@@ -1763,7 +1763,7 @@ void Station::EndMultiPlay(unsigned int numSamps)
 	}
 }
 
-void Station::ApplyFirstMasterRecordingAtAudioBoundary(utils::Timer& clock) noexcept
+void Station::ApplyFirstMasterRecordingAtAudioBoundary(utils::Timer& clock, std::uint32_t blockStartSample) noexcept
 {
 	if (MembershipRemoving()) return;
 	auto request = _firstMasterRecording.borrow();
@@ -1785,27 +1785,53 @@ void Station::ApplyFirstMasterRecordingAtAudioBoundary(utils::Timer& clock) noex
 	}
 	// A completed take may not have reached the published station membership yet.
 	if (!present || take->HasPendingTriggerCapture() || take->TakeState() != LoopTake::STATE_PLAYING) return;
-	// Trigger stamps and SceneSamplePos share the wrapping device-sample ruler.
+	// Trigger stamps are device samples; Scene/transport are separate rulers.
 	// A timestamp may be just ahead of this boundary; preserve that signed age.
-	const auto elapsed = static_cast<std::int32_t>(
-		static_cast<std::uint32_t>(clock.SceneSamplePos()) - request->Timing.RecordOrigin);
+	const auto rawOrigin = take->CaptureTiming().TriggerSample.value_or(
+		request->Timing.RecordOrigin + static_cast<std::uint32_t>(take->CaptureTiming().DelaySamps));
+	const auto elapsed = static_cast<std::int32_t>(blockStartSample - rawOrigin);
 	auto phase = static_cast<std::int64_t>(elapsed) % request->Timing.LengthSamps;
 	if (phase < 0) phase += request->Timing.LengthSamps;
 	if (!take->ActivateFirstMasterMidiAtAudioBoundary(static_cast<unsigned long>(phase),
-		request->Timing.RecordOrigin)) return;
+		rawOrigin)) return;
 	const bool installMaster = clock.RecordingSeedReadyAtAudioBoundary(request->Timing.Version)
 		&& clock.SeedSourceLength() == 0ul;
 	if (installMaster)
 	{
 		clock.SetQuantisation(request->Timing.GrainSamps, request->Timing.Type);
 		clock.SetSeedSourceLength(request->Timing.LengthSamps);
-		clock.SetMasterLoopSampleOffset(static_cast<unsigned long>(phase));
+		// This take establishes master zero at its compensated content origin.
+		clock.SetMasterLoopSampleOffset(take->MidiPlayIndex());
 	}
 	_firstMasterRecordingScene.store(clock.SceneSamplePos(), std::memory_order_relaxed);
-	_firstMasterRecordingPhase.store(static_cast<unsigned long>(phase), std::memory_order_relaxed);
+	_firstMasterRecordingPhase.store(take->MidiPlayIndex(), std::memory_order_relaxed);
 	_firstMasterRecordingStatus.store(installMaster ? 1u : 2u, std::memory_order_relaxed);
 	clock.ConsumeRecordingSeedAtAudioBoundary(request->Timing.Version);
 	_firstMasterRecordingConsumed.store(request->Timing.Version, std::memory_order_release);
+}
+
+void Station::BeginCaptureAudioBoundary(std::uint32_t blockStartSample,
+    std::uint64_t sceneSample, std::uint64_t absoluteSample,
+    std::optional<std::uint32_t> earliestPhysicalSample) noexcept
+{
+    if (earliestPhysicalSample)
+    {
+        _captureEarliestPhysicalSample.store(*earliestPhysicalSample, std::memory_order_relaxed);
+        _captureHistoryEpochKnown.store(true, std::memory_order_release);
+    }
+    if (_midiFormatEpochPending.exchange(false, std::memory_order_acq_rel))
+    {
+        _midiFormatEpochSample.store(blockStartSample, std::memory_order_relaxed);
+        _midiFormatEpochKnown.store(true, std::memory_order_release);
+    }
+    _captureBoundaryRevision.fetch_add(1u, std::memory_order_seq_cst);
+    _captureAbsoluteBoundary.store(absoluteSample, std::memory_order_seq_cst);
+    _captureDeviceBoundary.store(blockStartSample, std::memory_order_seq_cst);
+    _captureBoundaryRevision.fetch_add(1u, std::memory_order_seq_cst);
+    auto state = _BorrowAudioState();
+    if (!state) return;
+    for (const auto& take : state->OwnedLoopTakes)
+        if (take) take->BeginCaptureAudioBoundary(blockStartSample, sceneSample, absoluteSample);
 }
 
 void Station::ApplyAcceptedTimingCorrection(long long deltaSamps,
@@ -1915,18 +1941,7 @@ void Station::EndMultiWrite(unsigned int numSamps,
 	{
 		if (take)
 		{
-			if (take->IsArmed() && take->NumRecordedSamps() == 0ul)
-			{
-				take->CaptureFirstRecordBlockSceneAtAudioBoundary(
-					_clock ? _clock->SceneSamplePos() : 0u);
-				if (_clock && _clock->SeedSourceLength() > 0ul)
-				{
-					const auto start = static_cast<std::int64_t>(_clock->AbsoluteSamplePos())
-						+ static_cast<std::int64_t>(TransportOffsetSamps());
-					take->CaptureMidiTransportStartAtAudioBoundary(
-						start < 0 ? 0ull : static_cast<std::uint64_t>(start));
-				}
-			}
+
 			take->EndMultiWrite(numSamps, updateIndex, source);
 		}
 	}
@@ -2098,38 +2113,127 @@ ActionResult Station::OnAction(TriggerAction action)
 		recordingClock->SetSeedSourceLength(pendingSeed->LengthSamps);
 	}
 	const auto pendingElapsed = pendingSeed ? static_cast<std::int32_t>(
-		static_cast<std::uint32_t>(_clock->SceneSamplePos()) - pendingSeed->RecordOrigin) : 0;
+		_captureDeviceBoundary.load(std::memory_order_acquire) - pendingSeed->RecordOrigin) : 0;
 	const auto transportStart = static_cast<std::int64_t>(pendingSeed ?
 		(static_cast<std::uint64_t>((std::max)(0, pendingElapsed))) :
 		(_clock ? _clock->AbsoluteSamplePos() : 0ul))
 		+ static_cast<std::int64_t>(TransportOffsetSamps());
 	const auto transportStartSamps = transportStart < 0 ? 0ull :
 		static_cast<std::uint64_t>(transportStart);
+    auto resolveCaptureTiming = [&]() -> std::optional<TriggerCaptureTiming> {
+        const auto rate = _ResolveSampleRate(action.GetUserConfig(), action.GetAudioParams());
+        const auto delay = io::UserConfig::TriggerPreDelaySamples(action.PreDelayMs, rate);
+        const auto capacity = io::UserConfig::TriggerHistorySamples(rate);
+        if (!delay || !capacity) return std::nullopt;
+        TriggerCaptureTiming timing;
+        timing.TriggerSample = action.MidiSample.value_or(_captureDeviceBoundary.load(std::memory_order_acquire));
+        timing.DelaySamps = *delay;
+        if (_midiFormatEpochKnown.load(std::memory_order_acquire))
+        {
+            bool observed = false;
+            for (unsigned int attempt = 0u; attempt < 4u; ++attempt)
+            {
+                const auto before = _captureBoundaryRevision.load(std::memory_order_seq_cst);
+                if (before & 1u) continue;
+                const auto device = _captureDeviceBoundary.load(std::memory_order_seq_cst);
+                const auto absolute = _captureAbsoluteBoundary.load(std::memory_order_seq_cst);
+                const auto after = _captureBoundaryRevision.load(std::memory_order_seq_cst);
+                if (before != after) continue;
+                const auto transportAbsolute = pendingSeed
+                    ? midi::MidiSampleDelta(device, pendingSeed->RecordOrigin)
+                    : static_cast<std::int64_t>(absolute);
+                timing.ContentTransportOrigin = transportAbsolute
+                    - midi::MidiSampleDelta(device, *timing.TriggerSample) - timing.DelaySamps;
+                observed = true;
+                break;
+            }
+            if (!observed) return std::nullopt;
+        }
+        timing.CapacitySamps = *capacity;
+        auto inputLatency = action.GetAudioParams() ? action.GetAudioParams()->InputLatency : 0u;
+        if (inputLatency == 0u && action.GetUserConfig()) inputLatency = action.GetUserConfig()->Audio.LatencyIn;
+        timing.SourceAgeSamps = (std::max)(inputLatency, constants::MaxLoopFadeSamps + *capacity);
+        if (timing.SourceAgeSamps > static_cast<unsigned int>((std::numeric_limits<std::int32_t>::max)()))
+            return std::nullopt;
+        const auto guard = static_cast<std::uint32_t>((static_cast<std::uint64_t>(rate) * 10u + 999u) / 1000u);
+        timing.SeamSamps = *delay > 0 ? (std::min)(*capacity, static_cast<unsigned int>(*delay) + guard) : 0u;
+        if (!action.InputChannels.empty() && _captureHistoryEpochKnown.load(std::memory_order_acquire) &&
+            midi::MidiSampleDelta(*timing.TriggerSample - timing.SeamSamps,
+                _captureEarliestPhysicalSample.load(std::memory_order_relaxed)) < 0)
+        {
+            std::cout << "[Audio] Capture rejected: requested trigger history predates the active stream\n";
+            return std::nullopt;
+        }
+        if (!action.MidiInputDevices.empty() && _midiFormatEpochKnown.load(std::memory_order_acquire) &&
+            midi::MidiSampleDelta(*timing.TriggerSample - timing.SeamSamps,
+                _midiFormatEpochSample.load(std::memory_order_relaxed)) < 0)
+        {
+            std::cout << "[MIDI] Capture rejected: requested history predates the active format\n";
+            return std::nullopt;
+        }
+        if (!action.MidiInputDevices.empty() && _midiFormatEpochKnown.load(std::memory_order_acquire) &&
+            midi::MidiSampleDelta(_captureDeviceBoundary.load(std::memory_order_acquire), *timing.TriggerSample) > static_cast<std::int64_t>(rate))
+        {
+            std::cout << "[MIDI] Capture rejected: trigger activation exceeded one-second grace\n";
+            return std::nullopt;
+        }
+        return timing;
+    };
 	switch (action.ActionType)
 	{
 	case TriggerAction::TRIGGER_REC_START:
 	{
 		auto midiInputChannels = resolveMidiRecordChannels();
-		std::vector<std::pair<std::string, MidiNoteSnapshot>> heldSnapshot;
-		if (!midiInputChannels.empty())
-		{
-			std::scoped_lock lock(_liveHeldMidiMutex);
-			heldSnapshot = _liveHeldMidi;
-		}
-		auto newLoopTake = AddTake();
-		// Before a master clock exists, MIDI timestamps provide the actual press
-		// origin. The take may reach the audio snapshot much later.
-		const auto midiRecordStart = action.MidiSample && _clock &&
-			recordingClock->SeedSourceLength() == 0ul
-			? action.MidiSample : std::nullopt;
-		newLoopTake->Record(action.InputChannels,
-			Name(),
-			midiInputChannels,
-			action.MidiInputDevices,
-			std::move(heldSnapshot),
-			transportStartSamps,
-			midiRecordStart);
-		if (pendingSeed && !newLoopTake->HasTriggerAudioCapture() && !IsRemote())
+        const auto resolvedTiming = resolveCaptureTiming();
+        if (!resolvedTiming) return ActionResult::NoAction();
+        const auto timing = *resolvedTiming;
+        const auto earliest = *timing.TriggerSample - timing.SeamSamps;
+        std::vector<std::pair<std::string, MidiNoteSnapshot>> heldSnapshot;
+        std::vector<RecentPhysicalMidi> replay;
+        if (!midiInputChannels.empty())
+        {
+            std::scoped_lock lock(_liveHeldMidiMutex);
+            // Admission includes one second of structural/debounce grace. Missing
+            // retained events fail explicitly, never substitute a held attack.
+            if (_midiHistoryDroppedThroughSample &&
+                midi::MidiSampleDelta(*_midiHistoryDroppedThroughSample, earliest) >= 0)
+            {
+                std::cout << "[MIDI] Capture rejected: physical history overflow\n";
+                return ActionResult::NoAction();
+            }
+            heldSnapshot = _liveHeldMidi;
+            for (auto it = _recentPhysicalMidi.rbegin(); it != _recentPhysicalMidi.rend(); ++it)
+            {
+                if (midi::MidiSampleDelta(it->Event.sampleOffset, earliest) < 0) continue;
+                replay.push_back(*it);
+                const auto channel = it->Event.Channel();
+                const auto note = it->Event.data1;
+                auto restore = [&](const std::string& device, std::uint8_t velocity) {
+                    auto found = std::find_if(heldSnapshot.begin(), heldSnapshot.end(),
+                        [&](const auto& item) { return item.first == device; });
+                    if (found == heldSnapshot.end()) return;
+                    if (velocity) found->second.Set(channel, note, velocity);
+                    else found->second.Clear(channel, note);
+                };
+                restore("", it->PriorAnyVelocity);
+                if (!it->Device.empty()) restore(it->Device, it->PriorDeviceVelocity);
+            }
+        }
+        std::stable_sort(replay.begin(), replay.end(), [earliest](const auto& a, const auto& b) {
+            const auto left = midi::MidiSampleDelta(a.Event.sampleOffset, earliest);
+            const auto right = midi::MidiSampleDelta(b.Event.sampleOffset, earliest);
+            if (left != right) return left < right;
+            if (a.Device != b.Device) return a.Device < b.Device;
+            return a.Sequence < b.Sequence;
+        });
+        auto newLoopTake = AddTake();
+        newLoopTake->ConfigureTriggerCapture(timing);
+        newLoopTake->Record(action.InputChannels, Name(), midiInputChannels,
+            action.MidiInputDevices, std::move(heldSnapshot), transportStartSamps, timing.TriggerSample);
+        for (const auto& entry : replay)
+            newLoopTake->RecordMidiEvent(entry.Event, entry.Device, *timing.TriggerSample);
+        if (!midiInputChannels.empty()) _midiCaptureTargets.push_back(newLoopTake);
+		if (pendingSeed && !IsRemote())
 			newLoopTake->SetMidiBaseGrid(static_cast<std::uint32_t>(pendingSeed->LengthSamps),
 				static_cast<std::uint32_t>(pendingSeed->LengthSamps / pendingSeed->GrainSamps));
 		res.SourceId = "";
@@ -2196,8 +2300,14 @@ ActionResult Station::OnAction(TriggerAction action)
 					auto previewClock = std::make_shared<utils::Timer>();
 					_TrySeedClockFromFirstLoop(previewClock, loopLength, cfg, streamParams, loopTake.value()->Id());
 					loopLength = previewClock->SeedSourceLength();
+                    if (!loopTake.value()->AdmitTriggerCaptureLength(loopLength))
+                    {
+                        _DitchLoopTake(loopTake.value());
+                        return ActionResult::NoAction();
+                    }
 					firstSeed = _clock->ReserveRecordingSeedOnOwner({ 0u, previewClock->QuantiseSamps(),
-						loopLength, previewClock->Quantisation(), *loopTake.value()->MidiRecordStartSample() });
+						loopLength, previewClock->Quantisation(), *loopTake.value()->MidiRecordStartSample()
+                            - static_cast<std::uint32_t>(loopTake.value()->CaptureTiming().DelaySamps) });
 					if (firstSeed && !IsRemote())
 						loopTake.value()->SetMidiBaseGrid(static_cast<std::uint32_t>(loopLength),
 							static_cast<std::uint32_t>(loopLength / firstSeed->GrainSamps));
@@ -2205,7 +2315,7 @@ ActionResult Station::OnAction(TriggerAction action)
 					if (loopLength > 0ul)
 					{
 						const auto elapsed = static_cast<std::int32_t>(static_cast<std::uint32_t>(
-							_clock->SceneSamplePos()) - *loopTake.value()->MidiRecordStartSample());
+							_captureDeviceBoundary.load(std::memory_order_acquire)) - *loopTake.value()->MidiRecordStartSample());
 						auto phase = static_cast<std::int64_t>(elapsed) % loopLength;
 						if (phase < 0) phase += loopLength;
 						midiInitialPhase = static_cast<std::uint32_t>(phase);
@@ -2213,9 +2323,31 @@ ActionResult Station::OnAction(TriggerAction action)
 				}
 				else
 				{
-					_TrySeedClockFromFirstLoop(_clock, loopLength, cfg, streamParams,
-						loopTake.has_value() ? loopTake.value()->Id() : "none");
-					loopLength = _clock->SeedSourceLength();
+                    auto previewClock = std::make_shared<utils::Timer>();
+                    _TrySeedClockFromFirstLoop(previewClock, loopLength, cfg, streamParams,
+                        loopTake.has_value() ? loopTake.value()->Id() : "none");
+                    loopLength = previewClock->SeedSourceLength();
+                    if (loopTake && !loopTake.value()->AdmitTriggerCaptureLength(loopLength))
+                    {
+                        _DitchLoopTake(loopTake.value());
+                        return ActionResult::NoAction();
+                    }
+                    if (loopTake)
+                    {
+                        const auto origin = loopTake.value()->CaptureTiming().TriggerSample.value_or(
+                            _captureDeviceBoundary.load(std::memory_order_acquire));
+                        firstSeed = _clock->ReserveRecordingSeedOnOwner({ 0u, previewClock->QuantiseSamps(),
+                            loopLength, previewClock->Quantisation(), origin
+                                - static_cast<std::uint32_t>(loopTake.value()->CaptureTiming().DelaySamps) });
+                        if (firstSeed && !IsRemote())
+                            loopTake.value()->SetMidiBaseGrid(static_cast<std::uint32_t>(loopLength),
+                                static_cast<std::uint32_t>(loopLength / firstSeed->GrainSamps));
+                    }
+                    else
+                    {
+                        _clock->SetQuantisation(previewClock->QuantiseSamps(), previewClock->Quantisation());
+                        _clock->SetSeedSourceLength(loopLength);
+                    }
 				}
 			}
 			auto playPos = cfg.has_value() ?
@@ -2225,9 +2357,16 @@ ActionResult Station::OnAction(TriggerAction action)
 				cfg.value().EndRecordingSamps(errorSamps) :
 				0;
 
+            if (loopTake && !loopTake.value()->AdmitTriggerCaptureLength(loopLength))
+            {
+                _DitchLoopTake(loopTake.value());
+                return ActionResult::NoAction();
+            }
 			if (loopTake.has_value())
 			{
-				const auto midiBefore = loopTake.value()->MidiPlayIndex();
+                loopTake.value()->SetTriggerCaptureStop(action.MidiSample.value_or(
+                    _captureDeviceBoundary.load(std::memory_order_acquire)));
+                const auto midiBefore = loopTake.value()->MidiPlayIndex();
 				const auto midiPlayErrorSamps = midiInitialPhase ? static_cast<int>(*midiInitialPhase) : errorSamps;
 				loopTake.value()->Play(playPos, loopLength, endRecordSamps, midiPlayErrorSamps, static_cast<bool>(firstSeed));
 				if (firstSeed)
@@ -2266,9 +2405,18 @@ ActionResult Station::OnAction(TriggerAction action)
 	{
 		auto midiInputChannels = resolveMidiRecordChannels();
 		auto sourceLoopTake = _loopTakes.empty() ? std::shared_ptr<LoopTake>() : _loopTakes.back();
-		auto sourceId = sourceLoopTake ? sourceLoopTake->Id() : "";
+        auto sourceId = sourceLoopTake ? sourceLoopTake->Id() : "";
+        if (sourceLoopTake && !midiInputChannels.empty() && !sourceLoopTake->GetMidiLoops().empty()
+            && !sourceLoopTake->HasMidiDevicePhaseObservation())
+        {
+            std::cout << "[MIDI] Overdub rejected: source has no coherent device phase observation\n";
+            return ActionResult::NoAction();
+        }
 
-		auto newLoopTake = AddTake();
+        auto newLoopTake = AddTake();
+        const auto timing = resolveCaptureTiming();
+        if (!timing) return ActionResult::NoAction();
+        newLoopTake->ConfigureTriggerCapture(*timing);
 		newLoopTake->Overdub(action.InputChannels,
 			Name(),
 			midiInputChannels,
@@ -2276,6 +2424,7 @@ ActionResult Station::OnAction(TriggerAction action)
 			sourceLoopTake,
 			transportStartSamps);
 		newLoopTake->SetActiveBounce(sourceLoopTake, action.OverdubWriter);
+        if (!midiInputChannels.empty()) _midiCaptureTargets.push_back(newLoopTake);
 
 		res.SourceId = sourceId;
 		res.TargetId = newLoopTake->Id();
@@ -2318,9 +2467,14 @@ ActionResult Station::OnAction(TriggerAction action)
 				}
 				else
 				{
-					_TrySeedClockFromFirstLoop(_clock, action.SampleCount, cfg, streamParams,
-						loopTake.has_value() ? loopTake.value()->Id() : "none");
-					loopLength = _clock->SeedSourceLength();
+                    auto previewClock = std::make_shared<utils::Timer>();
+                    _TrySeedClockFromFirstLoop(previewClock, action.SampleCount, cfg, streamParams,
+                        loopTake.has_value() ? loopTake.value()->Id() : "none");
+                    loopLength = previewClock->SeedSourceLength();
+                    if (loopTake && !loopTake.value()->AdmitTriggerCaptureLength(loopLength))
+                    { _DitchLoopTake(loopTake.value()); return ActionResult::NoAction(); }
+                    _clock->SetQuantisation(previewClock->QuantiseSamps(), previewClock->Quantisation());
+                    _clock->SetSeedSourceLength(loopLength);
 				}
 			}
 			auto outLatency = streamParams.has_value() ?
@@ -2345,7 +2499,10 @@ ActionResult Station::OnAction(TriggerAction action)
 
 			if (loopTake.has_value())
 			{
-				loopTake.value()->Play(playPos, loopLength, endRecordSamps, errorSamps);
+                if (!loopTake.value()->AdmitTriggerCaptureLength(loopLength))
+                { _DitchLoopTake(loopTake.value()); return ActionResult::NoAction(); }
+                loopTake.value()->SetTriggerCaptureStop(action.MidiSample.value_or(_captureDeviceBoundary.load(std::memory_order_acquire)));
+                loopTake.value()->Play(playPos, loopLength, endRecordSamps, errorSamps, false, outLatency);
 			}
 			completedLength = loopLength;
 			completedErrorSamps = static_cast<long long>(requestedLength) - static_cast<long long>(loopLength);
@@ -2367,7 +2524,7 @@ ActionResult Station::OnAction(TriggerAction action)
 		}
 
 		if (action.ApplyToTargetTake && loopTake.has_value())
-			loopTake.value()->PunchIn(action.ApplyToTargetAudio, action.ApplyToTargetMidi);
+			loopTake.value()->PunchIn(action.ApplyToTargetAudio, action.ApplyToTargetMidi, action.MidiSample);
 
 		if (action.ApplyToSourceTake)
 		{
@@ -2388,7 +2545,7 @@ ActionResult Station::OnAction(TriggerAction action)
 		}
 
 		if (action.ApplyToTargetTake && loopTake.has_value())
-			loopTake.value()->PunchOut(action.ApplyToTargetAudio, action.ApplyToTargetMidi);
+			loopTake.value()->PunchOut(action.ApplyToTargetAudio, action.ApplyToTargetMidi, action.MidiSample);
 
 		if (action.ApplyToSourceTake)
 		{
@@ -2572,6 +2729,8 @@ void Station::Reset()
 	{
 		std::scoped_lock lock(_liveHeldMidiMutex);
 		_liveHeldMidi.clear();
+        _recentPhysicalMidi.clear();
+        _midiHistoryDroppedThroughSample.reset();
 		_anonymousLiveHeldMidi = {};
 		_pendingLostLiveMidiNoteOffs.reset();
 	}
@@ -2918,6 +3077,14 @@ bool Station::ReconfigureVstFormat(float sampleRate, unsigned int blockSize)
 
 void Station::SetSampleRate(float sampleRate)
 {
+    if (_sampleRate != sampleRate)
+    {
+        std::scoped_lock lock(_liveHeldMidiMutex);
+        _recentPhysicalMidi.clear();
+        _midiHistoryDroppedThroughSample.reset();
+        _midiFormatEpochKnown.store(false, std::memory_order_release);
+        _midiFormatEpochPending.store(true, std::memory_order_release);
+    }
 	_sampleRate = sampleRate;
 	for (auto& take : _loopTakes)
 		take->SetSampleRate(sampleRate);
@@ -3075,7 +3242,10 @@ void Station::OnBounce(unsigned int numSamps,
 	if (0u == outLatency)
 		outLatency = config.Audio.LatencyOut;
 
-	auto sourceOffset = config.OverdubSourceReadOffset(outLatency);
+	const auto sampleRate = params.has_value() ? params->SampleRate : config.Audio.SampleRate;
+	const auto inputLatency = params.has_value() && params->InputLatency != 0u ? params->InputLatency : config.Audio.LatencyIn;
+	const auto sourceAge = (std::max)(inputLatency, config.TriggerLoopAlignmentSamps(sampleRate));
+	const auto sourceOffset = -static_cast<long>(sourceAge + outLatency);
 	auto state = _BorrowAudioState();
 	if (!state)
 		return;
@@ -3230,41 +3400,74 @@ bool Station::_TryEnqueueSyntheticMidi(SyntheticMidi entry) noexcept
 
 void Station::ObservePhysicalMidiForRecording(const MidiEvent& event, const std::string& deviceName)
 {
-	if (MembershipRemoving()) return;
-	const auto channelAllowed = AcceptsLiveMidiChannel(event.Channel());
+    if (MembershipRemoving()) return;
+    if (!event.IsNoteOn() && !event.IsNoteOff()) return;
+    if (event.IsNoteOn() && !AcceptsLiveMidiChannel(event.Channel())) return;
+    {
+        const auto channel = event.Channel();
+        const auto note = static_cast<std::uint8_t>(event.data1 & 0x7Fu);
+        const auto slot = midi::MidiNote::NoteSlot(channel, note);
+        std::scoped_lock lock(_liveHeldMidiMutex);
+        auto upsert = [&](const std::string& key) {
+            auto it = std::find_if(_liveHeldMidi.begin(), _liveHeldMidi.end(),
+                [&](const auto& item) { return item.first == key; });
+            if (it == _liveHeldMidi.end())
+            {
+                _liveHeldMidi.push_back({key, MidiNoteSnapshot{}});
+                it = std::prev(_liveHeldMidi.end());
+            }
+            const auto prior = it->second.Velocity[slot];
+            if (event.IsNoteOn()) it->second.Set(channel, note, event.data2);
+            else it->second.Clear(channel, note);
+            return prior;
+        };
+        const auto priorAny = upsert("");
+        const auto priorDevice = deviceName.empty() ? priorAny : upsert(deviceName);
+        if (deviceName.empty())
+        {
+            if (event.IsNoteOn()) _anonymousLiveHeldMidi.Set(channel, note, event.data2);
+            else _anonymousLiveHeldMidi.Clear(channel, note);
+        }
+        _recentPhysicalMidi.push_back({event, deviceName, priorDevice, priorAny, ++_physicalMidiSequence});
+        // Capacity plus one second of activation grace, at the active format.
+        // Scan all entries: endpoints are drained separately, not in time order.
+        const auto retained = static_cast<std::int64_t>(_sampleRate * 1.2f);
+        auto drop = [&](const RecentPhysicalMidi& item) {
+            if (!_midiHistoryDroppedThroughSample || midi::MidiSampleDelta(item.Event.sampleOffset,
+                *_midiHistoryDroppedThroughSample) > 0)
+                _midiHistoryDroppedThroughSample = item.Event.sampleOffset;
+        };
+        std::erase_if(_recentPhysicalMidi, [&](const auto& item) {
+            if (midi::MidiSampleDelta(event.sampleOffset, item.Event.sampleOffset) <= retained) return false;
+            drop(item);
+            return true;
+        });
+        if (_recentPhysicalMidi.size() > 4096u)
+        {
+            drop(_recentPhysicalMidi.front());
+            _recentPhysicalMidi.erase(_recentPhysicalMidi.begin());
+        }
+    }
+    // Job targets cover START -> publication. This is the only ordinary recording
+    // delivery; published callback topology is deliberately not the capture list.
+    for (auto& target : _midiCaptureTargets)
+        if (auto take = target.lock(); take && !take->IsCaptureCancelled())
+            take->RecordMidiEvent(event, deviceName, event.sampleOffset);
+}
 
-	if (event.IsNoteOn() || event.IsNoteOff())
-	{
-		if (event.IsNoteOn() && !channelAllowed)
-			return;
-
-		const auto channel = event.Channel();
-		const auto note = static_cast<std::uint8_t>(event.data1 & 0x7F);
-		std::scoped_lock lock(_liveHeldMidiMutex);
-		if (MembershipRemoving()) return;
-		// Keep one snapshot for "any device" and one snapshot for the actual device.
-		// The empty-name snapshot is for device-agnostic recording; the named one is
-		// for real MIDI input from a specific device.
-		auto upsert = [&](const std::string& key) {
-			auto it = std::find_if(_liveHeldMidi.begin(), _liveHeldMidi.end(),
-				[&key](const auto& p) { return p.first == key; });
-			if (it == _liveHeldMidi.end())
-			{
-				_liveHeldMidi.push_back({ key, MidiNoteSnapshot{} });
-				it = std::prev(_liveHeldMidi.end());
-			}
-			if (event.IsNoteOn()) it->second.Set(channel, note, event.data2);
-			else it->second.Clear(channel, note);
-		};
-		upsert("");
-		if (!deviceName.empty())
-			upsert(deviceName);
-		else if (event.IsNoteOn())
-			_anonymousLiveHeldMidi.Set(channel, note, event.data2);
-		else
-			_anonymousLiveHeldMidi.Clear(channel, note);
-	}
-
+void Station::CompleteMidiIngressPump(std::uint32_t deviceSample, bool overflow)
+{
+    std::erase_if(_midiCaptureTargets, [&](auto& target) {
+        auto take = target.lock();
+        if (!take || take->IsCaptureCancelled()) return true;
+        if (overflow)
+        {
+            take->CancelCapture(true);
+            return true;
+        }
+        take->CompleteMidiIngressPump(deviceSample);
+        return !take->MidiTriggerCapturePending() && !take->IsArmed();
+    });
 }
 
 void Station::FlushLiveHeldMidiNotes() noexcept
@@ -3277,6 +3480,8 @@ void Station::FlushLiveHeldMidiNotes() noexcept
 		if (liveHeld != _liveHeldMidi.end())
 			heldSnapshot = liveHeld->second;
 		_liveHeldMidi.clear();
+        _recentPhysicalMidi.clear();
+        _midiHistoryDroppedThroughSample.reset();
 		_anonymousLiveHeldMidi = {};
 	}
 

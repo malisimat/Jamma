@@ -361,9 +361,11 @@ TEST_F(SceneRoutingIntegrationTest, ConfiguredMissingMidiSourceCreatesEditableTa
     io::UserConfig cfg;
     cfg.Trigger = { 0u, 0u };
     base::Action action;
+	std::uint32_t boundary = 0u;
     auto press = [&](bool down) {
         trigger->QueueExternalControlAction(true, down, action);
-        trigger->OnTick(utils::Timer::GetTime(), 0u, cfg, std::nullopt);
+		station->BeginCaptureAudioBoundary(boundary, boundary, boundary);
+        trigger->OnTick(utils::Timer::GetTime(), 0u, cfg, std::nullopt, 0u, boundary);
         trigger->ProcessStructuralActionsOnJob(cfg, std::nullopt);
         trigger->OnTick(utils::Timer::GetTime(), 0u, cfg, std::nullopt);
         scene->CommitChanges();
@@ -376,7 +378,9 @@ TEST_F(SceneRoutingIntegrationTest, ConfiguredMissingMidiSourceCreatesEditableTa
     ASSERT_EQ(1u, take->GetMidiLoops().size());
     EXPECT_EQ(std::vector<std::string>{ "missing" }, take->MidiLoopDevices());
     trigger->OnTick(utils::Timer::GetTime(), 256u, cfg, std::nullopt);
+	boundary += 256u;
     press(true); press(false);
+	station->CompleteMidiIngressPump(boundary + 4410u);
     EXPECT_EQ(engine::TRIGSTATE_DEFAULT, trigger->GetState());
     EXPECT_GT(take->GetMidiLoops().front()->CompletedLengthForEditor(), 0u);
     EXPECT_EQ(0u, take->GetMidiLoops().front()->EventCount());

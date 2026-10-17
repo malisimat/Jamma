@@ -232,10 +232,19 @@ void MidiQuantisation::BuildQuantisedPlaybackEvents(const MidiEvent* src,
 	// exactly the same boundaries, even when interval/divisions is fractional.
 	std::array<std::vector<std::int64_t>, MidiEvent::PairingSlotCount> pendingDeltas;
 	std::array<std::size_t, MidiEvent::PairingSlotCount> pendingReadIndex{};
+	std::vector<std::vector<std::size_t>> crossingOns(MidiEvent::PairingSlotCount);
+	std::vector<std::vector<std::size_t>> crossingOffs(MidiEvent::PairingSlotCount);
 	for (std::size_t i = 0u; i < eventCount; ++i)
 	{
 		auto event = src[i];
 		const auto slot = event.PairingSlot();
+		if (event.flags & MidiEvent::TriggerSeamEndpoint)
+		{
+			if (event.IsNoteOn()) crossingOns[slot].push_back(i);
+			else if (event.IsNoteOff()) crossingOffs[slot].push_back(i);
+			dst[i] = event;
+			continue;
+		}
 		if (event.IsNoteOn() && event.HasExactTiming())
 			pendingDeltas[slot].push_back(0);
 		else if (event.IsNoteOn() && event.sampleOffset < loopLength)
@@ -264,5 +273,27 @@ void MidiQuantisation::BuildQuantisedPlaybackEvents(const MidiEvent* src,
 		}
 		dst[i] = event;
 	}
+	for (std::size_t slot = 0u; slot < crossingOns.size(); ++slot)
+		for (std::size_t i = 0u; i < (std::min)(crossingOns[slot].size(), crossingOffs[slot].size()); ++i)
+		{
+			const auto on = crossingOns[slot][i], off = crossingOffs[slot][i];
+			auto start = static_cast<std::int64_t>(src[on].sampleOffset);
+			if (!src[on].HasExactTiming())
+			{
+				const auto transport = static_cast<std::int64_t>(transportStartSamps);
+				const auto index = NearestBoundaryIndex(transport + start - origin, interval, divisions);
+				start = origin + BoundarySampleAt(index, interval, divisions) - transport + settings.PhaseOffsetSamps;
+			}
+			start = (start % loopLength + loopLength) % loopLength;
+			const auto duration = static_cast<std::int64_t>(loopLength) - src[on].sampleOffset + src[off].sampleOffset;
+			dst[on].sampleOffset = static_cast<std::uint32_t>(start);
+			dst[off].sampleOffset = static_cast<std::uint32_t>((start + duration) % loopLength);
+			// The baked circular identity describes the current endpoint layout.
+			if (start + duration < loopLength)
+			{
+				dst[on].flags &= static_cast<std::uint8_t>(~MidiEvent::TriggerSeamEndpoint);
+				dst[off].flags &= static_cast<std::uint8_t>(~MidiEvent::TriggerSeamEndpoint);
+			}
+		}
 	if (sort) MidiNote::SortMidiEvents(dst, eventCount);
 }

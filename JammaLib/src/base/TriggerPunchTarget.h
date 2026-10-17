@@ -8,6 +8,7 @@ namespace base
 	public:
 		virtual ~TriggerPunchTarget() = default;
 		// Structural job owner only: freeze prepared capture material before publication.
+		virtual unsigned int FrozenAudioSourceAgeSamps() const noexcept { return 0u; }
 		virtual bool HasTriggerAudioCapture() const noexcept { return true; }
 		virtual bool HasPendingTriggerCapture() const noexcept { return true; }
 		virtual bool IsTriggerCaptureInactive() const noexcept { return false; }

@@ -351,6 +351,8 @@ namespace audio
 		std::atomic_bool _ninjamMetronomeEnabled{ true };
 
 		std::atomic<std::uint64_t> _audioSampleCounter{ 0 };
+		// Replaced only with callback admission closed, then read by callback.
+		std::uint64_t _captureHistoryEpochDeviceSample = 0u;
 		midi::MidiClockAnchor _midiClockAnchor;
 		static constexpr unsigned int _AdcPeakChannels = 32u;
 		std::array<std::atomic<float>, _AdcPeakChannels> _adcPeaks{};

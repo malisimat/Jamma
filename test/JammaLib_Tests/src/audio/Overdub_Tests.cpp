@@ -110,7 +110,8 @@ static std::shared_ptr<Station> MakeStation(unsigned int numChans)
 static ChannelMixer MakeChannelMixer(unsigned int numChans, unsigned int bufSize)
 {
 	ChannelMixerParams params;
-	params.InputBufferSize = bufSize;
+	params.InputBufferSize = (std::max)(bufSize, constants::MaxLoopFadeSamps
+		+ UserConfig::TriggerHistorySamples(constants::DefaultSampleRate).value() + constants::MaxBlockSize);
 	params.OutputBufferSize = bufSize;
 	params.NumInputChannels = numChans;
 	params.NumOutputChannels = numChans;
@@ -297,25 +298,31 @@ static void ReadStationOutput(ChannelMixer& chanMixer,
 	const std::shared_ptr<Station>& station,
 	float* outBuf,
 	unsigned int numChans,
-	unsigned int numSamps)
+	unsigned int numSamps, std::uint32_t* deviceSample = nullptr)
 {
+	if (deviceSample) station->BeginCaptureAudioBoundary(*deviceSample, *deviceSample, *deviceSample);
 	station->Zero(numSamps, Audible::AUDIOSOURCE_LOOPS);
 	chanMixer.Sink()->Zero(numSamps, Audible::AUDIOSOURCE_LOOPS);
 	station->WriteBlock(chanMixer.Sink(), nullptr, 0, numSamps);
 	station->EndMultiPlay(numSamps);
 	chanMixer.ToDac(outBuf, numChans, numSamps);
 	chanMixer.Sink()->EndMultiWrite(numSamps, true, Audible::AUDIOSOURCE_LOOPS);
+	if (deviceSample)
+	{
+		*deviceSample += numSamps;
+		station->BeginCaptureAudioBoundary(*deviceSample, *deviceSample, *deviceSample);
+	}
 }
 
 static void AdvancePlayback(ChannelMixer& chanMixer,
 	const std::shared_ptr<Station>& station,
 	unsigned int numChans,
 	unsigned int blockSize,
-	unsigned int numBlocks)
+	unsigned int numBlocks, std::uint32_t* deviceSample = nullptr)
 {
 	std::vector<float> outBuf(numChans * blockSize, 0.0f);
 	for (auto block = 0u; block < numBlocks; block++)
-		ReadStationOutput(chanMixer, station, outBuf.data(), numChans, blockSize);
+		ReadStationOutput(chanMixer, station, outBuf.data(), numChans, blockSize, deviceSample);
 }
 
 static void SimulateAudioCallback(ChannelMixer& chanMixer,
@@ -325,8 +332,10 @@ static void SimulateAudioCallback(ChannelMixer& chanMixer,
 	unsigned int numChans,
 	unsigned int numSamps,
 	const UserConfig& cfg,
-	const AudioStreamParams& streamParams)
+	const AudioStreamParams& streamParams,
+	std::uint32_t& deviceSample)
 {
+	station->BeginCaptureAudioBoundary(deviceSample, deviceSample, deviceSample);
 	auto inLatency = (0u == streamParams.InputLatency) ?
 		cfg.Audio.LatencyIn :
 		streamParams.InputLatency;
@@ -336,7 +345,7 @@ static void SimulateAudioCallback(ChannelMixer& chanMixer,
 	chanMixer.Source()->SetSourceType(Audible::AUDIOSOURCE_MONITOR);
 	chanMixer.WriteToSink(station, numSamps);
 
-	chanMixer.InitPlay(cfg.AdcBufferDelay(inLatency), numSamps);
+	chanMixer.InitPlay(cfg.AdcBufferDelay(inLatency, streamParams.SampleRate), numSamps);
 	chanMixer.Source()->SetSourceType(Audible::AUDIOSOURCE_ADC);
 	chanMixer.WriteToSink(station, numSamps);
 
@@ -358,6 +367,8 @@ static void SimulateAudioCallback(ChannelMixer& chanMixer,
 	chanMixer.Sink()->EndMultiWrite(numSamps, true, Audible::AUDIOSOURCE_LOOPS);
 
 	station->OnTick(utils::Timer::GetTime(), numSamps, cfg, streamParams);
+	deviceSample += numSamps;
+	station->BeginCaptureAudioBoundary(deviceSample, deviceSample, deviceSample);
 	DrainCommitJobs(station);
 }
 
@@ -367,7 +378,8 @@ static void SimulateRemainingRecordTail(ChannelMixer& chanMixer,
 	unsigned int blockSize,
 	unsigned int totalSamps,
 	const UserConfig& cfg,
-	const AudioStreamParams& streamParams)
+	const AudioStreamParams& streamParams,
+	std::uint32_t& deviceSample)
 {
 	std::vector<float> inBuf(numChans * blockSize, 0.0f);
 	std::vector<float> outBuf(numChans * blockSize, 0.0f);
@@ -383,7 +395,7 @@ static void SimulateRemainingRecordTail(ChannelMixer& chanMixer,
 			numChans,
 			sampsThisBlock,
 			cfg,
-			streamParams);
+			streamParams, deviceSample);
 		sampsLeft -= sampsThisBlock;
 	}
 }
@@ -400,6 +412,7 @@ struct OverdubSession
 	unsigned int OverdubBlocks = 0u;
 	unsigned long LoopSamps = 0ul;
 	unsigned long OverdubSamps = 0ul;
+	std::uint32_t DeviceSample = 0u;
 };
 
 static OverdubSession CreateOverdubSession(
@@ -431,7 +444,7 @@ static OverdubSession CreateOverdubSession(
 	DrainCommitJobs(session.Station);
 
 	auto preMixer = MakeChannelMixer(p.NumChans, constants::MaxBlockSize);
-	AdvancePlayback(preMixer, session.Station, p.NumChans, p.BlockSize, p.PreStartBlocks);
+	AdvancePlayback(preMixer, session.Station, p.NumChans, p.BlockSize, p.PreStartBlocks, &session.DeviceSample);
 
 	StartOverdub(session.TriggerInstance, session.Cfg, session.StreamParams);
 	DrainCommitJobs(session.Station);
@@ -467,9 +480,10 @@ static void RunOverdubAndTail(OverdubSession& session, unsigned int tailSamps)
 			session.Params.NumChans,
 			session.Params.BlockSize,
 			session.Cfg,
-			session.StreamParams);
+			session.StreamParams, session.DeviceSample);
 		session.TriggerInstance->OnTick(utils::Timer::GetTime(),
-			session.Params.BlockSize, session.Cfg, session.StreamParams);
+			session.Params.BlockSize, session.Cfg, session.StreamParams, 0u,
+			session.DeviceSample - session.Params.BlockSize);
 	}
 
 	ASSERT_EQ(session.OverdubSamps, session.TargetTake->NumRecordedSamps());
@@ -485,16 +499,17 @@ static void RunOverdubAndTail(OverdubSession& session, unsigned int tailSamps)
 		session.Station,
 		session.Params.NumChans,
 		session.Params.BlockSize,
-		tailSamps,
+		tailSamps + UserConfig::TriggerHistorySamples(session.StreamParams.SampleRate).value(),
 		session.Cfg,
-		session.StreamParams);
+		session.StreamParams, session.DeviceSample);
 
 	ASSERT_EQ(LoopTake::STATE_PLAYING, session.TargetTake->TakeState());
 }
 
 static void ExpectStandardTailLength(const OverdubSession& session)
 {
-	EXPECT_EQ(session.OverdubSamps + constants::MaxLoopFadeSamps,
+	EXPECT_EQ(session.OverdubSamps + constants::MaxLoopFadeSamps
+		+ UserConfig::TriggerHistorySamples(session.StreamParams.SampleRate).value(),
 		session.TargetTake->NumRecordedSamps());
 }
 
@@ -753,7 +768,8 @@ TEST(Overdub, SeededClock_LateTrigger_LoopAlignedWithSource)
 	// Before fix (wrong error sign): endRecordSamps is ~2×blockSize larger, so total
 	// recorded overshoots by ~2×blockSize beyond loopSamps + MaxLoopFadeSamps.
 	EXPECT_LE(session.TargetTake->NumRecordedSamps(),
-		loopSamps + constants::MaxLoopFadeSamps + static_cast<unsigned long>(p.BlockSize));
+		loopSamps + constants::MaxLoopFadeSamps + UserConfig::TriggerHistorySamples(session.StreamParams.SampleRate).value()
+		+ static_cast<unsigned long>(p.BlockSize));
 
 	// Alignment check: route source → left, overdub → right; verify channels match.
 	RouteSourceAndOverdubToStereo(session);

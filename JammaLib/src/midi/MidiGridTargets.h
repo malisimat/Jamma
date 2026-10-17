@@ -42,11 +42,18 @@ namespace midi
 			std::array<std::size_t, MidiEvent::PairingSlotCount> head, tail;
 			head.fill(count); tail.fill(count);
 			std::vector<std::size_t> next(count, count);
+			std::vector<std::vector<std::size_t>> crossingOn(MidiEvent::PairingSlotCount), crossingOff(MidiEvent::PairingSlotCount);
 			for (std::size_t i = 0; i < count; ++i)
 			{
 				const auto& ev = source.Events[i];
 				if (ev.sampleOffset >= source.LoopLengthSamps) continue;
 				const auto slot = ev.PairingSlot();
+				if (ev.flags & MidiEvent::TriggerSeamEndpoint)
+				{
+					if (ev.IsNoteOn()) crossingOn[slot].push_back(i);
+					else if (ev.IsNoteOff()) crossingOff[slot].push_back(i);
+					continue;
+				}
 
 				if (ev.IsNoteOn())
 				{
@@ -66,6 +73,15 @@ namespace midi
 				}
 			}
 			std::iota(order.begin(), order.end(), 0u);
+			for (std::size_t slot = 0u; slot < crossingOn.size(); ++slot)
+				for (std::size_t i = 0u; i < (std::min)(crossingOn[slot].size(), crossingOff[slot].size()); ++i)
+				{
+					const auto on = crossingOn[slot][i], release = crossingOff[slot][i];
+					off[on] = release;
+					const auto start = displayed[on].sampleOffset;
+					const auto duration = source.LoopLengthSamps - source.Events[on].sampleOffset + source.Events[release].sampleOffset;
+					result.Notes.push_back({start, start + duration, displayed[on].data1, on, release, false});
+				}
 			const auto priority = [](const MidiEvent& e) { return e.IsNoteOff() ? 0 : e.IsNoteOn() ? 2 : 1; };
 			std::stable_sort(order.begin(), order.end(), [&](auto a, auto b) {
 				return displayed[a].sampleOffset != displayed[b].sampleOffset
@@ -84,6 +100,7 @@ namespace midi
 			{
 				const auto& ev = displayed[i];
 				if (ev.sampleOffset >= source.LoopLengthSamps) continue;
+				if (source.Events[i].flags & MidiEvent::TriggerSeamEndpoint) continue;
 				auto& on = active[ev.PairingSlot()];
 				if (ev.IsNoteOn())
 				{

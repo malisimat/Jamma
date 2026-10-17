@@ -11,6 +11,7 @@
 #include <vector>
 #include <memory>
 #include "Loop.h"
+#include "TriggerCaptureTiming.h"
 #include "CameraRecordingObservation.h"
 #include "../graphics/CameraBounds.h"
 #include "../graphics/StationModel.h"
@@ -171,11 +172,12 @@ namespace engine
 		bool RestoreMixerLevels(double masterLevel, const std::vector<double>& busLevels);
 		bool RestoreAudioRoutes(const std::vector<std::vector<unsigned long>>& routes);
 		LoopTakeState TakeState() const;
+		unsigned int FrozenAudioSourceAgeSamps() const noexcept override { return _triggerCaptureConfigured ? _triggerCaptureTiming.SourceAgeSamps : 0u; }
 		bool HasTriggerAudioCapture() const noexcept override { return !_backLoops.empty(); }
 		bool HasPendingTriggerCapture() const noexcept override
 		{
 			const auto state = _state.load(std::memory_order_acquire);
-			return state != STATE_INACTIVE && state != STATE_PLAYING;
+			return !_captureCancelled.load(std::memory_order_acquire) && ((state != STATE_INACTIVE && state != STATE_PLAYING) || MidiTriggerCapturePending());
 		}
 		bool IsCaptureCancelled() const noexcept
 			{ return _captureCancelled.load(std::memory_order_acquire); }
@@ -300,10 +302,14 @@ namespace engine
 		{
 			return _midiRecordStartSample;
 		}
+        bool AdmitTriggerCaptureLength(unsigned long length) const noexcept;
+        void SetTriggerCaptureStop(std::uint32_t stop) noexcept { _triggerCaptureStop = stop; }
+        void CompleteMidiIngressPump(std::uint32_t deviceSample);
+        bool MidiTriggerCapturePending() const noexcept { return _midiTriggerCapturePending.load(std::memory_order_acquire); }
 		void Play(unsigned long index,
 			unsigned long loopLength,
 			unsigned int endRecordSamps,
-			int midiQuantisationErrorSamps = 0, bool deferFirstMasterActivation = false);
+			int midiQuantisationErrorSamps = 0, bool deferFirstMasterActivation = false, unsigned int outputAdvanceSamps = 0);
 		bool FirstMasterActivationPending() const noexcept
 			{ return _firstMasterActivationPending.load(std::memory_order_acquire); }
 		bool ActivateFirstMasterMidiAtAudioBoundary(unsigned long phaseSamps, std::uint32_t recordOrigin) noexcept;
@@ -345,6 +351,13 @@ namespace engine
 		void PublishCameraCaptureObservation() { _PublishCameraCapture(); }
 		void SetPresentation(PresentationMode mode, std::uint64_t serial) noexcept;
 		void EndRecording();
+		void ConfigureTriggerCapture(const TriggerCaptureTiming& timing) noexcept;
+		const TriggerCaptureTiming& CaptureTiming() const noexcept { return _triggerCaptureTiming; }
+        bool HasMidiDevicePhaseObservation() const noexcept { return _hasMidiDevicePhaseObservation.load(std::memory_order_acquire); }
+		std::uint32_t CaptureBoundarySample() const noexcept { return _captureBoundarySample.load(std::memory_order_acquire); }
+		void BeginCaptureAudioBoundary(std::uint64_t deviceSample, std::uint64_t sceneSample, std::uint64_t absoluteSample) noexcept;
+		bool AudioCaptureReady(unsigned int count, int offset = 0) const noexcept;
+
 		// Atomic logical cancellation; destructive Ditch requires stopped/retired readers.
 		void CancelCapture(bool sourceLoss = false) noexcept;
 		bool IsSourceLossCancelled() const noexcept
@@ -356,8 +369,8 @@ namespace engine
 			std::vector<std::string> midiDevices = {},
 			std::shared_ptr<LoopTake> sourceTake = nullptr,
 			std::uint64_t transportStartSamps = 0u);
-		void PunchIn(bool applyAudio = true, bool applyMidi = true);
-		void PunchOut(bool applyAudio = true, bool applyMidi = true);
+		void PunchIn(bool applyAudio = true, bool applyMidi = true, std::optional<std::uint32_t> edgeSample = std::nullopt);
+		void PunchOut(bool applyAudio = true, bool applyMidi = true, std::optional<std::uint32_t> edgeSample = std::nullopt);
 		// Keep MIDI capture and synthetic events on the job thread; audio transitions must stay allocation-free.
 		void TriggerPunchInAudio() noexcept override;
 		void TriggerPunchOutAudio() noexcept override;
@@ -586,6 +599,20 @@ namespace engine
 		// Lifetime is this take, pinned by the existing callback snapshot/session.
 		static_assert(std::atomic<std::uint64_t>::is_always_lock_free);
 		std::atomic<std::uint64_t> _cameraAudioPunchRevision{ 0u };
+        std::atomic<std::int64_t> _midiCaptureTransportOrigin{0};
+        std::atomic<bool> _hasMidiDevicePhaseObservation{false};
+        std::atomic<std::uint64_t> _midiDevicePhaseObservation{0u}; // callback publishes coherent device sample + phase
+        unsigned long _MidiPhaseAtDeviceSample(std::uint32_t sample, unsigned long length) const noexcept;
+        std::uint32_t _MidiPhysicalCaptureOffset(std::uint32_t sample) const noexcept;
+		TriggerCaptureTiming _triggerCaptureTiming;
+		bool _triggerCaptureConfigured = false; // immutable after structural publication
+		std::atomic<std::uint32_t> _captureBoundarySample{ 0u };
+		std::atomic<bool> _audioCaptureAdmitted{ true };
+		std::atomic<bool> _capturePlaybackPending{ false };
+        std::atomic<bool> _capturePlaybackPrepared{ false };
+		std::atomic<unsigned int> _captureOutputAdvance{ 0u };
+		bool _captureBoundaryStarted = false; // callback owner
+		std::uint32_t _captureFallbackOrigin = 0u; // callback owner
 		std::atomic<LoopTakeState> _state;
 		// INACTIVE also describes a newly constructed/restored take. Cancellation
 		// alone suppresses retained callback snapshots and queued lifecycle work.
@@ -652,6 +679,16 @@ namespace engine
 		std::vector<std::bitset<midi::MidiNote::TotalNoteSlots>> _midiRecordSeededHeld;
 		// Job-thread-owned sample origin for an unseeded first MIDI take.
 		std::optional<std::uint32_t> _midiRecordStartSample;
+        // Capture mutex/job owner owns provisional events and close intent. Callback
+        // observes only the pending scalar; cancellation uses existing take lifetime.
+        std::atomic<bool> _midiTriggerCapturePending{ false };
+        bool _midiCaptureCloseRequested = false;
+        std::uint32_t _triggerCaptureStop = 0u;
+        unsigned long _midiCaptureFinalLength = 0ul;
+        unsigned long _midiCaptureFinalIndex = 0ul;
+        LoopTakeState _midiCaptureFinalState = STATE_RECORDING;
+        void _FinalizeMidiCapture(unsigned long length, unsigned long index, LoopTakeState& state);
+
 		midi::MidiOverdubSession _midiOverdubSession;
 		mutable std::mutex _midiCaptureMutex;
 		base::PublishedAudioSnapshot<const MidiLoopSnapshot> _midiLoopSnapshot;

@@ -25,7 +25,7 @@ public:
 		const std::string& audio = R"({"name":"HDMI","samplerate":44100,"bufsize":255,"inlatency":414,"outlatency":414,"numbuffers":2,"numchannelsin":0,"numchannelsout":10})")
 	{
 		const auto json = R"({"version":"2.0","name":"rig","devices":{"audio":)" + audio +
-			R"(,"midi":)" + midi + R"(,"serial":[{"id":"pedal-a","port":"COM3","baudrate":115200,"enabled":true}]},"settings":{"loop":{"fadeSamps":800,"seedGrainMinMs":400,"seedGrainTargetMaxMs":3000,"seedBpmMin":80,"seedQuantisation":"power"},"trigger":{"preDelaySamps":400,"debounceMs":280},"midi":{"channelOverrideTriggers":false,"channelOverrideLive":true}},"triggers":[)" + triggers + "]}";
+			R"(,"midi":)" + midi + R"(,"serial":[{"id":"pedal-a","port":"COM3","baudrate":115200,"enabled":true}]},"settings":{"loop":{"fadeSamps":800,"seedGrainMinMs":400,"seedGrainTargetMaxMs":3000,"seedBpmMin":80,"seedQuantisation":"power"},"trigger":{"debounceMs":280},"midi":{"channelOverrideTriggers":false,"channelOverrideLive":true}},"triggers":[)" + triggers + "]}";
 		return RigFile::FromStream(std::stringstream(json));
 	}
 	static std::string Keyboard(unsigned int press, unsigned int release)
@@ -196,7 +196,7 @@ TEST(RigFile, PreservesInputOnlyAudioAndExplicitTriggerTimingUnits)
 		R"({"name":"Input only","samplerate":48000,"bufsize":128,"inlatency":0,"outlatency":0,"numbuffers":2,"numchannelsin":2,"numchannelsout":0})");
 	ASSERT_TRUE(rig);
 	EXPECT_EQ(2u, rig->User.Audio.NumChannelsIn); EXPECT_EQ(0u, rig->User.Audio.NumChannelsOut);
-	EXPECT_EQ(400u, rig->User.Trigger.PreDelaySamps); EXPECT_EQ(280u, rig->User.Trigger.DebounceMs);
+	EXPECT_EQ(0u, rig->User.Trigger.PreDelaySamps); EXPECT_EQ(280u, rig->User.Trigger.DebounceMs);
 	std::stringstream serialized; ASSERT_TRUE(RigFile::ToJsonStream(*rig, serialized));
 	const auto reloaded = RigFile::FromStream(std::move(serialized));
 	ASSERT_TRUE(reloaded); EXPECT_EQ(*rig, *reloaded);
@@ -444,4 +444,55 @@ TEST(RigFileRouting, LifecycleAddIsUnboundAndDeleteRemovesTheWholeTriggerRouteSe
 	added.Triggers[0].StationTarget = "Station A"; added.Triggers[0].CaptureInputs.Audio = {1u, 2u}; added.Triggers[0].CaptureInputs.Midi = {"Keys"};
 	const auto deleted = io::RigFileRouting::WithoutTrigger(added, 0u); ASSERT_TRUE(deleted);
 	EXPECT_TRUE(deleted->Triggers.empty()); EXPECT_EQ(1u, added.Triggers.size());
+}
+
+TEST(RigFile, TriggerPredelayDefaultsToZeroAndRoundTripsFractionalSignedMilliseconds)
+{
+	auto rig = RigFileTest::Read(RigFileTest::Trigger());
+	ASSERT_TRUE(rig);
+	ASSERT_EQ(1u, rig->Triggers.size());
+	EXPECT_DOUBLE_EQ(0.0, rig->Triggers.front().PreDelayMs);
+	for (const double milliseconds : {0.0, 86.0, -86.0, 0.123456789012345, -200.0, 200.0})
+	{
+		rig->Triggers.front().PreDelayMs = milliseconds;
+		std::stringstream encoded;
+		ASSERT_TRUE(RigFile::ToJsonStream(*rig, encoded));
+		EXPECT_EQ(std::string::npos, encoded.str().find("preDelaySamps"));
+		const auto restored = RigFile::FromStream(std::move(encoded));
+		ASSERT_TRUE(restored);
+		EXPECT_DOUBLE_EQ(milliseconds, restored->Triggers.front().PreDelayMs);
+	}
+}
+
+TEST(RigFile, RejectsOutOfRangeAndWrongTypeTriggerPredelay)
+{
+	for (const auto& milliseconds : {"200.1", "-200.1", "true", "null", "\"86\""})
+	{
+		auto trigger = RigFileTest::Trigger();
+		trigger.insert(1u, std::string("\"preDelayMs\":") + milliseconds + ",");
+		EXPECT_FALSE(RigFileTest::Read(trigger)) << milliseconds;
+	}
+}
+
+TEST(RigFile, MigratesLegacyZeroAndDiagnosesNonzeroOrConflictingGlobalPredelay)
+{
+	for (const auto value : {0u, 1u})
+	{
+		auto json = RigFile::DefaultJson;
+		const auto triggerSettings = json.find("\"debounceMs\"");
+		ASSERT_NE(std::string::npos, triggerSettings);
+		json.insert(triggerSettings, "\"preDelaySamps\":" + std::to_string(value) + ",");
+		RigFile::Diagnostics diagnostics;
+		auto parsed = RigFile::FromStream(std::stringstream(json), &diagnostics);
+		EXPECT_EQ(value == 0u, parsed.has_value());
+		ASSERT_FALSE(diagnostics.empty());
+		EXPECT_EQ("$.settings.trigger.preDelaySamps", diagnostics.front().Path);
+		if (value == 0u)
+		{
+			const auto triggerId = json.find("\"id\"", json.find("\"triggers\""));
+			ASSERT_NE(std::string::npos, triggerId);
+			json.insert(triggerId, "\"preDelayMs\":0,");
+			EXPECT_FALSE(RigFile::FromStream(std::stringstream(json)));
+		}
+	}
 }

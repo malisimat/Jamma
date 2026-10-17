@@ -8,6 +8,7 @@
 #pragma once
 
 #include <vector>
+#include <cstdint>
 #include <stack>
 #include <map>
 #include <optional>
@@ -36,13 +37,13 @@ namespace io
 		struct AudioSettings
 		{
 			std::string Name; // The name of the device (used for matching rig preferences)
-			unsigned int SampleRate; // The sample rate of the stream, in Hz
-			unsigned int BufSize; // The buffer size used by the device
-			unsigned int LatencyIn; // The input latency, in samples
-			unsigned int LatencyOut; // The output latency, in samples
-			unsigned int NumBuffers; // The number of buffers used by the device, if applicable
-			unsigned int NumChannelsIn; // The number of input channels used in current scene
-			unsigned int NumChannelsOut; // The number of output channels used in current scene
+			unsigned int SampleRate = constants::DefaultSampleRate; // The sample rate of the stream, in Hz
+			unsigned int BufSize = 0u; // The buffer size used by the device
+			unsigned int LatencyIn = 0u; // The input latency, in samples
+			unsigned int LatencyOut = 0u; // The output latency, in samples
+			unsigned int NumBuffers = 0u; // The number of buffers used by the device, if applicable
+			unsigned int NumChannelsIn = 0u; // The number of input channels used in current scene
+			unsigned int NumChannelsOut = 0u; // The number of output channels used in current scene
 
 			static std::optional<AudioSettings> FromJson(Json::JsonPart json);
 			bool operator==(const AudioSettings&) const = default;
@@ -62,7 +63,7 @@ namespace io
 
 		struct TriggerSettings
 		{
-			unsigned int PreDelaySamps = constants::DefaultPreDelaySamps; // Advance input alignment by this many samples
+			unsigned int PreDelaySamps = constants::DefaultPreDelaySamps; // Deprecated source member: only zero is supported; never used for timing
 			unsigned int DebounceMs = constants::DefaultDebounceMs; // Input bounce threshold, in milliseconds
 
 			static std::optional<TriggerSettings> FromJson(Json::JsonPart json);
@@ -109,7 +110,9 @@ namespace io
 		};
 
 		// How much to (further) delay input signal from ADC, in samples
-		unsigned int AdcBufferDelay(unsigned int inLatency) const;
+		unsigned int AdcBufferDelay(unsigned int inLatency, unsigned int sampleRate = 0u) const;
+		static std::optional<std::int32_t> TriggerPreDelaySamples(double milliseconds, unsigned int sampleRate) noexcept;
+		static std::optional<unsigned int> TriggerHistorySamples(unsigned int sampleRate) noexcept;
 
 		// How long to continue recording after trigger to end loop recording, in samples
 		unsigned int EndRecordingSamps(int error) const;
@@ -119,8 +122,8 @@ namespace io
 		unsigned long LoopPlayPos(int error,
 			unsigned long loopLength,
 			unsigned int outLatency) const;
-		unsigned int TriggerLoopAlignmentSamps() const;
-		long OverdubSourceReadOffset(unsigned int outLatency) const;
+		unsigned int TriggerLoopAlignmentSamps(unsigned int sampleRate = 0u) const;
+		long OverdubSourceReadOffset(unsigned int outLatency, unsigned int sampleRate = 0u) const;
 		unsigned long OverdubPlayPos(int error, unsigned long loopLength) const;
 		std::optional<SeedLoopTiming> DeduceLoopTiming(unsigned long loopLengthSamps,
 			unsigned int sampleRate) const;

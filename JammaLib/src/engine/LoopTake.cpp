@@ -11,6 +11,7 @@
 #include "../graphics/MidiModel.h"
 #include "../io/NativeMidiSidecar.h"
 #include "../midi/MidiNote.h"
+#include "../midi/MidiBlockTiming.h"
 #include "../midi/MidiIndexedOutputSink.h"
 #include "../ninjam/NinjamLoopAlignment.h"
 #include "../ninjam/NinjamTiming.h"
@@ -92,41 +93,16 @@ std::size_t engine::LoopTake::_BuildRebasedMidiOverdubSourceEvents(const midi::M
 
 	for (const auto& span : noteSpans)
 	{
-		const auto spanStart = span.StartSample;
-		auto spanEnd = span.StartSample + span.DurationSamples;
-		if (spanEnd > sourceLoopLength)
-			spanEnd = sourceLoopLength;
-		if (spanEnd <= spanStart)
-			continue;
-
-		const auto mappedStart = _NormalizeMidiLoopOffset(spanStart + rebaseOffset, sourceLoopLength);
-		const auto mappedEnd = _NormalizeMidiLoopOffset(spanEnd + rebaseOffset, sourceLoopLength);
-
-		if (mappedStart < mappedEnd)
-		{
-			if (!_AppendMidiEvent(midi::MidiEvent::MakeNoteOn(mappedStart, span.Channel, span.Note, span.Velocity).WithFlags(span.Flags), outEvents, outCapacity, outCount))
-				return outCount;
-			if (!_AppendMidiEvent(midi::MidiEvent::MakeNoteOff(mappedEnd, span.Channel, span.Note).WithFlags(span.Flags), outEvents, outCapacity, outCount))
-				return outCount;
-			continue;
-		}
-
-		if (mappedStart > mappedEnd)
-		{
-			if (mappedEnd > 0u)
-			{
-				if (!_AppendMidiEvent(midi::MidiEvent::MakeNoteOn(0u, span.Channel, span.Note, span.Velocity).WithFlags(span.Flags), outEvents, outCapacity, outCount))
-					return outCount;
-				if (!_AppendMidiEvent(midi::MidiEvent::MakeNoteOff(mappedEnd, span.Channel, span.Note).WithFlags(span.Flags), outEvents, outCapacity, outCount))
-					return outCount;
-			}
-
-			if (!_AppendMidiEvent(midi::MidiEvent::MakeNoteOn(mappedStart, span.Channel, span.Note, span.Velocity).WithFlags(span.Flags), outEvents, outCapacity, outCount))
-				return outCount;
-			continue;
-		}
-
-		if (!_AppendMidiEvent(midi::MidiEvent::MakeNoteOn(0u, span.Channel, span.Note, span.Velocity).WithFlags(span.Flags), outEvents, outCapacity, outCount))
+		if (span.DurationSamples == 0u) continue;
+		const auto mappedStart = static_cast<std::uint32_t>((static_cast<std::uint64_t>(span.StartSample)
+			+ rebaseOffset) % sourceLoopLength);
+		const auto end = static_cast<std::uint64_t>(mappedStart) + span.DurationSamples;
+		const auto mappedEnd = static_cast<std::uint32_t>(end % sourceLoopLength);
+		auto flags = static_cast<std::uint8_t>(span.Flags & ~midi::MidiEvent::TriggerSeamEndpoint);
+		if (end >= sourceLoopLength) flags |= midi::MidiEvent::TriggerSeamEndpoint;
+		if (!_AppendMidiEvent(midi::MidiEvent::MakeNoteOn(mappedStart, span.Channel, span.Note, span.Velocity).WithFlags(flags), outEvents, outCapacity, outCount))
+			return outCount;
+		if (!_AppendMidiEvent(midi::MidiEvent::MakeNoteOff(mappedEnd, span.Channel, span.Note).WithFlags(flags), outEvents, outCapacity, outCount))
 			return outCount;
 	}
 
@@ -552,10 +528,94 @@ void LoopTake::Zero(unsigned int numSamps,
 		if (loop) loop->Zero(numSamps);
 }
 
+
+void LoopTake::ConfigureTriggerCapture(const TriggerCaptureTiming& timing) noexcept
+{
+	_triggerCaptureTiming = timing;
+	_triggerCaptureConfigured = true;
+	_captureBoundaryStarted = false;
+	_audioCaptureAdmitted.store(true, std::memory_order_relaxed);
+}
+
+void LoopTake::BeginCaptureAudioBoundary(std::uint64_t deviceSample,
+	std::uint64_t sceneSample, std::uint64_t absoluteSample) noexcept
+{
+	_captureBoundarySample.store(static_cast<std::uint32_t>(deviceSample), std::memory_order_release);
+    const auto publishPhase = [&]() noexcept {
+        _midiDevicePhaseObservation.store((static_cast<std::uint64_t>(static_cast<std::uint32_t>(deviceSample)) << 32u)
+            | static_cast<std::uint32_t>(_midiVisualPlayIndex.load(std::memory_order_relaxed)), std::memory_order_release);
+        _hasMidiDevicePhaseObservation.store(true, std::memory_order_release);
+    };
+    if (!_triggerCaptureConfigured || _captureCancelled.load(std::memory_order_acquire)) { publishPhase(); return; }
+	auto state = _BorrowAudioState();
+	if (!state) return;
+	const auto sample = static_cast<std::uint32_t>(deviceSample);
+	const auto firstBoundary = !_captureBoundaryStarted;
+	if (firstBoundary)
+	{
+		_captureFallbackOrigin = sample;
+		_captureBoundaryStarted = true;
+	}
+	const auto origin = _triggerCaptureTiming.TriggerSample.value_or(_captureFallbackOrigin);
+	const auto elapsed = midi::MidiSampleDelta(sample, origin);
+    if (firstBoundary)
+    {
+        // A take can finalize before its first topology publication. Its baked
+        // grid origin is already canonical and must survive that late boundary.
+        if (!_capturePlaybackPrepared.load(std::memory_order_acquire))
+        {
+            const auto contentOrigin = _triggerCaptureTiming.ContentTransportOrigin.value_or(
+                static_cast<std::int64_t>(absoluteSample) - elapsed - _triggerCaptureTiming.DelaySamps);
+            _midiCaptureTransportOrigin.store(contentOrigin, std::memory_order_release);
+            const auto interval = ResolvedMidiQuantisation().GridInterval();
+            const auto gridOrigin = contentOrigin < 0 && interval > 0u
+                ? _NormalizeLoopIndex(contentOrigin, interval) : (std::max)(std::int64_t{0}, contentOrigin);
+            CaptureMidiTransportStartAtAudioBoundary(static_cast<std::uint64_t>(gridOrigin));
+        }
+        CaptureFirstRecordBlockSceneAtAudioBoundary(sceneSample);
+    }
+	const auto cursor = static_cast<std::int64_t>(constants::MaxLoopFadeSamps) + elapsed
+		- _triggerCaptureTiming.SourceAgeSamps + _triggerCaptureTiming.DelaySamps;
+	const auto begin = static_cast<std::int64_t>(constants::MaxLoopFadeSamps)
+		+ _triggerCaptureTiming.DelaySamps - _triggerCaptureTiming.SeamSamps;
+	if (!state->Loops.empty() && (begin < 0 || (_recordedSampCount.load(std::memory_order_relaxed) == 0 && cursor > begin)))
+		_audioCaptureAdmitted.store(false, std::memory_order_release);
+	const auto activate = _capturePlaybackPrepared.load(std::memory_order_acquire)
+        && _capturePlaybackPending.exchange(false, std::memory_order_acq_rel);
+	const auto midiLength = _midiVisualLoopLength.load(std::memory_order_relaxed);
+	if (activate && midiLength > 0)
+		_midiVisualPlayIndex.store(_NormalizeLoopIndex(static_cast<long long>(elapsed)
+			+ _triggerCaptureTiming.DelaySamps, midiLength), std::memory_order_relaxed);
+	for (const auto& loop : state->Loops)
+		if (loop)
+		{
+			loop->SetTriggerCaptureCursor(cursor);
+			if (activate && loop->LoopLength() > 0)
+				loop->SetBodyPlayIndex(_NormalizeLoopIndex(static_cast<long long>(elapsed)
+					+ _triggerCaptureTiming.DelaySamps + _captureOutputAdvance.load(std::memory_order_relaxed), loop->LoopLength()));
+		}
+    publishPhase();
+}
+
+bool LoopTake::AudioCaptureReady(unsigned int count, int offset) const noexcept
+{
+	if (!_audioCaptureAdmitted.load(std::memory_order_acquire)) return false;
+	auto state = _BorrowAudioState();
+	if (!state) return false;
+	for (const auto& loop : state->Loops)
+		if (loop && !loop->TriggerCaptureReady(_NormalizeLoopIndex(
+            static_cast<long long>(loop->BodyPlayIndex()) + offset, loop->LoopLength()), count)) return false;
+	return true;
+}
+
 void LoopTake::OnBlockWriteChannel(unsigned int channel,
 	const base::AudioWriteRequest& request,
 	int writeOffset)
 {
+	// A new topology can become visible between pre-write observation and routing.
+	// Defer it to the next coherent boundary instead of writing at default index 0.
+	if (_captureCancelled.load(std::memory_order_acquire)
+		|| (_triggerCaptureConfigured && !_captureBoundaryStarted)) return;
 	auto state = _BorrowAudioState();
 	if (!state)
 		return;
@@ -639,6 +699,9 @@ void LoopTake::WriteBlock(const std::shared_ptr<MultiAudioSink> dest,
 				if (loop) loop->ClearRecordedPlaybackDelay();
 		return;
 	}
+    if (!bounceWriter && (MidiTriggerCapturePending() || FirstMasterActivationPending() ||
+        (_triggerCaptureConfigured && !_capturePlaybackPrepared.load(std::memory_order_acquire)))) return;
+    if (!bounceWriter && !AudioCaptureReady(numSamps, indexOffset)) return;
 	if (nullptr == dest)
 		return;
 	
@@ -1079,6 +1142,8 @@ void LoopTake::EndMultiWrite(unsigned int numSamps,
 	bool updateIndex,
 	Audible::AudioSourceType source)
 {
+	if (_triggerCaptureConfigured && !_captureBoundaryStarted) return;
+
 	// Retired Station snapshots may still route here until the audio reader acknowledges.
 	const auto captureGeneration = _captureGeneration.load(std::memory_order_acquire);
 	if (_captureCancelled.load(std::memory_order_acquire))
@@ -1088,7 +1153,12 @@ void LoopTake::EndMultiWrite(unsigned int numSamps,
 		return;
 
 	for (const auto& loop : audioState->Loops)
-		if (loop) loop->EndWrite(numSamps, updateIndex);
+		if (loop)
+		{
+			loop->EndWrite(numSamps, updateIndex);
+			if (_triggerCaptureConfigured && !loop->TriggerCaptureCoverageValid())
+				_audioCaptureAdmitted.store(false, std::memory_order_release);
+		}
 
 	auto isRecording = IsArmed();
 	auto takeState = _state.load(std::memory_order_acquire);
@@ -1098,7 +1168,14 @@ void LoopTake::EndMultiWrite(unsigned int numSamps,
 	if (isEndRecording)
 	{
 		_endRecordSampCount += numSamps;
-		if ((_endRecordSampCount >= _endRecordSamps) && !_isPunchInActive.load(std::memory_order_acquire))
+		bool covered = _endRecordSampCount >= _endRecordSamps;
+		if (_triggerCaptureConfigured)
+		{
+			covered = _audioCaptureAdmitted.load(std::memory_order_acquire);
+			for (const auto& loop : audioState->Loops)
+				if (loop && !loop->TriggerCaptureComplete()) covered = false;
+		}
+		if (covered && !_isPunchInActive.load(std::memory_order_acquire))
 			_PublishRecordingCompletion(captureGeneration);
 	}
 
@@ -1854,9 +1931,19 @@ void LoopTake::Record(std::vector<unsigned int> channels,
 		return;
 
 	std::scoped_lock midiLock(_midiCaptureMutex);
-	_midiRecordStartSample = midiRecordStartSample;
+    _midiRecordStartSample = midiRecordStartSample;
+    _midiCaptureCloseRequested = false;
+    _midiTriggerCapturePending.store(_triggerCaptureConfigured && !midiChannels.empty(), std::memory_order_release);
 	_captureCancelled.store(false, std::memory_order_release);
 
+    if (_triggerCaptureConfigured && _triggerCaptureTiming.ContentTransportOrigin)
+    {
+        const auto origin = *_triggerCaptureTiming.ContentTransportOrigin;
+        _midiCaptureTransportOrigin.store(origin, std::memory_order_release);
+        const auto interval = ResolvedMidiQuantisation().GridInterval();
+        if (origin >= 0) transportStartSamps = static_cast<std::uint64_t>(origin);
+        else if (interval > 0u) transportStartSamps = _NormalizeLoopIndex(origin, interval);
+    }
 	_midiTransportStartSamps.store(transportStartSamps, std::memory_order_release);
 	_firstRecordBlockSceneSamps.store(0u, std::memory_order_relaxed);
 	_midiTransportStartFromAudio.store(false, std::memory_order_release);
@@ -1883,6 +1970,9 @@ void LoopTake::Record(std::vector<unsigned int> channels,
 	{
 		auto loop = AddLoop(chan, stationName);
 		loop->Record();
+		if (_triggerCaptureConfigured)
+			loop->ConfigureTriggerCapture(static_cast<std::int64_t>(constants::MaxLoopFadeSamps)
+				+ _triggerCaptureTiming.DelaySamps - _triggerCaptureTiming.SeamSamps, true, false);
 	}
 
 	_midiLoops.clear();
@@ -1927,7 +2017,7 @@ void LoopTake::Record(std::vector<unsigned int> channels,
 		{
 			const auto slot = midi::MidiNote::NoteSlot(midiChan, note);
 			if (snap.Held.test(slot) && snap.Velocity[slot] > 0u
-				&& _RecordMidiEventUnlocked(midi::MidiEvent::MakeNoteOn(0u, midiChan, note, snap.Velocity[slot]), dev, 0u))
+				&& _RecordMidiEventUnlocked(midi::MidiEvent::MakeNoteOn(_triggerCaptureConfigured && _midiRecordStartSample ? *_midiRecordStartSample - _triggerCaptureTiming.SeamSamps : 0u, midiChan, note, snap.Velocity[slot]), dev, 0u))
 				_midiRecordSeededHeld[i].set(slot);
 		}
 	}
@@ -1963,10 +2053,15 @@ bool LoopTake::_RecordMidiEventUnlocked(const midi::MidiEvent& ev,
 	const std::string& device,
 	std::uint32_t globalSampleNow) noexcept
 {
-	if (_midiLoops.empty())
-		return false;
+    if (_midiLoops.empty()) return false;
+    if (_triggerCaptureConfigured && _midiRecordStartSample)
+    {
+        const auto physical = static_cast<std::int64_t>(midi::MidiSampleDelta(ev.sampleOffset, *_midiRecordStartSample))
+            + _triggerCaptureTiming.SeamSamps;
+        if (physical < 0 || (_midiCaptureCloseRequested && physical >= _midiCaptureFinalLength)) return false;
+    }
 
-	const auto midiChan = ev.Channel();
+    const auto midiChan = ev.Channel();
 	const auto noteSlot = midi::MidiLoop::NoteSlot(midiChan, ev.data1);
 	bool recorded = false;
 	const auto recordedNow = static_cast<std::uint32_t>(_recordedSampCount.load(std::memory_order_relaxed));
@@ -2003,9 +2098,14 @@ bool LoopTake::_RecordMidiEventUnlocked(const midi::MidiEvent& ev,
 					continue;
 
 				midi::MidiEvent stamped = ev;
-				stamped.sampleOffset = ResolveMidiRecordSample(ev.sampleOffset, globalSampleNow, recordedNow);
-				if (stamped.sampleOffset < overdub.ActivePunchStart)
-					stamped.sampleOffset = overdub.ActivePunchStart;
+				stamped.sampleOffset = _triggerCaptureConfigured && _midiRecordStartSample
+                    ? _MidiPhysicalCaptureOffset(ev.sampleOffset)
+                    : ResolveMidiRecordSample(ev.sampleOffset, globalSampleNow, recordedNow);
+                if (stamped.sampleOffset < overdub.ActivePunchStart)
+                {
+                    if (_triggerCaptureConfigured) continue;
+                    stamped.sampleOffset = overdub.ActivePunchStart;
+                }
 
 				recorded = _AppendMidiOverdubLiveEvent(i, stamped) || recorded;
 			}
@@ -2014,9 +2114,18 @@ bool LoopTake::_RecordMidiEventUnlocked(const midi::MidiEvent& ev,
 		}
 
 		midi::MidiEvent stamped = ev;
-		stamped.sampleOffset = _midiRecordStartSample
-			? ResolveMidiRecordSampleFromTrigger(ev.sampleOffset, *_midiRecordStartSample)
-			: ResolveMidiRecordSample(ev.sampleOffset, globalSampleNow, recordedNow);
+        if (_triggerCaptureConfigured && _midiRecordStartSample)
+        {
+            const auto physical = static_cast<std::int64_t>(midi::MidiSampleDelta(ev.sampleOffset,
+                *_midiRecordStartSample)) + _triggerCaptureTiming.SeamSamps;
+            if (physical < 0 || physical > std::numeric_limits<std::int32_t>::max()) continue;
+            if (_midiCaptureCloseRequested && physical >= _midiCaptureFinalLength) continue;
+            stamped.sampleOffset = static_cast<std::uint32_t>(physical);
+        }
+        else
+            stamped.sampleOffset = _midiRecordStartSample
+                ? ResolveMidiRecordSampleFromTrigger(ev.sampleOffset, *_midiRecordStartSample)
+                : ResolveMidiRecordSample(ev.sampleOffset, globalSampleNow, recordedNow);
 		if (i < _midiRecordHeld.size())
 		{
 			auto& held = _midiRecordHeld[i];
@@ -2025,8 +2134,15 @@ bool LoopTake::_RecordMidiEventUnlocked(const midi::MidiEvent& ev,
 			else if (ev.IsNoteOff())
 				held.Clear(midiChan, ev.data1);
 		}
-		if (!_midiLoops[i]->RecordEvent(stamped))
-			continue;
+        if (!_midiLoops[i]->RecordEvent(stamped))
+        {
+            if (_triggerCaptureConfigured)
+            {
+                std::cout << "[MIDI] Capture cancelled: event storage overflow\n";
+                CancelCapture(true);
+            }
+            continue;
+        }
 
 		// Drive visual updates directly from MIDI ingress so note rendering does
 		// not depend on audio-loop update cadence.
@@ -2104,6 +2220,9 @@ unsigned int LoopTake::ReadMidiBlock(std::uint32_t globalSample,
 		_midiVisualPlayIndex.load(std::memory_order_relaxed));
 	if (!snapshot)
 		return 0u;
+    if (!flushOnly && (MidiTriggerCapturePending() ||
+        (_triggerCaptureConfigured && !_capturePlaybackPrepared.load(std::memory_order_acquire)) || !AudioCaptureReady(numSamples)))
+        return static_cast<unsigned int>(snapshot->size());
 	if (_firstMasterActivationPending.load(std::memory_order_acquire) && !flushOnly)
 		return static_cast<unsigned int>(snapshot->size());
 
@@ -2159,7 +2278,7 @@ std::uint32_t LoopTake::ResolveMidiRecordSampleFromTrigger(
 void LoopTake::Play(unsigned long index,
 	unsigned long loopLength,
 	unsigned int endRecordSamps,
-	int midiQuantisationErrorSamps, bool deferFirstMasterActivation)
+	int midiQuantisationErrorSamps, bool deferFirstMasterActivation, unsigned int outputAdvanceSamps)
 {
 	std::scoped_lock midiLock(_midiCaptureMutex);
 
@@ -2169,9 +2288,36 @@ void LoopTake::Play(unsigned long index,
 		(STATE_PUNCHEDIN != state))
 		return;
 
+    _capturePlaybackPrepared.store(false, std::memory_order_release);
 	_firstMasterActivationPending.store(deferFirstMasterActivation, std::memory_order_release);
 	_endRecordSampCount = 0;
 	_endRecordSamps = endRecordSamps;
+	if (_triggerCaptureConfigured && !_backLoops.empty())
+	{
+		const auto& timing = _triggerCaptureTiming;
+		const auto magnitude = timing.DelaySamps < 0 ? -timing.DelaySamps : timing.DelaySamps;
+		bool admitted = _audioCaptureAdmitted.load(std::memory_order_acquire)
+			&& loopLength > (std::max)(static_cast<std::int64_t>(timing.SeamSamps), magnitude);
+		for (const auto& loop : _backLoops)
+			if (loop && !loop->SetTriggerCaptureLength(loopLength)) admitted = false;
+		if (!admitted)
+		{
+			_captureCancelled.store(true, std::memory_order_release);
+			return;
+		}
+		const auto now = CaptureBoundarySample();
+		const auto origin = timing.TriggerSample.value_or(now);
+		const auto elapsed = midi::MidiSampleDelta(now, origin);
+		const auto remaining = (std::max)(std::int64_t{0}, static_cast<std::int64_t>(loopLength)
+			- timing.SeamSamps + timing.SourceAgeSamps - elapsed);
+		endRecordSamps = static_cast<unsigned int>(remaining);
+		_endRecordSamps.store(endRecordSamps, std::memory_order_relaxed);
+		_captureOutputAdvance.store(outputAdvanceSamps, std::memory_order_relaxed);
+
+		index = constants::MaxLoopFadeSamps + _NormalizeLoopIndex(
+			static_cast<long long>(elapsed) + timing.DelaySamps + outputAdvanceSamps, loopLength);
+	}
+
 	_midiVisualLoopLength.store(loopLength, std::memory_order_relaxed);
 	_midiAnchorCorrection.store(0, std::memory_order_relaxed);
 
@@ -2183,7 +2329,7 @@ void LoopTake::Play(unsigned long index,
 	// MIDI is finalized at this trigger; only audio needs the delayed-input tail.
 	// The structural owner may process END before the first UI publication.
 	// Prepared loops are authoritative here; callback readers keep their snapshot.
-	auto continueCapture = (!_backLoops.empty() && endRecordSamps > 0) ||
+	auto continueCapture = (!_backLoops.empty() && (_triggerCaptureConfigured || endRecordSamps > 0)) ||
 		_isPunchInActive.load(std::memory_order_relaxed);
 
 	for (auto& loop : _backLoops)
@@ -2215,6 +2361,52 @@ void LoopTake::Play(unsigned long index,
 	}
 #endif
 
+    if (_triggerCaptureConfigured && !_midiLoops.empty())
+    {
+        _midiCaptureCloseRequested = true;
+        _midiCaptureFinalLength = loopLength;
+        _midiCaptureFinalIndex = index;
+        _midiCaptureFinalState = state;
+    }
+    else
+        _FinalizeMidiCapture(loopLength, index, state);
+
+	auto isOverdubbing = (STATE_OVERDUBBING == state) || (STATE_PUNCHEDIN == state);
+	if (_isPunchInActive.load(std::memory_order_relaxed))
+		isOverdubbing = true;
+	auto recordState = isOverdubbing ? STATE_OVERDUBBINGRECORDING : STATE_PLAYINGRECORDING;
+	auto playState = continueCapture ? recordState : STATE_PLAYING;
+	_state.store(loopLength > 0 ? playState : STATE_INACTIVE, std::memory_order_release);
+	_SetPresentationMode(loopLength > 0 && continueCapture ? PresentationMode::Tail : PresentationMode::Inactive);
+    if (_triggerCaptureConfigured) _capturePlaybackPending.store(true, std::memory_order_relaxed);
+    _capturePlaybackPrepared.store(true, std::memory_order_release);
+
+}
+
+unsigned long LoopTake::_MidiPhaseAtDeviceSample(std::uint32_t sample, unsigned long length) const noexcept
+{
+    const auto observation = _midiDevicePhaseObservation.load(std::memory_order_acquire);
+    return _NormalizeLoopIndex(static_cast<std::int64_t>(static_cast<std::uint32_t>(observation))
+        + midi::MidiSampleDelta(sample, static_cast<std::uint32_t>(observation >> 32u)), length);
+}
+
+std::uint32_t LoopTake::_MidiPhysicalCaptureOffset(std::uint32_t sample) const noexcept
+{
+    const auto relative = static_cast<std::int64_t>(midi::MidiSampleDelta(sample,
+        _midiRecordStartSample.value_or(sample))) + _triggerCaptureTiming.SeamSamps;
+    return static_cast<std::uint32_t>((std::max)(std::int64_t{0}, relative));
+}
+
+bool LoopTake::AdmitTriggerCaptureLength(unsigned long length) const noexcept
+{
+    if (!_triggerCaptureConfigured) return length > 0ul;
+    const auto magnitude = _triggerCaptureTiming.DelaySamps < 0 ? -_triggerCaptureTiming.DelaySamps : _triggerCaptureTiming.DelaySamps;
+    return static_cast<std::int64_t>(length) > (std::max)(magnitude,
+        static_cast<std::int64_t>(_triggerCaptureTiming.SeamSamps));
+}
+
+void LoopTake::_FinalizeMidiCapture(unsigned long loopLength, unsigned long index, LoopTakeState& state)
+{
 	const auto midiLoopLength = static_cast<std::uint32_t>(loopLength);
 	if (_midiOverdubSession.Active)
 	{
@@ -2245,7 +2437,23 @@ void LoopTake::Play(unsigned long index,
 				(i < _midiLoopChannels.size()) ?
 				(_midiLoopChannels[i] & midi::MidiEvent::ChannelMask) :
 				0u);
-			const auto& held = _midiRecordHeld[i];
+            auto held = _midiRecordHeld[i];
+            if (_triggerCaptureConfigured)
+            {
+                held = {};
+                std::vector<midi::MidiEvent> eligible;
+                for (std::size_t e = 0u; e < midiLoop->EventCount(); ++e)
+                {
+                    midi::MidiEvent event;
+                    if (midiLoop->TryGetEvent(e, event) && event.sampleOffset < midiLoopLength) eligible.push_back(event);
+                }
+                midi::MidiNote::SortMidiEvents(eligible.data(), eligible.size());
+                for (const auto& event : eligible)
+                {
+                    if (event.IsNoteOn()) held.Set(event.Channel(), event.data1, event.data2);
+                    else if (event.IsNoteOff()) held.Clear(event.Channel(), event.data1);
+                }
+            }
 			const auto heldNoteOffSample = (midiLoopLength > 0u) ? (midiLoopLength - 1u) : 0u;
 			for (std::uint8_t note = 0u; note < 128u; ++note)
 			{
@@ -2255,7 +2463,7 @@ void LoopTake::Play(unsigned long index,
 				// A first-master note held on both trigger edges crosses the seam.
 				// Its head release closes the tail next repeat; an artificial L-1
 				// release would turn that continuation into two separate attacks.
-				if (_midiRecordStartSample && i < _midiRecordSeededHeld.size()
+				if (!_triggerCaptureConfigured && _midiRecordStartSample && i < _midiRecordSeededHeld.size()
 					&& _midiRecordSeededHeld[i].test(slot))
 					continue;
 
@@ -2269,17 +2477,34 @@ void LoopTake::Play(unsigned long index,
 		auto& midiLoop = _midiLoops[i];
 		if (midiLoop->State() == midi::MidiLoopState::Recording)
 		{
+            if (_triggerCaptureConfigured)
+                midiLoop->NormalizeTriggerCapture(midiLoopLength,
+                    _triggerCaptureTiming.DelaySamps - _triggerCaptureTiming.SeamSamps);
 			// Compute the global sample that corresponds to loop-relative position 0 so
 			// automation frac calculations stay in phase with _midiVisualPlayIndex.
 			// _midiVisualPlayIndex was just set to P0 = InitialMidiPlayIndex(...) above.
 			// At global sample `index`, the play cursor is at P0, so position 0 maps to
 			// global sample (index - P0). uint32_t wraps correctly.
-			const auto automationGlobalSampleOrigin = static_cast<std::uint32_t>(index)
-				- static_cast<std::uint32_t>(_midiVisualPlayIndex.load(std::memory_order_relaxed));
+			const auto automationGlobalSampleOrigin = _triggerCaptureConfigured && _midiRecordStartSample
+                ? *_midiRecordStartSample
+                : static_cast<std::uint32_t>(index) - static_cast<std::uint32_t>(_midiVisualPlayIndex.load(std::memory_order_relaxed));
 			// The audio callback may have replaced the provisional transport start
 			// after this loop was armed. EndRecord publishes the final grid once.
-			midiLoop->SetQuantisation(ResolvedMidiQuantisation(), MidiQuantisationTransportStartSamps(), _ForcedMidiQuantisationEnabled());
-			midiLoop->EndRecord(midiLoopLength, automationGlobalSampleOrigin);
+            auto gridOrigin = MidiQuantisationTransportStartSamps();
+            // The first take defines transport zero at its baked content zero.
+            // Predelay still rotates events, but cannot offset its own grid.
+            if (FirstMasterActivationPending())
+                gridOrigin = 0u;
+            else if (_triggerCaptureConfigured && _midiTransportStartFromAudio.load(std::memory_order_acquire))
+            {
+                const auto signedOrigin = _midiCaptureTransportOrigin.load(std::memory_order_acquire);
+                const auto interval = ResolvedMidiQuantisation().GridInterval();
+                if (signedOrigin < 0 && interval > 0u)
+                    gridOrigin = _NormalizeLoopIndex(signedOrigin, interval);
+            }
+            _midiTransportStartSamps.store(gridOrigin, std::memory_order_release);
+            midiLoop->SetQuantisation(ResolvedMidiQuantisation(), gridOrigin, _ForcedMidiQuantisationEnabled());
+            midiLoop->EndRecord(midiLoopLength, automationGlobalSampleOrigin);
 			midiLoop->QueueModelUpdateFromEvents(midiLoopLength, true);
 		}
 	}
@@ -2287,29 +2512,40 @@ void LoopTake::Play(unsigned long index,
 	_midiRecordHeld.clear();
 	_midiRecordSeededHeld.clear();
 
-	auto isOverdubbing = (STATE_OVERDUBBING == state) || (STATE_PUNCHEDIN == state);
-	if (_isPunchInActive.load(std::memory_order_relaxed))
-		isOverdubbing = true;
-	auto recordState = isOverdubbing ? STATE_OVERDUBBINGRECORDING : STATE_PLAYINGRECORDING;
-	auto playState = continueCapture ? recordState : STATE_PLAYING;
-	_state.store(loopLength > 0 ? playState : STATE_INACTIVE, std::memory_order_release);
-	_SetPresentationMode(loopLength > 0 && continueCapture ? PresentationMode::Tail : PresentationMode::Inactive);
+}
+
+void LoopTake::CompleteMidiIngressPump(std::uint32_t deviceSample)
+{
+    std::scoped_lock lock(_midiCaptureMutex);
+    if (!_midiCaptureCloseRequested || !_midiTriggerCapturePending.load(std::memory_order_relaxed)) return;
+    const auto origin = _midiRecordStartSample.value_or(deviceSample);
+    const auto end = origin + static_cast<std::uint32_t>(_midiCaptureFinalLength) - _triggerCaptureTiming.SeamSamps;
+    // All endpoint queues have been drained by this pump. Admit driver delivery
+    // through a bounded 100ms grace after the physical end, independently of ADC.
+    const auto grace = _triggerCaptureTiming.CapacitySamps / 2u;
+    if (midi::MidiSampleDelta(deviceSample, end) < static_cast<std::int64_t>(grace)) return;
+    _FinalizeMidiCapture(_midiCaptureFinalLength, _midiCaptureFinalIndex, _midiCaptureFinalState);
+    _midiTriggerCapturePending.store(false, std::memory_order_release);
 }
 
 bool LoopTake::ActivateFirstMasterMidiAtAudioBoundary(unsigned long phaseSamps, std::uint32_t recordOrigin) noexcept
 {
 	auto loops = _BorrowMidiLoopSnapshot();
-	if (!loops.ReadSucceeded() || !loops || loops->empty()) return false;
+	if (!loops.ReadSucceeded()) return false;
 	// All streams were completed together at the same initial cursor. Keep
 	// automation on the actual trigger ruler when publication was delayed.
-	for (const auto& loop : *loops)
+	if (loops) for (const auto& loop : *loops)
 		if (loop)
 		{
 			_midiAnchorCorrection.store(static_cast<std::int32_t>(
 				recordOrigin - loop->AutomationGlobalSampleOrigin()), std::memory_order_relaxed);
 			break;
 		}
-	_midiVisualPlayIndex.store(phaseSamps, std::memory_order_relaxed);
+    if (MidiTriggerCapturePending()) return false;
+    if (_triggerCaptureConfigured)
+        phaseSamps = _NormalizeLoopIndex(static_cast<long long>(phaseSamps) + _triggerCaptureTiming.DelaySamps,
+            _midiVisualLoopLength.load(std::memory_order_relaxed));
+    _midiVisualPlayIndex.store(phaseSamps, std::memory_order_relaxed);
 	_firstMasterActivationPending.store(false, std::memory_order_release);
 	return true;
 }
@@ -2529,8 +2765,19 @@ void LoopTake::Overdub(std::vector<unsigned int> channels,
 		return;
 
 	std::scoped_lock midiLock(_midiCaptureMutex);
+    _midiRecordStartSample = _triggerCaptureConfigured ? _triggerCaptureTiming.TriggerSample : std::nullopt;
+    _midiCaptureCloseRequested = false;
+    _midiTriggerCapturePending.store(_triggerCaptureConfigured && !midiChannels.empty(), std::memory_order_release);
 	_captureCancelled.store(false, std::memory_order_release);
 
+    if (_triggerCaptureConfigured && _triggerCaptureTiming.ContentTransportOrigin)
+    {
+        const auto origin = *_triggerCaptureTiming.ContentTransportOrigin;
+        _midiCaptureTransportOrigin.store(origin, std::memory_order_release);
+        const auto interval = ResolvedMidiQuantisation().GridInterval();
+        if (origin >= 0) transportStartSamps = static_cast<std::uint64_t>(origin);
+        else if (interval > 0u) transportStartSamps = _NormalizeLoopIndex(origin, interval);
+    }
 	_midiTransportStartSamps.store(transportStartSamps, std::memory_order_release);
 	_firstRecordBlockSceneSamps.store(0u, std::memory_order_relaxed);
 	_midiTransportStartFromAudio.store(false, std::memory_order_release);
@@ -2561,6 +2808,9 @@ void LoopTake::Overdub(std::vector<unsigned int> channels,
 	{
 		auto loop = AddLoop(static_cast<unsigned int>(loopSlot), stationName);
 		loop->Overdub();
+		if (_triggerCaptureConfigured)
+			loop->ConfigureTriggerCapture(static_cast<std::int64_t>(constants::MaxLoopFadeSamps)
+				+ _triggerCaptureTiming.DelaySamps - _triggerCaptureTiming.SeamSamps, false, loopSlot < sourceLoopCount, loopSlot < channels.size());
 	}
 
 	_midiLoops.clear();
@@ -2605,7 +2855,7 @@ void LoopTake::Overdub(std::vector<unsigned int> channels,
 	_state.store(STATE_OVERDUBBING, std::memory_order_release);
 }
 
-void LoopTake::PunchIn(bool applyAudio, bool applyMidi)
+void LoopTake::PunchIn(bool applyAudio, bool applyMidi, std::optional<std::uint32_t> edgeSample)
 {
 	std::scoped_lock midiLock(_midiCaptureMutex);
 
@@ -2620,7 +2870,9 @@ void LoopTake::PunchIn(bool applyAudio, bool applyMidi)
 	if (applyMidi && canPunchMidi && !_isMidiPunchInActive.load(std::memory_order_relaxed))
 	{
 		_isMidiPunchInActive.store(true, std::memory_order_release);
-		const auto punchSample = static_cast<std::uint32_t>(_recordedSampCount.load(std::memory_order_relaxed));
+		const auto punchSample = _triggerCaptureConfigured && _midiRecordStartSample
+            ? _MidiPhysicalCaptureOffset(edgeSample.value_or(CaptureBoundarySample()))
+            : static_cast<std::uint32_t>(_recordedSampCount.load(std::memory_order_relaxed));
 		_OpenMidiPunchWindow(punchSample);
 	}
 
@@ -2644,7 +2896,7 @@ void LoopTake::PunchIn(bool applyAudio, bool applyMidi)
 	}
 }
 
-void LoopTake::PunchOut(bool applyAudio, bool applyMidi)
+void LoopTake::PunchOut(bool applyAudio, bool applyMidi, std::optional<std::uint32_t> edgeSample)
 {
 	std::scoped_lock midiLock(_midiCaptureMutex);
 
@@ -2660,7 +2912,9 @@ void LoopTake::PunchOut(bool applyAudio, bool applyMidi)
 		_isMidiPunchInActive.store(false, std::memory_order_release);
 		if (_midiOverdubSession.Active)
 		{
-		const auto punchSample = static_cast<std::uint32_t>(_recordedSampCount.load(std::memory_order_relaxed));
+		const auto punchSample = _triggerCaptureConfigured && _midiRecordStartSample
+            ? _MidiPhysicalCaptureOffset(edgeSample.value_or(CaptureBoundarySample()))
+            : static_cast<std::uint32_t>(_recordedSampCount.load(std::memory_order_relaxed));
 		_CloseMidiPunchWindow(punchSample, true);
 		}
 	}
@@ -2684,6 +2938,11 @@ void LoopTake::PunchOut(bool applyAudio, bool applyMidi)
 	auto canFinishRecording = ((STATE_PLAYINGRECORDING == nextState) ||
 		(STATE_OVERDUBBINGRECORDING == nextState)) &&
 		(_endRecordSampCount >= _endRecordSamps);
+	if (canFinishRecording && _triggerCaptureConfigured)
+	{
+		for (const auto& loop : _backLoops)
+			if (loop && (!loop->TriggerCaptureComplete() || !loop->TriggerCaptureCoverageValid())) canFinishRecording = false;
+	}
 	if (canFinishRecording)
 		_PublishRecordingCompletion(captureGeneration);
 }
@@ -2825,6 +3084,13 @@ void LoopTake::_InitResources(ResourceLib& resourceLib, bool forceInit)
 
 std::vector<JobAction> LoopTake::_CommitChanges()
 {
+	if (_triggerCaptureConfigured && !_audioCaptureAdmitted.load(std::memory_order_acquire)
+		&& !_captureCancelled.load(std::memory_order_acquire))
+	{
+		std::cout << "[TriggerCapture] Audio capture rejected: unavailable source history or missing input block\n";
+		CancelCapture();
+	}
+
 	// Plugin latency/controller notifications must be pumped with closed editors.
 	if (const auto chain = _vstChain.load(std::memory_order_acquire))
 		chain->PollPendingChanges();
@@ -3857,9 +4123,9 @@ void LoopTake::_InitMidiOverdubSession(std::shared_ptr<LoopTake> sourceTake)
 		state.SourceLoopLengthSamps = sourceLoop->LoopLengthSamps();
 		if (0u == state.SourceLoopLengthSamps)
 			state.SourceLoopLengthSamps = static_cast<std::uint32_t>(sourceTake->VisualLoopLengthSamps());
-		state.SourceStartSample = _NormalizeMidiLoopOffset(
-			static_cast<std::uint32_t>(sourceTake->_midiVisualPlayIndex.load(std::memory_order_relaxed)),
-			state.SourceLoopLengthSamps);
+		state.SourceStartSample = _triggerCaptureConfigured && _midiRecordStartSample
+            ? sourceTake->_MidiPhaseAtDeviceSample(*_midiRecordStartSample - _triggerCaptureTiming.SeamSamps, state.SourceLoopLengthSamps)
+            : _NormalizeMidiLoopOffset(static_cast<std::uint32_t>(sourceTake->_midiVisualPlayIndex.load(std::memory_order_relaxed)), state.SourceLoopLengthSamps);
 		
 		for (std::size_t eventIndex = 0u; eventIndex < state.SourceEvents.size(); ++eventIndex)
 		{
@@ -4138,7 +4404,15 @@ void LoopTake::_FinalizeMidiOverdubLoop(std::size_t loopIndex, std::uint32_t tar
 		return;
 
 	const auto mergedCount = _BuildMidiOverdubMergedEvents(loopIndex, targetLoopLength, false);
-	midiLoop->ReplaceRecordedEvents(_midiOverdubSession.MergeScratch.data(), mergedCount, targetLoopLength);
+	if (_triggerCaptureConfigured)
+    {
+        midiLoop->StartRecord();
+        for (std::size_t e = 0u; e < mergedCount; ++e) midiLoop->AppendEventForBuild(_midiOverdubSession.MergeScratch[e]);
+        midiLoop->NormalizeTriggerCapture(targetLoopLength, _triggerCaptureTiming.DelaySamps - _triggerCaptureTiming.SeamSamps);
+        midiLoop->EndRecord(targetLoopLength, _midiRecordStartSample.value_or(0u));
+    }
+    else
+        midiLoop->ReplaceRecordedEvents(_midiOverdubSession.MergeScratch.data(), mergedCount, targetLoopLength);
 	midiLoop->QueueModelUpdateFromEvents(targetLoopLength, true);
 }
 

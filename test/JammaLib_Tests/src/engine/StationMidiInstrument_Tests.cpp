@@ -732,6 +732,7 @@ TEST(StationMidiInstrument, RecStartSeedsHeldChordIntoRecordingAndPlayback)
 
 	TriggerAction start;
 	start.ActionType = TriggerAction::TRIGGER_REC_START;
+	start.MidiSample = 0u;
 	start.InputChannels = {};
 	start.MidiInputDevices = { "Keys" };
 	auto startRes = station->OnAction(start);
@@ -759,6 +760,9 @@ TEST(StationMidiInstrument, RecStartSeedsHeldChordIntoRecordingAndPlayback)
 	EXPECT_EQ(2u, midiLoop->EventCount());
 
 	take->Play(0u, 128u, 0u);
+	EXPECT_TRUE(take->MidiTriggerCapturePending());
+	station->CompleteMidiIngressPump(128u + 4410u);
+	EXPECT_FALSE(take->MidiTriggerCapturePending());
 	ASSERT_EQ(4u, midiLoop->EventCount());
 
 	std::array<bool, 2u> foundOn{ false, false };
@@ -899,9 +903,11 @@ TEST(StationMidiInstrument, OverdubStartPassesSourceMidiToTargetTake)
 	EXPECT_TRUE(sourceTake->RecordMidiEvent(MidiEvent::MakeNoteOn(10u, 3u, 60u, 100u), "Keys", 100u));
 	EXPECT_TRUE(sourceTake->RecordMidiEvent(MidiEvent::MakeNoteOff(90u, 3u, 60u), "Keys", 100u));
 	sourceTake->Play(0u, 100u, 0u);
+	sourceTake->BeginCaptureAudioBoundary(0u, 0u, 0u);
 
 	TriggerAction start;
 	start.ActionType = TriggerAction::TRIGGER_OVERDUB_START;
+	start.MidiSample = 0u;
 	start.InputChannels = {};
 	start.MidiInputDevices = { "Keys" };
 	auto result = station->OnAction(start);
@@ -927,11 +933,15 @@ TEST(StationMidiInstrument, OverdubStartPassesSourceMidiToTargetTake)
 	ASSERT_EQ(3u, targetTake->MidiLoopChannels()[0]);
 	ASSERT_EQ("Keys", targetTake->MidiLoopDevices()[0]);
 
+	targetTake->BeginCaptureAudioBoundary(0u, 0u, 0u);
 	targetTake->EndMultiWrite(20u, true, base::Audible::AUDIOSOURCE_ADC);
+	targetTake->BeginCaptureAudioBoundary(20u, 20u, 20u);
 	targetTake->PunchIn();
 	targetTake->EndMultiWrite(20u, true, base::Audible::AUDIOSOURCE_ADC);
+	targetTake->BeginCaptureAudioBoundary(40u, 40u, 40u);
 	targetTake->PunchOut();
 	targetTake->Play(0u, 100u, 0u);
+	station->CompleteMidiIngressPump(100u + 4410u);
 
 	ASSERT_EQ(4u, targetTake->GetMidiLoops()[0]->EventCount());
 	MidiEvent event{};

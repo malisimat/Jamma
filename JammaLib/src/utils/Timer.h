@@ -39,6 +39,7 @@ namespace utils
 			unsigned int GrainSamps = 0u;
 			unsigned long LengthSamps = 0ul;
 			QuantisationType Type = QUANTISE_OFF;
+			// Device sample at compensated content zero (T-D), also master zero.
 			std::uint32_t RecordOrigin = 0u;
 		};
 		std::shared_ptr<const RecordingSeed> PendingRecordingSeedOnOwner() const;

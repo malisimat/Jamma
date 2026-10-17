@@ -3,6 +3,7 @@
 // while Station/LoopTake/Loop retain entity-specific geometry and phase.
 #include "stdafx.h"
 #include "AudioHost.h"
+#include <limits>
 #include "../engine/RigSnapshot.h"
 #include "../engine/PerformanceGroupService.h"
 #include "../ninjam/NinjamLoopAlignment.h"
@@ -321,6 +322,7 @@ namespace audio
 		if (audioStreamParams.BufSize == 0u || audioStreamParams.BufSize > constants::MaxBlockSize)
 			throw std::runtime_error("Negotiated audio buffer exceeds engine block capacity");
 		_preparedStreamParams = audioStreamParams;
+		_captureHistoryEpochDeviceSample = _audioSampleCounter.load(std::memory_order_relaxed);
 		_callbackOutputChannels.store(audioStreamParams.NumOutputChannels, std::memory_order_release);
 		_callbackContext->OutputChannels.store(audioStreamParams.NumOutputChannels, std::memory_order_release);
 		_ninjamMetronome.Configure(audioStreamParams.SampleRate);
@@ -329,8 +331,15 @@ namespace audio
 			_userConfig.Audio.LatencyIn :
 			audioStreamParams.InputLatency;
 
+		const auto reserve = io::UserConfig::TriggerHistorySamples(audioStreamParams.SampleRate);
+		const auto outputLatency = audioStreamParams.OutputLatency != 0u ? audioStreamParams.OutputLatency : _userConfig.Audio.LatencyOut;
+		if (!reserve || static_cast<std::uint64_t>((std::max)(inLatency,
+			constants::MaxLoopFadeSamps + reserve.value_or(0u))) + outputLatency >
+			static_cast<std::uint64_t>((std::numeric_limits<long>::max)()))
+			throw std::runtime_error("Audio latency exceeds bounded trigger capture sample arithmetic");
+
 		_channelMixer->SetParams(audio::ChannelMixerParams({
-				_userConfig.AdcBufferDelay(inLatency) + audioStreamParams.BufSize,
+				_userConfig.AdcBufferDelay(inLatency, audioStreamParams.SampleRate) + audioStreamParams.BufSize,
 				(std::max)(audio::ChannelMixer::DefaultBufferSize, audioStreamParams.BufSize),
 				audioStreamParams.NumInputChannels,
 				audioStreamParams.NumOutputChannels }));
@@ -1109,7 +1118,7 @@ void AudioHost::PublishAudioCallbackProgress(std::uint64_t blockStartSample,
 		auto* timingClock = _lastAudioTimingClock.get();
 		if (timingClock)
 			for (const auto& station : stations)
-				if (station && !station->IsRemote()) station->ApplyFirstMasterRecordingAtAudioBoundary(*timingClock);
+				if (station && !station->IsRemote()) station->ApplyFirstMasterRecordingAtAudioBoundary(*timingClock, blockStartSample);
 		ApplyLocalMasterTimingAtAudioBoundary(stations, timingClock);
 		ApplyDesiredTimingAtAudioBoundary(blockStartSample, audioStreamParams.SampleRate,
 			stationsSnapshotValue, timingClock);
@@ -1121,6 +1130,15 @@ void AudioHost::PublishAudioCallbackProgress(std::uint64_t blockStartSample,
 		// has applied it. This is a single post-command fan-out, rather than a
 		// speculative capture before the offset is known.
 		CaptureMappedSourceAnchorsAfterOffset(stations);
+
+		const auto captureInputLatency = audioStreamParams.InputLatency != 0u
+			? audioStreamParams.InputLatency : _userConfig.Audio.LatencyIn;
+		const auto earliestPhysicalInput = static_cast<std::uint32_t>(_captureHistoryEpochDeviceSample)
+			- captureInputLatency;
+		for (const auto& station : stations)
+			if (station && !station->IsRemote()) station->BeginCaptureAudioBoundary(blockStartSample,
+				timingClock ? timingClock->SceneSamplePos() : 0u,
+				timingClock ? timingClock->AbsoluteSamplePos() : 0u, earliestPhysicalInput);
 
 		if (nullptr != inBuf)
 		{
@@ -1151,7 +1169,7 @@ void AudioHost::PublishAudioCallbackProgress(std::uint64_t blockStartSample,
 				_channelMixer->WriteToSink(station, numSamps);
 			}
 
-			_channelMixer->InitPlay(_userConfig.AdcBufferDelay(inLatency), numSamps);
+			_channelMixer->InitPlay(_userConfig.AdcBufferDelay(inLatency, audioStreamParams.SampleRate), numSamps);
 			_channelMixer->Source()->SetSourceType(Audible::AUDIOSOURCE_ADC);
 
 			for (auto& station : stations)
@@ -1313,7 +1331,7 @@ void AudioHost::PublishAudioCallbackProgress(std::uint64_t blockStartSample,
 			{
 				if (trigger.Instance)
 					trigger.Instance->OnTick(Timer::GetTime(), numSamps,
-						_tickUserConfig, _preparedStreamParams, _audioRigRevision);
+						_tickUserConfig, _preparedStreamParams, _audioRigRevision, static_cast<std::uint32_t>(blockStartSample));
 			}
 		}
 

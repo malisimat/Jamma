@@ -114,6 +114,7 @@ Trigger::Trigger(TriggerParams trigParams) :
 	_midiInputDevices(trigParams.MidiInputDevices),
 	_state(TRIGSTATE_DEFAULT),
 	_debounceTimeMs(trigParams.DebounceMs),
+	_preDelayMs(trigParams.PreDelayMs),
 	_lastActivateTime(),
 	_lastDitchTime(),
 	_isDitchDown(false),
@@ -156,6 +157,7 @@ std::optional<std::shared_ptr<Trigger>> Trigger::FromFile(TriggerParams trigPara
 	trigParams.Name = definition.Name;
 	trigParams.InputChannels = definition.CaptureInputs.Audio;
 	trigParams.MidiInputDevices = definition.CaptureInputs.Midi;
+	trigParams.PreDelayMs = definition.PreDelayMs;
 	return std::make_shared<Trigger>(std::move(trigParams));
 }
 
@@ -211,7 +213,10 @@ ActionResult Trigger::OnEvent(const midi::MidiEvent& event,
 	if (!TryEncodeMidiEvent(event, value, state))
 		return ActionResult::NoAction();
 
-	return OnEvent(TriggerSource::TRIGGER_MIDI, value, state, action);
+	_currentInputMidiSample = event.sampleOffset;
+	const auto result = OnEvent(TriggerSource::TRIGGER_MIDI, value, state, action);
+	_currentInputMidiSample.reset();
+	return result;
 }
 
 ActionResult Trigger::OnEvent(TriggerSource source,
@@ -361,8 +366,10 @@ void Trigger::OnTick(Time curTime,
 	unsigned int samps,
 	const std::optional<io::UserConfig>& cfg,
 	const std::optional<audio::AudioStreamParams>& params,
-	std::uint64_t rigRevision)
+	std::uint64_t rigRevision,
+	std::optional<std::uint32_t> blockStartSample)
 {
+	_currentAudioBlockStartSample = blockStartSample;
 	_ProcessStructuralResults();
 	_ApplyReceiverRemovalAtAudioBoundary();
 	if (_removingReceiver.load(std::memory_order_acquire) == _receiver.get() && _receiver)
@@ -492,10 +499,11 @@ bool Trigger::_ApplyInputEdge(const TriggerInputEdge& edge,
 		return false;
 	const bool isActivate = edge.Control == TRIGGER_CONTROL_ACTIVATE;
 	const bool isDown = edge.Edge == TRIGGER_EDGE_DOWN;
+	const auto admittedSample = edge.MidiSample ? edge.MidiSample : _currentAudioBlockStartSample;
 	auto applyStateMachine = [&]()
 	{
 		const auto priorState = _state;
-		_currentInputMidiSample = edge.MidiSample;
+		_currentInputMidiSample = admittedSample;
 		const auto changed = StateMachine(isDown, isActivate, cfg, params);
 		_currentInputMidiSample.reset();
 		if (changed && isActivate && isDown && priorState != _state &&
@@ -527,7 +535,7 @@ bool Trigger::_ApplyInputEdge(const TriggerInputEdge& edge,
 		std::chrono::microseconds(edge.EventTimeUsec));
 	if (!Debounce(isActivate, match, Time(eventDuration)))
 	{
-		if (isActivate) _debouncedActivateMidiSample = edge.MidiSample;
+		if (isActivate) _debouncedActivateMidiSample = admittedSample;
 		return false;
 	}
 	if (isActivate) _debouncedActivateMidiSample.reset();
@@ -1066,6 +1074,7 @@ bool Trigger::_QueueStructuralCommand(TriggerAction::TriggerActionType actionTyp
 	command.HistoryToken = historyToken;
 	command.SampleCount = sampleCount;
 	command.MidiSample = _currentInputMidiSample;
+	command.PreDelayMs = _preDelayMs;
 	command.ApplyToTargetTake = applyToTargetTake;
 	command.ApplyToSourceTake = applyToSourceTake;
 	command.ApplyToTargetAudio = applyToTargetAudio;
@@ -1353,6 +1362,7 @@ void Trigger::ProcessStructuralActionsOnJob(
 			action.ActionType = command.ActionType;
 			action.SampleCount = command.SampleCount;
 			action.MidiSample = command.MidiSample;
+			action.PreDelayMs = command.PreDelayMs;
 			action.ApplyToTargetTake = command.ApplyToTargetTake;
 			action.ApplyToSourceTake = command.ApplyToSourceTake;
 			action.ApplyToTargetAudio = command.ApplyToTargetAudio;
@@ -1734,8 +1744,10 @@ bool Trigger::TryChangeState(DualBinding& binding,
 
 	if (!allowedThrough)
 	{
+		if (isActivate) _debouncedActivateMidiSample = _currentInputMidiSample;
 		return false;
 	}
+	if (isActivate) _debouncedActivateMidiSample.reset();
 
 	switch (trigResult)
 	{
@@ -2069,12 +2081,17 @@ unsigned int Trigger::CalcInputAlignedDelaySamps(const std::optional<io::UserCon
 
 	// Audio written this callback corresponds to older captured ADC samples:
 	// hardware input latency + additional ring-buffer read delay.
-	auto readDelay = cfg.value().AdcBufferDelay(inputLatency);
+	auto readDelay = cfg.value().AdcBufferDelay(inputLatency, params.has_value() ? params->SampleRate : 0u);
 	return inputLatency + readDelay;
 }
 
 unsigned int Trigger::CalcPunchStateDelaySamps(const std::optional<io::UserConfig>& cfg) const
 {
+	if (_activeHistoryIndex && *_activeHistoryIndex < _loopTakeHistorySize)
+	{
+		const auto& take = _loopTakeHistory[*_activeHistoryIndex].TargetTake;
+		if (take && take->FrozenAudioSourceAgeSamps() != 0u) return take->FrozenAudioSourceAgeSamps();
+	}
 	if (!cfg.has_value())
 		return 0u;
 

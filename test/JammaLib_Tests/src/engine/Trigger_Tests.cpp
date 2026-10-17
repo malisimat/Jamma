@@ -1264,7 +1264,7 @@ TEST(Trigger, BounceWriterFollowsDelayedPunchMixerChanges) {
 	ASSERT_GE(receiver->Actions().size(), 2u);
 	EXPECT_EQ(TriggerAction::TRIGGER_PUNCHIN_START, receiver->Actions()[1].ActionType);
 	EXPECT_EQ(engine::TRIGSTATE_PUNCHEDIN, trigger->GetState());
-	const auto punchDelay = cfg.Trigger.PreDelaySamps + constants::MaxLoopFadeSamps;
+	const auto punchDelay = cfg.TriggerLoopAlignmentSamps();
 	trigger->OnTick(GetTime(), punchDelay - 1u, cfg, std::nullopt);
 	writer->WriteBlock(sink, samples, 64u, 0u);
 	EXPECT_FLOAT_EQ(1.0f, sink->LastBounceLevel);
@@ -1361,7 +1361,7 @@ TEST(Trigger, EndOverdubPreservesDelayedPunchActions) {
 	EXPECT_EQ(0u, targetTake->PunchOutCount);
 
 	// Flush delayed audio work; it remains valid after the job-side overdub end.
-	trigger->OnTick(GetTime(), cfg.Trigger.PreDelaySamps + constants::MaxLoopFadeSamps, cfg, std::nullopt);
+	trigger->OnTick(GetTime(), cfg.TriggerLoopAlignmentSamps(), cfg, std::nullopt);
 	trigger->ProcessStructuralActionsOnJob(cfg, std::nullopt);
 
 	auto actionsAfterTick = receiver->Actions();
@@ -1433,7 +1433,7 @@ TEST(Trigger, MixedAudioMidiPunchDelaysAudioTargetButNotMidiTarget) {
 	EXPECT_EQ(0u, targetTake->PunchInCount);
 	EXPECT_EQ(0u, targetTake->PunchOutCount);
 
-	trigger->OnTick(GetTime(), cfg.Trigger.PreDelaySamps + constants::MaxLoopFadeSamps, cfg, std::nullopt);
+	trigger->OnTick(GetTime(), cfg.TriggerLoopAlignmentSamps(), cfg, std::nullopt);
 	trigger->ProcessStructuralActionsOnJob(cfg, std::nullopt);
 
 	auto actionsAfterTick = receiver->Actions();
@@ -2933,13 +2933,13 @@ TEST(Trigger, NewOverdubUsesIndependentWriterWhileOldDelayedPunchDrains)
 		if (request.ActionType == TriggerAction::TRIGGER_OVERDUB_START) newWriter = request.OverdubWriter;
 	ASSERT_NE(nullptr, newWriter);
 	EXPECT_NE(oldWriter, newWriter);
-	trigger->OnTick(GetTime(), cfg.Trigger.PreDelaySamps + constants::MaxLoopFadeSamps, cfg, std::nullopt);
+	trigger->OnTick(GetTime(), cfg.TriggerLoopAlignmentSamps(), cfg, std::nullopt);
 	EXPECT_EQ(1u, target->PunchInCount);
 	EXPECT_EQ(1u, target->PunchOutCount);
 	EXPECT_EQ(engine::TRIGSTATE_OVERDUBBING, trigger->GetState());
 	press(true, false);
 	press(true, true);
-	trigger->OnTick(GetTime(), cfg.Trigger.PreDelaySamps + constants::MaxLoopFadeSamps, cfg, std::nullopt);
+	trigger->OnTick(GetTime(), cfg.TriggerLoopAlignmentSamps(), cfg, std::nullopt);
 	auto oldSink = std::make_shared<StereoCaptureSampleSink>();
 	auto newSink = std::make_shared<StereoCaptureSampleSink>();
 	std::array<float, 64> samples;
@@ -3005,19 +3005,23 @@ TEST(Trigger, TwoAudioOrMixedTailsFinishIndependentlyWhileNewestCaptureStaysLive
 		if (mixed) params.MidiInputDevices = { "Keys" };
 		auto trigger = std::make_shared<Trigger>(params);
 		trigger->SetReceiver(station);
-		io::UserConfig cfg;
+		io::UserConfig cfg{};
 		cfg.Loop = { 0u };
 		base::Action action;
+		std::uint32_t boundary = 0u;
 		auto press = [&](bool down)
 		{
 			ASSERT_TRUE(trigger->QueueExternalControlAction(true, down, action).IsEaten);
-			TickAndComplete(trigger, 0u, cfg);
+			station->BeginCaptureAudioBoundary(boundary, boundary, boundary);
+			trigger->OnTick(GetTime(), 0u, cfg, std::nullopt, 0u, boundary);
+			CompleteQueuedStructuralAction(trigger, cfg);
 			station->CommitChanges();
 		};
 		for (unsigned int recording = 0u; recording < 2u; ++recording)
 		{
 			press(true); press(false);
 			trigger->OnTick(GetTime(), 64u, cfg, std::nullopt);
+			boundary += 64u;
 			press(true); press(false);
 		}
 		press(true); press(false);
@@ -3028,7 +3032,24 @@ TEST(Trigger, TwoAudioOrMixedTailsFinishIndependentlyWhileNewestCaptureStaysLive
 		EXPECT_EQ(LoopTake::STATE_RECORDING, takes[2]->TakeState());
 		for (unsigned int tail = 0u; tail < 2u; ++tail)
 		{
-			takes[tail]->EndMultiWrite(cfg.EndRecordingSamps(0u) + 1u, true, base::Audible::AUDIOSOURCE_ADC);
+			std::array<float, 256u> silence{};
+			base::AudioWriteRequest request;
+			request.samples = silence.data();
+			request.numSamps = static_cast<unsigned int>(silence.size());
+			request.stride = 1u;
+			request.source = base::Audible::AUDIOSOURCE_ADC;
+			const auto sourceAge = takes[tail]->CaptureTiming().SourceAgeSamps;
+			ASSERT_LT(sourceAge, constants::MaxLoopBufferSize);
+			// The frozen source age includes the unused 200ms history reserve;
+			// the legacy fade-only duration is not a source-coverage deadline.
+			for (std::uint32_t elapsed = 0u; elapsed < sourceAge + 256u; elapsed += 256u)
+			{
+				takes[tail]->BeginCaptureAudioBoundary(boundary + elapsed, boundary + elapsed, boundary + elapsed);
+				for (unsigned int channel = 0u; channel < 2u; ++channel)
+					takes[tail]->OnBlockWriteChannel(channel, request, 0);
+				takes[tail]->EndMultiWrite(256u, true, base::Audible::AUDIOSOURCE_ADC);
+			}
+			if (mixed) station->CompleteMidiIngressPump(boundary + sourceAge + 256u);
 			bool completed = false;
 			for (const auto& job : takes[tail]->CommitChanges())
 				if (job.JobActionType == actions::JobAction::JOB_ENDRECORDING)
@@ -3073,7 +3094,7 @@ TEST(Trigger, PunchAdmissionReservesDelayedAndStructuralReleaseCapacity)
 	EXPECT_GT(admitted, 0u);
 	EXPECT_LT(admitted, 40u);
 	trigger->ProcessStructuralActionsOnJob(cfg, std::nullopt);
-	trigger->OnTick(GetTime(), cfg.Trigger.PreDelaySamps + constants::MaxLoopFadeSamps, cfg, std::nullopt);
+	trigger->OnTick(GetTime(), cfg.TriggerLoopAlignmentSamps(), cfg, std::nullopt);
 	EXPECT_EQ(admitted, target->PunchInCount);
 	EXPECT_EQ(admitted, target->PunchOutCount);
 	EXPECT_EQ(engine::TRIGSTATE_OVERDUBBING, trigger->GetState());
@@ -3105,7 +3126,7 @@ TEST(Trigger, RejectedDitchReleasesRollbackCapacityAfterRestoredCommandsDrain)
 	press(false, true);
 	press(false, false);
 	ASSERT_EQ(engine::TRIGSTATE_OVERDUBBING, trigger->GetState());
-	trigger->OnTick(GetTime(), cfg.Trigger.PreDelaySamps + constants::MaxLoopFadeSamps,
+	trigger->OnTick(GetTime(), cfg.TriggerLoopAlignmentSamps(),
 		cfg, std::nullopt);
 	press(true, true);
 	EXPECT_EQ(engine::TRIGSTATE_PUNCHEDIN, trigger->GetState());
@@ -3247,9 +3268,12 @@ TEST(Trigger, ActivateRecordsConfiguredMidiLanesWithoutConnectedDevices)
             trigger->ConfirmMidiAvailabilityOnJob(
                 partiallyConnected ? std::vector<std::string>{ "keys" } : std::vector<std::string>{}, {});
             base::Action action;
+			std::uint32_t boundary = 0u;
             auto press = [&](bool down) {
                 trigger->QueueExternalControlAction(true, down, action);
-                TickAndComplete(trigger, 0u, cfg);
+				station->BeginCaptureAudioBoundary(boundary, boundary, boundary);
+				trigger->OnTick(GetTime(), 0u, cfg, std::nullopt, 0u, boundary);
+				CompleteQueuedStructuralAction(trigger, cfg);
                 station->CommitChanges();
             };
             press(true); press(false);
@@ -3262,7 +3286,9 @@ TEST(Trigger, ActivateRecordsConfiguredMidiLanesWithoutConnectedDevices)
             EXPECT_EQ(params.MidiInputDevices, take->MidiLoopDevices());
             EXPECT_FALSE(take->RecordMidiEvent(midi::MidiEvent::MakeNoteOn(0u, 0u, 60u, 100u), "unrelated", 0u));
             trigger->OnTick(GetTime(), 256u, cfg, std::nullopt);
+			boundary += 256u;
             press(true); press(false);
+			station->CompleteMidiIngressPump(boundary + 4410u);
             EXPECT_EQ(engine::TRIGSTATE_DEFAULT, trigger->GetState());
             ASSERT_EQ(1u, trigger->GetTakes().size());
             for (const auto& loop : take->GetMidiLoops())
@@ -3448,6 +3474,7 @@ TEST(Trigger, EmptyAudioRouteRemainsMidiOnlyAndStreamReplacementCancelsItsPunch)
     auto source = station->AddTake();
     source->Record({}, station->Name(), { 0u }, { "healthy" });
     source->Play(0u, 1000u, 0u);
+    source->BeginCaptureAudioBoundary(0u, 0u, 0u);
     station->CommitChanges();
     TriggerParams params;
     params.MidiInputDevices = { "healthy" };
@@ -3597,8 +3624,11 @@ TEST(Trigger, ConfirmedLossBeforeAcceptedMidiOnlyEndCannotEscapeAsCompletedHisto
     trigger->OnTick(GetTime(), 0u, cfg, std::nullopt);
     trigger->ConfirmMidiAvailabilityOnJob({}, { "lost" });
     trigger->ProcessStructuralActionsOnJob(cfg, std::nullopt);
-    ASSERT_FALSE(target->HasPendingTriggerCapture());
+	// END remains pending until endpoint delivery coverage, so confirmed loss
+	// must still cancel it before it can become completed history.
+	ASSERT_TRUE(target->HasPendingTriggerCapture());
     for (unsigned int step = 0u; step < 4u; ++step) TickAndComplete(trigger, 0u, cfg);
+	EXPECT_FALSE(target->HasPendingTriggerCapture());
     EXPECT_TRUE(trigger->GetTakes().empty());
     EXPECT_TRUE(target->IsTriggerCaptureInactive());
     EXPECT_EQ(engine::TRIGSTATE_DEFAULT, trigger->GetState());
@@ -3651,4 +3681,75 @@ TEST(Trigger, HistoricalReceiverRemovalDiscardsDelayedBorrowersWithoutCancelling
  trigger->OnTick(GetTime(), 128u, std::nullopt, std::nullopt);
  EXPECT_EQ(0u, removedTarget->PunchInCount);
  EXPECT_EQ(1u, survivorTarget->PunchInCount);
+}
+
+TEST(Trigger, PerTriggerPredelayAndOriginalMidiSampleSurviveStructuralHandoff)
+{
+	auto definition = MakeMidiRigTrigger("PredelayMidi");
+	definition.PreDelayMs = -86.125;
+	auto trigger = MakeTriggerFromRigDefinition(definition, 0u);
+	ASSERT_NE(nullptr, trigger);
+	auto receiver = std::make_shared<SequenceTriggerReceiver>();
+	trigger->SetReceiver(receiver);
+	base::Action action;
+	const auto now = GetTime();
+	const auto micros = std::chrono::duration_cast<std::chrono::microseconds>(
+		now.time_since_epoch()).count();
+	const auto event = midi::MidiEvent::MakeNoteOn(0xfffffff0u, 0u, 60u, 100u);
+	ASSERT_TRUE(trigger->QueueMidiInputEvent(engine::TRIGGER_INPUT_JOB, 0u,
+		event, action, micros, "TriggerPad").IsEaten);
+	trigger->OnTick(now, 64u, std::nullopt, std::nullopt, 0u, 5000u);
+	// The job can run much later without changing the admitted device timestamp.
+	trigger->ProcessStructuralActionsOnJob(std::nullopt, std::nullopt);
+	ASSERT_EQ(1u, receiver->Actions().size());
+	EXPECT_EQ(event.sampleOffset, receiver->Actions()[0].MidiSample);
+	EXPECT_DOUBLE_EQ(-86.125, receiver->Actions()[0].PreDelayMs);
+	EXPECT_EQ(0xfffffff0u, event.sampleOffset);
+}
+
+TEST(Trigger, UntimestampedKeyboardUsesAdmissionBoundaryThroughDebounce)
+{
+	auto receiver = std::make_shared<SequenceTriggerReceiver>();
+	auto trigger = MakeDefaultTrigger(receiver, 20u);
+	const auto start = GetTime();
+	auto queue = [&](unsigned int state, unsigned int elapsedMs, std::uint32_t boundary)
+	{
+		base::Action action;
+		action.SetActionTime(OffsetTime(start, elapsedMs));
+		ASSERT_TRUE(trigger->QueueInputEvent(engine::TRIGGER_INPUT_UI, 0u,
+			engine::TRIGGER_KEY, ActivateChar, state, action).IsEaten);
+		trigger->OnTick(OffsetTime(start, elapsedMs), 0u, std::nullopt, std::nullopt, 0u, boundary);
+	};
+	queue(1u, 0u, 1000u);
+	CompleteQueuedStructuralAction(trigger);
+	ASSERT_EQ(1u, receiver->Actions().size());
+	EXPECT_EQ(1000u, receiver->Actions()[0].MidiSample);
+	queue(0u, 30u, 2000u);
+	// The next press is debounced, then admitted with its original boundary.
+	queue(1u, 35u, 3000u);
+	EXPECT_EQ(1u, receiver->Actions().size());
+	trigger->OnTick(OffsetTime(start, 60u), 0u, std::nullopt, std::nullopt, 0u, 9000u);
+	trigger->ProcessStructuralActionsOnJob(std::nullopt, std::nullopt);
+	ASSERT_EQ(2u, receiver->Actions().size());
+	EXPECT_EQ(TriggerAction::TRIGGER_REC_END, receiver->Actions()[1].ActionType);
+	EXPECT_EQ(3000u, receiver->Actions()[1].MidiSample);
+}
+
+TEST(Trigger, UntimestampedSerialUsesAdmissionBoundary)
+{
+	TriggerParams params;
+	params.Activate.emplace_back(
+		engine::TriggerBinding(engine::TRIGGER_SERIAL, 7u, 1u, "pedal"),
+		engine::TriggerBinding(engine::TRIGGER_SERIAL, 7u, 0u, "pedal"));
+	auto trigger = std::make_shared<Trigger>(params);
+	auto receiver = std::make_shared<SequenceTriggerReceiver>();
+	trigger->SetReceiver(receiver);
+	base::Action action;
+	ASSERT_TRUE(trigger->QueueInputEvent(engine::TRIGGER_INPUT_JOB, 0u,
+		engine::TRIGGER_SERIAL, 7u, 1u, action, "pedal").IsEaten);
+	trigger->OnTick(GetTime(), 64u, std::nullopt, std::nullopt, 0u, 12345u);
+	trigger->ProcessStructuralActionsOnJob(std::nullopt, std::nullopt);
+	ASSERT_EQ(1u, receiver->Actions().size());
+	EXPECT_EQ(12345u, receiver->Actions()[0].MidiSample);
+	EXPECT_DOUBLE_EQ(0.0, receiver->Actions()[0].PreDelayMs);
 }

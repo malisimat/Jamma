@@ -164,7 +164,7 @@ bool NativeMidiSidecar::Validate(const Stream& stream, std::string* error) noexc
 	{
 		const auto statusType = event.Status & 0xf0u;
 		if (event.SampleOffset >= stream.LogicalLength || statusType < 0x80u || statusType > 0xe0u || event.Data1 > 127u || event.Data2 > 127u
-			|| event.Flags > 1u || (event.Flags && statusType != 0x80u && statusType != 0x90u))
+			|| event.Flags > 3u || (event.Flags && statusType != 0x80u && statusType != 0x90u))
 		{
 			SetError(error, "invalid MIDI event");
 			return false;

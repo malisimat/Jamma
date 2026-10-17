@@ -1167,18 +1167,21 @@ MidiRouter::TriggerDispatchSummary MidiRouter::PumpMidi(const std::vector<std::s
 	const audio::AudioStreamParams& audioParams) noexcept
 {
 	TriggerDispatchSummary summary;
+	bool captureOverflow = false;
 	MidiInputEndpoint::RigMidiIngressEvent queued{};
 	const auto midiInputs = _midiInputs.load(std::memory_order_acquire);
 	if (!midiInputs)
 	{
-		_ConsumeEditorAutomation(stations, globalSampleNow, audioParams);
+	    for (const auto& station : stations)
+        if (station) station->CompleteMidiIngressPump(static_cast<std::uint32_t>(globalSampleNow), captureOverflow);
+
+	_ConsumeEditorAutomation(stations, globalSampleNow, audioParams);
 		return summary;
 	}
 	for (const auto& input : *midiInputs)
 	{
 		if (!input)
 			continue;
-		input->Device->DrainVerbosePackets(input->ConfiguredName);
 
 		while (input->Ingress.Pop(queued))
 		{
@@ -1202,6 +1205,29 @@ MidiRouter::TriggerDispatchSummary MidiRouter::PumpMidi(const std::vector<std::s
 			summary.Ditched = summary.Ditched || dispatch.Ditched;
 			// Derive trigger and station events independently from the raw ingress event.
 			const auto msgType = ingress.MessageType();
+			if (_loggingVerbose && (msgType == midi::MidiEvent::NoteOn || msgType == midi::MidiEvent::NoteOff))
+			{
+				const char* timestampSource = "initial-arrival";
+				switch (queued.TimestampSource)
+				{
+				case midi::MidiTimestampSource::DriverDelta: timestampSource = "driver-delta"; break;
+				case midi::MidiTimestampSource::InvalidDeltaFallback: timestampSource = "invalid-delta-fallback"; break;
+				case midi::MidiTimestampSource::DiscontinuityFallback: timestampSource = "discontinuity-fallback"; break;
+				default: break;
+				}
+				std::cout << "[MIDI Timestamp] device=\"" << input->ConfiguredName
+					<< "\" slot=" << static_cast<unsigned int>(input->DeviceSlot)
+					<< " edge=" << (ingress.IsNoteOn() ? "on" : "off")
+					<< " channel=" << static_cast<unsigned int>(ingress.Channel() + 1u)
+					<< " note=" << static_cast<unsigned int>(ingress.data1)
+					<< " mappedSample=" << ingress.sampleOffset
+					<< " eventMicros=" << queued.EventSteadyMicros
+					<< " arrivalMicros=" << queued.CallbackArrivalMicros
+					<< " arrivalMinusEventMicros=" << (queued.CallbackArrivalMicros - queued.EventSteadyMicros)
+					<< " driverDeltaSeconds=" << queued.DriverDeltaSeconds
+					<< " timestampSource=" << timestampSource
+					<< " pumpSample=" << globalSampleNow << '\n';
+			}
 			if ((msgType >= 0x80u) && (msgType <= 0xE0u))
 			{
 				const auto channelBit = static_cast<std::uint16_t>(1u << stationEvent.Channel());
@@ -1274,25 +1300,22 @@ MidiRouter::TriggerDispatchSummary MidiRouter::PumpMidi(const std::vector<std::s
 			if ((msgType != midi::MidiEvent::NoteOn) && (msgType != midi::MidiEvent::NoteOff))
 				continue;
 
-			for (const auto& station : stations)
-			{
-				for (const auto& take : station->GetLoopTakeSnapshot())
-				{
-					if (take->IsArmed())
-						take->RecordMidiEvent(stationEvent, input->ConfiguredName, static_cast<std::uint32_t>(globalSampleNow));
-				}
-			}
+
 		}
 
 		auto dropped = input->Ingress.DroppedCount();
 		if (dropped != input->LastDroppedCount)
 		{
+            captureOverflow = true;
 			std::cout << "[MIDI] Ingress queue dropped " << (dropped - input->LastDroppedCount)
 				<< " event(s) on device \"" << input->ConfiguredName
 				<< "\", total dropped=" << dropped << std::endl;
 			input->LastDroppedCount = dropped;
 		}
 	}
+
+    for (const auto& station : stations)
+        if (station) station->CompleteMidiIngressPump(static_cast<std::uint32_t>(globalSampleNow), captureOverflow);
 
 	_ConsumeEditorAutomation(stations, globalSampleNow, audioParams);
 

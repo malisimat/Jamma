@@ -304,7 +304,9 @@ void Loop::OnBlockWrite(const base::AudioWriteRequest& request, int writeOffset)
 		return;
 	}
 
-	auto writeIndex = _writeIndex.load(std::memory_order_relaxed);
+	const auto writeIndex = _triggerCapture ? _triggerCaptureCursor :
+		static_cast<std::int64_t>(_writeIndex.load(std::memory_order_relaxed));
+	const auto captureEnd = _triggerCaptureEnd.load(std::memory_order_acquire);
 
 	if (AUDIOSOURCE_MONITOR == request.source)
 	{
@@ -313,7 +315,9 @@ void Loop::OnBlockWrite(const base::AudioWriteRequest& request, int writeOffset)
 		for (unsigned int i = 0; i < request.numSamps; i++)
 		{
 			auto samp = request.samples[i * request.stride];
-			auto idx = writeIndex + writeOffset + i;
+			const auto signedIndex = writeIndex + writeOffset + i;
+			if (signedIndex < 0 || signedIndex >= _monitorBufferBank.Capacity()) continue;
+			const auto idx = static_cast<unsigned long>(signedIndex);
 			_monitorBufferBank[idx] = (request.fadeNew * samp) + (request.fadeCurrent * _monitorBufferBank[idx]);
 
 			if (STATE_RECORDING == playState)
@@ -333,8 +337,22 @@ void Loop::OnBlockWrite(const base::AudioWriteRequest& request, int writeOffset)
 		for (unsigned int i = 0; i < request.numSamps; i++)
 		{
 			auto samp = request.samples[i * request.stride];
-			auto idx = writeIndex + writeOffset + i;
+			const auto signedIndex = writeIndex + writeOffset + i;
+			if (signedIndex < 0 || signedIndex >= _bufferBank.Capacity()
+				|| (_triggerCapture && signedIndex >= captureEnd)) continue;
+			const auto idx = static_cast<unsigned long>(signedIndex);
 			_bufferBank[idx] = (request.fadeNew * samp) + (request.fadeCurrent * _bufferBank[idx]);
+		}
+		if (_triggerCapture)
+		{
+			auto& through = request.source == AUDIOSOURCE_ADC ? _triggerAdcThrough : _triggerBounceThrough;
+			const auto first = (std::max)(writeIndex + writeOffset, _triggerCaptureBegin);
+			const auto end = (std::min)({ writeIndex + writeOffset + request.numSamps,
+				captureEnd, static_cast<std::int64_t>(_bufferBank.Capacity()) });
+			if (first <= through.load(std::memory_order_relaxed) && end > first)
+				through.store(end, std::memory_order_release);
+			if (request.source == AUDIOSOURCE_ADC && first <= _triggerAdcBlockThrough && end > first)
+				_triggerAdcBlockThrough = end;
 		}
 	}
 }
@@ -355,7 +373,20 @@ void Loop::EndWrite(unsigned int numSamps,
 	if (!updateIndex)
 		return;
 
-	auto writeIndex = _writeIndex.load(std::memory_order_relaxed) + numSamps;
+	const auto next = _triggerCapture ? _triggerCaptureCursor + numSamps :
+		static_cast<std::int64_t>(_writeIndex.load(std::memory_order_relaxed)) + numSamps;
+	if (_triggerCapture)
+	{
+		const auto requiredEnd = (std::min)(next, _triggerCaptureEnd.load(std::memory_order_acquire));
+		if (requiredEnd > _triggerCaptureBegin &&
+			((_triggerCaptureRequiresAdc && _triggerAdcThrough.load(std::memory_order_acquire) < requiredEnd)
+			|| (_triggerCaptureRequiresBounce && _triggerBounceThrough.load(std::memory_order_acquire) < requiredEnd)
+			|| (_triggerPunchRequiresAdc && _isPunchInActive.load(std::memory_order_acquire) && _triggerAdcBlockThrough < requiredEnd)))
+			_triggerCaptureCoverageValid.store(false, std::memory_order_release);
+		_triggerCaptureCursor = next;
+	}
+	const auto writeIndex = static_cast<unsigned long>((std::clamp)(next, std::int64_t{0},
+		static_cast<std::int64_t>(_bufferBank.Capacity())));
 	_writeIndex.store(writeIndex, std::memory_order_relaxed);
 	_bufferBank.SetLength(writeIndex);
 
@@ -411,6 +442,9 @@ unsigned int Loop::ReadBlock(float* outBuf,
 
 	if (index < constants::MaxLoopFadeSamps)
 		index += loopLength;
+
+	if (_triggerCapture && !TriggerCaptureReady(index - constants::MaxLoopFadeSamps, numSamps))
+		return 0u;
 
 	// Check if we are inside crossfading region at any point
 	auto isXfadeRegion = (index + numSamps) >= (bufSize - _loopParams.FadeSamps);
@@ -819,18 +853,22 @@ void Loop::Play(unsigned long index,
 	InvalidateSceneAnchor();
 	auto physBufSize = _bufferBank.Length();
 
-	if (0 == physBufSize)
+	// A short take can close before any delayed ADC sample reaches storage.
+	// Keep its capture alive; readiness silences unavailable repeats while phase advances.
+	if (0 == physBufSize && !(_triggerCapture && continueRecording && loopLength > 0ul))
 	{
 		Reset();
 		return;
 	}
 
+	// Preserve the requested musical phase; source readiness is checked on read.
 	// Clamp against the smaller of the logical loop size and the currently
 	// recorded physical size. Keep the MaxLoopFadeSamps logical offset in this
 	// bound: playback indices are in [fadeOffset, fadeOffset + loopLength).
 	auto logicalBufSize = loopLength + constants::MaxLoopFadeSamps;
 	auto effectiveBufSize = std::min(logicalBufSize, physBufSize);
-	_playIndex.store((effectiveBufSize > 0 && index >= effectiveBufSize) ? (effectiveBufSize - 1) : index, std::memory_order_relaxed);
+	_playIndex.store(_triggerCapture ? index :
+		((effectiveBufSize > 0 && index >= effectiveBufSize) ? (effectiveBufSize - 1) : index), std::memory_order_relaxed);
 	if (_loopLength.load(std::memory_order_relaxed) != loopLength)
 		_InvalidateAudioSource();
 	_loopLength.store(loopLength, std::memory_order_relaxed);
@@ -861,6 +899,7 @@ void Loop::Reset()
 	_InvalidateAudioSource();
 	_isPunchInActive.store(false, std::memory_order_relaxed);
 
+	_triggerCapture = false;
 	_writeIndex.store(0ul, std::memory_order_relaxed);
 	_playIndex.store(0ul, std::memory_order_relaxed);
 	_loopLength.store(0ul, std::memory_order_relaxed);
@@ -1210,6 +1249,75 @@ bool Loop::CanRefreshVisualModel() const noexcept
 	}
 }
 
+
+void Loop::ConfigureTriggerCapture(std::int64_t begin, bool requireAdc, bool requireBounce, bool requirePunchAdc) noexcept
+{
+	_triggerCaptureBegin = begin;
+	_triggerCaptureCoverageValid.store(true, std::memory_order_relaxed);
+	_triggerCaptureRequiresAdc = requireAdc;
+	_triggerCaptureRequiresBounce = requireBounce;
+	_triggerPunchRequiresAdc = requirePunchAdc;
+	_triggerAdcThrough.store(begin, std::memory_order_relaxed);
+	_triggerBounceThrough.store(begin, std::memory_order_relaxed);
+	_triggerCaptureEnd.store((std::numeric_limits<std::int64_t>::max)(), std::memory_order_relaxed);
+	_triggerCaptureNormalized.store(false, std::memory_order_relaxed);
+	_triggerCapture = true;
+}
+
+void Loop::SetTriggerCaptureCursor(std::int64_t cursor) noexcept
+{
+	_triggerCaptureCursor = cursor;
+	_triggerAdcBlockThrough = (std::max)(cursor, _triggerCaptureBegin);
+}
+
+bool Loop::SetTriggerCaptureLength(unsigned long length) noexcept
+{
+	const auto end = _triggerCaptureBegin + length;
+	if (_triggerCaptureBegin < 0 || _triggerCaptureBegin > constants::MaxLoopFadeSamps
+		|| constants::MaxLoopFadeSamps - _triggerCaptureBegin >= length
+		|| end > constants::MaxLoopBufferSize) return false;
+	_triggerCaptureEnd.store(end, std::memory_order_release);
+	return true;
+}
+
+bool Loop::TriggerCaptureComplete() const noexcept
+{
+	if (!_triggerCapture) return true;
+	if (!_triggerCaptureCoverageValid.load(std::memory_order_acquire)) return false;
+	const auto end = _triggerCaptureEnd.load(std::memory_order_acquire);
+	return (!_triggerCaptureRequiresAdc || _triggerAdcThrough.load(std::memory_order_acquire) >= end)
+		&& (!_triggerCaptureRequiresBounce || _triggerBounceThrough.load(std::memory_order_acquire) >= end);
+}
+
+bool Loop::TriggerCaptureReady(unsigned long phase, unsigned int count) const noexcept
+{
+	if (!_triggerCapture) return true;
+	const auto length = _loopLength.load(std::memory_order_relaxed);
+	if (length == 0) return false;
+	const auto through = (std::min)(
+		_triggerCaptureRequiresAdc ? _triggerAdcThrough.load(std::memory_order_acquire) : (std::numeric_limits<std::int64_t>::max)(),
+		_triggerCaptureRequiresBounce ? _triggerBounceThrough.load(std::memory_order_acquire) : (std::numeric_limits<std::int64_t>::max)());
+	for (unsigned int i = 0u; i < count; ++i)
+	{
+		const auto index = constants::MaxLoopFadeSamps + (phase + i) % length;
+		if (index >= through && !_triggerCaptureNormalized.load(std::memory_order_acquire)) return false;
+	}
+	return true;
+}
+
+void Loop::NormalizeTriggerCapture()
+{
+	// Completion stopped destination writes at the exclusive physical-pass end.
+	// Reads refuse the unprepared tail; publishing readiness is the final operation.
+	if (!_triggerCapture || !TriggerCaptureComplete()) return;
+	const auto length = _loopLength.load(std::memory_order_relaxed);
+	const auto bodyEnd = constants::MaxLoopFadeSamps + length;
+	_bufferBank.Resize((std::max)(_bufferBank.Length(), bodyEnd));
+	for (auto i = _triggerCaptureBegin; i < constants::MaxLoopFadeSamps; ++i)
+		_bufferBank[static_cast<unsigned long>(i + length)] = _bufferBank[static_cast<unsigned long>(i)];
+	_triggerCaptureNormalized.store(true, std::memory_order_release);
+}
+
 void Loop::EndRecording()
 {
 	auto playState = _playState.load(std::memory_order_relaxed);
@@ -1217,6 +1325,7 @@ void Loop::EndRecording()
 		(STATE_OVERDUBBINGRECORDING != playState))
 		return;
 	
+	NormalizeTriggerCapture();
 	_playState.store(STATE_PLAYING, std::memory_order_release);
 }
 

@@ -630,3 +630,352 @@ TEST(ExternalPhaseCorrection, LongSimulationRemainsExactAcrossLengths)
 		}
 	}
 }
+#include "engine/Station.h"
+#include "midi/MidiBlockTiming.h"
+
+class TriggerPredelayMidiSink : public midi::IMidiOutputSink
+{
+public:
+    std::vector<midi::MidiEvent> Events;
+    void OnEvent(unsigned int, const midi::MidiEvent& event) noexcept override { Events.push_back(event); }
+};
+
+class TriggerPredelayStationTest
+{
+public:
+    static std::shared_ptr<engine::Station> MakeStation()
+    {
+        engine::StationParams params;
+        params.Name = "trigger-predelay";
+        params.Size = {100, 100};
+        audio::MergeMixBehaviourParams merge;
+        auto station = std::make_shared<engine::Station>(params, engine::Station::GetMixerParams(params.Size, merge));
+        station->SetVisible(true);
+        station->SetEnabled(true);
+        station->SetAllowedMidiChannels({1});
+        auto clock = std::make_shared<Timer>();
+        clock->SetQuantisation(1000u, Timer::QUANTISE_MULTIPLE);
+        clock->SetSeedSourceLength(48000u);
+        station->SetClock(clock);
+        station->SetGlobalMidiQuantState(io::JamFile::GlobalMidiQuantState::Off);
+        return station;
+    }
+
+    static actions::TriggerAction Start(std::uint32_t trigger, double delay)
+    {
+        actions::TriggerAction action;
+        action.ActionType = actions::TriggerAction::TRIGGER_REC_START;
+        action.MidiSample = trigger;
+        action.PreDelayMs = delay;
+        action.MidiInputDevices = {"Keys A", "Keys B"};
+        io::UserConfig config;
+        config.Audio.SampleRate = 48000u;
+        action.SetUserConfig(config);
+        return action;
+    }
+};
+
+TEST(TriggerPredelayStation, PhysicalHistoryPublicationGapAndSignedWorldAlignment)
+{
+    for (const auto delay : {0.0, 80.0, -80.0})
+    for (const auto trigger : {100000u, 0xfffff800u})
+    {
+        SCOPED_TRACE(delay);
+        SCOPED_TRACE(trigger);
+        const auto station = TriggerPredelayStationTest::MakeStation();
+        const auto before = midi::MidiEvent::MakeNoteOn(trigger, 0u, 36u, 101u);
+        station->ObservePhysicalMidiForRecording(before, "Keys A");
+        const auto started = station->OnAction(TriggerPredelayStationTest::Start(trigger, delay));
+        ASSERT_TRUE(started.IsEaten);
+        const auto take = station->GetLoopTakes().back();
+        // START has not reached the UI/audio topology yet.
+        station->ObservePhysicalMidiForRecording(midi::MidiEvent::MakeNoteOff(trigger + 200u, 0u, 36u), "Keys A");
+        station->ObservePhysicalMidiForRecording(midi::MidiEvent::MakeNoteOn(trigger + 400u, 0u, 38u, 99u), "Keys B");
+        station->ObservePhysicalMidiForRecording(midi::MidiEvent::MakeNoteOff(trigger + 600u, 0u, 38u), "Keys B");
+        actions::TriggerAction stop = TriggerPredelayStationTest::Start(trigger + 48000u, -delay);
+        stop.ActionType = actions::TriggerAction::TRIGGER_REC_END;
+        stop.TargetId = started.TargetId;
+        stop.SampleCount = 48000u;
+        ASSERT_TRUE(station->OnAction(stop).IsEaten);
+        ASSERT_TRUE(take->MidiTriggerCapturePending());
+        // Queued ingress may drain after structural STOP, exactly once.
+        station->ObservePhysicalMidiForRecording(midi::MidiEvent::MakeNoteOn(trigger + 47000u, 0u, 40u, 90u), "Keys A");
+        station->ObservePhysicalMidiForRecording(midi::MidiEvent::MakeNoteOff(trigger + 47500u, 0u, 40u), "Keys A");
+        station->CompleteMidiIngressPump(trigger + 54000u);
+        ASSERT_FALSE(take->MidiTriggerCapturePending());
+        ASSERT_EQ(2u, take->GetMidiLoops().size());
+        const auto expected = static_cast<std::uint32_t>((static_cast<std::int64_t>(delay * 48.0) + 48000) % 48000);
+        unsigned int coincident = 0;
+        for (const auto& loop : take->GetMidiLoops())
+        {
+            for (std::size_t i = 0u; i < loop->EventCount(); ++i)
+            {
+                midi::MidiEvent event;
+                ASSERT_TRUE(loop->TryGetEvent(i, event));
+                if (event.IsNoteOn() && event.data1 == 36u)
+                {
+                    ++coincident;
+                    EXPECT_EQ(expected, event.sampleOffset);
+                }
+            }
+        }
+        EXPECT_EQ(1u, coincident);
+        EXPECT_EQ(trigger, before.sampleOffset);
+        EXPECT_EQ(static_cast<std::int64_t>(delay * 48.0), take->CaptureTiming().DelaySamps);
+        // Publication can be much later than both close and the ADC history age.
+        // MIDI has no ADC admission requirement and joins at the current phase.
+        take->BeginCaptureAudioBoundary(trigger + 192000u, 900000u, 192000u);
+        TriggerPredelayMidiSink sink;
+        take->ReadMidiBlock(trigger + 192000u, 1u, sink);
+        ASSERT_EQ(1u, sink.Events.size());
+        EXPECT_EQ(36u, sink.Events[0].data1);
+        EXPECT_EQ(trigger + 192000u, sink.Events[0].sampleOffset);
+
+    }
+}
+
+TEST(TriggerPredelayStation, OutOfOrderEndpointsRetainShortPretriggerPair)
+{
+    const auto station = TriggerPredelayStationTest::MakeStation();
+    constexpr auto trigger = 100000u;
+    // Newer A is drained before older B. Never break history search on A.
+    station->ObservePhysicalMidiForRecording(midi::MidiEvent::MakeNoteOn(trigger + 10u, 0u, 42u, 70u), "Keys A");
+    station->ObservePhysicalMidiForRecording(midi::MidiEvent::MakeNoteOn(trigger - 3744u, 0u, 36u, 110u), "Keys B");
+    station->ObservePhysicalMidiForRecording(midi::MidiEvent::MakeNoteOff(trigger - 3600u, 0u, 36u), "Keys B");
+    const auto started = station->OnAction(TriggerPredelayStationTest::Start(trigger, 80.0));
+    ASSERT_TRUE(started.IsEaten);
+    const auto take = station->GetLoopTakes().back();
+    auto stop = TriggerPredelayStationTest::Start(trigger + 48000u, 0.0);
+    stop.ActionType = actions::TriggerAction::TRIGGER_REC_END;
+    stop.TargetId = started.TargetId;
+    stop.SampleCount = 48000u;
+    ASSERT_TRUE(station->OnAction(stop).IsEaten);
+    station->CompleteMidiIngressPump(trigger + 54000u);
+    ASSERT_EQ(2u, take->GetMidiLoops().size());
+    midi::MidiEvent on, off;
+    ASSERT_TRUE(take->GetMidiLoops()[1]->TryGetEvent(0u, on));
+    ASSERT_TRUE(take->GetMidiLoops()[1]->TryGetEvent(1u, off));
+    EXPECT_TRUE(on.IsNoteOn());
+    EXPECT_EQ(96u, on.sampleOffset);
+    EXPECT_TRUE(off.IsNoteOff());
+    EXPECT_EQ(240u, off.sampleOffset);
+}
+
+TEST(TriggerPredelayStation, TooShortSignedCaptureRejectedBeforePlayback)
+{
+    const auto station = TriggerPredelayStationTest::MakeStation();
+    auto started = station->OnAction(TriggerPredelayStationTest::Start(100000u, -200.0));
+    ASSERT_TRUE(started.IsEaten);
+    auto stop = TriggerPredelayStationTest::Start(101000u, 0.0);
+    stop.ActionType = actions::TriggerAction::TRIGGER_REC_END;
+    stop.TargetId = started.TargetId;
+    stop.SampleCount = 1000u;
+    const auto take = station->GetLoopTakes().back();
+    station->OnAction(stop);
+    EXPECT_TRUE(take->IsCaptureCancelled());
+}
+
+#include "midi/MidiRouter.h"
+#include "engine/RigSnapshot.h"
+
+namespace midi
+{
+    // Inject only transport ingress; PumpMidi, recipient routing, history and
+    // completion remain the production path. No timing logic is duplicated.
+    class MidiRouterCaptureTestAccess
+    {
+    public:
+        static void Setup(MidiRouter& router, const std::shared_ptr<engine::Station>& station)
+        {
+            auto inputs = std::make_shared<std::vector<std::shared_ptr<MidiRouter::MidiInputEndpoint>>>();
+            for (std::uint8_t slot = 0; slot < 2u; ++slot)
+            {
+                auto endpoint = std::make_shared<MidiRouter::MidiInputEndpoint>();
+                endpoint->DeviceSlot = slot;
+                endpoint->ConfiguredName = slot ? "Keys B" : "Keys A";
+                endpoint->Device = std::make_unique<MidiDevice>();
+                inputs->push_back(endpoint);
+            }
+            router._midiInputs.store(inputs);
+            router._liveMidiDispatchNotification = std::make_shared<MidiRouter::LiveMidiDispatchNotification>();
+            auto rig = std::make_shared<engine::RigSnapshot>();
+            rig->Revision = 1u;
+            rig->InputDispatch.LiveMidi = {{"Keys A", {station}}, {"Keys B", {station}}};
+            router.PublishRigInputDispatch(rig);
+        }
+        static void Push(MidiRouter& router, unsigned int slot, const MidiEvent& event)
+        {
+            MidiRouter::MidiInputEndpoint::RigMidiIngressEvent ingress;
+            ingress.Event = event;
+            ingress.RigRevision = 1u;
+            ingress.RoutingGeneration = 1u;
+            ASSERT_TRUE(router._midiInputs.load()->at(slot)->Ingress.Push(ingress));
+        }
+    };
+}
+
+TEST(TriggerPredelayStation, RouterDrainsEveryEndpointBeforeClosingAndCapturesUpwardQuantisation)
+{
+    for (const auto delay : {0.0, 80.0})
+    {
+        auto station = TriggerPredelayStationTest::MakeStation();
+        midi::MidiRouter router;
+        midi::MidiRouterCaptureTestAccess::Setup(router, station);
+        constexpr auto trigger = 100000u;
+        const auto onset = trigger - (delay > 0.0 ? 3744u : 0u);
+        midi::MidiRouterCaptureTestAccess::Push(router, 0u, midi::MidiEvent::MakeNoteOn(trigger + 10u, 0u, 42u, 70u));
+        midi::MidiRouterCaptureTestAccess::Push(router, 1u, midi::MidiEvent::MakeNoteOn(onset, 0u, 36u, 100u));
+        midi::MidiRouterCaptureTestAccess::Push(router, 1u, midi::MidiEvent::MakeNoteOff(onset + 144u, 0u, 36u));
+        io::UserConfig config;
+        config.Audio.SampleRate = 48000u;
+        audio::AudioStreamParams params;
+        params.SampleRate = 48000u;
+        router.PumpMidi({station}, trigger + 64u, config, params);
+        auto started = station->OnAction(TriggerPredelayStationTest::Start(trigger, delay));
+        ASSERT_TRUE(started.IsEaten);
+        auto take = station->GetLoopTakes().back();
+        // Queued before STOP, drained only after structural END.
+        midi::MidiRouterCaptureTestAccess::Push(router, 1u, midi::MidiEvent::MakeNoteOn(trigger + 1000u, 0u, 38u, 90u));
+        midi::MidiRouterCaptureTestAccess::Push(router, 1u, midi::MidiEvent::MakeNoteOff(trigger + 1200u, 0u, 38u));
+        auto stop = TriggerPredelayStationTest::Start(trigger + 47550u, 0.0);
+        stop.ActionType = actions::TriggerAction::TRIGGER_REC_END;
+        stop.TargetId = started.TargetId;
+        stop.SampleCount = 47550u;
+        ASSERT_TRUE(station->OnAction(stop).IsEaten);
+        EXPECT_TRUE(take->MidiTriggerCapturePending());
+        // D0 has U>S. Its after-STOP note must survive, its event at U must not.
+        midi::MidiRouterCaptureTestAccess::Push(router, 1u, midi::MidiEvent::MakeNoteOn(trigger + 47800u, 0u, 40u, 80u));
+        midi::MidiRouterCaptureTestAccess::Push(router, 1u, midi::MidiEvent::MakeNoteOff(trigger + 47900u, 0u, 40u));
+        midi::MidiRouterCaptureTestAccess::Push(router, 1u, midi::MidiEvent::MakeNoteOn(trigger + 48000u, 0u, 44u, 80u));
+        router.PumpMidi({station}, trigger + 53000u, config, params);
+        EXPECT_FALSE(take->MidiTriggerCapturePending());
+        unsigned int kicks = 0, queued = 0, future = 0, excluded = 0;
+        for (const auto& loop : take->GetMidiLoops())
+        for (std::size_t i = 0; i < loop->EventCount(); ++i)
+        {
+            midi::MidiEvent event;
+            ASSERT_TRUE(loop->TryGetEvent(i, event));
+            if (!event.IsNoteOn()) continue;
+            if (event.data1 == 36u) { ++kicks; EXPECT_EQ(delay > 0.0 ? 96u : 0u, event.sampleOffset); }
+            if (event.data1 == 38u) ++queued;
+            if (event.data1 == 40u) ++future;
+            if (event.data1 == 44u) ++excluded;
+        }
+        EXPECT_EQ(1u, kicks);
+        EXPECT_EQ(1u, queued);
+        EXPECT_EQ(delay > 0.0 ? 0u : 1u, future);
+        EXPECT_EQ(0u, excluded);
+    }
+}
+
+TEST(TriggerPredelayStation, ZeroReportedHardwareLatencyUsesConfiguredSourceAge)
+{
+    auto station = TriggerPredelayStationTest::MakeStation();
+    auto action = TriggerPredelayStationTest::Start(100000u, 0.0);
+    action.InputChannels = {0u};
+    action.MidiInputDevices.clear();
+    io::UserConfig config;
+    config.Audio.SampleRate = 48000u;
+    config.Audio.LatencyIn = 100000u;
+    action.SetUserConfig(config);
+    audio::AudioStreamParams params;
+    params.SampleRate = 48000u;
+    params.InputLatency = 0u;
+    action.SetAudioParams(params);
+    ASSERT_TRUE(station->OnAction(action).IsEaten);
+    EXPECT_EQ(100000u, station->GetLoopTakes().back()->CaptureTiming().SourceAgeSamps);
+}
+
+TEST(TriggerPredelayStation, FirstAudioAndMixedMasterReserveCompensatedOrigin)
+{
+    for (const auto delay : {80.0, -80.0})
+    for (const auto withMidi : {false, true})
+    {
+        SCOPED_TRACE(delay);
+        SCOPED_TRACE(withMidi);
+        auto station = TriggerPredelayStationTest::MakeStation();
+        auto clock = std::make_shared<Timer>();
+        station->SetClock(clock);
+        constexpr auto trigger = 100000u;
+        auto start = TriggerPredelayStationTest::Start(trigger, delay);
+        start.InputChannels = {0u};
+        if (!withMidi) start.MidiInputDevices.clear();
+        const auto started = station->OnAction(start);
+        ASSERT_TRUE(started.IsEaten);
+        auto take = station->GetLoopTakes().back();
+        take->CommitChanges();
+        station->CommitChanges();
+        auto current = trigger;
+        const auto advance = [&](std::uint32_t end) {
+            std::vector<float> input(128u, 0.0f);
+            while (current < end)
+            {
+                const auto count = (std::min)(128u, end - current);
+                station->BeginCaptureAudioBoundary(current, current, 0u);
+                base::AudioWriteRequest request;
+                request.samples = input.data();
+                request.numSamps = count;
+                request.stride = 1u;
+                request.fadeNew = 1.0f;
+                request.source = base::Audible::AUDIOSOURCE_ADC;
+                take->OnBlockWriteChannel(0u, request, 0);
+                take->EndMultiWrite(count, true, base::Audible::AUDIOSOURCE_ADC);
+                take->EndMultiPlay(count);
+                current += count;
+            }
+        };
+        advance(trigger + 48000u);
+        station->BeginCaptureAudioBoundary(current, current, 0u);
+        auto stop = start;
+        stop.ActionType = actions::TriggerAction::TRIGGER_REC_END;
+        stop.TargetId = started.TargetId;
+        stop.MidiSample = trigger + 48000u;
+        stop.SampleCount = 48000u;
+        ASSERT_TRUE(station->OnAction(stop).IsEaten);
+        // Geometry and its compensated zero are committed together by the
+        // callback after source coverage and topology publication are ready.
+        EXPECT_EQ(0ul, clock->SeedSourceLength());
+        const auto seed = clock->PendingRecordingSeedOnOwner();
+        ASSERT_TRUE(seed);
+        EXPECT_EQ(trigger - static_cast<std::uint32_t>(static_cast<std::int32_t>(delay * 48.0)),
+            seed->RecordOrigin);
+        EXPECT_GT(seed->LengthSamps, 0ul);
+        EXPECT_TRUE(take->FirstMasterActivationPending());
+        const auto deadline = trigger + seed->LengthSamps - take->CaptureTiming().SeamSamps
+            + take->CaptureTiming().SourceAgeSamps;
+        advance(deadline + 10000u);
+        station->CompleteMidiIngressPump(current);
+        for (const auto& job : take->CommitChanges()) take->OnAction(job);
+        take->CommitChanges();
+        station->CommitChanges();
+        ASSERT_FALSE(take->IsCaptureCancelled());
+        ASSERT_EQ(LoopTake::STATE_PLAYING, take->TakeState());
+        station->BeginCaptureAudioBoundary(current, current, 0u);
+        station->ApplyFirstMasterRecordingAtAudioBoundary(*clock, current);
+        EXPECT_FALSE(take->FirstMasterActivationPending());
+        ASSERT_EQ(seed->LengthSamps, clock->SeedSourceLength());
+        const auto expected = static_cast<unsigned long>((static_cast<std::int64_t>(current - trigger)
+            + take->CaptureTiming().DelaySamps + seed->LengthSamps) % seed->LengthSamps);
+        EXPECT_EQ(expected, clock->SampOffset());
+        EXPECT_EQ(expected, take->MidiPlayIndex());
+        ASSERT_EQ(1u, take->GetLoops().size());
+        EXPECT_EQ(expected, take->GetLoops().front()->BodyPlayIndex());
+    }
+}
+
+TEST(TriggerPredelayStation, NewFormatRejectsLookbackAcrossItsEpoch)
+{
+    auto station = TriggerPredelayStationTest::MakeStation();
+    station->ObservePhysicalMidiForRecording(midi::MidiEvent::MakeNoteOn(10000u, 0u, 36u, 100u), "Keys A");
+    station->SetSampleRate(48000.0f);
+    station->BeginCaptureAudioBoundary(20000u, 90000u, 0u);
+    auto action = TriggerPredelayStationTest::Start(20100u, 80.0);
+    EXPECT_FALSE(station->OnAction(action).IsEaten);
+    action.PreDelayMs = 0.0;
+    ASSERT_TRUE(station->OnAction(action).IsEaten);
+    const auto take = station->GetLoopTakes().back();
+    midi::MidiEvent continuation;
+    ASSERT_TRUE(take->GetMidiLoops()[0]->TryGetEvent(0u, continuation));
+    EXPECT_EQ(0u, continuation.sampleOffset);
+    EXPECT_EQ(36u, continuation.data1);
+}

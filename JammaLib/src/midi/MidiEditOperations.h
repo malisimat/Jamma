@@ -69,7 +69,8 @@ namespace midi
 			const bool hasOff = offIndex < original.EventCount;
 			if (hasOff && (!original.Events[offIndex].IsNoteOff()
 				|| original.Events[offIndex].PairingSlot() != on.PairingSlot())) return false;
-			const auto duration = (hasOff ? original.Events[offIndex].sampleOffset : original.LoopLengthSamps) - on.sampleOffset;
+			const auto duration = (hasOff ? original.Events[offIndex].sampleOffset : original.LoopLengthSamps)
+				+ ((on.flags & MidiEvent::TriggerSeamEndpoint) ? original.LoopLengthSamps : 0u) - on.sampleOffset;
 			const auto& q = original.Quantisation;
 			const auto interval = q.GridInterval();
 			const auto divisions = q.GridDivisions();
@@ -97,7 +98,9 @@ namespace midi
 				auto candidate = original;
 				candidate.Events[onIndex].sampleOffset = static_cast<std::uint32_t>(raw);
 				candidate.Events[onIndex].data1 = pitch;
+				candidate.Events[onIndex].flags &= static_cast<std::uint8_t>(~MidiEvent::TriggerSeamEndpoint);
 				if (hasOff) { candidate.Events[offIndex].sampleOffset = static_cast<std::uint32_t>(raw + duration); candidate.Events[offIndex].data1 = pitch; }
+				if (hasOff) candidate.Events[offIndex].flags &= static_cast<std::uint8_t>(~MidiEvent::TriggerSeamEndpoint);
 				std::vector<std::size_t> order(candidate.EventCount);
 				std::iota(order.begin(), order.end(), 0u);
 				const auto priority = [](const MidiEvent& e) { return e.IsNoteOff() ? 0 : e.IsNoteOn() ? 2 : 1; };
@@ -161,6 +164,18 @@ namespace midi
 			if (onIndex >= state.EventCount || !state.Events[onIndex].IsNoteOn()) return false;
 			const auto on = state.Events[onIndex];
 			std::size_t off = state.EventCount;
+			if (on.flags & MidiEvent::TriggerSeamEndpoint)
+			{
+				const auto targets = MidiGridTargets::Build(state);
+				const auto found = std::find_if(targets.Notes.begin(), targets.Notes.end(),
+					[onIndex](const auto& note) { return note.On == onIndex; });
+				if (found == targets.Notes.end() || found->Ambiguous) return false;
+				std::size_t kept = 0u;
+				for (std::size_t i = 0u; i < state.EventCount; ++i)
+					if (i != onIndex && i != found->Off) state.Events[kept++] = state.Events[i];
+				state.EventCount = kept;
+				return true;
+			}
 			// Any still active predecessor makes this source identity ambiguous.
 			bool active = false;
 			for (std::size_t i = 0; i < onIndex; ++i)
@@ -215,7 +230,15 @@ namespace midi
 				|| newEnd > state.LoopLengthSamps) return false;
 			const auto on = state.Events[onIndex];
 			std::size_t offIndex = state.EventCount;
-			for (std::size_t i = onIndex + 1u; i < state.EventCount; ++i)
+			if (on.flags & MidiEvent::TriggerSeamEndpoint)
+			{
+				const auto targets = MidiGridTargets::Build(state);
+				const auto found = std::find_if(targets.Notes.begin(), targets.Notes.end(),
+					[onIndex](const auto& note) { return note.On == onIndex; });
+				if (found == targets.Notes.end() || found->Ambiguous) return false;
+				offIndex = found->Off;
+			}
+			else for (std::size_t i = onIndex + 1u; i < state.EventCount; ++i)
 			{
 				const auto& ev = state.Events[i];
 				if (ev.PairingSlot() != on.PairingSlot()) continue;
@@ -226,6 +249,7 @@ namespace midi
 				&& newEnd < state.LoopLengthSamps) return false;
 			state.Events[onIndex].sampleOffset = newStart;
 			state.Events[onIndex].data1 = newPitch;
+			state.Events[onIndex].flags &= static_cast<std::uint8_t>(~MidiEvent::TriggerSeamEndpoint);
 			if (offIndex < state.EventCount)
 			{
 				if (newEnd == state.LoopLengthSamps)
@@ -238,6 +262,7 @@ namespace midi
 				{
 					state.Events[offIndex].sampleOffset = newEnd;
 					state.Events[offIndex].data1 = newPitch;
+					state.Events[offIndex].flags &= static_cast<std::uint8_t>(~MidiEvent::TriggerSeamEndpoint);
 				}
 			}
 			else if (newEnd < state.LoopLengthSamps)

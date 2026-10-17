@@ -370,17 +370,16 @@ TEST(RecordedPlaybackLatency, RapidReferenceChangeWaitsForAudioTransitionBeforeM
 }
 
 static void VerifyRecordedCaptureOriginWithHardwareRuler(bool returningOutput,
-	int quantisationError = 0, int acceptedCorrection = 0)
+	int quantisationError = 0, int acceptedCorrection = 0, unsigned int inputLatency = 11u)
 {
 	constexpr auto blockSize = 128u;
 	constexpr auto loopLength = 256u;
 	constexpr auto musicalSample = 37u;
-	constexpr auto inputLatency = 11u;
 	constexpr auto outputLatency = 13u;
-	constexpr auto preDelay = 17u;
+	constexpr auto preDelay = 0u;
 	constexpr auto referenceLatency = 47u;
 	io::UserConfig cfg;
-	cfg.Trigger.PreDelaySamps = preDelay;
+	const auto reserve = io::UserConfig::TriggerHistorySamples(constants::DefaultSampleRate).value();
 	engine::StationParams stationParams;
 	stationParams.Name = returningOutput ? "overdub-capture-ruler" : "record-capture-ruler";
 	stationParams.Size = { 200, 200 };
@@ -402,6 +401,7 @@ static void VerifyRecordedCaptureOriginWithHardwareRuler(bool returningOutput,
 	auto take = std::make_shared<engine::LoopTake>(takeParams,
 		engine::LoopTake::GetMixerParams(takeParams.Size, merge));
 	station->AddTake(take);
+	take->ConfigureTriggerCapture({0u, 0, reserve, (std::max)(inputLatency, constants::MaxLoopFadeSamps + reserve), 0u});
 	take->Record({ 0u }, station->Name(), { 0u }, { "source" }, {}, 0u, 0u);
 	station->CommitChanges();
 	ASSERT_TRUE(take->RecordMidiEvent(midi::MidiEvent::MakeNoteOn(musicalSample,
@@ -413,13 +413,14 @@ static void VerifyRecordedCaptureOriginWithHardwareRuler(bool returningOutput,
 	const auto physicalAdcImpulse = musicalSample + inputLatency
 		+ (returningOutput ? outputLatency : 0u);
 	audio::ChannelMixerParams mixerParams;
-	mixerParams.InputBufferSize = constants::MaxLoopFadeSamps + preDelay + 2u * blockSize;
+	mixerParams.InputBufferSize = constants::MaxLoopFadeSamps + reserve + 2u * blockSize;
 	mixerParams.OutputBufferSize = blockSize;
 	mixerParams.NumInputChannels = 1u;
 	mixerParams.NumOutputChannels = 1u;
 	audio::ChannelMixer adc(mixerParams);
-	const auto totalRecord = constants::MaxLoopFadeSamps + loopLength
-		+ preDelay + outputLatency + blockSize;
+	const auto totalRecord = take->CaptureTiming().SourceAgeSamps + loopLength
+        + outputLatency + blockSize;
+	const auto playbackBoundary = ((totalRecord + blockSize - 1u) / blockSize) * blockSize;
 	std::array<float, blockSize> input{};
 	for (auto blockStart = 0u; blockStart < totalRecord; blockStart += blockSize)
 	{
@@ -427,6 +428,7 @@ static void VerifyRecordedCaptureOriginWithHardwareRuler(bool returningOutput,
 		if (physicalAdcImpulse >= blockStart
 			&& physicalAdcImpulse < blockStart + blockSize)
 			input[physicalAdcImpulse - blockStart] = 0.5f;
+		take->BeginCaptureAudioBoundary(blockStart, blockStart, blockStart);
 		adc.FromAdc(input.data(), 1u, blockSize);
 		adc.InitPlay(cfg.AdcBufferDelay(inputLatency), blockSize);
 		adc.WriteToSink(station, blockSize);
@@ -441,13 +443,17 @@ static void VerifyRecordedCaptureOriginWithHardwareRuler(bool returningOutput,
 	EXPECT_EQ(static_cast<unsigned int>(static_cast<int>(constants::MaxLoopFadeSamps
 		+ preDelay + (returningOutput ? outputLatency : 0u)) + quantisationError),
 		audioPlayIndex + loopLength);
-	take->Play(audioPlayIndex, loopLength, 0u, quantisationError);
+	take->SetTriggerCaptureStop(loopLength + quantisationError);
+	take->Play(audioPlayIndex, loopLength, 0u, quantisationError, false, returningOutput ? outputLatency : 0u);
+	take->CompleteMidiIngressPump(playbackBoundary);
+	take->EndRecording();
+	take->BeginCaptureAudioBoundary(playbackBoundary, playbackBoundary, playbackBoundary);
 	if (acceptedCorrection != 0)
 		take->ApplyAcceptedTimingCorrection(acceptedCorrection, 1u, false);
 	station->CommitChanges();
 	ASSERT_TRUE(station->ConfigureRecordedPlaybackCompensation(referenceLatency));
 	std::vector<float> rendered;
-	for (auto block = 0u; block < 4u; ++block)
+	for (auto block = 0u; block < 6u; ++block)
 	{
 		auto sink = std::make_shared<RecordedLatencyCaptureBus>(blockSize);
 		station->Zero(blockSize, base::Audible::AUDIOSOURCE_LOOPS);
@@ -455,9 +461,9 @@ static void VerifyRecordedCaptureOriginWithHardwareRuler(bool returningOutput,
 		station->EndMultiPlay(blockSize);
 		rendered.insert(rendered.end(), sink->Sink->Samples.begin(), sink->Sink->Samples.end());
 	}
-	const auto expected = static_cast<unsigned int>(
-		static_cast<int>(musicalSample + referenceLatency)
-		- quantisationError - acceptedCorrection);
+	const auto expected = static_cast<unsigned int>((static_cast<int>(musicalSample)
+		- static_cast<int>(playbackBoundary % loopLength) - acceptedCorrection
+		+ static_cast<int>(loopLength)) % static_cast<int>(loopLength)) + referenceLatency;
 	ASSERT_LT(expected + loopLength, rendered.size());
 	// LoopPlayPos returns a cursor one body early; Loop::ReadBlock maps
 	// that cursor into the playable body before rendering. Both captured
@@ -465,7 +471,7 @@ static void VerifyRecordedCaptureOriginWithHardwareRuler(bool returningOutput,
 	EXPECT_GT(rendered[expected], 1.0f);
 	EXPECT_GT(rendered[expected + loopLength], 1.0f);
 	for (auto sample = 0u; sample < rendered.size(); ++sample)
-		if (sample != expected && sample != expected + loopLength)
+		if (sample < expected || (sample - expected) % loopLength != 0u)
 			EXPECT_NEAR(0.0f, rendered[sample], 1.0e-4f)
 				<< "unexpected rendered sample " << sample << " returning=" << returningOutput
 				<< " error=" << quantisationError << " correction=" << acceptedCorrection;
@@ -626,4 +632,319 @@ TEST(RecordedPlaybackLatency, ThreeLevelLatencySaturatesWithoutWrapping)
 		(std::numeric_limits<unsigned int>::max)()));
 	EXPECT_FALSE(station->ConfigureRecordedPlaybackCompensation(
 		(std::numeric_limits<unsigned int>::max)()));
+}
+
+TEST(RecordedPlaybackLatency, SignedCaptureNormalizesOnlyTheSelectedPhysicalPass)
+{
+	for (const int delay : { -97, 0, 97 })
+	{
+		constexpr unsigned long length = 2048u;
+		const auto seam = delay > 0 ? delay + 10 : 0;
+		const auto begin = static_cast<std::int64_t>(constants::MaxLoopFadeSamps) + delay - seam;
+		audio::WireMixBehaviourParams wire;
+		wire.Channels = { 0u };
+		engine::LoopParams params;
+		params.FadeSamps = 0u;
+		auto loop = std::make_shared<engine::Loop>(params, engine::Loop::GetMixerParams({80,80}, wire));
+		loop->Record();
+		loop->ConfigureTriggerCapture(begin, true, false);
+		loop->SetTriggerCaptureCursor(begin);
+		ASSERT_TRUE(loop->SetTriggerCaptureLength(length));
+		std::vector<float> input(length + 31u, 0.0f);
+		input[seam] = 1.0f; // E=T, independent of signed content origin
+		input[0] = 0.25f; // eligible first sample
+		input[length] = 9.0f; // next pass must be excluded
+		base::AudioWriteRequest request;
+		request.samples = input.data(); request.numSamps = static_cast<unsigned int>(input.size());
+		request.stride = 1; request.fadeNew = 1.0f; request.fadeCurrent = 0.0f;
+		request.source = base::Audible::AUDIOSOURCE_ADC;
+		loop->OnBlockWrite(request, 0);
+		loop->EndWrite(request.numSamps, true);
+		ASSERT_TRUE(loop->TriggerCaptureComplete());
+		loop->Play(constants::MaxLoopFadeSamps, length, true);
+		loop->EndRecording();
+		const auto exported = loop->ExportSamples();
+		ASSERT_EQ(length, exported.size());
+		const auto onset = static_cast<unsigned long>((delay + static_cast<int>(length)) % length);
+		EXPECT_FLOAT_EQ(seam == 0 ? 0.25f : 1.0f, exported[onset]);
+		EXPECT_EQ(exported.end(), std::find(exported.begin(), exported.end(), 9.0f));
+		std::vector<float> rendered(length);
+		ASSERT_EQ(length, loop->ReadBlock(rendered.data(), 0, length));
+		EXPECT_EQ(exported, rendered);
+	}
+}
+
+TEST(RecordedPlaybackLatency, MonitorCannotCompleteCaptureOrClampUnavailablePlayback)
+{
+	audio::WireMixBehaviourParams wire; wire.Channels = {0u};
+	engine::LoopParams params; params.FadeSamps = 0u;
+	auto loop = std::make_shared<engine::Loop>(params, engine::Loop::GetMixerParams({80,80}, wire));
+	loop->Record();
+	loop->ConfigureTriggerCapture(constants::MaxLoopFadeSamps, true, false);
+	loop->SetTriggerCaptureCursor(constants::MaxLoopFadeSamps);
+	ASSERT_TRUE(loop->SetTriggerCaptureLength(128u));
+	std::array<float, 128> input{};
+	base::AudioWriteRequest request;
+	request.samples=input.data(); request.numSamps=128u; request.stride=1;
+	request.fadeCurrent=0.0f; request.fadeNew=1.0f;
+	request.source=base::Audible::AUDIOSOURCE_MONITOR;
+	loop->OnBlockWrite(request,0); loop->EndWrite(128u,true);
+	EXPECT_FALSE(loop->TriggerCaptureComplete());
+	loop->Play(constants::MaxLoopFadeSamps+97u,128u,true);
+	EXPECT_EQ(97u,loop->BodyPlayIndex());
+	std::array<float, 16> output{};
+	EXPECT_EQ(0u,loop->ReadBlock(output.data(),0,16u));
+	loop->EndMultiPlay(16u);
+	EXPECT_EQ(113u,loop->BodyPlayIndex());
+}
+
+TEST(RecordedPlaybackLatency, ProductionCaptureCompletesAtExclusivePhysicalDeadline)
+{
+	for (const unsigned int sampleRate : {44100u, 48000u, 192000u})
+	for (const int sign : {-1, 0, 1})
+	for (const int error : {-13, 13})
+	{
+		SCOPED_TRACE(::testing::Message() << sampleRate << " delay sign=" << sign << " error=" << error);
+		const auto reserve = io::UserConfig::TriggerHistorySamples(sampleRate).value();
+		const auto delay = io::UserConfig::TriggerPreDelaySamples(sign * 86.0, sampleRate).value();
+		const auto guard = (10u * sampleRate + 999u) / 1000u;
+		const auto seam = delay > 0 ? (std::min)(reserve, static_cast<unsigned int>(delay) + guard) : 0u;
+		const auto age = constants::MaxLoopFadeSamps + reserve;
+		const auto length = sampleRate / 2u;
+		constexpr std::uint32_t trigger = 1000000u;
+		const auto stop = trigger + length + error;
+		const auto sourceEnd = trigger + length - seam;
+		const auto deadline = sourceEnd + age;
+		engine::LoopTakeParams params; params.Size = {100,100}; params.FadeSamps = 0u;
+		audio::MergeMixBehaviourParams merge;
+		auto take = std::make_shared<engine::LoopTake>(params, engine::LoopTake::GetMixerParams(params.Size, merge));
+		take->ConfigureTriggerCapture({trigger, delay, reserve, age, seam});
+		take->Record({0u}, "deadline");
+		take->CommitChanges();
+		ASSERT_EQ(1u, take->GetLoops().size());
+		auto loop = take->GetLoops().front();
+		auto current = trigger;
+		auto advance = [&](std::uint32_t end)
+		{
+			while (current < end)
+			{
+				const auto count = (std::min)(128u, end-current);
+				take->BeginCaptureAudioBoundary(current, current, current);
+				std::array<float,128> input{};
+				for (auto i=0u;i<count;++i)
+				{
+					const auto physical = static_cast<std::int64_t>(current) + i - age;
+					if (physical == trigger) input[i]=1.0f;
+					if (physical == sourceEnd-1u) input[i]=0.5f;
+					if (physical == sourceEnd) input[i]=9.0f;
+				}
+				base::AudioWriteRequest request;
+				request.samples=input.data(); request.numSamps=count; request.stride=1;
+				request.fadeCurrent=0.0f; request.fadeNew=1.0f;
+				request.source=base::Audible::AUDIOSOURCE_ADC;
+				take->OnBlockWriteChannel(0u,request,0);
+				take->EndMultiWrite(count,true,base::Audible::AUDIOSOURCE_ADC);
+				current+=count;
+			}
+		};
+		advance(stop);
+		take->BeginCaptureAudioBoundary(stop,stop,stop);
+		take->SetTriggerCaptureStop(stop);
+		take->Play(constants::MaxLoopFadeSamps,length,0u,error);
+		advance(deadline-1u);
+		EXPECT_FALSE(loop->TriggerCaptureComplete());
+		const auto early = take->CommitChanges();
+		EXPECT_EQ(early.end(),std::find_if(early.begin(),early.end(),[](const auto& job){return job.JobActionType==actions::JobAction::JOB_ENDRECORDING;}));
+		advance(deadline);
+		EXPECT_TRUE(loop->TriggerCaptureComplete());
+		advance(deadline+9u); // late whole-block notification must exclude U and later
+		const auto completed = take->CommitChanges();
+		const auto completion = std::find_if(completed.begin(),completed.end(),[](const auto& job){return job.JobActionType==actions::JobAction::JOB_ENDRECORDING;});
+		ASSERT_NE(completed.end(),completion);
+		take->OnAction(*completion);
+		const auto exported=loop->ExportSamples();
+		ASSERT_EQ(length,exported.size());
+		const auto onset=static_cast<unsigned long>((static_cast<std::int64_t>(delay)+length)%length);
+		EXPECT_FLOAT_EQ(1.0f,exported[onset]);
+		const auto finalPhysical=static_cast<unsigned long>((static_cast<std::int64_t>(length)-seam-1+delay+length)%length);
+		EXPECT_FLOAT_EQ(0.5f,exported[finalPhysical]);
+		EXPECT_EQ(exported.end(),std::find(exported.begin(),exported.end(),9.0f));
+	}
+}
+
+TEST(RecordedPlaybackLatency, SignedOverdubAndPunchShareOneDestinationMapping)
+{
+	for (const int delay : {-97,0,97})
+	{
+		constexpr unsigned long length=2048u;
+		const auto seam=delay>0?delay+10:0;
+		const auto begin=static_cast<std::int64_t>(constants::MaxLoopFadeSamps)+delay-seam;
+		audio::WireMixBehaviourParams wire; wire.Channels={0u};
+		engine::LoopParams params; params.FadeSamps=0u;
+		auto loop=std::make_shared<engine::Loop>(params,engine::Loop::GetMixerParams({80,80},wire));
+		loop->Overdub(); loop->ConfigureTriggerCapture(begin,false,true);
+		loop->SetTriggerCaptureCursor(begin);
+		ASSERT_TRUE(loop->SetTriggerCaptureLength(length));
+		loop->PunchIn();
+		std::vector<float> input(length,0.0f); input[seam]=0.5f;
+		base::AudioWriteRequest request;
+		request.samples=input.data(); request.numSamps=length; request.stride=1;
+		request.fadeCurrent=1.0f; request.fadeNew=1.0f;
+		request.source=base::Audible::AUDIOSOURCE_ADC;
+		loop->OnBlockWrite(request,0);
+		EXPECT_FALSE(loop->TriggerCaptureComplete());
+		request.source=base::Audible::AUDIOSOURCE_BOUNCE;
+		loop->OnBlockWrite(request,0);
+		loop->EndWrite(length,true);
+		EXPECT_TRUE(loop->TriggerCaptureComplete());
+		loop->PunchOut(); loop->Play(constants::MaxLoopFadeSamps,length,true); loop->EndRecording();
+		const auto exported=loop->ExportSamples();
+		const auto onset=static_cast<unsigned long>((delay+static_cast<int>(length))%length);
+		ASSERT_EQ(length,exported.size());
+		EXPECT_FLOAT_EQ(1.0f,exported[onset]);
+		EXPECT_EQ(1u,std::count(exported.begin(),exported.end(),1.0f));
+	}
+}
+
+struct RecordedPredelayCapacityResult
+{
+	std::vector<float> Exported;
+	std::vector<float> Rendered;
+};
+
+static RecordedPredelayCapacityResult CaptureWithInjectedHistoryCapacity(unsigned int capacity, double delayMs)
+{
+	constexpr auto rate=44100u;
+	constexpr auto block=128u;
+	constexpr auto length=2048u;
+	constexpr auto trigger=1024u;
+	constexpr auto inputLatency=11u;
+	constexpr auto largestTestCapacity=8192u;
+	const auto delay=io::UserConfig::TriggerPreDelaySamples(delayMs,rate).value();
+	const auto guard=(10u*rate+999u)/1000u;
+	const auto seam=delay>0?(std::min)(capacity,static_cast<unsigned int>(delay)+guard):0u;
+	const auto age=constants::MaxLoopFadeSamps+capacity;
+	const auto playbackBoundary=((trigger+length+constants::MaxLoopFadeSamps+largestTestCapacity+3u*block+block-1u)/block)*block;
+	engine::LoopTakeParams params; params.Size={100,100}; params.FadeSamps=0u;
+	audio::MergeMixBehaviourParams merge;
+	auto take=std::make_shared<engine::LoopTake>(params,engine::LoopTake::GetMixerParams(params.Size,merge));
+	audio::ChannelMixerParams mixerParams;
+	mixerParams.InputBufferSize=age+2u*block; mixerParams.OutputBufferSize=block;
+	mixerParams.NumInputChannels=1u; mixerParams.NumOutputChannels=1u;
+	audio::ChannelMixer adc(mixerParams);
+	for (auto q=0u;q<playbackBoundary;q+=block)
+	{
+		if (q==trigger)
+		{
+			take->ConfigureTriggerCapture({trigger,delay,capacity,age,seam});
+			take->Record({0u},"capacity-proof"); take->CommitChanges();
+		}
+		if (q>=trigger) take->BeginCaptureAudioBoundary(q,q,q);
+		if (q==trigger+length)
+		{
+			take->SetTriggerCaptureStop(q);
+			take->Play(constants::MaxLoopFadeSamps,length,0u);
+		}
+		std::array<float,block> input{};
+		const auto ingress=trigger+inputLatency;
+		if (ingress>=q && ingress<q+block) input[ingress-q]=1.0f;
+		adc.FromAdc(input.data(),1u,block);
+		// Test-only capacity injection: Jadc=F+R-I, with no production rig setting.
+		adc.InitPlay(age-inputLatency,block);
+		adc.Source()->SetSourceType(base::Audible::AUDIOSOURCE_ADC);
+		if (q>=trigger) adc.WriteToSink(take,block);
+		adc.Source()->EndMultiPlay(block);
+		if (q>=trigger)
+		{
+			take->EndMultiWrite(block,true,base::Audible::AUDIOSOURCE_ADC);
+			take->EndMultiPlay(block);
+			for (const auto& job:take->CommitChanges()) take->OnAction(job);
+		}
+	}
+	take->BeginCaptureAudioBoundary(playbackBoundary,playbackBoundary,playbackBoundary);
+	RecordedPredelayCapacityResult result;
+	if (take->GetLoops().empty()) return result;
+	const auto loop=take->GetLoops().front();
+	result.Exported=loop->ExportSamples();
+	for (auto q=0u;q<2u*length;q+=block)
+	{
+		std::array<float,block> output{};
+		loop->ReadBlock(output.data(),0,block);
+		result.Rendered.insert(result.Rendered.end(),output.begin(),output.end());
+		loop->EndMultiPlay(block);
+	}
+	return result;
+}
+
+TEST(RecordedPlaybackLatency, SharedHistoryCapacityCancelsForZeroAndSignedFractionalPredelay)
+{
+	constexpr auto length=2048u;
+	constexpr auto trigger=1024u;
+	constexpr auto block=128u;
+	constexpr auto playbackBoundary=((trigger+length+constants::MaxLoopFadeSamps+8192u+3u*block+block-1u)/block)*block;
+	for (const double delayMs:{-0.37,0.0,0.37})
+	{
+		SCOPED_TRACE(delayMs);
+		const auto lowerCapacityCapture=CaptureWithInjectedHistoryCapacity(2048u,delayMs);
+		const auto higherCapacityCapture=CaptureWithInjectedHistoryCapacity(8192u,delayMs);
+		ASSERT_EQ(length,lowerCapacityCapture.Exported.size());
+		EXPECT_EQ(lowerCapacityCapture.Exported,higherCapacityCapture.Exported);
+		EXPECT_EQ(lowerCapacityCapture.Rendered,higherCapacityCapture.Rendered);
+		const auto delay=io::UserConfig::TriggerPreDelaySamples(delayMs,44100u).value();
+		const auto stored=static_cast<unsigned int>((delay+static_cast<int>(length))%length);
+		EXPECT_FLOAT_EQ(1.0f,lowerCapacityCapture.Exported[stored]);
+		const auto onset=(trigger+length-playbackBoundary%length)%length;
+		ASSERT_EQ(2u*length,lowerCapacityCapture.Rendered.size());
+		EXPECT_FLOAT_EQ(1.0f,lowerCapacityCapture.Rendered[onset]);
+		EXPECT_FLOAT_EQ(1.0f,lowerCapacityCapture.Rendered[onset+length]);
+		EXPECT_EQ(2u,std::count(lowerCapacityCapture.Rendered.begin(),lowerCapacityCapture.Rendered.end(),1.0f));
+	}
+}
+
+TEST(RecordedPlaybackLatency, Delly4EarlyOnsetSurvivesGuardOnceInExportAndPlayback)
+{
+	// 44.1kHz: an onset 4052 samples before T with D=3793 belongs at L-259.
+	constexpr unsigned long length=8192u;
+	constexpr std::int64_t delay=3793;
+	constexpr std::int64_t seam=4234;
+	constexpr std::int64_t begin=constants::MaxLoopFadeSamps+delay-seam;
+	constexpr unsigned int earlyOnsetFromPassStart=4234u-4052u;
+	audio::WireMixBehaviourParams wire; wire.Channels={0u};
+	engine::LoopParams params; params.FadeSamps=0u;
+	auto loop=std::make_shared<engine::Loop>(params,engine::Loop::GetMixerParams({80,80},wire));
+	loop->Record(); loop->ConfigureTriggerCapture(begin,true,false);
+	loop->SetTriggerCaptureCursor(begin);
+	ASSERT_TRUE(loop->SetTriggerCaptureLength(length));
+	std::vector<float> input(length+64u,0.0f);
+	input[earlyOnsetFromPassStart]=1.0f;
+	input[length]=9.0f; // same next physical pass is outside [T-s,T+L-s)
+	base::AudioWriteRequest request;
+	request.samples=input.data(); request.numSamps=static_cast<unsigned int>(input.size());
+	request.stride=1; request.fadeCurrent=0.0f; request.fadeNew=1.0f;
+	request.source=base::Audible::AUDIOSOURCE_ADC;
+	loop->OnBlockWrite(request,0); loop->EndWrite(request.numSamps,true);
+	ASSERT_TRUE(loop->TriggerCaptureComplete());
+	loop->Play(constants::MaxLoopFadeSamps,length,true); loop->EndRecording();
+	const auto exported=loop->ExportSamples();
+	ASSERT_EQ(length,exported.size());
+	EXPECT_FLOAT_EQ(1.0f,exported[length-259u]);
+	EXPECT_EQ(1u,std::count(exported.begin(),exported.end(),1.0f));
+	EXPECT_EQ(exported.end(),std::find(exported.begin(),exported.end(),9.0f));
+	std::vector<float> rendered;
+	for (auto offset=0u;offset<length;offset+=128u)
+	{
+		std::array<float,128> output{};
+		ASSERT_EQ(128u,loop->ReadBlock(output.data(),0,128u));
+		rendered.insert(rendered.end(),output.begin(),output.end());
+		loop->EndMultiPlay(128u);
+	}
+	EXPECT_EQ(exported,rendered);
+}
+
+TEST(RecordedPlaybackLatency, HardwareLatencyAboveHistoryAgeRetainsExactCaptureRuler)
+{
+    const auto inputLatency = constants::MaxLoopFadeSamps
+        + io::UserConfig::TriggerHistorySamples(constants::DefaultSampleRate).value() + 31u;
+    VerifyRecordedCaptureOriginWithHardwareRuler(false, 0, 0, inputLatency);
+    VerifyRecordedCaptureOriginWithHardwareRuler(true, 0, 0, inputLatency);
 }

@@ -2,6 +2,7 @@
 #include "gtest/gtest.h"
 #include <algorithm>
 #include <regex>
+#include <limits>
 #include "resources/ResourceLib.h"
 #include "io/InitFile.h"
 #include "io/StartupConfig.h"
@@ -42,13 +43,13 @@ TEST(UserConfig, ParsesLoopSettings) {
 }
 
 TEST(UserConfig, ParsesTriggerSettings) {
-	auto str = "{\"preDelaySamps\":42,\"debounceMs\":59}";
+	auto str = "{\"preDelaySamps\":0,\"debounceMs\":59}";
 	auto testStream = std::stringstream(str);
 	auto json = std::get<Json::JsonPart>(Json::FromStream(std::move(testStream)).value());
 	auto trig = UserConfig::TriggerSettings::FromJson(json);
 
 	ASSERT_TRUE(trig.has_value());
-	ASSERT_EQ(42, trig.value().PreDelaySamps);
+	ASSERT_EQ(0u, trig.value().PreDelaySamps);
 	ASSERT_EQ(59, trig.value().DebounceMs);
 }
 
@@ -134,7 +135,7 @@ TEST(UserConfig, ParsesSerialDeviceList) {
 TEST(UserConfig, ParsesFile) {
 	std::string audio = "{\"name\":\"HDMI\",\"bufsize\":255,\"inlatency\":414,\"outlatency\":414,\"numchannelsin\":0,\"numchannelsout\":10}";
 	std::string loop = "{\"fadeSamps\":54,\"seedGrainMinMs\":400,\"seedGrainTargetMaxMs\":3000,\"seedBpmMin\":80,\"seedQuantisation\":\"power\"}";
-	std::string trigger = "{\"preDelaySamps\":21,\"debounceMs\":18}";
+	std::string trigger = "{\"preDelaySamps\":0,\"debounceMs\":18}";
 	std::string midi = "{\"devices\":[{\"name\":\"Launchkey\",\"enabled\":true},{\"name\":\"DrumPad\",\"enabled\":false}]}";
 	std::string serial = "{\"devices\":[{\"name\":\"pedal-a\",\"port\":\"COM3\",\"baudrate\":115200,\"enabled\":true},{\"name\":\"pedal-b\",\"port\":\"COM4\",\"baudrate\":57600,\"enabled\":false}]}";
 	
@@ -158,7 +159,7 @@ TEST(UserConfig, ParsesFile) {
 	ASSERT_EQ(80u, cfg.value().Loop.SeedBpmMin);
 	ASSERT_TRUE(cfg.value().Loop.SeedUsesPowers);
 
-	ASSERT_EQ(21, cfg.value().Trigger.PreDelaySamps);
+	ASSERT_EQ(0u, cfg.value().Trigger.PreDelaySamps);
 	ASSERT_EQ(18, cfg.value().Trigger.DebounceMs);
 	ASSERT_EQ(2u, cfg.value().Midi.Devices.size());
 	ASSERT_EQ(0, cfg.value().Midi.Devices[0].Name.compare("Launchkey"));
@@ -427,10 +428,62 @@ TEST(StartupConfig, EmptyJamRoundTripsAsAUsableStationWithoutNinjamCredentials) 
 
 TEST(UserConfig, OverdubTimingHelpersIncludeAndExcludeOutputLatencyAtRightPoints) {
 	UserConfig cfg;
-	cfg.Trigger.PreDelaySamps = 128u;
+	cfg.Audio.SampleRate = 48000u;
 
-	EXPECT_EQ(constants::MaxLoopFadeSamps + 128u, cfg.TriggerLoopAlignmentSamps());
-	EXPECT_EQ(-static_cast<long>(constants::MaxLoopFadeSamps + 128u + 96u),
+	EXPECT_EQ(constants::MaxLoopFadeSamps + 9600u, cfg.TriggerLoopAlignmentSamps());
+	EXPECT_EQ(-static_cast<long>(constants::MaxLoopFadeSamps + 9600u + 96u),
 		cfg.OverdubSourceReadOffset(96u));
 	EXPECT_EQ(cfg.LoopPlayPos(0, 4096ul, 0u), cfg.OverdubPlayPos(0, 4096ul));
+}
+
+TEST(UserConfig, ConvertsSignedFractionalTriggerMillisecondsAndFixedCapacity)
+{
+	EXPECT_EQ(8820u, UserConfig::TriggerHistorySamples(44100u).value());
+	EXPECT_EQ(9600u, UserConfig::TriggerHistorySamples(48000u).value());
+	EXPECT_EQ(3793, UserConfig::TriggerPreDelaySamples(86.0, 44100u).value());
+	EXPECT_EQ(4128, UserConfig::TriggerPreDelaySamples(86.0, 48000u).value());
+	EXPECT_EQ(-3793, UserConfig::TriggerPreDelaySamples(-86.0, 44100u).value());
+	EXPECT_EQ(6, UserConfig::TriggerPreDelaySamples(0.125, 48000u).value());
+	EXPECT_EQ(-6, UserConfig::TriggerPreDelaySamples(-0.125, 48000u).value());
+	EXPECT_EQ(6, UserConfig::TriggerPreDelaySamples(0.125, 44100u).value());
+	EXPECT_EQ(-6, UserConfig::TriggerPreDelaySamples(-0.125, 44100u).value());
+	EXPECT_EQ(9600, UserConfig::TriggerPreDelaySamples(200.0, 48000u).value());
+	EXPECT_FALSE(UserConfig::TriggerPreDelaySamples(200.001, 48000u));
+	EXPECT_FALSE(UserConfig::TriggerPreDelaySamples(-200.001, 48000u));
+	EXPECT_FALSE(UserConfig::TriggerPreDelaySamples(std::numeric_limits<double>::infinity(), 48000u));
+	EXPECT_FALSE(UserConfig::TriggerPreDelaySamples(std::numeric_limits<double>::quiet_NaN(), 48000u));
+	EXPECT_FALSE(UserConfig::TriggerPreDelaySamples(0.0, 0u));
+	EXPECT_FALSE(UserConfig::TriggerPreDelaySamples(-200.0, 384000u));
+	EXPECT_TRUE(UserConfig::TriggerPreDelaySamples(200.0, 384000u));
+	EXPECT_FALSE(UserConfig::TriggerHistorySamples((std::numeric_limits<unsigned int>::max)()));
+}
+
+TEST(UserConfig, ActiveRateControlsAdcCapacityIndependentlyOfLegacyField)
+{
+	UserConfig cfg;
+	cfg.Audio.SampleRate = 44100u;
+	cfg.Trigger.PreDelaySamps = 123u; // Deprecated member never contributes timing.
+	EXPECT_EQ(78820u, cfg.TriggerLoopAlignmentSamps());
+	EXPECT_EQ(79600u, cfg.TriggerLoopAlignmentSamps(48000u));
+	EXPECT_EQ(79500u, cfg.AdcBufferDelay(100u, 48000u));
+	EXPECT_EQ(0u, cfg.AdcBufferDelay(80000u, 48000u));
+	EXPECT_EQ(-79700l, cfg.OverdubSourceReadOffset(100u, 48000u));
+}
+
+TEST(UserConfig, RejectsNonzeroLegacyTriggerPredelay)
+{
+	auto parsed = Json::FromStream(std::stringstream(R"({"preDelaySamps":1,"debounceMs":280})"));
+	ASSERT_TRUE(parsed);
+	EXPECT_FALSE(UserConfig::TriggerSettings::FromJson(std::get<Json::JsonPart>(*parsed)));
+}
+
+TEST(UserConfig, DefaultConstructedAudioHasDefinedUnavailableValues)
+{
+    UserConfig config;
+    EXPECT_EQ(0u, config.Audio.BufSize);
+    EXPECT_EQ(0u, config.Audio.LatencyIn);
+    EXPECT_EQ(0u, config.Audio.LatencyOut);
+    EXPECT_EQ(0u, config.Audio.NumBuffers);
+    EXPECT_EQ(0u, config.Audio.NumChannelsIn);
+    EXPECT_EQ(0u, config.Audio.NumChannelsOut);
 }

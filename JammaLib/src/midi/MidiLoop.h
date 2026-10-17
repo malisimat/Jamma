@@ -186,6 +186,9 @@ namespace midi
 		};
 
 	private:
+		// Persisted identity for a finite note crossing content zero. Quantisation
+		// remains enabled because this is separate from MidiEvent::ExactTiming.
+		static constexpr std::uint8_t TriggerSeamEndpoint = MidiEvent::TriggerSeamEndpoint;
 		struct ChaseState
 		{
 			std::bitset<TotalNoteSlots> Held;
@@ -239,6 +242,9 @@ namespace midi
 		// Finalize a caller-built event set that was assembled through
 		// AppendEventForBuild.
 		void FinalizeOverdubBase(std::uint32_t loopLengthSamps);
+		// MIDI owner only, before EndRecord: select physical [0,L), then rotate
+		// complete note endpoints into content coordinates. No publication occurs.
+		bool NormalizeTriggerCapture(std::uint32_t loopLengthSamps, std::int64_t rotation);
 		// Finalize the recording with an explicit loop length in samples and transition
 		// to Playing. Events whose offset >= loopLengthSamps are kept in storage but will
 		// not be emitted (they are outside the playable window).
