@@ -1,6 +1,7 @@
 #pragma once
 
 #include <memory>
+#include <optional>
 #include "GuiElement.h"
 #include "GuiLabel.h"
 #include "GuiPanel.h"
@@ -54,6 +55,8 @@ namespace gui
 		// buttons opt in so one activation cannot submit two different commands.
 		bool DispatchCommand = false;
 		unsigned int TextPadding = DefaultTextPadding;
+		std::optional<graphics::FontOptions::FontSize> TextFontSize;
+		bool TextEllipsize = false;
 	};
 
 	class GuiButton :

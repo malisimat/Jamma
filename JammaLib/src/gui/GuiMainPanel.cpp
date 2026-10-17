@@ -62,8 +62,10 @@ GuiMainPanel::GuiMainPanel(GuiMainPanelParams params) : GuiPanel(params),
 		auto& page = _pages[static_cast<size_t>(setting.Page)];
 		if (!setting.Label.empty())
 		{
-			auto label = GuiLabelParams::PanelHeader(setting.Label, 300u);
-			label.Ellipsize = true;
+			const auto labelHeight = setting.Label.size() > 30u
+				? 2u * GuiLabelParams::DefaultHeight : GuiLabelParams::DefaultHeight;
+			auto label = GuiLabelParams::PanelHeader(setting.Label, 320, labelHeight);
+			label.FontSize = graphics::FontOptions::FONT_SMALL;
 			page->AddChild(std::make_shared<GuiLabel>(label));
 		}
 		page->AddChild(setting.Control);
@@ -76,6 +78,8 @@ GuiMainPanel::GuiMainPanel(GuiMainPanelParams params) : GuiPanel(params),
 	{
 		auto save = GuiButtonParams::PanelButton(260u);
 		save.Text = "Save rig as default..."; save.DispatchCommand = true;
+		save.Size.Height = 40u; save.MinSize.Height = 40u;
+		save.TextFontSize = graphics::FontOptions::FONT_SMALL;
 		_saveRigButton = std::make_shared<GuiButton>(save);
 		_pages[static_cast<size_t>(SettingsPage::Timing)]->AddChild(_saveRigButton);
 		_controlSizes.emplace_back(_saveRigButton, save.Size);
@@ -320,18 +324,9 @@ void GuiMainPanel::_Layout()
 
 int GuiMainPanel::_SettingsPanelWidth() const
 {
-	unsigned int controlWidth = 0u;
-	for (const auto& entry : _controlSizes) controlWidth = std::max(controlWidth, entry.second.Width);
-	for (const auto& page : _pages)
-		for (unsigned int index = 0u; index < 256u; ++index)
-		{
-			auto child = page->TryGetChild(static_cast<unsigned char>(index));
-			if (!child) break;
-			if (auto label = std::dynamic_pointer_cast<GuiLabel>(child))
-				controlWidth = std::max(controlWidth, label->ContentSize().Width);
-		}
-	// Frame padding, page padding, clip inset, and the vertical scrollbar.
-	return static_cast<int>(std::max(controlWidth + 48u, _tabs->GetSize().Width + 28u));
+	// Keep the frame aligned to the four settings tabs. Page content wraps to
+	// the width available inside this fixed frame.
+	return static_cast<int>(_tabs->GetSize().Width + 28u);
 }
 
 int GuiMainPanel::_SelectionPanelHeight() const
@@ -416,23 +411,37 @@ void GuiMainPanel::_LayoutSettings(int panelWidth, int panelHeight)
 			unsigned int count = 0;
 			while (count < 255 && radio->TryGetChild(static_cast<unsigned char>(count))) ++count;
 			const auto natural = original != _controlSizes.end() ? original->second : radio->GetSize();
-			const auto cellWidth = count ? std::max(1u, (natural.Width + count - 1u) / count) : 1u;
-			const auto columns = std::max(1u, std::min(count, childWidth / cellWidth));
+			const auto naturalCellWidth = count ? std::max(1u, (natural.Width + count - 1u) / count) : 1u;
+			unsigned int columns = count ? std::max(1u, std::min(count, childWidth / std::max(44u, naturalCellWidth))) : 1u;
+			if (count == 9u) columns = 5u;
+			else if (count == 16u) columns = 8u;
 			const auto rows = (count + columns - 1u) / columns;
-			const auto toggleWidth = std::min(childWidth, cellWidth);
 			for (unsigned int toggleIndex = 0; toggleIndex < count; ++toggleIndex)
 			{
 				auto toggle = radio->TryGetChild(static_cast<unsigned char>(toggleIndex));
-				toggle->SetPosition({ static_cast<int>((toggleIndex % columns) * toggleWidth),
-					static_cast<int>((rows - 1u - toggleIndex / columns) * natural.Height) });
-				toggle->SetSize({ toggleWidth, natural.Height });
+				const auto row = toggleIndex / columns;
+				const auto column = toggleIndex % columns;
+				const auto rowItems = std::min(columns, count - row * columns);
+				const auto rowWidth = childWidth * rowItems / columns;
+				const auto rowStart = (childWidth - rowWidth) / 2u;
+				const auto left = rowStart + childWidth * column / columns;
+				const auto right = rowStart + childWidth * (column + 1u) / columns;
+				toggle->SetPosition({ static_cast<int>(left),
+					static_cast<int>((rows - 1u - row) * natural.Height) });
+				toggle->SetSize({ right - left, natural.Height });
 			}
-			radio->SetSize({ std::min(childWidth, natural.Width), rows * natural.Height });
+			radio->SetSize({ childWidth, rows * natural.Height });
 		}
 		else
 		{
 			if (original != _controlSizes.end())
-				child->SetSize({ std::min(childWidth, original->second.Width), original->second.Height });
+				child->SetSize({ std::dynamic_pointer_cast<GuiButton>(child)
+					? childWidth : std::min(childWidth, original->second.Width), original->second.Height });
+			if (auto stack = std::dynamic_pointer_cast<GuiStackPanel>(child))
+			{
+				stack->InvalidateLayout();
+				stack->ComputeLayout();
+			}
 		}
 		contentHeight += child->GetSize().Height + 8u;
 		contentWidth = std::max(contentWidth, child->GetSize().Width);
@@ -488,7 +497,14 @@ void GuiMainPanel::ReplacePageSettings(SettingsPage pageId, const std::vector<Gu
 	for (const auto& setting : settings)
 	{
 		if (!setting.Control) continue;
-		if (!setting.Label.empty()) page->AddChild(std::make_shared<GuiLabel>(GuiLabelParams::PanelHeader(setting.Label, 300u)));
+		if (!setting.Label.empty())
+		{
+			const auto labelHeight = setting.Label.size() > 30u
+				? 2u * GuiLabelParams::DefaultHeight : GuiLabelParams::DefaultHeight;
+			auto labelParams = GuiLabelParams::PanelHeader(setting.Label, 320, labelHeight);
+			labelParams.FontSize = graphics::FontOptions::FONT_SMALL;
+			page->AddChild(std::make_shared<GuiLabel>(labelParams));
+		}
 		page->AddChild(setting.Control);
 		// A retained widget may currently be wrapped for a narrow viewport.
 		const auto original = std::find_if(previousSizes.begin(), previousSizes.end(),

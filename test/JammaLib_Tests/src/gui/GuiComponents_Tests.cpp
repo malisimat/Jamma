@@ -1292,6 +1292,22 @@ TEST(GuiTextGeometry, RelatedControlsSharePreferredHeightAndHeadersKeepExplicitA
 	EXPECT_EQ(gui::GuiTextVerticalAlign::Center, gui::GuiLabelParams::PanelHeader("Agjpq 0123", 100u).VerticalAlign);
 	EXPECT_EQ(gui::GuiTextVerticalAlign::Center, gui::GuiLabelParams::PanelScrollRow("Agjpq 0123").VerticalAlign);
 	EXPECT_EQ(gui::GuiTextVerticalAlign::Baseline, gui::GuiLabelParams{}.VerticalAlign);
+	EXPECT_EQ(0u, gui::GuiLabelParams{}.Size.Width);
+	EXPECT_EQ(gui::GuiLabelParams::DefaultHeight, gui::GuiLabelParams{}.Size.Height);
+	EXPECT_EQ(0, gui::GuiLabelParams::PanelHeader("dynamic", 0).WrapWidth);
+	EXPECT_EQ(120, gui::GuiLabelParams::PanelHeader("wrapped", 120, 44u).WrapWidth);
+}
+
+TEST(GuiTextGeometry, ExplicitWidthWrapsWordsAndRespectsAvailableLines) {
+	const auto measure = [](const std::string& text) { return static_cast<float>(text.size()); };
+	EXPECT_EQ((std::vector<std::string>{ "alpha", "beta", "gamma" }),
+		gui::GuiLabel::WrapText("alpha beta gamma", 6.0f, 3u, measure));
+	EXPECT_EQ((std::vector<std::string>{ "abcde", "fghij" }),
+		gui::GuiLabel::WrapText("abcdefghij", 5.0f, 2u, measure));
+	EXPECT_EQ((std::vector<std::string>{ "alpha", "be..." }),
+		gui::GuiLabel::WrapText("alpha beta gamma", 5.0f, 2u, measure));
+	EXPECT_EQ((std::vector<std::string>{ "alpha beta" }),
+		gui::GuiLabel::WrapText("alpha beta", 0.0f, 2u, measure));
 }
 
 TEST(GuiTextGeometry, ButtonAndRadioLabelsRetainCenteredContentFramesAcrossResize) {
@@ -1498,8 +1514,24 @@ TEST_F(GuiSceneSettingsTests, SettingsFitNaturalWidthsAndWrapChoicesInsideNarrow
 				EXPECT_LE(static_cast<unsigned int>(toggle->Position().Y) + toggle->GetSize().Height, radio->GetSize().Height);
 				++count;
 			}
-			if (viewport.Width == 800u) EXPECT_EQ(page == gui::SettingsPage::Midi ? 28u : 40u, radio->GetSize().Height);
-			if (viewport.Width == 280u) EXPECT_GT(radio->GetSize().Height, page == gui::SettingsPage::Midi ? 28u : 40u);
+			if (viewport.Width == 800u) EXPECT_EQ(page == gui::SettingsPage::Midi ? 76u : 80u, radio->GetSize().Height);
+			if (viewport.Width == 280u) EXPECT_GT(radio->GetSize().Height, page == gui::SettingsPage::Midi ? 38u : 40u);
+			if (viewport.Width == 800u && page == gui::SettingsPage::Timing)
+			{
+				ASSERT_EQ(9u, count);
+				for (unsigned int index = 0u; index < count; ++index)
+				{
+					const auto toggle = radio->TryGetChild(static_cast<unsigned char>(index));
+					const auto column = index % 5u;
+					const auto rowItems = index < 5u ? 5u : 4u;
+					const auto rowWidth = radio->GetSize().Width * rowItems / 5u;
+					const auto rowStart = (radio->GetSize().Width - rowWidth) / 2u;
+					const auto expectedLeft = rowStart + radio->GetSize().Width * column / 5u;
+					const auto expectedRight = rowStart + radio->GetSize().Width * (column + 1u) / 5u;
+					EXPECT_EQ(expectedLeft, static_cast<unsigned int>(toggle->Position().X));
+					EXPECT_EQ(expectedRight - expectedLeft, toggle->GetSize().Width);
+				}
+			}
 		}
 		if (viewport.Width > 0u)
 			for (const auto page : { gui::SettingsPage::Audio, gui::SettingsPage::Midi, gui::SettingsPage::Timing, gui::SettingsPage::Session })
@@ -1518,14 +1550,15 @@ TEST_F(GuiSceneSettingsTests, SettingsFitNaturalWidthsAndWrapChoicesInsideNarrow
 			}
 	}
 	const auto frame = panel->TryGetChild(0);
-	EXPECT_GE(frame->GetSize().Width, 498u);
+	EXPECT_EQ(444u, frame->GetSize().Width);
 	const auto tabs = std::dynamic_pointer_cast<GuiScrollPanel>(frame->TryGetChild(2));
 	ASSERT_TRUE(tabs); EXPECT_FALSE(tabs->IsScrollBarVisible());
 	const auto previousWidth = frame->GetSize().Width;
 	auto wider = std::make_shared<GuiButton>(GuiButtonParams::PanelButton(520u));
 	panel->ReplacePageSettings(gui::SettingsPage::Audio, {{gui::SettingsPage::Audio, "Wide section", wider, 9000u}});
-	EXPECT_GT(frame->GetSize().Width, previousWidth);
-	EXPECT_EQ(520u, wider->GetSize().Width);
+	panel->SetPage(gui::SettingsPage::Audio);
+	EXPECT_EQ(previousWidth, frame->GetSize().Width);
+	EXPECT_EQ(396u, wider->GetSize().Width);
 }
 
 TEST(GuiMidiChannelOverride, PresentationRefreshDoesNotDispatchActions)

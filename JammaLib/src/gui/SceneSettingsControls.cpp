@@ -8,15 +8,16 @@ using actions::GuiAction;
 GuiRadioParams GuiMidiChannelOverride::_Params(std::uint8_t channel)
 {
 	GuiRadioParams params;
-	params.Size = { 448u, 28u };
+	params.Size = { 448u, 38u };
 	params.InitValue = channel == 0u ? UnchangedIndex : std::min<unsigned int>(channel, 16u) - 1u;
 	for (unsigned int index = 0u; index < 16u; ++index)
 	{
 		auto toggle = GuiToggleParams::PanelPrimary();
 		toggle.Text = std::to_string(index + 1u);
 		toggle.TextPadding = 2u;
+		toggle.TextFontSize = graphics::FontOptions::FONT_SMALL;
 		toggle.Position = { static_cast<int>(index * 28u), 0 };
-		toggle.Size = { 28u, 28u };
+		toggle.Size = { 28u, 38u };
 		toggle.MinSize = toggle.Size;
 		params.ToggleParams.push_back(toggle);
 	}
@@ -118,8 +119,9 @@ SceneSettingsControls::SceneSettingsControls(std::uint8_t channel, double offset
 	metronomeToggleParams.Index = NinjamMetronomeControlIndex;
 	metronomeToggleParams.ToggleIndex = NinjamMetronomeControlIndex;
 	metronomeToggleParams.Text = "Metronome";
-	metronomeToggleParams.Size = { 120, GuiToggleParams::DefaultHeight };
-	metronomeToggleParams.MinSize = { 120, GuiToggleParams::DefaultHeight };
+	metronomeToggleParams.Size = { 120, 40u };
+	metronomeToggleParams.MinSize = { 120, 40u };
+	metronomeToggleParams.TextFontSize = graphics::FontOptions::FONT_SMALL;
 	metronomeToggleParams.InitState = GuiToggleParams::TOGGLE_ON;
 	_ninjamMetronomeToggle = std::make_shared<GuiToggle>(metronomeToggleParams);
 
@@ -157,6 +159,7 @@ SceneSettingsControls::SceneSettingsControls(std::uint8_t channel, double offset
 			break;
 		}
 
+		toggleParams.TextFontSize = graphics::FontOptions::FONT_SMALL;
 		globalQuantToggleParams.push_back(toggleParams);
 	}
 	globalMidiQuantRadioParams.ToggleParams = globalQuantToggleParams;
@@ -165,6 +168,8 @@ SceneSettingsControls::SceneSettingsControls(std::uint8_t channel, double offset
 	auto tapParams = GuiButtonParams::PanelButton(180u);
 	tapParams.Index = TapTempoControlIndex;
 	tapParams.Text = "Tap tempo (Space)";
+	tapParams.Size.Height = 40u; tapParams.MinSize.Height = 40u;
+	tapParams.TextFontSize = graphics::FontOptions::FONT_SMALL;
 	_tapButton = std::make_shared<GuiButton>(tapParams);
 	GuiRadioParams subdivisionParams;
 	subdivisionParams.Index = MidiSubdivisionControlIndex;
@@ -176,6 +181,7 @@ SceneSettingsControls::SceneSettingsControls(std::uint8_t channel, double offset
 		toggle.Text = midi::MidiQuantisation::FractionLabel(midi::MidiQuantisation::ClampFractionDisplayIndex(index));
 		toggle.Position = { index * 50, 0 };
 		toggle.Size = { 48u, 40u };
+		toggle.TextFontSize = graphics::FontOptions::FONT_SMALL;
 		subdivisionParams.ToggleParams.push_back(toggle);
 	}
 	_midiSubdivisionRadio = std::make_shared<GuiRadio>(subdivisionParams);

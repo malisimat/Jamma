@@ -240,10 +240,19 @@ GLuint Font::InitVertexArray(const std::string& str, GLenum usage, GLuint* outPo
 	std::vector<GLfloat> uv(numVerts * 2);
 
 	float xOffset = 0.0f;
+	float yOffset = 0.0f;
+	const float lineStep = Metrics().LineStep();
 	unsigned int previousCodepoint = 0;
 	for (unsigned int i = 0; i < numChars; ++i)
 	{
 		auto codepoint = static_cast<unsigned char>(str[i]);
+		if (codepoint == '\n')
+		{
+			xOffset = 0.0f;
+			yOffset -= lineStep;
+			previousCodepoint = 0u;
+			continue;
+		}
 		auto glyph = _GetGlyph(codepoint);
 		auto advance = _MeasureCodepoint(codepoint, previousCodepoint);
 		previousCodepoint = codepoint;
@@ -256,8 +265,8 @@ GLuint Font::InitVertexArray(const std::string& str, GLenum usage, GLuint* outPo
 		int posStartIndex = i * 3 * 6;
 		int uvStartIndex = i * 2 * 6;
 		const float x0 = xOffset + glyph.XOffset;
-		const float y0 = -glyph.YOffset - glyph.Height;
-		const float y1 = -glyph.YOffset;
+		const float y0 = yOffset - glyph.YOffset - glyph.Height;
+		const float y1 = yOffset - glyph.YOffset;
 		const float x1 = x0 + glyph.Width;
 		pos[posStartIndex + 0] = x0; pos[posStartIndex + 1] = y0; pos[posStartIndex + 2] = 0.0f;
 		pos[posStartIndex + 3] = x0; pos[posStartIndex + 4] = y1; pos[posStartIndex + 5] = 0.0f;
@@ -324,13 +333,21 @@ void Font::Draw(GlDrawContext& ctx, GLuint vertexArray, unsigned int numChars)
 float Font::MeasureString(const std::string& str) const
 {
 	float total = 0.0f;
+	float maximum = 0.0f;
 	unsigned int previousCodepoint = 0;
 	for (unsigned char ch : str)
 	{
+		if (ch == '\n')
+		{
+			maximum = std::max(maximum, total);
+			total = 0.0f;
+			previousCodepoint = 0u;
+			continue;
+		}
 		total += _MeasureCodepoint(ch, previousCodepoint);
 		previousCodepoint = ch;
 	}
-	return total;
+	return std::max(maximum, total);
 }
 
 float Font::GetHeight() const

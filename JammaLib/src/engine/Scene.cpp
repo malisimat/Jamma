@@ -143,11 +143,18 @@ Scene::Scene(SceneParams params,
 	mainParams.Settings = _settingsControls->SettingsEntries();
 	_audioDraft = user.Audio;
 	_midiDraft = user.Midi.Devices;
-	_deviceStatus = std::make_shared<GuiLabel>(GuiLabelParams::PanelHeader("Ready", 300u));
-	_activeAudioStatus = std::make_shared<GuiLabel>(GuiLabelParams::PanelHeader("Audio stopped", 300u));
-	_fileStatus = std::make_shared<GuiLabel>(GuiLabelParams::PanelHeader("Choose a folder on first Save", 300u));
+	auto statusLabel = [](const std::string& text, unsigned int height) {
+		auto params = GuiLabelParams::PanelHeader(text, 320, height);
+		params.FontSize = graphics::FontOptions::FONT_SMALL;
+		return std::make_shared<GuiLabel>(params);
+	};
+	_deviceStatus = statusLabel("Ready", 66u);
+	_activeAudioStatus = statusLabel("Audio stopped", 44u);
+	_fileStatus = statusLabel("Choose a folder on first Save", 44u);
 	auto saveParams = GuiButtonParams::PanelButton(240u); saveParams.Text = "Save (Alt: choose folder)"; saveParams.DispatchCommand = true;
 	auto loadParams = GuiButtonParams::PanelButton(240u); loadParams.Text = "Load session"; loadParams.DispatchCommand = true;
+	saveParams.Size.Height = 40u; saveParams.MinSize.Height = 40u; saveParams.TextFontSize = graphics::FontOptions::FONT_SMALL;
+	loadParams.Size.Height = 40u; loadParams.MinSize.Height = 40u; loadParams.TextFontSize = graphics::FontOptions::FONT_SMALL;
 	_saveButton = std::make_shared<GuiButton>(saveParams); _loadButton = std::make_shared<GuiButton>(loadParams);
 	mainParams.Settings.push_back({SettingsPage::Session, "", _saveButton, 7210u});
 	mainParams.Settings.push_back({SettingsPage::Session, "", _loadButton, 7211u});
@@ -4236,7 +4243,9 @@ void Scene::_RebuildDevicePage()
 	{
 		std::string details = "Limits: " + std::to_string(selected->InputChannels) + " in / " + std::to_string(selected->OutputChannels) + " out. Rates:";
 		for (const auto rate : selected->SampleRates) details += " " + std::to_string(rate);
-		entries.push_back({SettingsPage::Audio,"",std::make_shared<GuiLabel>(GuiLabelParams::PanelHeader(details,300u)),0u});
+		auto detailsParams = GuiLabelParams::PanelHeader(details, 320, 66u);
+		detailsParams.FontSize = graphics::FontOptions::FONT_SMALL;
+		entries.push_back({SettingsPage::Audio,"",std::make_shared<GuiLabel>(detailsParams),0u});
 	}
 	const std::array<unsigned int,4> values{_audioDraft.NumChannelsIn, _audioDraft.NumChannelsOut, _audioDraft.SampleRate, _audioDraft.BufSize};
 	std::array<std::string,4> labels{"First N inputs (settles for 3 seconds)", "First N outputs (settles for 3 seconds)", "Sample rate (no takes only)", "Buffer size (requested; negotiated on open)"};
@@ -4255,11 +4264,13 @@ void Scene::_RebuildDevicePage()
 	}
 	entries.push_back({SettingsPage::Audio, "Active stream", _activeAudioStatus, 0u});
 	entries.push_back({SettingsPage::Audio, "Status", _deviceStatus, 0u});
-	auto button = [&](const std::string& text, unsigned int command){ auto params = GuiButtonParams::PanelButton(240u); params.Text = text; params.DispatchCommand = true; entries.push_back({SettingsPage::Audio,"",std::make_shared<GuiButton>(params),command}); };
+	auto button = [&](const std::string& text, unsigned int command){ auto params = GuiButtonParams::PanelButton(240u); params.Text = text; params.DispatchCommand = true; params.Size.Height = 40u; params.MinSize.Height = 40u; params.TextFontSize = graphics::FontOptions::FONT_SMALL; entries.push_back({SettingsPage::Audio,"",std::make_shared<GuiButton>(params),command}); };
 	button("Retry / refresh audio request", 7205u); button("Retry saving preferences",7207u);
 	_midiChoices.clear(); _midiChoiceBindings.clear();
 	const auto midi = _midiState.load(std::memory_order_acquire);
-	midiEntries.push_back({SettingsPage::Midi, "", std::make_shared<GuiLabel>(GuiLabelParams::PanelHeader(midi->Connection.Inventory.Error.empty() ? "MIDI input selection" : "MIDI inventory: " + midi->Connection.Inventory.Error, 300u)), 0u});
+	auto midiTitle = GuiLabelParams::PanelHeader(midi->Connection.Inventory.Error.empty() ? "MIDI input selection" : "MIDI inventory: " + midi->Connection.Inventory.Error, 320, 66u);
+	midiTitle.FontSize = graphics::FontOptions::FONT_SMALL;
+	midiEntries.push_back({SettingsPage::Midi, "", std::make_shared<GuiLabel>(midiTitle), 0u});
 	// Existing registry entries remain independent even when hardware selectors
 	// coincide. Inventory-only choices acquire their ID when first selected.
 	auto choices = _midiDraft;
@@ -4291,6 +4302,8 @@ void Scene::_RebuildDevicePage()
 		default: break;
 		}
 		params.Text = choice.Name + (choice.Id.empty() ? "" : " [" + choice.Id + "]") + " (" + status + ")";
+		params.TextFontSize = graphics::FontOptions::FONT_SMALL;
+		params.TextEllipsize = true;
 		auto control = std::make_shared<GuiToggle>(params);
 		auto binding = std::make_shared<GuiCommandReceiver>(7300u+static_cast<unsigned int>(_midiChoices.size()), ActionReceiver::shared_from_this());
 		control->SetReceiver(binding); _midiChoiceBindings.push_back(binding);
@@ -4298,6 +4311,7 @@ void Scene::_RebuildDevicePage()
 		_midiChoices.push_back({choice.Name, choice.Id, control});
 	}
 	auto refreshMidi = GuiButtonParams::PanelButton(240u); refreshMidi.Text = "Refresh MIDI devices"; refreshMidi.DispatchCommand = true;
+	refreshMidi.Size.Height = 40u; refreshMidi.MinSize.Height = 40u; refreshMidi.TextFontSize = graphics::FontOptions::FONT_SMALL;
 	midiEntries.push_back({SettingsPage::Midi, "", std::make_shared<GuiButton>(refreshMidi), 7206u});
 	_mainPanel->ReplacePageSettings(SettingsPage::Audio, entries);
 	_mainPanel->ReplacePageSettings(SettingsPage::Midi, midiEntries);

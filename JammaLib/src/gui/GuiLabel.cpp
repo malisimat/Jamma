@@ -4,6 +4,7 @@
 #include "glm/ext.hpp"
 #include <algorithm>
 #include <cmath>
+#include <sstream>
 
 using namespace base;
 using namespace gui;
@@ -17,6 +18,8 @@ GuiLabel::GuiLabel(GuiLabelParams guiParams) :
 	_textInset{ guiParams.TextInsetX, guiParams.TextInsetY },
 	_centerHorizontally(guiParams.CenterHorizontally),
 	_ellipsize(guiParams.Ellipsize),
+	_wrapWidth(guiParams.WrapWidth != 0 ? guiParams.WrapWidth : static_cast<int>(guiParams.Size.Width)),
+	_fontSize(guiParams.FontSize),
 	_verticalAlign(guiParams.VerticalAlign),
 	_clipText(guiParams.ClipText),
 	_vertexArrayDirty(true),
@@ -31,9 +34,9 @@ GuiLabel::GuiLabel(GuiLabelParams guiParams) :
 
 void GuiLabel::SetSize(utils::Size2d size)
 {
-	const bool widthChanged = GetSize().Width != size.Width;
+	const bool layoutChanged = GetSize().Width != size.Width || GetSize().Height != size.Height;
 	GuiElement::SetSize(size);
-	if (_ellipsize && widthChanged)
+	if ((_ellipsize || _wrapWidth > 0) && layoutChanged)
 		_vertexArrayDirty.store(true, std::memory_order_release);
 
 	if (nullptr == _resourceLib)
@@ -70,10 +73,70 @@ std::string GuiLabel::FitText(const std::string& text, float width,
 	return text.substr(0, first) + suffix;
 }
 
+std::vector<std::string> GuiLabel::WrapText(const std::string& text, float width,
+	unsigned int maxLines, const std::function<float(const std::string&)>& measure)
+{
+	if (text.empty() || maxLines == 0u) return {};
+	if (width <= 0.0f) return { text };
+
+	std::vector<std::string> lines;
+	size_t offset = 0u;
+	while (offset < text.size() && lines.size() < maxLines)
+	{
+		while (offset < text.size() && text[offset] == ' ') ++offset;
+		if (offset == text.size()) break;
+
+		std::string line;
+		size_t lastSpace = std::string::npos;
+		while (offset < text.size())
+		{
+			const char ch = text[offset];
+			if (measure(line + ch) <= width || line.empty())
+			{
+				line.push_back(ch);
+				++offset;
+				if (ch == ' ') lastSpace = line.size() - 1u;
+				continue;
+			}
+
+			if (lastSpace != std::string::npos)
+			{
+				const auto carried = line.size() - lastSpace - 1u;
+				line.resize(lastSpace);
+				offset -= carried;
+			}
+			break;
+		}
+
+		if (line.empty()) break;
+		lines.push_back(std::move(line));
+	}
+
+	if (offset < text.size() && !lines.empty())
+		lines.back() = FitText(lines.back() + "...", width, measure);
+	return lines;
+}
+
 std::optional<float> GuiLabel::MeasureText(const std::string& text) const
 {
 	if (auto font = _font.lock()) return font->MeasureString(text);
 	return std::nullopt;
+}
+
+utils::Size2d GuiLabel::GetSize() const
+{
+	auto size = GuiElement::GetSize();
+	if (size.Width != 0u || _wrapWidth > 0) return size;
+	if (auto font = _font.lock())
+	{
+		std::string currentStr;
+		{
+			std::lock_guard<std::mutex> lock(_stringMutex);
+			currentStr = _pendingStr;
+		}
+		size.Width = static_cast<unsigned int>(std::ceil(font->MeasureString(currentStr)));
+	}
+	return size;
 }
 
 utils::Size2d GuiLabel::ContentSize() const
@@ -92,6 +155,14 @@ utils::Size2d GuiLabel::ContentSize() const
 
 	auto sz = GetSize();
 	float measuredW = font->MeasureString(currentStr);
+	if (_wrapWidth > 0 && _LineCapacity(*font) > 1u)
+	{
+		const auto width = std::min(static_cast<float>(sz.Width), static_cast<float>(_wrapWidth));
+		const auto lines = WrapText(currentStr, width, _LineCapacity(*font),
+			[&font](const std::string& text) { return font->MeasureString(text); });
+		measuredW = 0.0f;
+		for (const auto& line : lines) measuredW = std::max(measuredW, font->MeasureString(line));
+	}
 
 	return {
 		static_cast<unsigned int>(std::ceil(measuredW)),
@@ -141,7 +212,14 @@ void GuiLabel::Draw(DrawContext& ctx)
 		? std::max(0.0f, (static_cast<float>(GetSize().Width) - textWidth) / 2.0f)
 		: 0.0f;
 	if (_clipText) glCtx.PushScissorRect(GlobalPosition(), GetSize());
-	const auto line = LineFrame().value();
+	auto line = LineFrame().value();
+	const auto lineCount = static_cast<unsigned int>(std::count(_str.begin(), _str.end(), '\n')) + 1u;
+	if (lineCount > 1u)
+	{
+		const float extra = static_cast<float>(lineCount - 1u) * font->Metrics().LineStep();
+		if (_verticalAlign == GuiTextVerticalAlign::Center) line.BaselineY += extra * 0.5f;
+		else if (_verticalAlign == GuiTextVerticalAlign::Bottom) line.BaselineY += extra;
+	}
 	glCtx.PushMvp(glm::translate(glm::mat4(1.0), glm::vec3(pos.X + _textInset.X + horizontalOffset, pos.Y + line.BaselineY, 0.f)));
 	
 	font->Draw(glCtx, _vertexArray, (unsigned int)_str.size());
@@ -151,6 +229,16 @@ void GuiLabel::Draw(DrawContext& ctx)
 
 bool GuiLabel::_ResolveFont(ResourceLib& resourceLib)
 {
+	if (_fontSize)
+	{
+		auto fontOpt = resourceLib.GetFont(*_fontSize);
+		if (!fontOpt.has_value()) return false;
+		auto previousFont = _font.lock();
+		_font = fontOpt.value();
+		_selectedFontSize = *_fontSize;
+		_resolvedTextPixelHeight = Font::GetPixelHeightForSize(*_fontSize);
+		return fontOpt.value().lock() != previousFont;
+	}
 	ResourceLib::FontSelection selection;
 	const unsigned int desired = ResourceLib::ResolveTextPixelHeightFromControlBox(GetSize().Height, 0u);
 
@@ -230,7 +318,19 @@ void GuiLabel::SyncVertexArray()
 	auto font = _font.lock();
 	if (!font)
 		return;
-	if (_ellipsize)
+	if (_wrapWidth > 0 && _LineCapacity(*font) > 1u)
+	{
+		const auto width = std::min(static_cast<float>(GetSize().Width), static_cast<float>(_wrapWidth));
+		const auto lines = WrapText(next, width, _LineCapacity(*font),
+			[&font](const std::string& text) { return font->MeasureString(text); });
+		next.clear();
+		for (const auto& line : lines)
+		{
+			if (!next.empty()) next.push_back('\n');
+			next += line;
+		}
+	}
+	else if (_ellipsize)
 		next = FitText(next, std::max(0.0f, static_cast<float>(GetSize().Width) - _textInset.X),
 			[&font](const std::string& text) { return font->MeasureString(text); });
 
@@ -240,4 +340,13 @@ void GuiLabel::SyncVertexArray()
 	graphics::GlDeleteQueue::DeleteVertexArrays(1, &_vertexArray);
 	_vertexArray = font->InitVertexArray(next, GL_STATIC_DRAW, &_vertexBuffers[0], &_vertexBuffers[1]);
 	_str = next;
+}
+
+unsigned int GuiLabel::_LineCapacity(const Font& font) const
+{
+	const auto metrics = font.Metrics();
+	const float lineStep = std::max(1.0f, metrics.LineStep());
+	const float height = static_cast<float>(GetSize().Height);
+	if (height <= metrics.Height()) return 1u;
+	return 1u + static_cast<unsigned int>(std::floor((height - metrics.Height()) / lineStep));
 }

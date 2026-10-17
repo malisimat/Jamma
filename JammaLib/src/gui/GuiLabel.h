@@ -5,6 +5,8 @@
 #include <atomic>
 #include <mutex>
 #include <algorithm>
+#include <optional>
+#include <vector>
 #include "GuiElement.h"
 #include "Drawable.h"
 #include "../graphics/Font.h"
@@ -31,6 +33,7 @@ namespace gui
 	class GuiLabelParams : public base::GuiElementParams
 	{
 	public:
+		static constexpr unsigned int DefaultHeight = 22u;
 		static constexpr unsigned int HeaderHeight = 22u;
 		static constexpr unsigned int HeaderMinWidth = 40u;
 		static constexpr unsigned int RowWidth = 260u;
@@ -39,7 +42,10 @@ namespace gui
 
 		GuiLabelParams() :
 			base::GuiElementParams()
-		{}
+		{
+			Size = { 0u, DefaultHeight };
+			MinSize = { 0u, DefaultHeight };
+		}
 
 		GuiLabelParams(base::GuiElementParams params,
 			std::string string) :
@@ -47,12 +53,14 @@ namespace gui
 			String(string)
 		{}
 
-		static GuiLabelParams PanelHeader(const std::string& text, unsigned int width)
+		static GuiLabelParams PanelHeader(const std::string& text, int width,
+			unsigned int height = HeaderHeight)
 		{
 			GuiLabelParams params;
 			params.String = text;
-			params.Size = { width, HeaderHeight };
-			params.MinSize = { HeaderMinWidth, HeaderHeight };
+			params.WrapWidth = width;
+			params.Size = { width > 0 ? static_cast<unsigned int>(width) : 0u, height };
+			params.MinSize = { width > 0 ? HeaderMinWidth : 0u, height };
 			params.VerticalAlign = GuiTextVerticalAlign::Center;
 			params.ClipText = true;
 			return params;
@@ -107,6 +115,10 @@ namespace gui
 
 	public:
 		std::string String;
+		// Positive enables word wrapping within the assigned label width. Zero or
+		// negative keeps a dynamic, single-line label.
+		int WrapWidth = 0;
+		std::optional<graphics::FontOptions::FontSize> FontSize;
 		int TextInsetX = 0;
 		int TextInsetY = 0;
 		bool CenterHorizontally = false;
@@ -124,6 +136,9 @@ namespace gui
 		std::optional<float> MeasureText(const std::string& text) const;
 		static std::string FitText(const std::string& text, float width,
 			const std::function<float(const std::string&)>& measure);
+		static std::vector<std::string> WrapText(const std::string& text, float width,
+			unsigned int maxLines,
+			const std::function<float(const std::string&)>& measure);
 		static GuiTextLineFrame ResolveLineFrame(float height, graphics::Font::VerticalMetrics metrics,
 			GuiTextVerticalAlign alignment);
 		std::optional<GuiTextLineFrame> LineFrame() const;
@@ -131,6 +146,7 @@ namespace gui
 
 	public:
 		virtual void Draw(base::DrawContext& ctx) override;
+	virtual utils::Size2d GetSize() const override;
 		virtual utils::Size2d ContentSize() const override;
 		virtual void SetSize(utils::Size2d size) override;
 
@@ -142,6 +158,7 @@ namespace gui
 		void SyncVertexArray();
 		bool InitVertexArray();
 		bool _ResolveFont(resources::ResourceLib& resourceLib);
+		unsigned int _LineCapacity(const graphics::Font& font) const;
 
 	private:
 		std::string _str;
@@ -149,6 +166,8 @@ namespace gui
 		utils::Position2d _textInset;
 		bool _centerHorizontally;
 		bool _ellipsize;
+		int _wrapWidth;
+		std::optional<graphics::FontOptions::FontSize> _fontSize;
 		GuiTextVerticalAlign _verticalAlign;
 		bool _clipText;
 		mutable std::mutex _stringMutex;

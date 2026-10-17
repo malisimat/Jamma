@@ -11,6 +11,8 @@ GuiLabelParams GuiButton::_MakeLabelParams(const GuiButtonParams& params)
 	lp.String = params.Text;
 	lp.VerticalAlign = GuiTextVerticalAlign::Center;
 	lp.ClipText = true;
+	lp.Ellipsize = params.TextEllipsize;
+	lp.FontSize = params.TextFontSize;
 
 	const GuiTextFrame frame = GuiLabelParams::ResolveTextFrame(
 		params.Size.Width,
