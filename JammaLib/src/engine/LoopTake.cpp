@@ -725,7 +725,10 @@ void LoopTake::WriteBlock(const std::shared_ptr<MultiAudioSink> dest,
         && !_isMidiPunchInActive.load(std::memory_order_acquire)
         && state->RecordInputChannels.size() == state->Loops.size()
         && std::all_of(state->Loops.begin(), state->Loops.end(),
-            [](const auto& loop) { return loop && loop->CanUseTemporaryPlayback(); })
+            [indexOffset, numSamps](const auto& loop) {
+                return loop && loop->CanUseTemporaryPlayback(_NormalizeLoopIndex(
+                    static_cast<long long>(loop->BodyPlayIndex()) + indexOffset, loop->LoopLength()), numSamps);
+            })
         && _triggerCaptureTiming.TriggerSample.has_value()
         && dac->History.ContainsOrigin(*_triggerCaptureTiming.TriggerSample);
     if (!captureReady && !provisional) return;

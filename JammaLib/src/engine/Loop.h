@@ -355,7 +355,7 @@ namespace engine
 		void SetTriggerCaptureCursor(std::int64_t cursor) noexcept;
 		bool SetTriggerCaptureLength(unsigned long length) noexcept;
 		bool TriggerCaptureComplete() const noexcept;
-        bool CanUseTemporaryPlayback() const noexcept;
+        bool CanUseTemporaryPlayback(unsigned long bodyPhase, unsigned int count) const noexcept;
 		bool TriggerCaptureCoverageValid() const noexcept { return _triggerCaptureCoverageValid.load(std::memory_order_acquire); }
 		bool TriggerCaptureReady(unsigned long bodyPhase, unsigned int count) const noexcept;
 		void NormalizeTriggerCapture();

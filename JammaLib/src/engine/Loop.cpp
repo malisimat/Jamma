@@ -444,7 +444,8 @@ unsigned int Loop::ReadBlock(float* outBuf,
 		index += loopLength;
 
     const bool ready = !_triggerCapture || TriggerCaptureReady(index - constants::MaxLoopFadeSamps, numSamps);
-    const bool provisional = !ready && dac && CanUseTemporaryPlayback() && dac->History.ContainsOrigin(trigger);
+    const bool provisional = !ready && dac && CanUseTemporaryPlayback(index - constants::MaxLoopFadeSamps, numSamps)
+        && dac->History.ContainsOrigin(trigger);
     if (!ready && !provisional) return 0u;
     // Read logical extent after the readiness acquire, including normalization.
     const auto bufBankSize = _bufferBank.Length();
@@ -463,7 +464,7 @@ unsigned int Loop::ReadBlock(float* outBuf,
             if (selected >= _triggerCaptureBegin + loopLength) selected -= loopLength;
             if (normalized) return _bufferBank[storage];
         }
-        else if (selected < _triggerCaptureBegin) return 0.0f; // seam padding
+        else if (selected < _triggerCaptureBegin) return 0.0f; // unpublished prefix excluded by eligibility
         if (selected >= _triggerCaptureBegin && selected < through)
             return _bufferBank[static_cast<unsigned long>(selected)];
         float sample = 0.0f;
@@ -1307,16 +1308,30 @@ bool Loop::SetTriggerCaptureLength(unsigned long length) noexcept
 	return true;
 }
 
-bool Loop::CanUseTemporaryPlayback() const noexcept
+bool Loop::CanUseTemporaryPlayback(unsigned long bodyPhase, unsigned int count) const noexcept
 {
-    // Prepass padding below begin has no published coverage. Leave fades
-    // touching it on the recorded-only route rather than inventing a seam leg.
-    return _triggerCapture && _triggerCaptureRequiresAdc && !_triggerCaptureRequiresBounce
-        && _loopParams.FadeSamps <= constants::MaxLoopFadeSamps - _triggerCaptureBegin
-        && TriggerCaptureCoverageValid()
-        && (_playState.load(std::memory_order_acquire) == STATE_PLAYINGRECORDING
-            || _playState.load(std::memory_order_acquire) == STATE_PLAYING)
-        && !_isPunchInActive.load(std::memory_order_acquire) && !_activeAudioSpectral && !_previousAudioSpectral;
+    const auto state = _playState.load(std::memory_order_acquire);
+    if (!_triggerCapture || !_triggerCaptureRequiresAdc || _triggerCaptureRequiresBounce
+        || !TriggerCaptureCoverageValid() || (state != STATE_PLAYINGRECORDING && state != STATE_PLAYING)
+        || _isPunchInActive.load(std::memory_order_acquire) || _activeAudioSpectral || _previousAudioSpectral)
+        return false;
+
+    const auto length = _loopLength.load(std::memory_order_relaxed);
+    const auto fade = _loopParams.FadeSamps;
+    if (length == 0u || bodyPhase >= length || fade > length) return false;
+    const auto requestEnd = static_cast<std::uint64_t>(bodyPhase) + (std::min)(count, constants::MaxBlockSize);
+    // Legacy seam addressing is only proved equivalent through one wrap.
+    if (requestEnd > 2u * static_cast<std::uint64_t>(length)) return false;
+    const auto selectedPrefix = constants::MaxLoopFadeSamps - _triggerCaptureBegin;
+    if (fade <= selectedPrefix) return true;
+
+    // Only the initial part of the existing seam reads below capture begin,
+    // where prefix coverage is unpublished. Reject those requests, not the
+    // whole loop. After ReadBlock wraps, its second seam leg is the body itself.
+    const auto unprovedBegin = static_cast<std::uint64_t>(length) - fade;
+    const auto unprovedEnd = static_cast<std::uint64_t>(length) - selectedPrefix;
+    return bodyPhase >= unprovedEnd
+        || requestEnd <= unprovedBegin;
 }
 
 bool Loop::TriggerCaptureComplete() const noexcept

@@ -182,8 +182,9 @@ TEST(TemporaryPlayback, SpectralAndPrepassPaddingKeepOriginalLoopReadinessAndNev
         ASSERT_TRUE(loop->SetTriggerCaptureLength(64u));
         loop->Play(constants::MaxLoopFadeSamps, 64u, true);
         if (spectralSource) ASSERT_TRUE(loop->InstallSpectralSourceForEligibilityTest());
-        ASSERT_FALSE(loop->CanUseTemporaryPlayback());
-        ASSERT_FALSE(loop->TriggerCaptureReady(0u, 4u));
+        else loop->SetBodyPlayIndex(48u); // this request touches unproved prepass padding
+        ASSERT_FALSE(loop->CanUseTemporaryPlayback(loop->BodyPlayIndex(), 4u));
+        ASSERT_FALSE(loop->TriggerCaptureReady(loop->BodyPlayIndex(), 4u));
         unsigned int reads = 0u;
         audio::InputHistoryChannel channel{};
         const audio::DacRenderContext dac{{&channel, 1u, 0u, 0u, 1000u, 1000u, &reads}};
@@ -191,7 +192,7 @@ TEST(TemporaryPlayback, SpectralAndPrepassPaddingKeepOriginalLoopReadinessAndNev
         float enabled[4] = {-1.0f, -1.0f, -1.0f, -1.0f};
         EXPECT_EQ(loop->ReadBlock(baseline, 0, 4u), loop->ReadBlock(enabled, 0, 4u, &dac, 1000u, -8));
         for (auto i = 0u; i < 4u; ++i) EXPECT_FLOAT_EQ(baseline[i], enabled[i]);
-        EXPECT_FALSE(loop->TriggerCaptureReady(0u, 4u));
+        EXPECT_FALSE(loop->TriggerCaptureReady(loop->BodyPlayIndex(), 4u));
         EXPECT_EQ(0u, reads);
     }
 }

@@ -715,6 +715,152 @@ TEST(AudioFlow, BounceCannotBorrowTemporarySamplesFromOrdinaryAdcSourceStillCapt
 	}
 }
 
+TEST(AudioFlow, Delly9FirstMasterUsesOriginalStereoPassBeforeDelayedCaptureArrives)
+{
+	// Actual Mic settings and admitted trigger stamps from delly9. The structural
+	// boundaries model its delayed job publication without replacing trigger time.
+	constexpr unsigned int rate = 44100u, block = 64u, inputLatency = 177u;
+	constexpr unsigned int trigger = 116295u, stop = 180313u;
+	constexpr unsigned int publishStart = 117312u, publishStop = 182336u;
+	constexpr unsigned int length = stop - trigger;
+	const auto signal = [](unsigned int physical, unsigned int channel) {
+		return 0.01f + static_cast<float>(channel) * 0.1f
+			+ static_cast<float>(physical % 251u) / 4096.0f;
+	};
+	for (const bool enabled : {false, true})
+	{
+		SCOPED_TRACE(enabled);
+		io::UserConfig config;
+		config.Audio.SampleRate = rate; config.Audio.BufSize = block;
+		config.Audio.LatencyIn = inputLatency; config.Audio.LatencyOut = 177u;
+		config.Audio.NumChannelsIn = 8u; config.Audio.NumChannelsOut = 8u;
+		config.Loop.FadeSamps = 800u; config.Loop.SeedGrainMinMs = 300u;
+		config.Loop.SeedGrainTargetMaxMs = 3000u; config.Loop.SeedBpmMin = 80u;
+		config.Loop.SeedUsesPowers = true;
+		audio::AudioStreamParams stream;
+		stream.SampleRate = rate; stream.InputLatency = inputLatency;
+		stream.OutputLatency = 177u; stream.NumInputChannels = 8u; stream.NumOutputChannels = 8u;
+		StationParams params; params.Name = "Mic"; params.Size = {200, 200}; params.FadeSamps = 800u;
+		MergeMixBehaviourParams merge;
+		auto station = std::make_shared<Station>(params, Station::GetMixerParams(params.Size, merge));
+		station->SetVisible(true); station->SetEnabled(true);
+		station->SetNumBusChannels(2u); station->SetNumDacChannels(2u);
+		// Production prepares both station and subsequently created take rings at
+		// the device block size. Larger default rings would add one stale block
+		// at each of the take and station Delay(block) reads in this fixture.
+		station->SetupBuffers(block);
+		auto clock = std::make_shared<utils::Timer>(); station->SetClock(clock);
+		station->CommitChanges();
+		const auto age = config.TriggerLoopAlignmentSamps(rate);
+		ASSERT_EQ(78820u, age);
+		ChannelMixer mixer({config.AdcBufferDelay(inputLatency, rate) + block, block, 8u, 2u});
+		std::shared_ptr<LoopTake> take;
+		TriggerAction start;
+		start.ActionType = TriggerAction::TRIGGER_REC_START;
+		start.MidiSample = trigger; start.PreDelayMs = 86.0; start.InputChannels = {1u, 0u};
+		start.SetUserConfig(config); start.SetAudioParams(stream);
+		unsigned int reads = 0u, renderedBlocks = 0u;
+		for (unsigned int current = 0u; current < publishStop + 4u * block; current += block)
+		{
+			SCOPED_TRACE(::testing::Message() << "device block=" << current);
+			if (current == publishStart)
+			{
+				station->BeginCaptureAudioBoundary(current, clock->SceneSamplePos(), clock->AbsoluteSamplePos());
+				const auto admitted = station->OnAction(start);
+				ASSERT_TRUE(admitted.IsEaten);
+				take = station->GetLoopTakes().back(); station->CommitChanges();
+				ASSERT_EQ(2u, take->GetLoops().size());
+				ASSERT_TRUE(take->GetMidiLoops().empty());
+				EXPECT_EQ(3793, take->CaptureTiming().DelaySamps);
+				EXPECT_EQ(4234u, take->CaptureTiming().SeamSamps);
+			}
+			if (current == publishStop)
+			{
+				station->BeginCaptureAudioBoundary(current, clock->SceneSamplePos(), clock->AbsoluteSamplePos());
+				auto end = start; end.ActionType = TriggerAction::TRIGGER_REC_END;
+				end.MidiSample = stop; end.TargetId = take->Id(); end.SampleCount = 59328u;
+				ASSERT_TRUE(station->OnAction(end).IsEaten);
+				station->CommitChanges();
+				ASSERT_TRUE(take->FirstMasterActivationPending());
+			}
+			// Match AudioHost: install the first master before capture-boundary
+			// activation, ingest ADC, render, and advance exactly once.
+			station->ApplyFirstMasterRecordingAtAudioBoundary(*clock, current);
+			station->BeginCaptureAudioBoundary(current, clock->SceneSamplePos(), clock->AbsoluteSamplePos());
+			std::array<float, block * 8u> input{};
+			for (auto frame = 0u; frame < block; ++frame)
+				for (auto channel = 0u; channel < 8u; ++channel)
+					input[frame * 8u + channel] = signal(current + frame - inputLatency, channel);
+			mixer.FromAdc(input.data(), 8u, block);
+			mixer.InitPlay(config.AdcBufferDelay(inputLatency, rate), block);
+			mixer.Source()->SetSourceType(Audible::AUDIOSOURCE_ADC);
+			mixer.WriteToSink(station, block);
+			station->EndMultiWrite(block, true, Audible::AUDIOSOURCE_ADC);
+			audio::DacRenderContext dac{mixer.ObserveInputHistory(current, block, inputLatency, true)};
+			dac.History.ReadCount = &reads;
+			mixer.Source()->EndMultiPlay(block);
+			if (current >= publishStop)
+			{
+				ASSERT_FALSE(take->FirstMasterActivationPending());
+				EXPECT_EQ(length, clock->SeedSourceLength());
+				EXPECT_EQ(32009u, clock->QuantiseSamps());
+				ASSERT_EQ(LoopTake::STATE_PLAYINGRECORDING, take->TakeState());
+				ASSERT_FALSE(take->AudioCaptureReady(block));
+				const auto phase = (current - trigger + 3793u) % length;
+				for (auto slot = 0u; slot < 2u; ++slot)
+				{
+					const auto loop = take->GetLoops()[slot];
+					EXPECT_EQ(length, loop->LoopLength());
+					EXPECT_EQ(phase, loop->BodyPlayIndex());
+					EXPECT_FALSE(loop->TriggerCaptureComplete());
+					std::array<float, block> direct{};
+					const auto count = loop->ReadBlock(direct.data(), 0, block,
+						enabled ? &dac : nullptr, trigger, 3793, 1u - slot);
+					EXPECT_EQ(enabled ? block : 0u, count);
+					if (enabled) for (auto frame = 0u; frame < block; ++frame)
+						EXPECT_FLOAT_EQ(signal(trigger + phase + frame - 3793u, 1u - slot), direct[frame]);
+					if (enabled && current == publishStop)
+					{
+						// A block containing even the last unproved prefix sample
+						// retains recorded-only readiness; the next phase is safe.
+						std::array<float, block> seamOutput{};
+						const auto before = reads;
+						EXPECT_EQ(0u, loop->ReadBlock(seamOutput.data(),
+							static_cast<int>(length - 442u - phase), block, &dac, trigger, 3793, 1u - slot));
+						EXPECT_EQ(before, reads);
+						ASSERT_EQ(block, loop->ReadBlock(seamOutput.data(),
+							static_cast<int>(length - 441u - phase), block, &dac, trigger, 3793, 1u - slot));
+						for (auto frame = 0u; frame < block; ++frame)
+							EXPECT_NEAR(signal(trigger - 4234u + frame, 1u - slot), seamOutput[frame], 1e-6f);
+					}
+				}
+			}
+			station->Zero(block, Audible::AUDIOSOURCE_LOOPS);
+			mixer.Sink()->Zero(block, Audible::AUDIOSOURCE_LOOPS);
+			station->WriteBlock(mixer.Sink(), nullptr, 0, block, current, enabled ? &dac : nullptr);
+			std::array<float, block * 2u> output{}; mixer.ToDac(output.data(), 2u, block);
+			if (current >= publishStop)
+			{
+				EXPECT_EQ(enabled, HasNonZero(output.data(), static_cast<unsigned int>(output.size())));
+				// All mixer gains begin at settled unity. With production-sized
+				// rings the existing Delay(block) reads select this callback's
+				// samples, without an extra software block at either hierarchy.
+				const auto phase = (current - trigger + 3793u) % length;
+				for (auto frame = 0u; frame < block; ++frame)
+					for (auto channel = 0u; channel < 2u; ++channel)
+						EXPECT_FLOAT_EQ(enabled ? signal(trigger + phase + frame - 3793u, 1u - channel) : 0.0f,
+							output[frame * 2u + channel]) << "frame=" << frame << " DAC channel=" << channel;
+				if (enabled) ++renderedBlocks;
+			}
+			station->EndMultiPlay(block);
+			mixer.Sink()->EndMultiWrite(block, true, Audible::AUDIOSOURCE_LOOPS);
+			clock->Tick(block, 0u);
+		}
+		EXPECT_EQ(enabled ? 4u : 0u, renderedBlocks);
+		if (enabled) EXPECT_GT(reads, 0u); else EXPECT_EQ(0u, reads);
+	}
+}
+
 // 3. Two channels: write to both channels, verify both loops record.
 TEST(AudioFlow, TwoChannel_WriteReachesBothLoops)
 {

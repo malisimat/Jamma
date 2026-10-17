@@ -1105,3 +1105,59 @@ TEST(RecordedPlaybackLatency, TemporaryOriginalPassMatchesRecordedAcrossHandover
         else EXPECT_EQ(0u,reads);
     }
 }
+
+TEST(RecordedPlaybackLatency, TemporaryWideFadeChecksRequestedSeamAndOneWrapOnly)
+{
+    constexpr unsigned long length = 64;
+    constexpr std::uint32_t trigger = 1000;
+    audio::WireMixBehaviourParams wire; wire.Channels = {0u};
+    engine::LoopParams params; params.FadeSamps = 16;
+    const auto make = [&]() {
+        auto loop = std::make_shared<engine::Loop>(params, engine::Loop::GetMixerParams({80,80},wire));
+        loop->Record(); loop->ConfigureTriggerCapture(constants::MaxLoopFadeSamps-8,true,false);
+        loop->SetTriggerCaptureCursor(constants::MaxLoopFadeSamps-8);
+        EXPECT_TRUE(loop->SetTriggerCaptureLength(length));
+        return loop;
+    };
+    auto pending=make(), recorded=make();
+    std::array<float,length> pass{};
+    for(auto i=0u;i<length;++i) pass[i]=static_cast<float>(i+1u)/128.0f;
+    base::AudioWriteRequest request;request.samples=pass.data();request.numSamps=length;
+    request.stride=1;request.fadeCurrent=1;request.fadeNew=1;request.source=base::Audible::AUDIOSOURCE_ADC;
+    recorded->OnBlockWrite(request,0);recorded->EndWrite(length,true);
+    recorded->Play(constants::MaxLoopFadeSamps,length,true);recorded->EndRecording();
+    pending->Play(constants::MaxLoopFadeSamps,length,true);
+    unsigned int reads=0;
+    audio::InputHistoryChannel channel{pass.data(),length,0u};
+    const audio::DacRenderContext dac{{&channel,1u,length,0u,trigger+length,trigger,&reads}};
+    for(const auto phase : {0u,47u,48u,55u,56u,63u})
+    for(const auto count : {1u,2u,8u,64u,72u,73u,128u})
+    for(const auto offset : {-64,0,64})
+    {
+        SCOPED_TRACE(::testing::Message()<<phase<<" count="<<count<<" offset="<<offset);
+        pending->SetBodyPlayIndex(phase);recorded->SetBodyPlayIndex(phase);
+        bool supported=phase+count<=2u*length;
+        // Inspect the exact existing unwrapped second-leg address independently
+        // of the eligibility interval formula. Prefix [F-16,F-8) is unproved.
+        for(auto frame=0u;frame<count;++frame)
+            if(phase+frame>=length-16 && phase+frame<length-8) supported=false;
+        EXPECT_EQ(supported,pending->CanUseTemporaryPlayback(phase,count));
+        const auto before=reads;
+        std::array<float,128> actual{},expected{};
+        const auto written=pending->ReadBlock(actual.data(),offset,count,&dac,trigger,-8);
+        if(supported)
+        {
+            ASSERT_EQ(count,written);
+            ASSERT_EQ(count,recorded->ReadBlock(expected.data(),offset,count));
+            EXPECT_EQ(actual,expected);
+        }
+        else { EXPECT_EQ(0u,written);EXPECT_EQ(before,reads); }
+    }
+    EXPECT_FALSE(pending->CanUseTemporaryPlayback(length,1));
+    EXPECT_FALSE(pending->CanUseTemporaryPlayback((std::numeric_limits<unsigned long>::max)(),1));
+    pending->SetBodyPlayIndex(0);
+    const auto before=reads;
+    std::array<float,4> output{};
+    EXPECT_EQ(0u,pending->ReadBlock(output.data(),-static_cast<int>(constants::MaxLoopFadeSamps),4,&dac,trigger,-8));
+    EXPECT_EQ(before,reads); // legacy out-of-body offset remains recorded-only
+}
