@@ -101,6 +101,18 @@
 1 station_bin
 1 station_bin_over
 1 station_bin_down
+1 vst_empty ninepatch 10 10
+1 vst_empty_over ninepatch 10 10
+1 vst_empty_down ninepatch 10 10
+1 vst_closed ninepatch 10 10
+1 vst_closed_over ninepatch 10 10
+1 vst_closed_down ninepatch 10 10
+1 vst_open ninepatch 10 10
+1 vst_open_over ninepatch 10 10
+1 vst_open_down ninepatch 10 10
+1 vst_failed ninepatch 10 10
+1 vst_failed_over ninepatch 10 10
+1 vst_failed_down ninepatch 10 10
 1 performance_group_holder ninepatch 8 8
 1 performance_group ninepatch 5 5
 1 performance_group_over ninepatch 5 5
