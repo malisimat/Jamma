@@ -192,7 +192,5 @@ namespace graphics
 		unsigned int _atlasHeight = 0;
 		GLuint _atlasTexture = 0;
 		std::weak_ptr<resources::ShaderResource> _shader;
-			bool _hasLoggedMissingShader = false;
-			bool _hasLoggedMissingAtlas = false;
 	};
 }

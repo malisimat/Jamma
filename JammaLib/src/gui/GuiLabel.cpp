@@ -157,7 +157,7 @@ bool GuiLabel::_ResolveFont(ResourceLib& resourceLib)
 	auto fontOpt = resourceLib.GetClosestFont(desired, &selection);
 	if (!fontOpt.has_value())
 	{
-		std::cout << "GuiLabel::_ResolveFont failed for desired text height " << desired << std::endl;
+		std::cout << "[LOAD] GuiLabel font selection failed for desired text height " << desired << std::endl;
 		return false;
 	}
 
@@ -182,7 +182,7 @@ void GuiLabel::_InitResources(ResourceLib& resourceLib, bool forceInit)
 
 	if (_font.expired())
 	{
-		std::cout << "GuiLabel::_InitResources missing resolved font resource" << std::endl;
+		std::cout << "[LOAD] GuiLabel missing resolved font resource" << std::endl;
 		return;
 	}
 
@@ -190,7 +190,7 @@ void GuiLabel::_InitResources(ResourceLib& resourceLib, bool forceInit)
 
 	auto validated = InitVertexArray();
 	if (!validated)
-		std::cout << "GuiLabel::_InitResources failed to build initial vertex array for label text: '" << _str << "'" << std::endl;
+		std::cout << "[LOAD] GuiLabel failed to build initial vertex array for label text: '" << _str << "'" << std::endl;
 
 	utils::GlUtils::CheckError("GuiLabel::_InitResources()");
 }

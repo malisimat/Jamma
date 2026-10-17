@@ -115,11 +115,15 @@ AsioInventory AudioDevice::DiscoverAsio()
 	try
 	{
 		RtAudio api(RtAudio::WINDOWS_ASIO);
+		// Inventory reads every driver to build candidate metadata. RtAudio emits
+		// warnings directly for unavailable drivers; keep those quiet here and
+		// report failures only when the rig actually selects a device.
+		api.showWarnings(false);
 		const auto count = api.getDeviceCount();
 		try { inventory.DefaultInputId = api.getDefaultInputDevice(); }
-		catch (const RtAudioError& err) { std::cout << "[ASIO] default input unavailable: " << err.getMessage() << std::endl; }
+		catch (const RtAudioError&) {}
 		try { inventory.DefaultOutputId = api.getDefaultOutputDevice(); }
-		catch (const RtAudioError& err) { std::cout << "[ASIO] default output unavailable: " << err.getMessage() << std::endl; }
+		catch (const RtAudioError&) {}
 		for (auto id = 0u; id < count; ++id)
 		{
 			AsioDeviceInfo device;
@@ -142,20 +146,6 @@ AsioInventory AudioDevice::DiscoverAsio()
 		}
 	}
 	catch (const RtAudioError& err) { inventory.EnumerationError = err.getMessage(); }
-	if (!inventory.EnumerationError.empty())
-		std::cout << "[ASIO] enumeration failed: " << inventory.EnumerationError << std::endl;
-	if (inventory.Devices.empty()) std::cout << "[ASIO] no devices found" << std::endl;
-	for (const auto& d : inventory.Devices)
-	{
-		std::cout << "[ASIO] id=" << d.Id << " name=" << d.Name << " probed=" << d.Probed
-			<< " input=" << d.InputChannels << " output=" << d.OutputChannels
-			<< " preferredRate=" << d.PreferredSampleRate
-			<< " defaultInput=" << d.DefaultInput << " defaultOutput=" << d.DefaultOutput
-			<< " rates=";
-		for (const auto rate : d.SampleRates) std::cout << rate << ",";
-		if (!d.ProbeError.empty()) std::cout << " error=" << d.ProbeError;
-		std::cout << std::endl;
-	}
 	return inventory;
 }
 

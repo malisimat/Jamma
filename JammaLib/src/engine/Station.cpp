@@ -60,7 +60,7 @@ void Station::_TrySeedClockFromFirstLoop(const std::shared_ptr<utils::Timer>& cl
 		clock->SetQuantisation(timing->GrainSamps, quantisation);
 		clock->SetSeedSourceLength(static_cast<unsigned long>(timing->GrainSamps) * timing->LoopGrains);
 		// Structural recording completion runs on the job owner, never OnTick.
-		std::cout << "[quantisation] recording master established: take=" << takeId
+		std::cout << "[Quantisation] recording master established: take=" << takeId
 			<< " authority=local source=default physical=" << loopLengthSamps
 			<< " logical=" << clock->SeedSourceLength() << " sr=" << sampleRate
 			<< " grain=" << timing->GrainSamps << " grains=" << timing->LoopGrains

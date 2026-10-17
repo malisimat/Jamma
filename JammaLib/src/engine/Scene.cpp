@@ -836,44 +836,6 @@ void Scene::UpdateCamera()
 		_camera.CancelAutomaticMotion((eligibleExceptHeldInteraction && _cameraHeldInteraction)
 			|| !recordings->ActiveCaptures.empty());
 
-	if (diagnosticDue)
-	{
-		const auto stateName = [](graphics::UnattendedCameraController::State state)
-		{
-			switch (state)
-			{
-			case graphics::UnattendedCameraController::State::Overview: return "overview";
-			case graphics::UnattendedCameraController::State::RecordingFocus: return "recording-focus";
-			case graphics::UnattendedCameraController::State::StationFocus: return "station-focus";
-			default: return "waiting";
-			}
-		};
-		const auto eye = _camera.CurrentPose().Eye;
-		std::clog << "[camera-auto] idle_s=" << _unattendedCamera.IdleSeconds(now)
-			<< " eligible=" << eligible
-			<< " gates{window=" << _cameraWindowEligible << ",held=" << _cameraHeldInteraction
-			<< ",viewport=" << (Width() > 0u && Height() > 0u)
-			<< ",front=" << (_camera.CurrentView() == graphics::Camera::View::Front)
-			<< ",transition=" << _camera.IsTransitioning()
-			<< ",editor=" << _loopEditor.IsEngaged() << ",popup=" << _popupManager.IsOpen() << '}'
-			<< " activity_rev=" << _cameraHumanActivityRevision
-			<< " scene_gen=" << recordings->SceneGeneration
-			<< " latest_start=" << recordings->LatestStart.StartOrder
-			<< " latest_age_s=" << (recordings->LatestStart.StartOrder == 0u ? -1.0
-				: Timer::GetElapsedSeconds(recordings->LatestStartAt, now))
-			<< " captures=" << recordings->ActiveCaptures.size()
-			<< " content_takes=" << allContentTakeCount
-			<< " visible_content_takes=" << visibleContentTakeCount
-			<< " live_takes=" << liveTakes.size()
-			<< " decision=" << stateName(decision.CurrentState)
-			<< " focus_order=" << decision.Focus.StartOrder
-			<< " target=";
-		if (automaticTarget)
-			std::clog << '(' << automaticTarget->X << ',' << automaticTarget->Y << ',' << automaticTarget->Z << ')';
-		else
-			std::clog << "none";
-		std::clog << " eye=(" << eye.X << ',' << eye.Y << ',' << eye.Z << ") delta_s=" << deltaSeconds << std::endl;
-	}
 
 	if (_camera.IsBackgroundDragging() || _camera.IsTransitioning())
 		_camera.TickBackgroundDrag(deltaSeconds);
@@ -1760,7 +1722,7 @@ void Scene::_HandleReclockArm()
 	std::scoped_lock lock(_sceneMutex);
 	if (_quantisation.ActiveGrid().Source == QuantisationGridSource::Remote)
 	{
-		std::cout << "[quantisation] reclock rejected: remote authority; choose Stay local first" << std::endl;
+		std::cout << "[Quantisation] reclock rejected: remote authority; choose Stay local first" << std::endl;
 		return;
 	}
 	std::cout << ">> Reclock armed (Ctrl+Shift+R) <<" << std::endl;

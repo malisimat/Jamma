@@ -29,14 +29,12 @@ namespace resources
 			other._numSamps = 0;
 			other._audioBuf = {};
 
-			std::cout << "Moving WavResource" << std::endl;
 		}
 
 		WavResource& operator=(WavResource&& other)
 		{
 			if (this != &other)
 			{
-				std::cout << "Swapping WavResource" << std::endl;
 
 				Release();
 				std::swap(_name, other._name);

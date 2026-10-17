@@ -35,7 +35,6 @@ namespace resources
 			_borderX(other._borderX),
 			_borderY(other._borderY)
 		{
-			std::cout << "Moving TextureResource" << std::endl;
 
 			other._name = "";
 			other._width = 0;
@@ -50,7 +49,6 @@ namespace resources
 		{
 			if (this != &other)
 			{
-				std::cout << "Swapping TextureResource" << std::endl;
 
 				Release();
 				std::swap(_name, other._name);

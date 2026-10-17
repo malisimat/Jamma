@@ -101,14 +101,14 @@ void CtrlHandleOverlay::InitResources(ResourceLib& resourceLib, bool forceInit)
 	auto shaderOpt = resourceLib.GetResource("ctrl_handle");
 	if (!shaderOpt.has_value())
 	{
-		std::cout << "CtrlHandleOverlay: missing shader resource 'ctrl_handle'" << std::endl;
+		std::cout << "[LOAD] CtrlHandleOverlay missing shader resource 'ctrl_handle'" << std::endl;
 		return;
 	}
 
 	auto res = shaderOpt.value().lock();
 	if (!res || res->GetType() != SHADER)
 	{
-		std::cout << "CtrlHandleOverlay: shader resource type mismatch" << std::endl;
+		std::cout << "[LOAD] CtrlHandleOverlay shader resource type mismatch" << std::endl;
 		return;
 	}
 

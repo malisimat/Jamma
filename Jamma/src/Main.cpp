@@ -635,39 +635,14 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 	}
 
 	const auto asioInventory = audio::AudioDevice::DiscoverAsio();
-	startupLog.Write("[ASIO] inventory=" + std::to_string(asioInventory.Devices.size()) +
-		" default-input=" + (asioInventory.DefaultInputId ? std::to_string(*asioInventory.DefaultInputId) : "none") +
-		" default-output=" + (asioInventory.DefaultOutputId ? std::to_string(*asioInventory.DefaultOutputId) : "none"));
-	std::cout << "[ASIO] Discovered " << asioInventory.Devices.size() << " device(s); default input="
-		<< (asioInventory.DefaultInputId ? std::to_string(*asioInventory.DefaultInputId) : "none")
-		<< " output=" << (asioInventory.DefaultOutputId ? std::to_string(*asioInventory.DefaultOutputId) : "none") << std::endl;
-	if (!asioInventory.EnumerationError.empty())
-		startupLog.Write("[ASIO] enumeration error=" + asioInventory.EnumerationError);
-	for (const auto& device : asioInventory.Devices)
-	{
-		std::ostringstream detail;
-		detail << "[ASIO] device=" << device.Id << " name='" << device.Name << "' in=" << device.InputChannels
-			<< " out=" << device.OutputChannels << " probed=" << device.Probed
-			<< " default-in=" << device.DefaultInput << " default-out=" << device.DefaultOutput
-			<< " preferred-rate=" << device.PreferredSampleRate << " rates=";
-		for (const auto rate : device.SampleRates) detail << rate << ',';
-		if (!device.ProbeError.empty()) detail << " error=" << device.ProbeError;
-		startupLog.Write(detail.str());
-		std::cout << "[ASIO] " << device.Id << " '" << device.Name << "' in=" << device.InputChannels
-			<< " out=" << device.OutputChannels << " probed=" << device.Probed
-			<< " default-in=" << device.DefaultInput << " default-out=" << device.DefaultOutput
-			<< " preferred-rate=" << device.PreferredSampleRate << " rates=";
-		for (const auto rate : device.SampleRates) std::cout << rate << " ";
-		std::cout << device.ProbeError << std::endl;
-	}
 	const auto midiInventory = midi::MidiDevice::InventoryInputDevices();
-	startupLog.Write("[MIDI] inventory=" + std::to_string(midiInventory.Devices.size()) +
-		(midiInventory.Error.empty() ? "" : " error=" + midiInventory.Error));
-	std::cout << "[MIDI] Discovered " << midiInventory.Devices.size() << " input(s) " << midiInventory.Error << std::endl;
-	for (const auto& device : midiInventory.Devices)
+	const bool hasConfiguredMidiInput = std::any_of(rig.User.Midi.Devices.begin(), rig.User.Midi.Devices.end(),
+		[](const auto& device) { return device.Enabled; });
+	if (hasConfiguredMidiInput && !midiInventory.Error.empty())
 	{
-		startupLog.Write("[MIDI] port=" + std::to_string(device.DeviceId) + " name='" + device.Name + "'");
-		std::cout << "[MIDI] " << device.DeviceId << " '" << device.Name << "'" << std::endl;
+		const auto failure = "[MIDI] configured input inventory failed: " + midiInventory.Error;
+		startupLog.Write(failure);
+		std::cout << failure << std::endl;
 	}
 
 	if (rigGenerated)
@@ -783,7 +758,23 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 			<< " out=" << requested.NumChannelsOut << " rate=" << requested.SampleRate
 			<< " buffer=" << requested.BufSize << " buffers=" << requested.NumBuffers;
 		startupLog.Write(detail.str());
+		if (!asioInventory.EnumerationError.empty())
+		{
+			const auto failure = "[ASIO] configured audio inventory failed: " + asioInventory.EnumerationError;
+			startupLog.Write(failure);
+			std::cout << failure << std::endl;
+		}
 	}
+	if (!rigGenerated && !rig.User.Audio.Name.empty())
+		for (const auto& device : asioInventory.Devices)
+			if (device.Name == rig.User.Audio.Name && !device.ProbeError.empty())
+			{
+				const auto failure = "[ASIO] selected device '" + device.Name +
+					"' could not be probed: " + device.ProbeError;
+				startupLog.Write(failure);
+				std::cout << failure << std::endl;
+				break;
+			}
 	scene.value()->InitAudio(rigGenerated, &asioInventory);
 	const auto& asioReport = scene.value()->GetAsioOpenReport();
 	for (const auto& attempt : asioReport.Attempts)

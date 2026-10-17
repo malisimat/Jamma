@@ -36,7 +36,7 @@ bool ResourceLib::LoadResource(Type type, std::string name, std::vector<std::str
 			unsigned int borderY = 0;
 			if (!ParseTextureArgs(args, isNinePatch, borderX, borderY))
 			{
-				std::cout << "ResourceLib: invalid texture args for '" << name << "'" << std::endl;
+				std::cout << "[LOAD] invalid texture args for '" << name << "'" << std::endl;
 				return false;
 			}
 
@@ -58,7 +58,7 @@ bool ResourceLib::LoadResource(Type type, std::string name, std::vector<std::str
 				return true;
 			}
 
-			std::cout << "ResourceLib: failed to load texture '" << name
+			std::cout << "[LOAD] failed to load texture '" << name
 				<< "' from resource path " << texFile << std::endl;
 
 			break;
@@ -76,7 +76,7 @@ bool ResourceLib::LoadResource(Type type, std::string name, std::vector<std::str
 				return true;
 			}
 
-			std::cout << "ResourceLib: failed to load shader '" << name
+			std::cout << "[LOAD] failed to load shader '" << name
 				<< "' from resource paths " << vertFile << " and " << fragFile << std::endl;
 
 			break;
@@ -94,7 +94,7 @@ bool ResourceLib::LoadResource(Type type, std::string name, std::vector<std::str
 				return true;
 			}
 
-			std::cout << "ResourceLib: failed to load wav '" << name
+			std::cout << "[LOAD] failed to load wav '" << name
 				<< "' from resource path " << wavFile << std::endl;
 
 			break;
@@ -154,7 +154,6 @@ bool ResourceLib::LoadFonts()
 		std::lock_guard<std::mutex> lock(_resourceMutex);
 		_fonts.clear();
 	}
-	std::cout << "ResourceLib::LoadFonts starting font initialisation" << std::endl;
 
 	std::shared_ptr<ShaderResource> shader;
 	auto shaderOpt = GetResource("font");
@@ -172,23 +171,20 @@ bool ResourceLib::LoadFonts()
 	}
 
 	if (!shader)
-		std::cout << "ResourceLib::LoadFonts missing shader resource 'font'/'texture'; font draw will be unavailable" << std::endl;
+		std::cout << "[LOAD] missing shader resource 'font'/'texture'; font draw will be unavailable" << std::endl;
 
 	bool res = true;
 	for (auto size : FontOptions::FontSizes)
 	{
-		auto fontName = Font::GetFontName(size);
 		auto font = Font::Load(size, shader);
 
 		if (font.has_value())
 		{
 			std::lock_guard<std::mutex> lock(_resourceMutex);
 			_fonts[size] = std::move(font.value());
-			std::cout << "ResourceLib::LoadFonts loaded " << fontName << std::endl;
 		}
 		else
 		{
-			std::cout << "ResourceLib: failed to load font '" << fontName << "'" << std::endl;
 			res = false;
 		}
 	}

@@ -27,14 +27,12 @@ namespace resources
 			other._shaderProgram = 0;
 			other._uniforms = {};
 
-			std::cout << "Moving ShaderResource" << std::endl;
 		}
 
 		ShaderResource& operator=(ShaderResource&& other)
 		{
 			if (this != &other)
 			{
-				std::cout << "Swapping ShaderResource" << std::endl;
 
 				Release();
 				std::swap(_name, other._name);

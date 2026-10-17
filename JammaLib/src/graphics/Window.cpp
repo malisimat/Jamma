@@ -111,22 +111,18 @@ void Window::LoadResources()
 					args.push_back(arg);
 				}
 
-				if (!_resourceLib.LoadResource((Type)resourceType, name, args))
-				{
-					std::cout << "Window::LoadResources failed for type=" << resourceType
-						<< " name='" << name << "'" << std::endl;
-				}
+				_resourceLib.LoadResource((Type)resourceType, name, args);
 			}
 		}
 	}
 	else
 	{
-		std::cout << "Window::LoadResources failed to open " << resourceListPath << std::endl;
+		std::cout << "[LOAD] failed to open resource list " << resourceListPath << std::endl;
 	}
 
 	_resourceLib.LoadFonts();
 
-	std::cout << "Loaded " << _resourceLib.NumResources() << " resources" << std::endl;
+	std::cout << "[LOAD] Loaded " << _resourceLib.NumResources() << " resources" << std::endl;
 }
 
 void Window::InitScene()

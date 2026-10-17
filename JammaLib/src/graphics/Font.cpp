@@ -34,11 +34,10 @@ std::optional<std::unique_ptr<Font>> Font::Load(FontOptions::FontSize size,
 	std::weak_ptr<ShaderResource> shader)
 {
 	auto datafilename = GetFontFilename();
-	std::cout << "Font::Load reading TTF from " << datafilename << " for size " << (int)size << "\n";
 	std::ifstream inputFile(datafilename.c_str(), std::ios::binary);
 	if (!inputFile)
 	{
-		std::cout << "Font::Load failed to open " << datafilename << "\n";
+		std::cout << "[LOAD] failed to open font resource " << datafilename << "\n";
 		return std::nullopt;
 	}
 
@@ -46,7 +45,7 @@ std::optional<std::unique_ptr<Font>> Font::Load(FontOptions::FontSize size,
 	inputFile.close();
 	if (bytes.empty())
 	{
-		std::cout << "Font::Load loaded an empty font file " << datafilename << "\n";
+		std::cout << "[LOAD] font resource is empty: " << datafilename << "\n";
 		return std::nullopt;
 	}
 
@@ -58,13 +57,7 @@ std::optional<std::unique_ptr<Font>> Font::Load(FontOptions::FontSize size,
 	font->_charWidths[font->_params.SpaceChar] = 6.0f;
 	font->_charWidths[font->_params.DegreeChar] = 8.0f;
 	if (!font->_LoadGlyphs(size))
-	{
-		std::cout << "Font::Load failed to initialise stb font data for " << datafilename << "\n";
 		return std::nullopt;
-	}
-
-	std::cout << "Font::Load loaded atlas " << font->_atlasWidth << "x" << font->_atlasHeight
-		<< " for size " << (int)size << "\n";
 
 	return font;
 }
@@ -122,7 +115,6 @@ bool Font::_LoadGlyphs(FontOptions::FontSize size)
 {
 	if (_fontData.empty())
 	{
-		std::cout << "Font::_LoadGlyphs called with empty font data\n";
 		return false;
 	}
 
@@ -142,15 +134,10 @@ bool Font::_LoadGlyphs(FontOptions::FontSize size)
 		_glyphs.clear();
 		_glyphs.reserve(kGlyphEndCodepoint - kGlyphStartCodepoint + 1);
 
-		std::cout << "Font::_LoadGlyphs scale=" << _fontScale
-			<< " ascent=" << _fontAscent << " descent=" << _fontDescent
-			<< " charHeight=" << _params.CharHeight << " size=" << (int)size << "\n";
-
 		std::vector<unsigned char> atlas(kAtlasWidth * kAtlasHeight, 0);
 		int x = kGlyphPadding;
 		int y = kGlyphPadding;
 		int rowHeight = 0;
-		int renderedGlyphs = 0;
 		for (unsigned int codepoint = kGlyphStartCodepoint; codepoint <= kGlyphEndCodepoint; ++codepoint)
 		{
 			int glyphIndex = stbtt_FindGlyphIndex(&_fontInfo, codepoint);
@@ -186,7 +173,7 @@ bool Font::_LoadGlyphs(FontOptions::FontSize size)
 			}
 			if (y + height + kGlyphPadding > kAtlasHeight)
 			{
-				std::cout << "Font::_LoadGlyphs atlas overflow at codepoint " << codepoint
+				std::cout << "[LOAD] font atlas overflow at codepoint " << codepoint
 					<< " for size " << (int)size << "\n";
 				return false;
 			}
@@ -207,14 +194,7 @@ bool Font::_LoadGlyphs(FontOptions::FontSize size)
 				atlasVBottom });
 			x += width + kGlyphPadding;
 			rowHeight = std::max(rowHeight, height);
-			++renderedGlyphs;
 		}
-
-		int nonZeroPixels = 0;
-		for (auto b : atlas)
-			if (b) ++nonZeroPixels;
-		std::cout << "Font::_LoadGlyphs rendered " << renderedGlyphs << " glyphs, "
-			<< nonZeroPixels << " non-zero atlas pixels (of " << atlas.size() << ") for size " << (int)size << "\n";
 
 		_atlasWidth = kAtlasWidth;
 		_atlasHeight = kAtlasHeight;
@@ -235,11 +215,10 @@ bool Font::_LoadGlyphs(FontOptions::FontSize size)
 		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 		glBindTexture(GL_TEXTURE_2D, 0);
 		utils::GlUtils::CheckError("Font::_LoadGlyphs");
-		std::cout << "Font::_LoadGlyphs atlas texture id=" << _atlasTexture << " for size " << (int)size << "\n";
 		return true;
 	}
 
-	std::cout << "Font::_LoadGlyphs stbtt_InitFont failed\n";
+	std::cout << "[LOAD] stbtt_InitFont failed for font size " << (int)size << "\n";
 	return false;
 }
 
@@ -322,21 +301,11 @@ void Font::Draw(GlDrawContext& ctx, GLuint vertexArray, unsigned int numChars)
 	auto shader = _shader.lock();
 	if (!shader)
 	{
-		if (!_hasLoggedMissingShader)
-		{
-			std::cout << "Font::Draw skipped: missing shader resource\n";
-			_hasLoggedMissingShader = true;
-		}
 		return;
 	}
 
 	if (_atlasTexture == 0)
 	{
-		if (!_hasLoggedMissingAtlas)
-		{
-			std::cout << "Font::Draw skipped: atlas texture not initialised\n";
-			_hasLoggedMissingAtlas = true;
-		}
 		return;
 	}
 

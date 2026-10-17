@@ -91,7 +91,7 @@ std::optional<Shader> Shader::FromFile(const std::string& filePath, GLenum shade
 	GLuint shader = glCreateShader(shaderType);
 	if (shader == 0)
 	{
-		std::cout << "glCreateShader failed" << std::endl;
+		std::cout << "[LOAD] glCreateShader failed" << std::endl;
 		//throw std::runtime_error("glCreateShader failed");
 		return std::nullopt;
 	}
@@ -116,7 +116,7 @@ std::optional<Shader> Shader::FromFile(const std::string& filePath, GLenum shade
 
 		glDeleteShader(shader); shader = 0;
 
-		std::cout << msg << std::endl;
+		std::cout << "[LOAD] " << msg << std::endl;
 
 		return std::nullopt;
 	}

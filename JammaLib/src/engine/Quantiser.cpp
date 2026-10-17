@@ -331,7 +331,7 @@ bool Quantiser::HandleTapTempo(std::uint64_t estimatedSampleAt,
     }
     if (!timing)
     {
-        std::cout << "[quantisation] tap sequence/no update: sample=" << estimatedSampleAt
+        std::cout << "[Quantisation] tap sequence/no update: sample=" << estimatedSampleAt
             << " generation=" << ReclockGeneration() << " sr=" << sampleRate << " eligible=" << eligible << " authority=" << (remote ? "remote" : "local") << std::endl;
         return false;
     }
@@ -342,7 +342,7 @@ bool Quantiser::HandleTapTempo(std::uint64_t estimatedSampleAt,
             (grain && _clock ? static_cast<unsigned int>(_clock->SeedSourceLength() / grain) : 0u);
         if (!base || !interval)
         {
-            std::cout << "[quantisation] tap rejected: no valid base geometry generation=" << ReclockGeneration()
+            std::cout << "[Quantisation] tap rejected: no valid base geometry generation=" << ReclockGeneration()
                 << " eligible=" << eligible << " sr=" << sampleRate << " interval=" << interval << " grain=" << grain << std::endl;
             return false;
         }
@@ -353,7 +353,7 @@ bool Quantiser::HandleTapTempo(std::uint64_t estimatedSampleAt,
                 for (const auto& take : station->GetLoopTakes())
                     if (take && (static_cast<std::uint64_t>(take->VisualLoopLengthSamps()) * selected + interval - 1u) / interval > 8192u)
                     {
-                        std::cout << "[quantisation] tap rejected: effective grid exceeds 8192 cells take=" << take->Id() << std::endl;
+                        std::cout << "[Quantisation] tap rejected: effective grid exceeds 8192 cells take=" << take->Id() << std::endl;
                         return false;
                     }
         _activeGridDivisions.store(selected, std::memory_order_release);
@@ -383,7 +383,7 @@ bool Quantiser::HandleTapTempo(std::uint64_t estimatedSampleAt,
                         minimumDivisor = (std::min)(minimumDivisor, divisor);
                         maximumDivisor = (std::max)(maximumDivisor, divisor);
                     }
-        std::cout << "[quantisation] tap subdivisions " << (previous == selected ? "unchanged" : "accepted")
+        std::cout << "[Quantisation] tap subdivisions " << (previous == selected ? "unchanged" : "accepted")
             << ": generation=" << ReclockGeneration() << " sr=" << sampleRate << " eligible=" << eligible
             << " authority=" << (remote ? "remote" : "local") << " interval=" << interval
             << " grain=" << grain << " base=" << base << " requested=" << timing->Bpi
@@ -395,7 +395,7 @@ bool Quantiser::HandleTapTempo(std::uint64_t estimatedSampleAt,
     }
     if (!LocalAudioGeometry::Create(original, timing->MasterLoopSamps, timing->SeedSamps, timing->Bpi))
     {
-        std::cout << "[quantisation] tap geometry rejected: generation=" << ReclockGeneration()
+        std::cout << "[Quantisation] tap geometry rejected: generation=" << ReclockGeneration()
             << " physical=" << original << " logical=" << timing->MasterLoopSamps << " grain=" << timing->SeedSamps
             << " grains=" << timing->Bpi << std::endl;
         return false;
@@ -410,7 +410,7 @@ bool Quantiser::HandleTapTempo(std::uint64_t estimatedSampleAt,
     _gridSource.store(QuantisationGridSource::Tap, std::memory_order_release);
     _masterLoopLengthSamps.store(timing->MasterLoopSamps, std::memory_order_release);
     SetMidiGrain(timing->SeedSamps, "tap tempo", stations);
-    std::cout << "[quantisation] tap geometry accepted: take=" << soleTake->Id()
+    std::cout << "[Quantisation] tap geometry accepted: take=" << soleTake->Id()
         << " generation=" << ReclockGeneration() << " sr=" << sampleRate << " eligible=" << eligible
         << " authority=local source=tap physical=" << original << " logical=" << timing->MasterLoopSamps
         << " grain=" << timing->SeedSamps << " grains=" << timing->Bpi << " bpm=" << timing->Bpm

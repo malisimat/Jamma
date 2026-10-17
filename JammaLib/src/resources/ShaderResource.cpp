@@ -119,7 +119,7 @@ bool ShaderResource::AddStageFromFile(GLuint shaderProgram, const std::string& f
 
 	if (!f.is_open())
 	{
-		std::cout << "Failed to open "
+		std::cout << "[LOAD] Failed to open "
 			<< (shaderType == GL_VERTEX_SHADER ? "vertex" : "fragment")
 			<< " shader file: " << filePath << std::endl;
 		return false;
@@ -131,7 +131,7 @@ bool ShaderResource::AddStageFromFile(GLuint shaderProgram, const std::string& f
 	auto shader = glCreateShader(shaderType);
 	if (0 == shader)
 	{
-		std::cout << "glCreateShader failed" << std::endl;
+		std::cout << "[LOAD] glCreateShader failed" << std::endl;
 		return false;
 	}
 
@@ -156,7 +156,7 @@ bool ShaderResource::AddStageFromFile(GLuint shaderProgram, const std::string& f
 		msg += strInfoLog;
 		delete[] strInfoLog;
 
-		std::cout << msg << std::endl;
+		std::cout << "[LOAD] " << msg << std::endl;
 
 		glDeleteShader(shader);
 		return false;

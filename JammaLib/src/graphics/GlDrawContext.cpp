@@ -138,9 +138,6 @@ void GlDrawContext::Initialise()
 		}
 		std::cerr << std::endl;
 	}
-	else {
-		std::cout << "Framebuffer is complete!" << std::endl;
-	}
 }
 
 void GlDrawContext::Bind()
