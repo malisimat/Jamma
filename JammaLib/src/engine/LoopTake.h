@@ -1,4 +1,5 @@
 #pragma once
+#include "../vst/VstRackSlot.h"
 #include "../audio/InputHistory.h"
 
 // Recorded performance layer within a Station; owns take state, MIDI material,
@@ -254,6 +255,9 @@ namespace engine
 			const std::vector<std::uint8_t>& initialState = {},
 			bool bypass = false, const std::string& stateId = {});
 		void UnloadVstPlugin(size_t index);
+		vst::VstRackSlot GetVstRackSlot() const;
+		bool LoadManagedVstPlugin(std::wstring path);
+		bool UnloadManagedVstPlugin(const std::string& identity);
 		void ForceUnloadAllVstPlugins();
 		void SetSampleRate(float sampleRate);
 		bool ReconfigureVstFormat(float sampleRate, unsigned int blockSize);
@@ -724,13 +728,16 @@ namespace engine
 		base::PublishedAudioSnapshot<vst::VstChain> _vstChain;
 		std::shared_ptr<vst::VstChain> _backVstChain;
 		std::atomic<bool> _flipVstChain{ false };
-		std::vector<std::pair<std::wstring, std::vector<std::uint8_t>>> _pendingVstLoads;
-		std::vector<size_t> _pendingVstUnloads;
+		std::vector<actions::JobAction> _pendingVstLoads;
+		std::vector<actions::JobAction> _pendingVstUnloads;
 		float _sampleRate{ static_cast<float>(constants::DefaultSampleRate) };
 		// _vstPluginPaths: written on job thread (OnAction), read on main thread (VstEntries).
 		// Access is guarded by _vstPathsMutex in both directions.
 		mutable std::mutex _vstPathsMutex;
 		std::vector<std::wstring> _vstPluginPaths;
+		std::vector<io::JamFile::VstEntry> _vstSavedEntries;
+		// UI stages requests, job completes them. Audio never reads this counter.
+		std::atomic<unsigned int> _vstJobsPending{ 0u };
 		// Startup-only metadata. Runtime lane pointers are installed by Station only
 		// after every chain named by these references has been constructed.
 		std::vector<PendingAutomationBinding> _pendingAutomationBindings;

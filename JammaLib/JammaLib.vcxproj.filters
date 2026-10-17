@@ -624,6 +624,10 @@
     <ClInclude Include="src\gui\GuiRack.h">
       <Filter>src\gui</Filter>
     </ClInclude>
+    <ClInclude Include="src\gui\VstRackControls.h">
+      <Filter>src\gui</Filter>
+    </ClInclude>
+    <ClInclude Include="src\vst\VstRackSlot.h" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="src\io\IoSessionLoader.cpp" />
@@ -1019,6 +1023,9 @@
       <Filter>src\base</Filter>
     </ClCompile>
     <ClCompile Include="src\gui\GuiRack.cpp">
+      <Filter>src\gui</Filter>
+    </ClCompile>
+    <ClCompile Include="src\gui\VstRackControls.cpp">
       <Filter>src\gui</Filter>
     </ClCompile>
     <ClInclude Include="src\engine\QuantisationTiming.h">

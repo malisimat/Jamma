@@ -35,6 +35,9 @@ namespace vst
 	public:
 		// Add a plugin to the end of the chain.  Not RT-safe.
 		void AddPlugin(std::shared_ptr<IVstPlugin> plugin);
+		// Preserve failed saved entries as silent slots so automation indices stay aligned.
+		void AddSlot(std::shared_ptr<IVstPlugin> plugin) { _plugins.push_back(std::move(plugin)); }
+		void ReplaceSlot(size_t index, std::shared_ptr<IVstPlugin> plugin) { if (index < _plugins.size()) _plugins[index] = std::move(plugin); }
 
 		// Remove the plugin at the given index.  Not RT-safe.
 		void RemovePlugin(size_t index);

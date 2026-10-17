@@ -540,6 +540,31 @@ TEST(SceneSelector, DragChoosesPaintDirectionFromPressedItem) {
 	}
 }
 
+TEST(GuiButton, OptInModifiersCapturePressIntentAndClearCanceledPress)
+{
+	auto receiver = std::make_shared<GuiControlsMockedGuiReceiver>();
+	auto params = MakeButtonParams(17u);
+	params.DispatchCommand = true;
+	params.CapturePressModifiers = true;
+	auto button = std::make_shared<GuiButton>(params);
+	button->SetReceiver(receiver);
+	auto down = MakeTouchAction(TouchAction::TOUCH_DOWN, { 10, 10 });
+	down.Modifiers = base::Action::MODIFIER_ALT;
+	auto up = MakeTouchAction(TouchAction::TOUCH_UP, { 10, 10 });
+	button->OnAction(down);
+	button->OnAction(up);
+	EXPECT_EQ(base::Action::MODIFIER_ALT, receiver->LastAction().InputModifiers);
+	down.Modifiers = base::Action::MODIFIER_NONE;
+	up.Modifiers = base::Action::MODIFIER_ALT;
+	button->OnAction(down);
+	button->OnAction(up);
+	EXPECT_EQ(base::Action::MODIFIER_NONE, receiver->LastAction().InputModifiers);
+	button->OnAction(down);
+	button->ClearPointerState();
+	button->OnAction(up);
+	EXPECT_EQ(2, receiver->ActionCount());
+}
+
 TEST(GuiControlsTests, ButtonDispatchesCommandAndPreservesAltModifier)
 {
 	auto receiver = std::make_shared<GuiControlsMockedGuiReceiver>();

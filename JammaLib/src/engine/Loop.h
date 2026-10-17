@@ -1,4 +1,5 @@
 #pragma once
+#include "../vst/VstRackSlot.h"
 #include "../audio/InputHistory.h"
 
 // Audio recording/playback entity within a LoopTake; owns its buffers, logical
@@ -137,7 +138,9 @@ namespace engine
 			_pendingVstUnloads(std::move(other._pendingVstUnloads)),
 			_sampleRate(other._sampleRate.load(std::memory_order_relaxed)),
 			_blockSize(other._blockSize),
-			_vstPluginPaths(std::move(other._vstPluginPaths))
+			_vstPluginPaths(std::move(other._vstPluginPaths)),
+			_vstSavedEntries(std::move(other._vstSavedEntries)),
+			_vstJobsPending(other._vstJobsPending.exchange(0u))
 		{
 			other._InvalidateAudioSource();
 			_vstChain.store(other._vstChain.exchange(nullptr, std::memory_order_acq_rel), std::memory_order_release);
@@ -195,6 +198,9 @@ namespace engine
 					std::memory_order_relaxed);
 				std::swap(_blockSize, other._blockSize);
 				std::swap(_vstPluginPaths, other._vstPluginPaths);
+				std::swap(_vstSavedEntries, other._vstSavedEntries);
+				const auto pending = _vstJobsPending.exchange(other._vstJobsPending.load());
+				other._vstJobsPending.store(pending);
 			}
 
 			return *this;
@@ -377,6 +383,9 @@ namespace engine
 			const std::vector<std::uint8_t>& initialState = {},
 			bool bypass = false, const std::string& stateId = {});
 		void UnloadVstPlugin(size_t index);
+		vst::VstRackSlot GetVstRackSlot() const;
+		bool LoadManagedVstPlugin(std::wstring path);
+		bool UnloadManagedVstPlugin(const std::string& identity);
 		void ForceUnloadAllVstPlugins();
 		void SetSampleRate(float sampleRate);
 		void SetBlockSize(unsigned int blockSize) { _blockSize = blockSize; }
@@ -385,6 +394,11 @@ namespace engine
 
 		// Non-RT accessor to retrieve a loaded plugin instance (or nullptr).
 		std::shared_ptr<vst::IVstPlugin> GetVstPlugin(size_t index) const;
+		bool OwnsPlugin(const vst::IVstPlugin* plugin) const noexcept
+		{
+			const auto chain = _vstChain.load(std::memory_order_acquire);
+			return chain && chain->ContainsPlugin(plugin);
+		}
 		bool ReconfigureVstFormat(float sampleRate, unsigned int blockSize);
 
 		// Job-owner compensation setup; polling/configuration may allocate or
@@ -480,14 +494,17 @@ namespace engine
 		std::shared_ptr<audio::PlaybackDelay> _playbackDelay = std::make_shared<audio::PlaybackDelay>();
 		std::shared_ptr<vst::VstChain> _backVstChain;
 		std::atomic<bool> _flipVstChain{ false };
-		std::vector<std::pair<std::wstring, std::vector<std::uint8_t>>> _pendingVstLoads;
-		std::vector<size_t> _pendingVstUnloads;
+		std::vector<actions::JobAction> _pendingVstLoads;
+		std::vector<actions::JobAction> _pendingVstUnloads;
 		std::atomic<float> _sampleRate{ static_cast<float>(constants::DefaultSampleRate) };
 		unsigned int _blockSize{ constants::DefaultBufferSizeSamps };
 		// Non-RT metadata: written on job thread (OnAction), read on main thread (VstEntries).
 		// Access is guarded by _vstPathsMutex in both directions.
 		mutable std::mutex _vstPathsMutex;
 		std::vector<std::wstring> _vstPluginPaths;
+		std::vector<io::JamFile::VstEntry> _vstSavedEntries;
+		// UI stages requests, job completes them. Audio never reads this counter.
+		std::atomic<unsigned int> _vstJobsPending{ 0u };
 
 	private:
 		std::size_t _CollectAudioSourceCaptures(); // Off callback only.

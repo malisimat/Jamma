@@ -643,6 +643,7 @@ public:
 	Steinberg::IPtr<Steinberg::Vst::IConnectionPoint> componentConnection;
 	Steinberg::IPtr<Steinberg::Vst::IConnectionPoint> controllerConnection;
 	bool _connectionsDone = false; // true after connect() called in OpenEditor()
+	DWORD controllerUiThreadId = 0; // Set before publication; reset with Impl teardown.
 	Steinberg::IPtr<Steinberg::IPlugView> plugView;
 	std::unique_ptr<HostComponentHandler> componentHandler;
 	std::unique_ptr<HostPlugFrame> plugFrame;
@@ -755,6 +756,12 @@ public:
 	// set so it is retried on the next poll.
 	bool RebuildMidiControllerMap() noexcept
 	{
+		// IMidiMapping requires [UI-thread & Connected]. Job-side load,
+		// restore and playback polls must leave the request pending for UI idle.
+		if (GetCurrentThreadId() != controllerUiThreadId)
+			return false;
+		if (!_connectionsDone && (componentConnection || controllerConnection))
+			return false;
 		ControllerRebuildGuard rebuild(controllerRebuildActive);
 		if (!rebuild) return false;
 
@@ -1089,6 +1096,7 @@ bool Vst3Plugin::PreInit(const std::wstring& path)
 		return false;
 	}
 	_impl->componentInitialized = true;
+	_impl->controllerUiThreadId = GetCurrentThreadId();
 
 	std::cout << "[Vst3Plugin] PreInit: success — factory, component, and initialize on main thread, plugin=" << _name << std::endl;
 	return true;
@@ -1110,6 +1118,8 @@ bool Vst3Plugin::Load(const std::wstring& path,
 	// NOT unload here or we'd throw away the main-thread pre-initialisation.
 	if (_isLoaded)
 		Unload();
+	if (_impl->controllerUiThreadId == 0)
+		_impl->controllerUiThreadId = GetCurrentThreadId();
 
 	std::cout << "[Vst3Plugin] Load request: path='" << utils::EncodeUtf8(path)
 		<< "', sampleRate=" << sampleRate
@@ -1493,9 +1503,8 @@ bool Vst3Plugin::Load(const std::wstring& path,
 			&& rawMidiMapping)
 		{
 			_impl->midiMapping = IPtr<IMidiMapping>(rawMidiMapping, false);
-			if (!_impl->RebuildMidiControllerMap())
-				_impl->midiMapRebuildRequested.store(true, std::memory_order_release);
-			std::cout << "[Vst3Plugin] IMidiMapping available; controller mapping table built" << std::endl;
+			_impl->midiMapRebuildRequested.store(true, std::memory_order_release);
+			std::cout << "[Vst3Plugin] IMidiMapping available; mapping refresh requested" << std::endl;
 		}
 	}
 
@@ -1616,6 +1625,7 @@ void Vst3Plugin::ResetLoadedObjects(bool terminateComponent)
 		_impl->controllerConnection->disconnect(_impl->componentConnection);
 	}
 	_impl->_connectionsDone = false;
+	_impl->controllerUiThreadId = 0;
 
 	if (_impl->controller)
 		_impl->controller->setComponentHandler(nullptr);
@@ -2076,10 +2086,13 @@ bool Vst3Plugin::OpenEditor(HWND parentHwnd)
 	{
 		auto c2k = _impl->componentConnection->connect(_impl->controllerConnection);
 		auto k2c = _impl->controllerConnection->connect(_impl->componentConnection);
-		_impl->_connectionsDone = true;
+		_impl->_connectionsDone = c2k == kResultOk && k2c == kResultOk;
 		std::cout << "[Vst3Plugin] ConnectionPoint connect: c2k=" << c2k
 			<< ", k2c=" << k2c << std::endl;
 	}
+	// Build before createView: MIDI mapping does not depend on editor success.
+	if (_impl->midiMapping && !_impl->RebuildMidiControllerMap())
+		_impl->midiMapRebuildRequested.store(true, std::memory_order_release);
 
 	IPlugView* rawView = nullptr;
 	{

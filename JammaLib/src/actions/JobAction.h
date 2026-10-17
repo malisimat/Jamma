@@ -24,13 +24,13 @@ namespace actions
 				return false;
 			if (other.SourceId != SourceId)
 				return false;
-			// VST jobs carry path/index payloads — two jobs for the same source
-			// but different plugins must not be treated as duplicates.
-			// LOADVST is keyed on path; UNLOADVST is keyed on slot index.
+			// VST jobs include stable slot identity as well as path/index.
+			// Distinct staged unload requests need distinct completions even when
+			// they target the same slot; the later removal safely becomes a no-op.
 			if (JobActionType == JOB_LOADVST)
-				return other.VstPath == VstPath;
+				return other.VstPath == VstPath && other.VstIdentity == VstIdentity && other.VstManaged == VstManaged;
 			if (JobActionType == JOB_UNLOADVST)
-				return other.VstIndex == VstIndex;
+				return other.VstIndex == VstIndex && other.VstIdentity == VstIdentity && other.VstRequestId == VstRequestId;
 			return true;
 		}
 
@@ -52,6 +52,9 @@ namespace actions
 
 		// Payload for JOB_LOADVST: path to the plugin.
 		std::wstring VstPath;
+		std::string VstIdentity; // Captured slot identity; stale jobs must never remove a replacement.
+		std::string VstRequestId; // Distinct staged completions must not be lost to queue deduplication.
+		bool VstManaged = false;
 
 		// Optional: plugin pre-initialised on the main thread before the job is
 		// dispatched to the job thread.  If non-null, the engine OnAction uses

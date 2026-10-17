@@ -59,6 +59,9 @@
     <ClCompile Include="src\engine\VstStaging_Tests.cpp">
       <Filter>src\engine</Filter>
     </ClCompile>
+    <ClCompile Include="src\engine\VstRackLoad_Tests.cpp">
+      <Filter>src\engine</Filter>
+    </ClCompile>
     <ClCompile Include="src\engine\StationRemote_Tests.cpp">
       <Filter>src\engine</Filter>
     </ClCompile>

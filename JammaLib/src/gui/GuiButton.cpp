@@ -40,12 +40,17 @@ GuiButton::GuiButton(GuiButtonParams params) :
 actions::ActionResult GuiButton::OnAction(actions::TouchAction action)
 {
 	const bool activate = _pressed && action.State == actions::TouchAction::TOUCH_UP && HitTest(action.Position) && _isEnabled && _isVisible;
-	if (action.State == actions::TouchAction::TOUCH_DOWN) _pressed = _isEnabled && _isVisible && HitTest(action.Position);
+	if (action.State == actions::TouchAction::TOUCH_DOWN)
+	{
+		_pressed = _isEnabled && _isVisible && HitTest(action.Position);
+		_pressModifiers = action.Modifiers;
+	}
 	else _pressed = false;
 	auto result = GuiElement::OnAction(action);
 	if (activate && _buttonParams.DispatchCommand && GetReceiver())
 	{
-		actions::GuiAction command; command.Index = _index; command.ElementType = actions::GuiAction::ACTIONELEMENT_BUTTON; command.InputModifiers = action.Modifiers;
+		actions::GuiAction command; command.Index = _index; command.ElementType = actions::GuiAction::ACTIONELEMENT_BUTTON;
+		command.InputModifiers = _buttonParams.CapturePressModifiers ? _pressModifiers : action.Modifiers;
 		GetReceiver()->OnAction(command);
 	}
 	if (result.IsEaten && action.State == actions::TouchAction::TOUCH_DOWN && !result.ActiveElement.lock())
@@ -56,6 +61,7 @@ actions::ActionResult GuiButton::OnAction(actions::TouchAction action)
 void GuiButton::SetSize(Size2d size)
 {
 	GuiElement::SetSize(size);
+	_buttonParams.Size = _sizeParams.Size;
 
 	if (!_label)
 		return;
@@ -121,5 +127,6 @@ actions::ActionResult GuiButton::OnAction(actions::KeyAction action)
 void GuiButton::ClearPointerState()
 {
 	_pressed = false;
+	_pressModifiers = base::Action::MODIFIER_NONE;
 	GuiElement::ClearPointerState();
 }

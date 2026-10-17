@@ -85,6 +85,24 @@ void VstEditorWindow::_ResizeFrameToClient(unsigned int clientWidth, unsigned in
 			static_cast<int>(clientWidth), static_cast<int>(clientHeight),
 			SWP_NOZORDER | SWP_NOACTIVATE);
 	}
+	_ClampToWorkArea();
+}
+
+void VstEditorWindow::_ClampToWorkArea() noexcept
+{
+	const auto wnd = EditorHwnd();
+	RECT frame{};
+	MONITORINFO monitor{};
+	monitor.cbSize = sizeof(monitor);
+	if (!wnd || !GetWindowRect(wnd, &frame)
+		|| !GetMonitorInfo(MonitorFromWindow(wnd, MONITOR_DEFAULTTONEAREST), &monitor)) return;
+	const auto& work = monitor.rcWork;
+	const LONG width = (std::min)(frame.right - frame.left, work.right - work.left);
+	const LONG height = (std::min)(frame.bottom - frame.top, work.bottom - work.top);
+	if (width <= 0 || height <= 0) return;
+	const LONG x = std::clamp(frame.left, work.left, work.right - width);
+	const LONG y = std::clamp(frame.top, work.top, work.bottom - height);
+	SetWindowPos(wnd, nullptr, x, y, width, height, SWP_NOZORDER | SWP_NOACTIVATE);
 }
 
 VstEditorWindow::VstEditorWindow() :
@@ -204,6 +222,7 @@ bool VstEditorWindow::Create(HINSTANCE hInstance,
 	auto sz = _plugin->GetEditorSize();
 	if (sz.Width > 0 && sz.Height > 0)
 		_ResizeFrameToClient(sz.Width, sz.Height);
+	_ClampToWorkArea();
 
 	ShowWindow(wnd, SW_SHOW);
 	UpdateWindow(wnd);
@@ -251,6 +270,7 @@ void VstEditorWindow::_IdlePlugin()
 }
 void VstEditorWindow::Destroy()
 {
+	if (_closing) return;
 	if (_idleActive || (_plugin && _plugin->IsStateOperationActive()))
 	{
 		_DeferClose();
@@ -258,6 +278,7 @@ void VstEditorWindow::Destroy()
 	}
 	const auto keepAlive = weak_from_this().lock();
 	const auto deferredOwner = std::move(_deferredCloseOwner);
+	_closing = true;
 	_closePending = false;
 	const auto plugin = _plugin;
 	HWND wnd = _editorWnd.exchange(nullptr, std::memory_order_acq_rel);
@@ -275,6 +296,7 @@ void VstEditorWindow::Destroy()
 
 	_plugin.reset();
 	_pluginChildWnd = nullptr;
+	_closing = false;
 }
 
 void VstEditorWindow::ResizePluginChild() noexcept
@@ -381,19 +403,24 @@ LRESULT CALLBACK VstEditorWindow::WindowProcedure(HWND hWnd,
 
 	case WM_CLOSE:
 	{
+		if (self->_closing) return 0;
 		if (self->_idleActive || (self->_plugin && self->_plugin->IsStateOperationActive()))
 		{
 			self->_DeferClose();
 			return 0;
 		}
 		const auto deferredOwner = std::move(self->_deferredCloseOwner);
+		self->_closing = true;
 		self->_closePending = false;
 		// Atomically take ownership of the HWND before calling CloseEditor.
 		// The exchange guards against re-entrant WM_CLOSE if the plugin pumps
 		// messages internally during effEditClose.
 		HWND owned = self->_editorWnd.exchange(nullptr, std::memory_order_acq_rel);
 		if (!owned)
+		{
+			self->_closing = false;
 			return 0;
+		}
 
 		self->_pluginChildWnd = nullptr;
 		const auto plugin = self->_plugin;
@@ -401,6 +428,7 @@ LRESULT CALLBACK VstEditorWindow::WindowProcedure(HWND hWnd,
 			plugin->CloseEditor();
 
 		DestroyWindow(hWnd);
+		self->_closing = false;
 		return 0;
 	}
 

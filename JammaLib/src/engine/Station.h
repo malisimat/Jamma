@@ -1,4 +1,5 @@
 #pragma once
+#include "../vst/VstRackSlot.h"
 #include "../audio/InputHistory.h"
 
 // Performance/mixing channel and LoopTake owner; fans neutral operations downward
@@ -287,10 +288,18 @@ namespace engine
 			const std::vector<std::uint8_t>& initialState = {},
 			bool bypass = false, const std::string& stateId = {});
 		void UnloadVstPlugin(size_t index);
+		vst::VstRackSlot GetVstRackSlot() const;
+		bool LoadManagedVstPlugin(std::wstring path);
+		bool UnloadManagedVstPlugin(const std::string& identity);
 		void ForceUnloadAllVstPlugins();
 
 		// Non-RT accessor to retrieve a loaded plugin instance (or nullptr).
 		std::shared_ptr<vst::IVstPlugin> GetVstPlugin(size_t index) const;
+		bool OwnsPlugin(const vst::IVstPlugin* plugin) const noexcept
+		{
+			const auto chain = _vstChain.load(std::memory_order_acquire);
+			return chain && chain->ContainsPlugin(plugin);
+		}
 
 		// Rebuild the flat parameter-automation dispatch list from the current
 		// loop set and lane wirings, then publish it atomically for the audio
@@ -615,12 +624,15 @@ namespace engine
 		// Pending load/unload requests staged by LoadVstPlugin / UnloadVstPlugin.
 		// Read only on the job thread (from OnAction(JobAction)).
 		// Each entry carries the plugin path and an optional VST2 initial-state blob.
-		std::vector<std::pair<std::wstring, std::vector<std::uint8_t>>> _pendingVstLoads;
-		std::vector<size_t> _pendingVstUnloads;
+		std::vector<actions::JobAction> _pendingVstLoads;
+		std::vector<actions::JobAction> _pendingVstUnloads;
 		// _vstPluginPaths: written on job thread (OnAction), read on main thread (VstEntries).
 		// Access is guarded by _vstPathsMutex in both directions.
 		mutable std::mutex _vstPathsMutex;
 		std::vector<std::wstring> _vstPluginPaths;
+		std::vector<io::JamFile::VstEntry> _vstSavedEntries;
+		// UI stages requests, job completes them. Audio never reads this counter.
+		std::atomic<unsigned int> _vstJobsPending{ 0u };
 		midi::MidiQueue<1024> _immediateLiveMidiIngress;
 		midi::MidiQueue<1024, SyntheticMidi> _syntheticLiveMidiIngress;
 		std::vector<std::weak_ptr<MidiDestination>> _midiDestinations;

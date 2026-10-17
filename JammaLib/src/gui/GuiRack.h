@@ -1,6 +1,8 @@
 #pragma once
 
 #include <functional>
+#include <array>
+#include "GuiButton.h"
 #include "GuiSlider.h"
 #include "GuiToggle.h"
 #include "GuiRouter.h"
@@ -53,6 +55,8 @@ namespace gui
 		std::weak_ptr<base::ActionReceiver> Receiver;
 		std::vector<int> AllowedMidiChannels;
 		std::function<void(const std::vector<int>&)> OnAllowedMidiChannelsChanged;
+		bool EnableVstControl = false;
+		std::function<void(base::Action::Modifiers)> OnVstControl;
 	};
 
 	class GuiRack :
@@ -64,6 +68,13 @@ namespace gui
 	public:
 		static constexpr unsigned int RackStateNotificationIndex = ~0u;
 		static constexpr unsigned int MidiChannelToggleBaseIndex = 100u;
+		static constexpr unsigned int VstControlActionIndex = ~0u - 1u;
+		void Init() override;
+		enum class VstControlState { Empty, Closed, Open, Failed, Loading };
+		void SetVstControlState(VstControlState state, bool enabled = true);
+		void SetVstControlCallback(std::function<void(base::Action::Modifiers)> callback);
+		void SetVstControlText(const std::string& text);
+		std::shared_ptr<GuiButton> GetVstControl() const;
 
 		virtual void SetSize(utils::Size2d size) override;
 		virtual void SetVisible(bool visible) override;
@@ -120,6 +131,9 @@ namespace gui
 		GuiRackParams::RackState _rackState;
 		std::shared_ptr<base::GuiElement> _masterPanel;
 		std::shared_ptr<gui::GuiSlider> _masterSlider;
+		std::array<std::shared_ptr<GuiButton>, 4> _vstControls;
+		VstControlState _vstControlState = VstControlState::Empty;
+		std::string _vstControlText = "VST";
 		std::shared_ptr<gui::GuiToggle> _channelToggle;
 		std::shared_ptr<base::GuiElement> _channelPanel;
 		std::vector<std::shared_ptr<gui::GuiSlider>> _channelSliders;

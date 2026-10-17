@@ -3156,6 +3156,8 @@ void Station::ForceUnloadAllVstPlugins()
 	{
 		std::lock_guard<std::mutex> lock(_vstPathsMutex);
 		_vstPluginPaths.clear();
+		_vstSavedEntries.clear();
+		_vstJobsPending.store(0u, std::memory_order_release);
 	}
 	for (auto& take : _loopTakes)
 	{
@@ -3751,8 +3753,10 @@ std::vector<JobAction> Station::_CommitChanges()
 		_WireVuSliders();
 	}
 	// Swap in the VST chain if the job thread has delivered a new one.
-	if (_flipVstChain.exchange(false, std::memory_order_acquire))
+	if (_flipVstChain.load(std::memory_order_acquire))
 	{
+		std::lock_guard<std::mutex> lock(_vstPathsMutex);
+		_flipVstChain.store(false, std::memory_order_release);
 		_vstChain.store(_backVstChain, std::memory_order_release);
 		audioStateChanged = true;
 	}
@@ -3764,29 +3768,16 @@ std::vector<JobAction> Station::_CommitChanges()
 	// Drain pending unload indices — emit one JOB_UNLOADVST per entry so
 	// rapid back-to-back UnloadVstPlugin() calls are not silently dropped.
 	auto pendingUnloads = std::move(_pendingVstUnloads);
-	for (auto idx : pendingUnloads)
-	{
-		// Queue removal to the job thread so DLL teardown does not happen
-		// under the audio mutex.
-		JobAction job;
-		job.JobActionType = JobAction::JOB_UNLOADVST;
-		job.SourceId = _name;
-		job.VstIndex = idx;
-		job.Receiver = ActionReceiver::shared_from_this();
-		jobs.push_back(job);
-	}
-
-	// Drain pending load paths into jobs, then clear.  Move the vector out
-	// first so the for-loop iterates a local copy (avoids moving from a
-	// reference to a live vector element).
 	auto pendingLoads = std::move(_pendingVstLoads);
-	for (auto& [path, initialState] : pendingLoads)
+	for (auto& job : pendingUnloads)
 	{
-		JobAction job;
-		job.JobActionType = JobAction::JOB_LOADVST;
 		job.SourceId = _name;
-		job.VstPath = std::move(path);
-		job.VstInitialState = std::move(initialState);
+		job.Receiver = ActionReceiver::shared_from_this();
+		jobs.push_back(std::move(job));
+	}
+	for (auto& job : pendingLoads)
+	{
+		job.SourceId = _name;
 		job.Receiver = ActionReceiver::shared_from_this();
 		jobs.push_back(std::move(job));
 	}
@@ -3978,6 +3969,7 @@ void Station::_ArrangeChildren()
 GuiRackParams Station::_GetRackParams(utils::Size2d size)
 {
 	GuiRackParams rackParams;
+	rackParams.EnableVstControl = true;
 	rackParams.Position = { 0, 0 };
 	rackParams.Size = size;
 	rackParams.MinSize = rackParams.Size;
@@ -4088,8 +4080,47 @@ void Station::_DitchLoopTake(std::shared_ptr<LoopTake>& take, bool flushLiveHeld
 void Station::LoadVstPlugin(std::wstring path,
 	std::vector<std::uint8_t> initialState)
 {
-	_pendingVstLoads.push_back({ std::move(path), std::move(initialState) });
+	JobAction job;
+	job.JobActionType = JobAction::JOB_LOADVST;
+	job.VstPath = std::move(path);
+	job.VstInitialState = std::move(initialState);
+	job.VstIdentity = utils::GetGuid();
+	_pendingVstLoads.push_back(std::move(job));
+	_vstJobsPending.fetch_add(1u, std::memory_order_release);
 	_changesMade = true;
+}
+
+vst::VstRackSlot Station::GetVstRackSlot() const
+{
+	vst::VstRackSlot slot;
+	std::lock_guard<std::mutex> lock(_vstPathsMutex);
+	slot.Pending = _vstJobsPending.load(std::memory_order_acquire) != 0u
+		|| _flipVstChain.load(std::memory_order_acquire);
+	if (_vstSavedEntries.empty()) return slot;
+	const auto& entry = _vstSavedEntries.front();
+	slot.Path = utils::DecodeUtf8(entry.Path);
+	slot.Identity = entry.Id;
+	const auto chain = _vstChain.load(std::memory_order_acquire);
+	slot.Plugin = chain ? chain->GetPlugin(0u) : nullptr;
+	slot.Failed = !slot.Plugin;
+	return slot;
+}
+
+bool Station::LoadManagedVstPlugin(std::wstring path)
+{
+	const auto slot = GetVstRackSlot();
+	if (slot.Pending || slot.Plugin || path.empty()) return false;
+	LoadVstPlugin(std::move(path));
+	_pendingVstLoads.back().VstManaged = true;
+	return true;
+}
+
+bool Station::UnloadManagedVstPlugin(const std::string& identity)
+{
+	const auto slot = GetVstRackSlot();
+	if (slot.Pending || identity.empty() || slot.Identity != identity) return false;
+	UnloadVstPlugin(0u);
+	return true;
 }
 
 bool Station::LoadVstPluginSynchronously(const std::wstring& path,
@@ -4102,34 +4133,49 @@ bool Station::LoadVstPluginSynchronously(const std::wstring& path,
 	auto hostChannels = NumBusChannels();
 	if (hostChannels == 0u)
 		hostChannels = 1u;
-	if (!plugin->PreInit(path)
-		|| !plugin->Load(path, _sampleRate, _blockSize, hostChannels, vst::HostedLayoutMode::Exact))
-		return false;
+	const bool loaded = plugin->PreInit(path)
+		&& plugin->Load(path, _sampleRate, _blockSize, hostChannels, vst::HostedLayoutMode::Exact);
 
 	plugin->SetStateId(stateId);
-	if (!initialState.empty())
+	if (loaded && !initialState.empty())
 		plugin->SetState(initialState);
 	plugin->SetBypassed(bypass);
+	const auto identity = plugin->StateId();
+	if (!loaded) { vst::QueueForUiThreadDestroy(std::move(plugin)); plugin.reset(); }
 
 	auto chain = _vstChain.load(std::memory_order_acquire);
 	auto replacement = std::make_shared<vst::VstChain>();
 	if (chain)
 	{
 		for (std::size_t index = 0u; index < chain->NumPlugins(); ++index)
-			if (auto existing = chain->GetPlugin(index))
-				replacement->AddPlugin(std::move(existing));
+			replacement->AddSlot(chain->GetPlugin(index));
 	}
-	replacement->AddPlugin(std::move(plugin));
+	replacement->AddSlot(std::move(plugin));
 	_vstChain.store(std::move(replacement), std::memory_order_release);
 	_PublishAudioState();
 	// Startup still exclusively owns this station.
 	_vstPluginPaths.push_back(path);
-	return true;
+	io::JamFile::VstEntry saved;
+	saved.Path = utils::EncodeUtf8(path);
+	saved.Id = identity;
+	saved.Bypass = bypass;
+	saved.State = io::JamFile::VstEntry::EncodeState(initialState);
+	_vstSavedEntries.push_back(std::move(saved));
+	return loaded;
 }
 
 void Station::UnloadVstPlugin(size_t index)
 {
-	_pendingVstUnloads.push_back(index);
+	JobAction job;
+	job.JobActionType = JobAction::JOB_UNLOADVST;
+	job.VstRequestId = utils::GetGuid();
+	job.VstIndex = index;
+	{
+		std::lock_guard<std::mutex> lock(_vstPathsMutex);
+		if (index < _vstSavedEntries.size()) job.VstIdentity = _vstSavedEntries[index].Id;
+	}
+	_pendingVstUnloads.push_back(std::move(job));
+	_vstJobsPending.fetch_add(1u, std::memory_order_release);
 	_changesMade = true;
 }
 
@@ -4148,18 +4194,19 @@ std::vector<io::JamFile::VstEntry> Station::VstEntries() const
 
 	auto chain = _vstChain.load(std::memory_order_acquire);
 	std::vector<std::wstring> paths;
+	std::vector<io::JamFile::VstEntry> savedEntries;
 	{
 		std::lock_guard<std::mutex> lock(_vstPathsMutex);
 		paths = _vstPluginPaths;
+		savedEntries = _vstSavedEntries;
+		chain = _flipVstChain.load(std::memory_order_acquire) ? _backVstChain : _vstChain.load(std::memory_order_acquire);
 	}
 	// Plugin state calls may pump native messages and reenter this owner.
 	entries.reserve(paths.size());
 
 	for (size_t i = 0; i < paths.size(); ++i)
 	{
-		io::JamFile::VstEntry entry;
-		entry.Path = utils::EncodeUtf8(paths[i]);
-		entry.Bypass = false;
+		io::JamFile::VstEntry entry = savedEntries[i];
 
 		if (chain && i < chain->NumPlugins())
 		{
@@ -4185,9 +4232,12 @@ bool Station::TryGroupVstEntries(std::vector<io::JamFile::VstEntry>& output) con
 {
 	auto chain = _vstChain.load(std::memory_order_acquire);
 	std::vector<std::wstring> paths;
+	std::vector<io::JamFile::VstEntry> savedEntries;
 	{
 		std::lock_guard<std::mutex> lock(_vstPathsMutex);
 		paths = _vstPluginPaths;
+		savedEntries = _vstSavedEntries;
+		chain = _flipVstChain.load(std::memory_order_acquire) ? _backVstChain : _vstChain.load(std::memory_order_acquire);
 	}
 	// Plugin state calls may pump native messages and reenter this owner.
 	std::vector<io::JamFile::VstEntry> entries;
@@ -4198,7 +4248,7 @@ bool Station::TryGroupVstEntries(std::vector<io::JamFile::VstEntry>& output) con
 		for (size_t i = 0; i < chain->NumPlugins(); ++i)
 		{
 			auto plugin = chain->GetPlugin(i);
-			if (!plugin) continue;
+			if (!plugin) { entries.push_back(savedEntries[i]); continue; }
 			std::vector<std::uint8_t> blob;
 			if (!plugin->TryCaptureLiveState(blob)) return false;
 			io::JamFile::VstEntry entry;
@@ -4237,57 +4287,42 @@ ActionResult Station::OnAction(JobAction action)
 	{
 	case JobAction::JOB_LOADVST:
 	{
-		// Running on the job thread — safe to do heavy work here.
-		// Always build a brand-new VstChain so _backVstChain never aliases
-		// the live _vstChain (which the audio callback reads concurrently).
-		// Take a snapshot of the current live chain under _vstChainMutex so
-		// we don't race with _CommitChanges() swapping it on the main thread.
-		std::shared_ptr<vst::VstChain> chainSnapshot;
-		chainSnapshot = _vstChain.load(std::memory_order_acquire);
-
-		auto newChain = std::make_shared<vst::VstChain>();
-		if (chainSnapshot)
-		{
-			for (size_t i = 0; i < chainSnapshot->NumPlugins(); ++i)
-			{
-				auto existing = chainSnapshot->GetPlugin(i);
-				if (existing)
-					newChain->AddPlugin(existing);
-			}
-		}
-
-		// Use the pre-initialised plugin instance when Scene::CommitChanges()
-		// prepared one on the UI thread; otherwise create a fresh plugin.
-		auto plugin = action.PreInitPlugin
-			? action.PreInitPlugin
-			: vst::MakePluginForPath(action.VstPath);
+		auto plugin = action.PreInitPlugin ? action.PreInitPlugin : vst::MakePluginForPath(action.VstPath);
 		auto hostChannels = NumBusChannels();
-		if (hostChannels == 0u)
-			hostChannels = 1u;
-		if (plugin->Load(action.VstPath, _sampleRate, _blockSize, hostChannels, vst::HostedLayoutMode::Exact))
+		if (hostChannels == 0u) hostChannels = 1u;
+		const bool loaded = plugin->Load(action.VstPath, _sampleRate, _blockSize, hostChannels, vst::HostedLayoutMode::Exact);
+		if (action.VstIdentity.empty()) action.VstIdentity = plugin->StateId();
+		plugin->SetStateId(action.VstIdentity);
+		if (loaded && !action.VstInitialState.empty()) plugin->SetState(action.VstInitialState);
+		if (!loaded) { vst::QueueForUiThreadDestroy(std::move(plugin)); plugin.reset(); }
 		{
-			// Restore saved state before adding to the chain so the plugin's
-			// parameters are correct when audio processing resumes.
-			if (!action.VstInitialState.empty())
-				plugin->SetState(action.VstInitialState);
-
-			newChain->AddPlugin(plugin);
+			std::lock_guard<std::mutex> lock(_vstPathsMutex);
+			// Multiple serialized jobs can complete before the UI publishes. Compose
+			// against the latest delivered chain so no earlier edit is discarded.
+			const auto chain = _flipVstChain.load(std::memory_order_acquire) ? _backVstChain : _vstChain.load(std::memory_order_acquire);
+			auto replacement = std::make_shared<vst::VstChain>();
+			if (chain) for (size_t i = 0u; i < chain->NumPlugins(); ++i) replacement->AddSlot(chain->GetPlugin(i));
+			io::JamFile::VstEntry saved;
+			saved.Id = action.VstIdentity;
+			saved.Path = utils::EncodeUtf8(action.VstPath);
+			saved.State = io::JamFile::VstEntry::EncodeState(action.VstInitialState);
+			if (action.VstManaged && !_vstSavedEntries.empty() && !replacement->GetPlugin(0u))
 			{
-				std::lock_guard<std::mutex> lock(_vstPathsMutex);
-				_vstPluginPaths.push_back(action.VstPath);
+				replacement->ReplaceSlot(0u, std::move(plugin));
+				_vstPluginPaths.front() = action.VstPath;
+				_vstSavedEntries.front() = std::move(saved);
 			}
-			// Publish the new chain and signal _CommitChanges() to swap it in.
-			_backVstChain = std::move(newChain);
+			else
+			{
+				replacement->AddSlot(std::move(plugin));
+				_vstPluginPaths.push_back(action.VstPath);
+				_vstSavedEntries.push_back(std::move(saved));
+			}
+			_backVstChain = std::move(replacement);
 			_flipVstChain.store(true, std::memory_order_release);
-			_changesMade = true;
 		}
-		else if (action.PreInitPlugin)
-		{
-			// Load failed but plugin was pre-initialised on the UI thread;
-			// destroying it here (job thread) would violate VST3 threading.
-			vst::QueueForUiThreadDestroy(std::move(plugin));
-		}
-
+		if (_vstJobsPending.load(std::memory_order_acquire) != 0u) _vstJobsPending.fetch_sub(1u, std::memory_order_release);
+		_changesMade = true;
 		ActionResult res;
 		res.IsEaten = true;
 		res.ResultType = actions::ACTIONRESULT_DEFAULT;
@@ -4295,44 +4330,30 @@ ActionResult Station::OnAction(JobAction action)
 	}
 	case JobAction::JOB_UNLOADVST:
 	{
-		// Build a new chain omitting the plugin at the requested index.
-		// This runs on the job thread so DLL teardown is not under the audio mutex.
-		// Take a snapshot of the current live chain under _vstChainMutex.
-		std::shared_ptr<vst::VstChain> chainSnapshot;
-		chainSnapshot = _vstChain.load(std::memory_order_acquire);
-
-		auto newChain = std::make_shared<vst::VstChain>();
-		const auto removeIndex = action.VstIndex;
-		if (chainSnapshot)
-		{
-			for (size_t i = 0; i < chainSnapshot->NumPlugins(); ++i)
-			{
-				auto existing = chainSnapshot->GetPlugin(i);
-				if (i == removeIndex)
-				{
-					// The old live chain is released by the audio thread after the
-					// atomic swap. Keep the removed plugin alive until the UI thread
-					// owns its final reference; otherwise its destructor can call
-					// effClose/FreeLibrary on the audio thread.
-					if (existing)
-						vst::QueueForUiThreadDestroy(std::move(existing));
-					continue;
-				}
-				if (existing)
-					newChain->AddPlugin(existing);
-			}
-		}
-
 		{
 			std::lock_guard<std::mutex> lock(_vstPathsMutex);
-			if (removeIndex < _vstPluginPaths.size())
+			const auto chain = _flipVstChain.load(std::memory_order_acquire) ? _backVstChain : _vstChain.load(std::memory_order_acquire);
+			// Identity is captured when requested. An index alone can drift while queued.
+			auto removeIndex = _vstSavedEntries.size();
+			for (size_t i = 0u; i < _vstSavedEntries.size(); ++i)
+				if (!action.VstIdentity.empty() && _vstSavedEntries[i].Id == action.VstIdentity) { removeIndex = i; break; }
+			if (removeIndex < _vstSavedEntries.size())
+			{
+				auto replacement = std::make_shared<vst::VstChain>();
+				if (chain) for (size_t i = 0u; i < chain->NumPlugins(); ++i)
+				{
+					auto existing = chain->GetPlugin(i);
+					if (i == removeIndex) { if (existing) vst::QueueForUiThreadDestroy(std::move(existing)); }
+					else replacement->AddSlot(std::move(existing));
+				}
 				_vstPluginPaths.erase(_vstPluginPaths.begin() + static_cast<std::ptrdiff_t>(removeIndex));
+				_vstSavedEntries.erase(_vstSavedEntries.begin() + static_cast<std::ptrdiff_t>(removeIndex));
+				_backVstChain = std::move(replacement);
+				_flipVstChain.store(true, std::memory_order_release);
+			}
 		}
-
-		_backVstChain = std::move(newChain);
-		_flipVstChain.store(true, std::memory_order_release);
+		if (_vstJobsPending.load(std::memory_order_acquire) != 0u) _vstJobsPending.fetch_sub(1u, std::memory_order_release);
 		_changesMade = true;
-
 		ActionResult res;
 		res.IsEaten = true;
 		res.ResultType = actions::ACTIONRESULT_DEFAULT;

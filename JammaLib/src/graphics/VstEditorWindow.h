@@ -62,9 +62,11 @@ namespace graphics
 		// Must be called from the main thread.
 		void Destroy();
 
-		bool IsOpen() const noexcept { return _editorWnd.load() != nullptr; }
+		bool IsOpen() const noexcept { const auto wnd = EditorHwnd(); return wnd && IsWindow(wnd); }
+		bool IsClosing() const noexcept { return _closing || _closePending; }
 		const std::shared_ptr<vst::IVstPlugin>& Plugin() const noexcept { return _plugin; }
 		HWND EditorHwnd() const noexcept { return _editorWnd.load(std::memory_order_acquire); }
+		void EnsureVisible() noexcept { _ClampToWorkArea(); }
 
 		// Called by the window's WNDPROC for WM_SIZE.
 		void OnAction(const actions::WindowAction& action);
@@ -84,10 +86,13 @@ namespace graphics
 		void _CaptureChildWindows(std::vector<HWND>& outChildren) const;
 		void _RefreshTrackedPluginChild() noexcept;
 		void _ResizeFrameToClient(unsigned int clientWidth, unsigned int clientHeight) noexcept;
+		void _ClampToWorkArea() noexcept;
 		void _IdlePlugin();
 		// UI owner only: a plugin idle call can pump another timer/idle message.
 		bool _idleActive = false;
 		bool _closePending = false;
+		// UI owner only; remains set while CloseEditor pumps native messages.
+		bool _closing = false;
 		// Released by the UI timer once the SDK call allows safe detachment.
 		std::shared_ptr<VstEditorWindow> _deferredCloseOwner;
 		void _DeferClose();

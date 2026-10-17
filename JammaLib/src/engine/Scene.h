@@ -68,6 +68,7 @@
 #include "RigCoordinator.h"
 #include "StationManagement.h"
 #include "../gui/GuiStationControls.h"
+#include "../gui/VstRackControls.h"
 #include "../actions/ActionUndoHistory.h"
 #include "../midi/LoopGridEditor.h"
 
@@ -524,6 +525,7 @@ namespace engine
 		bool _sourceLossRecoveryGateClosed = false; // Serialized by _sceneMutex.
 		std::uint64_t _audioStreamEpoch = 0u; // Serialized lifecycle owner.
 		std::unique_ptr<vst::VstEditorWindowManager> _windowSubsystem;
+		std::unique_ptr<gui::VstRackControls> _vstRackControls; // Window-thread owner; reset before station teardown.
 		std::unique_ptr<ninjam::NinjamNetworkService> _networkService;
 		engine::Quantiser _quantisation;
 		std::uint64_t _lastLocalMasterTimingVersion = 0u;

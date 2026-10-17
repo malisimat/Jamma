@@ -305,6 +305,7 @@ TEST(StationMidiInstrument, ShutdownReleasesRemovedPluginHeldByPlaybackRoute)
 	JobAction unload;
 	unload.JobActionType = JobAction::JOB_UNLOADVST;
 	unload.VstIndex = 0u;
+	unload.VstIdentity = plugin->StateId();
 	station->OnAction(unload);
 	station->CommitChanges();
 	std::weak_ptr<vst::IVstPlugin> lifetime = plugin;
@@ -1494,6 +1495,7 @@ TEST(StationMidiInstrument, RemovedDestinationCancelsQueuedShortNoteAndReclaimsP
 	JobAction unload;
 	unload.JobActionType = JobAction::JOB_UNLOADVST;
 	unload.VstIndex = 0u;
+	unload.VstIdentity = plugin->StateId();
 	station->OnAction(unload);
 	station->CommitChanges();
 	RenderStationBlock(station, 128u); // Retired destination queue is discarded even with no active chain.

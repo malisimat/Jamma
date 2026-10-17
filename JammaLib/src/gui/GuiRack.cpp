@@ -37,7 +37,10 @@ GuiRack::GuiRack(GuiRackParams params) :
 	_midiChannelToggles(),
 	_rackParams(params)
 {
-	params.Size.Height = std::max(params.Size.Height, _MinimumScaleLayoutHeight);
+	const auto vstSpace = params.EnableVstControl ? GuiButtonParams::DefaultHeight + _SliderGap.Height : 0u;
+	params.Size.Height = std::max(params.Size.Height, _MinimumScaleLayoutHeight + vstSpace);
+	const auto minFaderWidth = params.EnableVstControl ? 64u : 40u;
+	params.Size.Width = std::max(params.Size.Width, minFaderWidth + _ChannelToggleSize.Width + _ChannelTogglePaddingLeft + 2u * _SliderGap.Width);
 	_rackParams.Size = params.Size;
 	_masterPanel = std::make_shared<base::GuiElement>(_GetPanelParams(GuiRackParams::RACK_MASTER, params.Size));
 	_masterSlider = std::make_shared<gui::GuiSlider>(_GetSliderParams(0, params.Size));
@@ -67,6 +70,28 @@ GuiRack::GuiRack(GuiRackParams params) :
 
 	_children.push_back(_masterPanel);
 	_masterPanel->AddChild(_masterSlider);
+	if (params.EnableVstControl)
+	{
+		const std::array<std::string, 4> names = { "vst_empty", "vst_closed", "vst_open", "vst_failed" };
+		for (size_t i = 0; i < _vstControls.size(); ++i)
+		{
+			GuiButtonParams button;
+			button.Index = VstControlActionIndex;
+			button.Text = "VST";
+			button.TextFontSize = graphics::FontOptions::FONT_SMALL;
+			button.TextPadding = 2;
+			button.DispatchCommand = true;
+			button.CapturePressModifiers = true;
+			button.Texture = names[i];
+			button.OverTexture = names[i] + "_over";
+			button.DownTexture = names[i] + "_down";
+			button.Size = { 40u, GuiButtonParams::DefaultHeight };
+			button.MinSize = button.Size;
+			_vstControls[i] = std::make_shared<GuiButton>(button);
+			_masterPanel->AddChild(_vstControls[i]);
+		}
+		SetVstControlState(VstControlState::Empty);
+	}
 	_masterPanel->AddChild(_channelToggle);
 	_masterPanel->AddChild(_channelPanel);
 	_channelPanel->AddChild(_midiChannelPanel);
@@ -87,7 +112,11 @@ void GuiRack::SetSize(utils::Size2d size)
 {
 	// The silence, unity and maximum anchors need distinct pixel rows even on
 	// compact layouts. This leaves at least three pixels of handle travel.
-	size.Height = std::max(size.Height, _MinimumScaleLayoutHeight);
+	const auto vstSpace = _rackParams.EnableVstControl ? GuiButtonParams::DefaultHeight + _SliderGap.Height : 0u;
+	size.Height = std::max(size.Height, _MinimumScaleLayoutHeight + vstSpace);
+	// Leave room for the small Loop target hint as well as the VST glyphs.
+	const auto minFaderWidth = _rackParams.EnableVstControl ? 64u : 40u;
+	size.Width = std::max(size.Width, minFaderWidth + _ChannelToggleSize.Width + _ChannelTogglePaddingLeft + 2u * _SliderGap.Width);
 	_rackParams.Size = size;
 
 	auto masterPanelParams = _GetPanelParams(GuiRackParams::RACK_MASTER, size);
@@ -98,6 +127,12 @@ void GuiRack::SetSize(utils::Size2d size)
 	_masterSlider->SetPosition(masterSliderParams.Position);
 	_masterSlider->SetSize(masterSliderParams.Size);
 	_masterSlider->SetDragParams(masterSliderParams.DragControlOffset, masterSliderParams.DragControlSize, masterSliderParams.DragGap);
+	for (auto& button : _vstControls)
+		if (button)
+		{
+			button->SetPosition({ static_cast<int>(_SliderGap.Width), static_cast<int>(_SliderGap.Height) });
+			button->SetSize({ masterSliderParams.Size.Width, GuiButtonParams::DefaultHeight });
+		}
 
 	auto channelToggleParams = _GetToggleParams(GuiRackParams::RACK_CHANNELS, size);
 	_channelToggle->SetPosition(channelToggleParams.Position);
@@ -159,6 +194,18 @@ ActionResult GuiRack::OnAction(GuiAction action)
 	bool toggleOn;
 	bool routerVisible = _routerPanel->IsVisible();
 	GuiRackParams::RackState newRackState;
+	if (action.ElementType == GuiAction::ACTIONELEMENT_BUTTON && action.Index == VstControlActionIndex)
+	{
+		auto control = GetVstControl();
+		if (!control || !control->IsEnabled()) return ActionResult::NoAction();
+		if (_rackParams.OnVstControl) _rackParams.OnVstControl(action.InputModifiers);
+		else if (_receiver)
+		{
+			action.ElementType = GuiAction::ACTIONELEMENT_RACK;
+			_receiver->OnAction(action);
+		}
+		return ActionResult::NoAction();
+	}
 
 	if (_receiver)
 	{
@@ -311,6 +358,8 @@ void GuiRack::_InitReceivers()
 	_receiversInitialized = true;
 
 	_masterSlider->SetReceiver(ActionReceiver::shared_from_this());
+	for (auto& button : _vstControls)
+		if (button) button->SetReceiver(ActionReceiver::shared_from_this());
 	_masterSlider->SetValue(_masterSlider->Value(), true);
 
 	_channelToggle->SetReceiver(ActionReceiver::shared_from_this());
@@ -444,6 +493,14 @@ gui::GuiSliderParams GuiRack::_GetSliderParams(unsigned int index, utils::Size2d
 	if (0 == index)
 	{
 		sliderParams.Position = { (int)_SliderGap.Width, (int)_SliderGap.Height };
+		if (_rackParams.EnableVstControl)
+		{
+			const auto reserved = GuiButtonParams::DefaultHeight + _SliderGap.Height;
+			sliderSize.Height -= reserved;
+			sliderParams.Size.Height = sliderSize.Height;
+			sliderParams.MinSize.Height = std::max(47u, sliderSize.Height);
+			sliderParams.Position.Y += static_cast<int>(reserved);
+		}
 	}
 	else
 	{
@@ -601,6 +658,51 @@ void GuiRack::SetAllowedMidiChannels(const std::vector<int>& channels, bool bypa
 std::shared_ptr<gui::GuiSlider> GuiRack::GetMasterSlider() const
 {
 	return _masterSlider;
+}
+
+std::shared_ptr<GuiButton> GuiRack::GetVstControl() const
+{
+	const auto index = _vstControlState == VstControlState::Loading ?
+		static_cast<size_t>(VstControlState::Closed) : static_cast<size_t>(_vstControlState);
+	return _vstControls[index];
+}
+
+void GuiRack::SetVstControlState(VstControlState state, bool enabled)
+{
+	const auto previousState = _vstControlState;
+	_vstControlState = state;
+	const auto active = GetVstControl();
+	for (auto& button : _vstControls)
+		if (button)
+		{
+			button->SetVisible(button == active);
+			button->SetEnabled(enabled && state != VstControlState::Loading);
+		}
+	if (previousState != state && active)
+		active->SetText(state == VstControlState::Loading ? "VST..." : _vstControlText);
+}
+
+void GuiRack::SetVstControlCallback(std::function<void(base::Action::Modifiers)> callback)
+{
+	_rackParams.OnVstControl = std::move(callback);
+}
+
+void GuiRack::Init()
+{
+	GuiElement::Init();
+	// Tree initialization assigns child ordinals; this command has a stable index.
+	for (auto& button : _vstControls)
+		if (button) button->SetIndex(VstControlActionIndex);
+}
+
+void GuiRack::SetVstControlText(const std::string& text)
+{
+	if (_vstControlText == text) return;
+	_vstControlText = text;
+	for (auto& button : _vstControls)
+		if (button) button->SetText(text);
+	if (_vstControlState == VstControlState::Loading && GetVstControl())
+		GetVstControl()->SetText("VST...");
 }
 
 std::shared_ptr<gui::GuiSlider> GuiRack::GetChannelSlider(unsigned int index) const

@@ -99,6 +99,12 @@ namespace engine
         }
         static bool SelectionPreviewActive(const Scene& scene) { return scene._BackgroundSelectionPreviewActive(); }
         static void SelectTakeDepth(Scene& scene) { scene._UpdateSelectDepth(Scene::VIEW_LOOPTAKE); }
+        static void RefreshRackVisibility(Scene& scene)
+        {
+            std::scoped_lock lock(scene._sceneMutex);
+            scene._viewProj = glm::mat4(1.0f);
+            scene._UpdateRackVisibilityLocked();
+        }
         static bool ItemMutePressed(const Scene& scene) { return scene._selector->IsMutePressed(); }
         static bool ItemMutePainting(const Scene& scene) { return scene._selector->IsPaintingMute(); }
         static bool BackgroundPreviewActive(const Scene& scene) { return scene._BackgroundPreviewActive(); }
@@ -570,6 +576,37 @@ TEST_F(SceneRoutingIntegrationTest, ExpandedRackSuppressesOtherStationsAndRestor
 	rack->SetPosition({ 100, 100 });
 	scene->AdvanceUiAnimations();
 	EXPECT_EQ(gui::GuiRackParams::RACK_MASTER, rack->GetRackState());
+	scene->Shutdown();
+}
+
+TEST_F(SceneRoutingIntegrationTest, CompactTakeRacksShowOneSelectedOwnerWithoutOverlappingControls)
+{
+	auto scene = FreshScene({ Station("Compact") }, {});
+	ASSERT_TRUE(scene);
+	const auto station = scene->SnapshotStations().front();
+	const auto first = station->AddTake();
+	const auto second = station->AddTake();
+	scene->CommitChanges();
+	engine::SourceLossIntegrationTestAccess::SelectTakeDepth(*scene);
+	station->SetModelPosition({0.0f, 0.0f, 0.0f});
+	first->SetSize({200u, 30u});
+	second->SetSize({200u, 30u});
+	first->DeSelect();
+	second->DeSelect();
+	const auto firstPanel = first->GetGuiRack()->GetMasterSlider()->Parent();
+	const auto secondPanel = second->GetGuiRack()->GetMasterSlider()->Parent();
+	engine::SourceLossIntegrationTestAccess::RefreshRackVisibility(*scene);
+	EXPECT_TRUE(firstPanel->IsVisible());
+	EXPECT_FALSE(secondPanel->IsVisible());
+	second->Select();
+	engine::SourceLossIntegrationTestAccess::RefreshRackVisibility(*scene);
+	EXPECT_FALSE(firstPanel->IsVisible());
+	EXPECT_TRUE(secondPanel->IsVisible());
+	first->SetSize({200u, 150u});
+	second->SetSize({200u, 150u});
+	engine::SourceLossIntegrationTestAccess::RefreshRackVisibility(*scene);
+	EXPECT_TRUE(firstPanel->IsVisible());
+	EXPECT_TRUE(secondPanel->IsVisible());
 	scene->Shutdown();
 }
 

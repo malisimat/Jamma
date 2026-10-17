@@ -12,6 +12,8 @@
 
 namespace vst
 {
+	// Window/plugin operations and queries belong to the UI thread. The mutex
+	// protects bookkeeping only; never hold it across native or plugin calls.
 	class VstEditorWindowManager
 	{
 	public:
@@ -34,6 +36,9 @@ namespace vst
 		void SetLogging(base::LoggingConfig config) noexcept;
 
 		bool OpenVstEditorForPlugin(const std::shared_ptr<IVstPlugin>& plugin);
+		bool IsVstEditorOpen(const std::shared_ptr<IVstPlugin>& plugin) const;
+		bool CloseVstEditorForPlugin(const std::shared_ptr<IVstPlugin>& plugin);
+		bool ToggleVstEditorForPlugin(const std::shared_ptr<IVstPlugin>& plugin);
 		bool TryOpenVstEditorForLoop(const std::shared_ptr<engine::Loop>& loop, size_t pluginIndex);
 		bool TryOpenVstEditorForStation(const std::shared_ptr<engine::Station>& station, size_t pluginIndex);
 		bool TryOpenVstEditorForHover(const std::shared_ptr<base::GuiElement>& hovering,
@@ -46,7 +51,12 @@ namespace vst
 		base::LoggingConfig _loggingConfig;
 		mutable std::mutex _vstEditorWindowsMutex;
 		std::vector<std::shared_ptr<graphics::VstEditorWindow>> _vstEditorWindows;
+		std::vector<std::weak_ptr<graphics::VstEditorWindow>> _closingEditorWindows;
 		// Reservations survive native message pumping during editor creation.
 		std::vector<const IVstPlugin*> _pendingEditorOpens;
+		// UI owner only, protected alongside window bookkeeping. A close pumped
+		// during OpenEditor cancels publication without touching processor state.
+		std::vector<const IVstPlugin*> _cancelledEditorOpens;
+		unsigned int _closeAllDepth = 0u;
 	};
 }

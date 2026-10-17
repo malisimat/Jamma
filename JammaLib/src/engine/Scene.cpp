@@ -74,6 +74,12 @@ Scene::Scene(SceneParams params,
 	_audioEngine(std::make_unique<audio::AudioHost>(user)),
 	_inputSubsystem(std::make_unique<io::IoInputSubsystem>(user, io::LoggingConfig{})),
 	_windowSubsystem(std::make_unique<vst::VstEditorWindowManager>()),
+	_vstRackControls(std::make_unique<gui::VstRackControls>(gui::VstRackControls::Host{
+		_sceneMutex, _stations, *_windowSubsystem,
+		[this]() { return !_isSceneQuitting.load(std::memory_order_acquire) &&
+			!_sessionReplacing.load(std::memory_order_acquire) && !_controlWriterExclusion.owns_lock() &&
+			_controlOperation == ControlOperation::None && _rigCoordinator.EditsEnabled(); },
+		[this]() { CommitChanges(); }})),
 	_networkService(std::make_unique<ninjam::NinjamNetworkService>()),
 	_loopEditor(midi::LoopGridEditor::Host{
 		_camera, _undoHistory, _sceneMutex, _stations,
@@ -855,6 +861,9 @@ void Scene::UpdateCamera()
 
 bool Scene::AdvanceUiAnimations()
 {
+	// Native picker/editor calls can pump Windows messages; never hold the
+	// scene lock while processing a captured rack gesture.
+	_vstRackControls->Pump();
 	if (_quantisationInputResetRequested.exchange(false, std::memory_order_acq_rel))
 		_ReleaseQuantisationInput();
 	// Window calls once per UI frame before deferred hover and drawing.
@@ -883,6 +892,7 @@ bool Scene::AdvanceUiAnimations()
 		_InvalidateHover2d();
 	}
 	_UpdateRackVisibilityLocked();
+	_vstRackControls->UpdateLocked(static_cast<base::SelectDepth>(depth));
 	_performanceGroups.Acknowledge(_audioEngine->GroupMuteReceipt());
 	if (_selectionPanel) _selectionPanel->RefreshPerformanceGroups(_performanceGroups.Groups());
 	if (_hudPanel)
@@ -1630,13 +1640,14 @@ ActionResult Scene::OnAction(KeyAction action)
 		&& (Action::MODIFIER_CTRL & action.Modifiers)
 		&& (Action::MODIFIER_SHIFT & action.Modifiers))
 	{
+		const auto depth = static_cast<base::SelectDepth>(_selector->CurrentSelectDepth());
+		const auto hovering = _ChildFromPath(_selector->CurrentHover());
 		const auto pluginPath = utils::PickFile(L"Choose VST plugin");
 		if (pluginPath.empty())
 			return ActionResult::NoAction();
 
-		auto hovering = _ChildFromPath(_selector->CurrentHover());
 		return _windowSubsystem->HandleVstInsert(pluginPath,
-			_selector->CurrentSelectDepth(),
+			depth,
 			hovering,
 			[this]() { CommitChanges(); });
 	}
@@ -2834,6 +2845,7 @@ bool Scene::PumpGlobalKeyCapture(actions::KeyAction& action) noexcept
 
 void Scene::Shutdown()
 {
+	_vstRackControls->Reset();
 	_sessionReplacing.store(true, std::memory_order_release);
 	if (_controlWriterExclusion.owns_lock()) _controlWriterExclusion.unlock();
 	// Finish any admitted job tick before borrowing lifecycle state. No scene,
@@ -3310,8 +3322,21 @@ void Scene::_UpdateRackVisibilityLocked()
 			const bool stationInView = station->IsVisible() && !_loopEditor.IsEngaged() &&
 				clip.w > 0.0f && clip.z >= -clip.w && clip.z <= clip.w;
 			visit(station->GetGuiRack(), stationInView);
+			// Dense take rows can be shorter than a usable fader and VST button.
+			// Present one selected compact rack instead of overlapping hit targets.
+			std::shared_ptr<LoopTake> compactFocus;
 			for (const auto& take : station->GetLoopTakes())
-				visit(take->GetGuiRack(), stationInView && take->IsVisible());
+				if (take->GetGuiRack() && take->GetSize().Height < take->GetGuiRack()->GetSize().Height)
+				{
+					if (!compactFocus) compactFocus = take;
+					if (take->IsSelected()) { compactFocus = take; break; }
+				}
+			for (const auto& take : station->GetLoopTakes())
+			{
+				const auto rack = take->GetGuiRack();
+				const bool compact = rack && take->GetSize().Height < rack->GetSize().Height;
+				visit(rack, stationInView && take->IsVisible() && (!compact || take == compactFocus));
+			}
 		}
 	};
 
@@ -3326,9 +3351,9 @@ void Scene::_UpdateRackVisibilityLocked()
 		else
 			expanded = rack;
 	});
-	forEachRack([&](const std::shared_ptr<GuiRack>& rack, bool) {
+	forEachRack([&](const std::shared_ptr<GuiRack>& rack, bool ownerInView) {
 		if (!rack) return;
-		const bool visible = !expanded || rack == expanded;
+		const bool visible = ownerInView && (!expanded || rack == expanded);
 		if (rack->GetMasterSlider()->Parent()->IsVisible() != visible)
 		{
 			rack->SetMasterControlsVisible(visible);

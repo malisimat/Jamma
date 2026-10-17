@@ -54,6 +54,8 @@ namespace gui
 		// Existing button subclasses dispatch their own actions. Plain command
 		// buttons opt in so one activation cannot submit two different commands.
 		bool DispatchCommand = false;
+		// Destructive modifier gestures must retain the intent at pointer press.
+		bool CapturePressModifiers = false;
 		unsigned int TextPadding = DefaultTextPadding;
 		std::optional<graphics::FontOptions::FontSize> TextFontSize;
 		bool TextEllipsize = false;
@@ -75,6 +77,7 @@ namespace gui
 		static GuiLabelParams _MakeLabelParams(const GuiButtonParams& params);
 
 		bool _pressed = false;
+		base::Action::Modifiers _pressModifiers = base::Action::MODIFIER_NONE;
 		GuiButtonParams _buttonParams;
 		std::shared_ptr<GuiLabel> _label;
 	};

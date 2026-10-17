@@ -58,6 +58,84 @@ TEST(GuiRack, CompactConstructionAndResizeKeepScaleAnchorsDistinct)
 	EXPECT_GE(rack.GetChannelSlider(0)->GetSize().Height, 47u);
 }
 
+TEST(GuiRack, OptionalVstControlReservesOnlyMasterSliderSpace)
+{
+	auto params = MakeRackParams(200, 300);
+	params.EnableVstControl = true;
+	params.NumInputChannels = 1;
+	auto rack = std::make_shared<GuiRack>(params);
+	const auto button = rack->GetVstControl();
+	ASSERT_NE(nullptr, button);
+	EXPECT_EQ(gui::GuiButtonParams::DefaultHeight, button->GetSize().Height);
+	EXPECT_EQ(rack->GetMasterSlider()->GetSize().Width, button->GetSize().Width);
+	EXPECT_LE(button->Position().Y + static_cast<int>(button->GetSize().Height), rack->GetMasterSlider()->Position().Y);
+	EXPECT_GT(rack->GetChannelSlider(0)->GetSize().Height, rack->GetMasterSlider()->GetSize().Height);
+	rack->SetSize({ 1, 1 });
+	EXPECT_GE(rack->GetMasterSlider()->GetSize().Height, 47u);
+	EXPECT_GE(rack->GetMasterSlider()->GetSize().Width, 64u);
+	EXPECT_LE(rack->GetMasterSlider()->Position().Y + static_cast<int>(rack->GetMasterSlider()->GetSize().Height), static_cast<int>(rack->GetSize().Height));
+}
+
+TEST(GuiRack, VstControlIsAbsentUnlessRequested)
+{
+	GuiRack rack(MakeRackParams());
+	EXPECT_EQ(nullptr, rack.GetVstControl());
+}
+
+TEST(GuiRack, VstCommandRetainsPressModifiersThroughTreeInitialization)
+{
+	auto params = MakeRackParams();
+	params.EnableVstControl = true;
+	auto rack = std::make_shared<GuiRack>(params);
+	auto receiver = std::make_shared<MockedRackReceiver>();
+	rack->SetReceiver(receiver);
+	rack->Init();
+	const auto previousActions = receiver->ActionCount();
+	auto button = rack->GetVstControl();
+	actions::TouchAction down;
+	down.Position = { 10, 10 };
+	down.State = actions::TouchAction::TOUCH_DOWN;
+	down.Modifiers = base::Action::MODIFIER_ALT;
+	auto up = down;
+	up.State = actions::TouchAction::TOUCH_UP;
+	up.Modifiers = base::Action::MODIFIER_NONE;
+	button->OnAction(down);
+	button->OnAction(up);
+	ASSERT_EQ(previousActions + 1, receiver->ActionCount());
+	EXPECT_EQ(GuiAction::ACTIONELEMENT_RACK, receiver->LastAction().ElementType);
+	EXPECT_EQ(GuiRack::VstControlActionIndex, receiver->LastAction().Index);
+	EXPECT_EQ(base::Action::MODIFIER_ALT, receiver->LastAction().InputModifiers);
+}
+
+TEST(GuiRack, VstCallbackConsumesCommandAndLoadingOrReadOnlySuppressesIt)
+{
+	auto params = MakeRackParams();
+	params.EnableVstControl = true;
+	unsigned int count = 0;
+	params.OnVstControl = [&count](base::Action::Modifiers) { ++count; };
+	auto rack = std::make_shared<GuiRack>(params);
+	auto receiver = std::make_shared<MockedRackReceiver>();
+	rack->SetReceiver(receiver);
+	GuiAction command;
+	command.ElementType = GuiAction::ACTIONELEMENT_BUTTON;
+	command.Index = GuiRack::VstControlActionIndex;
+	rack->OnAction(command);
+	EXPECT_EQ(1u, count);
+	EXPECT_EQ(0, receiver->ActionCount());
+	const auto empty = rack->GetVstControl();
+	rack->SetVstControlState(GuiRack::VstControlState::Loading);
+	EXPECT_FALSE(empty->IsVisible());
+	EXPECT_FALSE(rack->GetVstControl()->IsEnabled());
+	rack->OnAction(command);
+	rack->SetVstControlState(GuiRack::VstControlState::Open, false);
+	rack->OnAction(command);
+	EXPECT_EQ(1u, count);
+	rack->SetVstControlState(GuiRack::VstControlState::Failed);
+	rack->OnAction(command);
+	EXPECT_EQ(2u, count);
+	EXPECT_TRUE(rack->GetVstControl()->IsEnabled());
+}
+
 // --- State transition tests ---
 
 TEST(GuiRack, DefaultStateIsMaster) {
