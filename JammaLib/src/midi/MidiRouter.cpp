@@ -852,11 +852,7 @@ void MidiRouter::_PublishRigInputDispatch(std::shared_ptr<const engine::RigSnaps
 				for (const auto& station : route.Recipients)
 				{
 					if (!station || station->IsRemote()) continue;
-					std::uint16_t channelMask = 0u;
-					for (std::uint8_t channel = 0u; channel < 16u; ++channel)
-						if (station->AcceptsLiveMidiChannel(channel))
-							channelMask = static_cast<std::uint16_t>(channelMask | (1u << channel));
-					if (channelMask != 0u) recipients.push_back({ station, channelMask });
+					recipients.push_back({ station });
 				}
 			}
 		}
@@ -1230,12 +1226,11 @@ MidiRouter::TriggerDispatchSummary MidiRouter::PumpMidi(const std::vector<std::s
 			}
 			if ((msgType >= 0x80u) && (msgType <= 0xE0u))
 			{
-				const auto channelBit = static_cast<std::uint16_t>(1u << stationEvent.Channel());
 				if (input->DeviceSlot < dispatchState->LiveMidi.RecipientsByDeviceSlot.size())
 				{
 					for (const auto& recipient : dispatchState->LiveMidi.RecipientsByDeviceSlot[input->DeviceSlot])
 					{
-						if (recipient.Station && (recipient.AllowedChannelMask & channelBit) != 0u)
+						if (recipient.Station && recipient.Station->AcceptsLiveMidiChannel(stationEvent.Channel()))
 							recipient.Station->ObservePhysicalMidiForRecording(
 								stationEvent, input->ConfiguredName);
 					}
@@ -1551,11 +1546,10 @@ void MidiRouter::_DispatchAvailableLiveMidi() noexcept
 			continue;
 		}
 
-		const auto channelBit = static_cast<std::uint16_t>(1u << dispatchedEvent.Event.Channel());
 		bool hasRecipient = false;
 		for (const auto& recipient : routes->LiveMidi.RecipientsByDeviceSlot[selectedInput->DeviceSlot])
 		{
-			if (!recipient.Station || (recipient.AllowedChannelMask & channelBit) == 0u)
+			if (!recipient.Station || !recipient.Station->AcceptsLiveMidiChannel(dispatchedEvent.Event.Channel()))
 				continue;
 
 			hasRecipient = true;

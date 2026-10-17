@@ -61,7 +61,6 @@ namespace midi
 		struct LiveMidiRecipient
 		{
 			std::shared_ptr<engine::Station> Station;
-			std::uint16_t AllowedChannelMask = 0u;
 		};
 
 		struct LiveMidiRoutingSnapshot
