@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <thread>
 
@@ -354,4 +355,123 @@ TEST(ChannelMixer, ShrinkRemovesChannelsAndExpandRestoresThem)
     sink->EndMultiWrite(blockSize, true, base::Audible::AUDIOSOURCE_ADC);
 
     EXPECT_EQ(std::vector<float>({ 100.0f, 200.0f, 300.0f, 400.0f }), sink->Samples(2u));
+}
+
+TEST(ChannelMixerHistory, PhysicalCoordinatesRespectLatencyRetentionAndBothWraps)
+{
+    for (const auto latency : { 0u, 3u, 37u })
+    for (const auto capacity : { 4u, 11u })
+    {
+        SCOPED_TRACE(::testing::Message() << "latency=" << latency << " capacity=" << capacity);
+        ChannelMixerParams params;
+        params.NumInputChannels = 2u; params.NumOutputChannels = 1u;
+        params.InputBufferSize = capacity; params.OutputBufferSize = 4u;
+        ChannelMixer mixer(params);
+        constexpr std::uint64_t origin = 0xfffffff9ull;
+        for (auto block = 0u; block < 8u; ++block)
+        {
+            std::array<float, 8> input{};
+            for (auto i = 0u; i < 4u; ++i)
+            {
+                input[i * 2u] = static_cast<float>(block * 4u + i + 1u);
+                input[i * 2u + 1u] = -10.0f * input[i * 2u];
+            }
+            const auto start = origin + block * 4u;
+            mixer.FromAdc(input.data(), 2u, 4u);
+            const auto history = mixer.ObserveInputHistory(start, 4u, latency, true);
+            const auto valid = (std::min)(capacity, (block + 1u) * 4u);
+            EXPECT_EQ(valid, history.ValidCount);
+            for (auto age = 1u; age <= valid; ++age)
+            {
+                const auto physical = static_cast<std::uint32_t>(start + 4u - latency - age);
+                float sample = 0.0f;
+                ASSERT_TRUE(history.Read(0u, physical, sample));
+                EXPECT_FLOAT_EQ(static_cast<float>((block + 1u) * 4u - age + 1u), sample);
+                ASSERT_TRUE(history.Read(1u, physical, sample));
+                EXPECT_FLOAT_EQ(-10.0f * static_cast<float>((block + 1u) * 4u - age + 1u), sample);
+            }
+            float unchanged = 123.0f;
+            const auto physicalHead = static_cast<std::uint32_t>(start + 4u - latency);
+            EXPECT_FALSE(history.Read(0u, physicalHead, unchanged)); // exclusive ingress head
+            EXPECT_FALSE(history.Read(0u, physicalHead + 1u, unchanged)); // future
+            EXPECT_FALSE(history.Read(0u, physicalHead - valid - 1u, unchanged));
+            EXPECT_FALSE(history.Read(2u, physicalHead - 1u, unchanged));
+            EXPECT_FLOAT_EQ(123.0f, unchanged);
+        }
+    }
+}
+
+TEST(ChannelMixerHistory, GapsAndStreamReplacementNeverRelabelOldSamples)
+{
+    ChannelMixerParams params;
+    params.NumInputChannels = 1u; params.NumOutputChannels = 1u;
+    params.InputBufferSize = 12u; params.OutputBufferSize = 4u;
+    ChannelMixer mixer(params);
+    std::array<float, 4> oldInput{ 1.0f, 2.0f, 3.0f, 4.0f };
+    mixer.FromAdc(oldInput.data(), 1u, 4u);
+    auto history = mixer.ObserveInputHistory(100u, 4u, 7u, true);
+    EXPECT_EQ(4u, history.ValidCount);
+    EXPECT_FALSE(mixer.ObserveInputHistory(104u, 4u, 7u, false).ContainsOrigin(100u));
+    std::array<float, 4> resumed{ 11.0f, 12.0f, 13.0f, 14.0f };
+    mixer.FromAdc(resumed.data(), 1u, 4u);
+    history = mixer.ObserveInputHistory(108u, 4u, 7u, true);
+    EXPECT_EQ(4u, history.ValidCount);
+    float sample = 0.0f;
+    ASSERT_TRUE(history.Read(0u, 108u - 7u, sample));
+    EXPECT_FLOAT_EQ(11.0f, sample);
+    EXPECT_FALSE(history.Read(0u, 107u - 7u, sample));
+
+    // A discontinuous callback ruler is also a gap, even with non-null input.
+    mixer.FromAdc(resumed.data(), 1u, 4u);
+    history = mixer.ObserveInputHistory(120u, 4u, 7u, true);
+    EXPECT_EQ(4u, history.ValidCount);
+    EXPECT_FALSE(history.Read(0u, 119u - 7u, sample));
+
+    mixer.SetParams(params);
+    mixer.FromAdc(resumed.data(), 1u, 4u);
+    history = mixer.ObserveInputHistory(200u, 4u, 7u, true);
+    EXPECT_EQ(4u, history.ValidCount);
+    EXPECT_FALSE(history.ContainsOrigin(100u));
+    EXPECT_TRUE(history.ContainsOrigin(200u));
+    EXPECT_FALSE(history.Read(0u, 199u - 7u, sample));
+}
+
+TEST(ChannelMixerHistory, MissingChannelCannotPublishStaleStereoCoverage)
+{
+    ChannelMixerParams params;
+    params.NumInputChannels = 2u; params.NumOutputChannels = 1u;
+    params.InputBufferSize = 12u; params.OutputBufferSize = 4u;
+    ChannelMixer mixer(params);
+    std::array<float, 8> stereo{ 1, 10, 2, 20, 3, 30, 4, 40 };
+    mixer.FromAdc(stereo.data(), 2u, 4u);
+    mixer.ObserveInputHistory(100u, 4u, 3u, true);
+    std::array<float, 4> mono{ 5, 6, 7, 8 };
+    mixer.FromAdc(mono.data(), 1u, 4u);
+    const auto missing = mixer.ObserveInputHistory(104u, 4u, 3u, true);
+    float sample = 0.0f;
+    EXPECT_FALSE(missing.Read(1u, 104u - 3u, sample));
+    mixer.FromAdc(stereo.data(), 2u, 4u);
+    const auto resumed = mixer.ObserveInputHistory(108u, 4u, 3u, true);
+    ASSERT_TRUE(resumed.Read(1u, 108u - 3u, sample));
+    EXPECT_FLOAT_EQ(10.0f, sample);
+    EXPECT_FALSE(resumed.Read(1u, 107u - 3u, sample));
+}
+
+TEST(ChannelMixerHistory, FreshOriginsRemainEligibleInLongRunningStream)
+{
+    ChannelMixerParams params;
+    params.NumInputChannels = 1u; params.NumOutputChannels = 1u;
+    params.InputBufferSize = 4u; params.OutputBufferSize = 4u;
+    ChannelMixer mixer(params);
+    std::array<float, 4> input{ 1, 2, 3, 4 };
+    mixer.FromAdc(input.data(), 1u, 4u);
+    mixer.ObserveInputHistory(100u, 4u, 3u, true);
+    constexpr std::uint64_t lateBoundary = 0x180000064ull;
+    mixer.FromAdc(input.data(), 1u, 4u);
+    const auto history = mixer.ObserveInputHistory(lateBoundary, 4u, 3u, true);
+    EXPECT_TRUE(history.ContainsOrigin(static_cast<std::uint32_t>(lateBoundary)));
+    EXPECT_FALSE(history.ContainsOrigin(static_cast<std::uint32_t>(lateBoundary + 5u)));
+    float sample = 0.0f;
+    ASSERT_TRUE(history.Read(0u, static_cast<std::uint32_t>(lateBoundary - 3u), sample));
+    EXPECT_FLOAT_EQ(1.0f, sample);
 }

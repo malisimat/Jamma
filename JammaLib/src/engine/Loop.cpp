@@ -400,10 +400,11 @@ void Loop::EndWrite(unsigned int numSamps,
 	}
 }
 
-// Only called when outputting to DAC
+// Shared by DAC and recorded-only bounce readers. Only DAC supplies context.
 unsigned int Loop::ReadBlock(float* outBuf,
 	int sampOffset,
-	unsigned int numSamps)
+	unsigned int numSamps, const audio::DacRenderContext* dac,
+    std::uint32_t trigger, std::int64_t delay, unsigned int channel)
 {
 	auto playState = _playState.load(std::memory_order_acquire);
 	auto loopLength = _loopLength.load(std::memory_order_relaxed);
@@ -417,7 +418,6 @@ unsigned int Loop::ReadBlock(float* outBuf,
 
 	const auto sourceGeneration = AudioSourceGeneration();
 	auto peak = 0.0f;
-	auto bufBankSize = _bufferBank.Length();
 	auto bufSize = loopLength + constants::MaxLoopFadeSamps;
 
 	// _playIndex is always within range:
@@ -443,8 +443,34 @@ unsigned int Loop::ReadBlock(float* outBuf,
 	if (index < constants::MaxLoopFadeSamps)
 		index += loopLength;
 
-	if (_triggerCapture && !TriggerCaptureReady(index - constants::MaxLoopFadeSamps, numSamps))
-		return 0u;
+    const bool ready = !_triggerCapture || TriggerCaptureReady(index - constants::MaxLoopFadeSamps, numSamps);
+    const bool provisional = !ready && dac && CanUseTemporaryPlayback() && dac->History.ContainsOrigin(trigger);
+    if (!ready && !provisional) return 0u;
+    // Read logical extent after the readiness acquire, including normalization.
+    const auto bufBankSize = _bufferBank.Length();
+    // Snapshot normalization before selecting a bank address. While false, never
+    // touch its destination tail: the job thread may be copying it concurrently.
+    const bool normalized = provisional && _triggerCaptureNormalized.load(std::memory_order_acquire);
+    const auto through = provisional ? _triggerAdcThrough.load(std::memory_order_acquire) : 0;
+    const auto readSource = [&](unsigned long storage, unsigned int frame) noexcept {
+        if (!provisional) return _ReadAudioSpectralSample(storage, frame, sourceGeneration);
+        const auto f = static_cast<std::int64_t>(constants::MaxLoopFadeSamps);
+        auto selected = static_cast<std::int64_t>(storage);
+        if (selected >= f)
+        {
+            // Selected pass is [begin,begin+L). Tail content lives in prefix
+            // storage until normalization; it is never another captured pass.
+            if (selected >= _triggerCaptureBegin + loopLength) selected -= loopLength;
+            if (normalized) return _bufferBank[storage];
+        }
+        else if (selected < _triggerCaptureBegin) return 0.0f; // seam padding
+        if (selected >= _triggerCaptureBegin && selected < through)
+            return _bufferBank[static_cast<unsigned long>(selected)];
+        float sample = 0.0f;
+        const auto physical = trigger + static_cast<std::uint32_t>(selected - f - delay);
+        dac->History.Read(channel, physical, sample);
+        return sample;
+    };
 
 	// Check if we are inside crossfading region at any point
 	auto isXfadeRegion = (index + numSamps) >= (bufSize - _loopParams.FadeSamps);
@@ -461,15 +487,15 @@ unsigned int Loop::ReadBlock(float* outBuf,
 			auto isXfade = (startIndex + i) >= (bufSize - _loopParams.FadeSamps);
 			isXfade &= index < bufSize;
 
-			if (index < bufBankSize)
+			if (provisional || index < bufBankSize)
 			{
-				auto samp = _ReadAudioSpectralSample(index, i, sourceGeneration);
+				auto samp = readSource(index, i);
 
 				if (isXfade)
 				{
 					auto xfadeIndex = (startIndex + i) - (bufSize - _loopParams.FadeSamps);
 					auto xfadeBufIndex = constants::MaxLoopFadeSamps + xfadeIndex - _loopParams.FadeSamps;
-					auto xfadeSamp = _ReadAudioSpectralSample(xfadeBufIndex, i, sourceGeneration);
+					auto xfadeSamp = readSource(xfadeBufIndex, i);
 
 					samp = _hanning->Mix(xfadeSamp, samp, xfadeIndex);
 				}
@@ -494,9 +520,9 @@ unsigned int Loop::ReadBlock(float* outBuf,
 		// Non-crossfade: fill output buffer from BufferBank, handling wrap-around
 		for (auto i = 0u; i < sampsToWrite; i++)
 		{
-			if (index < bufBankSize)
+			if (provisional || index < bufBankSize)
 			{
-				outBuf[i] = _ReadAudioSpectralSample(index, i, sourceGeneration);
+				outBuf[i] = readSource(index, i);
 
 				if (std::abs(outBuf[i]) > peak)
 					peak = std::abs(outBuf[i]);
@@ -541,7 +567,8 @@ void Loop::ClearRecordedPlaybackDelay() noexcept
 void Loop::WriteBlock(const std::shared_ptr<MultiAudioSink> dest,
 	const std::shared_ptr<base::BounceWriter> bounceWriter,
 	int sampOffset,
-	unsigned int numSamps)
+	unsigned int numSamps, const audio::DacRenderContext* dac,
+    std::uint32_t trigger, std::int64_t delay, unsigned int channel)
 {
 	// Mixer will stereo spread the mono wav
 	// and adjust level
@@ -559,7 +586,7 @@ void Loop::WriteBlock(const std::shared_ptr<MultiAudioSink> dest,
 
 	// Read source data from BufferBank into stack-allocated temp buffer
 	float tempBuf[constants::MaxBlockSize];
-	auto sampsToWrite = ReadBlock(tempBuf, sampOffset, numSamps);
+	auto sampsToWrite = ReadBlock(tempBuf, sampOffset, numSamps, bounceWriter ? nullptr : dac, trigger, delay, channel);
 	if (sampsToWrite == 0u && bounceWriter == nullptr)
 		ClearRecordedPlaybackDelay();
 
@@ -1278,6 +1305,18 @@ bool Loop::SetTriggerCaptureLength(unsigned long length) noexcept
 		|| end > constants::MaxLoopBufferSize) return false;
 	_triggerCaptureEnd.store(end, std::memory_order_release);
 	return true;
+}
+
+bool Loop::CanUseTemporaryPlayback() const noexcept
+{
+    // Prepass padding below begin has no published coverage. Leave fades
+    // touching it on the recorded-only route rather than inventing a seam leg.
+    return _triggerCapture && _triggerCaptureRequiresAdc && !_triggerCaptureRequiresBounce
+        && _loopParams.FadeSamps <= constants::MaxLoopFadeSamps - _triggerCaptureBegin
+        && TriggerCaptureCoverageValid()
+        && (_playState.load(std::memory_order_acquire) == STATE_PLAYINGRECORDING
+            || _playState.load(std::memory_order_acquire) == STATE_PLAYING)
+        && !_isPunchInActive.load(std::memory_order_acquire) && !_activeAudioSpectral && !_previousAudioSpectral;
 }
 
 bool Loop::TriggerCaptureComplete() const noexcept

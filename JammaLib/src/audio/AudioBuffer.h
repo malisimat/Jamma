@@ -6,6 +6,7 @@
 #include <iostream>
 #include "../../include/Constants.h"
 #include "AudioSource.h"
+#include "InputHistory.h"
 
 namespace audio
 {
@@ -36,6 +37,8 @@ namespace audio
 
 		unsigned int SampsRecorded() const;
 		unsigned int BufSize() const;
+        InputHistoryChannel HistoryChannel() const noexcept
+        { return {_buffer.data(), static_cast<unsigned int>(_buffer.size()), static_cast<unsigned int>(_writeIndex.load(std::memory_order_relaxed))}; }
 
 		const float& operator[](unsigned int index) const;
 		unsigned int Delay(unsigned int sampsDelay);

@@ -1,4 +1,5 @@
 #pragma once
+#include "../audio/InputHistory.h"
 
 // Audio recording/playback entity within a LoopTake; owns its buffers, logical
 // length, read/write positions, fades, and loop-local phase.
@@ -215,14 +216,16 @@ namespace engine
 		// Pure data-out method — no destination parameter.
 		unsigned int ReadBlock(float* outBuf,
 			int sampOffset,
-			unsigned int numSamps);
+			unsigned int numSamps, const audio::DacRenderContext* dac = nullptr,
+            std::uint32_t trigger = 0u, std::int64_t delay = 0, unsigned int channel = 0u);
 
 		// Reads source data via ReadBlock, then routes to destination
 		// via mixer->WriteBlock → behaviour->ApplyBlock → dest->OnBlockWriteChannel.
 		void WriteBlock(const std::shared_ptr<base::MultiAudioSink> dest,
 			const std::shared_ptr<base::BounceWriter> bounceWriter,
 			int sampOffset,
-			unsigned int numSamps);
+			unsigned int numSamps, const audio::DacRenderContext* dac = nullptr,
+            std::uint32_t trigger = 0u, std::int64_t delay = 0, unsigned int channel = 0u);
 		virtual void EndMultiPlay(unsigned int numSamps) override;
 		virtual void OnBlockWrite(const base::AudioWriteRequest& request, int writeOffset) override;
 		virtual void EndWrite(unsigned int numSamps,
@@ -352,6 +355,7 @@ namespace engine
 		void SetTriggerCaptureCursor(std::int64_t cursor) noexcept;
 		bool SetTriggerCaptureLength(unsigned long length) noexcept;
 		bool TriggerCaptureComplete() const noexcept;
+        bool CanUseTemporaryPlayback() const noexcept;
 		bool TriggerCaptureCoverageValid() const noexcept { return _triggerCaptureCoverageValid.load(std::memory_order_acquire); }
 		bool TriggerCaptureReady(unsigned long bodyPhase, unsigned int count) const noexcept;
 		void NormalizeTriggerCapture();

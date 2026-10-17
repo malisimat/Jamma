@@ -23,6 +23,8 @@ namespace audio
 		public:
 			void SetNumChannels(unsigned int numChans, unsigned int bufSize);
 			const std::shared_ptr<audio::AudioBuffer> Channel(unsigned int channel);
+            InputHistoryChannel HistoryChannel(unsigned int channel) const noexcept
+            { return _buffers[channel]->HistoryChannel(); }
 
 		protected:
 			std::vector<std::shared_ptr<AudioBuffer>> _buffers;
@@ -68,11 +70,19 @@ namespace audio
 		const std::shared_ptr<base::MultiAudioSource> Source();
 		const std::shared_ptr<base::MultiAudioSink> Sink();
 		void InitPlay(unsigned int delaySamps, unsigned int blockSize);
+        // Callback metadata only; these never reset the capture/playback ring.
+        InputHistoryView ObserveInputHistory(std::uint64_t blockStart, unsigned int count,
+            unsigned int latency, bool ingested) noexcept;
 
 	public:
 		static const unsigned int DefaultBufferSize = 3000;
 
 	protected:
+        std::vector<InputHistoryChannel> _historyChannels;
+        unsigned int _historyValid = 0;
+        std::uint64_t _historyHead = 0, _historyEpoch = 0;
+        bool _historyStarted = false;
+        unsigned int _historyIngestedFrames = 0;
 		std::shared_ptr<AdcChannelMixer> _adcMixer;
 		std::shared_ptr<DacChannelMixer> _dacMixer;
 	};

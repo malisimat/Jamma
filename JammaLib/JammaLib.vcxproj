@@ -281,6 +281,7 @@
     <ClInclude Include="src\engine\LoopRemote.h" />
     <ClInclude Include="src\base\MultiAudioSource.h" />
     <ClInclude Include="src\audio\AudioBuffer.h" />
+    <ClInclude Include="src\audio\InputHistory.h" />
     <ClInclude Include="src\audio\PlaybackDelay.h" />
     <ClInclude Include="src\audio\AudioMixer.h" />
     <ClInclude Include="src\audio\CaptureSourceMuteControl.h" />

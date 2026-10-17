@@ -1,4 +1,5 @@
 #pragma once
+#include "../audio/InputHistory.h"
 
 // Recorded performance layer within a Station; owns take state, MIDI material,
 // timing anchors, effects, and its Loops without owning remote follow policy.
@@ -130,7 +131,7 @@ namespace engine
 		void WriteBlock(const std::shared_ptr<base::MultiAudioSink> dest,
 			const std::shared_ptr<base::BounceWriter> bounceWriter,
 			int indexOffset,
-			unsigned int numSamps);
+			unsigned int numSamps, const audio::DacRenderContext* dac = nullptr);
 		void SetActiveBounce(std::shared_ptr<LoopTake> sourceTake,
 			std::shared_ptr<base::BounceWriter> writer) noexcept;
 		void ProcessActiveBounce(int sourceOffset, unsigned int numSamps);
@@ -488,6 +489,7 @@ namespace engine
 			// Snapshot pins keep retired loops alive until the job thread reclaims the state.
 			std::vector<std::shared_ptr<Loop>> Loops;
 			std::vector<unsigned int> RecordInputChannels;
+            bool OrdinaryAudioCapture = false;
 			std::vector<std::shared_ptr<audio::AudioMixer>> AudioMixers;
 			std::vector<std::shared_ptr<audio::AudioBuffer>> AudioBuffers;
 			std::vector<float> VstBlockScratch;
@@ -604,7 +606,8 @@ namespace engine
         std::atomic<std::uint64_t> _midiDevicePhaseObservation{0u}; // callback publishes coherent device sample + phase
         unsigned long _MidiPhaseAtDeviceSample(std::uint32_t sample, unsigned long length) const noexcept;
         std::uint32_t _MidiPhysicalCaptureOffset(std::uint32_t sample) const noexcept;
-		TriggerCaptureTiming _triggerCaptureTiming;
+		bool _ordinaryAudioCapture = false; // structural owner, published in AudioState
+        TriggerCaptureTiming _triggerCaptureTiming;
 		bool _triggerCaptureConfigured = false; // immutable after structural publication
 		std::atomic<std::uint32_t> _captureBoundarySample{ 0u };
 		std::atomic<bool> _audioCaptureAdmitted{ true };

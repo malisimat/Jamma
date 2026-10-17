@@ -18,11 +18,16 @@ void ChannelMixer::SetParams(ChannelMixerParams chanMixParams)
 {
 	_adcMixer->SetNumChannels(chanMixParams.NumInputChannels, chanMixParams.InputBufferSize);
 	_dacMixer->SetNumChannels(chanMixParams.NumOutputChannels, chanMixParams.OutputBufferSize);
+    _historyChannels.resize(chanMixParams.NumInputChannels);
+    _historyValid = 0;
+    _historyStarted = false;
+    _historyIngestedFrames = 0;
 }
 
 void ChannelMixer::FromAdc(float* inBuf, unsigned int numChannels, unsigned int numSamps)
 {
-	if (numSamps < 1 || numChannels < 1)
+	_historyIngestedFrames = inBuf && numChannels == _historyChannels.size() ? numSamps : 0u;
+	if (!inBuf || numSamps < 1 || numChannels < 1)
 		return;
 
 	for (auto chan = 0u; chan < _adcMixer->NumOutputChannels(Audible::AUDIOSOURCE_ADC); chan++)
@@ -43,6 +48,28 @@ void ChannelMixer::FromAdc(float* inBuf, unsigned int numChannels, unsigned int 
 			buf->EndWrite(numSamps, true);
 		}
 	}
+}
+
+InputHistoryView ChannelMixer::ObserveInputHistory(std::uint64_t start, unsigned int count,
+    unsigned int latency, bool ingested) noexcept
+{
+    ingested = ingested && count > 0 && count == _historyIngestedFrames;
+    _historyIngestedFrames = 0;
+    if (!_historyStarted) { _historyEpoch = start; _historyStarted = true; }
+    if (!ingested || start != _historyHead) _historyValid = 0;
+    _historyHead = start + count;
+    if (!ingested) return {};
+    unsigned int capacity = 0;
+    for (auto channel = 0u; channel < _historyChannels.size(); ++channel)
+    {
+        _historyChannels[channel] = _adcMixer->HistoryChannel(channel);
+        capacity = channel == 0 ? _historyChannels[channel].Capacity :
+            (std::min)(capacity, _historyChannels[channel].Capacity);
+    }
+    _historyValid = static_cast<unsigned int>((std::min)(static_cast<std::uint64_t>(capacity),
+        static_cast<std::uint64_t>(_historyValid) + count));
+    return {_historyChannels.data(), static_cast<unsigned int>(_historyChannels.size()),
+        _historyValid, latency, _historyHead, _historyEpoch};
 }
 
 void ChannelMixer::InitPlay(unsigned int delaySamps, unsigned int blockSize)

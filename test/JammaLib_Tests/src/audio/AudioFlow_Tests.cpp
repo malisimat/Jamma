@@ -460,6 +460,261 @@ TEST(AudioFlow, OverdubPreservesSourceSlotsAfterInputRouteShrinks)
 	}
 }
 
+// Deterministic additive overdub writer. The production capture routing, cursor,
+// coverage, completion and render paths below remain unchanged by the fixture.
+class AudioFlowAdditiveBounceWriter final : public base::BounceWriter
+{
+public:
+	void WriteBlock(const std::shared_ptr<base::MultiAudioSink> dest,
+		const float* samples, unsigned int count, unsigned int channel) override
+	{
+		AudioWriteRequest request;
+		request.samples = samples; request.numSamps = count; request.stride = 1u;
+		request.fadeNew = 1.0f; request.fadeCurrent = 1.0f;
+		request.source = Audible::AUDIOSOURCE_BOUNCE;
+		dest->OnBlockWriteChannel(channel, request, 0);
+	}
+};
+
+class AudioFlowTemporaryPlaybackRegression
+{
+public:
+	struct Result
+	{
+		std::vector<float> Exported, Dac;
+		std::vector<bool> Complete;
+		std::vector<unsigned int> CompletionEdges;
+		unsigned int HistoryReads = 0u;
+		bool DelayedPunchOpened = false, DelayedPunchClosed = false;
+	};
+
+	static Result CapturePunch(bool temporary, int delay, bool productionTrigger = false)
+	{
+		constexpr unsigned int trigger = 1024u, length = 2048u;
+		constexpr unsigned int inputLatency = 11u, outputLatency = 23u, block = 128u;
+		io::UserConfig config;
+		config.Audio.SampleRate = 48000u;
+		const auto age = config.TriggerLoopAlignmentSamps(48000u);
+		constexpr unsigned int punchStart = trigger + 333u, punchEnd = trigger + 1031u;
+		const auto seam = delay > 0 ? static_cast<unsigned int>(delay + (productionTrigger ? 480 : 10)) : 0u;
+		const auto deadline = trigger + length - seam + age;
+		auto station = MakeStation(1u);
+		auto source = MakeTake(); source->SetNumBusChannels(1u);
+		source->Record({}, "old");
+		auto sourceLoop = source->AddLoop(0u, "old"); sourceLoop->Record();
+		std::vector<float> old(constants::MaxLoopFadeSamps + length, 0.0f);
+		old[constants::MaxLoopFadeSamps + 77u] = 0.25f;
+		WriteLoopSamples(sourceLoop, old);
+		source->Play(constants::MaxLoopFadeSamps, length, 0u); source->CommitChanges();
+		std::shared_ptr<LoopTake> target;
+		station->AddTake(source);
+		if (!productionTrigger)
+		{
+			target = MakeTake(); target->SetNumBusChannels(1u);
+			target->ConfigureTriggerCapture({trigger, delay, 256u, age, seam});
+			target->Overdub({0u}, "new", {}, {}, source); target->CommitChanges();
+			target->SetActiveBounce(source, std::make_shared<AudioFlowAdditiveBounceWriter>());
+			station->AddTake(target);
+		}
+		station->SetVisible(true); station->SetEnabled(true); station->CommitChanges();
+		auto mixer = MakeChannelMixer(1u, age + 2u * block);
+		config.Audio.LatencyIn = inputLatency;
+		config.Audio.LatencyOut = outputLatency;
+		audio::AudioStreamParams stream;
+		stream.SampleRate = 48000u; stream.InputLatency = inputLatency; stream.OutputLatency = outputLatency;
+		engine::DualBinding activate, ditch;
+		activate.SetDown(engine::TriggerBinding(engine::TRIGGER_KEY, 49u, 1u), true);
+		ditch.SetRelease(engine::TriggerBinding(engine::TRIGGER_KEY, 50u, 0u), true);
+		TriggerParams triggerParams;
+		triggerParams.Activate = {activate}; triggerParams.Ditch = {ditch};
+		triggerParams.InputChannels = {0u}; triggerParams.PreDelayMs = static_cast<double>(delay) / 48.0;
+		auto realTrigger = std::make_shared<Trigger>(triggerParams); realTrigger->SetReceiver(station);
+		const auto key = [&](unsigned int value, unsigned int down) {
+			base::Action action; action.SetUserConfig(config); action.SetAudioParams(stream);
+			realTrigger->OnEvent(engine::TRIGGER_KEY, value, down, action);
+		};
+		Result result;
+		// Split physical and delayed edges inside nominal blocks. Real-trigger
+		// mode schedules both target state and writer fades through OnTick.
+		for (unsigned int start = 0u; start < deadline + 2u * block;)
+		{
+			unsigned int end = (std::min)(start + block, deadline + 2u * block);
+			for (const auto edge : {trigger, trigger + 1u, trigger + length, punchStart, punchEnd,
+				punchStart + age, punchEnd + age, deadline})
+				if (edge > start && edge < end) end = edge;
+			const auto count = end - start;
+			if (productionTrigger)
+			{
+				station->BeginCaptureAudioBoundary(start, start, start);
+				if (start == trigger)
+				{
+					key(50u, 1u); key(49u, 1u);
+					target = station->GetLoopTakes().back(); station->CommitChanges();
+					if (target == source) return {};
+				}
+				if (start == trigger + 1u) key(49u, 0u);
+				if (start == punchStart) key(49u, 1u);
+				if (start == punchEnd) key(49u, 0u);
+				if (start == trigger + length) { key(50u, 1u); key(49u, 1u); }
+			}
+			if (start >= trigger) target->BeginCaptureAudioBoundary(start, start, start);
+			if (!productionTrigger && start == punchStart + age) target->TriggerPunchInAudio();
+			if (!productionTrigger && start == punchEnd + age) target->TriggerPunchOutAudio();
+			if (start == punchStart + age) result.DelayedPunchOpened = target->IsPunchInActive();
+			if (start == punchEnd + age) result.DelayedPunchClosed = !target->IsPunchInActive();
+			if (!productionTrigger && start == trigger + length)
+			{
+				target->SetTriggerCaptureStop(start);
+				target->Play(constants::MaxLoopFadeSamps, length, 0u, 0, false, outputLatency);
+			}
+			std::array<float, block> input{};
+			for (auto i = 0u; i < count; ++i)
+			{
+				const auto physical = static_cast<std::int64_t>(start) + i - inputLatency;
+				if (physical == punchStart || physical == punchEnd - 1u || physical == punchStart + 350u) input[i] = 0.75f;
+				if (physical == punchStart - 1u || physical == punchEnd) input[i] = 9.0f;
+			}
+			mixer.FromAdc(input.data(), 1u, count);
+			audio::DacRenderContext dac{mixer.ObserveInputHistory(start, count, inputLatency, true)};
+			dac.History.ReadCount = &result.HistoryReads;
+			mixer.InitPlay(age - inputLatency, count);
+			mixer.Source()->SetSourceType(Audible::AUDIOSOURCE_ADC);
+			if (start >= trigger)
+			{
+				mixer.WriteToSink(station, count);
+				station->OnBounce(count, config, stream);
+				station->EndMultiWrite(count, true, Audible::AUDIOSOURCE_BOUNCE);
+			}
+			mixer.Source()->EndMultiPlay(count);
+			station->Zero(count, Audible::AUDIOSOURCE_LOOPS);
+			mixer.Sink()->Zero(count, Audible::AUDIOSOURCE_LOOPS);
+			station->WriteBlock(mixer.Sink(), nullptr, 0, count, start, temporary ? &dac : nullptr);
+			std::array<float, block> output{}; mixer.ToDac(output.data(), 1u, count);
+			result.Dac.insert(result.Dac.end(), output.begin(), output.begin() + count);
+			station->EndMultiPlay(count);
+			mixer.Sink()->EndMultiWrite(count, true, Audible::AUDIOSOURCE_LOOPS);
+			if (productionTrigger) realTrigger->OnTick(utils::Timer::GetTime(), count, config, stream);
+			if (start >= trigger)
+			{
+				result.Complete.push_back(target->GetLoops().front()->TriggerCaptureComplete());
+				for (const auto& job : target->CommitChanges())
+				{
+					if (job.JobActionType == actions::JobAction::JOB_ENDRECORDING)
+						result.CompletionEdges.push_back(end);
+					target->OnAction(job);
+				}
+			}
+			start = end;
+		}
+		result.Exported = target->GetLoops().front()->ExportSamples();
+		return result;
+	}
+};
+
+TEST(AudioFlow, TemporaryDacContextPreservesDelayedSignedPunchCaptureAndCompletion)
+{
+	for (const int delay : {-97, 0, 97})
+	{
+		SCOPED_TRACE(delay);
+		const auto disabled = AudioFlowTemporaryPlaybackRegression::CapturePunch(false, delay);
+		const auto enabled = AudioFlowTemporaryPlaybackRegression::CapturePunch(true, delay);
+		ASSERT_EQ(2048u, enabled.Exported.size());
+		EXPECT_EQ(disabled.Exported, enabled.Exported);
+		EXPECT_EQ(disabled.Dac, enabled.Dac);
+		EXPECT_EQ(disabled.Complete, enabled.Complete);
+		EXPECT_EQ(disabled.CompletionEdges, enabled.CompletionEdges);
+		EXPECT_EQ(0u, enabled.HistoryReads);
+		ASSERT_EQ(1u, enabled.CompletionEdges.size());
+		io::UserConfig config;
+		EXPECT_EQ(1024u + 2048u + config.TriggerLoopAlignmentSamps(48000u) - (delay > 0 ? delay + 10 : 0), enabled.CompletionEdges.front());
+		const auto phase = [delay](int elapsed) { return static_cast<unsigned int>((elapsed + delay + 2048) % 2048); };
+		EXPECT_FLOAT_EQ(0.75f, enabled.Exported[phase(333)]);
+		EXPECT_FLOAT_EQ(0.75f, enabled.Exported[phase(1030)]);
+		EXPECT_FLOAT_EQ(0.0f, enabled.Exported[phase(332)]);
+		EXPECT_FLOAT_EQ(0.0f, enabled.Exported[phase(1031)]);
+		EXPECT_EQ(enabled.Exported.end(), std::find(enabled.Exported.begin(), enabled.Exported.end(), 9.0f));
+	}
+}
+
+TEST(AudioFlow, RealTriggerDelayedPunchWriterAndStationRoutingMatchWithTemporaryPlayback)
+{
+	for (const int delay : {-97, 0, 97})
+	{
+		SCOPED_TRACE(delay);
+		const auto disabled = AudioFlowTemporaryPlaybackRegression::CapturePunch(false, delay, true);
+		const auto enabled = AudioFlowTemporaryPlaybackRegression::CapturePunch(true, delay, true);
+		ASSERT_EQ(2048u, enabled.Exported.size());
+		EXPECT_EQ(disabled.Exported, enabled.Exported);
+		EXPECT_EQ(disabled.Dac, enabled.Dac);
+		EXPECT_EQ(disabled.Complete, enabled.Complete);
+		EXPECT_EQ(disabled.CompletionEdges, enabled.CompletionEdges);
+		EXPECT_TRUE(enabled.DelayedPunchOpened);
+		EXPECT_TRUE(enabled.DelayedPunchClosed);
+		EXPECT_EQ(0u, enabled.HistoryReads);
+		ASSERT_EQ(1u, enabled.CompletionEdges.size());
+		io::UserConfig config;
+		const auto seam = delay > 0 ? delay + 480u : 0u;
+		EXPECT_EQ(1024u + 2048u + config.TriggerLoopAlignmentSamps(48000u) - seam, enabled.CompletionEdges.front());
+		EXPECT_GT(*std::max_element(enabled.Exported.begin(), enabled.Exported.end()), 0.25f);
+		EXPECT_EQ(enabled.Exported.end(), std::find(enabled.Exported.begin(), enabled.Exported.end(), 9.0f));
+	}
+}
+
+TEST(AudioFlow, BounceCannotBorrowTemporarySamplesFromOrdinaryAdcSourceStillCapturing)
+{
+	constexpr unsigned int trigger = 1024u, length = 2048u, count = 16u;
+	constexpr unsigned int age = 512u;
+	for (const bool temporary : {false, true})
+	{
+		LoopTakeParams params; params.Size = {100, 100}; params.FadeSamps = 0u;
+		MergeMixBehaviourParams merge;
+		auto source = std::make_shared<LoopTake>(params, LoopTake::GetMixerParams(params.Size, merge));
+		source->SetNumBusChannels(1u);
+		source->ConfigureTriggerCapture({trigger, 0, 256u, age, 0u});
+		source->Record({0u}, "finishing"); source->CommitChanges();
+		std::array<float, 128u> delayedInput{}; delayedInput.fill(0.25f);
+		for (auto start = trigger; start < trigger + length; start += 128u)
+		{
+			source->BeginCaptureAudioBoundary(start, start, start);
+			AudioWriteRequest request;
+			request.samples = delayedInput.data(); request.numSamps = 128u; request.stride = 1u;
+			request.fadeNew = 1.0f; request.fadeCurrent = 1.0f;
+			request.source = Audible::AUDIOSOURCE_ADC;
+			source->OnBlockWriteChannel(0u, request, 0);
+			source->EndMultiWrite(128u, true, Audible::AUDIOSOURCE_ADC);
+		}
+		source->BeginCaptureAudioBoundary(trigger + length, trigger + length, trigger + length);
+		source->SetTriggerCaptureStop(trigger + length);
+		source->Play(constants::MaxLoopFadeSamps, length, 0u);
+		source->BeginCaptureAudioBoundary(trigger + length, trigger + length, trigger + length);
+		source->GetLoops().front()->SetBodyPlayIndex(length - 32u);
+		ASSERT_EQ(LoopTake::STATE_PLAYINGRECORDING, source->TakeState());
+		ASSERT_FALSE(source->AudioCaptureReady(count));
+		std::array<float, length> samples{}; samples.fill(0.75f);
+		audio::InputHistoryChannel channel{samples.data(), length, 0u};
+		audio::DacRenderContext dac{{&channel, 1u, length, 0u, trigger + length + count, trigger}};
+		unsigned int historyReads = 0u;
+		dac.History.ReadCount = &historyReads;
+		auto target = MakeTake(); target->Overdub({0u}, "target", {}, {}, source); target->CommitChanges();
+		auto writer = std::make_shared<AudioFlowAdditiveBounceWriter>();
+		// Even an explicit context at this shared API must be rejected by bounce.
+		source->WriteBlock(target, writer, 0, count, temporary ? &dac : nullptr);
+		EXPECT_EQ(0u, historyReads);
+		EXPECT_FALSE(source->AudioCaptureReady(count));
+		EXPECT_FALSE(source->GetLoops().front()->TriggerCaptureComplete());
+		auto capture = std::make_shared<AudioFlowCaptureMultiSink>(count);
+		source->Zero(count, Audible::AUDIOSOURCE_LOOPS);
+		source->WriteBlock(capture, nullptr, 0, count, temporary ? &dac : nullptr);
+		EXPECT_EQ(temporary, HasNonZero(capture->GetSink()->Samples.data(), count));
+		EXPECT_EQ(temporary ? count : 0u, historyReads);
+		target->Play(constants::MaxLoopFadeSamps, length, 0u);
+		target->EndRecording();
+		const auto exported = target->GetLoops().front()->ExportSamples();
+		ASSERT_EQ(length, exported.size());
+		EXPECT_EQ(exported.end(), std::find(exported.begin(), exported.end(), 0.75f));
+	}
+}
+
 // 3. Two channels: write to both channels, verify both loops record.
 TEST(AudioFlow, TwoChannel_WriteReachesBothLoops)
 {

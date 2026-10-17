@@ -41,7 +41,160 @@ public:
 	{
 		_hasMidiSceneAnchor.store(false, std::memory_order_release);
 	}
+
+    void PublishCompletionStateBeforeLoopNormalization()
+    {
+        // Exact first operation of EndRecording, paused before its loop traversal.
+        _state.store(STATE_PLAYING, std::memory_order_release);
+    }
+
+    void OnBlockWriteChannel(unsigned int channel, const AudioWriteRequest& request, int offset) override
+    {
+        if (request.source == Audible::AUDIOSOURCE_MIXER)
+            RenderedSamples += request.numSamps;
+        LoopTake::OnBlockWriteChannel(channel, request, offset);
+    }
+
+    unsigned int RenderedSamples = 0u;
 };
+
+TEST(TemporaryPlayback, CompletionPublicationBetweenChannelNormalizationsKeepsRendering)
+{
+    LoopTakeParams params;
+    params.Size = {100, 100};
+    params.FadeSamps = 0u;
+    audio::MergeMixBehaviourParams merge;
+    auto take = std::make_shared<TimingTestLoopTake>(params, LoopTake::GetMixerParams(params.Size, merge));
+    constexpr auto trigger = 1000u;
+    constexpr auto length = 64u;
+    constexpr auto count = 4u;
+    take->ConfigureTriggerCapture({trigger, -8, 10000u, 0u, 0u});
+    take->Record({0u, 1u}, "completion-interleave");
+    take->CommitChanges();
+    take->BeginCaptureAudioBoundary(trigger, 0u, 0u);
+    take->Play(constants::MaxLoopFadeSamps, length, 0u);
+    const auto loops = take->GetLoops();
+    ASSERT_EQ(2u, loops.size());
+    std::vector<float> selected(length, 0.25f);
+    AudioWriteRequest request;
+    request.samples = selected.data();
+    request.numSamps = length;
+    request.fadeNew = 1.0f;
+    request.fadeCurrent = 0.0f;
+    request.stride = 1u;
+    request.source = Audible::AUDIOSOURCE_ADC;
+    for (const auto& loop : loops)
+    {
+        loop->OnBlockWrite(request, 0);
+        loop->SetBodyPlayIndex(length - 8u);
+        ASSERT_TRUE(loop->TriggerCaptureComplete());
+    }
+    ASSERT_FALSE(take->AudioCaptureReady(count));
+    audio::InputHistoryChannel channels[2]{};
+    const audio::DacRenderContext dac{{channels, 2u, 0u, 0u, trigger, trigger}};
+    auto destination = std::make_shared<base::MultiAudioSink>();
+    const auto render = [&]() {
+        take->RenderedSamples = 0u;
+        take->WriteBlock(destination, nullptr, 0, count, &dac);
+        EXPECT_EQ(2u * count, take->RenderedSamples);
+    };
+    render();
+    take->PublishCompletionStateBeforeLoopNormalization();
+    render();
+    loops[0]->EndRecording();
+    ASSERT_FALSE(take->AudioCaptureReady(count));
+    render();
+    loops[1]->EndRecording();
+    ASSERT_TRUE(take->AudioCaptureReady(count));
+    render();
+}
+
+TEST(TemporaryPlayback, MixedMidiOnlyCancelledAndDitchedTakesKeepRecordedOnlyRouting)
+{
+    for (auto route = 0u; route < 4u; ++route)
+    {
+        SCOPED_TRACE(route);
+        LoopTakeParams params;
+        params.Size = {100, 100};
+        params.FadeSamps = 0u;
+        audio::MergeMixBehaviourParams merge;
+        auto take = std::make_shared<TimingTestLoopTake>(params, LoopTake::GetMixerParams(params.Size, merge));
+        take->ConfigureTriggerCapture({1000u, 0, 10000u, 0u, 0u});
+        const bool midi = route < 2u;
+        take->Record(route == 1u ? std::vector<unsigned int>{} : std::vector<unsigned int>{0u},
+            "unsupported-temporary-route", midi ? std::vector<unsigned int>{0u} : std::vector<unsigned int>{},
+            midi ? std::vector<std::string>{"keys"} : std::vector<std::string>{});
+        take->CommitChanges();
+        take->BeginCaptureAudioBoundary(1000u, 0u, 0u);
+        take->Play(constants::MaxLoopFadeSamps, 64u, 0u);
+        if (route == 2u) take->CancelCapture();
+        if (route == 3u) take->Ditch();
+        unsigned int reads = 0u;
+        audio::InputHistoryChannel channel{};
+        const audio::DacRenderContext dac{{&channel, 1u, 0u, 0u, 1000u, 1000u, &reads}};
+        auto destination = std::make_shared<base::MultiAudioSink>();
+        const auto ready = take->AudioCaptureReady(4u);
+        take->WriteBlock(destination, nullptr, 0, 4u);
+        const auto baseline = take->RenderedSamples;
+        take->RenderedSamples = 0u;
+        take->WriteBlock(destination, nullptr, 0, 4u, &dac);
+        EXPECT_EQ(baseline, take->RenderedSamples);
+        EXPECT_EQ(ready, take->AudioCaptureReady(4u));
+        EXPECT_EQ(0u, reads);
+    }
+}
+
+class TemporaryTimingLoop final : public engine::Loop
+{
+public:
+    TemporaryTimingLoop(engine::LoopParams params, audio::AudioMixerParams mixer) : Loop(params, mixer) {}
+
+    bool InstallSpectralSourceForEligibilityTest()
+    {
+        auto source = std::make_shared<spectral::AudioSpectralSource>();
+        source->Identity = _audioSourceIdentity;
+        source->Generation = AudioSourceGeneration();
+        source->Layout = {64u, 64u, 0u, 48000.0f};
+        source->Samples.resize(source->Layout.StoredSampleCount(), 0.5f);
+        auto pcm = std::make_shared<spectral::AudioSpectralPcm>();
+        pcm->Source = source;
+        std::string reason;
+        auto playback = spectral::AudioSpectralPlaybackSnapshot::Create(pcm, nullptr, 1u, 1u, 1u, reason);
+        if (!playback) return false;
+        _audioSpectralPlayback.store(std::move(playback));
+        _activeAudioSpectral = _audioSpectralPlayback.borrow();
+        return static_cast<bool>(_activeAudioSpectral);
+    }
+};
+
+TEST(TemporaryPlayback, SpectralAndPrepassPaddingKeepOriginalLoopReadinessAndNeverReadHistory)
+{
+    for (const auto spectralSource : {false, true})
+    {
+        SCOPED_TRACE(spectralSource);
+        engine::LoopParams params;
+        params.FadeSamps = spectralSource ? 0u : 16u;
+        audio::WireMixBehaviourParams wire;
+        wire.Channels = {0u};
+        auto loop = std::make_shared<TemporaryTimingLoop>(params, engine::Loop::GetMixerParams({80, 80}, wire));
+        loop->Record();
+        loop->ConfigureTriggerCapture(constants::MaxLoopFadeSamps - 8, true, false);
+        ASSERT_TRUE(loop->SetTriggerCaptureLength(64u));
+        loop->Play(constants::MaxLoopFadeSamps, 64u, true);
+        if (spectralSource) ASSERT_TRUE(loop->InstallSpectralSourceForEligibilityTest());
+        ASSERT_FALSE(loop->CanUseTemporaryPlayback());
+        ASSERT_FALSE(loop->TriggerCaptureReady(0u, 4u));
+        unsigned int reads = 0u;
+        audio::InputHistoryChannel channel{};
+        const audio::DacRenderContext dac{{&channel, 1u, 0u, 0u, 1000u, 1000u, &reads}};
+        float baseline[4] = {-1.0f, -1.0f, -1.0f, -1.0f};
+        float enabled[4] = {-1.0f, -1.0f, -1.0f, -1.0f};
+        EXPECT_EQ(loop->ReadBlock(baseline, 0, 4u), loop->ReadBlock(enabled, 0, 4u, &dac, 1000u, -8));
+        for (auto i = 0u; i < 4u; ++i) EXPECT_FLOAT_EQ(baseline[i], enabled[i]);
+        EXPECT_FALSE(loop->TriggerCaptureReady(0u, 4u));
+        EXPECT_EQ(0u, reads);
+    }
+}
 
 static std::shared_ptr<TimingTestLoopTake> MakeTimingTestLoopTake(const std::string& id = "take-0")
 {

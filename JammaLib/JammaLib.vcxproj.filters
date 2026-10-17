@@ -300,6 +300,9 @@
     <ClInclude Include="lib\rtmidi\RtMidi.h">
       <Filter>lib\rtmidi</Filter>
     </ClInclude>
+    <ClInclude Include="src\audio\InputHistory.h">
+      <Filter>src\audio</Filter>
+    </ClInclude>
     <ClInclude Include="src\audio\AudioBuffer.h">
       <Filter>src\audio</Filter>
     </ClInclude>

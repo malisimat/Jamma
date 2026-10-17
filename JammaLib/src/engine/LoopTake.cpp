@@ -689,7 +689,7 @@ bool LoopTake::ConfigureRecordedPlaybackCompensation(
 void LoopTake::WriteBlock(const std::shared_ptr<MultiAudioSink> dest,
 	const std::shared_ptr<base::BounceWriter> bounceWriter,
 	int indexOffset,
-	unsigned int numSamps)
+	unsigned int numSamps, const audio::DacRenderContext* dac)
 {
 	if (_captureCancelled.load(std::memory_order_acquire))
 	{
@@ -701,7 +701,7 @@ void LoopTake::WriteBlock(const std::shared_ptr<MultiAudioSink> dest,
 	}
     if (!bounceWriter && (MidiTriggerCapturePending() || FirstMasterActivationPending() ||
         (_triggerCaptureConfigured && !_capturePlaybackPrepared.load(std::memory_order_acquire)))) return;
-    if (!bounceWriter && !AudioCaptureReady(numSamps, indexOffset)) return;
+
 	if (nullptr == dest)
 		return;
 	
@@ -716,9 +716,24 @@ void LoopTake::WriteBlock(const std::shared_ptr<MultiAudioSink> dest,
 	if (!state)
 		return;
 
-	for (const auto& loop : state->Loops)
-		if (loop)
-			loop->WriteBlock(loopDest, bounceWriter, indexOffset, numSamps);
+    const bool captureReady = bounceWriter || AudioCaptureReady(numSamps, indexOffset);
+    const bool provisional = !captureReady && dac && state->OrdinaryAudioCapture
+        && (_state.load(std::memory_order_acquire) == STATE_PLAYINGRECORDING
+            || _state.load(std::memory_order_acquire) == STATE_PLAYING)
+        && _audioCaptureAdmitted.load(std::memory_order_acquire)
+        && !_isPunchInActive.load(std::memory_order_acquire)
+        && !_isMidiPunchInActive.load(std::memory_order_acquire)
+        && state->RecordInputChannels.size() == state->Loops.size()
+        && std::all_of(state->Loops.begin(), state->Loops.end(),
+            [](const auto& loop) { return loop && loop->CanUseTemporaryPlayback(); })
+        && _triggerCaptureTiming.TriggerSample.has_value()
+        && dac->History.ContainsOrigin(*_triggerCaptureTiming.TriggerSample);
+    if (!captureReady && !provisional) return;
+    for (auto i = 0u; i < state->Loops.size(); ++i)
+        if (const auto& loop = state->Loops[i])
+            loop->WriteBlock(loopDest, bounceWriter, indexOffset, numSamps, provisional ? dac : nullptr,
+                _triggerCaptureTiming.TriggerSample.value_or(0u), _triggerCaptureTiming.DelaySamps,
+                provisional ? state->RecordInputChannels[i] : 0u);
 	if (IsMuted())
 		for (const auto& loop : state->Loops)
 			if (loop) loop->ClearRecordedPlaybackDelay();
@@ -1963,6 +1978,7 @@ void LoopTake::Record(std::vector<unsigned int> channels,
 	_midiRecordSeededHeld.clear();
 	_backLoops.clear();
 	_recordInputChannels = channels;
+    _ordinaryAudioCapture = midiChannels.empty();
 	_RemoveMidiModelChildren();
 	_ResetMidiOverdubSession();
 
@@ -2798,6 +2814,7 @@ void LoopTake::Overdub(std::vector<unsigned int> channels,
 	_midiRecordSeededHeld.clear();
 	_backLoops.clear();
 	_recordInputChannels = channels;
+    _ordinaryAudioCapture = false;
 	_RemoveMidiModelChildren();
 
 	// Bounce addresses source loop slots. Preserve those slots when the current
@@ -3567,6 +3584,7 @@ void LoopTake::_PublishAudioState()
 	for (const auto& loop : _loops)
 		state->Loops.push_back(loop);
 	state->RecordInputChannels = _recordInputChannels;
+    state->OrdinaryAudioCapture = _ordinaryAudioCapture && _triggerCaptureConfigured && _midiLoops.empty();
 	state->AudioMixers = _audioMixers;
 	state->AudioBuffers = _audioBuffers;
 	state->VstBlockScratch.resize(state->AudioBuffers.size() * constants::MaxBlockSize);

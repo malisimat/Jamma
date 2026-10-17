@@ -595,7 +595,7 @@ void Station::WriteBlock(const std::shared_ptr<base::MultiAudioSink> dest,
 	const std::shared_ptr<Trigger> trigger,
 	int indexOffset,
 	unsigned int numSamps,
-	std::uint32_t blockStartSample)
+	std::uint32_t blockStartSample, const audio::DacRenderContext* dac)
 {
 	auto ptr = Sharable::shared_from_this();
 	auto state = _BorrowAudioState();
@@ -607,7 +607,7 @@ void Station::WriteBlock(const std::shared_ptr<base::MultiAudioSink> dest,
 		if (!take)
 			continue;
 
-		take->WriteBlock(stationSink, trigger, indexOffset, numSamps);
+		take->WriteBlock(stationSink, trigger, indexOffset, numSamps, trigger ? nullptr : dac);
 	}
 
 	auto sampsToRead = (numSamps <= constants::MaxBlockSize) ? numSamps : constants::MaxBlockSize;

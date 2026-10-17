@@ -1189,6 +1189,8 @@ void AudioHost::PublishAudioCallbackProgress(std::uint64_t blockStartSample,
 			}
 		}
 
+        const audio::DacRenderContext dacContext{_channelMixer->ObserveInputHistory(
+            blockStartSample, numSamps, captureInputLatency, inBuf != nullptr)};
 		_channelMixer->Source()->EndMultiPlay(numSamps);
 
 		_channelMixer->Sink()->Zero(numSamps, Audible::AUDIOSOURCE_LOOPS);
@@ -1251,7 +1253,7 @@ void AudioHost::PublishAudioCallbackProgress(std::uint64_t blockStartSample,
 				station->Zero(numSamps, Audible::AUDIOSOURCE_LOOPS);
 				ingestRemoteStation(station);
 				station->WriteBlock(_channelMixer->Sink(), nullptr, 0, numSamps,
-					static_cast<std::uint32_t>(blockStartSample));
+					static_cast<std::uint32_t>(blockStartSample), &dacContext);
 				station->EndMultiPlay(numSamps);
 			}
 

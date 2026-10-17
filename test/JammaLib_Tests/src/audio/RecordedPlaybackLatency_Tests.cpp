@@ -8,6 +8,7 @@
 
 #include "actions/JobAction.h"
 #include "audio/ChannelMixer.h"
+#include "audio/Hanning.h"
 #include "base/AudioSink.h"
 #include "engine/Station.h"
 #include "io/UserConfig.h"
@@ -43,17 +44,18 @@ public:
 class RecordedLatencyCaptureBus final : public base::MultiAudioSink
 {
 public:
-	explicit RecordedLatencyCaptureBus(unsigned int count)
-		: Sink(std::make_shared<RecordedLatencyCaptureSink>(count)) {}
+	explicit RecordedLatencyCaptureBus(unsigned int count, unsigned int channel = 0u)
+		: Sink(std::make_shared<RecordedLatencyCaptureSink>(count)), Channel(channel) {}
 
-	unsigned int NumInputChannels(base::Audible::AudioSourceType) const override { return 1u; }
+	unsigned int NumInputChannels(base::Audible::AudioSourceType) const override { return Channel + 1u; }
 	std::shared_ptr<RecordedLatencyCaptureSink> Sink;
+    unsigned int Channel;
 
 protected:
 	const std::shared_ptr<base::AudioSink> _InputChannel(unsigned int channel,
 		base::Audible::AudioSourceType) override
 	{
-		return channel == 0u ? Sink : nullptr;
+		return channel == Channel ? Sink : nullptr;
 	}
 };
 
@@ -947,4 +949,159 @@ TEST(RecordedPlaybackLatency, HardwareLatencyAboveHistoryAgeRetainsExactCaptureR
         + io::UserConfig::TriggerHistorySamples(constants::DefaultSampleRate).value() + 31u;
     VerifyRecordedCaptureOriginWithHardwareRuler(false, 0, 0, inputLatency);
     VerifyRecordedCaptureOriginWithHardwareRuler(true, 0, 0, inputLatency);
+}
+
+// Exercise the production additive ADC route, then compare its selected pass to
+// temporary rendering, the eventual normalized source, and an independent DSP oracle.
+TEST(RecordedPlaybackLatency, TemporaryOriginalPassMatchesRecordedAcrossHandover)
+{
+    for (const int delay : {-23, 0, 23})
+    for (const unsigned int length : {127u, 1031u})
+    for (const unsigned int inputLatency : {17u, 512u})
+    for (const bool enabled : {false, true})
+    {
+        SCOPED_TRACE(::testing::Message() << delay << " L=" << length << " I=" << inputLatency << " enabled=" << enabled);
+        constexpr unsigned int block = 32, age = 512;
+        constexpr std::uint32_t trigger = 0xffffff00u;
+        const auto seam = delay > 0 ? 39u : 0u;
+        const auto fade = delay == 0 ? 0u : 13u;
+        auto hanning = std::make_unique<audio::Hanning>(fade);
+        const auto begin = static_cast<std::int64_t>(constants::MaxLoopFadeSamps) + delay - seam;
+        const auto signal = [](std::int64_t physical, unsigned int channel) {
+            return static_cast<float>((physical * 7 + channel * 113 + 100000) % 251) / 512.0f;
+        };
+        engine::LoopTakeParams params; params.Size = {100,100}; params.FadeSamps = fade;
+        audio::MergeMixBehaviourParams merge;
+        auto take = std::make_shared<engine::LoopTake>(params, engine::LoopTake::GetMixerParams(params.Size, merge));
+        take->ConfigureTriggerCapture({trigger, delay, age, age, seam});
+        take->Record({1u,0u}, "temporary-original"); take->CommitChanges();
+        ASSERT_EQ(2u, take->GetLoops().size());
+        auto loops = take->GetLoops();
+        std::vector<std::shared_ptr<engine::Loop>> references;
+        for (auto channel : {1u,0u})
+        {
+            audio::WireMixBehaviourParams wire; wire.Channels = {0u};
+            engine::LoopParams lp; lp.FadeSamps = fade;
+            auto reference = std::make_shared<engine::Loop>(lp, engine::Loop::GetMixerParams({80,80}, wire));
+            reference->Record(); reference->ConfigureTriggerCapture(begin,true,false);
+            reference->SetTriggerCaptureCursor(begin); ASSERT_TRUE(reference->SetTriggerCaptureLength(length));
+            std::vector<float> pass(length);
+            for (auto i=0u;i<length;++i) pass[i]=signal(static_cast<std::int64_t>(i)-seam,channel);
+            base::AudioWriteRequest request; request.samples=pass.data();request.numSamps=length;
+            request.stride=1;request.fadeCurrent=1;request.fadeNew=1;request.source=base::Audible::AUDIOSOURCE_ADC;
+            reference->OnBlockWrite(request,0);reference->EndWrite(length,true);
+            reference->Play(constants::MaxLoopFadeSamps,length,true);reference->EndRecording();
+            references.push_back(reference);
+        }
+        // Compare the loop effect + software delay with an independent FIFO:
+        // a handover must neither flush the delay nor process samples twice.
+        for (auto i=0u;i<loops.size();++i)
+            if (auto loop = loops[i])
+            {
+                actions::JobAction job; job.JobActionType=actions::JobAction::JOB_LOADVST;
+                job.VstPath=L"fake-temporary-delay.dll";job.PreInitPlugin=std::make_shared<RecordedLatencyImpulsePlugin>();
+                loop->OnAction(job);loop->CommitChanges();ASSERT_TRUE(loop->ConfigureRecordedPlaybackDelay(11));
+            }
+        audio::ChannelMixer mixer({age-inputLatency+block,block,2u,1u});
+        unsigned int reads=0, audibleBlocks=0;
+        std::array<std::array<float,40>,2> expectedDelay{};
+        std::array<unsigned int,2> expectedDelayCursor{};
+        const auto finish = length-seam+age;
+        bool stopped=false, normalized=false;
+        for (std::int64_t elapsed=-static_cast<int>(age); elapsed<static_cast<std::int64_t>(finish)+128;)
+        {
+            unsigned int count=block;
+            if (elapsed<length) count=(std::min)(count,static_cast<unsigned int>(length-elapsed));
+            if (elapsed<finish) count=(std::min)(count,static_cast<unsigned int>(finish-elapsed));
+            const auto device = static_cast<std::uint64_t>(trigger)+elapsed;
+            take->BeginCaptureAudioBoundary(device,device,device);
+            if (elapsed==length && !stopped)
+            {
+                take->SetTriggerCaptureStop(trigger+length);take->Play(constants::MaxLoopFadeSamps,length,0,0,false,7);
+                stopped=true;
+            }
+            std::array<float,block*2> input{};
+            for(auto i=0u;i<count;++i) for(auto channel=0u;channel<2;++channel)
+                input[i*2+channel]=signal(elapsed+i-inputLatency,channel);
+            mixer.FromAdc(input.data(),2,count);
+            mixer.InitPlay(age-inputLatency,count);mixer.Source()->SetSourceType(base::Audible::AUDIOSOURCE_ADC);
+            mixer.WriteToSink(take,count);take->EndMultiWrite(count,true,base::Audible::AUDIOSOURCE_ADC);
+            auto history=mixer.ObserveInputHistory(device,count,inputLatency,true);history.ReadCount=&reads;
+            audio::DacRenderContext dac{history};
+            if (stopped)
+            {
+                for(auto i=0u;i<loops.size();++i)
+                {
+                    auto loop=loops[i]; auto reference=references[i];
+                    reference->SetBodyPlayIndex(loop->BodyPlayIndex());
+                    std::array<float,block> actual{},expected{},causalExpected{};
+                    const auto ready=loop->TriggerCaptureReady(loop->BodyPlayIndex(),count);
+                    const auto written=loop->ReadBlock(actual.data(),0,count,enabled?&dac:nullptr,trigger,delay,1u-i);
+                    if(enabled || ready)
+                    {
+                        ASSERT_EQ(count,written);
+                        ASSERT_EQ(count,reference->ReadBlock(expected.data(),0,count));
+                        if(elapsed+count-inputLatency >= static_cast<std::int64_t>(length-seam)) EXPECT_EQ(actual,expected);
+                        if(enabled)
+                        {
+                            const auto start=loop->BodyPlayIndex();
+                            const auto original=[&](std::int64_t storage) {
+                                if(storage >= constants::MaxLoopFadeSamps && storage >= begin+length) storage-=length;
+                                const auto physical=storage-constants::MaxLoopFadeSamps-delay;
+                                return physical < elapsed+count-inputLatency ? signal(physical,1u-i) : 0.0f;
+                            };
+                            for(auto frame=0u;frame<count;++frame)
+                            {
+                                const auto phase=(start+frame)%length;
+                                auto wanted=original(constants::MaxLoopFadeSamps+phase);
+                                if(fade && start+frame >= length-fade)
+                                {
+                                    const auto xfade=start+frame-(length-fade);
+                                    wanted=hanning->Mix(original(constants::MaxLoopFadeSamps+xfade-fade),wanted,xfade);
+                                }
+                                causalExpected[frame]=wanted;
+                                EXPECT_FLOAT_EQ(wanted,actual[frame]) << "causal frame=" << frame << " elapsed=" << elapsed;
+                            }
+                        }
+                        if(enabled) ++audibleBlocks;
+                    }
+                    else EXPECT_EQ(0u,written);
+                    if(enabled)
+                    {
+                        auto actualSink=std::make_shared<RecordedLatencyCaptureBus>(count,i);
+                        loop->WriteBlock(actualSink,nullptr,0,count,&dac,trigger,delay,1u-i);
+                        // Independent FIFO oracle for the serial 29-sample plugin
+                        // and 11-sample playback delay, including partial silence.
+                        std::vector<float> processed(count);
+                        for(auto frame=0u;frame<count;++frame)
+                        {
+                            auto& cursor=expectedDelayCursor[i];
+                            processed[frame]=expectedDelay[i][cursor];
+                            expectedDelay[i][cursor]=causalExpected[frame];
+                            cursor=(cursor+1u)%40u;
+                        }
+                        EXPECT_EQ(actualSink->Sink->Samples,processed);
+                    }
+                }
+                take->EndMultiPlay(count);
+            }
+            const auto end=elapsed+count;
+            for(const auto& loop:loops) EXPECT_EQ(end>=finish,loop->TriggerCaptureComplete());
+            if(end==finish)
+            {
+                take->EndRecording();normalized=true;
+                for(auto i=0u;i<loops.size();++i) EXPECT_EQ(loops[i]->ExportSamples(),references[i]->ExportSamples());
+            }
+            if(normalized)
+            {
+                const auto previous=reads;
+                std::array<float,block> output{};
+                for(const auto& loop:loops) EXPECT_EQ(count,loop->ReadBlock(output.data(),0,count,&dac,trigger,delay));
+                EXPECT_EQ(previous,reads); // fully ready path never consults history
+            }
+            elapsed=end;
+        }
+        if(enabled) {EXPECT_GT(audibleBlocks,0u); if(inputLatency<age && length<age) EXPECT_GT(reads,0u);}
+        else EXPECT_EQ(0u,reads);
+    }
 }

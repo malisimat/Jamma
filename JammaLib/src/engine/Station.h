@@ -1,4 +1,5 @@
 #pragma once
+#include "../audio/InputHistory.h"
 
 // Performance/mixing channel and LoopTake owner; fans neutral operations downward
 // while each take and loop retains its own state, anchors, length, and phase.
@@ -133,7 +134,8 @@ namespace engine
 			const std::shared_ptr<Trigger> trigger,
 			int indexOffset,
 			unsigned int numSamps,
-			std::uint32_t blockStartSample = 0u);
+			std::uint32_t blockStartSample = 0u,
+            const audio::DacRenderContext* dac = nullptr);
 		virtual void EndMultiPlay(unsigned int numSamps) override;
 		// Fans one policy-neutral accepted correction out to every local take.
 		// Audio-thread only; called once at the top of the callback block.
