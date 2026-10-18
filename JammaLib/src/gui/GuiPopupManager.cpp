@@ -6,7 +6,7 @@ using namespace actions;
 using base::GuiElement;
 
 void GuiPopupManager::Open(std::shared_ptr<GuiElement> element,
-	std::shared_ptr<GuiElement> owner)
+	std::shared_ptr<GuiElement> owner, std::function<void()> onClosed, std::function<bool()> canDismiss)
 {
 	if (!element)
 		return;
@@ -23,47 +23,59 @@ void GuiPopupManager::Open(std::shared_ptr<GuiElement> element,
 		root->ClearPointerState();
 	}
 
-	_popups.push_back({ element, owner });
+	_popups.push_back({ element, owner, std::move(onClosed), std::move(canDismiss) });
 }
 
 void GuiPopupManager::Close()
 {
 	if (!_popups.empty())
 	{
-		_popups.back().Element->ClearPointerState();
+		auto popup = std::move(_popups.back());
 		_popups.pop_back();
+		popup.Element->ClearPointerState();
+		if (popup.OnClosed) popup.OnClosed();
 	}
 }
 
 void GuiPopupManager::Close(const std::shared_ptr<GuiElement>& element)
 {
 	if (!element) return;
-	std::erase_if(_popups, [&element](const auto& popup) {
-		if (popup.Element != element) return false;
-		popup.Element->ClearPointerState();
-		return true;
-	});
+	std::vector<Popup> closed;
+	for (auto it = _popups.begin(); it != _popups.end();)
+		if (it->Element == element) { closed.push_back(std::move(*it)); it = _popups.erase(it); }
+		else ++it;
+	for (auto& popup : closed) { popup.Element->ClearPointerState(); if (popup.OnClosed) popup.OnClosed(); }
 }
 
 void GuiPopupManager::CloseAll()
 {
-	for (const auto& popup : _popups) popup.Element->ClearPointerState();
+	auto closed = std::move(_popups);
 	_popups.clear();
+	for (auto& popup : closed) { popup.Element->ClearPointerState(); if (popup.OnClosed) popup.OnClosed(); }
 }
 
 void GuiPopupManager::CloseOwnedBy(const std::shared_ptr<GuiElement>& subtree)
 {
 	if (!subtree) return;
-	std::erase_if(_popups, [&subtree](const auto& popup)
+	std::vector<Popup> closed;
+	for (auto it = _popups.begin(); it != _popups.end();)
 	{
-		for (auto owner = popup.Owner.lock(); owner; owner = owner->Parent())
-			if (owner == subtree)
-			{
-				popup.Element->ClearPointerState();
-				return true;
-			}
+		bool belongs = false;
+		for (auto owner = it->Owner.lock(); owner; owner = owner->Parent())
+			if (owner == subtree) { belongs = true; break; }
+		if (belongs) { closed.push_back(std::move(*it)); it = _popups.erase(it); }
+		else ++it;
+	}
+	for (auto& popup : closed) { popup.Element->ClearPointerState(); if (popup.OnClosed) popup.OnClosed(); }
+}
+
+bool GuiPopupManager::ConsumeDismissedRelease(TouchAction action)
+{
+	if (!_dismissedPress || action.Touch != _dismissedPress->Touch || action.Index != _dismissedPress->Index)
 		return false;
-	});
+	if (action.State == TouchAction::TOUCH_UP) { _dismissedPress.reset(); return true; }
+	_dismissedPress.reset();
+	return false;
 }
 
 bool GuiPopupManager::Contains(const std::shared_ptr<GuiElement>& element) const
@@ -119,7 +131,10 @@ ActionResult GuiPopupManager::OnAction(TouchAction action)
 	// Outside press dismisses the topmost popup and consumes the event so it
 	// does not activate whatever sits beneath the popup.
 	if (TouchAction::TouchState::TOUCH_DOWN == action.State)
-		Close();
+	{
+		_dismissedPress = action;
+		if (!_popups.back().CanDismiss || _popups.back().CanDismiss()) Close();
+	}
 
 	return { true, "", "", ACTIONRESULT_DEFAULT, nullptr, std::weak_ptr<GuiElement>() };
 }
@@ -147,7 +162,7 @@ ActionResult GuiPopupManager::OnAction(KeyAction action)
 	// Escape (VK_ESCAPE) dismisses the topmost popup.
 	if ((27 == action.KeyChar) && (KeyAction::KEY_UP == action.KeyActionType))
 	{
-		Close();
+		if (!_popups.back().CanDismiss || _popups.back().CanDismiss()) Close();
 		return { true, "", "", ACTIONRESULT_DEFAULT, nullptr, std::weak_ptr<GuiElement>() };
 	}
 

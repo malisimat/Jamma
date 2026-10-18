@@ -120,6 +120,11 @@ Scene::Scene(SceneParams params,
 	hudParams.Size = params.Size;
 	hudParams.MinSize = params.Size;
 	hudParams.PopupManager = &_popupManager;
+	hudParams.FocusEditor = [this](const auto& editor, bool acquire)
+	{
+		if (acquire) _focusManager.RequestFocus(editor);
+		else if (_focusManager.CurrentFocus() == editor) _focusManager.ClearFocus();
+	};
 	hudParams.RoutingEditAvailabilityState = [this]() { return _RoutingEditAvailability(); };
 	hudParams.AcceptTriggerInput = [this](std::uint64_t revision)
 	{
@@ -129,6 +134,11 @@ Scene::Scene(SceneParams params,
 	{
 		// HUD dispatch already owns the scene lock; the public entry locks for external callers.
 		return _RequestRigEditLocked(candidate) == RigCoordinator::EditResult::Pending;
+	};
+	hudParams.SubmitTriggerRename = [this](const io::RigFile& candidate)
+	{
+		// Text acceptance also runs on blur/keyboard, outside HUD dispatch locking.
+		return RequestRigEdit(candidate) == RigCoordinator::EditResult::Pending;
 	};
 	_hudPanel = std::make_shared<GuiHud>(hudParams);
 	AddChild(_hudPanel);
@@ -897,6 +907,8 @@ bool Scene::AdvanceUiAnimations()
 	const auto depth = _selector->CurrentSelectDepth();
 	const bool stationDitchVisible = depth == base::DEPTH_STATION;
 	const bool takeDitchVisible = depth == base::DEPTH_LOOPTAKE || depth == base::DEPTH_LOOP;
+	if (_hudPanel && (_popupManager.IsOpen() || _loopEditor.IsEngaged() || _isSceneQuitting.load(std::memory_order_acquire)))
+		_hudPanel->CancelTriggerRenames();
 	for (const auto& station : _stations)
 		if (auto label = station->GetGuiRack()->StationLabel())
 		{
@@ -1057,6 +1069,12 @@ void Scene::_SelectAllLocalLocked()
 
 ActionResult Scene::OnAction(TouchAction action)
 {
+	if (_popupManager.ConsumeDismissedRelease(action))
+	{
+		_touchDownElement.reset();
+		_touchDownIsHud = _touchDownIsSettings = _consumeSettingsRelease = false;
+		return { true, {}, {}, ACTIONRESULT_DEFAULT, nullptr, {} };
+	}
 	if (action.State == TouchAction::TOUCH_DOWN) _cameraPointerPreservesIdle = false;
 	const auto result = _OnPointerAction(action);
 	if (std::dynamic_pointer_cast<gui::GuiPerformanceGroupButton>(_touchDownElement.lock()))
@@ -1129,6 +1147,12 @@ ActionResult Scene::_OnPointerAction(TouchAction action)
 		}
 		return popupRes;
 	}
+	if (_hudPanel && _hudPanel->RouteRenameTouch(_hudPanel->GlobalToLocal(action)))
+	{
+		if (action.State == TouchAction::TOUCH_UP && _touchDownIsHud && !_hudPanel->HasLabelPress())
+		{ _touchDownElement.reset(); _touchDownIsHud = false; }
+		return { true, {}, {}, ACTIONRESULT_DEFAULT, nullptr, {} };
+	}
 	if (!_loopEditor.IsEngaged())
 	{
 		const auto stations = SnapshotStations();
@@ -1137,6 +1161,43 @@ ActionResult Scene::_OnPointerAction(TouchAction action)
 			{
 				if (label->Touch(label->GlobalToLocal(action))) return { true, {}, {}, ACTIONRESULT_DEFAULT, nullptr, {} };
 			}
+	}
+	// Existing captures and drafts keep their gesture. Fresh panel/HUD hits
+	// precede projected station overlays, which may lie behind these controls.
+	if (!_EditControlsSuppressed() && !_quantisationInteraction.OwnsPointer())
+		if (auto settingsResult = _RouteSettingsTouch(action)) return *settingsResult;
+	if (_touchDownIsHud)
+	{
+		auto active = _touchDownElement.lock();
+		auto result = ActionResult::NoAction();
+		{ std::scoped_lock lock(_sceneMutex); if (active) result = active->OnAction(active->GlobalToLocal(action)); }
+		if (action.State == TouchAction::TOUCH_UP) { _touchDownElement.reset(); _touchDownIsHud = false; }
+		result.IsEaten = true;
+		return result;
+	}
+	if (!_EditControlsSuppressed() && !_touchDownElement.lock() && !_camera.IsBackgroundDragging() && !_isSceneTouching &&
+		!_loopEditor.OwnsPointer() && !_loopEditor.IsOrbitDragging() && !_quantisationInteraction.OwnsPointer() && _hudPanel &&
+		(_hudPanel->CapturesPointer(_hudPanel->GlobalToLocal(action.Position)) || _hudPanel->HasCableDrag()))
+	{
+		// Routing callbacks require scene serialization; focus follows after unlock.
+		auto result = ActionResult::NoAction();
+		{ std::scoped_lock lock(_sceneMutex); result = _hudPanel->OnAction(_hudPanel->GlobalToLocal(action)); }
+		if (result.IsEaten)
+		{
+			if (pointerPress)
+			{
+				auto active = result.ActiveElement.lock();
+				if (!active) active = _hudPanel;
+				_touchDownElement = active; _touchDownIsHud = true;
+				if (active->WantsFocusOnPress()) _focusManager.RequestFocus(active);
+				else _focusManager.ClearFocus();
+			}
+			return result;
+		}
+	}
+	if (!_loopEditor.IsEngaged())
+	{
+		const auto stations = SnapshotStations();
 		for (const auto& station : stations)
 			if (auto label = station->GetGuiRack()->StationLabel(); label && station->GetGuiRack()->IsInView(_sizeParams.Size))
 				if (label->Touch(label->GlobalToLocal(action))) return { true, {}, {}, ACTIONRESULT_DEFAULT, nullptr, {} };
@@ -1153,8 +1214,6 @@ ActionResult Scene::_OnPointerAction(TouchAction action)
 			return *overlay;
 		return ActionResult::NoAction();
 	}
-	if (!_EditControlsSuppressed())
-		if (auto settingsResult = _RouteSettingsTouch(action)) return *settingsResult;
 	if (!_EditControlsSuppressed() && _loopEditor.IsEngaged() && !_loopEditor.OwnsPointer() && !_loopEditor.IsOrbitDragging() && _hudPanel)
 	{
 		std::scoped_lock lock(_sceneMutex);
@@ -1366,6 +1425,27 @@ ActionResult Scene::_OnPointerMove(TouchMoveAction action)
 			// Moving cancels the click, but the captured background press continues
 			// previewing all local items until release.
 			_backgroundGesture->Moved = true;
+		return { true, {}, {}, ACTIONRESULT_DEFAULT, nullptr, {} };
+	}
+	if (!_popupManager.IsOpen() && _touchDownIsHud)
+	{
+		auto active = _touchDownElement.lock();
+		const bool cancelled = action.Touch == TouchAction::TOUCH_MOUSE && action.MouseButtonsDown == 0u;
+		std::scoped_lock lock(_sceneMutex);
+		if (active)
+		{
+			if (cancelled) active->ClearPointerState();
+			else active->OnAction(active->GlobalToLocal(action));
+		}
+		if (cancelled) { _touchDownElement.reset(); _touchDownIsHud = false; }
+		return { true, {}, {}, ACTIONRESULT_DEFAULT, nullptr, {} };
+	}
+	if (!_popupManager.IsOpen() && !_EditControlsSuppressed() && !_touchDownElement.lock() &&
+		!_camera.IsBackgroundDragging() && !_isSceneTouching && !_loopEditor.OwnsPointer() && !_loopEditor.IsOrbitDragging() &&
+		!_quantisationInteraction.OwnsPointer() && _hudPanel && _hudPanel->CapturesPointer(_hudPanel->GlobalToLocal(action.Position)))
+	{
+		std::scoped_lock lock(_sceneMutex);
+		_hudPanel->OnAction(_hudPanel->GlobalToLocal(action));
 		return { true, {}, {}, ACTIONRESULT_DEFAULT, nullptr, {} };
 	}
 	if (!_popupManager.IsOpen() && !_loopEditor.IsEngaged() && !_quantisationInteraction.OwnsPointer())
@@ -2930,6 +3010,7 @@ bool Scene::PumpGlobalKeyCapture(actions::KeyAction& action) noexcept
 
 void Scene::Shutdown()
 {
+	if (_hudPanel) _hudPanel->CancelTriggerRenames();
 	for (const auto& station : _stations)
 		if (auto label = station->GetGuiRack()->StationLabel()) label->Cancel();
 	_vstRackControls->Reset();

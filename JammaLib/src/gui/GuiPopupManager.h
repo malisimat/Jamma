@@ -2,6 +2,8 @@
 
 #include <memory>
 #include <vector>
+#include <functional>
+#include <optional>
 #include "GuiElement.h"
 #include "../actions/TouchAction.h"
 #include "../actions/KeyAction.h"
@@ -24,7 +26,10 @@ namespace gui
 		// Push a popup onto the stack. `owner` is informational (the control
 		// that opened it) and is held weakly.
 		void Open(std::shared_ptr<base::GuiElement> element,
-			std::shared_ptr<base::GuiElement> owner = nullptr);
+			std::shared_ptr<base::GuiElement> owner = nullptr,
+			std::function<void()> onClosed = {},
+			std::function<bool()> canDismiss = {});
+		bool ConsumeDismissedRelease(actions::TouchAction action);
 
 		// Close the topmost popup. No-op when empty.
 		void Close();
@@ -51,8 +56,12 @@ namespace gui
 		{
 			std::shared_ptr<base::GuiElement> Element;
 			std::weak_ptr<base::GuiElement> Owner;
+			std::function<void()> OnClosed;
+			// Guards user dismissal only; owner teardown/accepted revisions always close.
+			std::function<bool()> CanDismiss;
 		};
 
 		std::vector<Popup> _popups;
+		std::optional<actions::TouchAction> _dismissedPress;
 	};
 }

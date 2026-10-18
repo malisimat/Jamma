@@ -4,6 +4,7 @@
 #include "gui/GuiHud.h"
 #include "gui/GuiScrollPanel.h"
 #include "gui/GuiPopupManager.h"
+#include "gui/GuiTriggerRename.h"
 #include "engine/RigSnapshot.h"
 #include "engine/Trigger.h"
 
@@ -328,6 +329,78 @@ TEST_F(HudCableInteractionTests, ZeroButtonMoveCancelsClippedBodyDragInEditorHud
 	Release(); EXPECT_TRUE(Submissions.empty());
 }
 
+TEST_F(HudCableInteractionTests, PedalPressWinsOverSocketRadiusWhileSocketCentreRemainsDraggable)
+{
+	unsigned int admittedEdges = 0u;
+	gui::GuiHudParams params; params.Size = { 1200u, 800u };
+	params.AcceptTriggerInput = [&](std::uint64_t revision) {
+		EXPECT_EQ(Routing->Revision, revision); ++admittedEdges; return true;
+	};
+	Hud = std::make_shared<gui::GuiHud>(params);
+	Hud->SetRoutingConfig(20u, {}, *Routing); Hud->Init();
+	std::vector<std::shared_ptr<gui::GuiScrollPanel>> scrolls; Layout(Hud, scrolls);
+	for (const bool editorMode : { false, true })
+	{
+		// Each mode gets an idle runtime: queued pedal edges correctly block
+		// routing edits until the audio boundary consumes them.
+		const unsigned char triggerIndex = editorMode ? 1u : 0u;
+		const auto card = TriggerScroll()->Content()->TryGetChild(triggerIndex);
+		ASSERT_TRUE(card);
+		const auto pedal = card->TryGetChild(0);
+		ASSERT_TRUE(pedal);
+		Hud->SetLoopEditorMode(editorMode);
+		Hud->BuildInteractionGeometry(Endpoints, Cables);
+		const auto output = std::find_if(Endpoints.begin(), Endpoints.end(), [triggerIndex](const auto& endpoint) {
+			return endpoint.Kind == CableInteraction::EndpointKind::TriggerOutput && endpoint.TriggerIndex == triggerIndex;
+		});
+		ASSERT_NE(Endpoints.end(), output);
+		actions::TouchAction touch; touch.Touch = actions::TouchAction::TOUCH_MOUSE; touch.Index = 0u;
+		touch.Position = output->Position; touch.State = actions::TouchAction::TOUCH_DOWN;
+		ASSERT_TRUE(Routing->Triggers[triggerIndex].Instance->CanApplyCaptureRouting());
+		EXPECT_TRUE(Hud->OnAction(touch).IsEaten); EXPECT_TRUE(Hud->HasCableDrag());
+		Hud->ClearPointerState(); EXPECT_FALSE(Hud->HasCableDrag());
+		touch.Position = card->GlobalPosition() + utils::Position2d{22, 12};
+		ASSERT_TRUE(CableInteraction::HitTest(*output, touch.Position, 14.0f));
+		touch.State = actions::TouchAction::TOUCH_DOWN;
+		const auto result = Hud->OnAction(touch);
+		EXPECT_TRUE(result.IsEaten); EXPECT_EQ(pedal, result.ActiveElement.lock());
+		EXPECT_FALSE(Hud->HasCableDrag());
+		touch.State = actions::TouchAction::TOUCH_UP;
+		EXPECT_TRUE(Hud->OnAction(touch).IsEaten); EXPECT_FALSE(Hud->HasCableDrag());
+		EXPECT_FALSE(Routing->Triggers[triggerIndex].Instance->CanApplyCaptureRouting());
+	}
+	EXPECT_EQ(4u, admittedEdges);
+}
+
+TEST_F(HudCableInteractionTests, LabelClickOpensRawDraftOnReleaseAndOwnsBusyOrMovedGestures)
+{
+	const auto card = TriggerScroll()->Content()->TryGetChild(0);
+	const auto rename = std::dynamic_pointer_cast<gui::GuiTriggerRename>(card->TryGetChild(2));
+	ASSERT_TRUE(rename);
+	const auto label = rename->TryGetChild(1);
+	const auto editor = std::dynamic_pointer_cast<gui::GuiTextBox>(rename->TryGetChild(2));
+	ASSERT_TRUE(label); ASSERT_TRUE(editor);
+	actions::TouchAction touch; touch.Touch = actions::TouchAction::TOUCH_MOUSE; touch.Index = 0u;
+	touch.Position = label->GlobalPosition() + utils::Position2d{10, 10};
+	const auto press = [&]() { touch.State = actions::TouchAction::TOUCH_DOWN; return Hud->OnAction(touch); };
+	const auto release = [&]() { touch.State = actions::TouchAction::TOUCH_UP; return Hud->OnAction(touch); };
+	EXPECT_EQ(Hud, press().ActiveElement.lock()); EXPECT_FALSE(rename->Active());
+	EXPECT_TRUE(release().IsEaten); EXPECT_TRUE(rename->Active());
+	EXPECT_EQ(Routing->Rig.Triggers[0].Name, editor->Text());
+	rename->Cancel();
+	EXPECT_TRUE(press().IsEaten);
+	actions::TouchMoveAction move; move.Touch = actions::TouchAction::TOUCH_MOUSE; move.MouseButtonsDown = 1u;
+	move.Position = touch.Position + utils::Position2d{10, 0}; EXPECT_TRUE(Hud->OnAction(move).IsEaten);
+	move.Position = touch.Position; Hud->OnAction(move);
+	EXPECT_TRUE(release().IsEaten); EXPECT_FALSE(rename->Active());
+	Routing->Triggers[0].Instance->QueueExternalControlAction(true, true, touch, Routing->Revision);
+	EXPECT_TRUE(press().IsEaten); EXPECT_TRUE(release().IsEaten); EXPECT_FALSE(rename->Active());
+	EXPECT_FALSE(Hud->HasCableDrag());
+	EXPECT_TRUE(press().IsEaten); Hud->ClearPointerState();
+	EXPECT_TRUE(release().IsEaten); EXPECT_FALSE(rename->Active());
+	Hud->SetVisible(false); EXPECT_FALSE(press().IsEaten); EXPECT_FALSE(rename->Active());
+}
+
 TEST_F(HudCableInteractionTests, ClippedBodyReconnectPreservesOriginalTriggerAndStaleRevisionCancels)
 {
 	BeginBodyDrag(); ASSERT_TRUE(Hud->HasCableDrag()); MoveToReplacement(1u); Release();
@@ -351,18 +424,18 @@ TEST_F(HudCableInteractionTests, AddTriggerRevealsPublishedCardAfterResizeAndSup
 	EXPECT_FALSE(Submissions.back().Triggers.back().Id.empty());
 	const auto added = Submissions.back(); PublishRig(added); scroll = TriggerScroll();
 	ASSERT_TRUE(scroll->Content()->TryGetChild(12)); EXPECT_FALSE(scroll->Content()->TryGetChild(13));
-	EXPECT_EQ(100u, scroll->Content()->TryGetChild(12)->GetSize().Height);
+	EXPECT_EQ(132u, scroll->Content()->TryGetChild(12)->GetSize().Height);
 	EXPECT_EQ(scroll->MaxScrollOffset(), scroll->ScrollOffset());
 	const auto beforeExpand = scroll->ScrollOffset();
 	Hud->SetSize({ 1200, 800 });
 	EXPECT_EQ((std::min)(beforeExpand, scroll->MaxScrollOffset()), scroll->ScrollOffset());
 	for (unsigned char index = 0; index < 13; ++index)
-		EXPECT_EQ(100u, scroll->Content()->TryGetChild(index)->GetSize().Height);
+		EXPECT_EQ(132u, scroll->Content()->TryGetChild(index)->GetSize().Height);
 	io::RigFile empty = added; empty.Triggers.clear(); PublishRig(empty); Submissions.clear();
 	EXPECT_FALSE(TriggerScroll()->Content()->TryGetChild(0));
 	Click(Hud->TryGetChild(1)->TryGetChild(2)); ASSERT_EQ(1u, Submissions.size());
 	ASSERT_EQ(1u, Submissions.back().Triggers.size()); const auto first = Submissions.back(); PublishRig(first);
-	EXPECT_EQ(100u, TriggerScroll()->Content()->TryGetChild(0)->GetSize().Height);
+	EXPECT_EQ(132u, TriggerScroll()->Content()->TryGetChild(0)->GetSize().Height);
 }
 
 TEST_F(HudCableInteractionTests, SupportedCompactProfileKeepsSourcesAndTriggerActionsReachable)
@@ -373,7 +446,7 @@ TEST_F(HudCableInteractionTests, SupportedCompactProfileKeepsSourcesAndTriggerAc
 	unsigned int sourceRows = 0;
 	for (const auto& sourceScroll : scrolls) {
 		const auto card = sourceScroll->Content() ? sourceScroll->Content()->TryGetChild(0) : nullptr;
-		if (!card || card->GetSize().Height == 100u) continue;
+		if (!card || card->GetSize().Height == 132u) continue;
 		++sourceRows;
 		EXPECT_GE(sourceScroll->GetSize().Width, 80u);
 		EXPECT_GE(card->GetSize().Width, 80u);
@@ -385,9 +458,11 @@ TEST_F(HudCableInteractionTests, SupportedCompactProfileKeepsSourcesAndTriggerAc
 	auto scroll = TriggerScroll(); ASSERT_TRUE(scroll); EXPECT_GE(scroll->GetSize().Height, 100u);
 	scroll->SetScrollOffset(0);
 	const auto first = scroll->Content()->TryGetChild(0); ASSERT_TRUE(first);
-	EXPECT_EQ(100u, first->GetSize().Height);
-	EXPECT_GE(first->GlobalPosition().Y, scroll->GlobalPosition().Y);
-	EXPECT_LE(first->GlobalPosition().Y + 100, scroll->GlobalPosition().Y + static_cast<int>(scroll->GetSize().Height));
+	EXPECT_EQ(132u, first->GetSize().Height);
+	// The taller name row can clip a card in this compact viewport; scrolling
+	// still exposes its controls. Verify the first card intersects the viewport.
+	EXPECT_LE(first->GlobalPosition().Y, scroll->GlobalPosition().Y + static_cast<int>(scroll->GetSize().Height));
+	EXPECT_GE(first->GlobalPosition().Y + 132, scroll->GlobalPosition().Y);
 	EXPECT_TRUE(Hud->TryGetChild(1)->TryGetChild(0)->IsVisible());
 	const auto close = first->TryGetChild(3);
 	Click(close); ASSERT_TRUE(Popups.IsOpen());
@@ -403,7 +478,7 @@ TEST_F(HudCableInteractionTests, SupportedCompactProfileKeepsSourcesAndTriggerAc
 	ASSERT_EQ(1u, Submissions.size()); EXPECT_EQ(12u, Submissions.back().Triggers.size());
 	const auto appended = Submissions.back(); PublishRig(appended); scroll = TriggerScroll();
 	EXPECT_EQ(scroll->MaxScrollOffset(), scroll->ScrollOffset());
-	for (unsigned char index = 0; index < 12; ++index) EXPECT_EQ(100u, scroll->Content()->TryGetChild(index)->GetSize().Height);
+	for (unsigned char index = 0; index < 12; ++index) EXPECT_EQ(132u, scroll->Content()->TryGetChild(index)->GetSize().Height);
 }
 
 TEST_F(HudCableInteractionTests, DeleteConfirmationSubmitsOnlySelectedTriggerAndClampsPublishedList)
@@ -424,7 +499,7 @@ TEST_F(HudCableInteractionTests, DeleteConfirmationSubmitsOnlySelectedTriggerAnd
 	const auto beforeShrink = scroll->ScrollOffset();
 	Hud->SetSize({ 320, 180 }); EXPECT_EQ(beforeShrink, scroll->ScrollOffset());
 	for (unsigned char index = 0; index < 11; ++index)
-		EXPECT_EQ(100u, scroll->Content()->TryGetChild(index)->GetSize().Height);
+		EXPECT_EQ(132u, scroll->Content()->TryGetChild(index)->GetSize().Height);
 }
 
 class CableInteractionTests : public ::testing::Test

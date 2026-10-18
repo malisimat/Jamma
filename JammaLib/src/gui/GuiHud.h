@@ -12,6 +12,7 @@
 #include "GuiVu.h"
 #include "CableInteraction.h"
 #include "../io/RigFile.h"
+#include "../actions/TouchAction.h"
 
 namespace resources
 {
@@ -45,8 +46,10 @@ namespace gui
 		{}
 
 		std::function<bool(const io::RigFile&)> SubmitRigEdit;
+		std::function<bool(const io::RigFile&)> SubmitTriggerRename;
 		std::function<RoutingEditAvailability()> RoutingEditAvailabilityState;
 		std::function<bool(std::uint64_t)> AcceptTriggerInput;
+		std::function<void(const std::shared_ptr<base::GuiElement>&, bool)> FocusEditor;
 		GuiPopupManager* PopupManager = nullptr;
 	};
 
@@ -55,6 +58,7 @@ namespace gui
 	class GuiPopup;
 	class GuiScrollPanel;
 	class GuiHudSocket;
+	class GuiTriggerRename;
 
 	class GuiHud : public GuiPanel
 	{
@@ -85,6 +89,10 @@ namespace gui
 		virtual actions::ActionResult OnAction(actions::TouchMoveAction action) override;
 		virtual actions::ActionResult OnAction(actions::KeyAction action) override;
 		void ClearPointerState() override;
+		bool RouteRenameTouch(actions::TouchAction action);
+		bool HasLabelPress() const { return _labelPress.has_value(); }
+		bool CapturesPointer(utils::Position2d localPoint) const;
+		void CancelTriggerRenames();
 		void SetCableRevealHeld(bool held);
 		void SetAudioInputPeak(unsigned int channel, float peak, unsigned int numSamps);
 		void SetMidiInputPeak(unsigned int input, float peak, unsigned int numSamps);
@@ -137,20 +145,21 @@ namespace gui
 		static constexpr unsigned int _SourceScrollBarHeight = 12u;
 		static constexpr unsigned int _SourceViewportHeight = _SourceButtonHeight + _SourceScrollBarHeight + 4u;
 		static constexpr unsigned int _SourcePanelGap = 8u;
-		static constexpr unsigned int _RightRailWidth = 132u;
+		static constexpr unsigned int _RightRailWidth = 156u;
 		static constexpr unsigned int _RightRailHeight = 460u;
 		static constexpr unsigned int _RightRailMinHeight = 220u;
 		static constexpr unsigned int _RightRailPaddingH = 0u;
 		static constexpr unsigned int _RightRailPaddingV = 12u;
 		static constexpr unsigned int _RightRailSpacing = 10u;
-		static constexpr unsigned int _TriggerButtonWidth = 112u;
-		static constexpr unsigned int _TriggerButtonHeight = 100u;
+		static constexpr unsigned int _TriggerButtonWidth = 136u;
+		static constexpr unsigned int _TriggerButtonHeight = 132u;
 		static constexpr unsigned int _TriggerFooterHeight = 56u;
 		static constexpr unsigned int _TriggerControlSize = 34u;
+		static constexpr unsigned int _TriggerCloseSize = 24u;
 		static constexpr unsigned int _SocketSize = 24u;
 		static constexpr unsigned int _CableEndSize = 10u;
-		static constexpr int _TriggerInputPinTopOffset = 12;
 		static constexpr int _TriggerOutputPinBottomOffset = 12;
+		static constexpr int _TriggerInputPinTopOffset = _TriggerOutputPinBottomOffset;
 		static constexpr int _TriggerInputFanHalfHeight = 7;
 		static constexpr unsigned int _AudioInputPeakHoldSamps = 3000u;
 		static constexpr double _MidiInputFallRate = 0.003;
@@ -163,6 +172,8 @@ namespace gui
 		void _AddTrigger();
 		void _OpenDeleteConfirmation(size_t triggerIndex);
 		void _ConfirmDelete();
+		void _OpenRename(size_t triggerIndex);
+		std::string _SubmitRename(const std::string& name, const std::string& id, std::uint64_t revision);
 		bool _SubmitCandidate(const io::RigFile& candidate);
 		bool _CanEditTrigger(size_t triggerIndex) const;
 		RoutingEditAvailability _RoutingEditAvailability() const;
@@ -214,6 +225,8 @@ namespace gui
 		{
 			std::shared_ptr<GuiButton> Card;
 			std::shared_ptr<GuiButton> Close;
+			std::shared_ptr<GuiButton> Edit;
+			std::shared_ptr<GuiTriggerRename> Rename;
 			std::shared_ptr<base::GuiElement> InputSocket;
 			std::shared_ptr<base::GuiElement> OutputSocket;
 		};
@@ -268,8 +281,21 @@ namespace gui
 		io::RigFile _displayedRig;
 		std::uint64_t _displayedRevision = 0u;
 		std::optional<CableInteraction::Drag> _cableDrag;
+		struct LabelPress
+		{
+			size_t TriggerIndex;
+			std::string Id;
+			std::uint64_t Revision;
+			utils::Position2d Position;
+			actions::TouchAction::TouchType Source;
+			int Index;
+			bool Moved = false;
+		};
+		std::optional<LabelPress> _labelPress;
 		std::optional<size_t> _deleteTriggerIndex;
 		std::function<bool(const io::RigFile&)> _submitRigEdit;
+		std::function<bool(const io::RigFile&)> _submitTriggerRename;
+		std::function<void(const std::shared_ptr<base::GuiElement>&, bool)> _focusEditor;
 		std::function<RoutingEditAvailability()> _routingEditAvailability;
 		std::function<bool(std::uint64_t)> _acceptTriggerInput;
 		std::optional<RoutingEditAvailability> _lastRoutingEditAvailability;

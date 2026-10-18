@@ -3,6 +3,7 @@
 #include "gui/GuiToggle.h"
 #include "gui/GuiFocusManager.h"
 #include "gui/GuiStationLabel.h"
+#include "gui/GuiTriggerRename.h"
 #include "gui/GuiPopup.h"
 #include "gui/GuiPopupManager.h"
 #include "gui/GuiTextBox.h"
@@ -204,6 +205,33 @@ TEST(GuiPopupManager, OutsidePressDismissesAndConsumes) {
 
 	EXPECT_TRUE(res.IsEaten);
 	EXPECT_FALSE(host.IsOpen());
+	EXPECT_TRUE(host.ConsumeDismissedRelease(MakeTouch(TouchAction::TOUCH_UP, { 0, 0 })));
+
+	bool canDismiss = false;
+	int closed = 0;
+	const auto open = [&]() { host.Open(popup, nullptr, [&]() { ++closed; }, [&]() { return canDismiss; }); };
+	open();
+	EXPECT_TRUE(host.OnAction(MakeTouch(TouchAction::TOUCH_DOWN, { 0, 0 })).IsEaten);
+	EXPECT_TRUE(host.IsOpen());
+	EXPECT_TRUE(host.ConsumeDismissedRelease(MakeTouch(TouchAction::TOUCH_UP, { 0, 0 })));
+	EXPECT_TRUE(host.OnAction(MakeKey(27, KeyAction::KEY_UP)).IsEaten);
+	EXPECT_TRUE(host.IsOpen());
+	EXPECT_EQ(0, closed);
+	host.Close(popup); // Owner teardown remains authoritative during pending work.
+	host.Close(popup);
+	EXPECT_FALSE(host.IsOpen());
+	EXPECT_EQ(1, closed);
+
+	canDismiss = true;
+	open();
+	EXPECT_TRUE(host.OnAction(MakeTouch(TouchAction::TOUCH_DOWN, { 0, 0 })).IsEaten);
+	EXPECT_FALSE(host.IsOpen());
+	EXPECT_TRUE(host.ConsumeDismissedRelease(MakeTouch(TouchAction::TOUCH_UP, { 0, 0 })));
+	EXPECT_EQ(2, closed);
+	open();
+	EXPECT_TRUE(host.OnAction(MakeKey(27, KeyAction::KEY_UP)).IsEaten);
+	EXPECT_FALSE(host.IsOpen());
+	EXPECT_EQ(3, closed);
 }
 
 TEST(GuiPopupManager, InsidePressRoutesToPopup) {
@@ -740,6 +768,10 @@ TEST(GuiTextBox, SelectedLoadedUtf8EditsOnlyAtCodePointBoundaries) {
 	label->SetVisible(true); label->Layout({0, 0}, 80u);
 	label->Update("Keys", 7u, true, true, false);
 	label->Init();
+	const auto pencil = label->TryGetChild(3), cancel = label->TryGetChild(4);
+	ASSERT_TRUE(pencil); ASSERT_TRUE(cancel);
+	EXPECT_EQ(pencil->Position().X, cancel->Position().X); EXPECT_EQ(pencil->Position().Y, cancel->Position().Y);
+	EXPECT_EQ(pencil->GetSize().Width, cancel->GetSize().Width); EXPECT_EQ(pencil->GetSize().Height, cancel->GetSize().Height);
 	const utils::Position2d editPoint{static_cast<int>(gui::GuiStationLabel::LabelWidth + 10u), 10};
 	const auto editButton = label->FindTopmostDescendant(editPoint);
 	ASSERT_TRUE(editButton);
@@ -784,6 +816,54 @@ TEST(GuiTextBox, SelectedLoadedUtf8EditsOnlyAtCodePointBoundaries) {
 	label->Update("Piano", 8u, false, true, false);
 	EXPECT_FALSE(label->Active());
 	EXPECT_FALSE(focus.IsEditingText());
+}
+
+TEST(GuiTriggerRename, AttachedEditorPreservesCoordinatesAndDraftAcrossAcceptanceAndCancellation) {
+	auto card = std::make_shared<base::GuiElement>(base::GuiElementParams{});
+	card->SetPosition({300, 200});
+	auto rename = std::make_shared<gui::GuiTriggerRename>();
+	card->AddChild(rename);
+	const auto label = rename->TryGetChild(1);
+	const auto editor = std::dynamic_pointer_cast<GuiTextBox>(rename->TryGetChild(2));
+	ASSERT_TRUE(editor); ASSERT_TRUE(label);
+	EXPECT_EQ(306, label->GlobalPosition().X); EXPECT_EQ(278, label->GlobalPosition().Y);
+	EXPECT_EQ(306, editor->GlobalPosition().X); EXPECT_EQ(276, editor->GlobalPosition().Y);
+	EXPECT_EQ(rename, label->Parent()); EXPECT_EQ(rename, editor->Parent());
+	GuiFocusManager focus;
+	rename->Focus = [&](const auto& control, bool acquire) {
+		if (acquire) focus.RequestFocus(control);
+		else if (focus.CurrentFocus() == control) focus.ClearFocus();
+	};
+	unsigned int submissions = 0;
+	rename->Submit = [&](const auto& name, const auto& id, auto revision) {
+		++submissions; EXPECT_EQ("Piano", name); EXPECT_EQ("trigger-id", id); EXPECT_EQ(7u, revision);
+		return submissions == 1u ? std::string{"Busy; retry"} : std::string{};
+	};
+	rename->SetDisplay("Keys [unbound]"); rename->Begin("trigger-id", "Keys", 7u);
+	EXPECT_EQ("Keys", editor->SelectedText());
+	editor->SetText("Piano");
+	EXPECT_TRUE(rename->Touch(MakeTouch(TouchAction::TOUCH_DOWN, {-20, -20}), false));
+	EXPECT_EQ(1u, submissions); EXPECT_TRUE(rename->Active()); EXPECT_EQ("Piano", editor->Text());
+	EXPECT_TRUE(rename->Touch(MakeTouch(TouchAction::TOUCH_UP, {-20, -20}), false));
+	editor->OnAction(MakeKey(13u)); editor->OnAction(MakeKey(13u));
+	EXPECT_EQ(2u, submissions);
+	rename->Update(false); // Acknowledgement rejection restores the same draft.
+	EXPECT_EQ("Piano", editor->Text()); EXPECT_TRUE(rename->Active());
+	editor->OnAction(MakeKey(27u));
+	EXPECT_FALSE(rename->Active()); EXPECT_FALSE(focus.IsEditingText()); EXPECT_EQ(2u, submissions);
+	rename->Begin("trigger-id", "Keys", 7u);
+	editor->SetText("Piano"); focus.ClearFocus(); // Blur shares Enter acceptance.
+	EXPECT_EQ(3u, submissions);
+	rename->Cancel(); EXPECT_EQ(3u, submissions);
+	rename->Begin("trigger-id", "Keys", 7u);
+	const auto cancel = rename->TryGetChild(3);
+	ASSERT_TRUE(cancel); EXPECT_TRUE(cancel->IsVisible());
+	EXPECT_TRUE(rename->Touch(MakeTouch(TouchAction::TOUCH_DOWN,
+		{cancel->Position().X + 14, cancel->Position().Y + 14}), true));
+	EXPECT_FALSE(rename->Active()); EXPECT_FALSE(cancel->IsVisible()); EXPECT_TRUE(label->IsVisible());
+	EXPECT_EQ(3u, submissions);
+	EXPECT_TRUE(rename->Touch(MakeTouch(TouchAction::TOUCH_UP, {-20, -20}), false));
+	EXPECT_FALSE(rename->OwnsPointer());
 }
 
 TEST(GuiTextBox, BackspaceAndDeleteEditText) {

@@ -110,6 +110,12 @@
 1 station_bin
 1 station_bin_over
 1 station_bin_down
+1 rename_pencil
+1 rename_pencil_over
+1 rename_pencil_down
+1 rename_cancel
+1 rename_cancel_over
+1 rename_cancel_down
 1 vst_empty ninepatch 10 10
 1 vst_empty_over ninepatch 10 10
 1 vst_empty_down ninepatch 10 10
