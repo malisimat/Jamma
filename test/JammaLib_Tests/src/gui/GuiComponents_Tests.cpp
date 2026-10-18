@@ -204,6 +204,33 @@ TEST(GuiPopupManager, OutsidePressDismissesAndConsumes) {
 
 	EXPECT_TRUE(res.IsEaten);
 	EXPECT_FALSE(host.IsOpen());
+	EXPECT_TRUE(host.ConsumeDismissedRelease(MakeTouch(TouchAction::TOUCH_UP, { 0, 0 })));
+
+	bool canDismiss = false;
+	int closed = 0;
+	const auto open = [&]() { host.Open(popup, nullptr, [&]() { ++closed; }, [&]() { return canDismiss; }); };
+	open();
+	EXPECT_TRUE(host.OnAction(MakeTouch(TouchAction::TOUCH_DOWN, { 0, 0 })).IsEaten);
+	EXPECT_TRUE(host.IsOpen());
+	EXPECT_TRUE(host.ConsumeDismissedRelease(MakeTouch(TouchAction::TOUCH_UP, { 0, 0 })));
+	EXPECT_TRUE(host.OnAction(MakeKey(27, KeyAction::KEY_UP)).IsEaten);
+	EXPECT_TRUE(host.IsOpen());
+	EXPECT_EQ(0, closed);
+	host.Close(popup); // Owner teardown remains authoritative during pending work.
+	host.Close(popup);
+	EXPECT_FALSE(host.IsOpen());
+	EXPECT_EQ(1, closed);
+
+	canDismiss = true;
+	open();
+	EXPECT_TRUE(host.OnAction(MakeTouch(TouchAction::TOUCH_DOWN, { 0, 0 })).IsEaten);
+	EXPECT_FALSE(host.IsOpen());
+	EXPECT_TRUE(host.ConsumeDismissedRelease(MakeTouch(TouchAction::TOUCH_UP, { 0, 0 })));
+	EXPECT_EQ(2, closed);
+	open();
+	EXPECT_TRUE(host.OnAction(MakeKey(27, KeyAction::KEY_UP)).IsEaten);
+	EXPECT_FALSE(host.IsOpen());
+	EXPECT_EQ(3, closed);
 }
 
 TEST(GuiPopupManager, InsidePressRoutesToPopup) {

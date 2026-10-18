@@ -120,6 +120,11 @@ Scene::Scene(SceneParams params,
 	hudParams.Size = params.Size;
 	hudParams.MinSize = params.Size;
 	hudParams.PopupManager = &_popupManager;
+	hudParams.FocusEditor = [this](const auto& editor, bool acquire)
+	{
+		if (acquire) _focusManager.RequestFocus(editor);
+		else if (_focusManager.CurrentFocus() == editor) _focusManager.ClearFocus();
+	};
 	hudParams.RoutingEditAvailabilityState = [this]() { return _RoutingEditAvailability(); };
 	hudParams.AcceptTriggerInput = [this](std::uint64_t revision)
 	{
@@ -1057,6 +1062,12 @@ void Scene::_SelectAllLocalLocked()
 
 ActionResult Scene::OnAction(TouchAction action)
 {
+	if (_popupManager.ConsumeDismissedRelease(action))
+	{
+		_touchDownElement.reset();
+		_touchDownIsHud = _touchDownIsSettings = _consumeSettingsRelease = false;
+		return { true, {}, {}, ACTIONRESULT_DEFAULT, nullptr, {} };
+	}
 	if (action.State == TouchAction::TOUCH_DOWN) _cameraPointerPreservesIdle = false;
 	const auto result = _OnPointerAction(action);
 	if (std::dynamic_pointer_cast<gui::GuiPerformanceGroupButton>(_touchDownElement.lock()))

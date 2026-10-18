@@ -1398,9 +1398,39 @@ TEST_F(RigSnapshotTest, StationRenamePromotesOnlyAcknowledgedMetadataAndPreserve
 	EXPECT_EQ("Keys", a->Name());
 	EXPECT_EQ(old->Triggers[0].Instance, coordinator.Accepted()->Triggers[0].Instance);
 	auto next = coordinator.Accepted()->Rig;
+	const auto beforeRename = coordinator.Accepted();
+	const auto retained = beforeRename->Triggers[0].Instance;
+	retained->RestoreTakes({ { engine::TriggerTake::SOURCE_ADC, "source", "target", a } });
 	next.Triggers[0].Name = "Renamed trigger";
 	ASSERT_EQ(Result::Pending, coordinator.SubmitCandidate(next));
 	EXPECT_EQ(a, coordinator.Staged()->Triggers[0].BoundReceiver);
+	candidate = coordinator.Staged();
+	EXPECT_EQ(retained, candidate->Triggers[0].Instance);
+	EXPECT_TRUE(candidate->TriggerRouteUpdates.empty());
+	int writes = 0;
+	ASSERT_EQ(Result::Pending, coordinator.CompleteTransition(candidate->Revision, true,
+		[&writes](const io::RigFile&) { ++writes; return true; }));
+	coordinator.ApplyPendingAtAudioBoundary();
+	ASSERT_TRUE(coordinator.AcknowledgeInput(candidate->Revision));
+	ASSERT_TRUE(coordinator.PromoteAcknowledged());
+	const auto renamed = coordinator.Accepted();
+	EXPECT_EQ(0, writes);
+	EXPECT_EQ(retained, renamed->Triggers[0].Instance);
+	EXPECT_EQ(beforeRename->Triggers[0].Id, renamed->Triggers[0].Id);
+	EXPECT_EQ("Renamed trigger", retained->Name());
+	EXPECT_EQ(beforeRename->Rig.Triggers[0].ControlBindings, renamed->Rig.Triggers[0].ControlBindings);
+	EXPECT_EQ(beforeRename->Rig.Triggers[0].CaptureInputs, renamed->Rig.Triggers[0].CaptureInputs);
+	const auto history = retained->GetTakes();
+	ASSERT_EQ(1u, history.size());
+	EXPECT_EQ("source", history[0].SourceTakeId);
+	EXPECT_EQ("target", history[0].TargetTakeId);
+	EXPECT_EQ(a, history[0].Receiver);
+	std::stringstream saved;
+	ASSERT_TRUE(io::RigFile::ToJsonStream(renamed->Rig, saved));
+	const auto reloaded = io::RigFile::FromStream(std::move(saved));
+	ASSERT_TRUE(reloaded);
+	EXPECT_EQ(renamed->Rig.Triggers, reloaded->Triggers);
+	EXPECT_EQ("Keys", reloaded->Triggers[0].StationTarget);
 }
 
 TEST_F(RigSnapshotTest, RemovalExplicitlyUnbindsAndNeverRedirectsToIndexOccupant)

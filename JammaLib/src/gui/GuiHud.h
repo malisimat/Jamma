@@ -47,6 +47,7 @@ namespace gui
 		std::function<bool(const io::RigFile&)> SubmitRigEdit;
 		std::function<RoutingEditAvailability()> RoutingEditAvailabilityState;
 		std::function<bool(std::uint64_t)> AcceptTriggerInput;
+		std::function<void(const std::shared_ptr<base::GuiElement>&, bool)> FocusEditor;
 		GuiPopupManager* PopupManager = nullptr;
 	};
 
@@ -55,6 +56,7 @@ namespace gui
 	class GuiPopup;
 	class GuiScrollPanel;
 	class GuiHudSocket;
+	class GuiTriggerRename;
 
 	class GuiHud : public GuiPanel
 	{
@@ -137,19 +139,19 @@ namespace gui
 		static constexpr unsigned int _SourceScrollBarHeight = 12u;
 		static constexpr unsigned int _SourceViewportHeight = _SourceButtonHeight + _SourceScrollBarHeight + 4u;
 		static constexpr unsigned int _SourcePanelGap = 8u;
-		static constexpr unsigned int _RightRailWidth = 132u;
+		static constexpr unsigned int _RightRailWidth = 156u;
 		static constexpr unsigned int _RightRailHeight = 460u;
 		static constexpr unsigned int _RightRailMinHeight = 220u;
 		static constexpr unsigned int _RightRailPaddingH = 0u;
 		static constexpr unsigned int _RightRailPaddingV = 12u;
 		static constexpr unsigned int _RightRailSpacing = 10u;
-		static constexpr unsigned int _TriggerButtonWidth = 112u;
-		static constexpr unsigned int _TriggerButtonHeight = 100u;
+		static constexpr unsigned int _TriggerButtonWidth = 136u;
+		static constexpr unsigned int _TriggerButtonHeight = 132u;
 		static constexpr unsigned int _TriggerFooterHeight = 56u;
 		static constexpr unsigned int _TriggerControlSize = 34u;
 		static constexpr unsigned int _SocketSize = 24u;
 		static constexpr unsigned int _CableEndSize = 10u;
-		static constexpr int _TriggerInputPinTopOffset = 12;
+		static constexpr int _TriggerInputPinTopOffset = 44;
 		static constexpr int _TriggerOutputPinBottomOffset = 12;
 		static constexpr int _TriggerInputFanHalfHeight = 7;
 		static constexpr unsigned int _AudioInputPeakHoldSamps = 3000u;
@@ -163,6 +165,8 @@ namespace gui
 		void _AddTrigger();
 		void _OpenDeleteConfirmation(size_t triggerIndex);
 		void _ConfirmDelete();
+		void _OpenRename(size_t triggerIndex);
+		std::string _SubmitRename(const std::string& name, const std::string& id, std::uint64_t revision);
 		bool _SubmitCandidate(const io::RigFile& candidate);
 		bool _CanEditTrigger(size_t triggerIndex) const;
 		RoutingEditAvailability _RoutingEditAvailability() const;
@@ -214,6 +218,7 @@ namespace gui
 		{
 			std::shared_ptr<GuiButton> Card;
 			std::shared_ptr<GuiButton> Close;
+			std::shared_ptr<GuiButton> Edit;
 			std::shared_ptr<base::GuiElement> InputSocket;
 			std::shared_ptr<base::GuiElement> OutputSocket;
 		};
@@ -247,6 +252,7 @@ namespace gui
 		std::string _performanceGroupFeedback; // UI/job owner under Scene serialization
 		float _editModeAlpha = 0.0f;
 		std::shared_ptr<GuiPopup> _deletePopup;
+		std::shared_ptr<GuiTriggerRename> _renamePopup;
 		// UI-owned read-only identity popup. Routing rebuilds do not mutate it;
 		// resize and resource work stay on the existing UI/render paths.
 		std::shared_ptr<GuiPanel> _sourceInfoPanel;

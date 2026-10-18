@@ -630,6 +630,9 @@
     <ClInclude Include="src\gui\GuiStationLabel.h">
       <Filter>src\gui</Filter>
     </ClInclude>
+    <ClInclude Include="src\gui\GuiTriggerRename.h">
+      <Filter>src\gui</Filter>
+    </ClInclude>
     <ClInclude Include="src\gui\VstRackControls.h">
       <Filter>src\gui</Filter>
     </ClInclude>
