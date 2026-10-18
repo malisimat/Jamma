@@ -392,14 +392,7 @@ void Window::ClearModifiers()
 	// held. Routing them through the normal action path resets both the
 	// modifier bitmask and any scene state keyed off those releases (e.g. the
 	// Ctrl quantisation overlay), instead of leaving them stuck.
-	struct ModifierKey { Action::Modifiers Flag; unsigned int KeyChar; };
-	static const ModifierKey modifierKeys[] = {
-		{ Action::MODIFIER_SHIFT, 16 },
-		{ Action::MODIFIER_CTRL, 17 },
-		{ Action::MODIFIER_ALT, 18 }
-	};
-
-	for (const auto& mk : modifierKeys)
+	for (const auto& mk : ModifierKeys)
 	{
 		if (_modifiers & mk.Flag)
 		{
@@ -413,6 +406,35 @@ void Window::ClearModifiers()
 
 	_modifiers = Action::MODIFIER_NONE;
 	_heldKeys.reset();
+	_cachedCursorModifiers = _modifiers;
+	_hover3dDirty = _forcePick = true;
+}
+
+bool Window::_IsNativeKeyDown(unsigned int key, bool queuedInput) const
+{
+	// Mouse gestures use their queued key state, not a later physical state.
+	return ((queuedInput ? GetKeyState(static_cast<int>(key))
+		: GetAsyncKeyState(static_cast<int>(key))) & 0x8000) != 0;
+}
+
+void Window::_ReconcileKeyboardState(bool queuedInput)
+{
+	if (_modifiers == Action::MODIFIER_NONE && _heldKeys.none()) return;
+	SceneDispatchScope dispatch(*this);
+	// System shortcuts can swallow releases without changing focus. Only modifiers
+	// get synthetic releases; other tracked keys only lose their camera hold.
+	for (const auto& modifier : ModifierKeys)
+		if ((_modifiers & modifier.Flag) && !_IsNativeKeyDown(modifier.KeyChar, queuedInput))
+		{
+			KeyAction release;
+			release.KeyChar = modifier.KeyChar;
+			release.KeyActionType = KeyAction::KEY_UP;
+			release.IsSynthetic = true;
+			OnAction(release);
+		}
+	for (unsigned int key = 0u; key < _heldKeys.size(); ++key)
+		if (_heldKeys.test(key) && !_IsNativeKeyDown(key, queuedInput)) _heldKeys.reset(key);
+	_UpdateCameraEligibility();
 }
 
 bool Window::IsTrackingMouse() const
@@ -507,13 +529,16 @@ void Window::_UpdateCameraEligibility()
 	const bool validViewport = _config.Size.Width > 0u && _config.Size.Height > 0u;
 	const bool held = _buttonsDown != 0u || _heldKeys.any() || _heldTouches.any()
 		|| HasRelativePointer() || (_wnd && GetCapture() == _wnd) || _resizing || _windowSizeMove;
-	_scene->SetCameraInteractionEligibility(_cameraWindowActive && visible && validViewport, held);
+	// Keep camera inactivity timing active while Jamma is visible but unfocused
+	// (for example while Game Bar owns focus).
+	_scene->SetCameraInteractionEligibility(visible && validViewport, held);
 }
 
 void Window::Render()
 {
 	SceneDispatchScope dispatch(*this);
 	ProcessDeferredInputLoss();
+	_ReconcileKeyboardState();
 	GlDeleteQueue::FlushPendingDeletes();
 	ApplyPendingResize();
 
@@ -841,14 +866,12 @@ bool Window::ProcessDeferredInputLoss()
 	const bool captureLost = _captureLossPending;
 	_focusLossPending = _captureLossPending = false;
 	if (!focusLost && !captureLost) return false;
+	_windowSizeMove = false;
+	SetResizing(false);
 	CancelMouseCapture();
 	_heldTouches.reset();
-	if (focusLost)
-	{
-		_heldKeys.reset();
-		ClearModifiers();
-		if (_scene) _scene->OnInputFocusLost();
-	}
+	ClearModifiers();
+	if (_scene) _scene->OnInputFocusLost();
 	_UpdateCameraEligibility();
 	return true;
 }
@@ -871,6 +894,7 @@ ActionResult Window::OnAction(KeyAction keyAction)
 		_UpdateCameraEligibility();
 	}
 	// Handle modifiers
+	const auto previousModifiers = _modifiers;
 	int modifiers = _modifiers;
 
 	switch (keyAction.KeyChar)
@@ -900,9 +924,11 @@ ActionResult Window::OnAction(KeyAction keyAction)
 
 	_modifiers = (Action::Modifiers)modifiers;
 	keyAction.Modifiers = _modifiers;
-	if (17u == keyAction.KeyChar && KeyAction::KEY_UP == keyAction.KeyActionType)
+	if (_modifiers != previousModifiers
+		|| (VK_CONTROL == keyAction.KeyChar && KeyAction::KEY_UP == keyAction.KeyActionType))
 	{
-		// Scene freezes hover during Ctrl; restore the current pick even if its ID is unchanged.
+		// Modifier changes affect hover even without pointer motion. Ctrl release
+		// also unfreezes Scene's hover when its picked object has not changed.
 		_cachedCursorModifiers = _modifiers;
 		_hover3dDirty = true;
 		_forcePick = true;
@@ -1152,6 +1178,15 @@ LRESULT CALLBACK Window::WindowProcedure(HWND hWindow, UINT message, WPARAM wPar
 		return DefWindowProc(hWindow, message, wParam, lParam);
 	if (window->_DeferNativeSceneMessage(hWindow, message, wParam, lParam))
 		return message == WM_INPUT ? DefWindowProc(hWindow, message, wParam, lParam) : 0;
+	// Finish the old gesture before accepting new input, including a focus-return
+	// click before Render. Plugin-pumped messages must wait for Scene to unwind.
+	const bool inputMessage = (message >= WM_MOUSEFIRST && message <= WM_MOUSELAST)
+		|| (message >= WM_KEYFIRST && message <= WM_KEYLAST) || message == WM_INPUT;
+	if (inputMessage && window->_sceneDispatchDepth == 0u
+		&& (window->_focusLossPending || window->_captureLossPending))
+		window->ProcessDeferredInputLoss();
+	if (message >= WM_MOUSEFIRST && message <= WM_MOUSELAST && window->_sceneDispatchDepth == 0u)
+		window->_ReconcileKeyboardState(true);
 
 	switch (message)
 	{
@@ -1259,15 +1294,15 @@ LRESULT CALLBACK Window::WindowProcedure(HWND hWindow, UINT message, WPARAM wPar
 		// A completed own release is not external capture loss; held keys remain real.
 		if (window->_releasingOwnedMouseCapture) return 0;
 		window->_windowSizeMove = false;
-		if (window->IsResizing())
-		{
-			window->SetResizing(false);
-			return 0;
-		}
+		window->SetResizing(false);
 		// ReleaseCapture after a normal mouse-up also sends this notification.
 		// It must not cancel a fresh press received before the next UI frame.
-		if (window->_buttonsDown != 0u || window->HasRelativePointer() || window->_heldTouches.any())
+		if (lParam != 0 || window->_buttonsDown != 0u || window->HasRelativePointer() || window->_heldTouches.any())
+		{
 			window->_captureLossPending = true;
+			window->_modifiers = Action::MODIFIER_NONE;
+			window->_heldKeys.reset();
+		}
 		return 0;
 	}
 	case WM_EXITSIZEMOVE:
@@ -1630,12 +1665,32 @@ LRESULT CALLBACK Window::WindowProcedure(HWND hWindow, UINT message, WPARAM wPar
 		window->OnAction(keyAction);
 		return 0;
 	}
+	case WM_CANCELMODE:
+		window->_captureLossPending = true;
+		window->_modifiers = Action::MODIFIER_NONE;
+		window->_heldKeys.reset();
+		window->_windowSizeMove = false;
+		window->SetResizing(false);
+		break; // DefWindowProc also cancels native menu/scroll modes and capture.
+	case WM_ACTIVATEAPP:
+		if (!wParam)
+		{
+			window->_focusLossPending = true;
+			window->_modifiers = Action::MODIFIER_NONE;
+			window->_heldKeys.reset();
+		}
+		break;
 	case WM_ACTIVATE:
 	{
 		window->_cameraWindowActive = LOWORD(wParam) != WA_INACTIVE;
 		if (!window->_cameraWindowActive)
 		{
 			window->_focusLossPending = true;
+			// WM_ACTIVATE can arrive without a useful modifier key-up (for
+			// example when Game Bar takes focus). Neutralize input immediately so
+			// a click before the next Render cannot be interpreted as Alt-click.
+			window->_modifiers = Action::MODIFIER_NONE;
+			window->_heldKeys.reset();
 		}
 		window->_UpdateCameraEligibility();
 		break;
@@ -1646,6 +1701,8 @@ LRESULT CALLBACK Window::WindowProcedure(HWND hWindow, UINT message, WPARAM wPar
 		{
 			window->_focusLossPending = true;
 			window->_cameraWindowActive = false;
+			window->_modifiers = Action::MODIFIER_NONE;
+			window->_heldKeys.reset();
 		}
 		break;
 	}
@@ -1668,6 +1725,10 @@ LRESULT CALLBACK Window::WindowProcedure(HWND hWindow, UINT message, WPARAM wPar
 		window->_focusLossPending = true;
 		window->_windowSizeMove = false;
 		window->_cameraWindowActive = false;
+		// Keep native input state correct synchronously; Scene-owned focus
+		// cleanup remains deferred to avoid re-entering its lock from plugins.
+		window->_modifiers = Action::MODIFIER_NONE;
+		window->_heldKeys.reset();
 		return 0;
 	}
 	case WM_DESTROY:

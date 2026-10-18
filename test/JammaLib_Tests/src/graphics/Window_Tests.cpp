@@ -65,7 +65,10 @@ class CameraActivityWindow final : public Window
 public:
 	CameraActivityWindow(Scene& scene, ResourceLib& resources) : Window(scene, resources) {}
 	std::vector<unsigned char> PressPath;
+	std::bitset<256u> NativeKeys = ~std::bitset<256u>{};
+	using Window::_ReconcileKeyboardState;
 protected:
+	bool _IsNativeKeyDown(unsigned int key, bool) const override { return NativeKeys.test(key); }
 	std::optional<unsigned int> _PickPointerPress(utils::Position2d) override
 	{
 		if (PressPath.empty()) return 0u;
@@ -103,6 +106,61 @@ TEST(CameraIdle, PerformanceKeysAndNativeRepeatsPreserveDeadlineAndActiveWander)
 				EXPECT_TRUE(scene.AutomaticAtOriginalDeadline());
 			}
 	DestroyWindow(host);
+}
+
+TEST(CameraIdle, FocusLossClearsShortcutHoldWithoutResettingVisibleCameraDeadline)
+{
+	CameraActivityScene scene;
+	ResourceLib resources;
+	CameraActivityWindow window(scene, resources);
+	const auto host = CreateWindowExW(0, L"STATIC", L"", 0, 0, 0, 0, 0,
+		HWND_MESSAGE, nullptr, GetModuleHandleW(nullptr), nullptr);
+	ASSERT_NE(host, nullptr);
+	SetWindowLongPtrW(host, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(&window));
+	for (const bool automatic : { false, true })
+	{
+		Window::WindowProcedure(host, WM_SETFOCUS, 0, 0);
+		Window::WindowProcedure(host, WM_KEYDOWN, VK_LWIN, 0);
+		Window::WindowProcedure(host, WM_SYSKEYDOWN, VK_MENU, 0);
+		scene.ArmIdle(automatic);
+		Window::WindowProcedure(host, WM_ACTIVATE, WA_INACTIVE, 0);
+		EXPECT_TRUE(window.ProcessDeferredInputLoss());
+		// Shortcut releases are lost to Game Bar; Jamma remains unfocused.
+		EXPECT_EQ(base::Action::MODIFIER_NONE, window.Modifiers());
+		EXPECT_EQ(automatic, scene.Automatic());
+		EXPECT_TRUE(scene.AutomaticAtOriginalDeadline());
+	}
+	DestroyWindow(host);
+}
+
+TEST(CameraIdle, LostWinAndModifierReleasesRecoverWithoutAnyFocusNotification)
+{
+	CameraActivityScene scene;
+	ResourceLib resources;
+	CameraActivityWindow window(scene, resources);
+	for (const auto winKey : { VK_LWIN, VK_RWIN })
+	{
+		actions::KeyAction key;
+		key.KeyActionType = actions::KeyAction::KEY_DOWN;
+		for (const auto code : { winKey, VK_MENU, VK_CONTROL, VK_SHIFT })
+		{
+			window.NativeKeys.set(code);
+			key.KeyChar = code;
+			window.OnAction(key);
+		}
+		scene.ArmIdle(false);
+		const auto revision = scene.ActivityRevision();
+		window._ReconcileKeyboardState();
+		EXPECT_FALSE(scene.AutomaticAtOriginalDeadline()); // Win is genuinely held.
+		window.NativeKeys.reset(VK_MENU);
+		window._ReconcileKeyboardState();
+		EXPECT_EQ(base::Action::MODIFIER_CTRL | base::Action::MODIFIER_SHIFT, window.Modifiers());
+		for (const auto code : { winKey, VK_CONTROL, VK_SHIFT }) window.NativeKeys.reset(code);
+		window._ReconcileKeyboardState();
+		EXPECT_EQ(base::Action::MODIFIER_NONE, window.Modifiers());
+		EXPECT_EQ(revision, scene.ActivityRevision());
+		EXPECT_TRUE(scene.AutomaticAtOriginalDeadline());
+	}
 }
 
 TEST(CameraIdle, PointerSelectionDeselectMuteAndBackgroundClicksPreserveDeadline)
@@ -527,6 +585,72 @@ TEST(Window, DeferredCaptureLossDoesNotCancelANewerMousePress)
     EXPECT_FALSE(window.ProcessDeferredInputLoss());
     EXPECT_TRUE(window.CancelMouseCapture());
     DestroyWindow(host);
+}
+
+TEST(Window, FocusLossClearsModifiersAndFinishesOldGestureBeforeReturningClick)
+{
+	CaptureLossScene scene;
+	ResourceLib resources;
+	CameraActivityWindow window(scene, resources);
+	const auto host = CreateWindowExW(0, L"STATIC", L"", 0, 0, 0, 0, 0,
+		HWND_MESSAGE, nullptr, GetModuleHandleW(nullptr), nullptr);
+	ASSERT_NE(host, nullptr);
+	SetWindowLongPtrW(host, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(&window));
+	for (const auto loss : { WM_KILLFOCUS, WM_ACTIVATE, WM_SHOWWINDOW, WM_ACTIVATEAPP, WM_CANCELMODE })
+		for (const auto modifier : { VK_SHIFT, VK_CONTROL, VK_MENU })
+		{
+			SCOPED_TRACE(loss);
+			SCOPED_TRACE(modifier);
+			Window::WindowProcedure(host, WM_KEYDOWN, modifier, 0);
+			Window::WindowProcedure(host, WM_LBUTTONDOWN, 0, MAKELPARAM(320, 240));
+			scene.LastMove.reset();
+			Window::WindowProcedure(host, loss, 0, 0);
+			EXPECT_EQ(base::Action::MODIFIER_NONE, window.Modifiers());
+			EXPECT_FALSE(scene.LastMove); // Scene cleanup is still deferred.
+			Window::WindowProcedure(host, WM_SETFOCUS, 0, 0);
+			Window::WindowProcedure(host, WM_LBUTTONDOWN, 0, MAKELPARAM(320, 240));
+			ASSERT_TRUE(scene.LastMove);
+			EXPECT_EQ(0u, scene.LastMove->MouseButtonsDown);
+			ASSERT_TRUE(scene.LastTouch);
+			EXPECT_EQ(base::Action::MODIFIER_NONE, scene.LastTouch->Modifiers);
+			EXPECT_EQ(1u, scene.LastTouch->MouseButtonsDown);
+			EXPECT_FALSE(window.ProcessDeferredInputLoss());
+			EXPECT_TRUE(window.CancelMouseCapture()); // The fresh press survived.
+			// A late release from the old focus must remain harmless.
+			Window::WindowProcedure(host, WM_KEYUP, modifier, 0);
+			EXPECT_EQ(base::Action::MODIFIER_NONE, window.Modifiers());
+		}
+	// A fresh modifier press before Render must survive deferred cleanup too.
+	Window::WindowProcedure(host, WM_KILLFOCUS, 0, 0);
+	Window::WindowProcedure(host, WM_SETFOCUS, 0, 0);
+	Window::WindowProcedure(host, WM_KEYDOWN, VK_CONTROL, 0);
+	EXPECT_FALSE(window.ProcessDeferredInputLoss());
+	EXPECT_EQ(base::Action::MODIFIER_CTRL, window.Modifiers());
+	Window::WindowProcedure(host, WM_KEYUP, VK_CONTROL, 0);
+	DestroyWindow(host);
+}
+
+TEST(Window, ExternalCaptureLossClearsKeyboardStateEvenWithoutPointerGesture)
+{
+	CameraActivityScene scene;
+	ResourceLib resources;
+	CameraActivityWindow window(scene, resources);
+	const auto host = CreateWindowExW(0, L"STATIC", L"", 0, 0, 0, 0, 0,
+		HWND_MESSAGE, nullptr, GetModuleHandleW(nullptr), nullptr);
+	ASSERT_NE(host, nullptr);
+	SetWindowLongPtrW(host, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(&window));
+	Window::WindowProcedure(host, WM_KEYDOWN, VK_LWIN, 0);
+	Window::WindowProcedure(host, WM_SYSKEYDOWN, VK_MENU, 0);
+	scene.ArmIdle(false);
+	// A delayed notification from an ordinary release must preserve real holds.
+	Window::WindowProcedure(host, WM_CAPTURECHANGED, 0, 0);
+	EXPECT_EQ(base::Action::MODIFIER_ALT, window.Modifiers());
+	EXPECT_FALSE(window.ProcessDeferredInputLoss());
+	Window::WindowProcedure(host, WM_CAPTURECHANGED, 0, reinterpret_cast<LPARAM>(GetDesktopWindow()));
+	EXPECT_EQ(base::Action::MODIFIER_NONE, window.Modifiers());
+	EXPECT_TRUE(window.ProcessDeferredInputLoss());
+	EXPECT_TRUE(scene.AutomaticAtOriginalDeadline());
+	DestroyWindow(host);
 }
 
 class NativeReentryScene final : public Scene

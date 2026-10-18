@@ -109,10 +109,18 @@ namespace graphics
 		static LRESULT CALLBACK WindowProcedure(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) noexcept;
 
 	protected:
+		virtual bool _IsNativeKeyDown(unsigned int key, bool queuedInput) const;
+		void _ReconcileKeyboardState(bool queuedInput = false);
 		// Resolve the current press, not a delayed asynchronous hover readback.
 		virtual std::optional<unsigned int> _PickPointerPress(utils::Position2d position);
 
 	private:
+		struct ModifierKey { base::Action::Modifiers Flag; unsigned int KeyChar; };
+		static constexpr std::array<ModifierKey, 3u> ModifierKeys{{
+			{ base::Action::MODIFIER_SHIFT, VK_SHIFT },
+			{ base::Action::MODIFIER_CTRL, VK_CONTROL },
+			{ base::Action::MODIFIER_ALT, VK_MENU }
+		}};
 		class SceneDispatchScope
 		{
 		public:
