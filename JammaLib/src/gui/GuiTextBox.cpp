@@ -73,6 +73,12 @@ void GuiTextBox::SetText(const std::string& text, bool notify)
 }
 
 unsigned int GuiTextBox::CaretIndex() const { return _caret; }
+void GuiTextBox::BeginEditing(bool selectAll)
+{
+	_caret = static_cast<unsigned int>(_text.size());
+	_anchor = selectAll ? 0u : _caret;
+	_editing = true;
+}
 bool GuiTextBox::HasSelection() const { return _caret != _anchor; }
 unsigned int GuiTextBox::SelectionStart() const { return std::min(_caret, _anchor); }
 unsigned int GuiTextBox::SelectionLength() const { return std::max(_caret, _anchor) - std::min(_caret, _anchor); }
@@ -138,8 +144,9 @@ void GuiTextBox::_Backspace()
 
 	if (_caret > 0)
 	{
-		_text.erase(_text.begin() + (_caret - 1));
-		_caret--;
+		const auto end = _caret;
+		_MoveCaret(-1, false);
+		_text.erase(_caret, end - _caret);
 		_anchor = _caret;
 	}
 }
@@ -150,12 +157,18 @@ void GuiTextBox::_Delete()
 		return;
 
 	if (_caret < _text.size())
-		_text.erase(_text.begin() + _caret);
+	{
+		auto end = _caret + 1u;
+		while (end < _text.size() && (static_cast<unsigned char>(_text[end]) & 0xc0u) == 0x80u) ++end;
+		_text.erase(_caret, end - _caret);
+	}
 }
 
 void GuiTextBox::_SetCaret(unsigned int index, bool select)
 {
 	_caret = std::min(index, (unsigned int)_text.size());
+	while (_caret > 0u && _caret < _text.size() &&
+		(static_cast<unsigned char>(_text[_caret]) & 0xc0u) == 0x80u) --_caret;
 	if (!select)
 		_anchor = _caret;
 }
@@ -164,6 +177,8 @@ void GuiTextBox::_MoveCaret(int delta, bool select)
 {
 	int next = (int)_caret + delta;
 	next = std::clamp(next, 0, (int)_text.size());
+	if (delta > 0)
+		while (next < static_cast<int>(_text.size()) && (static_cast<unsigned char>(_text[next]) & 0xc0u) == 0x80u) ++next;
 	_SetCaret((unsigned int)next, select);
 }
 
@@ -178,6 +193,7 @@ unsigned int GuiTextBox::_CaretFromLocalX(int localX) const
 	float bestDist = std::abs(target);
 	for (unsigned int i = 1; i <= _text.size(); ++i)
 	{
+		if (i < _text.size() && (static_cast<unsigned char>(_text[i]) & 0xc0u) == 0x80u) continue;
 		const float x = font->MeasureString(_text.substr(0, i));
 		const float dist = std::abs(x - target);
 		if (dist < bestDist)

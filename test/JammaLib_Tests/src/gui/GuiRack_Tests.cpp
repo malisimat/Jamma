@@ -74,6 +74,21 @@ TEST(GuiRack, OptionalVstControlReservesOnlyMasterSliderSpace)
 	EXPECT_GE(rack->GetMasterSlider()->GetSize().Height, 47u);
 	EXPECT_GE(rack->GetMasterSlider()->GetSize().Width, 64u);
 	EXPECT_LE(rack->GetMasterSlider()->Position().Y + static_cast<int>(rack->GetMasterSlider()->GetSize().Height), static_cast<int>(rack->GetSize().Height));
+
+	params.EnableStationLabel = true;
+	auto stationRack = std::make_shared<GuiRack>(params);
+	stationRack->Init();
+	const auto slider = stationRack->GetMasterSlider();
+	const auto label = stationRack->StationLabel();
+	ASSERT_NE(nullptr, label);
+	EXPECT_EQ(gui::GuiStationLabel::LabelWidth + gui::GuiStationLabel::ButtonGap + gui::GuiStationLabel::ButtonWidth, label->GetSize().Width);
+	EXPECT_NEAR(label->Position().X + gui::GuiStationLabel::LabelWidth / 2.0,
+		slider->Position().X + slider->GetSize().Width / 2.0, 1.0);
+	EXPECT_GT(label->Position().Y, slider->Position().Y + static_cast<int>(slider->GetSize().Height));
+	EXPECT_LE(stationRack->GetVstControl()->Position().Y + static_cast<int>(stationRack->GetVstControl()->GetSize().Height), slider->Position().Y);
+	const auto bin = label->BinPosition({100, 0});
+	EXPECT_EQ(100, bin.X);
+	EXPECT_GE(bin.Y, label->GlobalPosition().Y + 34);
 }
 
 TEST(GuiRack, VstControlIsAbsentUnlessRequested)

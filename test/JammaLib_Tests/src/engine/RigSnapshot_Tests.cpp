@@ -1364,6 +1364,45 @@ TEST_F(RigSnapshotTest, PrependingPreservesReceiverIdentityAndDoesNotCreateTrigg
  EXPECT_EQ(3u, coordinator.Accepted()->Stations->size());
 }
 
+TEST_F(RigSnapshotTest, StationRenamePromotesOnlyAcknowledgedMetadataAndPreservesIdentity)
+{
+	auto a = RuntimeStation("A"), b = RuntimeStation("B");
+	auto rig = EmptyRig();
+	rig.Triggers = {TriggerDescriptor("first", "A"), TriggerDescriptor("missing", "Reserved")};
+	engine::RigCoordinator coordinator;
+	ASSERT_TRUE(coordinator.BuildInitial(rig, {StationDescriptor("A"), StationDescriptor("B")}, {a, b}, 0u, {}, {}, {}));
+	const auto old = coordinator.Accepted();
+	using Result = engine::RigCoordinator::EditResult;
+	for (const auto name : {"B", "Reserved", "", " \t", "bad\nname"})
+		EXPECT_EQ(Result::ValidationFailed, coordinator.SubmitStationRename(a, old->Revision, name));
+	EXPECT_EQ(Result::ValidationFailed, coordinator.SubmitStationRename(a, old->Revision + 1u, "Keys"));
+	ASSERT_EQ(Result::Pending, coordinator.SubmitStationRename(a, old->Revision, "Keys"));
+	auto candidate = coordinator.Staged();
+	EXPECT_EQ("A", a->Name());
+	EXPECT_FALSE(candidate->MembershipChange);
+	EXPECT_EQ(old->TopologyRevision, candidate->TopologyRevision);
+	EXPECT_EQ(old->Triggers[0].Instance, candidate->Triggers[0].Instance);
+	EXPECT_EQ(a, candidate->Triggers[0].BoundReceiver);
+	EXPECT_TRUE(candidate->TriggerRouteUpdates.empty());
+	EXPECT_EQ("Keys", candidate->Rig.Triggers[0].StationTarget);
+	EXPECT_EQ("Reserved", candidate->Rig.Triggers[1].StationTarget);
+	EXPECT_EQ(Result::TransitionRejected, coordinator.CompleteTransition(candidate->Revision, false, {}));
+	EXPECT_EQ("A", a->Name());
+	ASSERT_EQ(Result::Pending, coordinator.SubmitStationRename(a, old->Revision, "Keys"));
+	candidate = coordinator.Staged();
+	ASSERT_EQ(Result::Pending, coordinator.CompleteTransition(candidate->Revision, true, {}));
+	EXPECT_FALSE(coordinator.PromoteAcknowledged());
+	coordinator.ApplyPendingAtAudioBoundary();
+	ASSERT_TRUE(coordinator.AcknowledgeInput(candidate->Revision));
+	ASSERT_TRUE(coordinator.PromoteAcknowledged());
+	EXPECT_EQ("Keys", a->Name());
+	EXPECT_EQ(old->Triggers[0].Instance, coordinator.Accepted()->Triggers[0].Instance);
+	auto next = coordinator.Accepted()->Rig;
+	next.Triggers[0].Name = "Renamed trigger";
+	ASSERT_EQ(Result::Pending, coordinator.SubmitCandidate(next));
+	EXPECT_EQ(a, coordinator.Staged()->Triggers[0].BoundReceiver);
+}
+
 TEST_F(RigSnapshotTest, RemovalExplicitlyUnbindsAndNeverRedirectsToIndexOccupant)
 {
  auto a = RuntimeStation("A"), b = RuntimeStation("B");
@@ -1527,9 +1566,10 @@ TEST_F(RigSnapshotTest, DisabledFinalBinConsumesPressAndRelease)
  utils::Size2d viewport{800u, 600u};
  controls.Update({station}, view, viewport, true, true, false, true);
  auto anchor = station->TopCapModelPosition(); anchor.Y += 65.0f;
- const auto point = gui::CableInteraction::ProjectAnchor(view * glm::vec4(anchor.X, anchor.Y, anchor.Z, 1.0f), viewport);
- ASSERT_TRUE(point);
- actions::TouchAction action; action.Position = {static_cast<int>(point->x), static_cast<int>(point->y)}; action.Index = 0;
+ const auto projected = gui::CableInteraction::ProjectAnchor(view * glm::vec4(anchor.X, anchor.Y, anchor.Z, 1.0f), viewport);
+ ASSERT_TRUE(projected);
+ const auto bin = station->GetGuiRack()->StationLabel()->BinPosition({static_cast<int>(projected->x) - 24, static_cast<int>(projected->y) - 24});
+ actions::TouchAction action; action.Position = {bin.X + 24, bin.Y + 24}; action.Index = 0;
  action.State = actions::TouchAction::TOUCH_DOWN;
  unsigned activations = 0u;
  EXPECT_TRUE(controls.Touch(action, [&](auto) { ++activations; }));
@@ -1546,9 +1586,10 @@ TEST_F(RigSnapshotTest, ReleasingCtrlCancelsBinAndConsumesItsRelease)
  utils::Size2d viewport{800u, 600u};
  controls.Update({station, b}, view, viewport, true, true, false, true);
  auto anchor = station->TopCapModelPosition(); anchor.Y += 65.0f;
- const auto point = gui::CableInteraction::ProjectAnchor(view * glm::vec4(anchor.X, anchor.Y, anchor.Z, 1.0f), viewport);
- ASSERT_TRUE(point);
- actions::TouchAction action; action.Position = {static_cast<int>(point->x), static_cast<int>(point->y)}; action.Index = 0;
+ const auto projected = gui::CableInteraction::ProjectAnchor(view * glm::vec4(anchor.X, anchor.Y, anchor.Z, 1.0f), viewport);
+ ASSERT_TRUE(projected);
+ const auto bin = station->GetGuiRack()->StationLabel()->BinPosition({static_cast<int>(projected->x) - 24, static_cast<int>(projected->y) - 24});
+ actions::TouchAction action; action.Position = {bin.X + 24, bin.Y + 24}; action.Index = 0;
  unsigned activations = 0u;
  action.State = actions::TouchAction::TOUCH_DOWN;
  EXPECT_TRUE(controls.Touch(action, [&](auto) { ++activations; }));

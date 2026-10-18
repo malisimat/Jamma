@@ -289,8 +289,12 @@ ActionResult Trigger::QueueInputEvent(TriggerInputDomain domain,
 	const base::Action& action,
 	const std::string& device,
 	std::optional<std::int64_t> eventTimeUsec,
-	std::optional<std::uint32_t> midiSample)
+	std::optional<std::uint32_t> midiSample,
+	std::optional<KeyboardTriggerReceipt>* admittedDown,
+	std::optional<KeyboardTriggerReceipt>* matchedRelease)
 {
+	if (admittedDown) admittedDown->reset();
+	if (matchedRelease) matchedRelease->reset();
 	const auto inputGeneration = _inputLossGeneration.load(std::memory_order_acquire);
 	auto enqueue = [&](TriggerControl control, std::uint16_t bindingIndex,
 		DualBinding::TestResult match)
@@ -305,6 +309,12 @@ ActionResult Trigger::QueueInputEvent(TriggerInputDomain domain,
 		auto& queue = domain == TRIGGER_INPUT_UI ? _uiInputQueue : _jobInputQueue;
 		if (!queue.Push(edge))
 			_PublishInputFallback(domain, edge);
+		if (domain == TRIGGER_INPUT_UI && source == TRIGGER_KEY)
+		{
+			const auto& binding = (control == TRIGGER_CONTROL_ACTIVATE ? _activateBindings : _ditchBindings)[bindingIndex];
+			auto* output = match == DualBinding::MATCH_DOWN ? admittedDown : matchedRelease;
+			if (output) *output = KeyboardTriggerReceipt{ control, bindingIndex, binding.Down(), binding.Release() };
+		}
 		if (source == TRIGGER_MIDI)
 		{
 			const char* stateLabel = "idle";
@@ -338,6 +348,26 @@ ActionResult Trigger::QueueInputEvent(TriggerInputDomain domain,
 			return enqueue(TRIGGER_CONTROL_DITCH, static_cast<std::uint16_t>(i), match);
 	}
 	return ActionResult::NoAction();
+}
+
+bool Trigger::QueueAdmittedKeyboardRelease(const KeyboardTriggerReceipt& receipt,
+	std::uint64_t rigRevision, const base::Action& action)
+{
+	if (receipt.Down.TriggerSource != TRIGGER_KEY || !receipt.Release) return false;
+	const auto& bindings = receipt.Control == TRIGGER_CONTROL_ACTIVATE ? _activateBindings : _ditchBindings;
+	for (std::size_t index = 0u; index < bindings.size(); ++index)
+	{
+		const auto& binding = bindings[index];
+		if (!(binding.Down() == receipt.Down) || binding.Release() != receipt.Release) continue;
+		const auto time = std::chrono::duration_cast<std::chrono::microseconds>(
+			action.GetActionTime().time_since_epoch()).count();
+		TriggerInputEdge edge{ rigRevision, static_cast<std::uint16_t>(index), receipt.Control,
+			TRIGGER_EDGE_UP, time };
+		edge.InputGeneration = _inputLossGeneration.load(std::memory_order_acquire);
+		if (!_uiInputQueue.Push(edge)) _PublishInputFallback(TRIGGER_INPUT_UI, edge);
+		return true;
+	}
+	return false;
 }
 
 ActionResult Trigger::QueueMidiInputEvent(TriggerInputDomain domain,

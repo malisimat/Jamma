@@ -552,7 +552,9 @@ namespace engine
 		static std::shared_ptr<midi::MidiLoop> _LastRecordedMidiLoop(const std::shared_ptr<LoopTake>& take);
 		bool _flipTakeBuffer;
 		bool _flipAudioBuffer;
-		std::string _name;
+		// Immutable metadata publication: UI/job/MIDI diagnostics may read concurrently.
+		// No callback reader; Scene serializes accepted writes with rig promotion/export.
+		std::atomic<std::shared_ptr<const std::string>> _name;
 		const std::string _id;
 		unsigned int _fadeSamps;
 		unsigned int _lastBufSize;

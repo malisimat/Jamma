@@ -76,7 +76,7 @@ Station::Station(StationParams params,
 	Jammable(params),
 	_flipTakeBuffer(false),
 	_flipAudioBuffer(false),
-	_name(params.Name),
+	_name(std::make_shared<const std::string>(params.Name)),
 	_id(params.Id.empty() ? utils::GetGuid() : params.Id),
 	_fadeSamps(params.FadeSamps),
 	_lastBufSize(constants::MaxBlockSize),
@@ -2759,7 +2759,7 @@ void Station::Reset()
 std::shared_ptr<LoopTake> Station::AddTake()
 {
 	LoopTakeParams takeParams;
-	takeParams.Id = _name + "-TK-" + utils::GetGuid();
+	takeParams.Id = Name() + "-TK-" + utils::GetGuid();
 	takeParams.Size = { 100,100 };
 	takeParams.FadeSamps = _fadeSamps;
 
@@ -2851,12 +2851,12 @@ unsigned int Station::NumTakes() const
 
 std::string Station::Name() const
 {
-	return _name;
+	return *_name.load(std::memory_order_acquire);
 }
 
 void Station::SetName(std::string name)
 {
-	_name = name;
+	_name.store(std::make_shared<const std::string>(std::move(name)), std::memory_order_release);
 }
 
 void Station::SetClock(std::shared_ptr<utils::Timer> clock)
@@ -3809,13 +3809,13 @@ std::vector<JobAction> Station::_CommitChanges()
 	auto pendingLoads = std::move(_pendingVstLoads);
 	for (auto& job : pendingUnloads)
 	{
-		job.SourceId = _name;
+		job.SourceId = Name();
 		job.Receiver = ActionReceiver::shared_from_this();
 		jobs.push_back(std::move(job));
 	}
 	for (auto& job : pendingLoads)
 	{
-		job.SourceId = _name;
+		job.SourceId = Name();
 		job.Receiver = ActionReceiver::shared_from_this();
 		jobs.push_back(std::move(job));
 	}
@@ -4008,6 +4008,7 @@ GuiRackParams Station::_GetRackParams(utils::Size2d size)
 {
 	GuiRackParams rackParams;
 	rackParams.EnableVstControl = true;
+	rackParams.EnableStationLabel = true;
 	rackParams.Position = { 0, 0 };
 	rackParams.Size = size;
 	rackParams.MinSize = rackParams.Size;

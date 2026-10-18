@@ -269,6 +269,7 @@
     <ClInclude Include="src\gui\GuiRadio.h" />
     <ClInclude Include="src\gui\GuiPerformanceGroupRow.h" />
     <ClInclude Include="src\gui\GuiRack.h" />
+    <ClInclude Include="src\gui\GuiStationLabel.h" />
     <ClInclude Include="src\gui\VstRackControls.h" />
     <ClInclude Include="src\vst\VstRackSlot.h" />
     <ClInclude Include="src\utils\VecUtils.h" />
@@ -406,6 +407,7 @@
 
     <ClInclude Include="src\graphics\VstEditorWindow.h" />
     <ClInclude Include="src\engine\Trigger.h" />
+    <ClInclude Include="src\engine\ContextualKeyboardInput.h" />
     <ClInclude Include="src\actions\ActionUndoHistory.h" />
     <ClInclude Include="src\io\WavReadWriter.h" />
     <ClInclude Include="src\resources\TextureResource.h" />
