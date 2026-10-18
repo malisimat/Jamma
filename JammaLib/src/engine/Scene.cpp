@@ -926,6 +926,14 @@ bool Scene::AdvanceUiAnimations()
 	}
 	_UpdateRackVisibilityLocked();
 	_vstRackControls->UpdateLocked(static_cast<base::SelectDepth>(depth));
+	for (const auto& station : _stations)
+		if (const auto rack = station->GetGuiRack()->VstRack())
+		{
+			rack->SetViewport(_sizeParams.Size);
+			if (_popupManager.IsOpen() || _loopEditor.IsEngaged() || _focusManager.IsEditingText() ||
+				_isSceneQuitting.load(std::memory_order_acquire) || _rigSaveInProgress)
+			{ rack->ClearPointerState(); rack->SetRevealHeld(false); }
+		}
 	_performanceGroups.Acknowledge(_audioEngine->GroupMuteReceipt());
 	if (_selectionPanel) _selectionPanel->RefreshPerformanceGroups(_performanceGroups.Groups());
 	if (_hudPanel)
@@ -1096,6 +1104,17 @@ ActionResult Scene::_OnPointerAction(TouchAction action)
 	_cursorPos = action.Position;
 	_InvalidateHover2d();
 	if (_rigSaveDialogOpen) return { true, {}, {}, ACTIONRESULT_DEFAULT, nullptr, {} };
+	if (const auto rack = std::dynamic_pointer_cast<gui::GuiVstRack>(_touchDownElement.lock()))
+	{
+		if (_popupManager.IsOpen() || _loopEditor.IsEngaged() || _EditControlsSuppressed())
+		{ rack->ClearPointerState(); _touchDownElement.reset(); }
+		else
+		{
+			const auto result = rack->OnAction(rack->GlobalToLocal(action));
+			if (action.State == TouchAction::TOUCH_UP && action.Index == 0) _touchDownElement.reset();
+			return result;
+		}
+	}
 	if (_backgroundGesture && (_popupManager.IsOpen() || _EditControlsSuppressed() || _loopEditor.IsEngaged() ||
 		_quantisationInputResetRequested.load(std::memory_order_acquire)))
 		_backgroundGesture.reset();
@@ -1451,8 +1470,12 @@ ActionResult Scene::_OnPointerMove(TouchMoveAction action)
 	if (!_popupManager.IsOpen() && !_loopEditor.IsEngaged() && !_quantisationInteraction.OwnsPointer())
 	{
 		for (const auto& station : SnapshotStations())
+		{
 			if (auto label = station->GetGuiRack()->StationLabel())
 				label->Move(label->GlobalToLocal(action));
+			if (auto rack = station->GetGuiRack()->VstRack())
+				rack->MovePointer(rack->GlobalToLocal(action));
+		}
 	}
 	if (!_popupManager.IsOpen() && !_loopEditor.IsEngaged() && _stationControls.Move(action))
 		return { true, {}, {}, ACTIONRESULT_DEFAULT, nullptr, {} };
@@ -1705,12 +1728,18 @@ ActionResult Scene::OnAction(KeyAction action)
 		{
 			std::scoped_lock lock(_sceneMutex);
 			_hudPanel->SetCableRevealHeld(actions::KeyAction::KEY_DOWN == action.KeyActionType);
+			for (const auto& station : _stations)
+				if (auto rack = station->GetGuiRack()->VstRack())
+					rack->SetRevealHeld(actions::KeyAction::KEY_DOWN == action.KeyActionType);
 		}
 		return ActionResult::NoAction();
 	}
 	if (_hudPanel)
 	{
 		std::scoped_lock lock(_sceneMutex);
+		for (const auto& station : _stations)
+			if (auto rack = station->GetGuiRack()->VstRack())
+				if (auto result = rack->OnAction(action); result.IsEaten) return result;
 		if (_hudPanel->HasCableDrag())
 		{
 			auto hudResult = _hudPanel->OnAction(action);

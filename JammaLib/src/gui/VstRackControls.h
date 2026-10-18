@@ -3,6 +3,7 @@
 #include <functional>
 #include <optional>
 #include "GuiRack.h"
+#include "GuiVstRack.h"
 #include "../vst/VstEditorWindowManager.h"
 
 namespace gui
@@ -35,17 +36,21 @@ namespace gui
 			std::shared_ptr<engine::Station> Station;
 			std::shared_ptr<engine::LoopTake> Take;
 			std::shared_ptr<engine::Loop> Loop;
+			std::string PluginId;
 		};
 		struct Intent
 		{
 			Target Owner;
 			base::Action::Modifiers Modifiers;
+			std::optional<GuiVstRack::Command> RackCommand;
 		};
 		bool _AvailableLocked(const Target& target) const;
 		vst::VstRackSlot _SlotLocked(const Target& target) const;
 		bool _LoadLocked(const Target& target, const std::wstring& path);
 		bool _UnloadLocked(const Target& target, const std::string& identity);
 		void _PresentLocked(const std::shared_ptr<GuiRack>& rack, Target target, const std::string& label);
+		void _PresentStationLocked(const std::shared_ptr<engine::Station>& station);
+		void _PumpStation(const Intent& intent);
 		Host _host;
 		// UI thread only. An intent owns the exact hierarchy before any modal pump.
 		std::optional<Intent> _intent;

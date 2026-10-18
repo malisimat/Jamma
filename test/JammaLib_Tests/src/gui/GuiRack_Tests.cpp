@@ -1,5 +1,6 @@
 #include "gtest/gtest.h"
 #include "gui/GuiRack.h"
+#include "gui/GuiVstRack.h"
 
 using base::ActionReceiver;
 using gui::GuiRack;
@@ -56,6 +57,53 @@ TEST(GuiRack, CompactConstructionAndResizeKeepScaleAnchorsDistinct)
 	rack.SetSize({ 200, 1 });
 	EXPECT_GE(rack.GetMasterSlider()->GetSize().Height, 47u);
 	EXPECT_GE(rack.GetChannelSlider(0)->GetSize().Height, 47u);
+}
+
+TEST(GuiRack, SharedSlotViewPreservesCapturedIdentityScrollAndHiddenCableEndpoints)
+{
+	auto params = MakeRackParams(220, 300);
+	params.EnableVstControl = true; params.EnableVstRack = true; params.EnableVstRackMidiRouting = true;
+	auto rack = std::make_shared<GuiRack>(params); rack->SetPosition({300, 400}); rack->Init();
+	const auto view = rack->VstRack(); ASSERT_NE(nullptr, view);
+	view->SetViewport({1200u, 1000u});
+	gui::GuiVstRack::Model model; model.Editable = true; model.Revision = 4u; model.TotalSlots = 12u;
+	for (auto i = 0u; i < 12u; ++i)
+	{
+		gui::GuiVstRack::Slot slot; slot.Value.Identity = "slot-" + std::to_string(i);
+		slot.Value.Failed = true; model.Slots.push_back(std::move(slot));
+	}
+	model.ChannelRoutes[2] = {true, {"slot-0", "missing-slot"}};
+	std::vector<gui::GuiVstRack::Command> commands;
+	const auto submit = [&](auto command) { commands.push_back(std::move(command)); };
+	view->Update(model, submit);
+	EXPECT_EQ(rack->GetMasterSlider()->GetSize().Width, view->AppendButton()->GetSize().Width);
+	EXPECT_EQ(view, view->AppendButton()->Parent());
+	ASSERT_GT(view->SlotScroll()->MaxScrollOffset(), 0);
+	view->SlotScroll()->SetScrollOffset(80);
+	const auto slot = view->SlotButton(0u); ASSERT_NE(nullptr, slot);
+	EXPECT_NE(nullptr, slot->Parent()); EXPECT_NE(nullptr, slot->Parent()->Parent());
+	actions::TouchAction down; down.Index = 0; down.Touch = actions::TouchAction::TOUCH_MOUSE;
+	down.State = actions::TouchAction::TOUCH_DOWN; down.Position = {20, 15}; down.Modifiers = base::Action::MODIFIER_ALT;
+	slot->OnAction(down);
+	model.Revision = 5u; view->Update(model, submit);
+	EXPECT_EQ(80, view->SlotScroll()->ScrollOffset());
+	auto up = down; up.State = actions::TouchAction::TOUCH_UP; up.Modifiers = base::Action::MODIFIER_NONE;
+	slot->OnAction(up);
+	ASSERT_EQ(1u, commands.size()); EXPECT_EQ("slot-0", commands[0].Identity);
+	EXPECT_EQ(4u, commands[0].Revision); EXPECT_EQ(base::Action::MODIFIER_ALT, commands[0].Modifiers);
+	std::vector<gui::CableInteraction::Endpoint> endpoints; std::vector<gui::CableInteraction::Cable> cables;
+	view->BuildInteractionGeometry(endpoints, cables); ASSERT_EQ(2u, cables.size());
+	EXPECT_EQ(2u, cables[0].Start.MidiChannel); EXPECT_EQ("slot-0", cables[0].Finish.PluginId);
+	view->SetChannelsCollapsed(true); endpoints.clear(); cables.clear(); view->BuildInteractionGeometry(endpoints, cables);
+	ASSERT_EQ(2u, cables.size()); EXPECT_TRUE(cables[0].Start.Continuation);
+	EXPECT_EQ(2u, cables[0].Start.MidiChannel); EXPECT_EQ("missing-slot", cables[1].Finish.PluginId);
+	EXPECT_FALSE(cables[1].Finish.Available);
+	EXPECT_EQ(gui::GuiRackParams::RACK_MASTER, rack->GetRackState());
+	// A presentation without Station channels still uses the same slot owner.
+	auto plain = std::make_shared<gui::GuiVstRack>(); plain->Init(); plain->Update(model, submit);
+	endpoints.clear(); cables.clear(); plain->BuildInteractionGeometry(endpoints, cables);
+	EXPECT_TRUE(endpoints.empty()); EXPECT_TRUE(cables.empty());
+	plain->DetachGuiOwnershipForRetirement(); rack->DetachGuiOwnershipForRetirement();
 }
 
 TEST(GuiRack, OptionalVstControlReservesOnlyMasterSliderSpace)

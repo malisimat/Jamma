@@ -135,6 +135,45 @@ Hover sockets/cables or hold **`** to reveal routing. Left-drag a socket or cabl
 end to a compatible socket to wire/move it. Drop an existing end on empty space
 to disconnect. Esc or right-click cancels the cable drag.
 
+### Station VST rack and live MIDI
+
+The Station VST stack sits below its master fader. Click **+** to append an
+installed 64-bit VST2/VST3 plugin, or click a loaded slot to toggle its editor.
+A failed saved slot remains in place with its state; click it to choose a
+replacement for that slot. Cancelling the picker leaves the rack unchanged.
+Alt-click a content slot to remove it immediately, including a pending load;
+the surviving slots keep their identities and state. The bottom **+** remains.
+Long stacks scroll within the rack.
+
+The channel selectors to the left affect **live MIDI only**. **MIDI − / MIDI +**
+collapses or expands them independently of the audio controls. Enabled unwired
+channels broadcast to eligible plugins; cables select explicit destinations,
+including many channels to one plugin or one channel to several plugins.
+Disabled channels retain their cables. Recorded MIDI keeps its separate output
+routes and continues independently of these selectors.
+
+Drag channel sockets or plugin input sockets to connect them. The usual cable
+move/disconnect/cancel gestures apply. Hover a socket, cable or collapsed MIDI
+button, or hold **`**, to reveal connections. Collapsed and scrolled endpoints
+retain their logical identities; expand the channels or scroll the slot into
+view to edit its socket. Removing or losing a plugin preserves its explicit
+unavailable targets, so a missing plugin never silently enables Broadcast.
+Disconnecting the final valid explicit target restores Broadcast; Alt-click a
+channel socket to explicitly clear that channel's cables and restore Broadcast.
+
+New racks sum instruments into the Station audio and process effects in order:
+`instrument A, instrument B, reverb` gives `reverb(A + B)`, while
+`instrument A, reverb, instrument B` gives `reverb(A) + B`. Existing nonempty
+legacy racks retain their original serial sound until **Additive** is explicitly
+confirmed. Take and Loop effects retain their serial policy.
+
+Each Station supports 32 slots and up to 512 live channel/plugin links.
+**Rack info / Rack paused** explains rejected edits or a suspended rack.
+Over-limit or malformed imports preserve their saved entries and cables while
+inactive. Use the page arrows and Alt-remove unwanted entries, then **Resume**;
+**Clear MIDI** explicitly discards all saved live cables after confirmation.
+Plugin state and recorded routes remain separate from that recovery action.
+
 ### Timing, channel override and triggers
 
 Hold Ctrl outside text entry and the E editor to show **SHFT/DIV** handles, then

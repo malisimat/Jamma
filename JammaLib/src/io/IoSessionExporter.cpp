@@ -488,7 +488,8 @@ namespace io
 						if (!saved.Scope.empty())
 						{
 							lane.TargetScope = saved.Scope;
-							lane.TargetPluginId = saved.PluginId;
+							lane.TargetPluginId = !saved.PluginId.empty() && io::NativeMidiSidecar::ValidatePluginIdentity(saved.PluginId)
+								? saved.PluginId : "unavailable:" + utils::GetGuid();
 							lane.TargetPluginIndex = saved.PluginIndex;
 							lane.TargetLoopIndex = saved.LoopIndex;
 							return true;

@@ -277,6 +277,10 @@ std::optional<std::shared_ptr<Station>> Station::FromFile(StationParams stationP
 					savedTarget.PluginId = savedTake->Loops[binding.TargetLoopIndex].VstChain[binding.TargetPluginIndex].Id;
 			}
 
+			// Keep raw malformed rack metadata, scope/index and curve, but migrate
+			// its legacy positional target to an explicit valid unavailable ID.
+			if (savedTarget.PluginId.empty() || !io::NativeMidiSidecar::ValidatePluginIdentity(savedTarget.PluginId))
+				savedTarget.PluginId = "unavailable:" + utils::GetGuid();
 			std::shared_ptr<vst::IVstPlugin> plugin;
 			if (binding.TargetScope == "station")
 				plugin = station->GetVstPlugin(binding.TargetPluginIndex);
@@ -339,6 +343,8 @@ std::optional<std::shared_ptr<Station>> Station::FromFile(StationParams stationP
 			return std::nullopt;
 		}
 	}
+	// Validate the complete pending take hierarchy before Scene admits audio.
+	station->RefreshRackLatency();
 	std::cout << "[LOAD] Constructed station '" << stationStruct.Name << "'." << std::endl;
 
 	return station;
@@ -869,7 +875,8 @@ void Station::_PrepareMidiDestinations(AudioState& state)
 		{
 			destination = std::make_shared<MidiDestination>();
 			destination->Plugin = plugin;
-			destination->RenderChannels = std::max(1u, static_cast<unsigned int>(state.AudioBuffers.size()));
+			destination->RenderChannels = plugin && plugin->HostedChannelCount() > 0u ? plugin->HostedChannelCount()
+				: std::max(1u, static_cast<unsigned int>(state.AudioBuffers.size()));
 			_midiDestinations.push_back(destination);
 		}
 		destinations.push_back(std::move(destination));
@@ -4370,6 +4377,8 @@ GuiRackParams Station::_GetRackParams(utils::Size2d size)
 	GuiRackParams rackParams;
 	rackParams.EnableVstControl = true;
 	rackParams.EnableStationLabel = true;
+	rackParams.EnableVstRack = true;
+	rackParams.EnableVstRackMidiRouting = true;
 	rackParams.Position = { 0, 0 };
 	rackParams.Size = size;
 	rackParams.MinSize = rackParams.Size;
@@ -4639,7 +4648,7 @@ bool Station::_RackLatencyFeasible(const vst::VstChain& chain) const noexcept
 {
 	if (!chain.FitsCompensationCeiling()) return false;
 	const auto stationDelay = static_cast<unsigned int>(std::max(0, chain.GetLatencySamples()));
-	for (const auto& take : _loopTakes)
+	for (const auto& take : GetLoopTakes())
 		if (take && static_cast<std::uint64_t>(stationDelay) + take->RecordedPlaybackLatencySamps() > 262144u) return false;
 	return true;
 }
@@ -4661,6 +4670,11 @@ void Station::RefreshRackLatency()
 	{
 		const auto state = _AudioStateSnapshot();
 		if (HasUnacknowledgedAudioState() || (state && !state->RetiredMidiDestinations.empty())) return;
+		// A lost-source receipt may remain in synthetic ingress after destination
+		// cleanup. Its final borrower must acknowledge before processor reuse.
+		for (const auto& binding : _midiPlaybackBindings)
+			if (!binding->RoutingActive.load(std::memory_order_acquire)
+				&& !binding->ReleaseConsumed.load(std::memory_order_acquire)) return;
 		_rackLatencySuspended = false;
 		_rackDiagnostic.clear();
 		++_rackRevision;

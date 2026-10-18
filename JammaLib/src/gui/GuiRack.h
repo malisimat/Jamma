@@ -11,6 +11,7 @@
 
 namespace gui
 {
+	class GuiVstRack;
 	class GuiRackParams :
 		public base::GuiElementParams
 	{
@@ -58,6 +59,8 @@ namespace gui
 		std::function<void(const std::vector<int>&)> OnAllowedMidiChannelsChanged;
 		bool EnableVstControl = false;
 		bool EnableStationLabel = false;
+		bool EnableVstRack = false;
+		bool EnableVstRackMidiRouting = false;
 		std::function<void(base::Action::Modifiers)> OnVstControl;
 	};
 
@@ -78,6 +81,7 @@ namespace gui
 		void SetVstControlText(const std::string& text);
 		std::shared_ptr<GuiButton> GetVstControl() const;
 		std::shared_ptr<GuiStationLabel> StationLabel() const { return _stationLabel; }
+		std::shared_ptr<GuiVstRack> VstRack() const { return _vstRack; }
 
 		virtual void SetSize(utils::Size2d size) override;
 		virtual void SetVisible(bool visible) override;
@@ -147,5 +151,6 @@ namespace gui
 		std::vector<std::shared_ptr<gui::GuiToggle>> _midiChannelToggles;
 		GuiRackParams _rackParams;
 		std::shared_ptr<GuiStationLabel> _stationLabel;
+		std::shared_ptr<GuiVstRack> _vstRack;
 	};
 }

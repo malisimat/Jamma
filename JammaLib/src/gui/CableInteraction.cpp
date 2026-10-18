@@ -11,6 +11,11 @@ CableInteraction::Curve CableInteraction::CurveControls(RouteKind kind,
 {
 	const glm::vec2 a{ start.X, start.Y };
 	const glm::vec2 b{ finish.X, finish.Y };
+	if (kind == RouteKind::StationRack)
+	{
+		const auto pull = std::max(35.0f, std::abs(a.x - b.x) * 0.45f);
+		return {a, glm::vec2{a.x + pull, a.y}, glm::vec2{b.x - pull, b.y}, b};
+	}
 	if (kind == RouteKind::Station)
 	{
 		const float pull = std::max(50.0f, std::abs(a.x - b.x) * 0.45f);

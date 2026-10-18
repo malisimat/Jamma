@@ -139,6 +139,7 @@ namespace vst
 		bool IsLoaded() const noexcept override { return _isLoaded; }
 		RenderRole Role() const noexcept override { return _role; }
 		MidiInputCapabilities MidiInput() const noexcept override { return _midiInput; }
+		unsigned int HostedChannelCount() const noexcept override { return _hostedChannels; }
 		const std::string& Name() const noexcept override { return _name; }
 
 		void SetBypassed(bool bypass) noexcept override
@@ -171,6 +172,7 @@ namespace vst
 		// Discovery owner writes before publication; no SDK calls from metadata readers.
 		RenderRole _role = RenderRole::Unknown;
 		MidiInputCapabilities _midiInput{};
+		unsigned int _hostedChannels = 0u; // Load owner writes before publication; immutable while hosted.
 		friend struct Vst3PluginTestAccess;
 		static std::wstring ResolveModulePath(const std::wstring& path, std::error_code& error);
 		bool LoadModule(const std::wstring& path, const char* stage);

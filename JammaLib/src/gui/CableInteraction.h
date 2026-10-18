@@ -14,8 +14,8 @@ namespace gui
 {
 	struct CableInteraction
 	{
-		enum class EndpointKind { AdcSource, MidiSource, TriggerInput, TriggerOutput, Station };
-		enum class RouteKind { Capture, Station };
+		enum class EndpointKind { AdcSource, MidiSource, TriggerInput, TriggerOutput, Station, RackMidiChannel, RackVstPlugin };
+		enum class RouteKind { Capture, Station, StationRack };
 		enum class End { Start, Finish };
 
 		struct Handle
@@ -39,6 +39,8 @@ namespace gui
 			std::optional<utils::Rect2d> HitBounds;
 			bool Continuation = false;
 			std::optional<glm::dvec2> ActualPosition;
+			std::optional<unsigned int> MidiChannel;
+			std::string PluginId;
 		};
 
 		struct Cable

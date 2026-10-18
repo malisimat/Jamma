@@ -1143,6 +1143,7 @@ bool Vst3Plugin::Load(const std::wstring& path,
 	const auto requestedChannels = static_cast<Steinberg::int32>(std::max(1u, numChannels));
 	std::cout << "[Vst3Plugin] Requested host channels=" << requestedChannels << std::endl;
 	_impl->requestedChannels = requestedChannels;
+	_hostedChannels = static_cast<unsigned int>(requestedChannels);
 
 	// 1. Load the DLL — skip if PreInit() already loaded it on the main thread
 	if (!_moduleHandle)

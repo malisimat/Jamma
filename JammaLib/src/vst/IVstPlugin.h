@@ -288,6 +288,8 @@ namespace vst
 		// Cached during adapter discovery, immutable while the instance is published.
 		virtual RenderRole Role() const noexcept { return RenderRole::Unknown; }
 		virtual MidiInputCapabilities MidiInput() const noexcept { return {}; }
+		// Cached hosted layout established during Load; no SDK discovery.
+		virtual unsigned int HostedChannelCount() const noexcept { return 0u; }
 
 		// Capture the full plugin state as an opaque byte blob.
 		// VST2: uses effGetChunk (bank-level, index=0) when the plugin supports

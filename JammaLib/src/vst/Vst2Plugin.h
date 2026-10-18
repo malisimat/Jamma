@@ -105,6 +105,7 @@ namespace vst
 		bool IsLoaded() const noexcept override { return _isLoaded; }
 		RenderRole Role() const noexcept override { return _role; }
 		MidiInputCapabilities MidiInput() const noexcept override { return _midiInput; }
+		unsigned int HostedChannelCount() const noexcept override { return _requestedChannels > 0 ? static_cast<unsigned int>(_requestedChannels) : 0u; }
 		const std::string& Name() const noexcept override { return _name; }
 
 		void SetBypassed(bool bypass) noexcept override

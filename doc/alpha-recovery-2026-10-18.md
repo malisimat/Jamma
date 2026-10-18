@@ -2,9 +2,9 @@
 
 Continue the approved sequence in `alpha-handover-2026-10-18.md` and the five Desktop plans. This is a recovery record, not a completion claim.
 
-## Verified persisted state
+## Initial recovered state
 
-- Current feature branch: `codex/station-vst-rack`, HEAD `65f4245e`.
+- Recovered feature branch: `codex/station-vst-rack`, based on integration commit `65f4245e`. Subsequent checkpoints are recorded below.
 - Trigger names merged locally into `bugfix/alpha-cleanup` as `65f4245e` after independent source review. The user explicitly accepted both final visual fixes in chat.
 - Full naming Debug native regression passed 1,831/1,831; 17 disabled. Log: `alpha-naming-full-debug.log` (384301 ms).
 - `alpha-naming-release-app.log` records a successful Release app target with zero warnings/errors. It did not rebuild JammaLib: current complete Release validation remains pending.
@@ -49,3 +49,21 @@ The engine now includes bounded slot paging/recovery commands, atomic 16-channel
 Removed bypassed/unloaded processors are terminal and silent; teardown ends their voices. A guarded panic receipt is retained for any later reuse of a suspended instance. Active bypass retains pending note/pedal cleanup through unbypass. GUI removal closes the captured editor before structural removal. No MIDI output transformation exists in this feature.
 
 GUI/cables, app/Release builds, independent complete-feature review, real plugin/hardware acceptance, trigger learn/save and final integrated gates remain pending. This checkpoint is not a rack feature completion or merge.
+
+## Rack presentation in progress
+
+The shared presentation is named `GuiVstRack` following the user's clarification. It accepts an optional existing channel panel; Station supplies live routing controls, while Take/Loop retain their established controls and serial audio policy. The new view stages identity/revision commands through VstRackControls and reuses existing textures, scroll panels and cable geometry/shader.
+
+`alpha-rack-ui-second-build.log` records a passing Debug library build. `alpha-rack-ui-tests-build.log` records a passing native-test build, and `alpha-rack-ui-first-tests.log` records 76/76 focused GUI rack/slider/control tests (1 disabled), including captured press identity/modifiers, scroll preservation and collapsed logical cable identity. Subsequent small cable-drop/footer/modal fixes still require combined validation.
+
+Independent follow-up found four engine edge cases being corrected serially: hosted width after destination recreation; old playback-release acknowledgement before latency resume; malformed legacy automation IDs during inactive export; and combined latency validation after complete import reconstruction. The user requested a dedicated Astra subagent review of the complete rack/cabling design, safety, performance and cleanliness near completion, before merge. That review remains pending.
+
+## Rack/cable review checkpoint
+
+The combined shared-view and engine follow-up changes build successfully for Debug JammaLib, native tests and Jamma, with zero warnings/errors. `alpha-rack-review-fixes-combined-tests-2.log` records 460/460 engine/UI/cable/Scene/JSON checks passing (13 disabled). A final test-only embedded-NUL assertion passed in the 16/16 JSON rerun (`alpha-rack-review-fixes-json-final-tests.log`). Exact final build logs: `alpha-rack-review-fixes-tests-build-2.log`, `alpha-rack-review-fixes-tests-build-3.log`, `alpha-rack-review-fixes-app-build-2.log`.
+
+The four engine follow-ups are corrected. Hosted width is cached with the processor, latency resume waits for old release receipts, complete imported child latency is checked before admission, and invalid legacy automation identities migrate to explicit unavailable references. Malformed raw rack IDs survive valid JSON through a raw-byte field; hierarchy validation still protects Station/Take/Loop identities while deferring inactive Station rack recovery to its owner. The legacy JSON reader now preserves embedded NUL with a direct regression assertion.
+
+`GuiVstRack` provides the slot stack/append/scroll, identity/revision-bearing gestures, optional reused live channel controls, many-to-many cable editing, collapsed/clipped endpoint projection, explicit recovery and conversion controls. VstRackControls applies intents under existing Scene serialization and revalidates after native message pumping. View/capture/draft state is window-owned; command handlers stage values only. Plugin/route state remains structural and callback delivery remains prepared. Static threading audit plus manual callback inspection found no new callback lock, allocation or wait; reported mutex additions are non-RT UI/structural sites.
+
+Dedicated Astra review requested by the user, fresh Debug UI/plugin acceptance, Release and final integrated validation remain pending. No rack merge, push, release/tag or master merge has occurred. Trigger learn/save is still queued.

@@ -269,6 +269,7 @@
     <ClInclude Include="src\gui\GuiRadio.h" />
     <ClInclude Include="src\gui\GuiPerformanceGroupRow.h" />
     <ClInclude Include="src\gui\GuiRack.h" />
+    <ClInclude Include="src\gui\GuiVstRack.h" />
     <ClInclude Include="src\gui\GuiStationLabel.h" />
     <ClInclude Include="src\gui\GuiTriggerRename.h" />
     <ClInclude Include="src\gui\VstRackControls.h" />
@@ -463,6 +464,7 @@
     <ClCompile Include="src\gui\GuiRadio.cpp" />
     <ClCompile Include="src\gui\GuiPerformanceGroupRow.cpp" />
     <ClCompile Include="src\gui\GuiRack.cpp" />
+    <ClCompile Include="src\gui\GuiVstRack.cpp" />
     <ClCompile Include="src\gui\VstRackControls.cpp" />
     <ClCompile Include="src\io\InitFile.cpp" />
     <ClCompile Include="src\io\NetworkSession.cpp" />

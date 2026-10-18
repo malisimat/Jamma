@@ -6,6 +6,7 @@
 ///////////////////////////////////////////////////////////
 
 #include "JamFile.h"
+#include "NativeMidiSidecar.h"
 #include "PerformanceGroupPersistence.h"
 #include <algorithm>
 #include <cctype>
@@ -641,6 +642,15 @@ bool JamFile::ToStream(JamFile jam, std::stringstream& ss)
 			+ "," + kvStr("id", entry.Id)
 			+ "," + kvBool("bypass", entry.Bypass)
 			+ "," + kvStr("state", entry.State);
+		if (!NativeMidiSidecar::ValidatePluginIdentity(entry.Id))
+		{
+			// A raw inactive identity may contain invalid UTF-8 or NUL. Encode
+			// its original bytes explicitly; the JAM remains valid JSON.
+			const std::vector<std::uint8_t> bytes(entry.Id.begin(), entry.Id.end());
+			out = "{" + kvStr("path", entry.Path) + "," + kvStr("id", "")
+				+ "," + kvStr("rawIdBase64", utils::Base64Encode(bytes))
+				+ "," + kvBool("bypass", entry.Bypass) + "," + kvStr("state", entry.State);
+		}
 		out += "}";
 		return out;
 	};
@@ -926,6 +936,12 @@ std::optional<JamFile::VstEntry> JamFile::VstEntry::FromJson(Json::JsonPart json
 {
 	VstEntry entry;
 	entry.Id = Json::GetString(json, "id").value_or("");
+	if (const auto raw = Json::GetString(json, "rawIdBase64"))
+	{
+		const auto bytes = utils::Base64Decode(*raw);
+		if (bytes.empty() || utils::Base64Encode(bytes) != *raw) return std::nullopt;
+		entry.Id.assign(bytes.begin(), bytes.end());
+	}
 
 	auto iter = json.KeyValues.find("path");
 	if (iter != json.KeyValues.end())

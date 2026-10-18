@@ -1,5 +1,6 @@
 #include "GuiToggle.h"
 #include "GuiRack.h"
+#include "GuiVstRack.h"
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
@@ -10,6 +11,21 @@ using namespace gui;
 using namespace actions;
 using namespace resources;
 using namespace utils;
+
+namespace gui
+{
+	class GuiStationMidiToggle : public GuiToggle
+	{
+	public:
+		explicit GuiStationMidiToggle(GuiToggleParams params) : GuiToggle(params) {}
+		void Draw(base::DrawContext& context) override
+		{
+			const auto tint = _guiParams.TintColor;
+			if (GetToggleState() == GuiToggleParams::TOGGLE_OFF) _guiParams.TintColor = glm::vec3(0.45f);
+			GuiToggle::Draw(context); _guiParams.TintColor = tint;
+		}
+	};
+}
 
 const utils::Size2d GuiRack::_SliderGap = { 8, 4 };
 const unsigned int GuiRack::_ChannelTogglePaddingLeft = 18;
@@ -63,7 +79,13 @@ GuiRack::GuiRack(GuiRackParams params) :
 		toggleParams.Position = { 0, 0 };
 		toggleParams.Text = std::to_string(channel + 1u);
 		toggleParams.Rot90 = false;
-		auto toggle = std::make_shared<gui::GuiToggle>(toggleParams);
+		if (params.EnableVstRackMidiRouting)
+		{
+			toggleParams.TextFontSize = graphics::FontOptions::FONT_SMALL;
+			toggleParams.TextPadding = 2u;
+		}
+		std::shared_ptr<GuiToggle> toggle = params.EnableVstRackMidiRouting ?
+			std::make_shared<GuiStationMidiToggle>(toggleParams) : std::make_shared<GuiToggle>(toggleParams);
 		_midiChannelToggles.push_back(toggle);
 		_midiChannelPanel->AddChild(toggle);
 	}
@@ -76,7 +98,7 @@ GuiRack::GuiRack(GuiRackParams params) :
 		_masterPanel->AddChild(_stationLabel);
 		_stationLabel->SetVisible(true);
 	}
-	if (params.EnableVstControl)
+	if (params.EnableVstControl && !params.EnableVstRack)
 	{
 		const std::array<std::string, 4> names = { "vst_empty", "vst_closed", "vst_open", "vst_failed" };
 		for (size_t i = 0; i < _vstControls.size(); ++i)
@@ -100,7 +122,12 @@ GuiRack::GuiRack(GuiRackParams params) :
 	}
 	_masterPanel->AddChild(_channelToggle);
 	_masterPanel->AddChild(_channelPanel);
-	_channelPanel->AddChild(_midiChannelPanel);
+	if (params.EnableVstRack)
+	{
+		_vstRack = params.EnableVstRackMidiRouting ? std::make_shared<GuiVstRack>(_midiChannelPanel, _midiChannelToggles) : std::make_shared<GuiVstRack>();
+		_masterPanel->AddChild(_vstRack);
+	}
+	if (!params.EnableVstRackMidiRouting) _channelPanel->AddChild(_midiChannelPanel);
 	_channelPanel->AddChild(_routerToggle);
 	_channelPanel->AddChild(_routerPanel);
 	_routerPanel->AddChild(_router);
@@ -180,6 +207,11 @@ void GuiRack::SetSize(utils::Size2d size)
 			static_cast<int>(row * (_MidiChannelToggleSize.Height + _MidiChannelToggleGap.Height))
 		});
 		_midiChannelToggles[channel]->SetSize(_MidiChannelToggleSize);
+	}
+	if (_vstRack)
+	{
+		_vstRack->SetPosition({masterSliderParams.Position.X, 0});
+		_vstRack->Layout(masterSliderParams.Size.Width, masterSliderParams.Position.Y);
 	}
 
 	for (auto i = 0u; i < _channelSliders.size(); ++i)
@@ -334,6 +366,7 @@ void GuiRack::SetVisible(bool visible)
 {
 	if (!visible)
 	{
+		if (_vstRack) { _vstRack->ClearPointerState(); _vstRack->SetRevealHeld(false); }
 		if (_stationLabel) _stationLabel->Cancel();
 		SetRackState(GuiRackParams::RACK_MASTER, true);
 	}
@@ -342,6 +375,7 @@ void GuiRack::SetVisible(bool visible)
 
 void GuiRack::SetMasterControlsVisible(bool visible)
 {
+	if (!visible && _vstRack) { _vstRack->ClearPointerState(); _vstRack->SetRevealHeld(false); }
 	if (!visible && _stationLabel) _stationLabel->Cancel();
 	_masterControlsVisible = visible;
 	// Suppression must not overwrite selection-depth visibility or collapse
@@ -355,6 +389,7 @@ bool GuiRack::IsInView(utils::Size2d viewport) const
 		return false;
 	for (auto ancestor = Parent(); ancestor; ancestor = ancestor->Parent())
 		if (!ancestor->IsVisible()) return false;
+	if (_vstRack && _vstRack->IsInView(viewport)) return true;
 
 	// Expanded panels may extend into view after their owner has left it.
 	// Only the persistent master rectangle determines whether the rack is in view.
@@ -407,7 +442,7 @@ void GuiRack::_OnRackChange(unsigned int index, bool bypassUpdates)
 		_channelToggle->SetToggleState(GuiToggleParams::TOGGLE_OFF, 1 == index ? true : bypassUpdates);
 		_channelPanel->SetVisible(false);
 		_routerPanel->SetVisible(false);
-		_midiChannelPanel->SetVisible(false);
+		if (!_rackParams.EnableVstRackMidiRouting) _midiChannelPanel->SetVisible(false);
 		break;
 	case GuiRackParams::RACK_CHANNELS:
 		_masterPanel->SetVisible(true);
@@ -415,7 +450,7 @@ void GuiRack::_OnRackChange(unsigned int index, bool bypassUpdates)
 		_channelPanel->SetVisible(true);
 		_routerToggle->SetToggleState(GuiToggleParams::TOGGLE_OFF, 2 == index ? true : bypassUpdates);
 		_routerPanel->SetVisible(false);
-		_midiChannelPanel->SetVisible(true);
+		if (!_rackParams.EnableVstRackMidiRouting) _midiChannelPanel->SetVisible(true);
 		break;
 	case GuiRackParams::RACK_ROUTER:
 		_masterPanel->SetVisible(true);
@@ -423,7 +458,7 @@ void GuiRack::_OnRackChange(unsigned int index, bool bypassUpdates)
 		_channelPanel->SetVisible(true);
 		_routerToggle->SetToggleState(GuiToggleParams::TOGGLE_ON, 2 == index ? true : bypassUpdates);
 		_routerPanel->SetVisible(true);
-		_midiChannelPanel->SetVisible(true);
+		if (!_rackParams.EnableVstRackMidiRouting) _midiChannelPanel->SetVisible(true);
 		break;
 	}
 
@@ -675,6 +710,7 @@ std::shared_ptr<gui::GuiSlider> GuiRack::GetMasterSlider() const
 
 std::shared_ptr<GuiButton> GuiRack::GetVstControl() const
 {
+	if (_vstRack) return _vstRack->AppendButton();
 	const auto index = _vstControlState == VstControlState::Loading ?
 		static_cast<size_t>(VstControlState::Closed) : static_cast<size_t>(_vstControlState);
 	return _vstControls[index];

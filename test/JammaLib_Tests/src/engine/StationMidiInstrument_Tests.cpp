@@ -118,6 +118,7 @@ public:
 	const std::string& Name() const noexcept override { return _name; }
 	vst::RenderRole Role() const noexcept override { return RenderRole; }
 	vst::MidiInputCapabilities MidiInput() const noexcept override { return { true, true, true }; }
+	unsigned int HostedChannelCount() const noexcept override { return HostedChannels; }
 	vst::RenderRole RenderRole = vst::RenderRole::Effect;
 	bool ReplaceOutput = false;
 	float OutputValue = 0.0f;
@@ -2057,6 +2058,7 @@ TEST(StationMidiInstrument, SoundingSustainSurvivesHealthySourceAndRecoversAcros
 	station->RefreshRackLatency();
 	EXPECT_TRUE(station->RackLatencySuspended());
 	EXPECT_FALSE(station->RackDiagnostic().empty());
+	station->SetNumBusChannels(1); station->CommitChanges();
 	RenderStationBlock(station, 512);
 	station->AcknowledgeAudioBoundary(); station->ReleaseRetiredAudioStates();
 	RenderStationBlock(station, 640);
@@ -2064,8 +2066,23 @@ TEST(StationMidiInstrument, SoundingSustainSurvivesHealthySourceAndRecoversAcros
 	plugin->LatencySamps = 0;
 	station->RefreshRackLatency();
 	EXPECT_FALSE(station->RackLatencySuspended());
+	// A recreated destination still uses the processor's original two-channel
+	// hosted layout after the Station bus shrank while suspended.
 	station->TryEnqueueImmediateLiveMidi(MidiEvent::MakeNoteOn(768, 0, 61, 100));
 	RenderStationBlock(station, 768);
+	EXPECT_TRUE(plugin->LastBlockProcessed);
+	// Pending membership must count toward admission, before CommitChanges.
+	auto pending = MakeMidiTake("pending-ceiling");
+	auto child = std::make_shared<StationMidiInstrumentFakePlugin>();
+	child->LatencySamps = 262144;
+	JobAction childLoad; childLoad.JobActionType = JobAction::JOB_LOADVST;
+	childLoad.VstPath = L"child-ceiling.dll"; childLoad.PreInitPlugin = child;
+	pending->OnAction(childLoad); pending->CommitChanges();
+	plugin->LatencySamps = 1;
+	station->AddTake(pending);
+	station->RefreshRackLatency();
+	EXPECT_TRUE(station->RackLatencySuspended());
+	child->LatencySamps = 0;
 	ASSERT_TRUE(station->UnloadManagedVstPlugin(plugin->StateId()));
 	for (const auto& job : station->CommitChanges()) station->OnAction(job);
 	station->CommitChanges();
@@ -2101,6 +2118,28 @@ TEST(StationMidiInstrument, RecordedPedalFlushRetriesWithoutLiftingLiveOwner)
 		RenderStationBlock(station, 256);
 		const auto pedalUp = [](const auto& event) { return event.MessageType() == 0xb0 && event.data1 == 64 && event.data2 == 0; };
 		EXPECT_EQ(!liveOwner, std::any_of(plugin->ProcessedEvents.begin(), plugin->ProcessedEvents.end(), pedalUp));
+		if (!liveOwner)
+		{
+			auto filled = 0u;
+			while (filled < 1024u && station->TryEnqueueSyntheticLiveMidi(MidiEvent::MakeNoteOn(100000u, 0, 70, 100))) ++filled;
+			ASSERT_GT(filled, 0u);
+			EXPECT_FALSE(station->TryEnqueueSyntheticLiveMidi(MidiEvent::MakeNoteOn(100000u, 0, 70, 100)));
+			plugin->LatencySamps = 262145;
+			station->RefreshRackLatency();
+			RenderStationBlock(station, 384);
+			station->AcknowledgeAudioBoundary(); station->ReleaseRetiredAudioStates();
+			RenderStationBlock(station, 512);
+			station->AcknowledgeAudioBoundary(); station->ReleaseRetiredAudioStates();
+			plugin->LatencySamps = 0;
+			station->RefreshRackLatency();
+			EXPECT_TRUE(station->RackLatencySuspended()); // DSP cleanup alone cannot consume a full ingress queue's receipt.
+			station->ResetLiveMidiWhileQuiescent();
+			station->FlushPendingLostLiveMidiNotes();
+			RenderStationBlock(station, 640);
+			station->AcknowledgeAudioBoundary(); station->ReleaseRetiredAudioStates();
+			station->RefreshRackLatency();
+			EXPECT_FALSE(station->RackLatencySuspended());
+		}
 		if (liveOwner)
 		{
 			station->TryEnqueueImmediateLiveMidi({384, 0xb0, 64, 0});

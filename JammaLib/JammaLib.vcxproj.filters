@@ -627,6 +627,7 @@
     <ClInclude Include="src\gui\GuiRack.h">
       <Filter>src\gui</Filter>
     </ClInclude>
+    <ClInclude Include="src\gui\GuiVstRack.h"><Filter>gui</Filter></ClInclude>
     <ClInclude Include="src\gui\GuiStationLabel.h">
       <Filter>src\gui</Filter>
     </ClInclude>
@@ -1034,6 +1035,7 @@
     <ClCompile Include="src\gui\GuiRack.cpp">
       <Filter>src\gui</Filter>
     </ClCompile>
+    <ClCompile Include="src\gui\GuiVstRack.cpp"><Filter>gui</Filter></ClCompile>
     <ClCompile Include="src\gui\VstRackControls.cpp">
       <Filter>src\gui</Filter>
     </ClCompile>

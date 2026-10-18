@@ -48,6 +48,12 @@ GuiScrollPanel::GuiScrollPanel(GuiScrollPanelParams params) :
 
 void GuiScrollPanel::SetContent(std::shared_ptr<base::GuiElement> content)
 {
+	if (_contentHost)
+	{
+		_contentHost->ClearPointerState();
+		_contentHost->ReleaseResources();
+		_contentHost->DetachGuiOwnershipForRetirement();
+	}
 	_content = std::move(content);
 	_contentHost.reset();
 	if (_content)

@@ -456,7 +456,7 @@ bool Json::IsTrue(std::string str)
 		charBuf.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(letter))));
 
 	charBuf.push_back('\0');
-	auto strLower = std::string(charBuf.data());
+	auto strLower = std::string(charBuf.data(), charBuf.size() - 1u);
 	return "true" == strLower;
 }
 
@@ -527,7 +527,7 @@ Json::KeyResult Json::ParseKey(std::stringstream ss)
 		if ('"' == c)
 		{
 			charBuf.push_back('\0');
-			key = std::string(charBuf.data());
+			key = std::string(charBuf.data(), charBuf.size() - 1u);
 			break;
 		}
 		else
@@ -623,7 +623,7 @@ Json::ValueResult Json::ParseValue(std::stringstream ss)
 				if (!isQuotedString && ((',' == c) || isArrayEnd))
 				{
 					charBuf.push_back('\0');
-					values.push_back(std::string(charBuf.data()));
+					values.push_back(std::string(charBuf.data(), charBuf.size() - 1u));
 
 					if (isArrayEnd)
 						break;
@@ -710,7 +710,7 @@ Json::ValueResult Json::ParseValue(std::stringstream ss)
 				if ('"' == c)
 				{
 					charBuf.push_back('\0');
-					return { std::move(ss), std::string(charBuf.data()) };
+					return { std::move(ss), std::string(charBuf.data(), charBuf.size() - 1u) };
 				}
 
 				charBuf.push_back(c);
@@ -797,7 +797,7 @@ Json::ValueResult Json::ParseValue(std::stringstream ss)
 					}
 
 					charBuf.push_back('\0');
-					return { std::move(ss), std::string(charBuf.data()) };
+					return { std::move(ss), std::string(charBuf.data(), charBuf.size() - 1u) };
 				}
 				else
 					charBuf.push_back(c);
@@ -872,7 +872,7 @@ Json::JsonArray Json::ParseJsonArray(std::vector<std::string> values)
 					charBuf.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(letter))));
 
 				charBuf.push_back('\0');
-				firstValue = std::string(charBuf.data());
+				firstValue = std::string(charBuf.data(), charBuf.size() - 1u);
 				if (("true" == firstValue) || ("false" == firstValue))
 					jsonType = JSON_BOOL;
 				else
