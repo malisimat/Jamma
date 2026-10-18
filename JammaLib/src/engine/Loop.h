@@ -6,6 +6,7 @@
 // length, read/write positions, fades, and loop-local phase.
 
 #include <atomic>
+#include <functional>
 #include <string>
 #include <memory>
 #include <mutex>
@@ -134,6 +135,7 @@ namespace engine
 			_vstChain(),
 			_backVstChain(std::move(other._backVstChain)),
 			_flipVstChain(other._flipVstChain.load(std::memory_order_relaxed)),
+			_automationTopologyChanged(std::move(other._automationTopologyChanged)),
 			_pendingVstLoads(std::move(other._pendingVstLoads)),
 			_pendingVstUnloads(std::move(other._pendingVstUnloads)),
 			_sampleRate(other._sampleRate.load(std::memory_order_relaxed)),
@@ -187,6 +189,7 @@ namespace engine
 				auto chain = _vstChain.exchange(other._vstChain.load(std::memory_order_acquire), std::memory_order_acq_rel);
 				other._vstChain.store(chain, std::memory_order_release);
 				_backVstChain.swap(other._backVstChain);
+				_automationTopologyChanged.swap(other._automationTopologyChanged);
 				_playbackDelay.swap(other._playbackDelay);
 				bool flip = _flipVstChain.load(std::memory_order_relaxed);
 				_flipVstChain.store(other._flipVstChain.load(std::memory_order_relaxed), std::memory_order_relaxed);
@@ -394,6 +397,14 @@ namespace engine
 
 		// Non-RT accessor to retrieve a loaded plugin instance (or nullptr).
 		std::shared_ptr<vst::IVstPlugin> GetVstPlugin(size_t index) const;
+		void SetAutomationTopologyChangedCallback(std::function<void()> changed)
+			{ _automationTopologyChanged = std::move(changed); }
+		std::shared_ptr<vst::IVstPlugin> FindVstPlugin(const vst::IVstPlugin* observer,
+			const std::string& identity, std::size_t& index) const
+		{
+			const auto chain = _vstChain.load(std::memory_order_acquire);
+			return chain ? chain->FindPlugin(observer, identity, index) : nullptr;
+		}
 		bool OwnsPlugin(const vst::IVstPlugin* plugin) const noexcept
 		{
 			const auto chain = _vstChain.load(std::memory_order_acquire);
@@ -494,6 +505,9 @@ namespace engine
 		std::shared_ptr<audio::PlaybackDelay> _playbackDelay = std::make_shared<audio::PlaybackDelay>();
 		std::shared_ptr<vst::VstChain> _backVstChain;
 		std::atomic<bool> _flipVstChain{ false };
+		// Scene-serialized non-audio membership/commit only. Callback captures a
+		// weak Station owner and is never invoked from audio or plugin jobs.
+		std::function<void()> _automationTopologyChanged;
 		std::vector<actions::JobAction> _pendingVstLoads;
 		std::vector<actions::JobAction> _pendingVstUnloads;
 		std::atomic<float> _sampleRate{ static_cast<float>(constants::DefaultSampleRate) };

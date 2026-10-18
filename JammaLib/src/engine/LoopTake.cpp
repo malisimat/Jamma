@@ -312,6 +312,8 @@ std::optional<std::shared_ptr<LoopTake>> LoopTake::FromFile(LoopTakeParams takeP
 				midi::AutomationMapping::MakeEditorMatchKey() :
 				midi::AutomationMapping::MakeMatchKey(lane.Channel, lane.Controller);
 			restoredLane.TargetParameterIndex = lane.TargetParameterIndex;
+			restoredLane.SavedTarget = {lane.TargetScope, lane.TargetPluginId,
+				lane.TargetPluginIndex, lane.TargetLoopIndex};
 			restoredLane.PointCount = lane.Points.size();
 			for (std::size_t pointIndex = 0u; pointIndex < lane.Points.size(); ++pointIndex)
 				restoredLane.Points[pointIndex] = { static_cast<float>(lane.Points[pointIndex].Fraction),
@@ -1847,6 +1849,7 @@ std::shared_ptr<Loop> LoopTake::AddLoop(unsigned int chan, std::string stationNa
 
 void LoopTake::AddLoop(std::shared_ptr<Loop> loop)
 {
+	loop->SetAutomationTopologyChangedCallback(_automationTopologyChanged);
 	loop->SetCaptureSourceMuteControl(_captureSourceMuteControl);
 	_backLoops.push_back(loop);
 	_backAudioBuffers.push_back(std::make_shared<audio::AudioBuffer>(_lastBufSize));
@@ -3148,13 +3151,18 @@ std::vector<JobAction> LoopTake::_CommitChanges()
 	if (audioStateChanged)
 		_PublishAudioState();
 
+	bool vstTopologyChanged = false;
 	// Swap in the VST chain when the job thread has delivered a new one.
 	if (_flipVstChain.load(std::memory_order_acquire))
 	{
 		std::lock_guard<std::mutex> lock(_vstPathsMutex);
 		_flipVstChain.store(false, std::memory_order_release);
 		_vstChain.store(_backVstChain, std::memory_order_release);
+		vstTopologyChanged = true;
 	}
+	// Notify after releasing _vstPathsMutex. The parent commits before its
+	// children, so this schedules its next serialized dispatch publication.
+	if (vstTopologyChanged && _automationTopologyChanged) _automationTopologyChanged();
 
 	std::vector<JobAction> jobs;
 
@@ -4650,6 +4658,13 @@ void LoopTake::UnloadVstPlugin(size_t index)
 	_pendingVstUnloads.push_back(std::move(job));
 	_vstJobsPending.fetch_add(1u, std::memory_order_release);
 	_changesMade = true;
+}
+
+void LoopTake::SetAutomationTopologyChangedCallback(std::function<void()> changed)
+{
+	_automationTopologyChanged = std::move(changed);
+	for (const auto& loop : _loops) if (loop) loop->SetAutomationTopologyChangedCallback(_automationTopologyChanged);
+	for (const auto& loop : _backLoops) if (loop) loop->SetAutomationTopologyChangedCallback(_automationTopologyChanged);
 }
 
 std::shared_ptr<vst::IVstPlugin> LoopTake::GetVstPlugin(size_t index) const

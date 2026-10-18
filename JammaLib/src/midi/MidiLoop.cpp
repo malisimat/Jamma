@@ -347,7 +347,7 @@ void MidiLoop::Reset() noexcept
 }
 
 bool MidiLoop::SnapshotForExport(ExportState& state,
-	std::int32_t anchorCorrection) const noexcept
+	std::int32_t anchorCorrection) const
 {
 	const auto* snapshot = AcquirePlaybackSnapshot();
 	state.LoopQuantisation = _loopQuantisationOverride;
@@ -388,6 +388,7 @@ bool MidiLoop::SnapshotForExport(ExportState& state,
 			exported.MatchKey = lane.Mapping.MatchKey.load(std::memory_order_acquire);
 			exported.TargetParameterIndex = lane.Mapping.TargetParameterIndex;
 			exported.TargetPlugin = lane.Mapping.TargetPlugin;
+			exported.SavedTarget = lane.Mapping.SavedTarget;
 			exported.PointCount = lane.PointCount;
 			if (exported.PointCount > exported.Points.size())
 				return false;
@@ -406,7 +407,7 @@ bool MidiLoop::SnapshotForExport(ExportState& state,
 	return true;
 }
 
-bool MidiLoop::RestoreFromExport(const ExportState& state) noexcept
+bool MidiLoop::RestoreFromExport(const ExportState& state)
 {
 	OwnerPublicationGuard publication(*this);
 	if (_preparedGridActivated.load(std::memory_order_seq_cst))
@@ -468,6 +469,7 @@ bool MidiLoop::RestoreFromExport(const ExportState& state) noexcept
 		lane.Revision.store(generation + 1u, std::memory_order_release);
 		const auto& imported = state.AutomationLanes[laneIdx];
 		lane.Mapping.TargetPlugin = nullptr;
+		lane.Mapping.SavedTarget = imported.SavedTarget;
 		lane.Mapping.TargetParameterIndex = imported.TargetParameterIndex;
 		lane.Mapping.MatchKey.store(imported.MatchKey, std::memory_order_relaxed);
 		lane.PointCount = imported.PointCount;
@@ -482,12 +484,13 @@ bool MidiLoop::RestoreFromExport(const ExportState& state) noexcept
 }
 
 bool MidiLoop::BindAutomationLaneTarget(std::size_t laneIdx,
-	vst::IVstPlugin* plugin) noexcept
+	vst::IVstPlugin* plugin, const std::string& identity)
 {
 	if (laneIdx >= MaxAutomationLanes || !plugin || !_lanes[laneIdx].Mapping.IsActive())
 		return false;
 
 	_lanes[laneIdx].Mapping.TargetPlugin = plugin;
+	_lanes[laneIdx].Mapping.SavedTarget.PluginId = identity;
 	return true;
 }
 
@@ -1762,6 +1765,7 @@ void MidiLoop::ClearAutomationLane(std::size_t laneIdx) noexcept
 	lane.Revision.store(gen + 1u, std::memory_order_release);
 	lane.Mapping.MatchKey.store(AutomationMapping::kInactive, std::memory_order_relaxed);
 	lane.Mapping.TargetPlugin = nullptr;
+	lane.Mapping.SavedTarget = {};
 	lane.Mapping.TargetParameterIndex = 0u;
 	lane.PointCount = 0u;
 	lane.Revision.store(gen + 2u, std::memory_order_release);
@@ -1805,7 +1809,7 @@ std::optional<std::size_t> MidiLoop::ResolveAutomationLaneFor(const vst::IVstPlu
 
 bool MidiLoop::WireEditorAutomationLane(std::size_t laneIdx,
 	vst::IVstPlugin* plugin,
-	unsigned int paramIdx) noexcept
+	unsigned int paramIdx, const std::string& identity)
 {
 	if (laneIdx >= MaxAutomationLanes)
 		return false;
@@ -1813,6 +1817,7 @@ bool MidiLoop::WireEditorAutomationLane(std::size_t laneIdx,
 	auto& mapping = _lanes[laneIdx].Mapping;
 	const bool alreadyMapped = mapping.IsActive()
 		&& mapping.TargetPlugin == plugin
+		&& mapping.SavedTarget.PluginId == identity
 		&& mapping.TargetParameterIndex == paramIdx;
 	if (alreadyMapped)
 		return false;
@@ -1820,6 +1825,8 @@ bool MidiLoop::WireEditorAutomationLane(std::size_t laneIdx,
 	// Publish the target before activating the match key so a reader that observes
 	// the active key also observes the resolved plugin/parameter.
 	mapping.TargetPlugin = plugin;
+	mapping.SavedTarget = {};
+	mapping.SavedTarget.PluginId = identity;
 	mapping.TargetParameterIndex = paramIdx;
 	mapping.MatchKey.store(AutomationMapping::MakeEditorMatchKey(), std::memory_order_release);
 	return true;

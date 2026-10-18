@@ -131,6 +131,7 @@ actions::ActionResult MidiRouter::HandleAutomationKey(const actions::KeyAction& 
 
 		auto& lane = loop->GetLane(laneIdx);
 		lane.Mapping.TargetPlugin = plugin;
+		lane.Mapping.SavedTarget = {};
 		lane.Mapping.TargetParameterIndex = paramIdx;
 		lane.Mapping.MatchKey.store(
 			midi::AutomationMapping::MakeMatchKey(channel & 0x0Fu, learnedCC),
@@ -1115,11 +1116,12 @@ void MidiRouter::_ConsumeEditorAutomation(const std::vector<std::shared_ptr<engi
 							touchState->LaneIdx        = laneIdx;
 							touchState->LastTouchSample = nowSample;
 
-							if (targetLoop->WireEditorAutomationLane(laneIdx, plugin, paramIdx))
+						if (targetLoop->WireEditorAutomationLane(laneIdx, plugin, paramIdx, plugin->StateId()))
 							{
 								std::cout << "[Automation] editor drag wired lane " << laneIdx
 									<< " -> plugin " << static_cast<const void*>(plugin)
 									<< " param " << paramIdx << "\n";
+								targetStation->RebuildAutomationDispatch();
 							}
 
 							targetLoop->OverwriteAutomationWindow(laneIdx, loopSample, cooldownSamples, value);

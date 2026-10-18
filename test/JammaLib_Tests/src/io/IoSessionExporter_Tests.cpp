@@ -646,6 +646,93 @@ TEST(IoSessionExporter, PreservesSparseGroupRowsAndRuntimeIdentity)
     EXPECT_EQ(jam->MuteActiveGroup, 7u);
 }
 
+TEST(IoSessionExporter, UnavailableRackAutomationRemainsSaveableAndIdentityBound)
+{
+	struct DirectoryCleanup
+	{
+		std::filesystem::path Path;
+		~DirectoryCleanup() { std::error_code error; std::filesystem::remove_all(Path, error); }
+	} directory{IoSessionExporterTest::MakeDirectory()};
+	io::NativeMidiSidecar::Stream sidecar;
+	sidecar.LogicalLength = 128u;
+	io::JamFile::AutomationLane lane;
+	lane.Mapping = io::JamFile::AutomationLane::MappingType::Editor;
+	lane.TargetPluginId = "saved-plugin-0";
+	lane.TargetParameterIndex = 7u;
+	lane.Points = {{0.0, 0.25}, {0.5, 0.75}};
+	sidecar.Lanes.push_back(lane);
+	{
+		std::ofstream output(directory.Path / "automation.jammidi", std::ios::binary);
+		ASSERT_TRUE(io::NativeMidiSidecar::ToStream(sidecar, output));
+	}
+	for (const auto slots : {1u, 33u})
+	{
+		SCOPED_TRACE(slots);
+		io::JamFile::Station descriptor{};
+		descriptor.Name = "unavailable-rack";
+		descriptor.Id = "saved-station";
+		descriptor.AdditiveVstRack = true;
+		for (auto index = 0u; index < slots; ++index)
+		{
+			io::JamFile::VstEntry entry;
+			entry.Id = "saved-plugin-" + std::to_string(index);
+			entry.Path = "missing-test-plugin.dll";
+			descriptor.VstChain.push_back(std::move(entry));
+		}
+		io::JamFile::LoopTake take{};
+		take.Name = "automation-take";
+		take.Id = "automation-take";
+		take.MidiPlayLength = 128u;
+		take.MidiStreams.push_back({"automation.jammidi", 0u, "test", 128u, 0u});
+		descriptor.LoopTakes.push_back(std::move(take));
+		StationParams params;
+		params.Size = {200u, 300u};
+		auto restored = Station::FromFile(params, Station::GetMixerParams(params.Size,
+			audio::MergeMixBehaviourParams{}), descriptor, directory.Path.wstring());
+		ASSERT_TRUE(restored);
+		(*restored)->CommitChanges();
+		EXPECT_EQ(slots > Station::MaxRackPlugins, (*restored)->RackInactive());
+		const auto destination = directory.Path / std::to_string(slots);
+		ASSERT_TRUE(std::filesystem::create_directory(destination));
+		Quantiser quantiser;
+		quantiser.SetClock(std::make_shared<utils::Timer>());
+		quantiser.ApplyTiming({32u, 128ul, 4u, 120.0f, 4u}, "automation persistence fixture");
+		std::mutex sceneMutex;
+		audio::AudioStreamParams stream{};
+		ASSERT_TRUE(io::IoSessionExporter::ExportSessionToDirectory({*restored}, {}, quantiser,
+			io::JamFile::GlobalMidiQuantState::Off, 0.0, {}, stream, nullptr, sceneMutex,
+			nullptr, destination.wstring()));
+		std::ifstream manifest(destination / "session.jam");
+		std::stringstream contents;
+		contents << manifest.rdbuf();
+		const auto saved = io::JamFile::FromStream(std::move(contents));
+		ASSERT_TRUE(saved);
+		ASSERT_EQ(1u, saved->Stations.size());
+		EXPECT_EQ(slots, saved->Stations[0].VstChain.size());
+		const auto& savedStream = saved->Stations[0].LoopTakes[0].MidiStreams[0];
+		std::ifstream midiFile(destination / savedStream.SidecarPath, std::ios::binary);
+		const auto exported = io::NativeMidiSidecar::FromStream(midiFile);
+		ASSERT_TRUE(exported);
+		ASSERT_EQ(1u, exported->Lanes.size());
+		EXPECT_EQ("saved-plugin-0", exported->Lanes[0].TargetPluginId);
+		EXPECT_EQ(7u, exported->Lanes[0].TargetParameterIndex);
+		ASSERT_EQ(2u, exported->Lanes[0].Points.size());
+		EXPECT_DOUBLE_EQ(0.75, exported->Lanes[0].Points[1].Value);
+		// The old index now names a different plugin. Stable ID still prevents
+		// resolution to that survivor after another load and save.
+		auto replaced = saved->Stations[0];
+		replaced.VstChain[0].Id = "replacement-plugin";
+		auto reloaded = Station::FromFile(params, Station::GetMixerParams(params.Size,
+			audio::MergeMixBehaviourParams{}), replaced, destination.wstring());
+		ASSERT_TRUE(reloaded);
+		LoopTake::MidiExportState captured;
+		ASSERT_TRUE((*reloaded)->GetLoopTakeSnapshot().front()->SnapshotMidiForExport(captured));
+		const auto& retained = captured.Streams.front().Loop.AutomationLanes[0];
+		EXPECT_EQ("saved-plugin-0", retained.SavedTarget.PluginId);
+		EXPECT_EQ(nullptr, retained.TargetPlugin);
+	}
+}
+
 TEST(IoSessionExporter, RestoresLegacyMidiSessionMaterial)
 {
     struct DirectoryCleanup

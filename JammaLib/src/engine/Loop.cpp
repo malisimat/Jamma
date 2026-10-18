@@ -1716,13 +1716,16 @@ std::vector<JobAction> Loop::_CommitChanges()
 		_changesMade = true;
 	_vstChain.collect();
 
+	bool vstTopologyChanged = false;
 	// Swap in a new VST chain when the job thread has delivered one.
 	if (_flipVstChain.load(std::memory_order_acquire))
 	{
 		std::lock_guard<std::mutex> lock(_vstPathsMutex);
 		_flipVstChain.store(false, std::memory_order_release);
 		_vstChain.store(_backVstChain, std::memory_order_release);
+		vstTopologyChanged = true;
 	}
+	if (vstTopologyChanged && _automationTopologyChanged) _automationTopologyChanged();
 
 	std::vector<JobAction> jobs;
 

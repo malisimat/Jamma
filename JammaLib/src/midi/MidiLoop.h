@@ -59,6 +59,17 @@ namespace midi
 		Playing
 	};
 
+	// Non-callback persistence metadata. Scene serializes writes with wire/bind,
+	// dispatch construction and paused export. IDs remain valid after removal;
+	// an unavailable target must never be reinterpreted as its compacted index.
+	struct AutomationTargetIdentity
+	{
+		std::string Scope;
+		std::string PluginId;
+		unsigned int PluginIndex = 0u;
+		unsigned int LoopIndex = 0u;
+	};
+
 	// Metadata describing how a CC controller is wired to a hosted plugin
 	// parameter for one automation lane.
 	struct AutomationMapping
@@ -73,6 +84,7 @@ namespace midi
 		// and the wire/delete key handlers). No atomic needed.
 		vst::IVstPlugin* TargetPlugin{ nullptr };
 		unsigned int     TargetParameterIndex{ 0u };
+		AutomationTargetIdentity SavedTarget;
 
 		static constexpr std::uint32_t kInactive = 0u;
 
@@ -149,6 +161,7 @@ namespace midi
 		// Transient identity at the export boundary. The sidecar receives an
 		// explicit owner scope and plugin index, never this raw pointer.
 			const vst::IVstPlugin* TargetPlugin = nullptr;
+			AutomationTargetIdentity SavedTarget;
 			std::array<std::pair<float, float>, AutomationLane::MaxPoints> Points{};
 			std::size_t PointCount = 0u;
 		};
@@ -258,14 +271,14 @@ namespace midi
 		// than exposing a torn lane. anchorCorrection is folded into the exported
 		// origin so restored takes can begin with correction zero.
 		bool SnapshotForExport(ExportState& state,
-			std::int32_t anchorCorrection = 0) const noexcept;
+			std::int32_t anchorCorrection = 0) const;
 		// Restores raw event order exactly; unlike ReplaceRecordedEvents this does
 		// not sort simultaneous events. Runtime plugin pointers are deliberately
 		// cleared and must be rebound by the Station after VST resolution.
-		bool RestoreFromExport(const ExportState& state) noexcept;
+		bool RestoreFromExport(const ExportState& state);
 		// Bind a resolved runtime plugin after restoring a pointer-free lane DTO.
 		bool BindAutomationLaneTarget(std::size_t laneIdx,
-			vst::IVstPlugin* plugin) noexcept;
+			vst::IVstPlugin* plugin, const std::string& identity = {});
 
 		// Play any events that fall within [globalSample, globalSample + numSamples).
 		// Time mapping: loopOffset = globalSample % LoopLengthSamps().
@@ -369,7 +382,7 @@ namespace midi
 		// Non-audio thread only.
 		bool WireEditorAutomationLane(std::size_t laneIdx,
 			vst::IVstPlugin* plugin,
-			unsigned int paramIdx) noexcept;
+			unsigned int paramIdx, const std::string& identity = {});
 
 		// Render-thread consistent read of a lane's control points via the lane
 		// seqlock. Copies up to maxPoints (frac, value) pairs into out and returns

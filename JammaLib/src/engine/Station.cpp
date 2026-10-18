@@ -164,6 +164,22 @@ std::optional<std::shared_ptr<Station>> Station::FromFile(StationParams stationP
 	}
 	for (const auto& route : station->_liveVstChannelRoutes)
 		if (route.PluginIds.size() > MaxRackPlugins) station->_rackInactive = true;
+	// Legacy automation sidecars contain indices only. Give saved processors
+	// deterministic IDs before reconstruction, including unavailable Take/Loop
+	// slots, so later compaction cannot change the meaning of those bindings.
+	for (std::size_t takeIndex = 0u; takeIndex < stationStruct.LoopTakes.size(); ++takeIndex)
+	{
+		auto& savedTake = stationStruct.LoopTakes[takeIndex];
+		if (savedTake.Id.empty()) savedTake.Id = !savedTake.Name.empty() ? savedTake.Name
+			: stationStruct.Id + ":take:" + std::to_string(takeIndex);
+		for (std::size_t pluginIndex = 0u; pluginIndex < savedTake.VstChain.size(); ++pluginIndex)
+			if (savedTake.VstChain[pluginIndex].Id.empty()) savedTake.VstChain[pluginIndex].Id
+				= savedTake.Id + ":vst:" + std::to_string(pluginIndex);
+		for (std::size_t loopIndex = 0u; loopIndex < savedTake.Loops.size(); ++loopIndex)
+			for (std::size_t pluginIndex = 0u; pluginIndex < savedTake.Loops[loopIndex].VstChain.size(); ++pluginIndex)
+				if (savedTake.Loops[loopIndex].VstChain[pluginIndex].Id.empty()) savedTake.Loops[loopIndex].VstChain[pluginIndex].Id
+					= savedTake.Id + ":loop:" + std::to_string(loopIndex) + ":vst:" + std::to_string(pluginIndex);
+	}
 	for (const auto& vstEntry : stationStruct.VstChain)
 	{
 		if (station->_rackInactive)
@@ -231,12 +247,29 @@ std::optional<std::shared_ptr<Station>> Station::FromFile(StationParams stationP
 	{
 		if (!take)
 			continue;
+		const auto savedTake = std::find_if(stationStruct.LoopTakes.begin(), stationStruct.LoopTakes.end(),
+			[&](const auto& saved) { return saved.Id == take->Id(); });
 
 		for (const auto& binding : take->PendingAutomationBindings())
 		{
 			auto midiLoops = take->GetMidiLoopSnapshot();
 			if (binding.MidiStreamIndex >= midiLoops.size() || binding.LaneIndex >= midi::MidiLoop::MaxAutomationLanes)
 				return std::nullopt;
+			if (!midiLoops[binding.MidiStreamIndex]) return std::nullopt;
+			auto& savedTarget = midiLoops[binding.MidiStreamIndex]->GetLane(binding.LaneIndex).Mapping.SavedTarget;
+			// Migrate old station indices through the saved chain even if the rack
+			// is inactive/missing: compaction must never redirect this lane later.
+			if (savedTarget.PluginId.empty() && binding.TargetScope == "station"
+				&& binding.TargetPluginIndex < stationStruct.VstChain.size())
+				savedTarget.PluginId = stationStruct.VstChain[binding.TargetPluginIndex].Id;
+			if (savedTarget.PluginId.empty() && savedTake != stationStruct.LoopTakes.end())
+			{
+				if (binding.TargetScope == "take" && binding.TargetPluginIndex < savedTake->VstChain.size())
+					savedTarget.PluginId = savedTake->VstChain[binding.TargetPluginIndex].Id;
+				else if (binding.TargetScope == "loop" && binding.TargetLoopIndex < savedTake->Loops.size()
+					&& binding.TargetPluginIndex < savedTake->Loops[binding.TargetLoopIndex].VstChain.size())
+					savedTarget.PluginId = savedTake->Loops[binding.TargetLoopIndex].VstChain[binding.TargetPluginIndex].Id;
+			}
 
 			std::shared_ptr<vst::IVstPlugin> plugin;
 			if (binding.TargetScope == "station")
@@ -250,11 +283,12 @@ std::optional<std::shared_ptr<Station>> Station::FromFile(StationParams stationP
 					plugin = loops[binding.TargetLoopIndex]->GetVstPlugin(binding.TargetPluginIndex);
 			}
 
-			if (!plugin || !midiLoops[binding.MidiStreamIndex]
-				|| !midiLoops[binding.MidiStreamIndex]->BindAutomationLaneTarget(binding.LaneIndex, plugin.get()))
+			if (plugin && !savedTarget.PluginId.empty() && plugin->StateId() != savedTarget.PluginId) plugin.reset();
+			if (!plugin || !midiLoops[binding.MidiStreamIndex]->BindAutomationLaneTarget(
+				binding.LaneIndex, plugin.get(), plugin->StateId()))
 			{
 				std::cout << "[LOAD] Station '" << stationStruct.Name
-					<< "': skipping unresolved automation target." << std::endl;
+					<< "': retaining unavailable automation target." << std::endl;
 			}
 		}
 		take->ClearPendingAutomationBindings();
@@ -1770,11 +1804,11 @@ bool Station::_TryEnqueueOrderedLiveMidi(midi::MidiQueue<1024>& queue,
 
 void Station::RebuildAutomationDispatch()
 {
-	// Non-audio thread only. Walk every take and MIDI loop, resolve all raw
-	// pointers and lane metadata into a compact flat list, then publish it.
-	const std::uint8_t back = _automationDispatchBack;
-	auto* buf = _automationDispatchBuf[back];
-	std::uint8_t count = 0u;
+	// Scene-serialized non-audio ownership. Resolve observers against owning
+	// chains before dereferencing; snapshots pin processors, loops and anchors.
+	auto snapshot = std::make_shared<AutomationDispatchSnapshot>();
+	snapshot->Generation = _nextAutomationDispatchGeneration++;
+	const auto stationChain = _vstChain.load(std::memory_order_acquire);
 
 	const auto takes = GetLoopTakeSnapshot();
 	for (const auto& take : takes)
@@ -1789,31 +1823,58 @@ void Station::RebuildAutomationDispatch()
 
 			for (std::size_t laneIdx = 0u; laneIdx < midi::MidiLoop::MaxAutomationLanes; ++laneIdx)
 			{
-				if (count >= MaxAutomationDispatches)
+				if (snapshot->Count >= MaxAutomationDispatches)
 					break;
 
-				const auto& lane = midiLoop->GetLane(laneIdx);
-				if (!lane.Mapping.IsActive() || !lane.Mapping.TargetPlugin)
+				auto& lane = midiLoop->GetLane(laneIdx);
+				if (!lane.Mapping.IsActive())
 					continue;
+				auto& target = lane.Mapping.SavedTarget;
+				std::size_t pluginIndex = 0u;
+				std::shared_ptr<vst::IVstPlugin> plugin;
+				std::string scope;
+				unsigned int loopIndex = 0u;
+				if ((target.Scope.empty() || target.Scope == "station") && stationChain)
+				{
+					plugin = stationChain->FindPlugin(lane.Mapping.TargetPlugin, target.PluginId, pluginIndex);
+					if (plugin) scope = "station";
+				}
+				if (!plugin && (target.Scope.empty() || target.Scope == "take"))
+				{
+					plugin = take->FindVstPlugin(lane.Mapping.TargetPlugin, target.PluginId, pluginIndex);
+					if (plugin) scope = "take";
+				}
+				if (!plugin && (target.Scope.empty() || target.Scope == "loop"))
+				{
+					const auto& loops = take->GetLoops();
+					for (std::size_t index = 0u; index < loops.size(); ++index)
+					{
+						if (!loops[index] || (!target.Scope.empty() && index != target.LoopIndex)) continue;
+						plugin = loops[index]->FindVstPlugin(lane.Mapping.TargetPlugin, target.PluginId, pluginIndex);
+						if (plugin) { scope = "loop"; loopIndex = static_cast<unsigned int>(index); break; }
+					}
+				}
+				if (!plugin) continue; // Retain saved identity/curve, publish no unsafe observer.
+				lane.Mapping.TargetPlugin = plugin.get();
+				target = {scope, plugin->StateId(), static_cast<unsigned int>(pluginIndex), loopIndex};
 
-				auto& entry = buf[count];
-				entry.plugin = lane.Mapping.TargetPlugin;
+				const auto count = snapshot->Count++;
+				snapshot->Plugins[count] = plugin;
+				snapshot->Takes[count] = take;
+				snapshot->Loops[count] = midiLoop;
+				auto& entry = snapshot->Entries[count];
+				entry.plugin = plugin.get();
 				entry.paramIdx = lane.Mapping.TargetParameterIndex;
 				entry.loop = midiLoop.get();
 				entry.laneIdx = static_cast<std::uint8_t>(laneIdx);
 				entry.loopLengthSamps = midiLoop->LoopLengthSamps();
 				entry.automationGlobalSampleOrigin = midiLoop->AutomationGlobalSampleOrigin();
 				entry.anchorCorrection = take->MidiAnchorCorrectionPtr();
-				++count;
 			}
 		}
 	}
 
-	_automationDispatchCount[back] = count;
-	// Release pairs with the audio thread's acquire load: makes all MIDI-thread
-	// writes to lane Points visible before the new list is consumed.
-	_automationDispatch.store(static_cast<const AutomationDispatch*>(buf), std::memory_order_release);
-	_automationDispatchBack ^= 1u;
+	_automationDispatch.store(std::move(snapshot), std::memory_order_release);
 }
 
 std::shared_ptr<midi::MidiLoop> Station::_LastRecordedMidiLoop(const std::shared_ptr<LoopTake>& take)
@@ -1886,29 +1947,29 @@ std::shared_ptr<midi::MidiLoop> Station::ResolveEditorAutomationLoop(const vst::
 void Station::_RunAutomationDispatch(std::uint32_t blockStartSample,
 	std::uint32_t numSamps) noexcept
 {
-	const auto* dispatches = _automationDispatch.load(std::memory_order_acquire);
-	if (!dispatches)
+	const auto snapshot = _automationDispatch.borrow();
+	if (!snapshot)
 		return;
 
 	// Detect a newly published list and reset per-entry playback state so
 	// stale cursors and last-values from the previous list are never used.
-	if (dispatches != _automationDispatchFront)
+	if (snapshot->Generation != _automationDispatchGeneration)
 	{
-		_automationDispatchFront = dispatches;
+		_automationDispatchGeneration = snapshot->Generation;
 		for (auto& s : _automationPlaybackState)
 		{
 			s.cursorIdx = 0u;
+			s.stateGeneration = 0u;
 			s.lastValue = -2.0f;
 		}
 	}
 
-	const std::uint8_t frontIdx = (dispatches == _automationDispatchBuf[0]) ? 0u : 1u;
-	const auto count = _automationDispatchCount[frontIdx];
+	const auto count = snapshot->Count;
 	auto dispatchSample = blockStartSample + ((numSamps > 0u) ? (numSamps - 1u) : 0u);
 
-	for (std::uint8_t i = 0u; i < count; ++i)
+	for (std::size_t i = 0u; i < count; ++i)
 	{
-		const auto& entry = dispatches[i];
+		const auto& entry = snapshot->Entries[i];
 		if (!entry.plugin || !entry.loop)
 			continue;
 
@@ -2999,6 +3060,14 @@ void Station::SetCameraRecordingPublisher(const std::shared_ptr<CameraRecordingP
 
 void Station::AddTake(std::shared_ptr<LoopTake> take)
 {
+	const std::weak_ptr<Station> weakStation = std::dynamic_pointer_cast<Station>(ActionReceiver::shared_from_this());
+	take->SetAutomationTopologyChangedCallback([weakStation] {
+		if (const auto station = weakStation.lock())
+		{
+			station->_automationDispatchDirty = true;
+			station->_changesMade = true;
+		}
+	});
 	take->SetCameraRecordingPublisher(_cameraRecordingPublisher);
 	take->SetupBuffers(_lastBufSize);
 	take->SetNumBusChannels(NumBusChannels());
@@ -3328,6 +3397,8 @@ void Station::ForceUnloadAllVstPlugins()
 {
 	// Shutdown owns this thread after audio and job readers have stopped. There
 	// will be no later audio acknowledgement to reclaim retired routing owners.
+	_automationDispatch.store(nullptr);
+	_automationDispatch.collect();
 	const auto drainState = [](const std::shared_ptr<const AudioState>& state) {
 		if (!state) return;
 		_DrainVstChain(state->MidiChain);
@@ -4005,6 +4076,11 @@ std::vector<JobAction> Station::_CommitChanges()
 		audioStateChanged = true;
 	}
 	if (audioStateChanged) _PublishAudioState();
+	if (audioStateChanged || _automationDispatchDirty)
+	{
+		_automationDispatchDirty = false;
+		RebuildAutomationDispatch();
+	}
 
 	// Detect pending VST load/unload requests and queue a job for them.
 	std::vector<JobAction> jobs;
@@ -4177,6 +4253,7 @@ bool Station::HasUnacknowledgedAudioState() const noexcept
 void Station::ReleaseRetiredAudioStates()
 {
 	_audioState.collect();
+	_automationDispatch.collect();
 	const auto completed = _audioCompletedStateGeneration.load(std::memory_order_acquire);
 	auto keep = std::remove_if(_retiredAudioStates.begin(), _retiredAudioStates.end(),
 		[completed](const RetiredAudioState& retired)

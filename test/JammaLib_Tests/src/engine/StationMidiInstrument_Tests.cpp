@@ -368,6 +368,99 @@ TEST(StationMidiInstrument, RackRerouteAndRemovalRetryOwnedNoteAndSustainRelease
 	EXPECT_EQ(0u, routes.PluginByMidiOutput[1]);
 }
 
+TEST(StationMidiInstrument, AutomationSurvivesCompactionAndReleasesRemovedProcessor)
+{
+	auto station = MakeStation("automation-compaction");
+	auto a = AddPlugin(station, L"fake-auto-a.dll");
+	auto b = AddPlugin(station, L"fake-auto-b.dll");
+	auto c = AddPlugin(station, L"fake-auto-c.dll");
+	const auto removedId = b->StateId();
+	const auto survivingId = c->StateId();
+	auto take = MakeMidiTake("automation-take");
+	LoopTake::MidiExportState state;
+	state.LoopLengthSamps = 1024u;
+	LoopTake::MidiStreamExport stream;
+	stream.Loop.LoopLengthSamps = 1024u;
+	state.Streams.push_back(std::move(stream));
+	ASSERT_TRUE(take->RestoreMidiFromExport(state));
+	auto loop = take->GetMidiLoopSnapshot().front();
+	ASSERT_TRUE(loop->WireEditorAutomationLane(0u, b.get(), 1u, removedId));
+	ASSERT_TRUE(loop->WireEditorAutomationLane(1u, c.get(), 2u, survivingId));
+	loop->SetAutomationValueAtFrac(0u, 0.0, 0.25f);
+	loop->SetAutomationValueAtFrac(1u, 0.0, 0.75f);
+	station->AddTake(take);
+	station->CommitChanges();
+	RenderStationBlock(station, 0u);
+	ASSERT_GT(b->ParamSetCalls, 0u);
+	ASSERT_GT(c->ParamSetCalls, 0u);
+	const auto removedCalls = b->ParamSetCalls;
+	const auto survivingCalls = c->ParamSetCalls;
+	ASSERT_TRUE(station->UnloadManagedVstPlugin(removedId));
+	for (const auto& job : station->CommitChanges()) station->OnAction(job);
+	station->CommitChanges();
+	RenderStationBlock(station, 128u);
+	EXPECT_EQ(removedCalls, b->ParamSetCalls);
+	EXPECT_GT(c->ParamSetCalls, survivingCalls);
+	EXPECT_EQ(0u, a->ParamSetCalls);
+	LoopTake::MidiExportState captured;
+	ASSERT_TRUE(take->SnapshotMidiForExport(captured));
+	const auto& lanes = captured.Streams.front().Loop.AutomationLanes;
+	EXPECT_EQ(removedId, lanes[0].SavedTarget.PluginId);
+	EXPECT_EQ(survivingId, lanes[1].SavedTarget.PluginId);
+	EXPECT_EQ(1u, lanes[1].SavedTarget.PluginIndex);
+	std::weak_ptr<vst::IVstPlugin> lifetime = b;
+	b.reset();
+	for (auto block = 2u; block < 6u; ++block)
+	{
+		RenderStationBlock(station, block * 128u);
+		station->AcknowledgeAudioBoundary();
+		station->ReleaseRetiredAudioStates();
+		vst::DrainUiThreadDestroyQueue();
+	}
+	EXPECT_TRUE(lifetime.expired());
+	// A later rebuild must not dereference or republish the lane's old observer.
+	station->RebuildAutomationDispatch();
+	RenderStationBlock(station, 768u);
+	EXPECT_EQ(0u, a->ParamSetCalls);
+}
+
+TEST(StationMidiInstrument, ChildPluginRemovalSchedulesPinnedAutomationRefresh)
+{
+	auto station = MakeStation("child-automation");
+	auto take = MakeMidiTake("child-automation-take");
+	auto plugin = std::make_shared<StationMidiInstrumentFakePlugin>();
+	JobAction load;
+	load.JobActionType = JobAction::JOB_LOADVST;
+	load.VstPath = L"fake-child-automation.dll";
+	load.PreInitPlugin = plugin;
+	take->OnAction(load);
+	take->CommitChanges();
+	LoopTake::MidiExportState state;
+	state.LoopLengthSamps = 1024u;
+	LoopTake::MidiStreamExport stream;
+	stream.Loop.LoopLengthSamps = 1024u;
+	state.Streams.push_back(std::move(stream));
+	ASSERT_TRUE(take->RestoreMidiFromExport(state));
+	auto loop = take->GetMidiLoopSnapshot().front();
+	ASSERT_TRUE(loop->WireEditorAutomationLane(0u, plugin.get(), 3u, plugin->StateId()));
+	loop->SetAutomationValueAtFrac(0u, 0.0, 0.5f);
+	station->AddTake(take);
+	station->CommitChanges();
+	RenderStationBlock(station, 0u);
+	ASSERT_GT(plugin->ParamSetCalls, 0u);
+	const auto calls = plugin->ParamSetCalls;
+	JobAction unload;
+	unload.JobActionType = JobAction::JOB_UNLOADVST;
+	unload.VstIdentity = plugin->StateId();
+	take->OnAction(unload);
+	station->CommitChanges(); // Child commits after parent and schedules refresh.
+	station->CommitChanges();
+	RenderStationBlock(station, 128u);
+	EXPECT_EQ(calls, plugin->ParamSetCalls);
+	EXPECT_EQ("take", loop->GetLane(0u).Mapping.SavedTarget.Scope);
+	EXPECT_EQ(plugin->StateId(), loop->GetLane(0u).Mapping.SavedTarget.PluginId);
+}
+
 TEST(StationMidiInstrument, ShutdownReleasesPluginWithoutAnotherAudioBoundary)
 {
 	auto station = MakeStation("shutdown");

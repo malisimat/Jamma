@@ -9,6 +9,7 @@
 #include <atomic>
 #include <bitset>
 #include <cstdint>
+#include <functional>
 #include <mutex>
 #include <vector>
 #include <memory>
@@ -264,6 +265,13 @@ namespace engine
 		float GetSampleRate() const noexcept { return _sampleRate; }
 		unsigned int GetLastBufSize() const noexcept { return _lastBufSize; }
 		std::shared_ptr<vst::IVstPlugin> GetVstPlugin(size_t index) const;
+		void SetAutomationTopologyChangedCallback(std::function<void()> changed);
+		std::shared_ptr<vst::IVstPlugin> FindVstPlugin(const vst::IVstPlugin* observer,
+			const std::string& identity, std::size_t& index) const
+		{
+			const auto chain = _vstChain.load(std::memory_order_acquire);
+			return chain ? chain->FindPlugin(observer, identity, index) : nullptr;
+		}
 		std::vector<io::JamFile::VstEntry> VstEntries() const;
 		bool TryGroupVstEntries(std::vector<io::JamFile::VstEntry>& output) const;
 		bool TryRestoreGroupVstEntry(const io::JamFile::VstEntry& entry);
@@ -728,6 +736,9 @@ namespace engine
 		base::PublishedAudioSnapshot<vst::VstChain> _vstChain;
 		std::shared_ptr<vst::VstChain> _backVstChain;
 		std::atomic<bool> _flipVstChain{ false };
+		// Non-audio membership/commit only; propagated to child loops. Weak
+		// Station capture avoids retaining a removed hierarchy or touching audio.
+		std::function<void()> _automationTopologyChanged;
 		std::vector<actions::JobAction> _pendingVstLoads;
 		std::vector<actions::JobAction> _pendingVstUnloads;
 		float _sampleRate{ static_cast<float>(constants::DefaultSampleRate) };

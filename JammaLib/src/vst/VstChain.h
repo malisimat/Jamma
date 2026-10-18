@@ -51,6 +51,17 @@ namespace vst
 
 		// Returns the plugin at index, or nullptr if out of range.
 		std::shared_ptr<IVstPlugin> GetPlugin(size_t index) const;
+		// Non-RT ownership lookup. A saved ID is authoritative; never dereference
+		// an observer which may name a removed processor or reuse its old address.
+		std::shared_ptr<IVstPlugin> FindPlugin(const IVstPlugin* observer,
+			const std::string& identity, std::size_t& index) const
+		{
+			for (std::size_t i = 0u; i < _plugins.size(); ++i)
+				if (_plugins[i] && (identity.empty() ? _plugins[i].get() == observer
+					: _plugins[i]->StateId() == identity))
+				{ index = i; return _plugins[i]; }
+			return nullptr;
+		}
 
 		size_t NumPlugins() const noexcept { return _plugins.size(); }
 		bool ReconfigureAudioFormat(float sampleRate, unsigned int blockSize)

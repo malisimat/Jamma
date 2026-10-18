@@ -434,17 +434,22 @@ namespace io
 						jamTake.BaseDivisions = midiExport.BaseDivisions;
 					}
 
-					auto resolveAutomationTarget = [&](const vst::IVstPlugin* target,
+					auto resolveAutomationTarget = [&](const midi::MidiLoop::AutomationLaneExport& exported,
 						io::JamFile::AutomationLane& lane) -> bool
 					{
-						if (!target)
-				            return false;
+						const auto* target = exported.TargetPlugin;
+						const auto& saved = exported.SavedTarget;
+						const auto matches = [&](const std::shared_ptr<vst::IVstPlugin>& plugin, const char* scope) {
+							return plugin && (saved.Scope.empty() || saved.Scope == scope)
+								&& (saved.PluginId.empty() ? plugin.get() == target : plugin->StateId() == saved.PluginId);
+						};
 						for (std::size_t pluginIndex = 0u; pluginIndex < jamStation.VstChain.size(); ++pluginIndex)
 						{
 							auto plugin = station->GetVstPlugin(pluginIndex);
-							if (plugin && plugin.get() == target)
+							if (matches(plugin, "station"))
 							{
 								lane.TargetScope = "station";
+								lane.TargetPluginId = plugin->StateId();
 								lane.TargetPluginIndex = static_cast<unsigned int>(pluginIndex);
 								return true;
 							}
@@ -452,9 +457,10 @@ namespace io
 						for (std::size_t pluginIndex = 0u; pluginIndex < jamTake.VstChain.size(); ++pluginIndex)
 						{
 							auto plugin = take->GetVstPlugin(pluginIndex);
-							if (plugin && plugin.get() == target)
+							if (matches(plugin, "take"))
 							{
 								lane.TargetScope = "take";
+								lane.TargetPluginId = plugin->StateId();
 								lane.TargetPluginIndex = static_cast<unsigned int>(pluginIndex);
 								return true;
 							}
@@ -467,16 +473,27 @@ namespace io
 							for (std::size_t pluginIndex = 0u; pluginIndex < loopVstEntryCount; ++pluginIndex)
 							{
 								auto plugin = audioLoops[loopIndex]->GetVstPlugin(pluginIndex);
-								if (plugin && plugin.get() == target)
+								if (matches(plugin, "loop") && (saved.Scope.empty() || saved.LoopIndex == loopIndex))
 								{
 									lane.TargetScope = "loop";
+									lane.TargetPluginId = plugin->StateId();
 									lane.TargetLoopIndex = static_cast<unsigned int>(loopIndex);
 									lane.TargetPluginIndex = static_cast<unsigned int>(pluginIndex);
 									return true;
 								}
 							}
 						}
-			            return false;
+						// Missing/inactive/removed targets retain their exact identity and
+						// curve. ID-aware import cannot bind a survivor at the old index.
+						if (!saved.Scope.empty())
+						{
+							lane.TargetScope = saved.Scope;
+							lane.TargetPluginId = saved.PluginId;
+							lane.TargetPluginIndex = saved.PluginIndex;
+							lane.TargetLoopIndex = saved.LoopIndex;
+							return true;
+						}
+						return false;
 					};
 					for (std::size_t streamIndex = 0u; streamIndex < midiExport.Streams.size(); ++streamIndex)
 					{
@@ -504,7 +521,7 @@ namespace io
 							lane.Channel = static_cast<std::uint8_t>((exportedLane.MatchKey >> 8u) & 0xffu);
 							lane.Controller = static_cast<std::uint8_t>(exportedLane.MatchKey & 0xffu);
 							lane.TargetParameterIndex = exportedLane.TargetParameterIndex;
-							if (!resolveAutomationTarget(exportedLane.TargetPlugin, lane))
+							if (!resolveAutomationTarget(exportedLane, lane))
 							{
 								std::cout << "Export: unresolved automation target in take " << take->Id() << std::endl;
 					            result.Error = "Session capture failed"; return false;

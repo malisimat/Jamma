@@ -31,3 +31,11 @@ The crash damaged JammaLib Debug compiler artifacts. The original damaged PDB an
 This is an incomplete engine foundation checkpoint, not the finished rack. It adds release-aware retained destination processing, initial bounded managed admission, stable missing recorded-target silence and static insertion/conversion latency checks. Remaining engine work includes automation lifetime/persistence, device-loss controller tracking, complete load-path limits, latency-change recovery and inactive-import recovery/diagnostics. GUI, app/Release builds, full combined regression and manual acceptance are pending.
 
 The threading script flags five mutex additions in Station UI/job methods because it scans whole-file diffs. Manual callback inspection found no new locks/waits/allocations/logging in the added processing paths; this is a qualified manual review, not a clean static-audit claim. New destination/binding note/sustain fields are callback-owned; `RetirementReleased` is audio-to-structural atomic acknowledgement; scratch is allocated per snapshot off callback and mutated only by its audio reader. Routes are serialized structural state published as immutable prepared lists; plugin destruction remains queued to UI.
+
+## Automation checkpoint
+
+The engine foundation was committed locally as `d365f608`. Subsequent automation changes replace raw dispatch pointers with bounded leased snapshots that pin processor and child ownership off callback, and refresh after child topology changes. Stable target metadata and curves survive unavailable/inactive rack save/export; sidecar v0.4 adds bounded UTF-8 IDs while retaining v0.2/v0.3 import compatibility.
+
+`alpha-rack-automation-tests-build-2.log` records successful incremental Debug library/native-test builds. `alpha-rack-automation-focused-tests.log` records 105/105 focused passes. Diff checks and the focused threading audit passed. Dispatch generations are serialized non-audio state; callback cursors are callback-owned; retirement collection and final UI destruction stay off callback. Saved identity strings are never read by the callback. Child notifications use weak Station ownership.
+
+This remains an incomplete rack feature. Remaining engine, GUI, acceptance and trigger-learn work listed above is still pending; no rack merge or release has occurred.

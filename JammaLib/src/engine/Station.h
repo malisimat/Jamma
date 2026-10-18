@@ -537,13 +537,12 @@ namespace engine
 		// One pre-resolved automation mapping ready for the audio thread. All
 		// pointer chasing and lane metadata are baked in by RebuildAutomationDispatch
 		// so the audio path is a flat loop over a hot cache line.
-		// IMMUTABLE after publication: the audio thread must never write into this
-		// struct, which is what makes the double-buffer scheme race-free.
+		// Immutable while an audio snapshot lease can reference it.
 		struct AutomationDispatch
 		{
-			vst::IVstPlugin* plugin = nullptr;          // raw observer — lifetime owned by VstChain
+			vst::IVstPlugin* plugin = nullptr;          // pinned by AutomationDispatchSnapshot
 			unsigned int     paramIdx = 0u;
-			midi::MidiLoop*                   loop = nullptr;            // raw observer — lifetime owned by LoopTake
+			midi::MidiLoop*                   loop = nullptr;            // pinned by AutomationDispatchSnapshot
 			std::uint8_t                      laneIdx = 0u;              // which lane within loop to read
 			std::uint32_t                     loopLengthSamps = 0u;      // frozen at rebuild
 			std::uint32_t                     automationGlobalSampleOrigin = 0u; // frozen at rebuild; automation origin
@@ -551,9 +550,7 @@ namespace engine
 			// effective origin = automationGlobalSampleOrigin + anchorCorrection (modular uint32)
 		};
 		// Per-entry playback state owned exclusively by the audio thread.
-		// Kept separate from AutomationDispatch so the dispatch buffers are
-		// immutable after publication; the writer can safely overwrite the
-		// back buffer without racing the audio callback's cursor/value updates.
+		// Kept separate from immutable dispatch publication.
 		struct AutomationPlaybackState
 		{
 			std::uint16_t cursorIdx = 0u;
@@ -561,6 +558,17 @@ namespace engine
 			float         lastValue = -2.0f;  // sentinel: force first write
 		};
 		static constexpr std::size_t MaxAutomationDispatches = 64u;
+		struct AutomationDispatchSnapshot
+		{
+			std::uint64_t Generation = 0u;
+			std::size_t Count = 0u;
+			std::array<AutomationDispatch, MaxAutomationDispatches> Entries{};
+			// Shared owners are touched only by the serialized non-audio publisher
+			// and collector. A callback borrow protects all three lifetime boundaries.
+			std::array<std::shared_ptr<vst::IVstPlugin>, MaxAutomationDispatches> Plugins;
+			std::array<std::shared_ptr<LoopTake>, MaxAutomationDispatches> Takes;
+			std::array<std::shared_ptr<midi::MidiLoop>, MaxAutomationDispatches> Loops;
+		};
 		static constexpr float AutomationEpsilon = 1.0f / 65536.0f; // below 16-bit param resolution
 
 		// Run one automation dispatch block on the audio thread: advance each
@@ -624,20 +632,17 @@ namespace engine
 		std::uint64_t _nextAudioStateGeneration = 1u;
 		std::atomic<std::uint64_t> _audioCompletedStateGeneration{ 0u };
 		std::atomic<double> _transportOffsetLoopFrac{ 0.0 };
-		// Flat automation dispatch list, double-buffered and published with an
-		// atomic-swap release store (audio thread reads with acquire). Built only on
-		// the non-audio thread in RebuildAutomationDispatch.
-		// The buffers are immutable once published — the audio thread never writes
-		// into them, so the writer can safely fill the back buffer at any time.
-		std::atomic<const AutomationDispatch*> _automationDispatch{ nullptr };
-		AutomationDispatch _automationDispatchBuf[2][MaxAutomationDispatches]{};
-		std::uint8_t       _automationDispatchCount[2]{};
-		std::uint8_t       _automationDispatchBack = 0u;
+		// Scene-serialized non-audio writers build/collect complete pinned lists;
+		// callback reads only via bounded borrow. Shutdown stops readers, then
+		// clears this publication before the existing UI plugin retirement drain.
+		base::PublishedAudioSnapshot<const AutomationDispatchSnapshot> _automationDispatch;
+		std::uint64_t _nextAutomationDispatchGeneration = 1u;
+		bool _automationDispatchDirty = false; // Serialized child topology callback; UI commit consumes.
 		// Audio-thread-only playback state, parallel to the active dispatch list.
 		// Reset whenever _RunAutomationDispatch detects a new list was published.
 		AutomationPlaybackState  _automationPlaybackState[MaxAutomationDispatches]{};
-		// Last dispatch pointer seen by the audio thread; used to detect rebuilds.
-		const AutomationDispatch* _automationDispatchFront = nullptr;
+		// Callback-only generation: allocator address reuse cannot hide a rebuild.
+		std::uint64_t _automationDispatchGeneration = 0u;
 
 		// VST insert chain applied after all LoopTakes are mixed down,
 		// just before each channel is sent to the output AudioMixer.

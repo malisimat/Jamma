@@ -143,6 +143,7 @@ namespace io
 			std::uint8_t Channel = 0;
 			std::uint8_t Controller = 0;
 			std::string TargetScope = "station";
+			std::string TargetPluginId; // v0.4 sidecars; authoritative when present.
 			unsigned int TargetPluginIndex = 0;
 			unsigned int TargetLoopIndex = 0;
 			unsigned int TargetParameterIndex = 0;
