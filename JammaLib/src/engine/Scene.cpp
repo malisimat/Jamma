@@ -478,7 +478,12 @@ void Scene::Draw(DrawContext& ctx)
 			station->Draw(ctx);
 	}
 
-	if (!_loopEditor.IsEngaged()) _stationControls.Draw(ctx);
+	if (!_loopEditor.IsEngaged())
+	{
+		for (const auto& station : _stations)
+			if (auto label = station->GetGuiRack()->StationLabel()) label->DrawOverlay(ctx);
+		_stationControls.Draw(ctx);
+	}
 	_selector->Draw(ctx);
 	if (!loopEditorEngaged)
 		_ctrlHandleOverlay.Draw(ctx);
@@ -729,6 +734,13 @@ void Scene::SetCameraInteractionEligibility(bool windowEligible, bool heldIntera
 
 void Scene::UpdateCamera()
 {
+	if (!_isSceneQuitting.load(std::memory_order_acquire))
+		if (const auto rig = _rigCoordinator.Accepted(); rig && _inputSubsystem->TryAcceptUiRigTriggerInput(rig->Revision))
+		{
+			base::Action release;
+			release.SetActionTime(Timer::GetTime());
+			_contextualKeyboard.Flush(*rig, release);
+		}
 	// Keep camera state on the window thread; audio never reads or advances it.
 	const auto now = Timer::GetTime();
 	const auto deltaSeconds = _lastCameraUpdateTime
@@ -885,6 +897,15 @@ bool Scene::AdvanceUiAnimations()
 	const auto depth = _selector->CurrentSelectDepth();
 	const bool stationDitchVisible = depth == base::DEPTH_STATION;
 	const bool takeDitchVisible = depth == base::DEPTH_LOOPTAKE || depth == base::DEPTH_LOOP;
+	for (const auto& station : _stations)
+		if (auto label = station->GetGuiRack()->StationLabel())
+		{
+			if (_popupManager.IsOpen() || _loopEditor.IsEngaged() || _isSceneQuitting.load(std::memory_order_acquire)) label->Cancel();
+			const auto accepted = _rigCoordinator.Accepted();
+			label->Update(station->Name(), accepted ? accepted->Revision : 0u, _ctrlHeld,
+				!station->IsRemote() && !_popupManager.IsOpen() && !_loopEditor.IsEngaged() && !_stationManagement.Busy() && !_rigSaveInProgress,
+				!_rigCoordinator.EditsEnabled());
+		}
 	_stationControls.Update(_stations, _viewProj, _sizeParams.Size, _ctrlHeld, stationDitchVisible, takeDitchVisible,
 		_StationManagementAvailableLocked());
 	if (stationsMoved || cameraMoved)
@@ -1107,6 +1128,18 @@ ActionResult Scene::_OnPointerAction(TouchAction action)
 			_consumeSettingsRelease = false;
 		}
 		return popupRes;
+	}
+	if (!_loopEditor.IsEngaged())
+	{
+		const auto stations = SnapshotStations();
+		for (const auto& station : stations)
+			if (auto label = station->GetGuiRack()->StationLabel(); label && label->OwnsPointer())
+			{
+				if (label->Touch(label->GlobalToLocal(action))) return { true, {}, {}, ACTIONRESULT_DEFAULT, nullptr, {} };
+			}
+		for (const auto& station : stations)
+			if (auto label = station->GetGuiRack()->StationLabel(); label && station->GetGuiRack()->IsInView(_sizeParams.Size))
+				if (label->Touch(label->GlobalToLocal(action))) return { true, {}, {}, ACTIONRESULT_DEFAULT, nullptr, {} };
 	}
 	if (!_loopEditor.IsEngaged() && !_quantisationInteraction.OwnsPointer() &&
 		_stationControls.Touch(action, [this](auto intent) {
@@ -1335,6 +1368,12 @@ ActionResult Scene::_OnPointerMove(TouchMoveAction action)
 			_backgroundGesture->Moved = true;
 		return { true, {}, {}, ACTIONRESULT_DEFAULT, nullptr, {} };
 	}
+	if (!_popupManager.IsOpen() && !_loopEditor.IsEngaged() && !_quantisationInteraction.OwnsPointer())
+	{
+		for (const auto& station : SnapshotStations())
+			if (auto label = station->GetGuiRack()->StationLabel())
+				label->Move(label->GlobalToLocal(action));
+	}
 	if (!_popupManager.IsOpen() && !_loopEditor.IsEngaged() && _stationControls.Move(action))
 		return { true, {}, {}, ACTIONRESULT_DEFAULT, nullptr, {} };
 	if (_quantisationInteraction.OwnsPointer())
@@ -1449,6 +1488,19 @@ ActionResult Scene::_OnPointerMove(TouchMoveAction action)
 
 ActionResult Scene::OnAction(KeyAction action)
 {
+	action.SetActionTime(Timer::GetTime());
+	const bool contextual = _rigSaveDialogOpen || _controlWriterExclusion.owns_lock() ||
+		_popupManager.IsOpen() || _focusManager.IsEditingText() || _loopEditor.IsEngaged();
+	const auto inputRig = _rigCoordinator.Accepted();
+	const bool admissionOpen = !_isSceneQuitting.load(std::memory_order_acquire) && inputRig &&
+		_inputSubsystem->TryAcceptUiRigTriggerInput(inputRig->Revision);
+	// Complete older physical releases before a fresh press can be admitted.
+	// Observation follows this flush, so a current ordinary UP is queued once by
+	// normal dispatch below; contextual/suppressed releases use the exact receipt.
+	if (admissionOpen) _contextualKeyboard.Flush(*inputRig, action);
+	const bool suppressedKey = _contextualKeyboard.Observe(action, contextual, admissionOpen);
+	if (admissionOpen && (contextual || suppressedKey))
+		_contextualKeyboard.Flush(*inputRig, action);
 	if (_backgroundGesture && action.KeyActionType == KeyAction::KEY_DOWN && action.KeyChar == 27u)
 	{
 		_backgroundGesture->Cancelled = true;
@@ -1458,7 +1510,7 @@ ActionResult Scene::OnAction(KeyAction action)
 	if (_performanceGroups.ConsumeRelease(action)) return { true, {}, {}, ACTIONRESULT_DEFAULT, nullptr, {} };
 	if (_rigSaveDialogOpen || _controlWriterExclusion.owns_lock() || _popupManager.IsOpen() || _focusManager.IsEditingText() || _loopEditor.IsEngaged())
 		_performanceGroups.BlockContextualPress(action);
-	if (_isSceneQuitting.load(std::memory_order_acquire) || _controlWriterExclusion.owns_lock()) return ActionResult::NoAction();
+	if (_isSceneQuitting.load(std::memory_order_acquire)) return ActionResult::NoAction();
 	action.SetActionTime(Timer::GetTime());
 	action.SetUserConfig(_userConfig);
 	action.SetAudioParams(_audioEngine->GetStreamParams());
@@ -1468,7 +1520,10 @@ ActionResult Scene::OnAction(KeyAction action)
 	{
 		const bool wasCtrlHeld = _ctrlHeld;
 		_ctrlHeld = actions::KeyAction::KEY_DOWN == action.KeyActionType;
-		const bool contextualText = _focusManager.IsEditingText() || _loopEditor.IsEditingText();
+		// The loop grid keeps its existing Ctrl/Space overlay gestures; only its
+		// text editor (and true modal/text capture) suppresses those shortcuts.
+		const bool contextualText = _rigSaveDialogOpen || _controlWriterExclusion.owns_lock() ||
+			_popupManager.IsOpen() || _focusManager.IsEditingText() || _loopEditor.IsEditingText();
 		{
 			std::scoped_lock lock(_sceneMutex);
 			_quantisationInteraction.OnCtrlModifierChanged(_ctrlHeld && !contextualText, action.GetActionTime(),
@@ -1519,6 +1574,8 @@ ActionResult Scene::OnAction(KeyAction action)
 		if (!_popupManager.IsOpen() && !_focusManager.IsEditingText() && !_loopEditor.IsEditingText())
 			return ActionResult::NoAction();
 	}
+	if (_controlWriterExclusion.owns_lock()) return ActionResult::NoAction();
+	if (suppressedKey && !contextual) return ActionResult::NoAction();
 	if (27u == action.KeyChar && _quantisationInteraction.OwnsPointer())
 	{
 		_quantisationInteraction.CancelInteraction();
@@ -1553,6 +1610,15 @@ ActionResult Scene::OnAction(KeyAction action)
 			return popupRes;
 	}
 
+	// Text entry owns shortcuts, including channel overrides and cable reveal.
+	if (auto focus = _focusManager.CurrentFocus())
+	{
+		const bool editingText = _focusManager.IsEditingText();
+		auto focusRes = focus->OnAction(action);
+		if (focusRes.IsEaten) return focusRes;
+		if (editingText) return ActionResult::NoAction();
+	}
+
 	if ((192u == action.KeyChar) || (96u == action.KeyChar))
 	{
 		if (_hudPanel)
@@ -1583,16 +1649,6 @@ ActionResult Scene::OnAction(KeyAction action)
 		return overrideRes;
 	}
 
-	// 2. The focused control gets first refusal. While it is editing text we
-	//    swallow the key entirely so global shortcuts don't fire mid-edit.
-	if (auto focus = _focusManager.CurrentFocus())
-	{
-		auto focusRes = focus->OnAction(action);
-		if (focusRes.IsEaten)
-			return focusRes;
-		if (_focusManager.IsEditingText())
-			return ActionResult::NoAction();
-	}
 	if (auto editorRes = _loopEditor.TryOpenFromKey(action))
 		return *editorRes;
 	if (!_popupManager.IsOpen() && !_focusManager.IsEditingText() && !_loopEditor.IsEngaged())
@@ -1686,7 +1742,7 @@ ActionResult Scene::OnAction(KeyAction action)
 	auto result = ActionResult::NoAction();
 
 	const auto acceptedRig = _rigCoordinator.Accepted();
-	if (acceptedRig && _inputSubsystem->TryAcceptUiRigTriggerInput(acceptedRig->Revision))
+	if (!contextual && !suppressedKey && acceptedRig && _inputSubsystem->TryAcceptUiRigTriggerInput(acceptedRig->Revision))
 	{
 		static const std::string EmptyDevice;
 		const auto keyState = action.KeyActionType == KeyAction::KEY_DOWN ? 1u : 0u;
@@ -1695,9 +1751,17 @@ ActionResult Scene::OnAction(KeyAction action)
 		{
 			if (!trigger)
 				continue;
+			std::optional<KeyboardTriggerReceipt> admitted, released;
 			auto res = trigger->QueueInputEvent(TRIGGER_INPUT_UI,
 				acceptedRig->Revision, TriggerSource::TRIGGER_KEY,
-				action.KeyChar, keyState, action, EmptyDevice);
+				action.KeyChar, keyState, action, EmptyDevice, std::nullopt, std::nullopt, &admitted, &released);
+			if (released) _contextualKeyboard.Retire(trigger, *released);
+			if (admitted)
+			{
+				const auto runtime = std::find_if(acceptedRig->Triggers.begin(), acceptedRig->Triggers.end(),
+					[&](const auto& entry) { return entry.Instance == trigger; });
+				if (runtime != acceptedRig->Triggers.end()) _contextualKeyboard.Record(*acceptedRig, *runtime, *admitted);
+			}
 
 			if (!res.IsEaten)
 				continue;
@@ -2463,6 +2527,8 @@ void Scene::_AdvanceRigPublication()
 		if (update.CandidateIndex < pending->Triggers.size()) pending->Triggers[update.CandidateIndex].Receiver.reset();
 	if (!_rigCoordinator.PromoteAcknowledged())
 		return;
+	if (pending->RenamedStation)
+		_quantisationFeedback = "Station renamed. Save both JAM session and rig explicitly for consistent reload.";
 	if (pending->MembershipChange) _stationManagement.Committed = true;
 	_audioEngine->ReleaseRigSnapshotsBefore(pending->Revision);
 	_rigCoordinator.ReleaseRetired();
@@ -2480,6 +2546,30 @@ RigCoordinator::EditResult Scene::RequestRigEdit(const io::RigFile& candidateRig
 {
 	std::scoped_lock lock(_sceneMutex);
 	return _RequestRigEditLocked(candidateRig);
+}
+
+std::string Scene::_RequestStationRenameLocked(const std::shared_ptr<Station>& station,
+	std::uint64_t revision, const std::string& name)
+{
+	if (_controlOperation != ControlOperation::None || _stationManagement.Busy() ||
+		_controlWriterExclusion.owns_lock() || _sessionReplacing.load(std::memory_order_acquire) ||
+		_isSceneQuitting.load(std::memory_order_acquire) || _rigSaveDialogOpen || _rigSaveInProgress ||
+		_RoutingEditAvailability() != gui::RoutingEditAvailability::Ready)
+		return "Busy; keep the draft and retry";
+	// Like station membership staging, metadata staging needs the Scene writer
+	// lock, not the job lifecycle lock held throughout ordinary job ticks.
+	const auto result = _rigCoordinator.SubmitStationRename(station, revision, name);
+	if (result != RigCoordinator::EditResult::Pending) return "Invalid, duplicate, reserved or stale name";
+	const auto staged = _rigCoordinator.Staged();
+	const auto accepted = _rigCoordinator.Accepted();
+	if (_audioEngine->AppliedRigRevision() != accepted->Revision ||
+		!_inputSubsystem->RequestCloseRigTriggerInputFromUi(accepted->Revision))
+	{
+		_rigCoordinator.CompleteTransition(staged->Revision, false, {});
+		return "Input transition busy; retry";
+	}
+	_rigTransitionRequestedRevision = 0u;
+	return {};
 }
 
 RigCoordinator::EditResult Scene::_RequestRigEditLocked(const io::RigFile& candidateRig)
@@ -2840,6 +2930,8 @@ bool Scene::PumpGlobalKeyCapture(actions::KeyAction& action) noexcept
 
 void Scene::Shutdown()
 {
+	for (const auto& station : _stations)
+		if (auto label = station->GetGuiRack()->StationLabel()) label->Cancel();
 	_vstRackControls->Reset();
 	_sessionReplacing.store(true, std::memory_order_release);
 	if (_controlWriterExclusion.owns_lock()) _controlWriterExclusion.unlock();
@@ -2893,6 +2985,7 @@ void Scene::Shutdown()
 	for (const auto& station : _retiredStations) { station->ReleaseResources(); station->ForceUnloadAllVstPlugins(); }
 	_retiredStations.clear();
 	_audioEngine->Close();
+	_contextualKeyboard.ClearAfterReadersStopped();
 	_rigCoordinator.ReleaseAfterReadersStopped();
 }
 
@@ -3669,6 +3762,17 @@ void Scene::_PrepareStation(const std::shared_ptr<Station>& station)
 	station->SetNumAdcChannels(_audioEngine->GetChannelMixer()->Source()->NumOutputChannels(Audible::AUDIOSOURCE_ADC));
 	station->SetNumDacChannels(_audioEngine->GetChannelMixer()->Sink()->NumInputChannels(Audible::AUDIOSOURCE_LOOPS));
 	station->Init();
+	if (auto label = station->GetGuiRack()->StationLabel())
+	{
+		label->Focus = [this, weakLabel = std::weak_ptr(label)](const auto& editor) {
+			if (editor) _focusManager.RequestFocus(editor);
+			else if (auto owner = weakLabel.lock(); owner && owner->OwnsFocus(_focusManager.CurrentFocus())) _focusManager.ClearFocus();
+		};
+		label->Submit = [this, target = std::weak_ptr(station)](const auto& name, auto revision) {
+			std::scoped_lock lock(_sceneMutex);
+			return _RequestStationRenameLocked(target.lock(), revision, name);
+		};
+	}
 
 	auto selectDepth = (unsigned int)_viewMode;
 	if (selectDepth > (unsigned int)DEPTH_LOOP)
@@ -4207,6 +4311,13 @@ void Scene::_ReleaseQuantisationInputLocked()
 
 void Scene::OnInputFocusLost()
 {
+	_contextualKeyboard.FocusLost();
+	if (const auto rig = _rigCoordinator.Accepted(); rig && _inputSubsystem->TryAcceptUiRigTriggerInput(rig->Revision))
+	{
+		base::Action release;
+		release.SetActionTime(Timer::GetTime());
+		_contextualKeyboard.Flush(*rig, release);
+	}
 	// Window-owned focus finalization synchronously notifies the settings owner,
 	// which takes its own scene lock (e.g. SnapshotStations). Commit before locking.
 	_focusManager.ClearFocus();

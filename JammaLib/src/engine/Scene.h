@@ -18,6 +18,7 @@
 #include <unordered_map>
 #include <utility>
 #include "PerformanceGroupController.h"
+#include "ContextualKeyboardInput.h"
 #include "../resources/ResourceLib.h"
 #include "../actions/JobAction.h"
 #include "../audio/AudioDevice.h"
@@ -339,6 +340,8 @@ namespace engine
 		void _AcceptStationRemoval(bool consent);
 		void _CommitStationMembershipLocked();
 		RigCoordinator::EditResult _RequestRigEditLocked(const io::RigFile& candidateRig);
+		std::string _RequestStationRenameLocked(const std::shared_ptr<Station>& station,
+			std::uint64_t revision, const std::string& name);
 		bool _JobReceiverAvailableLocked(const std::shared_ptr<base::ActionReceiver>& receiver) const;
 		bool _StationManagementAvailableLocked() const;
 
@@ -548,6 +551,7 @@ namespace engine
 		std::shared_ptr<gui::GuiMainPanel> _selectionPanel;
 		std::shared_ptr<gui::GuiHud> _hudPanel;
 		PerformanceGroupController _performanceGroups; // scene mutex, never audio
+		ContextualKeyboardInput _contextualKeyboard; // Window thread only; no callback state.
 		std::vector<std::shared_ptr<base::GuiElement>> _guiChildren;
 		gui::GuiFocusManager _focusManager;
 		gui::GuiPopupManager _popupManager;

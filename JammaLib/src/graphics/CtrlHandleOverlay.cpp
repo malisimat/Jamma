@@ -33,8 +33,14 @@ void CtrlHandleOverlay::SetAnchor(utils::Position2d screenPos, utils::Size2d sce
 
 	const auto visibleButtons = (std::max)(_visibleButtonCount, 1);
 	const auto totalW = visibleButtons * ButtonW + (visibleButtons - 1) * ButtonGap;
-	float panelX = static_cast<float>(_anchorPos.X) - totalW * 0.5f;
-	float panelY = static_cast<float>(_anchorPos.Y) - AnchorOffsetY - ButtonH;
+	// Pin beside the press position, toward the screen's centre in each quadrant.
+	// Leave a gap on both axes so Ctrl never puts an action under the cursor.
+	float panelX = static_cast<float>(_anchorPos.X) < _sceneSize.Width * 0.5f
+		? static_cast<float>(_anchorPos.X) + AnchorOffsetY
+		: static_cast<float>(_anchorPos.X) - AnchorOffsetY - totalW;
+	float panelY = static_cast<float>(_anchorPos.Y) < _sceneSize.Height * 0.5f
+		? static_cast<float>(_anchorPos.Y) + AnchorOffsetY
+		: static_cast<float>(_anchorPos.Y) - AnchorOffsetY - ButtonH;
 
 	const auto maxX = static_cast<float>(_sceneSize.Width) - totalW;
 	const auto maxY = static_cast<float>(_sceneSize.Height) - ButtonH;

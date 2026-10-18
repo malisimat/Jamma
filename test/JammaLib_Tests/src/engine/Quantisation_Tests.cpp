@@ -1041,6 +1041,24 @@ TEST(Quantisation, MultichannelAudioAndMidiIsOneCompletedTake)
 TEST(QuantisationController, RapidModifierTransitionsKeepCurrentOpacity)
 {
 	graphics::CtrlHandleOverlay overlay;
+	for (const auto count : {1, 2})
+	{
+		overlay.SetVisibleButtonCount(count);
+		for (const auto cursor : {utils::Position2d{100, 100}, {700, 100}, {100, 500}, {700, 500}})
+		{
+			overlay.SetAnchor(cursor, {800u, 600u});
+			EXPECT_EQ(-1, overlay.HitTestButton(cursor));
+			for (int i = 0; i < count; ++i)
+			{
+				const auto centre = overlay.ButtonCenter(i);
+				ASSERT_TRUE(centre);
+				EXPECT_EQ(cursor.X < 400, centre->X > cursor.X);
+				EXPECT_EQ(cursor.Y < 300, centre->Y > cursor.Y);
+				EXPECT_GE(centre->X, 0); EXPECT_LT(centre->X, 800);
+				EXPECT_GE(centre->Y, 0); EXPECT_LT(centre->Y, 600);
+			}
+		}
+	}
 	engine::Quantiser quantiser;
 	std::vector<std::shared_ptr<engine::Station>> stations;
 	engine::QuantiserController controller(overlay, quantiser, stations);

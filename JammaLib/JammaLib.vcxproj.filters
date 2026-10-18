@@ -107,6 +107,9 @@
     <ClInclude Include="src\engine\UndoHistory.h">
       <Filter>src\engine</Filter>
     </ClInclude>
+    <ClInclude Include="src\engine\ContextualKeyboardInput.h">
+      <Filter>src\engine</Filter>
+    </ClInclude>
     <ClInclude Include="src\engine\Trigger.h">
       <Filter>src\engine</Filter>
     </ClInclude>
@@ -622,6 +625,9 @@
       <Filter>src\base</Filter>
     </ClInclude>
     <ClInclude Include="src\gui\GuiRack.h">
+      <Filter>src\gui</Filter>
+    </ClInclude>
+    <ClInclude Include="src\gui\GuiStationLabel.h">
       <Filter>src\gui</Filter>
     </ClInclude>
     <ClInclude Include="src\gui\VstRackControls.h">

@@ -76,6 +76,9 @@ namespace engine
 		io::RigFile Rig;
 		std::uint64_t TopologyRevision = 0u; // Survives later rig-only publications.
 		bool MembershipChange = false;
+		// Off-callback metadata commit, distinct from membership/topology changes.
+		std::shared_ptr<Station> RenamedStation;
+		std::string StationName;
 		std::shared_ptr<const std::vector<std::shared_ptr<Station>>> Stations;
 		std::vector<io::JamFile::Station> StationDescriptors;
 		Station* RemovedStation = nullptr; // Identity only; controller pins outgoing owner until retirement.

@@ -58,6 +58,9 @@ namespace gui
 					{
 						auto p = station->TopCapModelPosition(); p.Y += 65.0f;
 						add(p, {false, station, {}, {}}, true, locals > 1u);
+						if (!next.empty() && next.back().Action.Remove == station)
+							if (auto label = station->GetGuiRack()->StationLabel())
+								next.back().Button->SetPosition(label->BinPosition(next.back().Button->Position()));
 					}
 					if (ctrl && takeDitchVisible)
 					{

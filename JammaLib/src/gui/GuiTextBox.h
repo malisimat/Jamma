@@ -59,6 +59,7 @@ namespace gui
 	public:
 		const std::string& Text() const;
 		void SetText(const std::string& text, bool notify = false);
+		void BeginEditing(bool selectAll = true);
 
 		// Editing-state accessors (testable without GL).
 		unsigned int CaretIndex() const;

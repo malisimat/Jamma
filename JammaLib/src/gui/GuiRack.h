@@ -6,6 +6,7 @@
 #include "GuiSlider.h"
 #include "GuiToggle.h"
 #include "GuiRouter.h"
+#include "GuiStationLabel.h"
 #include "ActionReceiver.h"
 
 namespace gui
@@ -56,6 +57,7 @@ namespace gui
 		std::vector<int> AllowedMidiChannels;
 		std::function<void(const std::vector<int>&)> OnAllowedMidiChannelsChanged;
 		bool EnableVstControl = false;
+		bool EnableStationLabel = false;
 		std::function<void(base::Action::Modifiers)> OnVstControl;
 	};
 
@@ -75,6 +77,7 @@ namespace gui
 		void SetVstControlCallback(std::function<void(base::Action::Modifiers)> callback);
 		void SetVstControlText(const std::string& text);
 		std::shared_ptr<GuiButton> GetVstControl() const;
+		std::shared_ptr<GuiStationLabel> StationLabel() const { return _stationLabel; }
 
 		virtual void SetSize(utils::Size2d size) override;
 		virtual void SetVisible(bool visible) override;
@@ -143,5 +146,6 @@ namespace gui
 		std::shared_ptr<base::GuiElement> _midiChannelPanel;
 		std::vector<std::shared_ptr<gui::GuiToggle>> _midiChannelToggles;
 		GuiRackParams _rackParams;
+		std::shared_ptr<GuiStationLabel> _stationLabel;
 	};
 }

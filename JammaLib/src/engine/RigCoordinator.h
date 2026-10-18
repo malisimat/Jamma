@@ -35,6 +35,8 @@ namespace engine
 		bool MergeHardwarePreferences(const std::optional<io::UserConfig::AudioSettings>& audio,
 			const std::optional<std::vector<io::UserConfig::MidiSettings>>& midi);
 		EditResult SubmitCandidate(const io::RigFile& candidateRig);
+		EditResult SubmitStationRename(const std::shared_ptr<Station>& station,
+			std::uint64_t expectedRevision, const std::string& name);
 		// Serialized Scene owner, off callback. Normalize against the old inventory.
 		EditResult SubmitInventory(const std::vector<std::shared_ptr<Station>>& stations,
 			std::shared_ptr<Station> removed = {});

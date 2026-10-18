@@ -45,7 +45,7 @@ void StationRemote::EnsureRemoteTake()
 		return;
 
 	LoopTakeParams takeParams;
-	takeParams.Id = _name + "-REMOTE-TAKE";
+	takeParams.Id = Name() + "-REMOTE-TAKE";
 	takeParams.Size = { 100, 100 };
 	takeParams.FadeSamps = _fadeSamps;
 	audio::MergeMixBehaviourParams takeMerge;
@@ -58,7 +58,7 @@ void StationRemote::EnsureRemoteTake()
 	auto loopMixerParams = Loop::GetMixerParams({ 110, 48 }, visualOnlyWire);
 
 	LoopParams leftParams;
-	leftParams.Id = _name + "-REMOTE-L";
+	leftParams.Id = Name() + "-REMOTE-L";
 	leftParams.TakeId = takeParams.Id;
 	leftParams.Wav = leftParams.Id;
 	leftParams.Channel = 0;
@@ -68,7 +68,7 @@ void StationRemote::EnsureRemoteTake()
 	_leftLoop->SetVisualLength(_intervalLengthSamps.load());
 
 	LoopParams rightParams = leftParams;
-	rightParams.Id = _name + "-REMOTE-R";
+	rightParams.Id = Name() + "-REMOTE-R";
 	rightParams.Wav = rightParams.Id;
 	rightParams.Channel = 1;
 	_rightLoop = std::make_shared<LoopRemote>(rightParams, loopMixerParams);

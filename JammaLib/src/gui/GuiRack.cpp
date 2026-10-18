@@ -70,6 +70,12 @@ GuiRack::GuiRack(GuiRackParams params) :
 
 	_children.push_back(_masterPanel);
 	_masterPanel->AddChild(_masterSlider);
+	if (params.EnableStationLabel)
+	{
+		_stationLabel = std::make_shared<GuiStationLabel>();
+		_masterPanel->AddChild(_stationLabel);
+		_stationLabel->SetVisible(true);
+	}
 	if (params.EnableVstControl)
 	{
 		const std::array<std::string, 4> names = { "vst_empty", "vst_closed", "vst_open", "vst_failed" };
@@ -127,6 +133,9 @@ void GuiRack::SetSize(utils::Size2d size)
 	_masterSlider->SetPosition(masterSliderParams.Position);
 	_masterSlider->SetSize(masterSliderParams.Size);
 	_masterSlider->SetDragParams(masterSliderParams.DragControlOffset, masterSliderParams.DragControlSize, masterSliderParams.DragGap);
+	if (_stationLabel)
+		_stationLabel->Layout({masterSliderParams.Position.X,
+			masterSliderParams.Position.Y + static_cast<int>(masterSliderParams.Size.Height) + 6}, masterSliderParams.Size.Width);
 	for (auto& button : _vstControls)
 		if (button)
 		{
@@ -324,12 +333,16 @@ void GuiRack::SetRackState(GuiRackParams::RackState state, bool bypassUpdates)
 void GuiRack::SetVisible(bool visible)
 {
 	if (!visible)
+	{
+		if (_stationLabel) _stationLabel->Cancel();
 		SetRackState(GuiRackParams::RACK_MASTER, true);
+	}
 	GuiElement::SetVisible(visible);
 }
 
 void GuiRack::SetMasterControlsVisible(bool visible)
 {
+	if (!visible && _stationLabel) _stationLabel->Cancel();
 	_masterControlsVisible = visible;
 	// Suppression must not overwrite selection-depth visibility or collapse
 	// the rack being edited.

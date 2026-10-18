@@ -2,6 +2,7 @@
 #include "gui/GuiButton.h"
 #include "gui/GuiToggle.h"
 #include "gui/GuiFocusManager.h"
+#include "gui/GuiStationLabel.h"
 #include "gui/GuiPopup.h"
 #include "gui/GuiPopupManager.h"
 #include "gui/GuiTextBox.h"
@@ -716,6 +717,73 @@ TEST(GuiTextBox, TypingInsertsCharacters) {
 
 	EXPECT_EQ("abc", tb->Text());
 	EXPECT_EQ(3u, tb->CaretIndex());
+}
+
+TEST(GuiTextBox, SelectedLoadedUtf8EditsOnlyAtCodePointBoundaries) {
+	GuiTextBoxParams p; p.Text = "A\xc3\xa9\xe6\x97\xa5Z";
+	auto text = std::make_shared<GuiTextBox>(p);
+	ASSERT_TRUE(text->RequestFocus());
+	text->BeginEditing();
+	EXPECT_EQ(p.Text, text->SelectedText());
+	text->OnAction(MakeKey(0x23)); // End, clear selection.
+	text->OnAction(MakeKey(0x25)); // Before Z.
+	text->OnAction(MakeKey(0x25)); // Before whole three-byte character.
+	EXPECT_EQ(3u, text->CaretIndex());
+	text->OnAction(MakeKey(0x08)); // Delete whole two-byte character.
+	EXPECT_EQ("A\xe6\x97\xa5Z", text->Text());
+	text->OnAction(MakeKey(0x2e));
+	EXPECT_EQ("AZ", text->Text());
+
+	// The station presenter disarms acceptance before focus finalization.
+	GuiFocusManager focus;
+	auto label = std::make_shared<gui::GuiStationLabel>();
+	label->SetVisible(true); label->Layout({0, 0}, 80u);
+	label->Update("Keys", 7u, true, true, false);
+	label->Init();
+	const utils::Position2d editPoint{static_cast<int>(gui::GuiStationLabel::LabelWidth + 10u), 10};
+	const auto editButton = label->FindTopmostDescendant(editPoint);
+	ASSERT_TRUE(editButton);
+	EXPECT_TRUE(label->Move(MakeTouchMove(editPoint)));
+	EXPECT_EQ(base::GuiElement::STATE_OVER, editButton->GetState());
+	EXPECT_FALSE(label->Move(MakeTouchMove({-100, -100})));
+	EXPECT_EQ(base::GuiElement::STATE_NORMAL, editButton->GetState());
+	unsigned int submissions = 0u;
+	label->Focus = [&](const auto& editor) { if (editor) focus.RequestFocus(editor); else focus.ClearFocus(); };
+	label->Submit = [&](const auto&, auto) { ++submissions; return std::string{}; };
+	ASSERT_TRUE(label->Touch(MakeTouch(TouchAction::TOUCH_DOWN, {static_cast<int>(gui::GuiStationLabel::LabelWidth + 10u), 10})));
+	ASSERT_TRUE(label->Active());
+	ASSERT_TRUE(focus.IsEditingText());
+	ASSERT_TRUE(label->Touch(MakeTouch(TouchAction::TOUCH_UP, {static_cast<int>(gui::GuiStationLabel::LabelWidth + 10u), 10})));
+	ASSERT_TRUE(label->Touch(MakeTouch(TouchAction::TOUCH_DOWN, {static_cast<int>(gui::GuiStationLabel::LabelWidth + 10u), 10})));
+	EXPECT_FALSE(label->Active());
+	EXPECT_FALSE(focus.IsEditingText());
+	EXPECT_EQ(0u, submissions);
+	ASSERT_TRUE(label->Touch(MakeTouch(TouchAction::TOUCH_UP, editPoint)));
+
+	label->Update("Keys", 7u, false, true, false);
+	const utils::Position2d backgroundPoint{2, 2};
+	ASSERT_TRUE(label->Touch(MakeTouch(TouchAction::TOUCH_DOWN, backgroundPoint)));
+	EXPECT_FALSE(label->Active());
+	auto drag = MakeTouchMove({30, 2}); drag.MouseButtonsDown = 1u;
+	label->Move(drag);
+	ASSERT_TRUE(label->Touch(MakeTouch(TouchAction::TOUCH_UP, backgroundPoint)));
+	EXPECT_FALSE(label->Active()); // Returning to the press point cannot turn a drag into a click.
+	ASSERT_TRUE(label->Touch(MakeTouch(TouchAction::TOUCH_DOWN, backgroundPoint)));
+	ASSERT_TRUE(label->Touch(MakeTouch(TouchAction::TOUCH_UP, backgroundPoint)));
+	ASSERT_TRUE(label->Active());
+	auto editor = std::dynamic_pointer_cast<GuiTextBox>(focus.CurrentFocus());
+	ASSERT_TRUE(editor);
+	EXPECT_EQ("Keys", editor->SelectedText());
+	editor->SetText("Piano");
+	label->Submit = [&](const auto&, auto) { return ++submissions == 1u ? std::string{"Busy; retry"} : std::string{}; };
+	editor->OnAction(MakeKey(0x0d));
+	EXPECT_TRUE(label->Active()); EXPECT_EQ("Piano", editor->Text());
+	editor->OnAction(MakeKey(0x0d));
+	editor->OnAction(MakeKey(0x0d));
+	EXPECT_EQ(2u, submissions); // Pending acceptance cannot be submitted again by key repeat or blur.
+	label->Update("Piano", 8u, false, true, false);
+	EXPECT_FALSE(label->Active());
+	EXPECT_FALSE(focus.IsEditingText());
 }
 
 TEST(GuiTextBox, BackspaceAndDeleteEditText) {

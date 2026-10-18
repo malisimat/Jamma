@@ -237,6 +237,52 @@ RigCoordinator::EditResult RigCoordinator::SubmitCandidate(const io::RigFile& ca
 	return EditResult::Pending;
 }
 
+RigCoordinator::EditResult RigCoordinator::SubmitStationRename(
+	const std::shared_ptr<Station>& station, std::uint64_t expectedRevision, const std::string& name)
+{
+	const auto accepted = Accepted();
+	const auto found = std::find(_stations.begin(), _stations.end(), station);
+	if (!accepted || accepted->Revision != expectedRevision || !station || station->IsRemote() ||
+		found == _stations.end() || name.empty() || name.find_first_of("\r\n\0", 0, 3) != std::string::npos ||
+		name.find_first_not_of(" \t") == std::string::npos)
+		return EditResult::ValidationFailed;
+	if (station->Name() == name) return EditResult::ValidationFailed;
+	for (const auto& other : _stations)
+		if (other != station && other->Name() == name) return EditResult::ValidationFailed;
+	auto rig = accepted->Rig;
+	for (size_t i = 0; i < rig.Triggers.size(); ++i)
+	{
+		if (accepted->Triggers[i].BoundReceiver == station) rig.Triggers[i].StationTarget = name;
+		else if (!accepted->Triggers[i].BoundReceiver && rig.Triggers[i].StationTarget == name)
+			return EditResult::ValidationFailed;
+	}
+	// Reuse rig validation for the exact UTF-8 name contract, even in an empty rig.
+	auto validation = rig;
+	io::RigFile::Trigger probe;
+	probe.Id = "station-name-validation";
+	probe.Name = name;
+	validation.Triggers = { probe };
+	if (!io::RigFile::Validate(validation)) return EditResult::ValidationFailed;
+	bool enabled = true;
+	if (!_editsEnabled.compare_exchange_strong(enabled, false, std::memory_order_acq_rel))
+		return EditResult::EditsDisabled;
+	if (_shuttingDown.load(std::memory_order_acquire)) return EditResult::TransitionRejected;
+	auto descriptors = _stationDescriptors;
+	descriptors[static_cast<size_t>(found - _stations.begin())].Name = name;
+	auto snapshot = _BuildSnapshot(_AllocateRevision(), rig, descriptors, _stations,
+		accepted->AvailableAdcChannels, accepted->AvailableMidiDevices, _triggerParams, accepted);
+	if (!snapshot) { _editsEnabled.store(true, std::memory_order_release); return EditResult::ValidationFailed; }
+	for (size_t i = 0; i < snapshot->Triggers.size(); ++i)
+		if (snapshot->Triggers[i].BoundReceiver != accepted->Triggers[i].BoundReceiver)
+		{ _editsEnabled.store(true, std::memory_order_release); return EditResult::ValidationFailed; }
+	auto prepared = std::const_pointer_cast<RigSnapshot>(snapshot);
+	prepared->RenamedStation = station;
+	prepared->StationName = name;
+	prepared->StationDescriptors = std::move(descriptors);
+	_staged.store(std::move(snapshot), std::memory_order_release);
+	return EditResult::Pending;
+}
+
 RigCoordinator::EditResult RigCoordinator::SubmitInventory(
 	const std::vector<std::shared_ptr<Station>>& stations, std::shared_ptr<Station> removed)
 {
@@ -364,6 +410,11 @@ bool RigCoordinator::PromoteAcknowledged()
 	if (pending->MembershipChange)
 	{
 		_stations = *pending->Stations;
+		_stationDescriptors = pending->StationDescriptors;
+	}
+	if (pending->RenamedStation)
+	{
+		pending->RenamedStation->SetName(pending->StationName);
 		_stationDescriptors = pending->StationDescriptors;
 	}
 	auto old = _accepted.exchange(pending, std::memory_order_acq_rel);

@@ -3134,6 +3134,116 @@ TEST(Trigger, RejectedDitchReleasesRollbackCapacityAfterRestoredCommandsDrain)
 	EXPECT_EQ(engine::TRIGSTATE_OVERDUBBING, trigger->GetState());
 }
 
+TEST(Trigger, ContextualKeyboardCompletesOnlyAdmittedOrdinaryAndInverseReleases)
+{
+    for (const bool inverse : { false, true })
+    for (const bool modalStillOpen : { false, true })
+    {
+        auto receiver = std::make_shared<SequenceTriggerReceiver>();
+        engine::DualBinding binding;
+        binding.SetDown(engine::TriggerBinding(engine::TRIGGER_KEY, ActivateChar, inverse ? 0u : 1u), true);
+        TriggerParams params;
+        params.Activate = { binding };
+        auto trigger = std::make_shared<Trigger>(params);
+        trigger->SetReceiver(receiver);
+        engine::RigSnapshot rig;
+        rig.Revision = 1u;
+        engine::RigSnapshotTrigger runtime;
+        runtime.Id = "stable-trigger";
+        runtime.Instance = trigger;
+        rig.Triggers = { runtime };
+        rig.InputDispatch.KeyboardTriggers = { trigger };
+        engine::ContextualKeyboardInput keyboard;
+        engine::RigTriggerInputGate gate;
+        ASSERT_TRUE(gate.Open(rig.Revision));
+        KeyAction key;
+        key.SetActionTime(GetTime());
+        key.KeyChar = ActivateChar;
+        key.KeyActionType = inverse ? KeyAction::KEY_UP : KeyAction::KEY_DOWN;
+        std::optional<engine::KeyboardTriggerReceipt> receipt;
+        ASSERT_TRUE(trigger->QueueInputEvent(engine::TRIGGER_INPUT_UI, rig.Revision,
+            engine::TRIGGER_KEY, ActivateChar, inverse ? 0u : 1u, key, {},
+            std::nullopt, std::nullopt, &receipt).IsEaten);
+        ASSERT_TRUE(receipt);
+        keyboard.Record(rig, runtime, *receipt);
+        keyboard.Record(rig, runtime, *receipt); // Repeat admission occupies one slot.
+        EXPECT_EQ(1u, keyboard.Outstanding());
+        TickAndComplete(trigger, 0u, std::nullopt, rig.Revision);
+        ASSERT_TRUE(trigger->IsActivateInputDown());
+        ASSERT_TRUE(gate.RequestCloseFromUi(rig.Revision));
+        key.KeyActionType = inverse ? KeyAction::KEY_DOWN : KeyAction::KEY_UP;
+        keyboard.Observe(key, modalStillOpen, gate.TryAcceptUi(rig.Revision));
+        EXPECT_FALSE(gate.TryAcceptUi(rig.Revision));
+        EXPECT_EQ(1u, keyboard.Outstanding());
+        TickAndComplete(trigger, 0u, std::nullopt, rig.Revision);
+        EXPECT_TRUE(trigger->IsActivateInputDown());
+        // A name-only accepted revision preserves stable instance and binding identity.
+        trigger->SetName("renamed");
+        rig.Revision = 2u;
+        ASSERT_TRUE(gate.Open(rig.Revision));
+        ASSERT_TRUE(gate.TryAcceptUi(rig.Revision));
+        keyboard.Flush(rig, key);
+        EXPECT_EQ(0u, keyboard.Outstanding());
+        TickAndComplete(trigger, 0u, std::nullopt, rig.Revision);
+        EXPECT_FALSE(trigger->IsActivateInputDown());
+        keyboard.Flush(rig, key);
+        TickAndComplete(trigger, 0u, std::nullopt, rig.Revision);
+        EXPECT_FALSE(trigger->IsActivateInputDown());
+        // Swallowed modal presses cannot produce a newly configured inverse attack on close.
+        key.KeyActionType = KeyAction::KEY_DOWN;
+        keyboard.Observe(key, true);
+        key.KeyActionType = KeyAction::KEY_UP;
+        EXPECT_TRUE(keyboard.Observe(key, false));
+        EXPECT_FALSE(keyboard.Observe(key, false));
+        auto wrongSignature = *receipt;
+        wrongSignature.Down.Value += 1u;
+        EXPECT_FALSE(trigger->QueueAdmittedKeyboardRelease(wrongSignature, rig.Revision, key));
+        key.KeyActionType = inverse ? KeyAction::KEY_UP : KeyAction::KEY_DOWN;
+        ASSERT_TRUE(trigger->QueueInputEvent(engine::TRIGGER_INPUT_UI, rig.Revision,
+            engine::TRIGGER_KEY, ActivateChar, inverse ? 0u : 1u, key, {},
+            std::nullopt, std::nullopt, &receipt).IsEaten);
+        ASSERT_TRUE(receipt);
+        keyboard.Record(rig, runtime, *receipt);
+        TickAndComplete(trigger, 0u, std::nullopt, rig.Revision);
+        ASSERT_TRUE(trigger->IsActivateInputDown());
+        if (!inverse)
+        {
+            // An admitted press repeats inside a modal; its release arrives after close.
+            keyboard.Observe(key, true);
+            key.KeyActionType = KeyAction::KEY_UP;
+            EXPECT_TRUE(keyboard.Observe(key, false, true));
+            keyboard.Flush(rig, key);
+            TickAndComplete(trigger, 0u, std::nullopt, rig.Revision);
+            EXPECT_FALSE(trigger->IsActivateInputDown());
+            key.KeyActionType = KeyAction::KEY_DOWN;
+            ASSERT_TRUE(trigger->QueueInputEvent(engine::TRIGGER_INPUT_UI, rig.Revision,
+                engine::TRIGGER_KEY, ActivateChar, 1u, key, {}, std::nullopt, std::nullopt, &receipt).IsEaten);
+            keyboard.Record(rig, runtime, *receipt);
+            TickAndComplete(trigger, 0u, std::nullopt, rig.Revision);
+            ASSERT_TRUE(gate.RequestCloseFromUi(rig.Revision));
+            key.KeyActionType = KeyAction::KEY_UP;
+            keyboard.Observe(key, false, false);
+            ASSERT_TRUE(gate.Open(rig.Revision));
+            // Reopened input admits another press before the next UI frame.
+            key.KeyActionType = KeyAction::KEY_DOWN;
+            keyboard.Flush(rig, key); // The Scene prologue drains old pending UP first.
+            keyboard.Observe(key, false, true);
+            ASSERT_TRUE(trigger->QueueInputEvent(engine::TRIGGER_INPUT_UI, rig.Revision,
+                engine::TRIGGER_KEY, ActivateChar, 1u, key, {}, std::nullopt, std::nullopt, &receipt).IsEaten);
+            keyboard.Record(rig, runtime, *receipt);
+            keyboard.Flush(rig, key); // A frame cannot release the newly admitted press.
+            TickAndComplete(trigger, 0u, std::nullopt, rig.Revision);
+            EXPECT_TRUE(trigger->IsActivateInputDown());
+            EXPECT_EQ(1u, keyboard.Outstanding());
+        }
+        keyboard.FocusLost();
+        keyboard.Flush(rig, key);
+        TickAndComplete(trigger, 0u, std::nullopt, rig.Revision);
+        EXPECT_FALSE(trigger->IsActivateInputDown());
+        EXPECT_EQ(0u, keyboard.Outstanding());
+    }
+}
+
 TEST(Trigger, FutureRigReleaseWaitsForAudioRevisionInBothIngressDomains)
 {
     for (const auto domain : { engine::TRIGGER_INPUT_UI, engine::TRIGGER_INPUT_JOB })
