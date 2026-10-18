@@ -14,6 +14,12 @@ class GuiVstRack::Button : public GuiButton
 {
 public:
 	Button(GuiButtonParams params) : GuiButton(params) {}
+	void SetSize(Size2d size) override
+	{
+		// Layout runs each frame; unchanged sizes must not dirty nine-patch buffers.
+		if (GetSize().Width == size.Width && GetSize().Height == size.Height) return;
+		GuiButton::SetSize(size);
+	}
 	std::function<Command()> Capture;
 	std::function<void(Command)> Submit;
 	void ClearPointerState() override { _press.reset(); GuiButton::ClearPointerState(); }

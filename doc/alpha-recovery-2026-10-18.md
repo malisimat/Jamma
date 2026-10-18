@@ -67,3 +67,21 @@ The four engine follow-ups are corrected. Hosted width is cached with the proces
 `GuiVstRack` provides the slot stack/append/scroll, identity/revision-bearing gestures, optional reused live channel controls, many-to-many cable editing, collapsed/clipped endpoint projection, explicit recovery and conversion controls. VstRackControls applies intents under existing Scene serialization and revalidates after native message pumping. View/capture/draft state is window-owned; command handlers stage values only. Plugin/route state remains structural and callback delivery remains prepared. Static threading audit plus manual callback inspection found no new callback lock, allocation or wait; reported mutex additions are non-RT UI/structural sites.
 
 Dedicated Astra review requested by the user, fresh Debug UI/plugin acceptance, Release and final integrated validation remain pending. No rack merge, push, release/tag or master merge has occurred. Trigger learn/save is still queued.
+
+## Astra review and manual acceptance
+
+At the user's request, an independent `gpt-6-astra` subagent reviewed the entire `65f4245e..8dbc038c` rack feature. It found the ownership/design boundaries sound and no new callback allocation, lock or formatting in the inspected bodies. Three must-fix findings are being corrected before integration:
+
+1. Recorded CC64-up needs all-destination release acceptance/retry under asymmetric fanout backpressure.
+2. Pending older pedal-up must be ordered before admitting a new live/recorded pedal-down so stale recovery cannot lift the new owner.
+3. Preserved malformed live-route IDs need lossless raw encoding through valid JSON, matching slot-ID recovery.
+
+The tool refused computer-use launch because Jamma access was not approved. The user chose to perform the fresh Debug app checks themselves. Do not retry computer-use access or treat UI/audio/hardware acceptance as complete. Supply the rebuilt executable/checklist after review fixes pass. Astra source recheck is also required before the rack merge. Trigger learn/save remains queued.
+
+## Astra fixes validated
+
+The three findings above are corrected. Recorded sustain release requires all destinations to retain delivery; a retained older pedal release is delivered before a replacement attack is admitted. Malformed live-route identities use a canonical complete raw byte array, preserving Explicit mode, order, empty IDs and invalid UTF-8 through valid JSON.
+
+`alpha-rack-astra-fixes-tests-build-3.log` and `alpha-rack-astra-fixes-app-build.log` record successful Debug builds with zero warnings/errors. `alpha-rack-astra-fixes-combined-tests.log` records 460/460 passing, 13 disabled. Threading audit/manual ownership inspection found no new shared fields, callback locks or allocation.
+
+A narrow GuiVstRack button size guard avoids dirtying nine-patch buffers during unchanged per-frame layout. Debug library, tests and app builds passed (`alpha-rack-layout-*-build.log`); `alpha-rack-layout-ui-tests.log` records 150/150 UI/cable/Scene tests passing, 1 disabled. Independent Astra recheck and user visual/plugin/audio acceptance remain pending. Trigger learn/save remains queued; no rack merge or release has occurred.

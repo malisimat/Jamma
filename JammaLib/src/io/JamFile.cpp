@@ -850,13 +850,30 @@ bool JamFile::ToStream(JamFile jam, std::stringstream& ss)
 			{
 				if (channel) ss << ",";
 				const auto& route = station.LiveVstRoutes[channel];
+				const bool hasRawIds = std::any_of(route.PluginIds.begin(), route.PluginIds.end(), [](const auto& id) { return id.empty() || !NativeMidiSidecar::ValidatePluginIdentity(id); });
 				ss << "{" << kvBool("explicit", route.Explicit) << ",\"plugins\":[";
-				for (std::size_t index = 0; index < route.PluginIds.size(); ++index)
+				for (std::size_t index = 0; index < (hasRawIds ? 0u : route.PluginIds.size()); ++index)
 				{
 					if (index) ss << ",";
-					ss << quoted(route.PluginIds[index]);
+					const auto& id = route.PluginIds[index];
+					ss << quoted(id);
 				}
-				ss << "]}";
+				ss << "]";
+				if (hasRawIds)
+				{
+					// Malformed inactive routes use a complete canonical byte array.
+					// Older readers retain Explicit with no targets, hence silence.
+					ss << ",\"rawPluginIdsBase64\":[";
+					for (std::size_t index = 0; index < route.PluginIds.size(); ++index)
+					{
+						if (index) ss << ",";
+						const auto& id = route.PluginIds[index];
+						const std::vector<std::uint8_t> bytes(id.begin(), id.end());
+						ss << quoted("b64:" + utils::Base64Encode(bytes));
+					}
+					ss << "]";
+				}
+				ss << "}";
 			}
 			ss << "]";
 		}
@@ -1719,6 +1736,23 @@ std::optional<JamFile::Station> JamFile::Station::FromJson(Json::JsonPart json)
 			const auto& values = std::get<Json::JsonArray>(ids->second);
 			if (values.Array.index() == 4) route.PluginIds = std::get<std::vector<std::string>>(values.Array);
 			else if (!(values.Array.index() == 0 && std::get<std::vector<bool>>(values.Array).empty())) return std::nullopt;
+			if (const auto raw = channels[channel].KeyValues.find("rawPluginIdsBase64"); raw != channels[channel].KeyValues.end())
+			{
+				if (raw->second.index() != 5) return std::nullopt;
+				const auto& encoded = std::get<Json::JsonArray>(raw->second);
+				if (encoded.Array.index() != 4) return std::nullopt;
+				const auto& entries = std::get<std::vector<std::string>>(encoded.Array);
+				if (!route.PluginIds.empty()) return std::nullopt;
+				route.PluginIds.resize(entries.size());
+				for (std::size_t index = 0; index < entries.size(); ++index)
+				{
+					if (entries[index].compare(0u, 4u, "b64:") != 0) return std::nullopt;
+					const auto encodedId = entries[index].substr(4u);
+					const auto bytes = utils::Base64Decode(encodedId);
+					if (utils::Base64Encode(bytes) != encodedId) return std::nullopt;
+					route.PluginIds[index].assign(bytes.begin(), bytes.end());
+				}
+			}
 		}
 	}
 	station.AudioRoutes = std::move(audioRoutes);

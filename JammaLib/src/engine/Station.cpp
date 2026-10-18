@@ -1289,6 +1289,14 @@ bool Station::_TryDeliverMidiNow(MidiDestination& destination, const MidiEvent& 
 	if (destination.Plugin->IsBypassed() && (event.IsNoteOn() || (event.MessageType() == 0xb0u && event.data1 == 64u && event.data2 >= 64u))) return false;
 	const bool sustain = event.MessageType() == 0xb0u && event.data1 == 64u;
 	const auto slot = midi::MidiNote::NoteSlot(event.Channel(), event.data1);
+	// A replacement pedal owner must follow the retained release in adapter
+	// order. Reject its attack if the old release still cannot be accepted.
+	if (sustain && event.data2 >= 64u && destination.PendingSustainRelease.test(event.Channel()))
+	{
+		if (!destination.Plugin->TrySendMidiEvent({event.sampleOffset, event.status, 64u, 0u}, true)) return false;
+		destination.PendingSustainRelease.reset(event.Channel());
+		destination.PluginSustain.reset(event.Channel());
+	}
 	if (event.IsNoteOn() && destination.PendingReleases.test(slot))
 	{
 		const auto release = MidiEvent::MakeNoteOff(event.sampleOffset, event.Channel(), event.data1,
@@ -1451,21 +1459,23 @@ bool Station::MidiPlaybackSink::TryOnEvent(unsigned int outputIndex, const MidiE
 	const auto slot = midi::MidiNote::NoteSlot(event.Channel(), event.data1);
 	// Every destination must retain a release before the source forgets it.
 	// Attacks still establish source state if any destination accepts them.
-	bool accepted = event.IsNoteOff();
+	const bool sustainRelease = event.MessageType() == 0xb0u && event.data1 == 64u && event.data2 < 64u;
+	const bool release = event.IsNoteOff() || sustainRelease;
+	bool accepted = release;
 	for (const auto& binding : _state.MidiPlaybackRoutes[outputIndex])
 	{
 		if (binding->Take->IsSourceLossCancelled() && event.IsNoteOn()) continue;
 		auto& destination = *binding->Destination;
 		const bool suppressSource = binding->Take->IsMuted() || binding->Take->IsSourceLossCancelled();
-		if (suppressSource && event.IsNoteOff())
+		if (suppressSource && release)
 			Station::_RecoverCancelledScheduledMidi(destination,
 				Station::_CancelScheduledMidiForOwner(destination, binding.get()));
 		if (event.IsNoteOff() && !binding->Held.test(slot))
 			continue;
-		const bool immediateRelease = event.IsNoteOff() && destination.RecoveringCompensationChange;
+		const bool immediateRelease = release && destination.RecoveringCompensationChange;
 		const bool delivered = Station::_TryDeliverMidi(destination, event,
 			suppressSource || immediateRelease, binding.get());
-		if (event.IsNoteOff()) accepted &= delivered;
+		if (release) accepted &= delivered;
 		else accepted |= delivered;
 		if (event.IsNoteOn() && delivered && !binding->Held.test(slot))
 		{
