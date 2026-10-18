@@ -1,6 +1,7 @@
 #include "gtest/gtest.h"
 #include "../../TestPaths.h"
 #include <algorithm>
+#include <bitset>
 #include <filesystem>
 #include <fstream>
 #include "engine/Scene.h"
@@ -21,6 +22,17 @@ namespace gui
 }
 namespace engine
 {
+    class NativeKeyboardWindow : public graphics::Window
+    {
+    public:
+        NativeKeyboardWindow(Scene& scene, resources::ResourceLib& resources) : Window(scene, resources) {}
+        std::bitset<256u> NativeKeys;
+    protected:
+        // Direct WindowProcedure calls do not update the OS queued key state.
+        bool _IsNativeKeyDown(unsigned int key, bool) const override
+        { return key < NativeKeys.size() && NativeKeys.test(key); }
+    };
+
     class PressPickWindow : public graphics::Window
     {
     public:
@@ -1390,7 +1402,7 @@ TEST_F(SceneRoutingIntegrationTest, NativeBackgroundMiddleAndAltMiddleUseClickCo
     auto scene = FreshScene({ Station("Local") }, {});
     ASSERT_TRUE(scene);
     resources::ResourceLib resources;
-    graphics::Window window(*scene, resources);
+    engine::NativeKeyboardWindow window(*scene, resources);
     window.Resize({ 800, 600 });
     auto take = scene->SnapshotStations().front()->AddTake();
     scene->CommitChanges();
@@ -1402,12 +1414,14 @@ TEST_F(SceneRoutingIntegrationTest, NativeBackgroundMiddleAndAltMiddleUseClickCo
     {
         take->SetGroupMutedAudio(!mute);
         scene->SetHover3d({}, base::Action::MODIFIER_NONE);
+        window.NativeKeys.set(VK_MENU, mute);
         if (mute) graphics::Window::WindowProcedure(host, WM_SYSKEYDOWN, VK_MENU, 1u << 29u);
         graphics::Window::WindowProcedure(host, WM_MBUTTONDOWN,
             MK_MBUTTON, MAKELPARAM(560, 300));
         EXPECT_TRUE(engine::SourceLossIntegrationTestAccess::BackgroundOwned(*scene));
         EXPECT_TRUE(engine::SourceLossIntegrationTestAccess::BackgroundPreviewActive(*scene));
         EXPECT_FALSE(engine::SourceLossIntegrationTestAccess::CameraPointerHeld(*scene));
+        window.NativeKeys.reset(VK_MENU);
         if (mute) graphics::Window::WindowProcedure(host, WM_SYSKEYUP, VK_MENU, 1u << 29u);
         graphics::Window::WindowProcedure(host, WM_MBUTTONUP, 0, MAKELPARAM(560, 300));
         EXPECT_FALSE(engine::SourceLossIntegrationTestAccess::BackgroundPreviewActive(*scene));
@@ -1424,7 +1438,7 @@ TEST_F(SceneRoutingIntegrationTest, NativeAltLeftBackgroundPreviewsAndSelectsAll
     auto scene = FreshScene({ Station("Local") }, {});
     ASSERT_TRUE(scene);
     resources::ResourceLib resources;
-    graphics::Window window(*scene, resources);
+    engine::NativeKeyboardWindow window(*scene, resources);
     window.Resize({ 800, 600 });
     auto take = scene->SnapshotStations().front()->AddTake();
     scene->CommitChanges();
@@ -1434,12 +1448,14 @@ TEST_F(SceneRoutingIntegrationTest, NativeAltLeftBackgroundPreviewsAndSelectsAll
         HWND_MESSAGE, nullptr, GetModuleHandleW(nullptr), nullptr);
     ASSERT_NE(host, nullptr);
     SetWindowLongPtrW(host, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(&window));
+    window.NativeKeys.set(VK_MENU);
     graphics::Window::WindowProcedure(host, WM_SYSKEYDOWN, VK_MENU, 1u << 29u);
     graphics::Window::WindowProcedure(host, WM_LBUTTONDOWN, MK_LBUTTON, MAKELPARAM(560, 300));
     EXPECT_TRUE(engine::SourceLossIntegrationTestAccess::BackgroundOwned(*scene));
     EXPECT_TRUE(engine::SourceLossIntegrationTestAccess::SelectionPreviewActive(*scene));
     EXPECT_FALSE(engine::SourceLossIntegrationTestAccess::CameraPointerHeld(*scene));
     EXPECT_FALSE(take->IsSelected());
+    window.NativeKeys.reset(VK_MENU);
     graphics::Window::WindowProcedure(host, WM_SYSKEYUP, VK_MENU, 1u << 29u);
     graphics::Window::WindowProcedure(host, WM_LBUTTONUP, 0, MAKELPARAM(560, 300));
     EXPECT_FALSE(engine::SourceLossIntegrationTestAccess::BackgroundPreviewActive(*scene));
