@@ -540,6 +540,8 @@ namespace midi
 		std::atomic<MidiLoopState> _state;
 		std::atomic<std::uint32_t> _completedLengthForEditor{ 0u };
 		std::bitset<TotalNoteSlots> _held;
+		std::bitset<16> _sustainHeld; // Callback-owned accepted pedal downs.
+		std::bitset<16> _pendingSustainReleases; // Callback-owned bounded release retry.
 		// Callback-only state, cleared by played releases and full flushes.
 		std::bitset<TotalNoteSlots> _continuing;
 		std::bitset<TotalNoteSlots> _mergedContinuing; // Callback only; subset of _continuing.

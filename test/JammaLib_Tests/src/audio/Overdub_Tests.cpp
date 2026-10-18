@@ -831,6 +831,7 @@ public:
 	utils::Size2d GetEditorSize() const noexcept override { return { 0u, 0u }; }
 	bool IsLoaded() const noexcept override { return _loaded; }
 	const std::string& Name() const noexcept override { return _name; }
+	vst::RenderRole Role() const noexcept override { return vst::RenderRole::Effect; }
 	void SetBypassed(bool value) noexcept override { _bypassed = value; }
 	bool IsBypassed() const noexcept override { return _bypassed; }
 	int GetLatencySamples() const noexcept override { return static_cast<int>(LatencySamps); }

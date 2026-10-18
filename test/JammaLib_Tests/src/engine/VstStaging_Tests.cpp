@@ -340,6 +340,7 @@ public:
  utils::Size2d GetEditorSize() const noexcept override { return {0,0}; }
  bool IsLoaded() const noexcept override { return true; }
  const std::string& Name() const noexcept override { return StateId(); }
+ vst::RenderRole Role() const noexcept override { return vst::RenderRole::Effect; }
  void SetBypassed(bool) noexcept override {}
  bool IsBypassed() const noexcept override { return false; }
  bool Probe() const { PluginCallGuard call(*this); return static_cast<bool>(call); }

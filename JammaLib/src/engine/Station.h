@@ -293,7 +293,14 @@ namespace engine
 		vst::VstRackSlot GetVstRackSlot() const;
 		static constexpr std::size_t MaxRackPlugins = 32u;
 		static constexpr std::size_t MaxRackDestinations = 64u; // Active, pending and retiring recovery owners.
-		std::vector<vst::VstRackSlot> GetVstRackSlots() const;
+		std::vector<vst::VstRackSlot> GetVstRackSlots(std::size_t offset = 0u, std::size_t count = MaxRackPlugins) const;
+		std::size_t RackSlotCount() const;
+		std::string RackDiagnostic() const;
+		bool RecoverRack(std::uint64_t revision);
+		bool RemoveInactiveRackSlot(std::size_t ordinal, std::uint64_t revision);
+		bool ClearInactiveRackRoutes(std::uint64_t revision);
+		bool SetLiveVstChannelRoutes(std::array<midi::LiveVstChannelRoute, 16> routes, std::uint64_t revision);
+		void RefreshRackLatency(); // Existing non-RT latency pump, serialized by Scene.
 		bool LoadManagedVstSlot(std::wstring path, const std::string& retryIdentity = {});
 		bool SetLiveVstChannelRoute(unsigned int channel, midi::LiveVstChannelRoute route, std::uint64_t revision);
 		const std::array<midi::LiveVstChannelRoute, 16>& LiveVstChannelRoutes() const noexcept { return _liveVstChannelRoutes; }
@@ -301,6 +308,7 @@ namespace engine
 		vst::VstChain::RenderPolicy RackRenderPolicy() const noexcept { return _rackRenderPolicy; }
 		bool ConvertRackToAdditive(std::uint64_t revision);
 		bool RackInactive() const noexcept { return _rackInactive; }
+		bool RackLatencySuspended() const noexcept { return _rackLatencySuspended; }
 		bool LoadManagedVstPlugin(std::wstring path);
 		bool UnloadManagedVstPlugin(const std::string& identity);
 		void ForceUnloadAllVstPlugins();
@@ -367,9 +375,12 @@ namespace engine
 		struct MidiDestination
 		{
 			std::shared_ptr<vst::IVstPlugin> Plugin;
+			unsigned int RenderChannels = 0u; // Immutable captured hosted width.
 			std::bitset<midi::MidiNote::TotalNoteSlots> LiveHeld;
 			// Callback-owned pedal accounting, independent of changing live routes.
 			std::bitset<16> LiveSustain;
+			std::array<std::uint32_t, 16> LiveSustainRevision{};
+			std::uint16_t AppliedLiveChannels = 0u; // Callback-only effective route mask.
 			std::bitset<16> PluginSustain;
 			std::bitset<16> BlockSustainAtStart;
 			std::bitset<16> PendingSustainRelease;
@@ -447,12 +458,14 @@ namespace engine
 			std::vector<std::shared_ptr<audio::AudioMixer>> AudioMixers;
 			std::vector<std::shared_ptr<audio::AudioBuffer>> AudioBuffers;
 			std::vector<float> VstBlockScratch;
+			unsigned int VstRenderChannels = 0u; // Prepared padded width includes retiring processors.
 			std::vector<float*> VstBlockPtrs;
 			std::vector<float> InstrumentScratch;
 			std::vector<float*> InstrumentPtrs;
 			std::shared_ptr<vst::VstChain> MidiChain;
 			std::vector<std::shared_ptr<MidiDestination>> LiveMidiDestinations;
 			std::array<std::vector<std::shared_ptr<MidiDestination>>, 16> LiveChannelDestinations;
+			std::vector<std::uint16_t> LiveDestinationChannels; // Prepared, immutable.
 			std::vector<std::shared_ptr<MidiDestination>> MidiDestinations;
 			std::vector<std::shared_ptr<MidiDestination>> RetiredMidiDestinations;
 			mutable std::atomic<bool> RetiredMidiQueueCancelled{ false };
@@ -668,6 +681,9 @@ namespace engine
 		std::atomic<std::uint64_t> _rackRevision{1u}; // UI/job metadata publication; audio never reads.
 		std::vector<std::string> _pendingRackIds; // _vstPathsMutex; completion clears by identity.
 		bool _rackInactive = false; // Reconstruction/structural owner; raw saved entries remain exportable.
+		bool _rackLatencySuspended = false; // Structural owner; callback sees prepared empty delivery.
+		std::string _rackDiagnostic; // Structural owner/UI under existing Scene lock.
+		bool _RackLatencyFeasible(const vst::VstChain& chain) const noexcept;
 		// UI stages requests, job completes them. Audio never reads this counter.
 		std::atomic<unsigned int> _vstJobsPending{ 0u };
 		midi::MidiQueue<1024> _immediateLiveMidiIngress;
@@ -681,6 +697,9 @@ namespace engine
 		std::uint32_t _lastSyntheticLiveMidiSample = 0u;
 		mutable std::mutex _liveHeldMidiMutex;
 		std::vector<std::pair<std::string, midi::MidiNoteSnapshot>> _liveHeldMidi;
+		std::vector<std::pair<std::string, std::bitset<16>>> _liveSustainMidi; // Same non-RT held-state mutex/owner.
+		std::bitset<16> _pendingLostSustain; // Job retry, protected by held-state mutex.
+		std::array<std::atomic<std::uint32_t>, 16> _liveSustainRevisions{}; // Audio release-store; job acquire-load receipt.
 		struct RecentPhysicalMidi
 		{
 			midi::MidiEvent Event;

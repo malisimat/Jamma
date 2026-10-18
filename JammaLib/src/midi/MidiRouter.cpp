@@ -1232,7 +1232,7 @@ MidiRouter::TriggerDispatchSummary MidiRouter::PumpMidi(const std::vector<std::s
 				{
 					for (const auto& recipient : dispatchState->LiveMidi.RecipientsByDeviceSlot[input->DeviceSlot])
 					{
-						if (recipient.Station && recipient.Station->AcceptsLiveMidiChannel(stationEvent.Channel()))
+						if (recipient.Station && (recipient.Station->AcceptsLiveMidiChannel(stationEvent.Channel()) || stationEvent.IsNoteOff() || (stationEvent.MessageType() == 0xb0u && stationEvent.data1 == 64u && stationEvent.data2 < 64u)))
 							recipient.Station->ObservePhysicalMidiForRecording(
 								stationEvent, input->ConfiguredName);
 					}
@@ -1551,7 +1551,7 @@ void MidiRouter::_DispatchAvailableLiveMidi() noexcept
 		bool hasRecipient = false;
 		for (const auto& recipient : routes->LiveMidi.RecipientsByDeviceSlot[selectedInput->DeviceSlot])
 		{
-			if (!recipient.Station || !recipient.Station->AcceptsLiveMidiChannel(dispatchedEvent.Event.Channel()))
+			if (!recipient.Station || (!recipient.Station->AcceptsLiveMidiChannel(dispatchedEvent.Event.Channel()) && !dispatchedEvent.Event.IsNoteOff() && !(dispatchedEvent.Event.MessageType() == 0xb0u && dispatchedEvent.Event.data1 == 64u && dispatchedEvent.Event.data2 < 64u)))
 				continue;
 
 			hasRecipient = true;

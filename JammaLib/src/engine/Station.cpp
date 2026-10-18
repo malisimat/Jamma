@@ -6,6 +6,7 @@
 #include <thread>
 #include "../midi/MidiBlockTiming.h"
 #include "../midi/MidiRouter.h"
+#include "../io/NativeMidiSidecar.h"
 #include "../utils/MathUtils.h"
 
 using namespace engine;
@@ -159,11 +160,16 @@ std::optional<std::shared_ptr<Station>> Station::FromFile(StationParams stationP
 		auto& entry = stationStruct.VstChain[index];
 		// Legacy entries without identity receive a deterministic local identity.
 		if (entry.Id.empty()) entry.Id = stationStruct.Id + ":vst:" + std::to_string(index);
-		if (std::find(identities.begin(), identities.end(), entry.Id) != identities.end()) station->_rackInactive = true;
+		if (!io::NativeMidiSidecar::ValidatePluginIdentity(entry.Id) || std::find(identities.begin(), identities.end(), entry.Id) != identities.end()) station->_rackInactive = true;
 		identities.push_back(entry.Id);
 	}
 	for (const auto& route : station->_liveVstChannelRoutes)
+	{
 		if (route.PluginIds.size() > MaxRackPlugins) station->_rackInactive = true;
+		for (const auto& identity : route.PluginIds)
+			if (identity.empty() || !io::NativeMidiSidecar::ValidatePluginIdentity(identity)) station->_rackInactive = true;
+	}
+	if (station->_rackInactive) station->_rackDiagnostic = "Rack paused: remove excess/invalid entries or cables, then choose Resume rack. Saved data is preserved.";
 	// Legacy automation sidecars contain indices only. Give saved processors
 	// deterministic IDs before reconstruction, including unavailable Take/Loop
 	// slots, so later compaction cannot change the meaning of those bindings.
@@ -681,7 +687,7 @@ void Station::WriteBlock(const std::shared_ptr<base::MultiAudioSink> dest,
 	_PrepareVstScratch(*state, sampsToRead);
 
 	const auto& chain = state->MidiChain;
-	const bool vstActive = (channelCount > 0u) && chain && chain->IsActive() && (state->VstBlockPtrs.size() >= channelCount);
+	const bool vstActive = (channelCount > 0u) && chain && chain->NumPlugins() > 0u && (state->VstBlockPtrs.size() >= channelCount);
 
 	_RunVstBlock(chain.get(), *state, vstActive,
 		static_cast<unsigned int>(channelCount), sampsToRead, blockStartSample);
@@ -719,7 +725,7 @@ void Station::WriteBlock(const std::shared_ptr<base::MultiAudioSink> dest,
 int Station::CurrentVstLatencySamps() const noexcept
 {
 	const auto chain = _vstChain.load(std::memory_order_acquire);
-	return chain ? chain->GetLatencySamples() : 0;
+	return chain && !_rackInactive && !_rackLatencySuspended ? chain->GetLatencySamples() : 0;
 }
 
 void Station::PollPlaybackPluginChanges() const noexcept
@@ -806,7 +812,7 @@ bool Station::ConfigureRecordedMidiCompensation(unsigned int referenceLatencySam
 
 void Station::_PrepareMidiDestinations(AudioState& state)
 {
-	state.MidiChain = _vstChain.load(std::memory_order_acquire);
+	state.MidiChain = (_rackInactive || _rackLatencySuspended) ? nullptr : _vstChain.load(std::memory_order_acquire);
 	const auto previous = _AudioStateSnapshot();
 	auto queueRemovedBindings = [&]() {
 		if (!previous) return;
@@ -857,12 +863,13 @@ void Station::_PrepareMidiDestinations(AudioState& state)
 		const auto plugin = state.MidiChain->GetPlugin(index);
 		std::shared_ptr<MidiDestination> destination;
 		for (const auto& weak : _midiDestinations)
-			if (const auto existing = weak.lock(); existing && existing->Plugin == plugin)
+			if (const auto existing = weak.lock(); existing && existing->Plugin == plugin && !existing->RetirementReleased.load(std::memory_order_acquire))
 				{ destination = existing; break; }
 		if (!destination)
 		{
 			destination = std::make_shared<MidiDestination>();
 			destination->Plugin = plugin;
+			destination->RenderChannels = std::max(1u, static_cast<unsigned int>(state.AudioBuffers.size()));
 			_midiDestinations.push_back(destination);
 		}
 		destinations.push_back(std::move(destination));
@@ -888,7 +895,7 @@ void Station::_PrepareMidiDestinations(AudioState& state)
 			const auto capabilities = destination->Plugin->MidiInput();
 			// Legacy adapters/test processors retain broadcast compatibility. New
 			// explicit cables require discovered capability at the edit boundary.
-			if (capabilities.Known && !capabilities.Notes && !capabilities.Controllers) continue;
+			if ((capabilities.Known && !capabilities.Notes && !capabilities.Controllers) || (!capabilities.Known && _rackRenderPolicy != vst::VstChain::RenderPolicy::LegacySerial)) continue;
 			if (!route.Explicit || std::find(route.PluginIds.begin(), route.PluginIds.end(),
 				destination->Plugin->StateId()) != route.PluginIds.end()) prepared.push_back(destination);
 		}
@@ -897,6 +904,8 @@ void Station::_PrepareMidiDestinations(AudioState& state)
 			for (const auto& destination : destinations)
 			{
 				if (!destination->Plugin || std::find(prepared.begin(), prepared.end(), destination) != prepared.end()) continue;
+				const auto capability = destination->Plugin->MidiInput();
+				if (_rackRenderPolicy != vst::VstChain::RenderPolicy::LegacySerial && (!capability.Known || (!capability.Notes && !capability.Controllers))) continue;
 				if (std::find(route.PluginIds.begin(), route.PluginIds.end(), destination->Plugin->StateId()) != route.PluginIds.end())
 					prepared.push_back(destination);
 			}
@@ -904,6 +913,11 @@ void Station::_PrepareMidiDestinations(AudioState& state)
 	// Route history matters within the current chain. Removed plugins are unloaded
 	// by the structural owner; do not repin their destinations on every publication.
 	state.MidiDestinations = destinations;
+	state.LiveDestinationChannels.assign(destinations.size(), 0u);
+	for (auto index = 0u; index < destinations.size(); ++index)
+		for (auto channel = 0u; channel < 16u; ++channel)
+			if (std::find(state.LiveChannelDestinations[channel].begin(), state.LiveChannelDestinations[channel].end(), destinations[index]) != state.LiveChannelDestinations[channel].end())
+				state.LiveDestinationChannels[index] |= static_cast<std::uint16_t>(1u << channel);
 	for (const auto& take : state.OwnedLoopTakes)
 		for (const auto& loop : take->GetMidiLoopSnapshot())
 		{
@@ -1129,6 +1143,13 @@ void Station::_InvalidateScheduledMidiAtBlockStart(const AudioState& state, bool
 		if (!destination) continue;
 		const bool bypassed = destination->Plugin && destination->Plugin->IsBypassed();
 		const bool bypassStarted = bypassed && !destination->LastBypassed;
+		if (bypassStarted)
+		{
+			destination->PendingReleases |= destination->LiveHeld;
+			destination->LiveHeld.reset();
+			destination->PendingSustainRelease |= destination->LiveSustain;
+			destination->LiveSustain.reset();
+		}
 		destination->LastBypassed = bypassed;
 		std::bitset<midi::MidiNote::TotalNoteSlots> affected;
 		auto retained = std::size_t{ 0u };
@@ -1258,6 +1279,7 @@ bool Station::_TryDeliverMidiNow(MidiDestination& destination, const MidiEvent& 
 	bool isRealtime) noexcept
 {
 	if (!destination.Plugin || !destination.Plugin->IsLoaded()) return event.IsNoteOff();
+	if (destination.Plugin->IsBypassed() && (event.IsNoteOn() || (event.MessageType() == 0xb0u && event.data1 == 64u && event.data2 >= 64u))) return false;
 	const bool sustain = event.MessageType() == 0xb0u && event.data1 == 64u;
 	const auto slot = midi::MidiNote::NoteSlot(event.Channel(), event.data1);
 	if (event.IsNoteOn() && destination.PendingReleases.test(slot))
@@ -1366,13 +1388,18 @@ void Station::_DispatchLiveMidi(const AudioState& state, const MidiEvent& event,
 			for (const auto& destination : state.MidiDestinations)
 				if (destination->LiveSustain.test(channel))
 				{
+					if (sourceLossNoteOff && static_cast<std::int32_t>(destination->LiveSustainRevision[channel] - liveNoteOnRevision) > 0) continue;
 					destination->LiveSustain.reset(channel);
 					if (!destination->RecordedSustainOwners[channel]) _TryDeliverMidi(*destination, event, true);
 				}
 		}
 		else
 			for (const auto& destination : state.LiveChannelDestinations[channel])
-				if (_TryDeliverMidi(*destination, event, true)) destination->LiveSustain.set(channel);
+				if (_TryDeliverMidi(*destination, event, true))
+				{
+					destination->LiveSustain.set(channel);
+					destination->LiveSustainRevision[channel] = liveNoteOnRevision;
+				}
 		return;
 	}
 	const auto slot = midi::MidiNote::NoteSlot(event.Channel(), event.data1);
@@ -1513,6 +1540,8 @@ void Station::_FlushPendingLostPlaybackMidi()
 void Station::_PrepareVstScratch(const AudioState& state, unsigned int sampsToRead) noexcept
 {
 	const auto channelCount = std::min(state.AudioBuffers.size(), state.AudioMixers.size());
+	for (auto channel = channelCount; channel < state.VstBlockPtrs.size(); ++channel)
+		std::fill_n(state.VstBlockPtrs[channel], sampsToRead, 0.0f);
 	for (auto i = 0u; i < channelCount; i++)
 	{
 		auto* scratch = (i < state.VstBlockPtrs.size()) ? state.VstBlockPtrs[i] : nullptr;
@@ -1579,12 +1608,16 @@ void Station::_RunVstBlock(vst::VstChain* chain,
 		chain->BeginMidiBlock(blockStartSample, sampsToRead);
 		// A route/mask publication releases only this live owner's contribution.
 		// Recorded owners keep their notes and pedal state on the same processor.
-		for (const auto& destination : state.MidiDestinations)
+		for (auto index = 0u; index < state.MidiDestinations.size(); ++index)
+		{
+			const auto& destination = state.MidiDestinations[index];
+			const auto effective = static_cast<std::uint16_t>(state.LiveDestinationChannels[index] & _allowedMidiChannelMask.load(std::memory_order_acquire));
+			const auto removed = static_cast<std::uint16_t>(destination->AppliedLiveChannels & ~effective);
+			destination->AppliedLiveChannels = effective;
+			if (!removed) continue;
 			for (auto channel = 0u; channel < 16u; ++channel)
 			{
-				const auto& targets = state.LiveChannelDestinations[channel];
-				if (AcceptsLiveMidiChannel(static_cast<std::uint8_t>(channel))
-					&& std::find(targets.begin(), targets.end(), destination) != targets.end()) continue;
+				if (!(removed & (1u << channel))) continue;
 				if (destination->LiveSustain.test(channel))
 				{
 					destination->LiveSustain.reset(channel);
@@ -1598,6 +1631,7 @@ void Station::_RunVstBlock(vst::VstChain* chain,
 					if (!destination->RecordedAudibleOwners[slot]) destination->PendingReleases.set(slot);
 				}
 			}
+		}
 		for (const auto& destination : state.MidiDestinations)
 		{
 			destination->RecoveringCompensationChange = false;
@@ -1710,6 +1744,8 @@ void Station::_RunVstBlock(vst::VstChain* chain,
 		if (vstActive && (!MembershipRemoving() || release) && (AcceptsLiveMidiChannel(liveMidi.Channel()) || release))
 		{
 			auto revision = syntheticEntry.LiveNoteOnRevision;
+			if (liveMidi.MessageType() == 0xb0u && liveMidi.data1 == 64u && liveMidi.data2 >= 64u)
+				revision = _liveSustainRevisions[liveMidi.Channel()].fetch_add(1u, std::memory_order_release) + 1u;
 			if (liveMidi.IsNoteOn())
 				revision = _liveNoteOnRevisions[midi::MidiNote::NoteSlot(liveMidi.Channel(), liveMidi.data1)].fetch_add(1u, std::memory_order_release) + 1u;
 			_DispatchLiveMidi(state, liveMidi, chooseSynthetic && syntheticEntry.SourceLossNoteOff, revision);
@@ -1739,9 +1775,9 @@ void Station::_RunVstBlock(vst::VstChain* chain,
 			vst::IVstPlugin::PluginCallGuard call(*plugin, true);
 			if (call)
 			{
-				for (auto channel = 0u; channel < channelCount; ++channel)
+				for (auto channel = 0u; channel < destination->RenderChannels; ++channel)
 					std::fill_n(state.InstrumentPtrs[channel], sampsToRead, 0.0f);
-				plugin->ProcessBlockMulti(state.InstrumentPtrs.data(), static_cast<int>(channelCount), sampsToRead);
+				plugin->ProcessBlockMulti(state.InstrumentPtrs.data(), static_cast<int>(destination->RenderChannels), sampsToRead);
 			}
 			if (!plugin->MidiBlockWasProcessed())
 			{
@@ -1753,6 +1789,9 @@ void Station::_RunVstBlock(vst::VstChain* chain,
 		}
 		// Bypassed/unloaded removed processors are silent and terminal; teardown
 		// itself ends their voices, without touching any surviving processor.
+		// A latency suspension may later reuse this instance. Preserve its existing
+		// guarded reset receipt so bypass cannot resurrect old voices on resume.
+		if (plugin && (plugin->IsBypassed() || !plugin->IsLoaded())) plugin->RequestMidiPanic();
 		const bool released = !plugin || !plugin->IsLoaded() || plugin->IsBypassed()
 			|| (destination->PendingReleases.none() && destination->PendingSustainRelease.none());
 		destination->RetirementReleased.store(released, std::memory_order_release);
@@ -1778,7 +1817,7 @@ void Station::_RunVstBlock(vst::VstChain* chain,
 	}
 
 	_DrainScheduledMidi(state, blockStartSample, sampsToRead);
-	chain->ProcessRack(state.VstBlockPtrs.data(), state.InstrumentPtrs.data(), static_cast<int>(channelCount), sampsToRead);
+	chain->ProcessRack(state.VstBlockPtrs.data(), state.InstrumentPtrs.data(), static_cast<int>(state.VstRenderChannels), sampsToRead);
 	_RecoverSkippedMidiBlocks(state);
 }
 
@@ -1849,7 +1888,7 @@ void Station::RebuildAutomationDispatch()
 					const auto& loops = take->GetLoops();
 					for (std::size_t index = 0u; index < loops.size(); ++index)
 					{
-						if (!loops[index] || (!target.Scope.empty() && index != target.LoopIndex)) continue;
+						if (!loops[index]) continue;
 						plugin = loops[index]->FindVstPlugin(lane.Mapping.TargetPlugin, target.PluginId, pluginIndex);
 						if (plugin) { scope = "loop"; loopIndex = static_cast<unsigned int>(index); break; }
 					}
@@ -2995,6 +3034,8 @@ void Station::Reset()
 	{
 		std::scoped_lock lock(_liveHeldMidiMutex);
 		_liveHeldMidi.clear();
+		for (const auto& pedal : _liveSustainMidi) _pendingLostSustain |= pedal.second;
+		_liveSustainMidi.clear();
         _recentPhysicalMidi.clear();
         _midiHistoryDroppedThroughSample.reset();
 		_anonymousLiveHeldMidi = {};
@@ -3731,6 +3772,19 @@ bool Station::_TryEnqueueSyntheticMidi(SyntheticMidi entry) noexcept
 void Station::ObservePhysicalMidiForRecording(const MidiEvent& event, const std::string& deviceName)
 {
     if (MembershipRemoving()) return;
+    if (event.MessageType() == 0xb0u && event.data1 == 64u)
+    {
+        if (event.data2 >= 64u && !AcceptsLiveMidiChannel(event.Channel())) return;
+        std::scoped_lock lock(_liveHeldMidiMutex);
+        auto found = std::find_if(_liveSustainMidi.begin(), _liveSustainMidi.end(), [&](const auto& item) { return item.first == deviceName; });
+        if (found == _liveSustainMidi.end())
+        {
+            _liveSustainMidi.push_back({deviceName, {}});
+            found = std::prev(_liveSustainMidi.end());
+        }
+        found->second.set(event.Channel(), event.data2 >= 64u);
+        return; // Preserve the existing note-only capture contract.
+    }
     if (!event.IsNoteOn() && !event.IsNoteOff()) return;
     if (event.IsNoteOn() && !AcceptsLiveMidiChannel(event.Channel())) return;
     {
@@ -3810,13 +3864,15 @@ void Station::FlushLiveHeldMidiNotes() noexcept
 		if (liveHeld != _liveHeldMidi.end())
 			heldSnapshot = liveHeld->second;
 		_liveHeldMidi.clear();
+		for (const auto& pedal : _liveSustainMidi) _pendingLostSustain |= pedal.second;
+		_liveSustainMidi.clear();
         _recentPhysicalMidi.clear();
         _midiHistoryDroppedThroughSample.reset();
 		_anonymousLiveHeldMidi = {};
 	}
 
-	if (heldSnapshot.Held.none())
-		return;
+	FlushPendingLostLiveMidiNotes();
+	if (heldSnapshot.Held.none()) return;
 
 	for (std::uint8_t ch = 0u; ch < 16u; ++ch)
 	{
@@ -3837,10 +3893,19 @@ void Station::FlushLiveHeldMidiNotesForDevice(const std::string& deviceName) noe
 		std::scoped_lock lock(_liveHeldMidiMutex);
 		auto lost = std::find_if(_liveHeldMidi.begin(), _liveHeldMidi.end(),
 			[&deviceName](const auto& entry) { return entry.first == deviceName; });
-		if (lost == _liveHeldMidi.end())
-			return;
-		released = lost->second;
-		_liveHeldMidi.erase(lost);
+		if (lost != _liveHeldMidi.end())
+		{
+			released = lost->second;
+			_liveHeldMidi.erase(lost);
+		}
+		auto pedal = std::find_if(_liveSustainMidi.begin(), _liveSustainMidi.end(), [&](const auto& item) { return item.first == deviceName; });
+		if (pedal != _liveSustainMidi.end())
+		{
+			auto releasedPedal = pedal->second;
+			_liveSustainMidi.erase(pedal);
+			for (const auto& healthy : _liveSustainMidi) releasedPedal &= ~healthy.second;
+			_pendingLostSustain |= releasedPedal;
+		}
 		auto remaining = _anonymousLiveHeldMidi;
 		for (const auto& entry : _liveHeldMidi)
 			if (!entry.first.empty())
@@ -3864,8 +3929,14 @@ void Station::FlushPendingLostLiveMidiNotes() noexcept
 	// Job producer only. Retain release bits across a full synthetic queue;
 	// a surviving endpoint taking ownership of the same note suppresses release.
 	std::scoped_lock lock(_liveHeldMidiMutex);
-	if (_pendingLostLiveMidiNoteOffs.none())
-		return;
+	for (auto channel = 0u; channel < 16u; ++channel)
+		if (_pendingLostSustain.test(channel))
+		{
+			const bool healthy = std::any_of(_liveSustainMidi.begin(), _liveSustainMidi.end(), [channel](const auto& item) { return item.second.test(channel); });
+			if (!healthy && !_TryEnqueueSyntheticMidi({{0u, static_cast<std::uint8_t>(0xb0u | channel), 64u, 0u}, nullptr, true, _liveSustainRevisions[channel].load(std::memory_order_acquire)})) return;
+			_pendingLostSustain.reset(channel);
+		}
+	if (_pendingLostLiveMidiNoteOffs.none()) return;
 	const auto aggregate = std::find_if(_liveHeldMidi.begin(), _liveHeldMidi.end(),
 		[](const auto& entry) { return entry.first.empty(); });
 	if (aggregate != _liveHeldMidi.end())
@@ -4215,13 +4286,16 @@ void Station::_PublishAudioState()
 	state->AudioMixers = _audioMixers;
 	state->AudioBuffers = _audioBuffers;
 	_PrepareMidiDestinations(*state);
-	state->InstrumentScratch.resize(state->AudioBuffers.size() * constants::MaxBlockSize);
-	state->InstrumentPtrs.resize(state->AudioBuffers.size(), nullptr);
-	for (auto i = 0u; i < state->AudioBuffers.size(); ++i)
+	state->VstRenderChannels = static_cast<unsigned int>(state->AudioBuffers.size());
+	for (const auto& destination : state->MidiDestinations) state->VstRenderChannels = std::max(state->VstRenderChannels, destination->RenderChannels);
+	for (const auto& destination : state->RetiredMidiDestinations) state->VstRenderChannels = std::max(state->VstRenderChannels, destination->RenderChannels);
+	state->InstrumentScratch.resize(state->VstRenderChannels * constants::MaxBlockSize);
+	state->InstrumentPtrs.resize(state->VstRenderChannels, nullptr);
+	for (auto i = 0u; i < state->VstRenderChannels; ++i)
 		state->InstrumentPtrs[i] = state->InstrumentScratch.data() + (static_cast<size_t>(i) * constants::MaxBlockSize);
-	state->VstBlockScratch.resize(state->AudioBuffers.size() * constants::MaxBlockSize);
-	state->VstBlockPtrs.resize(state->AudioBuffers.size(), nullptr);
-	for (auto i = 0u; i < state->AudioBuffers.size(); i++)
+	state->VstBlockScratch.resize(state->VstRenderChannels * constants::MaxBlockSize);
+	state->VstBlockPtrs.resize(state->VstRenderChannels, nullptr);
+	for (auto i = 0u; i < state->VstRenderChannels; i++)
 		state->VstBlockPtrs[i] = state->VstBlockScratch.data() + (static_cast<size_t>(i) * constants::MaxBlockSize);
 	std::uint8_t expected = 0u;
 	while (!_promotionTopologyGate.compare_exchange_weak(expected, 2u,
@@ -4403,17 +4477,15 @@ void Station::_DitchLoopTake(std::shared_ptr<LoopTake>& take, bool flushLiveHeld
 	RebuildAutomationDispatch();
 }
 
-void Station::LoadVstPlugin(std::wstring path,
-	std::vector<std::uint8_t> initialState)
+void Station::LoadVstPlugin(std::wstring path, std::vector<std::uint8_t> initialState)
 {
-	JobAction job;
-	job.JobActionType = JobAction::JOB_LOADVST;
-	job.VstPath = std::move(path);
-	job.VstInitialState = std::move(initialState);
-	job.VstIdentity = utils::GetGuid();
-	_pendingVstLoads.push_back(std::move(job));
-	_vstJobsPending.fetch_add(1u, std::memory_order_release);
-	_changesMade = true;
+	const auto before = _pendingVstLoads.size();
+	if (LoadManagedVstSlot(std::move(path)) && _pendingVstLoads.size() > before)
+	{
+		_pendingVstLoads.back().VstInitialState = initialState;
+		std::lock_guard<std::mutex> lock(_vstPathsMutex);
+		_vstSavedEntries.back().State = io::JamFile::VstEntry::EncodeState(initialState);
+	}
 }
 
 vst::VstRackSlot Station::GetVstRackSlot() const
@@ -4437,12 +4509,12 @@ bool Station::LoadManagedVstPlugin(std::wstring path)
 	return LoadManagedVstSlot(std::move(path));
 }
 
-std::vector<vst::VstRackSlot> Station::GetVstRackSlots() const
+std::vector<vst::VstRackSlot> Station::GetVstRackSlots(std::size_t offset, std::size_t count) const
 {
 	std::lock_guard<std::mutex> lock(_vstPathsMutex);
 	const auto chain = _flipVstChain.load(std::memory_order_acquire) ? _backVstChain : _vstChain.load(std::memory_order_acquire);
 	std::vector<vst::VstRackSlot> result;
-	for (std::size_t index = 0; index < _vstSavedEntries.size(); ++index)
+	for (std::size_t index = std::min(offset, _vstSavedEntries.size()), end = index + std::min({count, MaxRackPlugins, _vstSavedEntries.size() - index}); index < end; ++index)
 	{
 		const auto& entry = _vstSavedEntries[index];
 		vst::VstRackSlot slot;
@@ -4475,9 +4547,9 @@ bool Station::LoadManagedVstSlot(std::wstring path, const std::string& retryIden
 		}
 		else
 		{
-			if (_vstSavedEntries.size() >= MaxRackPlugins) return false;
+			if (_vstSavedEntries.size() >= MaxRackPlugins) { _rackDiagnostic = "Rack supports at most 32 plugins; remove a slot first."; return false; }
 			const auto audio = _AudioStateSnapshot();
-			if (audio && _vstSavedEntries.size() + audio->RetiredMidiDestinations.size() >= MaxRackDestinations) return false;
+			if (audio && _vstSavedEntries.size() + audio->RetiredMidiDestinations.size() >= MaxRackDestinations) { _rackDiagnostic = "Waiting for removed plugin release recovery; retry shortly."; return false; }
 			identity = utils::GetGuid();
 			io::JamFile::VstEntry entry;
 			entry.Id = identity;
@@ -4488,9 +4560,16 @@ bool Station::LoadManagedVstSlot(std::wstring path, const std::string& retryIden
 		_pendingRackIds.push_back(identity);
 		++_rackRevision;
 	}
-	LoadVstPlugin(std::move(path), std::move(state));
-	_pendingVstLoads.back().VstManaged = true;
-	_pendingVstLoads.back().VstIdentity = identity;
+	JobAction job;
+	job.JobActionType = JobAction::JOB_LOADVST;
+	job.VstPath = std::move(path);
+	job.VstInitialState = std::move(state);
+	job.VstIdentity = identity;
+	job.VstRequestId = utils::GetGuid();
+	job.VstManaged = true;
+	_pendingVstLoads.push_back(std::move(job));
+	_vstJobsPending.fetch_add(1u, std::memory_order_release);
+	_changesMade = true;
 	return true;
 }
 
@@ -4512,24 +4591,142 @@ bool Station::UnloadManagedVstPlugin(const std::string& identity)
 
 bool Station::SetLiveVstChannelRoute(unsigned int channel, midi::LiveVstChannelRoute route, std::uint64_t revision)
 {
-	if (channel >= 16u || revision != _rackRevision || route.PluginIds.size() > MaxRackPlugins) return false;
-	std::sort(route.PluginIds.begin(), route.PluginIds.end());
-	route.PluginIds.erase(std::unique(route.PluginIds.begin(), route.PluginIds.end()), route.PluginIds.end());
-	if (!route.Explicit) route.PluginIds.clear();
+	if (channel >= 16u) return false;
+	auto routes = _liveVstChannelRoutes;
+	routes[channel] = std::move(route);
+	return SetLiveVstChannelRoutes(std::move(routes), revision);
+}
+
+bool Station::SetLiveVstChannelRoutes(std::array<midi::LiveVstChannelRoute, 16> routes, std::uint64_t revision)
+{
+	if (revision != _rackRevision) { _rackDiagnostic = "Rack changed; retry the gesture."; return false; }
 	const auto slots = GetVstRackSlots();
-	for (const auto& id : route.PluginIds)
+	for (auto channel = 0u; channel < 16u; ++channel)
 	{
-		const auto& oldIds = _liveVstChannelRoutes[channel].PluginIds;
-		if (std::find(oldIds.begin(), oldIds.end(), id) != oldIds.end()) continue;
-		const auto found = std::find_if(slots.begin(), slots.end(), [&](const auto& slot) { return slot.Identity == id; });
-		if (found == slots.end() || !found->Plugin) return false;
-		const auto capability = found->Plugin->MidiInput();
-		if (!capability.Known || (!capability.Notes && !capability.Controllers)) return false;
+		auto& route = routes[channel];
+		std::sort(route.PluginIds.begin(), route.PluginIds.end());
+		route.PluginIds.erase(std::unique(route.PluginIds.begin(), route.PluginIds.end()), route.PluginIds.end());
+		if (!route.Explicit) route.PluginIds.clear();
+		if (route.PluginIds.size() > MaxRackPlugins) { _rackDiagnostic = "Each channel supports at most 32 destinations."; return false; }
+		for (const auto& id : route.PluginIds)
+		{
+			if (id.empty() || !io::NativeMidiSidecar::ValidatePluginIdentity(id)) { _rackDiagnostic = "Invalid plugin identity; remove or repair the cable."; return false; }
+			const auto& oldIds = _liveVstChannelRoutes[channel].PluginIds;
+			if (std::find(oldIds.begin(), oldIds.end(), id) != oldIds.end()) continue;
+			const auto found = std::find_if(slots.begin(), slots.end(), [&](const auto& slot) { return slot.Identity == id; });
+			if (found == slots.end() || !found->Plugin) { _rackDiagnostic = "Destination is unavailable; retry its load first."; return false; }
+			const auto capability = found->Plugin->MidiInput();
+			if (!capability.Known || (!capability.Notes && !capability.Controllers)) { _rackDiagnostic = "This plugin has no supported MIDI input."; return false; }
+		}
 	}
-	_liveVstChannelRoutes[channel] = std::move(route);
+	_liveVstChannelRoutes = std::move(routes);
 	++_rackRevision;
 	_PublishAudioState();
 	_changesMade = true;
+	if (!_rackInactive && !_rackLatencySuspended) _rackDiagnostic.clear();
+	return true;
+}
+
+std::size_t Station::RackSlotCount() const
+{
+	std::lock_guard<std::mutex> lock(_vstPathsMutex);
+	return _vstSavedEntries.size();
+}
+
+std::string Station::RackDiagnostic() const { return _rackDiagnostic; }
+
+bool Station::_RackLatencyFeasible(const vst::VstChain& chain) const noexcept
+{
+	if (!chain.FitsCompensationCeiling()) return false;
+	const auto stationDelay = static_cast<unsigned int>(std::max(0, chain.GetLatencySamples()));
+	for (const auto& take : _loopTakes)
+		if (take && static_cast<std::uint64_t>(stationDelay) + take->RecordedPlaybackLatencySamps() > 262144u) return false;
+	return true;
+}
+
+void Station::RefreshRackLatency()
+{
+	if (_rackInactive) return;
+	const auto chain = _vstChain.load(std::memory_order_acquire);
+	if (!chain) return;
+	const bool feasible = _RackLatencyFeasible(*chain);
+	if (!feasible && !_rackLatencySuspended)
+	{
+		_rackLatencySuspended = true;
+		_rackDiagnostic = "Rack paused: plugin latency exceeds 262144 samples. Reduce latency to resume; state and cables are preserved.";
+		++_rackRevision;
+		_PublishAudioState();
+	}
+	else if (feasible && _rackLatencySuspended)
+	{
+		const auto state = _AudioStateSnapshot();
+		if (HasUnacknowledgedAudioState() || (state && !state->RetiredMidiDestinations.empty())) return;
+		_rackLatencySuspended = false;
+		_rackDiagnostic.clear();
+		++_rackRevision;
+		_PublishAudioState();
+	}
+}
+
+bool Station::RemoveInactiveRackSlot(std::size_t ordinal, std::uint64_t revision)
+{
+	if (!_rackInactive || revision != _rackRevision) return false;
+	std::lock_guard<std::mutex> lock(_vstPathsMutex);
+	if (ordinal >= _vstSavedEntries.size()) return false;
+	_vstSavedEntries.erase(_vstSavedEntries.begin() + ordinal);
+	_vstPluginPaths.erase(_vstPluginPaths.begin() + ordinal);
+	if (const auto* current = _midiVstRoutes.load(std::memory_order_acquire))
+	{
+		auto routes = std::make_unique<MidiVstRoutingSnapshot>(*current);
+		auto compact = [ordinal](std::size_t& index) {
+			if (index == ordinal) index = MidiVstRoutingSnapshot::MissingPlugin;
+			else if (index != MidiVstRoutingSnapshot::NoPlugin && index != MidiVstRoutingSnapshot::MissingPlugin && index > ordinal) --index;
+		};
+		compact(routes->LivePlugin);
+		for (auto& index : routes->PluginByMidiOutput) compact(index);
+		const auto* published = routes.get();
+		_retainedMidiVstRoutes.push_back(std::move(routes));
+		_midiVstRoutes.store(published, std::memory_order_release);
+	}
+	++_rackRevision;
+	_changesMade = true;
+	return true;
+}
+
+bool Station::ClearInactiveRackRoutes(std::uint64_t revision)
+{
+	if (!_rackInactive || revision != _rackRevision) return false;
+	_liveVstChannelRoutes = {};
+	++_rackRevision;
+	_changesMade = true;
+	return true;
+}
+
+bool Station::RecoverRack(std::uint64_t revision)
+{
+	if (!_rackInactive || revision != _rackRevision || RackSlotCount() > MaxRackPlugins) return false;
+	for (const auto& route : _liveVstChannelRoutes)
+	{
+		if (route.PluginIds.size() > MaxRackPlugins) return false;
+		for (const auto& id : route.PluginIds)
+			if (id.empty() || !io::NativeMidiSidecar::ValidatePluginIdentity(id)) { _rackDiagnostic = "Remove malformed cable identities before resuming."; return false; }
+	}
+	std::vector<io::JamFile::VstEntry> entries;
+	{
+		std::lock_guard<std::mutex> lock(_vstPathsMutex);
+		std::vector<std::string> ambiguous;
+		for (const auto& entry : _vstSavedEntries)
+			if (std::count_if(_vstSavedEntries.begin(), _vstSavedEntries.end(), [&](const auto& other) { return entry.Id == other.Id; }) > 1) ambiguous.push_back(entry.Id);
+		for (auto& entry : _vstSavedEntries)
+			if (entry.Id.empty() || !io::NativeMidiSidecar::ValidatePluginIdentity(entry.Id) || std::find(ambiguous.begin(), ambiguous.end(), entry.Id) != ambiguous.end()) entry.Id = utils::GetGuid();
+		entries = _vstSavedEntries;
+	}
+	_rackInactive = false;
+	_rackDiagnostic.clear();
+	++_rackRevision;
+	for (const auto& entry : entries) LoadManagedVstSlot(utils::DecodeUtf8(entry.Path), entry.Id);
+	_changesMade = true;
+	_PublishAudioState();
 	return true;
 }
 
@@ -4546,7 +4743,7 @@ bool Station::ConvertRackToAdditive(std::uint64_t revision)
 		if (plugin && plugin->Role() == vst::RenderRole::Unknown) return false;
 		replacement->AddSlot(plugin);
 	}
-	if (!replacement->FitsCompensationCeiling()) return false;
+	if (!_RackLatencyFeasible(*replacement)) return false;
 	_rackRenderPolicy = vst::VstChain::RenderPolicy::AdditiveInstruments;
 	_backVstChain = std::move(replacement);
 	_flipVstChain.store(true, std::memory_order_release);
@@ -4558,8 +4755,13 @@ bool Station::LoadVstPluginSynchronously(const std::wstring& path,
 	const std::vector<std::uint8_t>& initialState,
 	bool bypass, const std::string& stateId)
 {
-	// Startup construction completes before Scene::InitAudio publishes this
-	// station, so direct replacement cannot race the callback.
+	// Startup construction completes before Scene::InitAudio publishes this station.
+	if (_rackInactive || _vstSavedEntries.size() >= MaxRackPlugins || (!stateId.empty() && (!io::NativeMidiSidecar::ValidatePluginIdentity(stateId)
+		|| std::any_of(_vstSavedEntries.begin(), _vstSavedEntries.end(), [&](const auto& entry) { return entry.Id == stateId; }))))
+	{
+		_rackDiagnostic = "Rack limit or invalid identity; saved data requires explicit recovery.";
+		return false;
+	}
 	auto plugin = vst::MakePluginForPath(path);
 	auto hostChannels = NumBusChannels();
 	if (hostChannels == 0u)
@@ -4586,7 +4788,7 @@ bool Station::LoadVstPluginSynchronously(const std::wstring& path,
 			replacement->AddSlot(chain->GetPlugin(index));
 	}
 	replacement->AddSlot(std::move(plugin));
-	if (!replacement->FitsCompensationCeiling())
+	if (!_RackLatencyFeasible(*replacement))
 	{
 		loaded = false;
 		vst::QueueForUiThreadDestroy(replacement->GetPlugin(replacement->NumPlugins() - 1u));
@@ -4728,11 +4930,24 @@ ActionResult Station::OnAction(JobAction action)
 	{
 	case JobAction::JOB_LOADVST:
 	{
+		{
+			std::lock_guard<std::mutex> lock(_vstPathsMutex);
+			const auto state = _AudioStateSnapshot();
+			const bool overLimit = !action.VstManaged && (_vstSavedEntries.size() >= MaxRackPlugins || (state && _vstSavedEntries.size() + state->RetiredMidiDestinations.size() >= MaxRackDestinations)
+				|| (!action.VstIdentity.empty() && std::any_of(_vstSavedEntries.begin(), _vstSavedEntries.end(), [&](const auto& entry) { return entry.Id == action.VstIdentity; })));
+			const bool cancelled = action.VstManaged && std::find(_pendingRackIds.begin(), _pendingRackIds.end(), action.VstIdentity) == _pendingRackIds.end();
+			if (_rackInactive || overLimit || cancelled || (!action.VstIdentity.empty() && !io::NativeMidiSidecar::ValidatePluginIdentity(action.VstIdentity)))
+			{
+				if (_vstJobsPending.load(std::memory_order_acquire)) _vstJobsPending.fetch_sub(1u, std::memory_order_release);
+				_rackDiagnostic = cancelled ? "" : "Rack capacity or identity rejected; remove a slot and retry.";
+				return ActionResult::NoAction();
+			}
+		}
 		auto plugin = action.PreInitPlugin ? action.PreInitPlugin : vst::MakePluginForPath(action.VstPath);
 		auto hostChannels = NumBusChannels();
 		if (hostChannels == 0u) hostChannels = 1u;
 		bool loaded = plugin->Load(action.VstPath, _sampleRate, _blockSize, hostChannels, vst::HostedLayoutMode::Exact)
-			&& (!action.VstManaged || _rackRenderPolicy == vst::VstChain::RenderPolicy::LegacySerial
+			&& (_rackRenderPolicy == vst::VstChain::RenderPolicy::LegacySerial
 				|| plugin->Role() != vst::RenderRole::Unknown);
 		if (action.VstIdentity.empty()) action.VstIdentity = plugin->StateId();
 		plugin->SetStateId(action.VstIdentity);
@@ -4770,7 +4985,7 @@ ActionResult Station::OnAction(JobAction action)
 				const auto index = static_cast<std::size_t>(found - _vstSavedEntries.begin());
 				while (replacement->NumPlugins() <= index) replacement->AddSlot(nullptr);
 				replacement->ReplaceSlot(index, std::move(plugin));
-				if (!replacement->FitsCompensationCeiling())
+				if (!_RackLatencyFeasible(*replacement))
 				{
 					loaded = false;
 					vst::QueueForUiThreadDestroy(replacement->GetPlugin(index));
@@ -4788,7 +5003,14 @@ ActionResult Station::OnAction(JobAction action)
 				replacement->AddSlot(std::move(plugin));
 				_vstPluginPaths.push_back(action.VstPath);
 				_vstSavedEntries.push_back(std::move(saved));
+				if (!_RackLatencyFeasible(*replacement))
+				{
+					loaded = false;
+					vst::QueueForUiThreadDestroy(replacement->GetPlugin(replacement->NumPlugins() - 1u));
+					replacement->ReplaceSlot(replacement->NumPlugins() - 1u, nullptr);
+				}
 			}
+			if (!loaded) _rackDiagnostic = "Plugin could not be activated: check supported role, layout and latency (262144 samples maximum). Saved state is retained.";
 			_backVstChain = std::move(replacement);
 			++_rackRevision;
 			_flipVstChain.store(true, std::memory_order_release);

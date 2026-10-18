@@ -26,10 +26,11 @@ class StationMidiInstrumentFakePlugin final : public vst::IVstPlugin
 public:
 	bool PreInit(const std::wstring&) override { return true; }
 
-	bool Load(const std::wstring&, float, unsigned int, unsigned int,
+	bool Load(const std::wstring&, float, unsigned int, unsigned int hostedChannels,
 		vst::HostedLayoutMode = vst::HostedLayoutMode::Exact) override
 	{
 		_loaded = true;
+		HostedChannels = hostedChannels;
 		return true;
 	}
 
@@ -40,7 +41,7 @@ public:
 	void ProcessBlockMulti(float* const* channels, int32_t numChannels, int32_t numSamples) noexcept override
 	{
 		ProcessCalls++;
-		LastBlockProcessed = !SkipNextProcess;
+		LastBlockProcessed = !SkipNextProcess && !_bypassed && numChannels >= static_cast<int>(HostedChannels);
 		SkipNextProcess = false;
 		if (!LastBlockProcessed) return;
 		if (ReplaceOutput)
@@ -76,6 +77,7 @@ public:
 		BlockStart = blockStartSample;
 		BlockSamples = numSamples;
 		BeginCalls++;
+		LastBlockProcessed = false;
 		AcceptedThisBlock = 0u;
 		BlockEvents.clear();
 	}
@@ -126,6 +128,7 @@ public:
 	std::uint32_t BlockStart = 0u;
 	std::uint32_t BlockSamples = 0u;
 	unsigned int BeginCalls = 0u;
+	unsigned int HostedChannels = 0u;
 	unsigned int ProcessCalls = 0u;
 	unsigned int ParamSetCalls = 0u;
 	unsigned int LastParamIndex = 0u;
@@ -324,10 +327,17 @@ TEST(StationMidiInstrument, LiveChannelRoutesAreManyToManyAndMissingExplicitTarg
 	RenderStationBlock(station, 0);
 	EXPECT_EQ(1u, a->Events.size());
 	EXPECT_EQ(2u, b->Events.size());
-	ASSERT_TRUE(station->SetLiveVstChannelRoute(0, {true, {}}, station->RackRevision()));
+	auto routes = station->LiveVstChannelRoutes();
+	routes[0] = {true, {}};
+	routes[2] = {true, {a->StateId()}};
+	const auto revision = station->RackRevision();
+	ASSERT_TRUE(station->SetLiveVstChannelRoutes(routes, revision));
+	EXPECT_EQ(revision + 1u, station->RackRevision());
+	EXPECT_FALSE(station->SetLiveVstChannelRoutes(routes, revision));
 	station->TryEnqueueSyntheticLiveMidi(MidiEvent::MakeNoteOn(128, 0, 62, 100));
+	station->TryEnqueueSyntheticLiveMidi(MidiEvent::MakeNoteOn(128, 2, 63, 100));
 	RenderStationBlock(station, 128);
-	EXPECT_EQ(1u, std::count_if(a->Events.begin(), a->Events.end(), [](const auto& event) { return event.IsNoteOn(); }));
+	EXPECT_EQ(2u, std::count_if(a->Events.begin(), a->Events.end(), [](const auto& event) { return event.IsNoteOn(); }));
 	EXPECT_EQ(2u, std::count_if(b->Events.begin(), b->Events.end(), [](const auto& event) { return event.IsNoteOn(); }));
 }
 
@@ -2018,4 +2028,84 @@ TEST(StationMidiInstrument, QuiescentResetRetainsQueuedPlaybackSourceLossRelease
 	ASSERT_EQ(1u, plugin->Events.size());
 	EXPECT_TRUE(plugin->Events[0].IsNoteOff());
 	EXPECT_EQ(67u, plugin->Events[0].data1);
+}
+
+TEST(StationMidiInstrument, SoundingSustainSurvivesHealthySourceAndRecoversAcrossBypassLatencyAndResize)
+{
+	auto station = MakeStation("pedal-lifecycle");
+	auto plugin = AddPlugin(station, L"pedal.dll");
+	AllowAllMidiChannels(station);
+	const MidiEvent down{0, 0xb0, 64, 127};
+	station->ObservePhysicalMidiForRecording(down, "lost");
+	station->ObservePhysicalMidiForRecording(down, "healthy");
+	station->TryEnqueueImmediateLiveMidi(MidiEvent::MakeNoteOn(0, 0, 60, 100));
+	station->TryEnqueueImmediateLiveMidi(down);
+	RenderStationBlock(station, 0);
+	plugin->ProcessedEvents.clear();
+	station->FlushLiveHeldMidiNotesForDevice("lost");
+	RenderStationBlock(station, 128);
+	EXPECT_TRUE(plugin->ProcessedEvents.empty());
+	plugin->SetBypassed(true);
+	station->TryEnqueueImmediateLiveMidi(MidiEvent::MakeNoteOff(256, 0, 60));
+	station->TryEnqueueImmediateLiveMidi({256, 0xb0, 64, 0});
+	RenderStationBlock(station, 256);
+	plugin->SetBypassed(false);
+	RenderStationBlock(station, 384);
+	EXPECT_TRUE(std::any_of(plugin->ProcessedEvents.begin(), plugin->ProcessedEvents.end(), [](const auto& event) { return event.IsNoteOff(); }));
+	EXPECT_TRUE(std::any_of(plugin->ProcessedEvents.begin(), plugin->ProcessedEvents.end(), [](const auto& event) { return event.MessageType() == 0xb0 && event.data1 == 64 && event.data2 == 0; }));
+	plugin->LatencySamps = 262145;
+	station->RefreshRackLatency();
+	EXPECT_TRUE(station->RackLatencySuspended());
+	EXPECT_FALSE(station->RackDiagnostic().empty());
+	RenderStationBlock(station, 512);
+	station->AcknowledgeAudioBoundary(); station->ReleaseRetiredAudioStates();
+	RenderStationBlock(station, 640);
+	station->AcknowledgeAudioBoundary(); station->ReleaseRetiredAudioStates();
+	plugin->LatencySamps = 0;
+	station->RefreshRackLatency();
+	EXPECT_FALSE(station->RackLatencySuspended());
+	station->TryEnqueueImmediateLiveMidi(MidiEvent::MakeNoteOn(768, 0, 61, 100));
+	RenderStationBlock(station, 768);
+	ASSERT_TRUE(station->UnloadManagedVstPlugin(plugin->StateId()));
+	for (const auto& job : station->CommitChanges()) station->OnAction(job);
+	station->CommitChanges();
+	station->SetNumBusChannels(1); station->CommitChanges();
+	plugin->ProcessedEvents.clear();
+	RenderStationBlock(station, 896);
+	EXPECT_TRUE(plugin->LastBlockProcessed); // Retirement kept original hosted width.
+	EXPECT_TRUE(std::any_of(plugin->ProcessedEvents.begin(), plugin->ProcessedEvents.end(), [](const auto& event) { return event.IsNoteOff() && event.data1 == 61; }));
+}
+
+TEST(StationMidiInstrument, RecordedPedalFlushRetriesWithoutLiftingLiveOwner)
+{
+	for (const bool liveOwner : {false, true})
+	{
+		SCOPED_TRACE(liveOwner);
+		auto station = MakeStation("recorded-pedal");
+		auto plugin = AddPlugin(station, L"shared-pedal.dll");
+		AllowAllMidiChannels(station);
+		auto take = MakeMidiTake("pedal-take");
+		take->Record({}, station->Name(), {0u}, {"source"});
+		take->Play(0, 1000, 0);
+		const std::array events{MidiEvent{0, 0xb0, 64, 127}, MidiEvent::MakeNoteOn(0, 0, 60, 100), MidiEvent::MakeNoteOff(32, 0, 60)};
+		auto loop = take->GetMidiLoops().at(0);
+		loop->ReplaceRecordedEvents(events.data(), events.size(), 1000);
+		station->AddTake(take); station->CommitChanges();
+		if (liveOwner) station->TryEnqueueImmediateLiveMidi({0, 0xb0, 64, 127});
+		RenderStationBlock(station, 0);
+		plugin->ProcessedEvents.clear();
+		ASSERT_TRUE(take->Mute());
+		plugin->MaxAcceptedPerBlock = 0;
+		RenderStationBlock(station, 128);
+		plugin->MaxAcceptedPerBlock = 100;
+		RenderStationBlock(station, 256);
+		const auto pedalUp = [](const auto& event) { return event.MessageType() == 0xb0 && event.data1 == 64 && event.data2 == 0; };
+		EXPECT_EQ(!liveOwner, std::any_of(plugin->ProcessedEvents.begin(), plugin->ProcessedEvents.end(), pedalUp));
+		if (liveOwner)
+		{
+			station->TryEnqueueImmediateLiveMidi({384, 0xb0, 64, 0});
+			RenderStationBlock(station, 384);
+			EXPECT_TRUE(std::any_of(plugin->ProcessedEvents.begin(), plugin->ProcessedEvents.end(), pedalUp));
+		}
+	}
 }

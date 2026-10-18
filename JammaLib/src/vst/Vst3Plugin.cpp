@@ -1847,6 +1847,7 @@ void Vst3Plugin::ProcessBlockMulti(float* const* channelBufs, int32_t numChannel
 	const auto result = _impl->processor->process(_impl->processData);
 	_lastMidiBlockProcessed = result == kResultOk;
 	_impl->inputParameterChanges->BeginBlock();
+	if (!_lastMidiBlockProcessed) return; // Keep caller input/silent generator scratch on SDK failure.
 	CopyOutputToMulti(_impl->outputChannelPtrs.data(), _impl->outputChannels, numSamples, channelBufs, numChannels);
 #else
 	(void)channelBufs; (void)numChannels; (void)numSamples;

@@ -2328,6 +2328,7 @@ void Scene::_UpdateRecordedPlaybackCompensation()
 	{
 		if (!station) continue;
 		station->PollPlaybackPluginChanges();
+		station->RefreshRackLatency();
 		reference = std::max(reference, station->RecordedPlaybackLatencySamps());
 	}
 	if (reference > audio::PlaybackDelay::MaxDelaySamps)

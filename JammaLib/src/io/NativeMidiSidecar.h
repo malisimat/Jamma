@@ -49,7 +49,9 @@ namespace io
 
 	private:
 		static bool Validate(const Stream& stream, std::string* error) noexcept;
+	public:
 		static bool ValidatePluginIdentity(const std::string& identity) noexcept;
+	private:
 		static bool WriteBytes(std::ostream& out, const void* data, std::size_t size) noexcept;
 		static bool ReadBytes(std::istream& in, void* data, std::size_t size, std::size_t& consumed) noexcept;
 		static void SetError(std::string* error, const char* text) noexcept;

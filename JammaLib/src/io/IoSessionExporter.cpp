@@ -473,7 +473,7 @@ namespace io
 							for (std::size_t pluginIndex = 0u; pluginIndex < loopVstEntryCount; ++pluginIndex)
 							{
 								auto plugin = audioLoops[loopIndex]->GetVstPlugin(pluginIndex);
-								if (matches(plugin, "loop") && (saved.Scope.empty() || saved.LoopIndex == loopIndex))
+								if (matches(plugin, "loop"))
 								{
 									lane.TargetScope = "loop";
 									lane.TargetPluginId = plugin->StateId();

@@ -858,7 +858,7 @@ void MidiLoop::ReadBlock(std::uint32_t globalSample,
 	if (_relocationChaseRequested)
 	{
 		FlushHeldNotes(globalSample, sink);
-		if (_held.any() || _pendingReleases.any())
+		if (_held.any() || _pendingReleases.any() || _sustainHeld.any() || _pendingSustainReleases.any())
 		{
 			ReleasePlaybackSnapshot();
 			return; // Retry before reconstructing a new voice.
@@ -938,6 +938,8 @@ void MidiLoop::EmitEventsInRange(std::uint32_t lo,
 		out.sampleOffset = globalBase + off;
 		if (!sink.TryOnEvent(out))
 		{
+			if (src.MessageType() == 0xb0u && src.data1 == 64u && src.data2 < 64u && _sustainHeld.test(src.Channel()))
+				_pendingSustainReleases.set(src.Channel());
 			if (src.IsNoteOff() && _held.test(slot))
 			{
 				_pendingReleaseVelocity[slot] = src.data2;
@@ -946,6 +948,11 @@ void MidiLoop::EmitEventsInRange(std::uint32_t lo,
 			continue;
 		}
 
+		if (src.MessageType() == 0xb0u && src.data1 == 64u)
+		{
+			_sustainHeld.set(src.Channel(), src.data2 >= 64u);
+			if (src.data2 < 64u) _pendingSustainReleases.reset(src.Channel());
+		}
 		// Track only notes delivered to an output for wrap flushing.
 		if (src.IsNoteOn())
 		{
@@ -968,6 +975,12 @@ void MidiLoop::EmitEventsInRange(std::uint32_t lo,
 
 void MidiLoop::RetryPendingReleases(std::uint32_t atGlobalSample, IMidiSink& sink) noexcept
 {
+	for (auto channel = 0u; channel < 16u; ++channel)
+		if (_pendingSustainReleases.test(channel) && sink.TryOnEvent({atGlobalSample, static_cast<std::uint8_t>(0xb0u | channel), 64u, 0u}))
+		{
+			_pendingSustainReleases.reset(channel);
+			_sustainHeld.reset(channel);
+		}
 	if (_pendingReleases.none()) return;
 	for (std::uint8_t channel = 0u; channel < 16u; ++channel)
 		for (std::uint8_t note = 0u; note < 128u; ++note)
@@ -987,6 +1000,18 @@ void MidiLoop::RetryPendingReleases(std::uint32_t atGlobalSample, IMidiSink& sin
 void MidiLoop::FlushHeldNotes(std::uint32_t atGlobalSample, IMidiSink& sink,
 	HeldFlushPolicy policy) noexcept
 {
+	// Circular seams preserve the pedal; lifecycle/relocation flushes release it.
+	if (policy == HeldFlushPolicy::All)
+		for (auto channel = 0u; channel < 16u; ++channel)
+			if (_sustainHeld.test(channel))
+			{
+				if (sink.TryOnEvent({atGlobalSample, static_cast<std::uint8_t>(0xb0u | channel), 64u, 0u}))
+				{
+					_sustainHeld.reset(channel);
+					_pendingSustainReleases.reset(channel);
+				}
+				else _pendingSustainReleases.set(channel);
+			}
 	if (_held.none())
 	{
 		if (policy == HeldFlushPolicy::All)

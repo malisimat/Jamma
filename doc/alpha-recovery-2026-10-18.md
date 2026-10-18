@@ -39,3 +39,13 @@ The engine foundation was committed locally as `d365f608`. Subsequent automation
 `alpha-rack-automation-tests-build-2.log` records successful incremental Debug library/native-test builds. `alpha-rack-automation-focused-tests.log` records 105/105 focused passes. Diff checks and the focused threading audit passed. Dispatch generations are serialized non-audio state; callback cursors are callback-owned; retirement collection and final UI destruction stay off callback. Saved identity strings are never read by the callback. Child notifications use weak Station ownership.
 
 This remains an incomplete rack feature. Remaining engine, GUI, acceptance and trigger-learn work listed above is still pending; no rack merge or release has occurred.
+
+## Complete rack engine checkpoint
+
+`alpha-rack-engine-complete-gate-build.log` records a successful exact-source incremental Debug library/test build with zero warnings/errors. `alpha-rack-engine-complete-gate-tests.log` records 294/294 relevant engine, MIDI, latency, exporter, automation, Overdub and staging checks passing; 12 disabled. The first broader run passed 255/265: older fake processors needed explicit role/capability declarations, and the former INT_MAX Station activation expectation was replaced with an explicit admission-rejection assertion while retaining child-sum overflow coverage.
+
+The engine now includes bounded slot paging/recovery commands, atomic 16-channel route edits, complete load admission bounds, latency suspension/resumption, device and recorded pedal release retries, channel-mask delta cleanup, and preserved raw inactive imports. Independent findings addressed failed VST3 stale output, original render width during bus shrink/retirement, sole-plugin bypass release cleanup, additive unknown-capability filtering, and automation resolution after Loop-index compaction.
+
+Removed bypassed/unloaded processors are terminal and silent; teardown ends their voices. A guarded panic receipt is retained for any later reuse of a suspended instance. Active bypass retains pending note/pedal cleanup through unbypass. GUI removal closes the captured editor before structural removal. No MIDI output transformation exists in this feature.
+
+GUI/cables, app/Release builds, independent complete-feature review, real plugin/hardware acceptance, trigger learn/save and final integrated gates remain pending. This checkpoint is not a rack feature completion or merge.
