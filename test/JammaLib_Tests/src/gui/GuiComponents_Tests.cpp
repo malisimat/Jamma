@@ -822,8 +822,8 @@ TEST(GuiTriggerRename, AttachedEditorPreservesCoordinatesAndDraftAcrossAcceptanc
 	const auto label = rename->TryGetChild(1);
 	const auto editor = std::dynamic_pointer_cast<GuiTextBox>(rename->TryGetChild(2));
 	ASSERT_TRUE(editor); ASSERT_TRUE(label);
-	EXPECT_EQ(306, label->GlobalPosition().X); EXPECT_EQ(306, label->GlobalPosition().Y);
-	EXPECT_EQ(306, editor->GlobalPosition().X); EXPECT_EQ(304, editor->GlobalPosition().Y);
+	EXPECT_EQ(306, label->GlobalPosition().X); EXPECT_EQ(278, label->GlobalPosition().Y);
+	EXPECT_EQ(306, editor->GlobalPosition().X); EXPECT_EQ(276, editor->GlobalPosition().Y);
 	EXPECT_EQ(rename, label->Parent()); EXPECT_EQ(rename, editor->Parent());
 	GuiFocusManager focus;
 	rename->Focus = [&](const auto& control, bool acquire) {
@@ -851,6 +851,15 @@ TEST(GuiTriggerRename, AttachedEditorPreservesCoordinatesAndDraftAcrossAcceptanc
 	editor->SetText("Piano"); focus.ClearFocus(); // Blur shares Enter acceptance.
 	EXPECT_EQ(3u, submissions);
 	rename->Cancel(); EXPECT_EQ(3u, submissions);
+	rename->Begin("trigger-id", "Keys", 7u);
+	const auto cancel = rename->TryGetChild(3);
+	ASSERT_TRUE(cancel); EXPECT_TRUE(cancel->IsVisible());
+	EXPECT_TRUE(rename->Touch(MakeTouch(TouchAction::TOUCH_DOWN,
+		{cancel->Position().X + 14, cancel->Position().Y + 14}), true));
+	EXPECT_FALSE(rename->Active()); EXPECT_FALSE(cancel->IsVisible()); EXPECT_TRUE(label->IsVisible());
+	EXPECT_EQ(3u, submissions);
+	EXPECT_TRUE(rename->Touch(MakeTouch(TouchAction::TOUCH_UP, {-20, -20}), false));
+	EXPECT_FALSE(rename->OwnsPointer());
 }
 
 TEST(GuiTextBox, BackspaceAndDeleteEditText) {

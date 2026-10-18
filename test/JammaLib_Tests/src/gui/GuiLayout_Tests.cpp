@@ -10,6 +10,7 @@
 #include "gui/GuiMainPanel.h"
 #include "gui/GuiNumericInput.h"
 #include "gui/GuiHud.h"
+#include "gui/GuiTriggerRename.h"
 #include "gui/GuiPopupManager.h"
 #include "engine/RigSnapshot.h"
 #include "engine/Scene.h"
@@ -760,6 +761,50 @@ TEST_F(HudResponsiveLayoutTests, ResizeKeepsScrollViewportsInsideActualWindowAnd
 	}
 	EXPECT_EQ(sourceCard.get(), scrolls[0]->Content()->TryGetChild(0).get());
 	EXPECT_EQ(largeWidth, sourceCard->GetSize().Width);
+}
+
+TEST_F(HudResponsiveLayoutTests, TriggerCardsKeepSocketsSymmetricAndLabelControlsAboveCentredPedals)
+{
+	gui::GuiHudParams params;
+	params.Size = { 1200u, 800u };
+	auto hud = std::make_shared<gui::GuiHud>(params);
+	hud->SetRoutingConfig(0u, {}, Routing());
+	const auto scrolls = Scrolls(hud);
+	ASSERT_EQ(1u, scrolls.size());
+	const auto card = scrolls[0]->Content()->TryGetChild(0);
+	ASSERT_TRUE(card);
+	const auto activate = card->TryGetChild(0), ditch = card->TryGetChild(1);
+	const auto rename = std::dynamic_pointer_cast<gui::GuiTriggerRename>(card->TryGetChild(2));
+	const auto close = card->TryGetChild(3), edit = card->TryGetChild(4);
+	const auto input = card->TryGetChild(5), output = card->TryGetChild(6);
+	ASSERT_TRUE(activate); ASSERT_TRUE(ditch); ASSERT_TRUE(rename);
+	ASSERT_TRUE(close); ASSERT_TRUE(edit); ASSERT_TRUE(input); ASSERT_TRUE(output);
+	const auto band = rename->TryGetChild(0), label = rename->TryGetChild(1), cancel = rename->TryGetChild(3);
+	ASSERT_TRUE(band); ASSERT_TRUE(label); ASSERT_TRUE(cancel);
+	const auto top = [](const auto& element) { return element->Position().Y + static_cast<int>(element->GetSize().Height); };
+	const auto right = [](const auto& element) { return element->Position().X + static_cast<int>(element->GetSize().Width); };
+	const int height = static_cast<int>(card->GetSize().Height);
+	const int width = static_cast<int>(card->GetSize().Width);
+	EXPECT_EQ(height - top(input), output->Position().Y);
+	EXPECT_EQ(height - input->Position().Y - static_cast<int>(input->GetSize().Height / 2u),
+		output->Position().Y + static_cast<int>(output->GetSize().Height / 2u));
+	EXPECT_EQ(input->Position().X, output->Position().X);
+	EXPECT_EQ(activate->Position().X, width - right(ditch));
+	EXPECT_EQ(activate->Position().Y, ditch->Position().Y);
+	EXPECT_LT(top(activate), band->Position().Y);
+	EXPECT_LT(top(band), input->Position().Y);
+	EXPECT_LT(top(band), close->Position().Y);
+	EXPECT_LE(top(close), height);
+	EXPECT_LE(right(close), width);
+	EXPECT_LE(height - top(close), 4);
+	EXPECT_LE(width - right(close), 4);
+	EXPECT_LT(close->GetSize().Width, edit->GetSize().Width);
+	EXPECT_LT(close->GetSize().Height, edit->GetSize().Height);
+	EXPECT_LE(right(label), edit->Position().X);
+	EXPECT_EQ(edit->Position().X, cancel->Position().X);
+	EXPECT_EQ(edit->Position().Y, cancel->Position().Y);
+	EXPECT_EQ(edit->GetSize().Width, cancel->GetSize().Width);
+	EXPECT_EQ(edit->GetSize().Height, cancel->GetSize().Height);
 }
 
 TEST_F(HudResponsiveLayoutTests, ResizeClampsExistingScrollOffsetWithoutRebuildingCards)

@@ -328,6 +328,49 @@ TEST_F(HudCableInteractionTests, ZeroButtonMoveCancelsClippedBodyDragInEditorHud
 	Release(); EXPECT_TRUE(Submissions.empty());
 }
 
+TEST_F(HudCableInteractionTests, PedalPressWinsOverSocketRadiusWhileSocketCentreRemainsDraggable)
+{
+	unsigned int admittedEdges = 0u;
+	gui::GuiHudParams params; params.Size = { 1200u, 800u };
+	params.AcceptTriggerInput = [&](std::uint64_t revision) {
+		EXPECT_EQ(Routing->Revision, revision); ++admittedEdges; return true;
+	};
+	Hud = std::make_shared<gui::GuiHud>(params);
+	Hud->SetRoutingConfig(20u, {}, *Routing); Hud->Init();
+	std::vector<std::shared_ptr<gui::GuiScrollPanel>> scrolls; Layout(Hud, scrolls);
+	for (const bool editorMode : { false, true })
+	{
+		// Each mode gets an idle runtime: queued pedal edges correctly block
+		// routing edits until the audio boundary consumes them.
+		const unsigned char triggerIndex = editorMode ? 1u : 0u;
+		const auto card = TriggerScroll()->Content()->TryGetChild(triggerIndex);
+		ASSERT_TRUE(card);
+		const auto pedal = card->TryGetChild(0);
+		ASSERT_TRUE(pedal);
+		Hud->SetLoopEditorMode(editorMode);
+		Hud->BuildInteractionGeometry(Endpoints, Cables);
+		const auto output = std::find_if(Endpoints.begin(), Endpoints.end(), [triggerIndex](const auto& endpoint) {
+			return endpoint.Kind == CableInteraction::EndpointKind::TriggerOutput && endpoint.TriggerIndex == triggerIndex;
+		});
+		ASSERT_NE(Endpoints.end(), output);
+		actions::TouchAction touch; touch.Touch = actions::TouchAction::TOUCH_MOUSE; touch.Index = 0u;
+		touch.Position = output->Position; touch.State = actions::TouchAction::TOUCH_DOWN;
+		ASSERT_TRUE(Routing->Triggers[triggerIndex].Instance->CanApplyCaptureRouting());
+		EXPECT_TRUE(Hud->OnAction(touch).IsEaten); EXPECT_TRUE(Hud->HasCableDrag());
+		Hud->ClearPointerState(); EXPECT_FALSE(Hud->HasCableDrag());
+		touch.Position = card->GlobalPosition() + utils::Position2d{22, 12};
+		ASSERT_TRUE(CableInteraction::HitTest(*output, touch.Position, 14.0f));
+		touch.State = actions::TouchAction::TOUCH_DOWN;
+		const auto result = Hud->OnAction(touch);
+		EXPECT_TRUE(result.IsEaten); EXPECT_EQ(pedal, result.ActiveElement.lock());
+		EXPECT_FALSE(Hud->HasCableDrag());
+		touch.State = actions::TouchAction::TOUCH_UP;
+		EXPECT_TRUE(Hud->OnAction(touch).IsEaten); EXPECT_FALSE(Hud->HasCableDrag());
+		EXPECT_FALSE(Routing->Triggers[triggerIndex].Instance->CanApplyCaptureRouting());
+	}
+	EXPECT_EQ(4u, admittedEdges);
+}
+
 TEST_F(HudCableInteractionTests, ClippedBodyReconnectPreservesOriginalTriggerAndStaleRevisionCancels)
 {
 	BeginBodyDrag(); ASSERT_TRUE(Hud->HasCableDrag()); MoveToReplacement(1u); Release();

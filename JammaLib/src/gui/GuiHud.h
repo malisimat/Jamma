@@ -152,10 +152,11 @@ namespace gui
 		static constexpr unsigned int _TriggerButtonHeight = 132u;
 		static constexpr unsigned int _TriggerFooterHeight = 56u;
 		static constexpr unsigned int _TriggerControlSize = 34u;
+		static constexpr unsigned int _TriggerCloseSize = 24u;
 		static constexpr unsigned int _SocketSize = 24u;
 		static constexpr unsigned int _CableEndSize = 10u;
-		static constexpr int _TriggerInputPinTopOffset = 44;
 		static constexpr int _TriggerOutputPinBottomOffset = 12;
+		static constexpr int _TriggerInputPinTopOffset = _TriggerOutputPinBottomOffset;
 		static constexpr int _TriggerInputFanHalfHeight = 7;
 		static constexpr unsigned int _AudioInputPeakHoldSamps = 3000u;
 		static constexpr double _MidiInputFallRate = 0.003;

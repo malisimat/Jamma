@@ -586,18 +586,19 @@ void GuiHud::_BuildTriggerRail()
 		closeParams.Texture = "trigger_close";
 		closeParams.OverTexture = "trigger_close_over";
 		closeParams.DownTexture = "trigger_close_down";
-		closeParams.Size = { _TriggerControlSize, _TriggerControlSize };
+		closeParams.Size = { _TriggerCloseSize, _TriggerCloseSize };
 		closeParams.MinSize = closeParams.Size;
-		closeParams.Position = { static_cast<int>(_TriggerButtonWidth - _TriggerControlSize - 4u), 70 };
+		closeParams.Position = { static_cast<int>(_TriggerButtonWidth - _TriggerCloseSize - 4u),
+			static_cast<int>(_TriggerButtonHeight - _TriggerCloseSize - 2u) };
 		closeParams.TextPadding = 0u;
 		closeParams.TintColor = glm::vec3(1.0f);
 		auto close = std::make_shared<GuiHudActionButton>(closeParams, [this, i]() { _OpenDeleteConfirmation(i); });
 		button->AddChild(close);
-		auto editParams = GuiButtonParams::PanelButton(28u);
+		auto editParams = GuiButtonParams::PanelButton(GuiTriggerRename::ActionSize);
 		editParams.Texture = "rename_pencil"; editParams.OverTexture = "rename_pencil_over"; editParams.DownTexture = "rename_pencil_down";
 		editParams.TintColor = glm::vec3(1.0f);
-		editParams.Size = {28u, 28u}; editParams.MinSize = editParams.Size;
-		editParams.Position = {104, 104};
+		editParams.Size = {GuiTriggerRename::ActionSize, GuiTriggerRename::ActionSize}; editParams.MinSize = editParams.Size;
+		editParams.Position = {GuiTriggerRename::ActionX, GuiTriggerRename::RowY};
 		auto edit = std::make_shared<GuiHudActionButton>(editParams, [this, i]() { _OpenRename(i); });
 		button->AddChild(edit);
 		auto inputSocket = std::make_shared<GuiHudSocket>(
@@ -1181,9 +1182,14 @@ void GuiHud::_FilterCableHits(std::vector<CableInteraction::Endpoint>& endpoints
 	const auto global = point + GlobalPosition();
 	if (_ContentClip(_triggerScroll).Contains(global))
 		for (const auto& widgets : _triggerWidgets)
+		{
+			// A socket's generous hit radius must not steal a pedal press.
+			const auto control = widgets.Card->FindTopmostDescendant(widgets.Card->GlobalToLocal(global));
 			if (widgets.Edit->HitTest(widgets.Edit->GlobalToLocal(global)) ||
-				widgets.Close->HitTest(widgets.Close->GlobalToLocal(global)))
+				widgets.Close->HitTest(widgets.Close->GlobalToLocal(global)) ||
+				std::dynamic_pointer_cast<GuiHudTriggerPedal>(control))
 			{ endpoints.clear(); cables.clear(); return; }
+		}
 	std::erase_if(endpoints, [this](const auto& endpoint) {
 		return _loopEditorMode && endpoint.Kind == CableInteraction::EndpointKind::Station;
 	});
@@ -1978,10 +1984,10 @@ std::shared_ptr<GuiButton> GuiHud::_MakeTriggerButton(const std::string& text,
 	buttonParams.MinSize = { GuiButtonParams::DefaultMinWidth, _TriggerButtonHeight };
 	auto button = std::make_shared<GuiHudTriggerBack>(buttonParams, trigger);
 
-	const int socketPadding = 4;
+	const int pedalSpacing = 4;
 	const int pedalSizeW = 46;
 	const int pedalSizeH = 62;
-	const int pedalPosX = 16;
+	const int pedalPosX = (static_cast<int>(_TriggerButtonWidth) - 2 * pedalSizeW - pedalSpacing) / 2;
 	const int pedalPosY = 8;
 
 	base::GuiElementParams activateParams;
@@ -1997,7 +2003,7 @@ std::shared_ptr<GuiButton> GuiHud::_MakeTriggerButton(const std::string& text,
 		_displayedRevision, _acceptTriggerInput));
 
 	base::GuiElementParams ditchParams;
-	ditchParams.Position = { pedalPosX + pedalSizeW + socketPadding, pedalPosY };
+	ditchParams.Position = { pedalPosX + pedalSizeW + pedalSpacing, pedalPosY };
 	ditchParams.Size = { static_cast<unsigned int>(pedalSizeW), static_cast<unsigned int>(pedalSizeH) };
 	ditchParams.TextureShader = "texture";
 	ditchParams.Texture = "trigger_ditch";

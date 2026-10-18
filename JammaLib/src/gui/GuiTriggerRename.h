@@ -10,6 +10,12 @@ namespace gui
 	// Attached to its card: display decoration never enters the raw draft.
 	class GuiTriggerRename : public GuiPanel
 	{
+	public:
+		// The pencil and cancellation control share the same label-row slot.
+		static constexpr unsigned int ActionSize = 28u;
+		static constexpr int ActionX = 104;
+		static constexpr int RowY = 76;
+	private:
 		class Editor : public GuiTextBox
 		{
 		public:
@@ -37,14 +43,17 @@ namespace gui
 		{
 			SetSize({136u, 132u});
 			base::GuiElementParams band;
-			band.Position = {4, 104}; band.Size = {128u, 28u}; band.Texture = "fader_back_panel";
+			band.Position = {4, RowY}; band.Size = {128u, ActionSize}; band.Texture = "fader_back_panel";
 			AddChild(std::make_shared<base::GuiElement>(band));
 			auto label = GuiLabelParams::PanelScrollRow("", 0u);
-			label.Position = {6, 106}; label.Size = {96u, 24u}; label.Ellipsize = true; label.CenterHorizontally = true;
+			label.Position = {6, RowY + 2}; label.Size = {96u, 24u}; label.Ellipsize = true;
+			label.CenterHorizontally = true; label.WrapWidth = -1; // Keep decorated names on one centred line.
 			_label = std::make_shared<GuiLabel>(label);
-			_editor = std::make_shared<Editor>(); _editor->SetPosition({6, 104}); _editor->SetSize({96u, 28u});
-			auto cancel = GuiButtonParams::PanelButton(64u); cancel.Text = "Cancel";
-			cancel.Position = {28, 74}; cancel.Size = {64u, 28u}; cancel.TextPadding = 2u;
+			_editor = std::make_shared<Editor>(); _editor->SetPosition({6, RowY}); _editor->SetSize({96u, ActionSize});
+			auto cancel = GuiButtonParams::PanelButton(ActionSize);
+			cancel.Texture = "trigger_close"; cancel.OverTexture = "trigger_close_over"; cancel.DownTexture = "trigger_close_down";
+			cancel.TintColor = glm::vec3(1.0f);
+			cancel.Position = {ActionX, RowY}; cancel.Size = {ActionSize, ActionSize}; cancel.MinSize = cancel.Size;
 			_cancel = std::make_shared<GuiButton>(cancel);
 			AddChild(_label); AddChild(_editor); AddChild(_cancel);
 			_editor->Accept = [this]() { Accept(); };
