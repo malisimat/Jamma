@@ -25,6 +25,13 @@ namespace vst
 	class VstChain
 	{
 	public:
+		enum class RenderPolicy { LegacySerial, AdditiveInstruments };
+		// Immutable once the chain is published. Scratch is owned by the caller's
+		// callback state, so concurrent snapshot readers never share mutable buses.
+		void SetRenderPolicy(RenderPolicy policy) noexcept { _renderPolicy = policy; }
+		RenderPolicy Policy() const noexcept { return _renderPolicy; }
+		void ProcessRack(float* const* channels, float* const* instrumentScratch,
+			int numChannels, int numSamples) noexcept;
 		VstChain();
 		~VstChain() = default;
 
@@ -76,6 +83,13 @@ namespace vst
 		int GetLatencySamples() const noexcept;
 		// MIDI injected at a plugin incurs only its remaining serial path.
 		int GetLatencySamplesFrom(std::size_t firstPlugin) const noexcept;
+		bool FitsCompensationCeiling() const noexcept
+		{
+			if (GetLatencySamples() > 262144) return false;
+			for (std::size_t index = 0; index < _plugins.size(); ++index)
+				if (GetLatencySamplesFrom(index) > 262144) return false;
+			return true;
+		}
 		// Job/UI pump, including plugins whose editors are closed. Never callback.
 		void PollPendingChanges() const noexcept;
 
@@ -102,6 +116,7 @@ namespace vst
 		void UpdateHostTime(const HostTimeState& state) noexcept;
 
 	private:
+		RenderPolicy _renderPolicy = RenderPolicy::LegacySerial;
 		std::vector<std::shared_ptr<IVstPlugin>> _plugins;
 	};
 }

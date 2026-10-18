@@ -103,6 +103,8 @@ namespace vst
 		utils::Size2d GetEditorSize() const noexcept override { return _editorSize; }
 
 		bool IsLoaded() const noexcept override { return _isLoaded; }
+		RenderRole Role() const noexcept override { return _role; }
+		MidiInputCapabilities MidiInput() const noexcept override { return _midiInput; }
 		const std::string& Name() const noexcept override { return _name; }
 
 		void SetBypassed(bool bypass) noexcept override
@@ -153,6 +155,9 @@ namespace vst
 		}
 
 	private:
+		// Loader writes before publication; readers only inspect cached values.
+		RenderRole _role = RenderRole::Unknown;
+		MidiInputCapabilities _midiInput{};
 #ifdef JAMMA_VST2_ENABLED
 			static constexpr size_t MaxMidiEventsPerBlock = 256u;
 			struct MidiEventBlock

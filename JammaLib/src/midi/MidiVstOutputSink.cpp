@@ -32,6 +32,7 @@ namespace midi
 		}
 
 		const auto pluginIndex = routes->PluginForOutput(midiOutputIndex);
+		if (pluginIndex == MidiVstRoutingSnapshot::MissingPlugin) return;
 		if (pluginIndex != MidiVstRoutingSnapshot::NoPlugin && pluginIndex < chain->NumPlugins())
 		{
 			chain->SendMidiEventToPlugin(pluginIndex, event, isRealtime);

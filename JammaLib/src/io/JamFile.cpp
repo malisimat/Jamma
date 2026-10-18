@@ -828,10 +828,28 @@ bool JamFile::ToStream(JamFile jam, std::stringstream& ss)
 		}
 
 		ss << "]";
-		if (!station.AllowedMidiChannels.empty())
+		if (!station.AllowedMidiChannels.empty() || station.HasLiveVstRoutes)
 			ss << "," << kvIntArray("allowedmidichannels", station.AllowedMidiChannels);
 		if (!station.MidiRoutes.empty())
 			ss << "," << quoted("midiRoutes") << ":" << midiRoutesToJson(station.MidiRoutes);
+		if (station.AdditiveVstRack) ss << "," << kvBool("additiveVstRack", *station.AdditiveVstRack);
+		if (station.HasLiveVstRoutes)
+		{
+			ss << ",\"liveVstRoutes\":[";
+			for (auto channel = 0u; channel < 16u; ++channel)
+			{
+				if (channel) ss << ",";
+				const auto& route = station.LiveVstRoutes[channel];
+				ss << "{" << kvBool("explicit", route.Explicit) << ",\"plugins\":[";
+				for (std::size_t index = 0; index < route.PluginIds.size(); ++index)
+				{
+					if (index) ss << ",";
+					ss << quoted(route.PluginIds[index]);
+				}
+				ss << "]}";
+			}
+			ss << "]";
+		}
 		if (station.HasAudioRoutes)
 			ss << "," << quoted("audioRoutes") << ":" << audioRoutesToJson(station.AudioRoutes);
 		if (!station.VstChain.empty())
@@ -1661,6 +1679,32 @@ std::optional<JamFile::Station> JamFile::Station::FromJson(Json::JsonPart json)
 	allowedMidiChannels.erase(std::unique(allowedMidiChannels.begin(), allowedMidiChannels.end()), allowedMidiChannels.end());
 	station.AllowedMidiChannels = std::move(allowedMidiChannels);
 	station.MidiRoutes = std::move(midiRoutes);
+	if (const auto policy = json.KeyValues.find("additiveVstRack"); policy != json.KeyValues.end())
+	{
+		if (policy->second.index() != 0) return std::nullopt;
+		station.AdditiveVstRack = std::get<bool>(policy->second);
+	}
+	if (const auto live = json.KeyValues.find("liveVstRoutes"); live != json.KeyValues.end())
+	{
+		if (live->second.index() != 5) return std::nullopt;
+		const auto& array = std::get<Json::JsonArray>(live->second);
+		if (array.Array.index() != 5) return std::nullopt;
+		const auto& channels = std::get<std::vector<Json::JsonPart>>(array.Array);
+		if (channels.size() != 16u) return std::nullopt;
+		station.HasLiveVstRoutes = true;
+		for (auto channel = 0u; channel < 16u; ++channel)
+		{
+			const auto mode = channels[channel].KeyValues.find("explicit");
+			const auto ids = channels[channel].KeyValues.find("plugins");
+			if (mode == channels[channel].KeyValues.end() || mode->second.index() != 0
+				|| ids == channels[channel].KeyValues.end() || ids->second.index() != 5) return std::nullopt;
+			auto& route = station.LiveVstRoutes[channel];
+			route.Explicit = std::get<bool>(mode->second);
+			const auto& values = std::get<Json::JsonArray>(ids->second);
+			if (values.Array.index() == 4) route.PluginIds = std::get<std::vector<std::string>>(values.Array);
+			else if (!(values.Array.index() == 0 && std::get<std::vector<bool>>(values.Array).empty())) return std::nullopt;
+		}
+	}
 	station.AudioRoutes = std::move(audioRoutes);
 	station.HasAudioRoutes = hasAudioRoutes;
 	return station;

@@ -238,10 +238,13 @@ bool Vst2Plugin::Load(const std::wstring& path,
 	{
 		static const char kReceiveVstEvents[] = "receiveVstEvents";
 		static const char kReceiveVstMidiEvent[] = "receiveVstMidiEvent";
-		_effect->dispatcher(_effect, effCanDo, 0, 0,
+		const auto receivesEvents = _effect->dispatcher(_effect, effCanDo, 0, 0,
 			const_cast<char*>(kReceiveVstEvents), 0.0f);
-		_effect->dispatcher(_effect, effCanDo, 0, 0,
+		const auto receivesMidi = _effect->dispatcher(_effect, effCanDo, 0, 0,
 			const_cast<char*>(kReceiveVstMidiEvent), 0.0f);
+		_role = (_effect->flags & effFlagsIsSynth) != 0 ? RenderRole::Instrument : RenderRole::Effect;
+		const bool accepts = receivesEvents > 0 || receivesMidi > 0 || _role == RenderRole::Instrument;
+		_midiInput = { accepts, accepts, receivesEvents != 0 || receivesMidi != 0 || accepts };
 	}
 
 	for (int32_t input = 0; input < _effect->numInputs; ++input)

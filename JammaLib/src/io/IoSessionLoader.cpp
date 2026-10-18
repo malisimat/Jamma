@@ -48,7 +48,7 @@ IoSessionLoader::ReconstructedSession IoSessionLoader::Reconstruct(const JamFile
 		auto station = Station::FromFile(stationParams, mixerParams, stationStruct, directory);
 		if (station.has_value())
 		{
-			if (stationStruct.AllowedMidiChannels.empty())
+			if (stationStruct.AllowedMidiChannels.empty() && !stationStruct.HasLiveVstRoutes)
 			{
 				const auto defaultChannel = static_cast<int>((stationParams.Index % 16u) + 1u);
 				station.value()->SetAllowedMidiChannels({ defaultChannel });

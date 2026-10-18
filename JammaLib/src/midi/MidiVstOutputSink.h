@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <limits>
 #include <vector>
+#include <string>
 
 #include "MidiLoop.h"
 
@@ -14,11 +15,19 @@ namespace vst
 
 namespace midi
 {
+	struct LiveVstChannelRoute
+	{
+		bool Explicit = false;
+		std::vector<std::string> PluginIds;
+		bool operator==(const LiveVstChannelRoute&) const = default;
+	};
 	static constexpr unsigned int LiveMidiOutputIndex = ~0u;
 
 	struct MidiVstRoutingSnapshot
 	{
 		static constexpr size_t NoPlugin = (std::numeric_limits<size_t>::max)();
+		// Persistable explicit silence after removal; NoPlugin means broadcast.
+		static constexpr size_t MissingPlugin = (std::numeric_limits<unsigned int>::max)() - 1u;
 
 		std::vector<size_t> PluginByMidiOutput;
 		size_t LivePlugin = NoPlugin;

@@ -137,6 +137,8 @@ namespace vst
 		utils::Size2d GetEditorSize() const noexcept override;
 
 		bool IsLoaded() const noexcept override { return _isLoaded; }
+		RenderRole Role() const noexcept override { return _role; }
+		MidiInputCapabilities MidiInput() const noexcept override { return _midiInput; }
 		const std::string& Name() const noexcept override { return _name; }
 
 		void SetBypassed(bool bypass) noexcept override
@@ -166,6 +168,9 @@ namespace vst
 		void PollPendingControllerChanges() const noexcept;
 
 	private:
+		// Discovery owner writes before publication; no SDK calls from metadata readers.
+		RenderRole _role = RenderRole::Unknown;
+		MidiInputCapabilities _midiInput{};
 		friend struct Vst3PluginTestAccess;
 		static std::wstring ResolveModulePath(const std::wstring& path, std::error_code& error);
 		bool LoadModule(const std::wstring& path, const char* stage);

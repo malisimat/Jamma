@@ -1,5 +1,7 @@
 # Jamma alpha handover — 18 October 2026
 
+Later recovery state is recorded in [alpha-recovery-2026-10-18.md](alpha-recovery-2026-10-18.md). Naming was subsequently accepted and merged; the original snapshot below remains a historical handover.
+
 ## Repository and local integration
 
 - Repository: `C:\Users\matto\Source\Repos\Jamma`.

@@ -1037,6 +1037,19 @@ bool Vst3Plugin::PreInit(const std::wstring& path)
 		{
 			componentCid = FUID::fromTUID(classInfo.cid);
 			_name = classInfo.name;
+			IPluginFactory2* rawFactory2 = nullptr;
+			if (_impl->factory->queryInterface(IPluginFactory2::iid, (void**)&rawFactory2) == kResultOk && rawFactory2)
+			{
+				IPtr<IPluginFactory2> factory2(rawFactory2, false);
+				PClassInfo2 details{};
+				if (factory2->getClassInfo2(i, &details) == kResultOk)
+				{
+					const std::string categories(details.subCategories);
+					_role = categories.find("Instrument") != std::string::npos && categories.find("Fx") != std::string::npos ? RenderRole::Unknown
+					: categories.find("Instrument") != std::string::npos ? RenderRole::Instrument
+						: categories.find("Fx") != std::string::npos ? RenderRole::Effect : RenderRole::Unknown;
+				}
+			}
 			found = true;
 			break;
 		}
@@ -1212,6 +1225,19 @@ bool Vst3Plugin::Load(const std::wstring& path,
 			{
 				componentCid = FUID::fromTUID(classInfo.cid);
 				_name = classInfo.name;
+			IPluginFactory2* rawFactory2 = nullptr;
+			if (factory->queryInterface(IPluginFactory2::iid, (void**)&rawFactory2) == kResultOk && rawFactory2)
+			{
+				IPtr<IPluginFactory2> factory2(rawFactory2, false);
+				PClassInfo2 details{};
+				if (factory2->getClassInfo2(i, &details) == kResultOk)
+				{
+					const std::string categories(details.subCategories);
+					_role = categories.find("Instrument") != std::string::npos && categories.find("Fx") != std::string::npos ? RenderRole::Unknown
+					: categories.find("Instrument") != std::string::npos ? RenderRole::Instrument
+						: categories.find("Fx") != std::string::npos ? RenderRole::Effect : RenderRole::Unknown;
+				}
+			}
 				found = true;
 				break;
 			}
@@ -1411,6 +1437,7 @@ bool Vst3Plugin::Load(const std::wstring& path,
 		return cleanupFailedLoad();
 	}
 
+	_midiInput = { _impl->component->getBusCount(kEvent, kInput) > 0, false, true };
 	// 9. Pre-allocate ProcessData so ProcessBlock() is heap-allocation-free
 	_impl->inputScratchStorage.assign(static_cast<size_t>(_impl->inputChannels) * constants::MaxBlockSize, 0.0f);
 	_impl->outputScratchStorage.assign(static_cast<size_t>(_impl->outputChannels) * constants::MaxBlockSize, 0.0f);
@@ -1503,6 +1530,7 @@ bool Vst3Plugin::Load(const std::wstring& path,
 			&& rawMidiMapping)
 		{
 			_impl->midiMapping = IPtr<IMidiMapping>(rawMidiMapping, false);
+			_midiInput.Controllers = true;
 			_impl->midiMapRebuildRequested.store(true, std::memory_order_release);
 			std::cout << "[Vst3Plugin] IMidiMapping available; mapping refresh requested" << std::endl;
 		}
@@ -2358,7 +2386,8 @@ void vst::QueueForUiThreadDestroy(std::shared_ptr<vst::IVstPlugin> plugin)
 		return;
 
 	std::lock_guard<std::mutex> lock(Vst3Plugin::_UiDestroyQueueMutex());
-	Vst3Plugin::_UiDestroyQueue().push_back(std::move(plugin));
+	auto& queue = Vst3Plugin::_UiDestroyQueue();
+	if (std::find(queue.begin(), queue.end(), plugin) == queue.end()) queue.push_back(std::move(plugin));
 }
 
 std::size_t vst::DrainUiThreadDestroyQueue() noexcept
@@ -2366,7 +2395,17 @@ std::size_t vst::DrainUiThreadDestroyQueue() noexcept
 	std::vector<std::shared_ptr<vst::IVstPlugin>> drained;
 	{
 		std::lock_guard<std::mutex> lock(Vst3Plugin::_UiDestroyQueueMutex());
-		drained.swap(Vst3Plugin::_UiDestroyQueue());
+		auto& queued = Vst3Plugin::_UiDestroyQueue();
+		// Audio leases, release recovery and native editors may still pin a
+		// removed processor. Keep the queue's reference until it is the last one,
+		// so its SDK destructor always runs here on the window thread.
+		for (auto entry = queued.begin(); entry != queued.end();)
+			if (entry->use_count() == 1u)
+			{
+				drained.push_back(std::move(*entry));
+				entry = queued.erase(entry);
+			}
+			else ++entry;
 	}
 	const std::size_t count = drained.size();
 	// drained destructs here on the UI thread, running ~Vst3Plugin → Unload →

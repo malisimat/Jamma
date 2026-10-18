@@ -117,9 +117,31 @@ TEST_F(VstRackLoadTest, MissingPluginsKeepAlignedStateAndRecoverableSlot)
 
 TEST_F(VstRackLoadTest, AsyncFailureCompletesAndStaleRemovalCannotRemoveRetry)
 {
-	CheckRetryAndStaleUnload(Station());
 	CheckRetryAndStaleUnload(Take());
 	CheckRetryAndStaleUnload(Loop());
+}
+
+TEST_F(VstRackLoadTest, StationRetryPreservesIdentityStateBypassAndPendingRemoval)
+{
+	auto station = Station();
+	const std::vector<std::uint8_t> state{1, 4, 9};
+	ASSERT_FALSE(station->LoadVstPluginSynchronously(MissingPath(L"old.dll"), state, true, "stable-slot"));
+	ASSERT_TRUE(station->LoadManagedVstSlot(MissingPath(L"retry.dll"), "stable-slot"));
+	EXPECT_FALSE(station->LoadManagedVstSlot(MissingPath(L"duplicate.dll"), "stable-slot"));
+	for (const auto& job : station->CommitChanges()) station->OnAction(job);
+	station->CommitChanges();
+	const auto entries = station->VstEntries();
+	ASSERT_EQ(1u, entries.size());
+	EXPECT_EQ("stable-slot", entries[0].Id);
+	EXPECT_TRUE(entries[0].Bypass);
+	EXPECT_EQ(state, entries[0].DecodeState());
+	ASSERT_TRUE(station->LoadManagedVstSlot(MissingPath(L"cancelled.dll")));
+	const auto pending = station->GetVstRackSlots().back();
+	EXPECT_TRUE(pending.Pending);
+	ASSERT_TRUE(station->UnloadManagedVstPlugin(pending.Identity));
+	for (const auto& job : station->CommitChanges()) station->OnAction(job);
+	station->CommitChanges();
+	EXPECT_EQ(1u, station->GetVstRackSlots().size());
 }
 
 TEST_F(VstRackLoadTest, SeveralJobsBeforePublicationComposeRatherThanOverwrite)

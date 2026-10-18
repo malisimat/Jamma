@@ -291,6 +291,16 @@ namespace engine
 			bool bypass = false, const std::string& stateId = {});
 		void UnloadVstPlugin(size_t index);
 		vst::VstRackSlot GetVstRackSlot() const;
+		static constexpr std::size_t MaxRackPlugins = 32u;
+		static constexpr std::size_t MaxRackDestinations = 64u; // Active, pending and retiring recovery owners.
+		std::vector<vst::VstRackSlot> GetVstRackSlots() const;
+		bool LoadManagedVstSlot(std::wstring path, const std::string& retryIdentity = {});
+		bool SetLiveVstChannelRoute(unsigned int channel, midi::LiveVstChannelRoute route, std::uint64_t revision);
+		const std::array<midi::LiveVstChannelRoute, 16>& LiveVstChannelRoutes() const noexcept { return _liveVstChannelRoutes; }
+		std::uint64_t RackRevision() const noexcept { return _rackRevision; }
+		vst::VstChain::RenderPolicy RackRenderPolicy() const noexcept { return _rackRenderPolicy; }
+		bool ConvertRackToAdditive(std::uint64_t revision);
+		bool RackInactive() const noexcept { return _rackInactive; }
 		bool LoadManagedVstPlugin(std::wstring path);
 		bool UnloadManagedVstPlugin(const std::string& identity);
 		void ForceUnloadAllVstPlugins();
@@ -358,6 +368,12 @@ namespace engine
 		{
 			std::shared_ptr<vst::IVstPlugin> Plugin;
 			std::bitset<midi::MidiNote::TotalNoteSlots> LiveHeld;
+			// Callback-owned pedal accounting, independent of changing live routes.
+			std::bitset<16> LiveSustain;
+			std::bitset<16> PluginSustain;
+			std::bitset<16> BlockSustainAtStart;
+			std::bitset<16> PendingSustainRelease;
+			std::array<unsigned int, 16> RecordedSustainOwners{};
 			// Audio owner consumes; quiescent lifecycle owner marks actual delivered
 			// live notes after all writers drain. Destination lifetime follows snapshots.
 			std::bitset<midi::MidiNote::TotalNoteSlots> PendingLiveReset;
@@ -389,6 +405,7 @@ namespace engine
 			unsigned int ActiveCompensationDelaySamps = 0u; // Audio callback.
 			bool RecoveringCompensationChange = false; // Current callback block.
 			bool LastBypassed = false; // Audio callback.
+			std::atomic<bool> RetirementReleased{false}; // Audio publishes, structural owner reclaims.
 		};
 		struct MidiPlaybackBinding
 		{
@@ -397,6 +414,7 @@ namespace engine
 			std::shared_ptr<MidiDestination> Destination;
 			std::bitset<midi::MidiNote::TotalNoteSlots> Held;
 			std::bitset<midi::MidiNote::TotalNoteSlots> AudibleHeld; // Delayed note reached the plugin.
+			std::bitset<16> AudibleSustain; // Callback-owned delivered pedal state.
 			std::array<std::uint16_t, midi::MidiNote::TotalNoteSlots> AudibleSlots{};
 			std::array<std::uint16_t, midi::MidiNote::TotalNoteSlots> AudibleSlotPositions{};
 			std::size_t AudibleSlotCount = 0u; // Dense callback-owned active slots.
@@ -430,8 +448,11 @@ namespace engine
 			std::vector<std::shared_ptr<audio::AudioBuffer>> AudioBuffers;
 			std::vector<float> VstBlockScratch;
 			std::vector<float*> VstBlockPtrs;
+			std::vector<float> InstrumentScratch;
+			std::vector<float*> InstrumentPtrs;
 			std::shared_ptr<vst::VstChain> MidiChain;
 			std::vector<std::shared_ptr<MidiDestination>> LiveMidiDestinations;
+			std::array<std::vector<std::shared_ptr<MidiDestination>>, 16> LiveChannelDestinations;
 			std::vector<std::shared_ptr<MidiDestination>> MidiDestinations;
 			std::vector<std::shared_ptr<MidiDestination>> RetiredMidiDestinations;
 			mutable std::atomic<bool> RetiredMidiQueueCancelled{ false };
@@ -635,6 +656,13 @@ namespace engine
 		mutable std::mutex _vstPathsMutex;
 		std::vector<std::wstring> _vstPluginPaths;
 		std::vector<io::JamFile::VstEntry> _vstSavedEntries;
+		// Serialized structural owner writes; UI/export reads under Scene's owner
+		// lock. Audio sees only prepared lists/policy in its immutable snapshot.
+		std::array<midi::LiveVstChannelRoute, 16> _liveVstChannelRoutes{};
+		std::atomic<vst::VstChain::RenderPolicy> _rackRenderPolicy{vst::VstChain::RenderPolicy::AdditiveInstruments};
+		std::atomic<std::uint64_t> _rackRevision{1u}; // UI/job metadata publication; audio never reads.
+		std::vector<std::string> _pendingRackIds; // _vstPathsMutex; completion clears by identity.
+		bool _rackInactive = false; // Reconstruction/structural owner; raw saved entries remain exportable.
 		// UI stages requests, job completes them. Audio never reads this counter.
 		std::atomic<unsigned int> _vstJobsPending{ 0u };
 		midi::MidiQueue<1024> _immediateLiveMidiIngress;
