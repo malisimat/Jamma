@@ -140,6 +140,22 @@ Scene::Scene(SceneParams params,
 		// Text acceptance also runs on blur/keyboard, outside HUD dispatch locking.
 		return RequestRigEdit(candidate) == RigCoordinator::EditResult::Pending;
 	};
+	hudParams.TriggerLearnAdmission = [this]() -> std::string
+	{
+		if (_inputSubsystem->VstCcLearnActive()) return "Finish VST CC learn before learning a trigger";
+		if (_stationManagement.Busy() || _rigSaveInProgress || _rigSaveDialogOpen || _controlOperation != ControlOperation::None ||
+			_loopEditor.IsEngaged() || _isSceneQuitting.load(std::memory_order_acquire)) return "Finish the current edit or save before learning";
+		return {};
+	};
+	hudParams.TriggerLearnInput = [this](std::optional<io::TriggerBindingLearn::Request> request)
+	{
+		if (request) { if (request->Session) _inputSubsystem->RequestTriggerLearn(*request); else _inputSubsystem->EndTriggerLearn(); }
+		return _inputSubsystem->TriggerLearnObservation();
+	};
+	hudParams.TriggerLearnDevices = [this] {
+		const auto inputs = _midiState.load(std::memory_order_acquire);
+		return io::TriggerBindingLearn::Devices(_userConfig, inputs->Connection, inputs->ConnectedSerialIds);
+	};
 	_hudPanel = std::make_shared<GuiHud>(hudParams);
 	AddChild(_hudPanel);
 
@@ -1591,6 +1607,10 @@ ActionResult Scene::_OnPointerMove(TouchMoveAction action)
 
 ActionResult Scene::OnAction(KeyAction action)
 {
+	const bool keyDown = action.KeyActionType == KeyAction::KEY_DOWN;
+	const bool freshLearnKey = action.KeyChar < _learnKeysDown.size() && keyDown && !_learnKeysDown[action.KeyChar] &&
+		!_learnKeysDown[VK_LWIN] && !_learnKeysDown[VK_RWIN];
+	if (action.KeyChar < _learnKeysDown.size()) _learnKeysDown[action.KeyChar] = keyDown;
 	action.SetActionTime(Timer::GetTime());
 	const bool contextual = _rigSaveDialogOpen || _controlWriterExclusion.owns_lock() ||
 		_popupManager.IsOpen() || _focusManager.IsEditingText() || _loopEditor.IsEngaged();
@@ -1677,6 +1697,15 @@ ActionResult Scene::OnAction(KeyAction action)
 		if (!_popupManager.IsOpen() && !_focusManager.IsEditingText() && !_loopEditor.IsEditingText())
 			return ActionResult::NoAction();
 	}
+	if (contextual && action.KeyActionType == KeyAction::KEY_UP)
+	{
+		// These shortcut owners admitted their holds before a modal/text context.
+		// Cleanup is explicit and never invokes ordinary trigger matching.
+		std::scoped_lock lock(_sceneMutex);
+		if (action.KeyChar == VK_INSERT) _inputSubsystem->HandleAutomationKey(action, _stations, {}, {});
+		if (action.KeyChar == VK_PRIOR || action.KeyChar == VK_NEXT) _inputSubsystem->HandleChannelOverrideKey(action, _stations);
+		if ((action.KeyChar == 192u || action.KeyChar == 96u) && _hudPanel) _hudPanel->SetCableRevealHeld(false);
+	}
 	if (_controlWriterExclusion.owns_lock()) return ActionResult::NoAction();
 	if (suppressedKey && !contextual) return ActionResult::NoAction();
 	if (27u == action.KeyChar && _quantisationInteraction.OwnsPointer())
@@ -1701,6 +1730,7 @@ ActionResult Scene::OnAction(KeyAction action)
 	}
 	if (_popupManager.IsOpen())
 	{
+		{ std::scoped_lock lock(_sceneMutex); if (_hudPanel && _hudPanel->TriggerLearnKeyboard(action, freshLearnKey)) _inputSubsystem->ObserveTriggerLearnKey(action.KeyChar); }
 		_loopEditor.CancelInput();
 		auto popupRes = _popupManager.OnAction(action);
 		_ApplyRemoteTempoPromptDecision();
@@ -1839,8 +1869,9 @@ ActionResult Scene::OnAction(KeyAction action)
 	{
 		auto hovered = _ChildFromPath(_selector->CurrentHover());
 		auto hoveredTake = std::dynamic_pointer_cast<LoopTake>(hovered);
+		std::scoped_lock lock(_sceneMutex);
 		auto automationRes = _inputSubsystem->HandleAutomationKey(action,
-			SnapshotStations(),
+			_stations,
 			_selector->CurrentHover(),
 			hoveredTake);
 		if (automationRes.IsEaten)
@@ -1965,8 +1996,13 @@ ActionResult Scene::OnAction(GuiAction action)
 		else _deviceStatus->SetString("Preferences not saved; retry available");
 		return ActionResult::NoAction();
 	}
-	if (action.ElementType == GuiAction::ACTIONELEMENT_BUTTON && action.Index == GuiMainPanel::SaveRigDefaultControlIndex)
-	{ _rigSaveRequested = true; return ActionResult::NoAction(); }
+	if (action.ElementType == GuiAction::ACTIONELEMENT_BUTTON &&
+		(action.Index == GuiMainPanel::SaveRigDefaultControlIndex || action.Index == GuiMainPanel::SaveRigControlIndex || action.Index == GuiMainPanel::SaveRigAsControlIndex))
+	{
+		_rigSaveMode = action.Index == GuiMainPanel::SaveRigControlIndex ? RigSaveMode::Save :
+			action.Index == GuiMainPanel::SaveRigAsControlIndex ? RigSaveMode::SaveAs : RigSaveMode::StartupDefault;
+		_rigSaveRequested = true; return ActionResult::NoAction();
+	}
 	if (action.ElementType == GuiAction::ACTIONELEMENT_BUTTON &&
 		(action.Index == GuiStationControls::CancelTakeDitchControlIndex || action.Index == GuiStationControls::ConfirmTakeDitchControlIndex))
 	{
@@ -2684,7 +2720,7 @@ std::string Scene::_RequestStationRenameLocked(const std::shared_ptr<Station>& s
 
 RigCoordinator::EditResult Scene::_RequestRigEditLocked(const io::RigFile& candidateRig)
 {
-	if (_controlOperation != ControlOperation::None || _stationManagement.Busy() || _rigSaveDialogOpen) return RigCoordinator::EditResult::EditsDisabled;
+	if (_controlOperation != ControlOperation::None || _stationManagement.Busy() || _rigSaveDialogOpen || _rigSaveInProgress) return RigCoordinator::EditResult::EditsDisabled;
 	switch (_RoutingEditAvailability())
 	{
 	case gui::RoutingEditAvailability::Applying: return RigCoordinator::EditResult::EditsDisabled;
@@ -3057,6 +3093,8 @@ void Scene::Shutdown()
 		// Publish the permanent close token before the job loop can exit and make
 		// its final acknowledgement. Releasing quit first can strand that token.
 		_inputSubsystem->CloseRigTriggerInputForever();
+		_inputSubsystem->EndTriggerLearn();
+		if (_hudPanel) _hudPanel->CancelTriggerLearn();
 		_sourceLossRecoveryGateClosed = true; // Permanent admission closure outlives recovery.
 		_isSceneQuitting.store(true, std::memory_order_release);
 	}
@@ -3146,6 +3184,7 @@ void Scene::CommitChanges()
 		// CommitChanges is UI-owned: reconcile before resource traversal, VUs and drawing.
 		if (_hudPanel && _hudPanel->ApplyPendingRoutingConfig())
 			hoverChanged = true;
+		if (_hudPanel) _hudPanel->UpdateTriggerLearn();
 
 		if (pendingRemoteSnapshot.has_value())
 			_UpdateRemoteStationsFromSnapshot(pendingRemoteSnapshot.value());
@@ -4422,6 +4461,11 @@ void Scene::_ReleaseQuantisationInputLocked()
 
 void Scene::OnInputFocusLost()
 {
+	const bool leftWindowsHeld = _learnKeysDown[VK_LWIN], rightWindowsHeld = _learnKeysDown[VK_RWIN];
+	_learnKeysDown.fill(false);
+	// Windows modifiers have no Action flag. Require their observed release,
+	// including after focus loss, before admitting a plain learned key.
+	_learnKeysDown[VK_LWIN] = leftWindowsHeld; _learnKeysDown[VK_RWIN] = rightWindowsHeld;
 	_contextualKeyboard.FocusLost();
 	if (const auto rig = _rigCoordinator.Accepted(); rig && _inputSubsystem->TryAcceptUiRigTriggerInput(rig->Revision))
 	{
@@ -4434,6 +4478,12 @@ void Scene::OnInputFocusLost()
 	_focusManager.ClearFocus();
 	std::scoped_lock lock(_sceneMutex);
 	_stationControls.Cancel();
+	for (const auto key : {VK_INSERT, VK_PRIOR, VK_NEXT})
+	{
+		actions::KeyAction release; release.KeyChar = key; release.KeyActionType = KeyAction::KEY_UP;
+		if (key == VK_INSERT) _inputSubsystem->HandleAutomationKey(release, _stations, {}, {});
+		else _inputSubsystem->HandleChannelOverrideKey(release, _stations);
+	}
 	_performanceGroups.ResetKeys();
 	_ReleaseQuantisationInputLocked();
 	if (_hudPanel) _hudPanel->ClearPointerState();
@@ -5140,13 +5190,29 @@ bool Scene::ConsumeRigSaveRequest()
 
 std::optional<io::RigFile> Scene::CaptureCommittedRig() const
 {
+	const auto capture = CaptureCommittedRigVersion();
+	return capture ? std::optional(capture->Rig) : std::nullopt;
+}
+
+std::optional<Scene::CapturedRig> Scene::CaptureCommittedRigVersion() const
+{
 	std::scoped_lock lock(_sceneMutex);
 	if (!_rigCoordinator.EditsEnabled() || _stationManagement.Busy()) return std::nullopt;
 	const auto accepted = _rigCoordinator.Accepted();
 	if (!accepted) return std::nullopt;
 	auto rig = accepted->Rig;
 	rig.User = _userConfig;
-	return rig;
+	return CapturedRig{std::move(rig), accepted->Revision};
+}
+
+std::optional<Scene::CapturedRig> Scene::BeginExplicitRigSave()
+{
+	std::scoped_lock lock(_sceneMutex);
+	if (!_rigCoordinator.EditsEnabled() || _stationManagement.Busy() || _rigSaveInProgress ||
+		_controlOperation != ControlOperation::None || _popupManager.IsOpen() || _isSceneQuitting.load(std::memory_order_acquire)) return {};
+	const auto accepted = _rigCoordinator.Accepted(); if (!accepted) return {};
+	auto rig = accepted->Rig; rig.User = _userConfig; _rigSaveInProgress = true;
+	return CapturedRig{std::move(rig), accepted->Revision};
 }
 
 void Scene::SetRigSaveDialogOpen(bool open)

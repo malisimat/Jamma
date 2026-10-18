@@ -13,6 +13,7 @@
 #include "CableInteraction.h"
 #include "../io/RigFile.h"
 #include "../actions/TouchAction.h"
+#include "GuiTriggerLearn.h"
 
 namespace resources
 {
@@ -47,6 +48,9 @@ namespace gui
 
 		std::function<bool(const io::RigFile&)> SubmitRigEdit;
 		std::function<bool(const io::RigFile&)> SubmitTriggerRename;
+		std::function<std::string()> TriggerLearnAdmission;
+		std::function<std::vector<io::TriggerBindingLearn::Device>()> TriggerLearnDevices;
+		std::function<std::shared_ptr<const io::TriggerBindingLearn::Observation>(std::optional<io::TriggerBindingLearn::Request>)> TriggerLearnInput;
 		std::function<RoutingEditAvailability()> RoutingEditAvailabilityState;
 		std::function<bool(std::uint64_t)> AcceptTriggerInput;
 		std::function<void(const std::shared_ptr<base::GuiElement>&, bool)> FocusEditor;
@@ -84,6 +88,7 @@ namespace gui
 
 	public:
 		virtual void Draw(base::DrawContext& ctx) override;
+		void InitResources(resources::ResourceLib& resources, bool force) override;
 		virtual void SetSize(utils::Size2d size) override;
 		virtual actions::ActionResult OnAction(actions::TouchAction action) override;
 		virtual actions::ActionResult OnAction(actions::TouchMoveAction action) override;
@@ -93,6 +98,10 @@ namespace gui
 		bool HasLabelPress() const { return _labelPress.has_value(); }
 		bool CapturesPointer(utils::Position2d localPoint) const;
 		void CancelTriggerRenames();
+		void UpdateTriggerLearn(); // Window owner, with Scene serialization held.
+		void CancelTriggerLearn();
+		bool TriggerLearnKeyboard(const actions::KeyAction& action, bool fresh);
+		bool HasTriggerLearn() const { return _triggerLearn != nullptr; }
 		void SetCableRevealHeld(bool held);
 		void SetAudioInputPeak(unsigned int channel, float peak, unsigned int numSamps);
 		void SetMidiInputPeak(unsigned int input, float peak, unsigned int numSamps);
@@ -173,6 +182,7 @@ namespace gui
 		void _OpenDeleteConfirmation(size_t triggerIndex);
 		void _ConfirmDelete();
 		void _OpenRename(size_t triggerIndex);
+		void _OpenTriggerLearn(const std::string& id, bool activate, bool altHeld);
 		std::string _SubmitRename(const std::string& name, const std::string& id, std::uint64_t revision);
 		bool _SubmitCandidate(const io::RigFile& candidate);
 		bool _CanEditTrigger(size_t triggerIndex) const;
@@ -214,7 +224,7 @@ namespace gui
 			const glm::vec3& tint,
 			unsigned int width, bool midi, bool available);
 		std::shared_ptr<GuiButton> _MakeTriggerButton(const std::string& text,
-			std::weak_ptr<engine::Trigger> trigger) const;
+			std::weak_ptr<engine::Trigger> trigger, std::string id);
 		struct SourceWidgets
 		{
 			std::shared_ptr<GuiButton> Button;
@@ -295,6 +305,12 @@ namespace gui
 		std::optional<size_t> _deleteTriggerIndex;
 		std::function<bool(const io::RigFile&)> _submitRigEdit;
 		std::function<bool(const io::RigFile&)> _submitTriggerRename;
+		std::function<std::string()> _triggerLearnAdmission;
+		std::function<std::vector<io::TriggerBindingLearn::Device>()> _triggerLearnDevices;
+		std::function<std::shared_ptr<const io::TriggerBindingLearn::Observation>(std::optional<io::TriggerBindingLearn::Request>)> _triggerLearnInput;
+		std::shared_ptr<GuiTriggerLearn> _triggerLearn;
+		std::uint64_t _nextTriggerLearnSession = 0u;
+		bool _learnEndPending = false;
 		std::function<void(const std::shared_ptr<base::GuiElement>&, bool)> _focusEditor;
 		std::function<RoutingEditAvailability()> _routingEditAvailability;
 		std::function<bool(std::uint64_t)> _acceptTriggerInput;

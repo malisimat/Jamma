@@ -986,6 +986,8 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 	if (!jamGenerated && defaults) scene.value()->SetSessionSaveFolder(utils::GetParentDirectory(defaults->Jam));
 	hardwareDefaults->store(std::make_shared<const io::InitFile>(*defaults), std::memory_order_release);
 	RigDefaultSave rigDefaultSave(GetPath(PATH_ROAMING) + L"\\Jamma", initPath, SaveRigAtomic, UpdateIni);
+	if (const auto accepted = scene.value()->AcceptedRigSnapshot())
+		rigDefaultSave.InitializeCurrentPath(*defaults, !rigGenerated && defaults->RigOrigin != io::StartupConfig::GeneratedOrigin, accepted->Revision);
 	MSG msg{};
 	bool active = true;
 	const auto startupDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
@@ -1173,6 +1175,7 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 				if (scene.value()->JobThreadFailed()) break; // Keep outgoing failure for owner notification below.
 				window.ReplaceScene(*replacement.value());
 				scene = std::move(replacement);
+				rigDefaultSave.InvalidateSavedRevision();
 				vst::DrainUiThreadDestroyQueue();
 				scene.value()->SetSessionSaveFolder(utils::GetParentDirectory(pendingJamPath));
 				scene.value()->InitGlobalKeyCapture();
@@ -1185,7 +1188,7 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 
 		if (rigDefaultSave.Poll(*scene.value(), window.GetWindowHandle(), *defaults)) { rigReadyForDefaults = true; defaultsValid = true; hardwareDefaults->store(std::make_shared<const io::InitFile>(*defaults), std::memory_order_release); }
 		if (!rigDefaultSave.Busy() && scene.value()->ConsumeRigSaveRequest())
-			rigDefaultSave.Start(*scene.value(), window.GetWindowHandle(), *defaults);
+			rigDefaultSave.Start(*scene.value(), window.GetWindowHandle(), *defaults, scene.value()->RequestedRigSaveMode());
 		window.Render();
 		window.Swap();
 		if (!startupCompletionArmed)

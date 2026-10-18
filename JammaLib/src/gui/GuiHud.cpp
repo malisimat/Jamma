@@ -183,12 +183,13 @@ namespace gui
 			std::weak_ptr<engine::Trigger> trigger,
 			bool isActivate,
 			std::uint64_t rigRevision,
-			std::function<bool(std::uint64_t)> acceptInput) :
+			std::function<bool(std::uint64_t)> acceptInput,
+			std::function<void(bool)> learn = {}) :
 			GuiElement(params),
 			_trigger(std::move(trigger)),
 			_isActivate(isActivate),
 			_rigRevision(rigRevision),
-			_acceptInput(std::move(acceptInput))
+			_acceptInput(std::move(acceptInput)), _learn(std::move(learn))
 		{
 		}
 
@@ -206,6 +207,18 @@ namespace gui
 		{
 			if (!_isEnabled || !_isVisible)
 				return actions::ActionResult::NoAction();
+			if (_learnGesture)
+			{
+				if (action.Touch == _learnSource && action.Index == _learnIndex && action.State == actions::TouchAction::TOUCH_UP)
+				{ _learnGesture = false; if (HitTest(action.Position)) _learn((action.Modifiers & base::Action::MODIFIER_ALT) != 0); }
+				return {true, {}, {}, actions::ACTIONRESULT_DEFAULT, nullptr, shared_from_this()};
+			}
+			if (action.State == actions::TouchAction::TOUCH_DOWN && HitTest(action.Position) &&
+				(action.Modifiers & base::Action::MODIFIER_ALT) && _learn)
+			{
+				_learnGesture = true; _learnSource = action.Touch; _learnIndex = action.Index;
+				return {true, {}, {}, actions::ACTIONRESULT_DEFAULT, nullptr, shared_from_this()};
+			}
 
 			if ((actions::TouchAction::TOUCH_DOWN == action.State) && HitTest(action.Position))
 			{
@@ -222,6 +235,7 @@ namespace gui
 			return actions::ActionResult::NoAction();
 		}
 
+		void ClearPointerState() override { _learnGesture = false; GuiElement::ClearPointerState(); }
 	private:
 		actions::ActionResult _Dispatch(const actions::TouchAction& action)
 		{
@@ -244,6 +258,10 @@ namespace gui
 		bool _isActivate;
 		std::uint64_t _rigRevision;
 		std::function<bool(std::uint64_t)> _acceptInput;
+		std::function<void(bool)> _learn;
+		bool _learnGesture = false;
+		actions::TouchAction::TouchType _learnSource = actions::TouchAction::TOUCH_MOUSE;
+		int _learnIndex = 0;
 	};
 }
 
@@ -251,6 +269,9 @@ GuiHud::GuiHud(GuiHudParams params) :
 	GuiPanel(params),
 	_submitRigEdit(std::move(params.SubmitRigEdit)),
 	_submitTriggerRename(std::move(params.SubmitTriggerRename)),
+	_triggerLearnAdmission(std::move(params.TriggerLearnAdmission)),
+	_triggerLearnDevices(std::move(params.TriggerLearnDevices)),
+	_triggerLearnInput(std::move(params.TriggerLearnInput)),
 	_focusEditor(std::move(params.FocusEditor)),
 	_routingEditAvailability(std::move(params.RoutingEditAvailabilityState)),
 	_acceptTriggerInput(std::move(params.AcceptTriggerInput)),
@@ -408,6 +429,12 @@ Rect2d GuiHud::OccupiedTopStripBounds() const
 	return { position.X, position.Y, position.X + static_cast<int>(size.Width), position.Y + static_cast<int>(size.Height) };
 }
 
+void GuiHud::InitResources(ResourceLib& resourceLib, bool forceInit)
+{
+	GuiPanel::InitResources(resourceLib, forceInit);
+	if (_triggerLearn) _triggerLearn->InitResources(resourceLib, forceInit);
+}
+
 void GuiHud::_InitResources(ResourceLib& resourceLib, bool forceInit)
 {
 	auto valid = _InitCableShader(resourceLib);
@@ -427,6 +454,7 @@ void GuiHud::_InitResources(ResourceLib& resourceLib, bool forceInit)
 
 void GuiHud::_ReleaseResources()
 {
+	CancelTriggerLearn();
 	CancelTriggerRenames();
 	GuiPanel::_ReleaseResources();
 	graphics::GlDeleteQueue::DeleteBuffers(1, &_cableVertexBuffer);
@@ -575,7 +603,7 @@ void GuiHud::_BuildTriggerRail()
 	for (std::size_t i = 0u; i < _triggerNames.size(); ++i)
 	{
 		auto button = _MakeTriggerButton(_triggerNames[i],
-			i < _triggers.size() ? _triggers[i] : std::weak_ptr<engine::Trigger>());
+			i < _triggers.size() ? _triggers[i] : std::weak_ptr<engine::Trigger>(), i < _displayedRig.Triggers.size() ? _displayedRig.Triggers[i].Id : std::string{});
 		auto rename = std::make_shared<GuiTriggerRename>();
 		rename->Focus = _focusEditor;
 		rename->Submit = [this](const auto& name, const auto& id, auto revision) { return _SubmitRename(name, id, revision); };
@@ -1396,6 +1424,69 @@ void GuiHud::_OpenRename(size_t triggerIndex)
 	_triggerWidgets[triggerIndex].Edit->SetVisible(false);
 }
 
+void GuiHud::_OpenTriggerLearn(const std::string& id, bool activate, bool altHeld)
+{
+	if (!_popupManager || _popupManager->IsOpen() || !_triggerLearnInput) return;
+	const auto target = std::find_if(_displayedRig.Triggers.begin(), _displayedRig.Triggers.end(), [&](const auto& item) { return item.Id == id; });
+	if (target == _displayedRig.Triggers.end()) return;
+	if (!_CanEditTrigger(static_cast<std::size_t>(target - _displayedRig.Triggers.begin())))
+	{ SetQuantisationFeedback("Finish trigger action before learning bindings"); return; }
+	const auto admission = _triggerLearnAdmission ? _triggerLearnAdmission() : std::string{};
+	if (!admission.empty()) { SetQuantisationFeedback(admission); return; }
+	CancelTriggerLearn();
+	CancelTriggerRenames(); _CancelCableDrag();
+	_triggerLearn = std::make_shared<GuiTriggerLearn>();
+	_triggerLearn->Init(_displayedRig, id, activate ? io::RigFile::Control::Activate : io::RigFile::Control::Ditch,
+		_displayedRevision, ++_nextTriggerLearnSession, GetSize(), altHeld, _triggerLearnDevices ? _triggerLearnDevices() : std::vector<io::TriggerBindingLearn::Device>{});
+	auto weak = std::weak_ptr<GuiTriggerLearn>(_triggerLearn);
+	_popupManager->Open(_triggerLearn, shared_from_this(), {}, [weak] { const auto dialog = weak.lock(); return !dialog || !dialog->Applying; });
+}
+void GuiHud::CancelTriggerLearn()
+{
+	if (!_triggerLearn) return;
+	if (_popupManager) _popupManager->Close(_triggerLearn);
+	_triggerLearn->ReleaseResources(); _triggerLearn->DetachGuiOwnershipForRetirement();
+	_triggerLearn.reset(); _learnEndPending = true;
+}
+bool GuiHud::TriggerLearnKeyboard(const actions::KeyAction& action, bool fresh)
+{
+	return _triggerLearn && _popupManager && _popupManager->Contains(_triggerLearn) && _triggerLearn->AdmitKeyboard(action, fresh);
+}
+void GuiHud::UpdateTriggerLearn()
+{
+	if (_learnEndPending && _triggerLearnInput) { _triggerLearnInput(io::TriggerBindingLearn::Request{}); _learnEndPending = false; }
+	if (!_triggerLearn) return;
+	if (!_popupManager || !_popupManager->Contains(_triggerLearn) || _triggerLearn->CloseRequested)
+	{ CancelTriggerLearn(); return; }
+	const auto target = std::find_if(_displayedRig.Triggers.begin(), _displayedRig.Triggers.end(), [&](const auto& item) { return item.Id == _triggerLearn->Id; });
+	if (_triggerLearn->Revision != _displayedRevision)
+	{
+		const bool accepted = _triggerLearn->Applying && target != _displayedRig.Triggers.end() &&
+			(_triggerLearn->Control == io::RigFile::Control::Activate ? target->ControlBindings.Activate : target->ControlBindings.Ditch) == _triggerLearn->Bindings();
+		if (accepted) { CancelTriggerLearn(); SetQuantisationFeedback("Bindings applied; explicitly save the rig to keep them"); return; }
+		if (_triggerLearnInput) _triggerLearnInput(io::TriggerBindingLearn::Request{});
+		if (!_triggerLearn->Invalidated) _triggerLearn->Invalidate("Rig changed; cancel and reopen learning");
+		_triggerLearn->Fit(GetSize()); _triggerLearn->Refresh();
+		return;
+	}
+	if (_triggerLearnInput)
+		_triggerLearn->Observe(_triggerLearnInput(_triggerLearn->TakeRequest()));
+	if (_triggerLearn->ApplyRequested)
+	{
+		_triggerLearn->ApplyRequested = false;
+		std::string error;
+		const auto candidate = io::TriggerBindingLearn::ReplacePedal(_displayedRig, _triggerLearn->Id,
+			_triggerLearn->Control, _triggerLearn->Bindings(), error);
+		if (!candidate) _triggerLearn->Reject(error);
+		else if (target == _displayedRig.Triggers.end() || !_CanEditTrigger(static_cast<std::size_t>(target - _displayedRig.Triggers.begin())) || !_SubmitCandidate(*candidate))
+			_triggerLearn->Reject("Finish trigger action or pending edit, then retry OK");
+		else { _triggerLearn->SetApplying(); if (_triggerLearnInput) _triggerLearnInput(io::TriggerBindingLearn::Request{}); }
+	}
+	else if (_triggerLearn->Applying && _RoutingEditAvailability() != RoutingEditAvailability::Applying)
+		_triggerLearn->Reject("Binding change rejected; retry when idle");
+	_triggerLearn->Fit(GetSize()); _triggerLearn->Refresh();
+}
+
 std::string GuiHud::_SubmitRename(const std::string& name, const std::string& id, std::uint64_t revision)
 {
 	if (revision != _displayedRevision) return "Trigger changed; cancel and reopen";
@@ -2030,7 +2121,7 @@ std::shared_ptr<GuiButton> GuiHud::_MakeSourceButton(const std::string& text,
 	return button;
 }
 std::shared_ptr<GuiButton> GuiHud::_MakeTriggerButton(const std::string& text,
-	std::weak_ptr<engine::Trigger> trigger) const
+	std::weak_ptr<engine::Trigger> trigger, std::string id)
 {
 	auto buttonParams = GuiButtonParams::PanelButton(_TriggerButtonWidth);
 	buttonParams.Texture = "trigger_back";
@@ -2057,7 +2148,7 @@ std::shared_ptr<GuiButton> GuiHud::_MakeTriggerButton(const std::string& text,
 	activateParams.OutTexture = "trigger_activate_down_out";
 	activateParams.GuiPassThrough = false;
 	button->AddChild(std::make_shared<GuiHudTriggerPedal>(activateParams, trigger, true,
-		_displayedRevision, _acceptTriggerInput));
+		_displayedRevision, _acceptTriggerInput, [this, id](bool alt) { _OpenTriggerLearn(id, true, alt); }));
 
 	base::GuiElementParams ditchParams;
 	ditchParams.Position = { pedalPosX + pedalSizeW + pedalSpacing, pedalPosY };
@@ -2069,7 +2160,7 @@ std::shared_ptr<GuiButton> GuiHud::_MakeTriggerButton(const std::string& text,
 	ditchParams.OutTexture = "trigger_ditch_down_out";
 	ditchParams.GuiPassThrough = false;
 	button->AddChild(std::make_shared<GuiHudTriggerPedal>(ditchParams, std::move(trigger), false,
-		_displayedRevision, _acceptTriggerInput));
+		_displayedRevision, _acceptTriggerInput, [this, id](bool alt) { _OpenTriggerLearn(id, false, alt); }));
 
 	return button;
 }

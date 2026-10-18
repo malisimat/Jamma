@@ -933,6 +933,8 @@ ActionResult Window::OnAction(KeyAction keyAction)
 		_hover3dDirty = true;
 		_forcePick = true;
 	}
+	// Contextual input owns shortcuts after physical modifiers have been reconciled.
+	if (_scene->CapturesContextualKeyboard(keyAction.KeyChar)) return _scene->OnAction(keyAction);
 	if ((76u == keyAction.KeyChar)
 		&& (KeyAction::KEY_UP == keyAction.KeyActionType)
 		&& (Action::MODIFIER_CTRL & keyAction.Modifiers)

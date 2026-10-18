@@ -77,6 +77,16 @@ GuiMainPanel::GuiMainPanel(GuiMainPanelParams params) : GuiPanel(params),
 	}
 	if (!_selectionOnly)
 	{
+		for (const auto& [text, command] : std::array<std::pair<const char*, unsigned int>, 2>{{{"Save rig", SaveRigControlIndex}, {"Save rig as...", SaveRigAsControlIndex}}})
+		{
+			auto params = GuiButtonParams::PanelButton(260u); params.Text = text; params.DispatchCommand = true;
+			params.TextFontSize = graphics::FontOptions::FONT_SMALL;
+			auto button = std::make_shared<GuiButton>(params);
+			_pages[static_cast<size_t>(SettingsPage::Timing)]->AddChild(button);
+			_controlSizes.emplace_back(button, params.Size);
+			auto receiver = std::make_shared<GuiCommandReceiver>(command); button->SetReceiver(receiver);
+			_bindings.push_back(std::move(receiver)); _additionalRigSaveButtons.push_back(std::move(button));
+		}
 		auto save = GuiButtonParams::PanelButton(260u);
 		save.Text = "Save rig as default..."; save.DispatchCommand = true;
 		save.Size.Height = 40u; save.MinSize.Height = 40u;

@@ -272,6 +272,8 @@
     <ClInclude Include="src\gui\GuiVstRack.h" />
     <ClInclude Include="src\gui\GuiStationLabel.h" />
     <ClInclude Include="src\gui\GuiTriggerRename.h" />
+    <ClInclude Include="src\gui\GuiTriggerLearn.h" />
+    <ClInclude Include="src\io\TriggerBindingLearn.h" />
     <ClInclude Include="src\gui\VstRackControls.h" />
     <ClInclude Include="src\vst\VstRackSlot.h" />
     <ClInclude Include="src\utils\VecUtils.h" />

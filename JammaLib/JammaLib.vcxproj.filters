@@ -634,6 +634,8 @@
     <ClInclude Include="src\gui\GuiTriggerRename.h">
       <Filter>src\gui</Filter>
     </ClInclude>
+    <ClInclude Include="src\gui\GuiTriggerLearn.h"><Filter>src\gui</Filter></ClInclude>
+    <ClInclude Include="src\io\TriggerBindingLearn.h"><Filter>src\io</Filter></ClInclude>
     <ClInclude Include="src\gui\VstRackControls.h">
       <Filter>src\gui</Filter>
     </ClInclude>

@@ -1701,3 +1701,63 @@ TEST_F(RigSnapshotTest, PredelayEditRequiresTriggerReplacementAndAudioAcceptance
 	EXPECT_EQ(previous, coordinator.Accepted()->Triggers.front().Instance);
 	EXPECT_DOUBLE_EQ(0.0, coordinator.Accepted()->Rig.Triggers.front().PreDelayMs);
 }
+
+
+TEST_F(RigSnapshotTest, LearnedPedalPreservesImportedRowsAndUsesAcknowledgedAtomicRigTransition)
+{
+    auto rig = EmptyRig(); auto descriptor = TriggerDescriptor("learn-target","Station");
+    for (auto key = 65u; key < 71u; ++key) descriptor.ControlBindings.Activate.push_back(KeyboardButton(key));
+    descriptor.ControlBindings.Ditch = {KeyboardButton(90u)};
+    descriptor.CaptureInputs.Audio = {0u}; rig.Triggers.push_back(descriptor);
+    auto edited = descriptor.ControlBindings.Activate; edited.back() = KeyboardButton(75u);
+    std::string error;
+    const auto candidate = io::TriggerBindingLearn::ReplacePedal(rig,descriptor.Id,io::RigFile::Control::Activate,edited,error);
+    ASSERT_TRUE(candidate) << error; EXPECT_EQ(6u,candidate->Triggers[0].ControlBindings.Activate.size());
+    EXPECT_EQ(descriptor.ControlBindings.Ditch,candidate->Triggers[0].ControlBindings.Ditch);
+    EXPECT_EQ(descriptor.Name,candidate->Triggers[0].Name); EXPECT_EQ(descriptor.CaptureInputs,candidate->Triggers[0].CaptureInputs);
+    auto conflict = edited; conflict.push_back(KeyboardButton(90u));
+    EXPECT_FALSE(io::TriggerBindingLearn::ReplacePedal(rig,descriptor.Id,io::RigFile::Control::Activate,conflict,error));
+    EXPECT_FALSE(error.empty());
+    auto midiRig = rig; midiRig.User.Midi.Devices.push_back({"keys",true,"learn-keys"});
+    std::vector<io::RigFile::Binding> wildcard;
+    for (auto note = 60u; note < 65u; ++note)
+    {
+        auto binding = io::TriggerBindingLearn::Midi("learn-keys",midi::MidiEvent::MakeNoteOn(0u,0u,static_cast<std::uint8_t>(note),100u)).value();
+        binding.Press.Channel.reset(); binding.Release.Channel.reset(); wildcard.push_back(binding);
+    }
+    EXPECT_FALSE(io::TriggerBindingLearn::ReplacePedal(midiRig,descriptor.Id,io::RigFile::Control::Activate,wildcard,error));
+    wildcard.pop_back(); EXPECT_TRUE(io::TriggerBindingLearn::ReplacePedal(midiRig,descriptor.Id,io::RigFile::Control::Activate,wildcard,error));
+    EXPECT_FALSE(io::TriggerBindingLearn::ReplacePedal(rig,"deleted",io::RigFile::Control::Activate,edited,error));
+    auto station = RuntimeStation("Station"); engine::RigCoordinator coordinator;
+    ASSERT_TRUE(coordinator.BuildInitial(rig,{StationDescriptor("Station")},{station},1u,{},engine::TriggerParams(),[](const auto&) { return true; }));
+    const auto original = coordinator.Accepted();
+    ASSERT_EQ(engine::RigCoordinator::EditResult::Pending,coordinator.SubmitCandidate(*candidate));
+    EXPECT_EQ(engine::RigCoordinator::EditResult::EditsDisabled,coordinator.SubmitCandidate(rig));
+    const auto revision = coordinator.Staged()->Revision;
+    ASSERT_EQ(engine::RigCoordinator::EditResult::Pending,coordinator.CompleteTransition(revision,true,[](const auto&) { ADD_FAILURE() << "Learning must never autosave"; return false; }));
+    EXPECT_EQ(original,coordinator.Accepted()); coordinator.ApplyPendingAtAudioBoundary();
+    EXPECT_EQ(original,coordinator.Accepted()); ASSERT_TRUE(coordinator.AcknowledgeInput(revision)); ASSERT_TRUE(coordinator.PromoteAcknowledged());
+    EXPECT_EQ(edited,coordinator.Accepted()->Rig.Triggers[0].ControlBindings.Activate);
+    EXPECT_EQ(descriptor.ControlBindings.Ditch,coordinator.Accepted()->Rig.Triggers[0].ControlBindings.Ditch);
+    EXPECT_TRUE(io::TriggerBindingLearn::ReplacePedal(coordinator.Accepted()->Rig,descriptor.Id,io::RigFile::Control::Activate,{},error));
+}
+
+TEST(RigDefaultSaveTest, OrdinaryOverwriteDoesNotChangeDefaultsAndFailureKeepsPathAndCapturedRevision)
+{
+    const std::wstring directory = L"C:/isolated-jamma";
+    RigDefaultSave owner(directory,L"defaults.json",{},{});
+    io::InitFile defaults{}; defaults.Rig = directory + L"/current.rig";
+    defaults.RigOrigin = "user"; defaults.RigLoadType = io::InitFile::LOAD_SPECIFIC;
+    owner.InitializeCurrentPath(defaults,true,4u); EXPECT_FALSE(owner.Dirty(4u)); EXPECT_TRUE(owner.Dirty(5u));
+    io::RigFile rig; unsigned int defaultsWrites = 0u;
+    auto result = RigDefaultSave::WriteRequest(rig,directory+L"/another.rig",5u,false,defaults,L"defaults.json",
+        [](const auto&,const auto&) { return false; },[&](const auto&,const auto&) { ++defaultsWrites; return true; });
+    owner.AcceptSuccessfulWrite(*result); EXPECT_EQ(defaults.Rig,owner.CurrentPath()); EXPECT_EQ(4u,owner.SavedRevision());
+    result = RigDefaultSave::WriteRequest(rig,directory+L"/another.rig",5u,false,defaults,L"defaults.json",
+        [](const auto&,const auto&) { return true; },[&](const auto&,const auto&) { ++defaultsWrites; return true; });
+    owner.AcceptSuccessfulWrite(*result); EXPECT_EQ(directory+L"/another.rig",owner.CurrentPath());
+    EXPECT_EQ(5u,owner.SavedRevision()); EXPECT_FALSE(owner.Dirty(5u)); EXPECT_TRUE(owner.Dirty(6u)); EXPECT_EQ(0u,defaultsWrites);
+    owner.InvalidateSavedRevision(); EXPECT_TRUE(owner.Dirty(1u)); EXPECT_FALSE(owner.CurrentPath().empty());
+    RigDefaultSave generated(directory,L"defaults.json",{},{}); generated.InitializeCurrentPath(defaults,false,1u);
+    EXPECT_TRUE(generated.CurrentPath().empty()); EXPECT_TRUE(generated.Dirty(1u));
+}

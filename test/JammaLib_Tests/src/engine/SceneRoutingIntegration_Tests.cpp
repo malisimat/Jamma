@@ -18,6 +18,8 @@ namespace gui
     {
     public:
         static std::shared_ptr<GuiButton> RigSaveButton(GuiMainPanel& panel) { return panel._saveRigButton; }
+        static std::shared_ptr<GuiButton> RigSaveChoice(GuiMainPanel& panel, unsigned int choice) { return panel._additionalRigSaveButtons.at(choice); }
+
     };
 }
 namespace engine
@@ -65,6 +67,8 @@ namespace engine
     public:
         static std::shared_ptr<gui::GuiButton> RigSaveButton(Scene& scene)
         { return gui::GuiMainPanelTestAccess::RigSaveButton(*scene._mainPanel); }
+        static std::shared_ptr<gui::GuiButton> RigSaveChoice(Scene& scene, unsigned int choice)
+        { return gui::GuiMainPanelTestAccess::RigSaveChoice(*scene._mainPanel, choice); }
         static bool RigSaveRequested(const Scene& scene) { return scene._rigSaveRequested; }
         static void ChooseAudio(Scene& scene, int index) { scene._audioDeviceChoice->SetSelectedIndex(index, true); }
         static void AudioChannels(Scene& scene, unsigned int input, double value) { scene._audioInputs[input]->SetValue(value, true); }
@@ -171,6 +175,9 @@ namespace engine
 			return field;
 		}
 		static unsigned int ForcedChannel(const Scene& scene) { return scene._inputSubsystem->ForcedChannelOverride(); }
+        static void OpenKeyboardModal(Scene& scene) { scene._popupManager.Open(std::make_shared<gui::GuiPopup>()); }
+        static void CloseKeyboardModal(Scene& scene) { scene._popupManager.CloseAll(); }
+
 		static void StaleProjection(Scene& scene) { scene._viewProj = glm::mat4(0.0f); }
 		static bool HasCurrentProjection(const Scene& scene)
 		{
@@ -1061,6 +1068,13 @@ TEST_F(SceneRoutingIntegrationTest, DeviceGuiDispatchIsIsolatedFromStationComman
     auto save = engine::SourceLossIntegrationTestAccess::RigSaveButton(*scene);
     ASSERT_TRUE(save); click(save);
     EXPECT_TRUE(scene->ConsumeRigSaveRequest());
+    EXPECT_EQ(engine::Scene::RigSaveMode::StartupDefault,scene->RequestedRigSaveMode());
+    for (auto choice = 0u; choice < 2u; ++choice)
+    {
+        click(engine::SourceLossIntegrationTestAccess::RigSaveChoice(*scene,choice));
+        EXPECT_TRUE(scene->ConsumeRigSaveRequest());
+        EXPECT_EQ(choice == 0u ? engine::Scene::RigSaveMode::Save : engine::Scene::RigSaveMode::SaveAs,scene->RequestedRigSaveMode());
+    }
     engine::SourceLossIntegrationTestAccess::Manage(*scene, false, target);
     cancel = engine::SourceLossIntegrationTestAccess::RemovalButton(*scene, 0u);
     auto remove = engine::SourceLossIntegrationTestAccess::RemovalButton(*scene, 1u);
@@ -1082,6 +1096,8 @@ TEST_F(SceneRoutingIntegrationTest, PluginFocusLossDefersSceneEntryUntilStateCal
 {
     auto scene = FreshScene({ Station("Keys") }, {});
     ASSERT_TRUE(scene);
+    actions::KeyAction heldShortcut; heldShortcut.KeyChar = VK_INSERT; heldShortcut.KeyActionType = actions::KeyAction::KEY_DOWN;
+    scene->OnAction(heldShortcut); ASSERT_TRUE(midi::MidiRouter::IsAutomationRecordHeld());
     resources::ResourceLib resources;
     graphics::Window window(*scene, resources);
     const auto host = CreateWindowExW(0, L"STATIC", L"", 0, 0, 0, 0, 0,
@@ -1093,6 +1109,22 @@ TEST_F(SceneRoutingIntegrationTest, PluginFocusLossDefersSceneEntryUntilStateCal
     control.KeyActionType = actions::KeyAction::KEY_DOWN;
     window.OnAction(control);
     ASSERT_TRUE(engine::SourceLossIntegrationTestAccess::ControlHeld(*scene));
+    engine::SourceLossIntegrationTestAccess::OpenKeyboardModal(*scene);
+    actions::KeyAction modalKey; modalKey.KeyChar = 76u; modalKey.KeyActionType = actions::KeyAction::KEY_DOWN;
+    window.OnAction(modalKey);
+    engine::SourceLossIntegrationTestAccess::CloseKeyboardModal(*scene);
+    modalKey.KeyActionType = actions::KeyAction::KEY_UP;
+    window.OnAction(modalKey); EXPECT_FALSE(window.ConsumeJamLoadRequest());
+    engine::SourceLossIntegrationTestAccess::OpenKeyboardModal(*scene);
+    modalKey.KeyChar = 192u; modalKey.KeyActionType = actions::KeyAction::KEY_DOWN;
+    window.OnAction(modalKey);
+    engine::SourceLossIntegrationTestAccess::CloseKeyboardModal(*scene);
+    modalKey.KeyActionType = actions::KeyAction::KEY_UP;
+    window.OnAction(modalKey); EXPECT_FALSE(window.ConsumeConsoleToggleRequest());
+    engine::SourceLossIntegrationTestAccess::OpenKeyboardModal(*scene);
+    modalKey.KeyChar = VK_INSERT; window.OnAction(modalKey); EXPECT_FALSE(midi::MidiRouter::IsAutomationRecordHeld());
+    engine::SourceLossIntegrationTestAccess::CloseKeyboardModal(*scene);
+    scene->OnAction(heldShortcut); ASSERT_TRUE(midi::MidiRouter::IsAutomationRecordHeld());
     actions::TouchAction press;
     press.Touch = actions::TouchAction::TOUCH_MOUSE;
     press.State = actions::TouchAction::TOUCH_DOWN;
@@ -1114,6 +1146,7 @@ TEST_F(SceneRoutingIntegrationTest, PluginFocusLossDefersSceneEntryUntilStateCal
     });
     EXPECT_TRUE(window.ProcessDeferredInputLoss());
     EXPECT_FALSE(window.CancelMouseCapture());
+    EXPECT_FALSE(midi::MidiRouter::IsAutomationRecordHeld());
     EXPECT_FALSE(engine::SourceLossIntegrationTestAccess::ControlHeld(*scene));
     EXPECT_EQ(window.Modifiers(), base::Action::MODIFIER_NONE);
     EXPECT_FALSE(window.ProcessDeferredInputLoss());

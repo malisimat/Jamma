@@ -4,6 +4,7 @@
 #include "gui/GuiFocusManager.h"
 #include "gui/GuiStationLabel.h"
 #include "gui/GuiTriggerRename.h"
+#include "gui/GuiTriggerLearn.h"
 #include "gui/GuiPopup.h"
 #include "gui/GuiPopupManager.h"
 #include "gui/GuiTextBox.h"
@@ -1701,4 +1702,50 @@ TEST(GuiNumericInput, HardwareInputsRejectFractionAndOverflowRatherThanCoerce)
 	input->SetText("512", false); input->OnAction(MakeKey(0x0D));
 	EXPECT_DOUBLE_EQ(input->Value(), 512.0);
 	EXPECT_EQ(invalid, 2);
+}
+
+
+TEST(GuiTriggerLearn, AtomicDraftPreservesImportedRowsRestoresAttemptsAndFiltersEmptyRows)
+{
+    using Draft = gui::GuiTriggerLearn::Draft;
+    for (const auto count : {0u, 1u, 4u, 6u})
+    {
+        std::vector<io::RigFile::Binding> imported;
+        for (auto i = 0u; i < count; ++i) imported.push_back(io::TriggerBindingLearn::Keyboard(65u + i));
+        Draft draft(imported);
+        EXPECT_EQ(count < 4u ? count + 1u : count, draft.Rows.size());
+        EXPECT_EQ(count < 4u, draft.Learning.has_value());
+        EXPECT_EQ(imported, draft.Bindings()); EXPECT_FALSE(draft.Changed());
+        draft.Stop(); EXPECT_FALSE(draft.Changed());
+        if (draft.Rows.empty()) draft.Add();
+        draft.Learn(0u); const auto old = draft.Attempt;
+        draft.Learn(draft.Rows.size() - 1u);
+        EXPECT_FALSE(draft.Accept(old, io::TriggerBindingLearn::Keyboard(75u)));
+        draft.Stop(); EXPECT_EQ(imported, draft.Bindings());
+        draft.Learn(0u); const auto current = draft.Attempt;
+        EXPECT_TRUE(draft.Accept(current, io::TriggerBindingLearn::Keyboard(75u)));
+        EXPECT_FALSE(draft.Accept(current, io::TriggerBindingLearn::Keyboard(76u))); // Paired release cannot replace it.
+        EXPECT_TRUE(draft.Changed());
+        draft.Learn(0u); draft.CancelDelete(0u);
+        EXPECT_EQ(75u, draft.Rows[0]->Press.Code); // Cancel restores the pre-learn binding.
+        while (!draft.Rows.empty()) draft.CancelDelete(0u);
+        EXPECT_TRUE(draft.Bindings().empty()); EXPECT_EQ(count != 0u, draft.Changed());
+        draft.Add(); EXPECT_EQ(1u, draft.Rows.size()); draft.Stop();
+        EXPECT_TRUE(draft.Bindings().empty());
+        Draft cancelled(imported); EXPECT_EQ(imported, cancelled.Bindings()); // Outer Cancel discards the entire draft owner.
+    }
+    for (const auto key : {8u,9u,13u,16u,17u,18u,27u,32u,33u,34u,45u,69u,112u,120u,192u,219u})
+        EXPECT_FALSE(io::TriggerBindingLearn::KeyboardAllowed(key));
+    EXPECT_TRUE(io::TriggerBindingLearn::KeyboardAllowed(65u));
+    auto rig = io::RigFile::FromStream(std::stringstream(io::RigFile::DefaultJson)).value();
+    auto modal = std::make_shared<gui::GuiTriggerLearn>();
+    modal->Init(rig,rig.Triggers[0].Id,io::RigFile::Control::Activate,1u,1u,{200u,200u});
+    for (const auto child : {4u,5u,6u})
+    {
+        const auto button = modal->TryGetChild(static_cast<unsigned char>(child)); ASSERT_TRUE(button);
+        EXPECT_GE(button->Position().X,0); EXPECT_GE(button->Position().Y,0);
+        EXPECT_LE(button->Position().X + static_cast<int>(button->GetSize().Width),200);
+        EXPECT_LE(button->Position().Y + static_cast<int>(button->GetSize().Height),200);
+    }
+    modal->ReleaseResources(); modal->DetachGuiOwnershipForRetirement();
 }

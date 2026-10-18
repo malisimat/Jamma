@@ -191,6 +191,8 @@ namespace engine
 		void CloseGlobalKeyCapture();
 		bool PumpGlobalKeyCapture(actions::KeyAction& action) noexcept;
 		void OnInputFocusLost();
+		bool CapturesContextualKeyboard(unsigned int key) const
+		{ return _rigSaveDialogOpen || _controlWriterExclusion.owns_lock() || _popupManager.IsOpen() || _focusManager.IsEditingText() || _loopEditor.IsEngaged() || _contextualKeyboard.Suppresses(key); }
 		void Shutdown();
 		bool JobThreadFailed() const noexcept { return _jobThreadFailed.load(std::memory_order_acquire); }
 		std::string_view JobThreadFailureDetail() const noexcept { return JobThreadFailed() ? std::string_view(_jobThreadFailureDetail.data()) : std::string_view{}; }
@@ -232,6 +234,11 @@ namespace engine
 		bool SaveHardwarePreferences(const io::RigFile& rig) const
 		{ return _saveHardwarePreferences && _saveHardwarePreferences(rig); }
 		bool ConsumeRigSaveRequest(); // Main/window thread only.
+		enum class RigSaveMode { Save, SaveAs, StartupDefault };
+		RigSaveMode RequestedRigSaveMode() const { return _rigSaveMode; }
+		struct CapturedRig { io::RigFile Rig; std::uint64_t Revision = 0u; };
+		std::optional<CapturedRig> CaptureCommittedRigVersion() const;
+		std::optional<CapturedRig> BeginExplicitRigSave();
 		std::optional<io::RigFile> CaptureCommittedRig() const;
 		void QueueExplicitRigSave(std::function<void()> work);
 		void FinishExplicitRigSave();
@@ -552,6 +559,7 @@ namespace engine
 		std::shared_ptr<gui::GuiHud> _hudPanel;
 		PerformanceGroupController _performanceGroups; // scene mutex, never audio
 		ContextualKeyboardInput _contextualKeyboard; // Window thread only; no callback state.
+		std::array<bool, 256u> _learnKeysDown{}; // Window owner: repeat filtering, cleared on focus loss.
 		std::vector<std::shared_ptr<base::GuiElement>> _guiChildren;
 		gui::GuiFocusManager _focusManager;
 		gui::GuiPopupManager _popupManager;
@@ -578,6 +586,7 @@ namespace engine
 		std::shared_ptr<Station> _takeDitchStation;
 		std::shared_ptr<LoopTake> _takeDitchTake;
 		bool _rigSaveRequested = false; // Window owner only.
+		RigSaveMode _rigSaveMode = RigSaveMode::StartupDefault; // Window owner only.
 		std::function<void()> _explicitRigSaveJob; // Scene mutex handoff to existing job owner; drained on shutdown.
 		bool _rigSaveInProgress = false; // Scene mutex; UI completion resets.
 		bool _rigSaveDialogOpen = false; // Protected by _sceneMutex.

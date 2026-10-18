@@ -957,14 +957,20 @@ namespace midi
             rig->InputDispatch.LiveMidi = {{"Keys A", {station}}, {"Keys B", {station}}};
             router.PublishRigInputDispatch(rig);
         }
-        static void Push(MidiRouter& router, unsigned int slot, const MidiEvent& event)
+        static void Push(MidiRouter& router, unsigned int slot, const MidiEvent& event, std::int64_t arrival = 0)
         {
             MidiRouter::MidiInputEndpoint::RigMidiIngressEvent ingress;
             ingress.Event = event;
             ingress.RigRevision = 1u;
+            ingress.CallbackArrivalMicros = arrival;
             ingress.RoutingGeneration = 1u;
             ASSERT_TRUE(router._midiInputs.load()->at(slot)->Ingress.Push(ingress));
         }
+        static std::int64_t ArmBoundary(const MidiRouter& router) { return router._triggerLearnStartMicros; }
+        static void Serial(MidiRouter& router, const std::string& device, bool down)
+        { ASSERT_TRUE(router._serialIngress.Push({{&device, 7u, down},1u,++router._serialEnqueueSequence})); }
+        static void OverrideTriggers(MidiRouter& router)
+        { router._channelOverrideTriggers.store(true); router._channelOverrideLive.store(false); router.SetForcedChannelOverride(3u, {}); }
     };
 }
 
@@ -1199,4 +1205,75 @@ TEST(TriggerPredelayStation, NewFormatRejectsLookbackAcrossItsEpoch)
     ASSERT_TRUE(take->GetMidiLoops()[0]->TryGetEvent(0u, continuation));
     EXPECT_EQ(0u, continuation.sampleOffset);
     EXPECT_EQ(36u, continuation.data1);
+}
+
+
+TEST(TriggerBindingLearn, FreshValidatedPassiveIngressFreezesOneCandidateAndInfersInverseEdges)
+{
+    auto station = TriggerPredelayStationTest::MakeStation();
+    midi::MidiRouter router; midi::MidiRouterCaptureTestAccess::Setup(router, station);
+    ASSERT_TRUE(router.OpenRigTriggerInput(1u));
+    station->SetAllowedMidiChannels({1u,2u,3u});
+    const auto started = station->OnAction(TriggerPredelayStationTest::Start(100u,0.0)); ASSERT_TRUE(started.IsEaten);
+    const auto take = station->GetLoopTakes().back();
+    io::UserConfig config; config.Audio.SampleRate = 48000u;
+    audio::AudioStreamParams params; params.SampleRate = 48000u;
+    router.RequestTriggerLearn({10u,1u,1u});
+    midi::MidiRouterCaptureTestAccess::Push(router,0u,midi::MidiEvent::MakeNoteOn(100u,0u,60u,100u));
+    midi::MidiRouterCaptureTestAccess::Push(router,0u,midi::MidiEvent::MakeNoteOff(110u,0u,60u));
+    midi::MidiRouterCaptureTestAccess::Push(router,0u,midi::MidiEvent::MakeNoteOn(150u,1u,61u,100u));
+    router.PumpMidi({station},200u,config,params);
+    ASSERT_TRUE(router.TriggerLearnObservation()); EXPECT_TRUE(router.TriggerLearnObservation()->Armed);
+    EXPECT_FALSE(router.TriggerLearnObservation()->Binding); // Queued pre-arm input still drained normally.
+    const auto boundary = midi::MidiRouterCaptureTestAccess::ArmBoundary(router);
+    midi::MidiRouterCaptureTestAccess::OverrideTriggers(router);
+    midi::MidiRouterCaptureTestAccess::Push(router,0u,midi::MidiEvent::MakeNoteOn(201u,1u,61u,0u),boundary+1);
+    midi::MidiRouterCaptureTestAccess::Push(router,0u,midi::MidiEvent::MakeNoteOn(202u,1u,62u,100u),boundary+2);
+    midi::MidiRouterCaptureTestAccess::Push(router,0u,midi::MidiEvent::MakeNoteOff(203u,1u,62u),boundary+3);
+    router.PumpMidi({station},220u,config,params);
+    auto learned = router.TriggerLearnObservation(); ASSERT_TRUE(learned->Binding);
+    EXPECT_EQ(61u, learned->Binding->Press.Code); EXPECT_EQ(0u, learned->Binding->Press.State);
+    EXPECT_EQ(1u, learned->Binding->Release.State); EXPECT_EQ(2u, learned->Binding->Press.Channel);
+    EXPECT_EQ(1u, learned->PhysicalChannel); EXPECT_FALSE(learned->Armed);
+    router.RequestTriggerLearn({10u,2u,1u}); router.PumpMidi({station},230u,config,params);
+    const std::string serial = "serial-test";
+    midi::MidiRouterCaptureTestAccess::Serial(router,serial,true);
+    router.PumpSerial({station},config,params); ASSERT_TRUE(router.TriggerLearnObservation()->Binding);
+    EXPECT_EQ(io::RigFile::BindingSource::Serial,router.TriggerLearnObservation()->Binding->Source);
+    router.RequestTriggerLearn({10u,3u,1u}); router.PumpMidi({station},240u,config,params);
+    midi::MidiRouterCaptureTestAccess::Serial(router,serial,true); router.PumpSerial({station},config,params);
+    EXPECT_FALSE(router.TriggerLearnObservation()->Binding); // Repeated reports cannot teach a fresh edge.
+    midi::MidiRouterCaptureTestAccess::Serial(router,serial,false); router.PumpSerial({station},config,params);
+    ASSERT_TRUE(router.TriggerLearnObservation()->Binding); EXPECT_EQ(0u,router.TriggerLearnObservation()->Binding->Press.State);
+    router.RequestTriggerLearn({10u,4u,1u}); router.PumpMidi({station},250u,config,params);
+    router.ObserveTriggerLearnKey(69u); EXPECT_FALSE(router.TriggerLearnObservation()->Binding);
+    router.ObserveTriggerLearnKey(65u); ASSERT_TRUE(router.TriggerLearnObservation()->Binding);
+    EXPECT_EQ(io::RigFile::KeyboardDevice,router.TriggerLearnObservation()->Binding->Device);
+    router.RequestTriggerLearn({10u,0u,1u}); router.PumpMidi({station},260u,config,params);
+    router.ObserveTriggerLearnKey(66u); EXPECT_FALSE(router.TriggerLearnObservation()->Binding);
+    EXPECT_FALSE(router.TriggerLearnObservation()->Armed);
+    actions::KeyAction ccLearn; ccLearn.KeyChar = 76u; ccLearn.KeyActionType = actions::KeyAction::KEY_DOWN;
+    ccLearn.Modifiers = static_cast<base::Action::Modifiers>(base::Action::MODIFIER_CTRL | base::Action::MODIFIER_SHIFT);
+    router.HandleAutomationKey(ccLearn,{}, {},{}); EXPECT_FALSE(router.VstCcLearnActive());
+    router.EndTriggerLearn(); EXPECT_FALSE(router.TriggerLearnObservation());
+    router.HandleAutomationKey(ccLearn,{}, {},{}); ASSERT_TRUE(router.VstCcLearnActive());
+    router.RequestTriggerLearn({11u,1u,1u}); router.PumpMidi({station},270u,config,params);
+    EXPECT_FALSE(router.TriggerLearnObservation()->Error.empty()); EXPECT_FALSE(router.TriggerLearnObservation()->Armed);
+    router.EndTriggerLearn(); router.HandleAutomationKey(ccLearn,{}, {},{}); EXPECT_FALSE(router.VstCcLearnActive());
+    auto stop = TriggerPredelayStationTest::Start(48100u,0.0); stop.ActionType = actions::TriggerAction::TRIGGER_REC_END;
+    stop.TargetId = started.TargetId; stop.SampleCount = 48000u; ASSERT_TRUE(station->OnAction(stop).IsEaten);
+    router.PumpMidi({station},54000u,config,params); EXPECT_FALSE(take->MidiTriggerCapturePending());
+    unsigned int attacks[3]{}, releases[3]{};
+    for (const auto& loop : take->GetMidiLoops()) for (std::size_t i = 0u; i < loop->EventCount(); ++i)
+    {
+        midi::MidiEvent event; ASSERT_TRUE(loop->TryGetEvent(i,event));
+        if (event.data1 >= 60u && event.data1 <= 62u)
+        { if (event.IsNoteOn()) ++attacks[event.data1-60u]; if (event.IsNoteOff()) ++releases[event.data1-60u]; }
+    }
+    for (auto i = 0u; i < 3u; ++i) { EXPECT_EQ(1u,attacks[i]) << i; EXPECT_EQ(1u,releases[i]) << i; }
+    for (const auto value : {0u,1u,127u})
+    {
+        const auto binding = io::TriggerBindingLearn::Midi("keys",midi::MidiEvent{0u,0xb0u,64u,static_cast<std::uint8_t>(value)});
+        ASSERT_TRUE(binding); EXPECT_EQ(value != 0u,binding->Press.State); EXPECT_EQ(value == 0u,binding->Release.State);
+    }
 }

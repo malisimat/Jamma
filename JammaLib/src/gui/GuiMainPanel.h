@@ -33,6 +33,9 @@ namespace gui
 	{
 	public:
 		static constexpr unsigned int SaveRigDefaultControlIndex = 8400u;
+		// 8401-8404 belong to station confirmation controls.
+		static constexpr unsigned int SaveRigControlIndex = 8410u;
+		static constexpr unsigned int SaveRigAsControlIndex = 8411u;
 		explicit GuiMainPanel(GuiMainPanelParams params);
 		void FinalizePageSettings(SettingsPage page);
 		void ReplacePageSettings(SettingsPage page, const std::vector<GuiSettingEntry>& settings);
@@ -41,6 +44,7 @@ namespace gui
 			if (!_saveRigButton || _saveRigButton->IsEnabled() == enabled) return;
 			_saveRigButton->SetEnabled(enabled);
 			_saveRigButton->SetText(enabled ? "Save rig as default..." : "Save rig (busy)");
+			for (const auto& button : _additionalRigSaveButtons) button->SetEnabled(enabled);
 		}
 		void SetCommandOwner(std::weak_ptr<base::ActionReceiver> owner);
 		void SetViewportSize(utils::Size2d viewport);
@@ -86,6 +90,7 @@ namespace gui
 		std::weak_ptr<base::ActionReceiver> _commandOwner;
 		std::array<std::vector<std::shared_ptr<GuiCommandReceiver>>, static_cast<size_t>(SettingsPage::Count)> _pageBindings;
 		std::shared_ptr<GuiButton> _saveRigButton;
+		std::vector<std::shared_ptr<GuiButton>> _additionalRigSaveButtons;
 		std::array<std::shared_ptr<GuiPerformanceGroupRow>, 2> _groupRows;
 		bool _selectionOnly;
 		bool _expanded = true;

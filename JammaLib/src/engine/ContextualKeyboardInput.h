@@ -72,6 +72,10 @@ namespace engine
         }
 
         void ClearAfterReadersStopped() { _held.clear(); _suppressed.fill(false); }
+
+        // Window owner queries before its own shortcuts; the matching release
+        // still goes through Observe, which retires suppression exactly once.
+        bool Suppresses(unsigned int key) const noexcept { return key < _suppressed.size() && _suppressed[key]; }
         std::size_t Outstanding() const noexcept { return _held.size(); }
 
     private:
