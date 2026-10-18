@@ -453,7 +453,9 @@ void LoopTake::Draw3d(DrawContext& ctx,
 	_takeCore->SetLayout(coreRadius, (std::min)(5.0f, static_cast<float>(GetSize().Height) * 0.08f),
 		CurrentSelectDepth() == base::SelectDepth::DEPTH_LOOP);
 	_takeCore->SetState(GlobalId(), IsSelected(), _isPicking3d, IsMuted());
-	_takeCore->SetVisible(CurrentSelectDepth() != base::SelectDepth::DEPTH_STATION && coreRadius > 0.0f);
+	const auto depth = CurrentSelectDepth();
+	_takeCore->SetVisible((depth == base::SelectDepth::DEPTH_LOOPTAKE ||
+		depth == base::SelectDepth::DEPTH_LOOP) && coreRadius > 0.0f);
 	if (_isVisible && pass == base::PASS_SCENE)
 	{
 		auto& glCtx = dynamic_cast<graphics::GlDrawContext&>(ctx);

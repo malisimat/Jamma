@@ -3,12 +3,15 @@
 1 probe_chrome
 1 probe_pearl
 1 probe_amber
+1 looptake_disc
+1 loop_disc
 2 skybox MVP
 4 sky
 2 texture MVP TextureSampler Opacity
 2 texture_tinted MVP TextureSampler TintColor Opacity TintMaskSampler HasTintMask
 2 font MVP TextureSampler Opacity
 2 texture_shaded MVP LoopState LoopHover SceneDim
+2 disc_mask MVP TextureSampler DiscRepeatCount DiscSpiralPitch Opacity Highlight StationHover StationMuted SceneDim GroupPreview GroupPreviewTint
 2 waveform WaveformSceneScale WaveformDisplayScale SpectralReveal MVP GroupPreview GroupPreviewTint LoopState LoopHover LoopSelected LoopPressed LoopMuted Highlight HighlightPass TextureSampler WaveformSampler WaveformRadius WaveformHeightScale WaveformMinHeight WaveformColorMultiplier WaveformColorScale WaveformUnitMeshRadius EditorMorph EditorPlayFrac SelectionActive SceneDim EditorActive EditorTime ProbeSampler ProbeStrength EditorProbeEye ModelView ProbeView MaterialProbeSampler
 2 vu MVP DX DY NumInstances InstanceOffset SceneDim Opacity
 2 midi_note SceneLowPitch SceneLowCenter ScenePitchStep SceneNoteHeight SceneBandHeight MVP GroupPreview GroupPreviewTint ObjectId Highlight LoopHover LoopSelected LoopPressed LoopMuted DiscAlpha RenderMode EditorMorph EditorPlayFrac EditorBottomPitch EditorVisibleRows EditorHoverU EditorHoverPitch EditorTargetStart EditorTargetEnd EditorTargetInstance EditorHeldInstance EditorPreviewVelocity SelectionActive SceneDim EditorGridRadius EditorActive EditorTime EditorSeamHeadEnd EditorSeamTailStart EditorMasterCycles EditorMasterStartPhase ProbeSampler ProbeStrength EditorProbeEye ModelView TextureSampler DiscProbeSampler

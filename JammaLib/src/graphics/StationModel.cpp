@@ -756,12 +756,82 @@ void StationModel::Draw3d(DrawContext& ctx,
 	glBindTexture(GL_TEXTURE_2D, 0u);
 }
 
-TakeCoreModel::TakeCoreModel() : GuiModel(gui::GuiModelParams{})
+DiscMaskModel::DiscMaskModel(const std::string& textureName) : GuiModel(gui::GuiModelParams{})
 {
-	_modelParams.ModelShaders = { "station" };
-	_modelParams.ModelTextures = { "probe_amber" };
-	auto [verts, uvs] = BuildGeometry(false);
+	_modelParams.ModelShaders = { "disc_mask" };
+	_modelParams.ModelTextures = { textureName };
+	auto [verts, uvs] = BuildDiscGeometry();
 	SetGeometry(std::move(verts), std::move(uvs));
+	SetVisible(false);
+}
+
+void DiscMaskModel::SetRadius(float radius) noexcept
+{
+	SetModelScale((std::max)(radius, 0.001f));
+}
+
+std::tuple<std::vector<float>, std::vector<float>> DiscMaskModel::BuildDiscGeometry(unsigned int segments)
+{
+	std::vector<float> verts;
+	std::vector<float> uvs;
+	if (segments < 12u) return { verts, uvs };
+
+	// One angular turn is split finely enough to interpolate eight or twelve
+	// repeated mask tiles; radial strips keep warped mask boundaries smooth.
+	constexpr unsigned int radialSteps = 24u;
+	verts.reserve(segments * radialSteps * 6u * 3u);
+	uvs.reserve(segments * radialSteps * 6u * 2u);
+	for (unsigned int side = 0u; side < segments; ++side)
+	{
+		const float a0 = static_cast<float>(constants::TWOPI) * static_cast<float>(side) / static_cast<float>(segments);
+		const float a1 = static_cast<float>(constants::TWOPI) * static_cast<float>(side + 1u) / static_cast<float>(segments);
+		const float u0 = static_cast<float>(side) / static_cast<float>(segments);
+		const float u1 = static_cast<float>(side + 1u) / static_cast<float>(segments);
+		for (unsigned int radial = 0u; radial < radialSteps; ++radial)
+		{
+			const float r0 = static_cast<float>(radial) / static_cast<float>(radialSteps);
+			const float r1 = static_cast<float>(radial + 1u) / static_cast<float>(radialSteps);
+			const auto push = [&verts, &uvs](float angle, float radius, float u, float v)
+			{
+				verts.push_back(std::sin(angle) * radius);
+				verts.push_back(0.0f);
+				verts.push_back(std::cos(angle) * radius);
+				uvs.push_back(u);
+				uvs.push_back(v);
+			};
+			// Winding faces +Y so normal scene back-face culling remains valid.
+			push(a0, r0, u0, r0); push(a0, r1, u0, r1); push(a1, r1, u1, r1);
+			push(a0, r0, u0, r0); push(a1, r1, u1, r1); push(a1, r0, u1, r0);
+		}
+	}
+	return { std::move(verts), std::move(uvs) };
+}
+
+void DiscMaskModel::Draw3d(base::DrawContext& ctx, unsigned int instances, base::DrawPass pass)
+{
+	if (!_isVisible || pass != base::PASS_SCENE || !HasCurrentGlContext()) return;
+	auto& glCtx = dynamic_cast<GlDrawContext&>(ctx);
+	glCtx.SetUniform("TextureSampler", 0u);
+	glCtx.SetUniform("Opacity", 1.0f);
+	GLboolean previousDepthMask = GL_TRUE;
+	glGetBooleanv(GL_DEPTH_WRITEMASK, &previousDepthMask);
+	const GLboolean wasCulling = glIsEnabled(GL_CULL_FACE);
+	GLint previousActiveTexture = GL_TEXTURE0;
+	glGetIntegerv(GL_ACTIVE_TEXTURE, &previousActiveTexture);
+	// This is one plane, so disabling culling locally also makes its back face
+	// visible without drawing a second alpha layer. Restore scene state exactly.
+	glDepthMask(GL_FALSE);
+	glDisable(GL_CULL_FACE);
+	glActiveTexture(GL_TEXTURE0);
+	GuiModel::Draw3d(ctx, instances, pass);
+	glActiveTexture(static_cast<GLenum>(previousActiveTexture));
+	if (wasCulling) glEnable(GL_CULL_FACE);
+	glDepthMask(previousDepthMask);
+}
+
+TakeCoreModel::TakeCoreModel() : DiscMaskModel("looptake_disc")
+{
+	_modelParams.ModelTextures = { "looptake_disc", "loop_disc" };
 	SetVisible(false);
 }
 
@@ -804,16 +874,16 @@ float TakeCoreModel::OuterRadius(float nearestMaterial) noexcept
 	return (std::max)(0.0f, (std::min)(nearestMaterial * 0.68f, nearestMaterial - 12.0f));
 }
 
-void TakeCoreModel::SetLayout(float radius, float height, bool annular)
+void TakeCoreModel::SetLayout(float radius, float height, bool loopMode)
 {
-	if (_annular != annular)
-	{
-		_annular = annular;
-		auto [verts, uvs] = BuildGeometry(annular);
-		SetGeometry(std::move(verts), std::move(uvs));
-	}
+	_loopMode = loopMode;
 	SetModelScale((std::max)(radius, 0.001f));
 	_height = (std::max)(height, 0.001f);
+}
+
+std::weak_ptr<resources::TextureResource> TakeCoreModel::GetTexture()
+{
+	return GetTextureAt(_loopMode ? 1u : 0u);
 }
 
 void TakeCoreModel::SetState(const std::vector<unsigned int>& ownerId, bool selected, bool hover, bool muted)
@@ -836,15 +906,12 @@ void TakeCoreModel::Draw3d(base::DrawContext& ctx, unsigned int instances, base:
 	if (!_isVisible || pass != base::PASS_SCENE) return;
 	auto& glCtx = dynamic_cast<GlDrawContext&>(ctx);
 	glCtx.ApplyGroupPreview(_ownerId);
-	glCtx.SetUniform("TakeCore", 1.0f);
-	glCtx.SetUniform("TakeCoreThickness", _height / static_cast<float>(ModelScale()));
 	glCtx.SetUniform("Highlight", _isSelected ? 1.0f : 0.0f);
-	glCtx.SetUniform("HighlightPass", 0.0f);
 	glCtx.SetUniform("StationHover", _hover ? 1.0f : 0.0f);
 	glCtx.SetUniform("StationMuted", _muted ? 1.0f : 0.0f);
-	glCtx.SetUniform("StationPressed", 0.0f);
-	glCtx.SetUniform("StationLevel", 0.0f);
-	glCtx.SetUniform("MaterialProbeSampler", 0u);
-	GuiModel::Draw3d(ctx, instances, pass);
-	glCtx.SetUniform("TakeCore", 0.0f);
+	glCtx.SetUniform("DiscRepeatCount", _loopMode ? 12.0f : 8.0f);
+	// The three Loop bands are 120/384 of a tile apart; twelve offsets link
+	// each strand to the next one at the angular seam.
+	glCtx.SetUniform("DiscSpiralPitch", _loopMode ? (120.0f / (384.0f * 12.0f)) : 0.0f);
+	DiscMaskModel::Draw3d(ctx, instances, pass);
 }

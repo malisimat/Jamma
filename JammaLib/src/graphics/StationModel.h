@@ -1,6 +1,8 @@
 #pragma once
 
 #include <cstdint>
+#include <memory>
+#include <string>
 #include <glm/vec3.hpp>
 #include <span>
 #include <tuple>
@@ -8,25 +10,39 @@
 #include "../gui/GuiModel.h"
 #include "CameraBounds.h"
 
+namespace resources { class TextureResource; }
+
 namespace graphics
 {
-	// Decorative take surface. Uses the existing station material and resource lifecycle.
-	class TakeCoreModel : public gui::GuiModel
+	// Flat, alpha-cut disc artwork used behind take and loop waveform surfaces.
+	// Its single plane is rendered from either side with local culling state.
+	class DiscMaskModel : public gui::GuiModel
+	{
+	public:
+		explicit DiscMaskModel(const std::string& textureName);
+		void SetRadius(float radius) noexcept;
+		void Draw3d(base::DrawContext& ctx, unsigned int instances, base::DrawPass pass) override;
+		static std::tuple<std::vector<float>, std::vector<float>> BuildDiscGeometry(unsigned int segments = 144u);
+	};
+
+	// Shared take-level flat disc; texture selection changes with selection depth.
+	class TakeCoreModel : public DiscMaskModel
 	{
 	public:
 		TakeCoreModel();
 		~TakeCoreModel();
-		void SetLayout(float radius, float height, bool annular);
+		void SetLayout(float radius, float height, bool loopMode);
 		void SetState(const std::vector<unsigned int>& ownerId, bool selected, bool hover, bool muted);
 		CameraBounds CameraLocalBounds() const noexcept;
 		void Draw3d(base::DrawContext& ctx, unsigned int instances, base::DrawPass pass) override;
 		static std::tuple<std::vector<float>, std::vector<float>> BuildGeometry(bool annular);
 		static float OuterRadius(float nearestMaterial) noexcept;
 	protected:
+		std::weak_ptr<resources::TextureResource> GetTexture() override;
 		void _ReleaseResources() override;
 	private:
 		std::vector<unsigned int> _ownerId;
-		bool _annular = false;
+		bool _loopMode = false;
 		bool _hover = false;
 		bool _muted = false;
 		float _height = 4.0f;
