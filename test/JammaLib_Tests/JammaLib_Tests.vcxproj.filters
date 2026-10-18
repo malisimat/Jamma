@@ -98,6 +98,9 @@
     <ClCompile Include="src\graphics\ResourceLibTextureArgs_Tests.cpp">
       <Filter>src\graphics</Filter>
     </ClCompile>
+    <ClCompile Include="src\graphics\TextureTint_Tests.cpp">
+      <Filter>src\graphics</Filter>
+    </ClCompile>
     <ClCompile Include="src\graphics\Window_Tests.cpp">
       <Filter>src\graphics</Filter>
     </ClCompile>

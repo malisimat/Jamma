@@ -204,7 +204,7 @@
     <ClInclude Include="include\Main.h" />
   </ItemGroup>
   <ItemGroup>
-    <Content Include="resources\**\*.*">
+    <Content Include="resources\**\*.*" Exclude="resources\**\source\**\*.*">
       <DeploymentContent>true</DeploymentContent>
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
@@ -243,7 +243,8 @@
   <!-- Resource-only edits must deploy even when the executable does not relink. -->
   <Target Name="CopyJammaResources" AfterTargets="Build">
     <ItemGroup>
-      <JammaRuntimeResource Include="$(ProjectDir)resources\**\*.*" />
+      <JammaRuntimeResource Include="$(ProjectDir)resources\**\*.*"
+                             Exclude="$(ProjectDir)resources\**\source\**\*.*" />
     </ItemGroup>
     <Copy SourceFiles="@(JammaRuntimeResource)"
           DestinationFiles="@(JammaRuntimeResource->'$(OutDir)resources\%(RecursiveDir)%(Filename)%(Extension)')"

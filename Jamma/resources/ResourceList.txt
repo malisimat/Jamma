@@ -6,7 +6,7 @@
 2 skybox MVP
 4 sky
 2 texture MVP TextureSampler Opacity
-2 texture_tinted MVP TextureSampler TintColor Opacity
+2 texture_tinted MVP TextureSampler TintColor Opacity TintMaskSampler HasTintMask
 2 font MVP TextureSampler Opacity
 2 texture_shaded MVP LoopState LoopHover SceneDim
 2 waveform WaveformSceneScale WaveformDisplayScale SpectralReveal MVP GroupPreview GroupPreviewTint LoopState LoopHover LoopSelected LoopPressed LoopMuted Highlight HighlightPass TextureSampler WaveformSampler WaveformRadius WaveformHeightScale WaveformMinHeight WaveformColorMultiplier WaveformColorScale WaveformUnitMeshRadius EditorMorph EditorPlayFrac SelectionActive SceneDim EditorActive EditorTime ProbeSampler ProbeStrength EditorProbeEye ModelView ProbeView MaterialProbeSampler
@@ -69,6 +69,8 @@
 1 rounded_but_on ninepatch 12 12
 1 rounded_but_on_over ninepatch 12 12
 1 rounded_but_on_down ninepatch 12 12
+1 rounded_but_over_tintmask
+1 rounded_but_on_over_tintmask
 1 hud_socket_fat
 1 hud_socket_cable
 1 trigger_activate ninepatch 13 21
@@ -123,4 +125,7 @@
 1 performance_group_add ninepatch 5 5
 1 performance_group_add_over ninepatch 5 5
 1 performance_group_add_down ninepatch 5 5
+1 performance_group_over_tintmask
+1 performance_group_on_over_tintmask
+1 performance_group_add_over_tintmask
 2 audio_spectral MVP TextureSampler SpectralHeightSampler SpectralRadius SpectralHeightScale SpectralDepthScale SpectralBaseY EditorMorph EditorPlayFrac EditorTime SceneDim SpectralBrush SpectralViewport SpectralBrushMode

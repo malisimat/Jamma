@@ -66,6 +66,7 @@ namespace graphics
 			_pendingWidth(other._pendingWidth.load(std::memory_order_acquire)),
 			_pendingHeight(other._pendingHeight.load(std::memory_order_acquire)),
 			_texture(std::move(other._texture)),
+			_tintMask(std::move(other._tintMask)),
 			_shader(std::move(other._shader))
 		{
 			other._vertexArray = 0;
@@ -112,6 +113,7 @@ namespace graphics
 				other._pendingHeight.store(pendingHeight, std::memory_order_release);
 
 				_texture.swap(other._texture);
+				_tintMask.swap(other._tintMask);
 				_shader.swap(other._shader);
 			}
 
@@ -152,6 +154,8 @@ namespace graphics
 		std::atomic<unsigned int> _pendingWidth;
 		std::atomic<unsigned int> _pendingHeight;
 		std::weak_ptr<resources::TextureResource> _texture;
+		// Optional <texture>_tintmask resource; resolved only during resource init.
+		std::weak_ptr<resources::TextureResource> _tintMask;
 		std::weak_ptr<resources::ShaderResource> _shader;
 	};
 }

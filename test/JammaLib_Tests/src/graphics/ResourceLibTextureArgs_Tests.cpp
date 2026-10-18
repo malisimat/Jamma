@@ -9,6 +9,26 @@
 
 using resources::ResourceLib;
 
+TEST(ResourceLibShaderUniforms, TintMaskUniformsAreRegistered)
+{
+	auto root = std::filesystem::absolute(__FILE__);
+	for (int parent = 0; parent < 5; ++parent) root = root.parent_path();
+	std::ifstream list(root / "Jamma" / "resources" / "ResourceList.txt");
+	ASSERT_TRUE(list.is_open());
+	std::set<std::string> registered;
+	std::string line;
+	while (std::getline(list, line))
+	{
+		std::istringstream fields(line);
+		std::string type, name, uniform;
+		fields >> type >> name;
+		if (type != "2" || name != "texture_tinted") continue;
+		while (fields >> uniform) registered.insert(uniform);
+	}
+	for (const auto* uniform : { "MVP", "TextureSampler", "TintColor", "Opacity", "TintMaskSampler", "HasTintMask" })
+		EXPECT_TRUE(registered.contains(uniform)) << uniform;
+}
+
 TEST(ResourceLibTextureArgsTest, AcceptsNoArgsAsNormalTexture)
 {
 	bool isNinePatch = true;

@@ -27,6 +27,7 @@ Image::Image(ImageParams params) :
 	_pendingWidth(params.Size.Width),
 	_pendingHeight(params.Size.Height),
 	_texture(std::weak_ptr<TextureResource>()),
+	_tintMask(std::weak_ptr<TextureResource>()),
 	_shader(std::weak_ptr<ShaderResource>())
 {
 }
@@ -54,6 +55,14 @@ void Image::Draw(DrawContext& ctx)
 	auto opacity = ctx.WithOpacity(_imageParams.Opacity);
 
 	auto& glCtx = dynamic_cast<GlDrawContext&>(ctx);
+	const bool tinted = _imageParams.Shader == "texture_tinted";
+	auto tintMask = tinted ? _tintMask.lock() : nullptr;
+	if (tinted)
+	{
+		// Set for every tinted image, including unmasked images following a hover.
+		glCtx.SetUniform("HasTintMask", tintMask ? 1 : 0);
+		glCtx.SetUniform("TintMaskSampler", 1);
+	}
 
 	if (_isNinePatch)
 		_SyncVertexBuffer();
@@ -67,10 +76,22 @@ void Image::Draw(DrawContext& ctx)
 
 	glActiveTexture(GL_TEXTURE0);
 	glBindTexture(GL_TEXTURE_2D, texture->GetId());
+	if (tintMask)
+	{
+		glActiveTexture(GL_TEXTURE1);
+		glBindTexture(GL_TEXTURE_2D, tintMask->GetId());
+		glActiveTexture(GL_TEXTURE0);
+	}
 
 	glDrawArrays(GL_TRIANGLES, 0, _vertexCount);
 
 	glBindTexture(GL_TEXTURE_2D, 0);
+	if (tintMask)
+	{
+		glActiveTexture(GL_TEXTURE1);
+		glBindTexture(GL_TEXTURE_2D, 0);
+		glActiveTexture(GL_TEXTURE0);
+	}
 	glBindVertexArray(0);
 	glUseProgram(0);
 
@@ -114,6 +135,7 @@ void Image::_ReleaseResources()
 
 bool Image::_InitTexture(ResourceLib& resourceLib)
 {
+	_tintMask.reset();
 	auto textureOpt = resourceLib.GetResource(_drawParams.Texture);
 	
 	if (!textureOpt.has_value())
@@ -138,6 +160,16 @@ bool Image::_InitTexture(ResourceLib& resourceLib)
 	_borderY = texture->BorderY();
 	_texWidth = texture->Width();
 	_texHeight = texture->Height();
+	if (_imageParams.Shader == "texture_tinted")
+	{
+		if (const auto maskOpt = resourceLib.GetResource(_drawParams.Texture + "_tintmask"))
+		{
+			const auto mask = std::dynamic_pointer_cast<TextureResource>(maskOpt->lock());
+			if (!mask || mask->Width() != _texWidth || mask->Height() != _texHeight)
+				return false;
+			_tintMask = mask;
+		}
+	}
 
 	if (_isNinePatch)
 	{
