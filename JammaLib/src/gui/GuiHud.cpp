@@ -250,6 +250,8 @@ namespace gui
 GuiHud::GuiHud(GuiHudParams params) :
 	GuiPanel(params),
 	_submitRigEdit(std::move(params.SubmitRigEdit)),
+	_submitTriggerRename(std::move(params.SubmitTriggerRename)),
+	_focusEditor(std::move(params.FocusEditor)),
 	_routingEditAvailability(std::move(params.RoutingEditAvailabilityState)),
 	_acceptTriggerInput(std::move(params.AcceptTriggerInput)),
 	_popupManager(params.PopupManager)
@@ -274,10 +276,6 @@ GuiHud::GuiHud(GuiHudParams params) :
 		else { _deleteTriggerIndex.reset(); if (_popupManager) _popupManager->Close(); }
 	});
 	_deletePopup->SetButtonReceiver(_deletePopupReceiver);
-	_renamePopup = std::make_shared<GuiTriggerRename>();
-	_renamePopup->Focus = std::move(params.FocusEditor);
-	_renamePopup->Close = [this]() { if (_popupManager) _popupManager->Close(_renamePopup); };
-	_renamePopup->Submit = [this](const auto& name, const auto& id, auto revision) { return _SubmitRename(name, id, revision); };
 	GuiElementParams infoParams;
 	infoParams.Texture = "rounded_but_on";
 	infoParams.TextureShader = "texture_tinted";
@@ -397,7 +395,6 @@ void GuiHud::SetSize(Size2d size)
 {
 	GuiPanel::SetSize(size);
 	if (_deletePopup) _deletePopup->FitToViewport(size);
-	_renamePopup->FitToViewport(size);
 	_LayoutPanels();
 	if (_popupManager && _popupManager->Top() == _sourceInfoPanel)
 		_LayoutSourceIdentity();
@@ -421,7 +418,6 @@ void GuiHud::_InitResources(ResourceLib& resourceLib, bool forceInit)
 	if (_deletePopup)
 		_deletePopup->InitResources(resourceLib, forceInit);
 	_sourceInfoPanel->InitResources(resourceLib, forceInit);
-	_renamePopup->InitResources(resourceLib, forceInit);
 	_LayoutSourceIdentity();
 	_cableEndIcon->InitResources(resourceLib, forceInit);
 	_stationSocketIcon->InitResources(resourceLib, forceInit);
@@ -431,8 +427,7 @@ void GuiHud::_InitResources(ResourceLib& resourceLib, bool forceInit)
 
 void GuiHud::_ReleaseResources()
 {
-	if (_popupManager) _popupManager->Close(_renamePopup);
-	_renamePopup->ReleaseResources();
+	CancelTriggerRenames();
 	GuiPanel::_ReleaseResources();
 	graphics::GlDeleteQueue::DeleteBuffers(1, &_cableVertexBuffer);
 	_cableVertexBuffer = 0;
@@ -581,6 +576,12 @@ void GuiHud::_BuildTriggerRail()
 	{
 		auto button = _MakeTriggerButton(_triggerNames[i],
 			i < _triggers.size() ? _triggers[i] : std::weak_ptr<engine::Trigger>());
+		auto rename = std::make_shared<GuiTriggerRename>();
+		rename->Focus = _focusEditor;
+		rename->Submit = [this](const auto& name, const auto& id, auto revision) { return _SubmitRename(name, id, revision); };
+		rename->Feedback = [this](const auto& message) { SetQuantisationFeedback(message); };
+		rename->SetDisplay(_triggerNames[i]);
+		button->AddChild(rename); // Init relinks descendants after shared ownership exists.
 		GuiButtonParams closeParams;
 		closeParams.Texture = "trigger_close";
 		closeParams.OverTexture = "trigger_close_over";
@@ -592,9 +593,11 @@ void GuiHud::_BuildTriggerRail()
 		closeParams.TintColor = glm::vec3(1.0f);
 		auto close = std::make_shared<GuiHudActionButton>(closeParams, [this, i]() { _OpenDeleteConfirmation(i); });
 		button->AddChild(close);
-		auto editParams = GuiButtonParams::PanelButton(54u); editParams.Text = "Edit";
-		editParams.Size = {54u, 28u}; editParams.MinSize = editParams.Size;
-		editParams.Position = {28, 73};
+		auto editParams = GuiButtonParams::PanelButton(28u);
+		editParams.Texture = "rename_pencil"; editParams.OverTexture = "rename_pencil_over"; editParams.DownTexture = "rename_pencil_down";
+		editParams.TintColor = glm::vec3(1.0f);
+		editParams.Size = {28u, 28u}; editParams.MinSize = editParams.Size;
+		editParams.Position = {104, 104};
 		auto edit = std::make_shared<GuiHudActionButton>(editParams, [this, i]() { _OpenRename(i); });
 		button->AddChild(edit);
 		auto inputSocket = std::make_shared<GuiHudSocket>(
@@ -609,7 +612,7 @@ void GuiHud::_BuildTriggerRail()
 			_SocketSize,
 			glm::vec3(0.92f, 0.79f, 0.20f));
 		button->AddChild(outputSocket);
-		_triggerWidgets.push_back({ button, close, edit, inputSocket, outputSocket });
+		_triggerWidgets.push_back({ button, close, edit, rename, inputSocket, outputSocket });
 		_triggerList->AddChild(button);
 	}
 	const auto logicalHeight = _triggerNames.empty() ? 1u :
@@ -655,7 +658,7 @@ void GuiHud::_BuildTriggerRail()
 
 void GuiHud::_RebuildPanels()
 {
-	if (_popupManager) _popupManager->Close(_renamePopup);
+	CancelTriggerRenames();
 	const int previousScrollOffset = _triggerScroll ? _triggerScroll->ScrollOffset() : 0;
 	const int previousAudioOffset = _topAudioScroll ? _topAudioScroll->ScrollOffset() : 0;
 	const int previousMidiOffset = _topMidiScroll ? _topMidiScroll->ScrollOffset() : 0;
@@ -747,7 +750,6 @@ void GuiHud::SetRoutingConfig(unsigned int audioInputCount,
 		if (_popupManager)
 		{
 			_popupManager->Close(_deletePopup);
-			_popupManager->Close(_renamePopup);
 		}
 	}
 	_displayedRevision = routing.Revision;
@@ -1142,6 +1144,22 @@ void GuiHud::ClearPointerState()
 	if (_cableDrag) _CancelCableDrag();
 }
 
+void GuiHud::CancelTriggerRenames()
+{
+	for (auto& widgets : _triggerWidgets) widgets.Rename->Cancel();
+}
+
+bool GuiHud::RouteRenameTouch(actions::TouchAction action)
+{
+	const auto global = action.Position + GlobalPosition();
+	action.Position = global;
+	const bool inViewport = _ContentClip(_triggerScroll).Contains(global);
+	for (auto& widgets : _triggerWidgets)
+		if (widgets.Rename->OwnsPointer() && widgets.Rename->Touch(widgets.Rename->GlobalToLocal(action), inViewport))
+			return true;
+	return false;
+}
+
 void GuiHud::SetLoopEditorMode(bool enabled)
 {
 	if (_loopEditorMode == enabled) return;
@@ -1324,7 +1342,6 @@ RoutingEditAvailability GuiHud::_RoutingEditAvailability() const
 void GuiHud::_UpdateRoutingEditPresentation()
 {
 	const auto availability = _RoutingEditAvailability();
-	_renamePopup->Update(availability == RoutingEditAvailability::Applying);
 	const bool ready = availability == RoutingEditAvailability::Ready;
 	if (_addTriggerButton)
 		_addTriggerButton->SetEnabled(ready);
@@ -1333,6 +1350,8 @@ void GuiHud::_UpdateRoutingEditPresentation()
 		const auto trigger = i < _triggers.size() ? _triggers[i].lock() : nullptr;
 		_triggerWidgets[i].Close->SetEnabled(ready && trigger && trigger->CanEditRouting());
 		_triggerWidgets[i].Edit->SetEnabled(_CanEditTrigger(i));
+		_triggerWidgets[i].Edit->SetVisible(!_triggerWidgets[i].Rename->Active());
+		_triggerWidgets[i].Rename->Update(availability == RoutingEditAvailability::Applying);
 	}
 
 	if (!_routingStatusLabel || !_performanceGroupFeedback.empty() || !_quantisationFeedback.empty() || _lastRoutingEditAvailability == availability)
@@ -1349,13 +1368,11 @@ void GuiHud::_UpdateRoutingEditPresentation()
 
 void GuiHud::_OpenRename(size_t triggerIndex)
 {
-	if (!_popupManager || !_CanEditTrigger(triggerIndex) || triggerIndex >= _displayedRig.Triggers.size()) return;
+	if (!_CanEditTrigger(triggerIndex) || triggerIndex >= _displayedRig.Triggers.size() || triggerIndex >= _triggerWidgets.size()) return;
 	_CancelCableDrag();
 	const auto& trigger = _displayedRig.Triggers[triggerIndex];
-	_renamePopup->FitToViewport(GetSize());
-	_popupManager->Open(_renamePopup, shared_from_this(), [this]() { _renamePopup->Dismissed(); },
-		[this]() { return _renamePopup->CanDismiss(); });
-	_renamePopup->Begin(trigger.Id, trigger.Name, _displayedRevision);
+	_triggerWidgets[triggerIndex].Rename->Begin(trigger.Id, trigger.Name, _displayedRevision);
+	_triggerWidgets[triggerIndex].Edit->SetVisible(false);
 }
 
 std::string GuiHud::_SubmitRename(const std::string& name, const std::string& id, std::uint64_t revision)
@@ -1370,7 +1387,8 @@ std::string GuiHud::_SubmitRename(const std::string& name, const std::string& id
 	io::RigFile::Diagnostics diagnostics;
 	const auto normalized = io::RigFile::Normalize(candidate, &diagnostics);
 	if (!normalized) return diagnostics.empty() ? "Invalid trigger name" : diagnostics.front().Message;
-	return _SubmitCandidate(*normalized) ? "" : "Rename unavailable; retry";
+	const auto& submit = _submitTriggerRename ? _submitTriggerRename : _submitRigEdit;
+	return submit && submit(*normalized) ? "" : "Rename unavailable; retry";
 }
 
 void GuiHud::_OpenDeleteConfirmation(size_t triggerIndex)
@@ -1990,16 +2008,6 @@ std::shared_ptr<GuiButton> GuiHud::_MakeTriggerButton(const std::string& text,
 	button->AddChild(std::make_shared<GuiHudTriggerPedal>(ditchParams, std::move(trigger), false,
 		_displayedRevision, _acceptTriggerInput));
 
-	GuiLabelParams labelParams = GuiLabelParams::PanelScrollRow(text, 0u);
-	base::GuiElementParams band;
-	band.Position = {4, static_cast<int>(_TriggerButtonHeight) - 28};
-	band.Size = {_TriggerButtonWidth - 8u, 24u}; band.Texture = "fader_back_panel";
-	button->AddChild(std::make_shared<base::GuiElement>(band));
-	labelParams.Position = { 6, static_cast<int>(_TriggerButtonHeight) - 26 };
-	labelParams.Size = { _TriggerButtonWidth - 12u, 20u };
-	labelParams.Ellipsize = true;
-	labelParams.CenterHorizontally = true;
-	button->AddChild(std::make_shared<GuiLabel>(labelParams));
 	return button;
 }
 

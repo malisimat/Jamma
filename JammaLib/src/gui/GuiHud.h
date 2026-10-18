@@ -45,6 +45,7 @@ namespace gui
 		{}
 
 		std::function<bool(const io::RigFile&)> SubmitRigEdit;
+		std::function<bool(const io::RigFile&)> SubmitTriggerRename;
 		std::function<RoutingEditAvailability()> RoutingEditAvailabilityState;
 		std::function<bool(std::uint64_t)> AcceptTriggerInput;
 		std::function<void(const std::shared_ptr<base::GuiElement>&, bool)> FocusEditor;
@@ -87,6 +88,8 @@ namespace gui
 		virtual actions::ActionResult OnAction(actions::TouchMoveAction action) override;
 		virtual actions::ActionResult OnAction(actions::KeyAction action) override;
 		void ClearPointerState() override;
+		bool RouteRenameTouch(actions::TouchAction action);
+		void CancelTriggerRenames();
 		void SetCableRevealHeld(bool held);
 		void SetAudioInputPeak(unsigned int channel, float peak, unsigned int numSamps);
 		void SetMidiInputPeak(unsigned int input, float peak, unsigned int numSamps);
@@ -219,6 +222,7 @@ namespace gui
 			std::shared_ptr<GuiButton> Card;
 			std::shared_ptr<GuiButton> Close;
 			std::shared_ptr<GuiButton> Edit;
+			std::shared_ptr<GuiTriggerRename> Rename;
 			std::shared_ptr<base::GuiElement> InputSocket;
 			std::shared_ptr<base::GuiElement> OutputSocket;
 		};
@@ -252,7 +256,6 @@ namespace gui
 		std::string _performanceGroupFeedback; // UI/job owner under Scene serialization
 		float _editModeAlpha = 0.0f;
 		std::shared_ptr<GuiPopup> _deletePopup;
-		std::shared_ptr<GuiTriggerRename> _renamePopup;
 		// UI-owned read-only identity popup. Routing rebuilds do not mutate it;
 		// resize and resource work stay on the existing UI/render paths.
 		std::shared_ptr<GuiPanel> _sourceInfoPanel;
@@ -276,6 +279,8 @@ namespace gui
 		std::optional<CableInteraction::Drag> _cableDrag;
 		std::optional<size_t> _deleteTriggerIndex;
 		std::function<bool(const io::RigFile&)> _submitRigEdit;
+		std::function<bool(const io::RigFile&)> _submitTriggerRename;
+		std::function<void(const std::shared_ptr<base::GuiElement>&, bool)> _focusEditor;
 		std::function<RoutingEditAvailability()> _routingEditAvailability;
 		std::function<bool(std::uint64_t)> _acceptTriggerInput;
 		std::optional<RoutingEditAvailability> _lastRoutingEditAvailability;

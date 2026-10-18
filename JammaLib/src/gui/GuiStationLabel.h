@@ -41,6 +41,7 @@ namespace gui
 		static constexpr unsigned int LabelWidth = 200u;
 		static constexpr unsigned int LabelHeight = GuiButtonParams::DefaultHeight;
 		static constexpr unsigned int ButtonWidth = 76u;
+		static constexpr unsigned int PencilSize = 28u;
 		static constexpr unsigned int ButtonGap = 4u;
 		GuiStationLabel() : base::GuiElement(base::GuiElementParams{})
 		{
@@ -52,8 +53,13 @@ namespace gui
 			background.TextureOpacity = 0.75f;
 			_background = std::make_shared<base::GuiElement>(background);
 			_editor = std::make_shared<Editor>();
-			auto button = GuiButtonParams::PanelButton(ButtonWidth); button.Text = "Edit";
+			auto button = GuiButtonParams::PanelButton(PencilSize);
+			button.Size = {PencilSize, PencilSize}; button.MinSize = button.Size;
+			button.TextureShader = "texture";
+			button.Texture = "rename_pencil"; button.OverTexture = "rename_pencil_over";
+			button.DownTexture = "rename_pencil_down"; button.OutTexture = "rename_pencil";
 			_edit = std::make_shared<GuiButton>(button);
+			button = GuiButtonParams::PanelButton(ButtonWidth);
 			button.Text = "Cancel"; _cancel = std::make_shared<GuiButton>(button);
 			_feedback = std::make_shared<GuiLabel>(GuiLabelParams::PanelHeader("", 280u, 22u));
 			_feedback->SetPosition({0, static_cast<int>(LabelHeight + 4u)});
@@ -93,9 +99,9 @@ namespace gui
 			_label->SetPosition({0, static_cast<int>((LabelHeight - 26u) / 2u)});
 			_editor->SetSize({width, LabelHeight});
 			_background->SetSize({width, LabelHeight});
-			_edit->SetSize({ButtonWidth, LabelHeight}); _cancel->SetSize({ButtonWidth, LabelHeight});
-			_edit->SetPosition({static_cast<int>(width + 4u), 0});
-			_cancel->SetPosition(_edit->Position());
+			_edit->SetSize({PencilSize, PencilSize}); _cancel->SetSize({ButtonWidth, LabelHeight});
+			_edit->SetPosition({static_cast<int>(width + ButtonGap), static_cast<int>((LabelHeight - PencilSize) / 2u)});
+			_cancel->SetPosition({static_cast<int>(width + ButtonGap), 0});
 		}
 		bool Active() const { return _active; }
 		bool OwnsPointer() const { return _active || _labelPress.has_value() || _consumeRelease; }

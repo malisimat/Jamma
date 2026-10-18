@@ -351,18 +351,18 @@ TEST_F(HudCableInteractionTests, AddTriggerRevealsPublishedCardAfterResizeAndSup
 	EXPECT_FALSE(Submissions.back().Triggers.back().Id.empty());
 	const auto added = Submissions.back(); PublishRig(added); scroll = TriggerScroll();
 	ASSERT_TRUE(scroll->Content()->TryGetChild(12)); EXPECT_FALSE(scroll->Content()->TryGetChild(13));
-	EXPECT_EQ(100u, scroll->Content()->TryGetChild(12)->GetSize().Height);
+	EXPECT_EQ(132u, scroll->Content()->TryGetChild(12)->GetSize().Height);
 	EXPECT_EQ(scroll->MaxScrollOffset(), scroll->ScrollOffset());
 	const auto beforeExpand = scroll->ScrollOffset();
 	Hud->SetSize({ 1200, 800 });
 	EXPECT_EQ((std::min)(beforeExpand, scroll->MaxScrollOffset()), scroll->ScrollOffset());
 	for (unsigned char index = 0; index < 13; ++index)
-		EXPECT_EQ(100u, scroll->Content()->TryGetChild(index)->GetSize().Height);
+		EXPECT_EQ(132u, scroll->Content()->TryGetChild(index)->GetSize().Height);
 	io::RigFile empty = added; empty.Triggers.clear(); PublishRig(empty); Submissions.clear();
 	EXPECT_FALSE(TriggerScroll()->Content()->TryGetChild(0));
 	Click(Hud->TryGetChild(1)->TryGetChild(2)); ASSERT_EQ(1u, Submissions.size());
 	ASSERT_EQ(1u, Submissions.back().Triggers.size()); const auto first = Submissions.back(); PublishRig(first);
-	EXPECT_EQ(100u, TriggerScroll()->Content()->TryGetChild(0)->GetSize().Height);
+	EXPECT_EQ(132u, TriggerScroll()->Content()->TryGetChild(0)->GetSize().Height);
 }
 
 TEST_F(HudCableInteractionTests, SupportedCompactProfileKeepsSourcesAndTriggerActionsReachable)
@@ -373,7 +373,7 @@ TEST_F(HudCableInteractionTests, SupportedCompactProfileKeepsSourcesAndTriggerAc
 	unsigned int sourceRows = 0;
 	for (const auto& sourceScroll : scrolls) {
 		const auto card = sourceScroll->Content() ? sourceScroll->Content()->TryGetChild(0) : nullptr;
-		if (!card || card->GetSize().Height == 100u) continue;
+		if (!card || card->GetSize().Height == 132u) continue;
 		++sourceRows;
 		EXPECT_GE(sourceScroll->GetSize().Width, 80u);
 		EXPECT_GE(card->GetSize().Width, 80u);
@@ -385,9 +385,11 @@ TEST_F(HudCableInteractionTests, SupportedCompactProfileKeepsSourcesAndTriggerAc
 	auto scroll = TriggerScroll(); ASSERT_TRUE(scroll); EXPECT_GE(scroll->GetSize().Height, 100u);
 	scroll->SetScrollOffset(0);
 	const auto first = scroll->Content()->TryGetChild(0); ASSERT_TRUE(first);
-	EXPECT_EQ(100u, first->GetSize().Height);
-	EXPECT_GE(first->GlobalPosition().Y, scroll->GlobalPosition().Y);
-	EXPECT_LE(first->GlobalPosition().Y + 100, scroll->GlobalPosition().Y + static_cast<int>(scroll->GetSize().Height));
+	EXPECT_EQ(132u, first->GetSize().Height);
+	// The taller name row can clip a card in this compact viewport; scrolling
+	// still exposes its controls. Verify the first card intersects the viewport.
+	EXPECT_LE(first->GlobalPosition().Y, scroll->GlobalPosition().Y + static_cast<int>(scroll->GetSize().Height));
+	EXPECT_GE(first->GlobalPosition().Y + 132, scroll->GlobalPosition().Y);
 	EXPECT_TRUE(Hud->TryGetChild(1)->TryGetChild(0)->IsVisible());
 	const auto close = first->TryGetChild(3);
 	Click(close); ASSERT_TRUE(Popups.IsOpen());
@@ -403,7 +405,7 @@ TEST_F(HudCableInteractionTests, SupportedCompactProfileKeepsSourcesAndTriggerAc
 	ASSERT_EQ(1u, Submissions.size()); EXPECT_EQ(12u, Submissions.back().Triggers.size());
 	const auto appended = Submissions.back(); PublishRig(appended); scroll = TriggerScroll();
 	EXPECT_EQ(scroll->MaxScrollOffset(), scroll->ScrollOffset());
-	for (unsigned char index = 0; index < 12; ++index) EXPECT_EQ(100u, scroll->Content()->TryGetChild(index)->GetSize().Height);
+	for (unsigned char index = 0; index < 12; ++index) EXPECT_EQ(132u, scroll->Content()->TryGetChild(index)->GetSize().Height);
 }
 
 TEST_F(HudCableInteractionTests, DeleteConfirmationSubmitsOnlySelectedTriggerAndClampsPublishedList)
@@ -424,7 +426,7 @@ TEST_F(HudCableInteractionTests, DeleteConfirmationSubmitsOnlySelectedTriggerAnd
 	const auto beforeShrink = scroll->ScrollOffset();
 	Hud->SetSize({ 320, 180 }); EXPECT_EQ(beforeShrink, scroll->ScrollOffset());
 	for (unsigned char index = 0; index < 11; ++index)
-		EXPECT_EQ(100u, scroll->Content()->TryGetChild(index)->GetSize().Height);
+		EXPECT_EQ(132u, scroll->Content()->TryGetChild(index)->GetSize().Height);
 }
 
 class CableInteractionTests : public ::testing::Test

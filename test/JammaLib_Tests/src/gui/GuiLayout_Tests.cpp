@@ -756,7 +756,7 @@ TEST_F(HudResponsiveLayoutTests, ResizeKeepsScrollViewportsInsideActualWindowAnd
 				static_cast<int>(card->GetSize().Width) - 13);
 		}
 		for (unsigned char index = 0; index < 12; ++index)
-			EXPECT_EQ(100u, scrolls[2]->Content()->TryGetChild(index)->GetSize().Height);
+			EXPECT_EQ(132u, scrolls[2]->Content()->TryGetChild(index)->GetSize().Height);
 	}
 	EXPECT_EQ(sourceCard.get(), scrolls[0]->Content()->TryGetChild(0).get());
 	EXPECT_EQ(largeWidth, sourceCard->GetSize().Width);

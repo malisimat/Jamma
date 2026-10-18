@@ -135,6 +135,11 @@ Scene::Scene(SceneParams params,
 		// HUD dispatch already owns the scene lock; the public entry locks for external callers.
 		return _RequestRigEditLocked(candidate) == RigCoordinator::EditResult::Pending;
 	};
+	hudParams.SubmitTriggerRename = [this](const io::RigFile& candidate)
+	{
+		// Text acceptance also runs on blur/keyboard, outside HUD dispatch locking.
+		return RequestRigEdit(candidate) == RigCoordinator::EditResult::Pending;
+	};
 	_hudPanel = std::make_shared<GuiHud>(hudParams);
 	AddChild(_hudPanel);
 
@@ -902,6 +907,8 @@ bool Scene::AdvanceUiAnimations()
 	const auto depth = _selector->CurrentSelectDepth();
 	const bool stationDitchVisible = depth == base::DEPTH_STATION;
 	const bool takeDitchVisible = depth == base::DEPTH_LOOPTAKE || depth == base::DEPTH_LOOP;
+	if (_hudPanel && (_popupManager.IsOpen() || _loopEditor.IsEngaged() || _isSceneQuitting.load(std::memory_order_acquire)))
+		_hudPanel->CancelTriggerRenames();
 	for (const auto& station : _stations)
 		if (auto label = station->GetGuiRack()->StationLabel())
 		{
@@ -1140,6 +1147,8 @@ ActionResult Scene::_OnPointerAction(TouchAction action)
 		}
 		return popupRes;
 	}
+	if (_hudPanel && _hudPanel->RouteRenameTouch(_hudPanel->GlobalToLocal(action)))
+		return { true, {}, {}, ACTIONRESULT_DEFAULT, nullptr, {} };
 	if (!_loopEditor.IsEngaged())
 	{
 		const auto stations = SnapshotStations();
@@ -2941,6 +2950,7 @@ bool Scene::PumpGlobalKeyCapture(actions::KeyAction& action) noexcept
 
 void Scene::Shutdown()
 {
+	if (_hudPanel) _hudPanel->CancelTriggerRenames();
 	for (const auto& station : _stations)
 		if (auto label = station->GetGuiRack()->StationLabel()) label->Cancel();
 	_vstRackControls->Reset();
