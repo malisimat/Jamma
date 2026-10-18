@@ -1141,17 +1141,31 @@ void GuiHud::_CancelCableDrag()
 
 void GuiHud::ClearPointerState()
 {
+	_labelPress.reset();
 	GuiPanel::ClearPointerState();
 	if (_cableDrag) _CancelCableDrag();
 }
 
 void GuiHud::CancelTriggerRenames()
 {
+	_labelPress.reset();
 	for (auto& widgets : _triggerWidgets) widgets.Rename->Cancel();
+}
+
+bool GuiHud::CapturesPointer(Position2d point) const
+{
+	if (!IsVisible() || !IsEnabled()) return false;
+	for (const auto& panel : {_topStrip, _triggerRail})
+		if (panel && panel->IsVisible() && Size2d::RectTest(panel->GetSize(), panel->ParentToLocal(point))) return true;
+	return false;
 }
 
 bool GuiHud::RouteRenameTouch(actions::TouchAction action)
 {
+	// Starting a draft acquires text focus; run this release outside Scene's
+	// serialized routing dispatch, just like acceptance through blur/Enter.
+	if (_labelPress && action.State == actions::TouchAction::TOUCH_UP)
+		return OnAction(action).IsEaten;
 	const auto global = action.Position + GlobalPosition();
 	action.Position = global;
 	const bool inViewport = _ContentClip(_triggerScroll).Contains(global);
@@ -1187,7 +1201,8 @@ void GuiHud::_FilterCableHits(std::vector<CableInteraction::Endpoint>& endpoints
 			const auto control = widgets.Card->FindTopmostDescendant(widgets.Card->GlobalToLocal(global));
 			if (widgets.Edit->HitTest(widgets.Edit->GlobalToLocal(global)) ||
 				widgets.Close->HitTest(widgets.Close->GlobalToLocal(global)) ||
-				std::dynamic_pointer_cast<GuiHudTriggerPedal>(control))
+				std::dynamic_pointer_cast<GuiHudTriggerPedal>(control) ||
+				widgets.Rename->HitLabel(widgets.Rename->GlobalToLocal(global)))
 			{ endpoints.clear(); cables.clear(); return; }
 		}
 	std::erase_if(endpoints, [this](const auto& endpoint) {
@@ -1439,17 +1454,51 @@ void GuiHud::_RevealTrigger(size_t triggerIndex)
 
 actions::ActionResult GuiHud::OnAction(actions::TouchAction action)
 {
+	if (!IsVisible() || !IsEnabled()) return actions::ActionResult::NoAction();
+	if (_labelPress)
+	{
+		if (action.State == actions::TouchAction::TOUCH_UP &&
+			action.Index == _labelPress->Index && action.Touch == _labelPress->Source)
+		{
+			const auto press = *_labelPress; _labelPress.reset();
+			const auto global = action.Position + GlobalPosition();
+			if (!press.Moved && std::abs(action.Position.X - press.Position.X) <= 4 &&
+				std::abs(action.Position.Y - press.Position.Y) <= 4 && press.Revision == _displayedRevision &&
+				press.TriggerIndex < _displayedRig.Triggers.size() && _displayedRig.Triggers[press.TriggerIndex].Id == press.Id &&
+				_ContentClip(_triggerScroll).Contains(global) &&
+				_triggerWidgets[press.TriggerIndex].Rename->HitLabel(_triggerWidgets[press.TriggerIndex].Rename->GlobalToLocal(global)))
+				_OpenRename(press.TriggerIndex);
+		}
+		return {true, {}, {}, actions::ACTIONRESULT_DEFAULT, nullptr, shared_from_this()};
+	}
+	if (action.State == actions::TouchAction::TOUCH_DOWN &&
+		(action.Touch == actions::TouchAction::TOUCH_FINGER || action.Index == 0) &&
+		_ContentClip(_triggerScroll).Contains(action.Position + GlobalPosition()))
+		for (size_t i = 0; i < _triggerWidgets.size(); ++i)
+			if (_triggerWidgets[i].Rename->HitLabel(_triggerWidgets[i].Rename->GlobalToLocal(action.Position + GlobalPosition())))
+			{
+				if (i < _displayedRig.Triggers.size()) _labelPress = LabelPress{i, _displayedRig.Triggers[i].Id,
+					_displayedRevision, action.Position, action.Touch, action.Index};
+				return {true, {}, {}, actions::ACTIONRESULT_DEFAULT, nullptr, shared_from_this()};
+			}
 	if (action.Index == 2 && action.State == actions::TouchAction::TOUCH_DOWN && _cableDrag.has_value())
 	{
 		_CancelCableDrag();
 		return { true, {}, {}, actions::ACTIONRESULT_DEFAULT, nullptr, {} };
 	}
 	if (action.Index != 0)
-		return GuiPanel::OnAction(action);
+	{
+		auto result = GuiPanel::OnAction(action);
+		if (!result.IsEaten && CapturesPointer(action.Position)) return {true, {}, {}, actions::ACTIONRESULT_DEFAULT, nullptr, shared_from_this()};
+		return result;
+	}
 	if (action.State == actions::TouchAction::TOUCH_DOWN)
 	{
 		auto result = _BeginCableDrag(action.Position);
-		return result.IsEaten ? result : GuiPanel::OnAction(action);
+		if (result.IsEaten) return result;
+		result = GuiPanel::OnAction(action);
+		if (!result.IsEaten && CapturesPointer(action.Position)) return {true, {}, {}, actions::ACTIONRESULT_DEFAULT, nullptr, shared_from_this()};
+		return result;
 	}
 	if (!_cableDrag.has_value())
 		return GuiPanel::OnAction(action);
@@ -1470,6 +1519,14 @@ actions::ActionResult GuiHud::OnAction(actions::TouchAction action)
 
 actions::ActionResult GuiHud::OnAction(actions::TouchMoveAction action)
 {
+	if (_labelPress)
+	{
+		_labelPress->Moved |= std::abs(action.Position.X - _labelPress->Position.X) > 4 ||
+			std::abs(action.Position.Y - _labelPress->Position.Y) > 4 ||
+			(action.IsRelative && action.RelativeDelta != Position2d{});
+		if (action.Touch == actions::TouchAction::TOUCH_MOUSE && action.MouseButtonsDown == 0u) _labelPress.reset();
+		return {true, {}, {}, actions::ACTIONRESULT_DEFAULT, nullptr, shared_from_this()};
+	}
 	// The engaged editor forwards HUD moves before Scene's ordinary capture
 	// routing. Handle native mouse capture loss here as well as via pointer clear.
 	if (_cableDrag && action.Touch == actions::TouchAction::TOUCH_MOUSE && action.MouseButtonsDown == 0u)

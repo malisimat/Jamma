@@ -4,6 +4,7 @@
 #include "gui/GuiHud.h"
 #include "gui/GuiScrollPanel.h"
 #include "gui/GuiPopupManager.h"
+#include "gui/GuiTriggerRename.h"
 #include "engine/RigSnapshot.h"
 #include "engine/Trigger.h"
 
@@ -369,6 +370,35 @@ TEST_F(HudCableInteractionTests, PedalPressWinsOverSocketRadiusWhileSocketCentre
 		EXPECT_FALSE(Routing->Triggers[triggerIndex].Instance->CanApplyCaptureRouting());
 	}
 	EXPECT_EQ(4u, admittedEdges);
+}
+
+TEST_F(HudCableInteractionTests, LabelClickOpensRawDraftOnReleaseAndOwnsBusyOrMovedGestures)
+{
+	const auto card = TriggerScroll()->Content()->TryGetChild(0);
+	const auto rename = std::dynamic_pointer_cast<gui::GuiTriggerRename>(card->TryGetChild(2));
+	ASSERT_TRUE(rename);
+	const auto label = rename->TryGetChild(1);
+	const auto editor = std::dynamic_pointer_cast<gui::GuiTextBox>(rename->TryGetChild(2));
+	ASSERT_TRUE(label); ASSERT_TRUE(editor);
+	actions::TouchAction touch; touch.Touch = actions::TouchAction::TOUCH_MOUSE; touch.Index = 0u;
+	touch.Position = label->GlobalPosition() + utils::Position2d{10, 10};
+	const auto press = [&]() { touch.State = actions::TouchAction::TOUCH_DOWN; return Hud->OnAction(touch); };
+	const auto release = [&]() { touch.State = actions::TouchAction::TOUCH_UP; return Hud->OnAction(touch); };
+	EXPECT_EQ(Hud, press().ActiveElement.lock()); EXPECT_FALSE(rename->Active());
+	EXPECT_TRUE(release().IsEaten); EXPECT_TRUE(rename->Active());
+	EXPECT_EQ(Routing->Rig.Triggers[0].Name, editor->Text());
+	rename->Cancel();
+	EXPECT_TRUE(press().IsEaten);
+	actions::TouchMoveAction move; move.Touch = actions::TouchAction::TOUCH_MOUSE; move.MouseButtonsDown = 1u;
+	move.Position = touch.Position + utils::Position2d{10, 0}; EXPECT_TRUE(Hud->OnAction(move).IsEaten);
+	move.Position = touch.Position; Hud->OnAction(move);
+	EXPECT_TRUE(release().IsEaten); EXPECT_FALSE(rename->Active());
+	Routing->Triggers[0].Instance->QueueExternalControlAction(true, true, touch, Routing->Revision);
+	EXPECT_TRUE(press().IsEaten); EXPECT_TRUE(release().IsEaten); EXPECT_FALSE(rename->Active());
+	EXPECT_FALSE(Hud->HasCableDrag());
+	EXPECT_TRUE(press().IsEaten); Hud->ClearPointerState();
+	EXPECT_TRUE(release().IsEaten); EXPECT_FALSE(rename->Active());
+	Hud->SetVisible(false); EXPECT_FALSE(press().IsEaten); EXPECT_FALSE(rename->Active());
 }
 
 TEST_F(HudCableInteractionTests, ClippedBodyReconnectPreservesOriginalTriggerAndStaleRevisionCancels)

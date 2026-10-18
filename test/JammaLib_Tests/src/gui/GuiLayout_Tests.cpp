@@ -14,6 +14,7 @@
 #include "gui/GuiPopupManager.h"
 #include "engine/RigSnapshot.h"
 #include "engine/Scene.h"
+#include "engine/Trigger.h"
 
 using base::LayoutSizing;
 using base::LayoutHAlign;
@@ -535,6 +536,10 @@ class SettingsTestScene : public Scene
 public:
 	SettingsTestScene(SceneParams params, io::UserConfig user) : Scene(std::move(params), std::move(user)) {}
 	std::shared_ptr<gui::GuiMainPanel> SettingsPanel() const { return _mainPanel; }
+	void SetHudForInputTest(const std::shared_ptr<gui::GuiHud>& hud) {
+		for (auto& child : _guiChildren) if (child == _hudPanel) child = hud;
+		_hudPanel = hud;
+	}
 };
 
 static utils::Position2d SettingsHandleCenter(const std::shared_ptr<gui::GuiMainPanel>& panel)
@@ -922,6 +927,59 @@ TEST(Scene, SettingsReceivesNextPressAndReleaseAfterWheelScroll) {
 	EXPECT_TRUE(scene.OnAction(press).IsEaten);
 	EXPECT_FALSE(std::dynamic_pointer_cast<gui::GuiMainPanel>(owner)->IsExpanded());
 	EXPECT_FALSE(scene.HasSelection());
+}
+
+TEST(Scene, HudLabelAndPanelCaptureBeforeUnderlyingControlsAndKeepTheirRelease) {
+	SettingsTestScene scene(SceneParams({ "" }, {}, { 1200u, 800u }), io::UserConfig{});
+	gui::GuiHudParams params; params.Size = {1200u, 800u};
+	const auto hud = std::make_shared<gui::GuiHud>(params);
+	scene.SetHudForInputTest(hud); // Idle test-owned routing; no audio-device heartbeat.
+	engine::RigSnapshot routing; routing.Revision = 7u;
+	io::RigFile::Trigger saved{}; saved.Id = "raw-id"; saved.Name = "Raw name";
+	routing.Rig.Triggers.push_back(saved);
+	engine::RigSnapshotTrigger runtime{}; runtime.Id = saved.Id; runtime.RigTriggerIndex = 0u;
+	runtime.Instance = std::make_shared<engine::Trigger>(engine::TriggerParams{});
+	routing.Triggers.push_back(runtime);
+	io::RigFileRouting::TriggerResolution resolved{}; resolved.TriggerIndex = 0u; resolved.TriggerName = saved.Name;
+	routing.Graph.Triggers.push_back(resolved);
+	hud->SetRoutingConfig(0u, {}, routing); hud->Init();
+	const auto rail = hud->TryGetChild(1);
+	const auto scroll = std::dynamic_pointer_cast<gui::GuiScrollPanel>(rail->TryGetChild(1));
+	ASSERT_TRUE(scroll);
+	const auto stack = std::dynamic_pointer_cast<GuiStackPanel>(scroll->Content());
+	ASSERT_TRUE(stack); stack->ComputeLayout();
+	const auto card = stack->TryGetChild(0);
+	const auto rename = std::dynamic_pointer_cast<gui::GuiTriggerRename>(card->TryGetChild(2));
+	ASSERT_TRUE(rename);
+	const auto label = rename->TryGetChild(1);
+	auto underneath = std::make_shared<GuiButton>(MakeButtonParams(1200u, 800u)); scene.AddChild(underneath);
+	TouchAction touch; touch.Touch = TouchAction::TOUCH_MOUSE; touch.Index = 0u;
+	touch.Position = label->GlobalPosition() + utils::Position2d{10, 10}; touch.State = TouchAction::TOUCH_DOWN;
+	EXPECT_EQ(hud, scene.OnAction(touch).ActiveElement.lock()); EXPECT_FALSE(rename->Active());
+	EXPECT_EQ(base::GuiElement::STATE_NORMAL, underneath->GetState());
+	touch.Position.X += 2; touch.State = TouchAction::TOUCH_UP;
+	EXPECT_TRUE(scene.OnAction(touch).IsEaten); EXPECT_TRUE(rename->Active());
+	rename->Cancel();
+	touch.Touch = TouchAction::TOUCH_FINGER; touch.Index = 7; touch.State = TouchAction::TOUCH_DOWN;
+	EXPECT_EQ(hud, scene.OnAction(touch).ActiveElement.lock());
+	touch.State = TouchAction::TOUCH_UP; touch.Index = 8;
+	EXPECT_TRUE(scene.OnAction(touch).IsEaten); EXPECT_FALSE(rename->Active()); EXPECT_TRUE(hud->HasLabelPress());
+	touch.Touch = TouchAction::TOUCH_MOUSE; touch.Index = 7;
+	EXPECT_TRUE(scene.OnAction(touch).IsEaten); EXPECT_FALSE(rename->Active()); EXPECT_TRUE(hud->HasLabelPress());
+	touch.Touch = TouchAction::TOUCH_FINGER;
+	actions::TouchMoveAction fingerMove; fingerMove.Touch = TouchAction::TOUCH_FINGER;
+	fingerMove.Position = touch.Position; fingerMove.MouseButtonsDown = 0u;
+	EXPECT_TRUE(scene.OnAction(fingerMove).IsEaten);
+	touch.State = TouchAction::TOUCH_UP;
+	EXPECT_TRUE(scene.OnAction(touch).IsEaten); EXPECT_TRUE(rename->Active());
+	rename->Cancel(); touch.Touch = TouchAction::TOUCH_MOUSE; touch.Index = 0;
+	touch.Position = rail->GlobalPosition() + utils::Position2d{8, 8}; touch.State = TouchAction::TOUCH_DOWN;
+	EXPECT_EQ(hud, scene.OnAction(touch).ActiveElement.lock());
+	touch.Position = {500, 400}; touch.State = TouchAction::TOUCH_UP;
+	EXPECT_TRUE(scene.OnAction(touch).IsEaten);
+	EXPECT_EQ(base::GuiElement::STATE_NORMAL, underneath->GetState()); EXPECT_FALSE(scene.HasSelection());
+	touch.State = TouchAction::TOUCH_DOWN;
+	EXPECT_EQ(underneath, scene.OnAction(touch).ActiveElement.lock());
 }
 
 TEST(Scene, SettingsReceivesNextControlAfterGuiCaptureCancellation) {

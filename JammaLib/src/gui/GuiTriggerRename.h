@@ -51,7 +51,7 @@ namespace gui
 			_label = std::make_shared<GuiLabel>(label);
 			_editor = std::make_shared<Editor>(); _editor->SetPosition({6, RowY}); _editor->SetSize({96u, ActionSize});
 			auto cancel = GuiButtonParams::PanelButton(ActionSize);
-			cancel.Texture = "trigger_close"; cancel.OverTexture = "trigger_close_over"; cancel.DownTexture = "trigger_close_down";
+			cancel.Texture = "rename_cancel"; cancel.OverTexture = "rename_cancel_over"; cancel.DownTexture = "rename_cancel_down";
 			cancel.TintColor = glm::vec3(1.0f);
 			cancel.Position = {ActionX, RowY}; cancel.Size = {ActionSize, ActionSize}; cancel.MinSize = cancel.Size;
 			_cancel = std::make_shared<GuiButton>(cancel);
@@ -64,6 +64,7 @@ namespace gui
 		std::function<std::string(const std::string&, const std::string&, std::uint64_t)> Submit;
 		std::function<void(const std::string&)> Feedback;
 		bool Active() const { return _active; }
+		bool HitLabel(utils::Position2d point) const { return !_active && _label->IsVisible() && _label->HitTest(_label->ParentToLocal(point)); }
 		bool OwnsPointer() const { return _active || _consumeRelease; }
 		void SetDisplay(const std::string& name) { _label->SetString(name); }
 		void Begin(const std::string& id, const std::string& name, std::uint64_t revision)

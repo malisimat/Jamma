@@ -768,6 +768,10 @@ TEST(GuiTextBox, SelectedLoadedUtf8EditsOnlyAtCodePointBoundaries) {
 	label->SetVisible(true); label->Layout({0, 0}, 80u);
 	label->Update("Keys", 7u, true, true, false);
 	label->Init();
+	const auto pencil = label->TryGetChild(3), cancel = label->TryGetChild(4);
+	ASSERT_TRUE(pencil); ASSERT_TRUE(cancel);
+	EXPECT_EQ(pencil->Position().X, cancel->Position().X); EXPECT_EQ(pencil->Position().Y, cancel->Position().Y);
+	EXPECT_EQ(pencil->GetSize().Width, cancel->GetSize().Width); EXPECT_EQ(pencil->GetSize().Height, cancel->GetSize().Height);
 	const utils::Position2d editPoint{static_cast<int>(gui::GuiStationLabel::LabelWidth + 10u), 10};
 	const auto editButton = label->FindTopmostDescendant(editPoint);
 	ASSERT_TRUE(editButton);

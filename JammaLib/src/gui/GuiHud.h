@@ -12,6 +12,7 @@
 #include "GuiVu.h"
 #include "CableInteraction.h"
 #include "../io/RigFile.h"
+#include "../actions/TouchAction.h"
 
 namespace resources
 {
@@ -89,6 +90,8 @@ namespace gui
 		virtual actions::ActionResult OnAction(actions::KeyAction action) override;
 		void ClearPointerState() override;
 		bool RouteRenameTouch(actions::TouchAction action);
+		bool HasLabelPress() const { return _labelPress.has_value(); }
+		bool CapturesPointer(utils::Position2d localPoint) const;
 		void CancelTriggerRenames();
 		void SetCableRevealHeld(bool held);
 		void SetAudioInputPeak(unsigned int channel, float peak, unsigned int numSamps);
@@ -278,6 +281,17 @@ namespace gui
 		io::RigFile _displayedRig;
 		std::uint64_t _displayedRevision = 0u;
 		std::optional<CableInteraction::Drag> _cableDrag;
+		struct LabelPress
+		{
+			size_t TriggerIndex;
+			std::string Id;
+			std::uint64_t Revision;
+			utils::Position2d Position;
+			actions::TouchAction::TouchType Source;
+			int Index;
+			bool Moved = false;
+		};
+		std::optional<LabelPress> _labelPress;
 		std::optional<size_t> _deleteTriggerIndex;
 		std::function<bool(const io::RigFile&)> _submitRigEdit;
 		std::function<bool(const io::RigFile&)> _submitTriggerRename;
