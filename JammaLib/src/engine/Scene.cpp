@@ -1138,8 +1138,6 @@ ActionResult Scene::_OnPointerAction(TouchAction action)
 		_hoverPath2d.clear();
 	}
 
-	std::cout << "Touch action " << action.Touch << " [State " << action.State << "] Index " << action.Index << "(Modifiers " << action.Modifiers << ")" << std::endl;
-
 	if ((TouchAction::TouchState::TOUCH_DOWN == action.State)
 		&& (0 == action.Index)
 		&& (Action::MODIFIER_SHIFT & action.Modifiers)
@@ -1541,7 +1539,6 @@ ActionResult Scene::OnAction(KeyAction action)
 		{ std::scoped_lock lock(_sceneMutex); _stationManagement.Cancel(); }
 		return { true, {}, {}, ACTIONRESULT_DEFAULT, nullptr, {} };
 	}
-	std::cout << "Key action " << action.KeyActionType << " [" << action.KeyChar << "] IsSytem:" << action.IsSystem << ", Modifiers:" << action.Modifiers << "]" << std::endl;
 	if (_popupManager.IsOpen())
 	{
 		_loopEditor.CancelInput();
@@ -1705,7 +1702,6 @@ ActionResult Scene::OnAction(KeyAction action)
 			if (!res.IsEaten)
 				continue;
 
-		std::cout << "KeyAction eaten: " << res.SourceId << ", " << res.TargetId << ", " << res.ResultType << std::endl;
 		switch (res.ResultType)
 		{
 		case ACTIONRESULT_ACTIVATE:
@@ -1745,7 +1741,6 @@ ActionResult Scene::OnAction(KeyAction action)
 
 	if (res.IsEaten)
 	{
-		std::cout << "KeyAction eaten by selector: " << res.ResultType << std::endl;
 		_UpdateSelection(res.ResultType);
 		return res;
 	}
