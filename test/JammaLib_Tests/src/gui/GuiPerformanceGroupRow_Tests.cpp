@@ -272,6 +272,11 @@ TEST_F(SelectionGroupPanelTests, CapturedReleaseOutsideScrollClipCancelsPartlyVi
     panel->AdvanceAnimation(0.12f);
     auto add = mute->Button(0);
     const auto clip = scroll->ContentRect().Translated(scroll->GlobalPosition());
+    // Place this row across the clip explicitly; panel padding is not part of
+    // the capture contract being tested.
+    auto rowPosition = mute->Position();
+    rowPosition.Y += clip.Bottom - add->GlobalPosition().Y - static_cast<int>(add->GetSize().Height / 2u);
+    mute->SetPosition(rowPosition);
     const auto position = add->GlobalPosition();
     const auto press = utils::Position2d{ position.X + 12, clip.Bottom + 2 };
     const auto release = utils::Position2d{ press.X, clip.Bottom - 1 };

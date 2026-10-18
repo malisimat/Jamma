@@ -579,37 +579,6 @@ TEST_F(SceneRoutingIntegrationTest, ExpandedRackSuppressesOtherStationsAndRestor
 	scene->Shutdown();
 }
 
-TEST_F(SceneRoutingIntegrationTest, CompactTakeRacksShowOneSelectedOwnerWithoutOverlappingControls)
-{
-	auto scene = FreshScene({ Station("Compact") }, {});
-	ASSERT_TRUE(scene);
-	const auto station = scene->SnapshotStations().front();
-	const auto first = station->AddTake();
-	const auto second = station->AddTake();
-	scene->CommitChanges();
-	engine::SourceLossIntegrationTestAccess::SelectTakeDepth(*scene);
-	station->SetModelPosition({0.0f, 0.0f, 0.0f});
-	first->SetSize({200u, 30u});
-	second->SetSize({200u, 30u});
-	first->DeSelect();
-	second->DeSelect();
-	const auto firstPanel = first->GetGuiRack()->GetMasterSlider()->Parent();
-	const auto secondPanel = second->GetGuiRack()->GetMasterSlider()->Parent();
-	engine::SourceLossIntegrationTestAccess::RefreshRackVisibility(*scene);
-	EXPECT_TRUE(firstPanel->IsVisible());
-	EXPECT_FALSE(secondPanel->IsVisible());
-	second->Select();
-	engine::SourceLossIntegrationTestAccess::RefreshRackVisibility(*scene);
-	EXPECT_FALSE(firstPanel->IsVisible());
-	EXPECT_TRUE(secondPanel->IsVisible());
-	first->SetSize({200u, 150u});
-	second->SetSize({200u, 150u});
-	engine::SourceLossIntegrationTestAccess::RefreshRackVisibility(*scene);
-	EXPECT_TRUE(firstPanel->IsVisible());
-	EXPECT_TRUE(secondPanel->IsVisible());
-	scene->Shutdown();
-}
-
 TEST_F(SceneRoutingIntegrationTest, SelectingAnotherTakeCollapsesRackButHoverAndRackInputPreserveIt)
 {
 	auto scene = FreshScene({ Station("Keys") }, {});

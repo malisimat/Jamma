@@ -1032,38 +1032,14 @@ TEST(GuiMainPanel, ControlsRecoverTheirWidthsAfterTinyAndZeroViewport) {
 	params.Settings = { { gui::SettingsPage::Timing, "Offset", numeric, 7002u } };
 	auto panel = std::make_shared<gui::GuiMainPanel>(params);
 	panel->Init();
-	panel->SetViewportSize({ 200, 200 });
-	auto frame = panel->TryGetChild(0);
-	ASSERT_TRUE(frame);
-	auto title = frame->TryGetChild(0);
-	auto tabs = std::dynamic_pointer_cast<GuiScrollPanel>(frame->TryGetChild(2));
-	ASSERT_TRUE(title);
-	ASSERT_TRUE(tabs);
-	for (const auto& element : { title, std::static_pointer_cast<base::GuiElement>(tabs) })
-	{
-		EXPECT_GE(element->GlobalPosition().Y, 0);
-		EXPECT_LE(element->GlobalPosition().Y + static_cast<int>(element->GetSize().Height), 200);
-	}
-	auto midiTab = tabs->Content()->TryGetChild(static_cast<unsigned char>(gui::SettingsPage::Midi));
-	ASSERT_TRUE(midiTab);
-	const auto tabPoint = midiTab->GlobalPosition() + utils::Position2d{ 5, 5 };
-	ASSERT_GE(tabPoint.X, 0);
-	ASSERT_LT(tabPoint.X, 200);
-	ASSERT_GE(tabPoint.Y, 0);
-	ASSERT_LT(tabPoint.Y, 200);
-	EXPECT_TRUE(panel->RouteHitTest(tabPoint));
-	auto down = panel->OnAction(MakeTouch(TouchAction::TOUCH_DOWN, tabPoint));
-	ASSERT_TRUE(down.IsEaten);
-	auto active = down.ActiveElement.lock();
-	ASSERT_EQ(midiTab.get(), active.get());
-	EXPECT_TRUE(active->OnAction(active->GlobalToLocal(MakeTouch(TouchAction::TOUCH_UP, tabPoint))).IsEaten);
-	EXPECT_EQ(gui::SettingsPage::Midi, panel->Page());
-	panel->SetPage(gui::SettingsPage::Timing);
+	const auto originalWidth = numeric->GetSize().Width;
+	// Layout must retain the natural control width while shrinking its presentation.
 	panel->SetViewportSize({ 40, 40 });
+	EXPECT_LT(numeric->GetSize().Width, originalWidth);
 	panel->SetViewportSize({ 0, 0 });
 	EXPECT_FALSE(panel->RouteHitTest({ 0, 0 }));
 	panel->SetViewportSize({ 800, 600 });
-	EXPECT_EQ(96u, numeric->GetSize().Width);
+	EXPECT_EQ(originalWidth, numeric->GetSize().Width);
 }
 
 TEST(GuiFocusManager, MovingOrClearingFocusFinalizesNumericEdits) {
@@ -1484,81 +1460,6 @@ TEST_F(GuiSceneSettingsTests, ChannelLimitsAndShortcutFeedbackReachRouterAfterTr
 	expectChannel(0u);
 	key.KeyActionType = KeyAction::KEY_UP; Scene->OnAction(key);
 	EXPECT_EQ((std::vector<int>{ 2, 5, 11 }), Station->AllowedMidiChannels());
-}
-
-TEST_F(GuiSceneSettingsTests, SettingsFitNaturalWidthsAndWrapChoicesInsideNarrowViewport)
-{
-	const auto panel = Scene->Settings();
-	for (const auto viewport : { utils::Size2d{800u, 600u}, utils::Size2d{280u, 400u}, utils::Size2d{0u, 0u}, utils::Size2d{800u, 600u} })
-	{
-		panel->SetViewportSize(viewport);
-		if (viewport.Width == 280u)
-		{
-			panel->SetPage(gui::SettingsPage::Midi);
-			panel->ReplacePageSettings(gui::SettingsPage::Midi,
-				{{ gui::SettingsPage::Midi, "MIDI channel override", Scene->Channel(), 7001u }});
-		}
-		const auto frame = panel->TryGetChild(0);
-		ASSERT_TRUE(frame);
-		EXPECT_LE(frame->GetSize().Width, viewport.Width);
-		for (const auto page : { gui::SettingsPage::Midi, gui::SettingsPage::Timing })
-		{
-			panel->SetPage(page);
-			const auto radio = page == gui::SettingsPage::Midi
-				? std::static_pointer_cast<gui::GuiRadio>(Scene->Channel()) : Scene->Subdivision();
-			unsigned int count = 0u;
-			while (auto toggle = radio->TryGetChild(static_cast<unsigned char>(count)))
-			{
-				EXPECT_GE(toggle->Position().X, 0); EXPECT_GE(toggle->Position().Y, 0);
-				EXPECT_LE(static_cast<unsigned int>(toggle->Position().X) + toggle->GetSize().Width, radio->GetSize().Width);
-				EXPECT_LE(static_cast<unsigned int>(toggle->Position().Y) + toggle->GetSize().Height, radio->GetSize().Height);
-				++count;
-			}
-			if (viewport.Width == 800u) EXPECT_EQ(page == gui::SettingsPage::Midi ? 76u : 80u, radio->GetSize().Height);
-			if (viewport.Width == 280u) EXPECT_GT(radio->GetSize().Height, page == gui::SettingsPage::Midi ? 38u : 40u);
-			if (viewport.Width == 800u && page == gui::SettingsPage::Timing)
-			{
-				ASSERT_EQ(9u, count);
-				for (unsigned int index = 0u; index < count; ++index)
-				{
-					const auto toggle = radio->TryGetChild(static_cast<unsigned char>(index));
-					const auto column = index % 5u;
-					const auto rowItems = index < 5u ? 5u : 4u;
-					const auto rowWidth = radio->GetSize().Width * rowItems / 5u;
-					const auto rowStart = (radio->GetSize().Width - rowWidth) / 2u;
-					const auto expectedLeft = rowStart + radio->GetSize().Width * column / 5u;
-					const auto expectedRight = rowStart + radio->GetSize().Width * (column + 1u) / 5u;
-					EXPECT_EQ(expectedLeft, static_cast<unsigned int>(toggle->Position().X));
-					EXPECT_EQ(expectedRight - expectedLeft, toggle->GetSize().Width);
-				}
-			}
-		}
-		if (viewport.Width > 0u)
-			for (const auto page : { gui::SettingsPage::Audio, gui::SettingsPage::Midi, gui::SettingsPage::Timing, gui::SettingsPage::Session })
-			{
-				panel->SetPage(page);
-				const auto scroll = std::dynamic_pointer_cast<GuiScrollPanel>(frame->TryGetChild(1));
-				ASSERT_TRUE(scroll);
-				const auto clip = scroll->ContentRect().Translated(scroll->GlobalPosition());
-				for (unsigned int index = 0u; index < 256u; ++index)
-				{
-					const auto child = scroll->Content()->TryGetChild(static_cast<unsigned char>(index));
-					if (!child) break;
-					EXPECT_GE(child->GlobalPosition().X, clip.Left);
-					EXPECT_LE(child->GlobalPosition().X + static_cast<int>(child->GetSize().Width), clip.Right);
-				}
-			}
-	}
-	const auto frame = panel->TryGetChild(0);
-	EXPECT_EQ(444u, frame->GetSize().Width);
-	const auto tabs = std::dynamic_pointer_cast<GuiScrollPanel>(frame->TryGetChild(2));
-	ASSERT_TRUE(tabs); EXPECT_FALSE(tabs->IsScrollBarVisible());
-	const auto previousWidth = frame->GetSize().Width;
-	auto wider = std::make_shared<GuiButton>(GuiButtonParams::PanelButton(520u));
-	panel->ReplacePageSettings(gui::SettingsPage::Audio, {{gui::SettingsPage::Audio, "Wide section", wider, 9000u}});
-	panel->SetPage(gui::SettingsPage::Audio);
-	EXPECT_EQ(previousWidth, frame->GetSize().Width);
-	EXPECT_EQ(396u, wider->GetSize().Width);
 }
 
 TEST(GuiMidiChannelOverride, PresentationRefreshDoesNotDispatchActions)

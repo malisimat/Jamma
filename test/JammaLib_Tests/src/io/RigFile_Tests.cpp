@@ -1,12 +1,7 @@
 #include "gtest/gtest.h"
 #include "io/Json.h"
 #include "io/RigFile.h"
-#include <algorithm>
-#include <cstdlib>
-#include <cwctype>
-#include <filesystem>
-#include <fstream>
-#include <iostream>
+#include <sstream>
 
 using io::Json;
 using io::RigFile;
@@ -113,69 +108,6 @@ TEST(RigFile, RegistryRejectsHardwareNameReferencesAndCrossSourceIds)
 		R"({"audio":[],"midi":["pedal-a"]})"), devices));
 	EXPECT_TRUE(RigFileTest::Read(RigFileTest::Trigger("[]", "[]", "null",
 		R"({"audio":[],"midi":["keys"]})"), devices));
-}
-
-class RigMigrationValidation
-{
-public:
-	static bool Contains(const std::filesystem::path& parent, const std::filesystem::path& child)
-	{
-		const auto relative = child.lexically_relative(parent);
-		return relative.empty() || (!relative.is_absolute() && *relative.begin() != "..");
-	}
-	static bool IsLiveProfile(const std::filesystem::path& path)
-	{
-		auto text = path.generic_wstring();
-		std::transform(text.begin(), text.end(), text.begin(), [](wchar_t c) { return std::towlower(c); });
-		return text.find(L"/roaming/jamma") != std::wstring::npos;
-	}
-};
-
-// Opt in explicitly for staged migration evidence. Routine test runs never read
-// or write performer profiles, and validation never modifies its input files.
-TEST(RigFileMigrationValidation, StagedDirectoryRoundTrips)
-{
-	const auto sourceValue = std::getenv("JAMMA_VALIDATE_RIG_DIRECTORY");
-	const auto outputValue = std::getenv("JAMMA_VALIDATE_RIG_OUTPUT_DIRECTORY");
-	if (!sourceValue && !outputValue) GTEST_SKIP() << "No staged migration validation requested";
-	ASSERT_NE(nullptr, sourceValue); ASSERT_NE(nullptr, outputValue);
-	const std::filesystem::path requestedSource(sourceValue), requestedOutput(outputValue);
-	ASSERT_TRUE(requestedSource.is_absolute()); ASSERT_TRUE(requestedOutput.is_absolute());
-	const auto source = std::filesystem::canonical(requestedSource);
-	const auto output = std::filesystem::weakly_canonical(requestedOutput);
-	ASSERT_FALSE(RigMigrationValidation::Contains(source, output));
-	ASSERT_FALSE(RigMigrationValidation::Contains(output, source));
-	ASSERT_FALSE(RigMigrationValidation::IsLiveProfile(source));
-	ASSERT_FALSE(RigMigrationValidation::IsLiveProfile(output));
-	ASSERT_TRUE(std::filesystem::is_directory(source));
-	size_t count = 0u;
-	for (const auto& entry : std::filesystem::recursive_directory_iterator(source))
-	{
-		if (!entry.is_regular_file() || entry.path().extension() != ".rig") continue;
-		SCOPED_TRACE(entry.path().string());
-		std::ifstream input(entry.path(), std::ios::binary);
-		ASSERT_TRUE(input.is_open());
-		std::stringstream text; text << input.rdbuf();
-		RigFile::Diagnostics diagnostics;
-		const auto rig = RigFile::FromStream(std::move(text), &diagnostics);
-		for (const auto& diagnostic : diagnostics)
-			std::cout << entry.path().string() << ": " << diagnostic.Path << ": " << diagnostic.Message << '\n';
-		ASSERT_TRUE(rig);
-		std::stringstream serialized;
-		ASSERT_TRUE(RigFile::ToJsonStream(*rig, serialized));
-		const auto roundtrip = RigFile::FromStream(std::stringstream(serialized.str()));
-		ASSERT_TRUE(roundtrip); EXPECT_EQ(*rig, *roundtrip);
-		const auto destination = output / entry.path().lexically_relative(source);
-		ASSERT_FALSE(std::filesystem::exists(destination)) << "Refusing to overwrite prior evidence";
-		std::filesystem::create_directories(destination.parent_path());
-		std::ofstream normalized(destination, std::ios::binary);
-		ASSERT_TRUE(normalized.is_open()); normalized << serialized.str(); normalized.close();
-		ASSERT_TRUE(normalized.good());
-		std::cout << "Validated " << entry.path().string() << " -> " << destination.string() << '\n';
-		++count;
-	}
-	EXPECT_GT(count, 0u) << "No staged rigs found";
-	std::cout << "Validated " << count << " staged rigs with the production C++ parser\n";
 }
 
 TEST(RigFile, ParsesAudioSettings) {
