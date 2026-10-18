@@ -10,6 +10,7 @@
 #include "engine/Station.h"
 #include "engine/Scene.h"
 #include "midi/MidiLoop.h"
+#include "midi/MidiIndexedOutputSink.h"
 #include "midi/MidiRouter.h"
 #include "vst/Vst3Plugin.h"
 
@@ -1886,6 +1887,57 @@ public:
 		}
 	}
 
+	static void CheckSourcePedalReleaseRetry()
+	{
+		AudioState state;
+		auto take = MakeMidiTake("source-pedal-fanout");
+		auto loop = std::make_shared<midi::MidiLoop>();
+		const std::array source{MidiEvent{0u, 0xb0u, 64u, 127u}, MidiEvent{10u, 0xb0u, 64u, 0u},
+			MidiEvent{20u, 0xb0u, 64u, 127u}, MidiEvent{400u, 0xb0u, 64u, 127u}};
+		loop->ReplaceRecordedEvents(source.data(), source.size(), 1000u);
+		state.MidiPlaybackRoutes.emplace_back();
+		std::array<std::shared_ptr<StationMidiInstrumentFakePlugin>, 2> plugins;
+		for (auto index = 0u; index < plugins.size(); ++index)
+		{
+			plugins[index] = std::make_shared<StationMidiInstrumentFakePlugin>();
+			plugins[index]->Load(L"", 44100.f, 128u, 2u);
+			auto destination = std::make_shared<MidiDestination>();
+			destination->Plugin = plugins[index];
+			auto binding = std::make_shared<MidiPlaybackBinding>();
+			binding->Take = take; binding->Loop = loop; binding->Destination = destination;
+			state.MidiDestinations.push_back(destination);
+			state.MidiPlaybackRoutes[0].push_back(binding);
+		}
+		MidiPlaybackSink output(state);
+		midi::MidiIndexedOutputSink sink(output, 0u, 0u, 0u);
+		loop->ReadBlock(0u, 10u, sink);
+		for (const auto& destination : state.MidiDestinations) ASSERT_TRUE(destination->PluginSustain.test(0u));
+		auto& slow = *state.MidiDestinations[0];
+		auto& fast = *state.MidiDestinations[1];
+		slow.ActiveCompensationDelaySamps = 256u;
+		slow.ScheduledCount = MidiDestination::ScheduledCapacity;
+		loop->ReadBlock(10u, 20u, sink);
+		EXPECT_TRUE(slow.PluginSustain.test(0u));
+		EXPECT_FALSE(fast.PluginSustain.test(0u));
+		ASSERT_EQ(2u, plugins[1]->Events.size()); // Down20 must not overtake the source's pending up10.
+		EXPECT_EQ(0u, plugins[1]->Events.back().data2);
+		slow.ScheduledCount = 0u;
+		loop->ReadBlock(30u, 10u, sink);
+		_DrainScheduledMidi(state, 256u, 128u);
+		EXPECT_FALSE(slow.PluginSustain.test(0u));
+		EXPECT_FALSE(fast.PluginSustain.test(0u));
+		loop->ReadBlock(400u, 1u, sink);
+		loop->ReadBlock(401u, 10u, sink);
+		EXPECT_TRUE(fast.PluginSustain.test(0u));
+		ASSERT_EQ(3u, plugins[1]->Events.size());
+		EXPECT_EQ(127u, plugins[1]->Events.back().data2);
+		_DrainScheduledMidi(state, 656u, 128u);
+		EXPECT_TRUE(slow.PluginSustain.test(0u));
+		loop->FlushPlaybackHeldNotes(700u, sink);
+		_DrainScheduledMidi(state, 896u, 128u);
+		EXPECT_FALSE(slow.PluginSustain.test(0u));
+		EXPECT_FALSE(fast.PluginSustain.test(0u));
+	}
 	static void CheckReplacementPedalOrdering()
 	{
 		for (const bool live : {false, true})
@@ -1931,6 +1983,7 @@ public:
 TEST(StationMidiInstrument, FullDelayedDestinationRetainsReleaseUntilRetry)
 {
 	PlaybackReviewStation::CheckFanoutReleaseRetry();
+	PlaybackReviewStation::CheckSourcePedalReleaseRetry();
 	PlaybackReviewStation::CheckReplacementPedalOrdering();
 }
 TEST(StationMidiInstrument, RejectedPlaybackReleasePreservesVelocity)

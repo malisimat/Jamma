@@ -934,6 +934,11 @@ void MidiLoop::EmitEventsInRange(std::uint32_t lo,
 			snapshot.PlaybackViewActive ? snapshot.QuantisedContinuationRoots[i] : 0u) || _pendingReleases.test(slot)))
 			continue;
 
+		// A fanout release may still be retrying one destination after another
+		// accepted it. Do not establish a new pedal owner ahead of that release.
+		if (src.MessageType() == 0xb0u && src.data1 == 64u && src.data2 >= 64u
+			&& _pendingSustainReleases.test(src.Channel())) continue;
+
 		MidiEvent out = src;
 		out.sampleOffset = globalBase + off;
 		if (!sink.TryOnEvent(out))
