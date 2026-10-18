@@ -15,12 +15,13 @@ GuiMainPanel::GuiMainPanel(GuiMainPanelParams params) : GuiPanel(params),
 	_guiParams.GuiPassThrough = true;
 	GuiElementParams frameParams;
 	frameParams.GuiPassThrough = false;
-	// Share the flatter fill texture with the HUD panels.
 	frameParams.Texture = "panel_fill_flat";
+	frameParams.OverTexture = "panel_fill_flat_over";
 	frameParams.TextureShader = "texture_tinted";
-	frameParams.TintColor = GuiStyle::Graphite();
-	frameParams.TextureOpacity = GuiStyle::PanelFillOpacity;
+	frameParams.TintColor = glm::vec3(1.0f);
+	frameParams.TextureOpacity = 1.0f;
 	_frame = std::make_shared<GuiPanel>(frameParams);
+	_frame->SetHoverWithDescendants(true);
 	_children.push_back(_frame);
 	if (!_selectionOnly)
 	{
@@ -50,9 +51,9 @@ GuiMainPanel::GuiMainPanel(GuiMainPanelParams params) : GuiPanel(params),
 	for (auto& page : _pages)
 	{
 		GuiStackPanelParams pageParams;
-		pageParams.PaddingH = 4u;
-		pageParams.PaddingV = 4u;
-		pageParams.Spacing = 8u;
+		pageParams.PaddingH = PageContentPadding;
+		pageParams.PaddingV = PageContentPadding;
+		pageParams.Spacing = 10u;
 		pageParams.Size = { 300u, 8u };
 		page = std::make_shared<GuiStackPanel>(pageParams);
 	}
@@ -301,7 +302,7 @@ void GuiMainPanel::_Layout()
 	const int settingsAvailableHeight = std::max(0, selectionPanelBottom - MainPanelTopGap - mainPanelBottom);
 	// Preserve usable settings chrome only when the viewport cannot fit both
 	// overlays. Otherwise scrolling keeps settings entirely below selection.
-	constexpr int settingsChromeHeight = 2 * 12 + 22 + 48 + 8;
+	constexpr int settingsChromeHeight = 2 * 20 + 22 + 48 + 8;
 	const int settingsHeight = settingsAvailableHeight >= settingsChromeHeight
 		? settingsAvailableHeight : MainPanelMinimumHeight;
 	const int unconstrainedPanelHeight = _selectionOnly
@@ -326,7 +327,7 @@ int GuiMainPanel::_SettingsPanelWidth() const
 {
 	// Keep the frame aligned to the four settings tabs. Page content wraps to
 	// the width available inside this fixed frame.
-	return static_cast<int>(_tabs->GetSize().Width + 28u);
+	return static_cast<int>(_tabs->GetSize().Width + 44u);
 }
 
 int GuiMainPanel::_SelectionPanelHeight() const
@@ -345,21 +346,21 @@ void GuiMainPanel::_LayoutSelection(int panelWidth, int panelHeight)
 	const int innerWidth = std::max(0, panelWidth - 2 * padding);
 	const int innerHeight = std::max(0, panelHeight - 2 * padding - SelectionHandleHeight);
 	auto& page = _pages[static_cast<size_t>(_page)];
-	page->SetPadding(2u, 2u);
+	page->SetPadding(PageContentPadding, 0u);
 	page->SetSpacing(SelectionRowGap);
 	// A short viewport scrolls the complete stack; leave the scrollbar's width
 	// available before distributing the radios so every row shares its clip.
 	const int contentHeight = _SelectionPanelHeight() - 2 * StandardPanelPadding - SelectionHandleHeight;
 	const int barWidth = contentHeight > innerHeight ? 12 : 0;
 	page->SetSize({ static_cast<unsigned int>(std::max(0, innerWidth - barWidth)), static_cast<unsigned int>(contentHeight) });
-	for (const auto& row : _groupRows) row->SetSize({ static_cast<unsigned int>(std::max(0, innerWidth - 4 - barWidth)), GuiPerformanceGroupRow::Height });
+	for (const auto& row : _groupRows) row->SetSize({ static_cast<unsigned int>(std::max(0, innerWidth - 16 - barWidth)), GuiPerformanceGroupRow::Height });
 	for (const auto& entry : _controlSizes)
 	{
 		auto radio = std::dynamic_pointer_cast<GuiRadio>(entry.first);
 		if (!radio) continue;
 		unsigned int count = 0;
 		while (count < 255 && radio->TryGetChild(static_cast<unsigned char>(count))) ++count;
-		const auto available = static_cast<unsigned int>(std::max(0, innerWidth - 4 - barWidth));
+		const auto available = static_cast<unsigned int>(std::max(0, innerWidth - 16 - barWidth));
 		const auto radioWidth = std::min(available, entry.second.Width);
 		for (unsigned int index = 0; index < count; ++index)
 		{
@@ -371,7 +372,7 @@ void GuiMainPanel::_LayoutSelection(int panelWidth, int panelHeight)
 		}
 		radio->SetSize({ radioWidth, entry.second.Height });
 		for (const auto& row : _groupRows) row->SetSize({ radio->GetSize().Width, GuiPerformanceGroupRow::Height });
-		page->SetSize({ radio->GetSize().Width + 4u, static_cast<unsigned int>(contentHeight) });
+		page->SetSize({ radio->GetSize().Width + 16u, static_cast<unsigned int>(contentHeight) });
 	}
 	page->ComputeLayout();
 	_pageScroll->SetPosition({ padding, padding });
@@ -380,7 +381,7 @@ void GuiMainPanel::_LayoutSelection(int panelWidth, int panelHeight)
 
 void GuiMainPanel::_LayoutSettings(int panelWidth, int panelHeight)
 {
-	const int padding = std::min(12, std::min(panelWidth, panelHeight) / 2);
+	const int padding = std::min(20, std::min(panelWidth, panelHeight) / 2);
 	const int inner = std::max(0, panelWidth - 2 * padding);
 	const int titleHeight = std::min(22, std::max(0, panelHeight - 2 * padding));
 	auto title = _frame->TryGetChild(0);
@@ -396,12 +397,12 @@ void GuiMainPanel::_LayoutSettings(int panelWidth, int panelHeight)
 	_pageScroll->SetPosition({ padding, padding });
 	_pageScroll->SetSize({ static_cast<unsigned int>(inner), static_cast<unsigned int>(viewportHeight) });
 	auto& page = _pages[static_cast<size_t>(_page)];
-	unsigned int contentHeight = 8u, contentWidth = inner > 8 ? inner - 8u : 0u;
+	unsigned int contentHeight = 16u, contentWidth = inner > 16 ? inner - 16u : 0u;
 	for (unsigned int index = 0; index < 256; ++index)
 	{
 		auto child = page->TryGetChild(static_cast<unsigned char>(index));
 		if (!child) break;
-		const auto childWidth = static_cast<unsigned int>(std::max(0, inner - 24));
+		const auto childWidth = static_cast<unsigned int>(std::max(0, inner - 32));
 		const auto original = std::find_if(_controlSizes.begin(), _controlSizes.end(),
 			[&child](const auto& entry) { return entry.first == child; });
 		if (auto label = std::dynamic_pointer_cast<GuiLabel>(child))
@@ -443,10 +444,10 @@ void GuiMainPanel::_LayoutSettings(int panelWidth, int panelHeight)
 				stack->ComputeLayout();
 			}
 		}
-		contentHeight += child->GetSize().Height + 8u;
+		contentHeight += child->GetSize().Height + 10u;
 		contentWidth = std::max(contentWidth, child->GetSize().Width);
 	}
-	page->SetSize({ contentWidth + 8u, contentHeight });
+	page->SetSize({ contentWidth + 16u, contentHeight });
 	page->ComputeLayout();
 	_pageScroll->SetSize(_pageScroll->GetSize());
 }

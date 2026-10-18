@@ -65,8 +65,12 @@
 1 loopmode_down
 1 loopmode_toggled
 1 rounded_but ninepatch 12 12
-1 rounded_but_hud_border ninepatch 12 12
-1 panel_fill_flat ninepatch 20 20
+1 status_bar_background ninepatch 16 8
+1 panel_fill_flat ninepatch 36 32
+1 panel_fill_flat_tintmask ninepatch 36 32
+1 panel_fill_flat_over ninepatch 36 32
+1 panel_fill_flat_over_tintmask ninepatch 36 32
+1 status_bar_background_tintmask ninepatch 16 8
 1 rounded_but_over ninepatch 12 12
 1 rounded_but_down ninepatch 12 12
 1 rounded_but_on ninepatch 12 12

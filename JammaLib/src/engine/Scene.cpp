@@ -3156,15 +3156,23 @@ void Scene::_ApplyHoverPath2d(const std::vector<std::weak_ptr<base::GuiElement>>
 	_LockHoverPath(_hoverPath2d, _hoverPath2dPrevSharedScratch);
 	_LockHoverPath(nextPath, _hoverPath2dNextSharedScratch);
 
-	// Only the path leaf is the pointer target; ancestors are for ownership lookup.
+	// Only the leaf is a pointer target. Opted-in panel backgrounds also follow
+	// the resolved ownership path, without participating in control routing.
 	for (const auto& element : _hoverPath2dPrevSharedScratch)
+	{
 		element->ApplyHoverState(false);
+		if (auto panel = std::dynamic_pointer_cast<GuiPanel>(element))
+			panel->ApplyPanelHover(false);
+	}
 
 	if (!_hoverPath2dNextSharedScratch.empty())
 	{
 		auto& leaf = _hoverPath2dNextSharedScratch.back();
 		leaf->ApplyHoverPoint(leaf->GlobalToLocal(_cursorPos));
 	}
+	for (const auto& element : _hoverPath2dNextSharedScratch)
+		if (auto panel = std::dynamic_pointer_cast<GuiPanel>(element))
+			panel->ApplyPanelHover(true);
 }
 
 void Scene::_LockHoverPath(const std::vector<std::weak_ptr<base::GuiElement>>& path,

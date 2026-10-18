@@ -18,6 +18,15 @@ GuiPanel::GuiPanel(GuiElementParams params) :
 {
 }
 
+void GuiPanel::ApplyPanelHover(bool inside)
+{
+	if (!_hoverWithDescendants || !_isEnabled || !_isVisible) return;
+	if ((STATE_DOWN == _state) || (STATE_OUT == _state))
+		_state = inside ? STATE_DOWN : STATE_OUT;
+	else
+		_state = inside ? STATE_OVER : STATE_NORMAL;
+}
+
 void GuiPanel::AddChild(std::shared_ptr<base::GuiElement> child)
 {
 	GuiElement::AddChild(child);

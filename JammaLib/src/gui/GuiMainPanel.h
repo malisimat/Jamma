@@ -67,10 +67,11 @@ namespace gui
 		void _ReleaseResources() override;
 	private:
 		friend class GuiMainPanelTestAccess;
-		static constexpr int StandardPanelPadding = 8;
+		static constexpr int StandardPanelPadding = 16;
 		static constexpr int MainPanelTopGap = StandardPanelPadding * 3 + 4;
 		static constexpr int MainPanelMinimumHeight = 320;
-		static constexpr int SelectionRowGap = 4;
+		static constexpr int SelectionRowGap = 8;
+		static constexpr unsigned int PageContentPadding = 8u;
 		int _SelectionPanelHeight() const;
 		int _SettingsPanelWidth() const;
 		static constexpr int SelectionHandleHeight = 20;

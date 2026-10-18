@@ -48,9 +48,13 @@ namespace gui
 	{
 	public:
 		GuiPanel(base::GuiElementParams guiParams);
+		void SetHoverWithDescendants(bool enabled) { _hoverWithDescendants = enabled; }
+		void ApplyPanelHover(bool inside);
 
 	public:
 		void AddChild(std::shared_ptr<base::GuiElement> child) override;
 		bool RemoveChild(const std::shared_ptr<base::GuiElement>& child);
+	private:
+		bool _hoverWithDescendants = false;
 	};
 }
