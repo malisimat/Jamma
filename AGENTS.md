@@ -42,7 +42,7 @@ Treat this as a real-time audio codebase: prefer predictable, low-latency-safe b
 
 ## Investigation Guidance
 
-- For architecture and flow questions, prefer semantic/codegraph tools over blunt text search.
+- For architecture and flow questions, read `doc/glossary.md` and relevant subsystem docs first, then trace definitions and call sites with targeted `rg` searches. Verify conclusions against current source.
 - When using agent subtools, cite the specific files and lines involved.
 - For text search, use rg (ripgrep), not grep or Select-String in PowerShell.
 - For local loop phase, NINJAM timing, tempo join behavior, and remote-follow

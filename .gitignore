@@ -16,5 +16,4 @@
 packages/
 vcpkg_installed/
 test/JammaLib_Tests/x64/
-.codegraph/
 Directory.Build.local.props
