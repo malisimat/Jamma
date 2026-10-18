@@ -104,14 +104,14 @@ GuiMainPanel::GuiMainPanel(GuiMainPanelParams params) : GuiPanel(params),
 	{
 		GuiRadioParams tabParams;
 		tabParams.InitValue = static_cast<unsigned int>(SettingsPage::Timing);
-		tabParams.Size = { 416u, 32u };
+		tabParams.Size = { 416u, 48u };
 		for (unsigned int index = 0; index < 4; ++index)
 		{
 			auto toggle = GuiToggleParams::PanelPrimary();
 			toggle.Text = std::array<std::string, 4>{ "Audio", "MIDI", "Timing", "File" }[index];
 			toggle.TintColor = GuiStyle::Control();
 			toggle.Position = { static_cast<int>(index * 104u), 0 };
-			toggle.Size = { 100u, 32u };
+			toggle.Size = { 100u, 48u };
 			tabParams.ToggleParams.push_back(toggle);
 		}
 		_tabs = std::make_shared<GuiRadio>(tabParams);
@@ -301,7 +301,7 @@ void GuiMainPanel::_Layout()
 	const int settingsAvailableHeight = std::max(0, selectionPanelBottom - MainPanelTopGap - mainPanelBottom);
 	// Preserve usable settings chrome only when the viewport cannot fit both
 	// overlays. Otherwise scrolling keeps settings entirely below selection.
-	constexpr int settingsChromeHeight = 2 * 12 + 22 + 44 + 8;
+	constexpr int settingsChromeHeight = 2 * 12 + 22 + 48 + 8;
 	const int settingsHeight = settingsAvailableHeight >= settingsChromeHeight
 		? settingsAvailableHeight : MainPanelMinimumHeight;
 	const int unconstrainedPanelHeight = _selectionOnly
@@ -386,7 +386,7 @@ void GuiMainPanel::_LayoutSettings(int panelWidth, int panelHeight)
 	auto title = _frame->TryGetChild(0);
 	title->SetPosition({ padding, std::max(padding, panelHeight - padding - titleHeight) });
 	title->SetSize({ static_cast<unsigned int>(inner), static_cast<unsigned int>(titleHeight) });
-	const int tabHeight = std::min(44, std::max(0, panelHeight - 2 * padding - titleHeight));
+	const int tabHeight = std::min(48, std::max(0, panelHeight - 2 * padding - titleHeight));
 	if (_tabScroll)
 	{
 		_tabScroll->SetPosition({ padding, std::max(padding, panelHeight - padding - titleHeight - tabHeight) });
