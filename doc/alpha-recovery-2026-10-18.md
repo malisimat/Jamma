@@ -2,6 +2,19 @@
 
 Continue the approved sequence in `alpha-handover-2026-10-18.md` and the five Desktop plans. This is a recovery record, not a completion claim.
 
+## Current checkpoint — implementation and automated validation complete
+
+- Current branch: `codex/trigger-learn`. Source checkpoint: `3e7c5da77d75cbfe992b14e26e2034e987acea84`; subsequent documentation-only commits do not change the tested source.
+- Station labels and trigger names are accepted and integrated at `bugfix/alpha-cleanup` / `65f4245e`.
+- Rack/cables are complete and independently cleared by Astra on `codex/station-vst-rack` / `af0fa5e4`. Learn/explicit save are complete on the dependent branch, cleared by an independent feature reviewer and final Sol source review.
+- Final full Debug native run: **1848/1848 passed**, 216 suites, 17 disabled, 209554 ms (`alpha-final-debug-tests.log`).
+- Final Release affected run: **730/730 passed**, 73 suites, 12 disabled, 7620 ms (`alpha-final-release-affected-tests.log`). Debug and Release library, tests and app build successfully with zero warnings/errors. Release logs: `alpha-final-release-{lib,tests,app}-build.log`.
+- User explicitly deferred manual acceptance with “I can check later.” Actual UI/plugin/audio/hardware and integrated paired JAM+rig reload acceptance are **not passed**. No Jamma app automation was retried after the access refusal; the user chose manual checks.
+- Rack and learn remain unmerged pending their acceptance gates. Next: user checks the fresh Debug app, fix any reported issues, then locally integrate rack followed by learn into `bugfix/alpha-cleanup` and verify the resulting merges. Do not push, tag, release or merge master automatically.
+- Fresh Debug app: `Jamma/bin/x64/Debug/Jamma.exe`. No source/build owner remains delegated and no build/test process remains running.
+- Requested interactive HTML explainer: `C:/Users/matto/.codex/visualizations/2026/10/18/01a14fcd-913f-7120-8348-9198c4a35124/jamma-field-guide.html`. It is a standalone teaching model with no hardware/file mutations. Its six tabs/interactions and 736/390/320px layouts passed browser checks; desktop/mobile screenshots were visually inspected.
+
+The sections below preserve the recovery chronology. Earlier “pending” statements describe their historical checkpoint and are superseded by this status.
 ## Initial recovered state
 
 - Recovered feature branch: `codex/station-vst-rack`, based on integration commit `65f4245e`. Subsequent checkpoints are recorded below.
@@ -12,7 +25,7 @@ Continue the approved sequence in `alpha-handover-2026-10-18.md` and the five De
 - `alpha-rack-lib-checkpoint.log` ends during compilation and contains trailing NUL bytes. It provides no successful build result. No build/test/Jamma process was running at recovery.
 - Existing verification logs and unrelated files are preserved. Nothing pushed, tagged, released or merged into master.
 
-## Remaining work
+## Initial remaining work (historical)
 
 1. Audit/fix and validate the recovered foundation; build results are not yet established.
 2. Finish the complete rack plan: stable slot retry/removal and pending cancellation; live-only cables/channel panel/collapse and below-fader stack; explicit missing-target silence; bounded recovery preserving raw imported data; legacy serial compatibility; additive audio/latency validation; note/sustain release ownership, retries, retired processing and UI destruction; persistence and tests.
@@ -115,3 +128,17 @@ Trigger learn and explicit rig save are implemented on dependent `codex/trigger-
 All learn state is off callback. GUI draft/row/pressed-key state is window-owned. Requests, arm/results and observation conversion use existing Scene serialization between UI/job owners; results are complete immutable values. Serial enqueue sequence uses the existing ingress mutex; job-owned repeated-report baseline resets by lifecycle generation. Lifecycle owners publish only an atomic invalidation generation. No new callback-owned learn state, hardware reader or callback locks/allocations were added. The static audit flags four whole-Scene non-RT lock sites; manual inspection distinguishes those from callback bodies. Shell path/saved revision is window-owned; the detached save result uses the existing atomic shared_ptr handoff and job drain on shutdown.
 
 Source/build ownership returned to root, with no running commands or app session. Final combined Debug/Release validation and independent Sol review are next. Manual UI/plugin/hardware acceptance remains deferred by the user. Rack and learn remain unmerged; no push/tag/release/master merge.
+
+## Final combined candidate review
+
+Final independent Sol review cleared pinned `3e7c5da77d75cbfe992b14e26e2034e987acea84` against planning baseline `b61f5104`, with no additional substantiated must-fix findings. It inspected learn/save freshness/ownership, modal key suppression and exact releases, rig metadata promotion, rack processing/retirement, automation lifetime and persistence recovery. This was source-only clearance; final execution gates and manual acceptance remain separate.
+
+The standard threading script reads HEAD-to-working-tree, so a clean postcommit result cannot audit this committed feature. `alpha-final-threading-baseline-audit.log` explicitly scans `b61f5104..3e7c5da7` with the same whole-file lock heuristic. Its 20 additions belong to UI pointer/key/rename/save orchestration, job-side physical MIDI observation, and structural/plugin load/remove/job methods. Manual callback-body review and independent Astra/Sol inspection found no new callback locks, waits, allocation or logging. Whole-file findings are classified, not presented as a static hot-path pass. Full combined Debug regression is currently running against the pinned source; Release validation follows serially.
+
+## Final validation and delivery
+
+No source changes followed the independently reviewed `3e7c5da7` checkpoint. Full Debug passed 1848/1848 (17 disabled); the combined affected Release gate passed 730/730 (12 disabled). Current Release library, native test executable and app builds passed. The final baseline-to-pin threading record and manual callback classification are described above; a clean HEAD-to-working-tree script run is not presented as committed-diff evidence.
+
+The user also requested a bold interactive tabbed explainer. The standalone field guide covers before/current approaches, live versus recorded ownership, additive versus legacy serial mixing, learn draft cancellation/import limits/conflicts, explicit save/path/revision failures, exact affected files, source ownership and remaining acceptance. Browser checks exercised all six tabs and key simulations, verified no script errors or overflow at 736/390/320px, and desktop/mobile/rack screenshots were inspected. It does not control Jamma or write rig/session files.
+
+All implementation and available automated/source-review work is complete. Manual acceptance and gated local integration are the remaining actions; these are deliberately not claimed complete. Preserve all logs, ignored crash artifacts and feature branches for that acceptance.
