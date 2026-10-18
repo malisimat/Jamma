@@ -15,7 +15,7 @@ namespace audio
 		void Acquire() noexcept { _claims.fetch_add(1u, std::memory_order_acq_rel); }
 		void Release() noexcept
 		{
-			const auto previous = _claims.fetch_sub(1u, std::memory_order_acq_rel);
+			[[maybe_unused]] const auto previous = _claims.fetch_sub(1u, std::memory_order_acq_rel);
 			assert(previous > 0u);
 		}
 		void AcquireReplacement() noexcept
@@ -26,7 +26,7 @@ namespace audio
 		}
 		void ReleaseReplacement() noexcept
 		{
-			const auto previous = _replacementClaims.fetch_sub(1u, std::memory_order_acq_rel);
+			[[maybe_unused]] const auto previous = _replacementClaims.fetch_sub(1u, std::memory_order_acq_rel);
 			assert(previous > 0u);
 		}
 		// Explicit performer UnMute auditions completed source material. Claim
