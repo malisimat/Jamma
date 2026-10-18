@@ -3308,6 +3308,11 @@ base::Tweakable::TweakState Scene::_SelectionTweakStateLocked(const std::shared_
 
 void Scene::_UpdateRackVisibilityLocked()
 {
+	const auto depth = _selector->CurrentSelectDepth();
+	if (depth == base::DEPTH_LOOPTAKE || depth == base::DEPTH_LOOP)
+		for (const auto& station : _stations)
+			if (station->LayoutTakeRacks(_viewProj, _sizeParams.Size)) _InvalidateHover2d();
+
 	// Presentation stays on the UI thread under the existing scene lock.
 	const auto forEachRack = [this](auto&& visit) {
 		for (const auto& station : _stations)
@@ -3317,20 +3322,10 @@ void Scene::_UpdateRackVisibilityLocked()
 			const bool stationInView = station->IsVisible() && !_loopEditor.IsEngaged() &&
 				clip.w > 0.0f && clip.z >= -clip.w && clip.z <= clip.w;
 			visit(station->GetGuiRack(), stationInView);
-			// Dense take rows can be shorter than a usable fader and VST button.
-			// Present one selected compact rack instead of overlapping hit targets.
-			std::shared_ptr<LoopTake> compactFocus;
-			for (const auto& take : station->GetLoopTakes())
-				if (take->GetGuiRack() && take->GetSize().Height < take->GetGuiRack()->GetSize().Height)
-				{
-					if (!compactFocus) compactFocus = take;
-					if (take->IsSelected()) { compactFocus = take; break; }
-				}
 			for (const auto& take : station->GetLoopTakes())
 			{
 				const auto rack = take->GetGuiRack();
-				const bool compact = rack && take->GetSize().Height < rack->GetSize().Height;
-				visit(rack, stationInView && take->IsVisible() && (!compact || take == compactFocus));
+				visit(rack, stationInView && take->IsVisible());
 			}
 		}
 	};

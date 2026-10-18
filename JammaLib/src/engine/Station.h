@@ -244,6 +244,8 @@ namespace engine
 		void ReleaseRetiredAudioStates();
 		std::size_t RetiredAudioStateCount() const noexcept { return _retiredAudioStates.size(); }
 		void SetRackVisibility(bool showStationRack, bool showLoopTakeRacks);
+		// UI owner: follow projected take centres, with a minimum gap between racks.
+		bool LayoutTakeRacks(const glm::mat4& viewProjection, utils::Size2d viewport);
 		std::shared_ptr<gui::GuiRack> GetGuiRack() const { return _guiRack; }
 		std::vector<io::JamFile::VstEntry> VstEntries() const;
 		bool TryGroupVstEntries(std::vector<io::JamFile::VstEntry>& output) const;

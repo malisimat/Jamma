@@ -3269,6 +3269,44 @@ void Station::OnBounce(unsigned int numSamps,
 		if (take) take->ProcessActiveBounce(sourceOffset, numSamps);
 }
 
+bool Station::LayoutTakeRacks(const glm::mat4& viewProjection, utils::Size2d viewport)
+{
+	constexpr int padding = 8;
+	std::optional<int> previousTop;
+	bool changed = false;
+	const auto stationPosition = PresentationModelPosition();
+	const auto stationClip = viewProjection * glm::vec4(stationPosition.X, stationPosition.Y, stationPosition.Z, 1.0f);
+	if (stationClip.w <= 0.0f) return false;
+	const auto stationY = static_cast<int>((stationClip.y / stationClip.w + 1.0f) * 0.5f * viewport.Height);
+	for (const auto& take : GetLoopTakes())
+	{
+		const auto rack = take->GetGuiRack();
+		if (!rack || !take->IsVisible()) continue;
+		const auto takePosition = take->ModelPosition();
+		const auto scale = static_cast<float>(ModelScale());
+		const auto clip = viewProjection * glm::vec4(
+			stationPosition.X + takePosition.X * scale,
+			stationPosition.Y + takePosition.Y * scale,
+			stationPosition.Z + takePosition.Z * scale, 1.0f);
+		if (clip.w <= 0.0f) continue;
+		const auto centreY = static_cast<int>((clip.y / clip.w + 1.0f) * 0.5f * viewport.Height);
+		const auto height = static_cast<int>(rack->GetSize().Height);
+		// Anchor the first rack to its take. Later racks stop approaching their
+		// predecessor at the padding limit, without switching layout modes.
+		auto bottom = centreY - height / 2;
+		if (previousTop) bottom = (std::max)(bottom, *previousTop + padding);
+		previousTop = bottom + height;
+		auto position = rack->Position();
+		position.Y = bottom - stationY - take->Position().Y;
+		if (position.Y != rack->Position().Y)
+		{
+			rack->SetPosition(position);
+			changed = true;
+		}
+	}
+	return changed;
+}
+
 void Station::SetRackVisibility(bool showStationRack, bool showLoopTakeRacks)
 {
 	// Set the visibility of the Station (master/channels/router) rack

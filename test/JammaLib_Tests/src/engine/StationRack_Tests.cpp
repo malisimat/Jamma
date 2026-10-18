@@ -78,6 +78,49 @@ static void OpenChannelsOnTake(const std::shared_ptr<Station>& station,
 	take->ForceRackState(gui::GuiRackParams::RACK_CHANNELS);
 }
 
+TEST(StationRack, TakeRacksFollowProjectedCentresAndClampContinuouslyAtPadding)
+{
+	auto station = MakeStation();
+	CommitInitial(station);
+	auto first = MakeTestLoopTake("first");
+	auto second = MakeTestLoopTake("second");
+	auto third = MakeTestLoopTake("third");
+	for (const auto& take : { first, second, third }) station->AddTake(take);
+	station->CommitChanges();
+	station->SetModelPosition({ 0.0f, 0.2f, 0.0f });
+	station->SetModelScale(2.0);
+	for (const auto& take : { first, second, third }) take->Rack()->SetSize({ 150u, 100u });
+	first->SetModelPosition({ 0.0f, 0.0f, 0.0f });
+	const auto bottom = [](const auto& take) { return take->Position().Y + take->Rack()->Position().Y; };
+	int previousSecond = 0;
+	// One model-unit sweep represents camera zoom/spacing crossing the contact
+	// point in both directions; no discrete aligned/stacked mode can jump.
+	for (int spacing = 220; spacing >= 0; --spacing)
+	{
+		second->SetModelPosition({ 0.0f, spacing / 1000.0f, 0.0f });
+		third->SetModelPosition({ 0.0f, spacing / 500.0f, 0.0f });
+		station->LayoutTakeRacks(glm::mat4(1.0f), { 1000u, 1000u });
+		EXPECT_EQ(-50, bottom(first));
+		EXPECT_GE(bottom(second) - bottom(first), 108);
+		EXPECT_GE(bottom(third) - bottom(second), 108);
+		if (spacing == 220)
+		{
+			EXPECT_NEAR(170, bottom(second), 1);
+			EXPECT_NEAR(390, bottom(third), 1);
+		}
+		else EXPECT_LE(std::abs(bottom(second) - previousSecond), 2);
+		previousSecond = bottom(second);
+	}
+	EXPECT_EQ(58, bottom(second));
+	EXPECT_EQ(166, bottom(third));
+	EXPECT_FALSE(station->LayoutTakeRacks(glm::mat4(1.0f), { 1000u, 1000u }));
+	second->SetModelPosition({ 0.0f, 0.22f, 0.0f });
+	third->SetModelPosition({ 0.0f, 0.44f, 0.0f });
+	station->LayoutTakeRacks(glm::mat4(1.0f), { 1000u, 1000u });
+	EXPECT_NEAR(170, bottom(second), 1);
+	EXPECT_NEAR(390, bottom(third), 1);
+}
+
 TEST(StationRack, RouterOpenCollapsesCommittedSiblingRacksToMaster)
 {
 	auto station = MakeStation();
