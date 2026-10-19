@@ -59,8 +59,6 @@ Window::Window(Scene& scene,
 
 Window::~Window()
 {
-	CancelMouseCapture();
-	_scene->SetRelativePointerHost({}, {});
 	Release();
 }
 
@@ -639,6 +637,9 @@ void Window::Release()
 		return;
 
 	CancelMouseCapture();
+	// Release is called while the borrowed Scene is still alive. The Window
+	// destructor may run after that Scene has been destroyed.
+	_scene->SetRelativePointerHost({}, {});
 	_released = true;
 
 	if (_dc && _rc)
@@ -665,6 +666,7 @@ void Window::Release()
 		DestroyWindow(_wnd);
 		_wnd = nullptr;
 	}
+	_scene = nullptr;
 }
 
 ActionResult Window::OnAction(WindowAction winAction)

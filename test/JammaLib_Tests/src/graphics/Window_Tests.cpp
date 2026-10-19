@@ -366,6 +366,19 @@ TEST(CameraFrontZoom, FitsLargeOneSidedStationRowsAtWideAndNarrowAspectRatios)
 	}
 }
 
+TEST(Window, ReleasedWindowMayOutliveScene)
+{
+	ResourceLib resources;
+	auto scene = std::make_unique<CameraActivityScene>();
+	auto window = std::make_unique<Window>(*scene, resources);
+	window->Release();
+	scene.reset();
+	// Match application shutdown: release native resources, destroy the Scene,
+	// then destroy the stack-owned Window without consulting its former Scene.
+	window->Release();
+	window.reset();
+}
+
 TEST(Window, IsInitiallyWindowed) {
 	auto sceneParams = SceneParams(base::DrawableParams(),
 		base::MoveableParams(),

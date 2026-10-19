@@ -3136,6 +3136,19 @@ void Scene::Shutdown()
 	_audioEngine->Close();
 	_contextualKeyboard.ClearAfterReadersStopped();
 	_rigCoordinator.ReleaseAfterReadersStopped();
+
+	// Action senders own their receivers.  These Scene-owned senders therefore
+	// keep the Scene alive unless their receiver links are cleared after all
+	// input and job readers have stopped.
+	_selector->SetReceiver({});
+	if (_stationDeleteDialog) _stationDeleteDialog->SetButtonReceiver({});
+	if (_takeDitchDialog) _takeDitchDialog->SetButtonReceiver({});
+	for (const auto& station : _stations)
+		if (station)
+		{
+			station->SetReceiver({});
+			station->DetachGuiOwnershipForRetirement();
+		}
 }
 
 void Scene::ForceUnloadAllVstPlugins()
