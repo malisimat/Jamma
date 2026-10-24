@@ -144,26 +144,6 @@ TEST_F(VstRackLoadTest, StationRetryPreservesIdentityStateBypassAndPendingRemova
 	EXPECT_EQ(1u, station->GetVstRackSlots().size());
 }
 
-TEST_F(VstRackLoadTest, FailedInteractiveAppendsRestoreEmptyRackAndLeaveOnlyDialogOutcomes)
-{
-	auto station = Station();
-	const auto first = MissingPath(L"invalid-first.vst3");
-	const auto second = MissingPath(L"invalid-second.vst3");
-	ASSERT_TRUE(station->LoadManagedVstSlot(first, {}, true));
-	ASSERT_TRUE(station->LoadManagedVstSlot(second, {}, true));
-	const auto pending = station->GetVstRackSlots();
-	ASSERT_EQ(2u, pending.size());
-	const auto firstId = pending[0].Identity, secondId = pending[1].Identity;
-	for (const auto& job : station->CommitChanges()) station->OnAction(job);
-	station->CommitChanges();
-	EXPECT_TRUE(station->GetVstRackSlots().empty());
-	EXPECT_TRUE(station->VstEntries().empty());
-	EXPECT_TRUE(station->RackDiagnostic().empty());
-	EXPECT_EQ(station->TakeFailedInteractiveVstLoad(firstId),first);
-	EXPECT_EQ(station->TakeFailedInteractiveVstLoad(secondId),second);
-	EXPECT_FALSE(station->TakeFailedInteractiveVstLoad(firstId).has_value());
-}
-
 TEST_F(VstRackLoadTest, SeveralJobsBeforePublicationComposeRatherThanOverwrite)
 {
 	auto station = Station();

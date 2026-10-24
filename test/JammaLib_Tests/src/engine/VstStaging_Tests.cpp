@@ -1383,6 +1383,33 @@ public:
  bool Load(const std::wstring&, float, unsigned, unsigned, vst::HostedLayoutMode) override { return false; }
 };
 
+TEST_F(VstRackControlsTest, FailedInteractiveAppendsRestoreEmptyRackAndLeaveOnlyDialogOutcomes)
+{
+	const std::wstring first = L"invalid-first.vst3";
+	const std::wstring second = L"invalid-second.vst3";
+	ASSERT_TRUE(Station->LoadManagedVstSlot(first, {}, true));
+	ASSERT_TRUE(Station->LoadManagedVstSlot(second, {}, true));
+	const auto pending = Station->GetVstRackSlots();
+	ASSERT_EQ(2u, pending.size());
+	const auto firstId = pending[0].Identity, secondId = pending[1].Identity;
+	const auto jobs = Station->CommitChanges();
+	unsigned loadCount = 0;
+	for (auto job : jobs) {
+		if (job.JobActionType != JobAction::JOB_LOADVST) continue;
+		job.PreInitPlugin = std::make_shared<RackControlsFailedPlugin>();
+		Station->OnAction(job);
+		++loadCount;
+	}
+	ASSERT_EQ(2u, loadCount);
+	Station->CommitChanges();
+	EXPECT_TRUE(Station->GetVstRackSlots().empty());
+	EXPECT_TRUE(Station->VstEntries().empty());
+	EXPECT_TRUE(Station->RackDiagnostic().empty());
+	EXPECT_EQ(Station->TakeFailedInteractiveVstLoad(firstId), first);
+	EXPECT_EQ(Station->TakeFailedInteractiveVstLoad(secondId), second);
+	EXPECT_FALSE(Station->TakeFailedInteractiveVstLoad(firstId).has_value());
+}
+
 TEST_F(VstRackControlsTest, FailedSlotsShowRetryAtEachHierarchyLevel)
 {
  const auto fail = [](const auto& owner, const wchar_t* path) {
