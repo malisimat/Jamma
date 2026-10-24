@@ -280,11 +280,11 @@ TEST(GuiPopup, ConfirmationButtonsArePackedAtTheLowerRightAndDispatch) {
 	config.Actions = { { "Cancel", 2u }, { "Delete", 1u } };
 	popup->ConfigureButtons(config);
 
-	auto cancelButton = std::dynamic_pointer_cast<GuiButton>(popup->TryGetChild(5u));
-	auto deleteButton = std::dynamic_pointer_cast<GuiButton>(popup->TryGetChild(6u));
+	auto cancelButton = std::dynamic_pointer_cast<GuiButton>(popup->TryGetChild(6u));
+	auto deleteButton = std::dynamic_pointer_cast<GuiButton>(popup->TryGetChild(7u));
 	ASSERT_NE(nullptr, cancelButton);
 	ASSERT_NE(nullptr, deleteButton);
-	EXPECT_EQ(nullptr, popup->TryGetChild(7u));
+	EXPECT_EQ(nullptr, popup->TryGetChild(8u));
 	EXPECT_EQ(144, cancelButton->Position().X);
 	EXPECT_EQ(24, cancelButton->Position().Y);
 	EXPECT_EQ(284, deleteButton->Position().X);
@@ -312,7 +312,7 @@ TEST(GuiPopup, RequiredPressRejectsAnotherPointerRelease) {
 	popup->ConfigureButtons({ { { "Follow server", 1u } }, true });
 	auto receiver = std::make_shared<GuiRecordingActionReceiver>();
 	popup->SetButtonReceiver(receiver);
-	const auto button = popup->TryGetChild(5u);
+	const auto button = popup->TryGetChild(6u);
 	ASSERT_TRUE(button);
 	const auto point = button->Position() + utils::Position2d{ 10, 10 };
 	auto down = MakeTouch(TouchAction::TOUCH_DOWN, point);
@@ -335,7 +335,7 @@ TEST(GuiPopupManager, InterruptedRequiredPressCannotConfirmOnLaterRelease) {
 	popup->ConfigureButtons({ { { "Follow server", 1u } }, true });
 	auto receiver = std::make_shared<GuiRecordingActionReceiver>();
 	popup->SetButtonReceiver(receiver);
-	const auto button = popup->TryGetChild(5u);
+	const auto button = popup->TryGetChild(6u);
 	ASSERT_TRUE(button);
 	const auto point = popup->Position() + button->Position() + utils::Position2d{ 10, 10 };
 	host.Open(popup);
@@ -362,8 +362,8 @@ TEST(GuiPopupManager, ReleaseOverAnotherButtonDisarmsRequiredPress) {
 	popup->ConfigureButtons({ { { "Cancel", 2u }, { "Follow server", 1u } }, true });
 	auto receiver = std::make_shared<GuiRecordingActionReceiver>();
 	popup->SetButtonReceiver(receiver);
-	const auto cancel = popup->TryGetChild(5u);
-	const auto follow = popup->TryGetChild(6u);
+	const auto cancel = popup->TryGetChild(6u);
+	const auto follow = popup->TryGetChild(7u);
 	ASSERT_TRUE(cancel);
 	ASSERT_TRUE(follow);
 	const auto cancelPoint = popup->Position() + cancel->Position() + utils::Position2d{ 10, 10 };
@@ -385,7 +385,7 @@ TEST(GuiPopupManager, MouseCaptureLossDisarmsRequiredPress) {
 	popup->ConfigureButtons({ { { "Follow server", 1u } }, true });
 	auto receiver = std::make_shared<GuiRecordingActionReceiver>();
 	popup->SetButtonReceiver(receiver);
-	const auto button = popup->TryGetChild(5u);
+	const auto button = popup->TryGetChild(6u);
 	ASSERT_TRUE(button);
 	const auto point = popup->Position() + button->Position() + utils::Position2d{ 10, 10 };
 	host.Open(popup);
@@ -417,7 +417,7 @@ TEST(GuiPopup, FitsViewportAndKeepsContentAndActionsInsideAfterResize)
 		EXPECT_GE(position.X, 0); EXPECT_GE(position.Y, 0);
 		EXPECT_LE(position.X + static_cast<int>(size.Width), static_cast<int>(viewport.Width));
 		EXPECT_LE(position.Y + static_cast<int>(size.Height), static_cast<int>(viewport.Height));
-		for (unsigned char index = 0; index < 7; ++index) {
+		for (unsigned char index = 0; index < 8; ++index) {
 			const auto child = popup->TryGetChild(index); ASSERT_TRUE(child);
 			const auto pos = child->Position(); const auto frame = child->GetSize();
 			EXPECT_GE(pos.X, 0); EXPECT_GE(pos.Y, 0);
@@ -425,7 +425,7 @@ TEST(GuiPopup, FitsViewportAndKeepsContentAndActionsInsideAfterResize)
 			EXPECT_LE(pos.Y + static_cast<int>(frame.Height), static_cast<int>(size.Height));
 		}
 		if (viewport.Width >= 184 && viewport.Height >= 161) {
-			const auto button = popup->TryGetChild(6); const auto pos = button->Position(); const auto frame = button->GetSize();
+			const auto button = popup->TryGetChild(7); const auto pos = button->Position(); const auto frame = button->GetSize();
 			const utils::Position2d point{ pos.X + static_cast<int>(frame.Width / 2), pos.Y + static_cast<int>(frame.Height / 2) };
 			const auto before = receiver->ActionCount;
 			EXPECT_TRUE(popup->OnAction(MakeTouch(TouchAction::TOUCH_DOWN, point)).IsEaten);
@@ -1817,14 +1817,32 @@ TEST(GuiPopup, NarrowRowsKeepDetailsAndActionsWithinContent)
     auto popup = std::make_shared<gui::GuiPopup>(params);
     popup->FitToViewport({120u,200u});
     popup->SetRows({{"1. MIDI binding", "Learn"}}, {}, {});
-    auto scroll = std::dynamic_pointer_cast<GuiScrollPanel>(popup->TryGetChild(5u)); ASSERT_TRUE(scroll);
+    auto scroll = std::dynamic_pointer_cast<GuiScrollPanel>(popup->TryGetChild(6u)); ASSERT_TRUE(scroll);
     auto content = scroll->Content(); ASSERT_TRUE(content);
-    for (unsigned char index = 0; index < 4; ++index)
+    for (unsigned char index = 0; index < 8; ++index)
     {
         auto child = content->TryGetChild(index); ASSERT_TRUE(child);
         EXPECT_GE(child->Position().X,0);
         EXPECT_LE(child->Position().X + static_cast<int>(child->GetSize().Width),static_cast<int>(content->GetSize().Width));
     }
+}
+
+TEST(GuiPopup, LearningRowHasInsetDetailAndSquareTopAlignedRemoveAction)
+{
+    auto params = gui::GuiPopupParams::PanelDefault(gui::GuiPopupParams::VisualMode::Learning);
+    params.Size = {640u,384u}; params.MinSize = {1u,1u};
+    auto popup = std::make_shared<GuiPopup>(params);
+    popup->SetRows({{"1. Keyboard key 49 / press", "Stop", true}}, {}, {});
+    auto scroll = std::dynamic_pointer_cast<GuiScrollPanel>(popup->TryGetChild(6u)); ASSERT_TRUE(scroll);
+    auto content = scroll->Content(); ASSERT_TRUE(content);
+    const auto box = content->TryGetChild(0u);
+    const auto detail = content->TryGetChild(5u);
+    const auto remove = content->TryGetChild(7u);
+    ASSERT_TRUE(box); ASSERT_TRUE(detail); ASSERT_TRUE(remove);
+    EXPECT_GE(detail->Position().X - box->Position().X,16);
+    EXPECT_EQ(remove->GetSize().Width,remove->GetSize().Height);
+    EXPECT_EQ(box->Position().Y + static_cast<int>(box->GetSize().Height),
+        remove->Position().Y + static_cast<int>(remove->GetSize().Height));
 }
 
 TEST(GuiPopup, OptionalKeyHandlerCanDeclineAndAllowNormalDispatch)

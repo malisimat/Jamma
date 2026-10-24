@@ -8,6 +8,13 @@ using namespace gui;
 
 namespace gui
 {
+	class GuiPopupColorRect : public base::GuiElement
+	{
+	public:
+		explicit GuiPopupColorRect(base::GuiElementParams params) : GuiElement(params) {}
+		void SetColor(glm::vec3 color) { _guiParams.TintColor = color; }
+	};
+
 	class GuiPopupActionButton : public GuiButton
 	{
 	public:
@@ -76,15 +83,25 @@ namespace gui
 GuiPopupParams GuiPopupParams::PanelDefault(VisualMode mode)
 {
 	GuiPopupParams params;
+	params.Mode = mode;
 	params.GuiPassThrough = false;
-	params.TextureShader = "texture_tinted";
-	params.Texture = "rounded_but_on";
-	params.OverTexture = "rounded_but_on";
-	params.DownTexture = "rounded_but_on";
+	params.TextureShader = "colour";
 	params.Size = { 460u, 210u };
 	params.MinSize = { 460u, 210u };
-	params.TintColor = mode == VisualMode::Learning ? glm::vec3{0.07f, 0.43f, 0.55f} : GuiStyle::Graphite();
-	params.TextureOpacity = GuiStyle::PanelFillOpacity;
+	params.TintColor = mode == VisualMode::Learning ? glm::vec3{0.20f, 0.055f, 0.065f}
+		: mode == VisualMode::LearningBlue ? glm::vec3{0.035f, 0.17f, 0.22f}
+		: glm::vec3{0.075f, 0.085f, 0.10f};
+	params.TextureOpacity = 0.96f;
+	return params;
+}
+
+base::GuiElementParams GuiPopupParams::FlatRect(unsigned int width, unsigned int height,
+	glm::vec3 color, float opacity)
+{
+	base::GuiElementParams params;
+	params.Size = {width,height}; params.MinSize = {0u,0u};
+	params.TextureShader = "colour"; params.TintColor = color; params.TextureOpacity = opacity;
+	params.GuiPassThrough = true;
 	return params;
 }
 
@@ -98,17 +115,16 @@ GuiLabelParams GuiPopupParams::Header(const std::string& text, unsigned int widt
 
 base::GuiElementParams GuiPopupParams::HeaderBand(unsigned int width, unsigned int height)
 {
-	base::GuiElementParams params;
-	params.Size = {width, height}; params.MinSize = {0u,0u};
-	params.Texture = "rounded_but_on"; params.TextureShader = "texture_tinted";
-	params.TintColor = {0.035f, 0.055f, 0.075f}; params.TextureOpacity = 0.94f;
-	params.GuiPassThrough = true;
-	return params;
+	return FlatRect(width,height,{0.13f,0.18f,0.20f},0.82f);
 }
 
 GuiPopup::GuiPopup(const GuiPopupParams& params) :
 	GuiPanel(params), _preferredSize(params.Size)
 {
+	_fill = std::make_shared<GuiPopupColorRect>(GuiPopupParams::FlatRect(params.Size.Width - 8u,
+		params.Size.Height - 8u,{0.25f,0.28f,0.31f},0.78f));
+	_fill->SetPosition({4,4}); AddChild(_fill);
+	SetVisualMode(params.Mode);
 	_headerBand = std::make_shared<base::GuiElement>(GuiPopupParams::HeaderBand(params.Size.Width - 16u, 36u));
 	_headerBand->SetVisible(false);
 	AddChild(_headerBand);
@@ -174,6 +190,9 @@ void GuiPopup::SetTitle(const std::string& text)
 void GuiPopup::SetVisualMode(GuiPopupParams::VisualMode mode)
 {
 	_guiParams.TintColor = GuiPopupParams::PanelDefault(mode).TintColor;
+	_fill->SetColor(mode == GuiPopupParams::VisualMode::Learning ? glm::vec3{0.36f,0.18f,0.19f}
+		: mode == GuiPopupParams::VisualMode::LearningBlue ? glm::vec3{0.16f,0.32f,0.37f}
+		: glm::vec3{0.25f,0.28f,0.31f});
 }
 
 void GuiPopup::SetBodyLines(const std::vector<std::string>& lines)
@@ -271,24 +290,41 @@ void GuiPopup::SetRows(const std::vector<GuiPopupRow>& rows, std::function<void(
 	for (std::size_t i = 0; i < rows.size(); ++i)
 	{
 		const int y = static_cast<int>(height - (i + 1u) * rowHeight);
-		const int removeWidth = 24;
+		const int removeWidth = 28;
 		const int primaryWidth = compact ? (std::max)(1,static_cast<int>(width) - removeWidth - 12)
 			: std::clamp(static_cast<int>(width / 4u), 36, 92);
 		const int detailWidth = compact ? (std::max)(1,static_cast<int>(width) - 8)
 			: (std::max)(40, static_cast<int>(width) - primaryWidth - removeWidth - 20);
-		auto box = GuiPopupParams::HeaderBand(static_cast<unsigned int>(detailWidth), compact ? 50u : rowHeight - 8u);
+		base::GuiElementParams box;
+		box.Size = {static_cast<unsigned int>(detailWidth),compact ? 50u : rowHeight - 8u};
+		box.MinSize = {1u,1u}; box.Texture = "rounded_but_on"; box.TextureShader = "texture_tinted";
+		box.GuiPassThrough = true; box.TextureOpacity = 0.72f;
 		box.Position = {4,y + (compact ? 32 : 4)};
-		box.TintColor = rows[i].Active ? glm::vec3{0.09f,0.54f,0.67f} : rows[i].Recent ? glm::vec3{0.07f,0.35f,0.43f} : GuiStyle::Control();
+		box.TintColor = rows[i].Active ? glm::vec3{0.26f,0.39f,0.50f} : rows[i].Recent ? glm::vec3{0.07f,0.35f,0.43f} : GuiStyle::Control();
 		content->AddChild(std::make_shared<base::GuiElement>(box));
-		auto detail = GuiPopupParams::Header(rows[i].Detail, static_cast<unsigned int>((std::max)(1, detailWidth - 12)), compact ? 46u : rowHeight - 12u);
-		detail.Position = {10,y + (compact ? 34 : 6)}; detail.ClipText = true;
+		// A separate, square outline stays opaque while the textured slot remains translucent.
+		const int edge = rows[i].Active ? 2 : 1;
+		const auto edgeColor = rows[i].Active ? glm::vec3{0.12f,0.57f,0.78f} : GuiStyle::Control();
+		const int boxHeight = compact ? 50 : static_cast<int>(rowHeight) - 8;
+		for (const auto& rect : {std::array<int,4>{4,box.Position.Y,detailWidth,edge},
+			std::array<int,4>{4,box.Position.Y + boxHeight - edge,detailWidth,edge},
+			std::array<int,4>{4,box.Position.Y,edge,boxHeight},
+			std::array<int,4>{4 + detailWidth - edge,box.Position.Y,edge,boxHeight}})
+		{
+			auto line = GuiPopupParams::FlatRect(static_cast<unsigned int>(rect[2]),static_cast<unsigned int>(rect[3]),edgeColor,0.94f);
+			line.Position = {rect[0],rect[1]}; content->AddChild(std::make_shared<base::GuiElement>(line));
+		}
+		auto detail = GuiPopupParams::Header(rows[i].Detail, static_cast<unsigned int>((std::max)(1, detailWidth - 24)), compact ? 46u : rowHeight - 12u);
+		detail.Position = {20,y + (compact ? 34 : 6)}; detail.ClipText = true;
 		content->AddChild(std::make_shared<GuiLabel>(detail));
 		auto buttonParams = GuiButtonParams::PanelButton(static_cast<unsigned int>(primaryWidth));
 		buttonParams.MinSize = {1u,1u}; buttonParams.Size = {static_cast<unsigned int>(primaryWidth),compact ? 24u : rowHeight - 8u};
 		buttonParams.Position = {compact ? 4 : detailWidth + 8,y + 4}; buttonParams.Text = rows[i].PrimaryAction;
 		auto primaryButton = std::make_shared<GuiPopupRowButton>(buttonParams,[primary,i] { if (primary) primary(i); });
 		primaryButton->SetEnabled(rows[i].ActionsEnabled); content->AddChild(primaryButton);
-		buttonParams.Size.Width = removeWidth; buttonParams.Position.X = compact ? static_cast<int>(width) - removeWidth - 4 : detailWidth + primaryWidth + 12;
+		buttonParams.Size = {static_cast<unsigned int>(removeWidth),static_cast<unsigned int>(removeWidth)};
+		buttonParams.Position = {compact ? static_cast<int>(width) - removeWidth - 4 : detailWidth + primaryWidth + 12,
+			y + static_cast<int>(rowHeight) - removeWidth - 4};
 		buttonParams.Text = "X";
 		auto removeButton = std::make_shared<GuiPopupRowButton>(buttonParams,[remove,i] { if (remove) remove(i); });
 		removeButton->SetEnabled(rows[i].ActionsEnabled); content->AddChild(removeButton);
@@ -358,6 +394,10 @@ void GuiPopup::_LayoutContents()
 {
 	_LayoutButtons();
 	const int width = static_cast<int>(GetSize().Width), height = static_cast<int>(GetSize().Height);
+	const int fillInsetX = (std::min)(4,width / 2), fillInsetY = (std::min)(4,height / 2);
+	_fill->SetPosition({fillInsetX,fillInsetY});
+	_fill->SetSize({static_cast<unsigned int>(width - 2 * fillInsetX),
+		static_cast<unsigned int>(height - 2 * fillInsetY)});
 	if (_rowScroll && _rowScroll->IsVisible())
 	{
 		const unsigned int inner = static_cast<unsigned int>((std::max)(1,width - 24));

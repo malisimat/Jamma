@@ -37,13 +37,17 @@ namespace gui
 
 	struct GuiPopupParams : public base::GuiElementParams
 	{
-		enum class VisualMode { Normal, Learning };
+		enum class VisualMode { Normal, Learning, LearningBlue };
 		GuiPopupParams() = default;
+		VisualMode Mode = VisualMode::Normal;
 
 		static GuiPopupParams PanelDefault(VisualMode mode = VisualMode::Normal);
 		static GuiLabelParams Header(const std::string& text, unsigned int width, unsigned int height = 26u);
 		static base::GuiElementParams HeaderBand(unsigned int width, unsigned int height);
+		static base::GuiElementParams FlatRect(unsigned int width, unsigned int height,
+			glm::vec3 color, float opacity);
 	};
+	class GuiPopupColorRect;
 
 	class GuiPopup : public GuiPanel
 	{
@@ -85,6 +89,7 @@ namespace gui
 		static constexpr int ButtonSpacing = 12;
 
 		std::shared_ptr<GuiLabel> _titleLabel;
+		std::shared_ptr<GuiPopupColorRect> _fill;
 		std::shared_ptr<base::GuiElement> _headerBand;
 		std::array<std::shared_ptr<GuiLabel>, 3> _lineLabels;
 		std::vector<std::shared_ptr<GuiButton>> _buttons;

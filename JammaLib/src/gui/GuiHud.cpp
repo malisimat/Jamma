@@ -657,8 +657,11 @@ void GuiHud::_BuildTriggerRail()
 			auto learnParams = GuiButtonParams::PanelButton(pedal->GetSize().Width);
 			learnParams.Position = pedal->Position() + utils::Position2d{0, static_cast<int>(pedal->GetSize().Height) - 18};
 			learnParams.Size = {pedal->GetSize().Width, 18u}; learnParams.MinSize = learnParams.Size;
-			learnParams.Text = "Learn"; learnParams.TextFontSize = graphics::FontOptions::FONT_SMALL;
-			learnParams.TintColor = {0.05f, 0.35f, 0.46f};
+			learnParams.Texture.clear(); learnParams.OverTexture.clear(); learnParams.DownTexture.clear();
+			learnParams.TextureShader = "colour"; learnParams.TextureOpacity = 0.78f;
+			learnParams.TintColor = {0.27f, 0.29f, 0.31f};
+			learnParams.Text = "Learn"; learnParams.TextFontSize = graphics::FontOptions::FONT_TINY;
+			learnParams.TextPadding = 2u;
 			const auto id = i < _displayedRig.Triggers.size() ? _displayedRig.Triggers[i].Id : std::string{};
 			button->AddChild(std::make_shared<GuiHudActionButton>(learnParams,
 				[this, id, activate]() { _OpenTriggerLearn(id, activate, false); }));
