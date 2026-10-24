@@ -1612,6 +1612,11 @@ ActionResult Scene::OnAction(KeyAction action)
 		!_learnKeysDown[VK_LWIN] && !_learnKeysDown[VK_RWIN];
 	if (action.KeyChar < _learnKeysDown.size()) _learnKeysDown[action.KeyChar] = keyDown;
 	action.SetActionTime(Timer::GetTime());
+	if ((action.KeyChar == VK_MENU || action.KeyChar == VK_LMENU || action.KeyChar == VK_RMENU) && _hudPanel)
+	{
+		std::scoped_lock lock(_sceneMutex);
+		_hudPanel->SetAltLearnHeld(keyDown && !_popupManager.IsOpen() && !_focusManager.IsEditingText());
+	}
 	const bool contextual = _rigSaveDialogOpen || _controlWriterExclusion.owns_lock() ||
 		_popupManager.IsOpen() || _focusManager.IsEditingText() || _loopEditor.IsEngaged();
 	const auto inputRig = _rigCoordinator.Accepted();

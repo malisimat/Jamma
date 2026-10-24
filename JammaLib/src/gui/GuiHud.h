@@ -13,7 +13,7 @@
 #include "CableInteraction.h"
 #include "../io/RigFile.h"
 #include "../actions/TouchAction.h"
-#include "GuiTriggerLearn.h"
+#include "TriggerLearnController.h"
 
 namespace resources
 {
@@ -103,6 +103,7 @@ namespace gui
 		bool TriggerLearnKeyboard(const actions::KeyAction& action, bool fresh);
 		bool HasTriggerLearn() const { return _triggerLearn != nullptr; }
 		void SetCableRevealHeld(bool held);
+		void SetAltLearnHeld(bool held);
 		void SetAudioInputPeak(unsigned int channel, float peak, unsigned int numSamps);
 		void SetMidiInputPeak(unsigned int input, float peak, unsigned int numSamps);
 		// Off-callback producers publish complete, latest-substitutable presentation data.
@@ -308,9 +309,10 @@ namespace gui
 		std::function<std::string()> _triggerLearnAdmission;
 		std::function<std::vector<io::TriggerBindingLearn::Device>()> _triggerLearnDevices;
 		std::function<std::shared_ptr<const io::TriggerBindingLearn::Observation>(std::optional<io::TriggerBindingLearn::Request>)> _triggerLearnInput;
-		std::shared_ptr<GuiTriggerLearn> _triggerLearn;
+		std::shared_ptr<TriggerLearnController> _triggerLearn;
 		std::uint64_t _nextTriggerLearnSession = 0u;
 		bool _learnEndPending = false;
+		bool _altLearnHeld = false;
 		std::function<void(const std::shared_ptr<base::GuiElement>&, bool)> _focusEditor;
 		std::function<RoutingEditAvailability()> _routingEditAvailability;
 		std::function<bool(std::uint64_t)> _acceptTriggerInput;

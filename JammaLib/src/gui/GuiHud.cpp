@@ -191,7 +191,14 @@ namespace gui
 			_rigRevision(rigRevision),
 			_acceptInput(std::move(acceptInput)), _learn(std::move(learn))
 		{
+			auto overlay = GuiPopupParams::Header("LEARN", params.Size.Width, 20u);
+			overlay.Position = {0, static_cast<int>(params.Size.Height / 2u) - 10};
+			overlay.CenterHorizontally = true;
+			_altLabel = std::make_shared<GuiLabel>(overlay);
+			_altLabel->SetVisible(false);
+			AddChild(_altLabel);
 		}
+		void SetAltOverlay(bool visible) { _altLabel->SetVisible(visible); }
 
 		virtual void Draw(base::DrawContext& ctx) override
 		{
@@ -259,6 +266,7 @@ namespace gui
 		std::uint64_t _rigRevision;
 		std::function<bool(std::uint64_t)> _acceptInput;
 		std::function<void(bool)> _learn;
+		std::shared_ptr<GuiLabel> _altLabel;
 		bool _learnGesture = false;
 		actions::TouchAction::TouchType _learnSource = actions::TouchAction::TOUCH_MOUSE;
 		int _learnIndex = 0;
@@ -432,7 +440,7 @@ Rect2d GuiHud::OccupiedTopStripBounds() const
 void GuiHud::InitResources(ResourceLib& resourceLib, bool forceInit)
 {
 	GuiPanel::InitResources(resourceLib, forceInit);
-	if (_triggerLearn) _triggerLearn->InitResources(resourceLib, forceInit);
+	if (_triggerLearn) _triggerLearn->Popup()->InitResources(resourceLib, forceInit);
 }
 
 void GuiHud::_InitResources(ResourceLib& resourceLib, bool forceInit)
@@ -1230,6 +1238,7 @@ void GuiHud::_FilterCableHits(std::vector<CableInteraction::Endpoint>& endpoints
 			if (widgets.Edit->HitTest(widgets.Edit->GlobalToLocal(global)) ||
 				widgets.Close->HitTest(widgets.Close->GlobalToLocal(global)) ||
 				std::dynamic_pointer_cast<GuiHudTriggerPedal>(control) ||
+				std::dynamic_pointer_cast<GuiHudActionButton>(control) ||
 				widgets.Rename->HitLabel(widgets.Rename->GlobalToLocal(global)))
 			{ endpoints.clear(); cables.clear(); return; }
 		}
@@ -1433,30 +1442,31 @@ void GuiHud::_OpenTriggerLearn(const std::string& id, bool activate, bool altHel
 	{ SetQuantisationFeedback("Finish trigger action before learning bindings"); return; }
 	const auto admission = _triggerLearnAdmission ? _triggerLearnAdmission() : std::string{};
 	if (!admission.empty()) { SetQuantisationFeedback(admission); return; }
+	SetAltLearnHeld(false);
 	CancelTriggerLearn();
 	CancelTriggerRenames(); _CancelCableDrag();
-	_triggerLearn = std::make_shared<GuiTriggerLearn>();
+	_triggerLearn = std::make_shared<TriggerLearnController>();
 	_triggerLearn->Init(_displayedRig, id, activate ? io::RigFile::Control::Activate : io::RigFile::Control::Ditch,
 		_displayedRevision, ++_nextTriggerLearnSession, GetSize(), altHeld, _triggerLearnDevices ? _triggerLearnDevices() : std::vector<io::TriggerBindingLearn::Device>{});
-	auto weak = std::weak_ptr<GuiTriggerLearn>(_triggerLearn);
-	_popupManager->Open(_triggerLearn, shared_from_this(), {}, [weak] { const auto dialog = weak.lock(); return !dialog || !dialog->Applying; });
+	auto weak = std::weak_ptr<TriggerLearnController>(_triggerLearn);
+	_popupManager->Open(_triggerLearn->Popup(), shared_from_this(), {}, [weak] { const auto controller = weak.lock(); return !controller || !controller->Applying; });
 }
 void GuiHud::CancelTriggerLearn()
 {
 	if (!_triggerLearn) return;
-	if (_popupManager) _popupManager->Close(_triggerLearn);
-	_triggerLearn->ReleaseResources(); _triggerLearn->DetachGuiOwnershipForRetirement();
+	if (_popupManager) _popupManager->Close(_triggerLearn->Popup());
+	_triggerLearn->Popup()->ReleaseResources(); _triggerLearn->Popup()->DetachGuiOwnershipForRetirement();
 	_triggerLearn.reset(); _learnEndPending = true;
 }
 bool GuiHud::TriggerLearnKeyboard(const actions::KeyAction& action, bool fresh)
 {
-	return _triggerLearn && _popupManager && _popupManager->Contains(_triggerLearn) && _triggerLearn->AdmitKeyboard(action, fresh);
+	return _triggerLearn && _popupManager && _popupManager->Contains(_triggerLearn->Popup()) && _triggerLearn->AdmitKeyboard(action, fresh);
 }
 void GuiHud::UpdateTriggerLearn()
 {
 	if (_learnEndPending && _triggerLearnInput) { _triggerLearnInput(io::TriggerBindingLearn::Request{}); _learnEndPending = false; }
 	if (!_triggerLearn) return;
-	if (!_popupManager || !_popupManager->Contains(_triggerLearn) || _triggerLearn->CloseRequested)
+	if (!_popupManager || !_popupManager->Contains(_triggerLearn->Popup()) || _triggerLearn->CloseRequested)
 	{ CancelTriggerLearn(); return; }
 	const auto target = std::find_if(_displayedRig.Triggers.begin(), _displayedRig.Triggers.end(), [&](const auto& item) { return item.Id == _triggerLearn->Id; });
 	if (_triggerLearn->Revision != _displayedRevision)
@@ -1744,12 +1754,22 @@ void GuiHud::_UpdateSocketHighlights()
 
 actions::ActionResult GuiHud::OnAction(actions::KeyAction action)
 {
+	if (action.KeyChar == VK_MENU || action.KeyChar == VK_LMENU || action.KeyChar == VK_RMENU)
+		SetAltLearnHeld(action.KeyActionType == actions::KeyAction::KEY_DOWN);
 	if (_cableDrag.has_value() && action.KeyChar == VK_ESCAPE && action.KeyActionType == actions::KeyAction::KEY_DOWN)
 	{
 		_CancelCableDrag();
 		return { true, {}, {}, actions::ACTIONRESULT_DEFAULT, nullptr, {} };
 	}
 	return GuiPanel::OnAction(action);
+}
+
+void GuiHud::SetAltLearnHeld(bool held)
+{
+	_altLearnHeld = held;
+	for (const auto& widgets : _triggerWidgets)
+		for (unsigned char index : {0u, 1u})
+			if (auto pedal = std::dynamic_pointer_cast<GuiHudTriggerPedal>(widgets.Card->TryGetChild(index))) pedal->SetAltOverlay(held);
 }
 
 std::vector<GuiHud::CableRoute> GuiHud::BuildCableRoutes(const engine::RoutingGraph& graph)
@@ -2147,8 +2167,9 @@ std::shared_ptr<GuiButton> GuiHud::_MakeTriggerButton(const std::string& text,
 	activateParams.DownTexture = "trigger_activate_down";
 	activateParams.OutTexture = "trigger_activate_down_out";
 	activateParams.GuiPassThrough = false;
-	button->AddChild(std::make_shared<GuiHudTriggerPedal>(activateParams, trigger, true,
-		_displayedRevision, _acceptTriggerInput, [this, id](bool alt) { _OpenTriggerLearn(id, true, alt); }));
+	auto activatePedal = std::make_shared<GuiHudTriggerPedal>(activateParams, trigger, true,
+		_displayedRevision, _acceptTriggerInput, [this, id](bool alt) { _OpenTriggerLearn(id, true, alt); });
+	activatePedal->SetAltOverlay(_altLearnHeld); button->AddChild(activatePedal);
 
 	base::GuiElementParams ditchParams;
 	ditchParams.Position = { pedalPosX + pedalSizeW + pedalSpacing, pedalPosY };
@@ -2159,8 +2180,19 @@ std::shared_ptr<GuiButton> GuiHud::_MakeTriggerButton(const std::string& text,
 	ditchParams.DownTexture = "trigger_ditch_down";
 	ditchParams.OutTexture = "trigger_ditch_down_out";
 	ditchParams.GuiPassThrough = false;
-	button->AddChild(std::make_shared<GuiHudTriggerPedal>(ditchParams, std::move(trigger), false,
-		_displayedRevision, _acceptTriggerInput, [this, id](bool alt) { _OpenTriggerLearn(id, false, alt); }));
+	auto ditchPedal = std::make_shared<GuiHudTriggerPedal>(ditchParams, std::move(trigger), false,
+		_displayedRevision, _acceptTriggerInput, [this, id](bool alt) { _OpenTriggerLearn(id, false, alt); });
+	ditchPedal->SetAltOverlay(_altLearnHeld); button->AddChild(ditchPedal);
+	for (const auto [x, activate] : {std::pair{pedalPosX, true}, std::pair{pedalPosX + pedalSizeW + pedalSpacing, false}})
+	{
+		auto learnParams = GuiButtonParams::PanelButton(static_cast<unsigned int>(pedalSizeW));
+		learnParams.Position = {x, pedalPosY + pedalSizeH - 18};
+		learnParams.Size = {static_cast<unsigned int>(pedalSizeW), 18u}; learnParams.MinSize = learnParams.Size;
+		learnParams.Text = "Learn"; learnParams.TextFontSize = graphics::FontOptions::FONT_SMALL;
+		learnParams.TintColor = {0.05f, 0.35f, 0.46f};
+		button->AddChild(std::make_shared<GuiHudActionButton>(learnParams,
+			[this, id, activate]() { _OpenTriggerLearn(id, activate, false); }));
+	}
 
 	return button;
 }

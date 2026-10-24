@@ -4,7 +4,7 @@
 #include "gui/GuiFocusManager.h"
 #include "gui/GuiStationLabel.h"
 #include "gui/GuiTriggerRename.h"
-#include "gui/GuiTriggerLearn.h"
+#include "gui/TriggerLearnController.h"
 #include "gui/GuiPopup.h"
 #include "gui/GuiPopupManager.h"
 #include "gui/GuiTextBox.h"
@@ -280,11 +280,11 @@ TEST(GuiPopup, ConfirmationButtonsArePackedAtTheLowerRightAndDispatch) {
 	config.Actions = { { "Cancel", 2u }, { "Delete", 1u } };
 	popup->ConfigureButtons(config);
 
-	auto cancelButton = std::dynamic_pointer_cast<GuiButton>(popup->TryGetChild(4u));
-	auto deleteButton = std::dynamic_pointer_cast<GuiButton>(popup->TryGetChild(5u));
+	auto cancelButton = std::dynamic_pointer_cast<GuiButton>(popup->TryGetChild(5u));
+	auto deleteButton = std::dynamic_pointer_cast<GuiButton>(popup->TryGetChild(6u));
 	ASSERT_NE(nullptr, cancelButton);
 	ASSERT_NE(nullptr, deleteButton);
-	EXPECT_EQ(nullptr, popup->TryGetChild(6u));
+	EXPECT_EQ(nullptr, popup->TryGetChild(7u));
 	EXPECT_EQ(144, cancelButton->Position().X);
 	EXPECT_EQ(24, cancelButton->Position().Y);
 	EXPECT_EQ(284, deleteButton->Position().X);
@@ -312,7 +312,7 @@ TEST(GuiPopup, RequiredPressRejectsAnotherPointerRelease) {
 	popup->ConfigureButtons({ { { "Follow server", 1u } }, true });
 	auto receiver = std::make_shared<GuiRecordingActionReceiver>();
 	popup->SetButtonReceiver(receiver);
-	const auto button = popup->TryGetChild(4u);
+	const auto button = popup->TryGetChild(5u);
 	ASSERT_TRUE(button);
 	const auto point = button->Position() + utils::Position2d{ 10, 10 };
 	auto down = MakeTouch(TouchAction::TOUCH_DOWN, point);
@@ -335,7 +335,7 @@ TEST(GuiPopupManager, InterruptedRequiredPressCannotConfirmOnLaterRelease) {
 	popup->ConfigureButtons({ { { "Follow server", 1u } }, true });
 	auto receiver = std::make_shared<GuiRecordingActionReceiver>();
 	popup->SetButtonReceiver(receiver);
-	const auto button = popup->TryGetChild(4u);
+	const auto button = popup->TryGetChild(5u);
 	ASSERT_TRUE(button);
 	const auto point = popup->Position() + button->Position() + utils::Position2d{ 10, 10 };
 	host.Open(popup);
@@ -362,8 +362,8 @@ TEST(GuiPopupManager, ReleaseOverAnotherButtonDisarmsRequiredPress) {
 	popup->ConfigureButtons({ { { "Cancel", 2u }, { "Follow server", 1u } }, true });
 	auto receiver = std::make_shared<GuiRecordingActionReceiver>();
 	popup->SetButtonReceiver(receiver);
-	const auto cancel = popup->TryGetChild(4u);
-	const auto follow = popup->TryGetChild(5u);
+	const auto cancel = popup->TryGetChild(5u);
+	const auto follow = popup->TryGetChild(6u);
 	ASSERT_TRUE(cancel);
 	ASSERT_TRUE(follow);
 	const auto cancelPoint = popup->Position() + cancel->Position() + utils::Position2d{ 10, 10 };
@@ -385,7 +385,7 @@ TEST(GuiPopupManager, MouseCaptureLossDisarmsRequiredPress) {
 	popup->ConfigureButtons({ { { "Follow server", 1u } }, true });
 	auto receiver = std::make_shared<GuiRecordingActionReceiver>();
 	popup->SetButtonReceiver(receiver);
-	const auto button = popup->TryGetChild(4u);
+	const auto button = popup->TryGetChild(5u);
 	ASSERT_TRUE(button);
 	const auto point = popup->Position() + button->Position() + utils::Position2d{ 10, 10 };
 	host.Open(popup);
@@ -417,7 +417,7 @@ TEST(GuiPopup, FitsViewportAndKeepsContentAndActionsInsideAfterResize)
 		EXPECT_GE(position.X, 0); EXPECT_GE(position.Y, 0);
 		EXPECT_LE(position.X + static_cast<int>(size.Width), static_cast<int>(viewport.Width));
 		EXPECT_LE(position.Y + static_cast<int>(size.Height), static_cast<int>(viewport.Height));
-		for (unsigned char index = 0; index < 6; ++index) {
+		for (unsigned char index = 0; index < 7; ++index) {
 			const auto child = popup->TryGetChild(index); ASSERT_TRUE(child);
 			const auto pos = child->Position(); const auto frame = child->GetSize();
 			EXPECT_GE(pos.X, 0); EXPECT_GE(pos.Y, 0);
@@ -425,7 +425,7 @@ TEST(GuiPopup, FitsViewportAndKeepsContentAndActionsInsideAfterResize)
 			EXPECT_LE(pos.Y + static_cast<int>(frame.Height), static_cast<int>(size.Height));
 		}
 		if (viewport.Width >= 184 && viewport.Height >= 161) {
-			const auto button = popup->TryGetChild(5); const auto pos = button->Position(); const auto frame = button->GetSize();
+			const auto button = popup->TryGetChild(6); const auto pos = button->Position(); const auto frame = button->GetSize();
 			const utils::Position2d point{ pos.X + static_cast<int>(frame.Width / 2), pos.Y + static_cast<int>(frame.Height / 2) };
 			const auto before = receiver->ActionCount;
 			EXPECT_TRUE(popup->OnAction(MakeTouch(TouchAction::TOUCH_DOWN, point)).IsEaten);
@@ -639,6 +639,20 @@ TEST(GuiScrollPanel, ScrollFractionMapsToOffset) {
 
 	panel->SetScrollFraction(0.5);
 	EXPECT_EQ(75, panel->ScrollOffset());
+}
+
+TEST(GuiScrollPanel, ScrollToVisibleKeepsUserOffsetUntilAContentRowLeavesTheViewport) {
+    GuiScrollPanelParams p;
+    p.Size = {100u, 50u};
+    auto panel = std::make_shared<GuiScrollPanel>(p);
+    panel->SetContent(std::make_shared<GuiButton>(MakeSizedButton({0,0}, {80u,200u})));
+    panel->SetScrollOffset(30);
+    panel->ScrollToVisible({0,125,80,145});
+    EXPECT_EQ(30, panel->ScrollOffset());
+    panel->ScrollToVisible({0,10,80,30});
+    EXPECT_EQ(140, panel->ScrollOffset());
+    panel->ScrollToVisible({0,175,80,195});
+    EXPECT_EQ(5, panel->ScrollOffset());
 }
 
 TEST(GuiScrollPanel, ViewportExcludesScrollBar) {
@@ -1739,9 +1753,9 @@ TEST(GuiNumericInput, HardwareInputsRejectFractionAndOverflowRatherThanCoerce)
 }
 
 
-TEST(GuiTriggerLearn, AtomicDraftPreservesImportedRowsRestoresAttemptsAndFiltersEmptyRows)
+TEST(TriggerLearnController, AtomicDraftPreservesImportedRowsRestoresAttemptsAndFiltersEmptyRows)
 {
-    using Draft = gui::GuiTriggerLearn::Draft;
+    using Draft = gui::TriggerLearnController::Draft;
     for (const auto count : {0u, 1u, 4u, 6u})
     {
         std::vector<io::RigFile::Binding> imported;
@@ -1772,14 +1786,80 @@ TEST(GuiTriggerLearn, AtomicDraftPreservesImportedRowsRestoresAttemptsAndFilters
         EXPECT_FALSE(io::TriggerBindingLearn::KeyboardAllowed(key));
     EXPECT_TRUE(io::TriggerBindingLearn::KeyboardAllowed(65u));
     auto rig = io::RigFile::FromStream(std::stringstream(io::RigFile::DefaultJson)).value();
-    auto modal = std::make_shared<gui::GuiTriggerLearn>();
-    modal->Init(rig,rig.Triggers[0].Id,io::RigFile::Control::Activate,1u,1u,{200u,200u});
-    for (const auto child : {4u,5u,6u})
+    auto controller = std::make_shared<gui::TriggerLearnController>();
+    controller->Init(rig,rig.Triggers[0].Id,io::RigFile::Control::Activate,1u,1u,{200u,200u},false,{});
+    EXPECT_EQ(200u,controller->Popup()->GetSize().Width);
+    EXPECT_EQ(200u,controller->Popup()->GetSize().Height);
+    controller->Popup()->ReleaseResources(); controller->Popup()->DetachGuiOwnershipForRetirement();
+}
+
+TEST(GuiPopup, RowRevealPreservesUserScrollUntilExplicitlyRequested)
+{
+    auto params = gui::GuiPopupParams::PanelDefault();
+    params.Size = {640u,384u}; params.MinSize = {1u,1u};
+    auto popup = std::make_shared<gui::GuiPopup>(params);
+    popup->SetTitle("Bindings"); popup->FitToViewport({200u,200u});
+    std::vector<gui::GuiPopupRow> rows(6u);
+    for (auto& row : rows) { row.Detail = "Binding"; row.PrimaryAction = "Learn"; }
+    popup->SetRows(rows,{}, {},5u);
+    EXPECT_GT(popup->RowScrollOffset(),0);
+    const int scrolled = popup->RowScrollOffset();
+    popup->SetRows(rows,{},{});
+    EXPECT_EQ(scrolled,popup->RowScrollOffset());
+    popup->SetRows(rows,{}, {},0u);
+    EXPECT_EQ(0,popup->RowScrollOffset());
+}
+
+TEST(GuiPopup, NarrowRowsKeepDetailsAndActionsWithinContent)
+{
+    auto params = gui::GuiPopupParams::PanelDefault();
+    params.Size = {640u,384u}; params.MinSize = {1u,1u};
+    auto popup = std::make_shared<gui::GuiPopup>(params);
+    popup->FitToViewport({120u,200u});
+    popup->SetRows({{"1. MIDI binding", "Learn"}}, {}, {});
+    auto scroll = std::dynamic_pointer_cast<GuiScrollPanel>(popup->TryGetChild(5u)); ASSERT_TRUE(scroll);
+    auto content = scroll->Content(); ASSERT_TRUE(content);
+    for (unsigned char index = 0; index < 4; ++index)
     {
-        const auto button = modal->TryGetChild(static_cast<unsigned char>(child)); ASSERT_TRUE(button);
-        EXPECT_GE(button->Position().X,0); EXPECT_GE(button->Position().Y,0);
-        EXPECT_LE(button->Position().X + static_cast<int>(button->GetSize().Width),200);
-        EXPECT_LE(button->Position().Y + static_cast<int>(button->GetSize().Height),200);
+        auto child = content->TryGetChild(index); ASSERT_TRUE(child);
+        EXPECT_GE(child->Position().X,0);
+        EXPECT_LE(child->Position().X + static_cast<int>(child->GetSize().Width),static_cast<int>(content->GetSize().Width));
     }
-    modal->ReleaseResources(); modal->DetachGuiOwnershipForRetirement();
+}
+
+TEST(GuiPopup, OptionalKeyHandlerCanDeclineAndAllowNormalDispatch)
+{
+    auto popup = std::make_shared<GuiPopup>();
+    actions::KeyAction key; key.KeyChar = 65u; key.KeyActionType = actions::KeyAction::KEY_DOWN;
+    bool called = false;
+    popup->SetKeyAction([&](actions::KeyAction) { called = true; return false; });
+    EXPECT_FALSE(popup->OnAction(key).IsEaten); EXPECT_TRUE(called);
+    popup->SetKeyAction([](actions::KeyAction) { return true; });
+    EXPECT_TRUE(popup->OnAction(key).IsEaten);
+}
+
+TEST(TriggerLearnController, ArmAdmitsFreshKeyboardAfterAltReleaseWithoutOwningPopupCycle)
+{
+    auto rig = io::RigFile::FromStream(std::stringstream(io::RigFile::DefaultJson)).value();
+    auto controller = std::make_shared<gui::TriggerLearnController>();
+    controller->Init(rig,rig.Triggers[0].Id,io::RigFile::Control::Activate,1u,1u,{640u,384u},true,{});
+    const auto request = controller->TakeRequest(); ASSERT_TRUE(request);
+    auto observation = std::make_shared<io::TriggerBindingLearn::Observation>();
+    observation->Identity = *request; observation->Armed = true;
+    controller->Observe(observation);
+    actions::KeyAction key; key.KeyChar = 65u; key.KeyActionType = actions::KeyAction::KEY_DOWN;
+    EXPECT_FALSE(controller->AdmitKeyboard(key,true));
+    key.KeyChar = VK_MENU; key.KeyActionType = actions::KeyAction::KEY_UP;
+    EXPECT_FALSE(controller->AdmitKeyboard(key,true));
+    key.KeyChar = 65u; key.KeyActionType = actions::KeyAction::KEY_DOWN;
+    EXPECT_TRUE(controller->AdmitKeyboard(key,true));
+    EXPECT_FALSE(controller->AdmitKeyboard(key,false));
+    observation->Binding = io::TriggerBindingLearn::Keyboard(65u);
+    controller->Observe(observation); controller->Refresh();
+    EXPECT_FALSE(controller->Bindings().empty());
+    auto popup = controller->Popup();
+    std::weak_ptr<gui::TriggerLearnController> weak = controller;
+    controller.reset();
+    EXPECT_TRUE(weak.expired());
+    popup->ReleaseResources(); popup->DetachGuiOwnershipForRetirement();
 }

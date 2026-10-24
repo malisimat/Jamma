@@ -47,6 +47,8 @@ namespace gui
 
 		int ScrollOffset() const;
 		void SetScrollOffset(int offset);
+		// Reveal content-local bounds only when they fall outside the current viewport.
+		void ScrollToVisible(utils::Rect2d bounds);
 		void SetScrollFraction(double fraction);
 		int MaxScrollOffset() const;
 		unsigned int ViewportWidth() const;

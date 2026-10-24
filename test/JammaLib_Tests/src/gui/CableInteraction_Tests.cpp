@@ -848,15 +848,34 @@ TEST_F(HudCableInteractionTests, AltPedalOpensLearningOnMatchedReleaseWithoutLea
     EXPECT_TRUE(pedal->OnAction(action).IsEaten); EXPECT_FALSE(popups.IsOpen()); EXPECT_EQ(0u,admittedEdges);
     action.State = actions::TouchAction::TOUCH_UP; action.Modifiers = base::Action::MODIFIER_NONE;
     EXPECT_TRUE(pedal->OnAction(action).IsEaten); EXPECT_TRUE(popups.IsOpen()); EXPECT_EQ(0u,admittedEdges);
-    const auto dialog = std::dynamic_pointer_cast<gui::GuiTriggerLearn>(popups.Top()); ASSERT_TRUE(dialog);
-    const auto request = dialog->TakeRequest(); ASSERT_TRUE(request);
-    auto observation = std::make_shared<io::TriggerBindingLearn::Observation>(); observation->Identity = *request; observation->Armed = true; dialog->Observe(observation);
-    actions::KeyAction key; key.KeyChar = 65u; key.KeyActionType = actions::KeyAction::KEY_DOWN; key.Modifiers = base::Action::MODIFIER_NONE;
-    EXPECT_TRUE(dialog->AdmitKeyboard(key,true)); EXPECT_FALSE(dialog->AdmitKeyboard(key,false));
-    key.Modifiers = base::Action::MODIFIER_CTRL; EXPECT_FALSE(dialog->AdmitKeyboard(key,true));
+    const auto dialog = std::dynamic_pointer_cast<gui::GuiPopup>(popups.Top()); ASSERT_TRUE(dialog);
     auto stale = *Routing; ++stale.Revision; Hud->SetRoutingConfig(20u,{},stale); Hud->UpdateTriggerLearn();
-    EXPECT_TRUE(dialog->Invalidated); EXPECT_FALSE(dialog->Applying); EXPECT_TRUE(Submissions.empty());
+    EXPECT_TRUE(popups.IsOpen()); EXPECT_TRUE(Submissions.empty());
     popups.Close(); Hud->UpdateTriggerLearn(); EXPECT_FALSE(Hud->HasTriggerLearn());
     action.State = actions::TouchAction::TOUCH_DOWN; EXPECT_TRUE(pedal->OnAction(action).IsEaten);
     action.State = actions::TouchAction::TOUCH_UP; EXPECT_TRUE(pedal->OnAction(action).IsEaten); EXPECT_EQ(2u,admittedEdges);
+}
+
+TEST_F(HudCableInteractionTests, VisiblePedalLearnControlOpensDialogWithoutSendingPedalInput)
+{
+    gui::GuiPopupManager popups; unsigned int admittedEdges = 0u;
+    gui::GuiHudParams params; params.Size = {1200u,800u}; params.PopupManager = &popups;
+    params.AcceptTriggerInput = [&](std::uint64_t) { ++admittedEdges; return true; };
+    params.TriggerLearnInput = [](auto) { return std::shared_ptr<const io::TriggerBindingLearn::Observation>{}; };
+    Hud = std::make_shared<gui::GuiHud>(params); Hud->SetRoutingConfig(20u,{},*Routing); Hud->Init();
+    std::vector<std::shared_ptr<gui::GuiScrollPanel>> scrolls; Layout(Hud,scrolls);
+    const auto card = TriggerScroll()->Content()->TryGetChild(0u);
+    const auto learn = card->TryGetChild(2u); ASSERT_TRUE(learn);
+    const auto pedal = card->TryGetChild(0u); ASSERT_TRUE(pedal);
+    Hud->SetAltLearnHeld(true); ASSERT_TRUE(pedal->TryGetChild(0u)->IsVisible());
+    Hud->SetAltLearnHeld(false); EXPECT_FALSE(pedal->TryGetChild(0u)->IsVisible());
+    actions::TouchAction action; action.Touch = actions::TouchAction::TOUCH_MOUSE; action.Index = 0u;
+    action.Position = learn->GlobalPosition() + utils::Position2d{2,2}; action.State = actions::TouchAction::TOUCH_DOWN;
+    const auto down = Hud->OnAction(action);
+    EXPECT_TRUE(down.IsEaten); EXPECT_EQ(learn,down.ActiveElement.lock());
+    EXPECT_FALSE(popups.IsOpen()); EXPECT_FALSE(Hud->HasCableDrag());
+    action.State = actions::TouchAction::TOUCH_UP;
+    // Scene/Window send captured releases directly to the pressed control.
+    EXPECT_TRUE(learn->OnAction(learn->GlobalToLocal(action)).IsEaten);
+    EXPECT_TRUE(popups.IsOpen()); EXPECT_EQ(0u,admittedEdges);
 }
