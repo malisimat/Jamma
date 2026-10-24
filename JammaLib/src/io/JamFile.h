@@ -41,7 +41,7 @@ namespace io
 		};
 
 		static std::optional<JamFile> FromStream(std::stringstream ss);
-		static bool ToStream(JamFile jam, std::stringstream& ss);
+		static bool ToStream(JamFile jam, std::stringstream& ss, std::string* error = nullptr);
 		static const std::string DefaultJson;
 		static constexpr unsigned int CurrentFormatMajor = 0u;
 		static constexpr unsigned int CurrentFormatMinor = 3u;

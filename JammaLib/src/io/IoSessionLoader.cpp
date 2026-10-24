@@ -2,16 +2,76 @@
 #include "Constants.h"
 #include <algorithm>
 #include <iostream>
+#include <set>
 #include <utility>
 
 using namespace io;
 using namespace engine;
 using namespace audio;
 
+void IoSessionLoader::AssignMissingIdentities(JamFile& jam)
+{
+	std::set<std::string> stationIds, takeIds, audioLoopIds, midiLoopIds, pluginIds;
+	for (const auto& station : jam.Stations)
+	{
+		if (!station.Id.empty()) stationIds.insert(station.Id);
+		for (const auto& plugin : station.VstChain) if (!plugin.Id.empty()) pluginIds.insert(plugin.Id);
+		for (const auto& take : station.LoopTakes)
+		{
+			if (!take.Id.empty()) takeIds.insert(take.Id);
+			for (const auto& plugin : take.VstChain) if (!plugin.Id.empty()) pluginIds.insert(plugin.Id);
+			for (const auto& loop : take.Loops)
+			{
+				if (!loop.Id.empty()) audioLoopIds.insert(loop.Id);
+				for (const auto& plugin : loop.VstChain) if (!plugin.Id.empty()) pluginIds.insert(plugin.Id);
+			}
+			for (const auto& stream : take.MidiStreams)
+				if (!stream.Id.empty()) midiLoopIds.insert(stream.Id);
+		}
+	}
+	const auto assign = [](std::set<std::string>& used, std::string& id, std::string preferred, const char* kind)
+	{
+		if (!id.empty()) return;
+		if (preferred.empty() || preferred.size() > 256u) preferred = kind;
+		id = preferred;
+		for (std::size_t suffix = 1u; !used.insert(id).second; ++suffix)
+			id = std::string(kind) + ":" + std::to_string(suffix);
+	};
+	for (std::size_t stationIndex = 0u; stationIndex < jam.Stations.size(); ++stationIndex)
+	{
+		auto& station = jam.Stations[stationIndex];
+		assign(stationIds, station.Id, "legacy:station:" + std::to_string(stationIndex), "station");
+		for (std::size_t pluginIndex = 0u; pluginIndex < station.VstChain.size(); ++pluginIndex)
+			assign(pluginIds, station.VstChain[pluginIndex].Id,
+				station.Id + ":vst:" + std::to_string(pluginIndex), "vst");
+		for (std::size_t takeIndex = 0u; takeIndex < station.LoopTakes.size(); ++takeIndex)
+		{
+			auto& take = station.LoopTakes[takeIndex];
+			assign(takeIds, take.Id, take.Name.empty() ? station.Id + ":take:" + std::to_string(takeIndex) : take.Name, "take");
+			for (std::size_t pluginIndex = 0u; pluginIndex < take.VstChain.size(); ++pluginIndex)
+				assign(pluginIds, take.VstChain[pluginIndex].Id,
+					take.Id + ":vst:" + std::to_string(pluginIndex), "vst");
+			for (std::size_t loopIndex = 0u; loopIndex < take.Loops.size(); ++loopIndex)
+			{
+				auto& loop = take.Loops[loopIndex];
+				assign(audioLoopIds, loop.Id, take.Id + ":loop:" + std::to_string(loopIndex), "loop");
+				for (std::size_t pluginIndex = 0u; pluginIndex < loop.VstChain.size(); ++pluginIndex)
+					assign(pluginIds, loop.VstChain[pluginIndex].Id,
+						loop.Id + ":vst:" + std::to_string(pluginIndex), "vst");
+			}
+			for (std::size_t streamIndex = 0u; streamIndex < take.MidiStreams.size(); ++streamIndex)
+				assign(midiLoopIds, take.MidiStreams[streamIndex].Id,
+					take.Id + ":midi:" + std::to_string(streamIndex), "midi");
+		}
+	}
+}
+
 IoSessionLoader::ReconstructedSession IoSessionLoader::Reconstruct(const JamFile& jam,
 	const RigFile& rig, const std::wstring& directory)
 {
 	ReconstructedSession result;
+	JamFile restoredJam = jam;
+	AssignMissingIdentities(restoredJam);
 	result.HudAudioInputCount = std::max(1u, rig.User.Audio.NumChannelsIn);
 	for (const auto& triggerCfg : rig.Triggers)
 	{
@@ -39,11 +99,11 @@ IoSessionLoader::ReconstructedSession IoSessionLoader::Reconstruct(const JamFile
 
 	MergeMixBehaviourParams mergeParams;
 	AudioMixerParams mixerParams = Station::GetMixerParams(stationParams.Size, mergeParams);
-	result.Stations.reserve(jam.Stations.size());
-	result.StationDescriptors.reserve(jam.Stations.size());
+	result.Stations.reserve(restoredJam.Stations.size());
+	result.StationDescriptors.reserve(restoredJam.Stations.size());
 
 	size_t stationDescriptorIndex = 0u;
-	for (const auto& stationStruct : jam.Stations)
+	for (const auto& stationStruct : restoredJam.Stations)
 	{
 		auto station = Station::FromFile(stationParams, mixerParams, stationStruct, directory);
 		if (station.has_value())
@@ -65,7 +125,7 @@ IoSessionLoader::ReconstructedSession IoSessionLoader::Reconstruct(const JamFile
 				<< "' was not constructed; continuing with the remaining stations." << std::endl;
 		stationDescriptorIndex++;
 	}
-	std::cout << "[LOAD] Constructed " << result.Stations.size() << " of " << jam.Stations.size()
+	std::cout << "[LOAD] Constructed " << result.Stations.size() << " of " << restoredJam.Stations.size()
 		<< " station descriptor(s)." << std::endl;
 	if (jam.TransportInitialised && jam.Version == JamFile::VERSION_V && jam.MasterLengthSamps != 0ul)
 		result.SavedMaster = MasterPosition{ jam.MasterLengthSamps, jam.AbsoluteSamplePos };

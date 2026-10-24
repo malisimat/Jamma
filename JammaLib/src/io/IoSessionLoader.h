@@ -27,5 +27,7 @@ namespace io
 		static void RestoreTriggerHistories(const std::vector<JamFile::TriggerHistory>& histories,
 			const engine::RigSnapshot& initialRig,
 			const std::vector<std::shared_ptr<engine::Station>>& stations);
+	private:
+		static void AssignMissingIdentities(JamFile& jam);
 	};
 }

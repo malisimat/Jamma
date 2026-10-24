@@ -500,9 +500,13 @@ std::optional<JamFile> JamFile::FromStream(std::stringstream ss)
 	return jam;
 }
 
-bool JamFile::ToStream(JamFile jam, std::stringstream& ss)
+bool JamFile::ToStream(JamFile jam, std::stringstream& ss, std::string* error)
 {
-	if (!PerformanceGroupPersistence::ValidateIdentities(jam)) return false;
+	const auto fail = [error](const char* reason) {
+		if (error) *error = reason;
+		return false;
+	};
+	if (!PerformanceGroupPersistence::ValidateIdentities(jam)) return fail("Duplicate or invalid session identity");
 	auto escapeJsonString = [](const std::string& s) -> std::string {
 		std::string escaped;
 		escaped.reserve(s.size());
@@ -711,24 +715,24 @@ bool JamFile::ToStream(JamFile jam, std::stringstream& ss)
 	if (jam.TransportInitialised && (jam.MasterLengthSamps == 0u || jam.MasterLengthSamps > MaxLoopLengthSamps))
 	{
 		std::cout << "JamFile: refusing to write invalid local master length" << std::endl;
-		return false;
+		return fail("Invalid local master length");
 	}
 	for (const auto& station : jam.Stations)
 	{
 		if (station.LoopTakes.size() > MaxTakesPerStation)
-			return false;
+			return fail("Too many takes in a station");
 		for (const auto& take : station.LoopTakes)
 		{
 			if (!jam.TransportInitialised && (!take.Loops.empty() || !take.MidiStreams.empty()))
-				return false;
+				return fail("Loop content requires an initialised transport");
 			if (take.Loops.size() > MaxLoopsPerTake || take.MidiStreams.size() > MaxMidiStreamsPerTake)
-				return false;
+				return fail("Too many loops or MIDI streams in a take");
 			for (const auto& loop : take.Loops)
 				if (loop.Length == 0u || loop.Length > MaxLoopLengthSamps || loop.BodyPlayIndex >= loop.Length || !IsSafeSidecarPath(loop.Name))
-					return false;
+					return fail("Invalid audio loop length, position, or sidecar path");
 			for (const auto& stream : take.MidiStreams)
 				if (stream.LogicalLength == 0u || stream.Channel > 15u || !IsSafeSidecarPath(stream.SidecarPath))
-					return false;
+					return fail("Invalid MIDI stream length, channel, or sidecar path");
 		}
 	}
 	for (const auto& history : jam.TriggerHistories)
@@ -736,10 +740,10 @@ bool JamFile::ToStream(JamFile jam, std::stringstream& ss)
 		if (history.TriggerId.empty() || history.Takes.size() > MaxTriggerHistoryPerTrigger ||
 			std::count_if(jam.TriggerHistories.begin(), jam.TriggerHistories.end(), [&history](const TriggerHistory& other)
 				{ return other.TriggerId == history.TriggerId; }) != 1)
-			return false;
+			return fail("Invalid trigger history");
 		for (const auto& entry : history.Takes)
 			if (entry.SourceType > 2u || entry.TargetTakeId.empty())
-				return false;
+				return fail("Invalid trigger take history");
 	}
 	const auto transportOffsetLoopFrac = std::isfinite(jam.TransportOffsetLoopFrac) ?
 		std::clamp(jam.TransportOffsetLoopFrac, -1.0, 1.0) : 0.0;
@@ -900,7 +904,7 @@ bool JamFile::ToStream(JamFile jam, std::stringstream& ss)
 		ss << "]}";
 	}
 	std::stringstream groupStream;
-	if (!PerformanceGroupPersistence::Write(jam, groupStream)) return false;
+	if (!PerformanceGroupPersistence::Write(jam, groupStream)) return fail("Invalid performance group snapshot");
 	ss << "]," << quoted("performanceGroups") << ":" << groupStream.str() << "}";
 	return true;
 }

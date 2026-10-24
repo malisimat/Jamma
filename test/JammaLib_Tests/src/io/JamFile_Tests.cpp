@@ -950,6 +950,10 @@ TEST(JamFileGroups, DuplicateExplicitEntityIdentityIsRejected)
     jam.Stations[0].VstChain.push_back(plugin);
     jam.Stations[1].VstChain.push_back(plugin);
     EXPECT_FALSE(io::PerformanceGroupPersistence::ValidateIdentities(jam));
+    std::stringstream output;
+    std::string error;
+    EXPECT_FALSE(JamFile::ToStream(jam, output, &error));
+    EXPECT_EQ("Duplicate or invalid session identity", error);
     jam.Stations[1].VstChain[0].Id.clear(); // Legacy missing ID is assigned on construction.
     EXPECT_TRUE(io::PerformanceGroupPersistence::ValidateIdentities(jam));
 }

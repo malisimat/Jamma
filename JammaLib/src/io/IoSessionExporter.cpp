@@ -579,10 +579,11 @@ namespace io
 		}
 
 		std::stringstream jamStream;
-		if (!io::JamFile::ToStream(jam, jamStream))
+		std::string serializationError;
+		if (!io::JamFile::ToStream(jam, jamStream, &serializationError))
 		{
-			std::cout << "Export: failed to serialize session.jam" << std::endl;
-            appendError("Session capture or serialization failed"); return result;
+			std::cout << "Export: failed to serialize session.jam: " << serializationError << std::endl;
+            appendError("Session serialization failed: " + serializationError); return result;
 		}
 
         // Audio has resumed before serialization and all disk work.

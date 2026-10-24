@@ -158,7 +158,7 @@ std::optional<std::shared_ptr<Station>> Station::FromFile(StationParams stationP
 	{
 		auto& entry = stationStruct.VstChain[index];
 		// Legacy entries without identity receive a deterministic local identity.
-		if (entry.Id.empty()) entry.Id = stationStruct.Id + ":vst:" + std::to_string(index);
+		if (entry.Id.empty()) entry.Id = station->Id() + ":vst:" + std::to_string(index);
 		if (!io::NativeMidiSidecar::ValidatePluginIdentity(entry.Id) || std::find(identities.begin(), identities.end(), entry.Id) != identities.end()) station->_rackInactive = true;
 		identities.push_back(entry.Id);
 	}
@@ -176,7 +176,7 @@ std::optional<std::shared_ptr<Station>> Station::FromFile(StationParams stationP
 	{
 		auto& savedTake = stationStruct.LoopTakes[takeIndex];
 		if (savedTake.Id.empty()) savedTake.Id = !savedTake.Name.empty() ? savedTake.Name
-			: stationStruct.Id + ":take:" + std::to_string(takeIndex);
+			: station->Id() + ":take:" + std::to_string(takeIndex);
 		for (std::size_t pluginIndex = 0u; pluginIndex < savedTake.VstChain.size(); ++pluginIndex)
 			if (savedTake.VstChain[pluginIndex].Id.empty()) savedTake.VstChain[pluginIndex].Id
 				= savedTake.Id + ":vst:" + std::to_string(pluginIndex);

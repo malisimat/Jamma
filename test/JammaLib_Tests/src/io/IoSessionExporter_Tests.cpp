@@ -15,6 +15,7 @@
 #include "engine/Station.h"
 #include "engine/Trigger.h"
 #include "io/IoSessionExporter.h"
+#include "io/IoSessionLoader.h"
 #include "io/JamFile.h"
 #include "io/NativeMidiSidecar.h"
 
@@ -801,4 +802,29 @@ TEST(IoSessionExporter, RestoresLegacyMidiSessionMaterial)
         EXPECT_FALSE(io::JamFile::Station::FromJson(object));
         EXPECT_FALSE(io::JamFile::LoopTake::FromJson(object));
     }
+}
+
+TEST(IoSessionExporter, SavesLegacyStationsWithUnidentifiedVstSlots)
+{
+	// Reserve an explicit identity that the first legacy station would otherwise
+	// generate, then ensure both missing station and VST IDs remain unique.
+	const auto legacy = R"({"name":"legacy","stations":[{"name":"keys-a","stationtype":0,"takes":[{"name":"shared","loops":[]}],"vst":[{"path":"missing-a.dll","bypass":false,"state":""}]},{"name":"keys-b","stationtype":0,"takes":[{"name":"shared","loops":[]}],"vst":[{"path":"missing-b.dll","bypass":false,"state":""}]},{"id":"legacy:station:0","name":"explicit","stationtype":0,"takes":[],"vst":[{"id":"station:1:vst:0","path":"missing-c.dll","bypass":false,"state":""}]}],"quantisesamps":1,"quantisation":"off"})";
+	const auto jam = io::JamFile::FromStream(std::stringstream(legacy));
+	ASSERT_TRUE(jam);
+	const auto loaded = io::IoSessionLoader::Reconstruct(*jam, io::RigFile{}, L"");
+	ASSERT_EQ(3u, loaded.Stations.size());
+	const auto exported = IoSessionExporterTest::ExportManifest(loaded.Stations);
+	ASSERT_TRUE(exported);
+	ASSERT_EQ(3u, exported->Stations.size());
+	ASSERT_EQ(1u, exported->Stations[0].VstChain.size());
+	ASSERT_EQ(1u, exported->Stations[1].VstChain.size());
+	EXPECT_EQ("legacy:station:0", exported->Stations[2].Id);
+	EXPECT_NE("legacy:station:0", exported->Stations[0].Id);
+	EXPECT_NE("legacy:station:0", exported->Stations[1].Id);
+	EXPECT_NE(exported->Stations[0].VstChain[0].Id, exported->Stations[1].VstChain[0].Id);
+	ASSERT_EQ(1u, exported->Stations[0].LoopTakes.size());
+	ASSERT_EQ(1u, exported->Stations[1].LoopTakes.size());
+	EXPECT_NE(exported->Stations[0].LoopTakes[0].Id, exported->Stations[1].LoopTakes[0].Id);
+	EXPECT_EQ("station:1:vst:0", exported->Stations[2].VstChain[0].Id);
+	EXPECT_NE("station:1:vst:0", exported->Stations[0].VstChain[0].Id);
 }
