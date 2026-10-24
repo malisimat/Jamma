@@ -59,6 +59,52 @@ TEST(GuiRack, CompactConstructionAndResizeKeepScaleAnchorsDistinct)
 	EXPECT_GE(rack.GetChannelSlider(0)->GetSize().Height, 47u);
 }
 
+TEST(GuiRack, StationExpandersMirrorAroundFaderAndSingleSlotHasOneAddControl)
+{
+	auto params = MakeRackParams(220, 300);
+	params.EnableVstControl = true;
+	params.EnableVstRack = true;
+	params.EnableVstRackMidiRouting = true;
+	auto rack = std::make_shared<GuiRack>(params);
+	const auto view = rack->VstRack();
+	ASSERT_NE(nullptr, view);
+	const auto masterPanel = rack->TryGetChild(0u);
+	ASSERT_NE(nullptr, masterPanel);
+	const auto right = masterPanel->TryGetChild(1u);
+	const auto left = view->ChannelsExpander();
+	ASSERT_NE(nullptr, right);
+	ASSERT_NE(nullptr, left);
+	const auto checkMirrored = [&] {
+		const auto fader = rack->GetMasterSlider();
+		const auto faderLeft = fader->GlobalPosition().X;
+		const auto faderRight = faderLeft + static_cast<int>(fader->GetSize().Width);
+		const auto leftRight = left->GlobalPosition().X + static_cast<int>(left->GetSize().Width);
+		EXPECT_EQ(faderLeft - leftRight, right->GlobalPosition().X - faderRight);
+		EXPECT_EQ(left->GlobalPosition().Y, right->GlobalPosition().Y);
+		EXPECT_EQ(left->GetSize(), right->GetSize());
+		EXPECT_EQ(rack->GlobalPosition().X + static_cast<int>(rack->GetSize().Width) - 8,
+			masterPanel->TryGetChild(2u)->GlobalPosition().X);
+	};
+	checkMirrored();
+	rack->SetSize({260u, 340u});
+	checkMirrored();
+
+	gui::GuiVstRack::Model model;
+	model.Editable = true;
+	model.TotalSlots = 1u;
+	gui::GuiVstRack::Slot slot;
+	slot.Value.Identity = "plugin";
+	model.Slots.push_back(std::move(slot));
+	view->Update(std::move(model), {});
+	ASSERT_NE(nullptr, view->SlotButton(0u));
+	ASSERT_NE(nullptr, view->AppendButton());
+	unsigned int visibleFooterButtons = 0u;
+	for (unsigned int index = 0u; const auto child = view->TryGetChild(static_cast<unsigned char>(index)); ++index)
+		if (std::dynamic_pointer_cast<gui::GuiButton>(child) &&
+			!std::dynamic_pointer_cast<gui::GuiToggle>(child) && child->IsVisible()) ++visibleFooterButtons;
+	EXPECT_EQ(1u, visibleFooterButtons);
+}
+
 TEST(GuiRack, SharedSlotViewPreservesCapturedIdentityScrollAndHiddenCableEndpoints)
 {
 	auto params = MakeRackParams(220, 300);

@@ -202,8 +202,6 @@ void VstRackControls::_PresentStationLocked(const std::shared_ptr<engine::Statio
 	model.TotalSlots = station->RackSlotCount(); model.Revision = station->RackRevision();
 	model.Editable = _AvailableLocked({station, {}, {}}) && !_busy;
 	model.Inactive = station->RackInactive(); model.Suspended = station->RackLatencySuspended();
-	model.Legacy = station->RackRenderPolicy() == vst::VstChain::RenderPolicy::LegacySerial;
-	model.ConversionAvailable = model.Legacy && station->CanConvertRackToAdditive();
 	model.Diagnostic = station->RackDiagnostic();
 	if (!model.Inactive) model.ChannelRoutes = station->LiveVstChannelRoutes();
 	for (auto slot : station->GetVstRackSlots(control->PageOffset()))
@@ -236,12 +234,10 @@ void VstRackControls::_PumpStation(const Intent& intent)
 	};
 	vst::VstRackSlot slot;
 	bool inactive = false;
-	bool serial = false;
 	{
 		std::scoped_lock lock(_host.Mutex);
 		if (!valid()) { report("Rack changed; retry the gesture."); return; }
 		inactive = station->RackInactive();
-		serial = station->RackRenderPolicy() == vst::VstChain::RenderPolicy::LegacySerial;
 		if (command.Operation == Kind::Slot && !station->RackInactive())
 		{
 			slot = _SlotLocked(intent.Owner);
@@ -256,24 +252,13 @@ void VstRackControls::_PumpStation(const Intent& intent)
 		if (!message.empty()) show(message);
 		return;
 	}
-	if (command.Operation == Kind::ModeInfo)
-	{
-		show(serial ?
-			"Serial chain: each VST processes the previous VST's output. This keeps older JAMs sounding as saved. "
-			"Conversion is available when loaded plugins have known roles and rack latency fits. "
-			"Converting can change the sound and cannot be undone here." :
-			"Additive mix: instrument outputs are summed, while effects process the mix according to their order.");
-		return;
-	}
 	if (command.Operation == Kind::Append && (command.Modifiers & base::Action::MODIFIER_ALT)) return;
-	if (command.Operation == Kind::Convert || command.Operation == Kind::ClearInactiveRoutes)
+	if (command.Operation == Kind::ClearInactiveRoutes)
 	{
-		const auto text = command.Operation == Kind::Convert ?
-			L"Convert this serial chain to an additive mix?\n\nInstrument A, Instrument B, Reverb: Reverb(A + B).\nInstrument A, Reverb, Instrument B: Reverb(A) + B.\n\nThis can change the sound. Plugin state and order are preserved." :
-			L"Clear every saved live MIDI cable in this inactive rack?\n\nChannels return to Broadcast. Plugin entries, state and recorded MIDI routes are preserved.";
+		const auto text = L"Clear every saved live MIDI cable in this inactive rack?\n\nChannels return to Broadcast. Plugin entries, state and recorded MIDI routes are preserved.";
 		if (MessageBoxW(GetActiveWindow(), text, L"Station rack", MB_YESNO | MB_ICONQUESTION | MB_DEFBUTTON2) != IDYES) return;
 	}
-	if (command.Operation == Kind::Routes || command.Operation == Kind::Convert ||
+	if (command.Operation == Kind::Routes ||
 		command.Operation == Kind::Recover || command.Operation == Kind::ClearInactiveRoutes)
 	{
 		bool changed = false; std::string failure;
@@ -283,7 +268,6 @@ void VstRackControls::_PumpStation(const Intent& intent)
 			switch (command.Operation)
 			{
 			case Kind::Routes: changed = station->SetLiveVstChannelRoutes(command.ChannelRoutes, command.Revision); break;
-			case Kind::Convert: changed = station->ConvertRackToAdditive(command.Revision); break;
 			case Kind::Recover: changed = station->RecoverRack(command.Revision); break;
 			case Kind::ClearInactiveRoutes: changed = station->ClearInactiveRackRoutes(command.Revision); break;
 			default: break;

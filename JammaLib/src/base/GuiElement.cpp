@@ -36,6 +36,8 @@ void GuiElement::_ApplyTextureTint(GlDrawContext& ctx) const
 {
 	if (_guiParams.TextureShader == "texture_tinted")
 		ctx.SetUniform("TintColor", _guiParams.TintColor);
+	else if (_guiParams.TextureShader == "colour")
+		ctx.SetUniform("Color", glm::vec4(_guiParams.TintColor, 1.0f));
 }
 
 void GuiElement::_BeginGesture(GestureKind kind, Position2d startPosition, int startValue) noexcept
@@ -658,9 +660,9 @@ std::shared_ptr<GuiElement> GuiElement::TryGetChild(unsigned char index)
 void GuiElement::_InitResources(ResourceLib& resourceLib, bool forceInit)
 {
 	_texture.InitResources(resourceLib, forceInit);
-	_overTexture.InitResources(resourceLib, forceInit);
-	_downTexture.InitResources(resourceLib, forceInit);
-	_outTexture.InitResources(resourceLib, forceInit);
+	if (!_guiParams.OverTexture.empty()) _overTexture.InitResources(resourceLib, forceInit);
+	if (!_guiParams.DownTexture.empty()) _downTexture.InitResources(resourceLib, forceInit);
+	if (!_guiParams.OutTexture.empty()) _outTexture.InitResources(resourceLib, forceInit);
 }
 
 void GuiElement::_ReleaseResources()

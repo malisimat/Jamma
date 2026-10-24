@@ -69,10 +69,13 @@ namespace gui
 		// A flat fill for labels that do not already sit on a panel or button.
 		void UseDarkFlatBackground(float opacity = 0.72f)
 		{
-			Texture = "panel_fill_flat";
-			TextureShader = "texture_tinted";
+			Texture.clear();
+			TextureShader = "colour";
 			TintColor = {0.18f, 0.20f, 0.23f};
 			TextureOpacity = opacity;
+			TextInsetX = std::max(TextInsetX, 8);
+			ClipText = true;
+			Ellipsize = true;
 		}
 
 		static GuiLabelParams PanelScrollRow(const std::string& text)

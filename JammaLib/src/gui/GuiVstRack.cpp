@@ -87,16 +87,17 @@ private:
 	static GuiToggleParams _Params()
 	{
 		auto params = GuiToggleParams::RackExpander(true);
-		params.Size = {20u, 64u}; params.MinSize = params.Size;
+		params.Size = {32u, 64u}; params.MinSize = params.Size;
 		return params;
 	}
 };
 
 std::shared_ptr<GuiVstRack::Button> GuiVstRack::_MakeButton(
-	std::string text, std::string texture, std::function<Command()> capture)
+	std::string text, std::string texture, std::function<Command()> capture,
+	graphics::FontOptions::FontSize fontSize)
 {
 	auto params = GuiButtonParams::PanelButton();
-	params.Text = std::move(text); params.TextFontSize = graphics::FontOptions::FONT_SMALL;
+	params.Text = std::move(text); params.TextFontSize = fontSize;
 	params.TextPadding = 14u; params.TextEllipsize = true;
 	if (!texture.empty())
 	{
@@ -132,8 +133,6 @@ GuiVstRack::GuiVstRack(std::shared_ptr<base::GuiElement> channels,
 	}
 	const auto command = [this](Command::Kind kind) { Command result; result.Operation = kind; result.Revision = _model.Revision; return result; };
 	_append = _MakeButton("+", "vst_empty", [command] { return command(Command::Kind::Append); });
-	_convert = _MakeButton("Additive", "", [command] { return command(Command::Kind::Convert); });
-	_mode = _MakeButton("Additive mix", "", [command] { return command(Command::Kind::ModeInfo); });
 	_recover = _MakeButton("Resume", "", [command] { return command(Command::Kind::Recover); });
 	_clearRoutes = _MakeButton("Clear MIDI", "", [command] { return command(Command::Kind::ClearInactiveRoutes); });
 	_diagnostic = _MakeButton("Rack info", "", [command] { return command(Command::Kind::Diagnostic); });
@@ -148,10 +147,10 @@ GuiVstRack::GuiVstRack(std::shared_ptr<base::GuiElement> channels,
 	_previous->Submit = [this, life = std::weak_ptr<int>(_lifetime)](Command) { if (!life.expired() && _pageOffset >= _PageSize) _pageOffset -= _PageSize; };
 	_next->Submit = [this, life = std::weak_ptr<int>(_lifetime)](Command) { if (!life.expired() && _pageOffset + _PageSize < _model.TotalSlots) _pageOffset += _PageSize; };
 	AddChild(_channels); AddChild(_scroll); AddChild(_append); AddChild(_collapse);
-	AddChild(_convert); AddChild(_recover); AddChild(_clearRoutes); AddChild(_diagnostic); AddChild(_mode);
+	AddChild(_recover); AddChild(_clearRoutes); AddChild(_diagnostic);
 	AddChild(_previous); AddChild(_next);
 	_collapse->SetVisible(!_toggles.empty()); SetChannelsCollapsed(true);
-	Layout(_width, _faderBottom);
+	Layout(_width, _faderBottom, {-50, 42}, {32u, 64u});
 }
 
 GuiVstRack::~GuiVstRack()
@@ -209,8 +208,6 @@ void GuiVstRack::Update(Model model, std::function<void(Command)> submit)
 		row.Socket->SetVisible(!_model.Inactive && !_toggles.empty() && (row.Eligible || linked));
 	}
 	_append->SetEnabled(_model.Editable && !_model.Inactive && _model.TotalSlots < 32u);
-	_mode->SetText(_model.Legacy ? "Serial chain" : "Additive mix");
-	_convert->SetVisible(_model.Legacy && !_model.Inactive); _convert->SetEnabled(_model.Editable && _model.ConversionAvailable);
 	_recover->SetVisible(_model.Inactive); _recover->SetEnabled(_model.Editable && _model.TotalSlots <= 32u);
 	_clearRoutes->SetVisible(_model.Inactive); _clearRoutes->SetEnabled(_model.Editable);
 	_diagnostic->SetVisible(!_model.Diagnostic.empty() || !_feedback.empty());
@@ -251,7 +248,8 @@ void GuiVstRack::_RebuildRows()
 		{
 			row.Buttons[i] = _MakeButton(row.Missing ? "Missing" : "VST", textures[i],
 				[this, id = row.Id, ordinal = row.Ordinal] { Command command; command.Identity = id;
-					command.Ordinal = ordinal; command.Revision = _model.Revision; return command; });
+					command.Ordinal = ordinal; command.Revision = _model.Revision; return command; },
+				graphics::FontOptions::FONT_TINY);
 			row.Buttons[i]->SetVisible(row.Missing ? i == 3u : i == 0u);
 			row.Buttons[i]->SetEnabled(!row.Missing && _model.Editable);
 			_content->AddChild(row.Buttons[i]);
@@ -265,11 +263,14 @@ void GuiVstRack::_RebuildRows()
 	_resourcesNeedInitialising.store(true, std::memory_order_release);
 }
 
-void GuiVstRack::Layout(unsigned int width, int faderBottom)
+void GuiVstRack::Layout(unsigned int width, int faderBottom,
+	Position2d expanderPosition, Size2d expanderSize)
 {
 	_width = width; _faderBottom = faderBottom;
 	SetSize({width, static_cast<unsigned int>(std::max(1, faderBottom))});
-	_channels->SetPosition({-170, faderBottom}); _channels->SetSize({148u, 148u});
+	const Size2d channelPanelSize{148u, 148u};
+	_channels->SetSize(channelPanelSize);
+	_channels->SetPosition({expanderPosition.X - static_cast<int>(channelPanelSize.Width) - 2, faderBottom});
 	for (auto channel = 0u; channel < _toggles.size(); ++channel)
 	{
 		_toggles[channel]->SetPosition({static_cast<int>((channel % 4u) * 38u), static_cast<int>((3u - channel / 4u) * 38u)});
@@ -277,7 +278,7 @@ void GuiVstRack::Layout(unsigned int width, int faderBottom)
 		_sourceSockets[channel]->SetPosition({static_cast<int>((channel % 4u) * 38u + 25u), static_cast<int>((3u - channel / 4u) * 38u + 12u)});
 	}
 	_midiLabel->SetPosition({0, 154}); _midiLabel->SetSize({148u, 22u});
-	_collapse->SetPosition({-20, faderBottom + 42}); _collapse->SetSize({20u, 64u});
+	_collapse->SetPosition(expanderPosition); _collapse->SetSize(expanderSize);
 	_LayoutRows();
 }
 
@@ -286,7 +287,7 @@ void GuiVstRack::_LayoutRows()
 	const auto rowsHeight = static_cast<unsigned int>(_rows.size()) * _RowPitch + 4u;
 	const int top = _faderBottom - 4;
 	unsigned int footerRows = _previous->IsVisible() ? 1u : 0u;
-	for (const auto& control : {_append, _convert, _recover, _clearRoutes, _diagnostic, _mode})
+	for (const auto& control : {_append, _recover, _clearRoutes, _diagnostic})
 		if (control->IsVisible()) ++footerRows;
 	const int available = std::clamp(GlobalPosition().Y + top - GuiStyle::StatusBarHeight - static_cast<int>(footerRows * _RowPitch) - 4, 40, 280);
 	const auto height = std::min(rowsHeight, static_cast<unsigned int>(available));
@@ -303,7 +304,7 @@ void GuiVstRack::_LayoutRows()
 	}
 	_scroll->SetSize({_width, scrollHeight}); // Refresh content metrics without resetting scroll.
 	int bottom = top - static_cast<int>(scrollHeight) - static_cast<int>(_RowPitch);
-	for (const auto& control : {_append, _convert, _recover, _clearRoutes, _diagnostic, _mode})
+	for (const auto& control : {_append, _recover, _clearRoutes, _diagnostic})
 	{
 		control->SetPosition({0, bottom}); control->SetSize({_width, _RowHeight});
 		if (control->IsVisible()) bottom -= static_cast<int>(_RowPitch);

@@ -107,6 +107,7 @@ namespace gui
 	protected:
 		static const utils::Size2d _SliderGap;
 		static const unsigned int _ChannelTogglePaddingLeft;
+		static const unsigned int _ChannelExpanderInset;
 		static const unsigned int _RouterSpacingY;
 		static const utils::Size2d _ChannelToggleSize;
 		static const utils::Size2d _RouterToggleSize;

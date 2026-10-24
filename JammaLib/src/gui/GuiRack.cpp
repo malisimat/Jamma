@@ -29,6 +29,7 @@ namespace gui
 
 const utils::Size2d GuiRack::_SliderGap = { 8, 4 };
 const unsigned int GuiRack::_ChannelTogglePaddingLeft = 18;
+const unsigned int GuiRack::_ChannelExpanderInset = 8;
 const unsigned int GuiRack::_RouterSpacingY = 64;
 const utils::Size2d GuiRack::_ChannelToggleSize = { 32, 64 };
 const utils::Size2d GuiRack::_RouterToggleSize = { 64, 32 };
@@ -211,7 +212,12 @@ void GuiRack::SetSize(utils::Size2d size)
 	if (_vstRack)
 	{
 		_vstRack->SetPosition({masterSliderParams.Position.X, 0});
-		_vstRack->Layout(masterSliderParams.Size.Width, masterSliderParams.Position.Y);
+		// Share one clearance around the fader, so resizing keeps both expanders mirrored.
+		const int rightGap = channelToggleParams.Position.X -
+			(masterSliderParams.Position.X + static_cast<int>(masterSliderParams.Size.Width));
+		_vstRack->Layout(masterSliderParams.Size.Width, masterSliderParams.Position.Y,
+			{-rightGap - static_cast<int>(channelToggleParams.Size.Width), channelToggleParams.Position.Y},
+			channelToggleParams.Size);
 	}
 
 	for (auto i = 0u; i < _channelSliders.size(); ++i)
@@ -485,7 +491,7 @@ base::GuiElementParams GuiRack::_GetPanelParams(GuiRackParams::RackState state, 
 	case GuiRackParams::RACK_CHANNELS:
 		params.Size = { _CalcChannelPannelWidth(sliderSize),
 			size.Height };
-		params.Position = { (int)size.Width, 0 };
+		params.Position = { static_cast<int>(size.Width - _ChannelExpanderInset), 0 };
 		break;
 	default:
 		params.Size = { size.Width, size.Height };
@@ -576,7 +582,7 @@ gui::GuiToggleParams GuiRack::_GetToggleParams(GuiRackParams::RackState state, u
 		toggleParams = GuiToggleParams::RackExpander(false);
 		toggleParams.ToggleIndex = 1;
 		toggleParams.Position = {
-			(int)(size.Width - _ChannelToggleSize.Width),
+			static_cast<int>(size.Width - _ChannelToggleSize.Width - _ChannelExpanderInset),
 			((int)size.Height - (int)_ChannelToggleSize.Height) / 2 };
 		toggleParams.Size = _ChannelToggleSize;
 		toggleParams.Rot90 = true;
