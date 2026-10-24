@@ -649,6 +649,20 @@ void GuiHud::_BuildTriggerRail()
 			_SocketSize,
 			glm::vec3(0.92f, 0.79f, 0.20f));
 		button->AddChild(outputSocket);
+		// Keep the established card child order for rename, close and sockets.
+		// Learn controls are added last so their hit area owns the pedal footer.
+		for (const bool activate : {true, false})
+		{
+			const auto pedal = button->TryGetChild(activate ? 0u : 1u);
+			auto learnParams = GuiButtonParams::PanelButton(pedal->GetSize().Width);
+			learnParams.Position = pedal->Position() + utils::Position2d{0, static_cast<int>(pedal->GetSize().Height) - 18};
+			learnParams.Size = {pedal->GetSize().Width, 18u}; learnParams.MinSize = learnParams.Size;
+			learnParams.Text = "Learn"; learnParams.TextFontSize = graphics::FontOptions::FONT_SMALL;
+			learnParams.TintColor = {0.05f, 0.35f, 0.46f};
+			const auto id = i < _displayedRig.Triggers.size() ? _displayedRig.Triggers[i].Id : std::string{};
+			button->AddChild(std::make_shared<GuiHudActionButton>(learnParams,
+				[this, id, activate]() { _OpenTriggerLearn(id, activate, false); }));
+		}
 		_triggerWidgets.push_back({ button, close, edit, rename, inputSocket, outputSocket });
 		_triggerList->AddChild(button);
 	}
@@ -2183,17 +2197,6 @@ std::shared_ptr<GuiButton> GuiHud::_MakeTriggerButton(const std::string& text,
 	auto ditchPedal = std::make_shared<GuiHudTriggerPedal>(ditchParams, std::move(trigger), false,
 		_displayedRevision, _acceptTriggerInput, [this, id](bool alt) { _OpenTriggerLearn(id, false, alt); });
 	ditchPedal->SetAltOverlay(_altLearnHeld); button->AddChild(ditchPedal);
-	for (const auto [x, activate] : {std::pair{pedalPosX, true}, std::pair{pedalPosX + pedalSizeW + pedalSpacing, false}})
-	{
-		auto learnParams = GuiButtonParams::PanelButton(static_cast<unsigned int>(pedalSizeW));
-		learnParams.Position = {x, pedalPosY + pedalSizeH - 18};
-		learnParams.Size = {static_cast<unsigned int>(pedalSizeW), 18u}; learnParams.MinSize = learnParams.Size;
-		learnParams.Text = "Learn"; learnParams.TextFontSize = graphics::FontOptions::FONT_SMALL;
-		learnParams.TintColor = {0.05f, 0.35f, 0.46f};
-		button->AddChild(std::make_shared<GuiHudActionButton>(learnParams,
-			[this, id, activate]() { _OpenTriggerLearn(id, activate, false); }));
-	}
-
 	return button;
 }
 

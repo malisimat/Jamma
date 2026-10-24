@@ -72,6 +72,7 @@ namespace gui
 		actions::ActionResult OnAction(actions::KeyAction action) override;
 		void ClearPointerState() override;
 		void SetText(const std::string& text);
+		const std::string& Text() const noexcept { return _buttonParams.Text; }
 
 	private:
 		static GuiLabelParams _MakeLabelParams(const GuiButtonParams& params);

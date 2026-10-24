@@ -470,8 +470,8 @@ TEST_F(HudCableInteractionTests, SupportedCompactProfileKeepsSourcesAndTriggerAc
 	EXPECT_GE(popup->Position().X, 0); EXPECT_GE(popup->Position().Y, 0);
 	EXPECT_LE(popup->Position().X + static_cast<int>(popup->GetSize().Width), 400);
 	EXPECT_LE(popup->Position().Y + static_cast<int>(popup->GetSize().Height), 240);
-	Click(popup->TryGetChild(4), true); EXPECT_FALSE(Popups.IsOpen()); EXPECT_TRUE(Submissions.empty());
-	Click(close); ASSERT_TRUE(Popups.IsOpen()); Click(Popups.Top()->TryGetChild(5), true);
+	Click(popup->TryGetChild(5), true); EXPECT_FALSE(Popups.IsOpen()); EXPECT_TRUE(Submissions.empty());
+	Click(close); ASSERT_TRUE(Popups.IsOpen()); Click(Popups.Top()->TryGetChild(6), true);
 	ASSERT_EQ(1u, Submissions.size()); EXPECT_EQ(11u, Submissions.back().Triggers.size());
 	const auto removed = Submissions.back(); PublishRig(removed); Submissions.clear();
 	Click(Hud->TryGetChild(1)->TryGetChild(2));
@@ -487,9 +487,9 @@ TEST_F(HudCableInteractionTests, DeleteConfirmationSubmitsOnlySelectedTriggerAnd
 	scroll->SetScrollOffset(0);
 	const auto close = scroll->Content()->TryGetChild(0)->TryGetChild(3);
 	Click(close); ASSERT_TRUE(Popups.IsOpen()); EXPECT_EQ(Hud, Popups.OwnerOfTop());
-	Click(Popups.Top()->TryGetChild(4), true); EXPECT_FALSE(Popups.IsOpen()); EXPECT_TRUE(Submissions.empty());
+	Click(Popups.Top()->TryGetChild(5), true); EXPECT_FALSE(Popups.IsOpen()); EXPECT_TRUE(Submissions.empty());
 	Click(close); ASSERT_TRUE(Popups.IsOpen()); scroll->SetScrollOffset(scroll->MaxScrollOffset());
-	Click(Popups.Top()->TryGetChild(5), true); EXPECT_FALSE(Popups.IsOpen());
+	Click(Popups.Top()->TryGetChild(6), true); EXPECT_FALSE(Popups.IsOpen());
 	ASSERT_EQ(1u, Submissions.size()); ASSERT_EQ(11u, Submissions.back().Triggers.size());
 	EXPECT_EQ(Routing->Rig.Triggers[1].Id, Submissions.back().Triggers.front().Id);
 	EXPECT_EQ((std::vector<unsigned int>{ 19u }), Submissions.back().Triggers.back().CaptureInputs.Audio);
@@ -865,7 +865,7 @@ TEST_F(HudCableInteractionTests, VisiblePedalLearnControlOpensDialogWithoutSendi
     Hud = std::make_shared<gui::GuiHud>(params); Hud->SetRoutingConfig(20u,{},*Routing); Hud->Init();
     std::vector<std::shared_ptr<gui::GuiScrollPanel>> scrolls; Layout(Hud,scrolls);
     const auto card = TriggerScroll()->Content()->TryGetChild(0u);
-    const auto learn = card->TryGetChild(2u); ASSERT_TRUE(learn);
+    const auto learn = card->TryGetChild(7u); ASSERT_TRUE(learn);
     const auto pedal = card->TryGetChild(0u); ASSERT_TRUE(pedal);
     Hud->SetAltLearnHeld(true); ASSERT_TRUE(pedal->TryGetChild(0u)->IsVisible());
     Hud->SetAltLearnHeld(false); EXPECT_FALSE(pedal->TryGetChild(0u)->IsVisible());

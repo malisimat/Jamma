@@ -1383,6 +1383,32 @@ public:
  bool Load(const std::wstring&, float, unsigned, unsigned, vst::HostedLayoutMode) override { return false; }
 };
 
+TEST_F(VstRackControlsTest, FailedSlotsShowRetryAtEachHierarchyLevel)
+{
+ const auto fail = [](const auto& owner, const wchar_t* path) {
+  JobAction job;
+  job.JobActionType = JobAction::JOB_LOADVST;
+  job.VstPath = path;
+  job.PreInitPlugin = std::make_shared<RackControlsFailedPlugin>();
+  owner->OnAction(job);
+  owner->CommitChanges();
+ };
+ fail(Station, L"station-missing.vst3");
+ fail(Take, L"take-missing.vst3");
+ fail(First, L"loop-missing.vst3");
+
+ First->Select();
+ Second->DeSelect();
+ Update(base::DEPTH_LOOPTAKE);
+ ASSERT_NE(Station->GetGuiRack()->VstRack()->SlotButton(0u), nullptr);
+ EXPECT_EQ(Station->GetGuiRack()->VstRack()->SlotButton(0u)->Text(), "Retry station-missing");
+ ASSERT_NE(Take->GetGuiRack()->GetVstControl(), nullptr);
+ EXPECT_EQ(Take->GetGuiRack()->GetVstControl()->Text(), "Retry VST");
+ Update(base::DEPTH_LOOP);
+ ASSERT_NE(Take->GetGuiRack()->GetVstControl(), nullptr);
+ EXPECT_EQ(Take->GetGuiRack()->GetVstControl()->Text(), "Retry VST L1");
+}
+
 TEST_F(VstRackControlsTest, FailedLoadReportsErrorAndRemainsReplaceable)
 {
  Pick = [] { return std::wstring{L"failed-rack.vst3"}; };
