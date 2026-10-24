@@ -29,7 +29,8 @@ namespace actions
 			// they target the same slot; the later removal safely becomes a no-op.
 			if (JobActionType == JOB_LOADVST)
 				return other.VstPath == VstPath && other.VstIdentity == VstIdentity &&
-					other.VstManaged == VstManaged && other.VstDiscardOnFailure == VstDiscardOnFailure;
+					other.VstManaged == VstManaged && other.VstDiscardOnFailure == VstDiscardOnFailure &&
+					other.VstRoleOverride == VstRoleOverride && other.VstRoleChoiceReload == VstRoleChoiceReload;
 			if (JobActionType == JOB_UNLOADVST)
 				return other.VstIndex == VstIndex && other.VstIdentity == VstIdentity && other.VstRequestId == VstRequestId;
 			return true;
@@ -57,6 +58,9 @@ namespace actions
 		std::string VstRequestId; // Distinct staged completions must not be lost to queue deduplication.
 		bool VstManaged = false;
 		bool VstDiscardOnFailure = false; // Fresh UI append; saved/restored slots remain recoverable.
+		std::string VstRoleOverride; // "effect"/"instrument" for metadata-unknown VST3, empty for Auto.
+		bool VstRoleChoiceReload = false;
+		std::string VstPreviousRoleOverride;
 
 		// Optional: plugin pre-initialised on the main thread before the job is
 		// dispatched to the job thread.  If non-null, the engine OnAction uses

@@ -915,6 +915,19 @@ Vst3Plugin::~Vst3Plugin()
 	Unload();
 }
 
+RenderRole Vst3Plugin::DetectRoleFromCategories(std::string_view categories) noexcept
+{
+	const bool instrument = categories.find("Instrument") != std::string_view::npos;
+	const bool effect = categories.find("Fx") != std::string_view::npos;
+	return instrument == effect ? RenderRole::Unknown : instrument ? RenderRole::Instrument : RenderRole::Effect;
+}
+
+RenderRole Vst3Plugin::ResolveRole(RenderRole categoryRole, int audioInputs, int audioOutputs) noexcept
+{
+	return categoryRole == RenderRole::Unknown && audioInputs == 0 && audioOutputs > 0
+		? RenderRole::Instrument : categoryRole;
+}
+
 std::wstring Vst3Plugin::ResolveModulePath(const std::wstring& path, std::error_code& error)
 {
 	std::filesystem::path candidate(path);
@@ -1044,10 +1057,7 @@ bool Vst3Plugin::PreInit(const std::wstring& path)
 				PClassInfo2 details{};
 				if (factory2->getClassInfo2(i, &details) == kResultOk)
 				{
-					const std::string categories(details.subCategories);
-					_role = categories.find("Instrument") != std::string::npos && categories.find("Fx") != std::string::npos ? RenderRole::Unknown
-					: categories.find("Instrument") != std::string::npos ? RenderRole::Instrument
-						: categories.find("Fx") != std::string::npos ? RenderRole::Effect : RenderRole::Unknown;
+					_role = DetectRoleFromCategories(details.subCategories);
 				}
 			}
 			found = true;
@@ -1233,10 +1243,7 @@ bool Vst3Plugin::Load(const std::wstring& path,
 				PClassInfo2 details{};
 				if (factory2->getClassInfo2(i, &details) == kResultOk)
 				{
-					const std::string categories(details.subCategories);
-					_role = categories.find("Instrument") != std::string::npos && categories.find("Fx") != std::string::npos ? RenderRole::Unknown
-					: categories.find("Instrument") != std::string::npos ? RenderRole::Instrument
-						: categories.find("Fx") != std::string::npos ? RenderRole::Effect : RenderRole::Unknown;
+					_role = DetectRoleFromCategories(details.subCategories);
 				}
 			}
 				found = true;
@@ -1305,6 +1312,11 @@ bool Vst3Plugin::Load(const std::wstring& path,
 			std::cout << "[Vst3Plugin] Output bus 0 channels=" << outBus.channelCount << std::endl;
 		}
 	}
+	// A component with audio output and no audio input can only contribute
+	// generated sound to this rack; input-bearing hybrids remain ambiguous.
+	_role = ResolveRole(_role, inputBusCount, outputBusCount);
+	_detectedRole = _role;
+	if (_role == RenderRole::Unknown) _role = _roleOverride;
 
 	auto hostedLayout = ResolveHostedBusLayout(layoutMode, numChannels, inputBusChannels, outputBusChannels);
 	_impl->inputChannels = hostedLayout.InputChannels;

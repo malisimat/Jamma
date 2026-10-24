@@ -194,7 +194,7 @@ std::optional<std::shared_ptr<Station>> Station::FromFile(StationParams stationP
 			continue;
 		}
 		std::cout << "[LOAD] Station '" << stationStruct.Name << "': loading VST " << vstEntry.Path << std::endl;
-		if (!station->LoadVstPluginSynchronously(utils::DecodeUtf8(vstEntry.Path), vstEntry.DecodeState(), vstEntry.Bypass, vstEntry.Id))
+		if (!station->LoadVstPluginSynchronously(utils::DecodeUtf8(vstEntry.Path), vstEntry.DecodeState(), vstEntry.Bypass, vstEntry.Id, vstEntry.RoleOverride))
 		{
 			// Restore the station and rig target even when this optional processor is missing.
 			std::cout << "[LOAD] Station '" << stationStruct.Name << "': failed VST " << vstEntry.Path
@@ -4540,6 +4540,8 @@ vst::VstRackSlot Station::GetVstRackSlot() const
 	slot.Identity = entry.Id;
 	const auto chain = _vstChain.load(std::memory_order_acquire);
 	slot.Plugin = chain ? chain->GetPlugin(0u) : nullptr;
+	slot.RoleWasUnknown = slot.Plugin ? slot.Plugin->DetectedRole() == vst::RenderRole::Unknown : entry.RoleOverride.has_value();
+	if (slot.RoleWasUnknown && entry.RoleOverride) slot.RoleOverride = *entry.RoleOverride == "effect" ? vst::RenderRole::Effect : vst::RenderRole::Instrument;
 	slot.Failed = !slot.Plugin;
 	return slot;
 }
@@ -4561,6 +4563,8 @@ std::vector<vst::VstRackSlot> Station::GetVstRackSlots(std::size_t offset, std::
 		slot.Identity = entry.Id;
 		slot.Path = utils::DecodeUtf8(entry.Path);
 		slot.Plugin = chain ? chain->GetPlugin(index) : nullptr;
+		slot.RoleWasUnknown = slot.Plugin ? slot.Plugin->DetectedRole() == vst::RenderRole::Unknown : entry.RoleOverride.has_value();
+		if (slot.RoleWasUnknown && entry.RoleOverride) slot.RoleOverride = *entry.RoleOverride == "effect" ? vst::RenderRole::Effect : vst::RenderRole::Instrument;
 		slot.Pending = std::find(_pendingRackIds.begin(), _pendingRackIds.end(), entry.Id) != _pendingRackIds.end();
 		slot.Failed = !slot.Plugin && !slot.Pending;
 		result.push_back(std::move(slot));
@@ -4568,10 +4572,11 @@ std::vector<vst::VstRackSlot> Station::GetVstRackSlots(std::size_t offset, std::
 	return result;
 }
 
-bool Station::LoadManagedVstSlot(std::wstring path, const std::string& retryIdentity, bool discardOnFailure)
+bool Station::LoadManagedVstSlot(std::wstring path, const std::string& retryIdentity, bool discardOnFailure, bool reloadUnknown)
 {
 	if (path.empty() || _rackInactive) return false;
 	std::string identity = retryIdentity;
+	std::string roleOverride;
 	std::vector<std::uint8_t> state;
 	{
 		std::lock_guard<std::mutex> lock(_vstPathsMutex);
@@ -4582,8 +4587,9 @@ bool Station::LoadManagedVstSlot(std::wstring path, const std::string& retryIden
 			const auto found = std::find_if(_vstSavedEntries.begin(), _vstSavedEntries.end(), [&](const auto& entry) { return entry.Id == identity; });
 			if (found == _vstSavedEntries.end()) return false;
 			const auto index = static_cast<std::size_t>(found - _vstSavedEntries.begin());
-			if (chain && chain->GetPlugin(index)) return false;
+			if (chain && chain->GetPlugin(index) && (!reloadUnknown || chain->GetPlugin(index)->DetectedRole() != vst::RenderRole::Unknown)) return false;
 			state = found->DecodeState();
+			roleOverride = found->RoleOverride.value_or("");
 		}
 		else
 		{
@@ -4607,6 +4613,7 @@ bool Station::LoadManagedVstSlot(std::wstring path, const std::string& retryIden
 	job.VstIdentity = identity;
 	job.VstRequestId = utils::GetGuid();
 	job.VstManaged = true;
+	job.VstRoleOverride = std::move(roleOverride);
 	job.VstDiscardOnFailure = discardOnFailure && retryIdentity.empty();
 	_pendingVstLoads.push_back(std::move(job));
 	_vstJobsPending.fetch_add(1u, std::memory_order_release);
@@ -4647,6 +4654,51 @@ bool Station::SetLiveVstChannelRoute(unsigned int channel, midi::LiveVstChannelR
 	auto routes = _liveVstChannelRoutes;
 	routes[channel] = std::move(route);
 	return SetLiveVstChannelRoutes(std::move(routes), revision);
+}
+
+bool Station::SetVstRackSlotRole(const std::string& identity, std::optional<vst::RenderRole> role, std::uint64_t revision)
+{
+	if (role && *role == vst::RenderRole::Unknown) return false;
+	std::shared_ptr<vst::IVstPlugin> current;
+	std::wstring path;
+	std::optional<std::string> prior;
+	{
+		std::lock_guard<std::mutex> lock(_vstPathsMutex);
+		if (_rackInactive || revision != _rackRevision || !_pendingRackIds.empty() ||
+			_vstJobsPending.load(std::memory_order_acquire) != 0u || _flipVstChain.load(std::memory_order_acquire)) return false;
+		const auto found = std::find_if(_vstSavedEntries.begin(), _vstSavedEntries.end(), [&](const auto& entry) { return entry.Id == identity; });
+		if (found == _vstSavedEntries.end()) return false;
+		const auto index = static_cast<std::size_t>(found - _vstSavedEntries.begin());
+		const auto chain = _vstChain.load(std::memory_order_acquire);
+		current = chain ? chain->GetPlugin(index) : nullptr;
+		if ((current && current->DetectedRole() != vst::RenderRole::Unknown) || (!current && !found->RoleOverride)) return false;
+		prior = found->RoleOverride;
+		if (prior == (role ? std::optional<std::string>(*role == vst::RenderRole::Effect ? "effect" : "instrument") : std::nullopt)) return false;
+		path = _vstPluginPaths[index];
+	}
+	std::vector<std::uint8_t> liveState;
+	if (current && !current->TryCaptureLiveState(liveState, true)) { _rackDiagnostic = "Plugin state is busy; retry the role choice."; return false; }
+	{
+		std::lock_guard<std::mutex> lock(_vstPathsMutex);
+		if (_rackInactive || revision != _rackRevision || !_pendingRackIds.empty() ||
+			_vstJobsPending.load(std::memory_order_acquire) != 0u || _flipVstChain.load(std::memory_order_acquire)) return false;
+		const auto found = std::find_if(_vstSavedEntries.begin(), _vstSavedEntries.end(), [&](const auto& entry) { return entry.Id == identity; });
+		if (found == _vstSavedEntries.end() || found->RoleOverride != prior) return false;
+		const auto chain = _vstChain.load(std::memory_order_acquire);
+		if ((chain ? chain->GetPlugin(static_cast<std::size_t>(found - _vstSavedEntries.begin())) : nullptr) != current) return false;
+		if (current) found->State = io::JamFile::VstEntry::EncodeState(liveState);
+		found->RoleOverride = role ? std::optional<std::string>(*role == vst::RenderRole::Effect ? "effect" : "instrument") : std::nullopt;
+	}
+	if (LoadManagedVstSlot(std::move(path), identity, false, true))
+	{
+		_pendingVstLoads.back().VstRoleChoiceReload = true;
+		_pendingVstLoads.back().VstPreviousRoleOverride = prior.value_or("");
+		return true;
+	}
+	std::lock_guard<std::mutex> lock(_vstPathsMutex);
+	const auto found = std::find_if(_vstSavedEntries.begin(), _vstSavedEntries.end(), [&](const auto& entry) { return entry.Id == identity; });
+	if (found != _vstSavedEntries.end()) found->RoleOverride = std::move(prior);
+	return false;
 }
 
 bool Station::SetLiveVstChannelRoutes(std::array<midi::LiveVstChannelRoute, 16> routes, std::uint64_t revision)
@@ -4825,7 +4877,7 @@ bool Station::RecoverRack(std::uint64_t revision)
 
 bool Station::LoadVstPluginSynchronously(const std::wstring& path,
 	const std::vector<std::uint8_t>& initialState,
-	bool bypass, const std::string& stateId)
+	bool bypass, const std::string& stateId, const std::optional<std::string>& roleOverride)
 {
 	// Startup construction completes before Scene::InitAudio publishes this station.
 	if (_rackInactive || _vstSavedEntries.size() >= MaxRackPlugins || (!stateId.empty() && (!io::NativeMidiSidecar::ValidatePluginIdentity(stateId)
@@ -4835,18 +4887,21 @@ bool Station::LoadVstPluginSynchronously(const std::wstring& path,
 		return false;
 	}
 	auto plugin = vst::MakePluginForPath(path);
+	if (roleOverride) plugin->SetRoleOverride(*roleOverride == "effect" ? vst::RenderRole::Effect : vst::RenderRole::Instrument);
 	auto hostChannels = NumBusChannels();
 	if (hostChannels == 0u)
 		hostChannels = 1u;
 	bool loaded = plugin->PreInit(path)
 		&& plugin->Load(path, _sampleRate, _blockSize, hostChannels, vst::HostedLayoutMode::Exact)
-		&& plugin->Role() != vst::RenderRole::Unknown
 		&& plugin->GetLatencySamples() <= 262144;
+	if (loaded && plugin->Role() == vst::RenderRole::Unknown)
+		_rackDiagnostic = "Plugin loaded but paused: choose Effect or Instrument for this slot to enable audio and MIDI.";
 
 	plugin->SetStateId(stateId);
 	if (loaded && !initialState.empty())
 		plugin->SetState(initialState);
-	plugin->SetBypassed(bypass);
+	plugin->SetBypassed(bypass || plugin->Role() == vst::RenderRole::Unknown);
+	const bool roleWasUnknown = plugin->DetectedRole() == vst::RenderRole::Unknown;
 	const auto identity = plugin->StateId();
 	if (!loaded) { vst::QueueForUiThreadDestroy(std::move(plugin)); plugin.reset(); }
 
@@ -4872,6 +4927,7 @@ bool Station::LoadVstPluginSynchronously(const std::wstring& path,
 	saved.Path = utils::EncodeUtf8(path);
 	saved.Id = identity;
 	saved.Bypass = bypass;
+	saved.RoleOverride = !loaded || roleWasUnknown ? roleOverride : std::nullopt;
 	saved.State = io::JamFile::VstEntry::EncodeState(initialState);
 	_vstSavedEntries.push_back(std::move(saved));
 	return loaded;
@@ -4927,7 +4983,7 @@ std::vector<io::JamFile::VstEntry> Station::VstEntries() const
 			if (plugin)
 			{
 				entry.Id = plugin->StateId();
-				entry.Bypass = plugin->IsBypassed();
+				entry.Bypass = plugin->Role() == vst::RenderRole::Unknown ? savedEntries[i].Bypass : plugin->IsBypassed();
 				auto blob = plugin->GetState();
 				if (!blob.empty())
 					entry.State = io::JamFile::VstEntry::EncodeState(blob);
@@ -4967,7 +5023,8 @@ bool Station::TryGroupVstEntries(std::vector<io::JamFile::VstEntry>& output) con
 			io::JamFile::VstEntry entry;
 			entry.Id = plugin->StateId();
 			entry.Path = utils::EncodeUtf8(paths[i]);
-			entry.Bypass = plugin->IsBypassed();
+			entry.Bypass = plugin->Role() == vst::RenderRole::Unknown ? savedEntries[i].Bypass : plugin->IsBypassed();
+			entry.RoleOverride = savedEntries[i].RoleOverride;
 			entry.State = io::JamFile::VstEntry::EncodeState(blob);
 			entries.push_back(std::move(entry));
 		}
@@ -4987,7 +5044,7 @@ bool Station::TryRestoreGroupVstEntry(const io::JamFile::VstEntry& entry)
 		const auto blob = entry.DecodeState();
 		if (!entry.State.empty() && blob.empty()) return true;
 		if (!plugin->TryRestoreLiveState(blob)) return false;
-		plugin->SetBypassed(entry.Bypass);
+		plugin->SetBypassed(entry.Bypass || plugin->Role() == vst::RenderRole::Unknown);
 		return true;
 	}
 	return true; // Deleted plugins never match a replacement's position.
@@ -5014,20 +5071,23 @@ ActionResult Station::OnAction(JobAction action)
 			}
 		}
 		auto plugin = action.PreInitPlugin ? action.PreInitPlugin : vst::MakePluginForPath(action.VstPath);
+		if (!action.VstRoleOverride.empty()) plugin->SetRoleOverride(action.VstRoleOverride == "effect" ? vst::RenderRole::Effect : vst::RenderRole::Instrument);
 		auto hostChannels = NumBusChannels();
 		if (hostChannels == 0u) hostChannels = 1u;
-		bool loaded = plugin->Load(action.VstPath, _sampleRate, _blockSize, hostChannels, vst::HostedLayoutMode::Exact)
-			&& plugin->Role() != vst::RenderRole::Unknown;
+		bool loaded = plugin->Load(action.VstPath, _sampleRate, _blockSize, hostChannels, vst::HostedLayoutMode::Exact);
 		if (action.VstIdentity.empty()) action.VstIdentity = plugin->StateId();
 		plugin->SetStateId(action.VstIdentity);
 		if (loaded && !action.VstInitialState.empty()) plugin->SetState(action.VstInitialState);
+		plugin->SetBypassed(plugin->Role() == vst::RenderRole::Unknown);
 		if (action.VstManaged)
 		{
 			std::lock_guard<std::mutex> lock(_vstPathsMutex);
 			const auto found = std::find_if(_vstSavedEntries.begin(), _vstSavedEntries.end(), [&](const auto& entry) { return entry.Id == action.VstIdentity; });
-			if (found != _vstSavedEntries.end()) plugin->SetBypassed(found->Bypass);
+			if (found != _vstSavedEntries.end()) plugin->SetBypassed(found->Bypass || plugin->Role() == vst::RenderRole::Unknown);
+			else plugin->SetBypassed(plugin->Role() == vst::RenderRole::Unknown);
 		}
 		loaded = loaded && plugin->GetLatencySamples() <= 262144;
+		const bool roleUnknown = loaded && plugin->Role() == vst::RenderRole::Unknown;
 		if (!loaded) { vst::QueueForUiThreadDestroy(std::move(plugin)); plugin.reset(); }
 		{
 			std::lock_guard<std::mutex> lock(_vstPathsMutex);
@@ -5040,6 +5100,7 @@ ActionResult Station::OnAction(JobAction action)
 			saved.Id = action.VstIdentity;
 			saved.Path = utils::EncodeUtf8(action.VstPath);
 			saved.State = io::JamFile::VstEntry::EncodeState(action.VstInitialState);
+			if (!action.VstRoleOverride.empty()) saved.RoleOverride = action.VstRoleOverride;
 			if (action.VstManaged)
 			{
 				const auto found = std::find_if(_vstSavedEntries.begin(), _vstSavedEntries.end(), [&](const auto& entry) { return entry.Id == action.VstIdentity; });
@@ -5052,15 +5113,23 @@ ActionResult Station::OnAction(JobAction action)
 				}
 				const auto index = static_cast<std::size_t>(found - _vstSavedEntries.begin());
 				while (replacement->NumPlugins() <= index) replacement->AddSlot(nullptr);
+				const auto previous = replacement->GetPlugin(index);
 				replacement->ReplaceSlot(index, std::move(plugin));
-				if (!_RackLatencyFeasible(*replacement))
+				if (loaded && !_RackLatencyFeasible(*replacement))
 				{
 					loaded = false;
 					vst::QueueForUiThreadDestroy(replacement->GetPlugin(index));
-					replacement->ReplaceSlot(index, nullptr);
 				}
+				if (!loaded) replacement->ReplaceSlot(index, action.VstRoleChoiceReload ? previous : nullptr);
 				_vstPluginPaths[index] = action.VstPath;
 				saved.Bypass = found->Bypass;
+				if (!loaded && action.VstRoleChoiceReload)
+					saved.RoleOverride = action.VstPreviousRoleOverride.empty() ? std::nullopt :
+						std::optional<std::string>(action.VstPreviousRoleOverride);
+				else if (!loaded || (replacement->GetPlugin(index) &&
+					replacement->GetPlugin(index)->DetectedRole() == vst::RenderRole::Unknown))
+					saved.RoleOverride = found->RoleOverride;
+				else saved.RoleOverride.reset();
 				// A failed retry must keep the original opaque state for recovery.
 				if (!loaded) saved.State = found->State;
 				*found = std::move(saved);
@@ -5091,7 +5160,13 @@ ActionResult Station::OnAction(JobAction action)
 				}
 			}
 			if (!loaded && !action.VstDiscardOnFailure)
-				_rackDiagnostic = "Plugin could not be activated: check supported role, layout and latency (262144 samples maximum). Saved state is retained.";
+				_rackDiagnostic = action.VstRoleChoiceReload ?
+					"Role choice could not activate the plugin; the previous slot and state were kept." :
+					"Plugin could not be activated: check supported role, layout and latency (262144 samples maximum). Saved state is retained.";
+			else if (loaded && roleUnknown)
+				_rackDiagnostic = "Plugin loaded but paused: choose Effect or Instrument for this slot to enable audio and MIDI.";
+			else if (loaded && action.VstRoleChoiceReload)
+				_rackDiagnostic.clear();
 			_backVstChain = std::move(replacement);
 			++_rackRevision;
 			_flipVstChain.store(true, std::memory_order_release);

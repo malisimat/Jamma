@@ -694,8 +694,9 @@ TEST(JamFile, SerializesEmptyVstStateField) {
 
 TEST(JamFile, RoundTripsStationWithNoTakesAndVstChain) {
 	JamFile::VstEntry entry;
-	entry.Path = "C:/Plugins/Example.dll";
+	entry.Path = "C:/Plugins/Example.vst3";
 	entry.Bypass = false;
+	entry.RoleOverride = "effect";
 	entry.State = "dGVzdA==";
 
 	JamFile::Station station;
@@ -718,6 +719,7 @@ TEST(JamFile, RoundTripsStationWithNoTakesAndVstChain) {
 	ASSERT_TRUE(parsed->Stations[0].LoopTakes.empty());
 	ASSERT_EQ(1, parsed->Stations[0].VstChain.size());
 	ASSERT_EQ(entry.Path, parsed->Stations[0].VstChain[0].Path);
+	ASSERT_EQ(entry.RoleOverride, parsed->Stations[0].VstChain[0].RoleOverride);
 	ASSERT_EQ(entry.State, parsed->Stations[0].VstChain[0].State);
 }
 

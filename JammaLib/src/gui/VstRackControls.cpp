@@ -299,6 +299,41 @@ void VstRackControls::_PumpStation(const Intent& intent)
 		return;
 	}
 	if (command.Operation == Kind::Slot && (slot.Pending || inactive)) return;
+	if (command.Operation == Kind::Slot && slot.RoleWasUnknown
+		&& (command.Modifiers & base::Action::MODIFIER_SHIFT))
+	{
+		std::optional<vst::RenderRole> role;
+		if (command.Modifiers & base::Action::MODIFIER_CTRL)
+		{
+			if (!slot.RoleOverride) return;
+			if (MessageBoxW(GetActiveWindow(),
+				L"Pause this plugin and return to automatic role detection?",
+				L"Station VST role", MB_YESNO | MB_ICONQUESTION | MB_DEFBUTTON2) != IDYES) return;
+		}
+		else
+		{
+			const auto choice = MessageBoxW(GetActiveWindow(),
+				L"This plugin does not report whether it is an instrument or effect.\n\n"
+				L"Yes: treat it as an effect, processing the Station audio.\n"
+				L"No: treat it as an instrument, summed into the Station audio.\n"
+				L"Cancel: leave it as it is.",
+				L"Station VST role", MB_YESNOCANCEL | MB_ICONQUESTION | MB_DEFBUTTON3);
+			if (choice != IDYES && choice != IDNO) return;
+			role = choice == IDYES ? vst::RenderRole::Effect : vst::RenderRole::Instrument;
+		}
+		bool changed = false;
+		{
+			std::scoped_lock lock(_host.Mutex);
+			if (valid()) changed = station->SetVstRackSlotRole(command.Identity, role, command.Revision);
+		}
+		if (changed)
+		{
+			if (slot.Plugin) _host.Editors.CloseVstEditorForPlugin(slot.Plugin);
+			_host.Commit();
+		}
+		else report("Rack changed; retry the role choice.");
+		return;
+	}
 	if (slot.Plugin && !slot.Failed)
 	{
 		const bool opened = _host.Editors.ToggleVstEditorForPlugin(slot.Plugin);

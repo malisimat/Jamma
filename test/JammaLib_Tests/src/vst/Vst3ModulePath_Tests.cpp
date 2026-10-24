@@ -10,7 +10,22 @@ namespace vst
 	struct Vst3PluginTestAccess
 	{
 		static std::wstring Resolve(const std::wstring& path, std::error_code& error) { return Vst3Plugin::ResolveModulePath(path, error); }
+		static RenderRole Detect(std::string_view categories) { return Vst3Plugin::DetectRoleFromCategories(categories); }
+		static RenderRole ResolveRole(RenderRole role, int inputs, int outputs) { return Vst3Plugin::ResolveRole(role, inputs, outputs); }
 	};
+}
+TEST(Vst3Role, ResolvesOnlyUnambiguousMissingMetadata)
+{
+	using vst::RenderRole;
+	using Access = vst::Vst3PluginTestAccess;
+	EXPECT_EQ(Access::Detect("Instrument|Fx"), RenderRole::Unknown);
+	EXPECT_EQ(Access::Detect(""), RenderRole::Unknown);
+	EXPECT_EQ(Access::Detect("Instrument"), RenderRole::Instrument);
+	EXPECT_EQ(Access::Detect("Fx"), RenderRole::Effect);
+	EXPECT_EQ(Access::ResolveRole(RenderRole::Unknown, 0, 2), RenderRole::Instrument);
+	EXPECT_EQ(Access::ResolveRole(RenderRole::Unknown, 2, 2), RenderRole::Unknown);
+	EXPECT_EQ(Access::ResolveRole(RenderRole::Unknown, 0, 0), RenderRole::Unknown);
+	EXPECT_EQ(Access::ResolveRole(RenderRole::Effect, 0, 2), RenderRole::Effect);
 }
 class Vst3ModuleFiles : public testing::Test
 {

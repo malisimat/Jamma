@@ -144,13 +144,17 @@ replacement for that slot. Cancelling the picker leaves the rack unchanged.
 Alt-click a content slot to remove it immediately, including a pending load;
 the surviving slots keep their identities and state. The bottom **+** remains.
 Long stacks scroll within the rack.
+If a plugin cannot report whether it is an instrument or effect, it loads paused.
+Shift-click its slot to choose a role; Ctrl-Shift-click returns it to paused
+automatic detection. A role change reloads that slot while keeping its saved state.
 
 The channel selectors to the left affect **live MIDI only**. **MIDI − / MIDI +**
 collapses or expands them independently of the audio controls. Enabled unwired
 channels broadcast to eligible plugins; cables select explicit destinations,
 including many channels to one plugin or one channel to several plugins.
-Disabled channels retain their cables. Recorded MIDI keeps its separate output
-routes and continues independently of these selectors.
+Switching a channel off clears its explicit live cables; switching it back on
+restores Broadcast. Recorded MIDI keeps its separate output routes and
+continues independently of these selectors.
 
 Drag channel sockets or plugin input sockets to connect them. The usual cable
 move/disconnect/cancel gestures apply. Hover a socket, cable or collapsed MIDI
@@ -161,11 +165,10 @@ unavailable targets, so a missing plugin never silently enables Broadcast.
 Disconnecting the final valid explicit target restores Broadcast; Alt-click a
 channel socket to explicitly clear that channel's cables and restore Broadcast.
 
-New racks sum instruments into the Station audio and process effects in order:
+Station racks sum instruments into the Station audio and process effects in order:
 `instrument A, instrument B, reverb` gives `reverb(A + B)`, while
-`instrument A, reverb, instrument B` gives `reverb(A) + B`. Existing nonempty
-legacy racks retain their original serial sound until **Additive** is explicitly
-confirmed. Take and Loop effects retain their serial policy.
+`instrument A, reverb, instrument B` gives `reverb(A) + B`. Take and Loop
+effects retain their serial policy.
 
 Each Station supports 32 slots and up to 512 live channel/plugin links.
 **Rack info / Rack paused** explains rejected edits or a suspended rack.
