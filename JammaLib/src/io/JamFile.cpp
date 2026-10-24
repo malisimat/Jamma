@@ -842,7 +842,6 @@ bool JamFile::ToStream(JamFile jam, std::stringstream& ss)
 			ss << "," << kvIntArray("allowedmidichannels", station.AllowedMidiChannels);
 		if (!station.MidiRoutes.empty())
 			ss << "," << quoted("midiRoutes") << ":" << midiRoutesToJson(station.MidiRoutes);
-		if (station.AdditiveVstRack) ss << "," << kvBool("additiveVstRack", *station.AdditiveVstRack);
 		if (station.HasLiveVstRoutes)
 		{
 			ss << ",\"liveVstRoutes\":[";
@@ -1712,11 +1711,6 @@ std::optional<JamFile::Station> JamFile::Station::FromJson(Json::JsonPart json)
 	allowedMidiChannels.erase(std::unique(allowedMidiChannels.begin(), allowedMidiChannels.end()), allowedMidiChannels.end());
 	station.AllowedMidiChannels = std::move(allowedMidiChannels);
 	station.MidiRoutes = std::move(midiRoutes);
-	if (const auto policy = json.KeyValues.find("additiveVstRack"); policy != json.KeyValues.end())
-	{
-		if (policy->second.index() != 0) return std::nullopt;
-		station.AdditiveVstRack = std::get<bool>(policy->second);
-	}
 	if (const auto live = json.KeyValues.find("liveVstRoutes"); live != json.KeyValues.end())
 	{
 		if (live->second.index() != 5) return std::nullopt;

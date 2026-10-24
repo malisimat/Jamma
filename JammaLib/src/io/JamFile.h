@@ -213,7 +213,6 @@ namespace io
 			std::vector<MidiRoute> MidiRoutes;
 			std::array<midi::LiveVstChannelRoute, 16> LiveVstRoutes{};
 			bool HasLiveVstRoutes = false;
-			std::optional<bool> AdditiveVstRack;
 			// One destination-output list per station bus mixer.
 			std::vector<std::vector<unsigned long>> AudioRoutes;
 			bool HasAudioRoutes = false;

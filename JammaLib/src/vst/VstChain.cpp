@@ -49,7 +49,6 @@ bool VstChain::IsActive() const noexcept
 
 int VstChain::GetLatencySamples() const noexcept
 {
-	if (_renderPolicy == RenderPolicy::LegacySerial) return GetLatencySamplesFrom(0u);
 	int total = 0;
 	for (const auto& plugin : _plugins)
 	{
@@ -67,8 +66,7 @@ int VstChain::GetLatencySamplesFrom(std::size_t firstPlugin) const noexcept
 	{
 		const auto& plugin = _plugins[index];
 		if (!plugin || !plugin->IsLoaded() || plugin->IsBypassed()) continue;
-		if (_renderPolicy == RenderPolicy::AdditiveInstruments && index != firstPlugin
-			&& plugin->Role() == RenderRole::Instrument) continue;
+		if (index != firstPlugin && plugin->Role() == RenderRole::Instrument) continue;
 		const auto latency = std::max(0, plugin->GetLatencySamples());
 		total += std::min(latency, (std::numeric_limits<int>::max)() - total);
 	}
@@ -78,11 +76,6 @@ int VstChain::GetLatencySamplesFrom(std::size_t firstPlugin) const noexcept
 void VstChain::ProcessRack(float* const* channels, float* const* scratch,
 	int numChannels, int numSamples) noexcept
 {
-	if (_renderPolicy == RenderPolicy::LegacySerial)
-	{
-		ProcessBlockMulti(channels, numChannels, numSamples);
-		return;
-	}
 	if (!channels || !scratch || numChannels <= 0 || numSamples <= 0
 		|| static_cast<unsigned int>(numSamples) > constants::MaxBlockSize) return;
 	for (const auto& plugin : _plugins)

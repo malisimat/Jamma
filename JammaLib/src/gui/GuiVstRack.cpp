@@ -189,7 +189,7 @@ void GuiVstRack::Update(Model model, std::function<void(Command)> submit)
 	{
 		auto& row = _rows[index]; const auto& slot = _model.Slots[index];
 		const auto state = slot.Value.Pending ? 1u : slot.Value.Failed ? 3u : slot.Value.Plugin ? (slot.EditorOpen ? 2u : 1u) : 0u;
-		row.Eligible = slot.Value.Plugin && slot.Value.Plugin->MidiInput().Known
+		row.Eligible = slot.Value.Plugin && slot.Value.Plugin->IsLoaded() && !slot.Value.Plugin->IsBypassed() && slot.Value.Plugin->MidiInput().Known
 			&& (slot.Value.Plugin->MidiInput().Notes || slot.Value.Plugin->MidiInput().Controllers);
 		const auto savedName = !slot.Value.Failed || slot.Value.Pending || slot.Value.Path.empty() ? std::string{} :
 			utils::EncodeUtf8(std::filesystem::path(slot.Value.Path).stem().wstring());
@@ -332,7 +332,17 @@ void GuiVstRack::SetAllowedMidiChannels(const std::vector<int>& channels)
 bool GuiVstRack::ChannelShownActive(unsigned int channel) const noexcept
 {
 	if (channel >= _allowedChannels.size()) return false;
-	return _allowedChannels[channel] || !_model.ChannelRoutes[channel].PluginIds.empty();
+	return _allowedChannels[channel];
+}
+
+void GuiVstRack::ClearChannelRoutes(unsigned int channel)
+{
+	if (channel >= _model.ChannelRoutes.size() || !_model.Editable || _model.Inactive) return;
+	if (!_model.ChannelRoutes[channel].Explicit && _model.ChannelRoutes[channel].PluginIds.empty()) return;
+	Command command; command.Operation = Command::Kind::Routes; command.Revision = _model.Revision;
+	command.ChannelRoutes = _model.ChannelRoutes;
+	command.ChannelRoutes[channel] = {};
+	if (_submit) _submit(std::move(command));
 }
 
 void GuiVstRack::_RefreshChannelToggles()
@@ -645,10 +655,11 @@ void GuiVstRack::_DrawCables(base::DrawContext& context)
 				const auto curve = CableInteraction::CurveControls(CableInteraction::RouteKind::StationRack, cable.Start.Position, cable.Finish.Position);
 				for (auto point = 0u; point < 4u; ++point) points[i * 4u + point] = {curve[point].x, curve[point].y, 0.0f, 0.0f};
 				const auto channel = links[first + i].Channel;
-				const bool enabled = _toggles[channel]->GetToggleState() == GuiToggleParams::TOGGLE_ON && !_model.Suspended;
+			const bool enabled = _allowedChannels[channel] && !_model.Suspended;
 				const float hue = static_cast<float>((channel * 7u) % 16u) / 15.0f;
-				colors[i] = !cable.Finish.Available ? glm::vec4{1.0f, 0.3f, 0.2f, 0.8f} :
-					enabled ? glm::vec4{0.3f + hue * 0.6f, 0.9f - hue * 0.4f, 1.0f - hue * 0.3f, 0.85f} : glm::vec4{0.55f, 0.55f, 0.55f, 0.55f};
+			colors[i] = enabled && cable.Finish.Available
+				? glm::vec4{0.3f + hue * 0.6f, 0.9f - hue * 0.4f, 1.0f - hue * 0.3f, 0.85f}
+				: glm::vec4{0.55f, 0.55f, 0.55f, 0.55f};
 				if (width > 4.0f) colors[i] *= glm::vec4{0.45f, 0.45f, 0.45f, 1.0f};
 				colors[i].a *= context.Opacity();
 			}

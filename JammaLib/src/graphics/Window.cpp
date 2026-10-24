@@ -1582,7 +1582,7 @@ LRESULT CALLBACK Window::WindowProcedure(HWND hWindow, UINT message, WPARAM wPar
 		}
 		if (!repeatkey)
 		{
-			std::cout << "KeyDown " << wParam << "\n";
+			if (window->_scene->IsUiVerbose()) std::cout << "KeyDown " << wParam << "\n";
 			unsigned int keyCode = static_cast<unsigned int>(wParam);
 			const unsigned int scanCode = (static_cast<unsigned int>(lParam) >> 16u) & 0xffu;
 			// Normalise the physical key left of '1' (US backtick/tilde) across layouts.
@@ -1601,7 +1601,7 @@ LRESULT CALLBACK Window::WindowProcedure(HWND hWindow, UINT message, WPARAM wPar
 	}
 	case WM_KEYUP:
 	{
-		std::cout << "KeyUp " << wParam << "\n";
+		if (window->_scene->IsUiVerbose()) std::cout << "KeyUp " << wParam << "\n";
 		unsigned int keyCode = static_cast<unsigned int>(wParam);
 		const unsigned int scanCode = (static_cast<unsigned int>(lParam) >> 16u) & 0xffu;
 		if (0x29u == scanCode)
@@ -1636,7 +1636,7 @@ LRESULT CALLBACK Window::WindowProcedure(HWND hWindow, UINT message, WPARAM wPar
 		}
 		if (!repeatkey)
 		{
-			std::cout << "SysKeyDown " << wParam << "\n";
+			if (window->_scene->IsUiVerbose()) std::cout << "SysKeyDown " << wParam << "\n";
 			unsigned int keyCode = static_cast<unsigned int>(wParam);
 			const unsigned int scanCode = (static_cast<unsigned int>(lParam) >> 16u) & 0xffu;
 			if (0x29u == scanCode)
@@ -1654,7 +1654,7 @@ LRESULT CALLBACK Window::WindowProcedure(HWND hWindow, UINT message, WPARAM wPar
 	}
 	case WM_SYSKEYUP:
 	{
-		std::cout << "SysKeyUp " << wParam << "\n";
+		if (window->_scene->IsUiVerbose()) std::cout << "SysKeyUp " << wParam << "\n";
 		unsigned int keyCode = static_cast<unsigned int>(wParam);
 		const unsigned int scanCode = (static_cast<unsigned int>(lParam) >> 16u) & 0xffu;
 		if (0x29u == scanCode)

@@ -252,7 +252,7 @@ TEST_F(VstRackLoadTest, LoadedMissingStationCableStaysRecoverableUntilRemoved)
 	EXPECT_TRUE(station->LiveVstChannelRoutes()[3].PluginIds.empty());
 }
 
-TEST_F(VstRackLoadTest, InactiveRackPreservesRawOrderRoutesPolicyAndExplicitRecovery)
+TEST_F(VstRackLoadTest, InactiveRackPreservesRawOrderRoutesAndExplicitRecovery)
 {
 	io::JamFile::Station saved;
 	saved.Id = "raw-rack"; saved.Name = "raw rack"; saved.StationType = 0;
@@ -278,7 +278,6 @@ TEST_F(VstRackLoadTest, InactiveRackPreservesRawOrderRoutesPolicyAndExplicitReco
 	EXPECT_EQ(33u, station->RackSlotCount());
 	EXPECT_EQ(32u, station->GetVstRackSlots(0, 100000).size());
 	EXPECT_EQ(1u, station->GetVstRackSlots(32, 32).size());
-	EXPECT_EQ(vst::VstChain::RenderPolicy::LegacySerial, station->RackRenderPolicy());
 	EXPECT_FALSE(station->RecoverRack(station->RackRevision()));
 	EXPECT_EQ(33u, station->VstEntries().size());
 	midi::MidiVstRoutingSnapshot indexedRoutes;
@@ -323,50 +322,4 @@ TEST_F(VstRackLoadTest, InactiveRackPreservesRawOrderRoutesPolicyAndExplicitReco
 	io::JamFile::Station empty; empty.Name = "empty"; empty.Id = "empty"; empty.StationType = 0;
 	auto emptyStation = reconstruct(empty);
 	ASSERT_TRUE(emptyStation);
-	EXPECT_EQ(vst::VstChain::RenderPolicy::AdditiveInstruments, (*emptyStation)->RackRenderPolicy());
-}
-
-TEST_F(VstRackLoadTest, OlderSerialRackKeepsItsModeUntilExplicitConversion)
-{
-	io::JamFile::Station saved;
-	saved.Id = "older-rack"; saved.Name = "older rack"; saved.StationType = 0;
-	io::JamFile::VstEntry entry;
-	entry.Id = "missing-effect";
-	entry.Path = utils::EncodeUtf8(MissingPath(L"older.dll"));
-	saved.VstChain.push_back(entry);
-	engine::StationParams params; params.Name = saved.Name; params.Size = {200, 200};
-	audio::MergeMixBehaviourParams merge;
-	const auto restore = [&](io::JamFile::Station value) {
-		return engine::Station::FromFile(params, engine::Station::GetMixerParams(params.Size, merge), std::move(value), L"");
-	};
-	auto restored = restore(saved);
-	ASSERT_TRUE(restored);
-	const auto station = *restored;
-	EXPECT_EQ(vst::VstChain::RenderPolicy::LegacySerial, station->RackRenderPolicy());
-	ASSERT_EQ(1u, station->GetVstRackSlots().size());
-	EXPECT_TRUE(station->GetVstRackSlots()[0].Failed);
-	EXPECT_TRUE(station->CanConvertRackToAdditive());
-	ASSERT_TRUE(station->LoadManagedVstSlot(MissingPath(L"retry.dll"), "missing-effect"));
-	EXPECT_FALSE(station->CanConvertRackToAdditive());
-	EXPECT_FALSE(station->ConvertRackToAdditive(station->RackRevision()));
-	for (const auto& job : station->CommitChanges()) station->OnAction(job);
-	// Job completion still needs UI publication before the chain can change mode.
-	EXPECT_FALSE(station->CanConvertRackToAdditive());
-	EXPECT_FALSE(station->ConvertRackToAdditive(station->RackRevision()));
-	station->CommitChanges();
-	EXPECT_TRUE(station->CanConvertRackToAdditive());
-	const auto revision = station->RackRevision();
-	EXPECT_TRUE(station->ConvertRackToAdditive(revision));
-	EXPECT_EQ(vst::VstChain::RenderPolicy::AdditiveInstruments, station->RackRenderPolicy());
-	EXPECT_FALSE(station->CanConvertRackToAdditive());
-	EXPECT_FALSE(station->ConvertRackToAdditive(revision));
-	EXPECT_EQ("missing-effect", station->VstEntries()[0].Id);
-
-	saved.VstChain.push_back(entry); // Duplicate identities require explicit recovery first.
-	auto malformed = restore(saved);
-	ASSERT_TRUE(malformed);
-	EXPECT_TRUE((*malformed)->RackInactive());
-	EXPECT_FALSE((*malformed)->CanConvertRackToAdditive());
-	EXPECT_FALSE((*malformed)->ConvertRackToAdditive((*malformed)->RackRevision()));
-	EXPECT_EQ(vst::VstChain::RenderPolicy::LegacySerial, (*malformed)->RackRenderPolicy());
 }

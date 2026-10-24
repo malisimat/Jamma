@@ -128,6 +128,7 @@ public:
 	const std::string& Name() const noexcept override { return PluginName; }
 	void SetBypassed(bool bypassed) noexcept override { Bypassed = bypassed; }
 	bool IsBypassed() const noexcept override { return Bypassed; }
+	vst::RenderRole Role() const noexcept override { return vst::RenderRole::Effect; }
 	int GetLatencySamples() const noexcept override { return Latency; }
 	void PollPendingChanges() const noexcept override { ++PollCount; }
 private:

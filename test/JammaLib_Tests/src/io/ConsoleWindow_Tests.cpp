@@ -88,30 +88,6 @@ protected:
 	void Enter() { SendMessageW(Access::Input(View), WM_CHAR, L'\r', 0); }
 };
 
-TEST_F(NativeConsoleWindow, DISABLED_CreatesHiddenAndCloseHidesWithoutQuitOrLostHistory)
-{
-	const auto window = Access::Window(View), transcript = Access::Transcript(View);
-	EXPECT_FALSE(IsWindowVisible(window));
-	EXPECT_EQ(GetWindow(window, GW_OWNER), nullptr);
-	EXPECT_EQ(GetWindowLongPtrW(window, GWL_EXSTYLE) & WS_EX_NOACTIVATE, 0);
-	const auto foreground = GetForegroundWindow();
-	View.ShowPassive(nullptr);
-	EXPECT_TRUE(IsWindowVisible(window));
-	EXPECT_EQ(GetForegroundWindow(), foreground);
-	SendMessageW(window, WM_CLOSE, 0, 0);
-	EXPECT_FALSE(IsWindowVisible(window));
-	Append("hidden history");
-	EXPECT_NE(Text(transcript).find(L"hidden history"), std::wstring::npos);
-	View.Toggle(); EXPECT_TRUE(IsWindowVisible(window));
-	View.Toggle(); EXPECT_FALSE(IsWindowVisible(window));
-	MSG message{};
-	EXPECT_FALSE(PeekMessageW(&message, nullptr, WM_QUIT, WM_QUIT, PM_NOREMOVE));
-	View.Destroy(); EXPECT_FALSE(IsWindow(window)); EXPECT_FALSE(IsWindow(transcript));
-	ASSERT_TRUE(View.CreateHidden(GetModuleHandleW(nullptr)));
-	EXPECT_EQ(Access::Units(View), 0);
-}
-
-
 TEST_F(NativeConsoleWindow, UnicodeSelectionAndViewportStayStableWhileOutputArrives)
 {
 	const auto transcript = Access::Transcript(View);

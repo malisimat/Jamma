@@ -677,7 +677,6 @@ TEST(IoSessionExporter, UnavailableRackAutomationRemainsSaveableAndIdentityBound
 			io::JamFile::Station descriptor{};
 			descriptor.Name = "unavailable-rack";
 			descriptor.Id = "saved-station";
-			descriptor.AdditiveVstRack = true;
 			descriptor.HasLiveVstRoutes = true;
 			descriptor.LiveVstRoutes[0].Explicit = true;
 			descriptor.LiveVstRoutes[0].PluginIds = {caseIndex == 0u ? "normal-missing" : "", rawIds[caseIndex], "other-missing"};

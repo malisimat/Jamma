@@ -294,7 +294,6 @@ TEST(StationMidiInstrument, LiveMidiIsDeliveredToStationVstPlugin)
 TEST(StationMidiInstrument, AdditiveRackPreservesGeneratorsEffectOrderAndDestinationLatency)
 {
 	vst::VstChain chain;
-	chain.SetRenderPolicy(vst::VstChain::RenderPolicy::AdditiveInstruments);
 	auto a = std::make_shared<StationMidiInstrumentFakePlugin>();
 	auto b = std::make_shared<StationMidiInstrumentFakePlugin>();
 	auto effect = std::make_shared<StationMidiInstrumentFakePlugin>();
@@ -312,8 +311,6 @@ TEST(StationMidiInstrument, AdditiveRackPreservesGeneratorsEffectOrderAndDestina
 	EXPECT_EQ(18, chain.GetLatencySamplesFrom(0));
 	EXPECT_EQ(7, chain.GetLatencySamplesFrom(1));
 	EXPECT_EQ(23, chain.GetLatencySamplesFrom(2));
-	chain.SetRenderPolicy(vst::VstChain::RenderPolicy::LegacySerial);
-	EXPECT_EQ(41, chain.GetLatencySamples());
 }
 
 TEST(StationMidiInstrument, LiveChannelRoutesAreManyToManyAndMissingExplicitTargetsStaySilent)
@@ -321,9 +318,10 @@ TEST(StationMidiInstrument, LiveChannelRoutesAreManyToManyAndMissingExplicitTarg
 	auto station = MakeStation("channel-routes");
 	auto a = AddPlugin(station, L"a.dll");
 	auto b = AddPlugin(station, L"b.dll");
-	AllowAllMidiChannels(station);
+	station->SetAllowedMidiChannels({1});
 	ASSERT_TRUE(station->SetLiveVstChannelRoute(0, {true, {a->StateId(), a->StateId(), b->StateId()}}, station->RackRevision()));
 	ASSERT_TRUE(station->SetLiveVstChannelRoute(1, {true, {b->StateId()}}, station->RackRevision()));
+	EXPECT_EQ((std::vector<int>{1, 2}), station->AllowedMidiChannels());
 	station->TryEnqueueSyntheticLiveMidi(MidiEvent::MakeNoteOn(0, 0, 60, 100));
 	station->TryEnqueueSyntheticLiveMidi(MidiEvent::MakeNoteOn(0, 1, 61, 100));
 	RenderStationBlock(station, 0);
@@ -341,6 +339,19 @@ TEST(StationMidiInstrument, LiveChannelRoutesAreManyToManyAndMissingExplicitTarg
 	RenderStationBlock(station, 128);
 	EXPECT_EQ(2u, std::count_if(a->Events.begin(), a->Events.end(), [](const auto& event) { return event.IsNoteOn(); }));
 	EXPECT_EQ(2u, std::count_if(b->Events.begin(), b->Events.end(), [](const auto& event) { return event.IsNoteOn(); }));
+	routes = station->LiveVstChannelRoutes();
+	routes[3] = {true, {a->StateId()}};
+	routes[4] = {true, {b->StateId()}};
+	ASSERT_TRUE(station->SetLiveVstChannelRoutes(routes, station->RackRevision()));
+	EXPECT_TRUE(station->AcceptsLiveMidiChannel(3u));
+	EXPECT_TRUE(station->AcceptsLiveMidiChannel(4u));
+	station->TryEnqueueSyntheticLiveMidi(MidiEvent::MakeNoteOn(256, 3, 64, 100));
+	station->TryEnqueueSyntheticLiveMidi(MidiEvent::MakeNoteOn(256, 4, 65, 100));
+	RenderStationBlock(station, 256);
+	EXPECT_TRUE(std::any_of(a->Events.begin(), a->Events.end(), [](const auto& event) { return event.IsNoteOn() && event.Channel() == 3u; }));
+	EXPECT_FALSE(std::any_of(a->Events.begin(), a->Events.end(), [](const auto& event) { return event.IsNoteOn() && event.Channel() == 4u; }));
+	EXPECT_TRUE(std::any_of(b->Events.begin(), b->Events.end(), [](const auto& event) { return event.IsNoteOn() && event.Channel() == 4u; }));
+	EXPECT_FALSE(std::any_of(b->Events.begin(), b->Events.end(), [](const auto& event) { return event.IsNoteOn() && event.Channel() == 3u; }));
 }
 
 TEST(StationMidiInstrument, RackRerouteAndRemovalRetryOwnedNoteAndSustainReleases)

@@ -16,7 +16,7 @@
 namespace vst
 {
 	// VstChain holds an ordered sequence of IVstPlugin instances (VST2 or VST3)
-	// and applies them in series to mono, stereo, or exact-match multichannel buffers.
+	// and applies them to mono, stereo, or exact-match multichannel buffers.
 	//
 	// Threading contract:
 	//   AddPlugin / RemovePlugin – call from a non-RT thread only.
@@ -25,11 +25,8 @@ namespace vst
 	class VstChain
 	{
 	public:
-		enum class RenderPolicy { LegacySerial, AdditiveInstruments };
-		// Immutable once the chain is published. Scratch is owned by the caller's
+		// Scratch is owned by the caller's
 		// callback state, so concurrent snapshot readers never share mutable buses.
-		void SetRenderPolicy(RenderPolicy policy) noexcept { _renderPolicy = policy; }
-		RenderPolicy Policy() const noexcept { return _renderPolicy; }
 		void ProcessRack(float* const* channels, float* const* instrumentScratch,
 			int numChannels, int numSamples) noexcept;
 		VstChain();
@@ -88,11 +85,10 @@ namespace vst
 		// Real-time safe.
 		bool IsActive() const noexcept;
 
-		// Sum of GetLatencySamples() across all plugins in the chain (series
-		// processing accumulates latency additively). Bypassed/unloaded plugins
+		// Sum of the rack's active effect latency. Bypassed/unloaded plugins
 		// contribute no delay. Negative reports are ignored; sums saturate.
 		int GetLatencySamples() const noexcept;
-		// MIDI injected at a plugin incurs only its remaining serial path.
+		// MIDI injected at a plugin incurs that plugin and following effects.
 		int GetLatencySamplesFrom(std::size_t firstPlugin) const noexcept;
 		bool FitsCompensationCeiling() const noexcept
 		{
@@ -127,7 +123,6 @@ namespace vst
 		void UpdateHostTime(const HostTimeState& state) noexcept;
 
 	private:
-		RenderPolicy _renderPolicy = RenderPolicy::LegacySerial;
 		std::vector<std::shared_ptr<IVstPlugin>> _plugins;
 	};
 }

@@ -263,22 +263,24 @@ ActionResult GuiRack::OnAction(GuiAction action)
 				action.Index < (MidiChannelToggleBaseIndex + 16u))
 			{
 				const auto channel = static_cast<int>(action.Index - MidiChannelToggleBaseIndex + 1u);
+				const auto wasActive = _vstRack && _vstRack->ChannelShownActive(static_cast<unsigned int>(channel - 1));
 				auto it = std::find(_rackParams.AllowedMidiChannels.begin(),
 					_rackParams.AllowedMidiChannels.end(),
 					channel);
-				// The drawn state also includes cables. A click changes only allowed input
-				// membership, independently of the visual toggle's reported state.
-				if (it == _rackParams.AllowedMidiChannels.end())
+				bool membershipChanged = false;
+				if (it == _rackParams.AllowedMidiChannels.end() && !wasActive)
 				{
 					_rackParams.AllowedMidiChannels.push_back(channel);
 					std::sort(_rackParams.AllowedMidiChannels.begin(), _rackParams.AllowedMidiChannels.end());
+					membershipChanged = true;
 				}
-				else
-					_rackParams.AllowedMidiChannels.erase(it);
+				else if (it != _rackParams.AllowedMidiChannels.end())
+				{ _rackParams.AllowedMidiChannels.erase(it); membershipChanged = true; }
 
-				if (_rackParams.OnAllowedMidiChannelsChanged)
+				if (membershipChanged && _rackParams.OnAllowedMidiChannelsChanged)
 					_rackParams.OnAllowedMidiChannelsChanged(_rackParams.AllowedMidiChannels);
 				if (_vstRack) _vstRack->SetAllowedMidiChannels(_rackParams.AllowedMidiChannels);
+				if (wasActive) _vstRack->ClearChannelRoutes(static_cast<unsigned int>(channel - 1));
 
 				break;
 			}

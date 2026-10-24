@@ -136,27 +136,14 @@ TEST(GuiRack, SharedSlotViewPreservesCapturedIdentityScrollAndHiddenCableEndpoin
 	EXPECT_TRUE(view->OnAction(key).IsEaten);
 	EXPECT_TRUE(view->ChannelsCollapsed());
 	EXPECT_EQ(gui::GuiToggleParams::TOGGLE_OFF, expander->GetToggleState());
-	EXPECT_TRUE(view->ChannelShownActive(2u)); // A cable remains lit outside the input filter.
+	EXPECT_FALSE(view->ChannelShownActive(2u)); // A cable alone cannot admit live MIDI.
 	EXPECT_FALSE(view->ChannelShownActive(3u));
 	rack->SetAllowedMidiChannels({1}, true);
 	EXPECT_TRUE(view->ChannelShownActive(0u));
-	EXPECT_TRUE(view->ChannelShownActive(2u));
+	EXPECT_FALSE(view->ChannelShownActive(2u));
 	rack->SetAllowedMidiChannels({}, true);
 	EXPECT_FALSE(view->ChannelShownActive(0u));
-	EXPECT_TRUE(view->ChannelShownActive(2u));
-	// The first click adds cabled-only input; the second removes it while its cable remains lit.
-	auto receiver = std::make_shared<MockedRackReceiver>(); rack->SetReceiver(receiver);
-	GuiAction cabledClick; cabledClick.ElementType = GuiAction::ACTIONELEMENT_TOGGLE;
-	cabledClick.Index = GuiRack::MidiChannelToggleBaseIndex + 2u;
-	cabledClick.Data = GuiAction::GuiInt{0};
-	rack->OnAction(cabledClick);
-	EXPECT_TRUE(view->ChannelShownActive(2u));
-	EXPECT_EQ(1, filterChanges);
-	EXPECT_EQ(std::vector<int>{3}, lastAllowedChannels);
-	rack->OnAction(cabledClick);
-	EXPECT_TRUE(view->ChannelShownActive(2u));
-	EXPECT_EQ(2, filterChanges);
-	EXPECT_TRUE(lastAllowedChannels.empty());
+	EXPECT_FALSE(view->ChannelShownActive(2u));
 	EXPECT_EQ(rack->GetMasterSlider()->GetSize().Width, view->AppendButton()->GetSize().Width);
 	EXPECT_EQ(view, view->AppendButton()->Parent());
 	ASSERT_GT(view->SlotScroll()->MaxScrollOffset(), 0);
@@ -185,6 +172,30 @@ TEST(GuiRack, SharedSlotViewPreservesCapturedIdentityScrollAndHiddenCableEndpoin
 	auto plain = std::make_shared<gui::GuiVstRack>(); plain->Init(); plain->Update(model, submit);
 	endpoints.clear(); cables.clear(); plain->BuildInteractionGeometry(endpoints, cables);
 	EXPECT_TRUE(endpoints.empty()); EXPECT_TRUE(cables.empty());
+	// A disabled cable stays off. Turning its channel on, then off clears every route.
+	auto receiver = std::make_shared<MockedRackReceiver>(); rack->SetReceiver(receiver);
+	GuiAction cabledClick; cabledClick.ElementType = GuiAction::ACTIONELEMENT_TOGGLE;
+	cabledClick.Index = GuiRack::MidiChannelToggleBaseIndex + 2u;
+	cabledClick.Data = GuiAction::GuiInt{0};
+	rack->OnAction(cabledClick);
+	EXPECT_EQ(1u, commands.size());
+	EXPECT_EQ((std::vector<int>{3}), lastAllowedChannels);
+	EXPECT_EQ(1, filterChanges);
+	EXPECT_TRUE(view->ChannelShownActive(2u));
+	rack->OnAction(cabledClick);
+	ASSERT_EQ(2u, commands.size());
+	EXPECT_TRUE(commands[1].ChannelRoutes[2].PluginIds.empty());
+	EXPECT_FALSE(commands[1].ChannelRoutes[2].Explicit);
+	EXPECT_EQ(2, filterChanges);
+	EXPECT_TRUE(lastAllowedChannels.empty());
+	model.ChannelRoutes = commands[1].ChannelRoutes;
+	model.Revision = 6u; view->Update(model, submit);
+	EXPECT_FALSE(view->ChannelShownActive(2u));
+	rack->OnAction(cabledClick);
+	EXPECT_EQ((std::vector<int>{3}), lastAllowedChannels);
+	EXPECT_EQ(3, filterChanges);
+	EXPECT_TRUE(view->ChannelShownActive(2u));
+	EXPECT_EQ(2u, commands.size());
 	plain->DetachGuiOwnershipForRetirement(); rack->DetachGuiOwnershipForRetirement();
 }
 

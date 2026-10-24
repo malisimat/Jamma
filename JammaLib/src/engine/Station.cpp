@@ -61,14 +61,15 @@ void Station::_TrySeedClockFromFirstLoop(const std::shared_ptr<utils::Timer>& cl
 		clock->SetQuantisation(timing->GrainSamps, quantisation);
 		clock->SetSeedSourceLength(static_cast<unsigned long>(timing->GrainSamps) * timing->LoopGrains);
 		// Structural recording completion runs on the job owner, never OnTick.
-		std::cout << "[Quantisation] recording master established: take=" << takeId
-			<< " authority=local source=default physical=" << loopLengthSamps
-			<< " logical=" << clock->SeedSourceLength() << " sr=" << sampleRate
-			<< " grain=" << timing->GrainSamps << " grains=" << timing->LoopGrains
-			<< " bpm=" << 60.0 * sampleRate / timing->GrainSamps
-			<< " policyMinMs=" << policyCfg.Loop.SeedGrainMinMs
-			<< " policyMaxMs=" << policyCfg.Loop.SeedGrainTargetMaxMs
-			<< " rounding=floor-grain,exact-product" << std::endl;
+		if (_loggingConfig.Event == "verbose")
+			std::cout << "[Quantisation] recording master established: take=" << takeId
+				<< " authority=local source=default physical=" << loopLengthSamps
+				<< " logical=" << clock->SeedSourceLength() << " sr=" << sampleRate
+				<< " grain=" << timing->GrainSamps << " grains=" << timing->LoopGrains
+				<< " bpm=" << 60.0 * sampleRate / timing->GrainSamps
+				<< " policyMinMs=" << policyCfg.Loop.SeedGrainMinMs
+				<< " policyMaxMs=" << policyCfg.Loop.SeedGrainTargetMaxMs
+				<< " rounding=floor-grain,exact-product" << std::endl;
 	}
 }
 
@@ -150,8 +151,6 @@ std::optional<std::shared_ptr<Station>> Station::FromFile(StationParams stationP
 	auto station = std::make_shared<Station>(stationParams, mixerParams);
 	station->SetStationPhaseOffsetSamps(stationStruct.StationPhaseOffsetSamps);
 	station->SetAllowedMidiChannels(stationStruct.AllowedMidiChannels);
-	station->_rackRenderPolicy = stationStruct.AdditiveVstRack.value_or(stationStruct.VstChain.empty())
-		? vst::VstChain::RenderPolicy::AdditiveInstruments : vst::VstChain::RenderPolicy::LegacySerial;
 	station->_liveVstChannelRoutes = stationStruct.LiveVstRoutes;
 	std::vector<std::string> identities;
 	station->_rackInactive = stationStruct.VstChain.size() > MaxRackPlugins;
@@ -900,9 +899,7 @@ void Station::_PrepareMidiDestinations(AudioState& state)
 		{
 			if (!destination->Plugin) continue;
 			const auto capabilities = destination->Plugin->MidiInput();
-			// Legacy adapters/test processors retain broadcast compatibility. New
-			// explicit cables require discovered capability at the edit boundary.
-			if ((capabilities.Known && !capabilities.Notes && !capabilities.Controllers) || (!capabilities.Known && _rackRenderPolicy != vst::VstChain::RenderPolicy::LegacySerial)) continue;
+			if (!capabilities.Known || (!capabilities.Notes && !capabilities.Controllers)) continue;
 			if (!route.Explicit || std::find(route.PluginIds.begin(), route.PluginIds.end(),
 				destination->Plugin->StateId()) != route.PluginIds.end()) prepared.push_back(destination);
 		}
@@ -912,7 +909,7 @@ void Station::_PrepareMidiDestinations(AudioState& state)
 			{
 				if (!destination->Plugin || std::find(prepared.begin(), prepared.end(), destination) != prepared.end()) continue;
 				const auto capability = destination->Plugin->MidiInput();
-				if (_rackRenderPolicy != vst::VstChain::RenderPolicy::LegacySerial && (!capability.Known || (!capability.Notes && !capability.Controllers))) continue;
+				if (!capability.Known || (!capability.Notes && !capability.Controllers)) continue;
 				if (std::find(route.PluginIds.begin(), route.PluginIds.end(), destination->Plugin->StateId()) != route.PluginIds.end())
 					prepared.push_back(destination);
 			}
@@ -4655,7 +4652,22 @@ bool Station::SetLiveVstChannelRoutes(std::array<midi::LiveVstChannelRoute, 16> 
 			if (!capability.Known || (!capability.Notes && !capability.Controllers)) { _rackDiagnostic = "This plugin has no supported MIDI input."; return false; }
 		}
 	}
+	std::vector<int> allowed = _allowedMidiChannels;
+	for (auto channel = 0u; channel < 16u; ++channel)
+	{
+		const auto newlyConnected = std::any_of(routes[channel].PluginIds.begin(), routes[channel].PluginIds.end(), [&](const auto& id) {
+			const auto& prior = _liveVstChannelRoutes[channel].PluginIds;
+			return std::find(prior.begin(), prior.end(), id) == prior.end();
+		});
+		if (newlyConnected && std::find(allowed.begin(), allowed.end(), static_cast<int>(channel + 1u)) == allowed.end())
+			allowed.push_back(static_cast<int>(channel + 1u));
+	}
 	_liveVstChannelRoutes = std::move(routes);
+	if (allowed.size() != _allowedMidiChannels.size())
+	{
+		std::sort(allowed.begin(), allowed.end());
+		SetAllowedMidiChannels(allowed);
+	}
 	++_rackRevision;
 	_PublishAudioState();
 	_changesMade = true;
@@ -4792,47 +4804,6 @@ bool Station::RecoverRack(std::uint64_t revision)
 	return true;
 }
 
-bool Station::CanConvertRackToAdditive() const
-{
-	std::lock_guard<std::mutex> lock(_vstPathsMutex);
-	if (_rackInactive || _rackLatencySuspended || !_pendingRackIds.empty() ||
-		_vstJobsPending.load(std::memory_order_acquire) != 0u || _flipVstChain.load(std::memory_order_acquire) ||
-		_rackRenderPolicy == vst::VstChain::RenderPolicy::AdditiveInstruments) return false;
-	const auto chain = _flipVstChain.load(std::memory_order_acquire) ? _backVstChain : _vstChain.load(std::memory_order_acquire);
-	vst::VstChain additive;
-	additive.SetRenderPolicy(vst::VstChain::RenderPolicy::AdditiveInstruments);
-	if (chain) for (std::size_t i = 0; i < chain->NumPlugins(); ++i)
-	{
-		const auto plugin = chain->GetPlugin(i);
-		if (plugin && plugin->Role() == vst::RenderRole::Unknown) return false;
-		additive.AddSlot(plugin);
-	}
-	return _RackLatencyFeasible(additive);
-}
-
-bool Station::ConvertRackToAdditive(std::uint64_t revision)
-{
-	std::lock_guard<std::mutex> lock(_vstPathsMutex);
-	if (revision != _rackRevision || _rackInactive || _rackLatencySuspended || !_pendingRackIds.empty() ||
-		_vstJobsPending.load(std::memory_order_acquire) != 0u || _flipVstChain.load(std::memory_order_acquire) ||
-		_rackRenderPolicy == vst::VstChain::RenderPolicy::AdditiveInstruments) return false;
-	const auto chain = _flipVstChain.load(std::memory_order_acquire) ? _backVstChain : _vstChain.load(std::memory_order_acquire);
-	auto replacement = std::make_shared<vst::VstChain>();
-	replacement->SetRenderPolicy(vst::VstChain::RenderPolicy::AdditiveInstruments);
-	if (chain) for (std::size_t i = 0; i < chain->NumPlugins(); ++i)
-	{
-		const auto plugin = chain->GetPlugin(i);
-		if (plugin && plugin->Role() == vst::RenderRole::Unknown) return false;
-		replacement->AddSlot(plugin);
-	}
-	if (!_RackLatencyFeasible(*replacement)) return false;
-	_rackRenderPolicy = vst::VstChain::RenderPolicy::AdditiveInstruments;
-	_backVstChain = std::move(replacement);
-	_flipVstChain.store(true, std::memory_order_release);
-	++_rackRevision;
-	_changesMade = true;
-	return true;
-}
 bool Station::LoadVstPluginSynchronously(const std::wstring& path,
 	const std::vector<std::uint8_t>& initialState,
 	bool bypass, const std::string& stateId)
@@ -4850,8 +4821,7 @@ bool Station::LoadVstPluginSynchronously(const std::wstring& path,
 		hostChannels = 1u;
 	bool loaded = plugin->PreInit(path)
 		&& plugin->Load(path, _sampleRate, _blockSize, hostChannels, vst::HostedLayoutMode::Exact)
-		&& (_rackRenderPolicy == vst::VstChain::RenderPolicy::LegacySerial
-			|| plugin->Role() != vst::RenderRole::Unknown)
+		&& plugin->Role() != vst::RenderRole::Unknown
 		&& plugin->GetLatencySamples() <= 262144;
 
 	plugin->SetStateId(stateId);
@@ -4863,7 +4833,6 @@ bool Station::LoadVstPluginSynchronously(const std::wstring& path,
 
 	auto chain = _vstChain.load(std::memory_order_acquire);
 	auto replacement = std::make_shared<vst::VstChain>();
-	replacement->SetRenderPolicy(_rackRenderPolicy);
 	if (chain)
 	{
 		for (std::size_t index = 0u; index < chain->NumPlugins(); ++index)
@@ -5029,8 +4998,7 @@ ActionResult Station::OnAction(JobAction action)
 		auto hostChannels = NumBusChannels();
 		if (hostChannels == 0u) hostChannels = 1u;
 		bool loaded = plugin->Load(action.VstPath, _sampleRate, _blockSize, hostChannels, vst::HostedLayoutMode::Exact)
-			&& (_rackRenderPolicy == vst::VstChain::RenderPolicy::LegacySerial
-				|| plugin->Role() != vst::RenderRole::Unknown);
+			&& plugin->Role() != vst::RenderRole::Unknown;
 		if (action.VstIdentity.empty()) action.VstIdentity = plugin->StateId();
 		plugin->SetStateId(action.VstIdentity);
 		if (loaded && !action.VstInitialState.empty()) plugin->SetState(action.VstInitialState);
@@ -5048,7 +5016,6 @@ ActionResult Station::OnAction(JobAction action)
 			// against the latest delivered chain so no earlier edit is discarded.
 			const auto chain = _flipVstChain.load(std::memory_order_acquire) ? _backVstChain : _vstChain.load(std::memory_order_acquire);
 			auto replacement = std::make_shared<vst::VstChain>();
-			replacement->SetRenderPolicy(_rackRenderPolicy);
 			if (chain) for (size_t i = 0u; i < chain->NumPlugins(); ++i) replacement->AddSlot(chain->GetPlugin(i));
 			io::JamFile::VstEntry saved;
 			saved.Id = action.VstIdentity;
@@ -5129,7 +5096,6 @@ ActionResult Station::OnAction(JobAction action)
 			if (removeIndex < _vstSavedEntries.size())
 			{
 				auto replacement = std::make_shared<vst::VstChain>();
-	replacement->SetRenderPolicy(_rackRenderPolicy);
 				if (chain) for (size_t i = 0u; i < chain->NumPlugins(); ++i)
 				{
 					auto existing = chain->GetPlugin(i);

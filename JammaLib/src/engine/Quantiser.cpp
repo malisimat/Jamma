@@ -329,12 +329,7 @@ bool Quantiser::HandleTapTempo(std::uint64_t estimatedSampleAt,
         smoothedGap = _tapTempo.EstimatedGapSamps();
         if (smoothedGap > 0.0) requestedDivisions = interval / smoothedGap;
     }
-    if (!timing)
-    {
-        std::cout << "[Quantisation] tap sequence/no update: sample=" << estimatedSampleAt
-            << " generation=" << ReclockGeneration() << " sr=" << sampleRate << " eligible=" << eligible << " authority=" << (remote ? "remote" : "local") << std::endl;
-        return false;
-    }
+    if (!timing) return false;
     if (eligible != 1u || remote)
     {
         const auto grain = _clock ? _clock->QuantiseSamps() : 0u;
@@ -860,7 +855,6 @@ std::optional<QuantisationTiming> TapTempoTracker::TapAtSample(std::uint64_t sam
 	if (!sampleRate)
 	{
 		Clear();
-		std::cout << "[tap] rejected: invalid sample rate\n";
 		return std::nullopt;
 	}
 	if (!_lastTapSample.has_value())
@@ -871,7 +865,6 @@ std::optional<QuantisationTiming> TapTempoTracker::TapAtSample(std::uint64_t sam
 
 	if (samplePosition <= _lastTapSample.value())
 	{
-		std::cout << "[tap] rejected: non-increasing\n";
 		Clear();
 		_lastTapSample = samplePosition;
 		return std::nullopt;
@@ -884,7 +877,6 @@ std::optional<QuantisationTiming> TapTempoTracker::TapAtSample(std::uint64_t sam
 	{
 		Clear();
 		_lastTapSample = samplePosition;
-		std::cout << "[tap] sequence restarted: timeout >=2000ms\n";
 		return std::nullopt;
 	}
 
@@ -892,14 +884,6 @@ std::optional<QuantisationTiming> TapTempoTracker::TapAtSample(std::uint64_t sam
 	_estimatedGapSamps = _estimatedGapSamps.has_value() ?
 		((_estimatedGapSamps.value() * 0.5) + (gap * 0.5)) :
 		gap;
-
-	if (sampleRate > 0u)
-	{
-		const auto msPerSamp = 1000.0 / static_cast<double>(sampleRate);
-		std::cout << "[tap] raw=" << static_cast<int>(gap * msPerSamp + 0.5)
-			<< "ms smooth=" << static_cast<int>(_estimatedGapSamps.value() * msPerSamp + 0.5)
-			<< "ms\n";
-	}
 
 	return CurrentTiming(masterLoopSamps, sampleRate, policy);
 }

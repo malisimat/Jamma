@@ -358,7 +358,6 @@ namespace io
 				jamStation.AllowedMidiChannels = station->AllowedMidiChannels();
 				jamStation.HasLiveVstRoutes = true;
 				jamStation.LiveVstRoutes = station->LiveVstChannelRoutes();
-				jamStation.AdditiveVstRack = station->RackRenderPolicy() == vst::VstChain::RenderPolicy::AdditiveInstruments;
 				jamStation.AudioRoutes = station->SnapshotAudioRoutesForExport();
 				jamStation.HasAudioRoutes = true;
                 if (numbered) for (auto& routes : jamStation.AudioRoutes)

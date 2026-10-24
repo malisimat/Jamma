@@ -306,9 +306,6 @@ namespace engine
 		bool SetLiveVstChannelRoute(unsigned int channel, midi::LiveVstChannelRoute route, std::uint64_t revision);
 		const std::array<midi::LiveVstChannelRoute, 16>& LiveVstChannelRoutes() const noexcept { return _liveVstChannelRoutes; }
 		std::uint64_t RackRevision() const noexcept { return _rackRevision; }
-		vst::VstChain::RenderPolicy RackRenderPolicy() const noexcept { return _rackRenderPolicy; }
-		bool ConvertRackToAdditive(std::uint64_t revision);
-		bool CanConvertRackToAdditive() const;
 		bool RackInactive() const noexcept { return _rackInactive; }
 		bool RackLatencySuspended() const noexcept { return _rackLatencySuspended; }
 		bool LoadManagedVstPlugin(std::wstring path);
@@ -357,7 +354,7 @@ namespace engine
 		static void _DrainVstChain(std::shared_ptr<vst::VstChain> chain);
 		static unsigned int _ResolveSampleRate(std::optional<io::UserConfig> cfg,
 			std::optional<audio::AudioStreamParams> params);
-		static void _TrySeedClockFromFirstLoop(const std::shared_ptr<utils::Timer>& clock,
+		void _TrySeedClockFromFirstLoop(const std::shared_ptr<utils::Timer>& clock,
 			unsigned long loopLengthSamps,
 			std::optional<io::UserConfig> cfg,
 			std::optional<audio::AudioStreamParams> params,
@@ -682,7 +679,6 @@ namespace engine
 		// Serialized structural owner writes; UI/export reads under Scene's owner
 		// lock. Audio sees only prepared lists/policy in its immutable snapshot.
 		std::array<midi::LiveVstChannelRoute, 16> _liveVstChannelRoutes{};
-		std::atomic<vst::VstChain::RenderPolicy> _rackRenderPolicy{vst::VstChain::RenderPolicy::AdditiveInstruments};
 		std::atomic<std::uint64_t> _rackRevision{1u}; // UI/job metadata publication; audio never reads.
 		std::vector<std::string> _pendingRackIds; // _vstPathsMutex; completion clears by identity.
 		std::vector<std::pair<std::string, std::wstring>> _failedInteractiveVstLoads; // Bounded UI notices, _vstPathsMutex.
