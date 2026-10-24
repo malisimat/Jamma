@@ -636,6 +636,14 @@ void GuiElement::AddChild(std::shared_ptr<GuiElement> child)
 	Init();
 }
 
+void GuiElement::RemoveChild(const std::shared_ptr<GuiElement>& child)
+{
+	auto it = std::find(_children.begin(), _children.end(), child);
+	if (it == _children.end()) return;
+	if (child->Parent().get() == this) child->SetParent(nullptr);
+	_children.erase(it);
+}
+
 std::shared_ptr<GuiElement> GuiElement::TryGetChild(unsigned char index)
 {
 	for (auto& child : _children)

@@ -520,6 +520,36 @@ TEST(GuiScrollBar, HorizontalDragMovesThumbToTheRight) {
 }
 
 // GuiScrollPanel offset tests
+class GuiRetainedPageProbe : public base::GuiElement
+{
+public:
+	GuiRetainedPageProbe() : GuiElement(base::GuiElementParams{}) {}
+	int ReleaseCount = 0;
+protected:
+	void _InitResources(resources::ResourceLib&, bool) override {}
+	void _ReleaseResources() override { ++ReleaseCount; }
+};
+
+TEST(GuiScrollPanel, SwitchingRetainedContentPreservesResourcesAndDescendantOwnership) {
+	auto panel = std::make_shared<GuiScrollPanel>(GuiScrollPanelParams{});
+	auto page = std::make_shared<GuiRetainedPageProbe>();
+	auto child = std::make_shared<GuiRetainedPageProbe>();
+	page->AddChild(child);
+	resources::ResourceLib resources;
+	page->InitResources(resources, false);
+	panel->SetContent(page);
+	std::weak_ptr<base::GuiElement> oldHost = page->Parent();
+	panel->SetContent(nullptr);
+	EXPECT_EQ(0, page->ReleaseCount);
+	EXPECT_EQ(nullptr, page->Parent());
+	EXPECT_EQ(page, child->Parent());
+	EXPECT_TRUE(oldHost.expired());
+	panel->SetContent(page);
+	EXPECT_EQ(page, panel->Content());
+	EXPECT_EQ(panel, page->Parent()->Parent());
+	EXPECT_EQ(0, page->ReleaseCount);
+}
+
 
 TEST(GuiScrollPanel, OffsetClampsToContentRange) {
 	GuiScrollPanelParams p;
@@ -1132,6 +1162,10 @@ TEST(GuiMainPanel, RetainedPagesKeepCommandIdentityAfterTreeInitialization) {
 	EXPECT_EQ(2, std::get<GuiAction::GuiInt>(owner->LastAction->Data).Value);
 	panel->SetPage(gui::SettingsPage::Timing);
 	EXPECT_EQ(numeric, numeric->Parent()->TryGetChild(1));
+	const auto previousActionCount = owner->ActionCount;
+	numeric->SetValue(0.6, true);
+	EXPECT_EQ(previousActionCount + 1, owner->ActionCount);
+	EXPECT_EQ(7002u, owner->LastAction->Index);
 	owner.reset();
 	EXPECT_NO_THROW(numeric->SetValue(0.6, true));
 }

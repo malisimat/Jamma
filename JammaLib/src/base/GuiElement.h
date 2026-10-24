@@ -163,6 +163,8 @@ namespace base
 		unsigned int Index() const;
 		virtual std::vector<unsigned int> GlobalId();
 		virtual void AddChild(std::shared_ptr<GuiElement> child);
+		// Detach a reusable subtree without retiring its bindings or resources.
+		void RemoveChild(const std::shared_ptr<GuiElement>& child);
 		virtual std::shared_ptr<GuiElement> TryGetChild(unsigned char index);
 
 		virtual actions::ActionResult OnAction(actions::KeyAction action) override;

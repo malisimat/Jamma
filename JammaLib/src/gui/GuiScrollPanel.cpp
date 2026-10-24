@@ -51,6 +51,8 @@ void GuiScrollPanel::SetContent(std::shared_ptr<base::GuiElement> content)
 	if (_contentHost)
 	{
 		_contentHost->ClearPointerState();
+		// Pages can be retained and reattached later. Retire only the wrapper.
+		_contentHost->RemoveChild(_content);
 		_contentHost->ReleaseResources();
 		_contentHost->DetachGuiOwnershipForRetirement();
 	}
