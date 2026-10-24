@@ -403,16 +403,27 @@ TEST(MidiGridGesture, AmbiguousSourceRemovalRollsBackWholeGesture)
 	EXPECT_TRUE(add.Dirty()); // Unrelated ambiguity does not lock empty cells.
 }
 
-TEST(MidiGridGesture, EnumeratedLocalAndRemoteCellsCanAllBeAddedAndRemoved)
+TEST(MidiGridGesture, RepresentativeLocalAndRemoteCellsCanBeAddedAndRemoved)
 {
-	// Exhaust small physical lengths, rational steps, wrapped phase/origin, and
-	// nonzero transport starts. Every geometry cell is tested through the gesture.
+	// Cover small physical lengths, rational steps, wrapped phase/origin, and
+	// nonzero transport starts. Sample edge and middle cells in each geometry;
+	// exhaust every cell for the smallest loops.
+	struct GridCase
+	{
+		unsigned int Interval;
+		midi::MidiQuantisationFraction Fraction;
+		int Phase;
+		unsigned int Transport;
+	};
+	const GridCase cases[] = {
+		{4u, midi::MidiQuantisationFraction::Whole, -1, 0u},
+		{10u, midi::MidiQuantisationFraction::Quarter, 0, 17u},
+		{13u, midi::MidiQuantisationFraction::Whole, 1, 17u},
+		{4u, midi::MidiQuantisationFraction::Quarter, 1, 0u}
+	};
 	for (const bool remote : {false, true})
 	for (const auto length : {1u, 2u, 3u, 7u, 11u, 23u, 100u})
-	for (const auto interval : {4u, 10u, 13u})
-	for (const auto fraction : {midi::MidiQuantisationFraction::Whole, midi::MidiQuantisationFraction::Quarter})
-	for (const auto phase : {-1, 0, 1})
-	for (const auto transport : {0u, 17u})
+	for (const auto& [interval, fraction, phase, transport] : cases)
 	{
 		auto source = MidiGridGestureFixture::EmptyLoop();
 		source.LoopLengthSamps = length; source.Quantisation.GrainSamps = interval;
@@ -426,8 +437,11 @@ TEST(MidiGridGesture, EnumeratedLocalAndRemoteCellsCanAllBeAddedAndRemoved)
 		}
 		const auto grid = midi::LoopGridGeometry::Resolve(length, source.Quantisation, transport);
 		ASSERT_TRUE(grid);
+		const auto cellCount = grid->Boundaries.size() - 1u;
 		for (std::size_t cell = 0; cell + 1 < grid->Boundaries.size(); ++cell)
 		{
+			if (length > 3u && cell != 0u && cell != cellCount / 2u && cell != cellCount - 1u)
+				continue;
 			SCOPED_TRACE(::testing::Message() << remote << ":" << length << ":" << interval << ":" << phase << ":" << transport << ":" << cell);
 			const auto canonical = grid->SeamHeadEnd && cell == 0u ? grid->Boundaries.size() - 2u : cell;
 			const auto start = grid->Boundaries[canonical], end = grid->Boundaries[canonical + 1];

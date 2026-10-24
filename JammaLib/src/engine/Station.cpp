@@ -2909,7 +2909,7 @@ ActionResult Station::OnAction(TriggerAction action)
 			publisher->ObserveDitch(std::dynamic_pointer_cast<Station>(Sharable::shared_from_this()), utils::Timer::GetTime());
 	if (res.IsEaten && loopTake)
 		loopTake.value()->PublishCameraCaptureObservation();
-	if (res.IsEaten)
+	if (res.IsEaten && _loggingConfig.Event == "verbose")
 	{
 		const char* actionLabel = nullptr;
 		switch (action.ActionType)

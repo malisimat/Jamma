@@ -2,6 +2,7 @@
 #include "gui/CableInteraction.h"
 #include <limits>
 #include "gui/GuiHud.h"
+#include "gui/GuiButton.h"
 #include "gui/GuiScrollPanel.h"
 #include "gui/GuiPopupManager.h"
 #include "gui/GuiTriggerRename.h"
@@ -289,6 +290,23 @@ protected:
 			EXPECT_TRUE(popup ? Popups.OnAction(touch).IsEaten : Hud->OnAction(touch).IsEaten);
 		}
 	}
+	void ClickPopupButton(const std::string& text)
+	{
+		ASSERT_TRUE(Popups.IsOpen());
+		const auto popup = Popups.Top();
+		for (unsigned int index = 0; index < 256u; ++index)
+		{
+			const auto child = popup->TryGetChild(static_cast<unsigned char>(index));
+			if (!child) break;
+			const auto button = std::dynamic_pointer_cast<gui::GuiButton>(child);
+			if (button && button->Text() == text)
+			{
+				Click(button, true);
+				return;
+			}
+		}
+		FAIL() << "Popup button not found: " << text;
+	}
 	void PublishRig(const io::RigFile& rig)
 	{
 		auto next = std::make_shared<engine::RigSnapshot>(); next->Revision = Routing->Revision + 1; next->Rig = rig;
@@ -470,8 +488,8 @@ TEST_F(HudCableInteractionTests, SupportedCompactProfileKeepsSourcesAndTriggerAc
 	EXPECT_GE(popup->Position().X, 0); EXPECT_GE(popup->Position().Y, 0);
 	EXPECT_LE(popup->Position().X + static_cast<int>(popup->GetSize().Width), 400);
 	EXPECT_LE(popup->Position().Y + static_cast<int>(popup->GetSize().Height), 240);
-	Click(popup->TryGetChild(5), true); EXPECT_FALSE(Popups.IsOpen()); EXPECT_TRUE(Submissions.empty());
-	Click(close); ASSERT_TRUE(Popups.IsOpen()); Click(Popups.Top()->TryGetChild(6), true);
+	ClickPopupButton("Cancel"); EXPECT_FALSE(Popups.IsOpen()); EXPECT_TRUE(Submissions.empty());
+	Click(close); ASSERT_TRUE(Popups.IsOpen()); ClickPopupButton("Delete");
 	ASSERT_EQ(1u, Submissions.size()); EXPECT_EQ(11u, Submissions.back().Triggers.size());
 	const auto removed = Submissions.back(); PublishRig(removed); Submissions.clear();
 	Click(Hud->TryGetChild(1)->TryGetChild(2));
@@ -487,9 +505,9 @@ TEST_F(HudCableInteractionTests, DeleteConfirmationSubmitsOnlySelectedTriggerAnd
 	scroll->SetScrollOffset(0);
 	const auto close = scroll->Content()->TryGetChild(0)->TryGetChild(3);
 	Click(close); ASSERT_TRUE(Popups.IsOpen()); EXPECT_EQ(Hud, Popups.OwnerOfTop());
-	Click(Popups.Top()->TryGetChild(5), true); EXPECT_FALSE(Popups.IsOpen()); EXPECT_TRUE(Submissions.empty());
+	ClickPopupButton("Cancel"); EXPECT_FALSE(Popups.IsOpen()); EXPECT_TRUE(Submissions.empty());
 	Click(close); ASSERT_TRUE(Popups.IsOpen()); scroll->SetScrollOffset(scroll->MaxScrollOffset());
-	Click(Popups.Top()->TryGetChild(6), true); EXPECT_FALSE(Popups.IsOpen());
+	ClickPopupButton("Delete"); EXPECT_FALSE(Popups.IsOpen());
 	ASSERT_EQ(1u, Submissions.size()); ASSERT_EQ(11u, Submissions.back().Triggers.size());
 	EXPECT_EQ(Routing->Rig.Triggers[1].Id, Submissions.back().Triggers.front().Id);
 	EXPECT_EQ((std::vector<unsigned int>{ 19u }), Submissions.back().Triggers.back().CaptureInputs.Audio);
