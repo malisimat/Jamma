@@ -4159,6 +4159,10 @@ std::vector<JobAction> Station::_CommitChanges()
 	if (_flipVstChain.load(std::memory_order_acquire))
 	{
 		std::lock_guard<std::mutex> lock(_vstPathsMutex);
+		for (auto& route : _liveVstChannelRoutes)
+			for (const auto& identity : _pendingDeletedVstRouteIds)
+				std::erase(route.PluginIds, identity);
+		_pendingDeletedVstRouteIds.clear();
 		_flipVstChain.store(false, std::memory_order_release);
 		_vstChain.store(_backVstChain, std::memory_order_release);
 		audioStateChanged = true;
@@ -4697,8 +4701,12 @@ bool Station::RemoveInactiveRackSlot(std::size_t ordinal, std::uint64_t revision
 	if (!_rackInactive || revision != _rackRevision) return false;
 	std::lock_guard<std::mutex> lock(_vstPathsMutex);
 	if (ordinal >= _vstSavedEntries.size()) return false;
+	const auto deletedId = _vstSavedEntries[ordinal].Id;
 	_vstSavedEntries.erase(_vstSavedEntries.begin() + ordinal);
 	_vstPluginPaths.erase(_vstPluginPaths.begin() + ordinal);
+	if (std::none_of(_vstSavedEntries.begin(), _vstSavedEntries.end(),
+		[&](const auto& entry) { return entry.Id == deletedId; }))
+		for (auto& route : _liveVstChannelRoutes) std::erase(route.PluginIds, deletedId);
 	if (const auto* current = _midiVstRoutes.load(std::memory_order_acquire))
 	{
 		auto routes = std::make_unique<MidiVstRoutingSnapshot>(*current);
@@ -5067,6 +5075,7 @@ ActionResult Station::OnAction(JobAction action)
 				}
 				_vstPluginPaths.erase(_vstPluginPaths.begin() + static_cast<std::ptrdiff_t>(removeIndex));
 				_vstSavedEntries.erase(_vstSavedEntries.begin() + static_cast<std::ptrdiff_t>(removeIndex));
+				_pendingDeletedVstRouteIds.push_back(action.VstIdentity);
 				if (const auto* current = _midiVstRoutes.load(std::memory_order_acquire))
 				{
 					auto routes = std::make_unique<MidiVstRoutingSnapshot>(*current);

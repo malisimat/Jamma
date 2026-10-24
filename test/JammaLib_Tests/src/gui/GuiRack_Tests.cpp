@@ -62,9 +62,13 @@ TEST(GuiRack, CompactConstructionAndResizeKeepScaleAnchorsDistinct)
 TEST(GuiRack, SharedSlotViewPreservesCapturedIdentityScrollAndHiddenCableEndpoints)
 {
 	auto params = MakeRackParams(220, 300);
+	int filterChanges = 0;
+	std::vector<int> lastAllowedChannels;
+	params.OnAllowedMidiChannelsChanged = [&](const auto& channels) { ++filterChanges; lastAllowedChannels = channels; };
 	params.EnableVstControl = true; params.EnableVstRack = true; params.EnableVstRackMidiRouting = true;
 	auto rack = std::make_shared<GuiRack>(params); rack->SetPosition({300, 400}); rack->Init();
 	const auto view = rack->VstRack(); ASSERT_NE(nullptr, view);
+	EXPECT_TRUE(view->ChannelsCollapsed());
 	view->SetViewport({1200u, 1000u});
 	gui::GuiVstRack::Model model; model.Editable = true; model.Revision = 4u; model.TotalSlots = 12u;
 	for (auto i = 0u; i < 12u; ++i)
@@ -76,6 +80,37 @@ TEST(GuiRack, SharedSlotViewPreservesCapturedIdentityScrollAndHiddenCableEndpoin
 	std::vector<gui::GuiVstRack::Command> commands;
 	const auto submit = [&](auto command) { commands.push_back(std::move(command)); };
 	view->Update(model, submit);
+	auto expander = view->ChannelsExpander(); ASSERT_NE(nullptr, expander);
+	ASSERT_TRUE(expander->RequestFocus());
+	actions::KeyAction key; key.KeyChar = 13u; key.KeyActionType = actions::KeyAction::KEY_UP;
+	EXPECT_TRUE(view->OnAction(key).IsEaten);
+	EXPECT_FALSE(view->ChannelsCollapsed());
+	EXPECT_EQ(gui::GuiToggleParams::TOGGLE_ON, expander->GetToggleState());
+	key.KeyChar = 32u;
+	EXPECT_TRUE(view->OnAction(key).IsEaten);
+	EXPECT_TRUE(view->ChannelsCollapsed());
+	EXPECT_EQ(gui::GuiToggleParams::TOGGLE_OFF, expander->GetToggleState());
+	EXPECT_TRUE(view->ChannelShownActive(2u)); // A cable remains lit outside the input filter.
+	EXPECT_FALSE(view->ChannelShownActive(3u));
+	rack->SetAllowedMidiChannels({1}, true);
+	EXPECT_TRUE(view->ChannelShownActive(0u));
+	EXPECT_TRUE(view->ChannelShownActive(2u));
+	rack->SetAllowedMidiChannels({}, true);
+	EXPECT_FALSE(view->ChannelShownActive(0u));
+	EXPECT_TRUE(view->ChannelShownActive(2u));
+	// The first click adds cabled-only input; the second removes it while its cable remains lit.
+	auto receiver = std::make_shared<MockedRackReceiver>(); rack->SetReceiver(receiver);
+	GuiAction cabledClick; cabledClick.ElementType = GuiAction::ACTIONELEMENT_TOGGLE;
+	cabledClick.Index = GuiRack::MidiChannelToggleBaseIndex + 2u;
+	cabledClick.Data = GuiAction::GuiInt{0};
+	rack->OnAction(cabledClick);
+	EXPECT_TRUE(view->ChannelShownActive(2u));
+	EXPECT_EQ(1, filterChanges);
+	EXPECT_EQ(std::vector<int>{3}, lastAllowedChannels);
+	rack->OnAction(cabledClick);
+	EXPECT_TRUE(view->ChannelShownActive(2u));
+	EXPECT_EQ(2, filterChanges);
+	EXPECT_TRUE(lastAllowedChannels.empty());
 	EXPECT_EQ(rack->GetMasterSlider()->GetSize().Width, view->AppendButton()->GetSize().Width);
 	EXPECT_EQ(view, view->AppendButton()->Parent());
 	ASSERT_GT(view->SlotScroll()->MaxScrollOffset(), 0);
@@ -93,6 +128,7 @@ TEST(GuiRack, SharedSlotViewPreservesCapturedIdentityScrollAndHiddenCableEndpoin
 	EXPECT_EQ(4u, commands[0].Revision); EXPECT_EQ(base::Action::MODIFIER_ALT, commands[0].Modifiers);
 	std::vector<gui::CableInteraction::Endpoint> endpoints; std::vector<gui::CableInteraction::Cable> cables;
 	view->BuildInteractionGeometry(endpoints, cables); ASSERT_EQ(2u, cables.size());
+	EXPECT_TRUE(cables[0].Start.Continuation);
 	EXPECT_EQ(2u, cables[0].Start.MidiChannel); EXPECT_EQ("slot-0", cables[0].Finish.PluginId);
 	view->SetChannelsCollapsed(true); endpoints.clear(); cables.clear(); view->BuildInteractionGeometry(endpoints, cables);
 	ASSERT_EQ(2u, cables.size()); EXPECT_TRUE(cables[0].Start.Continuation);

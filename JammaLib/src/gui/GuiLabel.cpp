@@ -205,6 +205,7 @@ void GuiLabel::Draw(DrawContext& ctx)
 	if (_vertexArray == 0)
 		return;
 
+	if (!_guiParams.Texture.empty()) GuiElement::Draw(ctx);
 	auto& glCtx = dynamic_cast<GlDrawContext&>(ctx);
 	auto pos = Position();
 	const auto textWidth = _centerHorizontally ? font->MeasureString(_str) : 0.0f;
@@ -265,6 +266,7 @@ bool GuiLabel::_ResolveFont(ResourceLib& resourceLib)
 
 void GuiLabel::_InitResources(ResourceLib& resourceLib, bool forceInit)
 {
+	if (!_guiParams.Texture.empty()) GuiElement::_InitResources(resourceLib, forceInit);
 	_resourceLib = &resourceLib;
 	_ResolveFont(resourceLib);
 
@@ -285,6 +287,7 @@ void GuiLabel::_InitResources(ResourceLib& resourceLib, bool forceInit)
 
 void GuiLabel::_ReleaseResources()
 {
+	if (!_guiParams.Texture.empty()) GuiElement::_ReleaseResources();
 	_resourceLib = nullptr;
 	graphics::GlDeleteQueue::DeleteBuffers(2, _vertexBuffers);
 	_vertexBuffers[0] = 0;

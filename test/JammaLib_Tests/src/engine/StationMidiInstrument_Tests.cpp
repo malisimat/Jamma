@@ -363,11 +363,26 @@ TEST(StationMidiInstrument, RackRerouteAndRemovalRetryOwnedNoteAndSustainRelease
 	station->TryEnqueueSyntheticLiveMidi(MidiEvent::MakeNoteOn(384, 0, 61, 100));
 	station->TryEnqueueSyntheticLiveMidi({384, 0xb0, 64, 127});
 	RenderStationBlock(station, 384);
+	ASSERT_TRUE(station->SetLiveVstChannelRoute(1, {true, {a->StateId(), b->StateId()}}, station->RackRevision()));
+	ASSERT_TRUE(station->SetLiveVstChannelRoute(2, {true, {}}, station->RackRevision()));
+	ASSERT_TRUE(station->SetLiveVstChannelRoute(15, {true, {b->StateId()}}, station->RackRevision()));
+	station->SetMidiVstRoute(Station::LiveMidiOutputIndex, 1);
 	station->SetMidiVstRoute(0, 1);
 	station->SetMidiVstRoute(1, 0);
 	ASSERT_TRUE(station->UnloadManagedVstPlugin(b->StateId()));
 	for (const auto& job : station->CommitChanges()) station->OnAction(job);
 	station->CommitChanges();
+	const auto& liveRoutes = station->LiveVstChannelRoutes();
+	EXPECT_TRUE(liveRoutes[0].Explicit);
+	EXPECT_TRUE(liveRoutes[0].PluginIds.empty());
+	EXPECT_EQ((std::vector<std::string>{a->StateId()}), liveRoutes[1].PluginIds);
+	EXPECT_TRUE(liveRoutes[2].Explicit);
+	EXPECT_TRUE(liveRoutes[2].PluginIds.empty());
+	EXPECT_TRUE(liveRoutes[15].Explicit);
+	EXPECT_TRUE(liveRoutes[15].PluginIds.empty());
+	for (const auto& route : liveRoutes)
+		EXPECT_EQ(route.PluginIds.end(), std::find(route.PluginIds.begin(), route.PluginIds.end(), b->StateId()));
+	EXPECT_EQ(1u, station->GetVstRackSlots().size());
 	b->MaxAcceptedPerBlock = 0;
 	RenderStationBlock(station, 512);
 	b->MaxAcceptedPerBlock = 100;
@@ -376,8 +391,31 @@ TEST(StationMidiInstrument, RackRerouteAndRemovalRetryOwnedNoteAndSustainRelease
 	EXPECT_TRUE(std::any_of(b->ProcessedEvents.begin(), b->ProcessedEvents.end(), [](const auto& event) { return event.MessageType() == 0xb0u && event.data1 == 64u && event.data2 == 0u; }));
 	const auto routes = station->SnapshotMidiVstRoutesForExport();
 	ASSERT_EQ(2u, routes.PluginByMidiOutput.size());
+	EXPECT_EQ(midi::MidiVstRoutingSnapshot::MissingPlugin, routes.LivePlugin);
 	EXPECT_EQ(midi::MidiVstRoutingSnapshot::MissingPlugin, routes.PluginByMidiOutput[0]);
 	EXPECT_EQ(0u, routes.PluginByMidiOutput[1]);
+}
+
+TEST(StationMidiInstrument, QueuedRackRemovalsClearOnlyDeletedCableIdentities)
+{
+	auto station = MakeStation("queued-rack-removals");
+	auto a = AddPlugin(station, L"queued-a.dll");
+	auto b = AddPlugin(station, L"queued-b.dll");
+	auto c = AddPlugin(station, L"queued-c.dll");
+	ASSERT_TRUE(station->SetLiveVstChannelRoute(0,
+		{true, {a->StateId(), b->StateId(), c->StateId()}}, station->RackRevision()));
+	ASSERT_TRUE(station->SetLiveVstChannelRoute(15,
+		{true, {a->StateId(), b->StateId()}}, station->RackRevision()));
+	ASSERT_TRUE(station->UnloadManagedVstPlugin(a->StateId()));
+	ASSERT_TRUE(station->UnloadManagedVstPlugin(b->StateId()));
+	for (const auto& job : station->CommitChanges()) station->OnAction(job);
+	station->CommitChanges();
+	ASSERT_EQ(1u, station->GetVstRackSlots().size());
+	EXPECT_EQ(c->StateId(), station->GetVstRackSlots()[0].Identity);
+	const auto& routes = station->LiveVstChannelRoutes();
+	EXPECT_EQ((std::vector<std::string>{c->StateId()}), routes[0].PluginIds);
+	EXPECT_TRUE(routes[15].Explicit);
+	EXPECT_TRUE(routes[15].PluginIds.empty());
 }
 
 TEST(StationMidiInstrument, AutomationSurvivesCompactionAndReleasesRemovedProcessor)

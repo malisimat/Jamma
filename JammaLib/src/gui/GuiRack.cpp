@@ -256,36 +256,23 @@ ActionResult GuiRack::OnAction(GuiAction action)
 			if (action.Index >= MidiChannelToggleBaseIndex &&
 				action.Index < (MidiChannelToggleBaseIndex + 16u))
 			{
-				toggleOn = false;
-				if (auto i = std::get_if<GuiAction::GuiInt>(&action.Data))
-					toggleOn = (1 == i->Value);
-
 				const auto channel = static_cast<int>(action.Index - MidiChannelToggleBaseIndex + 1u);
 				auto it = std::find(_rackParams.AllowedMidiChannels.begin(),
 					_rackParams.AllowedMidiChannels.end(),
 					channel);
-
-				bool changed = false;
-				if (toggleOn)
+				// The drawn state also includes cables. A click changes only allowed input
+				// membership, independently of the visual toggle's reported state.
+				if (it == _rackParams.AllowedMidiChannels.end())
 				{
-					if (it == _rackParams.AllowedMidiChannels.end())
-					{
-						_rackParams.AllowedMidiChannels.push_back(channel);
-						std::sort(_rackParams.AllowedMidiChannels.begin(), _rackParams.AllowedMidiChannels.end());
-						changed = true;
-					}
+					_rackParams.AllowedMidiChannels.push_back(channel);
+					std::sort(_rackParams.AllowedMidiChannels.begin(), _rackParams.AllowedMidiChannels.end());
 				}
 				else
-				{
-					if (it != _rackParams.AllowedMidiChannels.end())
-					{
-						_rackParams.AllowedMidiChannels.erase(it);
-						changed = true;
-					}
-				}
+					_rackParams.AllowedMidiChannels.erase(it);
 
-				if (changed && _rackParams.OnAllowedMidiChannelsChanged)
+				if (_rackParams.OnAllowedMidiChannelsChanged)
 					_rackParams.OnAllowedMidiChannelsChanged(_rackParams.AllowedMidiChannels);
+				if (_vstRack) _vstRack->SetAllowedMidiChannels(_rackParams.AllowedMidiChannels);
 
 				break;
 			}
@@ -586,6 +573,7 @@ gui::GuiToggleParams GuiRack::_GetToggleParams(GuiRackParams::RackState state, u
 	switch (state)
 	{
 	case GuiRackParams::RACK_CHANNELS:
+		toggleParams = GuiToggleParams::RackExpander(false);
 		toggleParams.ToggleIndex = 1;
 		toggleParams.Position = {
 			(int)(size.Width - _ChannelToggleSize.Width),
@@ -604,12 +592,15 @@ gui::GuiToggleParams GuiRack::_GetToggleParams(GuiRackParams::RackState state, u
 	}
 
 	toggleParams.MinSize = toggleParams.Size;
-	toggleParams.Texture = "arrow";
-	toggleParams.OverTexture = "arrow_over";
-	toggleParams.DownTexture = "arrow_down";
-	toggleParams.ToggledTexture = "arrowup2";
-	toggleParams.ToggledOverTexture = "arrowup2_over";
-	toggleParams.ToggledDownTexture = "arrowup2_down";
+	if (state != GuiRackParams::RACK_CHANNELS)
+	{
+		toggleParams.Texture = "arrow";
+		toggleParams.OverTexture = "arrow_over";
+		toggleParams.DownTexture = "arrow_down";
+		toggleParams.ToggledTexture = "arrowup2";
+		toggleParams.ToggledOverTexture = "arrowup2_over";
+		toggleParams.ToggledDownTexture = "arrowup2_down";
+	}
 
 	return toggleParams;
 }
@@ -698,6 +689,7 @@ void GuiRack::SetAllowedMidiChannels(const std::vector<int>& channels, bool bypa
 		_midiChannelToggles[channel]->SetToggleState(on ? GuiToggleParams::TOGGLE_ON : GuiToggleParams::TOGGLE_OFF,
 			true);
 	}
+	if (_vstRack) _vstRack->SetAllowedMidiChannels(filtered);
 
 	if (!bypassUpdates && _rackParams.OnAllowedMidiChannelsChanged)
 		_rackParams.OnAllowedMidiChannelsChanged(_rackParams.AllowedMidiChannels);

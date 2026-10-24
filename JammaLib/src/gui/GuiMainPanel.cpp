@@ -66,6 +66,7 @@ GuiMainPanel::GuiMainPanel(GuiMainPanelParams params) : GuiPanel(params),
 			const auto labelHeight = setting.Label.size() > 30u
 				? 2u * GuiLabelParams::DefaultHeight : GuiLabelParams::DefaultHeight;
 			auto label = GuiLabelParams::PanelHeader(setting.Label, 320, labelHeight);
+			label.UseDarkFlatBackground();
 			label.FontSize = graphics::FontOptions::FONT_SMALL;
 			page->AddChild(std::make_shared<GuiLabel>(label));
 		}
@@ -513,6 +514,7 @@ void GuiMainPanel::ReplacePageSettings(SettingsPage pageId, const std::vector<Gu
 			const auto labelHeight = setting.Label.size() > 30u
 				? 2u * GuiLabelParams::DefaultHeight : GuiLabelParams::DefaultHeight;
 			auto labelParams = GuiLabelParams::PanelHeader(setting.Label, 320, labelHeight);
+			labelParams.UseDarkFlatBackground();
 			labelParams.FontSize = graphics::FontOptions::FONT_SMALL;
 			page->AddChild(std::make_shared<GuiLabel>(labelParams));
 		}

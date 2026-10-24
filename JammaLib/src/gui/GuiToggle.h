@@ -55,6 +55,21 @@ namespace gui
 			params.MinSize = { SecondaryMinWidth, DefaultHeight };
 			return params;
 		}
+		static GuiToggleParams RackExpander(bool facesLeft)
+		{
+			GuiToggleParams params;
+			params.Texture = "arrow";
+			params.OverTexture = "arrow_over";
+			params.DownTexture = "arrow_down";
+			params.ToggledTexture = "arrowup2";
+			params.ToggledOverTexture = "arrowup2_over";
+			params.ToggledDownTexture = "arrowup2_down";
+			params.TextureShader = "texture";
+			params.Rot90 = true;
+			// Rotation swaps texture axes, so vertical UV flip reverses the on-screen horizontal arrow.
+			params.FlipV = facesLeft;
+			return params;
+		}
 		GuiToggleParams() :
 			GuiButtonParams(),
 			ToggleIndex(0u),

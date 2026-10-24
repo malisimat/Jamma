@@ -674,6 +674,9 @@ namespace engine
 		mutable std::mutex _vstPathsMutex;
 		std::vector<std::wstring> _vstPluginPaths;
 		std::vector<io::JamFile::VstEntry> _vstSavedEntries;
+		// Job-side removals are applied to live cables by CommitChanges before
+		// publishing the matching replacement chain and MIDI destinations.
+		std::vector<std::string> _pendingDeletedVstRouteIds; // _vstPathsMutex.
 		// Serialized structural owner writes; UI/export reads under Scene's owner
 		// lock. Audio sees only prepared lists/policy in its immutable snapshot.
 		std::array<midi::LiveVstChannelRoute, 16> _liveVstChannelRoutes{};

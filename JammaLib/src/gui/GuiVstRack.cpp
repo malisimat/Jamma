@@ -52,6 +52,46 @@ private:
 	TouchAction::TouchType _sourceDown = TouchAction::TOUCH_MOUSE;
 };
 
+class GuiVstRack::Expander : public GuiToggle
+{
+public:
+	Expander() : GuiToggle(_Params()) {}
+	std::function<void()> ToggleChannels;
+	void ClearPointerState() override { _press.reset(); GuiToggle::ClearPointerState(); }
+	ActionResult OnAction(TouchAction action) override
+	{
+		if (action.Touch == TouchAction::TOUCH_MOUSE && action.Index != 0) return ActionResult::NoAction();
+		if (!IsEnabled() || !IsVisible()) { _press.reset(); return ActionResult::NoAction(); }
+		if (action.State == TouchAction::TOUCH_UP)
+		{
+			const bool matched = _press && _press->first == action.Index && _press->second == action.Touch && HitTest(action.Position);
+			_press.reset();
+			if (!matched) return ActionResult::NoAction();
+		}
+		auto result = GuiToggle::OnAction(action);
+		if (action.State == TouchAction::TOUCH_DOWN && result.IsEaten)
+			_press = std::pair{action.Index, action.Touch};
+		if (result.IsEaten && action.State == TouchAction::TOUCH_UP && ToggleChannels)
+			ToggleChannels();
+		return result;
+	}
+	ActionResult OnAction(KeyAction action) override
+	{
+		auto result = GuiToggle::OnAction(action);
+		if (result.IsEaten && result.ResultType == ACTIONRESULT_TOGGLE && ToggleChannels)
+			ToggleChannels();
+		return result;
+	}
+private:
+	std::optional<std::pair<int, TouchAction::TouchType>> _press;
+	static GuiToggleParams _Params()
+	{
+		auto params = GuiToggleParams::RackExpander(true);
+		params.Size = {20u, 64u}; params.MinSize = params.Size;
+		return params;
+	}
+};
+
 std::shared_ptr<GuiVstRack::Button> GuiVstRack::_MakeButton(
 	std::string text, std::string texture, std::function<Command()> capture)
 {
@@ -96,8 +136,12 @@ GuiVstRack::GuiVstRack(std::shared_ptr<base::GuiElement> channels,
 	_recover = _MakeButton("Resume", "", [command] { return command(Command::Kind::Recover); });
 	_clearRoutes = _MakeButton("Clear MIDI", "", [command] { return command(Command::Kind::ClearInactiveRoutes); });
 	_diagnostic = _MakeButton("Rack info", "", [command] { return command(Command::Kind::Diagnostic); });
-	_collapse = _MakeButton("MIDI -", "", [command] { return command(Command::Kind::Diagnostic); });
-	_collapse->Submit = [this, life = std::weak_ptr<int>(_lifetime)](Command) { if (!life.expired()) SetChannelsCollapsed(!_collapsed); };
+	_collapse = std::make_shared<Expander>();
+	_collapse->ToggleChannels = [this, life = std::weak_ptr<int>(_lifetime)] { if (!life.expired()) SetChannelsCollapsed(!_collapsed); };
+	auto labelParams = GuiLabelParams::PanelHeader("MIDI", 148, 22u);
+	labelParams.CenterHorizontally = true; labelParams.UseDarkFlatBackground();
+	_midiLabel = std::make_shared<GuiLabel>(labelParams);
+	_channels->AddChild(_midiLabel);
 	_previous = _MakeButton("<", "", [command] { return command(Command::Kind::Diagnostic); });
 	_next = _MakeButton(">", "", [command] { return command(Command::Kind::Diagnostic); });
 	_previous->Submit = [this, life = std::weak_ptr<int>(_lifetime)](Command) { if (!life.expired() && _pageOffset >= _PageSize) _pageOffset -= _PageSize; };
@@ -105,7 +149,7 @@ GuiVstRack::GuiVstRack(std::shared_ptr<base::GuiElement> channels,
 	AddChild(_channels); AddChild(_scroll); AddChild(_append); AddChild(_collapse);
 	AddChild(_convert); AddChild(_recover); AddChild(_clearRoutes); AddChild(_diagnostic);
 	AddChild(_previous); AddChild(_next);
-	_collapse->SetVisible(!_toggles.empty()); _channels->SetVisible(!_toggles.empty());
+	_collapse->SetVisible(!_toggles.empty()); SetChannelsCollapsed(true);
 	Layout(_width, _faderBottom);
 }
 
@@ -117,6 +161,7 @@ GuiVstRack::~GuiVstRack()
 }
 
 std::shared_ptr<GuiButton> GuiVstRack::AppendButton() const { return _append; }
+std::shared_ptr<GuiToggle> GuiVstRack::ChannelsExpander() const { return _collapse; }
 std::shared_ptr<GuiButton> GuiVstRack::SlotButton(std::size_t index) const
 {
 	if (index >= _rows.size()) return {};
@@ -133,6 +178,7 @@ void GuiVstRack::Update(Model model, std::function<void(Command)> submit)
 	if (_model.ChannelRoutes != model.ChannelRoutes) rebuild = true;
 	if (!_rows.empty() && _rows.front().Ordinal != _pageOffset) rebuild = true;
 	_model = std::move(model); _submit = std::move(submit);
+	_RefreshChannelToggles();
 	if (_pageOffset >= std::max(std::size_t{1u}, _model.TotalSlots))
 	{
 		_pageOffset = _model.TotalSlots ? ((_model.TotalSlots - 1u) / _PageSize) * _PageSize : 0u;
@@ -226,7 +272,8 @@ void GuiVstRack::Layout(unsigned int width, int faderBottom)
 		_toggles[channel]->SetSize({32u, 32u});
 		_sourceSockets[channel]->SetPosition({static_cast<int>((channel % 4u) * 38u + 25u), static_cast<int>((3u - channel / 4u) * 38u + 12u)});
 	}
-	_collapse->SetPosition({-170, faderBottom + 154}); _collapse->SetSize({148u, _RowHeight});
+	_midiLabel->SetPosition({0, 154}); _midiLabel->SetSize({148u, 22u});
+	_collapse->SetPosition({-20, faderBottom + 42}); _collapse->SetSize({20u, 64u});
 	_LayoutRows();
 }
 
@@ -266,7 +313,27 @@ void GuiVstRack::SetFeedback(std::string message) { _feedback = std::move(messag
 void GuiVstRack::SetChannelsCollapsed(bool collapsed)
 {
 	CancelInteraction(); _collapsed = collapsed; _channels->SetVisible(!collapsed);
-	_collapse->SetText(collapsed ? "MIDI +" : "MIDI -");
+	_collapse->SetToggleState(collapsed ? GuiToggleParams::TOGGLE_OFF : GuiToggleParams::TOGGLE_ON, true);
+}
+
+void GuiVstRack::SetAllowedMidiChannels(const std::vector<int>& channels)
+{
+	_allowedChannels.fill(false);
+	for (const auto channel : channels)
+		if (channel >= 1 && channel <= 16) _allowedChannels[static_cast<std::size_t>(channel - 1)] = true;
+	_RefreshChannelToggles();
+}
+
+bool GuiVstRack::ChannelShownActive(unsigned int channel) const noexcept
+{
+	if (channel >= _allowedChannels.size()) return false;
+	return _allowedChannels[channel] || !_model.ChannelRoutes[channel].PluginIds.empty();
+}
+
+void GuiVstRack::_RefreshChannelToggles()
+{
+	for (auto channel = 0u; channel < _toggles.size() && channel < 16u; ++channel)
+		_toggles[channel]->SetToggleState(ChannelShownActive(channel) ? GuiToggleParams::TOGGLE_ON : GuiToggleParams::TOGGLE_OFF, true);
 }
 void GuiVstRack::CancelInteraction()
 {
@@ -283,7 +350,7 @@ bool GuiVstRack::IsInView(Size2d viewport) const
 {
 	if (!IsVisible()) return false;
 	const Rect2d window{0, 0, static_cast<int>(viewport.Width), static_cast<int>(viewport.Height)};
-	for (const auto& control : {_append, _collapse})
+	for (const std::shared_ptr<GuiButton>& control : {std::static_pointer_cast<GuiButton>(_append), std::static_pointer_cast<GuiButton>(_collapse)})
 	{
 		const auto p = control->GlobalPosition(); const auto s = control->GetSize();
 		if (!Rect2d{p.X, p.Y, p.X + static_cast<int>(s.Width), p.Y + static_cast<int>(s.Height)}.Intersected(window).IsEmpty()) return true;
@@ -487,7 +554,7 @@ ActionResult GuiVstRack::OnAction(KeyAction action)
 		else _consumeEscape = false;
 		return {true, {}, {}, ACTIONRESULT_DEFAULT, nullptr, {}};
 	}
-	return ActionResult::NoAction();
+	return GuiElement::OnAction(action);
 }
 
 bool GuiVstRack::RouteHitTest(Position2d point)

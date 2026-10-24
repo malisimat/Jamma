@@ -3,6 +3,7 @@
 #include "GuiButton.h"
 #include "GuiToggle.h"
 #include "GuiScrollPanel.h"
+#include "GuiLabel.h"
 #include "CableInteraction.h"
 #include "../vst/VstRackSlot.h"
 #include "../midi/MidiVstOutputSink.h"
@@ -58,9 +59,12 @@ namespace gui
 		const std::string& Feedback() const noexcept { return _feedback; }
 		void SetRevealHeld(bool held) { _revealHeld = held; }
 		void SetChannelsCollapsed(bool collapsed);
+		void SetAllowedMidiChannels(const std::vector<int>& channels);
 		bool ChannelsCollapsed() const noexcept { return _collapsed; }
+		bool ChannelShownActive(unsigned int channel) const noexcept;
 		std::size_t PageOffset() const noexcept { return _pageOffset; }
 		std::shared_ptr<GuiButton> AppendButton() const;
+		std::shared_ptr<GuiToggle> ChannelsExpander() const;
 		std::shared_ptr<GuiButton> SlotButton(std::size_t index) const;
 		std::shared_ptr<GuiScrollPanel> SlotScroll() const { return _scroll; }
 		bool HasCableDrag() const noexcept { return _drag.has_value(); }
@@ -82,6 +86,7 @@ namespace gui
 		void _ReleaseResources() override;
 	private:
 		class Button;
+		class Expander;
 		struct Row
 		{
 			std::string Id;
@@ -116,6 +121,7 @@ namespace gui
 		void _FinishDrag();
 		void _RemoveLink(Routes& routes, const Link& link) const;
 		void _DrawCables(base::DrawContext& context);
+		void _RefreshChannelToggles();
 		actions::ActionResult _Captured();
 		Model _model;
 		std::function<void(Command)> _submit;
@@ -124,13 +130,16 @@ namespace gui
 		std::vector<std::shared_ptr<base::GuiElement>> _sourceSockets;
 		std::shared_ptr<GuiScrollPanel> _scroll;
 		std::shared_ptr<GuiPanel> _content;
-		std::shared_ptr<Button> _append, _collapse, _convert, _recover, _clearRoutes, _diagnostic, _previous, _next;
+		std::shared_ptr<Button> _append, _convert, _recover, _clearRoutes, _diagnostic, _previous, _next;
+		std::shared_ptr<Expander> _collapse;
+		std::shared_ptr<GuiLabel> _midiLabel;
+		std::array<bool, 16> _allowedChannels{};
 		std::vector<Row> _rows;
 		std::size_t _pageOffset = 0u;
 		unsigned int _width = 64u;
 		int _faderBottom = 40;
 		utils::Size2d _viewport{1920u, 1080u};
-		bool _collapsed = false, _revealHeld = false, _hovered = false, _consumeRelease = false, _consumeEscape = false, _rowsBuilt = false;
+		bool _collapsed = true, _revealHeld = false, _hovered = false, _consumeRelease = false, _consumeEscape = false, _rowsBuilt = false;
 		std::optional<Drag> _drag;
 		std::string _feedback;
 		std::shared_ptr<int> _lifetime = std::make_shared<int>(0);
