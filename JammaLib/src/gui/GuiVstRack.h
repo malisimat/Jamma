@@ -22,7 +22,7 @@ namespace gui
 		using Routes = std::array<midi::LiveVstChannelRoute, 16>;
 		struct Command
 		{
-			enum class Kind { Slot, Append, Convert, Recover, ClearInactiveRoutes, Diagnostic, Routes };
+			enum class Kind { Slot, Append, Convert, Recover, ClearInactiveRoutes, Diagnostic, ModeInfo, Routes };
 			Kind Operation = Kind::Slot;
 			std::string Identity;
 			std::size_t Ordinal = 0u;
@@ -44,6 +44,7 @@ namespace gui
 			bool Inactive = false;
 			bool Suspended = false;
 			bool Legacy = false;
+			bool ConversionAvailable = false;
 			std::string Diagnostic;
 			Routes ChannelRoutes{}; // Never populated from unbounded inactive imports.
 		};
@@ -130,7 +131,7 @@ namespace gui
 		std::vector<std::shared_ptr<base::GuiElement>> _sourceSockets;
 		std::shared_ptr<GuiScrollPanel> _scroll;
 		std::shared_ptr<GuiPanel> _content;
-		std::shared_ptr<Button> _append, _convert, _recover, _clearRoutes, _diagnostic, _previous, _next;
+		std::shared_ptr<Button> _append, _convert, _recover, _clearRoutes, _diagnostic, _mode, _previous, _next;
 		std::shared_ptr<Expander> _collapse;
 		std::shared_ptr<GuiLabel> _midiLabel;
 		std::array<bool, 16> _allowedChannels{};

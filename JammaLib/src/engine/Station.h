@@ -307,6 +307,7 @@ namespace engine
 		std::uint64_t RackRevision() const noexcept { return _rackRevision; }
 		vst::VstChain::RenderPolicy RackRenderPolicy() const noexcept { return _rackRenderPolicy; }
 		bool ConvertRackToAdditive(std::uint64_t revision);
+		bool CanConvertRackToAdditive() const;
 		bool RackInactive() const noexcept { return _rackInactive; }
 		bool RackLatencySuspended() const noexcept { return _rackLatencySuspended; }
 		bool LoadManagedVstPlugin(std::wstring path);

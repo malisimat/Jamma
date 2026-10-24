@@ -53,7 +53,7 @@ void VstRackControls::_PresentLocked(const std::shared_ptr<GuiRack>& rack, Targe
 		slot.Plugin ? (_host.Editors.IsVstEditorOpen(slot.Plugin) ? GuiRack::VstControlState::Open : GuiRack::VstControlState::Closed) :
 		GuiRack::VstControlState::Empty;
 	rack->SetVstControlState(state, available && !_busy);
-	rack->SetVstControlText(slot.Pending ? "VST..." : label);
+	rack->SetVstControlText(slot.Failed ? "Retry " + label : slot.Identity.empty() ? "Add " + label : label);
 	// The hierarchy owns its racks. Capturing strong owners here would form a
 	// cycle; pin them only when a gesture becomes an intent.
 	rack->SetVstControlCallback([this, lifetime = std::weak_ptr<int>(_lifetime),
@@ -137,7 +137,7 @@ void VstRackControls::Pump()
 	{
 		if (slot.Identity.empty()) return;
 		const bool confirmed = _host.ConfirmRemoval ? _host.ConfirmRemoval() :
-			MessageBoxW(GetActiveWindow(), L"Remove the first VST from this item?\nThe other plugins stay in their chain.",
+			MessageBoxW(GetActiveWindow(), L"Remove this VST slot?\nThe other plugins stay in their chain.",
 				L"Remove VST", MB_YESNO | MB_ICONQUESTION | MB_DEFBUTTON2) == IDYES;
 		if (!confirmed) return;
 		// The confirmation can pump messages. Close only the captured processor,
@@ -203,6 +203,7 @@ void VstRackControls::_PresentStationLocked(const std::shared_ptr<engine::Statio
 	model.Editable = _AvailableLocked({station, {}, {}}) && !_busy;
 	model.Inactive = station->RackInactive(); model.Suspended = station->RackLatencySuspended();
 	model.Legacy = station->RackRenderPolicy() == vst::VstChain::RenderPolicy::LegacySerial;
+	model.ConversionAvailable = model.Legacy && station->CanConvertRackToAdditive();
 	model.Diagnostic = station->RackDiagnostic();
 	if (!model.Inactive) model.ChannelRoutes = station->LiveVstChannelRoutes();
 	for (auto slot : station->GetVstRackSlots(control->PageOffset()))
@@ -235,10 +236,12 @@ void VstRackControls::_PumpStation(const Intent& intent)
 	};
 	vst::VstRackSlot slot;
 	bool inactive = false;
+	bool serial = false;
 	{
 		std::scoped_lock lock(_host.Mutex);
 		if (!valid()) { report("Rack changed; retry the gesture."); return; }
 		inactive = station->RackInactive();
+		serial = station->RackRenderPolicy() == vst::VstChain::RenderPolicy::LegacySerial;
 		if (command.Operation == Kind::Slot && !station->RackInactive())
 		{
 			slot = _SlotLocked(intent.Owner);
@@ -253,11 +256,20 @@ void VstRackControls::_PumpStation(const Intent& intent)
 		if (!message.empty()) show(message);
 		return;
 	}
+	if (command.Operation == Kind::ModeInfo)
+	{
+		show(serial ?
+			"Serial chain: each VST processes the previous VST's output. This keeps older JAMs sounding as saved. "
+			"Conversion is available when loaded plugins have known roles and rack latency fits. "
+			"Converting can change the sound and cannot be undone here." :
+			"Additive mix: instrument outputs are summed, while effects process the mix according to their order.");
+		return;
+	}
 	if (command.Operation == Kind::Append && (command.Modifiers & base::Action::MODIFIER_ALT)) return;
 	if (command.Operation == Kind::Convert || command.Operation == Kind::ClearInactiveRoutes)
 	{
 		const auto text = command.Operation == Kind::Convert ?
-			L"Convert this legacy serial rack to additive instruments?\n\nInstrument A, Instrument B, Reverb: Reverb(A + B).\nInstrument A, Reverb, Instrument B: Reverb(A) + B.\n\nPlugin state and order are preserved." :
+			L"Convert this serial chain to an additive mix?\n\nInstrument A, Instrument B, Reverb: Reverb(A + B).\nInstrument A, Reverb, Instrument B: Reverb(A) + B.\n\nThis can change the sound. Plugin state and order are preserved." :
 			L"Clear every saved live MIDI cable in this inactive rack?\n\nChannels return to Broadcast. Plugin entries, state and recorded MIDI routes are preserved.";
 		if (MessageBoxW(GetActiveWindow(), text, L"Station rack", MB_YESNO | MB_ICONQUESTION | MB_DEFBUTTON2) != IDYES) return;
 	}
@@ -284,6 +296,10 @@ void VstRackControls::_PumpStation(const Intent& intent)
 	}
 	if (command.Operation == Kind::Slot && (command.Modifiers & base::Action::MODIFIER_ALT))
 	{
+		const bool confirmed = _host.ConfirmRemoval ? _host.ConfirmRemoval() :
+			MessageBoxW(GetActiveWindow(), L"Remove this VST slot?\nThe other plugins stay in their chain.",
+				L"Remove VST", MB_YESNO | MB_ICONQUESTION | MB_DEFBUTTON2) == IDYES;
+		if (!confirmed) return;
 		_host.Editors.CloseVstEditorForPlugin(slot.Plugin);
 		bool changed = false;
 		{

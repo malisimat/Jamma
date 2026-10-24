@@ -720,7 +720,7 @@ void GuiRack::SetVstControlState(VstControlState state, bool enabled)
 			button->SetEnabled(enabled && state != VstControlState::Loading);
 		}
 	if (previousState != state && active)
-		active->SetText(state == VstControlState::Loading ? "VST..." : _vstControlText);
+		active->SetText(state == VstControlState::Loading ? "Loading..." : _vstControlText);
 }
 
 void GuiRack::SetVstControlCallback(std::function<void(base::Action::Modifiers)> callback)
@@ -743,7 +743,7 @@ void GuiRack::SetVstControlText(const std::string& text)
 	for (auto& button : _vstControls)
 		if (button) button->SetText(text);
 	if (_vstControlState == VstControlState::Loading && GetVstControl())
-		GetVstControl()->SetText("VST...");
+		GetVstControl()->SetText("Loading...");
 }
 
 std::shared_ptr<gui::GuiSlider> GuiRack::GetChannelSlider(unsigned int index) const

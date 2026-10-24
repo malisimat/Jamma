@@ -4762,10 +4762,30 @@ bool Station::RecoverRack(std::uint64_t revision)
 	return true;
 }
 
+bool Station::CanConvertRackToAdditive() const
+{
+	std::lock_guard<std::mutex> lock(_vstPathsMutex);
+	if (_rackInactive || _rackLatencySuspended || !_pendingRackIds.empty() ||
+		_vstJobsPending.load(std::memory_order_acquire) != 0u || _flipVstChain.load(std::memory_order_acquire) ||
+		_rackRenderPolicy == vst::VstChain::RenderPolicy::AdditiveInstruments) return false;
+	const auto chain = _flipVstChain.load(std::memory_order_acquire) ? _backVstChain : _vstChain.load(std::memory_order_acquire);
+	vst::VstChain additive;
+	additive.SetRenderPolicy(vst::VstChain::RenderPolicy::AdditiveInstruments);
+	if (chain) for (std::size_t i = 0; i < chain->NumPlugins(); ++i)
+	{
+		const auto plugin = chain->GetPlugin(i);
+		if (plugin && plugin->Role() == vst::RenderRole::Unknown) return false;
+		additive.AddSlot(plugin);
+	}
+	return _RackLatencyFeasible(additive);
+}
+
 bool Station::ConvertRackToAdditive(std::uint64_t revision)
 {
 	std::lock_guard<std::mutex> lock(_vstPathsMutex);
-	if (revision != _rackRevision || _rackRenderPolicy == vst::VstChain::RenderPolicy::AdditiveInstruments) return false;
+	if (revision != _rackRevision || _rackInactive || _rackLatencySuspended || !_pendingRackIds.empty() ||
+		_vstJobsPending.load(std::memory_order_acquire) != 0u || _flipVstChain.load(std::memory_order_acquire) ||
+		_rackRenderPolicy == vst::VstChain::RenderPolicy::AdditiveInstruments) return false;
 	const auto chain = _flipVstChain.load(std::memory_order_acquire) ? _backVstChain : _vstChain.load(std::memory_order_acquire);
 	auto replacement = std::make_shared<vst::VstChain>();
 	replacement->SetRenderPolicy(vst::VstChain::RenderPolicy::AdditiveInstruments);

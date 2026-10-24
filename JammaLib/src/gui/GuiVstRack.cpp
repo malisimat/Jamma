@@ -133,6 +133,7 @@ GuiVstRack::GuiVstRack(std::shared_ptr<base::GuiElement> channels,
 	const auto command = [this](Command::Kind kind) { Command result; result.Operation = kind; result.Revision = _model.Revision; return result; };
 	_append = _MakeButton("+", "vst_empty", [command] { return command(Command::Kind::Append); });
 	_convert = _MakeButton("Additive", "", [command] { return command(Command::Kind::Convert); });
+	_mode = _MakeButton("Additive mix", "", [command] { return command(Command::Kind::ModeInfo); });
 	_recover = _MakeButton("Resume", "", [command] { return command(Command::Kind::Recover); });
 	_clearRoutes = _MakeButton("Clear MIDI", "", [command] { return command(Command::Kind::ClearInactiveRoutes); });
 	_diagnostic = _MakeButton("Rack info", "", [command] { return command(Command::Kind::Diagnostic); });
@@ -147,7 +148,7 @@ GuiVstRack::GuiVstRack(std::shared_ptr<base::GuiElement> channels,
 	_previous->Submit = [this, life = std::weak_ptr<int>(_lifetime)](Command) { if (!life.expired() && _pageOffset >= _PageSize) _pageOffset -= _PageSize; };
 	_next->Submit = [this, life = std::weak_ptr<int>(_lifetime)](Command) { if (!life.expired() && _pageOffset + _PageSize < _model.TotalSlots) _pageOffset += _PageSize; };
 	AddChild(_channels); AddChild(_scroll); AddChild(_append); AddChild(_collapse);
-	AddChild(_convert); AddChild(_recover); AddChild(_clearRoutes); AddChild(_diagnostic);
+	AddChild(_convert); AddChild(_recover); AddChild(_clearRoutes); AddChild(_diagnostic); AddChild(_mode);
 	AddChild(_previous); AddChild(_next);
 	_collapse->SetVisible(!_toggles.empty()); SetChannelsCollapsed(true);
 	Layout(_width, _faderBottom);
@@ -188,16 +189,18 @@ void GuiVstRack::Update(Model model, std::function<void(Command)> submit)
 	for (std::size_t index = 0u; index < _model.Slots.size(); ++index)
 	{
 		auto& row = _rows[index]; const auto& slot = _model.Slots[index];
-		const auto state = slot.Value.Failed ? 3u : slot.Value.Plugin ? (slot.EditorOpen ? 2u : 1u) : 0u;
+		const auto state = slot.Value.Pending ? 1u : slot.Value.Failed ? 3u : slot.Value.Plugin ? (slot.EditorOpen ? 2u : 1u) : 0u;
 		row.Eligible = slot.Value.Plugin && slot.Value.Plugin->MidiInput().Known
 			&& (slot.Value.Plugin->MidiInput().Notes || slot.Value.Plugin->MidiInput().Controllers);
+		const auto savedName = !slot.Value.Failed || slot.Value.Pending || slot.Value.Path.empty() ? std::string{} :
+			utils::EncodeUtf8(std::filesystem::path(slot.Value.Path).stem().wstring());
 		auto label = slot.Value.Pending ? "Loading..." : slot.Value.Plugin ? slot.Value.Plugin->Name() :
-			slot.Value.Path.empty() ? "Empty" : utils::EncodeUtf8(std::filesystem::path(slot.Value.Path).stem().wstring());
+			slot.Value.Failed ? "Retry " + (savedName.empty() ? "VST" : savedName) : "Add VST";
 		if (!_toggles.empty() && slot.Value.Plugin && !slot.Value.Plugin->MidiInput().Known) label = "MIDI? " + label;
 		for (auto i = 0u; i < row.Buttons.size(); ++i)
 		{
 			row.Buttons[i]->SetVisible(i == state);
-			row.Buttons[i]->SetEnabled(_model.Editable);
+			row.Buttons[i]->SetEnabled(_model.Editable && !slot.Value.Pending);
 			row.Buttons[i]->SetText(label.empty() ? "VST" : label);
 		}
 		const bool linked = std::any_of(_model.ChannelRoutes.begin(), _model.ChannelRoutes.end(), [&](const auto& route) {
@@ -206,7 +209,8 @@ void GuiVstRack::Update(Model model, std::function<void(Command)> submit)
 		row.Socket->SetVisible(!_model.Inactive && !_toggles.empty() && (row.Eligible || linked));
 	}
 	_append->SetEnabled(_model.Editable && !_model.Inactive && _model.TotalSlots < 32u);
-	_convert->SetVisible(_model.Legacy && !_model.Inactive); _convert->SetEnabled(_model.Editable);
+	_mode->SetText(_model.Legacy ? "Serial chain" : "Additive mix");
+	_convert->SetVisible(_model.Legacy && !_model.Inactive); _convert->SetEnabled(_model.Editable && _model.ConversionAvailable);
 	_recover->SetVisible(_model.Inactive); _recover->SetEnabled(_model.Editable && _model.TotalSlots <= 32u);
 	_clearRoutes->SetVisible(_model.Inactive); _clearRoutes->SetEnabled(_model.Editable);
 	_diagnostic->SetVisible(!_model.Diagnostic.empty() || !_feedback.empty());
@@ -282,7 +286,7 @@ void GuiVstRack::_LayoutRows()
 	const auto rowsHeight = static_cast<unsigned int>(_rows.size()) * _RowPitch + 4u;
 	const int top = _faderBottom - 4;
 	unsigned int footerRows = _previous->IsVisible() ? 1u : 0u;
-	for (const auto& control : {_append, _convert, _recover, _clearRoutes, _diagnostic})
+	for (const auto& control : {_append, _convert, _recover, _clearRoutes, _diagnostic, _mode})
 		if (control->IsVisible()) ++footerRows;
 	const int available = std::clamp(GlobalPosition().Y + top - GuiStyle::StatusBarHeight - static_cast<int>(footerRows * _RowPitch) - 4, 40, 280);
 	const auto height = std::min(rowsHeight, static_cast<unsigned int>(available));
@@ -299,7 +303,7 @@ void GuiVstRack::_LayoutRows()
 	}
 	_scroll->SetSize({_width, scrollHeight}); // Refresh content metrics without resetting scroll.
 	int bottom = top - static_cast<int>(scrollHeight) - static_cast<int>(_RowPitch);
-	for (const auto& control : {_append, _convert, _recover, _clearRoutes, _diagnostic})
+	for (const auto& control : {_append, _convert, _recover, _clearRoutes, _diagnostic, _mode})
 	{
 		control->SetPosition({0, bottom}); control->SetSize({_width, _RowHeight});
 		if (control->IsVisible()) bottom -= static_cast<int>(_RowPitch);
