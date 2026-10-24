@@ -43,8 +43,8 @@ namespace vst
 	public:
 		// Pre-load the DLL and locate the plugin entry-point on the UI thread
 		// before Load() runs on the job thread.
-		// For VST2 this is lighter-weight than VST3: we only LoadLibraryW and
-		// resolve the entry-point function.  No plugin code is called here.
+		// Instantiate and open the effect here so plugin UI setup stays on
+		// the editor thread; retain unsupported audio shapes in bypass.
 		// Returns true on success; false leaves the object in an unloaded state.
 		bool PreInit(const std::wstring& path) override;
 
@@ -115,7 +115,7 @@ namespace vst
 
 		bool IsBypassed() const noexcept override
 		{
-			return _isBypassed.load(std::memory_order_relaxed);
+			return !_audioProcessingSupported || _isBypassed.load(std::memory_order_relaxed);
 		}
 
 		// AEffect::initialDelay is only meaningful once the plugin is loaded;
@@ -125,7 +125,7 @@ namespace vst
 		int GetLatencySamples() const noexcept override
 		{
 #ifdef JAMMA_VST2_ENABLED
-			return (_isLoaded && _effect) ? static_cast<int>(_effect->initialDelay) : 0;
+			return (_isLoaded && _effect && _audioProcessingSupported) ? static_cast<int>(_effect->initialDelay) : 0;
 #else
 			return 0;
 #endif
@@ -156,9 +156,13 @@ namespace vst
 		}
 
 	private:
+		friend struct Vst2PluginTestAccess;
 		// Loader writes before publication; readers only inspect cached values.
 		RenderRole _role = RenderRole::Unknown;
 		MidiInputCapabilities _midiInput{};
+		// PreInit/UI writer before publication; UI/job/audio readers thereafter.
+		// Immutable while published, reset only after audio retirement in Unload.
+		bool _audioProcessingSupported = true;
 #ifdef JAMMA_VST2_ENABLED
 			static constexpr size_t MaxMidiEventsPerBlock = 256u;
 			struct MidiEventBlock
@@ -180,6 +184,7 @@ namespace vst
 		// input correctly. Called from PreInit() (UI thread); Load() only calls
 		// it as a fallback when PreInit() was skipped.
 		bool _InstantiateEffect(const std::wstring& path);
+		bool _OpenEffect(const std::wstring& path);
 
 		AEffect* _effect;
 			ReservedMidiEvents<VstMidiEvent, MaxMidiEventsPerBlock> _midiEvents;
