@@ -354,6 +354,46 @@ TEST(StationMidiInstrument, LiveChannelRoutesAreManyToManyAndMissingExplicitTarg
 	EXPECT_FALSE(std::any_of(b->Events.begin(), b->Events.end(), [](const auto& event) { return event.IsNoteOn() && event.Channel() == 3u; }));
 }
 
+TEST(StationMidiInstrument, DisablingMidiChannelClearsRoutesAndReenableBroadcasts)
+{
+	auto station = MakeStation("channel-toggle-routes");
+	auto a = AddPlugin(station, L"toggle-a.dll");
+	auto b = AddPlugin(station, L"toggle-b.dll");
+	station->SetAllowedMidiChannels({1});
+	ASSERT_TRUE(station->SetLiveVstChannelRoute(0, {true, {a->StateId()}}, station->RackRevision()));
+	const auto staleRevision = station->RackRevision();
+	const auto staleRoutes = station->LiveVstChannelRoutes();
+
+	station->SetAllowedMidiChannels({});
+	EXPECT_FALSE(station->AcceptsLiveMidiChannel(0u));
+	EXPECT_FALSE(station->LiveVstChannelRoutes()[0].Explicit);
+	EXPECT_TRUE(station->LiveVstChannelRoutes()[0].PluginIds.empty());
+	EXPECT_EQ(staleRevision + 1u, station->RackRevision());
+	EXPECT_FALSE(station->SetLiveVstChannelRoutes(staleRoutes, staleRevision));
+
+	station->SetAllowedMidiChannels({1});
+	station->TryEnqueueSyntheticLiveMidi(MidiEvent::MakeNoteOn(0, 0, 60, 100));
+	RenderStationBlock(station, 0);
+	EXPECT_EQ(1u, a->Events.size());
+	EXPECT_EQ(1u, b->Events.size());
+}
+
+TEST(StationMidiInstrument, DisablingUnroutedChannelRejectsPendingCableEdit)
+{
+	auto station = MakeStation("pending-channel-cable");
+	auto plugin = AddPlugin(station, L"pending-cable.dll");
+	station->SetAllowedMidiChannels({1});
+	auto pendingRoutes = station->LiveVstChannelRoutes();
+	pendingRoutes[0] = {true, {plugin->StateId()}};
+	const auto staleRevision = station->RackRevision();
+
+	station->SetAllowedMidiChannels({});
+	EXPECT_EQ(staleRevision + 1u, station->RackRevision());
+	EXPECT_FALSE(station->SetLiveVstChannelRoutes(std::move(pendingRoutes), staleRevision));
+	EXPECT_FALSE(station->AcceptsLiveMidiChannel(0u));
+	EXPECT_FALSE(station->LiveVstChannelRoutes()[0].Explicit);
+}
+
 TEST(StationMidiInstrument, RackRerouteAndRemovalRetryOwnedNoteAndSustainReleases)
 {
 	auto station = MakeStation("rack-release");

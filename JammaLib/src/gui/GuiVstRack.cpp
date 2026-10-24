@@ -335,16 +335,6 @@ bool GuiVstRack::ChannelShownActive(unsigned int channel) const noexcept
 	return _allowedChannels[channel];
 }
 
-void GuiVstRack::ClearChannelRoutes(unsigned int channel)
-{
-	if (channel >= _model.ChannelRoutes.size() || !_model.Editable || _model.Inactive) return;
-	if (!_model.ChannelRoutes[channel].Explicit && _model.ChannelRoutes[channel].PluginIds.empty()) return;
-	Command command; command.Operation = Command::Kind::Routes; command.Revision = _model.Revision;
-	command.ChannelRoutes = _model.ChannelRoutes;
-	command.ChannelRoutes[channel] = {};
-	if (_submit) _submit(std::move(command));
-}
-
 void GuiVstRack::_RefreshChannelToggles()
 {
 	for (auto channel = 0u; channel < _toggles.size() && channel < 16u; ++channel)

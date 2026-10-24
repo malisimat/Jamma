@@ -280,7 +280,6 @@ ActionResult GuiRack::OnAction(GuiAction action)
 				if (membershipChanged && _rackParams.OnAllowedMidiChannelsChanged)
 					_rackParams.OnAllowedMidiChannelsChanged(_rackParams.AllowedMidiChannels);
 				if (_vstRack) _vstRack->SetAllowedMidiChannels(_rackParams.AllowedMidiChannels);
-				if (wasActive) _vstRack->ClearChannelRoutes(static_cast<unsigned int>(channel - 1));
 
 				break;
 			}

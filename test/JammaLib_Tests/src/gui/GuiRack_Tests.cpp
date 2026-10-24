@@ -172,7 +172,7 @@ TEST(GuiRack, SharedSlotViewPreservesCapturedIdentityScrollAndHiddenCableEndpoin
 	auto plain = std::make_shared<gui::GuiVstRack>(); plain->Init(); plain->Update(model, submit);
 	endpoints.clear(); cables.clear(); plain->BuildInteractionGeometry(endpoints, cables);
 	EXPECT_TRUE(endpoints.empty()); EXPECT_TRUE(cables.empty());
-	// A disabled cable stays off. Turning its channel on, then off clears every route.
+	// The station owns route clearing when a channel is disabled.
 	auto receiver = std::make_shared<MockedRackReceiver>(); rack->SetReceiver(receiver);
 	GuiAction cabledClick; cabledClick.ElementType = GuiAction::ACTIONELEMENT_TOGGLE;
 	cabledClick.Index = GuiRack::MidiChannelToggleBaseIndex + 2u;
@@ -183,19 +183,17 @@ TEST(GuiRack, SharedSlotViewPreservesCapturedIdentityScrollAndHiddenCableEndpoin
 	EXPECT_EQ(1, filterChanges);
 	EXPECT_TRUE(view->ChannelShownActive(2u));
 	rack->OnAction(cabledClick);
-	ASSERT_EQ(2u, commands.size());
-	EXPECT_TRUE(commands[1].ChannelRoutes[2].PluginIds.empty());
-	EXPECT_FALSE(commands[1].ChannelRoutes[2].Explicit);
+	EXPECT_EQ(1u, commands.size());
 	EXPECT_EQ(2, filterChanges);
 	EXPECT_TRUE(lastAllowedChannels.empty());
-	model.ChannelRoutes = commands[1].ChannelRoutes;
+	model.ChannelRoutes[2] = {};
 	model.Revision = 6u; view->Update(model, submit);
 	EXPECT_FALSE(view->ChannelShownActive(2u));
 	rack->OnAction(cabledClick);
 	EXPECT_EQ((std::vector<int>{3}), lastAllowedChannels);
 	EXPECT_EQ(3, filterChanges);
 	EXPECT_TRUE(view->ChannelShownActive(2u));
-	EXPECT_EQ(2u, commands.size());
+	EXPECT_EQ(1u, commands.size());
 	plain->DetachGuiOwnershipForRetirement(); rack->DetachGuiOwnershipForRetirement();
 }
 

@@ -3720,6 +3720,25 @@ void Station::SetAllowedMidiChannels(const std::vector<int>& channels)
 
 	_allowedMidiChannels = std::move(filtered);
 	_allowedMidiChannelMask.store(mask, std::memory_order_release);
+	bool routesCleared = false;
+	for (std::uint8_t channel = 0; channel < 16; ++channel)
+	{
+		if ((removedMask & (1u << channel)) == 0u) continue;
+		auto& route = _liveVstChannelRoutes[channel];
+		if (!route.Explicit && route.PluginIds.empty()) continue;
+		route = {}; // Re-enabling a channel starts in Broadcast, including after a stale rack edit.
+		routesCleared = true;
+	}
+	if (removedMask != 0u)
+	{
+		// A pending cable edit must not re-enable a channel after this toggle.
+		++_rackRevision;
+		if (routesCleared)
+		{
+			_PublishAudioState();
+			_changesMade = true;
+		}
+	}
 
 	if (_guiRack)
 		_guiRack->SetAllowedMidiChannels(_allowedMidiChannels, true);
