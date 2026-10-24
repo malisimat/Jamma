@@ -112,8 +112,12 @@ void VstRackControls::Pump()
 			if (!_AvailableLocked(target)) return true;
 			const auto completed = _SlotLocked(target);
 			if (completed.Pending) return false;
-			if (completed.Failed) failure = L"Could not load VST:\n" + completed.Path +
-				L"\n\nCheck that the file is an installed 64-bit VST2 or VST3 plugin compatible with this item's channels.\nClick the red VST button to choose a replacement.";
+			const auto rolledBack = !target.Take && !target.Loop && !target.PluginId.empty()
+				? target.Station->TakeFailedInteractiveVstLoad(target.PluginId) : std::nullopt;
+			if (rolledBack || completed.Failed)
+				failure = L"Could not load VST:\n" + (rolledBack ? *rolledBack : completed.Path) +
+					L"\n\nCheck that the file is an installed 64-bit VST2 or VST3 plugin compatible with this item's channels." +
+					(rolledBack ? L"\nThe rack has been restored." : L"\nClick the red VST button to choose a replacement.");
 			return true;
 		});
 	}
@@ -313,7 +317,8 @@ void VstRackControls::_PumpStation(const Intent& intent)
 	{
 		std::scoped_lock lock(_host.Mutex);
 		if (!valid()) { report("Rack changed while choosing a plugin; retry."); return; }
-		changed = station->LoadManagedVstSlot(path, command.Operation == Kind::Slot ? command.Identity : std::string{});
+		changed = station->LoadManagedVstSlot(path, command.Operation == Kind::Slot ? command.Identity : std::string{},
+			command.Operation == Kind::Append);
 		if (!changed) failure = station->RackDiagnostic();
 		else
 		{

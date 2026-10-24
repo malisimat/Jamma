@@ -867,8 +867,18 @@ TEST_F(HudCableInteractionTests, VisiblePedalLearnControlOpensDialogWithoutSendi
     const auto card = TriggerScroll()->Content()->TryGetChild(0u);
     const auto learn = card->TryGetChild(7u); ASSERT_TRUE(learn);
     const auto pedal = card->TryGetChild(0u); ASSERT_TRUE(pedal);
-    Hud->SetAltLearnHeld(true); ASSERT_TRUE(pedal->TryGetChild(0u)->IsVisible());
-    Hud->SetAltLearnHeld(false); EXPECT_FALSE(pedal->TryGetChild(0u)->IsVisible());
+    Hud->SetAltLearnHeld(true);
+    for (const auto index : {0u,1u})
+    {
+        const auto triggerPedal = card->TryGetChild(static_cast<unsigned char>(index)); ASSERT_TRUE(triggerPedal);
+        EXPECT_FALSE(triggerPedal->TryGetChild(0u)->IsVisible());
+        EXPECT_TRUE(triggerPedal->TryGetChild(1u)->IsVisible());
+        EXPECT_TRUE(triggerPedal->TryGetChild(2u)->IsVisible());
+    }
+    Hud->SetAltLearnHeld(false);
+    EXPECT_TRUE(pedal->TryGetChild(0u)->IsVisible());
+    EXPECT_FALSE(pedal->TryGetChild(1u)->IsVisible());
+    EXPECT_FALSE(pedal->TryGetChild(2u)->IsVisible());
     actions::TouchAction action; action.Touch = actions::TouchAction::TOUCH_MOUSE; action.Index = 0u;
     action.Position = learn->GlobalPosition() + utils::Position2d{2,2}; action.State = actions::TouchAction::TOUCH_DOWN;
     const auto down = Hud->OnAction(action);

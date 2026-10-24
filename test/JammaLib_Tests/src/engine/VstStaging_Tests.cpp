@@ -1440,6 +1440,36 @@ TEST_F(VstRackControlsTest, FailedLoadReportsErrorAndRemainsReplaceable)
  EXPECT_TRUE(Take->GetVstRackSlot().Pending);
 }
 
+TEST_F(VstRackControlsTest, FailedStationAppendShowsErrorWithoutRedSlotOrRackInfo)
+{
+	auto existing = std::make_shared<StateGatePlugin>();
+	JobAction installed; installed.JobActionType = JobAction::JOB_LOADVST;
+	installed.VstPath = L"existing.vst3"; installed.PreInitPlugin = existing;
+	Station->OnAction(installed); Station->CommitChanges();
+	Pick = [] { return std::wstring{L"invalid-station.vst3"}; };
+	Update();
+	auto view = Station->GetGuiRack()->VstRack(); ASSERT_TRUE(view);
+	auto append = view->AppendButton(); ASSERT_TRUE(append);
+	actions::TouchAction down; down.Touch = actions::TouchAction::TOUCH_MOUSE; down.Index = 0;
+	down.State = actions::TouchAction::TOUCH_DOWN; down.Position = {10,10};
+	append->OnAction(down);
+	auto up = down; up.State = actions::TouchAction::TOUCH_UP; append->OnAction(up);
+	Controls->Pump();
+	const auto jobs = Station->CommitChanges();
+	const auto load = std::find_if(jobs.begin(),jobs.end(),[](const auto& job) { return job.JobActionType == JobAction::JOB_LOADVST; });
+	ASSERT_NE(load,jobs.end());
+	auto failed = *load; failed.PreInitPlugin = std::make_shared<RackControlsFailedPlugin>();
+	Station->OnAction(failed); Station->CommitChanges();
+	Controls->Pump(); Update();
+	ASSERT_EQ(1u,Errors.size());
+	EXPECT_NE(std::wstring::npos,Errors[0].find(L"invalid-station.vst3"));
+	EXPECT_EQ(1u,Station->RackSlotCount());
+	EXPECT_EQ(existing,Station->GetVstRackSlots()[0].Plugin);
+	EXPECT_TRUE(view->SlotButton(0u));
+	EXPECT_FALSE(view->SlotButton(1u));
+	EXPECT_FALSE(view->TryGetChild(6u)->IsVisible()); // No stale Rack info footer.
+}
+
 TEST_F(VstRackControlsTest, DISABLED_StationRemovalClosesEditorsAfterFailedSlotsAcrossHierarchy)
 {
  const auto install = [](const auto& owner) {

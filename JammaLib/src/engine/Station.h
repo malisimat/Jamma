@@ -301,7 +301,8 @@ namespace engine
 		bool ClearInactiveRackRoutes(std::uint64_t revision);
 		bool SetLiveVstChannelRoutes(std::array<midi::LiveVstChannelRoute, 16> routes, std::uint64_t revision);
 		void RefreshRackLatency(); // Existing non-RT latency pump, serialized by Scene.
-		bool LoadManagedVstSlot(std::wstring path, const std::string& retryIdentity = {});
+		bool LoadManagedVstSlot(std::wstring path, const std::string& retryIdentity = {}, bool discardOnFailure = false);
+		std::optional<std::wstring> TakeFailedInteractiveVstLoad(const std::string& identity);
 		bool SetLiveVstChannelRoute(unsigned int channel, midi::LiveVstChannelRoute route, std::uint64_t revision);
 		const std::array<midi::LiveVstChannelRoute, 16>& LiveVstChannelRoutes() const noexcept { return _liveVstChannelRoutes; }
 		std::uint64_t RackRevision() const noexcept { return _rackRevision; }
@@ -684,10 +685,12 @@ namespace engine
 		std::atomic<vst::VstChain::RenderPolicy> _rackRenderPolicy{vst::VstChain::RenderPolicy::AdditiveInstruments};
 		std::atomic<std::uint64_t> _rackRevision{1u}; // UI/job metadata publication; audio never reads.
 		std::vector<std::string> _pendingRackIds; // _vstPathsMutex; completion clears by identity.
+		std::vector<std::pair<std::string, std::wstring>> _failedInteractiveVstLoads; // Bounded UI notices, _vstPathsMutex.
 		bool _rackInactive = false; // Reconstruction/structural owner; raw saved entries remain exportable.
 		bool _rackLatencySuspended = false; // Structural owner; callback sees prepared empty delivery.
 		std::string _rackDiagnostic; // Structural owner/UI under existing Scene lock.
 		bool _RackLatencyFeasible(const vst::VstChain& chain) const noexcept;
+		void _CompactMidiVstRoutesAfterRemoval(std::size_t index); // Caller holds _vstPathsMutex.
 		// UI stages requests, job completes them. Audio never reads this counter.
 		std::atomic<unsigned int> _vstJobsPending{ 0u };
 		midi::MidiQueue<1024> _immediateLiveMidiIngress;

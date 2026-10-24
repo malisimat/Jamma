@@ -176,6 +176,13 @@ namespace gui
 		std::weak_ptr<engine::Trigger> _trigger;
 	};
 
+	class GuiHudPedalArt : public base::GuiElement
+	{
+	public:
+		explicit GuiHudPedalArt(base::GuiElementParams params) : GuiElement(params) {}
+		void SetVisualState(GuiElementState state) { _state = state; }
+	};
+
 	class GuiHudTriggerPedal : public base::GuiElement
 	{
 	public:
@@ -185,12 +192,21 @@ namespace gui
 			std::uint64_t rigRevision,
 			std::function<bool(std::uint64_t)> acceptInput,
 			std::function<void(bool)> learn = {}) :
-			GuiElement(params),
+			GuiElement(_ControlParams(params)),
 			_trigger(std::move(trigger)),
 			_isActivate(isActivate),
 			_rigRevision(rigRevision),
 			_acceptInput(std::move(acceptInput)), _learn(std::move(learn))
 		{
+			params.Position = {0,0}; params.GuiPassThrough = true;
+			_normalArt = std::make_shared<GuiHudPedalArt>(params);
+			AddChild(_normalArt);
+			const auto stem = _isActivate ? "trigger_activate_learn" : "trigger_ditch_learn";
+			params.Texture = stem; params.OverTexture = std::string(stem) + "_over";
+			params.DownTexture = std::string(stem) + "_down";
+			params.OutTexture = std::string(stem) + "_down_out";
+			_learnArt = std::make_shared<GuiHudPedalArt>(params);
+			_learnArt->SetVisible(false); AddChild(_learnArt);
 			auto overlay = GuiPopupParams::Header("LEARN", params.Size.Width, 20u);
 			overlay.Position = {0, static_cast<int>(params.Size.Height / 2u) - 10};
 			overlay.CenterHorizontally = true;
@@ -198,7 +214,10 @@ namespace gui
 			_altLabel->SetVisible(false);
 			AddChild(_altLabel);
 		}
-		void SetAltOverlay(bool visible) { _altLabel->SetVisible(visible); }
+		void SetAltOverlay(bool visible)
+		{
+			_normalArt->SetVisible(!visible); _learnArt->SetVisible(visible); _altLabel->SetVisible(visible);
+		}
 
 		virtual void Draw(base::DrawContext& ctx) override
 		{
@@ -206,6 +225,7 @@ namespace gui
 			const bool inputDown = trigger && (_isActivate ? trigger->IsActivateInputDown() : trigger->IsDitchInputDown());
 			const auto pointerState = _state;
 			_state = inputDown || pointerState == STATE_DOWN ? STATE_DOWN : pointerState;
+			(_learnArt->IsVisible() ? _learnArt : _normalArt)->SetVisualState(_state);
 			GuiElement::Draw(ctx);
 			_state = pointerState;
 		}
@@ -244,6 +264,11 @@ namespace gui
 
 		void ClearPointerState() override { _learnGesture = false; GuiElement::ClearPointerState(); }
 	private:
+		static base::GuiElementParams _ControlParams(base::GuiElementParams params)
+		{
+			params.Texture.clear(); params.OverTexture.clear(); params.DownTexture.clear(); params.OutTexture.clear();
+			return params;
+		}
 		actions::ActionResult _Dispatch(const actions::TouchAction& action)
 		{
 			if (!_acceptInput || !_acceptInput(_rigRevision))
@@ -266,6 +291,7 @@ namespace gui
 		std::uint64_t _rigRevision;
 		std::function<bool(std::uint64_t)> _acceptInput;
 		std::function<void(bool)> _learn;
+		std::shared_ptr<GuiHudPedalArt> _normalArt, _learnArt;
 		std::shared_ptr<GuiLabel> _altLabel;
 		bool _learnGesture = false;
 		actions::TouchAction::TouchType _learnSource = actions::TouchAction::TOUCH_MOUSE;
@@ -658,7 +684,7 @@ void GuiHud::_BuildTriggerRail()
 			learnParams.Position = pedal->Position() + utils::Position2d{0, static_cast<int>(pedal->GetSize().Height) - 18};
 			learnParams.Size = {pedal->GetSize().Width, 18u}; learnParams.MinSize = learnParams.Size;
 			learnParams.Texture.clear(); learnParams.OverTexture.clear(); learnParams.DownTexture.clear();
-			learnParams.TextureShader = "colour"; learnParams.TextureOpacity = 0.78f;
+			learnParams.TextureShader = "colour"; learnParams.TextureOpacity = 0.70f;
 			learnParams.TintColor = {0.27f, 0.29f, 0.31f};
 			learnParams.Text = "Learn"; learnParams.TextFontSize = graphics::FontOptions::FONT_TINY;
 			learnParams.TextPadding = 2u;

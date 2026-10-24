@@ -84,10 +84,18 @@
 1 trigger_activate_over ninepatch 13 21
 1 trigger_activate_down ninepatch 13 21
 1 trigger_activate_down_out ninepatch 13 21
+1 trigger_activate_learn ninepatch 13 21
+1 trigger_activate_learn_over ninepatch 13 21
+1 trigger_activate_learn_down ninepatch 13 21
+1 trigger_activate_learn_down_out ninepatch 13 21
 1 trigger_ditch ninepatch 13 21
 1 trigger_ditch_over ninepatch 13 21
 1 trigger_ditch_down ninepatch 13 21
 1 trigger_ditch_down_out ninepatch 13 21
+1 trigger_ditch_learn ninepatch 13 21
+1 trigger_ditch_learn_over ninepatch 13 21
+1 trigger_ditch_learn_down ninepatch 13 21
+1 trigger_ditch_learn_down_out ninepatch 13 21
 1 trigger_back ninepatch 35 23
 1 trigger_add
 1 trigger_add_over

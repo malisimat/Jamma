@@ -3488,6 +3488,7 @@ void Station::ForceUnloadAllVstPlugins()
 		std::lock_guard<std::mutex> lock(_vstPathsMutex);
 		_vstPluginPaths.clear();
 		_vstSavedEntries.clear();
+		_failedInteractiveVstLoads.clear();
 		_vstJobsPending.store(0u, std::memory_order_release);
 	}
 	for (auto& take : _loopTakes)
@@ -4551,7 +4552,7 @@ std::vector<vst::VstRackSlot> Station::GetVstRackSlots(std::size_t offset, std::
 	return result;
 }
 
-bool Station::LoadManagedVstSlot(std::wstring path, const std::string& retryIdentity)
+bool Station::LoadManagedVstSlot(std::wstring path, const std::string& retryIdentity, bool discardOnFailure)
 {
 	if (path.empty() || _rackInactive) return false;
 	std::string identity = retryIdentity;
@@ -4590,10 +4591,22 @@ bool Station::LoadManagedVstSlot(std::wstring path, const std::string& retryIden
 	job.VstIdentity = identity;
 	job.VstRequestId = utils::GetGuid();
 	job.VstManaged = true;
+	job.VstDiscardOnFailure = discardOnFailure && retryIdentity.empty();
 	_pendingVstLoads.push_back(std::move(job));
 	_vstJobsPending.fetch_add(1u, std::memory_order_release);
 	_changesMade = true;
 	return true;
+}
+
+std::optional<std::wstring> Station::TakeFailedInteractiveVstLoad(const std::string& identity)
+{
+	std::lock_guard<std::mutex> lock(_vstPathsMutex);
+	const auto found = std::find_if(_failedInteractiveVstLoads.begin(), _failedInteractiveVstLoads.end(),
+		[&](const auto& item) { return item.first == identity; });
+	if (found == _failedInteractiveVstLoads.end()) return std::nullopt;
+	auto path = std::move(found->second);
+	_failedInteractiveVstLoads.erase(found);
+	return path;
 }
 
 bool Station::UnloadManagedVstPlugin(const std::string& identity)
@@ -4665,6 +4678,23 @@ bool Station::_RackLatencyFeasible(const vst::VstChain& chain) const noexcept
 	for (const auto& take : GetLoopTakes())
 		if (take && static_cast<std::uint64_t>(stationDelay) + take->RecordedPlaybackLatencySamps() > 262144u) return false;
 	return true;
+}
+
+void Station::_CompactMidiVstRoutesAfterRemoval(std::size_t removedIndex)
+{
+	if (const auto* current = _midiVstRoutes.load(std::memory_order_acquire))
+	{
+		auto routes = std::make_unique<MidiVstRoutingSnapshot>(*current);
+		auto compact = [removedIndex](std::size_t& index) {
+			if (index == removedIndex) index = MidiVstRoutingSnapshot::MissingPlugin;
+			else if (index != MidiVstRoutingSnapshot::NoPlugin && index != MidiVstRoutingSnapshot::MissingPlugin && index > removedIndex) --index;
+		};
+		compact(routes->LivePlugin);
+		for (auto& index : routes->PluginByMidiOutput) compact(index);
+		const auto* published = routes.get();
+		_retainedMidiVstRoutes.push_back(std::move(routes));
+		_midiVstRoutes.store(published, std::memory_order_release);
+	}
 }
 
 void Station::RefreshRackLatency()
@@ -5049,6 +5079,18 @@ ActionResult Station::OnAction(JobAction action)
 				if (!loaded) saved.State = found->State;
 				*found = std::move(saved);
 				std::erase(_pendingRackIds, action.VstIdentity);
+				if (!loaded && action.VstDiscardOnFailure)
+				{
+					// Fresh picker appends are provisional. Saved/imported slots and retries
+					// keep their opaque state; a failed new slot restores the prior rack.
+					replacement->RemovePlugin(index);
+					_vstPluginPaths.erase(_vstPluginPaths.begin() + static_cast<std::ptrdiff_t>(index));
+					_vstSavedEntries.erase(_vstSavedEntries.begin() + static_cast<std::ptrdiff_t>(index));
+					_pendingDeletedVstRouteIds.push_back(action.VstIdentity);
+					_CompactMidiVstRoutesAfterRemoval(index);
+					if (_failedInteractiveVstLoads.size() == 32u) _failedInteractiveVstLoads.erase(_failedInteractiveVstLoads.begin());
+					_failedInteractiveVstLoads.emplace_back(action.VstIdentity, action.VstPath);
+				}
 			}
 			else
 			{
@@ -5062,7 +5104,8 @@ ActionResult Station::OnAction(JobAction action)
 					replacement->ReplaceSlot(replacement->NumPlugins() - 1u, nullptr);
 				}
 			}
-			if (!loaded) _rackDiagnostic = "Plugin could not be activated: check supported role, layout and latency (262144 samples maximum). Saved state is retained.";
+			if (!loaded && !action.VstDiscardOnFailure)
+				_rackDiagnostic = "Plugin could not be activated: check supported role, layout and latency (262144 samples maximum). Saved state is retained.";
 			_backVstChain = std::move(replacement);
 			++_rackRevision;
 			_flipVstChain.store(true, std::memory_order_release);
@@ -5096,19 +5139,7 @@ ActionResult Station::OnAction(JobAction action)
 				_vstPluginPaths.erase(_vstPluginPaths.begin() + static_cast<std::ptrdiff_t>(removeIndex));
 				_vstSavedEntries.erase(_vstSavedEntries.begin() + static_cast<std::ptrdiff_t>(removeIndex));
 				_pendingDeletedVstRouteIds.push_back(action.VstIdentity);
-				if (const auto* current = _midiVstRoutes.load(std::memory_order_acquire))
-				{
-					auto routes = std::make_unique<MidiVstRoutingSnapshot>(*current);
-					auto compact = [removeIndex](std::size_t& index) {
-						if (index == removeIndex) index = MidiVstRoutingSnapshot::MissingPlugin;
-						else if (index != MidiVstRoutingSnapshot::NoPlugin && index != MidiVstRoutingSnapshot::MissingPlugin && index > removeIndex) --index;
-					};
-					compact(routes->LivePlugin);
-					for (auto& index : routes->PluginByMidiOutput) compact(index);
-					const auto* published = routes.get();
-					_retainedMidiVstRoutes.push_back(std::move(routes));
-					_midiVstRoutes.store(published, std::memory_order_release);
-				}
+				_CompactMidiVstRoutesAfterRemoval(removeIndex);
 				++_rackRevision;
 				_backVstChain = std::move(replacement);
 				_flipVstChain.store(true, std::memory_order_release);
