@@ -195,14 +195,7 @@ void GuiVstRack::Update(Model model, std::function<void(Command)> submit)
 			utils::EncodeUtf8(std::filesystem::path(slot.Value.Path).stem().wstring());
 		auto label = slot.Value.Pending ? "Loading..." : slot.Value.Plugin ? slot.Value.Plugin->Name() :
 			slot.Value.Failed ? "Retry " + (savedName.empty() ? "VST" : savedName) : "Add VST";
-		if (slot.Value.RoleWasUnknown)
-		{
-			label = slot.Value.RoleOverride == vst::RenderRole::Effect ? "Effect: " + label :
-				slot.Value.RoleOverride == vst::RenderRole::Instrument ? "Instrument: " + label :
-					"Choose role: " + label;
-		}
-		else if (!_toggles.empty() && slot.Value.Plugin && !slot.Value.Plugin->MidiInput().Known)
-			label = "MIDI? " + label;
+		if (!_toggles.empty() && slot.Value.Plugin && !slot.Value.Plugin->MidiInput().Known) label = "MIDI? " + label;
 		for (auto i = 0u; i < row.Buttons.size(); ++i)
 		{
 			row.Buttons[i]->SetVisible(i == state);

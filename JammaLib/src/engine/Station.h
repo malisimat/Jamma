@@ -288,8 +288,7 @@ namespace engine
 		// Startup-only synchronous counterpart used before Scene::InitAudio().
 		bool LoadVstPluginSynchronously(const std::wstring& path,
 			const std::vector<std::uint8_t>& initialState = {},
-			bool bypass = false, const std::string& stateId = {},
-			const std::optional<std::string>& roleOverride = std::nullopt);
+			bool bypass = false, const std::string& stateId = {});
 		void UnloadVstPlugin(size_t index);
 		vst::VstRackSlot GetVstRackSlot() const;
 		static constexpr std::size_t MaxRackPlugins = 32u;
@@ -301,10 +300,8 @@ namespace engine
 		bool RemoveInactiveRackSlot(std::size_t ordinal, std::uint64_t revision);
 		bool ClearInactiveRackRoutes(std::uint64_t revision);
 		bool SetLiveVstChannelRoutes(std::array<midi::LiveVstChannelRoute, 16> routes, std::uint64_t revision);
-		bool SetVstRackSlotRole(const std::string& identity, std::optional<vst::RenderRole> role, std::uint64_t revision);
 		void RefreshRackLatency(); // Existing non-RT latency pump, serialized by Scene.
-		bool LoadManagedVstSlot(std::wstring path, const std::string& retryIdentity = {}, bool discardOnFailure = false,
-			bool reloadUnknown = false);
+		bool LoadManagedVstSlot(std::wstring path, const std::string& retryIdentity = {}, bool discardOnFailure = false);
 		std::optional<std::wstring> TakeFailedInteractiveVstLoad(const std::string& identity);
 		bool SetLiveVstChannelRoute(unsigned int channel, midi::LiveVstChannelRoute route, std::uint64_t revision);
 		const std::array<midi::LiveVstChannelRoute, 16>& LiveVstChannelRoutes() const noexcept { return _liveVstChannelRoutes; }

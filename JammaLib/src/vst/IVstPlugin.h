@@ -66,7 +66,7 @@ namespace vst
 		// UI-thread only. A failed bounded acquisition leaves output/state untouched;
 		// the UI pump retries later. Blob calls run while all SDK entry guards are
 		// excluded. Editors and blob work share the same UI owner. No audio wait.
-		bool TryCaptureLiveState(std::vector<std::uint8_t>& output, bool allowEmpty = false) const
+		bool TryCaptureLiveState(std::vector<std::uint8_t>& output) const
 		{
 			if (_blobSdkActive.load(std::memory_order_acquire)) return false;
 			std::uint32_t expected = 0;
@@ -74,7 +74,7 @@ namespace vst
 			ExclusiveRelease release{_stateAccess};
 			auto blob = GetState();
 			_stateGeneration.fetch_add(1, std::memory_order_release);
-			if (blob.empty() && !allowEmpty) return false;
+			if (blob.empty()) return false;
 			output = std::move(blob);
 			return true;
 		}
@@ -287,8 +287,6 @@ namespace vst
 		virtual int GetLatencySamples() const noexcept { return 0; }
 		// Cached during adapter discovery, immutable while the instance is published.
 		virtual RenderRole Role() const noexcept { return RenderRole::Unknown; }
-		virtual RenderRole DetectedRole() const noexcept { return Role(); }
-		virtual void SetRoleOverride(RenderRole) noexcept {}
 		virtual MidiInputCapabilities MidiInput() const noexcept { return {}; }
 		// Cached hosted layout established during Load; no SDK discovery.
 		virtual unsigned int HostedChannelCount() const noexcept { return 0u; }

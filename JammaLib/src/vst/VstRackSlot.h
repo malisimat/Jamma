@@ -8,8 +8,6 @@ namespace vst
 	{
 		bool Pending = false;
 		bool Failed = false;
-		bool RoleWasUnknown = false;
-		std::optional<RenderRole> RoleOverride;
 		std::wstring Path;
 		std::string Identity;
 		std::shared_ptr<IVstPlugin> Plugin;

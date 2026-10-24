@@ -651,7 +651,6 @@ bool JamFile::ToStream(JamFile jam, std::stringstream& ss)
 				+ "," + kvStr("rawIdBase64", utils::Base64Encode(bytes))
 				+ "," + kvBool("bypass", entry.Bypass) + "," + kvStr("state", entry.State);
 		}
-		if (entry.RoleOverride) out += "," + kvStr("role", *entry.RoleOverride);
 		out += "}";
 		return out;
 	};
@@ -982,14 +981,6 @@ std::optional<JamFile::VstEntry> JamFile::VstEntry::FromJson(Json::JsonPart json
 	{
 		if (json.KeyValues["state"].index() == 4)
 			entry.State = std::get<std::string>(json.KeyValues["state"]);
-	}
-	iter = json.KeyValues.find("role");
-	if (iter != json.KeyValues.end())
-	{
-		if (iter->second.index() != 4) return std::nullopt;
-		const auto& role = std::get<std::string>(iter->second);
-		if (role != "effect" && role != "instrument") return std::nullopt;
-		entry.RoleOverride = role;
 	}
 
 	return entry;

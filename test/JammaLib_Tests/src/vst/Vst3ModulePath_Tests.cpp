@@ -10,22 +10,18 @@ namespace vst
 	struct Vst3PluginTestAccess
 	{
 		static std::wstring Resolve(const std::wstring& path, std::error_code& error) { return Vst3Plugin::ResolveModulePath(path, error); }
-		static RenderRole Detect(std::string_view categories) { return Vst3Plugin::DetectRoleFromCategories(categories); }
-		static RenderRole ResolveRole(RenderRole role, int inputs, int outputs) { return Vst3Plugin::ResolveRole(role, inputs, outputs); }
+		static RenderRole InferRole(RenderRole reported, int inputBuses, int outputChannels)
+		{ return Vst3Plugin::InferRoleFromAudioBuses(reported, inputBuses, outputChannels); }
 	};
 }
-TEST(Vst3Role, ResolvesOnlyUnambiguousMissingMetadata)
+TEST(Vst3Role, MissingMetadataUsesAudioBusShape)
 {
 	using vst::RenderRole;
 	using Access = vst::Vst3PluginTestAccess;
-	EXPECT_EQ(Access::Detect("Instrument|Fx"), RenderRole::Unknown);
-	EXPECT_EQ(Access::Detect(""), RenderRole::Unknown);
-	EXPECT_EQ(Access::Detect("Instrument"), RenderRole::Instrument);
-	EXPECT_EQ(Access::Detect("Fx"), RenderRole::Effect);
-	EXPECT_EQ(Access::ResolveRole(RenderRole::Unknown, 0, 2), RenderRole::Instrument);
-	EXPECT_EQ(Access::ResolveRole(RenderRole::Unknown, 2, 2), RenderRole::Unknown);
-	EXPECT_EQ(Access::ResolveRole(RenderRole::Unknown, 0, 0), RenderRole::Unknown);
-	EXPECT_EQ(Access::ResolveRole(RenderRole::Effect, 0, 2), RenderRole::Effect);
+	EXPECT_EQ(RenderRole::Instrument, Access::InferRole(RenderRole::Unknown, 0, 2));
+	EXPECT_EQ(RenderRole::Effect, Access::InferRole(RenderRole::Unknown, 1, 2));
+	EXPECT_EQ(RenderRole::Unknown, Access::InferRole(RenderRole::Unknown, 1, 0));
+	EXPECT_EQ(RenderRole::Instrument, Access::InferRole(RenderRole::Instrument, 1, 2));
 }
 class Vst3ModuleFiles : public testing::Test
 {

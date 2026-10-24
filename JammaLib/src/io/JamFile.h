@@ -93,8 +93,6 @@ namespace io
 			// UTF-8 path to the .vst3 bundle or DLL.
 			std::string Path;
 			bool Bypass = false;
-			// Explicit rack render role for a VST3 that does not report one.
-			std::optional<std::string> RoleOverride;
 			// Base64-encoded plugin state blob (from IVstPlugin::GetState).
 			// Self-describing per plugin type (VST2 param/chunk blob, or
 			// VST3 component/controller blob — see Vst3StateBlob.h).

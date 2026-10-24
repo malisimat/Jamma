@@ -144,9 +144,6 @@ replacement for that slot. Cancelling the picker leaves the rack unchanged.
 Alt-click a content slot to remove it immediately, including a pending load;
 the surviving slots keep their identities and state. The bottom **+** remains.
 Long stacks scroll within the rack.
-If a plugin cannot report whether it is an instrument or effect, it loads paused.
-Shift-click its slot to choose a role; Ctrl-Shift-click returns it to paused
-automatic detection. A role change reloads that slot while keeping its saved state.
 
 The channel selectors to the left affect **live MIDI only**. **MIDI − / MIDI +**
 collapses or expands them independently of the audio controls. Enabled unwired
