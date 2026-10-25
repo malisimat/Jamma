@@ -665,4 +665,3 @@ void RackState::ClearAfterReadersStopped()
 	_failedInteractiveVstLoads.clear();
 	_vstJobsPending.store(0u, std::memory_order_release);
 }
-
