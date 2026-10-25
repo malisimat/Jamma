@@ -1761,3 +1761,142 @@ TEST(RigDefaultSaveTest, OrdinaryOverwriteDoesNotChangeDefaultsAndFailureKeepsPa
     RigDefaultSave generated(directory,L"defaults.json",{},{}); generated.InitializeCurrentPath(defaults,false,1u);
     EXPECT_TRUE(generated.CurrentPath().empty()); EXPECT_TRUE(generated.Dirty(1u));
 }
+
+struct RigDefaultSaveTestAccess
+{
+	static void Publish(RigDefaultSave& owner, std::shared_ptr<const RigDefaultSave::Result> result)
+	{
+		owner._busy = true;
+		owner._result.store(std::move(result), std::memory_order_release);
+	}
+};
+
+class SessionSaveCompletionScene final : public engine::Scene
+{
+public:
+	SessionSaveCompletionScene() : Scene(engine::SceneParams({ "" }, {}, {640u, 480u}), io::UserConfig{}) {}
+	void Complete(bool success, const std::wstring& path, bool asDefault)
+	{
+		_pendingSaveFolder = L"C:/isolated-jamma/export";
+		_pendingSaveAsDefault = asDefault;
+		_CompleteSessionSave(success, path, "Save cancelled or destination unavailable");
+	}
+	const std::wstring& SaveFolder() const { return _sessionSaveFolder; }
+};
+
+TEST(SessionSaveCompletion, WrittenNumberedJamRemainsCurrentWhenDefaultUpdateFails)
+{
+	SessionSaveCompletionScene scene;
+	const std::wstring previous = L"C:/isolated-jamma/previous.jam";
+	const std::wstring written = L"C:/isolated-jamma/export/session-0002.jam";
+	scene.SetCurrentJamPath(previous);
+	unsigned defaultsWrites = 0u;
+	scene.SetDefaultJamSaver(previous, [&](const auto& path, bool named) {
+		++defaultsWrites;
+		EXPECT_EQ(written, path); EXPECT_TRUE(named);
+		// The destination belongs to the successful manifest write already.
+		EXPECT_EQ(written, scene.CurrentJamPath());
+		return false;
+	});
+	scene.Complete(true, written, true);
+	EXPECT_EQ(1u, defaultsWrites);
+	EXPECT_EQ(written, scene.CurrentJamPath());
+	EXPECT_EQ(L"C:/isolated-jamma/export", scene.SaveFolder());
+}
+
+TEST(SessionSaveCompletion, OrdinarySaveChangesDestinationWithoutChangingDefaults)
+{
+	SessionSaveCompletionScene scene;
+	unsigned defaultsWrites = 0u;
+	scene.SetDefaultJamSaver(L"startup.jam", [&](const auto&, bool) { ++defaultsWrites; return true; });
+	EXPECT_TRUE(scene.CurrentJamPath().empty());
+	scene.Complete(true, L"first-numbered.jam", false);
+	EXPECT_EQ(L"first-numbered.jam", scene.CurrentJamPath());
+	scene.Complete(true, L"next-numbered.jam", false);
+	EXPECT_EQ(L"next-numbered.jam", scene.CurrentJamPath());
+	EXPECT_EQ(0u, defaultsWrites);
+}
+
+TEST(SessionSaveCompletion, FailedOrCancelledSaveRetainsLastCommittedDestination)
+{
+	SessionSaveCompletionScene scene;
+	scene.SetCurrentJamPath(L"previous.jam");
+	scene.SetSessionSaveFolder(L"previous-folder");
+	unsigned defaultsWrites = 0u;
+	scene.SetDefaultJamSaver(L"startup.jam", [&](const auto&, bool) { ++defaultsWrites; return true; });
+	for (const auto* destination : {L"", L"denied.jam"})
+	{
+		scene.Complete(false, destination, true);
+		EXPECT_EQ(L"previous.jam", scene.CurrentJamPath());
+		EXPECT_EQ(L"previous-folder", scene.SaveFolder());
+	}
+	EXPECT_EQ(0u, defaultsWrites);
+}
+
+TEST_F(RigSnapshotTest, RigCompletionRejectsDestroyedSceneEvenWhenReplacementRevisionMatches)
+{
+	auto rig = EmptyRig(); rig.User.Midi.Devices.clear();
+	io::JamFile jam; jam.Stations = {StationDescriptor("Save completion")};
+	const engine::SceneParams params({ "" }, {}, {640u, 480u});
+	auto original = engine::Scene::FromFile(params, jam, rig, L"", {});
+	ASSERT_TRUE(original);
+	const auto captured = (*original)->CaptureCommittedRigVersion();
+	ASSERT_TRUE(captured);
+	EXPECT_EQ((*original)->Identity(), captured->SceneId);
+	const std::wstring directory = L"C:/isolated-jamma";
+	RigDefaultSave owner(directory, L"defaults.json", {}, {});
+	io::InitFile defaults{}; defaults.Rig = directory + L"/current.rig";
+	defaults.RigLoadType = io::InitFile::LOAD_SPECIFIC; defaults.RigOrigin = "user";
+	owner.InitializeCurrentPath(defaults, true, captured->Revision);
+	auto requestedDefaults = defaults; requestedDefaults.Rig = directory + L"/old-scene.rig";
+	const auto result = RigDefaultSave::WriteRequest(captured->Rig, directory + L"/old-scene.rig",
+		captured->Revision, true, requestedDefaults, L"defaults.json",
+		[](const auto&, const auto&) { return true; }, [](const auto&, const auto&) { return true; }, captured->SceneId);
+	const std::weak_ptr<engine::Scene> originalLifetime = *original;
+	(*original)->Shutdown(); original.reset();
+	EXPECT_TRUE(originalLifetime.expired());
+	auto replacement = engine::Scene::FromFile(params, jam, rig, L"", {});
+	ASSERT_TRUE(replacement);
+	const auto replacementSave = (*replacement)->BeginExplicitRigSave();
+	ASSERT_TRUE(replacementSave);
+	ASSERT_EQ(captured->Revision, replacementSave->Revision);
+	ASSERT_NE(captured->SceneId, replacementSave->SceneId);
+	owner.InvalidateSavedRevision();
+	RigDefaultSaveTestAccess::Publish(owner, result);
+	EXPECT_FALSE(owner.Poll(**replacement, nullptr, defaults, false));
+	EXPECT_FALSE(owner.Busy());
+	EXPECT_EQ(directory + L"/current.rig", defaults.Rig);
+	EXPECT_EQ(directory + L"/current.rig", owner.CurrentPath());
+	EXPECT_EQ(0u, owner.SavedRevision());
+	EXPECT_TRUE(owner.Dirty(replacementSave->Revision));
+	// Stale completion must not clear the replacement's own save admission.
+	EXPECT_FALSE((*replacement)->BeginExplicitRigSave());
+	(*replacement)->FinishExplicitRigSave();
+	(*replacement)->Shutdown();
+}
+
+TEST_F(RigSnapshotTest, SuccessfulRigWriteKeepsCapturedRevisionDespiteDefaultUpdateFailure)
+{
+	auto rig = EmptyRig(); rig.User.Midi.Devices.clear();
+	io::JamFile jam; jam.Stations = {StationDescriptor("Save completion")};
+	auto created = engine::Scene::FromFile(engine::SceneParams({ "" }, {}, {640u, 480u}), jam, rig, L"", {});
+	ASSERT_TRUE(created);
+	const auto captured = (*created)->BeginExplicitRigSave();
+	ASSERT_TRUE(captured);
+	const std::wstring directory = L"C:/isolated-jamma";
+	RigDefaultSave owner(directory, L"defaults.json", {}, {});
+	io::InitFile defaults{}; defaults.Rig = L"previous-startup.rig";
+	const auto result = RigDefaultSave::WriteRequest(captured->Rig, directory + L"/written.rig",
+		captured->Revision, true, defaults, L"defaults.json",
+		[](const auto&, const auto&) { return true; }, [](const auto&, const auto&) { return false; }, captured->SceneId);
+	RigDefaultSaveTestAccess::Publish(owner, result);
+	EXPECT_FALSE(owner.Poll(**created, nullptr, defaults, false));
+	EXPECT_EQ(L"previous-startup.rig", defaults.Rig);
+	EXPECT_EQ(directory + L"/written.rig", owner.CurrentPath());
+	EXPECT_EQ(captured->Revision, owner.SavedRevision());
+	EXPECT_FALSE(owner.Dirty(captured->Revision));
+	EXPECT_TRUE(owner.Dirty(captured->Revision + 1u));
+	EXPECT_TRUE((*created)->BeginExplicitRigSave());
+	(*created)->FinishExplicitRigSave();
+	(*created)->Shutdown();
+}

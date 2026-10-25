@@ -22,7 +22,7 @@ public:
 		bool RigSaved = false, DefaultsSaved = false, ChangesDefaults = false;
 		io::InitFile Defaults;
 		std::wstring Path;
-		std::uint64_t Revision = 0u;
+		std::uint64_t Revision = 0u, SceneId = 0u;
 	};
 	RigDefaultSave(std::wstring directory, std::wstring defaultsPath, RigWriter rigWriter, DefaultsWriter defaultsWriter)
 		: _directory(std::move(directory)), _defaultsPath(std::move(defaultsPath)),
@@ -58,7 +58,7 @@ public:
 	bool Dirty(std::uint64_t revision) const { return _currentPath.empty() || revision != _savedRevision; }
 	void AcceptSuccessfulWrite(const Result& result)
 	{
-		if (!result.RigSaved || (result.ChangesDefaults && !result.DefaultsSaved)) return;
+		if (!result.RigSaved) return;
 		_currentPath = result.Path; _savedRevision = result.Revision;
 	}
 	void Start(engine::Scene& scene, HWND owner, const io::InitFile& defaults,
@@ -92,16 +92,17 @@ public:
 		if (setDefault) { updated.Rig = target; updated.RigLoadType = io::InitFile::LOAD_SPECIFIC; updated.RigOrigin = "user"; }
 		_busy = true;
 		scene.QueueExplicitRigSave([this, capture = *rig, updated = std::move(updated), target = std::move(target), setDefault]() {
-			auto result = WriteRequest(capture.Rig, target, capture.Revision, setDefault, updated, _defaultsPath, _writeRig, _writeDefaults);
+			auto result = WriteRequest(capture.Rig, target, capture.Revision, setDefault, updated, _defaultsPath, _writeRig, _writeDefaults, capture.SceneId);
 			_result.store(std::move(result), std::memory_order_release);
 		});
 	}
 	static std::shared_ptr<Result> WriteRequest(const io::RigFile& rig, const std::wstring& path,
 		std::uint64_t revision, bool changesDefaults, const io::InitFile& defaults, const std::wstring& defaultsPath,
-		const RigWriter& writeRig, const DefaultsWriter& writeDefaults)
+		const RigWriter& writeRig, const DefaultsWriter& writeDefaults, std::uint64_t sceneId = 0u)
 	{
 		auto result = std::make_shared<Result>(); result->Defaults = defaults;
 		result->Path = path; result->Revision = revision; result->ChangesDefaults = changesDefaults;
+		result->SceneId = sceneId;
 		try
 		{
 			result->RigSaved = writeRig(path, rig);
@@ -123,7 +124,11 @@ public:
 	{
 		const auto result = _result.exchange({}, std::memory_order_acq_rel);
 		if (!result) return false;
-		_busy = false; scene.FinishExplicitRigSave();
+		_busy = false;
+		// Scene revisions restart on replacement. Compare the immutable identity
+		// before clearing its busy state or claiming any saved revision/path.
+		if (result->SceneId != scene.Identity()) return false;
+		scene.FinishExplicitRigSave();
 		AcceptSuccessfulWrite(*result);
 		if (result->DefaultsSaved) defaults = result->Defaults;
 		std::wstring message = result->DefaultsSaved ? L"Rig saved as the startup default." :
@@ -139,8 +144,9 @@ public:
 	}
 	bool Busy() const noexcept { return _busy; }
 private:
+	friend struct RigDefaultSaveTestAccess;
 	std::wstring _directory, _defaultsPath;
-	std::wstring _currentPath; // Shell/window owner; changes only on a complete successful explicit save.
+	std::wstring _currentPath; // Shell/window owner; changes after the rig write succeeds.
 	std::uint64_t _savedRevision = 0u;
 	RigWriter _writeRig;
 	DefaultsWriter _writeDefaults;

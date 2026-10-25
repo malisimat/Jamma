@@ -4693,6 +4693,21 @@ bool Scene::ConsumePanelLoadRequest()
 	return std::exchange(_panelLoadRequested, false);
 }
 
+void Scene::_CompleteSessionSave(bool success, const std::wstring& path, const std::string& error)
+{
+	if (!success) { ReportFileStatus(error); return; }
+	_sessionSaveFolder = _pendingSaveFolder;
+	// The manifest is already committed; updating the startup default is a
+	// separate operation and cannot revoke this session's successful destination.
+	_currentJamPath = path;
+	if (_pendingSaveAsDefault)
+	{
+		if (_defaultJamSaver(path, true)) ReportFileStatus("Saved startup jam " + utils::EncodeUtf8(path));
+		else ReportFileStatus("Jam saved at " + utils::EncodeUtf8(path) + "; startup default unchanged");
+	}
+	else ReportFileStatus("Saved " + utils::EncodeUtf8(path));
+}
+
 void Scene::PickSessionForLoad()
 {
 	if (_controlOperation != ControlOperation::None || !_rigCoordinator.EditsEnabled()) { ReportFileStatus("Another operation is busy"); return; }
@@ -4842,23 +4857,7 @@ void Scene::PumpDeviceAndFileControls()
 				if (_CaptureIsBusy()) { eligibilityError = "Save unavailable during capture or pending actions"; return false; }
 				return true;
 			}, &_performanceGroups.Groups());
-		if (result.Success)
-		{
-			_sessionSaveFolder = _pendingSaveFolder;
-			if (_pendingSaveAsDefault)
-			{
-				const bool useNamedJam = true;
-				if (_defaultJamSaver(result.Path, useNamedJam))
-				{
-					if (useNamedJam) _currentJamPath = result.Path;
-					ReportFileStatus(useNamedJam ? "Saved startup jam " + utils::EncodeUtf8(result.Path)
-						: "Saved startup jam " + utils::EncodeUtf8(_defaultJamPath));
-				}
-				else ReportFileStatus("Jam saved at " + utils::EncodeUtf8(result.Path) + "; startup default unchanged");
-			}
-			else { _currentJamPath = result.Path; ReportFileStatus("Saved " + utils::EncodeUtf8(result.Path)); }
-		}
-		else ReportFileStatus(result.Error);
+		_CompleteSessionSave(result.Success, result.Path, result.Error);
 		if (!result.AudioResumed) ReportFileStatus("Save outcome: " + utils::EncodeUtf8(result.Path) + "; audio restoration failed: " + result.Error);
 		if (_controlOperation != ControlOperation::None) _FinishControlOperation();
 		return;
@@ -5244,7 +5243,7 @@ std::optional<Scene::CapturedRig> Scene::CaptureCommittedRigVersion() const
 	if (!accepted) return std::nullopt;
 	auto rig = accepted->Rig;
 	rig.User = _userConfig;
-	return CapturedRig{std::move(rig), accepted->Revision};
+	return CapturedRig{std::move(rig), accepted->Revision, _sceneIdentity};
 }
 
 std::optional<Scene::CapturedRig> Scene::BeginExplicitRigSave()
@@ -5254,7 +5253,7 @@ std::optional<Scene::CapturedRig> Scene::BeginExplicitRigSave()
 		_controlOperation != ControlOperation::None || _popupManager.IsOpen() || _isSceneQuitting.load(std::memory_order_acquire)) return {};
 	const auto accepted = _rigCoordinator.Accepted(); if (!accepted) return {};
 	auto rig = accepted->Rig; rig.User = _userConfig; _rigSaveInProgress = true;
-	return CapturedRig{std::move(rig), accepted->Revision};
+	return CapturedRig{std::move(rig), accepted->Revision, _sceneIdentity};
 }
 
 void Scene::SetRigSaveDialogOpen(bool open)
