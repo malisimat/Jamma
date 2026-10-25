@@ -1262,7 +1262,7 @@ void LoopGridEditor::UpdateUi(const glm::mat4& viewProjection)
 		const auto hasCandidate = FindCandidate(take, audioLoop, midiLoop);
 		const auto reason = hasCandidate
 			? _UnavailableReason(take, audioLoop, midiLoop)
-			: std::string("Select and hover one loop to edit");
+			: std::string{};
 		_button->SetEnabled(hasCandidate && reason.empty());
 		_SetFeedback(reason);
 	}
