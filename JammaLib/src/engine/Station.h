@@ -425,6 +425,7 @@ namespace engine
 			std::bitset<midi::MidiNote::TotalNoteSlots> Held;
 			std::bitset<midi::MidiNote::TotalNoteSlots> AudibleHeld; // Delayed note reached the plugin.
 			std::bitset<16> AudibleSustain; // Callback-owned delivered pedal state.
+			std::uint16_t AllowedChannels = 0xffffu; // Callback-owned route eligibility.
 			std::array<std::uint16_t, midi::MidiNote::TotalNoteSlots> AudibleSlots{};
 			std::array<std::uint16_t, midi::MidiNote::TotalNoteSlots> AudibleSlotPositions{};
 			std::size_t AudibleSlotCount = 0u; // Dense callback-owned active slots.
@@ -488,7 +489,7 @@ namespace engine
 		static bool _TryDeliverRecordedMidiNow(MidiDestination& destination, const midi::MidiEvent& event,
 			MidiPlaybackBinding& owner, bool isRealtime) noexcept;
 		static void _DropRecordedAudibleOwner(MidiDestination& destination, MidiPlaybackBinding& owner,
-			bool emitRelease = true) noexcept;
+			bool emitRelease = true, std::uint16_t channels = 0xffffu) noexcept;
 		static void _DrainScheduledMidi(const AudioState& state, std::uint32_t blockStartSample, unsigned int numSamps) noexcept;
 		static std::bitset<midi::MidiNote::TotalNoteSlots> _CancelScheduledMidiForOwner(
 			MidiDestination& destination, MidiPlaybackBinding* owner) noexcept;

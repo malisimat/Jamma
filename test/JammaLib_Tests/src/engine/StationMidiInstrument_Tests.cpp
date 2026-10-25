@@ -1531,6 +1531,85 @@ TEST(StationMidiInstrument, RecordedMidiIsDelayedWhileLiveInputIsImmediate)
 	EXPECT_FALSE(plugin->RealtimeFlags[2]);
 }
 
+TEST(StationMidiInstrument, DisconnectingChannelCableCancelsDelayedMidiAndPreservesOtherOwners)
+{
+	for (const auto disconnectSample : {128u, 384u})
+		for (const bool survivingOwners : {false, true})
+		{
+			SCOPED_TRACE(disconnectSample);
+			SCOPED_TRACE(survivingOwners);
+			auto station = MakeStation("disconnect-delayed-channel");
+			auto pluginA = AddPlugin(station, L"fake-disconnected-channel.dll");
+			auto pluginB = AddPlugin(station, L"fake-surviving-channel.dll");
+			AllowAllMidiChannels(station);
+			auto take = MakeMidiTake("disconnected-channel-take");
+			take->Record({}, station->Name(), {0u}, {"source"});
+			take->Play(0u, 1000u, 0u);
+			const std::array events{
+				MidiEvent{0u, 0xb0u, 64u, 127u}, MidiEvent::MakeNoteOn(0u, 0u, 60u, 100u),
+				MidiEvent{0u, 0xb1u, 64u, 127u}, MidiEvent::MakeNoteOn(0u, 1u, 62u, 100u),
+				MidiEvent{128u, 0xb0u, 64u, 0u}, MidiEvent::MakeNoteOff(512u, 0u, 60u),
+				MidiEvent{512u, 0xb1u, 64u, 0u}, MidiEvent::MakeNoteOff(512u, 1u, 62u)};
+			take->GetMidiLoops().at(0u)->ReplaceRecordedEvents(events.data(), events.size(), 1000u);
+			station->AddTake(take);
+			if (survivingOwners)
+			{
+				auto explicitTake = MakeMidiTake("explicit-output-owner");
+				explicitTake->Record({}, station->Name(), {0u}, {"source"});
+				explicitTake->Play(0u, 1000u, 0u);
+				const std::array explicitEvents{
+					MidiEvent{0u, 0xb0u, 64u, 127u}, MidiEvent::MakeNoteOn(0u, 0u, 60u, 100u),
+					MidiEvent{640u, 0xb0u, 64u, 0u}, MidiEvent::MakeNoteOff(640u, 0u, 60u)};
+				explicitTake->GetMidiLoops().at(0u)->ReplaceRecordedEvents(
+					explicitEvents.data(), explicitEvents.size(), 1000u);
+				station->AddTake(explicitTake);
+				station->SetMidiVstRoute(1u, 0u);
+			}
+			station->CommitChanges();
+			std::vector<std::string> targets{pluginA->StateId()};
+			if (survivingOwners) targets.push_back(pluginB->StateId());
+			ASSERT_TRUE(station->SetLiveVstChannelRoute(0u, {true, targets}, station->RackRevision()));
+			ASSERT_TRUE(station->SetLiveVstChannelRoute(1u, {true, {pluginA->StateId()}}, station->RackRevision()));
+			ASSERT_TRUE(station->ConfigureRecordedMidiCompensation(256u));
+			ASSERT_TRUE(station->TryEnqueueImmediateLiveMidi(MidiEvent::MakeNoteOn(0u, 1u, 64u, 100u)));
+			ASSERT_TRUE(station->TryEnqueueImmediateLiveMidi({0u, 0xb1u, 64u, 127u}));
+			for (auto sample = 0u; sample < disconnectSample; sample += 128u)
+				RenderStationBlock(station, sample);
+			// At 128 the channel-zero pedal-down is still queued; at 384 it is audible.
+			targets.clear();
+			if (survivingOwners) targets.push_back(pluginB->StateId());
+			ASSERT_TRUE(station->SetLiveVstChannelRoute(0u, {true, targets}, station->RackRevision()));
+			for (auto sample = disconnectSample; sample <= 640u; sample += 128u)
+				RenderStationBlock(station, sample);
+			auto count = [](const auto& plugin, std::uint8_t status, std::uint8_t data1, std::uint8_t data2) {
+				return std::count_if(plugin->ProcessedEvents.begin(), plugin->ProcessedEvents.end(),
+					[=](const MidiEvent& event) { return event.status == status && event.data1 == data1 && event.data2 == data2; });
+			};
+			const auto attacks = (disconnectSample == 384u ? 1 : 0) + (survivingOwners ? 1 : 0);
+			EXPECT_EQ(attacks, count(pluginA, 0x90u, 60u, 100u));
+			EXPECT_EQ(attacks, count(pluginA, 0xb0u, 64u, 127u));
+			const auto releases = disconnectSample == 384u && !survivingOwners ? 1 : 0;
+			EXPECT_EQ(releases, count(pluginA, 0x80u, 60u, 0u));
+			EXPECT_EQ(releases, count(pluginA, 0xb0u, 64u, 0u));
+			EXPECT_EQ(1, count(pluginA, 0x91u, 62u, 100u));
+			EXPECT_EQ(1, count(pluginA, 0x91u, 64u, 100u));
+			EXPECT_EQ(0, count(pluginA, 0x81u, 62u, 0u));
+			EXPECT_EQ(0, count(pluginA, 0x81u, 64u, 0u));
+			EXPECT_EQ(0, count(pluginA, 0xb1u, 64u, 0u));
+			EXPECT_EQ(survivingOwners ? 1 : 0, count(pluginB, 0x90u, 60u, 100u));
+			EXPECT_EQ(survivingOwners ? 1 : 0, count(pluginB, 0xb0u, 64u, 0u));
+			ASSERT_TRUE(station->TryEnqueueImmediateLiveMidi(MidiEvent::MakeNoteOff(768u, 1u, 64u)));
+			ASSERT_TRUE(station->TryEnqueueImmediateLiveMidi({768u, 0xb1u, 64u, 0u}));
+			RenderStationBlock(station, 768u);
+			RenderStationBlock(station, 896u);
+			EXPECT_EQ(1, count(pluginA, 0x81u, 62u, 0u));
+			EXPECT_EQ(1, count(pluginA, 0x81u, 64u, 0u));
+			EXPECT_EQ(1, count(pluginA, 0xb1u, 64u, 0u));
+			EXPECT_EQ(survivingOwners ? 1 : releases, count(pluginA, 0x80u, 60u, 0u));
+			EXPECT_EQ(survivingOwners ? 1 : releases, count(pluginA, 0xb0u, 64u, 0u));
+		}
+}
+
 TEST(StationMidiInstrument, MutingCancelsFutureRecordedAttackBeforeDelivery)
 {
 	auto station = MakeStation("cancel-future-recorded");

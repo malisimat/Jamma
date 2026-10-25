@@ -1132,10 +1132,40 @@ void Station::_InvalidateScheduledMidiAtBlockStart(const AudioState& state, bool
 		}
 		destination->ScheduledCount = 0u;
 	}
-	for (const auto& routes : state.MidiPlaybackRoutes)
-		for (const auto& binding : routes)
+	for (auto output = std::size_t{0u}; output < state.MidiPlaybackRoutes.size(); ++output)
+		for (const auto& binding : state.MidiPlaybackRoutes[output])
 		{
 			if (!binding || !binding->Loop || !binding->Destination) continue;
+			auto channels = std::uint16_t{0xffffu};
+			if (output < state.MidiPlaybackUsesChannelRoutes.size() && state.MidiPlaybackUsesChannelRoutes[output])
+				for (auto channel = 0u; channel < 16u; ++channel)
+					if (state.RecordedChannelExplicit[channel] &&
+						std::find(state.RecordedChannelDestinations[channel].begin(),
+							state.RecordedChannelDestinations[channel].end(), binding->Destination) ==
+							state.RecordedChannelDestinations[channel].end())
+						channels &= static_cast<std::uint16_t>(~(1u << channel));
+			const auto removed = static_cast<std::uint16_t>(binding->AllowedChannels & ~channels);
+			binding->AllowedChannels = channels;
+			if (removed)
+			{
+				// Channel cables retire only this binding's removed channels. A source-wide
+				// flush would also release surviving channels and fanout destinations.
+				auto& destination = *binding->Destination;
+				_DropRecordedAudibleOwner(destination, *binding, true, removed);
+				for (auto channel = 0u; channel < 16u; ++channel)
+				{
+					if (!(removed & (1u << channel))) continue;
+					for (auto note = 0u; note < 128u; ++note)
+					{
+						const auto slot = midi::MidiNote::NoteSlot(static_cast<std::uint8_t>(channel),
+							static_cast<std::uint8_t>(note));
+						if (!binding->Held.test(slot)) continue;
+						binding->Held.reset(slot);
+						--destination.PlaybackOwners[slot];
+					}
+				}
+				binding->HasHeld.store(binding->Held.any(), std::memory_order_release);
+			}
 			const auto revision = binding->Loop->PublishedRevisionAtAudioBoundary();
 			const auto relocation = binding->Loop->RelocationGenerationAtAudioBoundary();
 			const bool changed = (binding->HasObservedSourceState
@@ -1170,14 +1200,18 @@ void Station::_InvalidateScheduledMidiAtBlockStart(const AudioState& state, bool
 		{
 			const auto entry = destination->Scheduled[index];
 			auto* owner = entry.Owner;
-			if (owner && (forceCancel || bypassStarted
+			const bool invalid = owner && (forceCancel || bypassStarted
 				|| !owner->RoutingActive.load(std::memory_order_acquire)
-				|| owner->CancelScheduledThisBlock))
+				|| owner->CancelScheduledThisBlock);
+			if (owner && (invalid || !(owner->AllowedChannels & (1u << entry.Event.Channel()))))
 			{
-				if (owner->Loop) owner->Loop->RequestHeldFlush();
-				_DropRecordedAudibleOwner(*destination, *owner);
-				if (entry.Event.IsNoteOn() || entry.Event.IsNoteOff())
-					affected.set(midi::MidiNote::NoteSlot(entry.Event.Channel(), entry.Event.data1));
+				if (invalid)
+				{
+					if (owner->Loop) owner->Loop->RequestHeldFlush();
+					_DropRecordedAudibleOwner(*destination, *owner);
+					if (entry.Event.IsNoteOn() || entry.Event.IsNoteOff())
+						affected.set(midi::MidiNote::NoteSlot(entry.Event.Channel(), entry.Event.data1));
+				}
 				owner->QueuedEvents.fetch_sub(1u, std::memory_order_release);
 			}
 			else destination->Scheduled[retained++] = entry;
@@ -1213,19 +1247,26 @@ void Station::_InvalidateScheduledMidiAtBlockStart(const AudioState& state, bool
 }
 
 void Station::_DropRecordedAudibleOwner(MidiDestination& destination, MidiPlaybackBinding& owner,
-	bool emitRelease) noexcept
+	bool emitRelease, std::uint16_t channels) noexcept
 {
 	for (auto channel = 0u; channel < 16u; ++channel)
-		if (owner.AudibleSustain.test(channel))
+		if ((channels & (1u << channel)) && owner.AudibleSustain.test(channel))
 		{
 			owner.AudibleSustain.reset(channel);
 			if (destination.RecordedSustainOwners[channel]) --destination.RecordedSustainOwners[channel];
 			if (!destination.RecordedSustainOwners[channel] && !destination.LiveSustain.test(channel))
 				destination.PendingSustainRelease.set(channel);
 		}
+	auto retained = std::size_t{0u};
 	for (auto index = std::size_t{ 0u }; index < owner.AudibleSlotCount; ++index)
 	{
 		const auto slot = owner.AudibleSlots[index];
+		if (!(channels & (1u << (slot / 128u))))
+		{
+			owner.AudibleSlotPositions[slot] = static_cast<std::uint16_t>(retained);
+			owner.AudibleSlots[retained++] = slot;
+			continue;
+		}
 		owner.AudibleHeld.reset(slot);
 		if (destination.RecordedAudibleOwners[slot] > 0u)
 			--destination.RecordedAudibleOwners[slot];
@@ -1233,7 +1274,7 @@ void Station::_DropRecordedAudibleOwner(MidiDestination& destination, MidiPlayba
 			&& !destination.LiveHeld.test(slot) && destination.PluginHeld.test(slot))
 			destination.PendingReleases.set(slot);
 	}
-	owner.AudibleSlotCount = 0u;
+	owner.AudibleSlotCount = retained;
 }
 
 bool Station::_TryDeliverRecordedMidiNow(MidiDestination& destination, const MidiEvent& event,
