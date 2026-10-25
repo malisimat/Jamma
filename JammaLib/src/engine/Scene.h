@@ -30,6 +30,7 @@
 #include "../gui/GuiLabel.h"
 #include "../gui/NinjamTempoPrompt.h"
 #include "../gui/GuiFocusManager.h"
+#include "../gui/PointerInteraction.h"
 #include "../gui/SceneSettingsControls.h"
 #include "../gui/GuiNumericInput.h"
 #include "../gui/GuiDropdown.h"
@@ -422,8 +423,6 @@ namespace engine
 		void _InvalidateHover2d();
 		void _ResolveHoverPath2d(std::vector<std::weak_ptr<base::GuiElement>>& outPath);
 		void _ApplyHoverPath2d(const std::vector<std::weak_ptr<base::GuiElement>>& nextPath);
-		void _LockHoverPath(const std::vector<std::weak_ptr<base::GuiElement>>& path,
-			std::vector<std::shared_ptr<base::GuiElement>>& outPath) const;
 		actions::ActionResult _BeginBackgroundDrag(actions::TouchAction action);
 		actions::ActionResult _UpdateBackgroundDrag(actions::TouchMoveAction action);
 		void _EndBackgroundDrag();
@@ -591,20 +590,11 @@ namespace engine
 		std::uint64_t _lastAudioCallbackHeartbeat = 0u;
 		std::chrono::steady_clock::time_point _lastAudioCallbackHeartbeatAt{};
 		actions::ActionUndoHistory _undoHistory;
-		std::weak_ptr<base::GuiElement> _touchDownElement;
-		// Whether the touch sequence started on the HUD panel, recorded at touch-down.
-		bool _touchDownIsHud = false;
-		bool _touchDownIsSettings = false;
-		bool _consumeSettingsRelease = false;
+		gui::PointerInteraction _pointer;
 		void _OnSettingsHidden(const std::shared_ptr<base::GuiElement>& subtree);
 		std::optional<actions::ActionResult> _RouteSettingsTouch(actions::TouchAction action);
 		std::weak_ptr<base::GuiElement> _hoverElement3d;
 		std::vector<unsigned char> _hoverPath3d;
-		std::vector<std::weak_ptr<base::GuiElement>> _hoverPath2d;
-		std::vector<std::weak_ptr<base::GuiElement>> _hoverPath2dScratch;
-		std::vector<std::shared_ptr<base::GuiElement>> _hoverPath2dPrevSharedScratch;
-		std::vector<std::shared_ptr<base::GuiElement>> _hoverPath2dNextSharedScratch;
-		bool _hover2dDirty;
 		std::vector<unsigned char> _lastLoggedHoverPath;
 		graphics::CtrlHandleOverlay _ctrlHandleOverlay;
 		engine::QuantiserController _quantisationInteraction;

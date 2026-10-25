@@ -266,6 +266,7 @@
     <ClInclude Include="src\graphics\Compositor.h" />
     <ClInclude Include="src\graphics\Camera.h" />
     <ClInclude Include="include\Constants.h" />
+    <ClInclude Include="src\gui\PointerInteraction.h" />
     <ClInclude Include="src\gui\SceneSelector.h" />
     <ClInclude Include="src\gui\GuiRadio.h" />
     <ClInclude Include="src\gui\GuiPerformanceGroupRow.h" />
@@ -466,6 +467,7 @@
     <ClCompile Include="src\graphics\VU.cpp" />
     <ClCompile Include="src\graphics\Compositor.cpp" />
     <ClCompile Include="src\graphics\Camera.cpp" />
+    <ClCompile Include="src\gui\PointerInteraction.cpp" />
     <ClCompile Include="src\gui\SceneSelector.cpp" />
     <ClCompile Include="src\gui\GuiRadio.cpp" />
     <ClCompile Include="src\gui\GuiPerformanceGroupRow.cpp" />

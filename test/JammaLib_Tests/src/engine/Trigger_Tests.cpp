@@ -505,7 +505,7 @@ public:
 
 	bool HasTouchCaptureForTest() const
 	{
-		return !_touchDownElement.expired();
+		return _pointer.HasCapture();
 	}
 
 	void OpenPopupForTest(const std::shared_ptr<base::GuiElement>& popup)
