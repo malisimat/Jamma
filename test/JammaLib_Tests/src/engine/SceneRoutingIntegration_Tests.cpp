@@ -208,13 +208,16 @@ namespace engine
 			EXPECT_EQ(scene._rigCoordinator.Accepted()->Revision, scene._audioEngine->AppliedRigRevision());
 			// Supply only the liveness hint. Publication still runs through the real
 			// producer gate, stopped-reader barrier and input acknowledgement.
-			scene._audioEngine->_audioCallbackHeartbeat.store(1u);
-			scene._lastAudioCallbackHeartbeatAt = std::chrono::steady_clock::now();
+			AudioHeartbeat(scene);
 			scene._hudPanel->SetCableRevealHeld(true);
 			scene._hudPanel->SetStationAnchors({ {0u, scene._stations[0]->Name(), glm::dvec2{600, 350}, glm::vec4{1.0f}},
 				{1u, scene._stations[1]->Name(), glm::dvec2{800, 350}, glm::vec4{1.0f}} });
 			return scene._hudPanel;
 		}
+		static void AudioHeartbeat(Scene& scene)
+		{ scene._audioEngine->_audioCallbackHeartbeat.fetch_add(1u); }
+		static gui::RoutingEditAvailability RoutingAvailability(Scene& scene)
+		{ std::scoped_lock lock(scene._sceneMutex); return scene._RoutingEditAvailability(); }
 		static void AudioBoundary(Scene& scene)
 		{
 			std::scoped_lock lock(scene._sceneMutex);
@@ -283,7 +286,9 @@ protected:
 	static std::shared_ptr<engine::Scene> FreshScene(std::vector<io::JamFile::Station> stations,
 		std::vector<io::RigFile::Trigger> triggers,
 		std::function<bool(const io::RigFile&)> saveRig = [](const io::RigFile&) { return true; },
-		std::vector<io::JamFile::TriggerHistory> histories = {})
+		std::vector<io::JamFile::TriggerHistory> histories = {},
+		std::function<std::chrono::steady_clock::time_point()> routingNow = [] {
+			return std::chrono::steady_clock::time_point{std::chrono::seconds(1)}; })
 	{
 		io::JamFile jam{};
 		jam.Stations = std::move(stations);
@@ -296,6 +301,9 @@ protected:
 					[&id](const auto& device) { return device.Id == id; }))
 					rig.User.Midi.Devices.push_back({ id, true, id });
 		engine::SceneParams params({ "" }, {}, { 640u, 480u });
+		// No audio callback runs here; test-owned time keeps routing independent
+		// of layout, gesture duration and machine scheduling.
+		params.RoutingEditNow = std::move(routingNow);
 		auto scene = engine::Scene::FromFile(params, std::move(jam), std::move(rig), L"", std::move(saveRig));
 		return scene.has_value() ? scene.value() : nullptr;
 	}
@@ -820,6 +828,27 @@ TEST_F(SceneRoutingIntegrationTest, RoutingEditIsRejectedWhenAudioCallbackIsInac
 	EXPECT_EQ((std::vector<std::pair<std::string, std::size_t>>{ { "Station", 1u } }),
 		Memberships(scene));
 	scene->Shutdown();
+}
+
+TEST_F(SceneRoutingIntegrationTest, RoutingEditLivenessExpiresAndRecoversOnNewHeartbeat)
+{
+    auto now = std::chrono::steady_clock::time_point{std::chrono::seconds(1)};
+    auto scene = FreshScene({ Station("Station") }, { Trigger("trigger", "Station") },
+        [](const io::RigFile&) { return true; }, {}, [&now] { return now; });
+    ASSERT_TRUE(scene);
+    using Availability = gui::RoutingEditAvailability;
+    using Access = engine::SourceLossIntegrationTestAccess;
+    EXPECT_EQ(Availability::AudioCallbackInactive, Access::RoutingAvailability(*scene));
+    Access::AudioHeartbeat(*scene);
+    EXPECT_EQ(Availability::Ready, Access::RoutingAvailability(*scene));
+    now += std::chrono::milliseconds(500);
+    EXPECT_EQ(Availability::Ready, Access::RoutingAvailability(*scene));
+    now += std::chrono::milliseconds(1);
+    EXPECT_EQ(engine::RigCoordinator::EditResult::AudioCallbackInactive,
+        scene->RequestRigEdit(io::RigFile{}));
+    Access::AudioHeartbeat(*scene);
+    EXPECT_EQ(Availability::Ready, Access::RoutingAvailability(*scene));
+    scene->Shutdown();
 }
 
 TEST_F(SceneRoutingIntegrationTest, StoppedStreamMembershipPreservesSelectionAndRouteIdentity)

@@ -85,6 +85,8 @@ namespace engine
 	public:
 		std::function<void()> OnJobThreadStart;
 		bool StartupDiagnostics = false;
+		// Optional monotonic clock for the UI routing-liveness gate.
+		std::function<std::chrono::steady_clock::time_point()> RoutingEditNow;
 		SceneParams(base::DrawableParams drawParams,
 			base::MoveableParams moveParams,
 			base::SizeableParams sizeParams) :
@@ -572,6 +574,7 @@ namespace engine
 
 		std::uint64_t _rigTransitionRequestedRevision = 0u;
 		std::unordered_map<const Trigger*, std::pair<std::uint64_t, std::uint64_t>> _triggerOutcomeCounts;
+		std::function<std::chrono::steady_clock::time_point()> _routingEditNow;
 		std::uint64_t _lastAudioCallbackHeartbeat = 0u;
 		std::chrono::steady_clock::time_point _lastAudioCallbackHeartbeatAt{};
 		actions::ActionUndoHistory _undoHistory;
