@@ -86,6 +86,8 @@ namespace gui
 		void _ReleaseResources() override;
 	private:
 		class Button;
+		class Socket;
+		std::optional<unsigned int> _hoveredMidiSocket;
 		class Expander;
 		struct Row
 		{

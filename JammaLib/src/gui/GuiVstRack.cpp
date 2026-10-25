@@ -10,6 +10,17 @@ using namespace gui;
 using namespace utils;
 using namespace actions;
 
+class GuiVstRack::Socket : public base::GuiElement
+{
+public:
+	Socket(base::GuiElementParams params) : GuiElement(params) {}
+	void ApplyHoverState(bool inside) override
+	{
+		_guiParams.TintColor = inside ? glm::vec3{1.0f, 0.90f, 0.35f} : glm::vec3{0.4f, 0.85f, 1.0f};
+	}
+	void ClearPointerState() override { ApplyHoverState(false); GuiElement::ClearPointerState(); }
+};
+
 class GuiVstRack::Button : public GuiButton
 {
 public:
@@ -129,7 +140,7 @@ GuiVstRack::GuiVstRack(std::shared_ptr<base::GuiElement> channels,
 		base::GuiElementParams socket; socket.Size = {8u, 8u}; socket.MinSize = socket.Size;
 		socket.Texture = "hud_socket_cable"; socket.TextureShader = "texture_tinted";
 		socket.TintColor = {0.4f, 0.85f, 1.0f};
-		auto icon = std::make_shared<base::GuiElement>(socket); _channels->AddChild(icon); _sourceSockets.push_back(icon);
+		auto icon = std::make_shared<Socket>(socket); _channels->AddChild(icon); _sourceSockets.push_back(icon);
 	}
 	const auto command = [this](Command::Kind kind) { Command result; result.Operation = kind; result.Revision = _model.Revision; return result; };
 	_append = _MakeButton("+", "vst_empty", [command] { return command(Command::Kind::Append); });
@@ -346,6 +357,9 @@ void GuiVstRack::CancelInteraction()
 	if (_channelPress) _toggles[_channelPress->Channel]->ClearPointerState();
 	_channelPress.reset();
 	_drag.reset(); _hovered = false;
+	if (_hoveredMidiSocket) _toggles[*_hoveredMidiSocket]->ApplyHoverState(false);
+	_hoveredMidiSocket.reset();
+	for (const auto& socket : _sourceSockets) socket->ApplyHoverState(false);
 }
 void GuiVstRack::ClearPointerState() { CancelInteraction(); GuiElement::ClearPointerState(); }
 void GuiVstRack::SetVisible(bool visible)
@@ -516,14 +530,40 @@ void GuiVstRack::_FinishDrag()
 
 void GuiVstRack::MovePointer(TouchMoveAction action)
 {
+	if (_hoveredMidiSocket) _toggles[*_hoveredMidiSocket]->ApplyHoverState(false);
+	_hoveredMidiSocket.reset();
+	for (const auto& socket : _sourceSockets) socket->ApplyHoverState(false);
 	if (!IsVisible()) { _hovered = false; return; }
 	if (_drag) { _UpdateDrag(action.Position); return; }
 	std::vector<CableInteraction::Endpoint> endpoints;
 	std::vector<CableInteraction::Cable> cables; std::vector<Link> links;
 	_Geometry(endpoints, cables, links);
+	const auto hoveredEndpoint = CableInteraction::HitEndpoint(endpoints, action.Position, 12.0f);
+	if (!_collapsed && hoveredEndpoint && endpoints[*hoveredEndpoint].MidiChannel)
+	{
+		_hoveredMidiSocket = *endpoints[*hoveredEndpoint].MidiChannel;
+		_sourceSockets[*_hoveredMidiSocket]->ApplyHoverState(true);
+		_toggles[*_hoveredMidiSocket]->ApplyHoverState(true);
+	}
 	_hovered = CableInteraction::HitEndpoint(endpoints, action.Position, 12.0f).has_value()
 		|| CableInteraction::HitCable(cables, action.Position, 7.0f).has_value()
 		|| (_collapsed && _collapse->HitTest(_collapse->ParentToLocal(action.Position)));
+	const auto point = action.Position + GlobalPosition();
+	const auto hitsControl = [point](const auto& control, Rect2d clip)
+	{
+		if (!control->IsVisible()) return false;
+		const auto p = control->GlobalPosition(); const auto s = control->GetSize();
+		return Rect2d{p.X, p.Y, p.X + static_cast<int>(s.Width), p.Y + static_cast<int>(s.Height)}
+			.Intersected(clip).Contains(point);
+	};
+	const auto window = Rect2d{0, 0, static_cast<int>(_viewport.Width), static_cast<int>(_viewport.Height)};
+	if (!_collapsed)
+		for (const auto& toggle : _toggles)
+			_hovered = _hovered || hitsControl(toggle, window);
+	const auto clip = _scroll->EffectiveContentRect(window);
+	for (const auto& row : _rows)
+		for (const auto& button : row.Buttons)
+			_hovered = _hovered || hitsControl(button, clip);
 }
 
 ActionResult GuiVstRack::OnAction(TouchMoveAction action)
@@ -666,6 +706,12 @@ void GuiVstRack::_ReleaseResources()
 void GuiVstRack::Draw(base::DrawContext& context)
 {
 	if (!IsVisible()) return;
+	// Scene hover picking may select the socket/rack instead of the channel button.
+	if (_hoveredMidiSocket)
+	{
+		_toggles[*_hoveredMidiSocket]->ApplyHoverState(true);
+		_sourceSockets[*_hoveredMidiSocket]->ApplyHoverState(true);
+	}
 	GuiElement::Draw(context);
 	auto& gl = dynamic_cast<graphics::GlDrawContext&>(context);
 	const auto p = Position(); gl.PushMvp(glm::translate(glm::mat4(1.0f), glm::vec3(p.X, p.Y, 0.0f)));
