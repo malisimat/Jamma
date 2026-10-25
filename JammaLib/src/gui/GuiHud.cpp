@@ -427,7 +427,7 @@ void GuiHud::Draw(base::DrawContext& ctx)
 		{
 			if (!scroll)
 				return;
-			const auto clip = _ContentClip(scroll);
+			const auto clip = _SourceSocketClip(scroll);
 			glCtx.PushScissorRect({ clip.Left, clip.Bottom }, {
 				static_cast<unsigned int>(clip.Right - clip.Left), static_cast<unsigned int>(clip.Top - clip.Bottom) });
 			for (size_t i = 0u; i < _sourceWidgets.size(); ++i)
@@ -614,15 +614,23 @@ void GuiHud::_BuildTopStrip()
 	for (const auto& source : _sourceEndpoints)
 	{
 		const auto isAdc = source.Kind == io::RigFileRouting::SourceKind::Adc;
-		auto label = isAdc ? "Audio In " + std::to_string(source.AdcChannel + 1u) :
-			"MIDI " + source.MidiDevice;
+		auto label = isAdc ? "Audio " + std::to_string(source.AdcChannel + 1u) : source.MidiDevice;
+		if (!isAdc)
+		{
+			const auto& devices = _displayedRig.User.Midi.Devices;
+			const auto device = std::find_if(devices.begin(), devices.end(), [&source](const auto& entry) {
+				return entry.Id == source.MidiDevice;
+			});
+			if (device != devices.end() && !device->Name.empty())
+				label = device->Name;
+		}
 		if (!source.Available)
 			label += " (unavailable)";
 		auto button = _MakeSourceButton(label,
 			source.Available ? (isAdc ? glm::vec3(0.92f, 0.52f, 0.24f) : glm::vec3(0.22f, 0.72f, 0.66f)) : glm::vec3(0.50f),
-			_SourceButtonWidth, !isAdc, source.Available);
+			_SourceButtonWidth);
 		auto socket = std::make_shared<GuiHudSocket>(
-			utils::Position2d{ static_cast<int>(_SourceButtonWidth / 2u - _SocketSize / 2u), 0 },
+			utils::Position2d{ static_cast<int>(_SourceButtonWidth / 2u - _SocketSize / 2u), _SourceSocketY },
 			_SocketSize,
 			source.Available
 			? (isAdc ? glm::vec3(0.92f, 0.52f, 0.24f) : glm::vec3(0.22f, 0.72f, 0.66f))
@@ -699,8 +707,8 @@ void GuiHud::_BuildTriggerRail()
 		closeParams.DownTexture = "trigger_close_down";
 		closeParams.Size = { _TriggerCloseSize, _TriggerCloseSize };
 		closeParams.MinSize = closeParams.Size;
-		closeParams.Position = { static_cast<int>(_TriggerButtonWidth - _TriggerCloseSize - 4u),
-			static_cast<int>(_TriggerButtonHeight - _TriggerCloseSize - 2u) };
+		closeParams.Position = { static_cast<int>(_TriggerButtonWidth - _TriggerCloseSize),
+			static_cast<int>(_TriggerButtonHeight) - _TriggerInputPinTopOffset - static_cast<int>(_TriggerCloseSize / 2u) };
 		closeParams.TextPadding = 0u;
 		closeParams.TintColor = glm::vec3(1.0f);
 		auto close = std::make_shared<GuiHudActionButton>(closeParams, [this, i]() { _OpenDeleteConfirmation(i); });
@@ -709,7 +717,7 @@ void GuiHud::_BuildTriggerRail()
 		editParams.Texture = "rename_pencil"; editParams.OverTexture = "rename_pencil_over"; editParams.DownTexture = "rename_pencil_down";
 		editParams.TintColor = glm::vec3(1.0f);
 		editParams.Size = {GuiTriggerRename::ActionSize, GuiTriggerRename::ActionSize}; editParams.MinSize = editParams.Size;
-		editParams.Position = {GuiTriggerRename::ActionX, GuiTriggerRename::RowY};
+		editParams.Position = {GuiTriggerRename::ActionX, GuiTriggerRename::RowY + GuiTriggerRename::ActionYInset};
 		auto edit = std::make_shared<GuiHudActionButton>(editParams, [this, i]() { _OpenRename(i); });
 		button->AddChild(edit);
 		auto inputSocket = std::make_shared<GuiHudSocket>(
@@ -730,7 +738,9 @@ void GuiHud::_BuildTriggerRail()
 		{
 			const auto pedal = button->TryGetChild(activate ? 0u : 1u);
 			auto learnParams = GuiButtonParams::PanelButton(pedal->GetSize().Width);
-			learnParams.Position = pedal->Position() + utils::Position2d{0, static_cast<int>(pedal->GetSize().Height) - 18};
+			// Put Learn just below the pedal, with a small overlap to keep the
+			// footer visually attached without covering the pedal face.
+			learnParams.Position = pedal->Position() + utils::Position2d{0, -10};
 			learnParams.Size = {pedal->GetSize().Width, 18u}; learnParams.MinSize = learnParams.Size;
 			learnParams.Texture.clear(); learnParams.OverTexture.clear(); learnParams.DownTexture.clear();
 			learnParams.TextureShader = "colour";
@@ -1099,10 +1109,9 @@ void GuiHud::_LayoutPanels()
 		const auto cardWidth = _sourceEndpoints[i].Kind == io::RigFileRouting::SourceKind::Adc ? audioCard : midiCard;
 		auto& widgets = _sourceWidgets[i];
 		widgets.Button->SetSize({ cardWidth, _SourceButtonHeight });
-		widgets.Socket->SetPosition({ static_cast<int>(cardWidth / 2u) - static_cast<int>(_SocketSize / 2u), 0 });
-		for (unsigned char line = 0; line < 2; ++line)
-			if (auto label = widgets.Button->TryGetChild(line))
-				label->SetSize({ cardWidth > 20u ? cardWidth - 20u : 0u, (_SourceButtonHeight - 4u) / 2u });
+		widgets.Socket->SetPosition({ static_cast<int>(cardWidth / 2u) - static_cast<int>(_SocketSize / 2u), _SourceSocketY });
+		if (auto label = widgets.Button->TryGetChild(0u))
+			label->SetSize({ cardWidth > 8u ? cardWidth - 8u : 0u, _SourceButtonHeight - 4u });
 	}
 	const auto layoutCategory = [rowHeight](const std::shared_ptr<GuiStackPanel>& row, const std::shared_ptr<GuiScrollPanel>& scroll,
 		unsigned int count, unsigned int cardWidth, unsigned int viewportWidth)
@@ -1528,7 +1537,7 @@ void GuiHud::_DrawCableSockets(base::DrawContext& ctx)
 	{
 		if (!scroll)
 			return;
-		const auto clip = _ContentClip(scroll);
+		const auto clip = _SourceSocketClip(scroll);
 		auto& glCtx = dynamic_cast<GlDrawContext&>(ctx);
 		glCtx.PushScissorRect({ clip.Left, clip.Bottom }, {
 			static_cast<unsigned int>(clip.Right - clip.Left), static_cast<unsigned int>(clip.Top - clip.Bottom) });
@@ -2012,6 +2021,16 @@ Rect2d GuiHud::_ContentClip(const std::shared_ptr<GuiScrollPanel>& scroll) const
 		static_cast<int>(GetSize().Width), static_cast<int>(GetSize().Height) }.Translated(GlobalPosition())) : Rect2d{};
 }
 
+Rect2d GuiHud::_SourceSocketClip(const std::shared_ptr<GuiScrollPanel>& scroll) const
+{
+	auto clip = _ContentClip(scroll);
+	// Sockets sit below their cards, over the parent border. Preserve the
+	// horizontal viewport bounds so scrolled-out sources stay hidden.
+	if (!clip.IsEmpty())
+		clip.Bottom = std::max(_topStrip->GlobalPosition().Y, clip.Bottom + _SourceSocketY);
+	return clip;
+}
+
 bool GuiHud::_SourceVisible(size_t index) const
 {
 	if (index >= _sourceEndpoints.size() || index >= _sourceWidgets.size())
@@ -2022,7 +2041,7 @@ bool GuiHud::_SourceVisible(size_t index) const
 		return false;
 	const auto center = _sourceWidgets[index].Socket->GlobalPosition() +
 		Position2d{ static_cast<int>(_SocketSize / 2u), static_cast<int>(_SocketSize / 2u) };
-	const auto clip = _ContentClip(scroll);
+	const auto clip = _SourceSocketClip(scroll);
 	// Keep the whole hit target within its own viewport at the scroll edges.
 	return clip.Contains(center) && center.X >= clip.Left + static_cast<int>(_SocketHitRadius) &&
 		center.X < clip.Right - static_cast<int>(_SocketHitRadius);
@@ -2043,7 +2062,7 @@ void GuiHud::BuildInteractionGeometry(std::vector<CableInteraction::Endpoint>& e
 			? CableInteraction::EndpointKind::AdcSource : CableInteraction::EndpointKind::MidiSource,
 			_ElementCenter(_sourceWidgets[i].Socket),
 			std::nullopt, std::nullopt, {}, source, source.Available,
-			_ContentClip(source.Kind == io::RigFileRouting::SourceKind::Adc ? _topAudioScroll : _topMidiScroll)
+			_SourceSocketClip(source.Kind == io::RigFileRouting::SourceKind::Adc ? _topAudioScroll : _topMidiScroll)
 				.Translated({ -rootPos.X, -rootPos.Y }) });
 		if (_SourceVisible(i))
 			endpoints.push_back(sources.back());
@@ -2337,7 +2356,7 @@ void GuiHud::_LayoutSourceIdentity()
 
 std::shared_ptr<GuiButton> GuiHud::_MakeSourceButton(const std::string& text,
 	const glm::vec3& tint,
-	unsigned int width, bool midi, bool available)
+	unsigned int width)
 {
 	auto buttonParams = GuiButtonParams::PanelButton(width);
 	buttonParams.Texture = "rounded_but";
@@ -2347,18 +2366,15 @@ std::shared_ptr<GuiButton> GuiHud::_MakeSourceButton(const std::string& text,
 	buttonParams.MinSize = { 80u, _SourceButtonHeight };
 	buttonParams.TintColor = GuiStyle::Graphite() * 0.5f + tint * 0.025f;
 	auto button = std::make_shared<GuiHudActionButton>(buttonParams, [this, text]() { _OpenSourceIdentity(text); });
-	const auto identity = available ? text : text.substr(0, text.size() - std::string(" (unavailable)").size());
-	const auto heading = available ? (midi ? "MIDI" : "Audio") : "Offline";
-	const auto name = midi ? identity.substr(5) : identity;
-	const unsigned int lineHeight = (_SourceButtonHeight - 4u) / 2u;
-	for (unsigned int line = 0; line < 2; ++line)
-	{
-		auto labelParams = GuiLabelParams::PanelScrollRow(line == 0 ? heading : name, 0u);
-		labelParams.Position = { 4, static_cast<int>(2u + (1u - line) * lineHeight) };
-		labelParams.Size = { width > 20u ? width - 20u : 0u, lineHeight };
-		labelParams.Ellipsize = true;
-		button->AddChild(std::make_shared<GuiLabel>(labelParams));
-	}
+	auto labelParams = GuiLabelParams::PanelScrollRow(text, 0u);
+	labelParams.FontSize = graphics::FontOptions::FONT_SMALL;
+	labelParams.VerticalAlign = GuiTextVerticalAlign::Center;
+	labelParams.CenterHorizontally = true;
+	labelParams.WrapWidth = -1;
+	labelParams.Position = { 4, 2 };
+	labelParams.Size = { width > 8u ? width - 8u : 0u, _SourceButtonHeight - 4u };
+	labelParams.Ellipsize = true;
+	button->AddChild(std::make_shared<GuiLabel>(labelParams));
 	return button;
 }
 std::shared_ptr<GuiButton> GuiHud::_MakeTriggerButton(const std::string& text,
@@ -2379,7 +2395,9 @@ std::shared_ptr<GuiButton> GuiHud::_MakeTriggerButton(const std::string& text,
 	// trigger_back's fixed left band ends at x=13; centre in the orange area.
 	const int orangeLeft = 13;
 	const int pedalPosX = orangeLeft + (static_cast<int>(_TriggerButtonWidth) - orangeLeft - 2 * pedalSizeW - pedalSpacing + 1) / 2;
-	const int pedalPosY = 8;
+	// Balance the orange gap between the bottom socket bar and label band.
+	const int pedalPosY = _TriggerOutputPinBottomOffset +
+		(GuiTriggerRename::RowY - _TriggerOutputPinBottomOffset - pedalSizeH) / 2;
 
 	base::GuiElementParams activateParams;
 	activateParams.Position = { pedalPosX, pedalPosY };

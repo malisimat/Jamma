@@ -12,9 +12,10 @@ namespace gui
 	{
 	public:
 		// The pencil and cancellation control share the same label-row slot.
-		static constexpr unsigned int ActionSize = 28u;
-		static constexpr int ActionX = 104;
-		static constexpr int RowY = 76;
+		static constexpr unsigned int ActionSize = 20u;
+		static constexpr int ActionX = 114;
+		static constexpr int ActionYInset = 1;
+		static constexpr int RowY = 86;
 	private:
 		class Editor : public GuiTextBox
 		{
@@ -44,17 +45,18 @@ namespace gui
 			SetSize({136u, 132u});
 			GuiLabelParams band;
 			band.UseDarkFlatBackground();
-			band.Position = {4, RowY}; band.Size = {128u, ActionSize};
+			band.Position = {0, RowY}; band.Size = {136u, 24u};
 			AddChild(std::make_shared<base::GuiElement>(band));
 			auto label = GuiLabelParams::PanelScrollRow("", 0u);
-			label.Position = {6, RowY + 2}; label.Size = {96u, 24u}; label.Ellipsize = true;
+			label.FontSize = graphics::FontOptions::FONT_SMALL;
+			label.Position = {0, RowY + 2}; label.Size = {110u, 20u}; label.Ellipsize = true;
 			label.CenterHorizontally = true; label.WrapWidth = -1; // Keep decorated names on one centred line.
 			_label = std::make_shared<GuiLabel>(label);
 			_editor = std::make_shared<Editor>(); _editor->SetPosition({6, RowY}); _editor->SetSize({96u, ActionSize});
 			auto cancel = GuiButtonParams::PanelButton(ActionSize);
 			cancel.Texture = "rename_cancel"; cancel.OverTexture = "rename_cancel_over"; cancel.DownTexture = "rename_cancel_down";
 			cancel.TintColor = glm::vec3(1.0f);
-			cancel.Position = {ActionX, RowY}; cancel.Size = {ActionSize, ActionSize}; cancel.MinSize = cancel.Size;
+			cancel.Position = {ActionX, RowY + ActionYInset}; cancel.Size = {ActionSize, ActionSize}; cancel.MinSize = cancel.Size;
 			_cancel = std::make_shared<GuiButton>(cancel);
 			AddChild(_label); AddChild(_editor); AddChild(_cancel);
 			_editor->Accept = [this]() { Accept(); };

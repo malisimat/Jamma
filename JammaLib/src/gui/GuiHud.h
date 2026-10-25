@@ -168,6 +168,7 @@ namespace gui
 		static constexpr unsigned int _TriggerControlSize = 34u;
 		static constexpr unsigned int _TriggerCloseSize = 24u;
 		static constexpr unsigned int _SocketSize = 24u;
+		static constexpr int _SourceSocketY = -static_cast<int>(_SocketSize / 2u);
 		static constexpr unsigned int _CableEndSize = 10u;
 		static constexpr int _TriggerOutputPinBottomOffset = 12;
 		static constexpr int _TriggerInputPinTopOffset = _TriggerOutputPinBottomOffset;
@@ -203,6 +204,7 @@ namespace gui
 		void _OpenSourceIdentity(const std::string& identity);
 		void _LayoutSourceIdentity();
 		utils::Rect2d _ContentClip(const std::shared_ptr<GuiScrollPanel>& scroll) const;
+		utils::Rect2d _SourceSocketClip(const std::shared_ptr<GuiScrollPanel>& scroll) const;
 		bool _InitCableShader(resources::ResourceLib& resourceLib);
 		bool _InitCableVertexArray();
 		void _DrawCables(base::DrawContext& ctx);
@@ -231,7 +233,7 @@ namespace gui
 			unsigned int horizontalInset = 0u) const;
 		std::shared_ptr<GuiButton> _MakeSourceButton(const std::string& text,
 			const glm::vec3& tint,
-			unsigned int width, bool midi, bool available);
+			unsigned int width);
 		std::shared_ptr<GuiButton> _MakeTriggerButton(const std::string& text,
 			std::weak_ptr<engine::Trigger> trigger, std::string id);
 		struct SourceWidgets

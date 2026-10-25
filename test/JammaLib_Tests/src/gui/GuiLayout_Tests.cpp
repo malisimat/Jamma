@@ -758,7 +758,7 @@ TEST_F(HudResponsiveLayoutTests, ResizeKeepsScrollViewportsInsideActualWindowAnd
 			EXPECT_GE(card->GetSize().Width, 80u);
 			EXPECT_LE(card->GetSize().Width, 160u);
 			EXPECT_EQ(2, card->Position().Y);
-			const auto socket = card->TryGetChild(2);
+			const auto socket = card->TryGetChild(1); // One name label, followed by the socket.
 			ASSERT_NE(nullptr, socket);
 			EXPECT_EQ(static_cast<int>(card->GetSize().Width / 2u), socket->Position().X + 12);
 			EXPECT_LE(card->TryGetChild(0)->Position().X + static_cast<int>(card->TryGetChild(0)->GetSize().Width),
