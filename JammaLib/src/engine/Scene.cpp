@@ -1768,70 +1768,7 @@ void Scene::OnJobTick(Time curTime)
 	{
 		// Keep the station clock synced when local content seeds it without NINJAM.
 		std::scoped_lock lock(_sceneMutex);
-		if (_quantisation.LocalMasterTimingPending())
-		{
-			const auto* target = _quantisation.PendingLocalMasterTake();
-			bool present = false;
-			for (const auto& station : _stations)
-				if (station && !station->IsRemote())
-					for (const auto& take : station->GetLoopTakes())
-						if (take.get() == target && !station->MembershipRemoving()) present = true;
-			if (!present && _audioEngine->LastActivatedLocalMasterTimingVersion() <
-				_quantisation.PendingLocalMasterTimingVersion())
-			{
-				const auto version = _quantisation.PendingLocalMasterTimingVersion();
-				_audioEngine->CancelLocalMasterTiming(version);
-				for (const auto& station : _stations)
-					if (station && !station->IsRemote())
-						for (const auto& take : station->GetLoopTakes())
-							if (take) take->CancelLocalMasterQuantisationOnOwner();
-				_quantisation.CancelLocalMasterTiming(version);
-			}
-		}
-		if (const auto receipt = _audioEngine->LastPreparedLocalMasterTiming();
-			receipt && _quantisation.LocalMasterTimingPending() &&
-			receipt->Version == _quantisation.PendingLocalMasterTimingVersion() &&
-			(receipt->Version > _lastLocalMasterTimingVersion ||
-			(_audioEngine->LocalMasterPreparationRetryVersion() == receipt->Version &&
-				_audioEngine->LastActivatedLocalMasterTimingVersion() < receipt->Version)))
-		{
-			const auto length = static_cast<std::uint64_t>(receipt->NewMasterLengthSamps);
-			if (_preparingLocalMasterTimingVersion != receipt->Version)
-			{
-				_preparingLocalMasterTimingVersion = receipt->Version;
-				_preparingLocalMasterTimingDelta =
-					(static_cast<std::uint64_t>(receipt->NewPhaseSamps) + length
-						- receipt->OldAbsoluteSamplePos % length) % length;
-			}
-			bool prepared = true;
-			for (const auto& station : _stations)
-			{
-				if (!station || station->IsRemote()) continue;
-				for (const auto& take : station->GetLoopTakes())
-					if (take)
-						prepared &= take->PrepareLocalMasterQuantisation(
-							_quantisation.EffectiveSamps(),
-							(take->MidiQuantisationTransportStartSamps() % length +
-								_preparingLocalMasterTimingDelta) % length);
-			}
-			if (prepared)
-			{
-				_lastLocalMasterTimingVersion = receipt->Version;
-				_audioEngine->CommitLocalMasterTiming(receipt->Version);
-			}
-		}
-		if (_quantisation.LocalMasterTimingPending() &&
-			_audioEngine->LastActivatedLocalMasterTimingVersion() >=
-				_quantisation.PendingLocalMasterTimingVersion() &&
-			_quantisation.PendingLocalMasterTimingVersion() != 0u)
-		{
-			for (const auto& station : _stations)
-				if (station && !station->IsRemote())
-					for (const auto& take : station->GetLoopTakes())
-						if (take)
-							take->CompleteLocalMasterQuantisationOnOwner();
-			_quantisation.CompleteLocalMasterTiming();
-		}
+		_localTiming.Advance(_quantisation, *_audioEngine, _stations);
 		if (auto clock = _quantisation.Clock(); clock && !_quantisation.LocalMasterTimingPending() &&
 			clock->QuantiseSamps() != _quantisation.EffectiveSamps())
 			_SetMidiQuantisationGrain(clock->QuantiseSamps(), "clock geometry changed");

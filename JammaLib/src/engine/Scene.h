@@ -42,6 +42,7 @@
 #include "../io/JamFile.h"
 #include "DeviceSelectionSchedule.h"
 #include "ControlOperation.h"
+#include "LocalTiming.h"
 #include "../io/RigFile.h"
 #include "../io/InitFile.h"
 #include "../io/SerialDevice.h"
@@ -521,9 +522,7 @@ namespace engine
 		std::unique_ptr<gui::VstRackControls> _vstRackControls; // Window-thread owner; reset before station teardown.
 		std::unique_ptr<ninjam::NinjamNetworkService> _networkService;
 		engine::Quantiser _quantisation;
-		std::uint64_t _lastLocalMasterTimingVersion = 0u;
-		std::uint64_t _preparingLocalMasterTimingVersion = 0u;
-		std::uint64_t _preparingLocalMasterTimingDelta = 0u;
+		LocalTiming _localTiming;
 		io::LoggingConfig _loggingConfig;
 		std::unique_ptr<gui::SceneSettingsControls> _settingsControls;
 		// Window-thread physical key state; repeats and consumed text taps cannot
