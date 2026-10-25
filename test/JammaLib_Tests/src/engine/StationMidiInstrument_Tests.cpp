@@ -1005,6 +1005,44 @@ TEST(StationMidiInstrument, RecordedMidiFollowsRackChannelCablesWithoutOutputOve
 	for (const auto& event : pluginB->Events) EXPECT_EQ(4u, event.Channel());
 }
 
+TEST(StationMidiInstrument, ExplicitRecordedOutputOverridesConflictingRackChannelCable)
+{
+	auto station = MakeStation("recorded-output-overrides-cable");
+	auto pluginA = AddPlugin(station, L"fake-cable-target.dll");
+	auto pluginB = AddPlugin(station, L"fake-recorded-output-target.dll");
+	auto take = MakeMidiTake("recorded-output-override-take");
+	station->AddTake(take);
+	station->CommitChanges();
+	take->Record({}, station->Name(), {3u}, {"Keys"});
+	ASSERT_TRUE(take->RecordMidiEvent(MidiEvent::MakeNoteOn(24u, 3u, 48u, 100u), "Keys", 24u));
+	take->Play(0u, 128u, 0u);
+	ASSERT_TRUE(station->SetLiveVstChannelRoute(3u, {true, {pluginA->StateId()}}, station->RackRevision()));
+	const auto channelCables = station->LiveVstChannelRoutes();
+	ASSERT_TRUE(channelCables[3u].Explicit);
+	ASSERT_EQ((std::vector<std::string>{pluginA->StateId()}), channelCables[3u].PluginIds);
+	station->SetMidiVstRoute(0u, 1u);
+	ASSERT_EQ(channelCables, station->LiveVstChannelRoutes());
+	const auto rackRevision = station->RackRevision();
+
+	RenderStationBlock(station, 0u);
+
+	EXPECT_TRUE(pluginA->Events.empty());
+	EXPECT_TRUE(pluginA->RealtimeFlags.empty());
+	ASSERT_EQ(2u, pluginB->Events.size());
+	ASSERT_EQ(2u, pluginB->RealtimeFlags.size());
+	EXPECT_TRUE(pluginB->Events[0].IsNoteOn());
+	EXPECT_TRUE(pluginB->Events[1].IsNoteOff());
+	for (auto index = 0u; index < pluginB->Events.size(); ++index)
+	{
+		EXPECT_EQ(3u, pluginB->Events[index].Channel());
+		EXPECT_EQ(48u, pluginB->Events[index].data1);
+		EXPECT_FALSE(pluginB->RealtimeFlags[index]);
+	}
+	EXPECT_EQ(channelCables, station->LiveVstChannelRoutes());
+	EXPECT_EQ(rackRevision, station->RackRevision());
+	EXPECT_EQ(1u, station->SnapshotMidiVstRoutesForExport().PluginForOutput(0u));
+}
+
 TEST(StationMidiInstrument, RegularRecordFinalizationClosesHeldNotesAtLoopEnd)
 {
 	auto take = MakeMidiTake("regular-record-held-boundary");
