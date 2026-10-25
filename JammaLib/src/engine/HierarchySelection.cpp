@@ -201,3 +201,37 @@ void HierarchySelection::ApplyAppearance(const LockedStations& view, const Appea
 		}
 	}
 }
+
+bool HierarchySelection::HasSelection(const LockedStations& view)
+{
+	for (const auto& station : view.Stations)
+	{
+		if (!station)
+			continue;
+
+		if (station->IsSelected())
+			return true;
+
+		for (const auto& take : station->GetLoopTakes())
+		{
+			if (!take)
+				continue;
+
+			if (take->IsSelected())
+				return true;
+
+			for (const auto& loop : take->GetLoops())
+			{
+				if (loop && loop->IsSelected())
+					return true;
+			}
+			for (const auto& loop : take->GetMidiLoops())
+			{
+				if (loop && loop->Model() && loop->Model()->IsSelected())
+					return true;
+			}
+		}
+	}
+
+	return false;
+}

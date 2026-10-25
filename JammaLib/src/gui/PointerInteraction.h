@@ -6,6 +6,7 @@
 #include <vector>
 #include "../base/GuiElement.h"
 #include "GuiFocusManager.h"
+#include "../actions/ActionUndoHistory.h"
 
 namespace gui
 {
@@ -32,6 +33,9 @@ namespace gui
 			GuiFocusManager& focus, bool finalizePrevious = false);
 		actions::ActionResult DispatchCapture(actions::TouchAction action, Release release, bool eat);
 		actions::ActionResult DispatchCapture(actions::TouchMoveAction action, CaptureLoss loss, bool eat);
+		// Complete an already-dispatched root result after the caller releases its target lock.
+		bool CompleteDispatch(const actions::TouchAction& action, const actions::ActionResult& result,
+			Owner owner, GuiFocusManager* focus, actions::ActionUndoHistory& history);
 		void OnSubtreeHidden(const std::shared_ptr<base::GuiElement>& subtree, GuiFocusManager& focus);
 		std::optional<actions::ActionResult> RoutePanels(actions::TouchAction action,
 			std::span<const std::shared_ptr<base::GuiElement>> panels, GuiFocusManager& focus, bool otherPointerOwner);

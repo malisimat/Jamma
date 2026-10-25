@@ -136,7 +136,7 @@ namespace engine
         static bool ItemMutePainting(const Scene& scene) { return scene._selector->IsPaintingMute(); }
         static bool BackgroundPreviewActive(const Scene& scene) { return scene._BackgroundPreviewActive(); }
         static graphics::Camera::Pose CameraPose(const Scene& scene) { return scene._camera.CurrentPose(); }
-        static bool BackgroundOwned(const Scene& scene) { return scene._backgroundGesture.has_value(); }
+        static bool BackgroundOwned(const Scene& scene) { return scene._selector->OwnsBackgroundClick(); }
         static bool CameraBackgroundActive(const Scene& scene) { return scene._camera.IsBackgroundDragging(); }
         static bool CameraPointerHeld(const Scene& scene) { return scene._camera.IsBackgroundPointerHeld(); }
         static bool ApplyMuteBoundary(Scene& scene)

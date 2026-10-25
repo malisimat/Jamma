@@ -778,14 +778,14 @@ std::optional<ActionResult> Scene::_RouteSettingsTouch(TouchAction action)
 
 bool Scene::_BackgroundPreviewActive() const
 {
-	return _backgroundGesture && !_backgroundGesture->Cancelled && !_popupManager.IsOpen()
+	return _selector->BackgroundPreview().has_value() && !_popupManager.IsOpen()
 		&& !_EditControlsSuppressed() && !_loopEditor.IsEngaged()
 		&& !_quantisationInputResetRequested.load(std::memory_order_acquire);
 }
 
 bool Scene::_BackgroundSelectionPreviewActive() const
 {
-	return _BackgroundPreviewActive() && _backgroundGesture->Command == BackgroundCommand::SelectAll;
+	return _BackgroundPreviewActive() && _selector->BackgroundPreview() == SceneSelector::BackgroundCommand::SelectAll;
 }
 
 void Scene::_SelectAllLocalLocked()
@@ -830,38 +830,29 @@ ActionResult Scene::_OnPointerAction(TouchAction action)
 			return _pointer.DispatchCapture(action, PointerInteraction::Release::LeftUp, false);
 		}
 	}
-	if (_backgroundGesture && (_popupManager.IsOpen() || _EditControlsSuppressed() || _loopEditor.IsEngaged() ||
+	if (_selector->OwnsBackgroundClick() && (_popupManager.IsOpen() || _EditControlsSuppressed() || _loopEditor.IsEngaged() ||
 		_quantisationInputResetRequested.load(std::memory_order_acquire)))
-		_backgroundGesture.reset();
-	if (_backgroundGesture)
+		_selector->ClearBackgroundClick();
+	if (_selector->OwnsBackgroundClick())
 	{
-		if (action.Touch != TouchAction::TOUCH_MOUSE)
-			_backgroundGesture->Cancelled = true;
-		else if (action.State == TouchAction::TOUCH_UP && action.Index == _backgroundGesture->Button)
+		if (const auto command = _selector->ReleaseBackgroundClick(action))
 		{
-			const auto gesture = *_backgroundGesture;
-			_backgroundGesture.reset();
-			if (!gesture.Cancelled && !gesture.Moved && action.Position == gesture.PressPosition)
 			{
+				std::scoped_lock lock(_sceneMutex);
+				if (*command == SceneSelector::BackgroundCommand::SelectAll) _SelectAllLocalLocked();
+				else
 				{
-					std::scoped_lock lock(_sceneMutex);
-					if (gesture.Command == BackgroundCommand::SelectAll) _SelectAllLocalLocked();
-					else
-					{
-						_performanceGroups.Acknowledge(_audioEngine->GroupMuteReceipt());
-						_performanceGroups.SetAllMuted(gesture.Command == BackgroundCommand::MuteAll, _stations,
-							[this](auto application) { _PublishGroupMuteApplication(std::move(application)); });
-					}
-				}
-				if (gesture.Command == BackgroundCommand::SelectAll)
-				{
-					_InvalidateHover2d();
-					_UpdateSelection(ACTIONRESULT_DEFAULT);
+					_performanceGroups.Acknowledge(_audioEngine->GroupMuteReceipt());
+					_performanceGroups.SetAllMuted(*command == SceneSelector::BackgroundCommand::MuteAll, _stations,
+						[this](auto application) { _PublishGroupMuteApplication(std::move(application)); });
 				}
 			}
+			if (*command == SceneSelector::BackgroundCommand::SelectAll)
+			{
+				_InvalidateHover2d();
+				_UpdateSelection(ACTIONRESULT_DEFAULT);
+			}
 		}
-		else if (pointerPress)
-			_backgroundGesture->Cancelled = true;
 		return { true, {}, {}, ACTIONRESULT_DEFAULT, nullptr, {} };
 	}
 	if (_popupManager.IsOpen())
@@ -1028,42 +1019,15 @@ ActionResult Scene::_OnPointerAction(TouchAction action)
 		}
 		else
 			res = child->OnAction(child->ParentToLocal(action));
-		if (res.IsEaten)
-		{
-			if (nullptr != res.Undo)
-				_undoHistory.Add(res.Undo);
-
-			if (pointerPress && !_pointer.Captured())
-			{
-				_pointer.Capture(res.ActiveElement, isHudChild ? PointerInteraction::Owner::Hud : PointerInteraction::Owner::General);
-			}
-
-			// Focus follows the pressed control when it wants the keyboard.
-			if (pointerPress)
-			{
-				PointerInteraction::FocusPress(res.ActiveElement.lock(), _focusManager);
-			}
-
-			return res;
-		}
+		if (_pointer.CompleteDispatch(action, res,
+			isHudChild ? PointerInteraction::Owner::Hud : PointerInteraction::Owner::General, &_focusManager, _undoHistory)) return res;
 	}
 
 	for (auto& station : SnapshotStations())
 	{
 		res = static_cast<std::shared_ptr<base::GuiElement>>(station)->OnAction(station->ParentToLocal(action));
 
-		if (res.IsEaten)
-		{
-			if (nullptr != res.Undo)
-				_undoHistory.Add(res.Undo);
-
-			if (pointerPress && !_pointer.Captured())
-			{
-				_pointer.Capture(res.ActiveElement);
-			}
-
-			return res;
-		}
+		if (_pointer.CompleteDispatch(action, res, PointerInteraction::Owner::General, nullptr, _undoHistory)) return res;
 	}
 
 	res = _selector->OnAction(_selector->ParentToLocal(action));
@@ -1095,18 +1059,10 @@ ActionResult Scene::_OnPointerAction(TouchAction action)
 		// Resolve actual targets: the pass-through HUD spans the viewport but
 		// must not claim its empty space as a control.
 		_ResolveHoverPath2d(_pointer.HoverScratch()); // Includes station racks and controls.
-		const bool unmute = action.Index == 1 && action.Modifiers == Action::MODIFIER_NONE;
-		const bool mute = action.Index == 1 && action.Modifiers == Action::MODIFIER_ALT;
-		const bool select = action.Index == 0 && action.Modifiers == Action::MODIFIER_ALT;
-		const auto buttonMask = (unmute || mute || select) ? (1u << action.Index) : 0u;
-		// Chords retain their existing camera/selection meaning. An eligible
-		// single-button background press owns its release even after cancellation.
-		if (_pointer.HoverScratch().empty() && !_HasQuantisationHover() && (unmute || mute || select) &&
-			(action.MouseButtonsDown == 0u || action.MouseButtonsDown == buttonMask))
+		// Chords retain camera/selection meaning; only a single-button empty hit starts a click.
+		if (_pointer.HoverScratch().empty() && !_HasQuantisationHover() && _selector->BeginBackgroundClick(action))
 		{
 			_camera.CancelBackgroundCoast();
-			_backgroundGesture = BackgroundGesture{ action.Index,
-				select ? BackgroundCommand::SelectAll : mute ? BackgroundCommand::MuteAll : BackgroundCommand::UnmuteAll, action.Position };
 			_cameraPointerPreservesIdle = true;
 			return { true, {}, {}, ACTIONRESULT_DEFAULT, nullptr, {} };
 		}
@@ -1130,20 +1086,10 @@ ActionResult Scene::_OnPointerMove(TouchMoveAction action)
 	action.SetUserConfig(_userConfig);
 	_cursorPos = action.Position;
 	_InvalidateHover2d();
-	if (_backgroundGesture)
+	if (_selector->OwnsBackgroundClick())
 	{
-		const auto buttonMask = 1u << _backgroundGesture->Button;
-		if (action.Touch != TouchAction::TOUCH_MOUSE || !(action.MouseButtonsDown & buttonMask) ||
-			_popupManager.IsOpen() || _EditControlsSuppressed() || _loopEditor.IsEngaged() ||
-			_quantisationInputResetRequested.load(std::memory_order_acquire))
-			_backgroundGesture.reset();
-		else if (action.MouseButtonsDown != buttonMask)
-			_backgroundGesture->Cancelled = true;
-		else if (action.Position != _backgroundGesture->PressPosition ||
-			(action.IsRelative && action.RelativeDelta != utils::Position2d{}))
-			// Moving cancels the click, but the captured background press continues
-			// previewing all local items until release.
-			_backgroundGesture->Moved = true;
+		_selector->MoveBackgroundClick(action, !_popupManager.IsOpen() && !_EditControlsSuppressed() && !_loopEditor.IsEngaged()
+			&& !_quantisationInputResetRequested.load(std::memory_order_acquire));
 		return { true, {}, {}, ACTIONRESULT_DEFAULT, nullptr, {} };
 	}
 	if (!_popupManager.IsOpen() && _pointer.IsCapturedBy(PointerInteraction::Owner::Hud))
@@ -1263,9 +1209,9 @@ ActionResult Scene::OnAction(KeyAction action)
 	const bool suppressedKey = _contextualKeyboard.Observe(action, contextual, admissionOpen);
 	if (admissionOpen && (contextual || suppressedKey))
 		_contextualKeyboard.Flush(*inputRig, action);
-	if (_backgroundGesture && action.KeyActionType == KeyAction::KEY_DOWN && action.KeyChar == 27u)
+	if (_selector->OwnsBackgroundClick() && action.KeyActionType == KeyAction::KEY_DOWN && action.KeyChar == 27u)
 	{
-		_backgroundGesture->Cancelled = true;
+		_selector->CancelBackgroundClick();
 		return { true, {}, {}, ACTIONRESULT_DEFAULT, nullptr, {} };
 	}
 	// A consumed physical press keeps its release even when focus changes.
@@ -1295,7 +1241,6 @@ ActionResult Scene::OnAction(KeyAction action)
 		{
 			_focusManager.ClearFocus();
 			if (auto active = _pointer.Captured()) active->ClearPointerState();
-			_pointer.ReleaseCapture();
 			_pointer.ReleaseCapture();
 			if (!wasCtrlHeld && HasSelection())
 			{
@@ -2465,7 +2410,7 @@ void Scene::AddChild(std::shared_ptr<base::GuiElement> child)
 void Scene::SetHover3d(std::vector<unsigned char> path, Action::Modifiers modifiers,
 	std::optional<utils::Position2d> pointerPosition)
 {
-	if (_ctrlHeld || _loopEditor.IsEngaged() || _backgroundGesture)
+	if (_ctrlHeld || _loopEditor.IsEngaged() || _selector->OwnsBackgroundClick())
 		return;
 	if (pointerPosition)
 	{
@@ -2706,7 +2651,7 @@ void Scene::Shutdown()
 	// Finish any admitted job tick before borrowing lifecycle state. No scene,
 	// MIDI or application gate mutex is held while acquiring this owner boundary.
 	std::unique_lock lifecycle(_controlLifecycleMutex);
-	_backgroundGesture.reset();
+	_selector->ClearBackgroundClick();
 	{
 		// Recovery borrows callback-owned fields under this same lock. Finish
 		// that borrow before teardown, and prevent a later job reopening admission.
@@ -2909,7 +2854,7 @@ void Scene::ApplyDeferredHoverUpdates()
 		return;
 	}
 
-	if (_pointer.Captured() || _isSceneTouching || _backgroundGesture)
+	if (_pointer.Captured() || _isSceneTouching || _selector->OwnsBackgroundClick())
 		return;
 
 	_pointer.HoverScratch().clear();
@@ -3011,18 +2956,8 @@ std::shared_ptr<StationRemote> Scene::FindRemoteStation(const std::vector<std::s
 
 std::vector<unsigned char> Scene::TrimPath(std::vector<unsigned char> path, unsigned int depth)
 {
-	unsigned int pathLength = depth <= path.size() ?
-		depth :
-		(unsigned int)path.size();
-
-	std::vector<unsigned char> curPath(path.begin(), path.begin() + pathLength);
-
-	return curPath;
+	return SceneSelector::PathAtDepth(std::move(path), depth);
 }
-
-
-
-
 
 bool Scene::_OnUndo(std::shared_ptr<base::ActionUndo> undo)
 {
@@ -3067,7 +3002,7 @@ void Scene::_InitSize()
 
 void Scene::_OnLoopGridEditorOpened()
 {
-	_backgroundGesture.reset();
+	_selector->ClearBackgroundClick();
 	_ReleaseQuantisationInput();
 	if (_hudPanel)
 	{
@@ -3750,36 +3685,7 @@ bool Scene::HasSelection() const
 
 bool Scene::_HasSelection() const
 {
-	for (const auto& station : _stations)
-	{
-		if (!station)
-			continue;
-
-		if (station->IsSelected())
-			return true;
-
-		for (const auto& take : station->GetLoopTakes())
-		{
-			if (!take)
-				continue;
-
-			if (take->IsSelected())
-				return true;
-
-			for (const auto& loop : take->GetLoops())
-			{
-				if (loop && loop->IsSelected())
-					return true;
-			}
-			for (const auto& loop : take->GetMidiLoops())
-			{
-				if (loop && loop->Model() && loop->Model()->IsSelected())
-					return true;
-			}
-		}
-	}
-
-	return false;
+	return HierarchySelection::HasSelection(HierarchySelection::LockedStations(_stations));
 }
 
 bool Scene::_HasQuantisationHover() const
@@ -3847,7 +3753,7 @@ void Scene::_ReleaseQuantisationInput()
 
 void Scene::_ReleaseQuantisationInputLocked()
 {
-	_backgroundGesture.reset();
+	_selector->ClearBackgroundClick();
 	_spaceHeld = _ctrlHeld = false;
 	_quantisation.SetOverlayHeld(false);
 	_quantisationInteraction.CancelInteraction(true);
@@ -4457,7 +4363,7 @@ void Scene::_CommitStationMembershipLocked()
 	_performanceGroups.Acknowledge(_audioEngine->GroupMuteReceipt());
 	_performanceGroups.CancelPending();
 	_audioEngine->PublishGroupMuteApplication(nullptr);
-	_backgroundGesture.reset();
+	_selector->ClearBackgroundClick();
 	const auto removed = _stationManagement.Target;
 	const auto affectedBindings = _stationManagement.Candidate->TriggerRouteUpdates.size();
 	if (removed)

@@ -337,3 +337,53 @@ SceneSelector::SelectionUpdate SceneSelector::SelectionChanges(actions::ActionRe
 	}
 	return update;
 }
+
+bool SceneSelector::BeginBackgroundClick(const actions::TouchAction& action)
+{
+	if (action.State != actions::TouchAction::TOUCH_DOWN || action.Touch != actions::TouchAction::TOUCH_MOUSE) return false;
+	const bool unmute = action.Index == 1 && action.Modifiers == Action::MODIFIER_NONE;
+	const bool mute = action.Index == 1 && action.Modifiers == Action::MODIFIER_ALT;
+	const bool select = action.Index == 0 && action.Modifiers == Action::MODIFIER_ALT;
+	const auto buttonMask = (unmute || mute || select) ? (1u << action.Index) : 0u;
+	if (!(unmute || mute || select) || (action.MouseButtonsDown != 0u && action.MouseButtonsDown != buttonMask)) return false;
+	_backgroundClick = BackgroundClick{action.Index,
+		select ? BackgroundCommand::SelectAll : mute ? BackgroundCommand::MuteAll : BackgroundCommand::UnmuteAll, action.Position};
+	return true;
+}
+
+std::optional<SceneSelector::BackgroundCommand> SceneSelector::BackgroundPreview() const
+{
+	if (_backgroundClick && !_backgroundClick->Cancelled) return _backgroundClick->Command;
+	return std::nullopt;
+}
+
+std::optional<SceneSelector::BackgroundCommand> SceneSelector::ReleaseBackgroundClick(const actions::TouchAction& action)
+{
+	if (!_backgroundClick) return std::nullopt;
+	if (action.Touch != actions::TouchAction::TOUCH_MOUSE) _backgroundClick->Cancelled = true;
+	else if (action.State == actions::TouchAction::TOUCH_UP && action.Index == _backgroundClick->Button)
+	{
+		const auto click = *_backgroundClick;
+		_backgroundClick.reset();
+		if (!click.Cancelled && !click.Moved && action.Position == click.PressPosition) return click.Command;
+	}
+	else if (action.State == actions::TouchAction::TOUCH_DOWN && action.Index != 4) _backgroundClick->Cancelled = true;
+	return std::nullopt;
+}
+
+void SceneSelector::MoveBackgroundClick(const actions::TouchMoveAction& action, bool allowed)
+{
+	if (!_backgroundClick) return;
+	const auto buttonMask = 1u << _backgroundClick->Button;
+	if (!allowed || action.Touch != actions::TouchAction::TOUCH_MOUSE || !(action.MouseButtonsDown & buttonMask))
+		_backgroundClick.reset();
+	else if (action.MouseButtonsDown != buttonMask) _backgroundClick->Cancelled = true;
+	else if (action.Position != _backgroundClick->PressPosition || (action.IsRelative && action.RelativeDelta != utils::Position2d{}))
+		_backgroundClick->Moved = true;
+}
+
+std::vector<unsigned char> SceneSelector::PathAtDepth(std::vector<unsigned char> path, unsigned int depth)
+{
+	const auto length = std::min<std::size_t>(depth, path.size());
+	return {path.begin(), path.begin() + length};
+}
