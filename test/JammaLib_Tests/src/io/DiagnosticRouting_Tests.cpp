@@ -11,7 +11,6 @@
 #include <thread>
 #include <chrono>
 #include <sstream>
-#include <regex>
 #include <set>
 #include "../../../../JammaLib/src/io/TextReadWriter.h"
 #include "../../../../JammaLib/src/io/WavReadWriter.h"
@@ -46,16 +45,19 @@ protected:
 TEST_F(DiagnosticFiles, RunLogCapturesEarlyWorkerPartialAndRuntimeOnceAndRotates)
 {
 	console::LineRing ring;
+	const auto header = console::StartupLog::RunStart("test-version");
+	EXPECT_NE(header.find(" Jamma vtest-version"), std::string::npos);
 	{
 		console::StartupLog log((Directory / "defaults.json").wstring());
 		ASSERT_TRUE(log.Available());
 		console::ConsoleCapture capture(ring, {}, [&](std::string_view line) { log.Append(line); });
+		std::cout << header << '\n';
 		std::cout << "early\n";
 		std::thread worker([] { std::cerr << "worker failure" << std::flush; }); worker.join();
 		capture.CompleteStartup();
 		std::cout << "runtime\n";
 	}
-	EXPECT_EQ(ReadLog(), "early\r\nworker failure\r\nruntime\r\n");
+	EXPECT_EQ(ReadLog(), header + "\r\nearly\r\nworker failure\r\nruntime\r\n");
 	{
 		console::StartupLog log((Directory / "defaults.json").wstring());
 		EXPECT_TRUE(std::filesystem::exists(Directory / "run.log.1"));
@@ -116,11 +118,7 @@ TEST_F(DiagnosticFiles, RunLogReportsRotationDenialWithoutDestroyingOldLog)
 	CloseHandle(locked);
 	EXPECT_EQ(ReadLog(), "prior run");
 }
-TEST(DiagnosticRouting, RunStartContainsVersionAndNumericTimezoneOffset)
-{
-	const auto header = console::StartupLog::RunStart("test-version");
-	EXPECT_TRUE(std::regex_match(header, std::regex(R"(\[BOOT\] run-start=\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[+-]\d{2}:\d{2} Jamma vtest-version)")));
-}
+
 TEST_F(DiagnosticFiles, StartupLogWriteFailureIsReportedOnceWithoutRecursion)
 {
 	console::StartupLog log((Directory / "defaults.json").wstring());

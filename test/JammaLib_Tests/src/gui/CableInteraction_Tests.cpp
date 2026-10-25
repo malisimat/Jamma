@@ -13,6 +13,16 @@
 
 using gui::CableInteraction;
 
+namespace gui
+{
+	class GuiHudTestAccess
+	{
+	public:
+		static std::shared_ptr<GuiButton> TriggerClose(GuiHud& hud, std::size_t index)
+		{ return hud._triggerWidgets.at(index).Close; }
+	};
+}
+
 TEST(CableGeometry, BoundaryResolutionKeepsVisiblePointsAndClampsEveryEdge)
 {
 	const utils::Rect2d bounds{ 10, 20, 100, 200 };
@@ -559,7 +569,7 @@ TEST_F(HudCableInteractionTests, SupportedCompactProfileKeepsSourcesAndTriggerAc
 	EXPECT_LE(first->GlobalPosition().Y, scroll->GlobalPosition().Y + static_cast<int>(scroll->GetSize().Height));
 	EXPECT_GE(first->GlobalPosition().Y + 132, scroll->GlobalPosition().Y);
 	EXPECT_TRUE(Hud->TryGetChild(1)->TryGetChild(2)->IsVisible());
-	const auto close = first->TryGetChild(5);
+	const auto close = gui::GuiHudTestAccess::TriggerClose(*Hud, 0u);
 	Click(close); ASSERT_TRUE(Popups.IsOpen());
 	const auto popup = Popups.Top();
 	EXPECT_GE(popup->Position().X, 0); EXPECT_GE(popup->Position().Y, 0);
@@ -580,7 +590,7 @@ TEST_F(HudCableInteractionTests, DeleteConfirmationSubmitsOnlySelectedTriggerAnd
 {
 	Hud->SetSize({ 640, 320 }); auto scroll = TriggerScroll(); ASSERT_TRUE(scroll);
 	scroll->SetScrollOffset(0);
-	const auto close = scroll->Content()->TryGetChild(0)->TryGetChild(3);
+	const auto close = gui::GuiHudTestAccess::TriggerClose(*Hud, 0u);
 	Click(close); ASSERT_TRUE(Popups.IsOpen()); EXPECT_EQ(Hud, Popups.OwnerOfTop());
 	ClickPopupButton("Cancel"); EXPECT_FALSE(Popups.IsOpen()); EXPECT_TRUE(Submissions.empty());
 	Click(close); ASSERT_TRUE(Popups.IsOpen()); scroll->SetScrollOffset(scroll->MaxScrollOffset());

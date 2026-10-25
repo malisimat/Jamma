@@ -139,6 +139,7 @@ namespace gui
 		virtual void _ReleaseResources() override;
 
 	private:
+		friend class GuiHudTestAccess;
 		std::vector<std::optional<CableInteraction::Endpoint>> _BuildStationEndpoints(
 			std::vector<CableInteraction::Endpoint>& endpoints) const;
 		static void _FanSourceCableEnds(const std::vector<CableInteraction::Endpoint>& sources,
