@@ -335,14 +335,7 @@ int Window::Create(HINSTANCE hInstance, int nCmdShow)
 	LoadResources();
 	InitScene();
 
-	std::stringstream titleStringStream;
-	titleStringStream << "Jamma (v" << LIB_VERSION << ")";
-	auto titleStr = titleStringStream.str();
-	wchar_t* titleChars = new wchar_t[titleStr.size() + 1];
-
-	size_t outSize;
-	mbstowcs_s(&outSize, titleChars, titleStr.size() + 1, titleStr.c_str(), titleStr.size());
-	SetWindowText(_wnd, titleChars);
+	UpdateSessionTitle();
 	ShowWindow(_wnd, nCmdShow);
 
 	return 0;
@@ -351,6 +344,7 @@ int Window::Create(HINSTANCE hInstance, int nCmdShow)
 void Window::SetWindowHandle(HWND wnd)
 {
 	_wnd = wnd;
+	_titleSceneIdentity = 0u;
 }
 
 Window::Config Window::GetConfig() const
@@ -535,6 +529,7 @@ void Window::_UpdateCameraEligibility()
 void Window::Render()
 {
 	SceneDispatchScope dispatch(*this);
+	UpdateSessionTitle();
 	ProcessDeferredInputLoss();
 	_ReconcileKeyboardState();
 	GlDeleteQueue::FlushPendingDeletes();
@@ -972,6 +967,32 @@ void Window::ReplaceScene(Scene& scene)
 	_hover3dDirty = true;
 	_forcePick = true;
 	_cachedCursorPosition.reset();
+	UpdateSessionTitle();
+}
+
+void Window::UpdateSessionTitle()
+{
+	if (_released || !_wnd || !_scene) return;
+	const auto identity = _scene->Identity();
+	const auto& path = _scene->CurrentJamPath();
+	if (_titleSceneIdentity == identity && _titleJamPath == path) return;
+
+	std::wstring title = L"Jamma";
+	if (!path.empty())
+	{
+		const auto separator = path.find_last_of(L"/\\");
+		const auto filename = separator == std::wstring::npos ? 0u : separator + 1u;
+		if (filename < path.size())
+		{
+			title += L" - ";
+			title.append(path, filename, std::wstring::npos);
+		}
+	}
+	if (SetWindowTextW(_wnd, title.c_str()))
+	{
+		_titleJamPath = path;
+		_titleSceneIdentity = identity;
+	}
 }
 
 bool Window::ConsumeJamLoadRequest() noexcept

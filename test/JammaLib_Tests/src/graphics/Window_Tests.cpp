@@ -827,3 +827,135 @@ TEST(Window, PluginPumpedNativeDestroyCancelsCaptureAfterSceneDispatchReturns)
 	PeekMessageW(&quit, nullptr, WM_QUIT, WM_QUIT, PM_REMOVE);
 	DestroyWindow(host);
 }
+
+class WindowTitleScene final : public Scene
+{
+public:
+	WindowTitleScene() : Scene(SceneParams(base::DrawableParams(), base::MoveableParams(),
+		base::SizeableParams({640u,480u})), {}) {}
+	void CompleteSave(bool success, const std::wstring& path, bool asDefault = false)
+	{
+		_pendingSaveFolder = L"C:/isolated-jamma/export";
+		_pendingSaveAsDefault = asDefault;
+		_CompleteSessionSave(success, path, "Save cancelled or destination unavailable");
+	}
+	// Native title/replacement tests need no renderer or installed resources.
+	void InitResources(ResourceLib&, bool) override {}
+protected:
+	void _ReleaseResources() override {}
+};
+
+class WindowTitleNativeHost
+{
+public:
+	explicit WindowTitleNativeHost(Window& window) : _window(window)
+	{
+		Handle = CreateWindowExW(0, L"STATIC", L"initial caption", WS_POPUP,
+			0, 0, 32, 32, nullptr, nullptr, GetModuleHandleW(nullptr), nullptr);
+		if (!Handle) return;
+		SetWindowLongPtrW(Handle, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(this));
+		_previous = reinterpret_cast<WNDPROC>(SetWindowLongPtrW(Handle, GWLP_WNDPROC,
+			reinterpret_cast<LONG_PTR>(Procedure)));
+		_window.SetWindowHandle(Handle);
+	}
+	~WindowTitleNativeHost()
+	{
+		_window.SetWindowHandle(nullptr);
+		if (!Handle) return;
+		SetWindowLongPtrW(Handle, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(_previous));
+		SetWindowLongPtrW(Handle, GWLP_USERDATA, 0);
+		DestroyWindow(Handle);
+	}
+	std::wstring Text() const
+	{
+		std::wstring text(static_cast<std::size_t>(GetWindowTextLengthW(Handle)) + 1u, L'\0');
+		const auto length = GetWindowTextW(Handle, text.data(), static_cast<int>(text.size()));
+		text.resize(static_cast<std::size_t>(length));
+		return text;
+	}
+	HWND Handle = nullptr;
+	unsigned int Changes = 0u;
+private:
+	static LRESULT CALLBACK Procedure(HWND handle, UINT message, WPARAM wparam, LPARAM lparam)
+	{
+		auto& host = *reinterpret_cast<WindowTitleNativeHost*>(GetWindowLongPtrW(handle, GWLP_USERDATA));
+		if (message == WM_SETTEXT) ++host.Changes;
+		return CallWindowProcW(host._previous, handle, message, wparam, lparam);
+	}
+	Window& _window;
+	WNDPROC _previous = nullptr;
+};
+
+TEST(WindowTitle, UnsavedUnicodeAndNumberedDestinationsUpdateNativeCaptionOnlyWhenChanged)
+{
+	WindowTitleScene scene;
+	ResourceLib resources;
+	Window window(scene, resources);
+	WindowTitleNativeHost host(window);
+	ASSERT_NE(nullptr, host.Handle);
+	window.UpdateSessionTitle();
+	EXPECT_EQ(L"Jamma", host.Text());
+	for (unsigned int frame = 0u; frame < 8u; ++frame) window.UpdateSessionTitle();
+	EXPECT_EQ(1u, host.Changes);
+	scene.SetCurrentJamPath(L"C:\\sessions\\\u6f14\u594f-\u03b2.jam");
+	window.UpdateSessionTitle();
+	EXPECT_EQ(L"Jamma - \u6f14\u594f-\u03b2.jam", host.Text());
+	EXPECT_EQ(2u, host.Changes);
+	scene.CompleteSave(true, L"C:/isolated-jamma/export/session-0002.jam");
+	window.UpdateSessionTitle();
+	EXPECT_EQ(L"Jamma - session-0002.jam", host.Text());
+	EXPECT_EQ(3u, host.Changes);
+	window.UpdateSessionTitle();
+	EXPECT_EQ(3u, host.Changes);
+}
+
+TEST(WindowTitle, WrittenJamStillNamesWindowWhenDefaultUpdateFailsAndFailedSavesKeepIt)
+{
+	WindowTitleScene scene;
+	ResourceLib resources;
+	Window window(scene, resources);
+	WindowTitleNativeHost host(window);
+	ASSERT_NE(nullptr, host.Handle);
+	scene.SetCurrentJamPath(L"previous.jam");
+	window.UpdateSessionTitle();
+	unsigned int defaultsWrites = 0u;
+	scene.SetDefaultJamSaver(L"startup.jam", [&](const auto&, bool) { ++defaultsWrites; return false; });
+	scene.CompleteSave(true, L"C:/isolated-jamma/export/committed-0003.jam", true);
+	window.UpdateSessionTitle();
+	EXPECT_EQ(1u, defaultsWrites);
+	EXPECT_EQ(L"Jamma - committed-0003.jam", host.Text());
+	EXPECT_EQ(2u, host.Changes);
+	for (const auto* path : {L"", L"denied.jam"})
+	{
+		scene.CompleteSave(false, path, true);
+		window.UpdateSessionTitle();
+		EXPECT_EQ(L"Jamma - committed-0003.jam", host.Text());
+		EXPECT_EQ(2u, host.Changes);
+	}
+	EXPECT_EQ(1u, defaultsWrites);
+}
+
+TEST(WindowTitle, ReplacementResetsUnsavedCaptionAndOldSceneCompletionCannotRenameIt)
+{
+	WindowTitleScene outgoing, unsaved, loaded;
+	ResourceLib resources;
+	Window window(outgoing, resources);
+	WindowTitleNativeHost host(window);
+	ASSERT_NE(nullptr, host.Handle);
+	outgoing.SetCurrentJamPath(L"outgoing.jam");
+	window.UpdateSessionTitle();
+	EXPECT_EQ(L"Jamma - outgoing.jam", host.Text());
+	window.ReplaceScene(unsaved);
+	EXPECT_EQ(L"Jamma", host.Text());
+	EXPECT_EQ(2u, host.Changes);
+	outgoing.CompleteSave(true, L"late-outgoing-save.jam");
+	window.UpdateSessionTitle();
+	EXPECT_EQ(L"Jamma", host.Text());
+	EXPECT_EQ(2u, host.Changes);
+
+	loaded.SetCurrentJamPath(L"C:/sessions/loaded-\u03a9.jam");
+	window.ReplaceScene(loaded);
+	EXPECT_EQ(L"Jamma - loaded-\u03a9.jam", host.Text());
+	window.UpdateSessionTitle();
+	EXPECT_EQ(3u, host.Changes);
+}
