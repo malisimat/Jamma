@@ -17,6 +17,8 @@
 #include <optional>
 #include <fstream>
 #include <sstream>
+#include <string>
+#include <cstdint>
 #include "glew/glew.h"
 #include "gl/gl.h"
 #include "gl/glext.h"
@@ -93,6 +95,8 @@ namespace graphics
 		void Swap();
 		void Release();
 		void ReplaceScene(engine::Scene& scene);
+		// UI owner only: mirror the current Scene committed destination, never a pending save.
+		void UpdateSessionTitle();
 		bool ConsumeJamLoadRequest() noexcept;
 		bool ConsumeConsoleToggleRequest() noexcept;
 
@@ -188,6 +192,9 @@ namespace graphics
 		std::optional<GlDrawContext> _textureContext;
 		std::optional<GlDrawContext> _highlightBlurContext;
 		engine::Scene* _scene;
+		// UI-owned cache; Scene identity prevents reuse across session replacement.
+		std::uint64_t _titleSceneIdentity = 0u;
+		std::wstring _titleJamPath;
 		resources::ResourceLib& _resourceLib;
 		base::Action::Modifiers _modifiers;
 		bool _jamLoadRequested;
