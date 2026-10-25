@@ -1679,35 +1679,17 @@ void GuiHud::UpdateTriggerLearn()
 {
 	if (_learnEndPending && _triggerLearnInput) { _triggerLearnInput(io::TriggerBindingLearn::Request{}); _learnEndPending = false; }
 	if (!_triggerLearn) return;
-	if (!_popupManager || !_popupManager->Contains(_triggerLearn->Popup()) || _triggerLearn->CloseRequested)
+	if (!_popupManager || !_popupManager->Contains(_triggerLearn->Popup()))
 	{ CancelTriggerLearn(); return; }
-	const auto target = std::find_if(_displayedRig.Triggers.begin(), _displayedRig.Triggers.end(), [&](const auto& item) { return item.Id == _triggerLearn->Id; });
-	if (_triggerLearn->Revision != _displayedRevision)
+	const auto result = _triggerLearn->Update(_displayedRig, _displayedRevision, GetSize(), _triggerLearnInput,
+		[this](const auto& candidate, std::size_t index) { return _CanEditTrigger(index) && _SubmitCandidate(candidate); },
+		[this] { return _RoutingEditAvailability() == RoutingEditAvailability::Applying; });
+	if (result != TriggerLearnController::UpdateResult::Active)
 	{
-		const bool accepted = _triggerLearn->Applying && target != _displayedRig.Triggers.end() &&
-			(_triggerLearn->Control == io::RigFile::Control::Activate ? target->ControlBindings.Activate : target->ControlBindings.Ditch) == _triggerLearn->Bindings();
-		if (accepted) { CancelTriggerLearn(); SetQuantisationFeedback("Bindings applied; explicitly save the rig to keep them"); return; }
-		if (_triggerLearnInput) _triggerLearnInput(io::TriggerBindingLearn::Request{});
-		if (!_triggerLearn->Invalidated) _triggerLearn->Invalidate("Rig changed; cancel and reopen learning");
-		_triggerLearn->Fit(GetSize()); _triggerLearn->Refresh();
-		return;
+		CancelTriggerLearn();
+		if (result == TriggerLearnController::UpdateResult::Applied)
+			SetQuantisationFeedback("Bindings applied; explicitly save the rig to keep them");
 	}
-	if (_triggerLearnInput)
-		_triggerLearn->Observe(_triggerLearnInput(_triggerLearn->TakeRequest()));
-	if (_triggerLearn->ApplyRequested)
-	{
-		_triggerLearn->ApplyRequested = false;
-		std::string error;
-		const auto candidate = io::TriggerBindingLearn::ReplacePedal(_displayedRig, _triggerLearn->Id,
-			_triggerLearn->Control, _triggerLearn->Bindings(), error);
-		if (!candidate) _triggerLearn->Reject(error);
-		else if (target == _displayedRig.Triggers.end() || !_CanEditTrigger(static_cast<std::size_t>(target - _displayedRig.Triggers.begin())) || !_SubmitCandidate(*candidate))
-			_triggerLearn->Reject("Finish trigger action or pending edit, then retry OK");
-		else { _triggerLearn->SetApplying(); if (_triggerLearnInput) _triggerLearnInput(io::TriggerBindingLearn::Request{}); }
-	}
-	else if (_triggerLearn->Applying && _RoutingEditAvailability() != RoutingEditAvailability::Applying)
-		_triggerLearn->Reject("Binding change rejected; retry when idle");
-	_triggerLearn->Fit(GetSize()); _triggerLearn->Refresh();
 }
 
 std::string GuiHud::_SubmitRename(const std::string& name, const std::string& id, std::uint64_t revision)

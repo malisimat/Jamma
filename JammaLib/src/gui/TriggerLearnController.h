@@ -11,6 +11,9 @@ namespace gui
     class TriggerLearnController : public base::ActionReceiver
     {
     public:
+        using InputExchange = std::function<std::shared_ptr<const io::TriggerBindingLearn::Observation>(
+            std::optional<io::TriggerBindingLearn::Request>)>;
+        enum class UpdateResult { Active, Close, Applied };
         class WeakActionReceiver : public base::ActionReceiver
         {
         public:
@@ -109,11 +112,44 @@ namespace gui
         { if (!_requestDirty) return {}; _requestDirty = false; return io::TriggerBindingLearn::Request{Session,_draft.Learning ? _draft.Attempt : 0u,Revision}; }
         void Observe(const std::shared_ptr<const io::TriggerBindingLearn::Observation>& value)
         {
-            if (!value || value->Identity.Session != Session || !_draft.Learning || value->Identity.Attempt != _draft.Attempt) return;
+            if (!value || !_draft.Learning || value->Identity != io::TriggerBindingLearn::Request{Session, _draft.Attempt, Revision}) return;
             _armed = value->Armed;
             if (!value->Error.empty()) { _error = value->Error; Invalidated = true; _draft.Stop(); _rowsDirty = true; return; }
             if (value->Binding && _draft.Accept(value->Identity.Attempt,*value->Binding,value->PhysicalChannel))
             { _rowsDirty = true; _error.clear(); }
+        }
+        UpdateResult Update(const io::RigFile& rig, std::uint64_t revision, utils::Size2d viewport,
+            const InputExchange& input, const std::function<bool(const io::RigFile&, std::size_t)>& submit,
+            const std::function<bool()>& editApplying)
+        {
+            if (CloseRequested) return UpdateResult::Close;
+            const auto target = std::find_if(rig.Triggers.begin(), rig.Triggers.end(),
+                [&](const auto& trigger) { return trigger.Id == Id; });
+            if (Revision != revision)
+            {
+                const bool accepted = Applying && target != rig.Triggers.end() &&
+                    (Control == io::RigFile::Control::Activate ? target->ControlBindings.Activate : target->ControlBindings.Ditch) == Bindings();
+                if (accepted) return UpdateResult::Applied;
+                if (input) input(io::TriggerBindingLearn::Request{});
+                if (!Invalidated) Invalidate("Rig changed; cancel and reopen learning");
+                Fit(viewport); Refresh();
+                return UpdateResult::Active;
+            }
+            if (input) Observe(input(TakeRequest()));
+            if (ApplyRequested)
+            {
+                ApplyRequested = false;
+                std::string error;
+                const auto candidate = io::TriggerBindingLearn::ReplacePedal(rig, Id, Control, Bindings(), error);
+                if (!candidate) Reject(error);
+                else if (target == rig.Triggers.end() || !submit || !submit(*candidate, static_cast<std::size_t>(target - rig.Triggers.begin())))
+                    Reject("Finish trigger action or pending edit, then retry OK");
+                else { SetApplying(); if (input) input(io::TriggerBindingLearn::Request{}); }
+            }
+            else if (Applying && (!editApplying || !editApplying()))
+                Reject("Binding change rejected; retry when idle");
+            Fit(viewport); Refresh();
+            return UpdateResult::Active;
         }
         bool AdmitKeyboard(const actions::KeyAction& action, bool fresh)
         {
