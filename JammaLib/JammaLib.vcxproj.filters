@@ -101,6 +101,9 @@
     <ClInclude Include="src\vst\ReservedMidiEvents.h">
       <Filter>src\vst</Filter>
     </ClInclude>
+    <ClInclude Include="src\vst\RackState.h">
+      <Filter>src\vst</Filter>
+    </ClInclude>
     <ClInclude Include="src\vst\VstChain.h">
       <Filter>src\vst</Filter>
     </ClInclude>
@@ -672,6 +675,9 @@
       <Filter>lib\rtaudio</Filter>
     </ClCompile>
     <ClCompile Include="src\vst\Vst.cpp">
+      <Filter>src\vst</Filter>
+    </ClCompile>
+    <ClCompile Include="src\vst\RackState.cpp">
       <Filter>src\vst</Filter>
     </ClCompile>
     <ClCompile Include="src\vst\VstChain.cpp">

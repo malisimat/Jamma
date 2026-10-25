@@ -409,6 +409,7 @@
     <ClInclude Include="src\vst\Vst3StateBlob.h" />
     <ClInclude Include="src\vst\Vst3MidiMapping.h" />
     <ClInclude Include="src\vst\VstGlContextScope.h" />
+    <ClInclude Include="src\vst\RackState.h" />
     <ClInclude Include="src\vst\VstChain.h" />
     <ClInclude Include="src\vst\ReservedMidiEvents.h" />
 
@@ -566,6 +567,7 @@
     <ClCompile Include="src\vst\Vst2Plugin.cpp" />
     <ClCompile Include="src\vst\Vst3StateBlob.cpp" />
     <ClCompile Include="src\vst\Vst3MidiMapping.cpp" />
+    <ClCompile Include="src\vst\RackState.cpp" />
     <ClCompile Include="src\vst\VstChain.cpp" />
     <ClCompile Include="src\graphics\VstEditorWindow.cpp" />
     <ClCompile Include="src\engine\Trigger.cpp" />

@@ -1,5 +1,5 @@
 #pragma once
-#include "../vst/VstRackSlot.h"
+#include "../vst/RackState.h"
 #include "../audio/InputHistory.h"
 
 // Performance/mixing channel and LoopTake owner; fans neutral operations downward
@@ -299,8 +299,8 @@ namespace engine
 			bool bypass = false, const std::string& stateId = {});
 		void UnloadVstPlugin(size_t index);
 		vst::VstRackSlot GetVstRackSlot() const;
-		static constexpr std::size_t MaxRackPlugins = 32u;
-		static constexpr std::size_t MaxRackDestinations = 64u; // Active, pending and retiring recovery owners.
+		static constexpr std::size_t MaxRackPlugins = vst::RackState::MaxRackPlugins;
+		static constexpr std::size_t MaxRackDestinations = vst::RackState::MaxRackDestinations; // Active, pending and retiring recovery owners.
 		std::vector<vst::VstRackSlot> GetVstRackSlots(std::size_t offset = 0u, std::size_t count = MaxRackPlugins) const;
 		std::size_t RackSlotCount() const;
 		std::string RackDiagnostic() const;
@@ -312,10 +312,10 @@ namespace engine
 		bool LoadManagedVstSlot(std::wstring path, const std::string& retryIdentity = {}, bool discardOnFailure = false);
 		std::optional<std::wstring> TakeFailedInteractiveVstLoad(const std::string& identity);
 		bool SetLiveVstChannelRoute(unsigned int channel, midi::LiveVstChannelRoute route, std::uint64_t revision);
-		const std::array<midi::LiveVstChannelRoute, 16>& LiveVstChannelRoutes() const noexcept { return _liveVstChannelRoutes; }
-		std::uint64_t RackRevision() const noexcept { return _rackRevision; }
-		bool RackInactive() const noexcept { return _rackInactive; }
-		bool RackLatencySuspended() const noexcept { return _rackLatencySuspended; }
+		const std::array<midi::LiveVstChannelRoute, 16>& LiveVstChannelRoutes() const noexcept { return _rackState.LiveChannelRoutes(); }
+		std::uint64_t RackRevision() const noexcept { return _rackState.Revision(); }
+		bool RackInactive() const noexcept { return _rackState.Inactive(); }
+		bool RackLatencySuspended() const noexcept { return _rackState.LatencySuspended(); }
 		bool LoadManagedVstPlugin(std::wstring path);
 		bool UnloadManagedVstPlugin(const std::string& identity);
 		void ForceUnloadAllVstPlugins();
@@ -324,7 +324,7 @@ namespace engine
 		std::shared_ptr<vst::IVstPlugin> GetVstPlugin(size_t index) const;
 		bool OwnsPlugin(const vst::IVstPlugin* plugin) const noexcept
 		{
-			const auto chain = _vstChain.load(std::memory_order_acquire);
+			const auto chain = _rackState.ActiveChain();
 			return chain && chain->ContainsPlugin(plugin);
 		}
 
@@ -359,7 +359,6 @@ namespace engine
 
 		static unsigned int _CalcTakeHeight(unsigned int stationHeight, unsigned int numTakes);
 		
-		static void _DrainVstChain(std::shared_ptr<vst::VstChain> chain);
 		static unsigned int _ResolveSampleRate(std::optional<io::UserConfig> cfg,
 			std::optional<audio::AudioStreamParams> params);
 		void _TrySeedClockFromFirstLoop(const std::shared_ptr<utils::Timer>& clock,
@@ -490,39 +489,10 @@ namespace engine
 		midi::AutomationPlayback _automationPlayback;
 		bool _automationDispatchDirty = false; // Serialized child topology callback; UI commit consumes.
 
-		// VST insert chain applied after all LoopTakes are mixed down,
-		// just before each channel is sent to the output AudioMixer.
-		// Published atomically for lock-free audio-thread reads.
-		std::atomic<std::shared_ptr<vst::VstChain>> _vstChain;
-		std::shared_ptr<vst::VstChain> _backVstChain;
-		std::atomic<bool> _flipVstChain{ false };
-
-		// Pending load/unload requests staged by LoadVstPlugin / UnloadVstPlugin.
-		// Read only on the job thread (from OnAction(JobAction)).
-		// Each entry carries the plugin path and an optional VST2 initial-state blob.
-		std::vector<actions::JobAction> _pendingVstLoads;
-		std::vector<actions::JobAction> _pendingVstUnloads;
-		// _vstPluginPaths: written on job thread (OnAction), read on main thread (VstEntries).
-		// Access is guarded by _vstPathsMutex in both directions.
-		mutable std::mutex _vstPathsMutex;
-		std::vector<std::wstring> _vstPluginPaths;
-		std::vector<io::JamFile::VstEntry> _vstSavedEntries;
-		// Job-side removals are applied to live cables by CommitChanges before
-		// publishing the matching replacement chain and MIDI destinations.
-		std::vector<std::string> _pendingDeletedVstRouteIds; // _vstPathsMutex.
-		// Serialized structural owner writes; UI/export reads under Scene's owner
-		// lock. Audio sees only prepared lists/policy in its immutable snapshot.
-		std::array<midi::LiveVstChannelRoute, 16> _liveVstChannelRoutes{};
-		std::atomic<std::uint64_t> _rackRevision{1u}; // UI/job metadata publication; audio never reads.
-		std::vector<std::string> _pendingRackIds; // _vstPathsMutex; completion clears by identity.
-		std::vector<std::pair<std::string, std::wstring>> _failedInteractiveVstLoads; // Bounded UI notices, _vstPathsMutex.
-		bool _rackInactive = false; // Reconstruction/structural owner; raw saved entries remain exportable.
-		bool _rackLatencySuspended = false; // Structural owner; callback sees prepared empty delivery.
-		std::string _rackDiagnostic; // Structural owner/UI under existing Scene lock.
+		vst::RackState _rackState;
+		vst::RackState::Format _RackFormat() const;
 		bool _RackLatencyFeasible(const vst::VstChain& chain) const noexcept;
-		void _CompactMidiVstRoutesAfterRemoval(std::size_t index); // Caller holds _vstPathsMutex.
-		// UI stages requests, job completes them. Audio never reads this counter.
-		std::atomic<unsigned int> _vstJobsPending{ 0u };
+		void _CompactMidiVstRoutesAfterRemoval(std::size_t index); // Rack calls under its metadata mutex.
 		midi::MidiDelivery _midiDelivery;
 		midi::CaptureHistory _captureHistory;
 		// Coherent correspondence: callback writes, structural owner reads via
