@@ -183,9 +183,9 @@ Scene::Scene(SceneParams params,
 	_deviceStatus = statusLabel("Ready", 66u);
 	_activeAudioStatus = statusLabel("Audio stopped", 44u);
 	_fileStatus = statusLabel("Choose a folder on first Save", 44u);
-	auto saveParams = GuiButtonParams::PanelButton(240u); saveParams.Text = "Save (Alt: choose folder)"; saveParams.DispatchCommand = true;
-	auto defaultJamParams = GuiButtonParams::PanelButton(240u); defaultJamParams.Text = "Save jam as default"; defaultJamParams.DispatchCommand = true;
-	auto loadParams = GuiButtonParams::PanelButton(240u); loadParams.Text = "Load Jam"; loadParams.DispatchCommand = true;
+	auto saveParams = GuiButtonParams::PanelButton(240u); saveParams.Text = "Save"; saveParams.DispatchCommand = true;
+	auto defaultJamParams = GuiButtonParams::PanelButton(240u); defaultJamParams.Text = "Set as Default"; defaultJamParams.DispatchCommand = true;
+	auto loadParams = GuiButtonParams::PanelButton(240u); loadParams.Text = "Load"; loadParams.DispatchCommand = true;
 	saveParams.Size.Height = 40u; saveParams.MinSize.Height = 40u; saveParams.TextFontSize = graphics::FontOptions::FONT_SMALL;
 	defaultJamParams.Size.Height = 40u; defaultJamParams.MinSize.Height = 40u; defaultJamParams.TextFontSize = graphics::FontOptions::FONT_SMALL;
 	loadParams.Size.Height = 40u; loadParams.MinSize.Height = 40u; loadParams.TextFontSize = graphics::FontOptions::FONT_SMALL;
@@ -193,7 +193,9 @@ Scene::Scene(SceneParams params,
 	mainParams.Settings.push_back({SettingsPage::Session, "", _saveButton, 7210u});
 	mainParams.Settings.push_back({SettingsPage::Session, "", _saveDefaultJamButton, 7212u});
 	mainParams.Settings.push_back({SettingsPage::Session, "", _loadButton, 7211u});
-	mainParams.Settings.push_back({SettingsPage::Session, "", _fileStatus, 0u});
+	auto saveAsParams = saveParams; saveAsParams.Text = "Save As...";
+	_saveAsJamButton = std::make_shared<GuiButton>(saveAsParams);
+	mainParams.Settings.push_back({SettingsPage::Session, "", _saveAsJamButton, 7213u});
 	_mainPanel = std::make_shared<GuiMainPanel>(mainParams);
 	AddChild(_mainPanel);
 	mainParams.SelectionOnly = true;
@@ -1989,6 +1991,8 @@ ActionResult Scene::OnAction(GuiAction action)
 	if (_isSceneQuitting.load(std::memory_order_acquire)) return ActionResult::NoAction();
 	if (_controlWriterExclusion.owns_lock() && (action.Index < 7200u || action.Index >= 8300u)) return ActionResult::NoAction();
 	if (action.Index == 7210u) { _RequestSave((action.InputModifiers & Action::MODIFIER_ALT) != 0); return ActionResult::NoAction(); }
+	if (action.Index == GuiMainPanel::LoadRigControlIndex) { _panelRigLoadRequested = true; return ActionResult::NoAction(); }
+	if (action.Index == 7213u) { _RequestSave(true); return ActionResult::NoAction(); }
 	if (action.Index == 7212u) { _RequestSave(false, true); return ActionResult::NoAction(); }
 	if (action.Index == 7211u) { if (_controlOperation == ControlOperation::None) _panelLoadRequested = true; return ActionResult::NoAction(); }
 	if (action.Index == 7205u) { _audioStartRequested = true; _audioSchedule.Changed(DeviceSelectionSchedule::Edit::Format); return ActionResult::NoAction(); }
@@ -4766,7 +4770,7 @@ void Scene::PumpDeviceAndFileControls()
 	bool inventoryBusy = false;
 	{ std::scoped_lock lock(_sceneMutex); inventoryBusy = _stationManagement.Busy() || _rigSaveDialogOpen || _rigSaveInProgress; }
 	const bool filesEnabled = !inventoryBusy && _controlOperation == ControlOperation::None && _rigCoordinator.EditsEnabled();
-	_saveButton->SetEnabled(filesEnabled); _saveDefaultJamButton->SetEnabled(filesEnabled && !_defaultJamPath.empty() && static_cast<bool>(_defaultJamSaver)); _loadButton->SetEnabled(filesEnabled);
+	_saveAsJamButton->SetEnabled(filesEnabled); _saveButton->SetEnabled(filesEnabled); _saveDefaultJamButton->SetEnabled(filesEnabled && !_defaultJamPath.empty() && static_cast<bool>(_defaultJamSaver)); _loadButton->SetEnabled(filesEnabled);
 	const auto now = std::chrono::steady_clock::now();
 	const auto actual = _audioEngine->GetStreamParams();
 	if (actual.BufSize && !_acceptedBufferSizes.contains(actual.Name)) { _acceptedBufferSizes[actual.Name] = {actual.BufSize}; _devicePageDirty = true; }
@@ -4843,7 +4847,7 @@ void Scene::PumpDeviceAndFileControls()
 			_sessionSaveFolder = _pendingSaveFolder;
 			if (_pendingSaveAsDefault)
 			{
-				const bool useNamedJam = !_currentJamPath.empty();
+				const bool useNamedJam = true;
 				if (_defaultJamSaver(result.Path, useNamedJam))
 				{
 					if (useNamedJam) _currentJamPath = result.Path;

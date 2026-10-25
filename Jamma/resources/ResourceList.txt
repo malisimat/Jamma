@@ -9,7 +9,7 @@
 4 sky
 2 texture MVP TextureSampler Opacity
 2 texture_tinted MVP TextureSampler TintColor Opacity TintMaskSampler HasTintMask
-2 font MVP TextureSampler Opacity
+2 font MVP TextureSampler Opacity TextColor
 2 texture_shaded MVP LoopState LoopHover SceneDim
 2 disc_mask MVP TextureSampler DiscRepeatCount DiscSpiralPitch Opacity Highlight StationHover StationMuted SceneDim GroupPreview GroupPreviewTint
 2 waveform WaveformSceneScale WaveformDisplayScale SpectralReveal MVP GroupPreview GroupPreviewTint LoopState LoopHover LoopSelected LoopPressed LoopMuted Highlight HighlightPass TextureSampler WaveformSampler WaveformRadius WaveformHeightScale WaveformMinHeight WaveformColorMultiplier WaveformColorScale WaveformUnitMeshRadius EditorMorph EditorPlayFrac SelectionActive SceneDim EditorActive EditorTime ProbeSampler ProbeStrength EditorProbeEye ModelView ProbeView MaterialProbeSampler

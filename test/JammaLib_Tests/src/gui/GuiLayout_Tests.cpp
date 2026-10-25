@@ -794,7 +794,12 @@ TEST_F(HudResponsiveLayoutTests, TriggerCardsKeepSocketsSymmetricAndLabelControl
 	EXPECT_EQ(height - input->Position().Y - static_cast<int>(input->GetSize().Height / 2u),
 		output->Position().Y + static_cast<int>(output->GetSize().Height / 2u));
 	EXPECT_EQ(input->Position().X, output->Position().X);
-	EXPECT_EQ(activate->Position().X, width - right(ditch));
+	// The fixed white band occupies the first 13 pixels of trigger_back.
+	EXPECT_LE(std::abs((activate->Position().X - 13) - (width - right(ditch))), 1);
+	EXPECT_EQ(46u, activate->GetSize().Width);
+	EXPECT_EQ(62u, activate->GetSize().Height);
+	EXPECT_EQ(activate->GetSize().Width, ditch->GetSize().Width);
+	EXPECT_EQ(activate->GetSize().Height, ditch->GetSize().Height);
 	EXPECT_EQ(activate->Position().Y, ditch->Position().Y);
 	EXPECT_LT(top(activate), band->Position().Y);
 	EXPECT_LT(top(band), input->Position().Y);

@@ -127,6 +127,7 @@ namespace gui
 
 	public:
 		std::string String;
+		glm::vec3 TextColor{1.0f};
 		// Positive enables word wrapping within the assigned label width. Zero or
 		// negative keeps a dynamic, single-line label.
 		int WrapWidth = 0;
@@ -145,6 +146,7 @@ namespace gui
 	public:
 		GuiLabel(GuiLabelParams guiParams);
 		void SetString(const std::string& str);
+		void SetTextColor(glm::vec3 color) { _textColor = color; }
 		std::optional<float> MeasureText(const std::string& text) const;
 		static std::string FitText(const std::string& text, float width,
 			const std::function<float(const std::string&)>& measure);
@@ -174,6 +176,7 @@ namespace gui
 
 	private:
 		std::string _str;
+		glm::vec3 _textColor{1.0f};
 		std::string _pendingStr;
 		utils::Position2d _textInset;
 		bool _centerHorizontally;

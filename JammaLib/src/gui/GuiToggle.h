@@ -109,7 +109,6 @@ namespace gui
 
 	public:
 		virtual void SetSize(utils::Size2d size) override;
-		virtual void Draw(base::DrawContext& ctx) override;
 
 		virtual actions::ActionResult OnAction(actions::TouchAction action) override;
 		virtual actions::ActionResult OnAction(actions::KeyAction action) override;
@@ -120,6 +119,7 @@ namespace gui
 		void SetToggleIndex(unsigned int index) { _toggleIndex = index; }
 
 	protected:
+		graphics::Image& _CurrentTexture() override;
 		virtual void _InitResources(resources::ResourceLib& resourceLib, bool forceInit) override;
 		virtual void _ReleaseResources() override;
 		virtual void _OnToggleChange(bool bypassUpdates);

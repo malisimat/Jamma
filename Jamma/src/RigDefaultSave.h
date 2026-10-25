@@ -67,7 +67,7 @@ public:
 		if (_busy) return;
 		std::wstring target = _currentPath;
 		const bool setDefault = mode == engine::Scene::RigSaveMode::StartupDefault;
-		const bool choose = mode != engine::Scene::RigSaveMode::Save || target.empty() || !ValidFilename(target, _directory);
+		const bool choose = mode == engine::Scene::RigSaveMode::SaveAs || target.empty() || !ValidFilename(target, _directory);
 		scene.SetRigSaveDialogOpen(true);
 		std::error_code error;
 		std::filesystem::create_directories(_directory, error);

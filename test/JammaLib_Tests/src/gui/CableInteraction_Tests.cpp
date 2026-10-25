@@ -377,7 +377,9 @@ TEST_F(HudCableInteractionTests, PedalPressWinsOverSocketRadiusWhileSocketCentre
 		ASSERT_TRUE(Routing->Triggers[triggerIndex].Instance->CanApplyCaptureRouting());
 		EXPECT_TRUE(Hud->OnAction(touch).IsEaten); EXPECT_TRUE(Hud->HasCableDrag());
 		Hud->ClearPointerState(); EXPECT_FALSE(Hud->HasCableDrag());
-		touch.Position = card->GlobalPosition() + utils::Position2d{22, 12};
+		// Deliberately overlap the socket radius, independently of the visual layout.
+		pedal->SetPosition({output->Position.X - card->GlobalPosition().X + 8, pedal->Position().Y});
+		touch.Position = pedal->GlobalPosition() + utils::Position2d{2, 4};
 		ASSERT_TRUE(CableInteraction::HitTest(*output, touch.Position, 14.0f));
 		touch.State = actions::TouchAction::TOUCH_DOWN;
 		const auto result = Hud->OnAction(touch);
@@ -897,6 +899,10 @@ TEST_F(HudCableInteractionTests, VisiblePedalLearnControlOpensDialogWithoutSendi
     EXPECT_TRUE(pedal->TryGetChild(0u)->IsVisible());
     EXPECT_FALSE(pedal->TryGetChild(1u)->IsVisible());
     EXPECT_FALSE(pedal->TryGetChild(2u)->IsVisible());
+    actions::TouchMoveAction hover;
+    hover.Position = learn->GlobalPosition() + utils::Position2d{2,2};
+    Hud->OnAction(hover);
+    EXPECT_EQ(base::GuiElement::STATE_OVER,learn->GetState());
     actions::TouchAction action; action.Touch = actions::TouchAction::TOUCH_MOUSE; action.Index = 0u;
     action.Position = learn->GlobalPosition() + utils::Position2d{2,2}; action.State = actions::TouchAction::TOUCH_DOWN;
     const auto down = Hud->OnAction(action);

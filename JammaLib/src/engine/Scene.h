@@ -236,6 +236,7 @@ namespace engine
 		// Off-callback hardware-only saver; never persists live membership or routing.
 		bool SaveHardwarePreferences(const io::RigFile& rig) const
 		{ return _saveHardwarePreferences && _saveHardwarePreferences(rig); }
+		bool ConsumePanelRigLoadRequest() { return std::exchange(_panelRigLoadRequested, false); }
 		bool ConsumeRigSaveRequest(); // Main/window thread only.
 		enum class RigSaveMode { Save, SaveAs, StartupDefault };
 		RigSaveMode RequestedRigSaveMode() const { return _rigSaveMode; }
@@ -531,6 +532,8 @@ namespace engine
 		std::wstring _defaultJamPath, _currentJamPath;
 		std::function<bool(const std::wstring&, bool)> _defaultJamSaver;
 		bool _pendingSaveAsDefault = false;
+		bool _panelRigLoadRequested = false;
+		std::shared_ptr<gui::GuiButton> _saveAsJamButton;
 		bool _panelLoadRequested = false, _loadReady = false;
 		std::mutex _midiLifecycleMutex;
 		std::atomic<bool> _midiRefreshRequested{ false };

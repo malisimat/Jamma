@@ -2,6 +2,8 @@
 #include "gtest/gtest.h"
 #include "graphics/Image.h"
 #include "graphics/GlDeleteQueue.h"
+#include "gui/GuiButton.h"
+#include "gui/GuiToggle.h"
 
 #include <Windows.h>
 #include <algorithm>
@@ -117,6 +119,120 @@ TEST_F(TextureTintGlTest, PreservesLegacyColoursAndSupportsPartialAndFullTintRel
 		EXPECT_EQ(legacy, (std::array<unsigned char, 4>{ 32, 60, 60, 64 }));
 	}
 	EXPECT_EQ(glGetError(), GL_NO_ERROR);
+}
+
+TEST_F(TextureTintGlTest, DarkFontColourPreservesCoverageAndNextDrawDefaultsToWhite)
+{
+	resources::ResourceLib resources;
+	ASSERT_TRUE(resources.LoadResource(resources::SHADER, "font", {"MVP","TextureSampler","Opacity","TextColor"}));
+	ASSERT_TRUE(resources.LoadFonts());
+	const auto selected = resources.GetFont(graphics::FontOptions::FONT_SMALL);
+	ASSERT_TRUE(selected);
+	const auto font = selected->lock(); ASSERT_TRUE(font);
+	GLuint buffers[2]{};
+	const auto vertices = font->InitVertexArray("Learn", GL_STATIC_DRAW, &buffers[0], &buffers[1]);
+	graphics::GlDrawContext context({64u,64u}, base::DrawContext::TEXTURE);
+	context.Initialise(); context.Bind();
+	context.PushMvp(glm::ortho(0.0f,64.0f,0.0f,64.0f,-1.0f,1.0f));
+	context.PushMvp(glm::translate(glm::mat4(1.0f),glm::vec3{4.0f,24.0f,0.0f}));
+	glDisable(GL_BLEND);
+	glClearColor(0,0,0,0); glClear(GL_COLOR_BUFFER_BIT);
+	font->Draw(context,vertices,5u,{0.08f,0.08f,0.07f});
+	std::array<unsigned char,64u * 64u * 4u> dark{}, white{};
+	glReadPixels(0,0,64,64,GL_RGBA,GL_UNSIGNED_BYTE,dark.data());
+	glClear(GL_COLOR_BUFFER_BIT);
+	font->Draw(context,vertices,5u);
+	glReadPixels(0,0,64,64,GL_RGBA,GL_UNSIGNED_BYTE,white.data());
+	std::size_t strongest = 0u;
+	for (std::size_t i = 0u; i < dark.size(); i += 4u)
+	{
+		EXPECT_EQ(dark[i + 3u],white[i + 3u]);
+		if (dark[i + 3u] > dark[strongest + 3u]) strongest = i;
+	}
+	EXPECT_GT(dark[strongest + 3u],128);
+	EXPECT_NEAR(dark[strongest],20,1);
+	EXPECT_NEAR(dark[strongest + 2u],18,1);
+	EXPECT_EQ(white[strongest],255);
+	EXPECT_EQ(white[strongest + 1u],255);
+	EXPECT_EQ(white[strongest + 2u],255);
+	graphics::GlDeleteQueue::DeleteBuffers(2,buffers);
+	graphics::GlDeleteQueue::DeleteVertexArrays(1,&vertices);
+	EXPECT_EQ(glGetError(),GL_NO_ERROR);
+}
+
+TEST_F(TextureTintGlTest, ButtonAndToggleLabelsUseConfiguredNormalHoverAndPressedColours)
+{
+	resources::ResourceLib resources;
+	ASSERT_TRUE(resources.LoadResource(resources::SHADER,"font",{"MVP","TextureSampler","Opacity","TextColor"}));
+	ASSERT_TRUE(resources.LoadFonts());
+	gui::GuiButtonParams params;
+	params.Size = {60u,60u}; params.Text = "Learn";
+	params.TextColor = {0.8f,0.9f,1.0f};
+	params.OverTextColor = glm::vec3{0.08f,0.08f,0.07f};
+	params.DownTextColor = glm::vec3{0.2f,0.2f,0.1f};
+	gui::GuiToggleParams toggleParams;
+	static_cast<gui::GuiButtonParams&>(toggleParams) = params;
+	const std::array<std::shared_ptr<gui::GuiButton>,2> buttons{
+		std::make_shared<gui::GuiButton>(params),std::make_shared<gui::GuiToggle>(toggleParams)};
+	graphics::GlDrawContext context({64u,64u},base::DrawContext::TEXTURE);
+	context.Initialise(); context.Bind();
+	context.PushMvp(glm::ortho(0.0f,64.0f,0.0f,64.0f,-1.0f,1.0f));
+	for (const auto& button : buttons)
+	{
+		button->InitResources(resources,false);
+		button->Draw(context);
+		EXPECT_EQ(std::any_cast<glm::vec3>(*context.GetUniform("TextColor")),params.TextColor);
+		button->ApplyHoverPoint({30,30}); button->Draw(context);
+		EXPECT_EQ(std::any_cast<glm::vec3>(*context.GetUniform("TextColor")),*params.OverTextColor);
+		actions::TouchAction press; press.Position = {30,30}; press.State = actions::TouchAction::TOUCH_DOWN;
+		button->OnAction(press); button->Draw(context);
+		EXPECT_EQ(std::any_cast<glm::vec3>(*context.GetUniform("TextColor")),*params.DownTextColor);
+		button->SetEnabled(false); button->Draw(context);
+		EXPECT_EQ(std::any_cast<glm::vec3>(*context.GetUniform("TextColor")),params.TextColor);
+	}
+	EXPECT_EQ(glGetError(),GL_NO_ERROR);
+}
+
+TEST_F(TextureTintGlTest, ToggleSharedDrawPathKeepsOnOffTexturesAndMissingStateFallbacks)
+{
+	resources::ResourceLib resources;
+	ASSERT_TRUE(LoadShader(resources));
+	const std::array<const char*,5> textures{"rounded_but","rounded_but_over","rounded_but_on","rounded_but_on_over","rounded_but_on_down"};
+	for (std::size_t i = 0; i < textures.size(); ++i)
+	{
+		ASSERT_TRUE(resources.LoadResource(resources::TEXTURE,textures[i],{}));
+		const auto shade = static_cast<unsigned char>(30u + 40u * i);
+		Fill(resources,textures[i],{shade,shade,shade,255});
+	}
+	gui::GuiToggleParams params;
+	params.Size = {60u,60u}; params.TextureShader = "texture_tinted"; params.TintColor = {1.0f,1.0f,1.0f};
+	params.Texture = textures[0]; params.OverTexture = textures[1]; params.OutTexture = textures[1];
+	params.ToggledTexture = textures[2]; params.ToggledOverTexture = textures[3]; params.ToggledDownTexture = textures[4];
+	auto toggle = std::make_shared<gui::GuiToggle>(params);
+	toggle->InitResources(resources,false);
+	graphics::GlDrawContext context({64u,64u},base::DrawContext::TEXTURE);
+	context.Initialise(); context.Bind();
+	context.PushMvp(glm::ortho(0.0f,64.0f,0.0f,64.0f,-1.0f,1.0f));
+	glDisable(GL_BLEND); context.SetUniform("TextureSampler",0);
+	for (const bool on : {false,true})
+	{
+		toggle->SetToggleState(on ? gui::GuiToggleParams::TOGGLE_ON : gui::GuiToggleParams::TOGGLE_OFF,true);
+		toggle->ClearPointerState(); toggle->Draw(context);
+		std::array<unsigned char,4> pixel{};
+		glReadPixels(30,30,1,1,GL_RGBA,GL_UNSIGNED_BYTE,pixel.data());
+		EXPECT_EQ(pixel[0],on ? 110 : 30);
+		toggle->ApplyHoverPoint({30,30}); toggle->Draw(context);
+		glReadPixels(30,30,1,1,GL_RGBA,GL_UNSIGNED_BYTE,pixel.data());
+		EXPECT_EQ(pixel[0],on ? 150 : 70);
+		actions::TouchAction press; press.Position = {30,30}; press.State = actions::TouchAction::TOUCH_DOWN;
+		toggle->OnAction(press); toggle->Draw(context);
+		glReadPixels(30,30,1,1,GL_RGBA,GL_UNSIGNED_BYTE,pixel.data());
+		EXPECT_EQ(pixel[0],on ? 190 : 30);
+		toggle->ApplyHoverPoint({80,80}); toggle->Draw(context);
+		glReadPixels(30,30,1,1,GL_RGBA,GL_UNSIGNED_BYTE,pixel.data());
+		EXPECT_EQ(pixel[0],on ? 110 : 30);
+	}
+	EXPECT_EQ(glGetError(),GL_NO_ERROR);
 }
 
 TEST_F(TextureTintGlTest, HoverMasksBrightenBordersAndPreserveTintedFillsAndNinePatchGaps)

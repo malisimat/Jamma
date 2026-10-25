@@ -90,6 +90,7 @@ namespace gui
 
 		std::shared_ptr<GuiLabel> _titleLabel;
 		std::shared_ptr<GuiPopupColorRect> _fill;
+		std::array<std::shared_ptr<GuiPopupColorRect>, 4> _border;
 		std::shared_ptr<base::GuiElement> _headerBand;
 		std::array<std::shared_ptr<GuiLabel>, 3> _lineLabels;
 		std::vector<std::shared_ptr<GuiButton>> _buttons;

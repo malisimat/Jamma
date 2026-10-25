@@ -225,6 +225,9 @@ namespace base
 		}
 
 	protected:
+		virtual graphics::Image& _CurrentTexture();
+		static graphics::Image& _ResolveStateTexture(GuiElementState state, graphics::Image& normal,
+			graphics::Image& over, graphics::Image& down, graphics::Image& out);
 		virtual void _InitResources(resources::ResourceLib& resourceLib, bool forceInit) override;
 		virtual void _ReleaseResources() override;
 		virtual std::vector<actions::JobAction> _CommitChanges();

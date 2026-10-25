@@ -1186,6 +1186,24 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 			}
 			else pendingConsoleToggle = !pendingConsoleToggle;
 		}
+		if (scene.value()->ConsumePanelRigLoadRequest())
+		{
+			wchar_t filename[32768] = L"";
+			OPENFILENAMEW dialog{};
+			dialog.lStructSize = sizeof(dialog); dialog.hwndOwner = window.GetWindowHandle();
+			dialog.lpstrFilter = L"Jamma rig (*.rig)\0*.rig\0\0";
+			dialog.lpstrFile = filename; dialog.nMaxFile = static_cast<DWORD>(std::size(filename));
+			dialog.lpstrTitle = L"Load rig";
+			dialog.Flags = OFN_FILEMUSTEXIST | OFN_NOCHANGEDIR | OFN_PATHMUSTEXIST;
+			if (GetOpenFileNameW(&dialog))
+			{
+				auto selected = *defaults; selected.Rig = filename;
+				bool readable = false;
+				const auto candidate = LoadRig(selected, readable);
+				if (!candidate || scene.value()->RequestRigEdit(*candidate) != engine::RigCoordinator::EditResult::Pending)
+					MessageBoxW(dialog.hwndOwner, L"Rig could not be applied. Check the log; device setup changes require a restart.", L"Load rig", MB_OK | MB_ICONWARNING);
+			}
+		}
 		const bool windowLoadRequested = window.ConsumeJamLoadRequest();
 		const bool panelLoadRequested = scene.value()->ConsumePanelLoadRequest();
 		if (windowLoadRequested || panelLoadRequested)

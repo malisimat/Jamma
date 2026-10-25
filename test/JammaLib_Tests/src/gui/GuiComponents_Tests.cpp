@@ -1229,6 +1229,11 @@ TEST(GuiMainPanel, ControlsRecoverTheirWidthsAfterTinyAndZeroViewport) {
 	params.Settings = { { gui::SettingsPage::Timing, "Offset", numeric, 7002u } };
 	auto panel = std::make_shared<gui::GuiMainPanel>(params);
 	panel->Init();
+	const auto label = numeric->Parent()->TryGetChild(0);
+	const auto page = numeric->Parent();
+	const auto leftMargin = label->GlobalPosition().X - page->GlobalPosition().X;
+	const auto rightMargin = static_cast<int>(page->GetSize().Width - label->GetSize().Width) - leftMargin;
+	EXPECT_EQ(leftMargin, rightMargin);
 	const auto originalWidth = numeric->GetSize().Width;
 	// Layout must retain the natural control width while shrinking its presentation.
 	panel->SetViewportSize({ 40, 40 });
@@ -1819,7 +1824,9 @@ TEST(GuiPopup, NarrowRowsKeepDetailsAndActionsWithinContent)
     popup->SetRows({{"1. MIDI binding", "Learn"}}, {}, {});
     auto scroll = std::dynamic_pointer_cast<GuiScrollPanel>(popup->TryGetChild(6u)); ASSERT_TRUE(scroll);
     auto content = scroll->Content(); ASSERT_TRUE(content);
-    for (unsigned char index = 0; index < 8; ++index)
+    // Inactive rows contain only their texture, label and two actions.
+    EXPECT_FALSE(content->TryGetChild(4u));
+    for (unsigned char index = 0; index < 4; ++index)
     {
         auto child = content->TryGetChild(index); ASSERT_TRUE(child);
         EXPECT_GE(child->Position().X,0);

@@ -60,6 +60,7 @@ GuiMainPanel::GuiMainPanel(GuiMainPanelParams params) : GuiPanel(params),
 	for (const auto& setting : params.Settings)
 	{
 		if (!setting.Control || setting.Page >= SettingsPage::Count) continue;
+		if (!_selectionOnly && setting.Page == SettingsPage::Session) continue;
 		auto& page = _pages[static_cast<size_t>(setting.Page)];
 		if (!setting.Label.empty())
 		{
@@ -78,26 +79,49 @@ GuiMainPanel::GuiMainPanel(GuiMainPanelParams params) : GuiPanel(params),
 	}
 	if (!_selectionOnly)
 	{
-		for (const auto& [text, command] : std::array<std::pair<const char*, unsigned int>, 2>{{{"Save rig", SaveRigControlIndex}, {"Save rig as...", SaveRigAsControlIndex}}})
-		{
-			auto params = GuiButtonParams::PanelButton(260u); params.Text = text; params.DispatchCommand = true;
-			params.TextFontSize = graphics::FontOptions::FONT_SMALL;
-			auto button = std::make_shared<GuiButton>(params);
-			_pages[static_cast<size_t>(SettingsPage::Timing)]->AddChild(button);
-			_controlSizes.emplace_back(button, params.Size);
-			auto receiver = std::make_shared<GuiCommandReceiver>(command); button->SetReceiver(receiver);
-			_bindings.push_back(std::move(receiver)); _additionalRigSaveButtons.push_back(std::move(button));
-		}
-		auto save = GuiButtonParams::PanelButton(260u);
-		save.Text = "Save rig as default..."; save.DispatchCommand = true;
-		save.Size.Height = 40u; save.MinSize.Height = 40u;
-		save.TextFontSize = graphics::FontOptions::FONT_SMALL;
-		_saveRigButton = std::make_shared<GuiButton>(save);
-		_pages[static_cast<size_t>(SettingsPage::Timing)]->AddChild(_saveRigButton);
-		_controlSizes.emplace_back(_saveRigButton, save.Size);
-		auto binding = std::make_shared<GuiCommandReceiver>(SaveRigDefaultControlIndex);
-		_saveRigButton->SetReceiver(binding);
-		_bindings.push_back(std::move(binding));
+		auto& page = _pages[static_cast<size_t>(SettingsPage::Session)];
+		const auto addSection = [&](const char* title, const auto& controls) {
+			auto label = GuiLabelParams::PanelHeader(title, 320u);
+			label.UseDarkFlatBackground();
+			label.FontSize = graphics::FontOptions::FONT_SMALL;
+			page->AddChild(std::make_shared<GuiLabel>(label));
+			auto row = std::make_shared<GuiStackPanel>(GuiStackPanelParams::PanelHorizontalRow(320u, 40u));
+			std::shared_ptr<GuiButton> defaultButton;
+			for (const auto& [text, command] : controls)
+			{
+				std::shared_ptr<GuiButton> button;
+				for (const auto& setting : params.Settings)
+					if (setting.Command == command) button = std::dynamic_pointer_cast<GuiButton>(setting.Control);
+				if (!button)
+				{
+					auto buttonParams = GuiButtonParams::PanelButton(80u);
+					buttonParams.Text = text; buttonParams.DispatchCommand = true;
+					buttonParams.Size.Height = 40u; buttonParams.MinSize = { 0u, 40u };
+					buttonParams.TextFontSize = graphics::FontOptions::FONT_SMALL;
+					button = std::make_shared<GuiButton>(buttonParams);
+				}
+				auto binding = std::make_shared<GuiCommandReceiver>(command);
+				button->SetReceiver(binding); _bindings.push_back(std::move(binding));
+				if (command == SaveRigDefaultControlIndex || command == 7212u) defaultButton = button;
+				else row->AddChild(button);
+				if (command == SaveRigDefaultControlIndex) _saveRigButton = button;
+				else if (command == LoadRigControlIndex || command == SaveRigAsControlIndex) _additionalRigSaveButtons.push_back(button);
+			}
+			page->AddChild(row);
+			_controlSizes.emplace_back(row, row->GetSize());
+			page->AddChild(defaultButton);
+			_controlSizes.emplace_back(defaultButton, defaultButton->GetSize());
+		};
+		addSection("Rig", std::array<std::pair<const char*, unsigned int>, 3>{{
+			{"Load", LoadRigControlIndex}, {"Save As...", SaveRigAsControlIndex}, {"Set as Default", SaveRigDefaultControlIndex}}});
+		addSection("Jam", std::array<std::pair<const char*, unsigned int>, 4>{{
+			{"Load", 7211u}, {"Save", 7210u}, {"Save As...", 7213u}, {"Set as Default", 7212u}}});
+		for (const auto& setting : params.Settings)
+			if (setting.Page == SettingsPage::Session && setting.Command == 0u && setting.Control)
+			{
+				page->AddChild(setting.Control);
+				_controlSizes.emplace_back(setting.Control, setting.Control->GetSize());
+			}
 	}
 	if (_selectionOnly)
 	{
@@ -108,7 +132,7 @@ GuiMainPanel::GuiMainPanel(GuiMainPanelParams params) : GuiPanel(params),
 		}
 	}
 	GuiScrollPanelParams scrollParams;
-	scrollParams.ScrollBarWidth = 12u;
+	scrollParams.ScrollBarWidth = SettingsScrollBarWidth;
 	_pageScroll = std::make_shared<GuiScrollPanel>(scrollParams);
 	_pageScroll->SetContent(_pages[static_cast<size_t>(_page)]);
 	_frame->AddChild(_pageScroll);
@@ -401,19 +425,24 @@ void GuiMainPanel::_LayoutSettings(int panelWidth, int panelHeight)
 	const int tabHeight = std::min(48, std::max(0, panelHeight - 2 * padding - titleHeight));
 	if (_tabScroll)
 	{
-		_tabScroll->SetPosition({ padding, std::max(padding, panelHeight - padding - titleHeight - tabHeight) });
+		// The radio width includes a trailing four-pixel cell gap; center the visible buttons.
+		const int tabRowWidth = static_cast<int>(_tabs->GetSize().Width) - 4;
+		const int tabLeft = padding + std::max(0, (inner - tabRowWidth) / 2);
+		_tabScroll->SetPosition({ tabLeft, std::max(padding, panelHeight - padding - titleHeight - tabHeight) });
 		_tabScroll->SetSize({ static_cast<unsigned int>(inner), static_cast<unsigned int>(tabHeight) });
 	}
 	const int viewportHeight = std::max(0, panelHeight - 2 * padding - titleHeight - tabHeight - 8);
 	_pageScroll->SetPosition({ padding, padding });
-	_pageScroll->SetSize({ static_cast<unsigned int>(inner), static_cast<unsigned int>(viewportHeight) });
+	// Keep the scrollbar in the outer gutter, outside the symmetric content margins.
+	const auto scrollGutter = std::min(static_cast<int>(SettingsScrollBarWidth), padding);
+	_pageScroll->SetSize({ static_cast<unsigned int>(inner + scrollGutter), static_cast<unsigned int>(viewportHeight) });
 	auto& page = _pages[static_cast<size_t>(_page)];
 	unsigned int contentHeight = 16u, contentWidth = inner > 16 ? inner - 16u : 0u;
 	for (unsigned int index = 0; index < 256; ++index)
 	{
 		auto child = page->TryGetChild(static_cast<unsigned char>(index));
 		if (!child) break;
-		const auto childWidth = static_cast<unsigned int>(std::max(0, inner - 32));
+		const auto childWidth = static_cast<unsigned int>(std::max(0, inner - 2 * static_cast<int>(PageContentPadding)));
 		const auto original = std::find_if(_controlSizes.begin(), _controlSizes.end(),
 			[&child](const auto& entry) { return entry.first == child; });
 		if (auto label = std::dynamic_pointer_cast<GuiLabel>(child))
@@ -451,6 +480,16 @@ void GuiMainPanel::_LayoutSettings(int panelWidth, int panelHeight)
 					? childWidth : std::min(childWidth, original->second.Width), original->second.Height });
 			if (auto stack = std::dynamic_pointer_cast<GuiStackPanel>(child))
 			{
+				if (_page == SettingsPage::Session)
+				{
+					unsigned int count = 0u;
+					while (count < 255u && stack->TryGetChild(static_cast<unsigned char>(count))) ++count;
+					stack->SetSize({ childWidth, 40u });
+					const auto gaps = count > 0u ? (count - 1u) * GuiStackPanelParams::PanelRowSpacing : 0u;
+					const auto available = childWidth > gaps ? childWidth - gaps : 0u;
+					for (unsigned int i = 0u; i < count; ++i)
+						stack->TryGetChild(static_cast<unsigned char>(i))->SetSize({ available * (i + 1u) / count - available * i / count, 40u });
+				}
 				stack->InvalidateLayout();
 				stack->ComputeLayout();
 			}

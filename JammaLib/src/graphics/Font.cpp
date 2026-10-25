@@ -305,7 +305,7 @@ GLuint Font::InitVertexArray(const std::string& str, GLenum usage, GLuint* outPo
 	return vao;
 }
 
-void Font::Draw(GlDrawContext& ctx, GLuint vertexArray, unsigned int numChars)
+void Font::Draw(GlDrawContext& ctx, GLuint vertexArray, unsigned int numChars, glm::vec3 color)
 {
 	auto shader = _shader.lock();
 	if (!shader)
@@ -319,6 +319,7 @@ void Font::Draw(GlDrawContext& ctx, GLuint vertexArray, unsigned int numChars)
 	}
 
 	ctx.SetUniform("TextureSampler", 0u);
+	ctx.SetUniform("TextColor", color);
 	glUseProgram(shader->GetId());
 	shader->SetUniforms(ctx);
 	glBindVertexArray(vertexArray);

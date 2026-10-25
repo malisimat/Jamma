@@ -15,6 +15,19 @@ namespace gui
 		void SetColor(glm::vec3 color) { _guiParams.TintColor = color; }
 	};
 
+	class GuiPopupFrameParams
+	{
+	public:
+		static base::GuiElementParams Container(const GuiPopupParams& params)
+		{
+			auto container = static_cast<base::GuiElementParams>(params);
+			// Only the inset fill and border strips draw; no opaque layer beneath them.
+			container.Texture.clear();
+			container.TextureShader = "texture";
+			return container;
+		}
+	};
+
 	class GuiPopupActionButton : public GuiButton
 	{
 	public:
@@ -91,7 +104,7 @@ GuiPopupParams GuiPopupParams::PanelDefault(VisualMode mode)
 	params.TintColor = mode == VisualMode::Learning ? glm::vec3{0.20f, 0.055f, 0.065f}
 		: mode == VisualMode::LearningBlue ? glm::vec3{0.035f, 0.17f, 0.22f}
 		: glm::vec3{0.075f, 0.085f, 0.10f};
-	params.TextureOpacity = 0.96f;
+	params.TextureOpacity = 0.60f;
 	return params;
 }
 
@@ -115,15 +128,21 @@ GuiLabelParams GuiPopupParams::Header(const std::string& text, unsigned int widt
 
 base::GuiElementParams GuiPopupParams::HeaderBand(unsigned int width, unsigned int height)
 {
-	return FlatRect(width,height,{0.13f,0.18f,0.20f},0.82f);
+	// A 25% band over the 60% popup fill gives 70% effective opacity.
+	return FlatRect(width,height,{0.13f,0.18f,0.20f},0.25f);
 }
 
 GuiPopup::GuiPopup(const GuiPopupParams& params) :
-	GuiPanel(params), _preferredSize(params.Size)
+	GuiPanel(GuiPopupFrameParams::Container(params)), _preferredSize(params.Size)
 {
 	_fill = std::make_shared<GuiPopupColorRect>(GuiPopupParams::FlatRect(params.Size.Width - 8u,
-		params.Size.Height - 8u,{0.25f,0.28f,0.31f},0.78f));
+		params.Size.Height - 8u,{0.25f,0.28f,0.31f},params.TextureOpacity));
 	_fill->SetPosition({4,4}); AddChild(_fill);
+	for (auto& edge : _border)
+	{
+		edge = std::make_shared<GuiPopupColorRect>(GuiPopupParams::FlatRect(0u,0u,params.TintColor,0.96f));
+		_fill->AddChild(edge);
+	}
 	SetVisualMode(params.Mode);
 	_headerBand = std::make_shared<base::GuiElement>(GuiPopupParams::HeaderBand(params.Size.Width - 16u, 36u));
 	_headerBand->SetVisible(false);
@@ -190,6 +209,7 @@ void GuiPopup::SetTitle(const std::string& text)
 void GuiPopup::SetVisualMode(GuiPopupParams::VisualMode mode)
 {
 	_guiParams.TintColor = GuiPopupParams::PanelDefault(mode).TintColor;
+	for (auto& edge : _border) edge->SetColor(_guiParams.TintColor);
 	_fill->SetColor(mode == GuiPopupParams::VisualMode::Learning ? glm::vec3{0.36f,0.18f,0.19f}
 		: mode == GuiPopupParams::VisualMode::LearningBlue ? glm::vec3{0.16f,0.32f,0.37f}
 		: glm::vec3{0.25f,0.28f,0.31f});
@@ -302,17 +322,20 @@ void GuiPopup::SetRows(const std::vector<GuiPopupRow>& rows, std::function<void(
 		box.Position = {4,y + (compact ? 32 : 4)};
 		box.TintColor = rows[i].Active ? glm::vec3{0.26f,0.39f,0.50f} : rows[i].Recent ? glm::vec3{0.07f,0.35f,0.43f} : GuiStyle::Control();
 		content->AddChild(std::make_shared<base::GuiElement>(box));
-		// A separate, square outline stays opaque while the textured slot remains translucent.
-		const int edge = rows[i].Active ? 2 : 1;
-		const auto edgeColor = rows[i].Active ? glm::vec3{0.12f,0.57f,0.78f} : GuiStyle::Control();
-		const int boxHeight = compact ? 50 : static_cast<int>(rowHeight) - 8;
-		for (const auto& rect : {std::array<int,4>{4,box.Position.Y,detailWidth,edge},
-			std::array<int,4>{4,box.Position.Y + boxHeight - edge,detailWidth,edge},
-			std::array<int,4>{4,box.Position.Y,edge,boxHeight},
-			std::array<int,4>{4 + detailWidth - edge,box.Position.Y,edge,boxHeight}})
+		// Only the row currently learning gets an additional outline.
+		if (rows[i].Active)
 		{
-			auto line = GuiPopupParams::FlatRect(static_cast<unsigned int>(rect[2]),static_cast<unsigned int>(rect[3]),edgeColor,0.94f);
-			line.Position = {rect[0],rect[1]}; content->AddChild(std::make_shared<base::GuiElement>(line));
+			const int edge = 2;
+			const auto edgeColor = glm::vec3{0.12f,0.57f,0.78f};
+			const int boxHeight = compact ? 50 : static_cast<int>(rowHeight) - 8;
+			for (const auto& rect : {std::array<int,4>{4,box.Position.Y,detailWidth,edge},
+				std::array<int,4>{4,box.Position.Y + boxHeight - edge,detailWidth,edge},
+				std::array<int,4>{4,box.Position.Y,edge,boxHeight},
+				std::array<int,4>{4 + detailWidth - edge,box.Position.Y,edge,boxHeight}})
+			{
+				auto line = GuiPopupParams::FlatRect(static_cast<unsigned int>(rect[2]),static_cast<unsigned int>(rect[3]),edgeColor,0.94f);
+				line.Position = {rect[0],rect[1]}; content->AddChild(std::make_shared<base::GuiElement>(line));
+			}
 		}
 		auto detail = GuiPopupParams::Header(rows[i].Detail, static_cast<unsigned int>((std::max)(1, detailWidth - 24)), compact ? 46u : rowHeight - 12u);
 		detail.Position = {20,y + (compact ? 34 : 6)}; detail.ClipText = true;
@@ -398,6 +421,16 @@ void GuiPopup::_LayoutContents()
 	_fill->SetPosition({fillInsetX,fillInsetY});
 	_fill->SetSize({static_cast<unsigned int>(width - 2 * fillInsetX),
 		static_cast<unsigned int>(height - 2 * fillInsetY)});
+	// Border strips surround the fill without stacking another background under it.
+	const std::array<std::array<int,4>,4> edges{{
+		{0,0,width,fillInsetY}, {0,height - fillInsetY,width,fillInsetY},
+		{0,fillInsetY,fillInsetX,height - 2 * fillInsetY},
+		{width - fillInsetX,fillInsetY,fillInsetX,height - 2 * fillInsetY}}};
+	for (std::size_t i = 0; i < edges.size(); ++i)
+	{
+		_border[i]->SetPosition({edges[i][0] - fillInsetX,edges[i][1] - fillInsetY});
+		_border[i]->SetSize({static_cast<unsigned int>(edges[i][2]),static_cast<unsigned int>(edges[i][3])});
+	}
 	if (_rowScroll && _rowScroll->IsVisible())
 	{
 		const unsigned int inner = static_cast<unsigned int>((std::max)(1,width - 24));

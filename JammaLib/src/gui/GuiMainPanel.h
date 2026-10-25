@@ -36,6 +36,7 @@ namespace gui
 		// 8401-8404 belong to station confirmation controls.
 		static constexpr unsigned int SaveRigControlIndex = 8410u;
 		static constexpr unsigned int SaveRigAsControlIndex = 8411u;
+		static constexpr unsigned int LoadRigControlIndex = 8412u;
 		explicit GuiMainPanel(GuiMainPanelParams params);
 		void FinalizePageSettings(SettingsPage page);
 		void ReplacePageSettings(SettingsPage page, const std::vector<GuiSettingEntry>& settings);
@@ -43,7 +44,7 @@ namespace gui
 		{
 			if (!_saveRigButton || _saveRigButton->IsEnabled() == enabled) return;
 			_saveRigButton->SetEnabled(enabled);
-			_saveRigButton->SetText(enabled ? "Save rig as default..." : "Save rig (busy)");
+			_saveRigButton->SetText(enabled ? "Set as Default" : "Busy");
 			for (const auto& button : _additionalRigSaveButtons) button->SetEnabled(enabled);
 		}
 		void SetCommandOwner(std::weak_ptr<base::ActionReceiver> owner);
@@ -76,6 +77,7 @@ namespace gui
 		static constexpr int MainPanelMinimumHeight = 320;
 		static constexpr int SelectionRowGap = 8;
 		static constexpr unsigned int PageContentPadding = 8u;
+		static constexpr unsigned int SettingsScrollBarWidth = 12u;
 		int _SelectionPanelHeight() const;
 		int _SettingsPanelWidth() const;
 		static constexpr int SelectionHandleHeight = 20;

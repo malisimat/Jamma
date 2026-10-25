@@ -14,6 +14,7 @@ using namespace resources;
 GuiLabel::GuiLabel(GuiLabelParams guiParams) :
 	GuiElement(guiParams),
 	_str(guiParams.String),
+	_textColor(guiParams.TextColor),
 	_pendingStr(guiParams.String),
 	_textInset{ guiParams.TextInsetX, guiParams.TextInsetY },
 	_centerHorizontally(guiParams.CenterHorizontally),
@@ -223,7 +224,7 @@ void GuiLabel::Draw(DrawContext& ctx)
 	}
 	glCtx.PushMvp(glm::translate(glm::mat4(1.0), glm::vec3(pos.X + _textInset.X + horizontalOffset, pos.Y + line.BaselineY, 0.f)));
 	
-	font->Draw(glCtx, _vertexArray, (unsigned int)_str.size());
+	font->Draw(glCtx, _vertexArray, (unsigned int)_str.size(), _textColor);
 	glCtx.PopMvp();
 	if (_clipText) glCtx.PopScissorRect();
 }

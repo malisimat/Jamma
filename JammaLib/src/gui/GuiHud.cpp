@@ -117,12 +117,26 @@ namespace gui
 	private:
 		static GuiButtonParams _Params(GuiButtonParams params)
 		{
-			params.TextureShader = "texture_tinted";
+			if (params.TextureShader != "colour") params.TextureShader = "texture_tinted";
 			return params;
 		}
 
 		std::function<void()> _callback;
 		bool _pressed = false;
+	};
+
+	class GuiHudLearnButton : public GuiHudActionButton
+	{
+	public:
+		GuiHudLearnButton(GuiButtonParams params, std::function<void()> callback) :
+			GuiHudActionButton(params, std::move(callback)) {}
+
+		void Draw(base::DrawContext& ctx) override
+		{
+			const bool highlighted = IsEnabled() && (_state == STATE_OVER || _state == STATE_DOWN);
+			_guiParams.TintColor = highlighted ? glm::vec3{1.0f,0.96f,0.72f} : glm::vec3{0.18f,0.19f,0.20f};
+			GuiHudActionButton::Draw(ctx);
+		}
 	};
 
 	class GuiHudPopupReceiver : public base::ActionReceiver
@@ -684,12 +698,14 @@ void GuiHud::_BuildTriggerRail()
 			learnParams.Position = pedal->Position() + utils::Position2d{0, static_cast<int>(pedal->GetSize().Height) - 18};
 			learnParams.Size = {pedal->GetSize().Width, 18u}; learnParams.MinSize = learnParams.Size;
 			learnParams.Texture.clear(); learnParams.OverTexture.clear(); learnParams.DownTexture.clear();
-			learnParams.TextureShader = "colour"; learnParams.TextureOpacity = 0.70f;
+			learnParams.TextureShader = "colour";
+			learnParams.TextureOpacity = 0.70f * (2.0f / 3.0f);
 			learnParams.TintColor = {0.27f, 0.29f, 0.31f};
 			learnParams.Text = "Learn"; learnParams.TextFontSize = graphics::FontOptions::FONT_TINY;
+			learnParams.OverTextColor = glm::vec3{0.08f,0.08f,0.07f};
 			learnParams.TextPadding = 2u;
 			const auto id = i < _displayedRig.Triggers.size() ? _displayedRig.Triggers[i].Id : std::string{};
-			button->AddChild(std::make_shared<GuiHudActionButton>(learnParams,
+			button->AddChild(std::make_shared<GuiHudLearnButton>(learnParams,
 				[this, id, activate]() { _OpenTriggerLearn(id, activate, false); }));
 		}
 		_triggerWidgets.push_back({ button, close, edit, rename, inputSocket, outputSocket });
@@ -904,9 +920,11 @@ void GuiHud::_LayoutPanels()
 	_triggerRail->SetPosition({ railX, std::min(GuiStyle::StatusBarHeight + 8, height) });
 	_triggerRail->SetSize({ static_cast<unsigned int>(railWidth), static_cast<unsigned int>(railHeight) });
 	_triggerRail->SetVisible(railWidth > 0 && railHeight > 0);
-	const int triggerHeader = std::min(34, railHeight);
-	const int triggerFooter = std::min(static_cast<int>(_TriggerFooterHeight), railHeight - triggerHeader);
-	const int triggerViewport = std::max(0, railHeight - triggerHeader - triggerFooter);
+	// Keep trigger actions reachable in the supported compact profile.
+	const int triggerTopInset = std::clamp(railHeight - 34 - static_cast<int>(_TriggerFooterHeight) - 100, 0, 8);
+	const int triggerHeader = std::min(34, railHeight - triggerTopInset);
+	const int triggerFooter = std::min(static_cast<int>(_TriggerFooterHeight), railHeight - triggerTopInset - triggerHeader);
+	const int triggerViewport = std::max(0, railHeight - triggerTopInset - triggerHeader - triggerFooter);
 	_triggerScroll->SetPosition({ 0, triggerFooter });
 	_triggerScroll->SetSize({ static_cast<unsigned int>(railWidth), static_cast<unsigned int>(triggerViewport) });
 	_triggerScroll->SetVisible(railWidth > 0 && triggerViewport > 0);
@@ -915,7 +933,7 @@ void GuiHud::_LayoutPanels()
 	_triggerList->SetSize({ static_cast<unsigned int>(railWidth), _triggerList->GetSize().Height });
 	if (auto header = _triggerRail->TryGetChild(0u))
 	{
-		header->SetPosition({ 0, railHeight - triggerHeader });
+		header->SetPosition({ 0, railHeight - triggerTopInset - triggerHeader });
 		header->SetSize({ static_cast<unsigned int>(railWidth), static_cast<unsigned int>(triggerHeader) });
 		header->SetVisible(railWidth >= 80 && triggerHeader >= 22);
 	}
@@ -2198,7 +2216,9 @@ std::shared_ptr<GuiButton> GuiHud::_MakeTriggerButton(const std::string& text,
 	const int pedalSpacing = 4;
 	const int pedalSizeW = 46;
 	const int pedalSizeH = 62;
-	const int pedalPosX = (static_cast<int>(_TriggerButtonWidth) - 2 * pedalSizeW - pedalSpacing) / 2;
+	// trigger_back's fixed left band ends at x=13; centre in the orange area.
+	const int orangeLeft = 13;
+	const int pedalPosX = orangeLeft + (static_cast<int>(_TriggerButtonWidth) - orangeLeft - 2 * pedalSizeW - pedalSpacing + 1) / 2;
 	const int pedalPosY = 8;
 
 	base::GuiElementParams activateParams;

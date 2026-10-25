@@ -17,7 +17,7 @@ namespace gui
     class GuiMainPanelTestAccess
     {
     public:
-        static std::shared_ptr<GuiButton> RigSaveButton(GuiMainPanel& panel) { return panel._saveRigButton; }
+        static std::shared_ptr<GuiButton> RigSaveButton(GuiMainPanel& panel) { panel.SetPage(SettingsPage::Session); return panel._saveRigButton; }
         static std::shared_ptr<GuiButton> RigSaveChoice(GuiMainPanel& panel, unsigned int choice) { return panel._additionalRigSaveButtons.at(choice); }
 
     };
@@ -1069,12 +1069,19 @@ TEST_F(SceneRoutingIntegrationTest, DeviceGuiDispatchIsIsolatedFromStationComman
     ASSERT_TRUE(save); click(save);
     EXPECT_TRUE(scene->ConsumeRigSaveRequest());
     EXPECT_EQ(engine::Scene::RigSaveMode::StartupDefault,scene->RequestedRigSaveMode());
-    for (auto choice = 0u; choice < 2u; ++choice)
-    {
-        click(engine::SourceLossIntegrationTestAccess::RigSaveChoice(*scene,choice));
-        EXPECT_TRUE(scene->ConsumeRigSaveRequest());
-        EXPECT_EQ(choice == 0u ? engine::Scene::RigSaveMode::Save : engine::Scene::RigSaveMode::SaveAs,scene->RequestedRigSaveMode());
-    }
+    auto loadRig = engine::SourceLossIntegrationTestAccess::RigSaveChoice(*scene, 0u);
+    auto saveAsRig = engine::SourceLossIntegrationTestAccess::RigSaveChoice(*scene, 1u);
+    ASSERT_NE(save->Parent(), loadRig->Parent());
+    ASSERT_EQ(loadRig->Parent(), saveAsRig->Parent());
+    EXPECT_LE(std::abs(static_cast<int>(loadRig->GetSize().Width) - static_cast<int>(saveAsRig->GetSize().Width)), 1);
+    EXPECT_EQ(save->GetSize().Width, loadRig->Parent()->GetSize().Width);
+    EXPECT_EQ(40u, save->GetSize().Height);
+    click(loadRig);
+    EXPECT_TRUE(scene->ConsumePanelRigLoadRequest());
+    EXPECT_FALSE(scene->ConsumeRigSaveRequest());
+    click(saveAsRig);
+    EXPECT_TRUE(scene->ConsumeRigSaveRequest());
+    EXPECT_EQ(engine::Scene::RigSaveMode::SaveAs, scene->RequestedRigSaveMode());
     engine::SourceLossIntegrationTestAccess::Manage(*scene, false, target);
     cancel = engine::SourceLossIntegrationTestAccess::RemovalButton(*scene, 0u);
     auto remove = engine::SourceLossIntegrationTestAccess::RemovalButton(*scene, 1u);
