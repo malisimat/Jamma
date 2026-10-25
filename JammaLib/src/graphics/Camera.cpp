@@ -1028,3 +1028,91 @@ void graphics::Camera::ForgetStation(const std::shared_ptr<const void>& identity
 	if (_lastChangedStationIdentity == identity) { _lastChangedStationIdentity.reset(); _lastChangedStationPosition.reset(); }
 	if (_interiorFocusIdentity == identity) _interiorFocusIdentity.reset();
 }
+
+Camera::FrameTime Camera::BeginPresentation(Time now)
+{
+	const auto deltaSeconds = _lastPresentationTime
+		? std::clamp(static_cast<float>(Timer::GetElapsedSeconds(*_lastPresentationTime, now)), 0.0f, 0.05f)
+		: 0.0f;
+	_lastPresentationTime = now;
+	const bool diagnosticDue = !_lastDiagnosticTime || Timer::GetElapsedSeconds(*_lastDiagnosticTime, now) >= 2.0;
+	if (diagnosticDue) _lastDiagnosticTime = now;
+	return { deltaSeconds, diagnosticDue };
+}
+
+void Camera::HumanActivity(Time now)
+{
+	_unattendedCamera.HumanActivity(now);
+	++_humanActivityRevision;
+	CancelAutomaticMotion();
+}
+
+void Camera::TriggerActivity(Time now)
+{
+	// Performance keys restart manual idle timing, preserving an active wander.
+	if (!_unattendedCamera.IsAutomatic()) HumanActivity(now);
+}
+
+void Camera::SetInteractionEligibility(bool windowEligible, bool heldInteraction,
+	const engine::CameraRecordingObservation& recordings, Time now)
+{
+	if (_windowEligible != windowEligible)
+	{
+		_unattendedCamera.HumanActivity(now);
+		_unattendedCamera.DiscardRecordingStartsThrough(recordings.LatestStart.StartOrder, recordings.LatestDitchOrder);
+		++_humanActivityRevision;
+		CancelAutomaticMotion();
+		_lastPresentationTime.reset();
+	}
+	_windowEligible = windowEligible;
+	_heldInteraction = heldInteraction;
+}
+
+void Camera::AdvancePresentation(Time now, float deltaSeconds, const Presentation& presentation,
+	const engine::CameraRecordingObservation& recordings, bool contextAllowsIdle, utils::Size2d viewport)
+{
+	SetFrontVisibleBounds(presentation.VisibleBounds);
+	const bool eligibleExceptHeldInteraction = contextAllowsIdle && _windowEligible
+		&& CurrentView() == View::Front && !IsTransitioning();
+	const bool eligible = eligibleExceptHeldInteraction && !_heldInteraction;
+	const auto decision = _unattendedCamera.Update(now, eligible,
+		eligibleExceptHeldInteraction && _heldInteraction, recordings, presentation.LiveTakes);
+	std::optional<Position3d> automaticTarget;
+	if (eligible && decision.IsAutomatic())
+	{
+		if (decision.CurrentState == graphics::UnattendedCameraController::State::StationFocus)
+		{
+			const auto station = std::find_if(presentation.Stations.begin(), presentation.Stations.end(),
+				[&decision](const auto& framing) {
+					return !framing.Identity.owner_before(decision.Station)
+						&& !decision.Station.owner_before(framing.Identity);
+				});
+			if (station != presentation.Stations.end())
+				automaticTarget = graphics::CameraFraming::Close(station->Centre, station->Bounds);
+		}
+		else if (decision.CurrentState == graphics::UnattendedCameraController::State::RecordingFocus)
+		{
+			const auto focus = std::find_if(presentation.Takes.begin(), presentation.Takes.end(),
+				[&decision](const auto& take) {
+					return engine::CameraRecordingPublisher::SameTake(take.Identity, decision.Focus.Take);
+				});
+			if (focus != presentation.Takes.end()) automaticTarget = graphics::CameraFraming::Close(focus->Centre, focus->Bounds);
+		}
+		if (!automaticTarget) automaticTarget = graphics::CameraFraming::Overview(presentation.OverviewBounds,
+			static_cast<float>(viewport.Width) / static_cast<float>(viewport.Height));
+		if (automaticTarget)
+		{
+			SetAutomaticTarget(*automaticTarget);
+			TickAutomaticMotion(deltaSeconds);
+		}
+		else
+			CancelAutomaticMotion();
+	}
+	else
+		CancelAutomaticMotion((eligibleExceptHeldInteraction && _heldInteraction)
+			|| !recordings.ActiveCaptures.empty());
+
+
+	if (IsBackgroundDragging() || IsTransitioning())
+		TickBackgroundDrag(deltaSeconds);
+}

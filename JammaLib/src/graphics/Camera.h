@@ -2,6 +2,7 @@
 
 #include "Moveable.h"
 #include "CameraFraming.h"
+#include "UnattendedCameraController.h"
 #include "../actions/ActionResult.h"
 #include "../actions/TouchAction.h"
 #include "../actions/TouchMoveAction.h"
@@ -60,7 +61,37 @@ namespace graphics
 
 		enum class SelectDepthChange { None, Station, LoopTake };
 
+		struct FrameTime { float DeltaSeconds; bool DiagnosticDue; };
+		struct TakeFraming
+		{
+			std::weak_ptr<engine::LoopTake> Identity;
+			CameraBounds Bounds;
+			utils::Position3d Centre;
+		};
+		struct StationFraming
+		{
+			std::weak_ptr<engine::Station> Identity;
+			CameraBounds Bounds;
+			utils::Position3d Centre;
+		};
+		struct Presentation
+		{
+			std::vector<std::weak_ptr<engine::LoopTake>> LiveTakes;
+			std::vector<TakeFraming> Takes;
+			std::vector<StationFraming> Stations;
+			CameraBounds OverviewBounds, VisibleBounds;
+		};
+
 		Camera(CameraParams camParams);
+		// Window-only idle policy and physics use copied presentation observations;
+		// the caller samples membership under its own lock before entering here.
+		FrameTime BeginPresentation(Time now);
+		void AdvancePresentation(Time now, float deltaSeconds, const Presentation& presentation,
+			const engine::CameraRecordingObservation& recordings, bool contextAllowsIdle, utils::Size2d viewport);
+		void HumanActivity(Time now);
+		void TriggerActivity(Time now);
+		void SetInteractionEligibility(bool windowEligible, bool heldInteraction,
+			const engine::CameraRecordingObservation& recordings, Time now);
 
 		actions::ActionResult HandleBackgroundDrag(actions::TouchAction action);
 		actions::ActionResult UpdateBackgroundDrag(actions::TouchMoveAction action);
@@ -113,6 +144,7 @@ namespace graphics
 		SelectDepthChange PendingSelectDepthChange() noexcept;
 
 	private:
+		friend class CameraPresentationTestAccess;
 		static constexpr unsigned int BackgroundDragLeftButtonMask    = 1u << 0;
 		static constexpr unsigned int BackgroundDragRightButtonMask   = 1u << 2;
 		static constexpr unsigned int BackgroundDragRelativeBlendFrames = 2u;
@@ -195,5 +227,11 @@ namespace graphics
 		utils::Position3d _automaticVelocity{};
 		bool _resumeAutomaticVelocity = false;
 		CameraBounds _frontVisibleBounds;
+		UnattendedCameraController _unattendedCamera;
+		bool _windowEligible = true;
+		bool _heldInteraction = false;
+		std::optional<Time> _lastPresentationTime;
+		std::optional<Time> _lastDiagnosticTime;
+		std::uint64_t _humanActivityRevision = 0u;
 	};
 }

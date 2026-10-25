@@ -558,8 +558,7 @@ bool Scene::IsCameraTriggerKey(unsigned int key) const
 
 void Scene::OnCameraTriggerActivity()
 {
-	// Performance keys restart manual idle timing, but preserve a live wander.
-	if (!_unattendedCamera.IsAutomatic()) OnHumanActivity();
+	_camera.TriggerActivity(Timer::GetTime());
 }
 
 bool Scene::PreservesCameraIdleForKey(unsigned int key) const noexcept
@@ -573,25 +572,13 @@ bool Scene::PreservesCameraIdleForKey(unsigned int key) const noexcept
 
 void Scene::OnHumanActivity()
 {
-	const auto now = Timer::GetTime();
-	_unattendedCamera.HumanActivity(now);
-	++_cameraHumanActivityRevision;
-	_camera.CancelAutomaticMotion();
+	_camera.HumanActivity(Timer::GetTime());
 }
 
 void Scene::SetCameraInteractionEligibility(bool windowEligible, bool heldInteraction)
 {
-	if (_cameraWindowEligible != windowEligible)
-	{
-		_unattendedCamera.HumanActivity(Timer::GetTime());
-		const auto recordings = _cameraRecordings->Snapshot();
-		_unattendedCamera.DiscardRecordingStartsThrough(recordings->LatestStart.StartOrder, recordings->LatestDitchOrder);
-		++_cameraHumanActivityRevision;
-		_camera.CancelAutomaticMotion();
-		_lastCameraUpdateTime.reset();
-	}
-	_cameraWindowEligible = windowEligible;
-	_cameraHeldInteraction = heldInteraction;
+	_camera.SetInteractionEligibility(windowEligible, heldInteraction,
+		*_cameraRecordings->Snapshot(), Timer::GetTime());
 }
 
 void Scene::UpdateCamera()
@@ -605,31 +592,10 @@ void Scene::UpdateCamera()
 		}
 	// Keep camera state on the window thread; audio never reads or advances it.
 	const auto now = Timer::GetTime();
-	const auto deltaSeconds = _lastCameraUpdateTime
-		? std::clamp(static_cast<float>(Timer::GetElapsedSeconds(*_lastCameraUpdateTime, now)), 0.0f, 0.05f)
-		: 0.0f;
-	_lastCameraUpdateTime = now;
-	const bool diagnosticDue = !_lastCameraDiagnosticTime ||
-		Timer::GetElapsedSeconds(*_lastCameraDiagnosticTime, now) >= 2.0;
-	if (diagnosticDue) _lastCameraDiagnosticTime = now;
-
-	struct TakeFraming
-	{
-		std::weak_ptr<LoopTake> Identity;
-		graphics::CameraBounds Bounds;
-		Position3d Centre;
-	};
-	std::vector<std::weak_ptr<LoopTake>> liveTakes;
-	std::vector<TakeFraming> takeFramings;
-	struct StationFraming
-	{
-		std::weak_ptr<Station> Identity;
-		graphics::CameraBounds Bounds;
-		Position3d Centre;
-	};
-	std::vector<StationFraming> stationFramings;
-	graphics::CameraBounds overviewBounds;
-	graphics::CameraBounds visibleBounds;
+	const auto frameTime = _camera.BeginPresentation(now);
+	const auto deltaSeconds = frameTime.DeltaSeconds;
+	const bool diagnosticDue = frameTime.DiagnosticDue;
+	Camera::Presentation presentation;
 	std::shared_ptr<const CameraRecordingObservation> recordings;
 	size_t visibleContentTakeCount = 0u;
 	size_t allContentTakeCount = 0u;
@@ -649,7 +615,7 @@ void Scene::UpdateCamera()
 			for (const auto& take : takes)
 			{
 				if (take->IsCaptureCancelled()) continue;
-				liveTakes.push_back(take);
+				presentation.LiveTakes.push_back(take);
 				const bool hasCameraContent = diagnosticDue && take->HasCameraContent();
 				if (hasCameraContent) ++allContentTakeCount;
 				if (!visible || !take->IsVisible()) continue;
@@ -660,13 +626,13 @@ void Scene::UpdateCamera()
 				bounds.Include(centre);
 				stationBounds.Include(bounds);
 				if (hasCameraContent) ++visibleContentTakeCount;
-				takeFramings.push_back({ take, bounds, centre });
+				presentation.Takes.push_back({ take, bounds, centre });
 			}
-			visibleBounds.Include(stationBounds);
+			presentation.VisibleBounds.Include(stationBounds);
 			if (visible)
 			{
-				overviewBounds.Include(stationBounds);
-				stationFramings.push_back({ station, stationBounds, stationPosition });
+				presentation.OverviewBounds.Include(stationBounds);
+				presentation.Stations.push_back({ station, stationBounds, stationPosition });
 			}
 		}
 		_camera.CompleteStationObservation(_stations.size(), _stations.empty()
@@ -679,53 +645,9 @@ void Scene::UpdateCamera()
 
 	// Release scene/membership locks before policy and physics. These are copied
 	// presentation values, and focus identities must still belong to this scene.
-	_camera.SetFrontVisibleBounds(visibleBounds);
-	const bool eligibleExceptHeldInteraction = controlsAvailable && _cameraWindowEligible
-		&& Width() > 0u && Height() > 0u
-		&& _camera.CurrentView() == graphics::Camera::View::Front
-		&& !_camera.IsTransitioning() && !_loopEditor.IsEngaged()
-		&& !_popupManager.IsOpen();
-	const bool eligible = eligibleExceptHeldInteraction && !_cameraHeldInteraction;
-	const auto decision = _unattendedCamera.Update(now, eligible,
-		eligibleExceptHeldInteraction && _cameraHeldInteraction, *recordings, liveTakes);
-	std::optional<Position3d> automaticTarget;
-	if (eligible && decision.IsAutomatic())
-	{
-		if (decision.CurrentState == graphics::UnattendedCameraController::State::StationFocus)
-		{
-			const auto station = std::find_if(stationFramings.begin(), stationFramings.end(),
-				[&decision](const auto& framing) {
-					return !framing.Identity.owner_before(decision.Station)
-						&& !decision.Station.owner_before(framing.Identity);
-				});
-			if (station != stationFramings.end())
-				automaticTarget = graphics::CameraFraming::Close(station->Centre, station->Bounds);
-		}
-		else if (decision.CurrentState == graphics::UnattendedCameraController::State::RecordingFocus)
-		{
-			const auto focus = std::find_if(takeFramings.begin(), takeFramings.end(),
-				[&decision](const auto& take) {
-					return CameraRecordingPublisher::SameTake(take.Identity, decision.Focus.Take);
-				});
-			if (focus != takeFramings.end()) automaticTarget = graphics::CameraFraming::Close(focus->Centre, focus->Bounds);
-		}
-		if (!automaticTarget) automaticTarget = graphics::CameraFraming::Overview(overviewBounds,
-			static_cast<float>(Width()) / static_cast<float>(Height()));
-		if (automaticTarget)
-		{
-			_camera.SetAutomaticTarget(*automaticTarget);
-			_camera.TickAutomaticMotion(deltaSeconds);
-		}
-		else
-			_camera.CancelAutomaticMotion();
-	}
-	else
-		_camera.CancelAutomaticMotion((eligibleExceptHeldInteraction && _cameraHeldInteraction)
-			|| !recordings->ActiveCaptures.empty());
-
-
-	if (_camera.IsBackgroundDragging() || _camera.IsTransitioning())
-		_camera.TickBackgroundDrag(deltaSeconds);
+	_camera.AdvancePresentation(now, deltaSeconds, presentation, *recordings,
+		controlsAvailable && Width() > 0u && Height() > 0u && !_loopEditor.IsEngaged()
+			&& !_popupManager.IsOpen(), _sizeParams.Size);
 	_loopEditor.Tick(deltaSeconds);
 	if (!_loopEditor.IsEngaged())
 		_ApplyCameraSelectDepthChange(_camera.PendingSelectDepthChange());
