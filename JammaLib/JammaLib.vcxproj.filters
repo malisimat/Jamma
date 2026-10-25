@@ -597,6 +597,9 @@
     <ClInclude Include="src\actions\DelayedAction.h">
       <Filter>src\actions</Filter>
     </ClInclude>
+    <ClInclude Include="src\gui\PointerInteraction.h">
+      <Filter>src\gui</Filter>
+    </ClInclude>
     <ClInclude Include="src\gui\SceneSelector.h">
       <Filter>src\gui</Filter>
     </ClInclude>
@@ -1036,6 +1039,9 @@
     </ClCompile>
     <ClCompile Include="src\utils\VecUtils.cpp">
       <Filter>src\utils</Filter>
+    </ClCompile>
+    <ClCompile Include="src\gui\PointerInteraction.cpp">
+      <Filter>src\gui</Filter>
     </ClCompile>
     <ClCompile Include="src\gui\SceneSelector.cpp">
       <Filter>src\gui</Filter>

@@ -49,11 +49,8 @@ Scene::Scene(SceneParams params,
 	_quantisation(),
 	_loggingConfig{},
 	_stations(),
-	_touchDownElement(std::weak_ptr<GuiElement>()),
 	_hoverElement3d(std::weak_ptr<GuiElement>()),
 	_hoverPath3d(),
-	_hoverPath2d(),
-	_hover2dDirty(true),
 	_lastLoggedHoverPath(),
 	_ctrlHandleOverlay(),
 	_quantisationInteraction(_ctrlHandleOverlay, _quantisation, _stations),
@@ -768,68 +765,15 @@ void Scene::_ReleaseResources()
 
 void Scene::_OnSettingsHidden(const std::shared_ptr<GuiElement>& subtree)
 {
-	auto belongs = [&subtree](std::shared_ptr<GuiElement> element)
-	{
-		for (; element; element = element->Parent())
-			if (element == subtree) return true;
-		return false;
-	};
-	if (belongs(_focusManager.CurrentFocus())) _focusManager.ClearFocus();
-	if (belongs(_touchDownElement.lock()))
-	{
-		_touchDownElement.reset();
-		_touchDownIsHud = false;
-		_touchDownIsSettings = false;
-		_consumeSettingsRelease = true;
-	}
-	_InvalidateHover2d();
+	_pointer.OnSubtreeHidden(subtree, _focusManager);
 }
 
 std::optional<ActionResult> Scene::_RouteSettingsTouch(TouchAction action)
 {
-	if (action.State == TouchAction::TOUCH_UP && _consumeSettingsRelease)
-	{
-		_consumeSettingsRelease = false;
-		return ActionResult{ true, {}, {}, ACTIONRESULT_DEFAULT, nullptr, {} };
-	}
-	if (_touchDownIsSettings)
-	{
-		auto active = _touchDownElement.lock();
-		auto result = active ? active->OnAction(active->GlobalToLocal(action)) : ActionResult::NoAction();
-		if (action.State == TouchAction::TOUCH_UP)
-		{
-			_touchDownElement.reset();
-			_touchDownIsSettings = false;
-			_consumeSettingsRelease = false;
-		}
-		result.IsEaten = true;
-		return result;
-	}
-	// A gesture already owned elsewhere keeps its release and move stream.
-	if (_touchDownElement.lock() || _camera.IsBackgroundDragging() || _isSceneTouching ||
-		_loopEditor.OwnsPointer() || _loopEditor.IsOrbitDragging() || _quantisationInteraction.OwnsPointer())
-		return std::nullopt;
-	for (const auto& panel : { _selectionPanel, _mainPanel })
-	{
-		if (!panel || !panel->RouteHitTest(panel->GlobalToLocal(action.Position))) continue;
-		auto result = panel->OnAction(panel->GlobalToLocal(action));
-		result.IsEaten = true;
-		if (action.State == TouchAction::TOUCH_DOWN &&
-			!(action.Touch == TouchAction::TOUCH_MOUSE && action.Index == 4))
-		{
-			auto active = result.ActiveElement.lock();
-			if (!active) active = panel;
-			_touchDownElement = active;
-			_touchDownIsSettings = true;
-			_touchDownIsHud = false;
-			auto focused = _focusManager.CurrentFocus();
-			if (focused && focused != active) focused->FinalizeEdits();
-			if (active->WantsFocusOnPress()) _focusManager.RequestFocus(active);
-			else _focusManager.ClearFocus();
-		}
-		return result;
-	}
-	return std::nullopt;
+	const std::array<std::shared_ptr<GuiElement>, 2> panels{ _selectionPanel, _mainPanel };
+	return _pointer.RoutePanels(action, panels, _focusManager,
+		_camera.IsBackgroundDragging() || _isSceneTouching || _loopEditor.OwnsPointer()
+			|| _loopEditor.IsOrbitDragging() || _quantisationInteraction.OwnsPointer());
 }
 
 bool Scene::_BackgroundPreviewActive() const
@@ -854,13 +798,12 @@ ActionResult Scene::OnAction(TouchAction action)
 {
 	if (_popupManager.ConsumeDismissedRelease(action))
 	{
-		_touchDownElement.reset();
-		_touchDownIsHud = _touchDownIsSettings = _consumeSettingsRelease = false;
+		_pointer.ReleaseCapture(); _pointer.ClearConsumedRelease();
 		return { true, {}, {}, ACTIONRESULT_DEFAULT, nullptr, {} };
 	}
 	if (action.State == TouchAction::TOUCH_DOWN) _cameraPointerPreservesIdle = false;
 	const auto result = _OnPointerAction(action);
-	if (std::dynamic_pointer_cast<gui::GuiPerformanceGroupButton>(_touchDownElement.lock()))
+	if (std::dynamic_pointer_cast<gui::GuiPerformanceGroupButton>(_pointer.Captured()))
 		_cameraPointerPreservesIdle = true;
 	if (!_cameraPointerPreservesIdle) OnHumanActivity();
 	return result;
@@ -872,22 +815,19 @@ ActionResult Scene::_OnPointerAction(TouchAction action)
 	ActionResult res;
 	// Wheel events are encoded as DOWN/index 4 and have no matching UP. They
 	// must not become pointer captures or replace keyboard focus.
-	const bool pointerPress = action.State == TouchAction::TOUCH_DOWN &&
-		!(action.Touch == TouchAction::TOUCH_MOUSE && action.Index == 4);
+	const bool pointerPress = PointerInteraction::IsPress(action);
 	action.SetActionTime(Timer::GetTime());
 	action.SetUserConfig(_userConfig);
 	_cursorPos = action.Position;
 	_InvalidateHover2d();
 	if (_rigSaveDialogOpen) return { true, {}, {}, ACTIONRESULT_DEFAULT, nullptr, {} };
-	if (const auto rack = std::dynamic_pointer_cast<gui::GuiVstRack>(_touchDownElement.lock()))
+	if (const auto rack = std::dynamic_pointer_cast<gui::GuiVstRack>(_pointer.Captured()))
 	{
 		if (_popupManager.IsOpen() || _loopEditor.IsEngaged() || _EditControlsSuppressed())
-		{ rack->ClearPointerState(); _touchDownElement.reset(); }
+		{ rack->ClearPointerState(); _pointer.ReleaseCapture(); }
 		else
 		{
-			const auto result = rack->OnAction(rack->GlobalToLocal(action));
-			if (action.State == TouchAction::TOUCH_UP && action.Index == 0) _touchDownElement.reset();
-			return result;
+			return _pointer.DispatchCapture(action, PointerInteraction::Release::LeftUp, false);
 		}
 	}
 	if (_backgroundGesture && (_popupManager.IsOpen() || _EditControlsSuppressed() || _loopEditor.IsEngaged() ||
@@ -934,17 +874,15 @@ ActionResult Scene::_OnPointerAction(TouchAction action)
 		{ std::scoped_lock lock(_sceneMutex); if (!_stationManagement.Busy()) _stationManagement.Cancel(); }
 		if (TouchAction::TOUCH_UP == action.State)
 		{
-			_touchDownElement.reset();
-			_touchDownIsHud = false;
-			_touchDownIsSettings = false;
-			_consumeSettingsRelease = false;
+			_pointer.ReleaseCapture();
+			_pointer.ClearConsumedRelease();
 		}
 		return popupRes;
 	}
 	if (_hudPanel && _hudPanel->RouteRenameTouch(_hudPanel->GlobalToLocal(action)))
 	{
-		if (action.State == TouchAction::TOUCH_UP && _touchDownIsHud && !_hudPanel->HasLabelPress())
-		{ _touchDownElement.reset(); _touchDownIsHud = false; }
+		if (action.State == TouchAction::TOUCH_UP && _pointer.IsCapturedBy(PointerInteraction::Owner::Hud) && !_hudPanel->HasLabelPress())
+		{ _pointer.ReleaseCapture(); }
 		return { true, {}, {}, ACTIONRESULT_DEFAULT, nullptr, {} };
 	}
 	if (!_loopEditor.IsEngaged())
@@ -960,16 +898,12 @@ ActionResult Scene::_OnPointerAction(TouchAction action)
 	// precede projected station overlays, which may lie behind these controls.
 	if (!_EditControlsSuppressed() && !_quantisationInteraction.OwnsPointer())
 		if (auto settingsResult = _RouteSettingsTouch(action)) return *settingsResult;
-	if (_touchDownIsHud)
+	if (_pointer.IsCapturedBy(PointerInteraction::Owner::Hud))
 	{
-		auto active = _touchDownElement.lock();
-		auto result = ActionResult::NoAction();
-		{ std::scoped_lock lock(_sceneMutex); if (active) result = active->OnAction(active->GlobalToLocal(action)); }
-		if (action.State == TouchAction::TOUCH_UP) { _touchDownElement.reset(); _touchDownIsHud = false; }
-		result.IsEaten = true;
-		return result;
+		std::scoped_lock lock(_sceneMutex);
+		return _pointer.DispatchCapture(action, PointerInteraction::Release::AnyUp, true);
 	}
-	if (!_EditControlsSuppressed() && !_touchDownElement.lock() && !_camera.IsBackgroundDragging() && !_isSceneTouching &&
+	if (!_EditControlsSuppressed() && !_pointer.Captured() && !_camera.IsBackgroundDragging() && !_isSceneTouching &&
 		!_loopEditor.OwnsPointer() && !_loopEditor.IsOrbitDragging() && !_quantisationInteraction.OwnsPointer() && _hudPanel &&
 		(_hudPanel->CapturesPointer(_hudPanel->GlobalToLocal(action.Position)) || _hudPanel->HasCableDrag()))
 	{
@@ -982,9 +916,8 @@ ActionResult Scene::_OnPointerAction(TouchAction action)
 			{
 				auto active = result.ActiveElement.lock();
 				if (!active) active = _hudPanel;
-				_touchDownElement = active; _touchDownIsHud = true;
-				if (active->WantsFocusOnPress()) _focusManager.RequestFocus(active);
-				else _focusManager.ClearFocus();
+				_pointer.Capture(active, PointerInteraction::Owner::Hud);
+				PointerInteraction::FocusPress(active, _focusManager);
 			}
 			return result;
 		}
@@ -1021,7 +954,7 @@ ActionResult Scene::_OnPointerAction(TouchAction action)
 		// Clear the old hover now so only the capture target appears pressed.
 		std::vector<std::weak_ptr<GuiElement>> none;
 		_ApplyHoverPath2d(none);
-		_hoverPath2d.clear();
+		_pointer.ClearHoverPath();
 	}
 
 	if ((TouchAction::TouchState::TOUCH_DOWN == action.State)
@@ -1043,17 +976,16 @@ ActionResult Scene::_OnPointerAction(TouchAction action)
 
 	if (TouchAction::TouchState::TOUCH_UP == action.State)
 	{
-		auto activeElement = _touchDownElement.lock();
+		auto activeElement = _pointer.Captured();
 
 		if (activeElement)
 		{
-			if (_touchDownIsHud)
+			if (_pointer.IsCapturedBy(PointerInteraction::Owner::Hud))
 			{
 				std::scoped_lock lock(_sceneMutex);
-				res = activeElement->OnAction(activeElement->GlobalToLocal(action));
+				res = _pointer.DispatchCapture(action, PointerInteraction::Release::Explicit, false);
 			}
-			else
-				res = activeElement->OnAction(activeElement->GlobalToLocal(action));
+			else res = _pointer.DispatchCapture(action, PointerInteraction::Release::Explicit, false);
 
 			if (res.IsEaten)
 			{
@@ -1077,8 +1009,7 @@ ActionResult Scene::_OnPointerAction(TouchAction action)
 
 		_UpdateSelection(res.ResultType);
 
-		_touchDownElement.reset();
-		_touchDownIsHud = false;
+		_pointer.ReleaseCapture();
 
 		return ActionResult::NoAction();
 	}
@@ -1102,20 +1033,15 @@ ActionResult Scene::_OnPointerAction(TouchAction action)
 			if (nullptr != res.Undo)
 				_undoHistory.Add(res.Undo);
 
-			if (pointerPress && !_touchDownElement.lock())
+			if (pointerPress && !_pointer.Captured())
 			{
-				_touchDownElement = res.ActiveElement;
-				_touchDownIsHud = isHudChild;
+				_pointer.Capture(res.ActiveElement, isHudChild ? PointerInteraction::Owner::Hud : PointerInteraction::Owner::General);
 			}
 
 			// Focus follows the pressed control when it wants the keyboard.
 			if (pointerPress)
 			{
-				auto active = res.ActiveElement.lock();
-				if (active && active->WantsFocusOnPress())
-					_focusManager.RequestFocus(active);
-				else
-					_focusManager.ClearFocus();
+				PointerInteraction::FocusPress(res.ActiveElement.lock(), _focusManager);
 			}
 
 			return res;
@@ -1131,10 +1057,9 @@ ActionResult Scene::_OnPointerAction(TouchAction action)
 			if (nullptr != res.Undo)
 				_undoHistory.Add(res.Undo);
 
-			if (pointerPress && !_touchDownElement.lock())
+			if (pointerPress && !_pointer.Captured())
 			{
-				_touchDownElement = res.ActiveElement;
-				_touchDownIsHud = false;
+				_pointer.Capture(res.ActiveElement);
 			}
 
 			return res;
@@ -1169,14 +1094,14 @@ ActionResult Scene::_OnPointerAction(TouchAction action)
 	{
 		// Resolve actual targets: the pass-through HUD spans the viewport but
 		// must not claim its empty space as a control.
-		_ResolveHoverPath2d(_hoverPath2dScratch); // Includes station racks and controls.
+		_ResolveHoverPath2d(_pointer.HoverScratch()); // Includes station racks and controls.
 		const bool unmute = action.Index == 1 && action.Modifiers == Action::MODIFIER_NONE;
 		const bool mute = action.Index == 1 && action.Modifiers == Action::MODIFIER_ALT;
 		const bool select = action.Index == 0 && action.Modifiers == Action::MODIFIER_ALT;
 		const auto buttonMask = (unmute || mute || select) ? (1u << action.Index) : 0u;
 		// Chords retain their existing camera/selection meaning. An eligible
 		// single-button background press owns its release even after cancellation.
-		if (_hoverPath2dScratch.empty() && !_HasQuantisationHover() && (unmute || mute || select) &&
+		if (_pointer.HoverScratch().empty() && !_HasQuantisationHover() && (unmute || mute || select) &&
 			(action.MouseButtonsDown == 0u || action.MouseButtonsDown == buttonMask))
 		{
 			_camera.CancelBackgroundCoast();
@@ -1221,20 +1146,12 @@ ActionResult Scene::_OnPointerMove(TouchMoveAction action)
 			_backgroundGesture->Moved = true;
 		return { true, {}, {}, ACTIONRESULT_DEFAULT, nullptr, {} };
 	}
-	if (!_popupManager.IsOpen() && _touchDownIsHud)
+	if (!_popupManager.IsOpen() && _pointer.IsCapturedBy(PointerInteraction::Owner::Hud))
 	{
-		auto active = _touchDownElement.lock();
-		const bool cancelled = action.Touch == TouchAction::TOUCH_MOUSE && action.MouseButtonsDown == 0u;
 		std::scoped_lock lock(_sceneMutex);
-		if (active)
-		{
-			if (cancelled) active->ClearPointerState();
-			else active->OnAction(active->GlobalToLocal(action));
-		}
-		if (cancelled) { _touchDownElement.reset(); _touchDownIsHud = false; }
-		return { true, {}, {}, ACTIONRESULT_DEFAULT, nullptr, {} };
+		return _pointer.DispatchCapture(action, PointerInteraction::CaptureLoss::MouseZeroButtons, true);
 	}
-	if (!_popupManager.IsOpen() && !_EditControlsSuppressed() && !_touchDownElement.lock() &&
+	if (!_popupManager.IsOpen() && !_EditControlsSuppressed() && !_pointer.Captured() &&
 		!_camera.IsBackgroundDragging() && !_isSceneTouching && !_loopEditor.OwnsPointer() && !_loopEditor.IsOrbitDragging() &&
 		!_quantisationInteraction.OwnsPointer() && _hudPanel && _hudPanel->CapturesPointer(_hudPanel->GlobalToLocal(action.Position)))
 	{
@@ -1269,37 +1186,11 @@ ActionResult Scene::_OnPointerMove(TouchMoveAction action)
 		_loopEditor.CancelInput();
 		return _popupManager.OnAction(action);
 	}
-	if (_consumeSettingsRelease && action.MouseButtonsDown == 0u)
-	{
-		_consumeSettingsRelease = false;
-		return { true, {}, {}, ACTIONRESULT_DEFAULT, nullptr, {} };
-	}
-	if (_touchDownIsSettings)
-	{
-		if (auto active = _touchDownElement.lock())
-		{
-			if (action.MouseButtonsDown == 0u) active->ClearPointerState();
-			else active->OnAction(active->GlobalToLocal(action));
-		}
-		if (action.MouseButtonsDown == 0u)
-		{
-			_touchDownElement.reset();
-			_touchDownIsSettings = false;
-			_consumeSettingsRelease = false;
-			_InvalidateHover2d();
-		}
-		return { true, {}, {}, ACTIONRESULT_DEFAULT, nullptr, {} };
-	}
-	if (!_EditControlsSuppressed() && !_touchDownElement.lock() && !_camera.IsBackgroundDragging() && !_isSceneTouching &&
-		!_loopEditor.OwnsPointer() && !_loopEditor.IsOrbitDragging() && !_quantisationInteraction.OwnsPointer())
-	{
-		for (const auto& panel : { _selectionPanel, _mainPanel })
-			if (panel && panel->RouteHitTest(panel->GlobalToLocal(action.Position)))
-			{
-				panel->OnAction(panel->GlobalToLocal(action));
-				return { true, {}, {}, ACTIONRESULT_DEFAULT, nullptr, {} };
-			}
-	}
+	const std::array<std::shared_ptr<GuiElement>, 2> panels{ _selectionPanel, _mainPanel };
+	if (auto panelResult = _pointer.RoutePanels(action, panels,
+		_EditControlsSuppressed() || _camera.IsBackgroundDragging() || _isSceneTouching
+			|| _loopEditor.OwnsPointer() || _loopEditor.IsOrbitDragging() || _quantisationInteraction.OwnsPointer()))
+		return *panelResult;
 	if (!_EditControlsSuppressed() && _loopEditor.IsEngaged() && !_loopEditor.OwnsPointer() && !_loopEditor.IsOrbitDragging() && _hudPanel)
 	{
 		std::scoped_lock lock(_sceneMutex);
@@ -1318,30 +1209,14 @@ ActionResult Scene::_OnPointerMove(TouchMoveAction action)
 	if (_camera.IsBackgroundDragging() && (0u != action.MouseButtonsDown))
 		return _UpdateBackgroundDrag(action);
 
-	auto activeElement = _touchDownElement.lock();
-
-	if (activeElement)
+	if (auto active = _pointer.Captured())
 	{
-		if (action.Touch == TouchAction::TOUCH_MOUSE && action.MouseButtonsDown == 0u)
-		{
-			// Native capture loss is reported as a zero-button move. Clear the
-			// captured widget and owner together, including HUD captures.
-			if (_touchDownIsHud)
-			{
-				std::scoped_lock lock(_sceneMutex);
-				activeElement->ClearPointerState();
-			}
-			else activeElement->ClearPointerState();
-			_touchDownElement.reset();
-			_touchDownIsHud = false;
-			return { true, {}, {}, ACTIONRESULT_DEFAULT, nullptr, {} };
-		}
-		if (_touchDownIsHud)
+		if (_pointer.IsCapturedBy(PointerInteraction::Owner::Hud))
 		{
 			std::scoped_lock lock(_sceneMutex);
-			return activeElement->OnAction(activeElement->GlobalToLocal(action));
+			return _pointer.DispatchCapture(action, PointerInteraction::CaptureLoss::MouseZeroButtons, false);
 		}
-		return activeElement->OnAction(activeElement->GlobalToLocal(action));
+		return _pointer.DispatchCapture(action, PointerInteraction::CaptureLoss::MouseZeroButtons, false);
 	}
 
 	if (_isSceneTouching)
@@ -1419,14 +1294,14 @@ ActionResult Scene::OnAction(KeyAction action)
 		if (_ctrlHeld && !contextualText && !_loopEditor.IsEngaged())
 		{
 			_focusManager.ClearFocus();
-			if (auto active = _touchDownElement.lock()) active->ClearPointerState();
-			_touchDownElement.reset();
-			_touchDownIsHud = _touchDownIsSettings = false;
+			if (auto active = _pointer.Captured()) active->ClearPointerState();
+			_pointer.ReleaseCapture();
+			_pointer.ReleaseCapture();
 			if (!wasCtrlHeld && HasSelection())
 			{
 				// Targets were captured above; hide hover when editing the selection.
 				_ApplyHoverPath2d({});
-				_hoverPath2d.clear();
+				_pointer.ClearHoverPath();
 				{
 					std::scoped_lock lock(_sceneMutex);
 					_hoverPath3d.clear();
@@ -3019,28 +2894,28 @@ void Scene::ApplyDeferredHoverUpdates()
 	if (_ctrlHeld)
 		return;
 	// Keep active hover in sync with both deferred 2D hit-testing and latest 3D picker result.
-	if (!_hover2dDirty)
+	if (!_pointer.HoverDirty())
 		return;
 
 	if (_popupManager.IsOpen())
 	{
-		if (!_hoverPath2d.empty())
+		if (!_pointer.HoverPath2d().empty())
 		{
 			std::vector<std::weak_ptr<base::GuiElement>> none;
 			_ApplyHoverPath2d(none);
-			_hoverPath2d.clear();
+			_pointer.ClearHoverPath();
 		}
 
-		_hover2dDirty = false;
+		_pointer.HoverResolved();
 		return;
 	}
 
-	if (_touchDownElement.lock() || _isSceneTouching || _backgroundGesture)
+	if (_pointer.Captured() || _isSceneTouching || _backgroundGesture)
 		return;
 
-	_hoverPath2dScratch.clear();
-	_ResolveHoverPath2d(_hoverPath2dScratch);
-	auto& nextPath = _hoverPath2dScratch;
+	_pointer.HoverScratch().clear();
+	_ResolveHoverPath2d(_pointer.HoverScratch());
+	auto& nextPath = _pointer.HoverScratch();
 	_ApplyHoverPath2d(nextPath);
 
 	bool stationHoverPromotedFrom2d = false;
@@ -3050,9 +2925,7 @@ void Scene::ApplyDeferredHoverUpdates()
 
 	if (!nextPath.empty() && !rackOwnsHover)
 	{
-		_hoverPath2dNextSharedScratch.clear();
-		_LockHoverPath(nextPath, _hoverPath2dNextSharedScratch);
-		auto& nextShared = _hoverPath2dNextSharedScratch;
+		const auto& nextShared = _pointer.HoverElements();
 		auto stationIt = std::find_if(nextShared.begin(), nextShared.end(), [](const std::shared_ptr<base::GuiElement>& element) {
 			return nullptr != std::dynamic_pointer_cast<Station>(element);
 		});
@@ -3102,98 +2975,26 @@ void Scene::ApplyDeferredHoverUpdates()
 		SetHover3d(std::move(pickPath), Action::MODIFIER_NONE);
 	}
 
-	_hoverPath2d = std::move(nextPath);
-	_hover2dDirty = false;
+	_pointer.CommitHover(std::move(nextPath));
 }
 
 void Scene::_InvalidateHover2d()
 {
-	_hover2dDirty = true;
+	_pointer.InvalidateHover();
 }
 
 void Scene::_ResolveHoverPath2d(std::vector<std::weak_ptr<base::GuiElement>>& outPath)
 {
-	if (_EditControlsSuppressed() && !_loopEditor.IsEngaged())
-	{
-		outPath.clear();
-		return;
-	}
-	outPath.clear();
-
-	auto resolveTop = [this](const std::shared_ptr<base::GuiElement>& root) {
-		if (!root)
-			return std::shared_ptr<base::GuiElement>();
-
-		return root->FindTopmostDescendant(root->ParentToLocal(_cursorPos));
-	};
-
-	auto leaf = std::shared_ptr<base::GuiElement>();
-	for (auto it = _guiChildren.rbegin(); it != _guiChildren.rend(); ++it)
-	{
-		leaf = resolveTop(*it);
-		if (leaf)
-			break;
-	}
-
-	if (!leaf)
-	{
-		for (auto& station : SnapshotStations())
-		{
-			leaf = resolveTop(std::static_pointer_cast<base::GuiElement>(station));
-			if (leaf)
-				break;
-		}
-	}
-
-	while (leaf)
-	{
-		outPath.push_back(leaf);
-		leaf = leaf->Parent();
-	}
-
-	std::reverse(outPath.begin(), outPath.end());
+	if (_EditControlsSuppressed() && !_loopEditor.IsEngaged()) { outPath.clear(); return; }
+	if (PointerInteraction::ResolveHoverPath(_guiChildren, true, _cursorPos, outPath)) return;
+	std::vector<std::shared_ptr<GuiElement>> stationRoots;
+	for (const auto& station : SnapshotStations()) stationRoots.push_back(station);
+	PointerInteraction::ResolveHoverPath(stationRoots, false, _cursorPos, outPath);
 }
 
 void Scene::_ApplyHoverPath2d(const std::vector<std::weak_ptr<base::GuiElement>>& nextPath)
 {
-	_hoverPath2dPrevSharedScratch.clear();
-	_hoverPath2dNextSharedScratch.clear();
-	_LockHoverPath(_hoverPath2d, _hoverPath2dPrevSharedScratch);
-	_LockHoverPath(nextPath, _hoverPath2dNextSharedScratch);
-
-	// Only the leaf is a pointer target. Opted-in panel backgrounds also follow
-	// the resolved ownership path, without participating in control routing.
-	for (const auto& element : _hoverPath2dPrevSharedScratch)
-	{
-		element->ApplyHoverState(false);
-		if (auto panel = std::dynamic_pointer_cast<GuiPanel>(element))
-			panel->ApplyPanelHover(false);
-	}
-
-	if (!_hoverPath2dNextSharedScratch.empty())
-	{
-		auto& leaf = _hoverPath2dNextSharedScratch.back();
-		leaf->ApplyHoverPoint(leaf->GlobalToLocal(_cursorPos));
-	}
-	for (const auto& element : _hoverPath2dNextSharedScratch)
-		if (auto panel = std::dynamic_pointer_cast<GuiPanel>(element))
-			panel->ApplyPanelHover(true);
-}
-
-void Scene::_LockHoverPath(const std::vector<std::weak_ptr<base::GuiElement>>& path,
-	std::vector<std::shared_ptr<base::GuiElement>>& outPath) const
-{
-	outPath.clear();
-	outPath.reserve(path.size());
-
-	for (const auto& element : path)
-	{
-		auto locked = element.lock();
-		if (!locked)
-			break;
-
-		outPath.push_back(std::move(locked));
-	}
+	_pointer.ApplyHover(nextPath, _cursorPos);
 }
 
 std::shared_ptr<StationRemote> Scene::FindRemoteStation(const std::vector<std::shared_ptr<Station>>& stations,
@@ -3275,10 +3076,8 @@ void Scene::_OnLoopGridEditorOpened()
 		_hudPanel->SetLoopEditorMode(_loopEditor.IsEngaged());
 	}
 	_focusManager.ClearFocus();
-	_touchDownElement.reset();
-	_touchDownIsHud = false;
-	_touchDownIsSettings = false;
-	_consumeSettingsRelease = false;
+	_pointer.ReleaseCapture();
+	_pointer.ClearConsumedRelease();
 	_EndBackgroundDrag();
 	_quantisationInteraction.OnCtrlModifierChanged(false, Timer::GetTime(),
 		_InteractionContext(), [this](const std::vector<unsigned char>& path) { return _ChildFromPath(path); });
@@ -4086,9 +3885,8 @@ void Scene::OnInputFocusLost()
 	_performanceGroups.ResetKeys();
 	_ReleaseQuantisationInputLocked();
 	if (_hudPanel) _hudPanel->ClearPointerState();
-	_touchDownElement.reset();
-	_touchDownIsHud = _touchDownIsSettings = false;
-	_consumeSettingsRelease = false;
+	_pointer.ReleaseCapture();
+	_pointer.ClearConsumedRelease();
 	_loopEditor.CancelInput();
 	_ApplyHoverPath2d({});
 	_InvalidateHover2d();
@@ -4525,7 +4323,7 @@ bool Scene::_StationManagementAvailableLocked() const
 		std::none_of(_stations.begin(), _stations.end(), [](const auto& station) { return station->IsPresentationMoving(); }) &&
 		!_popupManager.IsOpen() && !_loopEditor.IsEngaged() && !_focusManager.IsEditingText() &&
 		!_quantisationInteraction.OwnsPointer() && !_camera.IsBackgroundDragging() && !_isSceneTouching &&
-		!_touchDownElement.lock() && (!_hudPanel || !_hudPanel->HasCableDrag());
+		!_pointer.Captured() && (!_hudPanel || !_hudPanel->HasCableDrag());
 }
 
 void Scene::_RequestStationControl(gui::GuiStationControls::Intent intent)
@@ -4689,8 +4487,8 @@ void Scene::_CommitStationMembershipLocked()
 		_camera.RegisterStation(i, station, station->LoopTakeRevision());
 	}
 	// Selections reside on object identities; survivors retain them without selecting a neighbour.
-	_touchDownElement.reset(); _hoverElement3d.reset();
-	_hoverPath3d.clear(); _hoverPath2d.clear();
+	_pointer.ReleaseCapture(); _hoverElement3d.reset();
+	_hoverPath3d.clear(); _pointer.ClearHoverPath();
 	_selector->ClearPointerState();
 	_selector->UpdateCurrentHover({}, Action::MODIFIER_NONE, false, Tweakable::TWEAKSTATE_NONE);
 	_quantisationInteraction.CancelInteraction(true);
