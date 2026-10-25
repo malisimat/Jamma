@@ -77,6 +77,8 @@ namespace gui
 		static constexpr int MainPanelMinimumHeight = 320;
 		static constexpr int SelectionRowGap = 8;
 		static constexpr unsigned int PageContentPadding = 8u;
+		// Match the selection stack's top inset to its combined side padding.
+		static constexpr int SelectionTopPadding = StandardPanelPadding + static_cast<int>(PageContentPadding);
 		static constexpr unsigned int SettingsScrollBarWidth = 12u;
 		static constexpr unsigned int SettingsTabsWidth = 416u;
 		int _SelectionPanelHeight() const;

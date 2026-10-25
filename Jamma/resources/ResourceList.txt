@@ -56,14 +56,20 @@
 1 stationmode_over
 1 stationmode_down
 1 stationmode_toggled
+1 stationmode_toggled_over
+1 stationmode_toggled_down
 1 takemode
 1 takemode_over
 1 takemode_down
 1 takemode_toggled
+1 takemode_toggled_over
+1 takemode_toggled_down
 1 loopmode
 1 loopmode_over
 1 loopmode_down
 1 loopmode_toggled
+1 loopmode_toggled_over
+1 loopmode_toggled_down
 1 rounded_but ninepatch 12 12
 1 status_bar_background ninepatch 16 8
 1 panel_fill_flat ninepatch 36 32
