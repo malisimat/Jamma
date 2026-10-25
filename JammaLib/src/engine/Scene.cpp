@@ -89,6 +89,7 @@ Scene::Scene(SceneParams params,
 		[this]() { return _logicalPixelScale ? _logicalPixelScale() : 1.0f; } },
 		params.Size)
 {
+	_routingEditNow = std::move(params.RoutingEditNow);
 	_quantisation.SetClock(std::make_shared<Timer>());
 	_quantisation.SetLocalMasterTimingPublisher([this](const QuantisationTiming& timing,
 		Timer::QuantisationType type, const LoopTake* take, const Loop* loop)
@@ -2260,7 +2261,7 @@ gui::RoutingEditAvailability Scene::_RoutingEditAvailability()
 		return gui::RoutingEditAvailability::Applying;
 
 	const auto heartbeat = _audioEngine->AudioCallbackHeartbeat();
-	const auto now = std::chrono::steady_clock::now();
+	const auto now = _routingEditNow ? _routingEditNow() : std::chrono::steady_clock::now();
 	if (heartbeat != _lastAudioCallbackHeartbeat)
 	{
 		_lastAudioCallbackHeartbeat = heartbeat;
