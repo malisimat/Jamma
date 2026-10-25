@@ -426,6 +426,7 @@
     <ClInclude Include="src\base\Tickable.h" />
     <ClInclude Include="src\midi\LoopGridEditor.h" />
     <ClInclude Include="src\midi\AutomationPlayback.h" />
+    <ClInclude Include="src\midi\CaptureHistory.h" />
     <ClInclude Include="src\midi\MidiDelivery.h" />
     <ClInclude Include="src\midi\MidiLoop.h" />
     <ClInclude Include="src\midi\MidiOverdub.h" />
@@ -578,6 +579,7 @@
     <ClCompile Include="src\utils\VecUtils.cpp" />
     <ClCompile Include="src\midi\LoopGridEditor.cpp" />
     <ClCompile Include="src\midi\AutomationPlayback.cpp" />
+    <ClCompile Include="src\midi\CaptureHistory.cpp" />
     <ClCompile Include="src\midi\MidiDelivery.cpp" />
     <ClCompile Include="src\midi\MidiLoop.cpp" />
     <ClCompile Include="src\midi\MidiOverdub.cpp" />

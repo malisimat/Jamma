@@ -28,6 +28,7 @@
 #include "../gui/GuiRack.h"
 #include "../io/InitFile.h"
 #include "../midi/MidiDelivery.h"
+#include "../midi/CaptureHistory.h"
 #include "../midi/AutomationPlayback.h"
 #include "../midi/MidiVstOutputSink.h"
 #include "../vst/VstChain.h"
@@ -523,23 +524,7 @@ namespace engine
 		// UI stages requests, job completes them. Audio never reads this counter.
 		std::atomic<unsigned int> _vstJobsPending{ 0u };
 		midi::MidiDelivery _midiDelivery;
-		mutable std::mutex _liveHeldMidiMutex;
-		std::vector<std::pair<std::string, midi::MidiNoteSnapshot>> _liveHeldMidi;
-		std::vector<std::pair<std::string, std::bitset<16>>> _liveSustainMidi; // Same non-RT held-state mutex/owner.
-		std::bitset<16> _pendingLostSustain; // Job retry, protected by held-state mutex.
-		struct RecentPhysicalMidi
-		{
-			midi::MidiEvent Event;
-			std::string Device;
-			std::uint8_t PriorDeviceVelocity = 0u;
-			std::uint8_t PriorAnyVelocity = 0u;
-			std::uint64_t Sequence = 0u;
-		};
-		// Structural/MIDI job owner; guarded with the existing held-state mutex.
-		std::vector<RecentPhysicalMidi> _recentPhysicalMidi;
-		std::vector<std::weak_ptr<LoopTake>> _midiCaptureTargets;
-		std::optional<std::uint32_t> _midiHistoryDroppedThroughSample;
-		std::uint64_t _physicalMidiSequence = 0u;
+		midi::CaptureHistory _captureHistory;
 		// Coherent correspondence: callback writes, structural owner reads via
 		// the existing Timer observation plus this device boundary publication.
 		std::atomic<std::uint32_t> _captureDeviceBoundary{ 0u };
@@ -550,8 +535,6 @@ namespace engine
         std::atomic<bool> _midiFormatEpochPending{ true };
         std::atomic<bool> _midiFormatEpochKnown{ false };
         std::atomic<std::uint32_t> _midiFormatEpochSample{ 0u };
-		midi::MidiNoteSnapshot _anonymousLiveHeldMidi;
-		std::bitset<midi::MidiNote::TotalNoteSlots> _pendingLostLiveMidiNoteOffs;
 		std::vector<int> _allowedMidiChannels;
 		std::atomic<bool> _membershipRemoving{ false }; // Scene owner writes, UI/job readers; station lifetime pins teardown.
 		std::atomic<std::uint16_t> _allowedMidiChannelMask{ 0u };

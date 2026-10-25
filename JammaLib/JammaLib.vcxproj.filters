@@ -411,6 +411,9 @@
     <ClInclude Include="src\midi\AutomationPlayback.h">
       <Filter>src\midi</Filter>
     </ClInclude>
+    <ClInclude Include="src\midi\CaptureHistory.h">
+      <Filter>src\midi</Filter>
+    </ClInclude>
     <ClInclude Include="src\midi\MidiDelivery.h">
       <Filter>src\midi</Filter>
     </ClInclude>
@@ -885,6 +888,9 @@
       <Filter>src\midi</Filter>
     </ClCompile>
     <ClCompile Include="src\midi\AutomationPlayback.cpp">
+      <Filter>src\midi</Filter>
+    </ClCompile>
+    <ClCompile Include="src\midi\CaptureHistory.cpp">
       <Filter>src\midi</Filter>
     </ClCompile>
     <ClCompile Include="src\midi\MidiDelivery.cpp">
