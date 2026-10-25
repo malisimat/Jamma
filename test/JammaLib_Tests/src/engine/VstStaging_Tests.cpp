@@ -418,6 +418,66 @@ TEST(VstStaging, MidiCableDropAcceptsEntireVisibleSlotControl)
  rack->DetachGuiOwnershipForRetirement();
 }
 
+TEST(VstStaging, EveryMidiChannelCellDropsOntoVisibleScrolledSlotAndRejectsStaleDrag)
+{
+ gui::GuiRackParams params; params.Size = {220u,300u};
+ params.EnableVstControl = true; params.EnableVstRack = true; params.EnableVstRackMidiRouting = true;
+ auto rack = std::make_shared<gui::GuiRack>(params); rack->SetPosition({300,400}); rack->Init();
+ const auto view = rack->VstRack(); ASSERT_TRUE(view);
+ view->SetViewport({1200u,1000u}); view->SetChannelsCollapsed(false);
+ gui::GuiVstRack::Model model; model.Editable = true; model.Revision = 7u; model.TotalSlots = 12u;
+ for (auto i = 0u; i < 12u; ++i)
+ {
+  gui::GuiVstRack::Slot slot; slot.Value.Identity = "slot-" + std::to_string(i);
+  slot.Value.Plugin = std::make_shared<RackDropPlugin>(); model.Slots.push_back(std::move(slot));
+ }
+ std::vector<gui::GuiVstRack::Command> commands;
+ const auto submit = [&](auto command) { commands.push_back(std::move(command)); };
+ view->Update(model,submit); view->SetVisible(true);
+ view->Layout(100u,0,{0,0},{20u,20u});
+ ASSERT_GE(view->SlotScroll()->MaxScrollOffset(),80);
+ view->SlotScroll()->SetScrollOffset(80);
+ const auto button = view->SlotButton(3u); ASSERT_TRUE(button);
+ const auto clip = view->SlotScroll()->EffectiveContentRect({0,0,1200,1000});
+ const auto p = button->GlobalPosition(); const auto size = button->GetSize();
+ const auto visible = utils::Rect2d{p.X,p.Y,p.X + static_cast<int>(size.Width),p.Y + static_cast<int>(size.Height)}.Intersected(clip);
+ ASSERT_FALSE(visible.IsEmpty());
+ const auto drop = utils::Position2d{visible.Right - 6,(visible.Bottom + visible.Top) / 2} - view->GlobalPosition();
+ std::vector<gui::CableInteraction::Endpoint> endpoints; std::vector<gui::CableInteraction::Cable> cables;
+ view->BuildInteractionGeometry(endpoints,cables); ASSERT_EQ(28u,endpoints.size());
+ EXPECT_FALSE(gui::CableInteraction::HitTest(endpoints[19u],drop,13.0f));
+ for (auto channel = 0u; channel < 16u; ++channel)
+ {
+  SCOPED_TRACE(channel);
+  actions::TouchAction touch; touch.Index = 0; touch.Touch = actions::TouchAction::TOUCH_MOUSE;
+  touch.State = actions::TouchAction::TOUCH_DOWN;
+  touch.Position = endpoints[channel].Position + utils::Position2d{-20,0};
+  const auto pressed = view->OnAction(touch);
+  EXPECT_EQ(view,pressed.ActiveElement.lock()); EXPECT_FALSE(view->HasCableDrag());
+  actions::TouchMoveAction move; move.Index = 0; move.Touch = actions::TouchAction::TOUCH_MOUSE;
+  move.MouseButtonsDown = 1u; move.Position = touch.Position + utils::Position2d{-6,0};
+  view->OnAction(move); ASSERT_TRUE(view->HasCableDrag());
+  touch.State = actions::TouchAction::TOUCH_UP; touch.Position = drop;
+  view->OnAction(touch); EXPECT_FALSE(view->HasCableDrag());
+  ASSERT_EQ(channel + 1u,commands.size());
+  EXPECT_EQ(7u,commands.back().Revision);
+  for (auto routed = 0u; routed < 16u; ++routed)
+  {
+   EXPECT_EQ(routed == channel,commands.back().ChannelRoutes[routed].Explicit);
+   EXPECT_EQ(routed == channel ? (std::vector<std::string>{"slot-3"}) : std::vector<std::string>{},
+       commands.back().ChannelRoutes[routed].PluginIds);
+  }
+  EXPECT_EQ(80,view->SlotScroll()->ScrollOffset());
+ }
+ actions::TouchAction touch; touch.Index = 0; touch.Touch = actions::TouchAction::TOUCH_MOUSE;
+ touch.State = actions::TouchAction::TOUCH_DOWN; touch.Position = endpoints[0].Position;
+ view->OnAction(touch); ASSERT_TRUE(view->HasCableDrag());
+ ++model.Revision; view->Update(model,submit); EXPECT_FALSE(view->HasCableDrag());
+ touch.State = actions::TouchAction::TOUCH_UP; touch.Position = drop; view->OnAction(touch);
+ EXPECT_EQ(16u,commands.size());
+ rack->DetachGuiOwnershipForRetirement();
+}
+
 TEST(VstStaging, LiveCaptureRejectsActiveCallbackAndPreservesOutput)
 {
  StateGatePlugin plugin;

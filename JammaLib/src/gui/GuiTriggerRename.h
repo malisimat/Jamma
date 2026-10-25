@@ -42,8 +42,9 @@ namespace gui
 		GuiTriggerRename() : GuiPanel(base::GuiElementParams{})
 		{
 			SetSize({136u, 132u});
-			base::GuiElementParams band;
-			band.Position = {4, RowY}; band.Size = {128u, ActionSize}; band.Texture = "fader_back_panel";
+			GuiLabelParams band;
+			band.UseDarkFlatBackground();
+			band.Position = {4, RowY}; band.Size = {128u, ActionSize};
 			AddChild(std::make_shared<base::GuiElement>(band));
 			auto label = GuiLabelParams::PanelScrollRow("", 0u);
 			label.Position = {6, RowY + 2}; label.Size = {96u, 24u}; label.Ellipsize = true;

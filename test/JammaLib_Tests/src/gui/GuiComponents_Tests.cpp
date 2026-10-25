@@ -1835,6 +1835,53 @@ TEST(GuiPopup, NarrowRowsKeepDetailsAndActionsWithinContent)
     }
 }
 
+TEST(GuiPopup, LearnActionSpansNormalAndCompactRowsWithoutOverlappingOtherActions)
+{
+    for (const auto width : {640u, 200u, 120u, 48u, 47u})
+    {
+        SCOPED_TRACE(width);
+        auto params = gui::GuiPopupParams::PanelDefault();
+        params.Size = {640u,384u}; params.MinSize = {1u,1u};
+        auto popup = std::make_shared<GuiPopup>(params);
+        popup->FitToViewport({width,384u});
+        unsigned int learned = 0u, removed = 0u;
+        popup->SetRows({{"MIDI binding details", "Learn"}},
+            [&](std::size_t) { ++learned; }, [&](std::size_t) { ++removed; });
+        auto scroll = std::dynamic_pointer_cast<GuiScrollPanel>(popup->TryGetChild(6u)); ASSERT_TRUE(scroll);
+        auto content = scroll->Content(); ASSERT_TRUE(content);
+        const auto detail = content->TryGetChild(1u);
+        const auto learn = content->TryGetChild(2u), remove = content->TryGetChild(3u);
+        ASSERT_TRUE(detail); ASSERT_TRUE(learn); ASSERT_TRUE(remove);
+        if (width == 47u)
+        {
+            EXPECT_EQ(0u,detail->GetSize().Width);
+            EXPECT_FALSE(detail->IsVisible());
+        }
+        EXPECT_GT(learn->GetSize().Width,0u); EXPECT_GT(remove->GetSize().Width,0u);
+        EXPECT_EQ(content->GetSize().Height - 8u, learn->GetSize().Height);
+        EXPECT_EQ(4, learn->Position().Y);
+        for (const auto& child : {detail, learn, remove})
+        {
+            EXPECT_GE(child->Position().X,0);
+            EXPECT_LE(child->Position().X + static_cast<int>(child->GetSize().Width), static_cast<int>(content->GetSize().Width));
+        }
+        const auto rect = [](const auto& child) {
+            const auto p = child->Position(); const auto s = child->GetSize();
+            return utils::Rect2d{p.X,p.Y,p.X + static_cast<int>(s.Width),p.Y + static_cast<int>(s.Height)};
+        };
+        EXPECT_TRUE(rect(learn).Intersected(rect(detail)).IsEmpty());
+        EXPECT_TRUE(rect(learn).Intersected(rect(remove)).IsEmpty());
+        for (const auto y : {1, static_cast<int>(learn->GetSize().Height) - 2})
+        {
+            const utils::Position2d point{static_cast<int>(learn->GetSize().Width / 2u),y};
+            learn->OnAction(MakeTouch(TouchAction::TOUCH_DOWN,point));
+            learn->OnAction(MakeTouch(TouchAction::TOUCH_UP,point));
+        }
+        EXPECT_EQ(2u,learned); EXPECT_EQ(0u,removed);
+        popup->DetachGuiOwnershipForRetirement();
+    }
+}
+
 TEST(GuiPopup, LearningRowHasInsetDetailAndSquareTopAlignedRemoveAction)
 {
     auto params = gui::GuiPopupParams::PanelDefault(gui::GuiPopupParams::VisualMode::Learning);

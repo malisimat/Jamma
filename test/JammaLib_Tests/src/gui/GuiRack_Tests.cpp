@@ -160,15 +160,19 @@ TEST(GuiRack, SharedSlotViewPreservesCapturedIdentityScrollAndHiddenCableEndpoin
 	EXPECT_TRUE(view->OnAction(key).IsEaten);
 	EXPECT_TRUE(view->ChannelsCollapsed());
 	EXPECT_EQ(gui::GuiToggleParams::TOGGLE_OFF, expander->GetToggleState());
-	EXPECT_FALSE(view->ChannelShownActive(2u)); // A cable alone cannot admit live MIDI.
+	EXPECT_TRUE(view->ChannelShownActive(2u)); // Cable visibility is separate from live-input admission.
 	EXPECT_FALSE(view->ChannelShownActive(3u));
 	rack->SetAllowedMidiChannels({1}, true);
 	EXPECT_TRUE(view->ChannelShownActive(0u));
-	EXPECT_FALSE(view->ChannelShownActive(2u));
+	EXPECT_TRUE(view->ChannelShownActive(2u));
 	rack->SetAllowedMidiChannels({}, true);
 	EXPECT_FALSE(view->ChannelShownActive(0u));
-	EXPECT_FALSE(view->ChannelShownActive(2u));
-	EXPECT_EQ(rack->GetMasterSlider()->GetSize().Width, view->AppendButton()->GetSize().Width);
+	EXPECT_TRUE(view->ChannelShownActive(2u));
+	EXPECT_EQ(0, filterChanges);
+	EXPECT_TRUE(commands.empty());
+	EXPECT_EQ(36u, view->AppendButton()->GetSize().Width);
+	EXPECT_EQ(36u, view->AppendButton()->GetSize().Height);
+	EXPECT_EQ((static_cast<int>(view->GetSize().Width) - 36) / 2, view->AppendButton()->Position().X);
 	EXPECT_EQ(view, view->AppendButton()->Parent());
 	ASSERT_GT(view->SlotScroll()->MaxScrollOffset(), 0);
 	view->SlotScroll()->SetScrollOffset(80);
@@ -210,6 +214,7 @@ TEST(GuiRack, SharedSlotViewPreservesCapturedIdentityScrollAndHiddenCableEndpoin
 	EXPECT_EQ(1u, commands.size());
 	EXPECT_EQ(2, filterChanges);
 	EXPECT_TRUE(lastAllowedChannels.empty());
+	EXPECT_TRUE(view->ChannelShownActive(2u)); // Disabling input does not erase the displayed cable.
 	model.ChannelRoutes[2] = {};
 	model.Revision = 6u; view->Update(model, submit);
 	EXPECT_FALSE(view->ChannelShownActive(2u));

@@ -277,7 +277,7 @@ TEST_F(TextureTintGlTest, HoverMasksBrightenBordersAndPreserveTintedFillsAndNine
 			EXPECT_EQ(Draw(image, context, 30, 7)[3], 255) << name;
 			EXPECT_EQ(Draw(image, context, 30, 8)[3], 0) << name;
 			EXPECT_EQ(Draw(image, context, 30, 9)[3], 0) << name;
-			EXPECT_EQ(centre[3], name == "rounded_but_over" ? 128 : 255) << name;
+			EXPECT_EQ(centre[3], name == "rounded_but_over" ? 128 : 209) << name;
 		}
 	}
 	EXPECT_EQ(glGetError(), GL_NO_ERROR);

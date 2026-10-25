@@ -48,9 +48,8 @@ namespace gui
 			auto label = GuiLabelParams::PanelHeader("", 80u, 26u);
 			label.CenterHorizontally = true; label.Ellipsize = true;
 			_label = std::make_shared<GuiLabel>(label);
-			base::GuiElementParams background;
-			background.TextureShader = "texture"; background.Texture = "fader_back_panel";
-			background.TextureOpacity = 0.75f;
+			GuiLabelParams background;
+			background.UseDarkFlatBackground();
 			_background = std::make_shared<base::GuiElement>(background);
 			_editor = std::make_shared<Editor>();
 			auto button = GuiButtonParams::PanelButton(PencilSize);
