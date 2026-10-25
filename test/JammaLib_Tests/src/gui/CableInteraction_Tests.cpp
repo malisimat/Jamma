@@ -890,6 +890,30 @@ TEST_F(HudCableInteractionTests, AltPedalOpensLearningOnMatchedReleaseWithoutLea
     action.State = actions::TouchAction::TOUCH_UP; EXPECT_TRUE(pedal->OnAction(action).IsEaten); EXPECT_EQ(2u,admittedEdges);
 }
 
+TEST_F(HudCableInteractionTests, BothPedalsAltClickLearnWithoutSendingInput)
+{
+    gui::GuiPopupManager popups; unsigned int admittedEdges = 0u;
+    gui::GuiHudParams params; params.Size = {1200u,800u}; params.PopupManager = &popups;
+    params.AcceptTriggerInput = [&](std::uint64_t) { ++admittedEdges; return true; };
+    params.TriggerLearnInput = [](auto) { return std::shared_ptr<const io::TriggerBindingLearn::Observation>{}; };
+    Hud = std::make_shared<gui::GuiHud>(params); Hud->SetRoutingConfig(20u,{},*Routing); Hud->Init();
+    std::vector<std::shared_ptr<gui::GuiScrollPanel>> scrolls; Layout(Hud,scrolls);
+    const auto card = TriggerScroll()->Content()->TryGetChild(0u);
+    for (const auto index : {0u,1u})
+    {
+        SCOPED_TRACE(index);
+        const auto pedal = card->TryGetChild(static_cast<unsigned char>(index)); ASSERT_TRUE(pedal);
+        actions::TouchAction action; action.Touch = actions::TouchAction::TOUCH_MOUSE; action.Index = 0;
+        action.Position = {2,2}; action.Modifiers = base::Action::MODIFIER_ALT;
+        action.State = actions::TouchAction::TOUCH_DOWN;
+        EXPECT_TRUE(pedal->OnAction(action).IsEaten); EXPECT_FALSE(popups.IsOpen());
+        action.Modifiers = base::Action::MODIFIER_NONE; action.State = actions::TouchAction::TOUCH_UP;
+        EXPECT_TRUE(pedal->OnAction(action).IsEaten); EXPECT_TRUE(popups.IsOpen());
+        EXPECT_EQ(0u,admittedEdges); EXPECT_TRUE(Submissions.empty());
+        popups.Close(); Hud->UpdateTriggerLearn(); EXPECT_FALSE(Hud->HasTriggerLearn());
+    }
+}
+
 TEST_F(HudCableInteractionTests, VisiblePedalLearnControlOpensDialogWithoutSendingPedalInput)
 {
     gui::GuiPopupManager popups; unsigned int admittedEdges = 0u;

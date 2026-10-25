@@ -310,44 +310,55 @@ void GuiPopup::SetRows(const std::vector<GuiPopupRow>& rows, std::function<void(
 	for (std::size_t i = 0; i < rows.size(); ++i)
 	{
 		const int y = static_cast<int>(height - (i + 1u) * rowHeight);
-		const int removeWidth = 28;
-		const int primaryWidth = compact ? (std::max)(1,static_cast<int>(width) - removeWidth - 12)
+		const int inset = (std::min)(4, static_cast<int>(width) / 8);
+		const int gap = inset;
+		const int primaryWidth = compact ? (std::min)(52, static_cast<int>(width) / 3)
 			: std::clamp(static_cast<int>(width / 4u), 36, 92);
-		const int detailWidth = compact ? (std::max)(1,static_cast<int>(width) - 8)
-			: (std::max)(40, static_cast<int>(width) - primaryWidth - removeWidth - 20);
+		const int detailX = compact ? inset + primaryWidth + gap : 4;
+		const int detailWidth = compact ? (std::max)(0, static_cast<int>(width) - detailX - inset)
+			: (std::max)(40, static_cast<int>(width) - primaryWidth - 28 - 20);
+		const int removeWidth = compact ? (std::min)(28, detailWidth) : 28;
 		base::GuiElementParams box;
 		box.Size = {static_cast<unsigned int>(detailWidth),compact ? 50u : rowHeight - 8u};
 		box.MinSize = {1u,1u}; box.Texture = "rounded_but_on"; box.TextureShader = "texture_tinted";
 		box.GuiPassThrough = true; box.TextureOpacity = 0.72f;
-		box.Position = {4,y + (compact ? 32 : 4)};
+		box.Position = {detailX,y + (compact ? 32 : 4)};
 		box.TintColor = rows[i].Active ? glm::vec3{0.26f,0.39f,0.50f} : rows[i].Recent ? glm::vec3{0.07f,0.35f,0.43f} : GuiStyle::Control();
 		content->AddChild(std::make_shared<base::GuiElement>(box));
 		// Only the row currently learning gets an additional outline.
 		if (rows[i].Active)
 		{
-			const int edge = 2;
+			const int edge = (std::min)(2, detailWidth);
 			const auto edgeColor = glm::vec3{0.12f,0.57f,0.78f};
 			const int boxHeight = compact ? 50 : static_cast<int>(rowHeight) - 8;
-			for (const auto& rect : {std::array<int,4>{4,box.Position.Y,detailWidth,edge},
-				std::array<int,4>{4,box.Position.Y + boxHeight - edge,detailWidth,edge},
-				std::array<int,4>{4,box.Position.Y,edge,boxHeight},
-				std::array<int,4>{4 + detailWidth - edge,box.Position.Y,edge,boxHeight}})
+			for (const auto& rect : {std::array<int,4>{detailX,box.Position.Y,detailWidth,edge},
+				std::array<int,4>{detailX,box.Position.Y + boxHeight - edge,detailWidth,edge},
+				std::array<int,4>{detailX,box.Position.Y,edge,boxHeight},
+				std::array<int,4>{detailX + detailWidth - edge,box.Position.Y,edge,boxHeight}})
 			{
 				auto line = GuiPopupParams::FlatRect(static_cast<unsigned int>(rect[2]),static_cast<unsigned int>(rect[3]),edgeColor,0.94f);
 				line.Position = {rect[0],rect[1]}; content->AddChild(std::make_shared<base::GuiElement>(line));
 			}
 		}
-		auto detail = GuiPopupParams::Header(rows[i].Detail, static_cast<unsigned int>((std::max)(1, detailWidth - 24)), compact ? 46u : rowHeight - 12u);
-		detail.Position = {20,y + (compact ? 34 : 6)}; detail.ClipText = true;
-		content->AddChild(std::make_shared<GuiLabel>(detail));
+		const int textInset = compact ? (std::min)(8, detailWidth / 2) : 16;
+		const auto textWidth = static_cast<unsigned int>((std::max)(0,
+			detailWidth - textInset - (compact ? textInset : 8)));
+		auto detail = GuiPopupParams::Header(rows[i].Detail, textWidth, compact ? 46u : rowHeight - 12u);
+		detail.MinSize.Width = 0u;
+		detail.Position = {detailX + textInset,y + (compact ? 34 : 6)}; detail.ClipText = true;
+		auto detailLabel = std::make_shared<GuiLabel>(detail);
+		// Zero width means dynamic sizing to GuiLabel; an empty frame must stay hidden.
+		detailLabel->SetVisible(textWidth > 0u);
+		content->AddChild(detailLabel);
 		auto buttonParams = GuiButtonParams::PanelButton(static_cast<unsigned int>(primaryWidth));
-		buttonParams.MinSize = {1u,1u}; buttonParams.Size = {static_cast<unsigned int>(primaryWidth),compact ? 24u : rowHeight - 8u};
-		buttonParams.Position = {compact ? 4 : detailWidth + 8,y + 4}; buttonParams.Text = rows[i].PrimaryAction;
+		// The primary action spans the row even when details and removal stack beside it.
+		buttonParams.MinSize = {0u,1u}; buttonParams.Size = {static_cast<unsigned int>(primaryWidth),rowHeight - 8u};
+		buttonParams.Position = {compact ? inset : detailWidth + 8,y + 4}; buttonParams.Text = rows[i].PrimaryAction;
 		auto primaryButton = std::make_shared<GuiPopupRowButton>(buttonParams,[primary,i] { if (primary) primary(i); });
 		primaryButton->SetEnabled(rows[i].ActionsEnabled); content->AddChild(primaryButton);
 		buttonParams.Size = {static_cast<unsigned int>(removeWidth),static_cast<unsigned int>(removeWidth)};
-		buttonParams.Position = {compact ? static_cast<int>(width) - removeWidth - 4 : detailWidth + primaryWidth + 12,
-			y + static_cast<int>(rowHeight) - removeWidth - 4};
+		buttonParams.Position = {compact ? static_cast<int>(width) - removeWidth - inset : detailWidth + primaryWidth + 12,
+			compact ? y + 4 : y + static_cast<int>(rowHeight) - removeWidth - 4};
 		buttonParams.Text = "X";
 		auto removeButton = std::make_shared<GuiPopupRowButton>(buttonParams,[remove,i] { if (remove) remove(i); });
 		removeButton->SetEnabled(rows[i].ActionsEnabled); content->AddChild(removeButton);

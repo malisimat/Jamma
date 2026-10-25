@@ -264,12 +264,11 @@ ActionResult GuiRack::OnAction(GuiAction action)
 				action.Index < (MidiChannelToggleBaseIndex + 16u))
 			{
 				const auto channel = static_cast<int>(action.Index - MidiChannelToggleBaseIndex + 1u);
-				const auto wasActive = _vstRack && _vstRack->ChannelShownActive(static_cast<unsigned int>(channel - 1));
 				auto it = std::find(_rackParams.AllowedMidiChannels.begin(),
 					_rackParams.AllowedMidiChannels.end(),
 					channel);
 				bool membershipChanged = false;
-				if (it == _rackParams.AllowedMidiChannels.end() && !wasActive)
+				if (it == _rackParams.AllowedMidiChannels.end())
 				{
 					_rackParams.AllowedMidiChannels.push_back(channel);
 					std::sort(_rackParams.AllowedMidiChannels.begin(), _rackParams.AllowedMidiChannels.end());

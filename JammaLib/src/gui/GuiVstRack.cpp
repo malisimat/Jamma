@@ -154,8 +154,7 @@ GuiVstRack::GuiVstRack(std::shared_ptr<base::GuiElement> channels,
 	_collapse->ToggleChannels = [this, life = std::weak_ptr<int>(_lifetime)] { if (!life.expired()) SetChannelsCollapsed(!_collapsed); };
 	auto labelParams = GuiLabelParams::PanelHeader("MIDI", 148, 22u);
 	labelParams.CenterHorizontally = true;
-	labelParams.TextureShader = "texture"; labelParams.Texture = "fader_back_panel";
-	labelParams.TextureOpacity = 0.75f;
+	labelParams.UseDarkFlatBackground();
 	_midiLabel = std::make_shared<GuiLabel>(labelParams);
 	_channels->AddChild(_midiLabel);
 	_previous = _MakeButton("<", "", [command] { return command(Command::Kind::Diagnostic); });
@@ -373,7 +372,9 @@ void GuiVstRack::SetAllowedMidiChannels(const std::vector<int>& channels)
 bool GuiVstRack::ChannelShownActive(unsigned int channel) const noexcept
 {
 	if (channel >= _allowedChannels.size()) return false;
-	return _allowedChannels[channel];
+	// Display cables even when the separate live-input filter excludes this channel.
+	return _allowedChannels[channel] || (_model.ChannelRoutes[channel].Explicit &&
+		!_model.ChannelRoutes[channel].PluginIds.empty());
 }
 
 void GuiVstRack::_RefreshChannelToggles()
