@@ -12,6 +12,10 @@ console hidden. In the main Jamma window, **Ctrl+`** shows or hides it.
 Closing the console also hides it, retaining its transcript and input until
 Jamma exits. Jamma continues capturing output while the console is hidden.
 The obsolete `consoleforceconhost` preference is ignored.
+Output also reaches the continuous, rotated `run.log` beside the selected defaults
+file, independently of window visibility and console overflow. Verbosity is
+selected at each producer and applies equally to the file and console. See
+[diagnostic sources, limits and ownership](diagnostics.md).
 
 Type `/`, `/?`, or `/help` for the complete controls reference. General help is
 immediate and works offline; it never refreshes the server directory. **F1** in

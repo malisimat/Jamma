@@ -21,6 +21,7 @@
 #include "../io/InitFile.h"
 #include "../io/StartupConfig.h"
 #include "ConsoleCapture.h"
+#include "CrtCapture.h"
 #include "StartupLog.h"
 #include "JobFailureNotice.h"
 #include "../vst/Vst3Plugin.h"
@@ -497,7 +498,7 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 	const auto initPath = ResolveIniPath();
 	console::StartupLog startupLog(initPath);
 	auto consoleLines = std::make_shared<console::LineRing>();
-	console::ConsoleCapture capture(*consoleLines, [&](std::string_view line) {
+	console::ConsoleCapture capture(*consoleLines, {}, [&](std::string_view line) {
 		startupLog.Append(line);
 		if (auto failure = startupLog.TakeFailure(); !failure.empty())
 		{
@@ -505,6 +506,8 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 			OutputDebugStringA(failure.c_str()); // No recursive stream logging.
 		}
 	});
+	startupLog.Write(console::StartupLog::RunStart(LIB_VERSION));
+	console::CrtCapture crtCapture(capture);
 	const auto drainBackendDiagnostics = [] {
 		if (auto fault = console::DiagnosticThread::TakeBackendError())
 		{
@@ -577,16 +580,6 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 		return -1;
 	}
 
-	SYSTEMTIME startupTime{};
-	GetLocalTime(&startupTime);
-	std::ostringstream startupHeader;
-	startupHeader << "[BOOT] " << startupTime.wYear << '-'
-		<< std::setw(2) << std::setfill('0') << startupTime.wMonth << '-'
-		<< std::setw(2) << startupTime.wDay << ' '
-		<< std::setw(2) << startupTime.wHour << ':'
-		<< std::setw(2) << startupTime.wMinute << ':'
-		<< std::setw(2) << startupTime.wSecond << " local Jamma v" LIB_VERSION;
-	startupLog.Write(startupHeader.str());
 	startupLog.Write("[BOOT] defaults=" + EncodeUtf8(initPath) + " support-log=" +
 		EncodeUtf8(startupLog.Path()) + (startupLog.Available() ? "" : " (unavailable)"));
 	const bool defaultsExisted = GetFileAttributesW(initPath.c_str()) != INVALID_FILE_ATTRIBUTES;
@@ -1112,7 +1105,7 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 			}
 			else if (std::chrono::steady_clock::now() >= startupDeadline)
 			{
-				capture.CompleteStartup("[WARNING][BOOT] startup diagnostic window timed out after 30 seconds; later output remains in console");
+				capture.CompleteStartup("[WARNING][BOOT] startup diagnostic window timed out after 30 seconds; continuous run.log capture remains active");
 				startupCaptureFinished = true;
 			}
 		}
@@ -1326,6 +1319,7 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 	if (uiComInitialized)
 		CoUninitialize();
 	drainBackendDiagnostics();
+	crtCapture.Stop();
 	capture.Stop();
 
 	return jobThreadFailed ? 1 : (int)msg.wParam;
