@@ -1,0 +1,4 @@
+#include "Resource.h"
+
+IDI_JAMMA ICON "resources\\icons\\Jamma.ico"
+IDI_JAMMA_SMALL ICON "resources\\icons\\Jamma.ico"

@@ -263,4 +263,12 @@
       <Filter>resources\textures</Filter>
     </Image>
   </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="Resource.h"><Filter>resources</Filter></ClInclude>
+    <ResourceCompile Include="Jamma.rc"><Filter>resources</Filter></ResourceCompile>
+    <Image Include="resources\icons\Jamma.ico"><Filter>resources</Filter></Image>
+    <None Include="resources\source\app-icon\Jamma.svg"><Filter>resources</Filter></None>
+    <None Include="resources\source\app-icon\generate.cjs"><Filter>resources</Filter></None>
+    <None Include="resources\source\app-icon\README.md"><Filter>resources</Filter></None>
+  </ItemGroup>
 </Project>

@@ -66,7 +66,8 @@ namespace graphics
 		void SetWindowHandle(HWND wnd);
 		HWND GetWindowHandle() const noexcept { return _wnd; }
 		void ShowMessage(LPCWSTR message);
-		int Create(HINSTANCE hInstance, int nCmdShow);
+		// Optional large/small icon resources belong to the application instance; Window owns presentation.
+		int Create(HINSTANCE hInstance, int nCmdShow, unsigned int largeIconResourceId = 0u, unsigned int smallIconResourceId = 0u);
 		Config GetConfig() const;
 		utils::Size2d GetMinSize() const;
 		bool IsFullscreen() const;
@@ -105,7 +106,7 @@ namespace graphics
 		static bool GetMonitorWorkArea(HMONITOR monitor, RECT& workArea) noexcept;
 		static bool GetMonitorWorkAreaForRect(const RECT& rect, RECT& workArea) noexcept;
 		static void ClampToWorkArea(utils::Position2d& position, utils::Size2d& size, const RECT& workArea) noexcept;
-		static ATOM Register(HINSTANCE hInstance);
+		static ATOM Register(HINSTANCE hInstance, unsigned int largeIconResourceId = 0u, unsigned int smallIconResourceId = 0u);
 		static LRESULT CALLBACK WindowProcedure(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) noexcept;
 
 	protected:

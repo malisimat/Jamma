@@ -138,9 +138,9 @@ void Window::ShowMessage(LPCWSTR message)
 	MessageBox(0, message, L"Window::create", MB_ICONERROR);
 }
 
-int Window::Create(HINSTANCE hInstance, int nCmdShow)
+int Window::Create(HINSTANCE hInstance, int nCmdShow, unsigned int largeIconResourceId, unsigned int smallIconResourceId)
 {
-	_windowClass = MAKEINTATOM(Window::Register(hInstance));
+	_windowClass = MAKEINTATOM(Window::Register(hInstance, largeIconResourceId, smallIconResourceId));
 	if (_windowClass == 0) {
 		ShowMessage(L"registerClass() failed.");
 		return 1;
@@ -1064,7 +1064,7 @@ Position2d Window::Center(Size2d size)
 		(primaryDisplaySize.bottom - (int)size.Height) / 2 };
 }
 
-ATOM Window::Register(HINSTANCE hInstance)
+ATOM Window::Register(HINSTANCE hInstance, unsigned int largeIconResourceId, unsigned int smallIconResourceId)
 {
 	WNDCLASSEX wcex;
 	ZeroMemory(&wcex, sizeof(wcex));
@@ -1072,6 +1072,18 @@ ATOM Window::Register(HINSTANCE hInstance)
 	InitStyle(wcex);
 	wcex.lpfnWndProc = WindowProcedure;
 	wcex.hInstance = hInstance;
+	// LR_SHARED keeps resource handles owned by Windows for the class lifetime.
+	// Do not DestroyIcon them during Window teardown or Scene replacement.
+	// Distinct group IDs keep the LR_SHARED resource-name cache from returning
+	// the large icon for the small-icon request regardless of requested size.
+	if (largeIconResourceId)
+		wcex.hIcon = static_cast<HICON>(LoadImageW(hInstance, MAKEINTRESOURCEW(largeIconResourceId), IMAGE_ICON,
+			GetSystemMetrics(SM_CXICON), GetSystemMetrics(SM_CYICON), LR_SHARED));
+	if (smallIconResourceId)
+		wcex.hIconSm = static_cast<HICON>(LoadImageW(hInstance, MAKEINTRESOURCEW(smallIconResourceId), IMAGE_ICON,
+			GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON), LR_SHARED));
+	if (!wcex.hIcon) wcex.hIcon = LoadIcon(nullptr, IDI_APPLICATION);
+	if (!wcex.hIconSm) wcex.hIconSm = wcex.hIcon;
 	wcex.hCursor = LoadCursor(nullptr, IDC_ARROW);
 	wcex.lpszClassName = TEXT("JammaWindow");
 

@@ -13,6 +13,7 @@
 #include "../../console/Help.h"
 #include "../../console/LineRing.h"
 #include "Main.h"
+#include "../Resource.h"
 #include "RigDefaultSave.h"
 #include "Window.h"
 #include "PathUtils.h"
@@ -777,7 +778,7 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 	ResourceLib resourceLib;
 	Window window(*(scene.value()), resourceLib);
 
-	if (window.Create(hInstance, nCmdShow) != 0)
+	if (window.Create(hInstance, nCmdShow, IDI_JAMMA, IDI_JAMMA_SMALL) != 0)
 		PostQuitMessage(1);
 
 	scene.value()->InitGlobalKeyCapture();
