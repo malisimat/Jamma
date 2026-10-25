@@ -2039,3 +2039,65 @@ TEST(TriggerLearnController, ArmAdmitsFreshKeyboardAfterAltReleaseWithoutOwningP
     EXPECT_TRUE(weak.expired());
     popup->ReleaseResources(); popup->DetachGuiOwnershipForRetirement();
 }
+
+TEST(TriggerLearnController, RearmedDraftUsesExactObservationAndAcknowledgedRigOutcome)
+{
+    using Controller = gui::TriggerLearnController;
+    for (const bool accepted : {false, true})
+    {
+        SCOPED_TRACE(accepted);
+        auto rig = io::RigFile::FromStream(std::stringstream(io::RigFile::DefaultJson)).value();
+        rig.Triggers.resize(1u); rig.Triggers.front().ControlBindings.Activate.clear();
+        auto controller = std::make_shared<Controller>();
+        controller->Init(rig, rig.Triggers.front().Id, io::RigFile::Control::Activate, 4u, 7u, {640u,384u}, false, {});
+        std::vector<io::TriggerBindingLearn::Request> requests;
+        unsigned int cancellations = 0u, submissions = 0u;
+        auto observation = std::shared_ptr<io::TriggerBindingLearn::Observation>{};
+        const Controller::InputExchange input = [&](auto request) {
+            if (request) { if (request->Session) requests.push_back(*request); else ++cancellations; }
+            return observation;
+        };
+        bool admit = false, applying = true;
+        std::uint64_t revision = 4u;
+        std::optional<io::RigFile> submitted;
+        const auto update = [&] {
+            return controller->Update(rig, revision, {640u,384u}, input,
+                [&](const auto& candidate, std::size_t index) { EXPECT_EQ(0u,index); ++submissions; submitted = candidate; return admit; },
+                [&] { return applying; });
+        };
+        EXPECT_EQ(Controller::UpdateResult::Active, update()); ASSERT_EQ(1u,requests.size());
+        observation = std::make_shared<io::TriggerBindingLearn::Observation>();
+        observation->Identity = requests.front(); observation->Armed = true;
+        observation->Binding = io::TriggerBindingLearn::Keyboard(65u);
+        actions::GuiAction add; add.Index = 0u; controller->OnAction(add); // Rearm before the old observation arrives.
+        update(); ASSERT_EQ(2u,requests.size()); EXPECT_NE(requests.front(),requests.back());
+        EXPECT_TRUE(controller->Bindings().empty());
+        observation->Identity = requests.back(); ++observation->Identity.Revision;
+        update(); EXPECT_TRUE(controller->Bindings().empty()); // The full request identity includes its rig revision.
+        observation->Identity = requests.back(); update();
+        const auto draft = controller->Bindings(); ASSERT_EQ(1u,draft.size());
+        actions::GuiAction ok; ok.Index = 1u; controller->OnAction(ok); update();
+        EXPECT_FALSE(controller->Applying); EXPECT_EQ(draft,controller->Bindings());
+        admit = true; controller->OnAction(ok); update();
+        EXPECT_TRUE(controller->Applying); EXPECT_EQ(1u,cancellations);
+        applying = false; update(); // Runtime rejection preserves the same retryable draft.
+        EXPECT_FALSE(controller->Applying); EXPECT_EQ(draft,controller->Bindings());
+        controller->OnAction(ok); update(); EXPECT_TRUE(controller->Applying);
+        EXPECT_EQ(3u,submissions); EXPECT_EQ(2u,cancellations);
+        ASSERT_TRUE(submitted);
+        if (accepted) rig = *submitted;
+        else rig.Triggers.front().Name = "Unrelated edit";
+        ++revision;
+        EXPECT_EQ(accepted ? Controller::UpdateResult::Applied : Controller::UpdateResult::Active, update());
+        EXPECT_EQ(!accepted,controller->Invalidated);
+        if (!accepted)
+        {
+            EXPECT_EQ(3u,cancellations);
+            actions::GuiAction cancel; cancel.Index = 2u; controller->OnAction(cancel);
+            EXPECT_EQ(Controller::UpdateResult::Close,update());
+        }
+        auto popup = controller->Popup();
+        std::weak_ptr<Controller> lifetime = controller; controller.reset(); EXPECT_TRUE(lifetime.expired());
+        popup->ReleaseResources(); popup->DetachGuiOwnershipForRetirement();
+    }
+}
