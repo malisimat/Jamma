@@ -830,7 +830,7 @@ bool LoopGridEditor::_BeginSpecialGesture(const actions::TouchAction& action)
 		const auto& note = targets.Notes[i];
 		const auto& on = source.Events[note.On];
 		displayMatches = model->EditorNoteMatches(i, MidiNote{note.Start, note.End - note.Start,
-			on.Channel(), note.Pitch, on.data2, on.flags}, source.LoopLengthSamps);
+			on.Channel(), note.Pitch, on.data2, note.Flags}, source.LoopLengthSamps);
 	}
 	if (!displayMatches)
 	{

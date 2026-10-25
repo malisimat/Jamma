@@ -534,6 +534,49 @@ TEST(MidiLoopTriggerCapture, QuantisedCircularNoteUsesSameEditorAndPlaybackEndpo
 	EXPECT_EQ(0u, state.EventCount);
 }
 
+TEST(MidiLoopTriggerCapture, HoverTargetsMatchRenderedNotesAfterPredelayRotation)
+{
+	for (const bool quantised : {false, true})
+	{
+		SCOPED_TRACE(quantised);
+		MidiLoop loop;
+		auto model = std::make_shared<MidiModel>(MidiModelParams());
+		loop.AttachModel(model);
+		loop.StartRecord();
+		ASSERT_TRUE(loop.RecordEvent(MidiEvent::MakeNoteOn(100u, 0u, 60u, 100u)));
+		ASSERT_TRUE(loop.RecordEvent(MidiEvent::MakeNoteOff(300u, 0u, 60u)));
+		ASSERT_TRUE(loop.RecordEvent(MidiEvent::MakeNoteOn(500u, 0u, 60u, 100u)));
+		ASSERT_TRUE(loop.RecordEvent(MidiEvent::MakeNoteOff(600u, 0u, 60u)));
+		ASSERT_TRUE(loop.NormalizeTriggerCapture(1000u, -200));
+		loop.EndRecord(1000u);
+		MidiQuantisationSettings settings;
+		settings.Enabled = quantised;
+		settings.GrainSamps = 200u;
+		settings.Fraction = MidiQuantisationFraction::Whole;
+		settings.PhaseOffsetSamps = quantised ? 600 : 0;
+		ASSERT_TRUE(loop.SetQuantisation(settings));
+		ASSERT_TRUE(loop.UpdateModelFromEvents(1000u, true));
+		MidiLoop::EditState state;
+		ASSERT_TRUE(loop.SnapshotForEdit(state));
+		const auto targets = midi::MidiGridTargets::Build(state);
+		ASSERT_EQ(2u, targets.Notes.size());
+		const std::array<midi::MidiNote, 2> expected = quantised
+			? std::array{midi::MidiNote{0u, 100u, 0u, 60u, 100u, 0u},
+				midi::MidiNote{600u, 200u, 0u, 60u, 100u, 0u}}
+			: std::array{midi::MidiNote{300u, 100u, 0u, 60u, 100u, 0u},
+				midi::MidiNote{900u, 200u, 0u, 60u, 100u, MidiEvent::TriggerSeamEndpoint}};
+		for (std::size_t i = 0u; i < expected.size(); ++i)
+		{
+			const auto& note = expected[i];
+			const auto hover = targets.Resolve(note.StartSample + 1u, note.Note, nullptr);
+			ASSERT_TRUE(hover.NoteIndex);
+			EXPECT_EQ(i, *hover.NoteIndex);
+			EXPECT_EQ(note.Flags, targets.Notes[*hover.NoteIndex].Flags);
+			EXPECT_TRUE(model->EditorNoteMatches(*hover.NoteIndex, note, 1000u));
+		}
+	}
+}
+
 TEST(MidiLoopTriggerCapture, CircularOverdubPreservesOneAttackAndPunchesBothSidesOfSeam)
 {
 	for (const auto rotation : {-200ll, 200ll})
