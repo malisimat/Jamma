@@ -14,7 +14,7 @@ Open a loop to work on the details: edit MIDI notes or paint directly into an au
 
 ![MIDI note editing followed by a wipe to audio spectral painting](https://github.com/user-attachments/assets/fbe08251-caa0-4dd9-bb86-a642734acd7d)
 
-Current Version: v5.0.2
+Current Version: v5.0.3
 
 ## Features
 
