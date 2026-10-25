@@ -1762,6 +1762,104 @@ TEST(RigDefaultSaveTest, OrdinaryOverwriteDoesNotChangeDefaultsAndFailureKeepsPa
     EXPECT_TRUE(generated.CurrentPath().empty()); EXPECT_TRUE(generated.Dirty(1u));
 }
 
+TEST_F(RigSnapshotTest, LoadedRigPathFollowsItsAcknowledgedTransitionAndSurvivesAvailabilityRefresh)
+{
+	for (const bool acceptLoad : {false, true})
+		for (const auto* loadedPath : {L"C:/isolated-jamma/B.rig", L"D:/isolated-rigs/B.rig"})
+	{
+		SCOPED_TRACE(acceptLoad);
+		SCOPED_TRACE(loadedPath);
+		auto initial = EmptyRig();
+		initial.Triggers = {TriggerDescriptor("Initial A", std::nullopt)};
+		engine::RigCoordinator coordinator;
+		ASSERT_TRUE(coordinator.BuildInitial(initial, {}, {}, 0u, {}, engine::TriggerParams(), {}));
+		audio::AudioHost host(io::UserConfig{});
+		host.PublishPendingRigSnapshot(coordinator.Accepted());
+		audio::RigAudioBoundaryTestAccess::ApplyPending(host);
+		const std::wstring directory = L"C:/isolated-jamma";
+		io::InitFile defaults{};
+		defaults.Rig = directory + L"/A.rig";
+		defaults.RigLoadType = io::InitFile::LOAD_SPECIFIC;
+		RigDefaultSave owner(directory, L"defaults.json", {}, {});
+		owner.InitializeCurrentPath(defaults, true, coordinator.Accepted()->Revision);
+		RigDefaultSave replacingOwner(directory, L"defaults.json", {}, {});
+		replacingOwner.InitializeCurrentPath(defaults, true, coordinator.Accepted()->Revision);
+		constexpr auto SceneId = 11u;
+		auto loaded = initial;
+		loaded.Triggers.front().Name = "Loaded B";
+		engine::RigCoordinator::EditReceiptPtr receipt;
+		ASSERT_EQ(engine::RigCoordinator::EditResult::Pending, coordinator.SubmitCandidate(loaded, &receipt));
+		ASSERT_TRUE(receipt);
+		ASSERT_EQ(coordinator.Staged()->Revision, receipt->Revision);
+		owner.TrackLoadedPath(loadedPath, SceneId, receipt);
+		replacingOwner.TrackLoadedPath(loadedPath, SceneId, receipt);
+		EXPECT_FALSE(owner.PollLoadedPath(SceneId));
+		EXPECT_EQ(defaults.Rig, owner.CurrentPath());
+		ASSERT_EQ(acceptLoad ? engine::RigCoordinator::EditResult::Pending : engine::RigCoordinator::EditResult::TransitionRejected,
+			coordinator.CompleteTransition(receipt->Revision, acceptLoad, {}));
+		EXPECT_FALSE(owner.PollLoadedPath(SceneId));
+		if (!acceptLoad)
+		{
+			// A later unrelated acceptance must never make rejected B current.
+			EXPECT_EQ(engine::RigCoordinator::EditOutcome::Rejected, receipt->Outcome.load());
+			auto unrelated = initial;
+			unrelated.Triggers.front().Name = "Unrelated C";
+			ASSERT_EQ(engine::RigCoordinator::EditResult::Pending, coordinator.SubmitCandidate(unrelated));
+			ASSERT_GT(coordinator.Staged()->Revision, receipt->Revision);
+			ASSERT_EQ(engine::RigCoordinator::EditResult::Pending,
+				coordinator.CompleteTransition(coordinator.Staged()->Revision, true, {}));
+		}
+		const auto pending = coordinator.Pending();
+		ASSERT_TRUE(pending);
+		EXPECT_FALSE(coordinator.AcknowledgeInput(pending->Revision));
+		host.PublishPendingRigSnapshot(pending);
+		audio::RigAudioBoundaryTestAccess::ApplyPending(host);
+		ASSERT_TRUE(coordinator.ObserveAudioAcknowledgement(host.AppliedRigRevision()));
+		EXPECT_FALSE(owner.PollLoadedPath(SceneId));
+		EXPECT_EQ(defaults.Rig, owner.CurrentPath());
+		ASSERT_TRUE(coordinator.AcknowledgeInput(pending->Revision));
+		EXPECT_FALSE(owner.PollLoadedPath(SceneId));
+		ASSERT_TRUE(coordinator.PromoteAcknowledged());
+		ASSERT_TRUE(coordinator.RefreshRuntimeAvailability(0u, {}));
+		ASSERT_GT(coordinator.Accepted()->Revision, receipt->Revision);
+		EXPECT_EQ(acceptLoad, owner.PollLoadedPath(SceneId));
+		const std::wstring expectedPath = acceptLoad ? loadedPath : defaults.Rig;
+		EXPECT_EQ(expectedPath, owner.CurrentPath());
+		EXPECT_FALSE(owner.NeedsSaveDialog(engine::Scene::RigSaveMode::Save));
+		if (acceptLoad) EXPECT_EQ(receipt->Revision, owner.SavedRevision());
+		EXPECT_EQ(directory + L"/A.rig", defaults.Rig);
+		unsigned int defaultWrites = 0u;
+		std::wstring writtenPath;
+		const auto saved = RigDefaultSave::WriteRequest(coordinator.Accepted()->Rig, owner.CurrentPath(),
+			coordinator.Accepted()->Revision, false, defaults, L"defaults.json",
+			[&](const auto& path, const auto&) { writtenPath = path; return true; },
+			[&](const auto&, const auto&) { ++defaultWrites; return true; });
+		owner.AcceptSuccessfulWrite(*saved);
+		EXPECT_EQ(expectedPath, writtenPath);
+		const auto failed = RigDefaultSave::WriteRequest(coordinator.Accepted()->Rig, directory + L"/failed.rig",
+			coordinator.Accepted()->Revision, false, defaults, L"defaults.json",
+			[](const auto&, const auto&) { return false; },
+			[&](const auto&, const auto&) { ++defaultWrites; return true; });
+		owner.AcceptSuccessfulWrite(*failed);
+		EXPECT_EQ(expectedPath, owner.CurrentPath());
+		EXPECT_EQ(0u, defaultWrites);
+		// Shutdown rejects an unfinished load; a completed load remains accepted.
+		engine::RigCoordinator::EditReceiptPtr unfinished;
+		ASSERT_EQ(engine::RigCoordinator::EditResult::Pending, coordinator.SubmitCandidate(initial, &unfinished));
+		owner.TrackLoadedPath(directory + L"/unfinished.rig", SceneId, unfinished);
+		coordinator.Shutdown();
+		coordinator.ReleaseAfterReadersStopped();
+		EXPECT_FALSE(owner.PollLoadedPath(SceneId));
+		EXPECT_EQ(expectedPath, owner.CurrentPath());
+		// Main consumes the outgoing receipt before invalidating revisions for a
+		// replacement Scene. Its accepted rig keeps the accepted document path.
+		EXPECT_EQ(acceptLoad, replacingOwner.PollLoadedPath(SceneId));
+		replacingOwner.InvalidateSavedRevision();
+		EXPECT_EQ(expectedPath, replacingOwner.CurrentPath());
+		EXPECT_EQ(0u, replacingOwner.SavedRevision());
+	}
+}
+
 struct RigDefaultSaveTestAccess
 {
 	static void Publish(RigDefaultSave& owner, std::shared_ptr<const RigDefaultSave::Result> result)

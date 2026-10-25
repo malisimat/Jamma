@@ -207,8 +207,9 @@ RigCoordinator::SnapshotPtr RigCoordinator::RefreshRuntimeAvailability(unsigned 
 	return snapshot;
 }
 
-RigCoordinator::EditResult RigCoordinator::SubmitCandidate(const io::RigFile& candidateRig)
+RigCoordinator::EditResult RigCoordinator::SubmitCandidate(const io::RigFile& candidateRig, EditReceiptPtr* receipt)
 {
+	if (receipt) receipt->reset();
 	bool enabled = true;
 	if (!_editsEnabled.compare_exchange_strong(enabled, false, std::memory_order_acq_rel)) return EditResult::EditsDisabled;
 	const auto revision = _AllocateRevision();
@@ -233,6 +234,11 @@ RigCoordinator::EditResult RigCoordinator::SubmitCandidate(const io::RigFile& ca
 	auto snapshot = _BuildSnapshot(revision, candidateRig, _stationDescriptors, _stations,
 		accepted->AvailableAdcChannels, accepted->AvailableMidiDevices, _triggerParams, accepted);
 	if (!snapshot) { _editsEnabled.store(true, std::memory_order_release); return EditResult::ValidationFailed; }
+	if (receipt)
+	{
+		_editReceipt = std::make_shared<EditReceipt>(revision);
+		*receipt = _editReceipt;
+	}
 	_staged.store(snapshot, std::memory_order_release);
 	return EditResult::Pending;
 }
@@ -334,6 +340,7 @@ RigCoordinator::EditResult RigCoordinator::CompleteTransition(std::uint64_t revi
 		return EditResult::TransitionRejected;
 	if (!acceptedAtAudioBoundary || _shuttingDown.load(std::memory_order_acquire))
 	{
+		_CompleteEditReceipt(revision, EditOutcome::Rejected);
 		_staged.store({}, std::memory_order_release);
 		_editsEnabled.store(!_shuttingDown.load(std::memory_order_acquire), std::memory_order_release);
 		return EditResult::TransitionRejected;
@@ -419,6 +426,7 @@ bool RigCoordinator::PromoteAcknowledged()
 	}
 	auto old = _accepted.exchange(pending, std::memory_order_acq_rel);
 	_pending.store({}, std::memory_order_release);
+	_CompleteEditReceipt(pending->Revision, EditOutcome::Accepted);
 	if (old)
 	{
 		std::scoped_lock lock(_retiringMutex);
@@ -442,6 +450,7 @@ void RigCoordinator::Shutdown() noexcept
 
 void RigCoordinator::ReleaseAfterReadersStopped()
 {
+	if (_editReceipt) _CompleteEditReceipt(_editReceipt->Revision, EditOutcome::Rejected);
 	_pending.store({}, std::memory_order_release);
 	_staged.store({}, std::memory_order_release);
 	_accepted.store({}, std::memory_order_release);
@@ -449,6 +458,13 @@ void RigCoordinator::ReleaseAfterReadersStopped()
 	_retiring.clear();
 	_stations.clear();
 	_stationDescriptors.clear();
+}
+
+void RigCoordinator::_CompleteEditReceipt(std::uint64_t revision, EditOutcome outcome) noexcept
+{
+	if (!_editReceipt || _editReceipt->Revision != revision) return;
+	_editReceipt->Outcome.store(outcome, std::memory_order_release);
+	_editReceipt.reset();
 }
 
 bool RigCoordinator::MergeHardwarePreferences(const std::optional<io::UserConfig::AudioSettings>& audio,

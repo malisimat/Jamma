@@ -257,7 +257,8 @@ namespace engine
 		void FinishExplicitRigSave();
 		void SetRigSaveDialogOpen(bool open); // Window owner; gates conflicting input.
 
-		RigCoordinator::EditResult RequestRigEdit(const io::RigFile& candidateRig);
+		RigCoordinator::EditResult RequestRigEdit(const io::RigFile& candidateRig,
+			RigCoordinator::EditReceiptPtr* receipt = nullptr);
 		std::shared_ptr<const RigSnapshot> AcceptedRigSnapshot() const noexcept
 		{
 			return _rigCoordinator.Accepted();
@@ -359,7 +360,8 @@ namespace engine
 		void _ConfirmTakeDitch();
 		void _AcceptStationRemoval(bool consent);
 		void _CommitStationMembershipLocked();
-		RigCoordinator::EditResult _RequestRigEditLocked(const io::RigFile& candidateRig);
+		RigCoordinator::EditResult _RequestRigEditLocked(const io::RigFile& candidateRig,
+			RigCoordinator::EditReceiptPtr* receipt = nullptr);
 		std::string _RequestStationRenameLocked(const std::shared_ptr<Station>& station,
 			std::uint64_t revision, const std::string& name);
 		bool _JobReceiverAvailableLocked(const std::shared_ptr<base::ActionReceiver>& receiver) const;

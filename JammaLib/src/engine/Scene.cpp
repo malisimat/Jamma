@@ -2507,10 +2507,10 @@ void Scene::_AdvanceRigPublication()
 	if (!pending->MembershipChange) _inputSubsystem->OpenRigTriggerInput(pending->Revision);
 }
 
-RigCoordinator::EditResult Scene::RequestRigEdit(const io::RigFile& candidateRig)
+RigCoordinator::EditResult Scene::RequestRigEdit(const io::RigFile& candidateRig, RigCoordinator::EditReceiptPtr* receipt)
 {
 	std::scoped_lock lock(_sceneMutex);
-	return _RequestRigEditLocked(candidateRig);
+	return _RequestRigEditLocked(candidateRig, receipt);
 }
 
 std::string Scene::_RequestStationRenameLocked(const std::shared_ptr<Station>& station,
@@ -2537,8 +2537,9 @@ std::string Scene::_RequestStationRenameLocked(const std::shared_ptr<Station>& s
 	return {};
 }
 
-RigCoordinator::EditResult Scene::_RequestRigEditLocked(const io::RigFile& candidateRig)
+RigCoordinator::EditResult Scene::_RequestRigEditLocked(const io::RigFile& candidateRig, RigCoordinator::EditReceiptPtr* receipt)
 {
+	if (receipt) receipt->reset();
 	if (_controlOperation != ControlOperation::None || _stationManagement.Busy() || _rigSaveDialogOpen || _rigSaveInProgress) return RigCoordinator::EditResult::EditsDisabled;
 	switch (_RoutingEditAvailability())
 	{
@@ -2550,7 +2551,7 @@ RigCoordinator::EditResult Scene::_RequestRigEditLocked(const io::RigFile& candi
 	std::unique_lock lifecycle(_controlLifecycleMutex, std::try_to_lock);
 	if (!lifecycle.owns_lock() || !_rigCoordinator.EditsEnabled()) return RigCoordinator::EditResult::EditsDisabled;
 	const auto accepted = _rigCoordinator.Accepted();
-	const auto result = _rigCoordinator.SubmitCandidate(candidateRig);
+	const auto result = _rigCoordinator.SubmitCandidate(candidateRig, receipt);
 	if (result == RigCoordinator::EditResult::ReinitialisationRequired)
 		_quantisationFeedback = "Device setup and defaults require scene reinitialisation; reload or restart with the updated rig.";
 	if (result == RigCoordinator::EditResult::Pending)
