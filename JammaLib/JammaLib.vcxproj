@@ -424,6 +424,7 @@
     <ClInclude Include="src\midi\MidiQueue.h" />
     <ClInclude Include="src\base\Tickable.h" />
     <ClInclude Include="src\midi\LoopGridEditor.h" />
+    <ClInclude Include="src\midi\AutomationPlayback.h" />
     <ClInclude Include="src\midi\MidiLoop.h" />
     <ClInclude Include="src\midi\MidiOverdub.h" />
     <ClInclude Include="src\midi\MidiNote.h" />
@@ -573,6 +574,7 @@
     <ClCompile Include="src\resources\WavResource.cpp" />
     <ClCompile Include="src\utils\VecUtils.cpp" />
     <ClCompile Include="src\midi\LoopGridEditor.cpp" />
+    <ClCompile Include="src\midi\AutomationPlayback.cpp" />
     <ClCompile Include="src\midi\MidiLoop.cpp" />
     <ClCompile Include="src\midi\MidiOverdub.cpp" />
     <ClCompile Include="src\midi\MidiNote.cpp" />

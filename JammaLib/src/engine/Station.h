@@ -28,6 +28,7 @@
 #include "../gui/GuiRack.h"
 #include "../io/InitFile.h"
 #include "../midi/MidiQueue.h"
+#include "../midi/AutomationPlayback.h"
 #include "../midi/MidiVstOutputSink.h"
 #include "../vst/VstChain.h"
 
@@ -554,50 +555,6 @@ namespace engine
 		// Job/UI owners enqueue held NoteOffs; retirement releases resources off callback.
 		void _DitchLoopTake(std::shared_ptr<LoopTake>& take, bool flushLiveHeld = true) noexcept;
 
-		// --- Parameter automation dispatch ---
-
-		// One pre-resolved automation mapping ready for the audio thread. All
-		// pointer chasing and lane metadata are baked in by RebuildAutomationDispatch
-		// so the audio path is a flat loop over a hot cache line.
-		// Immutable while an audio snapshot lease can reference it.
-		struct AutomationDispatch
-		{
-			vst::IVstPlugin* plugin = nullptr;          // pinned by AutomationDispatchSnapshot
-			unsigned int     paramIdx = 0u;
-			midi::MidiLoop*                   loop = nullptr;            // pinned by AutomationDispatchSnapshot
-			std::uint8_t                      laneIdx = 0u;              // which lane within loop to read
-			std::uint32_t                     loopLengthSamps = 0u;      // frozen at rebuild
-			std::uint32_t                     automationGlobalSampleOrigin = 0u; // frozen at rebuild; automation origin
-			const std::atomic<std::int32_t>*  anchorCorrection = nullptr; // live correction from owning LoopTake
-			// effective origin = automationGlobalSampleOrigin + anchorCorrection (modular uint32)
-		};
-		// Per-entry playback state owned exclusively by the audio thread.
-		// Kept separate from immutable dispatch publication.
-		struct AutomationPlaybackState
-		{
-			std::uint16_t cursorIdx = 0u;
-			std::uint64_t stateGeneration = 0;
-			float         lastValue = -2.0f;  // sentinel: force first write
-		};
-		static constexpr std::size_t MaxAutomationDispatches = 64u;
-		struct AutomationDispatchSnapshot
-		{
-			std::uint64_t Generation = 0u;
-			std::size_t Count = 0u;
-			std::array<AutomationDispatch, MaxAutomationDispatches> Entries{};
-			// Shared owners are touched only by the serialized non-audio publisher
-			// and collector. A callback borrow protects all three lifetime boundaries.
-			std::array<std::shared_ptr<vst::IVstPlugin>, MaxAutomationDispatches> Plugins;
-			std::array<std::shared_ptr<LoopTake>, MaxAutomationDispatches> Takes;
-			std::array<std::shared_ptr<midi::MidiLoop>, MaxAutomationDispatches> Loops;
-		};
-		static constexpr float AutomationEpsilon = 1.0f / 65536.0f; // below 16-bit param resolution
-
-		// Run one automation dispatch block on the audio thread: advance each
-		// lane's cursor, interpolate, and SetParameter (delta-gated). Real-time safe.
-		void _RunAutomationDispatch(std::uint32_t blockStartSample,
-			std::uint32_t numSamps) noexcept;
-
 		// Last recorded MIDI loop in a take (most recently created loop with a
 		// non-zero length), or nullptr. Non-audio thread helper.
 		static std::shared_ptr<midi::MidiLoop> _LastRecordedMidiLoop(const std::shared_ptr<LoopTake>& take);
@@ -654,17 +611,8 @@ namespace engine
 		std::uint64_t _nextAudioStateGeneration = 1u;
 		std::atomic<std::uint64_t> _audioCompletedStateGeneration{ 0u };
 		std::atomic<double> _transportOffsetLoopFrac{ 0.0 };
-		// Scene-serialized non-audio writers build/collect complete pinned lists;
-		// callback reads only via bounded borrow. Shutdown stops readers, then
-		// clears this publication before the existing UI plugin retirement drain.
-		base::PublishedAudioSnapshot<const AutomationDispatchSnapshot> _automationDispatch;
-		std::uint64_t _nextAutomationDispatchGeneration = 1u;
+		midi::AutomationPlayback _automationPlayback;
 		bool _automationDispatchDirty = false; // Serialized child topology callback; UI commit consumes.
-		// Audio-thread-only playback state, parallel to the active dispatch list.
-		// Reset whenever _RunAutomationDispatch detects a new list was published.
-		AutomationPlaybackState  _automationPlaybackState[MaxAutomationDispatches]{};
-		// Callback-only generation: allocator address reuse cannot hide a rebuild.
-		std::uint64_t _automationDispatchGeneration = 0u;
 
 		// VST insert chain applied after all LoopTakes are mixed down,
 		// just before each channel is sent to the output AudioMixer.
