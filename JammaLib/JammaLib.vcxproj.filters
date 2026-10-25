@@ -71,6 +71,8 @@
     <ClInclude Include="src\io\IoSessionLoader.h" />
     <ClInclude Include="src\midi\MidiRefreshPolicy.h" />
     <ClInclude Include="src\engine\HierarchySelection.h" />
+    <ClInclude Include="src\engine\ControlOperation.h" />
+    <ClInclude Include="src\engine\LocalTiming.h" />
     <ClInclude Include="src\gui\SceneSettingsControls.h" />
     <ClInclude Include="src\gui\NinjamTempoPrompt.h" />
     <ClInclude Include="src\ninjam\NinjamTempoProposal.h" />
@@ -668,6 +670,8 @@
   <ItemGroup>
     <ClCompile Include="src\io\IoSessionLoader.cpp" />
     <ClCompile Include="src\engine\HierarchySelection.cpp" />
+    <ClCompile Include="src\engine\ControlOperation.cpp" />
+    <ClCompile Include="src\engine\LocalTiming.cpp" />
     <ClCompile Include="src\gui\SceneSettingsControls.cpp" />
     <ClCompile Include="src\gui\NinjamTempoPrompt.cpp" />
     <ClCompile Include="src\ninjam\NinjamTimingDiagnosticPresenter.cpp" />

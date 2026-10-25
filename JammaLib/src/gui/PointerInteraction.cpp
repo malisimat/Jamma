@@ -45,6 +45,19 @@ ActionResult PointerInteraction::DispatchCapture(TouchMoveAction action, Capture
 	return result;
 }
 
+bool PointerInteraction::CompleteDispatch(const TouchAction& action, const ActionResult& result,
+	Owner owner, GuiFocusManager* focus, ActionUndoHistory& history)
+{
+	if (!result.IsEaten) return false;
+	if (result.Undo) history.Add(result.Undo);
+	if (IsPress(action))
+	{
+		if (!HasCapture()) Capture(result.ActiveElement, owner);
+		if (focus) FocusPress(result.ActiveElement.lock(), *focus);
+	}
+	return true;
+}
+
 void PointerInteraction::OnSubtreeHidden(const std::shared_ptr<base::GuiElement>& subtree, GuiFocusManager& focus)
 {
 	const auto belongs = [&subtree](std::shared_ptr<base::GuiElement> element) {

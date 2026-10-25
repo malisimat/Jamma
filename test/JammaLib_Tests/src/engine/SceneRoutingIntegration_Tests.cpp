@@ -98,11 +98,11 @@ namespace engine
             return {};
         }
         static void BeginDeviceWriter(Scene& scene)
-        { scene._controlWriterExclusion = std::unique_lock(scene._controlLifecycleMutex); scene._controlOperation = Scene::ControlOperation::Save; }
+        { scene._operation._writer = std::unique_lock(scene._operation.LifecycleMutex()); scene._operation.Begin(ControlOperation::Save); }
         static void EndDeviceWriter(Scene& scene)
-        { scene._controlOperation = Scene::ControlOperation::None; scene._controlWriterExclusion.unlock(); }
+        { scene._operation.Begin(ControlOperation::None); scene._operation.ReleaseWriter(); }
         static std::unique_lock<std::mutex> ExcludeJob(Scene& scene)
-        { return std::unique_lock(scene._controlLifecycleMutex); }
+        { return std::unique_lock(scene._operation.LifecycleMutex()); }
         static std::string StartedAudioSelection(Scene& scene,
             const audio::AsioInventory& inventory, const audio::AudioStreamParams& params)
         {
@@ -136,7 +136,7 @@ namespace engine
         static bool ItemMutePainting(const Scene& scene) { return scene._selector->IsPaintingMute(); }
         static bool BackgroundPreviewActive(const Scene& scene) { return scene._BackgroundPreviewActive(); }
         static graphics::Camera::Pose CameraPose(const Scene& scene) { return scene._camera.CurrentPose(); }
-        static bool BackgroundOwned(const Scene& scene) { return scene._backgroundGesture.has_value(); }
+        static bool BackgroundOwned(const Scene& scene) { return scene._selector->OwnsBackgroundClick(); }
         static bool CameraBackgroundActive(const Scene& scene) { return scene._camera.IsBackgroundDragging(); }
         static bool CameraPointerHeld(const Scene& scene) { return scene._camera.IsBackgroundPointerHeld(); }
         static bool ApplyMuteBoundary(Scene& scene)
