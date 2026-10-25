@@ -426,19 +426,20 @@ void GuiMainPanel::_Layout()
 	int handleHeight = std::min(_selectionOnly ? SelectionHandleHeight + 3 : 64, std::max(0, height - (_selectionOnly ? 0 : std::min(StandardPanelPadding, height / 2))));
 	const int selectionPanelHeight = std::min(_SelectionPanelHeight(),
 		std::max(0, height - 2 * std::min(StandardPanelPadding, height / 2)));
-	const int mainPanelBottom = std::min(GuiStyle::StatusBarHeight + StandardPanelPadding, height / 2);
+	// Match _UpdatePresentation's actual frame origin when calculating its height.
+	const int mainPanelBottom = std::min(GuiStyle::StatusBarHeight + 8, height / 2);
 	const int selectionPanelBottom = !_selectionOnly && _occupiedSelection
 		? (_occupiedSelection->IsEmpty() ? height : _occupiedSelection->Bottom)
 		: height - margin - selectionPanelHeight;
 	// Scroll the settings inside the actual free band. A minimum-height
 	// fallback here would cover the selection panel in medium-height windows.
-	const int settingsHeight = std::max(0, selectionPanelBottom - StandardPanelPadding - mainPanelBottom);
+	const int settingsHeight = std::max(0, selectionPanelBottom - InterPanelPadding - mainPanelBottom);
 	const int unconstrainedPanelHeight = _selectionOnly
 		? selectionPanelHeight
 		: std::min(std::max(0, height - mainPanelBottom),
 			settingsHeight);
 	const int panelHeight = !_selectionOnly && !_occupiedTopStrip.IsEmpty()
-		? std::min(unconstrainedPanelHeight, std::max(0, _occupiedTopStrip.Bottom - StandardPanelPadding - mainPanelBottom))
+		? std::min(unconstrainedPanelHeight, std::max(0, _occupiedTopStrip.Bottom - InterPanelPadding - mainPanelBottom))
 		: unconstrainedPanelHeight;
 	const int settingsHandleBottom = std::min(GuiStyle::StatusBarHeight + 8, height / 2);
 	if (!_selectionOnly)

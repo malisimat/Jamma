@@ -14,7 +14,7 @@ namespace gui
 		// The pencil and cancellation control share the same label-row slot.
 		static constexpr unsigned int ActionSize = 20u;
 		static constexpr int ActionX = 114;
-		static constexpr int ActionYInset = 1;
+		static constexpr int ActionYInset = 2;
 		static constexpr int RowY = 86;
 	private:
 		class Editor : public GuiTextBox
@@ -49,7 +49,8 @@ namespace gui
 			AddChild(std::make_shared<base::GuiElement>(band));
 			auto label = GuiLabelParams::PanelScrollRow("", 0u);
 			label.FontSize = graphics::FontOptions::FONT_SMALL;
-			label.Position = {0, RowY + 2}; label.Size = {110u, 20u}; label.Ellipsize = true;
+			// Centre over the pedals in the orange area; allow text beneath the pencil.
+			label.Position = {7, RowY + 2}; label.Size = {136u, 20u}; label.Ellipsize = true;
 			label.CenterHorizontally = true; label.WrapWidth = -1; // Keep decorated names on one centred line.
 			_label = std::make_shared<GuiLabel>(label);
 			_editor = std::make_shared<Editor>(); _editor->SetPosition({6, RowY}); _editor->SetSize({96u, ActionSize});

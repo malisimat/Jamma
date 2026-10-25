@@ -781,10 +781,10 @@ TEST_F(HudResponsiveLayoutTests, TriggerCardsKeepSocketsSymmetricAndLabelControl
 	ASSERT_EQ(1u, scrolls.size());
 	const auto card = scrolls[0]->Content()->TryGetChild(0);
 	ASSERT_TRUE(card);
-	const auto activate = card->TryGetChild(0), ditch = card->TryGetChild(1);
-	const auto rename = std::dynamic_pointer_cast<gui::GuiTriggerRename>(card->TryGetChild(2));
-	const auto close = card->TryGetChild(3), edit = card->TryGetChild(4);
-	const auto input = card->TryGetChild(5), output = card->TryGetChild(6);
+	const auto activate = card->TryGetChild(2), ditch = card->TryGetChild(3);
+	const auto rename = std::dynamic_pointer_cast<gui::GuiTriggerRename>(card->TryGetChild(4));
+	const auto close = card->TryGetChild(5), edit = card->TryGetChild(6);
+	const auto input = card->TryGetChild(7), output = card->TryGetChild(8);
 	ASSERT_TRUE(activate); ASSERT_TRUE(ditch); ASSERT_TRUE(rename);
 	ASSERT_TRUE(close); ASSERT_TRUE(edit); ASSERT_TRUE(input); ASSERT_TRUE(output);
 	const auto band = rename->TryGetChild(0), label = rename->TryGetChild(1), cancel = rename->TryGetChild(3);
@@ -800,7 +800,7 @@ TEST_F(HudResponsiveLayoutTests, TriggerCardsKeepSocketsSymmetricAndLabelControl
 	// The fixed white band occupies the first 13 pixels of trigger_back.
 	EXPECT_LE(std::abs((activate->Position().X - 13) - (width - right(ditch))), 1);
 	EXPECT_EQ(46u, activate->GetSize().Width);
-	EXPECT_EQ(62u, activate->GetSize().Height);
+	EXPECT_EQ(66u, activate->GetSize().Height);
 	EXPECT_EQ(activate->GetSize().Width, ditch->GetSize().Width);
 	EXPECT_EQ(activate->GetSize().Height, ditch->GetSize().Height);
 	EXPECT_EQ(activate->Position().Y, ditch->Position().Y);
@@ -952,6 +952,15 @@ protected:
 	utils::Size2d Size{};
 };
 
+TEST_F(TopPanelInputsLayoutTests, SettingsRenderedTopHasEightPixelGapBelowPerformance)
+{
+	for (const auto size : {utils::Size2d{1200u, 800u}, {900u, 600u}})
+	{
+		Resize(size);
+		EXPECT_EQ(8, Selection->TopPanelLayout().PresentedBounds.Bottom - Settings->PresentedFrameBounds().Top);
+	}
+}
+
 TEST_F(TopPanelInputsLayoutTests, ExpandedWidthsMatchAcrossPagesVisibilityAndViewportClamping)
 {
 	for (const auto size : {utils::Size2d{1200u, 800u}, {812u, 600u}, {220u, 300u}, {0u, 0u}})
@@ -982,7 +991,7 @@ TEST_F(TopPanelInputsLayoutTests, ExactMinimumUsesSideSpanAndOnePixelLessStacksB
 	Resize({boundary - 1u, 800u});
 	strip = Hud->OccupiedTopStripBounds();
 	EXPECT_LE(strip.Top + 8, Selection->TopPanelLayout().PresentedBounds.Bottom);
-	EXPECT_EQ(static_cast<int>(boundary - 1u) - 8, strip.Right - strip.Left);
+	EXPECT_EQ(static_cast<int>(boundary - 1u) - 16, strip.Right - strip.Left);
 	ExpectSeparated();
 	Resize({1400u, 800u});
 	strip = Hud->OccupiedTopStripBounds();
@@ -1094,7 +1103,7 @@ TEST_F(TopPanelInputsLayoutTests, ResizeAcrossBreakpointRetargetsCurrentPresenta
 	}
 	EXPECT_FLOAT_EQ(0.0f, Selection->TransitionValue());
 	EXPECT_EQ(892, Hud->OccupiedTopStripBounds().Top);
-	EXPECT_EQ(92, Hud->OccupiedTopStripBounds().Left);
+	EXPECT_EQ(84, Hud->OccupiedTopStripBounds().Left);
 }
 
 TEST_F(TopPanelInputsLayoutTests, ResizeWhileOpeningLowersInputsBeforeTheFirstBodyPixel)
@@ -1277,7 +1286,7 @@ TEST(Scene, HudLabelAndPanelCaptureBeforeUnderlyingControlsAndKeepTheirRelease) 
 	const auto stack = std::dynamic_pointer_cast<GuiStackPanel>(scroll->Content());
 	ASSERT_TRUE(stack); stack->ComputeLayout();
 	const auto card = stack->TryGetChild(0);
-	const auto rename = std::dynamic_pointer_cast<gui::GuiTriggerRename>(card->TryGetChild(2));
+	const auto rename = std::dynamic_pointer_cast<gui::GuiTriggerRename>(card->TryGetChild(4));
 	ASSERT_TRUE(rename);
 	const auto label = rename->TryGetChild(1);
 	auto underneath = std::make_shared<GuiButton>(MakeButtonParams(1200u, 800u)); scene.AddChild(underneath);

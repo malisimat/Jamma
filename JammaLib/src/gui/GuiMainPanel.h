@@ -77,6 +77,7 @@ namespace gui
 	private:
 		friend class GuiMainPanelTestAccess;
 		static constexpr int StandardPanelPadding = 16;
+		static constexpr int InterPanelPadding = 8;
 		static constexpr int SelectionRowGap = 8;
 		static constexpr unsigned int PageContentPadding = 8u;
 		// Match the selection stack's top inset to its combined side padding.

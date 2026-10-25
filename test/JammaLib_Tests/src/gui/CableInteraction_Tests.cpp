@@ -423,7 +423,7 @@ TEST_F(HudCableInteractionTests, PedalPressWinsOverSocketRadiusWhileSocketCentre
 		const unsigned char triggerIndex = editorMode ? 1u : 0u;
 		const auto card = TriggerScroll()->Content()->TryGetChild(triggerIndex);
 		ASSERT_TRUE(card);
-		const auto pedal = card->TryGetChild(0);
+		const auto pedal = card->TryGetChild(2);
 		ASSERT_TRUE(pedal);
 		Hud->SetLoopEditorMode(editorMode);
 		Hud->BuildInteractionGeometry(Endpoints, Cables);
@@ -454,7 +454,7 @@ TEST_F(HudCableInteractionTests, PedalPressWinsOverSocketRadiusWhileSocketCentre
 TEST_F(HudCableInteractionTests, LabelClickOpensRawDraftOnReleaseAndOwnsBusyOrMovedGestures)
 {
 	const auto card = TriggerScroll()->Content()->TryGetChild(0);
-	const auto rename = std::dynamic_pointer_cast<gui::GuiTriggerRename>(card->TryGetChild(2));
+	const auto rename = std::dynamic_pointer_cast<gui::GuiTriggerRename>(card->TryGetChild(4));
 	ASSERT_TRUE(rename);
 	const auto label = rename->TryGetChild(1);
 	const auto editor = std::dynamic_pointer_cast<gui::GuiTextBox>(rename->TryGetChild(2));
@@ -559,7 +559,7 @@ TEST_F(HudCableInteractionTests, SupportedCompactProfileKeepsSourcesAndTriggerAc
 	EXPECT_LE(first->GlobalPosition().Y, scroll->GlobalPosition().Y + static_cast<int>(scroll->GetSize().Height));
 	EXPECT_GE(first->GlobalPosition().Y + 132, scroll->GlobalPosition().Y);
 	EXPECT_TRUE(Hud->TryGetChild(1)->TryGetChild(2)->IsVisible());
-	const auto close = first->TryGetChild(3);
+	const auto close = first->TryGetChild(5);
 	Click(close); ASSERT_TRUE(Popups.IsOpen());
 	const auto popup = Popups.Top();
 	EXPECT_GE(popup->Position().X, 0); EXPECT_GE(popup->Position().Y, 0);
@@ -937,7 +937,7 @@ TEST_F(HudCableInteractionTests, AltPedalOpensLearningOnMatchedReleaseWithoutLea
     params.TriggerLearnInput = [](auto) { return std::shared_ptr<const io::TriggerBindingLearn::Observation>{}; };
     Hud = std::make_shared<gui::GuiHud>(params); Hud->SetRoutingConfig(20u,{},*Routing); Hud->Init();
     std::vector<std::shared_ptr<gui::GuiScrollPanel>> scrolls; Layout(Hud,scrolls);
-    const auto card = TriggerScroll()->Content()->TryGetChild(0u); const auto pedal = card->TryGetChild(0u); ASSERT_TRUE(pedal);
+    const auto card = TriggerScroll()->Content()->TryGetChild(0u); const auto pedal = card->TryGetChild(2u); ASSERT_TRUE(pedal);
     actions::TouchAction action; action.Touch = actions::TouchAction::TOUCH_MOUSE; action.Index = 0u;
     action.Position = {2,2}; action.Modifiers = base::Action::MODIFIER_ALT; action.State = actions::TouchAction::TOUCH_DOWN;
     EXPECT_TRUE(pedal->OnAction(action).IsEaten); EXPECT_FALSE(popups.IsOpen()); EXPECT_EQ(0u,admittedEdges);
@@ -963,7 +963,7 @@ TEST_F(HudCableInteractionTests, BothPedalsAltClickLearnWithoutSendingInput)
     for (const auto index : {0u,1u})
     {
         SCOPED_TRACE(index);
-        const auto pedal = card->TryGetChild(static_cast<unsigned char>(index)); ASSERT_TRUE(pedal);
+        const auto pedal = card->TryGetChild(static_cast<unsigned char>(index + 2u)); ASSERT_TRUE(pedal);
         actions::TouchAction action; action.Touch = actions::TouchAction::TOUCH_MOUSE; action.Index = 0;
         action.Position = {2,2}; action.Modifiers = base::Action::MODIFIER_ALT;
         action.State = actions::TouchAction::TOUCH_DOWN;
@@ -984,8 +984,8 @@ TEST_F(HudCableInteractionTests, VisiblePedalLearnControlOpensDialogWithoutSendi
     Hud = std::make_shared<gui::GuiHud>(params); Hud->SetRoutingConfig(20u,{},*Routing); Hud->Init();
     std::vector<std::shared_ptr<gui::GuiScrollPanel>> scrolls; Layout(Hud,scrolls);
     const auto card = TriggerScroll()->Content()->TryGetChild(0u);
-    const auto learn = card->TryGetChild(7u); ASSERT_TRUE(learn);
-    const auto pedal = card->TryGetChild(0u); ASSERT_TRUE(pedal);
+    const auto learn = card->TryGetChild(0u); ASSERT_TRUE(learn);
+    const auto pedal = card->TryGetChild(2u); ASSERT_TRUE(pedal);
     Hud->SetAltLearnHeld(true);
     EXPECT_FALSE(learn->IsVisible());
     EXPECT_FALSE(learn->IsEnabled());
@@ -997,7 +997,7 @@ TEST_F(HudCableInteractionTests, VisiblePedalLearnControlOpensDialogWithoutSendi
     EXPECT_FALSE(popups.IsOpen());
     for (const auto index : {0u,1u})
     {
-        const auto triggerPedal = card->TryGetChild(static_cast<unsigned char>(index)); ASSERT_TRUE(triggerPedal);
+        const auto triggerPedal = card->TryGetChild(static_cast<unsigned char>(index + 2u)); ASSERT_TRUE(triggerPedal);
         EXPECT_FALSE(triggerPedal->TryGetChild(0u)->IsVisible());
         EXPECT_TRUE(triggerPedal->TryGetChild(1u)->IsVisible());
         EXPECT_TRUE(triggerPedal->TryGetChild(2u)->IsVisible());

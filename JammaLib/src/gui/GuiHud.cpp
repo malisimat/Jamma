@@ -630,7 +630,7 @@ void GuiHud::_BuildTopStrip()
 			source.Available ? (isAdc ? glm::vec3(0.92f, 0.52f, 0.24f) : glm::vec3(0.22f, 0.72f, 0.66f)) : glm::vec3(0.50f),
 			_SourceButtonWidth);
 		auto socket = std::make_shared<GuiHudSocket>(
-			utils::Position2d{ static_cast<int>(_SourceButtonWidth / 2u - _SocketSize / 2u), _SourceSocketY },
+			utils::Position2d{ static_cast<int>(_SourceButtonWidth / 2u - _SocketSize / 2u), _SourceSocketY - (isAdc ? 2 : 0) },
 			_SocketSize,
 			source.Available
 			? (isAdc ? glm::vec3(0.92f, 0.52f, 0.24f) : glm::vec3(0.22f, 0.72f, 0.66f))
@@ -732,30 +732,6 @@ void GuiHud::_BuildTriggerRail()
 			_SocketSize,
 			glm::vec3(0.92f, 0.79f, 0.20f));
 		button->AddChild(outputSocket);
-		// Keep the established card child order for rename, close and sockets.
-		// Learn controls are added last so their hit area owns the pedal footer.
-		for (const bool activate : {true, false})
-		{
-			const auto pedal = button->TryGetChild(activate ? 0u : 1u);
-			auto learnParams = GuiButtonParams::PanelButton(pedal->GetSize().Width);
-			// Put Learn just below the pedal, with a small overlap to keep the
-			// footer visually attached without covering the pedal face.
-			learnParams.Position = pedal->Position() + utils::Position2d{0, -10};
-			learnParams.Size = {pedal->GetSize().Width, 18u}; learnParams.MinSize = learnParams.Size;
-			learnParams.Texture.clear(); learnParams.OverTexture.clear(); learnParams.DownTexture.clear();
-			learnParams.TextureShader = "colour";
-			learnParams.TextureOpacity = 0.70f * (2.0f / 3.0f);
-			learnParams.TintColor = {0.27f, 0.29f, 0.31f};
-			learnParams.Text = "Learn"; learnParams.TextFontSize = graphics::FontOptions::FONT_TINY;
-			learnParams.OverTextColor = glm::vec3{0.08f,0.08f,0.07f};
-			learnParams.TextPadding = 2u;
-			const auto id = i < _displayedRig.Triggers.size() ? _displayedRig.Triggers[i].Id : std::string{};
-			auto learnButton = std::make_shared<GuiHudLearnButton>(learnParams,
-				[this, id, activate]() { _OpenTriggerLearn(id, activate, false); });
-			learnButton->SetVisible(!_altLearnHeld);
-			learnButton->SetEnabled(!_altLearnHeld);
-			button->AddChild(learnButton);
-		}
 		_triggerWidgets.push_back({ button, close, edit, rename, inputSocket, outputSocket });
 		_triggerList->AddChild(button);
 	}
@@ -1109,7 +1085,8 @@ void GuiHud::_LayoutPanels()
 		const auto cardWidth = _sourceEndpoints[i].Kind == io::RigFileRouting::SourceKind::Adc ? audioCard : midiCard;
 		auto& widgets = _sourceWidgets[i];
 		widgets.Button->SetSize({ cardWidth, _SourceButtonHeight });
-		widgets.Socket->SetPosition({ static_cast<int>(cardWidth / 2u) - static_cast<int>(_SocketSize / 2u), _SourceSocketY });
+		widgets.Socket->SetPosition({ static_cast<int>(cardWidth / 2u) - static_cast<int>(_SocketSize / 2u),
+			_SourceSocketY - (_sourceEndpoints[i].Kind == io::RigFileRouting::SourceKind::Adc ? 2 : 0) });
 		if (auto label = widgets.Button->TryGetChild(0u))
 			label->SetSize({ cardWidth > 8u ? cardWidth - 8u : 0u, _SourceButtonHeight - 4u });
 	}
@@ -2020,7 +1997,7 @@ void GuiHud::SetAltLearnHeld(bool held)
 	_altLearnHeld = held;
 	for (const auto& widgets : _triggerWidgets)
 	{
-		for (unsigned char index : {0u, 1u})
+		for (unsigned char index : {2u, 3u})
 			if (auto pedal = std::dynamic_pointer_cast<GuiHudTriggerPedal>(widgets.Card->TryGetChild(index))) pedal->SetAltOverlay(held);
 		for (unsigned int index = 0u; index < 256u; ++index)
 		{
@@ -2061,7 +2038,8 @@ Rect2d GuiHud::_SourceSocketClip(const std::shared_ptr<GuiScrollPanel>& scroll) 
 	// Sockets sit below their cards, over the parent border. Preserve the
 	// horizontal viewport bounds so scrolled-out sources stay hidden.
 	if (!clip.IsEmpty())
-		clip.Bottom = std::max(_topStrip->GlobalPosition().Y, clip.Bottom + _SourceSocketY);
+		clip.Bottom = std::max(_topStrip->GlobalPosition().Y,
+			clip.Bottom + _SourceSocketY - (scroll == _topAudioScroll ? 2 : 0));
 	return clip;
 }
 
@@ -2441,13 +2419,36 @@ std::shared_ptr<GuiButton> GuiHud::_MakeTriggerButton(const std::string& text,
 
 	const int pedalSpacing = 4;
 	const int pedalSizeW = 46;
-	const int pedalSizeH = 62;
+	const int pedalSizeH = 66;
 	// trigger_back's fixed left band ends at x=13; centre in the orange area.
 	const int orangeLeft = 13;
 	const int pedalPosX = orangeLeft + (static_cast<int>(_TriggerButtonWidth) - orangeLeft - 2 * pedalSizeW - pedalSpacing + 1) / 2;
 	// Balance the orange gap between the bottom socket bar and label band.
 	const int pedalPosY = _TriggerOutputPinBottomOffset +
 		(GuiTriggerRename::RowY - _TriggerOutputPinBottomOffset - pedalSizeH) / 2;
+	const auto addLearn = [this, &button, id, pedalPosX, pedalPosY, pedalSpacing, pedalSizeW](bool activate)
+	{
+		auto learnParams = GuiButtonParams::PanelButton(static_cast<unsigned int>(pedalSizeW - 2));
+		learnParams.Position = { pedalPosX + (activate ? 0 : pedalSizeW + pedalSpacing) + 1, pedalPosY - 11 };
+		learnParams.Size = { static_cast<unsigned int>(pedalSizeW - 2), 18u };
+		learnParams.MinSize = learnParams.Size;
+		learnParams.Texture.clear(); learnParams.OverTexture.clear(); learnParams.DownTexture.clear();
+		learnParams.TextureShader = "colour";
+		learnParams.TextureOpacity = 0.70f * (4.0f / 3.0f);
+		learnParams.TintColor = {0.27f, 0.29f, 0.31f};
+		learnParams.Text = "Learn"; learnParams.TextFontSize = graphics::FontOptions::FONT_TINY;
+		learnParams.OverTextColor = glm::vec3{0.08f,0.08f,0.07f};
+		learnParams.TextPadding = 2u;
+		auto learnButton = std::make_shared<GuiHudLearnButton>(learnParams,
+			[this, id, activate]() { _OpenTriggerLearn(id, activate, false); });
+		learnButton->SetVisible(!_altLearnHeld);
+		learnButton->SetEnabled(!_altLearnHeld);
+		button->AddChild(learnButton);
+	};
+	// Learn is below the pedals in draw and hit-test order, so the pedal owns
+	// any overlapping area.
+	addLearn(true);
+	addLearn(false);
 
 	base::GuiElementParams activateParams;
 	activateParams.Position = { pedalPosX, pedalPosY };

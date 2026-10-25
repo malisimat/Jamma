@@ -155,7 +155,6 @@ namespace gui
 		static constexpr unsigned int _SourceButtonHeight = GuiStyle::ControlHeight;
 		static constexpr unsigned int _SourceScrollBarHeight = 12u;
 		static constexpr unsigned int _SourceViewportHeight = _SourceButtonHeight + _SourceScrollBarHeight + 4u;
-		// Keep the inter-panel spacing aligned with the window's standard 8px inset.
 		static constexpr int _SourcePanelGap = 8;
 		static constexpr unsigned int _RightRailWidth = 156u;
 		static constexpr unsigned int _RightRailHeight = 460u;
