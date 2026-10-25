@@ -79,7 +79,10 @@ Scene::Scene(SceneParams params,
 		[this]() { return !_isSceneQuitting.load(std::memory_order_acquire) &&
 			!_sessionReplacing.load(std::memory_order_acquire) && !_controlWriterExclusion.owns_lock() &&
 			_controlOperation == ControlOperation::None && _rigCoordinator.EditsEnabled(); },
-		[this]() { CommitChanges(); }})),
+		[this]() { CommitChanges(); }, {},
+		[this](std::string title, std::string message, std::string accept) {
+			return _runtimeDialogs.Confirm(std::move(title),std::move(message),std::move(accept)); },
+		[this](const std::wstring& error) { ReportRuntimeNotice("VST",utils::EncodeUtf8(error)); }})),
 	_networkService(std::make_unique<ninjam::NinjamNetworkService>()),
 	_loopEditor(midi::LoopGridEditor::Host{
 		_camera, _undoHistory, _sceneMutex, _stations,
@@ -907,6 +910,7 @@ bool Scene::AdvanceUiAnimations()
 	// Native picker/editor calls can pump Windows messages; never hold the
 	// scene lock while processing a captured rack gesture.
 	_vstRackControls->Pump();
+	_runtimeDialogs.Pump(_popupManager,_sizeParams.Size,_runtimeRendererReady);
 	if (_quantisationInputResetRequested.exchange(false, std::memory_order_acq_rel))
 		_ReleaseQuantisationInput();
 	// Window calls once per UI frame before deferred hover and drawing.
@@ -990,6 +994,8 @@ void Scene::_InitResources(ResourceLib& resourceLib, bool forceInit)
 
 void Scene::_ReleaseResources()
 {
+	_runtimeRendererReady = false;
+	_runtimeDialogs.ReleaseResources();
 	{ std::scoped_lock lock(_sceneMutex); for (const auto& station : _stations) station->FinishPresentationMove(); }
 	_skybox.ReleaseResources();
 	_tempoLabel->ReleaseResources();
@@ -2006,7 +2012,7 @@ ActionResult Scene::OnAction(GuiAction action)
 		const bool merged = _rigCoordinator.MergeHardwarePreferences(_pendingAudioPersistence, _pendingMidiPersistence);
 		const auto accepted = AcceptedRigSnapshot();
 		if (merged && accepted && SaveHardwarePreferences(accepted->Rig)) { _pendingAudioPersistence.reset(); _pendingMidiPersistence.reset(); _hardwarePersistencePending = false; _deviceStatus->SetString("Preferences saved"); }
-		else _deviceStatus->SetString("Preferences not saved; retry available");
+		else { _deviceStatus->SetString("Preferences not saved; retry available"); ReportRuntimeNotice("Device preferences","Preferences not saved; retry available"); }
 		return ActionResult::NoAction();
 	}
 	if (action.ElementType == GuiAction::ACTIONELEMENT_BUTTON &&
@@ -2971,6 +2977,11 @@ void Scene::InitAudio(bool generatedRig, const audio::AsioInventory* inventory, 
 		_sourceLossRecoveryGateClosed = true;
 		started = _audioEngine->InitWithBlockAdvancement(_networkService->GetController(),
 			_quantisation.Clock(), generatedRig, inventory, exactSelection);
+		if (!started)
+		{
+			const auto& report = _audioEngine->GetAsioOpenReport();
+			ReportRuntimeNotice("Audio device",report.Attempts.empty() ? "Audio device could not be started; retry in settings" : report.Attempts.back().Error);
+		}
 		if (_audioEngine->GetAsioInventory().EnumerationError.empty()) _deviceInventory = _audioEngine->GetAsioInventory();
 		if (!started && !_audioEngine->LastInitReplacedStream())
 		{
@@ -3122,6 +3133,8 @@ void Scene::Shutdown()
 
 	if (_jobRunner.joinable())
 		_jobRunner.join();
+	_runtimeRendererReady = false;
+	_runtimeDialogs.Pump(_popupManager,_sizeParams.Size,false);
 	assert(_inputSubsystem->RigTriggerInputReadyForShutdown());
 	_inputSubsystem->PublishEmptyRigInputDispatch();
 	CloseGlobalKeyCapture();
@@ -3508,6 +3521,7 @@ void Scene::_InitSize()
 {
 	_loopEditor.SetSize(_sizeParams.Size);
 	_tempoPrompt.FitToViewport(_sizeParams.Size);
+	_runtimeDialogs.FitToViewport(_sizeParams.Size);
 	if (_mainPanel) _mainPanel->SetViewportSize(_sizeParams.Size);
 	if (_selectionPanel) _selectionPanel->SetViewportSize(_sizeParams.Size);
 	auto ar = _sizeParams.Size.Height > 0 ?
@@ -3849,6 +3863,8 @@ void Scene::_UpdateSelection(ActionResultType res)
 void Scene::InitResources(resources::ResourceLib& resourceLib, bool forceInit)
 {
 	ResourceUser::InitResources(resourceLib, forceInit);
+	_runtimeRendererReady = _runtimeDialogs.InitResources(resourceLib,forceInit);
+	if (!_runtimeRendererReady) _runtimeDialogs.Pump(_popupManager,_sizeParams.Size,false);
 	// Initialize controls added by rig edits on the render thread before drawing them.
 	{
 		std::scoped_lock lock(_sceneMutex);
@@ -4503,6 +4519,7 @@ void Scene::OnInputFocusLost()
 	// which takes its own scene lock (e.g. SnapshotStations). Commit before locking.
 	_focusManager.ClearFocus();
 	std::scoped_lock lock(_sceneMutex);
+	if (auto popup = _popupManager.Top()) popup->ClearPointerState();
 	_stationControls.Cancel();
 	for (const auto key : {VK_INSERT, VK_PRIOR, VK_NEXT})
 	{
@@ -4677,9 +4694,9 @@ void Scene::ReportFileStatus(const std::string& status)
 
 void Scene::_RequestSave(bool chooseFolder, bool asDefault)
 {
-	if (_controlOperation != ControlOperation::None || !_rigCoordinator.EditsEnabled()) { ReportFileStatus("Another operation is busy"); return; }
-	if (_CaptureIsBusy()) { ReportFileStatus("Save unavailable during capture or pending actions"); return; }
-	if (asDefault && (_defaultJamPath.empty() || !_defaultJamSaver)) { ReportFileStatus("Startup jam path unavailable"); return; }
+	if (_controlOperation != ControlOperation::None || !_rigCoordinator.EditsEnabled()) { ReportFileOutcome("Another operation is busy"); return; }
+	if (_CaptureIsBusy()) { ReportFileOutcome("Save unavailable during capture or pending actions"); return; }
+	if (asDefault && (_defaultJamPath.empty() || !_defaultJamSaver)) { ReportFileOutcome("Startup jam path unavailable"); return; }
 	_controlOperation = ControlOperation::Save;
 	auto folder = asDefault && _currentJamPath.empty() ? utils::GetParentDirectory(_defaultJamPath) : _sessionSaveFolder;
 	if (chooseFolder || folder.empty()) folder = utils::PickDirectory(L"Choose session save folder");
@@ -4695,8 +4712,8 @@ bool Scene::ConsumePanelLoadRequest()
 
 void Scene::PickSessionForLoad()
 {
-	if (_controlOperation != ControlOperation::None || !_rigCoordinator.EditsEnabled()) { ReportFileStatus("Another operation is busy"); return; }
-	if (_CaptureIsBusy()) { ReportFileStatus("Load unavailable during capture or pending actions"); return; }
+	if (_controlOperation != ControlOperation::None || !_rigCoordinator.EditsEnabled()) { ReportFileOutcome("Another operation is busy"); return; }
+	if (_CaptureIsBusy()) { ReportFileOutcome("Load unavailable during capture or pending actions"); return; }
 	_controlOperation = ControlOperation::Load;
 	try { _pendingLoadPath = utils::PickJamFile(); }
 	catch (...) { _controlOperation = ControlOperation::None; throw; }
@@ -4706,8 +4723,8 @@ void Scene::PickSessionForLoad()
 void Scene::RequestSessionLoad(std::wstring path)
 {
 	if (path.empty()) return;
-	if (_controlOperation != ControlOperation::None || !_rigCoordinator.EditsEnabled()) { ReportFileStatus("Another operation is busy"); return; }
-	if (_CaptureIsBusy()) { ReportFileStatus("Load unavailable during capture or pending actions"); return; }
+	if (_controlOperation != ControlOperation::None || !_rigCoordinator.EditsEnabled()) { ReportFileOutcome("Another operation is busy"); return; }
+	if (_CaptureIsBusy()) { ReportFileOutcome("Load unavailable during capture or pending actions"); return; }
 	_pendingLoadPath = std::move(path); _controlOperation = ControlOperation::Load;
 }
 
@@ -4725,7 +4742,7 @@ bool Scene::_FinishControlOperation(std::string* restorationError)
 	{
 		restored = false;
 		if (restorationError) *restorationError = error;
-		_deviceStatus->SetString("Stopped: " + error); ReportFileStatus("Audio restoration failed: " + error);
+		_deviceStatus->SetString("Stopped: " + error); ReportFileOutcome("Audio restoration failed: " + error);
 	}
 	if (_controlPaused && restored && _controlPause.AdmissionWasOpen)
 	{
@@ -4739,6 +4756,7 @@ bool Scene::_FinishControlOperation(std::string* restorationError)
 		restored = false;
 		if (restorationError) *restorationError += "; MIDI resume failed: " + std::string(dispatchError.what());
 		_deviceStatus->SetString("MIDI dispatch stopped: " + std::string(dispatchError.what()));
+		ReportRuntimeNotice("MIDI", "MIDI dispatch stopped: " + std::string(dispatchError.what()));
 	}
 	if (_controlInputClosed)
 	{
@@ -4761,7 +4779,7 @@ void Scene::FinishSessionLoad(bool replaced, const std::string& error)
 		if (_controlWriterExclusion.owns_lock()) _controlWriterExclusion.unlock();
 		_controlOperation = ControlOperation::None;
 	}
-	else { ReportFileStatus(error.empty() ? "Load failed; current session retained" : error); _FinishControlOperation(); }
+	else { ReportFileOutcome(error.empty() ? "Load failed; current session retained" : error); _FinishControlOperation(); }
 }
 
 void Scene::PumpDeviceAndFileControls()
@@ -4793,7 +4811,7 @@ void Scene::PumpDeviceAndFileControls()
 			if (_CaptureIsBusy()) { _deviceStatus->SetString("Waiting for recording/pending capture"); return; }
 			if (!_audioStartRequested && _audioDraft.Name == actual.Name && _audioDraft.SampleRate == actual.SampleRate && _audioDraft.BufSize == actual.BufSize && _audioDraft.NumChannelsIn == actual.NumInputChannels && _audioDraft.NumChannelsOut == actual.NumOutputChannels) { _audioSchedule.AttemptedRevision = _audioSchedule.Revision; return; }
 			std::string error;
-			if (!_ValidateAudioDraft(error)) { _deviceStatus->SetString(error); _audioSchedule.AttemptedRevision = _audioSchedule.Revision; return; }
+			if (!_ValidateAudioDraft(error)) { _deviceStatus->SetString(error); ReportRuntimeNotice("Audio device",error); _audioSchedule.AttemptedRevision = _audioSchedule.Revision; return; }
 			_controlOperation = ControlOperation::Audio;
 		}
 		else return;
@@ -4810,6 +4828,7 @@ void Scene::PumpDeviceAndFileControls()
 			}
 			_hardwarePersistencePending = _pendingAudioPersistence.has_value() || _pendingMidiPersistence.has_value();
 			_deviceStatus->SetString(completion->Status); _controlOperation = ControlOperation::None; _devicePageDirty = true;
+			ReportRuntimeNotice("MIDI devices",completion->Status);
 		}
 		return;
 	}
@@ -4851,21 +4870,21 @@ void Scene::PumpDeviceAndFileControls()
 				if (_defaultJamSaver(result.Path, useNamedJam))
 				{
 					if (useNamedJam) _currentJamPath = result.Path;
-					ReportFileStatus(useNamedJam ? "Saved startup jam " + utils::EncodeUtf8(result.Path)
+					ReportFileOutcome(useNamedJam ? "Saved startup jam " + utils::EncodeUtf8(result.Path)
 						: "Saved startup jam " + utils::EncodeUtf8(_defaultJamPath));
 				}
-				else ReportFileStatus("Jam saved at " + utils::EncodeUtf8(result.Path) + "; startup default unchanged");
+				else ReportFileOutcome("Jam saved at " + utils::EncodeUtf8(result.Path) + "; startup default unchanged");
 			}
-			else { _currentJamPath = result.Path; ReportFileStatus("Saved " + utils::EncodeUtf8(result.Path)); }
+			else { _currentJamPath = result.Path; ReportFileOutcome("Saved " + utils::EncodeUtf8(result.Path)); }
 		}
-		else ReportFileStatus(result.Error);
-		if (!result.AudioResumed) ReportFileStatus("Save outcome: " + utils::EncodeUtf8(result.Path) + "; audio restoration failed: " + result.Error);
+		else ReportFileOutcome(result.Error);
+		if (!result.AudioResumed) ReportFileOutcome("Save outcome: " + utils::EncodeUtf8(result.Path) + "; audio restoration failed: " + result.Error);
 		if (_controlOperation != ControlOperation::None) _FinishControlOperation();
 		return;
 	}
 	if (!_audioEngine->BeginQuiescence(_controlPause, error))
 	{
-		_deviceStatus->SetString("Stopped/error: " + error); ReportFileStatus(error);
+		_deviceStatus->SetString("Stopped/error: " + error); ReportFileOutcome(error);
 		if (_controlOperation == ControlOperation::Audio) _audioSchedule.AttemptedRevision = _audioSchedule.Revision;
 		_FinishControlOperation(); return;
 	}
@@ -4876,7 +4895,7 @@ void Scene::PumpDeviceAndFileControls()
 	if (_controlOperation != ControlOperation::Midi && _CaptureIsBusy())
 	{
 		if (_controlOperation == ControlOperation::Audio) _deviceStatus->SetString("Waiting for recording");
-		else ReportFileStatus("File operation rejected during capture/pending actions");
+		else ReportFileOutcome("File operation rejected during capture/pending actions");
 		_FinishControlOperation(); return;
 	}
 	if (_controlOperation == ControlOperation::Load) { _loadReady = true; ReportFileStatus("Loading session"); return; }
@@ -4886,7 +4905,7 @@ void Scene::PumpDeviceAndFileControls()
 		const auto admittedRevision = _audioSchedule.Revision;
 		const auto requested = _audioDraft;
 		_audioSchedule.Attempted(admittedRevision, now);
-		if (!_ValidateAudioDraft(error)) _deviceStatus->SetString(error);
+		if (!_ValidateAudioDraft(error)) { _deviceStatus->SetString(error); ReportRuntimeNotice("Audio device",error); }
 		else
 		{
 			_deviceStatus->SetString("Changing audio device");
@@ -4936,10 +4955,12 @@ void Scene::PumpDeviceAndFileControls()
 				const auto rig = AcceptedRigSnapshot(); _hardwarePersistencePending = !merged || !rig || !SaveHardwarePreferences(rig->Rig);
 				if (!_hardwarePersistencePending) { _pendingAudioPersistence.reset(); _pendingMidiPersistence.reset(); }
 				_deviceStatus->SetString(_hardwarePersistencePending ? "Applied, preferences not saved" : (acceptedParams.NumOutputChannels < actual.NumOutputChannels ? "Ready; unavailable output routes disconnected" : "Ready"));
+				ReportRuntimeNotice("Audio device",_hardwarePersistencePending ? "Applied, preferences not saved; retry available" :
+					(acceptedParams.NumOutputChannels < actual.NumOutputChannels ? "Ready; unavailable output routes disconnected" : "Audio device ready"));
 				if (_audioSchedule.Revision == admittedRevision) _audioDraft = settings;
 				_devicePageDirty = true;
 			}
-			else _deviceStatus->SetString(error);
+			else { _deviceStatus->SetString(error); ReportRuntimeNotice("Audio device",error); }
 			_audioStartRequested = false;
 			std::cout << "[DEVICES scene=" << _sceneIdentity << " operation=" << _controlOperationId << "] audio " << (applied ? "applied " : "failed ")
 				<< "requested='" << requested.Name << "' in=" << requested.NumChannelsIn << " out=" << requested.NumChannelsOut << " rate=" << requested.SampleRate << " buffer=" << requested.BufSize
@@ -4950,7 +4971,7 @@ void Scene::PumpDeviceAndFileControls()
 	}
 	catch (const std::exception& error)
 	{
-		ReportFileStatus(std::string("Operation failed: ") + error.what());
+		ReportFileOutcome(std::string("Operation failed: ") + error.what());
 		if (_controlOperation == ControlOperation::Audio) _audioSchedule.AttemptedRevision = _audioSchedule.Revision;
 		_FinishControlOperation();
 	}

@@ -310,6 +310,12 @@ GLuint Font::InitVertexArray(const std::string& str, GLenum usage, GLuint* outPo
 	return vao;
 }
 
+bool Font::CanDraw() const noexcept
+{
+	const auto shader = _shader.lock();
+	return _atlasTexture != 0u && !_glyphs.empty() && shader && shader->GetId() != 0u;
+}
+
 void Font::Draw(GlDrawContext& ctx, GLuint vertexArray, unsigned int numChars, glm::vec3 color)
 {
 	auto shader = _shader.lock();
