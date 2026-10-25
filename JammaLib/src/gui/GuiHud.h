@@ -121,6 +121,7 @@ namespace gui
 		void SetQuantisationFeedback(const std::string& text);
 		void SetPerformanceGroupFeedback(const std::string& text);
 		utils::Rect2d OccupiedTopStripBounds() const;
+		void SetTopPanelLayout(GuiTopPanelLayout layout);
 		void SetEditModeAlpha(float alpha) noexcept { _editModeAlpha = std::clamp(alpha, 0.0f, 1.0f); }
 		bool HasCableDrag() const noexcept { return _cableDrag.has_value(); }
 		bool IsApplying() const { return _RoutingEditAvailability() == RoutingEditAvailability::Applying; }
@@ -154,7 +155,7 @@ namespace gui
 		static constexpr unsigned int _SourceButtonHeight = GuiStyle::ControlHeight;
 		static constexpr unsigned int _SourceScrollBarHeight = 12u;
 		static constexpr unsigned int _SourceViewportHeight = _SourceButtonHeight + _SourceScrollBarHeight + 4u;
-		static constexpr unsigned int _SourcePanelGap = 8u;
+		static constexpr int _SourcePanelGap = 16;
 		static constexpr unsigned int _RightRailWidth = 156u;
 		static constexpr unsigned int _RightRailHeight = 460u;
 		static constexpr unsigned int _RightRailMinHeight = 220u;
@@ -192,6 +193,13 @@ namespace gui
 		void _RevealTrigger(size_t triggerIndex);
 		void _RebuildPanels();
 		void _LayoutPanels();
+		utils::Rect2d _TopStripLayout(int preferredHeight);
+		std::optional<GuiTopPanelLayout> _topPanelLayout;
+		bool _retargetStrip = false, _stripRetargetActive = false;
+		float _stripRetargetOffset = 0.0f, _stripRetargetProgress = 1.0f;
+		float _stripWidthAnchorPhase = 0.0f, _stripTopAnchorPhase = 0.0f;
+		int _stripRetargetLeft = 0;
+		bool _stripTargetExpanded = true;
 		void _OpenSourceIdentity(const std::string& identity);
 		void _LayoutSourceIdentity();
 		utils::Rect2d _ContentClip(const std::shared_ptr<GuiScrollPanel>& scroll) const;

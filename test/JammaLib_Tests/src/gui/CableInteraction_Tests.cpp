@@ -3,6 +3,7 @@
 #include "gui/CableInteraction.h"
 #include <limits>
 #include "gui/GuiHud.h"
+#include "gui/GuiMainPanel.h"
 #include "gui/GuiButton.h"
 #include "gui/GuiScrollPanel.h"
 #include "gui/GuiPopupManager.h"
@@ -257,10 +258,20 @@ protected:
 	{
 		const auto curve = CableInteraction::CurveControls(Cables.front().Route.Kind,
 			Cables.front().Start.Position, Cables.front().Finish.Position);
-		const auto point = CableInteraction::EvaluateCurve(curve, 0.15f);
+		// Inputs now sits above the rail. Find a visible body point in the gap
+		// using the current curve, rather than a fixed parameter behind a pedal.
+		std::optional<utils::Position2d> point;
+		for (unsigned int sample = 1u; sample <= 96u; ++sample)
+		{
+			const auto onCurve = CableInteraction::EvaluateCurve(curve, static_cast<float>(sample) / 200.0f);
+			const utils::Position2d candidate{static_cast<int>(onCurve.x), static_cast<int>(onCurve.y)};
+			if (!Hud->CapturesPointer(candidate) && CableInteraction::HitCable(Cables, candidate, 6.0f))
+			{ point = candidate; break; }
+		}
+		ASSERT_TRUE(point);
 		actions::TouchAction down; down.Touch = actions::TouchAction::TOUCH_MOUSE;
 		down.Index = 0; down.State = actions::TouchAction::TOUCH_DOWN;
-		down.Position = { static_cast<int>(point.x), static_cast<int>(point.y) };
+		down.Position = *point;
 		ASSERT_TRUE(CableInteraction::HitCable(Cables, down.Position, 6.0f));
 		ASSERT_TRUE(Hud->OnAction(down).IsEaten); ASSERT_TRUE(Hud->HasCableDrag());
 	}
@@ -331,6 +342,53 @@ protected:
 	std::vector<CableInteraction::Cable> Cables;
 	utils::Position2d ReplacementSocket{};
 };
+
+TEST_F(HudCableInteractionTests, ActiveCableDragUsesMovedInputSocketsThroughCollapseAndResize)
+{
+	gui::GuiMainPanelParams params; params.SelectionOnly = true; params.Size = {1200u, 800u};
+	auto selection = std::make_shared<gui::GuiMainPanel>(params); selection->Init();
+	Hud->SetTopPanelLayout(selection->TopPanelLayout());
+	std::vector<std::shared_ptr<gui::GuiScrollPanel>> scrolls; Layout(Hud, scrolls);
+	ASSERT_EQ(2u, scrolls.size());
+	const auto sourceCard = scrolls[0]->Content()->TryGetChild(19u); ASSERT_TRUE(sourceCard);
+	scrolls[0]->SetScrollOffset(scrolls[0]->MaxScrollOffset());
+	Hud->BuildInteractionGeometry(Endpoints, Cables); ASSERT_EQ(1u, Cables.size());
+	const auto oldSource = Cables.front().Start.Position;
+	BeginBodyDrag(); ASSERT_TRUE(Hud->HasCableDrag());
+	selection->SetViewportSize({640u, 800u});
+	Hud->SetTopPanelLayout(selection->TopPanelLayout()); Hud->SetSize({640u, 800u});
+	selection->SetExpanded(false);
+	for (int frame = 0; frame < 12; ++frame)
+	{
+		selection->AdvanceAnimation(0.01f); Hud->SetTopPanelLayout(selection->TopPanelLayout());
+		scrolls[0]->SetScrollOffset(scrolls[0]->MaxScrollOffset());
+		Hud->BuildInteractionGeometry(Endpoints, Cables);
+		EXPECT_TRUE(Hud->HasCableDrag());
+		EXPECT_EQ(sourceCard, scrolls[0]->Content()->TryGetChild(19u));
+		ASSERT_EQ(1u, Cables.size());
+		EXPECT_EQ(42u, Cables.front().Route.Revision);
+		EXPECT_EQ(11u, Cables.front().Route.TriggerIndex);
+		EXPECT_EQ(19u, Cables.front().Start.Source->AdcChannel);
+		for (const auto& endpoint : Endpoints)
+			if (endpoint.Source)
+			{
+				ASSERT_TRUE(endpoint.HitBounds);
+				EXPECT_TRUE(endpoint.HitBounds->Contains(endpoint.Position));
+			}
+	}
+	const auto replacement = std::find_if(Endpoints.begin(), Endpoints.end(), [](const auto& endpoint) {
+		return endpoint.Source && endpoint.Source->AdcChannel == 18u;
+	});
+	ASSERT_NE(Endpoints.end(), replacement);
+	EXPECT_FALSE(oldSource == Cables.front().Start.Position);
+	const auto oldHit = CableInteraction::HitEndpoint(Endpoints, oldSource, 14.0f);
+	EXPECT_FALSE(oldHit.has_value()); // The former socket location is outside the resized window.
+	ReplacementSocket = replacement->Position;
+	MoveToReplacement(1u); Release();
+	ASSERT_EQ(1u, Submissions.size());
+	EXPECT_EQ((std::vector<unsigned int>{18u}), Submissions.back().Triggers[11].CaptureInputs.Audio);
+	EXPECT_FALSE(Hud->HasCableDrag());
+}
 
 TEST_F(HudCableInteractionTests, PointerClearingCancelsClippedBodyDragWithoutSubmittingEdit)
 {
@@ -485,11 +543,14 @@ TEST_F(HudCableInteractionTests, SupportedCompactProfileKeepsSourcesAndTriggerAc
         if (index == 1u)
         {
             const auto controls = frame->TryGetChild(1u);
-            EXPECT_EQ(12, header->BandBounds().Bottom - controls->Position().Y - static_cast<int>(controls->GetSize().Height));
+            if (header->IsVisible())
+                EXPECT_EQ(12, header->BandBounds().Bottom - controls->Position().Y - static_cast<int>(controls->GetSize().Height));
+            else
+                EXPECT_EQ(static_cast<int>(frame->GetSize().Height), controls->Position().Y + static_cast<int>(controls->GetSize().Height));
         }
     }
 
-	auto scroll = TriggerScroll(); ASSERT_TRUE(scroll); EXPECT_GE(scroll->GetSize().Height, 80u); // Taller shared header retains a usable compact pedal viewport.
+	auto scroll = TriggerScroll(); ASSERT_TRUE(scroll); EXPECT_GE(scroll->GetSize().Height, 64u); // Compact rail yields its header to the pedal viewport below Inputs.
 	scroll->SetScrollOffset(0);
 	const auto first = scroll->Content()->TryGetChild(0); ASSERT_TRUE(first);
 	EXPECT_EQ(132u, first->GetSize().Height);
@@ -497,7 +558,7 @@ TEST_F(HudCableInteractionTests, SupportedCompactProfileKeepsSourcesAndTriggerAc
 	// still exposes its controls. Verify the first card intersects the viewport.
 	EXPECT_LE(first->GlobalPosition().Y, scroll->GlobalPosition().Y + static_cast<int>(scroll->GetSize().Height));
 	EXPECT_GE(first->GlobalPosition().Y + 132, scroll->GlobalPosition().Y);
-	EXPECT_TRUE(Hud->TryGetChild(1)->TryGetChild(0)->IsVisible());
+	EXPECT_TRUE(Hud->TryGetChild(1)->TryGetChild(2)->IsVisible());
 	const auto close = first->TryGetChild(3);
 	Click(close); ASSERT_TRUE(Popups.IsOpen());
 	const auto popup = Popups.Top();
