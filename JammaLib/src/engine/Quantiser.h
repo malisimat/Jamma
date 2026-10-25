@@ -312,6 +312,9 @@ namespace engine
 			Quantiser& quantisation,
 			std::vector<std::shared_ptr<engine::Station>>& stations);
 
+		// Caller retains the Scene lock through target traversal. No view escapes.
+		QuantisationInteractionContext InteractionContextLocked(utils::Position2d cursor, utils::Size2d viewport,
+			base::SelectDepth depth, std::vector<unsigned char> hover, std::vector<unsigned char> hover3d, unsigned int sampleRate) const;
 		void OnCtrlModifierChanged(bool held,
 			Time now,
 			const QuantisationInteractionContext& context,

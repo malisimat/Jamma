@@ -1,3 +1,4 @@
+#include "../gui/WorkspaceTestAccess.h"
 #include "gtest/gtest.h"
 #include "gui/GuiButton.h"
 #include "gui/GuiToggle.h"
@@ -1648,12 +1649,12 @@ public:
 	GuiSettingsOwnerScene() : Scene(engine::SceneParams({ "" }, {}, { 800u, 600u }), io::UserConfig{}) {}
 	std::shared_ptr<gui::GuiMainPanel> Settings() const { return _workspace->MainPanel(); }
 	std::shared_ptr<gui::GuiMainPanel> Selection() const { return _workspace->SelectionPanel(); }
-	std::shared_ptr<gui::GuiMidiChannelOverride> Channel() const { return _workspace->Settings()->Channel(); }
-	std::shared_ptr<gui::GuiNumericInput> Phase() const { return _workspace->Settings()->Offset(); }
-	std::shared_ptr<gui::GuiToggle> Click() const { return _workspace->Settings()->Metronome(); }
-	std::shared_ptr<gui::GuiRadio> Quantisation() const { return _workspace->Settings()->GlobalQuantisation(); }
-	std::shared_ptr<gui::GuiRadio> Depth() const { return _workspace->Settings()->Mode(); }
-	std::shared_ptr<gui::GuiRadio> Subdivision() const { return _workspace->Settings()->Subdivision(); }
+	std::shared_ptr<gui::GuiMidiChannelOverride> Channel() const { return _workspace->Settings().Channel(); }
+	std::shared_ptr<gui::GuiNumericInput> Phase() const { return _workspace->Settings().Offset(); }
+	std::shared_ptr<gui::GuiToggle> Click() const { return _workspace->Settings().Metronome(); }
+	std::shared_ptr<gui::GuiRadio> Quantisation() const { return _workspace->Settings().GlobalQuantisation(); }
+	std::shared_ptr<gui::GuiRadio> Depth() const { return _workspace->Settings().Mode(); }
+	std::shared_ptr<gui::GuiRadio> Subdivision() const { return _workspace->Settings().Subdivision(); }
 	void SetFrozenTapClock()
 	{
 		auto clock = std::make_shared<utils::Timer>();
@@ -1666,7 +1667,7 @@ public:
 	double PhaseFraction() const { return _transportOffsetLoopFrac; }
 	bool ClickEnabled() const { return _audioEngine->NinjamMetronomeEnabled(); }
 	io::JamFile::GlobalMidiQuantState QuantisationState() const { return _globalMidiQuantState; }
-	unsigned int SelectionDepth() const { return static_cast<unsigned int>(_viewMode); }
+	unsigned int SelectionDepth() const { return static_cast<unsigned int>(_workspace->PresentationMode()); }
 	std::shared_ptr<engine::Station> AddStation()
 	{
 		engine::StationParams params; params.Name = "Settings owner station"; params.Size = { 100, 100 };

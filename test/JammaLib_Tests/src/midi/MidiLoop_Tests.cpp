@@ -143,7 +143,7 @@ public:
 
 	void SetSelectDepthForTest(base::SelectDepth depth)
 	{
-		_UpdateSelectDepth(static_cast<unsigned int>(depth));
+		_workspace->UpdateSelectDepth(static_cast<unsigned int>(depth), { _sceneMutex, _stations }, _WorkspaceInputPresentation());
 	}
 };
 

@@ -235,3 +235,24 @@ bool HierarchySelection::HasSelection(const LockedStations& view)
 
 	return false;
 }
+
+HierarchySelection::Outcome HierarchySelection::ApplyLocked(const LockedStations& view, const EditBatch& batch)
+{
+	Outcome outcome{ batch.ClearSelection };
+	if (batch.ClearSelection) Clear(view);
+	for (std::size_t index = 0u; index < batch.ChangeCount; ++index)
+	{
+		const auto& change = batch.Changes[index];
+		if (change.Operation == Edit::Select || change.Operation == Edit::Deselect)
+		{
+			if (auto target = Resolve(view, change.Path))
+			{
+				outcome.CollapseRacks = true;
+				SetSelected(view, target, batch.Depth, change.Operation == Edit::Select);
+			}
+		}
+		else SetMuted(view, change.Path, change.Operation == Edit::Mute);
+	}
+	ApplyAppearance(view, batch.Presentation);
+	return outcome;
+}

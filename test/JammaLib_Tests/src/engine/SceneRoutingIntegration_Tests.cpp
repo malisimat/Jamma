@@ -1,3 +1,4 @@
+#include "../gui/WorkspaceTestAccess.h"
 #include "gtest/gtest.h"
 #include "../../TestPaths.h"
 #include <algorithm>
@@ -65,6 +66,12 @@ namespace engine
     class SourceLossIntegrationTestAccess
     {
     public:
+		static unsigned int InteractionSampleRate(Scene& scene)
+		{
+			std::scoped_lock lock(scene._sceneMutex);
+			return scene._workspace->InteractionContextLocked({ scene._sceneMutex, scene._stations }, scene._WorkspaceInputPresentation()).SampleRate;
+		}
+		static std::shared_ptr<base::GuiElement> SelectionHandle(Scene& scene) { return scene._workspace->SelectionPanel()->TryGetChild(1u); }
         static utils::Position2d CanvasPoint(Scene& scene, utils::Position2d offset = {})
         {
             // The former (560,300) lies inside stacked Inputs at 800x600.
@@ -81,16 +88,16 @@ namespace engine
         static std::shared_ptr<gui::GuiButton> RigSaveChoice(Scene& scene, unsigned int choice)
         { return gui::GuiMainPanelTestAccess::RigSaveChoice(*scene._workspace->MainPanel(), choice); }
         static bool RigSaveRequested(const Scene& scene) { return scene._rigSaveRequested; }
-        static void ChooseAudio(Scene& scene, int index) { scene._workspace->Settings()->AudioDevice()->SetSelectedIndex(index, true); }
-        static void AudioChannels(Scene& scene, unsigned int input, double value) { scene._workspace->Settings()->AudioInput(input)->SetValue(value, true); }
+        static void ChooseAudio(Scene& scene, int index) { scene._workspace->Settings().AudioDevice()->SetSelectedIndex(index, true); }
+        static void AudioChannels(Scene& scene, unsigned int input, double value) { scene._workspace->Settings().AudioInput(input)->SetValue(value, true); }
         static std::shared_ptr<Station> RemovalTarget(Scene& scene)
         { std::scoped_lock lock(scene._sceneMutex); return scene._stationManagement.Target; }
         static std::shared_ptr<gui::GuiButton> RemovalButton(Scene& scene, unsigned int ordinal)
         {
-            if (!scene._stationDeleteDialog) return {};
+            if (!scene._workspace->StationRemovalConfirmation()) return {};
             for (unsigned int index = 0u; index < 256u; ++index)
             {
-                const auto child = scene._stationDeleteDialog->TryGetChild(static_cast<unsigned char>(index));
+                const auto child = scene._workspace->StationRemovalConfirmation()->TryGetChild(static_cast<unsigned char>(index));
                 if (!child) break;
                 if (const auto button = std::dynamic_pointer_cast<gui::GuiButton>(child))
                     if (ordinal-- == 0u) return button;
@@ -107,38 +114,38 @@ namespace engine
             const audio::AsioInventory& inventory, const audio::AudioStreamParams& params)
         {
             scene._deviceInventory = inventory;
-            scene._SetAudioDraftFromStream(params);
+            scene._workspace->Settings().SetAudioDraftFromStream(params);
             scene._RebuildDevicePage();
-            return scene._workspace->Settings()->AudioDevice()->SelectedText();
+            return scene._workspace->Settings().AudioDevice()->SelectedText();
         }
-        static io::UserConfig::AudioSettings AudioDraft(const Scene& scene) { return scene._audioDraft; }
+        static io::UserConfig::AudioSettings AudioDraft(const Scene& scene) { return scene._workspace->Settings().AudioDraft(); }
         static void WhileSceneLocked(Scene& scene, const std::function<void()>& callback)
         {
             std::scoped_lock lock(scene._sceneMutex);
             callback();
         }
-        static bool ControlHeld(const Scene& scene) { return scene._ctrlHeld; }
-        static void SetDepth(Scene& scene, unsigned int depth) { scene._UpdateSelectDepth(depth); }
+        static bool ControlHeld(const Scene& scene) { return scene._workspace->CtrlHeld(); }
+        static void SetDepth(Scene& scene, unsigned int depth) { scene._workspace->UpdateSelectDepth(depth, { scene._sceneMutex, scene._stations }, scene._WorkspaceInputPresentation()); }
         static void AddStation(Scene& scene, const std::shared_ptr<Station>& station)
         {
             std::scoped_lock lock(scene._sceneMutex);
             scene._stations.push_back(station);
         }
-        static bool SelectionPreviewActive(const Scene& scene) { return scene._BackgroundSelectionPreviewActive(); }
-        static void SelectTakeDepth(Scene& scene) { scene._UpdateSelectDepth(Scene::VIEW_LOOPTAKE); }
+        static bool SelectionPreviewActive(const Scene& scene) { return scene._workspace->BackgroundSelectionPreviewActive({ scene._sceneMutex, scene._stations }, scene._WorkspaceInputPresentation()); }
+        static void SelectTakeDepth(Scene& scene) { scene._workspace->UpdateSelectDepth(Scene::VIEW_LOOPTAKE, { scene._sceneMutex, scene._stations }, scene._WorkspaceInputPresentation()); }
         static void RefreshRackVisibility(Scene& scene)
         {
             std::scoped_lock lock(scene._sceneMutex);
-            scene._workspace->ViewProjection() = glm::mat4(1.0f);
-            scene._workspace->UpdateRackVisibilityLocked(scene._stations, scene._loopEditor.IsEngaged());
+            gui::WorkspaceTestAccess::SetProjection(*scene._workspace, glm::mat4(1.0f));
+            scene._workspace->UpdateRackVisibilityLocked(scene._stations, scene._workspace->Editor().IsEngaged());
         }
-        static bool ItemMutePressed(const Scene& scene) { return scene._workspace->Selector()->IsMutePressed(); }
-        static bool ItemMutePainting(const Scene& scene) { return scene._workspace->Selector()->IsPaintingMute(); }
-        static bool BackgroundPreviewActive(const Scene& scene) { return scene._BackgroundPreviewActive(); }
-        static graphics::Camera::Pose CameraPose(const Scene& scene) { return scene._workspace->Camera().CurrentPose(); }
-        static bool BackgroundOwned(const Scene& scene) { return scene._workspace->Selector()->OwnsBackgroundClick(); }
-        static bool CameraBackgroundActive(const Scene& scene) { return scene._workspace->Camera().IsBackgroundDragging(); }
-        static bool CameraPointerHeld(const Scene& scene) { return scene._workspace->Camera().IsBackgroundPointerHeld(); }
+        static bool ItemMutePressed(const Scene& scene) { return scene._workspace->IsSelectionMutePressed(); }
+        static bool ItemMutePainting(const Scene& scene) { return scene._workspace->IsPaintingMute(); }
+        static bool BackgroundPreviewActive(const Scene& scene) { return scene._workspace->BackgroundPreviewActive({ scene._sceneMutex, scene._stations }, scene._WorkspaceInputPresentation()); }
+        static graphics::Camera::Pose CameraPose(const Scene& scene) { return gui::WorkspaceTestAccess::Camera(*scene._workspace).CurrentPose(); }
+        static bool BackgroundOwned(const Scene& scene) { return scene._workspace->OwnsBackgroundClick(); }
+        static bool CameraBackgroundActive(const Scene& scene) { return gui::WorkspaceTestAccess::Camera(*scene._workspace).IsBackgroundDragging(); }
+        static bool CameraPointerHeld(const Scene& scene) { return gui::WorkspaceTestAccess::Camera(*scene._workspace).IsBackgroundPointerHeld(); }
         static bool ApplyMuteBoundary(Scene& scene)
         {
             scene._audioEngine->CloseCallbackAdmission();
@@ -168,7 +175,20 @@ namespace engine
 		{ std::scoped_lock lock(scene._sceneMutex); for (const auto& station : scene._stations) station->FinishPresentationMove(); }
 		static bool ControlsAvailable(Scene& scene)
 		{ std::scoped_lock lock(scene._sceneMutex); return scene._StationManagementAvailableLocked(); }
-        static void ConfirmRemoval(Scene& scene) { scene._workspace->Popups().Close(); scene._AcceptStationRemoval(true); }
+		static bool ConfirmationOpen(const Scene& scene) { return scene._workspace->PopupOpen(); }
+		static void RequestTakeDitch(Scene& scene, const std::shared_ptr<Station>& station, const std::shared_ptr<LoopTake>& take)
+		{ scene._RequestTakeDitch({ false, {}, station, take }); }
+		static void AdvanceAcceptedRevision(Scene& scene)
+		{
+			std::scoped_lock lock(scene._sceneMutex);
+			const auto accepted = scene._rigCoordinator.Accepted();
+			const auto updated = scene._rigCoordinator.RefreshRuntimeAvailability(accepted->AvailableAdcChannels, accepted->AvailableMidiDevices);
+			ASSERT_TRUE(updated);
+			ASSERT_GT(updated->Revision, accepted->Revision);
+			scene._audioEngine->PublishPendingRigSnapshot(updated);
+			scene._inputSubsystem->PublishRigInputDispatch(updated);
+		}
+        static void ConfirmRemoval(Scene& scene) { scene._workspace->CloseTopPopup(); scene._AcceptStationRemoval(true); }
         static bool Busy(Scene& scene) { std::scoped_lock lock(scene._sceneMutex); return scene._stationManagement.Busy(); }
         static void Recover(Scene& scene) { scene._PumpSourceLossRecovery(); }
         static bool RecoveryGateIsClosed(Scene& scene)
@@ -178,22 +198,22 @@ namespace engine
         }
 		static std::shared_ptr<gui::GuiNumericInput> FocusSetting(Scene& scene, const std::string& text)
 		{
-			auto field = scene._workspace->Settings()->Offset();
+			auto field = scene._workspace->Settings().Offset();
 			// Focus manager and text edit state belong to the window owner. Commit
 			// remains deferred until actual Scene focus loss invokes FinalizeEdits.
-			EXPECT_TRUE(scene._workspace->Focus().RequestFocus(field));
+			EXPECT_TRUE(scene._workspace->RequestFocus(field));
 			field->SetText(text, false);
 			return field;
 		}
 		static unsigned int ForcedChannel(const Scene& scene) { return scene._inputSubsystem->ForcedChannelOverride(); }
-        static void OpenKeyboardModal(Scene& scene) { scene._workspace->Popups().Open(std::make_shared<gui::GuiPopup>()); }
-        static void CloseKeyboardModal(Scene& scene) { scene._workspace->Popups().CloseAll(); }
+        static void OpenKeyboardModal(Scene& scene) { scene._workspace->OpenPopup(std::make_shared<gui::GuiPopup>()); }
+        static void CloseKeyboardModal(Scene& scene) { scene._workspace->ClosePopups(); }
 
-		static void StaleProjection(Scene& scene) { scene._workspace->ViewProjection() = glm::mat4(0.0f); }
+		static void StaleProjection(Scene& scene) { gui::WorkspaceTestAccess::SetProjection(*scene._workspace, glm::mat4(0.0f)); }
 		static bool HasCurrentProjection(const Scene& scene)
 		{
 			const auto aspect = static_cast<float>(scene._sizeParams.Size.Width) / scene._sizeParams.Size.Height;
-			const auto current = scene._workspace->Camera().Projection(aspect, Scene::_StationCentre(scene._stations)) * scene._workspace->Camera().ViewMatrix();
+			const auto current = gui::WorkspaceTestAccess::Camera(*scene._workspace).Projection(aspect, gui::Workspace::StationCentre(scene._stations)) * gui::WorkspaceTestAccess::Camera(*scene._workspace).ViewMatrix();
 			return scene._workspace->ViewProjection() == current;
 		}
 		static std::shared_ptr<gui::GuiHud> PrepareHud(Scene& scene)
@@ -1901,4 +1921,81 @@ TEST_F(SceneRoutingIntegrationTest, BackgroundMuteStopsUnownedCameraCoastButPres
     right.Value = 4;
     scene->OnAction(right);
     scene->Shutdown();
+}
+
+TEST_F(SceneRoutingIntegrationTest, MembershipConfirmationRejectsChangedAcceptedRevision)
+{
+	using Access = engine::SourceLossIntegrationTestAccess;
+	for (const bool ditchTake : { false, true })
+	{
+		auto scene = FreshScene({ Station("A"), Station("B") }, {});
+		ASSERT_TRUE(scene);
+		auto station = scene->SnapshotStations().front();
+		auto take = station->AddTake();
+		take->AddLoop(0u, station->Id());
+		scene->CommitChanges();
+		{
+			auto excludeJob = Access::ExcludeJob(*scene);
+			if (ditchTake) Access::RequestTakeDitch(*scene, station, take);
+			else Access::Manage(*scene, false, station);
+			ASSERT_TRUE(Access::ConfirmationOpen(*scene));
+			Access::AdvanceAcceptedRevision(*scene);
+			if (ditchTake)
+			{
+				actions::GuiAction confirm;
+				confirm.ElementType = actions::GuiAction::ACTIONELEMENT_BUTTON;
+				confirm.Index = gui::GuiStationControls::ConfirmTakeDitchControlIndex;
+				scene->OnAction(confirm);
+			}
+			else Access::ConfirmRemoval(*scene);
+			EXPECT_EQ(2u, scene->SnapshotStations().size());
+			EXPECT_EQ(1u, station->NumTakes());
+			EXPECT_EQ(take, station->GetLoopTakeSnapshot().front());
+			EXPECT_FALSE(Access::Busy(*scene));
+			EXPECT_FALSE(station->MembershipRemoving());
+		}
+		scene->Shutdown();
+	}
+}
+
+TEST_F(SceneRoutingIntegrationTest, StoppedStreamInteractionUsesConfiguredSampleRate)
+{
+	io::JamFile jam{};
+	jam.Stations = { Station("Local") };
+	auto rig = io::RigFile::FromStream(std::stringstream(io::RigFile::DefaultJson)).value();
+	rig.Triggers.clear();
+	rig.Name = "Stopped stream";
+	rig.User.Audio.SampleRate = 48000u;
+	engine::SceneParams params({ "" }, {}, { 640u, 480u });
+	auto created = engine::Scene::FromFile(params, jam, rig, L"");
+	ASSERT_TRUE(created.has_value());
+	auto scene = *created;
+	EXPECT_EQ(0u, scene->GetAudioStreamParams().SampleRate);
+	EXPECT_EQ(48000u, engine::SourceLossIntegrationTestAccess::InteractionSampleRate(*scene));
+	scene->Shutdown();
+}
+
+TEST_F(SceneRoutingIntegrationTest, ResizingRehitsStationaryPointer)
+{
+	auto scene = FreshScene({ Station("Local") }, {});
+	ASSERT_TRUE(scene);
+	scene->SetSize({ 800u, 600u });
+	const auto handle = engine::SourceLossIntegrationTestAccess::SelectionHandle(*scene);
+	ASSERT_TRUE(handle);
+	const auto size = handle->GetSize();
+	const auto point = handle->GlobalPosition() + utils::Position2d{ static_cast<int>(size.Width / 2u), static_cast<int>(size.Height / 2u) };
+	scene->SetSize({ 800u, 900u });
+	actions::TouchMoveAction move;
+	move.Touch = actions::TouchAction::TOUCH_MOUSE;
+	move.Position = point;
+	move.MouseButtonsDown = 0u;
+	scene->OnAction(move);
+	scene->ApplyDeferredHoverUpdates();
+	ASSERT_FALSE(handle->RouteHitTest(handle->GlobalToLocal(point)));
+	EXPECT_EQ(base::GuiElement::STATE_NORMAL, handle->GetState());
+	scene->SetSize({ 800u, 600u });
+	ASSERT_TRUE(handle->RouteHitTest(handle->GlobalToLocal(point)));
+	scene->ApplyDeferredHoverUpdates(); // No further pointer event: resize must refresh the target.
+	EXPECT_EQ(base::GuiElement::STATE_OVER, handle->GetState());
+	scene->Shutdown();
 }

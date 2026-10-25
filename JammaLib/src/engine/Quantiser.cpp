@@ -1,6 +1,7 @@
 #include <iomanip>
 #include <sstream>
 #include "Quantiser.h"
+#include "HierarchySelection.h"
 
 #include <algorithm>
 #include <cmath>
@@ -1831,4 +1832,41 @@ void engine::Quantiser::DetachStationMaster(const std::shared_ptr<engine::Statio
 				// Cancellation must not restore an identity owned by the removed station.
 				if (loop == _previousMasterLoop) _previousMasterLoop.reset();
 			}
+}
+
+QuantisationInteractionContext QuantiserController::InteractionContextLocked(utils::Position2d cursor, utils::Size2d viewport,
+	base::SelectDepth depth, std::vector<unsigned char> hover, std::vector<unsigned char> hover3d, unsigned int sampleRate) const
+{
+	QuantisationInteractionContext context;
+	context.CursorPos = cursor;
+	context.ViewportSize = viewport;
+	context.SelectDepth = depth;
+	context.HoverPath = std::move(hover);
+	context.HoverPath3d = std::move(hover3d);
+	context.SampleRate = sampleRate;
+	if (context.SelectDepth == base::DEPTH_LOOP)
+	{
+		bool anySelected = false;
+		auto hovered = HierarchySelection::Resolve(HierarchySelection::BorrowLocked(_stations), context.HoverPath);
+		if (!hovered) hovered = HierarchySelection::Resolve(HierarchySelection::BorrowLocked(_stations), context.HoverPath3d);
+		for (const auto& station : _stations)
+			if (station && !station->IsRemote())
+				for (const auto& take : station->GetLoopTakes())
+				{
+					for (const auto& loop : take->GetLoops())
+						if (loop)
+						{
+							anySelected |= loop->IsSelected();
+							if (loop->IsSelected() || loop == hovered) context.LoopDepthHasAudioTarget = true;
+						}
+					for (const auto& loop : take->GetMidiLoops())
+						if (auto model = loop->Model())
+						{
+							if (model->IsSelected()) { context.SelectedMidiLoops.push_back(loop); anySelected = true; }
+							if (model == hovered) context.HoveredMidiLoop = loop;
+						}
+				}
+		if (anySelected) context.HoveredMidiLoop.reset();
+	}
+	return context;
 }

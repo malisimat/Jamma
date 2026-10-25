@@ -38,7 +38,6 @@ Scene::Scene(SceneParams params,
 	Drawable(params),
 	Moveable(params),
 	Sizeable(params),
-	_isSceneTouching(false),
 	_isSceneQuitting(false),
 	_isSceneReset(true),
 	_globalMidiQuantState(io::JamFile::GlobalMidiQuantState::Off),
@@ -46,39 +45,13 @@ Scene::Scene(SceneParams params,
 	_quantisation(),
 	_loggingConfig{},
 	_stations(),
-	_hoverElement3d(std::weak_ptr<GuiElement>()),
-	_hoverPath3d(),
-	_lastLoggedHoverPath(),
 	_workspace(std::make_unique<gui::Workspace>(params.Size)),
 	_quantisationInteraction(_workspace->CtrlOverlay(), _quantisation, _stations),
-	_cursorPos{},
 	_userConfig(user),
-	_viewMode(VIEW_STATION),
 	_audioEngine(std::make_unique<audio::AudioHost>(user)),
 	_inputSubsystem(std::make_unique<io::IoInputSubsystem>(user, io::LoggingConfig{})),
 	_windowSubsystem(std::make_unique<vst::VstEditorWindowManager>()),
-	_vstRackControls(std::make_unique<gui::VstRackControls>(gui::VstRackControls::Host{
-		_sceneMutex, _stations, *_windowSubsystem,
-		[this]() { return !_isSceneQuitting.load(std::memory_order_acquire) &&
-			!_sessionReplacing.load(std::memory_order_acquire) && !_operation.HoldsWriter() &&
-			_operation.Current() == ControlOperation::None && _rigCoordinator.EditsEnabled(); },
-		[this]() { CommitChanges(); }, {},
-		[this](std::string title, std::string message, std::string accept) {
-			return _workspace->Notices().Confirm(std::move(title),std::move(message),std::move(accept)); },
-		[this](const std::wstring& error) { ReportRuntimeNotice("VST",utils::EncodeUtf8(error)); }})),
-	_networkService(std::make_unique<ninjam::NinjamNetworkService>()),
-	_loopEditor(midi::LoopGridEditor::Host{
-		_workspace->Camera(), _undoHistory, _sceneMutex, _stations,
-		[this]() { return _hoverElement3d.lock(); },
-		[this](float aspect) { return _workspace->Camera().Projection(aspect, _StationCentre(_stations)) * _workspace->Camera().ViewMatrix(); },
-		[this]() { _OnLoopGridEditorOpened(); },
-		[this](int button, utils::Position2d anchor) { return _beginRelativePointer && _beginRelativePointer(button, anchor); },
-		[this](int button) { if (_endRelativePointer) _endRelativePointer(button); },
-		[this]() { const auto clock = _quantisation.Clock(); return clock ? clock->SeedSourceLength() : 0ul; },
-		[this]() { return static_cast<base::SelectDepth>(_workspace->Selector() ?
-			_workspace->Selector()->CurrentSelectDepth() : base::DEPTH_LOOP); },
-		[this]() { return _logicalPixelScale ? _logicalPixelScale() : 1.0f; } },
-		params.Size)
+	_networkService(std::make_unique<ninjam::NinjamNetworkService>())
 {
 	_routingEditNow = std::move(params.RoutingEditNow);
 	_quantisation.SetClock(std::make_shared<Timer>());
@@ -112,7 +85,7 @@ Scene::Scene(SceneParams params,
 	{
 		if (_inputSubsystem->VstCcLearnActive()) return "Finish VST CC learn before learning a trigger";
 		if (_stationManagement.Busy() || _rigSaveInProgress || _rigSaveDialogOpen || _operation.Current() != ControlOperation::None ||
-			_loopEditor.IsEngaged() || _isSceneQuitting.load(std::memory_order_acquire)) return "Finish the current edit or save before learning";
+			_workspace->Editor().IsEngaged() || _isSceneQuitting.load(std::memory_order_acquire)) return "Finish the current edit or save before learning";
 		return {};
 	};
 	hudParams.TriggerLearnInput = [this](std::optional<io::TriggerBindingLearn::Request> request)
@@ -124,12 +97,24 @@ Scene::Scene(SceneParams params,
 		const auto inputs = _midiState.load(std::memory_order_acquire);
 		return io::TriggerBindingLearn::Devices(_userConfig, inputs->Connection, inputs->ConnectedSerialIds);
 	};
+	_workspace->InitializeRacks(gui::VstRackControls::Host{
+		_sceneMutex, _stations, *_windowSubsystem,
+		[this]() { return !_isSceneQuitting.load(std::memory_order_acquire) &&
+			!_sessionReplacing.load(std::memory_order_acquire) && !_operation.HoldsWriter() &&
+			_operation.Current() == ControlOperation::None && _rigCoordinator.EditsEnabled(); },
+		[this]() { CommitChanges(); }, {},
+		[this](std::string title, std::string message, std::string accept) {
+			return _workspace->Notices().Confirm(std::move(title),std::move(message),std::move(accept)); },
+		[this](const std::wstring& error) { ReportRuntimeNotice("VST",utils::EncodeUtf8(error)); }});
+	_workspace->BindQuantisation(_quantisation, _quantisationInteraction);
 	_workspace->Initialize(std::move(hudParams), _inputSubsystem->ForcedChannelOverride(),
 		_transportOffsetLoopFrac, _globalMidiQuantState,
-		[this](const auto& subtree) { _OnSettingsHidden(subtree); },
+		[this](const auto& subtree) { _workspace->OnSettingsHidden(subtree); },
 		[this](bool selection, GroupCommand command, std::size_t slot) { _ExecuteGroupCommandLocked(selection, command, slot); });
-	_audioDraft = user.Audio;
-	_midiDraft = user.Midi.Devices;
+	_workspace->InitializeEditor(_sceneMutex, _stations,
+		[this]() { _workspace->OnLoopGridEditorOpened({ _sceneMutex, _stations }, _WorkspaceInputPresentation()); });
+	_workspace->Settings().SetAudioDraft(user.Audio);
+	_workspace->Settings().SetMidiDraft(user.Midi.Devices);
 
 	_PublishAudioStations();
 
@@ -189,7 +174,7 @@ void Scene::_HandleRemoteTempoSnapshot(const ninjam::NinjamRemoteSnapshot& snaps
 
 void Scene::_ApplyRemoteTempoPromptDecision()
 {
-	const auto decision = _workspace->TempoPrompt().TakeDecision(_workspace->Popups());
+	const auto decision = _workspace->TakeTempoDecision();
 	if (!decision) return;
 	std::scoped_lock lock(_sceneMutex);
 	if (auto clock = _quantisation.Clock())
@@ -352,27 +337,26 @@ bool Scene::IsCameraTriggerKey(unsigned int key) const
 
 void Scene::OnCameraTriggerActivity()
 {
-	_workspace->Camera().TriggerActivity(Timer::GetTime());
+	_workspace->OnCameraTriggerActivity();
 }
 
 bool Scene::PreservesCameraIdleForKey(unsigned int key) const noexcept
 {
 	// Modifiers alone do not navigate; the eventual modified action owns activity.
 	if (key == 16u || key == 17u || key == 18u) return true;
-	if (_workspace->Popups().IsOpen() || _workspace->Focus().IsEditingText() || _loopEditor.IsEditingText()) return false;
+	if (_workspace->PopupOpen() || _workspace->IsEditingText() || _workspace->Editor().IsEditingText()) return false;
 	return key == 32u || key == 192u || key == 96u
 		|| key == 8u || (key >= 112u && key <= 120u);
 }
 
 void Scene::OnHumanActivity()
 {
-	_workspace->Camera().HumanActivity(Timer::GetTime());
+	_workspace->OnHumanActivity();
 }
 
 void Scene::SetCameraInteractionEligibility(bool windowEligible, bool heldInteraction)
 {
-	_workspace->Camera().SetInteractionEligibility(windowEligible, heldInteraction,
-		*_cameraRecordings->Snapshot(), Timer::GetTime());
+	_workspace->SetCameraInteractionEligibility(windowEligible, heldInteraction, *_cameraRecordings->Snapshot());
 }
 
 void Scene::UpdateCamera()
@@ -386,7 +370,7 @@ void Scene::UpdateCamera()
 		}
 	// Keep camera state on the window thread; audio never reads or advances it.
 	const auto now = Timer::GetTime();
-	const auto frameTime = _workspace->Camera().BeginPresentation(now);
+	const auto frameTime = _workspace->BeginCameraPresentation(now);
 	const auto deltaSeconds = frameTime.DeltaSeconds;
 	const bool diagnosticDue = frameTime.DiagnosticDue;
 	Camera::Presentation presentation;
@@ -400,806 +384,25 @@ void Scene::UpdateCamera()
 		recordings = _cameraRecordings->Snapshot();
 	}
 
-	// Release scene/membership locks before policy and physics. These are copied
-	// presentation values, and focus identities must still belong to this scene.
-	_workspace->Camera().AdvancePresentation(now, deltaSeconds, presentation, *recordings,
-		controlsAvailable && Width() > 0u && Height() > 0u && !_loopEditor.IsEngaged()
-			&& !_workspace->Popups().IsOpen(), _sizeParams.Size);
-	_loopEditor.Tick(deltaSeconds);
-	if (!_loopEditor.IsEngaged())
-		_ApplyCameraSelectDepthChange(_workspace->Camera().PendingSelectDepthChange());
-	if (_isSceneTouching && !_workspace->Camera().IsBackgroundDragging())
-		_EndBackgroundDrag();
+	_workspace->AdvanceCamera(now, deltaSeconds, presentation, *recordings, controlsAvailable,
+		{ _sceneMutex, _stations }, _WorkspaceInputPresentation());
 }
 
 bool Scene::AdvanceUiAnimations()
 {
 	// Native picker/editor calls can pump Windows messages; never hold the
 	// scene lock while processing a captured rack gesture.
-	_vstRackControls->Pump();
-	_workspace->Notices().Pump(_workspace->Popups(),_sizeParams.Size,_workspace->RendererReady());
+	_workspace->PumpNativeControls();
 	if (_quantisationInputResetRequested.exchange(false, std::memory_order_acq_rel))
-		_ReleaseQuantisationInput();
+		_workspace->ReleaseQuantisationInput({ _sceneMutex, _stations }, _WorkspaceInputPresentation());
 	std::scoped_lock lock(_sceneMutex);
 	_performanceGroups.Acknowledge(_audioEngine->GroupMuteReceipt());
 	const auto accepted = _rigCoordinator.Accepted();
-	return _workspace->AdvancePresentationLocked(_stations, _loopEditor, *_vstRackControls, _performanceGroups.Groups(),
-		{ _ctrlHeld, _isSceneQuitting.load(std::memory_order_acquire), _rigSaveInProgress, _stationManagement.Busy(),
+	return _workspace->AdvancePresentationLocked(_stations, _workspace->Editor(), _workspace->Racks(), _performanceGroups.Groups(),
+		{ _workspace->CtrlHeld(), _isSceneQuitting.load(std::memory_order_acquire), _rigSaveInProgress, _stationManagement.Busy(),
 			_rigCoordinator.EditsEnabled(), _StationManagementAvailableLocked(), accepted ? accepted->Revision : 0u, _performanceGroups.Error() });
 }
 
-void Scene::_OnSettingsHidden(const std::shared_ptr<GuiElement>& subtree)
-{
-	_workspace->Pointer().OnSubtreeHidden(subtree, _workspace->Focus());
-}
-
-std::optional<ActionResult> Scene::_RouteSettingsTouch(TouchAction action)
-{
-	const std::array<std::shared_ptr<GuiElement>, 2> panels{ _workspace->SelectionPanel(), _workspace->MainPanel() };
-	return _workspace->Pointer().RoutePanels(action, panels, _workspace->Focus(),
-		_workspace->Camera().IsBackgroundDragging() || _isSceneTouching || _loopEditor.OwnsPointer()
-			|| _loopEditor.IsOrbitDragging() || _quantisationInteraction.OwnsPointer());
-}
-
-bool Scene::_BackgroundPreviewActive() const
-{
-	return _workspace->Selector()->BackgroundPreview().has_value() && !_workspace->Popups().IsOpen()
-		&& !_EditControlsSuppressed() && !_loopEditor.IsEngaged()
-		&& !_quantisationInputResetRequested.load(std::memory_order_acquire);
-}
-
-bool Scene::_BackgroundSelectionPreviewActive() const
-{
-	return _BackgroundPreviewActive() && _workspace->Selector()->BackgroundPreview() == SceneSelector::BackgroundCommand::SelectAll;
-}
-
-void Scene::_SelectAllLocalLocked()
-{
-	_workspace->CollapseRacksLocked(_stations);
-	HierarchySelection::SelectAllLocal(HierarchySelection::LockedStations(_stations), _workspace->Selector()->CurrentSelectDepth());
-}
-
-ActionResult Scene::OnAction(TouchAction action)
-{
-	if (_workspace->Popups().ConsumeDismissedRelease(action))
-	{
-		_workspace->Pointer().ReleaseCapture(); _workspace->Pointer().ClearConsumedRelease();
-		return { true, {}, {}, ACTIONRESULT_DEFAULT, nullptr, {} };
-	}
-	if (action.State == TouchAction::TOUCH_DOWN) _cameraPointerPreservesIdle = false;
-	const auto result = _OnPointerAction(action);
-	if (std::dynamic_pointer_cast<gui::GuiPerformanceGroupButton>(_workspace->Pointer().Captured()))
-		_cameraPointerPreservesIdle = true;
-	if (!_cameraPointerPreservesIdle) OnHumanActivity();
-	return result;
-}
-
-ActionResult Scene::_OnPointerAction(TouchAction action)
-{
-	if (_isSceneQuitting.load(std::memory_order_acquire) || _operation.HoldsWriter()) return ActionResult::NoAction();
-	ActionResult res;
-	// Wheel events are encoded as DOWN/index 4 and have no matching UP. They
-	// must not become pointer captures or replace keyboard focus.
-	const bool pointerPress = PointerInteraction::IsPress(action);
-	action.SetActionTime(Timer::GetTime());
-	action.SetUserConfig(_userConfig);
-	_cursorPos = action.Position;
-	_InvalidateHover2d();
-	if (_rigSaveDialogOpen) return { true, {}, {}, ACTIONRESULT_DEFAULT, nullptr, {} };
-	if (const auto rack = std::dynamic_pointer_cast<gui::GuiVstRack>(_workspace->Pointer().Captured()))
-	{
-		if (_workspace->Popups().IsOpen() || _loopEditor.IsEngaged() || _EditControlsSuppressed())
-		{ rack->ClearPointerState(); _workspace->Pointer().ReleaseCapture(); }
-		else
-		{
-			return _workspace->Pointer().DispatchCapture(action, PointerInteraction::Release::LeftUp, false);
-		}
-	}
-	if (_workspace->Selector()->OwnsBackgroundClick() && (_workspace->Popups().IsOpen() || _EditControlsSuppressed() || _loopEditor.IsEngaged() ||
-		_quantisationInputResetRequested.load(std::memory_order_acquire)))
-		_workspace->Selector()->ClearBackgroundClick();
-	if (_workspace->Selector()->OwnsBackgroundClick())
-	{
-		if (const auto command = _workspace->Selector()->ReleaseBackgroundClick(action))
-		{
-			{
-				std::scoped_lock lock(_sceneMutex);
-				if (*command == SceneSelector::BackgroundCommand::SelectAll) _SelectAllLocalLocked();
-				else
-				{
-					_performanceGroups.Acknowledge(_audioEngine->GroupMuteReceipt());
-					_performanceGroups.SetAllMuted(*command == SceneSelector::BackgroundCommand::MuteAll, _stations,
-						[this](auto application) { _PublishGroupMuteApplication(std::move(application)); });
-				}
-			}
-			if (*command == SceneSelector::BackgroundCommand::SelectAll)
-			{
-				_InvalidateHover2d();
-				_UpdateSelection(ACTIONRESULT_DEFAULT);
-			}
-		}
-		return { true, {}, {}, ACTIONRESULT_DEFAULT, nullptr, {} };
-	}
-	if (_workspace->Popups().IsOpen())
-	{
-		_loopEditor.CancelInput();
-		auto popupRes = _workspace->Popups().OnAction(action);
-		_ApplyRemoteTempoPromptDecision();
-		if (_takeDitchDialog && !_workspace->Popups().IsOpen()) _CancelTakeDitch();
-		if (_stationDeleteDialog && !_workspace->Popups().IsOpen())
-		{ std::scoped_lock lock(_sceneMutex); if (!_stationManagement.Busy()) _stationManagement.Cancel(); }
-		if (TouchAction::TOUCH_UP == action.State)
-		{
-			_workspace->Pointer().ReleaseCapture();
-			_workspace->Pointer().ClearConsumedRelease();
-		}
-		return popupRes;
-	}
-	if (_workspace->Hud() && _workspace->Hud()->RouteRenameTouch(_workspace->Hud()->GlobalToLocal(action)))
-	{
-		if (action.State == TouchAction::TOUCH_UP && _workspace->Pointer().IsCapturedBy(PointerInteraction::Owner::Hud) && !_workspace->Hud()->HasLabelPress())
-		{ _workspace->Pointer().ReleaseCapture(); }
-		return { true, {}, {}, ACTIONRESULT_DEFAULT, nullptr, {} };
-	}
-	if (!_loopEditor.IsEngaged())
-	{
-		const auto stations = SnapshotStations();
-		for (const auto& station : stations)
-			if (auto label = station->GetGuiRack()->StationLabel(); label && label->OwnsPointer())
-			{
-				if (label->Touch(label->GlobalToLocal(action))) return { true, {}, {}, ACTIONRESULT_DEFAULT, nullptr, {} };
-			}
-	}
-	// Existing captures and drafts keep their gesture. Fresh panel/HUD hits
-	// precede projected station overlays, which may lie behind these controls.
-	if (!_EditControlsSuppressed() && !_quantisationInteraction.OwnsPointer())
-		if (auto settingsResult = _RouteSettingsTouch(action)) return *settingsResult;
-	if (_workspace->Pointer().IsCapturedBy(PointerInteraction::Owner::Hud))
-	{
-		std::scoped_lock lock(_sceneMutex);
-		return _workspace->Pointer().DispatchCapture(action, PointerInteraction::Release::AnyUp, true);
-	}
-	if (!_EditControlsSuppressed() && !_workspace->Pointer().Captured() && !_workspace->Camera().IsBackgroundDragging() && !_isSceneTouching &&
-		!_loopEditor.OwnsPointer() && !_loopEditor.IsOrbitDragging() && !_quantisationInteraction.OwnsPointer() && _workspace->Hud() &&
-		(_workspace->Hud()->CapturesPointer(_workspace->Hud()->GlobalToLocal(action.Position)) || _workspace->Hud()->HasCableDrag()))
-	{
-		// Routing callbacks require scene serialization; focus follows after unlock.
-		auto result = ActionResult::NoAction();
-		{ std::scoped_lock lock(_sceneMutex); result = _workspace->Hud()->OnAction(_workspace->Hud()->GlobalToLocal(action)); }
-		if (result.IsEaten)
-		{
-			if (pointerPress)
-			{
-				auto active = result.ActiveElement.lock();
-				if (!active) active = _workspace->Hud();
-				_workspace->Pointer().Capture(active, PointerInteraction::Owner::Hud);
-				PointerInteraction::FocusPress(active, _workspace->Focus());
-			}
-			return result;
-		}
-	}
-	if (!_loopEditor.IsEngaged())
-	{
-		const auto stations = SnapshotStations();
-		for (const auto& station : stations)
-			if (auto label = station->GetGuiRack()->StationLabel(); label && station->GetGuiRack()->IsInView(_sizeParams.Size))
-				if (label->Touch(label->GlobalToLocal(action))) return { true, {}, {}, ACTIONRESULT_DEFAULT, nullptr, {} };
-	}
-	if (!_loopEditor.IsEngaged() && !_quantisationInteraction.OwnsPointer() &&
-		_workspace->StationControls().Touch(action, [this](auto intent) {
-			if (intent.Take) _RequestTakeDitch(std::move(intent));
-			else _RequestStationControl(std::move(intent));
-		}))
-		return { true, {}, {}, ACTIONRESULT_DEFAULT, nullptr, {} };
-	if (_quantisationInteraction.OwnsPointer() || (_EditControlsSuppressed() && !_loopEditor.IsEngaged()))
-	{
-		if (auto overlay = _RouteQuantisationTouch(action))
-			return *overlay;
-		return ActionResult::NoAction();
-	}
-	if (!_EditControlsSuppressed() && _loopEditor.IsEngaged() && !_loopEditor.OwnsPointer() && !_loopEditor.IsOrbitDragging() && _workspace->Hud())
-	{
-		std::scoped_lock lock(_sceneMutex);
-		auto hudResult = _workspace->Hud()->OnAction(_workspace->Hud()->GlobalToLocal(action));
-		if (hudResult.IsEaten) return hudResult;
-	}
-	if (auto editorRes = _loopEditor.OnAction(action))
-		return *editorRes;
-	if (TouchAction::TouchState::TOUCH_DOWN == action.State)
-	{
-		// Clear the old hover now so only the capture target appears pressed.
-		std::vector<std::weak_ptr<GuiElement>> none;
-		_ApplyHoverPath2d(none);
-		_workspace->Pointer().ClearHoverPath();
-	}
-
-	if ((TouchAction::TouchState::TOUCH_DOWN == action.State)
-		&& (0 == action.Index)
-		&& (Action::MODIFIER_SHIFT & action.Modifiers)
-		&& !(Action::MODIFIER_CTRL & action.Modifiers)
-		&& _TrySetMasterFromHover(true))
-	{
-		res.IsEaten = true;
-		res.ResultType = ACTIONRESULT_DEFAULT;
-		return res;
-	}
-
-	if (auto overlayRes = _RouteQuantisationTouch(action);
-		overlayRes.has_value())
-	{
-		return overlayRes.value();
-	}
-
-	if (TouchAction::TouchState::TOUCH_UP == action.State)
-	{
-		auto activeElement = _workspace->Pointer().Captured();
-
-		if (activeElement)
-		{
-			if (_workspace->Pointer().IsCapturedBy(PointerInteraction::Owner::Hud))
-			{
-				std::scoped_lock lock(_sceneMutex);
-				res = _workspace->Pointer().DispatchCapture(action, PointerInteraction::Release::Explicit, false);
-			}
-			else res = _workspace->Pointer().DispatchCapture(action, PointerInteraction::Release::Explicit, false);
-
-			if (res.IsEaten)
-			{
-				if (nullptr != res.Undo)
-					_undoHistory.Add(res.Undo);
-			}
-		}
-		else if (_workspace->Camera().IsBackgroundDragging())
-		{
-			auto wasDragged = _workspace->Camera().BackgroundDragWasDragged();
-			_workspace->Camera().HandleBackgroundDrag(action);
-			_EndBackgroundDrag();
-
-			// Clear selection after an unhandled background drag.
-			if (!wasDragged && !_workspace->Camera().IsBackgroundDragging())
-				_UpdateSelection(ACTIONRESULT_CLEARSELECT);
-		}
-
-		// Update selector and then react to result (selecting, deselecting, muting, unmuting)
-		res = _workspace->Selector()->OnAction(_workspace->Selector()->ParentToLocal(action));
-
-		_UpdateSelection(res.ResultType);
-
-		_workspace->Pointer().ReleaseCapture();
-
-		return ActionResult::NoAction();
-	}
-
-	for (auto it = _workspace->Children().rbegin(); it != _workspace->Children().rend(); ++it)
-	{
-		if (!*it)
-			continue;
-
-		const auto& child = *it;
-		const auto isHudChild = (child == _workspace->Hud());
-		if (isHudChild)
-		{
-			std::scoped_lock lock(_sceneMutex);
-			res = child->OnAction(child->ParentToLocal(action));
-		}
-		else
-			res = child->OnAction(child->ParentToLocal(action));
-		if (_workspace->Pointer().CompleteDispatch(action, res,
-			isHudChild ? PointerInteraction::Owner::Hud : PointerInteraction::Owner::General, &_workspace->Focus(), _undoHistory)) return res;
-	}
-
-	for (auto& station : SnapshotStations())
-	{
-		res = static_cast<std::shared_ptr<base::GuiElement>>(station)->OnAction(station->ParentToLocal(action));
-
-		if (_workspace->Pointer().CompleteDispatch(action, res, PointerInteraction::Owner::General, nullptr, _undoHistory)) return res;
-	}
-
-	res = _workspace->Selector()->OnAction(_workspace->Selector()->ParentToLocal(action));
-
-	_UpdateSelection(res.ResultType);
-
-	if (res.IsEaten)
-	{
-		_cameraPointerPreservesIdle = true;
-		if (nullptr != res.Undo)
-			_undoHistory.Add(res.Undo);
-
-		return res;
-	}
-
-	if ((TouchAction::TouchState::TOUCH_DOWN == action.State) && (4 == action.Index))
-		return _workspace->Camera().HandleWheel(action.Value,
-			action.Position,
-			_sizeParams.Size.Width,
-			_sizeParams.Size.Height,
-			_StationCentre(SnapshotStations()));
-
-	// Pressing empty background clears keyboard focus.
-	if (TouchAction::TouchState::TOUCH_DOWN == action.State)
-		_workspace->Focus().ClearFocus();
-
-	if (pointerPress && action.Touch == TouchAction::TOUCH_MOUSE && !_workspace->Camera().IsBackgroundPointerHeld() && !_isSceneTouching)
-	{
-		// Resolve actual targets: the pass-through HUD spans the viewport but
-		// must not claim its empty space as a control.
-		_ResolveHoverPath2d(_workspace->Pointer().HoverScratch()); // Includes station racks and controls.
-		// Chords retain camera/selection meaning; only a single-button empty hit starts a click.
-		if (_workspace->Pointer().HoverScratch().empty() && !_HasQuantisationHover() && _workspace->Selector()->BeginBackgroundClick(action))
-		{
-			_workspace->Camera().CancelBackgroundCoast();
-			_cameraPointerPreservesIdle = true;
-			return { true, {}, {}, ACTIONRESULT_DEFAULT, nullptr, {} };
-		}
-	}
-
-	return _BeginBackgroundDrag(action);
-}
-
-ActionResult Scene::OnAction(TouchMoveAction action)
-{
-	const auto result = _OnPointerMove(action);
-	if (action.Origin == TouchMoveAction::Provenance::DeliveredPointer
-		&& (!_cameraPointerPreservesIdle || action.MouseButtonsDown == 0u)) OnHumanActivity();
-	return result;
-}
-
-ActionResult Scene::_OnPointerMove(TouchMoveAction action)
-{
-	if (_isSceneQuitting.load(std::memory_order_acquire) || _operation.HoldsWriter()) return ActionResult::NoAction();
-	action.SetActionTime(Timer::GetTime());
-	action.SetUserConfig(_userConfig);
-	_cursorPos = action.Position;
-	_InvalidateHover2d();
-	if (_workspace->Selector()->OwnsBackgroundClick())
-	{
-		_workspace->Selector()->MoveBackgroundClick(action, !_workspace->Popups().IsOpen() && !_EditControlsSuppressed() && !_loopEditor.IsEngaged()
-			&& !_quantisationInputResetRequested.load(std::memory_order_acquire));
-		return { true, {}, {}, ACTIONRESULT_DEFAULT, nullptr, {} };
-	}
-	if (!_workspace->Popups().IsOpen() && _workspace->Pointer().IsCapturedBy(PointerInteraction::Owner::Hud))
-	{
-		std::scoped_lock lock(_sceneMutex);
-		return _workspace->Pointer().DispatchCapture(action, PointerInteraction::CaptureLoss::MouseZeroButtons, true);
-	}
-	if (!_workspace->Popups().IsOpen() && !_EditControlsSuppressed() && !_workspace->Pointer().Captured() &&
-		!_workspace->Camera().IsBackgroundDragging() && !_isSceneTouching && !_loopEditor.OwnsPointer() && !_loopEditor.IsOrbitDragging() &&
-		!_quantisationInteraction.OwnsPointer() && _workspace->Hud() && _workspace->Hud()->CapturesPointer(_workspace->Hud()->GlobalToLocal(action.Position)))
-	{
-		std::scoped_lock lock(_sceneMutex);
-		_workspace->Hud()->OnAction(_workspace->Hud()->GlobalToLocal(action));
-		return { true, {}, {}, ACTIONRESULT_DEFAULT, nullptr, {} };
-	}
-	if (!_workspace->Popups().IsOpen() && !_loopEditor.IsEngaged() && !_quantisationInteraction.OwnsPointer())
-	{
-		for (const auto& station : SnapshotStations())
-		{
-			if (auto label = station->GetGuiRack()->StationLabel())
-				label->Move(label->GlobalToLocal(action));
-			if (auto rack = station->GetGuiRack()->VstRack())
-				rack->MovePointer(rack->GlobalToLocal(action));
-		}
-	}
-	if (!_workspace->Popups().IsOpen() && !_loopEditor.IsEngaged() && _workspace->StationControls().Move(action))
-		return { true, {}, {}, ACTIONRESULT_DEFAULT, nullptr, {} };
-	if (_quantisationInteraction.OwnsPointer())
-	{
-		if (action.MouseButtonsDown == 0u)
-			_quantisationInteraction.CancelInteraction();
-		else if (auto overlay = _RouteQuantisationMove(action))
-			return *overlay;
-		return ActionResult::NoAction();
-	}
-	if (_EditControlsSuppressed() && !_loopEditor.IsEngaged())
-		return ActionResult::NoAction();
-	if (_workspace->Popups().IsOpen())
-	{
-		_loopEditor.CancelInput();
-		return _workspace->Popups().OnAction(action);
-	}
-	const std::array<std::shared_ptr<GuiElement>, 2> panels{ _workspace->SelectionPanel(), _workspace->MainPanel() };
-	if (auto panelResult = _workspace->Pointer().RoutePanels(action, panels,
-		_EditControlsSuppressed() || _workspace->Camera().IsBackgroundDragging() || _isSceneTouching
-			|| _loopEditor.OwnsPointer() || _loopEditor.IsOrbitDragging() || _quantisationInteraction.OwnsPointer()))
-		return *panelResult;
-	if (!_EditControlsSuppressed() && _loopEditor.IsEngaged() && !_loopEditor.OwnsPointer() && !_loopEditor.IsOrbitDragging() && _workspace->Hud())
-	{
-		std::scoped_lock lock(_sceneMutex);
-		auto hudResult = _workspace->Hud()->OnAction(_workspace->Hud()->GlobalToLocal(action));
-		if (hudResult.IsEaten) return hudResult;
-	}
-	if (auto editorRes = _loopEditor.OnAction(action))
-		return *editorRes;
-
-	if (auto overlayRes = _RouteQuantisationMove(action);
-		overlayRes.has_value())
-	{
-		return overlayRes.value();
-	}
-
-	if (_workspace->Camera().IsBackgroundDragging() && (0u != action.MouseButtonsDown))
-		return _UpdateBackgroundDrag(action);
-
-	if (auto active = _workspace->Pointer().Captured())
-	{
-		if (_workspace->Pointer().IsCapturedBy(PointerInteraction::Owner::Hud))
-		{
-			std::scoped_lock lock(_sceneMutex);
-			return _workspace->Pointer().DispatchCapture(action, PointerInteraction::CaptureLoss::MouseZeroButtons, false);
-		}
-		return _workspace->Pointer().DispatchCapture(action, PointerInteraction::CaptureLoss::MouseZeroButtons, false);
-	}
-
-	if (_isSceneTouching)
-		return _UpdateBackgroundDrag(action);
-	{
-		auto selectionMove = _workspace->Selector()->OnAction(_workspace->Selector()->ParentToLocal(action));
-		if (selectionMove.IsEaten)
-		{
-			_UpdateSelection(selectionMove.ResultType);
-			return selectionMove;
-		}
-	}
-	if (_workspace->Hud())
-	{
-		// Lock the HUD tree while the job thread rebuilds it.
-		std::scoped_lock lock(_sceneMutex);
-		return _workspace->Hud()->OnAction(_workspace->Hud()->GlobalToLocal(action));
-	}
-
-	return ActionResult::NoAction();
-}
-
-ActionResult Scene::OnAction(KeyAction action)
-{
-	const bool keyDown = action.KeyActionType == KeyAction::KEY_DOWN;
-	const bool freshLearnKey = action.KeyChar < _learnKeysDown.size() && keyDown && !_learnKeysDown[action.KeyChar] &&
-		!_learnKeysDown[VK_LWIN] && !_learnKeysDown[VK_RWIN];
-	if (action.KeyChar < _learnKeysDown.size()) _learnKeysDown[action.KeyChar] = keyDown;
-	action.SetActionTime(Timer::GetTime());
-	if ((action.KeyChar == VK_MENU || action.KeyChar == VK_LMENU || action.KeyChar == VK_RMENU) && _workspace->Hud())
-	{
-		std::scoped_lock lock(_sceneMutex);
-		_workspace->Hud()->SetAltLearnHeld(keyDown && !_workspace->Popups().IsOpen() && !_workspace->Focus().IsEditingText());
-	}
-	const bool contextual = _rigSaveDialogOpen || _operation.HoldsWriter() ||
-		_workspace->Popups().IsOpen() || _workspace->Focus().IsEditingText() || _loopEditor.IsEngaged();
-	const auto inputRig = _rigCoordinator.Accepted();
-	const bool admissionOpen = !_isSceneQuitting.load(std::memory_order_acquire) && inputRig &&
-		_inputSubsystem->TryAcceptUiRigTriggerInput(inputRig->Revision);
-	// Complete older physical releases before a fresh press can be admitted.
-	// Observation follows this flush, so a current ordinary UP is queued once by
-	// normal dispatch below; contextual/suppressed releases use the exact receipt.
-	if (admissionOpen) _contextualKeyboard.Flush(*inputRig, action);
-	const bool suppressedKey = _contextualKeyboard.Observe(action, contextual, admissionOpen);
-	if (admissionOpen && (contextual || suppressedKey))
-		_contextualKeyboard.Flush(*inputRig, action);
-	if (_workspace->Selector()->OwnsBackgroundClick() && action.KeyActionType == KeyAction::KEY_DOWN && action.KeyChar == 27u)
-	{
-		_workspace->Selector()->CancelBackgroundClick();
-		return { true, {}, {}, ACTIONRESULT_DEFAULT, nullptr, {} };
-	}
-	// A consumed physical press keeps its release even when focus changes.
-	if (_performanceGroups.ConsumeRelease(action)) return { true, {}, {}, ACTIONRESULT_DEFAULT, nullptr, {} };
-	if (_rigSaveDialogOpen || _operation.HoldsWriter() || _workspace->Popups().IsOpen() || _workspace->Focus().IsEditingText() || _loopEditor.IsEngaged())
-		_performanceGroups.BlockContextualPress(action);
-	if (_isSceneQuitting.load(std::memory_order_acquire)) return ActionResult::NoAction();
-	action.SetActionTime(Timer::GetTime());
-	action.SetUserConfig(_userConfig);
-	action.SetAudioParams(_audioEngine->GetStreamParams());
-
-	// Physical modifier transitions must survive contextual editor consumption.
-	if (17u == action.KeyChar)
-	{
-		const bool wasCtrlHeld = _ctrlHeld;
-		_ctrlHeld = actions::KeyAction::KEY_DOWN == action.KeyActionType;
-		// The loop grid keeps its existing Ctrl/Space overlay gestures; only its
-		// text editor (and true modal/text capture) suppresses those shortcuts.
-		const bool contextualText = _rigSaveDialogOpen || _operation.HoldsWriter() ||
-			_workspace->Popups().IsOpen() || _workspace->Focus().IsEditingText() || _loopEditor.IsEditingText();
-		{
-			std::scoped_lock lock(_sceneMutex);
-			_quantisationInteraction.OnCtrlModifierChanged(_ctrlHeld && !contextualText, action.GetActionTime(),
-				_InteractionContextLocked(), [this](const auto& path) { return _ChildFromPathLocked(path); });
-		}
-		if (_ctrlHeld && !contextualText && !_loopEditor.IsEngaged())
-		{
-			_workspace->Focus().ClearFocus();
-			if (auto active = _workspace->Pointer().Captured()) active->ClearPointerState();
-			_workspace->Pointer().ReleaseCapture();
-			if (!wasCtrlHeld && HasSelection())
-			{
-				// Targets were captured above; hide hover when editing the selection.
-				_ApplyHoverPath2d({});
-				_workspace->Pointer().ClearHoverPath();
-				{
-					std::scoped_lock lock(_sceneMutex);
-					_hoverPath3d.clear();
-					_hoverElement3d.reset();
-					_workspace->Selector()->UpdateCurrentHover({}, Action::MODIFIER_NONE, false,
-						Tweakable::TWEAKSTATE_NONE);
-					for (const auto& station : _stations)
-						station->SetPicking3d(false);
-				}
-			}
-		}
-		if (wasCtrlHeld && !_ctrlHeld) { _workspace->StationControls().CancelBinPress(); _InvalidateHover2d(); }
-	}
-	if (32u == action.KeyChar)
-	{
-		if (actions::KeyAction::KEY_UP == action.KeyActionType)
-		{
-			_spaceHeld = false;
-			_SetQuantisationOverlayHeld(false);
-		}
-		else if (!_spaceHeld)
-		{
-			_spaceHeld = true;
-			if (!_workspace->Popups().IsOpen() && !_workspace->Focus().IsEditingText() && !_loopEditor.IsEditingText())
-			{
-				_SetQuantisationOverlayHeld(true);
-				_HandleTapTempo(action.GetActionTime());
-			}
-		}
-		// A text consumer still receives Space, but the physical release above
-		// always unwinds a previous hold, even after focus changes.
-		if (!_workspace->Popups().IsOpen() && !_workspace->Focus().IsEditingText() && !_loopEditor.IsEditingText())
-			return ActionResult::NoAction();
-	}
-	if (contextual && action.KeyActionType == KeyAction::KEY_UP)
-	{
-		// These shortcut owners admitted their holds before a modal/text context.
-		// Cleanup is explicit and never invokes ordinary trigger matching.
-		std::scoped_lock lock(_sceneMutex);
-		if (action.KeyChar == VK_INSERT) _inputSubsystem->HandleAutomationKey(action, _stations, {}, {});
-		if (action.KeyChar == VK_PRIOR || action.KeyChar == VK_NEXT) _inputSubsystem->HandleChannelOverrideKey(action, _stations);
-		if ((action.KeyChar == 192u || action.KeyChar == 96u) && _workspace->Hud()) _workspace->Hud()->SetCableRevealHeld(false);
-	}
-	if (_operation.HoldsWriter()) return ActionResult::NoAction();
-	if (suppressedKey && !contextual) return ActionResult::NoAction();
-	if (27u == action.KeyChar && _quantisationInteraction.OwnsPointer())
-	{
-		_quantisationInteraction.CancelInteraction();
-		return ActionResult::NoAction();
-	}
-
-	if (_workspace->Popups().Top() == _takeDitchDialog && _takeDitchDialog &&
-		action.KeyChar == 13u && action.KeyActionType == KeyAction::KEY_UP)
-	{
-		_workspace->Popups().Close();
-		_CancelTakeDitch();
-		return { true, {}, {}, ACTIONRESULT_DEFAULT, nullptr, {} };
-	}
-	if (_workspace->Popups().Top() == _stationDeleteDialog && _stationDeleteDialog &&
-		action.KeyChar == 13u && action.KeyActionType == KeyAction::KEY_UP)
-	{
-		_workspace->Popups().Close();
-		{ std::scoped_lock lock(_sceneMutex); _stationManagement.Cancel(); }
-		return { true, {}, {}, ACTIONRESULT_DEFAULT, nullptr, {} };
-	}
-	if (_workspace->Popups().IsOpen())
-	{
-		{ std::scoped_lock lock(_sceneMutex); if (_workspace->Hud() && _workspace->Hud()->TriggerLearnKeyboard(action, freshLearnKey)) _inputSubsystem->ObserveTriggerLearnKey(action.KeyChar); }
-		_loopEditor.CancelInput();
-		auto popupRes = _workspace->Popups().OnAction(action);
-		_ApplyRemoteTempoPromptDecision();
-		if (_takeDitchDialog && !_workspace->Popups().IsOpen()) _CancelTakeDitch();
-		if (_stationDeleteDialog && !_workspace->Popups().IsOpen())
-		{ std::scoped_lock lock(_sceneMutex); if (!_stationManagement.Busy()) _stationManagement.Cancel(); }
-		if (_loopEditor.IsEngaged())
-			popupRes.IsEaten = true;
-		if (popupRes.IsEaten)
-			return popupRes;
-	}
-
-	// Text entry owns shortcuts, including channel overrides and cable reveal.
-	if (auto focus = _workspace->Focus().CurrentFocus())
-	{
-		const bool editingText = _workspace->Focus().IsEditingText();
-		auto focusRes = focus->OnAction(action);
-		if (focusRes.IsEaten) return focusRes;
-		if (editingText) return ActionResult::NoAction();
-	}
-
-	if ((192u == action.KeyChar) || (96u == action.KeyChar))
-	{
-		if (_workspace->Hud())
-		{
-			std::scoped_lock lock(_sceneMutex);
-			_workspace->Hud()->SetCableRevealHeld(actions::KeyAction::KEY_DOWN == action.KeyActionType);
-			for (const auto& station : _stations)
-				if (auto rack = station->GetGuiRack()->VstRack())
-					rack->SetRevealHeld(actions::KeyAction::KEY_DOWN == action.KeyActionType);
-		}
-		return ActionResult::NoAction();
-	}
-	if (_workspace->Hud())
-	{
-		std::scoped_lock lock(_sceneMutex);
-		for (const auto& station : _stations)
-			if (auto rack = station->GetGuiRack()->VstRack())
-				if (auto result = rack->OnAction(action); result.IsEaten) return result;
-		if (_workspace->Hud()->HasCableDrag())
-		{
-			auto hudResult = _workspace->Hud()->OnAction(action);
-			if (hudResult.IsEaten)
-				return hudResult;
-		}
-	}
-
-	if (auto editorRes = _loopEditor.OnAction(action))
-		return *editorRes;
-
-	if (auto overrideRes = _inputSubsystem->HandleChannelOverrideKey(action, SnapshotStations());
-		overrideRes.IsEaten)
-	{
-		_workspace->Settings()->RefreshChannelPresentation(_inputSubsystem->ForcedChannelOverride());
-		return overrideRes;
-	}
-
-	if (auto editorRes = _loopEditor.TryOpenFromKey(action))
-		return *editorRes;
-	if (!_workspace->Popups().IsOpen() && !_workspace->Focus().IsEditingText() && !_loopEditor.IsEngaged())
-	{
-		std::scoped_lock lock(_sceneMutex);
-		_performanceGroups.Acknowledge(_audioEngine->GroupMuteReceipt());
-		if (_performanceGroups.HandleKey(action, _stations, _GroupSelectionDepthLocked(),
-			[this](auto application) { _PublishGroupMuteApplication(std::move(application)); }))
-		{
-			if (_workspace->SelectionPanel()) _workspace->SelectionPanel()->RefreshPerformanceGroups(_performanceGroups.Groups());
-			return { true, {}, {}, ACTIONRESULT_DEFAULT, nullptr, {} };
-		}
-	}
-
-	if ((9u == action.KeyChar)
-		&& (actions::KeyAction::KEY_UP == action.KeyActionType)
-		&& (Action::MODIFIER_NONE == action.Modifiers))
-	{
-		_CycleCameraView();
-		ActionResult result;
-		result.IsEaten = true;
-		return result;
-	}
-
-	if ((82 == action.KeyChar)
-		&& (actions::KeyAction::KEY_UP == action.KeyActionType)
-		&& (Action::MODIFIER_CTRL & action.Modifiers)
-		&& (Action::MODIFIER_SHIFT & action.Modifiers))
-	{
-		_HandleReclockArm();
-		return ActionResult::NoAction();
-	}
-
-	if ((90 == action.KeyChar) && (actions::KeyAction::KEY_UP == action.KeyActionType) && (Action::MODIFIER_CTRL & action.Modifiers))
-	{
-		return _HandleUndo();
-	}
-
-	// Ctrl+Shift+V - insert a VST on the hovered station/take/loop.
-	if ((86 == action.KeyChar)
-		&& (actions::KeyAction::KEY_UP == action.KeyActionType)
-		&& (Action::MODIFIER_CTRL & action.Modifiers)
-		&& (Action::MODIFIER_SHIFT & action.Modifiers))
-	{
-		const auto depth = static_cast<base::SelectDepth>(_workspace->Selector()->CurrentSelectDepth());
-		const auto hovering = _ChildFromPath(_workspace->Selector()->CurrentHover());
-		const auto pluginPath = utils::PickFile(L"Choose VST plugin");
-		if (pluginPath.empty())
-			return ActionResult::NoAction();
-
-		return _windowSubsystem->HandleVstInsert(pluginPath,
-			depth,
-			hovering,
-			[this]() { CommitChanges(); });
-	}
-
-	// Ctrl+Shift+E - open the first plugin editor for the hovered station/take/loop.
-	if ((69 == action.KeyChar)
-		&& (actions::KeyAction::KEY_UP == action.KeyActionType)
-		&& (Action::MODIFIER_CTRL & action.Modifiers)
-		&& (Action::MODIFIER_SHIFT & action.Modifiers))
-	{
-		auto hovering = _ChildFromPath(_workspace->Selector()->CurrentHover());
-		return _windowSubsystem->HandleVstEditorOpen(hovering,
-			_workspace->Selector()->CurrentSelectDepth(),
-			SnapshotStations());
-	}
-
-	// Ctrl+S saves a numbered session; Ctrl+Shift+S chooses its directory.
-	if ((83 == action.KeyChar)
-		&& (actions::KeyAction::KEY_UP == action.KeyActionType)
-		&& (Action::MODIFIER_CTRL & action.Modifiers))
-	{
-		_RequestSave((action.Modifiers & Action::MODIFIER_SHIFT) != 0);
-		return ActionResult::NoAction();
-	}
-
-	// Insert + Ctrl+Shift+L/W/X/[/] - MIDI automation record, learn, wire, delete, lane cycle.
-	{
-		auto hovered = _ChildFromPath(_workspace->Selector()->CurrentHover());
-		auto hoveredTake = std::dynamic_pointer_cast<LoopTake>(hovered);
-		std::scoped_lock lock(_sceneMutex);
-		auto automationRes = _inputSubsystem->HandleAutomationKey(action,
-			_stations,
-			_workspace->Selector()->CurrentHover(),
-			hoveredTake);
-		if (automationRes.IsEaten)
-			return automationRes;
-	}
-
-	bool checkReset = false;
-	auto result = ActionResult::NoAction();
-
-	const auto acceptedRig = _rigCoordinator.Accepted();
-	if (!contextual && !suppressedKey && acceptedRig && _inputSubsystem->TryAcceptUiRigTriggerInput(acceptedRig->Revision))
-	{
-		static const std::string EmptyDevice;
-		const auto keyState = action.KeyActionType == KeyAction::KEY_DOWN ? 1u : 0u;
-		const auto& keyboardTriggers = acceptedRig->InputDispatch.KeyboardTriggers;
-		for (const auto& trigger : keyboardTriggers)
-		{
-			if (!trigger)
-				continue;
-			std::optional<KeyboardTriggerReceipt> admitted, released;
-			auto res = trigger->QueueInputEvent(TRIGGER_INPUT_UI,
-				acceptedRig->Revision, TriggerSource::TRIGGER_KEY,
-				action.KeyChar, keyState, action, EmptyDevice, std::nullopt, std::nullopt, &admitted, &released);
-			if (released) _contextualKeyboard.Retire(trigger, *released);
-			if (admitted)
-			{
-				const auto runtime = std::find_if(acceptedRig->Triggers.begin(), acceptedRig->Triggers.end(),
-					[&](const auto& entry) { return entry.Instance == trigger; });
-				if (runtime != acceptedRig->Triggers.end()) _contextualKeyboard.Record(*acceptedRig, *runtime, *admitted);
-			}
-
-			if (!res.IsEaten)
-				continue;
-
-		switch (res.ResultType)
-		{
-		case ACTIONRESULT_ACTIVATE:
-			_isSceneReset.store(false, std::memory_order_relaxed);
-			checkReset = true;
-			// Propagate any grain the clock just acquired (e.g. from first-loop seed).
-			// _SetQuantisation is not called by Station's TrySeedClockFromFirstLoop, so
-			// do it here after every activation so all LoopTakes see the current grain.
-			if (auto clock = _quantisation.Clock())
-			{
-				std::scoped_lock lock(_sceneMutex);
-				_SetMidiQuantisationGrain(clock->QuantiseSamps(), "loop activated");
-			}
-			break;
-		case ACTIONRESULT_DITCH:
-			checkReset = true;
-			break;
-		default:
-			break;
-		}
-
-			if (!result.IsEaten || (res.ResultType != ACTIONRESULT_DEFAULT))
-				result = res;
-		}
-	}
-
-	if (checkReset)
-	{
-		std::scoped_lock lock(_sceneMutex);
-		_ResetIfEmpty();
-	}
-
-	if (result.IsEaten)
-		return result;
-
-	auto res = _workspace->Selector()->OnAction(action);
-
-	if (res.IsEaten)
-	{
-		_UpdateSelection(res.ResultType);
-		return res;
-	}
-
-	return ActionResult::NoAction();
-}
 
 void Scene::_HandleReclockArm()
 {
@@ -1218,19 +421,14 @@ void Scene::_HandleReclockArm()
 			for (const auto& take : station->GetLoopTakes()) take->SetMidiBaseGrid(0u, 0u);
 }
 
-ActionResult Scene::_HandleUndo()
-{
-	std::cout << ">> Undo <<" << std::endl;
-	auto res = _undoHistory.Undo();
-	return { res };
-}
+
 
 ActionResult Scene::OnAction(GuiAction action)
 {
 	if (_isSceneQuitting.load(std::memory_order_acquire)) return ActionResult::NoAction();
 	if (_operation.HoldsWriter() && !SceneSettingsControls::IsOperationControl(action.Index)) return ActionResult::NoAction();
 	if (action.Index == GuiMainPanel::LoadRigControlIndex) { _panelRigLoadRequested = true; return ActionResult::NoAction(); }
-	const auto deviceChange = _workspace->Settings()->DecodeDeviceChange(action);
+	const auto deviceChange = _workspace->Settings().DecodeDeviceChange(action);
 	if (deviceChange)
 	{
 		if (const auto save = std::get_if<SceneSettingsControls::SaveSession>(&*deviceChange))
@@ -1244,13 +442,13 @@ ActionResult Scene::OnAction(GuiAction action)
 		if (std::holds_alternative<SceneSettingsControls::RetryPreferences>(*deviceChange))
 		{
 			{ std::scoped_lock lock(_sceneMutex); if (_stationManagement.Busy() || _rigSaveInProgress || _rigSaveDialogOpen) return ActionResult::NoAction(); }
-			if (_operation.Current() != ControlOperation::None || !_rigCoordinator.EditsEnabled()) { _workspace->Settings()->SetDeviceStatus("Preferences retry waits for other operations"); return ActionResult::NoAction(); }
+			if (_operation.Current() != ControlOperation::None || !_rigCoordinator.EditsEnabled()) { _workspace->Settings().SetDeviceStatus("Preferences retry waits for other operations"); return ActionResult::NoAction(); }
 			std::unique_lock lifecycle(_operation.LifecycleMutex(), std::try_to_lock);
 			if (!lifecycle.owns_lock() || !_rigCoordinator.EditsEnabled()) return ActionResult::NoAction();
 			const bool merged = _rigCoordinator.MergeHardwarePreferences(_pendingAudioPersistence, _pendingMidiPersistence);
 			const auto accepted = AcceptedRigSnapshot();
-			if (merged && accepted && SaveHardwarePreferences(accepted->Rig)) { _pendingAudioPersistence.reset(); _pendingMidiPersistence.reset(); _hardwarePersistencePending = false; _workspace->Settings()->SetDeviceStatus("Preferences saved"); }
-			else { _workspace->Settings()->SetDeviceStatus("Preferences not saved; retry available"); ReportRuntimeNotice("Device preferences","Preferences not saved; retry available"); }
+			if (merged && accepted && SaveHardwarePreferences(accepted->Rig)) { _pendingAudioPersistence.reset(); _pendingMidiPersistence.reset(); _hardwarePersistencePending = false; _workspace->Settings().SetDeviceStatus("Preferences saved"); }
+			else { _workspace->Settings().SetDeviceStatus("Preferences not saved; retry available"); ReportRuntimeNotice("Device preferences","Preferences not saved; retry available"); }
 			return ActionResult::NoAction();
 		}
 	}
@@ -1264,7 +462,7 @@ ActionResult Scene::OnAction(GuiAction action)
 	if (action.ElementType == GuiAction::ACTIONELEMENT_BUTTON &&
 		(action.Index == GuiStationControls::CancelTakeDitchControlIndex || action.Index == GuiStationControls::ConfirmTakeDitchControlIndex))
 	{
-		_workspace->Popups().Close(_takeDitchDialog);
+		_workspace->CloseTakeDitch();
 		if (action.Index == GuiStationControls::ConfirmTakeDitchControlIndex) _ConfirmTakeDitch();
 		else _CancelTakeDitch();
 		return ActionResult::NoAction();
@@ -1272,61 +470,25 @@ ActionResult Scene::OnAction(GuiAction action)
 	if (action.ElementType == GuiAction::ACTIONELEMENT_BUTTON &&
 		(action.Index == GuiStationControls::CancelRemovalControlIndex || action.Index == GuiStationControls::DeleteRemovalControlIndex))
 	{
-		_workspace->Popups().Close(_stationDeleteDialog);
+		_workspace->CloseStationRemoval();
 		if (action.Index == GuiStationControls::DeleteRemovalControlIndex) _AcceptStationRemoval(true);
 		else { std::scoped_lock lock(_sceneMutex); _stationManagement.Cancel(); }
 		return ActionResult::NoAction();
 	}
-	if (const auto value = deviceChange ? std::get_if<SceneSettingsControls::AudioDeviceChange>(&*deviceChange) : nullptr)
+	if (deviceChange)
 	{
-		_audioDraft.Name = value->Name;
-		_audioSchedule.Changed(DeviceSelectionSchedule::Edit::Device);
-		const auto found = std::find_if(_deviceInventory.Devices.begin(), _deviceInventory.Devices.end(), [this](const auto& d){ return d.Name == _audioDraft.Name; });
-		if (found != _deviceInventory.Devices.end() && found->Probed)
+		const auto rig = _rigCoordinator.Accepted();
+		const auto draft = _workspace->Settings().EditDeviceDraft(*deviceChange, _deviceInventory,
+			rig ? rig->Rig.User.Serial.Devices : _userConfig.Serial.Devices, !_SessionHasTakes());
+		using Draft = SceneSettingsControls::DraftChange;
+		if (draft == Draft::Device || draft == Draft::Channels || draft == Draft::Format)
 		{
-			_audioDraft.NumChannelsIn = std::min(_audioDraft.NumChannelsIn, found->InputChannels);
-			_audioDraft.NumChannelsOut = std::min(_audioDraft.NumChannelsOut, found->OutputChannels);
-			if (!_audioDraft.NumChannelsIn && !_audioDraft.NumChannelsOut) { _audioDraft.NumChannelsOut = std::min(2u, found->OutputChannels); if (!_audioDraft.NumChannelsOut) _audioDraft.NumChannelsIn = std::min(2u, found->InputChannels); }
-			if (!_SessionHasTakes() && std::find(found->SampleRates.begin(), found->SampleRates.end(), _audioDraft.SampleRate) == found->SampleRates.end() && !found->SampleRates.empty()) _audioDraft.SampleRate = found->PreferredSampleRate ? found->PreferredSampleRate : found->SampleRates.front();
+			_audioSchedule.Changed(draft == Draft::Device ? DeviceSelectionSchedule::Edit::Device :
+				draft == Draft::Channels ? DeviceSelectionSchedule::Edit::Channels : DeviceSelectionSchedule::Edit::Format);
+			_devicePageDirty |= draft == Draft::Device;
 		}
-		_devicePageDirty = true;
-		return ActionResult::NoAction();
-	}
-	if (deviceChange && std::holds_alternative<SceneSettingsControls::AudioValueChange>(*deviceChange))
-	{
-		const auto& change = std::get<SceneSettingsControls::AudioValueChange>(*deviceChange);
-		using Field = SceneSettingsControls::AudioField;
-		if (change.Field == Field::Inputs) _audioDraft.NumChannelsIn = change.Value;
-		if (change.Field == Field::Outputs) _audioDraft.NumChannelsOut = change.Value;
-		if (change.Field == Field::SampleRate) _audioDraft.SampleRate = change.Value;
-		if (change.Field == Field::BufferSize) _audioDraft.BufSize = change.Value;
-		_audioSchedule.Changed(change.Field == Field::Inputs || change.Field == Field::Outputs
-			? DeviceSelectionSchedule::Edit::Channels : DeviceSelectionSchedule::Edit::Format);
-		return ActionResult::NoAction();
-	}
-	if (deviceChange && std::holds_alternative<SceneSettingsControls::MidiDeviceChange>(*deviceChange))
-	{
-		const auto& choice = std::get<SceneSettingsControls::MidiDeviceChange>(*deviceChange);
-		const bool enabled = choice.Enabled;
-		auto found = std::find_if(_midiDraft.begin(), _midiDraft.end(), [&choice](const auto& d){ return d.Id == choice.RegistryId; });
-		if (found == _midiDraft.end())
-		{
-			std::string id;
-			const auto rig = _rigCoordinator.Accepted();
-			for (size_t suffix = 1u;; ++suffix)
-			{
-				id = "midi-" + std::to_string(suffix);
-				const bool midiCollision = std::any_of(_midiDraft.begin(), _midiDraft.end(), [&](const auto& device) { return device.Id == id; });
-				const bool serialCollision = rig && std::any_of(rig->Rig.User.Serial.Devices.begin(), rig->Rig.User.Serial.Devices.end(),
-					[&](const auto& device) { return device.Name == id; });
-				if (id != io::RigFile::KeyboardDevice && !midiCollision && !serialCollision) break;
-			}
-			_workspace->Settings()->SetMidiChoiceRegistryId(choice.Choice, id);
-			_midiDraft.push_back({choice.Name, enabled, std::move(id)});
-		}
-		else found->Enabled = enabled;
-		_midiDraftPending = true;
-		return ActionResult::NoAction();
+		_midiDraftPending |= draft == Draft::Midi;
+		if (draft != Draft::None) return ActionResult::NoAction();
 	}
 	if (action.ElementType == GuiAction::ACTIONELEMENT_MIDIQUANTISATION)
 	{
@@ -1334,18 +496,11 @@ ActionResult Scene::OnAction(GuiAction action)
 		return ActionResult::NoAction();
 	}
 	using Settings = SceneSettingsControls;
-	const auto change = _workspace->Settings()->Decode(action, _transportOffsetLoopFrac);
+	const auto change = _workspace->Settings().Decode(action, _transportOffsetLoopFrac);
 	if (!change) return ActionResult::NoAction();
 	if (auto view = std::get_if<Settings::ViewModeChange>(&*change))
 	{
-		auto mode = view->Value;
-		if (_workspace->Camera().SelectDepthChanged(VIEW_STATION == mode))
-		{
-			mode = VIEW_LOOPTAKE;
-			_workspace->Settings()->Mode()->SetCurrentValue(mode, true);
-		}
-		_viewMode = static_cast<ViewMode>(mode);
-		_UpdateSelectDepth(mode);
+		_workspace->SetViewMode(view->Value, { _sceneMutex, _stations }, _WorkspaceInputPresentation());
 	}
 	else if (auto quantisation = std::get_if<Settings::GlobalQuantisationChange>(&*change))
 		_SetGlobalMidiQuantState(quantisation->Value);
@@ -1366,16 +521,16 @@ ActionResult Scene::OnAction(GuiAction action)
 	else if (auto channel = std::get_if<Settings::ChannelChange>(&*change))
 	{
 		_inputSubsystem->SetForcedChannelOverride(channel->Value, SnapshotStations());
-		_workspace->Settings()->RefreshChannelPresentation(_inputSubsystem->ForcedChannelOverride());
+		_workspace->Settings().RefreshChannelPresentation(_inputSubsystem->ForcedChannelOverride());
 	}
 	else if (auto offset = std::get_if<Settings::OffsetChange>(&*change))
 	{
 		_SetTransportOffsetLoopFrac(offset->Value, false);
-		_workspace->Settings()->Offset()->SynchronizeValueFromOwner(_transportOffsetLoopFrac);
+		_workspace->Settings().Offset()->SynchronizeValueFromOwner(_transportOffsetLoopFrac);
 	}
 	else if (std::holds_alternative<Settings::TapTempo>(*change))
 	{
-		_PulseQuantisationOverlay();
+		_quantisation.PulseOverlay();
 		_HandleTapTempo(Timer::GetTime());
 	}
 	return ActionResult::NoAction();
@@ -1837,7 +992,7 @@ void Scene::_AdvanceRigPublication()
 	if (!_rigCoordinator.PromoteAcknowledged())
 		return;
 	if (pending->RenamedStation)
-		_quantisationFeedback = "Station renamed. Save both JAM session and rig explicitly for consistent reload.";
+		_workspace->SetFeedback("Station renamed. Save both JAM session and rig explicitly for consistent reload.");
 	if (pending->MembershipChange) _stationManagement.Committed = true;
 	_audioEngine->ReleaseRigSnapshotsBefore(pending->Revision);
 	_rigCoordinator.ReleaseRetired();
@@ -1897,7 +1052,7 @@ RigCoordinator::EditResult Scene::_RequestRigEditLocked(const io::RigFile& candi
 	const auto accepted = _rigCoordinator.Accepted();
 	const auto result = _rigCoordinator.SubmitCandidate(candidateRig, receipt);
 	if (result == RigCoordinator::EditResult::ReinitialisationRequired)
-		_quantisationFeedback = "Device setup and defaults require scene reinitialisation; reload or restart with the updated rig.";
+		_workspace->SetFeedback("Device setup and defaults require scene reinitialisation; reload or restart with the updated rig.");
 	if (result == RigCoordinator::EditResult::Pending)
 	{
 		const auto staged = _rigCoordinator.Staged();
@@ -1987,93 +1142,7 @@ void Scene::_ConsumeTriggerOutcomes()
 
 void Scene::InitReceivers()
 {
-	_workspace->Selector()->SetReceiver(ActionReceiver::shared_from_this());
-	_quantisationInteraction.SetFeedbackSink([this](const std::string& text) {
-		// UI-owned text; apply to the HUD during the next locked draw.
-		_quantisationFeedback = text;
-	});
-	_workspace->MainPanel()->SetCommandOwner(ActionReceiver::shared_from_this());
-	_workspace->SelectionPanel()->SetCommandOwner(ActionReceiver::shared_from_this());
-}
-
-void Scene::SetHover3d(std::vector<unsigned char> path, Action::Modifiers modifiers,
-	std::optional<utils::Position2d> pointerPosition)
-{
-	if (_ctrlHeld || _loopEditor.IsEngaged() || _workspace->Selector()->OwnsBackgroundClick())
-		return;
-	if (pointerPosition)
-	{
-		_cursorPos = *pointerPosition;
-		_InvalidateHover2d();
-	}
-	// Resolve GUI ownership before taking the scene lock: station snapshots also lock it.
-	std::vector<std::weak_ptr<base::GuiElement>> guiPath;
-	_ResolveHoverPath2d(guiPath);
-	std::unique_lock lock(_sceneMutex);
-	bool isSelected = false;
-	auto tweakState = base::Tweakable::TweakState::TWEAKSTATE_NONE;
-	std::vector<unsigned char> fullElementPath;
-	std::vector<unsigned char> elementPath;
-
-	for (auto segment : path)
-	{
-		// Picker path uses 0xFF as the terminator for missing path segments.
-		if ((0xFF == segment) || (0 == segment))
-			break;
-
-		fullElementPath.push_back(segment - 1);
-	}
-
-	_hoverPath3d = fullElementPath;
-	_hoverElement3d = _ChildFromPathLocked(fullElementPath);
-	elementPath = fullElementPath;
-	// Keep the picked stream identity; MIDI layers are independent loop targets.
-
-	elementPath = TrimPath(elementPath, _workspace->Selector()->CurrentSelectDepth() + 1);
-	// Rack controls own the pointer even when the 3D picker sees a model behind them.
-	if (std::any_of(guiPath.begin(), guiPath.end(), [](const auto& element) {
-		return nullptr != std::dynamic_pointer_cast<GuiRack>(element.lock());
-	}))
-		elementPath.clear();
-
-	if (elementPath != _lastLoggedHoverPath)
-	{
-		if (_loggingConfig.Ui == "verbose")
-		{
-			std::string pathString = "[";
-			for (size_t i = 0; i < elementPath.size(); ++i)
-			{
-				pathString += std::to_string(static_cast<unsigned int>(elementPath[i]));
-				if ((i + 1) < elementPath.size())
-					pathString += ",";
-			}
-			pathString += "]";
-			std::cout << "Hover3d resolved: " << pathString << std::endl;
-		}
-
-		_lastLoggedHoverPath = elementPath;
-	}
-
-	auto hovering = _ChildFromPathLocked(elementPath);
-	if (nullptr != hovering)
-	{
-		isSelected = hovering->IsSelected();
-
-		tweakState = _SelectionTweakStateLocked(hovering);
-	}
-
-	_workspace->Selector()->UpdateCurrentHover(elementPath,
-		modifiers,
-		isSelected,
-		tweakState);
-	_quantisationInteraction.RefreshOverlay(_InteractionContextLocked(),
-		[this](const std::vector<unsigned char>& path) { return _ChildFromPathLocked(path); });
-
-	lock.unlock();
-	_UpdateSelection(ACTIONRESULT_DEFAULT);
-
-	auto candidate = (Action::MODIFIER_SHIFT & modifiers) ? _ChildFromPath(elementPath) : nullptr;
-	_UpdateStationQuantisation(candidate, _workspace->Selector()->CurrentSelectDepth(), false);
+	_workspace->InitReceivers(ActionReceiver::shared_from_this());
 }
 
 void Scene::Reset()
@@ -2091,7 +1160,7 @@ void Scene::Reset()
 
 void Scene::InitGui()
 {
-	_workspace->Selector()->Init();
+	_workspace->Init();
 }
 
 void Scene::InitAudio(bool generatedRig, const audio::AsioInventory* inventory, bool exactSelection)
@@ -2126,7 +1195,7 @@ void Scene::InitAudio(bool generatedRig, const audio::AsioInventory* inventory, 
 		// display name/channels remain unchanged. New callbacks stay gated until
 		// prior captures have settled through the usual structural result protocol.
 		const auto actual = _audioEngine->GetStreamParams();
-		if (started) _SetAudioDraftFromStream(actual);
+		if (started) _workspace->Settings().SetAudioDraftFromStream(actual);
 		++_audioStreamEpoch;
 		if (const auto accepted = _rigCoordinator.Accepted())
 			for (const auto& runtime : accepted->Triggers)
@@ -2234,13 +1303,13 @@ void Scene::Shutdown()
 	if (_workspace->Hud()) _workspace->Hud()->CancelTriggerRenames();
 	for (const auto& station : _stations)
 		if (auto label = station->GetGuiRack()->StationLabel()) label->Cancel();
-	_vstRackControls->Reset();
+	_workspace->ResetRackControls();
 	_sessionReplacing.store(true, std::memory_order_release);
 	_operation.ReleaseWriter();
 	// Finish any admitted job tick before borrowing lifecycle state. No scene,
 	// MIDI or application gate mutex is held while acquiring this owner boundary.
 	std::unique_lock lifecycle(_operation.LifecycleMutex());
-	_workspace->Selector()->ClearBackgroundClick();
+	_workspace->CancelBackgroundClick();
 	{
 		// Recovery borrows callback-owned fields under this same lock. Finish
 		// that borrow before teardown, and prevent a later job reopening admission.
@@ -2264,8 +1333,7 @@ void Scene::Shutdown()
 
 	if (_jobRunner.joinable())
 		_jobRunner.join();
-	_workspace->RendererReady() = false;
-	_workspace->Notices().Pump(_workspace->Popups(),_sizeParams.Size,false);
+	_workspace->FinishRenderer();
 	assert(_inputSubsystem->RigTriggerInputReadyForShutdown());
 	_inputSubsystem->PublishEmptyRigInputDispatch();
 	CloseGlobalKeyCapture();
@@ -2297,9 +1365,7 @@ void Scene::Shutdown()
 	// Action senders own their receivers.  These Scene-owned senders therefore
 	// keep the Scene alive unless their receiver links are cleared after all
 	// input and job readers have stopped.
-	_workspace->Selector()->SetReceiver({});
-	if (_stationDeleteDialog) _stationDeleteDialog->SetButtonReceiver({});
-	if (_takeDitchDialog) _takeDitchDialog->SetButtonReceiver({});
+	_workspace->ClearReceivers();
 	for (const auto& station : _stations)
 		if (station)
 		{
@@ -2383,7 +1449,7 @@ void Scene::CommitChanges()
 			}
 		}
 
-		_workspace->TempoPrompt().Synchronize(_networkService->PendingRemoteTempoPrompt(), _workspace->Popups(), _sizeParams.Size);
+		_workspace->SynchronizeTempoPrompt(_networkService->PendingRemoteTempoPrompt());
 
 		// Completion/update payloads share structural ownership with start/end/ditch.
 		// Keep validation and mutation under the same off-callback scene lock.
@@ -2418,116 +1484,7 @@ void Scene::CommitChanges()
 	if (!jobList.empty()) _QueueJobs(std::move(jobList));
 
 	if (hoverChanged)
-		_InvalidateHover2d();
-}
-
-void Scene::ApplyDeferredHoverUpdates()
-{
-	// Ctrl edits the captured targets, so pointer motion must not change their feedback.
-	if (_ctrlHeld)
-		return;
-	// Keep active hover in sync with both deferred 2D hit-testing and latest 3D picker result.
-	if (!_workspace->Pointer().HoverDirty())
-		return;
-
-	if (_workspace->Popups().IsOpen())
-	{
-		if (!_workspace->Pointer().HoverPath2d().empty())
-		{
-			std::vector<std::weak_ptr<base::GuiElement>> none;
-			_ApplyHoverPath2d(none);
-			_workspace->Pointer().ClearHoverPath();
-		}
-
-		_workspace->Pointer().HoverResolved();
-		return;
-	}
-
-	if (_workspace->Pointer().Captured() || _isSceneTouching || _workspace->Selector()->OwnsBackgroundClick())
-		return;
-
-	_workspace->Pointer().HoverScratch().clear();
-	_ResolveHoverPath2d(_workspace->Pointer().HoverScratch());
-	auto& nextPath = _workspace->Pointer().HoverScratch();
-	_ApplyHoverPath2d(nextPath);
-
-	bool stationHoverPromotedFrom2d = false;
-	const bool rackOwnsHover = std::any_of(nextPath.begin(), nextPath.end(), [](const auto& element) {
-		return nullptr != std::dynamic_pointer_cast<GuiRack>(element.lock());
-	});
-
-	if (!nextPath.empty() && !rackOwnsHover)
-	{
-		const auto& nextShared = _workspace->Pointer().HoverElements();
-		auto stationIt = std::find_if(nextShared.begin(), nextShared.end(), [](const std::shared_ptr<base::GuiElement>& element) {
-			return nullptr != std::dynamic_pointer_cast<Station>(element);
-		});
-
-		if (stationIt != nextShared.end())
-		{
-			auto stationGlobalId = (*stationIt)->GlobalId();
-			std::vector<unsigned char> stationPathRaw;
-			stationPathRaw.reserve(stationGlobalId.size());
-			for (auto part : stationGlobalId)
-				stationPathRaw.push_back(static_cast<unsigned char>(part & 0xFFu));
-
-			auto stationPath = TrimPath(stationPathRaw, _workspace->Selector()->CurrentSelectDepth() + 1u);
-			bool isSelected = false;
-			auto tweakState = base::Tweakable::TweakState::TWEAKSTATE_NONE;
-			auto hovering = _ChildFromPath(stationPath);
-			if (hovering)
-			{
-				isSelected = hovering->IsSelected();
-				if (auto tweakable = std::dynamic_pointer_cast<Tweakable>(hovering))
-					tweakState = tweakable->IsMuted() ? Tweakable::TWEAKSTATE_MUTED : Tweakable::TWEAKSTATE_NONE;
-			}
-
-			_workspace->Selector()->UpdateCurrentHover(stationPath,
-				Action::MODIFIER_NONE,
-				isSelected,
-				tweakState);
-			_UpdateSelection(ACTIONRESULT_DEFAULT);
-			stationHoverPromotedFrom2d = true;
-		}
-	}
-
-	if (!stationHoverPromotedFrom2d && (rackOwnsHover || _hoverPath3d.empty()) && !_workspace->Selector()->CurrentHover().empty())
-	{
-		_workspace->Selector()->UpdateCurrentHover({ },
-			Action::MODIFIER_NONE,
-			false,
-			base::Tweakable::TweakState::TWEAKSTATE_NONE);
-		_UpdateSelection(ACTIONRESULT_DEFAULT);
-	}
-	else if (!stationHoverPromotedFrom2d && !rackOwnsHover && !_hoverPath3d.empty())
-	{
-		// The picker may keep the same model ID while the pointer leaves a control.
-		auto pickPath = _hoverPath3d;
-		for (auto& segment : pickPath)
-			++segment;
-		SetHover3d(std::move(pickPath), Action::MODIFIER_NONE);
-	}
-
-	_workspace->Pointer().CommitHover(std::move(nextPath));
-}
-
-void Scene::_InvalidateHover2d()
-{
-	_workspace->Pointer().InvalidateHover();
-}
-
-void Scene::_ResolveHoverPath2d(std::vector<std::weak_ptr<base::GuiElement>>& outPath)
-{
-	if (_EditControlsSuppressed() && !_loopEditor.IsEngaged()) { outPath.clear(); return; }
-	if (PointerInteraction::ResolveHoverPath(_workspace->Children(), true, _cursorPos, outPath)) return;
-	std::vector<std::shared_ptr<GuiElement>> stationRoots;
-	for (const auto& station : SnapshotStations()) stationRoots.push_back(station);
-	PointerInteraction::ResolveHoverPath(stationRoots, false, _cursorPos, outPath);
-}
-
-void Scene::_ApplyHoverPath2d(const std::vector<std::weak_ptr<base::GuiElement>>& nextPath)
-{
-	_workspace->Pointer().ApplyHover(nextPath, _cursorPos);
+		_workspace->InvalidateHover2d();
 }
 
 std::shared_ptr<StationRemote> Scene::FindRemoteStation(const std::vector<std::shared_ptr<Station>>& stations,
@@ -2543,100 +1500,15 @@ std::shared_ptr<StationRemote> Scene::FindRemoteStation(const std::vector<std::s
 	return nullptr;
 }
 
-std::vector<unsigned char> Scene::TrimPath(std::vector<unsigned char> path, unsigned int depth)
-{
-	return SceneSelector::PathAtDepth(std::move(path), depth);
-}
-
-bool Scene::_OnUndo(std::shared_ptr<base::ActionUndo> undo)
-{
-	switch (undo->UndoType())
-	{
-	case UNDO_DOUBLE:
-		auto doubleUndo = std::dynamic_pointer_cast<actions::GuiActionUndo>(undo);
-		if (doubleUndo)
-		{
-			doubleUndo->Value();
-			return true;
-		}		
-	}
-
-	return false;
-}
-
-void Scene::_OnLoopGridEditorOpened()
-{
-	_workspace->Selector()->ClearBackgroundClick();
-	_ReleaseQuantisationInput();
-	if (_workspace->Hud())
-	{
-		std::scoped_lock lock(_sceneMutex);
-		_workspace->Hud()->SetLoopEditorMode(_loopEditor.IsEngaged());
-	}
-	_workspace->Focus().ClearFocus();
-	_workspace->Pointer().ReleaseCapture();
-	_workspace->Pointer().ClearConsumedRelease();
-	_EndBackgroundDrag();
-	_quantisationInteraction.OnCtrlModifierChanged(false, Timer::GetTime(),
-		_InteractionContext(), [this](const std::vector<unsigned char>& path) { return _ChildFromPath(path); });
-}
-
-base::Tweakable::TweakState Scene::_SelectionTweakStateLocked(const std::shared_ptr<GuiElement>& target) const
-{
-	return HierarchySelection::TweakState(HierarchySelection::LockedStations(_stations), target);
-}
-
-void Scene::_UpdateSelection(ActionResultType res)
-{
-	std::scoped_lock lock(_sceneMutex);
-	const HierarchySelection::LockedStations view(_stations);
-	const auto update = _workspace->Selector()->SelectionChanges(res);
-	if (update.ClearSelection)
-	{
-		_workspace->CollapseRacksLocked(_stations);
-		HierarchySelection::Clear(view);
-	}
-	for (std::size_t index = 0u; index < update.ChangeCount; ++index)
-	{
-		const auto& change = update.Changes[index];
-		using Edit = SceneSelector::HierarchyEdit;
-		if (change.Edit == Edit::Select || change.Edit == Edit::Deselect)
-		{
-			if (auto target = HierarchySelection::Resolve(view, change.Path))
-			{
-				_workspace->CollapseRacksLocked(_stations);
-				HierarchySelection::SetSelected(view, target, _workspace->Selector()->CurrentSelectDepth(), change.Edit == Edit::Select);
-			}
-		}
-		else HierarchySelection::SetMuted(view, change.Path, change.Edit == Edit::Mute);
-	}
-	HierarchySelection::ApplyAppearance(view, { update.HoverPath, update.ClearPicking, update.HighlightHover,
-		update.HighlightMidiSiblings, update.ClickPressed, update.MutePressed });
-	// The picker may keep the same ID after a click or paint stroke, so update
-	// the selector's cached starting state without waiting for another pick.
-	if (auto hovered = _ChildFromPathLocked(_workspace->Selector()->CurrentHover()))
-	{
-		const auto tweakState = _SelectionTweakStateLocked(hovered);
-		_workspace->Selector()->UpdateCurrentHover(_workspace->Selector()->CurrentHover(),
-			Action::MODIFIER_NONE, hovered->IsSelected(), tweakState);
-	}
-
-	_quantisationInteraction.RefreshOverlay(_InteractionContextLocked(),
-		[this](const std::vector<unsigned char>& path) { return _ChildFromPathLocked(path); });
-}
-
 void Scene::InitResources(resources::ResourceLib& resourceLib, bool forceInit)
 {
 	ResourceUser::InitResources(resourceLib, forceInit);
-	_workspace->RendererReady() = _workspace->Notices().InitResources(resourceLib,forceInit);
-	if (!_workspace->RendererReady()) _workspace->Notices().Pump(_workspace->Popups(),_sizeParams.Size,false);
+	_workspace->InitNoticeResources(resourceLib, forceInit);
 	// Initialize controls added by rig edits on the render thread before drawing them.
 	{
 		std::scoped_lock lock(_sceneMutex);
 		if (_stationManagement.Added) _stationManagement.Added->InitResources(resourceLib, false);
-		if (_stationDeleteDialog) _stationDeleteDialog->InitResources(resourceLib, false);
-		if (_takeDitchDialog) _takeDitchDialog->InitResources(resourceLib, false);
-		_workspace->InitDynamicResourcesLocked(resourceLib, _stations, _ctrlHeld, _StationManagementAvailableLocked());
+		_workspace->InitDynamicResourcesLocked(resourceLib, _stations, _workspace->CtrlHeld(), _StationManagementAvailableLocked());
 	}
 
 	// Stations can be added after scene resources are initialised.
@@ -2648,48 +1520,7 @@ void Scene::InitResources(resources::ResourceLib& resourceLib, bool forceInit)
 	}
 }
 
-Position3d Scene::_StationCentre(const std::vector<std::shared_ptr<Station>>& stations)
-{
-	Position3d stationCentre{};
-	if (!stations.empty())
-	{
-		for (const auto& station : stations)
-			stationCentre += station->ModelPosition();
-		const auto inverseCount = 1.0f / static_cast<float>(stations.size());
-		stationCentre.X *= inverseCount;
-		stationCentre.Y *= inverseCount;
-		stationCentre.Z *= inverseCount;
-	}
-	return stationCentre;
-}
 
-void Scene::_ApplyCameraSelectDepthChange(graphics::Camera::SelectDepthChange change)
-{
-	if (graphics::Camera::SelectDepthChange::None == change)
-		return;
-	_viewMode = (graphics::Camera::SelectDepthChange::Station == change) ? VIEW_STATION : VIEW_LOOPTAKE;
-	_workspace->Settings()->Mode()->SetCurrentValue(static_cast<unsigned int>(_viewMode), true);
-	_UpdateSelectDepth(static_cast<unsigned int>(_viewMode));
-}
-
-void Scene::_CycleCameraView()
-{
-	const auto stations = SnapshotStations();
-	std::optional<Position3d> hoveredStation;
-	std::shared_ptr<Station> hoveredIdentity;
-	const auto hoverPath = _workspace->Selector()->CurrentHover();
-	if (!hoverPath.empty() && (hoverPath.front() < stations.size()))
-	{
-		hoveredStation = stations[hoverPath.front()]->ModelPosition();
-		hoveredIdentity = stations[hoverPath.front()];
-	}
-	const auto firstStation = stations.empty()
-		? std::optional<Position3d>{}
-		: std::optional<Position3d>{ stations.front()->ModelPosition() };
-	_ApplyCameraSelectDepthChange(_workspace->Camera().CycleView(_StationCentre(stations), hoveredStation,
-		firstStation, hoveredIdentity, stations.empty() ? nullptr : stations.front(),
-		VIEW_STATION == _viewMode));
-}
 
 std::vector<std::shared_ptr<Station>> Scene::SnapshotStations() const
 {
@@ -2710,19 +1541,12 @@ void Scene::_PrepareStation(const std::shared_ptr<Station>& station)
 	station->SetNumAdcChannels(_audioEngine->GetChannelMixer()->Source()->NumOutputChannels(Audible::AUDIOSOURCE_ADC));
 	station->SetNumDacChannels(_audioEngine->GetChannelMixer()->Sink()->NumInputChannels(Audible::AUDIOSOURCE_LOOPS));
 	station->Init();
-	if (auto label = station->GetGuiRack()->StationLabel())
-	{
-		label->Focus = [this, weakLabel = std::weak_ptr(label)](const auto& editor) {
-			if (editor) _workspace->Focus().RequestFocus(editor);
-			else if (auto owner = weakLabel.lock(); owner && owner->OwnsFocus(_workspace->Focus().CurrentFocus())) _workspace->Focus().ClearFocus();
-		};
-		label->Submit = [this, target = std::weak_ptr(station)](const auto& name, auto revision) {
+	_workspace->AttachStationLabel(station, [this, target = std::weak_ptr(station)](const auto& name, auto revision) {
 			std::scoped_lock lock(_sceneMutex);
 			return _RequestStationRenameLocked(target.lock(), revision, name);
-		};
-	}
+		});
 
-	auto selectDepth = (unsigned int)_viewMode;
+	auto selectDepth = static_cast<unsigned int>(_workspace->PresentationMode());
 	if (selectDepth > (unsigned int)DEPTH_LOOP)
 		selectDepth = (unsigned int)DEPTH_LOOP;
 
@@ -2738,7 +1562,7 @@ void Scene::_AddStation(std::shared_ptr<Station> station, bool publishAudioStati
 	{
 		std::lock_guard<std::mutex> lock(_sceneMutex);
 		_stations.push_back(station);
-		_workspace->Camera().RegisterStation(_stations.size() - 1u, station, station->LoopTakeRevision());
+		_workspace->RegisterStationLocked(_stations.size() - 1u, station);
 		if (publishAudioStations)
 			_PublishAudioStations();
 	}
@@ -2762,8 +1586,8 @@ void Scene::_SetGlobalMidiQuantState(io::JamFile::GlobalMidiQuantState state, bo
 		return;
 
 	_globalMidiQuantState = state;
-	if (_workspace->Settings()->GlobalQuantisation())
-		_workspace->Settings()->GlobalQuantisation()->SetCurrentValue(static_cast<unsigned int>(state), true);
+	if (_workspace->Settings().GlobalQuantisation())
+		_workspace->Settings().GlobalQuantisation()->SetCurrentValue(static_cast<unsigned int>(state), true);
 
 	_ApplyGlobalMidiQuantStateToAllLoopTakes();
 }
@@ -2782,8 +1606,8 @@ void Scene::_SetTransportOffsetLoopFrac(double loopFrac, bool updateInput)
 	if (_audioEngine && previousLoopFrac != loopFrac)
 		_audioEngine->PublishLocalTransportOffsetLoopFrac(loopFrac);
 
-	if (updateInput && _workspace->Settings()->Offset())
-		_workspace->Settings()->Offset()->SetValue(loopFrac, false);
+	if (updateInput && _workspace->Settings().Offset())
+		_workspace->Settings().Offset()->SetValue(loopFrac, false);
 }
 
 void Scene::_ApplyGlobalMidiQuantStateToAllLoopTakes()
@@ -2807,76 +1631,7 @@ void Scene::_UpdateRemoteStationsFromSnapshot(const NinjamRemoteSnapshot& snapsh
 		_PublishAudioStations();
 }
 
-bool Scene::_IsMidiPhaseDragModifier(base::Action::Modifiers modifiers) const noexcept
-{
-	return (Action::MODIFIER_CTRL & modifiers);
-}
 
-QuantisationInteractionContext Scene::_InteractionContext() const
-{
-	std::scoped_lock lock(_sceneMutex);
-	return _InteractionContextLocked();
-}
-
-QuantisationInteractionContext Scene::_InteractionContextLocked() const
-{
-	QuantisationInteractionContext context;
-	context.CursorPos = _cursorPos;
-	context.ViewportSize = _sizeParams.Size;
-	context.SelectDepth = _workspace->Selector()->CurrentSelectDepth();
-	context.HoverPath = _workspace->Selector()->CurrentHover();
-	context.HoverPath3d = _hoverPath3d;
-	context.SampleRate = _CurrentSampleRate();
-	if (context.SelectDepth == base::DEPTH_LOOP)
-	{
-		bool anySelected = false;
-		auto hovered = _ChildFromPathLocked(context.HoverPath);
-		if (!hovered) hovered = _ChildFromPathLocked(context.HoverPath3d);
-		for (const auto& station : _stations)
-			if (station && !station->IsRemote())
-				for (const auto& take : station->GetLoopTakes())
-				{
-					for (const auto& loop : take->GetLoops())
-						if (loop)
-						{
-							anySelected |= loop->IsSelected();
-							if (loop->IsSelected() || loop == hovered) context.LoopDepthHasAudioTarget = true;
-						}
-					for (const auto& loop : take->GetMidiLoops())
-						if (auto model = loop->Model())
-						{
-							if (model->IsSelected()) { context.SelectedMidiLoops.push_back(loop); anySelected = true; }
-							if (model == hovered) context.HoveredMidiLoop = loop;
-						}
-				}
-		if (anySelected) context.HoveredMidiLoop.reset();
-	}
-	return context;
-}
-
-ActionResult Scene::_BeginBackgroundDrag(actions::TouchAction action)
-{
-	// A background click only deselects. Activity begins when it actually pans.
-	_cameraPointerPreservesIdle = true;
-	auto res = _workspace->Camera().HandleBackgroundDrag(action);
-	_isSceneTouching = _workspace->Camera().IsBackgroundDragging();
-	return res;
-}
-
-ActionResult Scene::_UpdateBackgroundDrag(actions::TouchMoveAction action)
-{
-	auto res = _workspace->Camera().UpdateBackgroundDrag(action);
-	if (_workspace->Camera().BackgroundDragWasDragged()) _cameraPointerPreservesIdle = false;
-	if (!_workspace->Camera().IsBackgroundDragging())
-		_EndBackgroundDrag();
-
-	return res;
-}
-
-void Scene::_EndBackgroundDrag()
-{
-	_isSceneTouching = false;
-}
 
 void Scene::_ClearTimingState(bool clearTapTempo)
 {
@@ -3007,7 +1762,7 @@ void Scene::_PublishAudioStations()
 
 GroupTargetKind Scene::_GroupSelectionDepthLocked() const
 {
-	const auto depth = _workspace->Selector()->CurrentSelectDepth();
+	const auto depth = _workspace->SelectionDepth();
 	return depth == base::DEPTH_STATION ? GroupTargetKind::Station :
 		depth == base::DEPTH_LOOP ? GroupTargetKind::AudioLoop : GroupTargetKind::Take;
 }
@@ -3020,7 +1775,7 @@ void Scene::_RestoreGroupSelectionDepthLocked()
 	if (!snapshot) return;
 	const auto depth = snapshot->Depth == GroupTargetKind::Station ? base::DEPTH_STATION :
 		snapshot->Depth == GroupTargetKind::Take ? base::DEPTH_LOOPTAKE : base::DEPTH_LOOP;
-	_workspace->Selector()->SetSelectDepth(depth);
+	_workspace->SetSelectionDepthLocked(depth);
 	for (const auto& station : _stations) station->SetSelectDepth(depth);
 }
 
@@ -3031,7 +1786,7 @@ void Scene::_ExecuteGroupCommandLocked(bool selection, GroupCommand command, std
 		[this](auto application) { _PublishGroupMuteApplication(std::move(application)); });
 	if (selection && command == GroupCommand::RecallOrStore) _RestoreGroupSelectionDepthLocked();
 	if (_workspace->SelectionPanel()) _workspace->SelectionPanel()->RefreshPerformanceGroups(_performanceGroups.Groups());
-	_InvalidateHover2d();
+	_workspace->InvalidateHover2d();
 }
 
 std::shared_ptr<GuiElement> Scene::_ChildFromPath(std::vector<unsigned char> path)
@@ -3043,20 +1798,6 @@ std::shared_ptr<GuiElement> Scene::_ChildFromPath(std::vector<unsigned char> pat
 std::shared_ptr<GuiElement> Scene::_ChildFromPathLocked(const std::vector<unsigned char>& path) const
 {
 	return HierarchySelection::Resolve(HierarchySelection::LockedStations(_stations), path);
-}
-
-void Scene::_UpdateSelectDepth(unsigned int depth)
-{
-	if (depth > (unsigned int)DEPTH_LOOP)
-		depth = (unsigned int)DEPTH_LOOP;
-
-	auto selectDepth = (SelectDepth)depth;
-	_workspace->Selector()->SetSelectDepth(selectDepth);
-
-	for (auto& station : SnapshotStations())
-		station->SetSelectDepth(selectDepth);
-
-	_UpdateSelection(ACTIONRESULT_DEFAULT);
 }
 
 QuantisationPolicy Scene::_QuantisationPolicy() const
@@ -3110,38 +1851,18 @@ bool Scene::_HandleTapTempo(Time actionTime)
 		_userConfig);
 	if (handled)
 	{
-		_quantisation.UpdateStationHints(nullptr, _workspace->Selector()->CurrentSelectDepth(), false, _stations);
+		_quantisation.UpdateStationHints(nullptr, _workspace->SelectionDepth(), false, _stations);
 		for (const auto& station : _stations)
 			if (station && !station->IsRemote())
 				for (const auto& take : station->GetLoopTakes())
-					if (take && _workspace->Settings()->Subdivision())
+					if (take && _workspace->Settings().Subdivision())
 					{
-						_workspace->Settings()->Subdivision()->SetCurrentValue(
+						_workspace->Settings().Subdivision()->SetCurrentValue(
 							midi::MidiQuantisation::FractionDisplayIndex(take->MidiQuantisation().Fraction), true);
 						return handled;
 					}
 	}
 	return handled;
-}
-
-void Scene::_PulseQuantisationOverlay()
-{
-	_quantisation.PulseOverlay();
-}
-
-void Scene::_SetQuantisationOverlayHeld(bool held)
-{
-	_quantisation.SetOverlayHeld(held);
-}
-
-float Scene::_QuantisationOverlayAlpha(Time now) const
-{
-	return _quantisation.OverlayAlpha(now);
-}
-
-void Scene::_ApplyQuantisationOverlayAlpha(float alpha)
-{
-	_quantisation.ApplyOverlayAlpha(alpha, _stations);
 }
 
 bool Scene::HasSelection() const
@@ -3155,86 +1876,14 @@ bool Scene::_HasSelection() const
 	return HierarchySelection::HasSelection(HierarchySelection::LockedStations(_stations));
 }
 
-bool Scene::_HasQuantisationHover() const
-{
-	return !_workspace->Selector()->CurrentHover().empty() || !_hoverPath3d.empty();
-}
-
-bool Scene::_TrySetMasterFromHover(bool confirm)
-{
-	std::scoped_lock lock(_sceneMutex);
-	return _quantisation.TrySetMasterFromHover(_ChildFromPathLocked(_workspace->Selector()->CurrentHover()),
-		_workspace->Selector()->CurrentSelectDepth(),
-		_stations,
-		_CurrentSampleRate(),
-		_userConfig,
-		confirm);
-}
-
-void Scene::_UpdateStationQuantisation(std::shared_ptr<base::GuiElement> candidate,
-	base::SelectDepth depth,
-	bool confirmCandidate)
-{
-	std::scoped_lock lock(_sceneMutex);
-	_quantisation.UpdateStationHints(candidate, depth, confirmCandidate, _stations);
-}
-
 void Scene::_ClearStationQuantisation()
 {
 	_quantisation.ClearStationHints(_stations);
 }
 
-void Scene::SetRelativePointerHost(std::function<bool(int, utils::Position2d)> begin,
-	std::function<void(int)> end, std::function<float()> logicalPixelScale)
-{
-	_ReleaseQuantisationInput();
-	_loopEditor.CancelInput();
-	_beginRelativePointer = std::move(begin);
-	_endRelativePointer = std::move(end);
-	_logicalPixelScale = std::move(logicalPixelScale);
-}
-
-bool Scene::_EditControlsSuppressed() const
-{
-	return _quantisationInteraction.EditModeActive() || _quantisationInteraction.PanelAlpha() > 0.001f;
-}
-
-std::optional<ActionResult> Scene::_RouteQuantisationTouch(TouchAction action)
-{
-	std::scoped_lock lock(_sceneMutex);
-	return _quantisationInteraction.TryHandleTouchAction(action, _CurrentSampleRate(),
-		_ctrlHeld, _InteractionContextLocked(), [this](const auto& path) { return _ChildFromPathLocked(path); });
-}
-
-std::optional<ActionResult> Scene::_RouteQuantisationMove(TouchMoveAction action)
-{
-	std::scoped_lock lock(_sceneMutex);
-	return _quantisationInteraction.TryHandleTouchMove(action, _CurrentSampleRate());
-}
-
-void Scene::_ReleaseQuantisationInput()
-{
-	std::scoped_lock lock(_sceneMutex);
-	_ReleaseQuantisationInputLocked();
-}
-
-void Scene::_ReleaseQuantisationInputLocked()
-{
-	_workspace->Selector()->ClearBackgroundClick();
-	_spaceHeld = _ctrlHeld = false;
-	_quantisation.SetOverlayHeld(false);
-	_quantisationInteraction.CancelInteraction(true);
-	_quantisationInteraction.OnCtrlModifierChanged(false, Timer::GetTime(),
-		_InteractionContextLocked(), [this](const auto& path) { return _ChildFromPathLocked(path); });
-}
-
 void Scene::OnInputFocusLost()
 {
-	const bool leftWindowsHeld = _learnKeysDown[VK_LWIN], rightWindowsHeld = _learnKeysDown[VK_RWIN];
-	_learnKeysDown.fill(false);
-	// Windows modifiers have no Action flag. Require their observed release,
-	// including after focus loss, before admitting a plain learned key.
-	_learnKeysDown[VK_LWIN] = leftWindowsHeld; _learnKeysDown[VK_RWIN] = rightWindowsHeld;
+	_workspace->ResetKeyboardObservation();
 	_contextualKeyboard.FocusLost();
 	if (const auto rig = _rigCoordinator.Accepted(); rig && _inputSubsystem->TryAcceptUiRigTriggerInput(rig->Revision))
 	{
@@ -3244,10 +1893,9 @@ void Scene::OnInputFocusLost()
 	}
 	// Window-owned focus finalization synchronously notifies the settings owner,
 	// which takes its own scene lock (e.g. SnapshotStations). Commit before locking.
-	_workspace->Focus().ClearFocus();
+	_workspace->CommitFocus();
 	std::scoped_lock lock(_sceneMutex);
-	if (auto popup = _workspace->Popups().Top()) popup->ClearPointerState();
-	_workspace->StationControls().Cancel();
+
 	for (const auto key : {VK_INSERT, VK_PRIOR, VK_NEXT})
 	{
 		actions::KeyAction release; release.KeyChar = key; release.KeyActionType = KeyAction::KEY_UP;
@@ -3255,13 +1903,7 @@ void Scene::OnInputFocusLost()
 		else _inputSubsystem->HandleChannelOverrideKey(release, _stations);
 	}
 	_performanceGroups.ResetKeys();
-	_ReleaseQuantisationInputLocked();
-	if (_workspace->Hud()) _workspace->Hud()->ClearPointerState();
-	_workspace->Pointer().ReleaseCapture();
-	_workspace->Pointer().ClearConsumedRelease();
-	_loopEditor.CancelInput();
-	_ApplyHoverPath2d({});
-	_InvalidateHover2d();
+	_workspace->OnFocusLostLocked({ _sceneMutex, _stations }, _WorkspaceInputPresentation());
 }
 
 bool Scene::_SessionHasTakes() const
@@ -3288,34 +1930,23 @@ bool Scene::_CaptureIsBusy() const
 bool Scene::_ValidateAudioDraft(std::string& error) const
 {
 	const auto found = std::find_if(_deviceInventory.Devices.begin(), _deviceInventory.Devices.end(),
-		[this](const auto& device) { return device.Name == _audioDraft.Name; });
+		[this](const auto& device) { return device.Name == _workspace->Settings().AudioDraft().Name; });
 	if (found == _deviceInventory.Devices.end() || !found->Probed) { error = "Selected audio device is unavailable"; return _audioStartRequested; }
-	if ((!_audioDraft.NumChannelsIn && !_audioDraft.NumChannelsOut) || _audioDraft.NumChannelsIn > found->InputChannels || _audioDraft.NumChannelsOut > found->OutputChannels) { error = "Invalid input/output channel counts"; return false; }
-	if (!_audioDraft.BufSize || !_audioDraft.SampleRate || std::find(found->SampleRates.begin(), found->SampleRates.end(), _audioDraft.SampleRate) == found->SampleRates.end()) { error = "Unsupported sample rate or invalid buffer request"; return false; }
+	if ((!_workspace->Settings().AudioDraft().NumChannelsIn && !_workspace->Settings().AudioDraft().NumChannelsOut) || _workspace->Settings().AudioDraft().NumChannelsIn > found->InputChannels || _workspace->Settings().AudioDraft().NumChannelsOut > found->OutputChannels) { error = "Invalid input/output channel counts"; return false; }
+	if (!_workspace->Settings().AudioDraft().BufSize || !_workspace->Settings().AudioDraft().SampleRate || std::find(found->SampleRates.begin(), found->SampleRates.end(), _workspace->Settings().AudioDraft().SampleRate) == found->SampleRates.end()) { error = "Unsupported sample rate or invalid buffer request"; return false; }
 	const auto actual = _audioEngine->GetStreamParams();
-	if (_SessionHasTakes() && _audioDraft.SampleRate != (actual.SampleRate ? actual.SampleRate : _userConfig.Audio.SampleRate)) { error = "Sample rate cannot change while any takes exist"; return false; }
+	if (_SessionHasTakes() && _workspace->Settings().AudioDraft().SampleRate != (actual.SampleRate ? actual.SampleRate : _userConfig.Audio.SampleRate)) { error = "Sample rate cannot change while any takes exist"; return false; }
 	return true;
 }
 
-void Scene::_SetAudioDraftFromStream(const audio::AudioStreamParams& params)
-{
-	// Startup may resolve a legacy/default request or negotiate stream geometry.
-	// Show the running configuration without rewriting the accepted rig on disk.
-	_audioDraft.Name = params.Name;
-	_audioDraft.SampleRate = params.SampleRate;
-	_audioDraft.NumChannelsIn = params.NumInputChannels;
-	_audioDraft.NumChannelsOut = params.NumOutputChannels;
-	_audioDraft.BufSize = params.BufSize;
-	_audioDraft.NumBuffers = params.NumBuffers;
-	_devicePageDirty = true;
-}
+
 
 void Scene::_RebuildDevicePage()
 {
 	_workspace->MainPanel()->FinalizePageSettings(SettingsPage::Audio);
 	const auto midi = _midiState.load(std::memory_order_acquire);
-	const auto pages = _workspace->Settings()->BuildDevicePages(_deviceInventory, _audioDraft,
-		_acceptedBufferSizes, midi->Connection, _midiDraft, _workspace->Popups(), ActionReceiver::shared_from_this());
+	const auto pages = _workspace->Settings().BuildDevicePages(_deviceInventory, _workspace->Settings().AudioDraft(),
+		_acceptedBufferSizes, midi->Connection, _workspace->Settings().MidiDraft(), _workspace->Popups(), ActionReceiver::shared_from_this());
 	_workspace->MainPanel()->ReplacePageSettings(SettingsPage::Audio, pages.Audio);
 	_workspace->MainPanel()->ReplacePageSettings(SettingsPage::Midi, pages.Midi);
 	_displayedMidiState = midi; _devicePageDirty = false;
@@ -3323,7 +1954,7 @@ void Scene::_RebuildDevicePage()
 
 void Scene::ReportFileStatus(const std::string& status)
 {
-	_workspace->Settings()->SetFileStatus(status);
+	_workspace->Settings().SetFileStatus(status);
 	std::cout << "[SESSION scene=" << _sceneIdentity << " operation=" << _operation.Identity() << "] " << status << std::endl;
 }
 
@@ -3392,7 +2023,7 @@ bool Scene::_FinishControlOperation(std::string* restorationError)
 	if (!restored)
 	{
 		if (restorationError) *restorationError = error;
-		_workspace->Settings()->SetDeviceStatus("Stopped: " + error); ReportFileOutcome("Audio restoration failed: " + error);
+		_workspace->Settings().SetDeviceStatus("Stopped: " + error); ReportFileOutcome("Audio restoration failed: " + error);
 	}
 	if (audioRestore.AdmissionRestored)
 	{
@@ -3404,7 +2035,7 @@ bool Scene::_FinishControlOperation(std::string* restorationError)
 	{
 		restored = false;
 		if (restorationError) *restorationError += "; MIDI resume failed: " + std::string(dispatchError.what());
-		_workspace->Settings()->SetDeviceStatus("MIDI dispatch stopped: " + std::string(dispatchError.what()));
+		_workspace->Settings().SetDeviceStatus("MIDI dispatch stopped: " + std::string(dispatchError.what()));
 		ReportRuntimeNotice("MIDI", "MIDI dispatch stopped: " + std::string(dispatchError.what()));
 	}
 	std::optional<std::uint64_t> acceptedRevision;
@@ -3430,14 +2061,14 @@ void Scene::PumpDeviceAndFileControls()
 	bool inventoryBusy = false;
 	{ std::scoped_lock lock(_sceneMutex); inventoryBusy = _stationManagement.Busy() || _rigSaveDialogOpen || _rigSaveInProgress; }
 	const bool filesEnabled = !inventoryBusy && _operation.Current() == ControlOperation::None && _rigCoordinator.EditsEnabled();
-	_workspace->Settings()->SetSessionEnabled(filesEnabled, filesEnabled && !_defaultJamPath.empty() && static_cast<bool>(_defaultJamSaver));
+	_workspace->Settings().SetSessionEnabled(filesEnabled, filesEnabled && !_defaultJamPath.empty() && static_cast<bool>(_defaultJamSaver));
 	const auto now = std::chrono::steady_clock::now();
 	const auto actual = _audioEngine->GetStreamParams();
 	if (actual.BufSize && !_acceptedBufferSizes.contains(actual.Name)) { _acceptedBufferSizes[actual.Name] = {actual.BufSize}; _devicePageDirty = true; }
 	if (_devicePageDirty || _displayedMidiState != _midiState.load(std::memory_order_acquire)) _RebuildDevicePage();
 	std::ostringstream text;
 	text << actual.Name << " | " << actual.SampleRate << " Hz | " << actual.NumInputChannels << " in / " << actual.NumOutputChannels << " out | buffer " << actual.BufSize;
-	_workspace->Settings()->SetActiveAudioStatus(text.str());
+	_workspace->Settings().SetActiveAudioStatus(text.str());
 	if (_operation.Current() == ControlOperation::None)
 	{
 		if (inventoryBusy || !_rigCoordinator.EditsEnabled()) return;
@@ -3445,15 +2076,15 @@ void Scene::PumpDeviceAndFileControls()
 		{
 			_operation.Begin(ControlOperation::Midi); _midiDraftPending = false;
 			_operation.NextIdentity();
-			_pendingMidiDeviceRequest.store(std::make_shared<const MidiDeviceRequest>(MidiDeviceRequest{_sceneIdentity, _operation.Identity(), _midiDraft}), std::memory_order_release);
+			_pendingMidiDeviceRequest.store(std::make_shared<const MidiDeviceRequest>(MidiDeviceRequest{_sceneIdentity, _operation.Identity(), _workspace->Settings().MidiDraft()}), std::memory_order_release);
 		}
 		else if (_audioSchedule.Revision != _audioSchedule.AttemptedRevision && now >= _audioSchedule.NextChange)
 		{
-			if (now < _audioSchedule.ChannelDeadline) { _workspace->Settings()->SetDeviceStatus("Settling channel counts (3 seconds)"); return; }
-			if (_CaptureIsBusy()) { _workspace->Settings()->SetDeviceStatus("Waiting for recording/pending capture"); return; }
-			if (!_audioStartRequested && _audioDraft.Name == actual.Name && _audioDraft.SampleRate == actual.SampleRate && _audioDraft.BufSize == actual.BufSize && _audioDraft.NumChannelsIn == actual.NumInputChannels && _audioDraft.NumChannelsOut == actual.NumOutputChannels) { _audioSchedule.AttemptedRevision = _audioSchedule.Revision; return; }
+			if (now < _audioSchedule.ChannelDeadline) { _workspace->Settings().SetDeviceStatus("Settling channel counts (3 seconds)"); return; }
+			if (_CaptureIsBusy()) { _workspace->Settings().SetDeviceStatus("Waiting for recording/pending capture"); return; }
+			if (!_audioStartRequested && _workspace->Settings().AudioDraft().Name == actual.Name && _workspace->Settings().AudioDraft().SampleRate == actual.SampleRate && _workspace->Settings().AudioDraft().BufSize == actual.BufSize && _workspace->Settings().AudioDraft().NumChannelsIn == actual.NumInputChannels && _workspace->Settings().AudioDraft().NumChannelsOut == actual.NumOutputChannels) { _audioSchedule.AttemptedRevision = _audioSchedule.Revision; return; }
 			std::string error;
-			if (!_ValidateAudioDraft(error)) { _workspace->Settings()->SetDeviceStatus(error); ReportRuntimeNotice("Audio device",error); _audioSchedule.AttemptedRevision = _audioSchedule.Revision; return; }
+			if (!_ValidateAudioDraft(error)) { _workspace->Settings().SetDeviceStatus(error); ReportRuntimeNotice("Audio device",error); _audioSchedule.AttemptedRevision = _audioSchedule.Revision; return; }
 			_operation.Begin(ControlOperation::Audio);
 		}
 		else return;
@@ -3469,7 +2100,7 @@ void Scene::PumpDeviceAndFileControls()
 				else _pendingMidiPersistence = completion->Desired;
 			}
 			_hardwarePersistencePending = _pendingAudioPersistence.has_value() || _pendingMidiPersistence.has_value();
-			_workspace->Settings()->SetDeviceStatus(completion->Status); _operation.Begin(ControlOperation::None); _devicePageDirty = true;
+			_workspace->Settings().SetDeviceStatus(completion->Status); _operation.Begin(ControlOperation::None); _devicePageDirty = true;
 			ReportRuntimeNotice("MIDI devices",completion->Status);
 		}
 		return;
@@ -3506,7 +2137,7 @@ void Scene::PumpDeviceAndFileControls()
 	}
 	if (!_operation.PauseAudio(*_audioEngine, error))
 	{
-		_workspace->Settings()->SetDeviceStatus("Stopped/error: " + error); ReportFileOutcome(error);
+		_workspace->Settings().SetDeviceStatus("Stopped/error: " + error); ReportFileOutcome(error);
 		if (_operation.Current() == ControlOperation::Audio) _audioSchedule.AttemptedRevision = _audioSchedule.Revision;
 		_FinishControlOperation(); return;
 	}
@@ -3515,7 +2146,7 @@ void Scene::PumpDeviceAndFileControls()
 	// With producers excluded and callbacks drained, capture-start wins deterministically.
 	if (_operation.Current() != ControlOperation::Midi && _CaptureIsBusy())
 	{
-		if (_operation.Current() == ControlOperation::Audio) _workspace->Settings()->SetDeviceStatus("Waiting for recording");
+		if (_operation.Current() == ControlOperation::Audio) _workspace->Settings().SetDeviceStatus("Waiting for recording");
 		else ReportFileOutcome("File operation rejected during capture/pending actions");
 		_FinishControlOperation(); return;
 	}
@@ -3524,12 +2155,12 @@ void Scene::PumpDeviceAndFileControls()
 	if (_operation.Current() == ControlOperation::Audio)
 	{
 		const auto admittedRevision = _audioSchedule.Revision;
-		const auto requested = _audioDraft;
+		const auto requested = _workspace->Settings().AudioDraft();
 		_audioSchedule.Attempted(admittedRevision, now);
-		if (!_ValidateAudioDraft(error)) { _workspace->Settings()->SetDeviceStatus(error); ReportRuntimeNotice("Audio device",error); }
+		if (!_ValidateAudioDraft(error)) { _workspace->Settings().SetDeviceStatus(error); ReportRuntimeNotice("Audio device",error); }
 		else
 		{
-			_workspace->Settings()->SetDeviceStatus("Changing audio device");
+			_workspace->Settings().SetDeviceStatus("Changing audio device");
 			const auto oldRate = actual.SampleRate;
 			const bool applied = _audioEngine->Reconfigure(requested, error);
 			const auto acceptedParams = _audioEngine->GetStreamParams();
@@ -3575,13 +2206,13 @@ void Scene::PumpDeviceAndFileControls()
 				const bool merged = _rigCoordinator.MergeHardwarePreferences(settings, std::nullopt);
 				const auto rig = AcceptedRigSnapshot(); _hardwarePersistencePending = !merged || !rig || !SaveHardwarePreferences(rig->Rig);
 				if (!_hardwarePersistencePending) { _pendingAudioPersistence.reset(); _pendingMidiPersistence.reset(); }
-				_workspace->Settings()->SetDeviceStatus(_hardwarePersistencePending ? "Applied, preferences not saved" : (acceptedParams.NumOutputChannels < actual.NumOutputChannels ? "Ready; unavailable output routes disconnected" : "Ready"));
+				_workspace->Settings().SetDeviceStatus(_hardwarePersistencePending ? "Applied, preferences not saved" : (acceptedParams.NumOutputChannels < actual.NumOutputChannels ? "Ready; unavailable output routes disconnected" : "Ready"));
 				ReportRuntimeNotice("Audio device",_hardwarePersistencePending ? "Applied, preferences not saved; retry available" :
 					(acceptedParams.NumOutputChannels < actual.NumOutputChannels ? "Ready; unavailable output routes disconnected" : "Audio device ready"));
-				if (_audioSchedule.Revision == admittedRevision) _audioDraft = settings;
+				if (_audioSchedule.Revision == admittedRevision) _workspace->Settings().SetAudioDraft(settings);
 				_devicePageDirty = true;
 			}
-			else { _workspace->Settings()->SetDeviceStatus(error); ReportRuntimeNotice("Audio device",error); }
+			else { _workspace->Settings().SetDeviceStatus(error); ReportRuntimeNotice("Audio device",error); }
 			_audioStartRequested = false;
 			std::cout << "[DEVICES scene=" << _sceneIdentity << " operation=" << _operation.Identity() << "] audio " << (applied ? "applied " : "failed ")
 				<< "requested='" << requested.Name << "' in=" << requested.NumChannelsIn << " out=" << requested.NumChannelsOut << " rate=" << requested.SampleRate << " buffer=" << requested.BufSize
@@ -3680,9 +2311,9 @@ bool Scene::_StationManagementAvailableLocked() const
 {
 	return _operation.Current() == ControlOperation::None && !_operation.HoldsWriter() && !_stationManagement.Busy() && _rigCoordinator.EditsEnabled() && !_rigSaveDialogOpen && !_rigSaveInProgress &&
 		std::none_of(_stations.begin(), _stations.end(), [](const auto& station) { return station->IsPresentationMoving(); }) &&
-		!_workspace->Popups().IsOpen() && !_loopEditor.IsEngaged() && !_workspace->Focus().IsEditingText() &&
-		!_quantisationInteraction.OwnsPointer() && !_workspace->Camera().IsBackgroundDragging() && !_isSceneTouching &&
-		!_workspace->Pointer().Captured() && (!_workspace->Hud() || !_workspace->Hud()->HasCableDrag());
+		!_workspace->PopupOpen() && !_workspace->Editor().IsEngaged() && !_workspace->IsEditingText() &&
+		!_quantisationInteraction.OwnsPointer() && !_workspace->CameraDragging() && !_workspace->Touching() &&
+		!_workspace->HasPointerCapture() && (!_workspace->Hud() || !_workspace->Hud()->HasCableDrag());
 }
 
 void Scene::_RequestStationControl(gui::GuiStationControls::Intent intent)
@@ -3727,27 +2358,19 @@ void Scene::_RequestStationControl(gui::GuiStationControls::Intent intent)
 void Scene::_RequestTakeDitch(gui::GuiStationControls::Intent intent)
 {
 	std::scoped_lock lock(_sceneMutex);
-	if (!_StationManagementAvailableLocked() || _workspace->Popups().IsOpen() || !intent.TakeStation || !intent.Take ||
+	if (!_StationManagementAvailableLocked() || _workspace->PopupOpen() || !intent.TakeStation || !intent.Take ||
 		std::find(_stations.begin(), _stations.end(), intent.TakeStation) == _stations.end()) return;
 	const auto& takes = intent.TakeStation->GetLoopTakes();
 	if (std::find(takes.begin(), takes.end(), intent.Take) == takes.end()) return;
-	_takeDitchStation = std::move(intent.TakeStation);
-	_takeDitchTake = std::move(intent.Take);
-	if (_takeDitchDialog) _takeDitchDialog->ReleaseResources();
-	_takeDitchDialog = std::make_shared<GuiPopup>();
-	_takeDitchDialog->SetTitle("Ditch this take?");
-	_takeDitchDialog->SetBodyLines({"The whole LoopTake and all its loops will be removed.", "Active recording will be cancelled.", "This cannot be undone."});
-	_takeDitchDialog->ConfigureButtons({{{"Cancel", GuiStationControls::CancelTakeDitchControlIndex}, {"Ditch take", GuiStationControls::ConfirmTakeDitchControlIndex}}});
-	_takeDitchDialog->SetButtonReceiver(ActionReceiver::shared_from_this());
-	_takeDitchDialog->FitToViewport(_sizeParams.Size);
-	_workspace->Popups().Open(_takeDitchDialog);
+	const auto accepted = _rigCoordinator.Accepted();
+	_workspace->OpenTakeDitch(std::move(intent.TakeStation), std::move(intent.Take), accepted ? accepted->Revision : 0u,
+		ActionReceiver::shared_from_this());
 }
 
 void Scene::_CancelTakeDitch()
 {
 	std::scoped_lock lock(_sceneMutex);
-	_takeDitchTake.reset();
-	_takeDitchStation.reset();
+	_workspace->TakeDitchTargetLocked();
 }
 
 void Scene::_ConfirmTakeDitch()
@@ -3755,14 +2378,17 @@ void Scene::_ConfirmTakeDitch()
 	std::shared_ptr<LoopTake> ditched;
 	{
 		std::scoped_lock lock(_sceneMutex);
-		auto station = std::move(_takeDitchStation);
-		auto take = std::move(_takeDitchTake);
+		auto target = _workspace->TakeDitchTargetLocked();
+		auto station = std::move(target.Station);
+		auto take = std::move(target.Take);
+		const auto accepted = _rigCoordinator.Accepted();
+		if (!accepted || accepted->Revision != target.Revision) return;
 		if (!station || !take || std::find(_stations.begin(), _stations.end(), station) == _stations.end()) return;
 		if (station->DitchTake(take))
 		{
 			take->DeSelect();
 			_workspace->CollapseRacksLocked(_stations);
-			_InvalidateHover2d();
+			_workspace->InvalidateHover2d();
 			ditched = std::move(take);
 		}
 	}
@@ -3781,13 +2407,7 @@ void Scene::_AcceptStationRemoval(bool consent)
 	const auto validation = _stationManagement.Validate(_stations, accepted->Revision, consent);
 	if (validation == StationManagement::Validation::Confirm)
 	{
-		_stationDeleteDialog = std::make_shared<GuiPopup>();
-		_stationDeleteDialog->SetTitle("Delete " + _stationManagement.Target->Name() + "?");
-		_stationDeleteDialog->SetBodyLines({"All takes and station configuration will be removed.", "Active recordings will be cancelled.", "This cannot be undone."});
-		_stationDeleteDialog->ConfigureButtons({{{"Cancel", GuiStationControls::CancelRemovalControlIndex}, {"Delete station", GuiStationControls::DeleteRemovalControlIndex}}});
-		_stationDeleteDialog->SetButtonReceiver(ActionReceiver::shared_from_this());
-		_stationDeleteDialog->FitToViewport(_sizeParams.Size);
-		_workspace->Popups().Open(_stationDeleteDialog);
+		_workspace->OpenStationRemoval(_stationManagement.Target->Name(), ActionReceiver::shared_from_this());
 		return;
 	}
 	if (validation != StationManagement::Validation::Ready) { _stationManagement.Cancel(); return; }
@@ -3810,14 +2430,13 @@ void Scene::_CommitStationMembershipLocked()
 		{ _stationManagement.Added->ReleaseResources(); _stationManagement.Added->DetachGuiOwnershipForRetirement(); }
 		if (_stationManagement.Target) _stationManagement.Target->SetMembershipRemoving(false);
 		_stationManagement.Finish();
-		_quantisationFeedback = "Station change failed. Please try again.";
+		_workspace->SetFeedback("Station change failed. Please try again.");
 		return;
 	}
 	if (!_stationManagement.Committed || !_stationManagement.Candidate) return;
 	_performanceGroups.Acknowledge(_audioEngine->GroupMuteReceipt());
 	_performanceGroups.CancelPending();
 	_audioEngine->PublishGroupMuteApplication(nullptr);
-	_workspace->Selector()->ClearBackgroundClick();
 	const auto removed = _stationManagement.Target;
 	const auto affectedBindings = _stationManagement.Candidate->TriggerRouteUpdates.size();
 	if (removed)
@@ -3827,41 +2446,14 @@ void Scene::_CommitStationMembershipLocked()
 		removed->DeSelect();
 		for (const auto& take : removed->GetLoopTakeSnapshot()) { take->DeSelect(); take->DetachGuiOwnershipForRetirement(); }
 		removed->DetachGuiOwnershipForRetirement();
-		_workspace->Camera().ForgetStation(removed);
-		_workspace->Popups().CloseOwnedBy(removed);
 		_retiredStations.push_back(removed);
-		_undoHistory.Clear(); // Outgoing hierarchy must not be resurrected by a retained undo.
 	}
 	_stations = *_stationManagement.Candidate->Stations;
-	for (size_t i = 0u; i < _stations.size(); ++i)
-	{
-		auto& station = _stations[i];
-		const float startX = station == _stationManagement.Added
-			? (-50.0f + static_cast<float>(i) * 600.0f + (i == 0u ? -600.0f : 600.0f))
-			: station->PresentationModelPosition().X;
-		station->SetIndex(static_cast<unsigned int>(i));
-		station->SetPosition({20 + static_cast<int>(i) * 600, 20});
-		station->SetModelPosition({-50.0f + static_cast<float>(i) * 600.0f, -20.0f, 0.0f});
-		station->BeginPresentationMove(startX);
-		_workspace->Camera().RegisterStation(i, station, station->LoopTakeRevision());
-	}
-	// Selections reside on object identities; survivors retain them without selecting a neighbour.
-	_workspace->Pointer().ReleaseCapture(); _hoverElement3d.reset();
-	_hoverPath3d.clear(); _workspace->Pointer().ClearHoverPath();
-	_workspace->Selector()->ClearPointerState();
-	_workspace->Selector()->UpdateCurrentHover({}, Action::MODIFIER_NONE, false, Tweakable::TWEAKSTATE_NONE);
-	_quantisationInteraction.CancelInteraction(true);
-	_workspace->StationControls().Cancel();
-	if (_stationManagement.Added)
-	{
-		_workspace->Camera().RevealPosition(_stationManagement.Added->ModelPosition(), _sizeParams.Size,
-			_StationCentre(_stations), 80);
-	}
+	for (size_t i = 0u; i < _stations.size(); ++i) _stations[i]->SetIndex(static_cast<unsigned int>(i));
+	_workspace->CompleteMembershipPresentationLocked(_stations, removed, _stationManagement.Added, affectedBindings);
 	_PublishAudioStations();
 	_inputSubsystem->OpenRigTriggerInput(_rigCoordinator.Accepted()->Revision);
 	_stationManagement.Finish();
-	_quantisationFeedback = removed ? "Station deleted; " + std::to_string(affectedBindings) + " binding(s) unbound." : "Station added.";
-	_InvalidateHover2d();
 	_ResetIfEmpty();
 }
 
@@ -3893,7 +2485,7 @@ std::optional<Scene::CapturedRig> Scene::BeginExplicitRigSave()
 {
 	std::scoped_lock lock(_sceneMutex);
 	if (!_rigCoordinator.EditsEnabled() || _stationManagement.Busy() || _rigSaveInProgress ||
-		_operation.Current() != ControlOperation::None || _workspace->Popups().IsOpen() || _isSceneQuitting.load(std::memory_order_acquire)) return {};
+		_operation.Current() != ControlOperation::None || _workspace->PopupOpen() || _isSceneQuitting.load(std::memory_order_acquire)) return {};
 	const auto accepted = _rigCoordinator.Accepted(); if (!accepted) return {};
 	auto rig = accepted->Rig; rig.User = _userConfig; _rigSaveInProgress = true;
 	return CapturedRig{std::move(rig), accepted->Revision, _sceneIdentity};
@@ -3939,12 +2531,12 @@ void Scene::_PublishGroupMuteApplication(std::shared_ptr<const GroupMuteApplicat
 }
 void Scene::Draw(DrawContext& ctx)
 {
-	_loopEditor.UpdateUi(_workspace->ViewProjection());
+	_workspace->UpdateEditorUi();
 	std::scoped_lock lock(_sceneMutex);
-	if (_stationManagement.Busy()) _quantisationFeedback = "Applying station change...";
+	if (_stationManagement.Busy()) _workspace->SetFeedback("Applying station change...");
 	gui::Workspace::OverlayPresentation presentation;
 	presentation.RigSaveEnabled = _rigCoordinator.EditsEnabled() && !_stationManagement.Busy() && !_rigSaveInProgress && !_rigSaveDialogOpen;
-	presentation.QuantisationFeedback = _quantisationFeedback;
+	presentation.QuantisationFeedback = _workspace->QuantisationFeedback();
 	presentation.ForcedChannel = _inputSubsystem->ForcedChannelOverride();
 	presentation.Stream = _audioEngine->GetStreamParams();
 	for (auto channel = 0u; channel < presentation.Stream.NumInputChannels; ++channel)
@@ -3953,7 +2545,7 @@ void Scene::Draw(DrawContext& ctx)
 		presentation.MidiPeaks.push_back(_inputSubsystem->ConsumeMidiInputPeak(name));
 	const auto tempo = _quantisation.CurrentTempoStatus(_CurrentSampleRate());
 	if (tempo) presentation.Tempo = graphics::Compositor::Tempo{ tempo->Bpm, tempo->Bpi };
-	_workspace->DrawOverlayLocked(ctx, _stations, _loopEditor, _quantisationInteraction, presentation);
+	_workspace->DrawOverlayLocked(ctx, _stations, _workspace->Editor(), _quantisationInteraction, presentation);
 }
 
 void Scene::DrawBackground(DrawContext& ctx)
@@ -3965,24 +2557,22 @@ void Scene::DrawBackground(DrawContext& ctx)
 void Scene::Draw3d(DrawContext& ctx, unsigned int numInstances, base::DrawPass pass)
 {
 	std::scoped_lock lock(_sceneMutex);
-	if (pass == PASS_SCENE) _ApplyQuantisationOverlayAlpha(_QuantisationOverlayAlpha(Timer::GetTime()));
-	_workspace->DrawWorldLocked(ctx, pass, _stations, _loopEditor, _quantisationInteraction,
-		_performanceGroups.Groups(), { _HasSelection(), _BackgroundPreviewActive(), _BackgroundSelectionPreviewActive(), _EditControlsSuppressed() });
+	if (pass == PASS_SCENE) _quantisation.ApplyOverlayAlpha(_quantisation.OverlayAlpha(Timer::GetTime()), _stations);
+	_workspace->DrawWorldLocked(ctx, pass, _stations, _workspace->Editor(), _quantisationInteraction,
+		_performanceGroups.Groups(), { _HasSelection(), _workspace->BackgroundPreviewActive({ _sceneMutex, _stations }, _WorkspaceInputPresentation()), _workspace->BackgroundSelectionPreviewActive({ _sceneMutex, _stations }, _WorkspaceInputPresentation()), _workspace->EditControlsSuppressed() });
 }
 
 void Scene::_InitResources(ResourceLib& resourceLib, bool forceInit)
 {
 	std::scoped_lock lock(_sceneMutex);
-	_workspace->InitResourcesLocked(resourceLib, forceInit, _loopEditor, _stations);
+	_workspace->InitResourcesLocked(resourceLib, forceInit, _workspace->Editor(), _stations);
 	ResourceUser::_InitResources(resourceLib, forceInit);
 }
 
 void Scene::_ReleaseResources()
 {
 	{ std::scoped_lock lock(_sceneMutex); for (const auto& station : _stations) station->FinishPresentationMove(); }
-	_workspace->ReleaseResources(_loopEditor);
-	if (_stationDeleteDialog) _stationDeleteDialog->ReleaseResources();
-	if (_takeDitchDialog) _takeDitchDialog->ReleaseResources();
+	_workspace->ReleaseResources(_workspace->Editor());
 	for (const auto& station : _retiredStations) station->ReleaseResources();
 	for (auto& station : SnapshotStations()) station->ReleaseResources();
 	Drawable::_ReleaseResources();
@@ -3991,5 +2581,231 @@ void Scene::_ReleaseResources()
 void Scene::AddChild(std::shared_ptr<base::GuiElement> child)
 {
 	_workspace->AddChild(std::move(child));
-	_InvalidateHover2d();
+	_workspace->InvalidateHover2d();
+}
+
+gui::Workspace::InputPresentation Scene::_WorkspaceInputPresentation() const
+{
+	auto stream = _audioEngine->GetStreamParams();
+	stream.SampleRate = _CurrentSampleRate();
+	return { _userConfig, std::move(stream), _isSceneQuitting.load(std::memory_order_acquire),
+		_operation.HoldsWriter(), _rigSaveDialogOpen, _quantisationInputResetRequested.load(std::memory_order_acquire), IsUiVerbose() };
+}
+
+void Scene::_CompleteWorkspaceInput()
+{
+	_ApplyRemoteTempoPromptDecision();
+	auto commands = _workspace->TakeInputCommands();
+	if (commands.CancelTakeDitch) _CancelTakeDitch();
+	if (commands.CancelStationRemoval) { std::scoped_lock lock(_sceneMutex); if (!_stationManagement.Busy()) _stationManagement.Cancel(); }
+	if (commands.MuteAll)
+	{
+		std::scoped_lock lock(_sceneMutex);
+		_performanceGroups.Acknowledge(_audioEngine->GroupMuteReceipt());
+		_performanceGroups.SetAllMuted(*commands.MuteAll, _stations,
+			[this](auto application) { _PublishGroupMuteApplication(std::move(application)); });
+	}
+	if (commands.StationControl)
+	{
+		if (commands.StationControl->Take) _RequestTakeDitch(std::move(*commands.StationControl));
+		else _RequestStationControl(std::move(*commands.StationControl));
+	}
+}
+
+ActionResult Scene::OnAction(TouchAction action)
+{
+	const auto result = _workspace->OnTouch(action, { _sceneMutex, _stations }, _WorkspaceInputPresentation());
+	_CompleteWorkspaceInput();
+	return result;
+}
+
+ActionResult Scene::OnAction(TouchMoveAction action)
+{
+	const auto result = _workspace->OnMove(action, { _sceneMutex, _stations }, _WorkspaceInputPresentation());
+	_CompleteWorkspaceInput();
+	return result;
+}
+
+void Scene::SetHover3d(std::vector<unsigned char> path, Action::Modifiers modifiers, std::optional<utils::Position2d> pointerPosition)
+{
+	_workspace->SetHover3d(std::move(path), modifiers, pointerPosition, { _sceneMutex, _stations }, _WorkspaceInputPresentation());
+}
+
+void Scene::ApplyDeferredHoverUpdates()
+{
+	_workspace->ApplyDeferredHoverUpdates({ _sceneMutex, _stations }, _WorkspaceInputPresentation());
+}
+
+ActionResult Scene::OnAction(KeyAction action)
+{
+	const bool freshLearnKey = _workspace->PrepareKeyboard(action, { _sceneMutex, _stations });
+	const bool contextual = _rigSaveDialogOpen || _operation.HoldsWriter() ||
+		_workspace->PopupOpen() || _workspace->IsEditingText() || _workspace->Editor().IsEngaged();
+	const auto inputRig = _rigCoordinator.Accepted();
+	const bool admissionOpen = !_isSceneQuitting.load(std::memory_order_acquire) && inputRig &&
+		_inputSubsystem->TryAcceptUiRigTriggerInput(inputRig->Revision);
+	// Complete older physical releases before a fresh press can be admitted.
+	// Observation follows this flush, so a current ordinary UP is queued once by
+	// normal dispatch below; contextual/suppressed releases use the exact receipt.
+	if (admissionOpen) _contextualKeyboard.Flush(*inputRig, action);
+	const bool suppressedKey = _contextualKeyboard.Observe(action, contextual, admissionOpen);
+	if (admissionOpen && (contextual || suppressedKey))
+		_contextualKeyboard.Flush(*inputRig, action);
+	if (_workspace->OwnsBackgroundClick() && action.KeyActionType == KeyAction::KEY_DOWN && action.KeyChar == 27u)
+	{
+		_workspace->CancelBackgroundClick();
+		return { true, {}, {}, ACTIONRESULT_DEFAULT, nullptr, {} };
+	}
+	// A consumed physical press keeps its release even when focus changes.
+	if (_performanceGroups.ConsumeRelease(action)) return { true, {}, {}, ACTIONRESULT_DEFAULT, nullptr, {} };
+	if (_rigSaveDialogOpen || _operation.HoldsWriter() || _workspace->PopupOpen() || _workspace->IsEditingText() || _workspace->Editor().IsEngaged())
+		_performanceGroups.BlockContextualPress(action);
+	if (_isSceneQuitting.load(std::memory_order_acquire)) return ActionResult::NoAction();
+	action.SetActionTime(Timer::GetTime());
+	action.SetUserConfig(_userConfig);
+	action.SetAudioParams(_audioEngine->GetStreamParams());
+
+	if (contextual && action.KeyActionType == KeyAction::KEY_UP)
+	{
+		// These shortcut owners admitted their holds before a modal/text context.
+		// Cleanup is explicit and never invokes ordinary trigger matching.
+		std::scoped_lock lock(_sceneMutex);
+		if (action.KeyChar == VK_INSERT) _inputSubsystem->HandleAutomationKey(action, _stations, {}, {});
+		if (action.KeyChar == VK_PRIOR || action.KeyChar == VK_NEXT) _inputSubsystem->HandleChannelOverrideKey(action, _stations);
+		if ((action.KeyChar == 192u || action.KeyChar == 96u) && _workspace->Hud()) _workspace->Hud()->SetCableRevealHeld(false);
+	}
+	const auto result = _workspace->OnKeyboard(action, { _sceneMutex, _stations }, _WorkspaceInputPresentation(),
+		contextual, suppressedKey, freshLearnKey, *_inputSubsystem,
+		[this, contextual, suppressedKey](gui::Workspace::KeyboardCommand command, const KeyAction& key, bool groupsEnabled) {
+			return _HandleKeyboardCommand(command, key, groupsEnabled, contextual, suppressedKey);
+		});
+	_CompleteWorkspaceInput();
+	return result;
+}
+
+std::optional<ActionResult> Scene::_HandleKeyboardCommand(gui::Workspace::KeyboardCommand command, const KeyAction& action,
+	bool groupsEnabled, bool contextual, bool suppressedKey)
+{
+	if (command == gui::Workspace::KeyboardCommand::TapTempo) { _HandleTapTempo(action.GetActionTime()); return std::nullopt; }
+
+	if (auto overrideRes = _inputSubsystem->HandleChannelOverrideKey(action, SnapshotStations());
+		overrideRes.IsEaten)
+	{
+		_workspace->Settings().RefreshChannelPresentation(_inputSubsystem->ForcedChannelOverride());
+		return overrideRes;
+	}
+
+	if (groupsEnabled)
+	{
+		std::scoped_lock lock(_sceneMutex);
+		_performanceGroups.Acknowledge(_audioEngine->GroupMuteReceipt());
+		if (_performanceGroups.HandleKey(action, _stations, _GroupSelectionDepthLocked(),
+			[this](auto application) { _PublishGroupMuteApplication(std::move(application)); }))
+		{
+			if (_workspace->SelectionPanel()) _workspace->SelectionPanel()->RefreshPerformanceGroups(_performanceGroups.Groups());
+			return ActionResult{ true, {}, {}, ACTIONRESULT_DEFAULT, nullptr, {} };
+		}
+	}
+
+	if ((82 == action.KeyChar)
+		&& (actions::KeyAction::KEY_UP == action.KeyActionType)
+		&& (Action::MODIFIER_CTRL & action.Modifiers)
+		&& (Action::MODIFIER_SHIFT & action.Modifiers))
+	{
+		_HandleReclockArm();
+		return ActionResult::NoAction();
+	}
+
+	// Ctrl+S saves a numbered session; Ctrl+Shift+S chooses its directory.
+	if ((83 == action.KeyChar)
+		&& (actions::KeyAction::KEY_UP == action.KeyActionType)
+		&& (Action::MODIFIER_CTRL & action.Modifiers))
+	{
+		_RequestSave((action.Modifiers & Action::MODIFIER_SHIFT) != 0);
+		return ActionResult::NoAction();
+	}
+
+	// Insert + Ctrl+Shift+L/W/X/[/] - MIDI automation record, learn, wire, delete, lane cycle.
+	{
+		auto hovered = _ChildFromPath(_workspace->CurrentHover());
+		auto hoveredTake = std::dynamic_pointer_cast<LoopTake>(hovered);
+		std::scoped_lock lock(_sceneMutex);
+		auto automationRes = _inputSubsystem->HandleAutomationKey(action,
+			_stations,
+			_workspace->CurrentHover(),
+			hoveredTake);
+		if (automationRes.IsEaten)
+			return automationRes;
+	}
+
+	bool checkReset = false;
+	auto result = ActionResult::NoAction();
+
+	const auto acceptedRig = _rigCoordinator.Accepted();
+	if (!contextual && !suppressedKey && acceptedRig && _inputSubsystem->TryAcceptUiRigTriggerInput(acceptedRig->Revision))
+	{
+		static const std::string EmptyDevice;
+		const auto keyState = action.KeyActionType == KeyAction::KEY_DOWN ? 1u : 0u;
+		const auto& keyboardTriggers = acceptedRig->InputDispatch.KeyboardTriggers;
+		for (const auto& trigger : keyboardTriggers)
+		{
+			if (!trigger)
+				continue;
+			std::optional<KeyboardTriggerReceipt> admitted, released;
+			auto res = trigger->QueueInputEvent(TRIGGER_INPUT_UI,
+				acceptedRig->Revision, TriggerSource::TRIGGER_KEY,
+				action.KeyChar, keyState, action, EmptyDevice, std::nullopt, std::nullopt, &admitted, &released);
+			if (released) _contextualKeyboard.Retire(trigger, *released);
+			if (admitted)
+			{
+				const auto runtime = std::find_if(acceptedRig->Triggers.begin(), acceptedRig->Triggers.end(),
+					[&](const auto& entry) { return entry.Instance == trigger; });
+				if (runtime != acceptedRig->Triggers.end()) _contextualKeyboard.Record(*acceptedRig, *runtime, *admitted);
+			}
+
+			if (!res.IsEaten)
+				continue;
+
+		switch (res.ResultType)
+		{
+		case ACTIONRESULT_ACTIVATE:
+			_isSceneReset.store(false, std::memory_order_relaxed);
+			checkReset = true;
+			// Propagate any grain the clock just acquired (e.g. from first-loop seed).
+			// _SetQuantisation is not called by Station's TrySeedClockFromFirstLoop, so
+			// do it here after every activation so all LoopTakes see the current grain.
+			if (auto clock = _quantisation.Clock())
+			{
+				std::scoped_lock lock(_sceneMutex);
+				_SetMidiQuantisationGrain(clock->QuantiseSamps(), "loop activated");
+			}
+			break;
+		case ACTIONRESULT_DITCH:
+			checkReset = true;
+			break;
+		default:
+			break;
+		}
+
+			if (!result.IsEaten || (res.ResultType != ACTIONRESULT_DEFAULT))
+				result = res;
+		}
+	}
+
+	if (checkReset)
+	{
+		std::scoped_lock lock(_sceneMutex);
+		_ResetIfEmpty();
+	}
+
+	if (result.IsEaten) return result;
+	return std::nullopt;
+
+}
+
+void Scene::SetRelativePointerHost(std::function<bool(int, utils::Position2d)> begin,
+	std::function<void(int)> end, std::function<float()> logicalPixelScale)
+{
+	_workspace->SetRelativePointerHost(std::move(begin), std::move(end), std::move(logicalPixelScale),
+		{ _sceneMutex, _stations }, _WorkspaceInputPresentation());
 }

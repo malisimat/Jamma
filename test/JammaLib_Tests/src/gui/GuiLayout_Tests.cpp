@@ -1,3 +1,4 @@
+#include "../gui/WorkspaceTestAccess.h"
 #include <type_traits>
 #include <cmath>
 
@@ -540,8 +541,7 @@ public:
 	std::shared_ptr<gui::GuiMainPanel> SelectionPanel() const { return _workspace->SelectionPanel(); }
 	std::shared_ptr<gui::GuiHud> HudPanel() const { return _workspace->Hud(); }
 	void SetHudForInputTest(const std::shared_ptr<gui::GuiHud>& hud) {
-		for (auto& child : _workspace->Children()) if (child == _workspace->Hud()) child = hud;
-		_workspace->Hud() = hud;
+		gui::WorkspaceTestAccess::ReplaceHud(*_workspace, std::move(hud));
 	}
 };
 

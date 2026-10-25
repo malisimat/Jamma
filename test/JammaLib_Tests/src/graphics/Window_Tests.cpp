@@ -1,3 +1,4 @@
+#include "../gui/WorkspaceTestAccess.h"
 #define GLEW_STATIC
 #include "gtest/gtest.h"
 #include "resources/ResourceLib.h"
@@ -41,19 +42,19 @@ public:
 	{
 		graphics::Camera::Pose pose;
 		pose.Eye = { 0.0f, 0.0f, 420.0f };
-		_workspace->Camera().SetViewTarget(graphics::Camera::View::Front, pose);
-		for (unsigned int tick = 0u; tick < 8u; ++tick) _workspace->Camera().TickBackgroundDrag(0.05f);
+		gui::WorkspaceTestAccess::Camera(*_workspace).SetViewTarget(graphics::Camera::View::Front, pose);
+		for (unsigned int tick = 0u; tick < 8u; ++tick) gui::WorkspaceTestAccess::Camera(*_workspace).TickBackgroundDrag(0.05f);
 		_idleStart = utils::Timer::GetTime() - std::chrono::milliseconds(7900);
 		const auto observation = _cameraRecordings->Snapshot();
-		graphics::CameraPresentationTestAccess::ArmIdle(_workspace->Camera(), _idleStart, *observation, automatic);
+		graphics::CameraPresentationTestAccess::ArmIdle(gui::WorkspaceTestAccess::Camera(*_workspace), _idleStart, *observation, automatic);
 	}
 	bool AutomaticAtOriginalDeadline()
 	{
-		return graphics::CameraPresentationTestAccess::AutomaticAt(_workspace->Camera(),
+		return graphics::CameraPresentationTestAccess::AutomaticAt(gui::WorkspaceTestAccess::Camera(*_workspace),
 			_idleStart + std::chrono::milliseconds(8100), *_cameraRecordings->Snapshot());
 	}
-	bool Automatic() const { return graphics::CameraPresentationTestAccess::Automatic(_workspace->Camera()); }
-	std::uint64_t ActivityRevision() const { return graphics::CameraPresentationTestAccess::ActivityRevision(_workspace->Camera()); }
+	bool Automatic() const { return graphics::CameraPresentationTestAccess::Automatic(gui::WorkspaceTestAccess::Camera(*_workspace)); }
+	std::uint64_t ActivityRevision() const { return graphics::CameraPresentationTestAccess::ActivityRevision(gui::WorkspaceTestAccess::Camera(*_workspace)); }
 	void AddStation(const std::shared_ptr<engine::Station>& station) { _AddStation(station); }
 	std::shared_ptr<gui::GuiPerformanceGroupRow> GroupRow(std::size_t row)
 	{

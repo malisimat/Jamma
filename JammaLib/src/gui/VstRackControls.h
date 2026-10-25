@@ -3,6 +3,7 @@
 #include <functional>
 #include <optional>
 #include "GuiRack.h"
+#include "../actions/KeyAction.h"
 #include "GuiVstRack.h"
 #include "RuntimeDialogs.h"
 #include "../vst/VstEditorWindowManager.h"
@@ -28,6 +29,8 @@ namespace gui
 
 		explicit VstRackControls(Host host) : _host(std::move(host)) {}
 		~VstRackControls() { Reset(); }
+		std::optional<actions::ActionResult> OnKeyboard(const actions::KeyAction& action, base::SelectDepth depth,
+			const std::shared_ptr<base::GuiElement>& hovering, const std::vector<std::shared_ptr<engine::Station>>& stations);
 		void UpdateLocked(base::SelectDepth depth);
 		void Pump();
 		void Reset();

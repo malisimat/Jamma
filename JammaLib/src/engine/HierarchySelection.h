@@ -1,6 +1,7 @@
 #pragma once
 
 #include <memory>
+#include <array>
 #include <vector>
 #include "Station.h"
 
@@ -23,6 +24,8 @@ namespace engine
 			const std::vector<std::shared_ptr<Station>>& Stations;
 		};
 
+		static LockedStations BorrowLocked(const std::vector<std::shared_ptr<Station>>& stations) { return LockedStations(stations); }
+
 		struct Appearance
 		{
 			const std::vector<unsigned char>& HoverPath;
@@ -32,6 +35,18 @@ namespace engine
 			bool ClickPressed;
 			bool MutePressed;
 		};
+		enum class Edit { Select, Deselect, Mute, Unmute };
+		struct TargetChange { Edit Operation; std::vector<unsigned char> Path; };
+		struct EditBatch
+		{
+			bool ClearSelection = false;
+			base::SelectDepth Depth = base::DEPTH_STATION;
+			std::array<TargetChange, 2> Changes{};
+			std::size_t ChangeCount = 0u;
+			Appearance Presentation;
+		};
+		struct Outcome { bool CollapseRacks = false; };
+		static Outcome ApplyLocked(const LockedStations& view, const EditBatch& batch);
 		static void ApplyAppearance(const LockedStations& view, const Appearance& appearance);
 		static std::shared_ptr<base::GuiElement> Resolve(const LockedStations& view, const std::vector<unsigned char>& path);
 		static void SetSelected(const LockedStations& view, const std::shared_ptr<base::GuiElement>& target,

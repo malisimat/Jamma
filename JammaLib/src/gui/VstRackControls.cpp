@@ -362,3 +362,18 @@ void VstRackControls::_PumpStation(const Intent& intent)
 	}
 	if (changed) _host.Commit(); else report(failure.empty() ? "Rack is full or still retiring a removed plugin; retry shortly." : failure);
 }
+
+std::optional<actions::ActionResult> gui::VstRackControls::OnKeyboard(const actions::KeyAction& action, base::SelectDepth depth,
+	const std::shared_ptr<base::GuiElement>& hovering, const std::vector<std::shared_ptr<engine::Station>>& stations)
+{
+	if (action.KeyActionType != actions::KeyAction::KEY_UP || !(action.Modifiers & base::Action::MODIFIER_CTRL) ||
+		!(action.Modifiers & base::Action::MODIFIER_SHIFT)) return std::nullopt;
+	if (action.KeyChar == 86u)
+	{
+		const auto path = utils::PickFile(L"Choose VST plugin");
+		if (path.empty()) return actions::ActionResult::NoAction();
+		return _host.Editors.HandleVstInsert(path, depth, hovering, _host.Commit);
+	}
+	if (action.KeyChar == 69u) return _host.Editors.HandleVstEditorOpen(hovering, depth, stations);
+	return std::nullopt;
+}

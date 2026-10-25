@@ -56,6 +56,14 @@ namespace gui
 		using Change = std::variant<ViewModeChange, GlobalQuantisationChange, ChannelChange,
 			OffsetChange, MetronomeChange, SubdivisionChange, TapTempo>;
 
+		enum class DraftChange { None, Device, Channels, Format, Midi };
+		DraftChange EditDeviceDraft(const DeviceChange& command, const audio::AsioInventory& inventory,
+			const std::vector<io::UserConfig::SerialSettings>& serialDevices, bool allowRateFallback);
+		const io::UserConfig::AudioSettings& AudioDraft() const noexcept { return _audioDraft; }
+		const std::vector<io::UserConfig::MidiSettings>& MidiDraft() const noexcept { return _midiDraft; }
+		void SetAudioDraftFromStream(const audio::AudioStreamParams& params);
+		void SetAudioDraft(io::UserConfig::AudioSettings value) { _audioDraft = std::move(value); }
+		void SetMidiDraft(std::vector<io::UserConfig::MidiSettings> value) { _midiDraft = std::move(value); }
 		SceneSettingsControls(std::uint8_t channel, double offset, io::JamFile::GlobalMidiQuantState quantisation);
 		std::vector<GuiSettingEntry> SettingsEntries() const;
 		std::vector<GuiSettingEntry> SelectionEntries() const;
@@ -87,6 +95,8 @@ namespace gui
 		const auto& AudioInput(std::size_t index) const { return _audioInputs.at(index); }
 
 	private:
+		io::UserConfig::AudioSettings _audioDraft{};
+		std::vector<io::UserConfig::MidiSettings> _midiDraft;
 		static constexpr unsigned int AudioDeviceControlIndex = 7200u;
 		static constexpr unsigned int AudioInputControlIndex = 7201u;
 		static constexpr unsigned int RetryAudioControlIndex = 7205u;

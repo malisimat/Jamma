@@ -1,4 +1,5 @@
 #include "SceneSettingsControls.h"
+#include "../io/RigFile.h"
 #include <algorithm>
 #include <cmath>
 #include <limits>
@@ -444,4 +445,70 @@ SceneSettingsControls::DevicePages SceneSettingsControls::BuildDevicePages(
 	refreshMidi.Size.Height = 40u; refreshMidi.MinSize.Height = 40u; refreshMidi.TextFontSize = graphics::FontOptions::FONT_SMALL;
 	midiEntries.push_back({SettingsPage::Midi, "", std::make_shared<GuiButton>(refreshMidi), RefreshMidiControlIndex});
 	return { std::move(entries), std::move(midiEntries) };
+}
+
+SceneSettingsControls::DraftChange SceneSettingsControls::EditDeviceDraft(const DeviceChange& command,
+	const audio::AsioInventory& inventory, const std::vector<io::UserConfig::SerialSettings>& serialDevices, bool allowRateFallback)
+{
+	if (const auto value = std::get_if<AudioDeviceChange>(&command))
+	{
+		_audioDraft.Name = value->Name;
+		const auto found = std::find_if(inventory.Devices.begin(), inventory.Devices.end(), [this](const auto& d){ return d.Name == _audioDraft.Name; });
+		if (found != inventory.Devices.end() && found->Probed)
+		{
+			_audioDraft.NumChannelsIn = std::min(_audioDraft.NumChannelsIn, found->InputChannels);
+			_audioDraft.NumChannelsOut = std::min(_audioDraft.NumChannelsOut, found->OutputChannels);
+			if (!_audioDraft.NumChannelsIn && !_audioDraft.NumChannelsOut) { _audioDraft.NumChannelsOut = std::min(2u, found->OutputChannels); if (!_audioDraft.NumChannelsOut) _audioDraft.NumChannelsIn = std::min(2u, found->InputChannels); }
+			if (allowRateFallback && std::find(found->SampleRates.begin(), found->SampleRates.end(), _audioDraft.SampleRate) == found->SampleRates.end() && !found->SampleRates.empty()) _audioDraft.SampleRate = found->PreferredSampleRate ? found->PreferredSampleRate : found->SampleRates.front();
+		}
+		return DraftChange::Device;
+	}
+	if (std::holds_alternative<AudioValueChange>(command))
+	{
+		const auto& change = std::get<AudioValueChange>(command);
+		using Field = SceneSettingsControls::AudioField;
+		if (change.Field == Field::Inputs) _audioDraft.NumChannelsIn = change.Value;
+		if (change.Field == Field::Outputs) _audioDraft.NumChannelsOut = change.Value;
+		if (change.Field == Field::SampleRate) _audioDraft.SampleRate = change.Value;
+		if (change.Field == Field::BufferSize) _audioDraft.BufSize = change.Value;
+		return change.Field == AudioField::Inputs || change.Field == AudioField::Outputs ? DraftChange::Channels : DraftChange::Format;
+	}
+	if (std::holds_alternative<MidiDeviceChange>(command))
+	{
+		const auto& choice = std::get<MidiDeviceChange>(command);
+		const bool enabled = choice.Enabled;
+		auto found = std::find_if(_midiDraft.begin(), _midiDraft.end(), [&choice](const auto& d){ return d.Id == choice.RegistryId; });
+		if (found == _midiDraft.end())
+		{
+			std::string id;
+
+			for (size_t suffix = 1u;; ++suffix)
+			{
+				id = "midi-" + std::to_string(suffix);
+				const bool midiCollision = std::any_of(_midiDraft.begin(), _midiDraft.end(), [&](const auto& device) { return device.Id == id; });
+				const bool serialCollision = std::any_of(serialDevices.begin(), serialDevices.end(),
+					[&](const auto& device) { return device.Name == id; });
+				if (id != io::RigFile::KeyboardDevice && !midiCollision && !serialCollision) break;
+			}
+			SetMidiChoiceRegistryId(choice.Choice, id);
+			_midiDraft.push_back({choice.Name, enabled, std::move(id)});
+		}
+		else found->Enabled = enabled;
+		return DraftChange::Midi;
+	}
+	return DraftChange::None;
+}
+
+void SceneSettingsControls::SetAudioDraftFromStream(const audio::AudioStreamParams& params)
+{
+	auto draft = AudioDraft();
+	// Startup may resolve a legacy/default request or negotiate stream geometry.
+	// Show the running configuration without rewriting the accepted rig on disk.
+	draft.Name = params.Name;
+	draft.SampleRate = params.SampleRate;
+	draft.NumChannelsIn = params.NumInputChannels;
+	draft.NumChannelsOut = params.NumOutputChannels;
+	draft.BufSize = params.BufSize;
+	draft.NumBuffers = params.NumBuffers;
+	SetAudioDraft(std::move(draft));
 }
