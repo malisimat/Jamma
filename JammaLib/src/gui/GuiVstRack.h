@@ -142,7 +142,6 @@ namespace gui
 		std::shared_ptr<GuiScrollPanel> _scroll;
 		std::shared_ptr<GuiPanel> _content;
 		std::shared_ptr<Button> _append, _recover, _clearRoutes, _diagnostic, _previous, _next;
-		std::shared_ptr<base::GuiElement> _appendIcon;
 		std::shared_ptr<Expander> _collapse;
 		std::shared_ptr<GuiLabel> _midiLabel;
 		std::array<bool, 16> _allowedChannels{};

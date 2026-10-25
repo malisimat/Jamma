@@ -115,6 +115,7 @@ std::shared_ptr<GuiVstRack::Button> GuiVstRack::_MakeButton(
 	{
 		params.TextureShader = "texture"; params.Texture = texture;
 		params.OverTexture = texture + "_over"; params.DownTexture = texture + "_down";
+		if (texture == "plus") params.OutTexture = texture + "_down_out";
 	}
 	params.Size = {_width, _RowHeight}; params.MinSize = {1u, _RowHeight};
 	auto button = std::make_shared<Button>(params);
@@ -144,19 +145,17 @@ GuiVstRack::GuiVstRack(std::shared_ptr<base::GuiElement> channels,
 		auto icon = std::make_shared<Socket>(socket); _channels->AddChild(icon); _sourceSockets.push_back(icon);
 	}
 	const auto command = [this](Command::Kind kind) { Command result; result.Operation = kind; result.Revision = _model.Revision; return result; };
-	_append = _MakeButton("", "vst_empty", [command] { return command(Command::Kind::Append); });
-	base::GuiElementParams appendIcon;
-	appendIcon.Texture = "station_add"; appendIcon.TextureShader = "texture";
-	appendIcon.Size = {28u, 28u}; appendIcon.MinSize = appendIcon.Size;
-	_appendIcon = std::make_shared<base::GuiElement>(appendIcon);
-	_append->AddChild(_appendIcon);
+	_append = _MakeButton("", "plus", [command] { return command(Command::Kind::Append); });
+	_append->SetMinSize({_RowHeight, _RowHeight});
 	_recover = _MakeButton("Resume", "", [command] { return command(Command::Kind::Recover); });
 	_clearRoutes = _MakeButton("Clear MIDI", "", [command] { return command(Command::Kind::ClearInactiveRoutes); });
 	_diagnostic = _MakeButton("Rack info", "", [command] { return command(Command::Kind::Diagnostic); });
 	_collapse = std::make_shared<Expander>();
 	_collapse->ToggleChannels = [this, life = std::weak_ptr<int>(_lifetime)] { if (!life.expired()) SetChannelsCollapsed(!_collapsed); };
 	auto labelParams = GuiLabelParams::PanelHeader("MIDI", 148, 22u);
-	labelParams.CenterHorizontally = true; labelParams.UseDarkFlatBackground();
+	labelParams.CenterHorizontally = true;
+	labelParams.TextureShader = "texture"; labelParams.Texture = "fader_back_panel";
+	labelParams.TextureOpacity = 0.75f;
 	_midiLabel = std::make_shared<GuiLabel>(labelParams);
 	_channels->AddChild(_midiLabel);
 	_previous = _MakeButton("<", "", [command] { return command(Command::Kind::Diagnostic); });
@@ -343,11 +342,15 @@ void GuiVstRack::_LayoutRows()
 	int bottom = top - static_cast<int>(scrollHeight) - static_cast<int>(_RowPitch);
 	for (const auto& control : {_append, _recover, _clearRoutes, _diagnostic})
 	{
-		control->SetPosition({0, bottom}); control->SetSize({_width, _RowHeight});
+		if (control == _append)
+		{
+			control->SetPosition({std::max(0, (static_cast<int>(_width) - static_cast<int>(_RowHeight)) / 2), bottom + 4});
+			control->SetSize({_RowHeight, _RowHeight});
+		}
+		else { control->SetPosition({0, bottom}); control->SetSize({_width, _RowHeight}); }
 		if (control->IsVisible()) bottom -= static_cast<int>(_RowPitch);
 	}
 	_previous->SetPosition({0, bottom}); _next->SetPosition({static_cast<int>(_width / 2u), bottom});
-	_appendIcon->SetPosition({std::max(0, (static_cast<int>(_width) - 28) / 2), 4});
 	_previous->SetSize({_width / 2u, _RowHeight}); _next->SetSize({_width - _width / 2u, _RowHeight});
 }
 
