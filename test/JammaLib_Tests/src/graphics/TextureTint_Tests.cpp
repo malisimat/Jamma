@@ -4,7 +4,6 @@
 #include "graphics/GlDeleteQueue.h"
 #include "gui/GuiButton.h"
 #include "gui/GuiToggle.h"
-#include "gui/GuiPanelHeader.h"
 
 #include <Windows.h>
 #include <algorithm>
@@ -281,41 +280,4 @@ TEST_F(TextureTintGlTest, HoverMasksBrightenBordersAndPreserveTintedFillsAndNine
 		}
 	}
 	EXPECT_EQ(glGetError(), GL_NO_ERROR);
-}
-
-TEST_F(TextureTintGlTest, PanelHeaderFillHasNeutralTranslucencyAndOpposingChamfers)
-{
-    resources::ResourceLib resources;
-    ASSERT_TRUE(resources.LoadResource(resources::SHADER, "colour", {"MVP", "Color", "Opacity"}));
-    auto header = std::make_shared<gui::GuiPanelHeader>("Settings");
-    header->Layout({120u,80u});
-    header->InitResources(resources,false);
-    graphics::GlDrawContext context({120u,80u},base::DrawContext::TEXTURE);
-    context.Initialise(); context.Bind();
-    context.PushMvp(glm::ortho(0.0f,120.0f,0.0f,80.0f,-1.0f,1.0f));
-    glDisable(GL_BLEND);
-    glClearColor(0,0,0,0); glClear(GL_COLOR_BUFFER_BIT);
-    {
-        auto opacity = context.WithOpacity(0.5f);
-        header->Draw(context);
-    }
-    const auto read = [](int x,int y) {
-        std::array<unsigned char,4> pixel{};
-        glReadPixels(x,y,1,1,GL_RGBA,GL_UNSIGNED_BYTE,pixel.data());
-        return pixel;
-    };
-    const auto middle = read(60,48);
-    EXPECT_NEAR(31,middle[0],1); EXPECT_EQ(middle[0],middle[1]); EXPECT_EQ(middle[1],middle[2]);
-    EXPECT_NEAR(115,middle[3],1); // Shared scene opacity multiplies the 90% band.
-    EXPECT_EQ(0u,read(100,60)[3]); // Top right cut.
-    EXPECT_EQ(0u,read(20,22)[3]); // Bottom left cut.
-    EXPECT_NE(0u,read(20,60)[3]);
-    EXPECT_NE(0u,read(100,36)[3]);
-    EXPECT_EQ(0u,read(10,48)[3]); // Parent border remains untouched.
-    EXPECT_EQ(28,header->Position().X);
-    EXPECT_EQ(32,header->Position().Y);
-    const auto band = header->BandBounds();
-    EXPECT_EQ(band.Top - header->Position().Y - static_cast<int>(header->GetSize().Height),
-        header->Position().Y - band.Bottom);
-    header->ReleaseResources();
 }

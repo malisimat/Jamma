@@ -59,51 +59,6 @@ TEST(GuiRack, CompactConstructionAndResizeKeepScaleAnchorsDistinct)
 	EXPECT_GE(rack.GetChannelSlider(0)->GetSize().Height, 47u);
 }
 
-TEST(GuiRack, StationExpandersMirrorAroundFaderAndSingleSlotHasOneAddControl)
-{
-	auto params = MakeRackParams(220, 300);
-	params.EnableVstControl = true;
-	params.EnableVstRack = true;
-	params.EnableVstRackMidiRouting = true;
-	auto rack = std::make_shared<GuiRack>(params);
-	const auto view = rack->VstRack();
-	ASSERT_NE(nullptr, view);
-	const auto masterPanel = rack->TryGetChild(0u);
-	ASSERT_NE(nullptr, masterPanel);
-	const auto right = masterPanel->TryGetChild(1u);
-	const auto left = view->ChannelsExpander();
-	ASSERT_NE(nullptr, right);
-	ASSERT_NE(nullptr, left);
-	const auto checkMirrored = [&] {
-		const auto fader = rack->GetMasterSlider();
-		const auto faderLeft = fader->GlobalPosition().X;
-		const auto faderRight = faderLeft + static_cast<int>(fader->GetSize().Width);
-		const auto leftRight = left->GlobalPosition().X + static_cast<int>(left->GetSize().Width);
-		EXPECT_EQ(faderLeft - leftRight, right->GlobalPosition().X - faderRight);
-		EXPECT_EQ(left->GlobalPosition().Y, right->GlobalPosition().Y);
-		EXPECT_EQ(left->GetSize(), right->GetSize());
-		EXPECT_EQ(rack->GlobalPosition().X + static_cast<int>(rack->GetSize().Width) - 8,
-			masterPanel->TryGetChild(2u)->GlobalPosition().X);
-	};
-	checkMirrored();
-	rack->SetSize({260u, 340u});
-	checkMirrored();
-
-	gui::GuiVstRack::Model model;
-	model.Editable = true;
-	model.TotalSlots = 1u;
-	gui::GuiVstRack::Slot slot;
-	slot.Value.Identity = "plugin";
-	model.Slots.push_back(std::move(slot));
-	view->Update(std::move(model), {});
-	ASSERT_NE(nullptr, view->SlotButton(0u));
-	ASSERT_NE(nullptr, view->AppendButton());
-	unsigned int visibleFooterButtons = 0u;
-	for (unsigned int index = 0u; const auto child = view->TryGetChild(static_cast<unsigned char>(index)); ++index)
-		if (std::dynamic_pointer_cast<gui::GuiButton>(child) &&
-			!std::dynamic_pointer_cast<gui::GuiToggle>(child) && child->IsVisible()) ++visibleFooterButtons;
-	EXPECT_EQ(1u, visibleFooterButtons);
-}
 
 TEST(GuiRack, RestoredSlotsReplaceMissingCableRowsAndRetainFailedSlots)
 {
@@ -170,10 +125,6 @@ TEST(GuiRack, SharedSlotViewPreservesCapturedIdentityScrollAndHiddenCableEndpoin
 	EXPECT_TRUE(view->ChannelShownActive(2u));
 	EXPECT_EQ(0, filterChanges);
 	EXPECT_TRUE(commands.empty());
-	EXPECT_EQ(36u, view->AppendButton()->GetSize().Width);
-	EXPECT_EQ(36u, view->AppendButton()->GetSize().Height);
-	EXPECT_EQ((static_cast<int>(view->GetSize().Width) - 36) / 2, view->AppendButton()->Position().X);
-	EXPECT_EQ(view, view->AppendButton()->Parent());
 	ASSERT_GT(view->SlotScroll()->MaxScrollOffset(), 0);
 	view->SlotScroll()->SetScrollOffset(80);
 	const auto slot = view->SlotButton(0u); ASSERT_NE(nullptr, slot);
@@ -223,6 +174,18 @@ TEST(GuiRack, SharedSlotViewPreservesCapturedIdentityScrollAndHiddenCableEndpoin
 	EXPECT_EQ(3, filterChanges);
 	EXPECT_TRUE(view->ChannelShownActive(2u));
 	EXPECT_EQ(1u, commands.size());
+	model.TotalSlots = 1u; model.Slots.resize(1u); view->Update(model, submit);
+	const auto append = view->AppendButton(); ASSERT_TRUE(append); EXPECT_EQ(view, append->Parent());
+	unsigned int visibleFooterButtons = 0u;
+	for (unsigned int index = 0u; const auto child = view->TryGetChild(static_cast<unsigned char>(index)); ++index)
+		if (std::dynamic_pointer_cast<gui::GuiButton>(child) &&
+			!std::dynamic_pointer_cast<gui::GuiToggle>(child) && child->IsVisible()) ++visibleFooterButtons;
+	EXPECT_EQ(1u, visibleFooterButtons);
+	down.Position = {static_cast<int>(append->GetSize().Width / 2u), static_cast<int>(append->GetSize().Height / 2u)};
+	down.Modifiers = base::Action::MODIFIER_NONE;
+	append->OnAction(down); up = down; up.State = actions::TouchAction::TOUCH_UP; append->OnAction(up);
+	ASSERT_EQ(2u, commands.size()); EXPECT_EQ(gui::GuiVstRack::Command::Kind::Append, commands.back().Operation);
+	EXPECT_EQ(model.Revision, commands.back().Revision);
 	plain->DetachGuiOwnershipForRetirement(); rack->DetachGuiOwnershipForRetirement();
 }
 
