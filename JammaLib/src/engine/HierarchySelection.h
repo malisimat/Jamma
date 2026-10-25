@@ -9,7 +9,8 @@ namespace engine
 	class Scene;
 
 	// Committed hierarchy selection under the caller's existing scene lock.
-	// No gesture recognition, rack/editor coordination, callbacks, or locking.
+	// Applies resulting hierarchy presentation too; no gesture recognition,
+	// rack/editor coordination, callbacks, or locking.
 	class HierarchySelection
 	{
 	public:
@@ -22,6 +23,16 @@ namespace engine
 			const std::vector<std::shared_ptr<Station>>& Stations;
 		};
 
+		struct Appearance
+		{
+			const std::vector<unsigned char>& HoverPath;
+			bool ClearPicking;
+			bool HighlightHover;
+			bool HighlightMidiSiblings;
+			bool ClickPressed;
+			bool MutePressed;
+		};
+		static void ApplyAppearance(const LockedStations& view, const Appearance& appearance);
 		static std::shared_ptr<base::GuiElement> Resolve(const LockedStations& view, const std::vector<unsigned char>& path);
 		static void SetSelected(const LockedStations& view, const std::shared_ptr<base::GuiElement>& target,
 			base::SelectDepth depth, bool selected);

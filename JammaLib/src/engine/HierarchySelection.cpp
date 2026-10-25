@@ -132,3 +132,72 @@ void HierarchySelection::SelectAllLocal(const LockedStations& view, base::Select
 		}
 	}
 }
+
+void HierarchySelection::ApplyAppearance(const LockedStations& view, const Appearance& appearance)
+{
+	// Presentation follows committed changes while the caller still holds the
+	// hierarchy lock; no render observer sees intermediate click/paint shading.
+	if (appearance.ClearPicking)
+		for (const auto& station : view.Stations) station->SetPicking3d(false);
+	if (appearance.HighlightHover)
+		if (auto hovered = Resolve(view, appearance.HoverPath)) hovered->SetPicking3d(true);
+	if (appearance.HighlightMidiSiblings)
+	{
+		if (auto hovered = Resolve(view, appearance.HoverPath))
+		{
+			if (auto take = std::dynamic_pointer_cast<LoopTake>(hovered->Parent()))
+			{
+				for (const auto& midiLoop : take->GetMidiLoops())
+					if (midiLoop->Model() == hovered)
+					{
+						for (const auto& sibling : take->GetMidiLoops())
+							if (auto model = sibling->Model()) model->SetPicking3d(true);
+						break;
+					}
+			}
+		}
+	}
+	// A click has a short-lived pressed appearance. Keep it separate from
+	// persistent selection and hover, and clear it when the gesture becomes paint.
+	for (const auto& station : view.Stations)
+	{
+		station->SetClickPressed(false);
+		for (const auto& take : station->GetLoopTakes())
+		{
+			for (const auto& loop : take->GetLoops())
+				if (auto model = loop->Model()) model->SetClickPressed(false);
+			for (const auto& midiLoop : take->GetMidiLoops())
+				if (auto model = midiLoop->Model()) model->SetClickPressed(false);
+		}
+	}
+	if (appearance.ClickPressed)
+	{
+		if (auto pressed = Resolve(view, appearance.HoverPath))
+		{
+			const bool mutePressed = appearance.MutePressed;
+			const auto pressTakeLoops = [mutePressed](const std::shared_ptr<LoopTake>& take) {
+				for (const auto& loop : take->GetLoops())
+					if (auto model = loop->Model()) model->SetClickPressed(true, mutePressed);
+				for (const auto& midiLoop : take->GetMidiLoops())
+					if (auto model = midiLoop->Model()) model->SetClickPressed(true, mutePressed);
+			};
+			if (auto station = std::dynamic_pointer_cast<Station>(pressed))
+			{
+				station->SetClickPressed(true, mutePressed);
+				for (const auto& take : station->GetLoopTakes())
+					pressTakeLoops(take);
+			}
+			else if (auto take = std::dynamic_pointer_cast<LoopTake>(pressed))
+				pressTakeLoops(take);
+			else if (auto loop = std::dynamic_pointer_cast<Loop>(pressed))
+			{
+				if (auto model = loop->Model()) model->SetClickPressed(true, mutePressed);
+			}
+			else if (auto take = std::dynamic_pointer_cast<LoopTake>(pressed->Parent()))
+			{
+				for (const auto& midiLoop : take->GetMidiLoops())
+					if (auto model = midiLoop->Model()) model->SetClickPressed(true, mutePressed);
+			}
+		}
+	}
+}

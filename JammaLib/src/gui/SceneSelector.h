@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <vector>
 #include <algorithm>
 #include "../base/Jammable.h"
@@ -38,6 +39,21 @@ namespace gui
 		virtual actions::ActionResult OnAction(actions::TouchMoveAction action) override;
 		virtual actions::ActionResult OnAction(actions::KeyAction action) override;
 
+		enum class HierarchyEdit { Select, Deselect, Mute, Unmute };
+		struct TargetChange { HierarchyEdit Edit; std::vector<unsigned char> Path; };
+		struct SelectionUpdate
+		{
+			bool ClearSelection = false;
+			bool ClearPicking = false;
+			bool HighlightHover = false;
+			bool HighlightMidiSiblings = false;
+			bool ClickPressed = false;
+			bool MutePressed = false;
+			std::vector<unsigned char> HoverPath;
+			std::array<TargetChange, 2> Changes{};
+			std::size_t ChangeCount = 0u;
+		};
+		SelectionUpdate SelectionChanges(actions::ActionResultType result) const;
 		SelectMode CurrentMode() const;
 		base::SelectDepth CurrentSelectDepth() const;
 		void SetSelectDepth(base::SelectDepth level);
