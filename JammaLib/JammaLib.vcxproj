@@ -263,6 +263,7 @@
     <ClInclude Include="src\graphics\UnattendedCameraController.h" />
     <ClInclude Include="src\graphics\CameraBounds.h" />
     <ClInclude Include="src\graphics\CameraFraming.h" />
+    <ClInclude Include="src\graphics\Compositor.h" />
     <ClInclude Include="src\graphics\Camera.h" />
     <ClInclude Include="include\Constants.h" />
     <ClInclude Include="src\gui\SceneSelector.h" />
@@ -463,6 +464,7 @@
     <ClCompile Include="src\graphics\QuantisationDivisionModel.cpp" />
     <ClCompile Include="src\graphics\StationModel.cpp" />
     <ClCompile Include="src\graphics\VU.cpp" />
+    <ClCompile Include="src\graphics\Compositor.cpp" />
     <ClCompile Include="src\graphics\Camera.cpp" />
     <ClCompile Include="src\gui\SceneSelector.cpp" />
     <ClCompile Include="src\gui\GuiRadio.cpp" />

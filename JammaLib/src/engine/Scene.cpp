@@ -42,11 +42,6 @@ Scene::Scene(SceneParams params,
 	_isSceneQuitting(false),
 	_isSceneReset(true),
 	_viewProj(glm::mat4()),
-	_overlayViewProj(glm::mat4()),
-	_skyboxViewProj(glm::mat4()),
-	_skyboxStarted(false),
-	_skyboxStartTime(Timer::GetZero()),
-	_tempoLabel(nullptr),
 	_selector(nullptr),
 	_globalMidiQuantState(io::JamFile::GlobalMidiQuantState::Off),
 	_transportOffsetLoopFrac(0.0),
@@ -105,19 +100,6 @@ Scene::Scene(SceneParams params,
 			timing.MasterLoopSamps, type, take, loop);
 	});
 	_quantisation.SetSeedUsesPowers(_userConfig.Loop.SeedUsesPowers);
-
-	GuiLabelParams labelParams;
-	labelParams.String = "BPM --- / BPI ---";
-	labelParams.Ellipsize = true;
-	labelParams.ClipText = true;
-	labelParams.VerticalAlign = GuiTextVerticalAlign::Center;
-	labelParams.Position = { 0, 3 };
-	labelParams.TextInsetX = GuiStyle::TextPadding;
-	labelParams.Size = { GuiStyle::TempoColumnMaxWidth, 22u };
-	_tempoLabel = std::make_unique<GuiLabel>(labelParams);
-	labelParams.String = "Jamma v" LIB_VERSION;
-	_versionLabel = std::make_unique<GuiLabel>(labelParams);
-
 
 	GuiHudParams hudParams;
 	hudParams.Size = params.Size;
@@ -410,12 +392,8 @@ void Scene::Draw(DrawContext& ctx)
 		_hudPanel->SetEditModeAlpha(_quantisationInteraction.PanelAlpha());
 	}
 
-	glDisable(GL_DEPTH_TEST);
-
-	// Draw overlays
-	auto &glCtx = dynamic_cast<GlDrawContext&>(ctx);
-	glCtx.ClearMvp();
-	glCtx.PushMvp(_overlayViewProj);
+	auto& glCtx = dynamic_cast<GlDrawContext&>(ctx);
+	_compositor.BeginOverlay(glCtx);
 
 	_settingsControls->RefreshChannelPresentation(_inputSubsystem->ForcedChannelOverride());
 
@@ -460,25 +438,9 @@ void Scene::Draw(DrawContext& ctx)
 				child->Draw(ctx);
 	}
 	if (_hudPanel) _hudPanel->Draw(ctx);
-	const int statusWidth = GuiStyle::StatusBarWidth(static_cast<int>(_sizeParams.Size.Width));
-	const int tempoWidth = GuiStyle::TempoColumnWidth(statusWidth);
-	std::string tempoText = "BPM --- / BPI ---";
-	if (const auto tempo = _quantisation.CurrentTempoStatus(_CurrentSampleRate()))
-	{
-		std::ostringstream text;
-		text << std::fixed << std::setprecision(0) << "BPM " << std::setw(3) << tempo->Bpm
-			<< " / BPI " << std::setw(3) << tempo->Bpi;
-		tempoText = text.str();
-	}
-	_tempoLabel->SetString(tempoText);
-	const int statusHeight = std::min(GuiStyle::StatusBarHeight, static_cast<int>(_sizeParams.Size.Height));
-	_tempoLabel->SetPosition({ 0, std::max(0, (statusHeight - 22) / 2) });
-	_tempoLabel->SetSize({ static_cast<unsigned int>(tempoWidth), 22u });
-	if (tempoWidth > 0 && statusHeight >= 22) _tempoLabel->Draw(ctx);
-	const int versionWidth = GuiStyle::VersionColumnWidth(statusWidth);
-	_versionLabel->SetPosition({ statusWidth - versionWidth, std::max(0, (statusHeight - 22) / 2) });
-	_versionLabel->SetSize({ static_cast<unsigned int>(versionWidth), 22u });
-	if (versionWidth > 0 && statusHeight >= 22) _versionLabel->Draw(ctx);
+	const auto tempo = _quantisation.CurrentTempoStatus(_CurrentSampleRate());
+	_compositor.DrawStatus(ctx, _sizeParams.Size, tempo
+		? std::optional<Compositor::Tempo>{ { tempo->Bpm, tempo->Bpi } } : std::nullopt);
 	if (!_popupManager.IsOpen()) _loopEditor.Draw(ctx);
 	{
 		auto opacity = ctx.WithOpacity(1.0f - _quantisationInteraction.PanelAlpha());
@@ -487,34 +449,13 @@ void Scene::Draw(DrawContext& ctx)
 	}
 	_popupManager.Draw(ctx);
 
-	glCtx.PopMvp();
+	_compositor.EndOverlay(glCtx);
 }
 
 void Scene::DrawBackground(DrawContext& ctx)
 {
 	std::scoped_lock lock(_sceneMutex);
-	const auto ar = _sizeParams.Size.Height > 0
-		? static_cast<float>(_sizeParams.Size.Width) / _sizeParams.Size.Height : 1.0f;
-	const auto view = _camera.ViewMatrix();
-	auto& glCtx = dynamic_cast<GlDrawContext&>(ctx);
-	glEnable(GL_DEPTH_TEST);
-	if (!_skyboxStarted)
-	{
-		_skyboxStartTime = Timer::GetTime();
-		_skyboxStarted = true;
-	}
-	{
-		auto t = (float)Timer::GetElapsedSeconds(_skyboxStartTime, Timer::GetTime());
-		const auto rotation = Skybox::AnimationTransform(t);
-		auto skyboxProjection = _camera.SkyboxProjection(ar);
-		_skyboxViewProj = skyboxProjection * glm::mat4(glm::mat3(view)) * rotation;
-	}
-
-	glCtx.ClearMvp();
-	glCtx.PushMvp(_skyboxViewProj);
-	_skybox.Draw(glCtx);
-	glCtx.PopMvp();
-
+	_compositor.DrawBackground(dynamic_cast<GlDrawContext&>(ctx), _camera, _sizeParams.Size);
 }
 
 void Scene::Draw3d(DrawContext& ctx,
@@ -523,29 +464,12 @@ void Scene::Draw3d(DrawContext& ctx,
 {
 	std::scoped_lock lock(_sceneMutex);
 
-	auto ar = _sizeParams.Size.Height > 0 ?
-		(float)_sizeParams.Size.Width / (float)_sizeParams.Size.Height :
-		1.0f;
-	auto projection = _camera.Projection(ar, _StationCentre(_stations));
-	auto view = _camera.ViewMatrix();
-	_viewProj = projection * view;
-	_UpdateHudStationAnchors();
-
-	if (PASS_SCENE == pass)
-		glEnable(GL_DEPTH_TEST);
-	else
-		glDisable(GL_DEPTH_TEST);
-
 	auto& glCtx = dynamic_cast<GlDrawContext&>(ctx);
-
-
-	glCtx.ClearMvp();
-	glCtx.PushMvp(projection);
-	glCtx.PushMvp(view);
+	_viewProj = _compositor.BeginWorld(glCtx, _camera, _sizeParams.Size, _StationCentre(_stations), pass);
+	_UpdateHudStationAnchors();
 	if (PASS_PICKER == pass && _loopEditor.IsEngaged())
 	{
-		glCtx.PopMvp();
-		glCtx.PopMvp();
+		_compositor.EndProjection(glCtx);
 		return;
 	}
 
@@ -556,24 +480,10 @@ void Scene::Draw3d(DrawContext& ctx,
 		_quantisationInteraction.Tick(now);
 	}
 
-	glCtx.SetUniform("SelectionActive", PASS_SCENE == pass && _HasSelection() ? 1.0f : 0.0f);
-	glCtx.SetUniform("SceneDim", _loopEditor.SurroundingDim());
-	glCtx.SetUniform("EditorMorph", 0.0f);
-	glCtx.SetUniform("EditorTime", _skyboxStarted
-		? static_cast<float>(Timer::GetElapsedSeconds(_skyboxStartTime, Timer::GetTime())) : 0.0f);
-	const auto probeId = PASS_SCENE == pass && _loopEditor.IsEngaged()
-		? _skybox.CubemapId() : 0u;
-	// Active cubemap and material samplers must use distinct units even when
-	// editor lighting is disabled; otherwise GL rejects the draw's sampler types.
-	glCtx.SetUniform("ProbeSampler", 3);
-	glCtx.SetUniform("ProbeStrength", probeId != 0u ? 1.0f : 0.0f);
-	if (probeId != 0u)
-	{
-		glCtx.SetUniform("EditorProbeEye", _loopEditor.ProbeEyeLocal());
-		glActiveTexture(GL_TEXTURE3);
-		glBindTexture(GL_TEXTURE_CUBE_MAP, probeId);
-		glActiveTexture(GL_TEXTURE0);
-	}
+	const bool probeBound = _compositor.SetWorldPresentation(glCtx,
+		{ PASS_SCENE == pass && _HasSelection(), _loopEditor.SurroundingDim(),
+			PASS_SCENE == pass && _loopEditor.IsEngaged(),
+			PASS_SCENE == pass && _loopEditor.IsEngaged() ? _loopEditor.ProbeEyeLocal() : glm::vec3{} });
 	_loopEditor.ApplyToModels();
 	if (_selectionPanel && (!_selectionPanel->IsVisible() || !_selectionPanel->IsEnabled()
 		|| _popupManager.IsOpen() || _loopEditor.IsEngaged() || _EditControlsSuppressed()))
@@ -631,19 +541,7 @@ void Scene::Draw3d(DrawContext& ctx,
 	{
 		station->Draw3d(ctx, 1, pass);
 	}
-	glCtx.SetGroupPreview(false, glm::vec3(1.0f), {});
-	glCtx.ApplyGroupPreview({});
-	glCtx.SetUniform("SelectionActive", 0.0f);
-	glCtx.SetUniform("SceneDim", 1.0f);
-	if (probeId != 0u)
-	{
-		glActiveTexture(GL_TEXTURE3);
-		glBindTexture(GL_TEXTURE_CUBE_MAP, 0);
-		glActiveTexture(GL_TEXTURE0);
-	}
-
-	glCtx.PopMvp();
-	glCtx.PopMvp();
+	_compositor.EndWorld(glCtx, probeBound);
 }
 
 bool Scene::IsCameraTriggerKey(unsigned int key) const
@@ -905,9 +803,7 @@ void Scene::_InitResources(ResourceLib& resourceLib, bool forceInit)
 {
 	std::scoped_lock lock(_sceneMutex);
 
-	_skybox.InitResources(resourceLib, forceInit);
-	_tempoLabel->InitResources(resourceLib, forceInit);
-	_versionLabel->InitResources(resourceLib, forceInit);
+	_compositor.InitResources(resourceLib, forceInit);
 	_loopEditor.InitResources(resourceLib, forceInit);
 	_selector->InitResources(resourceLib, forceInit);
 	for (auto& child : _guiChildren)
@@ -929,9 +825,7 @@ void Scene::_ReleaseResources()
 	_runtimeRendererReady = false;
 	_runtimeDialogs.ReleaseResources();
 	{ std::scoped_lock lock(_sceneMutex); for (const auto& station : _stations) station->FinishPresentationMove(); }
-	_skybox.ReleaseResources();
-	_tempoLabel->ReleaseResources();
-	_versionLabel->ReleaseResources();
+	_compositor.ReleaseResources();
 	_loopEditor.ReleaseResources();
 	_selector->ReleaseResources();
 	for (auto& child : _guiChildren)
@@ -3435,13 +3329,7 @@ void Scene::_InitSize()
 		1.0f;
 	auto projection = _camera.Projection(ar, _StationCentre(_stations));
 	_viewProj = projection * _camera.ViewMatrix();
-	// _skyboxViewProj is updated in DrawBackground(); do not reset it here
-
-	auto hScale = _sizeParams.Size.Width > 0 ? 2.0f / (float)_sizeParams.Size.Width : 1.0f;
-	auto vScale = _sizeParams.Size.Height > 0 ? 2.0f / (float)_sizeParams.Size.Height : 1.0f;
-	_overlayViewProj = glm::mat4(1.0);
-	_overlayViewProj = glm::translate(_overlayViewProj, glm::vec3(-1.0f, -1.0f, -1.0f));
-	_overlayViewProj = glm::scale(_overlayViewProj, glm::vec3(hScale, vScale, 1.0f));
+	_compositor.Resize(_sizeParams.Size);
 
 	if (_hudPanel)
 	{

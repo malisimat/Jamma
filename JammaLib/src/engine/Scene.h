@@ -27,7 +27,7 @@
 #include "../graphics/Camera.h"
 #include "../graphics/UnattendedCameraController.h"
 #include "../graphics/GlDrawContext.h"
-#include "../graphics/Skybox.h"
+#include "../graphics/Compositor.h"
 #include "../gui/GuiLabel.h"
 #include "../gui/NinjamTempoPrompt.h"
 #include "../gui/GuiFocusManager.h"
@@ -466,11 +466,7 @@ namespace engine
 		std::array<char, 4096> _jobThreadFailureDetail{}; // Job writes once, before release-publishing failure.
 		std::atomic_bool _isSceneReset;
 		glm::mat4 _viewProj;
-		glm::mat4 _overlayViewProj;
-		glm::mat4 _skyboxViewProj;
-		bool _skyboxStarted;
-		Time _skyboxStartTime;
-		graphics::Skybox _skybox;
+		graphics::Compositor _compositor;
 		std::unique_ptr<audio::AudioHost> _audioEngine;
 		std::unique_ptr<io::IoInputSubsystem> _inputSubsystem;
 		std::optional<midi::MidiInputInventory> _midiInputInventory;
@@ -556,8 +552,6 @@ namespace engine
 		std::atomic_bool _quantisationInputResetRequested{ false };
 		io::JamFile::GlobalMidiQuantState _globalMidiQuantState = io::JamFile::GlobalMidiQuantState::Mixed;
 		double _transportOffsetLoopFrac = 0.0;
-		std::unique_ptr<gui::GuiLabel> _tempoLabel;
-		std::unique_ptr<gui::GuiLabel> _versionLabel;
 		std::unique_ptr<gui::SceneSelector> _selector;
 		std::shared_ptr<gui::GuiMainPanel> _mainPanel;
 		std::shared_ptr<gui::GuiMainPanel> _selectionPanel;

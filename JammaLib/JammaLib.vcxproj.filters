@@ -600,6 +600,9 @@
     <ClInclude Include="src\graphics\ImageFullscreen.h">
       <Filter>src\graphics</Filter>
     </ClInclude>
+    <ClInclude Include="src\graphics\Compositor.h">
+      <Filter>src\graphics</Filter>
+    </ClInclude>
     <ClInclude Include="src\graphics\Skybox.h">
       <Filter>src\graphics</Filter>
     </ClInclude>
@@ -1017,6 +1020,9 @@
       <Filter>src\gui</Filter>
     </ClCompile>
     <ClCompile Include="src\graphics\ImageFullscreen.cpp">
+      <Filter>src\graphics</Filter>
+    </ClCompile>
+    <ClCompile Include="src\graphics\Compositor.cpp">
       <Filter>src\graphics</Filter>
     </ClCompile>
     <ClCompile Include="src\graphics\Skybox.cpp">
