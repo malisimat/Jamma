@@ -13,6 +13,7 @@
 #include "audio/ChannelMixer.h"
 #include "audio/AudioMixer.h"
 #include "audio/AudioHost.h"
+#include "midi/MidiLoop.h"
 #include "actions/TriggerAction.h"
 #include "actions/GuiAction.h"
 #ifdef _DEBUG
@@ -1956,6 +1957,138 @@ TEST(AudioCallbackRealtime, AllocationProbeDetectsHeapAllocationAndFree)
 
 	EXPECT_GE(counts.Allocations + counts.Reallocations, 1u);
 	EXPECT_GE(counts.Frees, 1u);
+}
+
+// The functional MIDI fake grows vectors; this measured-callback fake retains
+// only bounded events/counters and does no assertions or formatting in dispatch.
+class CallbackMidiFixedPlugin final : public vst::IVstPlugin
+{
+public:
+	bool PreInit(const std::wstring&) override { return true; }
+	bool Load(const std::wstring&, float, unsigned int, unsigned int channels, vst::HostedLayoutMode) override
+	{ _loaded = true; _channels = channels; return true; }
+	void Unload() override { _loaded = false; }
+	void ProcessBlock(float*, int32_t) noexcept override { _processed = true; }
+	void ProcessBlockStereo(float*, float*, int32_t) noexcept override { _processed = true; }
+	void ProcessBlockMulti(float* const*, int32_t, int32_t) noexcept override { _processed = true; ++ProcessCalls; }
+	void BeginMidiBlock(std::uint32_t, std::uint32_t) noexcept override { _processed = false; }
+	void SendMidiEvent(const midi::MidiEvent& event, bool realtime) noexcept override { (void)TrySendMidiEvent(event, realtime); }
+	bool TrySendMidiEvent(const midi::MidiEvent& event, bool) noexcept override
+	{
+		if (RejectSustainRelease && event.MessageType() == 0xb0u && event.data1 == 64u && event.data2 < 64u)
+		{ ++RejectedReleases; return false; }
+		if (_eventCount == _events.size()) { Overflow = true; return false; }
+		_events[_eventCount++] = event;
+		return true;
+	}
+	bool MidiBlockWasProcessed() const noexcept override { return _processed; }
+	void SetParameter(unsigned int, float) noexcept override {}
+	float GetParameter(unsigned int) const noexcept override { return 0.0f; }
+	bool OpenEditor(HWND) override { return false; }
+	void CloseEditor() override {}
+	utils::Size2d GetEditorSize() const noexcept override { return {}; }
+	bool IsLoaded() const noexcept override { return _loaded; }
+	const std::string& Name() const noexcept override { return _name; }
+	void SetBypassed(bool bypassed) noexcept override { _bypassed = bypassed; }
+	bool IsBypassed() const noexcept override { return _bypassed; }
+	vst::RenderRole Role() const noexcept override { return vst::RenderRole::Instrument; }
+	vst::MidiInputCapabilities MidiInput() const noexcept override { return {true, true, true}; }
+	unsigned int HostedChannelCount() const noexcept override { return _channels; }
+	std::size_t Count(std::uint8_t status, std::uint8_t data1, std::uint8_t data2) const
+	{
+		return std::count_if(_events.begin(), _events.begin() + _eventCount, [=](const auto& event) {
+			return event.status == status && event.data1 == data1 && event.data2 == data2;
+		});
+	}
+	bool HasNoteAt(std::uint8_t note, std::uint32_t sample) const
+	{
+		return std::any_of(_events.begin(), _events.begin() + _eventCount, [=](const auto& event) {
+			return event.IsNoteOn() && event.data1 == note && event.sampleOffset == sample;
+		});
+	}
+	bool RejectSustainRelease = false, Overflow = false;
+	unsigned int RejectedReleases = 0u, ProcessCalls = 0u;
+private:
+	std::array<midi::MidiEvent, 128u> _events{};
+	std::size_t _eventCount = 0u;
+	std::string _name = "fixed-midi";
+	unsigned int _channels = 0u;
+	bool _loaded = false, _bypassed = false, _processed = false;
+};
+
+TEST(AudioCallbackRealtime, MidiPublicationCableCancellationAndRetirementRetryDoNotUseHeap)
+{
+	using midi::MidiEvent;
+	audio::AudioHost host(io::UserConfig{});
+	auto station = MakeStation(1u);
+	const auto addPlugin = [&](const wchar_t* path) {
+		auto plugin = std::make_shared<CallbackMidiFixedPlugin>();
+		actions::JobAction job; job.JobActionType = actions::JobAction::JOB_LOADVST;
+		job.VstPath = path; job.PreInitPlugin = plugin;
+		station->OnAction(job); station->CommitChanges();
+		return plugin;
+	};
+	auto removed = addPlugin(L"fixed-removed.dll"), survivor = addPlugin(L"fixed-survivor.dll");
+	station->SetAllowedMidiChannels({1, 2});
+	const audio::AudioStreamParams params{"test", 48000u, 2u, 128u, 0u, 0u, 0u, 1u};
+	auto stations = std::make_shared<const std::vector<std::shared_ptr<Station>>>(std::vector{station});
+	audio::AudioHostRealtimeTestAccess::Prepare(host, stations, params);
+	std::array<float, 128u> output{};
+	ASSERT_EQ(0, audio::AudioHostRealtimeTestAccess::InvokeCallback(host, output.data(), nullptr, 128u)); // Warm host and plugins.
+	ASSERT_GT(removed->ProcessCalls, 0u); ASSERT_GT(survivor->ProcessCalls, 0u);
+
+	// All fixture storage, recorded material, topology publication and route edits
+	// are prepared outside the measured full AudioHost callback invocations.
+	auto take = MakeTake();
+	take->Record({}, station->Name(), {0u}, {"source"}); take->Play(0u, 1000u, 0u);
+	const std::array events{
+		MidiEvent{0u, 0xb0u, 64u, 127u}, MidiEvent::MakeNoteOn(0u, 0u, 60u, 100u),
+		MidiEvent{0u, 0xb1u, 64u, 127u}, MidiEvent::MakeNoteOn(0u, 1u, 62u, 100u),
+		MidiEvent{128u, 0xb0u, 64u, 0u}, MidiEvent::MakeNoteOff(512u, 0u, 60u),
+		MidiEvent{512u, 0xb1u, 64u, 0u}, MidiEvent::MakeNoteOff(512u, 1u, 62u)};
+	take->GetMidiLoops().at(0u)->ReplaceRecordedEvents(events.data(), events.size(), 1000u);
+	station->AddTake(take); station->CommitChanges();
+	ASSERT_TRUE(station->SetLiveVstChannelRoute(0u, {true, {removed->StateId(), survivor->StateId()}}, station->RackRevision()));
+	ASSERT_TRUE(station->ConfigureRecordedMidiCompensation(256u));
+	unsigned int measuredBlocks = 0u;
+	const auto measuredCallback = [&] {
+		AudioCallbackAllocationProbe::Counts counts;
+		int result = -1;
+		{
+			AudioCallbackAllocationProbe::Scope probe;
+			result = audio::AudioHostRealtimeTestAccess::InvokeCallback(host, output.data(), nullptr, 128u);
+			counts = probe.GetCounts();
+		}
+		++measuredBlocks;
+		EXPECT_EQ(0, result);
+		EXPECT_EQ(0u, counts.Allocations); EXPECT_EQ(0u, counts.Reallocations); EXPECT_EQ(0u, counts.Frees);
+	};
+	measuredCallback(); // 128: newly published MIDI attacks wait for compensation.
+	EXPECT_EQ(0u, removed->Count(0x90u, 60u, 100u)); EXPECT_EQ(0u, survivor->Count(0x90u, 60u, 100u));
+	ASSERT_TRUE(station->SetLiveVstChannelRoute(0u, {true, {survivor->StateId()}}, station->RackRevision()));
+	measuredCallback(); // 256: cancel only the disconnected channel's future attacks.
+	measuredCallback(); // 384: surviving delayed attacks reach both retained routes.
+	EXPECT_EQ(0u, removed->Count(0x90u, 60u, 100u)); EXPECT_EQ(0u, removed->Count(0xb0u, 64u, 127u));
+	EXPECT_TRUE(survivor->HasNoteAt(60u, 384u)); EXPECT_TRUE(removed->HasNoteAt(62u, 384u));
+	removed->RejectSustainRelease = true;
+	actions::JobAction unload; unload.JobActionType = actions::JobAction::JOB_UNLOADVST; unload.VstIdentity = removed->StateId();
+	station->OnAction(unload); station->CommitChanges();
+	ASSERT_FALSE(station->OwnsPlugin(removed.get())); ASSERT_TRUE(station->OwnsPlugin(survivor.get()));
+	const auto activeCalls = removed->ProcessCalls;
+	measuredCallback(); // 512: retired processor runs release recovery, rejecting pedal-up.
+	EXPECT_GT(removed->RejectedReleases, 0u); EXPECT_EQ(activeCalls + 1u, removed->ProcessCalls);
+	EXPECT_EQ(0u, removed->Count(0xb1u, 64u, 0u));
+	removed->RejectSustainRelease = false;
+	measuredCallback(); // 640: a later block retries and completes retirement.
+	EXPECT_EQ(1u, removed->Count(0xb1u, 64u, 0u));
+	const auto retiredCalls = removed->ProcessCalls;
+	station->ReleaseRetiredAudioStates(); // Structural reclamation/publication stays off callback.
+	measuredCallback(); // 768: released retired processor is no longer rendered.
+	measuredCallback(); // 896: surviving channel's original release still arrives.
+	EXPECT_EQ(retiredCalls, removed->ProcessCalls); EXPECT_EQ(1u, survivor->Count(0xb1u, 64u, 0u));
+	EXPECT_EQ(1u, survivor->Count(0x81u, 62u, 0u));
+	EXPECT_FALSE(removed->Overflow); EXPECT_FALSE(survivor->Overflow);
+	EXPECT_EQ(7u, measuredBlocks); EXPECT_EQ(1024u, host.GetAudioSampleCounter());
 }
 
 TEST(AudioCallbackRealtime, PreparedCallbackWithSceneTickDoesNotAllocate)
