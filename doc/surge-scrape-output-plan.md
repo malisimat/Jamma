@@ -1,5 +1,7 @@
 # Jamma alpha implementation plan
 
+Execution status (2026-10-25): implementation and automated candidate gates are complete; manual acceptance remains open. This document retains the original requirements. See [merge handoff](alpha-merge-handoff.md) for current integration results and [manual checklist](alpha-manual-checklist.md) for unperformed acceptance checks.
+
 Deliver a reviewed alpha candidate with a reproducible Release x64 build and recorded automated and manual results. Execute the steps below in order; verify existing behavior before changing it, and implement only the remaining gaps.
 
 ## Execution rules
@@ -103,7 +105,7 @@ Record semantic disposition and run nonempty `LoopModelMesh.*:LoopModelWaveform.
 
 Freeze the candidate and have a fresh reviewer inspect the complete baseline-to-candidate diff, including admitted local repairs and integration resolutions. Resolve actionable findings, audit cross-thread ownership and manually inspect affected callback bodies. Use the actual full diff for the threading audit.
 
-Build affected Debug library/app/native tests and run the complete native suite. Build Release x64 library/app/native tests and affected JammaConsole; run the applicable Release native gate. Record commands, configuration, exact source state, counts, disabled/failing cases and nonzero focused-filter matches. After fixes, repeat checks for changed, failed or unresolved areas.
+Build affected Debug library/app/native tests and run the complete native suite. Build Release x64 library/app/native tests; the console is built into Jamma, with no separate JammaConsole target. Run the applicable Release native gate. Record commands, configuration, exact source state, counts, disabled/failing cases and nonzero focused-filter matches. After fixes, repeat checks for changed, failed or unresolved areas.
 
 Complete the [manual checklist](alpha-manual-checklist.md), including these integration requirements:
 
@@ -114,6 +116,6 @@ Complete the [manual checklist](alpha-manual-checklist.md), including these inte
 - Supported VST2/VST3 startup/runtime loads cover outer bundles/direct modules, state restore/editor/unload and recoverable missing/malformed/Unicode/wrong-architecture paths. Preserve configured plugin paths.
 - With known latency-producing plugins, verify capture/playback/automation and applicable NINJAM alignment/recovery against documented policy. MIDI/spectral editors, cables, Record/Overdub and undo coexist without stuck notes, lost material or dropouts.
 
-Use disposable test-owned sessions/files and preserve live defaults/media. Launch the exact prepared Release candidate with matching runtime DLLs, JammaConsole and registered fonts/shaders/textures. Verify startup, unavailable devices, capture/playback, two instruments/effects, note/sustain cleanup, save/reload/restart, offline operation and shutdown. Real-plugin/hardware/listening checks remain pending until performed.
+Use disposable test-owned sessions/files and preserve live defaults/media. Launch the exact prepared Release candidate with matching runtime DLLs and registered fonts/shaders/textures. Verify startup, unavailable devices, capture/playback, two instruments/effects, note/sustain cleanup, save/reload/restart, offline operation and shutdown. Real-plugin/hardware/listening checks remain pending until performed.
 
 Deliver baseline/final source identity, commits, build/test/review results, executable/resource/log paths, runtime prerequisites, selected icon, known limitations and manual results. Distinguish automated readiness for user testing from alpha acceptance; report any remaining acceptance gates. Stop before publishing, tagging or merging master.
