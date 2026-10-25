@@ -48,8 +48,11 @@ distinguished from this merged candidate.
 
 ## Verification
 
-Fresh integration evidence is in `artifacts/merge-preparation/` in the prepared
-worktree. These local artifacts are not part of the merge.
+Fresh integration evidence is in
+`artifacts/workflow/2026-10-25-alpha-readiness/merge-preparation/` in the prepared
+worktree. These ignored local artifacts are not part of the merge. Redundant skill
+backups, scratch audit scripts/diffs and empty texture staging were removed after
+verification; build/test logs, XML and audit results are retained.
 
 - Debug x64 incremental solution Build: passed, zero warnings/errors.
 - Complete Debug native suite: 1,921 passed; zero failures/disabled/errors.
