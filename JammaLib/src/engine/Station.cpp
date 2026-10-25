@@ -909,99 +909,40 @@ ActionResult Station::OnAction(GuiAction action)
 		(action.ElementType == GuiAction::ACTIONELEMENT_MIDIQUANTISATION);
 
 	auto res = isRackAction ? ActionResult::NoAction() : GuiElement::OnAction(action);
+	if (!_isEnabled || !_isVisible || res.IsEaten) return res;
 
-	if (!_isEnabled || !_isVisible)
-		return res;
-
-	if (res.IsEaten)
-		return res;
-
-	switch (action.ElementType)
+	if (action.ElementType == GuiAction::ACTIONELEMENT_MIDIQUANTISATION)
 	{
-	case GuiAction::ACTIONELEMENT_MIDIQUANTISATION:
-		if (_receiver)
-			_receiver->OnAction(action);
-		break;
-	case GuiAction::ACTIONELEMENT_TOGGLE:
-		// Legacy: GuiRack handles toggles internally and does not forward them,
-		// so this case is not reached. _router is nullptr and would crash if called.
-		if (auto toggleState = std::get_if<GuiAction::GuiInt>(&action.Data))
-		{
-			auto visible = ((int)GuiToggleParams::TOGGLE_ON) == toggleState->Value;
-
-			if (_router && action.Index == 2)
-				_router->SetVisible(visible);
-		}
-
-		break;
-	case GuiAction::ACTIONELEMENT_ROUTER:
-		// Legacy: GuiRack now converts ROUTER→RACK before forwarding,
-		// so this case is not reached in normal flows.
-		if (auto chans = std::get_if<GuiAction::GuiConnections>(&action.Data))
-		{
-			for (auto chan = 0u; chan < _audioMixers.size(); chan++)
-			{
-				std::vector<std::pair<unsigned int, unsigned int>> chanConnections;
-				std::copy_if(chans->Connections.begin(), chans->Connections.end(), std::back_inserter(chanConnections),
-					[chan](const std::pair<unsigned int, unsigned int>& pair) {
-						return pair.first == chan;
-					});
-
-				std::vector<unsigned int> secondElements;
-				std::transform(chanConnections.begin(), chanConnections.end(), std::back_inserter(secondElements),
-					[](const std::pair<unsigned int, unsigned int>& pair) {
-						return pair.second;
-					});
-				_audioMixers[chan]->SetChannels(secondElements);
-			}
-		}
-
-		break;
-	case GuiAction::ACTIONELEMENT_RACK:
-		if (auto i = std::get_if<GuiAction::GuiInt>(&action.Data))
-		{
-			if (action.Index == gui::GuiRack::RackStateNotificationIndex)
-			{
-				if (i->Value == gui::GuiRackParams::RACK_ROUTER)
-					_CollapseOtherTakeRouters();
-				else if (i->Value == gui::GuiRackParams::RACK_CHANNELS)
-					_CollapseOtherTakeRoutersToChannels();
-			}
-			else
-				SetNumBusChannels(i->Value);
-		}
-		else if (auto chans = std::get_if<GuiAction::GuiConnections>(&action.Data))
-		{
-			for (auto chan = 0u; chan < _audioMixers.size(); chan++)
-			{
-				std::vector<std::pair<unsigned int, unsigned int>> chanConnections;
-				std::copy_if(chans->Connections.begin(), chans->Connections.end(), std::back_inserter(chanConnections),
-					[chan](const std::pair<unsigned int, unsigned int>& pair) {
-						return pair.first == chan;
-					});
-
-				std::vector<unsigned int> secondElements;
-				std::transform(chanConnections.begin(), chanConnections.end(), std::back_inserter(secondElements),
-					[](const std::pair<unsigned int, unsigned int>& pair) {
-						return pair.second;
-					});
-				_audioMixers[chan]->SetChannels(secondElements);
-			}
-		}
-		else if (auto d = std::get_if<GuiAction::GuiDouble>(&action.Data))
-		{
-			GuiAction mixerAction = action;
-			mixerAction.ElementType = GuiAction::ACTIONELEMENT_SLIDER;
-
-			if (0 == action.Index)
-				_masterMixer->OnAction(mixerAction);
-			else if ((action.Index > 0) && ((action.Index - 1) < _audioMixers.size()))
-				_audioMixers[action.Index - 1]->OnAction(mixerAction);
-		}
-
-		break;
+		if (_receiver) _receiver->OnAction(action);
+	}
+	else if (action.ElementType == GuiAction::ACTIONELEMENT_TOGGLE)
+	{
+		// Legacy direct toggle input; GuiRack handles its own toggles internally.
+		if (const auto* toggle = std::get_if<GuiAction::GuiInt>(&action.Data); toggle && _router && action.Index == 2)
+			_router->SetVisible(toggle->Value == static_cast<int>(GuiToggleParams::TOGGLE_ON));
 	}
 
+	const auto intent = gui::GuiRack::DecodeControlAction(action);
+	if (const auto* panel = std::get_if<gui::GuiRack::PanelOpened>(&intent))
+	{
+		if (panel->State == GuiRackParams::RACK_ROUTER) _CollapseOtherTakeRouters();
+		else if (panel->State == GuiRackParams::RACK_CHANNELS) _CollapseOtherTakeRoutersToChannels();
+	}
+	else if (const auto* count = std::get_if<gui::GuiRack::InputCountChange>(&intent))
+		SetNumBusChannels(count->Count);
+	else if (const auto* routes = std::get_if<gui::GuiRack::RouteChange>(&intent))
+	{
+		for (auto channel = 0u; channel < _audioMixers.size(); ++channel)
+			_audioMixers[channel]->SetChannels(routes->OutputsFor(channel));
+	}
+	else if (const auto* level = std::get_if<gui::GuiRack::LevelChange>(&intent))
+	{
+		GuiAction mixerAction = action;
+		mixerAction.ElementType = GuiAction::ACTIONELEMENT_SLIDER;
+		mixerAction.Data = GuiAction::GuiDouble{level->Value};
+		if (level->Index == 0u) _masterMixer->OnAction(mixerAction);
+		else if (level->Index - 1u < _audioMixers.size()) _audioMixers[level->Index - 1u]->OnAction(mixerAction);
+	}
 	return res;
 }
 

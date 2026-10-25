@@ -759,3 +759,35 @@ std::shared_ptr<gui::GuiSlider> GuiRack::GetChannelSlider(unsigned int index) co
 		return _channelSliders[index];
 	return nullptr;
 }
+
+GuiRack::ControlIntent GuiRack::DecodeControlAction(const actions::GuiAction& action) noexcept
+{
+	if (action.ElementType != GuiAction::ACTIONELEMENT_RACK && action.ElementType != GuiAction::ACTIONELEMENT_ROUTER)
+		return {};
+	if (action.ElementType == GuiAction::ACTIONELEMENT_RACK)
+	{
+		if (const auto* count = std::get_if<GuiAction::GuiInt>(&action.Data))
+		{
+			if (action.Index == RackStateNotificationIndex)
+			{
+				if (count->Value >= GuiRackParams::RACK_MASTER && count->Value <= GuiRackParams::RACK_ROUTER)
+					return PanelOpened{static_cast<GuiRackParams::RackState>(count->Value)};
+				return {};
+			}
+			return InputCountChange{static_cast<unsigned int>(count->Value)};
+		}
+		if (const auto* level = std::get_if<GuiAction::GuiDouble>(&action.Data))
+			return LevelChange{action.Index, level->Value};
+	}
+	if (const auto* routes = std::get_if<GuiAction::GuiConnections>(&action.Data))
+		return RouteChange{routes->Connections};
+	return {};
+}
+
+std::vector<unsigned int> GuiRack::RouteChange::OutputsFor(unsigned int input) const
+{
+	std::vector<unsigned int> outputs;
+	for (const auto& connection : Connections)
+		if (connection.first == input) outputs.push_back(connection.second);
+	return outputs;
+}

@@ -2,6 +2,8 @@
 
 #include <functional>
 #include <array>
+#include <span>
+#include <variant>
 #include "GuiButton.h"
 #include "GuiSlider.h"
 #include "GuiToggle.h"
@@ -89,6 +91,19 @@ namespace gui
 		bool IsInView(utils::Size2d viewport) const;
 
 		virtual actions::ActionResult OnAction(actions::GuiAction action) override;
+
+		// Borrowed intents are consumed synchronously while the source action lives.
+		// The hierarchy owner applies mixer/topology consequences after decoding.
+		struct PanelOpened { GuiRackParams::RackState State; };
+		struct InputCountChange { unsigned int Count; };
+		struct RouteChange
+		{
+			std::span<const std::pair<unsigned int, unsigned int>> Connections;
+			std::vector<unsigned int> OutputsFor(unsigned int input) const;
+		};
+		struct LevelChange { unsigned int Index; double Value; };
+		using ControlIntent = std::variant<std::monostate, PanelOpened, InputCountChange, RouteChange, LevelChange>;
+		static ControlIntent DecodeControlAction(const actions::GuiAction& action) noexcept;
 
 		GuiRackParams::RackState GetRackState() const;
 		void SetRackState(GuiRackParams::RackState state, bool bypassUpdates);
