@@ -197,6 +197,42 @@ TEST(GuiRack, SharedSlotViewPreservesCapturedIdentityScrollAndHiddenCableEndpoin
 	plain->DetachGuiOwnershipForRetirement(); rack->DetachGuiOwnershipForRetirement();
 }
 
+TEST(GuiRack, DraggingFromChannelButtonStartsCableAndKeepsItLit)
+{
+	auto params = MakeRackParams(220, 300);
+	params.EnableVstControl = true; params.EnableVstRack = true; params.EnableVstRackMidiRouting = true;
+	auto rack = std::make_shared<GuiRack>(params); rack->SetPosition({300, 400}); rack->Init();
+	auto view = rack->VstRack(); ASSERT_NE(nullptr, view);
+	gui::GuiVstRack::Model model; model.Editable = true; model.Revision = 1u;
+	view->Update(model, [](auto) {});
+	view->SetChannelsCollapsed(false);
+	std::vector<gui::CableInteraction::Endpoint> endpoints;
+	std::vector<gui::CableInteraction::Cable> cables;
+	view->BuildInteractionGeometry(endpoints, cables); ASSERT_EQ(16u, endpoints.size());
+	const auto point = endpoints[0].Position + utils::Position2d{-20, 0};
+	auto toggle = std::dynamic_pointer_cast<gui::GuiToggle>(view->FindTopmostDescendant(point));
+	ASSERT_NE(nullptr, toggle);
+	actions::TouchAction down; down.Index = 0; down.Touch = actions::TouchAction::TOUCH_MOUSE;
+	down.State = actions::TouchAction::TOUCH_DOWN; down.Position = point;
+	const auto pressed = view->OnAction(down);
+	EXPECT_EQ(view, pressed.ActiveElement.lock());
+	EXPECT_FALSE(view->HasCableDrag());
+	EXPECT_EQ(base::GuiElement::STATE_DOWN, toggle->GetState());
+	actions::TouchMoveAction move; move.Index = 0; move.Touch = actions::TouchAction::TOUCH_MOUSE;
+	move.MouseButtonsDown = 1u; move.Position = point + utils::Position2d{-6, 0};
+	view->OnAction(move);
+	EXPECT_TRUE(view->HasCableDrag());
+	EXPECT_EQ(base::GuiElement::STATE_DOWN, toggle->GetState());
+	auto up = down; up.State = actions::TouchAction::TOUCH_UP; up.Position = move.Position;
+	view->OnAction(up);
+	EXPECT_FALSE(view->HasCableDrag());
+	EXPECT_EQ(gui::GuiToggleParams::TOGGLE_OFF, toggle->GetToggleState());
+	view->OnAction(down);
+	up.Position = point;
+	view->OnAction(up);
+	EXPECT_EQ(gui::GuiToggleParams::TOGGLE_ON, toggle->GetToggleState());
+}
+
 TEST(GuiRack, OptionalVstControlReservesOnlyMasterSliderSpace)
 {
 	auto params = MakeRackParams(200, 300);

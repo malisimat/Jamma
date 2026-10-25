@@ -21,7 +21,8 @@ namespace gui
 		void Draw(base::DrawContext& context) override
 		{
 			const auto tint = _guiParams.TintColor;
-			if (GetToggleState() == GuiToggleParams::TOGGLE_OFF) _guiParams.TintColor = glm::vec3(0.45f);
+			if (GetToggleState() == GuiToggleParams::TOGGLE_OFF && GetState() != STATE_DOWN)
+				_guiParams.TintColor = glm::vec3(0.45f);
 			GuiToggle::Draw(context); _guiParams.TintColor = tint;
 		}
 	};

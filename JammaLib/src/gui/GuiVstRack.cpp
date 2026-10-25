@@ -343,6 +343,8 @@ void GuiVstRack::_RefreshChannelToggles()
 void GuiVstRack::CancelInteraction()
 {
 	if (_drag) _consumeRelease = true;
+	if (_channelPress) _toggles[_channelPress->Channel]->ClearPointerState();
+	_channelPress.reset();
 	_drag.reset(); _hovered = false;
 }
 void GuiVstRack::ClearPointerState() { CancelInteraction(); GuiElement::ClearPointerState(); }
@@ -511,8 +513,27 @@ void GuiVstRack::MovePointer(TouchMoveAction action)
 
 ActionResult GuiVstRack::OnAction(TouchMoveAction action)
 {
+	if (_channelPress && action.Index == _channelPress->Index && action.Touch == _channelPress->Touch)
+	{
+		if (action.Touch == TouchAction::TOUCH_MOUSE && action.MouseButtonsDown == 0u)
+		{
+			CancelInteraction(); return _Captured();
+		}
+		if (!_drag && (std::abs(action.Position.X - _channelPress->Position.X) > 4 ||
+			std::abs(action.Position.Y - _channelPress->Position.Y) > 4))
+		{
+			const auto channel = _channelPress->Channel;
+			if (_model.Editable && !_model.Inactive && !_model.Suspended)
+			{
+				_drag = Drag{_model.Revision, false, {}, channel, {}, action.Position, {}};
+				_UpdateDrag(action.Position);
+			}
+		}
+		// Keep the pressed channel lit even after the pointer leaves its bounds.
+		if (_drag) _toggles[_channelPress->Channel]->ApplyHoverState(true);
+	}
 	MovePointer(action);
-	if (_drag) return _Captured();
+	if (_drag || _channelPress) return _Captured();
 	return GuiElement::OnAction(action);
 }
 
@@ -528,7 +549,23 @@ ActionResult GuiVstRack::OnAction(TouchAction action)
 	if (_drag)
 	{
 		if (action.Index == 1 && action.State == TouchAction::TOUCH_DOWN) CancelInteraction();
-		else if (action.Index == 0 && action.State == TouchAction::TOUCH_UP) { _UpdateDrag(action.Position); _FinishDrag(); }
+		else if (action.Index == 0 && action.State == TouchAction::TOUCH_UP)
+		{
+			_UpdateDrag(action.Position); _FinishDrag();
+			if (_channelPress) _toggles[_channelPress->Channel]->ClearPointerState();
+			_channelPress.reset();
+		}
+		return _Captured();
+	}
+	if (_channelPress && action.State == TouchAction::TOUCH_UP)
+	{
+		const auto press = std::exchange(_channelPress, std::nullopt);
+		if (action.Index == press->Index && action.Touch == press->Touch)
+		{
+			action.Position = _toggles[press->Channel]->GlobalToLocal(action.Position + GlobalPosition());
+			return _toggles[press->Channel]->OnAction(action);
+		}
+		_toggles[press->Channel]->ClearPointerState();
 		return _Captured();
 	}
 	if (action.Index == 0 && action.State == TouchAction::TOUCH_DOWN)
@@ -548,7 +585,18 @@ ActionResult GuiVstRack::OnAction(TouchAction action)
 		}
 		if (_BeginDrag(action.Position)) return _Captured();
 	}
-	return GuiElement::OnAction(action);
+	auto result = GuiElement::OnAction(action);
+	if (action.Index == 0 && action.State == TouchAction::TOUCH_DOWN && !_collapsed && result.IsEaten)
+	{
+		for (auto channel = 0u; channel < _toggles.size(); ++channel)
+			if (result.ActiveElement.lock() == _toggles[channel])
+			{
+				_channelPress = ChannelPress{channel, action.Position, action.Index, action.Touch};
+				result.ActiveElement = shared_from_this();
+				break;
+			}
+	}
+	return result;
 }
 
 ActionResult GuiVstRack::OnAction(KeyAction action)

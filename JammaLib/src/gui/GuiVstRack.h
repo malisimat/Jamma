@@ -107,6 +107,13 @@ namespace gui
 			utils::Position2d Pointer;
 			std::optional<CableInteraction::Endpoint> Snap;
 		};
+		struct ChannelPress
+		{
+			unsigned int Channel;
+			utils::Position2d Position;
+			int Index;
+			actions::TouchAction::TouchType Touch;
+		};
 		static constexpr unsigned int _RowHeight = 36u;
 		static constexpr unsigned int _RowPitch = 40u;
 		static constexpr unsigned int _PageSize = 32u;
@@ -142,6 +149,7 @@ namespace gui
 		utils::Size2d _viewport{1920u, 1080u};
 		bool _collapsed = true, _revealHeld = false, _hovered = false, _consumeRelease = false, _consumeEscape = false, _rowsBuilt = false;
 		std::optional<Drag> _drag;
+		std::optional<ChannelPress> _channelPress;
 		std::string _feedback;
 		std::shared_ptr<int> _lifetime = std::make_shared<int>(0);
 		std::weak_ptr<resources::ShaderResource> _cableShader;
