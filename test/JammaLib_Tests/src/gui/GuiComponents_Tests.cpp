@@ -7,6 +7,9 @@
 #include "gui/TriggerLearnController.h"
 #include "gui/GuiPopup.h"
 #include "gui/GuiPopupManager.h"
+#include "gui/RuntimeDialogs.h"
+#include <thread>
+#include <stdexcept>
 #include "gui/GuiTextBox.h"
 #include "gui/GuiNumericInput.h"
 #include "gui/GuiDropDown.h"
@@ -438,6 +441,126 @@ TEST(GuiPopup, FitsViewportAndKeepsContentAndActionsInsideAfterResize)
 }
 
 // GuiToggle keyboard tests
+
+TEST(RuntimeDialogs, WorkerNoticesOwnTheirValuesAndFallbackRunsOnlyOnUiPump)
+{
+    gui::RuntimeDialogs dialogs; GuiPopupManager manager;
+    const auto ui = std::this_thread::get_id();
+    std::vector<std::string> delivered;
+    dialogs.SetFallback([&](const auto& title, const auto& message) {
+        EXPECT_EQ(ui,std::this_thread::get_id()); delivered.push_back(title + ":" + message);
+    });
+    std::thread producer([&] {
+        std::string text = "detached worker failure";
+        dialogs.Notify("Worker",text); text.assign("reused producer storage");
+        dialogs.Notify("Second","another failure");
+    });
+    producer.join(); EXPECT_TRUE(delivered.empty()); EXPECT_FALSE(manager.IsOpen());
+    dialogs.Pump(manager,{800u,600u},true); EXPECT_TRUE(manager.IsOpen()); EXPECT_TRUE(delivered.empty());
+    dialogs.Pump(manager,{800u,600u},false); EXPECT_FALSE(manager.IsOpen());
+    EXPECT_EQ((std::vector<std::string>{"Worker:detached worker failure","Second:another failure"}),delivered);
+    dialogs.Pump(manager,{800u,600u},false); EXPECT_EQ(2u,delivered.size());
+}
+
+TEST(RuntimeDialogs, EnterEscapeAndOutsideDismissalCancelWithoutAccepting)
+{
+    gui::RuntimeDialogs dialogs; GuiPopupManager manager;
+    for (const auto dismissal : {0,1,2})
+    {
+        auto decision = dialogs.Confirm("Remove VST","Remove captured slot?","Remove");
+        dialogs.Pump(manager,{800u,600u},true); ASSERT_TRUE(manager.IsOpen());
+        if (dismissal < 2) manager.OnAction(MakeKey(dismissal == 0 ? VK_RETURN : VK_ESCAPE,KeyAction::KEY_UP));
+        else manager.OnAction(MakeTouch(TouchAction::TOUCH_DOWN,{-1000,-1000}));
+        EXPECT_FALSE(decision->has_value());
+        dialogs.Pump(manager,{800u,600u},true);
+        ASSERT_TRUE(decision->has_value()); EXPECT_FALSE(decision->value()); EXPECT_FALSE(manager.IsOpen());
+    }
+}
+
+TEST(RuntimeDialogs, ResizePreservesConfirmationAndInterruptedPressCannotAccept)
+{
+    gui::RuntimeDialogs dialogs; GuiPopupManager manager;
+    auto decision = dialogs.Confirm("Remove VST","Remove captured slot?","Remove");
+    dialogs.Pump(manager,{800u,600u},true);
+    const auto popup = manager.Top(); ASSERT_TRUE(popup);
+    dialogs.Pump(manager,{160u,180u},true); EXPECT_EQ(popup,manager.Top());
+    EXPECT_LE(popup->GetSize().Width,160u); EXPECT_LE(popup->GetSize().Height,180u);
+    const auto accept = popup->TryGetChild(7u); ASSERT_TRUE(accept);
+    auto point = accept->GlobalPosition() + utils::Position2d{2,2};
+    manager.OnAction(MakeTouch(TouchAction::TOUCH_UP,point));
+    dialogs.Pump(manager,{160u,180u},true); EXPECT_FALSE(decision->has_value());
+    manager.OnAction(MakeTouch(TouchAction::TOUCH_DOWN,point));
+    auto lost = MakeTouchMove(point); lost.MouseButtonsDown = 0u; manager.OnAction(lost);
+    manager.OnAction(MakeTouch(TouchAction::TOUCH_UP,point));
+    dialogs.Pump(manager,{160u,180u},true); EXPECT_FALSE(decision->has_value());
+    manager.OnAction(MakeTouch(TouchAction::TOUCH_DOWN,point));
+    manager.OnAction(MakeTouch(TouchAction::TOUCH_UP,point));
+    dialogs.Pump(manager,{160u,180u},true); ASSERT_TRUE(decision->has_value()); EXPECT_TRUE(decision->value());
+}
+
+TEST(RuntimeDialogs, MissingRendererCancelsConfirmationAndFallbackFailureKeepsStderrDelivery)
+{
+    gui::RuntimeDialogs dialogs; GuiPopupManager manager; unsigned int fallback = 0u;
+    dialogs.SetFallback([&](const auto&,const auto&) { ++fallback; throw std::runtime_error("native unavailable"); });
+    auto decision = dialogs.Confirm("Remove VST","Remove captured slot?","Remove");
+    testing::internal::CaptureStderr();
+    EXPECT_NO_THROW(dialogs.Pump(manager,{800u,600u},false));
+    EXPECT_NE(std::string::npos,testing::internal::GetCapturedStderr().find("Remove captured slot?"));
+    ASSERT_TRUE(decision->has_value()); EXPECT_FALSE(decision->value()); EXPECT_EQ(1u,fallback);
+    EXPECT_FALSE(manager.IsOpen());
+    auto cancelled = dialogs.Confirm("Old target","Never show cancelled work","Remove");
+    *cancelled = false; dialogs.Pump(manager,{800u,600u},true);
+    EXPECT_FALSE(manager.IsOpen()); EXPECT_EQ(1u,fallback);
+}
+
+TEST(RuntimeDialogs, NonAsciiPluginPathUsesOwnedNativeFallbackAndCancelsConfirmation)
+{
+    gui::RuntimeDialogs dialogs; GuiPopupManager manager;
+    const auto ui = std::this_thread::get_id();
+    const std::string path = "C:\\Plugins\\Pian\xC3\xB3\\\xE7\x90\xB4.vst3";
+    const auto message = "Could not load VST: " + path;
+    std::vector<std::string> shown;
+    dialogs.SetFallback([&](const auto& title,const auto& text) {
+        EXPECT_EQ(ui,std::this_thread::get_id()); EXPECT_EQ("VST",title); shown.push_back(text);
+    });
+    dialogs.Notify("VST",message);
+    testing::internal::CaptureStderr();
+    dialogs.Pump(manager,{800u,600u},true);
+    const auto logged = testing::internal::GetCapturedStderr();
+    EXPECT_FALSE(manager.IsOpen());
+    ASSERT_EQ(1u,shown.size()); EXPECT_EQ(message,shown[0]);
+    EXPECT_NE(std::string::npos,logged.find(path));
+    auto decision = dialogs.Confirm("VST",message,"Remove");
+    dialogs.Pump(manager,{800u,600u},true);
+    EXPECT_FALSE(manager.IsOpen());
+    ASSERT_TRUE(decision->has_value()); EXPECT_FALSE(decision->value());
+    ASSERT_EQ(2u,shown.size()); EXPECT_EQ(message,shown[1]);
+}
+
+TEST(RuntimeDialogs, ActualMissingResourcesCancelActiveAndQueuedConfirmations)
+{
+    gui::RuntimeDialogs dialogs; GuiPopupManager manager;
+    unsigned int fallback = 0u;
+    dialogs.SetFallback([&](const auto&,const auto&) { ++fallback; });
+    auto active = dialogs.Confirm("Remove VST","Remove captured slot?","Remove");
+    dialogs.Pump(manager,{800u,600u},true); ASSERT_TRUE(manager.IsOpen());
+    resources::ResourceLib missingResources;
+    const bool ready = dialogs.InitResources(missingResources,false);
+    EXPECT_FALSE(ready); // Exercises actual missing fonts/shaders, without GL or a false renderer seam.
+    dialogs.Pump(manager,{800u,600u},ready);
+    EXPECT_FALSE(manager.IsOpen()); ASSERT_TRUE(active->has_value()); EXPECT_FALSE(active->value());
+    auto queued = dialogs.Confirm("Remove VST","Remove another slot?","Remove");
+    dialogs.Pump(manager,{800u,600u},ready);
+    EXPECT_FALSE(manager.IsOpen()); ASSERT_TRUE(queued->has_value()); EXPECT_FALSE(queued->value());
+    EXPECT_EQ(2u,fallback);
+}
+
+TEST(RuntimeDialogs, FontMetricsAloneDoNotEstablishDrawReadiness)
+{
+    graphics::Font font({1,1,1,19.0f,0,0,graphics::FontOptions::FONT_SMALL},{8.0f},{});
+    EXPECT_GT(font.Metrics().Height(),0.0f);
+    EXPECT_FALSE(font.CanDraw());
+}
 
 TEST(GuiToggle, KeyboardActivatesWhenFocused) {
 	GuiToggleParams p;

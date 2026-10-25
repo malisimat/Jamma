@@ -1010,6 +1010,7 @@ protected:
  unsigned int Picks = 0u;
  unsigned int Commits = 0u;
  bool Enabled = true;
+ gui::RuntimeDialogDecision Decision;
 
  void SetUp() override
  {
@@ -1029,7 +1030,9 @@ protected:
   Controls = std::make_unique<gui::VstRackControls>(gui::VstRackControls::Host{
    Mutex, Stations, Editors, [&] { return Enabled; }, [&] { ++Commits; },
    [&] { ++Picks; return Pick ? Pick() : std::wstring{}; },
-   [] { return false; }, [&](const std::wstring& error) { Errors.push_back(error); }});
+   [&](std::string, std::string, std::string) {
+    Decision = std::make_shared<std::optional<bool>>(); return Decision;
+   }, [&](const std::wstring& error) { Errors.push_back(error); }});
  }
  void Update(base::SelectDepth depth = base::DEPTH_LOOPTAKE)
  {
@@ -1044,14 +1047,85 @@ protected:
   Controls.reset();
   if (Station) Station->DetachGuiOwnershipForRetirement();
  }
- static void Click(const std::shared_ptr<gui::GuiRack>& rack)
+ static void Click(const std::shared_ptr<gui::GuiRack>& rack, base::Action::Modifiers modifiers = base::Action::MODIFIER_NONE)
  {
   actions::GuiAction action;
   action.ElementType = actions::GuiAction::ACTIONELEMENT_BUTTON;
   action.Index = gui::GuiRack::VstControlActionIndex;
+  action.InputModifiers = modifiers;
   rack->OnAction(action);
  }
 };
+
+TEST_F(VstRackControlsTest, RemovalWaitsForDecisionAndCancellationPreservesSlot)
+{
+ JobAction installed; installed.JobActionType = JobAction::JOB_LOADVST;
+ installed.VstPath = L"captured.vst3"; installed.VstIdentity = "captured";
+ installed.PreInitPlugin = std::make_shared<StateGatePlugin>();
+ Take->OnAction(installed); Take->CommitChanges();
+ Update(); Click(Take->GetGuiRack(),base::Action::MODIFIER_ALT); Controls->Pump();
+ ASSERT_TRUE(Decision); EXPECT_FALSE(Decision->has_value());
+ Controls->Pump(); EXPECT_EQ(0u,Commits); EXPECT_EQ("captured",Take->GetVstRackSlot().Identity);
+ *Decision = false; Controls->Pump();
+ EXPECT_EQ(0u,Commits); EXPECT_EQ("captured",Take->GetVstRackSlot().Identity);
+ Update(); Click(Take->GetGuiRack(),base::Action::MODIFIER_ALT); Controls->Pump();
+ ASSERT_TRUE(Decision); *Decision = true; Controls->Pump();
+ EXPECT_EQ(1u,Commits);
+}
+
+TEST_F(VstRackControlsTest, DelayedRemovalRejectsReplacementSlotAndRemovedOwner)
+{
+ for (const bool removeOwner : {false,true})
+ {
+  SCOPED_TRACE(removeOwner);
+  JobAction installed; installed.JobActionType = JobAction::JOB_LOADVST;
+  installed.VstPath = L"captured.vst3"; installed.VstIdentity = "captured";
+  installed.PreInitPlugin = std::make_shared<StateGatePlugin>();
+  Take->OnAction(installed); Take->CommitChanges();
+  Update(); Click(Take->GetGuiRack(),base::Action::MODIFIER_ALT); Controls->Pump();
+  ASSERT_TRUE(Decision); EXPECT_FALSE(Decision->has_value());
+  if (removeOwner) Stations.clear();
+  else
+  {
+   JobAction removed; removed.JobActionType = JobAction::JOB_UNLOADVST; removed.VstIdentity = "captured";
+   Take->OnAction(removed); Take->CommitChanges();
+   installed.VstIdentity = "replacement"; installed.PreInitPlugin = std::make_shared<StateGatePlugin>();
+   Take->OnAction(installed); Take->CommitChanges();
+  }
+  *Decision = true; Controls->Pump(); EXPECT_EQ(0u,Commits);
+  if (!removeOwner)
+  {
+   EXPECT_EQ("replacement",Take->GetVstRackSlot().Identity);
+   JobAction removed; removed.JobActionType = JobAction::JOB_UNLOADVST; removed.VstIdentity = "replacement";
+   Take->OnAction(removed); Take->CommitChanges();
+  }
+ }
+}
+
+TEST_F(VstRackControlsTest, DelayedStationRemovalRejectsChangedRackRevisionAndResetCancelsToken)
+{
+ JobAction installed; installed.JobActionType = JobAction::JOB_LOADVST;
+ installed.VstPath = L"captured.vst3"; installed.VstIdentity = "captured";
+ installed.PreInitPlugin = std::make_shared<StateGatePlugin>();
+ Station->OnAction(installed); Station->CommitChanges(); Update();
+ const auto view = Station->GetGuiRack()->VstRack(); ASSERT_TRUE(view);
+ const auto button = view->SlotButton(0u); ASSERT_TRUE(button);
+ actions::TouchAction touch; touch.Index = 0; touch.Touch = actions::TouchAction::TOUCH_MOUSE;
+ touch.Modifiers = base::Action::MODIFIER_ALT; touch.Position = {10,10};
+ touch.State = actions::TouchAction::TOUCH_DOWN; button->OnAction(touch);
+ touch.State = actions::TouchAction::TOUCH_UP; button->OnAction(touch); Controls->Pump();
+ ASSERT_TRUE(Decision); EXPECT_FALSE(Decision->has_value());
+ const auto revision = Station->RackRevision();
+ installed.VstIdentity = "other"; installed.PreInitPlugin = std::make_shared<StateGatePlugin>();
+ Station->OnAction(installed); Station->CommitChanges(); ASSERT_NE(revision,Station->RackRevision());
+ *Decision = true; Controls->Pump(); EXPECT_EQ(0u,Commits);
+ EXPECT_EQ(2u,Station->RackSlotCount());
+ Update();
+ touch.State = actions::TouchAction::TOUCH_DOWN; view->SlotButton(0u)->OnAction(touch);
+ touch.State = actions::TouchAction::TOUCH_UP; view->SlotButton(0u)->OnAction(touch); Controls->Pump();
+ ASSERT_TRUE(Decision); EXPECT_FALSE(Decision->has_value());
+ Controls->Reset(); ASSERT_TRUE(Decision->has_value()); EXPECT_FALSE(Decision->value());
+}
 
 TEST_F(VstRackControlsTest, PickerKeepsCapturedLoopWhenSelectionAndDepthChange)
 {

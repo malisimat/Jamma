@@ -143,6 +143,7 @@ namespace graphics
 
 		GLuint InitVertexArray(const std::string& str, GLenum usage, GLuint* outPosBuffer = nullptr, GLuint* outUvBuffer = nullptr);
 		void Draw(GlDrawContext& ctx, GLuint vertexArray, unsigned int numChars, glm::vec3 color = glm::vec3(1.0f));
+		bool CanDraw() const noexcept; // Resource/UI owner: atlas and shader availability only.
 		float MeasureString(const std::string& str) const;
 		float GetHeight() const;
 		

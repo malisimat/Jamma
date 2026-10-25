@@ -1023,6 +1023,10 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 			scene.value()->SetCurrentJamPath(defaults->Jam);
 	}
 	const auto configureDefaultJamSave = [&]() {
+		scene.value()->SetRuntimeDialogFallback([owner = window.GetWindowHandle()](const std::string& title, const std::string& message) {
+			const auto wideTitle = utils::DecodeUtf8(title), wideMessage = utils::DecodeUtf8(message);
+			MessageBoxW(owner,wideMessage.c_str(),wideTitle.c_str(),MB_OK | MB_ICONWARNING);
+		});
 		if (const auto currentDefaults = LoadIni(initPath))
 			scene.value()->SetDefaultJamSaver(currentDefaults->Jam, [&](const std::wstring& savedPath, bool useNamedJam) {
 			auto current = LoadIni(initPath);
@@ -1209,7 +1213,7 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 				bool readable = false;
 				const auto candidate = LoadRig(selected, readable);
 				if (!candidate || scene.value()->RequestRigEdit(*candidate) != engine::RigCoordinator::EditResult::Pending)
-					MessageBoxW(dialog.hwndOwner, L"Rig could not be applied. Check the log; device setup changes require a restart.", L"Load rig", MB_OK | MB_ICONWARNING);
+					scene.value()->ReportRuntimeNotice("Load rig", "Rig could not be applied. Check the log; device setup changes require a restart.");
 			}
 		}
 		const bool windowLoadRequested = window.ConsumeJamLoadRequest();
@@ -1256,7 +1260,7 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 				// Preserve rig hardware choices and inventory across loaded content.
 				scene.value()->InitAudio(false, nullptr, true);
 				const bool started = scene.value()->GetAsioOpenReport().StartedParams.has_value();
-				scene.value()->ReportFileStatus(started ? "Loaded session (check log for asset warnings)" : "Loaded session; audio stopped, retry available");
+				scene.value()->ReportFileOutcome(started ? "Loaded session (check log for asset warnings)" : "Loaded session; audio stopped, retry available");
 			}
 		}
 

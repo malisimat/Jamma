@@ -345,6 +345,9 @@
     <ClInclude Include="src\gui\GuiPopup.h">
       <Filter>src\gui</Filter>
     </ClInclude>
+    <ClInclude Include="src\gui\RuntimeDialogs.h">
+      <Filter>src\gui</Filter>
+    </ClInclude>
     <ClInclude Include="src\gui\GuiTextBox.h">
       <Filter>src\gui</Filter>
     </ClInclude>

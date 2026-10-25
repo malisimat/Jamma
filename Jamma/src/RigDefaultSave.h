@@ -71,7 +71,7 @@ public:
 		scene.SetRigSaveDialogOpen(true);
 		std::error_code error;
 		std::filesystem::create_directories(_directory, error);
-		if (error) { scene.SetRigSaveDialogOpen(false); MessageBoxW(owner, L"Cannot create the Jamma rig directory.", L"Save rig", MB_OK | MB_ICONERROR); return; }
+		if (error) { scene.SetRigSaveDialogOpen(false); scene.ReportRuntimeNotice("Save rig", "Cannot create the Jamma rig directory: " + error.message()); return; }
 		wchar_t filename[32768] = L"My rig.rig";
 		if (!_currentPath.empty()) wcscpy_s(filename, std::filesystem::path(_currentPath).filename().c_str());
 		OPENFILENAMEW dialog{};
@@ -84,10 +84,10 @@ public:
 		if (choose && !GetSaveFileNameW(&dialog)) { scene.SetRigSaveDialogOpen(false); return; }
 		if (choose) target = filename;
 		if (!ValidFilename(std::filesystem::path(target), std::filesystem::path(_directory)))
-		{ scene.SetRigSaveDialogOpen(false); MessageBoxW(owner, L"Choose a .rig filename in the Jamma folder. Reserved filenames are unavailable.", L"Save rig", MB_OK | MB_ICONWARNING); return; }
+		{ scene.SetRigSaveDialogOpen(false); scene.ReportRuntimeNotice("Save rig", "Choose a .rig filename in the Jamma folder. Reserved filenames are unavailable."); return; }
 		scene.SetRigSaveDialogOpen(false);
 		const auto rig = scene.BeginExplicitRigSave();
-		if (!rig) { MessageBoxW(owner, L"A station or rig change is applying. Please save again when it finishes.", L"Save rig", MB_OK); return; }
+		if (!rig) { scene.ReportRuntimeNotice("Save rig", "A station or rig change is applying. Please save again when it finishes."); return; }
 		auto updated = defaults;
 		if (setDefault) { updated.Rig = target; updated.RigLoadType = io::InitFile::LOAD_SPECIFIC; updated.RigOrigin = "user"; }
 		_busy = true;
@@ -139,7 +139,7 @@ public:
 			const auto now = scene.CaptureCommittedRigVersion();
 			if (!now || now->Revision != result->Revision) message += L" Newer changes remain unsaved.";
 		}
-		if (show) MessageBoxW(owner, message.c_str(), L"Save rig", MB_OK | (result->RigSaved ? MB_ICONINFORMATION : MB_ICONWARNING));
+		if (show) scene.ReportRuntimeNotice("Save rig", utils::EncodeUtf8(message));
 		return result->DefaultsSaved;
 	}
 	bool Busy() const noexcept { return _busy; }

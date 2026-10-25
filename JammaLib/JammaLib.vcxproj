@@ -326,6 +326,7 @@
     <ClInclude Include="src\gui\GuiFocusManager.h" />
     <ClInclude Include="src\gui\GuiPopupManager.h" />
     <ClInclude Include="src\gui\GuiPopup.h" />
+    <ClInclude Include="src\gui\RuntimeDialogs.h" />
     <ClInclude Include="src\gui\GuiTextBox.h" />
     <ClInclude Include="src\gui\GuiNumericInput.h" />
     <ClInclude Include="src\gui\GuiDropDown.h" />

@@ -179,6 +179,13 @@ namespace engine
 		const std::wstring& CurrentJamPath() const noexcept { return _currentJamPath; }
 		std::uint64_t Identity() const noexcept { return _sceneIdentity; }
 		void ReportFileStatus(const std::string& status);
+		void ReportFileOutcome(const std::string& status)
+		{ _fileStatus->SetString(status); ReportRuntimeNotice("JAM",status); }
+		// Owned values only; off-callback workers may post, UI alone presents.
+		void ReportRuntimeNotice(std::string title, std::string message)
+		{ _runtimeDialogs.Notify(std::move(title),std::move(message)); }
+		void SetRuntimeDialogFallback(gui::RuntimeDialogs::Fallback fallback)
+		{ _runtimeDialogs.SetFallback(std::move(fallback)); }
 		void InitAudio(bool generatedRig = false,
 			const audio::AsioInventory* inventory = nullptr, bool exactSelection = false);
 		const audio::AsioOpenReport& GetAsioOpenReport() const noexcept
@@ -575,6 +582,8 @@ namespace engine
 		std::vector<std::shared_ptr<base::GuiElement>> _guiChildren;
 		gui::GuiFocusManager _focusManager;
 		gui::GuiPopupManager _popupManager;
+		gui::RuntimeDialogs _runtimeDialogs;
+		bool _runtimeRendererReady = false; // UI-only; job and audio never inspect it.
 		gui::NinjamTempoPrompt _tempoPrompt;
 		ninjam::NinjamTimingDiagnosticPresenter _ninjamDiagnosticPresenter;
 		// Job-owned diagnostic maxima; no callback reads/writes.
