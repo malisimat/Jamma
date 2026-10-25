@@ -71,8 +71,6 @@ Station::Station(StationParams params,
 	_fadeSamps(params.FadeSamps),
 	_lastBufSize(constants::MaxBlockSize),
 	_clock(std::shared_ptr<utils::Timer>()),
-	_quantisationModel(std::make_shared<QuantisationModel>()),
-	_quantisationDivisionModel(std::make_shared<QuantisationDivisionModel>()),
 	_stationModel(std::make_shared<graphics::StationModel>()),
 	_guiRack(nullptr),
 	_masterMixer(nullptr),
@@ -93,10 +91,7 @@ Station::Station(StationParams params,
 	_sampleRate(44100.0f),
 	_blockSize(512u),
 	_vstBlockScratch(),
-	_vstBlockPtrs(),
-	_pendingQuantisationParams(std::nullopt),
-	_pendingQuantisationConfirm(false),
-	_quantisationOverlayAlpha(0.0f)
+	_vstBlockPtrs()
 {
 	_masterMixer = std::make_shared<AudioMixer>(mixerParams);
 	_stationModel->SetParams(params.StationLevelFallRate);
@@ -305,36 +300,10 @@ void Station::Draw3d(base::DrawContext& ctx,
 	for (auto& child : _children)
 		child->Draw3d(ctx, 1, pass);
 
-	if ((_quantisationModel || _quantisationDivisionModel) && (base::PASS_SCENE == pass))
+	if (_stationModel && pass == base::PASS_SCENE)
 	{
-		// Refresh quantisation overlay state on the render thread (safe for
-		// geometry and instance-buffer allocation).
 		RefreshQuantisationOverlayFromClock();
-
-		// Draw the semi-transparent quantisation overlay without writing to the
-		// depth buffer (so it blends with already-rendered geometry and does not
-		// occlude subsequent draws).  Face culling eliminates back-facing gate
-		// panels that would otherwise accumulate a second alpha layer at the same
-		// screen pixel, which pushes effective opacity well above the intended 70%.
-		GLboolean prevDepthMask = GL_TRUE;
-		glGetBooleanv(GL_DEPTH_WRITEMASK, &prevDepthMask);
-		const GLboolean wasCulling = glIsEnabled(GL_CULL_FACE);
-		GLint prevCullFaceMode = GL_BACK;
-		glGetIntegerv(GL_CULL_FACE_MODE, &prevCullFaceMode);
-
-		glDepthMask(GL_FALSE);
-		glEnable(GL_CULL_FACE);
-		glCullFace(GL_BACK);
-
-		if (_quantisationModel)
-			_quantisationModel->Draw3d(ctx, numInstances, pass);
-		if (_quantisationDivisionModel)
-			_quantisationDivisionModel->Draw3d(ctx, numInstances, pass);
-
-		glDepthMask(prevDepthMask);
-		glCullFace(prevCullFaceMode);
-		if (!wasCulling)
-			glDisable(GL_CULL_FACE);
+		_stationModel->DrawQuantisationOverlay(ctx, numInstances, pass);
 	}
 
 	glCtx.PopMvp();
@@ -351,30 +320,23 @@ utils::Position3d Station::TopCapModelPosition() const
 utils::Position3d Station::PresentationModelPosition() const
 {
 	auto position = ModelPosition();
-	position.X += _presentationOffsetX;
+	position.X += _stationModel ? _stationModel->PresentationOffsetX() : 0.0f;
 	return position;
 }
 
 void Station::BeginPresentationMove(float startX)
 {
-	_presentationOffsetX = _presentationStartOffsetX = startX - ModelPosition().X;
-	_presentationElapsed = 0.0f;
+	if (_stationModel) _stationModel->BeginPresentationMove(startX - ModelPosition().X);
 }
 
 bool Station::AdvancePresentationMove(float elapsedSeconds)
 {
-	if (!IsPresentationMoving()) return false;
-	_presentationElapsed += std::clamp(elapsedSeconds, 0.0f, 0.05f);
-	const float t = std::min(1.0f, _presentationElapsed / 0.25f);
-	const float eased = t * t * (3.0f - 2.0f * t);
-	_presentationOffsetX = _presentationStartOffsetX * (1.0f - eased);
-	if (t >= 1.0f) FinishPresentationMove();
-	return true; // Includes settling frame, so a stationary cursor is repicked.
+	return _stationModel && _stationModel->AdvancePresentationMove(elapsedSeconds);
 }
 
 void Station::FinishPresentationMove() noexcept
 {
-	_presentationOffsetX = _presentationStartOffsetX = _presentationElapsed = 0.0f;
+	if (_stationModel) _stationModel->FinishPresentationMove();
 }
 
 utils::Position2d Station::Position() const
@@ -1811,24 +1773,9 @@ void Station::SetClock(std::shared_ptr<utils::Timer> clock)
 	_clock = clock;
 }
 
-void Station::SetQuantisationParams(std::optional<engine::QuantisationParams> params,
-	bool confirm)
+void Station::SetQuantisationParams(std::optional<engine::QuantisationParams> params, bool confirm)
 {
-	if (!_quantisationModel)
-		return;
-
-	if (!params.has_value())
-	{
-		_pendingQuantisationParams = std::nullopt;
-		_pendingQuantisationConfirm = false;
-		return;
-	}
-
-	_pendingQuantisationParams = engine::QuantisationParams{
-		params->SeedSamps,
-		params->MasterSamps
-	};
-	_pendingQuantisationConfirm = _pendingQuantisationConfirm || confirm;
+	if (_stationModel) _stationModel->SetQuantisationParams(params, confirm);
 }
 
 void Station::ClearQuantisationParams()
@@ -1838,11 +1785,7 @@ void Station::ClearQuantisationParams()
 
 void Station::SetQuantisationOverlayAlpha(float alpha) noexcept
 {
-	_quantisationOverlayAlpha = std::clamp(alpha, 0.0f, 1.0f);
-	if (_quantisationModel)
-		_quantisationModel->SetOverlayAlpha(_quantisationOverlayAlpha);
-	if (_quantisationDivisionModel)
-		_quantisationDivisionModel->SetOverlayAlpha(_quantisationOverlayAlpha);
+	if (_stationModel) _stationModel->SetQuantisationOverlayAlpha(alpha);
 }
 
 void Station::SetGlobalMidiQuantState(io::JamFile::GlobalMidiQuantState state) noexcept
@@ -1936,70 +1879,10 @@ void Station::_ApplyMidiQuantisationPhaseOffset() noexcept
 
 void Station::RefreshQuantisationOverlayFromClock()
 {
-	if (!_quantisationModel && !_quantisationDivisionModel)
-		return;
-
-	if (!_clock || !_clock->IsQuantisable() || (_quantisationOverlayAlpha <= 0.001f))
-	{
-		_pendingQuantisationParams = std::nullopt;
-		_pendingQuantisationConfirm = false;
-		if (_quantisationModel)
-		{
-			_quantisationModel->SetTiming(_HiddenSeedSamps);
-			_quantisationModel->SetOverlayVisible(false, false);
-		}
-		if (_quantisationDivisionModel)
-			_quantisationDivisionModel->SetOverlayVisible(false, false);
-		return;
-	}
-
-	const auto visuals = LoopTake::QuantisationVisualsFor(GetLoopTakes());
-
-	if (visuals.empty())
-	{
-		_pendingQuantisationParams = std::nullopt;
-		_pendingQuantisationConfirm = false;
-		if (_quantisationModel)
-		{
-			_quantisationModel->SetTiming(_HiddenSeedSamps);
-			_quantisationModel->SetOverlayVisible(false, false);
-		}
-		if (_quantisationDivisionModel)
-			_quantisationDivisionModel->SetOverlayVisible(false, false);
-		return;
-	}
-
-	if (_pendingQuantisationParams.has_value())
-	{
-		const auto seedSamps = _pendingQuantisationParams->SeedSamps > 0u ?
-			_pendingQuantisationParams->SeedSamps :
-				_HiddenSeedSamps;
-
-		if (_quantisationModel)
-		{
-			_quantisationModel->SetLoopTakeVisuals(seedSamps, visuals);
-			_quantisationModel->SetOverlayVisible(true, _pendingQuantisationConfirm);
-		}
-		if (_quantisationDivisionModel)
-		{
-			_quantisationDivisionModel->SetLoopTakeVisuals(visuals);
-			_quantisationDivisionModel->SetOverlayVisible(true, _pendingQuantisationConfirm);
-		}
-		_pendingQuantisationConfirm = false;
-		return;
-	}
-
-	const auto seedSamps = _clock->QuantiseSamps();
-	if (_quantisationModel)
-	{
-		_quantisationModel->SetLoopTakeVisuals(seedSamps, visuals);
-		_quantisationModel->SetOverlayVisible(true, false);
-	}
-	if (_quantisationDivisionModel)
-	{
-		_quantisationDivisionModel->SetLoopTakeVisuals(visuals);
-		_quantisationDivisionModel->SetOverlayVisible(true, false);
-	}
+	if (!_stationModel) return;
+	const bool quantisable = _clock && _clock->IsQuantisable() && _stationModel->QuantisationOverlayEnabled();
+	_stationModel->RefreshQuantisationOverlay(quantisable, quantisable ? _clock->QuantiseSamps() : 0u,
+		quantisable ? LoopTake::QuantisationVisualsFor(GetLoopTakes()) : std::vector<engine::QuantisationLoopTakeVisual>{});
 }
 
 void Station::SetupBuffers(unsigned int bufSize)
@@ -2441,28 +2324,13 @@ void Station::_InitReceivers()
 
 void Station::_InitResources(resources::ResourceLib& resourceLib, bool forceInit)
 {
-	if (_quantisationModel)
-		_quantisationModel->InitResources(resourceLib, forceInit);
-	if (_quantisationDivisionModel)
-		_quantisationDivisionModel->InitResources(resourceLib, forceInit);
-
-	if (_stationModel)
-		_stationModel->InitResources(resourceLib, forceInit);
-
+	if (_stationModel) _stationModel->InitPresentationResources(resourceLib, forceInit);
 	GuiElement::_InitResources(resourceLib, forceInit);
 }
 
 void Station::_ReleaseResources()
 {
-	FinishPresentationMove();
-	if (_quantisationModel)
-		_quantisationModel->ReleaseResources();
-	if (_quantisationDivisionModel)
-		_quantisationDivisionModel->ReleaseResources();
-
-	if (_stationModel)
-		_stationModel->ReleaseResources();
-
+	if (_stationModel) _stationModel->ReleasePresentationResources();
 	GuiElement::_ReleaseResources();
 }
 

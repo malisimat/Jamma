@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 #include <glm/vec3.hpp>
 #include <span>
@@ -9,8 +10,10 @@
 #include <vector>
 #include "../gui/GuiModel.h"
 #include "CameraBounds.h"
+#include "../engine/QuantisationTiming.h"
 
 namespace resources { class TextureResource; }
+namespace engine { class QuantisationModel; class QuantisationDivisionModel; }
 
 namespace graphics
 {
@@ -86,6 +89,21 @@ namespace graphics
 		void SetClickPressed(bool pressed, bool mute = false) noexcept { _clickPressed = pressed ? (mute ? 2.0f : 1.0f) : 0.0f; }
 		void SetMuted(bool muted) noexcept { _muted = muted; }
 		void ResetStationLevel() noexcept;
+		// Window/render owner only; inputs are detached timing and take visuals.
+		void SetQuantisationParams(std::optional<engine::QuantisationParams> params, bool confirm);
+		void SetQuantisationOverlayAlpha(float alpha) noexcept;
+		bool QuantisationOverlayEnabled() const noexcept { return !(_quantisationOverlayAlpha <= 0.001f); }
+		void RefreshQuantisationOverlay(bool quantisable, unsigned int clockSeedSamps,
+			const std::vector<engine::QuantisationLoopTakeVisual>& visuals);
+		void DrawQuantisationOverlay(base::DrawContext& ctx, unsigned int instances, base::DrawPass pass);
+		void InitPresentationResources(resources::ResourceLib& resourceLib, bool forceInit);
+		void ReleasePresentationResources();
+		void BeginPresentationMove(float offsetX);
+		bool AdvancePresentationMove(float elapsedSeconds);
+		void FinishPresentationMove() noexcept;
+		bool IsPresentationMoving() const noexcept { return _presentationOffsetX != 0.0f; }
+		float PresentationOffsetX() const noexcept { return _presentationOffsetX; }
+
 
 		// --- Pure geometry builders (no OpenGL; testable without a GL context) ---
 
@@ -153,6 +171,15 @@ namespace graphics
 		virtual std::weak_ptr<resources::ShaderResource> GetShader() override;
 
 	private:
+		static constexpr unsigned int _HiddenSeedSamps = 1u;
+		std::shared_ptr<engine::QuantisationModel> _quantisationModel;
+		std::shared_ptr<engine::QuantisationDivisionModel> _quantisationDivisionModel;
+		std::optional<engine::QuantisationParams> _pendingQuantisationParams;
+		bool _pendingQuantisationConfirm = false;
+		float _quantisationOverlayAlpha = 0.0f;
+		float _presentationOffsetX = 0.0f;
+		float _presentationStartOffsetX = 0.0f;
+		float _presentationElapsed = 0.0f;
 		static constexpr unsigned int DefaultNumSides = 32u;
 		static constexpr unsigned int DefaultNumRibs = 0u;
 		static constexpr unsigned int SideVerticalSections = 12u;

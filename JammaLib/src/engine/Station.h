@@ -16,8 +16,6 @@
 #include <vector>
 #include "LoopTake.h"
 #include "../engine/Quantiser.h"
-#include "../graphics/QuantisationModel.h"
-#include "../graphics/QuantisationDivisionModel.h"
 #include "../graphics/StationModel.h"
 #include "Trigger.h"
 #include "AudioSink.h"
@@ -124,7 +122,7 @@ namespace engine
 		void BeginPresentationMove(float startX);
 		bool AdvancePresentationMove(float elapsedSeconds);
 		void FinishPresentationMove() noexcept;
-		bool IsPresentationMoving() const noexcept { return _presentationOffsetX != 0.0f; }
+		bool IsPresentationMoving() const noexcept { return _stationModel && _stationModel->IsPresentationMoving(); }
 		// Presentation-only; caller holds Scene::_sceneMutex.
 		graphics::CameraBounds CameraDeckBoundsInWorld() const;
 		float CameraTakeVisualScale() const noexcept;
@@ -353,7 +351,6 @@ namespace engine
 		static constexpr utils::Size2d _Gap = { 5, 5 };
 		static constexpr unsigned int _DefaultNumBusChannels = 8;
 
-		static constexpr unsigned int _HiddenSeedSamps = 1u;
 		static constexpr float _StationModelHeight = 470.0f;
 		static constexpr float _StationModelYOffset = _StationModelHeight * 0.5f;
 
@@ -442,8 +439,6 @@ namespace engine
 		unsigned int _fadeSamps;
 		unsigned int _lastBufSize;
 		std::shared_ptr<utils::Timer> _clock;
-		std::shared_ptr<QuantisationModel> _quantisationModel;
-		std::shared_ptr<QuantisationDivisionModel> _quantisationDivisionModel;
 		std::shared_ptr<graphics::StationModel> _stationModel;
 		// Structural job owner orders meaningful accepted capture-mode changes.
 		std::uint64_t _nextPresentationSerial = 1u;
@@ -519,9 +514,6 @@ namespace engine
 		unsigned int _blockSize = 512u;
 		std::vector<float> _vstBlockScratch;
 		std::vector<float*> _vstBlockPtrs;
-		std::optional<engine::QuantisationParams> _pendingQuantisationParams;
-		bool _pendingQuantisationConfirm = false;
-		float _quantisationOverlayAlpha = 0.0f;
 		io::JamFile::GlobalMidiQuantState _globalMidiQuantState = io::JamFile::GlobalMidiQuantState::Off;
 		// Structural owner only, serialized with AddTake by Scene/Trigger ownership.
 		// Callback reads each take's existing atomic grid publication, never these
@@ -530,8 +522,5 @@ namespace engine
 		std::int64_t _remoteMidiGridOriginSamps = 0;
 		std::int32_t _globalPhaseOffsetSamps = 0;
 		std::int32_t _stationPhaseOffsetSamps = 0;
-		float _presentationOffsetX = 0.0f; // Window owner; no callback/job access.
-		float _presentationStartOffsetX = 0.0f;
-		float _presentationElapsed = 0.0f;
 	};
 }
