@@ -74,24 +74,24 @@ SceneSettingsControls::SceneSettingsControls(std::uint8_t channel, double offset
 			toggleParams.OverTexture = "stationmode_over";
 			toggleParams.DownTexture = "stationmode_down";
 			toggleParams.ToggledTexture = "stationmode_toggled";
-			toggleParams.ToggledOverTexture = "stationmode_over";
-			toggleParams.ToggledDownTexture = "stationmode_down";
+			toggleParams.ToggledOverTexture = "stationmode_toggled_over";
+			toggleParams.ToggledDownTexture = "stationmode_toggled_down";
 			break;
 		case 1:
 			toggleParams.Texture = "takemode";
 			toggleParams.OverTexture = "takemode_over";
 			toggleParams.DownTexture = "takemode_down";
 			toggleParams.ToggledTexture = "takemode_toggled";
-			toggleParams.ToggledOverTexture = "takemode_over";
-			toggleParams.ToggledDownTexture = "takemode_down";
+			toggleParams.ToggledOverTexture = "takemode_toggled_over";
+			toggleParams.ToggledDownTexture = "takemode_toggled_down";
 			break;
 		case 2:
 			toggleParams.Texture = "loopmode";
 			toggleParams.OverTexture = "loopmode_over";
 			toggleParams.DownTexture = "loopmode_down";
 			toggleParams.ToggledTexture = "loopmode_toggled";
-			toggleParams.ToggledOverTexture = "loopmode_over";
-			toggleParams.ToggledDownTexture = "loopmode_down";
+			toggleParams.ToggledOverTexture = "loopmode_toggled_over";
+			toggleParams.ToggledDownTexture = "loopmode_toggled_down";
 			break;
 		}
 

@@ -477,20 +477,21 @@ int GuiMainPanel::_SelectionPanelHeight() const
 		for (const auto& entry : _controlSizes)
 			if (std::dynamic_pointer_cast<GuiRadio>(entry.first)) { radioHeight = entry.second.Height; break; }
 	return static_cast<int>(radioHeight + 4u + 2u * GuiPerformanceGroupRow::Height) +
-		2 * SelectionRowGap + 2 * StandardPanelPadding + SelectionHandleHeight;
+		2 * SelectionRowGap + StandardPanelPadding + SelectionTopPadding;
 }
 
 void GuiMainPanel::_LayoutSelection(int panelWidth, int panelHeight)
 {
 	const int padding = std::min(StandardPanelPadding, std::min(panelWidth, panelHeight) / 2);
+	const int topPadding = std::min(SelectionTopPadding, std::max(0, panelHeight - padding));
 	const int innerWidth = std::max(0, panelWidth - 2 * padding);
-	const int innerHeight = std::max(0, panelHeight - 2 * padding - SelectionHandleHeight);
+	const int innerHeight = std::max(0, panelHeight - padding - topPadding);
 	auto& page = _pages[static_cast<size_t>(_page)];
 	page->SetPadding(PageContentPadding, 0u);
 	page->SetSpacing(SelectionRowGap);
 	// A short viewport scrolls the complete stack; leave the scrollbar's width
 	// available before distributing the radios so every row shares its clip.
-	const int contentHeight = _SelectionPanelHeight() - 2 * StandardPanelPadding - SelectionHandleHeight;
+	const int contentHeight = _SelectionPanelHeight() - StandardPanelPadding - SelectionTopPadding;
 	const int barWidth = contentHeight > innerHeight ? 12 : 0;
 	page->SetSize({ static_cast<unsigned int>(std::max(0, innerWidth - barWidth)), static_cast<unsigned int>(contentHeight) });
 	for (const auto& row : _groupRows) row->SetSize({ static_cast<unsigned int>(std::max(0, innerWidth - 16 - barWidth)), GuiPerformanceGroupRow::Height });
