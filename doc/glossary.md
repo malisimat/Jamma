@@ -26,6 +26,14 @@ This is Jamma's canonical short reference for core concepts, ownership, and term
 | MidiRefreshPolicy | The value-based policy for MIDI refresh cadence, inventory comparison, and retry decisions. Device operations remain in IoInputSubsystem; Scene/Rig owners retain lifecycle and publication consequences. |
 | NinjamTempoPrompt | The UI-owned tempo proposal popup and displayed proposal identity. It emits typed decisions; the serialized NINJAM coordinator validates proposal identity and owns the decision outcome. |
 | NinjamTimingDiagnosticPresenter | The job-side presentation helper that formats and deduplicates coordinator diagnostics. The coordinator owns diagnostic records; Scene drains and routes them off the audio callback. |
+| PointerInteraction | The GUI-side owner of weak pointer capture, panel dispatch, focus completion and hover paths. The window orchestrator chooses dispatch order and admission, and owns target locks. |
+| Compositor / Camera / StationModel | Graphics owners of frame composition, camera geometry/framing, and station overlays/motion respectively. Scene and Station provide explicit presentation inputs and retain hierarchy traversal and domain decisions. |
+| ControlOperation | The non-audio exclusive-control protocol owner for operation identity, writer admission, trigger-input closure and audio quiescence/restoration. Scene retains eligibility, hardware/file effects, publication and replacement ordering. |
+| LocalTiming | The job-side local-master preparation/retry handshake, called under the caller's Scene lock. AudioHost retains audio-boundary timing application and authority; Quantiser retains geometry decisions. |
+| MidiDelivery | The MIDI delivery owner for prepared destinations, bounded delayed events, note/pedal ownership and recovery. Station retains structural publication and audio-block ordering; physical input routing remains in IO. |
+| CaptureHistory | The non-audio physical MIDI history, held-note/pedal and source-loss tracking owner. Station retains recording admission, timing and take creation. |
+| AutomationPlayback | The reusable prepared parameter-automation dispatch and target-resolution owner. The structural caller supplies takes/chains and publishes off the callback; audio only borrows prepared state and advances its dispatch cursors. |
+| RackState | The VST-side owner of rack slot metadata, queued jobs, saved state and staged chains. Station retains routing, prepared audio publication and UI lifetime consequences. |
 | Snapshot | An immutable published view used to cross an ownership/thread boundary safely. Publishing a snapshot does not transfer ownership of the underlying subsystem's decisions. |
 
 ## Ownership boundaries
