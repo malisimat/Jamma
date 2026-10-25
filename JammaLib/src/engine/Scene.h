@@ -26,7 +26,7 @@
 #include "../graphics/Image.h"
 #include "../graphics/Camera.h"
 #include "../graphics/GlDrawContext.h"
-#include "../graphics/Compositor.h"
+#include "../gui/Workspace.h"
 #include "../gui/GuiLabel.h"
 #include "../gui/NinjamTempoPrompt.h"
 #include "../gui/GuiFocusManager.h"
@@ -145,7 +145,7 @@ namespace engine
 		{
 			std::scoped_lock lock(_sceneMutex);
 			_sizeParams.Size = size;
-			_InitSize();
+			_workspace->ResizeLocked(_sizeParams.Size, _loopEditor, _stations);
 			_InvalidateHover2d();
 		}
 
@@ -184,12 +184,12 @@ namespace engine
 		std::uint64_t Identity() const noexcept { return _sceneIdentity; }
 		void ReportFileStatus(const std::string& status);
 		void ReportFileOutcome(const std::string& status)
-		{ _settingsControls->SetFileStatus(status); ReportRuntimeNotice("JAM",status); }
+		{ _workspace->Settings()->SetFileStatus(status); ReportRuntimeNotice("JAM",status); }
 		// Owned values only; off-callback workers may post, UI alone presents.
 		void ReportRuntimeNotice(std::string title, std::string message)
-		{ _runtimeDialogs.Notify(std::move(title),std::move(message)); }
+		{ _workspace->Notices().Notify(std::move(title),std::move(message)); }
 		void SetRuntimeDialogFallback(gui::RuntimeDialogs::Fallback fallback)
-		{ _runtimeDialogs.SetFallback(std::move(fallback)); }
+		{ _workspace->Notices().SetFallback(std::move(fallback)); }
 		void InitAudio(bool generatedRig = false,
 			const audio::AsioInventory* inventory = nullptr, bool exactSelection = false);
 		const audio::AsioOpenReport& GetAsioOpenReport() const noexcept
@@ -208,7 +208,7 @@ namespace engine
 		bool PumpGlobalKeyCapture(actions::KeyAction& action) noexcept;
 		void OnInputFocusLost();
 		bool CapturesContextualKeyboard(unsigned int key) const
-		{ return _rigSaveDialogOpen || _operation.HoldsWriter() || _popupManager.IsOpen() || _focusManager.IsEditingText() || _loopEditor.IsEngaged() || _contextualKeyboard.Suppresses(key); }
+		{ return _rigSaveDialogOpen || _operation.HoldsWriter() || _workspace->Popups().IsOpen() || _workspace->Focus().IsEditingText() || _loopEditor.IsEngaged() || _contextualKeyboard.Suppresses(key); }
 		void Shutdown();
 		bool JobThreadFailed() const noexcept { return _jobThreadFailed.load(std::memory_order_acquire); }
 		std::string_view JobThreadFailureDetail() const noexcept { return JobThreadFailed() ? std::string_view(_jobThreadFailureDetail.data()) : std::string_view{}; }
@@ -342,9 +342,6 @@ namespace engine
 			float* outBuffer,
 			unsigned int numSamps);
 		bool _OnUndo(std::shared_ptr<base::ActionUndo> undo);
-		void _InitSize();
-		void _UpdateHudStationAnchors();
-		void _UpdateViewProjectionLocked();
 		void _PublishGroupMuteApplication(std::shared_ptr<const GroupMuteApplication> application);
 		void _ExecuteGroupCommandLocked(bool selection, GroupCommand command, std::size_t slot);
 		GroupTargetKind _GroupSelectionDepthLocked() const;
@@ -352,8 +349,6 @@ namespace engine
 		void _UpdateSelection(actions::ActionResultType res);
 		actions::ActionResult _OnPointerAction(actions::TouchAction action);
 		actions::ActionResult _OnPointerMove(actions::TouchMoveAction action);
-		void _UpdateRackVisibilityLocked();
-		void _CollapseRacksLocked();
 		// Selection helpers require _sceneMutex throughout hierarchy access.
 		base::Tweakable::TweakState _SelectionTweakStateLocked(const std::shared_ptr<base::GuiElement>& target) const;
 		void _PrepareStation(const std::shared_ptr<Station>& station);
@@ -463,8 +458,6 @@ namespace engine
 		std::atomic_bool _jobThreadFailed{false}; // Publishes the immutable failure detail to UI; lifetime ends after join.
 		std::array<char, 4096> _jobThreadFailureDetail{}; // Job writes once, before release-publishing failure.
 		std::atomic_bool _isSceneReset;
-		glm::mat4 _viewProj;
-		graphics::Compositor _compositor;
 		std::unique_ptr<audio::AudioHost> _audioEngine;
 		std::unique_ptr<io::IoInputSubsystem> _inputSubsystem;
 		std::optional<midi::MidiInputInventory> _midiInputInventory;
@@ -528,7 +521,6 @@ namespace engine
 		engine::Quantiser _quantisation;
 		LocalTiming _localTiming;
 		io::LoggingConfig _loggingConfig;
-		std::unique_ptr<gui::SceneSettingsControls> _settingsControls;
 		// Window-thread physical key state; repeats and consumed text taps cannot
 		// become extra tempo taps. Gesture holds are owned by the controller.
 		bool _spaceHeld = false;
@@ -537,19 +529,9 @@ namespace engine
 		std::atomic_bool _quantisationInputResetRequested{ false };
 		io::JamFile::GlobalMidiQuantState _globalMidiQuantState = io::JamFile::GlobalMidiQuantState::Mixed;
 		double _transportOffsetLoopFrac = 0.0;
-		std::unique_ptr<gui::SceneSelector> _selector;
-		std::shared_ptr<gui::GuiMainPanel> _mainPanel;
-		std::shared_ptr<gui::GuiMainPanel> _selectionPanel;
-		std::shared_ptr<gui::GuiHud> _hudPanel;
 		PerformanceGroupController _performanceGroups; // scene mutex, never audio
 		ContextualKeyboardInput _contextualKeyboard; // Window thread only; no callback state.
 		std::array<bool, 256u> _learnKeysDown{}; // Window owner: repeat filtering, cleared on focus loss.
-		std::vector<std::shared_ptr<base::GuiElement>> _guiChildren;
-		gui::GuiFocusManager _focusManager;
-		gui::GuiPopupManager _popupManager;
-		gui::RuntimeDialogs _runtimeDialogs;
-		bool _runtimeRendererReady = false; // UI-only; job and audio never inspect it.
-		gui::NinjamTempoPrompt _tempoPrompt;
 		ninjam::NinjamTimingDiagnosticPresenter _ninjamDiagnosticPresenter;
 		std::uint64_t _ninjamJoinGeneration = 0u;
 		std::uint64_t _ninjamTempoRequestId = 0u;
@@ -559,7 +541,6 @@ namespace engine
 		std::vector<std::shared_ptr<Station>> _retiredStations; // Scene mutex; UI reclaims after all callback/job pins release.
 		std::optional<ninjam::NinjamRemoteSnapshot> _deferredRemoteSnapshot; // Scene mutex; latest remote membership while a local change commits.
 		StationManagement _stationManagement; // All access under _sceneMutex; UI teardown.
-		gui::GuiStationControls _stationControls; // Window/render owner only.
 		std::shared_ptr<gui::GuiPopup> _stationDeleteDialog; // Window owner only.
 		std::shared_ptr<gui::GuiPopup> _takeDitchDialog; // Window owner only.
 		// Window-owned confirmation pins; request/cancel/confirm serialize with job edits via _sceneMutex.
@@ -578,20 +559,17 @@ namespace engine
 		std::uint64_t _lastAudioCallbackHeartbeat = 0u;
 		std::chrono::steady_clock::time_point _lastAudioCallbackHeartbeatAt{};
 		actions::ActionUndoHistory _undoHistory;
-		gui::PointerInteraction _pointer;
 		void _OnSettingsHidden(const std::shared_ptr<base::GuiElement>& subtree);
 		std::optional<actions::ActionResult> _RouteSettingsTouch(actions::TouchAction action);
 		std::weak_ptr<base::GuiElement> _hoverElement3d;
 		std::vector<unsigned char> _hoverPath3d;
 		std::vector<unsigned char> _lastLoggedHoverPath;
-		graphics::CtrlHandleOverlay _ctrlHandleOverlay;
+		std::unique_ptr<gui::Workspace> _workspace;
 		engine::QuantiserController _quantisationInteraction;
 		// Recording publication has separate structural ownership from camera presentation.
 		std::shared_ptr<CameraRecordingPublisher> _cameraRecordings = std::make_shared<CameraRecordingPublisher>();
-		graphics::Camera _camera;
 		// Window owner only: selection/group clicks retain their gesture classification through release.
 		bool _cameraPointerPreservesIdle = false;
-		std::optional<Time> _lastPanelAnimationTime;
 		std::thread _jobRunner;
 		std::mutex _jobMutex;
 		std::list<actions::JobAction> _jobList;

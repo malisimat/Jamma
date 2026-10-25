@@ -1646,14 +1646,14 @@ class GuiSettingsOwnerScene final : public engine::Scene
 {
 public:
 	GuiSettingsOwnerScene() : Scene(engine::SceneParams({ "" }, {}, { 800u, 600u }), io::UserConfig{}) {}
-	std::shared_ptr<gui::GuiMainPanel> Settings() const { return _mainPanel; }
-	std::shared_ptr<gui::GuiMainPanel> Selection() const { return _selectionPanel; }
-	std::shared_ptr<gui::GuiMidiChannelOverride> Channel() const { return _settingsControls->Channel(); }
-	std::shared_ptr<gui::GuiNumericInput> Phase() const { return _settingsControls->Offset(); }
-	std::shared_ptr<gui::GuiToggle> Click() const { return _settingsControls->Metronome(); }
-	std::shared_ptr<gui::GuiRadio> Quantisation() const { return _settingsControls->GlobalQuantisation(); }
-	std::shared_ptr<gui::GuiRadio> Depth() const { return _settingsControls->Mode(); }
-	std::shared_ptr<gui::GuiRadio> Subdivision() const { return _settingsControls->Subdivision(); }
+	std::shared_ptr<gui::GuiMainPanel> Settings() const { return _workspace->MainPanel(); }
+	std::shared_ptr<gui::GuiMainPanel> Selection() const { return _workspace->SelectionPanel(); }
+	std::shared_ptr<gui::GuiMidiChannelOverride> Channel() const { return _workspace->Settings()->Channel(); }
+	std::shared_ptr<gui::GuiNumericInput> Phase() const { return _workspace->Settings()->Offset(); }
+	std::shared_ptr<gui::GuiToggle> Click() const { return _workspace->Settings()->Metronome(); }
+	std::shared_ptr<gui::GuiRadio> Quantisation() const { return _workspace->Settings()->GlobalQuantisation(); }
+	std::shared_ptr<gui::GuiRadio> Depth() const { return _workspace->Settings()->Mode(); }
+	std::shared_ptr<gui::GuiRadio> Subdivision() const { return _workspace->Settings()->Subdivision(); }
 	void SetFrozenTapClock()
 	{
 		auto clock = std::make_shared<utils::Timer>();

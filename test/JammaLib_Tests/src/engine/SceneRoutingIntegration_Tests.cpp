@@ -71,18 +71,18 @@ namespace engine
             // These tests need actual free canvas before supplying a picker path.
             const auto point = utils::Position2d{560,200} + offset;
             EXPECT_TRUE(utils::Size2d::RectTest(scene._sizeParams.Size, point));
-            EXPECT_FALSE(scene._hudPanel->CapturesPointer(scene._hudPanel->GlobalToLocal(point)));
-            EXPECT_FALSE(scene._selectionPanel->RouteHitTest(scene._selectionPanel->GlobalToLocal(point)));
-            EXPECT_FALSE(scene._mainPanel->RouteHitTest(scene._mainPanel->GlobalToLocal(point)));
+            EXPECT_FALSE(scene._workspace->Hud()->CapturesPointer(scene._workspace->Hud()->GlobalToLocal(point)));
+            EXPECT_FALSE(scene._workspace->SelectionPanel()->RouteHitTest(scene._workspace->SelectionPanel()->GlobalToLocal(point)));
+            EXPECT_FALSE(scene._workspace->MainPanel()->RouteHitTest(scene._workspace->MainPanel()->GlobalToLocal(point)));
             return point;
         }
         static std::shared_ptr<gui::GuiButton> RigSaveButton(Scene& scene)
-        { return gui::GuiMainPanelTestAccess::RigSaveButton(*scene._mainPanel); }
+        { return gui::GuiMainPanelTestAccess::RigSaveButton(*scene._workspace->MainPanel()); }
         static std::shared_ptr<gui::GuiButton> RigSaveChoice(Scene& scene, unsigned int choice)
-        { return gui::GuiMainPanelTestAccess::RigSaveChoice(*scene._mainPanel, choice); }
+        { return gui::GuiMainPanelTestAccess::RigSaveChoice(*scene._workspace->MainPanel(), choice); }
         static bool RigSaveRequested(const Scene& scene) { return scene._rigSaveRequested; }
-        static void ChooseAudio(Scene& scene, int index) { scene._settingsControls->AudioDevice()->SetSelectedIndex(index, true); }
-        static void AudioChannels(Scene& scene, unsigned int input, double value) { scene._settingsControls->AudioInput(input)->SetValue(value, true); }
+        static void ChooseAudio(Scene& scene, int index) { scene._workspace->Settings()->AudioDevice()->SetSelectedIndex(index, true); }
+        static void AudioChannels(Scene& scene, unsigned int input, double value) { scene._workspace->Settings()->AudioInput(input)->SetValue(value, true); }
         static std::shared_ptr<Station> RemovalTarget(Scene& scene)
         { std::scoped_lock lock(scene._sceneMutex); return scene._stationManagement.Target; }
         static std::shared_ptr<gui::GuiButton> RemovalButton(Scene& scene, unsigned int ordinal)
@@ -109,7 +109,7 @@ namespace engine
             scene._deviceInventory = inventory;
             scene._SetAudioDraftFromStream(params);
             scene._RebuildDevicePage();
-            return scene._settingsControls->AudioDevice()->SelectedText();
+            return scene._workspace->Settings()->AudioDevice()->SelectedText();
         }
         static io::UserConfig::AudioSettings AudioDraft(const Scene& scene) { return scene._audioDraft; }
         static void WhileSceneLocked(Scene& scene, const std::function<void()>& callback)
@@ -129,16 +129,16 @@ namespace engine
         static void RefreshRackVisibility(Scene& scene)
         {
             std::scoped_lock lock(scene._sceneMutex);
-            scene._viewProj = glm::mat4(1.0f);
-            scene._UpdateRackVisibilityLocked();
+            scene._workspace->ViewProjection() = glm::mat4(1.0f);
+            scene._workspace->UpdateRackVisibilityLocked(scene._stations, scene._loopEditor.IsEngaged());
         }
-        static bool ItemMutePressed(const Scene& scene) { return scene._selector->IsMutePressed(); }
-        static bool ItemMutePainting(const Scene& scene) { return scene._selector->IsPaintingMute(); }
+        static bool ItemMutePressed(const Scene& scene) { return scene._workspace->Selector()->IsMutePressed(); }
+        static bool ItemMutePainting(const Scene& scene) { return scene._workspace->Selector()->IsPaintingMute(); }
         static bool BackgroundPreviewActive(const Scene& scene) { return scene._BackgroundPreviewActive(); }
-        static graphics::Camera::Pose CameraPose(const Scene& scene) { return scene._camera.CurrentPose(); }
-        static bool BackgroundOwned(const Scene& scene) { return scene._selector->OwnsBackgroundClick(); }
-        static bool CameraBackgroundActive(const Scene& scene) { return scene._camera.IsBackgroundDragging(); }
-        static bool CameraPointerHeld(const Scene& scene) { return scene._camera.IsBackgroundPointerHeld(); }
+        static graphics::Camera::Pose CameraPose(const Scene& scene) { return scene._workspace->Camera().CurrentPose(); }
+        static bool BackgroundOwned(const Scene& scene) { return scene._workspace->Selector()->OwnsBackgroundClick(); }
+        static bool CameraBackgroundActive(const Scene& scene) { return scene._workspace->Camera().IsBackgroundDragging(); }
+        static bool CameraPointerHeld(const Scene& scene) { return scene._workspace->Camera().IsBackgroundPointerHeld(); }
         static bool ApplyMuteBoundary(Scene& scene)
         {
             scene._audioEngine->CloseCallbackAdmission();
@@ -168,7 +168,7 @@ namespace engine
 		{ std::scoped_lock lock(scene._sceneMutex); for (const auto& station : scene._stations) station->FinishPresentationMove(); }
 		static bool ControlsAvailable(Scene& scene)
 		{ std::scoped_lock lock(scene._sceneMutex); return scene._StationManagementAvailableLocked(); }
-        static void ConfirmRemoval(Scene& scene) { scene._popupManager.Close(); scene._AcceptStationRemoval(true); }
+        static void ConfirmRemoval(Scene& scene) { scene._workspace->Popups().Close(); scene._AcceptStationRemoval(true); }
         static bool Busy(Scene& scene) { std::scoped_lock lock(scene._sceneMutex); return scene._stationManagement.Busy(); }
         static void Recover(Scene& scene) { scene._PumpSourceLossRecovery(); }
         static bool RecoveryGateIsClosed(Scene& scene)
@@ -178,23 +178,23 @@ namespace engine
         }
 		static std::shared_ptr<gui::GuiNumericInput> FocusSetting(Scene& scene, const std::string& text)
 		{
-			auto field = scene._settingsControls->Offset();
+			auto field = scene._workspace->Settings()->Offset();
 			// Focus manager and text edit state belong to the window owner. Commit
 			// remains deferred until actual Scene focus loss invokes FinalizeEdits.
-			EXPECT_TRUE(scene._focusManager.RequestFocus(field));
+			EXPECT_TRUE(scene._workspace->Focus().RequestFocus(field));
 			field->SetText(text, false);
 			return field;
 		}
 		static unsigned int ForcedChannel(const Scene& scene) { return scene._inputSubsystem->ForcedChannelOverride(); }
-        static void OpenKeyboardModal(Scene& scene) { scene._popupManager.Open(std::make_shared<gui::GuiPopup>()); }
-        static void CloseKeyboardModal(Scene& scene) { scene._popupManager.CloseAll(); }
+        static void OpenKeyboardModal(Scene& scene) { scene._workspace->Popups().Open(std::make_shared<gui::GuiPopup>()); }
+        static void CloseKeyboardModal(Scene& scene) { scene._workspace->Popups().CloseAll(); }
 
-		static void StaleProjection(Scene& scene) { scene._viewProj = glm::mat4(0.0f); }
+		static void StaleProjection(Scene& scene) { scene._workspace->ViewProjection() = glm::mat4(0.0f); }
 		static bool HasCurrentProjection(const Scene& scene)
 		{
 			const auto aspect = static_cast<float>(scene._sizeParams.Size.Width) / scene._sizeParams.Size.Height;
-			const auto current = scene._camera.Projection(aspect, Scene::_StationCentre(scene._stations)) * scene._camera.ViewMatrix();
-			return scene._viewProj == current;
+			const auto current = scene._workspace->Camera().Projection(aspect, Scene::_StationCentre(scene._stations)) * scene._workspace->Camera().ViewMatrix();
+			return scene._workspace->ViewProjection() == current;
 		}
 		static std::shared_ptr<gui::GuiHud> PrepareHud(Scene& scene)
 		{
@@ -209,10 +209,10 @@ namespace engine
 			// Supply only the liveness hint. Publication still runs through the real
 			// producer gate, stopped-reader barrier and input acknowledgement.
 			AudioHeartbeat(scene);
-			scene._hudPanel->SetCableRevealHeld(true);
-			scene._hudPanel->SetStationAnchors({ {0u, scene._stations[0]->Name(), glm::dvec2{600, 350}, glm::vec4{1.0f}},
+			scene._workspace->Hud()->SetCableRevealHeld(true);
+			scene._workspace->Hud()->SetStationAnchors({ {0u, scene._stations[0]->Name(), glm::dvec2{600, 350}, glm::vec4{1.0f}},
 				{1u, scene._stations[1]->Name(), glm::dvec2{800, 350}, glm::vec4{1.0f}} });
-			return scene._hudPanel;
+			return scene._workspace->Hud();
 		}
 		static void AudioHeartbeat(Scene& scene)
 		{ scene._audioEngine->_audioCallbackHeartbeat.fetch_add(1u); }

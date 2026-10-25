@@ -536,12 +536,12 @@ class SettingsTestScene : public Scene
 {
 public:
 	SettingsTestScene(SceneParams params, io::UserConfig user) : Scene(std::move(params), std::move(user)) {}
-	std::shared_ptr<gui::GuiMainPanel> SettingsPanel() const { return _mainPanel; }
-	std::shared_ptr<gui::GuiMainPanel> SelectionPanel() const { return _selectionPanel; }
-	std::shared_ptr<gui::GuiHud> HudPanel() const { return _hudPanel; }
+	std::shared_ptr<gui::GuiMainPanel> SettingsPanel() const { return _workspace->MainPanel(); }
+	std::shared_ptr<gui::GuiMainPanel> SelectionPanel() const { return _workspace->SelectionPanel(); }
+	std::shared_ptr<gui::GuiHud> HudPanel() const { return _workspace->Hud(); }
 	void SetHudForInputTest(const std::shared_ptr<gui::GuiHud>& hud) {
-		for (auto& child : _guiChildren) if (child == _hudPanel) child = hud;
-		_hudPanel = hud;
+		for (auto& child : _workspace->Children()) if (child == _workspace->Hud()) child = hud;
+		_workspace->Hud() = hud;
 	}
 };
 

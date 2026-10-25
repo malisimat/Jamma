@@ -607,8 +607,8 @@ class ChannelOverrideSettingsScene final : public engine::Scene
 public:
 	ChannelOverrideSettingsScene() : Scene(engine::SceneParams({ "" }, {}, { 800u, 600u }), io::UserConfig{}) {}
 	void Attach(const std::shared_ptr<Station>& station) { _AddStation(station); }
-	const auto& ChannelControl() const { return _settingsControls->Channel(); }
-	void RefreshChannel() { _settingsControls->RefreshChannelPresentation(ChannelControl()->Channel()); }
+	const auto& ChannelControl() const { return _workspace->Settings()->Channel(); }
+	void RefreshChannel() { _workspace->Settings()->RefreshChannelPresentation(ChannelControl()->Channel()); }
 };
 
 TEST(StationMidiInstrument, SettingsOverrideChangesFlushHeldNotesAndPresentationDoesNot)

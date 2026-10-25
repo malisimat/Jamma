@@ -41,24 +41,24 @@ public:
 	{
 		graphics::Camera::Pose pose;
 		pose.Eye = { 0.0f, 0.0f, 420.0f };
-		_camera.SetViewTarget(graphics::Camera::View::Front, pose);
-		for (unsigned int tick = 0u; tick < 8u; ++tick) _camera.TickBackgroundDrag(0.05f);
+		_workspace->Camera().SetViewTarget(graphics::Camera::View::Front, pose);
+		for (unsigned int tick = 0u; tick < 8u; ++tick) _workspace->Camera().TickBackgroundDrag(0.05f);
 		_idleStart = utils::Timer::GetTime() - std::chrono::milliseconds(7900);
 		const auto observation = _cameraRecordings->Snapshot();
-		graphics::CameraPresentationTestAccess::ArmIdle(_camera, _idleStart, *observation, automatic);
+		graphics::CameraPresentationTestAccess::ArmIdle(_workspace->Camera(), _idleStart, *observation, automatic);
 	}
 	bool AutomaticAtOriginalDeadline()
 	{
-		return graphics::CameraPresentationTestAccess::AutomaticAt(_camera,
+		return graphics::CameraPresentationTestAccess::AutomaticAt(_workspace->Camera(),
 			_idleStart + std::chrono::milliseconds(8100), *_cameraRecordings->Snapshot());
 	}
-	bool Automatic() const { return graphics::CameraPresentationTestAccess::Automatic(_camera); }
-	std::uint64_t ActivityRevision() const { return graphics::CameraPresentationTestAccess::ActivityRevision(_camera); }
+	bool Automatic() const { return graphics::CameraPresentationTestAccess::Automatic(_workspace->Camera()); }
+	std::uint64_t ActivityRevision() const { return graphics::CameraPresentationTestAccess::ActivityRevision(_workspace->Camera()); }
 	void AddStation(const std::shared_ptr<engine::Station>& station) { _AddStation(station); }
 	std::shared_ptr<gui::GuiPerformanceGroupRow> GroupRow(std::size_t row)
 	{
 		std::vector<std::shared_ptr<gui::GuiPerformanceGroupRow>> rows;
-		CollectRows(_selectionPanel, rows);
+		CollectRows(_workspace->SelectionPanel(), rows);
 		return row < rows.size() ? rows[row] : nullptr;
 	}
 private:

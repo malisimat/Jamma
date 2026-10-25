@@ -321,9 +321,9 @@ public:
 		// The former (1,1) is inside the drawn status bar at these viewports.
 		const auto point = utils::Position2d{560, 200} + offset;
 		EXPECT_TRUE(utils::Size2d::RectTest(_sizeParams.Size, point));
-		EXPECT_FALSE(_hudPanel->CapturesPointer(_hudPanel->GlobalToLocal(point)));
-		EXPECT_FALSE(_selectionPanel->RouteHitTest(_selectionPanel->GlobalToLocal(point)));
-		EXPECT_FALSE(_mainPanel->RouteHitTest(_mainPanel->GlobalToLocal(point)));
+		EXPECT_FALSE(_workspace->Hud()->CapturesPointer(_workspace->Hud()->GlobalToLocal(point)));
+		EXPECT_FALSE(_workspace->SelectionPanel()->RouteHitTest(_workspace->SelectionPanel()->GlobalToLocal(point)));
+		EXPECT_FALSE(_workspace->MainPanel()->RouteHitTest(_workspace->MainPanel()->GlobalToLocal(point)));
 		return point;
 	}
 
@@ -387,32 +387,32 @@ public:
 
 	utils::Position3d CameraPositionForTest() const
 	{
-		return _camera.ModelPosition();
+		return _workspace->Camera().ModelPosition();
 	}
 
 	graphics::Camera::View CameraViewForTest() const
 	{
-		return _camera.CurrentView();
+		return _workspace->Camera().CurrentView();
 	}
 
 	graphics::Camera::Pose CameraPoseForTest() const
 	{
-		return _camera.CurrentPose();
+		return _workspace->Camera().CurrentPose();
 	}
 
 	float StationInteriorFieldOfViewForTest() const
 	{
-		return _camera.StationInteriorFieldOfView();
+		return _workspace->Camera().StationInteriorFieldOfView();
 	}
 
 	glm::mat4 CameraProjectionForTest() const
 	{
-		return _camera.Projection(1.0f, {});
+		return _workspace->Camera().Projection(1.0f, {});
 	}
 
 	utils::Position3d CameraFocusAtCursorForTest(utils::Position2d cursorPosition) const
 	{
-		return _camera.FocusPointAtCursor(cursorPosition,
+		return _workspace->Camera().FocusPointAtCursor(cursorPosition,
 			_sizeParams.Size.Width,
 			_sizeParams.Size.Height,
 			{});
@@ -423,7 +423,7 @@ public:
 		const auto width = static_cast<float>(_sizeParams.Size.Width);
 		const auto height = static_cast<float>(_sizeParams.Size.Height);
 		const auto aspectRatio = width / height;
-		const auto clip = _camera.Projection(aspectRatio, {}) * _camera.ViewMatrix()
+		const auto clip = _workspace->Camera().Projection(aspectRatio, {}) * _workspace->Camera().ViewMatrix()
 			* glm::vec4(position.X, position.Y, position.Z, 1.0f);
 		const auto ndc = glm::vec3(clip) / clip.w;
 		return { ((ndc.x + 1.0f) * width) / 2.0f, ((ndc.y + 1.0f) * height) / 2.0f };
@@ -450,7 +450,7 @@ public:
 
 	std::shared_ptr<base::GuiElement> CurrentHoverElementForTest()
 	{
-		return _ChildFromPath(_selector->CurrentHover());
+		return _ChildFromPath(_workspace->Selector()->CurrentHover());
 	}
 
 	bool FindLoopGridEditorCandidateForTest(std::shared_ptr<LoopTake>& take,
@@ -461,7 +461,7 @@ public:
 
 	bool IsCameraTransitioningForTest() const
 	{
-		return _camera.IsTransitioning();
+		return _workspace->Camera().IsTransitioning();
 	}
 
 	void UpdateCameraStationFollowForTest()
@@ -471,7 +471,7 @@ public:
 
 	void TickCameraForTest(unsigned int samps, unsigned int sampleRate)
 	{
-		_camera.TickBackgroundDrag(static_cast<float>(samps) / static_cast<float>(sampleRate));
+		_workspace->Camera().TickBackgroundDrag(static_cast<float>(samps) / static_cast<float>(sampleRate));
 	}
 
 	void SettleCameraForTest()
@@ -484,7 +484,7 @@ public:
 	{
 		for (unsigned int tick = 0u; tick < 10u; ++tick)
 		{
-			_camera.TickBackgroundDrag(0.05f);
+			_workspace->Camera().TickBackgroundDrag(0.05f);
 			_loopEditor.Tick(0.05f);
 		}
 	}
@@ -494,23 +494,23 @@ public:
 	bool CtrlOverlayActiveForTest() const { return _quantisationInteraction.EditModeActive(); }
 	float GridAlphaForTest() const { return _quantisation.OverlayAlpha(Timer::GetTime()); }
 	void ClearGridForTest() { _quantisation.ClearOverlay(); }
-	void FocusTextForTest() { _focusManager.RequestFocus(_settingsControls->Offset()); }
-	void ClearTextFocusForTest() { _focusManager.ClearFocus(); }
+	void FocusTextForTest() { _workspace->Focus().RequestFocus(_workspace->Settings()->Offset()); }
+	void ClearTextFocusForTest() { _workspace->Focus().ClearFocus(); }
 	glm::vec3 EditorProbeEyeLocalForTest() const { return _loopEditor.ProbeEyeLocal(); }
 
 	bool IsSceneTouchingForTest() const
 	{
-		return _camera.IsBackgroundDragging();
+		return _workspace->Camera().IsBackgroundDragging();
 	}
 
 	bool HasTouchCaptureForTest() const
 	{
-		return _pointer.HasCapture();
+		return _workspace->Pointer().HasCapture();
 	}
 
 	void OpenPopupForTest(const std::shared_ptr<base::GuiElement>& popup)
 	{
-		_popupManager.Open(popup);
+		_workspace->Popups().Open(popup);
 	}
 
 	void ApplyHoverForTest()
