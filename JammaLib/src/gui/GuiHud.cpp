@@ -1377,6 +1377,25 @@ actions::ActionResult GuiHud::_BeginCableDrag(Position2d point)
 		}
 		_cableDrag = CableInteraction::Drag{ handle, movingEnd, endpoint, std::nullopt, point, std::nullopt };
 	}
+	else if (const auto sourceIndex = _SourceControlAt(point); sourceIndex.has_value())
+	{
+		const auto& source = _sourceEndpoints[sourceIndex.value()];
+		if (!source.Available)
+			return actions::ActionResult::NoAction();
+
+		const auto rootPos = GlobalPosition();
+		const auto socketPos = _sourceWidgets[sourceIndex.value()].Socket->GlobalPosition();
+		const CableInteraction::Endpoint endpoint{
+			source.Kind == io::RigFileRouting::SourceKind::Adc
+				? CableInteraction::EndpointKind::AdcSource : CableInteraction::EndpointKind::MidiSource,
+			{ socketPos.X - rootPos.X + static_cast<int>(_SocketSize / 2u),
+				socketPos.Y - rootPos.Y + static_cast<int>(_SocketSize / 2u) },
+			std::nullopt, std::nullopt, {}, source, source.Available };
+
+		_cableDrag = CableInteraction::Drag{
+			{ _displayedRevision, static_cast<size_t>(-1), CableInteraction::RouteKind::Capture, 0u },
+			CableInteraction::End::Finish, endpoint, std::nullopt, point, std::nullopt };
+	}
 
 	if (!_cableDrag.has_value())
 		return actions::ActionResult::NoAction();
@@ -1893,11 +1912,20 @@ void GuiHud::_UpdateCableHover(Position2d point)
 			cableEnd = std::pair{ *index, CableInteraction::ClosestEnd(cables[*index], point) };
 	const auto endpointIndex = cableEnd.has_value() ? std::nullopt :
 		CableInteraction::HitEndpoint(endpoints, point, _SocketHitRadius);
+	const auto sourceControlIndex = cableEnd.has_value() || endpointIndex.has_value()
+		? std::nullopt : _SourceControlAt(point);
 	const auto next = cableEnd.has_value()
 		? std::optional<CableInteraction::Endpoint>(cableEnd->second == CableInteraction::End::Start
 			? cables[cableEnd->first].Start : cables[cableEnd->first].Finish)
 		: endpointIndex.has_value()
-			? std::optional<CableInteraction::Endpoint>(endpoints[endpointIndex.value()]) : std::nullopt;
+			? std::optional<CableInteraction::Endpoint>(endpoints[endpointIndex.value()])
+			: sourceControlIndex.has_value()
+				? std::optional<CableInteraction::Endpoint>(CableInteraction::Endpoint{
+					_sourceEndpoints[sourceControlIndex.value()].Kind == io::RigFileRouting::SourceKind::Adc
+						? CableInteraction::EndpointKind::AdcSource : CableInteraction::EndpointKind::MidiSource,
+					_ElementCenter(_sourceWidgets[sourceControlIndex.value()].Socket), std::nullopt, std::nullopt, {},
+					_sourceEndpoints[sourceControlIndex.value()], _sourceEndpoints[sourceControlIndex.value()].Available })
+				: std::nullopt;
 	auto revealEndpoint = next;
 	if (revealEndpoint.has_value() && revealEndpoint->Kind == CableInteraction::EndpointKind::Station)
 		revealEndpoint->TriggerIndex.reset();
@@ -1941,14 +1969,20 @@ void GuiHud::_UpdateSocketHighlights()
 	{
 		const auto hovered = _cableDrag.has_value() ? _cableDrag->Snap :
 			(_hoveredCableRoute.has_value() ? std::optional<CableInteraction::Endpoint>{} : _hoveredCableEndpoint);
+		const auto sameEndpoint = [&endpoint](const CableInteraction::Endpoint& candidate)
+		{
+			return candidate.Kind == endpoint.Kind && candidate.TriggerIndex == endpoint.TriggerIndex &&
+				(!candidate.Source.has_value() || (endpoint.Source.has_value() &&
+					candidate.Source->Kind == endpoint.Source->Kind &&
+					candidate.Source->AdcChannel == endpoint.Source->AdcChannel &&
+					candidate.Source->MidiDevice == endpoint.Source->MidiDevice));
+		};
+		if (_cableDrag.has_value() && !_cableDrag->Snap.has_value() &&
+			_cableDrag->MovingEnd == CableInteraction::End::Finish && sameEndpoint(_cableDrag->Fixed))
+			return true;
 		if (!hovered.has_value())
 			return false;
-		if (hovered->Kind != endpoint.Kind || hovered->TriggerIndex != endpoint.TriggerIndex)
-			return false;
-		return !hovered->Source.has_value() || (endpoint.Source.has_value() &&
-			hovered->Source->Kind == endpoint.Source->Kind &&
-			hovered->Source->AdcChannel == endpoint.Source->AdcChannel &&
-			hovered->Source->MidiDevice == endpoint.Source->MidiDevice);
+		return sameEndpoint(*hovered);
 	};
 
 	for (size_t i = 0u; i < _sourceWidgets.size() && i < _sourceEndpoints.size(); ++i)
@@ -2029,6 +2063,22 @@ Rect2d GuiHud::_SourceSocketClip(const std::shared_ptr<GuiScrollPanel>& scroll) 
 	if (!clip.IsEmpty())
 		clip.Bottom = std::max(_topStrip->GlobalPosition().Y, clip.Bottom + _SourceSocketY);
 	return clip;
+}
+
+std::optional<size_t> GuiHud::_SourceControlAt(Position2d point) const
+{
+	const auto global = point + GlobalPosition();
+	for (size_t i = 0u; i < _sourceWidgets.size() && i < _sourceEndpoints.size(); ++i)
+	{
+		const auto& scroll = _sourceEndpoints[i].Kind == io::RigFileRouting::SourceKind::Adc
+			? _topAudioScroll : _topMidiScroll;
+		if (!_sourceWidgets[i].Button->IsVisible() || !scroll ||
+			!_ContentClip(scroll).Contains(global) ||
+			!_sourceWidgets[i].Button->HitTest(_sourceWidgets[i].Button->GlobalToLocal(global)))
+			continue;
+		return i;
+	}
+	return std::nullopt;
 }
 
 bool GuiHud::_SourceVisible(size_t index) const

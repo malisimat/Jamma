@@ -155,7 +155,8 @@ namespace gui
 		static constexpr unsigned int _SourceButtonHeight = GuiStyle::ControlHeight;
 		static constexpr unsigned int _SourceScrollBarHeight = 12u;
 		static constexpr unsigned int _SourceViewportHeight = _SourceButtonHeight + _SourceScrollBarHeight + 4u;
-		static constexpr int _SourcePanelGap = 16;
+		// Keep the inter-panel spacing aligned with the window's standard 8px inset.
+		static constexpr int _SourcePanelGap = 8;
 		static constexpr unsigned int _RightRailWidth = 156u;
 		static constexpr unsigned int _RightRailHeight = 460u;
 		static constexpr unsigned int _RightRailMinHeight = 220u;
@@ -217,6 +218,7 @@ namespace gui
 			std::vector<CableInteraction::Cable>& cables, utils::Position2d point) const;
 		void _UpdateCableHover(utils::Position2d point);
 		void _UpdateSocketHighlights();
+		std::optional<size_t> _SourceControlAt(utils::Position2d point) const;
 		bool _SourceVisible(size_t index) const;
 		actions::ActionResult _BeginCableDrag(utils::Position2d point);
 		void _CancelCableDrag();

@@ -973,20 +973,20 @@ TEST_F(TopPanelInputsLayoutTests, ExpandedWidthsMatchAcrossPagesVisibilityAndVie
 TEST_F(TopPanelInputsLayoutTests, ExactMinimumUsesSideSpanAndOnePixelLessStacksBelow)
 {
 	const int expandedRight = Selection->TopPanelLayout().ExpandedBounds.Right;
-	const auto boundary = static_cast<unsigned int>(expandedRight + 16 + 320 + 8);
+	const auto boundary = static_cast<unsigned int>(expandedRight + 8 + 320 + 8);
 	Resize({boundary, 800u});
 	auto strip = Hud->OccupiedTopStripBounds();
 	EXPECT_EQ(320, strip.Right - strip.Left);
-	EXPECT_EQ(expandedRight + 16, strip.Left);
+	EXPECT_EQ(expandedRight + 8, strip.Left);
 	EXPECT_EQ(792, strip.Top); ExpectSeparated();
 	Resize({boundary - 1u, 800u});
 	strip = Hud->OccupiedTopStripBounds();
-	EXPECT_LE(strip.Top + 16, Selection->TopPanelLayout().PresentedBounds.Bottom);
-	EXPECT_EQ(static_cast<int>(boundary - 1u) - 16, strip.Right - strip.Left);
+	EXPECT_LE(strip.Top + 8, Selection->TopPanelLayout().PresentedBounds.Bottom);
+	EXPECT_EQ(static_cast<int>(boundary - 1u) - 8, strip.Right - strip.Left);
 	ExpectSeparated();
 	Resize({1400u, 800u});
 	strip = Hud->OccupiedTopStripBounds();
-	EXPECT_EQ(expandedRight + 16, strip.Left);
+	EXPECT_EQ(expandedRight + 8, strip.Left);
 	EXPECT_EQ(1392, strip.Right);
 	EXPECT_GT(strip.Right - strip.Left, 760); // Full side span, independent of card contents.
 	ExpectSeparated();
@@ -1003,12 +1003,12 @@ TEST_F(TopPanelInputsLayoutTests, EveryAnimationFrameSharesVisibleClipInputBound
 		const auto presentation = Selection->TopPanelLayout();
 		const auto strip = Hud->OccupiedTopStripBounds();
 		EXPECT_LE(presentation.PresentedBounds.Right, previousRight);
-		EXPECT_EQ(presentation.PresentedBounds.Right + 16, strip.Left);
+		EXPECT_EQ(presentation.PresentedBounds.Right + 8, strip.Left);
 		EXPECT_EQ(expandedSize.Width, Selection->TryGetChild(0u)->GetSize().Width);
 		ExpectSeparated(); previousRight = presentation.PresentedBounds.Right;
 	}
 	EXPECT_FLOAT_EQ(0.0f, Selection->TransitionValue());
-	EXPECT_EQ(Selection->TopPanelLayout().CollapsedBounds.Right + 16, Hud->OccupiedTopStripBounds().Left);
+	EXPECT_EQ(Selection->TopPanelLayout().CollapsedBounds.Right + 8, Hud->OccupiedTopStripBounds().Left);
 	EXPECT_FALSE(Selection->AdvanceAnimation(0.01f));
 	Selection->SetExpanded(true); Advance(0.05f); Advance(0.05f);
 	const auto clip = Selection->PresentedFrameBounds();
@@ -1052,7 +1052,7 @@ TEST_F(TopPanelInputsLayoutTests, StackedDockingAndReversalAreContinuousIncludin
 		}
 		EXPECT_FLOAT_EQ(0.0f, Selection->TransitionValue());
 		EXPECT_EQ(792, Hud->OccupiedTopStripBounds().Top);
-		EXPECT_EQ(Selection->TopPanelLayout().CollapsedBounds.Right + 16, Hud->OccupiedTopStripBounds().Left);
+		EXPECT_EQ(Selection->TopPanelLayout().CollapsedBounds.Right + 8, Hud->OccupiedTopStripBounds().Left);
 		Selection->SetExpanded(true); Advance(0.04f);
 		const auto midway = Hud->OccupiedTopStripBounds();
 		Selection->SetExpanded(false); Advance(0.0f);
@@ -1082,7 +1082,7 @@ TEST_F(TopPanelInputsLayoutTests, ResizeAcrossBreakpointRetargetsCurrentPresenta
 	for (int frame = 0; frame < 32; ++frame) { Advance(0.01f); ExpectSeparated(); }
 	EXPECT_FLOAT_EQ(1.0f, Selection->TransitionValue());
 	EXPECT_EQ(892, Hud->OccupiedTopStripBounds().Top);
-	EXPECT_EQ(Selection->TopPanelLayout().PresentedBounds.Right + 16, Hud->OccupiedTopStripBounds().Left);
+	EXPECT_EQ(Selection->TopPanelLayout().PresentedBounds.Right + 8, Hud->OccupiedTopStripBounds().Left);
 	EXPECT_FALSE(Selection->AdvanceAnimation(0.01f));
 	Selection->SetExpanded(false); Advance(0.01f);
 	Resize({420u, 900u}); // Viewport clamping must retain the 320px minimum.
@@ -1117,7 +1117,7 @@ TEST_F(TopPanelInputsLayoutTests, ResizeWhileOpeningLowersInputsBeforeTheFirstBo
 		if (panel.Progress >= gui::GuiTopPanelLayout::DockingPhase)
 		{
 			if (previousProgress < gui::GuiTopPanelLayout::DockingPhase) crossedBodyBoundary = true;
-			EXPECT_EQ(panel.PresentedBounds.Bottom - 16, strip.Top) << "frame=" << frame;
+		EXPECT_EQ(panel.PresentedBounds.Bottom - 8, strip.Top) << "frame=" << frame;
 		}
 		previous = strip; previousProgress = panel.Progress;
 	}
@@ -1125,7 +1125,7 @@ TEST_F(TopPanelInputsLayoutTests, ResizeWhileOpeningLowersInputsBeforeTheFirstBo
 	EXPECT_FLOAT_EQ(1.0f, Selection->TransitionValue());
 	const auto strip = Hud->OccupiedTopStripBounds();
 	EXPECT_EQ(8, strip.Left); EXPECT_EQ(632, strip.Right);
-	EXPECT_EQ(Selection->TopPanelLayout().PresentedBounds.Bottom - 16, strip.Top);
+	EXPECT_EQ(Selection->TopPanelLayout().PresentedBounds.Bottom - 8, strip.Top);
 }
 
 TEST_F(TopPanelInputsLayoutTests, ContinuousResizeDoesNotRestartDockingUntilTheLastFrame)
@@ -1142,7 +1142,7 @@ TEST_F(TopPanelInputsLayoutTests, ContinuousResizeDoesNotRestartDockingUntilTheL
 	}
 	EXPECT_FLOAT_EQ(0.0f, Selection->TransitionValue());
 	EXPECT_EQ(792, Hud->OccupiedTopStripBounds().Top);
-	EXPECT_EQ(Selection->TopPanelLayout().CollapsedBounds.Right + 16, Hud->OccupiedTopStripBounds().Left);
+	EXPECT_EQ(Selection->TopPanelLayout().CollapsedBounds.Right + 8, Hud->OccupiedTopStripBounds().Left);
 }
 
 TEST_F(TopPanelInputsLayoutTests, TinyWindowsClampStackingAndPreserveSourceIdentityAndScroll)
@@ -1179,10 +1179,10 @@ TEST(Scene, SelectionPresentationIsForwardedToInputsOnResizeAndAnimation)
 	scene.SetSize({1200u, 800u});
 	const auto selection = scene.SelectionPanel(); const auto hud = scene.HudPanel();
 	ASSERT_TRUE(selection); ASSERT_TRUE(hud);
-	EXPECT_EQ(selection->TopPanelLayout().PresentedBounds.Right + 16, hud->OccupiedTopStripBounds().Left);
+	EXPECT_EQ(selection->TopPanelLayout().PresentedBounds.Right + 8, hud->OccupiedTopStripBounds().Left);
 	selection->SetExpanded(false); selection->AdvanceAnimation(0.05f);
 	scene.AdvanceUiAnimations();
-	EXPECT_EQ(selection->TopPanelLayout().PresentedBounds.Right + 16, hud->OccupiedTopStripBounds().Left);
+	EXPECT_EQ(selection->TopPanelLayout().PresentedBounds.Right + 8, hud->OccupiedTopStripBounds().Left);
 	scene.SetSize({811u, 800u});
 	EXPECT_EQ(803, hud->OccupiedTopStripBounds().Right);
 	EXPECT_TRUE(hud->OccupiedTopStripBounds().Intersected(selection->TopPanelLayout().PresentedBounds).IsEmpty());
