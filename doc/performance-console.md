@@ -145,16 +145,16 @@ Alt-click a content slot to remove it immediately, including a pending load;
 the surviving slots keep their identities and state. The bottom **+** remains.
 Long stacks scroll within the rack.
 
-The channel selectors to the left affect **live MIDI only**. **MIDI − / MIDI +**
-collapses or expands them independently of the audio controls. Enabled unwired
+The MIDI channel grid (revealed by toggling the expander button to the left of the master fader) controls the MIDI channels that a station listens to for live MIDI sources, and how they are wired. Also affects recorded MIDI playback
+when no separate recorded output route is set. Enabled unwired
 channels broadcast to eligible plugins; cables select explicit destinations,
 including many channels to one plugin or one channel to several plugins.
 Switching a channel off clears its explicit live cables; switching it back on
-restores Broadcast. Recorded MIDI keeps its separate output routes and
-continues independently of these selectors.
+restores Broadcast. Explicit recorded output routes still take precedence over
+the channel cables.
 
 Drag channel sockets or plugin input sockets to connect them. The usual cable
-move/disconnect/cancel gestures apply. Hover a socket, cable or collapsed MIDI
+move/disconnect/cancel gestures apply. Hover a socket, cable or collapsed MIDI grid
 button, or hold **`**, to reveal connections. Collapsed and scrolled endpoints
 retain their logical identities; expand the channels or scroll the slot into
 view to edit its socket. Removing or losing a plugin preserves its explicit
