@@ -176,6 +176,8 @@ namespace engine
 		void SetDefaultJamSaver(std::wstring path, std::function<bool(const std::wstring&, bool)> saver)
 		{ _defaultJamPath = std::move(path); _defaultJamSaver = std::move(saver); }
 		void SetCurrentJamPath(std::wstring path) { _currentJamPath = std::move(path); }
+		const std::wstring& CurrentJamPath() const noexcept { return _currentJamPath; }
+		std::uint64_t Identity() const noexcept { return _sceneIdentity; }
 		void ReportFileStatus(const std::string& status);
 		void InitAudio(bool generatedRig = false,
 			const audio::AsioInventory* inventory = nullptr, bool exactSelection = false);
@@ -240,7 +242,7 @@ namespace engine
 		bool ConsumeRigSaveRequest(); // Main/window thread only.
 		enum class RigSaveMode { Save, SaveAs, StartupDefault };
 		RigSaveMode RequestedRigSaveMode() const { return _rigSaveMode; }
-		struct CapturedRig { io::RigFile Rig; std::uint64_t Revision = 0u; };
+		struct CapturedRig { io::RigFile Rig; std::uint64_t Revision = 0u, SceneId = 0u; };
 		std::optional<CapturedRig> CaptureCommittedRigVersion() const;
 		std::optional<CapturedRig> BeginExplicitRigSave();
 		std::optional<io::RigFile> CaptureCommittedRig() const;
@@ -374,6 +376,7 @@ namespace engine
 		void _RebuildDevicePage();
 		void _SetAudioDraftFromStream(const audio::AudioStreamParams& params);
 		void _RequestSave(bool chooseFolder, bool asDefault = false);
+		void _CompleteSessionSave(bool success, const std::wstring& path, const std::string& error);
 		bool _CaptureIsBusy() const;
 		bool _SessionHasTakes() const;
 		bool _ValidateAudioDraft(std::string& error) const;

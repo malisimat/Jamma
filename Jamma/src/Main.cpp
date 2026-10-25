@@ -1022,7 +1022,12 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 		<< " log=" << EncodeUtf8(startupLog.Path());
 	startupLog.Write(startupSummary.str());
 
-	if (!jamGenerated && defaults) scene.value()->SetSessionSaveFolder(utils::GetParentDirectory(defaults->Jam));
+	if (!jamGenerated && defaults)
+	{
+		scene.value()->SetSessionSaveFolder(utils::GetParentDirectory(defaults->Jam));
+		if (defaults->JamOrigin != io::StartupConfig::GeneratedOrigin)
+			scene.value()->SetCurrentJamPath(defaults->Jam);
+	}
 	const auto configureDefaultJamSave = [&]() {
 		if (const auto currentDefaults = LoadIni(initPath))
 			scene.value()->SetDefaultJamSaver(currentDefaults->Jam, [&](const std::wstring& savedPath, bool useNamedJam) {
@@ -1030,6 +1035,8 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 			if (!current) return false;
 			if (!useNamedJam) return PublishDefaultJam(savedPath, current->Jam);
 			current->Jam = savedPath;
+			current->JamLoadType = io::InitFile::LOAD_SPECIFIC;
+			current->JamOrigin = "user";
 			std::stringstream stream;
 			if (!io::InitFile::ToStream(*current, stream) || !UpdateIni(initPath, stream.str())) return false;
 			*defaults = *current;
