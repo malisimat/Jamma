@@ -277,6 +277,12 @@ namespace engine
 		bool RestoreMidiVstRoutes(const midi::MidiVstRoutingSnapshot& routes,
 			size_t loadedPluginCount);
 
+		// Startup restoration on a fresh station, before it is admitted to an audio
+		// reader. Preserve unavailable/raw saved rack data for explicit recovery.
+		void RestoreSavedRack(const std::vector<io::JamFile::VstEntry>& entries,
+			std::array<midi::LiveVstChannelRoute, 16> routes, bool inactive);
+		void RestoreLiveVstRoutesBeforePublication(std::array<midi::LiveVstChannelRoute, 16> routes);
+
 		// VST chain management (non-RT, queued through the job thread).
 		// LoadVstPlugin queues an async load; once the load completes the plugin
 		// is inserted at the end of the station's effect chain.

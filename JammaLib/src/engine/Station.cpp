@@ -7,6 +7,7 @@
 #include "../midi/MidiBlockTiming.h"
 #include "../midi/MidiRouter.h"
 #include "../io/NativeMidiSidecar.h"
+#include "../io/IoSessionLoader.h"
 #include "../utils/MathUtils.h"
 
 using namespace engine;
@@ -140,213 +141,29 @@ Station::~Station()
 }
 
 std::optional<std::shared_ptr<Station>> Station::FromFile(StationParams stationParams,
-	AudioMixerParams mixerParams,
-	io::JamFile::Station stationStruct,
-	std::wstring dir)
+	AudioMixerParams mixerParams, io::JamFile::Station stationStruct, std::wstring dir)
 {
-	std::cout << "[LOAD] Constructing station " << stationParams.Index << " '" << stationStruct.Name
-		<< "' (takes=" << stationStruct.LoopTakes.size() << ", VSTs=" << stationStruct.VstChain.size() << ")." << std::endl;
-	stationParams.Name = stationStruct.Name;
-	stationParams.Id = stationStruct.Id;
-	auto station = std::make_shared<Station>(stationParams, mixerParams);
-	station->SetStationPhaseOffsetSamps(stationStruct.StationPhaseOffsetSamps);
-	station->SetAllowedMidiChannels(stationStruct.AllowedMidiChannels);
-	station->_liveVstChannelRoutes = stationStruct.LiveVstRoutes;
-	std::vector<std::string> identities;
-	station->_rackInactive = stationStruct.VstChain.size() > MaxRackPlugins;
-	for (std::size_t index = 0; index < stationStruct.VstChain.size(); ++index)
-	{
-		auto& entry = stationStruct.VstChain[index];
-		// Legacy entries without identity receive a deterministic local identity.
-		if (entry.Id.empty()) entry.Id = station->Id() + ":vst:" + std::to_string(index);
-		if (!io::NativeMidiSidecar::ValidatePluginIdentity(entry.Id) || std::find(identities.begin(), identities.end(), entry.Id) != identities.end()) station->_rackInactive = true;
-		identities.push_back(entry.Id);
-	}
-	for (const auto& route : station->_liveVstChannelRoutes)
-	{
-		if (route.PluginIds.size() > MaxRackPlugins) station->_rackInactive = true;
-		for (const auto& identity : route.PluginIds)
-			if (identity.empty() || !io::NativeMidiSidecar::ValidatePluginIdentity(identity)) station->_rackInactive = true;
-	}
-	if (station->_rackInactive) station->_rackDiagnostic = "Rack paused: remove excess/invalid entries or cables, then choose Resume rack. Saved data is preserved.";
-	// Legacy automation sidecars contain indices only. Give saved processors
-	// deterministic IDs before reconstruction, including unavailable Take/Loop
-	// slots, so later compaction cannot change the meaning of those bindings.
-	for (std::size_t takeIndex = 0u; takeIndex < stationStruct.LoopTakes.size(); ++takeIndex)
-	{
-		auto& savedTake = stationStruct.LoopTakes[takeIndex];
-		if (savedTake.Id.empty()) savedTake.Id = !savedTake.Name.empty() ? savedTake.Name
-			: station->Id() + ":take:" + std::to_string(takeIndex);
-		for (std::size_t pluginIndex = 0u; pluginIndex < savedTake.VstChain.size(); ++pluginIndex)
-			if (savedTake.VstChain[pluginIndex].Id.empty()) savedTake.VstChain[pluginIndex].Id
-				= savedTake.Id + ":vst:" + std::to_string(pluginIndex);
-		for (std::size_t loopIndex = 0u; loopIndex < savedTake.Loops.size(); ++loopIndex)
-			for (std::size_t pluginIndex = 0u; pluginIndex < savedTake.Loops[loopIndex].VstChain.size(); ++pluginIndex)
-				if (savedTake.Loops[loopIndex].VstChain[pluginIndex].Id.empty()) savedTake.Loops[loopIndex].VstChain[pluginIndex].Id
-					= savedTake.Id + ":loop:" + std::to_string(loopIndex) + ":vst:" + std::to_string(pluginIndex);
-	}
-	for (const auto& vstEntry : stationStruct.VstChain)
-	{
-		if (station->_rackInactive)
-		{
-			station->_vstSavedEntries.push_back(vstEntry);
-			station->_vstPluginPaths.push_back(utils::DecodeUtf8(vstEntry.Path));
-			continue;
-		}
-		std::cout << "[LOAD] Station '" << stationStruct.Name << "': loading VST " << vstEntry.Path << std::endl;
-		if (!station->LoadVstPluginSynchronously(utils::DecodeUtf8(vstEntry.Path), vstEntry.DecodeState(), vstEntry.Bypass, vstEntry.Id))
-		{
-			// Restore the station and rig target even when this optional processor is missing.
-			std::cout << "[LOAD] Station '" << stationStruct.Name << "': failed VST " << vstEntry.Path
-				<< "; continuing without it." << std::endl;
-		}
-	}
+	return io::IoSessionLoader::ReconstructStation(std::move(stationParams), std::move(mixerParams),
+		std::move(stationStruct), std::move(dir));
+}
 
-	auto numTakes = (unsigned int)stationStruct.LoopTakes.size();
-	Size2d gap = { 4, 4 };
-	auto takeHeight = numTakes > 0 ?
-		stationParams.Size.Height - ((2 + numTakes - 1) * gap.Height) / numTakes :
-		stationParams.Size.Height - (2 * gap.Height);
-	takeHeight = takeHeight < 1u ? 1u : takeHeight;
-	Size2d takeSize = { stationParams.Size.Width - (2 * gap.Width), takeHeight };
-	LoopTakeParams takeParams;
-	takeParams.Size = { 80, 80 };
-	
-	auto takeCount = 0u;
-	for (auto takeStruct : stationStruct.LoopTakes)
+void Station::RestoreSavedRack(const std::vector<io::JamFile::VstEntry>& entries,
+	std::array<midi::LiveVstChannelRoute, 16> routes, bool inactive)
+{
+	RestoreLiveVstRoutesBeforePublication(std::move(routes));
+	_rackInactive = inactive;
+	if (!inactive) return;
+	_rackDiagnostic = "Rack paused: remove excess/invalid entries or cables, then choose Resume rack. Saved data is preserved.";
+	for (const auto& entry : entries)
 	{
-		takeParams.ModelPosition = { (float)gap.Width, (float)(takeCount * takeHeight + gap.Height), 0.0 };
-		// Legacy descriptors without identity receive one during import. Keep
-		// the display name separate from job deduplication/group identity.
-		// Legacy JAM manifests stored take identity in Name. Retain it so trigger
-		// histories and source references survive migration to the explicit Id.
-		takeParams.Id = !takeStruct.Id.empty() ? takeStruct.Id :
-			!takeStruct.Name.empty() ? takeStruct.Name : utils::GetGuid();
-		auto take = LoopTake::FromFile(takeParams, takeStruct, dir);
-		
-		if (take.has_value())
-		{
-			station->AddTake(take.value());
-			// AddTake establishes the station bus count. Saved routes are applied
-			// afterwards so its normal one-to-one defaults cannot overwrite them.
-			if (takeStruct.HasAudioRoutes && !take.value()->RestoreAudioRoutes(takeStruct.AudioRoutes))
-			{
-				std::cout << "Load: invalid audio routes in take " << takeStruct.Name << std::endl;
-				return std::nullopt;
-			}
-		}
-
-		takeCount++;
+		_vstSavedEntries.push_back(entry);
+		_vstPluginPaths.push_back(utils::DecodeUtf8(entry.Path));
 	}
-	if (stationStruct.HasAudioRoutes && !station->RestoreAudioRoutes(stationStruct.AudioRoutes))
-	{
-		std::cout << "Load: invalid audio routes in station " << stationStruct.Name << std::endl;
-		return std::nullopt;
-	}
-	if (!station->RestoreMixerLevels(stationStruct.MasterLevel, stationStruct.BusLevels))
-		return std::nullopt;
-	// Empty stations are valid saved state: a station may contain its VST chain,
-	// routing configuration, or simply be ready for a new take. Only malformed
-	// station data should prevent the station from being reconstructed.
-	for (const auto& take : station->GetLoopTakes())
-	{
-		if (!take)
-			continue;
-		const auto savedTake = std::find_if(stationStruct.LoopTakes.begin(), stationStruct.LoopTakes.end(),
-			[&](const auto& saved) { return saved.Id == take->Id(); });
+}
 
-		for (const auto& binding : take->PendingAutomationBindings())
-		{
-			auto midiLoops = take->GetMidiLoopSnapshot();
-			if (binding.MidiStreamIndex >= midiLoops.size() || binding.LaneIndex >= midi::MidiLoop::MaxAutomationLanes)
-				return std::nullopt;
-			if (!midiLoops[binding.MidiStreamIndex]) return std::nullopt;
-			auto& savedTarget = midiLoops[binding.MidiStreamIndex]->GetLane(binding.LaneIndex).Mapping.SavedTarget;
-			// Migrate old station indices through the saved chain even if the rack
-			// is inactive/missing: compaction must never redirect this lane later.
-			if (savedTarget.PluginId.empty() && binding.TargetScope == "station"
-				&& binding.TargetPluginIndex < stationStruct.VstChain.size())
-				savedTarget.PluginId = stationStruct.VstChain[binding.TargetPluginIndex].Id;
-			if (savedTarget.PluginId.empty() && savedTake != stationStruct.LoopTakes.end())
-			{
-				if (binding.TargetScope == "take" && binding.TargetPluginIndex < savedTake->VstChain.size())
-					savedTarget.PluginId = savedTake->VstChain[binding.TargetPluginIndex].Id;
-				else if (binding.TargetScope == "loop" && binding.TargetLoopIndex < savedTake->Loops.size()
-					&& binding.TargetPluginIndex < savedTake->Loops[binding.TargetLoopIndex].VstChain.size())
-					savedTarget.PluginId = savedTake->Loops[binding.TargetLoopIndex].VstChain[binding.TargetPluginIndex].Id;
-			}
-
-			// Keep raw malformed rack metadata, scope/index and curve, but migrate
-			// its legacy positional target to an explicit valid unavailable ID.
-			if (savedTarget.PluginId.empty() || !io::NativeMidiSidecar::ValidatePluginIdentity(savedTarget.PluginId))
-				savedTarget.PluginId = "unavailable:" + utils::GetGuid();
-			std::shared_ptr<vst::IVstPlugin> plugin;
-			if (binding.TargetScope == "station")
-				plugin = station->GetVstPlugin(binding.TargetPluginIndex);
-			else if (binding.TargetScope == "take")
-				plugin = take->GetVstPlugin(binding.TargetPluginIndex);
-			else if (binding.TargetScope == "loop")
-			{
-				const auto& loops = take->GetLoops();
-				if (binding.TargetLoopIndex < loops.size() && loops[binding.TargetLoopIndex])
-					plugin = loops[binding.TargetLoopIndex]->GetVstPlugin(binding.TargetPluginIndex);
-			}
-
-			if (plugin && !savedTarget.PluginId.empty() && plugin->StateId() != savedTarget.PluginId) plugin.reset();
-			if (!plugin || !midiLoops[binding.MidiStreamIndex]->BindAutomationLaneTarget(
-				binding.LaneIndex, plugin.get(), plugin->StateId()))
-			{
-				std::cout << "[LOAD] Station '" << stationStruct.Name
-					<< "': retaining unavailable automation target." << std::endl;
-			}
-		}
-		take->ClearPendingAutomationBindings();
-	}
-	// Publish the completed pointer bindings as one immutable dispatch list before
-	// this startup-built station is made visible to audio.
-	station->RebuildAutomationDispatch();
-
-	if (!stationStruct.MidiRoutes.empty())
-	{
-		std::size_t outputCount = 0u;
-		for (const auto& take : station->GetLoopTakes())
-			if (take)
-				outputCount += take->GetMidiLoopSnapshot().size();
-
-		midi::MidiVstRoutingSnapshot routes;
-		routes.PluginByMidiOutput.assign(outputCount, midi::MidiVstRoutingSnapshot::NoPlugin);
-		for (const auto& route : stationStruct.MidiRoutes)
-		{
-			if ((route.PluginIndex >= stationStruct.VstChain.size() && route.PluginIndex != MidiVstRoutingSnapshot::MissingPlugin)
-				|| (!route.IsLive && route.OutputIndex >= outputCount))
-			{
-				std::cout << "Load: invalid MIDI VST route in station " << stationStruct.Name << std::endl;
-				return std::nullopt;
-			}
-			if (route.IsLive)
-			{
-				if (!stationStruct.HasLiveVstRoutes)
-					for (auto& channel : station->_liveVstChannelRoutes)
-					{
-						channel.Explicit = true;
-						if (route.PluginIndex < stationStruct.VstChain.size())
-							channel.PluginIds = {stationStruct.VstChain[route.PluginIndex].Id};
-					}
-			}
-			else
-				routes.PluginByMidiOutput[route.OutputIndex] = route.PluginIndex;
-		}
-		if (!station->RestoreMidiVstRoutes(routes, stationStruct.VstChain.size()))
-		{
-			std::cout << "Load: failed MIDI VST routes for station " << stationStruct.Name << std::endl;
-			return std::nullopt;
-		}
-	}
-	// Validate the complete pending take hierarchy before Scene admits audio.
-	station->RefreshRackLatency();
-	std::cout << "[LOAD] Constructed station '" << stationStruct.Name << "'." << std::endl;
-
-	return station;
+void Station::RestoreLiveVstRoutesBeforePublication(std::array<midi::LiveVstChannelRoute, 16> routes)
+{
+	_liveVstChannelRoutes = std::move(routes);
 }
 
 std::vector<std::vector<unsigned long>> Station::SnapshotAudioRoutesForExport() const
