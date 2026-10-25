@@ -180,7 +180,7 @@ namespace engine
 		std::uint64_t Identity() const noexcept { return _sceneIdentity; }
 		void ReportFileStatus(const std::string& status);
 		void ReportFileOutcome(const std::string& status)
-		{ _fileStatus->SetString(status); ReportRuntimeNotice("JAM",status); }
+		{ _settingsControls->SetFileStatus(status); ReportRuntimeNotice("JAM",status); }
 		// Owned values only; off-callback workers may post, UI alone presents.
 		void ReportRuntimeNotice(std::string title, std::string message)
 		{ _runtimeDialogs.Notify(std::move(title),std::move(message)); }
@@ -520,19 +520,6 @@ namespace engine
 		bool _audioStartRequested = false;
 		std::unordered_map<std::string, std::vector<unsigned int>> _acceptedBufferSizes;
 		audio::AsioInventory _deviceInventory;
-		std::vector<std::string> _audioChoiceNames;
-		std::shared_ptr<gui::GuiDropDown> _audioDeviceChoice;
-		std::array<std::shared_ptr<gui::GuiNumericInput>,4> _audioInputs;
-		std::shared_ptr<gui::GuiLabel> _deviceStatus, _activeAudioStatus, _fileStatus;
-		std::shared_ptr<gui::GuiButton> _saveButton, _saveDefaultJamButton, _loadButton;
-		struct MidiDeviceChoice
-		{
-			std::string HardwareName;
-			std::string RegistryId; // Empty only for an unregistered inventory choice.
-			std::shared_ptr<gui::GuiToggle> Toggle;
-		};
-		std::vector<MidiDeviceChoice> _midiChoices;
-		std::vector<std::shared_ptr<gui::GuiCommandReceiver>> _midiChoiceBindings;
 		std::vector<io::UserConfig::MidiSettings> _midiDraft;
 		std::optional<io::UserConfig::AudioSettings> _pendingAudioPersistence;
 		std::optional<std::vector<io::UserConfig::MidiSettings>> _pendingMidiPersistence;
@@ -543,7 +530,6 @@ namespace engine
 		std::function<bool(const std::wstring&, bool)> _defaultJamSaver;
 		bool _pendingSaveAsDefault = false;
 		bool _panelRigLoadRequested = false;
-		std::shared_ptr<gui::GuiButton> _saveAsJamButton;
 		bool _panelLoadRequested = false, _loadReady = false;
 		std::mutex _midiLifecycleMutex;
 		std::atomic<bool> _midiRefreshRequested{ false };
