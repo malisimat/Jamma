@@ -3088,7 +3088,8 @@ TEST(MidiLoopEdit, EntirePaintGesturePublishesOnceAndUndoRedoPreservesExactTimin
 	for (std::size_t i = 0; i < after.EventCount; ++i)
 	{
 		EXPECT_EQ(paint.Working().Events[i].sampleOffset, after.Events[i].sampleOffset);
-		EXPECT_EQ(MidiEvent::ExactTiming, after.Events[i].flags);
+		EXPECT_TRUE(after.Events[i].HasExactTiming());
+		EXPECT_EQ(paint.Working().Events[i].flags, after.Events[i].flags);
 	}
 	midi::MidiGridGesture erase;
 	ASSERT_TRUE(erase.Begin(after, {0u, 60u, 0.0}, 0u));
@@ -3921,6 +3922,80 @@ TEST(MidiLoopSeam, NonemptyReplacementFlushesContinuationAndPublishesNewPairing)
 	EXPECT_EQ(2020u, sink.events[3].sampleOffset);
 	EXPECT_EQ(2100u, sink.events[4].sampleOffset);
 	EXPECT_TRUE(loop.HeldNotes().none());
+}
+
+TEST(MidiLoopSeam, PaintedWrappedCellReleasesAtDisplayedEndWithoutSeamRetrigger)
+{
+	for (const bool remote : { false, true })
+	for (const auto length : { 400u, 403u })
+	for (const auto blockSize : { 1u, 17u, 1000u })
+	{
+		MidiLoop loop;
+		loop.ReplaceRecordedEvents(nullptr, 0u, length);
+		MidiQuantisationSettings settings;
+		settings.Enabled = true;
+		settings.GrainSamps = 100u;
+		settings.Fraction = MidiQuantisationFraction::Quarter;
+		if (remote)
+		{
+			settings.RemoteIntervalSamps = 100u;
+			settings.RemoteBpi = 1u;
+		}
+		ASSERT_TRUE(loop.SetQuantisation(settings, 13u));
+		MidiLoop::EditState edit;
+		ASSERT_TRUE(loop.SnapshotForEdit(edit));
+		midi::MidiGridGesture gesture;
+		ASSERT_TRUE(gesture.Begin(edit, { length - 1u, 60u }, 0u));
+		ASSERT_EQ(1u, gesture.Preview().size());
+		const auto start = gesture.Preview()[0].Start;
+		const auto end = gesture.Preview()[0].End;
+		ASSERT_GT(end, length);
+		ASSERT_TRUE(loop.PublishEdit(gesture.Working()));
+		MidiLoopCapturingSink sink;
+		for (auto sample = 0u; sample < 3u * length; sample += blockSize)
+			loop.ReadBlock(sample, std::min(blockSize, 3u * length - sample), sink);
+		// A release at the first head is harmless. Every tail then has exactly
+		// one release at its displayed end, with no attack at the seam/head.
+		ASSERT_EQ(6u, sink.events.size());
+		for (auto repeat = 0u; repeat < 3u; ++repeat)
+		{
+			EXPECT_TRUE(sink.events[2u * repeat].IsNoteOff());
+			EXPECT_EQ(repeat * length + end - length, sink.events[2u * repeat].sampleOffset);
+			EXPECT_TRUE(sink.events[2u * repeat + 1u].IsNoteOn());
+			EXPECT_EQ(repeat * length + start, sink.events[2u * repeat + 1u].sampleOffset);
+		}
+	}
+}
+
+TEST(MidiLoopSeam, PaintedWrappedCellMergesRecordedHeadAndKeepsItsRelease)
+{
+	MidiLoop loop;
+	const std::array recorded = { MidiEvent::MakeNoteOn(0u, 0u, 60u, 80u),
+		MidiEvent::MakeNoteOff(12u, 0u, 60u) };
+	loop.ReplaceRecordedEvents(recorded.data(), recorded.size(), 400u);
+	MidiQuantisationSettings settings;
+	settings.Enabled = true;
+	settings.GrainSamps = 100u;
+	settings.Fraction = MidiQuantisationFraction::Quarter;
+	ASSERT_TRUE(loop.SetQuantisation(settings, 13u));
+	MidiLoop::EditState edit;
+	ASSERT_TRUE(loop.SnapshotForEdit(edit));
+	midi::MidiGridGesture gesture;
+	ASSERT_TRUE(gesture.Begin(edit, { 399u, 60u }, 0u));
+	ASSERT_TRUE(loop.PublishEdit(gesture.Working()));
+	// Keep the captured head at its physical time. The painted circular
+	// endpoints must remain exact when quantisation is toggled off too.
+	settings.Enabled = false;
+	ASSERT_TRUE(loop.SetQuantisation(settings, 13u));
+	MidiLoopCapturingSink sink;
+	loop.ReadBlock(0u, 1200u, sink);
+	ASSERT_EQ(7u, sink.events.size());
+	const std::array times = { 0u, 12u, 387u, 412u, 787u, 812u, 1187u };
+	for (std::size_t i = 0u; i < times.size(); ++i)
+	{
+		EXPECT_EQ(times[i], sink.events[i].sampleOffset);
+		EXPECT_EQ(i % 2u == 0u, sink.events[i].IsNoteOn());
+	}
 }
 
 TEST(MidiLoopSeam, EditedNoteEndingAtSeamContinuesUntilNextPlayedRelease)

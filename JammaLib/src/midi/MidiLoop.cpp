@@ -599,6 +599,7 @@ bool MidiLoop::PublishEdit(const EditState& state) noexcept
 	std::array<std::uint32_t, MidiEvent::PairingSlotCount> activeStart{};
 	std::bitset<MidiEvent::PairingSlotCount> active;
 	std::bitset<MidiEvent::PairingSlotCount> invalidSlots;
+	std::array<std::uint16_t, MidiEvent::PairingSlotCount> crossingReleases{};
 	std::uint32_t previousOffset = 0u;
 	int previousPriority = -1;
 	for (std::size_t i = 0u; i < state.EventCount; ++i)
@@ -613,6 +614,15 @@ bool MidiLoop::PublishEdit(const EditState& state) noexcept
 		if (!event.IsNoteOn() && !event.IsNoteOff()) continue;
 		if (event.data1 >= 128u) return false;
 		const auto slot = event.PairingSlot();
+		if (event.flags & TriggerSeamEndpoint)
+		{
+			// Circular pairs have their release before their attack in sorted
+			// loop-local order; validate independently of ordinary source pairs.
+			if (event.IsNoteOff()) ++crossingReleases[slot];
+			else if (crossingReleases[slot] != 0u) --crossingReleases[slot];
+			else invalidSlots.set(slot);
+			continue;
+		}
 		if (event.IsNoteOn())
 		{
 			if (active.test(slot)) invalidSlots.set(slot);
@@ -630,6 +640,7 @@ bool MidiLoop::PublishEdit(const EditState& state) noexcept
 	// must not prevent a separate note from being edited.
 	for (std::size_t slot = 0u; slot < MidiEvent::PairingSlotCount; ++slot)
 	{
+		if (crossingReleases[slot] != 0u) invalidSlots.set(slot);
 		if (!invalidSlots.test(slot)) continue;
 		std::size_t oldIndex = 0u;
 		std::size_t newIndex = 0u;

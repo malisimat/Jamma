@@ -449,13 +449,13 @@ TEST(MidiGridGesture, RepresentativeLocalAndRemoteCellsCanBeAddedAndRemoved)
 			ASSERT_TRUE(add.Begin(source, {start, 60u, start / static_cast<double>(length)}, 3u));
 			const auto targets = midi::MidiGridTargets::Build(add.Working());
 			ASSERT_EQ(1u, targets.Notes.size());
-			EXPECT_EQ(start, targets.Notes[0].Start); EXPECT_EQ(end, targets.Notes[0].End);
+			EXPECT_EQ(start, targets.Notes[0].Start); EXPECT_EQ(end + (end == length ? grid->SeamHeadEnd : 0u), targets.Notes[0].End);
 			EXPECT_FALSE(targets.Notes[0].Ambiguous);
 			// Toggle quantisation: editor spans remain exact sample-domain material.
 			auto disabled = add.Working(); disabled.Quantisation.Enabled = false;
 			const auto rawTargets = midi::MidiGridTargets::Build(disabled);
 			ASSERT_EQ(1u, rawTargets.Notes.size());
-			EXPECT_EQ(start, rawTargets.Notes[0].Start); EXPECT_EQ(end, rawTargets.Notes[0].End);
+			EXPECT_EQ(start, rawTargets.Notes[0].Start); EXPECT_EQ(end + (end == length ? grid->SeamHeadEnd : 0u), rawTargets.Notes[0].End);
 			MidiGridGesture remove;
 			ASSERT_TRUE(remove.Begin(add.Working(), {end - 1u, 60u, (end - 1u) / static_cast<double>(length)}, 3u));
 			EXPECT_FALSE(remove.Filling()); EXPECT_EQ(0u, remove.Working().EventCount);
@@ -789,19 +789,21 @@ TEST(MidiGridGesture, SplitEdgeCellsCreateOneNoteAndShareRemovalAndVelocity)
 		}
 		MidiGridGesture add;
 		ASSERT_TRUE(add.Begin(source, {clicked, 60u, clicked / 100.0}, 2u));
-		ASSERT_EQ(1u, add.Working().EventCount);
-		EXPECT_EQ(91u, add.Working().Events[0].sampleOffset);
+		ASSERT_EQ(2u, add.Working().EventCount);
+		EXPECT_EQ(1u, add.Working().Events[0].sampleOffset);
+		EXPECT_TRUE(add.Working().Events[0].IsNoteOff());
+		EXPECT_EQ(91u, add.Working().Events[1].sampleOffset);
 		ASSERT_EQ(1u, add.Preview().size());
 		EXPECT_EQ(91u, add.Preview()[0].Start); EXPECT_EQ(101u, add.Preview()[0].End);
 		ASSERT_TRUE(add.Update({clicked == 0u ? 99u : 0u, 60u, clicked == 0u ? 0.99 : 0.0}));
-		EXPECT_EQ(1u, add.Working().EventCount); EXPECT_EQ(1u, add.Preview().size());
+		EXPECT_EQ(2u, add.Working().EventCount); EXPECT_EQ(1u, add.Preview().size());
 		for (const auto edge : {0u, 99u})
 		{
 			MidiGridGesture velocity;
 			ASSERT_TRUE(velocity.BeginVelocity(add.Working(), {edge, 60u}));
 			EXPECT_EQ(0u, *velocity.CapturedNoteIndex());
 			ASSERT_TRUE(velocity.UpdateRelative(4.0));
-			EXPECT_EQ(101u, velocity.Working().Events[0].data2);
+			EXPECT_EQ(101u, velocity.Working().Events[1].data2);
 			MidiGridGesture remove;
 			ASSERT_TRUE(remove.Begin(add.Working(), {edge, 60u}, 2u));
 			EXPECT_EQ(0u, remove.Working().EventCount);
@@ -857,8 +859,10 @@ TEST(MidiGridGesture, OffMasterLoopEdgesHoverAndPaintTheSameCompleteSubdivision)
 		{
 			MidiGridGesture add;
 			ASSERT_TRUE(add.Begin(source, {edge, 60u, edge / 400.0}, 0u));
-			ASSERT_EQ(1u, add.Working().EventCount);
-			EXPECT_EQ(tail, add.Working().Events[0].sampleOffset);
+			ASSERT_EQ(2u, add.Working().EventCount);
+			EXPECT_EQ(head, add.Working().Events[0].sampleOffset);
+			EXPECT_TRUE(add.Working().Events[0].IsNoteOff());
+			EXPECT_EQ(tail, add.Working().Events[1].sampleOffset);
 			ASSERT_EQ(1u, add.Preview().size());
 			EXPECT_EQ(tail, add.Preview()[0].Start); EXPECT_EQ(400u + head, add.Preview()[0].End);
 			const auto filled = midi::MidiGridTargets::Build(add.Working());
@@ -882,8 +886,10 @@ TEST(MidiGridGesture, UnequalLoopLengthWrapsOnlyAtItsClippedOuterEdges)
 	{
 		MidiGridGesture add;
 		ASSERT_TRUE(add.Begin(source, {edge, 60u}, 0u));
-		ASSERT_EQ(1u, add.Working().EventCount);
-		EXPECT_EQ(387u, add.Working().Events[0].sampleOffset);
+		ASSERT_EQ(2u, add.Working().EventCount);
+		EXPECT_EQ(12u, add.Working().Events[0].sampleOffset);
+		EXPECT_TRUE(add.Working().Events[0].IsNoteOff());
+		EXPECT_EQ(387u, add.Working().Events[1].sampleOffset);
 		ASSERT_EQ(1u, add.Preview().size()); EXPECT_EQ(415u, add.Preview()[0].End);
 		const auto targets = midi::MidiGridTargets::Build(add.Working());
 		for (auto sample = 0u; sample < 403u; ++sample)

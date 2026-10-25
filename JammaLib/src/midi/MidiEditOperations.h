@@ -206,15 +206,18 @@ namespace midi
 			std::uint32_t end, std::uint8_t channel, std::uint8_t pitch,
 			std::uint8_t velocity = 96u) noexcept
 		{
-			if (start >= end || end > state.LoopLengthSamps
+			if (start >= state.LoopLengthSamps || start >= end
+				|| end - start > state.LoopLengthSamps
 				|| channel >= 16u || pitch >= 128u || velocity == 0u || velocity > 127u) return false;
 			if (state.EventCount > MidiLoop::DefaultCapacity - (end == state.LoopLengthSamps ? 1u : 2u))
 				return false;
+			const auto flags = static_cast<std::uint8_t>(MidiEvent::ExactTiming
+				| (end > state.LoopLengthSamps ? MidiEvent::TriggerSeamEndpoint : 0u));
 			state.Events[state.EventCount++] = MidiEvent::MakeNoteOn(start, channel, pitch, velocity)
-				.WithFlags(MidiEvent::ExactTiming);
-			if (end < state.LoopLengthSamps)
-				state.Events[state.EventCount++] = MidiEvent::MakeNoteOff(end, channel, pitch)
-					.WithFlags(MidiEvent::ExactTiming);
+				.WithFlags(flags);
+			if (end != state.LoopLengthSamps)
+				state.Events[state.EventCount++] = MidiEvent::MakeNoteOff(end % state.LoopLengthSamps, channel, pitch)
+					.WithFlags(flags);
 			MidiNote::SortMidiEvents(state.Events.data(), state.EventCount);
 			return true;
 		}

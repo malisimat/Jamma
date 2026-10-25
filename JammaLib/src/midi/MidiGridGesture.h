@@ -301,10 +301,16 @@ namespace midi
 				}
 				if (note.Ambiguous) return Reject();
 				_removed[note.On] = true;
-				// Rebuild from frozen source identities, deleting in descending order.
+				// Circular releases precede their attacks in source order. Compact
+				// once so removing either endpoint cannot shift another identity.
 				_working = _before;
-				for (std::size_t i = _removed.size(); i-- > 0u;)
-					if (_removed[i] && !MidiEditOperations::RemoveNote(_working, i)) return Reject();
+				auto removed = _removed;
+				for (const auto& sourceNote : _targets.Notes)
+					if (_removed[sourceNote.On] && sourceNote.Off < _before.EventCount)
+						removed[sourceNote.Off] = true;
+				_working.EventCount = 0u;
+				for (std::size_t i = 0u; i < _before.EventCount; ++i)
+					if (!removed[i]) _working.Events[_working.EventCount++] = _before.Events[i];
 				_dirty = true;
 				AppendPreview(note.Start, note.End, note.Pitch, false);
 				return true;
@@ -327,7 +333,11 @@ namespace midi
 			auto start = cellStart;
 			const auto add = [&](std::uint32_t end) {
 				if (start >= end) return true;
-				if (!MidiEditOperations::CreateExact(_working, start, end, _channel, point.Pitch, _creationVelocity)) return false;
+				// Store the displayed head endpoint, rather than an unmatched tail
+				// that playback would sustain indefinitely across subsequent wraps.
+				const auto noteEnd = end == _before.LoopLengthSamps && start >= _grid->SeamTailStart
+					? end + _grid->SeamHeadEnd : end;
+				if (!MidiEditOperations::CreateExact(_working, start, noteEnd, _channel, point.Pitch, _creationVelocity)) return false;
 				AppendPreview(start, end, point.Pitch, true); _dirty = true;
 				return true;
 			};
