@@ -25,9 +25,8 @@
 #include "../audio/ChannelMixer.h"
 #include "../graphics/Image.h"
 #include "../graphics/Camera.h"
-#include "../graphics/UnattendedCameraController.h"
 #include "../graphics/GlDrawContext.h"
-#include "../graphics/Skybox.h"
+#include "../graphics/Compositor.h"
 #include "../gui/GuiLabel.h"
 #include "../gui/NinjamTempoPrompt.h"
 #include "../gui/GuiFocusManager.h"
@@ -180,7 +179,7 @@ namespace engine
 		std::uint64_t Identity() const noexcept { return _sceneIdentity; }
 		void ReportFileStatus(const std::string& status);
 		void ReportFileOutcome(const std::string& status)
-		{ _fileStatus->SetString(status); ReportRuntimeNotice("JAM",status); }
+		{ _settingsControls->SetFileStatus(status); ReportRuntimeNotice("JAM",status); }
 		// Owned values only; off-callback workers may post, UI alone presents.
 		void ReportRuntimeNotice(std::string title, std::string message)
 		{ _runtimeDialogs.Notify(std::move(title),std::move(message)); }
@@ -468,11 +467,7 @@ namespace engine
 		std::array<char, 4096> _jobThreadFailureDetail{}; // Job writes once, before release-publishing failure.
 		std::atomic_bool _isSceneReset;
 		glm::mat4 _viewProj;
-		glm::mat4 _overlayViewProj;
-		glm::mat4 _skyboxViewProj;
-		bool _skyboxStarted;
-		Time _skyboxStartTime;
-		graphics::Skybox _skybox;
+		graphics::Compositor _compositor;
 		std::unique_ptr<audio::AudioHost> _audioEngine;
 		std::unique_ptr<io::IoInputSubsystem> _inputSubsystem;
 		std::optional<midi::MidiInputInventory> _midiInputInventory;
@@ -522,19 +517,6 @@ namespace engine
 		bool _audioStartRequested = false;
 		std::unordered_map<std::string, std::vector<unsigned int>> _acceptedBufferSizes;
 		audio::AsioInventory _deviceInventory;
-		std::vector<std::string> _audioChoiceNames;
-		std::shared_ptr<gui::GuiDropDown> _audioDeviceChoice;
-		std::array<std::shared_ptr<gui::GuiNumericInput>,4> _audioInputs;
-		std::shared_ptr<gui::GuiLabel> _deviceStatus, _activeAudioStatus, _fileStatus;
-		std::shared_ptr<gui::GuiButton> _saveButton, _saveDefaultJamButton, _loadButton;
-		struct MidiDeviceChoice
-		{
-			std::string HardwareName;
-			std::string RegistryId; // Empty only for an unregistered inventory choice.
-			std::shared_ptr<gui::GuiToggle> Toggle;
-		};
-		std::vector<MidiDeviceChoice> _midiChoices;
-		std::vector<std::shared_ptr<gui::GuiCommandReceiver>> _midiChoiceBindings;
 		std::vector<io::UserConfig::MidiSettings> _midiDraft;
 		std::optional<io::UserConfig::AudioSettings> _pendingAudioPersistence;
 		std::optional<std::vector<io::UserConfig::MidiSettings>> _pendingMidiPersistence;
@@ -545,7 +527,6 @@ namespace engine
 		std::function<bool(const std::wstring&, bool)> _defaultJamSaver;
 		bool _pendingSaveAsDefault = false;
 		bool _panelRigLoadRequested = false;
-		std::shared_ptr<gui::GuiButton> _saveAsJamButton;
 		bool _panelLoadRequested = false, _loadReady = false;
 		std::mutex _midiLifecycleMutex;
 		std::atomic<bool> _midiRefreshRequested{ false };
@@ -572,8 +553,6 @@ namespace engine
 		std::atomic_bool _quantisationInputResetRequested{ false };
 		io::JamFile::GlobalMidiQuantState _globalMidiQuantState = io::JamFile::GlobalMidiQuantState::Mixed;
 		double _transportOffsetLoopFrac = 0.0;
-		std::unique_ptr<gui::GuiLabel> _tempoLabel;
-		std::unique_ptr<gui::GuiLabel> _versionLabel;
 		std::unique_ptr<gui::SceneSelector> _selector;
 		std::shared_ptr<gui::GuiMainPanel> _mainPanel;
 		std::shared_ptr<gui::GuiMainPanel> _selectionPanel;
@@ -588,11 +567,6 @@ namespace engine
 		bool _runtimeRendererReady = false; // UI-only; job and audio never inspect it.
 		gui::NinjamTempoPrompt _tempoPrompt;
 		ninjam::NinjamTimingDiagnosticPresenter _ninjamDiagnosticPresenter;
-		// Job-owned diagnostic maxima; no callback reads/writes.
-		std::optional<Time> _ninjamTraceLastJobAt;
-		long long _ninjamTraceMaxJobGapMs = 0;
-		long long _ninjamTraceMaxPumpUs = 0;
-		std::size_t _ninjamTraceJobQueueDepth = 0u;
 		std::uint64_t _ninjamJoinGeneration = 0u;
 		std::uint64_t _ninjamTempoRequestId = 0u;
 		ninjam::TempoRequestState _lastLoggedTempoRequestState = ninjam::TempoRequestState::Idle;
@@ -636,15 +610,9 @@ namespace engine
 		std::vector<unsigned char> _lastLoggedHoverPath;
 		graphics::CtrlHandleOverlay _ctrlHandleOverlay;
 		engine::QuantiserController _quantisationInteraction;
-		// Window-only controller/eligibility; publisher has separate structural ownership.
-		graphics::UnattendedCameraController _unattendedCamera;
-		bool _cameraWindowEligible = true;
-		bool _cameraHeldInteraction = false;
+		// Recording publication has separate structural ownership from camera presentation.
 		std::shared_ptr<CameraRecordingPublisher> _cameraRecordings = std::make_shared<CameraRecordingPublisher>();
 		graphics::Camera _camera;
-		std::optional<Time> _lastCameraUpdateTime;
-		std::optional<Time> _lastCameraDiagnosticTime;
-		std::uint64_t _cameraHumanActivityRevision = 0u;
 		// Window owner only: selection/group clicks retain their gesture classification through release.
 		bool _cameraPointerPreservesIdle = false;
 		std::optional<Time> _lastPanelAnimationTime;

@@ -11,6 +11,27 @@ using graphics::Window;
 using engine::Scene;
 using engine::SceneParams;
 
+namespace graphics
+{
+	class CameraPresentationTestAccess
+	{
+	public:
+		static void ArmIdle(Camera& camera, Time start, const engine::CameraRecordingObservation& observation, bool automatic)
+		{
+			camera._unattendedCamera.HumanActivity(start);
+			camera._unattendedCamera.Update(start, true, false, observation, {});
+			if (automatic) camera._unattendedCamera.Update(start + std::chrono::seconds(8), true, false, observation, {});
+		}
+		static bool AutomaticAt(Camera& camera, Time now, const engine::CameraRecordingObservation& observation)
+		{
+			return camera._unattendedCamera.Update(now, camera._windowEligible && !camera._heldInteraction,
+				camera._windowEligible && camera._heldInteraction, observation, {}).IsAutomatic();
+		}
+		static bool Automatic(const Camera& camera) { return camera._unattendedCamera.IsAutomatic(); }
+		static std::uint64_t ActivityRevision(const Camera& camera) { return camera._humanActivityRevision; }
+	};
+}
+
 class CameraActivityScene final : public Scene
 {
 public:
@@ -24,18 +45,15 @@ public:
 		for (unsigned int tick = 0u; tick < 8u; ++tick) _camera.TickBackgroundDrag(0.05f);
 		_idleStart = utils::Timer::GetTime() - std::chrono::milliseconds(7900);
 		const auto observation = _cameraRecordings->Snapshot();
-		_unattendedCamera.HumanActivity(_idleStart);
-		_unattendedCamera.Update(_idleStart, true, false, *observation, {});
-		if (automatic) _unattendedCamera.Update(_idleStart + std::chrono::seconds(8), true, false, *observation, {});
+		graphics::CameraPresentationTestAccess::ArmIdle(_camera, _idleStart, *observation, automatic);
 	}
 	bool AutomaticAtOriginalDeadline()
 	{
-		return _unattendedCamera.Update(_idleStart + std::chrono::milliseconds(8100),
-			_cameraWindowEligible && !_cameraHeldInteraction,
-			_cameraWindowEligible && _cameraHeldInteraction, *_cameraRecordings->Snapshot(), {}).IsAutomatic();
+		return graphics::CameraPresentationTestAccess::AutomaticAt(_camera,
+			_idleStart + std::chrono::milliseconds(8100), *_cameraRecordings->Snapshot());
 	}
-	bool Automatic() const { return _unattendedCamera.IsAutomatic(); }
-	std::uint64_t ActivityRevision() const { return _cameraHumanActivityRevision; }
+	bool Automatic() const { return graphics::CameraPresentationTestAccess::Automatic(_camera); }
+	std::uint64_t ActivityRevision() const { return graphics::CameraPresentationTestAccess::ActivityRevision(_camera); }
 	void AddStation(const std::shared_ptr<engine::Station>& station) { _AddStation(station); }
 	std::shared_ptr<gui::GuiPerformanceGroupRow> GroupRow(std::size_t row)
 	{

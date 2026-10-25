@@ -81,8 +81,8 @@ namespace engine
         static std::shared_ptr<gui::GuiButton> RigSaveChoice(Scene& scene, unsigned int choice)
         { return gui::GuiMainPanelTestAccess::RigSaveChoice(*scene._mainPanel, choice); }
         static bool RigSaveRequested(const Scene& scene) { return scene._rigSaveRequested; }
-        static void ChooseAudio(Scene& scene, int index) { scene._audioDeviceChoice->SetSelectedIndex(index, true); }
-        static void AudioChannels(Scene& scene, unsigned int input, double value) { scene._audioInputs[input]->SetValue(value, true); }
+        static void ChooseAudio(Scene& scene, int index) { scene._settingsControls->AudioDevice()->SetSelectedIndex(index, true); }
+        static void AudioChannels(Scene& scene, unsigned int input, double value) { scene._settingsControls->AudioInput(input)->SetValue(value, true); }
         static std::shared_ptr<Station> RemovalTarget(Scene& scene)
         { std::scoped_lock lock(scene._sceneMutex); return scene._stationManagement.Target; }
         static std::shared_ptr<gui::GuiButton> RemovalButton(Scene& scene, unsigned int ordinal)
@@ -109,7 +109,7 @@ namespace engine
             scene._deviceInventory = inventory;
             scene._SetAudioDraftFromStream(params);
             scene._RebuildDevicePage();
-            return scene._audioDeviceChoice->SelectedText();
+            return scene._settingsControls->AudioDevice()->SelectedText();
         }
         static io::UserConfig::AudioSettings AudioDraft(const Scene& scene) { return scene._audioDraft; }
         static void WhileSceneLocked(Scene& scene, const std::function<void()>& callback)

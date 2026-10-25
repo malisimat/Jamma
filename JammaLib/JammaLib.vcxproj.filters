@@ -408,6 +408,12 @@
     <ClInclude Include="src\midi\LoopGridEditor.h">
       <Filter>src\midi</Filter>
     </ClInclude>
+    <ClInclude Include="src\midi\AutomationPlayback.h">
+      <Filter>src\midi</Filter>
+    </ClInclude>
+    <ClInclude Include="src\midi\MidiDelivery.h">
+      <Filter>src\midi</Filter>
+    </ClInclude>
     <ClInclude Include="src\midi\MidiLoop.h">
       <Filter>src\midi</Filter>
     </ClInclude>
@@ -598,6 +604,9 @@
       <Filter>src\gui</Filter>
     </ClInclude>
     <ClInclude Include="src\graphics\ImageFullscreen.h">
+      <Filter>src\graphics</Filter>
+    </ClInclude>
+    <ClInclude Include="src\graphics\Compositor.h">
       <Filter>src\graphics</Filter>
     </ClInclude>
     <ClInclude Include="src\graphics\Skybox.h">
@@ -875,6 +884,12 @@
     <ClCompile Include="src\midi\LoopGridEditor.cpp">
       <Filter>src\midi</Filter>
     </ClCompile>
+    <ClCompile Include="src\midi\AutomationPlayback.cpp">
+      <Filter>src\midi</Filter>
+    </ClCompile>
+    <ClCompile Include="src\midi\MidiDelivery.cpp">
+      <Filter>src\midi</Filter>
+    </ClCompile>
     <ClCompile Include="src\midi\MidiLoop.cpp">
       <Filter>src\midi</Filter>
     </ClCompile>
@@ -1017,6 +1032,9 @@
       <Filter>src\gui</Filter>
     </ClCompile>
     <ClCompile Include="src\graphics\ImageFullscreen.cpp">
+      <Filter>src\graphics</Filter>
+    </ClCompile>
+    <ClCompile Include="src\graphics\Compositor.cpp">
       <Filter>src\graphics</Filter>
     </ClCompile>
     <ClCompile Include="src\graphics\Skybox.cpp">
