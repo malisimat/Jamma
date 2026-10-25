@@ -1,3 +1,4 @@
+#include "gui/GuiPanelHeader.h"
 #include "gtest/gtest.h"
 #include "gui/CableInteraction.h"
 #include <limits>
@@ -475,7 +476,20 @@ TEST_F(HudCableInteractionTests, SupportedCompactProfileKeepsSourcesAndTriggerAc
 			sourceScroll->GlobalPosition().X + static_cast<int>(sourceScroll->GetSize().Width));
 	}
 	EXPECT_EQ(2u, sourceRows);
-	auto scroll = TriggerScroll(); ASSERT_TRUE(scroll); EXPECT_GE(scroll->GetSize().Height, 100u);
+    for (unsigned char index : {0u,1u})
+    {
+        const auto frame = Hud->TryGetChild(index);
+        const auto header = std::dynamic_pointer_cast<gui::GuiPanelHeader>(frame->TryGetChild(0u));
+        ASSERT_TRUE(header);
+        EXPECT_EQ(26, static_cast<int>(frame->GetSize().Height) - header->Position().Y - static_cast<int>(header->GetSize().Height));
+        if (index == 1u)
+        {
+            const auto controls = frame->TryGetChild(1u);
+            EXPECT_EQ(12, header->BandBounds().Bottom - controls->Position().Y - static_cast<int>(controls->GetSize().Height));
+        }
+    }
+
+	auto scroll = TriggerScroll(); ASSERT_TRUE(scroll); EXPECT_GE(scroll->GetSize().Height, 80u); // Taller shared header retains a usable compact pedal viewport.
 	scroll->SetScrollOffset(0);
 	const auto first = scroll->Content()->TryGetChild(0); ASSERT_TRUE(first);
 	EXPECT_EQ(132u, first->GetSize().Height);

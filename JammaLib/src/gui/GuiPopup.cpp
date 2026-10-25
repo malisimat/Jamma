@@ -128,8 +128,8 @@ GuiLabelParams GuiPopupParams::Header(const std::string& text, unsigned int widt
 
 base::GuiElementParams GuiPopupParams::HeaderBand(unsigned int width, unsigned int height)
 {
-	// A 25% band over the 60% popup fill gives 70% effective opacity.
-	return FlatRect(width,height,{0.13f,0.18f,0.20f},0.25f);
+	// A neutral 50% band over the 60% popup fill gives 80% effective opacity.
+	return FlatRect(width,height,{0.18f,0.18f,0.18f},0.70f);
 }
 
 GuiPopup::GuiPopup(const GuiPopupParams& params) :
@@ -438,10 +438,10 @@ void GuiPopup::_LayoutContents()
 		_headerBand->SetSize({static_cast<unsigned int>((std::max)(0,width - 16)),static_cast<unsigned int>((std::min)(36,height))});
 		_titleLabel->SetPosition({12,(std::max)(0,height - 38)});
 		_titleLabel->SetSize({inner,26u});
-		_rowSubtitle->SetPosition({12,(std::max)(0,height - 66)}); _rowSubtitle->SetSize({inner,26u});
-		_rowStatus->SetPosition({12,(std::max)(0,height - 106)}); _rowStatus->SetSize({inner,38u});
+		_rowSubtitle->SetPosition({12,(std::max)(0,height - 66 - GuiLabelParams::HeaderBottomSpacing)}); _rowSubtitle->SetSize({inner,26u});
+		_rowStatus->SetPosition({12,(std::max)(0,height - 106 - GuiLabelParams::HeaderBottomSpacing)}); _rowStatus->SetSize({inner,38u});
 		_rowScroll->SetPosition({12,56});
-		_rowScroll->SetSize({inner, static_cast<unsigned int>((std::max)(1,height - 164))});
+		_rowScroll->SetSize({inner, static_cast<unsigned int>((std::max)(1,height - 164 - GuiLabelParams::HeaderBottomSpacing))});
 		return;
 	}
 	const int padding = (std::min)(20, width / 2);
@@ -459,7 +459,7 @@ void GuiPopup::_LayoutContents()
 		_titleLabel->SetSize({ static_cast<unsigned int>((std::min)(static_cast<int>(TitleWidth), width - padding * 2)),
 			static_cast<unsigned int>(titleHeight) });
 	}
-	const int bodyTop = (std::max)(0, titleY - 10);
+	const int bodyTop = (std::max)(0, titleY - 10 - GuiLabelParams::HeaderBottomSpacing);
 	const int buttonsTop = _buttons.empty() ? 0 : _buttons.front()->Position().Y + static_cast<int>(_buttons.front()->GetSize().Height);
 	const int bodyBottom = (std::min)(bodyTop, buttonsTop + (height >= static_cast<int>(_preferredSize.Height) ? 12 : 8));
 	const int count = static_cast<int>(std::count_if(_lineLabels.begin(), _lineLabels.end(),

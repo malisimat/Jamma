@@ -337,6 +337,7 @@
     <ClInclude Include="src\base\GuiElement.h" />
     <ClInclude Include="src\utils\ImageUtils.h" />
     <ClInclude Include="src\gui\GuiLabel.h" />
+    <ClInclude Include="src\gui\GuiPanelHeader.h" />
     <ClInclude Include="src\utils\FunctionUtils.h" />
     <ClInclude Include="src\resources\ShaderResource.h" />
     <ClInclude Include="src\resources\Resource.h" />

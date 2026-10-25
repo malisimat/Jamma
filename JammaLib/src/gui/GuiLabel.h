@@ -35,6 +35,7 @@ namespace gui
 	public:
 		static constexpr unsigned int DefaultHeight = 22u;
 		static constexpr unsigned int HeaderHeight = 22u;
+		static constexpr int HeaderBottomSpacing = 6;
 		static constexpr unsigned int HeaderMinWidth = 40u;
 		static constexpr unsigned int RowWidth = 260u;
 		static constexpr unsigned int RowHeight = 24u;

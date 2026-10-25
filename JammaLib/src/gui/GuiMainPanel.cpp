@@ -1,5 +1,6 @@
 #include "GuiMainPanel.h"
 #include "GuiLabel.h"
+#include "GuiPanelHeader.h"
 #include "../graphics/GlDrawContext.h"
 #include <cmath>
 
@@ -25,9 +26,7 @@ GuiMainPanel::GuiMainPanel(GuiMainPanelParams params) : GuiPanel(params),
 	_children.push_back(_frame);
 	if (!_selectionOnly)
 	{
-		auto headerParams = GuiLabelParams::PanelHeader("Settings", 320u);
-		headerParams.Ellipsize = true;
-		_frame->AddChild(std::make_shared<GuiLabel>(headerParams));
+		_frame->AddChild(std::make_shared<GuiPanelHeader>("Settings"));
 	}
 	GuiToggleParams handleParams = GuiToggleParams::PanelPrimary();
 	handleParams.Text = "";
@@ -39,7 +38,7 @@ GuiMainPanel::GuiMainPanel(GuiMainPanelParams params) : GuiPanel(params),
 	handleParams.ToggledDownTexture = "arrowup2_down";
 	handleParams.Rot90 = !_selectionOnly;
 	handleParams.TextPadding = 0u;
-	handleParams.Size = _selectionOnly ? Size2d{ 64u, 20u } : Size2d{ 20u, 64u };
+	handleParams.Size = _selectionOnly ? Size2d{ 64u, 23u } : Size2d{ 23u, 64u };
 	handleParams.MinSize = handleParams.Size;
 	handleParams.InitState = GuiToggleParams::TOGGLE_ON;
 	// Match rack handles: preserve the arrow textures' authored colours.
@@ -140,7 +139,7 @@ GuiMainPanel::GuiMainPanel(GuiMainPanelParams params) : GuiPanel(params),
 	{
 		GuiRadioParams tabParams;
 		tabParams.InitValue = static_cast<unsigned int>(SettingsPage::Timing);
-		tabParams.Size = { 416u, 48u };
+		tabParams.Size = { SettingsTabsWidth, 48u };
 		for (unsigned int index = 0; index < 4; ++index)
 		{
 			auto toggle = GuiToggleParams::PanelPrimary();
@@ -327,9 +326,9 @@ void GuiMainPanel::_Layout()
 {
 	const int width = static_cast<int>(_viewport.Width), height = static_cast<int>(_viewport.Height);
 	const int margin = std::min(StandardPanelPadding, width / 2);
-	const int panelWidth = std::min(_selectionOnly ? 404 : _SettingsPanelWidth(), std::max(0, width - 2 * margin));
-	const int handleWidth = std::min(_selectionOnly ? 64 : 20, std::max(0, width - (_selectionOnly ? margin : 0)));
-	const int handleHeight = std::min(_selectionOnly ? SelectionHandleHeight : 64, std::max(0, height - (_selectionOnly ? 0 : std::min(StandardPanelPadding, height / 2))));
+	const int panelWidth = std::min(_SettingsPanelWidth(), std::max(0, width - 2 * margin));
+	const int handleWidth = std::min(_selectionOnly ? 64 : 23, std::max(0, width - (_selectionOnly ? margin : 0)));
+	const int handleHeight = std::min(_selectionOnly ? SelectionHandleHeight + 3 : 64, std::max(0, height - (_selectionOnly ? 0 : std::min(StandardPanelPadding, height / 2))));
 	const int selectionPanelHeight = std::min(_SelectionPanelHeight(),
 		std::max(0, height - 2 * std::min(StandardPanelPadding, height / 2)));
 	const int mainPanelBottom = std::min(GuiStyle::StatusBarHeight + StandardPanelPadding, height / 2);
@@ -337,7 +336,7 @@ void GuiMainPanel::_Layout()
 	const int settingsAvailableHeight = std::max(0, selectionPanelBottom - MainPanelTopGap - mainPanelBottom);
 	// Preserve usable settings chrome only when the viewport cannot fit both
 	// overlays. Otherwise scrolling keeps settings entirely below selection.
-	constexpr int settingsChromeHeight = 2 * 20 + 22 + 48 + 8;
+	constexpr int settingsChromeHeight = 20 + GuiPanelHeader::ContentTopInset + 48 + 8;
 	const int settingsHeight = settingsAvailableHeight >= settingsChromeHeight
 		? settingsAvailableHeight : MainPanelMinimumHeight;
 	const int unconstrainedPanelHeight = _selectionOnly
@@ -362,7 +361,7 @@ int GuiMainPanel::_SettingsPanelWidth() const
 {
 	// Keep the frame aligned to the four settings tabs. Page content wraps to
 	// the width available inside this fixed frame.
-	return static_cast<int>(_tabs->GetSize().Width + 44u);
+	return static_cast<int>(SettingsTabsWidth + 44u);
 }
 
 int GuiMainPanel::_SelectionPanelHeight() const
@@ -396,7 +395,7 @@ void GuiMainPanel::_LayoutSelection(int panelWidth, int panelHeight)
 		unsigned int count = 0;
 		while (count < 255 && radio->TryGetChild(static_cast<unsigned char>(count))) ++count;
 		const auto available = static_cast<unsigned int>(std::max(0, innerWidth - 16 - barWidth));
-		const auto radioWidth = std::min(available, entry.second.Width);
+		const auto radioWidth = available;
 		for (unsigned int index = 0; index < count; ++index)
 		{
 			auto toggle = radio->TryGetChild(static_cast<unsigned char>(index));
@@ -418,20 +417,19 @@ void GuiMainPanel::_LayoutSettings(int panelWidth, int panelHeight)
 {
 	const int padding = std::min(20, std::min(panelWidth, panelHeight) / 2);
 	const int inner = std::max(0, panelWidth - 2 * padding);
-	const int titleHeight = std::min(22, std::max(0, panelHeight - 2 * padding));
 	auto title = _frame->TryGetChild(0);
-	title->SetPosition({ padding, std::max(padding, panelHeight - padding - titleHeight) });
-	title->SetSize({ static_cast<unsigned int>(inner), static_cast<unsigned int>(titleHeight) });
-	const int tabHeight = std::min(48, std::max(0, panelHeight - 2 * padding - titleHeight));
+	std::static_pointer_cast<GuiPanelHeader>(title)->Layout({static_cast<unsigned int>(panelWidth), static_cast<unsigned int>(panelHeight)});
+	const int contentTop = std::max(padding, panelHeight - GuiPanelHeader::ContentTopInset);
+	const int tabHeight = std::min(48, std::max(0, contentTop - padding));
 	if (_tabScroll)
 	{
 		// The radio width includes a trailing four-pixel cell gap; center the visible buttons.
 		const int tabRowWidth = static_cast<int>(_tabs->GetSize().Width) - 4;
 		const int tabLeft = padding + std::max(0, (inner - tabRowWidth) / 2);
-		_tabScroll->SetPosition({ tabLeft, std::max(padding, panelHeight - padding - titleHeight - tabHeight) });
+		_tabScroll->SetPosition({ tabLeft, std::max(padding, contentTop - tabHeight) });
 		_tabScroll->SetSize({ static_cast<unsigned int>(inner), static_cast<unsigned int>(tabHeight) });
 	}
-	const int viewportHeight = std::max(0, panelHeight - 2 * padding - titleHeight - tabHeight - 8);
+	const int viewportHeight = std::max(0, contentTop - padding - tabHeight - 8);
 	_pageScroll->SetPosition({ padding, padding });
 	// Keep the scrollbar in the outer gutter, outside the symmetric content margins.
 	const auto scrollGutter = std::min(static_cast<int>(SettingsScrollBarWidth), padding);

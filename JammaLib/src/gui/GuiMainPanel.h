@@ -78,6 +78,7 @@ namespace gui
 		static constexpr int SelectionRowGap = 8;
 		static constexpr unsigned int PageContentPadding = 8u;
 		static constexpr unsigned int SettingsScrollBarWidth = 12u;
+		static constexpr unsigned int SettingsTabsWidth = 416u;
 		int _SelectionPanelHeight() const;
 		int _SettingsPanelWidth() const;
 		static constexpr int SelectionHandleHeight = 20;

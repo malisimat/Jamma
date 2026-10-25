@@ -13,6 +13,7 @@
 #include "gui/GuiScrollBar.h"
 #include "gui/GuiScrollPanel.h"
 #include "gui/GuiMainPanel.h"
+#include "gui/GuiPanelHeader.h"
 #include "engine/Scene.h"
 #include "graphics/GlDrawContext.h"
 #include <limits>
@@ -1887,4 +1888,18 @@ TEST(TriggerLearnController, ArmAdmitsFreshKeyboardAfterAltReleaseWithoutOwningP
     controller.reset();
     EXPECT_TRUE(weak.expired());
     popup->ReleaseResources(); popup->DetachGuiOwnershipForRetirement();
+}
+
+TEST(GuiMainPanel, TabsLeaveClearGapBelowCenteredHeaderBand)
+{
+    gui::GuiMainPanelParams params; params.Size = {800u,600u};
+    auto panel = std::make_shared<gui::GuiMainPanel>(params); panel->Init();
+    const auto frame = panel->TryGetChild(0u);
+    const auto header = std::dynamic_pointer_cast<gui::GuiPanelHeader>(frame->TryGetChild(0u));
+    const auto tabs = frame->TryGetChild(2u);
+    ASSERT_TRUE(header); ASSERT_TRUE(tabs);
+    const auto band = header->BandBounds();
+    EXPECT_EQ(12, band.Bottom - tabs->Position().Y - static_cast<int>(tabs->GetSize().Height));
+    EXPECT_EQ(header->Position().Y - band.Bottom,
+        band.Top - header->Position().Y - static_cast<int>(header->GetSize().Height));
 }

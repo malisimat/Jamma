@@ -1,4 +1,5 @@
 #include "GuiHud.h"
+#include "GuiPanelHeader.h"
 
 #include <array>
 #include <algorithm>
@@ -483,6 +484,7 @@ void GuiHud::InitResources(ResourceLib& resourceLib, bool forceInit)
 {
 	GuiPanel::InitResources(resourceLib, forceInit);
 	if (_triggerLearn) _triggerLearn->Popup()->InitResources(resourceLib, forceInit);
+	_LayoutPanels(); // Compact header width uses the resolved label font.
 }
 
 void GuiHud::_InitResources(ResourceLib& resourceLib, bool forceInit)
@@ -554,7 +556,7 @@ void GuiHud::_BuildPanels()
 
 void GuiHud::_BuildTopStrip()
 {
-	_topStrip->AddChild(_MakeHeader("Inputs", _TopStripWidth - (_TopStripPadding * 2u), 8u));
+	_topStrip->AddChild(std::make_shared<GuiPanelHeader>("Inputs"));
 
 	const auto audioCount = static_cast<unsigned int>(std::count_if(_sourceEndpoints.begin(), _sourceEndpoints.end(),
 		[](const auto& source) { return source.Kind == io::RigFileRouting::SourceKind::Adc; }));
@@ -637,7 +639,7 @@ void GuiHud::_BuildTopStrip()
 
 void GuiHud::_BuildTriggerRail()
 {
-	auto header = _MakeHeader("Triggers", _RightRailWidth, 38u);
+	auto header = std::make_shared<GuiPanelHeader>("Triggers");
 	header->SetPosition({ 0, 0 });
 	_triggerRail->AddChild(header);
 
@@ -926,10 +928,13 @@ void GuiHud::_LayoutPanels()
 	_triggerRail->SetSize({ static_cast<unsigned int>(railWidth), static_cast<unsigned int>(railHeight) });
 	_triggerRail->SetVisible(railWidth > 0 && railHeight > 0);
 	// Keep trigger actions reachable in the supported compact profile.
-	const int triggerTopInset = std::clamp(railHeight - 34 - static_cast<int>(_TriggerFooterHeight) - 100, 0, 8);
-	const int triggerHeader = std::min(34, railHeight - triggerTopInset);
-	const int triggerFooter = std::min(static_cast<int>(_TriggerFooterHeight), railHeight - triggerTopInset - triggerHeader);
-	const int triggerViewport = std::max(0, railHeight - triggerTopInset - triggerHeader - triggerFooter);
+	const int triggerHeader = std::min(GuiPanelHeader::ContentTopInset, railHeight);
+	const int triggerRemaining = railHeight - triggerHeader;
+	// Prefer a 100px pedal viewport by reducing spare footer padding first.
+	// At smaller sizes retain the add button and scroll the remaining pedal area.
+	const int triggerFooter = std::min(static_cast<int>(_TriggerFooterHeight),
+		std::max(std::min(static_cast<int>(_TriggerControlSize), triggerRemaining), triggerRemaining - 100));
+	const int triggerViewport = std::max(0, triggerRemaining - triggerFooter);
 	_triggerScroll->SetPosition({ 0, triggerFooter });
 	_triggerScroll->SetSize({ static_cast<unsigned int>(railWidth), static_cast<unsigned int>(triggerViewport) });
 	_triggerScroll->SetVisible(railWidth > 0 && triggerViewport > 0);
@@ -938,8 +943,7 @@ void GuiHud::_LayoutPanels()
 	_triggerList->SetSize({ static_cast<unsigned int>(railWidth), _triggerList->GetSize().Height });
 	if (auto header = _triggerRail->TryGetChild(0u))
 	{
-		header->SetPosition({ 0, railHeight - triggerTopInset - triggerHeader });
-		header->SetSize({ static_cast<unsigned int>(railWidth), static_cast<unsigned int>(triggerHeader) });
+		std::static_pointer_cast<GuiPanelHeader>(header)->Layout(_triggerRail->GetSize());
 		header->SetVisible(railWidth >= 80 && triggerHeader >= 22);
 	}
 	_addTriggerButton->SetPosition({ std::max(0, (railWidth - static_cast<int>(_TriggerControlSize)) / 2),
@@ -959,7 +963,7 @@ void GuiHud::_LayoutPanels()
 		[](const auto& source) { return source.Kind == io::RigFileRouting::SourceKind::Adc; }));
 	const auto midiCount = static_cast<unsigned int>(_sourceEndpoints.size()) - audioCount;
 	const int categoryGap = audioCount && midiCount ? std::min(static_cast<int>(GuiStackPanelParams::PanelRowSpacing - 4u), innerWidth) : 0;
-	const int labelWidth = innerWidth >= static_cast<int>((audioCount + midiCount) * 84u) + 76 ? 76 : 0;
+	const int labelWidth = innerWidth >= static_cast<int>((audioCount + midiCount) * 84u) + 100 ? 100 : 0;
 	const auto budget = static_cast<unsigned int>(std::max(0, innerWidth - labelWidth - categoryGap));
 	auto audioWidth = audioCount + midiCount ? static_cast<unsigned int>(static_cast<unsigned long long>(budget) * audioCount / (audioCount + midiCount)) : 0u;
 	// Keep a minority category usable too: one minimum-width card plus the
@@ -979,7 +983,11 @@ void GuiHud::_LayoutPanels()
 	const bool sourceScrolls = audioWidth < occupiedWidth(audioCount, audioCard) || midiWidth < occupiedWidth(midiCount, midiCard);
 	const int desiredRowHeight = static_cast<int>(_SourceButtonHeight + 4u + (sourceScrolls ? _SourceScrollBarHeight : 0u));
 	rowHeight = std::min(rowHeight, desiredRowHeight);
-	topHeight = rowHeight + 2 * padding;
+	// Keep the full decorative border and the shared header's vertical padding
+	// even when the source cards need only one short row beside the title.
+	topHeight = std::min(std::max(rowHeight + 2 * padding,
+		2 * GuiPanelHeader::BorderInset + GuiPanelHeader::BandHeight),
+		std::max(0, height - 2 * marginY - GuiStyle::StatusBarHeight));
 	// Keep the same right anchor, but stop the background growing beyond its contents.
 	topWidth = std::min(topWidth, std::max(320, static_cast<int>(audioWidth + midiWidth) + categoryGap + labelWidth + 2 * padding));
 	_topStrip->SetPosition({ railX - static_cast<int>(_SourcePanelGap) - topWidth, std::max(0, height - marginY - topHeight) });
@@ -1009,11 +1017,10 @@ void GuiHud::_LayoutPanels()
 	};
 	layoutCategory(_topInputRow, _topAudioScroll, audioCount, audioCard, audioWidth);
 	layoutCategory(_topMidiRow, _topMidiScroll, midiCount, midiCard, midiWidth);
-	_topSourceRow->SetPosition({ topWidth - padding - static_cast<int>(_topSourceRow->GetSize().Width), topHeight - padding - rowHeight });
+	_topSourceRow->SetPosition({ topWidth - padding - static_cast<int>(_topSourceRow->GetSize().Width), (topHeight - rowHeight) / 2 });
 	if (auto header = _topStrip->TryGetChild(0u))
 	{
-		header->SetPosition({ _topSourceRow->Position().X - labelWidth, topHeight - padding - 28 });
-		header->SetSize({ static_cast<unsigned int>(labelWidth), 22u });
+		std::static_pointer_cast<GuiPanelHeader>(header)->Layout(_topStrip->GetSize(), false);
 		header->SetVisible(labelWidth > 0 && rowHeight >= 28);
 	}
 	_topSourceRow->ComputeLayout();
