@@ -274,3 +274,66 @@ void gui::SceneSelector::ClearPointerState()
  _currentHover.clear();
  _paintedPath.clear();
 }
+
+SceneSelector::SelectionUpdate SceneSelector::SelectionChanges(actions::ActionResultType result) const
+{
+	SelectionUpdate update;
+	update.HoverPath = _currentHover;
+	const bool paintingSelection = _selectMode == SELECT_SELECTADD || _selectMode == SELECT_SELECTREMOVE || IsPaintingMute();
+	update.HighlightMidiSiblings = !paintingSelection && _selectDepth == base::DEPTH_LOOP;
+	update.ClickPressed = IsClickPressed() && _currentHover == _paintedPath;
+	update.MutePressed = IsMutePressed();
+	const auto change = [&update](HierarchyEdit edit, const std::vector<unsigned char>& path) {
+		update.Changes[update.ChangeCount++] = { edit, path };
+	};
+	switch (result)
+	{
+	case actions::ACTIONRESULT_DEFAULT:
+		update.ClearPicking = true;
+		switch (_selectMode)
+		{
+		case SELECT_NONE:
+		case SELECT_NONEADD:
+		case SELECT_SELECT: update.HighlightHover = true; break;
+		case SELECT_SELECTADD: change(HierarchyEdit::Select, _currentHover); break;
+		case SELECT_SELECTREMOVE: change(HierarchyEdit::Deselect, _currentHover); break;
+		case SELECT_MUTE:
+		case SELECT_UNMUTE:
+			if (IsPaintingMute()) change(_selectMode == SELECT_MUTE ? HierarchyEdit::Mute : HierarchyEdit::Unmute, _currentHover);
+			else update.HighlightHover = true;
+			break;
+		}
+		break;
+	case actions::ACTIONRESULT_SELECT:
+		update.ClearSelection = true;
+		update.ClearPicking = update.HighlightHover = true;
+		change(HierarchyEdit::Select, _paintedPath);
+		break;
+	case actions::ACTIONRESULT_MUTE:
+	case actions::ACTIONRESULT_UNMUTE:
+		update.ClearPicking = update.HighlightHover = true;
+		change(result == actions::ACTIONRESULT_MUTE ? HierarchyEdit::Mute : HierarchyEdit::Unmute, _paintedPath);
+		break;
+	case actions::ACTIONRESULT_INITSELECT:
+		update.ClearPicking = true;
+		if (_selectMode == SELECT_SELECTADD || _selectMode == SELECT_SELECTREMOVE)
+		{
+			const auto edit = _selectMode == SELECT_SELECTADD ? HierarchyEdit::Select : HierarchyEdit::Deselect;
+			change(edit, _paintedPath);
+			change(edit, _currentHover);
+		}
+		else if (IsPaintingMute())
+		{
+			const auto edit = _selectMode == SELECT_MUTE ? HierarchyEdit::Mute : HierarchyEdit::Unmute;
+			change(edit, _paintedPath);
+			change(edit, _currentHover);
+		}
+		update.HighlightHover = !paintingSelection;
+		break;
+	case actions::ACTIONRESULT_CLEARSELECT:
+		update.ClearSelection = update.ClearPicking = true;
+		break;
+	default: break;
+	}
+	return update;
+}

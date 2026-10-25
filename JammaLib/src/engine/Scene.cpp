@@ -3379,193 +3379,30 @@ void Scene::_CollapseRacksLocked()
 
 void Scene::_UpdateSelection(ActionResultType res)
 {
-	// Called when touch up + down, and when hover updated
 	std::scoped_lock lock(_sceneMutex);
-	const auto& stations = _stations;
-	const HierarchySelection::LockedStations lockedStations(stations);
-	auto currentMode = _selector->CurrentMode();
-	std::shared_ptr<GuiElement> hovering = nullptr;
-	const auto applySelection = [this, &lockedStations](const std::vector<unsigned char>& path, bool selected) {
-		auto target = _ChildFromPathLocked(path);
-		if (!target)
-			return;
-		// Only committed scene selection reaches here. Rack controls consume
-		// their input before the selector, so editing a rack cannot dismiss it.
+	const HierarchySelection::LockedStations view(_stations);
+	const auto update = _selector->SelectionChanges(res);
+	if (update.ClearSelection)
+	{
 		_CollapseRacksLocked();
-		HierarchySelection::SetSelected(lockedStations, target, _selector->CurrentSelectDepth(), selected);
-	};
-	const auto clearSelection = [this, &lockedStations]() {
-		_CollapseRacksLocked();
-		HierarchySelection::Clear(lockedStations);
-	};
-	switch (res)
-	{
-	case ACTIONRESULT_DEFAULT:
-		// Only called when hover changed or touch down
-		switch (currentMode)
-		{
-		case SceneSelector::SELECT_NONE:
-			for (auto& station : stations)
-				station->SetPicking3d(false);
-
-			hovering = _ChildFromPathLocked(_selector->CurrentHover());
-			if (nullptr != hovering)
-				hovering->SetPicking3d(true);
-
-			break;
-		case SceneSelector::SELECT_NONEADD:
-			for (auto& station : stations)
-				station->SetPicking3d(false);
-
-			hovering = _ChildFromPathLocked(_selector->CurrentHover());
-			if (nullptr != hovering)
-				hovering->SetPicking3d(true);
-
-			break;
-		case SceneSelector::SELECT_SELECT:
-			for (auto& station : stations)
-				station->SetPicking3d(false);
-			hovering = _ChildFromPathLocked(_selector->CurrentHover());
-			if (nullptr != hovering)
-				hovering->SetPicking3d(true);
-
-			break;
-		case SceneSelector::SELECT_SELECTADD:
-			for (auto& station : stations)
-				station->SetPicking3d(false);
-			applySelection(_selector->CurrentHover(), true);
-
-			break;
-		case SceneSelector::SELECT_SELECTREMOVE:
-			for (auto& station : stations)
-				station->SetPicking3d(false);
-			applySelection(_selector->CurrentHover(), false);
-
-			break;
-		case SceneSelector::SELECT_MUTE:
-		case SceneSelector::SELECT_UNMUTE:
-			for (auto& station : stations)
-				station->SetPicking3d(false);
-			if (_selector->IsPaintingMute())
-				HierarchySelection::SetMuted(lockedStations, _selector->CurrentHover(), currentMode == SceneSelector::SELECT_MUTE);
-			else if (auto target = _ChildFromPathLocked(_selector->CurrentHover()))
-				target->SetPicking3d(true);
-
-			break;
-		}
-		break;
-	case ACTIONRESULT_SELECT:
-		// A click replaces the selection with the item pressed at touch down.
-		clearSelection();
-		applySelection(_selector->PaintedPathForTest(), true);
-		for (auto& station : stations)
-		{
-			station->SetPicking3d(false);
-		}
-		hovering = _ChildFromPathLocked(_selector->CurrentHover());
-		if (hovering) hovering->SetPicking3d(true);
-
-		break;
-	case ACTIONRESULT_MUTE:
-	case ACTIONRESULT_UNMUTE:
-		// A click changes only its pressed target; a paint stroke already applied.
-		HierarchySelection::SetMuted(lockedStations, _selector->PaintedPathForTest(), res == ACTIONRESULT_MUTE);
-		for (auto& station : stations) station->SetPicking3d(false);
-		if (auto target = _ChildFromPathLocked(_selector->CurrentHover())) target->SetPicking3d(true);
-		break;
-	case ACTIONRESULT_INITSELECT:
-		for (auto& station : stations)
-			station->SetPicking3d(false);
-
-		hovering = _ChildFromPathLocked(_selector->CurrentHover());
-		if (currentMode == SceneSelector::SELECT_SELECTADD ||
-			currentMode == SceneSelector::SELECT_SELECTREMOVE)
-		{
-			const bool select = currentMode == SceneSelector::SELECT_SELECTADD;
-			applySelection(_selector->PaintedPathForTest(), select);
-			applySelection(_selector->CurrentHover(), select);
-		}
-		else if (_selector->IsPaintingMute())
-		{
-			const bool muted = currentMode == SceneSelector::SELECT_MUTE;
-			HierarchySelection::SetMuted(lockedStations, _selector->PaintedPathForTest(), muted);
-			HierarchySelection::SetMuted(lockedStations, _selector->CurrentHover(), muted);
-		}
-		// Paint strokes show committed selection/mute states without hover or press shading.
-		if (currentMode != SceneSelector::SELECT_SELECTADD
-			&& currentMode != SceneSelector::SELECT_SELECTREMOVE && !_selector->IsPaintingMute() && hovering)
-			hovering->SetPicking3d(true);
-
-		break;
-	case ACTIONRESULT_CLEARSELECT:
-		clearSelection();
-		for (auto& station : stations)
-			station->SetPicking3d(false);
-
-		break;
+		HierarchySelection::Clear(view);
 	}
-	const bool paintingSelection = currentMode == SceneSelector::SELECT_SELECTADD
-		|| currentMode == SceneSelector::SELECT_SELECTREMOVE || _selector->IsPaintingMute();
-	if (!paintingSelection && _selector->CurrentSelectDepth() == base::DEPTH_LOOP)
+	for (std::size_t index = 0u; index < update.ChangeCount; ++index)
 	{
-		if (auto hovered = _ChildFromPathLocked(_selector->CurrentHover()))
+		const auto& change = update.Changes[index];
+		using Edit = SceneSelector::HierarchyEdit;
+		if (change.Edit == Edit::Select || change.Edit == Edit::Deselect)
 		{
-			if (auto take = std::dynamic_pointer_cast<LoopTake>(hovered->Parent()))
+			if (auto target = HierarchySelection::Resolve(view, change.Path))
 			{
-				for (const auto& midiLoop : take->GetMidiLoops())
-					if (midiLoop->Model() == hovered)
-					{
-						for (const auto& sibling : take->GetMidiLoops())
-							if (auto model = sibling->Model()) model->SetPicking3d(true);
-						break;
-					}
+				_CollapseRacksLocked();
+				HierarchySelection::SetSelected(view, target, _selector->CurrentSelectDepth(), change.Edit == Edit::Select);
 			}
 		}
+		else HierarchySelection::SetMuted(view, change.Path, change.Edit == Edit::Mute);
 	}
-	// A click has a short-lived pressed appearance. Keep it separate from
-	// persistent selection and hover, and clear it when the gesture becomes paint.
-	for (const auto& station : stations)
-	{
-		station->SetClickPressed(false);
-		for (const auto& take : station->GetLoopTakes())
-		{
-			for (const auto& loop : take->GetLoops())
-				if (auto model = loop->Model()) model->SetClickPressed(false);
-			for (const auto& midiLoop : take->GetMidiLoops())
-				if (auto model = midiLoop->Model()) model->SetClickPressed(false);
-		}
-	}
-	if (_selector->IsClickPressed()
-		&& _selector->CurrentHover() == _selector->PaintedPathForTest())
-	{
-		if (auto pressed = _ChildFromPathLocked(_selector->CurrentHover()))
-		{
-			const bool mutePressed = _selector->IsMutePressed();
-			const auto pressTakeLoops = [mutePressed](const std::shared_ptr<LoopTake>& take) {
-				for (const auto& loop : take->GetLoops())
-					if (auto model = loop->Model()) model->SetClickPressed(true, mutePressed);
-				for (const auto& midiLoop : take->GetMidiLoops())
-					if (auto model = midiLoop->Model()) model->SetClickPressed(true, mutePressed);
-			};
-			if (auto station = std::dynamic_pointer_cast<Station>(pressed))
-			{
-				station->SetClickPressed(true, mutePressed);
-				for (const auto& take : station->GetLoopTakes())
-					pressTakeLoops(take);
-			}
-			else if (auto take = std::dynamic_pointer_cast<LoopTake>(pressed))
-				pressTakeLoops(take);
-			else if (auto loop = std::dynamic_pointer_cast<Loop>(pressed))
-			{
-				if (auto model = loop->Model()) model->SetClickPressed(true, mutePressed);
-			}
-			else if (auto take = std::dynamic_pointer_cast<LoopTake>(pressed->Parent()))
-			{
-				for (const auto& midiLoop : take->GetMidiLoops())
-					if (auto model = midiLoop->Model()) model->SetClickPressed(true, mutePressed);
-			}
-		}
-	}
+	HierarchySelection::ApplyAppearance(view, { update.HoverPath, update.ClearPicking, update.HighlightHover,
+		update.HighlightMidiSiblings, update.ClickPressed, update.MutePressed });
 	// The picker may keep the same ID after a click or paint stroke, so update
 	// the selector's cached starting state without waiting for another pick.
 	if (auto hovered = _ChildFromPathLocked(_selector->CurrentHover()))
