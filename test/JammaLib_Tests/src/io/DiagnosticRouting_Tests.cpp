@@ -233,6 +233,21 @@ TEST_P(StartupJobOrigins, InterleavedJobsRespectExplicitOrigin)
 	EXPECT_EQ(std::find(startup.begin(), startup.end(), "runtime UI failure"), startup.end());
 }
 INSTANTIATE_TEST_SUITE_P(ConsoleSession, StartupJobOrigins, testing::Bool());
+TEST(ConsoleSession, VstLifecycleAndFailuresRemainInFileAfterStartup)
+{
+	console::LineRing ring;
+	std::vector<std::string> saved;
+	console::ConsoleCapture capture(ring, [&](std::string_view line) { saved.emplace_back(line); });
+	capture.CompleteStartup();
+	{
+		console::DiagnosticThread::StartupScope runtime(false);
+		std::clog << "[VST][load] stage=begin" << std::endl;
+		std::cerr << "[ERROR][VST2] windows-error=126" << std::endl;
+		std::cout << "ordinary runtime output" << std::endl;
+	}
+	EXPECT_EQ(saved, (std::vector<std::string>{"[VST][load] stage=begin", "[ERROR][VST2] windows-error=126"}));
+}
+
 TEST(ConsoleSession, BackendEventsKeepStartupOriginUntilDrainedAfterWindowEnds)
 {
 	while (console::DiagnosticThread::TakeBackendError()) {}

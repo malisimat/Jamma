@@ -101,6 +101,10 @@ TEST_F(VstRackLoadTest, MissingPluginsKeepAlignedStateAndRecoverableSlot)
 {
 	auto station = Station();
 	CheckFailedRestore(station);
+	const auto slots = station->GetVstRackSlots();
+	ASSERT_EQ(slots.size(), 2u);
+	EXPECT_EQ(slots[0].Identity, "failed-first");
+	EXPECT_EQ(slots[1].Identity, "failed-second");
 	auto take = Take();
 	CheckFailedRestore(take);
 	auto loop = Loop();

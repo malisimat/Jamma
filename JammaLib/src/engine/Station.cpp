@@ -4849,16 +4849,22 @@ bool Station::LoadVstPluginSynchronously(const std::wstring& path,
 		|| std::any_of(_vstSavedEntries.begin(), _vstSavedEntries.end(), [&](const auto& entry) { return entry.Id == stateId; }))))
 	{
 		_rackDiagnostic = "Rack limit or invalid identity; saved data requires explicit recovery.";
+		std::cerr << "[ERROR][VST] station='" << Name() << "' path='" << utils::EncodeUtf8(path)
+			<< "' id='" << stateId << "' stage=admission inactive=" << _rackInactive << " slots=" << _vstSavedEntries.size() << std::endl;
 		return false;
 	}
 	auto plugin = vst::MakePluginForPath(path);
 	auto hostChannels = NumBusChannels();
 	if (hostChannels == 0u)
 		hostChannels = 1u;
-	bool loaded = plugin->PreInit(path)
-		&& plugin->Load(path, _sampleRate, _blockSize, hostChannels, vst::HostedLayoutMode::Exact)
-		&& plugin->Role() != vst::RenderRole::Unknown
-		&& plugin->GetLatencySamples() <= 262144;
+	std::clog << "[VST][restore] station='" << Name() << "' path='" << utils::EncodeUtf8(path)
+		<< "' id='" << stateId << "' stage=begin state-bytes=" << initialState.size()
+		<< " rate=" << _sampleRate << " block=" << _blockSize << " channels=" << hostChannels << std::endl;
+	const bool preInit = plugin->PreInit(path);
+	const bool activated = preInit && plugin->Load(path, _sampleRate, _blockSize, hostChannels, vst::HostedLayoutMode::Exact);
+	const char* failure = !preInit ? "preinit" : !activated ? "load" : plugin->Role() == vst::RenderRole::Unknown
+		? "unsupported-role" : plugin->GetLatencySamples() > 262144 ? "latency-limit" : "none";
+	bool loaded = preInit && activated && plugin->Role() != vst::RenderRole::Unknown && plugin->GetLatencySamples() <= 262144;
 
 	plugin->SetStateId(stateId);
 	if (loaded && !initialState.empty())
@@ -4877,6 +4883,7 @@ bool Station::LoadVstPluginSynchronously(const std::wstring& path,
 	replacement->AddSlot(std::move(plugin));
 	if (!_RackLatencyFeasible(*replacement))
 	{
+		failure = "rack-latency-budget";
 		loaded = false;
 		vst::QueueForUiThreadDestroy(replacement->GetPlugin(replacement->NumPlugins() - 1u));
 		replacement->ReplaceSlot(replacement->NumPlugins() - 1u, nullptr);
@@ -4891,6 +4898,10 @@ bool Station::LoadVstPluginSynchronously(const std::wstring& path,
 	saved.Bypass = bypass;
 	saved.State = io::JamFile::VstEntry::EncodeState(initialState);
 	_vstSavedEntries.push_back(std::move(saved));
+	(loaded ? std::clog : std::cerr) << (loaded ? "[VST][restore]" : "[ERROR][VST][restore]")
+		<< " station='" << Name() << "' path='" << utils::EncodeUtf8(path) << "' id='" << identity
+		<< "' stage=complete loaded=" << loaded << " reason=" << failure << " saved-slots=" << _vstSavedEntries.size()
+		<< "; saved state retained" << std::endl;
 	return loaded;
 }
 
@@ -5027,14 +5038,20 @@ ActionResult Station::OnAction(JobAction action)
 			{
 				if (_vstJobsPending.load(std::memory_order_acquire)) _vstJobsPending.fetch_sub(1u, std::memory_order_release);
 				_rackDiagnostic = cancelled ? "" : "Rack capacity or identity rejected; remove a slot and retry.";
+				std::cerr << "[ERROR][VST][load] station='" << Name() << "' path='" << utils::EncodeUtf8(action.VstPath)
+					<< "' id='" << action.VstIdentity << "' stage=admission inactive=" << _rackInactive
+					<< " over-limit=" << overLimit << " cancelled=" << cancelled << std::endl;
 				return ActionResult::NoAction();
 			}
 		}
 		auto plugin = action.PreInitPlugin ? action.PreInitPlugin : vst::MakePluginForPath(action.VstPath);
+		std::clog << "[VST][load] station='" << Name() << "' path='" << utils::EncodeUtf8(action.VstPath)
+			<< "' id='" << action.VstIdentity << "' stage=begin preinitialized=" << bool(action.PreInitPlugin)
+			<< " state-bytes=" << action.VstInitialState.size() << std::endl;
 		auto hostChannels = NumBusChannels();
 		if (hostChannels == 0u) hostChannels = 1u;
-		bool loaded = plugin->Load(action.VstPath, _sampleRate, _blockSize, hostChannels, vst::HostedLayoutMode::Exact)
-			&& plugin->Role() != vst::RenderRole::Unknown;
+		const bool activated = plugin->Load(action.VstPath, _sampleRate, _blockSize, hostChannels, vst::HostedLayoutMode::Exact);
+		bool loaded = activated && plugin->Role() != vst::RenderRole::Unknown;
 		if (action.VstIdentity.empty()) action.VstIdentity = plugin->StateId();
 		plugin->SetStateId(action.VstIdentity);
 		if (loaded && !action.VstInitialState.empty()) plugin->SetState(action.VstInitialState);
@@ -5045,6 +5062,9 @@ ActionResult Station::OnAction(JobAction action)
 			if (found != _vstSavedEntries.end()) plugin->SetBypassed(found->Bypass);
 		}
 		loaded = loaded && plugin->GetLatencySamples() <= 262144;
+		if (!loaded) std::cerr << "[ERROR][VST][load] station='" << Name() << "' path='" << utils::EncodeUtf8(action.VstPath)
+			<< "' id='" << action.VstIdentity << "' stage=" << (!activated ? "load" : plugin->Role() == vst::RenderRole::Unknown ? "unsupported-role" : "latency-limit")
+			<< " latency=" << plugin->GetLatencySamples() << " rate=" << _sampleRate << " block=" << _blockSize << " channels=" << hostChannels << std::endl;
 		if (!loaded) { vst::QueueForUiThreadDestroy(std::move(plugin)); plugin.reset(); }
 		{
 			std::lock_guard<std::mutex> lock(_vstPathsMutex);
@@ -5110,6 +5130,10 @@ ActionResult Station::OnAction(JobAction action)
 			if (!loaded && !action.VstDiscardOnFailure)
 				_rackDiagnostic = "Plugin could not be activated: check supported role, layout and latency (262144 samples maximum). Saved state is retained.";
 			_backVstChain = std::move(replacement);
+			(loaded ? std::clog : std::cerr) << (loaded ? "[VST][load]" : "[ERROR][VST][load]")
+				<< " station='" << Name() << "' path='" << utils::EncodeUtf8(action.VstPath) << "' id='" << action.VstIdentity
+				<< "' stage=complete loaded=" << loaded << " discard-on-failure=" << action.VstDiscardOnFailure
+				<< " saved-slots=" << _vstSavedEntries.size() << std::endl;
 			++_rackRevision;
 			_flipVstChain.store(true, std::memory_order_release);
 		}
@@ -5131,6 +5155,8 @@ ActionResult Station::OnAction(JobAction action)
 				if (!action.VstIdentity.empty() && _vstSavedEntries[i].Id == action.VstIdentity) { removeIndex = i; break; }
 			if (removeIndex < _vstSavedEntries.size())
 			{
+				std::clog << "[VST][remove] station='" << Name() << "' id='" << action.VstIdentity
+					<< "' path='" << _vstSavedEntries[removeIndex].Path << "'" << std::endl;
 				auto replacement = std::make_shared<vst::VstChain>();
 				if (chain) for (size_t i = 0u; i < chain->NumPlugins(); ++i)
 				{

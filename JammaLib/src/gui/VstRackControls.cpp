@@ -203,6 +203,7 @@ void VstRackControls::_PresentStationLocked(const std::shared_ptr<engine::Statio
 	const auto control = rack ? rack->VstRack() : nullptr;
 	if (!control) return;
 	GuiVstRack::Model model;
+	model.OwnerName = station->Name();
 	model.TotalSlots = station->RackSlotCount(); model.Revision = station->RackRevision();
 	model.Editable = _AvailableLocked({station, {}, {}}) && !_busy;
 	model.Inactive = station->RackInactive(); model.Suspended = station->RackLatencySuspended();

@@ -25,10 +25,11 @@ namespace graphics
 			FONT_TINY,
 			FONT_SMALL,
 			FONT_MEDIUM,
-			FONT_LARGE
+			FONT_LARGE,
+			FONT_COMPACT
 		};
 
-		static const FontOptions::FontSize FontSizes[] = { FontOptions::FONT_LARGE, FontOptions::FONT_MEDIUM, FontOptions::FONT_SMALL, FontOptions::FONT_TINY };
+		static const FontOptions::FontSize FontSizes[] = { FontOptions::FONT_LARGE, FontOptions::FONT_MEDIUM, FontOptions::FONT_SMALL, FontOptions::FONT_TINY, FontOptions::FONT_COMPACT };
 		static constexpr unsigned int BasePixelHeight = 16u;
 
 		enum TextAlign

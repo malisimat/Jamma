@@ -536,6 +536,13 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 	} directoryShutdown;
 	console::ConsoleCapture::EnableForCurrentThread(true);
 	{
+		std::wstring executable(32768u, L'\0');
+		const auto length = GetModuleFileNameW(nullptr, executable.data(), static_cast<DWORD>(executable.size()));
+		if (length && length < executable.size())
+		{
+			executable.resize(length);
+			std::cout << "[BOOT] executable=" << EncodeUtf8(executable) << std::endl;
+		}
 		const DWORD cwdLength = GetCurrentDirectoryW(0, nullptr);
 		if (cwdLength > 0)
 		{

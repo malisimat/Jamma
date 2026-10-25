@@ -33,6 +33,7 @@ public:
 	}
 	std::function<Command()> Capture;
 	std::function<void(Command)> Submit;
+	bool KeepReadableWhenDisabled = false;
 	void ClearPointerState() override { _press.reset(); GuiButton::ClearPointerState(); }
 	ActionResult OnAction(TouchAction action) override
 	{
@@ -54,7 +55,7 @@ public:
 	}
 	void Draw(base::DrawContext& context) override
 	{
-		auto opacity = context.WithOpacity(IsEnabled() ? 1.0f : 0.40f);
+		auto opacity = context.WithOpacity(IsEnabled() || KeepReadableWhenDisabled ? 1.0f : 0.40f);
 		GuiButton::Draw(context);
 	}
 private:
@@ -109,7 +110,7 @@ std::shared_ptr<GuiVstRack::Button> GuiVstRack::_MakeButton(
 {
 	auto params = GuiButtonParams::PanelButton();
 	params.Text = std::move(text); params.TextFontSize = fontSize;
-	params.TextPadding = 14u; params.TextEllipsize = true;
+	params.TextPadding = 4u; params.TextEllipsize = true;
 	if (!texture.empty())
 	{
 		params.TextureShader = "texture"; params.Texture = texture;
@@ -143,7 +144,12 @@ GuiVstRack::GuiVstRack(std::shared_ptr<base::GuiElement> channels,
 		auto icon = std::make_shared<Socket>(socket); _channels->AddChild(icon); _sourceSockets.push_back(icon);
 	}
 	const auto command = [this](Command::Kind kind) { Command result; result.Operation = kind; result.Revision = _model.Revision; return result; };
-	_append = _MakeButton("+", "vst_empty", [command] { return command(Command::Kind::Append); });
+	_append = _MakeButton("", "vst_empty", [command] { return command(Command::Kind::Append); });
+	base::GuiElementParams appendIcon;
+	appendIcon.Texture = "station_add"; appendIcon.TextureShader = "texture";
+	appendIcon.Size = {28u, 28u}; appendIcon.MinSize = appendIcon.Size;
+	_appendIcon = std::make_shared<base::GuiElement>(appendIcon);
+	_append->AddChild(_appendIcon);
 	_recover = _MakeButton("Resume", "", [command] { return command(Command::Kind::Recover); });
 	_clearRoutes = _MakeButton("Clear MIDI", "", [command] { return command(Command::Kind::ClearInactiveRoutes); });
 	_diagnostic = _MakeButton("Rack info", "", [command] { return command(Command::Kind::Diagnostic); });
@@ -188,6 +194,11 @@ void GuiVstRack::Update(Model model, std::function<void(Command)> submit)
 		if (_model.Slots[i].Value.Identity != model.Slots[i].Value.Identity) { rebuild = true; break; }
 	if (_model.ChannelRoutes != model.ChannelRoutes) rebuild = true;
 	if (!_rows.empty() && _rows.front().Ordinal != _pageOffset) rebuild = true;
+	bool report = rebuild || !_rowsBuilt;
+	if (!report) for (std::size_t i = 0u; i < model.Slots.size(); ++i)
+		if (_model.Slots[i].Value.Plugin != model.Slots[i].Value.Plugin
+			|| _model.Slots[i].Value.Pending != model.Slots[i].Value.Pending
+			|| _model.Slots[i].Value.Failed != model.Slots[i].Value.Failed) { report = true; break; }
 	_model = std::move(model); _submit = std::move(submit);
 	_RefreshChannelToggles();
 	if (_pageOffset >= std::max(std::size_t{1u}, _model.TotalSlots))
@@ -196,6 +207,18 @@ void GuiVstRack::Update(Model model, std::function<void(Command)> submit)
 		_model.Slots.clear(); rebuild = true; // The presenter obtains this page next frame.
 	}
 	if (rebuild || !_rowsBuilt) _RebuildRows();
+	if (report)
+	{
+		std::clog << "[VST][rack] station='" << _model.OwnerName << "' saved-slots=" << _model.TotalSlots
+			<< " page=" << _pageOffset << " presented-slots=" << _model.Slots.size()
+			<< " rows=" << _rows.size() << " inactive=" << _model.Inactive << std::endl;
+		for (const auto& slot : _model.Slots)
+			std::clog << "[VST][rack] id='" << slot.Value.Identity << "' path='" << utils::EncodeUtf8(slot.Value.Path)
+				<< "' processor=" << bool(slot.Value.Plugin) << " loaded=" << (slot.Value.Plugin && slot.Value.Plugin->IsLoaded())
+				<< " pending=" << slot.Value.Pending << " failed=" << slot.Value.Failed << std::endl;
+		for (const auto& row : _rows) if (row.Missing)
+			std::cerr << "[ERROR][VST][rack] station='" << _model.OwnerName << "' missing cable target id='" << row.Id << "'" << std::endl;
+	}
 	for (std::size_t index = 0u; index < _model.Slots.size(); ++index)
 	{
 		auto& row = _rows[index]; const auto& slot = _model.Slots[index];
@@ -260,9 +283,10 @@ void GuiVstRack::_RebuildRows()
 			row.Buttons[i] = _MakeButton(row.Missing ? "Missing" : "VST", textures[i],
 				[this, id = row.Id, ordinal = row.Ordinal] { Command command; command.Identity = id;
 					command.Ordinal = ordinal; command.Revision = _model.Revision; return command; },
-				graphics::FontOptions::FONT_TINY);
+				graphics::FontOptions::FONT_COMPACT);
 			row.Buttons[i]->SetVisible(row.Missing ? i == 3u : i == 0u);
 			row.Buttons[i]->SetEnabled(!row.Missing && _model.Editable);
+			row.Buttons[i]->KeepReadableWhenDisabled = row.Missing;
 			_content->AddChild(row.Buttons[i]);
 		}
 		base::GuiElementParams socket; socket.Size = {10u, 10u}; socket.MinSize = socket.Size;
@@ -306,12 +330,14 @@ void GuiVstRack::_LayoutRows()
 	_scroll->SetPosition({0, top - static_cast<int>(scrollHeight)}); _scroll->SetSize({_width, scrollHeight});
 	_scroll->SetVisible(!_rows.empty());
 	_content->SetSize({_width, rowsHeight});
-	const auto rowWidth = std::max(1u, _width - (_scroll->IsScrollBarVisible() ? 8u : 0u));
+	// Keep the button borders inside the scroll panel's inset clipping rectangle.
+	const auto contentRect = _scroll->ContentRect();
+	const auto rowWidth = static_cast<unsigned int>(std::max(1, contentRect.Right - contentRect.Left));
 	for (std::size_t i = 0u; i < _rows.size(); ++i)
 	{
 		const auto y = static_cast<int>(rowsHeight - (i + 1u) * _RowPitch);
-		for (auto& button : _rows[i].Buttons) { button->SetPosition({0, y}); button->SetSize({rowWidth, _RowHeight}); }
-		_rows[i].Socket->SetPosition({1, y + 13});
+		for (auto& button : _rows[i].Buttons) { button->SetPosition({contentRect.Left, y}); button->SetSize({rowWidth, _RowHeight}); }
+		_rows[i].Socket->SetPosition({contentRect.Left + 1, y + 13});
 	}
 	_scroll->SetSize({_width, scrollHeight}); // Refresh content metrics without resetting scroll.
 	int bottom = top - static_cast<int>(scrollHeight) - static_cast<int>(_RowPitch);
@@ -321,6 +347,7 @@ void GuiVstRack::_LayoutRows()
 		if (control->IsVisible()) bottom -= static_cast<int>(_RowPitch);
 	}
 	_previous->SetPosition({0, bottom}); _next->SetPosition({static_cast<int>(_width / 2u), bottom});
+	_appendIcon->SetPosition({std::max(0, (static_cast<int>(_width) - 28) / 2), 4});
 	_previous->SetSize({_width / 2u, _RowHeight}); _next->SetSize({_width - _width / 2u, _RowHeight});
 }
 

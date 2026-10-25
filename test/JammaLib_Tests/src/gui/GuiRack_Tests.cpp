@@ -105,6 +105,30 @@ TEST(GuiRack, StationExpandersMirrorAroundFaderAndSingleSlotHasOneAddControl)
 	EXPECT_EQ(1u, visibleFooterButtons);
 }
 
+TEST(GuiRack, RestoredSlotsReplaceMissingCableRowsAndRetainFailedSlots)
+{
+	auto view = std::make_shared<gui::GuiVstRack>();
+	view->Init();
+	gui::GuiVstRack::Model model;
+	model.Editable = true;
+	model.ChannelRoutes[3].Explicit = true;
+	model.ChannelRoutes[3].PluginIds = {"serum"};
+	view->Update(model, {});
+	ASSERT_TRUE(view->SlotButton(0u));
+	EXPECT_EQ(view->SlotButton(0u)->Text(), "Missing");
+	gui::GuiVstRack::Slot slot;
+	slot.Value.Identity = "serum";
+	slot.Value.Path = L"Serum_x64.dll";
+	slot.Value.Failed = true;
+	model.TotalSlots = 1u;
+	model.Slots.push_back(slot);
+	view->Update(model, {});
+	ASSERT_TRUE(view->SlotButton(0u));
+	EXPECT_EQ(view->SlotButton(0u)->Text(), "Retry Serum_x64");
+	EXPECT_TRUE(view->SlotButton(0u)->IsEnabled());
+	EXPECT_FALSE(view->SlotButton(1u));
+}
+
 TEST(GuiRack, SharedSlotViewPreservesCapturedIdentityScrollAndHiddenCableEndpoints)
 {
 	auto params = MakeRackParams(220, 300);

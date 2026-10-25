@@ -66,6 +66,8 @@ std::string Font::GetFontName(FontOptions::FontSize size)
 {
 	switch (size)
 	{
+	case FontOptions::FONT_COMPACT:
+		return "font_compact";
 	case FontOptions::FONT_TINY:
 		return "font_tiny";
 	case FontOptions::FONT_SMALL:
@@ -86,6 +88,7 @@ std::string Font::GetFontFilename()
 
 unsigned int Font::GetPixelHeightForSize(FontOptions::FontSize size)
 {
+	if (size == FontOptions::FONT_COMPACT) return 10u;
 	return FontOptions::BasePixelHeight + (unsigned int)size;
 }
 
@@ -96,6 +99,8 @@ FontOptions::FontSize Font::GetClosestSizeForPixelHeight(unsigned int desiredPix
 
 	for (auto size : FontOptions::FontSizes)
 	{
+		// Compact text is opt-in for narrow rack controls, not automatic sizing.
+		if (size == FontOptions::FONT_COMPACT) continue;
 		const unsigned int pixelHeight = GetPixelHeightForSize(size);
 		const unsigned int distance = (pixelHeight > desiredPixelHeight)
 			? (pixelHeight - desiredPixelHeight)

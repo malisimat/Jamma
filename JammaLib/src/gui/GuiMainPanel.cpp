@@ -346,7 +346,7 @@ void GuiMainPanel::_Layout()
 	const int panelHeight = !_selectionOnly && !_occupiedTopStrip.IsEmpty()
 		? std::min(unconstrainedPanelHeight, std::max(0, _occupiedTopStrip.Bottom - StandardPanelPadding - mainPanelBottom))
 		: unconstrainedPanelHeight;
-	_handle->SetPosition(_selectionOnly ? Position2d{ margin, height - handleHeight } : Position2d{ 0, std::min(GuiStyle::StatusBarHeight + 8, height / 2) });
+	_handle->SetPosition(_selectionOnly ? Position2d{ margin - 4, height - handleHeight } : Position2d{ 0, std::min(GuiStyle::StatusBarHeight + 8, height / 2) });
 	_handle->SetSize({ static_cast<unsigned int>(handleWidth), static_cast<unsigned int>(handleHeight) });
 	_handle->SetVisible(handleWidth > 0 && handleHeight > 0);
 	_frame->SetSize({ static_cast<unsigned int>(panelWidth), static_cast<unsigned int>(panelHeight) });

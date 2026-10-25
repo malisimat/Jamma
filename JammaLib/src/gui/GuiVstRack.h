@@ -37,6 +37,7 @@ namespace gui
 		};
 		struct Model
 		{
+			std::string OwnerName;
 			std::vector<Slot> Slots;
 			std::size_t TotalSlots = 0u;
 			std::uint64_t Revision = 0u;
@@ -121,7 +122,7 @@ namespace gui
 		static constexpr unsigned int _PageSize = 32u;
 		std::shared_ptr<Button> _MakeButton(std::string text, std::string texture,
 			std::function<Command()> capture,
-			graphics::FontOptions::FontSize fontSize = graphics::FontOptions::FONT_SMALL);
+			graphics::FontOptions::FontSize fontSize = graphics::FontOptions::FONT_COMPACT);
 		void _RebuildRows();
 		void _LayoutRows();
 		void _Geometry(std::vector<CableInteraction::Endpoint>& endpoints,
@@ -141,6 +142,7 @@ namespace gui
 		std::shared_ptr<GuiScrollPanel> _scroll;
 		std::shared_ptr<GuiPanel> _content;
 		std::shared_ptr<Button> _append, _recover, _clearRoutes, _diagnostic, _previous, _next;
+		std::shared_ptr<base::GuiElement> _appendIcon;
 		std::shared_ptr<Expander> _collapse;
 		std::shared_ptr<GuiLabel> _midiLabel;
 		std::array<bool, 16> _allowedChannels{};

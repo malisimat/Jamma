@@ -1034,7 +1034,11 @@ void Vst2Plugin::SetState(const std::vector<std::uint8_t>& blob)
 	const std::vector<std::uint8_t>* stateBlob = &blob;
 
 	if (stateBlob->size() < 6)
+	{
+		std::cerr << "[ERROR][VST2] stage=SetState/header id='" << StateId() << "' name='" << _name
+			<< "' bytes=" << stateBlob->size() << "; state header truncated" << std::endl;
 		return;
+	}
 
 	auto readBe32 = [](const std::uint8_t* bytes) -> std::uint32_t
 	{
@@ -1102,13 +1106,15 @@ void Vst2Plugin::SetState(const std::vector<std::uint8_t>& blob)
 
 	if (version != 0x01)
 	{
-		std::cerr << "[Vst2Plugin] SetState: unknown blob version " << (int)version << std::endl;
+		std::cerr << "[ERROR][VST2] stage=SetState/version id='" << StateId() << "' name='" << _name
+			<< "' unknown blob version=" << (int)version << std::endl;
 		return;
 	}
 
 	if (stateBlob->size() < 6 + static_cast<size_t>(payloadSize))
 	{
-		std::cerr << "[Vst2Plugin] SetState: blob truncated" << std::endl;
+		std::cerr << "[ERROR][VST2] stage=SetState/payload id='" << StateId() << "' name='" << _name
+			<< "' bytes=" << stateBlob->size() << " expected-payload=" << payloadSize << "; blob truncated" << std::endl;
 		return;
 	}
 
