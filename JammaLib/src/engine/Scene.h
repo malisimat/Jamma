@@ -27,7 +27,7 @@
 #include "../gui/SceneSettingsControls.h"
 #include "../io/JamFile.h"
 #include "DeviceSelectionSchedule.h"
-#include "ControlOperation.h"
+#include "SessionControl.h"
 #include "LocalTiming.h"
 #include "../io/RigFile.h"
 #include "../io/InitFile.h"
@@ -157,15 +157,15 @@ namespace engine
 		bool ConsumePanelLoadRequest();
 		std::wstring TakeReadySessionLoad();
 		void FinishSessionLoad(bool replaced, const std::string& error = {});
-		void SetSessionSaveFolder(std::wstring folder) { _sessionSaveFolder = std::move(folder); }
+		void SetSessionSaveFolder(std::wstring folder) { _operation.SetSessionSaveFolder(std::move(folder)); }
 		void SetDefaultJamSaver(std::wstring path, std::function<bool(const std::wstring&, bool)> saver)
-		{ _defaultJamPath = std::move(path); _defaultJamSaver = std::move(saver); }
-		void SetCurrentJamPath(std::wstring path) { _currentJamPath = std::move(path); }
-		const std::wstring& CurrentJamPath() const noexcept { return _currentJamPath; }
+		{ _operation.SetDefaultJamSaver(std::move(path), std::move(saver)); }
+		void SetCurrentJamPath(std::wstring path) { _operation.SetCurrentJamPath(std::move(path)); }
+		const std::wstring& CurrentJamPath() const noexcept { return _operation.CurrentJamPath(); }
 		std::uint64_t Identity() const noexcept { return _sceneIdentity; }
 		void ReportFileStatus(const std::string& status);
 		void ReportFileOutcome(const std::string& status)
-		{ _workspace->Settings().SetFileStatus(status); ReportRuntimeNotice("JAM",status); }
+		{ _operation.ReportFileOutcome(status); }
 		// Owned values only; off-callback workers may post, UI alone presents.
 		void ReportRuntimeNotice(std::string title, std::string message)
 		{ _workspace->Notices().Notify(std::move(title),std::move(message)); }
@@ -189,51 +189,28 @@ namespace engine
 		bool PumpGlobalKeyCapture(actions::KeyAction& action) noexcept;
 		void OnInputFocusLost();
 		bool CapturesContextualKeyboard(unsigned int key) const
-		{ return _rigSaveDialogOpen || _operation.HoldsWriter() || _workspace->PopupOpen() || _workspace->IsEditingText() || _workspace->Editor().IsEngaged() || _contextualKeyboard.Suppresses(key); }
+		{ return _operation.RigSaveDialogOpen() || _operation.HoldsWriter() || _workspace->PopupOpen() || _workspace->IsEditingText() || _workspace->Editor().IsEngaged() || _contextualKeyboard.Suppresses(key); }
 		void Shutdown();
 		bool JobThreadFailed() const noexcept { return _jobThreadFailed.load(std::memory_order_acquire); }
 		std::string_view JobThreadFailureDetail() const noexcept { return JobThreadFailed() ? std::string_view(_jobThreadFailureDetail.data()) : std::string_view{}; }
 		void SetLogging(io::LoggingConfig config) noexcept;
 		bool IsUiVerbose() const noexcept { return _loggingConfig.Ui == "verbose"; }
-		void InitMidi(bool generatedRig = false)
-		{
-			std::scoped_lock midiLock(_midiLifecycleMutex);
-			auto result = _inputSubsystem->Init(_audioEngine->GetMidiClockAnchor_Ref(),
-				_audioEngine->GetStreamParams().SampleRate,
-				_midiInputInventory ? &*_midiInputInventory : nullptr, generatedRig);
-			_midiInputInventory.reset();
-			const auto connectedIds = result.ConnectedRegistryIds;
-			_midiState.store(
-				std::make_shared<const MidiState>(MidiState{ std::move(result), connectedIds, _inputSubsystem->ConnectedSerialDeviceIds() }),
-				std::memory_order_release);
-			_midiActive.store(true, std::memory_order_release);
-		}
-		void SetMidiInputInventory(midi::MidiInputInventory inventory)
-		{
-			_midiInputInventory = std::move(inventory);
-		}
-		midi::MidiConnectionResult GetMidiConnectionResult() const
-		{
-			return _midiState.load(std::memory_order_acquire)->Connection;
-		}
-		void CloseMidi()
-		{
-			std::scoped_lock midiLock(_midiLifecycleMutex);
-			_midiActive.store(false, std::memory_order_release);
-			_inputSubsystem->CloseMidi();
-		}
-		void RequestMidiRefresh() noexcept { _midiRefreshRequested.store(true, std::memory_order_release); }
+		void InitMidi(bool generatedRig = false) { _operation.InitMidi(generatedRig); }
+		void SetMidiInputInventory(midi::MidiInputInventory inventory) { _operation.SetMidiInputInventory(std::move(inventory)); }
+		midi::MidiConnectionResult GetMidiConnectionResult() const { return _operation.MidiSnapshot()->Connection; }
+		void CloseMidi() { _operation.CloseMidi(); }
+		void RequestMidiRefresh() noexcept { _operation.RequestMidiRefresh(); }
 		void InitSerial() {}
 		void CloseSerial() {}
 		// UI thread only: reconciles pending topology and popup presentation before rendering.
 		void CommitChanges();
 		// Off-callback hardware-only saver; never persists live membership or routing.
 		bool SaveHardwarePreferences(const io::RigFile& rig) const
-		{ return _saveHardwarePreferences && _saveHardwarePreferences(rig); }
+		{ return _operation.SaveHardwarePreferences(rig); }
 		bool ConsumePanelRigLoadRequest() { return std::exchange(_panelRigLoadRequested, false); }
 		bool ConsumeRigSaveRequest(); // Main/window thread only.
-		enum class RigSaveMode { Save, SaveAs, StartupDefault };
-		RigSaveMode RequestedRigSaveMode() const { return _rigSaveMode; }
+		using RigSaveMode = SessionControl::RigSaveMode;
+		RigSaveMode RequestedRigSaveMode() const { return _operation.RequestedRigSaveMode(); }
 		struct CapturedRig { io::RigFile Rig; std::uint64_t Revision = 0u, SceneId = 0u; };
 		std::optional<CapturedRig> CaptureCommittedRigVersion() const;
 		std::optional<CapturedRig> BeginExplicitRigSave();
@@ -327,6 +304,8 @@ namespace engine
 		// Selection helpers require _sceneMutex throughout hierarchy access.
 		gui::Workspace::InputPresentation _WorkspaceInputPresentation() const;
 		void _CompleteWorkspaceInput();
+		SessionControl::Effects _ControlEffects();
+		void _ApplyRuntimeAvailabilityLocked(const SessionControl::RuntimeAvailability& update);
 		std::optional<actions::ActionResult> _HandleKeyboardCommand(gui::Workspace::KeyboardCommand command, const actions::KeyAction& action,
 			bool groupsEnabled, bool contextual, bool suppressedKey);
 		void _PrepareStation(const std::shared_ptr<Station>& station);
@@ -355,23 +334,12 @@ namespace engine
 		void _JobLoop(std::function<void()> onStart) noexcept;
 		void _FailJobThread(const char* stage, const char* detail, const actions::JobAction* job = nullptr) noexcept;
 		void _QueueJobs(std::vector<actions::JobAction> jobs);
-		void _RebuildDevicePage();
-		void _RequestSave(bool chooseFolder, bool asDefault = false);
-		void _CompleteSessionSave(bool success, const std::wstring& path, const std::string& error);
 		bool _CaptureIsBusy() const;
 		bool _SessionHasTakes() const;
-		bool _ValidateAudioDraft(std::string& error) const;
-		bool _FinishControlOperation(std::string* restorationError = nullptr);
-		void _ReconcileMidiDeviceRequestOnJob();
-		void _PumpMidi();
-		void _RefreshMidiIfNeeded();
-		void _ConfirmMidiConnectionChange(const midi::MidiConnectionResult& previous,
-			const midi::MidiConnectionResult& refreshed, const std::vector<std::string>& connectedIds);
 		void _PumpSourceLossRecovery();
 		void _PumpTriggerStructuralActions();
 		void _AdvanceRigPublication();
 		gui::RoutingEditAvailability _RoutingEditAvailability();
-		void _PumpSerial();
 		void _ConsumeTriggerOutcomes();
 		void _PublishAudioStations();
 		std::shared_ptr<base::GuiElement> _ChildFromPath(std::vector<unsigned char> path);
@@ -405,66 +373,15 @@ namespace engine
 		std::atomic_bool _isSceneReset;
 		std::unique_ptr<audio::AudioHost> _audioEngine;
 		std::unique_ptr<io::IoInputSubsystem> _inputSubsystem;
-		std::optional<midi::MidiInputInventory> _midiInputInventory;
-		struct MidiState
-		{
-			midi::MidiConnectionResult Connection;
-			std::vector<std::string> ConnectedIds;
-			// Collected under _midiLifecycleMutex with MIDI setup; immutable after
-			// publication, so availability readers never touch mutable serial ports.
-			std::vector<std::string> ConnectedSerialIds;
-		};
-		std::atomic<std::shared_ptr<const MidiState>> _midiState = std::make_shared<const MidiState>();
-		// UI publishes complete desired set; job exchanges/accepts it and publishes completion.
-		struct MidiDeviceRequest
-		{
-			std::uint64_t SceneId = 0u, OperationId = 0u;
-			std::vector<io::UserConfig::MidiSettings> Desired;
-		};
-		struct MidiDeviceCompletion
-		{
-			std::uint64_t SceneId = 0u, OperationId = 0u;
-			std::string Status;
-			bool Accepted = false, PreferencesSaved = false;
-			std::vector<io::UserConfig::MidiSettings> Desired;
-		};
-		std::atomic<std::shared_ptr<const MidiDeviceRequest>> _pendingMidiDeviceRequest;
-		std::atomic<std::shared_ptr<const MidiDeviceCompletion>> _completedMidiDeviceRequest;
-		std::atomic<bool> _sessionReplacing{ false }; // UI writes; job reads; dies after join.
-		std::function<bool(const io::RigFile&)> _saveHardwarePreferences; // Immutable callback, serialized lifecycle callers; Scene bounds lifetime.
-		engine::ControlOperation _operation;
+		engine::SessionControl _operation;
+		bool _panelRigLoadRequested = false;
 		inline static std::atomic<std::uint64_t> _nextSceneIdentity{1u};
 		const std::uint64_t _sceneIdentity = _nextSceneIdentity.fetch_add(1u);
-		// All remaining drafts, deadlines, widgets/results and paths are UI-only.
-		DeviceSelectionSchedule _audioSchedule;
-		bool _audioStartRequested = false;
-		std::unordered_map<std::string, std::vector<unsigned int>> _acceptedBufferSizes;
-		audio::AsioInventory _deviceInventory;
-		std::optional<io::UserConfig::AudioSettings> _pendingAudioPersistence;
-		std::optional<std::vector<io::UserConfig::MidiSettings>> _pendingMidiPersistence;
-		bool _midiDraftPending = false, _devicePageDirty = true, _hardwarePersistencePending = false;
-		std::shared_ptr<const MidiState> _displayedMidiState;
-		std::wstring _sessionSaveFolder, _pendingSaveFolder, _pendingLoadPath;
-		std::wstring _defaultJamPath, _currentJamPath;
-		std::function<bool(const std::wstring&, bool)> _defaultJamSaver;
-		bool _pendingSaveAsDefault = false;
-		bool _panelRigLoadRequested = false;
-		bool _panelLoadRequested = false;
-		std::mutex _midiLifecycleMutex;
-		std::atomic<bool> _midiRefreshRequested{ false };
-		std::atomic<bool> _midiActive{ false };
-		midi::MidiRefreshPolicy _midiRefreshPolicy; // Job owner only; shutdown joins the job reader.
-		std::uint64_t _sourceRecoveryHeartbeat = 0u; // Job owner only.
-		std::chrono::steady_clock::time_point _sourceRecoveryHeartbeatAt{};
-		bool _sourceLossRecoveryGateClosed = false; // Serialized by _sceneMutex.
-		std::uint64_t _audioStreamEpoch = 0u; // Serialized lifecycle owner.
 		std::unique_ptr<vst::VstEditorWindowManager> _windowSubsystem;
 		std::unique_ptr<ninjam::NinjamNetworkService> _networkService;
 		engine::Quantiser _quantisation;
 		LocalTiming _localTiming;
 		io::LoggingConfig _loggingConfig;
-		// Window-thread physical key state; repeats and consumed text taps cannot
-		// become extra tempo taps. Gesture holds are owned by the controller.
 		std::atomic_bool _quantisationInputResetRequested{ false };
 		io::JamFile::GlobalMidiQuantState _globalMidiQuantState = io::JamFile::GlobalMidiQuantState::Mixed;
 		double _transportOffsetLoopFrac = 0.0;
@@ -479,13 +396,6 @@ namespace engine
 		std::vector<std::shared_ptr<Station>> _retiredStations; // Scene mutex; UI reclaims after all callback/job pins release.
 		std::optional<ninjam::NinjamRemoteSnapshot> _deferredRemoteSnapshot; // Scene mutex; latest remote membership while a local change commits.
 		StationManagement _stationManagement; // All access under _sceneMutex; UI teardown.
-		// Window-owned confirmation pins; request/cancel/confirm serialize with job edits via _sceneMutex.
-		// Released on cancel, successful/stale confirmation, or Scene teardown.
-		bool _rigSaveRequested = false; // Window owner only.
-		RigSaveMode _rigSaveMode = RigSaveMode::StartupDefault; // Window owner only.
-		std::function<void()> _explicitRigSaveJob; // Scene mutex handoff to existing job owner; drained on shutdown.
-		bool _rigSaveInProgress = false; // Scene mutex; UI completion resets.
-		bool _rigSaveDialogOpen = false; // Protected by _sceneMutex.
 
 		std::uint64_t _rigTransitionRequestedRevision = 0u;
 		std::unordered_map<const Trigger*, std::pair<std::uint64_t, std::uint64_t>> _triggerOutcomeCounts;
@@ -496,7 +406,6 @@ namespace engine
 		engine::QuantiserController _quantisationInteraction;
 		// Recording publication has separate structural ownership from camera presentation.
 		std::shared_ptr<CameraRecordingPublisher> _cameraRecordings = std::make_shared<CameraRecordingPublisher>();
-		// Window owner only: selection/group clicks retain their gesture classification through release.
 		std::thread _jobRunner;
 		std::mutex _jobMutex;
 		std::list<actions::JobAction> _jobList;

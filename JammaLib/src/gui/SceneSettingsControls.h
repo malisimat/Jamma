@@ -59,6 +59,10 @@ namespace gui
 		enum class DraftChange { None, Device, Channels, Format, Midi };
 		DraftChange EditDeviceDraft(const DeviceChange& command, const audio::AsioInventory& inventory,
 			const std::vector<io::UserConfig::SerialSettings>& serialDevices, bool allowRateFallback);
+		std::uint64_t AudioDraftRevision() const noexcept { return _audioDraftRevision; }
+		std::uint64_t MidiDraftRevision() const noexcept { return _midiDraftRevision; }
+		void AcceptAudioDraft(io::UserConfig::AudioSettings value, std::uint64_t revision) { if (revision == _audioDraftRevision) _audioDraft = std::move(value); }
+		void AcceptMidiDraft(std::vector<io::UserConfig::MidiSettings> value, std::uint64_t revision) { if (revision == _midiDraftRevision) _midiDraft = std::move(value); }
 		const io::UserConfig::AudioSettings& AudioDraft() const noexcept { return _audioDraft; }
 		const std::vector<io::UserConfig::MidiSettings>& MidiDraft() const noexcept { return _midiDraft; }
 		void SetAudioDraftFromStream(const audio::AudioStreamParams& params);
@@ -91,10 +95,12 @@ namespace gui
 		void SetDeviceStatus(const std::string& text) { _deviceStatus->SetString(text); }
 		void SetActiveAudioStatus(const std::string& text) { _activeAudioStatus->SetString(text); }
 		void SetFileStatus(const std::string& text) { _fileStatus->SetString(text); }
+		const auto& MidiDevice(std::size_t index) const { return _midiChoices.at(index).Toggle; }
 		const auto& AudioDevice() const { return _audioDeviceChoice; }
 		const auto& AudioInput(std::size_t index) const { return _audioInputs.at(index); }
 
 	private:
+		std::uint64_t _audioDraftRevision = 0u, _midiDraftRevision = 0u;
 		io::UserConfig::AudioSettings _audioDraft{};
 		std::vector<io::UserConfig::MidiSettings> _midiDraft;
 		static constexpr unsigned int AudioDeviceControlIndex = 7200u;

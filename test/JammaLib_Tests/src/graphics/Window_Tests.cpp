@@ -854,9 +854,7 @@ public:
 		base::SizeableParams({640u,480u})), {}) {}
 	void CompleteSave(bool success, const std::wstring& path, bool asDefault = false)
 	{
-		_pendingSaveFolder = L"C:/isolated-jamma/export";
-		_pendingSaveAsDefault = asDefault;
-		_CompleteSessionSave(success, path, "Save cancelled or destination unavailable");
+		_operation.CompleteSessionSave(success, path, "Save cancelled or destination unavailable", L"C:/isolated-jamma/export", asDefault);
 	}
 	// Native title/replacement tests need no renderer or installed resources.
 	void InitResources(ResourceLib&, bool) override {}

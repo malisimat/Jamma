@@ -14,7 +14,7 @@ using namespace midi;
 using namespace resources;
 using namespace utils;
 
-Workspace::Workspace(utils::Size2d size) : _size(size),
+Workspace::Workspace(utils::Size2d size, std::uint64_t sceneIdentity) : _sceneIdentity(sceneIdentity), _size(size),
 	_camera(CameraParams(MoveableParams({0, 0}, {0, 0, 420}, 1.0), 0))
 {}
 
@@ -1668,4 +1668,24 @@ void Workspace::SetViewMode(unsigned int mode, StationAccess access, const Input
 	}
 	_viewMode = static_cast<base::SelectDepth>(mode);
 	UpdateSelectDepth(mode, access, presentation);
+}
+
+void Workspace::ApplyControlPresentation(SessionControl::Presentation presentation, const std::shared_ptr<base::ActionReceiver>& receiver)
+{
+	if (presentation.SceneId != _sceneIdentity) return;
+	if (presentation.PagesChanged && presentation.Midi) _mainPanel->FinalizePageSettings(SettingsPage::Audio);
+	if (presentation.AudioAccepted) _settingsControls->AcceptAudioDraft(std::move(presentation.AudioAccepted->Value), presentation.AudioAccepted->Revision);
+	if (presentation.MidiAccepted) _settingsControls->AcceptMidiDraft(std::move(presentation.MidiAccepted->Value), presentation.MidiAccepted->Revision);
+	_settingsControls->SetSessionEnabled(presentation.SessionEnabled, presentation.DefaultEnabled);
+	_settingsControls->SetDeviceStatus(presentation.DeviceStatus);
+	_settingsControls->SetActiveAudioStatus(presentation.ActiveAudioStatus);
+	_settingsControls->SetFileStatus(presentation.FileStatus);
+	if (presentation.PagesChanged && presentation.Midi)
+	{
+		const auto pages = _settingsControls->BuildDevicePages(presentation.Inventory, _settingsControls->AudioDraft(),
+			presentation.AcceptedBufferSizes, presentation.Midi->Connection, _settingsControls->MidiDraft(), _popupManager, receiver);
+		_mainPanel->ReplacePageSettings(SettingsPage::Audio, pages.Audio);
+		_mainPanel->ReplacePageSettings(SettingsPage::Midi, pages.Midi);
+	}
+	for (auto& notice : presentation.Notices) _runtimeDialogs.Notify(std::move(notice.Title), std::move(notice.Message));
 }

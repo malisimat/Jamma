@@ -66,7 +66,7 @@ namespace io
 			const audio::AudioStreamParams& streamParams,
 			std::mutex& audioMutex);
 
-		PumpResult PumpSerial(std::vector<std::shared_ptr<engine::Station>>& stations,
+		PumpResult PumpSerial(const std::vector<std::shared_ptr<engine::Station>>& stations,
 			const audio::AudioStreamParams& streamParams,
 			std::mutex& audioMutex);
 

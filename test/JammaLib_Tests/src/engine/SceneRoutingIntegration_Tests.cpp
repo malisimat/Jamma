@@ -72,6 +72,49 @@ namespace engine
 			return scene._workspace->InteractionContextLocked({ scene._sceneMutex, scene._stations }, scene._WorkspaceInputPresentation()).SampleRate;
 		}
 		static std::shared_ptr<base::GuiElement> SelectionHandle(Scene& scene) { return scene._workspace->SelectionPanel()->TryGetChild(1u); }
+		struct MidiToken { std::uint64_t SceneId, OperationId, Revision; std::vector<io::UserConfig::MidiSettings> Desired; };
+		static bool Quitting(const Scene& scene) { return scene._isSceneQuitting.load(std::memory_order_acquire); }
+		static void PrepareMidiDraft(Scene& scene)
+		{
+			scene._workspace->Settings().SetMidiDraft({{"Keys", true, "keys"}});
+			scene._operation.InitializeCandidates(scene._workspace->Settings().AudioDraft(), scene._workspace->Settings().MidiDraft());
+			scene._operation._presentation.PagesChanged = true;
+			scene._workspace->ApplyControlPresentation(scene._operation.TakePresentation(), scene.shared_from_this());
+		}
+		static void ToggleMidi(Scene& scene, bool enabled)
+		{ scene._workspace->Settings().MidiDevice(0u)->SetToggleState(enabled ? gui::GuiToggleParams::TOGGLE_ON : gui::GuiToggleParams::TOGGLE_OFF, false); }
+		static bool MidiEnabled(const Scene& scene) { return scene._workspace->Settings().MidiDraft().at(0u).Enabled; }
+		static bool MidiOperation(const Scene& scene) { return scene._operation.Current() == SessionControl::Midi; }
+		static MidiToken TakeMidiRequest(Scene& scene)
+		{
+			const auto request = scene._operation._pendingMidiDeviceRequest.exchange({}, std::memory_order_acq_rel);
+			EXPECT_TRUE(request);
+			return request ? MidiToken{request->SceneId, request->OperationId, request->DraftRevision, request->Desired} : MidiToken{};
+		}
+		static void CompleteMidi(Scene& scene, const MidiToken& token, unsigned int mismatch = 0u)
+		{
+			scene._operation._completedMidiDeviceRequest.store(std::make_shared<const SessionControl::MidiDeviceCompletion>(SessionControl::MidiDeviceCompletion{
+				token.SceneId + (mismatch == 1u), token.OperationId + (mismatch == 2u), token.Revision + (mismatch == 3u),
+				"Test-owned completion", true, true, token.Desired}), std::memory_order_release);
+		}
+		static std::uint64_t AudioRevision(const Scene& scene) { return scene._workspace->Settings().AudioDraftRevision(); }
+		static void FocusAudioText(Scene& scene, const std::string& text)
+		{
+			scene._workspace->MainPanel()->SetPage(gui::SettingsPage::Audio);
+			auto field = scene._workspace->Settings().AudioInput(0u);
+			ASSERT_TRUE(scene._workspace->RequestFocus(field));
+			field->SetText(text, false);
+		}
+		static SessionControl::Presentation AudioCompletion(Scene& scene, io::UserConfig::AudioSettings settings, std::uint64_t revision)
+		{
+			scene._operation._presentation.AudioAccepted = SessionControl::Candidate<io::UserConfig::AudioSettings>{std::move(settings), revision};
+			scene._operation._presentation.PagesChanged = true;
+			return scene._operation.TakePresentation();
+		}
+		static void ApplyPresentation(Scene& scene, SessionControl::Presentation presentation)
+		{ scene._workspace->ApplyControlPresentation(std::move(presentation), scene.shared_from_this()); }
+		static bool ControlIdle(const Scene& scene) { return scene._operation.Current() == SessionControl::None && !scene._operation.HoldsWriter(); }
+		static bool InputGateOpen(Scene& scene) { const auto rig = scene.AcceptedRigSnapshot(); return rig && scene._inputSubsystem->TryAcceptUiRigTriggerInput(rig->Revision); }
         static utils::Position2d CanvasPoint(Scene& scene, utils::Position2d offset = {})
         {
             // The former (560,300) lies inside stacked Inputs at 800x600.
@@ -87,7 +130,7 @@ namespace engine
         { return gui::GuiMainPanelTestAccess::RigSaveButton(*scene._workspace->MainPanel()); }
         static std::shared_ptr<gui::GuiButton> RigSaveChoice(Scene& scene, unsigned int choice)
         { return gui::GuiMainPanelTestAccess::RigSaveChoice(*scene._workspace->MainPanel(), choice); }
-        static bool RigSaveRequested(const Scene& scene) { return scene._rigSaveRequested; }
+        static bool RigSaveRequested(const Scene& scene) { return scene._operation._rigSaveRequested; }
         static void ChooseAudio(Scene& scene, int index) { scene._workspace->Settings().AudioDevice()->SetSelectedIndex(index, true); }
         static void AudioChannels(Scene& scene, unsigned int input, double value) { scene._workspace->Settings().AudioInput(input)->SetValue(value, true); }
         static std::shared_ptr<Station> RemovalTarget(Scene& scene)
@@ -105,17 +148,18 @@ namespace engine
             return {};
         }
         static void BeginDeviceWriter(Scene& scene)
-        { scene._operation._writer = std::unique_lock(scene._operation.LifecycleMutex()); scene._operation.Begin(ControlOperation::Save); }
+        { scene._operation._writer = std::unique_lock(scene._operation.LifecycleMutex()); scene._operation.Begin(SessionControl::Save); }
         static void EndDeviceWriter(Scene& scene)
-        { scene._operation.Begin(ControlOperation::None); scene._operation.ReleaseWriter(); }
+        { scene._operation.Begin(SessionControl::None); scene._operation.ReleaseWriter(); }
         static std::unique_lock<std::mutex> ExcludeJob(Scene& scene)
         { return std::unique_lock(scene._operation.LifecycleMutex()); }
         static std::string StartedAudioSelection(Scene& scene,
             const audio::AsioInventory& inventory, const audio::AudioStreamParams& params)
         {
-            scene._deviceInventory = inventory;
+            scene._operation._deviceInventory = inventory;
             scene._workspace->Settings().SetAudioDraftFromStream(params);
-            scene._RebuildDevicePage();
+            scene._operation._presentation.PagesChanged = true;
+            scene._workspace->ApplyControlPresentation(scene._operation.TakePresentation(), scene.shared_from_this());
             return scene._workspace->Settings().AudioDevice()->SelectedText();
         }
         static io::UserConfig::AudioSettings AudioDraft(const Scene& scene) { return scene._workspace->Settings().AudioDraft(); }
@@ -154,7 +198,7 @@ namespace engine
         static void Confirm(Scene& scene, const midi::MidiConnectionResult& previous,
             const midi::MidiConnectionResult& refreshed, const std::vector<std::string>& names)
         {
-            scene._ConfirmMidiConnectionChange(previous, refreshed, names);
+            scene._operation.ConfirmMidiConnectionChange(previous, refreshed, names, { scene._sceneMutex, scene._stations });
         }
         static void RemoteGrid(Scene& scene, const engine::RemoteTransportGeometry& geometry, std::int64_t origin)
         { std::scoped_lock lock(scene._sceneMutex); scene._quantisation.SetRemoteMidiGrid(geometry, origin, scene._stations); }
@@ -194,7 +238,7 @@ namespace engine
         static bool RecoveryGateIsClosed(Scene& scene)
         {
             std::scoped_lock lock(scene._sceneMutex);
-            return scene._sourceLossRecoveryGateClosed;
+            return scene._operation.SourceRecoveryGateClosed();
         }
 		static std::shared_ptr<gui::GuiNumericInput> FocusSetting(Scene& scene, const std::string& text)
 		{
@@ -251,7 +295,7 @@ namespace engine
         {
             std::scoped_lock lock(scene._sceneMutex);
             scene._audioEngine->CloseCallbackAdmission();
-            scene._sourceLossRecoveryGateClosed = true;
+            scene._operation.CloseSourceRecoveryGateLocked();
         }
         static void StartRecording(Scene& scene, const std::shared_ptr<Trigger>& trigger,
             const io::UserConfig& cfg)
@@ -1997,5 +2041,157 @@ TEST_F(SceneRoutingIntegrationTest, ResizingRehitsStationaryPointer)
 	ASSERT_TRUE(handle->RouteHitTest(handle->GlobalToLocal(point)));
 	scene->ApplyDeferredHoverUpdates(); // No further pointer event: resize must refresh the target.
 	EXPECT_EQ(base::GuiElement::STATE_OVER, handle->GetState());
+	scene->Shutdown();
+}
+
+TEST_F(SceneRoutingIntegrationTest, DeviceCompletionPreservesNewerDraftAndRejectsIndependentStaleIdentities)
+{
+	using Access = engine::SourceLossIntegrationTestAccess;
+	auto scene = FreshScene({ Station("Local") }, {});
+	ASSERT_TRUE(scene);
+	{
+		auto excludeJob = Access::ExcludeJob(*scene); // No physical MIDI enumeration/reconciliation in this test.
+		Access::PrepareMidiDraft(*scene);
+		Access::ToggleMidi(*scene, false);
+		scene->PumpDeviceAndFileControls();
+		const auto admitted = Access::TakeMidiRequest(*scene);
+		ASSERT_FALSE(admitted.Desired.at(0u).Enabled);
+		Access::ToggleMidi(*scene, true); // A newer real widget edit while the first request is in flight.
+		for (unsigned int mismatch : {1u, 2u, 3u})
+		{
+			Access::CompleteMidi(*scene, admitted, mismatch);
+			scene->PumpDeviceAndFileControls();
+			EXPECT_TRUE(Access::MidiOperation(*scene));
+			EXPECT_TRUE(Access::MidiEnabled(*scene));
+		}
+		Access::CompleteMidi(*scene, admitted);
+		scene->PumpDeviceAndFileControls();
+		EXPECT_FALSE(Access::MidiOperation(*scene));
+		EXPECT_TRUE(Access::MidiEnabled(*scene));
+		scene->PumpDeviceAndFileControls();
+		const auto latest = Access::TakeMidiRequest(*scene);
+		EXPECT_GT(latest.OperationId, admitted.OperationId);
+		EXPECT_GT(latest.Revision, admitted.Revision);
+		EXPECT_TRUE(latest.Desired.at(0u).Enabled);
+		Access::CompleteMidi(*scene, latest);
+		scene->PumpDeviceAndFileControls();
+	}
+	scene->Shutdown();
+}
+
+TEST_F(SceneRoutingIntegrationTest, DevicePageCompletionCommitsPendingTextBeforeCheckingDraftRevision)
+{
+	using Access = engine::SourceLossIntegrationTestAccess;
+	auto scene = FreshScene({ Station("Local") }, {});
+	ASSERT_TRUE(scene);
+	{
+		auto excludeJob = Access::ExcludeJob(*scene);
+		audio::AsioInventory inventory;
+		inventory.Devices = {{0u, "Device A", true, "", 18u, 20u, {44100u, 48000u}, 44100u}};
+		const audio::AudioStreamParams actual{"Device A", 44100u, 2u, 128u, 0u, 0u, 2u, 2u};
+		Access::StartedAudioSelection(*scene, inventory, actual);
+		const auto revision = Access::AudioRevision(*scene);
+		auto accepted = Access::AudioDraft(*scene);
+		accepted.NumChannelsOut = 1u; accepted.SampleRate = 48000u;
+		Access::FocusAudioText(*scene, "7"); // Still uncommitted: acceptance initially has the same revision.
+		Access::ApplyPresentation(*scene, Access::AudioCompletion(*scene, accepted, revision));
+		const auto draft = Access::AudioDraft(*scene);
+		EXPECT_GT(Access::AudioRevision(*scene), revision);
+		EXPECT_EQ(7u, draft.NumChannelsIn);
+		EXPECT_EQ(2u, draft.NumChannelsOut);
+		EXPECT_EQ(44100u, draft.SampleRate);
+	}
+	scene->Shutdown();
+}
+
+TEST_F(SceneRoutingIntegrationTest, ReplacedSceneRejectsOwnedControlPresentation)
+{
+	using Access = engine::SourceLossIntegrationTestAccess;
+	auto original = FreshScene({ Station("Original") }, {});
+	ASSERT_TRUE(original);
+	auto staleSettings = Access::AudioDraft(*original);
+	staleSettings.Name = "Outgoing device";
+	auto completion = Access::AudioCompletion(*original, staleSettings, Access::AudioRevision(*original));
+	original->Shutdown(); original.reset();
+	auto replacement = FreshScene({ Station("Replacement") }, {});
+	ASSERT_TRUE(replacement);
+	const auto before = Access::AudioDraft(*replacement);
+	ASSERT_NE(replacement->Identity(), completion.SceneId);
+	Access::ApplyPresentation(*replacement, std::move(completion));
+	EXPECT_EQ(before, Access::AudioDraft(*replacement));
+	replacement->Shutdown();
+}
+
+TEST_F(SceneRoutingIntegrationTest, QueuedOwnedRigSaveDrainsExactlyOnceAfterImmediateShutdown)
+{
+	using Access = engine::SourceLossIntegrationTestAccess;
+	auto rig = io::RigFile::FromStream(std::stringstream(io::RigFile::DefaultJson)).value();
+	rig.Triggers.clear(); rig.User.Midi.Devices.clear();
+	io::JamFile jam{}; jam.Stations = { Station("Final save") };
+	std::atomic<bool> releaseStartup{false}, sawQuit{false};
+	engine::SceneParams params({ "" }, {}, {640u, 480u});
+	params.OnJobThreadStart = [&] {
+		const auto limit = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+		while (!releaseStartup.load(std::memory_order_acquire) && std::chrono::steady_clock::now() < limit) std::this_thread::yield();
+	};
+	auto created = engine::Scene::FromFile(params, jam, rig, L"");
+	ASSERT_TRUE(created);
+	auto scene = *created;
+	const auto capture = scene->BeginExplicitRigSave();
+	ASSERT_TRUE(capture);
+	std::atomic<unsigned int> saves{0u};
+	std::uint64_t savedScene = 0u, savedRevision = 0u;
+	std::string savedName;
+	scene->QueueExplicitRigSave([owned = *capture, &saves, &savedScene, &savedRevision, &savedName] {
+		savedScene = owned.SceneId; savedRevision = owned.Revision; savedName = owned.Rig.Name;
+		saves.fetch_add(1u, std::memory_order_release);
+	});
+	std::thread releaseAfterQuit([&] {
+		const auto limit = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+		while (!Access::Quitting(*scene) && std::chrono::steady_clock::now() < limit) std::this_thread::yield();
+		sawQuit.store(Access::Quitting(*scene), std::memory_order_release);
+		releaseStartup.store(true, std::memory_order_release);
+	});
+	scene->Shutdown();
+	releaseAfterQuit.join();
+	EXPECT_TRUE(sawQuit.load(std::memory_order_acquire));
+	EXPECT_EQ(1u, saves.load(std::memory_order_acquire));
+	EXPECT_EQ(capture->SceneId, savedScene); EXPECT_EQ(capture->Revision, savedRevision); EXPECT_EQ(capture->Rig.Name, savedName);
+	scene->Shutdown();
+	EXPECT_EQ(1u, saves.load(std::memory_order_acquire));
+}
+
+TEST_F(SceneRoutingIntegrationTest, CaptureBecomingBusyBeforeAdmissionRejectsSessionLoadAndRestoresInput)
+{
+	using Access = engine::SourceLossIntegrationTestAccess;
+	auto scene = FreshScene({ Station("Local") }, { Trigger("Record", "Local") });
+	ASSERT_TRUE(scene);
+	const auto station = scene->SnapshotStations().front();
+	const auto trigger = scene->AcceptedRigSnapshot()->Triggers.front().Instance;
+	ASSERT_TRUE(trigger);
+	{
+		auto excludeJob = Access::ExcludeJob(*scene);
+		ASSERT_TRUE(Access::InputGateOpen(*scene));
+		scene->RequestSessionLoad(L"test-owned-unopened-path.jam");
+		scene->PumpDeviceAndFileControls(); // Request closes producers; admission still awaits job acknowledgement.
+		EXPECT_FALSE(Access::InputGateOpen(*scene));
+		io::UserConfig config{}; config.Audio.NumChannelsIn = 1u;
+		Access::StartRecording(*scene, trigger, config); // An already-admitted capture wins before the writer drains.
+		ASSERT_EQ(engine::TRIGSTATE_RECORDING, trigger->GetState());
+		ASSERT_EQ(1u, station->NumTakes());
+		excludeJob.unlock(); // The real producer acknowledges closure; the window may now acquire its writer.
+		const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+		while (!Access::ControlIdle(*scene) && std::chrono::steady_clock::now() < deadline)
+		{
+			scene->PumpDeviceAndFileControls();
+			std::this_thread::yield();
+		}
+		EXPECT_TRUE(scene->TakeReadySessionLoad().empty());
+		EXPECT_TRUE(Access::ControlIdle(*scene));
+		EXPECT_TRUE(Access::InputGateOpen(*scene));
+		EXPECT_EQ(station, scene->SnapshotStations().front());
+		EXPECT_EQ(engine::TRIGSTATE_RECORDING, trigger->GetState());
+		EXPECT_EQ(1u, station->NumTakes());
+	}
 	scene->Shutdown();
 }

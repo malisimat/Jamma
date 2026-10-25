@@ -3,6 +3,7 @@
 #include "SceneSelector.h"
 #include "../io/IoInputSubsystem.h"
 #include "../engine/HierarchySelection.h"
+#include "../engine/SessionControl.h"
 #include "VstRackControls.h"
 #include "PointerInteraction.h"
 #include "SceneSettingsControls.h"
@@ -25,7 +26,7 @@ namespace gui
 	class Workspace
 	{
 	public:
-		explicit Workspace(utils::Size2d size);
+		explicit Workspace(utils::Size2d size, std::uint64_t sceneIdentity);
 		void Initialize(GuiHudParams hud, std::uint8_t channel, double offset,
 			io::JamFile::GlobalMidiQuantState quantisation,
 			std::function<void(const std::shared_ptr<base::GuiElement>&)> beforeHide,
@@ -171,6 +172,7 @@ namespace gui
 		bool IsPaintingMute() const { return _selector->IsPaintingMute(); }
 		bool OwnsBackgroundClick() const { return _selector->OwnsBackgroundClick(); }
 		const std::shared_ptr<GuiPopup>& StationRemovalConfirmation() const { return _stationDeleteDialog; }
+		void ApplyControlPresentation(engine::SessionControl::Presentation presentation, const std::shared_ptr<base::ActionReceiver>& receiver);
 		void BindQuantisation(engine::Quantiser& quantiser, engine::QuantiserController& interaction);
 		InputCommands TakeInputCommands() { return std::exchange(_inputCommands, {}); }
 		actions::ActionResult OnTouch(actions::TouchAction action, StationAccess access, const InputPresentation& presentation);
@@ -262,6 +264,7 @@ namespace gui
 		std::string _quantisationFeedback;
 		std::shared_ptr<gui::GuiPopup> _stationDeleteDialog;
 		std::shared_ptr<gui::GuiPopup> _takeDitchDialog;
+		const std::uint64_t _sceneIdentity;
 		utils::Size2d _size;
 		glm::mat4 _viewProj{};
 		graphics::Compositor _compositor;

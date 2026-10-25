@@ -461,6 +461,7 @@ SceneSettingsControls::DraftChange SceneSettingsControls::EditDeviceDraft(const 
 			if (!_audioDraft.NumChannelsIn && !_audioDraft.NumChannelsOut) { _audioDraft.NumChannelsOut = std::min(2u, found->OutputChannels); if (!_audioDraft.NumChannelsOut) _audioDraft.NumChannelsIn = std::min(2u, found->InputChannels); }
 			if (allowRateFallback && std::find(found->SampleRates.begin(), found->SampleRates.end(), _audioDraft.SampleRate) == found->SampleRates.end() && !found->SampleRates.empty()) _audioDraft.SampleRate = found->PreferredSampleRate ? found->PreferredSampleRate : found->SampleRates.front();
 		}
+		++_audioDraftRevision;
 		return DraftChange::Device;
 	}
 	if (std::holds_alternative<AudioValueChange>(command))
@@ -471,6 +472,7 @@ SceneSettingsControls::DraftChange SceneSettingsControls::EditDeviceDraft(const 
 		if (change.Field == Field::Outputs) _audioDraft.NumChannelsOut = change.Value;
 		if (change.Field == Field::SampleRate) _audioDraft.SampleRate = change.Value;
 		if (change.Field == Field::BufferSize) _audioDraft.BufSize = change.Value;
+		++_audioDraftRevision;
 		return change.Field == AudioField::Inputs || change.Field == AudioField::Outputs ? DraftChange::Channels : DraftChange::Format;
 	}
 	if (std::holds_alternative<MidiDeviceChange>(command))
@@ -494,6 +496,7 @@ SceneSettingsControls::DraftChange SceneSettingsControls::EditDeviceDraft(const 
 			_midiDraft.push_back({choice.Name, enabled, std::move(id)});
 		}
 		else found->Enabled = enabled;
+		++_midiDraftRevision;
 		return DraftChange::Midi;
 	}
 	return DraftChange::None;

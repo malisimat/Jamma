@@ -344,13 +344,12 @@ public:
 		return _isSceneReset.load(std::memory_order_relaxed);
 	}
 
-	void StopJobForTest()
+	void PauseJobForTest()
 	{
-		Shutdown();
-		// Keep the deterministic harness usable after joining its worker. This
-		// does not restart production teardown resources or the job thread.
-		_isSceneQuitting.store(false, std::memory_order_release);
-		_sessionReplacing.store(false, std::memory_order_release);
+		// These isolated GUI/timing tests need a stable engine view. The derived
+		// member releases before Scene destruction, so normal Shutdown keeps a
+		// live producer for permanent-close acknowledgement and join.
+		_jobPause = std::unique_lock<std::mutex>(_operation.LifecycleMutex());
 	}
 
 	void SeedTimingForTest()
@@ -518,6 +517,8 @@ public:
 	{
 		ApplyDeferredHoverUpdates();
 	}
+private:
+	std::unique_lock<std::mutex> _jobPause;
 };
 
 TouchAction MakeSceneTouch(TouchAction::TouchState state,
@@ -2441,7 +2442,7 @@ TEST(Scene, LoopGridEditorTracksOneMidiLoopAndClosesWhenItIsReplaced) {
 TEST(Scene, SpaceAndCtrlReachPhysicalStateWithEditorOpenAndFocusLossClearsHolds) {
 	SceneParams params{ base::DrawableParams(), base::MoveableParams(), base::SizeableParams({ 1400u, 900u }) };
 	TestScene scene(params, {});
-	scene.StopJobForTest();
+	scene.PauseJobForTest();
 	auto station = MakeTestStation("space-editor");
 	scene.AddStationForTest(station);
 	auto take = station->AddTake();
@@ -2483,7 +2484,7 @@ TEST(Scene, SpaceAndCtrlReachPhysicalStateWithEditorOpenAndFocusLossClearsHolds)
 TEST(Scene, SpaceStartedInTextCannotTurnIntoATapOnRepeatAfterFocusChanges) {
 	SceneParams params{ base::DrawableParams(), base::MoveableParams(), base::SizeableParams({ 1400u, 900u }) };
 	TestScene scene(params, {});
-	scene.StopJobForTest();
+	scene.PauseJobForTest();
 	scene.FocusTextForTest();
 	scene.ClearGridForTest();
 	KeyAction key;
@@ -2843,7 +2844,7 @@ TEST(SceneReset, ConnectedEmptyPreservesTimingAndEachDisconnectClearsOnce) {
 		base::SizeableParams() };
 	io::UserConfig userConfig = {};
 	TestScene scene(sceneParams, userConfig);
-	scene.StopJobForTest();
+	scene.PauseJobForTest();
 
 	scene.SeedTimingForTest();
 	scene.ObserveTimingAvailabilityForTest(true, 1u);

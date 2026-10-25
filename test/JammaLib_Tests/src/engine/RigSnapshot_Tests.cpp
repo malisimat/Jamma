@@ -1869,22 +1869,19 @@ struct RigDefaultSaveTestAccess
 	}
 };
 
-class SessionSaveCompletionScene final : public engine::Scene
+class SessionSaveCompletionControl final : public engine::SessionControl
 {
 public:
-	SessionSaveCompletionScene() : Scene(engine::SceneParams({ "" }, {}, {640u, 480u}), io::UserConfig{}) {}
 	void Complete(bool success, const std::wstring& path, bool asDefault)
 	{
-		_pendingSaveFolder = L"C:/isolated-jamma/export";
-		_pendingSaveAsDefault = asDefault;
-		_CompleteSessionSave(success, path, "Save cancelled or destination unavailable");
+		CompleteSessionSave(success, path, "Save cancelled or destination unavailable", L"C:/isolated-jamma/export", asDefault);
 	}
-	const std::wstring& SaveFolder() const { return _sessionSaveFolder; }
+	const std::wstring& SaveFolder() const { return SessionSaveFolder(); }
 };
 
 TEST(SessionSaveCompletion, WrittenNumberedJamRemainsCurrentWhenDefaultUpdateFails)
 {
-	SessionSaveCompletionScene scene;
+	SessionSaveCompletionControl scene;
 	const std::wstring previous = L"C:/isolated-jamma/previous.jam";
 	const std::wstring written = L"C:/isolated-jamma/export/session-0002.jam";
 	scene.SetCurrentJamPath(previous);
@@ -1904,7 +1901,7 @@ TEST(SessionSaveCompletion, WrittenNumberedJamRemainsCurrentWhenDefaultUpdateFai
 
 TEST(SessionSaveCompletion, OrdinarySaveChangesDestinationWithoutChangingDefaults)
 {
-	SessionSaveCompletionScene scene;
+	SessionSaveCompletionControl scene;
 	unsigned defaultsWrites = 0u;
 	scene.SetDefaultJamSaver(L"startup.jam", [&](const auto&, bool) { ++defaultsWrites; return true; });
 	EXPECT_TRUE(scene.CurrentJamPath().empty());
@@ -1917,7 +1914,7 @@ TEST(SessionSaveCompletion, OrdinarySaveChangesDestinationWithoutChangingDefault
 
 TEST(SessionSaveCompletion, FailedOrCancelledSaveRetainsLastCommittedDestination)
 {
-	SessionSaveCompletionScene scene;
+	SessionSaveCompletionControl scene;
 	scene.SetCurrentJamPath(L"previous.jam");
 	scene.SetSessionSaveFolder(L"previous-folder");
 	unsigned defaultsWrites = 0u;
