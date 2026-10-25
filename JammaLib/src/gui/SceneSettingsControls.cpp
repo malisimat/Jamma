@@ -1,6 +1,8 @@
 #include "SceneSettingsControls.h"
 #include <algorithm>
 #include <cmath>
+#include <limits>
+#include "GuiStackPanel.h"
 
 using namespace gui;
 using actions::GuiAction;
@@ -186,6 +188,14 @@ SceneSettingsControls::SceneSettingsControls(std::uint8_t channel, double offset
 	}
 	_midiSubdivisionRadio = std::make_shared<GuiRadio>(subdivisionParams);
 
+	_deviceStatus = _StatusLabel("Ready", 66u);
+	_activeAudioStatus = _StatusLabel("Audio stopped", 44u);
+	_fileStatus = _StatusLabel("Choose a folder on first Save", 44u);
+	_saveButton = _SessionButton("Save");
+	_saveDefaultJamButton = _SessionButton("Set as Default");
+	_loadButton = _SessionButton("Load");
+	_saveAsJamButton = _SessionButton("Save As...");
+
 }
 
 std::vector<GuiSettingEntry> SceneSettingsControls::SettingsEntries() const
@@ -197,7 +207,11 @@ std::vector<GuiSettingEntry> SceneSettingsControls::SettingsEntries() const
 		{ SettingsPage::Timing, "", _tapButton, TapTempoControlIndex },
 		{ SettingsPage::Midi, "MIDI channel override", _midiChannelOverride, MidiChannelOverrideControlIndex },
 		{ SettingsPage::Midi, "", std::make_shared<GuiLabel>(GuiLabelParams::PanelHeader("All off = unchanged", 300u)), 0u },
-		{ SettingsPage::Timing, "", _ninjamMetronomeToggle, NinjamMetronomeControlIndex }
+		{ SettingsPage::Timing, "", _ninjamMetronomeToggle, NinjamMetronomeControlIndex },
+		{ SettingsPage::Session, "", _saveButton, SaveSessionControlIndex },
+		{ SettingsPage::Session, "", _saveDefaultJamButton, DefaultSessionControlIndex },
+		{ SettingsPage::Session, "", _loadButton, LoadSessionControlIndex },
+		{ SettingsPage::Session, "", _saveAsJamButton, SaveSessionAsControlIndex }
 	};
 }
 
@@ -256,4 +270,178 @@ void SceneSettingsControls::RefreshChannelPresentation(std::uint8_t channel)
 {
 	if (_midiChannelOverride->Channel() != channel)
 		_midiChannelOverride->SetChannel(channel);
+}
+
+std::shared_ptr<GuiLabel> SceneSettingsControls::_StatusLabel(const std::string& text, unsigned int height)
+{
+	auto params = GuiLabelParams::PanelHeader(text, 320, height);
+	params.FontSize = graphics::FontOptions::FONT_SMALL;
+	return std::make_shared<GuiLabel>(params);
+}
+
+std::shared_ptr<GuiButton> SceneSettingsControls::_SessionButton(const std::string& text)
+{
+	auto params = GuiButtonParams::PanelButton(240u);
+	params.Text = text;
+	params.DispatchCommand = true;
+	params.Size.Height = 40u;
+	params.MinSize.Height = 40u;
+	params.TextFontSize = graphics::FontOptions::FONT_SMALL;
+	return std::make_shared<GuiButton>(params);
+}
+
+void SceneSettingsControls::SetSessionEnabled(bool enabled, bool defaultEnabled)
+{
+	_saveButton->SetEnabled(enabled);
+	_saveAsJamButton->SetEnabled(enabled);
+	_loadButton->SetEnabled(enabled);
+	_saveDefaultJamButton->SetEnabled(defaultEnabled);
+}
+
+bool SceneSettingsControls::IsOperationControl(unsigned int index)
+{
+	return index >= AudioDeviceControlIndex && index < MidiDeviceControlLimit;
+}
+
+std::optional<SceneSettingsControls::DeviceChange> SceneSettingsControls::DecodeDeviceChange(const GuiAction& action) const
+{
+	switch (action.Index)
+	{
+	case SaveSessionControlIndex: return SaveSession{ (action.InputModifiers & base::Action::MODIFIER_ALT) != 0, false };
+	case SaveSessionAsControlIndex: return SaveSession{ true, false };
+	case DefaultSessionControlIndex: return SaveSession{ false, true };
+	case LoadSessionControlIndex: return LoadSession{};
+	case RetryAudioControlIndex: return RetryAudio{};
+	case RefreshMidiControlIndex: return RefreshMidi{};
+	case RetryPreferencesControlIndex: return RetryPreferences{};
+	case AudioDeviceControlIndex:
+		if (const auto value = std::get_if<GuiAction::GuiInt>(&action.Data);
+			value && value->Value >= 0 && static_cast<std::size_t>(value->Value) < _audioChoiceNames.size())
+			return AudioDeviceChange{ _audioChoiceNames[value->Value] };
+		return std::nullopt;
+	default: break;
+	}
+	if (action.Index >= AudioInputControlIndex && action.Index < AudioInputControlIndex + _audioInputs.size())
+	{
+		const auto index = action.Index - AudioInputControlIndex;
+		return AudioValueChange{ static_cast<AudioField>(index), static_cast<unsigned int>(_audioInputs[index]->Value()) };
+	}
+	if (action.Index >= MidiDeviceControlIndex && action.Index < MidiDeviceControlLimit)
+	{
+		const auto index = action.Index - MidiDeviceControlIndex;
+		if (index < _midiChoices.size())
+		{
+			const auto& choice = _midiChoices[index];
+			return MidiDeviceChange{ index, choice.HardwareName, choice.RegistryId,
+				choice.Toggle->GetToggleState() == GuiToggleParams::TOGGLE_ON };
+		}
+	}
+	return std::nullopt;
+}
+
+void SceneSettingsControls::SetMidiChoiceRegistryId(std::size_t choice, const std::string& id)
+{
+	_midiChoices.at(choice).RegistryId = id;
+}
+
+SceneSettingsControls::DevicePages SceneSettingsControls::BuildDevicePages(
+	const audio::AsioInventory& inventory, const io::UserConfig::AudioSettings& audioDraft,
+	const std::unordered_map<std::string, std::vector<unsigned int>>& acceptedBufferSizes,
+	const midi::MidiConnectionResult& midi, const std::vector<io::UserConfig::MidiSettings>& midiDraft,
+	GuiPopupManager& popupManager, const std::shared_ptr<base::ActionReceiver>& receiver)
+{
+	std::vector<GuiSettingEntry> entries;
+	std::vector<GuiSettingEntry> midiEntries;
+	for (auto entry : SettingsEntries())
+		if (entry.Page == SettingsPage::Midi) midiEntries.push_back(std::move(entry));
+	_audioChoiceNames.clear();
+	auto dropdown = GuiDropDownParams::PanelInput(300u);
+	for (const auto& device : inventory.Devices)
+	{
+		_audioChoiceNames.push_back(device.Name);
+		dropdown.Items.push_back(device.Name + (device.Probed ? "" : " (unavailable)"));
+	}
+	if (std::find(_audioChoiceNames.begin(), _audioChoiceNames.end(), audioDraft.Name) == _audioChoiceNames.end())
+	{
+		_audioChoiceNames.push_back(audioDraft.Name); dropdown.Items.push_back(audioDraft.Name + " (missing)");
+	}
+	dropdown.InitIndex = static_cast<unsigned int>(std::find(_audioChoiceNames.begin(), _audioChoiceNames.end(), audioDraft.Name) - _audioChoiceNames.begin());
+	_audioDeviceChoice = std::make_shared<GuiDropDown>(dropdown);
+	_audioDeviceChoice->SetPopupManager(&popupManager);
+	entries.push_back({SettingsPage::Audio, "ASIO device", _audioDeviceChoice, AudioDeviceControlIndex});
+	const auto selected = std::find_if(inventory.Devices.begin(), inventory.Devices.end(), [&audioDraft](const auto& device){return device.Name == audioDraft.Name;});
+	if (selected != inventory.Devices.end())
+	{
+		std::string details = "Limits: " + std::to_string(selected->InputChannels) + " in / " + std::to_string(selected->OutputChannels) + " out. Rates:";
+		for (const auto rate : selected->SampleRates) details += " " + std::to_string(rate);
+		auto detailsParams = GuiLabelParams::PanelHeader(details, 320, 66u);
+		detailsParams.FontSize = graphics::FontOptions::FONT_SMALL;
+		entries.push_back({SettingsPage::Audio,"",std::make_shared<GuiLabel>(detailsParams),0u});
+	}
+	const std::array<unsigned int,4> values{audioDraft.NumChannelsIn, audioDraft.NumChannelsOut, audioDraft.SampleRate, audioDraft.BufSize};
+	std::array<std::string,4> labels{"First N inputs (settles for 3 seconds)", "First N outputs (settles for 3 seconds)", "Sample rate (no takes only)", "Buffer size (requested; negotiated on open)"};
+	if (const auto found = acceptedBufferSizes.find(audioDraft.Name); found != acceptedBufferSizes.end())
+	{
+		labels[3] += " Accepted:"; for (const auto size : found->second) labels[3] += " " + std::to_string(size);
+	}
+	for (unsigned int i = 0; i < 4; ++i)
+	{
+		auto params = GuiNumericInputParams::PanelInput(140u);
+		params.IntegerOnly = true; params.RejectOutOfRange = true;
+		params.OnInvalidValue = [this]() { _deviceStatus->SetString("Enter a valid whole number; value exceeds allowed integer limits"); };
+		params.Min = i < 2u ? 0.0 : 1.0; params.Max = static_cast<double>((std::numeric_limits<unsigned int>::max)()); params.Step = 1.0; params.Decimals = 0; params.InitValue = values[i];
+		_audioInputs[i] = std::make_shared<GuiNumericInput>(params);
+		entries.push_back({SettingsPage::Audio, labels[i], _audioInputs[i], AudioInputControlIndex+i});
+	}
+	entries.push_back({SettingsPage::Audio, "Active stream", _activeAudioStatus, 0u});
+	entries.push_back({SettingsPage::Audio, "Status", _deviceStatus, 0u});
+	auto button = [&](const std::string& text, unsigned int command){ auto params = GuiButtonParams::PanelButton(240u); params.Text = text; params.DispatchCommand = true; params.Size.Height = 40u; params.MinSize.Height = 40u; params.TextFontSize = graphics::FontOptions::FONT_SMALL; entries.push_back({SettingsPage::Audio,"",std::make_shared<GuiButton>(params),command}); };
+	button("Retry / refresh audio request", RetryAudioControlIndex); button("Retry saving preferences",RetryPreferencesControlIndex);
+	_midiChoices.clear(); _midiChoiceBindings.clear();
+	auto midiTitle = GuiLabelParams::PanelHeader(midi.Inventory.Error.empty() ? "MIDI input selection" : "MIDI inventory: " + midi.Inventory.Error, 320, 66u);
+	midiTitle.FontSize = graphics::FontOptions::FONT_SMALL;
+	midiEntries.push_back({SettingsPage::Midi, "", std::make_shared<GuiLabel>(midiTitle), 0u});
+	// Existing registry entries remain independent even when hardware selectors
+	// coincide. Inventory-only choices acquire their ID when first selected.
+	auto choices = midiDraft;
+	for (const auto& device : midi.Inventory.Devices)
+		if (std::none_of(choices.begin(), choices.end(), [&](const auto& choice) { return choice.Name == device.Name; }))
+			choices.push_back({device.Name, false, {}});
+	std::shared_ptr<GuiStackPanel> midiGroup;
+	for (const auto& choice : choices)
+	{
+		if (_midiChoices.size() >= 1000u) break;
+		if (_midiChoices.size() % 128u == 0u)
+		{
+			GuiStackPanelParams groupParams; groupParams.Size = {300u, 8u}; groupParams.Spacing = 8u;
+			midiGroup = std::make_shared<GuiStackPanel>(groupParams);
+			midiEntries.push_back({SettingsPage::Midi,"",midiGroup,0u});
+		}
+		auto params = GuiToggleParams::PanelPrimary(); params.Size = {300u,36u}; params.HorizSizing = base::LayoutSizing::Fill;
+		params.InitState = choice.Enabled ? GuiToggleParams::TOGGLE_ON : GuiToggleParams::TOGGLE_OFF;
+		const auto attempt = std::find_if(midi.Attempts.begin(), midi.Attempts.end(),
+			[&choice](const auto& a){return !choice.Id.empty() && a.RegistryId == choice.Id;});
+		std::string status = "disabled";
+		if (attempt != midi.Attempts.end()) switch (attempt->Status)
+		{
+		case midi::MidiConnectionStatus::Connected: status = "connected"; break;
+		case midi::MidiConnectionStatus::Missing: status = "missing"; break;
+		case midi::MidiConnectionStatus::Ambiguous: status = "ambiguous"; break;
+		case midi::MidiConnectionStatus::Failed: status = "failed"; break;
+		case midi::MidiConnectionStatus::CapacityExceeded: status = "capacity exceeded"; break;
+		default: break;
+		}
+		params.Text = choice.Name + (choice.Id.empty() ? "" : " [" + choice.Id + "]") + " (" + status + ")";
+		params.TextFontSize = graphics::FontOptions::FONT_SMALL;
+		params.TextEllipsize = true;
+		auto control = std::make_shared<GuiToggle>(params);
+		auto binding = std::make_shared<GuiCommandReceiver>(MidiDeviceControlIndex+static_cast<unsigned int>(_midiChoices.size()), receiver);
+		control->SetReceiver(binding); _midiChoiceBindings.push_back(binding);
+		midiGroup->AddChild(control); midiGroup->SetSize({300u, static_cast<unsigned int>((_midiChoices.size() % 128u + 1u) * 44u - 8u)}); midiGroup->ComputeLayout();
+		_midiChoices.push_back({choice.Name, choice.Id, control});
+	}
+	auto refreshMidi = GuiButtonParams::PanelButton(240u); refreshMidi.Text = "Refresh MIDI devices"; refreshMidi.DispatchCommand = true;
+	refreshMidi.Size.Height = 40u; refreshMidi.MinSize.Height = 40u; refreshMidi.TextFontSize = graphics::FontOptions::FONT_SMALL;
+	midiEntries.push_back({SettingsPage::Midi, "", std::make_shared<GuiButton>(refreshMidi), RefreshMidiControlIndex});
+	return { std::move(entries), std::move(midiEntries) };
 }
