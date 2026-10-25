@@ -41,6 +41,7 @@
 #include "../gui/GuiHud.h"
 #include "../io/JamFile.h"
 #include "DeviceSelectionSchedule.h"
+#include "ControlOperation.h"
 #include "../io/RigFile.h"
 #include "../io/InitFile.h"
 #include "../io/SerialDevice.h"
@@ -204,7 +205,7 @@ namespace engine
 		bool PumpGlobalKeyCapture(actions::KeyAction& action) noexcept;
 		void OnInputFocusLost();
 		bool CapturesContextualKeyboard(unsigned int key) const
-		{ return _rigSaveDialogOpen || _controlWriterExclusion.owns_lock() || _popupManager.IsOpen() || _focusManager.IsEditingText() || _loopEditor.IsEngaged() || _contextualKeyboard.Suppresses(key); }
+		{ return _rigSaveDialogOpen || _operation.HoldsWriter() || _popupManager.IsOpen() || _focusManager.IsEditingText() || _loopEditor.IsEngaged() || _contextualKeyboard.Suppresses(key); }
 		void Shutdown();
 		bool JobThreadFailed() const noexcept { return _jobThreadFailed.load(std::memory_order_acquire); }
 		std::string_view JobThreadFailureDetail() const noexcept { return JobThreadFailed() ? std::string_view(_jobThreadFailureDetail.data()) : std::string_view{}; }
@@ -471,9 +472,6 @@ namespace engine
 			std::vector<std::string> ConnectedSerialIds;
 		};
 		std::atomic<std::shared_ptr<const MidiState>> _midiState = std::make_shared<const MidiState>();
-		// UI lifecycle owner uses try_lock after trigger gate acknowledgement.
-		// Job holds this for its complete tick; callback never accesses it.
-		std::mutex _controlLifecycleMutex;
 		// UI publishes complete desired set; job exchanges/accepts it and publishes completion.
 		struct MidiDeviceRequest
 		{
@@ -489,17 +487,9 @@ namespace engine
 		};
 		std::atomic<std::shared_ptr<const MidiDeviceRequest>> _pendingMidiDeviceRequest;
 		std::atomic<std::shared_ptr<const MidiDeviceCompletion>> _completedMidiDeviceRequest;
-		std::atomic<bool> _controlAdmissionPending{false};
-		std::unique_lock<std::mutex> _controlWriterExclusion;
 		std::atomic<bool> _sessionReplacing{ false }; // UI writes; job reads; dies after join.
-		enum class ControlOperation { None, Audio, Midi, Save, Load };
 		std::function<bool(const io::RigFile&)> _saveHardwarePreferences; // Immutable callback, serialized lifecycle callers; Scene bounds lifetime.
-		ControlOperation _controlOperation = ControlOperation::None;
-		audio::AudioHost::QuiescenceState _controlPause{};
-		bool _controlPaused = false;
-		bool _controlInputClosed = false;
-		std::uint64_t _controlRevision = 0u;
-		std::uint64_t _controlOperationId = 0u;
+		engine::ControlOperation _operation;
 		inline static std::atomic<std::uint64_t> _nextSceneIdentity{1u};
 		const std::uint64_t _sceneIdentity = _nextSceneIdentity.fetch_add(1u);
 		// All remaining drafts, deadlines, widgets/results and paths are UI-only.
@@ -518,7 +508,7 @@ namespace engine
 		std::function<bool(const std::wstring&, bool)> _defaultJamSaver;
 		bool _pendingSaveAsDefault = false;
 		bool _panelRigLoadRequested = false;
-		bool _panelLoadRequested = false, _loadReady = false;
+		bool _panelLoadRequested = false;
 		std::mutex _midiLifecycleMutex;
 		std::atomic<bool> _midiRefreshRequested{ false };
 		std::atomic<bool> _midiActive{ false };

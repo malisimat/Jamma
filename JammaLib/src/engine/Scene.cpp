@@ -69,8 +69,8 @@ Scene::Scene(SceneParams params,
 	_vstRackControls(std::make_unique<gui::VstRackControls>(gui::VstRackControls::Host{
 		_sceneMutex, _stations, *_windowSubsystem,
 		[this]() { return !_isSceneQuitting.load(std::memory_order_acquire) &&
-			!_sessionReplacing.load(std::memory_order_acquire) && !_controlWriterExclusion.owns_lock() &&
-			_controlOperation == ControlOperation::None && _rigCoordinator.EditsEnabled(); },
+			!_sessionReplacing.load(std::memory_order_acquire) && !_operation.HoldsWriter() &&
+			_operation.Current() == ControlOperation::None && _rigCoordinator.EditsEnabled(); },
 		[this]() { CommitChanges(); }, {},
 		[this](std::string title, std::string message, std::string accept) {
 			return _runtimeDialogs.Confirm(std::move(title),std::move(message),std::move(accept)); },
@@ -125,7 +125,7 @@ Scene::Scene(SceneParams params,
 	hudParams.TriggerLearnAdmission = [this]() -> std::string
 	{
 		if (_inputSubsystem->VstCcLearnActive()) return "Finish VST CC learn before learning a trigger";
-		if (_stationManagement.Busy() || _rigSaveInProgress || _rigSaveDialogOpen || _controlOperation != ControlOperation::None ||
+		if (_stationManagement.Busy() || _rigSaveInProgress || _rigSaveDialogOpen || _operation.Current() != ControlOperation::None ||
 			_loopEditor.IsEngaged() || _isSceneQuitting.load(std::memory_order_acquire)) return "Finish the current edit or save before learning";
 		return {};
 	};
@@ -291,7 +291,7 @@ std::optional<std::shared_ptr<Scene>> Scene::FromFile(SceneParams sceneParams,
 		<< " rig trigger(s)." << std::endl;
 	auto scene = std::make_shared<Scene>(sceneParams, rigStruct.User);
 	// Candidate restoration excludes its already-started job owner through publication.
-	std::unique_lock candidateLifecycle(scene->_controlLifecycleMutex);
+	std::unique_lock candidateLifecycle(scene->_operation.LifecycleMutex());
 	scene->_saveHardwarePreferences = std::move(saveRig);
 
 	auto loaded = IoSessionLoader::Reconstruct(jamStruct, rigStruct, dir);
@@ -636,7 +636,7 @@ void Scene::UpdateCamera()
 			? std::optional<Position3d>{}
 			: std::optional<Position3d>{ _stations.front()->ModelPosition() });
 		controlsAvailable = !_rigSaveDialogOpen && !_rigSaveInProgress && !_stationManagement.Busy()
-			&& _controlOperation == ControlOperation::None && !_controlWriterExclusion.owns_lock();
+			&& _operation.Current() == ControlOperation::None && !_operation.HoldsWriter();
 		recordings = _cameraRecordings->Snapshot();
 	}
 
@@ -811,7 +811,7 @@ ActionResult Scene::OnAction(TouchAction action)
 
 ActionResult Scene::_OnPointerAction(TouchAction action)
 {
-	if (_isSceneQuitting.load(std::memory_order_acquire) || _controlWriterExclusion.owns_lock()) return ActionResult::NoAction();
+	if (_isSceneQuitting.load(std::memory_order_acquire) || _operation.HoldsWriter()) return ActionResult::NoAction();
 	ActionResult res;
 	// Wheel events are encoded as DOWN/index 4 and have no matching UP. They
 	// must not become pointer captures or replace keyboard focus.
@@ -1081,7 +1081,7 @@ ActionResult Scene::OnAction(TouchMoveAction action)
 
 ActionResult Scene::_OnPointerMove(TouchMoveAction action)
 {
-	if (_isSceneQuitting.load(std::memory_order_acquire) || _controlWriterExclusion.owns_lock()) return ActionResult::NoAction();
+	if (_isSceneQuitting.load(std::memory_order_acquire) || _operation.HoldsWriter()) return ActionResult::NoAction();
 	action.SetActionTime(Timer::GetTime());
 	action.SetUserConfig(_userConfig);
 	_cursorPos = action.Position;
@@ -1197,7 +1197,7 @@ ActionResult Scene::OnAction(KeyAction action)
 		std::scoped_lock lock(_sceneMutex);
 		_hudPanel->SetAltLearnHeld(keyDown && !_popupManager.IsOpen() && !_focusManager.IsEditingText());
 	}
-	const bool contextual = _rigSaveDialogOpen || _controlWriterExclusion.owns_lock() ||
+	const bool contextual = _rigSaveDialogOpen || _operation.HoldsWriter() ||
 		_popupManager.IsOpen() || _focusManager.IsEditingText() || _loopEditor.IsEngaged();
 	const auto inputRig = _rigCoordinator.Accepted();
 	const bool admissionOpen = !_isSceneQuitting.load(std::memory_order_acquire) && inputRig &&
@@ -1216,7 +1216,7 @@ ActionResult Scene::OnAction(KeyAction action)
 	}
 	// A consumed physical press keeps its release even when focus changes.
 	if (_performanceGroups.ConsumeRelease(action)) return { true, {}, {}, ACTIONRESULT_DEFAULT, nullptr, {} };
-	if (_rigSaveDialogOpen || _controlWriterExclusion.owns_lock() || _popupManager.IsOpen() || _focusManager.IsEditingText() || _loopEditor.IsEngaged())
+	if (_rigSaveDialogOpen || _operation.HoldsWriter() || _popupManager.IsOpen() || _focusManager.IsEditingText() || _loopEditor.IsEngaged())
 		_performanceGroups.BlockContextualPress(action);
 	if (_isSceneQuitting.load(std::memory_order_acquire)) return ActionResult::NoAction();
 	action.SetActionTime(Timer::GetTime());
@@ -1230,7 +1230,7 @@ ActionResult Scene::OnAction(KeyAction action)
 		_ctrlHeld = actions::KeyAction::KEY_DOWN == action.KeyActionType;
 		// The loop grid keeps its existing Ctrl/Space overlay gestures; only its
 		// text editor (and true modal/text capture) suppresses those shortcuts.
-		const bool contextualText = _rigSaveDialogOpen || _controlWriterExclusion.owns_lock() ||
+		const bool contextualText = _rigSaveDialogOpen || _operation.HoldsWriter() ||
 			_popupManager.IsOpen() || _focusManager.IsEditingText() || _loopEditor.IsEditingText();
 		{
 			std::scoped_lock lock(_sceneMutex);
@@ -1290,7 +1290,7 @@ ActionResult Scene::OnAction(KeyAction action)
 		if (action.KeyChar == VK_PRIOR || action.KeyChar == VK_NEXT) _inputSubsystem->HandleChannelOverrideKey(action, _stations);
 		if ((action.KeyChar == 192u || action.KeyChar == 96u) && _hudPanel) _hudPanel->SetCableRevealHeld(false);
 	}
-	if (_controlWriterExclusion.owns_lock()) return ActionResult::NoAction();
+	if (_operation.HoldsWriter()) return ActionResult::NoAction();
 	if (suppressedKey && !contextual) return ActionResult::NoAction();
 	if (27u == action.KeyChar && _quantisationInteraction.OwnsPointer())
 	{
@@ -1563,7 +1563,7 @@ ActionResult Scene::_HandleUndo()
 ActionResult Scene::OnAction(GuiAction action)
 {
 	if (_isSceneQuitting.load(std::memory_order_acquire)) return ActionResult::NoAction();
-	if (_controlWriterExclusion.owns_lock() && !SceneSettingsControls::IsOperationControl(action.Index)) return ActionResult::NoAction();
+	if (_operation.HoldsWriter() && !SceneSettingsControls::IsOperationControl(action.Index)) return ActionResult::NoAction();
 	if (action.Index == GuiMainPanel::LoadRigControlIndex) { _panelRigLoadRequested = true; return ActionResult::NoAction(); }
 	const auto deviceChange = _settingsControls->DecodeDeviceChange(action);
 	if (deviceChange)
@@ -1571,7 +1571,7 @@ ActionResult Scene::OnAction(GuiAction action)
 		if (const auto save = std::get_if<SceneSettingsControls::SaveSession>(&*deviceChange))
 		{ _RequestSave(save->ChooseFolder, save->AsDefault); return ActionResult::NoAction(); }
 		if (std::holds_alternative<SceneSettingsControls::LoadSession>(*deviceChange))
-		{ if (_controlOperation == ControlOperation::None) _panelLoadRequested = true; return ActionResult::NoAction(); }
+		{ if (_operation.Current() == ControlOperation::None) _panelLoadRequested = true; return ActionResult::NoAction(); }
 		if (std::holds_alternative<SceneSettingsControls::RetryAudio>(*deviceChange))
 		{ _audioStartRequested = true; _audioSchedule.Changed(DeviceSelectionSchedule::Edit::Format); return ActionResult::NoAction(); }
 		if (std::holds_alternative<SceneSettingsControls::RefreshMidi>(*deviceChange))
@@ -1579,8 +1579,8 @@ ActionResult Scene::OnAction(GuiAction action)
 		if (std::holds_alternative<SceneSettingsControls::RetryPreferences>(*deviceChange))
 		{
 			{ std::scoped_lock lock(_sceneMutex); if (_stationManagement.Busy() || _rigSaveInProgress || _rigSaveDialogOpen) return ActionResult::NoAction(); }
-			if (_controlOperation != ControlOperation::None || !_rigCoordinator.EditsEnabled()) { _settingsControls->SetDeviceStatus("Preferences retry waits for other operations"); return ActionResult::NoAction(); }
-			std::unique_lock lifecycle(_controlLifecycleMutex, std::try_to_lock);
+			if (_operation.Current() != ControlOperation::None || !_rigCoordinator.EditsEnabled()) { _settingsControls->SetDeviceStatus("Preferences retry waits for other operations"); return ActionResult::NoAction(); }
+			std::unique_lock lifecycle(_operation.LifecycleMutex(), std::try_to_lock);
 			if (!lifecycle.owns_lock() || !_rigCoordinator.EditsEnabled()) return ActionResult::NoAction();
 			const bool merged = _rigCoordinator.MergeHardwarePreferences(_pendingAudioPersistence, _pendingMidiPersistence);
 			const auto accepted = AcceptedRigSnapshot();
@@ -1741,7 +1741,7 @@ void Scene::CompleteStartupWhenIdle(std::function<void()> complete)
 
 void Scene::OnJobTick(Time curTime)
 {
-	std::scoped_lock lifecycle(_controlLifecycleMutex);
+	std::scoped_lock lifecycle(_operation.LifecycleMutex());
 	if (_sessionReplacing.load(std::memory_order_acquire) || _isSceneQuitting.load(std::memory_order_acquire)) return;
 	const auto verboseTiming = _loggingConfig.Event == "verbose";
 	if (verboseTiming) _ninjamDiagnosticPresenter.ObserveJobTick(curTime);
@@ -1752,7 +1752,7 @@ void Scene::OnJobTick(Time curTime)
 	if (!_isSceneQuitting.load(std::memory_order_acquire))
 		_inputSubsystem->AcknowledgeRigTriggerInputCloseFromJob();
 	_ReconcileMidiDeviceRequestOnJob();
-	if (!_controlAdmissionPending.load(std::memory_order_acquire)) _RefreshMidiIfNeeded();
+	if (!_operation.AdmissionPending()) _RefreshMidiIfNeeded();
 	_PumpTriggerStructuralActions();
 	_PumpSourceLossRecovery();
 	_AdvanceRigPublication();
@@ -2258,8 +2258,8 @@ RigCoordinator::EditResult Scene::RequestRigEdit(const io::RigFile& candidateRig
 std::string Scene::_RequestStationRenameLocked(const std::shared_ptr<Station>& station,
 	std::uint64_t revision, const std::string& name)
 {
-	if (_controlOperation != ControlOperation::None || _stationManagement.Busy() ||
-		_controlWriterExclusion.owns_lock() || _sessionReplacing.load(std::memory_order_acquire) ||
+	if (_operation.Current() != ControlOperation::None || _stationManagement.Busy() ||
+		_operation.HoldsWriter() || _sessionReplacing.load(std::memory_order_acquire) ||
 		_isSceneQuitting.load(std::memory_order_acquire) || _rigSaveDialogOpen || _rigSaveInProgress ||
 		_RoutingEditAvailability() != gui::RoutingEditAvailability::Ready)
 		return "Busy; keep the draft and retry";
@@ -2281,7 +2281,7 @@ std::string Scene::_RequestStationRenameLocked(const std::shared_ptr<Station>& s
 
 RigCoordinator::EditResult Scene::_RequestRigEditLocked(const io::RigFile& candidateRig)
 {
-	if (_controlOperation != ControlOperation::None || _stationManagement.Busy() || _rigSaveDialogOpen || _rigSaveInProgress) return RigCoordinator::EditResult::EditsDisabled;
+	if (_operation.Current() != ControlOperation::None || _stationManagement.Busy() || _rigSaveDialogOpen || _rigSaveInProgress) return RigCoordinator::EditResult::EditsDisabled;
 	switch (_RoutingEditAvailability())
 	{
 	case gui::RoutingEditAvailability::Applying: return RigCoordinator::EditResult::EditsDisabled;
@@ -2289,7 +2289,7 @@ RigCoordinator::EditResult Scene::_RequestRigEditLocked(const io::RigFile& candi
 	case gui::RoutingEditAvailability::TriggerBusy: return RigCoordinator::EditResult::TriggerBusy;
 	case gui::RoutingEditAvailability::Ready: break;
 	}
-	std::unique_lock lifecycle(_controlLifecycleMutex, std::try_to_lock);
+	std::unique_lock lifecycle(_operation.LifecycleMutex(), std::try_to_lock);
 	if (!lifecycle.owns_lock() || !_rigCoordinator.EditsEnabled()) return RigCoordinator::EditResult::EditsDisabled;
 	const auto accepted = _rigCoordinator.Accepted();
 	const auto result = _rigCoordinator.SubmitCandidate(candidateRig);
@@ -2507,7 +2507,7 @@ void Scene::InitGui()
 
 void Scene::InitAudio(bool generatedRig, const audio::AsioInventory* inventory, bool exactSelection)
 {
-	std::scoped_lock lifecycle(_controlLifecycleMutex);
+	std::scoped_lock lifecycle(_operation.LifecycleMutex());
 	if (inventory) _deviceInventory = *inventory;
 	_devicePageDirty = true;
 	const auto previousMidi = _midiState.load(std::memory_order_acquire);
@@ -2647,10 +2647,10 @@ void Scene::Shutdown()
 		if (auto label = station->GetGuiRack()->StationLabel()) label->Cancel();
 	_vstRackControls->Reset();
 	_sessionReplacing.store(true, std::memory_order_release);
-	if (_controlWriterExclusion.owns_lock()) _controlWriterExclusion.unlock();
+	_operation.ReleaseWriter();
 	// Finish any admitted job tick before borrowing lifecycle state. No scene,
 	// MIDI or application gate mutex is held while acquiring this owner boundary.
-	std::unique_lock lifecycle(_controlLifecycleMutex);
+	std::unique_lock lifecycle(_operation.LifecycleMutex());
 	_selector->ClearBackgroundClick();
 	{
 		// Recovery borrows callback-owned fields under this same lock. Finish
@@ -3857,19 +3857,19 @@ void Scene::_RebuildDevicePage()
 void Scene::ReportFileStatus(const std::string& status)
 {
 	_settingsControls->SetFileStatus(status);
-	std::cout << "[SESSION scene=" << _sceneIdentity << " operation=" << _controlOperationId << "] " << status << std::endl;
+	std::cout << "[SESSION scene=" << _sceneIdentity << " operation=" << _operation.Identity() << "] " << status << std::endl;
 }
 
 void Scene::_RequestSave(bool chooseFolder, bool asDefault)
 {
-	if (_controlOperation != ControlOperation::None || !_rigCoordinator.EditsEnabled()) { ReportFileOutcome("Another operation is busy"); return; }
+	if (_operation.Current() != ControlOperation::None || !_rigCoordinator.EditsEnabled()) { ReportFileOutcome("Another operation is busy"); return; }
 	if (_CaptureIsBusy()) { ReportFileOutcome("Save unavailable during capture or pending actions"); return; }
 	if (asDefault && (_defaultJamPath.empty() || !_defaultJamSaver)) { ReportFileOutcome("Startup jam path unavailable"); return; }
-	_controlOperation = ControlOperation::Save;
+	_operation.Begin(ControlOperation::Save);
 	auto folder = asDefault && _currentJamPath.empty() ? utils::GetParentDirectory(_defaultJamPath) : _sessionSaveFolder;
 	if (chooseFolder || folder.empty()) folder = utils::PickDirectory(L"Choose session save folder");
-	if (folder.empty()) { _controlOperation = ControlOperation::None; return; }
-	_pendingSaveAsDefault = asDefault; _pendingSaveFolder = std::move(folder); _controlOperation = ControlOperation::Save;
+	if (folder.empty()) { _operation.Begin(ControlOperation::None); return; }
+	_pendingSaveAsDefault = asDefault; _pendingSaveFolder = std::move(folder); _operation.Begin(ControlOperation::Save);
 	ReportFileStatus("Waiting to capture session");
 }
 
@@ -3895,44 +3895,43 @@ void Scene::_CompleteSessionSave(bool success, const std::wstring& path, const s
 
 void Scene::PickSessionForLoad()
 {
-	if (_controlOperation != ControlOperation::None || !_rigCoordinator.EditsEnabled()) { ReportFileOutcome("Another operation is busy"); return; }
+	if (_operation.Current() != ControlOperation::None || !_rigCoordinator.EditsEnabled()) { ReportFileOutcome("Another operation is busy"); return; }
 	if (_CaptureIsBusy()) { ReportFileOutcome("Load unavailable during capture or pending actions"); return; }
-	_controlOperation = ControlOperation::Load;
+	_operation.Begin(ControlOperation::Load);
 	try { _pendingLoadPath = utils::PickJamFile(); }
-	catch (...) { _controlOperation = ControlOperation::None; throw; }
-	if (_pendingLoadPath.empty()) _controlOperation = ControlOperation::None;
+	catch (...) { _operation.Begin(ControlOperation::None); throw; }
+	if (_pendingLoadPath.empty()) _operation.Begin(ControlOperation::None);
 }
 
 void Scene::RequestSessionLoad(std::wstring path)
 {
 	if (path.empty()) return;
-	if (_controlOperation != ControlOperation::None || !_rigCoordinator.EditsEnabled()) { ReportFileOutcome("Another operation is busy"); return; }
+	if (_operation.Current() != ControlOperation::None || !_rigCoordinator.EditsEnabled()) { ReportFileOutcome("Another operation is busy"); return; }
 	if (_CaptureIsBusy()) { ReportFileOutcome("Load unavailable during capture or pending actions"); return; }
-	_pendingLoadPath = std::move(path); _controlOperation = ControlOperation::Load;
+	_pendingLoadPath = std::move(path); _operation.Begin(ControlOperation::Load);
 }
 
 std::wstring Scene::TakeReadySessionLoad()
 {
-	return _loadReady ? std::exchange(_pendingLoadPath, {}) : std::wstring();
+	return _operation.LoadReady() ? std::exchange(_pendingLoadPath, {}) : std::wstring();
 }
 
 bool Scene::_FinishControlOperation(std::string* restorationError)
 {
-	bool restored = true;
-	if (_controlOperation == ControlOperation::Audio) _audioSchedule.NextChange = std::chrono::steady_clock::now() + std::chrono::milliseconds(500);
+	if (_operation.Current() == ControlOperation::Audio) _audioSchedule.NextChange = std::chrono::steady_clock::now() + std::chrono::milliseconds(500);
 	std::string error;
-	if (_controlPaused && !_audioEngine->EndQuiescence(_controlPause, error))
+	const auto audioRestore = _operation.RestoreAudio(*_audioEngine, error);
+	bool restored = audioRestore.Success;
+	if (!restored)
 	{
-		restored = false;
 		if (restorationError) *restorationError = error;
 		_settingsControls->SetDeviceStatus("Stopped: " + error); ReportFileOutcome("Audio restoration failed: " + error);
 	}
-	if (_controlPaused && restored && _controlPause.AdmissionWasOpen)
+	if (audioRestore.AdmissionRestored)
 	{
 		std::scoped_lock lock(_sceneMutex);
 		_sourceLossRecoveryGateClosed = false;
 	}
-	_controlPaused = false;
 	try { _inputSubsystem->ResumeMidiDispatch(); }
 	catch (const std::exception& dispatchError)
 	{
@@ -3941,15 +3940,10 @@ bool Scene::_FinishControlOperation(std::string* restorationError)
 		_settingsControls->SetDeviceStatus("MIDI dispatch stopped: " + std::string(dispatchError.what()));
 		ReportRuntimeNotice("MIDI", "MIDI dispatch stopped: " + std::string(dispatchError.what()));
 	}
-	if (_controlInputClosed)
-	{
-		const auto accepted = AcceptedRigSnapshot();
-		if (accepted) _inputSubsystem->OpenRigTriggerInput(accepted->Revision);
-	}
-	_controlInputClosed = false;
-	if (_controlWriterExclusion.owns_lock()) _controlWriterExclusion.unlock();
-	_controlOperation = ControlOperation::None; _loadReady = false;
-	_controlAdmissionPending.store(false, std::memory_order_release);
+	std::optional<std::uint64_t> acceptedRevision;
+	if (_operation.InputClosed())
+		if (const auto accepted = AcceptedRigSnapshot()) acceptedRevision = accepted->Revision;
+	_operation.Finish(*_inputSubsystem, acceptedRevision);
 	return restored;
 }
 
@@ -3958,9 +3952,7 @@ void Scene::FinishSessionLoad(bool replaced, const std::string& error)
 	if (replaced)
 	{
 		_sessionReplacing.store(true, std::memory_order_release);
-		_controlPaused = false; _loadReady = false;
-		if (_controlWriterExclusion.owns_lock()) _controlWriterExclusion.unlock();
-		_controlOperation = ControlOperation::None;
+		_operation.FinishReplacement();
 	}
 	else { ReportFileOutcome(error.empty() ? "Load failed; current session retained" : error); _FinishControlOperation(); }
 }
@@ -3970,7 +3962,7 @@ void Scene::PumpDeviceAndFileControls()
 	if (_isSceneQuitting.load(std::memory_order_acquire)) return;
 	bool inventoryBusy = false;
 	{ std::scoped_lock lock(_sceneMutex); inventoryBusy = _stationManagement.Busy() || _rigSaveDialogOpen || _rigSaveInProgress; }
-	const bool filesEnabled = !inventoryBusy && _controlOperation == ControlOperation::None && _rigCoordinator.EditsEnabled();
+	const bool filesEnabled = !inventoryBusy && _operation.Current() == ControlOperation::None && _rigCoordinator.EditsEnabled();
 	_settingsControls->SetSessionEnabled(filesEnabled, filesEnabled && !_defaultJamPath.empty() && static_cast<bool>(_defaultJamSaver));
 	const auto now = std::chrono::steady_clock::now();
 	const auto actual = _audioEngine->GetStreamParams();
@@ -3979,14 +3971,14 @@ void Scene::PumpDeviceAndFileControls()
 	std::ostringstream text;
 	text << actual.Name << " | " << actual.SampleRate << " Hz | " << actual.NumInputChannels << " in / " << actual.NumOutputChannels << " out | buffer " << actual.BufSize;
 	_settingsControls->SetActiveAudioStatus(text.str());
-	if (_controlOperation == ControlOperation::None)
+	if (_operation.Current() == ControlOperation::None)
 	{
 		if (inventoryBusy || !_rigCoordinator.EditsEnabled()) return;
 		if (_midiDraftPending)
 		{
-			_controlOperation = ControlOperation::Midi; _midiDraftPending = false;
-			++_controlOperationId;
-			_pendingMidiDeviceRequest.store(std::make_shared<const MidiDeviceRequest>(MidiDeviceRequest{_sceneIdentity, _controlOperationId, _midiDraft}), std::memory_order_release);
+			_operation.Begin(ControlOperation::Midi); _midiDraftPending = false;
+			_operation.NextIdentity();
+			_pendingMidiDeviceRequest.store(std::make_shared<const MidiDeviceRequest>(MidiDeviceRequest{_sceneIdentity, _operation.Identity(), _midiDraft}), std::memory_order_release);
 		}
 		else if (_audioSchedule.Revision != _audioSchedule.AttemptedRevision && now >= _audioSchedule.NextChange)
 		{
@@ -3995,44 +3987,40 @@ void Scene::PumpDeviceAndFileControls()
 			if (!_audioStartRequested && _audioDraft.Name == actual.Name && _audioDraft.SampleRate == actual.SampleRate && _audioDraft.BufSize == actual.BufSize && _audioDraft.NumChannelsIn == actual.NumInputChannels && _audioDraft.NumChannelsOut == actual.NumOutputChannels) { _audioSchedule.AttemptedRevision = _audioSchedule.Revision; return; }
 			std::string error;
 			if (!_ValidateAudioDraft(error)) { _settingsControls->SetDeviceStatus(error); ReportRuntimeNotice("Audio device",error); _audioSchedule.AttemptedRevision = _audioSchedule.Revision; return; }
-			_controlOperation = ControlOperation::Audio;
+			_operation.Begin(ControlOperation::Audio);
 		}
 		else return;
 	}
-	if (_controlOperation == ControlOperation::Midi)
+	if (_operation.Current() == ControlOperation::Midi)
 	{
 		if (const auto completion = _completedMidiDeviceRequest.exchange({}, std::memory_order_acq_rel))
 		{
-			if (completion->SceneId != _sceneIdentity || completion->OperationId != _controlOperationId) return;
+			if (completion->SceneId != _sceneIdentity || completion->OperationId != _operation.Identity()) return;
 			if (completion->Accepted)
 			{
 				if (completion->PreferencesSaved) { _pendingAudioPersistence.reset(); _pendingMidiPersistence.reset(); }
 				else _pendingMidiPersistence = completion->Desired;
 			}
 			_hardwarePersistencePending = _pendingAudioPersistence.has_value() || _pendingMidiPersistence.has_value();
-			_settingsControls->SetDeviceStatus(completion->Status); _controlOperation = ControlOperation::None; _devicePageDirty = true;
+			_settingsControls->SetDeviceStatus(completion->Status); _operation.Begin(ControlOperation::None); _devicePageDirty = true;
 			ReportRuntimeNotice("MIDI devices",completion->Status);
 		}
 		return;
 	}
-	if (_loadReady) return;
-	if (_controlOperation == ControlOperation::Audio && now < _audioSchedule.ChannelDeadline) { _FinishControlOperation(); return; }
-	if (!_controlInputClosed)
+	if (_operation.LoadReady()) return;
+	if (_operation.Current() == ControlOperation::Audio && now < _audioSchedule.ChannelDeadline) { _FinishControlOperation(); return; }
+	if (!_operation.InputClosed())
 	{
 		const auto accepted = AcceptedRigSnapshot();
 		if (!accepted || !_rigCoordinator.EditsEnabled()) return;
-		_controlRevision = accepted->Revision;
-		if (!_inputSubsystem->RequestCloseRigTriggerInputFromUi(_controlRevision)) return;
-		_controlInputClosed = true; _controlAdmissionPending.store(true, std::memory_order_release); ++_controlOperationId;
+		_operation.RequestBoundary(*_inputSubsystem, accepted->Revision);
 		return; // Job acknowledges on its next turn; never wait under an application lock.
 	}
-	if (!_inputSubsystem->RigTriggerInputReadyForAudioBoundary(_controlRevision)) return;
-	_controlWriterExclusion = std::unique_lock<std::mutex>(_controlLifecycleMutex, std::try_to_lock);
-	if (!_controlWriterExclusion.owns_lock()) return;
+	if (!_operation.TryAcquireBoundary(*_inputSubsystem)) return;
 	try
 	{
 	std::string error;
-	if (_controlOperation == ControlOperation::Save)
+	if (_operation.Current() == ControlOperation::Save)
 	{
 		ReportFileStatus("Capturing/saving session");
 		const auto result = io::IoSessionExporter::ExportSessionVersionToDirectory(_stations, AcceptedRigSnapshot(), _quantisation, _globalMidiQuantState, _transportOffsetLoopFrac, _userConfig, actual, _audioEngine.get(), _sceneMutex, _networkService->GetController(), _pendingSaveFolder,
@@ -4046,28 +4034,27 @@ void Scene::PumpDeviceAndFileControls()
 			}, &_performanceGroups.Groups());
 		_CompleteSessionSave(result.Success, result.Path, result.Error);
 		if (!result.AudioResumed) ReportFileOutcome("Save outcome: " + utils::EncodeUtf8(result.Path) + "; audio restoration failed: " + result.Error);
-		if (_controlOperation != ControlOperation::None) _FinishControlOperation();
+		if (_operation.Current() != ControlOperation::None) _FinishControlOperation();
 		return;
 	}
-	if (!_audioEngine->BeginQuiescence(_controlPause, error))
+	if (!_operation.PauseAudio(*_audioEngine, error))
 	{
 		_settingsControls->SetDeviceStatus("Stopped/error: " + error); ReportFileOutcome(error);
-		if (_controlOperation == ControlOperation::Audio) _audioSchedule.AttemptedRevision = _audioSchedule.Revision;
+		if (_operation.Current() == ControlOperation::Audio) _audioSchedule.AttemptedRevision = _audioSchedule.Revision;
 		_FinishControlOperation(); return;
 	}
-	_controlPaused = true;
 	_inputSubsystem->SuspendMidiDispatch();
 	for (const auto& station : _stations) if (station) station->ResetLiveMidiWhileQuiescent();
 	// With producers excluded and callbacks drained, capture-start wins deterministically.
-	if (_controlOperation != ControlOperation::Midi && _CaptureIsBusy())
+	if (_operation.Current() != ControlOperation::Midi && _CaptureIsBusy())
 	{
-		if (_controlOperation == ControlOperation::Audio) _settingsControls->SetDeviceStatus("Waiting for recording");
+		if (_operation.Current() == ControlOperation::Audio) _settingsControls->SetDeviceStatus("Waiting for recording");
 		else ReportFileOutcome("File operation rejected during capture/pending actions");
 		_FinishControlOperation(); return;
 	}
-	if (_controlOperation == ControlOperation::Load) { _loadReady = true; ReportFileStatus("Loading session"); return; }
+	if (_operation.Current() == ControlOperation::Load) { _operation.MarkLoadReady(); ReportFileStatus("Loading session"); return; }
 
-	if (_controlOperation == ControlOperation::Audio)
+	if (_operation.Current() == ControlOperation::Audio)
 	{
 		const auto admittedRevision = _audioSchedule.Revision;
 		const auto requested = _audioDraft;
@@ -4082,7 +4069,7 @@ void Scene::PumpDeviceAndFileControls()
 			if (applied)
 			{
 				auto settings = requested; settings.Name = acceptedParams.Name; settings.SampleRate = acceptedParams.SampleRate; settings.BufSize = acceptedParams.BufSize; settings.NumBuffers = acceptedParams.NumBuffers; settings.NumChannelsIn = acceptedParams.NumInputChannels; settings.NumChannelsOut = acceptedParams.NumOutputChannels;
-				if (_audioStartRequested) { _controlPause.WasRunning = true; _controlPause.AdmissionWasOpen = true; }
+				if (_audioStartRequested) _operation.RestoreRunningAudio();
 				_userConfig.Audio = settings;
 				auto& sizes = _acceptedBufferSizes[acceptedParams.Name];
 				if (std::find(sizes.begin(), sizes.end(), acceptedParams.BufSize) == sizes.end()) { if (sizes.size() == 16u) sizes.erase(sizes.begin()); sizes.push_back(acceptedParams.BufSize); }
@@ -4129,17 +4116,17 @@ void Scene::PumpDeviceAndFileControls()
 			}
 			else { _settingsControls->SetDeviceStatus(error); ReportRuntimeNotice("Audio device",error); }
 			_audioStartRequested = false;
-			std::cout << "[DEVICES scene=" << _sceneIdentity << " operation=" << _controlOperationId << "] audio " << (applied ? "applied " : "failed ")
+			std::cout << "[DEVICES scene=" << _sceneIdentity << " operation=" << _operation.Identity() << "] audio " << (applied ? "applied " : "failed ")
 				<< "requested='" << requested.Name << "' in=" << requested.NumChannelsIn << " out=" << requested.NumChannelsOut << " rate=" << requested.SampleRate << " buffer=" << requested.BufSize
 				<< " actual='" << acceptedParams.Name << "' in=" << acceptedParams.NumInputChannels << " out=" << acceptedParams.NumOutputChannels << " rate=" << acceptedParams.SampleRate << " buffer=" << acceptedParams.BufSize << " " << error << std::endl;
 		}
 	}
-	if (_controlOperation != ControlOperation::None) _FinishControlOperation();
+	if (_operation.Current() != ControlOperation::None) _FinishControlOperation();
 	}
 	catch (const std::exception& error)
 	{
 		ReportFileOutcome(std::string("Operation failed: ") + error.what());
-		if (_controlOperation == ControlOperation::Audio) _audioSchedule.AttemptedRevision = _audioSchedule.Revision;
+		if (_operation.Current() == ControlOperation::Audio) _audioSchedule.AttemptedRevision = _audioSchedule.Revision;
 		_FinishControlOperation();
 	}
 }
@@ -4147,7 +4134,7 @@ void Scene::PumpDeviceAndFileControls()
 
 void Scene::_ReconcileMidiDeviceRequestOnJob()
 {
-	// OnJobTick owns _controlLifecycleMutex; complete values are handed off by
+	// OnJobTick holds the lifecycle owner lock; complete values are handed off by
 	// UI atomics. Only this job owner mutates MIDI desired selection/endpoints.
 	const auto desired = _pendingMidiDeviceRequest.exchange({}, std::memory_order_acq_rel);
 	if (!desired) return;
@@ -4224,7 +4211,7 @@ void Scene::_ReconcileMidiDeviceRequestOnJob()
 // Membership presentation is committed only by the window owner.
 bool Scene::_StationManagementAvailableLocked() const
 {
-	return _controlOperation == ControlOperation::None && !_controlWriterExclusion.owns_lock() && !_stationManagement.Busy() && _rigCoordinator.EditsEnabled() && !_rigSaveDialogOpen && !_rigSaveInProgress &&
+	return _operation.Current() == ControlOperation::None && !_operation.HoldsWriter() && !_stationManagement.Busy() && _rigCoordinator.EditsEnabled() && !_rigSaveDialogOpen && !_rigSaveInProgress &&
 		std::none_of(_stations.begin(), _stations.end(), [](const auto& station) { return station->IsPresentationMoving(); }) &&
 		!_popupManager.IsOpen() && !_loopEditor.IsEngaged() && !_focusManager.IsEditingText() &&
 		!_quantisationInteraction.OwnsPointer() && !_camera.IsBackgroundDragging() && !_isSceneTouching &&
@@ -4323,7 +4310,7 @@ void Scene::_AcceptStationRemoval(bool consent)
 {
 	std::scoped_lock lock(_sceneMutex);
 	const auto accepted = _rigCoordinator.Accepted();
-	if (!accepted || _controlOperation != ControlOperation::None || _controlWriterExclusion.owns_lock() || !_rigCoordinator.EditsEnabled() || _rigSaveDialogOpen || _rigSaveInProgress) return;
+	if (!accepted || _operation.Current() != ControlOperation::None || _operation.HoldsWriter() || !_rigCoordinator.EditsEnabled() || _rigSaveDialogOpen || _rigSaveInProgress) return;
 	const auto validation = _stationManagement.Validate(_stations, accepted->Revision, consent);
 	if (validation == StationManagement::Validation::Confirm)
 	{
@@ -4439,7 +4426,7 @@ std::optional<Scene::CapturedRig> Scene::BeginExplicitRigSave()
 {
 	std::scoped_lock lock(_sceneMutex);
 	if (!_rigCoordinator.EditsEnabled() || _stationManagement.Busy() || _rigSaveInProgress ||
-		_controlOperation != ControlOperation::None || _popupManager.IsOpen() || _isSceneQuitting.load(std::memory_order_acquire)) return {};
+		_operation.Current() != ControlOperation::None || _popupManager.IsOpen() || _isSceneQuitting.load(std::memory_order_acquire)) return {};
 	const auto accepted = _rigCoordinator.Accepted(); if (!accepted) return {};
 	auto rig = accepted->Rig; rig.User = _userConfig; _rigSaveInProgress = true;
 	return CapturedRig{std::move(rig), accepted->Revision, _sceneIdentity};

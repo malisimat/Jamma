@@ -98,11 +98,11 @@ namespace engine
             return {};
         }
         static void BeginDeviceWriter(Scene& scene)
-        { scene._controlWriterExclusion = std::unique_lock(scene._controlLifecycleMutex); scene._controlOperation = Scene::ControlOperation::Save; }
+        { scene._operation._writer = std::unique_lock(scene._operation.LifecycleMutex()); scene._operation.Begin(ControlOperation::Save); }
         static void EndDeviceWriter(Scene& scene)
-        { scene._controlOperation = Scene::ControlOperation::None; scene._controlWriterExclusion.unlock(); }
+        { scene._operation.Begin(ControlOperation::None); scene._operation.ReleaseWriter(); }
         static std::unique_lock<std::mutex> ExcludeJob(Scene& scene)
-        { return std::unique_lock(scene._controlLifecycleMutex); }
+        { return std::unique_lock(scene._operation.LifecycleMutex()); }
         static std::string StartedAudioSelection(Scene& scene,
             const audio::AsioInventory& inventory, const audio::AudioStreamParams& params)
         {
