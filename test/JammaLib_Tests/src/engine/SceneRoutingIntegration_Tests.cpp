@@ -65,6 +65,17 @@ namespace engine
     class SourceLossIntegrationTestAccess
     {
     public:
+        static utils::Position2d CanvasPoint(Scene& scene, utils::Position2d offset = {})
+        {
+            // The former (560,300) lies inside stacked Inputs at 800x600.
+            // These tests need actual free canvas before supplying a picker path.
+            const auto point = utils::Position2d{560,200} + offset;
+            EXPECT_TRUE(utils::Size2d::RectTest(scene._sizeParams.Size, point));
+            EXPECT_FALSE(scene._hudPanel->CapturesPointer(scene._hudPanel->GlobalToLocal(point)));
+            EXPECT_FALSE(scene._selectionPanel->RouteHitTest(scene._selectionPanel->GlobalToLocal(point)));
+            EXPECT_FALSE(scene._mainPanel->RouteHitTest(scene._mainPanel->GlobalToLocal(point)));
+            return point;
+        }
         static std::shared_ptr<gui::GuiButton> RigSaveButton(Scene& scene)
         { return gui::GuiMainPanelTestAccess::RigSaveButton(*scene._mainPanel); }
         static std::shared_ptr<gui::GuiButton> RigSaveChoice(Scene& scene, unsigned int choice)
@@ -1223,7 +1234,7 @@ TEST_F(SceneRoutingIntegrationTest, InWindowItemMiddlePaintUsesSelectionThreshol
         scene->SetHover3d(audioPath, base::Action::MODIFIER_NONE);
         actions::TouchAction click;
         click.Touch = actions::TouchAction::TOUCH_MOUSE;
-        click.Position = { 560, 300 }; // Valid client point; the picker reports this actual loop.
+        click.Position = engine::SourceLossIntegrationTestAccess::CanvasPoint(*scene); // Valid client point; the picker reports this actual loop.
         click.Index = 1;
         click.MouseButtonsDown = 2u;
         click.State = actions::TouchAction::TOUCH_DOWN;
@@ -1285,7 +1296,7 @@ TEST_F(SceneRoutingIntegrationTest, RawStationPickBelowSelectionDepthDoesNotBeco
     scene->SetHover3d(stationPath, base::Action::MODIFIER_NONE);
     actions::TouchAction click;
     click.Touch = actions::TouchAction::TOUCH_MOUSE;
-    click.Position = { 560, 300 };
+    click.Position = engine::SourceLossIntegrationTestAccess::CanvasPoint(*scene);
     click.Index = 1;
     click.MouseButtonsDown = 2u;
     click.State = actions::TouchAction::TOUCH_DOWN;
@@ -1323,7 +1334,7 @@ TEST_F(SceneRoutingIntegrationTest, WindowFreshPressPickWinsOverStaleBackgroundA
         scene->SetHover3d({}, base::Action::MODIFIER_NONE); // Previous rendered hover was background.
         actions::TouchAction click;
         click.Touch = actions::TouchAction::TOUCH_MOUSE;
-        click.Position = { 560, 300 };
+        click.Position = engine::SourceLossIntegrationTestAccess::CanvasPoint(*scene);
         click.Index = 1;
         click.State = actions::TouchAction::TOUCH_DOWN;
         EXPECT_TRUE(window.OnAction(click).IsEaten);
@@ -1334,7 +1345,7 @@ TEST_F(SceneRoutingIntegrationTest, WindowFreshPressPickWinsOverStaleBackgroundA
         EXPECT_FALSE(engine::SourceLossIntegrationTestAccess::BackgroundPreviewActive(*scene));
         actions::TouchMoveAction move;
         move.Touch = actions::TouchAction::TOUCH_MOUSE;
-        move.Position = { 565, 300 };
+        move.Position = click.Position + utils::Position2d{5, 0};
         move.MouseButtonsDown = 2u;
         window.OnAction(move);
         EXPECT_TRUE(engine::SourceLossIntegrationTestAccess::ItemMutePainting(*scene));
@@ -1345,7 +1356,7 @@ TEST_F(SceneRoutingIntegrationTest, WindowFreshPressPickWinsOverStaleBackgroundA
         window.OnAction(click);
         // The inverse stale-hover case must acquire a genuine background press.
         window.PressPath.clear();
-        click.Position = { 580, 300 };
+        click.Position = engine::SourceLossIntegrationTestAccess::CanvasPoint(*scene) + utils::Position2d{20, 0};
         click.State = actions::TouchAction::TOUCH_DOWN;
         window.OnAction(click);
         EXPECT_EQ(2u, window.PickCount);
@@ -1381,7 +1392,7 @@ TEST_F(SceneRoutingIntegrationTest, InWindowBackgroundGesturesPreviewAndApplyOnl
             const auto pose = engine::SourceLossIntegrationTestAccess::CameraPose(*scene);
             actions::TouchAction click;
             click.Touch = actions::TouchAction::TOUCH_MOUSE;
-            click.Position = { 560, 300 }; // Empty space inside the pass-through HUD.
+            click.Position = engine::SourceLossIntegrationTestAccess::CanvasPoint(*scene); // Empty space inside the pass-through HUD.
             click.Index = 1;
             click.Modifiers = mute ? base::Action::MODIFIER_ALT : base::Action::MODIFIER_NONE;
             click.MouseButtonsDown = 2u;
@@ -1457,13 +1468,13 @@ TEST_F(SceneRoutingIntegrationTest, NativeBackgroundMiddleAndAltMiddleUseClickCo
         window.NativeKeys.set(VK_MENU, mute);
         if (mute) graphics::Window::WindowProcedure(host, WM_SYSKEYDOWN, VK_MENU, 1u << 29u);
         graphics::Window::WindowProcedure(host, WM_MBUTTONDOWN,
-            MK_MBUTTON, MAKELPARAM(560, 300));
+            MK_MBUTTON, MAKELPARAM(560, 400));
         EXPECT_TRUE(engine::SourceLossIntegrationTestAccess::BackgroundOwned(*scene));
         EXPECT_TRUE(engine::SourceLossIntegrationTestAccess::BackgroundPreviewActive(*scene));
         EXPECT_FALSE(engine::SourceLossIntegrationTestAccess::CameraPointerHeld(*scene));
         window.NativeKeys.reset(VK_MENU);
         if (mute) graphics::Window::WindowProcedure(host, WM_SYSKEYUP, VK_MENU, 1u << 29u);
-        graphics::Window::WindowProcedure(host, WM_MBUTTONUP, 0, MAKELPARAM(560, 300));
+        graphics::Window::WindowProcedure(host, WM_MBUTTONUP, 0, MAKELPARAM(560, 400));
         EXPECT_FALSE(engine::SourceLossIntegrationTestAccess::BackgroundPreviewActive(*scene));
         ASSERT_TRUE(engine::SourceLossIntegrationTestAccess::ApplyMuteBoundary(*scene));
         EXPECT_EQ(mute, take->IsMuted());
@@ -1490,14 +1501,14 @@ TEST_F(SceneRoutingIntegrationTest, NativeAltLeftBackgroundPreviewsAndSelectsAll
     SetWindowLongPtrW(host, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(&window));
     window.NativeKeys.set(VK_MENU);
     graphics::Window::WindowProcedure(host, WM_SYSKEYDOWN, VK_MENU, 1u << 29u);
-    graphics::Window::WindowProcedure(host, WM_LBUTTONDOWN, MK_LBUTTON, MAKELPARAM(560, 300));
+    graphics::Window::WindowProcedure(host, WM_LBUTTONDOWN, MK_LBUTTON, MAKELPARAM(560, 400));
     EXPECT_TRUE(engine::SourceLossIntegrationTestAccess::BackgroundOwned(*scene));
     EXPECT_TRUE(engine::SourceLossIntegrationTestAccess::SelectionPreviewActive(*scene));
     EXPECT_FALSE(engine::SourceLossIntegrationTestAccess::CameraPointerHeld(*scene));
     EXPECT_FALSE(take->IsSelected());
     window.NativeKeys.reset(VK_MENU);
     graphics::Window::WindowProcedure(host, WM_SYSKEYUP, VK_MENU, 1u << 29u);
-    graphics::Window::WindowProcedure(host, WM_LBUTTONUP, 0, MAKELPARAM(560, 300));
+    graphics::Window::WindowProcedure(host, WM_LBUTTONUP, 0, MAKELPARAM(560, 400));
     EXPECT_FALSE(engine::SourceLossIntegrationTestAccess::BackgroundPreviewActive(*scene));
     EXPECT_TRUE(take->IsSelected());
     EXPECT_FALSE(take->IsMuted());
@@ -1548,7 +1559,7 @@ TEST_F(SceneRoutingIntegrationTest, BackgroundSelectAllUsesCurrentDepthAndPreser
         scene->SetHover3d({}, base::Action::MODIFIER_NONE);
         actions::TouchAction click;
         click.Touch = actions::TouchAction::TOUCH_MOUSE;
-        click.Position = { 560, 300 };
+        click.Position = engine::SourceLossIntegrationTestAccess::CanvasPoint(*scene);
         click.Index = 0;
         click.Modifiers = base::Action::MODIFIER_ALT;
         click.MouseButtonsDown = 1u;
@@ -1598,7 +1609,7 @@ TEST_F(SceneRoutingIntegrationTest, BackgroundSelectAllMovementKeepsPreviewButDo
         const auto pose = engine::SourceLossIntegrationTestAccess::CameraPose(*scene);
         actions::TouchAction click;
         click.Touch = actions::TouchAction::TOUCH_MOUSE;
-        click.Position = { 560, 300 };
+        click.Position = engine::SourceLossIntegrationTestAccess::CanvasPoint(*scene);
         click.Index = 0;
         click.Modifiers = base::Action::MODIFIER_ALT;
         click.MouseButtonsDown = 1u;
@@ -1606,7 +1617,7 @@ TEST_F(SceneRoutingIntegrationTest, BackgroundSelectAllMovementKeepsPreviewButDo
         scene->OnAction(click);
         actions::TouchMoveAction move;
         move.Touch = actions::TouchAction::TOUCH_MOUSE;
-        move.Position = { 561, 300 };
+        move.Position = click.Position + utils::Position2d{1, 0};
         move.MouseButtonsDown = 1u;
         scene->OnAction(move);
         if (returnToOrigin) { move.Position = click.Position; scene->OnAction(move); }
@@ -1634,7 +1645,7 @@ TEST_F(SceneRoutingIntegrationTest, BackgroundSelectAllCancelsOnLossEscapeResetA
         scene->CommitChanges();
         actions::TouchAction click;
         click.Touch = actions::TouchAction::TOUCH_MOUSE;
-        click.Position = { 560, 300 };
+        click.Position = engine::SourceLossIntegrationTestAccess::CanvasPoint(*scene);
         click.Index = 0;
         click.Modifiers = base::Action::MODIFIER_ALT;
         click.MouseButtonsDown = 1u;
@@ -1693,7 +1704,7 @@ TEST_F(SceneRoutingIntegrationTest, AltLeftItemSelectsOnlyItsPressedTarget)
         window.PressPath.push_back(static_cast<unsigned char>(index + 1u));
     actions::TouchAction click;
     click.Touch = actions::TouchAction::TOUCH_MOUSE;
-    click.Position = { 560, 300 };
+    click.Position = engine::SourceLossIntegrationTestAccess::CanvasPoint(*scene);
     click.Index = 0;
     click.Modifiers = base::Action::MODIFIER_ALT;
     click.State = actions::TouchAction::TOUCH_DOWN;
@@ -1719,7 +1730,7 @@ TEST_F(SceneRoutingIntegrationTest, BackgroundUnmuteCancelsOnCaptureLossFocusLos
         scene->SetHover3d({}, base::Action::MODIFIER_NONE);
         actions::TouchAction click;
         click.Touch = actions::TouchAction::TOUCH_MOUSE;
-        click.Position = { 560, 300 };
+        click.Position = engine::SourceLossIntegrationTestAccess::CanvasPoint(*scene);
         click.Index = 1;
         click.MouseButtonsDown = 2u;
         click.State = actions::TouchAction::TOUCH_DOWN;
@@ -1773,7 +1784,7 @@ TEST_F(SceneRoutingIntegrationTest, MiddlePressOnItemAndHudDoesNotAcquireGlobalU
     scene->SetHover3d(itemPath, base::Action::MODIFIER_NONE);
     actions::TouchAction click;
     click.Touch = actions::TouchAction::TOUCH_MOUSE;
-    click.Position = { 560, 300 };
+    click.Position = engine::SourceLossIntegrationTestAccess::CanvasPoint(*scene);
     click.Index = 1;
     click.MouseButtonsDown = 2u;
     click.State = actions::TouchAction::TOUCH_DOWN;
@@ -1807,7 +1818,7 @@ TEST_F(SceneRoutingIntegrationTest, BackgroundMuteStopsUnownedCameraCoastButPres
         scene->SetHover3d({}, base::Action::MODIFIER_NONE);
         actions::TouchAction right;
         right.Touch = actions::TouchAction::TOUCH_MOUSE;
-        right.Position = { 560, 300 };
+        right.Position = engine::SourceLossIntegrationTestAccess::CanvasPoint(*scene);
         right.Index = 2;
         right.MouseButtonsDown = 4u;
         right.State = actions::TouchAction::TOUCH_DOWN;
@@ -1815,7 +1826,7 @@ TEST_F(SceneRoutingIntegrationTest, BackgroundMuteStopsUnownedCameraCoastButPres
         ASSERT_TRUE(engine::SourceLossIntegrationTestAccess::CameraPointerHeld(*scene));
         actions::TouchMoveAction move;
         move.Touch = actions::TouchAction::TOUCH_MOUSE;
-        move.Position = { 610, 320 };
+        move.Position = engine::SourceLossIntegrationTestAccess::CanvasPoint(*scene, {50, 20});
         move.MouseButtonsDown = 4u;
         scene->OnAction(move);
         right.Position = move.Position;
@@ -1841,7 +1852,7 @@ TEST_F(SceneRoutingIntegrationTest, BackgroundMuteStopsUnownedCameraCoastButPres
     }
     actions::TouchAction right;
     right.Touch = actions::TouchAction::TOUCH_MOUSE;
-    right.Position = { 560, 300 };
+    right.Position = engine::SourceLossIntegrationTestAccess::CanvasPoint(*scene);
     right.Index = 2;
     right.MouseButtonsDown = 4u;
     right.State = actions::TouchAction::TOUCH_DOWN;

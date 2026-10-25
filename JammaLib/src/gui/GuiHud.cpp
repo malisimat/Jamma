@@ -465,11 +465,42 @@ void GuiHud::Draw(base::DrawContext& ctx)
 
 void GuiHud::SetSize(Size2d size)
 {
+	if (size != GetSize() && _topPanelLayout && _topStrip &&
+		_topPanelLayout->Progress > 0.0f && _topPanelLayout->Progress < 1.0f)
+	{
+		const int oldTop = static_cast<int>(GetSize().Height) - std::min(_TopPosY, static_cast<int>(GetSize().Height) / 2);
+		_stripRetargetOffset = static_cast<float>(oldTop - (_topStrip->Position().Y + static_cast<int>(_topStrip->GetSize().Height)));
+		_stripRetargetLeft = _topStrip->Position().X;
+		_retargetStrip = true;
+	}
 	GuiPanel::SetSize(size);
 	if (_deletePopup) _deletePopup->FitToViewport(size);
 	_LayoutPanels();
 	if (_popupManager && _popupManager->Top() == _sourceInfoPanel)
 		_LayoutSourceIdentity();
+}
+
+void GuiHud::SetTopPanelLayout(GuiTopPanelLayout layout)
+{
+	const auto sameRect = [](const Rect2d& a, const Rect2d& b) {
+		return a.Left == b.Left && a.Bottom == b.Bottom && a.Right == b.Right && a.Top == b.Top;
+	};
+	if (_topPanelLayout && _topPanelLayout->Viewport == layout.Viewport &&
+		_topPanelLayout->Expanded == layout.Expanded && _topPanelLayout->Progress == layout.Progress &&
+		sameRect(_topPanelLayout->PresentedBounds, layout.PresentedBounds) &&
+		sameRect(_topPanelLayout->ExpandedBounds, layout.ExpandedBounds) &&
+		sameRect(_topPanelLayout->CollapsedBounds, layout.CollapsedBounds)) return;
+	if (_stripRetargetActive && _topPanelLayout && _topPanelLayout->Expanded != layout.Expanded)
+	{
+		const int top = static_cast<int>(GetSize().Height) - std::min(_TopPosY, static_cast<int>(GetSize().Height) / 2);
+		_stripRetargetOffset = static_cast<float>(top - (_topStrip->Position().Y + static_cast<int>(_topStrip->GetSize().Height)));
+		_stripRetargetLeft = _topStrip->Position().X;
+		_retargetStrip = true;
+	}
+	_topPanelLayout = layout;
+	// Resize supplies context before SetSize, avoiding an intermediate layout
+	// against a new viewport and an old panel presentation.
+	if (layout.Viewport == GetSize()) _LayoutPanels();
 }
 
 Rect2d GuiHud::OccupiedTopStripBounds() const
@@ -915,46 +946,112 @@ unsigned int GuiHud::SourceCardWidth(unsigned int viewportWidth, unsigned int co
 	return static_cast<unsigned int>(std::clamp(usable / count, 80ull, 160ull));
 }
 
+Rect2d GuiHud::_TopStripLayout(int preferredHeight)
+{
+	const int width = static_cast<int>(GetSize().Width), height = static_cast<int>(GetSize().Height);
+	const int marginX = std::min(_OuterMargin, width / 2), marginY = std::min(_TopPosY, height / 2);
+	const int left = marginX, right = width - marginX, top = height - marginY;
+	const int floor = std::min(top, GuiStyle::StatusBarHeight + marginY);
+	const int available = std::max(0, right - left);
+	int stripWidth = available;
+	float stripTop = static_cast<float>(top);
+	bool retargeting = false;
+	if (_topPanelLayout && !_topPanelLayout->PresentedBounds.IsEmpty())
+	{
+		const auto& panel = *_topPanelLayout;
+		const auto sideSpan = [&](const Rect2d& bounds) { return std::max(0, right - std::max(left, bounds.Right + _SourcePanelGap)); };
+		const int span = sideSpan(panel.PresentedBounds);
+		const int expandedSpan = sideSpan(panel.ExpandedBounds), collapsedSpan = sideSpan(panel.CollapsedBounds);
+		const int minimum = static_cast<int>(_TopStripMinWidth);
+		if (expandedSpan >= minimum) stripWidth = span;
+		else
+		{
+			stripTop = static_cast<float>(std::min(top, panel.PresentedBounds.Bottom - _SourcePanelGap));
+			if (collapsedSpan >= minimum)
+			{
+				// Contract the stacked rectangle along the same body progress. Using
+				// the tiny deficit at the 320px threshold would snap its width near
+				// that breakpoint. Rise only after horizontal body retraction.
+				const float body = std::clamp((panel.Progress - GuiTopPanelLayout::DockingPhase) /
+					(1.0f - GuiTopPanelLayout::DockingPhase), 0.0f, 1.0f);
+				stripWidth = static_cast<int>(std::lround(std::lerp(static_cast<float>(collapsedSpan), static_cast<float>(available), body)));
+				const float dock = std::clamp(panel.Progress / GuiTopPanelLayout::DockingPhase, 0.0f, 1.0f);
+				stripTop = std::lerp(static_cast<float>(top), stripTop, dock);
+			}
+		}
+		if (_retargetStrip)
+		{
+			retargeting = true;
+			if (!_stripRetargetActive || _stripTargetExpanded != panel.Expanded)
+			{
+				_stripRetargetProgress = panel.Progress;
+				_stripTargetExpanded = panel.Expanded;
+			}
+			_stripRetargetActive = true;
+			_retargetStrip = false;
+		}
+		if (_stripRetargetActive)
+		{
+			const float target = _stripTargetExpanded ? 1.0f : 0.0f;
+			const float fraction = _stripRetargetProgress == target ? 1.0f :
+				std::clamp((panel.Progress - _stripRetargetProgress) / (target - _stripRetargetProgress), 0.0f, 1.0f);
+			const bool targetStacked = (_stripTargetExpanded ? expandedSpan : collapsedSpan) < minimum;
+			const float first = std::min(1.0f, fraction * 2.0f), second = std::max(0.0f, fraction * 2.0f - 1.0f);
+			const float widthPhase = targetStacked ? second : first;
+			// Expanding starts revealing the body at DockingPhase. A resize from
+			// the docked side must finish lowering Inputs before that first pixel,
+			// rather than use half of the remaining whole-panel animation.
+			const bool clearBeforeBody = targetStacked && _stripTargetExpanded &&
+				_stripRetargetProgress < GuiTopPanelLayout::DockingPhase;
+			const float topPhase = clearBeforeBody
+				? std::clamp((panel.Progress - _stripRetargetProgress) /
+					(GuiTopPanelLayout::DockingPhase - _stripRetargetProgress), 0.0f, 1.0f)
+				: (targetStacked ? first : second);
+			if (retargeting)
+			{
+				_stripWidthAnchorPhase = widthPhase;
+				_stripTopAnchorPhase = topPhase;
+			}
+			const auto remainingFraction = [](float phase, float anchor) {
+				return anchor == 1.0f ? 1.0f : std::clamp((phase - anchor) / (1.0f - anchor), 0.0f, 1.0f);
+			};
+			// Repeated resize events retain the original phase deadline. Reanchor
+			// geometry without restarting the horizontal/vertical sequence.
+			stripWidth = static_cast<int>(std::lround(std::lerp(static_cast<float>(right - _stripRetargetLeft),
+				static_cast<float>(stripWidth), remainingFraction(widthPhase, _stripWidthAnchorPhase))));
+			const float offset = std::lerp(_stripRetargetOffset, static_cast<float>(top) - stripTop,
+				remainingFraction(topPhase, _stripTopAnchorPhase));
+			stripTop = static_cast<float>(top) - offset;
+			if (fraction == 1.0f) _stripRetargetActive = false;
+		}
+		stripWidth = std::clamp(stripWidth, std::min(minimum, available), available);
+		// A resize can remove actual space. Clamp that unavoidable collision;
+		// otherwise the retained presentation reaches its target with panel motion.
+		if (right - stripWidth < panel.PresentedBounds.Right + _SourcePanelGap)
+			stripTop = std::min(stripTop, static_cast<float>(panel.PresentedBounds.Bottom - _SourcePanelGap));
+	}
+	stripWidth = std::clamp(stripWidth, std::min(static_cast<int>(_TopStripMinWidth), available), available);
+	const int upper = std::clamp(static_cast<int>(std::lround(stripTop)), floor, top);
+	if (retargeting)
+	{
+		// Continue from the feasible presentation after any viewport clamp.
+		_stripRetargetOffset = static_cast<float>(top - upper);
+		_stripRetargetLeft = right - stripWidth;
+	}
+	const int stripHeight = std::min(std::max(0, preferredHeight), upper - floor);
+	return { right - stripWidth, upper - stripHeight, right, upper };
+}
+
 void GuiHud::_LayoutPanels()
 {
 	const int width = static_cast<int>(GetSize().Width);
 	const int height = static_cast<int>(GetSize().Height);
 	const int marginX = std::min(_OuterMargin, width / 2);
 	const int marginY = std::min(_TopPosY, height / 2);
-	const int railWidth = std::min(static_cast<int>(_RightRailWidth), std::max(0, width - 2 * marginX));
-	const int railHeight = std::max(0, height - marginY - GuiStyle::StatusBarHeight - 8);
-	const int railX = std::max(0, width - marginX - railWidth);
-	_triggerRail->SetPosition({ railX, std::min(GuiStyle::StatusBarHeight + 8, height) });
-	_triggerRail->SetSize({ static_cast<unsigned int>(railWidth), static_cast<unsigned int>(railHeight) });
-	_triggerRail->SetVisible(railWidth > 0 && railHeight > 0);
-	// Keep trigger actions reachable in the supported compact profile.
-	const int triggerHeader = std::min(GuiPanelHeader::ContentTopInset, railHeight);
-	const int triggerRemaining = railHeight - triggerHeader;
-	// Prefer a 100px pedal viewport by reducing spare footer padding first.
-	// At smaller sizes retain the add button and scroll the remaining pedal area.
-	const int triggerFooter = std::min(static_cast<int>(_TriggerFooterHeight),
-		std::max(std::min(static_cast<int>(_TriggerControlSize), triggerRemaining), triggerRemaining - 100));
-	const int triggerViewport = std::max(0, triggerRemaining - triggerFooter);
-	_triggerScroll->SetPosition({ 0, triggerFooter });
-	_triggerScroll->SetSize({ static_cast<unsigned int>(railWidth), static_cast<unsigned int>(triggerViewport) });
-	_triggerScroll->SetVisible(railWidth > 0 && triggerViewport > 0);
-	const int triggerSidePadding = std::max(0, (railWidth - static_cast<int>(_TriggerButtonWidth)) / 2);
-	_triggerList->SetPadding(static_cast<unsigned int>(triggerSidePadding), 0u);
-	_triggerList->SetSize({ static_cast<unsigned int>(railWidth), _triggerList->GetSize().Height });
-	if (auto header = _triggerRail->TryGetChild(0u))
-	{
-		std::static_pointer_cast<GuiPanelHeader>(header)->Layout(_triggerRail->GetSize());
-		header->SetVisible(railWidth >= 80 && triggerHeader >= 22);
-	}
-	_addTriggerButton->SetPosition({ std::max(0, (railWidth - static_cast<int>(_TriggerControlSize)) / 2),
-		std::max(0, (triggerFooter - static_cast<int>(_TriggerControlSize)) / 2) });
-	_addTriggerButton->SetVisible(railWidth >= static_cast<int>(_TriggerControlSize) && triggerFooter >= static_cast<int>(_TriggerControlSize));
 
-	int topWidth = std::max(0, railX - marginX - static_cast<int>(_SourcePanelGap));
-	int topHeight = std::min(static_cast<int>(_TopStripHeight), std::max(0, height - 2 * marginY - GuiStyle::StatusBarHeight));
-	_topStrip->SetPosition({ marginX, std::max(0, height - marginY - topHeight) });
-	_topStrip->SetSize({ static_cast<unsigned int>(topWidth), static_cast<unsigned int>(topHeight) });
-	_topStrip->SetVisible(topWidth > 0 && topHeight > 0);
+	auto strip = _TopStripLayout(static_cast<int>(_TopStripHeight));
+	int topWidth = strip.Right - strip.Left;
+	int topHeight = strip.Top - strip.Bottom;
 	const int padding = std::min(static_cast<int>(_TopStripPadding), std::min(topWidth, topHeight) / 2);
 	const int innerWidth = std::max(0, topWidth - 2 * padding);
 	int rowHeight = std::min(static_cast<int>(_SourceViewportHeight), std::max(0, topHeight - 2 * padding));
@@ -988,10 +1085,13 @@ void GuiHud::_LayoutPanels()
 	topHeight = std::min(std::max(rowHeight + 2 * padding,
 		2 * GuiPanelHeader::BorderInset + GuiPanelHeader::BandHeight),
 		std::max(0, height - 2 * marginY - GuiStyle::StatusBarHeight));
-	// Keep the same right anchor, but stop the background growing beyond its contents.
-	topWidth = std::min(topWidth, std::max(320, static_cast<int>(audioWidth + midiWidth) + categoryGap + labelWidth + 2 * padding));
-	_topStrip->SetPosition({ railX - static_cast<int>(_SourcePanelGap) - topWidth, std::max(0, height - marginY - topHeight) });
-	_topStrip->SetSize({ static_cast<unsigned int>(topWidth), static_cast<unsigned int>(topHeight) });
+	strip = _TopStripLayout(topHeight);
+	topHeight = strip.Top - strip.Bottom;
+	rowHeight = std::min(rowHeight, std::max(0, topHeight - 2 * padding));
+	_topStrip->SetPosition({strip.Left, strip.Bottom});
+	_topStrip->SetSize({static_cast<unsigned int>(topWidth), static_cast<unsigned int>(topHeight)});
+	_topStrip->SetVisible(topWidth > 0 && topHeight > 0);
+	_topSourceRow->SetVisible(innerWidth > 0 && rowHeight > 0);
 	_topSourceRow->SetSize({ audioWidth + midiWidth + static_cast<unsigned int>(categoryGap), static_cast<unsigned int>(rowHeight) });
 
 	for (size_t i = 0; i < _sourceWidgets.size(); ++i)
@@ -1024,6 +1124,41 @@ void GuiHud::_LayoutPanels()
 		header->SetVisible(labelWidth > 0 && rowHeight >= 28);
 	}
 	_topSourceRow->ComputeLayout();
+	const int railWidth = std::min(static_cast<int>(_RightRailWidth), std::max(0, width - 2 * marginX));
+	const int railBottom = std::min(GuiStyle::StatusBarHeight + 8, height);
+	const int railX = std::max(0, width - marginX - railWidth);
+	int railTop = topWidth > 0 && topHeight > 0 ? std::max(railBottom, strip.Bottom - _SourcePanelGap) : height - marginY;
+	if (_topPanelLayout && !_topPanelLayout->PresentedBounds.IsEmpty() &&
+		railX < _topPanelLayout->PresentedBounds.Right + _SourcePanelGap)
+		railTop = std::min(railTop, std::max(railBottom, _topPanelLayout->PresentedBounds.Bottom - _SourcePanelGap));
+	const int railHeight = std::max(0, railTop - railBottom);
+	_triggerRail->SetPosition({ railX, railBottom });
+	_triggerRail->SetSize({ static_cast<unsigned int>(railWidth), static_cast<unsigned int>(railHeight) });
+	_triggerRail->SetVisible(railWidth > 0 && railHeight > 0);
+	// Keep trigger actions reachable in the supported compact profile.
+	const int triggerHeader = std::min(GuiPanelHeader::ContentTopInset,
+		std::max(0, railHeight - static_cast<int>(_TriggerControlSize) - 80));
+	const int triggerRemaining = railHeight - triggerHeader;
+	// Prefer a 100px pedal viewport by reducing spare footer padding first.
+	// At smaller sizes retain the add button and scroll the remaining pedal area.
+	const int triggerFooter = std::min(static_cast<int>(_TriggerFooterHeight),
+		std::max(std::min(static_cast<int>(_TriggerControlSize), triggerRemaining), triggerRemaining - 100));
+	const int triggerViewport = std::max(0, triggerRemaining - triggerFooter);
+	_triggerScroll->SetPosition({ 0, triggerFooter });
+	_triggerScroll->SetSize({ static_cast<unsigned int>(railWidth), static_cast<unsigned int>(triggerViewport) });
+	_triggerScroll->SetVisible(railWidth > 0 && triggerViewport > 0);
+	const int triggerSidePadding = std::max(0, (railWidth - static_cast<int>(_TriggerButtonWidth)) / 2);
+	_triggerList->SetPadding(static_cast<unsigned int>(triggerSidePadding), 0u);
+	_triggerList->SetSize({ static_cast<unsigned int>(railWidth), _triggerList->GetSize().Height });
+	if (auto header = _triggerRail->TryGetChild(0u))
+	{
+		std::static_pointer_cast<GuiPanelHeader>(header)->Layout(_triggerRail->GetSize());
+		header->SetVisible(railWidth >= 80 && triggerHeader == GuiPanelHeader::ContentTopInset);
+	}
+	_addTriggerButton->SetPosition({ std::max(0, (railWidth - static_cast<int>(_TriggerControlSize)) / 2),
+		std::max(0, (triggerFooter - static_cast<int>(_TriggerControlSize)) / 2) });
+	_addTriggerButton->SetVisible(railWidth >= static_cast<int>(_TriggerControlSize) && triggerFooter >= static_cast<int>(_TriggerControlSize));
+
 	_triggerList->ComputeLayout();
 	const int statusWidth = GuiStyle::StatusBarWidth(width);
 	const int statusHeight = std::min(GuiStyle::StatusBarHeight, height);
@@ -1264,7 +1399,7 @@ void GuiHud::CancelTriggerRenames()
 bool GuiHud::CapturesPointer(Position2d point) const
 {
 	if (!IsVisible() || !IsEnabled()) return false;
-	for (const auto& panel : {_topStrip, _triggerRail})
+	for (const auto& panel : {_topStrip, _triggerRail, _statusPanel})
 		if (panel && panel->IsVisible() && Size2d::RectTest(panel->GetSize(), panel->ParentToLocal(point))) return true;
 	return false;
 }

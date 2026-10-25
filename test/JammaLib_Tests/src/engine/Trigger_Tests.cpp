@@ -315,6 +315,18 @@ public:
 	{
 	}
 
+	utils::Position2d CanvasPointForTest(utils::Position2d offset = {}) const
+	{
+		// Picker-driven tests still need a press outside the actual GUI chrome.
+		// The former (1,1) is inside the drawn status bar at these viewports.
+		const auto point = utils::Position2d{560, 200} + offset;
+		EXPECT_TRUE(utils::Size2d::RectTest(_sizeParams.Size, point));
+		EXPECT_FALSE(_hudPanel->CapturesPointer(_hudPanel->GlobalToLocal(point)));
+		EXPECT_FALSE(_selectionPanel->RouteHitTest(_selectionPanel->GlobalToLocal(point)));
+		EXPECT_FALSE(_mainPanel->RouteHitTest(_mainPanel->GlobalToLocal(point)));
+		return point;
+	}
+
 	void AddStationForTest(const std::shared_ptr<Station>& station)
 	{
 		_AddStation(station);
@@ -2569,9 +2581,9 @@ TEST(Scene, LoopGridEditorCanSelectMidiLoopAtEverySelectionDepthAndOpenWithE) {
 	for (const auto index : model->GlobalId())
 		pickPath.push_back(static_cast<unsigned char>(index + 1u));
 	const auto click = [&scene]() {
-		scene.OnAction(MakeSceneTouch(TouchAction::TOUCH_DOWN, { 1, 1 }, 0,
+		scene.OnAction(MakeSceneTouch(TouchAction::TOUCH_DOWN, scene.CanvasPointForTest(), 0,
 			LeftMouseButtonMask));
-		scene.OnAction(MakeSceneTouch(TouchAction::TOUCH_UP, { 1, 1 }, 0u, 0u));
+		scene.OnAction(MakeSceneTouch(TouchAction::TOUCH_UP, scene.CanvasPointForTest(), 0u, 0u));
 	};
 	for (const auto depth : { Scene::VIEW_STATION, Scene::VIEW_LOOPTAKE, Scene::VIEW_LOOP })
 	{
@@ -2616,13 +2628,13 @@ TEST(Scene, MiddleMutePaintAppliesImmediatelySuppressesHoverAndPreservesOtherTak
 	};
 	const auto midiPath = pickPath(midiModel);
 	const auto audioPath = pickPath(audioLoop);
-	const auto down = MakeSceneTouch(TouchAction::TOUCH_DOWN, { 1, 1 }, 1u, 2u);
-	const auto up = MakeSceneTouch(TouchAction::TOUCH_UP, { 6, 1 }, 1u, 0u);
+	const auto down = MakeSceneTouch(TouchAction::TOUCH_DOWN, scene.CanvasPointForTest(), 1u, 2u);
+	const auto up = MakeSceneTouch(TouchAction::TOUCH_UP, scene.CanvasPointForTest({5, 0}), 1u, 0u);
 
 	scene.SetHover3d(midiPath, base::Action::MODIFIER_NONE);
 	scene.OnAction(down);
 	EXPECT_FALSE(midiTake->IsMuted()); // Preview only until drag/release.
-	scene.OnAction(MakeSceneTouchMove({ 6, 1 }, 2u));
+	scene.OnAction(MakeSceneTouchMove(scene.CanvasPointForTest({5, 0}), 2u));
 	EXPECT_TRUE(midiTake->IsMuted());
 	EXPECT_FALSE(midiModel->IsPicking3d());
 	EXPECT_FALSE(midiTake->GetMidiLoops()[1]->Model()->IsPicking3d());
@@ -2639,7 +2651,7 @@ TEST(Scene, MiddleMutePaintAppliesImmediatelySuppressesHoverAndPreservesOtherTak
 	// The cached MIDI target must resolve its take's muted state for the next stroke.
 	scene.OnAction(down);
 	EXPECT_TRUE(midiTake->IsMuted());
-	scene.OnAction(MakeSceneTouchMove({ 6, 1 }, 2u));
+	scene.OnAction(MakeSceneTouchMove(scene.CanvasPointForTest({5, 0}), 2u));
 	EXPECT_FALSE(midiTake->IsMuted());
 	scene.SetHover3d(audioPath, base::Action::MODIFIER_NONE);
 	EXPECT_FALSE(audioLoop->IsMuted());
@@ -2672,8 +2684,8 @@ TEST(Scene, StationMuteClickUsesAggregateTakeState) {
 	scene.SetSelectionDepthForTest(Scene::VIEW_STATION);
 	scene.SetHover3d({ 1u }, base::Action::MODIFIER_NONE);
 	const auto click = [&scene]() {
-		scene.OnAction(MakeSceneTouch(TouchAction::TOUCH_DOWN, { 1, 1 }, 1u, 2u));
-		scene.OnAction(MakeSceneTouch(TouchAction::TOUCH_UP, { 1, 1 }, 1u, 0u));
+		scene.OnAction(MakeSceneTouch(TouchAction::TOUCH_DOWN, scene.CanvasPointForTest(), 1u, 2u));
+		scene.OnAction(MakeSceneTouch(TouchAction::TOUCH_UP, scene.CanvasPointForTest(), 1u, 0u));
 	};
 	click();
 	EXPECT_TRUE(first->IsMuted());
@@ -2713,8 +2725,8 @@ TEST(Scene, MidiStreamSelectionPreservesPickedEditorIdentity) {
 	for (const auto index : midiLoops[1]->Model()->GlobalId())
 		pickPath.push_back(static_cast<unsigned char>(index + 1u));
 	scene.SetHover3d(pickPath, base::Action::MODIFIER_NONE);
-	scene.OnAction(MakeSceneTouch(TouchAction::TOUCH_DOWN, { 1, 1 }, 0, LeftMouseButtonMask));
-	scene.OnAction(MakeSceneTouch(TouchAction::TOUCH_UP, { 1, 1 }, 0u, 0u));
+	scene.OnAction(MakeSceneTouch(TouchAction::TOUCH_DOWN, scene.CanvasPointForTest(), 0, LeftMouseButtonMask));
+	scene.OnAction(MakeSceneTouch(TouchAction::TOUCH_UP, scene.CanvasPointForTest(), 0u, 0u));
 	EXPECT_FALSE(midiLoops[0]->Model()->IsSelected());
 	EXPECT_TRUE(midiLoops[1]->Model()->IsSelected());
 
@@ -2725,14 +2737,14 @@ TEST(Scene, MidiStreamSelectionPreservesPickedEditorIdentity) {
 	EXPECT_EQ(midiLoops[1], midiLoop);
 	// Keep the same picker ID after the click: the next drag must start in
 	// subtractive paint mode using the newly selected state.
-	scene.OnAction(MakeSceneTouch(TouchAction::TOUCH_DOWN, { 1, 1 }, 0, LeftMouseButtonMask));
-	scene.OnAction(MakeSceneTouchMove({ 6, 1 }, LeftMouseButtonMask));
+	scene.OnAction(MakeSceneTouch(TouchAction::TOUCH_DOWN, scene.CanvasPointForTest(), 0, LeftMouseButtonMask));
+	scene.OnAction(MakeSceneTouchMove(scene.CanvasPointForTest({5, 0}), LeftMouseButtonMask));
 	EXPECT_FALSE(midiLoops[0]->Model()->IsSelected());
 	EXPECT_FALSE(midiLoops[1]->Model()->IsSelected());
-	scene.OnAction(MakeSceneTouch(TouchAction::TOUCH_UP, { 6, 1 }, 0, 0u));
+	scene.OnAction(MakeSceneTouch(TouchAction::TOUCH_UP, scene.CanvasPointForTest({5, 0}), 0, 0u));
 	// Re-select to exercise the no-hover editor fallback separately.
-	scene.OnAction(MakeSceneTouch(TouchAction::TOUCH_DOWN, { 1, 1 }, 0, LeftMouseButtonMask));
-	scene.OnAction(MakeSceneTouch(TouchAction::TOUCH_UP, { 1, 1 }, 0, 0u));
+	scene.OnAction(MakeSceneTouch(TouchAction::TOUCH_DOWN, scene.CanvasPointForTest(), 0, LeftMouseButtonMask));
+	scene.OnAction(MakeSceneTouch(TouchAction::TOUCH_UP, scene.CanvasPointForTest(), 0, 0u));
 	scene.SetHover3d({}, base::Action::MODIFIER_NONE);
 	ASSERT_TRUE(scene.FindLoopGridEditorCandidateForTest(candidateTake, audioLoop, midiLoop));
 	EXPECT_EQ(midiLoops[1], midiLoop);

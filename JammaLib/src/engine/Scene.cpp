@@ -959,8 +959,10 @@ bool Scene::AdvanceUiAnimations()
 	if (_selectionPanel) _selectionPanel->RefreshPerformanceGroups(_performanceGroups.Groups());
 	if (_hudPanel)
 	{
+		if (_selectionPanel) _hudPanel->SetTopPanelLayout(_selectionPanel->TopPanelLayout());
 		_hudPanel->SetPerformanceGroupFeedback(_performanceGroups.Error());
-		if (_mainPanel) _mainPanel->SetOccupiedTopStripBounds(_hudPanel->OccupiedTopStripBounds());
+		if (_mainPanel) _mainPanel->SetOccupiedTopBounds(
+			_selectionPanel ? _selectionPanel->TopPanelLayout().PresentedBounds : Rect2d{}, _hudPanel->OccupiedTopStripBounds());
 	}
 	return stationsMoved || cameraMoved;
 }
@@ -3525,8 +3527,10 @@ void Scene::_InitSize()
 
 	if (_hudPanel)
 	{
+		if (_selectionPanel) _hudPanel->SetTopPanelLayout(_selectionPanel->TopPanelLayout());
 		_hudPanel->SetSize(_sizeParams.Size);
-		if (_mainPanel) _mainPanel->SetOccupiedTopStripBounds(_hudPanel->OccupiedTopStripBounds());
+		if (_mainPanel) _mainPanel->SetOccupiedTopBounds(
+			_selectionPanel ? _selectionPanel->TopPanelLayout().PresentedBounds : Rect2d{}, _hudPanel->OccupiedTopStripBounds());
 	}
 
 	_UpdateHudStationAnchors();

@@ -234,6 +234,7 @@ void GuiMainPanel::SetExpanded(bool expanded)
 	if (_expanded == expanded) return;
 	if (!expanded) _PrepareHide(_frame);
 	_expanded = expanded;
+	_RetargetPresentation();
 	_handle->SetToggleState(expanded ? GuiToggleParams::TOGGLE_ON : GuiToggleParams::TOGGLE_OFF, true);
 	_pageScroll->SetEnabled(expanded);
 	for (const auto& row : _groupRows) if (row) row->SetEnabled(expanded);
@@ -259,15 +260,87 @@ bool GuiMainPanel::AdvanceAnimation(float elapsedSeconds)
 	return true;
 }
 
+float GuiMainPanel::_BodyProgress() const
+{
+	return std::clamp((PresentedOpacity() - GuiTopPanelLayout::DockingPhase) /
+		(1.0f - GuiTopPanelLayout::DockingPhase), 0.0f, 1.0f);
+}
+
+void GuiMainPanel::_RetargetPresentation()
+{
+	if (!_selectionOnly || !_presentationReady) return;
+	_presentationStart = _BodyProgress();
+	_startWidth = _presentedWidth;
+	_startHeight = _presentedHeight;
+}
+
 void GuiMainPanel::_UpdatePresentation()
 {
 	const int margin = std::min(8, static_cast<int>(_viewport.Width) / 2);
 	const auto size = _frame->GetSize();
 	const float hidden = 1.0f - PresentedOpacity();
 	_frame->SetPosition(_selectionOnly
-		? Position2d{ margin, static_cast<int>(_viewport.Height) - margin - static_cast<int>(size.Height) + static_cast<int>(std::lround(hidden * (size.Height + _handle->GetSize().Height))) }
+		? Position2d{ margin, static_cast<int>(_viewport.Height) - margin - static_cast<int>(size.Height) }
 		: Position2d{ margin - static_cast<int>(std::lround(hidden * (size.Width + margin))), std::min(GuiStyle::StatusBarHeight + 8, static_cast<int>(_viewport.Height) / 2) });
+	if (_selectionOnly)
+	{
+		const auto handle = _handle->Position();
+		const auto frame = _frame->Position();
+		const float collapsedWidth = static_cast<float>(std::clamp(handle.X + static_cast<int>(_handle->GetSize().Width) - frame.X, 0, static_cast<int>(size.Width)));
+		const float collapsedHeight = static_cast<float>(std::clamp(frame.Y + static_cast<int>(size.Height) - handle.Y, 0, static_cast<int>(size.Height)));
+		const float progress = _BodyProgress();
+		if (!_presentationReady)
+		{
+			_startWidth = _presentedWidth = static_cast<float>(size.Width);
+			_startHeight = _presentedHeight = static_cast<float>(size.Height);
+			_presentationStart = progress;
+			_presentationReady = true;
+		}
+		const float target = _expanded ? 1.0f : 0.0f;
+		const float fraction = _presentationStart == target ? 1.0f :
+			std::clamp((progress - _presentationStart) / (target - _presentationStart), 0.0f, 1.0f);
+		const float targetWidth = _expanded ? static_cast<float>(size.Width) : collapsedWidth;
+		const float targetHeight = _expanded ? static_cast<float>(size.Height) : collapsedHeight;
+		_presentedWidth = std::clamp(std::lerp(_startWidth, targetWidth, fraction), 0.0f, static_cast<float>(size.Width));
+		_presentedHeight = std::clamp(std::lerp(_startHeight, targetHeight, fraction), 0.0f, static_cast<float>(size.Height));
+	}
 	_frame->SetVisible(_transition > 0.0f && size.Width > 0u && size.Height > 0u);
+}
+
+Rect2d GuiMainPanel::PresentedFrameBounds() const
+{
+	if (!_frame->IsVisible()) return {};
+	const auto position = _frame->Position();
+	const auto size = _frame->GetSize();
+	const int right = position.X + (_selectionOnly ? static_cast<int>(std::lround(_presentedWidth)) : static_cast<int>(size.Width));
+	const int top = position.Y + static_cast<int>(size.Height);
+	const int bottom = _selectionOnly ? top - static_cast<int>(std::lround(_presentedHeight)) : position.Y;
+	return Rect2d{ position.X, bottom, right, top }.Intersected({0, 0,
+		static_cast<int>(_viewport.Width), static_cast<int>(_viewport.Height)});
+}
+
+GuiTopPanelLayout GuiMainPanel::TopPanelLayout() const
+{
+	GuiTopPanelLayout result;
+	result.Viewport = _viewport;
+	result.Progress = PresentedOpacity();
+	result.Expanded = _expanded;
+	if (!_selectionOnly || !IsVisible()) return result;
+	const Rect2d viewport{0, 0, static_cast<int>(_viewport.Width), static_cast<int>(_viewport.Height)};
+	const auto position = _frame->Position();
+	const auto size = _frame->GetSize();
+	result.ExpandedBounds = Rect2d{position.X, position.Y,
+		position.X + static_cast<int>(size.Width), position.Y + static_cast<int>(size.Height)}.Intersected(viewport);
+	const auto handle = _handle->Position();
+	result.CollapsedBounds = Rect2d{handle.X, handle.Y,
+		handle.X + static_cast<int>(_handle->GetSize().Width), handle.Y + static_cast<int>(_handle->GetSize().Height)}.Intersected(viewport);
+	result.PresentedBounds = PresentedFrameBounds();
+	const auto& edge = result.CollapsedBounds;
+	if (result.PresentedBounds.IsEmpty()) result.PresentedBounds = edge;
+	else if (!edge.IsEmpty()) result.PresentedBounds = {
+		std::min(result.PresentedBounds.Left, edge.Left), std::min(result.PresentedBounds.Bottom, edge.Bottom),
+		std::max(result.PresentedBounds.Right, edge.Right), std::max(result.PresentedBounds.Top, edge.Top)};
+	return result;
 }
 
 void GuiMainPanel::Draw(DrawContext& context)
@@ -277,15 +350,20 @@ void GuiMainPanel::Draw(DrawContext& context)
 	const auto position = Position();
 	glContext.PushMvp(glm::translate(glm::mat4(1.0f), glm::vec3(position.X, position.Y, 0.0f)));
 	glContext.PushScissorRect(GlobalPosition(), _viewport);
+	const auto frameClip = PresentedFrameBounds();
+	if (!frameClip.IsEmpty())
 	{
+		glContext.PushScissorRect(GlobalPosition() + Position2d{frameClip.Left, frameClip.Bottom},
+			{static_cast<unsigned int>(frameClip.Right - frameClip.Left), static_cast<unsigned int>(frameClip.Top - frameClip.Bottom)});
 		auto opacity = context.WithOpacity(PresentedOpacity());
 		_frame->Draw(context);
+		glContext.PopScissorRect();
 	}
 	if (_selectionOnly && _expanded)
 	{
 		auto opacity = context.WithOpacity(PresentedOpacity());
 		for (const auto& row : _groupRows)
-			if (!_pageScroll->EffectiveContentRect({ 0, 0, static_cast<int>(_viewport.Width), static_cast<int>(_viewport.Height) }).Intersected(
+			if (!_pageScroll->EffectiveContentRect(frameClip.Translated(GlobalPosition())).Intersected(
 				{ row->GlobalPosition().X, row->GlobalPosition().Y, row->GlobalPosition().X + static_cast<int>(row->GetSize().Width), row->GlobalPosition().Y + static_cast<int>(row->GetSize().Height) }).IsEmpty())
 				row->DrawTooltip(context, GlobalPosition());
 	}
@@ -307,6 +385,13 @@ ActionResult GuiMainPanel::OnAction(GuiAction action)
 	return ActionResult::NoAction();
 }
 
+ActionResult GuiMainPanel::OnAction(TouchAction action)
+{
+	if (action.State == TouchAction::TOUCH_DOWN && !RouteHitTest(action.Position))
+		return ActionResult::NoAction();
+	return GuiPanel::OnAction(action);
+}
+
 void GuiMainPanel::SetViewportSize(Size2d viewport)
 {
 	_viewport = viewport;
@@ -322,23 +407,32 @@ void GuiMainPanel::SetOccupiedTopStripBounds(Rect2d bounds)
 	_Layout();
 }
 
+void GuiMainPanel::SetOccupiedTopBounds(Rect2d selection, Rect2d inputs)
+{
+	const auto same = [](const Rect2d& a, const Rect2d& b) {
+		return a.Left == b.Left && a.Bottom == b.Bottom && a.Right == b.Right && a.Top == b.Top;
+	};
+	if (_occupiedSelection && same(*_occupiedSelection, selection) && same(_occupiedTopStrip, inputs)) return;
+	_occupiedSelection = selection; _occupiedTopStrip = inputs;
+	_Layout();
+}
+
 void GuiMainPanel::_Layout()
 {
 	const int width = static_cast<int>(_viewport.Width), height = static_cast<int>(_viewport.Height);
 	const int margin = std::min(StandardPanelPadding, width / 2);
 	const int panelWidth = std::min(_SettingsPanelWidth(), std::max(0, width - 2 * margin));
 	const int handleWidth = std::min(_selectionOnly ? 64 : 23, std::max(0, width - (_selectionOnly ? margin : 0)));
-	const int handleHeight = std::min(_selectionOnly ? SelectionHandleHeight + 3 : 64, std::max(0, height - (_selectionOnly ? 0 : std::min(StandardPanelPadding, height / 2))));
+	int handleHeight = std::min(_selectionOnly ? SelectionHandleHeight + 3 : 64, std::max(0, height - (_selectionOnly ? 0 : std::min(StandardPanelPadding, height / 2))));
 	const int selectionPanelHeight = std::min(_SelectionPanelHeight(),
 		std::max(0, height - 2 * std::min(StandardPanelPadding, height / 2)));
 	const int mainPanelBottom = std::min(GuiStyle::StatusBarHeight + StandardPanelPadding, height / 2);
-	const int selectionPanelBottom = height - margin - selectionPanelHeight;
-	const int settingsAvailableHeight = std::max(0, selectionPanelBottom - MainPanelTopGap - mainPanelBottom);
-	// Preserve usable settings chrome only when the viewport cannot fit both
-	// overlays. Otherwise scrolling keeps settings entirely below selection.
-	constexpr int settingsChromeHeight = 20 + GuiPanelHeader::ContentTopInset + 48 + 8;
-	const int settingsHeight = settingsAvailableHeight >= settingsChromeHeight
-		? settingsAvailableHeight : MainPanelMinimumHeight;
+	const int selectionPanelBottom = !_selectionOnly && _occupiedSelection
+		? (_occupiedSelection->IsEmpty() ? height : _occupiedSelection->Bottom)
+		: height - margin - selectionPanelHeight;
+	// Scroll the settings inside the actual free band. A minimum-height
+	// fallback here would cover the selection panel in medium-height windows.
+	const int settingsHeight = std::max(0, selectionPanelBottom - StandardPanelPadding - mainPanelBottom);
 	const int unconstrainedPanelHeight = _selectionOnly
 		? selectionPanelHeight
 		: std::min(std::max(0, height - mainPanelBottom),
@@ -346,9 +440,21 @@ void GuiMainPanel::_Layout()
 	const int panelHeight = !_selectionOnly && !_occupiedTopStrip.IsEmpty()
 		? std::min(unconstrainedPanelHeight, std::max(0, _occupiedTopStrip.Bottom - StandardPanelPadding - mainPanelBottom))
 		: unconstrainedPanelHeight;
-	_handle->SetPosition(_selectionOnly ? Position2d{ margin - 4, height - handleHeight } : Position2d{ 0, std::min(GuiStyle::StatusBarHeight + 8, height / 2) });
+	const int settingsHandleBottom = std::min(GuiStyle::StatusBarHeight + 8, height / 2);
+	if (!_selectionOnly)
+	{
+		int handleTop = selectionPanelBottom - StandardPanelPadding;
+		if (!_occupiedTopStrip.IsEmpty() && _occupiedTopStrip.Left < handleWidth)
+			handleTop = std::min(handleTop, _occupiedTopStrip.Bottom - StandardPanelPadding);
+		handleHeight = std::min(handleHeight, std::max(0, handleTop - settingsHandleBottom));
+	}
+	_handle->SetPosition(_selectionOnly ? Position2d{ margin - 4, height - handleHeight } : Position2d{ 0, settingsHandleBottom });
 	_handle->SetSize({ static_cast<unsigned int>(handleWidth), static_cast<unsigned int>(handleHeight) });
 	_handle->SetVisible(handleWidth > 0 && handleHeight > 0);
+	if (_selectionOnly && _presentationReady &&
+		(panelWidth < _presentedWidth || panelHeight < _presentedHeight))
+		_PrepareHide(_frame); // A resized-away captured control cannot accept a later hidden release.
+	_RetargetPresentation();
 	_frame->SetSize({ static_cast<unsigned int>(panelWidth), static_cast<unsigned int>(panelHeight) });
 	_UpdatePresentation();
 	if (_selectionOnly)
@@ -505,7 +611,7 @@ bool GuiMainPanel::RouteHitTest(Position2d position)
 	if (!IsVisible() || !IsEnabled()) return false;
 	if (position.X < 0 || position.Y < 0 || position.X >= static_cast<int>(_viewport.Width) || position.Y >= static_cast<int>(_viewport.Height)) return false;
 	return _handle->RouteHitTest(_handle->ParentToLocal(position)) ||
-		(_frame->IsVisible() && _frame->RouteHitTest(_frame->ParentToLocal(position)));
+		(PresentedFrameBounds().Contains(position) && _frame->RouteHitTest(_frame->ParentToLocal(position)));
 }
 
 void GuiMainPanel::InitResources(resources::ResourceLib& resources, bool force)

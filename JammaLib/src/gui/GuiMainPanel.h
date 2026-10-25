@@ -50,6 +50,7 @@ namespace gui
 		void SetCommandOwner(std::weak_ptr<base::ActionReceiver> owner);
 		void SetViewportSize(utils::Size2d viewport);
 		void SetOccupiedTopStripBounds(utils::Rect2d bounds);
+		void SetOccupiedTopBounds(utils::Rect2d selection, utils::Rect2d inputs);
 		void SetPerformanceGroupHandler(std::function<void(bool, engine::GroupCommand, std::size_t)> handler);
 		void RefreshPerformanceGroups(const engine::PerformanceGroups& groups);
 		std::optional<std::pair<bool, std::size_t>> HoveredPerformanceGroup() const;
@@ -61,11 +62,14 @@ namespace gui
 		bool AdvanceAnimation(float elapsedSeconds);
 		float TransitionValue() const { return _transition; }
 		float PresentedOpacity() const;
+		utils::Rect2d PresentedFrameBounds() const;
+		GuiTopPanelLayout TopPanelLayout() const;
 		void Draw(base::DrawContext& context) override;
 		void InitResources(resources::ResourceLib& resources, bool force) override;
 		bool RouteHitTest(utils::Position2d position) override;
 		using GuiPanel::OnAction;
 		actions::ActionResult OnAction(actions::GuiAction action) override;
+		actions::ActionResult OnAction(actions::TouchAction action) override;
 	protected:
 		void _InitReceivers() override;
 		void _InitResources(resources::ResourceLib& resources, bool force) override;
@@ -73,8 +77,6 @@ namespace gui
 	private:
 		friend class GuiMainPanelTestAccess;
 		static constexpr int StandardPanelPadding = 16;
-		static constexpr int MainPanelTopGap = StandardPanelPadding * 3 + 4;
-		static constexpr int MainPanelMinimumHeight = 320;
 		static constexpr int SelectionRowGap = 8;
 		static constexpr unsigned int PageContentPadding = 8u;
 		static constexpr unsigned int SettingsScrollBarWidth = 12u;
@@ -87,6 +89,12 @@ namespace gui
 		void _LayoutSettings(int panelWidth, int panelHeight);
 		void _PrepareHide(const std::shared_ptr<base::GuiElement>& subtree);
 		void _UpdatePresentation();
+		void _RetargetPresentation();
+		float _BodyProgress() const;
+		float _presentationStart = 1.0f;
+		float _presentedWidth = 0.0f, _presentedHeight = 0.0f;
+		float _startWidth = 0.0f, _startHeight = 0.0f;
+		bool _presentationReady = false;
 		static constexpr unsigned int _PageCommand = 1u;
 		static constexpr unsigned int _ExpandCommand = 2u;
 		resources::ResourceLib* _pageResources = nullptr; // UI owner; cleared on release.
@@ -101,6 +109,7 @@ namespace gui
 		SettingsPage _page;
 		utils::Size2d _viewport{};
 		utils::Rect2d _occupiedTopStrip{};
+		std::optional<utils::Rect2d> _occupiedSelection;
 		GuiPopupManager* _popups;
 	std::function<void(const std::shared_ptr<base::GuiElement>&)> _beforeHide;
 	std::shared_ptr<GuiPanel> _frame;
