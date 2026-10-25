@@ -427,9 +427,6 @@ namespace engine
 		// Job/UI owners enqueue held NoteOffs; retirement releases resources off callback.
 		void _DitchLoopTake(std::shared_ptr<LoopTake>& take, bool flushLiveHeld = true) noexcept;
 
-		// Last recorded MIDI loop in a take (most recently created loop with a
-		// non-zero length), or nullptr. Non-audio thread helper.
-		static std::shared_ptr<midi::MidiLoop> _LastRecordedMidiLoop(const std::shared_ptr<LoopTake>& take);
 		bool _flipTakeBuffer;
 		bool _flipAudioBuffer;
 		// Immutable metadata publication: UI/job/MIDI diagnostics may read concurrently.

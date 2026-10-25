@@ -20,6 +20,11 @@ namespace midi
 	class AutomationPlayback
 	{
 	public:
+		// Non-audio target resolution uses the same take/loop ownership as dispatch.
+		static std::shared_ptr<MidiLoop> ResolveEditorLoop(const vst::IVstPlugin* plugin,
+			const std::vector<std::shared_ptr<engine::LoopTake>>& takes, const std::shared_ptr<vst::VstChain>& ownerChain);
+		static std::int32_t ResolveAnchorCorrection(const MidiLoop* loop,
+			const std::vector<std::shared_ptr<engine::LoopTake>>& takes) noexcept;
 		void Rebuild(const std::vector<std::shared_ptr<engine::LoopTake>>& takes,
 			const std::shared_ptr<vst::VstChain>& stationChain);
 		void ProcessBlock(std::uint32_t blockStartSample, std::uint32_t numSamps) noexcept;
@@ -27,6 +32,7 @@ namespace midi
 		void ClearAfterReadersStopped();
 
 	private:
+		static std::shared_ptr<MidiLoop> LastRecordedLoop(const std::shared_ptr<engine::LoopTake>& take);
 		// --- Parameter automation dispatch ---
 
 		// One pre-resolved automation mapping ready for the audio thread. All

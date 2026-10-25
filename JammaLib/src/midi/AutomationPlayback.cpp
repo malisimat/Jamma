@@ -152,3 +152,67 @@ void AutomationPlayback::ClearAfterReadersStopped()
 	_automationDispatch.store(nullptr);
 	_automationDispatch.collect();
 }
+
+std::shared_ptr<midi::MidiLoop> AutomationPlayback::LastRecordedLoop(const std::shared_ptr<engine::LoopTake>& take)
+{
+	std::shared_ptr<midi::MidiLoop> last;
+	if (!take)
+		return last;
+
+	for (const auto& loop : take->GetMidiLoopSnapshot())
+	{
+		if (loop && loop->LoopLengthSamps() > 0u)
+			last = loop;
+	}
+	return last;
+}
+
+std::int32_t AutomationPlayback::ResolveAnchorCorrection(const midi::MidiLoop* loop,
+	const std::vector<std::shared_ptr<engine::LoopTake>>& takes) noexcept
+{
+	if (!loop)
+		return 0;
+
+	for (const auto& take : takes)
+	{
+		if (!take)
+			continue;
+		for (const auto& midiLoop : take->GetMidiLoopSnapshot())
+		{
+			if (midiLoop.get() == loop)
+				return take->MidiAnchorCorrection();
+		}
+	}
+	return 0;
+}
+
+std::shared_ptr<midi::MidiLoop> AutomationPlayback::ResolveEditorLoop(const vst::IVstPlugin* plugin,
+	const std::vector<std::shared_ptr<engine::LoopTake>>& takes, const std::shared_ptr<vst::VstChain>& ownerChain)
+{
+	if (!plugin)
+		return nullptr;
+
+	// Take-level ownership: record into the owning take's last recorded loop.
+	for (const auto& take : takes)
+	{
+		if (take && take->OwnsPlugin(plugin))
+		{
+			if (auto loop = LastRecordedLoop(take))
+				return loop;
+		}
+	}
+
+	// The parent chain records into the last recorded MIDI loop across its takes.
+	if (ownerChain && ownerChain->ContainsPlugin(plugin))
+	{
+		std::shared_ptr<midi::MidiLoop> last;
+		for (const auto& take : takes)
+		{
+			if (auto loop = LastRecordedLoop(take))
+				last = loop;
+		}
+		return last;
+	}
+
+	return nullptr;
+}

@@ -614,71 +614,14 @@ void Station::RebuildAutomationDispatch()
 	_automationPlayback.Rebuild(GetLoopTakeSnapshot(), _rackState.ActiveChain());
 }
 
-std::shared_ptr<midi::MidiLoop> Station::_LastRecordedMidiLoop(const std::shared_ptr<LoopTake>& take)
-{
-	std::shared_ptr<midi::MidiLoop> last;
-	if (!take)
-		return last;
-
-	for (const auto& loop : take->GetMidiLoopSnapshot())
-	{
-		if (loop && loop->LoopLengthSamps() > 0u)
-			last = loop;
-	}
-	return last;
-}
-
 std::int32_t Station::ResolveMidiAnchorCorrectionFor(const midi::MidiLoop* loop) const noexcept
 {
-	if (!loop)
-		return 0;
-
-	const auto takes = GetLoopTakeSnapshot();
-	for (const auto& take : takes)
-	{
-		if (!take)
-			continue;
-		for (const auto& midiLoop : take->GetMidiLoopSnapshot())
-		{
-			if (midiLoop.get() == loop)
-				return take->MidiAnchorCorrection();
-		}
-	}
-	return 0;
+	return loop ? midi::AutomationPlayback::ResolveAnchorCorrection(loop, GetLoopTakeSnapshot()) : 0;
 }
 
 std::shared_ptr<midi::MidiLoop> Station::ResolveEditorAutomationLoop(const vst::IVstPlugin* plugin) const
 {
-	if (!plugin)
-		return nullptr;
-
-	const auto takes = GetLoopTakeSnapshot();
-
-	// Take-level ownership: record into the owning take's last recorded loop.
-	for (const auto& take : takes)
-	{
-		if (take && take->OwnsPlugin(plugin))
-		{
-			if (auto loop = _LastRecordedMidiLoop(take))
-				return loop;
-		}
-	}
-
-	// Station-level ownership: record into the station's last recorded loop
-	// (the most recently created MIDI loop across all takes).
-	auto chain = _rackState.ActiveChain();
-	if (chain && chain->ContainsPlugin(plugin))
-	{
-		std::shared_ptr<midi::MidiLoop> last;
-		for (const auto& take : takes)
-		{
-			if (auto loop = _LastRecordedMidiLoop(take))
-				last = loop;
-		}
-		return last;
-	}
-
-	return nullptr;
+	return plugin ? midi::AutomationPlayback::ResolveEditorLoop(plugin, GetLoopTakeSnapshot(), _rackState.ActiveChain()) : nullptr;
 }
 
 void Station::EndMultiPlay(unsigned int numSamps)
