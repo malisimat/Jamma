@@ -50,12 +50,38 @@ public:
 	void InitializeCurrentPath(const io::InitFile& defaults, bool userRig, std::uint64_t revision)
 	{
 		if (userRig && defaults.RigLoadType == io::InitFile::LOAD_SPECIFIC &&
-			ValidFilename(defaults.Rig, _directory)) { _currentPath = defaults.Rig; _savedRevision = revision; }
+			ValidFilename(defaults.Rig, std::filesystem::path(defaults.Rig).parent_path()))
+		{ _currentPath = defaults.Rig; _savedRevision = revision; }
 	}
 	const std::wstring& CurrentPath() const { return _currentPath; }
 	std::uint64_t SavedRevision() const { return _savedRevision; }
-	void InvalidateSavedRevision() { _savedRevision = 0u; } // A replacement Scene starts its own revision sequence.
+	void InvalidateSavedRevision() { _savedRevision = 0u; _pendingLoad.reset(); } // A replacement Scene starts its own revision sequence.
 	bool Dirty(std::uint64_t revision) const { return _currentPath.empty() || revision != _savedRevision; }
+	bool NeedsSaveDialog(engine::Scene::RigSaveMode mode) const
+	{
+		const std::filesystem::path target(_currentPath);
+		return mode == engine::Scene::RigSaveMode::SaveAs || target.empty() || !ValidFilename(target, target.parent_path());
+	}
+	void TrackLoadedPath(std::wstring path, std::uint64_t sceneId, engine::RigCoordinator::EditReceiptPtr receipt)
+	{
+		PollLoadedPath(sceneId); // Preserve an earlier load accepted between window frames.
+		if (receipt) _pendingLoad = PendingLoad{std::move(path), sceneId, std::move(receipt)};
+	}
+	bool PollLoadedPath(std::uint64_t sceneId)
+	{
+		if (!_pendingLoad) return false;
+		if (_pendingLoad->SceneId != sceneId) { _pendingLoad.reset(); return false; }
+		const auto outcome = _pendingLoad->Receipt->Outcome.load(std::memory_order_acquire);
+		if (outcome == engine::RigCoordinator::EditOutcome::Pending) return false;
+		const bool accepted = outcome == engine::RigCoordinator::EditOutcome::Accepted;
+		if (accepted)
+		{
+			_currentPath = std::move(_pendingLoad->Path);
+			_savedRevision = _pendingLoad->Receipt->Revision;
+		}
+		_pendingLoad.reset();
+		return accepted;
+	}
 	void AcceptSuccessfulWrite(const Result& result)
 	{
 		if (!result.RigSaved) return;
@@ -64,14 +90,18 @@ public:
 	void Start(engine::Scene& scene, HWND owner, const io::InitFile& defaults,
 		engine::Scene::RigSaveMode mode = engine::Scene::RigSaveMode::StartupDefault)
 	{
+		PollLoadedPath(scene.Identity());
 		if (_busy) return;
 		std::wstring target = _currentPath;
 		const bool setDefault = mode == engine::Scene::RigSaveMode::StartupDefault;
-		const bool choose = mode == engine::Scene::RigSaveMode::SaveAs || target.empty() || !ValidFilename(target, _directory);
+		const bool choose = NeedsSaveDialog(mode);
 		scene.SetRigSaveDialogOpen(true);
-		std::error_code error;
-		std::filesystem::create_directories(_directory, error);
-		if (error) { scene.SetRigSaveDialogOpen(false); scene.ReportRuntimeNotice("Save rig", "Cannot create the Jamma rig directory: " + error.message()); return; }
+		if (choose)
+		{
+			std::error_code error;
+			std::filesystem::create_directories(_directory, error);
+			if (error) { scene.SetRigSaveDialogOpen(false); scene.ReportRuntimeNotice("Save rig", "Cannot create the Jamma rig directory: " + error.message()); return; }
+		}
 		wchar_t filename[32768] = L"My rig.rig";
 		if (!_currentPath.empty()) wcscpy_s(filename, std::filesystem::path(_currentPath).filename().c_str());
 		OPENFILENAMEW dialog{};
@@ -83,7 +113,8 @@ public:
 		dialog.Flags = OFN_OVERWRITEPROMPT | OFN_NOCHANGEDIR | OFN_PATHMUSTEXIST;
 		if (choose && !GetSaveFileNameW(&dialog)) { scene.SetRigSaveDialogOpen(false); return; }
 		if (choose) target = filename;
-		if (!ValidFilename(std::filesystem::path(target), std::filesystem::path(_directory)))
+		const std::filesystem::path targetPath(target);
+		if (!ValidFilename(targetPath, choose ? std::filesystem::path(_directory) : targetPath.parent_path()))
 		{ scene.SetRigSaveDialogOpen(false); scene.ReportRuntimeNotice("Save rig", "Choose a .rig filename in the Jamma folder. Reserved filenames are unavailable."); return; }
 		scene.SetRigSaveDialogOpen(false);
 		const auto rig = scene.BeginExplicitRigSave();
@@ -122,6 +153,7 @@ public:
 	}
 	bool Poll(engine::Scene& scene, HWND owner, io::InitFile& defaults, bool show = true)
 	{
+		PollLoadedPath(scene.Identity());
 		const auto result = _result.exchange({}, std::memory_order_acq_rel);
 		if (!result) return false;
 		_busy = false;
@@ -146,8 +178,15 @@ public:
 private:
 	friend struct RigDefaultSaveTestAccess;
 	std::wstring _directory, _defaultsPath;
-	std::wstring _currentPath; // Shell/window owner; changes after the rig write succeeds.
+	std::wstring _currentPath; // Shell/window owner; accepted load or successful write.
 	std::uint64_t _savedRevision = 0u;
+	struct PendingLoad
+	{
+		std::wstring Path;
+		std::uint64_t SceneId;
+		engine::RigCoordinator::EditReceiptPtr Receipt;
+	};
+	std::optional<PendingLoad> _pendingLoad; // Shell owner; never sent to the callback.
 	RigWriter _writeRig;
 	DefaultsWriter _writeDefaults;
 	bool _busy = false; // UI owner only.

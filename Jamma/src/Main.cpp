@@ -1212,8 +1212,10 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 				auto selected = *defaults; selected.Rig = filename;
 				bool readable = false;
 				const auto candidate = LoadRig(selected, readable);
-				if (!candidate || scene.value()->RequestRigEdit(*candidate) != engine::RigCoordinator::EditResult::Pending)
+				engine::RigCoordinator::EditReceiptPtr receipt;
+				if (!candidate || scene.value()->RequestRigEdit(*candidate, &receipt) != engine::RigCoordinator::EditResult::Pending)
 					scene.value()->ReportRuntimeNotice("Load rig", "Rig could not be applied. Check the log; device setup changes require a restart.");
+				else rigDefaultSave.TrackLoadedPath(filename, scene.value()->Identity(), std::move(receipt));
 			}
 		}
 		const bool windowLoadRequested = window.ConsumeJamLoadRequest();
@@ -1249,6 +1251,7 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 				scene.value()->FinishSessionLoad(true);
 				scene.value()->Shutdown();
 				if (scene.value()->JobThreadFailed()) break; // Keep outgoing failure for owner notification below.
+				rigDefaultSave.PollLoadedPath(scene.value()->Identity()); // Replacement carries this accepted rig.
 				window.ReplaceScene(*replacement.value());
 				scene = std::move(replacement);
 				rigDefaultSave.InvalidateSavedRevision();
