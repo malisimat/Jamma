@@ -2063,7 +2063,7 @@ TEST(StationMidiInstrument, ReroutingAudibleUnmatchedNoteReleasesOldDestination)
 	EXPECT_TRUE(newPlugin->ProcessedEvents.empty());
 }
 
-class PlaybackReviewStation : public Station
+class PlaybackReviewDelivery : public midi::MidiDelivery
 {
 public:
 	static void CheckFanoutReleaseRetry()
@@ -2071,7 +2071,7 @@ public:
 		for (const bool sustain : {false, true})
 		{
 			SCOPED_TRACE(sustain);
-			AudioState state;
+			PreparedState state;
 			auto take = MakeMidiTake("review-fanout");
 			auto loop = std::make_shared<midi::MidiLoop>();
 			state.MidiPlaybackRoutes.emplace_back();
@@ -2116,7 +2116,7 @@ public:
 
 	static void CheckSourcePedalReleaseRetry()
 	{
-		AudioState state;
+		PreparedState state;
 		auto take = MakeMidiTake("source-pedal-fanout");
 		auto loop = std::make_shared<midi::MidiLoop>();
 		const std::array source{MidiEvent{0u, 0xb0u, 64u, 127u}, MidiEvent{10u, 0xb0u, 64u, 0u},
@@ -2170,7 +2170,7 @@ public:
 		for (const bool live : {false, true})
 		{
 			SCOPED_TRACE(live);
-			AudioState state;
+			PreparedState state;
 			auto plugin = std::make_shared<StationMidiInstrumentFakePlugin>();
 			plugin->Load(L"", 44100.f, 128u, 2u);
 			auto destination = std::make_shared<MidiDestination>();
@@ -2209,9 +2209,9 @@ public:
 };
 TEST(StationMidiInstrument, FullDelayedDestinationRetainsReleaseUntilRetry)
 {
-	PlaybackReviewStation::CheckFanoutReleaseRetry();
-	PlaybackReviewStation::CheckSourcePedalReleaseRetry();
-	PlaybackReviewStation::CheckReplacementPedalOrdering();
+	PlaybackReviewDelivery::CheckFanoutReleaseRetry();
+	PlaybackReviewDelivery::CheckSourcePedalReleaseRetry();
+	PlaybackReviewDelivery::CheckReplacementPedalOrdering();
 }
 TEST(StationMidiInstrument, RejectedPlaybackReleasePreservesVelocity)
 {
