@@ -454,6 +454,21 @@ void GuiVstRack::_UpdateDrag(Position2d point)
 	std::vector<CableInteraction::Endpoint> endpoints;
 	std::vector<CableInteraction::Cable> cables; std::vector<Link> links;
 	_Geometry(endpoints, cables, links);
+	if (!_drag->MoveSource && endpoints.size() == 16u + _rows.size())
+	{
+		// Drop onto the visible slot control while keeping the cable anchored to its socket.
+		const auto origin = GlobalPosition();
+		const auto clip = _scroll->EffectiveContentRect({0, 0, static_cast<int>(_viewport.Width), static_cast<int>(_viewport.Height)});
+		for (std::size_t i = 0u; i < _rows.size(); ++i)
+		{
+			const auto& control = _rows[i].Buttons[0];
+			const auto p = control->GlobalPosition(); const auto s = control->GetSize();
+			const auto bounds = Rect2d{p.X, p.Y, p.X + static_cast<int>(s.Width), p.Y + static_cast<int>(s.Height)}.Intersected(clip);
+			const auto& endpoint = endpoints[16u + i];
+			if (endpoint.Available && bounds.Contains(point + origin))
+			{ _drag->Snap = endpoint; return; }
+		}
+	}
 	for (const auto& endpoint : endpoints)
 		if (!endpoint.Continuation && endpoint.Available &&
 			((endpoint.Kind == CableInteraction::EndpointKind::RackMidiChannel) == _drag->MoveSource) &&

@@ -373,6 +373,51 @@ public:
  }
 };
 
+class RackDropPlugin final : public StateGatePlugin
+{
+public:
+ vst::MidiInputCapabilities MidiInput() const noexcept override { return {true, true, true}; }
+};
+
+TEST(VstStaging, MidiCableDropAcceptsEntireVisibleSlotControl)
+{
+ gui::GuiRackParams params; params.Size = {220u, 300u};
+ params.EnableVstControl = true; params.EnableVstRack = true; params.EnableVstRackMidiRouting = true;
+ auto rack = std::make_shared<gui::GuiRack>(params); rack->SetPosition({300, 400}); rack->Init();
+ const auto view = rack->VstRack(); ASSERT_TRUE(view);
+ view->SetViewport({1200u, 1000u}); view->SetChannelsCollapsed(false);
+ gui::GuiVstRack::Model model; model.Editable = true; model.Revision = 1u; model.TotalSlots = 1u;
+ gui::GuiVstRack::Slot slot; slot.Value.Identity = "target"; slot.Value.Plugin = std::make_shared<RackDropPlugin>();
+ model.Slots.push_back(slot);
+ std::vector<gui::GuiVstRack::Command> commands;
+ view->Update(model, [&](auto command) { commands.push_back(std::move(command)); });
+ view->SetVisible(true);
+ view->Layout(100u, 0, {0, 0}, {20u, 20u});
+ std::vector<gui::CableInteraction::Endpoint> endpoints; std::vector<gui::CableInteraction::Cable> cables;
+ view->BuildInteractionGeometry(endpoints, cables); ASSERT_EQ(17u, endpoints.size());
+ ASSERT_TRUE(endpoints.back().Available);
+ const auto button = view->SlotButton(0u); ASSERT_TRUE(button);
+ const auto p = button->GlobalPosition() - view->GlobalPosition(); const auto size = button->GetSize();
+ for (const auto offset : {utils::Position2d{static_cast<int>(size.Width) - 6, 6},
+                          utils::Position2d{static_cast<int>(size.Width) - 6, static_cast<int>(size.Height) - 6}})
+ {
+  ASSERT_TRUE(view->SlotScroll()->EffectiveContentRect({0, 0, 1200, 1000}).Contains(button->GlobalPosition() + offset));
+  actions::TouchAction touch; touch.Index = 0; touch.Touch = actions::TouchAction::TOUCH_MOUSE;
+  touch.State = actions::TouchAction::TOUCH_DOWN; touch.Position = endpoints[0].Position;
+  view->OnAction(touch); ASSERT_TRUE(view->HasCableDrag());
+  touch.State = actions::TouchAction::TOUCH_UP; touch.Position = p + offset;
+  EXPECT_FALSE(gui::CableInteraction::HitTest(endpoints.back(), touch.Position, 13.0f));
+  view->OnAction(touch); EXPECT_FALSE(view->HasCableDrag());
+ }
+ ASSERT_EQ(2u, commands.size());
+ for (const auto& command : commands)
+ {
+  EXPECT_TRUE(command.ChannelRoutes[0].Explicit);
+  EXPECT_EQ((std::vector<std::string>{"target"}), command.ChannelRoutes[0].PluginIds);
+ }
+ rack->DetachGuiOwnershipForRetirement();
+}
+
 TEST(VstStaging, LiveCaptureRejectsActiveCallbackAndPreservesOutput)
 {
  StateGatePlugin plugin;

@@ -173,8 +173,9 @@ namespace engine
 		std::wstring TakeReadySessionLoad();
 		void FinishSessionLoad(bool replaced, const std::string& error = {});
 		void SetSessionSaveFolder(std::wstring folder) { _sessionSaveFolder = std::move(folder); }
-		void SetDefaultJamSaver(std::wstring path, std::function<bool(const std::wstring&, const std::wstring&)> saver)
+		void SetDefaultJamSaver(std::wstring path, std::function<bool(const std::wstring&, bool)> saver)
 		{ _defaultJamPath = std::move(path); _defaultJamSaver = std::move(saver); }
+		void SetCurrentJamPath(std::wstring path) { _currentJamPath = std::move(path); }
 		void ReportFileStatus(const std::string& status);
 		void InitAudio(bool generatedRig = false,
 			const audio::AsioInventory* inventory = nullptr, bool exactSelection = false);
@@ -527,8 +528,8 @@ namespace engine
 		bool _midiDraftPending = false, _devicePageDirty = true, _hardwarePersistencePending = false;
 		std::shared_ptr<const MidiState> _displayedMidiState;
 		std::wstring _sessionSaveFolder, _pendingSaveFolder, _pendingLoadPath;
-		std::wstring _defaultJamPath;
-		std::function<bool(const std::wstring&, const std::wstring&)> _defaultJamSaver;
+		std::wstring _defaultJamPath, _currentJamPath;
+		std::function<bool(const std::wstring&, bool)> _defaultJamSaver;
 		bool _pendingSaveAsDefault = false;
 		bool _panelLoadRequested = false, _loadReady = false;
 		std::mutex _midiLifecycleMutex;

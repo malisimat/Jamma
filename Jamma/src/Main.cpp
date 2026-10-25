@@ -1016,7 +1016,20 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 	startupLog.Write(startupSummary.str());
 
 	if (!jamGenerated && defaults) scene.value()->SetSessionSaveFolder(utils::GetParentDirectory(defaults->Jam));
-	if (defaults && defaultsValid) scene.value()->SetDefaultJamSaver(defaults->Jam, PublishDefaultJam);
+	const auto configureDefaultJamSave = [&]() {
+		if (const auto currentDefaults = LoadIni(initPath))
+			scene.value()->SetDefaultJamSaver(currentDefaults->Jam, [&](const std::wstring& savedPath, bool useNamedJam) {
+			auto current = LoadIni(initPath);
+			if (!current) return false;
+			if (!useNamedJam) return PublishDefaultJam(savedPath, current->Jam);
+			current->Jam = savedPath;
+			std::stringstream stream;
+			if (!io::InitFile::ToStream(*current, stream) || !UpdateIni(initPath, stream.str())) return false;
+			*defaults = *current;
+			return true;
+		});
+	};
+	configureDefaultJamSave();
 	hardwareDefaults->store(std::make_shared<const io::InitFile>(*defaults), std::memory_order_release);
 	RigDefaultSave rigDefaultSave(GetPath(PATH_ROAMING) + L"\\Jamma", initPath, SaveRigAtomic, UpdateIni);
 	if (const auto accepted = scene.value()->AcceptedRigSnapshot())
@@ -1211,6 +1224,8 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 				rigDefaultSave.InvalidateSavedRevision();
 				vst::DrainUiThreadDestroyQueue();
 				scene.value()->SetSessionSaveFolder(utils::GetParentDirectory(pendingJamPath));
+				scene.value()->SetCurrentJamPath(pendingJamPath);
+				configureDefaultJamSave();
 				scene.value()->InitGlobalKeyCapture();
 				// Preserve rig hardware choices and inventory across loaded content.
 				scene.value()->InitAudio(false, nullptr, true);

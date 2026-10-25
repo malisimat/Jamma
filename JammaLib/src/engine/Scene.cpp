@@ -185,7 +185,7 @@ Scene::Scene(SceneParams params,
 	_fileStatus = statusLabel("Choose a folder on first Save", 44u);
 	auto saveParams = GuiButtonParams::PanelButton(240u); saveParams.Text = "Save (Alt: choose folder)"; saveParams.DispatchCommand = true;
 	auto defaultJamParams = GuiButtonParams::PanelButton(240u); defaultJamParams.Text = "Save jam as default"; defaultJamParams.DispatchCommand = true;
-	auto loadParams = GuiButtonParams::PanelButton(240u); loadParams.Text = "Load session"; loadParams.DispatchCommand = true;
+	auto loadParams = GuiButtonParams::PanelButton(240u); loadParams.Text = "Load Jam"; loadParams.DispatchCommand = true;
 	saveParams.Size.Height = 40u; saveParams.MinSize.Height = 40u; saveParams.TextFontSize = graphics::FontOptions::FONT_SMALL;
 	defaultJamParams.Size.Height = 40u; defaultJamParams.MinSize.Height = 40u; defaultJamParams.TextFontSize = graphics::FontOptions::FONT_SMALL;
 	loadParams.Size.Height = 40u; loadParams.MinSize.Height = 40u; loadParams.TextFontSize = graphics::FontOptions::FONT_SMALL;
@@ -4677,7 +4677,7 @@ void Scene::_RequestSave(bool chooseFolder, bool asDefault)
 	if (_CaptureIsBusy()) { ReportFileStatus("Save unavailable during capture or pending actions"); return; }
 	if (asDefault && (_defaultJamPath.empty() || !_defaultJamSaver)) { ReportFileStatus("Startup jam path unavailable"); return; }
 	_controlOperation = ControlOperation::Save;
-	auto folder = asDefault ? utils::GetParentDirectory(_defaultJamPath) : _sessionSaveFolder;
+	auto folder = asDefault && _currentJamPath.empty() ? utils::GetParentDirectory(_defaultJamPath) : _sessionSaveFolder;
 	if (chooseFolder || folder.empty()) folder = utils::PickDirectory(L"Choose session save folder");
 	if (folder.empty()) { _controlOperation = ControlOperation::None; return; }
 	_pendingSaveAsDefault = asDefault; _pendingSaveFolder = std::move(folder); _controlOperation = ControlOperation::Save;
@@ -4766,7 +4766,7 @@ void Scene::PumpDeviceAndFileControls()
 	bool inventoryBusy = false;
 	{ std::scoped_lock lock(_sceneMutex); inventoryBusy = _stationManagement.Busy() || _rigSaveDialogOpen || _rigSaveInProgress; }
 	const bool filesEnabled = !inventoryBusy && _controlOperation == ControlOperation::None && _rigCoordinator.EditsEnabled();
-	_saveButton->SetEnabled(filesEnabled); _saveDefaultJamButton->SetEnabled(filesEnabled && !_defaultJamPath.empty()); _loadButton->SetEnabled(filesEnabled);
+	_saveButton->SetEnabled(filesEnabled); _saveDefaultJamButton->SetEnabled(filesEnabled && !_defaultJamPath.empty() && static_cast<bool>(_defaultJamSaver)); _loadButton->SetEnabled(filesEnabled);
 	const auto now = std::chrono::steady_clock::now();
 	const auto actual = _audioEngine->GetStreamParams();
 	if (actual.BufSize && !_acceptedBufferSizes.contains(actual.Name)) { _acceptedBufferSizes[actual.Name] = {actual.BufSize}; _devicePageDirty = true; }
@@ -4842,10 +4842,17 @@ void Scene::PumpDeviceAndFileControls()
 		{
 			_sessionSaveFolder = _pendingSaveFolder;
 			if (_pendingSaveAsDefault)
-				ReportFileStatus(_defaultJamSaver(result.Path, _defaultJamPath)
-					? "Saved startup jam " + utils::EncodeUtf8(_defaultJamPath)
-					: "Session saved at " + utils::EncodeUtf8(result.Path) + "; startup jam unchanged (backup or replacement failed)");
-			else ReportFileStatus("Saved " + utils::EncodeUtf8(result.Path));
+			{
+				const bool useNamedJam = !_currentJamPath.empty();
+				if (_defaultJamSaver(result.Path, useNamedJam))
+				{
+					if (useNamedJam) _currentJamPath = result.Path;
+					ReportFileStatus(useNamedJam ? "Saved startup jam " + utils::EncodeUtf8(result.Path)
+						: "Saved startup jam " + utils::EncodeUtf8(_defaultJamPath));
+				}
+				else ReportFileStatus("Jam saved at " + utils::EncodeUtf8(result.Path) + "; startup default unchanged");
+			}
+			else { _currentJamPath = result.Path; ReportFileStatus("Saved " + utils::EncodeUtf8(result.Path)); }
 		}
 		else ReportFileStatus(result.Error);
 		if (!result.AudioResumed) ReportFileStatus("Save outcome: " + utils::EncodeUtf8(result.Path) + "; audio restoration failed: " + result.Error);
