@@ -888,14 +888,26 @@ TEST_F(HudCableInteractionTests, VisiblePedalLearnControlOpensDialogWithoutSendi
     const auto learn = card->TryGetChild(7u); ASSERT_TRUE(learn);
     const auto pedal = card->TryGetChild(0u); ASSERT_TRUE(pedal);
     Hud->SetAltLearnHeld(true);
+    EXPECT_FALSE(learn->IsVisible());
+    EXPECT_FALSE(learn->IsEnabled());
+    actions::TouchAction hiddenClick; hiddenClick.Position = {2,2};
+    hiddenClick.State = actions::TouchAction::TOUCH_DOWN;
+    EXPECT_FALSE(learn->OnAction(hiddenClick).IsEaten);
+    hiddenClick.State = actions::TouchAction::TOUCH_UP;
+    EXPECT_FALSE(learn->OnAction(hiddenClick).IsEaten);
+    EXPECT_FALSE(popups.IsOpen());
     for (const auto index : {0u,1u})
     {
         const auto triggerPedal = card->TryGetChild(static_cast<unsigned char>(index)); ASSERT_TRUE(triggerPedal);
         EXPECT_FALSE(triggerPedal->TryGetChild(0u)->IsVisible());
         EXPECT_TRUE(triggerPedal->TryGetChild(1u)->IsVisible());
         EXPECT_TRUE(triggerPedal->TryGetChild(2u)->IsVisible());
+        EXPECT_EQ(triggerPedal->GetSize().Width, triggerPedal->TryGetChild(2u)->GetSize().Width);
+        EXPECT_EQ(triggerPedal->GetSize().Height, triggerPedal->TryGetChild(2u)->GetSize().Height);
     }
     Hud->SetAltLearnHeld(false);
+    EXPECT_TRUE(learn->IsVisible());
+    EXPECT_TRUE(learn->IsEnabled());
     EXPECT_TRUE(pedal->TryGetChild(0u)->IsVisible());
     EXPECT_FALSE(pedal->TryGetChild(1u)->IsVisible());
     EXPECT_FALSE(pedal->TryGetChild(2u)->IsVisible());

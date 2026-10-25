@@ -221,8 +221,10 @@ namespace gui
 			params.OutTexture = std::string(stem) + "_down_out";
 			_learnArt = std::make_shared<GuiHudPedalArt>(params);
 			_learnArt->SetVisible(false); AddChild(_learnArt);
-			auto overlay = GuiPopupParams::Header("LEARN", params.Size.Width, 20u);
-			overlay.Position = {0, static_cast<int>(params.Size.Height / 2u) - 10};
+			GuiLabelParams overlay(GuiPopupParams::FlatRect(params.Size.Width, params.Size.Height,
+				{0.5f, 0.5f, 0.5f}, 0.20f), "LEARN");
+			overlay.FontSize = graphics::FontOptions::FONT_SMALL;
+			overlay.VerticalAlign = GuiTextVerticalAlign::Center;
 			overlay.CenterHorizontally = true;
 			_altLabel = std::make_shared<GuiLabel>(overlay);
 			_altLabel->SetVisible(false);
@@ -705,8 +707,11 @@ void GuiHud::_BuildTriggerRail()
 			learnParams.OverTextColor = glm::vec3{0.08f,0.08f,0.07f};
 			learnParams.TextPadding = 2u;
 			const auto id = i < _displayedRig.Triggers.size() ? _displayedRig.Triggers[i].Id : std::string{};
-			button->AddChild(std::make_shared<GuiHudLearnButton>(learnParams,
-				[this, id, activate]() { _OpenTriggerLearn(id, activate, false); }));
+			auto learnButton = std::make_shared<GuiHudLearnButton>(learnParams,
+				[this, id, activate]() { _OpenTriggerLearn(id, activate, false); });
+			learnButton->SetVisible(!_altLearnHeld);
+			learnButton->SetEnabled(!_altLearnHeld);
+			button->AddChild(learnButton);
 		}
 		_triggerWidgets.push_back({ button, close, edit, rename, inputSocket, outputSocket });
 		_triggerList->AddChild(button);
@@ -1829,8 +1834,21 @@ void GuiHud::SetAltLearnHeld(bool held)
 {
 	_altLearnHeld = held;
 	for (const auto& widgets : _triggerWidgets)
+	{
 		for (unsigned char index : {0u, 1u})
 			if (auto pedal = std::dynamic_pointer_cast<GuiHudTriggerPedal>(widgets.Card->TryGetChild(index))) pedal->SetAltOverlay(held);
+		for (unsigned int index = 0u; index < 256u; ++index)
+		{
+			const auto child = widgets.Card->TryGetChild(static_cast<unsigned char>(index));
+			if (!child) break;
+			if (auto learnButton = std::dynamic_pointer_cast<GuiHudLearnButton>(child))
+			{
+				if (held) learnButton->ClearPointerState();
+				learnButton->SetVisible(!held);
+				learnButton->SetEnabled(!held);
+			}
+		}
+	}
 }
 
 std::vector<GuiHud::CableRoute> GuiHud::BuildCableRoutes(const engine::RoutingGraph& graph)
