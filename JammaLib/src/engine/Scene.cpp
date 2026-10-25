@@ -184,11 +184,14 @@ Scene::Scene(SceneParams params,
 	_activeAudioStatus = statusLabel("Audio stopped", 44u);
 	_fileStatus = statusLabel("Choose a folder on first Save", 44u);
 	auto saveParams = GuiButtonParams::PanelButton(240u); saveParams.Text = "Save (Alt: choose folder)"; saveParams.DispatchCommand = true;
+	auto defaultJamParams = GuiButtonParams::PanelButton(240u); defaultJamParams.Text = "Save jam as default"; defaultJamParams.DispatchCommand = true;
 	auto loadParams = GuiButtonParams::PanelButton(240u); loadParams.Text = "Load session"; loadParams.DispatchCommand = true;
 	saveParams.Size.Height = 40u; saveParams.MinSize.Height = 40u; saveParams.TextFontSize = graphics::FontOptions::FONT_SMALL;
+	defaultJamParams.Size.Height = 40u; defaultJamParams.MinSize.Height = 40u; defaultJamParams.TextFontSize = graphics::FontOptions::FONT_SMALL;
 	loadParams.Size.Height = 40u; loadParams.MinSize.Height = 40u; loadParams.TextFontSize = graphics::FontOptions::FONT_SMALL;
-	_saveButton = std::make_shared<GuiButton>(saveParams); _loadButton = std::make_shared<GuiButton>(loadParams);
+	_saveButton = std::make_shared<GuiButton>(saveParams); _saveDefaultJamButton = std::make_shared<GuiButton>(defaultJamParams); _loadButton = std::make_shared<GuiButton>(loadParams);
 	mainParams.Settings.push_back({SettingsPage::Session, "", _saveButton, 7210u});
+	mainParams.Settings.push_back({SettingsPage::Session, "", _saveDefaultJamButton, 7212u});
 	mainParams.Settings.push_back({SettingsPage::Session, "", _loadButton, 7211u});
 	mainParams.Settings.push_back({SettingsPage::Session, "", _fileStatus, 0u});
 	_mainPanel = std::make_shared<GuiMainPanel>(mainParams);
@@ -1986,6 +1989,7 @@ ActionResult Scene::OnAction(GuiAction action)
 	if (_isSceneQuitting.load(std::memory_order_acquire)) return ActionResult::NoAction();
 	if (_controlWriterExclusion.owns_lock() && (action.Index < 7200u || action.Index >= 8300u)) return ActionResult::NoAction();
 	if (action.Index == 7210u) { _RequestSave((action.InputModifiers & Action::MODIFIER_ALT) != 0); return ActionResult::NoAction(); }
+	if (action.Index == 7212u) { _RequestSave(false, true); return ActionResult::NoAction(); }
 	if (action.Index == 7211u) { if (_controlOperation == ControlOperation::None) _panelLoadRequested = true; return ActionResult::NoAction(); }
 	if (action.Index == 7205u) { _audioStartRequested = true; _audioSchedule.Changed(DeviceSelectionSchedule::Edit::Format); return ActionResult::NoAction(); }
 	if (action.Index == 7206u) { _devicePageDirty = true; RequestMidiRefresh(); return ActionResult::NoAction(); }
@@ -4667,15 +4671,16 @@ void Scene::ReportFileStatus(const std::string& status)
 	std::cout << "[SESSION scene=" << _sceneIdentity << " operation=" << _controlOperationId << "] " << status << std::endl;
 }
 
-void Scene::_RequestSave(bool chooseFolder)
+void Scene::_RequestSave(bool chooseFolder, bool asDefault)
 {
 	if (_controlOperation != ControlOperation::None || !_rigCoordinator.EditsEnabled()) { ReportFileStatus("Another operation is busy"); return; }
 	if (_CaptureIsBusy()) { ReportFileStatus("Save unavailable during capture or pending actions"); return; }
+	if (asDefault && (_defaultJamPath.empty() || !_defaultJamSaver)) { ReportFileStatus("Startup jam path unavailable"); return; }
 	_controlOperation = ControlOperation::Save;
-	auto folder = _sessionSaveFolder;
+	auto folder = asDefault ? utils::GetParentDirectory(_defaultJamPath) : _sessionSaveFolder;
 	if (chooseFolder || folder.empty()) folder = utils::PickDirectory(L"Choose session save folder");
 	if (folder.empty()) { _controlOperation = ControlOperation::None; return; }
-	_pendingSaveFolder = std::move(folder); _controlOperation = ControlOperation::Save;
+	_pendingSaveAsDefault = asDefault; _pendingSaveFolder = std::move(folder); _controlOperation = ControlOperation::Save;
 	ReportFileStatus("Waiting to capture session");
 }
 
@@ -4761,7 +4766,7 @@ void Scene::PumpDeviceAndFileControls()
 	bool inventoryBusy = false;
 	{ std::scoped_lock lock(_sceneMutex); inventoryBusy = _stationManagement.Busy() || _rigSaveDialogOpen || _rigSaveInProgress; }
 	const bool filesEnabled = !inventoryBusy && _controlOperation == ControlOperation::None && _rigCoordinator.EditsEnabled();
-	_saveButton->SetEnabled(filesEnabled); _loadButton->SetEnabled(filesEnabled);
+	_saveButton->SetEnabled(filesEnabled); _saveDefaultJamButton->SetEnabled(filesEnabled && !_defaultJamPath.empty()); _loadButton->SetEnabled(filesEnabled);
 	const auto now = std::chrono::steady_clock::now();
 	const auto actual = _audioEngine->GetStreamParams();
 	if (actual.BufSize && !_acceptedBufferSizes.contains(actual.Name)) { _acceptedBufferSizes[actual.Name] = {actual.BufSize}; _devicePageDirty = true; }
@@ -4833,7 +4838,15 @@ void Scene::PumpDeviceAndFileControls()
 				if (_CaptureIsBusy()) { eligibilityError = "Save unavailable during capture or pending actions"; return false; }
 				return true;
 			}, &_performanceGroups.Groups());
-		if (result.Success) { _sessionSaveFolder = _pendingSaveFolder; ReportFileStatus("Saved " + utils::EncodeUtf8(result.Path)); }
+		if (result.Success)
+		{
+			_sessionSaveFolder = _pendingSaveFolder;
+			if (_pendingSaveAsDefault)
+				ReportFileStatus(_defaultJamSaver(result.Path, _defaultJamPath)
+					? "Saved startup jam " + utils::EncodeUtf8(_defaultJamPath)
+					: "Session saved at " + utils::EncodeUtf8(result.Path) + "; startup jam unchanged (backup or replacement failed)");
+			else ReportFileStatus("Saved " + utils::EncodeUtf8(result.Path));
+		}
 		else ReportFileStatus(result.Error);
 		if (!result.AudioResumed) ReportFileStatus("Save outcome: " + utils::EncodeUtf8(result.Path) + "; audio restoration failed: " + result.Error);
 		if (_controlOperation != ControlOperation::None) _FinishControlOperation();

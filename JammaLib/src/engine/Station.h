@@ -469,6 +469,9 @@ namespace engine
 			std::vector<std::shared_ptr<MidiDestination>> RetiredMidiDestinations;
 			mutable std::atomic<bool> RetiredMidiQueueCancelled{ false };
 			std::vector<std::vector<std::shared_ptr<MidiPlaybackBinding>>> MidiPlaybackRoutes;
+			std::vector<bool> MidiPlaybackUsesChannelRoutes;
+			std::array<bool, 16> RecordedChannelExplicit{};
+			std::array<std::vector<std::shared_ptr<MidiDestination>>, 16> RecordedChannelDestinations;
 		};
 		class MidiPlaybackSink final : public midi::IMidiOutputSink
 		{

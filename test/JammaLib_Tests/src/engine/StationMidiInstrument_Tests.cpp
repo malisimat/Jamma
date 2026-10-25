@@ -984,6 +984,27 @@ TEST(StationMidiInstrument, RecordedMidiLoopPlaybackCanRouteToSpecificStationPlu
 	EXPECT_FALSE(pluginB->RealtimeFlags[1]);
 }
 
+TEST(StationMidiInstrument, RecordedMidiFollowsRackChannelCablesWithoutOutputOverride)
+{
+	auto station = MakeStation("recorded-channel-cables");
+	auto pluginA = AddPlugin(station, L"fake-channel-four.dll");
+	auto pluginB = AddPlugin(station, L"fake-channel-five.dll");
+	auto take = MakeMidiTake("recorded-channel-take");
+	station->AddTake(take);
+	station->CommitChanges();
+	take->Record({}, station->Name(), {3u, 4u}, {"Keys"});
+	ASSERT_TRUE(take->RecordMidiEvent(MidiEvent::MakeNoteOn(24u, 3u, 48u, 100u), "Keys", 24u));
+	ASSERT_TRUE(take->RecordMidiEvent(MidiEvent::MakeNoteOn(24u, 4u, 52u, 100u), "Keys", 24u));
+	take->Play(0u, 128u, 0u);
+	ASSERT_TRUE(station->SetLiveVstChannelRoute(3u, {true, {pluginA->StateId()}}, station->RackRevision()));
+	ASSERT_TRUE(station->SetLiveVstChannelRoute(4u, {true, {pluginB->StateId()}}, station->RackRevision()));
+	RenderStationBlock(station, 0u);
+	ASSERT_FALSE(pluginA->Events.empty());
+	ASSERT_FALSE(pluginB->Events.empty());
+	for (const auto& event : pluginA->Events) EXPECT_EQ(3u, event.Channel());
+	for (const auto& event : pluginB->Events) EXPECT_EQ(4u, event.Channel());
+}
+
 TEST(StationMidiInstrument, RegularRecordFinalizationClosesHeldNotesAtLoopEnd)
 {
 	auto take = MakeMidiTake("regular-record-held-boundary");

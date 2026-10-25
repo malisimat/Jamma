@@ -254,6 +254,38 @@ static bool SaveRigAtomic(const std::wstring& finalPath, const io::RigFile& rig)
 	return UpdateIni(finalPath, json.str());
 }
 
+static bool PublishDefaultJam(const std::wstring& savedPath, const std::wstring& defaultPath)
+{
+	if (savedPath.empty() || defaultPath.empty() || savedPath == defaultPath) return false;
+	const bool originalExists = GetFileAttributesW(defaultPath.c_str()) != INVALID_FILE_ATTRIBUTES;
+	if (originalExists)
+	{
+		// Never overwrite a prior backup. Copying first leaves the startup jam
+		// available even if staging or replacement later fails.
+		bool backedUp = false;
+		for (unsigned int n = 0; n < 10000u; ++n)
+		{
+			const auto backup = defaultPath + L".bak" + (n ? L"." + std::to_wstring(n) : L"");
+			if (CopyFileW(defaultPath.c_str(), backup.c_str(), TRUE)) { backedUp = true; break; }
+			if (GetLastError() != ERROR_FILE_EXISTS && GetLastError() != ERROR_ALREADY_EXISTS) return false;
+		}
+		if (!backedUp) return false;
+	}
+	for (unsigned int n = 0; n < 10000u; ++n)
+	{
+		const auto staged = defaultPath + L".new" + (n ? L"." + std::to_wstring(n) : L"");
+		if (!CopyFileW(savedPath.c_str(), staged.c_str(), TRUE))
+		{
+			if (GetLastError() == ERROR_FILE_EXISTS || GetLastError() == ERROR_ALREADY_EXISTS) continue;
+			return false;
+		}
+		const bool published = MoveFileExW(staged.c_str(), defaultPath.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) != 0;
+		if (!published) DeleteFileW(staged.c_str());
+		return published;
+	}
+	return false;
+}
+
 std::optional<io::InitFile> LoadIni(const std::wstring& initPath)
 {
 	io::TextReadWriter txtFile;
@@ -984,6 +1016,7 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 	startupLog.Write(startupSummary.str());
 
 	if (!jamGenerated && defaults) scene.value()->SetSessionSaveFolder(utils::GetParentDirectory(defaults->Jam));
+	if (defaults && defaultsValid) scene.value()->SetDefaultJamSaver(defaults->Jam, PublishDefaultJam);
 	hardwareDefaults->store(std::make_shared<const io::InitFile>(*defaults), std::memory_order_release);
 	RigDefaultSave rigDefaultSave(GetPath(PATH_ROAMING) + L"\\Jamma", initPath, SaveRigAtomic, UpdateIni);
 	if (const auto accepted = scene.value()->AcceptedRigSnapshot())

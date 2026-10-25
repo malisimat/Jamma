@@ -894,6 +894,12 @@ void Station::_PrepareMidiDestinations(AudioState& state)
 	for (auto channel = 0u; channel < 16u; ++channel)
 	{
 		const auto& route = _liveVstChannelRoutes[channel];
+		state.RecordedChannelExplicit[channel] = route.Explicit;
+		if (route.Explicit)
+			for (const auto& destination : destinations)
+				if (destination->Plugin && std::find(route.PluginIds.begin(), route.PluginIds.end(),
+					destination->Plugin->StateId()) != route.PluginIds.end())
+					state.RecordedChannelDestinations[channel].push_back(destination);
 		auto& prepared = state.LiveChannelDestinations[channel];
 		for (const auto& destination : state.LiveMidiDestinations)
 		{
@@ -926,7 +932,10 @@ void Station::_PrepareMidiDestinations(AudioState& state)
 		for (const auto& loop : take->GetMidiLoopSnapshot())
 		{
 			std::vector<std::shared_ptr<MidiPlaybackBinding>> bindings;
-			for (const auto& destination : resolve(static_cast<unsigned int>(state.MidiPlaybackRoutes.size())))
+			const auto outputIndex = static_cast<unsigned int>(state.MidiPlaybackRoutes.size());
+			state.MidiPlaybackUsesChannelRoutes.push_back(!routes ||
+				routes->PluginForOutput(outputIndex) == MidiVstRoutingSnapshot::NoPlugin);
+			for (const auto& destination : resolve(outputIndex))
 			{
 				std::shared_ptr<MidiPlaybackBinding> binding;
 				for (const auto& existing : _midiPlaybackBindings)
@@ -1463,6 +1472,14 @@ bool Station::MidiPlaybackSink::TryOnEvent(unsigned int outputIndex, const MidiE
 	{
 		if (binding->Take->IsSourceLossCancelled() && event.IsNoteOn()) continue;
 		auto& destination = *binding->Destination;
+		const auto channel = event.Channel();
+		if (outputIndex < _state.MidiPlaybackUsesChannelRoutes.size() &&
+			_state.MidiPlaybackUsesChannelRoutes[outputIndex] && _state.RecordedChannelExplicit[channel] &&
+			std::find(_state.RecordedChannelDestinations[channel].begin(),
+				_state.RecordedChannelDestinations[channel].end(), binding->Destination) ==
+				_state.RecordedChannelDestinations[channel].end() &&
+			!(event.IsNoteOff() && binding->Held.test(slot)) &&
+			!(sustainRelease && binding->AudibleSustain.test(channel))) continue;
 		const bool suppressSource = binding->Take->IsMuted() || binding->Take->IsSourceLossCancelled();
 		if (suppressSource && release)
 			Station::_RecoverCancelledScheduledMidi(destination,

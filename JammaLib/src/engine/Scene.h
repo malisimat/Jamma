@@ -173,6 +173,8 @@ namespace engine
 		std::wstring TakeReadySessionLoad();
 		void FinishSessionLoad(bool replaced, const std::string& error = {});
 		void SetSessionSaveFolder(std::wstring folder) { _sessionSaveFolder = std::move(folder); }
+		void SetDefaultJamSaver(std::wstring path, std::function<bool(const std::wstring&, const std::wstring&)> saver)
+		{ _defaultJamPath = std::move(path); _defaultJamSaver = std::move(saver); }
 		void ReportFileStatus(const std::string& status);
 		void InitAudio(bool generatedRig = false,
 			const audio::AsioInventory* inventory = nullptr, bool exactSelection = false);
@@ -369,7 +371,7 @@ namespace engine
 		void _QueueJobs(std::vector<actions::JobAction> jobs);
 		void _RebuildDevicePage();
 		void _SetAudioDraftFromStream(const audio::AudioStreamParams& params);
-		void _RequestSave(bool chooseFolder);
+		void _RequestSave(bool chooseFolder, bool asDefault = false);
 		bool _CaptureIsBusy() const;
 		bool _SessionHasTakes() const;
 		bool _ValidateAudioDraft(std::string& error) const;
@@ -510,7 +512,7 @@ namespace engine
 		std::shared_ptr<gui::GuiDropDown> _audioDeviceChoice;
 		std::array<std::shared_ptr<gui::GuiNumericInput>,4> _audioInputs;
 		std::shared_ptr<gui::GuiLabel> _deviceStatus, _activeAudioStatus, _fileStatus;
-		std::shared_ptr<gui::GuiButton> _saveButton, _loadButton;
+		std::shared_ptr<gui::GuiButton> _saveButton, _saveDefaultJamButton, _loadButton;
 		struct MidiDeviceChoice
 		{
 			std::string HardwareName;
@@ -525,6 +527,9 @@ namespace engine
 		bool _midiDraftPending = false, _devicePageDirty = true, _hardwarePersistencePending = false;
 		std::shared_ptr<const MidiState> _displayedMidiState;
 		std::wstring _sessionSaveFolder, _pendingSaveFolder, _pendingLoadPath;
+		std::wstring _defaultJamPath;
+		std::function<bool(const std::wstring&, const std::wstring&)> _defaultJamSaver;
+		bool _pendingSaveAsDefault = false;
 		bool _panelLoadRequested = false, _loadReady = false;
 		std::mutex _midiLifecycleMutex;
 		std::atomic<bool> _midiRefreshRequested{ false };
