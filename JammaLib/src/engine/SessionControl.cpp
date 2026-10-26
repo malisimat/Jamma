@@ -455,7 +455,7 @@ bool SessionControl::_ScheduleWindowOperation(DeviceSelectionSchedule::Clock::ti
 		}
 		else if (_audioSchedule.Revision != _audioSchedule.AttemptedRevision && now >= _audioSchedule.NextChange)
 		{
-			if (now < _audioSchedule.ChannelDeadline) { _SetDeviceStatus("Settling channel counts (3 seconds)"); return false; }
+			if (now < _audioSchedule.EditDeadline) { _SetDeviceStatus("Settling audio settings (3 seconds)"); return false; }
 			if (effects.CheckEligibility().CaptureBusy) { _SetDeviceStatus("Waiting for recording/pending capture"); return false; }
 			if (!_audioStartRequested && _submittedAudio.Value.Name == actual.Name && _submittedAudio.Value.SampleRate == actual.SampleRate && _submittedAudio.Value.BufSize == actual.BufSize && _submittedAudio.Value.NumChannelsIn == actual.NumInputChannels && _submittedAudio.Value.NumChannelsOut == actual.NumOutputChannels) { _audioSchedule.AttemptedRevision = _audioSchedule.Revision; return false; }
 			std::string error;
@@ -489,7 +489,7 @@ void SessionControl::_CompleteMidiRequest()
 bool SessionControl::_AdmitBoundary(StationAccess access, DeviceSelectionSchedule::Clock::time_point now)
 {
 	if (LoadReady()) return false;
-	if (Current() == SessionControl::Audio && now < _audioSchedule.ChannelDeadline) { FinishOperation(nullptr, access); return false; }
+	if (Current() == SessionControl::Audio && now < _audioSchedule.EditDeadline) { FinishOperation(nullptr, access); return false; }
 	if (!InputClosed())
 	{
 		const auto accepted = _rig->Accepted();

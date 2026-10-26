@@ -85,7 +85,7 @@ namespace engine
 		{ _submittedAudio = {std::move(value), revision}; _audioSchedule.Changed(edit); _devicePageDirty |= edit == DeviceSelectionSchedule::Edit::Device; }
 		void SubmitMidi(std::vector<io::UserConfig::MidiSettings> value, std::uint64_t revision)
 		{ _submittedMidi = {std::move(value), revision}; _midiDraftPending = true; }
-		void RetryAudio() { _audioStartRequested = true; _audioSchedule.Changed(DeviceSelectionSchedule::Edit::Format); }
+		void RetryAudio() { _audioStartRequested = true; _audioSchedule.Changed(DeviceSelectionSchedule::Edit::Retry); }
 		void RequestMidiRefresh() noexcept { _midiRefreshRequested.store(true, std::memory_order_release); }
 		void RefreshMidiFromWindow() noexcept { _devicePageDirty = true; RequestMidiRefresh(); }
 		void RetryPreferences(const Effects& effects);

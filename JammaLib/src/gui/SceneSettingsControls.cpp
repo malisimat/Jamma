@@ -380,7 +380,7 @@ SceneSettingsControls::DevicePages SceneSettingsControls::BuildDevicePages(
 		entries.push_back({SettingsPage::Audio,"",std::make_shared<GuiLabel>(detailsParams),0u});
 	}
 	const std::array<unsigned int,4> values{audioDraft.NumChannelsIn, audioDraft.NumChannelsOut, audioDraft.SampleRate, audioDraft.BufSize};
-	std::array<std::string,4> labels{"First N inputs (settles for 3 seconds)", "First N outputs (settles for 3 seconds)", "Sample rate (no takes only)", "Buffer size (requested; negotiated on open)"};
+	std::array<std::string,4> labels{"First N inputs (settles for 3 seconds)", "First N outputs (settles for 3 seconds)", "Sample rate (settles for 3 seconds; no takes only)", "Buffer size (settles for 3 seconds; negotiated on open)"};
 	if (const auto found = acceptedBufferSizes.find(audioDraft.Name); found != acceptedBufferSizes.end())
 	{
 		labels[3] += " Accepted:"; for (const auto size : found->second) labels[3] += " " + std::to_string(size);
