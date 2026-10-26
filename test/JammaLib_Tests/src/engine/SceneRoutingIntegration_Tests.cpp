@@ -132,6 +132,14 @@ namespace engine
         { return gui::GuiMainPanelTestAccess::RigSaveChoice(*scene._workspace->MainPanel(), choice); }
         static bool RigSaveRequested(const Scene& scene) { return scene._operation._rigSaveRequested; }
         static void ChooseAudio(Scene& scene, int index) { scene._workspace->Settings().AudioDevice()->SetSelectedIndex(index, true); }
+        static void ChooseSampleRate(Scene& scene, int index) { scene._workspace->Settings().AudioSampleRate()->SetSelectedIndex(index, true); }
+        static std::string SampleRateText(const Scene& scene) { return scene._workspace->Settings().AudioSampleRate()->SelectedText(); }
+        static void RefreshDevicePage(Scene& scene)
+        {
+            scene._operation._presentation.PagesChanged = true;
+            scene._workspace->ApplyControlPresentation(scene._operation.TakePresentation(), scene.shared_from_this());
+        }
+        static io::UserConfig::AudioSettings SubmittedAudio(const Scene& scene) { return scene._operation._submittedAudio.Value; }
         static void AudioChannels(Scene& scene, unsigned int input, double value) { scene._workspace->Settings().AudioInput(input)->SetValue(value, true); }
         static std::shared_ptr<Station> RemovalTarget(Scene& scene)
         { std::scoped_lock lock(scene._sceneMutex); return scene._stationManagement.Target; }
@@ -417,6 +425,99 @@ TEST_F(SceneRoutingIntegrationTest, StartedAudioSelectionShowsResolvedDeviceAndN
 	EXPECT_EQ("default", scene->AcceptedRigSnapshot()->Rig.User.Audio.Name);
 	EXPECT_EQ(64u, scene->AcceptedRigSnapshot()->Rig.User.Audio.BufSize);
 	EXPECT_EQ(0u, saves);
+	scene->Shutdown();
+}
+
+TEST_F(SceneRoutingIntegrationTest, SampleRateChoicesFollowDeviceAndSupersedePendingRate)
+{
+	using Access = engine::SourceLossIntegrationTestAccess;
+	auto scene = FreshScene({ Station("Local") }, {});
+	ASSERT_TRUE(scene);
+	{
+		auto excludeJob = Access::ExcludeJob(*scene);
+		audio::AsioInventory inventory;
+		inventory.Devices = {{0u, "Device A", true, "", 2u, 2u, {44100u, 48000u}, 44100u},
+			{1u, "Device B", true, "", 2u, 2u, {32000u, 96000u}, 96000u},
+			{2u, "Device C", true, "", 2u, 2u, {44100u, 48000u}, 48000u}};
+		const audio::AudioStreamParams actual{"Device A", 44100u, 2u, 128u, 0u, 0u, 2u, 2u};
+		Access::StartedAudioSelection(*scene, inventory, actual);
+		EXPECT_EQ("44100 Hz", Access::SampleRateText(*scene));
+		Access::ChooseSampleRate(*scene, 1);
+		EXPECT_EQ(48000u, Access::SubmittedAudio(*scene).SampleRate);
+		const auto pendingRevision = Access::AudioRevision(*scene);
+		Access::ChooseAudio(*scene, 2);
+		EXPECT_GT(Access::AudioRevision(*scene), pendingRevision);
+		// C also supports 48000 Hz, but a pending edit on A must not carry over.
+		EXPECT_EQ(44100u, Access::SubmittedAudio(*scene).SampleRate);
+		Access::RefreshDevicePage(*scene);
+		EXPECT_EQ("44100 Hz", Access::SampleRateText(*scene));
+		Access::ChooseSampleRate(*scene, 1);
+
+		Access::ChooseAudio(*scene, 1);
+		EXPECT_EQ("Device B", Access::SubmittedAudio(*scene).Name);
+		EXPECT_EQ(96000u, Access::SubmittedAudio(*scene).SampleRate);
+		// The old dropdown can still send an action until the next UI refresh.
+		Access::ChooseSampleRate(*scene, 0);
+		EXPECT_EQ(96000u, Access::SubmittedAudio(*scene).SampleRate);
+		Access::RefreshDevicePage(*scene);
+		EXPECT_EQ("96000 Hz", Access::SampleRateText(*scene));
+		Access::ChooseSampleRate(*scene, 0);
+		EXPECT_EQ(32000u, Access::SubmittedAudio(*scene).SampleRate);
+	}
+	scene->Shutdown();
+}
+
+TEST_F(SceneRoutingIntegrationTest, DeviceWithIncompatibleRateKeepsRunningRateVisibleWithTakes)
+{
+	using Access = engine::SourceLossIntegrationTestAccess;
+	auto scene = FreshScene({ Station("Local") }, {});
+	ASSERT_TRUE(scene);
+	{
+		auto excludeJob = Access::ExcludeJob(*scene);
+		audio::AsioInventory inventory;
+		inventory.Devices = {{0u, "Device A", true, "", 2u, 2u, {44100u}, 44100u},
+			{1u, "Device B", true, "", 2u, 2u, {48000u}, 48000u}};
+		const audio::AudioStreamParams actual{"Device A", 44100u, 2u, 128u, 0u, 0u, 2u, 2u};
+		Access::StartedAudioSelection(*scene, inventory, actual);
+		auto station = scene->SnapshotStations().front();
+		station->AddTake();
+		scene->CommitChanges();
+		Access::ChooseAudio(*scene, 1);
+		EXPECT_EQ(44100u, Access::SubmittedAudio(*scene).SampleRate);
+		Access::RefreshDevicePage(*scene);
+		EXPECT_EQ("44100 Hz (unavailable)", Access::SampleRateText(*scene));
+		const auto revision = Access::AudioRevision(*scene);
+		Access::ChooseSampleRate(*scene, 1);
+		EXPECT_EQ(revision, Access::AudioRevision(*scene));
+		EXPECT_EQ(44100u, Access::SubmittedAudio(*scene).SampleRate);
+	}
+	scene->Shutdown();
+}
+
+TEST_F(SceneRoutingIntegrationTest, ChannelControlsUseSelectedDeviceLimits)
+{
+	using Access = engine::SourceLossIntegrationTestAccess;
+	auto scene = FreshScene({ Station("Local") }, {});
+	ASSERT_TRUE(scene);
+	{
+		auto excludeJob = Access::ExcludeJob(*scene);
+		audio::AsioInventory inventory;
+		inventory.Devices = {{0u, "Device A", true, "", 4u, 6u, {44100u}, 44100u},
+			{1u, "Device B", true, "", 1u, 2u, {44100u}, 44100u}};
+		const audio::AudioStreamParams actual{"Device A", 44100u, 2u, 128u, 0u, 0u, 2u, 2u};
+		Access::StartedAudioSelection(*scene, inventory, actual);
+		Access::AudioChannels(*scene, 0u, 99.0);
+		Access::AudioChannels(*scene, 1u, 99.0);
+		EXPECT_EQ(4u, Access::AudioDraft(*scene).NumChannelsIn);
+		EXPECT_EQ(6u, Access::AudioDraft(*scene).NumChannelsOut);
+
+		Access::ChooseAudio(*scene, 1);
+		Access::RefreshDevicePage(*scene);
+		Access::AudioChannels(*scene, 0u, 99.0);
+		Access::AudioChannels(*scene, 1u, 99.0);
+		EXPECT_EQ(1u, Access::AudioDraft(*scene).NumChannelsIn);
+		EXPECT_EQ(2u, Access::AudioDraft(*scene).NumChannelsOut);
+	}
 	scene->Shutdown();
 }
 

@@ -437,12 +437,8 @@ ActionResult Scene::OnAction(GuiAction action)
 		{ _operation.RequestSave(save->ChooseFolder, save->AsDefault, _ControlEffects()); return ActionResult::NoAction(); }
 		if (std::holds_alternative<SceneSettingsControls::LoadSession>(*deviceChange))
 		{ _operation.RequestPanelLoad(); return ActionResult::NoAction(); }
-		if (std::holds_alternative<SceneSettingsControls::RetryAudio>(*deviceChange))
-		{ _operation.RetryAudio(); return ActionResult::NoAction(); }
 		if (std::holds_alternative<SceneSettingsControls::RefreshMidi>(*deviceChange))
 		{ _operation.RefreshMidiFromWindow(); return ActionResult::NoAction(); }
-		if (std::holds_alternative<SceneSettingsControls::RetryPreferences>(*deviceChange))
-		{ _operation.RetryPreferences(_ControlEffects()); return ActionResult::NoAction(); }
 	}
 	if (action.ElementType == GuiAction::ACTIONELEMENT_BUTTON &&
 		(action.Index == GuiMainPanel::SaveRigDefaultControlIndex || action.Index == GuiMainPanel::SaveRigControlIndex || action.Index == GuiMainPanel::SaveRigAsControlIndex))
@@ -471,7 +467,7 @@ ActionResult Scene::OnAction(GuiAction action)
 	{
 		const auto rig = _rigCoordinator.Accepted();
 		const auto draft = _workspace->Settings().EditDeviceDraft(*deviceChange, _operation.DeviceInventory(),
-			rig ? rig->Rig.User.Serial.Devices : _userConfig.Serial.Devices, !_SessionHasTakes());
+			rig ? rig->Rig.User.Serial.Devices : _userConfig.Serial.Devices, !_SessionHasTakes(), _CurrentSampleRate());
 		using Draft = SceneSettingsControls::DraftChange;
 		if (draft == Draft::Device || draft == Draft::Channels || draft == Draft::Format)
 		{

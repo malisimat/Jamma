@@ -85,10 +85,8 @@ namespace engine
 		{ _submittedAudio = {std::move(value), revision}; _audioSchedule.Changed(edit); _devicePageDirty |= edit == DeviceSelectionSchedule::Edit::Device; }
 		void SubmitMidi(std::vector<io::UserConfig::MidiSettings> value, std::uint64_t revision)
 		{ _submittedMidi = {std::move(value), revision}; _midiDraftPending = true; }
-		void RetryAudio() { _audioStartRequested = true; _audioSchedule.Changed(DeviceSelectionSchedule::Edit::Retry); }
 		void RequestMidiRefresh() noexcept { _midiRefreshRequested.store(true, std::memory_order_release); }
 		void RefreshMidiFromWindow() noexcept { _devicePageDirty = true; RequestMidiRefresh(); }
-		void RetryPreferences(const Effects& effects);
 		void PumpOnWindow(StationAccess access, const Effects& effects, bool quitting);
 		void PumpOnJob(StationAccess access, const Effects& effects, bool quitting);
 		void RecoverSourcesLocked(StationAccess access, bool membershipBusy, bool quitting);
@@ -184,12 +182,9 @@ namespace engine
 		std::function<bool(const io::RigFile&)> _saveHardwarePreferences; // Immutable callback, serialized lifecycle callers; Scene bounds lifetime.
 		// Submitted candidates, schedule, presentation and file paths are window-owned.
 		DeviceSelectionSchedule _audioSchedule;
-		bool _audioStartRequested = false;
 		std::unordered_map<std::string, std::vector<unsigned int>> _acceptedBufferSizes;
 		audio::AsioInventory _deviceInventory;
-		std::optional<io::UserConfig::AudioSettings> _pendingAudioPersistence;
-		std::optional<std::vector<io::UserConfig::MidiSettings>> _pendingMidiPersistence;
-		bool _midiDraftPending = false, _devicePageDirty = true, _hardwarePersistencePending = false;
+		bool _midiDraftPending = false, _devicePageDirty = true;
 		std::shared_ptr<const MidiState> _displayedMidiState;
 		std::wstring _sessionSaveFolder, _pendingSaveFolder, _pendingLoadPath;
 		std::wstring _defaultJamPath, _currentJamPath;

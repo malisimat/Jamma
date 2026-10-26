@@ -249,6 +249,12 @@
     <None Include="resources\source\app-icon\generate.cjs" />
     <None Include="resources\source\app-icon\README.md" />
   </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\JammaLib\JammaLib.vcxproj">
+      <Project>{92321565-166e-4317-b9c2-e4722e519f0e}</Project>
+      <LinkLibraryDependencies>false</LinkLibraryDependencies>
+    </ProjectReference>
+  </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <!-- Resource-only edits must deploy even when the executable does not relink. -->
   <Target Name="CopyJammaResources" AfterTargets="Build">

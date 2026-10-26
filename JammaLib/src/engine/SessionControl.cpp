@@ -318,7 +318,7 @@ bool SessionControl::_ValidateAudioDraft(std::string& error, const Effects& effe
 {
 	const auto found = std::find_if(_deviceInventory.Devices.begin(), _deviceInventory.Devices.end(),
 		[this](const auto& device) { return device.Name == _submittedAudio.Value.Name; });
-	if (found == _deviceInventory.Devices.end() || !found->Probed) { error = "Selected audio device is unavailable"; return _audioStartRequested; }
+	if (found == _deviceInventory.Devices.end() || !found->Probed) { error = "Selected audio device is unavailable"; return false; }
 	if ((!_submittedAudio.Value.NumChannelsIn && !_submittedAudio.Value.NumChannelsOut) || _submittedAudio.Value.NumChannelsIn > found->InputChannels || _submittedAudio.Value.NumChannelsOut > found->OutputChannels) { error = "Invalid input/output channel counts"; return false; }
 	if (!_submittedAudio.Value.BufSize || !_submittedAudio.Value.SampleRate || std::find(found->SampleRates.begin(), found->SampleRates.end(), _submittedAudio.Value.SampleRate) == found->SampleRates.end()) { error = "Unsupported sample rate or invalid buffer request"; return false; }
 	const auto actual = _audio->GetStreamParams();
@@ -457,7 +457,6 @@ bool SessionControl::_ScheduleWindowOperation(DeviceSelectionSchedule::Clock::ti
 		{
 			if (now < _audioSchedule.EditDeadline) { _SetDeviceStatus("Settling audio settings (3 seconds)"); return false; }
 			if (effects.CheckEligibility().CaptureBusy) { _SetDeviceStatus("Waiting for recording/pending capture"); return false; }
-			if (!_audioStartRequested && _submittedAudio.Value.Name == actual.Name && _submittedAudio.Value.SampleRate == actual.SampleRate && _submittedAudio.Value.BufSize == actual.BufSize && _submittedAudio.Value.NumChannelsIn == actual.NumInputChannels && _submittedAudio.Value.NumChannelsOut == actual.NumOutputChannels) { _audioSchedule.AttemptedRevision = _audioSchedule.Revision; return false; }
 			std::string error;
 			if (!_ValidateAudioDraft(error, effects)) { _SetDeviceStatus(error); _Notice("Audio device",error); _audioSchedule.AttemptedRevision = _audioSchedule.Revision; return false; }
 			Begin(SessionControl::Audio);
@@ -474,11 +473,11 @@ void SessionControl::_CompleteMidiRequest()
 		if (completion->SceneId != _sceneIdentity || completion->OperationId != Identity() || completion->DraftRevision != _admittedMidiRevision) return;
 		if (completion->Accepted)
 		{
+			// Keep the shell's user configuration aligned with the accepted rig so
+			// an explicit File-tab save includes the latest MIDI selection.
+			_config->Midi.Devices = completion->Desired;
 			_presentation.MidiAccepted = Candidate<std::vector<io::UserConfig::MidiSettings>>{completion->Desired, completion->DraftRevision};
-			if (completion->PreferencesSaved) { _pendingAudioPersistence.reset(); _pendingMidiPersistence.reset(); }
-			else _pendingMidiPersistence = completion->Desired;
 		}
-		_hardwarePersistencePending = _pendingAudioPersistence.has_value() || _pendingMidiPersistence.has_value();
 		_SetDeviceStatus(completion->Status); Begin(SessionControl::None); _devicePageDirty = true;
 		_Notice("MIDI devices",completion->Status);
 	}
@@ -539,7 +538,6 @@ void SessionControl::_ApplyAudioCandidate(const audio::AudioStreamParams& actual
 {
 	const auto admittedRevision = _audioSchedule.Revision;
 	_admittedAudio = _submittedAudio;
-	const bool startRequested = _audioStartRequested;
 	const auto requested = _admittedAudio.Value;
 	_audioSchedule.Attempted(admittedRevision, now);
 	if (!_ValidateAudioDraft(error, effects)) { _SetDeviceStatus(error); _Notice("Audio device",error); }
@@ -552,7 +550,6 @@ void SessionControl::_ApplyAudioCandidate(const audio::AudioStreamParams& actual
 		if (applied)
 		{
 			auto settings = requested; settings.Name = acceptedParams.Name; settings.SampleRate = acceptedParams.SampleRate; settings.BufSize = acceptedParams.BufSize; settings.NumBuffers = acceptedParams.NumBuffers; settings.NumChannelsIn = acceptedParams.NumInputChannels; settings.NumChannelsOut = acceptedParams.NumOutputChannels;
-			if (startRequested) RestoreRunningAudio();
 			(*_config).Audio = settings;
 			auto& sizes = _acceptedBufferSizes[acceptedParams.Name];
 			if (std::find(sizes.begin(), sizes.end(), acceptedParams.BufSize) == sizes.end()) { if (sizes.size() == 16u) sizes.erase(sizes.begin()); sizes.push_back(acceptedParams.BufSize); }
@@ -572,19 +569,15 @@ void SessionControl::_ApplyAudioCandidate(const audio::AudioStreamParams& actual
 			_midiState.store(std::make_shared<const MidiState>(MidiState{refreshedMidi, newMidiNames, serialIds}), std::memory_order_release);
 			_midiActive.store(true, std::memory_order_release);
 			{ std::scoped_lock lock(access.Mutex); effects.ApplyRuntimeAvailabilityLocked({acceptedParams.NumInputChannels, newMidiNames, serialIds, true, false, true, oldRate}); }
-			_pendingAudioPersistence = settings;
 			const bool merged = _rig->MergeHardwarePreferences(settings, std::nullopt);
-			const auto rig = _rig->Accepted(); _hardwarePersistencePending = !merged || !rig || !SaveHardwarePreferences(rig->Rig);
-			if (!_hardwarePersistencePending) { _pendingAudioPersistence.reset(); _pendingMidiPersistence.reset(); }
-			_SetDeviceStatus(_hardwarePersistencePending ? "Applied, preferences not saved" : (acceptedParams.NumOutputChannels < actual.NumOutputChannels ? "Ready; unavailable output routes disconnected" : "Ready"));
-			_Notice("Audio device",_hardwarePersistencePending ? "Applied, preferences not saved; retry available" :
+			_SetDeviceStatus(!merged ? "Applied; rig update unavailable" : (acceptedParams.NumOutputChannels < actual.NumOutputChannels ? "Ready; unavailable output routes disconnected" : "Ready"));
+			_Notice("Audio device", !merged ? "Audio device ready, but the rig could not be updated" :
 				(acceptedParams.NumOutputChannels < actual.NumOutputChannels ? "Ready; unavailable output routes disconnected" : "Audio device ready"));
 			if (_audioSchedule.Revision == admittedRevision) _submittedAudio.Value = settings;
 			_presentation.AudioAccepted = Candidate<io::UserConfig::AudioSettings>{settings, _admittedAudio.Revision};
 			_devicePageDirty = true;
 		}
 		else { _SetDeviceStatus(error); _Notice("Audio device",error); }
-		if (_audioSchedule.Revision == admittedRevision) _audioStartRequested = false;
 		std::cout << "[DEVICES scene=" << _sceneIdentity << " operation=" << Identity() << "] audio " << (applied ? "applied " : "failed ")
 			<< "requested='" << requested.Name << "' in=" << requested.NumChannelsIn << " out=" << requested.NumChannelsOut << " rate=" << requested.SampleRate << " buffer=" << requested.BufSize
 			<< " actual='" << acceptedParams.Name << "' in=" << acceptedParams.NumInputChannels << " out=" << acceptedParams.NumOutputChannels << " rate=" << acceptedParams.SampleRate << " buffer=" << acceptedParams.BufSize << " " << error << std::endl;
@@ -653,19 +646,16 @@ void SessionControl::_ReconcileMidiDeviceRequestOnJob(StationAccess access, cons
 		ConfirmMidiConnectionChange(previous->Connection, result, names, access);
 		_midiState.store(std::make_shared<const MidiState>(MidiState{std::move(result), names, serialIds}), std::memory_order_release);
 		bool merged = false;
-		std::shared_ptr<const RigSnapshot> rig;
 		{
 			std::scoped_lock sceneLock(access.Mutex);
 			merged = _rig->MergeHardwarePreferences(std::nullopt, desired->Desired);
-			rig = _rig->Accepted();
 		}
-		const bool saved = merged && rig && SaveHardwarePreferences(rig->Rig);
 		const auto inputs = _audio->GetStreamParams().NumInputChannels;
 		{
 		std::scoped_lock sceneLock(access.Mutex);
 		effects.ApplyRuntimeAvailabilityLocked({inputs, names, serialIds});
 		}
-		complete(saved ? "MIDI desired selection accepted" : "MIDI applied, preferences not saved", true, saved);
+		complete(merged ? "MIDI desired selection accepted" : "MIDI applied, rig update unavailable", true, true);
 	}
 	catch (const std::exception& error)
 	{
@@ -729,17 +719,4 @@ SessionControl::Presentation SessionControl::TakePresentation()
 	result.MidiAccepted = std::exchange(_presentation.MidiAccepted, {});
 	result.Notices = std::exchange(_presentation.Notices, {});
 	return result;
-}
-
-void SessionControl::RetryPreferences(const Effects& effects)
-{
-	if (effects.CheckEligibility().StructuralBusy) return;
-	if (Current() != None || !_rig->EditsEnabled()) { _SetDeviceStatus("Preferences retry waits for other operations"); return; }
-	std::unique_lock lifecycle(LifecycleMutex(), std::try_to_lock);
-	if (!lifecycle.owns_lock() || !_rig->EditsEnabled()) return;
-	const bool merged = _rig->MergeHardwarePreferences(_pendingAudioPersistence, _pendingMidiPersistence);
-	const auto accepted = _rig->Accepted();
-	if (merged && accepted && SaveHardwarePreferences(accepted->Rig))
-	{ _pendingAudioPersistence.reset(); _pendingMidiPersistence.reset(); _hardwarePersistencePending = false; _SetDeviceStatus("Preferences saved"); }
-	else { _SetDeviceStatus("Preferences not saved; retry available"); _Notice("Device preferences", "Preferences not saved; retry available"); }
 }

@@ -312,20 +312,29 @@ std::optional<SceneSettingsControls::DeviceChange> SceneSettingsControls::Decode
 	case SaveSessionAsControlIndex: return SaveSession{ true, false };
 	case DefaultSessionControlIndex: return SaveSession{ false, true };
 	case LoadSessionControlIndex: return LoadSession{};
-	case RetryAudioControlIndex: return RetryAudio{};
 	case RefreshMidiControlIndex: return RefreshMidi{};
-	case RetryPreferencesControlIndex: return RetryPreferences{};
 	case AudioDeviceControlIndex:
 		if (const auto value = std::get_if<GuiAction::GuiInt>(&action.Data);
 			value && value->Value >= 0 && static_cast<std::size_t>(value->Value) < _audioChoiceNames.size())
 			return AudioDeviceChange{ _audioChoiceNames[value->Value] };
+		return std::nullopt;
+	case AudioInputControlIndex + static_cast<unsigned int>(AudioField::SampleRate):
+		// A device choice can arrive before its page is rebuilt. Never decode an
+		// index from the previous device as a rate for the new draft.
+		if (_audioRateDeviceName != _audioDraft.Name) return std::nullopt;
+		if (const auto value = std::get_if<GuiAction::GuiInt>(&action.Data);
+			value && value->Value >= 0 && static_cast<std::size_t>(value->Value) < _audioRateChoices.size()
+			&& _audioRateChoices[value->Value] != 0u)
+			return AudioValueChange{ AudioField::SampleRate, _audioRateChoices[value->Value] };
 		return std::nullopt;
 	default: break;
 	}
 	if (action.Index >= AudioInputControlIndex && action.Index < AudioInputControlIndex + _audioInputs.size())
 	{
 		const auto index = action.Index - AudioInputControlIndex;
-		return AudioValueChange{ static_cast<AudioField>(index), static_cast<unsigned int>(_audioInputs[index]->Value()) };
+		if (_audioInputs[index])
+			return AudioValueChange{ static_cast<AudioField>(index), static_cast<unsigned int>(_audioInputs[index]->Value()) };
+		return std::nullopt;
 	}
 	if (action.Index >= MidiDeviceControlIndex && action.Index < MidiDeviceControlLimit)
 	{
@@ -373,9 +382,8 @@ SceneSettingsControls::DevicePages SceneSettingsControls::BuildDevicePages(
 	const auto selected = std::find_if(inventory.Devices.begin(), inventory.Devices.end(), [&audioDraft](const auto& device){return device.Name == audioDraft.Name;});
 	if (selected != inventory.Devices.end())
 	{
-		std::string details = "Limits: " + std::to_string(selected->InputChannels) + " in / " + std::to_string(selected->OutputChannels) + " out. Rates:";
-		for (const auto rate : selected->SampleRates) details += " " + std::to_string(rate);
-		auto detailsParams = GuiLabelParams::PanelHeader(details, 320, 66u);
+		const std::string details = "Limits: " + std::to_string(selected->InputChannels) + " in / " + std::to_string(selected->OutputChannels) + " out";
+		auto detailsParams = GuiLabelParams::PanelHeader(details, 320);
 		detailsParams.FontSize = graphics::FontOptions::FONT_SMALL;
 		entries.push_back({SettingsPage::Audio,"",std::make_shared<GuiLabel>(detailsParams),0u});
 	}
@@ -387,17 +395,46 @@ SceneSettingsControls::DevicePages SceneSettingsControls::BuildDevicePages(
 	}
 	for (unsigned int i = 0; i < 4; ++i)
 	{
+		if (i == static_cast<unsigned int>(AudioField::SampleRate))
+		{
+			_audioRateDeviceName = audioDraft.Name;
+			_audioRateChoices = selected != inventory.Devices.end() && selected->Probed
+				? selected->SampleRates : std::vector<unsigned int>{};
+			auto rates = GuiDropDownParams::PanelInput(140u);
+			for (const auto rate : _audioRateChoices) rates.Items.push_back(std::to_string(rate) + " Hz");
+			const auto current = std::find(_audioRateChoices.begin(), _audioRateChoices.end(), audioDraft.SampleRate);
+			if (current == _audioRateChoices.end() && audioDraft.SampleRate != 0u)
+			{
+				// Preserve an existing rate when a device cannot offer it (for
+				// example while takes prevent changing the running sample rate).
+				rates.InitIndex = static_cast<unsigned int>(_audioRateChoices.size());
+				_audioRateChoices.push_back(0u);
+				rates.Items.push_back(std::to_string(audioDraft.SampleRate) + " Hz (unavailable)");
+			}
+			else if (current != _audioRateChoices.end())
+				rates.InitIndex = static_cast<unsigned int>(current - _audioRateChoices.begin());
+			_audioSampleRateChoice = std::make_shared<GuiDropDown>(rates);
+			_audioSampleRateChoice->SetPopupManager(&popupManager);
+			entries.push_back({SettingsPage::Audio, labels[i], _audioSampleRateChoice, AudioInputControlIndex+i});
+			continue;
+		}
 		auto params = GuiNumericInputParams::PanelInput(140u);
 		params.IntegerOnly = true; params.RejectOutOfRange = true;
-		params.OnInvalidValue = [this]() { _deviceStatus->SetString("Enter a valid whole number; value exceeds allowed integer limits"); };
-		params.Min = i < 2u ? 0.0 : 1.0; params.Max = static_cast<double>((std::numeric_limits<unsigned int>::max)()); params.Step = 1.0; params.Decimals = 0; params.InitValue = values[i];
+		params.OnInvalidValue = [this, i]() { _deviceStatus->SetString(i < 2u
+			? "Enter a whole number within the selected device's channel limit"
+			: "Enter a valid whole number; value exceeds allowed integer limits"); };
+		params.Min = i < 2u ? 0.0 : 1.0;
+		params.Max = i < 2u && selected != inventory.Devices.end() && selected->Probed
+			? static_cast<double>(i == 0u ? selected->InputChannels : selected->OutputChannels)
+			: static_cast<double>((std::numeric_limits<unsigned int>::max)());
+		params.Step = 1.0; params.Decimals = 0; params.InitValue = values[i];
 		_audioInputs[i] = std::make_shared<GuiNumericInput>(params);
+		if (i < 2u && (selected == inventory.Devices.end() || !selected->Probed)) _audioInputs[i]->SetEnabled(false);
 		entries.push_back({SettingsPage::Audio, labels[i], _audioInputs[i], AudioInputControlIndex+i});
 	}
 	entries.push_back({SettingsPage::Audio, "Active stream", _activeAudioStatus, 0u});
 	entries.push_back({SettingsPage::Audio, "Status", _deviceStatus, 0u});
 	auto button = [&](const std::string& text, unsigned int command){ auto params = GuiButtonParams::PanelButton(240u); params.Text = text; params.DispatchCommand = true; params.Size.Height = 40u; params.MinSize.Height = 40u; params.TextFontSize = graphics::FontOptions::FONT_SMALL; entries.push_back({SettingsPage::Audio,"",std::make_shared<GuiButton>(params),command}); };
-	button("Retry / refresh audio request", RetryAudioControlIndex); button("Retry saving preferences",RetryPreferencesControlIndex);
 	_midiChoices.clear(); _midiChoiceBindings.clear();
 	auto midiTitle = GuiLabelParams::PanelHeader(midi.Inventory.Error.empty() ? "MIDI input selection" : "MIDI inventory: " + midi.Inventory.Error, 320, 66u);
 	midiTitle.FontSize = graphics::FontOptions::FONT_SMALL;
@@ -448,18 +485,24 @@ SceneSettingsControls::DevicePages SceneSettingsControls::BuildDevicePages(
 }
 
 SceneSettingsControls::DraftChange SceneSettingsControls::EditDeviceDraft(const DeviceChange& command,
-	const audio::AsioInventory& inventory, const std::vector<io::UserConfig::SerialSettings>& serialDevices, bool allowRateFallback)
+	const audio::AsioInventory& inventory, const std::vector<io::UserConfig::SerialSettings>& serialDevices,
+	bool allowRateFallback, unsigned int activeSampleRate)
 {
 	if (const auto value = std::get_if<AudioDeviceChange>(&command))
 	{
 		_audioDraft.Name = value->Name;
+		// A pending rate edit belongs to the old device. Start the new request
+		// from the running rate before choosing a supported fallback.
+		if (activeSampleRate != 0u) _audioDraft.SampleRate = activeSampleRate;
 		const auto found = std::find_if(inventory.Devices.begin(), inventory.Devices.end(), [this](const auto& d){ return d.Name == _audioDraft.Name; });
 		if (found != inventory.Devices.end() && found->Probed)
 		{
 			_audioDraft.NumChannelsIn = std::min(_audioDraft.NumChannelsIn, found->InputChannels);
 			_audioDraft.NumChannelsOut = std::min(_audioDraft.NumChannelsOut, found->OutputChannels);
 			if (!_audioDraft.NumChannelsIn && !_audioDraft.NumChannelsOut) { _audioDraft.NumChannelsOut = std::min(2u, found->OutputChannels); if (!_audioDraft.NumChannelsOut) _audioDraft.NumChannelsIn = std::min(2u, found->InputChannels); }
-			if (allowRateFallback && std::find(found->SampleRates.begin(), found->SampleRates.end(), _audioDraft.SampleRate) == found->SampleRates.end() && !found->SampleRates.empty()) _audioDraft.SampleRate = found->PreferredSampleRate ? found->PreferredSampleRate : found->SampleRates.front();
+			if (allowRateFallback && std::find(found->SampleRates.begin(), found->SampleRates.end(), _audioDraft.SampleRate) == found->SampleRates.end() && !found->SampleRates.empty())
+				_audioDraft.SampleRate = std::find(found->SampleRates.begin(), found->SampleRates.end(), found->PreferredSampleRate) != found->SampleRates.end()
+					? found->PreferredSampleRate : found->SampleRates.front();
 		}
 		++_audioDraftRevision;
 		return DraftChange::Device;
@@ -468,6 +511,12 @@ SceneSettingsControls::DraftChange SceneSettingsControls::EditDeviceDraft(const 
 	{
 		const auto& change = std::get<AudioValueChange>(command);
 		using Field = SceneSettingsControls::AudioField;
+		if (change.Field == Field::SampleRate)
+		{
+			if (change.Value == 0u || _audioRateDeviceName != _audioDraft.Name ||
+				std::find(_audioRateChoices.begin(), _audioRateChoices.end(), change.Value) == _audioRateChoices.end())
+				return DraftChange::None;
+		}
 		if (change.Field == Field::Inputs) _audioDraft.NumChannelsIn = change.Value;
 		if (change.Field == Field::Outputs) _audioDraft.NumChannelsOut = change.Value;
 		if (change.Field == Field::SampleRate) _audioDraft.SampleRate = change.Value;

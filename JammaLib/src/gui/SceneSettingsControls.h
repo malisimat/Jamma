@@ -43,22 +43,21 @@ namespace gui
 		struct TapTempo {};
 		struct SaveSession { bool ChooseFolder; bool AsDefault; };
 		struct LoadSession {};
-		struct RetryAudio {};
 		struct RefreshMidi {};
-		struct RetryPreferences {};
 		struct AudioDeviceChange { std::string Name; };
 		enum class AudioField { Inputs, Outputs, SampleRate, BufferSize };
 		struct AudioValueChange { AudioField Field; unsigned int Value; };
 		struct MidiDeviceChange { std::size_t Choice; std::string Name, RegistryId; bool Enabled; };
-		using DeviceChange = std::variant<SaveSession, LoadSession, RetryAudio, RefreshMidi,
-			RetryPreferences, AudioDeviceChange, AudioValueChange, MidiDeviceChange>;
+		using DeviceChange = std::variant<SaveSession, LoadSession, RefreshMidi,
+			AudioDeviceChange, AudioValueChange, MidiDeviceChange>;
 		struct DevicePages { std::vector<GuiSettingEntry> Audio, Midi; };
 		using Change = std::variant<ViewModeChange, GlobalQuantisationChange, ChannelChange,
 			OffsetChange, MetronomeChange, SubdivisionChange, TapTempo>;
 
 		enum class DraftChange { None, Device, Channels, Format, Midi };
 		DraftChange EditDeviceDraft(const DeviceChange& command, const audio::AsioInventory& inventory,
-			const std::vector<io::UserConfig::SerialSettings>& serialDevices, bool allowRateFallback);
+			const std::vector<io::UserConfig::SerialSettings>& serialDevices, bool allowRateFallback,
+			unsigned int activeSampleRate);
 		std::uint64_t AudioDraftRevision() const noexcept { return _audioDraftRevision; }
 		std::uint64_t MidiDraftRevision() const noexcept { return _midiDraftRevision; }
 		void AcceptAudioDraft(io::UserConfig::AudioSettings value, std::uint64_t revision) { if (revision == _audioDraftRevision) _audioDraft = std::move(value); }
@@ -97,6 +96,7 @@ namespace gui
 		void SetFileStatus(const std::string& text) { _fileStatus->SetString(text); }
 		const auto& MidiDevice(std::size_t index) const { return _midiChoices.at(index).Toggle; }
 		const auto& AudioDevice() const { return _audioDeviceChoice; }
+		const auto& AudioSampleRate() const { return _audioSampleRateChoice; }
 		const auto& AudioInput(std::size_t index) const { return _audioInputs.at(index); }
 
 	private:
@@ -105,9 +105,7 @@ namespace gui
 		std::vector<io::UserConfig::MidiSettings> _midiDraft;
 		static constexpr unsigned int AudioDeviceControlIndex = 7200u;
 		static constexpr unsigned int AudioInputControlIndex = 7201u;
-		static constexpr unsigned int RetryAudioControlIndex = 7205u;
 		static constexpr unsigned int RefreshMidiControlIndex = 7206u;
-		static constexpr unsigned int RetryPreferencesControlIndex = 7207u;
 		static constexpr unsigned int SaveSessionControlIndex = 7210u;
 		static constexpr unsigned int LoadSessionControlIndex = 7211u;
 		static constexpr unsigned int DefaultSessionControlIndex = 7212u;
@@ -130,6 +128,9 @@ namespace gui
 		std::shared_ptr<GuiLabel> _deviceStatus, _activeAudioStatus, _fileStatus;
 		std::vector<std::string> _audioChoiceNames;
 		std::shared_ptr<GuiDropDown> _audioDeviceChoice;
+		std::shared_ptr<GuiDropDown> _audioSampleRateChoice;
+		std::vector<unsigned int> _audioRateChoices;
+		std::string _audioRateDeviceName;
 		std::array<std::shared_ptr<GuiNumericInput>, 4> _audioInputs;
 		struct MidiDeviceChoice
 		{
