@@ -139,6 +139,7 @@ namespace audio
 		}
 		
 		AudioDevice* GetDevice() const { return _audioDevice.get(); }
+		bool HasMatchingRunningStream(const io::UserConfig::AudioSettings& request);
 		
 		std::shared_ptr<ChannelMixer> GetChannelMixer() { return _channelMixer; }
 		void SetNinjamMetronomeEnabled(bool enabled) noexcept { _ninjamMetronomeEnabled.store(enabled, std::memory_order_release); }

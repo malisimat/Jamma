@@ -457,6 +457,12 @@ bool SessionControl::_ScheduleWindowOperation(DeviceSelectionSchedule::Clock::ti
 		{
 			if (now < _audioSchedule.EditDeadline) { _SetDeviceStatus("Settling audio settings (3 seconds)"); return false; }
 			if (effects.CheckEligibility().CaptureBusy) { _SetDeviceStatus("Waiting for recording/pending capture"); return false; }
+			if (_audio->HasMatchingRunningStream(_submittedAudio.Value))
+			{
+				_audioSchedule.AttemptedRevision = _audioSchedule.Revision;
+				_SetDeviceStatus("Audio device ready");
+				return false;
+			}
 			std::string error;
 			if (!_ValidateAudioDraft(error, effects)) { _SetDeviceStatus(error); _Notice("Audio device",error); _audioSchedule.AttemptedRevision = _audioSchedule.Revision; return false; }
 			Begin(SessionControl::Audio);

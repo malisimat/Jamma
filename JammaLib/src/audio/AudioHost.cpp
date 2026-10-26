@@ -451,6 +451,13 @@ namespace audio
 		return true;
 	}
 
+	bool AudioHost::HasMatchingRunningStream(const io::UserConfig::AudioSettings& request)
+	{
+		std::scoped_lock lock(_audioMutex);
+		return _audioDevice && _audioDevice->IsRunning() &&
+			!_callbackRecoveryBlocked.load(std::memory_order_acquire) && _userConfig.Audio == request;
+	}
+
 	bool AudioHost::Reconfigure(const io::UserConfig::AudioSettings& settings, std::string& error)
 	{
 		std::scoped_lock lock(_audioMutex);
