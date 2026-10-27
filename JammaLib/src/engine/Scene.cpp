@@ -54,6 +54,7 @@ Scene::Scene(SceneParams params,
 	_networkService(std::make_unique<ninjam::NinjamNetworkService>())
 {
 	_operation.Bind(*_audioEngine, *_inputSubsystem, _rigCoordinator, _userConfig, _sceneIdentity);
+	_operation.BindEffects(_ControlEffects());
 	_operation.InitializeCandidates(user.Audio, user.Midi.Devices);
 	_routingEditNow = std::move(params.RoutingEditNow);
 	_quantisation.SetClock(std::make_shared<Timer>());
@@ -1052,7 +1053,7 @@ void Scene::Shutdown()
 	// RtAudio::Stop() waits for an in-flight callback to return.  Do this before
 	// closing an editor or releasing a plugin: the callback can be dispatching
 	// VST processing, MIDI, or recorded parameter automation.
-	CloseAudio();
+	_operation.CloseAudio();
 	CloseAllVstEditorWindows();
 	lifecycle.unlock(); // Final job acknowledgement must run before join.
 
@@ -1062,8 +1063,7 @@ void Scene::Shutdown()
 	assert(_inputSubsystem->RigTriggerInputReadyForShutdown());
 	_inputSubsystem->PublishEmptyRigInputDispatch();
 	CloseGlobalKeyCapture();
-	CloseSerial();
-	CloseMidi();
+	_operation.CloseMidi();
 
 	// No work from the outgoing session may survive a session replacement.
 	// In particular, queued VST loads retain UI-thread-created plugin objects;
@@ -1654,10 +1654,6 @@ bool Scene::_CaptureIsBusy() const
 
 
 
-bool Scene::ConsumePanelLoadRequest()
-{
-	return _operation.ConsumePanelLoadRequest();
-}
 
 // Membership presentation is committed only by the window owner.
 bool Scene::_StationManagementAvailableLocked() const
@@ -2223,34 +2219,6 @@ void Scene::InitAudio(bool generatedRig, const audio::AsioInventory* inventory, 
 	_workspace->ApplyControlPresentation(_operation.TakePresentation(), ActionReceiver::shared_from_this());
 }
 
-void Scene::CloseAudio()
-{
-	_operation.CloseAudio();
-}
-bool Scene::PauseAudio()
-{
-	return _operation.PauseAudio();
-}
-bool Scene::ResumeAudio()
-{
-	return _operation.ResumeAudio();
-}
-void Scene::ReportFileStatus(const std::string& status)
-{
-	_operation.ReportFileStatus(status);
-}
-void Scene::PickSessionForLoad()
-{
-	_operation.PickSessionForLoad(_ControlEffects());
-}
-void Scene::RequestSessionLoad(std::wstring path)
-{
-	_operation.RequestSessionLoad(std::move(path), _ControlEffects());
-}
-std::wstring Scene::TakeReadySessionLoad()
-{
-	return _operation.TakeReadySessionLoad();
-}
 void Scene::FinishSessionLoad(bool replaced, const std::string& error) { _operation.FinishSessionLoad(replaced, error,
 {
 	_sceneMutex, _stations });

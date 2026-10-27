@@ -974,7 +974,7 @@ void Window::UpdateSessionTitle()
 {
 	if (_released || !_wnd || !_scene) return;
 	const auto identity = _scene->Identity();
-	const auto& path = _scene->CurrentJamPath();
+	const auto& path = _scene->Controls().CurrentJamPath();
 	if (_titleSceneIdentity == identity && _titleJamPath == path) return;
 
 	std::wstring title = L"Jamma";

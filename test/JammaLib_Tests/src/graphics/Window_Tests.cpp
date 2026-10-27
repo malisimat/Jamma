@@ -914,7 +914,7 @@ TEST(WindowTitle, UnsavedUnicodeAndNumberedDestinationsUpdateNativeCaptionOnlyWh
 	EXPECT_EQ(L"Jamma", host.Text());
 	for (unsigned int frame = 0u; frame < 8u; ++frame) window.UpdateSessionTitle();
 	EXPECT_EQ(1u, host.Changes);
-	scene.SetCurrentJamPath(L"C:\\sessions\\\u6f14\u594f-\u03b2.jam");
+	scene.Controls().SetCurrentJamPath(L"C:\\sessions\\\u6f14\u594f-\u03b2.jam");
 	window.UpdateSessionTitle();
 	EXPECT_EQ(L"Jamma - \u6f14\u594f-\u03b2.jam", host.Text());
 	EXPECT_EQ(2u, host.Changes);
@@ -933,10 +933,10 @@ TEST(WindowTitle, WrittenJamStillNamesWindowWhenDefaultUpdateFailsAndFailedSaves
 	Window window(scene, resources);
 	WindowTitleNativeHost host(window);
 	ASSERT_NE(nullptr, host.Handle);
-	scene.SetCurrentJamPath(L"previous.jam");
+	scene.Controls().SetCurrentJamPath(L"previous.jam");
 	window.UpdateSessionTitle();
 	unsigned int defaultsWrites = 0u;
-	scene.SetDefaultJamSaver(L"startup.jam", [&](const auto&, bool) { ++defaultsWrites; return false; });
+	scene.Controls().SetDefaultJamSaver(L"startup.jam", [&](const auto&, bool) { ++defaultsWrites; return false; });
 	scene.CompleteSave(true, L"C:/isolated-jamma/export/committed-0003.jam", true);
 	window.UpdateSessionTitle();
 	EXPECT_EQ(1u, defaultsWrites);
@@ -959,7 +959,7 @@ TEST(WindowTitle, ReplacementResetsUnsavedCaptionAndOldSceneCompletionCannotRena
 	Window window(outgoing, resources);
 	WindowTitleNativeHost host(window);
 	ASSERT_NE(nullptr, host.Handle);
-	outgoing.SetCurrentJamPath(L"outgoing.jam");
+	outgoing.Controls().SetCurrentJamPath(L"outgoing.jam");
 	window.UpdateSessionTitle();
 	EXPECT_EQ(L"Jamma - outgoing.jam", host.Text());
 	window.ReplaceScene(unsaved);
@@ -970,7 +970,7 @@ TEST(WindowTitle, ReplacementResetsUnsavedCaptionAndOldSceneCompletionCannotRena
 	EXPECT_EQ(L"Jamma", host.Text());
 	EXPECT_EQ(2u, host.Changes);
 
-	loaded.SetCurrentJamPath(L"C:/sessions/loaded-\u03a9.jam");
+	loaded.Controls().SetCurrentJamPath(L"C:/sessions/loaded-\u03a9.jam");
 	window.ReplaceScene(loaded);
 	EXPECT_EQ(L"Jamma - loaded-\u03a9.jam", host.Text());
 	window.UpdateSessionTitle();

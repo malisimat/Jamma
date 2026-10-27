@@ -1,5 +1,6 @@
 #pragma once
 
+#include "SessionControls.h"
 #include <atomic>
 #include <functional>
 #include <unordered_map>
@@ -23,7 +24,7 @@ namespace engine
 	// Non-audio session control: one admission/writer protocol spans schedule,
 	// drain, hardware/file effects and restoration. Scene retains structural
 	// eligibility, accepted publication/timing effects and top-level teardown.
-	class SessionControl
+	class SessionControl : public SessionControls
 	{
 	public:
 		enum Kind { None, Audio, Midi, Save, Load };
@@ -77,7 +78,11 @@ namespace engine
 			std::vector<Notice> Notices;
 			std::shared_ptr<const MidiState> Midi;
 		};
-		enum class RigSaveMode { Save, SaveAs, StartupDefault };
+		using RigSaveMode = SessionControls::RigSaveMode;
+		void BindEffects(Effects effects) { _effects = std::move(effects); }
+		void RequestSessionLoad(std::wstring path) override { RequestSessionLoad(std::move(path), _effects); }
+		void PickSessionForLoad() override { PickSessionForLoad(_effects); }
+		midi::MidiConnectionResult GetMidiConnectionResult() const override { return MidiSnapshot()->Connection; }
 		void Bind(audio::AudioHost& audio, io::IoInputSubsystem& input, RigCoordinator& rig, io::UserConfig& config, std::uint64_t sceneIdentity);
 		void InitializeCandidates(io::UserConfig::AudioSettings audio, std::vector<io::UserConfig::MidiSettings> midi)
 		{ _submittedAudio.Value = std::move(audio); _submittedMidi.Value = std::move(midi); }
@@ -85,7 +90,7 @@ namespace engine
 		{ _submittedAudio = {std::move(value), revision}; _audioSchedule.Changed(edit); _devicePageDirty |= edit == DeviceSelectionSchedule::Edit::Device; }
 		void SubmitMidi(std::vector<io::UserConfig::MidiSettings> value, std::uint64_t revision)
 		{ _submittedMidi = {std::move(value), revision}; _midiDraftPending = true; }
-		void RequestMidiRefresh() noexcept { _midiRefreshRequested.store(true, std::memory_order_release); }
+		void RequestMidiRefresh() noexcept override { _midiRefreshRequested.store(true, std::memory_order_release); }
 		void RefreshMidiFromWindow() noexcept { _devicePageDirty = true; RequestMidiRefresh(); }
 		void PumpOnWindow(StationAccess access, const Effects& effects, bool quitting);
 		void PumpOnJob(StationAccess access, const Effects& effects, bool quitting);
@@ -99,27 +104,27 @@ namespace engine
 			bool generatedRig, const audio::AsioInventory* inventory, bool exactSelection, StationAccess access, const Effects& effects);
 		void InitMidi(bool generatedRig = false);
 		void CloseMidi();
-		void CloseAudio();
+		void CloseAudio() override;
 		bool PauseAudio();
 		bool ResumeAudio();
-		void SetMidiInputInventory(midi::MidiInputInventory inventory) { _midiInputInventory = std::move(inventory); }
+		void SetMidiInputInventory(midi::MidiInputInventory inventory) override { _midiInputInventory = std::move(inventory); }
 		void SetHardwarePreferenceSaver(std::function<bool(const io::RigFile&)> saver) { _saveHardwarePreferences = std::move(saver); }
 		bool SaveHardwarePreferences(const io::RigFile& rig) const { return _saveHardwarePreferences && _saveHardwarePreferences(rig); }
 		void RequestSave(bool chooseFolder, bool asDefault, const Effects& effects);
 		void PickSessionForLoad(const Effects& effects);
 		void RequestSessionLoad(std::wstring path, const Effects& effects);
-		std::wstring TakeReadySessionLoad();
+		std::wstring TakeReadySessionLoad() override;
 		void FinishSessionLoad(bool replaced, const std::string& error, StationAccess access);
 		bool FinishOperation(std::string* restorationError, StationAccess access);
 		void CompleteSessionSave(bool success, const std::wstring& path, const std::string& error, std::wstring folder, bool asDefault);
 		const std::wstring& SessionSaveFolder() const noexcept { return _sessionSaveFolder; }
 		void ReportFileStatus(const std::string& status);
-		void ReportFileOutcome(const std::string& status);
-		void SetSessionSaveFolder(std::wstring folder) { _sessionSaveFolder = std::move(folder); }
-		void SetDefaultJamSaver(std::wstring path, std::function<bool(const std::wstring&, bool)> saver) { _defaultJamPath = std::move(path); _defaultJamSaver = std::move(saver); }
-		void SetCurrentJamPath(std::wstring path) { _currentJamPath = std::move(path); }
-		const std::wstring& CurrentJamPath() const noexcept { return _currentJamPath; }
-		bool ConsumePanelLoadRequest() { return std::exchange(_panelLoadRequested, false); }
+		void ReportFileOutcome(const std::string& status) override;
+		void SetSessionSaveFolder(std::wstring folder) override { _sessionSaveFolder = std::move(folder); }
+		void SetDefaultJamSaver(std::wstring path, std::function<bool(const std::wstring&, bool)> saver) override { _defaultJamPath = std::move(path); _defaultJamSaver = std::move(saver); }
+		void SetCurrentJamPath(std::wstring path) override { _currentJamPath = std::move(path); }
+		const std::wstring& CurrentJamPath() const noexcept override { return _currentJamPath; }
+		bool ConsumePanelLoadRequest() override { return std::exchange(_panelLoadRequested, false); }
 		void RequestPanelLoad() { if (Current() == None) _panelLoadRequested = true; }
 		bool IsReplacing() const noexcept { return _sessionReplacing.load(std::memory_order_acquire); }
 		void BeginReplacement() noexcept { _sessionReplacing.store(true, std::memory_order_release); }
@@ -129,7 +134,7 @@ namespace engine
 		bool RigSaveDialogOpen() const noexcept { return _rigSaveDialogOpen; }
 		void RequestRigSave(RigSaveMode mode) { _rigSaveMode = mode; _rigSaveRequested = true; }
 		bool TakeRigSaveRequest() { return std::exchange(_rigSaveRequested, false); }
-		RigSaveMode RequestedRigSaveMode() const noexcept { return _rigSaveMode; }
+		RigSaveMode RequestedRigSaveMode() const noexcept override { return _rigSaveMode; }
 		void BeginExplicitRigSaveLocked() { _rigSaveInProgress = true; }
 		void SetRigSaveDialogOpenLocked(bool open);
 		void QueueExplicitRigSaveLocked(std::function<void()> work) { _rigSaveInProgress = true; _explicitRigSaveJob = std::move(work); }
@@ -149,6 +154,7 @@ namespace engine
 
 	private:
 		friend class SourceLossIntegrationTestAccess;
+		Effects _effects; // Bound once by Scene; synchronous callbacks never outlive it.
 		void Begin(Kind kind) { _kind = kind; }
 		void NextIdentity() { ++_identity; }
 		void RequestBoundary(io::IoInputSubsystem& input, std::uint64_t revision);

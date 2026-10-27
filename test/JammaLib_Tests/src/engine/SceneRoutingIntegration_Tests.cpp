@@ -976,8 +976,8 @@ TEST_F(SceneRoutingIntegrationTest, CloseAudioAndShutdownAreRepeatable)
 {
 	auto scene = FreshScene({ Station("Station") }, { Trigger("trigger", "Station") });
 	ASSERT_TRUE(scene);
-	EXPECT_NO_THROW(scene->CloseAudio());
-	EXPECT_NO_THROW(scene->CloseAudio());
+	EXPECT_NO_THROW(scene->Controls().CloseAudio());
+	EXPECT_NO_THROW(scene->Controls().CloseAudio());
 	EXPECT_NO_THROW(scene->Shutdown());
 	EXPECT_NO_THROW(scene->Shutdown());
 	EXPECT_EQ(engine::RigCoordinator::EditResult::EditsDisabled,
@@ -1273,7 +1273,7 @@ TEST_F(SceneRoutingIntegrationTest, DeviceGuiDispatchIsIsolatedFromStationComman
     auto save = engine::SourceLossIntegrationTestAccess::RigSaveButton(*scene);
     ASSERT_TRUE(save); click(save);
     EXPECT_TRUE(scene->ConsumeRigSaveRequest());
-    EXPECT_EQ(engine::Scene::RigSaveMode::StartupDefault,scene->RequestedRigSaveMode());
+    EXPECT_EQ(engine::Scene::RigSaveMode::StartupDefault,scene->Controls().RequestedRigSaveMode());
     auto loadRig = engine::SourceLossIntegrationTestAccess::RigSaveChoice(*scene, 0u);
     auto saveAsRig = engine::SourceLossIntegrationTestAccess::RigSaveChoice(*scene, 1u);
     ASSERT_NE(save->Parent(), loadRig->Parent());
@@ -1286,7 +1286,7 @@ TEST_F(SceneRoutingIntegrationTest, DeviceGuiDispatchIsIsolatedFromStationComman
     EXPECT_FALSE(scene->ConsumeRigSaveRequest());
     click(saveAsRig);
     EXPECT_TRUE(scene->ConsumeRigSaveRequest());
-    EXPECT_EQ(engine::Scene::RigSaveMode::SaveAs, scene->RequestedRigSaveMode());
+    EXPECT_EQ(engine::Scene::RigSaveMode::SaveAs, scene->Controls().RequestedRigSaveMode());
     engine::SourceLossIntegrationTestAccess::Manage(*scene, false, target);
     cancel = engine::SourceLossIntegrationTestAccess::RemovalButton(*scene, 0u);
     auto remove = engine::SourceLossIntegrationTestAccess::RemovalButton(*scene, 1u);
@@ -2273,7 +2273,7 @@ TEST_F(SceneRoutingIntegrationTest, CaptureBecomingBusyBeforeAdmissionRejectsSes
 	{
 		auto excludeJob = Access::ExcludeJob(*scene);
 		ASSERT_TRUE(Access::InputGateOpen(*scene));
-		scene->RequestSessionLoad(L"test-owned-unopened-path.jam");
+		scene->Controls().RequestSessionLoad(L"test-owned-unopened-path.jam");
 		scene->PumpDeviceAndFileControls(); // Request closes producers; admission still awaits job acknowledgement.
 		EXPECT_FALSE(Access::InputGateOpen(*scene));
 		io::UserConfig config{}; config.Audio.NumChannelsIn = 1u;
@@ -2287,7 +2287,7 @@ TEST_F(SceneRoutingIntegrationTest, CaptureBecomingBusyBeforeAdmissionRejectsSes
 			scene->PumpDeviceAndFileControls();
 			std::this_thread::yield();
 		}
-		EXPECT_TRUE(scene->TakeReadySessionLoad().empty());
+		EXPECT_TRUE(scene->Controls().TakeReadySessionLoad().empty());
 		EXPECT_TRUE(Access::ControlIdle(*scene));
 		EXPECT_TRUE(Access::InputGateOpen(*scene));
 		EXPECT_EQ(station, scene->SnapshotStations().front());

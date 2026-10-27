@@ -783,7 +783,7 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 
 	scene.value()->InitGlobalKeyCapture();
 
-	scene.value()->SetMidiInputInventory(midiInventory);
+	scene.value()->Controls().SetMidiInputInventory(midiInventory);
 	{
 		const auto& requested = rig.User.Audio;
 		std::ostringstream detail;
@@ -824,7 +824,7 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 			<< " buffer=" << attempt.BufferSize << " opened=" << attempt.Opened
 			<< " started=" << attempt.Started << " " << attempt.Error << std::endl;
 	}
-	for (const auto& attempt : scene.value()->GetMidiConnectionResult().Attempts)
+	for (const auto& attempt : scene.value()->Controls().GetMidiConnectionResult().Attempts)
 	{
 		startupLog.Write("[MIDI] request='" + attempt.RequestedName + "' connected='" +
 			attempt.ConnectedName + "' status=" + MidiStatusText(attempt.Status) +
@@ -857,7 +857,7 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 	}
 	if (!rigGenerated)
 	{
-		for (const auto& attempt : scene.value()->GetMidiConnectionResult().Attempts)
+		for (const auto& attempt : scene.value()->Controls().GetMidiConnectionResult().Attempts)
 			if (attempt.Status != midi::MidiConnectionStatus::Connected &&
 				attempt.Status != midi::MidiConnectionStatus::Disabled)
 				startupLog.Write("[RIG] warning: selected MIDI request '" + attempt.RequestedName +
@@ -867,7 +867,7 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 	if (rigGenerated && asioReport.StartedParams && generatedRigPath)
 	{
 		const auto& actual = *asioReport.StartedParams;
-		const auto connection = scene.value()->GetMidiConnectionResult();
+		const auto connection = scene.value()->Controls().GetMidiConnectionResult();
 		const auto acceptedBeforeFinalisation = scene.value()->AcceptedRigSnapshot();
 		const auto& openedRig = acceptedBeforeFinalisation ? acceptedBeforeFinalisation->Rig : rig;
 		auto finalRig = io::StartupConfig::WithOpenedInputs(openedRig, actual.NumInputChannels,
@@ -1006,7 +1006,7 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 			<< " in=" << actual.NumInputChannels << " out=" << actual.NumOutputChannels;
 	}
 	startupSummary << " midi=";
-	for (const auto& device : scene.value()->GetMidiConnectionResult().Connected)
+	for (const auto& device : scene.value()->Controls().GetMidiConnectionResult().Connected)
 		startupSummary << "'" << device.Name << "' ";
 	startupSummary << " stations=" << scene.value()->SnapshotStations().size()
 		<< " triggers=" << rig.Triggers.size()
@@ -1018,9 +1018,9 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 
 	if (!jamGenerated && defaults)
 	{
-		scene.value()->SetSessionSaveFolder(utils::GetParentDirectory(defaults->Jam));
+		scene.value()->Controls().SetSessionSaveFolder(utils::GetParentDirectory(defaults->Jam));
 		if (defaults->JamOrigin != io::StartupConfig::GeneratedOrigin)
-			scene.value()->SetCurrentJamPath(defaults->Jam);
+			scene.value()->Controls().SetCurrentJamPath(defaults->Jam);
 	}
 	const auto configureDefaultJamSave = [&]() {
 		scene.value()->SetRuntimeDialogFallback([owner = window.GetWindowHandle()](const std::string& title, const std::string& message) {
@@ -1028,7 +1028,7 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 			MessageBoxW(owner,wideMessage.c_str(),wideTitle.c_str(),MB_OK | MB_ICONWARNING);
 		});
 		if (const auto currentDefaults = LoadIni(initPath))
-			scene.value()->SetDefaultJamSaver(currentDefaults->Jam, [&](const std::wstring& savedPath, bool useNamedJam) {
+			scene.value()->Controls().SetDefaultJamSaver(currentDefaults->Jam, [&](const std::wstring& savedPath, bool useNamedJam) {
 			auto current = LoadIni(initPath);
 			if (!current) return false;
 			if (!useNamedJam) return PublishDefaultJam(savedPath, current->Jam);
@@ -1073,7 +1073,7 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 		while (PeekMessage(&msg, nullptr, 0, 0, PM_REMOVE))
 		{
 			if (msg.message == WM_DEVICECHANGE && msg.wParam == DBT_DEVNODES_CHANGED)
-				scene.value()->RequestMidiRefresh();
+				scene.value()->Controls().RequestMidiRefresh();
 			if (msg.message == WM_QUIT)
 			{
 				consoleCommands.Close();
@@ -1219,14 +1219,14 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 			}
 		}
 		const bool windowLoadRequested = window.ConsumeJamLoadRequest();
-		const bool panelLoadRequested = scene.value()->ConsumePanelLoadRequest();
+		const bool panelLoadRequested = scene.value()->Controls().ConsumePanelLoadRequest();
 		if (windowLoadRequested || panelLoadRequested)
 		{
 			// Resolve the picker before admission/suspension; cancel changes nothing.
-			scene.value()->PickSessionForLoad();
+			scene.value()->Controls().PickSessionForLoad();
 		}
 		scene.value()->PumpDeviceAndFileControls();
-		const auto pendingJamPath = scene.value()->TakeReadySessionLoad();
+		const auto pendingJamPath = scene.value()->Controls().TakeReadySessionLoad();
 		if (!pendingJamPath.empty())
 		{
 			std::optional<std::shared_ptr<Scene>> replacement;
@@ -1256,20 +1256,20 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 				scene = std::move(replacement);
 				rigDefaultSave.InvalidateSavedRevision();
 				vst::DrainUiThreadDestroyQueue();
-				scene.value()->SetSessionSaveFolder(utils::GetParentDirectory(pendingJamPath));
-				scene.value()->SetCurrentJamPath(pendingJamPath);
+				scene.value()->Controls().SetSessionSaveFolder(utils::GetParentDirectory(pendingJamPath));
+				scene.value()->Controls().SetCurrentJamPath(pendingJamPath);
 				configureDefaultJamSave();
 				scene.value()->InitGlobalKeyCapture();
 				// Preserve rig hardware choices and inventory across loaded content.
 				scene.value()->InitAudio(false, nullptr, true);
 				const bool started = scene.value()->GetAsioOpenReport().StartedParams.has_value();
-				scene.value()->ReportFileOutcome(started ? "Loaded session (check log for asset warnings)" : "Loaded session; audio stopped, retry available");
+				scene.value()->Controls().ReportFileOutcome(started ? "Loaded session (check log for asset warnings)" : "Loaded session; audio stopped, retry available");
 			}
 		}
 
 		if (rigDefaultSave.Poll(*scene.value(), window.GetWindowHandle(), *defaults)) { rigReadyForDefaults = true; defaultsValid = true; hardwareDefaults->store(std::make_shared<const io::InitFile>(*defaults), std::memory_order_release); }
 		if (!rigDefaultSave.Busy() && scene.value()->ConsumeRigSaveRequest())
-			rigDefaultSave.Start(*scene.value(), window.GetWindowHandle(), *defaults, scene.value()->RequestedRigSaveMode());
+			rigDefaultSave.Start(*scene.value(), window.GetWindowHandle(), *defaults, scene.value()->Controls().RequestedRigSaveMode());
 		window.Render();
 		window.Swap();
 		if (!startupCompletionArmed)

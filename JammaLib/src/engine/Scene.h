@@ -152,20 +152,10 @@ namespace engine
 		void InitGui();
 		// Main/UI owner only. One operation spans admission through restoration.
 		void PumpDeviceAndFileControls();
-		void RequestSessionLoad(std::wstring path);
-		void PickSessionForLoad();
-		bool ConsumePanelLoadRequest();
-		std::wstring TakeReadySessionLoad();
+		// Borrow only while this Scene remains alive; do not cache across replacement.
+		SessionControls& Controls() noexcept { return _operation; }
 		void FinishSessionLoad(bool replaced, const std::string& error = {});
-		void SetSessionSaveFolder(std::wstring folder) { _operation.SetSessionSaveFolder(std::move(folder)); }
-		void SetDefaultJamSaver(std::wstring path, std::function<bool(const std::wstring&, bool)> saver)
-		{ _operation.SetDefaultJamSaver(std::move(path), std::move(saver)); }
-		void SetCurrentJamPath(std::wstring path) { _operation.SetCurrentJamPath(std::move(path)); }
-		const std::wstring& CurrentJamPath() const noexcept { return _operation.CurrentJamPath(); }
 		std::uint64_t Identity() const noexcept { return _sceneIdentity; }
-		void ReportFileStatus(const std::string& status);
-		void ReportFileOutcome(const std::string& status)
-		{ _operation.ReportFileOutcome(status); }
 		// Owned values only; off-callback workers may post, UI alone presents.
 		void ReportRuntimeNotice(std::string title, std::string message)
 		{ _workspace->Notices().Notify(std::move(title),std::move(message)); }
@@ -181,9 +171,6 @@ namespace engine
 		{
 			return _audioEngine->GetStreamParams();
 		}
-		void CloseAudio();
-		bool PauseAudio();
-		bool ResumeAudio();
 		bool InitGlobalKeyCapture();
 		void CloseGlobalKeyCapture();
 		bool PumpGlobalKeyCapture(actions::KeyAction& action) noexcept;
@@ -195,22 +182,11 @@ namespace engine
 		std::string_view JobThreadFailureDetail() const noexcept { return JobThreadFailed() ? std::string_view(_jobThreadFailureDetail.data()) : std::string_view{}; }
 		void SetLogging(io::LoggingConfig config) noexcept;
 		bool IsUiVerbose() const noexcept { return _loggingConfig.Ui == "verbose"; }
-		void InitMidi(bool generatedRig = false) { _operation.InitMidi(generatedRig); }
-		void SetMidiInputInventory(midi::MidiInputInventory inventory) { _operation.SetMidiInputInventory(std::move(inventory)); }
-		midi::MidiConnectionResult GetMidiConnectionResult() const { return _operation.MidiSnapshot()->Connection; }
-		void CloseMidi() { _operation.CloseMidi(); }
-		void RequestMidiRefresh() noexcept { _operation.RequestMidiRefresh(); }
-		void InitSerial() {}
-		void CloseSerial() {}
 		// UI thread only: reconciles pending topology and popup presentation before rendering.
 		void CommitChanges();
-		// Off-callback hardware-only saver; never persists live membership or routing.
-		bool SaveHardwarePreferences(const io::RigFile& rig) const
-		{ return _operation.SaveHardwarePreferences(rig); }
 		bool ConsumePanelRigLoadRequest() { return std::exchange(_panelRigLoadRequested, false); }
 		bool ConsumeRigSaveRequest(); // Main/window thread only.
-		using RigSaveMode = SessionControl::RigSaveMode;
-		RigSaveMode RequestedRigSaveMode() const { return _operation.RequestedRigSaveMode(); }
+		using RigSaveMode = SessionControls::RigSaveMode;
 		struct CapturedRig { io::RigFile Rig; std::uint64_t Revision = 0u, SceneId = 0u; };
 		std::optional<CapturedRig> CaptureCommittedRigVersion() const;
 		std::optional<CapturedRig> BeginExplicitRigSave();
@@ -275,7 +251,7 @@ namespace engine
 		void DisconnectNinjam();
 
 		// Force-unload all hosted VST plugins owned by stations/takes/loops.
-		// Call on the main thread only after CloseAudio() has stopped the callback.
+		// Call on the main thread only after Controls().CloseAudio() has stopped the callback.
 		void ForceUnloadAllVstPlugins();
 		
 	protected:

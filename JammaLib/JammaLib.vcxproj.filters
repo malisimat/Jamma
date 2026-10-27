@@ -71,6 +71,7 @@
     <ClInclude Include="src\io\IoSessionLoader.h" />
     <ClInclude Include="src\midi\MidiRefreshPolicy.h" />
     <ClInclude Include="src\engine\HierarchySelection.h" />
+    <ClInclude Include="src\engine\SessionControls.h" />
     <ClInclude Include="src\engine\SessionControl.h" />
     <ClInclude Include="src\engine\LocalTiming.h" />
     <ClInclude Include="src\gui\SceneSettingsControls.h" />
