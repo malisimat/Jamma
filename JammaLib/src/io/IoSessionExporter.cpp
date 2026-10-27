@@ -325,19 +325,19 @@ namespace io
 					return std::any_of(takes.begin(), takes.end(), [](const std::shared_ptr<LoopTake>& take)
 						{ return take && (!take->GetLoops().empty() || !take->GetMidiLoops().empty()); });
 				});
-			if (clock && clock->SeedSourceLength() != 0ul)
+			if (!hasSavedLoopContent)
+				jam.TransportInitialised = false;
+			else if (clock && clock->SeedSourceLength() != 0ul)
 			{
 				jam.MasterLengthSamps = clock->SeedSourceLength();
 				jam.AbsoluteSamplePos = clock->AbsoluteSamplePos();
 				jam.Quantisation = clock->Quantisation();
 			}
-			else if (hasSavedLoopContent)
+			else
 			{
 				std::cout << "Export: local master timer is not initialised" << std::endl;
 	            result.Error = "Session capture failed"; return false;
 			}
-			else
-				jam.TransportInitialised = false;
 
 			for (std::size_t stationIndex = 0u; stationIndex < stations.size(); ++stationIndex)
 			{

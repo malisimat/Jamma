@@ -119,6 +119,7 @@ namespace gui
 		void SetStationAnchors(std::vector<StationAnchor> anchors);
 		void SetLoopEditorMode(bool enabled);
 		void SetQuantisationFeedback(const std::string& text);
+		void SetClockStatus(unsigned long masterLengthSamps, unsigned int grainSamps);
 		void SetPerformanceGroupFeedback(const std::string& text);
 		utils::Rect2d OccupiedTopStripBounds() const;
 		void SetTopPanelLayout(GuiTopPanelLayout layout);
@@ -280,6 +281,7 @@ namespace gui
 		std::shared_ptr<GuiPanel> _statusPanel;
 		std::shared_ptr<GuiLabel> _routingStatusLabel;
 		std::string _quantisationFeedback;
+		std::string _clockStatusText = "Clock OFF | Subdiv --";
 		std::string _performanceGroupFeedback; // UI/job owner under Scene serialization
 		float _editModeAlpha = 0.0f;
 		std::shared_ptr<GuiPopup> _deletePopup;

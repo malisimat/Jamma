@@ -761,7 +761,7 @@ void GuiHud::_BuildTriggerRail()
 	_triggerRail->AddChild(_addTriggerButton);
 
 	GuiLabelParams statusParams = GuiLabelParams::PanelScrollRow(
-		_performanceGroupFeedback.empty() ? _quantisationFeedback : _performanceGroupFeedback, 0u);
+		_performanceGroupFeedback.empty() ? (_quantisationFeedback.empty() ? _clockStatusText : _quantisationFeedback) : _performanceGroupFeedback, 0u);
 	statusParams.Ellipsize = true;
 	statusParams.Size = { 300u, GuiLabelParams::RowHeight };
 	statusParams.MinSize = { 160u, GuiLabelParams::RowHeight };
@@ -1630,7 +1630,7 @@ void GuiHud::_UpdateRoutingEditPresentation()
 	_lastRoutingEditAvailability = availability;
 	switch (availability)
 	{
-	case RoutingEditAvailability::Ready: _routingStatusLabel->SetString(""); break;
+	case RoutingEditAvailability::Ready: _routingStatusLabel->SetString(_clockStatusText); break;
 	case RoutingEditAvailability::Applying: _routingStatusLabel->SetString("Applying trigger routing..."); break;
 	case RoutingEditAvailability::AudioCallbackInactive: _routingStatusLabel->SetString("Start audio to edit trigger routing"); break;
 	case RoutingEditAvailability::TriggerBusy: _routingStatusLabel->SetString("Finish trigger action to edit routing"); break;
@@ -2471,6 +2471,20 @@ void gui::GuiHud::SetQuantisationFeedback(const std::string& text)
 		// Force normal routing status to recover on the next HUD update.
 		_lastRoutingEditAvailability.reset();
 	}
+}
+
+void GuiHud::SetClockStatus(unsigned long masterLengthSamps, unsigned int grainSamps)
+{
+	std::string status = "Clock OFF | Subdiv --";
+	if (masterLengthSamps > 0ul)
+		status = grainSamps > 0u && masterLengthSamps % grainSamps == 0ul
+			? "Clock ON | Subdiv " + std::to_string(masterLengthSamps / grainSamps)
+			: "Clock ON | Subdiv --";
+	if (_clockStatusText == status) return;
+	_clockStatusText = std::move(status);
+	if (_routingStatusLabel && _performanceGroupFeedback.empty() && _quantisationFeedback.empty()
+		&& _lastRoutingEditAvailability == RoutingEditAvailability::Ready)
+		_routingStatusLabel->SetString(_clockStatusText);
 }
 
 void GuiHud::SetPerformanceGroupFeedback(const std::string& text)

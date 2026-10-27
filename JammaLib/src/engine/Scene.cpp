@@ -291,10 +291,19 @@ std::optional<std::shared_ptr<Scene>> Scene::FromFile(SceneParams sceneParams,
 		scene->_workspace->Hud()->SetRoutingConfig(loaded.HudAudioInputCount, std::move(loaded.HudMidiInputs), *acceptedRig);
 	scene->_inputSubsystem->OpenRigTriggerInput(acceptedRig->Revision);
 
-	if (!jamStruct.TransportInitialised)
+	const bool hasLocalLoopContent = std::any_of(scene->_stations.begin(), scene->_stations.end(),
+		[](const std::shared_ptr<Station>& station)
+		{
+			if (!station || station->IsRemote()) return false;
+			const auto takes = station->GetLoopTakeSnapshot();
+			return std::any_of(takes.begin(), takes.end(), [](const std::shared_ptr<LoopTake>& take)
+				{ return take && (!take->GetLoops().empty() || !take->GetMidiLoops().empty()); });
+		});
+	scene->_isSceneReset.store(!hasLocalLoopContent, std::memory_order_relaxed);
+	if (!jamStruct.TransportInitialised || !hasLocalLoopContent)
 	{
-		// No local geometry was saved. The first completed recording seeds the
-		// clock from its physical length under the active user timing policy.
+		// An empty local hierarchy cannot own a saved master. The first completed
+		// recording seeds timing from its capture duration under the active policy.
 		scene->_quantisation.Clear(false);
 	}
 	else
@@ -1371,7 +1380,10 @@ void Scene::_ClearTimingState(bool clearTapTempo)
 void Scene::_HandleAudioLocalContentState(bool hasLocalContent)
 {
 	if (hasLocalContent)
+	{
+		_isSceneReset.store(false, std::memory_order_relaxed);
 		return;
+	}
 
 	// A connected empty scene still follows the accepted remote transport. Keep
 	// the edge armed so a later physical-loss visit can clear local timing once.
@@ -1892,6 +1904,12 @@ void Scene::Draw(DrawContext& ctx)
 		presentation.MidiPeaks.push_back(_inputSubsystem->ConsumeMidiInputPeak(name));
 	const auto tempo = _quantisation.CurrentTempoStatus(_CurrentSampleRate());
 	if (tempo) presentation.Tempo = graphics::Compositor::Tempo{ tempo->Bpm, tempo->Bpi };
+	if (auto hud = _workspace->Hud())
+	{
+		const auto clock = _quantisation.Clock();
+		hud->SetClockStatus(clock ? clock->SeedSourceLength() : 0ul,
+			clock ? clock->QuantiseSamps() : 0u);
+	}
 	_workspace->DrawOverlayLocked(ctx, _stations, _quantisationInteraction, presentation);
 }
 

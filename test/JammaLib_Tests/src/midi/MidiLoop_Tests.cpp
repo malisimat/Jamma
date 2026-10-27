@@ -1076,6 +1076,61 @@ TEST(LoopTakeMidiTiming, MidiOnlyMasterUsesPressIntervalAndStopPhase)
 		CheckFirstMidiMasterBoundary(configuredGrain, stopAge, publicationDelay, 0u);
 }
 
+TEST(LoopTakeMidiTiming, FirstCaptureAfterLegacyEmptySessionUsesTriggerInterval)
+{
+	io::JamFile jam;
+	jam.TransportInitialised = true;
+	jam.MasterLengthSamps = 116968ul;
+	jam.QuantiseSamps = 29242u;
+	jam.AbsoluteSamplePos = 72817595u;
+	io::JamFile::Station descriptor{};
+	descriptor.Name = "Kontakt";
+	descriptor.StationType = 0u;
+	jam.Stations.push_back(descriptor);
+	auto rig = io::RigFile::FromStream(std::stringstream(io::RigFile::DefaultJson));
+	ASSERT_TRUE(rig);
+	rig->Triggers.clear();
+	auto loaded = Scene::FromFile(SceneParams({ "" }, {}, { 640u, 480u }), jam, *rig, L"");
+	ASSERT_TRUE(loaded);
+	auto scene = *loaded;
+	const auto stations = scene->SnapshotStations();
+	ASSERT_EQ(1u, stations.size());
+	const auto station = stations.front();
+	constexpr std::uint32_t startSample = 304962u;
+	constexpr std::uint32_t stopSample = 444068u;
+	station->BeginCaptureAudioBoundary(startSample - 10000u, 0u, 0u);
+	station->BeginCaptureAudioBoundary(startSample + 64u, 0u, 0u);
+	station->ObservePhysicalMidiForRecording(
+		MidiEvent::MakeNoteOn(startSample - 3793u + 80u, 0u, 36u, 100u), "Keys");
+	actions::TriggerAction start;
+	start.ActionType = actions::TriggerAction::TRIGGER_REC_START;
+	start.MidiSample = startSample;
+	start.PreDelayMs = 86.0;
+	start.MidiInputDevices = { "Keys" };
+	io::UserConfig config;
+	config.Audio.SampleRate = 44100u;
+	start.SetUserConfig(config);
+	const auto started = station->OnAction(start);
+	ASSERT_TRUE(started.IsEaten);
+	station->BeginCaptureAudioBoundary(stopSample + 64u, 0u, 0u);
+	auto stop = start;
+	stop.ActionType = actions::TriggerAction::TRIGGER_REC_END;
+	stop.TargetId = started.TargetId;
+	stop.MidiSample = stopSample;
+	stop.SampleCount = 136448u;
+	ASSERT_TRUE(station->OnAction(stop).IsEaten);
+	station->CompleteMidiIngressPump(startSample + 139104u + 4410u);
+	const auto takes = station->GetLoopTakes();
+	ASSERT_EQ(1u, takes.size());
+	ASSERT_EQ(1u, takes.front()->GetMidiLoops().size());
+	EXPECT_EQ(139104ul, takes.front()->GetMidiLoops().front()->LoopLengthSamps());
+	EXPECT_EQ(0u, takes.front()->MidiQuantisationTransportStartSamps());
+	MidiEvent note{};
+	ASSERT_TRUE(takes.front()->GetMidiLoops().front()->TryGetEvent(0u, note));
+	EXPECT_EQ(80u, note.sampleOffset);
+	scene->Shutdown();
+}
+
 TEST(LoopTakeMidiTiming, PositivePredelayFirstMasterPersistsFinalQuantisationOrigin)
 {
 	constexpr std::uint32_t trigger = 77732u;

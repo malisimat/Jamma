@@ -380,6 +380,9 @@ TEST(IoSessionExporter, SavesLooplessStationConfigurationWithoutTransport)
 	station->CommitChanges();
 	Quantiser quantiser;
 	quantiser.SetClock(std::make_shared<utils::Timer>());
+	quantiser.Clock()->SetQuantisation(29242u, utils::Timer::QUANTISE_POWER);
+	quantiser.Clock()->SetSeedSourceLength(116968ul);
+	quantiser.Clock()->SetMasterLoopSampleOffset(41195ul);
 	audio::AudioStreamParams stream{};
 	io::UserConfig user{};
 	std::mutex sceneMutex;
