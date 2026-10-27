@@ -439,6 +439,10 @@ void Workspace::InitDynamicResourcesLocked(ResourceLib& resourceLib, const std::
 	_stationControls.Update(stations, _viewProj, _size, ctrlHeld, stationDitchVisible, takeDitchVisible,
 		controlsAvailable);
 	_stationControls.InitResources(resourceLib);
+	// Confirmation dialogs are created in response to input, after the initial
+	// resource pass. Initialise them on the render thread before drawing.
+	if (_takeDitchDialog) _takeDitchDialog->InitResources(resourceLib, false);
+	if (_stationDeleteDialog) _stationDeleteDialog->InitResources(resourceLib, false);
 	if (_hudPanel)
 		_hudPanel->InitResources(resourceLib, false);
 }
