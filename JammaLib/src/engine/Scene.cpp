@@ -401,9 +401,11 @@ bool Scene::AdvanceUiAnimations()
 	std::scoped_lock lock(_sceneMutex);
 	_performanceGroups.Acknowledge(_audioEngine->GroupMuteReceipt());
 	const auto accepted = _rigCoordinator.Accepted();
-	return _workspace->AdvancePresentationLocked(_stations, _workspace->Editor(), _workspace->Racks(), _performanceGroups.Groups(),
-		{ _workspace->CtrlHeld(), _isSceneQuitting.load(std::memory_order_acquire), _operation.RigSaveInProgress(), _stationManagement.Busy(),
-			_rigCoordinator.EditsEnabled(), _StationManagementAvailableLocked(), accepted ? accepted->Revision : 0u, _performanceGroups.Error() });
+	return _workspace->AdvancePresentationLocked(_stations, _performanceGroups.Groups(),
+		{ .CtrlHeld = _workspace->CtrlHeld(), .Quitting = _isSceneQuitting.load(std::memory_order_acquire),
+			.RigSaveInProgress = _operation.RigSaveInProgress(), .StationChangePending = _stationManagement.Busy(),
+			.RigEditsEnabled = _rigCoordinator.EditsEnabled(), .StationControlsAvailable = _StationManagementAvailableLocked(),
+			.RigRevision = accepted ? accepted->Revision : 0u, .GroupFeedback = _performanceGroups.Error() });
 }
 
 
@@ -1890,7 +1892,7 @@ void Scene::Draw(DrawContext& ctx)
 		presentation.MidiPeaks.push_back(_inputSubsystem->ConsumeMidiInputPeak(name));
 	const auto tempo = _quantisation.CurrentTempoStatus(_CurrentSampleRate());
 	if (tempo) presentation.Tempo = graphics::Compositor::Tempo{ tempo->Bpm, tempo->Bpi };
-	_workspace->DrawOverlayLocked(ctx, _stations, _workspace->Editor(), _quantisationInteraction, presentation);
+	_workspace->DrawOverlayLocked(ctx, _stations, _quantisationInteraction, presentation);
 }
 
 void Scene::DrawBackground(DrawContext& ctx)
@@ -1903,21 +1905,24 @@ void Scene::Draw3d(DrawContext& ctx, unsigned int numInstances, base::DrawPass p
 {
 	std::scoped_lock lock(_sceneMutex);
 	if (pass == PASS_SCENE) _quantisation.ApplyOverlayAlpha(_quantisation.OverlayAlpha(Timer::GetTime()), _stations);
-	_workspace->DrawWorldLocked(ctx, pass, _stations, _workspace->Editor(), _quantisationInteraction,
-		_performanceGroups.Groups(), { _HasSelection(), _workspace->BackgroundPreviewActive({ _sceneMutex, _stations }, _WorkspaceInputPresentation()), _workspace->BackgroundSelectionPreviewActive({ _sceneMutex, _stations }, _WorkspaceInputPresentation()), _workspace->EditControlsSuppressed() });
+	_workspace->DrawWorldLocked(ctx, pass, _stations, _quantisationInteraction,
+		_performanceGroups.Groups(), { .HasSelection = _HasSelection(),
+			.BackgroundPreview = _workspace->BackgroundPreviewActive({ _sceneMutex, _stations }, _WorkspaceInputPresentation()),
+			.BackgroundSelectionPreview = _workspace->BackgroundSelectionPreviewActive({ _sceneMutex, _stations }, _WorkspaceInputPresentation()),
+			.EditControlsSuppressed = _workspace->EditControlsSuppressed() });
 }
 
 void Scene::_InitResources(ResourceLib& resourceLib, bool forceInit)
 {
 	std::scoped_lock lock(_sceneMutex);
-	_workspace->InitResourcesLocked(resourceLib, forceInit, _workspace->Editor(), _stations);
+	_workspace->InitResourcesLocked(resourceLib, forceInit, _stations);
 	ResourceUser::_InitResources(resourceLib, forceInit);
 }
 
 void Scene::_ReleaseResources()
 {
 	{ std::scoped_lock lock(_sceneMutex); for (const auto& station : _stations) station->FinishPresentationMove(); }
-	_workspace->ReleaseResources(_workspace->Editor());
+	_workspace->ReleaseResources();
 	for (const auto& station : _retiredStations) station->ReleaseResources();
 	for (auto& station : SnapshotStations()) station->ReleaseResources();
 	Drawable::_ReleaseResources();
@@ -1933,8 +1938,11 @@ gui::Workspace::InputPresentation Scene::_WorkspaceInputPresentation() const
 {
 	auto stream = _audioEngine->GetStreamParams();
 	stream.SampleRate = _CurrentSampleRate();
-	return { _userConfig, std::move(stream), _isSceneQuitting.load(std::memory_order_acquire),
-		_operation.HoldsWriter(), _operation.RigSaveDialogOpen(), _quantisationInputResetRequested.load(std::memory_order_acquire), IsUiVerbose() };
+	return { .Config = _userConfig, .Stream = std::move(stream),
+		.Quitting = _isSceneQuitting.load(std::memory_order_acquire), .WriterHeld = _operation.HoldsWriter(),
+		.RigSaveDialogOpen = _operation.RigSaveDialogOpen(),
+		.QuantisationResetRequested = _quantisationInputResetRequested.load(std::memory_order_acquire),
+		.Verbose = IsUiVerbose() };
 }
 
 void Scene::_CompleteWorkspaceInput()
@@ -2020,7 +2028,7 @@ ActionResult Scene::OnAction(KeyAction action)
 		if ((action.KeyChar == 192u || action.KeyChar == 96u) && _workspace->Hud()) _workspace->Hud()->SetCableRevealHeld(false);
 	}
 	const auto result = _workspace->OnKeyboard(action, { _sceneMutex, _stations }, _WorkspaceInputPresentation(),
-		contextual, suppressedKey, freshLearnKey, *_inputSubsystem,
+		contextual, suppressedKey, freshLearnKey,
 		[this, contextual, suppressedKey](gui::Workspace::KeyboardCommand command, const KeyAction& key, bool groupsEnabled) {
 			return _HandleKeyboardCommand(command, key, groupsEnabled, contextual, suppressedKey);
 		});
@@ -2032,6 +2040,11 @@ std::optional<ActionResult> Scene::_HandleKeyboardCommand(gui::Workspace::Keyboa
 	bool groupsEnabled, bool contextual, bool suppressedKey)
 {
 	if (command == gui::Workspace::KeyboardCommand::TapTempo) { _HandleTapTempo(action.GetActionTime()); return std::nullopt; }
+	if (command == gui::Workspace::KeyboardCommand::ObserveTriggerLearnKey)
+	{
+		_inputSubsystem->ObserveTriggerLearnKey(action.KeyChar);
+		return std::nullopt;
+	}
 
 	if (auto overrideRes = _inputSubsystem->HandleChannelOverrideKey(action, SnapshotStations());
 		overrideRes.IsEaten)

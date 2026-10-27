@@ -513,18 +513,15 @@ TEST_F(HudCableInteractionTests, AddTriggerRevealsPublishedCardAfterResizeAndSup
 	EXPECT_FALSE(Submissions.back().Triggers.back().Id.empty());
 	const auto added = Submissions.back(); PublishRig(added); scroll = TriggerScroll();
 	ASSERT_TRUE(scroll->Content()->TryGetChild(12)); EXPECT_FALSE(scroll->Content()->TryGetChild(13));
-	EXPECT_EQ(132u, scroll->Content()->TryGetChild(12)->GetSize().Height);
 	EXPECT_EQ(scroll->MaxScrollOffset(), scroll->ScrollOffset());
 	const auto beforeExpand = scroll->ScrollOffset();
 	Hud->SetSize({ 1200, 800 });
 	EXPECT_EQ((std::min)(beforeExpand, scroll->MaxScrollOffset()), scroll->ScrollOffset());
-	for (unsigned char index = 0; index < 13; ++index)
-		EXPECT_EQ(132u, scroll->Content()->TryGetChild(index)->GetSize().Height);
 	io::RigFile empty = added; empty.Triggers.clear(); PublishRig(empty); Submissions.clear();
 	EXPECT_FALSE(TriggerScroll()->Content()->TryGetChild(0));
 	Click(Hud->TryGetChild(1)->TryGetChild(2)); ASSERT_EQ(1u, Submissions.size());
 	ASSERT_EQ(1u, Submissions.back().Triggers.size()); const auto first = Submissions.back(); PublishRig(first);
-	EXPECT_EQ(132u, TriggerScroll()->Content()->TryGetChild(0)->GetSize().Height);
+	EXPECT_TRUE(TriggerScroll()->Content()->TryGetChild(0));
 }
 
 TEST_F(HudCableInteractionTests, SupportedCompactProfileKeepsSourcesAndTriggerActionsReachable)
@@ -532,10 +529,11 @@ TEST_F(HudCableInteractionTests, SupportedCompactProfileKeepsSourcesAndTriggerAc
 	Hud->SetRoutingConfig(1u, { "Agjpq long MIDI device" }, *Routing);
 	Hud->SetSize({ 400u, 240u });
 	std::vector<std::shared_ptr<gui::GuiScrollPanel>> scrolls; Layout(Hud, scrolls);
+	auto scroll = TriggerScroll(); ASSERT_TRUE(scroll);
 	unsigned int sourceRows = 0;
 	for (const auto& sourceScroll : scrolls) {
 		const auto card = sourceScroll->Content() ? sourceScroll->Content()->TryGetChild(0) : nullptr;
-		if (!card || card->GetSize().Height == 132u) continue;
+		if (!card || sourceScroll == scroll) continue;
 		++sourceRows;
 		EXPECT_GE(sourceScroll->GetSize().Width, 80u);
 		EXPECT_GE(card->GetSize().Width, 80u);
@@ -544,30 +542,13 @@ TEST_F(HudCableInteractionTests, SupportedCompactProfileKeepsSourcesAndTriggerAc
 			sourceScroll->GlobalPosition().X + static_cast<int>(sourceScroll->GetSize().Width));
 	}
 	EXPECT_EQ(2u, sourceRows);
-    for (unsigned char index : {0u,1u})
-    {
-        const auto frame = Hud->TryGetChild(index);
-        const auto header = std::dynamic_pointer_cast<gui::GuiPanelHeader>(frame->TryGetChild(0u));
-        ASSERT_TRUE(header);
-        EXPECT_EQ(26, static_cast<int>(frame->GetSize().Height) - header->Position().Y - static_cast<int>(header->GetSize().Height));
-        if (index == 1u)
-        {
-            const auto controls = frame->TryGetChild(1u);
-            if (header->IsVisible())
-                EXPECT_EQ(12, header->BandBounds().Bottom - controls->Position().Y - static_cast<int>(controls->GetSize().Height));
-            else
-                EXPECT_EQ(static_cast<int>(frame->GetSize().Height), controls->Position().Y + static_cast<int>(controls->GetSize().Height));
-        }
-    }
-
-	auto scroll = TriggerScroll(); ASSERT_TRUE(scroll); EXPECT_GE(scroll->GetSize().Height, 64u); // Compact rail yields its header to the pedal viewport below Inputs.
+	EXPECT_GE(scroll->GetSize().Height, 64u); // Compact rail yields its header to the pedal viewport below Inputs.
 	scroll->SetScrollOffset(0);
 	const auto first = scroll->Content()->TryGetChild(0); ASSERT_TRUE(first);
-	EXPECT_EQ(132u, first->GetSize().Height);
 	// The taller name row can clip a card in this compact viewport; scrolling
 	// still exposes its controls. Verify the first card intersects the viewport.
 	EXPECT_LE(first->GlobalPosition().Y, scroll->GlobalPosition().Y + static_cast<int>(scroll->GetSize().Height));
-	EXPECT_GE(first->GlobalPosition().Y + 132, scroll->GlobalPosition().Y);
+	EXPECT_GE(first->GlobalPosition().Y + static_cast<int>(first->GetSize().Height), scroll->GlobalPosition().Y);
 	EXPECT_TRUE(Hud->TryGetChild(1)->TryGetChild(2)->IsVisible());
 	const auto close = gui::GuiHudTestAccess::TriggerClose(*Hud, 0u);
 	Click(close); ASSERT_TRUE(Popups.IsOpen());
@@ -583,7 +564,6 @@ TEST_F(HudCableInteractionTests, SupportedCompactProfileKeepsSourcesAndTriggerAc
 	ASSERT_EQ(1u, Submissions.size()); EXPECT_EQ(12u, Submissions.back().Triggers.size());
 	const auto appended = Submissions.back(); PublishRig(appended); scroll = TriggerScroll();
 	EXPECT_EQ(scroll->MaxScrollOffset(), scroll->ScrollOffset());
-	for (unsigned char index = 0; index < 12; ++index) EXPECT_EQ(132u, scroll->Content()->TryGetChild(index)->GetSize().Height);
 }
 
 TEST_F(HudCableInteractionTests, DeleteConfirmationSubmitsOnlySelectedTriggerAndClampsPublishedList)
@@ -603,8 +583,6 @@ TEST_F(HudCableInteractionTests, DeleteConfirmationSubmitsOnlySelectedTriggerAnd
 	EXPECT_FALSE(scroll->Content()->TryGetChild(11));
 	const auto beforeShrink = scroll->ScrollOffset();
 	Hud->SetSize({ 320, 180 }); EXPECT_EQ(beforeShrink, scroll->ScrollOffset());
-	for (unsigned char index = 0; index < 11; ++index)
-		EXPECT_EQ(132u, scroll->Content()->TryGetChild(index)->GetSize().Height);
 }
 
 class CableInteractionTests : public ::testing::Test

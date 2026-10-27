@@ -52,11 +52,11 @@ void Workspace::Initialize(GuiHudParams hud, std::uint8_t channel, double offset
 }
 
 void Workspace::DrawOverlayLocked(DrawContext& ctx, const std::vector<std::shared_ptr<Station>>& stations,
-	LoopGridEditor& editor, QuantiserController& quantisation, const OverlayPresentation& presentation)
+	QuantiserController& quantisation, const OverlayPresentation& presentation)
 {
-	const bool loopEditorEngaged = editor.IsEngaged();
+	const bool loopEditorEngaged = _editor->IsEngaged();
 	_mainPanel->SetRigSaveEnabled(presentation.RigSaveEnabled);
-	UpdateRackVisibilityLocked(stations, editor.IsEngaged());
+	UpdateRackVisibilityLocked(stations, loopEditorEngaged);
 	if (_hudPanel)
 	{
 		_hudPanel->SetLoopEditorMode(loopEditorEngaged);
@@ -85,7 +85,7 @@ void Workspace::DrawOverlayLocked(DrawContext& ctx, const std::vector<std::share
 			station->Draw(ctx);
 	}
 
-	if (!editor.IsEngaged())
+	if (!loopEditorEngaged)
 	{
 		for (const auto& station : stations)
 			if (auto label = station->GetGuiRack()->StationLabel()) label->DrawOverlay(ctx);
@@ -104,7 +104,7 @@ void Workspace::DrawOverlayLocked(DrawContext& ctx, const std::vector<std::share
 	}
 	if (_hudPanel) _hudPanel->Draw(ctx);
 	_compositor.DrawStatus(ctx, _size, presentation.Tempo);
-	if (!_popupManager.IsOpen()) editor.Draw(ctx);
+	if (!_popupManager.IsOpen()) _editor->Draw(ctx);
 	{
 		auto opacity = ctx.WithOpacity(1.0f - quantisation.PanelAlpha());
 		_mainPanel->Draw(ctx);
@@ -116,13 +116,13 @@ void Workspace::DrawOverlayLocked(DrawContext& ctx, const std::vector<std::share
 }
 
 void Workspace::DrawWorldLocked(DrawContext& ctx, DrawPass pass, const std::vector<std::shared_ptr<Station>>& stations,
-	LoopGridEditor& editor, QuantiserController& quantisation, const PerformanceGroups& groups, WorldPresentation presentation)
+	QuantiserController& quantisation, const PerformanceGroups& groups, WorldPresentation presentation)
 {
 
 	auto& glCtx = dynamic_cast<GlDrawContext&>(ctx);
 	_viewProj = _compositor.BeginWorld(glCtx, _camera, _size, StationCentre(stations), pass);
 	UpdateHudStationAnchorsLocked(stations);
-	if (PASS_PICKER == pass && editor.IsEngaged())
+	if (PASS_PICKER == pass && _editor->IsEngaged())
 	{
 		_compositor.EndProjection(glCtx);
 		return;
@@ -135,15 +135,15 @@ void Workspace::DrawWorldLocked(DrawContext& ctx, DrawPass pass, const std::vect
 	}
 
 	const bool probeBound = _compositor.SetWorldPresentation(glCtx,
-		{ PASS_SCENE == pass && presentation.HasSelection, editor.SurroundingDim(),
-			PASS_SCENE == pass && editor.IsEngaged(),
-			PASS_SCENE == pass && editor.IsEngaged() ? editor.ProbeEyeLocal() : glm::vec3{} });
-	editor.ApplyToModels();
+		{ PASS_SCENE == pass && presentation.HasSelection, _editor->SurroundingDim(),
+			PASS_SCENE == pass && _editor->IsEngaged(),
+			PASS_SCENE == pass && _editor->IsEngaged() ? _editor->ProbeEyeLocal() : glm::vec3{} });
+	_editor->ApplyToModels();
 	if (_selectionPanel && (!_selectionPanel->IsVisible() || !_selectionPanel->IsEnabled()
-		|| _popupManager.IsOpen() || editor.IsEngaged() || presentation.EditControlsSuppressed))
+		|| _popupManager.IsOpen() || _editor->IsEngaged() || presentation.EditControlsSuppressed))
 		_selectionPanel->ClearPerformanceGroupPointerState();
 	const auto hoveredGroup = PASS_SCENE == pass && _selectionPanel && !_popupManager.IsOpen()
-		&& !editor.IsEngaged() && !presentation.EditControlsSuppressed
+		&& !_editor->IsEngaged() && !presentation.EditControlsSuppressed
 		? _selectionPanel->HoveredPerformanceGroup() : std::nullopt;
 	const auto mutePreview = hoveredGroup && !hoveredGroup->first ? groups.Mute.Get(hoveredGroup->second) : nullptr;
 	const auto selectionPreview = hoveredGroup && hoveredGroup->first ? groups.Selection.Get(hoveredGroup->second) : nullptr;
@@ -197,10 +197,10 @@ void Workspace::DrawWorldLocked(DrawContext& ctx, DrawPass pass, const std::vect
 	_compositor.EndWorld(glCtx, probeBound);
 }
 
-void Workspace::ResizeLocked(utils::Size2d size, LoopGridEditor& editor, const std::vector<std::shared_ptr<Station>>& stations)
+void Workspace::ResizeLocked(utils::Size2d size, const std::vector<std::shared_ptr<Station>>& stations)
 {
 	_size = size;
-	editor.SetSize(_size);
+	_editor->SetSize(_size);
 	_tempoPrompt.FitToViewport(_size);
 	_runtimeDialogs.FitToViewport(_size);
 	if (_mainPanel) _mainPanel->SetViewportSize(_size);
@@ -317,12 +317,12 @@ void Workspace::DrawBackground(DrawContext& ctx)
 	_compositor.DrawBackground(dynamic_cast<GlDrawContext&>(ctx), _camera, _size);
 }
 
-void Workspace::InitResourcesLocked(ResourceLib& resourceLib, bool forceInit, LoopGridEditor& editor,
+void Workspace::InitResourcesLocked(ResourceLib& resourceLib, bool forceInit,
 	const std::vector<std::shared_ptr<Station>>& stations)
 {
 
 	_compositor.InitResources(resourceLib, forceInit);
-	editor.InitResources(resourceLib, forceInit);
+	_editor->InitResources(resourceLib, forceInit);
 	_selector->InitResources(resourceLib, forceInit);
 	for (auto& child : _guiChildren)
 		if (child)
@@ -333,16 +333,16 @@ void Workspace::InitResourcesLocked(ResourceLib& resourceLib, bool forceInit, Lo
 	for (auto& station : stations)
 		station->InitResources(resourceLib, forceInit);
 
-	ResizeLocked(_size, editor, stations);
+	ResizeLocked(_size, stations);
 
 }
 
-void Workspace::ReleaseResources(LoopGridEditor& editor)
+void Workspace::ReleaseResources()
 {
 	_runtimeRendererReady = false;
 	_runtimeDialogs.ReleaseResources();
 	_compositor.ReleaseResources();
-	editor.ReleaseResources();
+	_editor->ReleaseResources();
 	_selector->ReleaseResources();
 	for (auto& child : _guiChildren)
 		if (child)
@@ -444,8 +444,8 @@ void Workspace::InitDynamicResourcesLocked(ResourceLib& resourceLib, const std::
 }
 
 
-bool Workspace::AdvancePresentationLocked(const std::vector<std::shared_ptr<Station>>& stations, LoopGridEditor& editor,
-	VstRackControls& racks, const PerformanceGroups& groups, const AnimationPresentation& presentation)
+bool Workspace::AdvancePresentationLocked(const std::vector<std::shared_ptr<Station>>& stations,
+	const PerformanceGroups& groups, const AnimationPresentation& presentation)
 {
 	// Window calls once per UI frame before deferred hover and drawing.
 	// This clock is independent of the transport/audio callback.
@@ -465,14 +465,14 @@ bool Workspace::AdvancePresentationLocked(const std::vector<std::shared_ptr<Stat
 	const auto depth = _selector->CurrentSelectDepth();
 	const bool stationDitchVisible = depth == base::DEPTH_STATION;
 	const bool takeDitchVisible = depth == base::DEPTH_LOOPTAKE || depth == base::DEPTH_LOOP;
-	if (_hudPanel && (_popupManager.IsOpen() || editor.IsEngaged() || presentation.Quitting))
+	if (_hudPanel && (_popupManager.IsOpen() || _editor->IsEngaged() || presentation.Quitting))
 		_hudPanel->CancelTriggerRenames();
 	for (const auto& station : stations)
 		if (auto label = station->GetGuiRack()->StationLabel())
 		{
-			if (_popupManager.IsOpen() || editor.IsEngaged() || presentation.Quitting) label->Cancel();
+			if (_popupManager.IsOpen() || _editor->IsEngaged() || presentation.Quitting) label->Cancel();
 			label->Update(station->Name(), presentation.RigRevision, presentation.CtrlHeld,
-				!station->IsRemote() && !_popupManager.IsOpen() && !editor.IsEngaged() && !presentation.StationChangePending && !presentation.RigSaveInProgress,
+				!station->IsRemote() && !_popupManager.IsOpen() && !_editor->IsEngaged() && !presentation.StationChangePending && !presentation.RigSaveInProgress,
 				!presentation.RigEditsEnabled);
 		}
 	_stationControls.Update(stations, _viewProj, _size, presentation.CtrlHeld, stationDitchVisible, takeDitchVisible,
@@ -481,13 +481,13 @@ bool Workspace::AdvancePresentationLocked(const std::vector<std::shared_ptr<Stat
 	{
 		_pointer.InvalidateHover();
 	}
-	UpdateRackVisibilityLocked(stations, editor.IsEngaged());
-	racks.UpdateLocked(static_cast<base::SelectDepth>(depth));
+	UpdateRackVisibilityLocked(stations, _editor->IsEngaged());
+	_racks->UpdateLocked(static_cast<base::SelectDepth>(depth));
 	for (const auto& station : stations)
 		if (const auto rack = station->GetGuiRack()->VstRack())
 		{
 			rack->SetViewport(_size);
-			if (_popupManager.IsOpen() || editor.IsEngaged() || _focusManager.IsEditingText() ||
+			if (_popupManager.IsOpen() || _editor->IsEngaged() || _focusManager.IsEditingText() ||
 				presentation.Quitting || presentation.RigSaveInProgress)
 			{ rack->ClearPointerState(); rack->SetRevealHeld(false); }
 		}
@@ -702,7 +702,7 @@ actions::ActionResult Workspace::_OnPointerAction(actions::TouchAction action, S
 		{
 			auto wasDragged = _camera.BackgroundDragWasDragged();
 			_camera.HandleBackgroundDrag(action);
-			EndBackgroundDrag(access, presentation);
+			EndBackgroundDrag();
 
 			// Clear selection after an unhandled background drag.
 			if (!wasDragged && !_camera.IsBackgroundDragging())
@@ -774,7 +774,7 @@ actions::ActionResult Workspace::_OnPointerAction(actions::TouchAction action, S
 		// must not claim its empty space as a control.
 		_ResolveHoverPath2d(_pointer.HoverScratch(), access, presentation); // Includes station racks and controls.
 		// Chords retain camera/selection meaning; only a single-button empty hit starts a click.
-		if (_pointer.HoverScratch().empty() && !_HasQuantisationHover(access, presentation) && _selector->BeginBackgroundClick(action))
+		if (_pointer.HoverScratch().empty() && _selector->CurrentHover().empty() && _hoverPath3d.empty() && _selector->BeginBackgroundClick(action))
 		{
 			_camera.CancelBackgroundCoast();
 			_cameraPointerPreservesIdle = true;
@@ -984,7 +984,7 @@ void Workspace::SetHover3d(std::vector<unsigned char> path, base::Action::Modifi
 	{
 		isSelected = hovering->IsSelected();
 
-		tweakState = _SelectionTweakStateLocked(hovering, access, presentation);
+		tweakState = HierarchySelection::TweakState(HierarchySelection::BorrowLocked(access.Stations), hovering);
 	}
 
 	_selector->UpdateCurrentHover(elementPath,
@@ -998,7 +998,7 @@ void Workspace::SetHover3d(std::vector<unsigned char> path, base::Action::Modifi
 	UpdateSelection(ACTIONRESULT_DEFAULT, access, presentation);
 
 	auto candidate = (Action::MODIFIER_SHIFT & modifiers) ? _ChildFromPath(elementPath, access) : nullptr;
-	_UpdateStationQuantisation(candidate, _selector->CurrentSelectDepth(), false, access, presentation);
+	_UpdateStationQuantisation(candidate, _selector->CurrentSelectDepth(), false, access);
 }
 
 void Workspace::ApplyDeferredHoverUpdates(StationAccess access, const InputPresentation& presentation)
@@ -1130,18 +1130,13 @@ void Workspace::UpdateSelection(actions::ActionResultType res, StationAccess acc
 
 	if (auto hovered = _ChildFromPathLocked(_selector->CurrentHover(), access))
 	{
-		const auto tweakState = _SelectionTweakStateLocked(hovered, access, presentation);
+		const auto tweakState = HierarchySelection::TweakState(HierarchySelection::BorrowLocked(access.Stations), hovered);
 		_selector->UpdateCurrentHover(_selector->CurrentHover(),
 			Action::MODIFIER_NONE, hovered->IsSelected(), tweakState);
 	}
 
 	_interaction->RefreshOverlay(InteractionContextLocked(access, presentation),
 		[this, &access, &presentation](const std::vector<unsigned char>& path) { return _ChildFromPathLocked(path, access); });
-}
-
-base::Tweakable::TweakState Workspace::_SelectionTweakStateLocked(const std::shared_ptr<base::GuiElement>& target, StationAccess access, const InputPresentation& presentation) const
-{
-	return HierarchySelection::TweakState(HierarchySelection::BorrowLocked(access.Stations), target);
 }
 
 actions::ActionResult Workspace::_BeginBackgroundDrag(actions::TouchAction action, StationAccess access, const InputPresentation& presentation)
@@ -1158,12 +1153,12 @@ actions::ActionResult Workspace::_UpdateBackgroundDrag(actions::TouchMoveAction 
 	auto res = _camera.UpdateBackgroundDrag(action);
 	if (_camera.BackgroundDragWasDragged()) _cameraPointerPreservesIdle = false;
 	if (!_camera.IsBackgroundDragging())
-		EndBackgroundDrag(access, presentation);
+		EndBackgroundDrag();
 
 	return res;
 }
 
-void Workspace::EndBackgroundDrag(StationAccess access, const InputPresentation& presentation)
+void Workspace::EndBackgroundDrag()
 {
 	_isSceneTouching = false;
 }
@@ -1179,15 +1174,10 @@ bool Workspace::_TrySetMasterFromHover(bool confirm, StationAccess access, const
 		confirm);
 }
 
-void Workspace::_UpdateStationQuantisation(std::shared_ptr<base::GuiElement> candidate, base::SelectDepth depth, bool confirmCandidate, StationAccess access, const InputPresentation& presentation)
+void Workspace::_UpdateStationQuantisation(std::shared_ptr<base::GuiElement> candidate, base::SelectDepth depth, bool confirmCandidate, StationAccess access)
 {
 	std::scoped_lock lock(access.Mutex);
 	_quantiser->UpdateStationHints(candidate, depth, confirmCandidate, access.Stations);
-}
-
-bool Workspace::_HasQuantisationHover(StationAccess access, const InputPresentation& presentation) const
-{
-	return !_selector->CurrentHover().empty() || !_hoverPath3d.empty();
 }
 
 bool Workspace::EditControlsSuppressed() const
@@ -1254,7 +1244,7 @@ QuantisationInteractionContext Workspace::InteractionContextLocked(StationAccess
 }
 
 actions::ActionResult Workspace::OnKeyboard(KeyAction action, StationAccess access, const InputPresentation& presentation,
-	bool contextual, bool suppressedKey, bool freshLearnKey, io::IoInputSubsystem& input, const KeyboardHandler& handleKeyboard)
+	bool contextual, bool suppressedKey, bool freshLearnKey, const KeyboardHandler& handleKeyboard)
 {
 	// Physical modifier transitions must survive contextual editor consumption.
 	if (17u == action.KeyChar)
@@ -1338,7 +1328,14 @@ actions::ActionResult Workspace::OnKeyboard(KeyAction action, StationAccess acce
 	}
 	if (_popupManager.IsOpen())
 	{
-		{ std::scoped_lock lock(access.Mutex); if (_hudPanel && _hudPanel->TriggerLearnKeyboard(action, freshLearnKey)) input.ObserveTriggerLearnKey(action.KeyChar); }
+		bool learnKeyAdmitted = false;
+		{
+			std::scoped_lock lock(access.Mutex);
+			learnKeyAdmitted = _hudPanel && _hudPanel->TriggerLearnKeyboard(action, freshLearnKey);
+		}
+		// Observe before the popup handles this key; it may close the learn session.
+		if (learnKeyAdmitted)
+			handleKeyboard(KeyboardCommand::ObserveTriggerLearnKey, action, false);
 		(*_editor).CancelInput();
 		auto popupRes = _popupManager.OnAction(action);
 
@@ -1458,7 +1455,7 @@ void Workspace::OnLoopGridEditorOpened(StationAccess access, const InputPresenta
 	_focusManager.ClearFocus();
 	_pointer.ReleaseCapture();
 	_pointer.ClearConsumedRelease();
-	EndBackgroundDrag(access, presentation);
+	EndBackgroundDrag();
 	_interaction->OnCtrlModifierChanged(false, Timer::GetTime(),
 		_InteractionContext(access, presentation), [this, &access, &presentation](const std::vector<unsigned char>& path) { return _ChildFromPath(path, access); });
 }
@@ -1603,7 +1600,7 @@ void Workspace::AdvanceCamera(Time now, float deltaSeconds, const Camera::Presen
 	if (!(*_editor).IsEngaged())
 		ApplyCameraSelectDepthChange(_camera.PendingSelectDepthChange(), access, input);
 	if (_isSceneTouching && !_camera.IsBackgroundDragging())
-		EndBackgroundDrag(access, input);
+		EndBackgroundDrag();
 }
 
 bool Workspace::PrepareKeyboard(KeyAction& action, StationAccess access)

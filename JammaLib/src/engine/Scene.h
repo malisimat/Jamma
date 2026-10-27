@@ -127,7 +127,7 @@ namespace engine
 		{
 			std::scoped_lock lock(_sceneMutex);
 			_sizeParams.Size = size;
-			_workspace->ResizeLocked(_sizeParams.Size, _workspace->Editor(), _stations);
+			_workspace->ResizeLocked(_sizeParams.Size, _stations);
 		}
 
 		virtual actions::ActionResult OnAction(actions::TouchAction action) override;

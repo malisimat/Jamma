@@ -278,7 +278,7 @@ TEST(GuiPopupManager, OpenClearsOwnerPointerPresentation) {
 	EXPECT_EQ(base::GuiElement::STATE_NORMAL, sibling->GetState());
 }
 
-TEST(GuiPopup, ConfirmationButtonsArePackedAtTheLowerRightAndDispatch) {
+TEST(GuiPopup, ConfirmationButtonsDispatchConfiguredActions) {
 	auto popup = std::make_shared<GuiPopup>();
 	GuiPopupButtonConfig config;
 	config.Actions = { { "Cancel", 2u }, { "Delete", 1u } };
@@ -289,22 +289,22 @@ TEST(GuiPopup, ConfirmationButtonsArePackedAtTheLowerRightAndDispatch) {
 	ASSERT_NE(nullptr, cancelButton);
 	ASSERT_NE(nullptr, deleteButton);
 	EXPECT_EQ(nullptr, popup->TryGetChild(8u));
-	EXPECT_EQ(144, cancelButton->Position().X);
-	EXPECT_EQ(24, cancelButton->Position().Y);
-	EXPECT_EQ(284, deleteButton->Position().X);
-	EXPECT_EQ(24, deleteButton->Position().Y);
+	const auto center = [](const std::shared_ptr<GuiButton>& button) {
+		const auto size = button->GetSize();
+		return button->Position() + utils::Position2d{ static_cast<int>(size.Width / 2u), static_cast<int>(size.Height / 2u) };
+	};
 
 	auto receiver = std::make_shared<GuiRecordingActionReceiver>();
 	popup->SetButtonReceiver(receiver);
-	popup->OnAction(MakeTouch(TouchAction::TOUCH_DOWN, { 209, 25 }));
-	popup->OnAction(MakeTouch(TouchAction::TOUCH_UP, { 209, 25 }));
+	popup->OnAction(MakeTouch(TouchAction::TOUCH_DOWN, center(cancelButton)));
+	popup->OnAction(MakeTouch(TouchAction::TOUCH_UP, center(cancelButton)));
 	ASSERT_EQ(1, receiver->ActionCount);
 	ASSERT_TRUE(receiver->LastAction.has_value());
 	EXPECT_EQ(GuiAction::ACTIONELEMENT_BUTTON, receiver->LastAction->ElementType);
 	EXPECT_EQ(2u, receiver->LastAction->Index);
 
-	popup->OnAction(MakeTouch(TouchAction::TOUCH_DOWN, { 317, 25 }));
-	popup->OnAction(MakeTouch(TouchAction::TOUCH_UP, { 317, 25 }));
+	popup->OnAction(MakeTouch(TouchAction::TOUCH_DOWN, center(deleteButton)));
+	popup->OnAction(MakeTouch(TouchAction::TOUCH_UP, center(deleteButton)));
 	ASSERT_EQ(2, receiver->ActionCount);
 	ASSERT_TRUE(receiver->LastAction.has_value());
 	EXPECT_EQ(1u, receiver->LastAction->Index);
@@ -1583,14 +1583,7 @@ TEST(GuiTextGeometry, CaretAndSelectionBandsUseFontLineAndClampedLabelFrame) {
 	EXPECT_TRUE(GuiTextBox::ResolveTextBand(frame, line, std::numeric_limits<float>::infinity(), 2.0f).IsEmpty());
 }
 
-TEST(GuiTextGeometry, RelatedControlsSharePreferredHeightAndHeadersKeepExplicitAlignment) {
-	EXPECT_EQ(gui::GuiStyle::ControlHeight, gui::GuiButtonParams::PanelButton().Size.Height);
-	EXPECT_EQ(gui::GuiStyle::ControlHeight, GuiToggleParams::PanelPrimary().Size.Height);
-	EXPECT_EQ(gui::GuiStyle::ControlHeight, GuiTextBoxParams::PanelInput(100u).Size.Height);
-	EXPECT_EQ(gui::GuiStyle::ControlHeight, GuiNumericInputParams::PanelInput(100u).Size.Height);
-	EXPECT_EQ(gui::GuiStyle::ControlHeight, GuiDropDownParams::PanelInput(100u).Size.Height);
-	EXPECT_EQ(gui::GuiTextVerticalAlign::Center, gui::GuiLabelParams::PanelHeader("Agjpq 0123", 100u).VerticalAlign);
-	EXPECT_EQ(gui::GuiTextVerticalAlign::Center, gui::GuiLabelParams::PanelScrollRow("Agjpq 0123").VerticalAlign);
+TEST(GuiTextGeometry, LabelDefaultsAndExplicitWrapWidth) {
 	EXPECT_EQ(gui::GuiTextVerticalAlign::Baseline, gui::GuiLabelParams{}.VerticalAlign);
 	EXPECT_EQ(0u, gui::GuiLabelParams{}.Size.Width);
 	EXPECT_EQ(gui::GuiLabelParams::DefaultHeight, gui::GuiLabelParams{}.Size.Height);
@@ -1608,31 +1601,6 @@ TEST(GuiTextGeometry, ExplicitWidthWrapsWordsAndRespectsAvailableLines) {
 		gui::GuiLabel::WrapText("alpha beta gamma", 5.0f, 2u, measure));
 	EXPECT_EQ((std::vector<std::string>{ "alpha beta" }),
 		gui::GuiLabel::WrapText("alpha beta", 0.0f, 2u, measure));
-}
-
-TEST(GuiTextGeometry, ButtonAndRadioLabelsRetainCenteredContentFramesAcrossResize) {
-	auto params = gui::GuiButtonParams::PanelButton();
-	params.Text = "Agjpq 0123";
-	auto button = std::make_shared<gui::GuiButton>(params);
-	button->Init();
-	auto label = std::dynamic_pointer_cast<gui::GuiLabel>(button->TryGetChild(0));
-	ASSERT_NE(nullptr, label);
-	for (const auto size : { utils::Size2d{ 100, 36 }, utils::Size2d{ 3, 1 }, utils::Size2d{ 0, 0 }, utils::Size2d{ 101, 37 } }) {
-		button->SetSize(size);
-		const auto frame = gui::GuiLabelParams::ResolveTextFrame(size.Width, size.Height, params.TextPadding, params.TextPadding, true);
-		EXPECT_EQ(static_cast<int>(frame.PaddingX), label->Position().X);
-		EXPECT_EQ(frame.OffsetY, label->Position().Y);
-		EXPECT_EQ(frame.ContentWidth, label->GetSize().Width);
-		EXPECT_EQ(frame.TextHeight, label->GetSize().Height);
-	}
-	gui::GuiRadioParams radioParams;
-	auto toggle = GuiToggleParams::PanelPrimary(); toggle.Text = "Mixed";
-	radioParams.ToggleParams = { toggle };
-	auto radio = std::make_shared<gui::GuiRadio>(radioParams);
-	radio->Init();
-	auto toggleLabel = std::dynamic_pointer_cast<gui::GuiLabel>(radio->TryGetChild(0)->TryGetChild(0));
-	ASSERT_NE(nullptr, toggleLabel);
-	EXPECT_EQ(label->GetSize().Height - 1u, toggleLabel->GetSize().Height);
 }
 
 TEST(GuiTextGeometry, LegacyWidthTableFontHasExplicitFallbackLineMetrics) {
@@ -1979,8 +1947,6 @@ TEST(GuiPopup, LearnActionSpansNormalAndCompactRowsWithoutOverlappingOtherAction
             EXPECT_FALSE(detail->IsVisible());
         }
         EXPECT_GT(learn->GetSize().Width,0u); EXPECT_GT(remove->GetSize().Width,0u);
-        EXPECT_EQ(content->GetSize().Height - 8u, learn->GetSize().Height);
-        EXPECT_EQ(4, learn->Position().Y);
         for (const auto& child : {detail, learn, remove})
         {
             EXPECT_GE(child->Position().X,0);

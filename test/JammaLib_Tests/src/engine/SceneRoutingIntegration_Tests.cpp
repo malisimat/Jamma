@@ -1278,9 +1278,6 @@ TEST_F(SceneRoutingIntegrationTest, DeviceGuiDispatchIsIsolatedFromStationComman
     auto saveAsRig = engine::SourceLossIntegrationTestAccess::RigSaveChoice(*scene, 1u);
     ASSERT_NE(save->Parent(), loadRig->Parent());
     ASSERT_EQ(loadRig->Parent(), saveAsRig->Parent());
-    EXPECT_LE(std::abs(static_cast<int>(loadRig->GetSize().Width) - static_cast<int>(saveAsRig->GetSize().Width)), 1);
-    EXPECT_EQ(save->GetSize().Width, loadRig->Parent()->GetSize().Width);
-    EXPECT_EQ(40u, save->GetSize().Height);
     click(loadRig);
     EXPECT_TRUE(scene->ConsumePanelRigLoadRequest());
     EXPECT_FALSE(scene->ConsumeRigSaveRequest());

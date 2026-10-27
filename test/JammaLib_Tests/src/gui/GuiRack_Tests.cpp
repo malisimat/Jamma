@@ -644,29 +644,22 @@ TEST(GuiRack, AddRouteThenClear) {
 
 	rack->AddRoute(0, 0);
 	rack->AddRoute(1, 1);
+	EXPECT_EQ((std::vector<std::pair<unsigned int, unsigned int>>{ {0u, 0u}, {1u, 1u} }), rack->Routes());
+	rack->AddRoute(0, 0);
+	EXPECT_EQ(2u, rack->Routes().size());
 
-	// Routes are delegated to the inner router; clearing should not throw
 	rack->ClearRoutes();
-}
-
-TEST(GuiRack, AddRouteOutOfRange) {
-	// Adding a route with channels that exceed current channel count
-	// should not crash (GuiRouter just stores the pair)
-	auto params = MakeRackParams();
-	params.NumInputChannels = 1;
-	params.NumOutputChannels = 1;
-	auto rack = std::make_shared<GuiRack>(params);
-
-	rack->AddRoute(99, 99);
-	rack->ClearRoutes();
+	EXPECT_TRUE(rack->Routes().empty());
 }
 
 TEST(GuiRack, ClearRoutesOnEmptyRouter) {
 	auto params = MakeRackParams();
 	auto rack = std::make_shared<GuiRack>(params);
 
-	// ClearRoutes on empty should not crash
+	EXPECT_TRUE(rack->Routes().empty());
 	rack->ClearRoutes();
+	rack->ClearRoutes();
+	EXPECT_TRUE(rack->Routes().empty());
 }
 
 // --- Action dispatch tests ---

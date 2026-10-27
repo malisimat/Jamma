@@ -50,21 +50,21 @@ namespace gui
 			std::uint64_t RigRevision;
 			std::string GroupFeedback;
 		};
-		bool AdvancePresentationLocked(const std::vector<std::shared_ptr<engine::Station>>& stations, midi::LoopGridEditor& editor,
-			VstRackControls& racks, const engine::PerformanceGroups& groups, const AnimationPresentation& presentation);
+		bool AdvancePresentationLocked(const std::vector<std::shared_ptr<engine::Station>>& stations,
+			const engine::PerformanceGroups& groups, const AnimationPresentation& presentation);
 		void DrawOverlayLocked(base::DrawContext& ctx, const std::vector<std::shared_ptr<engine::Station>>& stations,
-			midi::LoopGridEditor& editor, engine::QuantiserController& quantisation, const OverlayPresentation& presentation);
+			engine::QuantiserController& quantisation, const OverlayPresentation& presentation);
 		void DrawWorldLocked(base::DrawContext& ctx, base::DrawPass pass,
-			const std::vector<std::shared_ptr<engine::Station>>& stations, midi::LoopGridEditor& editor,
+			const std::vector<std::shared_ptr<engine::Station>>& stations,
 			engine::QuantiserController& quantisation, const engine::PerformanceGroups& groups, WorldPresentation presentation);
 		graphics::Camera::Presentation ObserveCameraLocked(const std::vector<std::shared_ptr<engine::Station>>& stations, bool diagnosticDue);
 		void DrawBackground(base::DrawContext& ctx);
-		void InitResourcesLocked(resources::ResourceLib& resources, bool forceInit, midi::LoopGridEditor& editor,
+		void InitResourcesLocked(resources::ResourceLib& resources, bool forceInit,
 			const std::vector<std::shared_ptr<engine::Station>>& stations);
 		void InitDynamicResourcesLocked(resources::ResourceLib& resources, const std::vector<std::shared_ptr<engine::Station>>& stations,
 			bool ctrlHeld, bool controlsAvailable);
-		void ReleaseResources(midi::LoopGridEditor& editor);
-		void ResizeLocked(utils::Size2d size, midi::LoopGridEditor& editor,
+		void ReleaseResources();
+		void ResizeLocked(utils::Size2d size,
 			const std::vector<std::shared_ptr<engine::Station>>& stations);
 		void UpdateViewProjectionLocked(const std::vector<std::shared_ptr<engine::Station>>& stations);
 		void UpdateHudStationAnchorsLocked(const std::vector<std::shared_ptr<engine::Station>>& stations);
@@ -110,10 +110,10 @@ namespace gui
 		const midi::LoopGridEditor& Editor() const noexcept { return *_editor; }
 		actions::ActionUndoHistory& Undo() noexcept { return _undoHistory; }
 		engine::QuantisationInteractionContext InteractionContextLocked(StationAccess access, const InputPresentation& presentation) const;
-		enum class KeyboardCommand { TapTempo, ApplyKey };
+		enum class KeyboardCommand { TapTempo, ObserveTriggerLearnKey, ApplyKey };
 		using KeyboardHandler = std::function<std::optional<actions::ActionResult>(KeyboardCommand, const actions::KeyAction&, bool)>;
 		actions::ActionResult OnKeyboard(actions::KeyAction action, StationAccess access, const InputPresentation& presentation,
-			bool contextual, bool suppressedKey, bool freshLearnKey, io::IoInputSubsystem& input, const KeyboardHandler& handleKeyboard);
+			bool contextual, bool suppressedKey, bool freshLearnKey, const KeyboardHandler& handleKeyboard);
 		void InitializeRacks(VstRackControls::Host host) { _racks = std::make_unique<VstRackControls>(std::move(host)); }
 		VstRackControls& Racks() noexcept { return *_racks; }
 		struct TakeDitchTarget { std::shared_ptr<engine::Station> Station; std::shared_ptr<engine::LoopTake> Take; std::uint64_t Revision = 0u; };
@@ -188,7 +188,7 @@ namespace gui
 
 		void UpdateSelection(actions::ActionResultType res, StationAccess access, const InputPresentation& presentation);
 
-		void EndBackgroundDrag(StationAccess access, const InputPresentation& presentation);
+		void EndBackgroundDrag();
 
 		bool EditControlsSuppressed() const;
 
@@ -216,17 +216,13 @@ namespace gui
 
 		std::optional<actions::ActionResult> _RouteQuantisationTouch(actions::TouchAction action, StationAccess access, const InputPresentation& presentation);
 
-		bool _HasQuantisationHover(StationAccess access, const InputPresentation& presentation) const;
-
-		void _UpdateStationQuantisation(std::shared_ptr<base::GuiElement> candidate, base::SelectDepth depth, bool confirmCandidate, StationAccess access, const InputPresentation& presentation);
+		void _UpdateStationQuantisation(std::shared_ptr<base::GuiElement> candidate, base::SelectDepth depth, bool confirmCandidate, StationAccess access);
 
 		bool _TrySetMasterFromHover(bool confirm, StationAccess access, const InputPresentation& presentation);
 
 		actions::ActionResult _UpdateBackgroundDrag(actions::TouchMoveAction action, StationAccess access, const InputPresentation& presentation);
 
 		actions::ActionResult _BeginBackgroundDrag(actions::TouchAction action, StationAccess access, const InputPresentation& presentation);
-
-		base::Tweakable::TweakState _SelectionTweakStateLocked(const std::shared_ptr<base::GuiElement>& target, StationAccess access, const InputPresentation& presentation) const;
 
 		void _ResolveHoverPath2d(std::vector<std::weak_ptr<base::GuiElement>>& outPath, StationAccess access, const InputPresentation& presentation);
 
