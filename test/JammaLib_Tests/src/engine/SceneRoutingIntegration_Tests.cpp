@@ -72,6 +72,8 @@ namespace engine
 			return scene._workspace->InteractionContextLocked({ scene._sceneMutex, scene._stations }, scene._WorkspaceInputPresentation()).SampleRate;
 		}
 		static std::shared_ptr<base::GuiElement> SelectionHandle(Scene& scene) { return scene._workspace->SelectionPanel()->TryGetChild(1u); }
+        static std::shared_ptr<gui::GuiMainPanel> SettingsPanel(Scene& scene) { return scene._workspace->MainPanel(); }
+        static std::vector<unsigned char> CurrentHover(Scene& scene) { return scene._workspace->CurrentHover(); }
 		struct MidiToken { std::uint64_t SceneId, OperationId, Revision; std::vector<io::UserConfig::MidiSettings> Desired; };
 		static bool Quitting(const Scene& scene) { return scene._isSceneQuitting.load(std::memory_order_acquire); }
 		static void PrepareMidiDraft(Scene& scene)
@@ -1470,6 +1472,31 @@ TEST_F(SceneRoutingIntegrationTest, InWindowItemMiddlePaintUsesSelectionThreshol
         EXPECT_EQ(initiallyMuted, untouched->IsMuted());
         scene->Shutdown();
     }
+}
+
+TEST_F(SceneRoutingIntegrationTest, SettingsPanelClearsSceneHoverAndLeavingRestoresIt)
+{
+    auto scene = FreshScene({ Station("Local") }, {});
+    ASSERT_TRUE(scene);
+    scene->SetSize({ 800, 600 });
+    auto station = scene->SnapshotStations().front();
+    std::vector<unsigned char> stationPath;
+    for (const auto index : station->GlobalId()) stationPath.push_back(static_cast<unsigned char>(index + 1u));
+    const auto canvas = engine::SourceLossIntegrationTestAccess::CanvasPoint(*scene);
+    scene->SetHover3d(stationPath, base::Action::MODIFIER_NONE, canvas);
+    EXPECT_FALSE(engine::SourceLossIntegrationTestAccess::CurrentHover(*scene).empty());
+
+    const auto panel = engine::SourceLossIntegrationTestAccess::SettingsPanel(*scene);
+    const auto bounds = panel->PresentedFrameBounds();
+    ASSERT_FALSE(bounds.IsEmpty());
+    const utils::Position2d background{ bounds.Left + 3, bounds.Bottom + 3 };
+    ASSERT_TRUE(panel->RouteHitTest(background));
+    scene->SetHover3d(stationPath, base::Action::MODIFIER_NONE, background);
+    EXPECT_TRUE(engine::SourceLossIntegrationTestAccess::CurrentHover(*scene).empty());
+
+    scene->SetHover3d(stationPath, base::Action::MODIFIER_NONE, canvas);
+    EXPECT_FALSE(engine::SourceLossIntegrationTestAccess::CurrentHover(*scene).empty());
+    scene->Shutdown();
 }
 
 TEST_F(SceneRoutingIntegrationTest, RawStationPickBelowSelectionDepthDoesNotBecomeGlobalMiddleGesture)

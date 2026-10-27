@@ -959,9 +959,11 @@ void Workspace::SetHover3d(std::vector<unsigned char> path, base::Action::Modifi
 	// Keep the picked stream identity; MIDI layers are independent loop targets.
 
 	elementPath = SceneSelector::PathAtDepth(elementPath, _selector->CurrentSelectDepth() + 1);
-	// Rack controls own the pointer even when the 3D picker sees a model behind them.
-	if (std::any_of(guiPath.begin(), guiPath.end(), [](const auto& element) {
-		return nullptr != std::dynamic_pointer_cast<GuiRack>(element.lock());
+	// Panels and rack controls own the pointer even when the 3D picker sees a model behind them.
+	if (std::any_of(guiPath.begin(), guiPath.end(), [this](const auto& element) {
+		const auto shared = element.lock();
+		return nullptr != std::dynamic_pointer_cast<GuiRack>(shared) ||
+			shared == _mainPanel || shared == _selectionPanel;
 	}))
 		elementPath.clear();
 
@@ -1036,11 +1038,13 @@ void Workspace::ApplyDeferredHoverUpdates(StationAccess access, const InputPrese
 	ApplyHoverPath2d(nextPath);
 
 	bool stationHoverPromotedFrom2d = false;
-	const bool rackOwnsHover = std::any_of(nextPath.begin(), nextPath.end(), [](const auto& element) {
-		return nullptr != std::dynamic_pointer_cast<GuiRack>(element.lock());
+	const bool guiOwnsHover = std::any_of(nextPath.begin(), nextPath.end(), [this](const auto& element) {
+		const auto shared = element.lock();
+		return nullptr != std::dynamic_pointer_cast<GuiRack>(shared) ||
+			shared == _mainPanel || shared == _selectionPanel;
 	});
 
-	if (!nextPath.empty() && !rackOwnsHover)
+	if (!nextPath.empty() && !guiOwnsHover)
 	{
 		const auto& nextShared = _pointer.HoverElements();
 		auto stationIt = std::find_if(nextShared.begin(), nextShared.end(), [](const std::shared_ptr<base::GuiElement>& element) {
@@ -1075,7 +1079,7 @@ void Workspace::ApplyDeferredHoverUpdates(StationAccess access, const InputPrese
 		}
 	}
 
-	if (!stationHoverPromotedFrom2d && (rackOwnsHover || _hoverPath3d.empty()) && !_selector->CurrentHover().empty())
+	if (!stationHoverPromotedFrom2d && (guiOwnsHover || _hoverPath3d.empty()) && !_selector->CurrentHover().empty())
 	{
 		_selector->UpdateCurrentHover({ },
 			Action::MODIFIER_NONE,
@@ -1083,7 +1087,7 @@ void Workspace::ApplyDeferredHoverUpdates(StationAccess access, const InputPrese
 			base::Tweakable::TweakState::TWEAKSTATE_NONE);
 		UpdateSelection(ACTIONRESULT_DEFAULT, access, presentation);
 	}
-	else if (!stationHoverPromotedFrom2d && !rackOwnsHover && !_hoverPath3d.empty())
+	else if (!stationHoverPromotedFrom2d && !guiOwnsHover && !_hoverPath3d.empty())
 	{
 		// The picker may keep the same model ID while the pointer leaves a control.
 		auto pickPath = _hoverPath3d;
