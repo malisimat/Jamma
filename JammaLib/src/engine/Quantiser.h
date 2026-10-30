@@ -10,6 +10,7 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <string>
 #include <vector>
 #include "QuantisationTiming.h"
 #include "../utils/Timer.h"
@@ -234,6 +235,7 @@ namespace engine
 		bool _previousSeedUsesPowers = true;
 		std::shared_ptr<engine::Loop> _masterLoop;
 		RemoteTransportGeometry _acceptedRemoteGrid{};
+		std::int32_t _MasterAudioReferenceOffsetSamps() const noexcept;
 		midi::MidiQuantisationFraction _defaultMidiQuantisationFraction = midi::MidiQuantisationFraction::Quarter;
 		std::int64_t _acceptedRemoteGridOriginSamps = 0; // Scene-serialized job/UI owner.
 		std::atomic<QuantisationGridSource> _gridSource{ QuantisationGridSource::Default };

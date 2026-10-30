@@ -267,7 +267,7 @@ void Quantiser::InitialiseStationMidiGrid(const std::shared_ptr<Station>& statio
 	if (station && !station->IsRemote())
 	{
 		station->SetDefaultMidiQuantisationFraction(_defaultMidiQuantisationFraction);
-		station->SetMasterAudioReferenceOffsetSamps(_masterLoop ? _masterLoop->PlaybackOffsetSamps() : 0);
+		station->SetMasterAudioReferenceOffsetSamps(_MasterAudioReferenceOffsetSamps());
 		station->SetRemoteMidiQuantisationGrid(_acceptedRemoteGrid, _acceptedRemoteGridOriginSamps, false);
 	}
 }
@@ -590,7 +590,7 @@ void Quantiser::UpdateStationHints(const std::shared_ptr<base::GuiElement>& cand
 	AdoptRecordedMaster(stations);
 
 	for (const auto& station : stations)
-		if (station) station->SetMasterAudioReferenceOffsetSamps(_masterLoop ? _masterLoop->PlaybackOffsetSamps() : 0);
+		if (station) station->SetMasterAudioReferenceOffsetSamps(_MasterAudioReferenceOffsetSamps());
 	const auto seed = EffectiveSamps();
 	if (!_clock || seed == 0u)
 		return;
@@ -1952,8 +1952,10 @@ void engine::Quantiser::RestoreMasterAudioLoopId(const std::string& id,
 			for (const auto& loop : take->GetLoops()) if (loop && loop->Id() == id)
 			{
 				_masterLoop = loop;
-				_masterLoopLengthSamps.store(loop->LoopLength(), std::memory_order_release);
+				_masterLoopLengthSamps.store(_clock && _clock->SeedSourceLength() ? _clock->SeedSourceLength() : loop->LoopLength(), std::memory_order_release);
 				_masterOriginalBufferLengthSamps.store(loop->PhysicalLoopLength(), std::memory_order_release);
+				for (const auto& member : stations)
+					if (member) member->SetMasterAudioReferenceOffsetSamps(_MasterAudioReferenceOffsetSamps());
 				return;
 			}
 }
@@ -1975,4 +1977,11 @@ void engine::Quantiser::AdoptRecordedMaster(const std::vector<std::shared_ptr<St
 			return;
 		}
 	}
+}
+
+std::int32_t engine::Quantiser::_MasterAudioReferenceOffsetSamps() const noexcept
+{
+	if (!_masterLoop || !_masterLoop->LoopLength()) return 0;
+	return static_cast<std::int32_t>(static_cast<long long>(_masterLoop->PlaybackOffsetSamps())
+		% static_cast<long long>(_masterLoop->LoopLength()));
 }
