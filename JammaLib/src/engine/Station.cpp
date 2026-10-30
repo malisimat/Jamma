@@ -2728,3 +2728,14 @@ void engine::Station::BeginMembershipRemoval()
 		request->Clock->CancelRecordingSeedOnOwner(request->Timing.Version);
 	for (const auto& take : GetLoopTakeSnapshot()) take->CancelCapture();
 }
+
+std::shared_ptr<LoopTake> Station::RecordedMasterTakeOnOwner() const
+{
+	// An audio receipt does not mark the GUI tree dirty. Make its accepted
+	// identity visible even before a later structural commit drains the receipt.
+	const auto request = _firstMasterRecording.load();
+	if (request && request->Timing.Version <= _firstMasterRecordingConsumed.load(std::memory_order_acquire)
+		&& _firstMasterRecordingStatus.load(std::memory_order_relaxed) == 1u)
+		return request->Take;
+	return _recordedMasterTake.lock();
+}
