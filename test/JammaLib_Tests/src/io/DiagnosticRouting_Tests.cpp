@@ -14,6 +14,7 @@
 #include <set>
 #include "../../../../JammaLib/src/io/TextReadWriter.h"
 #include "../../../../JammaLib/src/io/WavReadWriter.h"
+#include "../../../../JammaLib/src/io/SerialDevice.h"
 #include "../../../../JammaLib/src/vst/Vst3Plugin.h"
 namespace console
 {
@@ -42,6 +43,42 @@ protected:
 		return std::string(std::istreambuf_iterator<char>(file), {});
 	}
 };
+TEST_F(DiagnosticFiles, MissingSerialEndpointReportsDisconnectedStatus)
+{
+	console::LineRing ring;
+	console::ConsoleCapture capture(ring);
+	capture.CompleteStartup();
+	io::SerialDevice device;
+	const auto port = (Directory / "missing-port").string();
+	EXPECT_FALSE(device.Open("pedal-a", port, 115200u, {}));
+	EXPECT_FALSE(device.IsOpen());
+	const auto line = ring.Take();
+	ASSERT_TRUE(line);
+	EXPECT_NE(line->find("Device \"pedal-a\" disconnected"), std::string::npos);
+	EXPECT_NE(line->find("not present"), std::string::npos);
+	EXPECT_EQ(line->find("error"), std::string::npos);
+	EXPECT_FALSE(ring.Take());
+}
+
+TEST_F(DiagnosticFiles, BusySerialEndpointStillReportsOpenFailure)
+{
+	const auto port = Directory / "busy-port";
+	const auto handle = CreateFileW(port.c_str(), GENERIC_READ | GENERIC_WRITE,
+		0, nullptr, CREATE_NEW, 0, nullptr);
+	ASSERT_NE(handle, INVALID_HANDLE_VALUE);
+	console::LineRing ring;
+	console::ConsoleCapture capture(ring);
+	capture.CompleteStartup();
+	io::SerialDevice device;
+	EXPECT_FALSE(device.Open("pedal-a", port.string(), 115200u, {}));
+	CloseHandle(handle);
+	const auto line = ring.Take();
+	ASSERT_TRUE(line);
+	EXPECT_NE(line->find("Failed to open device \"pedal-a\""), std::string::npos);
+	EXPECT_NE(line->find("error 32"), std::string::npos);
+	EXPECT_FALSE(ring.Take());
+}
+
 TEST_F(DiagnosticFiles, RunLogCapturesEarlyWorkerPartialAndRuntimeOnceAndRotates)
 {
 	console::LineRing ring;

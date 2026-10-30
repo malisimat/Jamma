@@ -329,6 +329,10 @@ std::optional<std::unique_ptr<AudioDevice>> AudioDevice::Open(
 				try
 				{
 					auto stream = std::make_unique<RtAudio>(RtAudio::WINDOWS_ASIO);
+					// openStream saves metadata by probing every ASIO driver again.
+					// Silence incidental probe warnings; selected-stream failures still
+					// reach the open report or the installed backend error callback.
+					stream->showWarnings(false);
 					if (exactSelection)
 					{
 						const auto current = stream->getDeviceInfo(candidate->Id);

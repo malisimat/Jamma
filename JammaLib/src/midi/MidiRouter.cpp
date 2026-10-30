@@ -1006,6 +1006,7 @@ void MidiRouter::InitSerial(const io::UserConfig& cfg)
 		std::cout << "[Serial]   " << port << std::endl;
 
 	unsigned int activeConnections = 0u;
+	unsigned int desiredConnections = 0u;
 	for (const auto& serialConfig : cfg.Serial.Devices)
 	{
 		if (!serialConfig.Enabled)
@@ -1014,6 +1015,7 @@ void MidiRouter::InitSerial(const io::UserConfig& cfg)
 			continue;
 		}
 
+		++desiredConnections;
 		if (serialConfig.Port.empty())
 		{
 			std::cout << "[Serial] Device \"" << serialConfig.Name << "\" has no port configured." << std::endl;
@@ -1039,8 +1041,8 @@ void MidiRouter::InitSerial(const io::UserConfig& cfg)
 		activeConnections++;
 	}
 
-	if (0u == activeConnections)
-		std::cout << "[Serial] No active serial trigger connections." << std::endl;
+	std::cout << "[Serial] Desired devices: " << desiredConnections
+		<< ", connected devices: " << activeConnections << std::endl;
 }
 
 std::vector<std::string> MidiRouter::ConnectedSerialDeviceIds() const

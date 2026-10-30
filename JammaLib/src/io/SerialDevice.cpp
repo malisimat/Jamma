@@ -52,9 +52,6 @@ bool SerialDevice::Open(const std::string& deviceName,
 	Close();
 
 	const auto normalisedPort = _NormalisePortName(portName);
-	std::cout << "[Serial] Opening device \"" << deviceName << "\" on " << portName
-		<< " @ " << baudRate << std::endl;
-
 	auto handle = CreateFileA(
 		normalisedPort.c_str(),
 		GENERIC_READ | GENERIC_WRITE,
@@ -67,6 +64,12 @@ bool SerialDevice::Open(const std::string& deviceName,
 	if (handle == INVALID_HANDLE_VALUE)
 	{
 		const auto lastError = GetLastError();
+		if (lastError == ERROR_FILE_NOT_FOUND || lastError == ERROR_PATH_NOT_FOUND)
+		{
+			std::cout << "[Serial] Device \"" << deviceName << "\" disconnected ("
+				<< portName << " not present)" << std::endl;
+			return false;
+		}
 		std::cout << "[Serial] Failed to open device \"" << deviceName << "\" on "
 			<< portName << " (error " << lastError << ")";
 		if (lastError == ERROR_ACCESS_DENIED)
