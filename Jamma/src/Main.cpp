@@ -290,20 +290,18 @@ static bool PublishDefaultJam(const std::wstring& savedPath, const std::wstring&
 
 std::optional<io::InitFile> LoadIni(const std::wstring& initPath)
 {
-	io::TextReadWriter txtFile;
-	auto res = txtFile.Read(initPath, MAX_JSON_CHARS);
-	if (!res) return std::nullopt;
-	auto [ini, numChars, unused] = std::move(*res);
-	std::stringstream ss(std::move(ini));
-	auto parsed = InitFile::FromStream(std::move(ss));
-	if (!parsed || parsed->Jam.empty() || parsed->Rig.empty()) return std::nullopt;
-	return parsed;
+	return InitFile::Read(initPath);
 }
 
 std::optional<io::JamFile> LoadJam(io::InitFile& ini, bool& readable)
 {
 	io::TextReadWriter txtFile;
 
+	if (ini.Jam.empty())
+	{
+		readable = false;
+		return std::nullopt;
+	}
 	std::cout << "[BOOT] Loading JAM from defaults path: " << EncodeUtf8(ini.Jam) << std::endl;
 	auto res = txtFile.Read(ini.Jam, MAX_JSON_CHARS);
 	readable = res.has_value();
@@ -410,6 +408,11 @@ std::optional<io::RigFile> LoadRig(io::InitFile& ini, bool& readable)
 {
 	io::TextReadWriter txtFile;
 
+	if (ini.Rig.empty())
+	{
+		readable = false;
+		return std::nullopt;
+	}
 	auto res = txtFile.Read(ini.Rig, MAX_JSON_CHARS);
 	readable = res.has_value();
 	if (!res.has_value())
@@ -586,6 +589,8 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 	startupLog.Write(std::string("[BOOT] defaults pre-existing=") + (defaultsExisted ? "yes" : "no"));
 	auto defaults = LoadIni(initPath);
 	bool defaultsValid = defaults.has_value();
+	if (defaultsValid)
+		std::cout << "[BOOT] Loaded defaults.json; selecting JAM and RIG independently." << std::endl;
 	if (!defaultsValid)
 	{
 		if (defaultsExisted)
@@ -614,6 +619,24 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 	RigFile rig = RigFile::FromStream(std::stringstream(RigFile::DefaultJson)).value();
 	bool rigGenerated = true;
 	bool jamGenerated = true;
+	const auto logSelection = [](const char* kind, const std::wstring& path,
+		const io::StartupConfig::Decision& decision, const char* fallback) {
+		std::cout << "[" << kind << "] ";
+		if (decision.UseExisting)
+			std::cout << "Loaded selected file: " << EncodeUtf8(path);
+		else
+		{
+			if (path.empty()) std::cout << "No path specified";
+			else
+			{
+				const auto reason = decision.State == io::StartupConfig::FileState::Missing ? "File missing" :
+					decision.State == io::StartupConfig::FileState::Unreadable ? "File unreadable" : "File invalid";
+				std::cout << reason << ": " << EncodeUtf8(path);
+			}
+			std::cout << "; " << fallback;
+		}
+		std::cout << std::endl;
+	};
 
 	if (defaults.has_value())
 	{
@@ -631,12 +654,9 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 			const auto jamDecision = io::StartupConfig::Decide(
 				io::StartupConfig::Classify(jamExists, jamReadable, jamOpt.has_value()), defaults->JamOrigin);
 			jamGenerated = jamDecision.Generate;
-			std::cout << "[JAM] " << (jamDecision.UseExisting ? "loaded existing" : jamDecision.Recovery ? "recovery needed" : "generation needed")
-				<< " path=" << EncodeUtf8(defaults->Jam) << std::endl;
+			logSelection("JAM", defaults->Jam, jamDecision, "starting a fresh session.");
 			if (jamOpt.has_value())
 				jam = std::move(jamOpt.value());
-			else
-				std::cout << "[BOOT] Continuing with an empty JAM. Use Load JAM to choose a compatible session." << std::endl;
 		}
 		catch (const std::exception& error)
 		{
@@ -656,14 +676,9 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 		const auto rigDecision = io::StartupConfig::Decide(
 			io::StartupConfig::Classify(rigExists, rigReadable, rigOpt.has_value()), defaults->RigOrigin);
 		rigGenerated = rigDecision.Generate;
-		std::cout << "[RIG] " << (rigDecision.UseExisting ? "loaded existing" : rigDecision.Recovery ? "recovery needed" : "generation needed")
-			<< " path=" << EncodeUtf8(defaults->Rig) << std::endl;
+		logSelection("RIG", defaults->Rig, rigDecision, "generating a default rig from available hardware.");
 		if (rigOpt.has_value())
 			rig = rigOpt.value();
-		startupLog.Write("[RIG] " + std::string(rigDecision.UseExisting ? "selected" :
-			rigDecision.Recovery ? "recovery" : "generation") + " path=" + EncodeUtf8(defaults->Rig));
-		startupLog.Write("[JAM] " + std::string(jamGenerated ? "generation/recovery" : "selected") +
-			" path=" + EncodeUtf8(defaults->Jam) + " stations=" + std::to_string(jam.Stations.size()));
 	}
 
 	const auto asioInventory = audio::AudioDevice::DiscoverAsio();
@@ -726,7 +741,7 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 	};
 	if (jamGenerated)
 		jam = RecoveryJam(rig, !rigGenerated);
-	const auto jamDirectory = defaults.has_value() ?
+	const auto jamDirectory = !defaults->Jam.empty() ?
 		utils::GetParentDirectory(defaults->Jam) :
 		utils::GetParentDirectory(initPath);
 	startupLog.Write("[BOOT] generated-directory=" + EncodeUtf8(generatedDirectory));

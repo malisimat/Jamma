@@ -3,6 +3,9 @@
 #include <algorithm>
 #include <regex>
 #include <limits>
+#include <chrono>
+#include <filesystem>
+#include <fstream>
 #include "resources/ResourceLib.h"
 #include "io/InitFile.h"
 #include "io/StartupConfig.h"
@@ -12,6 +15,59 @@
 using io::Json;
 using io::InitFile;
 using io::UserConfig;
+
+class StartupDefaultsTest : public testing::Test
+{
+protected:
+	std::filesystem::path Directory;
+	void SetUp() override
+	{
+		Directory = std::filesystem::temp_directory_path() / ("jamma-startup-defaults-" +
+			std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+		ASSERT_TRUE(std::filesystem::create_directory(Directory));
+	}
+	void TearDown() override { std::filesystem::remove_all(Directory); }
+	std::optional<InitFile> Read(const std::string& json)
+	{
+		const auto path = Directory / "defaults.json";
+		{ std::ofstream file(path); file << json; }
+		return InitFile::Read(path.wstring());
+	}
+};
+
+TEST_F(StartupDefaultsTest, MissingOrEmptyPathsPreserveTheOtherSelectionAndPreferences)
+{
+	for (const auto* absent : { "jam", "rig" })
+		for (const bool explicitEmpty : { false, true })
+		{
+			SCOPED_TRACE(std::string(absent) + (explicitEmpty ? " empty" : " missing"));
+			const bool missingJam = std::string(absent) == "jam";
+			const auto json = std::string("{\"consoleautostart\":false,\"win\":[22,24,1400,1000],") +
+				"\"logging\":{\"event\":\"verbose\"}," +
+				(missingJam ? "\"rig\":\"chosen.rig\",\"rigorigin\":\"user\"" :
+					"\"jam\":\"chosen.jam\",\"jamorigin\":\"user\"") +
+				(explicitEmpty ? std::string(",\"") + absent + "\":\"\"" : "") + "}";
+			const auto defaults = Read(json);
+			ASSERT_TRUE(defaults);
+			EXPECT_EQ(missingJam ? L"" : L"chosen.jam", defaults->Jam);
+			EXPECT_EQ(missingJam ? L"chosen.rig" : L"", defaults->Rig);
+			EXPECT_EQ("user", missingJam ? defaults->RigOrigin : defaults->JamOrigin);
+			EXPECT_FALSE(defaults->ConsoleAutoStart);
+			EXPECT_EQ(22, defaults->WinPos.X);
+			EXPECT_EQ("verbose", defaults->Logging.Event);
+		}
+}
+
+TEST_F(StartupDefaultsTest, EmptyObjectIsValidButMalformedOrUnreadableDefaultsAreRejected)
+{
+	const auto empty = Read("{}");
+	ASSERT_TRUE(empty);
+	EXPECT_TRUE(empty->Jam.empty());
+	EXPECT_TRUE(empty->Rig.empty());
+	EXPECT_FALSE(Read("{} trailing"));
+	EXPECT_FALSE(Read("[]"));
+	EXPECT_FALSE(InitFile::Read((Directory / "missing.json").wstring()));
+}
 
 TEST(UserConfig, ParsesAudioSettings) {
 	auto str = "{\"name\":\"Soundblaster\",\"bufsize\":12,\"inlatency\":212,\"outlatency\":212,\"numchannelsin\":6,\"numchannelsout\":8}";
