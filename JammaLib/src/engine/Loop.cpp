@@ -426,8 +426,10 @@ unsigned int Loop::ReadBlock(float* outBuf,
 	// _playIndex is always within range:
 	// [constants::MaxLoopFadeSamps : _loopLength + constants::MaxLoopFadeSamps - 1)
 	// index should apply the offset and then also stay in the same range
-	const auto playbackOffset = _playbackOffsetInitialised
-		? static_cast<std::int64_t>(std::llround(_playbackOffsetStart)) : PlaybackOffsetSamps();
+	const auto targetOffset = PlaybackOffsetSamps();
+	const bool exactTargetOffset = _playbackOffsetRate == 0.0 && _playbackOffsetStart == targetOffset;
+	const auto playbackOffset = exactTargetOffset ? static_cast<std::int64_t>(targetOffset)
+		: static_cast<std::int64_t>(std::llround(_playbackOffsetStart));
 	auto index = playbackOffset == 0 ? _playIndex.load(std::memory_order_relaxed)
 		: constants::MaxLoopFadeSamps + OffsetBodyIndex(BodyPlayIndex(), loopLength, playbackOffset);
 
@@ -479,8 +481,8 @@ unsigned int Loop::ReadBlock(float* outBuf,
         return sample;
     };
 
-	const bool fractionalSeek = _playbackOffsetInitialised && (_playbackOffsetRate != 0.0
-        || _playbackOffsetStart != std::round(_playbackOffsetStart));
+	const bool fractionalSeek = _playbackOffsetRate != 0.0
+        || (!exactTargetOffset && _playbackOffsetStart != std::round(_playbackOffsetStart));
     if (fractionalSeek)
     {
         // A completed/normalized body owns every adjacent and seam-prefix sample.
@@ -1917,6 +1919,7 @@ void engine::Loop::_AdvancePlaybackOffset(unsigned int numSamps) noexcept
     const auto length = LoopLength();
     const auto target = static_cast<double>(PlaybackOffsetSamps());
     _InitialisePlaybackOffset();
+    if (_playbackOffsetRate == 0.0 && _playbackOffsetStart == target) return;
     _playbackOffsetStart = _PlaybackOffsetAtFrame(numSamps);
     _playbackOffsetEnd = _playbackOffsetStart;
     _playbackOffsetRate = 0.0;

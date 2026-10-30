@@ -1417,6 +1417,8 @@ TEST(AudioLoopShift, HandleChangesAudioOnlyAndDoubleClickResetsAcceptedOffset)
 	ASSERT_TRUE(controller.TryHandleTouchAction(press,1000u,true,context,resolve)->IsEaten);
 	actions::TouchMoveAction move; move.Position = press.Position; move.Position.X += 50;
 	ASSERT_TRUE(controller.TryHandleTouchMove(move,1000u)->IsEaten);
+	EXPECT_DOUBLE_EQ(0.0,loop->AppliedPlaybackOffsetSamps());
+	EXPECT_EQ(0,station->MasterAudioReferenceOffsetSamps());
 	SettleTimingOffset(loop); loop->SetBodyPlayIndex(300ul);
 	quantiser.RefreshMasterAudioReference(station);
 	EXPECT_EQ(50,station->MasterAudioReferenceOffsetSamps());
