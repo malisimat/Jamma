@@ -170,6 +170,10 @@ namespace engine
 		std::string SourceId() const;
 		LoopTakeSource TakeSourceType() const;
 		const std::vector<std::shared_ptr<Loop>>& GetLoops() const { return _loops; }
+		// Owner/job-side restore lookup includes material awaiting ordinary publication.
+		std::shared_ptr<Loop> FindStagedAudioLoopById(const std::string& id) const;
+		// Owner/job-side restoration admission, before staged audio publication.
+		bool HasRestorableLoopMaterial() const noexcept { return !_backLoops.empty() || !_midiLoops.empty(); }
 		std::vector<std::vector<unsigned long>> SnapshotAudioRoutesForExport() const;
 		double MasterLevelForExport() const;
 		std::vector<double> BusLevelsForExport() const;

@@ -1689,7 +1689,8 @@ std::optional<std::uint32_t> LoopTake::MasterPhaseAtAudioBoundary(
 	}
 	if (representative)
 	{
-		const auto phaseFraction = 1.0 - representative->LoopIndexFrac();
+		const auto phaseFraction = representative->LoopLength() == 0ul ? 0.0
+			: static_cast<double>(representative->PlaybackBodyIndex()) / representative->LoopLength();
 		return static_cast<std::uint32_t>(phaseFraction * masterLength + 0.5) % masterLength;
 	}
 	if (targetLoop) return std::nullopt;
@@ -4894,4 +4895,11 @@ bool LoopTake::MoveVstSlot(const vst::RackMove& move)
 	_flipVstChain.store(true, std::memory_order_release);
 	_changesMade = true;
 	return true;
+}
+
+std::shared_ptr<engine::Loop> engine::LoopTake::FindStagedAudioLoopById(const std::string& id) const
+{
+	for (const auto& loop : _backLoops)
+		if (loop && loop->Id() == id) return loop;
+	return nullptr;
 }

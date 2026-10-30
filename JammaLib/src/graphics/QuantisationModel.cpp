@@ -270,7 +270,8 @@ void QuantisationModel::SetLoopTakeVisuals(unsigned int seedSamps,
 					* static_cast<float>(VisualBoundaryOffsetSamps(visual, boundaryIndex, 1u))
 					/ static_cast<float>(visual.LoopLengthSamps)
 				: phaseOffset + (angleStep * static_cast<float>(gate));
-			transforms.push_back(gateAngle);
+			transforms.push_back(gateAngle + static_cast<float>(constants::TWOPI) *
+				static_cast<float>(static_cast<std::int64_t>(visual.MasterAudioOffsetSamps) % visual.LoopLengthSamps) / static_cast<float>(visual.LoopLengthSamps));
 			transforms.push_back(visual.YCenter);
 			transforms.push_back(heightScale);
 			transforms.push_back(radiusScale);

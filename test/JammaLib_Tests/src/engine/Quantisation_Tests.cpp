@@ -13,6 +13,7 @@
 #include "engine/LoopTake.h"
 #include "engine/Loop.h"
 #include "graphics/QuantisationModel.h"
+#include "graphics/QuantisationDivisionModel.h"
 #include "graphics/MidiModel.h"
 #include "midi/MidiQuantisation.h"
 #include "utils/Timer.h"
@@ -1167,4 +1168,51 @@ TEST(QuantisationController, LoopDragChangesCapturedMidiStreamAndDeletionRelease
 	EXPECT_FALSE(controller.OwnsPointer());
 	EXPECT_TRUE(controller.EditModeActive());
 	EXPECT_FLOAT_EQ(0.0f, quantiser.OverlayAlpha(utils::Timer::GetTime() + std::chrono::seconds(20)));
+}
+
+class QuantisationTransformInspection : public engine::QuantisationModel
+{
+public:
+	const std::vector<float>& Transforms() const { return _backInstanceAttributes.at(0).Data; }
+};
+class DivisionTransformInspection : public engine::QuantisationDivisionModel
+{
+public:
+	const std::vector<float>& Transforms() const { return _backInstanceAttributes.at(0).Data; }
+};
+
+TEST(QuantisationVisuals, ShiftedMasterMovesBlueFramesByEachLoopLengthWithoutMovingMidiDivisions)
+{
+	QuantisationTransformInspection frames;
+	DivisionTransformInspection divisions;
+	std::vector<engine::QuantisationLoopTakeVisual> visuals(2);
+	for (unsigned int i = 0; i < visuals.size(); ++i)
+	{
+		auto& visual = visuals[i];
+		visual.LoopLengthSamps = i == 0u ? 1000ul : 2000ul;
+		visual.GrainSamps = 250u; visual.LoopGrains = i == 0u ? 4u : 8u;
+		visual.LoopIndexFrac = 0.2; visual.HalfHeight = 25.0f; visual.Radius = 100.0f;
+		visual.Fraction = midi::MidiQuantisationFraction::Half;
+	}
+	frames.SetLoopTakeVisuals(250u,visuals);
+	divisions.SetLoopTakeVisuals(visuals);
+	const auto baselineFrames = frames.Transforms();
+	const auto baselineDivisions = divisions.Transforms();
+	ASSERT_FALSE(baselineDivisions.empty());
+	ASSERT_EQ(12u * 4u,baselineFrames.size());
+	for (const auto offset : {50,-50,2000000050,0})
+	{
+		for (auto& visual : visuals) visual.MasterAudioOffsetSamps = offset;
+		frames.SetLoopTakeVisuals(250u,visuals); divisions.SetLoopTakeVisuals(visuals);
+		const auto& actual = frames.Transforms(); ASSERT_EQ(baselineFrames.size(),actual.size());
+		for (unsigned int gate = 0; gate < 12u; ++gate)
+		{
+			const auto length = gate < 4u ? 1000ll : 2000ll;
+			const auto expected = baselineFrames[gate * 4u] + constants::TWOPI * (static_cast<long long>(offset) % length) / length;
+			EXPECT_NEAR(expected,actual[gate * 4u],0.00001) << "offset=" << offset << " length=" << length;
+			for (unsigned int component = 1; component < 4u; ++component)
+				EXPECT_FLOAT_EQ(baselineFrames[gate * 4u + component],actual[gate * 4u + component]);
+		}
+		EXPECT_EQ(baselineDivisions,divisions.Transforms());
+	}
 }

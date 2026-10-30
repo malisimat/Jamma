@@ -297,7 +297,7 @@ std::optional<std::shared_ptr<Scene>> Scene::FromFile(SceneParams sceneParams,
 			if (!station || station->IsRemote()) return false;
 			const auto takes = station->GetLoopTakeSnapshot();
 			return std::any_of(takes.begin(), takes.end(), [](const std::shared_ptr<LoopTake>& take)
-				{ return take && (!take->GetLoops().empty() || !take->GetMidiLoops().empty()); });
+				{ return take && take->HasRestorableLoopMaterial(); });
 		});
 	scene->_isSceneReset.store(!hasLocalLoopContent, std::memory_order_relaxed);
 	if (!jamStruct.TransportInitialised || !hasLocalLoopContent)
@@ -326,6 +326,11 @@ std::optional<std::shared_ptr<Scene>> Scene::FromFile(SceneParams sceneParams,
 		}
 	}
 	scene->_quantisation.SetGlobalPhaseOffsetSamps(jamStruct.GlobalPhaseOffsetSamps, scene->_stations);
+	scene->_quantisation.SetDefaultMidiQuantisationFraction(jamStruct.DefaultMidiQuantFraction, scene->_stations, false);
+	scene->_quantisation.RestoreMasterAudioLoopId(jamStruct.MasterAudioLoopId, scene->_stations);
+	if (scene->_workspace->Settings().Subdivision())
+		scene->_workspace->Settings().Subdivision()->SetCurrentValue(
+			midi::MidiQuantisation::FractionDisplayIndex(jamStruct.DefaultMidiQuantFraction), true);
 	scene->_SetGlobalMidiQuantState(jamStruct.GlobalMidiQuantStateValue, true);
 	scene->_SetTransportOffsetLoopFrac(jamStruct.TransportOffsetLoopFrac);
 	// Saved sessions always start locally.  NINJAM config/anchors are live
@@ -517,14 +522,7 @@ ActionResult Scene::OnAction(GuiAction action)
 	else if (auto subdivision = std::get_if<Settings::SubdivisionChange>(&*change))
 	{
 		std::scoped_lock lock(_sceneMutex);
-		for (const auto& station : _stations)
-			if (station && !station->IsRemote())
-				for (const auto& take : station->GetLoopTakes())
-				{
-					auto settings = take->MidiQuantisation();
-					settings.Fraction = subdivision->Value;
-					take->SetMidiQuantisation(settings);
-				}
+		_quantisation.SetDefaultMidiQuantisationFraction(subdivision->Value, _stations);
 	}
 	else if (auto metronome = std::get_if<Settings::MetronomeChange>(&*change))
 		_audioEngine->SetNinjamMetronomeEnabled(metronome->Enabled);
@@ -1674,7 +1672,7 @@ bool Scene::_HandleTapTempo(Time actionTime)
 					if (take && _workspace->Settings().Subdivision())
 					{
 						_workspace->Settings().Subdivision()->SetCurrentValue(
-							midi::MidiQuantisation::FractionDisplayIndex(take->MidiQuantisation().Fraction), true);
+							midi::MidiQuantisation::FractionDisplayIndex(_quantisation.DefaultMidiQuantisationFraction()), true);
 						return handled;
 					}
 	}

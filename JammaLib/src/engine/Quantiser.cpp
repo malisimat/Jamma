@@ -217,6 +217,7 @@ void Quantiser::SetMidiGrain(unsigned int grainSamps,
 	const char* source,
 	const std::vector<std::shared_ptr<Station>>& stations)
 {
+	AdoptRecordedMaster(stations);
 	_effectiveQuantiseSamps.store(grainSamps, std::memory_order_release);
 	unsigned int takeCount = 0u;
 	for (const auto& station : stations)
@@ -264,7 +265,11 @@ void Quantiser::SetRemoteMidiGrid(const RemoteTransportGeometry& geometry,
 void Quantiser::InitialiseStationMidiGrid(const std::shared_ptr<Station>& station) const
 {
 	if (station && !station->IsRemote())
+	{
+		station->SetDefaultMidiQuantisationFraction(_defaultMidiQuantisationFraction);
+		station->SetMasterAudioReferenceOffsetSamps(_MasterAudioReferenceOffsetSamps());
 		station->SetRemoteMidiQuantisationGrid(_acceptedRemoteGrid, _acceptedRemoteGridOriginSamps, false);
+	}
 }
 
 void Quantiser::SetGlobalPhaseOffsetSamps(std::int32_t offsetSamps,
@@ -367,7 +372,9 @@ bool Quantiser::HandleTapTempo(std::uint64_t estimatedSampleAt,
                             if (midi::MidiQuantisation::Divisor(fraction) == selected / base)
                                 settings.Fraction = fraction;
                         take->SetMidiQuantisation(settings);
+                        _defaultMidiQuantisationFraction = settings.Fraction;
                     }
+        SetDefaultMidiQuantisationFraction(_defaultMidiQuantisationFraction, stations, false);
         unsigned int minimumDivisor = 32u;
         unsigned int maximumDivisor = 1u;
         for (const auto& station : stations)
@@ -547,7 +554,9 @@ bool Quantiser::TrySetMasterFromHover(const std::shared_ptr<base::GuiElement>& h
 	{
 		ApplyTiming(*timing, "master loop");
 		if (_clock && target->TakeRef)
-			_clock->SetMasterLoopIndexFrac(target->TakeRef->LoopIndexFrac());
+			_clock->SetMasterLoopIndexFrac(target->RepresentativeLoopRef && target->RepresentativeLoopRef->LoopLength()
+				? 1.0 - static_cast<double>(target->RepresentativeLoopRef->PlaybackBodyIndex()) / target->RepresentativeLoopRef->LoopLength()
+				: target->TakeRef->LoopIndexFrac());
 	}
 	if (!_localMasterTimingPublisher)
 		SetMidiGrain(timing->SeedSamps, "master loop", stations);
@@ -578,7 +587,10 @@ void Quantiser::UpdateStationHints(const std::shared_ptr<base::GuiElement>& cand
 	const std::vector<std::shared_ptr<Station>>& stations)
 {
 	ClearStationHints(stations);
+	AdoptRecordedMaster(stations);
 
+	for (const auto& station : stations)
+		if (station) station->SetMasterAudioReferenceOffsetSamps(_MasterAudioReferenceOffsetSamps());
 	const auto seed = EffectiveSamps();
 	if (!_clock || seed == 0u)
 		return;
@@ -958,6 +970,7 @@ void QuantiserController::OnCtrlModifierChanged(bool held,
 	if (held && !OwnsPointer())
 	{
 		_ctrlOverlayContext.reset();
+		_hasShiftClick = false;
 		_capturedMidiTargets.clear();
 		if (context.SelectDepth == base::SelectDepth::DEPTH_LOOP)
 		{
@@ -996,6 +1009,7 @@ void QuantiserController::Tick(Time now)
 	bool invalid = false;
 	for (const auto& loop : _fractionMidiTargets) invalid = invalid || !_OwnerForMidiLoop(loop);
 	for (const auto& loop : _midiPhaseDragTarget.MidiTargets) invalid = invalid || !_OwnerForMidiLoop(loop);
+	for (const auto& loop : _midiPhaseDragTarget.AudioTargets) invalid = invalid || !_TakeForLoop(loop);
 	for (const auto& take : _fractionDragTargets) invalid = invalid || !_StationForTake(take);
 	for (const auto& take : _midiPhaseDragTarget.TakeTargets) invalid = invalid || !_StationForTake(take);
 	for (const auto& station : _midiPhaseDragTarget.StationTargets)
@@ -1066,7 +1080,7 @@ void QuantiserController::_CaptureContext(const QuantisationInteractionContext& 
 {
 	CtrlOverlayContext captured;
 	captured.Anchor = context.CursorPos;
-	captured.VisibleButtonCount = context.SelectDepth == base::SelectDepth::DEPTH_LOOP && context.LoopDepthHasAudioTarget && _capturedMidiTargets.empty() ? 0 : _VisibleButtonCount(context);
+	captured.VisibleButtonCount = context.SelectDepth == base::SelectDepth::DEPTH_LOOP && context.LoopDepthHasAudioTarget && _capturedMidiTargets.empty() ? 1 : _VisibleButtonCount(context);
 	captured.SelectDepth = context.SelectDepth;
 
 	std::vector<unsigned char> hoverPath = context.HoverPath;
@@ -1303,6 +1317,18 @@ ActionResult QuantiserController::_BeginMidiPhaseDrag(TouchAction action,
 	_midiPhaseDragStartPosition = action.Position;
 	_midiPhaseDragTarget = _ctrlOverlayContext ? _capturedPhaseTarget : _ResolveMidiPhaseDragTarget(context, childResolver);
 	_midiPhaseDragStartOffsetSamps = _MidiPhaseOffsetForTarget(_midiPhaseDragTarget);
+	const bool reset = action.Touch == TouchAction::TOUCH_MOUSE && _hasShiftClick &&
+		now >= _lastShiftClick && now - _lastShiftClick <= std::chrono::milliseconds(GetDoubleClickTime()) &&
+		std::abs(action.Position.X - _lastShiftClickPosition.X) <= GetSystemMetrics(SM_CXDOUBLECLK) / 2 &&
+		std::abs(action.Position.Y - _lastShiftClickPosition.Y) <= GetSystemMetrics(SM_CYDOUBLECLK) / 2;
+	_hasShiftClick = !reset;
+	_lastShiftClick = now;
+	_lastShiftClickPosition = action.Position;
+	if (reset)
+	{
+		_midiPhaseDragStartOffsetSamps = 0;
+		_SetMidiPhaseOffsetForTarget(_midiPhaseDragTarget, 0);
+	}
 	_quantisation.SetGestureOverlayHeld(true);
 	_quantisation.ApplyOverlayAlpha(1.0f, _stations);
 	_ShowPhaseFeedback(_feedbackSampleRate);
@@ -1317,6 +1343,7 @@ ActionResult QuantiserController::_UpdateMidiPhaseDrag(TouchMoveAction action,
 	unsigned int sampleRate)
 {
 	const auto delta = action.Position - _midiPhaseDragStartPosition;
+	if (delta.X != 0 || delta.Y != 0) _hasShiftClick = false;
 	const auto offsetSamps = Quantiser::ResolvePhaseOffsetDrag(_midiPhaseDragStartOffsetSamps,
 		delta.X,
 		sampleRate);
@@ -1336,6 +1363,7 @@ ActionResult QuantiserController::_EndMidiPhaseDrag(TouchAction action,
 	if (_isMidiPhaseDragging)
 	{
 		const auto delta = action.Position - _midiPhaseDragStartPosition;
+		if (delta.X != 0 || delta.Y != 0) _hasShiftClick = false;
 		const auto offsetSamps = Quantiser::ResolvePhaseOffsetDrag(_midiPhaseDragStartOffsetSamps,
 			delta.X,
 			sampleRate);
@@ -1613,9 +1641,16 @@ QuantiserController::MidiPhaseDragTarget QuantiserController::_ResolveMidiPhaseD
 	{
 		target.Kind = MidiPhaseDragTargetKind::MidiLoop;
 		target.MidiTargets = _capturedMidiTargets;
+		target.AudioTargets = context.SelectedAudioLoops;
 		return target;
 	}
-	if (depth == base::SelectDepth::DEPTH_LOOP && context.LoopDepthHasAudioTarget) return target;
+	if (depth == base::SelectDepth::DEPTH_LOOP && context.LoopDepthHasAudioTarget)
+	{
+		target.Kind = MidiPhaseDragTargetKind::AudioLoop;
+		target.AudioTargets = context.SelectedAudioLoops;
+		if (target.AudioTargets.empty() && context.HoveredAudioLoop) target.AudioTargets.push_back(context.HoveredAudioLoop);
+		return target;
+	}
 
 	if (depth == base::SelectDepth::DEPTH_STATION)
 	{
@@ -1665,6 +1700,8 @@ std::int32_t QuantiserController::_MidiPhaseOffsetForTarget(const MidiPhaseDragT
 {
 	switch (target.Kind)
 	{
+	case MidiPhaseDragTargetKind::AudioLoop:
+		return target.AudioTargets.empty() ? 0 : target.AudioTargets.front()->PlaybackOffsetSamps();
 	case MidiPhaseDragTargetKind::MidiLoop:
 		return target.MidiTargets.empty() ? 0 : target.MidiTargets.front()->GetLoopQuantisationOverride().PhaseOffsetSamps.value_or(0);
 	case MidiPhaseDragTargetKind::Station:
@@ -1682,7 +1719,13 @@ void QuantiserController::_SetMidiPhaseOffsetForTarget(const MidiPhaseDragTarget
 {
 	switch (target.Kind)
 	{
+	case MidiPhaseDragTargetKind::AudioLoop:
+		for (const auto& loop : target.AudioTargets) if (loop) loop->SetPlaybackOffsetSamps(offsetSamps);
+		_quantisation.UpdateStationHints(nullptr, base::DEPTH_LOOP, false, _stations);
+		break;
 	case MidiPhaseDragTargetKind::MidiLoop:
+		for (const auto& loop : target.AudioTargets) if (loop) loop->SetPlaybackOffsetSamps(offsetSamps);
+		if (!target.AudioTargets.empty()) _quantisation.UpdateStationHints(nullptr, base::DEPTH_LOOP, false, _stations);
 		for (const auto& loop : target.MidiTargets)
 		{
 			if (const auto owner = _OwnerForMidiLoop(loop))
@@ -1748,7 +1791,7 @@ void engine::QuantiserController::_ShowPhaseFeedback(unsigned int sampleRate)
 	if (!_feedbackSink) return;
 	const auto offset = _MidiPhaseOffsetForTarget(_midiPhaseDragTarget);
 	const char* scope = _midiPhaseDragTarget.Kind == MidiPhaseDragTargetKind::Global ? "Global" :
-		(_midiPhaseDragTarget.Kind == MidiPhaseDragTargetKind::Station ? "Station" : (_midiPhaseDragTarget.Kind == MidiPhaseDragTargetKind::MidiLoop ? "Loop" : "Take"));
+		(_midiPhaseDragTarget.Kind == MidiPhaseDragTargetKind::Station ? "Station" : ((_midiPhaseDragTarget.Kind == MidiPhaseDragTargetKind::MidiLoop || _midiPhaseDragTarget.Kind == MidiPhaseDragTargetKind::AudioLoop) ? "Loop" : "Take"));
 	std::ostringstream text;
 	text << scope << " SHFT " << std::showpos;
 	if (sampleRate > 0u) text << std::fixed << std::setprecision(2) << 1000.0 * offset / sampleRate << " ms (" << offset << " samples)";
@@ -1766,9 +1809,15 @@ void engine::QuantiserController::_ShowPhaseFeedback(unsigned int sampleRate)
 		count = _midiPhaseDragTarget.TakeTargets.size();
 		for (const auto& take : _midiPhaseDragTarget.TakeTargets) if (take) include(take->MidiQuantisation().PhaseOffsetSamps);
 	}
+	else if (_midiPhaseDragTarget.Kind == MidiPhaseDragTargetKind::AudioLoop)
+	{
+		count = _midiPhaseDragTarget.AudioTargets.size();
+		for (const auto& loop : _midiPhaseDragTarget.AudioTargets) if (loop) include(loop->PlaybackOffsetSamps());
+	}
 	else if (_midiPhaseDragTarget.Kind == MidiPhaseDragTargetKind::MidiLoop)
 	{
-		count = _midiPhaseDragTarget.MidiTargets.size();
+		count = _midiPhaseDragTarget.MidiTargets.size() + _midiPhaseDragTarget.AudioTargets.size();
+		for (const auto& loop : _midiPhaseDragTarget.AudioTargets) if (loop) include(loop->PlaybackOffsetSamps());
 		for (const auto& loop : _midiPhaseDragTarget.MidiTargets) if (loop) include(loop->GetLoopQuantisationOverride().PhaseOffsetSamps.value_or(0));
 	}
 	if (minimum != maximum) text << " mixed [" << minimum << ", " << maximum << "] samples";
@@ -1857,7 +1906,8 @@ QuantisationInteractionContext QuantiserController::InteractionContextLocked(uti
 						if (loop)
 						{
 							anySelected |= loop->IsSelected();
-							if (loop->IsSelected() || loop == hovered) context.LoopDepthHasAudioTarget = true;
+							if (loop->IsSelected()) context.SelectedAudioLoops.push_back(loop);
+							if (loop == hovered) context.HoveredAudioLoop = loop;
 						}
 					for (const auto& loop : take->GetMidiLoops())
 						if (auto model = loop->Model())
@@ -1866,7 +1916,72 @@ QuantisationInteractionContext QuantiserController::InteractionContextLocked(uti
 							if (model == hovered) context.HoveredMidiLoop = loop;
 						}
 				}
-		if (anySelected) context.HoveredMidiLoop.reset();
+		if (anySelected) { context.HoveredMidiLoop.reset(); context.HoveredAudioLoop.reset(); }
+		context.LoopDepthHasAudioTarget = !context.SelectedAudioLoops.empty() || static_cast<bool>(context.HoveredAudioLoop);
 	}
 	return context;
+}
+
+void engine::Quantiser::SetDefaultMidiQuantisationFraction(midi::MidiQuantisationFraction fraction,
+	const std::vector<std::shared_ptr<Station>>& stations, bool updateExisting)
+{
+	_defaultMidiQuantisationFraction = fraction;
+	for (const auto& station : stations)
+	{
+		if (!station || station->IsRemote()) continue;
+		station->SetDefaultMidiQuantisationFraction(fraction);
+		if (updateExisting) for (const auto& take : station->GetLoopTakes())
+		{
+			auto settings = take->MidiQuantisation();
+			settings.Fraction = fraction;
+			take->SetMidiQuantisation(settings);
+		}
+	}
+}
+
+std::string engine::Quantiser::MasterAudioLoopId() const
+{
+	return _masterLoop ? _masterLoop->Id() : std::string{};
+}
+void engine::Quantiser::RestoreMasterAudioLoopId(const std::string& id,
+	const std::vector<std::shared_ptr<Station>>& stations)
+{
+	if (id.empty()) return;
+	for (const auto& station : stations)
+		if (station && !station->IsRemote()) for (const auto& take : station->GetLoopTakes())
+			if (const auto loop = take ? take->FindStagedAudioLoopById(id) : nullptr)
+			{
+				_masterLoop = loop;
+				_masterLoopLengthSamps.store(_clock && _clock->SeedSourceLength() ? _clock->SeedSourceLength() : loop->LoopLength(), std::memory_order_release);
+				_masterOriginalBufferLengthSamps.store(loop->PhysicalLoopLength(), std::memory_order_release);
+				for (const auto& member : stations)
+					if (member) member->SetMasterAudioReferenceOffsetSamps(_MasterAudioReferenceOffsetSamps());
+				return;
+			}
+}
+void engine::Quantiser::AdoptRecordedMaster(const std::vector<std::shared_ptr<Station>>& stations)
+{
+	if (_masterLoop) return;
+	for (const auto& station : stations)
+	{
+		if (!station || station->IsRemote()) continue;
+		const auto take = station->RecordedMasterTakeOnOwner();
+		if (!take || std::find(_preReclockTakeIds.begin(), _preReclockTakeIds.end(), take->Id()) != _preReclockTakeIds.end()) continue;
+		const auto takes = station->GetLoopTakes();
+		if (std::find(takes.begin(), takes.end(), take) == takes.end()) continue;
+		for (const auto& loop : take->GetLoops()) if (loop && loop->LoopLength())
+		{
+			_masterLoop = loop;
+			_masterLoopLengthSamps.store(loop->LoopLength(), std::memory_order_release);
+			_masterOriginalBufferLengthSamps.store(loop->PhysicalLoopLength(), std::memory_order_release);
+			return;
+		}
+	}
+}
+
+std::int32_t engine::Quantiser::_MasterAudioReferenceOffsetSamps() const noexcept
+{
+	if (!_masterLoop || !_masterLoop->LoopLength()) return 0;
+	return static_cast<std::int32_t>(static_cast<long long>(_masterLoop->PlaybackOffsetSamps())
+		% static_cast<long long>(_masterLoop->LoopLength()));
 }

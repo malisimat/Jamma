@@ -2068,3 +2068,43 @@ TEST(TriggerLearnController, RearmedDraftUsesExactObservationAndAcknowledgedRigO
         popup->ReleaseResources(); popup->DetachGuiOwnershipForRetirement();
     }
 }
+
+TEST_F(GuiSceneSettingsTests, SubdivisionCommandUpdatesExistingAndFutureAudioAndMidiTakes)
+{
+	const auto existing = Station->AddTake();
+	Station->CommitChanges();
+	for (const auto fraction : { midi::MidiQuantisationFraction::Sixth, midi::MidiQuantisationFraction::Eighth })
+	{
+		Scene->Subdivision()->SetCurrentValue(midi::MidiQuantisation::FractionDisplayIndex(fraction), false);
+		EXPECT_EQ(fraction, existing->MidiQuantisation().Fraction);
+		const auto audio = Station->AddTake();
+		audio->Record({0u}, "subdivision-audio");
+		const auto midi = Station->AddTake();
+		midi->Record({}, "subdivision-midi", {0u});
+		Station->CommitChanges();
+		EXPECT_EQ(fraction, audio->MidiQuantisation().Fraction);
+		EXPECT_EQ(fraction, midi->MidiQuantisation().Fraction);
+		// Tree/selection refresh must retain the chosen creation default.
+		Scene->Depth()->SetCurrentValue(1u, false);
+		EXPECT_EQ(midi::MidiQuantisation::FractionDisplayIndex(fraction), Scene->Subdivision()->CurrentValue());
+		const auto laterStation = Scene->AddStation();
+		EXPECT_EQ(fraction, laterStation->AddTake()->MidiQuantisation().Fraction);
+	}
+}
+
+TEST(GuiSubdivisionRestore, SavedEmptySessionRetainsCreationDefaultForAudioAndMidi)
+{
+	io::JamFile jam; jam.Name = "saved-subdivision"; jam.DefaultMidiQuantFraction = midi::MidiQuantisationFraction::Sixth;
+	io::JamFile::Station descriptor; descriptor.Name = "restored"; descriptor.StationType = 0u; jam.Stations.push_back(descriptor);
+	std::stringstream output; ASSERT_TRUE(io::JamFile::ToStream(jam,output));
+	auto parsed = io::JamFile::FromStream(std::move(output)); ASSERT_TRUE(parsed);
+	auto rig = io::RigFile::FromStream(std::stringstream(io::RigFile::DefaultJson)); ASSERT_TRUE(rig);
+	rig->Triggers.clear(); rig->User.Midi.Devices.clear();
+	auto restored = engine::Scene::FromFile(engine::SceneParams({""},{},{640u,480u}),*parsed,*rig,L""); ASSERT_TRUE(restored);
+	const auto stations = (*restored)->SnapshotStations(); ASSERT_EQ(1u,stations.size());
+	const auto audio = stations[0]->AddTake(); audio->Record({0u},"restored-audio");
+	const auto midi = stations[0]->AddTake(); midi->Record({},"restored-midi",{0u});
+	EXPECT_EQ(midi::MidiQuantisationFraction::Sixth,audio->MidiQuantisation().Fraction);
+	EXPECT_EQ(midi::MidiQuantisationFraction::Sixth,midi->MidiQuantisation().Fraction);
+	(*restored)->Shutdown();
+}

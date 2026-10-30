@@ -10,8 +10,10 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <string>
 #include <vector>
 #include "QuantisationTiming.h"
+#include "../midi/MidiQuantisation.h"
 #include "../utils/Timer.h"
 #include "../actions/ActionResult.h"
 #include "../actions/TouchAction.h"
@@ -79,6 +81,12 @@ namespace engine
 	public:
 		Quantiser() = default;
 
+		std::string MasterAudioLoopId() const;
+		void RestoreMasterAudioLoopId(const std::string& id, const std::vector<std::shared_ptr<Station>>& stations);
+		void AdoptRecordedMaster(const std::vector<std::shared_ptr<Station>>& stations);
+		void SetDefaultMidiQuantisationFraction(midi::MidiQuantisationFraction fraction,
+			const std::vector<std::shared_ptr<Station>>& stations, bool updateExisting = true);
+		midi::MidiQuantisationFraction DefaultMidiQuantisationFraction() const noexcept { return _defaultMidiQuantisationFraction; }
 		void SetClock(std::shared_ptr<utils::Timer> clock);
 		using LocalMasterTimingPublisher = std::function<std::uint64_t(const QuantisationTiming&,
 			utils::Timer::QuantisationType, const LoopTake*, const Loop*)>;
@@ -228,6 +236,8 @@ namespace engine
 		bool _previousSeedUsesPowers = true;
 		std::shared_ptr<engine::Loop> _masterLoop;
 		RemoteTransportGeometry _acceptedRemoteGrid{};
+		std::int32_t _MasterAudioReferenceOffsetSamps() const noexcept;
+		midi::MidiQuantisationFraction _defaultMidiQuantisationFraction = midi::MidiQuantisationFraction::Quarter;
 		std::int64_t _acceptedRemoteGridOriginSamps = 0; // Scene-serialized job/UI owner.
 		std::atomic<QuantisationGridSource> _gridSource{ QuantisationGridSource::Default };
 		std::atomic_ulong _masterLoopLengthSamps{ 0ul };
@@ -299,6 +309,8 @@ namespace engine
 		std::vector<unsigned char> HoverPath3d;
 		std::vector<std::shared_ptr<midi::MidiLoop>> SelectedMidiLoops;
 		std::shared_ptr<midi::MidiLoop> HoveredMidiLoop;
+		std::vector<std::shared_ptr<Loop>> SelectedAudioLoops;
+		std::shared_ptr<Loop> HoveredAudioLoop;
 		bool LoopDepthHasAudioTarget = false;
 		unsigned int SampleRate = 0u;
 	};
@@ -344,7 +356,8 @@ namespace engine
 			Global,
 			Station,
 			LoopTake,
-			MidiLoop
+			MidiLoop,
+			AudioLoop
 		};
 
 		struct MidiPhaseDragTarget
@@ -355,6 +368,7 @@ namespace engine
 			std::vector<std::shared_ptr<engine::Station>> StationTargets;
 			std::vector<std::shared_ptr<engine::LoopTake>> TakeTargets;
 			std::vector<std::shared_ptr<midi::MidiLoop>> MidiTargets;
+			std::vector<std::shared_ptr<Loop>> AudioTargets;
 		};
 
 		struct CtrlOverlayContext
@@ -432,6 +446,9 @@ namespace engine
 		void _ShowPhaseFeedback(unsigned int sampleRate);
 		void _ShowFractionFeedback();
 		std::optional<CtrlOverlayContext> _ctrlOverlayContext;
+		bool _hasShiftClick = false;
+		Time _lastShiftClick{};
+		utils::Position2d _lastShiftClickPosition{};
 		bool _isMidiPhaseDragging = false;
 		utils::Position2d _midiPhaseDragStartPosition;
 		std::int32_t _midiPhaseDragStartOffsetSamps = 0;

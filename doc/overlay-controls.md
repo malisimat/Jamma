@@ -23,9 +23,17 @@ targets, while DIV chooses one fraction; its press feedback reports mixed values
 - Take: SHFT and DIV change the captured take settings.
 - MIDI loop: SHFT is a stream-local additive offset; DIV is a stream-local
   fraction/enable override. Sibling MIDI streams keep their settings. A missing
-  override inherits take settings. Audio loops have no paired MIDI stream, so
-  selecting only audio loops shows no MIDI edit handles.
+  override inherits take settings.
+- Audio loop: SHFT delays only the captured audio loops by the displayed samples
+  (milliseconds at the current sample rate). Audio playback and waveform move
+  together, independently of MIDI grid offsets. DIV remains hidden. Double-click
+  SHFT to reset the captured targets to zero. Positive/negative offsets wrap at
+  each audio loop's own length; recorded samples are unchanged.
 - Global fallback: SHFT changes the global offset; DIV edits current local takes.
+
+The Timing subdivision selection also becomes the default for new local audio
+and MIDI takes, and is retained in saved sessions. Selection changes do not alter
+that creation default.
 
 Global Off/All still controls playback enablement; Mixed uses take/loop choices.
 Global, station, take and stream offsets are composed once. Stream overrides

@@ -125,6 +125,7 @@ namespace engine
 			_pitch(other._pitch),
 			_loopLength(other._loopLength.load(std::memory_order_relaxed)),
 			_playState(other._playState.load(std::memory_order_relaxed)),
+			_playbackOffsetSamps(other.PlaybackOffsetSamps()),
 			_playIndex(other._playIndex.load(std::memory_order_relaxed)),
 			_loopParams{other._loopParams},
 			_mixer(std::move(other._mixer)),
@@ -176,6 +177,8 @@ namespace engine
 				_loopLength.store(other._loopLength.exchange(loopLength, std::memory_order_relaxed), std::memory_order_relaxed);
 				auto writeIndex = _writeIndex.load(std::memory_order_relaxed);
 				_writeIndex.store(other._writeIndex.exchange(writeIndex, std::memory_order_relaxed), std::memory_order_relaxed);
+				auto offset = PlaybackOffsetSamps();
+				_playbackOffsetSamps.store(other._playbackOffsetSamps.exchange(offset, std::memory_order_relaxed), std::memory_order_relaxed);
 				auto playIndex = _playIndex.load(std::memory_order_relaxed);
 				_playIndex.store(other._playIndex.exchange(playIndex, std::memory_order_relaxed), std::memory_order_relaxed);
 				auto playState = _playState.load(std::memory_order_relaxed);
@@ -343,6 +346,11 @@ namespace engine
 		unsigned long SceneAnchor() const noexcept { return _sceneAnchor.load(std::memory_order_relaxed); }
 		void InvalidateSceneAnchor() noexcept { _hasSceneAnchor.store(false, std::memory_order_release); }
 		void ShiftPlayIndex(long long deltaSamps) noexcept;
+		// Positive SHFT delays this audio source; transport/anchor cursors stay unchanged.
+		void SetPlaybackOffsetSamps(std::int32_t samples) noexcept { _playbackOffsetSamps.store(samples, std::memory_order_relaxed); }
+		std::int32_t PlaybackOffsetSamps() const noexcept { return _playbackOffsetSamps.load(std::memory_order_relaxed); }
+		unsigned long PlaybackBodyIndex() const noexcept;
+		static unsigned long OffsetBodyIndex(unsigned long phase, unsigned long length, std::int32_t offset) noexcept;
 		unsigned long PlayIndex() const noexcept
 		{
 			return _playIndex.load(std::memory_order_relaxed);
@@ -491,6 +499,7 @@ namespace engine
 		// Current playback position, in samples. Advanced by ReadBlock().
 		// Source coordinates exclude plugin latency. Recorded rendering applies
 		// compensation after the loop chain, preserving capture/fade coordinates.
+		std::atomic<std::int32_t> _playbackOffsetSamps{ 0 };
 		std::atomic<unsigned long> _playIndex;
 		std::atomic<unsigned long> _sceneAnchor{ 0ul };
 		std::atomic_bool _hasSceneAnchor{ false };

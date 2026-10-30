@@ -119,6 +119,7 @@ namespace io
 			unsigned long MasterLoopCount;
 			// Current-schema body phase. Index is retained only for legacy readers.
 			unsigned long BodyPlayIndex = 0;
+			std::int32_t PlaybackOffsetSamps = 0;
 			double Level;
 			double Speed;
 			unsigned int MuteGroups;
@@ -240,6 +241,8 @@ namespace io
 		unsigned long TimerTicks = 0;
 		unsigned int QuantiseSamps = 1;
 		GlobalMidiQuantState GlobalMidiQuantStateValue = GlobalMidiQuantState::Off;
+		std::string MasterAudioLoopId;
+		midi::MidiQuantisationFraction DefaultMidiQuantFraction = midi::MidiQuantisationFraction::Quarter;
 		std::int32_t GlobalPhaseOffsetSamps = 0;
 		double TransportOffsetLoopFrac = 0.0;
 		utils::Timer::QuantisationType Quantisation = utils::Timer::QUANTISE_OFF;

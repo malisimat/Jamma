@@ -1,4 +1,12 @@
 #include "gtest/gtest.h"
+#include "../../TestPaths.h"
+#include "engine/Scene.h"
+#include "io/IoSessionExporter.h"
+#include <chrono>
+#include <thread>
+#include <filesystem>
+#include <fstream>
+#include <sstream>
 
 #include <memory>
 #include <string>
@@ -6,10 +14,22 @@
 
 #include "base/AudioSink.h"
 #include "engine/Loop.h"
+#include "engine/Station.h"
+#include "engine/Quantiser.h"
+#include "io/UserConfig.h"
 #include "engine/LoopTake.h"
 #include "io/JamFile.h"
 #include "ninjam/NinjamLoopAlignment.h"
 #include "utils/Timer.h"
+
+namespace engine
+{
+class SceneTimingRestoreTestAccess
+{
+public:
+    static std::shared_ptr<utils::Timer> Clock(const Scene& scene) { return scene._quantisation.Clock(); }
+};
+}
 
 using audio::MergeMixBehaviourParams;
 using base::AudioWriteRequest;
@@ -207,7 +227,7 @@ static std::shared_ptr<TimingTestLoopTake> MakeTimingTestLoopTake(const std::str
 	return std::make_shared<TimingTestLoopTake>(params, mixerParams);
 }
 
-static std::shared_ptr<engine::Loop> MakeTimingLoop(unsigned long loopLength)
+static std::shared_ptr<engine::Loop> MakeTimingLoop(unsigned long loopLength, bool ramp = false)
 {
 	audio::WireMixBehaviourParams mixBehaviour;
 	mixBehaviour.Channels = { 0u };
@@ -225,6 +245,7 @@ static std::shared_ptr<engine::Loop> MakeTimingLoop(unsigned long loopLength)
 	loop->Record();
 	const auto recordedLength = constants::MaxLoopFadeSamps + loopLength;
 	std::vector<float> samples(recordedLength, 1.0f);
+	if (ramp) for (unsigned long i = 0; i < recordedLength; ++i) samples[i] = static_cast<float>(i) / recordedLength;
 	AudioWriteRequest request;
 	request.samples = samples.data();
 	request.numSamps = static_cast<unsigned int>(recordedLength);
@@ -1056,6 +1077,12 @@ TEST(TriggerPredelayStation, FirstAudioAndMixedMasterReserveCompensatedOrigin)
         auto station = TriggerPredelayStationTest::MakeStation();
         auto clock = std::make_shared<Timer>();
         station->SetClock(clock);
+        // Keep the first recorded master behind unrelated earlier material.
+        if (delay == 0.0 && !withMidi)
+        {
+            station->AddTake(MakePlayingTimingTake("earlier-nonmaster",48000ul,0ul));
+            station->CommitChanges();
+        }
         constexpr auto trigger = 100000u;
         auto start = TriggerPredelayStationTest::Start(trigger, delay);
         start.InputChannels = {0u};
@@ -1124,6 +1151,77 @@ TEST(TriggerPredelayStation, FirstAudioAndMixedMasterReserveCompensatedOrigin)
         EXPECT_EQ(expected, take->MidiPlayIndex());
         ASSERT_EQ(1u, take->GetLoops().size());
         EXPECT_EQ(expected, take->GetLoops().front()->BodyPlayIndex());
+        if (delay == 0.0 && !withMidi)
+        {
+            station->CommitChanges(); // Consume the actual accepted master receipt.
+            ASSERT_EQ(take,station->RecordedMasterTakeOnOwner());
+            auto firstStation = TriggerPredelayStationTest::MakeStation();
+            firstStation->AddTake(MakePlayingTimingTake("first-station-decoy",48000ul,0ul));
+            firstStation->CommitChanges();
+            const std::vector<std::shared_ptr<engine::Station>> stations{firstStation,station};
+            engine::Quantiser quantiser; quantiser.SetClock(clock);
+            quantiser.SetMidiGrain(clock->QuantiseSamps(),"accepted recording",stations);
+            const auto master = take->GetLoops().front();
+            ASSERT_FALSE(master->Id().empty());
+            ASSERT_EQ(master->Id(),quantiser.MasterAudioLoopId());
+            master->SetPlaybackOffsetSamps(-1500);
+            quantiser.UpdateStationHints(nullptr,base::DEPTH_LOOP,false,stations);
+            struct DirectoryCleanup
+            {
+                std::filesystem::path Path;
+                ~DirectoryCleanup() { std::error_code error; std::filesystem::remove_all(Path,error); }
+            } directory{TestPaths::FixtureDirectory() / ("recorded-master-" + std::to_string(GetCurrentProcessId()))};
+            ASSERT_TRUE(std::filesystem::create_directory(directory.Path));
+            std::mutex sceneMutex;
+            audio::AudioStreamParams stream; stream.SampleRate = 48000u;
+            ASSERT_TRUE(io::IoSessionExporter::ExportSessionToDirectory(stations,nullptr,quantiser,
+                io::JamFile::GlobalMidiQuantState::Off,0.0,io::UserConfig{},stream,nullptr,
+                sceneMutex,nullptr,directory.Path.wstring()));
+            std::ifstream file(directory.Path / "session.jam"); std::stringstream text; text << file.rdbuf(); file.close();
+            auto jam = io::JamFile::FromStream(std::move(text)); ASSERT_TRUE(jam);
+            EXPECT_EQ(master->Id(),jam->MasterAudioLoopId);
+            ASSERT_EQ(2u,jam->Stations.size()); ASSERT_EQ(2u,jam->Stations[1].LoopTakes.size());
+            ASSERT_EQ(1u,jam->Stations[1].LoopTakes[1].Loops.size());
+            EXPECT_EQ(master->Id(),jam->Stations[1].LoopTakes[1].Loops[0].Id);
+            auto rig = io::RigFile::FromStream(std::stringstream(io::RigFile::DefaultJson)); ASSERT_TRUE(rig);
+            rig->Triggers.clear(); rig->User.Midi.Devices.clear();
+            auto loaded = engine::Scene::FromFile(engine::SceneParams({""},{},{640u,480u}),*jam,*rig,directory.Path.wstring());
+            ASSERT_TRUE(loaded);
+            const auto restoredStations = (*loaded)->SnapshotStations(); ASSERT_EQ(2u,restoredStations.size());
+            const auto restoredClock = engine::SceneTimingRestoreTestAccess::Clock(**loaded);
+            ASSERT_TRUE(restoredClock);
+            EXPECT_EQ(jam->QuantiseSamps,restoredClock->QuantiseSamps());
+            EXPECT_EQ(jam->MasterLengthSamps,restoredClock->SeedSourceLength());
+            EXPECT_EQ(jam->AbsoluteSamplePos,restoredClock->AbsoluteSamplePos());
+            EXPECT_EQ(-1500,restoredStations[0]->MasterAudioReferenceOffsetSamps());
+            EXPECT_EQ(-1500,restoredStations[1]->MasterAudioReferenceOffsetSamps());
+            // Scene commit may skip a contended frame while its job owner runs.
+            const auto publishDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+            do
+            {
+                (*loaded)->CommitChanges();
+                if (!restoredStations[1]->GetLoopTakes()[1]->GetLoops().empty()) break;
+                std::this_thread::yield();
+            } while (std::chrono::steady_clock::now() < publishDeadline);
+            ASSERT_EQ(2u,restoredStations[1]->GetLoopTakes().size());
+            ASSERT_EQ(1u,restoredStations[1]->GetLoopTakes()[1]->GetLoops().size());
+            const auto restoredMaster = restoredStations[1]->GetLoopTakes()[1]->GetLoops()[0];
+            EXPECT_EQ(master->Id(),restoredMaster->Id());
+            EXPECT_EQ(-1500,restoredMaster->PlaybackOffsetSamps());
+            EXPECT_EQ(master->PlaybackBodyIndex(),restoredMaster->PlaybackBodyIndex());
+            EXPECT_EQ(0,restoredStations[1]->GetLoopTakes()[0]->GetLoops()[0]->PlaybackOffsetSamps());
+            (*loaded)->Shutdown();
+            auto emptyJam = *jam;
+            for (auto& savedStation : emptyJam.Stations) savedStation.LoopTakes.clear();
+            auto empty = engine::Scene::FromFile(engine::SceneParams({""},{},{640u,480u}),emptyJam,*rig,directory.Path.wstring());
+            ASSERT_TRUE(empty);
+            const auto emptyClock = engine::SceneTimingRestoreTestAccess::Clock(**empty);
+            ASSERT_TRUE(emptyClock);
+            EXPECT_EQ(0u,emptyClock->QuantiseSamps());
+            EXPECT_EQ(0ul,emptyClock->SeedSourceLength());
+            EXPECT_EQ(0u,emptyClock->AbsoluteSamplePos());
+            (*empty)->Shutdown();
+        }
     }
 }
 
@@ -1276,4 +1374,72 @@ TEST(TriggerBindingLearn, FreshValidatedPassiveIngressFreezesOneCandidateAndInfe
         const auto binding = io::TriggerBindingLearn::Midi("keys",midi::MidiEvent{0u,0xb0u,64u,static_cast<std::uint8_t>(value)});
         ASSERT_TRUE(binding); EXPECT_EQ(value != 0u,binding->Press.State); EXPECT_EQ(value == 0u,binding->Release.State);
     }
+}
+
+TEST(AudioLoopShift, HandleChangesAudioOnlyAndDoubleClickResetsAcceptedOffset)
+{
+	auto take = MakeTimingTestLoopTake("audio-shft");
+	auto loop = MakeTimingLoop(1000ul, true);
+	loop->SetBodyPlayIndex(300ul);
+	take->AddLoop(loop); take->CommitChanges();
+	take->SetMidiVisualPosition(300ul, 1000ul);
+	auto station = std::make_shared<engine::Station>(engine::StationParams{}, engine::Station::GetMixerParams({100,100}, MergeMixBehaviourParams{}));
+	station->AddTake(take); station->CommitChanges();
+	std::vector<std::shared_ptr<engine::Station>> stations{station};
+	graphics::CtrlHandleOverlay overlay;
+	engine::Quantiser quantiser;
+	quantiser.SetClock(std::make_shared<Timer>());
+	ASSERT_TRUE(quantiser.TrySetMasterFromHover(loop,base::DEPTH_LOOP,stations,1000u,io::UserConfig{},false));
+	engine::QuantiserController controller(overlay, quantiser, stations);
+	engine::QuantisationInteractionContext context;
+	context.SelectDepth = base::DEPTH_LOOP;
+	context.CursorPos = {200,200}; context.ViewportSize = {800,600}; context.SampleRate = 1000u;
+	context.SelectedAudioLoops = {loop}; context.LoopDepthHasAudioTarget = true;
+	const engine::QuantiserController::ChildResolver resolve = [loop](const auto&) { return loop; };
+	const auto now = Timer::GetTime();
+	controller.OnCtrlModifierChanged(true, now, context, resolve);
+	ASSERT_TRUE(overlay.ButtonCenter(0)); EXPECT_FALSE(overlay.ButtonCenter(1));
+	float expected = 0; loop->SetBodyPlayIndex(250ul); ASSERT_EQ(1u, loop->ReadBlock(&expected,0,1u)); loop->SetBodyPlayIndex(300ul);
+	actions::TouchAction press; press.SetActionTime(now); press.Position = *overlay.ButtonCenter(0);
+	ASSERT_TRUE(controller.TryHandleTouchAction(press,1000u,true,context,resolve)->IsEaten);
+	actions::TouchMoveAction move; move.Position = press.Position; move.Position.X += 50;
+	ASSERT_TRUE(controller.TryHandleTouchMove(move,1000u)->IsEaten);
+	EXPECT_EQ(50,station->MasterAudioReferenceOffsetSamps());
+	auto laterStation = std::make_shared<engine::Station>(engine::StationParams{}, engine::Station::GetMixerParams({100,100}, MergeMixBehaviourParams{}));
+	quantiser.InitialiseStationMidiGrid(laterStation);
+	EXPECT_EQ(50,laterStation->MasterAudioReferenceOffsetSamps());
+	EXPECT_EQ(50, loop->PlaybackOffsetSamps()); EXPECT_EQ(250ul, loop->PlaybackBodyIndex());
+	EXPECT_EQ(300ul, loop->BodyPlayIndex()); EXPECT_EQ(300ul, take->MidiVisualPosition());
+	EXPECT_EQ(0, take->MidiQuantisation().PhaseOffsetSamps);
+	float actual = 0; ASSERT_EQ(1u, loop->ReadBlock(&actual,0,1u)); EXPECT_FLOAT_EQ(expected,actual);
+	EXPECT_EQ(250u, take->MasterPhaseAtAudioBoundary(loop.get(),1000u));
+	press.State = actions::TouchAction::TOUCH_UP; press.Position = move.Position;
+	controller.TryHandleTouchAction(press,1000u,true,context,resolve);
+	// A fresh click pair on SHFT uses the same OS time/distance criteria as sliders.
+	press.State = actions::TouchAction::TOUCH_DOWN; press.Position = *overlay.ButtonCenter(0); press.SetActionTime(now + std::chrono::seconds(1));
+	controller.TryHandleTouchAction(press,1000u,true,context,resolve);
+	press.State = actions::TouchAction::TOUCH_UP; controller.TryHandleTouchAction(press,1000u,true,context,resolve);
+	press.State = actions::TouchAction::TOUCH_DOWN; press.SetActionTime(now + std::chrono::milliseconds(1100));
+	controller.TryHandleTouchAction(press,1000u,true,context,resolve);
+	EXPECT_EQ(0,station->MasterAudioReferenceOffsetSamps());
+	EXPECT_EQ(0,loop->PlaybackOffsetSamps()); EXPECT_EQ(300ul,loop->PlaybackBodyIndex());
+}
+
+TEST(AudioLoopShift, SignedOffsetsWrapByEachLengthAndSurviveTransportCorrections)
+{
+	for (const auto length : {777ul,1000ul,2000ul})
+	{
+		auto take = MakePlayingTimingTake("shift-wrap",length,100ul);
+		auto loop = take->GetLoops().front();
+		for (const auto offset : {0,17,-17,2000000017,-2000000017})
+		{
+			loop->SetPlaybackOffsetSamps(offset);
+			EXPECT_EQ(ninjam::PositiveModulo(100ll-offset,length),loop->PlaybackBodyIndex());
+			take->CaptureMappedSourceAnchors(5000);
+			take->RestoreMappedSourceCoordinate(5100);
+			EXPECT_EQ(ninjam::PositiveModulo(200ll-offset,length),loop->PlaybackBodyIndex());
+			EXPECT_EQ(offset,loop->PlaybackOffsetSamps());
+			loop->SetBodyPlayIndex(100ul); loop->InvalidateSceneAnchor();
+		}
+	}
 }
