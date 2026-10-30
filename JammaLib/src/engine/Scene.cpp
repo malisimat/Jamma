@@ -297,7 +297,7 @@ std::optional<std::shared_ptr<Scene>> Scene::FromFile(SceneParams sceneParams,
 			if (!station || station->IsRemote()) return false;
 			const auto takes = station->GetLoopTakeSnapshot();
 			return std::any_of(takes.begin(), takes.end(), [](const std::shared_ptr<LoopTake>& take)
-				{ return take && (!take->GetLoops().empty() || !take->GetMidiLoops().empty()); });
+				{ return take && take->HasRestorableLoopMaterial(); });
 		});
 	scene->_isSceneReset.store(!hasLocalLoopContent, std::memory_order_relaxed);
 	if (!jamStruct.TransportInitialised || !hasLocalLoopContent)

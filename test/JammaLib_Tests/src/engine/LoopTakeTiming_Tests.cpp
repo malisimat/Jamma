@@ -20,6 +20,15 @@
 #include "ninjam/NinjamLoopAlignment.h"
 #include "utils/Timer.h"
 
+namespace engine
+{
+class SceneTimingRestoreTestAccess
+{
+public:
+    static std::shared_ptr<utils::Timer> Clock(const Scene& scene) { return scene._quantisation.Clock(); }
+};
+}
+
 using audio::MergeMixBehaviourParams;
 using base::AudioWriteRequest;
 using base::Audible;
@@ -1177,6 +1186,11 @@ TEST(TriggerPredelayStation, FirstAudioAndMixedMasterReserveCompensatedOrigin)
             auto loaded = engine::Scene::FromFile(engine::SceneParams({""},{},{640u,480u}),*jam,*rig,directory.Path.wstring());
             ASSERT_TRUE(loaded);
             const auto restoredStations = (*loaded)->SnapshotStations(); ASSERT_EQ(2u,restoredStations.size());
+            const auto restoredClock = engine::SceneTimingRestoreTestAccess::Clock(**loaded);
+            ASSERT_TRUE(restoredClock);
+            EXPECT_EQ(jam->QuantiseSamps,restoredClock->QuantiseSamps());
+            EXPECT_EQ(jam->MasterLengthSamps,restoredClock->SeedSourceLength());
+            EXPECT_EQ(jam->AbsoluteSamplePos,restoredClock->AbsoluteSamplePos());
             EXPECT_EQ(-1500,restoredStations[0]->MasterAudioReferenceOffsetSamps());
             EXPECT_EQ(-1500,restoredStations[1]->MasterAudioReferenceOffsetSamps());
             (*loaded)->CommitChanges(); // Publish restored material through the normal scene boundary.
@@ -1188,6 +1202,16 @@ TEST(TriggerPredelayStation, FirstAudioAndMixedMasterReserveCompensatedOrigin)
             EXPECT_EQ(master->PlaybackBodyIndex(),restoredMaster->PlaybackBodyIndex());
             EXPECT_EQ(0,restoredStations[1]->GetLoopTakes()[0]->GetLoops()[0]->PlaybackOffsetSamps());
             (*loaded)->Shutdown();
+            auto emptyJam = *jam;
+            for (auto& savedStation : emptyJam.Stations) savedStation.LoopTakes.clear();
+            auto empty = engine::Scene::FromFile(engine::SceneParams({""},{},{640u,480u}),emptyJam,*rig,directory.Path.wstring());
+            ASSERT_TRUE(empty);
+            const auto emptyClock = engine::SceneTimingRestoreTestAccess::Clock(**empty);
+            ASSERT_TRUE(emptyClock);
+            EXPECT_EQ(0u,emptyClock->QuantiseSamps());
+            EXPECT_EQ(0ul,emptyClock->SeedSourceLength());
+            EXPECT_EQ(0u,emptyClock->AbsoluteSamplePos());
+            (*empty)->Shutdown();
         }
     }
 }
