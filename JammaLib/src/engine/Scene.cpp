@@ -405,6 +405,11 @@ bool Scene::AdvanceUiAnimations()
 	// Native picker/editor calls can pump Windows messages; never hold the
 	// scene lock while processing a captured rack gesture.
 	_workspace->PumpNativeControls();
+	if (_resetAllDecision && _resetAllDecision->has_value())
+	{
+		const bool accepted = **_resetAllDecision; _resetAllDecision.reset();
+		if (accepted) _operation.RequestReset(_ControlEffects());
+	}
 	if (_quantisationInputResetRequested.exchange(false, std::memory_order_acq_rel))
 		_workspace->ReleaseQuantisationInput({ _sceneMutex, _stations }, _WorkspaceInputPresentation());
 	std::scoped_lock lock(_sceneMutex);
@@ -421,12 +426,14 @@ bool Scene::AdvanceUiAnimations()
 void Scene::_HandleReclockArm()
 {
 	std::scoped_lock lock(_sceneMutex);
+	if (_operation.Current() != SessionControl::None || _operation.HoldsWriter() || _stationManagement.Busy() ||
+		_operation.RigSaveDialogOpen() || _operation.RigSaveInProgress() || _quantisation.IsArmedForReclock()) return;
 	if (_quantisation.ActiveGrid().Source == QuantisationGridSource::Remote)
 	{
 		std::cout << "[Quantisation] reclock rejected: remote authority; choose Stay local first" << std::endl;
 		return;
 	}
-	std::cout << ">> Reclock armed (Ctrl+Shift+R) <<" << std::endl;
+	std::cout << ">> Reclock armed <<" << std::endl;
 	_quantisation.ArmReclock(_stations);
 	_quantisation.SetRemoteMidiGrid({}, 0, _stations);
 	_quantisation.SetMidiGrain(0u, "reclock arm", _stations);
@@ -440,7 +447,8 @@ void Scene::_HandleReclockArm()
 ActionResult Scene::OnAction(GuiAction action)
 {
 	if (_isSceneQuitting.load(std::memory_order_acquire)) return ActionResult::NoAction();
-	if (_operation.HoldsWriter() && !SceneSettingsControls::IsOperationControl(action.Index)) return ActionResult::NoAction();
+	const bool rigSave = action.Index == GuiMainPanel::SaveRigControlIndex || action.Index == GuiMainPanel::SaveRigAsControlIndex || action.Index == GuiMainPanel::SaveRigDefaultControlIndex;
+	if (_operation.HoldsWriter() && !SceneSettingsControls::IsOperationControl(action.Index) && !rigSave) return ActionResult::NoAction();
 	if (action.Index == GuiMainPanel::LoadRigControlIndex) { _panelRigLoadRequested = true; return ActionResult::NoAction(); }
 	const auto deviceChange = _workspace->Settings().DecodeDeviceChange(action);
 	if (deviceChange)
@@ -457,7 +465,10 @@ ActionResult Scene::OnAction(GuiAction action)
 	{
 		const auto mode = action.Index == GuiMainPanel::SaveRigControlIndex ? RigSaveMode::Save :
 			action.Index == GuiMainPanel::SaveRigAsControlIndex ? RigSaveMode::SaveAs : RigSaveMode::StartupDefault;
-		_operation.RequestRigSave(mode); return ActionResult::NoAction();
+		if (_operation.Current() != SessionControl::None || _operation.HoldsWriter() || _operation.RigSaveInProgress() || _operation.RigSaveDialogOpen())
+			_operation.ReportFileOutcome("Another operation is busy; retry Rig Save");
+		else _operation.RequestRigSave(mode);
+		return ActionResult::NoAction();
 	}
 	if (action.ElementType == GuiAction::ACTIONELEMENT_BUTTON &&
 		(action.Index == GuiStationControls::CancelTakeDitchControlIndex || action.Index == GuiStationControls::ConfirmTakeDitchControlIndex))
@@ -526,6 +537,15 @@ ActionResult Scene::OnAction(GuiAction action)
 	{
 		_SetTransportOffsetLoopFrac(offset->Value, false);
 		_workspace->Settings().Offset()->SynchronizeValueFromOwner(_transportOffsetLoopFrac);
+	}
+	else if (std::holds_alternative<Settings::Reclock>(*change)) _HandleReclockArm();
+	else if (std::holds_alternative<Settings::ResetAll>(*change))
+	{
+		if (_operation.Current() != SessionControl::None || _operation.HoldsWriter() || _stationManagement.Busy() ||
+			_operation.RigSaveInProgress() || _operation.RigSaveDialogOpen())
+		{ _operation.ReportFileOutcome("Another operation is busy; retry Reset All"); return ActionResult::NoAction(); }
+		if (!_resetAllDecision) _resetAllDecision = _workspace->Notices().Confirm("Reset All?",
+			"Disconnect NINJAM, discard every take and reset mixer faders to 0 dB. The rig, routing and station plugins are retained. This cannot be undone.", "Reset All");
 	}
 	else if (std::holds_alternative<Settings::TapTempo>(*change))
 	{
@@ -997,6 +1017,63 @@ void Scene::Reset()
 	_isSceneReset.store(true, std::memory_order_relaxed);
 	// Reset callers share the structural scene lock, including trigger outcomes.
 	_cameraRecordings->Reset(Timer::GetTime());
+}
+
+void Scene::_ResetSessionWhileQuiescent()
+{
+	// SessionControl owns the writer lease: job/input producers and audio readers
+	// are stopped before resetting trigger queues or retiring take material.
+	DisconnectNinjam();
+	_workspace->Editor().Close();
+	_workspace->CancelBackgroundClick();
+	std::vector<std::shared_ptr<LoopTake>> discarded;
+	std::vector<JobAction> retainedJobs;
+	{
+		std::scoped_lock lock(_sceneMutex);
+		++_ninjamJoinGeneration;
+		++_ninjamTempoRequestId;
+		_deferredRemoteSnapshot.reset();
+		_UpdateRemoteStationsFromSnapshot({});
+		if (_quantisation.LocalMasterTimingPending())
+		{
+			const auto version = _quantisation.PendingLocalMasterTimingVersion();
+			_audioEngine->CancelLocalMasterTiming(version);
+			_quantisation.CancelLocalMasterTiming(version);
+		}
+		if (const auto rig = _rigCoordinator.Accepted())
+			for (const auto& runtime : rig->Triggers) if (runtime.Instance) runtime.Instance->Reset();
+		_contextualKeyboard.ClearAfterReadersStopped();
+		_performanceGroups.ResetKeys();
+		_performanceGroups.CancelPending();
+		_audioEngine->PublishGroupMuteApplication(nullptr);
+		_workspace->OnFocusLostLocked({ _sceneMutex, _stations }, _WorkspaceInputPresentation());
+		for (const auto& station : _stations)
+		{
+			if (!station || station->IsRemote()) continue;
+			for (const auto& take : station->GetLoopTakeSnapshot())
+			{
+				if (!take) continue;
+				take->DeSelect();
+				if (station->DitchTake(take)) discarded.push_back(take);
+			}
+			station->DeSelect();
+			// Update only existing mixer values; rebuilding channels erases cables.
+			station->RestoreMixerLevels(audio::AudioMixer::DefaultLevel,
+				std::vector<double>(station->NumBusChannels(), audio::AudioMixer::DefaultLevel));
+			auto jobs = station->CommitChanges();
+			retainedJobs.insert(retainedJobs.end(), std::make_move_iterator(jobs.begin()), std::make_move_iterator(jobs.end()));
+		}
+		_transportOffsetLoopFrac = 0.0;
+		for (const auto& station : _stations) if (station) station->SetTransportOffsetLoopFrac(0.0);
+		_audioEngine->PublishLocalTransportOffsetLoopFrac(0.0);
+		Reset(); // Remote authority is gone before the final local clock clear.
+		_workspace->InvalidateHover2d();
+	}
+	// Detached take jobs are rejected by _JobReceiverAvailableLocked. Preserve
+	// surviving station rack jobs and editors, while closing retired take editors.
+	for (const auto& take : discarded) _windowSubsystem->CloseVstEditorsForTake(take);
+	if (!retainedJobs.empty()) _QueueJobs(std::move(retainedJobs));
+	_workspace->Settings().Offset()->SynchronizeValueFromOwner(_transportOffsetLoopFrac);
 }
 
 void Scene::InitGui()
@@ -1822,8 +1899,12 @@ void Scene::_CommitStationMembershipLocked()
 bool Scene::ConsumeRigSaveRequest()
 {
 	const bool requested = _operation.TakeRigSaveRequest();
+	const bool captureBusy = requested && _CaptureIsBusy();
 	std::scoped_lock lock(_sceneMutex);
-	return requested && _StationManagementAvailableLocked() && !_operation.RigSaveInProgress();
+	if (!requested) return false;
+	if (captureBusy || !_StationManagementAvailableLocked() || _operation.RigSaveInProgress())
+	{ _operation.ReportFileOutcome("Another operation is busy; retry Rig Save"); return false; }
+	return true;
 }
 
 std::optional<io::RigFile> Scene::CaptureCommittedRig() const
@@ -1845,6 +1926,7 @@ std::optional<Scene::CapturedRig> Scene::CaptureCommittedRigVersion() const
 
 std::optional<Scene::CapturedRig> Scene::BeginExplicitRigSave()
 {
+	if (_CaptureIsBusy()) { _operation.ReportFileOutcome("Capture is busy; retry Rig Save"); return {}; }
 	std::scoped_lock lock(_sceneMutex);
 	if (!_rigCoordinator.EditsEnabled() || _stationManagement.Busy() || _operation.RigSaveInProgress() ||
 		_operation.Current() != SessionControl::None || _workspace->PopupOpen() || _isSceneQuitting.load(std::memory_order_acquire)) return {};
@@ -2082,15 +2164,6 @@ std::optional<ActionResult> Scene::_HandleKeyboardCommand(gui::Workspace::Keyboa
 		}
 	}
 
-	if ((82 == action.KeyChar)
-		&& (actions::KeyAction::KEY_UP == action.KeyActionType)
-		&& (Action::MODIFIER_CTRL & action.Modifiers)
-		&& (Action::MODIFIER_SHIFT & action.Modifiers))
-	{
-		_HandleReclockArm();
-		return ActionResult::NoAction();
-	}
-
 	// Ctrl+S saves a numbered session; Ctrl+Shift+S chooses its directory.
 	if ((83 == action.KeyChar)
 		&& (actions::KeyAction::KEY_UP == action.KeyActionType)
@@ -2198,7 +2271,8 @@ SessionControl::Effects Scene::_ControlEffects()
 			return io::IoSessionExporter::ExportSessionVersionToDirectory(_stations, AcceptedRigSnapshot(), _quantisation,
 				_globalMidiQuantState, _transportOffsetLoopFrac, _userConfig, actual, _audioEngine.get(), _sceneMutex,
 				_networkService->GetController(), folder, restore, eligible, &_performanceGroups.Groups());
-		}
+		},
+		[this] { _ResetSessionWhileQuiescent(); }
 	};
 }
 

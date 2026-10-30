@@ -27,7 +27,7 @@ namespace engine
 	class SessionControl : public SessionControls
 	{
 	public:
-		enum Kind { None, Audio, Midi, Save, Load };
+		enum Kind { None, Audio, Midi, Save, Load, ResetSession };
 		struct AudioRestoration { bool Success; bool AdmissionRestored; };
 		Kind Current() const { return _kind; }
 		std::uint64_t Identity() const { return _identity; }
@@ -62,6 +62,7 @@ namespace engine
 			std::function<Eligibility()> CheckEligibility;
 			std::function<void(const RuntimeAvailability&)> ApplyRuntimeAvailabilityLocked;
 			std::function<io::IoSessionExporter::ExportResult(const std::wstring&, const audio::AudioStreamParams&, const Restore&, const Restore&)> CaptureSession;
+			std::function<void()> ResetSessionWhileQuiescent;
 		};
 		template<class T> struct Candidate { T Value; std::uint64_t Revision = 0u; };
 		struct Notice { std::string Title, Message; };
@@ -110,6 +111,8 @@ namespace engine
 		void SetMidiInputInventory(midi::MidiInputInventory inventory) override { _midiInputInventory = std::move(inventory); }
 		void SetHardwarePreferenceSaver(std::function<bool(const io::RigFile&)> saver) { _saveHardwarePreferences = std::move(saver); }
 		bool SaveHardwarePreferences(const io::RigFile& rig) const { return _saveHardwarePreferences && _saveHardwarePreferences(rig); }
+		void RequestReset(const Effects& effects);
+		void ClearJamDestination() { _currentJamPath.clear(); _sessionSaveFolder.clear(); }
 		void RequestSave(bool chooseFolder, bool asDefault, const Effects& effects);
 		void PickSessionForLoad(const Effects& effects);
 		void RequestSessionLoad(std::wstring path, const Effects& effects);
@@ -192,6 +195,7 @@ namespace engine
 		audio::AsioInventory _deviceInventory;
 		bool _midiDraftPending = false, _devicePageDirty = true;
 		std::shared_ptr<const MidiState> _displayedMidiState;
+		std::function<std::wstring(const std::wstring&)> _pickSessionDirectory;
 		std::wstring _sessionSaveFolder, _pendingSaveFolder, _pendingLoadPath;
 		std::wstring _defaultJamPath, _currentJamPath;
 		std::function<bool(const std::wstring&, bool)> _defaultJamSaver;

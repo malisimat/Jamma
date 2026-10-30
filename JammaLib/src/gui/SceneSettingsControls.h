@@ -41,6 +41,8 @@ namespace gui
 		struct MetronomeChange { bool Enabled; };
 		struct SubdivisionChange { midi::MidiQuantisationFraction Value; };
 		struct TapTempo {};
+		struct Reclock {};
+		struct ResetAll {};
 		struct SaveSession { bool ChooseFolder; bool AsDefault; };
 		struct LoadSession {};
 		struct RefreshMidi {};
@@ -52,7 +54,7 @@ namespace gui
 			AudioDeviceChange, AudioValueChange, MidiDeviceChange>;
 		struct DevicePages { std::vector<GuiSettingEntry> Audio, Midi; };
 		using Change = std::variant<ViewModeChange, GlobalQuantisationChange, ChannelChange,
-			OffsetChange, MetronomeChange, SubdivisionChange, TapTempo>;
+			OffsetChange, MetronomeChange, SubdivisionChange, TapTempo, Reclock, ResetAll>;
 
 		enum class DraftChange { None, Device, Channels, Format, Midi };
 		DraftChange EditDeviceDraft(const DeviceChange& command, const audio::AsioInventory& inventory,
@@ -110,6 +112,8 @@ namespace gui
 		static constexpr unsigned int LoadSessionControlIndex = 7211u;
 		static constexpr unsigned int DefaultSessionControlIndex = 7212u;
 		static constexpr unsigned int SaveSessionAsControlIndex = 7213u;
+		static constexpr unsigned int ResetAllControlIndex = 7214u;
+		static constexpr unsigned int ReclockControlIndex = 7006u;
 		static constexpr unsigned int MidiDeviceControlIndex = 7300u;
 		static constexpr unsigned int MidiDeviceControlLimit = 8300u;
 		static constexpr unsigned int MidiChannelOverrideControlIndex = 7001u;
@@ -123,7 +127,7 @@ namespace gui
 		std::shared_ptr<GuiToggle> _ninjamMetronomeToggle;
 		std::shared_ptr<GuiRadio> _globalMidiQuantRadio;
 		std::shared_ptr<GuiRadio> _midiSubdivisionRadio;
-		std::shared_ptr<GuiButton> _tapButton;
+		std::shared_ptr<GuiButton> _tapButton, _reclockButton, _resetAllButton;
 		std::shared_ptr<GuiButton> _saveButton, _saveDefaultJamButton, _loadButton, _saveAsJamButton;
 		std::shared_ptr<GuiLabel> _deviceStatus, _activeAudioStatus, _fileStatus;
 		std::vector<std::string> _audioChoiceNames;

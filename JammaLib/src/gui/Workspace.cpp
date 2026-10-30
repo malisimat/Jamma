@@ -532,7 +532,14 @@ actions::ActionResult Workspace::OnMove(actions::TouchMoveAction action, Station
 
 actions::ActionResult Workspace::_OnPointerAction(actions::TouchAction action, StationAccess access, const InputPresentation& presentation)
 {
-	if (presentation.Quitting || presentation.WriterHeld) return ActionResult::NoAction();
+	if (presentation.Quitting) return ActionResult::NoAction();
+	if (presentation.WriterHeld)
+	{
+		// File controls remain reachable; their owner performs operation admission.
+		if (!_popupManager.IsOpen() && !presentation.RigSaveDialogOpen)
+			if (auto result = _RouteSettingsTouch(action, access, presentation)) return *result;
+		return ActionResult::NoAction();
+	}
 	ActionResult res;
 	// Wheel events are encoded as DOWN/index 4 and have no matching UP. They
 	// must not become pointer captures or replace keyboard focus.

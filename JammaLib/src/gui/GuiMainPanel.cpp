@@ -105,19 +105,25 @@ GuiMainPanel::GuiMainPanel(GuiMainPanelParams params) : GuiPanel(params),
 				else row->AddChild(button);
 				if (command == SaveRigDefaultControlIndex) _saveRigButton = button;
 				else if (command == LoadRigControlIndex || command == SaveRigAsControlIndex) _additionalRigSaveButtons.push_back(button);
+				else if (command == SaveRigControlIndex) _ordinaryRigSaveButton = button;
 			}
 			page->AddChild(row);
 			_controlSizes.emplace_back(row, row->GetSize());
 			page->AddChild(defaultButton);
 			_controlSizes.emplace_back(defaultButton, defaultButton->GetSize());
 		};
-		addSection("Rig", std::array<std::pair<const char*, unsigned int>, 3>{{
-			{"Load", LoadRigControlIndex}, {"Save As...", SaveRigAsControlIndex}, {"Set as Default", SaveRigDefaultControlIndex}}});
+		addSection("Rig", std::array<std::pair<const char*, unsigned int>, 4>{{
+			{"Load", LoadRigControlIndex}, {"Save", SaveRigControlIndex}, {"Save As...", SaveRigAsControlIndex}, {"Set as Default", SaveRigDefaultControlIndex}}});
 		addSection("Jam", std::array<std::pair<const char*, unsigned int>, 4>{{
 			{"Load", 7211u}, {"Save", 7210u}, {"Save As...", 7213u}, {"Set as Default", 7212u}}});
 		for (const auto& setting : params.Settings)
-			if (setting.Page == SettingsPage::Session && setting.Command == 0u && setting.Control)
+			if (setting.Page == SettingsPage::Session && (setting.Command == 0u || setting.Command == 7214u) && setting.Control)
 			{
+				if (setting.Command != 0u)
+				{
+					auto binding = std::make_shared<GuiCommandReceiver>(setting.Command);
+					setting.Control->SetReceiver(binding); _bindings.push_back(std::move(binding));
+				}
 				page->AddChild(setting.Control);
 				_controlSizes.emplace_back(setting.Control, setting.Control->GetSize());
 			}

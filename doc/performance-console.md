@@ -77,7 +77,7 @@ outside the console; the loop editor consumes contextual key input.
 | **Tab**, no modifiers | Cycle front, top-down and station-interior camera views |
 | **E**, no modifiers | Open the selected completed audio/MIDI loop; hover to disambiguate |
 | **Space** | Tap tempo on press; hold the grid until release; works with Ctrl and in the editor, except text entry |
-| **Ctrl+Shift+R** | Arm reclock; while following remote timing, choose Stay local first |
+| **Reclock (Timing settings)** | Arm reclock; while following remote timing, choose Stay local first |
 | **Ctrl+Shift+V** | Insert a VST on the hovered station/take/loop at the current selection depth |
 | **Ctrl+Shift+E** | Open the first VST editor on that hovered target |
 | Hold **`** or **numpad 0** | Reveal routing cables |
@@ -222,3 +222,15 @@ Alt-left-drag sweeps a broadband band. Wheel changes brush size, Alt-wheel chang
 band width, Shift-wheel zooms frequency and Alt-Shift-wheel zooms time.
 Shift-left-drag pans time/frequency; Shift-right-drag zooms both axes. Start a
 drag off the surface to orbit. Ctrl pointer/wheel gestures are reserved.
+
+### Session controls
+
+Jam and Rig Save and Save As remain available for empty sessions. Save uses the
+current destination or asks for one; Save As always asks. A busy operation or
+capture reports a reason to retry. Set as Default remains a separate action.
+
+Reset All in Session settings asks for confirmation, disconnects NINJAM, discards
+all takes, clears timing and restores mixer faders to 0 dB. Stations, rig/device
+configuration, station routing and station plugins remain. The next Jam Save
+asks for a destination; the Rig destination remains. Cancel leaves the session
+unchanged. Reclock is in Timing settings.
