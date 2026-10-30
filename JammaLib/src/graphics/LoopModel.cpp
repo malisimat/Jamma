@@ -57,6 +57,7 @@ void LoopModel::Draw3d(DrawContext& ctx,
 	glCtx.ApplyGroupPreview(GlobalId());
 
 	glCtx.PushMvp(glm::rotate(glm::mat4(1.0),
+		pass == base::PASS_PICKER ? 0.0f :
 		(float)(constants::TWOPI * _loopIndexFrac) * (1.0f - _editorMorph),
 		glm::vec3(0.0f, 1.0f, 0.0f)));
 
@@ -105,7 +106,8 @@ void LoopModel::Draw3d(DrawContext& ctx,
 
 	auto shader = modelShader.lock();
 
-	if (!shader || 0u == _vertexArray)
+	const auto vertexArray = pass == base::PASS_PICKER ? _pickerVertexArray : _vertexArray;
+	if (!shader || 0u == vertexArray)
 	{
 		glCtx.PopMvp();
 		return;
@@ -122,6 +124,7 @@ void LoopModel::Draw3d(DrawContext& ctx,
 	glCtx.SetUniform("WaveformHeightScale", _HeightScale);
 	glCtx.SetUniform("WaveformDisplayScale", _DisplayScale);
 	glCtx.SetUniform("WaveformSceneScale", _sceneHeightScale);
+	glCtx.SetUniform("PickerHalfHeight", _pickerHalfHeight);
 	glCtx.SetUniform("WaveformMinHeight", _MinHeight);
 	glCtx.SetUniform("WaveformColorMultiplier", waveformColorMultiplier);
 	glCtx.SetUniform("WaveformUnitMeshRadius", _UnitMeshRadius);
@@ -134,7 +137,7 @@ void LoopModel::Draw3d(DrawContext& ctx,
 	glUseProgram(shader->GetId());
 	shader->SetUniforms(dynamic_cast<GlDrawContext&>(ctx));
 
-	glBindVertexArray(_vertexArray);
+	glBindVertexArray(vertexArray);
 
 	if (pass == base::PASS_SCENE)
 	{
@@ -152,10 +155,11 @@ void LoopModel::Draw3d(DrawContext& ctx,
 		glBindTexture(GL_TEXTURE_1D, _waveformTexture);
 	}
 
+	const auto vertexCount = pass == base::PASS_PICKER ? _PickerSegments * 24u : _numTris * 3u;
 	if (numInstances > 1)
-		glDrawArraysInstanced(GL_TRIANGLES, 0, _numTris * 3, numInstances);
+		glDrawArraysInstanced(GL_TRIANGLES, 0, vertexCount, numInstances);
 	else
-		glDrawArrays(GL_TRIANGLES, 0, _numTris * 3);
+		glDrawArrays(GL_TRIANGLES, 0, vertexCount);
 
 	if (pass == base::PASS_SCENE)
 	{
@@ -242,7 +246,25 @@ std::weak_ptr<resources::ShaderResource> LoopModel::GetShader()
 
 void LoopModel::_InitResources(resources::ResourceLib& resourceLib, bool forceInit)
 {
+	if (!HasCurrentGlContext())
+		return;
 	GuiModel::_InitResources(resourceLib, forceInit);
+
+	// Picker geometry is static and independent of waveform samples/uploads.
+	if (_pickerVertexArray == 0u) glGenVertexArrays(1, &_pickerVertexArray);
+	if (_pickerBuffers[0] == 0u) glGenBuffers(2, _pickerBuffers.data());
+	const auto [pickerVerts, pickerUvs] = BuildFixedGeometry(_PickerSegments, _UnitMeshRadius);
+	glBindVertexArray(_pickerVertexArray);
+	glBindBuffer(GL_ARRAY_BUFFER, _pickerBuffers[0]);
+	glBufferData(GL_ARRAY_BUFFER, pickerVerts.size() * sizeof(float), pickerVerts.data(), GL_STATIC_DRAW);
+	glEnableVertexAttribArray(0);
+	glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 0, nullptr);
+	glBindBuffer(GL_ARRAY_BUFFER, _pickerBuffers[1]);
+	glBufferData(GL_ARRAY_BUFFER, pickerUvs.size() * sizeof(float), pickerUvs.data(), GL_STATIC_DRAW);
+	glEnableVertexAttribArray(1);
+	glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 0, nullptr);
+	glBindVertexArray(0);
+	glBindBuffer(GL_ARRAY_BUFFER, 0);
 
 	if (0u == _waveformTexture)
 		glGenTextures(1, &_waveformTexture);
@@ -283,6 +305,10 @@ void LoopModel::_InitResources(resources::ResourceLib& resourceLib, bool forceIn
 
 void LoopModel::_ReleaseResources()
 {
+	graphics::GlDeleteQueue::DeleteBuffers(2, _pickerBuffers.data());
+	_pickerBuffers.fill(0u);
+	graphics::GlDeleteQueue::DeleteVertexArrays(1, &_pickerVertexArray);
+	_pickerVertexArray = 0u;
 	if (0u != _waveformTexture)
 	{
 		graphics::GlDeleteQueue::DeleteTextures(1, &_waveformTexture);
@@ -771,4 +797,11 @@ float LoopModel::FitSceneHeight(float largestHalfHeight, float bandHeight) noexc
 {
 	return largestHalfHeight > 0.0f
 		? std::clamp(bandHeight * 0.5f / largestHalfHeight, 0.0f, 1.0f) : 1.0f;
+}
+
+float LoopModel::PickerLocalHalfHeight(float availableHeight, float modelScale) noexcept
+{
+	// Compensate only geometry scale, never gain (which may legitimately be zero).
+	const auto scale = std::fabs(modelScale);
+	return scale > 0.0f ? 0.175f * (std::max)(0.0f, availableHeight) / scale : 0.0f;
 }

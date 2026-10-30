@@ -249,7 +249,7 @@ void Loop::Draw3d(DrawContext& ctx,
 	_model->SetSpectralReveal(spectralVisible ? _audioSpectralMorph : 0.0f);
 	const auto visualHeightScale = static_cast<float>(_mixer->UnmutedLevel()) * _masterVisualScale;
 	_model->SetWaveformColorScale(visualHeightScale);
-	glCtx.PushMvp(glm::scale(glm::mat4(1.0f), glm::vec3(1.0f, visualHeightScale, 1.0f)));
+	glCtx.PushMvp(glm::scale(glm::mat4(1.0f), glm::vec3(1.0f, pass == PASS_PICKER ? 1.0f : visualHeightScale, 1.0f)));
 	
 	GLboolean depthWrites = GL_TRUE;
 	const auto fadingWaveform = PASS_SCENE == pass && spectralVisible && _audioSpectralMorph > 0.0f;
@@ -1832,4 +1832,11 @@ ActionResult Loop::OnAction(JobAction action)
 	}
 
 	return ActionResult::NoAction();
+}
+
+void Loop::SetPickerLayoutHeight(float availableHeight) noexcept
+{
+	if (_model)
+		_model->SetPickerHalfHeight(LoopModel::PickerLocalHalfHeight(availableHeight,
+			static_cast<float>(ModelScale())));
 }

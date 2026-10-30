@@ -1,6 +1,10 @@
 #define GLEW_STATIC
 #include "gtest/gtest.h"
 #include "graphics/Image.h"
+#include "graphics/LoopModel.h"
+#include <filesystem>
+#include <fstream>
+#include <sstream>
 #include "graphics/GlDeleteQueue.h"
 #include "gui/GuiButton.h"
 #include "gui/GuiToggle.h"
@@ -280,4 +284,71 @@ TEST_F(TextureTintGlTest, HoverMasksBrightenBordersAndPreserveTintedFillsAndNine
 		}
 	}
 	EXPECT_EQ(glGetError(), GL_NO_ERROR);
+}
+
+class PickerGlModel : public engine::LoopModel
+{
+public:
+	PickerGlModel(engine::LoopModelParams params) : gui::GuiModel(params), engine::LoopModel(params) {}
+	bool PendingUpload() const { return _waveformNeedsUpload; }
+};
+
+TEST_F(TextureTintGlTest, AudioPickerHasStaticCoverageAcrossPhaseContentAndSceneFit)
+{
+	resources::ResourceLib resources;
+	auto root = std::filesystem::absolute(__FILE__);
+	for (int i = 0; i < 5; ++i) root = root.parent_path();
+	std::ifstream list(root / "Jamma/resources/ResourceList.txt");
+	ASSERT_TRUE(list.is_open());
+	std::vector<std::string> uniforms;
+	std::string line;
+	while (std::getline(list, line))
+	{
+		std::istringstream fields(line);
+		std::string type, name, uniform;
+		fields >> type >> name;
+		if (type != "2" || name != "picker") continue;
+		while (fields >> uniform) uniforms.push_back(uniform);
+	}
+	ASSERT_TRUE(resources.LoadResource(resources::SHADER, "picker", uniforms));
+	engine::LoopModelParams params;
+	params.ModelShaders = { "picker", "picker", "picker" };
+	PickerGlModel model(params);
+	model.InitResources(resources, false);
+	model.SetLoopState(engine::LoopModel::STATE_PICKING);
+	model.SetPickerHalfHeight(17.5f);
+	graphics::GlDrawContext context({ 64u, 64u }, base::DrawContext::PICKING);
+	context.Initialise(); context.Bind();
+	context.PushMvp(glm::ortho(-140.0f, 140.0f, -140.0f, 140.0f, -400.0f, 400.0f));
+	glDisable(GL_BLEND); glDisable(GL_DEPTH_TEST); glDisable(GL_CULL_FACE);
+	glClearColor(0, 0, 0, 0);
+	// Front-on world Y bounds: pixel 35 is inside +/-17.5, pixel 37 is outside.
+	glClear(GL_COLOR_BUFFER_BIT);
+	model.Draw3d(context, 1u, base::PASS_PICKER);
+	EXPECT_NE(0u, context.GetPixel({32, 35}));
+	EXPECT_EQ(0u, context.GetPixel({32, 37}));
+	context.PushMvp(glm::rotate(glm::mat4(1.0f), 0.6f, glm::vec3(1.0f, 0.0f, 0.0f)));
+	audio::BufferBank buffer; buffer.Resize(32u);
+	for (const auto morph : { 0.0f, 0.4f, 1.0f })
+	{
+		model.SetEditorMorph(morph);
+		std::vector<unsigned char> reference;
+		for (const auto phase : { 0.0, 0.12345, 0.75 })
+			for (const auto peak : { 0.0f, 0.001f, 1.0f })
+			{
+				buffer[0] = peak;
+				model.UpdateModel(buffer, 32u, 0u, 100.0f);
+				model.SetSceneHeightScale(peak);
+				model.SetLoopIndexFrac(phase);
+				glClear(GL_COLOR_BUFFER_BIT);
+				model.Draw3d(context, 1u, base::PASS_PICKER);
+				const auto pixels = context.GetPixels();
+				ASSERT_TRUE(std::any_of(pixels.begin(), pixels.end(), [](auto pixel) { return pixel != 0; }));
+				if (reference.empty()) reference = pixels;
+				else EXPECT_EQ(reference, pixels);
+				EXPECT_TRUE(model.PendingUpload()); // Picking never uploads waveform data.
+			}
+	}
+	model.ReleaseResources();
+	EXPECT_EQ(GL_NO_ERROR, glGetError());
 }
