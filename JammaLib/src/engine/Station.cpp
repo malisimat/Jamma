@@ -2723,3 +2723,10 @@ void engine::Station::BeginMembershipRemoval()
 		request->Clock->CancelRecordingSeedOnOwner(request->Timing.Version);
 	for (const auto& take : GetLoopTakeSnapshot()) take->CancelCapture();
 }
+
+bool Station::MoveVstSlot(const vst::RackMove& move)
+{
+	if (!_rackState.MoveSlot(move, Id())) return false;
+	_changesMade = true;
+	return true;
+}

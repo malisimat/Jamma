@@ -6,6 +6,7 @@
 #include "GuiLabel.h"
 #include "CableInteraction.h"
 #include "../vst/VstRackSlot.h"
+#include "../vst/RackMove.h"
 #include "../midi/MidiChannelRoute.h"
 #include <array>
 #include <functional>
@@ -22,13 +23,14 @@ namespace gui
 		using Routes = std::array<midi::MidiChannelRoute, 16>;
 		struct Command
 		{
-			enum class Kind { Slot, Append, Recover, ClearInactiveRoutes, Diagnostic, Routes };
+			enum class Kind { Slot, Append, Recover, ClearInactiveRoutes, Diagnostic, Routes, Move };
 			Kind Operation = Kind::Slot;
 			std::string Identity;
 			std::size_t Ordinal = 0u;
 			std::uint64_t Revision = 0u;
 			base::Action::Modifiers Modifiers = base::Action::MODIFIER_NONE;
 			GuiVstRack::Routes ChannelRoutes{};
+			vst::RackMove Move;
 		};
 		struct Slot
 		{
@@ -38,6 +40,8 @@ namespace gui
 		struct Model
 		{
 			std::string OwnerName;
+			std::string OwnerId;
+			vst::RackMove::Scope OwnerScope = vst::RackMove::Scope::Station;
 			std::vector<Slot> Slots;
 			std::size_t TotalSlots = 0u;
 			std::uint64_t Revision = 0u;
@@ -67,6 +71,8 @@ namespace gui
 		std::shared_ptr<GuiButton> AppendButton() const;
 		std::shared_ptr<GuiToggle> ChannelsExpander() const;
 		std::shared_ptr<GuiButton> SlotButton(std::size_t index) const;
+		std::shared_ptr<GuiButton> MoveHandle(std::size_t index) const;
+		bool HasSlotMove() const noexcept { return _slotMove.has_value(); }
 		std::shared_ptr<GuiScrollPanel> SlotScroll() const { return _scroll; }
 		bool HasCableDrag() const noexcept { return _drag.has_value(); }
 		void CancelInteraction();
@@ -98,6 +104,7 @@ namespace gui
 			bool Eligible = false;
 			std::array<std::shared_ptr<Button>, 4> Buttons;
 			std::shared_ptr<base::GuiElement> Socket;
+			std::shared_ptr<Button> Handle;
 		};
 		struct Link { unsigned int Channel; std::string Id; };
 		struct Drag
@@ -109,6 +116,13 @@ namespace gui
 			std::string Id;
 			utils::Position2d Pointer;
 			std::optional<CableInteraction::Endpoint> Snap;
+		};
+		struct SlotMove
+		{
+			vst::RackMove Move;
+			std::optional<std::size_t> Target;
+			int Index;
+			actions::TouchAction::TouchType Touch;
 		};
 		struct ChannelPress
 		{
@@ -128,6 +142,9 @@ namespace gui
 		void _Geometry(std::vector<CableInteraction::Endpoint>& endpoints,
 			std::vector<CableInteraction::Cable>& cables, std::vector<Link>& links) const;
 		bool _BeginDrag(utils::Position2d point);
+		bool _BeginSlotMove(const actions::TouchAction& action);
+		void _UpdateSlotMove(utils::Position2d point);
+		void _FinishSlotMove();
 		void _UpdateDrag(utils::Position2d point);
 		void _FinishDrag();
 		void _RemoveLink(Routes& routes, const Link& link) const;
@@ -152,6 +169,7 @@ namespace gui
 		utils::Size2d _viewport{1920u, 1080u};
 		bool _collapsed = true, _revealHeld = false, _hovered = false, _consumeRelease = false, _consumeEscape = false, _rowsBuilt = false;
 		std::optional<Drag> _drag;
+		std::optional<SlotMove> _slotMove;
 		std::optional<ChannelPress> _channelPress;
 		std::string _feedback;
 		std::shared_ptr<int> _lifetime = std::make_shared<int>(0);

@@ -10,6 +10,7 @@
 #include <utility>
 #include <vector>
 #include "VstChain.h"
+#include "RackMove.h"
 #include "VstRackSlot.h"
 #include "../actions/JobAction.h"
 #include "../actions/ActionResult.h"
@@ -34,6 +35,7 @@ namespace vst
 		std::shared_ptr<VstChain> ActiveChain() const noexcept { return _vstChain.load(std::memory_order_acquire); }
 		const std::shared_ptr<VstChain>& StagedChain() const noexcept { return _backVstChain; }
 		bool CommitChain();
+		bool MoveSlot(const RackMove& move, const std::string& ownerId);
 		std::pair<std::vector<actions::JobAction>, std::vector<actions::JobAction>> TakePendingJobs();
 		bool LoadVstPlugin(std::wstring path, std::vector<std::uint8_t> initialState, std::size_t retiredDestinations);
 		VstRackSlot GetVstRackSlot() const;

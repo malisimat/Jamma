@@ -595,7 +595,10 @@ void Loop::WriteBlock(const std::shared_ptr<MultiAudioSink> dest,
 	{
 		auto chain = _vstChain.borrow();
 		if (chain && chain->IsActive())
-			chain->ProcessBlock(tempBuf, static_cast<int>(sampsToWrite));
+		{
+			float instrumentScratch[constants::MaxBlockSize];
+			chain->ProcessRackMono(tempBuf, instrumentScratch, static_cast<int>(sampsToWrite));
+		}
 
 		// Only rendered playback is delayed; bounce and source capture keep
 		// their original sample coordinates.
@@ -1581,9 +1584,13 @@ void Loop::_ApplyLoopVisualModel(const BufferBank& buffer,
 	_vu->UpdateModel(radius);
 }
 
-void Loop::LoadVstPlugin(std::wstring path,
+std::string Loop::LoadVstPlugin(std::wstring path,
 	std::vector<std::uint8_t> initialState)
 {
+	{
+		std::lock_guard<std::mutex> lock(_vstPathsMutex);
+		if (_vstSavedEntries.size() + _vstJobsPending.load(std::memory_order_acquire) >= 32u) return {};
+	}
 	JobAction job;
 	job.JobActionType = JobAction::JOB_LOADVST;
 	job.VstPath = std::move(path);
@@ -1591,7 +1598,9 @@ void Loop::LoadVstPlugin(std::wstring path,
 	job.VstIdentity = utils::GetGuid();
 	_pendingVstLoads.push_back(std::move(job));
 	_vstJobsPending.fetch_add(1u, std::memory_order_release);
+	++_rackRevision;
 	_changesMade = true;
+	return _pendingVstLoads.back().VstIdentity;
 }
 
 vst::VstRackSlot Loop::GetVstRackSlot() const
@@ -1610,12 +1619,15 @@ vst::VstRackSlot Loop::GetVstRackSlot() const
 	return slot;
 }
 
-bool Loop::LoadManagedVstPlugin(std::wstring path)
+bool Loop::LoadManagedVstPlugin(std::wstring path, const std::string& identity)
 {
-	const auto slot = GetVstRackSlot();
-	if (slot.Pending || slot.Plugin || path.empty()) return false;
-	LoadVstPlugin(std::move(path));
-	_pendingVstLoads.back().VstManaged = true;
+	auto slots = GetVstRackSlots();
+	const auto found = identity.empty() ? slots.begin() : std::find_if(slots.begin(), slots.end(), [&](const auto& slot) { return slot.Identity == identity; });
+	if (path.empty() || (!identity.empty() && found == slots.end())) return false;
+	if (found != slots.end() && (found->Pending || found->Plugin)) return false;
+	if (LoadVstPlugin(std::move(path)).empty()) return false;
+	_pendingVstLoads.back().VstManaged = found != slots.end();
+	if (found != slots.end() && !identity.empty()) _pendingVstLoads.back().VstIdentity = found->Identity;
 	return true;
 }
 
@@ -1662,6 +1674,7 @@ bool Loop::LoadVstPluginSynchronously(const std::wstring& path,
 	saved.Bypass = bypass;
 	saved.State = io::JamFile::VstEntry::EncodeState(initialState);
 	_vstSavedEntries.push_back(std::move(saved));
+	++_rackRevision;
 	return loaded;
 }
 
@@ -1677,6 +1690,7 @@ void Loop::UnloadVstPlugin(size_t index)
 	}
 	_pendingVstUnloads.push_back(std::move(job));
 	_vstJobsPending.fetch_add(1u, std::memory_order_release);
+	++_rackRevision;
 	_changesMade = true;
 }
 
@@ -1774,11 +1788,15 @@ ActionResult Loop::OnAction(JobAction action)
 			saved.Id = action.VstIdentity;
 			saved.Path = utils::EncodeUtf8(action.VstPath);
 			saved.State = io::JamFile::VstEntry::EncodeState(action.VstInitialState);
-			if (action.VstManaged && !_vstSavedEntries.empty() && !replacement->GetPlugin(0u))
+			auto retry = std::find_if(_vstSavedEntries.begin(), _vstSavedEntries.end(), [&](const auto& entry) { return entry.Id == action.VstIdentity; });
+			// Legacy single-slot requests choose a replacement identity; row requests retain their exact ID.
+			if (action.VstManaged && retry == _vstSavedEntries.end() && !_vstSavedEntries.empty() && !replacement->GetPlugin(0u)) retry = _vstSavedEntries.begin();
+			if (action.VstManaged && retry != _vstSavedEntries.end())
 			{
-				replacement->ReplaceSlot(0u, std::move(plugin));
-				_vstPluginPaths.front() = action.VstPath;
-				_vstSavedEntries.front() = std::move(saved);
+				const auto index = static_cast<std::size_t>(retry - _vstSavedEntries.begin());
+				replacement->ReplaceSlot(index, std::move(plugin));
+				_vstPluginPaths[index] = action.VstPath;
+				*retry = std::move(saved);
 			}
 			else
 			{
@@ -1787,6 +1805,7 @@ ActionResult Loop::OnAction(JobAction action)
 				_vstSavedEntries.push_back(std::move(saved));
 			}
 			_backVstChain = std::move(replacement);
+			++_rackRevision;
 			_flipVstChain.store(true, std::memory_order_release);
 		}
 		if (_vstJobsPending.load(std::memory_order_acquire) != 0u) _vstJobsPending.fetch_sub(1u, std::memory_order_release);
@@ -1817,6 +1836,7 @@ ActionResult Loop::OnAction(JobAction action)
 				_vstPluginPaths.erase(_vstPluginPaths.begin() + static_cast<std::ptrdiff_t>(removeIndex));
 				_vstSavedEntries.erase(_vstSavedEntries.begin() + static_cast<std::ptrdiff_t>(removeIndex));
 				_backVstChain = std::move(replacement);
+			++_rackRevision;
 				_flipVstChain.store(true, std::memory_order_release);
 			}
 		}
@@ -1839,4 +1859,37 @@ void Loop::SetPickerLayoutHeight(float availableHeight) noexcept
 	if (_model)
 		_model->SetPickerHalfHeight(LoopModel::PickerLocalHalfHeight(availableHeight,
 			static_cast<float>(ModelScale())));
+}
+
+std::vector<vst::VstRackSlot> Loop::GetVstRackSlots(std::size_t offset) const
+{
+	std::lock_guard<std::mutex> lock(_vstPathsMutex);
+	const auto chain = _flipVstChain.load(std::memory_order_acquire) ? _backVstChain : _vstChain.load(std::memory_order_acquire);
+	std::vector<vst::VstRackSlot> result;
+	for (auto i = std::min(offset, _vstSavedEntries.size()); i < _vstSavedEntries.size() && result.size() < 32u; ++i)
+	{
+		vst::VstRackSlot slot;
+		slot.Identity = _vstSavedEntries[i].Id;
+		slot.Path = utils::DecodeUtf8(_vstSavedEntries[i].Path);
+		slot.Plugin = chain ? chain->GetPlugin(i) : nullptr;
+		slot.Pending = _vstJobsPending.load(std::memory_order_acquire) != 0u || _flipVstChain.load(std::memory_order_acquire);
+		slot.Failed = !slot.Plugin && !slot.Pending;
+		result.push_back(std::move(slot));
+	}
+	return result;
+}
+
+bool Loop::MoveVstSlot(const vst::RackMove& move)
+{
+	std::lock_guard<std::mutex> lock(_vstPathsMutex);
+	if (_vstJobsPending.load(std::memory_order_acquire) != 0u
+		|| !move.Valid(vst::RackMove::Scope::Loop, Id(), RackRevision(), _vstSavedEntries)) return false;
+	const auto chain = _flipVstChain.load(std::memory_order_acquire) ? _backVstChain : _vstChain.load(std::memory_order_acquire);
+	auto replacement = move.Stage(chain, _vstSavedEntries, _vstPluginPaths);
+	if (!replacement) return false;
+	_backVstChain = std::move(replacement);
+	++_rackRevision;
+	_flipVstChain.store(true, std::memory_order_release);
+	_changesMade = true;
+	return true;
 }

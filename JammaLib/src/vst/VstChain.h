@@ -29,6 +29,8 @@ namespace vst
 		// callback state, so concurrent snapshot readers never share mutable buses.
 		void ProcessRack(float* const* channels, float* const* instrumentScratch,
 			int numChannels, int numSamples) noexcept;
+		// Preserve the mono host adapter (including its established output folding).
+		void ProcessRackMono(float* channel, float* instrumentScratch, int numSamples) noexcept;
 		VstChain();
 		~VstChain() = default;
 

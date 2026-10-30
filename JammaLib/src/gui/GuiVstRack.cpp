@@ -186,7 +186,9 @@ std::shared_ptr<GuiButton> GuiVstRack::SlotButton(std::size_t index) const
 
 void GuiVstRack::Update(Model model, std::function<void(Command)> submit)
 {
-	if (!model.Editable || model.Inactive || (_drag && _drag->Revision != model.Revision)) CancelInteraction();
+	if (!model.Editable || model.Inactive || (_drag && _drag->Revision != model.Revision)
+		|| (_slotMove && (_slotMove->Move.Revision != model.Revision || _slotMove->Move.OwnerId != model.OwnerId
+			|| _slotMove->Move.OwnerScope != model.OwnerScope))) CancelInteraction();
 	bool rebuild = _model.Inactive != model.Inactive || _model.Slots.size() != model.Slots.size();
 	if (!rebuild) for (std::size_t i = 0u; i < model.Slots.size(); ++i)
 		if (_model.Slots[i].Value.Identity != model.Slots[i].Value.Identity) { rebuild = true; break; }
@@ -221,6 +223,7 @@ void GuiVstRack::Update(Model model, std::function<void(Command)> submit)
 	{
 		auto& row = _rows[index]; const auto& slot = _model.Slots[index];
 		const auto state = slot.Value.Pending ? 1u : slot.Value.Failed ? 3u : slot.Value.Plugin ? (slot.EditorOpen ? 2u : 1u) : 0u;
+		row.Handle->SetEnabled(_model.Editable && !_model.Inactive && !slot.Value.Pending && _model.TotalSlots > 1u);
 		row.Eligible = slot.Value.Plugin && slot.Value.Plugin->IsLoaded() && !slot.Value.Plugin->IsBypassed() && slot.Value.Plugin->MidiInput().Known
 			&& (slot.Value.Plugin->MidiInput().Notes || slot.Value.Plugin->MidiInput().Controllers);
 		const auto savedName = !slot.Value.Failed || slot.Value.Pending || slot.Value.Path.empty() ? std::string{} :
@@ -239,6 +242,7 @@ void GuiVstRack::Update(Model model, std::function<void(Command)> submit)
 		});
 		row.Socket->SetVisible(!_model.Inactive && !_toggles.empty() && (row.Eligible || linked));
 	}
+	_append->SetText("");
 	_append->SetEnabled(_model.Editable && !_model.Inactive && _model.TotalSlots < 32u);
 	_recover->SetVisible(_model.Inactive); _recover->SetEnabled(_model.Editable && _model.TotalSlots <= 32u);
 	_clearRoutes->SetVisible(_model.Inactive); _clearRoutes->SetEnabled(_model.Editable);
@@ -263,6 +267,7 @@ void GuiVstRack::_RebuildRows()
 			button->ReleaseResources(); _content->RemoveChild(button); button->DetachGuiOwnershipForRetirement();
 		}
 		row.Socket->ReleaseResources(); _content->RemoveChild(row.Socket); row.Socket->DetachGuiOwnershipForRetirement();
+		row.Handle->ReleaseResources(); _content->RemoveChild(row.Handle); row.Handle->DetachGuiOwnershipForRetirement();
 	}
 	_rows.clear();
 	std::vector<std::string> identities;
@@ -287,6 +292,10 @@ void GuiVstRack::_RebuildRows()
 			row.Buttons[i]->KeepReadableWhenDisabled = row.Missing;
 			_content->AddChild(row.Buttons[i]);
 		}
+		row.Handle = _MakeButton("=", "", [] { return Command{}; });
+		row.Handle->SetVisible(!row.Missing);
+		row.Handle->SetEnabled(!row.Missing && _model.Editable);
+		_content->AddChild(row.Handle);
 		base::GuiElementParams socket; socket.Size = {10u, 10u}; socket.MinSize = socket.Size;
 		socket.Texture = "hud_socket_cable"; socket.TextureShader = "texture_tinted";
 		socket.TintColor = row.Missing ? glm::vec3{1.0f, 0.25f, 0.2f} : glm::vec3{0.4f, 0.85f, 1.0f};
@@ -334,8 +343,10 @@ void GuiVstRack::_LayoutRows()
 	for (std::size_t i = 0u; i < _rows.size(); ++i)
 	{
 		const auto y = static_cast<int>(rowsHeight - (i + 1u) * _RowPitch);
-		for (auto& button : _rows[i].Buttons) { button->SetPosition({contentRect.Left, y}); button->SetSize({rowWidth, _RowHeight}); }
+		for (auto& button : _rows[i].Buttons) { button->SetPosition({contentRect.Left, y}); button->SetSize({std::max(1u, rowWidth > 18u ? rowWidth - 18u : 1u), _RowHeight}); }
 		_rows[i].Socket->SetPosition({contentRect.Left + 1, y + 13});
+		_rows[i].Handle->SetPosition({contentRect.Left + static_cast<int>(rowWidth) - 18, y});
+		_rows[i].Handle->SetSize({18u, _RowHeight});
 	}
 	_scroll->SetSize({_width, scrollHeight}); // Refresh content metrics without resetting scroll.
 	int bottom = top - static_cast<int>(scrollHeight) - static_cast<int>(_RowPitch);
@@ -382,7 +393,10 @@ void GuiVstRack::_RefreshChannelToggles()
 }
 void GuiVstRack::CancelInteraction()
 {
-	if (_drag) _consumeRelease = true;
+	if (_drag || _slotMove) _consumeRelease = true;
+	if (_slotMove) _feedback.clear();
+	_slotMove.reset();
+	for (const auto& row : _rows) row.Handle->ApplyHoverState(false);
 	if (_channelPress) _toggles[_channelPress->Channel]->ClearPointerState();
 	_channelPress.reset();
 	_drag.reset(); _hovered = false;
@@ -559,6 +573,7 @@ void GuiVstRack::MovePointer(TouchMoveAction action)
 	_hoveredMidiSocket.reset();
 	for (const auto& socket : _sourceSockets) socket->ApplyHoverState(false);
 	if (!IsVisible()) { _hovered = false; return; }
+	if (_slotMove) { _UpdateSlotMove(action.Position); return; }
 	if (_drag) { _UpdateDrag(action.Position); return; }
 	std::vector<CableInteraction::Endpoint> endpoints;
 	std::vector<CableInteraction::Cable> cables; std::vector<Link> links;
@@ -593,6 +608,13 @@ void GuiVstRack::MovePointer(TouchMoveAction action)
 
 ActionResult GuiVstRack::OnAction(TouchMoveAction action)
 {
+	if (_slotMove)
+	{
+		if (action.Index != _slotMove->Index || action.Touch != _slotMove->Touch) return _Captured();
+		if (action.Touch == TouchAction::TOUCH_MOUSE && action.MouseButtonsDown == 0u) CancelInteraction();
+		else _UpdateSlotMove(action.Position);
+		return _Captured();
+	}
 	if (_channelPress && action.Index == _channelPress->Index && action.Touch == _channelPress->Touch)
 	{
 		if (action.Touch == TouchAction::TOUCH_MOUSE && action.MouseButtonsDown == 0u)
@@ -624,6 +646,13 @@ ActionResult GuiVstRack::OnAction(TouchAction action)
 	if (_consumeRelease)
 	{
 		if (action.State == TouchAction::TOUCH_UP && action.Index == 0) _consumeRelease = false;
+		return _Captured();
+	}
+	if (_slotMove)
+	{
+		if (action.Index == 1 && action.State == TouchAction::TOUCH_DOWN) CancelInteraction();
+		else if (action.Index == _slotMove->Index && action.Touch == _slotMove->Touch && action.State == TouchAction::TOUCH_UP)
+		{ _UpdateSlotMove(action.Position); _FinishSlotMove(); }
 		return _Captured();
 	}
 	if (_drag)
@@ -663,7 +692,7 @@ ActionResult GuiVstRack::OnAction(TouchAction action)
 					if (_submit) _submit(std::move(command)); _consumeRelease = true; return _Captured();
 				}
 		}
-		if (_BeginDrag(action.Position)) return _Captured();
+		if (_BeginSlotMove(action) || _BeginDrag(action.Position)) return _Captured();
 	}
 	auto result = GuiElement::OnAction(action);
 	if (action.Index == 0 && action.State == TouchAction::TOUCH_DOWN && !_collapsed && result.IsEaten)
@@ -681,7 +710,7 @@ ActionResult GuiVstRack::OnAction(TouchAction action)
 
 ActionResult GuiVstRack::OnAction(KeyAction action)
 {
-	if (action.KeyChar == 27u && (_drag || _consumeEscape))
+	if (action.KeyChar == 27u && (_drag || _slotMove || _consumeEscape))
 	{
 		if (action.KeyActionType == KeyAction::KEY_DOWN) { CancelInteraction(); _consumeEscape = true; }
 		else _consumeEscape = false;
@@ -695,12 +724,21 @@ bool GuiVstRack::RouteHitTest(Position2d point)
 	if (!IsEnabled() || !IsVisible()) return false;
 	std::vector<CableInteraction::Endpoint> endpoints; std::vector<CableInteraction::Cable> cables; std::vector<Link> links;
 	_Geometry(endpoints, cables, links);
-	return _drag.has_value() || CableInteraction::HitEndpoint(endpoints, point, 9.0f).has_value()
+	return _slotMove.has_value() || _drag.has_value() || CableInteraction::HitEndpoint(endpoints, point, 9.0f).has_value()
 		|| CableInteraction::HitCable(cables, point, 5.0f).has_value() || _ChildRectHitTest(point);
 }
 
 std::shared_ptr<base::GuiElement> GuiVstRack::FindTopmostDescendant(Position2d point)
 {
+	// Handles own their capture, independently of MIDI cable gestures.
+	if (IsEnabled() && IsVisible())
+	{
+		const auto global = point + GlobalPosition();
+		const auto clip = _scroll->EffectiveContentRect({0, 0, static_cast<int>(_viewport.Width), static_cast<int>(_viewport.Height)});
+		for (const auto& row : _rows)
+			if (row.Handle->IsVisible() && row.Handle->IsEnabled() && clip.Contains(global)
+				&& row.Handle->HitTest(row.Handle->GlobalToLocal(global))) return shared_from_this();
+	}
 	// Socket/cable gestures precede the underlying slot/channel buttons.
 	std::vector<CableInteraction::Endpoint> endpoints; std::vector<CableInteraction::Cable> cables; std::vector<Link> links;
 	_Geometry(endpoints, cables, links);
@@ -794,4 +832,57 @@ void GuiVstRack::_DrawCables(base::DrawContext& context)
 		}
 	}
 	glBindVertexArray(0); glUseProgram(0);
+}
+
+std::shared_ptr<GuiButton> GuiVstRack::MoveHandle(std::size_t index) const
+{
+	return index < _rows.size() ? _rows[index].Handle : nullptr;
+}
+
+bool GuiVstRack::_BeginSlotMove(const TouchAction& action)
+{
+	if (!_model.Editable || _model.Inactive) return false;
+	const auto point = action.Position + GlobalPosition();
+	const auto clip = _scroll->EffectiveContentRect({0, 0, static_cast<int>(_viewport.Width), static_cast<int>(_viewport.Height)});
+	if (!clip.Contains(point)) return false;
+	for (const auto& row : _rows)
+		if (row.Handle->IsEnabled() && row.Handle->IsVisible() && row.Handle->HitTest(row.Handle->GlobalToLocal(point)))
+		{
+			vst::RackMove move{_model.OwnerScope, _model.OwnerId, row.Id, row.Ordinal, row.Ordinal, _model.Revision};
+			_slotMove = SlotMove{std::move(move), row.Ordinal, action.Index, action.Touch};
+			_UpdateSlotMove(action.Position);
+			return true;
+		}
+	return false;
+}
+
+void GuiVstRack::_UpdateSlotMove(Position2d point)
+{
+	if (!_slotMove) return;
+	_slotMove->Target.reset();
+	point = point + GlobalPosition();
+	const auto clip = _scroll->EffectiveContentRect({0, 0, static_cast<int>(_viewport.Width), static_cast<int>(_viewport.Height)});
+	for (const auto& row : _rows)
+	{
+		const auto p = row.Buttons[0]->GlobalPosition();
+		const auto size = row.Buttons[0]->GetSize();
+		const bool target = !row.Missing && Rect2d{p.X, p.Y, p.X + static_cast<int>(size.Width) + 18, p.Y + static_cast<int>(_RowHeight)}
+			.Intersected(clip).Contains(point);
+		row.Handle->ApplyHoverState(target);
+		if (target) _slotMove->Target = row.Ordinal;
+	}
+	SetFeedback(_slotMove->Target ? "Move to slot " + std::to_string(*_slotMove->Target + 1u) : "Outside rack: cancel move");
+}
+
+void GuiVstRack::_FinishSlotMove()
+{
+	auto move = std::exchange(_slotMove, std::nullopt);
+	for (const auto& row : _rows) row.Handle->ApplyHoverState(false);
+	_feedback.clear();
+	if (!move || !move->Target || move->Move.Revision != _model.Revision || !_model.Editable
+		|| *move->Target == move->Move.Source) return;
+	move->Move.Target = *move->Target;
+	Command command; command.Operation = Command::Kind::Move; command.Revision = move->Move.Revision;
+	command.Identity = move->Move.PluginId; command.Ordinal = move->Move.Source; command.Move = std::move(move->Move);
+	if (_submit) _submit(std::move(command));
 }
