@@ -138,6 +138,7 @@ namespace engine
 			bool confirmCandidate,
 			const std::vector<std::shared_ptr<engine::Station>>& stations);
 
+		void RefreshMasterAudioReference(const std::shared_ptr<Station>& station) const;
 		void ClearStationHints(const std::vector<std::shared_ptr<engine::Station>>& stations);
 
 		void PulseOverlay();

@@ -2,6 +2,8 @@
 #include "../../TestPaths.h"
 #include "engine/Scene.h"
 #include "io/IoSessionExporter.h"
+#include <array>
+#include <cmath>
 #include <chrono>
 #include <thread>
 #include <filesystem>
@@ -257,6 +259,16 @@ static std::shared_ptr<engine::Loop> MakeTimingLoop(unsigned long loopLength, bo
 	loop->EndWrite(static_cast<unsigned int>(recordedLength), true);
 	loop->Play(constants::MaxLoopFadeSamps, loopLength, false);
 	return loop;
+}
+
+static void SettleTimingOffset(const std::shared_ptr<engine::Loop>& loop)
+{
+    for (auto block = 0u; block < 4096u; ++block)
+    {
+        loop->EndMultiPlay(128u);
+        if (loop->AppliedPlaybackOffsetSamps() == loop->PlaybackOffsetSamps()) return;
+    }
+    ADD_FAILURE() << "Audio shift did not converge";
 }
 
 static std::shared_ptr<TimingTestLoopTake> MakePlayingTimingTake(const std::string& id,
@@ -1165,6 +1177,7 @@ TEST(TriggerPredelayStation, FirstAudioAndMixedMasterReserveCompensatedOrigin)
             ASSERT_FALSE(master->Id().empty());
             ASSERT_EQ(master->Id(),quantiser.MasterAudioLoopId());
             master->SetPlaybackOffsetSamps(-1500);
+            SettleTimingOffset(master);
             quantiser.UpdateStationHints(nullptr,base::DEPTH_LOOP,false,stations);
             struct DirectoryCleanup
             {
@@ -1404,6 +1417,10 @@ TEST(AudioLoopShift, HandleChangesAudioOnlyAndDoubleClickResetsAcceptedOffset)
 	ASSERT_TRUE(controller.TryHandleTouchAction(press,1000u,true,context,resolve)->IsEaten);
 	actions::TouchMoveAction move; move.Position = press.Position; move.Position.X += 50;
 	ASSERT_TRUE(controller.TryHandleTouchMove(move,1000u)->IsEaten);
+	EXPECT_DOUBLE_EQ(0.0,loop->AppliedPlaybackOffsetSamps());
+	EXPECT_EQ(0,station->MasterAudioReferenceOffsetSamps());
+	SettleTimingOffset(loop); loop->SetBodyPlayIndex(300ul);
+	quantiser.RefreshMasterAudioReference(station);
 	EXPECT_EQ(50,station->MasterAudioReferenceOffsetSamps());
 	auto laterStation = std::make_shared<engine::Station>(engine::StationParams{}, engine::Station::GetMixerParams({100,100}, MergeMixBehaviourParams{}));
 	quantiser.InitialiseStationMidiGrid(laterStation);
@@ -1421,6 +1438,8 @@ TEST(AudioLoopShift, HandleChangesAudioOnlyAndDoubleClickResetsAcceptedOffset)
 	press.State = actions::TouchAction::TOUCH_UP; controller.TryHandleTouchAction(press,1000u,true,context,resolve);
 	press.State = actions::TouchAction::TOUCH_DOWN; press.SetActionTime(now + std::chrono::milliseconds(1100));
 	controller.TryHandleTouchAction(press,1000u,true,context,resolve);
+	SettleTimingOffset(loop); loop->SetBodyPlayIndex(300ul);
+	quantiser.RefreshMasterAudioReference(station);
 	EXPECT_EQ(0,station->MasterAudioReferenceOffsetSamps());
 	EXPECT_EQ(0,loop->PlaybackOffsetSamps()); EXPECT_EQ(300ul,loop->PlaybackBodyIndex());
 }
@@ -1434,6 +1453,7 @@ TEST(AudioLoopShift, SignedOffsetsWrapByEachLengthAndSurviveTransportCorrections
 		for (const auto offset : {0,17,-17,2000000017,-2000000017})
 		{
 			loop->SetPlaybackOffsetSamps(offset);
+			SettleTimingOffset(loop); loop->SetBodyPlayIndex(100ul);
 			EXPECT_EQ(ninjam::PositiveModulo(100ll-offset,length),loop->PlaybackBodyIndex());
 			take->CaptureMappedSourceAnchors(5000);
 			take->RestoreMappedSourceCoordinate(5100);
@@ -1442,4 +1462,128 @@ TEST(AudioLoopShift, SignedOffsetsWrapByEachLengthAndSurviveTransportCorrections
 			loop->SetBodyPlayIndex(100ul); loop->InvalidateSceneAnchor();
 		}
 	}
+}
+
+TEST(AudioLoopShift, FirstBlockLatchesInitialTargetAndRepeatedReadsDoNotAdvance)
+{
+    auto loop = MakeTimingLoop(1000ul, true);
+    loop->SetBodyPlayIndex(200ul);
+    loop->SetPlaybackOffsetSamps(7);
+    EXPECT_DOUBLE_EQ(7.0,loop->AppliedPlaybackOffsetSamps());
+    std::array<float,64> first{}, repeated{}, seek{}, seekAgain{};
+    ASSERT_EQ(64u,loop->ReadBlock(first.data(),0,64u));
+    loop->SetPlaybackOffsetSamps(31); // Arrives after first consumer, before first EndMultiPlay.
+    ASSERT_EQ(64u,loop->ReadBlock(repeated.data(),0,64u));
+    EXPECT_EQ(first,repeated);
+    EXPECT_DOUBLE_EQ(7.0,loop->AppliedPlaybackOffsetSamps());
+    loop->EndMultiPlay(64u);
+    EXPECT_DOUBLE_EQ(7.0,loop->AppliedPlaybackOffsetSamps());
+    ASSERT_EQ(64u,loop->ReadBlock(seek.data(),0,64u));
+    ASSERT_EQ(64u,loop->ReadBlock(seekAgain.data(),0,64u));
+    EXPECT_EQ(seek,seekAgain);
+    EXPECT_DOUBLE_EQ(7.0,loop->AppliedPlaybackOffsetSamps());
+    // A ramp fixture exposes fractional reads rather than repeated integer samples.
+    const auto rate = 24.0 / (44100.0 * 0.010);
+    const auto expected = (constants::MaxLoopFadeSamps + 264.0 + 1.0 - 7.0 - rate)
+        / (constants::MaxLoopFadeSamps + 1000.0);
+    EXPECT_NEAR(expected,seek[1],1e-6);
+    loop->EndMultiPlay(17u); // Actual frame count differs from ramp preparation.
+    EXPECT_NEAR(7.0 + rate * 17.0,loop->AppliedPlaybackOffsetSamps(),1e-9);
+    EXPECT_EQ(31,loop->PlaybackOffsetSamps());
+    SettleTimingOffset(loop);
+    EXPECT_DOUBLE_EQ(31.0,loop->AppliedPlaybackOffsetSamps());
+}
+
+TEST(AudioLoopShift, ShortestWrappedSeekBoundsRetargetAndReset)
+{
+    auto loop = MakeTimingLoop(1000ul, true);
+    loop->SetPlaybackOffsetSamps(990);
+    float first{}; ASSERT_EQ(1u,loop->ReadBlock(&first,0,1u));
+    loop->SetPlaybackOffsetSamps(10);
+    loop->EndMultiPlay(128u);
+    loop->EndMultiPlay(128u);
+    EXPECT_GT(loop->AppliedPlaybackOffsetSamps(),990.0); // Across seam, positive shortest motion.
+    EXPECT_LE(loop->AppliedPlaybackOffsetSamps(),1010.0);
+    for (const auto target : {-500,500,1000,2000000017,-2000000017,0})
+    {
+        loop->SetPlaybackOffsetSamps(target);
+        for (auto block = 0u; block < 512u; ++block)
+        {
+            const auto before = loop->AppliedPlaybackOffsetSamps();
+            loop->EndMultiPlay(128u);
+            const auto after = loop->AppliedPlaybackOffsetSamps();
+            EXPECT_LE(std::abs(std::remainder(after-before,1000.0)),32.0 + 1e-6);
+            if (block == 1u && target == -500) break; // Retarget before the previous seek settles.
+            if (after == target) break;
+        }
+        EXPECT_EQ(target,loop->PlaybackOffsetSamps());
+    }
+    SettleTimingOffset(loop);
+    EXPECT_DOUBLE_EQ(0.0,loop->AppliedPlaybackOffsetSamps());
+    loop->SetPlaybackOffsetSamps(-500);
+    loop->EndMultiPlay(128u); loop->EndMultiPlay(128u);
+    EXPECT_GT(loop->AppliedPlaybackOffsetSamps(),0.0); // Half-period tie is deterministic positive.
+}
+
+TEST(AudioLoopShift, FractionalSeamReadsRemainContinuousForShortAndLongFades)
+{
+    constexpr double pi = 3.14159265358979323846;
+    for (const auto length : {17ul,97ul}) for (const auto direction : {-1,1})
+    {
+        SCOPED_TRACE(length);
+        SCOPED_TRACE(direction);
+        audio::WireMixBehaviourParams wire; wire.Channels={0u};
+        audio::AudioMixerParams mixer; mixer.Size={100,100}; mixer.Behaviour=wire;
+        engine::LoopParams params; params.FadeSamps=length==17ul ? 64u : 16u;
+        auto loop=std::make_shared<engine::Loop>(params,mixer);
+        loop->Record();
+        std::vector<float> samples(constants::MaxLoopFadeSamps+length);
+        for (auto i=0u; i<samples.size(); ++i)
+            samples[i]=static_cast<float>(std::sin((static_cast<double>(i)-constants::MaxLoopFadeSamps)*2.0*pi/length));
+        AudioWriteRequest request; request.samples=samples.data(); request.numSamps=static_cast<unsigned int>(samples.size());
+        request.stride=1u; request.fadeCurrent=0.0f; request.fadeNew=1.0f; request.source=Audible::AUDIOSOURCE_ADC;
+        loop->OnBlockWrite(request,0); loop->EndWrite(request.numSamps,true);
+        loop->Play(constants::MaxLoopFadeSamps,length,false);
+        float initial{}; ASSERT_EQ(1u,loop->ReadBlock(&initial,0,1u));
+        const auto target=direction*static_cast<int>(length/3ul);
+        loop->SetPlaybackOffsetSamps(target); loop->EndMultiPlay(8u);
+        loop->SetBodyPlayIndex(length-3ul);
+        std::array<float,32> rendered{};
+        ASSERT_EQ(32u,loop->ReadBlock(rendered.data(),0,32u));
+        const auto rate=static_cast<double>(target)/(44100.0*0.010);
+        for (auto frame=0u; frame<rendered.size(); ++frame)
+        {
+            const auto offset=rate*(std::min)(frame,8u);
+            auto phase=std::fmod(length-3.0+frame-offset,static_cast<double>(length));
+            if (phase<0.0) phase+=length;
+            const auto first=static_cast<unsigned long>(phase);
+            const auto fraction=phase-first;
+            const auto expected=std::sin(first*2.0*pi/length)*(1.0-fraction)
+                + std::sin(((first+1ul)%length)*2.0*pi/length)*fraction;
+            EXPECT_NEAR(expected,rendered[frame],1e-5) << frame;
+            EXPECT_TRUE(std::isfinite(rendered[frame])); EXPECT_LE(std::abs(rendered[frame]),1.00001f);
+            if (frame) EXPECT_LE(std::abs(rendered[frame]-rendered[frame-1u]),2.0*std::sin(pi/length)*1.25+1e-5);
+        }
+    }
+}
+
+TEST(AudioLoopShift, PunchWritesAndLengthChangesPreserveActiveAppliedOffset)
+{
+    auto loop=MakeTimingLoop(1000ul,true);
+    float sample{}; ASSERT_EQ(1u,loop->ReadBlock(&sample,0,1u));
+    loop->SetPlaybackOffsetSamps(100); loop->EndMultiPlay(128u); loop->EndMultiPlay(64u);
+    const auto before=loop->AppliedPlaybackOffsetSamps(); ASSERT_GT(before,0.0); ASSERT_LT(before,100.0);
+    loop->PunchIn();
+    ASSERT_EQ(1u,loop->ReadBlock(&sample,0,1u)); EXPECT_DOUBLE_EQ(before,loop->AppliedPlaybackOffsetSamps());
+    const auto generation=loop->AudioSourceGeneration();
+    float input=0.25f; AudioWriteRequest request; request.samples=&input; request.numSamps=1u;
+    request.stride=1u; request.fadeCurrent=0.0f; request.fadeNew=1.0f; request.source=Audible::AUDIOSOURCE_ADC;
+    loop->OnBlockWrite(request,0); ASSERT_NE(generation,loop->AudioSourceGeneration());
+    ASSERT_EQ(1u,loop->ReadBlock(&sample,0,1u)); EXPECT_DOUBLE_EQ(before,loop->AppliedPlaybackOffsetSamps());
+    loop->EndMultiPlay(17u); const auto advanced=loop->AppliedPlaybackOffsetSamps();
+    EXPECT_LE(std::abs(advanced-before),0.25*17.0+1e-6);
+    loop->PunchOut(); loop->Play(constants::MaxLoopFadeSamps,777ul,false);
+    ASSERT_EQ(1u,loop->ReadBlock(&sample,0,1u)); EXPECT_DOUBLE_EQ(advanced,loop->AppliedPlaybackOffsetSamps());
+    EXPECT_EQ(100,loop->PlaybackOffsetSamps());
+    SettleTimingOffset(loop); EXPECT_DOUBLE_EQ(100.0,loop->AppliedPlaybackOffsetSamps());
 }

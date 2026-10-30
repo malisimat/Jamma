@@ -2182,4 +2182,41 @@ TEST(AudioCallbackRealtime, MembershipPublicationDuringPlaybackDoesNotAllocateOr
  host.SetStations(candidate->Stations, candidate->TopologyRevision);
  host.CollectRetiredSnapshots();
 }
+TEST(AudioCallbackRealtime, ActiveAudioShiftSeekDoesNotAllocateOrFree)
+{
+    io::UserConfig config{};
+    audio::AudioHost host(config);
+    const audio::AudioStreamParams params{"shift-test",48000u,2u,128u,0u,0u,0u,1u};
+    auto station = MakeStation(1u);
+    auto take = MakeTake();
+    station->AddTake(take); take->Record({0u},"shift-allocation"); station->CommitChanges();
+    ASSERT_EQ(1u,take->GetLoops().size());
+    const auto loop = take->GetLoops().front();
+    constexpr auto length = 4096ul;
+    std::vector<float> recorded(constants::MaxLoopFadeSamps + length,0.25f);
+    AudioWriteRequest request;
+    request.samples=recorded.data(); request.numSamps=static_cast<unsigned int>(recorded.size());
+    request.stride=1u; request.fadeCurrent=0.0f; request.fadeNew=1.0f; request.source=Audible::AUDIOSOURCE_ADC;
+    loop->OnBlockWrite(request,0); loop->EndWrite(request.numSamps,true);
+    take->Play(constants::MaxLoopFadeSamps,length,0u);
+    station->CommitChanges();
+    auto stations=std::make_shared<const std::vector<std::shared_ptr<Station>>>(std::vector{station});
+    audio::AudioHostRealtimeTestAccess::Prepare(host,stations,params);
+    std::array<float,128> output{};
+    audio::AudioHostRealtimeTestAccess::InvokeCallback(host,output.data(),nullptr,128u);
+    loop->SetPlaybackOffsetSamps(1024);
+    audio::AudioHostRealtimeTestAccess::InvokeCallback(host,output.data(),nullptr,128u); // Prepare active ramp.
+    AudioCallbackAllocationProbe::Counts counts;
+    {
+        AudioCallbackAllocationProbe::Scope probe;
+        for (auto block=0u; block<8u; ++block)
+            audio::AudioHostRealtimeTestAccess::InvokeCallback(host,output.data(),nullptr,128u);
+        counts=probe.GetCounts();
+    }
+    EXPECT_GT(loop->AppliedPlaybackOffsetSamps(),0.0);
+    EXPECT_LT(loop->AppliedPlaybackOffsetSamps(),1024.0);
+    EXPECT_EQ(1024,loop->PlaybackOffsetSamps());
+    EXPECT_EQ(0u,counts.Allocations); EXPECT_EQ(0u,counts.Reallocations); EXPECT_EQ(0u,counts.Frees);
+    EXPECT_TRUE(std::any_of(output.begin(),output.end(),[](float sample){ return sample!=0.0f; }));
+}
 #endif
