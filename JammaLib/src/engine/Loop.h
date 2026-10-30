@@ -33,6 +33,7 @@
 #include "../graphics/GlDrawContext.h"
 #include "../resources/WavResource.h"
 #include "../vst/VstChain.h"
+#include "../vst/RackMove.h"
 #include "../audio/PlaybackDelay.h"
 
 namespace engine
@@ -142,7 +143,8 @@ namespace engine
 			_blockSize(other._blockSize),
 			_vstPluginPaths(std::move(other._vstPluginPaths)),
 			_vstSavedEntries(std::move(other._vstSavedEntries)),
-			_vstJobsPending(other._vstJobsPending.exchange(0u))
+			_vstJobsPending(other._vstJobsPending.exchange(0u)),
+			_rackRevision(other._rackRevision.fetch_add(1u) + 1u)
 		{
 			other._InvalidateAudioSource();
 			_vstChain.store(other._vstChain.exchange(nullptr, std::memory_order_acq_rel), std::memory_order_release);
@@ -204,6 +206,8 @@ namespace engine
 				std::swap(_vstSavedEntries, other._vstSavedEntries);
 				const auto pending = _vstJobsPending.exchange(other._vstJobsPending.load());
 				other._vstJobsPending.store(pending);
+				++_rackRevision;
+				++other._rackRevision;
 			}
 
 			return *this;
@@ -378,7 +382,7 @@ namespace engine
 
 		// VST chain management — staging only; actual load/unload happens on the
 		// job thread after CommitChanges() queues the appropriate job.
-		void LoadVstPlugin(std::wstring path,
+		std::string LoadVstPlugin(std::wstring path,
 			std::vector<std::uint8_t> initialState = {});
 		// Startup-only: synchronously construct and publish one plugin before this
 		// loop can enter an audio snapshot.
@@ -387,7 +391,7 @@ namespace engine
 			bool bypass = false, const std::string& stateId = {});
 		void UnloadVstPlugin(size_t index);
 		vst::VstRackSlot GetVstRackSlot() const;
-		bool LoadManagedVstPlugin(std::wstring path);
+		bool LoadManagedVstPlugin(std::wstring path, const std::string& identity = {});
 		bool UnloadManagedVstPlugin(const std::string& identity);
 		void ForceUnloadAllVstPlugins();
 		void SetSampleRate(float sampleRate);
@@ -397,6 +401,9 @@ namespace engine
 
 		// Non-RT accessor to retrieve a loaded plugin instance (or nullptr).
 		std::shared_ptr<vst::IVstPlugin> GetVstPlugin(size_t index) const;
+		std::vector<vst::VstRackSlot> GetVstRackSlots(std::size_t offset = 0u) const;
+		std::uint64_t RackRevision() const noexcept { return _rackRevision.load(std::memory_order_acquire); }
+		bool MoveVstSlot(const vst::RackMove& move);
 		void SetAutomationTopologyChangedCallback(std::function<void()> changed)
 			{ _automationTopologyChanged = std::move(changed); }
 		std::shared_ptr<vst::IVstPlugin> FindVstPlugin(const vst::IVstPlugin* observer,
@@ -519,6 +526,7 @@ namespace engine
 		std::vector<io::JamFile::VstEntry> _vstSavedEntries;
 		// UI stages requests, job completes them. Audio never reads this counter.
 		std::atomic<unsigned int> _vstJobsPending{ 0u };
+		std::atomic<std::uint64_t> _rackRevision{1u};
 
 	private:
 		std::size_t _CollectAudioSourceCaptures(); // Off callback only.

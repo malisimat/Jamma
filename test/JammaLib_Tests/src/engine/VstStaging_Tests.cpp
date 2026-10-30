@@ -12,6 +12,7 @@
 #include "vst/VstEditorWindowManager.h"
 #include "gui/VstRackControls.h"
 #include <functional>
+#include <sstream>
 
 using actions::JobAction;
 using engine::Loop;
@@ -1352,4 +1353,182 @@ TEST_F(VstRackControlsTest, PresentedRackDoesNotRetainItsOwnerHierarchy)
  Second.reset();
  EXPECT_TRUE(weakStation.expired());
  EXPECT_TRUE(weakTake.expired());
+}
+
+class RackOrderPlugin final : public StateGatePlugin
+{
+public:
+ vst::RenderRole Render = vst::RenderRole::Effect;
+ float Value = 2.0f;
+ std::atomic<bool> Hold{false}, Entered{false}, Release{false};
+ std::atomic<unsigned int> Calls{0u}, Concurrent{0u}, Overlaps{0u};
+ mutable unsigned int Captures = 0u;
+ unsigned int Restores = 0u;
+ vst::RenderRole Role() const noexcept override { return Render; }
+ vst::MidiInputCapabilities MidiInput() const noexcept override { return {true,true,true}; }
+ unsigned int HostedChannelCount() const noexcept override { return 2u; }
+ void ProcessBlockMulti(float* const* channels, int32_t count, int32_t samples) noexcept override
+ {
+  if (Concurrent.fetch_add(1u) != 0u) ++Overlaps;
+  ++Calls;
+  if (Hold.exchange(false))
+  {
+   Entered.store(true, std::memory_order_release);
+   // Test-owned bounded rendezvous; production callbacks never wait.
+   for (unsigned int attempt = 0u; attempt < 10000000u && !Release.load(std::memory_order_acquire); ++attempt) std::this_thread::yield();
+  }
+  for (int32_t channel = 0; channel < count; ++channel)
+   for (int32_t sample = 0; sample < samples; ++sample)
+    channels[channel][sample] = Render == vst::RenderRole::Instrument ? Value : channels[channel][sample] * Value;
+  Concurrent.fetch_sub(1u);
+ }
+ std::vector<std::uint8_t> GetState() const override { ++Captures; return {static_cast<std::uint8_t>(Value)}; }
+ void SetState(const std::vector<std::uint8_t>&) override { ++Restores; }
+};
+
+class RackOrderStation final : public engine::Station
+{
+public:
+ explicit RackOrderStation(engine::StationParams params) : Station(params, Station::GetMixerParams(params.Size, MergeMixBehaviourParams{})) {}
+ auto Borrow() const noexcept { return _BorrowAudioState(); }
+ float RenderBlock() noexcept
+ {
+  const auto state = Borrow();
+  if (!state || !state->Midi.MidiChain || state->VstRenderChannels == 0u) return -1.0f;
+  for (auto* channel : state->VstBlockPtrs) std::fill_n(channel, 8u, 0.0f);
+  state->Midi.MidiChain->ProcessRack(state->VstBlockPtrs.data(), state->InstrumentPtrs.data(), state->VstRenderChannels, 8u);
+  return state->VstBlockPtrs[0][0];
+ }
+};
+
+TEST(VstStaging, RackMovePublishesMatchingIdentityDestinationsAndOrderDuringAnActiveBlock)
+{
+ engine::StationParams params; params.Id = "reorder-station"; params.Size = {200u,200u}; params.NumBusChannels = 2u;
+ auto station = std::make_shared<RackOrderStation>(params);
+ const auto a = std::make_shared<RackOrderPlugin>(); a->Render = vst::RenderRole::Instrument; a->Value = 1.0f;
+ const auto effect = std::make_shared<RackOrderPlugin>();
+ const auto b = std::make_shared<RackOrderPlugin>(); b->Render = vst::RenderRole::Instrument; b->Value = 3.0f;
+ const std::array plugins{a,effect,b};
+ const std::array<std::string,3> ids{"instrument-a","effect","instrument-b"};
+ for (auto i = 0u; i < plugins.size(); ++i)
+ {
+  JobAction load; load.JobActionType = JobAction::JOB_LOADVST; load.VstPath = L"test-owned.vst3";
+  load.VstIdentity = ids[i]; load.PreInitPlugin = plugins[i]; station->OnAction(load);
+ }
+ station->CommitChanges();
+ midi::MidiChannelRoute cable; cable.PluginIds = {"instrument-b"};
+ ASSERT_TRUE(station->SetMidiChannelRoute(0u,cable,station->RackRevision()));
+ const auto old = station->Borrow(); ASSERT_TRUE(old); ASSERT_EQ(3u,old->Midi.MidiDestinations.size());
+ const auto destination = old->Midi.MidiDestinations[2];
+ ASSERT_EQ(destination,old->Midi.LiveChannelDestinations[0][0]);
+ a->Hold = true;
+ float oldOutput = 0.0f;
+ std::thread callback([&] { oldOutput = station->RenderBlock(); });
+ for (auto attempt = 0u; attempt < 1000000u && !a->Entered.load(std::memory_order_acquire); ++attempt) std::this_thread::yield();
+ const bool entered = a->Entered.load(std::memory_order_acquire);
+ vst::RackMove move{vst::RackMove::Scope::Station,station->Id(),"effect",1u,2u,station->RackRevision()};
+ const bool moved = station->MoveVstSlot(move);
+ station->CommitChanges();
+ a->Release.store(true,std::memory_order_release); callback.join();
+ ASSERT_TRUE(entered); ASSERT_TRUE(moved);
+ EXPECT_FLOAT_EQ(5.0f,oldOutput); // A -> effect -> B is still the old immutable order.
+ EXPECT_FLOAT_EQ(8.0f,station->RenderBlock()); // A + B -> effect, using the same processors.
+ const auto current = station->Borrow(); ASSERT_TRUE(current);
+ EXPECT_EQ(effect,current->Midi.MidiChain->GetPlugin(2u));
+ EXPECT_EQ(effect,old->Midi.MidiChain->GetPlugin(1u));
+ EXPECT_EQ(destination,current->Midi.MidiDestinations[1]);
+ EXPECT_EQ(destination,current->Midi.LiveChannelDestinations[0][0]);
+ EXPECT_TRUE(current->Midi.RetiredMidiDestinations.empty());
+ EXPECT_EQ(cable,station->MidiChannelRoutes()[0]);
+ for (const auto& plugin : plugins)
+ {
+  EXPECT_EQ(0u,plugin->Overlaps.load()); EXPECT_EQ(2u,plugin->Calls.load());
+  EXPECT_EQ(0u,plugin->Captures); EXPECT_EQ(0u,plugin->Restores);
+ }
+ station->DetachGuiOwnershipForRetirement();
+}
+
+class RackMoveTest : public testing::Test
+{
+protected:
+ static auto Entries(const std::shared_ptr<Loop>& owner) { return owner->ToJamFile("reorder.wav").VstChain; }
+ template<class Owner> static auto Entries(const std::shared_ptr<Owner>& owner) { return owner->VstEntries(); }
+ template<class Owner> void Check(const std::shared_ptr<Owner>& owner, vst::RackMove::Scope scope)
+ {
+  std::array<std::shared_ptr<RackOrderPlugin>,3> plugins;
+  for (auto i = 0u; i < plugins.size(); ++i)
+  {
+   plugins[i] = std::make_shared<RackOrderPlugin>(); plugins[i]->Value = static_cast<float>(i + 1u);
+   JobAction load; load.JobActionType = JobAction::JOB_LOADVST; load.VstPath = L"order-" + std::to_wstring(i) + L".vst3";
+   load.VstIdentity = "order-" + std::to_string(i); load.PreInitPlugin = plugins[i]; owner->OnAction(load);
+  }
+  owner->CommitChanges();
+  vst::RackMove move{scope,owner->Id(),"order-0",0u,2u,owner->RackRevision()};
+  auto invalid = move; invalid.OwnerId = "other-owner"; EXPECT_FALSE(owner->MoveVstSlot(invalid));
+  invalid = move; invalid.Source = 1u; EXPECT_FALSE(owner->MoveVstSlot(invalid));
+  invalid = move; invalid.Target = 3u; EXPECT_FALSE(owner->MoveVstSlot(invalid));
+  invalid = move; invalid.Target = 0u; EXPECT_FALSE(owner->MoveVstSlot(invalid));
+  invalid = move; invalid.OwnerScope = scope == vst::RackMove::Scope::Station ? vst::RackMove::Scope::Loop : vst::RackMove::Scope::Station; EXPECT_FALSE(owner->MoveVstSlot(invalid));
+  ASSERT_TRUE(owner->MoveVstSlot(move));
+  EXPECT_EQ(plugins[0],owner->GetVstPlugin(0u)); // No in-place topology mutation before commit.
+  EXPECT_FALSE(owner->MoveVstSlot(move)); // Captured revision cannot apply twice.
+  owner->CommitChanges();
+  EXPECT_EQ(plugins[1],owner->GetVstPlugin(0u)); EXPECT_EQ(plugins[2],owner->GetVstPlugin(1u)); EXPECT_EQ(plugins[0],owner->GetVstPlugin(2u));
+  for (const auto& plugin : plugins) { EXPECT_EQ(0u,plugin->Captures); EXPECT_EQ(0u,plugin->Restores); }
+  auto entries = Entries(owner); ASSERT_EQ(3u,entries.size());
+  EXPECT_EQ("order-1",entries[0].Id); EXPECT_EQ("order-1.vst3",entries[0].Path); EXPECT_EQ((std::vector<std::uint8_t>{2u}),entries[0].DecodeState());
+  EXPECT_EQ("order-0",entries[2].Id);
+  // Exercise the supported JAM encoding at every owner scope, including blobs.
+  io::JamFile jam; jam.Name = "rack-order";
+  io::JamFile::Station savedStation{}; savedStation.Id = "saved-station"; savedStation.Name = "saved station";
+  io::JamFile::LoopTake savedTake{}; savedTake.Id = "saved-take"; savedTake.Name = "saved take";
+  io::JamFile::Loop savedLoop{}; savedLoop.Id = "saved-loop"; savedLoop.Name = "saved.wav"; savedLoop.Length = 8u; savedLoop.Speed = 1.0;
+  savedStation.VstChain = entries; savedTake.VstChain = entries; savedLoop.VstChain = entries;
+  savedTake.Loops.push_back(savedLoop); savedStation.LoopTakes.push_back(savedTake); jam.Stations.push_back(savedStation);
+  std::stringstream encoded;
+  ASSERT_TRUE(io::JamFile::ToStream(jam,encoded));
+  const auto decoded = io::JamFile::FromStream(std::move(encoded)); ASSERT_TRUE(decoded);
+  ASSERT_EQ(1u,decoded->Stations.size()); ASSERT_EQ(1u,decoded->Stations[0].LoopTakes.size());
+  ASSERT_EQ(1u,decoded->Stations[0].LoopTakes[0].Loops.size());
+  for (const auto& restored : {decoded->Stations[0].VstChain,decoded->Stations[0].LoopTakes[0].VstChain,decoded->Stations[0].LoopTakes[0].Loops[0].VstChain})
+  {
+   ASSERT_EQ(entries.size(),restored.size());
+   for (auto i = 0u; i < entries.size(); ++i)
+   { EXPECT_EQ(entries[i].Id,restored[i].Id); EXPECT_EQ(entries[i].Path,restored[i].Path); EXPECT_EQ(entries[i].State,restored[i].State); }
+  }
+  move.Source = 2u; move.Target = 0u; move.Revision = owner->RackRevision();
+  ASSERT_TRUE(owner->MoveVstSlot(move)); owner->CommitChanges();
+  for (auto i = 0u; i < plugins.size(); ++i) EXPECT_EQ(plugins[i],owner->GetVstPlugin(i));
+  owner->DetachGuiOwnershipForRetirement();
+ }
+};
+
+TEST_F(RackMoveTest, StationTakeAndLoopKeepInstancesStateAndSavedOrderInBothDirections)
+{
+ engine::StationParams params; params.Id = "move-owner"; params.Size = {200u,200u};
+ auto station = std::make_shared<engine::Station>(params,engine::Station::GetMixerParams(params.Size,MergeMixBehaviourParams{}));
+ Check(station,vst::RackMove::Scope::Station);
+ Check(MakeTake(),vst::RackMove::Scope::Take);
+ Check(MakeLoop(),vst::RackMove::Scope::Loop);
+}
+
+TEST(VstStaging, SlotMoveHandleIsSeparateFromCableDragAndCancelsOutsideEscapeOrStaleOwner)
+{
+ auto view = std::make_shared<gui::GuiVstRack>(); view->SetPosition({300,700}); view->SetViewport({1200u,1000u});
+ gui::GuiVstRack::Model model; model.Editable = true; model.Revision = 9u; model.OwnerId = "owner"; model.TotalSlots = 3u;
+ for (auto i = 0u; i < 3u; ++i) { gui::GuiVstRack::Slot slot; slot.Value.Identity = "slot-" + std::to_string(i); model.Slots.push_back(slot); }
+ std::vector<gui::GuiVstRack::Command> commands;
+ const auto submit = [&](auto command) { commands.push_back(std::move(command)); };
+ view->Update(model,submit); view->Layout(100u,0,{0,0},{20u,20u});
+ const auto point = [&](std::size_t i) { return view->MoveHandle(i)->GlobalPosition() - view->GlobalPosition() + utils::Position2d{9,18}; };
+ actions::TouchAction touch; touch.Touch = actions::TouchAction::TOUCH_MOUSE; touch.Index = 0;
+ const auto begin = [&] { touch.State = actions::TouchAction::TOUCH_DOWN; touch.Position = point(0u); EXPECT_TRUE(view->OnAction(touch).IsEaten); EXPECT_TRUE(view->HasSlotMove()); EXPECT_FALSE(view->HasCableDrag()); };
+ begin(); touch.State = actions::TouchAction::TOUCH_UP; touch.Position = point(2u); view->OnAction(touch);
+ ASSERT_EQ(1u,commands.size()); EXPECT_EQ(0u,commands[0].Move.Source); EXPECT_EQ(2u,commands[0].Move.Target); EXPECT_EQ("slot-0",commands[0].Move.PluginId); EXPECT_EQ("owner",commands[0].Move.OwnerId);
+ begin(); touch.State = actions::TouchAction::TOUCH_UP; touch.Position = {-1000,-1000}; view->OnAction(touch); EXPECT_EQ(1u,commands.size());
+ begin(); actions::KeyAction escape; escape.KeyChar = 27u; escape.KeyActionType = actions::KeyAction::KEY_DOWN; view->OnAction(escape);
+ touch.State = actions::TouchAction::TOUCH_UP; touch.Position = point(2u); view->OnAction(touch); EXPECT_EQ(1u,commands.size());
+ begin(); model.OwnerId = "replacement"; view->Update(model,submit); EXPECT_FALSE(view->HasSlotMove());
+ touch.State = actions::TouchAction::TOUCH_UP; touch.Position = point(2u); view->OnAction(touch); EXPECT_EQ(1u,commands.size());
+ view->DetachGuiOwnershipForRetirement();
 }

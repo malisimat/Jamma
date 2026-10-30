@@ -287,6 +287,7 @@ namespace engine
 		static constexpr std::size_t MaxRackDestinations = vst::RackState::MaxRackDestinations; // Active, pending and retiring recovery owners.
 		std::vector<vst::VstRackSlot> GetVstRackSlots(std::size_t offset = 0u, std::size_t count = MaxRackPlugins) const;
 		std::size_t RackSlotCount() const;
+		bool MoveVstSlot(const vst::RackMove& move);
 		std::string RackDiagnostic() const;
 		bool RecoverRack(std::uint64_t revision);
 		bool RemoveInactiveRackSlot(std::size_t ordinal, std::uint64_t revision);

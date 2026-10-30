@@ -661,3 +661,19 @@ void RackState::ClearAfterReadersStopped()
 	_failedInteractiveVstLoads.clear();
 	_vstJobsPending.store(0u, std::memory_order_release);
 }
+
+// Structural/UI owner only. Surviving processors are shared with the old snapshot;
+// AudioHost's callback admission is the exclusive processing owner for both orders.
+bool RackState::MoveSlot(const RackMove& move, const std::string& ownerId)
+{
+	std::lock_guard<std::mutex> lock(_vstPathsMutex);
+	if (_vstJobsPending.load(std::memory_order_acquire) != 0u
+		|| !move.Valid(RackMove::Scope::Station, ownerId, Revision(), _vstSavedEntries)) return false;
+	const auto chain = _flipVstChain.load(std::memory_order_acquire) ? _backVstChain : ActiveChain();
+	auto replacement = move.Stage(chain, _vstSavedEntries, _vstPluginPaths);
+	if (!replacement) return false;
+	_backVstChain = std::move(replacement);
+	++_rackRevision;
+	_flipVstChain.store(true, std::memory_order_release);
+	return true; // Explicit MIDI routes are identities and remain unchanged.
+}

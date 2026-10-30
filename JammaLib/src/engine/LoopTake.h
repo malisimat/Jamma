@@ -28,6 +28,7 @@
 #include "../gui/GuiRack.h"
 #include "../io/JamFile.h"
 #include "../vst/VstChain.h"
+#include "../vst/RackMove.h"
 #include "../base/TriggerPunchTarget.h"
 #include "../base/PublishedAudioSnapshot.h"
 
@@ -249,7 +250,7 @@ namespace engine
 		unsigned int NumBusChannels() const;
 		// Staging only — actual load/unload happens on the job thread after
 		// CommitChanges() queues the appropriate JOB_LOADVST / JOB_UNLOADVST job.
-		void LoadVstPlugin(std::wstring path,
+		std::string LoadVstPlugin(std::wstring path,
 			std::vector<std::uint8_t> initialState = {});
 		// Startup-only synchronous counterpart used by JAM reconstruction.
 		bool LoadVstPluginSynchronously(const std::wstring& path,
@@ -257,7 +258,7 @@ namespace engine
 			bool bypass = false, const std::string& stateId = {});
 		void UnloadVstPlugin(size_t index);
 		vst::VstRackSlot GetVstRackSlot() const;
-		bool LoadManagedVstPlugin(std::wstring path);
+		bool LoadManagedVstPlugin(std::wstring path, const std::string& identity = {});
 		bool UnloadManagedVstPlugin(const std::string& identity);
 		void ForceUnloadAllVstPlugins();
 		void SetSampleRate(float sampleRate);
@@ -265,6 +266,9 @@ namespace engine
 		float GetSampleRate() const noexcept { return _sampleRate; }
 		unsigned int GetLastBufSize() const noexcept { return _lastBufSize; }
 		std::shared_ptr<vst::IVstPlugin> GetVstPlugin(size_t index) const;
+		std::vector<vst::VstRackSlot> GetVstRackSlots(std::size_t offset = 0u) const;
+		std::uint64_t RackRevision() const noexcept { return _rackRevision.load(std::memory_order_acquire); }
+		bool MoveVstSlot(const vst::RackMove& move);
 		void SetAutomationTopologyChangedCallback(std::function<void()> changed);
 		std::shared_ptr<vst::IVstPlugin> FindVstPlugin(const vst::IVstPlugin* observer,
 			const std::string& identity, std::size_t& index) const
@@ -749,6 +753,7 @@ namespace engine
 		std::vector<io::JamFile::VstEntry> _vstSavedEntries;
 		// UI stages requests, job completes them. Audio never reads this counter.
 		std::atomic<unsigned int> _vstJobsPending{ 0u };
+		std::atomic<std::uint64_t> _rackRevision{1u};
 		// Startup-only metadata. Runtime lane pointers are installed by Station only
 		// after every chain named by these references has been constructed.
 		std::vector<PendingAutomationBinding> _pendingAutomationBindings;

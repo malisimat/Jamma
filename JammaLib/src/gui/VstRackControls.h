@@ -65,6 +65,8 @@ namespace gui
 		bool _LoadLocked(const Target& target, const std::wstring& path);
 		bool _UnloadLocked(const Target& target, const std::string& identity);
 		void _PresentLocked(const std::shared_ptr<GuiRack>& rack, Target target, const std::string& label);
+		void _PresentChildLocked(const std::shared_ptr<GuiRack>& rack, const Target& target, const std::string& label);
+		void _PumpChild(const Intent& intent);
 		void _PresentStationLocked(const std::shared_ptr<engine::Station>& station);
 		void _PumpStation(const Intent& intent);
 		Host _host;
