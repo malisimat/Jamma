@@ -774,8 +774,9 @@ void LoopTake::WriteBlock(const std::shared_ptr<MultiAudioSink> dest,
 	}
 
 	auto chain = _vstChain.borrow();
-	if (chain && chain->IsActive() && (state->VstBlockPtrs.size() >= channelCount))
-		chain->ProcessBlockMulti(state->VstBlockPtrs.data(), static_cast<int>(channelCount), sampsToRead);
+	if (chain && chain->IsActive() && state->VstBlockPtrs.size() >= channelCount
+		&& state->InstrumentPtrs.size() >= channelCount)
+		chain->ProcessRack(state->VstBlockPtrs.data(), state->InstrumentPtrs.data(), static_cast<int>(channelCount), sampsToRead);
 
 	for (auto i = 0u; i < channelCount; i++)
 	{
@@ -3582,6 +3583,10 @@ void LoopTake::_PublishAudioState()
 	state->VstBlockPtrs.resize(state->AudioBuffers.size(), nullptr);
 	for (auto i = 0u; i < state->AudioBuffers.size(); i++)
 		state->VstBlockPtrs[i] = state->VstBlockScratch.data() + (static_cast<size_t>(i) * constants::MaxBlockSize);
+	state->InstrumentScratch.resize(state->AudioBuffers.size() * constants::MaxBlockSize);
+	state->InstrumentPtrs.resize(state->AudioBuffers.size(), nullptr);
+	for (auto i = 0u; i < state->AudioBuffers.size(); ++i)
+		state->InstrumentPtrs[i] = state->InstrumentScratch.data() + (static_cast<size_t>(i) * constants::MaxBlockSize);
 	_audioState.store(state, std::memory_order_release);
 }
 

@@ -595,7 +595,10 @@ void Loop::WriteBlock(const std::shared_ptr<MultiAudioSink> dest,
 	{
 		auto chain = _vstChain.borrow();
 		if (chain && chain->IsActive())
-			chain->ProcessBlock(tempBuf, static_cast<int>(sampsToWrite));
+		{
+			float instrumentScratch[constants::MaxBlockSize];
+			chain->ProcessRackMono(tempBuf, instrumentScratch, static_cast<int>(sampsToWrite));
+		}
 
 		// Only rendered playback is delayed; bounce and source capture keep
 		// their original sample coordinates.

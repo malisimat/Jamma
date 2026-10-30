@@ -1272,10 +1272,10 @@ TEST_F(VstRackControlsTest, FailedSlotsShowRetryAtEachHierarchyLevel)
  ASSERT_NE(Station->GetGuiRack()->VstRack()->SlotButton(0u), nullptr);
  EXPECT_EQ(Station->GetGuiRack()->VstRack()->SlotButton(0u)->Text(), "Retry station-missing");
  ASSERT_NE(Take->GetGuiRack()->GetVstControl(), nullptr);
- EXPECT_EQ(Take->GetGuiRack()->GetVstControl()->Text(), "Retry VST");
+ EXPECT_EQ(Take->GetGuiRack()->VstRack()->SlotButton(0u)->Text(), "Retry take-missing");
  Update(base::DEPTH_LOOP);
  ASSERT_NE(Take->GetGuiRack()->GetVstControl(), nullptr);
- EXPECT_EQ(Take->GetGuiRack()->GetVstControl()->Text(), "Retry VST L1");
+ EXPECT_EQ(Take->GetGuiRack()->VstRack()->SlotButton(0u)->Text(), "Retry loop-missing");
 }
 
 TEST_F(VstRackControlsTest, FailedLoadReportsErrorAndRemainsReplaceable)
@@ -1364,6 +1364,7 @@ public:
  std::atomic<unsigned int> Calls{0u}, Concurrent{0u}, Overlaps{0u};
  mutable unsigned int Captures = 0u;
  unsigned int Restores = 0u;
+ void ProcessBlock(float* channel, int32_t samples) noexcept override { float* channels[]{channel}; ProcessBlockMulti(channels,1,samples); }
  vst::RenderRole Role() const noexcept override { return Render; }
  vst::MidiInputCapabilities MidiInput() const noexcept override { return {true,true,true}; }
  unsigned int HostedChannelCount() const noexcept override { return 2u; }
@@ -1483,19 +1484,21 @@ protected:
   io::JamFile::Station savedStation{}; savedStation.Id = "saved-station"; savedStation.Name = "saved station";
   io::JamFile::LoopTake savedTake{}; savedTake.Id = "saved-take"; savedTake.Name = "saved take";
   io::JamFile::Loop savedLoop{}; savedLoop.Id = "saved-loop"; savedLoop.Name = "saved.wav"; savedLoop.Length = 8u; savedLoop.Speed = 1.0;
-  savedStation.VstChain = entries; savedTake.VstChain = entries; savedLoop.VstChain = entries;
+  if (scope == vst::RackMove::Scope::Station) savedStation.VstChain = entries;
+  else if (scope == vst::RackMove::Scope::Take) savedTake.VstChain = entries;
+  else savedLoop.VstChain = entries;
   savedTake.Loops.push_back(savedLoop); savedStation.LoopTakes.push_back(savedTake); jam.Stations.push_back(savedStation);
   std::stringstream encoded;
   ASSERT_TRUE(io::JamFile::ToStream(jam,encoded));
   const auto decoded = io::JamFile::FromStream(std::move(encoded)); ASSERT_TRUE(decoded);
   ASSERT_EQ(1u,decoded->Stations.size()); ASSERT_EQ(1u,decoded->Stations[0].LoopTakes.size());
   ASSERT_EQ(1u,decoded->Stations[0].LoopTakes[0].Loops.size());
-  for (const auto& restored : {decoded->Stations[0].VstChain,decoded->Stations[0].LoopTakes[0].VstChain,decoded->Stations[0].LoopTakes[0].Loops[0].VstChain})
-  {
-   ASSERT_EQ(entries.size(),restored.size());
-   for (auto i = 0u; i < entries.size(); ++i)
-   { EXPECT_EQ(entries[i].Id,restored[i].Id); EXPECT_EQ(entries[i].Path,restored[i].Path); EXPECT_EQ(entries[i].State,restored[i].State); }
-  }
+  const auto& restored = scope == vst::RackMove::Scope::Station ? decoded->Stations[0].VstChain
+   : scope == vst::RackMove::Scope::Take ? decoded->Stations[0].LoopTakes[0].VstChain
+   : decoded->Stations[0].LoopTakes[0].Loops[0].VstChain;
+  ASSERT_EQ(entries.size(),restored.size());
+  for (auto i = 0u; i < entries.size(); ++i)
+  { EXPECT_EQ(entries[i].Id,restored[i].Id); EXPECT_EQ(entries[i].Path,restored[i].Path); EXPECT_EQ(entries[i].State,restored[i].State); }
   move.Source = 2u; move.Target = 0u; move.Revision = owner->RackRevision();
   ASSERT_TRUE(owner->MoveVstSlot(move)); owner->CommitChanges();
   for (auto i = 0u; i < plugins.size(); ++i) EXPECT_EQ(plugins[i],owner->GetVstPlugin(i));
@@ -1514,7 +1517,9 @@ TEST_F(RackMoveTest, StationTakeAndLoopKeepInstancesStateAndSavedOrderInBothDire
 
 TEST(VstStaging, SlotMoveHandleIsSeparateFromCableDragAndCancelsOutsideEscapeOrStaleOwner)
 {
- auto view = std::make_shared<gui::GuiVstRack>(); view->SetPosition({300,700}); view->SetViewport({1200u,1000u});
+ gui::GuiRackParams params; params.Size = {220u,300u}; params.EnableVstControl = true; params.EnableVstRack = true;
+ auto rack = std::make_shared<gui::GuiRack>(params); rack->SetPosition({300,700}); rack->Init();
+ auto view = rack->VstRack(); view->SetVisible(true); view->SetViewport({1200u,1000u});
  gui::GuiVstRack::Model model; model.Editable = true; model.Revision = 9u; model.OwnerId = "owner"; model.TotalSlots = 3u;
  for (auto i = 0u; i < 3u; ++i) { gui::GuiVstRack::Slot slot; slot.Value.Identity = "slot-" + std::to_string(i); model.Slots.push_back(slot); }
  std::vector<gui::GuiVstRack::Command> commands;
@@ -1531,4 +1536,66 @@ TEST(VstStaging, SlotMoveHandleIsSeparateFromCableDragAndCancelsOutsideEscapeOrS
  begin(); model.OwnerId = "replacement"; view->Update(model,submit); EXPECT_FALSE(view->HasSlotMove());
  touch.State = actions::TouchAction::TOUCH_UP; touch.Position = point(2u); view->OnAction(touch); EXPECT_EQ(1u,commands.size());
  view->DetachGuiOwnershipForRetirement();
+}
+
+class RackRenderSink final : public base::MultiAudioSink
+{
+public:
+ float First = 0.0f;
+ unsigned int Writes = 0u;
+ void OnBlockWriteChannel(unsigned int, const base::AudioWriteRequest& request, int) override
+ { if (request.numSamps) { First += request.samples[0]; ++Writes; } }
+};
+
+class RackRenderLoop final : public Loop
+{
+public:
+ static audio::AudioMixerParams Mixer(const LoopParams& params)
+ {
+  audio::WireMixBehaviourParams wire; wire.Channels = {0u}; return GetMixerParams(params.Size,wire);
+ }
+ explicit RackRenderLoop(LoopParams params) : Loop(params,Mixer(params))
+ {
+  _bufferBank.Resize(constants::MaxLoopFadeSamps + 64u);
+  for (auto i = 0u; i < _bufferBank.Length(); ++i) _bufferBank[i] = 0.0f;
+  _loopLength = 64u; _playIndex = constants::MaxLoopFadeSamps; _playState = STATE_PLAYING;
+ }
+};
+
+class RackScopeRenderTest : public testing::Test
+{
+protected:
+ template<class Owner, class Render> void Check(const std::shared_ptr<Owner>& owner, vst::RackMove::Scope scope, Render render)
+ {
+  auto a = std::make_shared<RackOrderPlugin>(); a->Render = vst::RenderRole::Instrument; a->Value = 1.0f;
+  auto effect = std::make_shared<RackOrderPlugin>(); effect->Value = 2.0f;
+  auto b = std::make_shared<RackOrderPlugin>(); b->Render = vst::RenderRole::Instrument; b->Value = 3.0f;
+  const std::array plugins{a,effect,b};
+  for (auto i = 0u; i < plugins.size(); ++i)
+  {
+   JobAction load; load.JobActionType = JobAction::JOB_LOADVST; load.VstPath = L"scope-test.vst3";
+   load.VstIdentity = "scope-" + std::to_string(i); load.PreInitPlugin = plugins[i]; owner->OnAction(load);
+  }
+  owner->CommitChanges();
+  EXPECT_FLOAT_EQ(5.0f,render()); // Instrument A -> effect -> additive B.
+  vst::RackMove move{scope,owner->Id(),"scope-1",1u,2u,owner->RackRevision()};
+  ASSERT_TRUE(owner->MoveVstSlot(move)); owner->CommitChanges();
+  EXPECT_FLOAT_EQ(8.0f,render()); // Both instruments -> effect.
+  move.Source = 2u; move.Target = 1u; move.Revision = owner->RackRevision();
+  ASSERT_TRUE(owner->MoveVstSlot(move)); owner->CommitChanges();
+  EXPECT_FLOAT_EQ(5.0f,render());
+  for (const auto& plugin : plugins) EXPECT_EQ(3u,plugin->Calls.load());
+  owner->DetachGuiOwnershipForRetirement();
+ }
+};
+
+TEST_F(RackScopeRenderTest, TakeAndLoopPlaybackUseAdditiveInstrumentsAndOrderedEffects)
+{
+ auto sink = std::make_shared<RackRenderSink>();
+ LoopParams params; params.Id = "render-loop"; params.Size = {100u,100u}; params.FadeSamps = 0u;
+ auto loop = std::make_shared<RackRenderLoop>(params);
+ Check(loop,vst::RackMove::Scope::Loop,[&] { sink->First = 0.0f; loop->WriteBlock(sink,nullptr,0,8u); return sink->First; });
+ auto take = MakeTake("render-take"); take->SetNumBusChannels(1u); take->AddLoop(MakeLoop()); take->CommitChanges();
+ Check(take,vst::RackMove::Scope::Take,[&] { sink->First = 0.0f; take->Zero(8u,base::Audible::AUDIOSOURCE_LOOPS); take->WriteBlock(sink,nullptr,0,8u); return sink->First; });
+ EXPECT_EQ(6u,sink->Writes);
 }

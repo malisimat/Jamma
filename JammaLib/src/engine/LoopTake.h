@@ -510,6 +510,8 @@ namespace engine
 			std::vector<std::shared_ptr<audio::AudioBuffer>> AudioBuffers;
 			std::vector<float> VstBlockScratch;
 			std::vector<float*> VstBlockPtrs;
+			std::vector<float> InstrumentScratch;
+			std::vector<float*> InstrumentPtrs;
 		};
 
 		using MidiLoopSnapshot = std::vector<std::shared_ptr<midi::MidiLoop>>;

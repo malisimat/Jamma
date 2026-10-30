@@ -242,6 +242,7 @@ void GuiVstRack::Update(Model model, std::function<void(Command)> submit)
 		});
 		row.Socket->SetVisible(!_model.Inactive && !_toggles.empty() && (row.Eligible || linked));
 	}
+	_append->SetText("");
 	_append->SetEnabled(_model.Editable && !_model.Inactive && _model.TotalSlots < 32u);
 	_recover->SetVisible(_model.Inactive); _recover->SetEnabled(_model.Editable && _model.TotalSlots <= 32u);
 	_clearRoutes->SetVisible(_model.Inactive); _clearRoutes->SetEnabled(_model.Editable);

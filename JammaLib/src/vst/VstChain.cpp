@@ -98,6 +98,27 @@ void VstChain::ProcessRack(float* const* channels, float* const* scratch,
 	}
 }
 
+void VstChain::ProcessRackMono(float* channel, float* scratch, int numSamples) noexcept
+{
+	if (!channel || !scratch || numSamples <= 0
+		|| static_cast<unsigned int>(numSamples) > constants::MaxBlockSize) return;
+	for (const auto& plugin : _plugins)
+	{
+		if (!plugin || !plugin->IsLoaded() || plugin->IsBypassed()) continue;
+		IVstPlugin::PluginCallGuard call(*plugin, true);
+		if (!call) continue;
+		plugin->FlushPendingMidiPanic();
+		if (plugin->Role() != RenderRole::Instrument)
+		{
+			plugin->ProcessBlock(channel, numSamples);
+			continue;
+		}
+		std::fill_n(scratch, numSamples, 0.0f);
+		plugin->ProcessBlock(scratch, numSamples);
+		for (int sample = 0; sample < numSamples; ++sample) channel[sample] += scratch[sample];
+	}
+}
+
 void VstChain::PollPendingChanges() const noexcept
 {
 	for (const auto& plugin : _plugins)
