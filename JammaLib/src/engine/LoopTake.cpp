@@ -3607,6 +3607,7 @@ void LoopTake::_ArrangeChildren()
 		loop->SetSize(loopSize);
 		loop->SetModelPosition({ 0.0f, 0.0f, 0.0f });
 		loop->SetModelScale(1.0 + (loopCount * dScale) - (dTotalScale * 0.5));
+		loop->SetPickerLayoutHeight(static_cast<float>(loopSize.Height));
 
 		loopCount++;
 	}
