@@ -9,6 +9,7 @@
 #include "StringUtils.h"
 #include "GlDeleteQueue.h"
 #include "../resources/ResourcePaths.h"
+#include <algorithm>
 #include <thread>
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #include "stb/stb_image_write.h"
@@ -980,13 +981,24 @@ void Window::UpdateSessionTitle()
 	std::wstring title = L"Jamma";
 	if (!path.empty())
 	{
+		title += L" - ";
+		// Keep ordinary paths intact; long filenames may exceed this display
+		// budget so the filename and a useful path prefix are never discarded.
+		constexpr std::size_t pathBudget = 120u, minimumPrefix = 24u;
 		const auto separator = path.find_last_of(L"/\\");
-		const auto filename = separator == std::wstring::npos ? 0u : separator + 1u;
-		if (filename < path.size())
+		if (path.size() > pathBudget && separator != std::wstring::npos)
 		{
-			title += L" - ";
-			title.append(path, filename, std::wstring::npos);
+			const auto suffixLength = path.size() - separator;
+			auto prefixLength = (std::min)(separator, (std::max)(minimumPrefix,
+				suffixLength < pathBudget ? pathBudget - suffixLength - 1u : 0u));
+			// Do not split a UTF-16 surrogate pair at the truncation boundary.
+			if (prefixLength > 0u && path[prefixLength - 1u] >= 0xd800 && path[prefixLength - 1u] <= 0xdbff)
+				--prefixLength;
+			title.append(path, 0u, prefixLength);
+			if (prefixLength < separator) title += L"\u2026";
+			title.append(path, separator, std::wstring::npos);
 		}
+		else title += path;
 	}
 	if (SetWindowTextW(_wnd, title.c_str()))
 	{

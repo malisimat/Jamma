@@ -333,7 +333,8 @@ void SessionControl::RequestSave(bool chooseFolder, bool asDefault, const Effect
 	if (asDefault && (_defaultJamPath.empty() || !_defaultJamSaver)) { ReportFileOutcome("Startup jam path unavailable"); return; }
 	Begin(SessionControl::Save);
 	auto folder = asDefault && _currentJamPath.empty() ? utils::GetParentDirectory(_defaultJamPath) : _sessionSaveFolder;
-	if (chooseFolder || folder.empty()) folder = utils::PickDirectory(L"Choose session save folder");
+	if (chooseFolder || folder.empty())
+		folder = utils::PickDirectory(L"Choose session save folder", utils::GetParentDirectory(_currentJamPath));
 	if (folder.empty()) { Begin(SessionControl::None); return; }
 	_pendingSaveAsDefault = asDefault; _pendingSaveFolder = std::move(folder); Begin(SessionControl::Save);
 	ReportFileStatus("Waiting to capture session");

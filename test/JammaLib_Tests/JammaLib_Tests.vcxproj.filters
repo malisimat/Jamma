@@ -181,6 +181,9 @@
     <ClCompile Include="src\utils\MathUtils_Tests.cpp">
       <Filter>src\utils</Filter>
     </ClCompile>
+    <ClCompile Include="src\utils\PathUtils_Tests.cpp">
+      <Filter>src\utils</Filter>
+    </ClCompile>
     <ClCompile Include="src\ninjam\NinjamAudioTimingCommand_Tests.cpp">
       <Filter>src\ninjam</Filter>
     </ClCompile>

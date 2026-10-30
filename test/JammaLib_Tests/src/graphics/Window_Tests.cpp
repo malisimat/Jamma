@@ -916,14 +916,69 @@ TEST(WindowTitle, UnsavedUnicodeAndNumberedDestinationsUpdateNativeCaptionOnlyWh
 	EXPECT_EQ(1u, host.Changes);
 	scene.Controls().SetCurrentJamPath(L"C:\\sessions\\\u6f14\u594f-\u03b2.jam");
 	window.UpdateSessionTitle();
-	EXPECT_EQ(L"Jamma - \u6f14\u594f-\u03b2.jam", host.Text());
+	EXPECT_EQ(L"Jamma - C:\\sessions\\\u6f14\u594f-\u03b2.jam", host.Text());
 	EXPECT_EQ(2u, host.Changes);
 	scene.CompleteSave(true, L"C:/isolated-jamma/export/session-0002.jam");
 	window.UpdateSessionTitle();
-	EXPECT_EQ(L"Jamma - session-0002.jam", host.Text());
+	EXPECT_EQ(L"Jamma - C:/isolated-jamma/export/session-0002.jam", host.Text());
 	EXPECT_EQ(3u, host.Changes);
 	window.UpdateSessionTitle();
 	EXPECT_EQ(3u, host.Changes);
+
+	scene.CompleteSave(true, L"C:/isolated-jamma/another/session-0002.jam");
+	window.UpdateSessionTitle();
+	EXPECT_EQ(L"Jamma - C:/isolated-jamma/another/session-0002.jam", host.Text());
+	EXPECT_EQ(4u, host.Changes);
+}
+
+TEST(WindowTitle, LongPathsKeepPrefixAndFullFilenameWithoutChangingDocumentPath)
+{
+	WindowTitleScene scene;
+	ResourceLib resources;
+	Window window(scene, resources);
+	WindowTitleNativeHost host(window);
+	ASSERT_NE(nullptr, host.Handle);
+	for (const auto separator : {L'\\', L'/'})
+	{
+		const std::wstring filename = L"\u6f14\u594f-session.jam";
+		const auto suffix = std::wstring(1u, separator) + filename;
+		const auto prefix = std::wstring(L"C:") + separator + L"sessions" + separator;
+		const auto boundaryPath = prefix + std::wstring(120u - prefix.size() - suffix.size(), L'a') + suffix;
+		scene.Controls().SetCurrentJamPath(boundaryPath);
+		window.UpdateSessionTitle();
+		EXPECT_EQ(L"Jamma - " + boundaryPath, host.Text());
+
+		const auto longPath = prefix + std::wstring(180u, L'a') + suffix;
+		scene.Controls().SetCurrentJamPath(longPath);
+		window.UpdateSessionTitle();
+		EXPECT_EQ(L"Jamma - " + longPath.substr(0u, 120u - suffix.size() - 1u) + L"\u2026" + suffix, host.Text());
+		EXPECT_EQ(longPath, scene.Controls().CurrentJamPath());
+		const auto changes = host.Changes;
+		window.UpdateSessionTitle();
+		EXPECT_EQ(changes, host.Changes);
+	}
+}
+
+TEST(WindowTitle, VeryLongFilenameRetainsUsefulPrefixEvenBeyondDisplayBudget)
+{
+	WindowTitleScene scene;
+	ResourceLib resources;
+	Window window(scene, resources);
+	WindowTitleNativeHost host(window);
+	ASSERT_NE(nullptr, host.Handle);
+	const std::wstring prefix = L"C:/sessions/performance/";
+	ASSERT_EQ(24u, prefix.size());
+	const auto filename = std::wstring(140u, L'b') + L".jam";
+	const auto path = prefix + L"some/deep/directory/" + filename;
+	scene.Controls().SetCurrentJamPath(path);
+	window.UpdateSessionTitle();
+	EXPECT_EQ(L"Jamma - " + prefix + L"\u2026/" + filename, host.Text());
+	EXPECT_EQ(path, scene.Controls().CurrentJamPath());
+
+	// A filename without any directory must also remain complete.
+	scene.Controls().SetCurrentJamPath(filename);
+	window.UpdateSessionTitle();
+	EXPECT_EQ(L"Jamma - " + filename, host.Text());
 }
 
 TEST(WindowTitle, WrittenJamStillNamesWindowWhenDefaultUpdateFailsAndFailedSavesKeepIt)
@@ -940,13 +995,13 @@ TEST(WindowTitle, WrittenJamStillNamesWindowWhenDefaultUpdateFailsAndFailedSaves
 	scene.CompleteSave(true, L"C:/isolated-jamma/export/committed-0003.jam", true);
 	window.UpdateSessionTitle();
 	EXPECT_EQ(1u, defaultsWrites);
-	EXPECT_EQ(L"Jamma - committed-0003.jam", host.Text());
+	EXPECT_EQ(L"Jamma - C:/isolated-jamma/export/committed-0003.jam", host.Text());
 	EXPECT_EQ(2u, host.Changes);
 	for (const auto* path : {L"", L"denied.jam"})
 	{
 		scene.CompleteSave(false, path, true);
 		window.UpdateSessionTitle();
-		EXPECT_EQ(L"Jamma - committed-0003.jam", host.Text());
+		EXPECT_EQ(L"Jamma - C:/isolated-jamma/export/committed-0003.jam", host.Text());
 		EXPECT_EQ(2u, host.Changes);
 	}
 	EXPECT_EQ(1u, defaultsWrites);
@@ -972,7 +1027,7 @@ TEST(WindowTitle, ReplacementResetsUnsavedCaptionAndOldSceneCompletionCannotRena
 
 	loaded.Controls().SetCurrentJamPath(L"C:/sessions/loaded-\u03a9.jam");
 	window.ReplaceScene(loaded);
-	EXPECT_EQ(L"Jamma - loaded-\u03a9.jam", host.Text());
+	EXPECT_EQ(L"Jamma - C:/sessions/loaded-\u03a9.jam", host.Text());
 	window.UpdateSessionTitle();
 	EXPECT_EQ(3u, host.Changes);
 }

@@ -39,7 +39,16 @@ std::wstring utils::GetParentDirectory(std::wstring dir)
 	return p.parent_path();
 }
 
-std::wstring utils::PickDirectory(const std::wstring& title)
+bool utils::IsUsableDialogDirectory(const std::wstring& directory)
+{
+	if (directory.empty() || directory.find(L'\0') != std::wstring::npos) return false;
+	const std::filesystem::path candidate(directory);
+	if (!candidate.is_absolute()) return false;
+	std::error_code error;
+	return std::filesystem::is_directory(candidate, error) && !error;
+}
+
+std::wstring utils::PickDirectory(const std::wstring& title, const std::wstring& initialDirectory)
 {
 	using Microsoft::WRL::ComPtr;
 
@@ -71,6 +80,14 @@ std::wstring utils::PickDirectory(const std::wstring& title)
 	dialog->GetOptions(&options);
 	dialog->SetOptions(options | FOS_PICKFOLDERS | FOS_FORCEFILESYSTEM);
 	dialog->SetTitle(title.c_str());
+	if (IsUsableDialogDirectory(initialDirectory))
+	{
+		// The folder can disappear after validation. Shell failures must not
+		// prevent Show from opening at the dialog's normal fallback location.
+		ComPtr<IShellItem> folder;
+		if (SUCCEEDED(SHCreateItemFromParsingName(initialDirectory.c_str(), nullptr, IID_PPV_ARGS(&folder))))
+			dialog->SetFolder(folder.Get());
+	}
 
 	if (SUCCEEDED(dialog->Show(nullptr)))
 	{
