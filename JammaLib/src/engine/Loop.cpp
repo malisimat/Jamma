@@ -1917,8 +1917,8 @@ void engine::Loop::_AdvancePlaybackOffset(unsigned int numSamps) noexcept
 {
     static_assert(std::atomic<double>::is_always_lock_free);
     const auto length = LoopLength();
-    const auto target = static_cast<double>(PlaybackOffsetSamps());
     _InitialisePlaybackOffset();
+    const auto target = static_cast<double>(PlaybackOffsetSamps());
     if (_playbackOffsetRate == 0.0 && _playbackOffsetStart == target) return;
     _playbackOffsetStart = _PlaybackOffsetAtFrame(numSamps);
     _playbackOffsetEnd = _playbackOffsetStart;
