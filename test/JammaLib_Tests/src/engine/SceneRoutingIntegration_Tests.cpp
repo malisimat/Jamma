@@ -19,6 +19,7 @@ namespace gui
     {
     public:
         static std::shared_ptr<GuiButton> RigSaveButton(GuiMainPanel& panel) { panel.SetPage(SettingsPage::Session); return panel._saveRigButton; }
+        static std::shared_ptr<GuiButton> OrdinaryRigSave(GuiMainPanel& panel) { return panel._ordinaryRigSaveButton; }
         static std::shared_ptr<GuiButton> RigSaveChoice(GuiMainPanel& panel, unsigned int choice) { return panel._additionalRigSaveButtons.at(choice); }
 
     };
@@ -132,6 +133,28 @@ namespace engine
         { return gui::GuiMainPanelTestAccess::RigSaveButton(*scene._workspace->MainPanel()); }
         static std::shared_ptr<gui::GuiButton> RigSaveChoice(Scene& scene, unsigned int choice)
         { return gui::GuiMainPanelTestAccess::RigSaveChoice(*scene._workspace->MainPanel(), choice); }
+        static std::shared_ptr<gui::GuiButton> OrdinaryRigSave(Scene& scene)
+        { return gui::GuiMainPanelTestAccess::OrdinaryRigSave(*scene._workspace->MainPanel()); }
+        static std::shared_ptr<gui::GuiButton> SessionButton(Scene& scene, unsigned int command)
+        {
+            for (const auto& entry : scene._workspace->Settings().SettingsEntries())
+                if (entry.Command == command) return std::dynamic_pointer_cast<gui::GuiButton>(entry.Control);
+            return {};
+        }
+        static void PickDirectory(Scene& scene, std::function<std::wstring(const std::wstring&)> pick)
+        { scene._operation._pickSessionDirectory = std::move(pick); }
+        static void Save(Scene& scene, bool choose = false) { scene._operation.RequestSave(choose, false, scene._ControlEffects()); }
+        static void FinishPickedSave(Scene& scene, bool success, std::wstring folder, std::wstring path)
+        { scene._operation.CompleteSessionSave(success, path, "test failure", std::move(folder), false); scene._operation.Begin(SessionControl::None); }
+        static std::wstring PendingFolder(Scene& scene) { return scene._operation._pendingSaveFolder; }
+        static std::wstring SaveFolder(Scene& scene) { return scene._operation.SessionSaveFolder(); }
+        static std::string FileStatus(Scene& scene) { return scene._operation.TakePresentation().FileStatus; }
+        static void SetFileControls(Scene& scene, bool enabled) { scene._workspace->Settings().SetSessionEnabled(enabled, enabled); scene._workspace->MainPanel()->SetRigSaveEnabled(enabled); }
+        static gui::RuntimeDialogDecision ResetDecision(Scene& scene) { return scene._resetAllDecision; }
+        static void ResolveReset(Scene& scene, bool accept) { ASSERT_TRUE(scene._resetAllDecision); *scene._resetAllDecision = accept; scene.AdvanceUiAnimations(); }
+        static unsigned long ClockLength(Scene& scene) { return scene._quantisation.Clock()->SeedSourceLength(); }
+        static void SetClock(Scene& scene) { scene._quantisation.Clock()->SetSeedSourceLength(96000ul); }
+        static bool ReclockArmed(Scene& scene) { return scene._quantisation.IsArmedForReclock(); }
         static bool RigSaveRequested(const Scene& scene) { return scene._operation._rigSaveRequested; }
         static void ChooseAudio(Scene& scene, int index) { scene._workspace->Settings().AudioDevice()->SetSelectedIndex(index, true); }
         static void ChooseSampleRate(Scene& scene, int index) { scene._workspace->Settings().AudioSampleRate()->SetSelectedIndex(index, true); }
@@ -2326,4 +2349,175 @@ TEST_F(SceneRoutingIntegrationTest, CaptureBecomingBusyBeforeAdmissionRejectsSes
 		EXPECT_EQ(1u, station->NumTakes());
 	}
 	scene->Shutdown();
+}
+
+TEST_F(SceneRoutingIntegrationTest, SaveControlsRemainEnabledWhileLoadKeepsItsBusyGate)
+{
+    using Access = engine::SourceLossIntegrationTestAccess;
+    auto scene = FreshScene({Station("Empty")}, {}); ASSERT_TRUE(scene);
+    auto exclusion = Access::ExcludeJob(*scene);
+    Access::SetFileControls(*scene, false);
+    EXPECT_TRUE(Access::SessionButton(*scene, 7210u)->IsEnabled());
+    EXPECT_TRUE(Access::SessionButton(*scene, 7213u)->IsEnabled());
+    EXPECT_FALSE(Access::SessionButton(*scene, 7211u)->IsEnabled());
+    EXPECT_TRUE(Access::OrdinaryRigSave(*scene)->IsEnabled());
+    EXPECT_TRUE(Access::RigSaveChoice(*scene, 1u)->IsEnabled());
+    EXPECT_FALSE(Access::RigSaveChoice(*scene, 0u)->IsEnabled());
+    actions::GuiAction command; command.ElementType = actions::GuiAction::ACTIONELEMENT_BUTTON;
+    command.Index = gui::GuiMainPanel::SaveRigControlIndex; scene->OnAction(command);
+    EXPECT_TRUE(scene->ConsumeRigSaveRequest());
+    EXPECT_EQ(engine::Scene::RigSaveMode::Save, scene->Controls().RequestedRigSaveMode());
+    exclusion.unlock(); scene->Shutdown();
+}
+
+TEST_F(SceneRoutingIntegrationTest, EmptyJamSaveDestinationFallbackCancellationFailureAndRepeatedAdmission)
+{
+    using Access = engine::SourceLossIntegrationTestAccess;
+    auto scene = FreshScene({Station("Empty")}, {}); ASSERT_TRUE(scene);
+    auto exclusion = Access::ExcludeJob(*scene);
+    unsigned int picks = 0u; std::wstring chosen;
+    Access::PickDirectory(*scene, [&](const auto&) { ++picks; return chosen; });
+    Access::Save(*scene); EXPECT_EQ(1u, picks); EXPECT_TRUE(Access::ControlIdle(*scene));
+    EXPECT_TRUE(scene->Controls().CurrentJamPath().empty());
+    chosen = L"first-folder"; Access::Save(*scene); EXPECT_EQ(2u, picks);
+    EXPECT_EQ(chosen, Access::PendingFolder(*scene));
+    Access::Save(*scene); EXPECT_EQ(2u, picks); EXPECT_NE(std::string::npos, Access::FileStatus(*scene).find("busy"));
+    Access::FinishPickedSave(*scene, true, chosen, L"first-folder/001.jam");
+    Access::Save(*scene); EXPECT_EQ(2u, picks); EXPECT_EQ(chosen, Access::PendingFolder(*scene));
+    Access::FinishPickedSave(*scene, false, L"failed-folder", L"failed.jam");
+    EXPECT_EQ(L"first-folder/001.jam", scene->Controls().CurrentJamPath());
+    EXPECT_EQ(chosen, Access::SaveFolder(*scene));
+    chosen.clear(); Access::Save(*scene, true); EXPECT_EQ(3u, picks); EXPECT_TRUE(Access::ControlIdle(*scene));
+    EXPECT_EQ(L"first-folder/001.jam", scene->Controls().CurrentJamPath());
+    scene->Controls().SetCurrentJamPath(L"loaded/005.jam"); scene->Controls().SetSessionSaveFolder(L"loaded");
+    Access::Save(*scene); EXPECT_EQ(3u, picks); EXPECT_EQ(L"loaded", Access::PendingFolder(*scene));
+    Access::FinishPickedSave(*scene, true, L"loaded", L"loaded/006.jam");
+    chosen = L"explicit"; Access::Save(*scene, true); EXPECT_EQ(4u, picks); EXPECT_EQ(chosen, Access::PendingFolder(*scene));
+    Access::FinishPickedSave(*scene, true, chosen, L"explicit/001.jam");
+    exclusion.unlock(); scene->Shutdown();
+}
+
+class ResetPreservationPlugin final : public vst::IVstPlugin
+{
+public:
+    float Parameter = 0.73f;
+    unsigned int Unloads = 0u;
+    bool PreInit(const std::wstring&) override { return true; }
+    bool Load(const std::wstring&, float, unsigned int, unsigned int, vst::HostedLayoutMode) override { return true; }
+    void Unload() override { ++Unloads; }
+    void ProcessBlock(float*, int32_t) noexcept override {}
+    void ProcessBlockStereo(float*, float*, int32_t) noexcept override {}
+    void ProcessBlockMulti(float* const*, int32_t, int32_t) noexcept override {}
+    void SetParameter(unsigned int, float value) noexcept override { Parameter = value; }
+    float GetParameter(unsigned int) const noexcept override { return Parameter; }
+    void BeginMidiBlock(std::uint32_t, std::uint32_t) noexcept override {}
+    void SendMidiEvent(const midi::MidiEvent&, bool) noexcept override {}
+    bool OpenEditor(HWND) override { return false; }
+    void CloseEditor() override {}
+    utils::Size2d GetEditorSize() const noexcept override { return {}; }
+    bool IsLoaded() const noexcept override { return true; }
+    const std::string& Name() const noexcept override { return StateId(); }
+    vst::RenderRole Role() const noexcept override { return vst::RenderRole::Effect; }
+    vst::MidiInputCapabilities MidiInput() const noexcept override { return {true, true, true}; }
+    void SetBypassed(bool) noexcept override {}
+    bool IsBypassed() const noexcept override { return false; }
+    std::vector<std::uint8_t> GetState() const override { return {7u, 3u}; }
+    void SetState(const std::vector<std::uint8_t>&) override {}
+};
+
+TEST_F(SceneRoutingIntegrationTest, ResetAllConfirmationCancellationAndSerializedRetirementPreserveRigAndRouting)
+{
+    using Access = engine::SourceLossIntegrationTestAccess;
+    auto scene = FreshScene({Station("Keys"), Station("Drums")}, {Trigger("Keys trigger", "Keys")}); ASSERT_TRUE(scene);
+    auto exclusion = Access::ExcludeJob(*scene);
+    auto stations = scene->SnapshotStations(); auto station = stations.front();
+    auto take = station->AddTake(); auto other = stations.back()->AddTake(); scene->CommitChanges();
+    station->SetAllowedMidiChannels({2,5,11});
+    ASSERT_TRUE(station->RestoreMixerLevels(0.25, std::vector<double>(station->NumBusChannels(), 0.5)));
+    auto plugin = std::make_shared<ResetPreservationPlugin>();
+    actions::JobAction load; load.JobActionType = actions::JobAction::JOB_LOADVST;
+    load.VstPath = L"test-owned-reset.vst3"; load.PreInitPlugin = plugin;
+    station->OnAction(load); station->CommitChanges(); ASSERT_EQ(plugin, station->GetVstPlugin(0u));
+    auto routed = station->MidiChannelRoutes(); routed[1].PluginIds = {plugin->StateId()};
+    ASSERT_TRUE(station->SetMidiChannelRoutes(routed, station->RackRevision()));
+    const auto routes = station->MidiChannelRoutes(); const auto rack = station->GetGuiRack();
+    rack->AddRoute(0u, 0u); const auto cables = rack->Routes();
+    const auto engineRoutes = station->SnapshotAudioRoutesForExport();
+    const auto revision = scene->AcceptedRigSnapshot()->Revision;
+    Access::SetClock(*scene);
+    scene->Controls().SetCurrentJamPath(L"previous/001.jam"); scene->Controls().SetSessionSaveFolder(L"previous");
+    actions::GuiAction reset; reset.ElementType = actions::GuiAction::ACTIONELEMENT_BUTTON; reset.Index = 7214u;
+    scene->OnAction(reset); const auto decision = Access::ResetDecision(*scene); ASSERT_TRUE(decision);
+    scene->OnAction(reset); EXPECT_EQ(decision, Access::ResetDecision(*scene));
+    Access::ResolveReset(*scene, false);
+    EXPECT_EQ(1u, station->GetLoopTakeSnapshot().size()); EXPECT_DOUBLE_EQ(0.25, station->MasterLevelForExport());
+    EXPECT_EQ(96000ul, Access::ClockLength(*scene)); EXPECT_EQ(L"previous/001.jam", scene->Controls().CurrentJamPath());
+    auto trigger = scene->AcceptedRigSnapshot()->Triggers.front().Instance;
+    io::UserConfig captureConfig{}; captureConfig.Audio.NumChannelsIn = 1u;
+    Access::StartRecording(*scene, trigger, captureConfig);
+    ASSERT_EQ(engine::TRIGSTATE_RECORDING, trigger->GetState());
+    const auto beforeResetCount = station->NumTakes();
+    scene->OnAction(reset); Access::ResolveReset(*scene, true);
+    scene->PumpDeviceAndFileControls(); // Closes input; it cannot mutate before job acknowledgement.
+    EXPECT_EQ(beforeResetCount, station->NumTakes());
+    exclusion.unlock();
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+    while (!Access::ControlIdle(*scene) && std::chrono::steady_clock::now() < deadline)
+    { scene->PumpDeviceAndFileControls(); std::this_thread::yield(); }
+    ASSERT_TRUE(Access::ControlIdle(*scene));
+    EXPECT_TRUE(station->GetLoopTakeSnapshot().empty()); EXPECT_TRUE(stations.back()->GetLoopTakeSnapshot().empty());
+    EXPECT_EQ(stations, scene->SnapshotStations()); EXPECT_EQ(revision, scene->AcceptedRigSnapshot()->Revision);
+    EXPECT_EQ((std::vector<int>{2,5,11}), station->AllowedMidiChannels());
+    EXPECT_EQ(routes, station->MidiChannelRoutes()); EXPECT_EQ(rack, station->GetGuiRack());
+    EXPECT_EQ(cables, rack->Routes()); EXPECT_EQ(engineRoutes, station->SnapshotAudioRoutesForExport());
+    EXPECT_EQ(plugin, station->GetVstPlugin(0u)); EXPECT_FLOAT_EQ(0.73f, plugin->GetParameter(0u));
+    EXPECT_EQ((std::vector<std::uint8_t>{7u,3u}), plugin->GetState()); EXPECT_EQ(0u, plugin->Unloads);
+    EXPECT_DOUBLE_EQ(1.0, station->MasterLevelForExport());
+    for (auto level : station->BusLevelsForExport()) EXPECT_DOUBLE_EQ(1.0, level);
+    EXPECT_EQ(0ul, Access::ClockLength(*scene)); EXPECT_TRUE(scene->Controls().CurrentJamPath().empty());
+    EXPECT_TRUE(Access::SaveFolder(*scene).empty()); EXPECT_TRUE(take->IsTriggerCaptureInactive());
+    EXPECT_EQ(engine::TRIGSTATE_DEFAULT, trigger->GetState()); EXPECT_TRUE(trigger->GetTakes().empty());
+    scene->CommitChanges(); // The running job thread owns its input-gate producer.
+    EXPECT_TRUE(station->GetLoopTakeSnapshot().empty());
+    unsigned int picks = 0u;
+    { auto job = Access::ExcludeJob(*scene); Access::PickDirectory(*scene, [&](const auto&) { ++picks; return std::wstring{}; }); Access::Save(*scene); }
+    EXPECT_EQ(1u, picks); scene->Shutdown();
+}
+
+TEST_F(SceneRoutingIntegrationTest, ReclockButtonArmsOnceAndFormerKeyboardChordDoesNotArm)
+{
+    using Access = engine::SourceLossIntegrationTestAccess;
+    auto scene = FreshScene({Station("Local")}, {}); ASSERT_TRUE(scene);
+    auto exclusion = Access::ExcludeJob(*scene);
+    actions::KeyAction key; key.KeyChar = 82u; key.KeyActionType = actions::KeyAction::KEY_UP;
+    key.Modifiers = static_cast<base::Action::Modifiers>(base::Action::MODIFIER_CTRL | base::Action::MODIFIER_SHIFT);
+    scene->OnAction(key); EXPECT_FALSE(Access::ReclockArmed(*scene));
+    actions::GuiAction button; button.ElementType = actions::GuiAction::ACTIONELEMENT_BUTTON; button.Index = 7006u;
+    Access::RemoteGrid(*scene, {88200u, 4u, 0u, 120.0f, 1u}, 1234);
+    scene->OnAction(button); EXPECT_FALSE(Access::ReclockArmed(*scene));
+    Access::RemoteGrid(*scene, {}, 0);
+    scene->OnAction(button); EXPECT_TRUE(Access::ReclockArmed(*scene));
+    scene->OnAction(button); EXPECT_TRUE(Access::ReclockArmed(*scene));
+    exclusion.unlock(); scene->Shutdown();
+}
+
+TEST_F(SceneRoutingIntegrationTest, SaveBusyFeedbackDoesNotOpenDialogsOrReplaceDestinations)
+{
+    using Access = engine::SourceLossIntegrationTestAccess;
+    auto scene = FreshScene({Station("Capture")}, {Trigger("Record", "Capture")}); ASSERT_TRUE(scene);
+    auto exclusion = Access::ExcludeJob(*scene);
+    unsigned int picks = 0u;
+    Access::PickDirectory(*scene, [&](const auto&) { ++picks; return std::wstring{}; });
+    scene->Controls().SetCurrentJamPath(L"prior/001.jam"); scene->Controls().SetSessionSaveFolder(L"prior");
+    auto trigger = scene->AcceptedRigSnapshot()->Triggers.front().Instance;
+    io::UserConfig config{}; config.Audio.NumChannelsIn = 1u;
+    Access::StartRecording(*scene, trigger, config);
+    Access::Save(*scene, true); EXPECT_EQ(0u, picks);
+    EXPECT_NE(std::string::npos, Access::FileStatus(*scene).find("capture"));
+    actions::GuiAction rig; rig.ElementType = actions::GuiAction::ACTIONELEMENT_BUTTON; rig.Index = gui::GuiMainPanel::SaveRigControlIndex;
+    scene->OnAction(rig); EXPECT_FALSE(scene->ConsumeRigSaveRequest());
+    EXPECT_NE(std::string::npos, Access::FileStatus(*scene).find("busy"));
+    EXPECT_FALSE(scene->BeginExplicitRigSave());
+    EXPECT_EQ(L"prior/001.jam", scene->Controls().CurrentJamPath());
+    exclusion.unlock(); scene->Shutdown();
 }

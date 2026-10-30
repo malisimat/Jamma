@@ -45,7 +45,7 @@ namespace gui
 			if (!_saveRigButton || _saveRigButton->IsEnabled() == enabled) return;
 			_saveRigButton->SetEnabled(enabled);
 			_saveRigButton->SetText(enabled ? "Set as Default" : "Busy");
-			for (const auto& button : _additionalRigSaveButtons) button->SetEnabled(enabled);
+			if (!_additionalRigSaveButtons.empty()) _additionalRigSaveButtons.front()->SetEnabled(enabled);
 		}
 		void SetCommandOwner(std::weak_ptr<base::ActionReceiver> owner);
 		void SetViewportSize(utils::Size2d viewport);
@@ -103,7 +103,7 @@ namespace gui
 		resources::ResourceLib* _pageResources = nullptr; // UI owner; cleared on release.
 		std::weak_ptr<base::ActionReceiver> _commandOwner;
 		std::array<std::vector<std::shared_ptr<GuiCommandReceiver>>, static_cast<size_t>(SettingsPage::Count)> _pageBindings;
-		std::shared_ptr<GuiButton> _saveRigButton;
+		std::shared_ptr<GuiButton> _saveRigButton, _ordinaryRigSaveButton;
 		std::vector<std::shared_ptr<GuiButton>> _additionalRigSaveButtons;
 		std::array<std::shared_ptr<GuiPerformanceGroupRow>, 2> _groupRows;
 		bool _selectionOnly;

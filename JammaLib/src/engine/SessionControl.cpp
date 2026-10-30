@@ -326,15 +326,30 @@ bool SessionControl::_ValidateAudioDraft(std::string& error, const Effects& effe
 	return true;
 }
 
+void SessionControl::RequestReset(const Effects& effects)
+{
+	if (Current() != None || HoldsWriter() || !_rig->EditsEnabled() || effects.CheckEligibility().StructuralBusy)
+	{ ReportFileOutcome("Another operation is busy; retry Reset All"); return; }
+	Begin(ResetSession);
+	ReportFileStatus("Waiting to reset session");
+}
+
 void SessionControl::RequestSave(bool chooseFolder, bool asDefault, const Effects& effects)
 {
 	if (Current() != SessionControl::None || !_rig->EditsEnabled()) { ReportFileOutcome("Another operation is busy"); return; }
-	if (effects.CheckEligibility().CaptureBusy) { ReportFileOutcome("Save unavailable during capture or pending actions"); return; }
+	const auto eligibility = effects.CheckEligibility();
+	if (eligibility.StructuralBusy) { ReportFileOutcome("Another operation is busy; retry Save"); return; }
+	if (eligibility.CaptureBusy) { ReportFileOutcome("Save unavailable during capture or pending actions; retry Save"); return; }
 	if (asDefault && (_defaultJamPath.empty() || !_defaultJamSaver)) { ReportFileOutcome("Startup jam path unavailable"); return; }
 	Begin(SessionControl::Save);
 	auto folder = asDefault && _currentJamPath.empty() ? utils::GetParentDirectory(_defaultJamPath) : _sessionSaveFolder;
 	if (chooseFolder || folder.empty())
-		folder = utils::PickDirectory(L"Choose session save folder", utils::GetParentDirectory(_currentJamPath));
+	{
+		try { folder = _pickSessionDirectory ? _pickSessionDirectory(utils::GetParentDirectory(_currentJamPath))
+			: utils::PickDirectory(L"Choose session save folder", utils::GetParentDirectory(_currentJamPath)); }
+		catch (const std::exception& error)
+		{ Begin(None); ReportFileOutcome(std::string("Save folder selection failed: ") + error.what()); return; }
+	}
 	if (folder.empty()) { Begin(SessionControl::None); return; }
 	_pendingSaveAsDefault = asDefault; _pendingSaveFolder = std::move(folder); Begin(SessionControl::Save);
 	ReportFileStatus("Waiting to capture session");
@@ -521,6 +536,13 @@ void SessionControl::_ApplyAdmittedOperation(const audio::AudioStreamParams& act
 		_input->SuspendMidiDispatch();
 		for (const auto& station : access.Stations) if (station) station->ResetLiveMidiWhileQuiescent();
 		// With producers excluded and callbacks drained, capture-start wins deterministically.
+		if (Current() == ResetSession)
+		{
+			if (effects.CheckEligibility().StructuralBusy || !effects.ResetSessionWhileQuiescent)
+				ReportFileOutcome("Another operation is busy; retry Reset All");
+			else { effects.ResetSessionWhileQuiescent(); ClearJamDestination(); ReportFileOutcome("Session reset"); }
+			FinishOperation(nullptr, access); return;
+		}
 		if (Current() != SessionControl::Midi && effects.CheckEligibility().CaptureBusy)
 		{
 			if (Current() == SessionControl::Audio) _SetDeviceStatus("Waiting for recording");
