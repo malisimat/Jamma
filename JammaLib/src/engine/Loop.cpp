@@ -491,9 +491,9 @@ unsigned int Loop::ReadBlock(float* outBuf,
             const auto storage = constants::MaxLoopFadeSamps + body;
             if (storage >= bufBankSize) return 0.0f;
             const auto sample = readSource(storage, frame);
-            if (_loopParams.FadeSamps && body >= loopLength - _loopParams.FadeSamps)
+            if (_loopParams.FadeSamps && storage >= bufSize - _loopParams.FadeSamps)
             {
-                const auto fadeIndex = body - (loopLength - _loopParams.FadeSamps);
+                const auto fadeIndex = storage - (bufSize - _loopParams.FadeSamps);
                 const auto prefix = constants::MaxLoopFadeSamps + fadeIndex - _loopParams.FadeSamps;
                 return _hanning->Mix(readSource(prefix, frame), sample, fadeIndex);
             }
@@ -1938,13 +1938,20 @@ void engine::Loop::_AdvancePlaybackOffset(unsigned int numSamps) noexcept
 void engine::Loop::_InitialisePlaybackOffset() noexcept
 {
     const auto length = LoopLength();
-    const auto generation = AudioSourceGeneration();
-    if (_playbackOffsetInitialised && _playbackOffsetLength == length && _playbackOffsetGeneration == generation) return;
+    if (_playbackOffsetInitialised)
+    {
+        if (_playbackOffsetLength == length) return;
+        // Content writes/punches keep this trajectory. A geometry replacement
+        // keeps its applied offset and cancels only the old-length ramp.
+        _playbackOffsetEnd = _playbackOffsetStart;
+        _playbackOffsetRate = 0.0;
+        _playbackOffsetLength = length;
+        return;
+    }
     _playbackOffsetStart = _playbackOffsetEnd = static_cast<double>(PlaybackOffsetSamps());
     _playbackOffsetRate = 0.0;
     _playbackOffsetInitialised = true;
     _playbackOffsetLength = length;
-    _playbackOffsetGeneration = generation;
     _appliedPlaybackOffsetSamps.store(_playbackOffsetStart, std::memory_order_relaxed);
     _playbackOffsetPublished.store(true, std::memory_order_release);
 }

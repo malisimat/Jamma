@@ -507,7 +507,6 @@ namespace engine
 		bool _playbackOffsetInitialised = false;
 		double _playbackOffsetStart = 0.0, _playbackOffsetEnd = 0.0, _playbackOffsetRate = 0.0;
 		unsigned long _playbackOffsetLength = 0ul;
-		std::uint64_t _playbackOffsetGeneration = 0u;
 		double _PlaybackOffsetAtFrame(unsigned int frame) const noexcept;
 		void _AdvancePlaybackOffset(unsigned int numSamps) noexcept;
 		void _InitialisePlaybackOffset() noexcept;
