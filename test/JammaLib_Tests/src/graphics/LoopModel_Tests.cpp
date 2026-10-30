@@ -17,7 +17,7 @@ using graphics::VuParams;
 static constexpr auto GrainVertFloatCount = 72u;
 static constexpr auto GrainUvFloatCount = 48u;
 static constexpr auto MeshMinHeight = 1.0f;
-static constexpr auto MeshHeightScale = 100.0f;
+static constexpr auto MeshHeightScale = 200.0f;
 
 TEST(MidiGridVisual, ExactBoundariesReachBothSeamEdges)
 {
@@ -516,12 +516,12 @@ TEST(LoopModelVisualBounds, ExaggerationAndSharedBandFitPreserveRelativeAmplitud
 	GraphicsTestLoopModel quiet, loud;
 	quiet.UpdateModel(quietBuffer, 32, 0, 100);
 	loud.UpdateModel(loudBuffer, 32, 0, 120);
-	EXPECT_NEAR(27.0f, quiet.UnfittedHalfHeight(), 0.001f);
-	EXPECT_NEAR(105.0f, loud.UnfittedHalfHeight(), 0.001f);
+	EXPECT_NEAR(53.0f, quiet.UnfittedHalfHeight(), 0.001f);
+	EXPECT_NEAR(209.0f, loud.UnfittedHalfHeight(), 0.001f);
 	const auto scale = LoopModel::FitSceneHeight(loud.UnfittedHalfHeight(), 80.0f);
 	quiet.SetSceneHeightScale(scale); loud.SetSceneHeightScale(scale);
 	EXPECT_NEAR(40.0f, loud.CameraLocalBounds().Max.Y, 0.001f);
-	EXPECT_NEAR(27.0f / 105.0f, quiet.CameraLocalBounds().Max.Y / loud.CameraLocalBounds().Max.Y, 0.001f);
+	EXPECT_NEAR(53.0f / 209.0f, quiet.CameraLocalBounds().Max.Y / loud.CameraLocalBounds().Max.Y, 0.001f);
 	EXPECT_FLOAT_EQ(1.0f, LoopModel::FitSceneHeight(105.0f, 300.0f));
 	EXPECT_FLOAT_EQ(1.0f, LoopModel::FitSceneHeight(0.0f, 0.0f));
 	EXPECT_FLOAT_EQ(0.0f, LoopModel::FitSceneHeight(105.0f, 0.0f));
@@ -555,4 +555,21 @@ TEST(LoopModelPicker, ModestMeshClosesSeamAndRetainsEditorUvEdges)
 		EXPECT_GT(verts[i * 3 + 2], 0.0f);
 	}
 	EXPECT_TRUE(left); EXPECT_TRUE(right);
+}
+
+TEST(LoopModelVisualBounds, TransformedLoudChannelFitsNinetyFourPercentTakeBand)
+{
+	auto buffer = MakeBuffer(32u);
+	buffer[0] = -0.4f; buffer[1] = 0.8f;
+	GraphicsTestLoopModel model;
+	model.UpdateModel(buffer, 32u, 0u, 120.0f);
+	constexpr float ringScale = 1.7f, takeHeight = 100.0f;
+	model.SetSceneHeightScale(LoopModel::FitSceneHeight(model.UnfittedHalfHeight() * ringScale,
+		takeHeight * 0.94f));
+	const auto bounds = model.CameraLocalBounds().Transformed({10.0f, 20.0f, 30.0f}, ringScale);
+	EXPECT_NEAR(67.0f, bounds.Max.Y, 0.001f);
+	EXPECT_NEAR(-27.0f, bounds.Min.Y, 0.001f);
+	EXPECT_NEAR(94.0f, bounds.Max.Y - bounds.Min.Y, 0.001f);
+	EXPECT_NEAR(30.0f + 126.0f * ringScale, bounds.Max.Z, 0.001f);
+	EXPECT_NEAR(35.0f, 2.0f * ringScale * LoopModel::PickerLocalHalfHeight(takeHeight, ringScale), 0.001f);
 }
