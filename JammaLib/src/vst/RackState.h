@@ -3,7 +3,6 @@
 #include <array>
 #include <atomic>
 #include <cstdint>
-#include <functional>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -46,17 +45,16 @@ namespace vst
 		std::shared_ptr<IVstPlugin> GetVstPlugin(std::size_t index) const;
 		std::size_t RackSlotCount() const;
 		std::string RackDiagnostic() const;
-		std::optional<std::vector<int>> SetLiveVstChannelRoutes(std::array<midi::LiveVstChannelRoute,16> routes,
+		std::optional<std::vector<int>> SetMidiChannelRoutes(std::array<midi::MidiChannelRoute,16> routes,
 			std::uint64_t revision, const std::vector<int>& allowedMidiChannels);
 		bool ClearChannelRoutes(std::uint16_t removedMask);
-		const std::array<midi::LiveVstChannelRoute,16>& LiveChannelRoutes() const { return _liveVstChannelRoutes; }
-		void RestoreLiveChannelRoutes(std::array<midi::LiveVstChannelRoute,16> routes) { _liveVstChannelRoutes = std::move(routes); }
+		const std::array<midi::MidiChannelRoute,16>& ChannelRoutes() const { return _midiChannelRoutes; }
 		std::uint64_t Revision() const noexcept { return _rackRevision.load(); }
 		bool Inactive() const noexcept { return _rackInactive; }
 		bool LatencySuspended() const noexcept { return _rackLatencySuspended; }
 		static bool LatencyFeasible(const VstChain& chain, std::uint64_t maxChildLatency) noexcept;
 		bool UpdateLatencyFeasibility(bool feasible, bool canResume);
-		bool RemoveInactiveRackSlot(std::size_t ordinal, std::uint64_t revision, const std::function<void(std::size_t)>& removedSlot);
+		bool RemoveInactiveRackSlot(std::size_t ordinal, std::uint64_t revision);
 		bool ClearInactiveRackRoutes(std::uint64_t revision);
 		bool RecoverRack(std::uint64_t revision, std::size_t retiredDestinations);
 		bool LoadVstPluginSynchronously(const std::wstring& path, const std::vector<std::uint8_t>& initialState,
@@ -66,8 +64,8 @@ namespace vst
 		bool TryGroupVstEntries(std::vector<io::JamFile::VstEntry>& output) const;
 		bool TryRestoreGroupVstEntry(const io::JamFile::VstEntry& entry);
 		actions::ActionResult OnAction(actions::JobAction action, const Format& format, const std::string& ownerName,
-			std::size_t retiredDestinations, const std::function<void(std::size_t)>& removedSlot);
-		void RestoreSaved(const std::vector<io::JamFile::VstEntry>& entries, std::array<midi::LiveVstChannelRoute,16> routes, bool inactive);
+			std::size_t retiredDestinations);
+		void RestoreSaved(const std::vector<io::JamFile::VstEntry>& entries, std::array<midi::MidiChannelRoute,16> routes, bool inactive);
 		static void RetireChain(std::shared_ptr<VstChain> chain);
 		void RetireChainsOnUiThread() const;
 		void ClearAfterReadersStopped();
@@ -95,7 +93,7 @@ namespace vst
 		std::vector<std::string> _pendingDeletedVstRouteIds; // _vstPathsMutex.
 		// Serialized structural owner writes; UI/export reads under Scene's owner
 		// lock. Audio sees only prepared lists/policy in its immutable snapshot.
-		std::array<midi::LiveVstChannelRoute, 16> _liveVstChannelRoutes{};
+		std::array<midi::MidiChannelRoute, 16> _midiChannelRoutes{};
 		std::atomic<std::uint64_t> _rackRevision{1u}; // UI/job metadata publication; audio never reads.
 		std::vector<std::string> _pendingRackIds; // _vstPathsMutex; completion clears by identity.
 		std::vector<std::pair<std::string, std::wstring>> _failedInteractiveVstLoads; // Bounded UI notices, _vstPathsMutex.

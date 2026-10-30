@@ -363,21 +363,6 @@ TEST(JamFile, RoundTripsUninitialisedCurrentTransport)
 	EXPECT_FALSE(JamFile::FromStream(std::stringstream(malformed)).has_value());
 }
 
-TEST(JamFile, PreservesZeroIndexedMidiRoute)
-{
-	const auto loop = std::regex_replace(std::regex_replace(LoopString, std::regex("%NAME%"), "loop.wav"), std::regex("%INDEX%"), "1");
-	const auto text = "{\"name\":\"station\",\"takes\":[{\"name\":\"take\",\"loops\":[" + loop
-		+ "]}],\"midiRoutes\":[{\"outputIndex\":0,\"pluginIndex\":0,\"live\":false}]}";
-	auto root = Json::FromStream(std::stringstream(text));
-	ASSERT_TRUE(root.has_value());
-	auto station = JamFile::Station::FromJson(std::get<Json::JsonPart>(*root));
-	ASSERT_TRUE(station.has_value());
-	ASSERT_EQ(1u, station->MidiRoutes.size());
-	EXPECT_EQ(0u, station->MidiRoutes[0].OutputIndex);
-	EXPECT_EQ(0u, station->MidiRoutes[0].PluginIndex);
-	EXPECT_FALSE(station->MidiRoutes[0].IsLive);
-}
-
 TEST(JamFile, RoundTripsTakeAndStationAudioRoutes)
 {
 	const auto loop = std::regex_replace(std::regex_replace(LoopString, std::regex("%NAME%"), "loop.wav"), std::regex("%INDEX%"), "1");
@@ -956,4 +941,16 @@ TEST(JamFileGroups, DuplicateExplicitEntityIdentityIsRejected)
     EXPECT_EQ("Duplicate or invalid session identity", error);
     jam.Stations[1].VstChain[0].Id.clear(); // Legacy missing ID is assigned on construction.
     EXPECT_TRUE(io::PerformanceGroupPersistence::ValidateIdentities(jam));
+}
+
+TEST(JamFile, BuiltInNewSessionEnablesEveryMidiChannelWithoutCables)
+{
+	auto parsed = JamFile::FromStream(std::stringstream(JamFile::DefaultJson));
+	ASSERT_TRUE(parsed); ASSERT_FALSE(parsed->Stations.empty());
+	const std::vector<int> allChannels{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16};
+	for (const auto& station : parsed->Stations)
+	{
+		EXPECT_EQ(allChannels, station.AllowedMidiChannels);
+		for (const auto& route : station.MidiChannelRoutes) EXPECT_TRUE(route.PluginIds.empty());
+	}
 }

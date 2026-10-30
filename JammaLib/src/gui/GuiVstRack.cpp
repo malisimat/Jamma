@@ -372,9 +372,7 @@ void GuiVstRack::SetAllowedMidiChannels(const std::vector<int>& channels)
 bool GuiVstRack::ChannelShownActive(unsigned int channel) const noexcept
 {
 	if (channel >= _allowedChannels.size()) return false;
-	// Display cables even when the separate live-input filter excludes this channel.
-	return _allowedChannels[channel] || (_model.ChannelRoutes[channel].Explicit &&
-		!_model.ChannelRoutes[channel].PluginIds.empty());
+	return _allowedChannels[channel];
 }
 
 void GuiVstRack::_RefreshChannelToggles()
@@ -523,10 +521,6 @@ void GuiVstRack::_UpdateDrag(Position2d point)
 void GuiVstRack::_RemoveLink(Routes& routes, const Link& link) const
 {
 	auto& route = routes[link.Channel]; std::erase(route.PluginIds, link.Id);
-	const auto anyValid = std::any_of(route.PluginIds.begin(), route.PluginIds.end(), [&](const auto& id) {
-		return std::any_of(_rows.begin(), _rows.end(), [&](const auto& row) { return row.Id == id && row.Eligible; });
-	});
-	if (!anyValid) route = {}; // A user disconnect of the final valid target restores Broadcast.
 }
 
 void GuiVstRack::_FinishDrag()
@@ -552,7 +546,7 @@ void GuiVstRack::_FinishDrag()
 		const auto channel = drag->MoveSource ? drag->Snap->MidiChannel.value() : drag->Channel;
 		const auto& id = drag->MoveSource ? drag->Id : drag->Snap->PluginId;
 		if (drag->Original && channel == drag->Original->Channel && id == drag->Original->Id) return;
-		auto& route = command.ChannelRoutes[channel]; route.Explicit = true;
+		auto& route = command.ChannelRoutes[channel];
 		if (std::find(route.PluginIds.begin(), route.PluginIds.end(), id) == route.PluginIds.end()) route.PluginIds.push_back(id);
 	}
 	else if (!drag->Original) return;
@@ -656,7 +650,7 @@ ActionResult GuiVstRack::OnAction(TouchAction action)
 	}
 	if (action.Index == 0 && action.State == TouchAction::TOUCH_DOWN)
 	{
-		// An explicit empty/broken channel can always be restored to Broadcast.
+		// Disconnect all cables on this channel. Enabled channels then broadcast.
 		if ((action.Modifiers & base::Action::MODIFIER_ALT) && !_collapsed && _model.Editable && !_model.Inactive)
 		{
 			std::vector<CableInteraction::Endpoint> endpoints; std::vector<CableInteraction::Cable> cables; std::vector<Link> links;

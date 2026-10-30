@@ -28,7 +28,7 @@
 #include "../midi/MidiDelivery.h"
 #include "../midi/CaptureHistory.h"
 #include "../midi/AutomationPlayback.h"
-#include "../midi/MidiVstOutputSink.h"
+#include "../midi/MidiChannelRoute.h"
 #include "../vst/VstChain.h"
 
 namespace engine
@@ -63,7 +63,6 @@ namespace engine
 			StationLevelFallRate(0.01f)
 		{
 		}
-
 	public:
 		std::string Name;
 		std::string Id;
@@ -85,8 +84,6 @@ namespace engine
 			STATIONPANEL_ROUTER
 		};
 
-		static constexpr unsigned int LiveMidiOutputIndex = midi::LiveMidiOutputIndex;
-
 	public:
 		Station(StationParams params,
 			audio::AudioMixerParams mixerParams);
@@ -95,7 +92,6 @@ namespace engine
 		// Copy
 		Station(const Station&) = delete;
 		Station& operator=(const Station&) = delete;
-
 	public:
 		static std::optional<std::shared_ptr<Station>> FromFile(StationParams stationParams,
 			audio::AudioMixerParams mixerParams,
@@ -268,20 +264,10 @@ namespace engine
 		void FlushLiveHeldMidiNotes() noexcept;
 		void FlushLiveHeldMidiNotesForDevice(const std::string& deviceName) noexcept;
 		void FlushPendingLostLiveMidiNotes() noexcept;
-		// Replacement semantics: one MIDI output routes to at most one plugin.
-		void SetMidiVstRoute(unsigned int midiOutputIndex, size_t vstIndex);
-		void ClearMidiVstRoutes();
-		// Non-RT persistence transfer. The audio callback continues to consume only
-		// immutable, retained snapshots; these methods never mutate one in place.
-		midi::MidiVstRoutingSnapshot SnapshotMidiVstRoutesForExport() const;
-		bool RestoreMidiVstRoutes(const midi::MidiVstRoutingSnapshot& routes,
-			size_t loadedPluginCount);
-
 		// Startup restoration on a fresh station, before it is admitted to an audio
 		// reader. Preserve unavailable/raw saved rack data for explicit recovery.
 		void RestoreSavedRack(const std::vector<io::JamFile::VstEntry>& entries,
-			std::array<midi::LiveVstChannelRoute, 16> routes, bool inactive);
-		void RestoreLiveVstRoutesBeforePublication(std::array<midi::LiveVstChannelRoute, 16> routes);
+			std::array<midi::MidiChannelRoute, 16> routes, bool inactive);
 
 		// VST chain management (non-RT, queued through the job thread).
 		// LoadVstPlugin queues an async load; once the load completes the plugin
@@ -305,12 +291,12 @@ namespace engine
 		bool RecoverRack(std::uint64_t revision);
 		bool RemoveInactiveRackSlot(std::size_t ordinal, std::uint64_t revision);
 		bool ClearInactiveRackRoutes(std::uint64_t revision);
-		bool SetLiveVstChannelRoutes(std::array<midi::LiveVstChannelRoute, 16> routes, std::uint64_t revision);
+		bool SetMidiChannelRoutes(std::array<midi::MidiChannelRoute, 16> routes, std::uint64_t revision);
 		void RefreshRackLatency(); // Existing non-RT latency pump, serialized by Scene.
 		bool LoadManagedVstSlot(std::wstring path, const std::string& retryIdentity = {}, bool discardOnFailure = false);
 		std::optional<std::wstring> TakeFailedInteractiveVstLoad(const std::string& identity);
-		bool SetLiveVstChannelRoute(unsigned int channel, midi::LiveVstChannelRoute route, std::uint64_t revision);
-		const std::array<midi::LiveVstChannelRoute, 16>& LiveVstChannelRoutes() const noexcept { return _rackState.LiveChannelRoutes(); }
+		bool SetMidiChannelRoute(unsigned int channel, midi::MidiChannelRoute route, std::uint64_t revision);
+		const std::array<midi::MidiChannelRoute, 16>& MidiChannelRoutes() const noexcept { return _rackState.ChannelRoutes(); }
 		std::uint64_t RackRevision() const noexcept { return _rackState.Revision(); }
 		bool RackInactive() const noexcept { return _rackState.Inactive(); }
 		bool RackLatencySuspended() const noexcept { return _rackState.LatencySuspended(); }
@@ -403,8 +389,6 @@ namespace engine
 		std::optional<std::shared_ptr<LoopTake>> _TryGetTake(std::string id);
 		void _SetTakePresentation(LoopTake& take, LoopTake::PresentationMode mode) noexcept;
 		void _WireVuSliders();
-		using MidiVstRoutingSnapshot = midi::MidiVstRoutingSnapshot;
-		static constexpr std::size_t MaxMidiVstRouteOutputs = 4096u;
 
 		// --- WriteBlock helpers (audio thread) ---
 
@@ -484,7 +468,6 @@ namespace engine
 		vst::RackState _rackState;
 		vst::RackState::Format _RackFormat() const;
 		bool _RackLatencyFeasible(const vst::VstChain& chain) const noexcept;
-		void _CompactMidiVstRoutesAfterRemoval(std::size_t index); // Rack calls under its metadata mutex.
 		midi::MidiDelivery _midiDelivery;
 		midi::CaptureHistory _captureHistory;
 		// Coherent correspondence: callback writes, structural owner reads via
@@ -500,10 +483,6 @@ namespace engine
 		std::vector<int> _allowedMidiChannels;
 		std::atomic<bool> _membershipRemoving{ false }; // Scene owner writes, UI/job readers; station lifetime pins teardown.
 		std::atomic<std::uint16_t> _allowedMidiChannelMask{ 0u };
-		// Route snapshots are published off the audio thread.
-		// The callback reads an immutable snapshot pointer for O(1) lookups.
-		std::atomic<const MidiVstRoutingSnapshot*> _midiVstRoutes;
-		std::vector<std::unique_ptr<MidiVstRoutingSnapshot>> _retainedMidiVstRoutes;
 
 		// Sample rate and block size captured at SetupBuffers time; needed to
 		// initialise a newly loaded plugin (IVstPlugin: VST2 or VST3).

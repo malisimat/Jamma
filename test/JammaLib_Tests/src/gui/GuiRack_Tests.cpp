@@ -66,7 +66,6 @@ TEST(GuiRack, RestoredSlotsReplaceMissingCableRowsAndRetainFailedSlots)
 	view->Init();
 	gui::GuiVstRack::Model model;
 	model.Editable = true;
-	model.ChannelRoutes[3].Explicit = true;
 	model.ChannelRoutes[3].PluginIds = {"serum"};
 	view->Update(model, {});
 	ASSERT_TRUE(view->SlotButton(0u));
@@ -101,7 +100,7 @@ TEST(GuiRack, SharedSlotViewPreservesCapturedIdentityScrollAndHiddenCableEndpoin
 		gui::GuiVstRack::Slot slot; slot.Value.Identity = "slot-" + std::to_string(i);
 		slot.Value.Failed = true; model.Slots.push_back(std::move(slot));
 	}
-	model.ChannelRoutes[2] = {true, {"slot-0", "missing-slot"}};
+	model.ChannelRoutes[2] = {{"slot-0", "missing-slot"}};
 	std::vector<gui::GuiVstRack::Command> commands;
 	const auto submit = [&](auto command) { commands.push_back(std::move(command)); };
 	view->Update(model, submit);
@@ -115,14 +114,14 @@ TEST(GuiRack, SharedSlotViewPreservesCapturedIdentityScrollAndHiddenCableEndpoin
 	EXPECT_TRUE(view->OnAction(key).IsEaten);
 	EXPECT_TRUE(view->ChannelsCollapsed());
 	EXPECT_EQ(gui::GuiToggleParams::TOGGLE_OFF, expander->GetToggleState());
-	EXPECT_TRUE(view->ChannelShownActive(2u)); // Cable visibility is separate from live-input admission.
+	EXPECT_FALSE(view->ChannelShownActive(2u)); // Cable identity does not override enabled state.
 	EXPECT_FALSE(view->ChannelShownActive(3u));
 	rack->SetAllowedMidiChannels({1}, true);
 	EXPECT_TRUE(view->ChannelShownActive(0u));
-	EXPECT_TRUE(view->ChannelShownActive(2u));
+	EXPECT_FALSE(view->ChannelShownActive(2u));
 	rack->SetAllowedMidiChannels({}, true);
 	EXPECT_FALSE(view->ChannelShownActive(0u));
-	EXPECT_TRUE(view->ChannelShownActive(2u));
+	EXPECT_FALSE(view->ChannelShownActive(2u));
 	EXPECT_EQ(0, filterChanges);
 	EXPECT_TRUE(commands.empty());
 	ASSERT_GT(view->SlotScroll()->MaxScrollOffset(), 0);
@@ -165,7 +164,7 @@ TEST(GuiRack, SharedSlotViewPreservesCapturedIdentityScrollAndHiddenCableEndpoin
 	EXPECT_EQ(1u, commands.size());
 	EXPECT_EQ(2, filterChanges);
 	EXPECT_TRUE(lastAllowedChannels.empty());
-	EXPECT_TRUE(view->ChannelShownActive(2u)); // Disabling input does not erase the displayed cable.
+	EXPECT_FALSE(view->ChannelShownActive(2u)); // Retained repair geometry does not light a disabled channel.
 	model.ChannelRoutes[2] = {};
 	model.Revision = 6u; view->Update(model, submit);
 	EXPECT_FALSE(view->ChannelShownActive(2u));

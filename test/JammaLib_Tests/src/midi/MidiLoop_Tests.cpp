@@ -1076,7 +1076,7 @@ TEST(LoopTakeMidiTiming, MidiOnlyMasterUsesPressIntervalAndStopPhase)
 		CheckFirstMidiMasterBoundary(configuredGrain, stopAge, publicationDelay, 0u);
 }
 
-TEST(LoopTakeMidiTiming, FirstCaptureAfterLegacyEmptySessionUsesTriggerInterval)
+TEST(LoopTakeMidiTiming, FirstCaptureAfterLoadedEmptySessionUsesTriggerInterval)
 {
 	io::JamFile jam;
 	jam.TransportInitialised = true;
@@ -1086,6 +1086,7 @@ TEST(LoopTakeMidiTiming, FirstCaptureAfterLegacyEmptySessionUsesTriggerInterval)
 	io::JamFile::Station descriptor{};
 	descriptor.Name = "Kontakt";
 	descriptor.StationType = 0u;
+	descriptor.AllowedMidiChannels = {1};
 	jam.Stations.push_back(descriptor);
 	auto rig = io::RigFile::FromStream(std::stringstream(io::RigFile::DefaultJson));
 	ASSERT_TRUE(rig);

@@ -6,7 +6,7 @@
 #include "GuiLabel.h"
 #include "CableInteraction.h"
 #include "../vst/VstRackSlot.h"
-#include "../midi/MidiVstOutputSink.h"
+#include "../midi/MidiChannelRoute.h"
 #include <array>
 #include <functional>
 
@@ -19,7 +19,7 @@ namespace gui
 	class GuiVstRack : public base::GuiElement
 	{
 	public:
-		using Routes = std::array<midi::LiveVstChannelRoute, 16>;
+		using Routes = std::array<midi::MidiChannelRoute, 16>;
 		struct Command
 		{
 			enum class Kind { Slot, Append, Recover, ClearInactiveRoutes, Diagnostic, Routes };

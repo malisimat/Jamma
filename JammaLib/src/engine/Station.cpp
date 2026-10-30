@@ -84,10 +84,8 @@ Station::Station(StationParams params,
 	_backAudioMixers(),
 	_audioBuffers(),
 	_backAudioBuffers(),
-	_allowedMidiChannels(),
-	_allowedMidiChannelMask(0u),
-	_midiVstRoutes(nullptr),
-	_retainedMidiVstRoutes(),
+	_allowedMidiChannels({1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16}),
+	_allowedMidiChannelMask(0xffffu),
 	_sampleRate(44100.0f),
 	_blockSize(512u),
 	_vstBlockScratch(),
@@ -120,14 +118,9 @@ std::optional<std::shared_ptr<Station>> Station::FromFile(StationParams stationP
 }
 
 void Station::RestoreSavedRack(const std::vector<io::JamFile::VstEntry>& entries,
-	std::array<midi::LiveVstChannelRoute, 16> routes, bool inactive)
+	std::array<midi::MidiChannelRoute, 16> routes, bool inactive)
 {
 	_rackState.RestoreSaved(entries, std::move(routes), inactive);
-}
-
-void Station::RestoreLiveVstRoutesBeforePublication(std::array<midi::LiveVstChannelRoute, 16> routes)
-{
-	_rackState.RestoreLiveChannelRoutes(std::move(routes));
 }
 
 std::vector<std::vector<unsigned long>> Station::SnapshotAudioRoutesForExport() const
@@ -603,7 +596,7 @@ void Station::_RunVstBlock(vst::VstChain* chain,
 		chain->BeginMidiBlock(blockStartSample, sampsToRead);
 	}
 	_midiDelivery.ProcessBlock(state.Midi, state.OwnedLoopTakes, state.InstrumentPtrs,
-		vstActive, _membershipRemoving, _allowedMidiChannelMask, sampsToRead, blockStartSample);
+		vstActive, _membershipRemoving, sampsToRead, blockStartSample);
 	if (!vstActive) return;
 	chain->ProcessRack(state.VstBlockPtrs.data(), state.InstrumentPtrs.data(), static_cast<int>(state.VstRenderChannels), sampsToRead);
 	midi::MidiDelivery::RecoverSkippedBlocks(state.Midi);
@@ -2055,11 +2048,10 @@ void Station::SetAllowedMidiChannels(const std::vector<int>& channels)
 
 	_allowedMidiChannels = std::move(filtered);
 	_allowedMidiChannelMask.store(mask, std::memory_order_release);
-	if (_rackState.ClearChannelRoutes(removedMask))
-	{
-		_PublishAudioState();
-		_changesMade = true;
-	}
+	_rackState.ClearChannelRoutes(removedMask);
+	// Publish the enable mask and cables together, even for a mask-only edit.
+	_PublishAudioState();
+	_changesMade = true;
 
 	if (_guiRack)
 		_guiRack->SetAllowedMidiChannels(_allowedMidiChannels, true);
@@ -2119,71 +2111,6 @@ void Station::FlushLiveHeldMidiNotesForDevice(const std::string& deviceName) noe
 void Station::FlushPendingLostLiveMidiNotes() noexcept
 {
 	_captureHistory.FlushPendingReleases(_midiDelivery);
-}
-
-void Station::SetMidiVstRoute(unsigned int midiOutputIndex, size_t vstIndex)
-{
-	const auto* current = _midiVstRoutes.load(std::memory_order_acquire);
-	auto nextRoutes = current ?
-		std::make_unique<MidiVstRoutingSnapshot>(*current) :
-		std::make_unique<MidiVstRoutingSnapshot>();
-
-	if (midiOutputIndex == LiveMidiOutputIndex)
-	{
-		nextRoutes->LivePlugin = vstIndex;
-	}
-	else
-	{
-		if (midiOutputIndex >= nextRoutes->PluginByMidiOutput.size())
-			nextRoutes->PluginByMidiOutput.resize(static_cast<size_t>(midiOutputIndex) + 1u,
-				MidiVstRoutingSnapshot::NoPlugin);
-		nextRoutes->PluginByMidiOutput[midiOutputIndex] = vstIndex;
-	}
-
-	const auto* published = nextRoutes.get();
-	_retainedMidiVstRoutes.push_back(std::move(nextRoutes));
-	_midiVstRoutes.store(published, std::memory_order_release);
-	_PublishAudioState();
-}
-
-void Station::ClearMidiVstRoutes()
-{
-	auto nextRoutes = std::make_unique<MidiVstRoutingSnapshot>();
-	const auto* published = nextRoutes.get();
-	_retainedMidiVstRoutes.push_back(std::move(nextRoutes));
-	_midiVstRoutes.store(published, std::memory_order_release);
-	_PublishAudioState();
-}
-
-Station::MidiVstRoutingSnapshot Station::SnapshotMidiVstRoutesForExport() const
-{
-	const auto* current = _midiVstRoutes.load(std::memory_order_acquire);
-	return current ? *current : MidiVstRoutingSnapshot{};
-}
-
-bool Station::RestoreMidiVstRoutes(const MidiVstRoutingSnapshot& routes,
-	size_t loadedPluginCount)
-{
-	if (routes.PluginByMidiOutput.size() > MaxMidiVstRouteOutputs)
-		return false;
-
-	auto isValidPlugin = [loadedPluginCount](size_t pluginIndex) noexcept {
-		return pluginIndex == MidiVstRoutingSnapshot::NoPlugin || pluginIndex == MidiVstRoutingSnapshot::MissingPlugin || pluginIndex < loadedPluginCount;
-	};
-	if (!isValidPlugin(routes.LivePlugin))
-		return false;
-	for (const auto pluginIndex : routes.PluginByMidiOutput)
-		if (!isValidPlugin(pluginIndex))
-			return false;
-
-	// Copy before publishing. Retained ownership prevents the callback from
-	// observing freed route storage after the atomic pointer handoff.
-	auto restored = std::make_unique<MidiVstRoutingSnapshot>(routes);
-	const auto* published = restored.get();
-	_retainedMidiVstRoutes.push_back(std::move(restored));
-	_midiVstRoutes.store(published, std::memory_order_release);
-	_PublishAudioState();
-	return true;
 }
 
 unsigned int Station::_CalcTakeHeight(unsigned int stationHeight, unsigned int numTakes)
@@ -2432,7 +2359,7 @@ void Station::_PublishAudioState()
 	const auto previous = _AudioStateSnapshot();
 	_midiDelivery.Prepare(state->Midi, previous ? &previous->Midi : nullptr,
 		(_rackState.Inactive() || _rackState.LatencySuspended()) ? nullptr : _rackState.ActiveChain(),
-		state->OwnedLoopTakes, _midiVstRoutes.load(std::memory_order_acquire), _rackState.LiveChannelRoutes(),
+		state->OwnedLoopTakes, _allowedMidiChannelMask.load(std::memory_order_acquire), _rackState.ChannelRoutes(),
 		static_cast<unsigned int>(state->AudioBuffers.size()));
 	state->VstRenderChannels = static_cast<unsigned int>(state->AudioBuffers.size());
 	for (const auto& destination : state->Midi.MidiDestinations) state->VstRenderChannels = std::max(state->VstRenderChannels, destination->RenderChannels);
@@ -2666,17 +2593,17 @@ bool Station::UnloadManagedVstPlugin(const std::string& identity)
 	return accepted;
 }
 
-bool Station::SetLiveVstChannelRoute(unsigned int channel, midi::LiveVstChannelRoute route, std::uint64_t revision)
+bool Station::SetMidiChannelRoute(unsigned int channel, midi::MidiChannelRoute route, std::uint64_t revision)
 {
 	if (channel >= 16u) return false;
-	auto routes = _rackState.LiveChannelRoutes();
+	auto routes = _rackState.ChannelRoutes();
 	routes[channel] = std::move(route);
-	return SetLiveVstChannelRoutes(std::move(routes), revision);
+	return SetMidiChannelRoutes(std::move(routes), revision);
 }
 
-bool Station::SetLiveVstChannelRoutes(std::array<midi::LiveVstChannelRoute, 16> routes, std::uint64_t revision)
+bool Station::SetMidiChannelRoutes(std::array<midi::MidiChannelRoute, 16> routes, std::uint64_t revision)
 {
-	auto allowed = _rackState.SetLiveVstChannelRoutes(std::move(routes), revision, _allowedMidiChannels);
+	auto allowed = _rackState.SetMidiChannelRoutes(std::move(routes), revision, _allowedMidiChannels);
 	if (!allowed) return false;
 	if (allowed->size() != _allowedMidiChannels.size()) SetAllowedMidiChannels(*allowed);
 	_PublishAudioState();
@@ -2707,23 +2634,6 @@ bool Station::_RackLatencyFeasible(const vst::VstChain& chain) const noexcept
 	return vst::RackState::LatencyFeasible(chain, _RackFormat().MaxChildLatency);
 }
 
-void Station::_CompactMidiVstRoutesAfterRemoval(std::size_t removedIndex)
-{
-	if (const auto* current = _midiVstRoutes.load(std::memory_order_acquire))
-	{
-		auto routes = std::make_unique<MidiVstRoutingSnapshot>(*current);
-		auto compact = [removedIndex](std::size_t& index) {
-			if (index == removedIndex) index = MidiVstRoutingSnapshot::MissingPlugin;
-			else if (index != MidiVstRoutingSnapshot::NoPlugin && index != MidiVstRoutingSnapshot::MissingPlugin && index > removedIndex) --index;
-		};
-		compact(routes->LivePlugin);
-		for (auto& index : routes->PluginByMidiOutput) compact(index);
-		const auto* published = routes.get();
-		_retainedMidiVstRoutes.push_back(std::move(routes));
-		_midiVstRoutes.store(published, std::memory_order_release);
-	}
-}
-
 void Station::RefreshRackLatency()
 {
 	if (_rackState.Inactive()) return;
@@ -2742,8 +2652,7 @@ void Station::RefreshRackLatency()
 
 bool Station::RemoveInactiveRackSlot(std::size_t ordinal, std::uint64_t revision)
 {
-	const bool accepted = _rackState.RemoveInactiveRackSlot(ordinal, revision,
-		[this](std::size_t index) { _CompactMidiVstRoutesAfterRemoval(index); });
+	const bool accepted = _rackState.RemoveInactiveRackSlot(ordinal, revision);
 	if (accepted) _changesMade = true;
 	return accepted;
 }
@@ -2802,8 +2711,7 @@ ActionResult Station::OnAction(JobAction action)
 	if (MembershipRemoving()) return ActionResult::NoAction();
 	const auto state = _AudioStateSnapshot();
 	auto result = _rackState.OnAction(std::move(action), _RackFormat(), Name(),
-		state ? state->Midi.RetiredMidiDestinations.size() : 0u,
-		[this](std::size_t index) { _CompactMidiVstRoutesAfterRemoval(index); });
+		state ? state->Midi.RetiredMidiDestinations.size() : 0u);
 	if (result.IsEaten) _changesMade = true;
 	return result;
 }

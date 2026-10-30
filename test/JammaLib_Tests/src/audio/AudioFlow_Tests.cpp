@@ -2048,7 +2048,7 @@ TEST(AudioCallbackRealtime, MidiPublicationCableCancellationAndRetirementRetryDo
 		MidiEvent{512u, 0xb1u, 64u, 0u}, MidiEvent::MakeNoteOff(512u, 1u, 62u)};
 	take->GetMidiLoops().at(0u)->ReplaceRecordedEvents(events.data(), events.size(), 1000u);
 	station->AddTake(take); station->CommitChanges();
-	ASSERT_TRUE(station->SetLiveVstChannelRoute(0u, {true, {removed->StateId(), survivor->StateId()}}, station->RackRevision()));
+	ASSERT_TRUE(station->SetMidiChannelRoute(0u, {{removed->StateId(), survivor->StateId()}}, station->RackRevision()));
 	ASSERT_TRUE(station->ConfigureRecordedMidiCompensation(256u));
 	unsigned int measuredBlocks = 0u;
 	const auto measuredCallback = [&] {
@@ -2065,7 +2065,7 @@ TEST(AudioCallbackRealtime, MidiPublicationCableCancellationAndRetirementRetryDo
 	};
 	measuredCallback(); // 128: newly published MIDI attacks wait for compensation.
 	EXPECT_EQ(0u, removed->Count(0x90u, 60u, 100u)); EXPECT_EQ(0u, survivor->Count(0x90u, 60u, 100u));
-	ASSERT_TRUE(station->SetLiveVstChannelRoute(0u, {true, {survivor->StateId()}}, station->RackRevision()));
+	ASSERT_TRUE(station->SetMidiChannelRoute(0u, {{survivor->StateId()}}, station->RackRevision()));
 	measuredCallback(); // 256: cancel only the disconnected channel's future attacks.
 	measuredCallback(); // 384: surviving delayed attacks reach both retained routes.
 	EXPECT_EQ(0u, removed->Count(0x90u, 60u, 100u)); EXPECT_EQ(0u, removed->Count(0xb0u, 64u, 127u));

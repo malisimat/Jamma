@@ -88,13 +88,13 @@ std::optional<std::shared_ptr<Station>> IoSessionLoader::ReconstructStation(Stat
 		if (!io::NativeMidiSidecar::ValidatePluginIdentity(entry.Id) || std::find(identities.begin(), identities.end(), entry.Id) != identities.end()) rackInactive = true;
 		identities.push_back(entry.Id);
 	}
-	for (const auto& route : stationStruct.LiveVstRoutes)
+	for (const auto& route : stationStruct.MidiChannelRoutes)
 	{
 		if (route.PluginIds.size() > Station::MaxRackPlugins) rackInactive = true;
 		for (const auto& identity : route.PluginIds)
 			if (identity.empty() || !io::NativeMidiSidecar::ValidatePluginIdentity(identity)) rackInactive = true;
 	}
-	station->RestoreSavedRack(stationStruct.VstChain, stationStruct.LiveVstRoutes, rackInactive);
+	station->RestoreSavedRack(stationStruct.VstChain, stationStruct.MidiChannelRoutes, rackInactive);
 	// Legacy automation sidecars contain indices only. Give saved processors
 	// deterministic IDs before reconstruction, including unavailable Take/Loop
 	// slots, so later compaction cannot change the meaning of those bindings.
@@ -227,44 +227,6 @@ std::optional<std::shared_ptr<Station>> IoSessionLoader::ReconstructStation(Stat
 	// this startup-built station is made visible to audio.
 	station->RebuildAutomationDispatch();
 
-	if (!stationStruct.MidiRoutes.empty())
-	{
-		std::size_t outputCount = 0u;
-		for (const auto& take : station->GetLoopTakes())
-			if (take)
-				outputCount += take->GetMidiLoopSnapshot().size();
-
-		midi::MidiVstRoutingSnapshot routes;
-		routes.PluginByMidiOutput.assign(outputCount, midi::MidiVstRoutingSnapshot::NoPlugin);
-		auto liveRoutes = station->LiveVstChannelRoutes();
-		for (const auto& route : stationStruct.MidiRoutes)
-		{
-			if ((route.PluginIndex >= stationStruct.VstChain.size() && route.PluginIndex != midi::MidiVstRoutingSnapshot::MissingPlugin)
-				|| (!route.IsLive && route.OutputIndex >= outputCount))
-			{
-				std::cout << "Load: invalid MIDI VST route in station " << stationStruct.Name << std::endl;
-				return std::nullopt;
-			}
-			if (route.IsLive)
-			{
-				if (!stationStruct.HasLiveVstRoutes)
-					for (auto& channel : liveRoutes)
-					{
-						channel.Explicit = true;
-						if (route.PluginIndex < stationStruct.VstChain.size())
-							channel.PluginIds = {stationStruct.VstChain[route.PluginIndex].Id};
-					}
-			}
-			else
-				routes.PluginByMidiOutput[route.OutputIndex] = route.PluginIndex;
-		}
-		station->RestoreLiveVstRoutesBeforePublication(std::move(liveRoutes));
-		if (!station->RestoreMidiVstRoutes(routes, stationStruct.VstChain.size()))
-		{
-			std::cout << "Load: failed MIDI VST routes for station " << stationStruct.Name << std::endl;
-			return std::nullopt;
-		}
-	}
 	// Validate the complete pending take hierarchy before Scene admits audio.
 	station->RefreshRackLatency();
 	std::cout << "[LOAD] Constructed station '" << stationStruct.Name << "'." << std::endl;
@@ -314,11 +276,6 @@ IoSessionLoader::ReconstructedSession IoSessionLoader::Reconstruct(const JamFile
 		auto station = ReconstructStation(stationParams, mixerParams, stationStruct, directory);
 		if (station.has_value())
 		{
-			if (stationStruct.AllowedMidiChannels.empty() && !stationStruct.HasLiveVstRoutes)
-			{
-				const auto defaultChannel = static_cast<int>((stationParams.Index % 16u) + 1u);
-				station.value()->SetAllowedMidiChannels({ defaultChannel });
-			}
 
 			result.Stations.push_back(station.value());
 			result.StationDescriptors.push_back(stationStruct);

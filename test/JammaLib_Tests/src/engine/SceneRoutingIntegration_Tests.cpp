@@ -1101,10 +1101,17 @@ TEST_F(SceneRoutingIntegrationTest, SavedJamAndExplicitRigReproduceAddedMembersh
  std::ifstream file(directory / "session.jam"); std::stringstream jamJson; jamJson << file.rdbuf(); file.close();
  auto savedJam = io::JamFile::FromStream(std::move(jamJson)); ASSERT_TRUE(savedJam);
  EXPECT_EQ(2u, savedJam->Stations.size());
- EXPECT_EQ((std::vector<int>{1}), savedJam->Stations.front().AllowedMidiChannels);
+ const std::vector<int> allChannels{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16};
+ EXPECT_EQ(allChannels, savedJam->Stations.front().AllowedMidiChannels);
+ for (const auto& route : savedJam->Stations.front().MidiChannelRoutes) EXPECT_TRUE(route.PluginIds.empty());
+ // The loaded original retains its saved disabled channels, independently of creation defaults.
+ EXPECT_TRUE(savedJam->Stations.back().AllowedMidiChannels.empty());
  engine::SceneParams params({ "" }, {}, {640u, 480u});
  auto reloaded = engine::Scene::FromFile(params, *savedJam, *savedRig, directory.wstring()); ASSERT_TRUE(reloaded);
  EXPECT_EQ(scene->SnapshotStations()[0]->Name(), reloaded.value()->SnapshotStations()[0]->Name());
+ EXPECT_EQ(allChannels, reloaded.value()->SnapshotStations()[0]->AllowedMidiChannels());
+ EXPECT_TRUE(reloaded.value()->SnapshotStations()[1]->AllowedMidiChannels().empty());
+ for (const auto& route : reloaded.value()->SnapshotStations()[0]->MidiChannelRoutes()) EXPECT_TRUE(route.PluginIds.empty());
  EXPECT_EQ("A", reloaded.value()->AcceptedRigSnapshot()->Rig.Triggers.front().StationTarget); // frozen target lives in Rig
  reloaded.value()->Shutdown(); scene->Shutdown();
  std::filesystem::remove_all(directory);

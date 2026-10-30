@@ -546,7 +546,7 @@ static void VerifySerialRenderedPath(bool indexedStationDestination)
 	if (indexedStationDestination)
 	{
 		secondStationEffect = loadDelay(station, L"fake-station-synth.dll");
-		station->SetMidiVstRoute(0u, 1u);
+		ASSERT_TRUE(station->SetMidiChannelRoute(0u, {{secondStationEffect->StateId()}}, station->RackRevision()));
 	}
 	station->AddTake(take);
 	station->CommitChanges();

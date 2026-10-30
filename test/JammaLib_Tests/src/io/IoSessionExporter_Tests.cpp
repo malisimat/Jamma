@@ -681,9 +681,7 @@ TEST(IoSessionExporter, UnavailableRackAutomationRemainsSaveableAndIdentityBound
 			io::JamFile::Station descriptor{};
 			descriptor.Name = "unavailable-rack";
 			descriptor.Id = "saved-station";
-			descriptor.HasLiveVstRoutes = true;
-			descriptor.LiveVstRoutes[0].Explicit = true;
-			descriptor.LiveVstRoutes[0].PluginIds = {caseIndex == 0u ? "normal-missing" : "", rawIds[caseIndex], "other-missing"};
+			descriptor.MidiChannelRoutes[0].PluginIds = {caseIndex == 0u ? "normal-missing" : "", rawIds[caseIndex], "other-missing"};
 			for (auto index = 0u; index < slots; ++index)
 			{
 				io::JamFile::VstEntry entry;
@@ -723,9 +721,7 @@ TEST(IoSessionExporter, UnavailableRackAutomationRemainsSaveableAndIdentityBound
 			ASSERT_EQ(1u, saved->Stations.size());
 			EXPECT_EQ(slots, saved->Stations[0].VstChain.size());
 			EXPECT_EQ(rawIds[caseIndex], saved->Stations[0].VstChain[0].Id);
-			EXPECT_TRUE(saved->Stations[0].HasLiveVstRoutes);
-			EXPECT_TRUE(saved->Stations[0].LiveVstRoutes[0].Explicit);
-			EXPECT_EQ(descriptor.LiveVstRoutes[0].PluginIds, saved->Stations[0].LiveVstRoutes[0].PluginIds);
+			EXPECT_EQ(descriptor.MidiChannelRoutes[0].PluginIds, saved->Stations[0].MidiChannelRoutes[0].PluginIds);
 			const auto& savedStream = saved->Stations[0].LoopTakes[0].MidiStreams[0];
 			std::ifstream midiFile(destination / savedStream.SidecarPath, std::ios::binary);
 			const auto exported = io::NativeMidiSidecar::FromStream(midiFile);

@@ -412,7 +412,6 @@ TEST(VstStaging, MidiCableDropAcceptsEntireVisibleSlotControl)
  ASSERT_EQ(2u, commands.size());
  for (const auto& command : commands)
  {
-  EXPECT_TRUE(command.ChannelRoutes[0].Explicit);
   EXPECT_EQ((std::vector<std::string>{"target"}), command.ChannelRoutes[0].PluginIds);
  }
  rack->DetachGuiOwnershipForRetirement();
@@ -463,7 +462,6 @@ TEST(VstStaging, EveryMidiChannelCellDropsOntoVisibleScrolledSlotAndRejectsStale
   EXPECT_EQ(7u,commands.back().Revision);
   for (auto routed = 0u; routed < 16u; ++routed)
   {
-   EXPECT_EQ(routed == channel,commands.back().ChannelRoutes[routed].Explicit);
    EXPECT_EQ(routed == channel ? (std::vector<std::string>{"slot-3"}) : std::vector<std::string>{},
        commands.back().ChannelRoutes[routed].PluginIds);
   }

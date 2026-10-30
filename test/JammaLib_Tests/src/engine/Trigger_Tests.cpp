@@ -3520,6 +3520,8 @@ TEST(Trigger, LosingOlderTailPreservesNewIndependentPunchAndItsQueuedRelease)
 {
     auto oldStation = MakeTestStation("old-tail-source");
     auto healthyStation = MakeTestStation("new-punch-source");
+    oldStation->SetAllowedMidiChannels({});
+    healthyStation->SetAllowedMidiChannels({}); // Audio-tail ownership; device names only exercise source loss.
     TriggerParams params;
     params.InputChannels = { 0u };
     params.MidiInputDevices = { "old" };
@@ -3690,6 +3692,7 @@ TEST(Trigger, LossDuringPendingEndSettlesBeforeReconnectAndRejectsOldQueuedRelea
 TEST(Trigger, ConfirmedTailLossStaysStickyAfterCompletionAndPreservesEarlierCompletedHistory)
 {
     auto station = MakeTestStation("sticky-tail-loss");
+    station->SetAllowedMidiChannels({}); // Keep this completion race audio-only.
     TriggerParams params;
     params.InputChannels = { 0u };
     params.MidiInputDevices = { "lost" };

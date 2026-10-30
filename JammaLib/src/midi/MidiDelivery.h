@@ -10,7 +10,8 @@
 #include <vector>
 #include "MidiQueue.h"
 #include "MidiNote.h"
-#include "MidiVstOutputSink.h"
+#include "MidiChannelRoute.h"
+#include "MidiLoop.h"
 
 namespace engine { class LoopTake; }
 namespace vst { class IVstPlugin; class VstChain; }
@@ -36,6 +37,7 @@ namespace midi
 			// Callback-owned pedal accounting, independent of changing live routes.
 			std::bitset<16> LiveSustain;
 			std::array<std::uint32_t, 16> LiveSustainRevision{};
+			std::array<std::uint64_t, 16> AppliedLiveRetirements{};
 			std::uint16_t AppliedLiveChannels = 0u; // Callback-only effective route mask.
 			std::bitset<16> PluginSustain;
 			std::bitset<16> BlockSustainAtStart;
@@ -82,6 +84,8 @@ namespace midi
 			std::bitset<midi::MidiNote::TotalNoteSlots> Held;
 			std::bitset<midi::MidiNote::TotalNoteSlots> AudibleHeld; // Delayed note reached the plugin.
 			std::bitset<16> AudibleSustain; // Callback-owned delivered pedal state.
+			std::array<std::uint64_t, 16> AppliedRetirements{};
+			std::uint16_t CancelChannelsThisBlock = 0u;
 			std::uint16_t AllowedChannels = 0xffffu; // Callback-owned route eligibility.
 			std::array<std::uint16_t, midi::MidiNote::TotalNoteSlots> AudibleSlots{};
 			std::array<std::uint16_t, midi::MidiNote::TotalNoteSlots> AudibleSlotPositions{};
@@ -111,21 +115,20 @@ namespace midi
 		struct PreparedState
 		{
 			std::shared_ptr<vst::VstChain> MidiChain;
-			std::vector<std::shared_ptr<MidiDestination>> LiveMidiDestinations;
 			std::array<std::vector<std::shared_ptr<MidiDestination>>, 16> LiveChannelDestinations;
-			std::vector<std::uint16_t> LiveDestinationChannels; // Prepared, immutable.
+			std::uint16_t EnabledChannels = 0u;
+			std::vector<std::uint16_t> DestinationChannels; // Shared live/recorded permissions, immutable.
+			// Retirements survive skipped publications, including disable/re-enable between blocks.
+			std::vector<std::array<std::uint64_t, 16>> DestinationRetirements;
 			std::vector<std::shared_ptr<MidiDestination>> MidiDestinations;
 			std::vector<std::shared_ptr<MidiDestination>> RetiredMidiDestinations;
 			mutable std::atomic<bool> RetiredMidiQueueCancelled{ false };
 			std::vector<std::vector<std::shared_ptr<MidiPlaybackBinding>>> MidiPlaybackRoutes;
-			std::vector<bool> MidiPlaybackUsesChannelRoutes;
-			std::array<bool, 16> RecordedChannelExplicit{};
-			std::array<std::vector<std::shared_ptr<MidiDestination>>, 16> RecordedChannelDestinations;
 		};
 
 		void Prepare(PreparedState& state, const PreparedState* previous,
 			std::shared_ptr<vst::VstChain> chain, const std::vector<std::shared_ptr<engine::LoopTake>>& takes,
-			const MidiVstRoutingSnapshot* outputRoutes, const std::array<LiveVstChannelRoute, 16>& channelRoutes,
+			std::uint16_t enabledChannels, const std::array<MidiChannelRoute, 16>& channelRoutes,
 			unsigned int renderChannels);
 		static bool ConfigureCompensation(const PreparedState& state, unsigned int referenceLatencySamps) noexcept;
 		static void BeginRetiredBlock(const PreparedState& state,
@@ -133,7 +136,7 @@ namespace midi
 		void ProcessBlock(const PreparedState& state,
 			std::span<const std::shared_ptr<engine::LoopTake>> takes, std::span<float* const> instrumentPtrs,
 			bool vstActive, const std::atomic<bool>& membershipRemoving,
-			const std::atomic<std::uint16_t>& allowedChannels, unsigned int numSamps,
+			unsigned int numSamps,
 			std::uint32_t blockStartSample) noexcept;
 		static void RecoverSkippedBlocks(const PreparedState& state) noexcept { _RecoverSkippedMidiBlocks(state); }
 		bool TryEnqueueImmediateLiveMidi(const MidiEvent& event) noexcept;

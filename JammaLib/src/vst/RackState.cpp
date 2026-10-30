@@ -249,7 +249,7 @@ bool RackState::UnloadManagedVstPlugin(const std::string& identity)
 	return true;
 }
 
-std::optional<std::vector<int>> RackState::SetLiveVstChannelRoutes(std::array<midi::LiveVstChannelRoute, 16> routes, std::uint64_t revision, const std::vector<int>& allowedMidiChannels)
+std::optional<std::vector<int>> RackState::SetMidiChannelRoutes(std::array<midi::MidiChannelRoute, 16> routes, std::uint64_t revision, const std::vector<int>& allowedMidiChannels)
 {
 	if (revision != _rackRevision) { _rackDiagnostic = "Rack changed; retry the gesture."; return std::nullopt; }
 	const auto slots = GetVstRackSlots();
@@ -258,12 +258,11 @@ std::optional<std::vector<int>> RackState::SetLiveVstChannelRoutes(std::array<mi
 		auto& route = routes[channel];
 		std::sort(route.PluginIds.begin(), route.PluginIds.end());
 		route.PluginIds.erase(std::unique(route.PluginIds.begin(), route.PluginIds.end()), route.PluginIds.end());
-		if (!route.Explicit) route.PluginIds.clear();
 		if (route.PluginIds.size() > MaxRackPlugins) { _rackDiagnostic = "Each channel supports at most 32 destinations."; return std::nullopt; }
 		for (const auto& id : route.PluginIds)
 		{
 			if (id.empty() || !io::NativeMidiSidecar::ValidatePluginIdentity(id)) { _rackDiagnostic = "Invalid plugin identity; remove or repair the cable."; return std::nullopt; }
-			const auto& oldIds = _liveVstChannelRoutes[channel].PluginIds;
+			const auto& oldIds = _midiChannelRoutes[channel].PluginIds;
 			if (std::find(oldIds.begin(), oldIds.end(), id) != oldIds.end()) continue;
 			const auto found = std::find_if(slots.begin(), slots.end(), [&](const auto& slot) { return slot.Identity == id; });
 			if (found == slots.end() || !found->Plugin) { _rackDiagnostic = "Destination is unavailable; retry its load first."; return std::nullopt; }
@@ -275,13 +274,13 @@ std::optional<std::vector<int>> RackState::SetLiveVstChannelRoutes(std::array<mi
 	for (auto channel = 0u; channel < 16u; ++channel)
 	{
 		const auto newlyConnected = std::any_of(routes[channel].PluginIds.begin(), routes[channel].PluginIds.end(), [&](const auto& id) {
-			const auto& prior = _liveVstChannelRoutes[channel].PluginIds;
+			const auto& prior = _midiChannelRoutes[channel].PluginIds;
 			return std::find(prior.begin(), prior.end(), id) == prior.end();
 		});
 		if (newlyConnected && std::find(allowed.begin(), allowed.end(), static_cast<int>(channel + 1u)) == allowed.end())
 			allowed.push_back(static_cast<int>(channel + 1u));
 	}
-	_liveVstChannelRoutes = std::move(routes);
+	_midiChannelRoutes = std::move(routes);
 	if (allowed.size() != allowedMidiChannels.size())
 	{
 		std::sort(allowed.begin(), allowed.end());
@@ -291,7 +290,7 @@ std::optional<std::vector<int>> RackState::SetLiveVstChannelRoutes(std::array<mi
 	return allowed;
 }
 
-bool RackState::RemoveInactiveRackSlot(std::size_t ordinal, std::uint64_t revision, const std::function<void(std::size_t)>& removedSlot)
+bool RackState::RemoveInactiveRackSlot(std::size_t ordinal, std::uint64_t revision)
 {
 	if (!_rackInactive || revision != _rackRevision) return false;
 	std::lock_guard<std::mutex> lock(_vstPathsMutex);
@@ -301,8 +300,7 @@ bool RackState::RemoveInactiveRackSlot(std::size_t ordinal, std::uint64_t revisi
 	_vstPluginPaths.erase(_vstPluginPaths.begin() + ordinal);
 	if (std::none_of(_vstSavedEntries.begin(), _vstSavedEntries.end(),
 		[&](const auto& entry) { return entry.Id == deletedId; }))
-		for (auto& route : _liveVstChannelRoutes) std::erase(route.PluginIds, deletedId);
-	removedSlot(ordinal);
+		for (auto& route : _midiChannelRoutes) std::erase(route.PluginIds, deletedId);
 	++_rackRevision;
 	return true;
 }
@@ -310,7 +308,7 @@ bool RackState::RemoveInactiveRackSlot(std::size_t ordinal, std::uint64_t revisi
 bool RackState::ClearInactiveRackRoutes(std::uint64_t revision)
 {
 	if (!_rackInactive || revision != _rackRevision) return false;
-	_liveVstChannelRoutes = {};
+	_midiChannelRoutes = {};
 	++_rackRevision;
 	return true;
 }
@@ -318,7 +316,7 @@ bool RackState::ClearInactiveRackRoutes(std::uint64_t revision)
 bool RackState::RecoverRack(std::uint64_t revision, std::size_t retiredDestinations)
 {
 	if (!_rackInactive || revision != _rackRevision || RackSlotCount() > MaxRackPlugins) return false;
-	for (const auto& route : _liveVstChannelRoutes)
+	for (const auto& route : _midiChannelRoutes)
 	{
 		if (route.PluginIds.size() > MaxRackPlugins) return false;
 		for (const auto& id : route.PluginIds)
@@ -404,7 +402,7 @@ bool RackState::LoadVstPluginSynchronously(const std::wstring& path, const std::
 	return loaded;
 }
 
-actions::ActionResult RackState::OnAction(actions::JobAction action, const Format& format, const std::string& ownerName, std::size_t retiredDestinations, const std::function<void(std::size_t)>& removedSlot)
+actions::ActionResult RackState::OnAction(actions::JobAction action, const Format& format, const std::string& ownerName, std::size_t retiredDestinations)
 {
 	switch (action.JobActionType)
 	{
@@ -491,7 +489,6 @@ actions::ActionResult RackState::OnAction(actions::JobAction action, const Forma
 					_vstPluginPaths.erase(_vstPluginPaths.begin() + static_cast<std::ptrdiff_t>(index));
 					_vstSavedEntries.erase(_vstSavedEntries.begin() + static_cast<std::ptrdiff_t>(index));
 					_pendingDeletedVstRouteIds.push_back(action.VstIdentity);
-					removedSlot(index);
 					if (_failedInteractiveVstLoads.size() == 32u) _failedInteractiveVstLoads.erase(_failedInteractiveVstLoads.begin());
 					_failedInteractiveVstLoads.emplace_back(action.VstIdentity, action.VstPath);
 				}
@@ -547,7 +544,6 @@ actions::ActionResult RackState::OnAction(actions::JobAction action, const Forma
 				_vstPluginPaths.erase(_vstPluginPaths.begin() + static_cast<std::ptrdiff_t>(removeIndex));
 				_vstSavedEntries.erase(_vstSavedEntries.begin() + static_cast<std::ptrdiff_t>(removeIndex));
 				_pendingDeletedVstRouteIds.push_back(action.VstIdentity);
-				removedSlot(removeIndex);
 				++_rackRevision;
 				_backVstChain = std::move(replacement);
 				_flipVstChain.store(true, std::memory_order_release);
@@ -598,8 +594,8 @@ bool RackState::ClearChannelRoutes(std::uint16_t removedMask)
 	for (std::uint8_t channel = 0; channel < 16; ++channel)
 	{
 		if ((removedMask & (1u << channel)) == 0u) continue;
-		auto& route = _liveVstChannelRoutes[channel];
-		if (!route.Explicit && route.PluginIds.empty()) continue;
+		auto& route = _midiChannelRoutes[channel];
+		if (route.PluginIds.empty()) continue;
 		route = {};
 		cleared = true;
 	}
@@ -611,7 +607,7 @@ bool RackState::CommitChain()
 {
 	if (!_flipVstChain.load(std::memory_order_acquire)) return false;
 	std::lock_guard<std::mutex> lock(_vstPathsMutex);
-	for (auto& route : _liveVstChannelRoutes)
+	for (auto& route : _midiChannelRoutes)
 		for (const auto& identity : _pendingDeletedVstRouteIds) std::erase(route.PluginIds, identity);
 	_pendingDeletedVstRouteIds.clear();
 	_flipVstChain.store(false, std::memory_order_release);
@@ -625,9 +621,9 @@ std::pair<std::vector<JobAction>, std::vector<JobAction>> RackState::TakePending
 }
 
 void RackState::RestoreSaved(const std::vector<io::JamFile::VstEntry>& entries,
-	std::array<midi::LiveVstChannelRoute, 16> routes, bool inactive)
+	std::array<midi::MidiChannelRoute, 16> routes, bool inactive)
 {
-	_liveVstChannelRoutes = std::move(routes);
+	_midiChannelRoutes = std::move(routes);
 	_rackInactive = inactive;
 	if (!inactive) return;
 	_rackDiagnostic = "Rack paused: remove excess/invalid entries or cables, then choose Resume rack. Saved data is preserved.";

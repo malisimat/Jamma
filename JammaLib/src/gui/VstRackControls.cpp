@@ -246,7 +246,7 @@ void VstRackControls::_PresentStationLocked(const std::shared_ptr<engine::Statio
 	model.Editable = _AvailableLocked({station, {}, {}}) && !_busy;
 	model.Inactive = station->RackInactive(); model.Suspended = station->RackLatencySuspended();
 	model.Diagnostic = station->RackDiagnostic();
-	if (!model.Inactive) model.ChannelRoutes = station->LiveVstChannelRoutes();
+	if (!model.Inactive) model.ChannelRoutes = station->MidiChannelRoutes();
 	for (auto slot : station->GetVstRackSlots(control->PageOffset()))
 	{
 		const bool open = slot.Plugin && _host.Editors.IsVstEditorOpen(slot.Plugin);
@@ -310,7 +310,7 @@ void VstRackControls::_PumpStation(const Intent& intent)
 			if (!valid()) { report("Rack changed; retry the gesture."); return; }
 			switch (command.Operation)
 			{
-			case Kind::Routes: changed = station->SetLiveVstChannelRoutes(command.ChannelRoutes, command.Revision); break;
+			case Kind::Routes: changed = station->SetMidiChannelRoutes(command.ChannelRoutes, command.Revision); break;
 			case Kind::Recover: changed = station->RecoverRack(command.Revision); break;
 			case Kind::ClearInactiveRoutes: changed = station->ClearInactiveRackRoutes(command.Revision); break;
 			default: break;

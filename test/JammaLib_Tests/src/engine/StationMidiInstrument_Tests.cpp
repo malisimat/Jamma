@@ -119,7 +119,8 @@ public:
 	bool IsLoaded() const noexcept override { return _loaded; }
 	const std::string& Name() const noexcept override { return _name; }
 	vst::RenderRole Role() const noexcept override { return RenderRole; }
-	vst::MidiInputCapabilities MidiInput() const noexcept override { return { true, true, true }; }
+	vst::MidiInputCapabilities MidiInput() const noexcept override { return MidiCapabilities; }
+	vst::MidiInputCapabilities MidiCapabilities{true, true, true};
 	unsigned int HostedChannelCount() const noexcept override { return HostedChannels; }
 	vst::RenderRole RenderRole = vst::RenderRole::Effect;
 	bool ReplaceOutput = false;
@@ -216,6 +217,7 @@ static std::shared_ptr<Station> MakeStation(const std::string& name)
 	audio::MergeMixBehaviourParams merge;
 	auto mixerParams = Station::GetMixerParams(params.Size, merge);
 	auto station = std::make_shared<Station>(params, mixerParams);
+	station->SetAllowedMidiChannels({1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16});
 	station->SetupBuffers(128u);
 	station->SetNumDacChannels(2u);
 	station->CommitChanges();
@@ -314,36 +316,36 @@ TEST(StationMidiInstrument, AdditiveRackPreservesGeneratorsEffectOrderAndDestina
 	EXPECT_EQ(23, chain.GetLatencySamplesFrom(2));
 }
 
-TEST(StationMidiInstrument, LiveChannelRoutesAreManyToManyAndMissingExplicitTargetsStaySilent)
+TEST(StationMidiInstrument, ChannelRoutesAreManyToManyAndEmptyTargetsBroadcast)
 {
 	auto station = MakeStation("channel-routes");
 	auto a = AddPlugin(station, L"a.dll");
 	auto b = AddPlugin(station, L"b.dll");
 	station->SetAllowedMidiChannels({1});
-	ASSERT_TRUE(station->SetLiveVstChannelRoute(0, {true, {a->StateId(), a->StateId(), b->StateId()}}, station->RackRevision()));
-	ASSERT_TRUE(station->SetLiveVstChannelRoute(1, {true, {b->StateId()}}, station->RackRevision()));
+	ASSERT_TRUE(station->SetMidiChannelRoute(0, {{a->StateId(), a->StateId(), b->StateId()}}, station->RackRevision()));
+	ASSERT_TRUE(station->SetMidiChannelRoute(1, {{b->StateId()}}, station->RackRevision()));
 	EXPECT_EQ((std::vector<int>{1, 2}), station->AllowedMidiChannels());
 	station->TryEnqueueSyntheticLiveMidi(MidiEvent::MakeNoteOn(0, 0, 60, 100));
 	station->TryEnqueueSyntheticLiveMidi(MidiEvent::MakeNoteOn(0, 1, 61, 100));
 	RenderStationBlock(station, 0);
 	EXPECT_EQ(1u, a->Events.size());
 	EXPECT_EQ(2u, b->Events.size());
-	auto routes = station->LiveVstChannelRoutes();
-	routes[0] = {true, {}};
-	routes[2] = {true, {a->StateId()}};
+	auto routes = station->MidiChannelRoutes();
+	routes[0] = {{}};
+	routes[2] = {{a->StateId()}};
 	const auto revision = station->RackRevision();
-	ASSERT_TRUE(station->SetLiveVstChannelRoutes(routes, revision));
+	ASSERT_TRUE(station->SetMidiChannelRoutes(routes, revision));
 	EXPECT_EQ(revision + 1u, station->RackRevision());
-	EXPECT_FALSE(station->SetLiveVstChannelRoutes(routes, revision));
+	EXPECT_FALSE(station->SetMidiChannelRoutes(routes, revision));
 	station->TryEnqueueSyntheticLiveMidi(MidiEvent::MakeNoteOn(128, 0, 62, 100));
 	station->TryEnqueueSyntheticLiveMidi(MidiEvent::MakeNoteOn(128, 2, 63, 100));
 	RenderStationBlock(station, 128);
-	EXPECT_EQ(2u, std::count_if(a->Events.begin(), a->Events.end(), [](const auto& event) { return event.IsNoteOn(); }));
-	EXPECT_EQ(2u, std::count_if(b->Events.begin(), b->Events.end(), [](const auto& event) { return event.IsNoteOn(); }));
-	routes = station->LiveVstChannelRoutes();
-	routes[3] = {true, {a->StateId()}};
-	routes[4] = {true, {b->StateId()}};
-	ASSERT_TRUE(station->SetLiveVstChannelRoutes(routes, station->RackRevision()));
+	EXPECT_EQ(3u, std::count_if(a->Events.begin(), a->Events.end(), [](const auto& event) { return event.IsNoteOn(); }));
+	EXPECT_EQ(3u, std::count_if(b->Events.begin(), b->Events.end(), [](const auto& event) { return event.IsNoteOn(); }));
+	routes = station->MidiChannelRoutes();
+	routes[3] = {{a->StateId()}};
+	routes[4] = {{b->StateId()}};
+	ASSERT_TRUE(station->SetMidiChannelRoutes(routes, station->RackRevision()));
 	EXPECT_TRUE(station->AcceptsLiveMidiChannel(3u));
 	EXPECT_TRUE(station->AcceptsLiveMidiChannel(4u));
 	station->TryEnqueueSyntheticLiveMidi(MidiEvent::MakeNoteOn(256, 3, 64, 100));
@@ -361,16 +363,15 @@ TEST(StationMidiInstrument, DisablingMidiChannelClearsRoutesAndReenableBroadcast
 	auto a = AddPlugin(station, L"toggle-a.dll");
 	auto b = AddPlugin(station, L"toggle-b.dll");
 	station->SetAllowedMidiChannels({1});
-	ASSERT_TRUE(station->SetLiveVstChannelRoute(0, {true, {a->StateId()}}, station->RackRevision()));
+	ASSERT_TRUE(station->SetMidiChannelRoute(0, {{a->StateId()}}, station->RackRevision()));
 	const auto staleRevision = station->RackRevision();
-	const auto staleRoutes = station->LiveVstChannelRoutes();
+	const auto staleRoutes = station->MidiChannelRoutes();
 
 	station->SetAllowedMidiChannels({});
 	EXPECT_FALSE(station->AcceptsLiveMidiChannel(0u));
-	EXPECT_FALSE(station->LiveVstChannelRoutes()[0].Explicit);
-	EXPECT_TRUE(station->LiveVstChannelRoutes()[0].PluginIds.empty());
+	EXPECT_TRUE(station->MidiChannelRoutes()[0].PluginIds.empty());
 	EXPECT_EQ(staleRevision + 1u, station->RackRevision());
-	EXPECT_FALSE(station->SetLiveVstChannelRoutes(staleRoutes, staleRevision));
+	EXPECT_FALSE(station->SetMidiChannelRoutes(staleRoutes, staleRevision));
 
 	station->SetAllowedMidiChannels({1});
 	station->TryEnqueueSyntheticLiveMidi(MidiEvent::MakeNoteOn(0, 0, 60, 100));
@@ -384,15 +385,14 @@ TEST(StationMidiInstrument, DisablingUnroutedChannelRejectsPendingCableEdit)
 	auto station = MakeStation("pending-channel-cable");
 	auto plugin = AddPlugin(station, L"pending-cable.dll");
 	station->SetAllowedMidiChannels({1});
-	auto pendingRoutes = station->LiveVstChannelRoutes();
-	pendingRoutes[0] = {true, {plugin->StateId()}};
+	auto pendingRoutes = station->MidiChannelRoutes();
+	pendingRoutes[0] = {{plugin->StateId()}};
 	const auto staleRevision = station->RackRevision();
 
 	station->SetAllowedMidiChannels({});
 	EXPECT_EQ(staleRevision + 1u, station->RackRevision());
-	EXPECT_FALSE(station->SetLiveVstChannelRoutes(std::move(pendingRoutes), staleRevision));
+	EXPECT_FALSE(station->SetMidiChannelRoutes(std::move(pendingRoutes), staleRevision));
 	EXPECT_FALSE(station->AcceptsLiveMidiChannel(0u));
-	EXPECT_FALSE(station->LiveVstChannelRoutes()[0].Explicit);
 }
 
 TEST(StationMidiInstrument, RackRerouteAndRemovalRetryOwnedNoteAndSustainReleases)
@@ -401,12 +401,12 @@ TEST(StationMidiInstrument, RackRerouteAndRemovalRetryOwnedNoteAndSustainRelease
 	auto a = AddPlugin(station, L"a.dll");
 	auto b = AddPlugin(station, L"b.dll");
 	AllowAllMidiChannels(station);
-	ASSERT_TRUE(station->SetLiveVstChannelRoute(0, {true, {a->StateId()}}, station->RackRevision()));
+	ASSERT_TRUE(station->SetMidiChannelRoute(0, {{a->StateId()}}, station->RackRevision()));
 	station->TryEnqueueSyntheticLiveMidi(MidiEvent::MakeNoteOn(0, 0, 60, 100));
 	station->TryEnqueueSyntheticLiveMidi({0, 0xb0, 64, 127});
 	RenderStationBlock(station, 0);
 	a->MaxAcceptedPerBlock = 0;
-	ASSERT_TRUE(station->SetLiveVstChannelRoute(0, {true, {b->StateId()}}, station->RackRevision()));
+	ASSERT_TRUE(station->SetMidiChannelRoute(0, {{b->StateId()}}, station->RackRevision()));
 	RenderStationBlock(station, 128);
 	a->MaxAcceptedPerBlock = 100;
 	RenderStationBlock(station, 256);
@@ -415,22 +415,16 @@ TEST(StationMidiInstrument, RackRerouteAndRemovalRetryOwnedNoteAndSustainRelease
 	station->TryEnqueueSyntheticLiveMidi(MidiEvent::MakeNoteOn(384, 0, 61, 100));
 	station->TryEnqueueSyntheticLiveMidi({384, 0xb0, 64, 127});
 	RenderStationBlock(station, 384);
-	ASSERT_TRUE(station->SetLiveVstChannelRoute(1, {true, {a->StateId(), b->StateId()}}, station->RackRevision()));
-	ASSERT_TRUE(station->SetLiveVstChannelRoute(2, {true, {}}, station->RackRevision()));
-	ASSERT_TRUE(station->SetLiveVstChannelRoute(15, {true, {b->StateId()}}, station->RackRevision()));
-	station->SetMidiVstRoute(Station::LiveMidiOutputIndex, 1);
-	station->SetMidiVstRoute(0, 1);
-	station->SetMidiVstRoute(1, 0);
+	ASSERT_TRUE(station->SetMidiChannelRoute(1, {{a->StateId(), b->StateId()}}, station->RackRevision()));
+	ASSERT_TRUE(station->SetMidiChannelRoute(2, {{}}, station->RackRevision()));
+	ASSERT_TRUE(station->SetMidiChannelRoute(15, {{b->StateId()}}, station->RackRevision()));
 	ASSERT_TRUE(station->UnloadManagedVstPlugin(b->StateId()));
 	for (const auto& job : station->CommitChanges()) station->OnAction(job);
 	station->CommitChanges();
-	const auto& liveRoutes = station->LiveVstChannelRoutes();
-	EXPECT_TRUE(liveRoutes[0].Explicit);
+	const auto& liveRoutes = station->MidiChannelRoutes();
 	EXPECT_TRUE(liveRoutes[0].PluginIds.empty());
 	EXPECT_EQ((std::vector<std::string>{a->StateId()}), liveRoutes[1].PluginIds);
-	EXPECT_TRUE(liveRoutes[2].Explicit);
 	EXPECT_TRUE(liveRoutes[2].PluginIds.empty());
-	EXPECT_TRUE(liveRoutes[15].Explicit);
 	EXPECT_TRUE(liveRoutes[15].PluginIds.empty());
 	for (const auto& route : liveRoutes)
 		EXPECT_EQ(route.PluginIds.end(), std::find(route.PluginIds.begin(), route.PluginIds.end(), b->StateId()));
@@ -441,11 +435,7 @@ TEST(StationMidiInstrument, RackRerouteAndRemovalRetryOwnedNoteAndSustainRelease
 	RenderStationBlock(station, 640);
 	EXPECT_TRUE(std::any_of(b->ProcessedEvents.begin(), b->ProcessedEvents.end(), [](const auto& event) { return event.IsNoteOff() && event.data1 == 61; }));
 	EXPECT_TRUE(std::any_of(b->ProcessedEvents.begin(), b->ProcessedEvents.end(), [](const auto& event) { return event.MessageType() == 0xb0u && event.data1 == 64u && event.data2 == 0u; }));
-	const auto routes = station->SnapshotMidiVstRoutesForExport();
-	ASSERT_EQ(2u, routes.PluginByMidiOutput.size());
-	EXPECT_EQ(midi::MidiVstRoutingSnapshot::MissingPlugin, routes.LivePlugin);
-	EXPECT_EQ(midi::MidiVstRoutingSnapshot::MissingPlugin, routes.PluginByMidiOutput[0]);
-	EXPECT_EQ(0u, routes.PluginByMidiOutput[1]);
+
 }
 
 TEST(StationMidiInstrument, QueuedRackRemovalsClearOnlyDeletedCableIdentities)
@@ -454,19 +444,18 @@ TEST(StationMidiInstrument, QueuedRackRemovalsClearOnlyDeletedCableIdentities)
 	auto a = AddPlugin(station, L"queued-a.dll");
 	auto b = AddPlugin(station, L"queued-b.dll");
 	auto c = AddPlugin(station, L"queued-c.dll");
-	ASSERT_TRUE(station->SetLiveVstChannelRoute(0,
-		{true, {a->StateId(), b->StateId(), c->StateId()}}, station->RackRevision()));
-	ASSERT_TRUE(station->SetLiveVstChannelRoute(15,
-		{true, {a->StateId(), b->StateId()}}, station->RackRevision()));
+	ASSERT_TRUE(station->SetMidiChannelRoute(0,
+		{{a->StateId(), b->StateId(), c->StateId()}}, station->RackRevision()));
+	ASSERT_TRUE(station->SetMidiChannelRoute(15,
+		{{a->StateId(), b->StateId()}}, station->RackRevision()));
 	ASSERT_TRUE(station->UnloadManagedVstPlugin(a->StateId()));
 	ASSERT_TRUE(station->UnloadManagedVstPlugin(b->StateId()));
 	for (const auto& job : station->CommitChanges()) station->OnAction(job);
 	station->CommitChanges();
 	ASSERT_EQ(1u, station->GetVstRackSlots().size());
 	EXPECT_EQ(c->StateId(), station->GetVstRackSlots()[0].Identity);
-	const auto& routes = station->LiveVstChannelRoutes();
+	const auto& routes = station->MidiChannelRoutes();
 	EXPECT_EQ((std::vector<std::string>{c->StateId()}), routes[0].PluginIds);
-	EXPECT_TRUE(routes[15].Explicit);
 	EXPECT_TRUE(routes[15].PluginIds.empty());
 }
 
@@ -831,15 +820,15 @@ TEST(StationMidiInstrument, SourceLossPlaybackReleaseUsesItsDestination)
         auto livePlugin = AddPlugin(station, L"fake-live-destination.dll");
         auto playbackPlugin = AddPlugin(station, L"fake-playback-destination.dll");
         AllowAllMidiChannels(station);
-        station->SetMidiVstRoute(midi::LiveMidiOutputIndex, rerouteWhileHeld ? 1u : 0u);
-        station->SetMidiVstRoute(0u, 1u);
+        ASSERT_TRUE(station->SetMidiChannelRoute(0u, {{playbackPlugin->StateId()}}, station->RackRevision()));
+        ASSERT_TRUE(station->SetMidiChannelRoute(1u, {{livePlugin->StateId()}}, station->RackRevision()));
         auto take = MakeMidiTake("routed-cancelled");
         take->Record({}, station->Name(), { 0u }, { "lost" });
         ASSERT_TRUE(take->RecordMidiEvent(MidiEvent::MakeNoteOn(0u, 0u, 60u, 100u), "lost", 0u));
         take->Play(0u, 1000u, 0u);
         station->AddTake(take);
         station->CommitChanges();
-        const auto on = MidiEvent::MakeNoteOn(0u, 0u, 60u, 100u);
+        const auto on = MidiEvent::MakeNoteOn(0u, rerouteWhileHeld ? 0u : 1u, 60u, 100u);
         station->ObservePhysicalMidiForRecording(on, "healthy");
         ASSERT_TRUE(station->TryEnqueueImmediateLiveMidi(on));
         RenderStationBlock(station, 0u, 64u);
@@ -849,8 +838,7 @@ TEST(StationMidiInstrument, SourceLossPlaybackReleaseUsesItsDestination)
         playbackPlugin->Events.clear();
         if (rerouteWhileHeld)
         {
-            station->SetMidiVstRoute(0u, 0u);
-            station->SetMidiVstRoute(midi::LiveMidiOutputIndex, 0u);
+            ASSERT_TRUE(station->SetMidiChannelRoute(0u, {{livePlugin->StateId()}}, station->RackRevision()));
             const auto off = MidiEvent::MakeNoteOff(64u, 0u, 60u);
             station->ObservePhysicalMidiForRecording(off, "healthy");
             ASSERT_TRUE(station->TryEnqueueImmediateLiveMidi(off));
@@ -949,7 +937,7 @@ TEST(StationMidiInstrument, LiveMidiCanRouteToSpecificStationPlugin)
 	auto pluginA = AddPlugin(station, L"fake-a.dll");
 	auto pluginB = AddPlugin(station, L"fake-b.dll");
 	AllowAllMidiChannels(station);
-	station->SetMidiVstRoute(Station::LiveMidiOutputIndex, 1u);
+	ASSERT_TRUE(station->SetMidiChannelRoute(0u, {{pluginB->StateId()}}, station->RackRevision()));
 
 	station->TryEnqueueSyntheticLiveMidi(MidiEvent::MakeNoteOn(16u, 0u, 36u, 120u));
 	RenderStationBlock(station, 0u);
@@ -971,7 +959,7 @@ TEST(StationMidiInstrument, RecordedMidiLoopPlaybackCanRouteToSpecificStationPlu
 	take->Record({}, station->Name(), { 0u }, { "Keys" });
 	take->RecordMidiEvent(MidiEvent::MakeNoteOn(24u, 0u, 48u, 100u), "Keys", 24u);
 	take->Play(0u, 128u, 0u);
-	station->SetMidiVstRoute(0u, 1u);
+	ASSERT_TRUE(station->SetMidiChannelRoute(0u, {{pluginB->StateId()}}, station->RackRevision()));
 
 	RenderStationBlock(station, 0u);
 
@@ -985,7 +973,7 @@ TEST(StationMidiInstrument, RecordedMidiLoopPlaybackCanRouteToSpecificStationPlu
 	EXPECT_FALSE(pluginB->RealtimeFlags[1]);
 }
 
-TEST(StationMidiInstrument, RecordedMidiFollowsRackChannelCablesWithoutOutputOverride)
+TEST(StationMidiInstrument, RecordedMidiFollowsRackChannelCables)
 {
 	auto station = MakeStation("recorded-channel-cables");
 	auto pluginA = AddPlugin(station, L"fake-channel-four.dll");
@@ -997,51 +985,13 @@ TEST(StationMidiInstrument, RecordedMidiFollowsRackChannelCablesWithoutOutputOve
 	ASSERT_TRUE(take->RecordMidiEvent(MidiEvent::MakeNoteOn(24u, 3u, 48u, 100u), "Keys", 24u));
 	ASSERT_TRUE(take->RecordMidiEvent(MidiEvent::MakeNoteOn(24u, 4u, 52u, 100u), "Keys", 24u));
 	take->Play(0u, 128u, 0u);
-	ASSERT_TRUE(station->SetLiveVstChannelRoute(3u, {true, {pluginA->StateId()}}, station->RackRevision()));
-	ASSERT_TRUE(station->SetLiveVstChannelRoute(4u, {true, {pluginB->StateId()}}, station->RackRevision()));
+	ASSERT_TRUE(station->SetMidiChannelRoute(3u, {{pluginA->StateId()}}, station->RackRevision()));
+	ASSERT_TRUE(station->SetMidiChannelRoute(4u, {{pluginB->StateId()}}, station->RackRevision()));
 	RenderStationBlock(station, 0u);
 	ASSERT_FALSE(pluginA->Events.empty());
 	ASSERT_FALSE(pluginB->Events.empty());
 	for (const auto& event : pluginA->Events) EXPECT_EQ(3u, event.Channel());
 	for (const auto& event : pluginB->Events) EXPECT_EQ(4u, event.Channel());
-}
-
-TEST(StationMidiInstrument, ExplicitRecordedOutputOverridesConflictingRackChannelCable)
-{
-	auto station = MakeStation("recorded-output-overrides-cable");
-	auto pluginA = AddPlugin(station, L"fake-cable-target.dll");
-	auto pluginB = AddPlugin(station, L"fake-recorded-output-target.dll");
-	auto take = MakeMidiTake("recorded-output-override-take");
-	station->AddTake(take);
-	station->CommitChanges();
-	take->Record({}, station->Name(), {3u}, {"Keys"});
-	ASSERT_TRUE(take->RecordMidiEvent(MidiEvent::MakeNoteOn(24u, 3u, 48u, 100u), "Keys", 24u));
-	take->Play(0u, 128u, 0u);
-	ASSERT_TRUE(station->SetLiveVstChannelRoute(3u, {true, {pluginA->StateId()}}, station->RackRevision()));
-	const auto channelCables = station->LiveVstChannelRoutes();
-	ASSERT_TRUE(channelCables[3u].Explicit);
-	ASSERT_EQ((std::vector<std::string>{pluginA->StateId()}), channelCables[3u].PluginIds);
-	station->SetMidiVstRoute(0u, 1u);
-	ASSERT_EQ(channelCables, station->LiveVstChannelRoutes());
-	const auto rackRevision = station->RackRevision();
-
-	RenderStationBlock(station, 0u);
-
-	EXPECT_TRUE(pluginA->Events.empty());
-	EXPECT_TRUE(pluginA->RealtimeFlags.empty());
-	ASSERT_EQ(2u, pluginB->Events.size());
-	ASSERT_EQ(2u, pluginB->RealtimeFlags.size());
-	EXPECT_TRUE(pluginB->Events[0].IsNoteOn());
-	EXPECT_TRUE(pluginB->Events[1].IsNoteOff());
-	for (auto index = 0u; index < pluginB->Events.size(); ++index)
-	{
-		EXPECT_EQ(3u, pluginB->Events[index].Channel());
-		EXPECT_EQ(48u, pluginB->Events[index].data1);
-		EXPECT_FALSE(pluginB->RealtimeFlags[index]);
-	}
-	EXPECT_EQ(channelCables, station->LiveVstChannelRoutes());
-	EXPECT_EQ(rackRevision, station->RackRevision());
-	EXPECT_EQ(1u, station->SnapshotMidiVstRoutesForExport().PluginForOutput(0u));
 }
 
 TEST(StationMidiInstrument, RegularRecordFinalizationClosesHeldNotesAtLoopEnd)
@@ -1181,7 +1131,7 @@ TEST(StationMidiInstrument, RecStartUsesStationAllowedChannels)
 	EXPECT_EQ(90u, event.data2);
 }
 
-TEST(StationMidiInstrument, SetMidiVstRouteReplacesPreviousRouteForOutput)
+TEST(StationMidiInstrument, ChannelCableReplacementSelectsNewDestination)
 {
 	auto station = MakeStation("station-route-replace");
 	auto pluginA = AddPlugin(station, L"fake-a.dll");
@@ -1189,8 +1139,8 @@ TEST(StationMidiInstrument, SetMidiVstRouteReplacesPreviousRouteForOutput)
 	auto pluginC = AddPlugin(station, L"fake-c.dll");
 	AllowAllMidiChannels(station);
 
-	station->SetMidiVstRoute(Station::LiveMidiOutputIndex, 1u);
-	station->SetMidiVstRoute(Station::LiveMidiOutputIndex, 2u);
+	ASSERT_TRUE(station->SetMidiChannelRoute(0u, {{pluginB->StateId()}}, station->RackRevision()));
+	ASSERT_TRUE(station->SetMidiChannelRoute(0u, {{pluginC->StateId()}}, station->RackRevision()));
 	station->TryEnqueueSyntheticLiveMidi(MidiEvent::MakeNoteOn(8u, 0u, 40u, 100u));
 
 	RenderStationBlock(station, 0u);
@@ -1201,15 +1151,15 @@ TEST(StationMidiInstrument, SetMidiVstRouteReplacesPreviousRouteForOutput)
 	EXPECT_EQ(40u, pluginC->Events[0].data1);
 }
 
-TEST(StationMidiInstrument, ClearMidiVstRoutesRestoresWholeChainDelivery)
+TEST(StationMidiInstrument, RemovingLastChannelCableRestoresBroadcast)
 {
 	auto station = MakeStation("station-route-clear");
 	auto pluginA = AddPlugin(station, L"fake-a.dll");
 	auto pluginB = AddPlugin(station, L"fake-b.dll");
 	AllowAllMidiChannels(station);
 
-	station->SetMidiVstRoute(Station::LiveMidiOutputIndex, 1u);
-	station->ClearMidiVstRoutes();
+	ASSERT_TRUE(station->SetMidiChannelRoute(0u, {{pluginB->StateId()}}, station->RackRevision()));
+	ASSERT_TRUE(station->SetMidiChannelRoute(0u, {}, station->RackRevision()));
 	station->TryEnqueueSyntheticLiveMidi(MidiEvent::MakeNoteOn(8u, 0u, 41u, 100u));
 
 	RenderStationBlock(station, 0u);
@@ -1218,24 +1168,6 @@ TEST(StationMidiInstrument, ClearMidiVstRoutesRestoresWholeChainDelivery)
 	ASSERT_EQ(1u, pluginB->Events.size());
 	EXPECT_EQ(41u, pluginA->Events[0].data1);
 	EXPECT_EQ(41u, pluginB->Events[0].data1);
-}
-
-TEST(StationMidiInstrument, InvalidRouteFallsBackToWholeChainDelivery)
-{
-	auto station = MakeStation("station-route-invalid");
-	auto pluginA = AddPlugin(station, L"fake-a.dll");
-	auto pluginB = AddPlugin(station, L"fake-b.dll");
-	AllowAllMidiChannels(station);
-
-	station->SetMidiVstRoute(Station::LiveMidiOutputIndex, 99u);
-	station->TryEnqueueSyntheticLiveMidi(MidiEvent::MakeNoteOn(8u, 0u, 42u, 100u));
-
-	RenderStationBlock(station, 0u);
-
-	ASSERT_EQ(1u, pluginA->Events.size());
-	ASSERT_EQ(1u, pluginB->Events.size());
-	EXPECT_EQ(42u, pluginA->Events[0].data1);
-	EXPECT_EQ(42u, pluginB->Events[0].data1);
 }
 
 TEST(StationMidiInstrument, OverdubStartPassesSourceMidiToTargetTake)
@@ -1415,8 +1347,6 @@ TEST(StationMidiInstrument, ManyHeldReleasesRetryAcrossBoundedPluginBlocks)
 	auto plugin = AddPlugin(station, L"fake-many-release.dll");
 	plugin->MaxAcceptedPerBlock = 256u;
 	auto take = MakeMidiTake("many-release-take");
-	station->AddTake(take);
-	station->CommitChanges();
 	take->Record({}, station->Name(), { 0u }, { "Keys" });
 	take->Play(0u, 1024u, 0u);
 	std::vector<MidiEvent> attacks;
@@ -1425,7 +1355,8 @@ TEST(StationMidiInstrument, ManyHeldReleasesRetryAcrossBoundedPluginBlocks)
 			static_cast<std::uint8_t>(i / 128u), static_cast<std::uint8_t>(i % 128u), 100u));
 	auto loop = take->GetMidiLoops().at(0u);
 	loop->ReplaceRecordedEvents(attacks.data(), attacks.size(), 1024u);
-	station->SetMidiVstRoute(0u, 0u);
+	station->AddTake(take);
+	station->CommitChanges();
 	RenderStationBlock(station, 0u);
 	RenderStationBlock(station, 128u);
 	ASSERT_EQ(300u, std::count_if(plugin->ProcessedEvents.begin(), plugin->ProcessedEvents.end(),
@@ -1455,7 +1386,7 @@ TEST(StationMidiInstrument, PartialFanoutAcceptanceRetainsTheAudibleLoopNote)
 	const auto attack = MidiEvent::MakeNoteOn(10u, 0u, 60u, 113u);
 	auto loop = take->GetMidiLoops().at(0u);
 	loop->ReplaceRecordedEvents(&attack, 1u, 256u);
-	station->ClearMidiVstRoutes(); // Broadcast fallback to both plugins.
+	ASSERT_TRUE(station->SetMidiChannelRoute(0u, {}, station->RackRevision()));
 	RenderStationBlock(station, 0u);
 	EXPECT_TRUE(rejected->ProcessedEvents.empty());
 	ASSERT_EQ(1u, accepted->ProcessedEvents.size());
@@ -1472,15 +1403,14 @@ TEST(StationMidiInstrument, SkippedPluginBlockFlushesContinuationAndDropsStaleCo
 	auto station = MakeStation("skipped-editor-block");
 	auto plugin = AddPlugin(station, L"fake-skipped-editor.dll");
 	auto take = MakeMidiTake("skipped-editor-take");
-	station->AddTake(take);
-	station->CommitChanges();
 	take->Record({}, station->Name(), { 0u }, { "Keys" });
 	take->Play(0u, 256u, 0u);
 	const std::array source = { MidiEvent::MakeNoteOn(10u, 0u, 60u, 113u),
 		MidiEvent{ 20u, 0xB0u, 74u, 99u, 0u } };
 	auto loop = take->GetMidiLoops().at(0u);
 	loop->ReplaceRecordedEvents(source.data(), source.size(), 256u);
-	station->SetMidiVstRoute(0u, 0u);
+	station->AddTake(take);
+	station->CommitChanges();
 	plugin->SkipNextProcess = true;
 	RenderStationBlock(station, 0u);
 	EXPECT_TRUE(plugin->ProcessedEvents.empty());
@@ -1555,7 +1485,7 @@ TEST(StationMidiInstrument, DisconnectingChannelCableCancelsDelayedMidiAndPreser
 			station->AddTake(take);
 			if (survivingOwners)
 			{
-				auto explicitTake = MakeMidiTake("explicit-output-owner");
+				auto explicitTake = MakeMidiTake("surviving-channel-owner");
 				explicitTake->Record({}, station->Name(), {0u}, {"source"});
 				explicitTake->Play(0u, 1000u, 0u);
 				const std::array explicitEvents{
@@ -1564,32 +1494,30 @@ TEST(StationMidiInstrument, DisconnectingChannelCableCancelsDelayedMidiAndPreser
 				explicitTake->GetMidiLoops().at(0u)->ReplaceRecordedEvents(
 					explicitEvents.data(), explicitEvents.size(), 1000u);
 				station->AddTake(explicitTake);
-				station->SetMidiVstRoute(1u, 0u);
 			}
 			station->CommitChanges();
 			std::vector<std::string> targets{pluginA->StateId()};
 			if (survivingOwners) targets.push_back(pluginB->StateId());
-			ASSERT_TRUE(station->SetLiveVstChannelRoute(0u, {true, targets}, station->RackRevision()));
-			ASSERT_TRUE(station->SetLiveVstChannelRoute(1u, {true, {pluginA->StateId()}}, station->RackRevision()));
+			ASSERT_TRUE(station->SetMidiChannelRoute(0u, {targets}, station->RackRevision()));
+			ASSERT_TRUE(station->SetMidiChannelRoute(1u, {{pluginA->StateId()}}, station->RackRevision()));
 			ASSERT_TRUE(station->ConfigureRecordedMidiCompensation(256u));
 			ASSERT_TRUE(station->TryEnqueueImmediateLiveMidi(MidiEvent::MakeNoteOn(0u, 1u, 64u, 100u)));
 			ASSERT_TRUE(station->TryEnqueueImmediateLiveMidi({0u, 0xb1u, 64u, 127u}));
 			for (auto sample = 0u; sample < disconnectSample; sample += 128u)
 				RenderStationBlock(station, sample);
 			// At 128 the channel-zero pedal-down is still queued; at 384 it is audible.
-			targets.clear();
-			if (survivingOwners) targets.push_back(pluginB->StateId());
-			ASSERT_TRUE(station->SetLiveVstChannelRoute(0u, {true, targets}, station->RackRevision()));
+			targets = {pluginB->StateId()};
+			ASSERT_TRUE(station->SetMidiChannelRoute(0u, {targets}, station->RackRevision()));
 			for (auto sample = disconnectSample; sample <= 640u; sample += 128u)
 				RenderStationBlock(station, sample);
 			auto count = [](const auto& plugin, std::uint8_t status, std::uint8_t data1, std::uint8_t data2) {
 				return std::count_if(plugin->ProcessedEvents.begin(), plugin->ProcessedEvents.end(),
 					[=](const MidiEvent& event) { return event.status == status && event.data1 == data1 && event.data2 == data2; });
 			};
-			const auto attacks = (disconnectSample == 384u ? 1 : 0) + (survivingOwners ? 1 : 0);
+			const auto attacks = (disconnectSample == 384u ? (survivingOwners ? 2 : 1) : 0);
 			EXPECT_EQ(attacks, count(pluginA, 0x90u, 60u, 100u));
 			EXPECT_EQ(attacks, count(pluginA, 0xb0u, 64u, 127u));
-			const auto releases = disconnectSample == 384u && !survivingOwners ? 1 : 0;
+			const auto releases = disconnectSample == 384u ? 1 : 0;
 			EXPECT_EQ(releases, count(pluginA, 0x80u, 60u, 0u));
 			EXPECT_EQ(releases, count(pluginA, 0xb0u, 64u, 0u));
 			EXPECT_EQ(1, count(pluginA, 0x91u, 62u, 100u));
@@ -1597,8 +1525,9 @@ TEST(StationMidiInstrument, DisconnectingChannelCableCancelsDelayedMidiAndPreser
 			EXPECT_EQ(0, count(pluginA, 0x81u, 62u, 0u));
 			EXPECT_EQ(0, count(pluginA, 0x81u, 64u, 0u));
 			EXPECT_EQ(0, count(pluginA, 0xb1u, 64u, 0u));
-			EXPECT_EQ(survivingOwners ? 1 : 0, count(pluginB, 0x90u, 60u, 100u));
-			EXPECT_EQ(survivingOwners ? 1 : 0, count(pluginB, 0xb0u, 64u, 0u));
+			EXPECT_EQ(survivingOwners ? 2 : 0, count(pluginB, 0x90u, 60u, 100u));
+			EXPECT_EQ(0, count(pluginB, 0x80u, 60u, 0u));
+			EXPECT_EQ(0, count(pluginB, 0xb0u, 64u, 0u));
 			ASSERT_TRUE(station->TryEnqueueImmediateLiveMidi(MidiEvent::MakeNoteOff(768u, 1u, 64u)));
 			ASSERT_TRUE(station->TryEnqueueImmediateLiveMidi({768u, 0xb1u, 64u, 0u}));
 			RenderStationBlock(station, 768u);
@@ -1606,8 +1535,10 @@ TEST(StationMidiInstrument, DisconnectingChannelCableCancelsDelayedMidiAndPreser
 			EXPECT_EQ(1, count(pluginA, 0x81u, 62u, 0u));
 			EXPECT_EQ(1, count(pluginA, 0x81u, 64u, 0u));
 			EXPECT_EQ(1, count(pluginA, 0xb1u, 64u, 0u));
-			EXPECT_EQ(survivingOwners ? 1 : releases, count(pluginA, 0x80u, 60u, 0u));
-			EXPECT_EQ(survivingOwners ? 1 : releases, count(pluginA, 0xb0u, 64u, 0u));
+			EXPECT_EQ(releases, count(pluginA, 0x80u, 60u, 0u));
+			EXPECT_EQ(releases, count(pluginA, 0xb0u, 64u, 0u));
+			EXPECT_EQ(survivingOwners ? 1 : 0, count(pluginB, 0x80u, 60u, 0u));
+			EXPECT_EQ(survivingOwners ? 1 : 0, count(pluginB, 0xb0u, 64u, 0u));
 		}
 }
 
@@ -1665,7 +1596,7 @@ TEST(StationMidiInstrument, RecordedRouteDelayUsesDestinationSuffixLatency)
 		ASSERT_TRUE(take->RecordMidiEvent(MidiEvent::MakeNoteOn(0u, 0u, 60u, 100u), "source", 0u));
 		take->Play(0u, 1000u, 0u);
 		station->AddTake(take);
-		station->SetMidiVstRoute(0u, routeIndex);
+		ASSERT_TRUE(station->SetMidiChannelRoute(0u, {{(routeIndex == 0u ? first : second)->StateId()}}, station->RackRevision()));
 		station->CommitChanges();
 		ASSERT_EQ(64u, station->RecordedPlaybackLatencySamps());
 		ASSERT_TRUE(station->ConfigureRecordedPlaybackCompensation(128u));
@@ -1832,7 +1763,7 @@ TEST(StationMidiInstrument, RerouteAndBypassCancelFullyQueuedShortNote)
 			MidiEvent::MakeNoteOff(64u, 0u, 60u) };
 		take->GetMidiLoops().at(0u)->ReplaceRecordedEvents(source.data(), source.size(), 1000u);
 		station->AddTake(take);
-		station->SetMidiVstRoute(0u, 0u);
+		ASSERT_TRUE(station->SetMidiChannelRoute(0u, {{oldPlugin->StateId()}}, station->RackRevision()));
 		station->CommitChanges();
 		ASSERT_TRUE(station->ConfigureRecordedMidiCompensation(256u));
 		RenderStationBlock(station, 0u);
@@ -1840,7 +1771,7 @@ TEST(StationMidiInstrument, RerouteAndBypassCancelFullyQueuedShortNote)
 		if (bypass) oldPlugin->SetBypassed(true);
 		else
 		{
-			station->SetMidiVstRoute(0u, 1u);
+			ASSERT_TRUE(station->SetMidiChannelRoute(0u, {{newPlugin->StateId()}}, station->RackRevision()));
 			station->CommitChanges();
 		}
 		RenderStationBlock(station, 128u);
@@ -1885,8 +1816,6 @@ TEST(StationMidiInstrument, RejectedDelayedAttackDoesNotFlushAnotherTake)
 		take->GetMidiLoops().at(0u)->ReplaceRecordedEvents(&attack, 1u, 1000u);
 		station->AddTake(take);
 	}
-	station->SetMidiVstRoute(0u, 0u);
-	station->SetMidiVstRoute(1u, 0u);
 	station->CommitChanges();
 	ASSERT_TRUE(station->ConfigureRecordedMidiCompensation(256u));
 	RenderStationBlock(station, 0u);
@@ -2047,7 +1976,7 @@ TEST(StationMidiInstrument, ReroutingAudibleUnmatchedNoteReleasesOldDestination)
 	const auto attack = MidiEvent::MakeNoteOn(0u, 0u, 60u, 100u);
 	take->GetMidiLoops().at(0u)->ReplaceRecordedEvents(&attack, 1u, 1000u);
 	station->AddTake(take);
-	station->SetMidiVstRoute(0u, 0u);
+	ASSERT_TRUE(station->SetMidiChannelRoute(0u, {{oldPlugin->StateId()}}, station->RackRevision()));
 	station->CommitChanges();
 	ASSERT_TRUE(station->ConfigureRecordedMidiCompensation(256u));
 	RenderStationBlock(station, 0u);
@@ -2055,7 +1984,7 @@ TEST(StationMidiInstrument, ReroutingAudibleUnmatchedNoteReleasesOldDestination)
 	RenderStationBlock(station, 256u);
 	ASSERT_EQ(1u, oldPlugin->ProcessedEvents.size());
 	ASSERT_TRUE(oldPlugin->ProcessedEvents[0].IsNoteOn());
-	station->SetMidiVstRoute(0u, 1u);
+	ASSERT_TRUE(station->SetMidiChannelRoute(0u, {{newPlugin->StateId()}}, station->RackRevision()));
 	station->CommitChanges();
 	RenderStationBlock(station, 384u);
 	ASSERT_EQ(2u, oldPlugin->ProcessedEvents.size());
@@ -2486,4 +2415,159 @@ TEST(StationMidiInstrument, RecordedPedalFlushRetriesWithoutLiftingLiveOwner)
 			EXPECT_TRUE(std::any_of(plugin->ProcessedEvents.begin(), plugin->ProcessedEvents.end(), pedalUp));
 		}
 	}
+}
+
+TEST(StationMidiInstrument, LiveAndRecordedShareChannelStatesIncludingSixteenAndUnavailableCables)
+{
+	for (const bool recorded : {false, true})
+		for (const unsigned int mode : {0u, 1u, 2u, 3u, 4u, 5u})
+		{
+			SCOPED_TRACE(recorded);
+			SCOPED_TRACE(mode);
+			auto station = MakeStation("shared-channel-states");
+			auto a = AddPlugin(station, L"state-a.dll");
+			auto b = AddPlugin(station, L"state-b.dll");
+			a->RenderMidiImpulses = b->RenderMidiImpulses = true;
+			station->SetAllowedMidiChannels(mode == 0u ? std::vector<int>{2} : std::vector<int>{1, 2, 16});
+			if (mode >= 2u)
+			{
+				auto routes = station->MidiChannelRoutes();
+				std::vector<std::string> targets{a->StateId()};
+				if (mode == 3u) targets.push_back(b->StateId());
+				if (mode == 4u) targets = {"unavailable-plugin"};
+				if (mode == 5u) targets.push_back("unavailable-plugin");
+				routes[0].PluginIds = routes[15].PluginIds = targets;
+				// Startup restoration retains unavailable cable identities.
+				station->RestoreSavedRack({}, routes, false);
+				station->SetAllowedMidiChannels(station->AllowedMidiChannels());
+			}
+			std::vector<MidiEvent> events;
+			for (const auto channel : {0u, 1u, 15u})
+			{
+				events.push_back(MidiEvent::MakeNoteOn(16u, channel, 60u + channel, 100u));
+				events.push_back({24u, static_cast<std::uint8_t>(0xb0u | channel), 74u, 99u});
+				events.push_back(MidiEvent::MakeNoteOff(32u, channel, 60u + channel));
+			}
+			std::stable_sort(events.begin(), events.end(), [](const auto& l, const auto& r) { return l.sampleOffset < r.sampleOffset; });
+			if (recorded)
+			{
+				auto take = MakeMidiTake("multi-channel-loop");
+				take->Record({}, station->Name(), {0u}, {"source"});
+				take->Play(0u, 1024u, 0u);
+				take->GetMidiLoops().at(0)->ReplaceRecordedEvents(events.data(), events.size(), 1024u);
+				station->AddTake(take); station->CommitChanges();
+			}
+			else for (const auto& event : events) ASSERT_TRUE(station->TryEnqueueImmediateLiveMidi(event));
+			const auto audio = RenderStationAudioBlock(station, 0u, 128u);
+			const auto selected = mode != 0u && mode != 4u;
+			for (const auto& plugin : {a, b})
+			{
+				const auto routed = selected && ((mode != 2u && mode != 5u) || plugin == a);
+				ASSERT_EQ(routed ? 9u : 3u, plugin->Events.size());
+				for (const auto& event : plugin->Events)
+				{
+					EXPECT_TRUE(event.Channel() == 1u || routed);
+					EXPECT_EQ(event.IsNoteOn() ? 16u : event.IsNoteOff() ? 32u : 24u, event.sampleOffset);
+				}
+				for (const auto realtime : plugin->RealtimeFlags) EXPECT_EQ(!recorded, realtime);
+			}
+			EXPECT_FLOAT_EQ(selected ? ((mode == 2u || mode == 5u) ? 4.0f : 6.0f) : 2.0f, audio[16]);
+		}
+}
+
+TEST(StationMidiInstrument, MaskOnlyDisableCancelsDelayedAttackControllersAndPedalBeforeReenable)
+{
+	for (const bool skipDisabledBlock : {false, true})
+	{
+	SCOPED_TRACE(skipDisabledBlock);
+	auto station = MakeStation("disable-delayed-broadcast");
+	auto plugin = AddPlugin(station, L"disable-delayed.dll");
+	station->SetAllowedMidiChannels({1, 16});
+	auto take = MakeMidiTake("disable-material");
+	take->Record({}, station->Name(), {0u}, {"source"}); take->Play(0u, 1024u, 0u);
+	const std::array events{MidiEvent::MakeNoteOn(0u, 0u, 60u, 100u), MidiEvent{0u, 0xb0u, 64u, 127u},
+		MidiEvent{0u, 0xb0u, 74u, 99u}, MidiEvent::MakeNoteOff(64u, 0u, 60u),
+		MidiEvent::MakeNoteOn(0u, 15u, 62u, 100u)};
+	auto loop = take->GetMidiLoops().at(0u);
+	loop->ReplaceRecordedEvents(events.data(), events.size(), 1024u);
+	station->AddTake(take); station->CommitChanges();
+	ASSERT_TRUE(station->ConfigureRecordedMidiCompensation(256u));
+	RenderStationBlock(station, 0u);
+	station->SetAllowedMidiChannels({16}); // No cables existed or changed.
+	if (!skipDisabledBlock) RenderStationBlock(station, 128u);
+	station->SetAllowedMidiChannels({1, 16});
+	if (skipDisabledBlock) RenderStationBlock(station, 128u);
+	RenderStationBlock(station, 256u); RenderStationBlock(station, 384u);
+	ASSERT_EQ(1u, plugin->Events.size()); EXPECT_EQ(15u, plugin->Events[0].Channel());
+	midi::MidiLoop::ExportState saved;
+	ASSERT_TRUE(loop->SnapshotForExport(saved));
+	EXPECT_EQ(events.size(), saved.EventCount);
+	// Only the next loop occurrence may attack on the re-enabled channel.
+	for (auto sample = 512u; sample <= 1280u; sample += 128u) RenderStationBlock(station, sample);
+	EXPECT_TRUE(std::any_of(plugin->Events.begin(), plugin->Events.end(), [](const auto& e) { return e.IsNoteOn() && e.Channel() == 0u && e.sampleOffset == 1280u; }));
+	}
+}
+
+TEST(StationMidiInstrument, DisablingAudibleRecordedChannelRetriesReleasesAndPreservesOtherChannel)
+{
+	auto station = MakeStation("disable-audible-recorded");
+	auto plugin = AddPlugin(station, L"disable-audible.dll");
+	station->SetAllowedMidiChannels({1, 16});
+	auto take = MakeMidiTake("audible-material");
+	take->Record({}, station->Name(), {0u}, {"source"}); take->Play(0u, 1024u, 0u);
+	const std::array events{MidiEvent::MakeNoteOn(0u, 0u, 60u, 100u), MidiEvent{0u, 0xb0u, 64u, 127u},
+		MidiEvent::MakeNoteOn(0u, 15u, 60u, 100u), MidiEvent{0u, 0xbfu, 64u, 127u}};
+	take->GetMidiLoops().at(0u)->ReplaceRecordedEvents(events.data(), events.size(), 1024u);
+	station->AddTake(take); station->CommitChanges(); RenderStationBlock(station, 0u);
+	ASSERT_EQ(4u, plugin->Events.size()); plugin->Events.clear();
+	plugin->MaxAcceptedPerBlock = 0u;
+	station->SetAllowedMidiChannels({16}); RenderStationBlock(station, 128u);
+	EXPECT_TRUE(plugin->Events.empty());
+	plugin->MaxAcceptedPerBlock = 100u; RenderStationBlock(station, 256u);
+	ASSERT_EQ(2u, plugin->Events.size());
+	for (const auto& event : plugin->Events) EXPECT_EQ(0u, event.Channel());
+	EXPECT_TRUE(std::any_of(plugin->Events.begin(), plugin->Events.end(), [](const auto& e) { return e.IsNoteOff() && e.data1 == 60u; }));
+	EXPECT_TRUE(std::any_of(plugin->Events.begin(), plugin->Events.end(), [](const auto& e) { return e.MessageType() == 0xb0u && e.data1 == 64u && e.data2 == 0u; }));
+	station->SetAllowedMidiChannels({1, 16}); RenderStationBlock(station, 384u);
+	EXPECT_EQ(2u, plugin->Events.size());
+}
+
+TEST(StationMidiInstrument, SourceLossKeepsHealthyLiveOwnerOfSameChannelNoteAndPedal)
+{
+	auto station = MakeStation("source-loss-shared-owner");
+	auto plugin = AddPlugin(station, L"source-loss-shared.dll");
+	station->SetAllowedMidiChannels({1});
+	auto take = MakeMidiTake("lost-recorded-owner");
+	take->Record({}, station->Name(), {0u}, {"lost"}); take->Play(0u, 1024u, 0u);
+	const std::array events{MidiEvent::MakeNoteOn(0u, 0u, 60u, 100u), MidiEvent{0u, 0xb0u, 64u, 127u}};
+	take->GetMidiLoops().at(0u)->ReplaceRecordedEvents(events.data(), events.size(), 1024u);
+	station->AddTake(take); station->CommitChanges();
+	for (const auto& event : events)
+	{
+		station->ObservePhysicalMidiForRecording(event, "healthy");
+		ASSERT_TRUE(station->TryEnqueueImmediateLiveMidi(event));
+	}
+	RenderStationBlock(station, 0u); ASSERT_EQ(4u, plugin->Events.size()); plugin->Events.clear();
+	TriggerAction ditch; ditch.ActionType = TriggerAction::TRIGGER_DITCH;
+	ditch.TargetId = take->Id(); ditch.IsSourceLossCancellation = true;
+	ASSERT_EQ(actions::DitchDisposition::Removed, station->OnAction(ditch).DitchResult);
+	RenderStationBlock(station, 128u); station->CommitChanges(); RenderStationBlock(station, 256u);
+	EXPECT_TRUE(plugin->Events.empty());
+	ASSERT_TRUE(station->TryEnqueueImmediateLiveMidi(MidiEvent::MakeNoteOff(384u, 0u, 60u)));
+	ASSERT_TRUE(station->TryEnqueueImmediateLiveMidi({384u, 0xb0u, 64u, 0u}));
+	RenderStationBlock(station, 384u); ASSERT_EQ(2u, plugin->Events.size());
+	EXPECT_TRUE(plugin->Events[0].IsNoteOff()); EXPECT_EQ(64u, plugin->Events[1].data1); EXPECT_EQ(0u, plugin->Events[1].data2);
+}
+
+TEST(StationMidiInstrument, BroadcastUsesMidiCapabilitiesRatherThanAudioRackOrder)
+{
+	auto station = MakeStation("broadcast-capabilities");
+	auto a = AddPlugin(station, L"broadcast-first.dll");
+	auto audioOnly = AddPlugin(station, L"audio-only.dll");
+	auto b = AddPlugin(station, L"broadcast-last.dll");
+	audioOnly->MidiCapabilities = {true, false, false};
+	station->SetAllowedMidiChannels({16});
+	ASSERT_TRUE(station->TryEnqueueImmediateLiveMidi(MidiEvent::MakeNoteOn(0u, 15u, 60u, 100u)));
+	RenderStationBlock(station, 0u);
+	EXPECT_EQ(1u, a->Events.size()); EXPECT_TRUE(audioOnly->Events.empty()); EXPECT_EQ(1u, b->Events.size());
 }

@@ -356,21 +356,11 @@ namespace io
 				jamStation.VstChain = station->VstEntries();
 				jamStation.StationPhaseOffsetSamps = station->StationPhaseOffsetSamps();
 				jamStation.AllowedMidiChannels = station->AllowedMidiChannels();
-				jamStation.HasLiveVstRoutes = true;
-				jamStation.LiveVstRoutes = station->LiveVstChannelRoutes();
+				jamStation.MidiChannelRoutes = station->MidiChannelRoutes();
 				jamStation.AudioRoutes = station->SnapshotAudioRoutesForExport();
 				jamStation.HasAudioRoutes = true;
                 if (numbered) for (auto& routes : jamStation.AudioRoutes)
                     std::erase_if(routes, [&](auto channel) { return channel >= streamParams.NumOutputChannels; });
-				const auto routes = station->SnapshotMidiVstRoutesForExport();
-				for (std::size_t outputIndex = 0u; outputIndex < routes.PluginByMidiOutput.size(); ++outputIndex)
-				{
-					if (routes.PluginByMidiOutput[outputIndex] != midi::MidiVstRoutingSnapshot::NoPlugin)
-						jamStation.MidiRoutes.push_back({ static_cast<unsigned int>(outputIndex), false,
-							static_cast<unsigned int>(routes.PluginByMidiOutput[outputIndex]) });
-				}
-				if (routes.LivePlugin != midi::MidiVstRoutingSnapshot::NoPlugin)
-					jamStation.MidiRoutes.push_back({ 0u, true, static_cast<unsigned int>(routes.LivePlugin) });
 
 				const auto takes = station->GetLoopTakes();
 				for (std::size_t takeIndex = 0u; takeIndex < takes.size(); ++takeIndex)

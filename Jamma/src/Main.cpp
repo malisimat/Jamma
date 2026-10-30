@@ -363,7 +363,6 @@ io::JamFile EmptyJam()
 	{
 		station.LoopTakes.clear();
 		station.VstChain.clear();
-		station.MidiRoutes.clear();
 		station.StationPhaseOffsetSamps = 0;
 	}
 	return jam;

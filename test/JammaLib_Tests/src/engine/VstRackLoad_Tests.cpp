@@ -226,8 +226,7 @@ TEST_F(VstRackLoadTest, LoadedMissingStationCableStaysRecoverableUntilRemoved)
 	saved.Id = "recoverable-station";
 	saved.Name = "recoverable station";
 	saved.StationType = 0;
-	saved.HasLiveVstRoutes = true;
-	saved.LiveVstRoutes[3] = {true, {"unavailable-slot"}};
+	saved.MidiChannelRoutes[3] = {{"unavailable-slot"}};
 	io::JamFile::VstEntry entry;
 	entry.Id = "unavailable-slot";
 	entry.Path = utils::EncodeUtf8(MissingPath(L"unavailable.dll"));
@@ -242,28 +241,26 @@ TEST_F(VstRackLoadTest, LoadedMissingStationCableStaysRecoverableUntilRemoved)
 	auto station = *restored;
 	ASSERT_EQ(1u, station->GetVstRackSlots().size());
 	EXPECT_TRUE(station->GetVstRackSlots()[0].Failed);
-	EXPECT_EQ((std::vector<std::string>{"unavailable-slot"}), station->LiveVstChannelRoutes()[3].PluginIds);
+	EXPECT_EQ((std::vector<std::string>{"unavailable-slot"}), station->MidiChannelRoutes()[3].PluginIds);
 	ASSERT_TRUE(station->LoadManagedVstSlot(MissingPath(L"retry.dll"), "unavailable-slot"));
 	for (const auto& job : station->CommitChanges()) station->OnAction(job);
 	station->CommitChanges();
 	EXPECT_TRUE(station->GetVstRackSlots()[0].Failed);
-	EXPECT_EQ((std::vector<std::string>{"unavailable-slot"}), station->LiveVstChannelRoutes()[3].PluginIds);
+	EXPECT_EQ((std::vector<std::string>{"unavailable-slot"}), station->MidiChannelRoutes()[3].PluginIds);
 	ASSERT_TRUE(station->UnloadManagedVstPlugin("unavailable-slot"));
 	for (const auto& job : station->CommitChanges()) station->OnAction(job);
 	station->CommitChanges();
 	EXPECT_TRUE(station->GetVstRackSlots().empty());
-	EXPECT_TRUE(station->LiveVstChannelRoutes()[3].Explicit);
-	EXPECT_TRUE(station->LiveVstChannelRoutes()[3].PluginIds.empty());
+	EXPECT_TRUE(station->MidiChannelRoutes()[3].PluginIds.empty());
 }
 
 TEST_F(VstRackLoadTest, InactiveRackPreservesRawOrderRoutesAndExplicitRecovery)
 {
 	io::JamFile::Station saved;
 	saved.Id = "raw-rack"; saved.Name = "raw rack"; saved.StationType = 0;
-	saved.HasLiveVstRoutes = true;
-	saved.LiveVstRoutes[0] = {true, {"missing", "slot-16"}};
-	saved.LiveVstRoutes[1] = {true, {}};
-	saved.LiveVstRoutes[15] = {true, {"slot-16", "slot-17"}};
+	saved.MidiChannelRoutes[0] = {{"missing", "slot-16"}};
+	saved.MidiChannelRoutes[1] = {{}};
+	saved.MidiChannelRoutes[15] = {{"slot-16", "slot-17"}};
 	for (auto index = 0u; index < 33u; ++index)
 	{
 		io::JamFile::VstEntry entry;
@@ -284,25 +281,14 @@ TEST_F(VstRackLoadTest, InactiveRackPreservesRawOrderRoutesAndExplicitRecovery)
 	EXPECT_EQ(1u, station->GetVstRackSlots(32, 32).size());
 	EXPECT_FALSE(station->RecoverRack(station->RackRevision()));
 	EXPECT_EQ(33u, station->VstEntries().size());
-	midi::MidiVstRoutingSnapshot indexedRoutes;
-	indexedRoutes.LivePlugin = 16u;
-	indexedRoutes.PluginByMidiOutput = {16u, 17u, midi::MidiVstRoutingSnapshot::MissingPlugin};
-	ASSERT_TRUE(station->RestoreMidiVstRoutes(indexedRoutes, station->RackSlotCount()));
 	ASSERT_TRUE(station->RemoveInactiveRackSlot(16, station->RackRevision()));
 	EXPECT_FALSE(station->RemoveInactiveRackSlot(16, station->RackRevision() - 1u));
 	saved.VstChain = station->VstEntries();
-	saved.LiveVstRoutes = station->LiveVstChannelRoutes();
+	saved.MidiChannelRoutes = station->MidiChannelRoutes();
 	EXPECT_EQ("slot-17", saved.VstChain[16].Id);
-	EXPECT_EQ((std::vector<std::string>{"missing"}), saved.LiveVstRoutes[0].PluginIds);
-	EXPECT_TRUE(saved.LiveVstRoutes[1].Explicit);
-	EXPECT_TRUE(saved.LiveVstRoutes[1].PluginIds.empty());
-	EXPECT_EQ((std::vector<std::string>{"slot-17"}), saved.LiveVstRoutes[15].PluginIds);
-	const auto compactedRoutes = station->SnapshotMidiVstRoutesForExport();
-	EXPECT_EQ(midi::MidiVstRoutingSnapshot::MissingPlugin, compactedRoutes.LivePlugin);
-	ASSERT_EQ(3u, compactedRoutes.PluginByMidiOutput.size());
-	EXPECT_EQ(midi::MidiVstRoutingSnapshot::MissingPlugin, compactedRoutes.PluginByMidiOutput[0]);
-	EXPECT_EQ(16u, compactedRoutes.PluginByMidiOutput[1]);
-	EXPECT_EQ(midi::MidiVstRoutingSnapshot::MissingPlugin, compactedRoutes.PluginByMidiOutput[2]);
+	EXPECT_EQ((std::vector<std::string>{"missing"}), saved.MidiChannelRoutes[0].PluginIds);
+	EXPECT_TRUE(saved.MidiChannelRoutes[1].PluginIds.empty());
+	EXPECT_EQ((std::vector<std::string>{"slot-17"}), saved.MidiChannelRoutes[15].PluginIds);
 	io::JamFile jam; jam.Name = "rack-roundtrip"; jam.Stations.push_back(saved);
 	std::stringstream encoded;
 	ASSERT_TRUE(io::JamFile::ToStream(jam, encoded));
@@ -312,7 +298,7 @@ TEST_F(VstRackLoadTest, InactiveRackPreservesRawOrderRoutesAndExplicitRecovery)
 	const auto& roundTrip = parsed->Stations[0];
 	ASSERT_EQ(32u, roundTrip.VstChain.size());
 	EXPECT_EQ("slot-17", roundTrip.VstChain[16].Id);
-	EXPECT_EQ(saved.LiveVstRoutes, roundTrip.LiveVstRoutes);
+	EXPECT_EQ(saved.MidiChannelRoutes, roundTrip.MidiChannelRoutes);
 	EXPECT_TRUE(roundTrip.AllowedMidiChannels.empty());
 	ASSERT_TRUE(station->RecoverRack(station->RackRevision()));
 	EXPECT_FALSE(station->RackInactive());

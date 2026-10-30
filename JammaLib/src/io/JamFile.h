@@ -19,7 +19,7 @@
 #include "Json.h"
 #include "Timer.h"
 #include "../midi/MidiQuantisation.h"
-#include "../midi/MidiVstOutputSink.h"
+#include "../midi/MidiChannelRoute.h"
 #include "../audio/AudioMixer.h"
 #include "../engine/PerformanceGroups.h"
 
@@ -166,14 +166,6 @@ namespace io
 			std::string Id;
 		};
 
-		struct MidiRoute
-		{
-			// OutputIndex is the flattened take/stream index. Live routes use IsLive.
-			unsigned int OutputIndex = 0;
-			bool IsLive = false;
-			unsigned int PluginIndex = 0;
-		};
-
 		struct LoopTake
 		{
 			std::string Name;
@@ -210,9 +202,7 @@ namespace io
 			std::vector<VstEntry> VstChain;
 			std::int32_t StationPhaseOffsetSamps = 0;
 			std::vector<int> AllowedMidiChannels;
-			std::vector<MidiRoute> MidiRoutes;
-			std::array<midi::LiveVstChannelRoute, 16> LiveVstRoutes{};
-			bool HasLiveVstRoutes = false;
+			std::array<midi::MidiChannelRoute, 16> MidiChannelRoutes{};
 			// One destination-output list per station bus mixer.
 			std::vector<std::vector<unsigned long>> AudioRoutes;
 			bool HasAudioRoutes = false;

@@ -1703,7 +1703,6 @@ void Scene::_RequestStationControl(gui::GuiStationControls::Intent intent)
 				[&](const auto& trigger) { return trigger.StationTarget == params.Name; })) break;
 	}
 	auto station = std::make_shared<Station>(params, Station::GetMixerParams(params.Size, MergeMixBehaviourParams{}));
-	station->SetAllowedMidiChannels({1});
 	_PrepareStation(station);
 	auto candidate = _stations;
 	auto firstRemote = std::find_if(candidate.begin(), candidate.end(), [](const auto& entry) { return entry->IsRemote(); });

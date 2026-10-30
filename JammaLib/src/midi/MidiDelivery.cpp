@@ -35,10 +35,11 @@ bool MidiDelivery::ConfigureCompensation(const PreparedState& state, unsigned in
 
 void MidiDelivery::Prepare(PreparedState& state, const PreparedState* previous,
 	std::shared_ptr<vst::VstChain> chain, const std::vector<std::shared_ptr<engine::LoopTake>>& takes,
-	const MidiVstRoutingSnapshot* outputRoutes, const std::array<LiveVstChannelRoute, 16>& channelRoutes,
+	std::uint16_t enabledChannels, const std::array<MidiChannelRoute, 16>& channelRoutes,
 	unsigned int renderChannels)
 {
 	state.MidiChain = std::move(chain);
+	state.EnabledChannels = enabledChannels;
 	auto queueRemovedBindings = [&]() {
 		if (!previous) return;
 		for (const auto& routes : previous->MidiPlaybackRoutes)
@@ -100,61 +101,48 @@ void MidiDelivery::Prepare(PreparedState& state, const PreparedState* previous,
 		}
 		destinations.push_back(std::move(destination));
 	}
-	// Preserve the existing broadcast fallback, including partially mapped routes.
-	auto resolve = [&](unsigned int output) {
-		const auto pluginIndex = outputRoutes ? outputRoutes->PluginForOutput(output) : MidiVstRoutingSnapshot::NoPlugin;
-		if (pluginIndex == MidiVstRoutingSnapshot::MissingPlugin)
-			return std::vector<std::shared_ptr<MidiDestination>>{};
-		if (pluginIndex < destinations.size())
-			return std::vector<std::shared_ptr<MidiDestination>>{ destinations[pluginIndex] };
-		return destinations;
-	};
-	state.LiveMidiDestinations = resolve(LiveMidiOutputIndex);
+	// The host currently has no plugin-to-plugin MIDI forwarding (VST3 outputEvents
+	// is null). Audio rack order alone does not imply an upstream MIDI supply.
 	for (auto channel = 0u; channel < 16u; ++channel)
 	{
-		const auto& route = channelRoutes[channel];
-		state.RecordedChannelExplicit[channel] = route.Explicit;
-		if (route.Explicit)
-			for (const auto& destination : destinations)
-				if (destination->Plugin && std::find(route.PluginIds.begin(), route.PluginIds.end(),
-					destination->Plugin->StateId()) != route.PluginIds.end())
-					state.RecordedChannelDestinations[channel].push_back(destination);
-		auto& prepared = state.LiveChannelDestinations[channel];
-		for (const auto& destination : state.LiveMidiDestinations)
+		if (!(enabledChannels & (1u << channel))) continue;
+		const auto& ids = channelRoutes[channel].PluginIds;
+		for (const auto& destination : destinations)
 		{
 			if (!destination->Plugin) continue;
 			const auto capabilities = destination->Plugin->MidiInput();
 			if (!capabilities.Known || (!capabilities.Notes && !capabilities.Controllers)) continue;
-			if (!route.Explicit || std::find(route.PluginIds.begin(), route.PluginIds.end(),
-				destination->Plugin->StateId()) != route.PluginIds.end()) prepared.push_back(destination);
+			// Retained unavailable identities still make a channel cabled, never broadcast.
+			if (ids.empty() || std::find(ids.begin(), ids.end(), destination->Plugin->StateId()) != ids.end())
+				state.LiveChannelDestinations[channel].push_back(destination);
 		}
-		// Explicit live routing replaces only the legacy live selection.
-		if (route.Explicit)
-			for (const auto& destination : destinations)
-			{
-				if (!destination->Plugin || std::find(prepared.begin(), prepared.end(), destination) != prepared.end()) continue;
-				const auto capability = destination->Plugin->MidiInput();
-				if (!capability.Known || (!capability.Notes && !capability.Controllers)) continue;
-				if (std::find(route.PluginIds.begin(), route.PluginIds.end(), destination->Plugin->StateId()) != route.PluginIds.end())
-					prepared.push_back(destination);
-			}
 	}
 	// Route history matters within the current chain. Removed plugins are unloaded
 	// by the structural owner; do not repin their destinations on every publication.
 	state.MidiDestinations = destinations;
-	state.LiveDestinationChannels.assign(destinations.size(), 0u);
+	state.DestinationChannels.assign(destinations.size(), 0u);
 	for (auto index = 0u; index < destinations.size(); ++index)
 		for (auto channel = 0u; channel < 16u; ++channel)
 			if (std::find(state.LiveChannelDestinations[channel].begin(), state.LiveChannelDestinations[channel].end(), destinations[index]) != state.LiveChannelDestinations[channel].end())
-				state.LiveDestinationChannels[index] |= static_cast<std::uint16_t>(1u << channel);
+				state.DestinationChannels[index] |= static_cast<std::uint16_t>(1u << channel);
+	state.DestinationRetirements.resize(destinations.size());
+	if (previous)
+		for (auto index = std::size_t{0u}; index < destinations.size(); ++index)
+		{
+			const auto old = std::find(previous->MidiDestinations.begin(), previous->MidiDestinations.end(), destinations[index]);
+			if (old == previous->MidiDestinations.end()) continue;
+			const auto oldIndex = static_cast<std::size_t>(old - previous->MidiDestinations.begin());
+			auto& retirements = state.DestinationRetirements[index];
+			retirements = previous->DestinationRetirements[oldIndex];
+			const auto removed = previous->DestinationChannels[oldIndex] & ~state.DestinationChannels[index];
+			for (auto channel = 0u; channel < 16u; ++channel)
+				if (removed & (1u << channel)) ++retirements[channel];
+		}
 	for (const auto& take : takes)
 		for (const auto& loop : take->GetMidiLoopSnapshot())
 		{
 			std::vector<std::shared_ptr<MidiPlaybackBinding>> bindings;
-			const auto outputIndex = static_cast<unsigned int>(state.MidiPlaybackRoutes.size());
-			state.MidiPlaybackUsesChannelRoutes.push_back(!outputRoutes ||
-				outputRoutes->PluginForOutput(outputIndex) == MidiVstRoutingSnapshot::NoPlugin);
-			for (const auto& destination : resolve(outputIndex))
+			for (const auto& destination : destinations)
 			{
 				std::shared_ptr<MidiPlaybackBinding> binding;
 				for (const auto& existing : _midiPlaybackBindings)
@@ -352,18 +340,17 @@ void MidiDelivery::_InvalidateScheduledMidiAtBlockStart(const PreparedState& sta
 		destination->ScheduledCount = 0u;
 	}
 	for (auto output = std::size_t{0u}; output < state.MidiPlaybackRoutes.size(); ++output)
-		for (const auto& binding : state.MidiPlaybackRoutes[output])
+		for (auto index = std::size_t{0u}; index < state.MidiPlaybackRoutes[output].size(); ++index)
 		{
+			const auto& binding = state.MidiPlaybackRoutes[output][index];
 			if (!binding || !binding->Loop || !binding->Destination) continue;
-			auto channels = std::uint16_t{0xffffu};
-			if (output < state.MidiPlaybackUsesChannelRoutes.size() && state.MidiPlaybackUsesChannelRoutes[output])
-				for (auto channel = 0u; channel < 16u; ++channel)
-					if (state.RecordedChannelExplicit[channel] &&
-						std::find(state.RecordedChannelDestinations[channel].begin(),
-							state.RecordedChannelDestinations[channel].end(), binding->Destination) ==
-							state.RecordedChannelDestinations[channel].end())
-						channels &= static_cast<std::uint16_t>(~(1u << channel));
-			const auto removed = static_cast<std::uint16_t>(binding->AllowedChannels & ~channels);
+			const auto channels = state.DestinationChannels[index];
+			auto removed = static_cast<std::uint16_t>(binding->AllowedChannels & ~channels);
+			for (auto channel = 0u; channel < 16u; ++channel)
+				if (binding->AppliedRetirements[channel] != state.DestinationRetirements[index][channel])
+					removed |= static_cast<std::uint16_t>(1u << channel);
+			binding->AppliedRetirements = state.DestinationRetirements[index];
+			binding->CancelChannelsThisBlock = removed;
 			binding->AllowedChannels = channels;
 			if (removed)
 			{
@@ -422,7 +409,8 @@ void MidiDelivery::_InvalidateScheduledMidiAtBlockStart(const PreparedState& sta
 			const bool invalid = owner && (forceCancel || bypassStarted
 				|| !owner->RoutingActive.load(std::memory_order_acquire)
 				|| owner->CancelScheduledThisBlock);
-			if (owner && (invalid || !(owner->AllowedChannels & (1u << entry.Event.Channel()))))
+			if (owner && (invalid || !(owner->AllowedChannels & (1u << entry.Event.Channel()))
+				|| (owner->CancelChannelsThisBlock & (1u << entry.Event.Channel()))))
 			{
 				if (invalid)
 				{
@@ -728,18 +716,16 @@ bool MidiDelivery::MidiPlaybackSink::TryOnEvent(unsigned int outputIndex, const 
 	const bool sustainRelease = event.MessageType() == 0xb0u && event.data1 == 64u && event.data2 < 64u;
 	const bool release = event.IsNoteOff() || sustainRelease;
 	bool accepted = release;
+	bool eligible = false;
 	for (const auto& binding : _state.MidiPlaybackRoutes[outputIndex])
 	{
 		if (binding->Take->IsSourceLossCancelled() && event.IsNoteOn()) continue;
 		auto& destination = *binding->Destination;
 		const auto channel = event.Channel();
-		if (outputIndex < _state.MidiPlaybackUsesChannelRoutes.size() &&
-			_state.MidiPlaybackUsesChannelRoutes[outputIndex] && _state.RecordedChannelExplicit[channel] &&
-			std::find(_state.RecordedChannelDestinations[channel].begin(),
-				_state.RecordedChannelDestinations[channel].end(), binding->Destination) ==
-				_state.RecordedChannelDestinations[channel].end() &&
+		if (!(binding->AllowedChannels & (1u << channel)) &&
 			!(event.IsNoteOff() && binding->Held.test(slot)) &&
 			!(sustainRelease && binding->AudibleSustain.test(channel))) continue;
+		eligible = true;
 		const bool suppressSource = binding->Take->IsMuted() || binding->Take->IsSourceLossCancelled();
 		if (suppressSource && release)
 			MidiDelivery::_RecoverCancelledScheduledMidi(destination,
@@ -764,7 +750,8 @@ bool MidiDelivery::MidiPlaybackSink::TryOnEvent(unsigned int outputIndex, const 
 			binding->HasHeld.store(binding->Held.any(), std::memory_order_release);
 		}
 	}
-	return accepted;
+	// Suppression consumes the source event; it must not replay after re-enable.
+	return !eligible || accepted;
 }
 
 bool MidiDelivery::_ReleaseLostPlaybackMidi(MidiPlaybackBinding& binding, std::uint32_t sample,
@@ -848,7 +835,7 @@ void MidiDelivery::BeginRetiredBlock(const PreparedState& state,
 void MidiDelivery::ProcessBlock(const PreparedState& state,
 	std::span<const std::shared_ptr<engine::LoopTake>> takes, std::span<float* const> instrumentPtrs,
 	bool vstActive, const std::atomic<bool>& membershipRemoving,
-	const std::atomic<std::uint16_t>& allowedChannels, unsigned int sampsToRead,
+	unsigned int sampsToRead,
 	std::uint32_t blockStartSample) noexcept
 {
 	if (vstActive)
@@ -858,8 +845,12 @@ void MidiDelivery::ProcessBlock(const PreparedState& state,
 		for (auto index = 0u; index < state.MidiDestinations.size(); ++index)
 		{
 			const auto& destination = state.MidiDestinations[index];
-			const auto effective = static_cast<std::uint16_t>(state.LiveDestinationChannels[index] & allowedChannels.load(std::memory_order_acquire));
-			const auto removed = static_cast<std::uint16_t>(destination->AppliedLiveChannels & ~effective);
+			const auto effective = static_cast<std::uint16_t>(state.DestinationChannels[index]);
+			auto removed = static_cast<std::uint16_t>(destination->AppliedLiveChannels & ~effective);
+			for (auto channel = 0u; channel < 16u; ++channel)
+				if (destination->AppliedLiveRetirements[channel] != state.DestinationRetirements[index][channel])
+					removed |= static_cast<std::uint16_t>(1u << channel);
+			destination->AppliedLiveRetirements = state.DestinationRetirements[index];
 			destination->AppliedLiveChannels = effective;
 			if (!removed) continue;
 			for (auto channel = 0u; channel < 16u; ++channel)
@@ -988,7 +979,7 @@ void MidiDelivery::ProcessBlock(const PreparedState& state,
 			blockStartSample,
 			blockStartSample);
 		const bool release = liveMidi.IsNoteOff() || (liveMidi.MessageType() == 0xb0u && liveMidi.data1 == 64u && liveMidi.data2 < 64u);
-		if (vstActive && (!membershipRemoving.load(std::memory_order_acquire) || release) && ((allowedChannels.load(std::memory_order_acquire) & (1u << liveMidi.Channel())) != 0u || release))
+		if (vstActive && (!membershipRemoving.load(std::memory_order_acquire) || release) && ((state.EnabledChannels & (1u << liveMidi.Channel())) != 0u || release))
 		{
 			auto revision = syntheticEntry.LiveNoteOnRevision;
 			if (liveMidi.MessageType() == 0xb0u && liveMidi.data1 == 64u && liveMidi.data2 >= 64u)

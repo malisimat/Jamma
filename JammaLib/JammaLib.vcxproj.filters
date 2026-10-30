@@ -444,7 +444,7 @@
     <ClInclude Include="src\midi\MidiIndexedOutputSink.h">
       <Filter>src\midi</Filter>
     </ClInclude>
-    <ClInclude Include="src\midi\MidiVstOutputSink.h">
+    <ClInclude Include="src\midi\MidiChannelRoute.h">
       <Filter>src\midi</Filter>
     </ClInclude>
     <ClInclude Include="src\graphics\MidiModel.h">
@@ -932,9 +932,6 @@
       <Filter>src\midi</Filter>
     </ClCompile>
     <ClCompile Include="src\midi\MidiIndexedOutputSink.cpp">
-      <Filter>src\midi</Filter>
-    </ClCompile>
-    <ClCompile Include="src\midi\MidiVstOutputSink.cpp">
       <Filter>src\midi</Filter>
     </ClCompile>
     <ClCompile Include="src\graphics\MidiModel.cpp">
