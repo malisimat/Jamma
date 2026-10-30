@@ -1530,7 +1530,8 @@ TEST(AudioLoopShift, FractionalSeamReadsRemainContinuousForShortAndLongFades)
     constexpr double pi = 3.14159265358979323846;
     for (const auto length : {17ul,97ul}) for (const auto direction : {-1,1})
     {
-        SCOPED_TRACE(length); SCOPED_TRACE(direction);
+        SCOPED_TRACE(length);
+        SCOPED_TRACE(direction);
         audio::WireMixBehaviourParams wire; wire.Channels={0u};
         audio::AudioMixerParams mixer; mixer.Size={100,100}; mixer.Behaviour=wire;
         engine::LoopParams params; params.FadeSamps=length==17ul ? 64u : 16u;
