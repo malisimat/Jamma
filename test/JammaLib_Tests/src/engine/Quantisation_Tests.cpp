@@ -1192,12 +1192,13 @@ TEST(QuantisationVisuals, ShiftedMasterMovesBlueFramesByEachLoopLengthWithoutMov
 		visual.LoopLengthSamps = i == 0u ? 1000ul : 2000ul;
 		visual.GrainSamps = 250u; visual.LoopGrains = i == 0u ? 4u : 8u;
 		visual.LoopIndexFrac = 0.2; visual.HalfHeight = 25.0f; visual.Radius = 100.0f;
-		visual.Fraction = midi::MidiQuantisationFraction::Quarter;
+		visual.Fraction = midi::MidiQuantisationFraction::Half;
 	}
 	frames.SetLoopTakeVisuals(250u,visuals);
 	divisions.SetLoopTakeVisuals(visuals);
 	const auto baselineFrames = frames.Transforms();
 	const auto baselineDivisions = divisions.Transforms();
+	ASSERT_FALSE(baselineDivisions.empty());
 	ASSERT_EQ(12u * 4u,baselineFrames.size());
 	for (const auto offset : {50,-50,2000000050,0})
 	{
