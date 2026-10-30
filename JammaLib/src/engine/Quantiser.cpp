@@ -1949,7 +1949,7 @@ void engine::Quantiser::RestoreMasterAudioLoopId(const std::string& id,
 	if (id.empty()) return;
 	for (const auto& station : stations)
 		if (station && !station->IsRemote()) for (const auto& take : station->GetLoopTakes())
-			for (const auto& loop : take->GetLoops()) if (loop && loop->Id() == id)
+			if (const auto loop = take ? take->FindStagedAudioLoopById(id) : nullptr)
 			{
 				_masterLoop = loop;
 				_masterLoopLengthSamps.store(_clock && _clock->SeedSourceLength() ? _clock->SeedSourceLength() : loop->LoopLength(), std::memory_order_release);

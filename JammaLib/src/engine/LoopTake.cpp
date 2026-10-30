@@ -4840,3 +4840,10 @@ void LoopTake::_PublishRecordingCompletion(std::uint64_t generation) noexcept
 	_pendingCompletionGeneration.store(generation, std::memory_order_release);
 	_changesMade.store(true, std::memory_order_release);
 }
+
+std::shared_ptr<engine::Loop> engine::LoopTake::FindStagedAudioLoopById(const std::string& id) const
+{
+	for (const auto& loop : _backLoops)
+		if (loop && loop->Id() == id) return loop;
+	return nullptr;
+}

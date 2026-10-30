@@ -1179,6 +1179,7 @@ TEST(TriggerPredelayStation, FirstAudioAndMixedMasterReserveCompensatedOrigin)
             const auto restoredStations = (*loaded)->SnapshotStations(); ASSERT_EQ(2u,restoredStations.size());
             EXPECT_EQ(-1500,restoredStations[0]->MasterAudioReferenceOffsetSamps());
             EXPECT_EQ(-1500,restoredStations[1]->MasterAudioReferenceOffsetSamps());
+            (*loaded)->CommitChanges(); // Publish restored material through the normal scene boundary.
             ASSERT_EQ(2u,restoredStations[1]->GetLoopTakes().size());
             ASSERT_EQ(1u,restoredStations[1]->GetLoopTakes()[1]->GetLoops().size());
             const auto restoredMaster = restoredStations[1]->GetLoopTakes()[1]->GetLoops()[0];

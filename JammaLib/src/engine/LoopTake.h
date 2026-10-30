@@ -169,6 +169,8 @@ namespace engine
 		std::string SourceId() const;
 		LoopTakeSource TakeSourceType() const;
 		const std::vector<std::shared_ptr<Loop>>& GetLoops() const { return _loops; }
+		// Owner/job-side restore lookup includes material awaiting ordinary publication.
+		std::shared_ptr<Loop> FindStagedAudioLoopById(const std::string& id) const;
 		std::vector<std::vector<unsigned long>> SnapshotAudioRoutesForExport() const;
 		double MasterLevelForExport() const;
 		std::vector<double> BusLevelsForExport() const;
