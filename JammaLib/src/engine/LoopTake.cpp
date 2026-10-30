@@ -1786,7 +1786,9 @@ std::optional<engine::QuantisationLoopTakeVisual> LoopTake::QuantisationVisual()
 		true,
 		static_cast<std::uint32_t>(resolvedQuantisation.GridInterval()),
 		static_cast<std::uint32_t>(resolvedQuantisation.GridDivisions() / midi::MidiQuantisation::Divisor(resolvedQuantisation.Fraction)),
-		resolvedQuantisation.HasRemoteGrid() ? resolvedQuantisation.RemoteOriginSamps : 0
+		resolvedQuantisation.HasRemoteGrid() ? resolvedQuantisation.RemoteOriginSamps : 0,
+		0,
+		midiSnapshot && !midiSnapshot->empty()
 	};
 }
 

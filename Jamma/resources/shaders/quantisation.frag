@@ -2,6 +2,8 @@
 
 out vec4 ColorOUT;
 
+flat in float MidiColours;
+
 uniform float Highlight;
 uniform float OverlayAlpha;
 uniform float SceneDim;
@@ -14,8 +16,8 @@ void main()
 	if (PartKind > 0.5)
 		partAlpha = 0.48;
 
-	vec3 frameColour  = vec3(0.62, 0.70, 0.90);
-	vec3 backingColour = vec3(0.18, 0.22, 0.40);
+	vec3 frameColour  = mix(vec3(0.20, 0.78, 0.58), vec3(0.58, 0.40, 0.86), MidiColours);
+	vec3 backingColour = mix(vec3(0.06, 0.27, 0.20), vec3(0.22, 0.12, 0.36), MidiColours);
 
 	vec3 colour = frameColour;
 	if (PartKind > 0.5)

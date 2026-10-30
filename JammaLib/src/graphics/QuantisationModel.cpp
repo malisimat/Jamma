@@ -230,6 +230,7 @@ void QuantisationModel::SetLoopTakeVisuals(unsigned int seedSamps,
 
 	std::vector<float> transforms;
 	std::vector<float> fillHalfWidths;
+	std::vector<float> midiColours;
 	transforms.reserve(visuals.size() * 16u);
 	fillHalfWidths.reserve(visuals.size() * 4u);
 
@@ -276,6 +277,7 @@ void QuantisationModel::SetLoopTakeVisuals(unsigned int seedSamps,
 			transforms.push_back(heightScale);
 			transforms.push_back(radiusScale);
 			fillHalfWidths.push_back(fillHalfWidth);
+			midiColours.push_back(visual.ContainsMidiLoops ? 1.0f : 0.0f);
 		}
 
 	}
@@ -283,7 +285,8 @@ void QuantisationModel::SetLoopTakeVisuals(unsigned int seedSamps,
 	const auto instanceCount = static_cast<unsigned int>(fillHalfWidths.size());
 	SetInstanceAttributes({
 		{ 3u, 4u, std::move(transforms) },
-		{ 4u, 1u, std::move(fillHalfWidths) }
+		{ 4u, 1u, std::move(fillHalfWidths) },
+		{ 5u, 1u, std::move(midiColours) }
 	}, instanceCount);
 }
 

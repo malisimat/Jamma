@@ -1763,6 +1763,10 @@ void Station::RefreshQuantisationOverlayFromClock()
 	const bool quantisable = _clock && _clock->IsQuantisable() && _stationModel->QuantisationOverlayEnabled();
 	auto visuals = quantisable ? LoopTake::QuantisationVisualsFor(GetLoopTakes()) : std::vector<engine::QuantisationLoopTakeVisual>{};
 	for (auto& visual : visuals) visual.MasterAudioOffsetSamps = _masterAudioReferenceOffsetSamps;
+	const auto stationContainsMidi = quantisable && std::any_of(GetLoopTakes().begin(), GetLoopTakes().end(),
+		[](const auto& take) { return take && !take->GetMidiLoops().empty(); });
+	graphics::StationModel::ApplyQuantisationColourScope(visuals,
+		CurrentSelectDepth() == base::SelectDepth::DEPTH_STATION, stationContainsMidi);
 	_stationModel->RefreshQuantisationOverlay(quantisable, quantisable ? _clock->QuantiseSamps() : 0u, visuals);
 }
 

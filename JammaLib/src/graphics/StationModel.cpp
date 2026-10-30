@@ -950,6 +950,13 @@ void StationModel::SetQuantisationOverlayAlpha(float alpha) noexcept
 		_quantisationDivisionModel->SetOverlayAlpha(_quantisationOverlayAlpha);
 }
 
+void StationModel::ApplyQuantisationColourScope(std::span<engine::QuantisationLoopTakeVisual> visuals,
+	bool stationDepth, bool stationContainsMidi) noexcept
+{
+	if (stationDepth)
+		for (auto& visual : visuals) visual.ContainsMidiLoops = stationContainsMidi;
+}
+
 void StationModel::RefreshQuantisationOverlay(bool quantisable, unsigned int clockSeedSamps,
 	const std::vector<engine::QuantisationLoopTakeVisual>& visuals)
 {

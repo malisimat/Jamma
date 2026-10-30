@@ -95,6 +95,8 @@ namespace graphics
 		bool QuantisationOverlayEnabled() const noexcept { return !(_quantisationOverlayAlpha <= 0.001f); }
 		void RefreshQuantisationOverlay(bool quantisable, unsigned int clockSeedSamps,
 			const std::vector<engine::QuantisationLoopTakeVisual>& visuals);
+		static void ApplyQuantisationColourScope(std::span<engine::QuantisationLoopTakeVisual> visuals,
+			bool stationDepth, bool stationContainsMidi) noexcept;
 		void DrawQuantisationOverlay(base::DrawContext& ctx, unsigned int instances, base::DrawPass pass);
 		void InitPresentationResources(resources::ResourceLib& resourceLib, bool forceInit);
 		void ReleasePresentationResources();
