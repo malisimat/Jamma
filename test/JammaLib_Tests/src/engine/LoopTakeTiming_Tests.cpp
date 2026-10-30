@@ -1,4 +1,10 @@
 #include "gtest/gtest.h"
+#include "../../TestPaths.h"
+#include "engine/Scene.h"
+#include "io/IoSessionExporter.h"
+#include <filesystem>
+#include <fstream>
+#include <sstream>
 
 #include <memory>
 #include <string>
@@ -1060,6 +1066,12 @@ TEST(TriggerPredelayStation, FirstAudioAndMixedMasterReserveCompensatedOrigin)
         auto station = TriggerPredelayStationTest::MakeStation();
         auto clock = std::make_shared<Timer>();
         station->SetClock(clock);
+        // Keep the first recorded master behind unrelated earlier material.
+        if (delay == 0.0 && !withMidi)
+        {
+            station->AddTake(MakePlayingTimingTake("earlier-nonmaster",48000ul,0ul));
+            station->CommitChanges();
+        }
         constexpr auto trigger = 100000u;
         auto start = TriggerPredelayStationTest::Start(trigger, delay);
         start.InputChannels = {0u};
@@ -1128,6 +1140,54 @@ TEST(TriggerPredelayStation, FirstAudioAndMixedMasterReserveCompensatedOrigin)
         EXPECT_EQ(expected, take->MidiPlayIndex());
         ASSERT_EQ(1u, take->GetLoops().size());
         EXPECT_EQ(expected, take->GetLoops().front()->BodyPlayIndex());
+        if (delay == 0.0 && !withMidi)
+        {
+            station->CommitChanges(); // Consume the actual accepted master receipt.
+            ASSERT_EQ(take,station->RecordedMasterTakeOnOwner());
+            auto firstStation = TriggerPredelayStationTest::MakeStation();
+            firstStation->AddTake(MakePlayingTimingTake("first-station-decoy",48000ul,0ul));
+            firstStation->CommitChanges();
+            const std::vector<std::shared_ptr<engine::Station>> stations{firstStation,station};
+            engine::Quantiser quantiser; quantiser.SetClock(clock);
+            quantiser.SetMidiGrain(clock->QuantiseSamps(),"accepted recording",stations);
+            const auto master = take->GetLoops().front();
+            ASSERT_FALSE(master->Id().empty());
+            ASSERT_EQ(master->Id(),quantiser.MasterAudioLoopId());
+            master->SetPlaybackOffsetSamps(-1500);
+            quantiser.UpdateStationHints(nullptr,base::DEPTH_LOOP,false,stations);
+            struct DirectoryCleanup
+            {
+                std::filesystem::path Path;
+                ~DirectoryCleanup() { std::error_code error; std::filesystem::remove_all(Path,error); }
+            } directory{TestPaths::FixtureDirectory() / ("recorded-master-" + std::to_string(GetCurrentProcessId()))};
+            ASSERT_TRUE(std::filesystem::create_directory(directory.Path));
+            std::mutex sceneMutex;
+            audio::AudioStreamParams stream; stream.SampleRate = 48000u;
+            ASSERT_TRUE(io::IoSessionExporter::ExportSessionToDirectory(stations,nullptr,quantiser,
+                io::JamFile::GlobalMidiQuantState::Off,0.0,io::UserConfig{},stream,nullptr,
+                sceneMutex,nullptr,directory.Path.wstring()));
+            std::ifstream file(directory.Path / "session.jam"); std::stringstream text; text << file.rdbuf(); file.close();
+            auto jam = io::JamFile::FromStream(std::move(text)); ASSERT_TRUE(jam);
+            EXPECT_EQ(master->Id(),jam->MasterAudioLoopId);
+            ASSERT_EQ(2u,jam->Stations.size()); ASSERT_EQ(2u,jam->Stations[1].LoopTakes.size());
+            ASSERT_EQ(1u,jam->Stations[1].LoopTakes[1].Loops.size());
+            EXPECT_EQ(master->Id(),jam->Stations[1].LoopTakes[1].Loops[0].Id);
+            auto rig = io::RigFile::FromStream(std::stringstream(io::RigFile::DefaultJson)); ASSERT_TRUE(rig);
+            rig->Triggers.clear(); rig->User.Midi.Devices.clear();
+            auto loaded = engine::Scene::FromFile(engine::SceneParams({""},{},{640u,480u}),*jam,*rig,directory.Path.wstring());
+            ASSERT_TRUE(loaded);
+            const auto restoredStations = (*loaded)->SnapshotStations(); ASSERT_EQ(2u,restoredStations.size());
+            EXPECT_EQ(-1500,restoredStations[0]->MasterAudioReferenceOffsetSamps());
+            EXPECT_EQ(-1500,restoredStations[1]->MasterAudioReferenceOffsetSamps());
+            ASSERT_EQ(2u,restoredStations[1]->GetLoopTakes().size());
+            ASSERT_EQ(1u,restoredStations[1]->GetLoopTakes()[1]->GetLoops().size());
+            const auto restoredMaster = restoredStations[1]->GetLoopTakes()[1]->GetLoops()[0];
+            EXPECT_EQ(master->Id(),restoredMaster->Id());
+            EXPECT_EQ(-1500,restoredMaster->PlaybackOffsetSamps());
+            EXPECT_EQ(master->PlaybackBodyIndex(),restoredMaster->PlaybackBodyIndex());
+            EXPECT_EQ(0,restoredStations[1]->GetLoopTakes()[0]->GetLoops()[0]->PlaybackOffsetSamps());
+            (*loaded)->Shutdown();
+        }
     }
 }
 
