@@ -13,6 +13,7 @@
 #include <string>
 #include <vector>
 #include "QuantisationTiming.h"
+#include "../midi/MidiQuantisation.h"
 #include "../utils/Timer.h"
 #include "../actions/ActionResult.h"
 #include "../actions/TouchAction.h"
