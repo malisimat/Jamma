@@ -2,6 +2,7 @@
 #include "gtest/gtest.h"
 #include "graphics/Image.h"
 #include "graphics/LoopModel.h"
+#include "engine/Loop.h"
 #include <filesystem>
 #include <fstream>
 #include <sstream>
@@ -293,6 +294,12 @@ public:
 	bool PendingUpload() const { return _waveformNeedsUpload; }
 };
 
+class PickerGlLoop : public engine::Loop
+{
+public:
+	PickerGlLoop(std::shared_ptr<engine::LoopModel> model) : engine::Loop({}, {}) { _model = std::move(model); }
+};
+
 TEST_F(TextureTintGlTest, AudioPickerHasStaticCoverageAcrossPhaseContentAndSceneFit)
 {
 	resources::ResourceLib resources;
@@ -349,6 +356,31 @@ TEST_F(TextureTintGlTest, AudioPickerHasStaticCoverageAcrossPhaseContentAndScene
 				EXPECT_TRUE(model.PendingUpload()); // Picking never uploads waveform data.
 			}
 	}
+	// Exercise the actual Loop transform: zero gain must not collapse the picker.
+	context.ClearMvp();
+	context.PushMvp(glm::ortho(-200.0f, 200.0f, -140.0f, 140.0f, -400.0f, 400.0f));
+	auto loopModel = std::make_shared<PickerGlModel>(params);
+	loopModel->InitResources(resources, false);
+	PickerGlLoop loop(loopModel);
+	for (const auto scale : { 0.8f, 1.7f })
+	{
+		loop.SetModelScale(scale);
+		loop.SetPickerLayoutHeight(100.0f);
+		std::vector<unsigned char> reference;
+		for (const auto gain : { 0.0f, 0.01f, 1.0f, 2.0f })
+		{
+			loop.Mixer()->SetUnmutedLevel(gain);
+			loop.SetMasterVisualScale(gain);
+			glClear(GL_COLOR_BUFFER_BIT);
+			loop.Draw3d(context, 1u, base::PASS_PICKER);
+			EXPECT_NE(0u, context.GetPixel({32, 35}));
+			EXPECT_EQ(0u, context.GetPixel({32, 37}));
+			const auto pixels = context.GetPixels();
+			if (reference.empty()) reference = pixels;
+			else EXPECT_EQ(reference, pixels);
+		}
+	}
+	loopModel->ReleaseResources();
 	model.ReleaseResources();
 	EXPECT_EQ(GL_NO_ERROR, glGetError());
 }
