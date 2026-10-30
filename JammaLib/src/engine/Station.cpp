@@ -1544,6 +1544,9 @@ std::shared_ptr<LoopTake> Station::AddTake()
 	MergeMixBehaviourParams mergeParams;
 	auto mixerParams = LoopTake::GetMixerParams(takeParams.Size, mergeParams);
 	auto take = std::make_shared<LoopTake>(takeParams, mixerParams);
+	auto settings = take->MidiQuantisation();
+	settings.Fraction = _defaultMidiQuantisationFraction;
+	take->SetMidiQuantisation(settings);
 	AddTake(take);
 
 	return take;
@@ -1758,8 +1761,9 @@ void Station::RefreshQuantisationOverlayFromClock()
 {
 	if (!_stationModel) return;
 	const bool quantisable = _clock && _clock->IsQuantisable() && _stationModel->QuantisationOverlayEnabled();
-	_stationModel->RefreshQuantisationOverlay(quantisable, quantisable ? _clock->QuantiseSamps() : 0u,
-		quantisable ? LoopTake::QuantisationVisualsFor(GetLoopTakes()) : std::vector<engine::QuantisationLoopTakeVisual>{});
+	auto visuals = quantisable ? LoopTake::QuantisationVisualsFor(GetLoopTakes()) : std::vector<engine::QuantisationLoopTakeVisual>{};
+	for (auto& visual : visuals) visual.MasterAudioOffsetSamps = _masterAudioReferenceOffsetSamps;
+	_stationModel->RefreshQuantisationOverlay(quantisable, quantisable ? _clock->QuantiseSamps() : 0u, visuals);
 }
 
 void Station::SetupBuffers(unsigned int bufSize)
@@ -2151,6 +2155,7 @@ std::vector<JobAction> Station::_CommitChanges()
 		request->Timing.Version <= _firstMasterRecordingConsumed.load(std::memory_order_acquire))
 	{
 		const auto status = _firstMasterRecordingStatus.load(std::memory_order_relaxed);
+		if (status == 1u) _recordedMasterTake = request->Take;
 		std::cout << "[midi-master] take=" << request->Take->Id()
 			<< " status=" << (status == 1u ? "activated" : (status == 2u ? "playback-only" : "cancelled"))
 			<< " origin=" << request->Timing.RecordOrigin

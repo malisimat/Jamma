@@ -202,6 +202,10 @@ namespace engine
 		void SetTransportOffsetLoopFrac(double loopFrac) noexcept;
 		double TransportOffsetLoopFrac() const noexcept { return _transportOffsetLoopFrac.load(std::memory_order_relaxed); }
 		std::int32_t TransportOffsetSamps() const noexcept;
+		std::shared_ptr<LoopTake> RecordedMasterTakeOnOwner() const { return _recordedMasterTake.lock(); }
+		std::int32_t MasterAudioReferenceOffsetSamps() const noexcept { return _masterAudioReferenceOffsetSamps; }
+		void SetMasterAudioReferenceOffsetSamps(std::int32_t offset) noexcept { _masterAudioReferenceOffsetSamps = offset; }
+		void SetDefaultMidiQuantisationFraction(midi::MidiQuantisationFraction fraction) noexcept { _defaultMidiQuantisationFraction = fraction; }
 		void SetGlobalPhaseOffsetSamps(std::int32_t offsetSamps) noexcept;
 		void SetStationPhaseOffsetSamps(std::int32_t offsetSamps) noexcept;
 		std::int32_t GlobalPhaseOffsetSamps() const noexcept { return _globalPhaseOffsetSamps; }
@@ -496,6 +500,9 @@ namespace engine
 		// retained defaults. Station teardown follows callback shutdown.
 		RemoteTransportGeometry _remoteMidiGrid;
 		std::int64_t _remoteMidiGridOriginSamps = 0;
+		std::weak_ptr<LoopTake> _recordedMasterTake; // Job-owned identity from accepted first-master receipt.
+		std::int32_t _masterAudioReferenceOffsetSamps = 0;
+		midi::MidiQuantisationFraction _defaultMidiQuantisationFraction = midi::MidiQuantisationFraction::Quarter;
 		std::int32_t _globalPhaseOffsetSamps = 0;
 		std::int32_t _stationPhaseOffsetSamps = 0;
 	};

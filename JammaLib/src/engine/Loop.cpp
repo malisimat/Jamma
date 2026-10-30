@@ -144,6 +144,7 @@ std::optional<std::shared_ptr<Loop>> Loop::FromFile(LoopParams loopParams, io::J
 	// fade-free, so restore it only after establishing the logical loop state.
 	loop->Play(constants::MaxLoopFadeSamps, loopStruct.Length, false);
 	loop->SetBodyPlayIndex(bodyPlayIndex);
+	loop->SetPlaybackOffsetSamps(loopStruct.PlaybackOffsetSamps);
 	loop->SetMixerLevel(loopStruct.Level);
 	loop->_pitch = loopStruct.Speed;
 	if (loopStruct.Muted)
@@ -233,6 +234,7 @@ void Loop::Draw3d(DrawContext& ctx,
 	if (!isRecording && index >= constants::MaxLoopFadeSamps)
 		index -= constants::MaxLoopFadeSamps;
 
+	if (!isRecording) index = PlaybackBodyIndex();
 	auto frac = loopLength == 0 ? 0.0 : 1.0 - std::max(0.0, std::min(1.0, ((double)(index % loopLength)) / ((double)loopLength)));
 	_model->SetLoopIndexFrac(frac);
 	_model->SetLoopState(_GetLoopModelState(pass, playState, IsMuted()));
@@ -266,7 +268,7 @@ void Loop::Draw3d(DrawContext& ctx,
 	{
 		_audioSpectralModel->SetRadius(static_cast<float>(CalcDrawRadius(loopLength) * _DrawRadiusScale()));
 		_audioSpectralModel->SetPlayFraction(loopLength == 0ul ? 0.0
-			: static_cast<double>(BodyPlayIndex()) / loopLength);
+			: static_cast<double>(PlaybackBodyIndex()) / loopLength);
 		_audioSpectralModel->Draw3d(ctx, numInstances, pass);
 	}
 	glCtx.PopMvp();
@@ -423,7 +425,9 @@ unsigned int Loop::ReadBlock(float* outBuf,
 	// _playIndex is always within range:
 	// [constants::MaxLoopFadeSamps : _loopLength + constants::MaxLoopFadeSamps - 1)
 	// index should apply the offset and then also stay in the same range
-	auto index = _playIndex.load(std::memory_order_relaxed);
+	const auto playbackOffset = PlaybackOffsetSamps();
+	auto index = playbackOffset == 0 ? _playIndex.load(std::memory_order_relaxed)
+		: constants::MaxLoopFadeSamps + OffsetBodyIndex(BodyPlayIndex(), loopLength, playbackOffset);
 
 	if (sampOffset >= 0)
 	{
@@ -739,6 +743,7 @@ io::JamFile::Loop Loop::ToJamFile(const std::string& wavFilename) const
 		(playIndex - constants::MaxLoopFadeSamps) :
 		0ul;
 	loop.BodyPlayIndex = BodyPlayIndex();
+	loop.PlaybackOffsetSamps = PlaybackOffsetSamps();
 	loop.MasterLoopCount = 0;
 	loop.Level = _mixer->UnmutedLevel();
 	loop.Speed = _pitch;
@@ -1839,4 +1844,16 @@ void Loop::SetPickerLayoutHeight(float availableHeight) noexcept
 	if (_model)
 		_model->SetPickerHalfHeight(LoopModel::PickerLocalHalfHeight(availableHeight,
 			static_cast<float>(ModelScale())));
+}
+
+unsigned long engine::Loop::OffsetBodyIndex(unsigned long phase, unsigned long length, std::int32_t offset) noexcept
+{
+	if (!length) return 0ul;
+	auto shifted = (static_cast<long long>(phase % length) - static_cast<long long>(offset)) % static_cast<long long>(length);
+	if (shifted < 0) shifted += length;
+	return static_cast<unsigned long>(shifted);
+}
+unsigned long engine::Loop::PlaybackBodyIndex() const noexcept
+{
+	return OffsetBodyIndex(BodyPlayIndex(), LoopLength(), PlaybackOffsetSamps());
 }

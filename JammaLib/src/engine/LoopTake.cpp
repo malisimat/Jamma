@@ -1682,7 +1682,8 @@ std::optional<std::uint32_t> LoopTake::MasterPhaseAtAudioBoundary(
 	}
 	if (representative)
 	{
-		const auto phaseFraction = 1.0 - representative->LoopIndexFrac();
+		const auto phaseFraction = representative->LoopLength() == 0ul ? 0.0
+			: static_cast<double>(representative->PlaybackBodyIndex()) / representative->LoopLength();
 		return static_cast<std::uint32_t>(phaseFraction * masterLength + 0.5) % masterLength;
 	}
 	if (targetLoop) return std::nullopt;

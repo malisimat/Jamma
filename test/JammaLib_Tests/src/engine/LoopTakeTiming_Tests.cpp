@@ -6,6 +6,9 @@
 
 #include "base/AudioSink.h"
 #include "engine/Loop.h"
+#include "engine/Station.h"
+#include "engine/Quantiser.h"
+#include "io/UserConfig.h"
 #include "engine/LoopTake.h"
 #include "io/JamFile.h"
 #include "ninjam/NinjamLoopAlignment.h"
@@ -207,7 +210,7 @@ static std::shared_ptr<TimingTestLoopTake> MakeTimingTestLoopTake(const std::str
 	return std::make_shared<TimingTestLoopTake>(params, mixerParams);
 }
 
-static std::shared_ptr<engine::Loop> MakeTimingLoop(unsigned long loopLength)
+static std::shared_ptr<engine::Loop> MakeTimingLoop(unsigned long loopLength, bool ramp = false)
 {
 	audio::WireMixBehaviourParams mixBehaviour;
 	mixBehaviour.Channels = { 0u };
@@ -225,6 +228,7 @@ static std::shared_ptr<engine::Loop> MakeTimingLoop(unsigned long loopLength)
 	loop->Record();
 	const auto recordedLength = constants::MaxLoopFadeSamps + loopLength;
 	std::vector<float> samples(recordedLength, 1.0f);
+	if (ramp) for (unsigned long i = 0; i < recordedLength; ++i) samples[i] = static_cast<float>(i) / recordedLength;
 	AudioWriteRequest request;
 	request.samples = samples.data();
 	request.numSamps = static_cast<unsigned int>(recordedLength);
@@ -1276,4 +1280,72 @@ TEST(TriggerBindingLearn, FreshValidatedPassiveIngressFreezesOneCandidateAndInfe
         const auto binding = io::TriggerBindingLearn::Midi("keys",midi::MidiEvent{0u,0xb0u,64u,static_cast<std::uint8_t>(value)});
         ASSERT_TRUE(binding); EXPECT_EQ(value != 0u,binding->Press.State); EXPECT_EQ(value == 0u,binding->Release.State);
     }
+}
+
+TEST(AudioLoopShift, HandleChangesAudioOnlyAndDoubleClickResetsAcceptedOffset)
+{
+	auto take = MakeTimingTestLoopTake("audio-shft");
+	auto loop = MakeTimingLoop(1000ul, true);
+	loop->SetBodyPlayIndex(300ul);
+	take->AddLoop(loop); take->CommitChanges();
+	take->SetMidiVisualPosition(300ul, 1000ul);
+	auto station = std::make_shared<engine::Station>(engine::StationParams{}, engine::Station::GetMixerParams({100,100}, MergeMixBehaviourParams{}));
+	station->AddTake(take); station->CommitChanges();
+	std::vector<std::shared_ptr<engine::Station>> stations{station};
+	graphics::CtrlHandleOverlay overlay;
+	engine::Quantiser quantiser;
+	quantiser.SetClock(std::make_shared<Timer>());
+	ASSERT_TRUE(quantiser.TrySetMasterFromHover(loop,base::DEPTH_LOOP,stations,1000u,io::UserConfig{},false));
+	engine::QuantiserController controller(overlay, quantiser, stations);
+	engine::QuantisationInteractionContext context;
+	context.SelectDepth = base::DEPTH_LOOP;
+	context.CursorPos = {200,200}; context.ViewportSize = {800,600}; context.SampleRate = 1000u;
+	context.SelectedAudioLoops = {loop}; context.LoopDepthHasAudioTarget = true;
+	const engine::QuantiserController::ChildResolver resolve = [loop](const auto&) { return loop; };
+	const auto now = Timer::GetTime();
+	controller.OnCtrlModifierChanged(true, now, context, resolve);
+	ASSERT_TRUE(overlay.ButtonCenter(0)); EXPECT_FALSE(overlay.ButtonCenter(1));
+	float expected = 0; loop->SetBodyPlayIndex(250ul); ASSERT_EQ(1u, loop->ReadBlock(&expected,0,1u)); loop->SetBodyPlayIndex(300ul);
+	actions::TouchAction press; press.SetActionTime(now); press.Position = *overlay.ButtonCenter(0);
+	ASSERT_TRUE(controller.TryHandleTouchAction(press,1000u,true,context,resolve)->IsEaten);
+	actions::TouchMoveAction move; move.Position = press.Position; move.Position.X += 50;
+	ASSERT_TRUE(controller.TryHandleTouchMove(move,1000u)->IsEaten);
+	EXPECT_EQ(50,station->MasterAudioReferenceOffsetSamps());
+	auto laterStation = std::make_shared<engine::Station>(engine::StationParams{}, engine::Station::GetMixerParams({100,100}, MergeMixBehaviourParams{}));
+	quantiser.InitialiseStationMidiGrid(laterStation);
+	EXPECT_EQ(50,laterStation->MasterAudioReferenceOffsetSamps());
+	EXPECT_EQ(50, loop->PlaybackOffsetSamps()); EXPECT_EQ(250ul, loop->PlaybackBodyIndex());
+	EXPECT_EQ(300ul, loop->BodyPlayIndex()); EXPECT_EQ(300ul, take->MidiVisualPosition());
+	EXPECT_EQ(0, take->MidiQuantisation().PhaseOffsetSamps);
+	float actual = 0; ASSERT_EQ(1u, loop->ReadBlock(&actual,0,1u)); EXPECT_FLOAT_EQ(expected,actual);
+	EXPECT_EQ(250u, take->MasterPhaseAtAudioBoundary(loop.get(),1000u));
+	press.State = actions::TouchAction::TOUCH_UP; press.Position = move.Position;
+	controller.TryHandleTouchAction(press,1000u,true,context,resolve);
+	// A fresh click pair on SHFT uses the same OS time/distance criteria as sliders.
+	press.State = actions::TouchAction::TOUCH_DOWN; press.Position = *overlay.ButtonCenter(0); press.SetActionTime(now + std::chrono::seconds(1));
+	controller.TryHandleTouchAction(press,1000u,true,context,resolve);
+	press.State = actions::TouchAction::TOUCH_UP; controller.TryHandleTouchAction(press,1000u,true,context,resolve);
+	press.State = actions::TouchAction::TOUCH_DOWN; press.SetActionTime(now + std::chrono::milliseconds(1100));
+	controller.TryHandleTouchAction(press,1000u,true,context,resolve);
+	EXPECT_EQ(0,station->MasterAudioReferenceOffsetSamps());
+	EXPECT_EQ(0,loop->PlaybackOffsetSamps()); EXPECT_EQ(300ul,loop->PlaybackBodyIndex());
+}
+
+TEST(AudioLoopShift, SignedOffsetsWrapByEachLengthAndSurviveTransportCorrections)
+{
+	for (const auto length : {777ul,1000ul,2000ul})
+	{
+		auto take = MakePlayingTimingTake("shift-wrap",length,100ul);
+		auto loop = take->GetLoops().front();
+		for (const auto offset : {0,17,-17,2000000017,-2000000017})
+		{
+			loop->SetPlaybackOffsetSamps(offset);
+			EXPECT_EQ(ninjam::PositiveModulo(100ll-offset,length),loop->PlaybackBodyIndex());
+			take->CaptureMappedSourceAnchors(5000);
+			take->RestoreMappedSourceCoordinate(5100);
+			EXPECT_EQ(ninjam::PositiveModulo(200ll-offset,length),loop->PlaybackBodyIndex());
+			EXPECT_EQ(offset,loop->PlaybackOffsetSamps());
+			loop->SetBodyPlayIndex(100ul); loop->InvalidateSceneAnchor();
+		}
+	}
 }

@@ -412,6 +412,7 @@ TEST(IoSessionExporter, RoundedLogicalAudioBoundaryRetainsPhysicalTailAfterReloa
 	auto take = IoSessionExporterTest::MakeTake("rounded-take");
 	auto loop = IoSessionExporterTest::MakeAudioLoop(101u, 0u, 37u, 0.005f);
 	const auto recorded = loop->ExportSamples();
+	loop->SetPlaybackOffsetSamps(-2000000017);
 	loop->Play(loop->PlayIndex(), 100u, false);
 	take->AddLoop(loop);
 	take->CommitChanges();
@@ -435,6 +436,8 @@ TEST(IoSessionExporter, RoundedLogicalAudioBoundaryRetainsPhysicalTailAfterReloa
 	const auto restored = Loop::FromFile({}, saved->Stations[0].LoopTakes[0].Loops[0], dir.wstring());
 	ASSERT_TRUE(restored);
 	EXPECT_EQ(100u, (*restored)->LoopLength());
+	EXPECT_EQ(-2000000017, (*restored)->PlaybackOffsetSamps());
+	EXPECT_EQ(loop->PlaybackBodyIndex(), (*restored)->PlaybackBodyIndex());
 	EXPECT_EQ(101u, (*restored)->PhysicalLoopLength());
 	const auto restoredSamples = (*restored)->ExportSamples(true);
 	ASSERT_EQ(recorded.size(), restoredSamples.size());

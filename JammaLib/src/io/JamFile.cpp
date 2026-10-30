@@ -354,6 +354,15 @@ std::optional<JamFile> JamFile::FromStream(std::stringstream ss)
 			const auto& text = std::get<std::string>(midiStateIter->second);
 			jam.GlobalMidiQuantStateValue = text == "all" ? GlobalMidiQuantState::All : text == "mixed" ? GlobalMidiQuantState::Mixed : GlobalMidiQuantState::Off;
 		}
+		const auto masterId = transport.KeyValues.find("masterAudioLoopId");
+		if (masterId != transport.KeyValues.end() && masterId->second.index() == 4 && std::get<std::string>(masterId->second).size() <= 1024u)
+			jam.MasterAudioLoopId = std::get<std::string>(masterId->second);
+		const auto fractionIter = transport.KeyValues.find("defaultMidiQuantFraction");
+		if (fractionIter != transport.KeyValues.end() && fractionIter->second.index() == 2)
+		{
+			const auto value = std::get<unsigned long>(fractionIter->second);
+			if (value < midi::MidiQuantisationFractionCount) jam.DefaultMidiQuantFraction = static_cast<midi::MidiQuantisationFraction>(value);
+		}
 		const auto globalOffsetIter = transport.KeyValues.find("globalPhaseOffsetSamps");
 		if (globalOffsetIter != transport.KeyValues.end())
 			jam.GlobalPhaseOffsetSamps = ParseInt32Clamped(globalOffsetIter->second, 0);
@@ -749,6 +758,8 @@ bool JamFile::ToStream(JamFile jam, std::stringstream& ss, std::string* error)
 		ss << kvStr("quantisation", quantStr(jam.Quantisation)) << ",";
 	}
 	ss << kvStr("globalMidiQuantState", midiGlobalQuantStr(jam.GlobalMidiQuantStateValue)) << ",";
+	ss << kvStr("masterAudioLoopId", jam.MasterAudioLoopId) << ",";
+	ss << kvInt("defaultMidiQuantFraction", static_cast<int>(jam.DefaultMidiQuantFraction)) << ",";
 	ss << kvInt("globalPhaseOffsetSamps", jam.GlobalPhaseOffsetSamps) << ",";
 	if (jam.TransportInitialised)
 		ss << kvStr("absoluteSamplePos", std::to_string(jam.AbsoluteSamplePos)) << ",";
@@ -802,6 +813,7 @@ bool JamFile::ToStream(JamFile jam, std::stringstream& ss, std::string* error)
 					<< kvUlong("channel", loop.Channel) << ","
 					<< kvUlong("length", loop.Length) << ","
 					<< kvUlong("bodyPlayIndex", loop.BodyPlayIndex) << ","
+					<< kvInt("playbackOffsetSamps", loop.PlaybackOffsetSamps) << ","
 					<< kvDouble("level", loop.Level) << ","
 					<< kvDouble("speed", loop.Speed) << ","
 					<< kvUlong("mutegroups", loop.MuteGroups) << ","
@@ -1197,6 +1209,8 @@ std::optional<JamFile::Loop> JamFile::Loop::FromJson(Json::JsonPart json)
 	loop.Index = index;
 	loop.MasterLoopCount = masterLoopCount;
 	loop.BodyPlayIndex = bodyPlayIndex;
+	const auto playbackOffset = json.KeyValues.find("playbackOffsetSamps");
+	if (playbackOffset != json.KeyValues.end()) loop.PlaybackOffsetSamps = ParseInt32Clamped(playbackOffset->second, 0);
 	loop.Level = level;
 	loop.Speed = speed;
 	loop.MuteGroups = muteGroups;

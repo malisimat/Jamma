@@ -954,3 +954,19 @@ TEST(JamFile, BuiltInNewSessionEnablesEveryMidiChannelWithoutCables)
 		for (const auto& route : station.MidiChannelRoutes) EXPECT_TRUE(route.PluginIds.empty());
 	}
 }
+
+TEST(JamFile, RetainsAudioShiftAndCreationSubdivisionIndependentlyOfMidiGrid)
+{
+	JamFile jam; jam.Name = "shift-and-subdivision"; jam.MasterAudioLoopId = "audio-master";
+	jam.DefaultMidiQuantFraction = midi::MidiQuantisationFraction::Sixth;
+	JamFile::Loop loop; loop.Name = "audio.wav"; loop.Length = 1000ul; loop.BodyPlayIndex = 300ul; loop.PlaybackOffsetSamps = -2000000017;
+	JamFile::LoopTake take; take.Name = "take"; take.TakePhaseOffsetSamps = 19; take.Loops.push_back(loop);
+	JamFile::Station station; station.Name = "station"; station.LoopTakes.push_back(take); jam.Stations.push_back(station);
+	std::stringstream output; ASSERT_TRUE(JamFile::ToStream(jam,output));
+	const auto restored = JamFile::FromStream(std::move(output)); ASSERT_TRUE(restored);
+	EXPECT_EQ(midi::MidiQuantisationFraction::Sixth,restored->DefaultMidiQuantFraction);
+	EXPECT_EQ("audio-master",restored->MasterAudioLoopId);
+	ASSERT_EQ(1u,restored->Stations.size()); ASSERT_EQ(1u,restored->Stations[0].LoopTakes.size());
+	const auto& savedTake = restored->Stations[0].LoopTakes[0]; ASSERT_EQ(1u,savedTake.Loops.size());
+	EXPECT_EQ(19,savedTake.TakePhaseOffsetSamps); EXPECT_EQ(-2000000017,savedTake.Loops[0].PlaybackOffsetSamps); EXPECT_EQ(300ul,savedTake.Loops[0].BodyPlayIndex);
+}

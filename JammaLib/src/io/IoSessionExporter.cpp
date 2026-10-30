@@ -304,6 +304,8 @@ namespace io
 			std::scoped_lock lock(sceneMutex);
             jam.QuantiseSamps = quantisation.EffectiveSamps();
             jam.GlobalPhaseOffsetSamps = quantisation.GlobalPhaseOffsetSamps();
+            jam.DefaultMidiQuantFraction = quantisation.DefaultMidiQuantisationFraction();
+            jam.MasterAudioLoopId = quantisation.MasterAudioLoopId();
 		if (groups)
 		{
 			for (std::size_t slot = 1u; slot <= 9u; ++slot)
