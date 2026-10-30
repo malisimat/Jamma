@@ -1982,6 +1982,14 @@ void engine::Quantiser::AdoptRecordedMaster(const std::vector<std::shared_ptr<St
 std::int32_t engine::Quantiser::_MasterAudioReferenceOffsetSamps() const noexcept
 {
 	if (!_masterLoop || !_masterLoop->LoopLength()) return 0;
-	return static_cast<std::int32_t>(static_cast<long long>(_masterLoop->PlaybackOffsetSamps())
-		% static_cast<long long>(_masterLoop->LoopLength()));
+	auto offset = static_cast<long long>(std::llround(_masterLoop->AppliedPlaybackOffsetSamps()))
+		% static_cast<long long>(_masterLoop->LoopLength());
+	if (offset > std::numeric_limits<std::int32_t>::max()) offset -= _masterLoop->LoopLength();
+	if (offset < std::numeric_limits<std::int32_t>::min()) offset += _masterLoop->LoopLength();
+	return static_cast<std::int32_t>(offset);
+}
+
+void engine::Quantiser::RefreshMasterAudioReference(const std::shared_ptr<Station>& station) const
+{
+    if (station) station->SetMasterAudioReferenceOffsetSamps(_MasterAudioReferenceOffsetSamps());
 }

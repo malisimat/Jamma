@@ -1162,6 +1162,7 @@ void Scene::CommitChanges()
 		for (auto& station : _stations)
 		{
 			if (station->MembershipRemoving()) continue;
+			_quantisation.RefreshMasterAudioReference(station);
 			station->ReleaseRetiredAudioStates();
 			auto jobs = station->CommitChanges();
 			if (!jobs.empty())

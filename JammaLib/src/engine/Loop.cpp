@@ -418,6 +418,7 @@ unsigned int Loop::ReadBlock(float* outBuf,
 	if (!isPlaying || (0 == loopLength))
 		return 0;
 
+	_InitialisePlaybackOffset(); // Cold latch once; repeated consumers share this block head.
 	const auto sourceGeneration = AudioSourceGeneration();
 	auto peak = 0.0f;
 	auto bufSize = loopLength + constants::MaxLoopFadeSamps;
@@ -425,7 +426,8 @@ unsigned int Loop::ReadBlock(float* outBuf,
 	// _playIndex is always within range:
 	// [constants::MaxLoopFadeSamps : _loopLength + constants::MaxLoopFadeSamps - 1)
 	// index should apply the offset and then also stay in the same range
-	const auto playbackOffset = PlaybackOffsetSamps();
+	const auto playbackOffset = _playbackOffsetInitialised
+		? static_cast<std::int64_t>(std::llround(_playbackOffsetStart)) : PlaybackOffsetSamps();
 	auto index = playbackOffset == 0 ? _playIndex.load(std::memory_order_relaxed)
 		: constants::MaxLoopFadeSamps + OffsetBodyIndex(BodyPlayIndex(), loopLength, playbackOffset);
 
@@ -476,6 +478,47 @@ unsigned int Loop::ReadBlock(float* outBuf,
         dac->History.Read(channel, physical, sample);
         return sample;
     };
+
+	const bool fractionalSeek = _playbackOffsetInitialised && (_playbackOffsetRate != 0.0
+        || _playbackOffsetStart != std::round(_playbackOffsetStart));
+    if (fractionalSeek)
+    {
+        // A completed/normalized body owns every adjacent and seam-prefix sample.
+        // In-flight captures retain their ordinary integer read path until ready.
+        if (_triggerCapture && !_triggerCaptureNormalized.load(std::memory_order_acquire)) return 0u;
+        const auto sampleAtBody = [&](unsigned long body, unsigned int frame) noexcept
+        {
+            const auto storage = constants::MaxLoopFadeSamps + body;
+            if (storage >= bufBankSize) return 0.0f;
+            const auto sample = readSource(storage, frame);
+            if (_loopParams.FadeSamps && body >= loopLength - _loopParams.FadeSamps)
+            {
+                const auto fadeIndex = body - (loopLength - _loopParams.FadeSamps);
+                const auto prefix = constants::MaxLoopFadeSamps + fadeIndex - _loopParams.FadeSamps;
+                return _hanning->Mix(readSource(prefix, frame), sample, fadeIndex);
+            }
+            return sample;
+        };
+        const auto count = (std::min)(numSamps, constants::MaxBlockSize);
+        auto body = std::fmod(static_cast<double>(BodyPlayIndex()) + sampOffset - _playbackOffsetStart,
+            static_cast<double>(loopLength));
+        if (body < 0.0) body += loopLength;
+        for (auto frame = 0u; frame < count; ++frame)
+        {
+            const auto first = static_cast<unsigned long>(body);
+            const auto next = first + 1ul == loopLength ? 0ul : first + 1ul;
+            const auto fraction = body - first;
+            const auto sample = static_cast<float>(static_cast<double>(sampleAtBody(first, frame)) * (1.0 - fraction)
+                + static_cast<double>(sampleAtBody(next, frame)) * fraction);
+            outBuf[frame] = sample;
+            peak = (std::max)(peak, std::abs(sample));
+            body += 1.0 - (_PlaybackOffsetAtFrame(frame + 1u) - _PlaybackOffsetAtFrame(frame));
+            if (body >= loopLength) body -= loopLength;
+            if (body < 0.0) body += loopLength;
+        }
+        _lastPeak = peak;
+        return count;
+    }
 
 	// Check if we are inside crossfading region at any point
 	auto isXfadeRegion = (index + numSamps) >= (bufSize - _loopParams.FadeSamps);
@@ -638,6 +681,8 @@ void Loop::EndMultiPlay(unsigned int numSamps)
 	if (0 == loopLength)
 		return;
 		
+	_AdvancePlaybackOffset(numSamps);
+
 	auto playIndex = _playIndex.load(std::memory_order_relaxed) + numSamps;
 
 	auto bufSize = loopLength + constants::MaxLoopFadeSamps;
@@ -1846,7 +1891,7 @@ void Loop::SetPickerLayoutHeight(float availableHeight) noexcept
 			static_cast<float>(ModelScale())));
 }
 
-unsigned long engine::Loop::OffsetBodyIndex(unsigned long phase, unsigned long length, std::int32_t offset) noexcept
+unsigned long engine::Loop::OffsetBodyIndex(unsigned long phase, unsigned long length, std::int64_t offset) noexcept
 {
 	if (!length) return 0ul;
 	auto shifted = (static_cast<long long>(phase % length) - static_cast<long long>(offset)) % static_cast<long long>(length);
@@ -1855,5 +1900,51 @@ unsigned long engine::Loop::OffsetBodyIndex(unsigned long phase, unsigned long l
 }
 unsigned long engine::Loop::PlaybackBodyIndex() const noexcept
 {
-	return OffsetBodyIndex(BodyPlayIndex(), LoopLength(), PlaybackOffsetSamps());
+	return OffsetBodyIndex(BodyPlayIndex(), LoopLength(),
+		static_cast<std::int64_t>(std::llround(AppliedPlaybackOffsetSamps())));
+}
+
+// The trajectory is prepared/consumed once at the existing audio advancement boundary.
+double engine::Loop::_PlaybackOffsetAtFrame(unsigned int frame) const noexcept
+{
+    const auto value = _playbackOffsetStart + _playbackOffsetRate * frame;
+    return _playbackOffsetRate >= 0.0 ? (std::min)(value, _playbackOffsetEnd)
+        : (std::max)(value, _playbackOffsetEnd);
+}
+void engine::Loop::_AdvancePlaybackOffset(unsigned int numSamps) noexcept
+{
+    static_assert(std::atomic<double>::is_always_lock_free);
+    const auto length = LoopLength();
+    const auto target = static_cast<double>(PlaybackOffsetSamps());
+    _InitialisePlaybackOffset();
+    _playbackOffsetStart = _PlaybackOffsetAtFrame(numSamps);
+    _playbackOffsetEnd = _playbackOffsetStart;
+    _playbackOffsetRate = 0.0;
+    auto delta = std::fmod(target - _playbackOffsetStart, static_cast<double>(length));
+    // Exact half-period ties always seek in the positive offset direction.
+    if (delta > length * 0.5) delta -= length;
+    if (delta <= -static_cast<double>(length) * 0.5) delta += length;
+    if (delta == 0.0) _playbackOffsetStart = _playbackOffsetEnd = target;
+    _appliedPlaybackOffsetSamps.store(_playbackOffsetStart, std::memory_order_relaxed);
+    if ((_triggerCapture && !_triggerCaptureNormalized.load(std::memory_order_acquire)) || !numSamps) return;
+    const auto maximumStep = 0.25 * numSamps;
+    const auto damping = (std::min)(1.0, numSamps / ((std::max)(1.0, static_cast<double>(_sampleRate.load(std::memory_order_relaxed))) * 0.010));
+    const auto step = std::abs(delta) <= 1e-6 && std::abs(delta) <= maximumStep ? delta
+        : std::clamp(delta * damping, -maximumStep, maximumStep);
+    _playbackOffsetEnd = _playbackOffsetStart + step;
+    _playbackOffsetRate = step / numSamps;
+}
+
+void engine::Loop::_InitialisePlaybackOffset() noexcept
+{
+    const auto length = LoopLength();
+    const auto generation = AudioSourceGeneration();
+    if (_playbackOffsetInitialised && _playbackOffsetLength == length && _playbackOffsetGeneration == generation) return;
+    _playbackOffsetStart = _playbackOffsetEnd = static_cast<double>(PlaybackOffsetSamps());
+    _playbackOffsetRate = 0.0;
+    _playbackOffsetInitialised = true;
+    _playbackOffsetLength = length;
+    _playbackOffsetGeneration = generation;
+    _appliedPlaybackOffsetSamps.store(_playbackOffsetStart, std::memory_order_relaxed);
+    _playbackOffsetPublished.store(true, std::memory_order_release);
 }
