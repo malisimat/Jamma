@@ -40,7 +40,7 @@ namespace audio
 		static std::unique_ptr<AudioDevice> Device(std::unique_ptr<FakeBackend> backend,
 			unsigned int sampleRate = 48000u, unsigned int blockSize = 128u)
 		{
-			AudioStreamParams params{"Focusrite USB ASIO", sampleRate, 2u, blockSize, 0u, 0u, 2u, 2u};
+			AudioStreamParams params{"Primary ASIO device", sampleRate, 2u, blockSize, 0u, 0u, 2u, 2u};
 			return std::make_unique<AudioDevice>(params, std::unique_ptr<AsioStream>(new AsioStream(std::move(backend))));
 		}
 		static void Install(AudioHost& host, std::unique_ptr<AudioDevice> device)
@@ -57,7 +57,7 @@ namespace audio
 			return host._callbackAdmission.compare_exchange_strong(expected, 0u);
 		}
 		static bool LifetimeUncertain(const AudioHost& host) { return host._backendLifetimeUncertain; }
-		static void Inventory(engine::SessionControl& control) { control._deviceInventory.Devices = {{0u, "Focusrite USB ASIO", true}}; }
+		static void Inventory(engine::SessionControl& control) { control._deviceInventory.Devices = {{0u, "Primary ASIO device", true}}; }
 	};
 }
 

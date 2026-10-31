@@ -196,6 +196,14 @@ namespace engine
 			return scene._operation._ValidateAudioDraft(error, effects);
 		}
 		static void FinishTestAudioRefresh(Scene& scene) { scene._operation.Begin(SessionControl::None); }
+		static void AcceptRescannedAudioDraft(Scene& scene, const io::UserConfig::AudioSettings& settings)
+		{
+			scene._operation._admittedAudio.Revision = scene._workspace->Settings().AudioDraftRevision();
+			scene._operation._submittedAudio = {scene._workspace->Settings().AudioDraft(), scene._operation._admittedAudio.Revision};
+			scene._operation._AcceptAudioDraft(settings, true, true);
+			scene._operation._presentation.PagesChanged = true;
+			scene._workspace->ApplyControlPresentation(scene._operation.TakePresentation(), scene.shared_from_this());
+		}
 		static io::UserConfig::AudioSettings FailAudioRefreshWithoutHardware(Scene& scene, audio::AudioStreamParams actual = {})
 		{
 			// The existing uncertain-backend guard rejects before constructing any
@@ -481,9 +489,9 @@ TEST_F(SceneRoutingIntegrationTest, StartedAudioSelectionShowsResolvedDeviceAndN
 	ASSERT_TRUE(created.has_value());
 	auto scene = *created;
 	audio::AsioInventory inventory;
-	inventory.Devices = {{ 0u, "Focusrite USB ASIO", true, "", 18u, 20u, {44100u, 48000u}, 48000u }};
-	const audio::AudioStreamParams actual{ "Focusrite USB ASIO", 48000u, 2u, 128u, 177u, 177u, 8u, 8u };
-	EXPECT_EQ("Focusrite USB ASIO", engine::SourceLossIntegrationTestAccess::StartedAudioSelection(*scene, inventory, actual));
+	inventory.Devices = {{ 0u, "Primary ASIO device", true, "", 18u, 20u, {44100u, 48000u}, 48000u }};
+	const audio::AudioStreamParams actual{ "Primary ASIO device", 48000u, 2u, 128u, 177u, 177u, 8u, 8u };
+	EXPECT_EQ("Primary ASIO device", engine::SourceLossIntegrationTestAccess::StartedAudioSelection(*scene, inventory, actual));
 	const auto draft = engine::SourceLossIntegrationTestAccess::AudioDraft(*scene);
 	EXPECT_EQ(48000u, draft.SampleRate);
 	EXPECT_EQ(128u, draft.BufSize);
@@ -2331,6 +2339,34 @@ TEST_F(SceneRoutingIntegrationTest, OpenBackupStreamRequiresManualRescanAndKeeps
 		EXPECT_EQ(draft, Access::SubmittedAudio(*scene));
 		Access::FinishTestAudioRefresh(*scene);
 		EXPECT_FALSE(Access::ScheduleAudioRefresh(*scene));
+	}
+	scene->Shutdown();
+}
+
+TEST_F(SceneRoutingIntegrationTest, SuccessfulRescanDisplaysRestoredFallbackWithoutChangingSavedPreference)
+{
+	using Access = engine::SourceLossIntegrationTestAccess;
+	auto scene = FreshScene({ Station("Local") }, {});
+	ASSERT_TRUE(scene);
+	{
+		auto excludeJob = Access::ExcludeJob(*scene);
+		const auto configured = Access::ConfiguredAudio(*scene);
+		audio::AsioInventory inventory;
+		inventory.Devices = {{0u, "Primary ASIO device", true, "", 18u, 20u, {44100u}, 44100u},
+			{1u, "Fallback ASIO device", true, "", 8u, 4u, {44100u}, 44100u}};
+		Access::StartedAudioSelection(*scene, inventory, {"Primary ASIO device", 44100u, 2u, 64u, 0u, 0u, 8u, 4u});
+		auto restored = configured;
+		restored.Name = "Fallback ASIO device";
+		restored.SampleRate = 44100u;
+		restored.BufSize = 1024u;
+		restored.NumChannelsIn = 8u;
+		restored.NumChannelsOut = 4u;
+		Access::AcceptRescannedAudioDraft(*scene, restored);
+		EXPECT_EQ(restored, Access::SubmittedAudio(*scene));
+		EXPECT_EQ(restored, Access::AudioDraft(*scene));
+		EXPECT_EQ("Fallback ASIO device", Access::AudioDraft(*scene).Name);
+		EXPECT_EQ(configured, Access::ConfiguredAudio(*scene));
+		EXPECT_EQ(configured, scene->AcceptedRigSnapshot()->Rig.User.Audio);
 	}
 	scene->Shutdown();
 }

@@ -238,6 +238,7 @@ namespace engine
 		bool _ScheduleAudioRefresh(bool streamOpen);
 		void _CompleteMidiRequest();
 		void _AcceptAudioCandidate(const audio::AudioStreamParams& actual, StationAccess access, const Effects& effects, bool refresh);
+		void _AcceptAudioDraft(const io::UserConfig::AudioSettings& settings, bool refresh, bool preservePreferences);
 		bool _AdmitBoundary(StationAccess access, DeviceSelectionSchedule::Clock::time_point now);
 		void _ApplyAdmittedOperation(const audio::AudioStreamParams& actual, DeviceSelectionSchedule::Clock::time_point now, StationAccess access, const Effects& effects);
 		void _ApplyAudioCandidate(const audio::AudioStreamParams& actual, DeviceSelectionSchedule::Clock::time_point now, StationAccess access, const Effects& effects, std::string& error);

@@ -1796,7 +1796,7 @@ namespace audio
 TEST(AudioHostInputMeter, EightChannelInterleavedCaptureReportsPhysicalInputPeaks)
 {
 	audio::AudioHost host(io::UserConfig{});
-	const audio::AudioStreamParams params{ "Focusrite USB ASIO", 44100u, 2u, 64u, 0u, 0u, 8u, 8u };
+	const audio::AudioStreamParams params{ "Primary ASIO device", 44100u, 2u, 64u, 0u, 0u, 8u, 8u };
 	auto stations = std::make_shared<const std::vector<std::shared_ptr<Station>>>();
 	audio::AudioHostRealtimeTestAccess::Prepare(host, stations, params);
 	std::array<float, 64u * 8u> input{};

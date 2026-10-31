@@ -722,10 +722,17 @@ void SessionControl::_AcceptAudioCandidate(const audio::AudioStreamParams& actua
 		(!merged ? "Applied; rig update unavailable" : (acceptedParams.NumOutputChannels < actual.NumOutputChannels ? "Ready; unavailable output routes disconnected" : "Ready")));
 	_Notice("Audio device", !merged ? "Audio device ready, but the rig could not be updated" :
 		(acceptedParams.NumOutputChannels < actual.NumOutputChannels ? "Ready; unavailable output routes disconnected" : "Audio device ready"));
-	if (!preservePreferences && _submittedAudio.Revision == _admittedAudio.Revision && (!refresh || _submittedAudio.Value == _admittedAudio.Value)) _submittedAudio.Value = settings;
-	if (!preservePreferences && (!refresh || _submittedAudio.Value == settings))
-		_presentation.AudioAccepted = Candidate<io::UserConfig::AudioSettings>{settings, _admittedAudio.Revision};
+	_AcceptAudioDraft(settings, refresh, preservePreferences);
 	_devicePageDirty = true;
+}
+
+void SessionControl::_AcceptAudioDraft(const io::UserConfig::AudioSettings& settings, bool refresh, bool preservePreferences)
+{
+	// A successful explicit rescan restores the current stream, so discard the
+	// old device draft too. Saved hardware preferences remain unchanged.
+	if (_submittedAudio.Revision == _admittedAudio.Revision && (preservePreferences || !refresh || _submittedAudio.Value == _admittedAudio.Value)) _submittedAudio.Value = settings;
+	if (preservePreferences || !refresh || _submittedAudio.Value == settings)
+		_presentation.AudioAccepted = Candidate<io::UserConfig::AudioSettings>{settings, _admittedAudio.Revision};
 }
 
 void SessionControl::_CaptureSession(const audio::AudioStreamParams& actual, StationAccess access, const Effects& effects)
