@@ -8,8 +8,9 @@ transport.
 When sync is active:
 
 1. NINJAM provides a remote interval, tempo, beat count, and current phase.
-2. The audio callback maps elapsed remote time onto Jamma's local source ruler.
-3. Each local audio or MIDI loop follows that ruler using its own length and
+2. The audio callback applies accepted remote timing and maps elapsed time into
+   each recording baseline.
+3. Each local audio or MIDI loop follows its baseline using its own length and
    saved phase.
 4. A timing update changes phase and tempo; it does not resize or rewrite
    local loops.
@@ -64,17 +65,20 @@ stretching: when the rates differ, a source sample may be repeated or skipped.
 
 ## Why each loop keeps its own phase
 
-The sync map is common timing geometry, not a common loop cursor. Each loop
-stores an anchor that relates its current phase to the common source coordinate:
+A sync map describes timing geometry, not a common loop cursor. Takes recorded
+under accepted remote authority retain their source-master interval and BPI.
+Legacy recordings retain AudioHost's shared source map. Each loop stores an
+anchor relating its current phase to the appropriate source coordinate:
 
 ```text
 anchor = local_source_coordinate - loop_phase (mod loop_length)
 loop_phase = local_source_coordinate - anchor (mod loop_length)
 ```
 
-The result is that one common correction moves every loop by the same musical
-amount, while each loop wraps according to its own length. An audio loop and a
-MIDI loop therefore stay aligned without forcing their lengths to match.
+A correction moves entities recorded under the same baseline by the same source
+amount; recordings from other baselines interpret the accepted remote phase in
+their own source units. Each loop still wraps by its own length, preserving audio,
+MIDI and intentional offsets without forcing lengths to match.
 
 When a map is first established, playable loops capture anchors. Later timing
 corrections and map rebases retain those anchors. A loop without an anchor may
@@ -221,3 +225,41 @@ server, or follow the server's current timing.
 Follow revision and any explicit local source-master interval are retained in
 every complete desired publication. A latest-value mailbox may skip intermediate
 NoSync/replacement values without losing the need to reset stale map anchors.
+
+## Recordings after an accepted remote tempo change
+
+Accepting new remote BPM/BPI establishes the reference for future independent
+recordings. It resets recorded-master eligibility like Reclock, while retaining
+the live remote clock, beat grid and metronome. It does not clear Timer, infer
+server tempo from the next take or send another server vote. The first completed
+independent take becomes the new recorded-master reference; older takes and their
+overdubs do not take that role. Acknowledgement of an explicit local reclock/tap
+request retains the master just established locally.
+
+At actual capture admission, each new take freezes the full accepted source
+interval/BPI. A take recorded at 128 BPM plays at normal recorded speed while the
+remote tempo remains 128 BPM, even if older 113 BPM material remains present.
+It still consumes every accepted remote phase/drift correction; normal recorded
+speed does not mean free-running playback. Subsequent remote changes discipline
+it using the same integer map/anchor behavior as earlier recordings, expressed in
+its own source units. This also works across repeated tempo changes and after
+all previous takes are ditched, without needing another remote geometry change.
+
+Overdub/punch retains the source take's baseline. NoSync clears active maps and
+anchors without erasing source geometry or moving cursors. Optional JAM take
+fields `recordingMasterLengthSamps` and `recordingBeatsPerInterval` preserve the
+baseline across save/load; missing/invalid pairs use the legacy shared-map path.
+Source sample counts follow the existing material loader's unchanged sample
+counts when device sample rate changes; active follow maps are reset.
+
+Remote recording lengths use rational boundaries from the full interval/BPI,
+including complete intervals with odd BPI. Rounded beat samples remain a local
+grain representation and cannot replace authoritative remote interval lengths or
+beat counts. Disconnected local-grain inference and quantization-off duration
+remain on their existing paths. BlockSync and ContinuousSync retain their existing
+map/anchor advancement; this change does not introduce a new stretching algorithm.
+
+Verbose PlaybackTake diagnostics include `recordingMaster` and `recordingBpi`.
+Zero means the legacy shared source map applies; a nonzero value identifies the
+take's own recording ruler, so the global PlaybackTrace map is not mistakenly
+interpreted as the rate for every take.

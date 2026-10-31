@@ -41,14 +41,14 @@ This is Jamma's canonical short reference for core concepts, ownership, and term
 
 - The NINJAM job-side integration owns connection lifecycle and validated observations. Its serialized timing coordinator owns session epoch, remote timing authority, tempo proposal identity and resolution, follow policy, remote grid, and production of one complete desired transport value. The UI-owned `NinjamTempoPrompt` displays proposals and sends typed decisions; neither it nor Scene creates timing authority. The coordinator never mutates Timer or loop cursors directly.
 - Scene owns top-level composition, session membership/publication, subsystem lifecycle ordering, and coordination between subsystem and UI owners. Specialized collaborators own settings controls, committed hierarchy selection, session reconstruction, MIDI refresh decisions, and tempo-prompt presentation. Scene keeps the orchestration decisions that join them and does not duplicate their internal state or behavior.
-- AudioHost owns the audio-block application and advancement boundary. It accepts the latest complete desired value, replaces or disciplines the shared Timer, owns the common remote-to-local map calculation, ticks the clock, advances the published station view, and sends neutral timing operations down the engine hierarchy.
+- AudioHost owns the audio-block application and advancement boundary. It accepts the latest complete desired value, replaces or disciplines the shared Timer, owns the legacy remote-to-local map calculation and supplies complete neutral timing boundaries, ticks the clock, advances the published station view, and sends neutral timing operations down the engine hierarchy.
 - `IoSessionLoader` reconstructs saved entities and validated restoration values; Scene installs those values in order and handles rig acceptance, timing setup, publication, and recovery.
 - `MidiRefreshPolicy` decides when an inventory refresh is due and whether a retry is warranted. `IoInputSubsystem` performs enumeration/router operations; Scene and rig owners handle confirmation and resulting input/audio/HUD publication.
 - `HierarchySelection` applies selection/mute changes only through a station view whose locking is owned by the caller. Workspace keeps target locking scoped to the synchronous operation and coordinates dependent editor/rack presentation; Scene retains mutex lifetime, membership and publication.
 - `SceneSettingsControls` constructs settings UI and decodes control actions into typed changes. Scene forwards accepted changes to the subsystem that owns their effect; GUI classes do not own engine policy.
 - `NinjamTimingDiagnosticPresenter` formats and deduplicates job-side presentation. Diagnostics are owned and recorded by the coordinator; formatting/output never runs in the audio callback.
 - Timer owns the shared musical clock and its continuity counter. It does not own any loop's cursor or remote-follow policy.
-- `Station -> LoopTake -> Loop` owns membership and each entity's length, anchor, audio phase, MIDI event cursor, and automation origin. These objects apply neutral timing operations using their own geometry; they do not own NINJAM policy or the common map.
+- `Station -> LoopTake -> Loop` owns membership and each entity's length, anchor, audio phase, MIDI event cursor, and automation origin. LoopTake retains the accepted recording baseline and maps neutral remote timing into its source units; its child Loops keep their own lengths and anchors. These objects do not own NINJAM follow policy.
 - Quantiser owns quantisation choices and boundary calculations. Local grain-based inference and an authoritative remote grid are distinct inputs; Quantiser does not own remote follow policy or transport mapping.
 - Cross-thread timing travels as complete coherent values through the established mailbox/snapshot patterns. Diagnostics may mirror timing identity for correlation but never become authority.
 
@@ -76,8 +76,8 @@ Audio-callback work must remain bounded, allocation-free, exception-free, lock-f
 | Quantisation | Choosing or snapping to allowed event boundaries. It controls when an action occurs; it is not transport synchronisation or phase restoration. |
 | Active quantisation grid | The current set of rounded boundaries across an interval, derived from its division count. Changing the grid does not itself move or restore loop phase. |
 | Remote grid step | A remote-authority grid spacing derived from accepted remote interval/BPI information. It is distinct from local grain. |
-| Sync phase map | AudioHost's conversion between elapsed NINJAM time and elapsed local-source time. It stores the two interval lengths and their starting points, not a shared loop cursor. |
-| Mapped elapsed time | Common local-source progress derived from remote elapsed time. Every entity receives the same elapsed amount and wraps it by its own length. |
+| Sync phase map | An integer conversion between elapsed remote time and a recording source ruler. AudioHost retains the legacy shared map; a take recorded under remote authority retains its own source interval and map. A map stores interval lengths and origins, not a shared loop cursor. |
+| Mapped elapsed time | Source progress derived from remote elapsed time in the receiving recording baseline. Entities recorded under the same baseline share progress and wrap it by their own lengths; recordings made at different accepted tempos use their own source units. |
 | Anchor | A captured relationship between a coordinate and an entity-specific phase/source position. Anchors preserve relative offsets and are invalidated before an independent follow session. |
 | Origin | The zero/reference point of a particular mapping or counter. Always name its domain; remote-grid origin, map origin, and automation origin are not interchangeable. |
 | Correction | A signed adjustment applied within a named domain. A master-phase correction is not automatically a loop-phase replacement. |
@@ -92,7 +92,7 @@ Audio-callback work must remain bounded, allocation-free, exception-free, lock-f
 | `BlockSync` | Follow policy for materially different accepted tempo, using the same map/anchor model with potentially larger corrections. |
 | `NoSync` / Stay local | No remote transport authority. It clears remote map, anchors, and generation gates without moving local audio, MIDI, or automation cursors. |
 | Remote join | Session request/acknowledgement and follow decision followed by audio-boundary application of accepted desired state. It is not itself a coordinate system. |
-| Loop alignment | Restoring each local entity from its own anchor plus common mapped elapsed time, preserving intentional relative offsets. |
+| Loop alignment | Restoring each local entity from its own anchor plus elapsed time mapped into its recording baseline, preserving intentional relative offsets. |
 | Mailbox | A bounded coherent cross-thread latest-value transport. A mailbox carries authority or observations owned elsewhere; it does not acquire ownership itself. |
 
 Do not merge these concepts merely because their numeric units match. Any simplification must preserve behavior for unequal loop lengths, intentional offsets, reconnects, delayed observations, and `NoSync` invalidation.
