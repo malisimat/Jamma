@@ -365,13 +365,13 @@ TEST(MidiQuantisation, QuantiseEventsPreservesNoteDuration) {
 	EXPECT_EQ(400u, result[1].sampleOffset - result[0].sampleOffset);
 }
 
-TEST(MidiQuantisation, QuantiseEventsClampsNoteOffAtLoopBoundary) {
+TEST(MidiQuantisation, QuantiseEventsTranslatesReleaseAcrossLoopBoundary) {
 	// Note-on near end of loop. After snap forward, the matching note-off would
 	// land past loopLength — clamp to loopLength - 1 so playback still fires the
 	// note-off inside the window.
 	std::vector<MidiEvent> events = {
-		MidiEvent::MakeNoteOn(960u, 0u, 60u, 100u),  // nearest 100-multiple = 1000 -> wrap to 0, delta = -960
-		MidiEvent::MakeNoteOff(990u, 0u, 60u),       // 990 + (-960) = 30 -> stays inside loop
+		MidiEvent::MakeNoteOn(960u, 0u, 60u, 100u),  // nearest 100-multiple = 1000, delta = +40
+		MidiEvent::MakeNoteOff(990u, 0u, 60u),       // 990 + 40 = 1030 -> wrap to 30
 	};
 
 	auto result = QuantiseVec(events, 1000u, 100u);
@@ -381,11 +381,12 @@ TEST(MidiQuantisation, QuantiseEventsClampsNoteOffAtLoopBoundary) {
 	// Now a long note shifted forward so its tail crosses the boundary.
 	std::vector<MidiEvent> longNote = {
 		MidiEvent::MakeNoteOn(550u, 0u, 60u, 100u),  // snap-to 600, delta +50
-		MidiEvent::MakeNoteOff(990u, 0u, 60u),       // 990 + 50 = 1040 -> clamp to 999
+		MidiEvent::MakeNoteOff(990u, 0u, 60u),       // 990 + 50 = 1040 -> wrap to 40
 	};
 	auto longResult = QuantiseVec(longNote, 1000u, 100u);
 	EXPECT_EQ(600u, longResult[0].sampleOffset);
-	EXPECT_EQ(999u, longResult[1].sampleOffset);
+	EXPECT_EQ(40u, longResult[1].sampleOffset);
+	EXPECT_TRUE(longResult[0].flags & MidiEvent::TriggerSeamEndpoint);
 }
 
 TEST(MidiQuantisation, QuantiseEventsPassesThroughWhenStepZero) {
@@ -566,4 +567,24 @@ TEST(MidiQuantisation, TripletShuffleAndResolutionRoundTripPreserveSourceNotes)
 		EXPECT_EQ(first[index].sampleOffset, restored[index].sampleOffset);
 	EXPECT_EQ(667u, source[2].sampleOffset);
 	EXPECT_EQ(767u, source[3].sampleOffset);
+}
+
+TEST(MidiQuantisation, SourcePairsKeepPositiveDurationAndOriginalRepeatAcrossSnaps)
+{
+	for (const bool remote : {false,true})
+	for (const auto phase : {-19,0,19})
+	for (const auto start : {874u,875u,876u,980u})
+	for (const auto duration : {1u,10u,999u,1000u})
+	{
+		MidiQuantisationSettings settings;
+		settings.Enabled=true; settings.GrainSamps=1000u; settings.Fraction=MidiQuantisationFraction::Quarter;
+		settings.PhaseOffsetSamps=phase;
+		if(remote) {settings.RemoteIntervalSamps=1000u; settings.RemoteBpi=1u; settings.RemoteOriginSamps=37;}
+		const MidiEvent source[]={MidiEvent::MakeNoteOff(200u,0u,60u),
+			MidiEvent::MakeNoteOn(start,0u,60u,100u),MidiEvent::MakeNoteOff(start+duration,0u,60u)};
+		const auto spans=MidiQuantisation::ProjectNotes(source,3u,1000u,settings,37u);
+		ASSERT_EQ(1u,spans.size()); EXPECT_EQ(1u,spans[0].On); EXPECT_EQ(2u,spans[0].Off);
+		EXPECT_EQ(duration,spans[0].End-spans[0].Start);
+		EXPECT_FALSE(spans[0].BoundaryHeld);
+	}
 }

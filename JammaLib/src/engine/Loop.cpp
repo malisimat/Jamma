@@ -144,6 +144,7 @@ std::optional<std::shared_ptr<Loop>> Loop::FromFile(LoopParams loopParams, io::J
 	// fade-free, so restore it only after establishing the logical loop state.
 	loop->Play(constants::MaxLoopFadeSamps, loopStruct.Length, false);
 	loop->SetBodyPlayIndex(bodyPlayIndex);
+	loop->SetPlaybackOffsetSamps(loopStruct.PlaybackOffsetSamps);
 	loop->SetMixerLevel(loopStruct.Level);
 	loop->_pitch = loopStruct.Speed;
 	if (loopStruct.Muted)
@@ -233,6 +234,7 @@ void Loop::Draw3d(DrawContext& ctx,
 	if (!isRecording && index >= constants::MaxLoopFadeSamps)
 		index -= constants::MaxLoopFadeSamps;
 
+	if (!isRecording) index = PlaybackBodyIndex();
 	auto frac = loopLength == 0 ? 0.0 : 1.0 - std::max(0.0, std::min(1.0, ((double)(index % loopLength)) / ((double)loopLength)));
 	_model->SetLoopIndexFrac(frac);
 	_model->SetLoopState(_GetLoopModelState(pass, playState, IsMuted()));
@@ -249,7 +251,7 @@ void Loop::Draw3d(DrawContext& ctx,
 	_model->SetSpectralReveal(spectralVisible ? _audioSpectralMorph : 0.0f);
 	const auto visualHeightScale = static_cast<float>(_mixer->UnmutedLevel()) * _masterVisualScale;
 	_model->SetWaveformColorScale(visualHeightScale);
-	glCtx.PushMvp(glm::scale(glm::mat4(1.0f), glm::vec3(1.0f, visualHeightScale, 1.0f)));
+	glCtx.PushMvp(glm::scale(glm::mat4(1.0f), glm::vec3(1.0f, pass == PASS_PICKER ? 1.0f : visualHeightScale, 1.0f)));
 	
 	GLboolean depthWrites = GL_TRUE;
 	const auto fadingWaveform = PASS_SCENE == pass && spectralVisible && _audioSpectralMorph > 0.0f;
@@ -266,7 +268,7 @@ void Loop::Draw3d(DrawContext& ctx,
 	{
 		_audioSpectralModel->SetRadius(static_cast<float>(CalcDrawRadius(loopLength) * _DrawRadiusScale()));
 		_audioSpectralModel->SetPlayFraction(loopLength == 0ul ? 0.0
-			: static_cast<double>(BodyPlayIndex()) / loopLength);
+			: static_cast<double>(PlaybackBodyIndex()) / loopLength);
 		_audioSpectralModel->Draw3d(ctx, numInstances, pass);
 	}
 	glCtx.PopMvp();
@@ -416,6 +418,7 @@ unsigned int Loop::ReadBlock(float* outBuf,
 	if (!isPlaying || (0 == loopLength))
 		return 0;
 
+	_InitialisePlaybackOffset(); // Cold latch once; repeated consumers share this block head.
 	const auto sourceGeneration = AudioSourceGeneration();
 	auto peak = 0.0f;
 	auto bufSize = loopLength + constants::MaxLoopFadeSamps;
@@ -423,7 +426,12 @@ unsigned int Loop::ReadBlock(float* outBuf,
 	// _playIndex is always within range:
 	// [constants::MaxLoopFadeSamps : _loopLength + constants::MaxLoopFadeSamps - 1)
 	// index should apply the offset and then also stay in the same range
-	auto index = _playIndex.load(std::memory_order_relaxed);
+	const auto targetOffset = TotalPlaybackOffsetSamps();
+	const bool exactTargetOffset = _playbackOffsetRate == 0.0 && _playbackOffsetStart == targetOffset;
+	const auto playbackOffset = exactTargetOffset ? static_cast<std::int64_t>(targetOffset)
+		: static_cast<std::int64_t>(std::llround(_playbackOffsetStart));
+	auto index = playbackOffset == 0 ? _playIndex.load(std::memory_order_relaxed)
+		: constants::MaxLoopFadeSamps + OffsetBodyIndex(BodyPlayIndex(), loopLength, playbackOffset);
 
 	if (sampOffset >= 0)
 	{
@@ -472,6 +480,47 @@ unsigned int Loop::ReadBlock(float* outBuf,
         dac->History.Read(channel, physical, sample);
         return sample;
     };
+
+	const bool fractionalSeek = _playbackOffsetRate != 0.0
+        || (!exactTargetOffset && _playbackOffsetStart != std::round(_playbackOffsetStart));
+    if (fractionalSeek)
+    {
+        // A completed/normalized body owns every adjacent and seam-prefix sample.
+        // In-flight captures retain their ordinary integer read path until ready.
+        if (_triggerCapture && !_triggerCaptureNormalized.load(std::memory_order_acquire)) return 0u;
+        const auto sampleAtBody = [&](unsigned long body, unsigned int frame) noexcept
+        {
+            const auto storage = constants::MaxLoopFadeSamps + body;
+            if (storage >= bufBankSize) return 0.0f;
+            const auto sample = readSource(storage, frame);
+            if (_loopParams.FadeSamps && storage >= bufSize - _loopParams.FadeSamps)
+            {
+                const auto fadeIndex = storage - (bufSize - _loopParams.FadeSamps);
+                const auto prefix = constants::MaxLoopFadeSamps + fadeIndex - _loopParams.FadeSamps;
+                return _hanning->Mix(readSource(prefix, frame), sample, fadeIndex);
+            }
+            return sample;
+        };
+        const auto count = (std::min)(numSamps, constants::MaxBlockSize);
+        auto body = std::fmod(static_cast<double>(BodyPlayIndex()) + sampOffset - _playbackOffsetStart,
+            static_cast<double>(loopLength));
+        if (body < 0.0) body += loopLength;
+        for (auto frame = 0u; frame < count; ++frame)
+        {
+            const auto first = static_cast<unsigned long>(body);
+            const auto next = first + 1ul == loopLength ? 0ul : first + 1ul;
+            const auto fraction = body - first;
+            const auto sample = static_cast<float>(static_cast<double>(sampleAtBody(first, frame)) * (1.0 - fraction)
+                + static_cast<double>(sampleAtBody(next, frame)) * fraction);
+            outBuf[frame] = sample;
+            peak = (std::max)(peak, std::abs(sample));
+            body += 1.0 - (_PlaybackOffsetAtFrame(frame + 1u) - _PlaybackOffsetAtFrame(frame));
+            if (body >= loopLength) body -= loopLength;
+            if (body < 0.0) body += loopLength;
+        }
+        _lastPeak = peak;
+        return count;
+    }
 
 	// Check if we are inside crossfading region at any point
 	auto isXfadeRegion = (index + numSamps) >= (bufSize - _loopParams.FadeSamps);
@@ -595,7 +644,10 @@ void Loop::WriteBlock(const std::shared_ptr<MultiAudioSink> dest,
 	{
 		auto chain = _vstChain.borrow();
 		if (chain && chain->IsActive())
-			chain->ProcessBlock(tempBuf, static_cast<int>(sampsToWrite));
+		{
+			float instrumentScratch[constants::MaxBlockSize];
+			chain->ProcessRackMono(tempBuf, instrumentScratch, static_cast<int>(sampsToWrite));
+		}
 
 		// Only rendered playback is delayed; bounce and source capture keep
 		// their original sample coordinates.
@@ -634,6 +686,8 @@ void Loop::EndMultiPlay(unsigned int numSamps)
 	if (0 == loopLength)
 		return;
 		
+	_AdvancePlaybackOffset(numSamps);
+
 	auto playIndex = _playIndex.load(std::memory_order_relaxed) + numSamps;
 
 	auto bufSize = loopLength + constants::MaxLoopFadeSamps;
@@ -739,6 +793,7 @@ io::JamFile::Loop Loop::ToJamFile(const std::string& wavFilename) const
 		(playIndex - constants::MaxLoopFadeSamps) :
 		0ul;
 	loop.BodyPlayIndex = BodyPlayIndex();
+	loop.PlaybackOffsetSamps = PlaybackOffsetSamps();
 	loop.MasterLoopCount = 0;
 	loop.Level = _mixer->UnmutedLevel();
 	loop.Speed = _pitch;
@@ -1581,9 +1636,13 @@ void Loop::_ApplyLoopVisualModel(const BufferBank& buffer,
 	_vu->UpdateModel(radius);
 }
 
-void Loop::LoadVstPlugin(std::wstring path,
+std::string Loop::LoadVstPlugin(std::wstring path,
 	std::vector<std::uint8_t> initialState)
 {
+	{
+		std::lock_guard<std::mutex> lock(_vstPathsMutex);
+		if (_vstSavedEntries.size() + _vstJobsPending.load(std::memory_order_acquire) >= 32u) return {};
+	}
 	JobAction job;
 	job.JobActionType = JobAction::JOB_LOADVST;
 	job.VstPath = std::move(path);
@@ -1591,7 +1650,9 @@ void Loop::LoadVstPlugin(std::wstring path,
 	job.VstIdentity = utils::GetGuid();
 	_pendingVstLoads.push_back(std::move(job));
 	_vstJobsPending.fetch_add(1u, std::memory_order_release);
+	++_rackRevision;
 	_changesMade = true;
+	return _pendingVstLoads.back().VstIdentity;
 }
 
 vst::VstRackSlot Loop::GetVstRackSlot() const
@@ -1610,12 +1671,15 @@ vst::VstRackSlot Loop::GetVstRackSlot() const
 	return slot;
 }
 
-bool Loop::LoadManagedVstPlugin(std::wstring path)
+bool Loop::LoadManagedVstPlugin(std::wstring path, const std::string& identity)
 {
-	const auto slot = GetVstRackSlot();
-	if (slot.Pending || slot.Plugin || path.empty()) return false;
-	LoadVstPlugin(std::move(path));
-	_pendingVstLoads.back().VstManaged = true;
+	auto slots = GetVstRackSlots();
+	const auto found = identity.empty() ? slots.begin() : std::find_if(slots.begin(), slots.end(), [&](const auto& slot) { return slot.Identity == identity; });
+	if (path.empty() || (!identity.empty() && found == slots.end())) return false;
+	if (found != slots.end() && (found->Pending || found->Plugin)) return false;
+	if (LoadVstPlugin(std::move(path)).empty()) return false;
+	_pendingVstLoads.back().VstManaged = found != slots.end();
+	if (found != slots.end() && !identity.empty()) _pendingVstLoads.back().VstIdentity = found->Identity;
 	return true;
 }
 
@@ -1662,6 +1726,7 @@ bool Loop::LoadVstPluginSynchronously(const std::wstring& path,
 	saved.Bypass = bypass;
 	saved.State = io::JamFile::VstEntry::EncodeState(initialState);
 	_vstSavedEntries.push_back(std::move(saved));
+	++_rackRevision;
 	return loaded;
 }
 
@@ -1677,6 +1742,7 @@ void Loop::UnloadVstPlugin(size_t index)
 	}
 	_pendingVstUnloads.push_back(std::move(job));
 	_vstJobsPending.fetch_add(1u, std::memory_order_release);
+	++_rackRevision;
 	_changesMade = true;
 }
 
@@ -1716,13 +1782,16 @@ std::vector<JobAction> Loop::_CommitChanges()
 		_changesMade = true;
 	_vstChain.collect();
 
+	bool vstTopologyChanged = false;
 	// Swap in a new VST chain when the job thread has delivered one.
 	if (_flipVstChain.load(std::memory_order_acquire))
 	{
 		std::lock_guard<std::mutex> lock(_vstPathsMutex);
 		_flipVstChain.store(false, std::memory_order_release);
 		_vstChain.store(_backVstChain, std::memory_order_release);
+		vstTopologyChanged = true;
 	}
+	if (vstTopologyChanged && _automationTopologyChanged) _automationTopologyChanged();
 
 	std::vector<JobAction> jobs;
 
@@ -1771,11 +1840,15 @@ ActionResult Loop::OnAction(JobAction action)
 			saved.Id = action.VstIdentity;
 			saved.Path = utils::EncodeUtf8(action.VstPath);
 			saved.State = io::JamFile::VstEntry::EncodeState(action.VstInitialState);
-			if (action.VstManaged && !_vstSavedEntries.empty() && !replacement->GetPlugin(0u))
+			auto retry = std::find_if(_vstSavedEntries.begin(), _vstSavedEntries.end(), [&](const auto& entry) { return entry.Id == action.VstIdentity; });
+			// Legacy single-slot requests choose a replacement identity; row requests retain their exact ID.
+			if (action.VstManaged && retry == _vstSavedEntries.end() && !_vstSavedEntries.empty() && !replacement->GetPlugin(0u)) retry = _vstSavedEntries.begin();
+			if (action.VstManaged && retry != _vstSavedEntries.end())
 			{
-				replacement->ReplaceSlot(0u, std::move(plugin));
-				_vstPluginPaths.front() = action.VstPath;
-				_vstSavedEntries.front() = std::move(saved);
+				const auto index = static_cast<std::size_t>(retry - _vstSavedEntries.begin());
+				replacement->ReplaceSlot(index, std::move(plugin));
+				_vstPluginPaths[index] = action.VstPath;
+				*retry = std::move(saved);
 			}
 			else
 			{
@@ -1784,6 +1857,7 @@ ActionResult Loop::OnAction(JobAction action)
 				_vstSavedEntries.push_back(std::move(saved));
 			}
 			_backVstChain = std::move(replacement);
+			++_rackRevision;
 			_flipVstChain.store(true, std::memory_order_release);
 		}
 		if (_vstJobsPending.load(std::memory_order_acquire) != 0u) _vstJobsPending.fetch_sub(1u, std::memory_order_release);
@@ -1814,6 +1888,7 @@ ActionResult Loop::OnAction(JobAction action)
 				_vstPluginPaths.erase(_vstPluginPaths.begin() + static_cast<std::ptrdiff_t>(removeIndex));
 				_vstSavedEntries.erase(_vstSavedEntries.begin() + static_cast<std::ptrdiff_t>(removeIndex));
 				_backVstChain = std::move(replacement);
+			++_rackRevision;
 				_flipVstChain.store(true, std::memory_order_release);
 			}
 		}
@@ -1829,4 +1904,110 @@ ActionResult Loop::OnAction(JobAction action)
 	}
 
 	return ActionResult::NoAction();
+}
+
+void Loop::SetPickerLayoutHeight(float availableHeight) noexcept
+{
+	if (_model)
+		_model->SetPickerHalfHeight(LoopModel::PickerLocalHalfHeight(availableHeight,
+			static_cast<float>(ModelScale())));
+}
+
+std::vector<vst::VstRackSlot> Loop::GetVstRackSlots(std::size_t offset) const
+{
+	std::lock_guard<std::mutex> lock(_vstPathsMutex);
+	const auto chain = _flipVstChain.load(std::memory_order_acquire) ? _backVstChain : _vstChain.load(std::memory_order_acquire);
+	std::vector<vst::VstRackSlot> result;
+	for (auto i = std::min(offset, _vstSavedEntries.size()); i < _vstSavedEntries.size() && result.size() < 32u; ++i)
+	{
+		vst::VstRackSlot slot;
+		slot.Identity = _vstSavedEntries[i].Id;
+		slot.Path = utils::DecodeUtf8(_vstSavedEntries[i].Path);
+		slot.Plugin = chain ? chain->GetPlugin(i) : nullptr;
+		slot.Pending = _vstJobsPending.load(std::memory_order_acquire) != 0u || _flipVstChain.load(std::memory_order_acquire);
+		slot.Failed = !slot.Plugin && !slot.Pending;
+		result.push_back(std::move(slot));
+	}
+	return result;
+}
+
+bool Loop::MoveVstSlot(const vst::RackMove& move)
+{
+	std::lock_guard<std::mutex> lock(_vstPathsMutex);
+	if (_vstJobsPending.load(std::memory_order_acquire) != 0u
+		|| !move.Valid(vst::RackMove::Scope::Loop, Id(), RackRevision(), _vstSavedEntries)) return false;
+	const auto chain = _flipVstChain.load(std::memory_order_acquire) ? _backVstChain : _vstChain.load(std::memory_order_acquire);
+	auto replacement = move.Stage(chain, _vstSavedEntries, _vstPluginPaths);
+	if (!replacement) return false;
+	_backVstChain = std::move(replacement);
+	++_rackRevision;
+	_flipVstChain.store(true, std::memory_order_release);
+	_changesMade = true;
+	return true;
+}
+
+unsigned long engine::Loop::OffsetBodyIndex(unsigned long phase, unsigned long length, std::int64_t offset) noexcept
+{
+	if (!length) return 0ul;
+	auto shifted = (static_cast<long long>(phase % length) - static_cast<long long>(offset)) % static_cast<long long>(length);
+	if (shifted < 0) shifted += length;
+	return static_cast<unsigned long>(shifted);
+}
+unsigned long engine::Loop::PlaybackBodyIndex() const noexcept
+{
+	return OffsetBodyIndex(BodyPlayIndex(), LoopLength(),
+		static_cast<std::int64_t>(std::llround(AppliedPlaybackOffsetSamps())));
+}
+
+// The trajectory is prepared/consumed once at the existing audio advancement boundary.
+double engine::Loop::_PlaybackOffsetAtFrame(unsigned int frame) const noexcept
+{
+    const auto value = _playbackOffsetStart + _playbackOffsetRate * frame;
+    return _playbackOffsetRate >= 0.0 ? (std::min)(value, _playbackOffsetEnd)
+        : (std::max)(value, _playbackOffsetEnd);
+}
+void engine::Loop::_AdvancePlaybackOffset(unsigned int numSamps) noexcept
+{
+    static_assert(std::atomic<double>::is_always_lock_free);
+    const auto length = LoopLength();
+    _InitialisePlaybackOffset();
+    const auto target = static_cast<double>(TotalPlaybackOffsetSamps());
+    if (_playbackOffsetRate == 0.0 && _playbackOffsetStart == target) return;
+    _playbackOffsetStart = _PlaybackOffsetAtFrame(numSamps);
+    _playbackOffsetEnd = _playbackOffsetStart;
+    _playbackOffsetRate = 0.0;
+    auto delta = std::fmod(target - _playbackOffsetStart, static_cast<double>(length));
+    // Exact half-period ties always seek in the positive offset direction.
+    if (delta > length * 0.5) delta -= length;
+    if (delta <= -static_cast<double>(length) * 0.5) delta += length;
+    if (delta == 0.0) _playbackOffsetStart = _playbackOffsetEnd = target;
+    _appliedPlaybackOffsetSamps.store(_playbackOffsetStart, std::memory_order_relaxed);
+    if ((_triggerCapture && !_triggerCaptureNormalized.load(std::memory_order_acquire)) || !numSamps) return;
+    const auto maximumStep = 0.25 * numSamps;
+    const auto damping = (std::min)(1.0, numSamps / ((std::max)(1.0, static_cast<double>(_sampleRate.load(std::memory_order_relaxed))) * 0.010));
+    const auto step = std::abs(delta) <= 1e-6 && std::abs(delta) <= maximumStep ? delta
+        : std::clamp(delta * damping, -maximumStep, maximumStep);
+    _playbackOffsetEnd = _playbackOffsetStart + step;
+    _playbackOffsetRate = step / numSamps;
+}
+
+void engine::Loop::_InitialisePlaybackOffset() noexcept
+{
+    const auto length = LoopLength();
+    if (_playbackOffsetInitialised)
+    {
+        if (_playbackOffsetLength == length) return;
+        // Content writes/punches keep this trajectory. A geometry replacement
+        // keeps its applied offset and cancels only the old-length ramp.
+        _playbackOffsetEnd = _playbackOffsetStart;
+        _playbackOffsetRate = 0.0;
+        _playbackOffsetLength = length;
+        return;
+    }
+    _playbackOffsetStart = _playbackOffsetEnd = static_cast<double>(TotalPlaybackOffsetSamps());
+    _playbackOffsetRate = 0.0;
+    _playbackOffsetInitialised = true;
+    _playbackOffsetLength = length;
+    _appliedPlaybackOffsetSamps.store(_playbackOffsetStart, std::memory_order_relaxed);
+    _playbackOffsetPublished.store(true, std::memory_order_release);
 }

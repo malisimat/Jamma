@@ -9,6 +9,7 @@
 #include <atomic>
 #include <bitset>
 #include <cstdint>
+#include <functional>
 #include <mutex>
 #include <vector>
 #include <memory>
@@ -27,6 +28,7 @@
 #include "../gui/GuiRack.h"
 #include "../io/JamFile.h"
 #include "../vst/VstChain.h"
+#include "../vst/RackMove.h"
 #include "../base/TriggerPunchTarget.h"
 #include "../base/PublishedAudioSnapshot.h"
 
@@ -66,6 +68,8 @@ namespace engine
 	public:
 		std::string Id;
 		unsigned int FadeSamps;
+		float SampleRate = static_cast<float>(constants::DefaultSampleRate);
+		unsigned int MidiSeamMergeWindowMs = constants::DefaultMidiSeamMergeWindowMs;
 		std::vector<LoopParams> Loops;
 	};
 
@@ -168,6 +172,10 @@ namespace engine
 		std::string SourceId() const;
 		LoopTakeSource TakeSourceType() const;
 		const std::vector<std::shared_ptr<Loop>>& GetLoops() const { return _loops; }
+		// Owner/job-side restore lookup includes material awaiting ordinary publication.
+		std::shared_ptr<Loop> FindStagedAudioLoopById(const std::string& id) const;
+		// Owner/job-side restoration admission, before staged audio publication.
+		bool HasRestorableLoopMaterial() const noexcept { return !_backLoops.empty() || !_midiLoops.empty(); }
 		std::vector<std::vector<unsigned long>> SnapshotAudioRoutesForExport() const;
 		double MasterLevelForExport() const;
 		std::vector<double> BusLevelsForExport() const;
@@ -248,7 +256,7 @@ namespace engine
 		unsigned int NumBusChannels() const;
 		// Staging only — actual load/unload happens on the job thread after
 		// CommitChanges() queues the appropriate JOB_LOADVST / JOB_UNLOADVST job.
-		void LoadVstPlugin(std::wstring path,
+		std::string LoadVstPlugin(std::wstring path,
 			std::vector<std::uint8_t> initialState = {});
 		// Startup-only synchronous counterpart used by JAM reconstruction.
 		bool LoadVstPluginSynchronously(const std::wstring& path,
@@ -256,14 +264,25 @@ namespace engine
 			bool bypass = false, const std::string& stateId = {});
 		void UnloadVstPlugin(size_t index);
 		vst::VstRackSlot GetVstRackSlot() const;
-		bool LoadManagedVstPlugin(std::wstring path);
+		bool LoadManagedVstPlugin(std::wstring path, const std::string& identity = {});
 		bool UnloadManagedVstPlugin(const std::string& identity);
 		void ForceUnloadAllVstPlugins();
-		void SetSampleRate(float sampleRate);
+		// Owner-side playback format refresh; sample-only updates retain the seam policy.
+		void SetSampleRate(float sampleRate, std::optional<unsigned int> midiSeamMergeWindowMs = std::nullopt);
 		bool ReconfigureVstFormat(float sampleRate, unsigned int blockSize);
 		float GetSampleRate() const noexcept { return _sampleRate; }
 		unsigned int GetLastBufSize() const noexcept { return _lastBufSize; }
 		std::shared_ptr<vst::IVstPlugin> GetVstPlugin(size_t index) const;
+		std::vector<vst::VstRackSlot> GetVstRackSlots(std::size_t offset = 0u) const;
+		std::uint64_t RackRevision() const noexcept { return _rackRevision.load(std::memory_order_acquire); }
+		bool MoveVstSlot(const vst::RackMove& move);
+		void SetAutomationTopologyChangedCallback(std::function<void()> changed);
+		std::shared_ptr<vst::IVstPlugin> FindVstPlugin(const vst::IVstPlugin* observer,
+			const std::string& identity, std::size_t& index) const
+		{
+			const auto chain = _vstChain.load(std::memory_order_acquire);
+			return chain ? chain->FindPlugin(observer, identity, index) : nullptr;
+		}
 		std::vector<io::JamFile::VstEntry> VstEntries() const;
 		bool TryGroupVstEntries(std::vector<io::JamFile::VstEntry>& output) const;
 		bool TryRestoreGroupVstEntry(const io::JamFile::VstEntry& entry);
@@ -498,6 +517,8 @@ namespace engine
 			std::vector<std::shared_ptr<audio::AudioBuffer>> AudioBuffers;
 			std::vector<float> VstBlockScratch;
 			std::vector<float*> VstBlockPtrs;
+			std::vector<float> InstrumentScratch;
+			std::vector<float*> InstrumentPtrs;
 		};
 
 		using MidiLoopSnapshot = std::vector<std::shared_ptr<midi::MidiLoop>>;
@@ -526,6 +547,7 @@ namespace engine
 			base::AudioSource::AudioSourceType source) const;
 
 	private:
+		void _ApplyAudioPhaseOffset() noexcept;
 		static bool _HasMidiQuantisationGestureModifiers(base::Action::Modifiers modifiers) noexcept;
 		static unsigned long _NormalizeLoopIndex(long long index, unsigned long loopLength) noexcept;
 		static std::uint32_t _NormalizeMidiLoopOffset(std::uint32_t offset,
@@ -728,9 +750,13 @@ namespace engine
 		base::PublishedAudioSnapshot<vst::VstChain> _vstChain;
 		std::shared_ptr<vst::VstChain> _backVstChain;
 		std::atomic<bool> _flipVstChain{ false };
+		// Non-audio membership/commit only; propagated to child loops. Weak
+		// Station capture avoids retaining a removed hierarchy or touching audio.
+		std::function<void()> _automationTopologyChanged;
 		std::vector<actions::JobAction> _pendingVstLoads;
 		std::vector<actions::JobAction> _pendingVstUnloads;
-		float _sampleRate{ static_cast<float>(constants::DefaultSampleRate) };
+		unsigned int _midiSeamMergeWindowMs;
+		float _sampleRate;
 		// _vstPluginPaths: written on job thread (OnAction), read on main thread (VstEntries).
 		// Access is guarded by _vstPathsMutex in both directions.
 		mutable std::mutex _vstPathsMutex;
@@ -738,6 +764,7 @@ namespace engine
 		std::vector<io::JamFile::VstEntry> _vstSavedEntries;
 		// UI stages requests, job completes them. Audio never reads this counter.
 		std::atomic<unsigned int> _vstJobsPending{ 0u };
+		std::atomic<std::uint64_t> _rackRevision{1u};
 		// Startup-only metadata. Runtime lane pointers are installed by Station only
 		// after every chain named by these references has been constructed.
 		std::vector<PendingAutomationBinding> _pendingAutomationBindings;

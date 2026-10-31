@@ -116,7 +116,17 @@ bool Vst2Plugin::_InstantiateEffect(const std::wstring& path)
 	}
 
 	_effect = mainProc(Vst2Plugin::HostCallback);
-	if (!_effect || (_effect->magic != kEffectMagic))
+	return _OpenEffect(path);
+#else
+	(void)path;
+	return false;
+#endif
+}
+
+#ifdef JAMMA_VST2_ENABLED
+bool Vst2Plugin::_OpenEffect(const std::wstring& path)
+{
+	if (!_effect || (_effect->magic != kEffectMagic) || !_effect->dispatcher)
 	{
 		std::cerr << "[ERROR][VST2] requested='" << utils::EncodeUtf8(path)
 			<< "' stage=InstantiateEffect/VSTPluginMain returned null or wrong magic; plugin skipped" << std::endl;
@@ -137,6 +147,27 @@ bool Vst2Plugin::_InstantiateEffect(const std::wstring& path)
 	// is deferred to Load() once the host format is known.
 	_effect->dispatcher(_effect, effOpen, 0, 0, nullptr, 0.0f);
 
+	if (_effect->numInputs < 0 || _effect->numOutputs < 0)
+	{
+		std::cerr << "[ERROR][VST2] requested='" << utils::EncodeUtf8(path)
+			<< "' stage=OpenEffect/audio-compatibility inputs=" << _effect->numInputs
+			<< " outputs=" << _effect->numOutputs
+			<< "; invalid negative audio channel count; plugin skipped" << std::endl;
+		_effect->dispatcher(_effect, effClose, 0, 0, nullptr, 0.0f);
+		_effect = nullptr;
+		return false;
+	}
+
+	// Valid MIDI-only/unsupported processors remain loaded, but must never be
+	// activated or fed fabricated audio sockets by this audio-output rack.
+	_audioProcessingSupported = _effect->numOutputs > 0 && _effect->processReplacing;
+	if (!_audioProcessingSupported)
+		std::clog << "[VST2] requested='" << utils::EncodeUtf8(path)
+			<< "' stage=OpenEffect/audio-compatibility inputs=" << _effect->numInputs
+			<< " outputs=" << _effect->numOutputs
+			<< " float-replacing=" << (_effect->processReplacing != nullptr)
+			<< "; loaded in enforced bypass (unsupported rack audio shape)" << std::endl;
+
 	// Query name after effOpen.
 	{
 		char effectName[64] = {};
@@ -151,6 +182,10 @@ bool Vst2Plugin::_InstantiateEffect(const std::wstring& path)
 		if (_name.empty())
 			_name = "(unknown vst2)";
 	}
+
+	// Host-owned callback pointer; plugins retain effect->user for their state.
+	_effect->resvd2 = reinterpret_cast<VstIntPtr>(this);
+	if (!_audioProcessingSupported) return true;
 
 	_outputChannels = (std::max)(1, static_cast<int32_t>(_effect->numOutputs));
 	_inputChannels = (std::max)((std::max)(1, static_cast<int32_t>(_effect->numInputs)), _outputChannels);
@@ -173,16 +208,9 @@ bool Vst2Plugin::_InstantiateEffect(const std::wstring& path)
 		_outputChannelPtrs[static_cast<size_t>(c)] =
 			_outputScratchStorage.data() + static_cast<size_t>(c) * constants::MaxBlockSize;
 
-	// Host-owned instance pointer for HostCallback. Do not use effect->user;
-	// plugins may use that slot for their own state.
-	_effect->resvd2 = reinterpret_cast<VstIntPtr>(this);
-
 	return true;
-#else
-	(void)path;
-	return false;
-#endif
 }
+#endif
 
 bool Vst2Plugin::Load(const std::wstring& path,
 	float sampleRate,
@@ -228,6 +256,14 @@ bool Vst2Plugin::Load(const std::wstring& path,
 		}
 	}
 
+	_role = (_effect->flags & effFlagsIsSynth) != 0 ? RenderRole::Instrument : RenderRole::Effect;
+	if (!_audioProcessingSupported)
+	{
+		_midiInput = {};
+		_isLoaded = true;
+		return true;
+	}
+
 	// 3. Configure for the host audio format (safe off the editor thread).
 	_effect->dispatcher(_effect, effSetSampleRate, 0, 0, nullptr, sampleRate);
 	_effect->dispatcher(_effect, effSetBlockSize, 0,
@@ -238,10 +274,13 @@ bool Vst2Plugin::Load(const std::wstring& path,
 	{
 		static const char kReceiveVstEvents[] = "receiveVstEvents";
 		static const char kReceiveVstMidiEvent[] = "receiveVstMidiEvent";
-		_effect->dispatcher(_effect, effCanDo, 0, 0,
+		const auto receivesEvents = _effect->dispatcher(_effect, effCanDo, 0, 0,
 			const_cast<char*>(kReceiveVstEvents), 0.0f);
-		_effect->dispatcher(_effect, effCanDo, 0, 0,
+		const auto receivesMidi = _effect->dispatcher(_effect, effCanDo, 0, 0,
 			const_cast<char*>(kReceiveVstMidiEvent), 0.0f);
+		_role = (_effect->flags & effFlagsIsSynth) != 0 ? RenderRole::Instrument : RenderRole::Effect;
+		const bool accepts = receivesEvents > 0 || receivesMidi > 0 || _role == RenderRole::Instrument;
+		_midiInput = { accepts, accepts, receivesEvents != 0 || receivesMidi != 0 || accepts };
 	}
 
 	for (int32_t input = 0; input < _effect->numInputs; ++input)
@@ -291,7 +330,7 @@ bool Vst2Plugin::Load(const std::wstring& path,
 
 bool Vst2Plugin::ReconfigureAudioFormat(float sampleRate, unsigned int blockSize)
 {
-	if (!_isLoaded || !_effect) return true;
+	if (!_isLoaded || !_effect || !_audioProcessingSupported) return true;
 	_effect->dispatcher(_effect, effStopProcess, 0, 0, nullptr, 0.0f);
 	_effect->dispatcher(_effect, effMainsChanged, 0, 0, nullptr, 0.0f);
 	_sampleRate = sampleRate;
@@ -339,6 +378,7 @@ void Vst2Plugin::Unload()
 #endif
 
 	_isLoaded = false;
+	_audioProcessingSupported = true;
 	_name.clear();
 	_editorSize = { 0, 0 };
 	_editorParentHwnd.store(nullptr, std::memory_order_release);
@@ -358,7 +398,7 @@ void Vst2Plugin::ProcessBlock(float* monoBuf, int32_t numSamples) noexcept
 
 	if (!_isLoaded
 		|| !_isActivated.load(std::memory_order_acquire)
-		|| _isBypassed.load(std::memory_order_relaxed)
+		|| IsBypassed()
 		|| !_effect
 		|| !_effect->processReplacing)
 		return;
@@ -410,7 +450,7 @@ void Vst2Plugin::ProcessBlockStereo(float* leftBuf, float* rightBuf, int32_t num
 
 	if (!_isLoaded
 		|| !_isActivated.load(std::memory_order_acquire)
-		|| _isBypassed.load(std::memory_order_relaxed)
+		|| IsBypassed()
 		|| !_effect
 		|| !_effect->processReplacing)
 		return;
@@ -472,7 +512,7 @@ void Vst2Plugin::ProcessBlockMulti(float* const* channelBufs, int32_t numChannel
 
 	if (!_isLoaded
 		|| !_isActivated.load(std::memory_order_acquire)
-		|| _isBypassed.load(std::memory_order_relaxed)
+		|| IsBypassed()
 		|| !_effect
 		|| !_effect->processReplacing
 		|| !channelBufs)
@@ -579,7 +619,7 @@ bool Vst2Plugin::TrySendMidiEvent(const midi::MidiEvent& event,
 	if (!stateCall) return false;
 	FlushPendingMidiPanic();
 #ifdef JAMMA_VST2_ENABLED
-	if (0u == _midiBlockNumSamples) return false;
+	if (!_audioProcessingSupported || 0u == _midiBlockNumSamples) return false;
 	const auto position = midi::ClassifyMidiSampleInBlock(event.sampleOffset,
 		_midiBlockStartSample, _midiBlockNumSamples);
 	const bool inWindow = position == midi::MidiBlockSamplePosition::Due;
@@ -624,7 +664,7 @@ bool Vst2Plugin::TrySendMidiEvent(const midi::MidiEvent& event,
 #ifdef JAMMA_VST2_ENABLED
 void Vst2Plugin::DispatchPendingMidiEvents() noexcept
 {
-	if (_midiEvents.Count() == 0u || !_effect)
+	if (!_audioProcessingSupported || _midiEvents.Count() == 0u || !_effect)
 		return;
 
 	_midiEventBlock.numEvents = static_cast<VstInt32>(_midiEvents.Count());
@@ -994,7 +1034,11 @@ void Vst2Plugin::SetState(const std::vector<std::uint8_t>& blob)
 	const std::vector<std::uint8_t>* stateBlob = &blob;
 
 	if (stateBlob->size() < 6)
+	{
+		std::cerr << "[ERROR][VST2] stage=SetState/header id='" << StateId() << "' name='" << _name
+			<< "' bytes=" << stateBlob->size() << "; state header truncated" << std::endl;
 		return;
+	}
 
 	auto readBe32 = [](const std::uint8_t* bytes) -> std::uint32_t
 	{
@@ -1062,13 +1106,15 @@ void Vst2Plugin::SetState(const std::vector<std::uint8_t>& blob)
 
 	if (version != 0x01)
 	{
-		std::cerr << "[Vst2Plugin] SetState: unknown blob version " << (int)version << std::endl;
+		std::cerr << "[ERROR][VST2] stage=SetState/version id='" << StateId() << "' name='" << _name
+			<< "' unknown blob version=" << (int)version << std::endl;
 		return;
 	}
 
 	if (stateBlob->size() < 6 + static_cast<size_t>(payloadSize))
 	{
-		std::cerr << "[Vst2Plugin] SetState: blob truncated" << std::endl;
+		std::cerr << "[ERROR][VST2] stage=SetState/payload id='" << StateId() << "' name='" << _name
+			<< "' bytes=" << stateBlob->size() << " expected-payload=" << payloadSize << "; blob truncated" << std::endl;
 		return;
 	}
 
@@ -1114,6 +1160,7 @@ void Vst2Plugin::SetState(const std::vector<std::uint8_t>& blob)
 void Vst2Plugin::SendMidiPanicImmediately() noexcept
 {
 #ifdef JAMMA_VST2_ENABLED
+	if (!_audioProcessingSupported) return;
 	if (_midiBlockNumSamples == 0u) { RequestMidiPanic(); return; }
 	for (std::uint8_t channel = 0; channel < 16; ++channel)
 	{

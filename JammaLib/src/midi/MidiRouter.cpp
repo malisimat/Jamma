@@ -15,6 +15,67 @@
 #include "MidiLoop.h"
 using namespace midi;
 
+void MidiRouter::RequestTriggerLearn(io::TriggerBindingLearn::Request request)
+{
+	_triggerLearnRequest = request.Attempt ? std::optional(request) : std::nullopt;
+	if (!_triggerLearnObservation || _triggerLearnObservation->Identity.Session != request.Session)
+		_triggerLearnGeneration = _triggerLearnLifecycle.load(std::memory_order_acquire);
+	_triggerLearnObservation = std::make_shared<const io::TriggerBindingLearn::Observation>(
+		io::TriggerBindingLearn::Observation{request});
+}
+void MidiRouter::EndTriggerLearn()
+{
+	_triggerLearnRequest.reset(); _triggerLearnObservation.reset();
+}
+std::shared_ptr<const io::TriggerBindingLearn::Observation> MidiRouter::TriggerLearnObservation() const
+{
+	if (_triggerLearnObservation && _triggerLearnObservation->Error.empty() && _triggerLearnGeneration != _triggerLearnLifecycle.load(std::memory_order_acquire))
+	{
+		auto invalid = *_triggerLearnObservation; invalid.Armed = false; invalid.Binding.reset();
+		invalid.Error = "Input devices changed; cancel and reopen learning";
+		_triggerLearnObservation = std::make_shared<const io::TriggerBindingLearn::Observation>(std::move(invalid));
+	}
+	return _triggerLearnObservation;
+}
+void MidiRouter::_ArmTriggerLearn()
+{
+	if (!_triggerLearnRequest) return;
+	const auto request = *_triggerLearnRequest; _triggerLearnRequest.reset();
+	io::TriggerBindingLearn::Observation result{request};
+	const auto dispatch = _rigInputDispatch.load(std::memory_order_acquire);
+	if (_triggerLearnGeneration != _triggerLearnLifecycle.load(std::memory_order_acquire))
+		result.Error = "Input devices changed; cancel and reopen learning";
+	else if (VstCcLearnActive()) result.Error = "Finish VST CC learn before learning a trigger";
+	else if (!dispatch || dispatch->Revision != request.Revision) result.Error = "Rig changed; cancel and reopen learning";
+	else
+	{
+		std::scoped_lock lock(_serialIngressMutex);
+		_triggerLearnSerialWatermark = _serialEnqueueSequence;
+		_triggerLearnStartMicros = std::chrono::duration_cast<std::chrono::microseconds>(
+			std::chrono::steady_clock::now().time_since_epoch()).count();
+		result.Armed = true;
+	}
+	_triggerLearnObservation = std::make_shared<const io::TriggerBindingLearn::Observation>(std::move(result));
+}
+void MidiRouter::_ObserveTriggerLearn(io::RigFile::Binding binding, std::optional<unsigned int> physical)
+{
+	if (!_TriggerLearnArmed()) return;
+	const auto& observation = _triggerLearnObservation;
+	const auto dispatch = _rigInputDispatch.load(std::memory_order_acquire);
+	if (!dispatch || dispatch->Revision != observation->Identity.Revision) return;
+	auto captured = *observation; captured.Armed = false; captured.Binding = std::move(binding); captured.PhysicalChannel = physical;
+	_triggerLearnObservation = std::make_shared<const io::TriggerBindingLearn::Observation>(std::move(captured));
+}
+bool MidiRouter::_TriggerLearnArmed() const
+{
+	return _triggerLearnObservation && _triggerLearnObservation->Armed && !_triggerLearnObservation->Binding &&
+		_triggerLearnObservation->Error.empty() && _triggerLearnGeneration == _triggerLearnLifecycle.load(std::memory_order_acquire);
+}
+void MidiRouter::ObserveTriggerLearnKey(unsigned int key)
+{
+	if (_TriggerLearnArmed() && io::TriggerBindingLearn::KeyboardAllowed(key)) _ObserveTriggerLearn(io::TriggerBindingLearn::Keyboard(key));
+}
+
 namespace midi
 {
 	std::atomic<bool> MidiRouter::_automationRecordHeld{ false };
@@ -101,6 +162,7 @@ actions::ActionResult MidiRouter::HandleAutomationKey(const actions::KeyAction& 
 	{
 	case 76: // 'L'
 	{
+		if (_triggerLearnObservation) { std::cout << "Finish trigger learn before VST CC learn" << std::endl; return eaten; }
 		const bool nowOn = !_learnMidiCCMode.load(std::memory_order_relaxed);
 		_learnMidiCCMode.store(nowOn, std::memory_order_relaxed);
 		if (!nowOn)
@@ -131,6 +193,7 @@ actions::ActionResult MidiRouter::HandleAutomationKey(const actions::KeyAction& 
 
 		auto& lane = loop->GetLane(laneIdx);
 		lane.Mapping.TargetPlugin = plugin;
+		lane.Mapping.SavedTarget = {};
 		lane.Mapping.TargetParameterIndex = paramIdx;
 		lane.Mapping.MatchKey.store(
 			midi::AutomationMapping::MakeMatchKey(channel & 0x0Fu, learnedCC),
@@ -445,6 +508,7 @@ MidiConnectionResult MidiRouter::InitMidi(const io::UserConfig& cfg,
 		desired == _lastMidiDesired && actualSampleRate == _lastMidiSampleRate &&
 		_loggingVerbose == (loggingConfig.Midi == "verbose"))
 		return _lastMidiConnectionResult;
+	_triggerLearnLifecycle.fetch_add(1u, std::memory_order_acq_rel);
 	const auto previousInputs = _midiInputs.load(std::memory_order_acquire);
 	const auto previousRoutes = _rigInputDispatch.load(std::memory_order_acquire);
 	auto midiInputs = std::make_shared<std::vector<std::shared_ptr<MidiInputEndpoint>>>();
@@ -711,6 +775,7 @@ void MidiRouter::CloseMidi()
 
 void MidiRouter::SuspendMidiDispatch()
 {
+	_triggerLearnLifecycle.fetch_add(1u, std::memory_order_acq_rel);
 	std::scoped_lock lock(_rigInputPublicationMutex);
 	_midiDispatchSuspended = true;
 	if (_liveMidiDispatchNotification)
@@ -783,6 +848,7 @@ void MidiRouter::ResumeMidiDispatch()
 
 void MidiRouter::_CloseMidi()
 {
+	_triggerLearnLifecycle.fetch_add(1u, std::memory_order_acq_rel);
 	_lastMidiConnectionResult = {};
 	_lastMidiDesired.clear();
 	_lastMidiSampleRate = 0u;
@@ -940,6 +1006,7 @@ void MidiRouter::InitSerial(const io::UserConfig& cfg)
 		std::cout << "[Serial]   " << port << std::endl;
 
 	unsigned int activeConnections = 0u;
+	unsigned int desiredConnections = 0u;
 	for (const auto& serialConfig : cfg.Serial.Devices)
 	{
 		if (!serialConfig.Enabled)
@@ -948,6 +1015,7 @@ void MidiRouter::InitSerial(const io::UserConfig& cfg)
 			continue;
 		}
 
+		++desiredConnections;
 		if (serialConfig.Port.empty())
 		{
 			std::cout << "[Serial] Device \"" << serialConfig.Name << "\" has no port configured." << std::endl;
@@ -963,7 +1031,7 @@ void MidiRouter::InitSerial(const io::UserConfig& cfg)
 			{
 				std::scoped_lock lock(_serialIngressMutex);
 				const auto dispatch = _rigInputDispatch.load(std::memory_order_acquire);
-				_serialIngress.Push({ event, dispatch ? dispatch->Revision : 0u });
+				_serialIngress.Push({ event, dispatch ? dispatch->Revision : 0u, ++_serialEnqueueSequence });
 			});
 
 		if (!opened)
@@ -973,8 +1041,8 @@ void MidiRouter::InitSerial(const io::UserConfig& cfg)
 		activeConnections++;
 	}
 
-	if (0u == activeConnections)
-		std::cout << "[Serial] No active serial trigger connections." << std::endl;
+	std::cout << "[Serial] Desired devices: " << desiredConnections
+		<< ", connected devices: " << activeConnections << std::endl;
 }
 
 std::vector<std::string> MidiRouter::ConnectedSerialDeviceIds() const
@@ -987,6 +1055,7 @@ std::vector<std::string> MidiRouter::ConnectedSerialDeviceIds() const
 
 void MidiRouter::CloseSerial()
 {
+	_triggerLearnLifecycle.fetch_add(1u, std::memory_order_acq_rel);
 	for (auto& serialDevice : _serialDevices)
 	{
 		if (serialDevice)
@@ -1115,11 +1184,12 @@ void MidiRouter::_ConsumeEditorAutomation(const std::vector<std::shared_ptr<engi
 							touchState->LaneIdx        = laneIdx;
 							touchState->LastTouchSample = nowSample;
 
-							if (targetLoop->WireEditorAutomationLane(laneIdx, plugin, paramIdx))
+						if (targetLoop->WireEditorAutomationLane(laneIdx, plugin, paramIdx, plugin->StateId()))
 							{
 								std::cout << "[Automation] editor drag wired lane " << laneIdx
 									<< " -> plugin " << static_cast<const void*>(plugin)
 									<< " param " << paramIdx << "\n";
+								targetStation->RebuildAutomationDispatch();
 							}
 
 							targetLoop->OverwriteAutomationWindow(laneIdx, loopSample, cooldownSamples, value);
@@ -1163,6 +1233,7 @@ MidiRouter::TriggerDispatchSummary MidiRouter::PumpMidi(const std::vector<std::s
 	const audio::AudioStreamParams& audioParams) noexcept
 {
 	TriggerDispatchSummary summary;
+	_ArmTriggerLearn();
 	bool captureOverflow = false;
 	MidiInputEndpoint::RigMidiIngressEvent queued{};
 	const auto midiInputs = _midiInputs.load(std::memory_order_acquire);
@@ -1193,6 +1264,9 @@ MidiRouter::TriggerDispatchSummary MidiRouter::PumpMidi(const std::vector<std::s
 			const auto stationEvent = DeriveStationEvent(ingress,
 				_channelOverrideLive.load(std::memory_order_acquire)
 					? ForcedChannelOverride() : 0u);
+			if (_TriggerLearnArmed() && queued.CallbackArrivalMicros > _triggerLearnStartMicros)
+				if (auto binding = io::TriggerBindingLearn::Midi(input->ConfiguredName, triggerEvent))
+					_ObserveTriggerLearn(std::move(*binding), ingress.Channel());
 
 			auto dispatch = _DispatchMidiTriggerEvent(input->DeviceSlot, triggerEvent,
 				queued.EventSteadyMicros,
@@ -1230,7 +1304,7 @@ MidiRouter::TriggerDispatchSummary MidiRouter::PumpMidi(const std::vector<std::s
 				{
 					for (const auto& recipient : dispatchState->LiveMidi.RecipientsByDeviceSlot[input->DeviceSlot])
 					{
-						if (recipient.Station && recipient.Station->AcceptsLiveMidiChannel(stationEvent.Channel()))
+						if (recipient.Station && (recipient.Station->AcceptsLiveMidiChannel(stationEvent.Channel()) || stationEvent.IsNoteOff() || (stationEvent.MessageType() == 0xb0u && stationEvent.data1 == 64u && stationEvent.data2 < 64u)))
 							recipient.Station->ObservePhysicalMidiForRecording(
 								stationEvent, input->ConfiguredName);
 					}
@@ -1322,7 +1396,11 @@ MidiRouter::TriggerDispatchSummary MidiRouter::PumpSerial(const std::vector<std:
 	const audio::AudioStreamParams& audioParams) noexcept
 {
 	TriggerDispatchSummary summary;
+	_ArmTriggerLearn();
 	static const std::string EmptyDevice;
+	const auto generation = _triggerLearnLifecycle.load(std::memory_order_acquire);
+	if (_serialLearnStateGeneration != generation)
+	{ _serialLearnStates.clear(); _serialLearnStateGeneration = generation; }
 	while (true)
 	{
 		SerialIngressEvent queued{};
@@ -1343,6 +1421,15 @@ MidiRouter::TriggerDispatchSummary MidiRouter::PumpSerial(const std::vector<std:
 		action.SetUserConfig(userConfig);
 		action.SetAudioParams(audioParams);
 		const auto& device = ev.Device ? *ev.Device : EmptyDevice;
+		if (!device.empty())
+		{
+			const auto key = std::make_pair(device, ev.ButtonIndex);
+			const auto old = _serialLearnStates.find(key);
+			const bool changed = old == _serialLearnStates.end() || old->second != ev.IsPressed;
+			_serialLearnStates[key] = ev.IsPressed;
+			if (changed && _TriggerLearnArmed() && queued.Sequence > _triggerLearnSerialWatermark)
+				_ObserveTriggerLearn(io::TriggerBindingLearn::Serial(device, ev.ButtonIndex, ev.IsPressed));
+		}
 
 		for (const auto& trigger : dispatch->Snapshot->InputDispatch.SerialTriggers)
 		{
@@ -1549,7 +1636,7 @@ void MidiRouter::_DispatchAvailableLiveMidi() noexcept
 		bool hasRecipient = false;
 		for (const auto& recipient : routes->LiveMidi.RecipientsByDeviceSlot[selectedInput->DeviceSlot])
 		{
-			if (!recipient.Station || !recipient.Station->AcceptsLiveMidiChannel(dispatchedEvent.Event.Channel()))
+			if (!recipient.Station || (!recipient.Station->AcceptsLiveMidiChannel(dispatchedEvent.Event.Channel()) && !dispatchedEvent.Event.IsNoteOff() && !(dispatchedEvent.Event.MessageType() == 0xb0u && dispatchedEvent.Event.data1 == 64u && dispatchedEvent.Event.data2 < 64u)))
 				continue;
 
 			hasRecipient = true;

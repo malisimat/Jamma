@@ -22,10 +22,16 @@ namespace io
 			std::optional<MasterPosition> SavedMaster;
 		};
 
+		// Startup persistence entry; the caller admits the completed station to audio.
+		static std::optional<std::shared_ptr<engine::Station>> ReconstructStation(
+			engine::StationParams stationParams, audio::AudioMixerParams mixerParams,
+			JamFile::Station descriptor, std::wstring directory);
 		static ReconstructedSession Reconstruct(const JamFile& jam, const RigFile& rig, const std::wstring& directory);
 		// Exactly once on the loading thread, on a fresh rig before input/audio publication.
 		static void RestoreTriggerHistories(const std::vector<JamFile::TriggerHistory>& histories,
 			const engine::RigSnapshot& initialRig,
 			const std::vector<std::shared_ptr<engine::Station>>& stations);
+	private:
+		static void AssignMissingIdentities(JamFile& jam);
 	};
 }

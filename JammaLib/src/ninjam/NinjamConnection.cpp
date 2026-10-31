@@ -271,6 +271,7 @@ void NinjamConnection::Disconnect()
 		std::cout << "[NINJAM] Disconnected" << std::endl;
 
 	_isConnected = false;
+	_PublishRemoteTiming({});
 	_state = ConnectionState::Disconnected;
 	_ResetReconnectState(std::chrono::steady_clock::now());
 	_userOutputChannels.clear();
@@ -569,9 +570,11 @@ void NinjamConnection::_PublishRemoteTiming(const NinjamRemoteTiming& timing) no
 	_remoteTimingDeviceAudioSampleAtObservation.store(
 		timing.DeviceAudioSampleAtObservation, std::memory_order_relaxed);
 	_remoteTimingSequence.store(completedSequence + 2u, std::memory_order_release);
+	if (!timing.IsConnected)
+		_remoteTimingResetRevision.fetch_add(1u, std::memory_order_release);
 }
 
-NinjamRemoteTiming NinjamConnection::_ReadPublishedRemoteTiming() const noexcept
+std::optional<NinjamRemoteTiming> NinjamConnection::_ReadPublishedRemoteTiming() const noexcept
 {
 	for (auto attempt = 0u; attempt < 2u; ++attempt)
 	{
@@ -607,8 +610,23 @@ NinjamRemoteTiming NinjamConnection::ProcessExportBlock(const float* interleaved
 	unsigned int sampleRate,
 	std::uint64_t audioBlockStartSample)
 {
-	const auto remoteTiming = _ReadPublishedRemoteTiming();
-	if (!_isConnected || !_client || numFrames == 0u)
+	if (!_isConnected || !_client)
+	{
+		_audioRemoteTiming = {};
+		return {};
+	}
+	const auto epochBefore = _remoteTimingResetRevision.load(std::memory_order_acquire);
+	if (_audioRemoteTimingResetRevision != epochBefore)
+		_audioRemoteTiming = {};
+	const auto timing = _ReadPublishedRemoteTiming();
+	const auto epochAfter = _remoteTimingResetRevision.load(std::memory_order_acquire);
+	if (epochBefore != epochAfter)
+		_audioRemoteTiming = {};
+	else if (timing)
+		_audioRemoteTiming = *timing;
+	_audioRemoteTimingResetRevision = epochAfter;
+	const auto remoteTiming = _audioRemoteTiming;
+	if (numFrames == 0u)
 		return remoteTiming;
 
 	if (sampleRate > 0)
@@ -959,7 +977,13 @@ void NinjamConnection::_UpdateSnapshot()
 		return;
 
 	NinjamRemoteSnapshot snapshot;
-	snapshot.Timing = _ReadPublishedRemoteTiming();
+	if (const auto timing = _ReadPublishedRemoteTiming())
+		snapshot.Timing = *timing;
+	else
+	{
+		std::scoped_lock lock(_snapshotMutex);
+		snapshot.Timing = _snapshot.Timing;
+	}
 	const auto audioSequenceBefore = _audioProcSequence.load(std::memory_order_acquire);
 	if ((audioSequenceBefore & 1u) == 0u)
 	{

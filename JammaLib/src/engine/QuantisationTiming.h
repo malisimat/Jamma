@@ -94,6 +94,9 @@ namespace engine
 		std::uint32_t GridIntervalSamps = 0u;
 		std::uint32_t GridBaseDivisions = 0u;
 		std::int64_t GridOriginSamps = 0;
+		std::int32_t MasterAudioOffsetSamps = 0;
+		// Presentation scope: station-wide at station depth, otherwise take-local.
+		bool ContainsMidiLoops = false;
 	};
 
 	struct QuantisationPolicy

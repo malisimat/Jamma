@@ -1,5 +1,5 @@
 #pragma once
-#include "../vst/VstRackSlot.h"
+#include "../vst/RackState.h"
 #include "../audio/InputHistory.h"
 
 // Performance/mixing channel and LoopTake owner; fans neutral operations downward
@@ -16,8 +16,6 @@
 #include <vector>
 #include "LoopTake.h"
 #include "../engine/Quantiser.h"
-#include "../graphics/QuantisationModel.h"
-#include "../graphics/QuantisationDivisionModel.h"
 #include "../graphics/StationModel.h"
 #include "Trigger.h"
 #include "AudioSink.h"
@@ -27,8 +25,10 @@
 #include "../base/Jammable.h"
 #include "../gui/GuiRack.h"
 #include "../io/InitFile.h"
-#include "../midi/MidiQueue.h"
-#include "../midi/MidiVstOutputSink.h"
+#include "../midi/MidiDelivery.h"
+#include "../midi/CaptureHistory.h"
+#include "../midi/AutomationPlayback.h"
+#include "../midi/MidiChannelRoute.h"
 #include "../vst/VstChain.h"
 
 namespace engine
@@ -63,11 +63,12 @@ namespace engine
 			StationLevelFallRate(0.01f)
 		{
 		}
-
 	public:
 		std::string Name;
 		std::string Id;
 		unsigned int FadeSamps;
+		float SampleRate = static_cast<float>(constants::DefaultSampleRate);
+		unsigned int MidiSeamMergeWindowMs = constants::DefaultMidiSeamMergeWindowMs;
 		unsigned int NumBusChannels;
 		float StationLevelFallRate;
 	};
@@ -85,8 +86,6 @@ namespace engine
 			STATIONPANEL_ROUTER
 		};
 
-		static constexpr unsigned int LiveMidiOutputIndex = midi::LiveMidiOutputIndex;
-
 	public:
 		Station(StationParams params,
 			audio::AudioMixerParams mixerParams);
@@ -95,7 +94,6 @@ namespace engine
 		// Copy
 		Station(const Station&) = delete;
 		Station& operator=(const Station&) = delete;
-
 	public:
 		static std::optional<std::shared_ptr<Station>> FromFile(StationParams stationParams,
 			audio::AudioMixerParams mixerParams,
@@ -122,7 +120,7 @@ namespace engine
 		void BeginPresentationMove(float startX);
 		bool AdvancePresentationMove(float elapsedSeconds);
 		void FinishPresentationMove() noexcept;
-		bool IsPresentationMoving() const noexcept { return _presentationOffsetX != 0.0f; }
+		bool IsPresentationMoving() const noexcept { return _stationModel && _stationModel->IsPresentationMoving(); }
 		// Presentation-only; caller holds Scene::_sceneMutex.
 		graphics::CameraBounds CameraDeckBoundsInWorld() const;
 		float CameraTakeVisualScale() const noexcept;
@@ -206,6 +204,10 @@ namespace engine
 		void SetTransportOffsetLoopFrac(double loopFrac) noexcept;
 		double TransportOffsetLoopFrac() const noexcept { return _transportOffsetLoopFrac.load(std::memory_order_relaxed); }
 		std::int32_t TransportOffsetSamps() const noexcept;
+		std::shared_ptr<LoopTake> RecordedMasterTakeOnOwner() const;
+		std::int32_t MasterAudioReferenceOffsetSamps() const noexcept { return _masterAudioReferenceOffsetSamps; }
+		void SetMasterAudioReferenceOffsetSamps(std::int32_t offset) noexcept { _masterAudioReferenceOffsetSamps = offset; }
+		void SetDefaultMidiQuantisationFraction(midi::MidiQuantisationFraction fraction) noexcept { _defaultMidiQuantisationFraction = fraction; }
 		void SetGlobalPhaseOffsetSamps(std::int32_t offsetSamps) noexcept;
 		void SetStationPhaseOffsetSamps(std::int32_t offsetSamps) noexcept;
 		std::int32_t GlobalPhaseOffsetSamps() const noexcept { return _globalPhaseOffsetSamps; }
@@ -219,7 +221,9 @@ namespace engine
 			const LoopTake* targetTake, const Loop* targetLoop,
 			std::uint32_t masterLength) const noexcept;
 		void SetupBuffers(unsigned int bufSize);
-		void SetSampleRate(float sampleRate);
+		// Owner-side playback format refresh; sample-only updates retain the seam policy.
+		void SetSampleRate(float sampleRate, std::optional<unsigned int> midiSeamMergeWindowMs = std::nullopt);
+		float GetSampleRate() const noexcept { return _sampleRate; }
 		int CurrentVstLatencySamps() const noexcept;
 		void PollPlaybackPluginChanges() const noexcept;
 		unsigned int RecordedPlaybackLatencySamps() const noexcept;
@@ -268,14 +272,10 @@ namespace engine
 		void FlushLiveHeldMidiNotes() noexcept;
 		void FlushLiveHeldMidiNotesForDevice(const std::string& deviceName) noexcept;
 		void FlushPendingLostLiveMidiNotes() noexcept;
-		// Replacement semantics: one MIDI output routes to at most one plugin.
-		void SetMidiVstRoute(unsigned int midiOutputIndex, size_t vstIndex);
-		void ClearMidiVstRoutes();
-		// Non-RT persistence transfer. The audio callback continues to consume only
-		// immutable, retained snapshots; these methods never mutate one in place.
-		midi::MidiVstRoutingSnapshot SnapshotMidiVstRoutesForExport() const;
-		bool RestoreMidiVstRoutes(const midi::MidiVstRoutingSnapshot& routes,
-			size_t loadedPluginCount);
+		// Startup restoration on a fresh station, before it is admitted to an audio
+		// reader. Preserve unavailable/raw saved rack data for explicit recovery.
+		void RestoreSavedRack(const std::vector<io::JamFile::VstEntry>& entries,
+			std::array<midi::MidiChannelRoute, 16> routes, bool inactive);
 
 		// VST chain management (non-RT, queued through the job thread).
 		// LoadVstPlugin queues an async load; once the load completes the plugin
@@ -291,6 +291,24 @@ namespace engine
 			bool bypass = false, const std::string& stateId = {});
 		void UnloadVstPlugin(size_t index);
 		vst::VstRackSlot GetVstRackSlot() const;
+		static constexpr std::size_t MaxRackPlugins = vst::RackState::MaxRackPlugins;
+		static constexpr std::size_t MaxRackDestinations = vst::RackState::MaxRackDestinations; // Active, pending and retiring recovery owners.
+		std::vector<vst::VstRackSlot> GetVstRackSlots(std::size_t offset = 0u, std::size_t count = MaxRackPlugins) const;
+		std::size_t RackSlotCount() const;
+		bool MoveVstSlot(const vst::RackMove& move);
+		std::string RackDiagnostic() const;
+		bool RecoverRack(std::uint64_t revision);
+		bool RemoveInactiveRackSlot(std::size_t ordinal, std::uint64_t revision);
+		bool ClearInactiveRackRoutes(std::uint64_t revision);
+		bool SetMidiChannelRoutes(std::array<midi::MidiChannelRoute, 16> routes, std::uint64_t revision);
+		void RefreshRackLatency(); // Existing non-RT latency pump, serialized by Scene.
+		bool LoadManagedVstSlot(std::wstring path, const std::string& retryIdentity = {}, bool discardOnFailure = false);
+		std::optional<std::wstring> TakeFailedInteractiveVstLoad(const std::string& identity);
+		bool SetMidiChannelRoute(unsigned int channel, midi::MidiChannelRoute route, std::uint64_t revision);
+		const std::array<midi::MidiChannelRoute, 16>& MidiChannelRoutes() const noexcept { return _rackState.ChannelRoutes(); }
+		std::uint64_t RackRevision() const noexcept { return _rackState.Revision(); }
+		bool RackInactive() const noexcept { return _rackState.Inactive(); }
+		bool RackLatencySuspended() const noexcept { return _rackState.LatencySuspended(); }
 		bool LoadManagedVstPlugin(std::wstring path);
 		bool UnloadManagedVstPlugin(const std::string& identity);
 		void ForceUnloadAllVstPlugins();
@@ -299,7 +317,7 @@ namespace engine
 		std::shared_ptr<vst::IVstPlugin> GetVstPlugin(size_t index) const;
 		bool OwnsPlugin(const vst::IVstPlugin* plugin) const noexcept
 		{
-			const auto chain = _vstChain.load(std::memory_order_acquire);
+			const auto chain = _rackState.ActiveChain();
 			return chain && chain->ContainsPlugin(plugin);
 		}
 
@@ -328,16 +346,14 @@ namespace engine
 		static constexpr utils::Size2d _Gap = { 5, 5 };
 		static constexpr unsigned int _DefaultNumBusChannels = 8;
 
-		static constexpr unsigned int _HiddenSeedSamps = 1u;
 		static constexpr float _StationModelHeight = 470.0f;
 		static constexpr float _StationModelYOffset = _StationModelHeight * 0.5f;
 
 		static unsigned int _CalcTakeHeight(unsigned int stationHeight, unsigned int numTakes);
 		
-		static void _DrainVstChain(std::shared_ptr<vst::VstChain> chain);
 		static unsigned int _ResolveSampleRate(std::optional<io::UserConfig> cfg,
 			std::optional<audio::AudioStreamParams> params);
-		static void _TrySeedClockFromFirstLoop(const std::shared_ptr<utils::Timer>& clock,
+		void _TrySeedClockFromFirstLoop(const std::shared_ptr<utils::Timer>& clock,
 			unsigned long loopLengthSamps,
 			std::optional<io::UserConfig> cfg,
 			std::optional<audio::AudioStreamParams> params,
@@ -351,75 +367,6 @@ namespace engine
 			Audible::AudioSourceType source) override;
 		virtual void _ArrangeChildren() override;
 
-		// Prepared/pinned on the structural owner; MIDI ownership is mutated only
-		// by audio dispatch. Counts are per destination, never per changing output index.
-		struct MidiPlaybackBinding;
-		struct MidiDestination
-		{
-			std::shared_ptr<vst::IVstPlugin> Plugin;
-			std::bitset<midi::MidiNote::TotalNoteSlots> LiveHeld;
-			// Audio owner consumes; quiescent lifecycle owner marks actual delivered
-			// live notes after all writers drain. Destination lifetime follows snapshots.
-			std::bitset<midi::MidiNote::TotalNoteSlots> PendingLiveReset;
-			std::array<std::uint32_t, midi::MidiNote::TotalNoteSlots> LiveNoteOnRevision{};
-			std::array<unsigned int, midi::MidiNote::TotalNoteSlots> PlaybackOwners{};
-			std::array<unsigned int, midi::MidiNote::TotalNoteSlots> RecordedAudibleOwners{}; // Audio delivery time.
-			// Audio callback owner: rejected releases retry in later blocks.
-			std::bitset<midi::MidiNote::TotalNoteSlots> PendingReleases;
-			std::array<std::uint8_t, midi::MidiNote::TotalNoteSlots> PendingReleaseVelocity{};
-			std::bitset<midi::MidiNote::TotalNoteSlots> PluginHeld;
-			std::bitset<midi::MidiNote::TotalNoteSlots> BlockHeldAtStart;
-			std::bitset<midi::MidiNote::TotalNoteSlots> BlockTouched;
-			std::size_t ReleaseCursor = 0u;
-			struct ScheduledMidi
-			{
-				midi::MidiEvent Event;
-				std::uint64_t Sequence = 0u;
-				MidiPlaybackBinding* Owner = nullptr; // Pinned by QueuedEvents.
-				bool IsRealtime = false;
-			};
-			static constexpr std::size_t ScheduledCapacity = 1024u;
-			static constexpr std::size_t ScheduledReleaseReserve = 256u;
-			std::array<ScheduledMidi, ScheduledCapacity> Scheduled{};
-			std::size_t ScheduledCount = 0u; // Audio callback only.
-			std::uint64_t ScheduleSequence = 0u;
-			std::atomic<unsigned int> CompensationDelaySamps{ 0u };
-			std::atomic<std::uint32_t> CompensationEpoch{ 0u }; // Job publication.
-			std::uint32_t AppliedCompensationEpoch = 0u; // Audio callback.
-			unsigned int ActiveCompensationDelaySamps = 0u; // Audio callback.
-			bool RecoveringCompensationChange = false; // Current callback block.
-			bool LastBypassed = false; // Audio callback.
-		};
-		struct MidiPlaybackBinding
-		{
-			std::shared_ptr<LoopTake> Take;
-			std::shared_ptr<midi::MidiLoop> Loop;
-			std::shared_ptr<MidiDestination> Destination;
-			std::bitset<midi::MidiNote::TotalNoteSlots> Held;
-			std::bitset<midi::MidiNote::TotalNoteSlots> AudibleHeld; // Delayed note reached the plugin.
-			std::array<std::uint16_t, midi::MidiNote::TotalNoteSlots> AudibleSlots{};
-			std::array<std::uint16_t, midi::MidiNote::TotalNoteSlots> AudibleSlotPositions{};
-			std::size_t AudibleSlotCount = 0u; // Dense callback-owned active slots.
-			std::atomic<bool> HasHeld{ false }; // Audio publishes; job reclaims unused bindings.
-			std::atomic<unsigned int> QueuedEvents{ 0u }; // Pins raw queue identity until removed.
-			std::atomic<bool> RoutingActive{ true }; // Job publication; callback cancellation.
-			std::uint64_t ObservedSourceRevision = 0u; // Audio callback.
-			bool HasObservedSourceRevision = false;
-			bool HasObservedSourceState = false;
-			bool CancelScheduledThisBlock = false;
-			std::uint64_t ObservedRelocationGeneration = 0u; // Audio callback.
-			std::atomic<bool> ReleaseConsumed{ false };
-			std::size_t ReleaseSlot = 0u; // Audio only; preserves the per-block ingress budget.
-			bool ReleaseQueued = false; // Job producer only.
-			bool EmitSourceLossRelease = true; // Frozen before queue publication.
-		};
-		struct SyntheticMidi
-		{
-			midi::MidiEvent Event;
-			MidiPlaybackBinding* Release = nullptr; // Pinned until audio acknowledges.
-			bool SourceLossNoteOff = false;
-			std::uint32_t LiveNoteOnRevision = 0u;
-		};
 		struct AudioState
 		{
 			std::uint64_t Generation = 0u;
@@ -429,45 +376,12 @@ namespace engine
 			std::vector<std::shared_ptr<audio::AudioMixer>> AudioMixers;
 			std::vector<std::shared_ptr<audio::AudioBuffer>> AudioBuffers;
 			std::vector<float> VstBlockScratch;
+			unsigned int VstRenderChannels = 0u; // Prepared padded width includes retiring processors.
 			std::vector<float*> VstBlockPtrs;
-			std::shared_ptr<vst::VstChain> MidiChain;
-			std::vector<std::shared_ptr<MidiDestination>> LiveMidiDestinations;
-			std::vector<std::shared_ptr<MidiDestination>> MidiDestinations;
-			std::vector<std::shared_ptr<MidiDestination>> RetiredMidiDestinations;
-			mutable std::atomic<bool> RetiredMidiQueueCancelled{ false };
-			std::vector<std::vector<std::shared_ptr<MidiPlaybackBinding>>> MidiPlaybackRoutes;
+			std::vector<float> InstrumentScratch;
+			std::vector<float*> InstrumentPtrs;
+			midi::MidiDelivery::PreparedState Midi;
 		};
-		class MidiPlaybackSink final : public midi::IMidiOutputSink
-		{
-		public:
-			explicit MidiPlaybackSink(const AudioState& state) noexcept : _state(state) {}
-			void OnEvent(unsigned int outputIndex, const midi::MidiEvent& event) noexcept override;
-			bool TryOnEvent(unsigned int outputIndex, const midi::MidiEvent& event) noexcept override;
-		private:
-			const AudioState& _state;
-		};
-		void _PrepareMidiDestinations(AudioState& state);
-		static bool _TryDeliverMidi(MidiDestination& destination, const midi::MidiEvent& event, bool isRealtime, MidiPlaybackBinding* owner = nullptr) noexcept;
-		static bool _TryDeliverMidiNow(MidiDestination& destination, const midi::MidiEvent& event, bool isRealtime) noexcept;
-		static bool _TryDeliverRecordedMidiNow(MidiDestination& destination, const midi::MidiEvent& event,
-			MidiPlaybackBinding& owner, bool isRealtime) noexcept;
-		static void _DropRecordedAudibleOwner(MidiDestination& destination, MidiPlaybackBinding& owner,
-			bool emitRelease = true) noexcept;
-		static void _DrainScheduledMidi(const AudioState& state, std::uint32_t blockStartSample, unsigned int numSamps) noexcept;
-		static std::bitset<midi::MidiNote::TotalNoteSlots> _CancelScheduledMidiForOwner(
-			MidiDestination& destination, MidiPlaybackBinding* owner) noexcept;
-		static void _RecoverCancelledScheduledMidi(MidiDestination& destination,
-			const std::bitset<midi::MidiNote::TotalNoteSlots>& affected) noexcept;
-		static void _InvalidateScheduledMidiAtBlockStart(const AudioState& state, bool forceCancel = false) noexcept;
-		static void _DrainPendingMidiReleases(const AudioState& state, std::uint32_t sample) noexcept;
-		static void _RecoverSkippedMidiBlocks(const AudioState& state) noexcept;
-		static void _DispatchLiveMidi(const AudioState& state, const midi::MidiEvent& event,
-			bool sourceLossNoteOff, std::uint32_t liveNoteOnRevision) noexcept;
-		static bool _ReleaseLostPlaybackMidi(MidiPlaybackBinding& binding, std::uint32_t sample,
-			unsigned int& budget, unsigned int& slotBudget) noexcept;
-		void _QueueLostPlaybackMidi(const std::shared_ptr<LoopTake>& take, bool emitRelease = true);
-		void _FlushPendingLostPlaybackMidi();
-		bool _TryEnqueueSyntheticMidi(SyntheticMidi entry) noexcept;
 
 		using LoopTakeSnapshot = std::vector<std::weak_ptr<LoopTake>>;
 
@@ -484,8 +398,6 @@ namespace engine
 		std::optional<std::shared_ptr<LoopTake>> _TryGetTake(std::string id);
 		void _SetTakePresentation(LoopTake& take, LoopTake::PresentationMode mode) noexcept;
 		void _WireVuSliders();
-		using MidiVstRoutingSnapshot = midi::MidiVstRoutingSnapshot;
-		static constexpr std::size_t MaxMidiVstRouteOutputs = 4096u;
 
 		// --- WriteBlock helpers (audio thread) ---
 
@@ -502,63 +414,21 @@ namespace engine
 			unsigned int channelCount,
 			unsigned int sampsToRead,
 			std::uint32_t blockStartSample) noexcept;
-			static bool _TryEnqueueOrderedLiveMidi(midi::MidiQueue<1024>& queue,
-				bool& hasLastSample,
-				std::uint32_t& lastSample,
-				const midi::MidiEvent& event) noexcept;
+
 
 		// Cancel and remove without resetting resources borrowed by callback snapshots.
 		// Job/UI owners enqueue held NoteOffs; retirement releases resources off callback.
 		void _DitchLoopTake(std::shared_ptr<LoopTake>& take, bool flushLiveHeld = true) noexcept;
 
-		// --- Parameter automation dispatch ---
-
-		// One pre-resolved automation mapping ready for the audio thread. All
-		// pointer chasing and lane metadata are baked in by RebuildAutomationDispatch
-		// so the audio path is a flat loop over a hot cache line.
-		// IMMUTABLE after publication: the audio thread must never write into this
-		// struct, which is what makes the double-buffer scheme race-free.
-		struct AutomationDispatch
-		{
-			vst::IVstPlugin* plugin = nullptr;          // raw observer — lifetime owned by VstChain
-			unsigned int     paramIdx = 0u;
-			midi::MidiLoop*                   loop = nullptr;            // raw observer — lifetime owned by LoopTake
-			std::uint8_t                      laneIdx = 0u;              // which lane within loop to read
-			std::uint32_t                     loopLengthSamps = 0u;      // frozen at rebuild
-			std::uint32_t                     automationGlobalSampleOrigin = 0u; // frozen at rebuild; automation origin
-			const std::atomic<std::int32_t>*  anchorCorrection = nullptr; // live correction from owning LoopTake
-			// effective origin = automationGlobalSampleOrigin + anchorCorrection (modular uint32)
-		};
-		// Per-entry playback state owned exclusively by the audio thread.
-		// Kept separate from AutomationDispatch so the dispatch buffers are
-		// immutable after publication; the writer can safely overwrite the
-		// back buffer without racing the audio callback's cursor/value updates.
-		struct AutomationPlaybackState
-		{
-			std::uint16_t cursorIdx = 0u;
-			std::uint64_t stateGeneration = 0;
-			float         lastValue = -2.0f;  // sentinel: force first write
-		};
-		static constexpr std::size_t MaxAutomationDispatches = 64u;
-		static constexpr float AutomationEpsilon = 1.0f / 65536.0f; // below 16-bit param resolution
-
-		// Run one automation dispatch block on the audio thread: advance each
-		// lane's cursor, interpolate, and SetParameter (delta-gated). Real-time safe.
-		void _RunAutomationDispatch(std::uint32_t blockStartSample,
-			std::uint32_t numSamps) noexcept;
-
-		// Last recorded MIDI loop in a take (most recently created loop with a
-		// non-zero length), or nullptr. Non-audio thread helper.
-		static std::shared_ptr<midi::MidiLoop> _LastRecordedMidiLoop(const std::shared_ptr<LoopTake>& take);
 		bool _flipTakeBuffer;
 		bool _flipAudioBuffer;
-		std::string _name;
+		// Immutable metadata publication: UI/job/MIDI diagnostics may read concurrently.
+		// No callback reader; Scene serializes accepted writes with rig promotion/export.
+		std::atomic<std::shared_ptr<const std::string>> _name;
 		const std::string _id;
 		unsigned int _fadeSamps;
 		unsigned int _lastBufSize;
 		std::shared_ptr<utils::Timer> _clock;
-		std::shared_ptr<QuantisationModel> _quantisationModel;
-		std::shared_ptr<QuantisationDivisionModel> _quantisationDivisionModel;
 		std::shared_ptr<graphics::StationModel> _stationModel;
 		// Structural job owner orders meaningful accepted capture-mode changes.
 		std::uint64_t _nextPresentationSerial = 1u;
@@ -601,64 +471,14 @@ namespace engine
 		std::uint64_t _nextAudioStateGeneration = 1u;
 		std::atomic<std::uint64_t> _audioCompletedStateGeneration{ 0u };
 		std::atomic<double> _transportOffsetLoopFrac{ 0.0 };
-		// Flat automation dispatch list, double-buffered and published with an
-		// atomic-swap release store (audio thread reads with acquire). Built only on
-		// the non-audio thread in RebuildAutomationDispatch.
-		// The buffers are immutable once published — the audio thread never writes
-		// into them, so the writer can safely fill the back buffer at any time.
-		std::atomic<const AutomationDispatch*> _automationDispatch{ nullptr };
-		AutomationDispatch _automationDispatchBuf[2][MaxAutomationDispatches]{};
-		std::uint8_t       _automationDispatchCount[2]{};
-		std::uint8_t       _automationDispatchBack = 0u;
-		// Audio-thread-only playback state, parallel to the active dispatch list.
-		// Reset whenever _RunAutomationDispatch detects a new list was published.
-		AutomationPlaybackState  _automationPlaybackState[MaxAutomationDispatches]{};
-		// Last dispatch pointer seen by the audio thread; used to detect rebuilds.
-		const AutomationDispatch* _automationDispatchFront = nullptr;
+		midi::AutomationPlayback _automationPlayback;
+		bool _automationDispatchDirty = false; // Serialized child topology callback; UI commit consumes.
 
-		// VST insert chain applied after all LoopTakes are mixed down,
-		// just before each channel is sent to the output AudioMixer.
-		// Published atomically for lock-free audio-thread reads.
-		std::atomic<std::shared_ptr<vst::VstChain>> _vstChain;
-		std::shared_ptr<vst::VstChain> _backVstChain;
-		std::atomic<bool> _flipVstChain{ false };
-
-		// Pending load/unload requests staged by LoadVstPlugin / UnloadVstPlugin.
-		// Read only on the job thread (from OnAction(JobAction)).
-		// Each entry carries the plugin path and an optional VST2 initial-state blob.
-		std::vector<actions::JobAction> _pendingVstLoads;
-		std::vector<actions::JobAction> _pendingVstUnloads;
-		// _vstPluginPaths: written on job thread (OnAction), read on main thread (VstEntries).
-		// Access is guarded by _vstPathsMutex in both directions.
-		mutable std::mutex _vstPathsMutex;
-		std::vector<std::wstring> _vstPluginPaths;
-		std::vector<io::JamFile::VstEntry> _vstSavedEntries;
-		// UI stages requests, job completes them. Audio never reads this counter.
-		std::atomic<unsigned int> _vstJobsPending{ 0u };
-		midi::MidiQueue<1024> _immediateLiveMidiIngress;
-		midi::MidiQueue<1024, SyntheticMidi> _syntheticLiveMidiIngress;
-		std::vector<std::weak_ptr<MidiDestination>> _midiDestinations;
-		std::vector<std::shared_ptr<MidiPlaybackBinding>> _midiPlaybackBindings;
-		std::vector<std::shared_ptr<MidiPlaybackBinding>> _pendingLostPlaybackMidi;
-		bool _hasLastImmediateLiveMidiSample = false;
-		std::uint32_t _lastImmediateLiveMidiSample = 0u;
-		bool _hasLastSyntheticLiveMidiSample = false;
-		std::uint32_t _lastSyntheticLiveMidiSample = 0u;
-		mutable std::mutex _liveHeldMidiMutex;
-		std::vector<std::pair<std::string, midi::MidiNoteSnapshot>> _liveHeldMidi;
-		struct RecentPhysicalMidi
-		{
-			midi::MidiEvent Event;
-			std::string Device;
-			std::uint8_t PriorDeviceVelocity = 0u;
-			std::uint8_t PriorAnyVelocity = 0u;
-			std::uint64_t Sequence = 0u;
-		};
-		// Structural/MIDI job owner; guarded with the existing held-state mutex.
-		std::vector<RecentPhysicalMidi> _recentPhysicalMidi;
-		std::vector<std::weak_ptr<LoopTake>> _midiCaptureTargets;
-		std::optional<std::uint32_t> _midiHistoryDroppedThroughSample;
-		std::uint64_t _physicalMidiSequence = 0u;
+		vst::RackState _rackState;
+		vst::RackState::Format _RackFormat() const;
+		bool _RackLatencyFeasible(const vst::VstChain& chain) const noexcept;
+		midi::MidiDelivery _midiDelivery;
+		midi::CaptureHistory _captureHistory;
 		// Coherent correspondence: callback writes, structural owner reads via
 		// the existing Timer observation plus this device boundary publication.
 		std::atomic<std::uint32_t> _captureDeviceBoundary{ 0u };
@@ -669,38 +489,27 @@ namespace engine
         std::atomic<bool> _midiFormatEpochPending{ true };
         std::atomic<bool> _midiFormatEpochKnown{ false };
         std::atomic<std::uint32_t> _midiFormatEpochSample{ 0u };
-		midi::MidiNoteSnapshot _anonymousLiveHeldMidi;
-		std::bitset<midi::MidiNote::TotalNoteSlots> _pendingLostLiveMidiNoteOffs;
-		// Audio publishes delivered live note-ons; job snapshots that revision for
-		// lost-live releases. Dropped ingress must never reserve note ownership.
-		std::array<std::atomic<std::uint32_t>, midi::MidiNote::TotalNoteSlots> _liveNoteOnRevisions{};
 		std::vector<int> _allowedMidiChannels;
 		std::atomic<bool> _membershipRemoving{ false }; // Scene owner writes, UI/job readers; station lifetime pins teardown.
 		std::atomic<std::uint16_t> _allowedMidiChannelMask{ 0u };
-		// Route snapshots are published off the audio thread.
-		// The callback reads an immutable snapshot pointer for O(1) lookups.
-		std::atomic<const MidiVstRoutingSnapshot*> _midiVstRoutes;
-		std::vector<std::unique_ptr<MidiVstRoutingSnapshot>> _retainedMidiVstRoutes;
 
 		// Sample rate and block size captured at SetupBuffers time; needed to
 		// initialise a newly loaded plugin (IVstPlugin: VST2 or VST3).
-		float _sampleRate = 44100.0f;
+		unsigned int _midiSeamMergeWindowMs;
+		float _sampleRate;
 		unsigned int _blockSize = 512u;
 		std::vector<float> _vstBlockScratch;
 		std::vector<float*> _vstBlockPtrs;
-		std::optional<engine::QuantisationParams> _pendingQuantisationParams;
-		bool _pendingQuantisationConfirm = false;
-		float _quantisationOverlayAlpha = 0.0f;
 		io::JamFile::GlobalMidiQuantState _globalMidiQuantState = io::JamFile::GlobalMidiQuantState::Off;
 		// Structural owner only, serialized with AddTake by Scene/Trigger ownership.
 		// Callback reads each take's existing atomic grid publication, never these
 		// retained defaults. Station teardown follows callback shutdown.
 		RemoteTransportGeometry _remoteMidiGrid;
 		std::int64_t _remoteMidiGridOriginSamps = 0;
+		std::weak_ptr<LoopTake> _recordedMasterTake; // Job-owned identity from accepted first-master receipt.
+		std::int32_t _masterAudioReferenceOffsetSamps = 0;
+		midi::MidiQuantisationFraction _defaultMidiQuantisationFraction = midi::MidiQuantisationFraction::Quarter;
 		std::int32_t _globalPhaseOffsetSamps = 0;
 		std::int32_t _stationPhaseOffsetSamps = 0;
-		float _presentationOffsetX = 0.0f; // Window owner; no callback/job access.
-		float _presentationStartOffsetX = 0.0f;
-		float _presentationElapsed = 0.0f;
 	};
 }

@@ -18,7 +18,7 @@ Rig files support multiple configured MIDI input devices. MIDI activation and di
     "serial": []
   },
   "settings": {
-    "loop": { "fadeSamps": 800, "seedGrainMinMs": 400, "seedGrainTargetMaxMs": 3000, "seedBpmMin": 80, "seedQuantisation": "power" },
+    "loop": { "fadeSamps": 800, "midiSeamMergeWindowMs": 200, "seedGrainMinMs": 400, "seedGrainTargetMaxMs": 3000, "seedBpmMin": 80, "seedQuantisation": "power" },
     "trigger": { "debounceMs": 280 },
     "midi": { "channelOverrideTriggers": false, "channelOverrideLive": true }
   },
@@ -82,3 +82,63 @@ Legacy `settings.trigger.preDelaySamps: 0` is accepted with a deprecation warnin
 and omitted on save. Nonzero legacy values require explicit per-trigger
 `preDelayMs`. Mixing that deprecated global field with per-trigger declarations
 is rejected. MIDI device timestamp-offset configuration is unsupported.
+
+## Learning trigger bindings
+
+Alt-click either Activate or Ditch pedal to edit that pedal's bindings. Ordinary pedal clicks keep their existing action. The editor shows configured device names and IDs, availability, channel and input details. MIDI note labels use C4 for note 60.
+
+An editor with fewer than four rows adds an empty learning row when opened. Use Learn to replace a row or + to add another. Only one row learns at a time. Its first fresh eligible MIDI, serial or unmodified application key event becomes a highlighted candidate; a paired release cannot replace it. MIDI uses the effective trigger channel when channel override is enabled. Note-off activation is supported; the inverse release is inferred. CC uses nonzero/zero edges. Reserved application shortcut keys cannot be learned.
+
+Cancel or Stop learn on the active row restores that row's previous draft. Switching rows first restores the previous learning row. Delete removes an idle row. The four-row limit applies to adding rows: imported bindings beyond four remain available through scrolling and are preserved. Empty rows are ignored, and deleting every binding is allowed.
+
+MIDI and serial controls remain active while learning. Learning does not consume or replay their normal trigger, instrument or recording input. VST CC learn and trigger learn cannot run together. Device or rig changes invalidate an attempt; cancel and reopen if prompted.
+
+OK applies the complete valid changed pedal draft through the existing acknowledged rig transition. The other pedal, trigger identity/name, capture inputs and target remain unchanged. Conflicts are reported rather than silently dropping rows. A busy or rejected apply keeps the draft for retry; Cancel, Escape or outside dismissal before submission discards it. During submission the editor waits for the result. Accepted bindings are live in memory and are saved only by an explicit rig save.
+
+## Explicit rig saving
+
+Settings provides Save rig, Save rig as..., and Save rig as default.... Save rig overwrites the current editable user rig; generated, protected or unknown paths use Save As. Save As creates or explicitly overwrites a chosen user file and makes it the current path. Both ordinary actions leave startup defaults unchanged. Save rig as default is the separate explicit action that changes the startup selection.
+
+Each request writes a detached accepted rig revision through the existing atomic writer. Pending edits require retry. Completion reports the captured revision; newer changes remain unsaved. A failed save retains the previous current path and saved-revision state. Replacing the running Scene invalidates revision comparisons while retaining the current user path. Hardware preference writes preserve the saved mappings rather than persisting unsaved runtime binding edits.
+
+
+## MIDI loop boundary notes
+
+`settings.loop.midiSeamMergeWindowMs` is an overall rig setting, default 200 ms,
+accepting any nonnegative integer representable by the unsigned millisecond field.
+The forward search stays within one loop repeat even for larger windows. Missing fields in older rigs use the
+default. The MIDI owner converts milliseconds at the active stream sample rate,
+rounding to the nearest sample with half-sample ties upward, and publishes the
+resolved window with the immutable playback view. Accepted changes rebuild both
+existing and subsequently created/restored streams through their existing owners.
+
+A finite note merges with the next repeat only when their unwrapped spans really
+overlap. A captured tail whose key remained physically held may instead bridge
+to the earliest paired attack within the forward seam window (inclusive). Its
+channel, pitch and stream must match; an orphan release cannot qualify. The
+initial head stays audible, later duplicate heads are suppressed only while the
+matching tail continues, and that head's own release ends the note. Zero disables
+positive-distance matching while retaining exact-zero continuation and finite
+overlaps. Editor-authored finite endpoints do not become physical holds.
+
+An isolated held tail releases at the seam and attacks normally next repeat.
+Case [3], a finite capture suffix that does not reach the next head, still releases
+at the playable seam; this change does not retain its general post-wrap release.
+Notes held throughout capture keep exact endpoints at 0 and L-1, leaving a
+one-sample rest before the next repeat's fresh attack.
+
+Both quantise modes pair in source order, translate the whole positive-duration
+span by the attack's signed grid displacement, and compare spans before wrapping.
+The paired release follows that same displacement; it is never independently
+snapped or clamped to L-1. A 980/990 note in a 1000-sample loop snapped to 1000
+therefore plays at 0/10. An unmatched 980 attack retains its inferred 20-sample
+capture-window duration and cannot borrow an orphan release at 200 (or at 10).
+Playback, drawing and editor targets share prepared spans and source identities.
+Snapping may legitimately create/remove an overlap or move a head outside the
+configured tolerance; equivalent geometry uses the same merge policy.
+
+Native MIDI sidecar version 0.5 persists a flag on artificial capture closures.
+Older assets retain their known semantics: an unmarked L-1 release is treated as
+real because its physical origin cannot be recovered. Naturally unmatched legacy
+tails can still use seam matching. Source persistence stays unquantised. Replacing
+an endpoint in the editor clears obsolete held-boundary provenance.

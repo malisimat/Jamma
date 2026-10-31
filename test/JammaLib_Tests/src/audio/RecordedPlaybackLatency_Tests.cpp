@@ -230,6 +230,8 @@ public:
 	utils::Size2d GetEditorSize() const noexcept override { return { 0u, 0u }; }
 	bool IsLoaded() const noexcept override { return _loaded; }
 	const std::string& Name() const noexcept override { return _name; }
+	vst::RenderRole Role() const noexcept override { return vst::RenderRole::Effect; }
+	vst::MidiInputCapabilities MidiInput() const noexcept override { return {true, true, true}; }
 	void SetBypassed(bool value) noexcept override { _bypassed = value; }
 	bool IsBypassed() const noexcept override { return _bypassed; }
 	int GetLatencySamples() const noexcept override { return ReportedLatencySamps; }
@@ -544,7 +546,7 @@ static void VerifySerialRenderedPath(bool indexedStationDestination)
 	if (indexedStationDestination)
 	{
 		secondStationEffect = loadDelay(station, L"fake-station-synth.dll");
-		station->SetMidiVstRoute(0u, 1u);
+		ASSERT_TRUE(station->SetMidiChannelRoute(0u, {{secondStationEffect->StateId()}}, station->RackRevision()));
 	}
 	station->AddTake(take);
 	station->CommitChanges();
@@ -591,7 +593,7 @@ TEST(RecordedPlaybackLatency, IndexedStationMidiSkipsUpstreamPluginDelay)
 	VerifySerialRenderedPath(true);
 }
 
-TEST(RecordedPlaybackLatency, ThreeLevelLatencySaturatesWithoutWrapping)
+TEST(RecordedPlaybackLatency, ExcessiveStationLatencyIsRejectedWithoutWrappingChildSum)
 {
 	audio::MergeMixBehaviourParams merge;
 	engine::StationParams stationParams;
@@ -628,8 +630,13 @@ TEST(RecordedPlaybackLatency, ThreeLevelLatencySaturatesWithoutWrapping)
 	station->CommitChanges();
 	EXPECT_EQ((std::numeric_limits<unsigned int>::max)() - 1u,
 		take->RecordedPlaybackLatencySamps());
-	EXPECT_EQ((std::numeric_limits<unsigned int>::max)(),
+	// Unsupported Station rack latency is rejected before publication. The
+	// unchanged legacy child paths retain their exact non-wrapping sum.
+	EXPECT_EQ((std::numeric_limits<unsigned int>::max)() - 1u,
 		station->RecordedPlaybackLatencySamps());
+	EXPECT_EQ(0, station->CurrentVstLatencySamps());
+	EXPECT_TRUE(station->GetVstRackSlot().Failed);
+	EXPECT_FALSE(station->RackDiagnostic().empty());
 	EXPECT_FALSE(station->CanConfigureRecordedPlaybackCompensation(
 		(std::numeric_limits<unsigned int>::max)()));
 	EXPECT_FALSE(station->ConfigureRecordedPlaybackCompensation(

@@ -1,4 +1,14 @@
 #include "gtest/gtest.h"
+#include "../../TestPaths.h"
+#include "engine/Scene.h"
+#include "io/IoSessionExporter.h"
+#include <array>
+#include <cmath>
+#include <chrono>
+#include <thread>
+#include <filesystem>
+#include <fstream>
+#include <sstream>
 
 #include <memory>
 #include <string>
@@ -6,10 +16,22 @@
 
 #include "base/AudioSink.h"
 #include "engine/Loop.h"
+#include "engine/Station.h"
+#include "engine/Quantiser.h"
+#include "io/UserConfig.h"
 #include "engine/LoopTake.h"
 #include "io/JamFile.h"
 #include "ninjam/NinjamLoopAlignment.h"
 #include "utils/Timer.h"
+
+namespace engine
+{
+class SceneTimingRestoreTestAccess
+{
+public:
+    static std::shared_ptr<utils::Timer> Clock(const Scene& scene) { return scene._quantisation.Clock(); }
+};
+}
 
 using audio::MergeMixBehaviourParams;
 using base::AudioWriteRequest;
@@ -207,7 +229,7 @@ static std::shared_ptr<TimingTestLoopTake> MakeTimingTestLoopTake(const std::str
 	return std::make_shared<TimingTestLoopTake>(params, mixerParams);
 }
 
-static std::shared_ptr<engine::Loop> MakeTimingLoop(unsigned long loopLength)
+static std::shared_ptr<engine::Loop> MakeTimingLoop(unsigned long loopLength, bool ramp = false)
 {
 	audio::WireMixBehaviourParams mixBehaviour;
 	mixBehaviour.Channels = { 0u };
@@ -225,6 +247,7 @@ static std::shared_ptr<engine::Loop> MakeTimingLoop(unsigned long loopLength)
 	loop->Record();
 	const auto recordedLength = constants::MaxLoopFadeSamps + loopLength;
 	std::vector<float> samples(recordedLength, 1.0f);
+	if (ramp) for (unsigned long i = 0; i < recordedLength; ++i) samples[i] = static_cast<float>(i) / recordedLength;
 	AudioWriteRequest request;
 	request.samples = samples.data();
 	request.numSamps = static_cast<unsigned int>(recordedLength);
@@ -236,6 +259,16 @@ static std::shared_ptr<engine::Loop> MakeTimingLoop(unsigned long loopLength)
 	loop->EndWrite(static_cast<unsigned int>(recordedLength), true);
 	loop->Play(constants::MaxLoopFadeSamps, loopLength, false);
 	return loop;
+}
+
+static void SettleTimingOffset(const std::shared_ptr<engine::Loop>& loop)
+{
+    for (auto block = 0u; block < 4096u; ++block)
+    {
+        loop->EndMultiPlay(128u);
+        if (loop->AppliedPlaybackOffsetSamps() == loop->TotalPlaybackOffsetSamps()) return;
+    }
+    ADD_FAILURE() << "Audio shift did not converge";
 }
 
 static std::shared_ptr<TimingTestLoopTake> MakePlayingTimingTake(const std::string& id,
@@ -957,14 +990,20 @@ namespace midi
             rig->InputDispatch.LiveMidi = {{"Keys A", {station}}, {"Keys B", {station}}};
             router.PublishRigInputDispatch(rig);
         }
-        static void Push(MidiRouter& router, unsigned int slot, const MidiEvent& event)
+        static void Push(MidiRouter& router, unsigned int slot, const MidiEvent& event, std::int64_t arrival = 0)
         {
             MidiRouter::MidiInputEndpoint::RigMidiIngressEvent ingress;
             ingress.Event = event;
             ingress.RigRevision = 1u;
+            ingress.CallbackArrivalMicros = arrival;
             ingress.RoutingGeneration = 1u;
             ASSERT_TRUE(router._midiInputs.load()->at(slot)->Ingress.Push(ingress));
         }
+        static std::int64_t ArmBoundary(const MidiRouter& router) { return router._triggerLearnStartMicros; }
+        static void Serial(MidiRouter& router, const std::string& device, bool down)
+        { ASSERT_TRUE(router._serialIngress.Push({{&device, 7u, down},1u,++router._serialEnqueueSequence})); }
+        static void OverrideTriggers(MidiRouter& router)
+        { router._channelOverrideTriggers.store(true); router._channelOverrideLive.store(false); router.SetForcedChannelOverride(3u, {}); }
     };
 }
 
@@ -1050,6 +1089,12 @@ TEST(TriggerPredelayStation, FirstAudioAndMixedMasterReserveCompensatedOrigin)
         auto station = TriggerPredelayStationTest::MakeStation();
         auto clock = std::make_shared<Timer>();
         station->SetClock(clock);
+        // Keep the first recorded master behind unrelated earlier material.
+        if (delay == 0.0 && !withMidi)
+        {
+            station->AddTake(MakePlayingTimingTake("earlier-nonmaster",48000ul,0ul));
+            station->CommitChanges();
+        }
         constexpr auto trigger = 100000u;
         auto start = TriggerPredelayStationTest::Start(trigger, delay);
         start.InputChannels = {0u};
@@ -1118,6 +1163,86 @@ TEST(TriggerPredelayStation, FirstAudioAndMixedMasterReserveCompensatedOrigin)
         EXPECT_EQ(expected, take->MidiPlayIndex());
         ASSERT_EQ(1u, take->GetLoops().size());
         EXPECT_EQ(expected, take->GetLoops().front()->BodyPlayIndex());
+        if (delay == 0.0 && !withMidi)
+        {
+            station->CommitChanges(); // Consume the actual accepted master receipt.
+            ASSERT_EQ(take,station->RecordedMasterTakeOnOwner());
+            auto firstStation = TriggerPredelayStationTest::MakeStation();
+            firstStation->AddTake(MakePlayingTimingTake("first-station-decoy",48000ul,0ul));
+            firstStation->CommitChanges();
+            const std::vector<std::shared_ptr<engine::Station>> stations{firstStation,station};
+            engine::Quantiser quantiser; quantiser.SetClock(clock);
+            quantiser.SetMidiGrain(clock->QuantiseSamps(),"accepted recording",stations);
+            const auto master = take->GetLoops().front();
+            ASSERT_FALSE(master->Id().empty());
+            ASSERT_EQ(master->Id(),quantiser.MasterAudioLoopId());
+            master->SetPlaybackOffsetSamps(-1500);
+			auto takeGrid = take->MidiQuantisation();
+			takeGrid.PhaseOffsetSamps = 500;
+			take->SetMidiQuantisation(takeGrid);
+			station->SetStationPhaseOffsetSamps(300);
+			quantiser.SetGlobalPhaseOffsetSamps(200, stations);
+            SettleTimingOffset(master);
+            quantiser.UpdateStationHints(nullptr,base::DEPTH_LOOP,false,stations);
+            struct DirectoryCleanup
+            {
+                std::filesystem::path Path;
+                ~DirectoryCleanup() { std::error_code error; std::filesystem::remove_all(Path,error); }
+            } directory{TestPaths::FixtureDirectory() / ("recorded-master-" + std::to_string(GetCurrentProcessId()))};
+            ASSERT_TRUE(std::filesystem::create_directory(directory.Path));
+            std::mutex sceneMutex;
+            audio::AudioStreamParams stream; stream.SampleRate = 48000u;
+            ASSERT_TRUE(io::IoSessionExporter::ExportSessionToDirectory(stations,nullptr,quantiser,
+                io::JamFile::GlobalMidiQuantState::Off,0.0,io::UserConfig{},stream,nullptr,
+                sceneMutex,nullptr,directory.Path.wstring()));
+            std::ifstream file(directory.Path / "session.jam"); std::stringstream text; text << file.rdbuf(); file.close();
+            auto jam = io::JamFile::FromStream(std::move(text)); ASSERT_TRUE(jam);
+            EXPECT_EQ(master->Id(),jam->MasterAudioLoopId);
+            ASSERT_EQ(2u,jam->Stations.size()); ASSERT_EQ(2u,jam->Stations[1].LoopTakes.size());
+            ASSERT_EQ(1u,jam->Stations[1].LoopTakes[1].Loops.size());
+            EXPECT_EQ(master->Id(),jam->Stations[1].LoopTakes[1].Loops[0].Id);
+            auto rig = io::RigFile::FromStream(std::stringstream(io::RigFile::DefaultJson)); ASSERT_TRUE(rig);
+            rig->Triggers.clear(); rig->User.Midi.Devices.clear();
+            auto loaded = engine::Scene::FromFile(engine::SceneParams({""},{},{640u,480u}),*jam,*rig,directory.Path.wstring());
+            ASSERT_TRUE(loaded);
+            const auto restoredStations = (*loaded)->SnapshotStations(); ASSERT_EQ(2u,restoredStations.size());
+            const auto restoredClock = engine::SceneTimingRestoreTestAccess::Clock(**loaded);
+            ASSERT_TRUE(restoredClock);
+            EXPECT_EQ(jam->QuantiseSamps,restoredClock->QuantiseSamps());
+            EXPECT_EQ(jam->MasterLengthSamps,restoredClock->SeedSourceLength());
+            EXPECT_EQ(jam->AbsoluteSamplePos,restoredClock->AbsoluteSamplePos());
+            EXPECT_EQ(-500,restoredStations[0]->MasterAudioReferenceOffsetSamps());
+            EXPECT_EQ(-500,restoredStations[1]->MasterAudioReferenceOffsetSamps());
+            // Scene commit may skip a contended frame while its job owner runs.
+            const auto publishDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+            do
+            {
+                (*loaded)->CommitChanges();
+                if (!restoredStations[1]->GetLoopTakes()[1]->GetLoops().empty()) break;
+                std::this_thread::yield();
+            } while (std::chrono::steady_clock::now() < publishDeadline);
+            ASSERT_EQ(2u,restoredStations[1]->GetLoopTakes().size());
+            ASSERT_EQ(1u,restoredStations[1]->GetLoopTakes()[1]->GetLoops().size());
+            const auto restoredMaster = restoredStations[1]->GetLoopTakes()[1]->GetLoops()[0];
+            EXPECT_EQ(master->Id(),restoredMaster->Id());
+            EXPECT_EQ(-1500,restoredMaster->PlaybackOffsetSamps());
+			EXPECT_EQ(-500, restoredMaster->TotalPlaybackOffsetSamps());
+			EXPECT_EQ(300, restoredStations[1]->StationPhaseOffsetSamps());
+			EXPECT_EQ(500, restoredStations[1]->GetLoopTakes()[1]->MidiQuantisation().PhaseOffsetSamps);
+            EXPECT_EQ(master->PlaybackBodyIndex(),restoredMaster->PlaybackBodyIndex());
+            EXPECT_EQ(0,restoredStations[1]->GetLoopTakes()[0]->GetLoops()[0]->PlaybackOffsetSamps());
+            (*loaded)->Shutdown();
+            auto emptyJam = *jam;
+            for (auto& savedStation : emptyJam.Stations) savedStation.LoopTakes.clear();
+            auto empty = engine::Scene::FromFile(engine::SceneParams({""},{},{640u,480u}),emptyJam,*rig,directory.Path.wstring());
+            ASSERT_TRUE(empty);
+            const auto emptyClock = engine::SceneTimingRestoreTestAccess::Clock(**empty);
+            ASSERT_TRUE(emptyClock);
+            EXPECT_EQ(0u,emptyClock->QuantiseSamps());
+            EXPECT_EQ(0ul,emptyClock->SeedSourceLength());
+            EXPECT_EQ(0u,emptyClock->AbsoluteSamplePos());
+            (*empty)->Shutdown();
+        }
     }
 }
 
@@ -1199,4 +1324,369 @@ TEST(TriggerPredelayStation, NewFormatRejectsLookbackAcrossItsEpoch)
     ASSERT_TRUE(take->GetMidiLoops()[0]->TryGetEvent(0u, continuation));
     EXPECT_EQ(0u, continuation.sampleOffset);
     EXPECT_EQ(36u, continuation.data1);
+}
+
+
+TEST(TriggerBindingLearn, FreshValidatedPassiveIngressFreezesOneCandidateAndInfersInverseEdges)
+{
+    auto station = TriggerPredelayStationTest::MakeStation();
+    midi::MidiRouter router; midi::MidiRouterCaptureTestAccess::Setup(router, station);
+    ASSERT_TRUE(router.OpenRigTriggerInput(1u));
+    station->SetAllowedMidiChannels({1u,2u,3u});
+    const auto started = station->OnAction(TriggerPredelayStationTest::Start(100u,0.0)); ASSERT_TRUE(started.IsEaten);
+    const auto take = station->GetLoopTakes().back();
+    io::UserConfig config; config.Audio.SampleRate = 48000u;
+    audio::AudioStreamParams params; params.SampleRate = 48000u;
+    router.RequestTriggerLearn({10u,1u,1u});
+    midi::MidiRouterCaptureTestAccess::Push(router,0u,midi::MidiEvent::MakeNoteOn(100u,0u,60u,100u));
+    midi::MidiRouterCaptureTestAccess::Push(router,0u,midi::MidiEvent::MakeNoteOff(110u,0u,60u));
+    midi::MidiRouterCaptureTestAccess::Push(router,0u,midi::MidiEvent::MakeNoteOn(150u,1u,61u,100u));
+    router.PumpMidi({station},200u,config,params);
+    ASSERT_TRUE(router.TriggerLearnObservation()); EXPECT_TRUE(router.TriggerLearnObservation()->Armed);
+    EXPECT_FALSE(router.TriggerLearnObservation()->Binding); // Queued pre-arm input still drained normally.
+    const auto boundary = midi::MidiRouterCaptureTestAccess::ArmBoundary(router);
+    midi::MidiRouterCaptureTestAccess::OverrideTriggers(router);
+    midi::MidiRouterCaptureTestAccess::Push(router,0u,midi::MidiEvent::MakeNoteOn(201u,1u,61u,0u),boundary+1);
+    midi::MidiRouterCaptureTestAccess::Push(router,0u,midi::MidiEvent::MakeNoteOn(202u,1u,62u,100u),boundary+2);
+    midi::MidiRouterCaptureTestAccess::Push(router,0u,midi::MidiEvent::MakeNoteOff(203u,1u,62u),boundary+3);
+    router.PumpMidi({station},220u,config,params);
+    auto learned = router.TriggerLearnObservation(); ASSERT_TRUE(learned->Binding);
+    EXPECT_EQ(61u, learned->Binding->Press.Code); EXPECT_EQ(0u, learned->Binding->Press.State);
+    EXPECT_EQ(1u, learned->Binding->Release.State); EXPECT_EQ(2u, learned->Binding->Press.Channel);
+    EXPECT_EQ(1u, learned->PhysicalChannel); EXPECT_FALSE(learned->Armed);
+    router.RequestTriggerLearn({10u,2u,1u}); router.PumpMidi({station},230u,config,params);
+    const std::string serial = "serial-test";
+    midi::MidiRouterCaptureTestAccess::Serial(router,serial,true);
+    router.PumpSerial({station},config,params); ASSERT_TRUE(router.TriggerLearnObservation()->Binding);
+    EXPECT_EQ(io::RigFile::BindingSource::Serial,router.TriggerLearnObservation()->Binding->Source);
+    router.RequestTriggerLearn({10u,3u,1u}); router.PumpMidi({station},240u,config,params);
+    midi::MidiRouterCaptureTestAccess::Serial(router,serial,true); router.PumpSerial({station},config,params);
+    EXPECT_FALSE(router.TriggerLearnObservation()->Binding); // Repeated reports cannot teach a fresh edge.
+    midi::MidiRouterCaptureTestAccess::Serial(router,serial,false); router.PumpSerial({station},config,params);
+    ASSERT_TRUE(router.TriggerLearnObservation()->Binding); EXPECT_EQ(0u,router.TriggerLearnObservation()->Binding->Press.State);
+    router.RequestTriggerLearn({10u,4u,1u}); router.PumpMidi({station},250u,config,params);
+    router.ObserveTriggerLearnKey(69u); EXPECT_FALSE(router.TriggerLearnObservation()->Binding);
+    router.ObserveTriggerLearnKey(65u); ASSERT_TRUE(router.TriggerLearnObservation()->Binding);
+    EXPECT_EQ(io::RigFile::KeyboardDevice,router.TriggerLearnObservation()->Binding->Device);
+    router.RequestTriggerLearn({10u,0u,1u}); router.PumpMidi({station},260u,config,params);
+    router.ObserveTriggerLearnKey(66u); EXPECT_FALSE(router.TriggerLearnObservation()->Binding);
+    EXPECT_FALSE(router.TriggerLearnObservation()->Armed);
+    actions::KeyAction ccLearn; ccLearn.KeyChar = 76u; ccLearn.KeyActionType = actions::KeyAction::KEY_DOWN;
+    ccLearn.Modifiers = static_cast<base::Action::Modifiers>(base::Action::MODIFIER_CTRL | base::Action::MODIFIER_SHIFT);
+    router.HandleAutomationKey(ccLearn,{}, {},{}); EXPECT_FALSE(router.VstCcLearnActive());
+    router.EndTriggerLearn(); EXPECT_FALSE(router.TriggerLearnObservation());
+    router.HandleAutomationKey(ccLearn,{}, {},{}); ASSERT_TRUE(router.VstCcLearnActive());
+    router.RequestTriggerLearn({11u,1u,1u}); router.PumpMidi({station},270u,config,params);
+    EXPECT_FALSE(router.TriggerLearnObservation()->Error.empty()); EXPECT_FALSE(router.TriggerLearnObservation()->Armed);
+    router.EndTriggerLearn(); router.HandleAutomationKey(ccLearn,{}, {},{}); EXPECT_FALSE(router.VstCcLearnActive());
+    auto stop = TriggerPredelayStationTest::Start(48100u,0.0); stop.ActionType = actions::TriggerAction::TRIGGER_REC_END;
+    stop.TargetId = started.TargetId; stop.SampleCount = 48000u; ASSERT_TRUE(station->OnAction(stop).IsEaten);
+    router.PumpMidi({station},54000u,config,params); EXPECT_FALSE(take->MidiTriggerCapturePending());
+    unsigned int attacks[3]{}, releases[3]{};
+    for (const auto& loop : take->GetMidiLoops()) for (std::size_t i = 0u; i < loop->EventCount(); ++i)
+    {
+        midi::MidiEvent event; ASSERT_TRUE(loop->TryGetEvent(i,event));
+        if (event.data1 >= 60u && event.data1 <= 62u)
+        { if (event.IsNoteOn()) ++attacks[event.data1-60u]; if (event.IsNoteOff()) ++releases[event.data1-60u]; }
+    }
+    for (auto i = 0u; i < 3u; ++i) { EXPECT_EQ(1u,attacks[i]) << i; EXPECT_EQ(1u,releases[i]) << i; }
+    for (const auto value : {0u,1u,127u})
+    {
+        const auto binding = io::TriggerBindingLearn::Midi("keys",midi::MidiEvent{0u,0xb0u,64u,static_cast<std::uint8_t>(value)});
+        ASSERT_TRUE(binding); EXPECT_EQ(value != 0u,binding->Press.State); EXPECT_EQ(value == 0u,binding->Release.State);
+    }
+}
+
+TEST(AudioLoopShift, HierarchyOffsetsComposeAndResetIndependently)
+{
+	auto take = MakePlayingTimingTake("hierarchy", 1000ul, 300ul);
+	auto sibling = MakePlayingTimingTake("sibling", 1500ul, 400ul);
+	auto loop = take->GetLoops().front();
+	auto siblingLoop = sibling->GetLoops().front();
+	auto station = std::make_shared<engine::Station>(engine::StationParams{},
+		engine::Station::GetMixerParams({100,100}, MergeMixBehaviourParams{}));
+	station->AddTake(take); station->AddTake(sibling); station->CommitChanges();
+	loop->SetPlaybackOffsetSamps(10);
+	siblingLoop->SetPlaybackOffsetSamps(-10);
+	auto settings = take->MidiQuantisation(); settings.PhaseOffsetSamps = 30;
+	take->SetMidiQuantisation(settings);
+	settings.PhaseOffsetSamps = -40; sibling->SetMidiQuantisation(settings);
+	station->SetStationPhaseOffsetSamps(100);
+	station->SetGlobalPhaseOffsetSamps(20);
+	EXPECT_EQ(160, loop->TotalPlaybackOffsetSamps());
+	EXPECT_EQ(70, siblingLoop->TotalPlaybackOffsetSamps());
+	SettleTimingOffset(loop); loop->SetBodyPlayIndex(300ul);
+	EXPECT_EQ(140ul, loop->PlaybackBodyIndex());
+	EXPECT_EQ(300ul, loop->BodyPlayIndex());
+	// Resetting the station preserves both take-local and stream-local values.
+	station->SetStationPhaseOffsetSamps(0);
+	EXPECT_EQ(60, loop->TotalPlaybackOffsetSamps());
+	EXPECT_EQ(-30, siblingLoop->TotalPlaybackOffsetSamps());
+	EXPECT_EQ(30, take->MidiQuantisation().PhaseOffsetSamps);
+	EXPECT_EQ(-40, sibling->MidiQuantisation().PhaseOffsetSamps);
+	EXPECT_EQ(10, loop->PlaybackOffsetSamps());
+	settings = take->MidiQuantisation(); settings.PhaseOffsetSamps = 0;
+	take->SetMidiQuantisation(settings);
+	EXPECT_EQ(30, loop->TotalPlaybackOffsetSamps());
+	EXPECT_EQ(-30, siblingLoop->TotalPlaybackOffsetSamps());
+	// Newly added loops inherit the owners without baking that into local state.
+	auto added = MakeTimingLoop(1000ul);
+	take->AddLoop(added); take->CommitChanges();
+	EXPECT_EQ(0, added->PlaybackOffsetSamps());
+	EXPECT_EQ(20, added->TotalPlaybackOffsetSamps());
+}
+
+TEST(AudioLoopShift, HandleChangesAudioOnlyAndDoubleClickResetsAcceptedOffset)
+{
+	auto take = MakeTimingTestLoopTake("audio-shft");
+	auto loop = MakeTimingLoop(1000ul, true);
+	loop->SetBodyPlayIndex(300ul);
+	take->AddLoop(loop); take->CommitChanges();
+	take->SetMidiVisualPosition(300ul, 1000ul);
+	auto station = std::make_shared<engine::Station>(engine::StationParams{}, engine::Station::GetMixerParams({100,100}, MergeMixBehaviourParams{}));
+	station->AddTake(take); station->CommitChanges();
+	std::vector<std::shared_ptr<engine::Station>> stations{station};
+	graphics::CtrlHandleOverlay overlay;
+	engine::Quantiser quantiser;
+	quantiser.SetClock(std::make_shared<Timer>());
+	ASSERT_TRUE(quantiser.TrySetMasterFromHover(loop,base::DEPTH_LOOP,stations,1000u,io::UserConfig{},false));
+	engine::QuantiserController controller(overlay, quantiser, stations);
+	engine::QuantisationInteractionContext context;
+	context.SelectDepth = base::DEPTH_LOOP;
+	context.CursorPos = {200,200}; context.ViewportSize = {800,600}; context.SampleRate = 1000u;
+	context.SelectedAudioLoops = {loop}; context.LoopDepthHasAudioTarget = true;
+	const engine::QuantiserController::ChildResolver resolve = [loop](const auto&) { return loop; };
+	const auto now = Timer::GetTime();
+	controller.OnCtrlModifierChanged(true, now, context, resolve);
+	ASSERT_TRUE(overlay.ButtonCenter(0)); EXPECT_FALSE(overlay.ButtonCenter(1));
+	float expected = 0; loop->SetBodyPlayIndex(250ul); ASSERT_EQ(1u, loop->ReadBlock(&expected,0,1u)); loop->SetBodyPlayIndex(300ul);
+	actions::TouchAction press; press.SetActionTime(now); press.Position = *overlay.ButtonCenter(0);
+	ASSERT_TRUE(controller.TryHandleTouchAction(press,1000u,true,context,resolve)->IsEaten);
+	actions::TouchMoveAction move; move.Position = press.Position; move.Position.X += 50;
+	ASSERT_TRUE(controller.TryHandleTouchMove(move,1000u)->IsEaten);
+	EXPECT_DOUBLE_EQ(0.0,loop->AppliedPlaybackOffsetSamps());
+	EXPECT_EQ(0,station->MasterAudioReferenceOffsetSamps());
+	SettleTimingOffset(loop); loop->SetBodyPlayIndex(300ul);
+	quantiser.RefreshMasterAudioReference(station);
+	EXPECT_EQ(50,station->MasterAudioReferenceOffsetSamps());
+	auto laterStation = std::make_shared<engine::Station>(engine::StationParams{}, engine::Station::GetMixerParams({100,100}, MergeMixBehaviourParams{}));
+	quantiser.InitialiseStationMidiGrid(laterStation);
+	EXPECT_EQ(50,laterStation->MasterAudioReferenceOffsetSamps());
+	EXPECT_EQ(50, loop->PlaybackOffsetSamps()); EXPECT_EQ(250ul, loop->PlaybackBodyIndex());
+	EXPECT_EQ(300ul, loop->BodyPlayIndex()); EXPECT_EQ(300ul, take->MidiVisualPosition());
+	EXPECT_EQ(0, take->MidiQuantisation().PhaseOffsetSamps);
+	float actual = 0; ASSERT_EQ(1u, loop->ReadBlock(&actual,0,1u)); EXPECT_FLOAT_EQ(expected,actual);
+	EXPECT_EQ(250u, take->MasterPhaseAtAudioBoundary(loop.get(),1000u));
+	press.State = actions::TouchAction::TOUCH_UP; press.Position = move.Position;
+	controller.TryHandleTouchAction(press,1000u,true,context,resolve);
+	// A fresh click pair on SHFT uses the same OS time/distance criteria as sliders.
+	press.State = actions::TouchAction::TOUCH_DOWN; press.Position = *overlay.ButtonCenter(0); press.SetActionTime(now + std::chrono::seconds(1));
+	controller.TryHandleTouchAction(press,1000u,true,context,resolve);
+	press.State = actions::TouchAction::TOUCH_UP; controller.TryHandleTouchAction(press,1000u,true,context,resolve);
+	press.State = actions::TouchAction::TOUCH_DOWN; press.SetActionTime(now + std::chrono::milliseconds(1100));
+	controller.TryHandleTouchAction(press,1000u,true,context,resolve);
+	SettleTimingOffset(loop); loop->SetBodyPlayIndex(300ul);
+	quantiser.RefreshMasterAudioReference(station);
+	EXPECT_EQ(0,station->MasterAudioReferenceOffsetSamps());
+	EXPECT_EQ(0,loop->PlaybackOffsetSamps()); EXPECT_EQ(300ul,loop->PlaybackBodyIndex());
+}
+
+TEST(AudioLoopShift, SignedOffsetsWrapByEachLengthAndSurviveTransportCorrections)
+{
+	for (const auto length : {777ul,1000ul,2000ul})
+	{
+		auto take = MakePlayingTimingTake("shift-wrap",length,100ul);
+		auto loop = take->GetLoops().front();
+		for (const auto offset : {0,17,-17,2000000017,-2000000017})
+		{
+			loop->SetPlaybackOffsetSamps(offset);
+			SettleTimingOffset(loop); loop->SetBodyPlayIndex(100ul);
+			EXPECT_EQ(ninjam::PositiveModulo(100ll-offset,length),loop->PlaybackBodyIndex());
+			take->CaptureMappedSourceAnchors(5000);
+			take->RestoreMappedSourceCoordinate(5100);
+			EXPECT_EQ(ninjam::PositiveModulo(200ll-offset,length),loop->PlaybackBodyIndex());
+			EXPECT_EQ(offset,loop->PlaybackOffsetSamps());
+			loop->SetBodyPlayIndex(100ul); loop->InvalidateSceneAnchor();
+		}
+	}
+}
+
+TEST(AudioLoopShift, FirstBlockLatchesInitialTargetAndRepeatedReadsDoNotAdvance)
+{
+    auto loop = MakeTimingLoop(1000ul, true);
+    loop->SetBodyPlayIndex(200ul);
+    loop->SetPlaybackOffsetSamps(7);
+    EXPECT_DOUBLE_EQ(7.0,loop->AppliedPlaybackOffsetSamps());
+    std::array<float,64> first{}, repeated{}, seek{}, seekAgain{};
+    ASSERT_EQ(64u,loop->ReadBlock(first.data(),0,64u));
+    loop->SetPlaybackOffsetSamps(31); // Arrives after first consumer, before first EndMultiPlay.
+    ASSERT_EQ(64u,loop->ReadBlock(repeated.data(),0,64u));
+    EXPECT_EQ(first,repeated);
+    EXPECT_DOUBLE_EQ(7.0,loop->AppliedPlaybackOffsetSamps());
+    loop->EndMultiPlay(64u);
+    EXPECT_DOUBLE_EQ(7.0,loop->AppliedPlaybackOffsetSamps());
+    ASSERT_EQ(64u,loop->ReadBlock(seek.data(),0,64u));
+    ASSERT_EQ(64u,loop->ReadBlock(seekAgain.data(),0,64u));
+    EXPECT_EQ(seek,seekAgain);
+    EXPECT_DOUBLE_EQ(7.0,loop->AppliedPlaybackOffsetSamps());
+    // A ramp fixture exposes fractional reads rather than repeated integer samples.
+    const auto rate = 24.0 / (44100.0 * 0.010);
+    const auto expected = (constants::MaxLoopFadeSamps + 264.0 + 1.0 - 7.0 - rate)
+        / (constants::MaxLoopFadeSamps + 1000.0);
+    EXPECT_NEAR(expected,seek[1],1e-6);
+    loop->EndMultiPlay(17u); // Actual frame count differs from ramp preparation.
+    EXPECT_NEAR(7.0 + rate * 17.0,loop->AppliedPlaybackOffsetSamps(),1e-9);
+    EXPECT_EQ(31,loop->PlaybackOffsetSamps());
+    SettleTimingOffset(loop);
+    EXPECT_DOUBLE_EQ(31.0,loop->AppliedPlaybackOffsetSamps());
+}
+
+TEST(AudioLoopShift, ShortestWrappedSeekBoundsRetargetAndReset)
+{
+    auto loop = MakeTimingLoop(1000ul, true);
+    loop->SetPlaybackOffsetSamps(990);
+    float first{}; ASSERT_EQ(1u,loop->ReadBlock(&first,0,1u));
+    loop->SetPlaybackOffsetSamps(10);
+    loop->EndMultiPlay(128u);
+    loop->EndMultiPlay(128u);
+    EXPECT_GT(loop->AppliedPlaybackOffsetSamps(),990.0); // Across seam, positive shortest motion.
+    EXPECT_LE(loop->AppliedPlaybackOffsetSamps(),1010.0);
+    for (const auto target : {-500,500,1000,2000000017,-2000000017,0})
+    {
+        loop->SetPlaybackOffsetSamps(target);
+        for (auto block = 0u; block < 512u; ++block)
+        {
+            const auto before = loop->AppliedPlaybackOffsetSamps();
+            loop->EndMultiPlay(128u);
+            const auto after = loop->AppliedPlaybackOffsetSamps();
+            EXPECT_LE(std::abs(std::remainder(after-before,1000.0)),32.0 + 1e-6);
+            if (block == 1u && target == -500) break; // Retarget before the previous seek settles.
+            if (after == target) break;
+        }
+        EXPECT_EQ(target,loop->PlaybackOffsetSamps());
+    }
+    SettleTimingOffset(loop);
+    EXPECT_DOUBLE_EQ(0.0,loop->AppliedPlaybackOffsetSamps());
+    loop->SetPlaybackOffsetSamps(-500);
+    loop->EndMultiPlay(128u); loop->EndMultiPlay(128u);
+    EXPECT_GT(loop->AppliedPlaybackOffsetSamps(),0.0); // Half-period tie is deterministic positive.
+}
+
+TEST(AudioLoopShift, FractionalSeamReadsRemainContinuousForShortAndLongFades)
+{
+    constexpr double pi = 3.14159265358979323846;
+    for (const auto length : {17ul,97ul}) for (const auto direction : {-1,1})
+    {
+        SCOPED_TRACE(length);
+        SCOPED_TRACE(direction);
+        audio::WireMixBehaviourParams wire; wire.Channels={0u};
+        audio::AudioMixerParams mixer; mixer.Size={100,100}; mixer.Behaviour=wire;
+        engine::LoopParams params; params.FadeSamps=length==17ul ? 64u : 16u;
+        auto loop=std::make_shared<engine::Loop>(params,mixer);
+        loop->Record();
+        std::vector<float> samples(constants::MaxLoopFadeSamps+length);
+        for (auto i=0u; i<samples.size(); ++i)
+            samples[i]=static_cast<float>(std::sin((static_cast<double>(i)-constants::MaxLoopFadeSamps)*2.0*pi/length));
+        AudioWriteRequest request; request.samples=samples.data(); request.numSamps=static_cast<unsigned int>(samples.size());
+        request.stride=1u; request.fadeCurrent=0.0f; request.fadeNew=1.0f; request.source=Audible::AUDIOSOURCE_ADC;
+        loop->OnBlockWrite(request,0); loop->EndWrite(request.numSamps,true);
+        loop->Play(constants::MaxLoopFadeSamps,length,false);
+        float initial{}; ASSERT_EQ(1u,loop->ReadBlock(&initial,0,1u));
+        const auto target=direction*static_cast<int>(length/3ul);
+        loop->SetPlaybackOffsetSamps(target); loop->EndMultiPlay(8u);
+        loop->SetBodyPlayIndex(length-3ul);
+        std::array<float,32> rendered{};
+        ASSERT_EQ(32u,loop->ReadBlock(rendered.data(),0,32u));
+        const auto rate=static_cast<double>(target)/(44100.0*0.010);
+        for (auto frame=0u; frame<rendered.size(); ++frame)
+        {
+            const auto offset=rate*(std::min)(frame,8u);
+            auto phase=std::fmod(length-3.0+frame-offset,static_cast<double>(length));
+            if (phase<0.0) phase+=length;
+            const auto first=static_cast<unsigned long>(phase);
+            const auto fraction=phase-first;
+            const auto expected=std::sin(first*2.0*pi/length)*(1.0-fraction)
+                + std::sin(((first+1ul)%length)*2.0*pi/length)*fraction;
+            EXPECT_NEAR(expected,rendered[frame],1e-5) << frame;
+            EXPECT_TRUE(std::isfinite(rendered[frame])); EXPECT_LE(std::abs(rendered[frame]),1.00001f);
+            if (frame) EXPECT_LE(std::abs(rendered[frame]-rendered[frame-1u]),2.0*std::sin(pi/length)*1.25+1e-5);
+        }
+    }
+}
+
+TEST(AudioLoopShift, PunchWritesAndLengthChangesPreserveActiveAppliedOffset)
+{
+    auto loop=MakeTimingLoop(1000ul,true);
+    float sample{}; ASSERT_EQ(1u,loop->ReadBlock(&sample,0,1u));
+    loop->SetPlaybackOffsetSamps(100); loop->EndMultiPlay(128u); loop->EndMultiPlay(64u);
+    const auto before=loop->AppliedPlaybackOffsetSamps(); ASSERT_GT(before,0.0); ASSERT_LT(before,100.0);
+    loop->PunchIn();
+    ASSERT_EQ(1u,loop->ReadBlock(&sample,0,1u)); EXPECT_DOUBLE_EQ(before,loop->AppliedPlaybackOffsetSamps());
+    const auto generation=loop->AudioSourceGeneration();
+    float input=0.25f; AudioWriteRequest request; request.samples=&input; request.numSamps=1u;
+    request.stride=1u; request.fadeCurrent=0.0f; request.fadeNew=1.0f; request.source=Audible::AUDIOSOURCE_ADC;
+    loop->OnBlockWrite(request,0); ASSERT_NE(generation,loop->AudioSourceGeneration());
+    ASSERT_EQ(1u,loop->ReadBlock(&sample,0,1u)); EXPECT_DOUBLE_EQ(before,loop->AppliedPlaybackOffsetSamps());
+    loop->EndMultiPlay(17u); const auto advanced=loop->AppliedPlaybackOffsetSamps();
+    EXPECT_LE(std::abs(advanced-before),0.25*17.0+1e-6);
+    loop->PunchOut(); loop->Play(constants::MaxLoopFadeSamps,777ul,false);
+    ASSERT_EQ(1u,loop->ReadBlock(&sample,0,1u)); EXPECT_DOUBLE_EQ(advanced,loop->AppliedPlaybackOffsetSamps());
+    EXPECT_EQ(100,loop->PlaybackOffsetSamps());
+    SettleTimingOffset(loop); EXPECT_DOUBLE_EQ(100.0,loop->AppliedPlaybackOffsetSamps());
+}
+
+TEST(LoopTakeTiming, ConfiguredCaptureAnchorsWaitForPlaybackActivation)
+{
+    for (const auto delay : {-17, 17})
+    for (const auto explicitCapture : {false, true})
+    for (const auto audio : {false, true})
+    {
+        SCOPED_TRACE(delay);
+        SCOPED_TRACE(explicitCapture);
+        SCOPED_TRACE(audio);
+        LoopTakeParams params;
+        params.Size = {100, 100};
+        params.FadeSamps = 0u;
+        auto take = std::make_shared<TimingTestLoopTake>(params,
+            LoopTake::GetMixerParams(params.Size, MergeMixBehaviourParams{}));
+        midi::MidiQuantisationSettings quantisation;
+        quantisation.Enabled = true;
+        quantisation.Fraction = midi::MidiQuantisationFraction::Whole;
+        take->SetMidiQuantisation(quantisation);
+        take->SetGlobalMidiQuantState(io::JamFile::GlobalMidiQuantState::All);
+        take->SetRemoteMidiQuantisationGrid({1000ul, 3u}, 0);
+        take->ConfigureTriggerCapture({1000u, delay, 10000u, 0u, 32u, -delay});
+        take->Record(audio ? std::vector<unsigned int>{0u} : std::vector<unsigned int>{},
+            "capture-anchor", {0u}, {}, {}, static_cast<std::uint64_t>((1000 - delay) % 1000), 1000u);
+        ASSERT_TRUE(take->RecordMidiEvent(midi::MidiEvent::MakeNoteOn(1340u, 0u, 60u, 100u), 1340u));
+        ASSERT_TRUE(take->RecordMidiEvent(midi::MidiEvent::MakeNoteOff(1450u, 0u, 60u), 1450u));
+        take->CommitChanges();
+        take->RestoreMappedSourceCoordinate(4000);
+        take->Play(constants::MaxLoopFadeSamps, 1000u, 0u);
+        take->CompleteMidiIngressPump(8000u);
+        const auto loop = audio ? take->GetLoops().front() : nullptr;
+        if (explicitCapture) take->CaptureMappedSourceAnchors(4000);
+        else take->RestoreMappedSourceCoordinate(4000);
+        if (loop) EXPECT_FALSE(loop->HasSceneAnchor());
+        // Delayed first topology observation must still establish trigger phase.
+        take->BeginCaptureAudioBoundary(2250u, 5250u, 1250u);
+        const auto phase = static_cast<unsigned long>(250 + delay);
+        if (loop) ASSERT_EQ(phase, loop->BodyPlayIndex());
+        ASSERT_EQ(phase, take->MidiVisualPosition());
+        take->RestoreMappedSourceCoordinate(5250);
+        if (loop) EXPECT_EQ(phase, loop->BodyPlayIndex());
+        EXPECT_EQ(phase, take->MidiVisualPosition());
+        if (!audio)
+        {
+            TriggerPredelayMidiSink sink;
+            take->ReadMidiBlock(2250u, 120u, sink);
+            ASSERT_EQ(1u, sink.Events.size());
+            EXPECT_TRUE(sink.Events[0].IsNoteOn());
+            // NINJAM's next beat is round(1000/3), independent of signed predelay.
+            EXPECT_EQ(2000u + (1000u + 1u) / 3u, sink.Events[0].sampleOffset);
+        }
+        take->RestoreMappedSourceCoordinate(5387);
+        if (loop) EXPECT_EQ(phase + 137u, loop->BodyPlayIndex());
+        EXPECT_EQ(phase + 137u, take->MidiVisualPosition());
+    }
 }

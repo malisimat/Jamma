@@ -51,6 +51,10 @@ namespace gui
 
 	public:
 		std::string Text;
+		glm::vec3 TextColor{1.0f};
+		// Unset state colours fall back to TextColor; pressed falls back to hover.
+		std::optional<glm::vec3> OverTextColor;
+		std::optional<glm::vec3> DownTextColor;
 		// Existing button subclasses dispatch their own actions. Plain command
 		// buttons opt in so one activation cannot submit two different commands.
 		bool DispatchCommand = false;
@@ -66,12 +70,14 @@ namespace gui
 	{
 	public:
 		GuiButton(GuiButtonParams guiParams);
+		void Draw(base::DrawContext& context) override;
 		using base::GuiElement::OnAction;
 		virtual void SetSize(utils::Size2d size) override;
 		virtual actions::ActionResult OnAction(actions::TouchAction action) override;
 		actions::ActionResult OnAction(actions::KeyAction action) override;
 		void ClearPointerState() override;
 		void SetText(const std::string& text);
+		const std::string& Text() const noexcept { return _buttonParams.Text; }
 
 	private:
 		static GuiLabelParams _MakeLabelParams(const GuiButtonParams& params);

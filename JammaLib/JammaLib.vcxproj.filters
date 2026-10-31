@@ -71,6 +71,9 @@
     <ClInclude Include="src\io\IoSessionLoader.h" />
     <ClInclude Include="src\midi\MidiRefreshPolicy.h" />
     <ClInclude Include="src\engine\HierarchySelection.h" />
+    <ClInclude Include="src\engine\SessionControls.h" />
+    <ClInclude Include="src\engine\SessionControl.h" />
+    <ClInclude Include="src\engine\LocalTiming.h" />
     <ClInclude Include="src\gui\SceneSettingsControls.h" />
     <ClInclude Include="src\gui\NinjamTempoPrompt.h" />
     <ClInclude Include="src\ninjam\NinjamTempoProposal.h" />
@@ -101,10 +104,16 @@
     <ClInclude Include="src\vst\ReservedMidiEvents.h">
       <Filter>src\vst</Filter>
     </ClInclude>
+    <ClInclude Include="src\vst\RackState.h">
+      <Filter>src\vst</Filter>
+    </ClInclude>
     <ClInclude Include="src\vst\VstChain.h">
       <Filter>src\vst</Filter>
     </ClInclude>
     <ClInclude Include="src\engine\UndoHistory.h">
+      <Filter>src\engine</Filter>
+    </ClInclude>
+    <ClInclude Include="src\engine\ContextualKeyboardInput.h">
       <Filter>src\engine</Filter>
     </ClInclude>
     <ClInclude Include="src\engine\Trigger.h">
@@ -234,6 +243,9 @@
     <ClInclude Include="src\engine\PerformanceGroupController.h">
       <Filter>src\engine</Filter>
     </ClInclude>
+    <ClInclude Include="src\gui\Workspace.h">
+      <Filter>src\gui</Filter>
+    </ClInclude>
     <ClInclude Include="src\engine\Scene.h">
       <Filter>src\engine</Filter>
     </ClInclude>
@@ -282,6 +294,9 @@
     <ClInclude Include="src\gui\GuiLabel.h">
       <Filter>src\gui</Filter>
     </ClInclude>
+    <ClInclude Include="src\gui\GuiPanelHeader.h">
+      <Filter>src\gui</Filter>
+    </ClInclude>
     <ClInclude Include="src\audio\CaptureSourceMuteControl.h">
       <Filter>src\audio</Filter>
     </ClInclude>
@@ -289,6 +304,9 @@
       <Filter>src\audio</Filter>
     </ClInclude>
     <ClInclude Include="src\audio\AudioDevice.h">
+      <Filter>src\audio</Filter>
+    </ClInclude>
+    <ClInclude Include="src\audio\AsioStream.h">
       <Filter>src\audio</Filter>
     </ClInclude>
     <ClInclude Include="src\audio\NinjamMetronome.h">
@@ -337,6 +355,9 @@
       <Filter>src\gui</Filter>
     </ClInclude>
     <ClInclude Include="src\gui\GuiPopup.h">
+      <Filter>src\gui</Filter>
+    </ClInclude>
+    <ClInclude Include="src\gui\RuntimeDialogs.h">
       <Filter>src\gui</Filter>
     </ClInclude>
     <ClInclude Include="src\gui\GuiTextBox.h">
@@ -399,6 +420,15 @@
     <ClInclude Include="src\midi\LoopGridEditor.h">
       <Filter>src\midi</Filter>
     </ClInclude>
+    <ClInclude Include="src\midi\AutomationPlayback.h">
+      <Filter>src\midi</Filter>
+    </ClInclude>
+    <ClInclude Include="src\midi\CaptureHistory.h">
+      <Filter>src\midi</Filter>
+    </ClInclude>
+    <ClInclude Include="src\midi\MidiDelivery.h">
+      <Filter>src\midi</Filter>
+    </ClInclude>
     <ClInclude Include="src\midi\MidiLoop.h">
       <Filter>src\midi</Filter>
     </ClInclude>
@@ -417,7 +447,7 @@
     <ClInclude Include="src\midi\MidiIndexedOutputSink.h">
       <Filter>src\midi</Filter>
     </ClInclude>
-    <ClInclude Include="src\midi\MidiVstOutputSink.h">
+    <ClInclude Include="src\midi\MidiChannelRoute.h">
       <Filter>src\midi</Filter>
     </ClInclude>
     <ClInclude Include="src\graphics\MidiModel.h">
@@ -576,6 +606,9 @@
     <ClInclude Include="src\actions\DelayedAction.h">
       <Filter>src\actions</Filter>
     </ClInclude>
+    <ClInclude Include="src\gui\PointerInteraction.h">
+      <Filter>src\gui</Filter>
+    </ClInclude>
     <ClInclude Include="src\gui\SceneSelector.h">
       <Filter>src\gui</Filter>
     </ClInclude>
@@ -589,6 +622,9 @@
       <Filter>src\gui</Filter>
     </ClInclude>
     <ClInclude Include="src\graphics\ImageFullscreen.h">
+      <Filter>src\graphics</Filter>
+    </ClInclude>
+    <ClInclude Include="src\graphics\Compositor.h">
       <Filter>src\graphics</Filter>
     </ClInclude>
     <ClInclude Include="src\graphics\Skybox.h">
@@ -624,6 +660,15 @@
     <ClInclude Include="src\gui\GuiRack.h">
       <Filter>src\gui</Filter>
     </ClInclude>
+    <ClInclude Include="src\gui\GuiVstRack.h"><Filter>gui</Filter></ClInclude>
+    <ClInclude Include="src\gui\GuiStationLabel.h">
+      <Filter>src\gui</Filter>
+    </ClInclude>
+    <ClInclude Include="src\gui\GuiTriggerRename.h">
+      <Filter>src\gui</Filter>
+    </ClInclude>
+    <ClInclude Include="src\gui\TriggerLearnController.h"><Filter>src\gui</Filter></ClInclude>
+    <ClInclude Include="src\io\TriggerBindingLearn.h"><Filter>src\io</Filter></ClInclude>
     <ClInclude Include="src\gui\VstRackControls.h">
       <Filter>src\gui</Filter>
     </ClInclude>
@@ -632,6 +677,8 @@
   <ItemGroup>
     <ClCompile Include="src\io\IoSessionLoader.cpp" />
     <ClCompile Include="src\engine\HierarchySelection.cpp" />
+    <ClCompile Include="src\engine\SessionControl.cpp" />
+    <ClCompile Include="src\engine\LocalTiming.cpp" />
     <ClCompile Include="src\gui\SceneSettingsControls.cpp" />
     <ClCompile Include="src\gui\NinjamTempoPrompt.cpp" />
     <ClCompile Include="src\ninjam\NinjamTimingDiagnosticPresenter.cpp" />
@@ -642,6 +689,9 @@
       <Filter>lib\rtaudio</Filter>
     </ClCompile>
     <ClCompile Include="src\vst\Vst.cpp">
+      <Filter>src\vst</Filter>
+    </ClCompile>
+    <ClCompile Include="src\vst\RackState.cpp">
       <Filter>src\vst</Filter>
     </ClCompile>
     <ClCompile Include="src\vst\VstChain.cpp">
@@ -733,6 +783,9 @@
     </ClCompile>
     <ClCompile Include="src\engine\PerformanceGroupController.cpp">
       <Filter>src\engine</Filter>
+    </ClCompile>
+    <ClCompile Include="src\gui\Workspace.cpp">
+      <Filter>src\gui</Filter>
     </ClCompile>
     <ClCompile Include="src\engine\Scene.cpp">
       <Filter>src\engine</Filter>
@@ -827,6 +880,9 @@
     <ClCompile Include="src\audio\AudioDevice.cpp">
       <Filter>src\audio</Filter>
     </ClCompile>
+    <ClCompile Include="src\audio\AsioStream.cpp">
+      <Filter>src\audio</Filter>
+    </ClCompile>
     <ClCompile Include="src\audio\NinjamMetronome.cpp">
       <Filter>src\audio</Filter>
     </ClCompile>
@@ -857,6 +913,15 @@
     <ClCompile Include="src\midi\LoopGridEditor.cpp">
       <Filter>src\midi</Filter>
     </ClCompile>
+    <ClCompile Include="src\midi\AutomationPlayback.cpp">
+      <Filter>src\midi</Filter>
+    </ClCompile>
+    <ClCompile Include="src\midi\CaptureHistory.cpp">
+      <Filter>src\midi</Filter>
+    </ClCompile>
+    <ClCompile Include="src\midi\MidiDelivery.cpp">
+      <Filter>src\midi</Filter>
+    </ClCompile>
     <ClCompile Include="src\midi\MidiLoop.cpp">
       <Filter>src\midi</Filter>
     </ClCompile>
@@ -873,9 +938,6 @@
       <Filter>src\midi</Filter>
     </ClCompile>
     <ClCompile Include="src\midi\MidiIndexedOutputSink.cpp">
-      <Filter>src\midi</Filter>
-    </ClCompile>
-    <ClCompile Include="src\midi\MidiVstOutputSink.cpp">
       <Filter>src\midi</Filter>
     </ClCompile>
     <ClCompile Include="src\graphics\MidiModel.cpp">
@@ -992,6 +1054,9 @@
     <ClCompile Include="src\utils\VecUtils.cpp">
       <Filter>src\utils</Filter>
     </ClCompile>
+    <ClCompile Include="src\gui\PointerInteraction.cpp">
+      <Filter>src\gui</Filter>
+    </ClCompile>
     <ClCompile Include="src\gui\SceneSelector.cpp">
       <Filter>src\gui</Filter>
     </ClCompile>
@@ -999,6 +1064,9 @@
       <Filter>src\gui</Filter>
     </ClCompile>
     <ClCompile Include="src\graphics\ImageFullscreen.cpp">
+      <Filter>src\graphics</Filter>
+    </ClCompile>
+    <ClCompile Include="src\graphics\Compositor.cpp">
       <Filter>src\graphics</Filter>
     </ClCompile>
     <ClCompile Include="src\graphics\Skybox.cpp">
@@ -1025,6 +1093,7 @@
     <ClCompile Include="src\gui\GuiRack.cpp">
       <Filter>src\gui</Filter>
     </ClCompile>
+    <ClCompile Include="src\gui\GuiVstRack.cpp"><Filter>gui</Filter></ClCompile>
     <ClCompile Include="src\gui\VstRackControls.cpp">
       <Filter>src\gui</Filter>
     </ClCompile>

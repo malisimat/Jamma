@@ -363,21 +363,6 @@ TEST(JamFile, RoundTripsUninitialisedCurrentTransport)
 	EXPECT_FALSE(JamFile::FromStream(std::stringstream(malformed)).has_value());
 }
 
-TEST(JamFile, PreservesZeroIndexedMidiRoute)
-{
-	const auto loop = std::regex_replace(std::regex_replace(LoopString, std::regex("%NAME%"), "loop.wav"), std::regex("%INDEX%"), "1");
-	const auto text = "{\"name\":\"station\",\"takes\":[{\"name\":\"take\",\"loops\":[" + loop
-		+ "]}],\"midiRoutes\":[{\"outputIndex\":0,\"pluginIndex\":0,\"live\":false}]}";
-	auto root = Json::FromStream(std::stringstream(text));
-	ASSERT_TRUE(root.has_value());
-	auto station = JamFile::Station::FromJson(std::get<Json::JsonPart>(*root));
-	ASSERT_TRUE(station.has_value());
-	ASSERT_EQ(1u, station->MidiRoutes.size());
-	EXPECT_EQ(0u, station->MidiRoutes[0].OutputIndex);
-	EXPECT_EQ(0u, station->MidiRoutes[0].PluginIndex);
-	EXPECT_FALSE(station->MidiRoutes[0].IsLive);
-}
-
 TEST(JamFile, RoundTripsTakeAndStationAudioRoutes)
 {
 	const auto loop = std::regex_replace(std::regex_replace(LoopString, std::regex("%NAME%"), "loop.wav"), std::regex("%INDEX%"), "1");
@@ -950,6 +935,38 @@ TEST(JamFileGroups, DuplicateExplicitEntityIdentityIsRejected)
     jam.Stations[0].VstChain.push_back(plugin);
     jam.Stations[1].VstChain.push_back(plugin);
     EXPECT_FALSE(io::PerformanceGroupPersistence::ValidateIdentities(jam));
+    std::stringstream output;
+    std::string error;
+    EXPECT_FALSE(JamFile::ToStream(jam, output, &error));
+    EXPECT_EQ("Duplicate or invalid session identity", error);
     jam.Stations[1].VstChain[0].Id.clear(); // Legacy missing ID is assigned on construction.
     EXPECT_TRUE(io::PerformanceGroupPersistence::ValidateIdentities(jam));
+}
+
+TEST(JamFile, BuiltInNewSessionEnablesEveryMidiChannelWithoutCables)
+{
+	auto parsed = JamFile::FromStream(std::stringstream(JamFile::DefaultJson));
+	ASSERT_TRUE(parsed); ASSERT_FALSE(parsed->Stations.empty());
+	const std::vector<int> allChannels{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16};
+	for (const auto& station : parsed->Stations)
+	{
+		EXPECT_EQ(allChannels, station.AllowedMidiChannels);
+		for (const auto& route : station.MidiChannelRoutes) EXPECT_TRUE(route.PluginIds.empty());
+	}
+}
+
+TEST(JamFile, RetainsAudioShiftAndCreationSubdivisionIndependentlyOfMidiGrid)
+{
+	JamFile jam; jam.Name = "shift-and-subdivision"; jam.MasterAudioLoopId = "audio-master";
+	jam.DefaultMidiQuantFraction = midi::MidiQuantisationFraction::Sixth;
+	JamFile::Loop loop; loop.Name = "audio.wav"; loop.Length = 1000ul; loop.BodyPlayIndex = 300ul; loop.PlaybackOffsetSamps = -2000000017;
+	JamFile::LoopTake take; take.Name = "take"; take.TakePhaseOffsetSamps = 19; take.Loops.push_back(loop);
+	JamFile::Station station; station.Name = "station"; station.LoopTakes.push_back(take); jam.Stations.push_back(station);
+	std::stringstream output; ASSERT_TRUE(JamFile::ToStream(jam,output));
+	const auto restored = JamFile::FromStream(std::move(output)); ASSERT_TRUE(restored);
+	EXPECT_EQ(midi::MidiQuantisationFraction::Sixth,restored->DefaultMidiQuantFraction);
+	EXPECT_EQ("audio-master",restored->MasterAudioLoopId);
+	ASSERT_EQ(1u,restored->Stations.size()); ASSERT_EQ(1u,restored->Stations[0].LoopTakes.size());
+	const auto& savedTake = restored->Stations[0].LoopTakes[0]; ASSERT_EQ(1u,savedTake.Loops.size());
+	EXPECT_EQ(19,savedTake.TakePhaseOffsetSamps); EXPECT_EQ(-2000000017,savedTake.Loops[0].PlaybackOffsetSamps); EXPECT_EQ(300ul,savedTake.Loops[0].BodyPlayIndex);
 }

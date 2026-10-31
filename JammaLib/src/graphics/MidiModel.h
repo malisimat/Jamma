@@ -105,10 +105,13 @@ namespace graphics
 		int EditorBottomPitch() const noexcept { return _editorBottomPitch; }
 		int EditorVisibleRows() const noexcept { return _editorVisibleRows; }
 		bool EditorGridResolved() const noexcept { return _editorGridResolved; }
+		void SetEditorHandle(midi::LoopGridGeometry::EditHandle handle) noexcept { _editorHandle = handle; }
 		void SetEditorHover(float u, int pitch) noexcept;
 		void SetEditorTarget(float startU, float endU, int pitch, int noteIndex) noexcept;
 		void SetEditorHeld(int noteIndex, int proposedVelocity = -1) noexcept;
 		void ClearEditorHeld() noexcept;
+		struct EditorHit { std::uint32_t Sample; std::uint8_t Pitch; };
+		std::optional<EditorHit> PickEditorNote(glm::vec3 origin, glm::vec3 direction) const;
 		bool EditorNoteMatches(std::size_t index, const midi::MidiNote& note,
 			std::uint32_t loopLength) const noexcept;
 		std::uint64_t EditorModelGeneration() const noexcept { return _editorModelGeneration; }
@@ -189,6 +192,7 @@ namespace graphics
 		float _editorHoverU = -1.0f;
 		int _editorHoverPitch = -1;
 		float _editorTargetStart = -1.0f, _editorTargetEnd = -1.0f;
+		midi::LoopGridGeometry::EditHandle _editorHandle = midi::LoopGridGeometry::EditHandle::None;
 		int _editorTargetInstance = -1;
 		int _editorHeldInstance = -1;
 		int _editorPreviewVelocity = -1;

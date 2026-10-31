@@ -49,7 +49,14 @@ bool VstChain::IsActive() const noexcept
 
 int VstChain::GetLatencySamples() const noexcept
 {
-	return GetLatencySamplesFrom(0u);
+	int total = 0;
+	for (const auto& plugin : _plugins)
+	{
+		if (!plugin || !plugin->IsLoaded() || plugin->IsBypassed()
+			|| plugin->Role() == RenderRole::Instrument) continue;
+		total += std::min(std::max(0, plugin->GetLatencySamples()), (std::numeric_limits<int>::max)() - total);
+	}
+	return total;
 }
 
 int VstChain::GetLatencySamplesFrom(std::size_t firstPlugin) const noexcept
@@ -59,10 +66,57 @@ int VstChain::GetLatencySamplesFrom(std::size_t firstPlugin) const noexcept
 	{
 		const auto& plugin = _plugins[index];
 		if (!plugin || !plugin->IsLoaded() || plugin->IsBypassed()) continue;
+		if (index != firstPlugin && plugin->Role() == RenderRole::Instrument) continue;
 		const auto latency = std::max(0, plugin->GetLatencySamples());
 		total += std::min(latency, (std::numeric_limits<int>::max)() - total);
 	}
 	return total;
+}
+
+void VstChain::ProcessRack(float* const* channels, float* const* scratch,
+	int numChannels, int numSamples) noexcept
+{
+	if (!channels || !scratch || numChannels <= 0 || numSamples <= 0
+		|| static_cast<unsigned int>(numSamples) > constants::MaxBlockSize) return;
+	for (const auto& plugin : _plugins)
+	{
+		if (!plugin || !plugin->IsLoaded() || plugin->IsBypassed()) continue;
+		IVstPlugin::PluginCallGuard call(*plugin, true);
+		if (!call) continue;
+		plugin->FlushPendingMidiPanic();
+		if (plugin->Role() != RenderRole::Instrument)
+		{
+			plugin->ProcessBlockMulti(channels, numChannels, numSamples);
+			continue;
+		}
+		for (int channel = 0; channel < numChannels; ++channel)
+			std::fill_n(scratch[channel], numSamples, 0.0f);
+		plugin->ProcessBlockMulti(scratch, numChannels, numSamples);
+		for (int channel = 0; channel < numChannels; ++channel)
+			for (int sample = 0; sample < numSamples; ++sample)
+				channels[channel][sample] += scratch[channel][sample];
+	}
+}
+
+void VstChain::ProcessRackMono(float* channel, float* scratch, int numSamples) noexcept
+{
+	if (!channel || !scratch || numSamples <= 0
+		|| static_cast<unsigned int>(numSamples) > constants::MaxBlockSize) return;
+	for (const auto& plugin : _plugins)
+	{
+		if (!plugin || !plugin->IsLoaded() || plugin->IsBypassed()) continue;
+		IVstPlugin::PluginCallGuard call(*plugin, true);
+		if (!call) continue;
+		plugin->FlushPendingMidiPanic();
+		if (plugin->Role() != RenderRole::Instrument)
+		{
+			plugin->ProcessBlock(channel, numSamples);
+			continue;
+		}
+		std::fill_n(scratch, numSamples, 0.0f);
+		plugin->ProcessBlock(scratch, numSamples);
+		for (int sample = 0; sample < numSamples; ++sample) channel[sample] += scratch[sample];
+	}
 }
 
 void VstChain::PollPendingChanges() const noexcept

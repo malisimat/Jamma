@@ -101,6 +101,10 @@ TEST_F(VstRackLoadTest, MissingPluginsKeepAlignedStateAndRecoverableSlot)
 {
 	auto station = Station();
 	CheckFailedRestore(station);
+	const auto slots = station->GetVstRackSlots();
+	ASSERT_EQ(slots.size(), 2u);
+	EXPECT_EQ(slots[0].Identity, "failed-first");
+	EXPECT_EQ(slots[1].Identity, "failed-second");
 	auto take = Take();
 	CheckFailedRestore(take);
 	auto loop = Loop();
@@ -117,9 +121,31 @@ TEST_F(VstRackLoadTest, MissingPluginsKeepAlignedStateAndRecoverableSlot)
 
 TEST_F(VstRackLoadTest, AsyncFailureCompletesAndStaleRemovalCannotRemoveRetry)
 {
-	CheckRetryAndStaleUnload(Station());
 	CheckRetryAndStaleUnload(Take());
 	CheckRetryAndStaleUnload(Loop());
+}
+
+TEST_F(VstRackLoadTest, StationRetryPreservesIdentityStateBypassAndPendingRemoval)
+{
+	auto station = Station();
+	const std::vector<std::uint8_t> state{1, 4, 9};
+	ASSERT_FALSE(station->LoadVstPluginSynchronously(MissingPath(L"old.dll"), state, true, "stable-slot"));
+	ASSERT_TRUE(station->LoadManagedVstSlot(MissingPath(L"retry.dll"), "stable-slot"));
+	EXPECT_FALSE(station->LoadManagedVstSlot(MissingPath(L"duplicate.dll"), "stable-slot"));
+	for (const auto& job : station->CommitChanges()) station->OnAction(job);
+	station->CommitChanges();
+	const auto entries = station->VstEntries();
+	ASSERT_EQ(1u, entries.size());
+	EXPECT_EQ("stable-slot", entries[0].Id);
+	EXPECT_TRUE(entries[0].Bypass);
+	EXPECT_EQ(state, entries[0].DecodeState());
+	ASSERT_TRUE(station->LoadManagedVstSlot(MissingPath(L"cancelled.dll")));
+	const auto pending = station->GetVstRackSlots().back();
+	EXPECT_TRUE(pending.Pending);
+	ASSERT_TRUE(station->UnloadManagedVstPlugin(pending.Identity));
+	for (const auto& job : station->CommitChanges()) station->OnAction(job);
+	station->CommitChanges();
+	EXPECT_EQ(1u, station->GetVstRackSlots().size());
 }
 
 TEST_F(VstRackLoadTest, SeveralJobsBeforePublicationComposeRatherThanOverwrite)
@@ -192,4 +218,98 @@ TEST_F(VstRackLoadTest, RepeatedUnloadRequestsCompleteWithoutQueueDeduplication)
 	station->CommitChanges();
 	EXPECT_TRUE(station->VstEntries().empty());
 	EXPECT_FALSE(station->GetVstRackSlot().Pending);
+}
+
+TEST_F(VstRackLoadTest, LoadedMissingStationCableStaysRecoverableUntilRemoved)
+{
+	io::JamFile::Station saved;
+	saved.Id = "recoverable-station";
+	saved.Name = "recoverable station";
+	saved.StationType = 0;
+	saved.MidiChannelRoutes[3] = {{"unavailable-slot"}};
+	io::JamFile::VstEntry entry;
+	entry.Id = "unavailable-slot";
+	entry.Path = utils::EncodeUtf8(MissingPath(L"unavailable.dll"));
+	saved.VstChain.push_back(entry);
+	engine::StationParams params;
+	params.Name = saved.Name;
+	params.Size = {200, 200};
+	audio::MergeMixBehaviourParams merge;
+	auto restored = engine::Station::FromFile(params,
+		engine::Station::GetMixerParams(params.Size, merge), std::move(saved), L"");
+	ASSERT_TRUE(restored);
+	auto station = *restored;
+	ASSERT_EQ(1u, station->GetVstRackSlots().size());
+	EXPECT_TRUE(station->GetVstRackSlots()[0].Failed);
+	EXPECT_EQ((std::vector<std::string>{"unavailable-slot"}), station->MidiChannelRoutes()[3].PluginIds);
+	ASSERT_TRUE(station->LoadManagedVstSlot(MissingPath(L"retry.dll"), "unavailable-slot"));
+	for (const auto& job : station->CommitChanges()) station->OnAction(job);
+	station->CommitChanges();
+	EXPECT_TRUE(station->GetVstRackSlots()[0].Failed);
+	EXPECT_EQ((std::vector<std::string>{"unavailable-slot"}), station->MidiChannelRoutes()[3].PluginIds);
+	ASSERT_TRUE(station->UnloadManagedVstPlugin("unavailable-slot"));
+	for (const auto& job : station->CommitChanges()) station->OnAction(job);
+	station->CommitChanges();
+	EXPECT_TRUE(station->GetVstRackSlots().empty());
+	EXPECT_TRUE(station->MidiChannelRoutes()[3].PluginIds.empty());
+}
+
+TEST_F(VstRackLoadTest, InactiveRackPreservesRawOrderRoutesAndExplicitRecovery)
+{
+	io::JamFile::Station saved;
+	saved.Id = "raw-rack"; saved.Name = "raw rack"; saved.StationType = 0;
+	saved.MidiChannelRoutes[0] = {{"missing", "slot-16"}};
+	saved.MidiChannelRoutes[1] = {{}};
+	saved.MidiChannelRoutes[15] = {{"slot-16", "slot-17"}};
+	for (auto index = 0u; index < 33u; ++index)
+	{
+		io::JamFile::VstEntry entry;
+		entry.Id = "slot-" + std::to_string(index);
+		entry.Path = utils::EncodeUtf8(MissingPath(L"preserved.dll"));
+		entry.State = io::JamFile::VstEntry::EncodeState({1, 4, 9});
+		saved.VstChain.push_back(entry);
+	}
+	engine::StationParams params; params.Name = saved.Name; params.Size = {200, 200};
+	audio::MergeMixBehaviourParams merge;
+	const auto reconstruct = [&](io::JamFile::Station value) { return engine::Station::FromFile(params, engine::Station::GetMixerParams(params.Size, merge), std::move(value), L""); };
+	auto restored = reconstruct(saved);
+	ASSERT_TRUE(restored);
+	auto station = *restored;
+	EXPECT_TRUE(station->RackInactive());
+	EXPECT_EQ(33u, station->RackSlotCount());
+	EXPECT_EQ(32u, station->GetVstRackSlots(0, 100000).size());
+	EXPECT_EQ(1u, station->GetVstRackSlots(32, 32).size());
+	EXPECT_FALSE(station->RecoverRack(station->RackRevision()));
+	EXPECT_EQ(33u, station->VstEntries().size());
+	ASSERT_TRUE(station->RemoveInactiveRackSlot(16, station->RackRevision()));
+	EXPECT_FALSE(station->RemoveInactiveRackSlot(16, station->RackRevision() - 1u));
+	saved.VstChain = station->VstEntries();
+	saved.MidiChannelRoutes = station->MidiChannelRoutes();
+	EXPECT_EQ("slot-17", saved.VstChain[16].Id);
+	EXPECT_EQ((std::vector<std::string>{"missing"}), saved.MidiChannelRoutes[0].PluginIds);
+	EXPECT_TRUE(saved.MidiChannelRoutes[1].PluginIds.empty());
+	EXPECT_EQ((std::vector<std::string>{"slot-17"}), saved.MidiChannelRoutes[15].PluginIds);
+	io::JamFile jam; jam.Name = "rack-roundtrip"; jam.Stations.push_back(saved);
+	std::stringstream encoded;
+	ASSERT_TRUE(io::JamFile::ToStream(jam, encoded));
+	auto parsed = io::JamFile::FromStream(std::move(encoded));
+	ASSERT_TRUE(parsed);
+	ASSERT_EQ(1u, parsed->Stations.size());
+	const auto& roundTrip = parsed->Stations[0];
+	ASSERT_EQ(32u, roundTrip.VstChain.size());
+	EXPECT_EQ("slot-17", roundTrip.VstChain[16].Id);
+	EXPECT_EQ(saved.MidiChannelRoutes, roundTrip.MidiChannelRoutes);
+	EXPECT_TRUE(roundTrip.AllowedMidiChannels.empty());
+	ASSERT_TRUE(station->RecoverRack(station->RackRevision()));
+	EXPECT_FALSE(station->RackInactive());
+	EXPECT_EQ(32u, station->GetVstRackSlots().size());
+	auto malformed = saved;
+	malformed.VstChain[0].Id = std::string("bad\0id", 6);
+	auto bad = reconstruct(malformed);
+	ASSERT_TRUE(bad);
+	EXPECT_TRUE((*bad)->RackInactive());
+	EXPECT_EQ(malformed.VstChain[0].Id, (*bad)->VstEntries()[0].Id);
+	io::JamFile::Station empty; empty.Name = "empty"; empty.Id = "empty"; empty.StationType = 0;
+	auto emptyStation = reconstruct(empty);
+	ASSERT_TRUE(emptyStation);
 }

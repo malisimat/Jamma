@@ -83,14 +83,14 @@ namespace midi
 				: MidiQuantisation::NearestBoundaryIndex(transport - origin + original.LoopLengthSamps - 1u, interval, divisions);
 			if (last < first || last - first > 8192) return false;
 			std::vector<MidiEvent> displayed(original.EventCount);
-			MidiQuantisation::BuildQuantisedPlaybackEvents(original.Events.data(), original.EventCount,
+			MidiQuantisation::BuildPlaybackEvents(original.Events.data(), original.EventCount,
 				original.LoopLengthSamps, q, original.QuantisationTransportStartSamps, displayed.data(), false);
 			for (auto boundary = first; boundary <= last; ++boundary)
 			{
 				const auto localBoundary = origin + MidiQuantisation::BoundarySampleAt(boundary, interval, divisions) - transport + q.PhaseOffsetSamps;
 				const auto wrapped = (localBoundary % original.LoopLengthSamps + original.LoopLengthSamps) % original.LoopLengthSamps;
 				if (!on.HasExactTiming() && wrapped != start) continue;
-				const auto raw = on.HasExactTiming() ? static_cast<std::int64_t>(start)
+				const auto raw = on.HasExactTiming() ? SourcePosition(start, original.LoopLengthSamps, q.PhaseOffsetSamps)
 					: std::clamp<std::int64_t>(origin + MidiQuantisation::BoundarySampleAt(boundary, interval, divisions) - transport,
 						0, original.LoopLengthSamps - 1u);
 				if (duration > original.LoopLengthSamps - raw || (hasOff && raw + duration >= original.LoopLengthSamps)
@@ -98,9 +98,9 @@ namespace midi
 				auto candidate = original;
 				candidate.Events[onIndex].sampleOffset = static_cast<std::uint32_t>(raw);
 				candidate.Events[onIndex].data1 = pitch;
-				candidate.Events[onIndex].flags &= static_cast<std::uint8_t>(~MidiEvent::TriggerSeamEndpoint);
+				candidate.Events[onIndex].flags &= static_cast<std::uint8_t>(~(MidiEvent::TriggerSeamEndpoint | MidiEvent::BoundaryHeld));
 				if (hasOff) { candidate.Events[offIndex].sampleOffset = static_cast<std::uint32_t>(raw + duration); candidate.Events[offIndex].data1 = pitch; }
-				if (hasOff) candidate.Events[offIndex].flags &= static_cast<std::uint8_t>(~MidiEvent::TriggerSeamEndpoint);
+				if (hasOff) candidate.Events[offIndex].flags &= static_cast<std::uint8_t>(~(MidiEvent::TriggerSeamEndpoint | MidiEvent::BoundaryHeld));
 				std::vector<std::size_t> order(candidate.EventCount);
 				std::iota(order.begin(), order.end(), 0u);
 				const auto priority = [](const MidiEvent& e) { return e.IsNoteOff() ? 0 : e.IsNoteOn() ? 2 : 1; };
@@ -111,7 +111,7 @@ namespace midi
 				std::size_t movedOn = 0;
 				for (std::size_t i = 0; i < order.size(); ++i) { sorted.Events[i] = candidate.Events[order[i]]; if (order[i] == onIndex) movedOn = i; }
 				std::vector<MidiEvent> projected(sorted.EventCount);
-				MidiQuantisation::BuildQuantisedPlaybackEvents(sorted.Events.data(), sorted.EventCount,
+				MidiQuantisation::BuildPlaybackEvents(sorted.Events.data(), sorted.EventCount,
 					sorted.LoopLengthSamps, q, sorted.QuantisationTransportStartSamps, projected.data(), false);
 				bool unchanged = true;
 				for (std::size_t i = 0; i < order.size(); ++i)
@@ -150,9 +150,10 @@ namespace midi
 				|| channel >= 16u || pitch >= 128u || velocity == 0u)
 				return false;
 			const auto end = start + duration;
-			state.Events[state.EventCount++] = MidiEvent::MakeNoteOn(start, channel, pitch, velocity);
+			state.Events[state.EventCount++] = MidiEvent::MakeNoteOn(start, channel, pitch, velocity)
+				.WithFlags(end == state.LoopLengthSamps ? MidiEvent::ExactTiming : 0u);
 			// ExtractSpans extends an unmatched on to the seam. Playback flushes
-			// it there, preserving a true one-sample final cell.
+			// it there unless merged across the wrap, preserving a true one-sample final cell.
 			if (end < state.LoopLengthSamps)
 				state.Events[state.EventCount++] = MidiEvent::MakeNoteOff(end, channel, pitch);
 			MidiNote::SortMidiEvents(state.Events.data(), state.EventCount);
@@ -206,15 +207,22 @@ namespace midi
 			std::uint32_t end, std::uint8_t channel, std::uint8_t pitch,
 			std::uint8_t velocity = 96u) noexcept
 		{
-			if (start >= end || end > state.LoopLengthSamps
+			if (start >= state.LoopLengthSamps || start >= end
+				|| end - start > state.LoopLengthSamps
 				|| channel >= 16u || pitch >= 128u || velocity == 0u || velocity > 127u) return false;
-			if (state.EventCount > MidiLoop::DefaultCapacity - (end == state.LoopLengthSamps ? 1u : 2u))
+			const auto duration = end - start;
+			start = static_cast<std::uint32_t>(SourcePosition(start, state.LoopLengthSamps, state.Quantisation.PhaseOffsetSamps));
+			end = start + duration;
+			const bool omitOff = end == state.LoopLengthSamps && state.Quantisation.PhaseOffsetSamps == 0;
+			if (state.EventCount > MidiLoop::DefaultCapacity - (omitOff ? 1u : 2u))
 				return false;
+			const auto flags = static_cast<std::uint8_t>(MidiEvent::ExactTiming
+				| (end >= state.LoopLengthSamps && !omitOff ? MidiEvent::TriggerSeamEndpoint : 0u));
 			state.Events[state.EventCount++] = MidiEvent::MakeNoteOn(start, channel, pitch, velocity)
-				.WithFlags(MidiEvent::ExactTiming);
-			if (end < state.LoopLengthSamps)
-				state.Events[state.EventCount++] = MidiEvent::MakeNoteOff(end, channel, pitch)
-					.WithFlags(MidiEvent::ExactTiming);
+				.WithFlags(flags);
+			if (!omitOff)
+				state.Events[state.EventCount++] = MidiEvent::MakeNoteOff(end % state.LoopLengthSamps, channel, pitch)
+					.WithFlags(flags);
 			MidiNote::SortMidiEvents(state.Events.data(), state.EventCount);
 			return true;
 		}
@@ -228,6 +236,10 @@ namespace midi
 			if (onIndex >= state.EventCount || !state.Events[onIndex].IsNoteOn()
 				|| newPitch >= 128u || newStart >= newEnd
 				|| newEnd > state.LoopLengthSamps) return false;
+			const auto duration = newEnd - newStart;
+			newStart = static_cast<std::uint32_t>(SourcePosition(newStart, state.LoopLengthSamps, state.Quantisation.PhaseOffsetSamps));
+			newEnd = newStart + duration;
+			const bool omitOff = newEnd == state.LoopLengthSamps && state.Quantisation.PhaseOffsetSamps == 0;
 			const auto on = state.Events[onIndex];
 			std::size_t offIndex = state.EventCount;
 			if (on.flags & MidiEvent::TriggerSeamEndpoint)
@@ -246,13 +258,14 @@ namespace midi
 				if (ev.IsNoteOff()) { offIndex = i; break; }
 			}
 			if (offIndex == state.EventCount && state.EventCount == MidiLoop::DefaultCapacity
-				&& newEnd < state.LoopLengthSamps) return false;
+				&& !omitOff) return false;
 			state.Events[onIndex].sampleOffset = newStart;
 			state.Events[onIndex].data1 = newPitch;
-			state.Events[onIndex].flags &= static_cast<std::uint8_t>(~MidiEvent::TriggerSeamEndpoint);
+			state.Events[onIndex].flags &= static_cast<std::uint8_t>(~(MidiEvent::TriggerSeamEndpoint | MidiEvent::BoundaryHeld));
+			if (newEnd >= state.LoopLengthSamps && !omitOff) state.Events[onIndex].flags |= MidiEvent::TriggerSeamEndpoint;
 			if (offIndex < state.EventCount)
 			{
-				if (newEnd == state.LoopLengthSamps)
+				if (omitOff)
 				{
 					for (std::size_t i = offIndex + 1u; i < state.EventCount; ++i)
 						state.Events[i - 1u] = state.Events[i];
@@ -260,14 +273,15 @@ namespace midi
 				}
 				else
 				{
-					state.Events[offIndex].sampleOffset = newEnd;
+					state.Events[offIndex].sampleOffset = newEnd % state.LoopLengthSamps;
 					state.Events[offIndex].data1 = newPitch;
-					state.Events[offIndex].flags &= static_cast<std::uint8_t>(~MidiEvent::TriggerSeamEndpoint);
+					state.Events[offIndex].flags &= static_cast<std::uint8_t>(~(MidiEvent::TriggerSeamEndpoint | MidiEvent::BoundaryHeld));
+					if (newEnd >= state.LoopLengthSamps) state.Events[offIndex].flags |= MidiEvent::TriggerSeamEndpoint;
 				}
 			}
-			else if (newEnd < state.LoopLengthSamps)
-				state.Events[state.EventCount++] = MidiEvent::MakeNoteOff(newEnd, on.Channel(), newPitch)
-					.WithFlags(on.flags);
+			else if (!omitOff)
+				state.Events[state.EventCount++] = MidiEvent::MakeNoteOff(newEnd % state.LoopLengthSamps, on.Channel(), newPitch)
+					.WithFlags(state.Events[onIndex].flags);
 			MidiNote::SortMidiEvents(state.Events.data(), state.EventCount);
 			return true;
 		}
@@ -392,6 +406,12 @@ namespace midi
 		}
 
 	private:
+		static std::int64_t SourcePosition(std::uint32_t displayed, std::uint32_t length, std::int32_t shift) noexcept
+		{
+			const auto raw = static_cast<std::int64_t>(displayed) - shift;
+			return (raw % length + length) % length;
+		}
+
 		static bool DisplayedSpan(const MidiEvent& on, const MidiEvent* off,
 			std::uint32_t length, const MidiQuantisationSettings& settings,
 			std::uint64_t transportStart, std::uint32_t& start,
@@ -400,7 +420,7 @@ namespace midi
 			std::array<MidiEvent, 2u> raw{ on, off ? *off : MidiEvent{} };
 			std::array<MidiEvent, 2u> quantised{};
 			const auto count = off ? 2u : 1u;
-			MidiQuantisation::BuildQuantisedPlaybackEvents(raw.data(), count,
+			MidiQuantisation::BuildPlaybackEvents(raw.data(), count,
 				length, settings, transportStart, quantised.data());
 			const auto spans = MidiNote::ExtractSpans(quantised.data(), count, length);
 			if (spans.size() != 1u) return false;

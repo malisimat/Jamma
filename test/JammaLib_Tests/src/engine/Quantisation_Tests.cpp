@@ -13,6 +13,7 @@
 #include "engine/LoopTake.h"
 #include "engine/Loop.h"
 #include "graphics/QuantisationModel.h"
+#include "graphics/QuantisationDivisionModel.h"
 #include "graphics/MidiModel.h"
 #include "midi/MidiQuantisation.h"
 #include "utils/Timer.h"
@@ -758,12 +759,12 @@ TEST(Quantisation, OverlayWaitsTwoSecondsAfterReleaseBeforeFading)
     quantiser.SetOverlayHeld(false);
     const auto released = utils::Timer::GetTime();
     EXPECT_FLOAT_EQ(1.0f, quantiser.OverlayAlpha(beforeRelease + std::chrono::seconds(2)));
-    EXPECT_NEAR(0.5f, quantiser.OverlayAlpha(released + std::chrono::seconds(3)), 0.01f);
-    EXPECT_FLOAT_EQ(0.0f, quantiser.OverlayAlpha(released + std::chrono::seconds(4)));
+    EXPECT_NEAR(0.5f, quantiser.OverlayAlpha(released + std::chrono::milliseconds(2500)), 0.01f);
+    EXPECT_FLOAT_EQ(0.0f, quantiser.OverlayAlpha(released + std::chrono::seconds(3)));
     quantiser.PulseOverlay();
     const auto pulse = utils::Timer::GetTime();
     EXPECT_FLOAT_EQ(1.0f, quantiser.OverlayAlpha(pulse + std::chrono::seconds(1)));
-    EXPECT_NEAR(0.5f, quantiser.OverlayAlpha(pulse + std::chrono::seconds(3)), 0.01f);
+    EXPECT_NEAR(0.5f, quantiser.OverlayAlpha(pulse + std::chrono::milliseconds(2500)), 0.01f);
     quantiser.ClearOverlay();
     EXPECT_FLOAT_EQ(0.0f, quantiser.OverlayAlpha(pulse));
 }
@@ -1041,6 +1042,24 @@ TEST(Quantisation, MultichannelAudioAndMidiIsOneCompletedTake)
 TEST(QuantisationController, RapidModifierTransitionsKeepCurrentOpacity)
 {
 	graphics::CtrlHandleOverlay overlay;
+	for (const auto count : {1, 2})
+	{
+		overlay.SetVisibleButtonCount(count);
+		for (const auto cursor : {utils::Position2d{100, 100}, {700, 100}, {100, 500}, {700, 500}})
+		{
+			overlay.SetAnchor(cursor, {800u, 600u});
+			EXPECT_EQ(-1, overlay.HitTestButton(cursor));
+			for (int i = 0; i < count; ++i)
+			{
+				const auto centre = overlay.ButtonCenter(i);
+				ASSERT_TRUE(centre);
+				EXPECT_EQ(cursor.X < 400, centre->X > cursor.X);
+				EXPECT_EQ(cursor.Y < 300, centre->Y > cursor.Y);
+				EXPECT_GE(centre->X, 0); EXPECT_LT(centre->X, 800);
+				EXPECT_GE(centre->Y, 0); EXPECT_LT(centre->Y, 600);
+			}
+		}
+	}
 	engine::Quantiser quantiser;
 	std::vector<std::shared_ptr<engine::Station>> stations;
 	engine::QuantiserController controller(overlay, quantiser, stations);
@@ -1111,6 +1130,100 @@ TEST(QuantisationController, CapturedSelectionSurvivesChangesAndCancelPreservesC
 	EXPECT_FALSE(controller.EditModeActive());
 }
 
+TEST(QuantisationController, TakeShiftDelegatesToMixedLoopsAndKeepsCapturedScope)
+{
+	auto take = MakeQuantisationContractTake("mixed", 96000ul);
+	auto other = MakeQuantisationContractTake("other", 96000ul);
+	engine::LoopParams params;
+	params.Size = {80, 80};
+	auto audioLoop = std::make_shared<engine::Loop>(params,
+		engine::Loop::GetMixerParams({80, 80}, audio::WireMixBehaviourParams{}));
+	audioLoop->SetPlaybackOffsetSamps(100);
+	take->CompleteAudio({audioLoop});
+	auto midiLoop = std::make_shared<midi::MidiLoop>();
+	take->AddMidi(midiLoop);
+	auto streamSettings = midiLoop->GetLoopQuantisationOverride();
+	streamSettings.PhaseOffsetSamps = 50;
+	take->SetMidiLoopQuantisationOverride(midiLoop, streamSettings);
+	take->Select();
+	auto station = std::make_shared<QuantisationContractStation>();
+	station->AddTake(take);
+	station->AddTake(other);
+	graphics::CtrlHandleOverlay overlay;
+	engine::Quantiser quantiser;
+	std::vector<std::shared_ptr<engine::Station>> stations = {station};
+	engine::QuantiserController controller(overlay, quantiser, stations);
+	engine::QuantisationInteractionContext context;
+	context.SelectDepth = base::DEPTH_LOOPTAKE;
+	context.CursorPos = {200, 200};
+	context.ViewportSize = {800, 600};
+	const engine::QuantiserController::ChildResolver resolve = [other](const auto&) { return other; };
+	controller.OnCtrlModifierChanged(true, utils::Timer::GetTime(), context, resolve);
+	EXPECT_EQ("Take (1)", overlay.ScopeLabel());
+	take->DeSelect();
+	other->Select();
+	actions::TouchAction press;
+	press.State = actions::TouchAction::TOUCH_DOWN;
+	press.Index = 0;
+	press.Position = overlay.ButtonCenter(0).value();
+	ASSERT_TRUE(controller.TryHandleTouchAction(press, 48000u, true, context, resolve)->IsEaten);
+	actions::TouchMoveAction move;
+	move.Position = press.Position;
+	move.Position.X += 50;
+	controller.TryHandleTouchMove(move, 48000u);
+	EXPECT_EQ(2400, take->MidiQuantisation().PhaseOffsetSamps);
+	EXPECT_EQ(2500, audioLoop->TotalPlaybackOffsetSamps());
+	EXPECT_EQ(100, audioLoop->PlaybackOffsetSamps()); // Stream setting stays separate for save/load.
+	EXPECT_EQ(0, other->MidiQuantisation().PhaseOffsetSamps);
+	EXPECT_EQ("Take (1)", overlay.ScopeLabel());
+	// Station and global offsets compose once with each take and loop offset.
+	station->SetStationPhaseOffsetSamps(300);
+	station->SetGlobalPhaseOffsetSamps(-200);
+	EXPECT_EQ(2600, audioLoop->TotalPlaybackOffsetSamps());
+	EXPECT_EQ(2500, take->ResolvedMidiQuantisation().PhaseOffsetSamps);
+	EXPECT_EQ(2550, take->ResolvedMidiQuantisationFor(midiLoop).PhaseOffsetSamps);
+	EXPECT_EQ(100, other->ResolvedMidiQuantisation().PhaseOffsetSamps);
+	station->SetStationPhaseOffsetSamps(300);
+	EXPECT_EQ(2600, audioLoop->TotalPlaybackOffsetSamps());
+	controller.CancelInteraction(true);
+	context.SelectDepth = base::DEPTH_STATION;
+	station->Select();
+	controller.OnCtrlModifierChanged(true, utils::Timer::GetTime(), context, resolve);
+	EXPECT_EQ("Station (1)", overlay.ScopeLabel());
+	press.Position = overlay.ButtonCenter(0).value();
+	ASSERT_TRUE(controller.TryHandleTouchAction(press, 48000u, true, context, resolve)->IsEaten);
+	move.Position = press.Position; move.Position.X += 50;
+	controller.TryHandleTouchMove(move, 48000u);
+	EXPECT_EQ(2700, station->StationPhaseOffsetSamps());
+	EXPECT_EQ(5000, audioLoop->TotalPlaybackOffsetSamps());
+	EXPECT_EQ(4950, take->ResolvedMidiQuantisationFor(midiLoop).PhaseOffsetSamps);
+	EXPECT_EQ(2400, take->MidiQuantisation().PhaseOffsetSamps);
+	EXPECT_EQ(100, audioLoop->PlaybackOffsetSamps());
+	// Double-click each captured parent: reset only that level, not its children.
+	for (const auto depth : {base::DEPTH_STATION, base::DEPTH_LOOPTAKE})
+	{
+		controller.CancelInteraction(true);
+		take->Select(); other->DeSelect();
+		context.SelectDepth = depth;
+		const auto clickTime = utils::Timer::GetTime();
+		controller.OnCtrlModifierChanged(true, clickTime, context, resolve);
+		press.Position = overlay.ButtonCenter(0).value();
+		for (int click = 0; click < 2; ++click)
+		{
+			press.State = actions::TouchAction::TOUCH_DOWN;
+			press.SetActionTime(clickTime + std::chrono::milliseconds(click * 10));
+			ASSERT_TRUE(controller.TryHandleTouchAction(press, 48000u, true, context, resolve)->IsEaten);
+			press.State = actions::TouchAction::TOUCH_UP;
+			controller.TryHandleTouchAction(press, 48000u, true, context, resolve);
+		}
+		EXPECT_EQ(0, station->StationPhaseOffsetSamps());
+		EXPECT_EQ(depth == base::DEPTH_STATION ? 2400 : 0, take->MidiQuantisation().PhaseOffsetSamps);
+		EXPECT_EQ(depth == base::DEPTH_STATION ? 2300 : -100, audioLoop->TotalPlaybackOffsetSamps());
+		EXPECT_EQ(100, audioLoop->PlaybackOffsetSamps());
+		EXPECT_EQ(50, midiLoop->GetLoopQuantisationOverride().PhaseOffsetSamps);
+	}
+}
+
 TEST(QuantisationController, LoopDragChangesCapturedMidiStreamAndDeletionReleasesGesture)
 {
 	auto take = MakeQuantisationContractTake("midi-scope", 96000ul);
@@ -1149,4 +1262,87 @@ TEST(QuantisationController, LoopDragChangesCapturedMidiStreamAndDeletionRelease
 	EXPECT_FALSE(controller.OwnsPointer());
 	EXPECT_TRUE(controller.EditModeActive());
 	EXPECT_FLOAT_EQ(0.0f, quantiser.OverlayAlpha(utils::Timer::GetTime() + std::chrono::seconds(20)));
+}
+
+class QuantisationTransformInspection : public engine::QuantisationModel
+{
+public:
+	const std::vector<float>& Transforms() const { return _backInstanceAttributes.at(0).Data; }
+};
+class DivisionTransformInspection : public engine::QuantisationDivisionModel
+{
+public:
+	const std::vector<float>& Transforms() const { return _backInstanceAttributes.at(0).Data; }
+};
+
+TEST(QuantisationVisuals, ShiftedMasterMovesBlueFramesByEachLoopLengthWithoutMovingMidiDivisions)
+{
+	QuantisationTransformInspection frames;
+	DivisionTransformInspection divisions;
+	std::vector<engine::QuantisationLoopTakeVisual> visuals(2);
+	for (unsigned int i = 0; i < visuals.size(); ++i)
+	{
+		auto& visual = visuals[i];
+		visual.LoopLengthSamps = i == 0u ? 1000ul : 2000ul;
+		visual.GrainSamps = 250u; visual.LoopGrains = i == 0u ? 4u : 8u;
+		visual.LoopIndexFrac = 0.2; visual.HalfHeight = 25.0f; visual.Radius = 100.0f;
+		visual.Fraction = midi::MidiQuantisationFraction::Half;
+	}
+	frames.SetLoopTakeVisuals(250u,visuals);
+	divisions.SetLoopTakeVisuals(visuals);
+	const auto baselineFrames = frames.Transforms();
+	const auto baselineDivisions = divisions.Transforms();
+	ASSERT_FALSE(baselineDivisions.empty());
+	ASSERT_EQ(12u * 4u,baselineFrames.size());
+	for (const auto offset : {50,-50,2000000050,0})
+	{
+		for (auto& visual : visuals) visual.MasterAudioOffsetSamps = offset;
+		frames.SetLoopTakeVisuals(250u,visuals); divisions.SetLoopTakeVisuals(visuals);
+		const auto& actual = frames.Transforms(); ASSERT_EQ(baselineFrames.size(),actual.size());
+		for (unsigned int gate = 0; gate < 12u; ++gate)
+		{
+			const auto length = gate < 4u ? 1000ll : 2000ll;
+			const auto expected = baselineFrames[gate * 4u] + constants::TWOPI * (static_cast<long long>(offset) % length) / length;
+			EXPECT_NEAR(expected,actual[gate * 4u],0.00001) << "offset=" << offset << " length=" << length;
+			for (unsigned int component = 1; component < 4u; ++component)
+				EXPECT_FLOAT_EQ(baselineFrames[gate * 4u + component],actual[gate * 4u + component]);
+		}
+		EXPECT_EQ(baselineDivisions,divisions.Transforms());
+	}
+}
+
+TEST(Quantisation, ReclockResetIgnoresOlderTakesAndRetainsNewerFollowers)
+{
+    auto old = MakeQuantisationContractTake("old", 96000ul);
+    auto master = MakeQuantisationContractTake("master", 48000ul);
+    auto follower = MakeQuantisationContractTake("follower", 48000ul);
+    auto station = std::make_shared<QuantisationContractStation>();
+    station->AddTake(old);
+    engine::Quantiser quantiser;
+    auto clock = std::make_shared<utils::Timer>();
+    quantiser.SetClock(clock);
+    quantiser.ArmReclock({station});
+    EXPECT_FALSE(quantiser.ResetReclockIfEmpty({station}));
+    station->AddTake(master);
+    station->AddTake(follower);
+    quantiser.Set(12000u, utils::Timer::QUANTISE_MULTIPLE);
+    clock->SetSeedSourceLength(48000ul);
+    ASSERT_TRUE(station->DitchTake(master));
+    EXPECT_FALSE(quantiser.ResetReclockIfEmpty({station}));
+    EXPECT_EQ(48000ul, clock->SeedSourceLength());
+    ASSERT_TRUE(station->DitchTake(follower));
+    EXPECT_TRUE(quantiser.ResetReclockIfEmpty({station}));
+    EXPECT_EQ(0ul, clock->SeedSourceLength());
+    EXPECT_EQ(0u, clock->QuantiseSamps());
+    EXPECT_TRUE(quantiser.IsArmedForReclock());
+    EXPECT_EQ(1u, station->GetLoopTakes().size());
+    EXPECT_FALSE(quantiser.ResetReclockIfEmpty({station}));
+    // A second master can be recorded and ditched without admitting old takes.
+    station->AddTake(master);
+    quantiser.Set(16000u, utils::Timer::QUANTISE_MULTIPLE);
+    clock->SetSeedSourceLength(64000ul);
+    EXPECT_FALSE(quantiser.ResetReclockIfEmpty({station}));
+    ASSERT_TRUE(station->DitchTake(master));
+    EXPECT_TRUE(quantiser.ResetReclockIfEmpty({station}));
+    EXPECT_EQ(0ul, clock->SeedSourceLength());
 }

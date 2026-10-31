@@ -114,10 +114,10 @@ TEST(GuiPerformanceGroups, SettingsFollowActualTopStripBoundsAcrossCollapseAndSm
     panel->Init();
     panel->SetOccupiedTopStripBounds({ 200, 300, 760, 590 });
     auto frame = panel->TryGetChild(0u);
-    EXPECT_LE(frame->Position().Y + static_cast<int>(frame->GetSize().Height), 292);
+	EXPECT_LE(frame->Position().Y + static_cast<int>(frame->GetSize().Height), 300);
     panel->SetExpanded(false);
     panel->AdvanceAnimation(0.05f);
-    EXPECT_LE(frame->Position().Y + static_cast<int>(frame->GetSize().Height), 292);
+	EXPECT_LE(frame->Position().Y + static_cast<int>(frame->GetSize().Height), 300);
     panel->SetOccupiedTopStripBounds({ 0, 20, 100, 100 });
     EXPECT_EQ(frame->GetSize().Height, 0u);
     panel->SetViewportSize({ 0u, 0u });

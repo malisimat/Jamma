@@ -12,6 +12,7 @@
 #include "vst/VstEditorWindowManager.h"
 #include "gui/VstRackControls.h"
 #include <functional>
+#include <sstream>
 
 using actions::JobAction;
 using engine::Loop;
@@ -340,6 +341,7 @@ public:
  utils::Size2d GetEditorSize() const noexcept override { return {0,0}; }
  bool IsLoaded() const noexcept override { return true; }
  const std::string& Name() const noexcept override { return StateId(); }
+ vst::RenderRole Role() const noexcept override { return vst::RenderRole::Effect; }
  void SetBypassed(bool) noexcept override {}
  bool IsBypassed() const noexcept override { return false; }
  bool Probe() const { PluginCallGuard call(*this); return static_cast<bool>(call); }
@@ -371,6 +373,109 @@ public:
   vst::PublishLastTouchedParameter(this, 2, 0.75f);
  }
 };
+
+class RackDropPlugin final : public StateGatePlugin
+{
+public:
+ vst::MidiInputCapabilities MidiInput() const noexcept override { return {true, true, true}; }
+};
+
+TEST(VstStaging, MidiCableDropAcceptsEntireVisibleSlotControl)
+{
+ gui::GuiRackParams params; params.Size = {220u, 300u};
+ params.EnableVstControl = true; params.EnableVstRack = true; params.EnableVstRackMidiRouting = true;
+ auto rack = std::make_shared<gui::GuiRack>(params); rack->SetPosition({300, 400}); rack->Init();
+ const auto view = rack->VstRack(); ASSERT_TRUE(view);
+ view->SetViewport({1200u, 1000u}); view->SetChannelsCollapsed(false);
+ gui::GuiVstRack::Model model; model.Editable = true; model.Revision = 1u; model.TotalSlots = 1u;
+ gui::GuiVstRack::Slot slot; slot.Value.Identity = "target"; slot.Value.Plugin = std::make_shared<RackDropPlugin>();
+ model.Slots.push_back(slot);
+ std::vector<gui::GuiVstRack::Command> commands;
+ view->Update(model, [&](auto command) { commands.push_back(std::move(command)); });
+ view->SetVisible(true);
+ view->Layout(100u, 0, {0, 0}, {20u, 20u});
+ std::vector<gui::CableInteraction::Endpoint> endpoints; std::vector<gui::CableInteraction::Cable> cables;
+ view->BuildInteractionGeometry(endpoints, cables); ASSERT_EQ(17u, endpoints.size());
+ ASSERT_TRUE(endpoints.back().Available);
+ const auto button = view->SlotButton(0u); ASSERT_TRUE(button);
+ const auto p = button->GlobalPosition() - view->GlobalPosition(); const auto size = button->GetSize();
+ for (const auto offset : {utils::Position2d{static_cast<int>(size.Width) - 6, 6},
+                          utils::Position2d{static_cast<int>(size.Width) - 6, static_cast<int>(size.Height) - 6}})
+ {
+  ASSERT_TRUE(view->SlotScroll()->EffectiveContentRect({0, 0, 1200, 1000}).Contains(button->GlobalPosition() + offset));
+  actions::TouchAction touch; touch.Index = 0; touch.Touch = actions::TouchAction::TOUCH_MOUSE;
+  touch.State = actions::TouchAction::TOUCH_DOWN; touch.Position = endpoints[0].Position;
+  view->OnAction(touch); ASSERT_TRUE(view->HasCableDrag());
+  touch.State = actions::TouchAction::TOUCH_UP; touch.Position = p + offset;
+  EXPECT_FALSE(gui::CableInteraction::HitTest(endpoints.back(), touch.Position, 13.0f));
+  view->OnAction(touch); EXPECT_FALSE(view->HasCableDrag());
+ }
+ ASSERT_EQ(2u, commands.size());
+ for (const auto& command : commands)
+ {
+  EXPECT_EQ((std::vector<std::string>{"target"}), command.ChannelRoutes[0].PluginIds);
+ }
+ rack->DetachGuiOwnershipForRetirement();
+}
+
+TEST(VstStaging, EveryMidiChannelCellDropsOntoVisibleScrolledSlotAndRejectsStaleDrag)
+{
+ gui::GuiRackParams params; params.Size = {220u,300u};
+ params.EnableVstControl = true; params.EnableVstRack = true; params.EnableVstRackMidiRouting = true;
+ auto rack = std::make_shared<gui::GuiRack>(params); rack->SetPosition({300,400}); rack->Init();
+ const auto view = rack->VstRack(); ASSERT_TRUE(view);
+ view->SetViewport({1200u,1000u}); view->SetChannelsCollapsed(false);
+ gui::GuiVstRack::Model model; model.Editable = true; model.Revision = 7u; model.TotalSlots = 12u;
+ for (auto i = 0u; i < 12u; ++i)
+ {
+  gui::GuiVstRack::Slot slot; slot.Value.Identity = "slot-" + std::to_string(i);
+  slot.Value.Plugin = std::make_shared<RackDropPlugin>(); model.Slots.push_back(std::move(slot));
+ }
+ std::vector<gui::GuiVstRack::Command> commands;
+ const auto submit = [&](auto command) { commands.push_back(std::move(command)); };
+ view->Update(model,submit); view->SetVisible(true);
+ view->Layout(100u,0,{0,0},{20u,20u});
+ ASSERT_GE(view->SlotScroll()->MaxScrollOffset(),80);
+ view->SlotScroll()->SetScrollOffset(80);
+ const auto button = view->SlotButton(3u); ASSERT_TRUE(button);
+ const auto clip = view->SlotScroll()->EffectiveContentRect({0,0,1200,1000});
+ const auto p = button->GlobalPosition(); const auto size = button->GetSize();
+ const auto visible = utils::Rect2d{p.X,p.Y,p.X + static_cast<int>(size.Width),p.Y + static_cast<int>(size.Height)}.Intersected(clip);
+ ASSERT_FALSE(visible.IsEmpty());
+ const auto drop = utils::Position2d{visible.Right - 6,(visible.Bottom + visible.Top) / 2} - view->GlobalPosition();
+ std::vector<gui::CableInteraction::Endpoint> endpoints; std::vector<gui::CableInteraction::Cable> cables;
+ view->BuildInteractionGeometry(endpoints,cables); ASSERT_EQ(28u,endpoints.size());
+ EXPECT_FALSE(gui::CableInteraction::HitTest(endpoints[19u],drop,13.0f));
+ for (auto channel = 0u; channel < 16u; ++channel)
+ {
+  SCOPED_TRACE(channel);
+  actions::TouchAction touch; touch.Index = 0; touch.Touch = actions::TouchAction::TOUCH_MOUSE;
+  touch.State = actions::TouchAction::TOUCH_DOWN;
+  touch.Position = endpoints[channel].Position + utils::Position2d{-20,0};
+  const auto pressed = view->OnAction(touch);
+  EXPECT_EQ(view,pressed.ActiveElement.lock()); EXPECT_FALSE(view->HasCableDrag());
+  actions::TouchMoveAction move; move.Index = 0; move.Touch = actions::TouchAction::TOUCH_MOUSE;
+  move.MouseButtonsDown = 1u; move.Position = touch.Position + utils::Position2d{-6,0};
+  view->OnAction(move); ASSERT_TRUE(view->HasCableDrag());
+  touch.State = actions::TouchAction::TOUCH_UP; touch.Position = drop;
+  view->OnAction(touch); EXPECT_FALSE(view->HasCableDrag());
+  ASSERT_EQ(channel + 1u,commands.size());
+  EXPECT_EQ(7u,commands.back().Revision);
+  for (auto routed = 0u; routed < 16u; ++routed)
+  {
+   EXPECT_EQ(routed == channel ? (std::vector<std::string>{"slot-3"}) : std::vector<std::string>{},
+       commands.back().ChannelRoutes[routed].PluginIds);
+  }
+  EXPECT_EQ(80,view->SlotScroll()->ScrollOffset());
+ }
+ actions::TouchAction touch; touch.Index = 0; touch.Touch = actions::TouchAction::TOUCH_MOUSE;
+ touch.State = actions::TouchAction::TOUCH_DOWN; touch.Position = endpoints[0].Position;
+ view->OnAction(touch); ASSERT_TRUE(view->HasCableDrag());
+ ++model.Revision; view->Update(model,submit); EXPECT_FALSE(view->HasCableDrag());
+ touch.State = actions::TouchAction::TOUCH_UP; touch.Position = drop; view->OnAction(touch);
+ EXPECT_EQ(16u,commands.size());
+ rack->DetachGuiOwnershipForRetirement();
+}
 
 TEST(VstStaging, LiveCaptureRejectsActiveCallbackAndPreservesOutput)
 {
@@ -880,342 +985,6 @@ TEST_F(VstMetadataReentryTest, StationGroupCaptureAllowsReentrantMetadataUpdate)
  CheckCapture(MakeStation(), [](engine::Station& station) { return CaptureGroup(station); });
 }
 
-class ReentrantEditorDestructionPlugin final : public StateGatePlugin
-{
-public:
- HWND EditorParent = nullptr;
- std::function<void()> DuringDestruction;
- ~ReentrantEditorDestructionPlugin() override
- {
-  if (DuringDestruction) DuringDestruction();
- }
- bool OpenEditor(HWND parent) override
- {
-  EditorParent = parent;
-  return true;
- }
- utils::Size2d GetEditorSize() const noexcept override
- {
-  // Close while Create still owns a hidden frame, before ShowWindow.
-  // The closed manager entry retains the final plugin reference until prune.
-  SendMessage(EditorParent, WM_CLOSE, 0, 0);
-  return {0, 0};
- }
-};
-
-TEST(VstStaging, DISABLED_PruningClosedEditorAllowsReentrantPluginDestruction)
-{
- vst::VstEditorWindowManager manager;
- bool reentered = false;
- auto plugin = std::make_shared<ReentrantEditorDestructionPlugin>();
- plugin->DuringDestruction = [&] {
-  manager.PruneClosedVstEditorWindows();
-  reentered = true;
- };
- ASSERT_TRUE(manager.OpenVstEditorForPlugin(plugin));
- EXPECT_FALSE(IsWindow(plugin->EditorParent));
- plugin.reset();
- EXPECT_FALSE(reentered);
- manager.PruneClosedVstEditorWindows();
- EXPECT_TRUE(reentered);
-}
-class ReentrantEditorIdlePlugin final : public StateGatePlugin
-{
-public:
- HWND EditorParent = nullptr;
- unsigned int IdleCalls = 0;
- bool OpenEditor(HWND parent) override { EditorParent = parent; return true; }
- void IdleEditor() noexcept override
- {
-  ++IdleCalls;
-  if (IdleCalls == 1u)
-  {
-   SendMessage(EditorParent, WM_TIMER, 1, 0);
-   SendMessage(EditorParent, graphics::VstEditorWindow::MessageVst2Idle, 0, 0);
-  }
- }
-};
-
-TEST(VstStaging, DISABLED_EditorIdleRejectsNestedTimerAndVst2IdleMessages)
-{
- auto plugin = std::make_shared<ReentrantEditorIdlePlugin>();
- graphics::VstEditorWindow editor;
- ASSERT_TRUE(editor.Create(GetModuleHandle(nullptr), plugin));
- SendMessage(editor.EditorHwnd(), WM_TIMER, 1, 0);
- EXPECT_EQ(plugin->IdleCalls, 1u);
- SendMessage(editor.EditorHwnd(), graphics::VstEditorWindow::MessageVst2Idle, 0, 0);
- EXPECT_EQ(plugin->IdleCalls, 2u);
- editor.Destroy();
-}
-
-class ReentrantEditorLifetimePlugin final : public StateGatePlugin
-{
-public:
- HWND EditorParent = nullptr;
- vst::VstEditorWindowManager* Manager = nullptr;
- std::weak_ptr<graphics::VstEditorWindow> Editor;
- bool KeptAliveDuringIdle = false;
- bool OpenEditor(HWND parent) override { EditorParent = parent; return true; }
- void IdleEditor() noexcept override
- {
-  auto* editor = reinterpret_cast<graphics::VstEditorWindow*>(
-   GetWindowLongPtr(EditorParent, GWLP_USERDATA));
-  Editor = editor->weak_from_this();
-  SendMessage(EditorParent, WM_CLOSE, 0, 0);
-  Manager->PruneClosedVstEditorWindows();
-  Manager->CloseAllVstEditorWindows();
-  KeptAliveDuringIdle = !Editor.expired() && IsWindow(EditorParent);
- }
-};
-
-TEST(VstStaging, DISABLED_EditorSurvivesReentrantClosePruneAndManagerRemovalDuringIdle)
-{
- vst::VstEditorWindowManager manager;
- auto plugin = std::make_shared<ReentrantEditorLifetimePlugin>();
- plugin->Manager = &manager;
- ASSERT_TRUE(manager.OpenVstEditorForPlugin(plugin));
- SendMessage(plugin->EditorParent, graphics::VstEditorWindow::MessageVst2Idle, 0, 0);
- EXPECT_TRUE(plugin->KeptAliveDuringIdle);
- EXPECT_TRUE(plugin->Editor.expired());
- EXPECT_FALSE(IsWindow(plugin->EditorParent));
-}
-
-class ReentrantEditorOpenPlugin final : public StateGatePlugin
-{
-public:
- HWND EditorParent = nullptr;
- unsigned int OpenCalls = 0;
- bool NestedResult = true;
- bool FailOpen = false;
- std::function<bool()> Reopen;
- bool OpenEditor(HWND parent) override
- {
-  EditorParent = parent;
-  ++OpenCalls;
-  // Bound a failing regression rather than overflowing the test's stack.
-  if (OpenCalls == 1u) NestedResult = Reopen();
-  return !FailOpen;
- }
- utils::Size2d GetEditorSize() const noexcept override
- {
-  SendMessage(EditorParent, WM_CLOSE, 0, 0);
-  return {0, 0};
- }
-};
-
-TEST(VstStaging, DISABLED_ReentrantEditorCreateForSamePluginIsBounded)
-{
- vst::VstEditorWindowManager manager;
- auto plugin = std::make_shared<ReentrantEditorOpenPlugin>();
- std::weak_ptr<ReentrantEditorOpenPlugin> weakPlugin = plugin;
- plugin->Reopen = [&manager, weakPlugin] { return manager.OpenVstEditorForPlugin(weakPlugin.lock()); };
- ASSERT_TRUE(manager.OpenVstEditorForPlugin(plugin));
- EXPECT_FALSE(plugin->NestedResult);
- EXPECT_EQ(plugin->OpenCalls, 1u);
- manager.PruneClosedVstEditorWindows();
- // The pending reservation is released even though the editor closed in Create.
- EXPECT_TRUE(manager.OpenVstEditorForPlugin(plugin));
- EXPECT_EQ(plugin->OpenCalls, 2u);
-}
-
-TEST(VstStaging, DISABLED_FailedEditorCreateReleasesPendingReservation)
-{
- vst::VstEditorWindowManager manager;
- auto plugin = std::make_shared<ReentrantEditorOpenPlugin>();
- std::weak_ptr<ReentrantEditorOpenPlugin> weakPlugin = plugin;
- plugin->Reopen = [&manager, weakPlugin] { return manager.OpenVstEditorForPlugin(weakPlugin.lock()); };
- plugin->FailOpen = true;
- EXPECT_FALSE(manager.OpenVstEditorForPlugin(plugin));
- EXPECT_FALSE(plugin->NestedResult);
- plugin->FailOpen = false;
- EXPECT_TRUE(manager.OpenVstEditorForPlugin(plugin));
- EXPECT_EQ(plugin->OpenCalls, 2u);
-}
-class ReentrantEditorStateClosePlugin final : public StateGatePlugin
-{
-public:
- HWND EditorParent = nullptr;
- vst::VstEditorWindowManager* Manager = nullptr;
- mutable std::weak_ptr<graphics::VstEditorWindow> Editor;
- mutable bool KeptAliveDuringState = false;
- mutable bool NestedSdkRejected = false;
- mutable bool NestedLiveStateRejected = false;
- unsigned int CloseCalls = 0;
- bool ClosedDuringState = false;
- bool OpenEditor(HWND parent) override { EditorParent = parent; return true; }
- void CloseEditor() override
- {
-  ++CloseCalls;
-  ClosedDuringState = IsStateOperationActive();
- }
- std::vector<std::uint8_t> GetState() const override
- {
-  BlobSdkCallGuard blobCall(*this);
-  if (!blobCall) return {};
-  NestedSdkRejected = !Probe() && !HousekeepingProbe() && GetState().empty();
-  std::vector<std::uint8_t> nestedOutput{9};
-  NestedLiveStateRejected = !TryCaptureLiveState(nestedOutput)
-   && nestedOutput == std::vector<std::uint8_t>{9};
-  auto* editor = reinterpret_cast<graphics::VstEditorWindow*>(
-   GetWindowLongPtr(EditorParent, GWLP_USERDATA));
-  Editor = editor->weak_from_this();
-  SendMessage(EditorParent, WM_CLOSE, 0, 0);
-  Manager->CloseAllVstEditorWindows();
-  // Repeated pump ticks must neither detach nor continually repost WM_CLOSE.
-  for (unsigned int tick = 0u; tick < 3u; ++tick)
-   SendMessage(EditorParent, WM_TIMER, 1, 0);
-  KeptAliveDuringState = !Editor.expired() && IsWindow(EditorParent) && CloseCalls == 0u;
-  return {1, 2, 3};
- }
-};
-
-TEST(VstStaging, DISABLED_EditorCloseAndManagerRemovalWaitUntilExclusiveStateCaptureReturns)
-{
- vst::VstEditorWindowManager manager;
- auto plugin = std::make_shared<ReentrantEditorStateClosePlugin>();
- plugin->Manager = &manager;
- ASSERT_TRUE(manager.OpenVstEditorForPlugin(plugin));
- std::vector<std::uint8_t> state;
- ASSERT_TRUE(plugin->TryCaptureLiveState(state));
- EXPECT_TRUE(plugin->KeptAliveDuringState);
- EXPECT_FALSE(plugin->Editor.expired());
- EXPECT_TRUE(IsWindow(plugin->EditorParent));
- EXPECT_EQ(plugin->CloseCalls, 0u);
- // The existing timer completes close once the exclusive gate is released.
- SendMessage(plugin->EditorParent, WM_TIMER, 1, 0);
- EXPECT_EQ(plugin->CloseCalls, 1u);
- EXPECT_FALSE(plugin->ClosedDuringState);
- EXPECT_TRUE(plugin->Editor.expired());
- EXPECT_FALSE(IsWindow(plugin->EditorParent));
-}
-
-TEST(VstStaging, DISABLED_RawStateCaptureDefersEditorCloseAndRejectsNestedSdkEntry)
-{
- vst::VstEditorWindowManager manager;
- auto plugin = std::make_shared<ReentrantEditorStateClosePlugin>();
- plugin->Manager = &manager;
- ASSERT_TRUE(manager.OpenVstEditorForPlugin(plugin));
- EXPECT_EQ(plugin->GetState(), (std::vector<std::uint8_t>{1, 2, 3}));
- EXPECT_TRUE(plugin->NestedSdkRejected);
- EXPECT_TRUE(plugin->NestedLiveStateRejected);
- EXPECT_TRUE(plugin->KeptAliveDuringState);
- EXPECT_FALSE(plugin->IsStateOperationActive());
- EXPECT_TRUE(IsWindow(plugin->EditorParent));
- EXPECT_EQ(plugin->CloseCalls, 0u);
- SendMessage(plugin->EditorParent, WM_TIMER, 1, 0);
- EXPECT_EQ(plugin->CloseCalls, 1u);
- EXPECT_FALSE(plugin->ClosedDuringState);
- EXPECT_TRUE(plugin->Editor.expired());
- EXPECT_FALSE(IsWindow(plugin->EditorParent));
- EXPECT_TRUE(plugin->Probe());
-}
-
-class RackEditorTestPlugin final : public StateGatePlugin
-{
-public:
- HWND Parent = nullptr;
- std::function<void()> DuringOpen;
- std::function<void()> DuringClose;
- bool FailOpen = false;
- utils::Size2d PreferredSize{400, 250};
- unsigned int Opens = 0u;
- unsigned int Closes = 0u;
- bool OpenEditor(HWND parent) override
- {
-  Parent = parent;
-  ++Opens;
-  if (DuringOpen) DuringOpen();
-  return !FailOpen;
- }
- void CloseEditor() override { ++Closes; if (DuringClose) DuringClose(); }
- utils::Size2d GetEditorSize() const noexcept override { return PreferredSize; }
-};
-
-TEST(VstStaging, DISABLED_RackEditorToggleUsesExactPluginAndTracksTitleBarClose)
-{
- vst::VstEditorWindowManager manager;
- auto first = std::make_shared<RackEditorTestPlugin>();
- auto second = std::make_shared<RackEditorTestPlugin>();
- EXPECT_FALSE(manager.IsVstEditorOpen(first));
- ASSERT_TRUE(manager.ToggleVstEditorForPlugin(first));
- ASSERT_TRUE(manager.ToggleVstEditorForPlugin(second));
- EXPECT_TRUE(manager.IsVstEditorOpen(first));
- ASSERT_TRUE(manager.ToggleVstEditorForPlugin(first));
- EXPECT_FALSE(manager.IsVstEditorOpen(first));
- EXPECT_TRUE(manager.IsVstEditorOpen(second));
- SendMessage(second->Parent, WM_CLOSE, 0, 0);
- EXPECT_FALSE(manager.IsVstEditorOpen(second));
- EXPECT_EQ(first->Closes, 1u);
- EXPECT_EQ(second->Closes, 1u);
- ASSERT_TRUE(manager.ToggleVstEditorForPlugin(second));
- EXPECT_TRUE(manager.IsVstEditorOpen(second));
-}
-
-TEST(VstStaging, DISABLED_RackEditorRejectsReopenDuringManagerAndTitleBarClose)
-{
- vst::VstEditorWindowManager manager;
- auto plugin = std::make_shared<RackEditorTestPlugin>();
- bool reopen = true;
- plugin->DuringClose = [&] {
-  manager.PruneClosedVstEditorWindows();
-  reopen = manager.ToggleVstEditorForPlugin(plugin);
- };
- ASSERT_TRUE(manager.OpenVstEditorForPlugin(plugin));
- ASSERT_TRUE(manager.CloseVstEditorForPlugin(plugin));
- EXPECT_FALSE(reopen);
- EXPECT_EQ(plugin->Opens, 1u);
- ASSERT_TRUE(manager.OpenVstEditorForPlugin(plugin));
- SendMessage(plugin->Parent, WM_CLOSE, 0, 0);
- EXPECT_FALSE(reopen);
- EXPECT_EQ(plugin->Opens, 2u);
-}
-
-TEST(VstStaging, DISABLED_RackEditorCloseCancelsAnOpenPumpingNativeMessages)
-{
- vst::VstEditorWindowManager manager;
- auto plugin = std::make_shared<RackEditorTestPlugin>();
- plugin->DuringOpen = [&] { EXPECT_TRUE(manager.CloseVstEditorForPlugin(plugin)); };
- EXPECT_FALSE(manager.OpenVstEditorForPlugin(plugin));
- EXPECT_FALSE(manager.IsVstEditorOpen(plugin));
- EXPECT_FALSE(IsWindow(plugin->Parent));
- EXPECT_TRUE(plugin->IsLoaded());
- plugin->DuringOpen = {};
- EXPECT_TRUE(manager.OpenVstEditorForPlugin(plugin));
-}
-
-TEST(VstStaging, DISABLED_RackEditorFailureLeavesProcessorLoadedAndCanRetry)
-{
- vst::VstEditorWindowManager manager;
- auto plugin = std::make_shared<RackEditorTestPlugin>();
- plugin->FailOpen = true;
- EXPECT_FALSE(manager.ToggleVstEditorForPlugin(plugin));
- EXPECT_TRUE(plugin->IsLoaded());
- EXPECT_FALSE(manager.IsVstEditorOpen(plugin));
- plugin->FailOpen = false;
- EXPECT_TRUE(manager.ToggleVstEditorForPlugin(plugin));
-}
-
-TEST(VstStaging, DISABLED_RackEditorPreferredSizeFitsMonitorWorkAreaAfterReopen)
-{
- vst::VstEditorWindowManager manager;
- auto plugin = std::make_shared<RackEditorTestPlugin>();
- plugin->PreferredSize = {30000, 30000};
- for (unsigned int attempt = 0u; attempt < 2u; ++attempt)
- {
-  ASSERT_TRUE(manager.ToggleVstEditorForPlugin(plugin));
-  RECT rect{};
-  ASSERT_TRUE(GetWindowRect(plugin->Parent, &rect));
-  MONITORINFO monitor{};
-  monitor.cbSize = sizeof(monitor);
-  ASSERT_TRUE(GetMonitorInfo(MonitorFromWindow(plugin->Parent, MONITOR_DEFAULTTONEAREST), &monitor));
-  EXPECT_GE(rect.left, monitor.rcWork.left);
-  EXPECT_GE(rect.top, monitor.rcWork.top);
-  EXPECT_LE(rect.right, monitor.rcWork.right);
-  EXPECT_LE(rect.bottom, monitor.rcWork.bottom);
-  ASSERT_TRUE(manager.CloseVstEditorForPlugin(plugin));
- }
-}
-
 class RackControlsRemoteStation final : public engine::Station
 {
 public:
@@ -1240,6 +1009,7 @@ protected:
  unsigned int Picks = 0u;
  unsigned int Commits = 0u;
  bool Enabled = true;
+ gui::RuntimeDialogDecision Decision;
 
  void SetUp() override
  {
@@ -1259,7 +1029,9 @@ protected:
   Controls = std::make_unique<gui::VstRackControls>(gui::VstRackControls::Host{
    Mutex, Stations, Editors, [&] { return Enabled; }, [&] { ++Commits; },
    [&] { ++Picks; return Pick ? Pick() : std::wstring{}; },
-   [] { return false; }, [&](const std::wstring& error) { Errors.push_back(error); }});
+   [&](std::string, std::string, std::string) {
+    Decision = std::make_shared<std::optional<bool>>(); return Decision;
+   }, [&](const std::wstring& error) { Errors.push_back(error); }});
  }
  void Update(base::SelectDepth depth = base::DEPTH_LOOPTAKE)
  {
@@ -1274,14 +1046,85 @@ protected:
   Controls.reset();
   if (Station) Station->DetachGuiOwnershipForRetirement();
  }
- static void Click(const std::shared_ptr<gui::GuiRack>& rack)
+ static void Click(const std::shared_ptr<gui::GuiRack>& rack, base::Action::Modifiers modifiers = base::Action::MODIFIER_NONE)
  {
   actions::GuiAction action;
   action.ElementType = actions::GuiAction::ACTIONELEMENT_BUTTON;
   action.Index = gui::GuiRack::VstControlActionIndex;
+  action.InputModifiers = modifiers;
   rack->OnAction(action);
  }
 };
+
+TEST_F(VstRackControlsTest, RemovalWaitsForDecisionAndCancellationPreservesSlot)
+{
+ JobAction installed; installed.JobActionType = JobAction::JOB_LOADVST;
+ installed.VstPath = L"captured.vst3"; installed.VstIdentity = "captured";
+ installed.PreInitPlugin = std::make_shared<StateGatePlugin>();
+ Take->OnAction(installed); Take->CommitChanges();
+ Update(); Click(Take->GetGuiRack(),base::Action::MODIFIER_ALT); Controls->Pump();
+ ASSERT_TRUE(Decision); EXPECT_FALSE(Decision->has_value());
+ Controls->Pump(); EXPECT_EQ(0u,Commits); EXPECT_EQ("captured",Take->GetVstRackSlot().Identity);
+ *Decision = false; Controls->Pump();
+ EXPECT_EQ(0u,Commits); EXPECT_EQ("captured",Take->GetVstRackSlot().Identity);
+ Update(); Click(Take->GetGuiRack(),base::Action::MODIFIER_ALT); Controls->Pump();
+ ASSERT_TRUE(Decision); *Decision = true; Controls->Pump();
+ EXPECT_EQ(1u,Commits);
+}
+
+TEST_F(VstRackControlsTest, DelayedRemovalRejectsReplacementSlotAndRemovedOwner)
+{
+ for (const bool removeOwner : {false,true})
+ {
+  SCOPED_TRACE(removeOwner);
+  JobAction installed; installed.JobActionType = JobAction::JOB_LOADVST;
+  installed.VstPath = L"captured.vst3"; installed.VstIdentity = "captured";
+  installed.PreInitPlugin = std::make_shared<StateGatePlugin>();
+  Take->OnAction(installed); Take->CommitChanges();
+  Update(); Click(Take->GetGuiRack(),base::Action::MODIFIER_ALT); Controls->Pump();
+  ASSERT_TRUE(Decision); EXPECT_FALSE(Decision->has_value());
+  if (removeOwner) Stations.clear();
+  else
+  {
+   JobAction removed; removed.JobActionType = JobAction::JOB_UNLOADVST; removed.VstIdentity = "captured";
+   Take->OnAction(removed); Take->CommitChanges();
+   installed.VstIdentity = "replacement"; installed.PreInitPlugin = std::make_shared<StateGatePlugin>();
+   Take->OnAction(installed); Take->CommitChanges();
+  }
+  *Decision = true; Controls->Pump(); EXPECT_EQ(0u,Commits);
+  if (!removeOwner)
+  {
+   EXPECT_EQ("replacement",Take->GetVstRackSlot().Identity);
+   JobAction removed; removed.JobActionType = JobAction::JOB_UNLOADVST; removed.VstIdentity = "replacement";
+   Take->OnAction(removed); Take->CommitChanges();
+  }
+ }
+}
+
+TEST_F(VstRackControlsTest, DelayedStationRemovalRejectsChangedRackRevisionAndResetCancelsToken)
+{
+ JobAction installed; installed.JobActionType = JobAction::JOB_LOADVST;
+ installed.VstPath = L"captured.vst3"; installed.VstIdentity = "captured";
+ installed.PreInitPlugin = std::make_shared<StateGatePlugin>();
+ Station->OnAction(installed); Station->CommitChanges(); Update();
+ const auto view = Station->GetGuiRack()->VstRack(); ASSERT_TRUE(view);
+ const auto button = view->SlotButton(0u); ASSERT_TRUE(button);
+ actions::TouchAction touch; touch.Index = 0; touch.Touch = actions::TouchAction::TOUCH_MOUSE;
+ touch.Modifiers = base::Action::MODIFIER_ALT; touch.Position = {10,10};
+ touch.State = actions::TouchAction::TOUCH_DOWN; button->OnAction(touch);
+ touch.State = actions::TouchAction::TOUCH_UP; button->OnAction(touch); Controls->Pump();
+ ASSERT_TRUE(Decision); EXPECT_FALSE(Decision->has_value());
+ const auto revision = Station->RackRevision();
+ installed.VstIdentity = "other"; installed.PreInitPlugin = std::make_shared<StateGatePlugin>();
+ Station->OnAction(installed); Station->CommitChanges(); ASSERT_NE(revision,Station->RackRevision());
+ *Decision = true; Controls->Pump(); EXPECT_EQ(0u,Commits);
+ EXPECT_EQ(2u,Station->RackSlotCount());
+ Update();
+ touch.State = actions::TouchAction::TOUCH_DOWN; view->SlotButton(0u)->OnAction(touch);
+ touch.State = actions::TouchAction::TOUCH_UP; view->SlotButton(0u)->OnAction(touch); Controls->Pump();
+ ASSERT_TRUE(Decision); EXPECT_FALSE(Decision->has_value());
+ Controls->Reset(); ASSERT_TRUE(Decision->has_value()); EXPECT_FALSE(Decision->value());
+}
 
 TEST_F(VstRackControlsTest, PickerKeepsCapturedLoopWhenSelectionAndDepthChange)
 {
@@ -1382,6 +1225,59 @@ public:
  bool Load(const std::wstring&, float, unsigned, unsigned, vst::HostedLayoutMode) override { return false; }
 };
 
+TEST_F(VstRackControlsTest, FailedInteractiveAppendsRestoreEmptyRackAndLeaveOnlyDialogOutcomes)
+{
+	const std::wstring first = L"invalid-first.vst3";
+	const std::wstring second = L"invalid-second.vst3";
+	ASSERT_TRUE(Station->LoadManagedVstSlot(first, {}, true));
+	ASSERT_TRUE(Station->LoadManagedVstSlot(second, {}, true));
+	const auto pending = Station->GetVstRackSlots();
+	ASSERT_EQ(2u, pending.size());
+	const auto firstId = pending[0].Identity, secondId = pending[1].Identity;
+	const auto jobs = Station->CommitChanges();
+	unsigned loadCount = 0;
+	for (auto job : jobs) {
+		if (job.JobActionType != JobAction::JOB_LOADVST) continue;
+		job.PreInitPlugin = std::make_shared<RackControlsFailedPlugin>();
+		Station->OnAction(job);
+		++loadCount;
+	}
+	ASSERT_EQ(2u, loadCount);
+	Station->CommitChanges();
+	EXPECT_TRUE(Station->GetVstRackSlots().empty());
+	EXPECT_TRUE(Station->VstEntries().empty());
+	EXPECT_TRUE(Station->RackDiagnostic().empty());
+	EXPECT_EQ(Station->TakeFailedInteractiveVstLoad(firstId), first);
+	EXPECT_EQ(Station->TakeFailedInteractiveVstLoad(secondId), second);
+	EXPECT_FALSE(Station->TakeFailedInteractiveVstLoad(firstId).has_value());
+}
+
+TEST_F(VstRackControlsTest, FailedSlotsShowRetryAtEachHierarchyLevel)
+{
+ const auto fail = [](const auto& owner, const wchar_t* path) {
+  JobAction job;
+  job.JobActionType = JobAction::JOB_LOADVST;
+  job.VstPath = path;
+  job.PreInitPlugin = std::make_shared<RackControlsFailedPlugin>();
+  owner->OnAction(job);
+  owner->CommitChanges();
+ };
+ fail(Station, L"station-missing.vst3");
+ fail(Take, L"take-missing.vst3");
+ fail(First, L"loop-missing.vst3");
+
+ First->Select();
+ Second->DeSelect();
+ Update(base::DEPTH_LOOPTAKE);
+ ASSERT_NE(Station->GetGuiRack()->VstRack()->SlotButton(0u), nullptr);
+ EXPECT_EQ(Station->GetGuiRack()->VstRack()->SlotButton(0u)->Text(), "Retry station-missing");
+ ASSERT_NE(Take->GetGuiRack()->GetVstControl(), nullptr);
+ EXPECT_EQ(Take->GetGuiRack()->VstRack()->SlotButton(0u)->Text(), "Retry take-missing");
+ Update(base::DEPTH_LOOP);
+ ASSERT_NE(Take->GetGuiRack()->GetVstControl(), nullptr);
+ EXPECT_EQ(Take->GetGuiRack()->VstRack()->SlotButton(0u)->Text(), "Retry loop-missing");
+}
+
 TEST_F(VstRackControlsTest, FailedLoadReportsErrorAndRemainsReplaceable)
 {
  Pick = [] { return std::wstring{L"failed-rack.vst3"}; };
@@ -1413,40 +1309,34 @@ TEST_F(VstRackControlsTest, FailedLoadReportsErrorAndRemainsReplaceable)
  EXPECT_TRUE(Take->GetVstRackSlot().Pending);
 }
 
-TEST_F(VstRackControlsTest, DISABLED_StationRemovalClosesEditorsAfterFailedSlotsAcrossHierarchy)
+TEST_F(VstRackControlsTest, FailedStationAppendShowsErrorWithoutRedSlotOrRackInfo)
 {
- const auto install = [](const auto& owner) {
-  JobAction failed;
-  failed.JobActionType = JobAction::JOB_LOADVST;
-  failed.VstPath = L"missing-first.vst3";
-  failed.PreInitPlugin = std::make_shared<RackControlsFailedPlugin>();
-  owner->OnAction(failed);
-  owner->CommitChanges();
-  auto plugin = std::make_shared<RackEditorTestPlugin>();
-  JobAction loaded;
-  loaded.JobActionType = JobAction::JOB_LOADVST;
-  loaded.VstPath = L"live-second.vst3";
-  loaded.PreInitPlugin = plugin;
-  owner->OnAction(loaded);
-  owner->CommitChanges();
-  return plugin;
- };
- const auto stationPlugin = install(Station);
- const auto takePlugin = install(Take);
- const auto loopPlugin = install(First);
- ASSERT_EQ(Station->GetVstPlugin(0u), nullptr);
- ASSERT_EQ(Take->GetVstPlugin(0u), nullptr);
- ASSERT_EQ(First->GetVstPlugin(0u), nullptr);
- ASSERT_TRUE(Editors.OpenVstEditorForPlugin(stationPlugin));
- ASSERT_TRUE(Editors.OpenVstEditorForPlugin(takePlugin));
- ASSERT_TRUE(Editors.OpenVstEditorForPlugin(loopPlugin));
- Editors.CloseVstEditorsForStation(Station);
- EXPECT_FALSE(Editors.IsVstEditorOpen(stationPlugin));
- EXPECT_FALSE(Editors.IsVstEditorOpen(takePlugin));
- EXPECT_FALSE(Editors.IsVstEditorOpen(loopPlugin));
- ASSERT_TRUE(Editors.OpenVstEditorForPlugin(loopPlugin));
- Editors.CloseVstEditorsForTake(Take);
- EXPECT_FALSE(Editors.IsVstEditorOpen(loopPlugin));
+	auto existing = std::make_shared<StateGatePlugin>();
+	JobAction installed; installed.JobActionType = JobAction::JOB_LOADVST;
+	installed.VstPath = L"existing.vst3"; installed.PreInitPlugin = existing;
+	Station->OnAction(installed); Station->CommitChanges();
+	Pick = [] { return std::wstring{L"invalid-station.vst3"}; };
+	Update();
+	auto view = Station->GetGuiRack()->VstRack(); ASSERT_TRUE(view);
+	auto append = view->AppendButton(); ASSERT_TRUE(append);
+	actions::TouchAction down; down.Touch = actions::TouchAction::TOUCH_MOUSE; down.Index = 0;
+	down.State = actions::TouchAction::TOUCH_DOWN; down.Position = {10,10};
+	append->OnAction(down);
+	auto up = down; up.State = actions::TouchAction::TOUCH_UP; append->OnAction(up);
+	Controls->Pump();
+	const auto jobs = Station->CommitChanges();
+	const auto load = std::find_if(jobs.begin(),jobs.end(),[](const auto& job) { return job.JobActionType == JobAction::JOB_LOADVST; });
+	ASSERT_NE(load,jobs.end());
+	auto failed = *load; failed.PreInitPlugin = std::make_shared<RackControlsFailedPlugin>();
+	Station->OnAction(failed); Station->CommitChanges();
+	Controls->Pump(); Update();
+	ASSERT_EQ(1u,Errors.size());
+	EXPECT_NE(std::wstring::npos,Errors[0].find(L"invalid-station.vst3"));
+	EXPECT_EQ(1u,Station->RackSlotCount());
+	EXPECT_EQ(existing,Station->GetVstRackSlots()[0].Plugin);
+	EXPECT_TRUE(view->SlotButton(0u));
+	EXPECT_FALSE(view->SlotButton(1u));
+	EXPECT_FALSE(view->TryGetChild(6u)->IsVisible()); // No stale Rack info footer.
 }
 
 TEST_F(VstRackControlsTest, PresentedRackDoesNotRetainItsOwnerHierarchy)
@@ -1463,4 +1353,258 @@ TEST_F(VstRackControlsTest, PresentedRackDoesNotRetainItsOwnerHierarchy)
  Second.reset();
  EXPECT_TRUE(weakStation.expired());
  EXPECT_TRUE(weakTake.expired());
+}
+
+class RackOrderPlugin final : public StateGatePlugin
+{
+public:
+ vst::RenderRole Render = vst::RenderRole::Effect;
+ float Value = 2.0f;
+ std::atomic<bool> Hold{false}, Entered{false}, Release{false};
+ std::atomic<unsigned int> Calls{0u}, Concurrent{0u}, Overlaps{0u};
+ mutable unsigned int Captures = 0u;
+ unsigned int Restores = 0u;
+ void ProcessBlock(float* channel, int32_t samples) noexcept override { float* channels[]{channel}; ProcessBlockMulti(channels,1,samples); }
+ vst::RenderRole Role() const noexcept override { return Render; }
+ vst::MidiInputCapabilities MidiInput() const noexcept override { return {true,true,true}; }
+ unsigned int HostedChannelCount() const noexcept override { return 2u; }
+ void ProcessBlockMulti(float* const* channels, int32_t count, int32_t samples) noexcept override
+ {
+  if (Concurrent.fetch_add(1u) != 0u) ++Overlaps;
+  ++Calls;
+  if (Hold.exchange(false))
+  {
+   Entered.store(true, std::memory_order_release);
+   // Test-owned bounded rendezvous; production callbacks never wait.
+   for (unsigned int attempt = 0u; attempt < 10000000u && !Release.load(std::memory_order_acquire); ++attempt) std::this_thread::yield();
+  }
+  for (int32_t channel = 0; channel < count; ++channel)
+   for (int32_t sample = 0; sample < samples; ++sample)
+    channels[channel][sample] = Render == vst::RenderRole::Instrument ? Value : channels[channel][sample] * Value;
+  Concurrent.fetch_sub(1u);
+ }
+ std::vector<std::uint8_t> GetState() const override { ++Captures; return {static_cast<std::uint8_t>(Value)}; }
+ void SetState(const std::vector<std::uint8_t>&) override { ++Restores; }
+};
+
+class RackOrderStation final : public engine::Station
+{
+public:
+ explicit RackOrderStation(engine::StationParams params) : Station(params, Station::GetMixerParams(params.Size, MergeMixBehaviourParams{})) {}
+ auto Borrow() const noexcept { return _BorrowAudioState(); }
+ float RenderBlock() noexcept
+ {
+  const auto state = Borrow();
+  if (!state || !state->Midi.MidiChain || state->VstRenderChannels == 0u) return -1.0f;
+  for (auto* channel : state->VstBlockPtrs) std::fill_n(channel, 8u, 0.0f);
+  state->Midi.MidiChain->ProcessRack(state->VstBlockPtrs.data(), state->InstrumentPtrs.data(), state->VstRenderChannels, 8u);
+  return state->VstBlockPtrs[0][0];
+ }
+};
+
+TEST(VstStaging, RackMovePublishesMatchingIdentityDestinationsAndOrderDuringAnActiveBlock)
+{
+ engine::StationParams params; params.Id = "reorder-station"; params.Size = {200u,200u}; params.NumBusChannels = 2u;
+ auto station = std::make_shared<RackOrderStation>(params);
+ const auto a = std::make_shared<RackOrderPlugin>(); a->Render = vst::RenderRole::Instrument; a->Value = 1.0f;
+ const auto effect = std::make_shared<RackOrderPlugin>();
+ const auto b = std::make_shared<RackOrderPlugin>(); b->Render = vst::RenderRole::Instrument; b->Value = 3.0f;
+ const std::array plugins{a,effect,b};
+ const std::array<std::string,3> ids{"instrument-a","effect","instrument-b"};
+ for (auto i = 0u; i < plugins.size(); ++i)
+ {
+  JobAction load; load.JobActionType = JobAction::JOB_LOADVST; load.VstPath = L"test-owned.vst3";
+  load.VstIdentity = ids[i]; load.PreInitPlugin = plugins[i]; station->OnAction(load);
+ }
+ station->CommitChanges();
+ midi::MidiChannelRoute cable; cable.PluginIds = {"instrument-b"};
+ ASSERT_TRUE(station->SetMidiChannelRoute(0u,cable,station->RackRevision()));
+ const auto old = station->Borrow(); ASSERT_TRUE(old); ASSERT_EQ(3u,old->Midi.MidiDestinations.size());
+ const auto destination = old->Midi.MidiDestinations[2];
+ ASSERT_EQ(destination,old->Midi.LiveChannelDestinations[0][0]);
+ a->Hold = true;
+ float oldOutput = 0.0f;
+ std::thread callback([&] { oldOutput = station->RenderBlock(); });
+ for (auto attempt = 0u; attempt < 1000000u && !a->Entered.load(std::memory_order_acquire); ++attempt) std::this_thread::yield();
+ const bool entered = a->Entered.load(std::memory_order_acquire);
+ vst::RackMove move{vst::RackMove::Scope::Station,station->Id(),"effect",1u,2u,station->RackRevision()};
+ const bool moved = station->MoveVstSlot(move);
+ station->CommitChanges();
+ a->Release.store(true,std::memory_order_release); callback.join();
+ ASSERT_TRUE(entered); ASSERT_TRUE(moved);
+ EXPECT_FLOAT_EQ(5.0f,oldOutput); // A -> effect -> B is still the old immutable order.
+ EXPECT_FLOAT_EQ(8.0f,station->RenderBlock()); // A + B -> effect, using the same processors.
+ const auto current = station->Borrow(); ASSERT_TRUE(current);
+ EXPECT_EQ(effect,current->Midi.MidiChain->GetPlugin(2u));
+ EXPECT_EQ(effect,old->Midi.MidiChain->GetPlugin(1u));
+ EXPECT_EQ(destination,current->Midi.MidiDestinations[1]);
+ EXPECT_EQ(destination,current->Midi.LiveChannelDestinations[0][0]);
+ EXPECT_TRUE(current->Midi.RetiredMidiDestinations.empty());
+ EXPECT_EQ(cable,station->MidiChannelRoutes()[0]);
+ for (const auto& plugin : plugins)
+ {
+  EXPECT_EQ(0u,plugin->Overlaps.load()); EXPECT_EQ(2u,plugin->Calls.load());
+  EXPECT_EQ(0u,plugin->Captures); EXPECT_EQ(0u,plugin->Restores);
+ }
+ station->DetachGuiOwnershipForRetirement();
+}
+
+class RackMoveTest : public testing::Test
+{
+protected:
+ static auto Entries(const std::shared_ptr<Loop>& owner) { return owner->ToJamFile("reorder.wav").VstChain; }
+ template<class Owner> static auto Entries(const std::shared_ptr<Owner>& owner) { return owner->VstEntries(); }
+ template<class Owner> void Check(const std::shared_ptr<Owner>& owner, vst::RackMove::Scope scope)
+ {
+  std::array<std::shared_ptr<RackOrderPlugin>,3> plugins;
+  for (auto i = 0u; i < plugins.size(); ++i)
+  {
+   plugins[i] = std::make_shared<RackOrderPlugin>(); plugins[i]->Value = static_cast<float>(i + 1u);
+   JobAction load; load.JobActionType = JobAction::JOB_LOADVST; load.VstPath = L"order-" + std::to_wstring(i) + L".vst3";
+   load.VstIdentity = "order-" + std::to_string(i); load.PreInitPlugin = plugins[i]; owner->OnAction(load);
+  }
+  owner->CommitChanges();
+  vst::RackMove move{scope,owner->Id(),"order-0",0u,2u,owner->RackRevision()};
+  auto invalid = move; invalid.OwnerId = "other-owner"; EXPECT_FALSE(owner->MoveVstSlot(invalid));
+  invalid = move; invalid.Source = 1u; EXPECT_FALSE(owner->MoveVstSlot(invalid));
+  invalid = move; invalid.Target = 3u; EXPECT_FALSE(owner->MoveVstSlot(invalid));
+  invalid = move; invalid.Target = 0u; EXPECT_FALSE(owner->MoveVstSlot(invalid));
+  invalid = move; invalid.OwnerScope = scope == vst::RackMove::Scope::Station ? vst::RackMove::Scope::Loop : vst::RackMove::Scope::Station; EXPECT_FALSE(owner->MoveVstSlot(invalid));
+  ASSERT_TRUE(owner->MoveVstSlot(move));
+  EXPECT_EQ(plugins[0],owner->GetVstPlugin(0u)); // No in-place topology mutation before commit.
+  EXPECT_FALSE(owner->MoveVstSlot(move)); // Captured revision cannot apply twice.
+  owner->CommitChanges();
+  EXPECT_EQ(plugins[1],owner->GetVstPlugin(0u)); EXPECT_EQ(plugins[2],owner->GetVstPlugin(1u)); EXPECT_EQ(plugins[0],owner->GetVstPlugin(2u));
+  for (const auto& plugin : plugins) { EXPECT_EQ(0u,plugin->Captures); EXPECT_EQ(0u,plugin->Restores); }
+  auto entries = Entries(owner); ASSERT_EQ(3u,entries.size());
+  EXPECT_EQ("order-1",entries[0].Id); EXPECT_EQ("order-1.vst3",entries[0].Path); EXPECT_EQ((std::vector<std::uint8_t>{2u}),entries[0].DecodeState());
+  EXPECT_EQ("order-0",entries[2].Id);
+  // Exercise the supported JAM encoding at every owner scope, including blobs.
+  io::JamFile jam; jam.Name = "rack-order";
+  io::JamFile::Station savedStation{}; savedStation.Id = "saved-station"; savedStation.Name = "saved station";
+  io::JamFile::LoopTake savedTake{}; savedTake.Id = "saved-take"; savedTake.Name = "saved take";
+  io::JamFile::Loop savedLoop{}; savedLoop.Id = "saved-loop"; savedLoop.Name = "saved.wav"; savedLoop.Length = 8u; savedLoop.Speed = 1.0;
+  if (scope == vst::RackMove::Scope::Station) savedStation.VstChain = entries;
+  else if (scope == vst::RackMove::Scope::Take) savedTake.VstChain = entries;
+  else savedLoop.VstChain = entries;
+  savedTake.Loops.push_back(savedLoop); savedStation.LoopTakes.push_back(savedTake); jam.Stations.push_back(savedStation);
+  std::stringstream encoded;
+  ASSERT_TRUE(io::JamFile::ToStream(jam,encoded));
+  const auto decoded = io::JamFile::FromStream(std::move(encoded)); ASSERT_TRUE(decoded);
+  ASSERT_EQ(1u,decoded->Stations.size()); ASSERT_EQ(1u,decoded->Stations[0].LoopTakes.size());
+  ASSERT_EQ(1u,decoded->Stations[0].LoopTakes[0].Loops.size());
+  const auto& restored = scope == vst::RackMove::Scope::Station ? decoded->Stations[0].VstChain
+   : scope == vst::RackMove::Scope::Take ? decoded->Stations[0].LoopTakes[0].VstChain
+   : decoded->Stations[0].LoopTakes[0].Loops[0].VstChain;
+  ASSERT_EQ(entries.size(),restored.size());
+  for (auto i = 0u; i < entries.size(); ++i)
+  { EXPECT_EQ(entries[i].Id,restored[i].Id); EXPECT_EQ(entries[i].Path,restored[i].Path); EXPECT_EQ(entries[i].State,restored[i].State); }
+  move.Source = 2u; move.Target = 0u; move.Revision = owner->RackRevision();
+  ASSERT_TRUE(owner->MoveVstSlot(move)); owner->CommitChanges();
+  for (auto i = 0u; i < plugins.size(); ++i) EXPECT_EQ(plugins[i],owner->GetVstPlugin(i));
+  owner->DetachGuiOwnershipForRetirement();
+ }
+};
+
+TEST_F(RackMoveTest, StationTakeAndLoopKeepInstancesStateAndSavedOrderInBothDirections)
+{
+ engine::StationParams params; params.Id = "move-owner"; params.Size = {200u,200u};
+ auto station = std::make_shared<engine::Station>(params,engine::Station::GetMixerParams(params.Size,MergeMixBehaviourParams{}));
+ Check(station,vst::RackMove::Scope::Station);
+ Check(MakeTake(),vst::RackMove::Scope::Take);
+ Check(MakeLoop(),vst::RackMove::Scope::Loop);
+}
+
+TEST(VstStaging, SlotButtonDragPreservesClicksAndCancelsOutsideEscapeOrStaleOwner)
+{
+ gui::GuiRackParams params; params.Size = {220u,300u}; params.EnableVstControl = true; params.EnableVstRack = true;
+ auto rack = std::make_shared<gui::GuiRack>(params); rack->SetPosition({300,700}); rack->Init();
+ auto view = rack->VstRack(); view->SetVisible(true); view->SetViewport({1200u,1000u});
+ gui::GuiVstRack::Model model; model.Editable = true; model.Revision = 9u; model.OwnerId = "owner"; model.TotalSlots = 3u;
+ for (auto i = 0u; i < 3u; ++i) { gui::GuiVstRack::Slot slot; slot.Value.Identity = "slot-" + std::to_string(i); model.Slots.push_back(slot); }
+ std::vector<gui::GuiVstRack::Command> commands;
+ const auto submit = [&](auto command) { commands.push_back(std::move(command)); };
+ view->Update(model,submit); view->Layout(100u,0,{0,0},{20u,20u});
+ const auto point = [&](std::size_t i) { return view->SlotButton(i)->GlobalPosition() - view->GlobalPosition() + utils::Position2d{40,18}; };
+ actions::TouchAction touch; touch.Touch = actions::TouchAction::TOUCH_MOUSE; touch.Index = 0;
+ const auto begin = [&] { touch.State = actions::TouchAction::TOUCH_DOWN; touch.Position = point(0u); EXPECT_TRUE(view->OnAction(touch).IsEaten); EXPECT_TRUE(view->HasSlotMove()); EXPECT_FALSE(view->HasCableDrag()); };
+ EXPECT_EQ(view, view->FindTopmostDescendant(point(0u)));
+ EXPECT_EQ(static_cast<unsigned int>(view->SlotScroll()->ContentRect().Right - view->SlotScroll()->ContentRect().Left), view->SlotButton(0u)->GetSize().Width);
+ begin(); touch.State = actions::TouchAction::TOUCH_UP; view->OnAction(touch);
+ ASSERT_EQ(1u, commands.size()); EXPECT_EQ(gui::GuiVstRack::Command::Kind::Slot, commands.back().Operation);
+ commands.clear();
+ begin(); touch.Position = point(2u);
+ actions::TouchMoveAction motion; motion.Touch = touch.Touch; motion.Index = touch.Index; motion.MouseButtonsDown = 1u; motion.Position = touch.Position;
+ view->OnAction(motion); view->Update(model, submit);
+ EXPECT_FALSE(view->TryGetChild(6u)->IsVisible()); // Drag hints must not create a Rack info footer.
+ touch.State = actions::TouchAction::TOUCH_UP; view->OnAction(touch);
+ ASSERT_EQ(1u,commands.size()); EXPECT_EQ(0u,commands[0].Move.Source); EXPECT_EQ(2u,commands[0].Move.Target); EXPECT_EQ("slot-0",commands[0].Move.PluginId); EXPECT_EQ("owner",commands[0].Move.OwnerId);
+ begin(); touch.State = actions::TouchAction::TOUCH_UP; touch.Position = {-1000,-1000}; view->OnAction(touch); EXPECT_EQ(1u,commands.size());
+ begin(); actions::KeyAction escape; escape.KeyChar = 27u; escape.KeyActionType = actions::KeyAction::KEY_DOWN; view->OnAction(escape);
+ touch.State = actions::TouchAction::TOUCH_UP; touch.Position = point(2u); view->OnAction(touch); EXPECT_EQ(1u,commands.size());
+ begin(); model.OwnerId = "replacement"; view->Update(model,submit); EXPECT_FALSE(view->HasSlotMove());
+ touch.State = actions::TouchAction::TOUCH_UP; touch.Position = point(2u); view->OnAction(touch); EXPECT_EQ(1u,commands.size());
+ view->DetachGuiOwnershipForRetirement();
+}
+
+class RackRenderSink final : public base::MultiAudioSink
+{
+public:
+ float First = 0.0f;
+ unsigned int Writes = 0u;
+ void OnBlockWriteChannel(unsigned int, const base::AudioWriteRequest& request, int) override
+ { if (request.numSamps) { First += request.samples[0]; ++Writes; } }
+};
+
+class RackRenderLoop final : public Loop
+{
+public:
+ static audio::AudioMixerParams Mixer(const LoopParams& params)
+ {
+  audio::WireMixBehaviourParams wire; wire.Channels = {0u}; return GetMixerParams(params.Size,wire);
+ }
+ explicit RackRenderLoop(LoopParams params) : Loop(params,Mixer(params))
+ {
+  _bufferBank.Resize(constants::MaxLoopFadeSamps + 64u);
+  for (auto i = 0u; i < _bufferBank.Length(); ++i) _bufferBank[i] = 0.0f;
+  _loopLength = 64u; _playIndex = constants::MaxLoopFadeSamps; _playState = STATE_PLAYING;
+ }
+};
+
+class RackScopeRenderTest : public testing::Test
+{
+protected:
+ template<class Owner, class Render> void Check(const std::shared_ptr<Owner>& owner, vst::RackMove::Scope scope, Render render)
+ {
+  auto a = std::make_shared<RackOrderPlugin>(); a->Render = vst::RenderRole::Instrument; a->Value = 1.0f;
+  auto effect = std::make_shared<RackOrderPlugin>(); effect->Value = 2.0f;
+  auto b = std::make_shared<RackOrderPlugin>(); b->Render = vst::RenderRole::Instrument; b->Value = 3.0f;
+  const std::array plugins{a,effect,b};
+  for (auto i = 0u; i < plugins.size(); ++i)
+  {
+   JobAction load; load.JobActionType = JobAction::JOB_LOADVST; load.VstPath = L"scope-test.vst3";
+   load.VstIdentity = "scope-" + std::to_string(i); load.PreInitPlugin = plugins[i]; owner->OnAction(load);
+  }
+  owner->CommitChanges();
+  EXPECT_FLOAT_EQ(5.0f,render()); // Instrument A -> effect -> additive B.
+  vst::RackMove move{scope,owner->Id(),"scope-1",1u,2u,owner->RackRevision()};
+  ASSERT_TRUE(owner->MoveVstSlot(move)); owner->CommitChanges();
+  EXPECT_FLOAT_EQ(8.0f,render()); // Both instruments -> effect.
+  move.Source = 2u; move.Target = 1u; move.Revision = owner->RackRevision();
+  ASSERT_TRUE(owner->MoveVstSlot(move)); owner->CommitChanges();
+  EXPECT_FLOAT_EQ(5.0f,render());
+  for (const auto& plugin : plugins) EXPECT_EQ(3u,plugin->Calls.load());
+  owner->DetachGuiOwnershipForRetirement();
+ }
+};
+
+TEST_F(RackScopeRenderTest, TakeAndLoopPlaybackUseAdditiveInstrumentsAndOrderedEffects)
+{
+ auto sink = std::make_shared<RackRenderSink>();
+ LoopParams params; params.Id = "render-loop"; params.Size = {100u,100u}; params.FadeSamps = 0u;
+ auto loop = std::make_shared<RackRenderLoop>(params);
+ Check(loop,vst::RackMove::Scope::Loop,[&] { sink->First = 0.0f; loop->WriteBlock(sink,nullptr,0,8u); return sink->First; });
+ auto take = MakeTake("render-take"); take->SetNumBusChannels(1u); take->AddLoop(MakeLoop()); take->CommitChanges();
+ Check(take,vst::RackMove::Scope::Take,[&] { sink->First = 0.0f; take->Zero(8u,base::Audible::AUDIOSOURCE_LOOPS); take->WriteBlock(sink,nullptr,0,8u); return sink->First; });
+ EXPECT_EQ(6u,sink->Writes);
 }

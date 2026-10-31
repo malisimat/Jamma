@@ -274,3 +274,116 @@ void gui::SceneSelector::ClearPointerState()
  _currentHover.clear();
  _paintedPath.clear();
 }
+
+SceneSelector::SelectionUpdate SceneSelector::SelectionChanges(actions::ActionResultType result) const
+{
+	SelectionUpdate update;
+	update.HoverPath = _currentHover;
+	const bool paintingSelection = _selectMode == SELECT_SELECTADD || _selectMode == SELECT_SELECTREMOVE || IsPaintingMute();
+	update.HighlightMidiSiblings = !paintingSelection && _selectDepth == base::DEPTH_LOOP;
+	update.ClickPressed = IsClickPressed() && _currentHover == _paintedPath;
+	update.MutePressed = IsMutePressed();
+	const auto change = [&update](HierarchyEdit edit, const std::vector<unsigned char>& path) {
+		update.Changes[update.ChangeCount++] = { edit, path };
+	};
+	switch (result)
+	{
+	case actions::ACTIONRESULT_DEFAULT:
+		update.ClearPicking = true;
+		switch (_selectMode)
+		{
+		case SELECT_NONE:
+		case SELECT_NONEADD:
+		case SELECT_SELECT: update.HighlightHover = true; break;
+		case SELECT_SELECTADD: change(HierarchyEdit::Select, _currentHover); break;
+		case SELECT_SELECTREMOVE: change(HierarchyEdit::Deselect, _currentHover); break;
+		case SELECT_MUTE:
+		case SELECT_UNMUTE:
+			if (IsPaintingMute()) change(_selectMode == SELECT_MUTE ? HierarchyEdit::Mute : HierarchyEdit::Unmute, _currentHover);
+			else update.HighlightHover = true;
+			break;
+		}
+		break;
+	case actions::ACTIONRESULT_SELECT:
+		update.ClearSelection = true;
+		update.ClearPicking = update.HighlightHover = true;
+		change(HierarchyEdit::Select, _paintedPath);
+		break;
+	case actions::ACTIONRESULT_MUTE:
+	case actions::ACTIONRESULT_UNMUTE:
+		update.ClearPicking = update.HighlightHover = true;
+		change(result == actions::ACTIONRESULT_MUTE ? HierarchyEdit::Mute : HierarchyEdit::Unmute, _paintedPath);
+		break;
+	case actions::ACTIONRESULT_INITSELECT:
+		update.ClearPicking = true;
+		if (_selectMode == SELECT_SELECTADD || _selectMode == SELECT_SELECTREMOVE)
+		{
+			const auto edit = _selectMode == SELECT_SELECTADD ? HierarchyEdit::Select : HierarchyEdit::Deselect;
+			change(edit, _paintedPath);
+			change(edit, _currentHover);
+		}
+		else if (IsPaintingMute())
+		{
+			const auto edit = _selectMode == SELECT_MUTE ? HierarchyEdit::Mute : HierarchyEdit::Unmute;
+			change(edit, _paintedPath);
+			change(edit, _currentHover);
+		}
+		update.HighlightHover = !paintingSelection;
+		break;
+	case actions::ACTIONRESULT_CLEARSELECT:
+		update.ClearSelection = update.ClearPicking = true;
+		break;
+	default: break;
+	}
+	return update;
+}
+
+bool SceneSelector::BeginBackgroundClick(const actions::TouchAction& action)
+{
+	if (action.State != actions::TouchAction::TOUCH_DOWN || action.Touch != actions::TouchAction::TOUCH_MOUSE) return false;
+	const bool unmute = action.Index == 1 && action.Modifiers == Action::MODIFIER_NONE;
+	const bool mute = action.Index == 1 && action.Modifiers == Action::MODIFIER_ALT;
+	const bool select = action.Index == 0 && action.Modifiers == Action::MODIFIER_ALT;
+	const auto buttonMask = (unmute || mute || select) ? (1u << action.Index) : 0u;
+	if (!(unmute || mute || select) || (action.MouseButtonsDown != 0u && action.MouseButtonsDown != buttonMask)) return false;
+	_backgroundClick = BackgroundClick{action.Index,
+		select ? BackgroundCommand::SelectAll : mute ? BackgroundCommand::MuteAll : BackgroundCommand::UnmuteAll, action.Position};
+	return true;
+}
+
+std::optional<SceneSelector::BackgroundCommand> SceneSelector::BackgroundPreview() const
+{
+	if (_backgroundClick && !_backgroundClick->Cancelled) return _backgroundClick->Command;
+	return std::nullopt;
+}
+
+std::optional<SceneSelector::BackgroundCommand> SceneSelector::ReleaseBackgroundClick(const actions::TouchAction& action)
+{
+	if (!_backgroundClick) return std::nullopt;
+	if (action.Touch != actions::TouchAction::TOUCH_MOUSE) _backgroundClick->Cancelled = true;
+	else if (action.State == actions::TouchAction::TOUCH_UP && action.Index == _backgroundClick->Button)
+	{
+		const auto click = *_backgroundClick;
+		_backgroundClick.reset();
+		if (!click.Cancelled && !click.Moved && action.Position == click.PressPosition) return click.Command;
+	}
+	else if (action.State == actions::TouchAction::TOUCH_DOWN && action.Index != 4) _backgroundClick->Cancelled = true;
+	return std::nullopt;
+}
+
+void SceneSelector::MoveBackgroundClick(const actions::TouchMoveAction& action, bool allowed)
+{
+	if (!_backgroundClick) return;
+	const auto buttonMask = 1u << _backgroundClick->Button;
+	if (!allowed || action.Touch != actions::TouchAction::TOUCH_MOUSE || !(action.MouseButtonsDown & buttonMask))
+		_backgroundClick.reset();
+	else if (action.MouseButtonsDown != buttonMask) _backgroundClick->Cancelled = true;
+	else if (action.Position != _backgroundClick->PressPosition || (action.IsRelative && action.RelativeDelta != utils::Position2d{}))
+		_backgroundClick->Moved = true;
+}
+
+std::vector<unsigned char> SceneSelector::PathAtDepth(std::vector<unsigned char> path, unsigned int depth)
+{
+	const auto length = std::min<std::size_t>(depth, path.size());
+	return {path.begin(), path.begin() + length};
+}

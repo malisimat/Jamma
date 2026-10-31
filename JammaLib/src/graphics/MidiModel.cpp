@@ -180,6 +180,7 @@ void MidiModel::Draw3d(DrawContext& ctx, unsigned int numInstances, base::DrawPa
 	glCtx.SetUniform("EditorHoverPitch", _editorHoverPitch);
 	glCtx.SetUniform("EditorTargetStart", _editorTargetStart);
 	glCtx.SetUniform("EditorTargetEnd", _editorTargetEnd);
+	glCtx.SetUniform("EditorEditHandle", static_cast<int>(_editorHandle));
 	glCtx.SetUniform("EditorTargetInstance", _editorTargetInstance);
 	glCtx.SetUniform("EditorHeldInstance", _editorHeldInstance);
 	glCtx.SetUniform("EditorPreviewVelocity", _editorPreviewVelocity < 0
@@ -273,6 +274,7 @@ void MidiModel::SetEditorPitchRange(int bottomPitch, int visibleRows) noexcept
 
 void MidiModel::SetEditorHover(float u, int pitch) noexcept
 {
+	_editorHandle = midi::LoopGridGeometry::EditHandle::None;
 	_editorHoverU = u >= 0.0f && u < 1.0f ? u : -1.0f;
 	_editorHoverPitch = pitch >= 0 && pitch < 128 ? pitch : -1;
 	_editorTargetStart = _editorTargetEnd = -1.0f;
@@ -1009,4 +1011,53 @@ float MidiModel::SceneInnerRadius() const noexcept
 	if (_midiParams.DrawSelectionRing)
 		inner = (std::min)(inner, radius * (_midiParams.DiscRadiusFactor - _midiParams.DiscRadialThicknessFactor));
 	return (std::max)(0.0f, inner * static_cast<float>(ModelScale()));
+}
+
+// Intersect the flat editor's chamfered note prism, including both end caps.
+// These half planes match BuildBaseVerts and midi_note.vert.
+std::optional<MidiModel::EditorHit> MidiModel::PickEditorNote(glm::vec3 origin, glm::vec3 direction) const
+{
+	if (!_editorModelLength || _editorMorph < 1.0f) return std::nullopt;
+	const auto radius = static_cast<float>(std::clamp(
+		70.0 * std::log(static_cast<double>(_editorModelLength)) - 600.0, 50.0, 400.0));
+	const auto rows = static_cast<float>(_editorVisibleRows);
+	const auto noteHeight = radius * _midiParams.NoteHeight;
+	if (!(noteHeight > 0.0f)) return std::nullopt;
+	std::optional<EditorHit> result;
+	double nearest = 1.0;
+	for (const auto& note : _editorNoteSpans)
+	{
+		if (note.Note < _editorBottomPitch || note.Note >= _editorBottomPitch + _editorVisibleRows) continue;
+		const auto start = static_cast<double>(note.StartSample) / _editorModelLength;
+		const auto end = std::min(1.0, start + static_cast<double>(note.DurationSamples) / _editorModelLength);
+		const auto centerY = 3.0f + std::clamp(note.Velocity / 127.0f, 0.0f, 1.0f) * 4.0f;
+		const auto centerZ = -((note.Note - _editorBottomPitch + 0.5f) / rows * 2.0f - 1.0f) * radius * 0.78f;
+		const glm::dvec3 o(origin.x / (2.0 * radius) + 0.5,
+			(origin.y - centerY) / noteHeight, (origin.z - centerZ) / (radius * 1.56f / rows * 0.40f));
+		const glm::dvec3 d(direction.x / (2.0 * radius), direction.y / noteHeight,
+			direction.z / (radius * 1.56f / rows * 0.40f));
+		double first = 0.0, last = nearest;
+		const auto clip = [&](glm::dvec3 normal, double limit) {
+			const auto distance = limit - glm::dot(normal, o);
+			const auto rate = glm::dot(normal, d);
+			if (std::abs(rate) < 1e-12) return distance >= 0.0;
+			const auto t = distance / rate;
+			if (rate < 0.0) first = std::max(first, t);
+			else last = std::min(last, t);
+			return first <= last;
+		};
+		bool hit = clip({-1,0,0}, -start) && clip({1,0,0}, end)
+			&& clip({0,1,0}, 0.5) && clip({0,-1,0}, 0.5)
+			&& clip({0,0,1}, 1.0) && clip({0,0,-1}, 1.0);
+		for (const double y : {-1.0, 1.0})
+			for (const double z : {-1.0, 1.0})
+				hit = hit && clip({0, y * 0.14, z * 0.10}, 0.156);
+		if (!hit) continue;
+		nearest = first;
+		const auto u = std::clamp(o.x + d.x * first, start, end);
+		const auto sample = std::clamp(static_cast<std::uint32_t>(u * _editorModelLength),
+			note.StartSample, std::min(_editorModelLength, note.StartSample + note.DurationSamples) - 1u);
+		result = EditorHit{sample, note.Note};
+	}
+	return result;
 }

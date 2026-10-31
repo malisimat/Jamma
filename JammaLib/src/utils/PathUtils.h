@@ -21,9 +21,11 @@ namespace utils
 
 	std::wstring GetPath(PathType pathType);
 	std::wstring GetParentDirectory(std::wstring dir);
+	// Relative/invalid/unavailable directories leave the dialog's normal location intact.
+	bool IsUsableDialogDirectory(const std::wstring& directory);
 	// Shows a native folder-picker dialog.
 	// Returns the chosen path, or an empty wstring if the user cancelled.
-	std::wstring PickDirectory(const std::wstring& title = L"Choose export directory");
+	std::wstring PickDirectory(const std::wstring& title = L"Choose export directory", const std::wstring& initialDirectory = L"");
 	// Shows a native file-picker dialog for VST plugins.
 	// Opening a .vst3 folder selects its outer bundle; files retain normal behavior.
 	// Returns the chosen plugin path, or an empty wstring if the user cancelled.

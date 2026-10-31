@@ -29,95 +29,12 @@ void GuiToggle::SetSize(Size2d size)
 	_toggledOutTexture.SetSize(_sizeParams.Size);
 }
 
-void GuiToggle::Draw(DrawContext& ctx)
+Image& GuiToggle::_CurrentTexture()
 {
-	if (!_isVisible)
-		return;
-
-	auto& glCtx = dynamic_cast<GlDrawContext&>(ctx);
-	_ApplyTextureTint(glCtx);
-
-	auto pos = Position();
-	glCtx.PushMvp(glm::translate(glm::mat4(1.0), glm::vec3(pos.X, pos.Y, 0.f)));
-
-	bool hasDrawn = false;
-
-	switch (_state)
-	{
-	case STATE_OVER:
-		switch (_toggleState)
-		{
-		case GuiToggleParams::TOGGLE_ON:
-			if (_toggledOverTexture.IsDrawInitialised())
-			{
-				_toggledOverTexture.Draw(ctx);
-				hasDrawn = true;
-			}
-			break;
-		default:
-			if (_overTexture.IsDrawInitialised())
-			{
-				_overTexture.Draw(ctx);
-				hasDrawn = true;
-			}
-			break;
-		}
-
-		break;
-	case STATE_DOWN:
-		switch (_toggleState)
-		{
-		case GuiToggleParams::TOGGLE_ON:
-			if (_toggledDownTexture.IsDrawInitialised())
-			{
-				_toggledDownTexture.Draw(ctx);
-				hasDrawn = true;
-			}
-			break;
-		default:
-			if (_downTexture.IsDrawInitialised())
-			{
-				_downTexture.Draw(ctx);
-				hasDrawn = true;
-			}
-			break;
-		}
-
-		break;
-	case STATE_OUT:
-		switch (_toggleState)
-		{
-		case GuiToggleParams::TOGGLE_ON:
-			if (_toggledOutTexture.IsDrawInitialised())
-			{
-				_toggledOutTexture.Draw(ctx);
-				hasDrawn = true;
-			}
-			break;
-		default:
-			break;
-		}
-
-		break;
-	}
-
-	if (!hasDrawn)
-	{
-		switch (_toggleState)
-		{
-		case GuiToggleParams::TOGGLE_ON:
-			_toggledTexture.Draw(ctx);
-			break;
-		default:
-			_texture.Draw(ctx);
-			break;
-		}
-	}
-
-	for (auto& child : _children)
-		child->Draw(ctx);
-
-	glCtx.PopMvp();
+	if (_toggleState == GuiToggleParams::TOGGLE_ON)
+		return _ResolveStateTexture(_state, _toggledTexture, _toggledOverTexture, _toggledDownTexture, _toggledOutTexture);
+	// An untoggled drag outside retains the normal appearance.
+	return _state == STATE_OUT ? _texture : GuiElement::_CurrentTexture();
 }
 
 ActionResult GuiToggle::OnAction(TouchAction action)

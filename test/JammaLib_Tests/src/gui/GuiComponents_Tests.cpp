@@ -1,9 +1,16 @@
+#include "../gui/WorkspaceTestAccess.h"
 #include "gtest/gtest.h"
 #include "gui/GuiButton.h"
 #include "gui/GuiToggle.h"
 #include "gui/GuiFocusManager.h"
+#include "gui/GuiStationLabel.h"
+#include "gui/GuiTriggerRename.h"
+#include "gui/TriggerLearnController.h"
 #include "gui/GuiPopup.h"
 #include "gui/GuiPopupManager.h"
+#include "gui/RuntimeDialogs.h"
+#include <thread>
+#include <stdexcept>
 #include "gui/GuiTextBox.h"
 #include "gui/GuiNumericInput.h"
 #include "gui/GuiDropDown.h"
@@ -203,6 +210,33 @@ TEST(GuiPopupManager, OutsidePressDismissesAndConsumes) {
 
 	EXPECT_TRUE(res.IsEaten);
 	EXPECT_FALSE(host.IsOpen());
+	EXPECT_TRUE(host.ConsumeDismissedRelease(MakeTouch(TouchAction::TOUCH_UP, { 0, 0 })));
+
+	bool canDismiss = false;
+	int closed = 0;
+	const auto open = [&]() { host.Open(popup, nullptr, [&]() { ++closed; }, [&]() { return canDismiss; }); };
+	open();
+	EXPECT_TRUE(host.OnAction(MakeTouch(TouchAction::TOUCH_DOWN, { 0, 0 })).IsEaten);
+	EXPECT_TRUE(host.IsOpen());
+	EXPECT_TRUE(host.ConsumeDismissedRelease(MakeTouch(TouchAction::TOUCH_UP, { 0, 0 })));
+	EXPECT_TRUE(host.OnAction(MakeKey(27, KeyAction::KEY_UP)).IsEaten);
+	EXPECT_TRUE(host.IsOpen());
+	EXPECT_EQ(0, closed);
+	host.Close(popup); // Owner teardown remains authoritative during pending work.
+	host.Close(popup);
+	EXPECT_FALSE(host.IsOpen());
+	EXPECT_EQ(1, closed);
+
+	canDismiss = true;
+	open();
+	EXPECT_TRUE(host.OnAction(MakeTouch(TouchAction::TOUCH_DOWN, { 0, 0 })).IsEaten);
+	EXPECT_FALSE(host.IsOpen());
+	EXPECT_TRUE(host.ConsumeDismissedRelease(MakeTouch(TouchAction::TOUCH_UP, { 0, 0 })));
+	EXPECT_EQ(2, closed);
+	open();
+	EXPECT_TRUE(host.OnAction(MakeKey(27, KeyAction::KEY_UP)).IsEaten);
+	EXPECT_FALSE(host.IsOpen());
+	EXPECT_EQ(3, closed);
 }
 
 TEST(GuiPopupManager, InsidePressRoutesToPopup) {
@@ -244,33 +278,33 @@ TEST(GuiPopupManager, OpenClearsOwnerPointerPresentation) {
 	EXPECT_EQ(base::GuiElement::STATE_NORMAL, sibling->GetState());
 }
 
-TEST(GuiPopup, ConfirmationButtonsArePackedAtTheLowerRightAndDispatch) {
+TEST(GuiPopup, ConfirmationButtonsDispatchConfiguredActions) {
 	auto popup = std::make_shared<GuiPopup>();
 	GuiPopupButtonConfig config;
 	config.Actions = { { "Cancel", 2u }, { "Delete", 1u } };
 	popup->ConfigureButtons(config);
 
-	auto cancelButton = std::dynamic_pointer_cast<GuiButton>(popup->TryGetChild(4u));
-	auto deleteButton = std::dynamic_pointer_cast<GuiButton>(popup->TryGetChild(5u));
+	auto cancelButton = std::dynamic_pointer_cast<GuiButton>(popup->TryGetChild(6u));
+	auto deleteButton = std::dynamic_pointer_cast<GuiButton>(popup->TryGetChild(7u));
 	ASSERT_NE(nullptr, cancelButton);
 	ASSERT_NE(nullptr, deleteButton);
-	EXPECT_EQ(nullptr, popup->TryGetChild(6u));
-	EXPECT_EQ(144, cancelButton->Position().X);
-	EXPECT_EQ(24, cancelButton->Position().Y);
-	EXPECT_EQ(284, deleteButton->Position().X);
-	EXPECT_EQ(24, deleteButton->Position().Y);
+	EXPECT_EQ(nullptr, popup->TryGetChild(8u));
+	const auto center = [](const std::shared_ptr<GuiButton>& button) {
+		const auto size = button->GetSize();
+		return button->Position() + utils::Position2d{ static_cast<int>(size.Width / 2u), static_cast<int>(size.Height / 2u) };
+	};
 
 	auto receiver = std::make_shared<GuiRecordingActionReceiver>();
 	popup->SetButtonReceiver(receiver);
-	popup->OnAction(MakeTouch(TouchAction::TOUCH_DOWN, { 209, 25 }));
-	popup->OnAction(MakeTouch(TouchAction::TOUCH_UP, { 209, 25 }));
+	popup->OnAction(MakeTouch(TouchAction::TOUCH_DOWN, center(cancelButton)));
+	popup->OnAction(MakeTouch(TouchAction::TOUCH_UP, center(cancelButton)));
 	ASSERT_EQ(1, receiver->ActionCount);
 	ASSERT_TRUE(receiver->LastAction.has_value());
 	EXPECT_EQ(GuiAction::ACTIONELEMENT_BUTTON, receiver->LastAction->ElementType);
 	EXPECT_EQ(2u, receiver->LastAction->Index);
 
-	popup->OnAction(MakeTouch(TouchAction::TOUCH_DOWN, { 317, 25 }));
-	popup->OnAction(MakeTouch(TouchAction::TOUCH_UP, { 317, 25 }));
+	popup->OnAction(MakeTouch(TouchAction::TOUCH_DOWN, center(deleteButton)));
+	popup->OnAction(MakeTouch(TouchAction::TOUCH_UP, center(deleteButton)));
 	ASSERT_EQ(2, receiver->ActionCount);
 	ASSERT_TRUE(receiver->LastAction.has_value());
 	EXPECT_EQ(1u, receiver->LastAction->Index);
@@ -282,7 +316,7 @@ TEST(GuiPopup, RequiredPressRejectsAnotherPointerRelease) {
 	popup->ConfigureButtons({ { { "Follow server", 1u } }, true });
 	auto receiver = std::make_shared<GuiRecordingActionReceiver>();
 	popup->SetButtonReceiver(receiver);
-	const auto button = popup->TryGetChild(4u);
+	const auto button = popup->TryGetChild(6u);
 	ASSERT_TRUE(button);
 	const auto point = button->Position() + utils::Position2d{ 10, 10 };
 	auto down = MakeTouch(TouchAction::TOUCH_DOWN, point);
@@ -305,7 +339,7 @@ TEST(GuiPopupManager, InterruptedRequiredPressCannotConfirmOnLaterRelease) {
 	popup->ConfigureButtons({ { { "Follow server", 1u } }, true });
 	auto receiver = std::make_shared<GuiRecordingActionReceiver>();
 	popup->SetButtonReceiver(receiver);
-	const auto button = popup->TryGetChild(4u);
+	const auto button = popup->TryGetChild(6u);
 	ASSERT_TRUE(button);
 	const auto point = popup->Position() + button->Position() + utils::Position2d{ 10, 10 };
 	host.Open(popup);
@@ -332,8 +366,8 @@ TEST(GuiPopupManager, ReleaseOverAnotherButtonDisarmsRequiredPress) {
 	popup->ConfigureButtons({ { { "Cancel", 2u }, { "Follow server", 1u } }, true });
 	auto receiver = std::make_shared<GuiRecordingActionReceiver>();
 	popup->SetButtonReceiver(receiver);
-	const auto cancel = popup->TryGetChild(4u);
-	const auto follow = popup->TryGetChild(5u);
+	const auto cancel = popup->TryGetChild(6u);
+	const auto follow = popup->TryGetChild(7u);
 	ASSERT_TRUE(cancel);
 	ASSERT_TRUE(follow);
 	const auto cancelPoint = popup->Position() + cancel->Position() + utils::Position2d{ 10, 10 };
@@ -355,7 +389,7 @@ TEST(GuiPopupManager, MouseCaptureLossDisarmsRequiredPress) {
 	popup->ConfigureButtons({ { { "Follow server", 1u } }, true });
 	auto receiver = std::make_shared<GuiRecordingActionReceiver>();
 	popup->SetButtonReceiver(receiver);
-	const auto button = popup->TryGetChild(4u);
+	const auto button = popup->TryGetChild(6u);
 	ASSERT_TRUE(button);
 	const auto point = popup->Position() + button->Position() + utils::Position2d{ 10, 10 };
 	host.Open(popup);
@@ -387,7 +421,7 @@ TEST(GuiPopup, FitsViewportAndKeepsContentAndActionsInsideAfterResize)
 		EXPECT_GE(position.X, 0); EXPECT_GE(position.Y, 0);
 		EXPECT_LE(position.X + static_cast<int>(size.Width), static_cast<int>(viewport.Width));
 		EXPECT_LE(position.Y + static_cast<int>(size.Height), static_cast<int>(viewport.Height));
-		for (unsigned char index = 0; index < 6; ++index) {
+		for (unsigned char index = 0; index < 8; ++index) {
 			const auto child = popup->TryGetChild(index); ASSERT_TRUE(child);
 			const auto pos = child->Position(); const auto frame = child->GetSize();
 			EXPECT_GE(pos.X, 0); EXPECT_GE(pos.Y, 0);
@@ -395,7 +429,7 @@ TEST(GuiPopup, FitsViewportAndKeepsContentAndActionsInsideAfterResize)
 			EXPECT_LE(pos.Y + static_cast<int>(frame.Height), static_cast<int>(size.Height));
 		}
 		if (viewport.Width >= 184 && viewport.Height >= 161) {
-			const auto button = popup->TryGetChild(5); const auto pos = button->Position(); const auto frame = button->GetSize();
+			const auto button = popup->TryGetChild(7); const auto pos = button->Position(); const auto frame = button->GetSize();
 			const utils::Position2d point{ pos.X + static_cast<int>(frame.Width / 2), pos.Y + static_cast<int>(frame.Height / 2) };
 			const auto before = receiver->ActionCount;
 			EXPECT_TRUE(popup->OnAction(MakeTouch(TouchAction::TOUCH_DOWN, point)).IsEaten);
@@ -407,6 +441,126 @@ TEST(GuiPopup, FitsViewportAndKeepsContentAndActionsInsideAfterResize)
 }
 
 // GuiToggle keyboard tests
+
+TEST(RuntimeDialogs, WorkerNoticesOwnTheirValuesAndFallbackRunsOnlyOnUiPump)
+{
+    gui::RuntimeDialogs dialogs; GuiPopupManager manager;
+    const auto ui = std::this_thread::get_id();
+    std::vector<std::string> delivered;
+    dialogs.SetFallback([&](const auto& title, const auto& message) {
+        EXPECT_EQ(ui,std::this_thread::get_id()); delivered.push_back(title + ":" + message);
+    });
+    std::thread producer([&] {
+        std::string text = "detached worker failure";
+        dialogs.Notify("Worker",text); text.assign("reused producer storage");
+        dialogs.Notify("Second","another failure");
+    });
+    producer.join(); EXPECT_TRUE(delivered.empty()); EXPECT_FALSE(manager.IsOpen());
+    dialogs.Pump(manager,{800u,600u},true); EXPECT_TRUE(manager.IsOpen()); EXPECT_TRUE(delivered.empty());
+    dialogs.Pump(manager,{800u,600u},false); EXPECT_FALSE(manager.IsOpen());
+    EXPECT_EQ((std::vector<std::string>{"Worker:detached worker failure","Second:another failure"}),delivered);
+    dialogs.Pump(manager,{800u,600u},false); EXPECT_EQ(2u,delivered.size());
+}
+
+TEST(RuntimeDialogs, EnterEscapeAndOutsideDismissalCancelWithoutAccepting)
+{
+    gui::RuntimeDialogs dialogs; GuiPopupManager manager;
+    for (const auto dismissal : {0,1,2})
+    {
+        auto decision = dialogs.Confirm("Remove VST","Remove captured slot?","Remove");
+        dialogs.Pump(manager,{800u,600u},true); ASSERT_TRUE(manager.IsOpen());
+        if (dismissal < 2) manager.OnAction(MakeKey(dismissal == 0 ? VK_RETURN : VK_ESCAPE,KeyAction::KEY_UP));
+        else manager.OnAction(MakeTouch(TouchAction::TOUCH_DOWN,{-1000,-1000}));
+        EXPECT_FALSE(decision->has_value());
+        dialogs.Pump(manager,{800u,600u},true);
+        ASSERT_TRUE(decision->has_value()); EXPECT_FALSE(decision->value()); EXPECT_FALSE(manager.IsOpen());
+    }
+}
+
+TEST(RuntimeDialogs, ResizePreservesConfirmationAndInterruptedPressCannotAccept)
+{
+    gui::RuntimeDialogs dialogs; GuiPopupManager manager;
+    auto decision = dialogs.Confirm("Remove VST","Remove captured slot?","Remove");
+    dialogs.Pump(manager,{800u,600u},true);
+    const auto popup = manager.Top(); ASSERT_TRUE(popup);
+    dialogs.Pump(manager,{160u,180u},true); EXPECT_EQ(popup,manager.Top());
+    EXPECT_LE(popup->GetSize().Width,160u); EXPECT_LE(popup->GetSize().Height,180u);
+    const auto accept = popup->TryGetChild(7u); ASSERT_TRUE(accept);
+    auto point = accept->GlobalPosition() + utils::Position2d{2,2};
+    manager.OnAction(MakeTouch(TouchAction::TOUCH_UP,point));
+    dialogs.Pump(manager,{160u,180u},true); EXPECT_FALSE(decision->has_value());
+    manager.OnAction(MakeTouch(TouchAction::TOUCH_DOWN,point));
+    auto lost = MakeTouchMove(point); lost.MouseButtonsDown = 0u; manager.OnAction(lost);
+    manager.OnAction(MakeTouch(TouchAction::TOUCH_UP,point));
+    dialogs.Pump(manager,{160u,180u},true); EXPECT_FALSE(decision->has_value());
+    manager.OnAction(MakeTouch(TouchAction::TOUCH_DOWN,point));
+    manager.OnAction(MakeTouch(TouchAction::TOUCH_UP,point));
+    dialogs.Pump(manager,{160u,180u},true); ASSERT_TRUE(decision->has_value()); EXPECT_TRUE(decision->value());
+}
+
+TEST(RuntimeDialogs, MissingRendererCancelsConfirmationAndFallbackFailureKeepsStderrDelivery)
+{
+    gui::RuntimeDialogs dialogs; GuiPopupManager manager; unsigned int fallback = 0u;
+    dialogs.SetFallback([&](const auto&,const auto&) { ++fallback; throw std::runtime_error("native unavailable"); });
+    auto decision = dialogs.Confirm("Remove VST","Remove captured slot?","Remove");
+    testing::internal::CaptureStderr();
+    EXPECT_NO_THROW(dialogs.Pump(manager,{800u,600u},false));
+    EXPECT_NE(std::string::npos,testing::internal::GetCapturedStderr().find("Remove captured slot?"));
+    ASSERT_TRUE(decision->has_value()); EXPECT_FALSE(decision->value()); EXPECT_EQ(1u,fallback);
+    EXPECT_FALSE(manager.IsOpen());
+    auto cancelled = dialogs.Confirm("Old target","Never show cancelled work","Remove");
+    *cancelled = false; dialogs.Pump(manager,{800u,600u},true);
+    EXPECT_FALSE(manager.IsOpen()); EXPECT_EQ(1u,fallback);
+}
+
+TEST(RuntimeDialogs, NonAsciiPluginPathUsesOwnedNativeFallbackAndCancelsConfirmation)
+{
+    gui::RuntimeDialogs dialogs; GuiPopupManager manager;
+    const auto ui = std::this_thread::get_id();
+    const std::string path = "C:\\Plugins\\Pian\xC3\xB3\\\xE7\x90\xB4.vst3";
+    const auto message = "Could not load VST: " + path;
+    std::vector<std::string> shown;
+    dialogs.SetFallback([&](const auto& title,const auto& text) {
+        EXPECT_EQ(ui,std::this_thread::get_id()); EXPECT_EQ("VST",title); shown.push_back(text);
+    });
+    dialogs.Notify("VST",message);
+    testing::internal::CaptureStderr();
+    dialogs.Pump(manager,{800u,600u},true);
+    const auto logged = testing::internal::GetCapturedStderr();
+    EXPECT_FALSE(manager.IsOpen());
+    ASSERT_EQ(1u,shown.size()); EXPECT_EQ(message,shown[0]);
+    EXPECT_NE(std::string::npos,logged.find(path));
+    auto decision = dialogs.Confirm("VST",message,"Remove");
+    dialogs.Pump(manager,{800u,600u},true);
+    EXPECT_FALSE(manager.IsOpen());
+    ASSERT_TRUE(decision->has_value()); EXPECT_FALSE(decision->value());
+    ASSERT_EQ(2u,shown.size()); EXPECT_EQ(message,shown[1]);
+}
+
+TEST(RuntimeDialogs, ActualMissingResourcesCancelActiveAndQueuedConfirmations)
+{
+    gui::RuntimeDialogs dialogs; GuiPopupManager manager;
+    unsigned int fallback = 0u;
+    dialogs.SetFallback([&](const auto&,const auto&) { ++fallback; });
+    auto active = dialogs.Confirm("Remove VST","Remove captured slot?","Remove");
+    dialogs.Pump(manager,{800u,600u},true); ASSERT_TRUE(manager.IsOpen());
+    resources::ResourceLib missingResources;
+    const bool ready = dialogs.InitResources(missingResources,false);
+    EXPECT_FALSE(ready); // Exercises actual missing fonts/shaders, without GL or a false renderer seam.
+    dialogs.Pump(manager,{800u,600u},ready);
+    EXPECT_FALSE(manager.IsOpen()); ASSERT_TRUE(active->has_value()); EXPECT_FALSE(active->value());
+    auto queued = dialogs.Confirm("Remove VST","Remove another slot?","Remove");
+    dialogs.Pump(manager,{800u,600u},ready);
+    EXPECT_FALSE(manager.IsOpen()); ASSERT_TRUE(queued->has_value()); EXPECT_FALSE(queued->value());
+    EXPECT_EQ(2u,fallback);
+}
+
+TEST(RuntimeDialogs, FontMetricsAloneDoNotEstablishDrawReadiness)
+{
+    graphics::Font font({1,1,1,19.0f,0,0,graphics::FontOptions::FONT_SMALL},{8.0f},{});
+    EXPECT_GT(font.Metrics().Height(),0.0f);
+    EXPECT_FALSE(font.CanDraw());
+}
 
 TEST(GuiToggle, KeyboardActivatesWhenFocused) {
 	GuiToggleParams p;
@@ -490,6 +644,36 @@ TEST(GuiScrollBar, HorizontalDragMovesThumbToTheRight) {
 }
 
 // GuiScrollPanel offset tests
+class GuiRetainedPageProbe : public base::GuiElement
+{
+public:
+	GuiRetainedPageProbe() : GuiElement(base::GuiElementParams{}) {}
+	int ReleaseCount = 0;
+protected:
+	void _InitResources(resources::ResourceLib&, bool) override {}
+	void _ReleaseResources() override { ++ReleaseCount; }
+};
+
+TEST(GuiScrollPanel, SwitchingRetainedContentPreservesResourcesAndDescendantOwnership) {
+	auto panel = std::make_shared<GuiScrollPanel>(GuiScrollPanelParams{});
+	auto page = std::make_shared<GuiRetainedPageProbe>();
+	auto child = std::make_shared<GuiRetainedPageProbe>();
+	page->AddChild(child);
+	resources::ResourceLib resources;
+	page->InitResources(resources, false);
+	panel->SetContent(page);
+	std::weak_ptr<base::GuiElement> oldHost = page->Parent();
+	panel->SetContent(nullptr);
+	EXPECT_EQ(0, page->ReleaseCount);
+	EXPECT_EQ(nullptr, page->Parent());
+	EXPECT_EQ(page, child->Parent());
+	EXPECT_TRUE(oldHost.expired());
+	panel->SetContent(page);
+	EXPECT_EQ(page, panel->Content());
+	EXPECT_EQ(panel, page->Parent()->Parent());
+	EXPECT_EQ(0, page->ReleaseCount);
+}
+
 
 TEST(GuiScrollPanel, OffsetClampsToContentRange) {
 	GuiScrollPanelParams p;
@@ -579,6 +763,20 @@ TEST(GuiScrollPanel, ScrollFractionMapsToOffset) {
 
 	panel->SetScrollFraction(0.5);
 	EXPECT_EQ(75, panel->ScrollOffset());
+}
+
+TEST(GuiScrollPanel, ScrollToVisibleKeepsUserOffsetUntilAContentRowLeavesTheViewport) {
+    GuiScrollPanelParams p;
+    p.Size = {100u, 50u};
+    auto panel = std::make_shared<GuiScrollPanel>(p);
+    panel->SetContent(std::make_shared<GuiButton>(MakeSizedButton({0,0}, {80u,200u})));
+    panel->SetScrollOffset(30);
+    panel->ScrollToVisible({0,125,80,145});
+    EXPECT_EQ(30, panel->ScrollOffset());
+    panel->ScrollToVisible({0,10,80,30});
+    EXPECT_EQ(140, panel->ScrollOffset());
+    panel->ScrollToVisible({0,175,80,195});
+    EXPECT_EQ(5, panel->ScrollOffset());
 }
 
 TEST(GuiScrollPanel, ViewportExcludesScrollBar) {
@@ -716,6 +914,123 @@ TEST(GuiTextBox, TypingInsertsCharacters) {
 
 	EXPECT_EQ("abc", tb->Text());
 	EXPECT_EQ(3u, tb->CaretIndex());
+}
+
+TEST(GuiTextBox, SelectedLoadedUtf8EditsOnlyAtCodePointBoundaries) {
+	GuiTextBoxParams p; p.Text = "A\xc3\xa9\xe6\x97\xa5Z";
+	auto text = std::make_shared<GuiTextBox>(p);
+	ASSERT_TRUE(text->RequestFocus());
+	text->BeginEditing();
+	EXPECT_EQ(p.Text, text->SelectedText());
+	text->OnAction(MakeKey(0x23)); // End, clear selection.
+	text->OnAction(MakeKey(0x25)); // Before Z.
+	text->OnAction(MakeKey(0x25)); // Before whole three-byte character.
+	EXPECT_EQ(3u, text->CaretIndex());
+	text->OnAction(MakeKey(0x08)); // Delete whole two-byte character.
+	EXPECT_EQ("A\xe6\x97\xa5Z", text->Text());
+	text->OnAction(MakeKey(0x2e));
+	EXPECT_EQ("AZ", text->Text());
+
+	// The station presenter disarms acceptance before focus finalization.
+	GuiFocusManager focus;
+	auto label = std::make_shared<gui::GuiStationLabel>();
+	label->SetVisible(true); label->Layout({0, 0}, 80u);
+	label->Update("Keys", 7u, true, true, false);
+	label->Init();
+	const auto pencil = label->TryGetChild(3), cancel = label->TryGetChild(4);
+	ASSERT_TRUE(pencil); ASSERT_TRUE(cancel);
+	EXPECT_EQ(pencil->Position().X, cancel->Position().X); EXPECT_EQ(pencil->Position().Y, cancel->Position().Y);
+	EXPECT_EQ(pencil->GetSize().Width, cancel->GetSize().Width); EXPECT_EQ(pencil->GetSize().Height, cancel->GetSize().Height);
+	const utils::Position2d editPoint{static_cast<int>(gui::GuiStationLabel::LabelWidth + 10u), 10};
+	const auto editButton = label->FindTopmostDescendant(editPoint);
+	ASSERT_TRUE(editButton);
+	EXPECT_TRUE(label->Move(MakeTouchMove(editPoint)));
+	EXPECT_EQ(base::GuiElement::STATE_OVER, editButton->GetState());
+	EXPECT_FALSE(label->Move(MakeTouchMove({-100, -100})));
+	EXPECT_EQ(base::GuiElement::STATE_NORMAL, editButton->GetState());
+	unsigned int submissions = 0u;
+	label->Focus = [&](const auto& editor) { if (editor) focus.RequestFocus(editor); else focus.ClearFocus(); };
+	label->Submit = [&](const auto&, auto) { ++submissions; return std::string{}; };
+	ASSERT_TRUE(label->Touch(MakeTouch(TouchAction::TOUCH_DOWN, {static_cast<int>(gui::GuiStationLabel::LabelWidth + 10u), 10})));
+	ASSERT_TRUE(label->Active());
+	ASSERT_TRUE(focus.IsEditingText());
+	ASSERT_TRUE(label->Touch(MakeTouch(TouchAction::TOUCH_UP, {static_cast<int>(gui::GuiStationLabel::LabelWidth + 10u), 10})));
+	ASSERT_TRUE(label->Touch(MakeTouch(TouchAction::TOUCH_DOWN, {static_cast<int>(gui::GuiStationLabel::LabelWidth + 10u), 10})));
+	EXPECT_FALSE(label->Active());
+	EXPECT_FALSE(focus.IsEditingText());
+	EXPECT_EQ(0u, submissions);
+	ASSERT_TRUE(label->Touch(MakeTouch(TouchAction::TOUCH_UP, editPoint)));
+
+	label->Update("Keys", 7u, false, true, false);
+	const utils::Position2d backgroundPoint{2, 2};
+	ASSERT_TRUE(label->Touch(MakeTouch(TouchAction::TOUCH_DOWN, backgroundPoint)));
+	EXPECT_FALSE(label->Active());
+	auto drag = MakeTouchMove({30, 2}); drag.MouseButtonsDown = 1u;
+	label->Move(drag);
+	ASSERT_TRUE(label->Touch(MakeTouch(TouchAction::TOUCH_UP, backgroundPoint)));
+	EXPECT_FALSE(label->Active()); // Returning to the press point cannot turn a drag into a click.
+	ASSERT_TRUE(label->Touch(MakeTouch(TouchAction::TOUCH_DOWN, backgroundPoint)));
+	ASSERT_TRUE(label->Touch(MakeTouch(TouchAction::TOUCH_UP, backgroundPoint)));
+	ASSERT_TRUE(label->Active());
+	auto editor = std::dynamic_pointer_cast<GuiTextBox>(focus.CurrentFocus());
+	ASSERT_TRUE(editor);
+	EXPECT_EQ("Keys", editor->SelectedText());
+	editor->SetText("Piano");
+	label->Submit = [&](const auto&, auto) { return ++submissions == 1u ? std::string{"Busy; retry"} : std::string{}; };
+	editor->OnAction(MakeKey(0x0d));
+	EXPECT_TRUE(label->Active()); EXPECT_EQ("Piano", editor->Text());
+	editor->OnAction(MakeKey(0x0d));
+	editor->OnAction(MakeKey(0x0d));
+	EXPECT_EQ(2u, submissions); // Pending acceptance cannot be submitted again by key repeat or blur.
+	label->Update("Piano", 8u, false, true, false);
+	EXPECT_FALSE(label->Active());
+	EXPECT_FALSE(focus.IsEditingText());
+}
+
+TEST(GuiTriggerRename, AttachedEditorRetainsDraftAndHonoursSubmitAndCancel) {
+	auto card = std::make_shared<base::GuiElement>(base::GuiElementParams{});
+	card->SetPosition({300, 200});
+	auto rename = std::make_shared<gui::GuiTriggerRename>();
+	card->AddChild(rename);
+	const auto label = rename->TryGetChild(1);
+	const auto editor = std::dynamic_pointer_cast<GuiTextBox>(rename->TryGetChild(2));
+	ASSERT_TRUE(editor); ASSERT_TRUE(label);
+	EXPECT_EQ(rename, label->Parent()); EXPECT_EQ(rename, editor->Parent());
+	GuiFocusManager focus;
+	rename->Focus = [&](const auto& control, bool acquire) {
+		if (acquire) focus.RequestFocus(control);
+		else if (focus.CurrentFocus() == control) focus.ClearFocus();
+	};
+	unsigned int submissions = 0;
+	rename->Submit = [&](const auto& name, const auto& id, auto revision) {
+		++submissions; EXPECT_EQ("Piano", name); EXPECT_EQ("trigger-id", id); EXPECT_EQ(7u, revision);
+		return submissions == 1u ? std::string{"Busy; retry"} : std::string{};
+	};
+	rename->SetDisplay("Keys [unbound]"); rename->Begin("trigger-id", "Keys", 7u);
+	EXPECT_EQ("Keys", editor->SelectedText());
+	editor->SetText("Piano");
+	EXPECT_TRUE(rename->Touch(MakeTouch(TouchAction::TOUCH_DOWN, {-20, -20}), false));
+	EXPECT_EQ(1u, submissions); EXPECT_TRUE(rename->Active()); EXPECT_EQ("Piano", editor->Text());
+	EXPECT_TRUE(rename->Touch(MakeTouch(TouchAction::TOUCH_UP, {-20, -20}), false));
+	editor->OnAction(MakeKey(13u)); editor->OnAction(MakeKey(13u));
+	EXPECT_EQ(2u, submissions);
+	rename->Update(false); // Acknowledgement rejection restores the same draft.
+	EXPECT_EQ("Piano", editor->Text()); EXPECT_TRUE(rename->Active());
+	editor->OnAction(MakeKey(27u));
+	EXPECT_FALSE(rename->Active()); EXPECT_FALSE(focus.IsEditingText()); EXPECT_EQ(2u, submissions);
+	rename->Begin("trigger-id", "Keys", 7u);
+	editor->SetText("Piano"); focus.ClearFocus(); // Blur shares Enter acceptance.
+	EXPECT_EQ(3u, submissions);
+	rename->Cancel(); EXPECT_EQ(3u, submissions);
+	rename->Begin("trigger-id", "Keys", 7u);
+	const auto cancel = rename->TryGetChild(3);
+	ASSERT_TRUE(cancel); EXPECT_TRUE(cancel->IsVisible());
+	EXPECT_TRUE(rename->Touch(MakeTouch(TouchAction::TOUCH_DOWN,
+		{cancel->Position().X + 14, cancel->Position().Y + 14}), true));
+	EXPECT_FALSE(rename->Active()); EXPECT_FALSE(cancel->IsVisible()); EXPECT_TRUE(label->IsVisible());
+	EXPECT_EQ(3u, submissions);
+	EXPECT_TRUE(rename->Touch(MakeTouch(TouchAction::TOUCH_UP, {-20, -20}), false));
+	EXPECT_FALSE(rename->OwnsPointer());
 }
 
 TEST(GuiTextBox, BackspaceAndDeleteEditText) {
@@ -983,6 +1298,10 @@ TEST(GuiMainPanel, RetainedPagesKeepCommandIdentityAfterTreeInitialization) {
 	EXPECT_EQ(2, std::get<GuiAction::GuiInt>(owner->LastAction->Data).Value);
 	panel->SetPage(gui::SettingsPage::Timing);
 	EXPECT_EQ(numeric, numeric->Parent()->TryGetChild(1));
+	const auto previousActionCount = owner->ActionCount;
+	numeric->SetValue(0.6, true);
+	EXPECT_EQ(previousActionCount + 1, owner->ActionCount);
+	EXPECT_EQ(7002u, owner->LastAction->Index);
 	owner.reset();
 	EXPECT_NO_THROW(numeric->SetValue(0.6, true));
 }
@@ -1032,6 +1351,11 @@ TEST(GuiMainPanel, ControlsRecoverTheirWidthsAfterTinyAndZeroViewport) {
 	params.Settings = { { gui::SettingsPage::Timing, "Offset", numeric, 7002u } };
 	auto panel = std::make_shared<gui::GuiMainPanel>(params);
 	panel->Init();
+	const auto label = numeric->Parent()->TryGetChild(0);
+	const auto page = numeric->Parent();
+	const auto leftMargin = label->GlobalPosition().X - page->GlobalPosition().X;
+	const auto rightMargin = static_cast<int>(page->GetSize().Width - label->GetSize().Width) - leftMargin;
+	EXPECT_EQ(leftMargin, rightMargin);
 	const auto originalWidth = numeric->GetSize().Width;
 	// Layout must retain the natural control width while shrinking its presentation.
 	panel->SetViewportSize({ 40, 40 });
@@ -1259,14 +1583,7 @@ TEST(GuiTextGeometry, CaretAndSelectionBandsUseFontLineAndClampedLabelFrame) {
 	EXPECT_TRUE(GuiTextBox::ResolveTextBand(frame, line, std::numeric_limits<float>::infinity(), 2.0f).IsEmpty());
 }
 
-TEST(GuiTextGeometry, RelatedControlsSharePreferredHeightAndHeadersKeepExplicitAlignment) {
-	EXPECT_EQ(gui::GuiStyle::ControlHeight, gui::GuiButtonParams::PanelButton().Size.Height);
-	EXPECT_EQ(gui::GuiStyle::ControlHeight, GuiToggleParams::PanelPrimary().Size.Height);
-	EXPECT_EQ(gui::GuiStyle::ControlHeight, GuiTextBoxParams::PanelInput(100u).Size.Height);
-	EXPECT_EQ(gui::GuiStyle::ControlHeight, GuiNumericInputParams::PanelInput(100u).Size.Height);
-	EXPECT_EQ(gui::GuiStyle::ControlHeight, GuiDropDownParams::PanelInput(100u).Size.Height);
-	EXPECT_EQ(gui::GuiTextVerticalAlign::Center, gui::GuiLabelParams::PanelHeader("Agjpq 0123", 100u).VerticalAlign);
-	EXPECT_EQ(gui::GuiTextVerticalAlign::Center, gui::GuiLabelParams::PanelScrollRow("Agjpq 0123").VerticalAlign);
+TEST(GuiTextGeometry, LabelDefaultsAndExplicitWrapWidth) {
 	EXPECT_EQ(gui::GuiTextVerticalAlign::Baseline, gui::GuiLabelParams{}.VerticalAlign);
 	EXPECT_EQ(0u, gui::GuiLabelParams{}.Size.Width);
 	EXPECT_EQ(gui::GuiLabelParams::DefaultHeight, gui::GuiLabelParams{}.Size.Height);
@@ -1286,31 +1603,6 @@ TEST(GuiTextGeometry, ExplicitWidthWrapsWordsAndRespectsAvailableLines) {
 		gui::GuiLabel::WrapText("alpha beta", 0.0f, 2u, measure));
 }
 
-TEST(GuiTextGeometry, ButtonAndRadioLabelsRetainCenteredContentFramesAcrossResize) {
-	auto params = gui::GuiButtonParams::PanelButton();
-	params.Text = "Agjpq 0123";
-	auto button = std::make_shared<gui::GuiButton>(params);
-	button->Init();
-	auto label = std::dynamic_pointer_cast<gui::GuiLabel>(button->TryGetChild(0));
-	ASSERT_NE(nullptr, label);
-	for (const auto size : { utils::Size2d{ 100, 36 }, utils::Size2d{ 3, 1 }, utils::Size2d{ 0, 0 }, utils::Size2d{ 101, 37 } }) {
-		button->SetSize(size);
-		const auto frame = gui::GuiLabelParams::ResolveTextFrame(size.Width, size.Height, params.TextPadding, params.TextPadding, true);
-		EXPECT_EQ(static_cast<int>(frame.PaddingX), label->Position().X);
-		EXPECT_EQ(frame.OffsetY, label->Position().Y);
-		EXPECT_EQ(frame.ContentWidth, label->GetSize().Width);
-		EXPECT_EQ(frame.TextHeight, label->GetSize().Height);
-	}
-	gui::GuiRadioParams radioParams;
-	auto toggle = GuiToggleParams::PanelPrimary(); toggle.Text = "Mixed";
-	radioParams.ToggleParams = { toggle };
-	auto radio = std::make_shared<gui::GuiRadio>(radioParams);
-	radio->Init();
-	auto toggleLabel = std::dynamic_pointer_cast<gui::GuiLabel>(radio->TryGetChild(0)->TryGetChild(0));
-	ASSERT_NE(nullptr, toggleLabel);
-	EXPECT_EQ(label->GetSize().Height - 1u, toggleLabel->GetSize().Height);
-}
-
 TEST(GuiTextGeometry, LegacyWidthTableFontHasExplicitFallbackLineMetrics) {
 	graphics::Font font({ 1, 1, 1, 19.0f, 0, 0, graphics::FontOptions::FONT_LARGE },
 		std::vector<float>(graphics::Font::MaxChars, 8.0f), {});
@@ -1323,14 +1615,14 @@ class GuiSettingsOwnerScene final : public engine::Scene
 {
 public:
 	GuiSettingsOwnerScene() : Scene(engine::SceneParams({ "" }, {}, { 800u, 600u }), io::UserConfig{}) {}
-	std::shared_ptr<gui::GuiMainPanel> Settings() const { return _mainPanel; }
-	std::shared_ptr<gui::GuiMainPanel> Selection() const { return _selectionPanel; }
-	std::shared_ptr<gui::GuiMidiChannelOverride> Channel() const { return _settingsControls->Channel(); }
-	std::shared_ptr<gui::GuiNumericInput> Phase() const { return _settingsControls->Offset(); }
-	std::shared_ptr<gui::GuiToggle> Click() const { return _settingsControls->Metronome(); }
-	std::shared_ptr<gui::GuiRadio> Quantisation() const { return _settingsControls->GlobalQuantisation(); }
-	std::shared_ptr<gui::GuiRadio> Depth() const { return _settingsControls->Mode(); }
-	std::shared_ptr<gui::GuiRadio> Subdivision() const { return _settingsControls->Subdivision(); }
+	std::shared_ptr<gui::GuiMainPanel> Settings() const { return _workspace->MainPanel(); }
+	std::shared_ptr<gui::GuiMainPanel> Selection() const { return _workspace->SelectionPanel(); }
+	std::shared_ptr<gui::GuiMidiChannelOverride> Channel() const { return _workspace->Settings().Channel(); }
+	std::shared_ptr<gui::GuiNumericInput> Phase() const { return _workspace->Settings().Offset(); }
+	std::shared_ptr<gui::GuiToggle> Click() const { return _workspace->Settings().Metronome(); }
+	std::shared_ptr<gui::GuiRadio> Quantisation() const { return _workspace->Settings().GlobalQuantisation(); }
+	std::shared_ptr<gui::GuiRadio> Depth() const { return _workspace->Settings().Mode(); }
+	std::shared_ptr<gui::GuiRadio> Subdivision() const { return _workspace->Settings().Subdivision(); }
 	void SetFrozenTapClock()
 	{
 		auto clock = std::make_shared<utils::Timer>();
@@ -1343,7 +1635,7 @@ public:
 	double PhaseFraction() const { return _transportOffsetLoopFrac; }
 	bool ClickEnabled() const { return _audioEngine->NinjamMetronomeEnabled(); }
 	io::JamFile::GlobalMidiQuantState QuantisationState() const { return _globalMidiQuantState; }
-	unsigned int SelectionDepth() const { return static_cast<unsigned int>(_viewMode); }
+	unsigned int SelectionDepth() const { return static_cast<unsigned int>(_workspace->PresentationMode()); }
 	std::shared_ptr<engine::Station> AddStation()
 	{
 		engine::StationParams params; params.Name = "Settings owner station"; params.Size = { 100, 100 };
@@ -1553,4 +1845,266 @@ TEST(GuiNumericInput, HardwareInputsRejectFractionAndOverflowRatherThanCoerce)
 	input->SetText("512", false); input->OnAction(MakeKey(0x0D));
 	EXPECT_DOUBLE_EQ(input->Value(), 512.0);
 	EXPECT_EQ(invalid, 2);
+}
+
+
+TEST(TriggerLearnController, AtomicDraftPreservesImportedRowsRestoresAttemptsAndFiltersEmptyRows)
+{
+    using Draft = gui::TriggerLearnController::Draft;
+    for (const auto count : {0u, 1u, 4u, 6u})
+    {
+        std::vector<io::RigFile::Binding> imported;
+        for (auto i = 0u; i < count; ++i) imported.push_back(io::TriggerBindingLearn::Keyboard(65u + i));
+        Draft draft(imported);
+        EXPECT_EQ(count < 4u ? count + 1u : count, draft.Rows.size());
+        EXPECT_EQ(count < 4u, draft.Learning.has_value());
+        EXPECT_EQ(imported, draft.Bindings()); EXPECT_FALSE(draft.Changed());
+        draft.Stop(); EXPECT_FALSE(draft.Changed());
+        if (draft.Rows.empty()) draft.Add();
+        draft.Learn(0u); const auto old = draft.Attempt;
+        draft.Learn(draft.Rows.size() - 1u);
+        EXPECT_FALSE(draft.Accept(old, io::TriggerBindingLearn::Keyboard(75u)));
+        draft.Stop(); EXPECT_EQ(imported, draft.Bindings());
+        draft.Learn(0u); const auto current = draft.Attempt;
+        EXPECT_TRUE(draft.Accept(current, io::TriggerBindingLearn::Keyboard(75u)));
+        EXPECT_FALSE(draft.Accept(current, io::TriggerBindingLearn::Keyboard(76u))); // Paired release cannot replace it.
+        EXPECT_TRUE(draft.Changed());
+        draft.Learn(0u); draft.CancelDelete(0u);
+        EXPECT_EQ(75u, draft.Rows[0]->Press.Code); // Cancel restores the pre-learn binding.
+        while (!draft.Rows.empty()) draft.CancelDelete(0u);
+        EXPECT_TRUE(draft.Bindings().empty()); EXPECT_EQ(count != 0u, draft.Changed());
+        draft.Add(); EXPECT_EQ(1u, draft.Rows.size()); draft.Stop();
+        EXPECT_TRUE(draft.Bindings().empty());
+        Draft cancelled(imported); EXPECT_EQ(imported, cancelled.Bindings()); // Outer Cancel discards the entire draft owner.
+    }
+    for (const auto key : {8u,9u,13u,16u,17u,18u,27u,32u,33u,34u,45u,69u,112u,120u,192u,219u})
+        EXPECT_FALSE(io::TriggerBindingLearn::KeyboardAllowed(key));
+    EXPECT_TRUE(io::TriggerBindingLearn::KeyboardAllowed(65u));
+    auto rig = io::RigFile::FromStream(std::stringstream(io::RigFile::DefaultJson)).value();
+    auto controller = std::make_shared<gui::TriggerLearnController>();
+    controller->Init(rig,rig.Triggers[0].Id,io::RigFile::Control::Activate,1u,1u,{200u,200u},false,{});
+    EXPECT_EQ(200u,controller->Popup()->GetSize().Width);
+    EXPECT_EQ(200u,controller->Popup()->GetSize().Height);
+    controller->Popup()->ReleaseResources(); controller->Popup()->DetachGuiOwnershipForRetirement();
+}
+
+TEST(GuiPopup, RowRevealPreservesUserScrollUntilExplicitlyRequested)
+{
+    auto params = gui::GuiPopupParams::PanelDefault();
+    params.Size = {640u,384u}; params.MinSize = {1u,1u};
+    auto popup = std::make_shared<gui::GuiPopup>(params);
+    popup->SetTitle("Bindings"); popup->FitToViewport({200u,200u});
+    std::vector<gui::GuiPopupRow> rows(6u);
+    for (auto& row : rows) { row.Detail = "Binding"; row.PrimaryAction = "Learn"; }
+    popup->SetRows(rows,{}, {},5u);
+    EXPECT_GT(popup->RowScrollOffset(),0);
+    const int scrolled = popup->RowScrollOffset();
+    popup->SetRows(rows,{},{});
+    EXPECT_EQ(scrolled,popup->RowScrollOffset());
+    popup->SetRows(rows,{}, {},0u);
+    EXPECT_EQ(0,popup->RowScrollOffset());
+}
+
+TEST(GuiPopup, NarrowRowsKeepDetailsAndActionsWithinContent)
+{
+    auto params = gui::GuiPopupParams::PanelDefault();
+    params.Size = {640u,384u}; params.MinSize = {1u,1u};
+    auto popup = std::make_shared<gui::GuiPopup>(params);
+    popup->FitToViewport({120u,200u});
+    popup->SetRows({{"1. MIDI binding", "Learn"}}, {}, {});
+    auto scroll = std::dynamic_pointer_cast<GuiScrollPanel>(popup->TryGetChild(6u)); ASSERT_TRUE(scroll);
+    auto content = scroll->Content(); ASSERT_TRUE(content);
+    // Inactive rows contain only their texture, label and two actions.
+    EXPECT_FALSE(content->TryGetChild(4u));
+    for (unsigned char index = 0; index < 4; ++index)
+    {
+        auto child = content->TryGetChild(index); ASSERT_TRUE(child);
+        EXPECT_GE(child->Position().X,0);
+        EXPECT_LE(child->Position().X + static_cast<int>(child->GetSize().Width),static_cast<int>(content->GetSize().Width));
+    }
+}
+
+TEST(GuiPopup, LearnActionSpansNormalAndCompactRowsWithoutOverlappingOtherActions)
+{
+    for (const auto width : {640u, 200u, 120u, 48u, 47u})
+    {
+        SCOPED_TRACE(width);
+        auto params = gui::GuiPopupParams::PanelDefault();
+        params.Size = {640u,384u}; params.MinSize = {1u,1u};
+        auto popup = std::make_shared<GuiPopup>(params);
+        popup->FitToViewport({width,384u});
+        unsigned int learned = 0u, removed = 0u;
+        popup->SetRows({{"MIDI binding details", "Learn"}},
+            [&](std::size_t) { ++learned; }, [&](std::size_t) { ++removed; });
+        auto scroll = std::dynamic_pointer_cast<GuiScrollPanel>(popup->TryGetChild(6u)); ASSERT_TRUE(scroll);
+        auto content = scroll->Content(); ASSERT_TRUE(content);
+        const auto detail = content->TryGetChild(1u);
+        const auto learn = content->TryGetChild(2u), remove = content->TryGetChild(3u);
+        ASSERT_TRUE(detail); ASSERT_TRUE(learn); ASSERT_TRUE(remove);
+        if (width == 47u)
+        {
+            EXPECT_EQ(0u,detail->GetSize().Width);
+            EXPECT_FALSE(detail->IsVisible());
+        }
+        EXPECT_GT(learn->GetSize().Width,0u); EXPECT_GT(remove->GetSize().Width,0u);
+        for (const auto& child : {detail, learn, remove})
+        {
+            EXPECT_GE(child->Position().X,0);
+            EXPECT_LE(child->Position().X + static_cast<int>(child->GetSize().Width), static_cast<int>(content->GetSize().Width));
+        }
+        const auto rect = [](const auto& child) {
+            const auto p = child->Position(); const auto s = child->GetSize();
+            return utils::Rect2d{p.X,p.Y,p.X + static_cast<int>(s.Width),p.Y + static_cast<int>(s.Height)};
+        };
+        EXPECT_TRUE(rect(learn).Intersected(rect(detail)).IsEmpty());
+        EXPECT_TRUE(rect(learn).Intersected(rect(remove)).IsEmpty());
+        for (const auto y : {1, static_cast<int>(learn->GetSize().Height) - 2})
+        {
+            const utils::Position2d point{static_cast<int>(learn->GetSize().Width / 2u),y};
+            learn->OnAction(MakeTouch(TouchAction::TOUCH_DOWN,point));
+            learn->OnAction(MakeTouch(TouchAction::TOUCH_UP,point));
+        }
+        EXPECT_EQ(2u,learned); EXPECT_EQ(0u,removed);
+        popup->DetachGuiOwnershipForRetirement();
+    }
+}
+
+
+TEST(GuiPopup, OptionalKeyHandlerCanDeclineAndAllowNormalDispatch)
+{
+    auto popup = std::make_shared<GuiPopup>();
+    actions::KeyAction key; key.KeyChar = 65u; key.KeyActionType = actions::KeyAction::KEY_DOWN;
+    bool called = false;
+    popup->SetKeyAction([&](actions::KeyAction) { called = true; return false; });
+    EXPECT_FALSE(popup->OnAction(key).IsEaten); EXPECT_TRUE(called);
+    popup->SetKeyAction([](actions::KeyAction) { return true; });
+    EXPECT_TRUE(popup->OnAction(key).IsEaten);
+}
+
+TEST(TriggerLearnController, ArmAdmitsFreshKeyboardAfterAltReleaseWithoutOwningPopupCycle)
+{
+    auto rig = io::RigFile::FromStream(std::stringstream(io::RigFile::DefaultJson)).value();
+    auto controller = std::make_shared<gui::TriggerLearnController>();
+    controller->Init(rig,rig.Triggers[0].Id,io::RigFile::Control::Activate,1u,1u,{640u,384u},true,{});
+    const auto request = controller->TakeRequest(); ASSERT_TRUE(request);
+    auto observation = std::make_shared<io::TriggerBindingLearn::Observation>();
+    observation->Identity = *request; observation->Armed = true;
+    controller->Observe(observation);
+    actions::KeyAction key; key.KeyChar = 65u; key.KeyActionType = actions::KeyAction::KEY_DOWN;
+    EXPECT_FALSE(controller->AdmitKeyboard(key,true));
+    key.KeyChar = VK_MENU; key.KeyActionType = actions::KeyAction::KEY_UP;
+    EXPECT_FALSE(controller->AdmitKeyboard(key,true));
+    key.KeyChar = 65u; key.KeyActionType = actions::KeyAction::KEY_DOWN;
+    EXPECT_TRUE(controller->AdmitKeyboard(key,true));
+    EXPECT_FALSE(controller->AdmitKeyboard(key,false));
+    observation->Binding = io::TriggerBindingLearn::Keyboard(65u);
+    controller->Observe(observation); controller->Refresh();
+    EXPECT_FALSE(controller->Bindings().empty());
+    auto popup = controller->Popup();
+    std::weak_ptr<gui::TriggerLearnController> weak = controller;
+    controller.reset();
+    EXPECT_TRUE(weak.expired());
+    popup->ReleaseResources(); popup->DetachGuiOwnershipForRetirement();
+}
+
+TEST(TriggerLearnController, RearmedDraftUsesExactObservationAndAcknowledgedRigOutcome)
+{
+    using Controller = gui::TriggerLearnController;
+    for (const bool accepted : {false, true})
+    {
+        SCOPED_TRACE(accepted);
+        auto rig = io::RigFile::FromStream(std::stringstream(io::RigFile::DefaultJson)).value();
+        rig.Triggers.resize(1u); rig.Triggers.front().ControlBindings.Activate.clear();
+        auto controller = std::make_shared<Controller>();
+        controller->Init(rig, rig.Triggers.front().Id, io::RigFile::Control::Activate, 4u, 7u, {640u,384u}, false, {});
+        std::vector<io::TriggerBindingLearn::Request> requests;
+        unsigned int cancellations = 0u, submissions = 0u;
+        auto observation = std::shared_ptr<io::TriggerBindingLearn::Observation>{};
+        const Controller::InputExchange input = [&](auto request) {
+            if (request) { if (request->Session) requests.push_back(*request); else ++cancellations; }
+            return observation;
+        };
+        bool admit = false, applying = true;
+        std::uint64_t revision = 4u;
+        std::optional<io::RigFile> submitted;
+        const auto update = [&] {
+            return controller->Update(rig, revision, {640u,384u}, input,
+                [&](const auto& candidate, std::size_t index) { EXPECT_EQ(0u,index); ++submissions; submitted = candidate; return admit; },
+                [&] { return applying; });
+        };
+        EXPECT_EQ(Controller::UpdateResult::Active, update()); ASSERT_EQ(1u,requests.size());
+        observation = std::make_shared<io::TriggerBindingLearn::Observation>();
+        observation->Identity = requests.front(); observation->Armed = true;
+        observation->Binding = io::TriggerBindingLearn::Keyboard(65u);
+        actions::GuiAction add; add.Index = 0u; controller->OnAction(add); // Rearm before the old observation arrives.
+        update(); ASSERT_EQ(2u,requests.size()); EXPECT_NE(requests.front(),requests.back());
+        EXPECT_TRUE(controller->Bindings().empty());
+        observation->Identity = requests.back(); ++observation->Identity.Revision;
+        update(); EXPECT_TRUE(controller->Bindings().empty()); // The full request identity includes its rig revision.
+        observation->Identity = requests.back(); update();
+        const auto draft = controller->Bindings(); ASSERT_EQ(1u,draft.size());
+        actions::GuiAction ok; ok.Index = 1u; controller->OnAction(ok); update();
+        EXPECT_FALSE(controller->Applying); EXPECT_EQ(draft,controller->Bindings());
+        admit = true; controller->OnAction(ok); update();
+        EXPECT_TRUE(controller->Applying); EXPECT_EQ(1u,cancellations);
+        applying = false; update(); // Runtime rejection preserves the same retryable draft.
+        EXPECT_FALSE(controller->Applying); EXPECT_EQ(draft,controller->Bindings());
+        controller->OnAction(ok); update(); EXPECT_TRUE(controller->Applying);
+        EXPECT_EQ(3u,submissions); EXPECT_EQ(2u,cancellations);
+        ASSERT_TRUE(submitted);
+        if (accepted) rig = *submitted;
+        else rig.Triggers.front().Name = "Unrelated edit";
+        ++revision;
+        EXPECT_EQ(accepted ? Controller::UpdateResult::Applied : Controller::UpdateResult::Active, update());
+        EXPECT_EQ(!accepted,controller->Invalidated);
+        if (!accepted)
+        {
+            EXPECT_EQ(3u,cancellations);
+            actions::GuiAction cancel; cancel.Index = 2u; controller->OnAction(cancel);
+            EXPECT_EQ(Controller::UpdateResult::Close,update());
+        }
+        auto popup = controller->Popup();
+        std::weak_ptr<Controller> lifetime = controller; controller.reset(); EXPECT_TRUE(lifetime.expired());
+        popup->ReleaseResources(); popup->DetachGuiOwnershipForRetirement();
+    }
+}
+
+TEST_F(GuiSceneSettingsTests, SubdivisionCommandUpdatesExistingAndFutureAudioAndMidiTakes)
+{
+	const auto existing = Station->AddTake();
+	Station->CommitChanges();
+	for (const auto fraction : { midi::MidiQuantisationFraction::Sixth, midi::MidiQuantisationFraction::Eighth })
+	{
+		Scene->Subdivision()->SetCurrentValue(midi::MidiQuantisation::FractionDisplayIndex(fraction), false);
+		EXPECT_EQ(fraction, existing->MidiQuantisation().Fraction);
+		const auto audio = Station->AddTake();
+		audio->Record({0u}, "subdivision-audio");
+		const auto midi = Station->AddTake();
+		midi->Record({}, "subdivision-midi", {0u});
+		Station->CommitChanges();
+		EXPECT_EQ(fraction, audio->MidiQuantisation().Fraction);
+		EXPECT_EQ(fraction, midi->MidiQuantisation().Fraction);
+		// Tree/selection refresh must retain the chosen creation default.
+		Scene->Depth()->SetCurrentValue(1u, false);
+		EXPECT_EQ(midi::MidiQuantisation::FractionDisplayIndex(fraction), Scene->Subdivision()->CurrentValue());
+		const auto laterStation = Scene->AddStation();
+		EXPECT_EQ(fraction, laterStation->AddTake()->MidiQuantisation().Fraction);
+	}
+}
+
+TEST(GuiSubdivisionRestore, SavedEmptySessionRetainsCreationDefaultForAudioAndMidi)
+{
+	io::JamFile jam; jam.Name = "saved-subdivision"; jam.DefaultMidiQuantFraction = midi::MidiQuantisationFraction::Sixth;
+	io::JamFile::Station descriptor; descriptor.Name = "restored"; descriptor.StationType = 0u; jam.Stations.push_back(descriptor);
+	std::stringstream output; ASSERT_TRUE(io::JamFile::ToStream(jam,output));
+	auto parsed = io::JamFile::FromStream(std::move(output)); ASSERT_TRUE(parsed);
+	auto rig = io::RigFile::FromStream(std::stringstream(io::RigFile::DefaultJson)); ASSERT_TRUE(rig);
+	rig->Triggers.clear(); rig->User.Midi.Devices.clear();
+	auto restored = engine::Scene::FromFile(engine::SceneParams({""},{},{640u,480u}),*parsed,*rig,L""); ASSERT_TRUE(restored);
+	const auto stations = (*restored)->SnapshotStations(); ASSERT_EQ(1u,stations.size());
+	const auto audio = stations[0]->AddTake(); audio->Record({0u},"restored-audio");
+	const auto midi = stations[0]->AddTake(); midi->Record({},"restored-midi",{0u});
+	EXPECT_EQ(midi::MidiQuantisationFraction::Sixth,audio->MidiQuantisation().Fraction);
+	EXPECT_EQ(midi::MidiQuantisationFraction::Sixth,midi->MidiQuantisation().Fraction);
+	(*restored)->Shutdown();
 }

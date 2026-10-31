@@ -9,15 +9,15 @@
 4 sky
 2 texture MVP TextureSampler Opacity
 2 texture_tinted MVP TextureSampler TintColor Opacity TintMaskSampler HasTintMask
-2 font MVP TextureSampler Opacity
+2 font MVP TextureSampler Opacity TextColor
 2 texture_shaded MVP LoopState LoopHover SceneDim
 2 disc_mask MVP TextureSampler DiscRepeatCount DiscSpiralPitch Opacity Highlight StationHover StationMuted SceneDim GroupPreview GroupPreviewTint
 2 waveform WaveformSceneScale WaveformDisplayScale SpectralReveal MVP GroupPreview GroupPreviewTint LoopState LoopHover LoopSelected LoopPressed LoopMuted Highlight HighlightPass TextureSampler WaveformSampler WaveformRadius WaveformHeightScale WaveformMinHeight WaveformColorMultiplier WaveformColorScale WaveformUnitMeshRadius EditorMorph EditorPlayFrac SelectionActive SceneDim EditorActive EditorTime ProbeSampler ProbeStrength EditorProbeEye ModelView ProbeView MaterialProbeSampler
 2 vu MVP DX DY NumInstances InstanceOffset SceneDim Opacity
-2 midi_note SceneLowPitch SceneLowCenter ScenePitchStep SceneNoteHeight SceneBandHeight MVP GroupPreview GroupPreviewTint ObjectId Highlight LoopHover LoopSelected LoopPressed LoopMuted DiscAlpha RenderMode EditorMorph EditorPlayFrac EditorBottomPitch EditorVisibleRows EditorHoverU EditorHoverPitch EditorTargetStart EditorTargetEnd EditorTargetInstance EditorHeldInstance EditorPreviewVelocity SelectionActive SceneDim EditorGridRadius EditorActive EditorTime EditorSeamHeadEnd EditorSeamTailStart EditorMasterCycles EditorMasterStartPhase ProbeSampler ProbeStrength EditorProbeEye ModelView TextureSampler DiscProbeSampler
+2 midi_note SceneLowPitch SceneLowCenter ScenePitchStep SceneNoteHeight SceneBandHeight MVP GroupPreview GroupPreviewTint ObjectId Highlight LoopHover LoopSelected LoopPressed LoopMuted DiscAlpha RenderMode EditorMorph EditorPlayFrac EditorBottomPitch EditorVisibleRows EditorHoverU EditorHoverPitch EditorTargetStart EditorTargetEnd EditorEditHandle EditorTargetInstance EditorHeldInstance EditorPreviewVelocity SelectionActive SceneDim EditorGridRadius EditorActive EditorTime EditorSeamHeadEnd EditorSeamTailStart EditorMasterCycles EditorMasterStartPhase ProbeSampler ProbeStrength EditorProbeEye ModelView TextureSampler DiscProbeSampler
 2 midi_grid MVP EditorGridRadius EditorMorph SceneDim EditorPreviewFirstVertex
 2 automation MVP SceneDim EditorMorph
-2 picker WaveformSceneScale MVP ObjectId WaveformRadius WaveformUnitMeshRadius EditorMorph
+2 picker PickerHalfHeight MVP ObjectId WaveformRadius WaveformUnitMeshRadius EditorMorph
 2 colour MVP Color Opacity
 2 cable MVP Opacity
 2 quantisation MVP Highlight OverlayAlpha SceneDim
@@ -56,14 +56,20 @@
 1 stationmode_over
 1 stationmode_down
 1 stationmode_toggled
+1 stationmode_toggled_over
+1 stationmode_toggled_down
 1 takemode
 1 takemode_over
 1 takemode_down
 1 takemode_toggled
+1 takemode_toggled_over
+1 takemode_toggled_down
 1 loopmode
 1 loopmode_over
 1 loopmode_down
 1 loopmode_toggled
+1 loopmode_toggled_over
+1 loopmode_toggled_down
 1 rounded_but ninepatch 12 12
 1 status_bar_background ninepatch 16 8
 1 panel_fill_flat ninepatch 36 32
@@ -84,10 +90,18 @@
 1 trigger_activate_over ninepatch 13 21
 1 trigger_activate_down ninepatch 13 21
 1 trigger_activate_down_out ninepatch 13 21
+1 trigger_activate_learn ninepatch 13 21
+1 trigger_activate_learn_over ninepatch 13 21
+1 trigger_activate_learn_down ninepatch 13 21
+1 trigger_activate_learn_down_out ninepatch 13 21
 1 trigger_ditch ninepatch 13 21
 1 trigger_ditch_over ninepatch 13 21
 1 trigger_ditch_down ninepatch 13 21
 1 trigger_ditch_down_out ninepatch 13 21
+1 trigger_ditch_learn ninepatch 13 21
+1 trigger_ditch_learn_over ninepatch 13 21
+1 trigger_ditch_learn_down ninepatch 13 21
+1 trigger_ditch_learn_down_out ninepatch 13 21
 1 trigger_back ninepatch 35 23
 1 trigger_add
 1 trigger_add_over
@@ -104,12 +118,19 @@
 1 fader_scale_line ninepatch 3 0
 1 fader_scale_track ninepatch 4 2
 
-1 station_add
-1 station_add_over
-1 station_add_down
+1 plus
+1 plus_over
+1 plus_down
+1 plus_down_out
 1 station_bin
 1 station_bin_over
 1 station_bin_down
+1 rename_pencil
+1 rename_pencil_over
+1 rename_pencil_down
+1 rename_cancel
+1 rename_cancel_over
+1 rename_cancel_down
 1 vst_empty ninepatch 10 10
 1 vst_empty_over ninepatch 10 10
 1 vst_empty_down ninepatch 10 10

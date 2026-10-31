@@ -102,7 +102,7 @@ namespace engine
 			return false;
 		}
 
-		bool operator==(const TriggerBinding& other) {
+		bool operator==(const TriggerBinding& other) const {
 			if (TriggerSource != other.TriggerSource)
 				return false;
 
@@ -233,9 +233,11 @@ namespace engine
 			return MATCH_NONE;
 		}
 
+		const TriggerBinding& Down() const noexcept { return _triggerDown; }
+		const std::optional<TriggerBinding>& Release() const noexcept { return _triggerRelease; }
 		void Reset() { _isDown = false;	}
 
-		bool operator==(const DualBinding& other) {
+		bool operator==(const DualBinding& other) const {
 			if (!(_triggerDown == other._triggerDown))
 				return false;
 
@@ -252,6 +254,15 @@ namespace engine
 		TriggerBinding _triggerDown;
 		std::optional<TriggerBinding> _triggerRelease;
 		bool _isDown;
+	};
+
+	// UI-only admission evidence; descriptors are immutable, never callback hold state.
+	struct KeyboardTriggerReceipt
+	{
+		TriggerControl Control = TRIGGER_CONTROL_ACTIVATE;
+		std::uint16_t BindingIndex = 0u; // Revalidated lookup hint, never identity.
+		TriggerBinding Down;
+		std::optional<TriggerBinding> Release;
 	};
 
 	struct TriggerParams
@@ -313,7 +324,11 @@ namespace engine
 			const base::Action& action,
 			const std::string& device = "",
 			std::optional<std::int64_t> eventTimeUsec = std::nullopt,
-			std::optional<std::uint32_t> midiSample = std::nullopt);
+			std::optional<std::uint32_t> midiSample = std::nullopt,
+			std::optional<KeyboardTriggerReceipt>* admittedDown = nullptr,
+			std::optional<KeyboardTriggerReceipt>* matchedRelease = nullptr);
+		bool QueueAdmittedKeyboardRelease(const KeyboardTriggerReceipt& receipt,
+			std::uint64_t rigRevision, const base::Action& action);
 		actions::ActionResult QueueMidiInputEvent(TriggerInputDomain domain,
 			std::uint64_t rigRevision,
 			const midi::MidiEvent& event,

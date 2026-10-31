@@ -14,6 +14,7 @@ using namespace resources;
 GuiLabel::GuiLabel(GuiLabelParams guiParams) :
 	GuiElement(guiParams),
 	_str(guiParams.String),
+	_textColor(guiParams.TextColor),
 	_pendingStr(guiParams.String),
 	_textInset{ guiParams.TextInsetX, guiParams.TextInsetY },
 	_centerHorizontally(guiParams.CenterHorizontally),
@@ -205,11 +206,12 @@ void GuiLabel::Draw(DrawContext& ctx)
 	if (_vertexArray == 0)
 		return;
 
+	if (!_guiParams.Texture.empty() || _guiParams.TextureShader == "colour") GuiElement::Draw(ctx);
 	auto& glCtx = dynamic_cast<GlDrawContext&>(ctx);
 	auto pos = Position();
 	const auto textWidth = _centerHorizontally ? font->MeasureString(_str) : 0.0f;
 	const auto horizontalOffset = _centerHorizontally
-		? std::max(0.0f, (static_cast<float>(GetSize().Width) - textWidth) / 2.0f)
+		? std::max(0.0f, (static_cast<float>(GetSize().Width) - 2.0f * _textInset.X - textWidth) / 2.0f)
 		: 0.0f;
 	if (_clipText) glCtx.PushScissorRect(GlobalPosition(), GetSize());
 	auto line = LineFrame().value();
@@ -222,7 +224,7 @@ void GuiLabel::Draw(DrawContext& ctx)
 	}
 	glCtx.PushMvp(glm::translate(glm::mat4(1.0), glm::vec3(pos.X + _textInset.X + horizontalOffset, pos.Y + line.BaselineY, 0.f)));
 	
-	font->Draw(glCtx, _vertexArray, (unsigned int)_str.size());
+	font->Draw(glCtx, _vertexArray, (unsigned int)_str.size(), _textColor);
 	glCtx.PopMvp();
 	if (_clipText) glCtx.PopScissorRect();
 }
@@ -265,6 +267,7 @@ bool GuiLabel::_ResolveFont(ResourceLib& resourceLib)
 
 void GuiLabel::_InitResources(ResourceLib& resourceLib, bool forceInit)
 {
+	if (!_guiParams.Texture.empty() || _guiParams.TextureShader == "colour") GuiElement::_InitResources(resourceLib, forceInit);
 	_resourceLib = &resourceLib;
 	_ResolveFont(resourceLib);
 
@@ -285,6 +288,7 @@ void GuiLabel::_InitResources(ResourceLib& resourceLib, bool forceInit)
 
 void GuiLabel::_ReleaseResources()
 {
+	if (!_guiParams.Texture.empty() || _guiParams.TextureShader == "colour") GuiElement::_ReleaseResources();
 	_resourceLib = nullptr;
 	graphics::GlDeleteQueue::DeleteBuffers(2, _vertexBuffers);
 	_vertexBuffers[0] = 0;
@@ -320,7 +324,7 @@ void GuiLabel::SyncVertexArray()
 		return;
 	if (_wrapWidth > 0 && _LineCapacity(*font) > 1u)
 	{
-		const auto width = std::min(static_cast<float>(GetSize().Width), static_cast<float>(_wrapWidth));
+		const auto width = std::max(0.0f, std::min(static_cast<float>(GetSize().Width), static_cast<float>(_wrapWidth)) - 2.0f * _textInset.X);
 		const auto lines = WrapText(next, width, _LineCapacity(*font),
 			[&font](const std::string& text) { return font->MeasureString(text); });
 		next.clear();
@@ -331,7 +335,7 @@ void GuiLabel::SyncVertexArray()
 		}
 	}
 	else if (_ellipsize)
-		next = FitText(next, std::max(0.0f, static_cast<float>(GetSize().Width) - _textInset.X),
+		next = FitText(next, std::max(0.0f, static_cast<float>(GetSize().Width) - 2.0f * _textInset.X),
 			[&font](const std::string& text) { return font->MeasureString(text); });
 
 	graphics::GlDeleteQueue::DeleteBuffers(2, _vertexBuffers);

@@ -1,7 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup>
-    <ClCompile Include="pch.cpp" />
     <ClCompile Include="src\io\ConsoleWindow_Tests.cpp"><Filter>src\io</Filter></ClCompile>
     <ClCompile Include="..\..\Jamma\src\ConsoleWindow.cpp"><Filter>src\io</Filter></ClCompile>
     <ClCompile Include="src\engine\PerformanceGroups_Tests.cpp">
@@ -23,6 +22,9 @@
       <Filter>src\audio</Filter>
     </ClCompile>
     <ClCompile Include="src\audio\RecordedPlaybackLatency_Tests.cpp">
+      <Filter>src\audio</Filter>
+    </ClCompile>
+    <ClCompile Include="src\audio\AsioStreamRecovery_Tests.cpp">
       <Filter>src\audio</Filter>
     </ClCompile>
     <ClCompile Include="src\audio\Overdub_Tests.cpp">
@@ -66,6 +68,9 @@
       <Filter>src\engine</Filter>
     </ClCompile>
     <ClCompile Include="src\engine\StationRack_Tests.cpp">
+      <Filter>src\engine</Filter>
+    </ClCompile>
+    <ClCompile Include="src\engine\StationVisualState_Tests.cpp">
       <Filter>src\engine</Filter>
     </ClCompile>
     <ClCompile Include="src\engine\StationMidiInstrument_Tests.cpp">
@@ -149,9 +154,6 @@
     <ClCompile Include="src\midi\MidiRouterChannelOverride_Tests.cpp">
       <Filter>src\midi</Filter>
     </ClCompile>
-    <ClCompile Include="src\midi\MidiRouterAutomationKey_Tests.cpp">
-      <Filter>src\midi</Filter>
-    </ClCompile>
     <ClCompile Include="src\midi\MidiOverdub_Tests.cpp">
       <Filter>src\midi</Filter>
     </ClCompile>
@@ -181,6 +183,15 @@
     </ClCompile>
     <ClCompile Include="src\utils\MathUtils_Tests.cpp">
       <Filter>src\utils</Filter>
+    </ClCompile>
+    <ClCompile Include="src\utils\PathUtils_Tests.cpp">
+      <Filter>src\utils</Filter>
+    </ClCompile>
+    <ClCompile Include="src\ninjam\NinjamAudioTimingCommand_Tests.cpp">
+      <Filter>src\ninjam</Filter>
+    </ClCompile>
+    <ClCompile Include="src\ninjam\NinjamTimingIntegration_Tests.cpp">
+      <Filter>src\ninjam</Filter>
     </ClCompile>
     <ClCompile Include="src\ninjam\NinjamTimingTracker_Tests.cpp">
       <Filter>src\ninjam</Filter>

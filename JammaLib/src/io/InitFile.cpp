@@ -6,9 +6,18 @@
 ///////////////////////////////////////////////////////////
 
 #include "InitFile.h"
+#include "TextReadWriter.h"
 
 using namespace io;
 using audio::BehaviourParams;
+
+std::optional<InitFile> InitFile::Read(const std::wstring& path)
+{
+	TextReadWriter reader;
+	auto contents = reader.Read(path, 1000000u);
+	if (!contents) return std::nullopt;
+	return FromStream(std::stringstream(std::move(std::get<0>(*contents))));
+}
 
 const std::string InitFile::DefaultJson(std::string roamingPath)
 {

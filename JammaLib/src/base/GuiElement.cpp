@@ -36,6 +36,8 @@ void GuiElement::_ApplyTextureTint(GlDrawContext& ctx) const
 {
 	if (_guiParams.TextureShader == "texture_tinted")
 		ctx.SetUniform("TintColor", _guiParams.TintColor);
+	else if (_guiParams.TextureShader == "colour")
+		ctx.SetUniform("Color", glm::vec4(_guiParams.TintColor, 1.0f));
 }
 
 void GuiElement::_BeginGesture(GestureKind kind, Position2d startPosition, int startValue) noexcept
@@ -303,6 +305,23 @@ std::vector<JobAction> GuiElement::CommitChanges()
 	return jobList;
 }
 
+graphics::Image& GuiElement::_ResolveStateTexture(GuiElementState state, graphics::Image& normal,
+	graphics::Image& over, graphics::Image& down, graphics::Image& out)
+{
+	switch (state)
+	{
+	case STATE_OVER: if (over.IsDrawInitialised()) return over; break;
+	case STATE_DOWN: if (down.IsDrawInitialised()) return down; break;
+	case STATE_OUT: if (out.IsDrawInitialised()) return out; break;
+	}
+	return normal;
+}
+
+graphics::Image& GuiElement::_CurrentTexture()
+{
+	return _ResolveStateTexture(_state, _texture, _overTexture, _downTexture, _outTexture);
+}
+
 void GuiElement::Draw(DrawContext& ctx)
 {
 	if (_isVisible)
@@ -313,33 +332,7 @@ void GuiElement::Draw(DrawContext& ctx)
 		auto pos = Position();
 		glCtx.PushMvp(glm::translate(glm::mat4(1.0), glm::vec3(pos.X, pos.Y, 0.f)));
 
-		switch (_state)
-		{
-		case STATE_OVER:
-			if (_overTexture.IsDrawInitialised())
-				_overTexture.Draw(ctx);
-			else
-				_texture.Draw(ctx);
-
-			break;
-		case STATE_DOWN:
-			if (_downTexture.IsDrawInitialised())
-				_downTexture.Draw(ctx);
-			else
-				_texture.Draw(ctx);
-
-			break;
-		case STATE_OUT:
-			if (_outTexture.IsDrawInitialised())
-				_outTexture.Draw(ctx);
-			else
-				_texture.Draw(ctx);
-
-			break;
-		default:
-			_texture.Draw(ctx);
-			break;
-		}
+		_CurrentTexture().Draw(ctx);
 
 		for (auto& child : _children)
 			child->Draw(ctx);
@@ -636,6 +629,14 @@ void GuiElement::AddChild(std::shared_ptr<GuiElement> child)
 	Init();
 }
 
+void GuiElement::RemoveChild(const std::shared_ptr<GuiElement>& child)
+{
+	auto it = std::find(_children.begin(), _children.end(), child);
+	if (it == _children.end()) return;
+	if (child->Parent().get() == this) child->SetParent(nullptr);
+	_children.erase(it);
+}
+
 std::shared_ptr<GuiElement> GuiElement::TryGetChild(unsigned char index)
 {
 	for (auto& child : _children)
@@ -650,9 +651,9 @@ std::shared_ptr<GuiElement> GuiElement::TryGetChild(unsigned char index)
 void GuiElement::_InitResources(ResourceLib& resourceLib, bool forceInit)
 {
 	_texture.InitResources(resourceLib, forceInit);
-	_overTexture.InitResources(resourceLib, forceInit);
-	_downTexture.InitResources(resourceLib, forceInit);
-	_outTexture.InitResources(resourceLib, forceInit);
+	if (!_guiParams.OverTexture.empty()) _overTexture.InitResources(resourceLib, forceInit);
+	if (!_guiParams.DownTexture.empty()) _downTexture.InitResources(resourceLib, forceInit);
+	if (!_guiParams.OutTexture.empty()) _outTexture.InitResources(resourceLib, forceInit);
 }
 
 void GuiElement::_ReleaseResources()

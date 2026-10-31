@@ -1,13 +1,27 @@
+#include "gui/GuiPanelHeader.h"
 #include "gtest/gtest.h"
 #include "gui/CableInteraction.h"
 #include <limits>
 #include "gui/GuiHud.h"
+#include "gui/GuiMainPanel.h"
+#include "gui/GuiButton.h"
 #include "gui/GuiScrollPanel.h"
 #include "gui/GuiPopupManager.h"
+#include "gui/GuiTriggerRename.h"
 #include "engine/RigSnapshot.h"
 #include "engine/Trigger.h"
 
 using gui::CableInteraction;
+
+namespace gui
+{
+	class GuiHudTestAccess
+	{
+	public:
+		static std::shared_ptr<GuiButton> TriggerClose(GuiHud& hud, std::size_t index)
+		{ return hud._triggerWidgets.at(index).Close; }
+	};
+}
 
 TEST(CableGeometry, BoundaryResolutionKeepsVisiblePointsAndClampsEveryEdge)
 {
@@ -254,10 +268,20 @@ protected:
 	{
 		const auto curve = CableInteraction::CurveControls(Cables.front().Route.Kind,
 			Cables.front().Start.Position, Cables.front().Finish.Position);
-		const auto point = CableInteraction::EvaluateCurve(curve, 0.15f);
+		// Inputs now sits above the rail. Find a visible body point in the gap
+		// using the current curve, rather than a fixed parameter behind a pedal.
+		std::optional<utils::Position2d> point;
+		for (unsigned int sample = 1u; sample <= 96u; ++sample)
+		{
+			const auto onCurve = CableInteraction::EvaluateCurve(curve, static_cast<float>(sample) / 200.0f);
+			const utils::Position2d candidate{static_cast<int>(onCurve.x), static_cast<int>(onCurve.y)};
+			if (!Hud->CapturesPointer(candidate) && CableInteraction::HitCable(Cables, candidate, 6.0f))
+			{ point = candidate; break; }
+		}
+		ASSERT_TRUE(point);
 		actions::TouchAction down; down.Touch = actions::TouchAction::TOUCH_MOUSE;
 		down.Index = 0; down.State = actions::TouchAction::TOUCH_DOWN;
-		down.Position = { static_cast<int>(point.x), static_cast<int>(point.y) };
+		down.Position = *point;
 		ASSERT_TRUE(CableInteraction::HitCable(Cables, down.Position, 6.0f));
 		ASSERT_TRUE(Hud->OnAction(down).IsEaten); ASSERT_TRUE(Hud->HasCableDrag());
 	}
@@ -288,6 +312,23 @@ protected:
 			EXPECT_TRUE(popup ? Popups.OnAction(touch).IsEaten : Hud->OnAction(touch).IsEaten);
 		}
 	}
+	void ClickPopupButton(const std::string& text)
+	{
+		ASSERT_TRUE(Popups.IsOpen());
+		const auto popup = Popups.Top();
+		for (unsigned int index = 0; index < 256u; ++index)
+		{
+			const auto child = popup->TryGetChild(static_cast<unsigned char>(index));
+			if (!child) break;
+			const auto button = std::dynamic_pointer_cast<gui::GuiButton>(child);
+			if (button && button->Text() == text)
+			{
+				Click(button, true);
+				return;
+			}
+		}
+		FAIL() << "Popup button not found: " << text;
+	}
 	void PublishRig(const io::RigFile& rig)
 	{
 		auto next = std::make_shared<engine::RigSnapshot>(); next->Revision = Routing->Revision + 1; next->Rig = rig;
@@ -312,6 +353,53 @@ protected:
 	utils::Position2d ReplacementSocket{};
 };
 
+TEST_F(HudCableInteractionTests, ActiveCableDragUsesMovedInputSocketsThroughCollapseAndResize)
+{
+	gui::GuiMainPanelParams params; params.SelectionOnly = true; params.Size = {1200u, 800u};
+	auto selection = std::make_shared<gui::GuiMainPanel>(params); selection->Init();
+	Hud->SetTopPanelLayout(selection->TopPanelLayout());
+	std::vector<std::shared_ptr<gui::GuiScrollPanel>> scrolls; Layout(Hud, scrolls);
+	ASSERT_EQ(2u, scrolls.size());
+	const auto sourceCard = scrolls[0]->Content()->TryGetChild(19u); ASSERT_TRUE(sourceCard);
+	scrolls[0]->SetScrollOffset(scrolls[0]->MaxScrollOffset());
+	Hud->BuildInteractionGeometry(Endpoints, Cables); ASSERT_EQ(1u, Cables.size());
+	const auto oldSource = Cables.front().Start.Position;
+	BeginBodyDrag(); ASSERT_TRUE(Hud->HasCableDrag());
+	selection->SetViewportSize({640u, 800u});
+	Hud->SetTopPanelLayout(selection->TopPanelLayout()); Hud->SetSize({640u, 800u});
+	selection->SetExpanded(false);
+	for (int frame = 0; frame < 12; ++frame)
+	{
+		selection->AdvanceAnimation(0.01f); Hud->SetTopPanelLayout(selection->TopPanelLayout());
+		scrolls[0]->SetScrollOffset(scrolls[0]->MaxScrollOffset());
+		Hud->BuildInteractionGeometry(Endpoints, Cables);
+		EXPECT_TRUE(Hud->HasCableDrag());
+		EXPECT_EQ(sourceCard, scrolls[0]->Content()->TryGetChild(19u));
+		ASSERT_EQ(1u, Cables.size());
+		EXPECT_EQ(42u, Cables.front().Route.Revision);
+		EXPECT_EQ(11u, Cables.front().Route.TriggerIndex);
+		EXPECT_EQ(19u, Cables.front().Start.Source->AdcChannel);
+		for (const auto& endpoint : Endpoints)
+			if (endpoint.Source)
+			{
+				ASSERT_TRUE(endpoint.HitBounds);
+				EXPECT_TRUE(endpoint.HitBounds->Contains(endpoint.Position));
+			}
+	}
+	const auto replacement = std::find_if(Endpoints.begin(), Endpoints.end(), [](const auto& endpoint) {
+		return endpoint.Source && endpoint.Source->AdcChannel == 18u;
+	});
+	ASSERT_NE(Endpoints.end(), replacement);
+	EXPECT_FALSE(oldSource == Cables.front().Start.Position);
+	const auto oldHit = CableInteraction::HitEndpoint(Endpoints, oldSource, 14.0f);
+	EXPECT_FALSE(oldHit.has_value()); // The former socket location is outside the resized window.
+	ReplacementSocket = replacement->Position;
+	MoveToReplacement(1u); Release();
+	ASSERT_EQ(1u, Submissions.size());
+	EXPECT_EQ((std::vector<unsigned int>{18u}), Submissions.back().Triggers[11].CaptureInputs.Audio);
+	EXPECT_FALSE(Hud->HasCableDrag());
+}
+
 TEST_F(HudCableInteractionTests, PointerClearingCancelsClippedBodyDragWithoutSubmittingEdit)
 {
 	BeginBodyDrag(); ASSERT_TRUE(Hud->HasCableDrag());
@@ -326,6 +414,80 @@ TEST_F(HudCableInteractionTests, ZeroButtonMoveCancelsClippedBodyDragInEditorHud
 	BeginBodyDrag(); ASSERT_TRUE(Hud->HasCableDrag());
 	MoveToReplacement(0u); EXPECT_FALSE(Hud->HasCableDrag());
 	Release(); EXPECT_TRUE(Submissions.empty());
+}
+
+TEST_F(HudCableInteractionTests, PedalPressWinsOverSocketRadiusWhileSocketCentreRemainsDraggable)
+{
+	unsigned int admittedEdges = 0u;
+	gui::GuiHudParams params; params.Size = { 1200u, 800u };
+	params.AcceptTriggerInput = [&](std::uint64_t revision) {
+		EXPECT_EQ(Routing->Revision, revision); ++admittedEdges; return true;
+	};
+	Hud = std::make_shared<gui::GuiHud>(params);
+	Hud->SetRoutingConfig(20u, {}, *Routing); Hud->Init();
+	std::vector<std::shared_ptr<gui::GuiScrollPanel>> scrolls; Layout(Hud, scrolls);
+	for (const bool editorMode : { false, true })
+	{
+		// Each mode gets an idle runtime: queued pedal edges correctly block
+		// routing edits until the audio boundary consumes them.
+		const unsigned char triggerIndex = editorMode ? 1u : 0u;
+		const auto card = TriggerScroll()->Content()->TryGetChild(triggerIndex);
+		ASSERT_TRUE(card);
+		const auto pedal = card->TryGetChild(2);
+		ASSERT_TRUE(pedal);
+		Hud->SetLoopEditorMode(editorMode);
+		Hud->BuildInteractionGeometry(Endpoints, Cables);
+		const auto output = std::find_if(Endpoints.begin(), Endpoints.end(), [triggerIndex](const auto& endpoint) {
+			return endpoint.Kind == CableInteraction::EndpointKind::TriggerOutput && endpoint.TriggerIndex == triggerIndex;
+		});
+		ASSERT_NE(Endpoints.end(), output);
+		actions::TouchAction touch; touch.Touch = actions::TouchAction::TOUCH_MOUSE; touch.Index = 0u;
+		touch.Position = output->Position; touch.State = actions::TouchAction::TOUCH_DOWN;
+		ASSERT_TRUE(Routing->Triggers[triggerIndex].Instance->CanApplyCaptureRouting());
+		EXPECT_TRUE(Hud->OnAction(touch).IsEaten); EXPECT_TRUE(Hud->HasCableDrag());
+		Hud->ClearPointerState(); EXPECT_FALSE(Hud->HasCableDrag());
+		// Deliberately overlap the socket radius, independently of the visual layout.
+		pedal->SetPosition({output->Position.X - card->GlobalPosition().X + 8, pedal->Position().Y});
+		touch.Position = pedal->GlobalPosition() + utils::Position2d{2, 4};
+		ASSERT_TRUE(CableInteraction::HitTest(*output, touch.Position, 14.0f));
+		touch.State = actions::TouchAction::TOUCH_DOWN;
+		const auto result = Hud->OnAction(touch);
+		EXPECT_TRUE(result.IsEaten); EXPECT_EQ(pedal, result.ActiveElement.lock());
+		EXPECT_FALSE(Hud->HasCableDrag());
+		touch.State = actions::TouchAction::TOUCH_UP;
+		EXPECT_TRUE(Hud->OnAction(touch).IsEaten); EXPECT_FALSE(Hud->HasCableDrag());
+		EXPECT_FALSE(Routing->Triggers[triggerIndex].Instance->CanApplyCaptureRouting());
+	}
+	EXPECT_EQ(4u, admittedEdges);
+}
+
+TEST_F(HudCableInteractionTests, LabelClickOpensRawDraftOnReleaseAndOwnsBusyOrMovedGestures)
+{
+	const auto card = TriggerScroll()->Content()->TryGetChild(0);
+	const auto rename = std::dynamic_pointer_cast<gui::GuiTriggerRename>(card->TryGetChild(4));
+	ASSERT_TRUE(rename);
+	const auto label = rename->TryGetChild(1);
+	const auto editor = std::dynamic_pointer_cast<gui::GuiTextBox>(rename->TryGetChild(2));
+	ASSERT_TRUE(label); ASSERT_TRUE(editor);
+	actions::TouchAction touch; touch.Touch = actions::TouchAction::TOUCH_MOUSE; touch.Index = 0u;
+	touch.Position = label->GlobalPosition() + utils::Position2d{10, 10};
+	const auto press = [&]() { touch.State = actions::TouchAction::TOUCH_DOWN; return Hud->OnAction(touch); };
+	const auto release = [&]() { touch.State = actions::TouchAction::TOUCH_UP; return Hud->OnAction(touch); };
+	EXPECT_EQ(Hud, press().ActiveElement.lock()); EXPECT_FALSE(rename->Active());
+	EXPECT_TRUE(release().IsEaten); EXPECT_TRUE(rename->Active());
+	EXPECT_EQ(Routing->Rig.Triggers[0].Name, editor->Text());
+	rename->Cancel();
+	EXPECT_TRUE(press().IsEaten);
+	actions::TouchMoveAction move; move.Touch = actions::TouchAction::TOUCH_MOUSE; move.MouseButtonsDown = 1u;
+	move.Position = touch.Position + utils::Position2d{10, 0}; EXPECT_TRUE(Hud->OnAction(move).IsEaten);
+	move.Position = touch.Position; Hud->OnAction(move);
+	EXPECT_TRUE(release().IsEaten); EXPECT_FALSE(rename->Active());
+	Routing->Triggers[0].Instance->QueueExternalControlAction(true, true, touch, Routing->Revision);
+	EXPECT_TRUE(press().IsEaten); EXPECT_TRUE(release().IsEaten); EXPECT_FALSE(rename->Active());
+	EXPECT_FALSE(Hud->HasCableDrag());
+	EXPECT_TRUE(press().IsEaten); Hud->ClearPointerState();
+	EXPECT_TRUE(release().IsEaten); EXPECT_FALSE(rename->Active());
+	Hud->SetVisible(false); EXPECT_FALSE(press().IsEaten); EXPECT_FALSE(rename->Active());
 }
 
 TEST_F(HudCableInteractionTests, ClippedBodyReconnectPreservesOriginalTriggerAndStaleRevisionCancels)
@@ -351,18 +513,15 @@ TEST_F(HudCableInteractionTests, AddTriggerRevealsPublishedCardAfterResizeAndSup
 	EXPECT_FALSE(Submissions.back().Triggers.back().Id.empty());
 	const auto added = Submissions.back(); PublishRig(added); scroll = TriggerScroll();
 	ASSERT_TRUE(scroll->Content()->TryGetChild(12)); EXPECT_FALSE(scroll->Content()->TryGetChild(13));
-	EXPECT_EQ(100u, scroll->Content()->TryGetChild(12)->GetSize().Height);
 	EXPECT_EQ(scroll->MaxScrollOffset(), scroll->ScrollOffset());
 	const auto beforeExpand = scroll->ScrollOffset();
 	Hud->SetSize({ 1200, 800 });
 	EXPECT_EQ((std::min)(beforeExpand, scroll->MaxScrollOffset()), scroll->ScrollOffset());
-	for (unsigned char index = 0; index < 13; ++index)
-		EXPECT_EQ(100u, scroll->Content()->TryGetChild(index)->GetSize().Height);
 	io::RigFile empty = added; empty.Triggers.clear(); PublishRig(empty); Submissions.clear();
 	EXPECT_FALSE(TriggerScroll()->Content()->TryGetChild(0));
 	Click(Hud->TryGetChild(1)->TryGetChild(2)); ASSERT_EQ(1u, Submissions.size());
 	ASSERT_EQ(1u, Submissions.back().Triggers.size()); const auto first = Submissions.back(); PublishRig(first);
-	EXPECT_EQ(100u, TriggerScroll()->Content()->TryGetChild(0)->GetSize().Height);
+	EXPECT_TRUE(TriggerScroll()->Content()->TryGetChild(0));
 }
 
 TEST_F(HudCableInteractionTests, SupportedCompactProfileKeepsSourcesAndTriggerActionsReachable)
@@ -370,10 +529,11 @@ TEST_F(HudCableInteractionTests, SupportedCompactProfileKeepsSourcesAndTriggerAc
 	Hud->SetRoutingConfig(1u, { "Agjpq long MIDI device" }, *Routing);
 	Hud->SetSize({ 400u, 240u });
 	std::vector<std::shared_ptr<gui::GuiScrollPanel>> scrolls; Layout(Hud, scrolls);
+	auto scroll = TriggerScroll(); ASSERT_TRUE(scroll);
 	unsigned int sourceRows = 0;
 	for (const auto& sourceScroll : scrolls) {
 		const auto card = sourceScroll->Content() ? sourceScroll->Content()->TryGetChild(0) : nullptr;
-		if (!card || card->GetSize().Height == 100u) continue;
+		if (!card || sourceScroll == scroll) continue;
 		++sourceRows;
 		EXPECT_GE(sourceScroll->GetSize().Width, 80u);
 		EXPECT_GE(card->GetSize().Width, 80u);
@@ -382,39 +542,39 @@ TEST_F(HudCableInteractionTests, SupportedCompactProfileKeepsSourcesAndTriggerAc
 			sourceScroll->GlobalPosition().X + static_cast<int>(sourceScroll->GetSize().Width));
 	}
 	EXPECT_EQ(2u, sourceRows);
-	auto scroll = TriggerScroll(); ASSERT_TRUE(scroll); EXPECT_GE(scroll->GetSize().Height, 100u);
+	EXPECT_GE(scroll->GetSize().Height, 64u); // Compact rail yields its header to the pedal viewport below Inputs.
 	scroll->SetScrollOffset(0);
 	const auto first = scroll->Content()->TryGetChild(0); ASSERT_TRUE(first);
-	EXPECT_EQ(100u, first->GetSize().Height);
-	EXPECT_GE(first->GlobalPosition().Y, scroll->GlobalPosition().Y);
-	EXPECT_LE(first->GlobalPosition().Y + 100, scroll->GlobalPosition().Y + static_cast<int>(scroll->GetSize().Height));
-	EXPECT_TRUE(Hud->TryGetChild(1)->TryGetChild(0)->IsVisible());
-	const auto close = first->TryGetChild(3);
+	// The taller name row can clip a card in this compact viewport; scrolling
+	// still exposes its controls. Verify the first card intersects the viewport.
+	EXPECT_LE(first->GlobalPosition().Y, scroll->GlobalPosition().Y + static_cast<int>(scroll->GetSize().Height));
+	EXPECT_GE(first->GlobalPosition().Y + static_cast<int>(first->GetSize().Height), scroll->GlobalPosition().Y);
+	EXPECT_TRUE(Hud->TryGetChild(1)->TryGetChild(2)->IsVisible());
+	const auto close = gui::GuiHudTestAccess::TriggerClose(*Hud, 0u);
 	Click(close); ASSERT_TRUE(Popups.IsOpen());
 	const auto popup = Popups.Top();
 	EXPECT_GE(popup->Position().X, 0); EXPECT_GE(popup->Position().Y, 0);
 	EXPECT_LE(popup->Position().X + static_cast<int>(popup->GetSize().Width), 400);
 	EXPECT_LE(popup->Position().Y + static_cast<int>(popup->GetSize().Height), 240);
-	Click(popup->TryGetChild(4), true); EXPECT_FALSE(Popups.IsOpen()); EXPECT_TRUE(Submissions.empty());
-	Click(close); ASSERT_TRUE(Popups.IsOpen()); Click(Popups.Top()->TryGetChild(5), true);
+	ClickPopupButton("Cancel"); EXPECT_FALSE(Popups.IsOpen()); EXPECT_TRUE(Submissions.empty());
+	Click(close); ASSERT_TRUE(Popups.IsOpen()); ClickPopupButton("Delete");
 	ASSERT_EQ(1u, Submissions.size()); EXPECT_EQ(11u, Submissions.back().Triggers.size());
 	const auto removed = Submissions.back(); PublishRig(removed); Submissions.clear();
 	Click(Hud->TryGetChild(1)->TryGetChild(2));
 	ASSERT_EQ(1u, Submissions.size()); EXPECT_EQ(12u, Submissions.back().Triggers.size());
 	const auto appended = Submissions.back(); PublishRig(appended); scroll = TriggerScroll();
 	EXPECT_EQ(scroll->MaxScrollOffset(), scroll->ScrollOffset());
-	for (unsigned char index = 0; index < 12; ++index) EXPECT_EQ(100u, scroll->Content()->TryGetChild(index)->GetSize().Height);
 }
 
 TEST_F(HudCableInteractionTests, DeleteConfirmationSubmitsOnlySelectedTriggerAndClampsPublishedList)
 {
 	Hud->SetSize({ 640, 320 }); auto scroll = TriggerScroll(); ASSERT_TRUE(scroll);
 	scroll->SetScrollOffset(0);
-	const auto close = scroll->Content()->TryGetChild(0)->TryGetChild(3);
+	const auto close = gui::GuiHudTestAccess::TriggerClose(*Hud, 0u);
 	Click(close); ASSERT_TRUE(Popups.IsOpen()); EXPECT_EQ(Hud, Popups.OwnerOfTop());
-	Click(Popups.Top()->TryGetChild(4), true); EXPECT_FALSE(Popups.IsOpen()); EXPECT_TRUE(Submissions.empty());
+	ClickPopupButton("Cancel"); EXPECT_FALSE(Popups.IsOpen()); EXPECT_TRUE(Submissions.empty());
 	Click(close); ASSERT_TRUE(Popups.IsOpen()); scroll->SetScrollOffset(scroll->MaxScrollOffset());
-	Click(Popups.Top()->TryGetChild(5), true); EXPECT_FALSE(Popups.IsOpen());
+	ClickPopupButton("Delete"); EXPECT_FALSE(Popups.IsOpen());
 	ASSERT_EQ(1u, Submissions.size()); ASSERT_EQ(11u, Submissions.back().Triggers.size());
 	EXPECT_EQ(Routing->Rig.Triggers[1].Id, Submissions.back().Triggers.front().Id);
 	EXPECT_EQ((std::vector<unsigned int>{ 19u }), Submissions.back().Triggers.back().CaptureInputs.Audio);
@@ -423,8 +583,6 @@ TEST_F(HudCableInteractionTests, DeleteConfirmationSubmitsOnlySelectedTriggerAnd
 	EXPECT_FALSE(scroll->Content()->TryGetChild(11));
 	const auto beforeShrink = scroll->ScrollOffset();
 	Hud->SetSize({ 320, 180 }); EXPECT_EQ(beforeShrink, scroll->ScrollOffset());
-	for (unsigned char index = 0; index < 11; ++index)
-		EXPECT_EQ(100u, scroll->Content()->TryGetChild(index)->GetSize().Height);
 }
 
 class CableInteractionTests : public ::testing::Test
@@ -756,4 +914,125 @@ TEST_F(CableInteractionTests, EditorStationRoutesRequireExplicitRevealAtTheStati
 	EXPECT_TRUE(CableInteraction::CanGrabEnd(cable, CableInteraction::End::Finish, false, false));
 	cable.Route.Kind = CableInteraction::RouteKind::Capture;
 	EXPECT_TRUE(CableInteraction::CanGrabEnd(cable, CableInteraction::End::Finish, true, false));
+}
+
+
+TEST_F(HudCableInteractionTests, AltPedalOpensLearningOnMatchedReleaseWithoutLeakingOrSwallowingNextClick)
+{
+    gui::GuiPopupManager popups; unsigned int admittedEdges = 0u;
+    gui::GuiHudParams params; params.Size = {1200u,800u}; params.PopupManager = &popups;
+    params.AcceptTriggerInput = [&](std::uint64_t) { ++admittedEdges; return true; };
+    params.TriggerLearnInput = [](auto) { return std::shared_ptr<const io::TriggerBindingLearn::Observation>{}; };
+    Hud = std::make_shared<gui::GuiHud>(params); Hud->SetRoutingConfig(20u,{},*Routing); Hud->Init();
+    std::vector<std::shared_ptr<gui::GuiScrollPanel>> scrolls; Layout(Hud,scrolls);
+    const auto card = TriggerScroll()->Content()->TryGetChild(0u); const auto pedal = card->TryGetChild(2u); ASSERT_TRUE(pedal);
+    actions::TouchAction action; action.Touch = actions::TouchAction::TOUCH_MOUSE; action.Index = 0u;
+    action.Position = {2,2}; action.Modifiers = base::Action::MODIFIER_ALT; action.State = actions::TouchAction::TOUCH_DOWN;
+    EXPECT_TRUE(pedal->OnAction(action).IsEaten); EXPECT_FALSE(popups.IsOpen()); EXPECT_EQ(0u,admittedEdges);
+    action.State = actions::TouchAction::TOUCH_UP; action.Modifiers = base::Action::MODIFIER_NONE;
+    EXPECT_TRUE(pedal->OnAction(action).IsEaten); EXPECT_TRUE(popups.IsOpen()); EXPECT_EQ(0u,admittedEdges);
+    const auto dialog = std::dynamic_pointer_cast<gui::GuiPopup>(popups.Top()); ASSERT_TRUE(dialog);
+    auto stale = *Routing; ++stale.Revision; Hud->SetRoutingConfig(20u,{},stale); Hud->UpdateTriggerLearn();
+    EXPECT_TRUE(popups.IsOpen()); EXPECT_TRUE(Submissions.empty());
+    popups.Close(); Hud->UpdateTriggerLearn(); EXPECT_FALSE(Hud->HasTriggerLearn());
+    action.State = actions::TouchAction::TOUCH_DOWN; EXPECT_TRUE(pedal->OnAction(action).IsEaten);
+    action.State = actions::TouchAction::TOUCH_UP; EXPECT_TRUE(pedal->OnAction(action).IsEaten); EXPECT_EQ(2u,admittedEdges);
+}
+
+TEST_F(HudCableInteractionTests, BothPedalsAltClickLearnWithoutSendingInput)
+{
+    gui::GuiPopupManager popups; unsigned int admittedEdges = 0u;
+    gui::GuiHudParams params; params.Size = {1200u,800u}; params.PopupManager = &popups;
+    params.AcceptTriggerInput = [&](std::uint64_t) { ++admittedEdges; return true; };
+    params.TriggerLearnInput = [](auto) { return std::shared_ptr<const io::TriggerBindingLearn::Observation>{}; };
+    Hud = std::make_shared<gui::GuiHud>(params); Hud->SetRoutingConfig(20u,{},*Routing); Hud->Init();
+    std::vector<std::shared_ptr<gui::GuiScrollPanel>> scrolls; Layout(Hud,scrolls);
+    const auto card = TriggerScroll()->Content()->TryGetChild(0u);
+    for (const auto index : {0u,1u})
+    {
+        SCOPED_TRACE(index);
+        const auto pedal = card->TryGetChild(static_cast<unsigned char>(index + 2u)); ASSERT_TRUE(pedal);
+        actions::TouchAction action; action.Touch = actions::TouchAction::TOUCH_MOUSE; action.Index = 0;
+        action.Position = {2,2}; action.Modifiers = base::Action::MODIFIER_ALT;
+        action.State = actions::TouchAction::TOUCH_DOWN;
+        EXPECT_TRUE(pedal->OnAction(action).IsEaten); EXPECT_FALSE(popups.IsOpen());
+        action.Modifiers = base::Action::MODIFIER_NONE; action.State = actions::TouchAction::TOUCH_UP;
+        EXPECT_TRUE(pedal->OnAction(action).IsEaten); EXPECT_TRUE(popups.IsOpen());
+        EXPECT_EQ(0u,admittedEdges); EXPECT_TRUE(Submissions.empty());
+        popups.Close(); Hud->UpdateTriggerLearn(); EXPECT_FALSE(Hud->HasTriggerLearn());
+    }
+}
+
+TEST_F(HudCableInteractionTests, VisiblePedalLearnControlOpensDialogWithoutSendingPedalInput)
+{
+    gui::GuiPopupManager popups; unsigned int admittedEdges = 0u;
+    gui::GuiHudParams params; params.Size = {1200u,800u}; params.PopupManager = &popups;
+    params.AcceptTriggerInput = [&](std::uint64_t) { ++admittedEdges; return true; };
+    params.TriggerLearnInput = [](auto) { return std::shared_ptr<const io::TriggerBindingLearn::Observation>{}; };
+    Hud = std::make_shared<gui::GuiHud>(params); Hud->SetRoutingConfig(20u,{},*Routing); Hud->Init();
+    std::vector<std::shared_ptr<gui::GuiScrollPanel>> scrolls; Layout(Hud,scrolls);
+    const auto card = TriggerScroll()->Content()->TryGetChild(0u);
+    const auto learn = card->TryGetChild(0u); ASSERT_TRUE(learn);
+    const auto pedal = card->TryGetChild(2u); ASSERT_TRUE(pedal);
+    Hud->SetAltLearnHeld(true);
+    EXPECT_FALSE(learn->IsVisible());
+    EXPECT_FALSE(learn->IsEnabled());
+    actions::TouchAction hiddenClick; hiddenClick.Position = {2,2};
+    hiddenClick.State = actions::TouchAction::TOUCH_DOWN;
+    EXPECT_FALSE(learn->OnAction(hiddenClick).IsEaten);
+    hiddenClick.State = actions::TouchAction::TOUCH_UP;
+    EXPECT_FALSE(learn->OnAction(hiddenClick).IsEaten);
+    EXPECT_FALSE(popups.IsOpen());
+    for (const auto index : {0u,1u})
+    {
+        const auto triggerPedal = card->TryGetChild(static_cast<unsigned char>(index + 2u)); ASSERT_TRUE(triggerPedal);
+        EXPECT_FALSE(triggerPedal->TryGetChild(0u)->IsVisible());
+        EXPECT_TRUE(triggerPedal->TryGetChild(1u)->IsVisible());
+        EXPECT_TRUE(triggerPedal->TryGetChild(2u)->IsVisible());
+        EXPECT_EQ(triggerPedal->GetSize().Width, triggerPedal->TryGetChild(2u)->GetSize().Width);
+        EXPECT_EQ(triggerPedal->GetSize().Height, triggerPedal->TryGetChild(2u)->GetSize().Height);
+    }
+    Hud->SetAltLearnHeld(false);
+    EXPECT_TRUE(learn->IsVisible());
+    EXPECT_TRUE(learn->IsEnabled());
+    EXPECT_TRUE(pedal->TryGetChild(0u)->IsVisible());
+    EXPECT_FALSE(pedal->TryGetChild(1u)->IsVisible());
+    EXPECT_FALSE(pedal->TryGetChild(2u)->IsVisible());
+    actions::TouchMoveAction hover;
+    hover.Position = learn->GlobalPosition() + utils::Position2d{2,2};
+    Hud->OnAction(hover);
+    EXPECT_EQ(base::GuiElement::STATE_OVER,learn->GetState());
+    actions::TouchAction action; action.Touch = actions::TouchAction::TOUCH_MOUSE; action.Index = 0u;
+    action.Position = learn->GlobalPosition() + utils::Position2d{2,2}; action.State = actions::TouchAction::TOUCH_DOWN;
+    const auto down = Hud->OnAction(action);
+    EXPECT_TRUE(down.IsEaten); EXPECT_EQ(learn,down.ActiveElement.lock());
+    EXPECT_FALSE(popups.IsOpen()); EXPECT_FALSE(Hud->HasCableDrag());
+    action.State = actions::TouchAction::TOUCH_UP;
+    // Scene/Window send captured releases directly to the pressed control.
+    EXPECT_TRUE(learn->OnAction(learn->GlobalToLocal(action)).IsEaten);
+    EXPECT_TRUE(popups.IsOpen()); EXPECT_EQ(0u,admittedEdges);
+}
+
+TEST_F(CableInteractionTests, FadeRetainsVisibilityAfterRevealEndsAndEditsFadeSlower)
+{
+    const auto visible = gui::CableInteraction::FadeAlpha(0.0f, true, 0.2f, false);
+    EXPECT_FLOAT_EQ(1.0f, visible);
+    const auto normal = gui::CableInteraction::FadeAlpha(visible, false, 0.175f, false);
+    const auto edited = gui::CableInteraction::FadeAlpha(visible, false, 0.175f, true);
+    EXPECT_NEAR(0.5f, normal, 0.0001f);
+    EXPECT_GT(edited, normal);
+    EXPECT_FLOAT_EQ(0.0f, gui::CableInteraction::FadeAlpha(normal, false, 1.0f, false));
+    EXPECT_FLOAT_EQ(0.0f, gui::CableInteraction::FadeAlpha(edited, false, 1.0f, true));
+    EXPECT_GT(gui::CableInteraction::FadeAlpha(normal, true, 0.05f, false), normal);
+}
+
+TEST_F(CableInteractionTests, FadeTimingDoesNotDependOnFrameRate)
+{
+    for (const auto frames : {30, 60, 144})
+    {
+        float alpha = 1.0f;
+        for (int frame = 0; frame < frames; ++frame)
+            alpha = gui::CableInteraction::FadeAlpha(alpha, false, 0.5f / frames, true);
+        EXPECT_NEAR(0.5f, alpha, 0.0001f);
+    }
 }

@@ -1,5 +1,6 @@
 #include "../../../console/DiagnosticThread.h"
 #include "AudioDevice.h"
+#include "AsioStream.h"
 #include <cmath>
 #include <limits>
 #include <set>
@@ -21,7 +22,7 @@ void AudioStreamParams::PrintParams()
 
 AudioDevice::AudioDevice() : _audioStreamParams(), _stream(), _streamState(StreamState::CLOSED) {}
 
-AudioDevice::AudioDevice(AudioStreamParams params, std::unique_ptr<RtAudio> stream) :
+AudioDevice::AudioDevice(AudioStreamParams params, std::unique_ptr<AsioStream> stream) :
 	_audioStreamParams(std::move(params)), _stream(std::move(stream)), _streamState(StreamState::CLOSED)
 {
 	if (_stream)
@@ -36,7 +37,11 @@ AudioDevice::~AudioDevice()
 	if (!TryStop()) (void)_stream.release();
 }
 
-void AudioDevice::SetDevice(std::unique_ptr<RtAudio> device)
+bool AudioDevice::IsRunning() const { return _stream && _stream->IsActive(); }
+bool AudioDevice::IsOpen() const { return _stream && _stream->isStreamOpen(); }
+bool AudioDevice::ResetRequested() const { return _stream && _stream->ResetRequested(); }
+
+void AudioDevice::SetDevice(std::unique_ptr<AsioStream> device)
 {
 	if (!TryStop()) return;
 	_stream = std::move(device);
@@ -74,8 +79,8 @@ bool AudioDevice::TryStop()
 	if (!_stream) return true;
 	try
 	{
-		if (_stream->isStreamRunning()) _stream->stopStream();
-		if (_stream->isStreamRunning()) return false;
+		if (_stream->IsActive()) _stream->stopStream();
+		if (_stream->IsActive()) return false;
 		if (_stream->isStreamOpen()) _stream->closeStream();
 		if (_stream->isStreamOpen()) return false;
 	}
@@ -90,11 +95,11 @@ bool AudioDevice::TryStop()
 
 bool AudioDevice::Pause()
 {
-	if (!_stream || !_stream->isStreamRunning()) return false;
+	if (!_stream || !_stream->IsActive()) return false;
 	try
 	{
 		_stream->stopStream();
-		if (_stream->isStreamRunning()) return false;
+		if (_stream->IsActive()) return false;
 		_streamState = StreamState::PAUSED;
 		return true;
 	}
@@ -328,7 +333,11 @@ std::optional<std::unique_ptr<AudioDevice>> AudioDevice::Open(
 				std::unique_ptr<AudioDevice> openedDevice;
 				try
 				{
-					auto stream = std::make_unique<RtAudio>(RtAudio::WINDOWS_ASIO);
+					auto stream = std::make_unique<AsioStream>();
+					// openStream saves metadata by probing every ASIO driver again.
+					// Silence incidental probe warnings; selected-stream failures still
+					// reach the open report or the installed backend error callback.
+					stream->showWarnings(false);
 					if (exactSelection)
 					{
 						const auto current = stream->getDeviceInfo(candidate->Id);

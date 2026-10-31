@@ -1,6 +1,8 @@
+#include "../gui/WorkspaceTestAccess.h"
 #include "gtest/gtest.h"
 #include "../../TestPaths.h"
 #include <algorithm>
+#include <bitset>
 #include <filesystem>
 #include <fstream>
 #include "engine/Scene.h"
@@ -16,11 +18,25 @@ namespace gui
     class GuiMainPanelTestAccess
     {
     public:
-        static std::shared_ptr<GuiButton> RigSaveButton(GuiMainPanel& panel) { return panel._saveRigButton; }
+        static std::shared_ptr<GuiButton> RigSaveButton(GuiMainPanel& panel) { panel.SetPage(SettingsPage::Session); return panel._saveRigButton; }
+        static std::shared_ptr<GuiButton> OrdinaryRigSave(GuiMainPanel& panel) { return panel._ordinaryRigSaveButton; }
+        static std::shared_ptr<GuiButton> RigSaveChoice(GuiMainPanel& panel, unsigned int choice) { return panel._additionalRigSaveButtons.at(choice); }
+
     };
 }
 namespace engine
 {
+    class NativeKeyboardWindow : public graphics::Window
+    {
+    public:
+        NativeKeyboardWindow(Scene& scene, resources::ResourceLib& resources) : Window(scene, resources) {}
+        std::bitset<256u> NativeKeys;
+    protected:
+        // Direct WindowProcedure calls do not update the OS queued key state.
+        bool _IsNativeKeyDown(unsigned int key, bool) const override
+        { return key < NativeKeys.size() && NativeKeys.test(key); }
+    };
+
     class PressPickWindow : public graphics::Window
     {
     public:
@@ -51,19 +67,165 @@ namespace engine
     class SourceLossIntegrationTestAccess
     {
     public:
+		static unsigned int InteractionSampleRate(Scene& scene)
+		{
+			std::scoped_lock lock(scene._sceneMutex);
+			return scene._workspace->InteractionContextLocked({ scene._sceneMutex, scene._stations }, scene._WorkspaceInputPresentation()).SampleRate;
+		}
+		static std::shared_ptr<base::GuiElement> SelectionHandle(Scene& scene) { return scene._workspace->SelectionPanel()->TryGetChild(1u); }
+        static std::shared_ptr<gui::GuiMainPanel> SettingsPanel(Scene& scene) { return scene._workspace->MainPanel(); }
+        static std::vector<unsigned char> CurrentHover(Scene& scene) { return scene._workspace->CurrentHover(); }
+		struct MidiToken { std::uint64_t SceneId, OperationId, Revision; std::vector<io::UserConfig::MidiSettings> Desired; };
+		static bool Quitting(const Scene& scene) { return scene._isSceneQuitting.load(std::memory_order_acquire); }
+		static void PrepareMidiDraft(Scene& scene)
+		{
+			scene._workspace->Settings().SetMidiDraft({{"Keys", true, "keys"}});
+			scene._operation.InitializeCandidates(scene._workspace->Settings().AudioDraft(), scene._workspace->Settings().MidiDraft());
+			scene._operation._presentation.PagesChanged = true;
+			scene._workspace->ApplyControlPresentation(scene._operation.TakePresentation(), scene.shared_from_this());
+		}
+		static void ToggleMidi(Scene& scene, bool enabled)
+		{ scene._workspace->Settings().MidiDevice(0u)->SetToggleState(enabled ? gui::GuiToggleParams::TOGGLE_ON : gui::GuiToggleParams::TOGGLE_OFF, false); }
+		static bool MidiEnabled(const Scene& scene) { return scene._workspace->Settings().MidiDraft().at(0u).Enabled; }
+		static bool MidiOperation(const Scene& scene) { return scene._operation.Current() == SessionControl::Midi; }
+		static MidiToken TakeMidiRequest(Scene& scene)
+		{
+			const auto request = scene._operation._pendingMidiDeviceRequest.exchange({}, std::memory_order_acq_rel);
+			EXPECT_TRUE(request);
+			return request ? MidiToken{request->SceneId, request->OperationId, request->DraftRevision, request->Desired} : MidiToken{};
+		}
+		static void CompleteMidi(Scene& scene, const MidiToken& token, unsigned int mismatch = 0u)
+		{
+			scene._operation._completedMidiDeviceRequest.store(std::make_shared<const SessionControl::MidiDeviceCompletion>(SessionControl::MidiDeviceCompletion{
+				token.SceneId + (mismatch == 1u), token.OperationId + (mismatch == 2u), token.Revision + (mismatch == 3u),
+				"Test-owned completion", true, true, token.Desired}), std::memory_order_release);
+		}
+		static std::uint64_t AudioRevision(const Scene& scene) { return scene._workspace->Settings().AudioDraftRevision(); }
+		static void FocusAudioText(Scene& scene, const std::string& text)
+		{
+			scene._workspace->MainPanel()->SetPage(gui::SettingsPage::Audio);
+			auto field = scene._workspace->Settings().AudioInput(0u);
+			ASSERT_TRUE(scene._workspace->RequestFocus(field));
+			field->SetText(text, false);
+		}
+		static SessionControl::Presentation AudioCompletion(Scene& scene, io::UserConfig::AudioSettings settings, std::uint64_t revision)
+		{
+			scene._operation._presentation.AudioAccepted = SessionControl::Candidate<io::UserConfig::AudioSettings>{std::move(settings), revision};
+			scene._operation._presentation.PagesChanged = true;
+			return scene._operation.TakePresentation();
+		}
+		static void ApplyPresentation(Scene& scene, SessionControl::Presentation presentation)
+		{ scene._workspace->ApplyControlPresentation(std::move(presentation), scene.shared_from_this()); }
+		static bool ControlIdle(const Scene& scene) { return scene._operation.Current() == SessionControl::None && !scene._operation.HoldsWriter(); }
+		static bool InputGateOpen(Scene& scene) { const auto rig = scene.AcceptedRigSnapshot(); return rig && scene._inputSubsystem->TryAcceptUiRigTriggerInput(rig->Revision); }
+        static utils::Position2d CanvasPoint(Scene& scene, utils::Position2d offset = {})
+        {
+            // The former (560,300) lies inside stacked Inputs at 800x600.
+            // These tests need actual free canvas before supplying a picker path.
+            const auto point = utils::Position2d{560,200} + offset;
+            EXPECT_TRUE(utils::Size2d::RectTest(scene._sizeParams.Size, point));
+            EXPECT_FALSE(scene._workspace->Hud()->CapturesPointer(scene._workspace->Hud()->GlobalToLocal(point)));
+            EXPECT_FALSE(scene._workspace->SelectionPanel()->RouteHitTest(scene._workspace->SelectionPanel()->GlobalToLocal(point)));
+            EXPECT_FALSE(scene._workspace->MainPanel()->RouteHitTest(scene._workspace->MainPanel()->GlobalToLocal(point)));
+            return point;
+        }
         static std::shared_ptr<gui::GuiButton> RigSaveButton(Scene& scene)
-        { return gui::GuiMainPanelTestAccess::RigSaveButton(*scene._mainPanel); }
-        static bool RigSaveRequested(const Scene& scene) { return scene._rigSaveRequested; }
-        static void ChooseAudio(Scene& scene, int index) { scene._audioDeviceChoice->SetSelectedIndex(index, true); }
-        static void AudioChannels(Scene& scene, unsigned int input, double value) { scene._audioInputs[input]->SetValue(value, true); }
+        { return gui::GuiMainPanelTestAccess::RigSaveButton(*scene._workspace->MainPanel()); }
+        static std::shared_ptr<gui::GuiButton> RigSaveChoice(Scene& scene, unsigned int choice)
+        { return gui::GuiMainPanelTestAccess::RigSaveChoice(*scene._workspace->MainPanel(), choice); }
+        static std::shared_ptr<gui::GuiButton> OrdinaryRigSave(Scene& scene)
+        { return gui::GuiMainPanelTestAccess::OrdinaryRigSave(*scene._workspace->MainPanel()); }
+        static std::shared_ptr<gui::GuiButton> SessionButton(Scene& scene, unsigned int command)
+        {
+            for (const auto& entry : scene._workspace->Settings().SettingsEntries())
+                if (entry.Command == command) return std::dynamic_pointer_cast<gui::GuiButton>(entry.Control);
+            return {};
+        }
+        static void PickDirectory(Scene& scene, std::function<std::wstring(const std::wstring&)> pick)
+        { scene._operation._pickSessionDirectory = std::move(pick); }
+        static void Save(Scene& scene, bool choose = false) { scene._operation.RequestSave(choose, false, scene._ControlEffects()); }
+        static void FinishPickedSave(Scene& scene, bool success, std::wstring folder, std::wstring path)
+        { scene._operation.CompleteSessionSave(success, path, "test failure", std::move(folder), false); scene._operation.Begin(SessionControl::None); }
+        static std::wstring PendingFolder(Scene& scene) { return scene._operation._pendingSaveFolder; }
+        static std::wstring SaveFolder(Scene& scene) { return scene._operation.SessionSaveFolder(); }
+        static std::string FileStatus(Scene& scene) { return scene._operation.TakePresentation().FileStatus; }
+        static void SetFileControls(Scene& scene, bool enabled) { scene._workspace->Settings().SetSessionEnabled(enabled, enabled); scene._workspace->MainPanel()->SetRigSaveEnabled(enabled); }
+        static gui::RuntimeDialogDecision ResetDecision(Scene& scene) { return scene._resetAllDecision; }
+        static void ResolveReset(Scene& scene, bool accept) { ASSERT_TRUE(scene._resetAllDecision); *scene._resetAllDecision = accept; scene.AdvanceUiAnimations(); }
+        static unsigned long ClockLength(Scene& scene) { return scene._quantisation.Clock()->SeedSourceLength(); }
+        static void SetClock(Scene& scene) { scene._quantisation.Clock()->SetSeedSourceLength(96000ul); }
+        static void SetResetQuantisationState(Scene& scene)
+        {
+            scene._quantisation.SetGlobalPhaseOffsetSamps(321, scene._stations);
+            scene._quantisation.SetDefaultMidiQuantisationFraction(midi::MidiQuantisationFraction::Sixth, scene._stations, false);
+            scene._SetGlobalMidiQuantState(io::JamFile::GlobalMidiQuantState::All);
+        }
+        static std::int32_t GlobalPhase(Scene& scene) { return scene._quantisation.GlobalPhaseOffsetSamps(); }
+        static midi::MidiQuantisationFraction DefaultFraction(Scene& scene) { return scene._quantisation.DefaultMidiQuantisationFraction(); }
+        static io::JamFile::GlobalMidiQuantState GlobalQuantisationState(Scene& scene) { return scene._globalMidiQuantState; }
+
+        static bool ReclockArmed(Scene& scene) { return scene._quantisation.IsArmedForReclock(); }
+        static bool RigSaveRequested(const Scene& scene) { return scene._operation._rigSaveRequested; }
+        static void ChooseAudio(Scene& scene, int index) { scene._workspace->Settings().AudioDevice()->SetSelectedIndex(index, true); }
+        static void ChooseSampleRate(Scene& scene, int index) { scene._workspace->Settings().AudioSampleRate()->SetSelectedIndex(index, true); }
+        static std::string SampleRateText(const Scene& scene) { return scene._workspace->Settings().AudioSampleRate()->SelectedText(); }
+        static void RefreshDevicePage(Scene& scene)
+        {
+            scene._operation._presentation.PagesChanged = true;
+            scene._workspace->ApplyControlPresentation(scene._operation.TakePresentation(), scene.shared_from_this());
+        }
+        static io::UserConfig::AudioSettings SubmittedAudio(const Scene& scene) { return scene._operation._submittedAudio.Value; }
+		static bool ScheduleAudioRefresh(Scene& scene, SessionControl::Eligibility eligibility = {}, bool inventoryBusy = false)
+		{
+			SessionControl::Effects effects;
+			effects.CheckEligibility = [eligibility] { return eligibility; };
+			return scene._operation._ScheduleWindowOperation(std::chrono::steady_clock::now(), scene._audioEngine->GetStreamParams(), effects, inventoryBusy);
+		}
+		static bool AudioRefreshPending(const Scene& scene) { return scene._operation._audioRefreshRequested.load(); }
+		static bool AudioRefreshOperation(const Scene& scene) { return scene._operation.Current() == SessionControl::AudioRefresh; }
+		static bool ScheduleRefreshWithOpenStream(Scene& scene) { return scene._operation._ScheduleAudioRefresh(true); }
+		static bool ManualAudioRescanOperation(const Scene& scene) { return scene._operation.Current() == SessionControl::AudioRescan; }
+		static void RequestManualAudioRescan(Scene& scene) { scene._operation.RefreshAudioFromWindow(); }
+		static SessionControl::Presentation DevicePresentation(Scene& scene) { return scene._operation.TakePresentation(); }
+		static io::UserConfig::AudioSettings ConfiguredAudio(const Scene& scene) { return scene._userConfig.Audio; }
+		static void SetHostInventory(Scene& scene, audio::AsioInventory inventory) { scene._audioEngine->_asioInventory = std::move(inventory); }
+		static bool ValidateAudioDraft(Scene& scene, bool hasTakes, std::string& error)
+		{
+			SessionControl::Effects effects;
+			effects.CheckEligibility = [hasTakes] { return SessionControl::Eligibility{false, hasTakes, false}; };
+			return scene._operation._ValidateAudioDraft(error, effects);
+		}
+		static void FinishTestAudioRefresh(Scene& scene) { scene._operation.Begin(SessionControl::None); }
+		static void AcceptRescannedAudioDraft(Scene& scene, const io::UserConfig::AudioSettings& settings)
+		{
+			scene._operation._admittedAudio.Revision = scene._workspace->Settings().AudioDraftRevision();
+			scene._operation._submittedAudio = {scene._workspace->Settings().AudioDraft(), scene._operation._admittedAudio.Revision};
+			scene._operation._AcceptAudioDraft(settings, true, true);
+			scene._operation._presentation.PagesChanged = true;
+			scene._workspace->ApplyControlPresentation(scene._operation.TakePresentation(), scene.shared_from_this());
+		}
+		static io::UserConfig::AudioSettings FailAudioRefreshWithoutHardware(Scene& scene, audio::AudioStreamParams actual = {})
+		{
+			// The existing uncertain-backend guard rejects before constructing any
+			// RtAudio object. Exercise request choice/failure scheduling hermetically.
+			scene._audioEngine->_backendLifetimeUncertain = true;
+			std::string error;
+			scene._operation._ApplyAudioCandidate(actual, std::chrono::steady_clock::now(), {scene._sceneMutex, scene._stations}, {}, error);
+			EXPECT_FALSE(error.empty());
+			scene._audioEngine->_backendLifetimeUncertain = false;
+			return scene._operation._admittedAudio.Value;
+		}
+		static void SetUnsubmittedAudioDraft(Scene& scene, io::UserConfig::AudioSettings draft)
+		{ scene._operation._submittedAudio = {std::move(draft), 123u}; }
+        static void AudioChannels(Scene& scene, unsigned int input, double value) { scene._workspace->Settings().AudioInput(input)->SetValue(value, true); }
         static std::shared_ptr<Station> RemovalTarget(Scene& scene)
         { std::scoped_lock lock(scene._sceneMutex); return scene._stationManagement.Target; }
         static std::shared_ptr<gui::GuiButton> RemovalButton(Scene& scene, unsigned int ordinal)
         {
-            if (!scene._stationDeleteDialog) return {};
+            if (!scene._workspace->StationRemovalConfirmation()) return {};
             for (unsigned int index = 0u; index < 256u; ++index)
             {
-                const auto child = scene._stationDeleteDialog->TryGetChild(static_cast<unsigned char>(index));
+                const auto child = scene._workspace->StationRemovalConfirmation()->TryGetChild(static_cast<unsigned char>(index));
                 if (!child) break;
                 if (const auto button = std::dynamic_pointer_cast<gui::GuiButton>(child))
                     if (ordinal-- == 0u) return button;
@@ -71,47 +233,48 @@ namespace engine
             return {};
         }
         static void BeginDeviceWriter(Scene& scene)
-        { scene._controlWriterExclusion = std::unique_lock(scene._controlLifecycleMutex); scene._controlOperation = Scene::ControlOperation::Save; }
+        { scene._operation._writer = std::unique_lock(scene._operation.LifecycleMutex()); scene._operation.Begin(SessionControl::Save); }
         static void EndDeviceWriter(Scene& scene)
-        { scene._controlOperation = Scene::ControlOperation::None; scene._controlWriterExclusion.unlock(); }
+        { scene._operation.Begin(SessionControl::None); scene._operation.ReleaseWriter(); }
         static std::unique_lock<std::mutex> ExcludeJob(Scene& scene)
-        { return std::unique_lock(scene._controlLifecycleMutex); }
+        { return std::unique_lock(scene._operation.LifecycleMutex()); }
         static std::string StartedAudioSelection(Scene& scene,
             const audio::AsioInventory& inventory, const audio::AudioStreamParams& params)
         {
-            scene._deviceInventory = inventory;
-            scene._SetAudioDraftFromStream(params);
-            scene._RebuildDevicePage();
-            return scene._audioDeviceChoice->SelectedText();
+            scene._operation._deviceInventory = inventory;
+            scene._workspace->Settings().SetAudioDraftFromStream(params);
+            scene._operation._presentation.PagesChanged = true;
+            scene._workspace->ApplyControlPresentation(scene._operation.TakePresentation(), scene.shared_from_this());
+            return scene._workspace->Settings().AudioDevice()->SelectedText();
         }
-        static io::UserConfig::AudioSettings AudioDraft(const Scene& scene) { return scene._audioDraft; }
+        static io::UserConfig::AudioSettings AudioDraft(const Scene& scene) { return scene._workspace->Settings().AudioDraft(); }
         static void WhileSceneLocked(Scene& scene, const std::function<void()>& callback)
         {
             std::scoped_lock lock(scene._sceneMutex);
             callback();
         }
-        static bool ControlHeld(const Scene& scene) { return scene._ctrlHeld; }
-        static void SetDepth(Scene& scene, unsigned int depth) { scene._UpdateSelectDepth(depth); }
+        static bool ControlHeld(const Scene& scene) { return scene._workspace->CtrlHeld(); }
+        static void SetDepth(Scene& scene, unsigned int depth) { scene._workspace->UpdateSelectDepth(depth, { scene._sceneMutex, scene._stations }, scene._WorkspaceInputPresentation()); }
         static void AddStation(Scene& scene, const std::shared_ptr<Station>& station)
         {
             std::scoped_lock lock(scene._sceneMutex);
             scene._stations.push_back(station);
         }
-        static bool SelectionPreviewActive(const Scene& scene) { return scene._BackgroundSelectionPreviewActive(); }
-        static void SelectTakeDepth(Scene& scene) { scene._UpdateSelectDepth(Scene::VIEW_LOOPTAKE); }
+        static bool SelectionPreviewActive(const Scene& scene) { return scene._workspace->BackgroundSelectionPreviewActive({ scene._sceneMutex, scene._stations }, scene._WorkspaceInputPresentation()); }
+        static void SelectTakeDepth(Scene& scene) { scene._workspace->UpdateSelectDepth(Scene::VIEW_LOOPTAKE, { scene._sceneMutex, scene._stations }, scene._WorkspaceInputPresentation()); }
         static void RefreshRackVisibility(Scene& scene)
         {
             std::scoped_lock lock(scene._sceneMutex);
-            scene._viewProj = glm::mat4(1.0f);
-            scene._UpdateRackVisibilityLocked();
+            gui::WorkspaceTestAccess::SetProjection(*scene._workspace, glm::mat4(1.0f));
+            scene._workspace->UpdateRackVisibilityLocked(scene._stations, scene._workspace->Editor().IsEngaged());
         }
-        static bool ItemMutePressed(const Scene& scene) { return scene._selector->IsMutePressed(); }
-        static bool ItemMutePainting(const Scene& scene) { return scene._selector->IsPaintingMute(); }
-        static bool BackgroundPreviewActive(const Scene& scene) { return scene._BackgroundPreviewActive(); }
-        static graphics::Camera::Pose CameraPose(const Scene& scene) { return scene._camera.CurrentPose(); }
-        static bool BackgroundOwned(const Scene& scene) { return scene._backgroundGesture.has_value(); }
-        static bool CameraBackgroundActive(const Scene& scene) { return scene._camera.IsBackgroundDragging(); }
-        static bool CameraPointerHeld(const Scene& scene) { return scene._camera.IsBackgroundPointerHeld(); }
+        static bool ItemMutePressed(const Scene& scene) { return scene._workspace->IsSelectionMutePressed(); }
+        static bool ItemMutePainting(const Scene& scene) { return scene._workspace->IsPaintingMute(); }
+        static bool BackgroundPreviewActive(const Scene& scene) { return scene._workspace->BackgroundPreviewActive({ scene._sceneMutex, scene._stations }, scene._WorkspaceInputPresentation()); }
+        static graphics::Camera::Pose CameraPose(const Scene& scene) { return gui::WorkspaceTestAccess::Camera(*scene._workspace).CurrentPose(); }
+        static bool BackgroundOwned(const Scene& scene) { return scene._workspace->OwnsBackgroundClick(); }
+        static bool CameraBackgroundActive(const Scene& scene) { return gui::WorkspaceTestAccess::Camera(*scene._workspace).IsBackgroundDragging(); }
+        static bool CameraPointerHeld(const Scene& scene) { return gui::WorkspaceTestAccess::Camera(*scene._workspace).IsBackgroundPointerHeld(); }
         static bool ApplyMuteBoundary(Scene& scene)
         {
             scene._audioEngine->CloseCallbackAdmission();
@@ -120,7 +283,7 @@ namespace engine
         static void Confirm(Scene& scene, const midi::MidiConnectionResult& previous,
             const midi::MidiConnectionResult& refreshed, const std::vector<std::string>& names)
         {
-            scene._ConfirmMidiConnectionChange(previous, refreshed, names);
+            scene._operation.ConfirmMidiConnectionChange(previous, refreshed, names, { scene._sceneMutex, scene._stations });
         }
         static void RemoteGrid(Scene& scene, const engine::RemoteTransportGeometry& geometry, std::int64_t origin)
         { std::scoped_lock lock(scene._sceneMutex); scene._quantisation.SetRemoteMidiGrid(geometry, origin, scene._stations); }
@@ -141,30 +304,46 @@ namespace engine
 		{ std::scoped_lock lock(scene._sceneMutex); for (const auto& station : scene._stations) station->FinishPresentationMove(); }
 		static bool ControlsAvailable(Scene& scene)
 		{ std::scoped_lock lock(scene._sceneMutex); return scene._StationManagementAvailableLocked(); }
-        static void ConfirmRemoval(Scene& scene) { scene._popupManager.Close(); scene._AcceptStationRemoval(true); }
+		static bool ConfirmationOpen(const Scene& scene) { return scene._workspace->PopupOpen(); }
+		static void RequestTakeDitch(Scene& scene, const std::shared_ptr<Station>& station, const std::shared_ptr<LoopTake>& take)
+		{ scene._RequestTakeDitch({ false, {}, station, take }); }
+		static void AdvanceAcceptedRevision(Scene& scene)
+		{
+			std::scoped_lock lock(scene._sceneMutex);
+			const auto accepted = scene._rigCoordinator.Accepted();
+			const auto updated = scene._rigCoordinator.RefreshRuntimeAvailability(accepted->AvailableAdcChannels, accepted->AvailableMidiDevices);
+			ASSERT_TRUE(updated);
+			ASSERT_GT(updated->Revision, accepted->Revision);
+			scene._audioEngine->PublishPendingRigSnapshot(updated);
+			scene._inputSubsystem->PublishRigInputDispatch(updated);
+		}
+        static void ConfirmRemoval(Scene& scene) { scene._workspace->CloseTopPopup(); scene._AcceptStationRemoval(true); }
         static bool Busy(Scene& scene) { std::scoped_lock lock(scene._sceneMutex); return scene._stationManagement.Busy(); }
         static void Recover(Scene& scene) { scene._PumpSourceLossRecovery(); }
         static bool RecoveryGateIsClosed(Scene& scene)
         {
             std::scoped_lock lock(scene._sceneMutex);
-            return scene._sourceLossRecoveryGateClosed;
+            return scene._operation.SourceRecoveryGateClosed();
         }
 		static std::shared_ptr<gui::GuiNumericInput> FocusSetting(Scene& scene, const std::string& text)
 		{
-			auto field = scene._settingsControls->Offset();
+			auto field = scene._workspace->Settings().Offset();
 			// Focus manager and text edit state belong to the window owner. Commit
 			// remains deferred until actual Scene focus loss invokes FinalizeEdits.
-			EXPECT_TRUE(scene._focusManager.RequestFocus(field));
+			EXPECT_TRUE(scene._workspace->RequestFocus(field));
 			field->SetText(text, false);
 			return field;
 		}
 		static unsigned int ForcedChannel(const Scene& scene) { return scene._inputSubsystem->ForcedChannelOverride(); }
-		static void StaleProjection(Scene& scene) { scene._viewProj = glm::mat4(0.0f); }
+        static void OpenKeyboardModal(Scene& scene) { scene._workspace->OpenPopup(std::make_shared<gui::GuiPopup>()); }
+        static void CloseKeyboardModal(Scene& scene) { scene._workspace->ClosePopups(); }
+
+		static void StaleProjection(Scene& scene) { gui::WorkspaceTestAccess::SetProjection(*scene._workspace, glm::mat4(0.0f)); }
 		static bool HasCurrentProjection(const Scene& scene)
 		{
 			const auto aspect = static_cast<float>(scene._sizeParams.Size.Width) / scene._sizeParams.Size.Height;
-			const auto current = scene._camera.Projection(aspect, Scene::_StationCentre(scene._stations)) * scene._camera.ViewMatrix();
-			return scene._viewProj == current;
+			const auto current = gui::WorkspaceTestAccess::Camera(*scene._workspace).Projection(aspect, gui::Workspace::StationCentre(scene._stations)) * gui::WorkspaceTestAccess::Camera(*scene._workspace).ViewMatrix();
+			return scene._workspace->ViewProjection() == current;
 		}
 		static std::shared_ptr<gui::GuiHud> PrepareHud(Scene& scene)
 		{
@@ -178,13 +357,16 @@ namespace engine
 			EXPECT_EQ(scene._rigCoordinator.Accepted()->Revision, scene._audioEngine->AppliedRigRevision());
 			// Supply only the liveness hint. Publication still runs through the real
 			// producer gate, stopped-reader barrier and input acknowledgement.
-			scene._audioEngine->_audioCallbackHeartbeat.store(1u);
-			scene._lastAudioCallbackHeartbeatAt = std::chrono::steady_clock::now();
-			scene._hudPanel->SetCableRevealHeld(true);
-			scene._hudPanel->SetStationAnchors({ {0u, scene._stations[0]->Name(), glm::dvec2{600, 350}, glm::vec4{1.0f}},
+			AudioHeartbeat(scene);
+			scene._workspace->Hud()->SetCableRevealHeld(true);
+			scene._workspace->Hud()->SetStationAnchors({ {0u, scene._stations[0]->Name(), glm::dvec2{600, 350}, glm::vec4{1.0f}},
 				{1u, scene._stations[1]->Name(), glm::dvec2{800, 350}, glm::vec4{1.0f}} });
-			return scene._hudPanel;
+			return scene._workspace->Hud();
 		}
+		static void AudioHeartbeat(Scene& scene)
+		{ scene._audioEngine->_audioCallbackHeartbeat.fetch_add(1u); }
+		static gui::RoutingEditAvailability RoutingAvailability(Scene& scene)
+		{ std::scoped_lock lock(scene._sceneMutex); return scene._RoutingEditAvailability(); }
 		static void AudioBoundary(Scene& scene)
 		{
 			std::scoped_lock lock(scene._sceneMutex);
@@ -198,7 +380,7 @@ namespace engine
         {
             std::scoped_lock lock(scene._sceneMutex);
             scene._audioEngine->CloseCallbackAdmission();
-            scene._sourceLossRecoveryGateClosed = true;
+            scene._operation.CloseSourceRecoveryGateLocked();
         }
         static void StartRecording(Scene& scene, const std::shared_ptr<Trigger>& trigger,
             const io::UserConfig& cfg)
@@ -253,7 +435,9 @@ protected:
 	static std::shared_ptr<engine::Scene> FreshScene(std::vector<io::JamFile::Station> stations,
 		std::vector<io::RigFile::Trigger> triggers,
 		std::function<bool(const io::RigFile&)> saveRig = [](const io::RigFile&) { return true; },
-		std::vector<io::JamFile::TriggerHistory> histories = {})
+		std::vector<io::JamFile::TriggerHistory> histories = {},
+		std::function<std::chrono::steady_clock::time_point()> routingNow = [] {
+			return std::chrono::steady_clock::time_point{std::chrono::seconds(1)}; })
 	{
 		io::JamFile jam{};
 		jam.Stations = std::move(stations);
@@ -266,6 +450,9 @@ protected:
 					[&id](const auto& device) { return device.Id == id; }))
 					rig.User.Midi.Devices.push_back({ id, true, id });
 		engine::SceneParams params({ "" }, {}, { 640u, 480u });
+		// No audio callback runs here; test-owned time keeps routing independent
+		// of layout, gesture duration and machine scheduling.
+		params.RoutingEditNow = std::move(routingNow);
 		auto scene = engine::Scene::FromFile(params, std::move(jam), std::move(rig), L"", std::move(saveRig));
 		return scene.has_value() ? scene.value() : nullptr;
 	}
@@ -302,9 +489,9 @@ TEST_F(SceneRoutingIntegrationTest, StartedAudioSelectionShowsResolvedDeviceAndN
 	ASSERT_TRUE(created.has_value());
 	auto scene = *created;
 	audio::AsioInventory inventory;
-	inventory.Devices = {{ 0u, "Focusrite USB ASIO", true, "", 18u, 20u, {44100u, 48000u}, 48000u }};
-	const audio::AudioStreamParams actual{ "Focusrite USB ASIO", 48000u, 2u, 128u, 177u, 177u, 8u, 8u };
-	EXPECT_EQ("Focusrite USB ASIO", engine::SourceLossIntegrationTestAccess::StartedAudioSelection(*scene, inventory, actual));
+	inventory.Devices = {{ 0u, "Primary ASIO device", true, "", 18u, 20u, {44100u, 48000u}, 48000u }};
+	const audio::AudioStreamParams actual{ "Primary ASIO device", 48000u, 2u, 128u, 177u, 177u, 8u, 8u };
+	EXPECT_EQ("Primary ASIO device", engine::SourceLossIntegrationTestAccess::StartedAudioSelection(*scene, inventory, actual));
 	const auto draft = engine::SourceLossIntegrationTestAccess::AudioDraft(*scene);
 	EXPECT_EQ(48000u, draft.SampleRate);
 	EXPECT_EQ(128u, draft.BufSize);
@@ -315,6 +502,99 @@ TEST_F(SceneRoutingIntegrationTest, StartedAudioSelectionShowsResolvedDeviceAndN
 	EXPECT_EQ("default", scene->AcceptedRigSnapshot()->Rig.User.Audio.Name);
 	EXPECT_EQ(64u, scene->AcceptedRigSnapshot()->Rig.User.Audio.BufSize);
 	EXPECT_EQ(0u, saves);
+	scene->Shutdown();
+}
+
+TEST_F(SceneRoutingIntegrationTest, SampleRateChoicesFollowDeviceAndSupersedePendingRate)
+{
+	using Access = engine::SourceLossIntegrationTestAccess;
+	auto scene = FreshScene({ Station("Local") }, {});
+	ASSERT_TRUE(scene);
+	{
+		auto excludeJob = Access::ExcludeJob(*scene);
+		audio::AsioInventory inventory;
+		inventory.Devices = {{0u, "Device A", true, "", 2u, 2u, {44100u, 48000u}, 44100u},
+			{1u, "Device B", true, "", 2u, 2u, {32000u, 96000u}, 96000u},
+			{2u, "Device C", true, "", 2u, 2u, {44100u, 48000u}, 48000u}};
+		const audio::AudioStreamParams actual{"Device A", 44100u, 2u, 128u, 0u, 0u, 2u, 2u};
+		Access::StartedAudioSelection(*scene, inventory, actual);
+		EXPECT_EQ("44100 Hz", Access::SampleRateText(*scene));
+		Access::ChooseSampleRate(*scene, 1);
+		EXPECT_EQ(48000u, Access::SubmittedAudio(*scene).SampleRate);
+		const auto pendingRevision = Access::AudioRevision(*scene);
+		Access::ChooseAudio(*scene, 2);
+		EXPECT_GT(Access::AudioRevision(*scene), pendingRevision);
+		// C also supports 48000 Hz, but a pending edit on A must not carry over.
+		EXPECT_EQ(44100u, Access::SubmittedAudio(*scene).SampleRate);
+		Access::RefreshDevicePage(*scene);
+		EXPECT_EQ("44100 Hz", Access::SampleRateText(*scene));
+		Access::ChooseSampleRate(*scene, 1);
+
+		Access::ChooseAudio(*scene, 1);
+		EXPECT_EQ("Device B", Access::SubmittedAudio(*scene).Name);
+		EXPECT_EQ(96000u, Access::SubmittedAudio(*scene).SampleRate);
+		// The old dropdown can still send an action until the next UI refresh.
+		Access::ChooseSampleRate(*scene, 0);
+		EXPECT_EQ(96000u, Access::SubmittedAudio(*scene).SampleRate);
+		Access::RefreshDevicePage(*scene);
+		EXPECT_EQ("96000 Hz", Access::SampleRateText(*scene));
+		Access::ChooseSampleRate(*scene, 0);
+		EXPECT_EQ(32000u, Access::SubmittedAudio(*scene).SampleRate);
+	}
+	scene->Shutdown();
+}
+
+TEST_F(SceneRoutingIntegrationTest, DeviceWithIncompatibleRateKeepsRunningRateVisibleWithTakes)
+{
+	using Access = engine::SourceLossIntegrationTestAccess;
+	auto scene = FreshScene({ Station("Local") }, {});
+	ASSERT_TRUE(scene);
+	{
+		auto excludeJob = Access::ExcludeJob(*scene);
+		audio::AsioInventory inventory;
+		inventory.Devices = {{0u, "Device A", true, "", 2u, 2u, {44100u}, 44100u},
+			{1u, "Device B", true, "", 2u, 2u, {48000u}, 48000u}};
+		const audio::AudioStreamParams actual{"Device A", 44100u, 2u, 128u, 0u, 0u, 2u, 2u};
+		Access::StartedAudioSelection(*scene, inventory, actual);
+		auto station = scene->SnapshotStations().front();
+		station->AddTake();
+		scene->CommitChanges();
+		Access::ChooseAudio(*scene, 1);
+		EXPECT_EQ(44100u, Access::SubmittedAudio(*scene).SampleRate);
+		Access::RefreshDevicePage(*scene);
+		EXPECT_EQ("44100 Hz (unavailable)", Access::SampleRateText(*scene));
+		const auto revision = Access::AudioRevision(*scene);
+		Access::ChooseSampleRate(*scene, 1);
+		EXPECT_EQ(revision, Access::AudioRevision(*scene));
+		EXPECT_EQ(44100u, Access::SubmittedAudio(*scene).SampleRate);
+	}
+	scene->Shutdown();
+}
+
+TEST_F(SceneRoutingIntegrationTest, ChannelControlsUseSelectedDeviceLimits)
+{
+	using Access = engine::SourceLossIntegrationTestAccess;
+	auto scene = FreshScene({ Station("Local") }, {});
+	ASSERT_TRUE(scene);
+	{
+		auto excludeJob = Access::ExcludeJob(*scene);
+		audio::AsioInventory inventory;
+		inventory.Devices = {{0u, "Device A", true, "", 4u, 6u, {44100u}, 44100u},
+			{1u, "Device B", true, "", 1u, 2u, {44100u}, 44100u}};
+		const audio::AudioStreamParams actual{"Device A", 44100u, 2u, 128u, 0u, 0u, 2u, 2u};
+		Access::StartedAudioSelection(*scene, inventory, actual);
+		Access::AudioChannels(*scene, 0u, 99.0);
+		Access::AudioChannels(*scene, 1u, 99.0);
+		EXPECT_EQ(4u, Access::AudioDraft(*scene).NumChannelsIn);
+		EXPECT_EQ(6u, Access::AudioDraft(*scene).NumChannelsOut);
+
+		Access::ChooseAudio(*scene, 1);
+		Access::RefreshDevicePage(*scene);
+		Access::AudioChannels(*scene, 0u, 99.0);
+		Access::AudioChannels(*scene, 1u, 99.0);
+		EXPECT_EQ(1u, Access::AudioDraft(*scene).NumChannelsIn);
+		EXPECT_EQ(2u, Access::AudioDraft(*scene).NumChannelsOut);
+	}
 	scene->Shutdown();
 }
 
@@ -773,8 +1053,8 @@ TEST_F(SceneRoutingIntegrationTest, CloseAudioAndShutdownAreRepeatable)
 {
 	auto scene = FreshScene({ Station("Station") }, { Trigger("trigger", "Station") });
 	ASSERT_TRUE(scene);
-	EXPECT_NO_THROW(scene->CloseAudio());
-	EXPECT_NO_THROW(scene->CloseAudio());
+	EXPECT_NO_THROW(scene->Controls().CloseAudio());
+	EXPECT_NO_THROW(scene->Controls().CloseAudio());
 	EXPECT_NO_THROW(scene->Shutdown());
 	EXPECT_NO_THROW(scene->Shutdown());
 	EXPECT_EQ(engine::RigCoordinator::EditResult::EditsDisabled,
@@ -790,6 +1070,27 @@ TEST_F(SceneRoutingIntegrationTest, RoutingEditIsRejectedWhenAudioCallbackIsInac
 	EXPECT_EQ((std::vector<std::pair<std::string, std::size_t>>{ { "Station", 1u } }),
 		Memberships(scene));
 	scene->Shutdown();
+}
+
+TEST_F(SceneRoutingIntegrationTest, RoutingEditLivenessExpiresAndRecoversOnNewHeartbeat)
+{
+    auto now = std::chrono::steady_clock::time_point{std::chrono::seconds(1)};
+    auto scene = FreshScene({ Station("Station") }, { Trigger("trigger", "Station") },
+        [](const io::RigFile&) { return true; }, {}, [&now] { return now; });
+    ASSERT_TRUE(scene);
+    using Availability = gui::RoutingEditAvailability;
+    using Access = engine::SourceLossIntegrationTestAccess;
+    EXPECT_EQ(Availability::AudioCallbackInactive, Access::RoutingAvailability(*scene));
+    Access::AudioHeartbeat(*scene);
+    EXPECT_EQ(Availability::Ready, Access::RoutingAvailability(*scene));
+    now += std::chrono::milliseconds(500);
+    EXPECT_EQ(Availability::Ready, Access::RoutingAvailability(*scene));
+    now += std::chrono::milliseconds(1);
+    EXPECT_EQ(engine::RigCoordinator::EditResult::AudioCallbackInactive,
+        scene->RequestRigEdit(io::RigFile{}));
+    Access::AudioHeartbeat(*scene);
+    EXPECT_EQ(Availability::Ready, Access::RoutingAvailability(*scene));
+    scene->Shutdown();
 }
 
 TEST_F(SceneRoutingIntegrationTest, StoppedStreamMembershipPreservesSelectionAndRouteIdentity)
@@ -875,10 +1176,17 @@ TEST_F(SceneRoutingIntegrationTest, SavedJamAndExplicitRigReproduceAddedMembersh
  std::ifstream file(directory / "session.jam"); std::stringstream jamJson; jamJson << file.rdbuf(); file.close();
  auto savedJam = io::JamFile::FromStream(std::move(jamJson)); ASSERT_TRUE(savedJam);
  EXPECT_EQ(2u, savedJam->Stations.size());
- EXPECT_EQ((std::vector<int>{1}), savedJam->Stations.front().AllowedMidiChannels);
+ const std::vector<int> allChannels{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16};
+ EXPECT_EQ(allChannels, savedJam->Stations.front().AllowedMidiChannels);
+ for (const auto& route : savedJam->Stations.front().MidiChannelRoutes) EXPECT_TRUE(route.PluginIds.empty());
+ // The loaded original retains its saved disabled channels, independently of creation defaults.
+ EXPECT_TRUE(savedJam->Stations.back().AllowedMidiChannels.empty());
  engine::SceneParams params({ "" }, {}, {640u, 480u});
  auto reloaded = engine::Scene::FromFile(params, *savedJam, *savedRig, directory.wstring()); ASSERT_TRUE(reloaded);
  EXPECT_EQ(scene->SnapshotStations()[0]->Name(), reloaded.value()->SnapshotStations()[0]->Name());
+ EXPECT_EQ(allChannels, reloaded.value()->SnapshotStations()[0]->AllowedMidiChannels());
+ EXPECT_TRUE(reloaded.value()->SnapshotStations()[1]->AllowedMidiChannels().empty());
+ for (const auto& route : reloaded.value()->SnapshotStations()[0]->MidiChannelRoutes()) EXPECT_TRUE(route.PluginIds.empty());
  EXPECT_EQ("A", reloaded.value()->AcceptedRigSnapshot()->Rig.Triggers.front().StationTarget); // frozen target lives in Rig
  reloaded.value()->Shutdown(); scene->Shutdown();
  std::filesystem::remove_all(directory);
@@ -1049,6 +1357,17 @@ TEST_F(SceneRoutingIntegrationTest, DeviceGuiDispatchIsIsolatedFromStationComman
     auto save = engine::SourceLossIntegrationTestAccess::RigSaveButton(*scene);
     ASSERT_TRUE(save); click(save);
     EXPECT_TRUE(scene->ConsumeRigSaveRequest());
+    EXPECT_EQ(engine::Scene::RigSaveMode::StartupDefault,scene->Controls().RequestedRigSaveMode());
+    auto loadRig = engine::SourceLossIntegrationTestAccess::RigSaveChoice(*scene, 0u);
+    auto saveAsRig = engine::SourceLossIntegrationTestAccess::RigSaveChoice(*scene, 1u);
+    ASSERT_NE(save->Parent(), loadRig->Parent());
+    ASSERT_EQ(loadRig->Parent(), saveAsRig->Parent());
+    click(loadRig);
+    EXPECT_TRUE(scene->ConsumePanelRigLoadRequest());
+    EXPECT_FALSE(scene->ConsumeRigSaveRequest());
+    click(saveAsRig);
+    EXPECT_TRUE(scene->ConsumeRigSaveRequest());
+    EXPECT_EQ(engine::Scene::RigSaveMode::SaveAs, scene->Controls().RequestedRigSaveMode());
     engine::SourceLossIntegrationTestAccess::Manage(*scene, false, target);
     cancel = engine::SourceLossIntegrationTestAccess::RemovalButton(*scene, 0u);
     auto remove = engine::SourceLossIntegrationTestAccess::RemovalButton(*scene, 1u);
@@ -1070,6 +1389,8 @@ TEST_F(SceneRoutingIntegrationTest, PluginFocusLossDefersSceneEntryUntilStateCal
 {
     auto scene = FreshScene({ Station("Keys") }, {});
     ASSERT_TRUE(scene);
+    actions::KeyAction heldShortcut; heldShortcut.KeyChar = VK_INSERT; heldShortcut.KeyActionType = actions::KeyAction::KEY_DOWN;
+    scene->OnAction(heldShortcut); ASSERT_TRUE(midi::MidiRouter::IsAutomationRecordHeld());
     resources::ResourceLib resources;
     graphics::Window window(*scene, resources);
     const auto host = CreateWindowExW(0, L"STATIC", L"", 0, 0, 0, 0, 0,
@@ -1081,6 +1402,22 @@ TEST_F(SceneRoutingIntegrationTest, PluginFocusLossDefersSceneEntryUntilStateCal
     control.KeyActionType = actions::KeyAction::KEY_DOWN;
     window.OnAction(control);
     ASSERT_TRUE(engine::SourceLossIntegrationTestAccess::ControlHeld(*scene));
+    engine::SourceLossIntegrationTestAccess::OpenKeyboardModal(*scene);
+    actions::KeyAction modalKey; modalKey.KeyChar = 76u; modalKey.KeyActionType = actions::KeyAction::KEY_DOWN;
+    window.OnAction(modalKey);
+    engine::SourceLossIntegrationTestAccess::CloseKeyboardModal(*scene);
+    modalKey.KeyActionType = actions::KeyAction::KEY_UP;
+    window.OnAction(modalKey); EXPECT_FALSE(window.ConsumeJamLoadRequest());
+    engine::SourceLossIntegrationTestAccess::OpenKeyboardModal(*scene);
+    modalKey.KeyChar = 192u; modalKey.KeyActionType = actions::KeyAction::KEY_DOWN;
+    window.OnAction(modalKey);
+    engine::SourceLossIntegrationTestAccess::CloseKeyboardModal(*scene);
+    modalKey.KeyActionType = actions::KeyAction::KEY_UP;
+    window.OnAction(modalKey); EXPECT_FALSE(window.ConsumeConsoleToggleRequest());
+    engine::SourceLossIntegrationTestAccess::OpenKeyboardModal(*scene);
+    modalKey.KeyChar = VK_INSERT; window.OnAction(modalKey); EXPECT_FALSE(midi::MidiRouter::IsAutomationRecordHeld());
+    engine::SourceLossIntegrationTestAccess::CloseKeyboardModal(*scene);
+    scene->OnAction(heldShortcut); ASSERT_TRUE(midi::MidiRouter::IsAutomationRecordHeld());
     actions::TouchAction press;
     press.Touch = actions::TouchAction::TOUCH_MOUSE;
     press.State = actions::TouchAction::TOUCH_DOWN;
@@ -1092,14 +1429,17 @@ TEST_F(SceneRoutingIntegrationTest, PluginFocusLossDefersSceneEntryUntilStateCal
     engine::SourceLossIntegrationTestAccess::WhileSceneLocked(*scene, [&] {
         graphics::Window::WindowProcedure(host, WM_KILLFOCUS, 0, 0);
         graphics::Window::WindowProcedure(host, WM_CAPTURECHANGED, 0, 0);
+        graphics::Window::WindowProcedure(host, WM_CANCELMODE, 0, 0);
+        graphics::Window::WindowProcedure(host, WM_ACTIVATEAPP, FALSE, 0);
         graphics::Window::WindowProcedure(host, WM_ACTIVATE, WA_INACTIVE, 0);
         graphics::Window::WindowProcedure(host, WM_SHOWWINDOW, FALSE, 0);
         graphics::Window::WindowProcedure(host, WM_KILLFOCUS, 0, 0);
         EXPECT_TRUE(engine::SourceLossIntegrationTestAccess::ControlHeld(*scene));
-        EXPECT_EQ(window.Modifiers(), base::Action::MODIFIER_CTRL);
+        EXPECT_EQ(window.Modifiers(), base::Action::MODIFIER_NONE);
     });
     EXPECT_TRUE(window.ProcessDeferredInputLoss());
     EXPECT_FALSE(window.CancelMouseCapture());
+    EXPECT_FALSE(midi::MidiRouter::IsAutomationRecordHeld());
     EXPECT_FALSE(engine::SourceLossIntegrationTestAccess::ControlHeld(*scene));
     EXPECT_EQ(window.Modifiers(), base::Action::MODIFIER_NONE);
     EXPECT_FALSE(window.ProcessDeferredInputLoss());
@@ -1169,7 +1509,7 @@ TEST_F(SceneRoutingIntegrationTest, InWindowItemMiddlePaintUsesSelectionThreshol
         scene->SetHover3d(audioPath, base::Action::MODIFIER_NONE);
         actions::TouchAction click;
         click.Touch = actions::TouchAction::TOUCH_MOUSE;
-        click.Position = { 560, 300 }; // Valid client point; the picker reports this actual loop.
+        click.Position = engine::SourceLossIntegrationTestAccess::CanvasPoint(*scene); // Valid client point; the picker reports this actual loop.
         click.Index = 1;
         click.MouseButtonsDown = 2u;
         click.State = actions::TouchAction::TOUCH_DOWN;
@@ -1216,6 +1556,31 @@ TEST_F(SceneRoutingIntegrationTest, InWindowItemMiddlePaintUsesSelectionThreshol
     }
 }
 
+TEST_F(SceneRoutingIntegrationTest, SettingsPanelClearsSceneHoverAndLeavingRestoresIt)
+{
+    auto scene = FreshScene({ Station("Local") }, {});
+    ASSERT_TRUE(scene);
+    scene->SetSize({ 800, 600 });
+    auto station = scene->SnapshotStations().front();
+    std::vector<unsigned char> stationPath;
+    for (const auto index : station->GlobalId()) stationPath.push_back(static_cast<unsigned char>(index + 1u));
+    const auto canvas = engine::SourceLossIntegrationTestAccess::CanvasPoint(*scene);
+    scene->SetHover3d(stationPath, base::Action::MODIFIER_NONE, canvas);
+    EXPECT_FALSE(engine::SourceLossIntegrationTestAccess::CurrentHover(*scene).empty());
+
+    const auto panel = engine::SourceLossIntegrationTestAccess::SettingsPanel(*scene);
+    const auto bounds = panel->PresentedFrameBounds();
+    ASSERT_FALSE(bounds.IsEmpty());
+    const utils::Position2d background{ bounds.Left + 3, bounds.Bottom + 3 };
+    ASSERT_TRUE(panel->RouteHitTest(background));
+    scene->SetHover3d(stationPath, base::Action::MODIFIER_NONE, background);
+    EXPECT_TRUE(engine::SourceLossIntegrationTestAccess::CurrentHover(*scene).empty());
+
+    scene->SetHover3d(stationPath, base::Action::MODIFIER_NONE, canvas);
+    EXPECT_FALSE(engine::SourceLossIntegrationTestAccess::CurrentHover(*scene).empty());
+    scene->Shutdown();
+}
+
 TEST_F(SceneRoutingIntegrationTest, RawStationPickBelowSelectionDepthDoesNotBecomeGlobalMiddleGesture)
 {
     auto scene = FreshScene({ Station("Local") }, {});
@@ -1231,7 +1596,7 @@ TEST_F(SceneRoutingIntegrationTest, RawStationPickBelowSelectionDepthDoesNotBeco
     scene->SetHover3d(stationPath, base::Action::MODIFIER_NONE);
     actions::TouchAction click;
     click.Touch = actions::TouchAction::TOUCH_MOUSE;
-    click.Position = { 560, 300 };
+    click.Position = engine::SourceLossIntegrationTestAccess::CanvasPoint(*scene);
     click.Index = 1;
     click.MouseButtonsDown = 2u;
     click.State = actions::TouchAction::TOUCH_DOWN;
@@ -1269,7 +1634,7 @@ TEST_F(SceneRoutingIntegrationTest, WindowFreshPressPickWinsOverStaleBackgroundA
         scene->SetHover3d({}, base::Action::MODIFIER_NONE); // Previous rendered hover was background.
         actions::TouchAction click;
         click.Touch = actions::TouchAction::TOUCH_MOUSE;
-        click.Position = { 560, 300 };
+        click.Position = engine::SourceLossIntegrationTestAccess::CanvasPoint(*scene);
         click.Index = 1;
         click.State = actions::TouchAction::TOUCH_DOWN;
         EXPECT_TRUE(window.OnAction(click).IsEaten);
@@ -1280,7 +1645,7 @@ TEST_F(SceneRoutingIntegrationTest, WindowFreshPressPickWinsOverStaleBackgroundA
         EXPECT_FALSE(engine::SourceLossIntegrationTestAccess::BackgroundPreviewActive(*scene));
         actions::TouchMoveAction move;
         move.Touch = actions::TouchAction::TOUCH_MOUSE;
-        move.Position = { 565, 300 };
+        move.Position = click.Position + utils::Position2d{5, 0};
         move.MouseButtonsDown = 2u;
         window.OnAction(move);
         EXPECT_TRUE(engine::SourceLossIntegrationTestAccess::ItemMutePainting(*scene));
@@ -1291,7 +1656,7 @@ TEST_F(SceneRoutingIntegrationTest, WindowFreshPressPickWinsOverStaleBackgroundA
         window.OnAction(click);
         // The inverse stale-hover case must acquire a genuine background press.
         window.PressPath.clear();
-        click.Position = { 580, 300 };
+        click.Position = engine::SourceLossIntegrationTestAccess::CanvasPoint(*scene) + utils::Position2d{20, 0};
         click.State = actions::TouchAction::TOUCH_DOWN;
         window.OnAction(click);
         EXPECT_EQ(2u, window.PickCount);
@@ -1327,7 +1692,7 @@ TEST_F(SceneRoutingIntegrationTest, InWindowBackgroundGesturesPreviewAndApplyOnl
             const auto pose = engine::SourceLossIntegrationTestAccess::CameraPose(*scene);
             actions::TouchAction click;
             click.Touch = actions::TouchAction::TOUCH_MOUSE;
-            click.Position = { 560, 300 }; // Empty space inside the pass-through HUD.
+            click.Position = engine::SourceLossIntegrationTestAccess::CanvasPoint(*scene); // Empty space inside the pass-through HUD.
             click.Index = 1;
             click.Modifiers = mute ? base::Action::MODIFIER_ALT : base::Action::MODIFIER_NONE;
             click.MouseButtonsDown = 2u;
@@ -1388,7 +1753,7 @@ TEST_F(SceneRoutingIntegrationTest, NativeBackgroundMiddleAndAltMiddleUseClickCo
     auto scene = FreshScene({ Station("Local") }, {});
     ASSERT_TRUE(scene);
     resources::ResourceLib resources;
-    graphics::Window window(*scene, resources);
+    engine::NativeKeyboardWindow window(*scene, resources);
     window.Resize({ 800, 600 });
     auto take = scene->SnapshotStations().front()->AddTake();
     scene->CommitChanges();
@@ -1400,14 +1765,16 @@ TEST_F(SceneRoutingIntegrationTest, NativeBackgroundMiddleAndAltMiddleUseClickCo
     {
         take->SetGroupMutedAudio(!mute);
         scene->SetHover3d({}, base::Action::MODIFIER_NONE);
+        window.NativeKeys.set(VK_MENU, mute);
         if (mute) graphics::Window::WindowProcedure(host, WM_SYSKEYDOWN, VK_MENU, 1u << 29u);
         graphics::Window::WindowProcedure(host, WM_MBUTTONDOWN,
-            MK_MBUTTON, MAKELPARAM(560, 300));
+            MK_MBUTTON, MAKELPARAM(560, 400));
         EXPECT_TRUE(engine::SourceLossIntegrationTestAccess::BackgroundOwned(*scene));
         EXPECT_TRUE(engine::SourceLossIntegrationTestAccess::BackgroundPreviewActive(*scene));
         EXPECT_FALSE(engine::SourceLossIntegrationTestAccess::CameraPointerHeld(*scene));
+        window.NativeKeys.reset(VK_MENU);
         if (mute) graphics::Window::WindowProcedure(host, WM_SYSKEYUP, VK_MENU, 1u << 29u);
-        graphics::Window::WindowProcedure(host, WM_MBUTTONUP, 0, MAKELPARAM(560, 300));
+        graphics::Window::WindowProcedure(host, WM_MBUTTONUP, 0, MAKELPARAM(560, 400));
         EXPECT_FALSE(engine::SourceLossIntegrationTestAccess::BackgroundPreviewActive(*scene));
         ASSERT_TRUE(engine::SourceLossIntegrationTestAccess::ApplyMuteBoundary(*scene));
         EXPECT_EQ(mute, take->IsMuted());
@@ -1422,7 +1789,7 @@ TEST_F(SceneRoutingIntegrationTest, NativeAltLeftBackgroundPreviewsAndSelectsAll
     auto scene = FreshScene({ Station("Local") }, {});
     ASSERT_TRUE(scene);
     resources::ResourceLib resources;
-    graphics::Window window(*scene, resources);
+    engine::NativeKeyboardWindow window(*scene, resources);
     window.Resize({ 800, 600 });
     auto take = scene->SnapshotStations().front()->AddTake();
     scene->CommitChanges();
@@ -1432,14 +1799,16 @@ TEST_F(SceneRoutingIntegrationTest, NativeAltLeftBackgroundPreviewsAndSelectsAll
         HWND_MESSAGE, nullptr, GetModuleHandleW(nullptr), nullptr);
     ASSERT_NE(host, nullptr);
     SetWindowLongPtrW(host, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(&window));
+    window.NativeKeys.set(VK_MENU);
     graphics::Window::WindowProcedure(host, WM_SYSKEYDOWN, VK_MENU, 1u << 29u);
-    graphics::Window::WindowProcedure(host, WM_LBUTTONDOWN, MK_LBUTTON, MAKELPARAM(560, 300));
+    graphics::Window::WindowProcedure(host, WM_LBUTTONDOWN, MK_LBUTTON, MAKELPARAM(560, 400));
     EXPECT_TRUE(engine::SourceLossIntegrationTestAccess::BackgroundOwned(*scene));
     EXPECT_TRUE(engine::SourceLossIntegrationTestAccess::SelectionPreviewActive(*scene));
     EXPECT_FALSE(engine::SourceLossIntegrationTestAccess::CameraPointerHeld(*scene));
     EXPECT_FALSE(take->IsSelected());
+    window.NativeKeys.reset(VK_MENU);
     graphics::Window::WindowProcedure(host, WM_SYSKEYUP, VK_MENU, 1u << 29u);
-    graphics::Window::WindowProcedure(host, WM_LBUTTONUP, 0, MAKELPARAM(560, 300));
+    graphics::Window::WindowProcedure(host, WM_LBUTTONUP, 0, MAKELPARAM(560, 400));
     EXPECT_FALSE(engine::SourceLossIntegrationTestAccess::BackgroundPreviewActive(*scene));
     EXPECT_TRUE(take->IsSelected());
     EXPECT_FALSE(take->IsMuted());
@@ -1490,7 +1859,7 @@ TEST_F(SceneRoutingIntegrationTest, BackgroundSelectAllUsesCurrentDepthAndPreser
         scene->SetHover3d({}, base::Action::MODIFIER_NONE);
         actions::TouchAction click;
         click.Touch = actions::TouchAction::TOUCH_MOUSE;
-        click.Position = { 560, 300 };
+        click.Position = engine::SourceLossIntegrationTestAccess::CanvasPoint(*scene);
         click.Index = 0;
         click.Modifiers = base::Action::MODIFIER_ALT;
         click.MouseButtonsDown = 1u;
@@ -1540,7 +1909,7 @@ TEST_F(SceneRoutingIntegrationTest, BackgroundSelectAllMovementKeepsPreviewButDo
         const auto pose = engine::SourceLossIntegrationTestAccess::CameraPose(*scene);
         actions::TouchAction click;
         click.Touch = actions::TouchAction::TOUCH_MOUSE;
-        click.Position = { 560, 300 };
+        click.Position = engine::SourceLossIntegrationTestAccess::CanvasPoint(*scene);
         click.Index = 0;
         click.Modifiers = base::Action::MODIFIER_ALT;
         click.MouseButtonsDown = 1u;
@@ -1548,7 +1917,7 @@ TEST_F(SceneRoutingIntegrationTest, BackgroundSelectAllMovementKeepsPreviewButDo
         scene->OnAction(click);
         actions::TouchMoveAction move;
         move.Touch = actions::TouchAction::TOUCH_MOUSE;
-        move.Position = { 561, 300 };
+        move.Position = click.Position + utils::Position2d{1, 0};
         move.MouseButtonsDown = 1u;
         scene->OnAction(move);
         if (returnToOrigin) { move.Position = click.Position; scene->OnAction(move); }
@@ -1576,7 +1945,7 @@ TEST_F(SceneRoutingIntegrationTest, BackgroundSelectAllCancelsOnLossEscapeResetA
         scene->CommitChanges();
         actions::TouchAction click;
         click.Touch = actions::TouchAction::TOUCH_MOUSE;
-        click.Position = { 560, 300 };
+        click.Position = engine::SourceLossIntegrationTestAccess::CanvasPoint(*scene);
         click.Index = 0;
         click.Modifiers = base::Action::MODIFIER_ALT;
         click.MouseButtonsDown = 1u;
@@ -1635,7 +2004,7 @@ TEST_F(SceneRoutingIntegrationTest, AltLeftItemSelectsOnlyItsPressedTarget)
         window.PressPath.push_back(static_cast<unsigned char>(index + 1u));
     actions::TouchAction click;
     click.Touch = actions::TouchAction::TOUCH_MOUSE;
-    click.Position = { 560, 300 };
+    click.Position = engine::SourceLossIntegrationTestAccess::CanvasPoint(*scene);
     click.Index = 0;
     click.Modifiers = base::Action::MODIFIER_ALT;
     click.State = actions::TouchAction::TOUCH_DOWN;
@@ -1661,7 +2030,7 @@ TEST_F(SceneRoutingIntegrationTest, BackgroundUnmuteCancelsOnCaptureLossFocusLos
         scene->SetHover3d({}, base::Action::MODIFIER_NONE);
         actions::TouchAction click;
         click.Touch = actions::TouchAction::TOUCH_MOUSE;
-        click.Position = { 560, 300 };
+        click.Position = engine::SourceLossIntegrationTestAccess::CanvasPoint(*scene);
         click.Index = 1;
         click.MouseButtonsDown = 2u;
         click.State = actions::TouchAction::TOUCH_DOWN;
@@ -1715,7 +2084,7 @@ TEST_F(SceneRoutingIntegrationTest, MiddlePressOnItemAndHudDoesNotAcquireGlobalU
     scene->SetHover3d(itemPath, base::Action::MODIFIER_NONE);
     actions::TouchAction click;
     click.Touch = actions::TouchAction::TOUCH_MOUSE;
-    click.Position = { 560, 300 };
+    click.Position = engine::SourceLossIntegrationTestAccess::CanvasPoint(*scene);
     click.Index = 1;
     click.MouseButtonsDown = 2u;
     click.State = actions::TouchAction::TOUCH_DOWN;
@@ -1749,7 +2118,7 @@ TEST_F(SceneRoutingIntegrationTest, BackgroundMuteStopsUnownedCameraCoastButPres
         scene->SetHover3d({}, base::Action::MODIFIER_NONE);
         actions::TouchAction right;
         right.Touch = actions::TouchAction::TOUCH_MOUSE;
-        right.Position = { 560, 300 };
+        right.Position = engine::SourceLossIntegrationTestAccess::CanvasPoint(*scene);
         right.Index = 2;
         right.MouseButtonsDown = 4u;
         right.State = actions::TouchAction::TOUCH_DOWN;
@@ -1757,7 +2126,7 @@ TEST_F(SceneRoutingIntegrationTest, BackgroundMuteStopsUnownedCameraCoastButPres
         ASSERT_TRUE(engine::SourceLossIntegrationTestAccess::CameraPointerHeld(*scene));
         actions::TouchMoveAction move;
         move.Touch = actions::TouchAction::TOUCH_MOUSE;
-        move.Position = { 610, 320 };
+        move.Position = engine::SourceLossIntegrationTestAccess::CanvasPoint(*scene, {50, 20});
         move.MouseButtonsDown = 4u;
         scene->OnAction(move);
         right.Position = move.Position;
@@ -1783,7 +2152,7 @@ TEST_F(SceneRoutingIntegrationTest, BackgroundMuteStopsUnownedCameraCoastButPres
     }
     actions::TouchAction right;
     right.Touch = actions::TouchAction::TOUCH_MOUSE;
-    right.Position = { 560, 300 };
+    right.Position = engine::SourceLossIntegrationTestAccess::CanvasPoint(*scene);
     right.Index = 2;
     right.MouseButtonsDown = 4u;
     right.State = actions::TouchAction::TOUCH_DOWN;
@@ -1803,4 +2172,658 @@ TEST_F(SceneRoutingIntegrationTest, BackgroundMuteStopsUnownedCameraCoastButPres
     right.Value = 4;
     scene->OnAction(right);
     scene->Shutdown();
+}
+
+TEST_F(SceneRoutingIntegrationTest, MembershipConfirmationRejectsChangedAcceptedRevision)
+{
+	using Access = engine::SourceLossIntegrationTestAccess;
+	for (const bool ditchTake : { false, true })
+	{
+		auto scene = FreshScene({ Station("A"), Station("B") }, {});
+		ASSERT_TRUE(scene);
+		auto station = scene->SnapshotStations().front();
+		auto take = station->AddTake();
+		take->AddLoop(0u, station->Id());
+		scene->CommitChanges();
+		{
+			auto excludeJob = Access::ExcludeJob(*scene);
+			if (ditchTake) Access::RequestTakeDitch(*scene, station, take);
+			else Access::Manage(*scene, false, station);
+			ASSERT_TRUE(Access::ConfirmationOpen(*scene));
+			Access::AdvanceAcceptedRevision(*scene);
+			if (ditchTake)
+			{
+				actions::GuiAction confirm;
+				confirm.ElementType = actions::GuiAction::ACTIONELEMENT_BUTTON;
+				confirm.Index = gui::GuiStationControls::ConfirmTakeDitchControlIndex;
+				scene->OnAction(confirm);
+			}
+			else Access::ConfirmRemoval(*scene);
+			EXPECT_EQ(2u, scene->SnapshotStations().size());
+			EXPECT_EQ(1u, station->NumTakes());
+			EXPECT_EQ(take, station->GetLoopTakeSnapshot().front());
+			EXPECT_FALSE(Access::Busy(*scene));
+			EXPECT_FALSE(station->MembershipRemoving());
+		}
+		scene->Shutdown();
+	}
+}
+
+TEST_F(SceneRoutingIntegrationTest, StoppedStreamInteractionUsesConfiguredSampleRate)
+{
+	io::JamFile jam{};
+	jam.Stations = { Station("Local") };
+	auto rig = io::RigFile::FromStream(std::stringstream(io::RigFile::DefaultJson)).value();
+	rig.Triggers.clear();
+	rig.Name = "Stopped stream";
+	rig.User.Audio.SampleRate = 48000u;
+	engine::SceneParams params({ "" }, {}, { 640u, 480u });
+	auto created = engine::Scene::FromFile(params, jam, rig, L"");
+	ASSERT_TRUE(created.has_value());
+	auto scene = *created;
+	EXPECT_EQ(0u, scene->GetAudioStreamParams().SampleRate);
+	EXPECT_EQ(48000u, engine::SourceLossIntegrationTestAccess::InteractionSampleRate(*scene));
+	scene->Shutdown();
+}
+
+TEST_F(SceneRoutingIntegrationTest, ResizingRehitsStationaryPointer)
+{
+	auto scene = FreshScene({ Station("Local") }, {});
+	ASSERT_TRUE(scene);
+	scene->SetSize({ 800u, 600u });
+	const auto handle = engine::SourceLossIntegrationTestAccess::SelectionHandle(*scene);
+	ASSERT_TRUE(handle);
+	const auto size = handle->GetSize();
+	const auto point = handle->GlobalPosition() + utils::Position2d{ static_cast<int>(size.Width / 2u), static_cast<int>(size.Height / 2u) };
+	scene->SetSize({ 800u, 900u });
+	actions::TouchMoveAction move;
+	move.Touch = actions::TouchAction::TOUCH_MOUSE;
+	move.Position = point;
+	move.MouseButtonsDown = 0u;
+	scene->OnAction(move);
+	scene->ApplyDeferredHoverUpdates();
+	ASSERT_FALSE(handle->RouteHitTest(handle->GlobalToLocal(point)));
+	EXPECT_EQ(base::GuiElement::STATE_NORMAL, handle->GetState());
+	scene->SetSize({ 800u, 600u });
+	ASSERT_TRUE(handle->RouteHitTest(handle->GlobalToLocal(point)));
+	scene->ApplyDeferredHoverUpdates(); // No further pointer event: resize must refresh the target.
+	EXPECT_EQ(base::GuiElement::STATE_OVER, handle->GetState());
+	scene->Shutdown();
+}
+
+TEST_F(SceneRoutingIntegrationTest, AudioRefreshCoalescesNotificationsAndDefersWhileBusy)
+{
+	using Access = engine::SourceLossIntegrationTestAccess;
+	auto scene = FreshScene({ Station("Local") }, {});
+	ASSERT_TRUE(scene);
+	{
+		auto excludeJob = Access::ExcludeJob(*scene);
+		scene->Controls().RequestAudioRefresh();
+		scene->Controls().RequestAudioRefresh();
+		EXPECT_FALSE(Access::ScheduleAudioRefresh(*scene, {}, true));
+		EXPECT_TRUE(Access::AudioRefreshPending(*scene));
+		EXPECT_FALSE(Access::ScheduleAudioRefresh(*scene, {true, false, false}));
+		EXPECT_TRUE(Access::AudioRefreshPending(*scene));
+		EXPECT_TRUE(Access::ScheduleAudioRefresh(*scene));
+		EXPECT_TRUE(Access::AudioRefreshOperation(*scene));
+		EXPECT_FALSE(Access::AudioRefreshPending(*scene));
+		Access::FinishTestAudioRefresh(*scene);
+		EXPECT_FALSE(Access::ScheduleAudioRefresh(*scene));
+	}
+	scene->Shutdown();
+}
+
+TEST_F(SceneRoutingIntegrationTest, AudioRefreshRetriesConfiguredDeviceWithoutApplyingDraftOrPolling)
+{
+	using Access = engine::SourceLossIntegrationTestAccess;
+	auto scene = FreshScene({ Station("Local") }, {});
+	ASSERT_TRUE(scene);
+	{
+		auto excludeJob = Access::ExcludeJob(*scene);
+		const auto configured = Access::SubmittedAudio(*scene);
+		auto draft = configured;
+		draft.Name = "Uncommitted different hardware";
+		Access::SetUnsubmittedAudioDraft(*scene, draft);
+		scene->Controls().RequestAudioRefresh();
+		// Empty startup inventory must not reject recovery before fresh discovery.
+		EXPECT_TRUE(Access::ScheduleAudioRefresh(*scene));
+		EXPECT_EQ(configured, Access::FailAudioRefreshWithoutHardware(*scene));
+		EXPECT_EQ(draft, Access::SubmittedAudio(*scene));
+		Access::FinishTestAudioRefresh(*scene);
+		EXPECT_FALSE(Access::ScheduleAudioRefresh(*scene));
+		// A late-ready driver or failed open receives one new attempt on rescan.
+		actions::GuiAction rescan;
+		rescan.ElementType = actions::GuiAction::ACTIONELEMENT_BUTTON;
+		rescan.Index = 7207u;
+		scene->OnAction(rescan);
+		EXPECT_TRUE(Access::ScheduleAudioRefresh(*scene));
+		EXPECT_EQ(configured, Access::FailAudioRefreshWithoutHardware(*scene));
+		Access::FinishTestAudioRefresh(*scene);
+	}
+	scene->Shutdown();
+}
+
+TEST_F(SceneRoutingIntegrationTest, OpenBackupStreamRequiresManualRescanAndKeepsItsActualGeometry)
+{
+	using Access = engine::SourceLossIntegrationTestAccess;
+	auto scene = FreshScene({ Station("Local") }, {});
+	ASSERT_TRUE(scene);
+	{
+		auto excludeJob = Access::ExcludeJob(*scene);
+		const auto configured = Access::ConfiguredAudio(*scene);
+		auto draft = configured;
+		draft.Name = "Unsaved different card";
+		Access::SetUnsubmittedAudioDraft(*scene, draft);
+		scene->Controls().RequestAudioRefresh();
+		// Explicit lifecycle observation represents a real open backup stream;
+		// no physical ASIO device is constructed by this policy test.
+		EXPECT_FALSE(Access::ScheduleRefreshWithOpenStream(*scene));
+		EXPECT_TRUE(Access::ControlIdle(*scene));
+		EXPECT_FALSE(Access::AudioRefreshPending(*scene));
+		EXPECT_NE(std::string::npos, Access::DevicePresentation(*scene).DeviceStatus.find("Rescan audio devices"));
+		EXPECT_FALSE(Access::ScheduleAudioRefresh(*scene)); // No periodic retry.
+
+		Access::RequestManualAudioRescan(*scene);
+		EXPECT_TRUE(Access::ScheduleRefreshWithOpenStream(*scene));
+		EXPECT_TRUE(Access::ManualAudioRescanOperation(*scene)); // Manual intent survives admission.
+		const audio::AudioStreamParams backup{"Current backup", 48000u, 3u, 256u, 11u, 22u, 1u, 2u};
+		const auto requested = Access::FailAudioRefreshWithoutHardware(*scene, backup);
+		EXPECT_EQ(backup.Name, requested.Name);
+		EXPECT_EQ(backup.SampleRate, requested.SampleRate);
+		EXPECT_EQ(backup.BufSize, requested.BufSize);
+		EXPECT_EQ(backup.NumBuffers, requested.NumBuffers);
+		EXPECT_EQ(backup.NumInputChannels, requested.NumChannelsIn);
+		EXPECT_EQ(backup.NumOutputChannels, requested.NumChannelsOut);
+		EXPECT_EQ(configured, Access::ConfiguredAudio(*scene));
+		EXPECT_EQ(configured, scene->AcceptedRigSnapshot()->Rig.User.Audio);
+		EXPECT_EQ(draft, Access::SubmittedAudio(*scene));
+		Access::FinishTestAudioRefresh(*scene);
+		EXPECT_FALSE(Access::ScheduleAudioRefresh(*scene));
+	}
+	scene->Shutdown();
+}
+
+TEST_F(SceneRoutingIntegrationTest, SuccessfulRescanDisplaysRestoredFallbackWithoutChangingSavedPreference)
+{
+	using Access = engine::SourceLossIntegrationTestAccess;
+	auto scene = FreshScene({ Station("Local") }, {});
+	ASSERT_TRUE(scene);
+	{
+		auto excludeJob = Access::ExcludeJob(*scene);
+		const auto configured = Access::ConfiguredAudio(*scene);
+		audio::AsioInventory inventory;
+		inventory.Devices = {{0u, "Primary ASIO device", true, "", 18u, 20u, {44100u}, 44100u},
+			{1u, "Fallback ASIO device", true, "", 8u, 4u, {44100u}, 44100u}};
+		Access::StartedAudioSelection(*scene, inventory, {"Primary ASIO device", 44100u, 2u, 64u, 0u, 0u, 8u, 4u});
+		auto restored = configured;
+		restored.Name = "Fallback ASIO device";
+		restored.SampleRate = 44100u;
+		restored.BufSize = 1024u;
+		restored.NumChannelsIn = 8u;
+		restored.NumChannelsOut = 4u;
+		Access::AcceptRescannedAudioDraft(*scene, restored);
+		EXPECT_EQ(restored, Access::SubmittedAudio(*scene));
+		EXPECT_EQ(restored, Access::AudioDraft(*scene));
+		EXPECT_EQ("Fallback ASIO device", Access::AudioDraft(*scene).Name);
+		EXPECT_EQ(configured, Access::ConfiguredAudio(*scene));
+		EXPECT_EQ(configured, scene->AcceptedRigSnapshot()->Rig.User.Audio);
+	}
+	scene->Shutdown();
+}
+
+TEST_F(SceneRoutingIntegrationTest, FailedAudioRequestStillPublishesHostInventoryForDevicePage)
+{
+	using Access = engine::SourceLossIntegrationTestAccess;
+	auto scene = FreshScene({ Station("Local") }, {});
+	ASSERT_TRUE(scene);
+	{
+		auto excludeJob = Access::ExcludeJob(*scene);
+		audio::AsioInventory inventory;
+		inventory.Devices = {{0u, "Newly powered preferred", true, "", 8u, 8u, {44100u}, 44100u}};
+		// Inject the host's discovery result to exercise the completion/publication
+		// path independently of physical ASIO discovery and open failure.
+		Access::SetHostInventory(*scene, inventory);
+		Access::RequestManualAudioRescan(*scene);
+		ASSERT_TRUE(Access::ScheduleRefreshWithOpenStream(*scene));
+		Access::FailAudioRefreshWithoutHardware(*scene, {"Current backup", 44100u, 2u, 128u, 0u, 0u, 2u, 2u});
+		const auto presentation = Access::DevicePresentation(*scene);
+		ASSERT_TRUE(presentation.PagesChanged);
+		ASSERT_EQ(1u, presentation.Inventory.Devices.size());
+		EXPECT_EQ("Newly powered preferred", presentation.Inventory.Devices.front().Name);
+		EXPECT_TRUE(presentation.Inventory.Devices.front().Probed);
+		EXPECT_NE(std::string::npos, presentation.DeviceStatus.find("Backend teardown"));
+		Access::FinishTestAudioRefresh(*scene);
+	}
+	scene->Shutdown();
+}
+
+TEST_F(SceneRoutingIntegrationTest, UnavailableDropdownSelectionCanReachFreshDiscoveryWithValidGeometry)
+{
+	using Access = engine::SourceLossIntegrationTestAccess;
+	auto scene = FreshScene({ Station("Local") }, {});
+	ASSERT_TRUE(scene);
+	{
+		auto excludeJob = Access::ExcludeJob(*scene);
+		audio::AsioInventory inventory;
+		inventory.Devices = {{0u, "Current backup", true, "", 2u, 2u, {44100u}, 44100u},
+			{1u, "Preferred", false, "Powered off at startup"}};
+		Access::StartedAudioSelection(*scene, inventory, {"Current backup", 44100u, 2u, 128u, 0u, 0u, 2u, 2u});
+		Access::ChooseAudio(*scene, 1);
+		EXPECT_EQ("Preferred", Access::SubmittedAudio(*scene).Name);
+		std::string error;
+		EXPECT_TRUE(Access::ValidateAudioDraft(*scene, false, error));
+		auto draft = Access::SubmittedAudio(*scene);
+		draft.Name = "Not in stale inventory";
+		Access::SetUnsubmittedAudioDraft(*scene, draft);
+		EXPECT_TRUE(Access::ValidateAudioDraft(*scene, false, error));
+		draft.NumChannelsIn = draft.NumChannelsOut = 0u;
+		Access::SetUnsubmittedAudioDraft(*scene, draft);
+		EXPECT_FALSE(Access::ValidateAudioDraft(*scene, false, error));
+		draft.NumChannelsOut = 2u;
+		draft.BufSize = 0u;
+		Access::SetUnsubmittedAudioDraft(*scene, draft);
+		EXPECT_FALSE(Access::ValidateAudioDraft(*scene, false, error));
+		draft.BufSize = 128u;
+		draft.SampleRate = Access::ConfiguredAudio(*scene).SampleRate == 48000u ? 44100u : 48000u;
+		Access::SetUnsubmittedAudioDraft(*scene, draft);
+		EXPECT_FALSE(Access::ValidateAudioDraft(*scene, true, error));
+		EXPECT_EQ("Sample rate cannot change while any takes exist", error);
+		draft.Name = "Current backup";
+		draft.SampleRate = 44100u;
+		draft.NumChannelsOut = 3u;
+		Access::SetUnsubmittedAudioDraft(*scene, draft);
+		EXPECT_FALSE(Access::ValidateAudioDraft(*scene, false, error));
+		draft.NumChannelsOut = 2u;
+		draft.SampleRate = 48000u;
+		Access::SetUnsubmittedAudioDraft(*scene, draft);
+		EXPECT_FALSE(Access::ValidateAudioDraft(*scene, false, error));
+	}
+	scene->Shutdown();
+}
+
+TEST_F(SceneRoutingIntegrationTest, DeviceCompletionPreservesNewerDraftAndRejectsIndependentStaleIdentities)
+{
+	using Access = engine::SourceLossIntegrationTestAccess;
+	auto scene = FreshScene({ Station("Local") }, {});
+	ASSERT_TRUE(scene);
+	{
+		auto excludeJob = Access::ExcludeJob(*scene); // No physical MIDI enumeration/reconciliation in this test.
+		Access::PrepareMidiDraft(*scene);
+		Access::ToggleMidi(*scene, false);
+		scene->PumpDeviceAndFileControls();
+		const auto admitted = Access::TakeMidiRequest(*scene);
+		ASSERT_FALSE(admitted.Desired.at(0u).Enabled);
+		Access::ToggleMidi(*scene, true); // A newer real widget edit while the first request is in flight.
+		for (unsigned int mismatch : {1u, 2u, 3u})
+		{
+			Access::CompleteMidi(*scene, admitted, mismatch);
+			scene->PumpDeviceAndFileControls();
+			EXPECT_TRUE(Access::MidiOperation(*scene));
+			EXPECT_TRUE(Access::MidiEnabled(*scene));
+		}
+		Access::CompleteMidi(*scene, admitted);
+		scene->PumpDeviceAndFileControls();
+		EXPECT_FALSE(Access::MidiOperation(*scene));
+		EXPECT_TRUE(Access::MidiEnabled(*scene));
+		scene->PumpDeviceAndFileControls();
+		const auto latest = Access::TakeMidiRequest(*scene);
+		EXPECT_GT(latest.OperationId, admitted.OperationId);
+		EXPECT_GT(latest.Revision, admitted.Revision);
+		EXPECT_TRUE(latest.Desired.at(0u).Enabled);
+		Access::CompleteMidi(*scene, latest);
+		scene->PumpDeviceAndFileControls();
+	}
+	scene->Shutdown();
+}
+
+TEST_F(SceneRoutingIntegrationTest, DevicePageCompletionCommitsPendingTextBeforeCheckingDraftRevision)
+{
+	using Access = engine::SourceLossIntegrationTestAccess;
+	auto scene = FreshScene({ Station("Local") }, {});
+	ASSERT_TRUE(scene);
+	{
+		auto excludeJob = Access::ExcludeJob(*scene);
+		audio::AsioInventory inventory;
+		inventory.Devices = {{0u, "Device A", true, "", 18u, 20u, {44100u, 48000u}, 44100u}};
+		const audio::AudioStreamParams actual{"Device A", 44100u, 2u, 128u, 0u, 0u, 2u, 2u};
+		Access::StartedAudioSelection(*scene, inventory, actual);
+		const auto revision = Access::AudioRevision(*scene);
+		auto accepted = Access::AudioDraft(*scene);
+		accepted.NumChannelsOut = 1u; accepted.SampleRate = 48000u;
+		Access::FocusAudioText(*scene, "7"); // Still uncommitted: acceptance initially has the same revision.
+		Access::ApplyPresentation(*scene, Access::AudioCompletion(*scene, accepted, revision));
+		const auto draft = Access::AudioDraft(*scene);
+		EXPECT_GT(Access::AudioRevision(*scene), revision);
+		EXPECT_EQ(7u, draft.NumChannelsIn);
+		EXPECT_EQ(2u, draft.NumChannelsOut);
+		EXPECT_EQ(44100u, draft.SampleRate);
+	}
+	scene->Shutdown();
+}
+
+TEST_F(SceneRoutingIntegrationTest, ReplacedSceneRejectsOwnedControlPresentation)
+{
+	using Access = engine::SourceLossIntegrationTestAccess;
+	auto original = FreshScene({ Station("Original") }, {});
+	ASSERT_TRUE(original);
+	auto staleSettings = Access::AudioDraft(*original);
+	staleSettings.Name = "Outgoing device";
+	auto completion = Access::AudioCompletion(*original, staleSettings, Access::AudioRevision(*original));
+	original->Shutdown(); original.reset();
+	auto replacement = FreshScene({ Station("Replacement") }, {});
+	ASSERT_TRUE(replacement);
+	const auto before = Access::AudioDraft(*replacement);
+	ASSERT_NE(replacement->Identity(), completion.SceneId);
+	Access::ApplyPresentation(*replacement, std::move(completion));
+	EXPECT_EQ(before, Access::AudioDraft(*replacement));
+	replacement->Shutdown();
+}
+
+TEST_F(SceneRoutingIntegrationTest, QueuedOwnedRigSaveDrainsExactlyOnceAfterImmediateShutdown)
+{
+	using Access = engine::SourceLossIntegrationTestAccess;
+	auto rig = io::RigFile::FromStream(std::stringstream(io::RigFile::DefaultJson)).value();
+	rig.Triggers.clear(); rig.User.Midi.Devices.clear();
+	io::JamFile jam{}; jam.Stations = { Station("Final save") };
+	std::atomic<bool> releaseStartup{false}, sawQuit{false};
+	engine::SceneParams params({ "" }, {}, {640u, 480u});
+	params.OnJobThreadStart = [&] {
+		const auto limit = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+		while (!releaseStartup.load(std::memory_order_acquire) && std::chrono::steady_clock::now() < limit) std::this_thread::yield();
+	};
+	auto created = engine::Scene::FromFile(params, jam, rig, L"");
+	ASSERT_TRUE(created);
+	auto scene = *created;
+	const auto capture = scene->BeginExplicitRigSave();
+	ASSERT_TRUE(capture);
+	std::atomic<unsigned int> saves{0u};
+	std::uint64_t savedScene = 0u, savedRevision = 0u;
+	std::string savedName;
+	scene->QueueExplicitRigSave([owned = *capture, &saves, &savedScene, &savedRevision, &savedName] {
+		savedScene = owned.SceneId; savedRevision = owned.Revision; savedName = owned.Rig.Name;
+		saves.fetch_add(1u, std::memory_order_release);
+	});
+	std::thread releaseAfterQuit([&] {
+		const auto limit = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+		while (!Access::Quitting(*scene) && std::chrono::steady_clock::now() < limit) std::this_thread::yield();
+		sawQuit.store(Access::Quitting(*scene), std::memory_order_release);
+		releaseStartup.store(true, std::memory_order_release);
+	});
+	scene->Shutdown();
+	releaseAfterQuit.join();
+	EXPECT_TRUE(sawQuit.load(std::memory_order_acquire));
+	EXPECT_EQ(1u, saves.load(std::memory_order_acquire));
+	EXPECT_EQ(capture->SceneId, savedScene); EXPECT_EQ(capture->Revision, savedRevision); EXPECT_EQ(capture->Rig.Name, savedName);
+	scene->Shutdown();
+	EXPECT_EQ(1u, saves.load(std::memory_order_acquire));
+}
+
+TEST_F(SceneRoutingIntegrationTest, CaptureBecomingBusyBeforeAdmissionRejectsSessionLoadAndRestoresInput)
+{
+	using Access = engine::SourceLossIntegrationTestAccess;
+	auto scene = FreshScene({ Station("Local") }, { Trigger("Record", "Local") });
+	ASSERT_TRUE(scene);
+	const auto station = scene->SnapshotStations().front();
+	const auto trigger = scene->AcceptedRigSnapshot()->Triggers.front().Instance;
+	ASSERT_TRUE(trigger);
+	{
+		auto excludeJob = Access::ExcludeJob(*scene);
+		ASSERT_TRUE(Access::InputGateOpen(*scene));
+		scene->Controls().RequestSessionLoad(L"test-owned-unopened-path.jam");
+		scene->PumpDeviceAndFileControls(); // Request closes producers; admission still awaits job acknowledgement.
+		EXPECT_FALSE(Access::InputGateOpen(*scene));
+		io::UserConfig config{}; config.Audio.NumChannelsIn = 1u;
+		Access::StartRecording(*scene, trigger, config); // An already-admitted capture wins before the writer drains.
+		ASSERT_EQ(engine::TRIGSTATE_RECORDING, trigger->GetState());
+		ASSERT_EQ(1u, station->NumTakes());
+		excludeJob.unlock(); // The real producer acknowledges closure; the window may now acquire its writer.
+		const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+		while (!Access::ControlIdle(*scene) && std::chrono::steady_clock::now() < deadline)
+		{
+			scene->PumpDeviceAndFileControls();
+			std::this_thread::yield();
+		}
+		EXPECT_TRUE(scene->Controls().TakeReadySessionLoad().empty());
+		EXPECT_TRUE(Access::ControlIdle(*scene));
+		EXPECT_TRUE(Access::InputGateOpen(*scene));
+		EXPECT_EQ(station, scene->SnapshotStations().front());
+		EXPECT_EQ(engine::TRIGSTATE_RECORDING, trigger->GetState());
+		EXPECT_EQ(1u, station->NumTakes());
+	}
+	scene->Shutdown();
+}
+
+TEST_F(SceneRoutingIntegrationTest, SaveControlsRemainEnabledWhileLoadKeepsItsBusyGate)
+{
+    using Access = engine::SourceLossIntegrationTestAccess;
+    auto scene = FreshScene({Station("Empty")}, {}); ASSERT_TRUE(scene);
+    auto exclusion = Access::ExcludeJob(*scene);
+    Access::SetFileControls(*scene, false);
+    EXPECT_TRUE(Access::SessionButton(*scene, 7210u)->IsEnabled());
+    EXPECT_TRUE(Access::SessionButton(*scene, 7213u)->IsEnabled());
+    EXPECT_FALSE(Access::SessionButton(*scene, 7211u)->IsEnabled());
+    EXPECT_TRUE(Access::OrdinaryRigSave(*scene)->IsEnabled());
+    EXPECT_TRUE(Access::RigSaveChoice(*scene, 1u)->IsEnabled());
+    EXPECT_FALSE(Access::RigSaveChoice(*scene, 0u)->IsEnabled());
+    actions::GuiAction command; command.ElementType = actions::GuiAction::ACTIONELEMENT_BUTTON;
+    command.Index = gui::GuiMainPanel::SaveRigControlIndex; scene->OnAction(command);
+    EXPECT_TRUE(scene->ConsumeRigSaveRequest());
+    EXPECT_EQ(engine::Scene::RigSaveMode::Save, scene->Controls().RequestedRigSaveMode());
+    exclusion.unlock(); scene->Shutdown();
+}
+
+TEST_F(SceneRoutingIntegrationTest, EmptyJamSaveDestinationFallbackCancellationFailureAndRepeatedAdmission)
+{
+    using Access = engine::SourceLossIntegrationTestAccess;
+    auto scene = FreshScene({Station("Empty")}, {}); ASSERT_TRUE(scene);
+    auto exclusion = Access::ExcludeJob(*scene);
+    unsigned int picks = 0u; std::wstring chosen;
+    Access::PickDirectory(*scene, [&](const auto&) { ++picks; return chosen; });
+    Access::Save(*scene); EXPECT_EQ(1u, picks); EXPECT_TRUE(Access::ControlIdle(*scene));
+    EXPECT_TRUE(scene->Controls().CurrentJamPath().empty());
+    chosen = L"first-folder"; Access::Save(*scene); EXPECT_EQ(2u, picks);
+    EXPECT_EQ(chosen, Access::PendingFolder(*scene));
+    Access::Save(*scene); EXPECT_EQ(2u, picks); EXPECT_NE(std::string::npos, Access::FileStatus(*scene).find("busy"));
+    Access::FinishPickedSave(*scene, true, chosen, L"first-folder/001.jam");
+    Access::Save(*scene); EXPECT_EQ(2u, picks); EXPECT_EQ(chosen, Access::PendingFolder(*scene));
+    Access::FinishPickedSave(*scene, false, L"failed-folder", L"failed.jam");
+    EXPECT_EQ(L"first-folder/001.jam", scene->Controls().CurrentJamPath());
+    EXPECT_EQ(chosen, Access::SaveFolder(*scene));
+    chosen.clear(); Access::Save(*scene, true); EXPECT_EQ(3u, picks); EXPECT_TRUE(Access::ControlIdle(*scene));
+    EXPECT_EQ(L"first-folder/001.jam", scene->Controls().CurrentJamPath());
+    scene->Controls().SetCurrentJamPath(L"loaded/005.jam"); scene->Controls().SetSessionSaveFolder(L"loaded");
+    Access::Save(*scene); EXPECT_EQ(3u, picks); EXPECT_EQ(L"loaded", Access::PendingFolder(*scene));
+    Access::FinishPickedSave(*scene, true, L"loaded", L"loaded/006.jam");
+    chosen = L"explicit"; Access::Save(*scene, true); EXPECT_EQ(4u, picks); EXPECT_EQ(chosen, Access::PendingFolder(*scene));
+    Access::FinishPickedSave(*scene, true, chosen, L"explicit/001.jam");
+    exclusion.unlock(); scene->Shutdown();
+}
+
+class ResetPreservationPlugin final : public vst::IVstPlugin
+{
+public:
+    float Parameter = 0.73f;
+    unsigned int Unloads = 0u;
+    bool PreInit(const std::wstring&) override { return true; }
+    bool Load(const std::wstring&, float, unsigned int, unsigned int, vst::HostedLayoutMode) override { return true; }
+    void Unload() override { ++Unloads; }
+    void ProcessBlock(float*, int32_t) noexcept override {}
+    void ProcessBlockStereo(float*, float*, int32_t) noexcept override {}
+    void ProcessBlockMulti(float* const*, int32_t, int32_t) noexcept override {}
+    void SetParameter(unsigned int, float value) noexcept override { Parameter = value; }
+    float GetParameter(unsigned int) const noexcept override { return Parameter; }
+    void BeginMidiBlock(std::uint32_t, std::uint32_t) noexcept override {}
+    void SendMidiEvent(const midi::MidiEvent&, bool) noexcept override {}
+    bool OpenEditor(HWND) override { return false; }
+    void CloseEditor() override {}
+    utils::Size2d GetEditorSize() const noexcept override { return {}; }
+    bool IsLoaded() const noexcept override { return true; }
+    const std::string& Name() const noexcept override { return StateId(); }
+    vst::RenderRole Role() const noexcept override { return vst::RenderRole::Effect; }
+    vst::MidiInputCapabilities MidiInput() const noexcept override { return {true, true, true}; }
+    void SetBypassed(bool) noexcept override {}
+    bool IsBypassed() const noexcept override { return false; }
+    std::vector<std::uint8_t> GetState() const override { return {7u, 3u}; }
+    void SetState(const std::vector<std::uint8_t>&) override {}
+};
+
+TEST_F(SceneRoutingIntegrationTest, ResetAllConfirmationCancellationAndSerializedRetirementPreserveRigAndRouting)
+{
+    using Access = engine::SourceLossIntegrationTestAccess;
+    auto scene = FreshScene({Station("Keys"), Station("Drums")}, {Trigger("Keys trigger", "Keys")}); ASSERT_TRUE(scene);
+    auto exclusion = Access::ExcludeJob(*scene);
+    auto stations = scene->SnapshotStations(); auto station = stations.front();
+    auto take = station->AddTake(); auto other = stations.back()->AddTake(); scene->CommitChanges();
+    station->SetAllowedMidiChannels({2,5,11});
+    ASSERT_TRUE(station->RestoreMixerLevels(0.25, std::vector<double>(station->NumBusChannels(), 0.5)));
+    auto plugin = std::make_shared<ResetPreservationPlugin>();
+    actions::JobAction load; load.JobActionType = actions::JobAction::JOB_LOADVST;
+    load.VstPath = L"test-owned-reset.vst3"; load.PreInitPlugin = plugin;
+    station->OnAction(load); station->CommitChanges(); ASSERT_EQ(plugin, station->GetVstPlugin(0u));
+    auto routed = station->MidiChannelRoutes(); routed[1].PluginIds = {plugin->StateId()};
+    ASSERT_TRUE(station->SetMidiChannelRoutes(routed, station->RackRevision()));
+    const auto routes = station->MidiChannelRoutes(); const auto rack = station->GetGuiRack();
+    rack->AddRoute(0u, 0u); const auto cables = rack->Routes();
+    const auto engineRoutes = station->SnapshotAudioRoutesForExport();
+    const auto revision = scene->AcceptedRigSnapshot()->Revision;
+    Access::SetClock(*scene);
+    Access::SetResetQuantisationState(*scene);
+    station->SetStationPhaseOffsetSamps(-123);
+    stations.back()->SetStationPhaseOffsetSamps(456);
+    scene->Controls().SetCurrentJamPath(L"previous/001.jam"); scene->Controls().SetSessionSaveFolder(L"previous");
+    actions::GuiAction reset; reset.ElementType = actions::GuiAction::ACTIONELEMENT_BUTTON; reset.Index = 7214u;
+    scene->OnAction(reset); const auto decision = Access::ResetDecision(*scene); ASSERT_TRUE(decision);
+    scene->OnAction(reset); EXPECT_EQ(decision, Access::ResetDecision(*scene));
+    Access::ResolveReset(*scene, false);
+    EXPECT_EQ(1u, station->GetLoopTakeSnapshot().size()); EXPECT_DOUBLE_EQ(0.25, station->MasterLevelForExport());
+    EXPECT_EQ(96000ul, Access::ClockLength(*scene)); EXPECT_EQ(L"previous/001.jam", scene->Controls().CurrentJamPath());
+    EXPECT_EQ(321, Access::GlobalPhase(*scene));
+    EXPECT_EQ(-123, station->StationPhaseOffsetSamps());
+    EXPECT_EQ(456, stations.back()->StationPhaseOffsetSamps());
+    for (const auto& retained : stations) EXPECT_EQ(321, retained->GlobalPhaseOffsetSamps());
+
+    auto trigger = scene->AcceptedRigSnapshot()->Triggers.front().Instance;
+    io::UserConfig captureConfig{}; captureConfig.Audio.NumChannelsIn = 1u;
+    Access::StartRecording(*scene, trigger, captureConfig);
+    ASSERT_EQ(engine::TRIGSTATE_RECORDING, trigger->GetState());
+    const auto beforeResetCount = station->NumTakes();
+    scene->OnAction(reset); Access::ResolveReset(*scene, true);
+    scene->PumpDeviceAndFileControls(); // Closes input; it cannot mutate before job acknowledgement.
+    EXPECT_EQ(beforeResetCount, station->NumTakes());
+    exclusion.unlock();
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+    while (!Access::ControlIdle(*scene) && std::chrono::steady_clock::now() < deadline)
+    { scene->PumpDeviceAndFileControls(); std::this_thread::yield(); }
+    ASSERT_TRUE(Access::ControlIdle(*scene));
+    EXPECT_TRUE(station->GetLoopTakeSnapshot().empty()); EXPECT_TRUE(stations.back()->GetLoopTakeSnapshot().empty());
+    EXPECT_EQ(stations, scene->SnapshotStations()); EXPECT_EQ(revision, scene->AcceptedRigSnapshot()->Revision);
+    EXPECT_EQ((std::vector<int>{2,5,11}), station->AllowedMidiChannels());
+    EXPECT_EQ(routes, station->MidiChannelRoutes()); EXPECT_EQ(rack, station->GetGuiRack());
+    EXPECT_EQ(cables, rack->Routes()); EXPECT_EQ(engineRoutes, station->SnapshotAudioRoutesForExport());
+    EXPECT_EQ(plugin, station->GetVstPlugin(0u)); EXPECT_FLOAT_EQ(0.73f, plugin->GetParameter(0u));
+    EXPECT_EQ((std::vector<std::uint8_t>{7u,3u}), plugin->GetState()); EXPECT_EQ(0u, plugin->Unloads);
+    EXPECT_DOUBLE_EQ(1.0, station->MasterLevelForExport());
+    for (auto level : station->BusLevelsForExport()) EXPECT_DOUBLE_EQ(1.0, level);
+    EXPECT_EQ(0ul, Access::ClockLength(*scene)); EXPECT_TRUE(scene->Controls().CurrentJamPath().empty());
+    EXPECT_TRUE(Access::SaveFolder(*scene).empty()); EXPECT_TRUE(take->IsTriggerCaptureInactive());
+    EXPECT_EQ(engine::TRIGSTATE_DEFAULT, trigger->GetState()); EXPECT_TRUE(trigger->GetTakes().empty());
+    scene->CommitChanges(); // The running job thread owns its input-gate producer.
+    EXPECT_TRUE(station->GetLoopTakeSnapshot().empty());
+    unsigned int picks = 0u;
+    { auto job = Access::ExcludeJob(*scene); Access::PickDirectory(*scene, [&](const auto&) { ++picks; return std::wstring{}; }); Access::Save(*scene); }
+    EXPECT_EQ(1u, picks);
+    {
+        auto job = Access::ExcludeJob(*scene);
+        EXPECT_EQ(0, Access::GlobalPhase(*scene));
+        EXPECT_EQ(midi::MidiQuantisationFraction::Sixth, Access::DefaultFraction(*scene));
+        EXPECT_EQ(io::JamFile::GlobalMidiQuantState::All, Access::GlobalQuantisationState(*scene));
+        for (const auto& retained : stations)
+        {
+            EXPECT_EQ(0, retained->GlobalPhaseOffsetSamps());
+            EXPECT_EQ(0, retained->StationPhaseOffsetSamps());
+            const auto freshTake = retained->AddTake();
+            EXPECT_EQ(0, freshTake->ResolvedMidiQuantisation().PhaseOffsetSamps);
+            EXPECT_EQ(midi::MidiQuantisationFraction::Sixth, freshTake->MidiQuantisation().Fraction);
+        }
+    }
+    scene->Shutdown();
+}
+
+TEST_F(SceneRoutingIntegrationTest, ReclockButtonArmsOnceAndFormerKeyboardChordDoesNotArm)
+{
+    using Access = engine::SourceLossIntegrationTestAccess;
+    auto scene = FreshScene({Station("Local")}, {}); ASSERT_TRUE(scene);
+    auto exclusion = Access::ExcludeJob(*scene);
+    actions::KeyAction key; key.KeyChar = 82u; key.KeyActionType = actions::KeyAction::KEY_UP;
+    key.Modifiers = static_cast<base::Action::Modifiers>(base::Action::MODIFIER_CTRL | base::Action::MODIFIER_SHIFT);
+    scene->OnAction(key); EXPECT_FALSE(Access::ReclockArmed(*scene));
+    actions::GuiAction button; button.ElementType = actions::GuiAction::ACTIONELEMENT_BUTTON; button.Index = 7006u;
+    Access::RemoteGrid(*scene, {88200u, 4u, 0u, 120.0f, 1u}, 1234);
+    scene->OnAction(button); EXPECT_FALSE(Access::ReclockArmed(*scene));
+    Access::RemoteGrid(*scene, {}, 0);
+    scene->OnAction(button); EXPECT_TRUE(Access::ReclockArmed(*scene));
+    scene->OnAction(button); EXPECT_TRUE(Access::ReclockArmed(*scene));
+    exclusion.unlock(); scene->Shutdown();
+}
+
+TEST_F(SceneRoutingIntegrationTest, SaveBusyFeedbackDoesNotOpenDialogsOrReplaceDestinations)
+{
+    using Access = engine::SourceLossIntegrationTestAccess;
+    auto scene = FreshScene({Station("Capture")}, {Trigger("Record", "Capture")}); ASSERT_TRUE(scene);
+    auto exclusion = Access::ExcludeJob(*scene);
+    unsigned int picks = 0u;
+    Access::PickDirectory(*scene, [&](const auto&) { ++picks; return std::wstring{}; });
+    scene->Controls().SetCurrentJamPath(L"prior/001.jam"); scene->Controls().SetSessionSaveFolder(L"prior");
+    auto trigger = scene->AcceptedRigSnapshot()->Triggers.front().Instance;
+    io::UserConfig config{}; config.Audio.NumChannelsIn = 1u;
+    Access::StartRecording(*scene, trigger, config);
+    Access::Save(*scene, true); EXPECT_EQ(0u, picks);
+    EXPECT_NE(std::string::npos, Access::FileStatus(*scene).find("capture"));
+    actions::GuiAction rig; rig.ElementType = actions::GuiAction::ACTIONELEMENT_BUTTON; rig.Index = gui::GuiMainPanel::SaveRigControlIndex;
+    scene->OnAction(rig); EXPECT_FALSE(scene->ConsumeRigSaveRequest());
+    EXPECT_NE(std::string::npos, Access::FileStatus(*scene).find("busy"));
+    EXPECT_FALSE(scene->BeginExplicitRigSave());
+    EXPECT_EQ(L"prior/001.jam", scene->Controls().CurrentJamPath());
+    exclusion.unlock(); scene->Shutdown();
+}
+
+TEST_F(SceneRoutingIntegrationTest, SeamPolicyRigChangePreservesStationPlaybackFormat)
+{
+	using Access = engine::SourceLossIntegrationTestAccess;
+	auto scene = FreshScene({Station("Local"), Station("Other")}, {});
+	ASSERT_TRUE(scene);
+	Access::PrepareHud(*scene);
+	auto station = scene->SnapshotStations().front();
+	std::shared_ptr<engine::LoopTake> take;
+	Access::WhileSceneLocked(*scene, [&] {
+		// A policy edit must retain each station's format, even when it differs
+		// from the scene device rate (as a newly joined remote station can).
+		station->SetSampleRate(32000.0f);
+		take = station->AddTake();
+		take->Record({}, "Local", {0u});
+		ASSERT_TRUE(take->RecordMidiEvent(midi::MidiEvent::MakeNoteOn(0u, 0u, 60u, 100u), 0u));
+		take->Play(0u, 10000u, 0u);
+	});
+	EXPECT_NE(32000u, Access::InteractionSampleRate(*scene));
+	auto candidate = scene->AcceptedRigSnapshot()->Rig;
+	candidate.User.Loop.MidiSeamMergeWindowMs = 500u;
+	auto result = scene->RequestRigEdit(candidate);
+	const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(1);
+	while (result == engine::RigCoordinator::EditResult::EditsDisabled
+		&& std::chrono::steady_clock::now() < deadline)
+	{
+		std::this_thread::sleep_for(std::chrono::milliseconds(1));
+		result = scene->RequestRigEdit(candidate);
+	}
+	ASSERT_EQ(engine::RigCoordinator::EditResult::Pending, result);
+	Settle(scene);
+	EXPECT_EQ(500u, scene->AcceptedRigSnapshot()->Rig.User.Loop.MidiSeamMergeWindowMs);
+	Access::WhileSceneLocked(*scene, [&] {
+		EXPECT_EQ(32000.0f, station->GetSampleRate());
+		EXPECT_EQ(32000.0f, take->GetSampleRate());
+		midi::MidiLoop::EditState edit;
+		ASSERT_TRUE(take->GetMidiLoops().front()->SnapshotForEdit(edit));
+		EXPECT_EQ(16000u, edit.SeamMergeWindowSamps);
+	});
+	scene->Shutdown();
 }

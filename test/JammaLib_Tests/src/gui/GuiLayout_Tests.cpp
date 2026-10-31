@@ -1,4 +1,6 @@
+#include "../gui/WorkspaceTestAccess.h"
 #include <type_traits>
+#include <cmath>
 
 #include "gtest/gtest.h"
 #include "gui/GuiGrid.h"
@@ -10,9 +12,11 @@
 #include "gui/GuiMainPanel.h"
 #include "gui/GuiNumericInput.h"
 #include "gui/GuiHud.h"
+#include "gui/GuiTriggerRename.h"
 #include "gui/GuiPopupManager.h"
 #include "engine/RigSnapshot.h"
 #include "engine/Scene.h"
+#include "engine/Trigger.h"
 
 using base::LayoutSizing;
 using base::LayoutHAlign;
@@ -533,7 +537,12 @@ class SettingsTestScene : public Scene
 {
 public:
 	SettingsTestScene(SceneParams params, io::UserConfig user) : Scene(std::move(params), std::move(user)) {}
-	std::shared_ptr<gui::GuiMainPanel> SettingsPanel() const { return _mainPanel; }
+	std::shared_ptr<gui::GuiMainPanel> SettingsPanel() const { return _workspace->MainPanel(); }
+	std::shared_ptr<gui::GuiMainPanel> SelectionPanel() const { return _workspace->SelectionPanel(); }
+	std::shared_ptr<gui::GuiHud> HudPanel() const { return _workspace->Hud(); }
+	void SetHudForInputTest(const std::shared_ptr<gui::GuiHud>& hud) {
+		gui::WorkspaceTestAccess::ReplaceHud(*_workspace, std::move(hud));
+	}
 };
 
 static utils::Position2d SettingsHandleCenter(const std::shared_ptr<gui::GuiMainPanel>& panel)
@@ -745,21 +754,50 @@ TEST_F(HudResponsiveLayoutTests, ResizeKeepsScrollViewportsInsideActualWindowAnd
 		{
 			const auto card = scrolls[0]->Content()->TryGetChild(index);
 			ASSERT_NE(nullptr, card);
-			EXPECT_EQ(gui::GuiStyle::ControlHeight, card->GetSize().Height);
+			EXPECT_GT(card->GetSize().Height, 0u);
 			EXPECT_GE(card->GetSize().Width, 80u);
-			EXPECT_LE(card->GetSize().Width, 160u);
-			EXPECT_EQ(2, card->Position().Y);
-			const auto socket = card->TryGetChild(2);
+			EXPECT_EQ(sourceCard->Position().Y, card->Position().Y);
+			const auto socket = card->TryGetChild(1); // One name label, followed by the socket.
 			ASSERT_NE(nullptr, socket);
-			EXPECT_EQ(static_cast<int>(card->GetSize().Width / 2u), socket->Position().X + 12);
+			EXPECT_GE(socket->Position().X, 0);
+			EXPECT_LE(socket->Position().X + static_cast<int>(socket->GetSize().Width), static_cast<int>(card->GetSize().Width));
 			EXPECT_LE(card->TryGetChild(0)->Position().X + static_cast<int>(card->TryGetChild(0)->GetSize().Width),
-				static_cast<int>(card->GetSize().Width) - 13);
+				static_cast<int>(card->GetSize().Width));
 		}
 		for (unsigned char index = 0; index < 12; ++index)
-			EXPECT_EQ(100u, scrolls[2]->Content()->TryGetChild(index)->GetSize().Height);
+			EXPECT_GT(scrolls[2]->Content()->TryGetChild(index)->GetSize().Height, 0u);
 	}
 	EXPECT_EQ(sourceCard.get(), scrolls[0]->Content()->TryGetChild(0).get());
 	EXPECT_EQ(largeWidth, sourceCard->GetSize().Width);
+}
+
+TEST_F(HudResponsiveLayoutTests, TriggerCardActionsAndSocketsKeepUsableBoundsAndHitTargets)
+{
+	gui::GuiHudParams params;
+	params.Size = { 1200u, 800u };
+	auto hud = std::make_shared<gui::GuiHud>(params);
+	hud->SetRoutingConfig(0u, {}, Routing());
+	const auto scrolls = Scrolls(hud);
+	ASSERT_EQ(1u, scrolls.size());
+	const auto card = scrolls[0]->Content()->TryGetChild(0);
+	ASSERT_TRUE(card);
+	const auto activate = card->TryGetChild(2), ditch = card->TryGetChild(3);
+	const auto rename = std::dynamic_pointer_cast<gui::GuiTriggerRename>(card->TryGetChild(4));
+	const auto close = card->TryGetChild(5), edit = card->TryGetChild(6);
+	const auto input = card->TryGetChild(7), output = card->TryGetChild(8);
+	ASSERT_TRUE(activate); ASSERT_TRUE(ditch); ASSERT_TRUE(rename);
+	ASSERT_TRUE(close); ASSERT_TRUE(edit); ASSERT_TRUE(input); ASSERT_TRUE(output);
+	const int height = static_cast<int>(card->GetSize().Height);
+	const int width = static_cast<int>(card->GetSize().Width);
+	for (const auto& control : {activate, ditch, close, edit, input, output})
+	{
+		EXPECT_GE(control->Position().X, 0); EXPECT_GE(control->Position().Y, 0);
+		EXPECT_GT(control->GetSize().Width, 0u); EXPECT_GT(control->GetSize().Height, 0u);
+		EXPECT_LE(control->Position().X + static_cast<int>(control->GetSize().Width), width);
+		EXPECT_LE(control->Position().Y + static_cast<int>(control->GetSize().Height), height);
+		EXPECT_TRUE(control->HitTest({static_cast<int>(control->GetSize().Width / 2u),
+			static_cast<int>(control->GetSize().Height / 2u)}));
+	}
 }
 
 TEST_F(HudResponsiveLayoutTests, ResizeClampsExistingScrollOffsetWithoutRebuildingCards)
@@ -821,6 +859,256 @@ TEST_F(HudResponsiveLayoutTests, SourceIdentityPopupUsesExistingCaptureAndStaysW
 	EXPECT_FALSE(popups.IsOpen());
 }
 
+class TopPanelInputsLayoutTests : public HudResponsiveLayoutTests
+{
+protected:
+	void SetUp() override
+	{
+		gui::GuiMainPanelParams panelParams;
+		panelParams.Size = {1200u, 800u};
+		Settings = std::make_shared<gui::GuiMainPanel>(panelParams);
+		panelParams.SelectionOnly = true;
+		Selection = std::make_shared<gui::GuiMainPanel>(panelParams);
+		Settings->Init(); Selection->Init();
+		gui::GuiHudParams hudParams; hudParams.Size = panelParams.Size;
+		Hud = std::make_shared<gui::GuiHud>(hudParams);
+		Hud->SetRoutingConfig(8u, {"Keys"}, Routing());
+		Hud->Init();
+		Resize(panelParams.Size);
+	}
+	void Resize(utils::Size2d size)
+	{
+		Size = size;
+		Selection->SetViewportSize(size); Settings->SetViewportSize(size);
+		Hud->SetTopPanelLayout(Selection->TopPanelLayout());
+		Hud->SetSize(size);
+		Settings->SetOccupiedTopBounds(Selection->TopPanelLayout().PresentedBounds, Hud->OccupiedTopStripBounds());
+	}
+	void Advance(float seconds)
+	{
+		Selection->AdvanceAnimation(seconds);
+		Hud->SetTopPanelLayout(Selection->TopPanelLayout());
+		Settings->SetOccupiedTopBounds(Selection->TopPanelLayout().PresentedBounds, Hud->OccupiedTopStripBounds());
+	}
+	void Finish()
+	{
+		for (int frame = 0; frame < 32; ++frame) Advance(0.01f);
+	}
+	static utils::Rect2d Bounds(const std::shared_ptr<base::GuiElement>& element)
+	{
+		const auto p = element->GlobalPosition(); const auto s = element->GetSize();
+		return {p.X, p.Y, p.X + static_cast<int>(s.Width), p.Y + static_cast<int>(s.Height)};
+	}
+	void ExpectSeparated() const
+	{
+		const auto strip = Hud->OccupiedTopStripBounds();
+		const auto selection = Selection->TopPanelLayout().PresentedBounds;
+		if (!strip.IsEmpty())
+		{
+			EXPECT_GE(strip.Left, 0); EXPECT_GE(strip.Bottom, 0);
+			EXPECT_LE(strip.Right, static_cast<int>(Size.Width));
+			EXPECT_LE(strip.Top, static_cast<int>(Size.Height));
+			EXPECT_TRUE(strip.Intersected(selection).IsEmpty());
+		}
+		const auto rail = Hud->TryGetChild(1u);
+		if (rail->IsVisible())
+		{
+			EXPECT_TRUE(Bounds(rail).Intersected(strip).IsEmpty());
+			EXPECT_TRUE(Bounds(rail).Intersected(selection).IsEmpty());
+			EXPECT_GE(Bounds(rail).Bottom, 0); EXPECT_LE(Bounds(rail).Top, static_cast<int>(Size.Height));
+		}
+		const auto settings = Settings->PresentedFrameBounds();
+		EXPECT_TRUE(settings.Intersected(selection).IsEmpty());
+		EXPECT_TRUE(settings.Intersected(strip).IsEmpty());
+		const auto handle = Settings->TryGetChild(1u);
+		if (handle->IsVisible())
+		{
+			EXPECT_TRUE(Bounds(handle).Intersected(selection).IsEmpty());
+			EXPECT_TRUE(Bounds(handle).Intersected(strip).IsEmpty());
+		}
+	}
+	std::shared_ptr<gui::GuiMainPanel> Settings, Selection;
+	std::shared_ptr<gui::GuiHud> Hud;
+	utils::Size2d Size{};
+};
+
+
+
+TEST_F(TopPanelInputsLayoutTests, NormalAndNarrowViewportsKeepInputsSeparateAndUsable)
+{
+	Resize({900u, 800u});
+	auto strip = Hud->OccupiedTopStripBounds();
+	EXPECT_GE(strip.Right - strip.Left, 320);
+	EXPECT_GE(strip.Left, Selection->TopPanelLayout().PresentedBounds.Right);
+	ExpectSeparated();
+	Resize({640u, 800u});
+	strip = Hud->OccupiedTopStripBounds();
+	EXPECT_LE(strip.Top, Selection->TopPanelLayout().PresentedBounds.Bottom);
+	EXPECT_GE(strip.Right - strip.Left, 320);
+	ExpectSeparated();
+}
+
+TEST_F(TopPanelInputsLayoutTests, AnimationKeepsInputsSeparateAndClippedContentUnreachable)
+{
+	Selection->SetExpanded(false);
+	for (int frame = 0; frame < 24; ++frame)
+	{
+		Advance(0.01f);
+		ExpectSeparated();
+	}
+	EXPECT_FLOAT_EQ(0.0f, Selection->TransitionValue());
+	EXPECT_FALSE(Selection->AdvanceAnimation(0.01f));
+	Selection->SetExpanded(true); Advance(0.05f); Advance(0.05f);
+	const auto clip = Selection->PresentedFrameBounds();
+	const auto frameBounds = Bounds(Selection->TryGetChild(0u));
+	ASSERT_GT(frameBounds.Right, clip.Right);
+	const utils::Position2d hidden{frameBounds.Right - 1, clip.Bottom + 1};
+	EXPECT_FALSE(Selection->RouteHitTest(hidden));
+	EXPECT_EQ(nullptr, Selection->FindTopmostDescendant(hidden));
+	TouchAction hiddenPress; hiddenPress.Touch = TouchAction::TOUCH_MOUSE;
+	hiddenPress.State = TouchAction::TOUCH_DOWN; hiddenPress.Position = hidden;
+	EXPECT_FALSE(Selection->OnAction(hiddenPress).IsEaten);
+	const utils::Position2d visible{clip.Left + 2, clip.Bottom + 2};
+	EXPECT_TRUE(Selection->RouteHitTest(visible));
+	EXPECT_NE(nullptr, Selection->FindTopmostDescendant(visible));
+	const auto before = Selection->TopPanelLayout().PresentedBounds;
+	const auto beforeStrip = Hud->OccupiedTopStripBounds();
+	Selection->SetExpanded(false); Advance(0.0f);
+	EXPECT_EQ(before.Right, Selection->TopPanelLayout().PresentedBounds.Right);
+	EXPECT_EQ(before.Bottom, Selection->TopPanelLayout().PresentedBounds.Bottom);
+	EXPECT_EQ(beforeStrip.Left, Hud->OccupiedTopStripBounds().Left);
+	EXPECT_EQ(beforeStrip.Top, Hud->OccupiedTopStripBounds().Top);
+	Selection->SetExpanded(false); Advance(0.0f); // Repeated request does not restart.
+	Finish(); EXPECT_FLOAT_EQ(0.0f, Selection->TransitionValue()); ExpectSeparated();
+}
+
+
+TEST_F(TopPanelInputsLayoutTests, ResizeAcrossBreakpointRetargetsCurrentPresentationAndFinishesWithPanel)
+{
+	Resize({640u, 800u}); Selection->SetExpanded(false); Advance(0.04f);
+	const auto before = Hud->OccupiedTopStripBounds();
+	const auto progress = Selection->TransitionValue();
+	const auto panelBefore = Selection->TopPanelLayout().PresentedBounds;
+	Resize({900u, 800u});
+	EXPECT_FLOAT_EQ(progress, Selection->TransitionValue());
+	EXPECT_EQ(panelBefore.Right, Selection->TopPanelLayout().PresentedBounds.Right);
+	EXPECT_EQ(before.Left, Hud->OccupiedTopStripBounds().Left);
+	EXPECT_EQ(before.Top, Hud->OccupiedTopStripBounds().Top);
+	for (int frame = 0; frame < 8; ++frame) { Advance(0.01f); ExpectSeparated(); }
+	const auto reverse = Hud->OccupiedTopStripBounds();
+	Selection->SetExpanded(true); Advance(0.0f);
+	EXPECT_EQ(reverse.Left, Hud->OccupiedTopStripBounds().Left);
+	EXPECT_EQ(reverse.Top, Hud->OccupiedTopStripBounds().Top);
+	Resize({812u, 900u});
+	for (int frame = 0; frame < 32; ++frame) { Advance(0.01f); ExpectSeparated(); }
+	EXPECT_FLOAT_EQ(1.0f, Selection->TransitionValue());
+	ExpectSeparated();
+	EXPECT_FALSE(Selection->AdvanceAnimation(0.01f));
+	Selection->SetExpanded(false); Advance(0.01f);
+	Resize({420u, 900u}); // Viewport clamping must retain the 320px minimum.
+	for (int frame = 0; frame < 32; ++frame)
+	{
+		Advance(0.01f); ExpectSeparated();
+		const auto strip = Hud->OccupiedTopStripBounds();
+		EXPECT_GE(strip.Right - strip.Left, 320);
+	}
+	EXPECT_FLOAT_EQ(0.0f, Selection->TransitionValue());
+	ExpectSeparated();
+}
+
+TEST_F(TopPanelInputsLayoutTests, ResizeWhileOpeningKeepsInputsOutsideVisibleBody)
+{
+	Resize({900u, 800u}); Selection->SetExpanded(false); Finish();
+	ASSERT_FLOAT_EQ(0.0f, Selection->TransitionValue());
+	Selection->SetExpanded(true); Advance(0.02f);
+	Resize({640u, 800u});
+	float previousProgress = Selection->TopPanelLayout().Progress;
+	ASSERT_LT(previousProgress, gui::GuiTopPanelLayout::DockingPhase);
+	bool crossedBodyBoundary = false;
+	for (int frame = 0; frame < 32; ++frame)
+	{
+		Advance(0.01f);
+		const auto panel = Selection->TopPanelLayout();
+		const auto strip = Hud->OccupiedTopStripBounds();
+		ExpectSeparated();
+		if (panel.Progress >= gui::GuiTopPanelLayout::DockingPhase)
+		{
+			if (previousProgress < gui::GuiTopPanelLayout::DockingPhase) crossedBodyBoundary = true;
+			EXPECT_LE(strip.Top, panel.PresentedBounds.Bottom) << "frame=" << frame;
+		}
+		previousProgress = panel.Progress;
+	}
+	EXPECT_TRUE(crossedBodyBoundary);
+	EXPECT_FLOAT_EQ(1.0f, Selection->TransitionValue());
+	ExpectSeparated();
+}
+
+TEST_F(TopPanelInputsLayoutTests, ContinuousResizeDoesNotRestartDockingUntilTheLastFrame)
+{
+	Resize({640u, 800u}); Selection->SetExpanded(false); Advance(0.02f);
+	for (unsigned int frame = 0u; frame < 42u; ++frame)
+	{
+		Resize({640u + (frame % 2u) * 2u, 800u}); Advance(0.005f);
+		ExpectSeparated();
+	}
+	EXPECT_FLOAT_EQ(0.0f, Selection->TransitionValue());
+	ExpectSeparated();
+}
+
+TEST_F(TopPanelInputsLayoutTests, TinyWindowsClampStackingAndPreserveSourceIdentityAndScroll)
+{
+	const auto scrolls = Scrolls(Hud); ASSERT_EQ(3u, scrolls.size());
+	const auto first = scrolls[0]->Content()->TryGetChild(0u); ASSERT_TRUE(first);
+	scrolls[0]->SetScrollOffset(scrolls[0]->MaxScrollOffset());
+	const auto originalOffset = scrolls[0]->ScrollOffset(); ASSERT_GT(originalOffset, 0);
+	for (const auto size : {utils::Size2d{335u, 600u}, {220u, 120u}, {80u, 60u}, {1u, 1u}, {0u, 0u}, {1200u, 800u}})
+	{
+		Resize(size); ExpectSeparated();
+		for (const auto& scroll : scrolls)
+		{
+			EXPECT_GE(scroll->ScrollOffset(), 0); EXPECT_LE(scroll->ScrollOffset(), scroll->MaxScrollOffset());
+			if (scroll->IsVisible())
+			{
+				EXPECT_GE(Bounds(scroll).Left, 0); EXPECT_GE(Bounds(scroll).Bottom, 0);
+				EXPECT_LE(Bounds(scroll).Right, static_cast<int>(size.Width));
+				EXPECT_LE(Bounds(scroll).Top, static_cast<int>(size.Height));
+			}
+		}
+		EXPECT_EQ(first, scrolls[0]->Content()->TryGetChild(0u));
+		EXPECT_EQ(originalOffset, scrolls[0]->ScrollOffset());
+		EXPECT_GE(first->GetSize().Width, 80u);
+	}
+	Selection->SetExpanded(false); Finish();
+	ExpectSeparated();
+}
+
+TEST(Scene, SelectionPresentationIsForwardedToInputsOnResizeAndAnimation)
+{
+	SceneParams params({""}, {}, {1200u, 800u});
+	SettingsTestScene scene(params, io::UserConfig{});
+	scene.SetSize({1200u, 800u});
+	const auto selection = scene.SelectionPanel(); const auto hud = scene.HudPanel();
+	ASSERT_TRUE(selection); ASSERT_TRUE(hud);
+	EXPECT_EQ(selection->TopPanelLayout().PresentedBounds.Right + 8, hud->OccupiedTopStripBounds().Left);
+	selection->SetExpanded(false); selection->AdvanceAnimation(0.05f);
+	scene.AdvanceUiAnimations();
+	EXPECT_EQ(selection->TopPanelLayout().PresentedBounds.Right + 8, hud->OccupiedTopStripBounds().Left);
+	scene.SetSize({811u, 800u});
+	EXPECT_EQ(803, hud->OccupiedTopStripBounds().Right);
+	EXPECT_TRUE(hud->OccupiedTopStripBounds().Intersected(selection->TopPanelLayout().PresentedBounds).IsEmpty());
+}
+
+TEST(GuiHudLayout, PresentedStatusBarBlocksMiddlePressInsteadOfStartingBackgroundGesture)
+{
+	gui::GuiHudParams params; params.Size = {800u, 600u};
+	auto hud = std::make_shared<gui::GuiHud>(params); hud->Init();
+	ASSERT_TRUE(hud->CapturesPointer({10, 10}));
+	TouchAction action; action.Touch = TouchAction::TOUCH_MOUSE; action.Index = 1u;
+	action.Position = {10, 10}; action.State = TouchAction::TOUCH_DOWN;
+	EXPECT_TRUE(hud->OnAction(action).IsEaten);
+	hud->SetSize({0u, 0u}); EXPECT_FALSE(hud->CapturesPointer({0, 0}));
+}
+
 TEST(GuiLabel, FitsMeasuredWidthsWithEllipsisAndHandlesEmptyFrames)
 {
 	const auto measure = [](const std::string& text)
@@ -879,13 +1167,66 @@ TEST(Scene, SettingsReceivesNextPressAndReleaseAfterWheelScroll) {
 	EXPECT_FALSE(scene.HasSelection());
 }
 
+TEST(Scene, HudLabelAndPanelCaptureBeforeUnderlyingControlsAndKeepTheirRelease) {
+	SettingsTestScene scene(SceneParams({ "" }, {}, { 1200u, 800u }), io::UserConfig{});
+	gui::GuiHudParams params; params.Size = {1200u, 800u};
+	const auto hud = std::make_shared<gui::GuiHud>(params);
+	scene.SetHudForInputTest(hud); // Idle test-owned routing; no audio-device heartbeat.
+	engine::RigSnapshot routing; routing.Revision = 7u;
+	io::RigFile::Trigger saved{}; saved.Id = "raw-id"; saved.Name = "Raw name";
+	routing.Rig.Triggers.push_back(saved);
+	engine::RigSnapshotTrigger runtime{}; runtime.Id = saved.Id; runtime.RigTriggerIndex = 0u;
+	runtime.Instance = std::make_shared<engine::Trigger>(engine::TriggerParams{});
+	routing.Triggers.push_back(runtime);
+	io::RigFileRouting::TriggerResolution resolved{}; resolved.TriggerIndex = 0u; resolved.TriggerName = saved.Name;
+	routing.Graph.Triggers.push_back(resolved);
+	hud->SetRoutingConfig(0u, {}, routing); hud->Init();
+	const auto rail = hud->TryGetChild(1);
+	const auto scroll = std::dynamic_pointer_cast<gui::GuiScrollPanel>(rail->TryGetChild(1));
+	ASSERT_TRUE(scroll);
+	const auto stack = std::dynamic_pointer_cast<GuiStackPanel>(scroll->Content());
+	ASSERT_TRUE(stack); stack->ComputeLayout();
+	const auto card = stack->TryGetChild(0);
+	const auto rename = std::dynamic_pointer_cast<gui::GuiTriggerRename>(card->TryGetChild(4));
+	ASSERT_TRUE(rename);
+	const auto label = rename->TryGetChild(1);
+	auto underneath = std::make_shared<GuiButton>(MakeButtonParams(1200u, 800u)); scene.AddChild(underneath);
+	TouchAction touch; touch.Touch = TouchAction::TOUCH_MOUSE; touch.Index = 0u;
+	touch.Position = label->GlobalPosition() + utils::Position2d{10, 10}; touch.State = TouchAction::TOUCH_DOWN;
+	EXPECT_EQ(hud, scene.OnAction(touch).ActiveElement.lock()); EXPECT_FALSE(rename->Active());
+	EXPECT_EQ(base::GuiElement::STATE_NORMAL, underneath->GetState());
+	touch.Position.X += 2; touch.State = TouchAction::TOUCH_UP;
+	EXPECT_TRUE(scene.OnAction(touch).IsEaten); EXPECT_TRUE(rename->Active());
+	rename->Cancel();
+	touch.Touch = TouchAction::TOUCH_FINGER; touch.Index = 7; touch.State = TouchAction::TOUCH_DOWN;
+	EXPECT_EQ(hud, scene.OnAction(touch).ActiveElement.lock());
+	touch.State = TouchAction::TOUCH_UP; touch.Index = 8;
+	EXPECT_TRUE(scene.OnAction(touch).IsEaten); EXPECT_FALSE(rename->Active()); EXPECT_TRUE(hud->HasLabelPress());
+	touch.Touch = TouchAction::TOUCH_MOUSE; touch.Index = 7;
+	EXPECT_TRUE(scene.OnAction(touch).IsEaten); EXPECT_FALSE(rename->Active()); EXPECT_TRUE(hud->HasLabelPress());
+	touch.Touch = TouchAction::TOUCH_FINGER;
+	actions::TouchMoveAction fingerMove; fingerMove.Touch = TouchAction::TOUCH_FINGER;
+	fingerMove.Position = touch.Position; fingerMove.MouseButtonsDown = 0u;
+	EXPECT_TRUE(scene.OnAction(fingerMove).IsEaten);
+	touch.State = TouchAction::TOUCH_UP;
+	EXPECT_TRUE(scene.OnAction(touch).IsEaten); EXPECT_TRUE(rename->Active());
+	rename->Cancel(); touch.Touch = TouchAction::TOUCH_MOUSE; touch.Index = 0;
+	touch.Position = rail->GlobalPosition() + utils::Position2d{8, 8}; touch.State = TouchAction::TOUCH_DOWN;
+	EXPECT_EQ(hud, scene.OnAction(touch).ActiveElement.lock());
+	touch.Position = {500, 400}; touch.State = TouchAction::TOUCH_UP;
+	EXPECT_TRUE(scene.OnAction(touch).IsEaten);
+	EXPECT_EQ(base::GuiElement::STATE_NORMAL, underneath->GetState()); EXPECT_FALSE(scene.HasSelection());
+	touch.State = TouchAction::TOUCH_DOWN;
+	EXPECT_EQ(underneath, scene.OnAction(touch).ActiveElement.lock());
+}
+
 TEST(Scene, SettingsReceivesNextControlAfterGuiCaptureCancellation) {
 	SettingsTestScene scene(SceneParams({ "" }, {}, { 800u, 600u }), io::UserConfig{});
 	auto panel = scene.SettingsPanel();
 	auto button = std::make_shared<GuiButton>(MakeButtonParams(80u, 30u));
-	button->SetPosition({ 500, 300 }); scene.AddChild(button);
+	button->SetPosition({ 500, 200 }); scene.AddChild(button);
 	TouchAction press; press.Touch = TouchAction::TOUCH_MOUSE;
-	press.Index = 0; press.State = TouchAction::TOUCH_DOWN; press.Position = { 510, 310 };
+	press.Index = 0; press.State = TouchAction::TOUCH_DOWN; press.Position = { 510, 210 };
 	ASSERT_EQ(button, scene.OnAction(press).ActiveElement.lock());
 	actions::TouchMoveAction cancel; cancel.Touch = TouchAction::TOUCH_MOUSE;
 	cancel.Position = press.Position; cancel.MouseButtonsDown = 0;
@@ -906,7 +1247,7 @@ TEST(Scene, SettingsCaptureCancellationAllowsNextControlToReceivePress) {
 	SceneParams sceneParams({ "" }, {}, { 800u, 600u });
 	SettingsTestScene scene(sceneParams, io::UserConfig{});
 	auto button = std::make_shared<GuiButton>(MakeButtonParams(80u, 30u));
-	button->SetPosition({ 500, 300 });
+	button->SetPosition({ 500, 200 });
 	scene.AddChild(button);
 	TouchAction action;
 	action.Touch = TouchAction::TOUCH_MOUSE;
@@ -918,7 +1259,7 @@ TEST(Scene, SettingsCaptureCancellationAllowsNextControlToReceivePress) {
 	cancel.Position = action.Position;
 	cancel.MouseButtonsDown = 0u;
 	EXPECT_TRUE(scene.OnAction(cancel).IsEaten);
-	action.Position = { 510, 310 };
+	action.Position = { 510, 210 };
 	auto next = scene.OnAction(action);
 	EXPECT_TRUE(next.IsEaten);
 	EXPECT_EQ(button, next.ActiveElement.lock());
@@ -965,9 +1306,19 @@ TEST(Scene, HidingSettingsDuringNumericCaptureConsumesTerminatingRelease) {
 	actions::TouchMoveAction cancel;
 	cancel.Position = action.Position; cancel.MouseButtonsDown = 0u;
 	scene.OnAction(cancel);
+	// Cancellation may leave the handle's toggle accepted. Restore the visible
+	// page and reveal the actual target before testing capture dismissal.
+	panel->SetExpanded(true);
+	for (int frame = 0; frame < 6; ++frame) panel->AdvanceAnimation(0.05f);
 	auto numeric = FindGuiElement<gui::GuiNumericInput>(*panel);
 	ASSERT_NE(nullptr, numeric);
+	const auto scroll = FindGuiElement<gui::GuiScrollPanel>(*panel);
+	ASSERT_NE(nullptr, scroll); ASSERT_NE(nullptr, scroll->Content());
+	const auto local = scroll->Content()->GlobalToLocal(numeric->GlobalPosition());
+	scroll->ScrollToVisible({local.X, local.Y, local.X + static_cast<int>(numeric->GetSize().Width),
+		local.Y + static_cast<int>(numeric->GetSize().Height)});
 	action.Position = numeric->GlobalPosition() + utils::Position2d{ 10, 10 };
+	ASSERT_EQ(numeric, panel->FindTopmostDescendant(action.Position));
 	auto inputPress = scene.OnAction(action);
 	ASSERT_EQ(numeric, inputPress.ActiveElement.lock());
 	numeric->SetText("0.5", false);

@@ -19,6 +19,7 @@
 #include "Json.h"
 #include "Timer.h"
 #include "../midi/MidiQuantisation.h"
+#include "../midi/MidiChannelRoute.h"
 #include "../audio/AudioMixer.h"
 #include "../engine/PerformanceGroups.h"
 
@@ -40,7 +41,7 @@ namespace io
 		};
 
 		static std::optional<JamFile> FromStream(std::stringstream ss);
-		static bool ToStream(JamFile jam, std::stringstream& ss);
+		static bool ToStream(JamFile jam, std::stringstream& ss, std::string* error = nullptr);
 		static const std::string DefaultJson;
 		static constexpr unsigned int CurrentFormatMajor = 0u;
 		static constexpr unsigned int CurrentFormatMinor = 3u;
@@ -118,6 +119,7 @@ namespace io
 			unsigned long MasterLoopCount;
 			// Current-schema body phase. Index is retained only for legacy readers.
 			unsigned long BodyPlayIndex = 0;
+			std::int32_t PlaybackOffsetSamps = 0;
 			double Level;
 			double Speed;
 			unsigned int MuteGroups;
@@ -142,6 +144,7 @@ namespace io
 			std::uint8_t Channel = 0;
 			std::uint8_t Controller = 0;
 			std::string TargetScope = "station";
+			std::string TargetPluginId; // v0.4 sidecars; authoritative when present.
 			unsigned int TargetPluginIndex = 0;
 			unsigned int TargetLoopIndex = 0;
 			unsigned int TargetParameterIndex = 0;
@@ -162,14 +165,6 @@ namespace io
 			std::optional<int> MidiQuantFraction;
 			std::optional<std::int32_t> PhaseOffsetSamps;
 			std::string Id;
-		};
-
-		struct MidiRoute
-		{
-			// OutputIndex is the flattened take/stream index. Live routes use IsLive.
-			unsigned int OutputIndex = 0;
-			bool IsLive = false;
-			unsigned int PluginIndex = 0;
 		};
 
 		struct LoopTake
@@ -208,7 +203,7 @@ namespace io
 			std::vector<VstEntry> VstChain;
 			std::int32_t StationPhaseOffsetSamps = 0;
 			std::vector<int> AllowedMidiChannels;
-			std::vector<MidiRoute> MidiRoutes;
+			std::array<midi::MidiChannelRoute, 16> MidiChannelRoutes{};
 			// One destination-output list per station bus mixer.
 			std::vector<std::vector<unsigned long>> AudioRoutes;
 			bool HasAudioRoutes = false;
@@ -246,6 +241,8 @@ namespace io
 		unsigned long TimerTicks = 0;
 		unsigned int QuantiseSamps = 1;
 		GlobalMidiQuantState GlobalMidiQuantStateValue = GlobalMidiQuantState::Off;
+		std::string MasterAudioLoopId;
+		midi::MidiQuantisationFraction DefaultMidiQuantFraction = midi::MidiQuantisationFraction::Quarter;
 		std::int32_t GlobalPhaseOffsetSamps = 0;
 		double TransportOffsetLoopFrac = 0.0;
 		utils::Timer::QuantisationType Quantisation = utils::Timer::QUANTISE_OFF;

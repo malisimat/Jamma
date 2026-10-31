@@ -7,6 +7,8 @@
 #include "../utils/VecUtils.h"
 #include "GlDeleteQueue.h"
 #include "GlDrawContext.h"
+#include "QuantisationModel.h"
+#include "QuantisationDivisionModel.h"
 #include "glm/glm.hpp"
 
 using namespace graphics;
@@ -420,6 +422,8 @@ StationModel::BuildAllGeometry(unsigned int numSides, float radius, unsigned int
 
 StationModel::StationModel() :
 	GuiModel(gui::GuiModelParams()),
+	_quantisationModel(std::make_shared<engine::QuantisationModel>()),
+	_quantisationDivisionModel(std::make_shared<engine::QuantisationDivisionModel>()),
 	_lastPass(base::PASS_SCENE),
 	_stationGlobalId(),
 	_stationSelected(false),
@@ -914,4 +918,173 @@ void TakeCoreModel::Draw3d(base::DrawContext& ctx, unsigned int instances, base:
 	// each strand to the next one at the angular seam.
 	glCtx.SetUniform("DiscSpiralPitch", _loopMode ? (120.0f / (384.0f * 12.0f)) : 0.0f);
 	DiscMaskModel::Draw3d(ctx, instances, pass);
+}
+
+
+void StationModel::SetQuantisationParams(std::optional<engine::QuantisationParams> params,
+	bool confirm)
+{
+	if (!_quantisationModel)
+		return;
+
+	if (!params.has_value())
+	{
+		_pendingQuantisationParams = std::nullopt;
+		_pendingQuantisationConfirm = false;
+		return;
+	}
+
+	_pendingQuantisationParams = engine::QuantisationParams{
+		params->SeedSamps,
+		params->MasterSamps
+	};
+	_pendingQuantisationConfirm = _pendingQuantisationConfirm || confirm;
+}
+
+void StationModel::SetQuantisationOverlayAlpha(float alpha) noexcept
+{
+	_quantisationOverlayAlpha = std::clamp(alpha, 0.0f, 1.0f);
+	if (_quantisationModel)
+		_quantisationModel->SetOverlayAlpha(_quantisationOverlayAlpha);
+	if (_quantisationDivisionModel)
+		_quantisationDivisionModel->SetOverlayAlpha(_quantisationOverlayAlpha);
+}
+
+void StationModel::ApplyQuantisationColourScope(std::span<engine::QuantisationLoopTakeVisual> visuals,
+	bool stationDepth, bool stationContainsMidi) noexcept
+{
+	if (stationDepth)
+		for (auto& visual : visuals) visual.ContainsMidiLoops = stationContainsMidi;
+}
+
+void StationModel::RefreshQuantisationOverlay(bool quantisable, unsigned int clockSeedSamps,
+	const std::vector<engine::QuantisationLoopTakeVisual>& visuals)
+{
+	if (!_quantisationModel && !_quantisationDivisionModel)
+		return;
+
+	if (!quantisable || !QuantisationOverlayEnabled())
+	{
+		_pendingQuantisationParams = std::nullopt;
+		_pendingQuantisationConfirm = false;
+		if (_quantisationModel)
+		{
+			_quantisationModel->SetTiming(_HiddenSeedSamps);
+			_quantisationModel->SetOverlayVisible(false, false);
+		}
+		if (_quantisationDivisionModel)
+			_quantisationDivisionModel->SetOverlayVisible(false, false);
+		return;
+	}
+
+	if (visuals.empty())
+	{
+		_pendingQuantisationParams = std::nullopt;
+		_pendingQuantisationConfirm = false;
+		if (_quantisationModel)
+		{
+			_quantisationModel->SetTiming(_HiddenSeedSamps);
+			_quantisationModel->SetOverlayVisible(false, false);
+		}
+		if (_quantisationDivisionModel)
+			_quantisationDivisionModel->SetOverlayVisible(false, false);
+		return;
+	}
+
+	if (_pendingQuantisationParams.has_value())
+	{
+		const auto seedSamps = _pendingQuantisationParams->SeedSamps > 0u ?
+			_pendingQuantisationParams->SeedSamps :
+				_HiddenSeedSamps;
+
+		if (_quantisationModel)
+		{
+			_quantisationModel->SetLoopTakeVisuals(seedSamps, visuals);
+			_quantisationModel->SetOverlayVisible(true, _pendingQuantisationConfirm);
+		}
+		if (_quantisationDivisionModel)
+		{
+			_quantisationDivisionModel->SetLoopTakeVisuals(visuals);
+			_quantisationDivisionModel->SetOverlayVisible(true, _pendingQuantisationConfirm);
+		}
+		_pendingQuantisationConfirm = false;
+		return;
+	}
+
+	const auto seedSamps = clockSeedSamps;
+	if (_quantisationModel)
+	{
+		_quantisationModel->SetLoopTakeVisuals(seedSamps, visuals);
+		_quantisationModel->SetOverlayVisible(true, false);
+	}
+	if (_quantisationDivisionModel)
+	{
+		_quantisationDivisionModel->SetLoopTakeVisuals(visuals);
+		_quantisationDivisionModel->SetOverlayVisible(true, false);
+	}
+}
+
+void StationModel::BeginPresentationMove(float offsetX)
+{
+	_presentationOffsetX = _presentationStartOffsetX = offsetX;
+	_presentationElapsed = 0.0f;
+}
+
+bool StationModel::AdvancePresentationMove(float elapsedSeconds)
+{
+	if (!IsPresentationMoving()) return false;
+	_presentationElapsed += std::clamp(elapsedSeconds, 0.0f, 0.05f);
+	const float t = std::min(1.0f, _presentationElapsed / 0.25f);
+	const float eased = t * t * (3.0f - 2.0f * t);
+	_presentationOffsetX = _presentationStartOffsetX * (1.0f - eased);
+	if (t >= 1.0f) FinishPresentationMove();
+	return true; // Includes settling frame, so a stationary cursor is repicked.
+}
+
+void StationModel::FinishPresentationMove() noexcept
+{
+	_presentationOffsetX = _presentationStartOffsetX = _presentationElapsed = 0.0f;
+}
+
+void StationModel::InitPresentationResources(resources::ResourceLib& resourceLib, bool forceInit)
+{
+	if (_quantisationModel) _quantisationModel->InitResources(resourceLib, forceInit);
+	if (_quantisationDivisionModel) _quantisationDivisionModel->InitResources(resourceLib, forceInit);
+	InitResources(resourceLib, forceInit);
+}
+
+void StationModel::ReleasePresentationResources()
+{
+	FinishPresentationMove();
+	if (_quantisationModel) _quantisationModel->ReleaseResources();
+	if (_quantisationDivisionModel) _quantisationDivisionModel->ReleaseResources();
+	ReleaseResources();
+}
+
+void StationModel::DrawQuantisationOverlay(base::DrawContext& ctx, unsigned int numInstances, base::DrawPass pass)
+{
+	// Draw the semi-transparent quantisation overlay without writing to the
+	// depth buffer (so it blends with already-rendered geometry and does not
+	// occlude subsequent draws).  Face culling eliminates back-facing gate
+	// panels that would otherwise accumulate a second alpha layer at the same
+	// screen pixel, which pushes effective opacity well above the intended 70%.
+	GLboolean prevDepthMask = GL_TRUE;
+	glGetBooleanv(GL_DEPTH_WRITEMASK, &prevDepthMask);
+	const GLboolean wasCulling = glIsEnabled(GL_CULL_FACE);
+	GLint prevCullFaceMode = GL_BACK;
+	glGetIntegerv(GL_CULL_FACE_MODE, &prevCullFaceMode);
+
+	glDepthMask(GL_FALSE);
+	glEnable(GL_CULL_FACE);
+	glCullFace(GL_BACK);
+
+	if (_quantisationModel)
+		_quantisationModel->Draw3d(ctx, numInstances, pass);
+	if (_quantisationDivisionModel)
+		_quantisationDivisionModel->Draw3d(ctx, numInstances, pass);
+
+	glDepthMask(prevDepthMask);
+	glCullFace(prevCullFaceMode);
+	if (!wasCulling)
+		glDisable(GL_CULL_FACE);
 }

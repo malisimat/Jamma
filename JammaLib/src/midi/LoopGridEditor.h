@@ -89,6 +89,11 @@ namespace midi
 		bool IsEditingText() const noexcept { return _channelInput->HasFocus(); }
 		utils::Position2d ChannelControlPosition() const { return _channelInput->Position(); }
 		bool SelectMidiChannel(unsigned int channel); // Human-facing channel 1..16.
+		LoopGridGeometry::EditHandle EditHandle() const noexcept
+		{ return !IsReady() || _orbitDragging ? LoopGridGeometry::EditHandle::None
+			: _gesture ? _gesture->EditHandle() : _editHandle; }
+		bool NumericCursorAt(utils::Position2d point) const
+		{ return IsReady() && (_channelDragging || (_channelInput->IsVisible() && _channelInput->HitTest(_channelInput->ParentToLocal(point)))); }
 		bool OwnsPointer() const noexcept { return _pointerOwned; }
 		bool IsOrbitDragging() const noexcept { return _orbitDragging; }
 		float Morph() const noexcept { return _blend; }
@@ -195,7 +200,9 @@ namespace midi
 		float _audioSurfaceBlend = 0.0f;
 		bool _buttonPressed = false;
 		bool _buttonShowsClose = false;
+		LoopGridGeometry::EditHandle _editHandle = LoopGridGeometry::EditHandle::None;
 		bool _pointerOwned = false;
+		double _freeDragOffsetU = 0.0, _freeDragOffsetV = 0.0;
 		int _pointerButton = -1;
 		bool _relativePointer = false;
 		bool _pitchView = false;

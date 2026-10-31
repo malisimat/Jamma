@@ -6,6 +6,7 @@
 ///////////////////////////////////////////////////////////
 
 #include "JamFile.h"
+#include "NativeMidiSidecar.h"
 #include "PerformanceGroupPersistence.h"
 #include <algorithm>
 #include <cctype>
@@ -21,7 +22,7 @@
 using namespace io;
 using audio::BehaviourParams;
 
-const std::string JamFile::DefaultJson = "{\"name\":\"default\",\"ninjam\":{\"host\":\"ninjam.com:2049\",\"user\":\"jamma_guest\",\"pass\":\"\",\"workdir\":\"\"},\"stations\":[{\"name\":\"Station1\",\"stationtype\":0,\"takes\":[]}],\"quantisesamps\":1,\"quantisation\":\"off\"}";
+const std::string JamFile::DefaultJson = "{\"name\":\"default\",\"ninjam\":{\"host\":\"ninjam.com:2049\",\"user\":\"jamma_guest\",\"pass\":\"\",\"workdir\":\"\"},\"stations\":[{\"name\":\"Station1\",\"stationtype\":0,\"allowedmidichannels\":[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16],\"takes\":[]}],\"quantisesamps\":1,\"quantisation\":\"off\"}";
 
 std::optional<double> JamFile::ParseFiniteNumber(const Json::JsonValue& value) noexcept
 {
@@ -353,6 +354,15 @@ std::optional<JamFile> JamFile::FromStream(std::stringstream ss)
 			const auto& text = std::get<std::string>(midiStateIter->second);
 			jam.GlobalMidiQuantStateValue = text == "all" ? GlobalMidiQuantState::All : text == "mixed" ? GlobalMidiQuantState::Mixed : GlobalMidiQuantState::Off;
 		}
+		const auto masterId = transport.KeyValues.find("masterAudioLoopId");
+		if (masterId != transport.KeyValues.end() && masterId->second.index() == 4 && std::get<std::string>(masterId->second).size() <= 1024u)
+			jam.MasterAudioLoopId = std::get<std::string>(masterId->second);
+		const auto fractionIter = transport.KeyValues.find("defaultMidiQuantFraction");
+		if (fractionIter != transport.KeyValues.end() && fractionIter->second.index() == 2)
+		{
+			const auto value = std::get<unsigned long>(fractionIter->second);
+			if (value < midi::MidiQuantisationFractionCount) jam.DefaultMidiQuantFraction = static_cast<midi::MidiQuantisationFraction>(value);
+		}
 		const auto globalOffsetIter = transport.KeyValues.find("globalPhaseOffsetSamps");
 		if (globalOffsetIter != transport.KeyValues.end())
 			jam.GlobalPhaseOffsetSamps = ParseInt32Clamped(globalOffsetIter->second, 0);
@@ -499,9 +509,13 @@ std::optional<JamFile> JamFile::FromStream(std::stringstream ss)
 	return jam;
 }
 
-bool JamFile::ToStream(JamFile jam, std::stringstream& ss)
+bool JamFile::ToStream(JamFile jam, std::stringstream& ss, std::string* error)
 {
-	if (!PerformanceGroupPersistence::ValidateIdentities(jam)) return false;
+	const auto fail = [error](const char* reason) {
+		if (error) *error = reason;
+		return false;
+	};
+	if (!PerformanceGroupPersistence::ValidateIdentities(jam)) return fail("Duplicate or invalid session identity");
 	auto escapeJsonString = [](const std::string& s) -> std::string {
 		std::string escaped;
 		escaped.reserve(s.size());
@@ -641,6 +655,15 @@ bool JamFile::ToStream(JamFile jam, std::stringstream& ss)
 			+ "," + kvStr("id", entry.Id)
 			+ "," + kvBool("bypass", entry.Bypass)
 			+ "," + kvStr("state", entry.State);
+		if (!NativeMidiSidecar::ValidatePluginIdentity(entry.Id))
+		{
+			// A raw inactive identity may contain invalid UTF-8 or NUL. Encode
+			// its original bytes explicitly; the JAM remains valid JSON.
+			const std::vector<std::uint8_t> bytes(entry.Id.begin(), entry.Id.end());
+			out = "{" + kvStr("path", entry.Path) + "," + kvStr("id", "")
+				+ "," + kvStr("rawIdBase64", utils::Base64Encode(bytes))
+				+ "," + kvBool("bypass", entry.Bypass) + "," + kvStr("state", entry.State);
+		}
 		out += "}";
 		return out;
 	};
@@ -671,17 +694,6 @@ bool JamFile::ToStream(JamFile jam, std::stringstream& ss)
 		}
 		return out + "]";
 	};
-	auto midiRoutesToJson = [&](const std::vector<JamFile::MidiRoute>& routes) -> std::string {
-		std::string out = "[";
-		for (size_t i = 0; i < routes.size(); ++i)
-		{
-			if (i > 0) out += ",";
-			const auto& route = routes[i];
-			out += "{" + kvUlong("outputIndex", route.OutputIndex) + "," + kvBool("live", route.IsLive) + ","
-				+ kvUlong("pluginIndex", route.PluginIndex) + "}";
-		}
-		return out + "]";
-	};
 	auto audioRoutesToJson = [&](const std::vector<std::vector<unsigned long>>& routes) -> std::string {
 		std::string out = "[";
 		for (size_t i = 0; i < routes.size(); ++i)
@@ -701,24 +713,24 @@ bool JamFile::ToStream(JamFile jam, std::stringstream& ss)
 	if (jam.TransportInitialised && (jam.MasterLengthSamps == 0u || jam.MasterLengthSamps > MaxLoopLengthSamps))
 	{
 		std::cout << "JamFile: refusing to write invalid local master length" << std::endl;
-		return false;
+		return fail("Invalid local master length");
 	}
 	for (const auto& station : jam.Stations)
 	{
 		if (station.LoopTakes.size() > MaxTakesPerStation)
-			return false;
+			return fail("Too many takes in a station");
 		for (const auto& take : station.LoopTakes)
 		{
 			if (!jam.TransportInitialised && (!take.Loops.empty() || !take.MidiStreams.empty()))
-				return false;
+				return fail("Loop content requires an initialised transport");
 			if (take.Loops.size() > MaxLoopsPerTake || take.MidiStreams.size() > MaxMidiStreamsPerTake)
-				return false;
+				return fail("Too many loops or MIDI streams in a take");
 			for (const auto& loop : take.Loops)
 				if (loop.Length == 0u || loop.Length > MaxLoopLengthSamps || loop.BodyPlayIndex >= loop.Length || !IsSafeSidecarPath(loop.Name))
-					return false;
+					return fail("Invalid audio loop length, position, or sidecar path");
 			for (const auto& stream : take.MidiStreams)
 				if (stream.LogicalLength == 0u || stream.Channel > 15u || !IsSafeSidecarPath(stream.SidecarPath))
-					return false;
+					return fail("Invalid MIDI stream length, channel, or sidecar path");
 		}
 	}
 	for (const auto& history : jam.TriggerHistories)
@@ -726,10 +738,10 @@ bool JamFile::ToStream(JamFile jam, std::stringstream& ss)
 		if (history.TriggerId.empty() || history.Takes.size() > MaxTriggerHistoryPerTrigger ||
 			std::count_if(jam.TriggerHistories.begin(), jam.TriggerHistories.end(), [&history](const TriggerHistory& other)
 				{ return other.TriggerId == history.TriggerId; }) != 1)
-			return false;
+			return fail("Invalid trigger history");
 		for (const auto& entry : history.Takes)
 			if (entry.SourceType > 2u || entry.TargetTakeId.empty())
-				return false;
+				return fail("Invalid trigger take history");
 	}
 	const auto transportOffsetLoopFrac = std::isfinite(jam.TransportOffsetLoopFrac) ?
 		std::clamp(jam.TransportOffsetLoopFrac, -1.0, 1.0) : 0.0;
@@ -746,6 +758,8 @@ bool JamFile::ToStream(JamFile jam, std::stringstream& ss)
 		ss << kvStr("quantisation", quantStr(jam.Quantisation)) << ",";
 	}
 	ss << kvStr("globalMidiQuantState", midiGlobalQuantStr(jam.GlobalMidiQuantStateValue)) << ",";
+	ss << kvStr("masterAudioLoopId", jam.MasterAudioLoopId) << ",";
+	ss << kvInt("defaultMidiQuantFraction", static_cast<int>(jam.DefaultMidiQuantFraction)) << ",";
 	ss << kvInt("globalPhaseOffsetSamps", jam.GlobalPhaseOffsetSamps) << ",";
 	if (jam.TransportInitialised)
 		ss << kvStr("absoluteSamplePos", std::to_string(jam.AbsoluteSamplePos)) << ",";
@@ -799,6 +813,7 @@ bool JamFile::ToStream(JamFile jam, std::stringstream& ss)
 					<< kvUlong("channel", loop.Channel) << ","
 					<< kvUlong("length", loop.Length) << ","
 					<< kvUlong("bodyPlayIndex", loop.BodyPlayIndex) << ","
+					<< kvInt("playbackOffsetSamps", loop.PlaybackOffsetSamps) << ","
 					<< kvDouble("level", loop.Level) << ","
 					<< kvDouble("speed", loop.Speed) << ","
 					<< kvUlong("mutegroups", loop.MuteGroups) << ","
@@ -828,10 +843,39 @@ bool JamFile::ToStream(JamFile jam, std::stringstream& ss)
 		}
 
 		ss << "]";
-		if (!station.AllowedMidiChannels.empty())
-			ss << "," << kvIntArray("allowedmidichannels", station.AllowedMidiChannels);
-		if (!station.MidiRoutes.empty())
-			ss << "," << quoted("midiRoutes") << ":" << midiRoutesToJson(station.MidiRoutes);
+		ss << "," << kvIntArray("allowedmidichannels", station.AllowedMidiChannels);
+		{
+			ss << ",\"midiChannelRoutes\":[";
+			for (auto channel = 0u; channel < 16u; ++channel)
+			{
+				if (channel) ss << ",";
+				const auto& route = station.MidiChannelRoutes[channel];
+				const bool hasRawIds = std::any_of(route.PluginIds.begin(), route.PluginIds.end(), [](const auto& id) { return id.empty() || !NativeMidiSidecar::ValidatePluginIdentity(id); });
+				ss << "{\"plugins\":[";
+				for (std::size_t index = 0; index < (hasRawIds ? 0u : route.PluginIds.size()); ++index)
+				{
+					if (index) ss << ",";
+					const auto& id = route.PluginIds[index];
+					ss << quoted(id);
+				}
+				ss << "]";
+				if (hasRawIds)
+				{
+					// Malformed inactive routes use a complete canonical byte array.
+					ss << ",\"rawPluginIdsBase64\":[";
+					for (std::size_t index = 0; index < route.PluginIds.size(); ++index)
+					{
+						if (index) ss << ",";
+						const auto& id = route.PluginIds[index];
+						const std::vector<std::uint8_t> bytes(id.begin(), id.end());
+						ss << quoted("b64:" + utils::Base64Encode(bytes));
+					}
+					ss << "]";
+				}
+				ss << "}";
+			}
+			ss << "]";
+		}
 		if (station.HasAudioRoutes)
 			ss << "," << quoted("audioRoutes") << ":" << audioRoutesToJson(station.AudioRoutes);
 		if (!station.VstChain.empty())
@@ -856,7 +900,7 @@ bool JamFile::ToStream(JamFile jam, std::stringstream& ss)
 		ss << "]}";
 	}
 	std::stringstream groupStream;
-	if (!PerformanceGroupPersistence::Write(jam, groupStream)) return false;
+	if (!PerformanceGroupPersistence::Write(jam, groupStream)) return fail("Invalid performance group snapshot");
 	ss << "]," << quoted("performanceGroups") << ":" << groupStream.str() << "}";
 	return true;
 }
@@ -908,6 +952,12 @@ std::optional<JamFile::VstEntry> JamFile::VstEntry::FromJson(Json::JsonPart json
 {
 	VstEntry entry;
 	entry.Id = Json::GetString(json, "id").value_or("");
+	if (const auto raw = Json::GetString(json, "rawIdBase64"))
+	{
+		const auto bytes = utils::Base64Decode(*raw);
+		if (bytes.empty() || utils::Base64Encode(bytes) != *raw) return std::nullopt;
+		entry.Id.assign(bytes.begin(), bytes.end());
+	}
 
 	auto iter = json.KeyValues.find("path");
 	if (iter != json.KeyValues.end())
@@ -1159,6 +1209,8 @@ std::optional<JamFile::Loop> JamFile::Loop::FromJson(Json::JsonPart json)
 	loop.Index = index;
 	loop.MasterLoopCount = masterLoopCount;
 	loop.BodyPlayIndex = bodyPlayIndex;
+	const auto playbackOffset = json.KeyValues.find("playbackOffsetSamps");
+	if (playbackOffset != json.KeyValues.end()) loop.PlaybackOffsetSamps = ParseInt32Clamped(playbackOffset->second, 0);
 	loop.Level = level;
 	loop.Speed = speed;
 	loop.MuteGroups = muteGroups;
@@ -1553,27 +1605,6 @@ std::optional<JamFile::Station> JamFile::Station::FromJson(Json::JsonPart json)
 		}
 	}
 
-	std::vector<MidiRoute> midiRoutes;
-	iter = json.KeyValues.find("midiRoutes");
-	if (iter != json.KeyValues.end() && iter->second.index() == 5)
-	{
-		const auto& routes = std::get<Json::JsonArray>(iter->second);
-		if (routes.Array.index() == 5)
-		{
-			for (const auto& routeJson : std::get<std::vector<Json::JsonPart>>(routes.Array))
-			{
-				const auto output = Json::GetUnsigned(routeJson, "outputIndex");
-				const auto plugin = Json::GetUnsigned(routeJson, "pluginIndex");
-				auto liveIter = routeJson.KeyValues.find("live");
-				if (output.has_value() && plugin.has_value()
-					&& liveIter != routeJson.KeyValues.end() && liveIter->second.index() == 0)
-					midiRoutes.push_back(MidiRoute{ *output, std::get<bool>(liveIter->second), *plugin });
-				else
-					std::cout << "JamFile: skipped invalid MIDI route" << std::endl;
-			}
-		}
-	}
-
 	std::vector<std::vector<unsigned long>> audioRoutes;
 	bool hasAudioRoutes = false;
 	iter = json.KeyValues.find("audioRoutes");
@@ -1660,7 +1691,40 @@ std::optional<JamFile::Station> JamFile::Station::FromJson(Json::JsonPart json)
 	std::sort(allowedMidiChannels.begin(), allowedMidiChannels.end());
 	allowedMidiChannels.erase(std::unique(allowedMidiChannels.begin(), allowedMidiChannels.end()), allowedMidiChannels.end());
 	station.AllowedMidiChannels = std::move(allowedMidiChannels);
-	station.MidiRoutes = std::move(midiRoutes);
+	if (const auto live = json.KeyValues.find("midiChannelRoutes"); live != json.KeyValues.end())
+	{
+		if (live->second.index() != 5) return std::nullopt;
+		const auto& array = std::get<Json::JsonArray>(live->second);
+		if (array.Array.index() != 5) return std::nullopt;
+		const auto& channels = std::get<std::vector<Json::JsonPart>>(array.Array);
+		if (channels.size() != 16u) return std::nullopt;
+		for (auto channel = 0u; channel < 16u; ++channel)
+		{
+			const auto ids = channels[channel].KeyValues.find("plugins");
+			if (ids == channels[channel].KeyValues.end() || ids->second.index() != 5) return std::nullopt;
+			auto& route = station.MidiChannelRoutes[channel];
+			const auto& values = std::get<Json::JsonArray>(ids->second);
+			if (values.Array.index() == 4) route.PluginIds = std::get<std::vector<std::string>>(values.Array);
+			else if (!(values.Array.index() == 0 && std::get<std::vector<bool>>(values.Array).empty())) return std::nullopt;
+			if (const auto raw = channels[channel].KeyValues.find("rawPluginIdsBase64"); raw != channels[channel].KeyValues.end())
+			{
+				if (raw->second.index() != 5) return std::nullopt;
+				const auto& encoded = std::get<Json::JsonArray>(raw->second);
+				if (encoded.Array.index() != 4) return std::nullopt;
+				const auto& entries = std::get<std::vector<std::string>>(encoded.Array);
+				if (!route.PluginIds.empty()) return std::nullopt;
+				route.PluginIds.resize(entries.size());
+				for (std::size_t index = 0; index < entries.size(); ++index)
+				{
+					if (entries[index].compare(0u, 4u, "b64:") != 0) return std::nullopt;
+					const auto encodedId = entries[index].substr(4u);
+					const auto bytes = utils::Base64Decode(encodedId);
+					if (utils::Base64Encode(bytes) != encodedId) return std::nullopt;
+					route.PluginIds[index].assign(bytes.begin(), bytes.end());
+				}
+			}
+		}
+	}
 	station.AudioRoutes = std::move(audioRoutes);
 	station.HasAudioRoutes = hasAudioRoutes;
 	return station;

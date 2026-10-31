@@ -20,6 +20,16 @@ namespace engine
 		using SnapshotPtr = std::shared_ptr<const RigSnapshot>;
 		using PersistRig = std::function<bool(const io::RigFile&)>;
 		enum class EditResult { Pending, EditsDisabled, AudioCallbackInactive, TriggerBusy, TransitionRejected, ValidationFailed, PersistenceFailed, ReinitialisationRequired };
+		enum class EditOutcome { Pending, Accepted, Rejected };
+		struct EditReceipt
+		{
+			explicit EditReceipt(std::uint64_t revision) : Revision(revision) {}
+			// Immutable request identity; the serialized coordinator completes the
+			// outcome off callback, and the shell observes it with an acquire load.
+			const std::uint64_t Revision;
+			std::atomic<EditOutcome> Outcome{EditOutcome::Pending};
+		};
+		using EditReceiptPtr = std::shared_ptr<const EditReceipt>;
 
 		RigCoordinator() = default;
 		RigCoordinator(const RigCoordinator&) = delete;
@@ -34,7 +44,9 @@ namespace engine
 			const PersistRig& persistMigration);
 		bool MergeHardwarePreferences(const std::optional<io::UserConfig::AudioSettings>& audio,
 			const std::optional<std::vector<io::UserConfig::MidiSettings>>& midi);
-		EditResult SubmitCandidate(const io::RigFile& candidateRig);
+		EditResult SubmitCandidate(const io::RigFile& candidateRig, EditReceiptPtr* receipt = nullptr);
+		EditResult SubmitStationRename(const std::shared_ptr<Station>& station,
+			std::uint64_t expectedRevision, const std::string& name);
 		// Serialized Scene owner, off callback. Normalize against the old inventory.
 		EditResult SubmitInventory(const std::vector<std::shared_ptr<Station>>& stations,
 			std::shared_ptr<Station> removed = {});
@@ -76,12 +88,16 @@ namespace engine
 			const SnapshotPtr& acceptedSnapshot,
 			const std::vector<std::string>* availableSerialDevices = nullptr);
 		std::uint64_t _AllocateRevision() noexcept;
+		void _CompleteEditReceipt(std::uint64_t revision, EditOutcome outcome) noexcept;
 
 		// Retire snapshots only after audio and input readers stop, to keep teardown off their threads.
 		std::atomic<std::uint64_t> _nextRevision{ 1u };
 		std::atomic<SnapshotPtr> _accepted;
 		std::atomic<SnapshotPtr> _staged;
 		std::atomic<SnapshotPtr> _pending;
+		// Serialized Scene owner creates and completes receipts off callback. UI
+		// retains its receipt independently of later availability publications.
+		std::shared_ptr<EditReceipt> _editReceipt;
 		std::atomic<std::uint64_t> _audioAcknowledgement{ 0u };
 		std::atomic<std::uint64_t> _inputAcknowledgement{ 0u };
 		std::atomic<bool> _editsEnabled{ false };

@@ -1,3 +1,4 @@
+#include "../gui/WorkspaceTestAccess.h"
 #define GLEW_STATIC
 #include "gtest/gtest.h"
 #include "resources/ResourceLib.h"
@@ -11,6 +12,27 @@ using graphics::Window;
 using engine::Scene;
 using engine::SceneParams;
 
+namespace graphics
+{
+	class CameraPresentationTestAccess
+	{
+	public:
+		static void ArmIdle(Camera& camera, Time start, const engine::CameraRecordingObservation& observation, bool automatic)
+		{
+			camera._unattendedCamera.HumanActivity(start);
+			camera._unattendedCamera.Update(start, true, false, observation, {});
+			if (automatic) camera._unattendedCamera.Update(start + std::chrono::seconds(8), true, false, observation, {});
+		}
+		static bool AutomaticAt(Camera& camera, Time now, const engine::CameraRecordingObservation& observation)
+		{
+			return camera._unattendedCamera.Update(now, camera._windowEligible && !camera._heldInteraction,
+				camera._windowEligible && camera._heldInteraction, observation, {}).IsAutomatic();
+		}
+		static bool Automatic(const Camera& camera) { return camera._unattendedCamera.IsAutomatic(); }
+		static std::uint64_t ActivityRevision(const Camera& camera) { return camera._humanActivityRevision; }
+	};
+}
+
 class CameraActivityScene final : public Scene
 {
 public:
@@ -20,27 +42,24 @@ public:
 	{
 		graphics::Camera::Pose pose;
 		pose.Eye = { 0.0f, 0.0f, 420.0f };
-		_camera.SetViewTarget(graphics::Camera::View::Front, pose);
-		for (unsigned int tick = 0u; tick < 8u; ++tick) _camera.TickBackgroundDrag(0.05f);
+		gui::WorkspaceTestAccess::Camera(*_workspace).SetViewTarget(graphics::Camera::View::Front, pose);
+		for (unsigned int tick = 0u; tick < 8u; ++tick) gui::WorkspaceTestAccess::Camera(*_workspace).TickBackgroundDrag(0.05f);
 		_idleStart = utils::Timer::GetTime() - std::chrono::milliseconds(7900);
 		const auto observation = _cameraRecordings->Snapshot();
-		_unattendedCamera.HumanActivity(_idleStart);
-		_unattendedCamera.Update(_idleStart, true, false, *observation, {});
-		if (automatic) _unattendedCamera.Update(_idleStart + std::chrono::seconds(8), true, false, *observation, {});
+		graphics::CameraPresentationTestAccess::ArmIdle(gui::WorkspaceTestAccess::Camera(*_workspace), _idleStart, *observation, automatic);
 	}
 	bool AutomaticAtOriginalDeadline()
 	{
-		return _unattendedCamera.Update(_idleStart + std::chrono::milliseconds(8100),
-			_cameraWindowEligible && !_cameraHeldInteraction,
-			_cameraWindowEligible && _cameraHeldInteraction, *_cameraRecordings->Snapshot(), {}).IsAutomatic();
+		return graphics::CameraPresentationTestAccess::AutomaticAt(gui::WorkspaceTestAccess::Camera(*_workspace),
+			_idleStart + std::chrono::milliseconds(8100), *_cameraRecordings->Snapshot());
 	}
-	bool Automatic() const { return _unattendedCamera.IsAutomatic(); }
-	std::uint64_t ActivityRevision() const { return _cameraHumanActivityRevision; }
+	bool Automatic() const { return graphics::CameraPresentationTestAccess::Automatic(gui::WorkspaceTestAccess::Camera(*_workspace)); }
+	std::uint64_t ActivityRevision() const { return graphics::CameraPresentationTestAccess::ActivityRevision(gui::WorkspaceTestAccess::Camera(*_workspace)); }
 	void AddStation(const std::shared_ptr<engine::Station>& station) { _AddStation(station); }
 	std::shared_ptr<gui::GuiPerformanceGroupRow> GroupRow(std::size_t row)
 	{
 		std::vector<std::shared_ptr<gui::GuiPerformanceGroupRow>> rows;
-		CollectRows(_selectionPanel, rows);
+		CollectRows(_workspace->SelectionPanel(), rows);
 		return row < rows.size() ? rows[row] : nullptr;
 	}
 private:
@@ -65,7 +84,10 @@ class CameraActivityWindow final : public Window
 public:
 	CameraActivityWindow(Scene& scene, ResourceLib& resources) : Window(scene, resources) {}
 	std::vector<unsigned char> PressPath;
+	std::bitset<256u> NativeKeys = ~std::bitset<256u>{};
+	using Window::_ReconcileKeyboardState;
 protected:
+	bool _IsNativeKeyDown(unsigned int key, bool) const override { return NativeKeys.test(key); }
 	std::optional<unsigned int> _PickPointerPress(utils::Position2d) override
 	{
 		if (PressPath.empty()) return 0u;
@@ -103,6 +125,61 @@ TEST(CameraIdle, PerformanceKeysAndNativeRepeatsPreserveDeadlineAndActiveWander)
 				EXPECT_TRUE(scene.AutomaticAtOriginalDeadline());
 			}
 	DestroyWindow(host);
+}
+
+TEST(CameraIdle, FocusLossClearsShortcutHoldWithoutResettingVisibleCameraDeadline)
+{
+	CameraActivityScene scene;
+	ResourceLib resources;
+	CameraActivityWindow window(scene, resources);
+	const auto host = CreateWindowExW(0, L"STATIC", L"", 0, 0, 0, 0, 0,
+		HWND_MESSAGE, nullptr, GetModuleHandleW(nullptr), nullptr);
+	ASSERT_NE(host, nullptr);
+	SetWindowLongPtrW(host, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(&window));
+	for (const bool automatic : { false, true })
+	{
+		Window::WindowProcedure(host, WM_SETFOCUS, 0, 0);
+		Window::WindowProcedure(host, WM_KEYDOWN, VK_LWIN, 0);
+		Window::WindowProcedure(host, WM_SYSKEYDOWN, VK_MENU, 0);
+		scene.ArmIdle(automatic);
+		Window::WindowProcedure(host, WM_ACTIVATE, WA_INACTIVE, 0);
+		EXPECT_TRUE(window.ProcessDeferredInputLoss());
+		// Shortcut releases are lost to Game Bar; Jamma remains unfocused.
+		EXPECT_EQ(base::Action::MODIFIER_NONE, window.Modifiers());
+		EXPECT_EQ(automatic, scene.Automatic());
+		EXPECT_TRUE(scene.AutomaticAtOriginalDeadline());
+	}
+	DestroyWindow(host);
+}
+
+TEST(CameraIdle, LostWinAndModifierReleasesRecoverWithoutAnyFocusNotification)
+{
+	CameraActivityScene scene;
+	ResourceLib resources;
+	CameraActivityWindow window(scene, resources);
+	for (const auto winKey : { VK_LWIN, VK_RWIN })
+	{
+		actions::KeyAction key;
+		key.KeyActionType = actions::KeyAction::KEY_DOWN;
+		for (const auto code : { winKey, VK_MENU, VK_CONTROL, VK_SHIFT })
+		{
+			window.NativeKeys.set(code);
+			key.KeyChar = code;
+			window.OnAction(key);
+		}
+		scene.ArmIdle(false);
+		const auto revision = scene.ActivityRevision();
+		window._ReconcileKeyboardState();
+		EXPECT_FALSE(scene.AutomaticAtOriginalDeadline()); // Win is genuinely held.
+		window.NativeKeys.reset(VK_MENU);
+		window._ReconcileKeyboardState();
+		EXPECT_EQ(base::Action::MODIFIER_CTRL | base::Action::MODIFIER_SHIFT, window.Modifiers());
+		for (const auto code : { winKey, VK_CONTROL, VK_SHIFT }) window.NativeKeys.reset(code);
+		window._ReconcileKeyboardState();
+		EXPECT_EQ(base::Action::MODIFIER_NONE, window.Modifiers());
+		EXPECT_EQ(revision, scene.ActivityRevision());
+		EXPECT_TRUE(scene.AutomaticAtOriginalDeadline());
+	}
 }
 
 TEST(CameraIdle, PointerSelectionDeselectMuteAndBackgroundClicksPreserveDeadline)
@@ -306,6 +383,19 @@ TEST(CameraFrontZoom, FitsLargeOneSidedStationRowsAtWideAndNarrowAspectRatios)
 		}
 		EXPECT_FLOAT_EQ(80.0f, camera.CurrentPose().Eye.Z);
 	}
+}
+
+TEST(Window, ReleasedWindowMayOutliveScene)
+{
+	ResourceLib resources;
+	auto scene = std::make_unique<CameraActivityScene>();
+	auto window = std::make_unique<Window>(*scene, resources);
+	window->Release();
+	scene.reset();
+	// Match application shutdown: release native resources, destroy the Scene,
+	// then destroy the stack-owned Window without consulting its former Scene.
+	window->Release();
+	window.reset();
 }
 
 TEST(Window, IsInitiallyWindowed) {
@@ -529,6 +619,72 @@ TEST(Window, DeferredCaptureLossDoesNotCancelANewerMousePress)
     DestroyWindow(host);
 }
 
+TEST(Window, FocusLossClearsModifiersAndFinishesOldGestureBeforeReturningClick)
+{
+	CaptureLossScene scene;
+	ResourceLib resources;
+	CameraActivityWindow window(scene, resources);
+	const auto host = CreateWindowExW(0, L"STATIC", L"", 0, 0, 0, 0, 0,
+		HWND_MESSAGE, nullptr, GetModuleHandleW(nullptr), nullptr);
+	ASSERT_NE(host, nullptr);
+	SetWindowLongPtrW(host, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(&window));
+	for (const auto loss : { WM_KILLFOCUS, WM_ACTIVATE, WM_SHOWWINDOW, WM_ACTIVATEAPP, WM_CANCELMODE })
+		for (const auto modifier : { VK_SHIFT, VK_CONTROL, VK_MENU })
+		{
+			SCOPED_TRACE(loss);
+			SCOPED_TRACE(modifier);
+			Window::WindowProcedure(host, WM_KEYDOWN, modifier, 0);
+			Window::WindowProcedure(host, WM_LBUTTONDOWN, 0, MAKELPARAM(320, 240));
+			scene.LastMove.reset();
+			Window::WindowProcedure(host, loss, 0, 0);
+			EXPECT_EQ(base::Action::MODIFIER_NONE, window.Modifiers());
+			EXPECT_FALSE(scene.LastMove); // Scene cleanup is still deferred.
+			Window::WindowProcedure(host, WM_SETFOCUS, 0, 0);
+			Window::WindowProcedure(host, WM_LBUTTONDOWN, 0, MAKELPARAM(320, 240));
+			ASSERT_TRUE(scene.LastMove);
+			EXPECT_EQ(0u, scene.LastMove->MouseButtonsDown);
+			ASSERT_TRUE(scene.LastTouch);
+			EXPECT_EQ(base::Action::MODIFIER_NONE, scene.LastTouch->Modifiers);
+			EXPECT_EQ(1u, scene.LastTouch->MouseButtonsDown);
+			EXPECT_FALSE(window.ProcessDeferredInputLoss());
+			EXPECT_TRUE(window.CancelMouseCapture()); // The fresh press survived.
+			// A late release from the old focus must remain harmless.
+			Window::WindowProcedure(host, WM_KEYUP, modifier, 0);
+			EXPECT_EQ(base::Action::MODIFIER_NONE, window.Modifiers());
+		}
+	// A fresh modifier press before Render must survive deferred cleanup too.
+	Window::WindowProcedure(host, WM_KILLFOCUS, 0, 0);
+	Window::WindowProcedure(host, WM_SETFOCUS, 0, 0);
+	Window::WindowProcedure(host, WM_KEYDOWN, VK_CONTROL, 0);
+	EXPECT_FALSE(window.ProcessDeferredInputLoss());
+	EXPECT_EQ(base::Action::MODIFIER_CTRL, window.Modifiers());
+	Window::WindowProcedure(host, WM_KEYUP, VK_CONTROL, 0);
+	DestroyWindow(host);
+}
+
+TEST(Window, ExternalCaptureLossClearsKeyboardStateEvenWithoutPointerGesture)
+{
+	CameraActivityScene scene;
+	ResourceLib resources;
+	CameraActivityWindow window(scene, resources);
+	const auto host = CreateWindowExW(0, L"STATIC", L"", 0, 0, 0, 0, 0,
+		HWND_MESSAGE, nullptr, GetModuleHandleW(nullptr), nullptr);
+	ASSERT_NE(host, nullptr);
+	SetWindowLongPtrW(host, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(&window));
+	Window::WindowProcedure(host, WM_KEYDOWN, VK_LWIN, 0);
+	Window::WindowProcedure(host, WM_SYSKEYDOWN, VK_MENU, 0);
+	scene.ArmIdle(false);
+	// A delayed notification from an ordinary release must preserve real holds.
+	Window::WindowProcedure(host, WM_CAPTURECHANGED, 0, 0);
+	EXPECT_EQ(base::Action::MODIFIER_ALT, window.Modifiers());
+	EXPECT_FALSE(window.ProcessDeferredInputLoss());
+	Window::WindowProcedure(host, WM_CAPTURECHANGED, 0, reinterpret_cast<LPARAM>(GetDesktopWindow()));
+	EXPECT_EQ(base::Action::MODIFIER_NONE, window.Modifiers());
+	EXPECT_TRUE(window.ProcessDeferredInputLoss());
+	EXPECT_TRUE(scene.AutomaticAtOriginalDeadline());
+	DestroyWindow(host);
+}
+
 class NativeReentryScene final : public Scene
 {
 public:
@@ -689,4 +845,189 @@ TEST(Window, PluginPumpedNativeDestroyCancelsCaptureAfterSceneDispatchReturns)
 	// directly verify the deferred teardown contract.
 	PeekMessageW(&quit, nullptr, WM_QUIT, WM_QUIT, PM_REMOVE);
 	DestroyWindow(host);
+}
+
+class WindowTitleScene final : public Scene
+{
+public:
+	WindowTitleScene() : Scene(SceneParams(base::DrawableParams(), base::MoveableParams(),
+		base::SizeableParams({640u,480u})), {}) {}
+	void CompleteSave(bool success, const std::wstring& path, bool asDefault = false)
+	{
+		_operation.CompleteSessionSave(success, path, "Save cancelled or destination unavailable", L"C:/isolated-jamma/export", asDefault);
+	}
+	// Native title/replacement tests need no renderer or installed resources.
+	void InitResources(ResourceLib&, bool) override {}
+protected:
+	void _ReleaseResources() override {}
+};
+
+class WindowTitleNativeHost
+{
+public:
+	explicit WindowTitleNativeHost(Window& window) : _window(window)
+	{
+		Handle = CreateWindowExW(0, L"STATIC", L"initial caption", WS_POPUP,
+			0, 0, 32, 32, nullptr, nullptr, GetModuleHandleW(nullptr), nullptr);
+		if (!Handle) return;
+		SetWindowLongPtrW(Handle, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(this));
+		_previous = reinterpret_cast<WNDPROC>(SetWindowLongPtrW(Handle, GWLP_WNDPROC,
+			reinterpret_cast<LONG_PTR>(Procedure)));
+		_window.SetWindowHandle(Handle);
+	}
+	~WindowTitleNativeHost()
+	{
+		_window.SetWindowHandle(nullptr);
+		if (!Handle) return;
+		SetWindowLongPtrW(Handle, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(_previous));
+		SetWindowLongPtrW(Handle, GWLP_USERDATA, 0);
+		DestroyWindow(Handle);
+	}
+	std::wstring Text() const
+	{
+		std::wstring text(static_cast<std::size_t>(GetWindowTextLengthW(Handle)) + 1u, L'\0');
+		const auto length = GetWindowTextW(Handle, text.data(), static_cast<int>(text.size()));
+		text.resize(static_cast<std::size_t>(length));
+		return text;
+	}
+	HWND Handle = nullptr;
+	unsigned int Changes = 0u;
+private:
+	static LRESULT CALLBACK Procedure(HWND handle, UINT message, WPARAM wparam, LPARAM lparam)
+	{
+		auto& host = *reinterpret_cast<WindowTitleNativeHost*>(GetWindowLongPtrW(handle, GWLP_USERDATA));
+		if (message == WM_SETTEXT) ++host.Changes;
+		return CallWindowProcW(host._previous, handle, message, wparam, lparam);
+	}
+	Window& _window;
+	WNDPROC _previous = nullptr;
+};
+
+TEST(WindowTitle, UnsavedUnicodeAndNumberedDestinationsUpdateNativeCaptionOnlyWhenChanged)
+{
+	WindowTitleScene scene;
+	ResourceLib resources;
+	Window window(scene, resources);
+	WindowTitleNativeHost host(window);
+	ASSERT_NE(nullptr, host.Handle);
+	window.UpdateSessionTitle();
+	EXPECT_EQ(L"Jamma", host.Text());
+	for (unsigned int frame = 0u; frame < 8u; ++frame) window.UpdateSessionTitle();
+	EXPECT_EQ(1u, host.Changes);
+	scene.Controls().SetCurrentJamPath(L"C:\\sessions\\\u6f14\u594f-\u03b2.jam");
+	window.UpdateSessionTitle();
+	EXPECT_EQ(L"Jamma - C:\\sessions\\\u6f14\u594f-\u03b2.jam", host.Text());
+	EXPECT_EQ(2u, host.Changes);
+	scene.CompleteSave(true, L"C:/isolated-jamma/export/session-0002.jam");
+	window.UpdateSessionTitle();
+	EXPECT_EQ(L"Jamma - C:/isolated-jamma/export/session-0002.jam", host.Text());
+	EXPECT_EQ(3u, host.Changes);
+	window.UpdateSessionTitle();
+	EXPECT_EQ(3u, host.Changes);
+
+	scene.CompleteSave(true, L"C:/isolated-jamma/another/session-0002.jam");
+	window.UpdateSessionTitle();
+	EXPECT_EQ(L"Jamma - C:/isolated-jamma/another/session-0002.jam", host.Text());
+	EXPECT_EQ(4u, host.Changes);
+}
+
+TEST(WindowTitle, LongPathsKeepPrefixAndFullFilenameWithoutChangingDocumentPath)
+{
+	WindowTitleScene scene;
+	ResourceLib resources;
+	Window window(scene, resources);
+	WindowTitleNativeHost host(window);
+	ASSERT_NE(nullptr, host.Handle);
+	for (const auto separator : {L'\\', L'/'})
+	{
+		const std::wstring filename = L"\u6f14\u594f-session.jam";
+		const auto suffix = std::wstring(1u, separator) + filename;
+		const auto prefix = std::wstring(L"C:") + separator + L"sessions" + separator;
+		const auto boundaryPath = prefix + std::wstring(120u - prefix.size() - suffix.size(), L'a') + suffix;
+		scene.Controls().SetCurrentJamPath(boundaryPath);
+		window.UpdateSessionTitle();
+		EXPECT_EQ(L"Jamma - " + boundaryPath, host.Text());
+
+		const auto longPath = prefix + std::wstring(180u, L'a') + suffix;
+		scene.Controls().SetCurrentJamPath(longPath);
+		window.UpdateSessionTitle();
+		EXPECT_EQ(L"Jamma - " + longPath.substr(0u, 120u - suffix.size() - 1u) + L"\u2026" + suffix, host.Text());
+		EXPECT_EQ(longPath, scene.Controls().CurrentJamPath());
+		const auto changes = host.Changes;
+		window.UpdateSessionTitle();
+		EXPECT_EQ(changes, host.Changes);
+	}
+}
+
+TEST(WindowTitle, VeryLongFilenameRetainsUsefulPrefixEvenBeyondDisplayBudget)
+{
+	WindowTitleScene scene;
+	ResourceLib resources;
+	Window window(scene, resources);
+	WindowTitleNativeHost host(window);
+	ASSERT_NE(nullptr, host.Handle);
+	const std::wstring prefix = L"C:/sessions/performance/";
+	ASSERT_EQ(24u, prefix.size());
+	const auto filename = std::wstring(140u, L'b') + L".jam";
+	const auto path = prefix + L"some/deep/directory/" + filename;
+	scene.Controls().SetCurrentJamPath(path);
+	window.UpdateSessionTitle();
+	EXPECT_EQ(L"Jamma - " + prefix + L"\u2026/" + filename, host.Text());
+	EXPECT_EQ(path, scene.Controls().CurrentJamPath());
+
+	// A filename without any directory must also remain complete.
+	scene.Controls().SetCurrentJamPath(filename);
+	window.UpdateSessionTitle();
+	EXPECT_EQ(L"Jamma - " + filename, host.Text());
+}
+
+TEST(WindowTitle, WrittenJamStillNamesWindowWhenDefaultUpdateFailsAndFailedSavesKeepIt)
+{
+	WindowTitleScene scene;
+	ResourceLib resources;
+	Window window(scene, resources);
+	WindowTitleNativeHost host(window);
+	ASSERT_NE(nullptr, host.Handle);
+	scene.Controls().SetCurrentJamPath(L"previous.jam");
+	window.UpdateSessionTitle();
+	unsigned int defaultsWrites = 0u;
+	scene.Controls().SetDefaultJamSaver(L"startup.jam", [&](const auto&, bool) { ++defaultsWrites; return false; });
+	scene.CompleteSave(true, L"C:/isolated-jamma/export/committed-0003.jam", true);
+	window.UpdateSessionTitle();
+	EXPECT_EQ(1u, defaultsWrites);
+	EXPECT_EQ(L"Jamma - C:/isolated-jamma/export/committed-0003.jam", host.Text());
+	EXPECT_EQ(2u, host.Changes);
+	for (const auto* path : {L"", L"denied.jam"})
+	{
+		scene.CompleteSave(false, path, true);
+		window.UpdateSessionTitle();
+		EXPECT_EQ(L"Jamma - C:/isolated-jamma/export/committed-0003.jam", host.Text());
+		EXPECT_EQ(2u, host.Changes);
+	}
+	EXPECT_EQ(1u, defaultsWrites);
+}
+
+TEST(WindowTitle, ReplacementResetsUnsavedCaptionAndOldSceneCompletionCannotRenameIt)
+{
+	WindowTitleScene outgoing, unsaved, loaded;
+	ResourceLib resources;
+	Window window(outgoing, resources);
+	WindowTitleNativeHost host(window);
+	ASSERT_NE(nullptr, host.Handle);
+	outgoing.Controls().SetCurrentJamPath(L"outgoing.jam");
+	window.UpdateSessionTitle();
+	EXPECT_EQ(L"Jamma - outgoing.jam", host.Text());
+	window.ReplaceScene(unsaved);
+	EXPECT_EQ(L"Jamma", host.Text());
+	EXPECT_EQ(2u, host.Changes);
+	outgoing.CompleteSave(true, L"late-outgoing-save.jam");
+	window.UpdateSessionTitle();
+	EXPECT_EQ(L"Jamma", host.Text());
+	EXPECT_EQ(2u, host.Changes);
+
+	loaded.Controls().SetCurrentJamPath(L"C:/sessions/loaded-\u03a9.jam");
+	window.ReplaceScene(loaded);
+	EXPECT_EQ(L"Jamma - C:/sessions/loaded-\u03a9.jam", host.Text());
+	window.UpdateSessionTitle();
+	EXPECT_EQ(3u, host.Changes);
 }

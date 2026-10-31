@@ -24,7 +24,7 @@ namespace console
 		{
 			std::mutex Mutex;
 			LineRing* Lines = nullptr;
-			std::function<void(std::string_view)> Startup;
+			std::function<void(std::string_view)> Startup, Run;
 			Thread* Threads = nullptr;
 			bool Active = true;
 			bool GeneralStartup = true;
@@ -33,6 +33,7 @@ namespace console
 				const std::string_view line(pending.Bytes.data(), pending.Length);
 				Lines->Publish(line);
 				if (Startup && pending.Startup) Startup(line);
+				if (Run) Run(line);
 				pending.Length = 0;
 			}
 		};
@@ -40,7 +41,7 @@ namespace console
 		{
 			std::shared_ptr<State> Owner;
 			Thread* Next = nullptr;
-			std::array<Pending, 3> Streams;
+			std::array<Pending, 5> Streams;
 			void Detach()
 			{
 				if (!Owner) return;
@@ -55,11 +56,13 @@ namespace console
 			~Thread() { Detach(); }
 		};
 	public:
-		explicit ConsoleCapture(LineRing& lines, std::function<void(std::string_view)> startup = {})
+		explicit ConsoleCapture(LineRing& lines, std::function<void(std::string_view)> startup = {},
+			std::function<void(std::string_view)> run = {})
 			: _state(std::make_shared<State>()), _cout(this, 0), _cerr(this, 1), _clog(this, 2)
 		{
 			_state->Lines = &lines;
 			_state->Startup = std::move(startup);
+			_state->Run = std::move(run);
 			DiagnosticThread::StartupWindow(true);
 			// cerr's unitbuf would turn every insertion in a diagnostic into a
 			// separate entry. Newline and explicit flush remain publication points.
@@ -73,6 +76,8 @@ namespace console
 		ConsoleCapture(const ConsoleCapture&) = delete;
 		ConsoleCapture& operator=(const ConsoleCapture&) = delete;
 		static void EnableForCurrentThread(bool enabled) noexcept { _enabled = enabled; }
+		void WriteExternal(unsigned stream, std::string_view text, bool flush = false)
+		{ Write(stream ? 4 : 3, text.data(), static_cast<std::streamsize>(text.size()), flush); }
 		void CompleteStartup(std::string_view completion = {})
 		{
 			std::scoped_lock lock(_state->Mutex);
@@ -82,6 +87,7 @@ namespace console
 			{
 				_state->Lines->Publish(completion);
 				if (_state->Startup) _state->Startup(completion);
+				if (_state->Run) _state->Run(completion);
 			}
 			_state->GeneralStartup = false;
 			DiagnosticThread::StartupWindow(false);
@@ -96,6 +102,7 @@ namespace console
 				DiagnosticThread::StartupWindow(false);
 				_state->Threads = nullptr;
 				_state->Startup = {};
+				_state->Run = {};
 			}
 			std::cout.rdbuf(_originalCout);
 			std::cerr.rdbuf(_originalCerr);

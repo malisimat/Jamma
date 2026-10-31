@@ -19,12 +19,13 @@ namespace io
 	{
 	public:
 		static constexpr std::uint16_t CurrentMajor = 0u;
-		static constexpr std::uint16_t CurrentMinor = 3u;
+		static constexpr std::uint16_t CurrentMinor = 5u;
 		static constexpr std::uint16_t CurrentPatch = 0u;
 		static constexpr std::size_t MaxEvents = 4096u;
 		static constexpr std::size_t MaxLanes = 8u;
 		static constexpr std::size_t MaxPointsPerLane = 512u;
 		static constexpr std::size_t MaxAssetBytes = 4u * 1024u * 1024u;
+		static constexpr std::size_t MaxPluginIdentityBytes = 1024u;
 
 		struct Event
 		{
@@ -48,6 +49,9 @@ namespace io
 
 	private:
 		static bool Validate(const Stream& stream, std::string* error) noexcept;
+	public:
+		static bool ValidatePluginIdentity(const std::string& identity) noexcept;
+	private:
 		static bool WriteBytes(std::ostream& out, const void* data, std::size_t size) noexcept;
 		static bool ReadBytes(std::istream& in, void* data, std::size_t size, std::size_t& consumed) noexcept;
 		static void SetError(std::string* error, const char* text) noexcept;

@@ -9,7 +9,7 @@
 
 #define MAJOR_VERSION       5
 #define MINOR_VERSION       0
-#define PATCH_VERSION       2
+#define PATCH_VERSION       5
 
 #define QUOTE_(x) #x
 #define QUOTE(x) QUOTE_(x)
@@ -24,6 +24,7 @@ namespace constants
 	const unsigned long MaxLoopBufferSize = 40000000ul;
 	const unsigned int GrainSamps = 300u;
 	const unsigned int DefaultFadeSamps = 20u;
+	inline constexpr unsigned int DefaultMidiSeamMergeWindowMs = 200u;
 	const unsigned int DefaultPreDelaySamps = 0u;
 	const unsigned int DefaultDebounceMs = 280u;
 	const unsigned int DefaultSeedGrainMinMs = 300u;

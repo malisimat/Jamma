@@ -20,6 +20,13 @@
 
 namespace vst
 {
+	enum class RenderRole { Unknown, Effect, Instrument };
+	struct MidiInputCapabilities
+	{
+		bool Notes = false;
+		bool Controllers = false;
+		bool Known = false;
+	};
 	// Snapshot of host transport/tempo state passed to each plugin before processing
 	// each audio block.  Populated on the audio thread; must be trivially copyable.
 	struct HostTimeState
@@ -278,6 +285,11 @@ namespace vst
 		// Recorded rendering compensates path differences outside source cursors;
 		// direct monitoring and NINJAM export retain their own timing domains.
 		virtual int GetLatencySamples() const noexcept { return 0; }
+		// Cached during adapter discovery, immutable while the instance is published.
+		virtual RenderRole Role() const noexcept { return RenderRole::Unknown; }
+		virtual MidiInputCapabilities MidiInput() const noexcept { return {}; }
+		// Cached hosted layout established during Load; no SDK discovery.
+		virtual unsigned int HostedChannelCount() const noexcept { return 0u; }
 
 		// Capture the full plugin state as an opaque byte blob.
 		// VST2: uses effGetChunk (bank-level, index=0) when the plugin supports
@@ -332,7 +344,8 @@ namespace vst
 	// Safe to call from any thread.
 	void QueueForUiThreadDestroy(std::shared_ptr<IVstPlugin> plugin);
 
-	// Drop all queued plugin refs.  Must be called from the UI thread.
+	// Release queued plugins once their audio/editor/recovery pins have ended.
+	// Must be called from the UI thread; retained entries are retried by the pump.
 	// Returns the number of plugins released.
 	std::size_t DrainUiThreadDestroyQueue() noexcept;
 }

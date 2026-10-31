@@ -219,6 +219,9 @@
     <ClInclude Include="src\io\IoSessionLoader.h" />
     <ClInclude Include="src\midi\MidiRefreshPolicy.h" />
     <ClInclude Include="src\engine\HierarchySelection.h" />
+    <ClInclude Include="src\engine\SessionControls.h" />
+    <ClInclude Include="src\engine\SessionControl.h" />
+    <ClInclude Include="src\engine\LocalTiming.h" />
     <ClInclude Include="src\gui\SceneSettingsControls.h" />
     <ClInclude Include="src\gui\NinjamTempoPrompt.h" />
     <ClInclude Include="src\ninjam\NinjamTempoProposal.h" />
@@ -263,12 +266,19 @@
     <ClInclude Include="src\graphics\UnattendedCameraController.h" />
     <ClInclude Include="src\graphics\CameraBounds.h" />
     <ClInclude Include="src\graphics\CameraFraming.h" />
+    <ClInclude Include="src\graphics\Compositor.h" />
     <ClInclude Include="src\graphics\Camera.h" />
     <ClInclude Include="include\Constants.h" />
+    <ClInclude Include="src\gui\PointerInteraction.h" />
     <ClInclude Include="src\gui\SceneSelector.h" />
     <ClInclude Include="src\gui\GuiRadio.h" />
     <ClInclude Include="src\gui\GuiPerformanceGroupRow.h" />
     <ClInclude Include="src\gui\GuiRack.h" />
+    <ClInclude Include="src\gui\GuiVstRack.h" />
+    <ClInclude Include="src\gui\GuiStationLabel.h" />
+    <ClInclude Include="src\gui\GuiTriggerRename.h" />
+    <ClInclude Include="src\gui\TriggerLearnController.h" />
+    <ClInclude Include="src\io\TriggerBindingLearn.h" />
     <ClInclude Include="src\gui\VstRackControls.h" />
     <ClInclude Include="src\vst\VstRackSlot.h" />
     <ClInclude Include="src\utils\VecUtils.h" />
@@ -300,6 +310,7 @@
     <ClInclude Include="lib\rtaudio\include\soundcard.h" />
     <ClInclude Include="src\base\ResourceUser.h" />
     <ClInclude Include="src\audio\AudioDevice.h" />
+    <ClInclude Include="src\audio\AsioStream.h" />
     <ClInclude Include="src\midi\MidiDevice.h" />
     <ClInclude Include="src\io\SerialDevice.h" />
     <ClInclude Include="src\io\SerialTriggerProtocol.h" />
@@ -321,6 +332,7 @@
     <ClInclude Include="src\gui\GuiFocusManager.h" />
     <ClInclude Include="src\gui\GuiPopupManager.h" />
     <ClInclude Include="src\gui\GuiPopup.h" />
+    <ClInclude Include="src\gui\RuntimeDialogs.h" />
     <ClInclude Include="src\gui\GuiTextBox.h" />
     <ClInclude Include="src\gui\GuiNumericInput.h" />
     <ClInclude Include="src\gui\GuiDropDown.h" />
@@ -332,6 +344,7 @@
     <ClInclude Include="src\base\GuiElement.h" />
     <ClInclude Include="src\utils\ImageUtils.h" />
     <ClInclude Include="src\gui\GuiLabel.h" />
+    <ClInclude Include="src\gui\GuiPanelHeader.h" />
     <ClInclude Include="src\utils\FunctionUtils.h" />
     <ClInclude Include="src\resources\ShaderResource.h" />
     <ClInclude Include="src\resources\Resource.h" />
@@ -349,6 +362,7 @@
         <ClInclude Include="src\engine\PerformanceGroups.h" />
         <ClInclude Include="src\engine\PerformanceGroupService.h" />
         <ClInclude Include="src\engine\PerformanceGroupController.h" />
+        <ClInclude Include="src\gui\Workspace.h" />
         <ClInclude Include="src\engine\Scene.h" />
     <ClInclude Include="src\audio\AudioHost.h" />
     <ClInclude Include="src\audio\NinjamMetronome.h" />
@@ -401,11 +415,13 @@
     <ClInclude Include="src\vst\Vst3StateBlob.h" />
     <ClInclude Include="src\vst\Vst3MidiMapping.h" />
     <ClInclude Include="src\vst\VstGlContextScope.h" />
+    <ClInclude Include="src\vst\RackState.h" />
     <ClInclude Include="src\vst\VstChain.h" />
     <ClInclude Include="src\vst\ReservedMidiEvents.h" />
 
     <ClInclude Include="src\graphics\VstEditorWindow.h" />
     <ClInclude Include="src\engine\Trigger.h" />
+    <ClInclude Include="src\engine\ContextualKeyboardInput.h" />
     <ClInclude Include="src\actions\ActionUndoHistory.h" />
     <ClInclude Include="src\io\WavReadWriter.h" />
     <ClInclude Include="src\resources\TextureResource.h" />
@@ -416,6 +432,9 @@
     <ClInclude Include="src\midi\MidiQueue.h" />
     <ClInclude Include="src\base\Tickable.h" />
     <ClInclude Include="src\midi\LoopGridEditor.h" />
+    <ClInclude Include="src\midi\AutomationPlayback.h" />
+    <ClInclude Include="src\midi\CaptureHistory.h" />
+    <ClInclude Include="src\midi\MidiDelivery.h" />
     <ClInclude Include="src\midi\MidiLoop.h" />
     <ClInclude Include="src\midi\MidiOverdub.h" />
     <ClInclude Include="src\midi\MidiNote.h" />
@@ -432,6 +451,8 @@
   <ItemGroup>
     <ClCompile Include="src\io\IoSessionLoader.cpp" />
     <ClCompile Include="src\engine\HierarchySelection.cpp" />
+    <ClCompile Include="src\engine\SessionControl.cpp" />
+    <ClCompile Include="src\engine\LocalTiming.cpp" />
     <ClCompile Include="src\gui\SceneSettingsControls.cpp" />
     <ClCompile Include="src\gui\NinjamTempoPrompt.cpp" />
     <ClCompile Include="src\audio\BufferBank.cpp" />
@@ -455,11 +476,14 @@
     <ClCompile Include="src\graphics\QuantisationDivisionModel.cpp" />
     <ClCompile Include="src\graphics\StationModel.cpp" />
     <ClCompile Include="src\graphics\VU.cpp" />
+    <ClCompile Include="src\graphics\Compositor.cpp" />
     <ClCompile Include="src\graphics\Camera.cpp" />
+    <ClCompile Include="src\gui\PointerInteraction.cpp" />
     <ClCompile Include="src\gui\SceneSelector.cpp" />
     <ClCompile Include="src\gui\GuiRadio.cpp" />
     <ClCompile Include="src\gui\GuiPerformanceGroupRow.cpp" />
     <ClCompile Include="src\gui\GuiRack.cpp" />
+    <ClCompile Include="src\gui\GuiVstRack.cpp" />
     <ClCompile Include="src\gui\VstRackControls.cpp" />
     <ClCompile Include="src\io\InitFile.cpp" />
     <ClCompile Include="src\io\NetworkSession.cpp" />
@@ -519,6 +543,7 @@
     <ClCompile Include="src\graphics\Font.cpp" />
     <ClCompile Include="src\utils\GlUtils.cpp" />
     <ClCompile Include="src\graphics\GlDrawContext.cpp" />
+        <ClCompile Include="src\gui\Workspace.cpp" />
         <ClCompile Include="src\engine\Scene.cpp" />
         <ClCompile Include="src\engine\PerformanceGroupService.cpp" />
         <ClCompile Include="src\engine\PerformanceGroupController.cpp" />
@@ -541,6 +566,7 @@
     <ClCompile Include="src\audio\InterpolatedValue.cpp" />
     <ClCompile Include="lib\glew\glew.c" />
     <ClCompile Include="lib\rtaudio\RtAudio.cpp" />
+    <ClCompile Include="src\audio\AsioStream.cpp" />
     <ClCompile Include="src\engine\StationRemote.cpp" />
 	<ClCompile Include="src\engine\RigSnapshot.cpp" />
 	<ClCompile Include="src\engine\RigCoordinator.cpp" />
@@ -552,6 +578,7 @@
     <ClCompile Include="src\vst\Vst2Plugin.cpp" />
     <ClCompile Include="src\vst\Vst3StateBlob.cpp" />
     <ClCompile Include="src\vst\Vst3MidiMapping.cpp" />
+    <ClCompile Include="src\vst\RackState.cpp" />
     <ClCompile Include="src\vst\VstChain.cpp" />
     <ClCompile Include="src\graphics\VstEditorWindow.cpp" />
     <ClCompile Include="src\engine\Trigger.cpp" />
@@ -564,13 +591,15 @@
     <ClCompile Include="src\resources\WavResource.cpp" />
     <ClCompile Include="src\utils\VecUtils.cpp" />
     <ClCompile Include="src\midi\LoopGridEditor.cpp" />
+    <ClCompile Include="src\midi\AutomationPlayback.cpp" />
+    <ClCompile Include="src\midi\CaptureHistory.cpp" />
+    <ClCompile Include="src\midi\MidiDelivery.cpp" />
     <ClCompile Include="src\midi\MidiLoop.cpp" />
     <ClCompile Include="src\midi\MidiOverdub.cpp" />
     <ClCompile Include="src\midi\MidiNote.cpp" />
     <ClCompile Include="src\midi\MidiQuantisation.cpp" />
     <ClCompile Include="src\midi\MidiTimestampMapper.cpp" />
     <ClCompile Include="src\midi\MidiIndexedOutputSink.cpp" />
-    <ClCompile Include="src\midi\MidiVstOutputSink.cpp" />
     <ClCompile Include="src\graphics\MidiModel.cpp" />
   </ItemGroup>
   <ItemGroup>

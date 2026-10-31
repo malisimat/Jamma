@@ -32,6 +32,7 @@ uniform float EditorHoverU;
 uniform int EditorHoverPitch;
 uniform float EditorTargetStart;
 uniform float EditorTargetEnd;
+uniform int EditorEditHandle; // 0 none, 1 move, 2 left, 3 right, 4 either edge
 uniform int EditorTargetInstance;
 uniform int EditorHeldInstance;
 uniform int EditorBottomPitch;
@@ -210,6 +211,13 @@ void main()
         float outline = max(timeEdge, rowEdge) * EditorTopFace * max(noteHover, noteDown);
         vec3 edgeColor = noteHeld ? vec3(1.0, 0.63, 0.18) : vec3(0.08, 0.16, 0.20);
         noteColor = mix(noteColor, edgeColor, 0.92 * outline);
+        // Cyan marks the active end on every face, including a thin note's end cap.
+        float trimDistance = EditorEditHandle == 2 ? EditorU - EditorNoteHit.x
+            : EditorEditHandle == 3 ? EditorNoteHit.y - EditorU
+            : min(EditorU - EditorNoteHit.x, EditorNoteHit.y - EditorU);
+        float trimEdge = 1.0 - smoothstep(0.0, max(3.0 * fwidth(EditorU), 1e-6), trimDistance);
+        if (EditorEditHandle >= 2)
+            noteColor = mix(noteColor, vec3(0.05, 1.0, 0.85), trimEdge * max(noteHover, noteDown));
         ColorOUT = vec4(noteColor, 0.88 + 0.12 * max(max(selected, hovered), max(noteHover, noteDown)));
     }
     if (EditorActive > 0.5)

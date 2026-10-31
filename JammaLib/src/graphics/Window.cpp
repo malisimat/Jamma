@@ -9,6 +9,7 @@
 #include "StringUtils.h"
 #include "GlDeleteQueue.h"
 #include "../resources/ResourcePaths.h"
+#include <algorithm>
 #include <thread>
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #include "stb/stb_image_write.h"
@@ -59,8 +60,6 @@ Window::Window(Scene& scene,
 
 Window::~Window()
 {
-	CancelMouseCapture();
-	_scene->SetRelativePointerHost({}, {});
 	Release();
 }
 
@@ -140,9 +139,9 @@ void Window::ShowMessage(LPCWSTR message)
 	MessageBox(0, message, L"Window::create", MB_ICONERROR);
 }
 
-int Window::Create(HINSTANCE hInstance, int nCmdShow)
+int Window::Create(HINSTANCE hInstance, int nCmdShow, unsigned int largeIconResourceId, unsigned int smallIconResourceId)
 {
-	_windowClass = MAKEINTATOM(Window::Register(hInstance));
+	_windowClass = MAKEINTATOM(Window::Register(hInstance, largeIconResourceId, smallIconResourceId));
 	if (_windowClass == 0) {
 		ShowMessage(L"registerClass() failed.");
 		return 1;
@@ -337,14 +336,7 @@ int Window::Create(HINSTANCE hInstance, int nCmdShow)
 	LoadResources();
 	InitScene();
 
-	std::stringstream titleStringStream;
-	titleStringStream << "Jamma (v" << LIB_VERSION << ")";
-	auto titleStr = titleStringStream.str();
-	wchar_t* titleChars = new wchar_t[titleStr.size() + 1];
-
-	size_t outSize;
-	mbstowcs_s(&outSize, titleChars, titleStr.size() + 1, titleStr.c_str(), titleStr.size());
-	SetWindowText(_wnd, titleChars);
+	UpdateSessionTitle();
 	ShowWindow(_wnd, nCmdShow);
 
 	return 0;
@@ -353,6 +345,7 @@ int Window::Create(HINSTANCE hInstance, int nCmdShow)
 void Window::SetWindowHandle(HWND wnd)
 {
 	_wnd = wnd;
+	_titleSceneIdentity = 0u;
 }
 
 Window::Config Window::GetConfig() const
@@ -392,14 +385,7 @@ void Window::ClearModifiers()
 	// held. Routing them through the normal action path resets both the
 	// modifier bitmask and any scene state keyed off those releases (e.g. the
 	// Ctrl quantisation overlay), instead of leaving them stuck.
-	struct ModifierKey { Action::Modifiers Flag; unsigned int KeyChar; };
-	static const ModifierKey modifierKeys[] = {
-		{ Action::MODIFIER_SHIFT, 16 },
-		{ Action::MODIFIER_CTRL, 17 },
-		{ Action::MODIFIER_ALT, 18 }
-	};
-
-	for (const auto& mk : modifierKeys)
+	for (const auto& mk : ModifierKeys)
 	{
 		if (_modifiers & mk.Flag)
 		{
@@ -413,6 +399,35 @@ void Window::ClearModifiers()
 
 	_modifiers = Action::MODIFIER_NONE;
 	_heldKeys.reset();
+	_cachedCursorModifiers = _modifiers;
+	_hover3dDirty = _forcePick = true;
+}
+
+bool Window::_IsNativeKeyDown(unsigned int key, bool queuedInput) const
+{
+	// Mouse gestures use their queued key state, not a later physical state.
+	return ((queuedInput ? GetKeyState(static_cast<int>(key))
+		: GetAsyncKeyState(static_cast<int>(key))) & 0x8000) != 0;
+}
+
+void Window::_ReconcileKeyboardState(bool queuedInput)
+{
+	if (_modifiers == Action::MODIFIER_NONE && _heldKeys.none()) return;
+	SceneDispatchScope dispatch(*this);
+	// System shortcuts can swallow releases without changing focus. Only modifiers
+	// get synthetic releases; other tracked keys only lose their camera hold.
+	for (const auto& modifier : ModifierKeys)
+		if ((_modifiers & modifier.Flag) && !_IsNativeKeyDown(modifier.KeyChar, queuedInput))
+		{
+			KeyAction release;
+			release.KeyChar = modifier.KeyChar;
+			release.KeyActionType = KeyAction::KEY_UP;
+			release.IsSynthetic = true;
+			OnAction(release);
+		}
+	for (unsigned int key = 0u; key < _heldKeys.size(); ++key)
+		if (_heldKeys.test(key) && !_IsNativeKeyDown(key, queuedInput)) _heldKeys.reset(key);
+	_UpdateCameraEligibility();
 }
 
 bool Window::IsTrackingMouse() const
@@ -507,13 +522,17 @@ void Window::_UpdateCameraEligibility()
 	const bool validViewport = _config.Size.Width > 0u && _config.Size.Height > 0u;
 	const bool held = _buttonsDown != 0u || _heldKeys.any() || _heldTouches.any()
 		|| HasRelativePointer() || (_wnd && GetCapture() == _wnd) || _resizing || _windowSizeMove;
-	_scene->SetCameraInteractionEligibility(_cameraWindowActive && visible && validViewport, held);
+	// Keep camera inactivity timing active while Jamma is visible but unfocused
+	// (for example while Game Bar owns focus).
+	_scene->SetCameraInteractionEligibility(visible && validViewport, held);
 }
 
 void Window::Render()
 {
 	SceneDispatchScope dispatch(*this);
+	UpdateSessionTitle();
 	ProcessDeferredInputLoss();
+	_ReconcileKeyboardState();
 	GlDeleteQueue::FlushPendingDeletes();
 	ApplyPendingResize();
 
@@ -600,6 +619,28 @@ void Window::Render()
 
 	_scene->Draw3d(*_drawContext, 1, DrawPass::PASS_SCENE);
 	_scene->Draw(*_drawContext);
+	_UpdatePointerCursor();
+}
+
+// UI thread only. Do not replace cursors belonging to native frames or plugin windows.
+void Window::_UpdatePointerCursor()
+{
+	if (_released || !_wnd || !_scene) return;
+	POINT point;
+	RECT client;
+	if (!GetCursorPos(&point) || WindowFromPoint(point) != _wnd) return;
+	ScreenToClient(_wnd, &point);
+	GetClientRect(_wnd, &client);
+	if (!PtInRect(&client, point)) return;
+	LPCTSTR cursor = IDC_ARROW;
+	switch (_scene->CursorHint())
+	{
+	case base::PointerCursor::Move: cursor = IDC_SIZEALL; break;
+	case base::PointerCursor::Horizontal: cursor = IDC_SIZEWE; break;
+	case base::PointerCursor::Vertical: cursor = IDC_SIZENS; break;
+	default: break;
+	}
+	SetCursor(LoadCursor(nullptr, cursor));
 }
 
 void Window::Swap()
@@ -614,6 +655,9 @@ void Window::Release()
 		return;
 
 	CancelMouseCapture();
+	// Release is called while the borrowed Scene is still alive. The Window
+	// destructor may run after that Scene has been destroyed.
+	_scene->SetRelativePointerHost({}, {});
 	_released = true;
 
 	if (_dc && _rc)
@@ -640,6 +684,7 @@ void Window::Release()
 		DestroyWindow(_wnd);
 		_wnd = nullptr;
 	}
+	_scene = nullptr;
 }
 
 ActionResult Window::OnAction(WindowAction winAction)
@@ -841,14 +886,12 @@ bool Window::ProcessDeferredInputLoss()
 	const bool captureLost = _captureLossPending;
 	_focusLossPending = _captureLossPending = false;
 	if (!focusLost && !captureLost) return false;
+	_windowSizeMove = false;
+	SetResizing(false);
 	CancelMouseCapture();
 	_heldTouches.reset();
-	if (focusLost)
-	{
-		_heldKeys.reset();
-		ClearModifiers();
-		if (_scene) _scene->OnInputFocusLost();
-	}
+	ClearModifiers();
+	if (_scene) _scene->OnInputFocusLost();
 	_UpdateCameraEligibility();
 	return true;
 }
@@ -871,6 +914,7 @@ ActionResult Window::OnAction(KeyAction keyAction)
 		_UpdateCameraEligibility();
 	}
 	// Handle modifiers
+	const auto previousModifiers = _modifiers;
 	int modifiers = _modifiers;
 
 	switch (keyAction.KeyChar)
@@ -900,13 +944,17 @@ ActionResult Window::OnAction(KeyAction keyAction)
 
 	_modifiers = (Action::Modifiers)modifiers;
 	keyAction.Modifiers = _modifiers;
-	if (17u == keyAction.KeyChar && KeyAction::KEY_UP == keyAction.KeyActionType)
+	if (_modifiers != previousModifiers
+		|| (VK_CONTROL == keyAction.KeyChar && KeyAction::KEY_UP == keyAction.KeyActionType))
 	{
-		// Scene freezes hover during Ctrl; restore the current pick even if its ID is unchanged.
+		// Modifier changes affect hover even without pointer motion. Ctrl release
+		// also unfreezes Scene's hover when its picked object has not changed.
 		_cachedCursorModifiers = _modifiers;
 		_hover3dDirty = true;
 		_forcePick = true;
 	}
+	// Contextual input owns shortcuts after physical modifiers have been reconciled.
+	if (_scene->CapturesContextualKeyboard(keyAction.KeyChar)) return _scene->OnAction(keyAction);
 	if ((76u == keyAction.KeyChar)
 		&& (KeyAction::KEY_UP == keyAction.KeyActionType)
 		&& (Action::MODIFIER_CTRL & keyAction.Modifiers)
@@ -942,6 +990,43 @@ void Window::ReplaceScene(Scene& scene)
 	_hover3dDirty = true;
 	_forcePick = true;
 	_cachedCursorPosition.reset();
+	UpdateSessionTitle();
+}
+
+void Window::UpdateSessionTitle()
+{
+	if (_released || !_wnd || !_scene) return;
+	const auto identity = _scene->Identity();
+	const auto& path = _scene->Controls().CurrentJamPath();
+	if (_titleSceneIdentity == identity && _titleJamPath == path) return;
+
+	std::wstring title = L"Jamma";
+	if (!path.empty())
+	{
+		title += L" - ";
+		// Keep ordinary paths intact; long filenames may exceed this display
+		// budget so the filename and a useful path prefix are never discarded.
+		constexpr std::size_t pathBudget = 120u, minimumPrefix = 24u;
+		const auto separator = path.find_last_of(L"/\\");
+		if (path.size() > pathBudget && separator != std::wstring::npos)
+		{
+			const auto suffixLength = path.size() - separator;
+			auto prefixLength = (std::min)(separator, (std::max)(minimumPrefix,
+				suffixLength < pathBudget ? pathBudget - suffixLength - 1u : 0u));
+			// Do not split a UTF-16 surrogate pair at the truncation boundary.
+			if (prefixLength > 0u && path[prefixLength - 1u] >= 0xd800 && path[prefixLength - 1u] <= 0xdbff)
+				--prefixLength;
+			title.append(path, 0u, prefixLength);
+			if (prefixLength < separator) title += L"\u2026";
+			title.append(path, separator, std::wstring::npos);
+		}
+		else title += path;
+	}
+	if (SetWindowTextW(_wnd, title.c_str()))
+	{
+		_titleJamPath = path;
+		_titleSceneIdentity = identity;
+	}
 }
 
 bool Window::ConsumeJamLoadRequest() noexcept
@@ -1034,7 +1119,7 @@ Position2d Window::Center(Size2d size)
 		(primaryDisplaySize.bottom - (int)size.Height) / 2 };
 }
 
-ATOM Window::Register(HINSTANCE hInstance)
+ATOM Window::Register(HINSTANCE hInstance, unsigned int largeIconResourceId, unsigned int smallIconResourceId)
 {
 	WNDCLASSEX wcex;
 	ZeroMemory(&wcex, sizeof(wcex));
@@ -1042,6 +1127,18 @@ ATOM Window::Register(HINSTANCE hInstance)
 	InitStyle(wcex);
 	wcex.lpfnWndProc = WindowProcedure;
 	wcex.hInstance = hInstance;
+	// LR_SHARED keeps resource handles owned by Windows for the class lifetime.
+	// Do not DestroyIcon them during Window teardown or Scene replacement.
+	// Distinct group IDs keep the LR_SHARED resource-name cache from returning
+	// the large icon for the small-icon request regardless of requested size.
+	if (largeIconResourceId)
+		wcex.hIcon = static_cast<HICON>(LoadImageW(hInstance, MAKEINTRESOURCEW(largeIconResourceId), IMAGE_ICON,
+			GetSystemMetrics(SM_CXICON), GetSystemMetrics(SM_CYICON), LR_SHARED));
+	if (smallIconResourceId)
+		wcex.hIconSm = static_cast<HICON>(LoadImageW(hInstance, MAKEINTRESOURCEW(smallIconResourceId), IMAGE_ICON,
+			GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON), LR_SHARED));
+	if (!wcex.hIcon) wcex.hIcon = LoadIcon(nullptr, IDI_APPLICATION);
+	if (!wcex.hIconSm) wcex.hIconSm = wcex.hIcon;
 	wcex.hCursor = LoadCursor(nullptr, IDC_ARROW);
 	wcex.lpszClassName = TEXT("JammaWindow");
 
@@ -1152,6 +1249,15 @@ LRESULT CALLBACK Window::WindowProcedure(HWND hWindow, UINT message, WPARAM wPar
 		return DefWindowProc(hWindow, message, wParam, lParam);
 	if (window->_DeferNativeSceneMessage(hWindow, message, wParam, lParam))
 		return message == WM_INPUT ? DefWindowProc(hWindow, message, wParam, lParam) : 0;
+	// Finish the old gesture before accepting new input, including a focus-return
+	// click before Render. Plugin-pumped messages must wait for Scene to unwind.
+	const bool inputMessage = (message >= WM_MOUSEFIRST && message <= WM_MOUSELAST)
+		|| (message >= WM_KEYFIRST && message <= WM_KEYLAST) || message == WM_INPUT;
+	if (inputMessage && window->_sceneDispatchDepth == 0u
+		&& (window->_focusLossPending || window->_captureLossPending))
+		window->ProcessDeferredInputLoss();
+	if (message >= WM_MOUSEFIRST && message <= WM_MOUSELAST && window->_sceneDispatchDepth == 0u)
+		window->_ReconcileKeyboardState(true);
 
 	switch (message)
 	{
@@ -1259,15 +1365,15 @@ LRESULT CALLBACK Window::WindowProcedure(HWND hWindow, UINT message, WPARAM wPar
 		// A completed own release is not external capture loss; held keys remain real.
 		if (window->_releasingOwnedMouseCapture) return 0;
 		window->_windowSizeMove = false;
-		if (window->IsResizing())
-		{
-			window->SetResizing(false);
-			return 0;
-		}
+		window->SetResizing(false);
 		// ReleaseCapture after a normal mouse-up also sends this notification.
 		// It must not cancel a fresh press received before the next UI frame.
-		if (window->_buttonsDown != 0u || window->HasRelativePointer() || window->_heldTouches.any())
+		if (lParam != 0 || window->_buttonsDown != 0u || window->HasRelativePointer() || window->_heldTouches.any())
+		{
 			window->_captureLossPending = true;
+			window->_modifiers = Action::MODIFIER_NONE;
+			window->_heldKeys.reset();
+		}
 		return 0;
 	}
 	case WM_EXITSIZEMOVE:
@@ -1283,32 +1389,9 @@ LRESULT CALLBACK Window::WindowProcedure(HWND hWindow, UINT message, WPARAM wPar
 	}
 	break;
 	case WM_SETCURSOR:
-	{
-		/*MOUSEOVERSTATE mouseoverstate = MOUSEOVER_NORMAL;
-
-		if (Component::MasterOverComponent() != nullptr)
-		mouseoverstate = Component::MasterOverComponent()->MouseOverState();
-
-		switch (mouseoverstate)
-		{
-		case MOUSEOVER_HAND:
-		SetCursor(HandCursor);
-		break;
-		case MOUSEOVER_OPENHAND:
-		SetCursor(OpenHandCursor);
-		break;
-		case MOUSEOVER_CLOSEDHAND:
-		SetCursor(ClosedHandCursor);
-		break;
-		case MOUSEOVER_CARET:
-		SetCursor(CaretCursor);
-		break;
-		default:
-		SetCursor(ArrowCursor);
-		break;
-		}*/
-	}
-	break;
+		if (LOWORD(lParam) != HTCLIENT) break;
+		window->_UpdatePointerCursor();
+		return TRUE;
 	case WM_LBUTTONDOWN:
 	{
 		int winHeight = (int)window->GetSize().Height;
@@ -1543,7 +1626,7 @@ LRESULT CALLBACK Window::WindowProcedure(HWND hWindow, UINT message, WPARAM wPar
 		}
 		if (!repeatkey)
 		{
-			std::cout << "KeyDown " << wParam << "\n";
+			if (window->_scene->IsUiVerbose()) std::cout << "KeyDown " << wParam << "\n";
 			unsigned int keyCode = static_cast<unsigned int>(wParam);
 			const unsigned int scanCode = (static_cast<unsigned int>(lParam) >> 16u) & 0xffu;
 			// Normalise the physical key left of '1' (US backtick/tilde) across layouts.
@@ -1562,7 +1645,7 @@ LRESULT CALLBACK Window::WindowProcedure(HWND hWindow, UINT message, WPARAM wPar
 	}
 	case WM_KEYUP:
 	{
-		std::cout << "KeyUp " << wParam << "\n";
+		if (window->_scene->IsUiVerbose()) std::cout << "KeyUp " << wParam << "\n";
 		unsigned int keyCode = static_cast<unsigned int>(wParam);
 		const unsigned int scanCode = (static_cast<unsigned int>(lParam) >> 16u) & 0xffu;
 		if (0x29u == scanCode)
@@ -1597,7 +1680,7 @@ LRESULT CALLBACK Window::WindowProcedure(HWND hWindow, UINT message, WPARAM wPar
 		}
 		if (!repeatkey)
 		{
-			std::cout << "SysKeyDown " << wParam << "\n";
+			if (window->_scene->IsUiVerbose()) std::cout << "SysKeyDown " << wParam << "\n";
 			unsigned int keyCode = static_cast<unsigned int>(wParam);
 			const unsigned int scanCode = (static_cast<unsigned int>(lParam) >> 16u) & 0xffu;
 			if (0x29u == scanCode)
@@ -1615,7 +1698,7 @@ LRESULT CALLBACK Window::WindowProcedure(HWND hWindow, UINT message, WPARAM wPar
 	}
 	case WM_SYSKEYUP:
 	{
-		std::cout << "SysKeyUp " << wParam << "\n";
+		if (window->_scene->IsUiVerbose()) std::cout << "SysKeyUp " << wParam << "\n";
 		unsigned int keyCode = static_cast<unsigned int>(wParam);
 		const unsigned int scanCode = (static_cast<unsigned int>(lParam) >> 16u) & 0xffu;
 		if (0x29u == scanCode)
@@ -1630,12 +1713,32 @@ LRESULT CALLBACK Window::WindowProcedure(HWND hWindow, UINT message, WPARAM wPar
 		window->OnAction(keyAction);
 		return 0;
 	}
+	case WM_CANCELMODE:
+		window->_captureLossPending = true;
+		window->_modifiers = Action::MODIFIER_NONE;
+		window->_heldKeys.reset();
+		window->_windowSizeMove = false;
+		window->SetResizing(false);
+		break; // DefWindowProc also cancels native menu/scroll modes and capture.
+	case WM_ACTIVATEAPP:
+		if (!wParam)
+		{
+			window->_focusLossPending = true;
+			window->_modifiers = Action::MODIFIER_NONE;
+			window->_heldKeys.reset();
+		}
+		break;
 	case WM_ACTIVATE:
 	{
 		window->_cameraWindowActive = LOWORD(wParam) != WA_INACTIVE;
 		if (!window->_cameraWindowActive)
 		{
 			window->_focusLossPending = true;
+			// WM_ACTIVATE can arrive without a useful modifier key-up (for
+			// example when Game Bar takes focus). Neutralize input immediately so
+			// a click before the next Render cannot be interpreted as Alt-click.
+			window->_modifiers = Action::MODIFIER_NONE;
+			window->_heldKeys.reset();
 		}
 		window->_UpdateCameraEligibility();
 		break;
@@ -1646,6 +1749,8 @@ LRESULT CALLBACK Window::WindowProcedure(HWND hWindow, UINT message, WPARAM wPar
 		{
 			window->_focusLossPending = true;
 			window->_cameraWindowActive = false;
+			window->_modifiers = Action::MODIFIER_NONE;
+			window->_heldKeys.reset();
 		}
 		break;
 	}
@@ -1668,6 +1773,10 @@ LRESULT CALLBACK Window::WindowProcedure(HWND hWindow, UINT message, WPARAM wPar
 		window->_focusLossPending = true;
 		window->_windowSizeMove = false;
 		window->_cameraWindowActive = false;
+		// Keep native input state correct synchronously; Scene-owned focus
+		// cleanup remains deferred to avoid re-entering its lock from plugins.
+		window->_modifiers = Action::MODIFIER_NONE;
+		window->_heldKeys.reset();
 		return 0;
 	}
 	case WM_DESTROY:

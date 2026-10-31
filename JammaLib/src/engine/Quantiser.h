@@ -10,8 +10,10 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <string>
 #include <vector>
 #include "QuantisationTiming.h"
+#include "../midi/MidiQuantisation.h"
 #include "../utils/Timer.h"
 #include "../actions/ActionResult.h"
 #include "../actions/TouchAction.h"
@@ -79,6 +81,12 @@ namespace engine
 	public:
 		Quantiser() = default;
 
+		std::string MasterAudioLoopId() const;
+		void RestoreMasterAudioLoopId(const std::string& id, const std::vector<std::shared_ptr<Station>>& stations);
+		void AdoptRecordedMaster(const std::vector<std::shared_ptr<Station>>& stations);
+		void SetDefaultMidiQuantisationFraction(midi::MidiQuantisationFraction fraction,
+			const std::vector<std::shared_ptr<Station>>& stations, bool updateExisting = true);
+		midi::MidiQuantisationFraction DefaultMidiQuantisationFraction() const noexcept { return _defaultMidiQuantisationFraction; }
 		void SetClock(std::shared_ptr<utils::Timer> clock);
 		using LocalMasterTimingPublisher = std::function<std::uint64_t(const QuantisationTiming&,
 			utils::Timer::QuantisationType, const LoopTake*, const Loop*)>;
@@ -91,6 +99,7 @@ namespace engine
 		// Compatibility entry point for callers without a scene snapshot.
 		void ArmReclock();
 		void ArmReclock(const std::vector<std::shared_ptr<engine::Station>>& stations);
+		bool ResetReclockIfEmpty(const std::vector<std::shared_ptr<engine::Station>>& stations);
 		void ApplyTiming(const QuantisationTiming& timing, const char* source);
 		bool LocalMasterTimingPending() const noexcept { return _localMasterTimingPending; }
 		std::uint64_t PendingLocalMasterTimingVersion() const noexcept
@@ -130,6 +139,7 @@ namespace engine
 			bool confirmCandidate,
 			const std::vector<std::shared_ptr<engine::Station>>& stations);
 
+		void RefreshMasterAudioReference(const std::shared_ptr<Station>& station) const;
 		void ClearStationHints(const std::vector<std::shared_ptr<engine::Station>>& stations);
 
 		void PulseOverlay();
@@ -187,7 +197,7 @@ namespace engine
 		static QuantisationPolicy Policy(const io::UserConfig& cfg);
 
 	private:
-		static constexpr double OverlayFadeSeconds = 2.0;
+		static constexpr double OverlayFadeSeconds = 1.0;
 		static constexpr int PhaseOffsetDragPixelsPerMillisecond = 1;
 		static constexpr std::int64_t StateInactive = 0LL;
 		static std::int32_t _ClampPhaseOffset(std::int64_t offsetSamps) noexcept;
@@ -228,6 +238,8 @@ namespace engine
 		bool _previousSeedUsesPowers = true;
 		std::shared_ptr<engine::Loop> _masterLoop;
 		RemoteTransportGeometry _acceptedRemoteGrid{};
+		std::int32_t _MasterAudioReferenceOffsetSamps() const noexcept;
+		midi::MidiQuantisationFraction _defaultMidiQuantisationFraction = midi::MidiQuantisationFraction::Quarter;
 		std::int64_t _acceptedRemoteGridOriginSamps = 0; // Scene-serialized job/UI owner.
 		std::atomic<QuantisationGridSource> _gridSource{ QuantisationGridSource::Default };
 		std::atomic_ulong _masterLoopLengthSamps{ 0ul };
@@ -299,6 +311,8 @@ namespace engine
 		std::vector<unsigned char> HoverPath3d;
 		std::vector<std::shared_ptr<midi::MidiLoop>> SelectedMidiLoops;
 		std::shared_ptr<midi::MidiLoop> HoveredMidiLoop;
+		std::vector<std::shared_ptr<Loop>> SelectedAudioLoops;
+		std::shared_ptr<Loop> HoveredAudioLoop;
 		bool LoopDepthHasAudioTarget = false;
 		unsigned int SampleRate = 0u;
 	};
@@ -312,6 +326,9 @@ namespace engine
 			Quantiser& quantisation,
 			std::vector<std::shared_ptr<engine::Station>>& stations);
 
+		// Caller retains the Scene lock through target traversal. No view escapes.
+		QuantisationInteractionContext InteractionContextLocked(utils::Position2d cursor, utils::Size2d viewport,
+			base::SelectDepth depth, std::vector<unsigned char> hover, std::vector<unsigned char> hover3d, unsigned int sampleRate) const;
 		void OnCtrlModifierChanged(bool held,
 			Time now,
 			const QuantisationInteractionContext& context,
@@ -341,7 +358,8 @@ namespace engine
 			Global,
 			Station,
 			LoopTake,
-			MidiLoop
+			MidiLoop,
+			AudioLoop
 		};
 
 		struct MidiPhaseDragTarget
@@ -352,6 +370,7 @@ namespace engine
 			std::vector<std::shared_ptr<engine::Station>> StationTargets;
 			std::vector<std::shared_ptr<engine::LoopTake>> TakeTargets;
 			std::vector<std::shared_ptr<midi::MidiLoop>> MidiTargets;
+			std::vector<std::shared_ptr<Loop>> AudioTargets;
 		};
 
 		struct CtrlOverlayContext
@@ -429,6 +448,9 @@ namespace engine
 		void _ShowPhaseFeedback(unsigned int sampleRate);
 		void _ShowFractionFeedback();
 		std::optional<CtrlOverlayContext> _ctrlOverlayContext;
+		bool _hasShiftClick = false;
+		Time _lastShiftClick{};
+		utils::Position2d _lastShiftClickPosition{};
 		bool _isMidiPhaseDragging = false;
 		utils::Position2d _midiPhaseDragStartPosition;
 		std::int32_t _midiPhaseDragStartOffsetSamps = 0;

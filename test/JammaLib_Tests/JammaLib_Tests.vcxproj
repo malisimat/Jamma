@@ -164,6 +164,7 @@ xcopy /y "$(VcpkgInstalledDir)$(VcpkgTriplet)\debug\bin\gtest_main.dll" "$(OutDi
     <ClCompile Include="src\audio\AudioFlow_Tests.cpp" />
     <ClCompile Include="src\audio\RecordedPlaybackLatency_Tests.cpp" />
 	<ClCompile Include="src\audio\AudioDeviceNegotiation_Tests.cpp" />
+	<ClCompile Include="src\audio\AsioStreamRecovery_Tests.cpp" />
     <ClCompile Include="src\audio\Overdub_Tests.cpp" />
     <ClCompile Include="src\audio\AudioBuffer_Tests.cpp" />
     <ClCompile Include="src\audio\ChannelMixer_Tests.cpp" />
@@ -247,6 +248,7 @@ xcopy /y "$(VcpkgInstalledDir)$(VcpkgTriplet)\debug\bin\gtest_main.dll" "$(OutDi
     <ClCompile Include="src\vst\Vst3MidiMapping_Tests.cpp" />
     <ClCompile Include="src\utils\CommonTypes_Tests.cpp" />
     <ClCompile Include="src\utils\MathUtils_Tests.cpp" />
+    <ClCompile Include="src\utils\PathUtils_Tests.cpp" />
     <ClCompile Include="src\ninjam\NinjamTimingTracker_Tests.cpp" />
     <ClCompile Include="pch.cpp">
       <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">Create</PrecompiledHeader>

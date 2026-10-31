@@ -2,7 +2,6 @@
 #include "../utils/PathUtils.h"
 #include <algorithm>
 #include <utility>
-#include <Windows.h>
 
 using namespace gui;
 
@@ -21,22 +20,41 @@ bool VstRackControls::_AvailableLocked(const Target& target) const
 
 vst::VstRackSlot VstRackControls::_SlotLocked(const Target& target) const
 {
-	if (target.Loop) return target.Loop->GetVstRackSlot();
-	if (target.Take) return target.Take->GetVstRackSlot();
+	if (target.Loop || target.Take)
+	{
+		if (target.PluginId.empty()) return target.Loop ? target.Loop->GetVstRackSlot() : target.Take->GetVstRackSlot();
+		const auto slots = target.Loop ? target.Loop->GetVstRackSlots() : target.Take->GetVstRackSlots();
+		for (const auto& slot : slots) if (slot.Identity == target.PluginId) return slot;
+		auto pending = target.Loop ? target.Loop->GetVstRackSlot() : target.Take->GetVstRackSlot();
+		if (pending.Pending) { pending.Identity = target.PluginId; pending.Plugin.reset(); return pending; }
+		return {};
+	}
+	if (!target.PluginId.empty())
+		for (const auto& slot : target.Station->GetVstRackSlots()) if (slot.Identity == target.PluginId) return slot;
+	if (!target.PluginId.empty()) return {};
 	return target.Station->GetVstRackSlot();
 }
 
 bool VstRackControls::_LoadLocked(const Target& target, const std::wstring& path)
 {
-	if (target.Loop) return target.Loop->LoadManagedVstPlugin(path);
-	if (target.Take) return target.Take->LoadManagedVstPlugin(path);
+	if (target.Loop) return target.Loop->LoadManagedVstPlugin(path, target.PluginId);
+	if (target.Take) return target.Take->LoadManagedVstPlugin(path, target.PluginId);
 	return target.Station->LoadManagedVstPlugin(path);
 }
 
 bool VstRackControls::_UnloadLocked(const Target& target, const std::string& identity)
 {
-	if (target.Loop) return target.Loop->UnloadManagedVstPlugin(identity);
-	if (target.Take) return target.Take->UnloadManagedVstPlugin(identity);
+	if (target.Take || target.Loop)
+	{
+		const auto slots = target.Loop ? target.Loop->GetVstRackSlots() : target.Take->GetVstRackSlots();
+		for (auto index = 0u; index < slots.size(); ++index)
+			if (slots[index].Identity == identity && !slots[index].Pending)
+			{
+				if (target.Loop) target.Loop->UnloadVstPlugin(index); else target.Take->UnloadVstPlugin(index);
+				return true;
+			}
+		return false;
+	}
 	return target.Station->UnloadManagedVstPlugin(identity);
 }
 
@@ -50,7 +68,7 @@ void VstRackControls::_PresentLocked(const std::shared_ptr<GuiRack>& rack, Targe
 		slot.Plugin ? (_host.Editors.IsVstEditorOpen(slot.Plugin) ? GuiRack::VstControlState::Open : GuiRack::VstControlState::Closed) :
 		GuiRack::VstControlState::Empty;
 	rack->SetVstControlState(state, available && !_busy);
-	rack->SetVstControlText(slot.Pending ? "VST..." : label);
+	rack->SetVstControlText(slot.Failed ? "Retry " + label : slot.Identity.empty() ? "Add " + label : label);
 	// The hierarchy owns its racks. Capturing strong owners here would form a
 	// cycle; pin them only when a gesture becomes an intent.
 	rack->SetVstControlCallback([this, lifetime = std::weak_ptr<int>(_lifetime),
@@ -61,15 +79,16 @@ void VstRackControls::_PresentLocked(const std::shared_ptr<GuiRack>& rack, Targe
 		if (lifetime.expired()) return;
 		Target owner{station.lock(), take.lock(), loop.lock()};
 		if (!owner.Station || (hasTake && !owner.Take) || (hasLoop && !owner.Loop)) return;
-		if (!_busy && !_intent) _intent = Intent{std::move(owner), modifiers};
+		if (!_busy && !_intent && !_confirmation) _intent = Intent{std::move(owner), modifiers};
 	});
+	if (target.Take && rack->VstRack()) _PresentChildLocked(rack, target, label);
 }
 
 void VstRackControls::UpdateLocked(base::SelectDepth depth)
 {
 	for (const auto& station : _host.Stations)
 	{
-		_PresentLocked(station->GetGuiRack(), {station, {}, {}}, "VST");
+		_PresentStationLocked(station);
 		for (const auto& take : station->GetLoopTakes())
 		{
 			auto rack = take->GetGuiRack();
@@ -92,6 +111,7 @@ void VstRackControls::UpdateLocked(base::SelectDepth depth)
 				rack->SetVstControlState(GuiRack::VstControlState::Empty, false);
 				rack->SetVstControlText("VST L?");
 				rack->SetVstControlCallback({});
+				if (const auto view = rack->VstRack()) { GuiVstRack::Model model; view->Update(std::move(model), {}); }
 			}
 		}
 	}
@@ -109,42 +129,38 @@ void VstRackControls::Pump()
 			if (!_AvailableLocked(target)) return true;
 			const auto completed = _SlotLocked(target);
 			if (completed.Pending) return false;
-			if (completed.Failed) failure = L"Could not load VST:\n" + completed.Path +
-				L"\n\nCheck that the file is an installed 64-bit VST2 or VST3 plugin compatible with this item's channels.\nClick the red VST button to choose a replacement.";
+			const auto rolledBack = !target.Take && !target.Loop && !target.PluginId.empty()
+				? target.Station->TakeFailedInteractiveVstLoad(target.PluginId) : std::nullopt;
+			if (rolledBack || completed.Failed)
+				failure = L"Could not load VST:\n" + (rolledBack ? *rolledBack : completed.Path) +
+					L"\n\nCheck that the file is an installed 64-bit VST2 or VST3 plugin compatible with this item's channels." +
+					(rolledBack ? L"\nThe rack has been restored." : L"\nClick the red VST button to choose a replacement.");
 			return true;
 		});
 	}
 	if (!failure.empty())
 	{
-		if (_host.ShowError) _host.ShowError(failure);
-		else MessageBoxW(GetActiveWindow(), failure.c_str(), L"VST load failed", MB_OK | MB_ICONWARNING);
+		_ShowError(failure);
 	}
+	if (_confirmation) { _CompleteConfirmation(); return; }
 	if (!_intent) return;
 	const auto intent = std::exchange(_intent, std::nullopt).value();
+	if (intent.RackCommand) { if (intent.Owner.Take) _PumpChild(intent); else _PumpStation(intent); return; }
 	vst::VstRackSlot slot;
+	std::uint64_t rackRevision = 0u;
 	{
 		std::scoped_lock lock(_host.Mutex);
 		if (!_AvailableLocked(intent.Owner)) return;
 		slot = _SlotLocked(intent.Owner);
+		rackRevision = intent.Owner.Loop ? intent.Owner.Loop->RackRevision() : intent.Owner.Take ? intent.Owner.Take->RackRevision() : intent.Owner.Station->RackRevision();
 		if (slot.Pending) return;
 	}
 	const bool remove = (intent.Modifiers & base::Action::MODIFIER_ALT) != 0;
 	if (remove)
 	{
 		if (slot.Identity.empty()) return;
-		const bool confirmed = _host.ConfirmRemoval ? _host.ConfirmRemoval() :
-			MessageBoxW(GetActiveWindow(), L"Remove the first VST from this item?\nThe other plugins stay in their chain.",
-				L"Remove VST", MB_YESNO | MB_ICONQUESTION | MB_DEFBUTTON2) == IDYES;
-		if (!confirmed) return;
-		// The confirmation can pump messages. Close only the captured processor,
-		// then validate membership and identity again before enqueueing removal.
-		_host.Editors.CloseVstEditorForPlugin(slot.Plugin);
-		bool changed = false;
-		{
-			std::scoped_lock lock(_host.Mutex);
-			if (_AvailableLocked(intent.Owner)) changed = _UnloadLocked(intent.Owner, slot.Identity);
-		}
-		if (changed) _host.Commit();
+		_RequestConfirmation(intent,slot,rackRevision,"Remove VST",
+			"Remove this VST slot? The other plugins stay in their chain.","Remove VST");
 		return;
 	}
 	if (slot.Plugin && !slot.Failed)
@@ -152,9 +168,14 @@ void VstRackControls::Pump()
 		if (!_host.Editors.ToggleVstEditorForPlugin(slot.Plugin))
 		{
 			const std::wstring error = L"The plugin is loaded, but its editor could not be opened.\nAudio processing is unchanged. You can try again or Alt-click to remove it.";
-			if (_host.ShowError) _host.ShowError(error);
-			else MessageBoxW(GetActiveWindow(), error.c_str(), L"VST editor", MB_OK | MB_ICONINFORMATION);
+			_ShowError(error);
 		}
+		bool stillOwned = false;
+		{
+			std::scoped_lock lock(_host.Mutex);
+			stillOwned = _AvailableLocked(intent.Owner) && _SlotLocked(intent.Owner).Plugin == slot.Plugin;
+		}
+		if (!stillOwned) _host.Editors.CloseVstEditorForPlugin(slot.Plugin);
 		return;
 	}
 	const auto path = _host.PickPlugin ? _host.PickPlugin() : utils::PickFile(
@@ -179,6 +200,284 @@ void VstRackControls::Pump()
 
 void VstRackControls::Reset()
 {
+	if (_confirmation) { *_confirmation->Decision = false; _confirmation.reset(); }
 	_intent.reset();
 	_loads.clear();
+}
+
+void VstRackControls::_ShowError(const std::wstring& message) const
+{
+	if (_host.ShowError) _host.ShowError(message);
+	else std::cerr << "[VST] " << utils::EncodeUtf8(message) << std::endl;
+}
+
+void VstRackControls::_RequestConfirmation(const Intent& intent, vst::VstRackSlot slot,
+	std::uint64_t revision, std::string title, std::string message, std::string accept)
+{
+	if (!_host.Confirm) { _ShowError(utils::DecodeUtf8(message)); return; }
+	auto decision = _host.Confirm(std::move(title),std::move(message),std::move(accept));
+	if (decision) _confirmation = Confirmation{intent,std::move(slot),revision,std::move(decision)};
+}
+
+void VstRackControls::_CompleteConfirmation()
+{
+	if (!_confirmation->Decision->has_value()) return;
+	auto confirmation = std::move(*_confirmation); _confirmation.reset();
+	if (!confirmation.Decision->value()) return;
+	const auto& intent = confirmation.Captured;
+	const auto& station = intent.Owner.Station;
+	const bool child = bool(intent.Owner.Take);
+	const bool clear = !child && intent.RackCommand && intent.RackCommand->Operation == GuiVstRack::Command::Kind::ClearInactiveRoutes;
+	const auto valid = [&] {
+		if (!_AvailableLocked(intent.Owner) || (child ? (intent.Owner.Loop ? intent.Owner.Loop->RackRevision() : intent.Owner.Take->RackRevision()) : station->RackRevision()) != confirmation.RackRevision) return false;
+		if (clear) return station->RackInactive();
+		if (!child && intent.RackCommand && station->RackInactive()) return true; // Ordinal is protected by rack revision.
+		const auto current = _SlotLocked(intent.Owner);
+		return !current.Pending && current.Identity == confirmation.Slot.Identity && current.Plugin == confirmation.Slot.Plugin;
+	};
+	{
+		std::scoped_lock lock(_host.Mutex);
+		if (!valid()) return;
+	}
+	// Native editor teardown can pump messages. Keep it on UI and outside Scene's
+	// lock, then validate the captured identity/revision again before mutation.
+	if (!clear) _host.Editors.CloseVstEditorForPlugin(confirmation.Slot.Plugin);
+	bool changed = false;
+	{
+		std::scoped_lock lock(_host.Mutex);
+		if (!valid()) return;
+		if (clear) changed = station->ClearInactiveRackRoutes(confirmation.RackRevision);
+		else if (!child && intent.RackCommand && station->RackInactive())
+			changed = station->RemoveInactiveRackSlot(intent.RackCommand->Ordinal,confirmation.RackRevision);
+		else changed = _UnloadLocked(intent.Owner,confirmation.Slot.Identity);
+	}
+	if (changed) _host.Commit();
+}
+
+void VstRackControls::_PresentStationLocked(const std::shared_ptr<engine::Station>& station)
+{
+	const auto rack = station->GetGuiRack();
+	const auto control = rack ? rack->VstRack() : nullptr;
+	if (!control) return;
+	GuiVstRack::Model model;
+	model.OwnerName = station->Name();
+	model.OwnerId = station->Id();
+	model.TotalSlots = station->RackSlotCount(); model.Revision = station->RackRevision();
+	model.Editable = _AvailableLocked({station, {}, {}}) && !_busy;
+	model.Inactive = station->RackInactive(); model.Suspended = station->RackLatencySuspended();
+	model.Diagnostic = station->RackDiagnostic();
+	if (!model.Inactive) model.ChannelRoutes = station->MidiChannelRoutes();
+	for (auto slot : station->GetVstRackSlots(control->PageOffset()))
+	{
+		const bool open = slot.Plugin && _host.Editors.IsVstEditorOpen(slot.Plugin);
+		model.Slots.push_back({std::move(slot), open});
+	}
+	control->Update(std::move(model), [this, life = std::weak_ptr<int>(_lifetime), weak = std::weak_ptr<engine::Station>(station)](GuiVstRack::Command command) {
+		if (life.expired() || _busy || _intent || _confirmation) return;
+		if (auto owner = weak.lock())
+		{
+			Target target{std::move(owner), {}, {}, command.Identity};
+			_intent = Intent{std::move(target), command.Modifiers, std::move(command)};
+		}
+	});
+}
+
+void VstRackControls::_PumpStation(const Intent& intent)
+{
+	const auto command = *intent.RackCommand;
+	const auto station = intent.Owner.Station;
+	const auto rack = station->GetGuiRack()->VstRack();
+	using Kind = GuiVstRack::Command::Kind;
+	const auto report = [&](const std::string& message) { if (rack) rack->SetFeedback(message); _ShowError(utils::DecodeUtf8(message)); };
+	const auto valid = [&] { return _AvailableLocked(intent.Owner) && station->RackRevision() == command.Revision; };
+	const auto show = [&](const std::string& message) {
+		const auto text = utils::DecodeUtf8(message);
+		_ShowError(text);
+	};
+	vst::VstRackSlot slot;
+	bool inactive = false;
+	{
+		std::scoped_lock lock(_host.Mutex);
+		if (!valid()) { report("Rack changed; retry the gesture."); return; }
+		inactive = station->RackInactive();
+		if (command.Operation == Kind::Slot && !station->RackInactive())
+		{
+			slot = _SlotLocked(intent.Owner);
+			if (slot.Identity != command.Identity) { report("This slot is no longer available."); return; }
+		}
+	}
+	if (command.Operation == Kind::Move)
+	{
+		bool changed = false;
+		{ std::scoped_lock lock(_host.Mutex); if (valid()) changed = station->MoveVstSlot(command.Move); }
+		if (changed) _host.Commit(); else report("Rack changed or move is invalid; retry the gesture.");
+		return;
+	}
+	if (command.Operation == Kind::Diagnostic)
+	{
+		std::string message;
+		{ std::scoped_lock lock(_host.Mutex); message = station->RackDiagnostic(); }
+		if (message.empty() && rack) message = rack->Feedback();
+		if (!message.empty()) show(message);
+		return;
+	}
+	if (command.Operation == Kind::Append && (command.Modifiers & base::Action::MODIFIER_ALT)) return;
+	if (command.Operation == Kind::ClearInactiveRoutes)
+	{
+		_RequestConfirmation(intent,slot,command.Revision,"Station rack",
+			"Clear saved live MIDI cables? Channels return to Broadcast. Plugin entries, state and recorded MIDI routes are preserved.","Clear MIDI");
+		return;
+	}
+	if (command.Operation == Kind::Routes ||
+		command.Operation == Kind::Recover || command.Operation == Kind::ClearInactiveRoutes)
+	{
+		bool changed = false; std::string failure;
+		{
+			std::scoped_lock lock(_host.Mutex);
+			if (!valid()) { report("Rack changed; retry the gesture."); return; }
+			switch (command.Operation)
+			{
+			case Kind::Routes: changed = station->SetMidiChannelRoutes(command.ChannelRoutes, command.Revision); break;
+			case Kind::Recover: changed = station->RecoverRack(command.Revision); break;
+			case Kind::ClearInactiveRoutes: changed = station->ClearInactiveRackRoutes(command.Revision); break;
+			default: break;
+			}
+			if (!changed) failure = station->RackDiagnostic();
+		}
+		if (changed) _host.Commit();
+		else report(failure.empty() ? "Rack edit rejected; check plugin roles and capacity." : failure);
+		return;
+	}
+	if (command.Operation == Kind::Slot && (command.Modifiers & base::Action::MODIFIER_ALT))
+	{
+		_RequestConfirmation(intent,slot,command.Revision,"Remove VST",
+			"Remove this VST slot? The other plugins stay in their chain.","Remove VST");
+		return;
+	}
+	if (command.Operation == Kind::Slot && (slot.Pending || inactive)) return;
+	if (slot.Plugin && !slot.Failed)
+	{
+		const bool opened = _host.Editors.ToggleVstEditorForPlugin(slot.Plugin);
+		bool stillOwned = false;
+		{
+			std::scoped_lock lock(_host.Mutex);
+			stillOwned = valid() && _SlotLocked(intent.Owner).Plugin == slot.Plugin;
+		}
+		if (!stillOwned) _host.Editors.CloseVstEditorForPlugin(slot.Plugin);
+		else if (!opened) report("The plugin editor could not be opened; click Rack info for details.");
+		return;
+	}
+	const auto path = _host.PickPlugin ? _host.PickPlugin() : utils::PickFile(slot.Failed ? L"Retry saved VST slot" : L"Append VST plugin");
+	if (path.empty()) return;
+	bool changed = false; std::string failure;
+	{
+		std::scoped_lock lock(_host.Mutex);
+		if (!valid()) { report("Rack changed while choosing a plugin; retry."); return; }
+		changed = station->LoadManagedVstSlot(path, command.Operation == Kind::Slot ? command.Identity : std::string{},
+			command.Operation == Kind::Append);
+		if (!changed) failure = station->RackDiagnostic();
+		else
+		{
+			auto target = intent.Owner;
+			if (command.Operation == Kind::Append)
+			{
+				const auto slots = station->GetVstRackSlots();
+				if (!slots.empty()) target.PluginId = slots.back().Identity;
+			}
+			_loads.push_back(std::move(target));
+		}
+	}
+	if (changed) _host.Commit(); else report(failure.empty() ? "Rack is full or still retiring a removed plugin; retry shortly." : failure);
+}
+
+std::optional<actions::ActionResult> gui::VstRackControls::OnKeyboard(const actions::KeyAction& action, base::SelectDepth depth,
+	const std::shared_ptr<base::GuiElement>& hovering, const std::vector<std::shared_ptr<engine::Station>>& stations)
+{
+	if (action.KeyActionType != actions::KeyAction::KEY_UP || !(action.Modifiers & base::Action::MODIFIER_CTRL) ||
+		!(action.Modifiers & base::Action::MODIFIER_SHIFT)) return std::nullopt;
+	if (action.KeyChar == 86u)
+	{
+		const auto path = utils::PickFile(L"Choose VST plugin");
+		if (path.empty()) return actions::ActionResult::NoAction();
+		return _host.Editors.HandleVstInsert(path, depth, hovering, _host.Commit);
+	}
+	if (action.KeyChar == 69u) return _host.Editors.HandleVstEditorOpen(hovering, depth, stations);
+	return std::nullopt;
+}
+
+void VstRackControls::_PresentChildLocked(const std::shared_ptr<GuiRack>& rack, const Target& target, const std::string& label)
+{
+	const auto control = rack->VstRack();
+	GuiVstRack::Model model;
+	model.OwnerName = label;
+	model.OwnerId = target.Loop ? target.Loop->Id() : target.Take->Id();
+	model.OwnerScope = target.Loop ? vst::RackMove::Scope::Loop : vst::RackMove::Scope::Take;
+	model.Revision = target.Loop ? target.Loop->RackRevision() : target.Take->RackRevision();
+	model.Editable = _AvailableLocked(target) && !_busy;
+	const auto slots = target.Loop ? target.Loop->GetVstRackSlots() : target.Take->GetVstRackSlots();
+	model.TotalSlots = slots.size();
+	for (const auto& slot : slots) model.Slots.push_back({slot, slot.Plugin && _host.Editors.IsVstEditorOpen(slot.Plugin)});
+	control->Update(std::move(model), [this, life = std::weak_ptr<int>(_lifetime),
+		station = std::weak_ptr<engine::Station>(target.Station), take = std::weak_ptr<engine::LoopTake>(target.Take),
+		loop = std::weak_ptr<engine::Loop>(target.Loop), hasLoop = bool(target.Loop)](GuiVstRack::Command command) {
+		if (life.expired() || _busy || _intent || _confirmation) return;
+		Target owner{station.lock(), take.lock(), loop.lock(), command.Identity};
+		if (!owner.Station || !owner.Take || (hasLoop && !owner.Loop)) return;
+		_intent = Intent{std::move(owner), command.Modifiers, std::move(command)};
+	});
+}
+
+void VstRackControls::_PumpChild(const Intent& intent)
+{
+	const auto command = *intent.RackCommand;
+	const auto& owner = intent.Owner;
+	using Kind = GuiVstRack::Command::Kind;
+	const auto revision = [&] { return owner.Loop ? owner.Loop->RackRevision() : owner.Take->RackRevision(); };
+	const auto valid = [&] { return _AvailableLocked(owner) && revision() == command.Revision; };
+	vst::VstRackSlot slot;
+	{
+		std::scoped_lock lock(_host.Mutex);
+		if (!valid()) return;
+		slot = _SlotLocked(owner);
+	}
+	if (command.Operation == Kind::Move)
+	{
+		bool changed = false;
+		{ std::scoped_lock lock(_host.Mutex); if (valid()) changed = owner.Loop ? owner.Loop->MoveVstSlot(command.Move) : owner.Take->MoveVstSlot(command.Move); }
+		if (changed) _host.Commit();
+		return;
+	}
+	if (command.Operation != Kind::Slot && command.Operation != Kind::Append) return;
+	if (command.Operation == Kind::Slot && (slot.Identity != command.Identity || slot.Pending)) return;
+	if (command.Modifiers & base::Action::MODIFIER_ALT)
+	{
+		if (command.Operation == Kind::Slot) _RequestConfirmation(intent, slot, command.Revision, "Remove VST", "Remove this VST slot?", "Remove VST");
+		return;
+	}
+	if (slot.Plugin && command.Operation == Kind::Slot)
+	{
+		const bool opened = _host.Editors.ToggleVstEditorForPlugin(slot.Plugin);
+		bool owned = false;
+		{ std::scoped_lock lock(_host.Mutex); owned = valid() && _SlotLocked(owner).Plugin == slot.Plugin; }
+		if (!owned) _host.Editors.CloseVstEditorForPlugin(slot.Plugin);
+		else if (!opened) _ShowError(L"The plugin editor could not be opened.");
+		return;
+	}
+	const auto path = _host.PickPlugin ? _host.PickPlugin() : utils::PickFile(L"Choose VST plugin");
+	if (path.empty()) return;
+	bool changed = false;
+	Target loadOwner = owner;
+	{
+		std::scoped_lock lock(_host.Mutex);
+		if (!valid()) return;
+		if (command.Operation == Kind::Append)
+		{
+			const auto slots = owner.Loop ? owner.Loop->GetVstRackSlots() : owner.Take->GetVstRackSlots();
+			if (slots.size() >= vst::RackState::MaxRackPlugins) return;
+			loadOwner.PluginId = owner.Loop ? owner.Loop->LoadVstPlugin(path) : owner.Take->LoadVstPlugin(path);
+			changed = !loadOwner.PluginId.empty();
+		}
+		else changed = _LoadLocked(owner, path);
+	}
+	if (changed) { _loads.push_back(std::move(loadOwner)); _host.Commit(); }
 }

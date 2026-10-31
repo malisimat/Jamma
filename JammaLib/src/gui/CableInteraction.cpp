@@ -11,6 +11,11 @@ CableInteraction::Curve CableInteraction::CurveControls(RouteKind kind,
 {
 	const glm::vec2 a{ start.X, start.Y };
 	const glm::vec2 b{ finish.X, finish.Y };
+	if (kind == RouteKind::StationRack)
+	{
+		const auto pull = std::max(35.0f, std::abs(a.x - b.x) * 0.45f);
+		return {a, glm::vec2{a.x + pull, a.y}, glm::vec2{b.x - pull, b.y}, b};
+	}
 	if (kind == RouteKind::Station)
 	{
 		const float pull = std::max(50.0f, std::abs(a.x - b.x) * 0.45f);
@@ -405,4 +410,12 @@ bool CableInteraction::Revealed(const Cable& cable, bool revealHeld, bool draggi
 bool CableInteraction::CanGrabEnd(const Cable& cable, End end, bool loopEditor, bool revealHeld)
 {
 	return !loopEditor || revealHeld || cable.Route.Kind != RouteKind::Station || end == End::Start;
+}
+
+float CableInteraction::FadeAlpha(float alpha, bool revealed, float elapsedSeconds, bool slow)
+{
+	// Normal transitions take 200/350ms; edited routes take one second to disappear.
+	const float duration = revealed ? 0.2f : slow ? 1.0f : 0.35f;
+	const float step = std::max(0.0f, elapsedSeconds) / duration;
+	return std::clamp(alpha + (revealed ? step : -step), 0.0f, 1.0f);
 }

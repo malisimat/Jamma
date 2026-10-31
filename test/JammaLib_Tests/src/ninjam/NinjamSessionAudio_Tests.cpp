@@ -2,6 +2,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <cstdlib>
 #include <future>
 #include <limits>
 #include <stdexcept>
@@ -56,47 +57,70 @@ TEST(NinjamLanePacking, ScalarPublicationRoundTripsLaneMetadata)
 	EXPECT_EQ(std::numeric_limits<std::uint16_t>::max(), maximum.LaneCount);
 }
 
-TEST(NinjamDirectoryDeathTest, ShutdownJoinsWorkerAndRejectsNewRefreshes)
-{
-	// Isolate process-wide shutdown so test ordering/repetition stays independent.
-	ASSERT_EXIT({
-		using Session = ninjam::NinjamSession;
-		try
-		{
-			Session::RefreshPublicServerDirectoryAsync({}, {}, [] {
-				throw std::runtime_error("start failure");
-			});
-			std::exit(1);
-		}
-		catch (const std::runtime_error&) {}
-		if (Session::GetPublicServerDirectorySnapshot().RefreshInFlight) std::exit(2);
-		std::promise<void> entered;
-		std::promise<void> release;
-		auto released = release.get_future();
-		std::atomic<bool> finished{ false };
-		if (!Session::RefreshPublicServerDirectoryAsync({}, [&] {
-			entered.set_value();
-			released.wait();
-			finished = true;
-			throw std::runtime_error("worker failure"); // Never uses the network.
-		})) std::exit(3);
-		entered.get_future().wait();
-		auto shutdown = std::async(std::launch::async, [] { Session::ShutdownPublicServerDirectory(); });
-		const bool waited = shutdown.wait_for(std::chrono::milliseconds(50)) == std::future_status::timeout;
-		release.set_value();
-		shutdown.get();
-		if (!waited || !finished || Session::GetPublicServerDirectorySnapshot().RefreshInFlight)
-			std::exit(4);
-		if (Session::RefreshPublicServerDirectoryAsync()) std::exit(5);
-		Session::ShutdownPublicServerDirectory();
-		std::exit(0);
-	}, ::testing::ExitedWithCode(0), "");
-}
-
 TEST(NinjamSessionAudio, ChatReportsNotSentWithoutConnection)
 {
 	ninjam::NinjamSession session;
 	EXPECT_FALSE(session.SendChat("hello"));
+}
+
+// The directory worker is process-global and shutdown is terminal. Run in a
+// death-test child so failure can exit without destructors joining a stuck job.
+class NinjamDirectoryShutdownProbe
+{
+public:
+	static void Run()
+	{
+		using Session = ninjam::NinjamSession;
+		using namespace std::chrono_literals;
+		try
+		{
+			bool startupFailed = false;
+			try
+			{
+				Session::RefreshPublicServerDirectoryAsync({}, {}, [] { throw std::runtime_error("injected startup failure"); });
+			}
+			catch (const std::runtime_error&) { startupFailed = true; }
+			if (!startupFailed) std::_Exit(1);
+			std::promise<void> workerEntered, releaseWorker, shutdownEntered;
+			auto entered = workerEntered.get_future();
+			auto release = releaseWorker.get_future();
+			auto shuttingDown = shutdownEntered.get_future();
+			std::atomic<bool> workerLeft{false}, workerTimedOut{false};
+			// Both injected failure paths stop before FetchAutosongServerListHtml.
+			if (!Session::RefreshPublicServerDirectoryAsync({}, [&] {
+				workerEntered.set_value();
+				workerTimedOut.store(release.wait_for(5s) != std::future_status::ready);
+				workerLeft.store(true, std::memory_order_release);
+				throw std::runtime_error("injected worker failure");
+			})) std::_Exit(2);
+			if (entered.wait_for(2s) != std::future_status::ready) std::_Exit(3);
+			entered.get();
+			auto shutdown = std::async(std::launch::async, [&] {
+				shutdownEntered.set_value();
+				Session::ShutdownPublicServerDirectory();
+			});
+			if (shuttingDown.wait_for(2s) != std::future_status::ready) std::_Exit(4);
+			shuttingDown.get();
+			if (shutdown.wait_for(20ms) != std::future_status::timeout) std::_Exit(5);
+			releaseWorker.set_value();
+			if (shutdown.wait_for(2s) != std::future_status::ready) std::_Exit(6);
+			shutdown.get();
+			if (!workerLeft.load(std::memory_order_acquire) || workerTimedOut.load()) std::_Exit(7);
+			bool restarted = false;
+			if (Session::RefreshPublicServerDirectoryAsync({}, [] { throw std::runtime_error("unexpected restart"); },
+				[&] { restarted = true; }) || restarted) std::_Exit(8);
+			auto repeated = std::async(std::launch::async, [] { Session::ShutdownPublicServerDirectory(); });
+			if (repeated.wait_for(2s) != std::future_status::ready) std::_Exit(9);
+			repeated.get();
+		}
+		catch (...) { std::_Exit(10); }
+		std::_Exit(0);
+	}
+};
+
+TEST(NinjamSessionAudio, ShutdownJoinsWorkerAndRejectsNewRefreshes)
+{
+	ASSERT_EXIT(NinjamDirectoryShutdownProbe::Run(), testing::ExitedWithCode(0), "");
 }
 
 TEST(NinjamSessionAudio, StopCannotInvalidateBorrowDuringSynchronousConsume)

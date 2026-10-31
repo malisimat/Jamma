@@ -13,6 +13,7 @@
 #include "../../console/Help.h"
 #include "../../console/LineRing.h"
 #include "Main.h"
+#include "../Resource.h"
 #include "RigDefaultSave.h"
 #include "Window.h"
 #include "PathUtils.h"
@@ -21,6 +22,7 @@
 #include "../io/InitFile.h"
 #include "../io/StartupConfig.h"
 #include "ConsoleCapture.h"
+#include "CrtCapture.h"
 #include "StartupLog.h"
 #include "JobFailureNotice.h"
 #include "../vst/Vst3Plugin.h"
@@ -254,22 +256,52 @@ static bool SaveRigAtomic(const std::wstring& finalPath, const io::RigFile& rig)
 	return UpdateIni(finalPath, json.str());
 }
 
+static bool PublishDefaultJam(const std::wstring& savedPath, const std::wstring& defaultPath)
+{
+	if (savedPath.empty() || defaultPath.empty() || savedPath == defaultPath) return false;
+	const bool originalExists = GetFileAttributesW(defaultPath.c_str()) != INVALID_FILE_ATTRIBUTES;
+	if (originalExists)
+	{
+		// Never overwrite a prior backup. Copying first leaves the startup jam
+		// available even if staging or replacement later fails.
+		bool backedUp = false;
+		for (unsigned int n = 0; n < 10000u; ++n)
+		{
+			const auto backup = defaultPath + L".bak" + (n ? L"." + std::to_wstring(n) : L"");
+			if (CopyFileW(defaultPath.c_str(), backup.c_str(), TRUE)) { backedUp = true; break; }
+			if (GetLastError() != ERROR_FILE_EXISTS && GetLastError() != ERROR_ALREADY_EXISTS) return false;
+		}
+		if (!backedUp) return false;
+	}
+	for (unsigned int n = 0; n < 10000u; ++n)
+	{
+		const auto staged = defaultPath + L".new" + (n ? L"." + std::to_wstring(n) : L"");
+		if (!CopyFileW(savedPath.c_str(), staged.c_str(), TRUE))
+		{
+			if (GetLastError() == ERROR_FILE_EXISTS || GetLastError() == ERROR_ALREADY_EXISTS) continue;
+			return false;
+		}
+		const bool published = MoveFileExW(staged.c_str(), defaultPath.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) != 0;
+		if (!published) DeleteFileW(staged.c_str());
+		return published;
+	}
+	return false;
+}
+
 std::optional<io::InitFile> LoadIni(const std::wstring& initPath)
 {
-	io::TextReadWriter txtFile;
-	auto res = txtFile.Read(initPath, MAX_JSON_CHARS);
-	if (!res) return std::nullopt;
-	auto [ini, numChars, unused] = std::move(*res);
-	std::stringstream ss(std::move(ini));
-	auto parsed = InitFile::FromStream(std::move(ss));
-	if (!parsed || parsed->Jam.empty() || parsed->Rig.empty()) return std::nullopt;
-	return parsed;
+	return InitFile::Read(initPath);
 }
 
 std::optional<io::JamFile> LoadJam(io::InitFile& ini, bool& readable)
 {
 	io::TextReadWriter txtFile;
 
+	if (ini.Jam.empty())
+	{
+		readable = false;
+		return std::nullopt;
+	}
 	std::cout << "[BOOT] Loading JAM from defaults path: " << EncodeUtf8(ini.Jam) << std::endl;
 	auto res = txtFile.Read(ini.Jam, MAX_JSON_CHARS);
 	readable = res.has_value();
@@ -329,7 +361,6 @@ io::JamFile EmptyJam()
 	{
 		station.LoopTakes.clear();
 		station.VstChain.clear();
-		station.MidiRoutes.clear();
 		station.StationPhaseOffsetSamps = 0;
 	}
 	return jam;
@@ -377,6 +408,11 @@ std::optional<io::RigFile> LoadRig(io::InitFile& ini, bool& readable)
 {
 	io::TextReadWriter txtFile;
 
+	if (ini.Rig.empty())
+	{
+		readable = false;
+		return std::nullopt;
+	}
 	auto res = txtFile.Read(ini.Rig, MAX_JSON_CHARS);
 	readable = res.has_value();
 	if (!res.has_value())
@@ -465,7 +501,7 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 	const auto initPath = ResolveIniPath();
 	console::StartupLog startupLog(initPath);
 	auto consoleLines = std::make_shared<console::LineRing>();
-	console::ConsoleCapture capture(*consoleLines, [&](std::string_view line) {
+	console::ConsoleCapture capture(*consoleLines, {}, [&](std::string_view line) {
 		startupLog.Append(line);
 		if (auto failure = startupLog.TakeFailure(); !failure.empty())
 		{
@@ -473,6 +509,8 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 			OutputDebugStringA(failure.c_str()); // No recursive stream logging.
 		}
 	});
+	startupLog.Write(console::StartupLog::RunStart(LIB_VERSION));
+	console::CrtCapture crtCapture(capture);
 	const auto drainBackendDiagnostics = [] {
 		if (auto fault = console::DiagnosticThread::TakeBackendError())
 		{
@@ -504,6 +542,13 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 	} directoryShutdown;
 	console::ConsoleCapture::EnableForCurrentThread(true);
 	{
+		std::wstring executable(32768u, L'\0');
+		const auto length = GetModuleFileNameW(nullptr, executable.data(), static_cast<DWORD>(executable.size()));
+		if (length && length < executable.size())
+		{
+			executable.resize(length);
+			std::cout << "[BOOT] executable=" << EncodeUtf8(executable) << std::endl;
+		}
 		const DWORD cwdLength = GetCurrentDirectoryW(0, nullptr);
 		if (cwdLength > 0)
 		{
@@ -538,22 +583,14 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 		return -1;
 	}
 
-	SYSTEMTIME startupTime{};
-	GetLocalTime(&startupTime);
-	std::ostringstream startupHeader;
-	startupHeader << "[BOOT] " << startupTime.wYear << '-'
-		<< std::setw(2) << std::setfill('0') << startupTime.wMonth << '-'
-		<< std::setw(2) << startupTime.wDay << ' '
-		<< std::setw(2) << startupTime.wHour << ':'
-		<< std::setw(2) << startupTime.wMinute << ':'
-		<< std::setw(2) << startupTime.wSecond << " local Jamma v" LIB_VERSION;
-	startupLog.Write(startupHeader.str());
 	startupLog.Write("[BOOT] defaults=" + EncodeUtf8(initPath) + " support-log=" +
 		EncodeUtf8(startupLog.Path()) + (startupLog.Available() ? "" : " (unavailable)"));
 	const bool defaultsExisted = GetFileAttributesW(initPath.c_str()) != INVALID_FILE_ATTRIBUTES;
 	startupLog.Write(std::string("[BOOT] defaults pre-existing=") + (defaultsExisted ? "yes" : "no"));
 	auto defaults = LoadIni(initPath);
 	bool defaultsValid = defaults.has_value();
+	if (defaultsValid)
+		std::cout << "[BOOT] Loaded defaults.json; selecting JAM and RIG independently." << std::endl;
 	if (!defaultsValid)
 	{
 		if (defaultsExisted)
@@ -582,6 +619,24 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 	RigFile rig = RigFile::FromStream(std::stringstream(RigFile::DefaultJson)).value();
 	bool rigGenerated = true;
 	bool jamGenerated = true;
+	const auto logSelection = [](const char* kind, const std::wstring& path,
+		const io::StartupConfig::Decision& decision, const char* fallback) {
+		std::cout << "[" << kind << "] ";
+		if (decision.UseExisting)
+			std::cout << "Loaded selected file: " << EncodeUtf8(path);
+		else
+		{
+			if (path.empty()) std::cout << "No path specified";
+			else
+			{
+				const auto reason = decision.State == io::StartupConfig::FileState::Missing ? "File missing" :
+					decision.State == io::StartupConfig::FileState::Unreadable ? "File unreadable" : "File invalid";
+				std::cout << reason << ": " << EncodeUtf8(path);
+			}
+			std::cout << "; " << fallback;
+		}
+		std::cout << std::endl;
+	};
 
 	if (defaults.has_value())
 	{
@@ -599,12 +654,9 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 			const auto jamDecision = io::StartupConfig::Decide(
 				io::StartupConfig::Classify(jamExists, jamReadable, jamOpt.has_value()), defaults->JamOrigin);
 			jamGenerated = jamDecision.Generate;
-			std::cout << "[JAM] " << (jamDecision.UseExisting ? "loaded existing" : jamDecision.Recovery ? "recovery needed" : "generation needed")
-				<< " path=" << EncodeUtf8(defaults->Jam) << std::endl;
+			logSelection("JAM", defaults->Jam, jamDecision, "starting a fresh session.");
 			if (jamOpt.has_value())
 				jam = std::move(jamOpt.value());
-			else
-				std::cout << "[BOOT] Continuing with an empty JAM. Use Load JAM to choose a compatible session." << std::endl;
 		}
 		catch (const std::exception& error)
 		{
@@ -624,14 +676,9 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 		const auto rigDecision = io::StartupConfig::Decide(
 			io::StartupConfig::Classify(rigExists, rigReadable, rigOpt.has_value()), defaults->RigOrigin);
 		rigGenerated = rigDecision.Generate;
-		std::cout << "[RIG] " << (rigDecision.UseExisting ? "loaded existing" : rigDecision.Recovery ? "recovery needed" : "generation needed")
-			<< " path=" << EncodeUtf8(defaults->Rig) << std::endl;
+		logSelection("RIG", defaults->Rig, rigDecision, "generating a default rig from available hardware.");
 		if (rigOpt.has_value())
 			rig = rigOpt.value();
-		startupLog.Write("[RIG] " + std::string(rigDecision.UseExisting ? "selected" :
-			rigDecision.Recovery ? "recovery" : "generation") + " path=" + EncodeUtf8(defaults->Rig));
-		startupLog.Write("[JAM] " + std::string(jamGenerated ? "generation/recovery" : "selected") +
-			" path=" + EncodeUtf8(defaults->Jam) + " stations=" + std::to_string(jam.Stations.size()));
 	}
 
 	const auto asioInventory = audio::AudioDevice::DiscoverAsio();
@@ -694,7 +741,7 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 	};
 	if (jamGenerated)
 		jam = RecoveryJam(rig, !rigGenerated);
-	const auto jamDirectory = defaults.has_value() ?
+	const auto jamDirectory = !defaults->Jam.empty() ?
 		utils::GetParentDirectory(defaults->Jam) :
 		utils::GetParentDirectory(initPath);
 	startupLog.Write("[BOOT] generated-directory=" + EncodeUtf8(generatedDirectory));
@@ -745,12 +792,12 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 	ResourceLib resourceLib;
 	Window window(*(scene.value()), resourceLib);
 
-	if (window.Create(hInstance, nCmdShow) != 0)
+	if (window.Create(hInstance, nCmdShow, IDI_JAMMA, IDI_JAMMA_SMALL) != 0)
 		PostQuitMessage(1);
 
 	scene.value()->InitGlobalKeyCapture();
 
-	scene.value()->SetMidiInputInventory(midiInventory);
+	scene.value()->Controls().SetMidiInputInventory(midiInventory);
 	{
 		const auto& requested = rig.User.Audio;
 		std::ostringstream detail;
@@ -791,7 +838,7 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 			<< " buffer=" << attempt.BufferSize << " opened=" << attempt.Opened
 			<< " started=" << attempt.Started << " " << attempt.Error << std::endl;
 	}
-	for (const auto& attempt : scene.value()->GetMidiConnectionResult().Attempts)
+	for (const auto& attempt : scene.value()->Controls().GetMidiConnectionResult().Attempts)
 	{
 		startupLog.Write("[MIDI] request='" + attempt.RequestedName + "' connected='" +
 			attempt.ConnectedName + "' status=" + MidiStatusText(attempt.Status) +
@@ -824,7 +871,7 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 	}
 	if (!rigGenerated)
 	{
-		for (const auto& attempt : scene.value()->GetMidiConnectionResult().Attempts)
+		for (const auto& attempt : scene.value()->Controls().GetMidiConnectionResult().Attempts)
 			if (attempt.Status != midi::MidiConnectionStatus::Connected &&
 				attempt.Status != midi::MidiConnectionStatus::Disabled)
 				startupLog.Write("[RIG] warning: selected MIDI request '" + attempt.RequestedName +
@@ -834,7 +881,7 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 	if (rigGenerated && asioReport.StartedParams && generatedRigPath)
 	{
 		const auto& actual = *asioReport.StartedParams;
-		const auto connection = scene.value()->GetMidiConnectionResult();
+		const auto connection = scene.value()->Controls().GetMidiConnectionResult();
 		const auto acceptedBeforeFinalisation = scene.value()->AcceptedRigSnapshot();
 		const auto& openedRig = acceptedBeforeFinalisation ? acceptedBeforeFinalisation->Rig : rig;
 		auto finalRig = io::StartupConfig::WithOpenedInputs(openedRig, actual.NumInputChannels,
@@ -973,7 +1020,7 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 			<< " in=" << actual.NumInputChannels << " out=" << actual.NumOutputChannels;
 	}
 	startupSummary << " midi=";
-	for (const auto& device : scene.value()->GetMidiConnectionResult().Connected)
+	for (const auto& device : scene.value()->Controls().GetMidiConnectionResult().Connected)
 		startupSummary << "'" << device.Name << "' ";
 	startupSummary << " stations=" << scene.value()->SnapshotStations().size()
 		<< " triggers=" << rig.Triggers.size()
@@ -983,9 +1030,36 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 		<< " log=" << EncodeUtf8(startupLog.Path());
 	startupLog.Write(startupSummary.str());
 
-	if (!jamGenerated && defaults) scene.value()->SetSessionSaveFolder(utils::GetParentDirectory(defaults->Jam));
+	if (!jamGenerated && defaults)
+	{
+		scene.value()->Controls().SetSessionSaveFolder(utils::GetParentDirectory(defaults->Jam));
+		if (defaults->JamOrigin != io::StartupConfig::GeneratedOrigin)
+			scene.value()->Controls().SetCurrentJamPath(defaults->Jam);
+	}
+	const auto configureDefaultJamSave = [&]() {
+		scene.value()->SetRuntimeDialogFallback([owner = window.GetWindowHandle()](const std::string& title, const std::string& message) {
+			const auto wideTitle = utils::DecodeUtf8(title), wideMessage = utils::DecodeUtf8(message);
+			MessageBoxW(owner,wideMessage.c_str(),wideTitle.c_str(),MB_OK | MB_ICONWARNING);
+		});
+		if (const auto currentDefaults = LoadIni(initPath))
+			scene.value()->Controls().SetDefaultJamSaver(currentDefaults->Jam, [&](const std::wstring& savedPath, bool useNamedJam) {
+			auto current = LoadIni(initPath);
+			if (!current) return false;
+			if (!useNamedJam) return PublishDefaultJam(savedPath, current->Jam);
+			current->Jam = savedPath;
+			current->JamLoadType = io::InitFile::LOAD_SPECIFIC;
+			current->JamOrigin = "user";
+			std::stringstream stream;
+			if (!io::InitFile::ToStream(*current, stream) || !UpdateIni(initPath, stream.str())) return false;
+			*defaults = *current;
+			return true;
+		});
+	};
+	configureDefaultJamSave();
 	hardwareDefaults->store(std::make_shared<const io::InitFile>(*defaults), std::memory_order_release);
 	RigDefaultSave rigDefaultSave(GetPath(PATH_ROAMING) + L"\\Jamma", initPath, SaveRigAtomic, UpdateIni);
+	if (const auto accepted = scene.value()->AcceptedRigSnapshot())
+		rigDefaultSave.InitializeCurrentPath(*defaults, !rigGenerated && defaults->RigOrigin != io::StartupConfig::GeneratedOrigin, accepted->Revision);
 	MSG msg{};
 	bool active = true;
 	const auto startupDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
@@ -1013,7 +1087,10 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 		while (PeekMessage(&msg, nullptr, 0, 0, PM_REMOVE))
 		{
 			if (msg.message == WM_DEVICECHANGE && msg.wParam == DBT_DEVNODES_CHANGED)
-				scene.value()->RequestMidiRefresh();
+			{
+				scene.value()->Controls().RequestMidiRefresh();
+				scene.value()->Controls().RequestAudioRefresh();
+			}
 			if (msg.message == WM_QUIT)
 			{
 				consoleCommands.Close();
@@ -1057,7 +1134,7 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 			}
 			else if (std::chrono::steady_clock::now() >= startupDeadline)
 			{
-				capture.CompleteStartup("[WARNING][BOOT] startup diagnostic window timed out after 30 seconds; later output remains in console");
+				capture.CompleteStartup("[WARNING][BOOT] startup diagnostic window timed out after 30 seconds; continuous run.log capture remains active");
 				startupCaptureFinished = true;
 			}
 		}
@@ -1138,15 +1215,35 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 			}
 			else pendingConsoleToggle = !pendingConsoleToggle;
 		}
+		if (scene.value()->ConsumePanelRigLoadRequest())
+		{
+			wchar_t filename[32768] = L"";
+			OPENFILENAMEW dialog{};
+			dialog.lStructSize = sizeof(dialog); dialog.hwndOwner = window.GetWindowHandle();
+			dialog.lpstrFilter = L"Jamma rig (*.rig)\0*.rig\0\0";
+			dialog.lpstrFile = filename; dialog.nMaxFile = static_cast<DWORD>(std::size(filename));
+			dialog.lpstrTitle = L"Load rig";
+			dialog.Flags = OFN_FILEMUSTEXIST | OFN_NOCHANGEDIR | OFN_PATHMUSTEXIST;
+			if (GetOpenFileNameW(&dialog))
+			{
+				auto selected = *defaults; selected.Rig = filename;
+				bool readable = false;
+				const auto candidate = LoadRig(selected, readable);
+				engine::RigCoordinator::EditReceiptPtr receipt;
+				if (!candidate || scene.value()->RequestRigEdit(*candidate, &receipt) != engine::RigCoordinator::EditResult::Pending)
+					scene.value()->ReportRuntimeNotice("Load rig", "Rig could not be applied. Check the log; device setup changes require a restart.");
+				else rigDefaultSave.TrackLoadedPath(filename, scene.value()->Identity(), std::move(receipt));
+			}
+		}
 		const bool windowLoadRequested = window.ConsumeJamLoadRequest();
-		const bool panelLoadRequested = scene.value()->ConsumePanelLoadRequest();
+		const bool panelLoadRequested = scene.value()->Controls().ConsumePanelLoadRequest();
 		if (windowLoadRequested || panelLoadRequested)
 		{
 			// Resolve the picker before admission/suspension; cancel changes nothing.
-			scene.value()->PickSessionForLoad();
+			scene.value()->Controls().PickSessionForLoad();
 		}
 		scene.value()->PumpDeviceAndFileControls();
-		const auto pendingJamPath = scene.value()->TakeReadySessionLoad();
+		const auto pendingJamPath = scene.value()->Controls().TakeReadySessionLoad();
 		if (!pendingJamPath.empty())
 		{
 			std::optional<std::shared_ptr<Scene>> replacement;
@@ -1171,21 +1268,25 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 				scene.value()->FinishSessionLoad(true);
 				scene.value()->Shutdown();
 				if (scene.value()->JobThreadFailed()) break; // Keep outgoing failure for owner notification below.
+				rigDefaultSave.PollLoadedPath(scene.value()->Identity()); // Replacement carries this accepted rig.
 				window.ReplaceScene(*replacement.value());
 				scene = std::move(replacement);
+				rigDefaultSave.InvalidateSavedRevision();
 				vst::DrainUiThreadDestroyQueue();
-				scene.value()->SetSessionSaveFolder(utils::GetParentDirectory(pendingJamPath));
+				scene.value()->Controls().SetSessionSaveFolder(utils::GetParentDirectory(pendingJamPath));
+				scene.value()->Controls().SetCurrentJamPath(pendingJamPath);
+				configureDefaultJamSave();
 				scene.value()->InitGlobalKeyCapture();
 				// Preserve rig hardware choices and inventory across loaded content.
 				scene.value()->InitAudio(false, nullptr, true);
 				const bool started = scene.value()->GetAsioOpenReport().StartedParams.has_value();
-				scene.value()->ReportFileStatus(started ? "Loaded session (check log for asset warnings)" : "Loaded session; audio stopped, retry available");
+				scene.value()->Controls().ReportFileOutcome(started ? "Loaded session (check log for asset warnings)" : "Loaded session; audio stopped, retry available");
 			}
 		}
 
 		if (rigDefaultSave.Poll(*scene.value(), window.GetWindowHandle(), *defaults)) { rigReadyForDefaults = true; defaultsValid = true; hardwareDefaults->store(std::make_shared<const io::InitFile>(*defaults), std::memory_order_release); }
 		if (!rigDefaultSave.Busy() && scene.value()->ConsumeRigSaveRequest())
-			rigDefaultSave.Start(*scene.value(), window.GetWindowHandle(), *defaults);
+			rigDefaultSave.Start(*scene.value(), window.GetWindowHandle(), *defaults, scene.value()->Controls().RequestedRigSaveMode());
 		window.Render();
 		window.Swap();
 		if (!startupCompletionArmed)
@@ -1250,6 +1351,7 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 	if (uiComInitialized)
 		CoUninitialize();
 	drainBackendDiagnostics();
+	crtCapture.Stop();
 	capture.Stop();
 
 	return jobThreadFailed ? 1 : (int)msg.wParam;

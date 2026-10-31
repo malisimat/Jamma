@@ -1,0 +1,7 @@
+#ifndef JAMMA_RESOURCE_IDS_H
+#define JAMMA_RESOURCE_IDS_H
+
+#define IDI_JAMMA 101
+#define IDI_JAMMA_SMALL 102
+
+#endif

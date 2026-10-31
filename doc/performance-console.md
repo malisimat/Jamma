@@ -12,6 +12,10 @@ console hidden. In the main Jamma window, **Ctrl+`** shows or hides it.
 Closing the console also hides it, retaining its transcript and input until
 Jamma exits. Jamma continues capturing output while the console is hidden.
 The obsolete `consoleforceconhost` preference is ignored.
+Output also reaches the continuous, rotated `run.log` beside the selected defaults
+file, independently of window visibility and console overflow. Verbosity is
+selected at each producer and applies equally to the file and console. See
+[diagnostic sources, limits and ownership](diagnostics.md).
 
 Type `/`, `/?`, or `/help` for the complete controls reference. General help is
 immediate and works offline; it never refreshes the server directory. **F1** in
@@ -73,7 +77,7 @@ outside the console; the loop editor consumes contextual key input.
 | **Tab**, no modifiers | Cycle front, top-down and station-interior camera views |
 | **E**, no modifiers | Open the selected completed audio/MIDI loop; hover to disambiguate |
 | **Space** | Tap tempo on press; hold the grid until release; works with Ctrl and in the editor, except text entry |
-| **Ctrl+Shift+R** | Arm reclock; while following remote timing, choose Stay local first |
+| **Reclock (Timing settings)** | Arm reclock; while following remote timing, choose Stay local first |
 | **Ctrl+Shift+V** | Insert a VST on the hovered station/take/loop at the current selection depth |
 | **Ctrl+Shift+E** | Open the first VST editor on that hovered target |
 | Hold **`** or **numpad 0** | Reveal routing cables |
@@ -135,6 +139,45 @@ Hover sockets/cables or hold **`** to reveal routing. Left-drag a socket or cabl
 end to a compatible socket to wire/move it. Drop an existing end on empty space
 to disconnect. Esc or right-click cancels the cable drag.
 
+### Station VST rack and live MIDI
+
+The Station VST stack sits below its master fader. Click **+** to append an
+installed 64-bit VST2/VST3 plugin, or click a loaded slot to toggle its editor.
+A failed saved slot remains in place with its state; click it to choose a
+replacement for that slot. Cancelling the picker leaves the rack unchanged.
+Alt-click a content slot to remove it immediately, including a pending load;
+the surviving slots keep their identities and state. The bottom **+** remains.
+Long stacks scroll within the rack.
+
+The MIDI channel grid (revealed by toggling the expander button to the left of the master fader) controls the MIDI channels that a station listens to for live MIDI sources, and how they are wired. Also affects recorded MIDI playback
+when no separate recorded output route is set. Enabled unwired
+channels broadcast to eligible plugins; cables select explicit destinations,
+including many channels to one plugin or one channel to several plugins.
+Switching a channel off clears its explicit live cables; switching it back on
+restores Broadcast. Explicit recorded output routes still take precedence over
+the channel cables.
+
+Drag channel sockets or plugin input sockets to connect them. The usual cable
+move/disconnect/cancel gestures apply. Hover a socket, cable or collapsed MIDI grid
+button, or hold **`**, to reveal connections. Collapsed and scrolled endpoints
+retain their logical identities; expand the channels or scroll the slot into
+view to edit its socket. Removing or losing a plugin preserves its explicit
+unavailable targets, so a missing plugin never silently enables Broadcast.
+Disconnecting the final valid explicit target restores Broadcast; Alt-click a
+channel socket to explicitly clear that channel's cables and restore Broadcast.
+
+Station racks sum instruments into the Station audio and process effects in order:
+`instrument A, instrument B, reverb` gives `reverb(A + B)`, while
+`instrument A, reverb, instrument B` gives `reverb(A) + B`. Take and Loop
+effects retain their serial policy.
+
+Each Station supports 32 slots and up to 512 live channel/plugin links.
+**Rack info / Rack paused** explains rejected edits or a suspended rack.
+Over-limit or malformed imports preserve their saved entries and cables while
+inactive. Use the page arrows and Alt-remove unwanted entries, then **Resume**;
+**Clear MIDI** explicitly discards all saved live cables after confirmation.
+Plugin state and recorded routes remain separate from that recovery action.
+
 ### Timing, channel override and triggers
 
 Hold Ctrl outside text entry and the E editor to show **SHFT/DIV** handles, then
@@ -166,8 +209,8 @@ Hover disambiguates several selected loops. Esc closes. **Ctrl+Z** undoes and
 changed target cancels unfinished previews.
 
 For MIDI, left-drag paints notes or erases occupied coverage on the active grid.
-With quantisation off, click empty space to add, drag a note body to move, or drag
-an edge to trim. Right-drag a note changes velocity; right-drag empty MIDI grid
+With quantisation off, click empty space to add or drag to set duration; click a
+note to delete it, drag its body to move, or drag an edge to trim. Right-drag a note changes velocity; right-drag empty MIDI grid
 pans pitch vertically and zooms horizontally. Ctrl-left-drag a note moves by grid
 cells/semitones; Ctrl-left-drag on empty MIDI grid has no action. Start a left/right
 drag off the MIDI grid to orbit. Wheel scrolls pitch and
@@ -179,3 +222,15 @@ Alt-left-drag sweeps a broadband band. Wheel changes brush size, Alt-wheel chang
 band width, Shift-wheel zooms frequency and Alt-Shift-wheel zooms time.
 Shift-left-drag pans time/frequency; Shift-right-drag zooms both axes. Start a
 drag off the surface to orbit. Ctrl pointer/wheel gestures are reserved.
+
+### Session controls
+
+Jam and Rig Save and Save As remain available for empty sessions. Save uses the
+current destination or asks for one; Save As always asks. A busy operation or
+capture reports a reason to retry. Set as Default remains a separate action.
+
+Reset All in Session settings asks for confirmation, disconnects NINJAM, discards
+all takes, clears timing and restores mixer faders to 0 dB. Stations, rig/device
+configuration, station routing and station plugins remain. The next Jam Save
+asks for a destination; the Rig destination remains. Cancel leaves the session
+unchanged. Reclock is in Timing settings.

@@ -185,6 +185,8 @@ LoopTake::LoopTake(LoopTakeParams params,
 	_audioBuffers(),
 	_backAudioBuffers(),
 	_vstChain(),
+	_midiSeamMergeWindowMs(params.MidiSeamMergeWindowMs),
+	_sampleRate(params.SampleRate),
 	_vstPluginPaths(),
 	_vstBlockScratch(),
 	_vstBlockPtrs()
@@ -312,6 +314,8 @@ std::optional<std::shared_ptr<LoopTake>> LoopTake::FromFile(LoopTakeParams takeP
 				midi::AutomationMapping::MakeEditorMatchKey() :
 				midi::AutomationMapping::MakeMatchKey(lane.Channel, lane.Controller);
 			restoredLane.TargetParameterIndex = lane.TargetParameterIndex;
+			restoredLane.SavedTarget = {lane.TargetScope, lane.TargetPluginId,
+				lane.TargetPluginIndex, lane.TargetLoopIndex};
 			restoredLane.PointCount = lane.Points.size();
 			for (std::size_t pointIndex = 0u; pointIndex < lane.Points.size(); ++pointIndex)
 				restoredLane.Points[pointIndex] = { static_cast<float>(lane.Points[pointIndex].Fraction),
@@ -772,8 +776,9 @@ void LoopTake::WriteBlock(const std::shared_ptr<MultiAudioSink> dest,
 	}
 
 	auto chain = _vstChain.borrow();
-	if (chain && chain->IsActive() && (state->VstBlockPtrs.size() >= channelCount))
-		chain->ProcessBlockMulti(state->VstBlockPtrs.data(), static_cast<int>(channelCount), sampsToRead);
+	if (chain && chain->IsActive() && state->VstBlockPtrs.size() >= channelCount
+		&& state->InstrumentPtrs.size() >= channelCount)
+		chain->ProcessRack(state->VstBlockPtrs.data(), state->InstrumentPtrs.data(), static_cast<int>(channelCount), sampsToRead);
 
 	for (auto i = 0u; i < channelCount; i++)
 	{
@@ -995,6 +1000,11 @@ void LoopTake::InvalidateSceneAnchors() noexcept
 
 void LoopTake::CaptureMappedSourceAnchors(std::int64_t sourceCoordinateSamps) noexcept
 {
+	// Configured capture publishes its final cursor at the activation boundary.
+	if (_triggerCaptureConfigured && (!_capturePlaybackPrepared.load(std::memory_order_acquire)
+		|| _capturePlaybackPending.load(std::memory_order_acquire)))
+		return;
+
 	auto state = _BorrowAudioState();
 	if (state)
 		for (const auto& loop : state->Loops)
@@ -1021,6 +1031,11 @@ void LoopTake::ResetTimingEpoch() noexcept
 
 void LoopTake::RestoreMappedSourceCoordinate(std::int64_t sourceCoordinateSamps) noexcept
 {
+	// Configured capture publishes its final cursor at the activation boundary.
+	if (_triggerCaptureConfigured && (!_capturePlaybackPrepared.load(std::memory_order_acquire)
+		|| _capturePlaybackPending.load(std::memory_order_acquire)))
+		return;
+
 	auto state = _BorrowAudioState();
 	if (state)
 		for (const auto& loop : state->Loops)
@@ -1367,11 +1382,15 @@ ActionResult LoopTake::OnAction(JobAction action)
 			saved.Id = action.VstIdentity;
 			saved.Path = utils::EncodeUtf8(action.VstPath);
 			saved.State = io::JamFile::VstEntry::EncodeState(action.VstInitialState);
-			if (action.VstManaged && !_vstSavedEntries.empty() && !replacement->GetPlugin(0u))
+			auto retry = std::find_if(_vstSavedEntries.begin(), _vstSavedEntries.end(), [&](const auto& entry) { return entry.Id == action.VstIdentity; });
+			// Legacy single-slot requests choose a replacement identity; row requests retain their exact ID.
+			if (action.VstManaged && retry == _vstSavedEntries.end() && !_vstSavedEntries.empty() && !replacement->GetPlugin(0u)) retry = _vstSavedEntries.begin();
+			if (action.VstManaged && retry != _vstSavedEntries.end())
 			{
-				replacement->ReplaceSlot(0u, std::move(plugin));
-				_vstPluginPaths.front() = action.VstPath;
-				_vstSavedEntries.front() = std::move(saved);
+				const auto index = static_cast<std::size_t>(retry - _vstSavedEntries.begin());
+				replacement->ReplaceSlot(index, std::move(plugin));
+				_vstPluginPaths[index] = action.VstPath;
+				*retry = std::move(saved);
 			}
 			else
 			{
@@ -1380,6 +1399,7 @@ ActionResult LoopTake::OnAction(JobAction action)
 				_vstSavedEntries.push_back(std::move(saved));
 			}
 			_backVstChain = std::move(replacement);
+			++_rackRevision;
 			_flipVstChain.store(true, std::memory_order_release);
 		}
 		if (_vstJobsPending.load(std::memory_order_acquire) != 0u) _vstJobsPending.fetch_sub(1u, std::memory_order_release);
@@ -1410,6 +1430,7 @@ ActionResult LoopTake::OnAction(JobAction action)
 				_vstPluginPaths.erase(_vstPluginPaths.begin() + static_cast<std::ptrdiff_t>(removeIndex));
 				_vstSavedEntries.erase(_vstSavedEntries.begin() + static_cast<std::ptrdiff_t>(removeIndex));
 				_backVstChain = std::move(replacement);
+			++_rackRevision;
 				_flipVstChain.store(true, std::memory_order_release);
 			}
 		}
@@ -1680,7 +1701,8 @@ std::optional<std::uint32_t> LoopTake::MasterPhaseAtAudioBoundary(
 	}
 	if (representative)
 	{
-		const auto phaseFraction = 1.0 - representative->LoopIndexFrac();
+		const auto phaseFraction = representative->LoopLength() == 0ul ? 0.0
+			: static_cast<double>(representative->PlaybackBodyIndex()) / representative->LoopLength();
 		return static_cast<std::uint32_t>(phaseFraction * masterLength + 0.5) % masterLength;
 	}
 	if (targetLoop) return std::nullopt;
@@ -1776,7 +1798,9 @@ std::optional<engine::QuantisationLoopTakeVisual> LoopTake::QuantisationVisual()
 		true,
 		static_cast<std::uint32_t>(resolvedQuantisation.GridInterval()),
 		static_cast<std::uint32_t>(resolvedQuantisation.GridDivisions() / midi::MidiQuantisation::Divisor(resolvedQuantisation.Fraction)),
-		resolvedQuantisation.HasRemoteGrid() ? resolvedQuantisation.RemoteOriginSamps : 0
+		resolvedQuantisation.HasRemoteGrid() ? resolvedQuantisation.RemoteOriginSamps : 0,
+		0,
+		midiSnapshot && !midiSnapshot->empty()
 	};
 }
 
@@ -1847,6 +1871,9 @@ std::shared_ptr<Loop> LoopTake::AddLoop(unsigned int chan, std::string stationNa
 
 void LoopTake::AddLoop(std::shared_ptr<Loop> loop)
 {
+	loop->SetSampleRate(_sampleRate);
+	loop->SetInheritedPlaybackOffsetSamps(ResolvedMidiQuantisation().PhaseOffsetSamps);
+	loop->SetAutomationTopologyChangedCallback(_automationTopologyChanged);
 	loop->SetCaptureSourceMuteControl(_captureSourceMuteControl);
 	_backLoops.push_back(loop);
 	_backAudioBuffers.push_back(std::make_shared<audio::AudioBuffer>(_lastBufSize));
@@ -1984,7 +2011,7 @@ void LoopTake::Record(std::vector<unsigned int> channels,
 	{
 		for (auto midiChan : midiChannels)
 		{
-			auto midiLoop = std::make_shared<midi::MidiLoop>();
+			auto midiLoop = std::make_shared<midi::MidiLoop>(_sampleRate, _midiSeamMergeWindowMs);
 			midiLoop->SetGroupId(utils::GetGuid());
 			graphics::MidiModelParams modelParams;
 			modelParams.ModelScale = 1.0f;
@@ -2407,6 +2434,7 @@ bool LoopTake::AdmitTriggerCaptureLength(unsigned long length) const noexcept
 void LoopTake::_FinalizeMidiCapture(unsigned long loopLength, unsigned long index, LoopTakeState& state)
 {
 	const auto midiLoopLength = static_cast<std::uint32_t>(loopLength);
+	std::vector<midi::MidiNoteSnapshot> heldThroughout;
 	if (_midiOverdubSession.Active)
 	{
 		if (_isMidiPunchInActive.load(std::memory_order_relaxed))
@@ -2424,6 +2452,7 @@ void LoopTake::_FinalizeMidiCapture(unsigned long loopLength, unsigned long inde
 	}
 	else
 	{
+		heldThroughout.resize(_midiLoops.size());
 		for (std::size_t i = 0u; i < _midiLoops.size(); ++i)
 		{
 			auto midiLoop = _midiLoops[i];
@@ -2436,37 +2465,46 @@ void LoopTake::_FinalizeMidiCapture(unsigned long loopLength, unsigned long inde
 				(i < _midiLoopChannels.size()) ?
 				(_midiLoopChannels[i] & midi::MidiEvent::ChannelMask) :
 				0u);
-            auto held = _midiRecordHeld[i];
-            if (_triggerCaptureConfigured)
-            {
-                held = {};
-                std::vector<midi::MidiEvent> eligible;
-                for (std::size_t e = 0u; e < midiLoop->EventCount(); ++e)
-                {
-                    midi::MidiEvent event;
-                    if (midiLoop->TryGetEvent(e, event) && event.sampleOffset < midiLoopLength) eligible.push_back(event);
-                }
-                midi::MidiNote::SortMidiEvents(eligible.data(), eligible.size());
-                for (const auto& event : eligible)
-                {
-                    if (event.IsNoteOn()) held.Set(event.Channel(), event.data1, event.data2);
-                    else if (event.IsNoteOff()) held.Clear(event.Channel(), event.data1);
-                }
-            }
+			midi::MidiNoteSnapshot held;
+			std::bitset<midi::MidiNote::TotalNoteSlots> released;
+			std::vector<midi::MidiEvent> eligible;
+			for (std::size_t e = 0u; e < midiLoop->EventCount(); ++e)
+			{
+				midi::MidiEvent event;
+				if (midiLoop->TryGetEvent(e, event) && event.sampleOffset < midiLoopLength) eligible.push_back(event);
+			}
+			midi::MidiNote::SortMidiEvents(eligible.data(), eligible.size());
+			for (const auto& event : eligible)
+			{
+				if (event.IsNoteOn()) held.Set(event.Channel(), event.data1, event.data2);
+				else if (event.IsNoteOff())
+				{
+					held.Clear(event.Channel(), event.data1);
+					released.set(midi::MidiNote::NoteSlot(event.Channel(), event.data1));
+				}
+			}
+			if (i < _midiRecordSeededHeld.size())
+			{
+				heldThroughout[i] = held;
+				heldThroughout[i].Held &= _midiRecordSeededHeld[i] & ~released;
+			}
+
 			const auto heldNoteOffSample = (midiLoopLength > 0u) ? (midiLoopLength - 1u) : 0u;
 			for (std::uint8_t note = 0u; note < 128u; ++note)
 			{
 				const auto slot = midi::MidiNote::NoteSlot(channel, note);
 				if (!held.Held.test(slot))
 					continue;
-				// A first-master note held on both trigger edges crosses the seam.
-				// Its head release closes the tail next repeat; an artificial L-1
-				// release would turn that continuation into two separate attacks.
+				// A note held throughout capture is clamped after rotation.
+				if (heldThroughout[i].Held.test(slot)) continue;
+				// A released/replayed first-master note can merge with its head
+				// next repeat; an artificial release would split that articulation.
 				if (!_triggerCaptureConfigured && _midiRecordStartSample && i < _midiRecordSeededHeld.size()
 					&& _midiRecordSeededHeld[i].test(slot))
 					continue;
 
-				midiLoop->RecordEvent(midi::MidiEvent::MakeNoteOff(heldNoteOffSample, channel, note));
+				midiLoop->RecordEvent(midi::MidiEvent::MakeNoteOff(heldNoteOffSample, channel, note)
+					.WithFlags(midi::MidiEvent::BoundaryHeld));
 			}
 		}
 	}
@@ -2479,6 +2517,8 @@ void LoopTake::_FinalizeMidiCapture(unsigned long loopLength, unsigned long inde
             if (_triggerCaptureConfigured)
                 midiLoop->NormalizeTriggerCapture(midiLoopLength,
                     _triggerCaptureTiming.DelaySamps - _triggerCaptureTiming.SeamSamps);
+			if (i < heldThroughout.size())
+				midiLoop->ClampFullLoopCaptureNotes(midiLoopLength, heldThroughout[i]);
 			// Compute the global sample that corresponds to loop-relative position 0 so
 			// automation frac calculations stay in phase with _midiVisualPlayIndex.
 			// _midiVisualPlayIndex was just set to P0 = InitialMidiPlayIndex(...) above.
@@ -2824,7 +2864,7 @@ void LoopTake::Overdub(std::vector<unsigned int> channels,
 	{
 		for (auto midiChan : midiChannels)
 		{
-			auto midiLoop = std::make_shared<midi::MidiLoop>();
+			auto midiLoop = std::make_shared<midi::MidiLoop>(_sampleRate, _midiSeamMergeWindowMs);
 			graphics::MidiModelParams modelParams;
 			midiLoop->SetGroupId(utils::GetGuid());
 			modelParams.ModelScale = 1.0f;
@@ -3148,13 +3188,18 @@ std::vector<JobAction> LoopTake::_CommitChanges()
 	if (audioStateChanged)
 		_PublishAudioState();
 
+	bool vstTopologyChanged = false;
 	// Swap in the VST chain when the job thread has delivered a new one.
 	if (_flipVstChain.load(std::memory_order_acquire))
 	{
 		std::lock_guard<std::mutex> lock(_vstPathsMutex);
 		_flipVstChain.store(false, std::memory_order_release);
 		_vstChain.store(_backVstChain, std::memory_order_release);
+		vstTopologyChanged = true;
 	}
+	// Notify after releasing _vstPathsMutex. The parent commits before its
+	// children, so this schedules its next serialized dispatch publication.
+	if (vstTopologyChanged && _automationTopologyChanged) _automationTopologyChanged();
 
 	std::vector<JobAction> jobs;
 
@@ -3483,9 +3528,8 @@ bool LoopTake::RestoreMidiFromExport(const MidiExportState& state)
 			|| stream.Loop.LoopLengthSamps != state.LoopLengthSamps)
 			return false;
 
-		auto loop = std::make_shared<midi::MidiLoop>();
+		auto loop = std::make_shared<midi::MidiLoop>(_sampleRate, _midiSeamMergeWindowMs);
 		loop->SetGroupId(stream.Id.empty() ? utils::GetGuid() : stream.Id);
-		loop->SetSampleRate(_sampleRate);
 		if (!loop->RestoreFromExport(stream.Loop))
 			return false;
 
@@ -3515,6 +3559,7 @@ bool LoopTake::RestoreMidiFromExport(const MidiExportState& state)
 	_midiAnchorCorrection.store(0, std::memory_order_release);
 	_midiTransportStartSamps.store(state.QuantisationTransportStartSamps, std::memory_order_release);
 	_midiQuantisationPacked.store(state.Quantisation.Pack(), std::memory_order_release);
+	_ApplyAudioPhaseOffset();
 	_midiBaseGridPacked.store((static_cast<std::uint64_t>(state.BaseIntervalSamps) << 32u) | state.BaseDivisions, std::memory_order_release);
 	for (const auto& loop : _midiLoops)
 		loop->SetQuantisation(ResolvedMidiQuantisation(), state.QuantisationTransportStartSamps, _ForcedMidiQuantisationEnabled());
@@ -3568,6 +3613,10 @@ void LoopTake::_PublishAudioState()
 	state->VstBlockPtrs.resize(state->AudioBuffers.size(), nullptr);
 	for (auto i = 0u; i < state->AudioBuffers.size(); i++)
 		state->VstBlockPtrs[i] = state->VstBlockScratch.data() + (static_cast<size_t>(i) * constants::MaxBlockSize);
+	state->InstrumentScratch.resize(state->AudioBuffers.size() * constants::MaxBlockSize);
+	state->InstrumentPtrs.resize(state->AudioBuffers.size(), nullptr);
+	for (auto i = 0u; i < state->AudioBuffers.size(); ++i)
+		state->InstrumentPtrs[i] = state->InstrumentScratch.data() + (static_cast<size_t>(i) * constants::MaxBlockSize);
 	_audioState.store(state, std::memory_order_release);
 }
 
@@ -3599,6 +3648,7 @@ void LoopTake::_ArrangeChildren()
 		loop->SetSize(loopSize);
 		loop->SetModelPosition({ 0.0f, 0.0f, 0.0f });
 		loop->SetModelScale(1.0 + (loopCount * dScale) - (dTotalScale * 0.5));
+		loop->SetPickerLayoutHeight(static_cast<float>(loopSize.Height));
 
 		loopCount++;
 	}
@@ -3625,6 +3675,7 @@ GuiRackParams LoopTake::_GetRackParams(utils::Size2d size)
 {
 	GuiRackParams rackParams;
 	rackParams.EnableVstControl = true;
+	rackParams.EnableVstRack = true;
 	rackParams.Position = { 0, 0 };
 	rackParams.Size = size;
 	rackParams.MinSize = rackParams.Size;
@@ -3684,10 +3735,20 @@ void LoopTake::_UpdateMidiModelRotation()
 	}
 }
 
+void LoopTake::_ApplyAudioPhaseOffset() noexcept
+{
+	const auto offset = ResolvedMidiQuantisation().PhaseOffsetSamps;
+	for (const auto& loop : _loops)
+		if (loop) loop->SetInheritedPlaybackOffsetSamps(offset);
+	for (const auto& loop : _backLoops)
+		if (loop) loop->SetInheritedPlaybackOffsetSamps(offset);
+}
+
 void LoopTake::SetMidiQuantisation(const midi::MidiQuantisationSettings& settings) noexcept
 {
 	const auto previous = MidiQuantisation();
 	_midiQuantisationPacked.store(settings.Pack(), std::memory_order_release);
+	_ApplyAudioPhaseOffset();
 
 	if (previous != settings)
 	{
@@ -3797,6 +3858,7 @@ void LoopTake::SetMidiQuantisationInheritedPhaseOffset(std::int32_t offsetSamps)
 {
 	const auto previous = ResolvedMidiQuantisation();
 	_midiInheritedPhaseOffsetSamps.store(offsetSamps, std::memory_order_release);
+	_ApplyAudioPhaseOffset();
 	const auto updated = ResolvedMidiQuantisation();
 
 	if (previous != updated)
@@ -4504,15 +4566,22 @@ bool LoopTake::ReconfigureVstFormat(float sampleRate, unsigned int blockSize)
 	return true;
 }
 
-void LoopTake::SetSampleRate(float sampleRate)
+void LoopTake::SetSampleRate(float sampleRate, std::optional<unsigned int> midiSeamMergeWindowMs)
 {
-	_sampleRate = sampleRate;
-	for (auto& loop : _loops)
-		loop->SetSampleRate(sampleRate);
-	for (auto& loop : _backLoops)
-		loop->SetSampleRate(sampleRate);
+	std::scoped_lock midiLock(_midiCaptureMutex);
+	if (midiSeamMergeWindowMs)
+		_midiSeamMergeWindowMs = *midiSeamMergeWindowMs;
+	// Only the stopped-callback format transition may mutate audio-loop rate state.
+	if (_sampleRate != sampleRate)
+	{
+		_sampleRate = sampleRate;
+		for (auto& loop : _loops)
+			loop->SetSampleRate(sampleRate);
+		for (auto& loop : _backLoops)
+			loop->SetSampleRate(sampleRate);
+	}
 	for (auto& midiLoop : _midiLoops)
-		if (midiLoop) midiLoop->SetSampleRate(sampleRate);
+		if (midiLoop) midiLoop->SetSampleRate(sampleRate, _midiSeamMergeWindowMs);
 }
 
 void LoopTake::SetParentVisualScale(float scale) noexcept
@@ -4551,9 +4620,13 @@ void LoopTake::ForceUnloadAllVstPlugins()
 	}
 }
 
-void LoopTake::LoadVstPlugin(std::wstring path,
+std::string LoopTake::LoadVstPlugin(std::wstring path,
 	std::vector<std::uint8_t> initialState)
 {
+	{
+		std::lock_guard<std::mutex> lock(_vstPathsMutex);
+		if (_vstSavedEntries.size() + _vstJobsPending.load(std::memory_order_acquire) >= 32u) return {};
+	}
 	JobAction job;
 	job.JobActionType = JobAction::JOB_LOADVST;
 	job.VstPath = std::move(path);
@@ -4561,7 +4634,9 @@ void LoopTake::LoadVstPlugin(std::wstring path,
 	job.VstIdentity = utils::GetGuid();
 	_pendingVstLoads.push_back(std::move(job));
 	_vstJobsPending.fetch_add(1u, std::memory_order_release);
+	++_rackRevision;
 	_changesMade = true;
+	return _pendingVstLoads.back().VstIdentity;
 }
 
 vst::VstRackSlot LoopTake::GetVstRackSlot() const
@@ -4580,12 +4655,15 @@ vst::VstRackSlot LoopTake::GetVstRackSlot() const
 	return slot;
 }
 
-bool LoopTake::LoadManagedVstPlugin(std::wstring path)
+bool LoopTake::LoadManagedVstPlugin(std::wstring path, const std::string& identity)
 {
-	const auto slot = GetVstRackSlot();
-	if (slot.Pending || slot.Plugin || path.empty()) return false;
-	LoadVstPlugin(std::move(path));
-	_pendingVstLoads.back().VstManaged = true;
+	auto slots = GetVstRackSlots();
+	const auto found = identity.empty() ? slots.begin() : std::find_if(slots.begin(), slots.end(), [&](const auto& slot) { return slot.Identity == identity; });
+	if (path.empty() || (!identity.empty() && found == slots.end())) return false;
+	if (found != slots.end() && (found->Pending || found->Plugin)) return false;
+	if (LoadVstPlugin(std::move(path)).empty()) return false;
+	_pendingVstLoads.back().VstManaged = found != slots.end();
+	if (found != slots.end() && !identity.empty()) _pendingVstLoads.back().VstIdentity = found->Identity;
 	return true;
 }
 
@@ -4634,6 +4712,7 @@ bool LoopTake::LoadVstPluginSynchronously(const std::wstring& path,
 	saved.Bypass = bypass;
 	saved.State = io::JamFile::VstEntry::EncodeState(initialState);
 	_vstSavedEntries.push_back(std::move(saved));
+	++_rackRevision;
 	return loaded;
 }
 
@@ -4649,7 +4728,15 @@ void LoopTake::UnloadVstPlugin(size_t index)
 	}
 	_pendingVstUnloads.push_back(std::move(job));
 	_vstJobsPending.fetch_add(1u, std::memory_order_release);
+	++_rackRevision;
 	_changesMade = true;
+}
+
+void LoopTake::SetAutomationTopologyChangedCallback(std::function<void()> changed)
+{
+	_automationTopologyChanged = std::move(changed);
+	for (const auto& loop : _loops) if (loop) loop->SetAutomationTopologyChangedCallback(_automationTopologyChanged);
+	for (const auto& loop : _backLoops) if (loop) loop->SetAutomationTopologyChangedCallback(_automationTopologyChanged);
 }
 
 std::shared_ptr<vst::IVstPlugin> LoopTake::GetVstPlugin(size_t index) const
@@ -4822,4 +4909,44 @@ void LoopTake::_PublishRecordingCompletion(std::uint64_t generation) noexcept
 		return;
 	_pendingCompletionGeneration.store(generation, std::memory_order_release);
 	_changesMade.store(true, std::memory_order_release);
+}
+
+std::vector<vst::VstRackSlot> LoopTake::GetVstRackSlots(std::size_t offset) const
+{
+	std::lock_guard<std::mutex> lock(_vstPathsMutex);
+	const auto chain = _flipVstChain.load(std::memory_order_acquire) ? _backVstChain : _vstChain.load(std::memory_order_acquire);
+	std::vector<vst::VstRackSlot> result;
+	for (auto i = std::min(offset, _vstSavedEntries.size()); i < _vstSavedEntries.size() && result.size() < 32u; ++i)
+	{
+		vst::VstRackSlot slot;
+		slot.Identity = _vstSavedEntries[i].Id;
+		slot.Path = utils::DecodeUtf8(_vstSavedEntries[i].Path);
+		slot.Plugin = chain ? chain->GetPlugin(i) : nullptr;
+		slot.Pending = _vstJobsPending.load(std::memory_order_acquire) != 0u || _flipVstChain.load(std::memory_order_acquire);
+		slot.Failed = !slot.Plugin && !slot.Pending;
+		result.push_back(std::move(slot));
+	}
+	return result;
+}
+
+bool LoopTake::MoveVstSlot(const vst::RackMove& move)
+{
+	std::lock_guard<std::mutex> lock(_vstPathsMutex);
+	if (_vstJobsPending.load(std::memory_order_acquire) != 0u
+		|| !move.Valid(vst::RackMove::Scope::Take, Id(), RackRevision(), _vstSavedEntries)) return false;
+	const auto chain = _flipVstChain.load(std::memory_order_acquire) ? _backVstChain : _vstChain.load(std::memory_order_acquire);
+	auto replacement = move.Stage(chain, _vstSavedEntries, _vstPluginPaths);
+	if (!replacement) return false;
+	_backVstChain = std::move(replacement);
+	++_rackRevision;
+	_flipVstChain.store(true, std::memory_order_release);
+	_changesMade = true;
+	return true;
+}
+
+std::shared_ptr<engine::Loop> engine::LoopTake::FindStagedAudioLoopById(const std::string& id) const
+{
+	for (const auto& loop : _backLoops)
+		if (loop && loop->Id() == id) return loop;
+	return nullptr;
 }

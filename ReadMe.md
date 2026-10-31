@@ -2,11 +2,19 @@
 
 [![Build Status](https://dev.azure.com/mattojones/mattojones/_apis/build/status/Jamma-x64-Release?branchName=master)](https://dev.azure.com/mattojones/mattojones/_build/latest?definitionId=1&branchName=master)
 
-Multichannel loopsampling software for recording and live performance.
+Jamma is free Windows multichannel loop-sampling software for recording and live performance. Build a session from audio and MIDI loops, layer new takes, and shape them as you play. Its spatial interface puts each instrument's loops around a station, with controls for hands-on use or footpedal operation.
 
-![JammaV_Screenshot](https://github-production-user-asset-6210df.s3.amazonaws.com/172774419/606049963-08fd0f48-8f11-495a-83e8-f19a0cad3f1b.png?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=AKIAVCODYLSA53PQK4ZA%2F20260610%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260610T205856Z&X-Amz-Expires=300&X-Amz-Signature=f4e94adf8d931e0c9b1eb3a66073533e202d646cfd62b83fe36cfd1ae235cdf4&X-Amz-SignedHeaders=host&response-content-type=image%2Fpng)
+![Jamma playing a session with multiple loop stations](https://github.com/user-attachments/assets/80334e4d-ac59-4e57-9f1d-92420feff840)
 
-Current Version: v5.0.2
+Explore individual loops and bring their controls into view while the session plays.
+
+![Loop controls opening around a playing station](https://github.com/user-attachments/assets/01f61a85-62b1-4258-bdf8-f7a06a2b8d34)
+
+Open a loop to work on the details: edit MIDI notes or paint directly into an audio loop's spectrum. The clip below switches between the two editors.
+
+![MIDI note editing followed by a wipe to audio spectral painting](https://github.com/user-attachments/assets/fbe08251-caa0-4dd9-bb86-a642734acd7d)
+
+Current Version: v5.0.5
 
 ## Features
 

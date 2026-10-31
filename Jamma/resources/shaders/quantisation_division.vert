@@ -7,7 +7,11 @@ layout(location = 3) in vec4 InstanceTransformIN;
 layout(location = 4) in float InstanceBandIN;
 layout(location = 5) in float InstanceFillHalfWidthIN;
 
+layout(location = 6) in float InstanceMidiColoursIN;
+
 uniform mat4 MVP;
+
+flat out float MidiColours;
 
 out float BandValue;
 out vec3 Normal;
@@ -15,6 +19,7 @@ out vec3 LocalPosition;
 
 void main()
 {
+	MidiColours = InstanceMidiColoursIN;
 	float angle = InstanceTransformIN.x;
 	float c = cos(angle);
 	float s = sin(angle);

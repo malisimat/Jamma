@@ -14,6 +14,7 @@
 
 namespace audio
 {
+	class AsioStream;
 	struct AudioStreamParams
 	{
 		std::string Name; // The actual name of the device
@@ -92,24 +93,25 @@ namespace audio
 	public:
 		AudioDevice();
 		AudioDevice(AudioStreamParams audioStreamParams,
-			std::unique_ptr<RtAudio> stream);
+			std::unique_ptr<AsioStream> stream);
 		~AudioDevice();
 
 	public:
-		void SetDevice(std::unique_ptr<RtAudio> device);
+		void SetDevice(std::unique_ptr<AsioStream> device);
 		bool Start();
 		void Stop();
 		bool TryStop();
 		bool Pause();
 		bool Resume();
-		bool IsRunning() const { return _stream && _stream->isStreamRunning(); }
-		bool IsOpen() const { return _stream && _stream->isStreamOpen(); }
+		bool IsRunning() const;
+		bool IsOpen() const;
+		bool ResetRequested() const;
 		AudioStreamParams GetAudioStreamParams();
 
 	private:
 		static void ReportBackendError(RtAudioError::Type type, const std::string& message) noexcept;
 		AudioStreamParams _audioStreamParams;
-		std::unique_ptr<RtAudio> _stream;
+		std::unique_ptr<AsioStream> _stream;
 		StreamState _streamState;
 
 	public:

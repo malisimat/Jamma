@@ -66,6 +66,9 @@ namespace engine
 		float UnfittedHalfHeight() const;
 		void SetSceneHeightScale(float scale) noexcept { _sceneHeightScale = std::clamp(scale, 0.0f, 1.0f); }
 		static float FitSceneHeight(float largestHalfHeight, float bandHeight) noexcept;
+		// Half-height is expressed in Loop-local geometry, before its model scale.
+		void SetPickerHalfHeight(float halfHeight) noexcept { _pickerHalfHeight = (std::max)(0.0f, halfHeight); }
+		static float PickerLocalHalfHeight(float availableHeight, float modelScale) noexcept;
 		double LoopIndexFrac() const;
 		void SetLoopIndexFrac(double frac);
 		void SetLoopState(LoopModelState state);
@@ -137,6 +140,10 @@ namespace engine
 		static constexpr float _DisplayScale = 1.3f;
 		static const float _UnitMeshRadius;
 		static constexpr unsigned int _WaveformSegments = 2048u;
+		static constexpr unsigned int _PickerSegments = 128u;
+		unsigned int _pickerVertexArray = 0u;
+		std::array<unsigned int, 2> _pickerBuffers{};
+		float _pickerHalfHeight = 1.0f;
 		static constexpr unsigned int _WaveformPboCount = 2u;
 		static constexpr unsigned long _RecordingWaveformUpdateIntervalSamps =
 			constants::DefaultSampleRate / 30ul;

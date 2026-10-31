@@ -6,6 +6,7 @@
 // length, read/write positions, fades, and loop-local phase.
 
 #include <atomic>
+#include <functional>
 #include <string>
 #include <memory>
 #include <mutex>
@@ -32,6 +33,7 @@
 #include "../graphics/GlDrawContext.h"
 #include "../resources/WavResource.h"
 #include "../vst/VstChain.h"
+#include "../vst/RackMove.h"
 #include "../audio/PlaybackDelay.h"
 
 namespace engine
@@ -123,6 +125,9 @@ namespace engine
 			_pitch(other._pitch),
 			_loopLength(other._loopLength.load(std::memory_order_relaxed)),
 			_playState(other._playState.load(std::memory_order_relaxed)),
+			_playbackOffsetSamps(other.PlaybackOffsetSamps()),
+			_inheritedPlaybackOffsetSamps(other._inheritedPlaybackOffsetSamps.load(std::memory_order_relaxed)),
+			_appliedPlaybackOffsetSamps(static_cast<double>(other.TotalPlaybackOffsetSamps())),
 			_playIndex(other._playIndex.load(std::memory_order_relaxed)),
 			_loopParams{other._loopParams},
 			_mixer(std::move(other._mixer)),
@@ -134,13 +139,15 @@ namespace engine
 			_vstChain(),
 			_backVstChain(std::move(other._backVstChain)),
 			_flipVstChain(other._flipVstChain.load(std::memory_order_relaxed)),
+			_automationTopologyChanged(std::move(other._automationTopologyChanged)),
 			_pendingVstLoads(std::move(other._pendingVstLoads)),
 			_pendingVstUnloads(std::move(other._pendingVstUnloads)),
 			_sampleRate(other._sampleRate.load(std::memory_order_relaxed)),
 			_blockSize(other._blockSize),
 			_vstPluginPaths(std::move(other._vstPluginPaths)),
 			_vstSavedEntries(std::move(other._vstSavedEntries)),
-			_vstJobsPending(other._vstJobsPending.exchange(0u))
+			_vstJobsPending(other._vstJobsPending.exchange(0u)),
+			_rackRevision(other._rackRevision.fetch_add(1u) + 1u)
 		{
 			other._InvalidateAudioSource();
 			_vstChain.store(other._vstChain.exchange(nullptr, std::memory_order_acq_rel), std::memory_order_release);
@@ -172,6 +179,13 @@ namespace engine
 				_loopLength.store(other._loopLength.exchange(loopLength, std::memory_order_relaxed), std::memory_order_relaxed);
 				auto writeIndex = _writeIndex.load(std::memory_order_relaxed);
 				_writeIndex.store(other._writeIndex.exchange(writeIndex, std::memory_order_relaxed), std::memory_order_relaxed);
+				auto offset = PlaybackOffsetSamps();
+				_playbackOffsetSamps.store(other._playbackOffsetSamps.exchange(offset, std::memory_order_relaxed), std::memory_order_relaxed);
+				const auto inheritedOffset = _inheritedPlaybackOffsetSamps.load(std::memory_order_relaxed);
+				_inheritedPlaybackOffsetSamps.store(other._inheritedPlaybackOffsetSamps.exchange(inheritedOffset, std::memory_order_relaxed), std::memory_order_relaxed);
+				_playbackOffsetInitialised = other._playbackOffsetInitialised = false;
+				_playbackOffsetPublished.store(false, std::memory_order_relaxed);
+				other._playbackOffsetPublished.store(false, std::memory_order_relaxed);
 				auto playIndex = _playIndex.load(std::memory_order_relaxed);
 				_playIndex.store(other._playIndex.exchange(playIndex, std::memory_order_relaxed), std::memory_order_relaxed);
 				auto playState = _playState.load(std::memory_order_relaxed);
@@ -187,6 +201,7 @@ namespace engine
 				auto chain = _vstChain.exchange(other._vstChain.load(std::memory_order_acquire), std::memory_order_acq_rel);
 				other._vstChain.store(chain, std::memory_order_release);
 				_backVstChain.swap(other._backVstChain);
+				_automationTopologyChanged.swap(other._automationTopologyChanged);
 				_playbackDelay.swap(other._playbackDelay);
 				bool flip = _flipVstChain.load(std::memory_order_relaxed);
 				_flipVstChain.store(other._flipVstChain.load(std::memory_order_relaxed), std::memory_order_relaxed);
@@ -201,6 +216,8 @@ namespace engine
 				std::swap(_vstSavedEntries, other._vstSavedEntries);
 				const auto pending = _vstJobsPending.exchange(other._vstJobsPending.load());
 				other._vstJobsPending.store(pending);
+				++_rackRevision;
+				++other._rackRevision;
 			}
 
 			return *this;
@@ -311,6 +328,7 @@ namespace engine
 		// UI wiring keeps a weak reference; this Loop owns the post-gain source.
 		std::shared_ptr<audio::AudioMixer> Mixer() const noexcept { return _mixer; }
 		void SetMasterVisualScale(float scale) noexcept;
+		void SetPickerLayoutHeight(float availableHeight) noexcept;
 		void SetVisualUpdatesEnabled(bool enabled);
 		bool Load(const io::WavReadWriter& readWriter);
 		void Record();
@@ -335,6 +353,19 @@ namespace engine
 		unsigned long SceneAnchor() const noexcept { return _sceneAnchor.load(std::memory_order_relaxed); }
 		void InvalidateSceneAnchor() noexcept { _hasSceneAnchor.store(false, std::memory_order_release); }
 		void ShiftPlayIndex(long long deltaSamps) noexcept;
+		// Positive SHFT delays this audio source; transport/anchor cursors stay unchanged.
+		void SetPlaybackOffsetSamps(std::int32_t samples) noexcept { _playbackOffsetSamps.store(samples, std::memory_order_relaxed); }
+		std::int32_t PlaybackOffsetSamps() const noexcept { return _playbackOffsetSamps.load(std::memory_order_relaxed); }
+		// Owner-published take/station/global sum; persisted at those owners only.
+		void SetInheritedPlaybackOffsetSamps(std::int32_t samples) noexcept { _inheritedPlaybackOffsetSamps.store(samples, std::memory_order_relaxed); }
+		std::int64_t TotalPlaybackOffsetSamps() const noexcept
+		{ return static_cast<std::int64_t>(PlaybackOffsetSamps()) + _inheritedPlaybackOffsetSamps.load(std::memory_order_relaxed); }
+		// Before first audio publication, initial targets are already exact for presentation.
+		double AppliedPlaybackOffsetSamps() const noexcept
+		{ return _playbackOffsetPublished.load(std::memory_order_acquire)
+			? _appliedPlaybackOffsetSamps.load(std::memory_order_relaxed) : TotalPlaybackOffsetSamps(); }
+		unsigned long PlaybackBodyIndex() const noexcept;
+		static unsigned long OffsetBodyIndex(unsigned long phase, unsigned long length, std::int64_t offset) noexcept;
 		unsigned long PlayIndex() const noexcept
 		{
 			return _playIndex.load(std::memory_order_relaxed);
@@ -375,7 +406,7 @@ namespace engine
 
 		// VST chain management — staging only; actual load/unload happens on the
 		// job thread after CommitChanges() queues the appropriate job.
-		void LoadVstPlugin(std::wstring path,
+		std::string LoadVstPlugin(std::wstring path,
 			std::vector<std::uint8_t> initialState = {});
 		// Startup-only: synchronously construct and publish one plugin before this
 		// loop can enter an audio snapshot.
@@ -384,7 +415,7 @@ namespace engine
 			bool bypass = false, const std::string& stateId = {});
 		void UnloadVstPlugin(size_t index);
 		vst::VstRackSlot GetVstRackSlot() const;
-		bool LoadManagedVstPlugin(std::wstring path);
+		bool LoadManagedVstPlugin(std::wstring path, const std::string& identity = {});
 		bool UnloadManagedVstPlugin(const std::string& identity);
 		void ForceUnloadAllVstPlugins();
 		void SetSampleRate(float sampleRate);
@@ -394,6 +425,17 @@ namespace engine
 
 		// Non-RT accessor to retrieve a loaded plugin instance (or nullptr).
 		std::shared_ptr<vst::IVstPlugin> GetVstPlugin(size_t index) const;
+		std::vector<vst::VstRackSlot> GetVstRackSlots(std::size_t offset = 0u) const;
+		std::uint64_t RackRevision() const noexcept { return _rackRevision.load(std::memory_order_acquire); }
+		bool MoveVstSlot(const vst::RackMove& move);
+		void SetAutomationTopologyChangedCallback(std::function<void()> changed)
+			{ _automationTopologyChanged = std::move(changed); }
+		std::shared_ptr<vst::IVstPlugin> FindVstPlugin(const vst::IVstPlugin* observer,
+			const std::string& identity, std::size_t& index) const
+		{
+			const auto chain = _vstChain.load(std::memory_order_acquire);
+			return chain ? chain->FindPlugin(observer, identity, index) : nullptr;
+		}
 		bool OwnsPlugin(const vst::IVstPlugin* plugin) const noexcept
 		{
 			const auto chain = _vstChain.load(std::memory_order_acquire);
@@ -472,6 +514,17 @@ namespace engine
 		// Current playback position, in samples. Advanced by ReadBlock().
 		// Source coordinates exclude plugin latency. Recorded rendering applies
 		// compensation after the loop chain, preserving capture/fade coordinates.
+		std::atomic<std::int32_t> _playbackOffsetSamps{ 0 };
+		std::atomic<std::int32_t> _inheritedPlaybackOffsetSamps{ 0 };
+		std::atomic<double> _appliedPlaybackOffsetSamps{ 0.0 };
+		std::atomic<bool> _playbackOffsetPublished{ false };
+		// Callback-owned trajectory; reads evaluate it without advancing it.
+		bool _playbackOffsetInitialised = false;
+		double _playbackOffsetStart = 0.0, _playbackOffsetEnd = 0.0, _playbackOffsetRate = 0.0;
+		unsigned long _playbackOffsetLength = 0ul;
+		double _PlaybackOffsetAtFrame(unsigned int frame) const noexcept;
+		void _AdvancePlaybackOffset(unsigned int numSamps) noexcept;
+		void _InitialisePlaybackOffset() noexcept;
 		std::atomic<unsigned long> _playIndex;
 		std::atomic<unsigned long> _sceneAnchor{ 0ul };
 		std::atomic_bool _hasSceneAnchor{ false };
@@ -494,6 +547,9 @@ namespace engine
 		std::shared_ptr<audio::PlaybackDelay> _playbackDelay = std::make_shared<audio::PlaybackDelay>();
 		std::shared_ptr<vst::VstChain> _backVstChain;
 		std::atomic<bool> _flipVstChain{ false };
+		// Scene-serialized non-audio membership/commit only. Callback captures a
+		// weak Station owner and is never invoked from audio or plugin jobs.
+		std::function<void()> _automationTopologyChanged;
 		std::vector<actions::JobAction> _pendingVstLoads;
 		std::vector<actions::JobAction> _pendingVstUnloads;
 		std::atomic<float> _sampleRate{ static_cast<float>(constants::DefaultSampleRate) };
@@ -505,6 +561,7 @@ namespace engine
 		std::vector<io::JamFile::VstEntry> _vstSavedEntries;
 		// UI stages requests, job completes them. Audio never reads this counter.
 		std::atomic<unsigned int> _vstJobsPending{ 0u };
+		std::atomic<std::uint64_t> _rackRevision{1u};
 
 	private:
 		std::size_t _CollectAudioSourceCaptures(); // Off callback only.

@@ -15,6 +15,7 @@
 #include "engine/Station.h"
 #include "engine/Trigger.h"
 #include "io/IoSessionExporter.h"
+#include "io/IoSessionLoader.h"
 #include "io/JamFile.h"
 #include "io/NativeMidiSidecar.h"
 
@@ -379,6 +380,9 @@ TEST(IoSessionExporter, SavesLooplessStationConfigurationWithoutTransport)
 	station->CommitChanges();
 	Quantiser quantiser;
 	quantiser.SetClock(std::make_shared<utils::Timer>());
+	quantiser.Clock()->SetQuantisation(29242u, utils::Timer::QUANTISE_POWER);
+	quantiser.Clock()->SetSeedSourceLength(116968ul);
+	quantiser.Clock()->SetMasterLoopSampleOffset(41195ul);
 	audio::AudioStreamParams stream{};
 	io::UserConfig user{};
 	std::mutex sceneMutex;
@@ -408,6 +412,7 @@ TEST(IoSessionExporter, RoundedLogicalAudioBoundaryRetainsPhysicalTailAfterReloa
 	auto take = IoSessionExporterTest::MakeTake("rounded-take");
 	auto loop = IoSessionExporterTest::MakeAudioLoop(101u, 0u, 37u, 0.005f);
 	const auto recorded = loop->ExportSamples();
+	loop->SetPlaybackOffsetSamps(-2000000017);
 	loop->Play(loop->PlayIndex(), 100u, false);
 	take->AddLoop(loop);
 	take->CommitChanges();
@@ -431,6 +436,8 @@ TEST(IoSessionExporter, RoundedLogicalAudioBoundaryRetainsPhysicalTailAfterReloa
 	const auto restored = Loop::FromFile({}, saved->Stations[0].LoopTakes[0].Loops[0], dir.wstring());
 	ASSERT_TRUE(restored);
 	EXPECT_EQ(100u, (*restored)->LoopLength());
+	EXPECT_EQ(-2000000017, (*restored)->PlaybackOffsetSamps());
+	EXPECT_EQ(loop->PlaybackBodyIndex(), (*restored)->PlaybackBodyIndex());
 	EXPECT_EQ(101u, (*restored)->PhysicalLoopLength());
 	const auto restoredSamples = (*restored)->ExportSamples(true);
 	ASSERT_EQ(recorded.size(), restoredSamples.size());
@@ -646,6 +653,110 @@ TEST(IoSessionExporter, PreservesSparseGroupRowsAndRuntimeIdentity)
     EXPECT_EQ(jam->MuteActiveGroup, 7u);
 }
 
+TEST(IoSessionExporter, UnavailableRackAutomationRemainsSaveableAndIdentityBound)
+{
+	struct DirectoryCleanup
+	{
+		std::filesystem::path Path;
+		~DirectoryCleanup() { std::error_code error; std::filesystem::remove_all(Path, error); }
+	} directory{IoSessionExporterTest::MakeDirectory()};
+	io::NativeMidiSidecar::Stream sidecar;
+	sidecar.LogicalLength = 128u;
+	io::JamFile::AutomationLane lane;
+	lane.Mapping = io::JamFile::AutomationLane::MappingType::Editor;
+	lane.TargetPluginId = "saved-plugin-0";
+	lane.TargetParameterIndex = 7u;
+	lane.Points = {{0.0, 0.25}, {0.5, 0.75}};
+	sidecar.Lanes.push_back(lane);
+	const std::array<std::string, 4> rawIds{"saved-plugin-0", std::string("bad\0id", 6), std::string(1025u, 'x'), std::string("\xc0\x80", 2)};
+	for (auto caseIndex = 0u; caseIndex < rawIds.size(); ++caseIndex)
+	{
+		// Empty sidecar IDs model the legacy index-only contract. Migration
+		// must keep malformed raw rack metadata while emitting valid sidecars.
+		sidecar.Lanes[0].TargetPluginId = caseIndex == 0u ? "saved-plugin-0" : "";
+		{
+			std::ofstream output(directory.Path / "automation.jammidi", std::ios::binary);
+			ASSERT_TRUE(io::NativeMidiSidecar::ToStream(sidecar, output));
+		}
+		for (const auto slots : {1u, 33u})
+		{
+			SCOPED_TRACE(slots);
+			io::JamFile::Station descriptor{};
+			descriptor.Name = "unavailable-rack";
+			descriptor.Id = "saved-station";
+			descriptor.MidiChannelRoutes[0].PluginIds = {caseIndex == 0u ? "normal-missing" : "", rawIds[caseIndex], "other-missing"};
+			for (auto index = 0u; index < slots; ++index)
+			{
+				io::JamFile::VstEntry entry;
+				entry.Id = index == 0u ? rawIds[caseIndex] : "saved-plugin-" + std::to_string(index);
+				entry.Path = "missing-test-plugin.dll";
+				descriptor.VstChain.push_back(std::move(entry));
+			}
+			io::JamFile::LoopTake take{};
+			take.Name = "automation-take";
+			take.Id = "automation-take";
+			take.MidiPlayLength = 128u;
+			take.MidiStreams.push_back({"automation.jammidi", 0u, "test", 128u, 0u});
+			descriptor.LoopTakes.push_back(std::move(take));
+			StationParams params;
+			params.Size = {200u, 300u};
+			auto restored = Station::FromFile(params, Station::GetMixerParams(params.Size,
+				audio::MergeMixBehaviourParams{}), descriptor, directory.Path.wstring());
+			ASSERT_TRUE(restored);
+			(*restored)->CommitChanges();
+			EXPECT_EQ(slots > Station::MaxRackPlugins || caseIndex != 0u, (*restored)->RackInactive());
+			const auto destination = directory.Path / (std::to_string(caseIndex) + "-" + std::to_string(slots));
+			ASSERT_TRUE(std::filesystem::create_directory(destination));
+			Quantiser quantiser;
+			quantiser.SetClock(std::make_shared<utils::Timer>());
+			quantiser.ApplyTiming({32u, 128ul, 4u, 120.0f, 4u}, "automation persistence fixture");
+			std::mutex sceneMutex;
+			audio::AudioStreamParams stream{};
+			ASSERT_TRUE(io::IoSessionExporter::ExportSessionToDirectory({*restored}, {}, quantiser,
+				io::JamFile::GlobalMidiQuantState::Off, 0.0, {}, stream, nullptr, sceneMutex,
+				nullptr, destination.wstring()));
+			std::ifstream manifest(destination / "session.jam");
+			std::stringstream contents;
+			contents << manifest.rdbuf();
+			EXPECT_TRUE(io::Json::FromStrictStream(std::stringstream(contents.str())).has_value());
+			const auto saved = io::JamFile::FromStream(std::move(contents));
+			ASSERT_TRUE(saved);
+			ASSERT_EQ(1u, saved->Stations.size());
+			EXPECT_EQ(slots, saved->Stations[0].VstChain.size());
+			EXPECT_EQ(rawIds[caseIndex], saved->Stations[0].VstChain[0].Id);
+			EXPECT_EQ(descriptor.MidiChannelRoutes[0].PluginIds, saved->Stations[0].MidiChannelRoutes[0].PluginIds);
+			const auto& savedStream = saved->Stations[0].LoopTakes[0].MidiStreams[0];
+			std::ifstream midiFile(destination / savedStream.SidecarPath, std::ios::binary);
+			const auto exported = io::NativeMidiSidecar::FromStream(midiFile);
+			ASSERT_TRUE(exported);
+			ASSERT_EQ(1u, exported->Lanes.size());
+			const auto expectedIdentity = exported->Lanes[0].TargetPluginId;
+			EXPECT_TRUE(io::NativeMidiSidecar::ValidatePluginIdentity(expectedIdentity));
+			EXPECT_FALSE(expectedIdentity.empty());
+			if (caseIndex == 0u) EXPECT_EQ("saved-plugin-0", expectedIdentity);
+			else EXPECT_EQ(0u, expectedIdentity.find("unavailable:"));
+			EXPECT_EQ(lane.TargetScope, exported->Lanes[0].TargetScope);
+			EXPECT_EQ(lane.TargetPluginIndex, exported->Lanes[0].TargetPluginIndex);
+			EXPECT_EQ(lane.TargetLoopIndex, exported->Lanes[0].TargetLoopIndex);
+			EXPECT_EQ(7u, exported->Lanes[0].TargetParameterIndex);
+			ASSERT_EQ(2u, exported->Lanes[0].Points.size());
+			EXPECT_DOUBLE_EQ(0.75, exported->Lanes[0].Points[1].Value);
+			// The old index now names a different plugin. Stable ID still prevents
+			// resolution to that survivor after another load and save.
+			auto replaced = saved->Stations[0];
+			replaced.VstChain[0].Id = "replacement-plugin";
+			auto reloaded = Station::FromFile(params, Station::GetMixerParams(params.Size,
+				audio::MergeMixBehaviourParams{}), replaced, destination.wstring());
+			ASSERT_TRUE(reloaded);
+			LoopTake::MidiExportState captured;
+			ASSERT_TRUE((*reloaded)->GetLoopTakeSnapshot().front()->SnapshotMidiForExport(captured));
+			const auto& retained = captured.Streams.front().Loop.AutomationLanes[0];
+			EXPECT_EQ(expectedIdentity, retained.SavedTarget.PluginId);
+			EXPECT_EQ(nullptr, retained.TargetPlugin);
+		}
+	}
+}
+
 TEST(IoSessionExporter, RestoresLegacyMidiSessionMaterial)
 {
     struct DirectoryCleanup
@@ -693,4 +804,29 @@ TEST(IoSessionExporter, RestoresLegacyMidiSessionMaterial)
         EXPECT_FALSE(io::JamFile::Station::FromJson(object));
         EXPECT_FALSE(io::JamFile::LoopTake::FromJson(object));
     }
+}
+
+TEST(IoSessionExporter, SavesLegacyStationsWithUnidentifiedVstSlots)
+{
+	// Reserve an explicit identity that the first legacy station would otherwise
+	// generate, then ensure both missing station and VST IDs remain unique.
+	const auto legacy = R"({"name":"legacy","stations":[{"name":"keys-a","stationtype":0,"takes":[{"name":"shared","loops":[]}],"vst":[{"path":"missing-a.dll","bypass":false,"state":""}]},{"name":"keys-b","stationtype":0,"takes":[{"name":"shared","loops":[]}],"vst":[{"path":"missing-b.dll","bypass":false,"state":""}]},{"id":"legacy:station:0","name":"explicit","stationtype":0,"takes":[],"vst":[{"id":"station:1:vst:0","path":"missing-c.dll","bypass":false,"state":""}]}],"quantisesamps":1,"quantisation":"off"})";
+	const auto jam = io::JamFile::FromStream(std::stringstream(legacy));
+	ASSERT_TRUE(jam);
+	const auto loaded = io::IoSessionLoader::Reconstruct(*jam, io::RigFile{}, L"");
+	ASSERT_EQ(3u, loaded.Stations.size());
+	const auto exported = IoSessionExporterTest::ExportManifest(loaded.Stations);
+	ASSERT_TRUE(exported);
+	ASSERT_EQ(3u, exported->Stations.size());
+	ASSERT_EQ(1u, exported->Stations[0].VstChain.size());
+	ASSERT_EQ(1u, exported->Stations[1].VstChain.size());
+	EXPECT_EQ("legacy:station:0", exported->Stations[2].Id);
+	EXPECT_NE("legacy:station:0", exported->Stations[0].Id);
+	EXPECT_NE("legacy:station:0", exported->Stations[1].Id);
+	EXPECT_NE(exported->Stations[0].VstChain[0].Id, exported->Stations[1].VstChain[0].Id);
+	ASSERT_EQ(1u, exported->Stations[0].LoopTakes.size());
+	ASSERT_EQ(1u, exported->Stations[1].LoopTakes.size());
+	EXPECT_NE(exported->Stations[0].LoopTakes[0].Id, exported->Stations[1].LoopTakes[0].Id);
+	EXPECT_EQ("station:1:vst:0", exported->Stations[2].VstChain[0].Id);
+	EXPECT_NE("station:1:vst:0", exported->Stations[0].VstChain[0].Id);
 }

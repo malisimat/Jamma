@@ -19,6 +19,16 @@ CtrlHandleOverlay::CtrlHandleOverlay()
 		params.CenterHorizontally = true;
 		_captions[index] = std::make_shared<gui::GuiLabel>(params);
 	}
+	auto scopeParams = gui::GuiLabelParams::PanelHeader("", static_cast<int>(2 * ButtonW + ButtonGap));
+	scopeParams.CenterHorizontally = true;
+	_scopeLabel = std::make_shared<gui::GuiLabel>(scopeParams);
+}
+
+void CtrlHandleOverlay::SetScopeLabel(const std::string& text)
+{
+	if (_scopeText == text) return;
+	_scopeText = text;
+	_scopeLabel->SetString(text);
 }
 
 CtrlHandleOverlay::~CtrlHandleOverlay()
@@ -32,12 +42,18 @@ void CtrlHandleOverlay::SetAnchor(utils::Position2d screenPos, utils::Size2d sce
 	_sceneSize = sceneSize;
 
 	const auto visibleButtons = (std::max)(_visibleButtonCount, 1);
-	const auto totalW = visibleButtons * ButtonW + (visibleButtons - 1) * ButtonGap;
-	float panelX = static_cast<float>(_anchorPos.X) - totalW * 0.5f;
-	float panelY = static_cast<float>(_anchorPos.Y) - AnchorOffsetY - ButtonH;
+	const auto totalW = (std::max)(150.0f, visibleButtons * ButtonW + (visibleButtons - 1) * ButtonGap);
+	// Pin beside the press position, toward the screen's centre in each quadrant.
+	// Leave a gap on both axes so Ctrl never puts an action under the cursor.
+	float panelX = static_cast<float>(_anchorPos.X) < _sceneSize.Width * 0.5f
+		? static_cast<float>(_anchorPos.X) + AnchorOffsetY
+		: static_cast<float>(_anchorPos.X) - AnchorOffsetY - totalW;
+	float panelY = static_cast<float>(_anchorPos.Y) < _sceneSize.Height * 0.5f
+		? static_cast<float>(_anchorPos.Y) + AnchorOffsetY
+		: static_cast<float>(_anchorPos.Y) - AnchorOffsetY - ButtonH;
 
 	const auto maxX = static_cast<float>(_sceneSize.Width) - totalW;
-	const auto maxY = static_cast<float>(_sceneSize.Height) - ButtonH;
+	const auto maxY = static_cast<float>(_sceneSize.Height) - ButtonH - 48.0f;
 	_panelX = std::clamp(panelX, 0.0f, std::max(maxX, 0.0f));
 	_panelY = std::clamp(panelY, 0.0f, std::max(maxY, 0.0f));
 }
@@ -115,6 +131,7 @@ void CtrlHandleOverlay::InitResources(ResourceLib& resourceLib, bool forceInit)
 	_shader = std::dynamic_pointer_cast<ShaderResource>(res);
 
 	for (auto& caption : _captions) caption->InitResources(resourceLib, forceInit);
+	_scopeLabel->InitResources(resourceLib, forceInit);
 
 	// Allocate a VBO large enough to hold all button quads (2 triangles each).
 	constexpr int FloatsPerButton = 6 * 2;  // 6 vertices × 2 floats (x, y)
@@ -147,6 +164,7 @@ void CtrlHandleOverlay::ReleaseResources()
 		_vertexArray = 0;
 	}
 	for (auto& caption : _captions) caption->ReleaseResources();
+	_scopeLabel->ReleaseResources();
 	_shader.reset();
 }
 
@@ -187,10 +205,10 @@ void CtrlHandleOverlay::Draw(base::DrawContext& ctx)
 		q[10] = x;  q[11] = y2;
 	}
 
-	const float panelRight = panelX + _visibleButtonCount * ButtonW + (_visibleButtonCount - 1) * ButtonGap;
+	const float panelRight = panelX + (std::max)(150.0f, _visibleButtonCount * ButtonW + (_visibleButtonCount - 1) * ButtonGap);
 	float* panel = &verts[NumButtons * FloatsPerButton];
 	const float left = panelX - 6.0f, right = panelRight + 6.0f;
-	const float bottom = panelY - 6.0f, top = panelY + ButtonH + 26.0f;
+	const float bottom = panelY - 6.0f, top = panelY + ButtonH + 48.0f;
 	const float panelVerts[] = {left,bottom,right,bottom,right,top,left,bottom,right,top,left,top};
 	std::copy(std::begin(panelVerts), std::end(panelVerts), panel);
 
@@ -234,6 +252,9 @@ void CtrlHandleOverlay::Draw(base::DrawContext& ctx)
 	glBindVertexArray(0);
 	glUseProgram(0);
 	auto opacity = ctx.WithOpacity(_alpha);
+	_scopeLabel->SetSize({static_cast<unsigned int>(panelRight - panelX), 22u});
+	_scopeLabel->SetPosition({static_cast<int>(panelX), static_cast<int>(panelY + ButtonH + 24.0f)});
+	_scopeLabel->Draw(ctx);
 	for (int i = 0; i < _visibleButtonCount; ++i)
 	{
 		if (_activeButton >= 0 && i != _activeButton) continue;

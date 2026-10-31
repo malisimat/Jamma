@@ -1,3 +1,4 @@
+#include "../gui/WorkspaceTestAccess.h"
 
 #include "gtest/gtest.h"
 #include <sstream>
@@ -315,6 +316,18 @@ public:
 	{
 	}
 
+	utils::Position2d CanvasPointForTest(utils::Position2d offset = {}) const
+	{
+		// Picker-driven tests still need a press outside the actual GUI chrome.
+		// The former (1,1) is inside the drawn status bar at these viewports.
+		const auto point = utils::Position2d{560, 200} + offset;
+		EXPECT_TRUE(utils::Size2d::RectTest(_sizeParams.Size, point));
+		EXPECT_FALSE(_workspace->Hud()->CapturesPointer(_workspace->Hud()->GlobalToLocal(point)));
+		EXPECT_FALSE(_workspace->SelectionPanel()->RouteHitTest(_workspace->SelectionPanel()->GlobalToLocal(point)));
+		EXPECT_FALSE(_workspace->MainPanel()->RouteHitTest(_workspace->MainPanel()->GlobalToLocal(point)));
+		return point;
+	}
+
 	void AddStationForTest(const std::shared_ptr<Station>& station)
 	{
 		_AddStation(station);
@@ -331,13 +344,12 @@ public:
 		return _isSceneReset.load(std::memory_order_relaxed);
 	}
 
-	void StopJobForTest()
+	void PauseJobForTest()
 	{
-		Shutdown();
-		// Keep the deterministic harness usable after joining its worker. This
-		// does not restart production teardown resources or the job thread.
-		_isSceneQuitting.store(false, std::memory_order_release);
-		_sessionReplacing.store(false, std::memory_order_release);
+		// These isolated GUI/timing tests need a stable engine view. The derived
+		// member releases before Scene destruction, so normal Shutdown keeps a
+		// live producer for permanent-close acknowledgement and join.
+		_jobPause = std::unique_lock<std::mutex>(_operation.LifecycleMutex());
 	}
 
 	void SeedTimingForTest()
@@ -375,32 +387,32 @@ public:
 
 	utils::Position3d CameraPositionForTest() const
 	{
-		return _camera.ModelPosition();
+		return gui::WorkspaceTestAccess::Camera(*_workspace).ModelPosition();
 	}
 
 	graphics::Camera::View CameraViewForTest() const
 	{
-		return _camera.CurrentView();
+		return gui::WorkspaceTestAccess::Camera(*_workspace).CurrentView();
 	}
 
 	graphics::Camera::Pose CameraPoseForTest() const
 	{
-		return _camera.CurrentPose();
+		return gui::WorkspaceTestAccess::Camera(*_workspace).CurrentPose();
 	}
 
 	float StationInteriorFieldOfViewForTest() const
 	{
-		return _camera.StationInteriorFieldOfView();
+		return gui::WorkspaceTestAccess::Camera(*_workspace).StationInteriorFieldOfView();
 	}
 
 	glm::mat4 CameraProjectionForTest() const
 	{
-		return _camera.Projection(1.0f, {});
+		return gui::WorkspaceTestAccess::Camera(*_workspace).Projection(1.0f, {});
 	}
 
 	utils::Position3d CameraFocusAtCursorForTest(utils::Position2d cursorPosition) const
 	{
-		return _camera.FocusPointAtCursor(cursorPosition,
+		return gui::WorkspaceTestAccess::Camera(*_workspace).FocusPointAtCursor(cursorPosition,
 			_sizeParams.Size.Width,
 			_sizeParams.Size.Height,
 			{});
@@ -411,7 +423,7 @@ public:
 		const auto width = static_cast<float>(_sizeParams.Size.Width);
 		const auto height = static_cast<float>(_sizeParams.Size.Height);
 		const auto aspectRatio = width / height;
-		const auto clip = _camera.Projection(aspectRatio, {}) * _camera.ViewMatrix()
+		const auto clip = gui::WorkspaceTestAccess::Camera(*_workspace).Projection(aspectRatio, {}) * gui::WorkspaceTestAccess::Camera(*_workspace).ViewMatrix()
 			* glm::vec4(position.X, position.Y, position.Z, 1.0f);
 		const auto ndc = glm::vec3(clip) / clip.w;
 		return { ((ndc.x + 1.0f) * width) / 2.0f, ((ndc.y + 1.0f) * height) / 2.0f };
@@ -419,7 +431,7 @@ public:
 
 	ViewMode CameraSelectDepthForTest() const
 	{
-		return _viewMode;
+		return static_cast<ViewMode>(_workspace->PresentationMode());
 	}
 
 	void SetCameraSelectDepthForTest(unsigned int value)
@@ -433,23 +445,23 @@ public:
 
 	void SetSelectionDepthForTest(unsigned int value)
 	{
-		_UpdateSelectDepth(value);
+		_workspace->UpdateSelectDepth(value, { _sceneMutex, _stations }, _WorkspaceInputPresentation());
 	}
 
 	std::shared_ptr<base::GuiElement> CurrentHoverElementForTest()
 	{
-		return _ChildFromPath(_selector->CurrentHover());
+		return _ChildFromPath(_workspace->CurrentHover());
 	}
 
 	bool FindLoopGridEditorCandidateForTest(std::shared_ptr<LoopTake>& take,
 		std::shared_ptr<Loop>& audioLoop, std::shared_ptr<midi::MidiLoop>& midiLoop) const
 	{
-		return _loopEditor.FindCandidate(take, audioLoop, midiLoop);
+		return _workspace->Editor().FindCandidate(take, audioLoop, midiLoop);
 	}
 
 	bool IsCameraTransitioningForTest() const
 	{
-		return _camera.IsTransitioning();
+		return gui::WorkspaceTestAccess::Camera(*_workspace).IsTransitioning();
 	}
 
 	void UpdateCameraStationFollowForTest()
@@ -459,7 +471,7 @@ public:
 
 	void TickCameraForTest(unsigned int samps, unsigned int sampleRate)
 	{
-		_camera.TickBackgroundDrag(static_cast<float>(samps) / static_cast<float>(sampleRate));
+		gui::WorkspaceTestAccess::Camera(*_workspace).TickBackgroundDrag(static_cast<float>(samps) / static_cast<float>(sampleRate));
 	}
 
 	void SettleCameraForTest()
@@ -472,39 +484,41 @@ public:
 	{
 		for (unsigned int tick = 0u; tick < 10u; ++tick)
 		{
-			_camera.TickBackgroundDrag(0.05f);
-			_loopEditor.Tick(0.05f);
+			gui::WorkspaceTestAccess::Camera(*_workspace).TickBackgroundDrag(0.05f);
+			_workspace->Editor().Tick(0.05f);
 		}
 	}
 
-	bool EditorOwnsPointerForTest() const { return _loopEditor.OwnsPointer(); }
-	bool SpaceHeldForTest() const { return _spaceHeld; }
+	bool EditorOwnsPointerForTest() const { return _workspace->Editor().OwnsPointer(); }
+	bool SpaceHeldForTest() const { return _workspace->SpaceHeld(); }
 	bool CtrlOverlayActiveForTest() const { return _quantisationInteraction.EditModeActive(); }
 	float GridAlphaForTest() const { return _quantisation.OverlayAlpha(Timer::GetTime()); }
 	void ClearGridForTest() { _quantisation.ClearOverlay(); }
-	void FocusTextForTest() { _focusManager.RequestFocus(_settingsControls->Offset()); }
-	void ClearTextFocusForTest() { _focusManager.ClearFocus(); }
-	glm::vec3 EditorProbeEyeLocalForTest() const { return _loopEditor.ProbeEyeLocal(); }
+	void FocusTextForTest() { _workspace->RequestFocus(_workspace->Settings().Offset()); }
+	void ClearTextFocusForTest() { _workspace->CommitFocus(); }
+	glm::vec3 EditorProbeEyeLocalForTest() const { return _workspace->Editor().ProbeEyeLocal(); }
 
 	bool IsSceneTouchingForTest() const
 	{
-		return _camera.IsBackgroundDragging();
+		return gui::WorkspaceTestAccess::Camera(*_workspace).IsBackgroundDragging();
 	}
 
 	bool HasTouchCaptureForTest() const
 	{
-		return !_touchDownElement.expired();
+		return _workspace->HasPointerCapture();
 	}
 
 	void OpenPopupForTest(const std::shared_ptr<base::GuiElement>& popup)
 	{
-		_popupManager.Open(popup);
+		_workspace->OpenPopup(popup);
 	}
 
 	void ApplyHoverForTest()
 	{
 		ApplyDeferredHoverUpdates();
 	}
+private:
+	std::unique_lock<std::mutex> _jobPause;
 };
 
 TouchAction MakeSceneTouch(TouchAction::TouchState state,
@@ -2428,7 +2442,7 @@ TEST(Scene, LoopGridEditorTracksOneMidiLoopAndClosesWhenItIsReplaced) {
 TEST(Scene, SpaceAndCtrlReachPhysicalStateWithEditorOpenAndFocusLossClearsHolds) {
 	SceneParams params{ base::DrawableParams(), base::MoveableParams(), base::SizeableParams({ 1400u, 900u }) };
 	TestScene scene(params, {});
-	scene.StopJobForTest();
+	scene.PauseJobForTest();
 	auto station = MakeTestStation("space-editor");
 	scene.AddStationForTest(station);
 	auto take = station->AddTake();
@@ -2470,7 +2484,7 @@ TEST(Scene, SpaceAndCtrlReachPhysicalStateWithEditorOpenAndFocusLossClearsHolds)
 TEST(Scene, SpaceStartedInTextCannotTurnIntoATapOnRepeatAfterFocusChanges) {
 	SceneParams params{ base::DrawableParams(), base::MoveableParams(), base::SizeableParams({ 1400u, 900u }) };
 	TestScene scene(params, {});
-	scene.StopJobForTest();
+	scene.PauseJobForTest();
 	scene.FocusTextForTest();
 	scene.ClearGridForTest();
 	KeyAction key;
@@ -2569,9 +2583,9 @@ TEST(Scene, LoopGridEditorCanSelectMidiLoopAtEverySelectionDepthAndOpenWithE) {
 	for (const auto index : model->GlobalId())
 		pickPath.push_back(static_cast<unsigned char>(index + 1u));
 	const auto click = [&scene]() {
-		scene.OnAction(MakeSceneTouch(TouchAction::TOUCH_DOWN, { 1, 1 }, 0,
+		scene.OnAction(MakeSceneTouch(TouchAction::TOUCH_DOWN, scene.CanvasPointForTest(), 0,
 			LeftMouseButtonMask));
-		scene.OnAction(MakeSceneTouch(TouchAction::TOUCH_UP, { 1, 1 }, 0u, 0u));
+		scene.OnAction(MakeSceneTouch(TouchAction::TOUCH_UP, scene.CanvasPointForTest(), 0u, 0u));
 	};
 	for (const auto depth : { Scene::VIEW_STATION, Scene::VIEW_LOOPTAKE, Scene::VIEW_LOOP })
 	{
@@ -2616,13 +2630,13 @@ TEST(Scene, MiddleMutePaintAppliesImmediatelySuppressesHoverAndPreservesOtherTak
 	};
 	const auto midiPath = pickPath(midiModel);
 	const auto audioPath = pickPath(audioLoop);
-	const auto down = MakeSceneTouch(TouchAction::TOUCH_DOWN, { 1, 1 }, 1u, 2u);
-	const auto up = MakeSceneTouch(TouchAction::TOUCH_UP, { 6, 1 }, 1u, 0u);
+	const auto down = MakeSceneTouch(TouchAction::TOUCH_DOWN, scene.CanvasPointForTest(), 1u, 2u);
+	const auto up = MakeSceneTouch(TouchAction::TOUCH_UP, scene.CanvasPointForTest({5, 0}), 1u, 0u);
 
 	scene.SetHover3d(midiPath, base::Action::MODIFIER_NONE);
 	scene.OnAction(down);
 	EXPECT_FALSE(midiTake->IsMuted()); // Preview only until drag/release.
-	scene.OnAction(MakeSceneTouchMove({ 6, 1 }, 2u));
+	scene.OnAction(MakeSceneTouchMove(scene.CanvasPointForTest({5, 0}), 2u));
 	EXPECT_TRUE(midiTake->IsMuted());
 	EXPECT_FALSE(midiModel->IsPicking3d());
 	EXPECT_FALSE(midiTake->GetMidiLoops()[1]->Model()->IsPicking3d());
@@ -2639,7 +2653,7 @@ TEST(Scene, MiddleMutePaintAppliesImmediatelySuppressesHoverAndPreservesOtherTak
 	// The cached MIDI target must resolve its take's muted state for the next stroke.
 	scene.OnAction(down);
 	EXPECT_TRUE(midiTake->IsMuted());
-	scene.OnAction(MakeSceneTouchMove({ 6, 1 }, 2u));
+	scene.OnAction(MakeSceneTouchMove(scene.CanvasPointForTest({5, 0}), 2u));
 	EXPECT_FALSE(midiTake->IsMuted());
 	scene.SetHover3d(audioPath, base::Action::MODIFIER_NONE);
 	EXPECT_FALSE(audioLoop->IsMuted());
@@ -2672,8 +2686,8 @@ TEST(Scene, StationMuteClickUsesAggregateTakeState) {
 	scene.SetSelectionDepthForTest(Scene::VIEW_STATION);
 	scene.SetHover3d({ 1u }, base::Action::MODIFIER_NONE);
 	const auto click = [&scene]() {
-		scene.OnAction(MakeSceneTouch(TouchAction::TOUCH_DOWN, { 1, 1 }, 1u, 2u));
-		scene.OnAction(MakeSceneTouch(TouchAction::TOUCH_UP, { 1, 1 }, 1u, 0u));
+		scene.OnAction(MakeSceneTouch(TouchAction::TOUCH_DOWN, scene.CanvasPointForTest(), 1u, 2u));
+		scene.OnAction(MakeSceneTouch(TouchAction::TOUCH_UP, scene.CanvasPointForTest(), 1u, 0u));
 	};
 	click();
 	EXPECT_TRUE(first->IsMuted());
@@ -2713,8 +2727,8 @@ TEST(Scene, MidiStreamSelectionPreservesPickedEditorIdentity) {
 	for (const auto index : midiLoops[1]->Model()->GlobalId())
 		pickPath.push_back(static_cast<unsigned char>(index + 1u));
 	scene.SetHover3d(pickPath, base::Action::MODIFIER_NONE);
-	scene.OnAction(MakeSceneTouch(TouchAction::TOUCH_DOWN, { 1, 1 }, 0, LeftMouseButtonMask));
-	scene.OnAction(MakeSceneTouch(TouchAction::TOUCH_UP, { 1, 1 }, 0u, 0u));
+	scene.OnAction(MakeSceneTouch(TouchAction::TOUCH_DOWN, scene.CanvasPointForTest(), 0, LeftMouseButtonMask));
+	scene.OnAction(MakeSceneTouch(TouchAction::TOUCH_UP, scene.CanvasPointForTest(), 0u, 0u));
 	EXPECT_FALSE(midiLoops[0]->Model()->IsSelected());
 	EXPECT_TRUE(midiLoops[1]->Model()->IsSelected());
 
@@ -2725,14 +2739,14 @@ TEST(Scene, MidiStreamSelectionPreservesPickedEditorIdentity) {
 	EXPECT_EQ(midiLoops[1], midiLoop);
 	// Keep the same picker ID after the click: the next drag must start in
 	// subtractive paint mode using the newly selected state.
-	scene.OnAction(MakeSceneTouch(TouchAction::TOUCH_DOWN, { 1, 1 }, 0, LeftMouseButtonMask));
-	scene.OnAction(MakeSceneTouchMove({ 6, 1 }, LeftMouseButtonMask));
+	scene.OnAction(MakeSceneTouch(TouchAction::TOUCH_DOWN, scene.CanvasPointForTest(), 0, LeftMouseButtonMask));
+	scene.OnAction(MakeSceneTouchMove(scene.CanvasPointForTest({5, 0}), LeftMouseButtonMask));
 	EXPECT_FALSE(midiLoops[0]->Model()->IsSelected());
 	EXPECT_FALSE(midiLoops[1]->Model()->IsSelected());
-	scene.OnAction(MakeSceneTouch(TouchAction::TOUCH_UP, { 6, 1 }, 0, 0u));
+	scene.OnAction(MakeSceneTouch(TouchAction::TOUCH_UP, scene.CanvasPointForTest({5, 0}), 0, 0u));
 	// Re-select to exercise the no-hover editor fallback separately.
-	scene.OnAction(MakeSceneTouch(TouchAction::TOUCH_DOWN, { 1, 1 }, 0, LeftMouseButtonMask));
-	scene.OnAction(MakeSceneTouch(TouchAction::TOUCH_UP, { 1, 1 }, 0, 0u));
+	scene.OnAction(MakeSceneTouch(TouchAction::TOUCH_DOWN, scene.CanvasPointForTest(), 0, LeftMouseButtonMask));
+	scene.OnAction(MakeSceneTouch(TouchAction::TOUCH_UP, scene.CanvasPointForTest(), 0, 0u));
 	scene.SetHover3d({}, base::Action::MODIFIER_NONE);
 	ASSERT_TRUE(scene.FindLoopGridEditorCandidateForTest(candidateTake, audioLoop, midiLoop));
 	EXPECT_EQ(midiLoops[1], midiLoop);
@@ -2830,7 +2844,7 @@ TEST(SceneReset, ConnectedEmptyPreservesTimingAndEachDisconnectClearsOnce) {
 		base::SizeableParams() };
 	io::UserConfig userConfig = {};
 	TestScene scene(sceneParams, userConfig);
-	scene.StopJobForTest();
+	scene.PauseJobForTest();
 
 	scene.SeedTimingForTest();
 	scene.ObserveTimingAvailabilityForTest(true, 1u);
@@ -3134,6 +3148,116 @@ TEST(Trigger, RejectedDitchReleasesRollbackCapacityAfterRestoredCommandsDrain)
 	EXPECT_EQ(engine::TRIGSTATE_OVERDUBBING, trigger->GetState());
 }
 
+TEST(Trigger, ContextualKeyboardCompletesOnlyAdmittedOrdinaryAndInverseReleases)
+{
+    for (const bool inverse : { false, true })
+    for (const bool modalStillOpen : { false, true })
+    {
+        auto receiver = std::make_shared<SequenceTriggerReceiver>();
+        engine::DualBinding binding;
+        binding.SetDown(engine::TriggerBinding(engine::TRIGGER_KEY, ActivateChar, inverse ? 0u : 1u), true);
+        TriggerParams params;
+        params.Activate = { binding };
+        auto trigger = std::make_shared<Trigger>(params);
+        trigger->SetReceiver(receiver);
+        engine::RigSnapshot rig;
+        rig.Revision = 1u;
+        engine::RigSnapshotTrigger runtime;
+        runtime.Id = "stable-trigger";
+        runtime.Instance = trigger;
+        rig.Triggers = { runtime };
+        rig.InputDispatch.KeyboardTriggers = { trigger };
+        engine::ContextualKeyboardInput keyboard;
+        engine::RigTriggerInputGate gate;
+        ASSERT_TRUE(gate.Open(rig.Revision));
+        KeyAction key;
+        key.SetActionTime(GetTime());
+        key.KeyChar = ActivateChar;
+        key.KeyActionType = inverse ? KeyAction::KEY_UP : KeyAction::KEY_DOWN;
+        std::optional<engine::KeyboardTriggerReceipt> receipt;
+        ASSERT_TRUE(trigger->QueueInputEvent(engine::TRIGGER_INPUT_UI, rig.Revision,
+            engine::TRIGGER_KEY, ActivateChar, inverse ? 0u : 1u, key, {},
+            std::nullopt, std::nullopt, &receipt).IsEaten);
+        ASSERT_TRUE(receipt);
+        keyboard.Record(rig, runtime, *receipt);
+        keyboard.Record(rig, runtime, *receipt); // Repeat admission occupies one slot.
+        EXPECT_EQ(1u, keyboard.Outstanding());
+        TickAndComplete(trigger, 0u, std::nullopt, rig.Revision);
+        ASSERT_TRUE(trigger->IsActivateInputDown());
+        ASSERT_TRUE(gate.RequestCloseFromUi(rig.Revision));
+        key.KeyActionType = inverse ? KeyAction::KEY_DOWN : KeyAction::KEY_UP;
+        keyboard.Observe(key, modalStillOpen, gate.TryAcceptUi(rig.Revision));
+        EXPECT_FALSE(gate.TryAcceptUi(rig.Revision));
+        EXPECT_EQ(1u, keyboard.Outstanding());
+        TickAndComplete(trigger, 0u, std::nullopt, rig.Revision);
+        EXPECT_TRUE(trigger->IsActivateInputDown());
+        // A name-only accepted revision preserves stable instance and binding identity.
+        trigger->SetName("renamed");
+        rig.Revision = 2u;
+        ASSERT_TRUE(gate.Open(rig.Revision));
+        ASSERT_TRUE(gate.TryAcceptUi(rig.Revision));
+        keyboard.Flush(rig, key);
+        EXPECT_EQ(0u, keyboard.Outstanding());
+        TickAndComplete(trigger, 0u, std::nullopt, rig.Revision);
+        EXPECT_FALSE(trigger->IsActivateInputDown());
+        keyboard.Flush(rig, key);
+        TickAndComplete(trigger, 0u, std::nullopt, rig.Revision);
+        EXPECT_FALSE(trigger->IsActivateInputDown());
+        // Swallowed modal presses cannot produce a newly configured inverse attack on close.
+        key.KeyActionType = KeyAction::KEY_DOWN;
+        keyboard.Observe(key, true);
+        key.KeyActionType = KeyAction::KEY_UP;
+        EXPECT_TRUE(keyboard.Observe(key, false));
+        EXPECT_FALSE(keyboard.Observe(key, false));
+        auto wrongSignature = *receipt;
+        wrongSignature.Down.Value += 1u;
+        EXPECT_FALSE(trigger->QueueAdmittedKeyboardRelease(wrongSignature, rig.Revision, key));
+        key.KeyActionType = inverse ? KeyAction::KEY_UP : KeyAction::KEY_DOWN;
+        ASSERT_TRUE(trigger->QueueInputEvent(engine::TRIGGER_INPUT_UI, rig.Revision,
+            engine::TRIGGER_KEY, ActivateChar, inverse ? 0u : 1u, key, {},
+            std::nullopt, std::nullopt, &receipt).IsEaten);
+        ASSERT_TRUE(receipt);
+        keyboard.Record(rig, runtime, *receipt);
+        TickAndComplete(trigger, 0u, std::nullopt, rig.Revision);
+        ASSERT_TRUE(trigger->IsActivateInputDown());
+        if (!inverse)
+        {
+            // An admitted press repeats inside a modal; its release arrives after close.
+            keyboard.Observe(key, true);
+            key.KeyActionType = KeyAction::KEY_UP;
+            EXPECT_TRUE(keyboard.Observe(key, false, true));
+            keyboard.Flush(rig, key);
+            TickAndComplete(trigger, 0u, std::nullopt, rig.Revision);
+            EXPECT_FALSE(trigger->IsActivateInputDown());
+            key.KeyActionType = KeyAction::KEY_DOWN;
+            ASSERT_TRUE(trigger->QueueInputEvent(engine::TRIGGER_INPUT_UI, rig.Revision,
+                engine::TRIGGER_KEY, ActivateChar, 1u, key, {}, std::nullopt, std::nullopt, &receipt).IsEaten);
+            keyboard.Record(rig, runtime, *receipt);
+            TickAndComplete(trigger, 0u, std::nullopt, rig.Revision);
+            ASSERT_TRUE(gate.RequestCloseFromUi(rig.Revision));
+            key.KeyActionType = KeyAction::KEY_UP;
+            keyboard.Observe(key, false, false);
+            ASSERT_TRUE(gate.Open(rig.Revision));
+            // Reopened input admits another press before the next UI frame.
+            key.KeyActionType = KeyAction::KEY_DOWN;
+            keyboard.Flush(rig, key); // The Scene prologue drains old pending UP first.
+            keyboard.Observe(key, false, true);
+            ASSERT_TRUE(trigger->QueueInputEvent(engine::TRIGGER_INPUT_UI, rig.Revision,
+                engine::TRIGGER_KEY, ActivateChar, 1u, key, {}, std::nullopt, std::nullopt, &receipt).IsEaten);
+            keyboard.Record(rig, runtime, *receipt);
+            keyboard.Flush(rig, key); // A frame cannot release the newly admitted press.
+            TickAndComplete(trigger, 0u, std::nullopt, rig.Revision);
+            EXPECT_TRUE(trigger->IsActivateInputDown());
+            EXPECT_EQ(1u, keyboard.Outstanding());
+        }
+        keyboard.FocusLost();
+        keyboard.Flush(rig, key);
+        TickAndComplete(trigger, 0u, std::nullopt, rig.Revision);
+        EXPECT_FALSE(trigger->IsActivateInputDown());
+        EXPECT_EQ(0u, keyboard.Outstanding());
+    }
+}
+
 TEST(Trigger, FutureRigReleaseWaitsForAudioRevisionInBothIngressDomains)
 {
     for (const auto domain : { engine::TRIGGER_INPUT_UI, engine::TRIGGER_INPUT_JOB })
@@ -3396,6 +3520,8 @@ TEST(Trigger, LosingOlderTailPreservesNewIndependentPunchAndItsQueuedRelease)
 {
     auto oldStation = MakeTestStation("old-tail-source");
     auto healthyStation = MakeTestStation("new-punch-source");
+    oldStation->SetAllowedMidiChannels({});
+    healthyStation->SetAllowedMidiChannels({}); // Audio-tail ownership; device names only exercise source loss.
     TriggerParams params;
     params.InputChannels = { 0u };
     params.MidiInputDevices = { "old" };
@@ -3566,6 +3692,7 @@ TEST(Trigger, LossDuringPendingEndSettlesBeforeReconnectAndRejectsOldQueuedRelea
 TEST(Trigger, ConfirmedTailLossStaysStickyAfterCompletionAndPreservesEarlierCompletedHistory)
 {
     auto station = MakeTestStation("sticky-tail-loss");
+    station->SetAllowedMidiChannels({}); // Keep this completion race audio-only.
     TriggerParams params;
     params.InputChannels = { 0u };
     params.MidiInputDevices = { "lost" };

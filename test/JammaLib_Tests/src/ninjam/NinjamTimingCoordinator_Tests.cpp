@@ -1,6 +1,7 @@
 #include "gtest/gtest.h"
 #include "ninjam/NinjamNetworkService.h"
 #include "ninjam/NinjamTimingCoordinator.h"
+#include "ninjam/NinjamConnection.h"
 #include "ninjam/NinjamSession.h"
 #include "io/UserConfig.h"
 
@@ -1228,4 +1229,82 @@ TEST(NinjamTimingCoordinator, AcceptedDeadlineProposalResumesOnlyMatchingFreshGe
 			EXPECT_EQ(256u, recovered.DesiredTransport->RemotePhaseDeviceSample);
 		}
 	}
+}
+
+namespace ninjam
+{
+class NinjamConnectionTimingTestAccess
+{
+public:
+    static void Connected(NinjamConnection& connection, bool connected)
+    { connection._isConnected.store(connected); }
+    static void Publish(NinjamConnection& connection, const NinjamRemoteTiming& timing)
+    { connection._PublishRemoteTiming(timing); }
+    static void ReadingMiss(NinjamConnection& connection, bool miss)
+    { connection._remoteTimingSequence.store(miss ? 3u : 4u); }
+};
+}
+
+TEST(NinjamTimingCoordinator, ReadMissRetainsAcceptedTempoButInvalidAndDisconnectRemainVisible)
+{
+    ninjam::NinjamConnection connection{"", "", "", ""};
+    using Access = ninjam::NinjamConnectionTimingTestAccess;
+    Access::Connected(connection, true);
+    ninjam::NinjamRemoteTiming published;
+    published.IsConnected = published.IsValid = true;
+    published.IntervalLengthSamps = 115200u;
+    published.IntervalPositionSamps = 100u;
+    published.SourceSampleRate = 48000u;
+    published.Bpm = 400.0f;
+    published.Bpi = 16u;
+    published.HasDeviceAudioSampleAtObservation = true;
+    published.DeviceAudioSampleAtObservation = 1234u;
+    Access::Publish(connection, published);
+    const auto read = [&]() { return connection.ProcessExportBlock(nullptr, 0u, nullptr, 0u, 0u, 48000u, 1234u); };
+    const auto observe = [](const ninjam::NinjamRemoteTiming& remote) {
+        auto timing = MakeTiming(remote.IntervalLengthSamps, remote.IntervalPositionSamps);
+        timing.IsConnected = remote.IsConnected;
+        timing.IsValid = remote.IsValid;
+        timing.Bpm = remote.Bpm;
+        timing.Bpi = remote.Bpi;
+        timing.SourceSampleRate = remote.SourceSampleRate;
+        timing.DeviceAudioSampleAtObservation = remote.DeviceAudioSampleAtObservation;
+        return timing;
+    };
+    Timer clock;
+    NinjamTimingCoordinator coordinator;
+    Connect(coordinator, true, false);
+    ASSERT_TRUE(coordinator.Observe(observe(read()), std::nullopt, true, io::UserConfig{}, clock).PromptForTempoChange);
+    coordinator.ResolveTempoChange(true, std::nullopt, clock);
+    Access::ReadingMiss(connection, true);
+    const auto cached = read();
+    EXPECT_TRUE(cached.IsValid);
+    EXPECT_EQ(published.DeviceAudioSampleAtObservation, cached.DeviceAudioSampleAtObservation);
+    const auto retained = coordinator.Observe(observe(cached), std::nullopt, true, io::UserConfig{}, clock);
+    EXPECT_FALSE(retained.PromptForTempoChange);
+    EXPECT_EQ(ninjam::NinjamNoSyncReason::None, retained.NoSyncReason);
+    Access::ReadingMiss(connection, false);
+    published.IsValid = false;
+    Access::Publish(connection, published);
+    EXPECT_FALSE(read().IsValid);
+    EXPECT_EQ(ninjam::NinjamNoSyncReason::InvalidTiming,
+        coordinator.Observe(observe(read()), std::nullopt, true, io::UserConfig{}, clock).NoSyncReason);
+    published.IsValid = true;
+    Access::Publish(connection, published);
+    ASSERT_TRUE(read().IsValid);
+    // Job-side loss and reconnection can both occur while callbacks are paused.
+    Access::Connected(connection, false);
+    Access::Publish(connection, {});
+    Access::Connected(connection, true);
+    Access::ReadingMiss(connection, true);
+    EXPECT_FALSE(read().IsValid);
+    Access::ReadingMiss(connection, false);
+    Access::Publish(connection, published);
+    ASSERT_TRUE(read().IsValid);
+    Access::Connected(connection, false);
+    Access::ReadingMiss(connection, true);
+    EXPECT_FALSE(read().IsConnected);
+    Access::Connected(connection, true);
+    EXPECT_FALSE(read().IsValid); // disconnected callback cleared the audio-owned cache
+    Access::Connected(connection, false);
 }

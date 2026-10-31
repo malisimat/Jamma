@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <functional>
 #include <memory>
 #include <string>
@@ -12,6 +13,9 @@
 #include "GuiVu.h"
 #include "CableInteraction.h"
 #include "../io/RigFile.h"
+#include "../actions/TouchAction.h"
+#include "TriggerLearnController.h"
+#include "../midi/MidiQuantisation.h"
 
 namespace resources
 {
@@ -45,8 +49,13 @@ namespace gui
 		{}
 
 		std::function<bool(const io::RigFile&)> SubmitRigEdit;
+		std::function<bool(const io::RigFile&)> SubmitTriggerRename;
+		std::function<std::string()> TriggerLearnAdmission;
+		std::function<std::vector<io::TriggerBindingLearn::Device>()> TriggerLearnDevices;
+		std::function<std::shared_ptr<const io::TriggerBindingLearn::Observation>(std::optional<io::TriggerBindingLearn::Request>)> TriggerLearnInput;
 		std::function<RoutingEditAvailability()> RoutingEditAvailabilityState;
 		std::function<bool(std::uint64_t)> AcceptTriggerInput;
+		std::function<void(const std::shared_ptr<base::GuiElement>&, bool)> FocusEditor;
 		GuiPopupManager* PopupManager = nullptr;
 	};
 
@@ -55,6 +64,7 @@ namespace gui
 	class GuiPopup;
 	class GuiScrollPanel;
 	class GuiHudSocket;
+	class GuiTriggerRename;
 
 	class GuiHud : public GuiPanel
 	{
@@ -80,12 +90,22 @@ namespace gui
 
 	public:
 		virtual void Draw(base::DrawContext& ctx) override;
+		void InitResources(resources::ResourceLib& resources, bool force) override;
 		virtual void SetSize(utils::Size2d size) override;
 		virtual actions::ActionResult OnAction(actions::TouchAction action) override;
 		virtual actions::ActionResult OnAction(actions::TouchMoveAction action) override;
 		virtual actions::ActionResult OnAction(actions::KeyAction action) override;
 		void ClearPointerState() override;
+		bool RouteRenameTouch(actions::TouchAction action);
+		bool HasLabelPress() const { return _labelPress.has_value(); }
+		bool CapturesPointer(utils::Position2d localPoint) const;
+		void CancelTriggerRenames();
+		void UpdateTriggerLearn(); // Window owner, with Scene serialization held.
+		void CancelTriggerLearn();
+		bool TriggerLearnKeyboard(const actions::KeyAction& action, bool fresh);
+		bool HasTriggerLearn() const { return _triggerLearn != nullptr; }
 		void SetCableRevealHeld(bool held);
+		void SetAltLearnHeld(bool held);
 		void SetAudioInputPeak(unsigned int channel, float peak, unsigned int numSamps);
 		void SetMidiInputPeak(unsigned int input, float peak, unsigned int numSamps);
 		// Off-callback producers publish complete, latest-substitutable presentation data.
@@ -101,8 +121,10 @@ namespace gui
 		void SetStationAnchors(std::vector<StationAnchor> anchors);
 		void SetLoopEditorMode(bool enabled);
 		void SetQuantisationFeedback(const std::string& text);
+		void SetClockStatus(unsigned long masterLengthSamps, midi::MidiQuantisationFraction fraction);
 		void SetPerformanceGroupFeedback(const std::string& text);
 		utils::Rect2d OccupiedTopStripBounds() const;
+		void SetTopPanelLayout(GuiTopPanelLayout layout);
 		void SetEditModeAlpha(float alpha) noexcept { _editModeAlpha = std::clamp(alpha, 0.0f, 1.0f); }
 		bool HasCableDrag() const noexcept { return _cableDrag.has_value(); }
 		bool IsApplying() const { return _RoutingEditAvailability() == RoutingEditAvailability::Applying; }
@@ -120,6 +142,7 @@ namespace gui
 		virtual void _ReleaseResources() override;
 
 	private:
+		friend class GuiHudTestAccess;
 		std::vector<std::optional<CableInteraction::Endpoint>> _BuildStationEndpoints(
 			std::vector<CableInteraction::Endpoint>& endpoints) const;
 		static void _FanSourceCableEnds(const std::vector<CableInteraction::Endpoint>& sources,
@@ -136,21 +159,23 @@ namespace gui
 		static constexpr unsigned int _SourceButtonHeight = GuiStyle::ControlHeight;
 		static constexpr unsigned int _SourceScrollBarHeight = 12u;
 		static constexpr unsigned int _SourceViewportHeight = _SourceButtonHeight + _SourceScrollBarHeight + 4u;
-		static constexpr unsigned int _SourcePanelGap = 8u;
-		static constexpr unsigned int _RightRailWidth = 132u;
+		static constexpr int _SourcePanelGap = 8;
+		static constexpr unsigned int _RightRailWidth = 156u;
 		static constexpr unsigned int _RightRailHeight = 460u;
 		static constexpr unsigned int _RightRailMinHeight = 220u;
 		static constexpr unsigned int _RightRailPaddingH = 0u;
 		static constexpr unsigned int _RightRailPaddingV = 12u;
 		static constexpr unsigned int _RightRailSpacing = 10u;
-		static constexpr unsigned int _TriggerButtonWidth = 112u;
-		static constexpr unsigned int _TriggerButtonHeight = 100u;
+		static constexpr unsigned int _TriggerButtonWidth = 136u;
+		static constexpr unsigned int _TriggerButtonHeight = 132u;
 		static constexpr unsigned int _TriggerFooterHeight = 56u;
 		static constexpr unsigned int _TriggerControlSize = 34u;
+		static constexpr unsigned int _TriggerCloseSize = 24u;
 		static constexpr unsigned int _SocketSize = 24u;
+		static constexpr int _SourceSocketY = -static_cast<int>(_SocketSize / 2u);
 		static constexpr unsigned int _CableEndSize = 10u;
-		static constexpr int _TriggerInputPinTopOffset = 12;
 		static constexpr int _TriggerOutputPinBottomOffset = 12;
+		static constexpr int _TriggerInputPinTopOffset = _TriggerOutputPinBottomOffset;
 		static constexpr int _TriggerInputFanHalfHeight = 7;
 		static constexpr unsigned int _AudioInputPeakHoldSamps = 3000u;
 		static constexpr double _MidiInputFallRate = 0.003;
@@ -163,6 +188,9 @@ namespace gui
 		void _AddTrigger();
 		void _OpenDeleteConfirmation(size_t triggerIndex);
 		void _ConfirmDelete();
+		void _OpenRename(size_t triggerIndex);
+		void _OpenTriggerLearn(const std::string& id, bool activate, bool altHeld);
+		std::string _SubmitRename(const std::string& name, const std::string& id, std::uint64_t revision);
 		bool _SubmitCandidate(const io::RigFile& candidate);
 		bool _CanEditTrigger(size_t triggerIndex) const;
 		RoutingEditAvailability _RoutingEditAvailability() const;
@@ -170,9 +198,17 @@ namespace gui
 		void _RevealTrigger(size_t triggerIndex);
 		void _RebuildPanels();
 		void _LayoutPanels();
+		utils::Rect2d _TopStripLayout(int preferredHeight);
+		std::optional<GuiTopPanelLayout> _topPanelLayout;
+		bool _retargetStrip = false, _stripRetargetActive = false;
+		float _stripRetargetOffset = 0.0f, _stripRetargetProgress = 1.0f;
+		float _stripWidthAnchorPhase = 0.0f, _stripTopAnchorPhase = 0.0f;
+		int _stripRetargetLeft = 0;
+		bool _stripTargetExpanded = true;
 		void _OpenSourceIdentity(const std::string& identity);
 		void _LayoutSourceIdentity();
 		utils::Rect2d _ContentClip(const std::shared_ptr<GuiScrollPanel>& scroll) const;
+		utils::Rect2d _SourceSocketClip(const std::shared_ptr<GuiScrollPanel>& scroll) const;
 		bool _InitCableShader(resources::ResourceLib& resourceLib);
 		bool _InitCableVertexArray();
 		void _DrawCables(base::DrawContext& ctx);
@@ -185,6 +221,7 @@ namespace gui
 			std::vector<CableInteraction::Cable>& cables, utils::Position2d point) const;
 		void _UpdateCableHover(utils::Position2d point);
 		void _UpdateSocketHighlights();
+		std::optional<size_t> _SourceControlAt(utils::Position2d point) const;
 		bool _SourceVisible(size_t index) const;
 		actions::ActionResult _BeginCableDrag(utils::Position2d point);
 		void _CancelCableDrag();
@@ -201,9 +238,9 @@ namespace gui
 			unsigned int horizontalInset = 0u) const;
 		std::shared_ptr<GuiButton> _MakeSourceButton(const std::string& text,
 			const glm::vec3& tint,
-			unsigned int width, bool midi, bool available);
+			unsigned int width);
 		std::shared_ptr<GuiButton> _MakeTriggerButton(const std::string& text,
-			std::weak_ptr<engine::Trigger> trigger) const;
+			std::weak_ptr<engine::Trigger> trigger, std::string id);
 		struct SourceWidgets
 		{
 			std::shared_ptr<GuiButton> Button;
@@ -214,6 +251,8 @@ namespace gui
 		{
 			std::shared_ptr<GuiButton> Card;
 			std::shared_ptr<GuiButton> Close;
+			std::shared_ptr<GuiButton> Edit;
+			std::shared_ptr<GuiTriggerRename> Rename;
 			std::shared_ptr<base::GuiElement> InputSocket;
 			std::shared_ptr<base::GuiElement> OutputSocket;
 		};
@@ -244,6 +283,7 @@ namespace gui
 		std::shared_ptr<GuiPanel> _statusPanel;
 		std::shared_ptr<GuiLabel> _routingStatusLabel;
 		std::string _quantisationFeedback;
+		std::string _clockStatusText = "Clock OFF | Subdiv --";
 		std::string _performanceGroupFeedback; // UI/job owner under Scene serialization
 		float _editModeAlpha = 0.0f;
 		std::shared_ptr<GuiPopup> _deletePopup;
@@ -268,8 +308,28 @@ namespace gui
 		io::RigFile _displayedRig;
 		std::uint64_t _displayedRevision = 0u;
 		std::optional<CableInteraction::Drag> _cableDrag;
+		struct LabelPress
+		{
+			size_t TriggerIndex;
+			std::string Id;
+			std::uint64_t Revision;
+			utils::Position2d Position;
+			actions::TouchAction::TouchType Source;
+			int Index;
+			bool Moved = false;
+		};
+		std::optional<LabelPress> _labelPress;
 		std::optional<size_t> _deleteTriggerIndex;
 		std::function<bool(const io::RigFile&)> _submitRigEdit;
+		std::function<bool(const io::RigFile&)> _submitTriggerRename;
+		std::function<std::string()> _triggerLearnAdmission;
+		std::function<std::vector<io::TriggerBindingLearn::Device>()> _triggerLearnDevices;
+		std::function<std::shared_ptr<const io::TriggerBindingLearn::Observation>(std::optional<io::TriggerBindingLearn::Request>)> _triggerLearnInput;
+		std::shared_ptr<TriggerLearnController> _triggerLearn;
+		std::uint64_t _nextTriggerLearnSession = 0u;
+		bool _learnEndPending = false;
+		bool _altLearnHeld = false;
+		std::function<void(const std::shared_ptr<base::GuiElement>&, bool)> _focusEditor;
 		std::function<RoutingEditAvailability()> _routingEditAvailability;
 		std::function<bool(std::uint64_t)> _acceptTriggerInput;
 		std::optional<RoutingEditAvailability> _lastRoutingEditAvailability;
@@ -282,7 +342,16 @@ namespace gui
 		std::optional<CableInteraction::End> _hoveredCableEnd;
 		std::shared_ptr<GuiHudSocket> _cableEndIcon;
 		std::shared_ptr<GuiHudSocket> _stationSocketIcon;
-		float _cableRevealAlpha = 0.0f;
+		struct CableFade
+		{
+			CableInteraction::Handle Route;
+			float Alpha = 0.0f;
+			bool Slow = false;
+		};
+		std::vector<CableFade> _cableFades;
+		std::chrono::steady_clock::time_point _lastCableFrame = std::chrono::steady_clock::now();
+		std::chrono::steady_clock::time_point _cableEditRevealUntil{};
+		std::optional<size_t> _editedCableTrigger;
 		std::vector<glm::vec4> _cableControlPoints;
 		std::vector<glm::vec4> _cableColors;
 		std::vector<glm::vec4> _cableRenderColors;

@@ -9,6 +9,7 @@ GuiLabelParams GuiButton::_MakeLabelParams(const GuiButtonParams& params)
 {
 	GuiLabelParams lp;
 	lp.String = params.Text;
+	lp.TextColor = params.TextColor;
 	lp.VerticalAlign = GuiTextVerticalAlign::Center;
 	lp.ClipText = true;
 	lp.Ellipsize = params.TextEllipsize;
@@ -35,6 +36,19 @@ GuiButton::GuiButton(GuiButtonParams params) :
 {
 	if (_label)
 		_children.push_back(_label);
+}
+
+void GuiButton::Draw(base::DrawContext& context)
+{
+	if (_label)
+	{
+		auto color = _buttonParams.TextColor;
+		if (IsEnabled() && _state == STATE_OVER) color = _buttonParams.OverTextColor.value_or(color);
+		else if (IsEnabled() && _state == STATE_DOWN)
+			color = _buttonParams.DownTextColor.value_or(_buttonParams.OverTextColor.value_or(color));
+		_label->SetTextColor(color);
+	}
+	GuiElement::Draw(context);
 }
 
 actions::ActionResult GuiButton::OnAction(actions::TouchAction action)

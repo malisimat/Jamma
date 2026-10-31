@@ -377,11 +377,9 @@ void LoopGridEditor::_FitPitchRange(const std::shared_ptr<MidiLoop>& midiLoop)
 	if (!model || !midiLoop->SnapshotForEdit(source))
 		return;
 	std::vector<MidiEvent> displayed(source.EventCount);
-	if (source.Quantisation.Enabled)
-		MidiQuantisation::BuildQuantisedPlaybackEvents(source.Events.data(),
-			source.EventCount, source.LoopLengthSamps, source.Quantisation,
-			source.QuantisationTransportStartSamps, displayed.data());
-	else std::copy_n(source.Events.begin(), source.EventCount, displayed.begin());
+	MidiQuantisation::BuildPlaybackEvents(source.Events.data(),
+		source.EventCount, source.LoopLengthSamps, source.Quantisation,
+		source.QuantisationTransportStartSamps, displayed.data());
 	const auto notes = MidiNote::ExtractSpans(displayed.data(),
 		displayed.size(), source.LoopLengthSamps);
 	int low = 127, high = 0;
@@ -582,12 +580,27 @@ std::optional<MidiGridGesture::Point> LoopGridEditor::_PointAt(
 	const auto width = static_cast<int>(_size.Width);
 	const auto height = static_cast<int>(_size.Height);
 	if (!length || width <= 0 || height <= 0) return std::nullopt;
+	// Capture and hover use visible note faces; held drags retain the backing plane.
+	if (!clampToGrid)
+	{
+		MidiLoop::EditState source;
+		if (loop->SnapshotForEdit(source) && !LoopGridGeometry::Resolve(length,
+			source.Quantisation, source.QuantisationTransportStartSamps))
+			if (const auto ray = graphics::LoopGridProjection::UnprojectToLocalRay(
+				_ViewProjection(), _ModelMatrix(), pixel, width, height))
+				if (const auto hit = loop->Model()->PickEditorNote(ray->Origin, ray->Direction))
+					return MidiGridGesture::Point{hit->Sample, hit->Pitch,
+						static_cast<double>(hit->Sample) / length,
+						(hit->Pitch - loop->Model()->EditorBottomPitch() + 0.5) / loop->Model()->EditorVisibleRows()};
+	}
 	const auto local = graphics::LoopGridProjection::UnprojectToLocalPlane(_ViewProjection(),
 		_ModelMatrix(), pixel, width, height, 2.0f);
 	if (!local) return std::nullopt;
 	const auto radius = _MidiRadius(length);
-	const auto u = static_cast<double>(local->x / (2.0f * radius) + 0.5f);
-	const auto v = static_cast<double>(0.5f - local->z / (1.56f * radius));
+	const auto u = static_cast<double>(local->x / (2.0f * radius) + 0.5f)
+		+ (clampToGrid && _pointerOwned ? _freeDragOffsetU : 0.0);
+	const auto v = static_cast<double>(0.5f - local->z / (1.56f * radius))
+		+ (clampToGrid && _pointerOwned ? _freeDragOffsetV : 0.0);
 	if (!clampToGrid && (u < 0.0 || u >= 1.0 || v < 0.0 || v >= 1.0))
 		return std::nullopt;
 	const auto boundedU = std::clamp(u, 0.0, std::nextafter(1.0, 0.0));
@@ -710,6 +723,7 @@ void LoopGridEditor::_EndAudioStroke(bool cancel)
 	_audioStroke = false;
 	_audioStrokePoint.reset();
 	_pointerOwned = false;
+	_freeDragOffsetU = _freeDragOffsetV = 0.0;
 	_pointerButton = -1;
 	if (const auto loop = _audioLoop.lock())
 		if (const auto model = loop->AudioSpectralModel()) model->SetBrush({-1.0f,-1.0f}, {}, 0);
@@ -803,10 +817,19 @@ void LoopGridEditor::_BeginGesture(const actions::TouchAction& action)
 	_gesture = std::make_unique<MidiGridGesture>();
 	if (_gesture->Begin(source, *point, _ChannelOf(loop), _PixelsPerSample(source.LoopLengthSamps), _creationVelocity))
 	{
+		// Keep a captured face anchored while drag samples use the backing plane.
+		_freeDragOffsetU = _freeDragOffsetV = 0.0;
+		if (!_gesture->Grid())
+			if (const auto plane = _PointAt(action.Position, true))
+			{
+				_freeDragOffsetU = point->U - plane->U;
+				_freeDragOffsetV = point->V - plane->V;
+			}
+		_gestureModelGeneration = loop->Model()->EditorModelGeneration();
 		_pointerOwned = true;
 		_pointerButton = 0;
 		_previewDirty = true;
-		_UpdateHover(*point);
+		_UpdateHeldTarget();
 	}
 	else
 	{
@@ -830,7 +853,7 @@ bool LoopGridEditor::_BeginSpecialGesture(const actions::TouchAction& action)
 		const auto& note = targets.Notes[i];
 		const auto& on = source.Events[note.On];
 		displayMatches = model->EditorNoteMatches(i, MidiNote{note.Start, note.End - note.Start,
-			on.Channel(), note.Pitch, on.data2, on.flags}, source.LoopLengthSamps);
+			on.Channel(), note.Pitch, on.data2, note.Flags}, source.LoopLengthSamps);
 	}
 	if (!displayMatches)
 	{
@@ -892,6 +915,7 @@ void LoopGridEditor::_UpdateHeldTarget()
 	}
 	_hoverRevision = _gesture->Before().Revision;
 	model->SetEditorHover(-1.0f, -1);
+	model->SetEditorHandle(EditHandle());
 	model->SetEditorHeld(static_cast<int>(*_gesture->CapturedNoteIndex()),
 		_gesture->Mode() == MidiGridGesture::Kind::Velocity ? _gesture->ProposedVelocity() : -1);
 	if (_gesture->Mode() == MidiGridGesture::Kind::Velocity)
@@ -913,7 +937,7 @@ void LoopGridEditor::_EndGesture(const actions::TouchAction& action)
 		const auto snappedMove = _gesture->Mode() == MidiGridGesture::Kind::SnappedMove;
 		const auto point = _PointAt(action.Position, !snappedMove);
 		validDrop = !snappedMove || point.has_value();
-		if (point) _gesture->Update(*point);
+		if (point) _gesture->Finish(*point);
 	}
 	if (validDrop && _gesture && _gesture->Dirty() && !_gesture->Rejected()) _PublishGesture();
 	else if (_gesture && _gesture->Rejected()) _SetFeedback("Edit rejected; source unchanged");
@@ -954,6 +978,7 @@ void LoopGridEditor::_CancelGesture()
 	const auto relative = _relativePointer;
 	const auto button = _pointerButton;
 	_pointerOwned = false;
+	_freeDragOffsetU = _freeDragOffsetV = 0.0;
 	_pointerButton = -1;
 	_relativePointer = false;
 	_pitchView = false;
@@ -974,6 +999,7 @@ void LoopGridEditor::_CancelGesture()
 
 void LoopGridEditor::_ClearIdleHover(bool clearCache)
 {
+	_editHandle = LoopGridGeometry::EditHandle::None;
 	_idleHoverPointer.reset();
 	if (clearCache)
 	{
@@ -994,6 +1020,7 @@ void LoopGridEditor::_UpdateIdleHover()
 	const auto point = _PointAt(*_idleHoverPointer, false);
 	if (!point)
 	{
+		_editHandle = LoopGridGeometry::EditHandle::None;
 		if (auto loop = _midiLoop.lock())
 			if (auto model = loop->Model()) model->SetEditorHover(-1.0f, -1);
 		return;
@@ -1003,6 +1030,7 @@ void LoopGridEditor::_UpdateIdleHover()
 
 void LoopGridEditor::_UpdateHover(MidiGridGesture::Point point)
 {
+	_editHandle = LoopGridGeometry::EditHandle::None;
 	const auto loop = _midiLoop.lock();
 	const auto model = loop ? loop->Model() : nullptr;
 	if (!model) return;
@@ -1055,6 +1083,8 @@ void LoopGridEditor::_UpdateHover(MidiGridGesture::Point point)
 		_hoverRevision = source.Revision;
 	}
 	if (!length) return;
+	if (!gridResolved && target.NoteIndex)
+		_editHandle = LoopGridGeometry::NoteEditHandle(point.Sample, target.Start, target.End, _PixelsPerSample(length));
 	// Free timing has no cell to highlight, so empty space keeps the pointer glow.
 	if (!target.NoteIndex && !gridResolved)
 	{
@@ -1064,6 +1094,7 @@ void LoopGridEditor::_UpdateHover(MidiGridGesture::Point point)
 	model->SetEditorTarget(static_cast<float>(target.Start) / length,
 		static_cast<float>(target.End) / length, target.Pitch,
 		target.NoteIndex ? static_cast<int>(*target.NoteIndex) : -1);
+	model->SetEditorHandle(_editHandle);
 }
 
 void LoopGridEditor::_UpdatePreview()
@@ -1213,7 +1244,7 @@ void LoopGridEditor::UpdateUi(const glm::mat4& viewProjection)
 			if (loop->SnapshotForEdit(state))
 				mode = LoopGridGeometry::Resolve(state.LoopLengthSamps,
 					state.Quantisation, state.QuantisationTransportStartSamps)
-					? "Paint: click notes to remove; drag empty cells to add" : "Free timing: drag notes or edges";
+					? "Paint: click notes to remove; drag empty cells to add" : "Free timing: click notes to remove; drag to create, move or trim";
 		}
 		_modeLabel->SetString(mode);
 		_modeLabel->SetVisible(!_audioLoop.expired());
@@ -1262,7 +1293,7 @@ void LoopGridEditor::UpdateUi(const glm::mat4& viewProjection)
 		const auto hasCandidate = FindCandidate(take, audioLoop, midiLoop);
 		const auto reason = hasCandidate
 			? _UnavailableReason(take, audioLoop, midiLoop)
-			: std::string("Select and hover one loop to edit");
+			: std::string{};
 		_button->SetEnabled(hasCandidate && reason.empty());
 		_SetFeedback(reason);
 	}
