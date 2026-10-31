@@ -1,4 +1,4 @@
-#include "AudioSpectralPicking.h"
+#include "SpectralPicking.h"
 
 #include <algorithm>
 #include <cmath>
@@ -8,12 +8,12 @@
 
 using namespace spectral;
 
-bool AudioSpectralPicking::_Finite(glm::dvec3 value) noexcept
+bool SpectralPicking::_Finite(glm::dvec3 value) noexcept
 {
 	return std::isfinite(value.x) && std::isfinite(value.y) && std::isfinite(value.z);
 }
 
-bool AudioSpectralPicking::_Slab(double origin, double direction, double minimum,
+bool SpectralPicking::_Slab(double origin, double direction, double minimum,
 	double maximum, double& first, double& last) noexcept
 {
 	if (direction == 0.0) return origin >= minimum && origin <= maximum;
@@ -25,7 +25,7 @@ bool AudioSpectralPicking::_Slab(double origin, double direction, double minimum
 	return first <= last;
 }
 
-std::optional<AudioSpectralPicking::Hit> AudioSpectralPicking::_Triangle(
+std::optional<SpectralPicking::Hit> SpectralPicking::_Triangle(
 	glm::dvec3 origin, glm::dvec3 direction, glm::dvec3 a, glm::dvec3 b, glm::dvec3 c,
 	glm::dvec2 uvA, glm::dvec2 uvB, glm::dvec2 uvC,
 	double first, double last, double positionTolerance) noexcept
@@ -84,8 +84,8 @@ std::optional<AudioSpectralPicking::Hit> AudioSpectralPicking::_Triangle(
 	return Hit{ std::clamp(uv.x, 0.0, 1.0), std::clamp(uv.y, 0.0, 1.0), distance };
 }
 
-std::optional<AudioSpectralPicking::Hit> AudioSpectralPicking::Intersect(
-	const graphics::AudioSpectralModel::Surface& surface,
+std::optional<SpectralPicking::Hit> SpectralPicking::Intersect(
+	const graphics::SpectralModel::Surface& surface,
 	glm::vec3 localOrigin, glm::vec3 localDirection) noexcept
 {
 	const auto display = surface.Display.get();
@@ -94,8 +94,8 @@ std::optional<AudioSpectralPicking::Hit> AudioSpectralPicking::Intersect(
 	if (!display || surface.Morph != 1.0f || !std::isfinite(surface.Radius) || surface.Radius <= 0.0f || !std::isfinite(surface.PlayFraction)
 		|| !display->SourceIdentity || display->SourceGeneration == 0u || display->Revision == 0u
 		|| display->TimeSegments == 0u || display->FrequencySegments == 0u
-		|| display->TimeSegments > AudioSpectralConfig::MaxTimeSegments
-		|| display->FrequencySegments > AudioSpectralConfig::MaxFrequencySegments
+		|| display->TimeSegments > SpectralConfig::MaxTimeSegments
+		|| display->FrequencySegments > SpectralConfig::MaxFrequencySegments
 		|| !std::isfinite(display->MinimumFrequencyHz) || !(display->MinimumFrequencyHz > 0.0f)
 		|| !std::isfinite(display->NyquistHz) || !(display->NyquistHz > display->MinimumFrequencyHz)
 		|| !std::isfinite(display->MaximumFrequencyHz) || !(display->MaximumFrequencyHz > display->MinimumFrequencyHz)
@@ -112,21 +112,21 @@ std::optional<AudioSpectralPicking::Hit> AudioSpectralPicking::Intersect(
 	direction /= directionLength;
 	const auto columns = display->TimeSegments;
 	const auto rows = display->FrequencySegments;
-	const auto corner = graphics::AudioSpectralModel::LocalVertex(surface, 0u, 0u);
-	const auto opposite = graphics::AudioSpectralModel::LocalVertex(surface, columns, rows);
+	const auto corner = graphics::SpectralModel::LocalVertex(surface, 0u, 0u);
+	const auto opposite = graphics::SpectralModel::LocalVertex(surface, columns, rows);
 	const auto minimumX = static_cast<double>(corner.x);
 	const auto maximumX = static_cast<double>(opposite.x);
 	const auto minimumZ = static_cast<double>(opposite.z);
 	const auto maximumZ = static_cast<double>(corner.z);
-	const auto maximumY = static_cast<double>(graphics::AudioSpectralModel::SurfaceBaseY
-		+ surface.Radius * graphics::AudioSpectralModel::HeightRadiusScale);
+	const auto maximumY = static_cast<double>(graphics::SpectralModel::SurfaceBaseY
+		+ surface.Radius * graphics::SpectralModel::HeightRadiusScale);
 	const auto tolerance = (std::max)(1.0, static_cast<double>(surface.Radius)) * 1e-7;
 	double first = 0.0;
 	double last = std::numeric_limits<double>::infinity();
 	if (!(maximumX > minimumX) || !(maximumZ > minimumZ) || !std::isfinite(maximumY)
 		|| !_Slab(origin.x, direction.x, -surface.Radius, surface.Radius, first, last)
-		|| !_Slab(origin.z, direction.z, -surface.Radius * graphics::AudioSpectralModel::DepthRadiusScale, surface.Radius * graphics::AudioSpectralModel::DepthRadiusScale, first, last)
-		|| !_Slab(origin.y, direction.y, graphics::AudioSpectralModel::SurfaceBaseY, maximumY, first, last))
+		|| !_Slab(origin.z, direction.z, -surface.Radius * graphics::SpectralModel::DepthRadiusScale, surface.Radius * graphics::SpectralModel::DepthRadiusScale, first, last)
+		|| !_Slab(origin.y, direction.y, graphics::SpectralModel::SurfaceBaseY, maximumY, first, last))
 		return std::nullopt;
 	std::optional<Hit> best;
 	const auto testCell = [&](int column, int row) noexcept
@@ -138,10 +138,10 @@ std::optional<AudioSpectralPicking::Hit> AudioSpectralPicking::Intersect(
 		for (const auto index : { z * stride + x, z * stride + x + 1u,
 			(z + 1u) * stride + x, (z + 1u) * stride + x + 1u })
 			if (!std::isfinite(display->Heights[index]) || display->Heights[index] < 0.0f || display->Heights[index] > 1.0f) return;
-		const glm::dvec3 a(graphics::AudioSpectralModel::LocalVertex(surface, x, z));
-		const glm::dvec3 b(graphics::AudioSpectralModel::LocalVertex(surface, x + 1u, z));
-		const glm::dvec3 c(graphics::AudioSpectralModel::LocalVertex(surface, x, z + 1u));
-		const glm::dvec3 d(graphics::AudioSpectralModel::LocalVertex(surface, x + 1u, z + 1u));
+		const glm::dvec3 a(graphics::SpectralModel::LocalVertex(surface, x, z));
+		const glm::dvec3 b(graphics::SpectralModel::LocalVertex(surface, x + 1u, z));
+		const glm::dvec3 c(graphics::SpectralModel::LocalVertex(surface, x, z + 1u));
+		const glm::dvec3 d(graphics::SpectralModel::LocalVertex(surface, x + 1u, z + 1u));
 		const auto uvA = glm::dvec2(static_cast<float>(x) / columns, static_cast<float>(z) / rows);
 		const auto uvB = glm::dvec2(static_cast<float>(x + 1u) / columns, static_cast<float>(z) / rows);
 		const auto uvC = glm::dvec2(static_cast<float>(x) / columns, static_cast<float>(z + 1u) / rows);
@@ -163,8 +163,8 @@ std::optional<AudioSpectralPicking::Hit> AudioSpectralPicking::Intersect(
 		testCell(column, row);
 		const auto nearestColumn = static_cast<int>(std::round(u));
 		const auto nearestRow = static_cast<int>(std::round(v));
-		const bool onX = std::abs(point.x - graphics::AudioSpectralModel::LocalVertex(surface, nearestColumn, 0u).x) <= tolerance;
-		const bool onZ = std::abs(point.z - graphics::AudioSpectralModel::LocalVertex(surface, 0u, nearestRow).z) <= tolerance;
+		const bool onX = std::abs(point.x - graphics::SpectralModel::LocalVertex(surface, nearestColumn, 0u).x) <= tolerance;
+		const bool onZ = std::abs(point.z - graphics::SpectralModel::LocalVertex(surface, 0u, nearestRow).z) <= tolerance;
 		if (onX) { testCell(nearestColumn - 1, row); testCell(nearestColumn, row); }
 		if (onZ) { testCell(column, nearestRow - 1); testCell(column, nearestRow); }
 		if (onX && onZ)
@@ -185,9 +185,9 @@ std::optional<AudioSpectralPicking::Hit> AudioSpectralPicking::Intersect(
 	{
 		if (column < 0 || row < 0 || column >= static_cast<int>(columns) || row >= static_cast<int>(rows)) break;
 		const auto nextX = stepX == 0 ? std::numeric_limits<double>::infinity()
-			: (graphics::AudioSpectralModel::LocalVertex(surface, column + (stepX > 0 ? 1 : 0), 0u).x - origin.x) / direction.x;
+			: (graphics::SpectralModel::LocalVertex(surface, column + (stepX > 0 ? 1 : 0), 0u).x - origin.x) / direction.x;
 		const auto nextZ = stepZ == 0 ? std::numeric_limits<double>::infinity()
-			: (graphics::AudioSpectralModel::LocalVertex(surface, 0u, row + (stepZ > 0 ? 1 : 0)).z - origin.z) / direction.z;
+			: (graphics::SpectralModel::LocalVertex(surface, 0u, row + (stepZ > 0 ? 1 : 0)).z - origin.z) / direction.z;
 		const auto next = (std::min)(last, (std::min)(nextX, nextZ));
 		testCell(column, row);
 		if (next > current) testPointCells(current + (next - current) * 0.5);

@@ -1,4 +1,4 @@
-#include "AudioSpectralPlaybackSnapshot.h"
+#include "SpectralPlaybackSnapshot.h"
 
 #include <algorithm>
 #include <cmath>
@@ -8,16 +8,16 @@
 
 using namespace spectral;
 
-AudioSpectralPlaybackSnapshot::AudioSpectralPlaybackSnapshot(
-	std::shared_ptr<const AudioSpectralPcm> pcm, std::shared_ptr<const AudioSpectralEnvelope> envelope,
+SpectralPlaybackSnapshot::SpectralPlaybackSnapshot(
+	std::shared_ptr<const SpectralPcm> pcm, std::shared_ptr<const SpectralEnvelope> envelope,
 	std::uint64_t revision, std::uint64_t spectralRevision, std::uint64_t envelopeRevision) :
 	Pcm(std::move(pcm)), Envelope(std::move(envelope)), Revision(revision),
 	SpectralRevision(spectralRevision), EnvelopeRevision(envelopeRevision)
 {
 }
 
-std::shared_ptr<const AudioSpectralPlaybackSnapshot> AudioSpectralPlaybackSnapshot::Create(
-	std::shared_ptr<const AudioSpectralPcm> pcm, std::shared_ptr<const AudioSpectralEnvelope> envelope,
+std::shared_ptr<const SpectralPlaybackSnapshot> SpectralPlaybackSnapshot::Create(
+	std::shared_ptr<const SpectralPcm> pcm, std::shared_ptr<const SpectralEnvelope> envelope,
 	std::uint64_t revision, std::uint64_t spectralRevision, std::uint64_t envelopeRevision,
 	std::string& reason, std::stop_token stop)
 {
@@ -35,8 +35,8 @@ std::shared_ptr<const AudioSpectralPlaybackSnapshot> AudioSpectralPlaybackSnapsh
 	}
 	try
 	{
-		auto snapshot = std::shared_ptr<AudioSpectralPlaybackSnapshot>(
-			new AudioSpectralPlaybackSnapshot(std::move(pcm), std::move(envelope),
+		auto snapshot = std::shared_ptr<SpectralPlaybackSnapshot>(
+			new SpectralPlaybackSnapshot(std::move(pcm), std::move(envelope),
 				revision, spectralRevision, envelopeRevision));
 		// Off-worker validation also covers envelope multiplication overflow. No
 		// limiter/renormalization is introduced into the callback read path.
@@ -81,7 +81,7 @@ std::shared_ptr<const AudioSpectralPlaybackSnapshot> AudioSpectralPlaybackSnapsh
 	return nullptr;
 }
 
-float AudioSpectralPlaybackSnapshot::SampleAt(unsigned long storageIndex) const noexcept
+float SpectralPlaybackSnapshot::SampleAt(unsigned long storageIndex) const noexcept
 {
 	const auto samples = Pcm->Samples();
 	if (storageIndex >= samples.size()) return 0.0f;

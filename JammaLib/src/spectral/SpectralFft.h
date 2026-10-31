@@ -7,7 +7,7 @@ namespace spectral
 {
 	// Worker-owned real float FFT. Construct, transform and destroy off callback.
 	// One instance is reusable scratch for one worker, not a concurrent service.
-	class AudioSpectralFft
+	class SpectralFft
 	{
 	public:
 		struct Bin
@@ -18,10 +18,10 @@ namespace spectral
 
 		// Power-of-two sizes >= 4 avoid KissFFT's generic-butterfly allocations.
 		// Invalid size, allocation failure or plan failure leaves IsValid() false.
-		explicit AudioSpectralFft(unsigned int windowSize);
-		~AudioSpectralFft();
-		AudioSpectralFft(const AudioSpectralFft&) = delete;
-		AudioSpectralFft& operator=(const AudioSpectralFft&) = delete;
+		explicit SpectralFft(unsigned int windowSize);
+		~SpectralFft();
+		SpectralFft(const SpectralFft&) = delete;
+		SpectralFft& operator=(const SpectralFft&) = delete;
 
 		bool IsValid() const noexcept;
 		// Forward is unscaled; Inverse applies 1/N exactly once.

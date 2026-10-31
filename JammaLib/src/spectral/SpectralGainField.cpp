@@ -1,6 +1,6 @@
-#include "AudioSpectralGainField.h"
-#include "AudioSpectralDsp.h"
-#include "AudioSpectralEnvelope.h"
+#include "SpectralGainField.h"
+#include "SpectralDsp.h"
+#include "SpectralEnvelope.h"
 
 #include <algorithm>
 #include <cmath>
@@ -9,13 +9,13 @@
 
 using namespace spectral;
 
-AudioSpectralGainField::AudioSpectralGainField(std::size_t frames, unsigned int bins) :
+SpectralGainField::SpectralGainField(std::size_t frames, unsigned int bins) :
 	_frameCount(frames), _binCount(bins), _binTiles((bins - 1u) / TileBins + 1u),
 	_tiles(((frames - 1u) / TileFrames + 1u) * _binTiles)
 {
 }
 
-std::optional<AudioSpectralGainField> AudioSpectralGainField::Unity(
+std::optional<SpectralGainField> SpectralGainField::Unity(
 	std::size_t frames, unsigned int bins, std::string& reason)
 {
 	reason.clear();
@@ -26,13 +26,13 @@ std::optional<AudioSpectralGainField> AudioSpectralGainField::Unity(
 	}
 	const auto frameTiles = (frames - 1u) / TileFrames + 1u;
 	const auto binTiles = (bins - 1u) / TileBins + 1u;
-	if (frameTiles > AudioSpectralConfig::MaxWorkingBytes
+	if (frameTiles > SpectralConfig::MaxWorkingBytes
 		/ (sizeof(Tile) + sizeof(std::shared_ptr<Tile>) + 64u) / binTiles)
 	{
 		reason = "Spectral gain tiles exceed the editor memory budget";
 		return std::nullopt;
 	}
-	try { return AudioSpectralGainField(frames, bins); }
+	try { return SpectralGainField(frames, bins); }
 	catch (const std::bad_alloc&)
 	{
 		reason = "Not enough memory for spectral gain tiles";
@@ -40,26 +40,26 @@ std::optional<AudioSpectralGainField> AudioSpectralGainField::Unity(
 	}
 }
 
-std::size_t AudioSpectralGainField::_TileIndex(std::size_t frame, unsigned int bin) const noexcept
+std::size_t SpectralGainField::_TileIndex(std::size_t frame, unsigned int bin) const noexcept
 {
 	return (frame / TileFrames) * _binTiles + bin / TileBins;
 }
 
-float AudioSpectralGainField::GainDb(std::size_t frame, unsigned int bin) const noexcept
+float SpectralGainField::GainDb(std::size_t frame, unsigned int bin) const noexcept
 {
 	if (frame >= _frameCount || bin >= _binCount) return 0.0f;
 	const auto& tile = _tiles[_TileIndex(frame, bin)];
 	return tile ? (*tile)[(frame % TileFrames) * TileBins + bin % TileBins] : 0.0f;
 }
 
-bool AudioSpectralGainField::IsOwned(std::size_t frame, unsigned int bin) const noexcept
+bool SpectralGainField::IsOwned(std::size_t frame, unsigned int bin) const noexcept
 {
     if (frame >= _frameCount || bin >= _binCount) return false;
     const auto& tile = _tiles[_TileIndex(frame, bin)];
     return tile && tile->Owned[(frame % TileFrames) * TileBins + bin % TileBins];
 }
 
-bool AudioSpectralGainField::ContentEquals(const AudioSpectralGainField& other) const noexcept
+bool SpectralGainField::ContentEquals(const SpectralGainField& other) const noexcept
 {
     if (_frameCount != other._frameCount || _binCount != other._binCount
         || _ownedBins != other._ownedBins || _nonUnityBins != other._nonUnityBins) return false;
@@ -80,7 +80,7 @@ bool AudioSpectralGainField::ContentEquals(const AudioSpectralGainField& other) 
     return true;
 }
 
-bool AudioSpectralGainField::FrameHasOwned(std::size_t frame) const noexcept
+bool SpectralGainField::FrameHasOwned(std::size_t frame) const noexcept
 {
     if (!_ownedBins || frame >= _frameCount) return false;
     for (unsigned int column = 0; column < _binTiles; ++column)
@@ -93,7 +93,7 @@ bool AudioSpectralGainField::FrameHasOwned(std::size_t frame) const noexcept
     return false;
 }
 
-bool AudioSpectralGainField::SetOwned(std::size_t frame, unsigned int bin, bool owned)
+bool SpectralGainField::SetOwned(std::size_t frame, unsigned int bin, bool owned)
 {
     if (frame >= _frameCount || bin >= _binCount || IsOwned(frame, bin) == owned) return false;
     auto& tile = _tiles[_TileIndex(frame, bin)];
@@ -104,21 +104,21 @@ bool AudioSpectralGainField::SetOwned(std::size_t frame, unsigned int bin, bool 
     return true;
 }
 
-unsigned long AudioSpectralGainField::EnvelopeIndex(const AudioSpectralAnalysis& analysis, std::size_t frame) noexcept
+unsigned long SpectralGainField::EnvelopeIndex(const SpectralAnalysis& analysis, std::size_t frame) noexcept
 {
     const auto length = static_cast<std::int64_t>(analysis.Source->Layout.LogicalLength);
     const auto sample = analysis.Geometry.FrameCentre(frame, analysis.Transform.HopSamps) % length;
     return static_cast<unsigned long>(sample < 0 ? sample + length : sample);
 }
 
-bool AudioSpectralGainField::ApplyOwnedBand(const AudioSpectralAnalysis& analysis,
-    const AudioSpectralGainField& before, const AudioSpectralEnvelopeStroke& stroke, std::string& reason, ChangeBounds* changes)
+bool SpectralGainField::ApplyOwnedBand(const SpectralAnalysis& analysis,
+    const SpectralGainField& before, const SpectralEnvelopeStroke& stroke, std::string& reason, ChangeBounds* changes)
 {
     reason.clear();
     try
     {
         auto candidate = *this;
-        const auto floor = std::pow(10.0, AudioSpectralConfig::SpectralFloorDb / 20.0);
+        const auto floor = std::pow(10.0, SpectralConfig::SpectralFloorDb / 20.0);
         bool changed = false;
         ChangeBounds bounds;
         for (std::size_t frame = 0; frame < _frameCount; ++frame)
@@ -133,12 +133,12 @@ bool AudioSpectralGainField::ApplyOwnedBand(const AudioSpectralAnalysis& analysi
                 const auto db = before.GainDb(frame, bin);
                 const auto original = analysis.Magnitude(frame, bin);
                 if (!(original > 0.0)) continue;
-                const auto baseline = db == AudioSpectralConfig::SilenceGainDb ? 0.0
+                const auto baseline = db == SpectralConfig::SilenceGainDb ? 0.0
                     : original * before.GainLinear(frame, bin);
-                const auto target = AudioSpectralEnvelope::RelativeGain(baseline, *factor,
-                    floor, AudioSpectralEnvelope::MaximumGain());
+                const auto target = SpectralEnvelope::RelativeGain(baseline, *factor,
+                    floor, SpectralEnvelope::MaximumGain());
                 const auto targetDb = *factor == 1.0 ? db : target == 0.0
-                    ? AudioSpectralConfig::SilenceGainDb : static_cast<float>(20.0 * std::log10(target / original));
+                    ? SpectralConfig::SilenceGainDb : static_cast<float>(20.0 * std::log10(target / original));
                 if (candidate.SetGainDb(frame, bin, targetDb))
                 { changed = true; bounds.Include(frame, bin); }
             }
@@ -149,16 +149,16 @@ bool AudioSpectralGainField::ApplyOwnedBand(const AudioSpectralAnalysis& analysi
     catch (const std::bad_alloc&) { reason = "Not enough memory for recovered band targets"; return false; }
 }
 
-double AudioSpectralGainField::GainLinear(std::size_t frame, unsigned int bin) const noexcept
+double SpectralGainField::GainLinear(std::size_t frame, unsigned int bin) const noexcept
 {
     const auto db = GainDb(frame, bin);
-    return db == AudioSpectralConfig::SilenceGainDb ? 0.0 : std::pow(10.0, db / 20.0);
+    return db == SpectralConfig::SilenceGainDb ? 0.0 : std::pow(10.0, db / 20.0);
 }
-bool AudioSpectralGainField::SetGainDb(std::size_t frame, unsigned int bin, float db)
+bool SpectralGainField::SetGainDb(std::size_t frame, unsigned int bin, float db)
 {
 	if (frame >= _frameCount || bin >= _binCount || !std::isfinite(db)) return false;
-	if (db != AudioSpectralConfig::SilenceGainDb)
-        db = std::clamp(db, AudioSpectralConfig::MinimumSpectralGainDb, AudioSpectralConfig::MaximumSpectralGainDb);
+	if (db != SpectralConfig::SilenceGainDb)
+        db = std::clamp(db, SpectralConfig::MinimumSpectralGainDb, SpectralConfig::MaximumSpectralGainDb);
 	const auto old = GainDb(frame, bin);
 	if (old == db) return false;
 	auto& tile = _tiles[_TileIndex(frame, bin)];
@@ -170,7 +170,7 @@ bool AudioSpectralGainField::SetGainDb(std::size_t frame, unsigned int bin, floa
 	return true;
 }
 
-double AudioSpectralGainField::_IntegratedShoulder(double x, double y, double dx, double dy,
+double SpectralGainField::_IntegratedShoulder(double x, double y, double dx, double dy,
 	double first, double last) noexcept
 {
 	const auto a = dx * dx + dy * dy;
@@ -200,20 +200,20 @@ double AudioSpectralGainField::_IntegratedShoulder(double x, double y, double dx
 	return std::clamp(h * h * radius * (integral1 - integral0), 0.0, last - first);
 }
 
-double AudioSpectralGainField::EffectiveTimeRadius(const AudioSpectralAnalysis& analysis, double radius) noexcept
+double SpectralGainField::EffectiveTimeRadius(const SpectralAnalysis& analysis, double radius) noexcept
 {
     return (std::max)(radius, analysis.Transform.HopSamps / static_cast<double>(analysis.Source->Layout.SampleRate));
 }
 
-double AudioSpectralGainField::EffectiveFrequencyRadius(const AudioSpectralAnalysis& analysis, double hz, double radius) noexcept
+double SpectralGainField::EffectiveFrequencyRadius(const SpectralAnalysis& analysis, double hz, double radius) noexcept
 {
     const auto spacing = analysis.Source->Layout.SampleRate / static_cast<double>(analysis.Transform.WindowSamps);
-    const auto lower = (std::min)(AudioSpectralConfig::DisplayMinimumFrequencyHz, analysis.Source->Layout.SampleRate * 0.25);
+    const auto lower = (std::min)(SpectralConfig::DisplayMinimumFrequencyHz, analysis.Source->Layout.SampleRate * 0.25);
     // Fixed per-coefficient support: segmentation cannot change the response.
     return (std::max)(radius, std::log2(1.0 + spacing / (std::max)(lower, hz - spacing)));
 }
 
-double AudioSpectralGainField::_IntegratedOval(double x, double y, double dx, double dy,
+double SpectralGainField::_IntegratedOval(double x, double y, double dx, double dy,
     double first, double last) noexcept
 {
     constexpr double plateauSquared = 0.5625; // Inner 75% receives the full 60 dB/s.
@@ -238,43 +238,43 @@ double AudioSpectralGainField::_IntegratedOval(double x, double y, double dx, do
     return std::clamp(result / shoulderScale, 0.0, last-first);
 }
 
-float AudioSpectralGainField::GainDbAfterExposure(const AudioSpectralAnalysis& analysis, std::size_t frame,
+float SpectralGainField::GainDbAfterExposure(const SpectralAnalysis& analysis, std::size_t frame,
     unsigned int bin, float beforeDb, double exposureSeconds, bool increase) noexcept
 {
     if (!(exposureSeconds > 0.0)) return beforeDb;
     const auto magnitude = analysis.Magnitude(frame, bin);
     if (!(magnitude > 0.0)) return beforeDb;
     const auto originalDb = 20.0 * std::log10(magnitude);
-    const auto silent = beforeDb == AudioSpectralConfig::SilenceGainDb;
+    const auto silent = beforeDb == SpectralConfig::SilenceGainDb;
     if (silent && !increase) return beforeDb;
-    const auto currentDb = silent ? AudioSpectralConfig::SpectralFloorDb : originalDb + beforeDb;
-    const auto delta = (std::min)(2400.0, exposureSeconds * AudioSpectralConfig::BrushDbPerSecond);
+    const auto currentDb = silent ? SpectralConfig::SpectralFloorDb : originalDb + beforeDb;
+    const auto delta = (std::min)(2400.0, exposureSeconds * SpectralConfig::BrushDbPerSecond);
     const auto targetDb = increase
-        ? (std::min)(AudioSpectralConfig::SpectralCeilingDb,
-            (std::max)(currentDb, AudioSpectralConfig::SpectralFloorDb) + delta)
+        ? (std::min)(SpectralConfig::SpectralCeilingDb,
+            (std::max)(currentDb, SpectralConfig::SpectralFloorDb) + delta)
         : currentDb - delta;
-    return !increase && targetDb <= AudioSpectralConfig::SpectralFloorDb
-        ? AudioSpectralConfig::SilenceGainDb : static_cast<float>(targetDb - originalDb);
+    return !increase && targetDb <= SpectralConfig::SpectralFloorDb
+        ? SpectralConfig::SilenceGainDb : static_cast<float>(targetDb - originalDb);
 }
 
-AudioSpectralGainField::ExposureMap::ExposureMap(std::size_t frames, unsigned int bins)
+SpectralGainField::ExposureMap::ExposureMap(std::size_t frames, unsigned int bins)
     : _frames(frames), _bins(bins), _exposure(frames * bins, 0.0)
 {
     _dirty.reserve(_exposure.size());
 }
 
-std::unique_ptr<AudioSpectralGainField::ExposureMap> AudioSpectralGainField::ExposureMap::Create(
+std::unique_ptr<SpectralGainField::ExposureMap> SpectralGainField::ExposureMap::Create(
     std::size_t frames, unsigned int bins, std::string& reason)
 {
     reason.clear();
-    if (!frames || !bins || frames > AudioSpectralConfig::MaxWorkingBytes / AudioSpectralConfig::InputMapBytesPerCoefficient / bins
+    if (!frames || !bins || frames > SpectralConfig::MaxWorkingBytes / SpectralConfig::InputMapBytesPerCoefficient / bins
         || frames > (std::numeric_limits<std::uint32_t>::max)() / bins)
     { reason = "Spectral input map exceeds its bounded dimensions"; return nullptr; }
     try { return std::unique_ptr<ExposureMap>(new ExposureMap(frames, bins)); }
     catch (const std::bad_alloc&) { reason = "Not enough memory for the spectral input map"; return nullptr; }
 }
 
-bool AudioSpectralGainField::ExposureMap::Accumulate(const AudioSpectralAnalysis& analysis,
+bool SpectralGainField::ExposureMap::Accumulate(const SpectralAnalysis& analysis,
     double startSeconds, double startHz, double endSeconds, double endHz, double elapsedSeconds,
     std::string& reason, double timeRadius, double frequencyRadius)
 {
@@ -282,27 +282,27 @@ bool AudioSpectralGainField::ExposureMap::Accumulate(const AudioSpectralAnalysis
     if (_frames != analysis.Geometry.FrameCount || _bins != analysis.Geometry.BinCount
         )
     { reason = "Spectral input map dimensions differ from the source"; return false; }
-    const auto changed = AudioSpectralGainField::_VisitOval(analysis, startSeconds, startHz,
+    const auto changed = SpectralGainField::_VisitOval(analysis, startSeconds, startHz,
         endSeconds, endHz, elapsedSeconds, reason, timeRadius, frequencyRadius,
         [&](std::size_t frame, unsigned int bin, double exposure)
     {
         const auto index = static_cast<std::uint32_t>(frame * _bins + bin);
         auto& value = _exposure[index];
         if (value == 0.0) _dirty.push_back(index); // Full capacity was reserved at creation.
-        value = (std::min)(AudioSpectralConfig::MaximumBrushExposureSeconds, value + exposure); // Beyond 2400 dB, every finite input has saturated.
+        value = (std::min)(SpectralConfig::MaximumBrushExposureSeconds, value + exposure); // Beyond 2400 dB, every finite input has saturated.
         return true;
     });
     return changed;
 }
 
-void AudioSpectralGainField::ExposureMap::Clear() noexcept
+void SpectralGainField::ExposureMap::Clear() noexcept
 {
     for (const auto index : _dirty) _exposure[index] = 0.0;
     _dirty.clear();
 }
 
-bool AudioSpectralGainField::ApplyExposureMap(const AudioSpectralAnalysis& analysis,
-    const ExposureMap& exposure, bool increase, std::string& reason, const AudioSpectralEnvelope* envelope, ChangeBounds* changes)
+bool SpectralGainField::ApplyExposureMap(const SpectralAnalysis& analysis,
+    const ExposureMap& exposure, bool increase, std::string& reason, const SpectralEnvelope* envelope, ChangeBounds* changes)
 {
     reason.clear();
     if (_frameCount != exposure._frames || _binCount != exposure._bins
@@ -323,8 +323,8 @@ bool AudioSpectralGainField::ApplyExposureMap(const AudioSpectralAnalysis& analy
             if (exposure._exposure[index] > 0.0 && analysis.Magnitude(frame, bin) > 0.0
                 && mask != 1.0f && !candidate.IsOwned(frame, bin))
             {
-                beforeDb = mask == 0.0f || beforeDb == AudioSpectralConfig::SilenceGainDb
-                    ? AudioSpectralConfig::SilenceGainDb : beforeDb + static_cast<float>(20.0 * std::log10(mask));
+                beforeDb = mask == 0.0f || beforeDb == SpectralConfig::SilenceGainDb
+                    ? SpectralConfig::SilenceGainDb : beforeDb + static_cast<float>(20.0 * std::log10(mask));
                 cellChanged |= candidate.SetOwned(frame, bin, true);
             }
             cellChanged |= candidate.SetGainDb(frame, bin, GainDbAfterExposure(analysis, frame, bin,
@@ -338,7 +338,7 @@ bool AudioSpectralGainField::ApplyExposureMap(const AudioSpectralAnalysis& analy
 }
 
 template<class Visitor>
-bool AudioSpectralGainField::_VisitOval(const AudioSpectralAnalysis& analysis,
+bool SpectralGainField::_VisitOval(const SpectralAnalysis& analysis,
     double startSeconds, double startHz, double endSeconds, double endHz,
     double elapsedSeconds, std::string& reason, double timeRadius, double frequencyRadius, Visitor&& visit)
 {
@@ -369,7 +369,7 @@ bool AudioSpectralGainField::_VisitOval(const AudioSpectralAnalysis& analysis,
 	if (startSeconds < 0.0) startSeconds += period;
 	endSeconds = startSeconds + deltaTime;
 	const auto nyquist = sampleRate * 0.5;
-	const auto lower = (std::min)(AudioSpectralConfig::DisplayMinimumFrequencyHz, nyquist * 0.5);
+	const auto lower = (std::min)(SpectralConfig::DisplayMinimumFrequencyHz, nyquist * 0.5);
 	startHz = std::clamp(startHz, lower, nyquist);
 	endHz = std::clamp(endHz, lower, nyquist);
 	const auto startOctave = std::log2(startHz);

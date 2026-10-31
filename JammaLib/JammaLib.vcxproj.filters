@@ -1107,88 +1107,88 @@
     </Filter>
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="src\spectral\AudioSpectralWorker.h">
+    <ClInclude Include="src\spectral\SpectralWorker.h">
       <Filter>src\spectral</Filter>
     </ClInclude>
-    <ClInclude Include="src\spectral\AudioSpectralResourceBudget.h">
+    <ClInclude Include="src\spectral\SpectralResourceBudget.h">
       <Filter>src\spectral</Filter>
     </ClInclude>
-    <ClInclude Include="src\spectral\AudioSpectralSource.h">
+    <ClInclude Include="src\spectral\SpectralSource.h">
       <Filter>src\spectral</Filter>
     </ClInclude>
-    <ClInclude Include="src\spectral\AudioSpectralPicking.h">
+    <ClInclude Include="src\spectral\SpectralPicking.h">
       <Filter>src\spectral</Filter>
     </ClInclude>
-    <ClInclude Include="src\spectral\AudioSpectralDisplayJob.h">
+    <ClInclude Include="src\spectral\SpectralDisplayJob.h">
       <Filter>src\spectral</Filter>
     </ClInclude>
-    <ClInclude Include="src\graphics\AudioSpectralModel.h">
+    <ClInclude Include="src\graphics\SpectralModel.h">
       <Filter>src\graphics</Filter>
     </ClInclude>
-    <ClInclude Include="src\spectral\AudioSpectralEditState.h">
+    <ClInclude Include="src\spectral\SpectralEditState.h">
       <Filter>src\spectral</Filter>
     </ClInclude>
-    <ClInclude Include="src\spectral\AudioSpectralPlaybackSnapshot.h">
+    <ClInclude Include="src\spectral\SpectralPlaybackSnapshot.h">
       <Filter>src\spectral</Filter>
     </ClInclude>
-    <ClInclude Include="src\spectral\AudioSpectralConfig.h">
+    <ClInclude Include="src\spectral\SpectralConfig.h">
       <Filter>src\spectral</Filter>
     </ClInclude>
-    <ClInclude Include="src\spectral\AudioSpectralGainField.h">
+    <ClInclude Include="src\spectral\SpectralGainField.h">
       <Filter>src\spectral</Filter>
     </ClInclude>
-    <ClInclude Include="src\spectral\AudioSpectralFft.h">
+    <ClInclude Include="src\spectral\SpectralFft.h">
       <Filter>src\spectral</Filter>
     </ClInclude>
-    <ClInclude Include="src\spectral\AudioSpectralEnvelope.h">
+    <ClInclude Include="src\spectral\SpectralEnvelope.h">
       <Filter>src\spectral</Filter>
     </ClInclude>
-    <ClInclude Include="src\spectral\AudioSpectralDsp.h">
+    <ClInclude Include="src\spectral\SpectralDsp.h">
       <Filter>src\spectral</Filter>
     </ClInclude>
-    <ClInclude Include="src\spectral\AudioSpectralAnalysisJob.h">
+    <ClInclude Include="src\spectral\SpectralAnalysisJob.h">
       <Filter>src\spectral</Filter>
     </ClInclude>
-    <ClCompile Include="src\spectral\AudioSpectralWorker.cpp">
+    <ClCompile Include="src\spectral\SpectralWorker.cpp">
       <Filter>src\spectral</Filter>
     </ClCompile>
-    <ClCompile Include="src\spectral\AudioSpectralSource.cpp">
+    <ClCompile Include="src\spectral\SpectralSource.cpp">
       <Filter>src\spectral</Filter>
     </ClCompile>
-    <ClCompile Include="src\spectral\AudioSpectralPicking.cpp">
+    <ClCompile Include="src\spectral\SpectralPicking.cpp">
       <Filter>src\spectral</Filter>
     </ClCompile>
-    <ClCompile Include="src\spectral\AudioSpectralDisplayJob.cpp">
+    <ClCompile Include="src\spectral\SpectralDisplayJob.cpp">
       <Filter>src\spectral</Filter>
     </ClCompile>
-    <ClCompile Include="src\graphics\AudioSpectralModel.cpp">
+    <ClCompile Include="src\graphics\SpectralModel.cpp">
       <Filter>src\graphics</Filter>
     </ClCompile>
-    <ClCompile Include="src\spectral\AudioSpectralEditState.cpp">
+    <ClCompile Include="src\spectral\SpectralEditState.cpp">
       <Filter>src\spectral</Filter>
     </ClCompile>
-    <ClCompile Include="src\spectral\AudioSpectralPlaybackSnapshot.cpp">
+    <ClCompile Include="src\spectral\SpectralPlaybackSnapshot.cpp">
       <Filter>src\spectral</Filter>
     </ClCompile>
-    <ClCompile Include="src\spectral\AudioSpectralGainField.cpp">
+    <ClCompile Include="src\spectral\SpectralGainField.cpp">
       <Filter>src\spectral</Filter>
     </ClCompile>
-    <ClCompile Include="src\spectral\AudioSpectralFft.cpp">
+    <ClCompile Include="src\spectral\SpectralFft.cpp">
       <Filter>src\spectral</Filter>
     </ClCompile>
-    <ClCompile Include="src\spectral\AudioSpectralEnvelope.cpp">
+    <ClCompile Include="src\spectral\SpectralEnvelope.cpp">
       <Filter>src\spectral</Filter>
     </ClCompile>
-    <ClCompile Include="src\spectral\AudioSpectralDsp.cpp">
+    <ClCompile Include="src\spectral\SpectralDsp.cpp">
       <Filter>src\spectral</Filter>
     </ClCompile>
-    <ClCompile Include="src\spectral\AudioSpectralAnalysisJob.cpp">
+    <ClCompile Include="src\spectral\SpectralAnalysisJob.cpp">
       <Filter>src\spectral</Filter>
     </ClCompile>
-    <ClInclude Include="src\spectral\AudioSpectralEditor.h">
+    <ClInclude Include="src\spectral\SpectralEditor.h">
       <Filter>src\spectral</Filter>
     </ClInclude>
-    <ClCompile Include="src\spectral\AudioSpectralEditor.cpp">
+    <ClCompile Include="src\spectral\SpectralEditor.cpp">
       <Filter>src\spectral</Filter>
     </ClCompile>
   </ItemGroup>

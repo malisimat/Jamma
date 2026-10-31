@@ -9,17 +9,17 @@
 #include <span>
 #include <string>
 #include <vector>
-#include "AudioSpectralConfig.h"
+#include "SpectralConfig.h"
 
 namespace spectral
 {
-	struct AudioSpectralAnalysis;
-	class AudioSpectralEnvelope;
-	class AudioSpectralEnvelopeStroke;
+	struct SpectralAnalysis;
+	class SpectralEnvelope;
+	class SpectralEnvelopeStroke;
 
 	// Value copies share tiles; editing a copy forks only the changed tiles.
 	// Publish const value copies, never mutate a field already handed to a worker.
-	class AudioSpectralGainField
+	class SpectralGainField
 	{
 	public:
 		struct ChangeBounds
@@ -43,13 +43,13 @@ namespace spectral
 		// Storage is reserved once, so rasterizing a pointer sample cannot allocate.
 		class ExposureMap
 		{
-			friend class AudioSpectralGainField;
+			friend class SpectralGainField;
 		public:
 			static std::unique_ptr<ExposureMap> Create(std::size_t frames, unsigned int bins, std::string& reason);
-			bool Accumulate(const AudioSpectralAnalysis& analysis, double startSeconds, double startHz,
+			bool Accumulate(const SpectralAnalysis& analysis, double startSeconds, double startHz,
 				double endSeconds, double endHz, double elapsedSeconds, std::string& reason,
-				double timeRadius = AudioSpectralConfig::BrushTimeRadiusSeconds,
-				double frequencyRadius = AudioSpectralConfig::BrushFrequencyRadiusOctaves);
+				double timeRadius = SpectralConfig::BrushTimeRadiusSeconds,
+				double frequencyRadius = SpectralConfig::BrushFrequencyRadiusOctaves);
 			bool Empty() const noexcept { return _dirty.empty(); }
 			std::size_t DirtyCellCount() const noexcept { return _dirty.size(); }
 			double ExposureAt(std::size_t frame, unsigned int bin) const noexcept
@@ -62,7 +62,7 @@ namespace spectral
 			std::vector<double> _exposure;
 			std::vector<std::uint32_t> _dirty;
 		};
-		static std::optional<AudioSpectralGainField> Unity(
+		static std::optional<SpectralGainField> Unity(
 			std::size_t frames, unsigned int bins, std::string& reason);
 		std::size_t FrameCount() const noexcept { return _frameCount; }
 		unsigned int BinCount() const noexcept { return _binCount; }
@@ -70,26 +70,26 @@ namespace spectral
 		bool HasOwnedCoefficients() const noexcept { return _ownedBins != 0u; }
 		bool IsOwned(std::size_t frame, unsigned int bin) const noexcept;
 		bool FrameHasOwned(std::size_t frame) const noexcept;
-		bool ContentEquals(const AudioSpectralGainField& other) const noexcept;
+		bool ContentEquals(const SpectralGainField& other) const noexcept;
 		bool SetOwned(std::size_t frame, unsigned int bin, bool owned);
-		static unsigned long EnvelopeIndex(const AudioSpectralAnalysis&, std::size_t frame) noexcept;
-		bool ApplyOwnedBand(const AudioSpectralAnalysis&, const AudioSpectralGainField& before,
-			const AudioSpectralEnvelopeStroke& stroke, std::string& reason, ChangeBounds* changes = nullptr);
+		static unsigned long EnvelopeIndex(const SpectralAnalysis&, std::size_t frame) noexcept;
+		bool ApplyOwnedBand(const SpectralAnalysis&, const SpectralGainField& before,
+			const SpectralEnvelopeStroke& stroke, std::string& reason, ChangeBounds* changes = nullptr);
 		float GainDb(std::size_t frame, unsigned int bin) const noexcept;
         double GainLinear(std::size_t frame, unsigned int bin) const noexcept;
 		bool SetGainDb(std::size_t frame, unsigned int bin, float db);
-		static float GainDbAfterExposure(const AudioSpectralAnalysis& analysis, std::size_t frame,
+		static float GainDbAfterExposure(const SpectralAnalysis& analysis, std::size_t frame,
 			unsigned int bin, float beforeDb, double exposureSeconds, bool increase) noexcept;
-		bool ApplyExposureMap(const AudioSpectralAnalysis& analysis, const ExposureMap& exposure,
-			bool increase, std::string& reason, const AudioSpectralEnvelope* envelope = nullptr, ChangeBounds* changes = nullptr);
+		bool ApplyExposureMap(const SpectralAnalysis& analysis, const ExposureMap& exposure,
+			bool increase, std::string& reason, const SpectralEnvelope* envelope = nullptr, ChangeBounds* changes = nullptr);
 
-		static double EffectiveTimeRadius(const AudioSpectralAnalysis&, double radius) noexcept;
-		static double EffectiveFrequencyRadius(const AudioSpectralAnalysis&, double hz, double radius) noexcept;
+		static double EffectiveTimeRadius(const SpectralAnalysis&, double radius) noexcept;
+		static double EffectiveFrequencyRadius(const SpectralAnalysis&, double hz, double radius) noexcept;
 
 	private:
-		AudioSpectralGainField(std::size_t frames, unsigned int bins);
+		SpectralGainField(std::size_t frames, unsigned int bins);
 		template<class Visitor>
-		static bool _VisitOval(const AudioSpectralAnalysis& analysis, double startSeconds, double startHz,
+		static bool _VisitOval(const SpectralAnalysis& analysis, double startSeconds, double startHz,
 			double endSeconds, double endHz, double elapsedSeconds, std::string& reason,
 			double timeRadius, double frequencyRadius, Visitor&& visit);
 		std::size_t _TileIndex(std::size_t frame, unsigned int bin) const noexcept;

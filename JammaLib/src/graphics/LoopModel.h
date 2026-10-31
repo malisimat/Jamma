@@ -10,7 +10,7 @@
 #include "../utils/ArrayUtils.h"
 #include "../utils/VecUtils.h"
 #include "../audio/BufferBank.h"
-#include "../spectral/AudioSpectralPlaybackSnapshot.h"
+#include "../spectral/SpectralPlaybackSnapshot.h"
 #include "../gui/GuiModel.h"
 #include "CameraBounds.h"
 
@@ -85,7 +85,7 @@ namespace engine
 			float radius,
 			bool allowUnchangedSkip = false);
 		// UI-owned bounded upload preparation from worker-decimated immutable audio.
-		void UpdateEditedModel(const std::shared_ptr<const spectral::AudioSpectralPlaybackSnapshot>& snapshot,
+		void UpdateEditedModel(const std::shared_ptr<const spectral::SpectralPlaybackSnapshot>& snapshot,
 			float radius);
 		void UpdateModel(const audio::BufferBank& buffer,
 			unsigned long sourceLoopLength,
@@ -160,7 +160,7 @@ namespace engine
 		std::vector<glm::vec2> _waveformDecimated;
 		std::vector<glm::vec2> _waveformWorkDecimated;
 		bool _hasWaveformUpdateSignature;
-		std::weak_ptr<const spectral::AudioSpectralPlaybackSnapshot> _lastEditedWaveform;
+		std::weak_ptr<const spectral::SpectralPlaybackSnapshot> _lastEditedWaveform;
 		bool _usesEditedWaveform = false;
 		unsigned long _lastWaveformSourceLength;
 		unsigned long _lastWaveformDisplayLength;

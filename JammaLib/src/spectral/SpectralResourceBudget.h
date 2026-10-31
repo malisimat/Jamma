@@ -6,30 +6,30 @@
 #include <new>
 #include <string>
 #include <utility>
-#include "AudioSpectralConfig.h"
+#include "SpectralConfig.h"
 
 namespace spectral
 {
 	// One explicit owner per session/editor. Admissions and final token destruction
 	// are off audio; immutable sources pin their reservation through jobs/history.
-	class AudioSpectralResourceBudget : public std::enable_shared_from_this<AudioSpectralResourceBudget>
+	class SpectralResourceBudget : public std::enable_shared_from_this<SpectralResourceBudget>
 	{
 	public:
 		class Reservation
 		{
 		public:
-			Reservation(std::shared_ptr<AudioSpectralResourceBudget> owner, std::uint64_t bytes)
+			Reservation(std::shared_ptr<SpectralResourceBudget> owner, std::uint64_t bytes)
 				: _owner(std::move(owner)), _bytes(bytes) {}
 			~Reservation() { _owner->_used.fetch_sub(_bytes, std::memory_order_relaxed); }
 			Reservation(const Reservation&) = delete;
 			Reservation& operator=(const Reservation&) = delete;
 			std::uint64_t Bytes() const noexcept { return _bytes; }
 		private:
-			const std::shared_ptr<AudioSpectralResourceBudget> _owner;
+			const std::shared_ptr<SpectralResourceBudget> _owner;
 			const std::uint64_t _bytes;
 		};
 
-		explicit AudioSpectralResourceBudget(std::uint64_t limit = AudioSpectralConfig::MaxWorkingBytes)
+		explicit SpectralResourceBudget(std::uint64_t limit = SpectralConfig::MaxWorkingBytes)
 			: _limit(limit) {}
 		std::uint64_t UsedBytes() const noexcept { return _used.load(std::memory_order_relaxed); }
 		std::shared_ptr<const Reservation> Reserve(std::uint64_t bytes, std::string& reason)

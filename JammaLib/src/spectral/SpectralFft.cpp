@@ -1,4 +1,4 @@
-#include "AudioSpectralFft.h"
+#include "SpectralFft.h"
 
 #include <algorithm>
 #include <cmath>
@@ -14,7 +14,7 @@ using namespace spectral;
 // The installed header defaults to float; reject conflicting build definitions.
 static_assert(std::is_same_v<kiss_fft_scalar, float>);
 
-struct AudioSpectralFft::State
+struct SpectralFft::State
 {
 	struct PlanDeleter
 	{
@@ -38,7 +38,7 @@ struct AudioSpectralFft::State
 	std::vector<kiss_fft_cpx> Bins;
 };
 
-AudioSpectralFft::AudioSpectralFft(unsigned int windowSize)
+SpectralFft::SpectralFft(unsigned int windowSize)
 {
 	// kiss_fftr_alloc halves N and computes (N/2)*3 using signed int.
 	if (windowSize < 4u || (windowSize & (windowSize - 1u)) != 0u
@@ -55,19 +55,19 @@ AudioSpectralFft::AudioSpectralFft(unsigned int windowSize)
 	}
 }
 
-AudioSpectralFft::~AudioSpectralFft() = default;
+SpectralFft::~SpectralFft() = default;
 
-bool AudioSpectralFft::IsValid() const noexcept
+bool SpectralFft::IsValid() const noexcept
 {
 	return _state != nullptr;
 }
 
-float AudioSpectralFft::InverseNormalization() const noexcept
+float SpectralFft::InverseNormalization() const noexcept
 {
 	return _state ? _state->Normalization : 0.0f;
 }
 
-void AudioSpectralFft::Forward(std::span<const float> samples, std::span<Bin> bins)
+void SpectralFft::Forward(std::span<const float> samples, std::span<Bin> bins)
 {
 	if (!_state || samples.size() != _state->Samples.size() || bins.size() != _state->Bins.size())
 		throw std::invalid_argument("Audio spectral FFT forward requires a valid plan and exact spans");
@@ -85,7 +85,7 @@ void AudioSpectralFft::Forward(std::span<const float> samples, std::span<Bin> bi
 		bins[i] = { _state->Bins[i].r, _state->Bins[i].i };
 }
 
-void AudioSpectralFft::Inverse(std::span<const Bin> bins, std::span<float> samples)
+void SpectralFft::Inverse(std::span<const Bin> bins, std::span<float> samples)
 {
 	if (!_state || samples.size() != _state->Samples.size() || bins.size() != _state->Bins.size())
 		throw std::invalid_argument("Audio spectral FFT inverse requires a valid plan and exact spans");

@@ -173,19 +173,19 @@ public:
 
     bool InstallSpectralSourceForEligibilityTest()
     {
-        auto source = std::make_shared<spectral::AudioSpectralSource>();
+        auto source = std::make_shared<spectral::SpectralSource>();
         source->Identity = _audioSourceIdentity;
         source->Generation = AudioSourceGeneration();
         source->Layout = {64u, 64u, 0u, 48000.0f};
         source->Samples.resize(source->Layout.StoredSampleCount(), 0.5f);
-        auto pcm = std::make_shared<spectral::AudioSpectralPcm>();
+        auto pcm = std::make_shared<spectral::SpectralPcm>();
         pcm->Source = source;
         std::string reason;
-        auto playback = spectral::AudioSpectralPlaybackSnapshot::Create(pcm, nullptr, 1u, 1u, 1u, reason);
+        auto playback = spectral::SpectralPlaybackSnapshot::Create(pcm, nullptr, 1u, 1u, 1u, reason);
         if (!playback) return false;
-        _audioSpectralPlayback.store(std::move(playback));
-        _activeAudioSpectral = _audioSpectralPlayback.borrow();
-        return static_cast<bool>(_activeAudioSpectral);
+        _spectralPlayback.store(std::move(playback));
+        _activeSpectral = _spectralPlayback.borrow();
+        return static_cast<bool>(_activeSpectral);
     }
 };
 

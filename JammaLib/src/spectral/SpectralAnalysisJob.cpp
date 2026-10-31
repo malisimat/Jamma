@@ -1,17 +1,17 @@
-#include "AudioSpectralAnalysisJob.h"
+#include "SpectralAnalysisJob.h"
 
 #include <new>
 #include <utility>
 
 using namespace spectral;
 
-AudioSpectralAnalysisJob::AudioSpectralAnalysisJob(
-	std::shared_ptr<const AudioSpectralSource> source, AudioSpectralTransformConfig transform) :
+SpectralAnalysisJob::SpectralAnalysisJob(
+	std::shared_ptr<const SpectralSource> source, SpectralTransformConfig transform) :
 	Source(std::move(source)), Transform(transform)
 {
 }
 
-void AudioSpectralAnalysisJob::Cancel() noexcept
+void SpectralAnalysisJob::Cancel() noexcept
 {
 	auto expected = State::Pending;
 	if (_state.compare_exchange_strong(expected, State::Cancelled,
@@ -19,45 +19,45 @@ void AudioSpectralAnalysisJob::Cancel() noexcept
 		_stop.request_stop();
 }
 
-std::shared_ptr<const AudioSpectralAnalysis> AudioSpectralAnalysisJob::Result() const noexcept
+std::shared_ptr<const SpectralAnalysis> SpectralAnalysisJob::Result() const noexcept
 {
 	return Status() == State::Complete ? _result : nullptr;
 }
 
-std::string AudioSpectralAnalysisJob::Reason() const
+std::string SpectralAnalysisJob::Reason() const
 {
 	return Status() == State::Failed ? _reason : std::string{};
 }
 
-std::shared_ptr<const AudioSpectralPlaybackSnapshot> AudioSpectralAnalysisJob::Playback() const noexcept
+std::shared_ptr<const SpectralPlaybackSnapshot> SpectralAnalysisJob::Playback() const noexcept
 {
 	return Status() == State::Complete ? _playback : nullptr;
 }
 
-std::shared_ptr<const AudioSpectralEditState> AudioSpectralAnalysisJob::EditState() const noexcept
+std::shared_ptr<const SpectralEditState> SpectralAnalysisJob::EditState() const noexcept
 {
 	return Status() == State::Complete ? _editState : nullptr;
 }
 
-void AudioSpectralAnalysisJob::Run()
+void SpectralAnalysisJob::Run()
 {
 	if (Status() != State::Pending) return;
 	try
 	{
-		_result = AudioSpectralDsp::Analyze(Source, Transform, _reason, _stop.get_token());
+		_result = SpectralDsp::Analyze(Source, Transform, _reason, _stop.get_token());
 		if (_result)
 		{
-			auto gains = AudioSpectralGainField::Unity(_result->Geometry.FrameCount,
+			auto gains = SpectralGainField::Unity(_result->Geometry.FrameCount,
 				_result->Geometry.BinCount, _reason);
 			if (gains)
-				_editState = AudioSpectralEditState::Create(Source, Transform,
-					std::make_shared<const AudioSpectralGainField>(std::move(*gains)), nullptr,
+				_editState = SpectralEditState::Create(Source, Transform,
+					std::make_shared<const SpectralGainField>(std::move(*gains)), nullptr,
 					1u, 0u, 0u, _reason);
 			if (_editState)
 			{
-				auto pcm = std::make_shared<AudioSpectralPcm>();
+				auto pcm = std::make_shared<SpectralPcm>();
 				pcm->Source = Source;
-				_playback = AudioSpectralPlaybackSnapshot::Create(std::move(pcm), nullptr,
+				_playback = SpectralPlaybackSnapshot::Create(std::move(pcm), nullptr,
 					1u, 0u, 0u, _reason, _stop.get_token());
 			}
 		}

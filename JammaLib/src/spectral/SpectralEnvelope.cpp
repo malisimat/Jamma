@@ -1,4 +1,4 @@
-#include "AudioSpectralEnvelope.h"
+#include "SpectralEnvelope.h"
 
 #include <algorithm>
 #include <cmath>
@@ -9,38 +9,38 @@
 
 using namespace spectral;
 
-AudioSpectralEnvelope::AudioSpectralEnvelope(std::vector<float> gains, bool unity) :
+SpectralEnvelope::SpectralEnvelope(std::vector<float> gains, bool unity) :
 	_gains(std::move(gains)), _unity(unity)
 {
 }
 
-float AudioSpectralEnvelope::MaximumGain() noexcept
+float SpectralEnvelope::MaximumGain() noexcept
 {
-	return static_cast<float>(std::pow(10.0, AudioSpectralConfig::MaximumGainDb / 20.0));
+	return static_cast<float>(std::pow(10.0, SpectralConfig::MaximumGainDb / 20.0));
 }
 
-float AudioSpectralEnvelope::TargetFromDragPixels(double displacement) noexcept
+float SpectralEnvelope::TargetFromDragPixels(double displacement) noexcept
 {
 	if (!std::isfinite(displacement)) return 1.0f;
 	if (displacement == 0.0) return 1.0f;
-	if (displacement <= -AudioSpectralConfig::BarSilenceDragPixels) return 0.0f;
+	if (displacement <= -SpectralConfig::BarSilenceDragPixels) return 0.0f;
 	if (displacement < 0.0)
-		return static_cast<float>(1.0 + displacement / AudioSpectralConfig::BarSilenceDragPixels);
-	const auto fraction = (std::min)(displacement / AudioSpectralConfig::BarBoostDragPixels, 1.0);
-	return static_cast<float>(std::pow(10.0, AudioSpectralConfig::MaximumGainDb * fraction / 20.0));
+		return static_cast<float>(1.0 + displacement / SpectralConfig::BarSilenceDragPixels);
+	const auto fraction = (std::min)(displacement / SpectralConfig::BarBoostDragPixels, 1.0);
+	return static_cast<float>(std::pow(10.0, SpectralConfig::MaximumGainDb * fraction / 20.0));
 }
 
-std::shared_ptr<const AudioSpectralEnvelope> AudioSpectralEnvelope::Unity(unsigned long length, std::string& reason)
+std::shared_ptr<const SpectralEnvelope> SpectralEnvelope::Unity(unsigned long length, std::string& reason)
 {
 	reason.clear();
-	if (length == 0ul || static_cast<std::uint64_t>(length) * sizeof(float) > AudioSpectralConfig::MaxWorkingBytes)
+	if (length == 0ul || static_cast<std::uint64_t>(length) * sizeof(float) > SpectralConfig::MaxWorkingBytes)
 	{
 		reason = "Broadband envelope exceeds the editor memory budget or has no length";
 		return nullptr;
 	}
 	try
 	{
-		return std::shared_ptr<const AudioSpectralEnvelope>(new AudioSpectralEnvelope(std::vector<float>(length, 1.0f), true));
+		return std::shared_ptr<const SpectralEnvelope>(new SpectralEnvelope(std::vector<float>(length, 1.0f), true));
 	}
 	catch (const std::bad_alloc&)
 	{
@@ -49,11 +49,11 @@ std::shared_ptr<const AudioSpectralEnvelope> AudioSpectralEnvelope::Unity(unsign
 	}
 }
 
-std::shared_ptr<const AudioSpectralEnvelope> AudioSpectralEnvelope::FromGains(std::span<const float> gains, std::string& reason)
+std::shared_ptr<const SpectralEnvelope> SpectralEnvelope::FromGains(std::span<const float> gains, std::string& reason)
 {
 	reason.clear();
 	if (gains.empty() || gains.size() > std::numeric_limits<unsigned long>::max()
-		|| gains.size() > AudioSpectralConfig::MaxWorkingBytes / sizeof(float))
+		|| gains.size() > SpectralConfig::MaxWorkingBytes / sizeof(float))
 	{
 		reason = "Broadband envelope exceeds the editor memory budget or has no length";
 		return nullptr;
@@ -71,7 +71,7 @@ std::shared_ptr<const AudioSpectralEnvelope> AudioSpectralEnvelope::FromGains(st
 	}
 	try
 	{
-		return std::shared_ptr<const AudioSpectralEnvelope>(new AudioSpectralEnvelope(
+		return std::shared_ptr<const SpectralEnvelope>(new SpectralEnvelope(
 			std::vector<float>(gains.begin(), gains.end()), unity));
 	}
 	catch (const std::bad_alloc&)
@@ -81,31 +81,31 @@ std::shared_ptr<const AudioSpectralEnvelope> AudioSpectralEnvelope::FromGains(st
 	}
 }
 
-AudioSpectralEnvelopeStroke::AudioSpectralEnvelopeStroke(
-	std::shared_ptr<const AudioSpectralEnvelope> before, double rampHalfSamps) :
+SpectralEnvelopeStroke::SpectralEnvelopeStroke(
+	std::shared_ptr<const SpectralEnvelope> before, double rampHalfSamps) :
 	_before(std::move(before)), _gains(_before->Gains().begin(), _before->Gains().end()),
 	_bestInfluence(_before->Length(), 0.0), _winnerIds(_before->Length(), 0u),
 	_winningTargets(_before->Length(), 1.0f), _rampHalfSamps(rampHalfSamps)
 {
 }
 
-std::unique_ptr<AudioSpectralEnvelopeStroke> AudioSpectralEnvelopeStroke::Begin(
-	std::shared_ptr<const AudioSpectralEnvelope> before, float sampleRate, std::string& reason)
+std::unique_ptr<SpectralEnvelopeStroke> SpectralEnvelopeStroke::Begin(
+	std::shared_ptr<const SpectralEnvelope> before, float sampleRate, std::string& reason)
 {
 	reason.clear();
 	// Count E0, raw gains, influence, winner IDs/targets and one moved snapshot.
 	constexpr auto bytesPerSample = 4u * sizeof(float) + sizeof(double) + sizeof(std::uint64_t);
 	if (!before || !std::isfinite(sampleRate) || sampleRate <= 0.0f
-		|| static_cast<std::uint64_t>(before->Length()) * bytesPerSample > AudioSpectralConfig::MaxWorkingBytes)
+		|| static_cast<std::uint64_t>(before->Length()) * bytesPerSample > SpectralConfig::MaxWorkingBytes)
 	{
 		reason = "Broadband stroke has invalid geometry or exceeds the editor memory budget";
 		return nullptr;
 	}
 	try
 	{
-		return std::unique_ptr<AudioSpectralEnvelopeStroke>(new AudioSpectralEnvelopeStroke(
+		return std::unique_ptr<SpectralEnvelopeStroke>(new SpectralEnvelopeStroke(
 			std::move(before),
-			sampleRate * AudioSpectralConfig::EnvelopeRampSeconds * 0.5));
+			sampleRate * SpectralConfig::EnvelopeRampSeconds * 0.5));
 	}
 	catch (const std::bad_alloc&)
 	{
@@ -114,27 +114,27 @@ std::unique_ptr<AudioSpectralEnvelopeStroke> AudioSpectralEnvelopeStroke::Begin(
 	}
 }
 
-unsigned long AudioSpectralEnvelopeStroke::_WrapSample(double integralSample, unsigned long length) noexcept
+unsigned long SpectralEnvelopeStroke::_WrapSample(double integralSample, unsigned long length) noexcept
 {
 	auto wrapped = std::fmod(integralSample, static_cast<double>(length));
 	if (wrapped < 0.0) wrapped += length;
 	return static_cast<unsigned long>(wrapped);
 }
 
-double AudioSpectralEnvelope::RelativeGain(double baseline, double factor, double floor, double maximum) noexcept
+double SpectralEnvelope::RelativeGain(double baseline, double factor, double floor, double maximum) noexcept
 {
     if (factor == 1.0) return baseline;
     if (factor <= 0.0) return 0.0;
     return std::clamp((factor > 1.0 ? (std::max)(baseline, floor) : baseline) * factor, 0.0, maximum);
 }
 
-std::optional<double> AudioSpectralEnvelopeStroke::RelativeFactorAt(unsigned long index) const noexcept
+std::optional<double> SpectralEnvelopeStroke::RelativeFactorAt(unsigned long index) const noexcept
 {
     if (index >= _bestInfluence.size() || _bestInfluence[index] <= 0.0) return std::nullopt;
     return 1.0 + _bestInfluence[index] * (static_cast<double>(_winningTargets[index]) - 1.0);
 }
 
-bool AudioSpectralEnvelopeStroke::RelativePath::Next(double start, double startDrag,
+bool SpectralEnvelopeStroke::RelativePath::Next(double start, double startDrag,
 	double end, double endDrag) noexcept
 {
 	const auto dx = end - start;
@@ -153,19 +153,19 @@ bool AudioSpectralEnvelopeStroke::RelativePath::Next(double start, double startD
 	return true;
 }
 
-AudioSpectralEnvelopeStroke::RelativeMap::RelativeMap(unsigned long length, double radius) :
+SpectralEnvelopeStroke::RelativeMap::RelativeMap(unsigned long length, double radius) :
 	_influence(length, 0.0), _drag(length, 0.0), _winners(length, 0u), _radius(radius)
 {
 	_dirty.reserve(length);
 }
 
-std::unique_ptr<AudioSpectralEnvelopeStroke::RelativeMap> AudioSpectralEnvelopeStroke::RelativeMap::Create(
+std::unique_ptr<SpectralEnvelopeStroke::RelativeMap> SpectralEnvelopeStroke::RelativeMap::Create(
 	unsigned long length, float sampleRate, double radiusSeconds, std::string& reason)
 {
 	reason.clear();
 	if (length == 0ul || !std::isfinite(sampleRate) || sampleRate <= 0.0f
 		|| !std::isfinite(radiusSeconds) || radiusSeconds <= 0.0 || radiusSeconds > 2.0
-		|| static_cast<std::uint64_t>(length) * 24u > AudioSpectralConfig::MaxWorkingBytes)
+		|| static_cast<std::uint64_t>(length) * 24u > SpectralConfig::MaxWorkingBytes)
 	{
 		reason = "Relative band input exceeds the spectral memory budget or has invalid geometry";
 		return nullptr;
@@ -174,13 +174,13 @@ std::unique_ptr<AudioSpectralEnvelopeStroke::RelativeMap> AudioSpectralEnvelopeS
 	catch (const std::bad_alloc&) { reason = "Not enough memory for relative band input"; return nullptr; }
 }
 
-void AudioSpectralEnvelopeStroke::RelativeMap::Clear() noexcept
+void SpectralEnvelopeStroke::RelativeMap::Clear() noexcept
 {
 	for (const auto index : _dirty) { _influence[index] = 0.0; _winners[index] = 0u; }
 	_dirty.clear();
 }
 
-bool AudioSpectralEnvelopeStroke::RelativeMap::Accumulate(double startSample, double startDrag,
+bool SpectralEnvelopeStroke::RelativeMap::Accumulate(double startSample, double startDrag,
 	double endSample, double endDrag, RelativePath& path, std::string& reason)
 {
 	reason.clear();
@@ -201,7 +201,7 @@ bool AudioSpectralEnvelopeStroke::RelativeMap::Accumulate(double startSample, do
 	return true;
 }
 
-void AudioSpectralEnvelopeStroke::RelativeMap::_AccumulateSample(unsigned long index, double start,
+void SpectralEnvelopeStroke::RelativeMap::_AccumulateSample(unsigned long index, double start,
 	double startDrag, double end, double endDrag, std::uint32_t winner) noexcept
 {
 	const auto length = static_cast<double>(_influence.size());
@@ -245,21 +245,21 @@ void AudioSpectralEnvelopeStroke::RelativeMap::_AccumulateSample(unsigned long i
 	_winners[index] = winner;
 }
 
-bool AudioSpectralEnvelopeStroke::ApplyRelativeMap(const RelativeMap& map) noexcept
+bool SpectralEnvelopeStroke::ApplyRelativeMap(const RelativeMap& map) noexcept
 {
 	if (map._influence.size() != _gains.size()) return false;
 	bool changed = false;
-	const auto maximum = static_cast<double>(AudioSpectralEnvelope::MaximumGain());
-    const auto floor = std::pow(10.0, AudioSpectralConfig::SpectralFloorDb / 20.0);
+	const auto maximum = static_cast<double>(SpectralEnvelope::MaximumGain());
+    const auto floor = std::pow(10.0, SpectralConfig::SpectralFloorDb / 20.0);
 	for (const auto index : map._dirty)
 	{
 		const auto influence = map._influence[index];
 		// Maps are consumed in input order. Equal influence always takes this map;
 		// run IDs describe continuity for ramps, never temporal winner priority.
 		if (influence < _bestInfluence[index]) continue;
-		const auto target = AudioSpectralEnvelope::TargetFromDragPixels(map._drag[index]);
+		const auto target = SpectralEnvelope::TargetFromDragPixels(map._drag[index]);
 		const auto baseline = _before->GainAt(index);
-		const auto candidate = static_cast<float>(AudioSpectralEnvelope::RelativeGain(baseline,
+		const auto candidate = static_cast<float>(SpectralEnvelope::RelativeGain(baseline,
             1.0 + influence * (static_cast<double>(target) - 1.0),
             floor, maximum));
 		const bool wasChanged = _gains[index] != baseline, isChanged = candidate != baseline;
@@ -274,7 +274,7 @@ bool AudioSpectralEnvelopeStroke::ApplyRelativeMap(const RelativeMap& map) noexc
 	return changed;
 }
 
-std::shared_ptr<const AudioSpectralEnvelope> AudioSpectralEnvelopeStroke::Snapshot(std::string& reason) const
+std::shared_ptr<const SpectralEnvelope> SpectralEnvelopeStroke::Snapshot(std::string& reason) const
 {
 	if (_changedSamples == 0ul)
 	{
@@ -288,7 +288,7 @@ std::shared_ptr<const AudioSpectralEnvelope> AudioSpectralEnvelopeStroke::Snapsh
 		_ApplyLocalRamps(gains);
 		if (std::equal(gains.begin(), gains.end(), _before->Gains().begin())) return _before;
 		const auto unity = std::all_of(gains.begin(), gains.end(), [](float gain) { return gain == 1.0f; });
-		return std::shared_ptr<const AudioSpectralEnvelope>(new AudioSpectralEnvelope(std::move(gains), unity));
+		return std::shared_ptr<const SpectralEnvelope>(new SpectralEnvelope(std::move(gains), unity));
 	}
 	catch (const std::bad_alloc&)
 	{
@@ -297,7 +297,7 @@ std::shared_ptr<const AudioSpectralEnvelope> AudioSpectralEnvelopeStroke::Snapsh
 	}
 }
 
-bool AudioSpectralEnvelopeStroke::_IsRampBoundary(unsigned long leftIndex) const noexcept
+bool SpectralEnvelopeStroke::_IsRampBoundary(unsigned long leftIndex) const noexcept
 {
 	const auto rightIndex = (leftIndex + 1ul) % _before->Length();
 	return _winnerIds[leftIndex] != 0u && _winnerIds[rightIndex] != 0u
@@ -306,7 +306,7 @@ bool AudioSpectralEnvelopeStroke::_IsRampBoundary(unsigned long leftIndex) const
 		&& _gains[leftIndex] != _gains[rightIndex];
 }
 
-void AudioSpectralEnvelopeStroke::_ApplyLocalRamps(std::vector<float>& gains) const noexcept
+void SpectralEnvelopeStroke::_ApplyLocalRamps(std::vector<float>& gains) const noexcept
 {
 	const auto length = _before->Length();
 	if (length < 2ul) return;

@@ -17,7 +17,7 @@
 #include "../base/DrawContext.h"
 #include "../base/GuiElement.h"
 #include "../engine/Loop.h"
-#include "../spectral/AudioSpectralEditor.h"
+#include "../spectral/SpectralEditor.h"
 #include "../engine/LoopTake.h"
 #include "../engine/Station.h"
 #include "../graphics/Camera.h"
@@ -164,14 +164,14 @@ namespace midi
 		std::weak_ptr<engine::Station> _station;
 		std::weak_ptr<engine::LoopTake> _take;
 		std::weak_ptr<engine::Loop> _audioLoop;
-		spectral::AudioSpectralEditor _audioEditor;
+		spectral::SpectralEditor _audioEditor;
 		// UI-only controls/capture. Worker requests copy values; Close cancels capture.
-		spectral::AudioSpectralControls _audioControls;
+		spectral::SpectralControls _audioControls;
 		bool _audioNavigation = false;
         bool _audioPan = false;
 		bool _audioBandPreview = false;
 		utils::Position2d _audioViewPointerAnchor{};
-		graphics::AudioSpectralViewport _audioCapturedViewport, _audioCapturedTimeViewport;
+		graphics::SpectralViewport _audioCapturedViewport, _audioCapturedTimeViewport;
 		bool _audioStroke = false;
 		std::deque<bool> _pendingAudioUndo; // At most sixteen release-adjacent history keys.
 		bool _audioBroadband = false;

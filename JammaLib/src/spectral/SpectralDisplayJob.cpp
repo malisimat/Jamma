@@ -1,21 +1,21 @@
-#include "AudioSpectralDisplayJob.h"
+#include "SpectralDisplayJob.h"
 
 #include <new>
 #include <utility>
 
 using namespace spectral;
 
-AudioSpectralDisplayJob::AudioSpectralDisplayJob(
-	std::shared_ptr<const AudioSpectralAnalysis> analysis,
-	std::shared_ptr<const AudioSpectralEditState> editState,
+SpectralDisplayJob::SpectralDisplayJob(
+	std::shared_ptr<const SpectralAnalysis> analysis,
+	std::shared_ptr<const SpectralEditState> editState,
 	unsigned int timeSegments, unsigned int frequencySegments,
-	graphics::AudioSpectralViewport viewport, std::uint64_t presentationRevision, std::shared_ptr<Cache> cache, Damage damage) :
+	graphics::SpectralViewport viewport, std::uint64_t presentationRevision, std::shared_ptr<Cache> cache, Damage damage) :
 	Analysis(std::move(analysis)), EditState(std::move(editState)),
 	TimeSegments(timeSegments), FrequencySegments(frequencySegments), Viewport(viewport), PresentationRevision(presentationRevision), _cache(std::move(cache)), _damage(damage)
 {
 }
 
-void AudioSpectralDisplayJob::Cancel() noexcept
+void SpectralDisplayJob::Cancel() noexcept
 {
 	auto expected = State::Pending;
 	if (_state.compare_exchange_strong(expected, State::Cancelled,
@@ -23,17 +23,17 @@ void AudioSpectralDisplayJob::Cancel() noexcept
 		_stop.request_stop();
 }
 
-std::shared_ptr<const graphics::AudioSpectralDisplay> AudioSpectralDisplayJob::Result() const noexcept
+std::shared_ptr<const graphics::SpectralDisplay> SpectralDisplayJob::Result() const noexcept
 {
 	return Status() == State::Complete ? _result : nullptr;
 }
 
-std::string AudioSpectralDisplayJob::Reason() const
+std::string SpectralDisplayJob::Reason() const
 {
 	return Status() == State::Failed ? _reason : std::string{};
 }
 
-void AudioSpectralDisplayJob::Run()
+void SpectralDisplayJob::Run()
 {
 	if (Status() != State::Pending) return;
 	try
@@ -48,10 +48,10 @@ void AudioSpectralDisplayJob::Run()
         {
             const auto baseline = _damage.TargetRevision == EditState->Revision && _cache && _cache->Display
                 && _cache->Display->Revision == _damage.BaselineRevision ? _cache->Display : nullptr;
-            auto rectangles = baseline ? graphics::AudioSpectralModel::ProjectDamage(*Analysis, *baseline,
+            auto rectangles = baseline ? graphics::SpectralModel::ProjectDamage(*Analysis, *baseline,
                 _damage.FirstFrame, _damage.LastFrame, _damage.FirstBin, _damage.LastBin,
-                _damage.FirstSample, _damage.LastSample) : std::vector<graphics::AudioSpectralDisplay::Rectangle>{};
-            _result = graphics::AudioSpectralModel::_BuildDisplay(*Analysis, EditState->Gains.get(),
+                _damage.FirstSample, _damage.LastSample) : std::vector<graphics::SpectralDisplay::Rectangle>{};
+            _result = graphics::SpectralModel::_BuildDisplay(*Analysis, EditState->Gains.get(),
 				EditState->Envelope.get(), EditState->Revision, TimeSegments, FrequencySegments,
 				_reason, _stop.get_token(), Viewport, PresentationRevision, baseline, std::move(rectangles));
         }

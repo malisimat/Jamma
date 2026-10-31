@@ -1,22 +1,22 @@
-#include "AudioSpectralEditState.h"
+#include "SpectralEditState.h"
 
 #include <new>
 #include <utility>
 
 using namespace spectral;
 
-AudioSpectralEditState::AudioSpectralEditState(
-	std::shared_ptr<const AudioSpectralSource> source, AudioSpectralTransformConfig transform,
-	std::shared_ptr<const AudioSpectralGainField> gains, std::shared_ptr<const AudioSpectralEnvelope> envelope,
+SpectralEditState::SpectralEditState(
+	std::shared_ptr<const SpectralSource> source, SpectralTransformConfig transform,
+	std::shared_ptr<const SpectralGainField> gains, std::shared_ptr<const SpectralEnvelope> envelope,
 	std::uint64_t revision, std::uint64_t spectralRevision, std::uint64_t envelopeRevision) :
 	Source(std::move(source)), Transform(transform), Gains(std::move(gains)), Envelope(std::move(envelope)),
 	Revision(revision), SpectralRevision(spectralRevision), EnvelopeRevision(envelopeRevision)
 {
 }
 
-std::shared_ptr<const AudioSpectralEditState> AudioSpectralEditState::Create(
-	std::shared_ptr<const AudioSpectralSource> source, AudioSpectralTransformConfig transform,
-	std::shared_ptr<const AudioSpectralGainField> gains, std::shared_ptr<const AudioSpectralEnvelope> envelope,
+std::shared_ptr<const SpectralEditState> SpectralEditState::Create(
+	std::shared_ptr<const SpectralSource> source, SpectralTransformConfig transform,
+	std::shared_ptr<const SpectralGainField> gains, std::shared_ptr<const SpectralEnvelope> envelope,
 	std::uint64_t revision, std::uint64_t spectralRevision, std::uint64_t envelopeRevision, std::string& reason)
 {
 	reason.clear();
@@ -26,7 +26,7 @@ std::shared_ptr<const AudioSpectralEditState> AudioSpectralEditState::Create(
 		reason = "Audio edit state has no complete source or gain field";
 		return nullptr;
 	}
-	const auto estimate = AudioSpectralDsp::EstimateWorkingMemory(source->Layout, transform, reason);
+	const auto estimate = SpectralDsp::EstimateWorkingMemory(source->Layout, transform, reason);
 	if (!estimate) return nullptr;
 	if (gains->FrameCount() != estimate->Geometry.FrameCount || gains->BinCount() != estimate->Geometry.BinCount
 		|| (envelope && envelope->Length() != source->Layout.LogicalLength)
@@ -38,7 +38,7 @@ std::shared_ptr<const AudioSpectralEditState> AudioSpectralEditState::Create(
 	}
 	try
 	{
-		return std::shared_ptr<const AudioSpectralEditState>(new AudioSpectralEditState(
+		return std::shared_ptr<const SpectralEditState>(new SpectralEditState(
 			std::move(source), transform, std::move(gains), std::move(envelope),
 			revision, spectralRevision, envelopeRevision));
 	}

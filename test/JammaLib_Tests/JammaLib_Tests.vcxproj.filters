@@ -9,7 +9,7 @@
     <ClCompile Include="src\engine\PerformanceGroupService_Tests.cpp">
       <Filter>src\engine</Filter>
     </ClCompile>
-    <ClCompile Include="src\audio\AudioSpectral_Tests.cpp">
+    <ClCompile Include="src\audio\Spectral_Tests.cpp">
       <Filter>src\audio</Filter>
     </ClCompile>
     <ClCompile Include="src\audio\BlockApi_Tests.cpp">

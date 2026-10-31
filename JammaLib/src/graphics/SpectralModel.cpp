@@ -1,5 +1,5 @@
-#include "AudioSpectralModel.h"
-#include "../spectral/AudioSpectralDisplayJob.h"
+#include "SpectralModel.h"
+#include "../spectral/SpectralDisplayJob.h"
 
 #include <algorithm>
 #include <cmath>
@@ -10,28 +10,28 @@
 
 using namespace graphics;
 
-bool AudioSpectralViewport::IsValid() const noexcept
+bool SpectralViewport::IsValid() const noexcept
 {
 	return std::isfinite(Lower) && std::isfinite(Upper) && Lower >= 0.0 && Upper <= 1.0 && Upper > Lower;
 }
 
-double AudioSpectralDisplay::FrequencyAt(double v) const noexcept
+double SpectralDisplay::FrequencyAt(double v) const noexcept
 {
 	if (IncludesDc && v <= 0.0) return 0.0;
 	return MinimumFrequencyHz * std::pow(MaximumFrequencyHz / MinimumFrequencyHz, std::clamp(v, 0.0, 1.0));
 }
 
-double AudioSpectralDisplay::FrequencyV(double hz) const noexcept
+double SpectralDisplay::FrequencyV(double hz) const noexcept
 {
 	return hz <= MinimumFrequencyHz ? 0.0
 		: std::log2(hz / MinimumFrequencyHz) / std::log2(MaximumFrequencyHz / MinimumFrequencyHz);
 }
 
-bool AudioSpectralDisplay::IsValid() const noexcept
+bool SpectralDisplay::IsValid() const noexcept
 {
 	if (!SourceIdentity || SourceGeneration == 0u || Revision == 0u
-		|| TimeSegments == 0u || TimeSegments > spectral::AudioSpectralConfig::MaxTimeSegments
-		|| FrequencySegments == 0u || FrequencySegments > spectral::AudioSpectralConfig::MaxFrequencySegments
+		|| TimeSegments == 0u || TimeSegments > spectral::SpectralConfig::MaxTimeSegments
+		|| FrequencySegments == 0u || FrequencySegments > spectral::SpectralConfig::MaxFrequencySegments
 		|| !(MinimumFrequencyHz > 0.0f) || !std::isfinite(MinimumFrequencyHz)
 		|| !(NyquistHz > MinimumFrequencyHz) || !std::isfinite(NyquistHz)
 		|| !(MaximumFrequencyHz > MinimumFrequencyHz) || !std::isfinite(MaximumFrequencyHz)
@@ -49,18 +49,18 @@ bool AudioSpectralDisplay::IsValid() const noexcept
 	return true;
 }
 
-gui::GuiModelParams AudioSpectralModel::_ModelParams(gui::GuiModelParams params)
+gui::GuiModelParams SpectralModel::_ModelParams(gui::GuiModelParams params)
 {
 	params.ModelTextures = { "levels" };
 	params.ModelShaders = { "audio_spectral" };
 	return params;
 }
 
-AudioSpectralTopology::AudioSpectralTopology(unsigned int timeSegments, unsigned int frequencySegments) :
+SpectralTopology::SpectralTopology(unsigned int timeSegments, unsigned int frequencySegments) :
 	_timeSegments(timeSegments), _frequencySegments(frequencySegments)
 {
-	if (_timeSegments == 0u || _timeSegments > spectral::AudioSpectralConfig::MaxTimeSegments
-		|| _frequencySegments == 0u || _frequencySegments > spectral::AudioSpectralConfig::MaxFrequencySegments)
+	if (_timeSegments == 0u || _timeSegments > spectral::SpectralConfig::MaxTimeSegments
+		|| _frequencySegments == 0u || _frequencySegments > spectral::SpectralConfig::MaxFrequencySegments)
 		throw std::invalid_argument("Spectral surface topology exceeds its fixed limits");
 	_grid.resize(static_cast<std::size_t>(_timeSegments + 1u) * (_frequencySegments + 1u));
 	_indices.resize(static_cast<std::size_t>(_timeSegments) * _frequencySegments * 6u);
@@ -85,18 +85,18 @@ AudioSpectralTopology::AudioSpectralTopology(unsigned int timeSegments, unsigned
 		}
 }
 
-AudioSpectralModel::AudioSpectralModel(gui::GuiModelParams params,
+SpectralModel::SpectralModel(gui::GuiModelParams params,
 	unsigned int timeSegments, unsigned int frequencySegments) :
-	AudioSpectralModel(std::move(params), std::make_shared<const AudioSpectralTopology>(timeSegments, frequencySegments))
+	SpectralModel(std::move(params), std::make_shared<const SpectralTopology>(timeSegments, frequencySegments))
 {}
 
-AudioSpectralModel::AudioSpectralModel(gui::GuiModelParams params,
-	std::shared_ptr<const AudioSpectralTopology> topology) :
-	AudioSpectralModel(std::move(params), std::make_shared<AudioSpectralMeshResource>(std::move(topology)))
+SpectralModel::SpectralModel(gui::GuiModelParams params,
+	std::shared_ptr<const SpectralTopology> topology) :
+	SpectralModel(std::move(params), std::make_shared<SpectralMeshResource>(std::move(topology)))
 {}
 
-AudioSpectralModel::AudioSpectralModel(gui::GuiModelParams params,
-	std::shared_ptr<AudioSpectralMeshResource> mesh) :
+SpectralModel::SpectralModel(gui::GuiModelParams params,
+	std::shared_ptr<SpectralMeshResource> mesh) :
 	GuiModel(_ModelParams(std::move(params))),
 	_topology(mesh ? mesh->Topology() : throw std::invalid_argument("Spectral surface requires mesh")),
 	_mesh(std::move(mesh)),
@@ -104,21 +104,21 @@ AudioSpectralModel::AudioSpectralModel(gui::GuiModelParams params,
 	_grid(_topology->Grid()), _indices(_topology->Indices())
 {}
 
-AudioSpectralMeshResource::AudioSpectralMeshResource(std::shared_ptr<const AudioSpectralTopology> topology) :
+SpectralMeshResource::SpectralMeshResource(std::shared_ptr<const SpectralTopology> topology) :
 	_topology(topology ? std::move(topology) : throw std::invalid_argument("Spectral surface requires topology"))
 {}
 
-std::shared_ptr<const AudioSpectralMeshBuffers> AudioSpectralMeshResource::Prepare()
+std::shared_ptr<const SpectralMeshBuffers> SpectralMeshResource::Prepare()
 {
 	if (!wglGetCurrentContext()) return nullptr;
 	if (_buffers && !_buffers->IsCurrent())
 		throw std::runtime_error("Release the spectral mesh in its owning context before context replacement");
 	if (!_buffers)
-		_buffers = std::make_shared<const AudioSpectralMeshBuffers>(*_topology);
+		_buffers = std::make_shared<const SpectralMeshBuffers>(*_topology);
 	return _buffers;
 }
 
-AudioSpectralMeshBuffers::AudioSpectralMeshBuffers(const AudioSpectralTopology& topology) :
+SpectralMeshBuffers::SpectralMeshBuffers(const SpectralTopology& topology) :
 	_context(wglGetCurrentContext())
 {
 	if (!_context) throw std::runtime_error("Spectral mesh upload requires a current GL context");
@@ -141,12 +141,12 @@ AudioSpectralMeshBuffers::AudioSpectralMeshBuffers(const AudioSpectralTopology& 
 	}
 }
 
-bool AudioSpectralMeshBuffers::IsCurrent() const noexcept
+bool SpectralMeshBuffers::IsCurrent() const noexcept
 {
 	return _context && _context == wglGetCurrentContext();
 }
 
-AudioSpectralMeshBuffers::~AudioSpectralMeshBuffers()
+SpectralMeshBuffers::~SpectralMeshBuffers()
 {
 	// Scene releases resources before context destruction. If the context is
 	// lost/unrelated, never enqueue stale IDs: its teardown reclaims its objects.
@@ -155,17 +155,17 @@ AudioSpectralMeshBuffers::~AudioSpectralMeshBuffers()
 	glDeleteBuffers(1, &_indexBuffer);
 }
 
-AudioSpectralModel::~AudioSpectralModel()
+SpectralModel::~SpectralModel()
 {
 	_ReleaseResources();
 }
 
-std::shared_ptr<const AudioSpectralDisplay> AudioSpectralModel::BuildDisplay(
-	const spectral::AudioSpectralAnalysis& analysis, const spectral::AudioSpectralGainField* gains,
-	const spectral::AudioSpectralEnvelope* envelope, std::uint64_t revision,
+std::shared_ptr<const SpectralDisplay> SpectralModel::BuildDisplay(
+	const spectral::SpectralAnalysis& analysis, const spectral::SpectralGainField* gains,
+	const spectral::SpectralEnvelope* envelope, std::uint64_t revision,
 	unsigned int timeSegments, unsigned int frequencySegments, std::string& reason, std::stop_token stop,
-	AudioSpectralViewport viewport, std::uint64_t presentationRevision,
-    std::shared_ptr<const AudioSpectralDisplay> baseline, std::vector<AudioSpectralDisplay::Rectangle> rectangles)
+	SpectralViewport viewport, std::uint64_t presentationRevision,
+    std::shared_ptr<const SpectralDisplay> baseline, std::vector<SpectralDisplay::Rectangle> rectangles)
 {
     // Public callers can supply arbitrary matrices; validate before indexing or
     // forwarding them to the provenance-controlled worker cache path.
@@ -175,19 +175,19 @@ std::shared_ptr<const AudioSpectralDisplay> AudioSpectralModel::BuildDisplay(
         reason, stop, viewport, presentationRevision, std::move(baseline), std::move(rectangles));
 }
 
-std::shared_ptr<const AudioSpectralDisplay> AudioSpectralModel::_BuildDisplay(
-	const spectral::AudioSpectralAnalysis& analysis, const spectral::AudioSpectralGainField* gains,
-	const spectral::AudioSpectralEnvelope* envelope, std::uint64_t revision,
+std::shared_ptr<const SpectralDisplay> SpectralModel::_BuildDisplay(
+	const spectral::SpectralAnalysis& analysis, const spectral::SpectralGainField* gains,
+	const spectral::SpectralEnvelope* envelope, std::uint64_t revision,
 	unsigned int timeSegments, unsigned int frequencySegments, std::string& reason, std::stop_token stop,
-	AudioSpectralViewport viewport, std::uint64_t presentationRevision,
-    std::shared_ptr<const AudioSpectralDisplay> baseline, std::vector<AudioSpectralDisplay::Rectangle> rectangles)
+	SpectralViewport viewport, std::uint64_t presentationRevision,
+    std::shared_ptr<const SpectralDisplay> baseline, std::vector<SpectralDisplay::Rectangle> rectangles)
 {
 	reason.clear();
 	if (!analysis.Source || !analysis.Source->Identity || analysis.Source->Generation == 0u
 		|| !analysis.Transform.IsValid() || !analysis.Source->Layout.IsValid()
 		|| revision == 0u || timeSegments == 0u || frequencySegments == 0u || !viewport.IsValid()
-		|| timeSegments > spectral::AudioSpectralConfig::MaxTimeSegments
-		|| frequencySegments > spectral::AudioSpectralConfig::MaxFrequencySegments
+		|| timeSegments > spectral::SpectralConfig::MaxTimeSegments
+		|| frequencySegments > spectral::SpectralConfig::MaxFrequencySegments
 		|| analysis.Geometry.FrameCount == 0u
 		|| analysis.Geometry.BinCount != analysis.Transform.WindowSamps / 2u + 1u
 		|| !(analysis.WindowSum > 0.0) || !std::isfinite(analysis.WindowSum)
@@ -200,7 +200,7 @@ std::shared_ptr<const AudioSpectralDisplay> AudioSpectralModel::_BuildDisplay(
 		reason = "Spectral display source, dimensions or revision are invalid";
 		return nullptr;
 	}
-	const auto estimate = spectral::AudioSpectralDsp::EstimateWorkingMemory(
+	const auto estimate = spectral::SpectralDsp::EstimateWorkingMemory(
 		analysis.Source->Layout, analysis.Transform, reason);
 	if (!estimate || analysis.Geometry.FirstFrameCentre != estimate->Geometry.FirstFrameCentre
 		|| analysis.Geometry.FrameCount != estimate->Geometry.FrameCount)
@@ -217,14 +217,14 @@ std::shared_ptr<const AudioSpectralDisplay> AudioSpectralModel::_BuildDisplay(
 		const auto incremental = baseline && baseline->SourceIdentity == analysis.Source->Identity
             && baseline->SourceGeneration == analysis.Source->Generation
             && baseline->TimeSegments == timeSegments && baseline->FrequencySegments == frequencySegments
-            && baseline->Viewport == AudioSpectralViewport{} && baseline->IncludesDc
+            && baseline->Viewport == SpectralViewport{} && baseline->IncludesDc
             && baseline->NyquistHz == analysis.Source->Layout.SampleRate * 0.5f
             && baseline->MaximumFrequencyHz == baseline->NyquistHz
-            && baseline->MinimumFrequencyHz == static_cast<float>((std::min)(spectral::AudioSpectralConfig::DisplayMinimumFrequencyHz,
+            && baseline->MinimumFrequencyHz == static_cast<float>((std::min)(spectral::SpectralConfig::DisplayMinimumFrequencyHz,
                 static_cast<double>(analysis.Source->Layout.SampleRate) * 0.25));
-        auto display = incremental ? std::make_shared<AudioSpectralDisplay>(*baseline) : std::make_shared<AudioSpectralDisplay>();
+        auto display = incremental ? std::make_shared<SpectralDisplay>(*baseline) : std::make_shared<SpectralDisplay>();
         display->BaselineRevision = incremental ? baseline->Revision : 0;
-        display->DirtyRectangles = incremental ? std::move(rectangles) : std::vector<AudioSpectralDisplay::Rectangle>{};
+        display->DirtyRectangles = incremental ? std::move(rectangles) : std::vector<SpectralDisplay::Rectangle>{};
 		display->SourceIdentity = analysis.Source->Identity;
 		display->SourceGeneration = analysis.Source->Generation;
 		display->Revision = revision;
@@ -235,7 +235,7 @@ std::shared_ptr<const AudioSpectralDisplay> AudioSpectralModel::_BuildDisplay(
 		display->FrequencySegments = frequencySegments;
 		const auto sampleRate = static_cast<double>(analysis.Source->Layout.SampleRate);
 		const auto nyquist = sampleRate * 0.5;
-		const auto lower = (std::min)(spectral::AudioSpectralConfig::DisplayMinimumFrequencyHz, nyquist * 0.5);
+		const auto lower = (std::min)(spectral::SpectralConfig::DisplayMinimumFrequencyHz, nyquist * 0.5);
 		display->MinimumFrequencyHz = static_cast<float>(lower);
 		display->MaximumFrequencyHz = static_cast<float>(nyquist);
 		display->NyquistHz = static_cast<float>(nyquist);
@@ -292,7 +292,7 @@ std::shared_ptr<const AudioSpectralDisplay> AudioSpectralModel::_BuildDisplay(
 						* (gains ? gains->GainLinear(frame, bin) : 1.0);
 					return !std::isfinite(magnitude) || magnitude < 0.0
 						? std::numeric_limits<double>::quiet_NaN()
-                        : magnitude > 0.0 ? 20.0 * std::log10(magnitude / spectral::AudioSpectralConfig::DisplayReferenceMagnitude)
+                        : magnitude > 0.0 ? 20.0 * std::log10(magnitude / spectral::SpectralConfig::DisplayReferenceMagnitude)
                         : -std::numeric_limits<double>::infinity();
 				};
                 if (sample.CachedFirst != firstFrame || sample.CachedNext != nextFrame)
@@ -320,8 +320,8 @@ std::shared_ptr<const AudioSpectralDisplay> AudioSpectralModel::_BuildDisplay(
                 const auto compressed = [&](double db, bool owned)
                 {
                     if (std::isnan(db)) return std::numeric_limits<float>::quiet_NaN();
-                    return static_cast<float>(std::clamp((db + (owned ? 0.0 : envelopeDb) - spectral::AudioSpectralConfig::DisplayFloorDb)
-                        / (spectral::AudioSpectralConfig::DisplayCeilingDb - spectral::AudioSpectralConfig::DisplayFloorDb), 0.0, 1.0));
+                    return static_cast<float>(std::clamp((db + (owned ? 0.0 : envelopeDb) - spectral::SpectralConfig::DisplayFloorDb)
+                        / (spectral::SpectralConfig::DisplayCeilingDb - spectral::SpectralConfig::DisplayFloorDb), 0.0, 1.0));
                 };
                 const auto first = std::lerp(compressed(sample.Db00, sample.Owned00), compressed(sample.Db01, sample.Owned01), sample.BinWeight);
                 const auto next = std::lerp(compressed(sample.Db10, sample.Owned10), compressed(sample.Db11, sample.Owned11), sample.BinWeight);
@@ -344,7 +344,7 @@ std::shared_ptr<const AudioSpectralDisplay> AudioSpectralModel::_BuildDisplay(
 	return nullptr;
 }
 
-bool AudioSpectralModel::SetDisplay(std::shared_ptr<const AudioSpectralDisplay> display, std::string& reason)
+bool SpectralModel::SetDisplay(std::shared_ptr<const SpectralDisplay> display, std::string& reason)
 {
 	reason.clear();
 	if (!display || !display->IsValid() || display->TimeSegments != _timeSegments
@@ -356,7 +356,7 @@ bool AudioSpectralModel::SetDisplay(std::shared_ptr<const AudioSpectralDisplay> 
     return _SetDisplay(std::move(display), reason, false);
 }
 
-bool AudioSpectralModel::SetCompletedDisplay(const spectral::AudioSpectralDisplayJob& job, std::string& reason)
+bool SpectralModel::SetCompletedDisplay(const spectral::SpectralDisplayJob& job, std::string& reason)
 {
     const auto display = job.Result();
     if (!display || display->TimeSegments != _timeSegments || display->FrequencySegments != _frequencySegments)
@@ -365,7 +365,7 @@ bool AudioSpectralModel::SetCompletedDisplay(const spectral::AudioSpectralDispla
     return _SetDisplay(display, reason, true);
 }
 
-bool AudioSpectralModel::_SetDisplay(std::shared_ptr<const AudioSpectralDisplay> display, std::string& reason, bool trustedDamage)
+bool SpectralModel::_SetDisplay(std::shared_ptr<const SpectralDisplay> display, std::string& reason, bool trustedDamage)
 {
     reason.clear();
 	std::lock_guard lock(_surfaceMutex);
@@ -384,19 +384,19 @@ bool AudioSpectralModel::_SetDisplay(std::shared_ptr<const AudioSpectralDisplay>
 	return true;
 }
 
-void AudioSpectralModel::SetEditorMorph(float morph)
+void SpectralModel::SetEditorMorph(float morph)
 {
 	std::lock_guard lock(_surfaceMutex);
 	_morph = std::isfinite(morph) ? std::clamp(morph, 0.0f, 1.0f) : 0.0f;
 }
 
-void AudioSpectralModel::SetRadius(float radius)
+void SpectralModel::SetRadius(float radius)
 {
 	std::lock_guard lock(_surfaceMutex);
 	if (std::isfinite(radius) && radius > 0.0f) _radius = radius;
 }
 
-void AudioSpectralModel::SetPlayFraction(double fraction)
+void SpectralModel::SetPlayFraction(double fraction)
 {
 	std::lock_guard lock(_surfaceMutex);
 	if (!std::isfinite(fraction)) return;
@@ -404,32 +404,32 @@ void AudioSpectralModel::SetPlayFraction(double fraction)
 	_playFraction = static_cast<float>(fraction);
 }
 
-AudioSpectralModel::Surface AudioSpectralModel::DisplayedSurface() const
+SpectralModel::Surface SpectralModel::DisplayedSurface() const
 {
 	std::lock_guard lock(_surfaceMutex);
 	return _displayedSurface;
 }
 
-bool AudioSpectralModel::IsAvailable() const
+bool SpectralModel::IsAvailable() const
 {
 	std::lock_guard lock(_surfaceMutex);
 	return _uploadedDisplay && _unavailableReason.empty();
 }
 
-std::string AudioSpectralModel::UnavailableReason() const
+std::string SpectralModel::UnavailableReason() const
 {
 	std::lock_guard lock(_surfaceMutex);
 	return _unavailableReason;
 }
 
-void AudioSpectralModel::_Fail(std::string reason)
+void SpectralModel::_Fail(std::string reason)
 {
 	std::lock_guard lock(_surfaceMutex);
 	_unavailableReason = std::move(reason);
 	_displayedSurface.Display.reset();
 }
 
-glm::vec3 AudioSpectralModel::LocalVertex(const Surface& surface,
+glm::vec3 SpectralModel::LocalVertex(const Surface& surface,
 	unsigned int timeVertex, unsigned int frequencyVertex) noexcept
 {
 	if (!surface.Display || timeVertex > surface.Display->TimeSegments
@@ -453,7 +453,7 @@ glm::vec3 AudioSpectralModel::LocalVertex(const Surface& surface,
 		-std::sin(rotation) * point.x + std::cos(rotation) * point.z };
 }
 
-void AudioSpectralModel::_InitResources(resources::ResourceLib& resourceLib, bool forceInit)
+void SpectralModel::_InitResources(resources::ResourceLib& resourceLib, bool forceInit)
 {
 	if (!HasCurrentGlContext()) return;
 	if (!InitTextures(resourceLib) || !InitShaders(resourceLib))
@@ -506,7 +506,7 @@ void AudioSpectralModel::_InitResources(resources::ResourceLib& resourceLib, boo
 	}
 }
 
-void AudioSpectralModel::_ReleaseResources()
+void SpectralModel::_ReleaseResources()
 {
 	if (_resourceContext && _resourceContext == wglGetCurrentContext())
 	{
@@ -521,9 +521,9 @@ void AudioSpectralModel::_ReleaseResources()
 	_displayedSurface.Display.reset();
 }
 
-bool AudioSpectralModel::_UploadDisplay()
+bool SpectralModel::_UploadDisplay()
 {
-	std::shared_ptr<const AudioSpectralDisplay> pending, uploaded;
+	std::shared_ptr<const SpectralDisplay> pending, uploaded;
     bool trustedDamage = false;
 	{
 		std::lock_guard lock(_surfaceMutex);
@@ -550,7 +550,7 @@ bool AudioSpectralModel::_UploadDisplay()
 		glActiveTexture(GL_TEXTURE1);
 		glBindTexture(GL_TEXTURE_2D, _heightTexture);
         GLenum error = GL_NO_ERROR;
-        const auto upload = [&](const AudioSpectralDisplay::Rectangle& rectangle)
+        const auto upload = [&](const SpectralDisplay::Rectangle& rectangle)
         {
             glTexSubImage2D(GL_TEXTURE_2D, 0, rectangle.Left, rectangle.Bottom,
                 rectangle.Right - rectangle.Left + 1u, rectangle.Top - rectangle.Bottom + 1u,
@@ -583,14 +583,14 @@ bool AudioSpectralModel::_UploadDisplay()
 	return true;
 }
 
-void AudioSpectralModel::SetViewport(AudioSpectralViewport time, AudioSpectralViewport frequency)
+void SpectralModel::SetViewport(SpectralViewport time, SpectralViewport frequency)
 {
 	if (!time.IsValid() || !frequency.IsValid()) return;
 	std::lock_guard lock(_surfaceMutex);
 	_timeViewport = time; _frequencyViewport = frequency;
 }
 
-void AudioSpectralModel::SetBrush(glm::vec2 centre, glm::vec2 radii, int mode)
+void SpectralModel::SetBrush(glm::vec2 centre, glm::vec2 radii, int mode)
 {
 	std::lock_guard lock(_surfaceMutex);
 	_brushCentre = centre;
@@ -598,7 +598,7 @@ void AudioSpectralModel::SetBrush(glm::vec2 centre, glm::vec2 radii, int mode)
 	_brushMode = mode;
 }
 
-void AudioSpectralModel::Draw3d(base::DrawContext& ctx, unsigned int numInstances, base::DrawPass pass)
+void SpectralModel::Draw3d(base::DrawContext& ctx, unsigned int numInstances, base::DrawPass pass)
 {
 	if (pass != base::PASS_SCENE || !HasCurrentGlContext() || _vertexArray == 0u || !_UploadDisplay())
 		return; // Surface picking uses the retained displayed heightfield, not a flat picker shader.
@@ -668,19 +668,19 @@ void AudioSpectralModel::Draw3d(base::DrawContext& ctx, unsigned int numInstance
 	_unavailableReason.clear();
 }
 
-bool AudioSpectralDisplay::CanSubUpload(const AudioSpectralDisplay& baseline, bool trustedDamage) const noexcept
+bool SpectralDisplay::CanSubUpload(const SpectralDisplay& baseline, bool trustedDamage) const noexcept
 {
     return trustedDamage && BaselineRevision != 0 && BaselineRevision == baseline.Revision
         && SourceIdentity == baseline.SourceIdentity && SourceGeneration == baseline.SourceGeneration
         && TimeSegments == baseline.TimeSegments && FrequencySegments == baseline.FrequencySegments;
 }
 
-std::vector<AudioSpectralDisplay::Rectangle> AudioSpectralModel::ProjectDamage(
-    const spectral::AudioSpectralAnalysis& analysis, const AudioSpectralDisplay& display,
+std::vector<SpectralDisplay::Rectangle> SpectralModel::ProjectDamage(
+    const spectral::SpectralAnalysis& analysis, const SpectralDisplay& display,
     std::size_t firstFrame, std::size_t lastFrame, unsigned int firstBin, unsigned int lastBin,
     unsigned long firstSample, unsigned long lastSample)
 {
-    std::vector<AudioSpectralDisplay::Rectangle> result;
+    std::vector<SpectralDisplay::Rectangle> result;
     unsigned int bottom = display.FrequencySegments + 1, top = 0;
     for (unsigned int row = 0; row <= display.FrequencySegments && firstFrame <= lastFrame; ++row)
     {

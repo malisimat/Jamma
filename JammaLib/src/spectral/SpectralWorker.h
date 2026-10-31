@@ -6,22 +6,22 @@
 #include <mutex>
 #include <thread>
 #include <deque>
-#include "AudioSpectralSource.h"
-#include "AudioSpectralAnalysisJob.h"
+#include "SpectralSource.h"
+#include "SpectralAnalysisJob.h"
 
 namespace spectral
 {
 	// Dedicated non-audio worker. Never allocate source PCM or perform FFT work
 	// on UI/Scene trigger job threads. Normal editor close cancels without joining.
-	class AudioSpectralWorker
+	class SpectralWorker
 	{
 	public:
-		AudioSpectralWorker();
-		~AudioSpectralWorker(); // Joins only at editor-owner teardown.
-		AudioSpectralWorker(const AudioSpectralWorker&) = delete;
-		AudioSpectralWorker& operator=(const AudioSpectralWorker&) = delete;
-		void PrepareSource(std::shared_ptr<AudioSpectralSourceCapture> request);
-		void RequestAnalysis(std::shared_ptr<AudioSpectralAnalysisJob> job);
+		SpectralWorker();
+		~SpectralWorker(); // Joins only at editor-owner teardown.
+		SpectralWorker(const SpectralWorker&) = delete;
+		SpectralWorker& operator=(const SpectralWorker&) = delete;
+		void PrepareSource(std::shared_ptr<SpectralSourceCapture> request);
+		void RequestAnalysis(std::shared_ptr<SpectralAnalysisJob> job);
 		// Opaque non-GL CPU work with cooperative bounded cancellation. Both
 		// closures run off audio; coalescing/teardown cancel outside the queue lock.
 		void RequestPresentation(std::function<void()> work, std::function<void()> cancel);
@@ -45,10 +45,10 @@ namespace spectral
 		// audio/visual scratch and additionally retained results.
 		std::mutex _requestMutex;
 		std::condition_variable _wake;
-		std::shared_ptr<AudioSpectralSourceCapture> _queuedSource;
-		std::shared_ptr<AudioSpectralSourceCapture> _currentSource;
-		std::shared_ptr<AudioSpectralAnalysisJob> _queuedAnalysis;
-		std::shared_ptr<AudioSpectralAnalysisJob> _currentAnalysis;
+		std::shared_ptr<SpectralSourceCapture> _queuedSource;
+		std::shared_ptr<SpectralSourceCapture> _currentSource;
+		std::shared_ptr<SpectralAnalysisJob> _queuedAnalysis;
+		std::shared_ptr<SpectralAnalysisJob> _currentAnalysis;
 		std::shared_ptr<PresentationWork> _queuedPresentation;
 		std::shared_ptr<PresentationWork> _currentPresentation;
 		std::shared_ptr<PresentationWork> _queuedEditing;

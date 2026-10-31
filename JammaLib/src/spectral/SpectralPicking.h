@@ -1,12 +1,12 @@
 #pragma once
 
 #include <optional>
-#include "../graphics/AudioSpectralModel.h"
+#include "../graphics/SpectralModel.h"
 #include "../graphics/LoopGridProjection.h"
 
 namespace spectral
 {
-	class AudioSpectralPicking
+	class SpectralPicking
 	{
 	public:
 		struct Hit
@@ -17,7 +17,7 @@ namespace spectral
 		};
 		// Surface is the model's already-validated DisplayedSurface, with the exact
 		// view/model ray supplied by the caller. Opening/closing surfaces reject hits.
-		static std::optional<Hit> Intersect(const graphics::AudioSpectralModel::Surface& surface,
+		static std::optional<Hit> Intersect(const graphics::SpectralModel::Surface& surface,
 			glm::vec3 localOrigin, glm::vec3 localDirection) noexcept;
 		// Freeze screen Y at click height: vertical adjustment cannot move time.
 		// The clicked sample remains authoritative despite pixel projection rounding.

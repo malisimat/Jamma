@@ -1,9 +1,9 @@
-#include "AudioSpectralWorker.h"
+#include "SpectralWorker.h"
 #include <utility>
 
 using namespace spectral;
 
-AudioSpectralWorker::AudioSpectralWorker() :
+SpectralWorker::SpectralWorker() :
 	_thread([this] { _Run(); })
 {
     try { _visualThread = std::thread([this] { _RunVisual(); }); }
@@ -16,12 +16,12 @@ AudioSpectralWorker::AudioSpectralWorker() :
     }
 }
 
-AudioSpectralWorker::~AudioSpectralWorker()
+SpectralWorker::~SpectralWorker()
 {
-	std::shared_ptr<AudioSpectralSourceCapture> queuedSource;
-	std::shared_ptr<AudioSpectralSourceCapture> currentSource;
-	std::shared_ptr<AudioSpectralAnalysisJob> queuedAnalysis;
-	std::shared_ptr<AudioSpectralAnalysisJob> currentAnalysis;
+	std::shared_ptr<SpectralSourceCapture> queuedSource;
+	std::shared_ptr<SpectralSourceCapture> currentSource;
+	std::shared_ptr<SpectralAnalysisJob> queuedAnalysis;
+	std::shared_ptr<SpectralAnalysisJob> currentAnalysis;
 	std::shared_ptr<PresentationWork> queuedPresentation;
 	std::shared_ptr<PresentationWork> currentPresentation;
 	std::shared_ptr<PresentationWork> editing;
@@ -52,10 +52,10 @@ AudioSpectralWorker::~AudioSpectralWorker()
 	_visualThread.join();
 }
 
-void AudioSpectralWorker::PrepareSource(std::shared_ptr<AudioSpectralSourceCapture> request)
+void SpectralWorker::PrepareSource(std::shared_ptr<SpectralSourceCapture> request)
 {
 	if (!request) return;
-	std::shared_ptr<AudioSpectralSourceCapture> displaced;
+	std::shared_ptr<SpectralSourceCapture> displaced;
 	bool stopping;
 	{
 		std::scoped_lock lock(_requestMutex);
@@ -68,10 +68,10 @@ void AudioSpectralWorker::PrepareSource(std::shared_ptr<AudioSpectralSourceCaptu
 	// Last-owner release stays outside the queue mutex.
 }
 
-void AudioSpectralWorker::RequestAnalysis(std::shared_ptr<AudioSpectralAnalysisJob> job)
+void SpectralWorker::RequestAnalysis(std::shared_ptr<SpectralAnalysisJob> job)
 {
 	if (!job) return;
-	std::shared_ptr<AudioSpectralAnalysisJob> displaced;
+	std::shared_ptr<SpectralAnalysisJob> displaced;
 	bool stopping;
 	{
 		std::scoped_lock lock(_requestMutex);
@@ -85,7 +85,7 @@ void AudioSpectralWorker::RequestAnalysis(std::shared_ptr<AudioSpectralAnalysisJ
 	// invalidation is explicit through the owner's job.Cancel() operation.
 }
 
-void AudioSpectralWorker::RequestPresentation(std::function<void()> work, std::function<void()> cancel)
+void SpectralWorker::RequestPresentation(std::function<void()> work, std::function<void()> cancel)
 {
 	if (!work) return;
 	// Allocate the small opaque holder before locking; queue/current operations
@@ -104,7 +104,7 @@ void AudioSpectralWorker::RequestPresentation(std::function<void()> work, std::f
 	// Last-owner destruction and cooperative cancellation stay outside the mutex.
 }
 
-void AudioSpectralWorker::RequestEditing(std::function<void()> work, std::function<void()> cancel)
+void SpectralWorker::RequestEditing(std::function<void()> work, std::function<void()> cancel)
 {
 	auto request = std::make_shared<PresentationWork>(PresentationWork{ std::move(work), std::move(cancel) });
 	std::shared_ptr<PresentationWork> displaced;
@@ -119,7 +119,7 @@ void AudioSpectralWorker::RequestEditing(std::function<void()> work, std::functi
 	else _wake.notify_all();
 }
 
-void AudioSpectralWorker::CancelPendingEditing()
+void SpectralWorker::CancelPendingEditing()
 {
     std::shared_ptr<PresentationWork> displaced;
     {
@@ -129,7 +129,7 @@ void AudioSpectralWorker::CancelPendingEditing()
     if (displaced && displaced->Cancel) displaced->Cancel();
     // Release cancelled map storage outside the mutex. Running jobs keep their immutable map.
 }
-void AudioSpectralWorker::RequestContent(const void* owner, std::function<void()> work)
+void SpectralWorker::RequestContent(const void* owner, std::function<void()> work)
 {
 	auto request = std::make_shared<ContentWork>(ContentWork{ owner, std::move(work) });
 	std::shared_ptr<ContentWork> displaced;
@@ -143,12 +143,12 @@ void AudioSpectralWorker::RequestContent(const void* owner, std::function<void()
 	_wake.notify_all();
 }
 
-void AudioSpectralWorker::_Run()
+void SpectralWorker::_Run()
 {
 	for (;;)
 	{
-		std::shared_ptr<AudioSpectralSourceCapture> source;
-		std::shared_ptr<AudioSpectralAnalysisJob> analysis;
+		std::shared_ptr<SpectralSourceCapture> source;
+		std::shared_ptr<SpectralAnalysisJob> analysis;
 		std::shared_ptr<ContentWork> content;
 		{
 			std::unique_lock lock(_requestMutex);
@@ -183,7 +183,7 @@ void AudioSpectralWorker::_Run()
 	}
 }
 
-void AudioSpectralWorker::_RunVisual()
+void SpectralWorker::_RunVisual()
 {
     for (;;)
     {

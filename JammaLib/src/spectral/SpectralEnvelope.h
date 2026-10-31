@@ -6,17 +6,17 @@
 #include <span>
 #include <string>
 #include <vector>
-#include "AudioSpectralConfig.h"
+#include "SpectralConfig.h"
 
 namespace spectral
 {
 	// Immutable dense source-time gains. Construction and ownership stay off audio;
 	// a callback borrows the envelope and performs one bounded indexed read.
-	class AudioSpectralEnvelope
+	class SpectralEnvelope
 	{
 	public:
-		static std::shared_ptr<const AudioSpectralEnvelope> Unity(unsigned long length, std::string& reason);
-		static std::shared_ptr<const AudioSpectralEnvelope> FromGains(std::span<const float> gains, std::string& reason);
+		static std::shared_ptr<const SpectralEnvelope> Unity(unsigned long length, std::string& reason);
+		static std::shared_ptr<const SpectralEnvelope> FromGains(std::span<const float> gains, std::string& reason);
 		static float MaximumGain() noexcept;
 		static double RelativeGain(double baseline, double factor, double floor, double maximum) noexcept;
 		static float TargetFromDragPixels(double upwardPositiveLogicalPixels) noexcept;
@@ -26,15 +26,15 @@ namespace spectral
 		std::span<const float> Gains() const noexcept { return _gains; }
 
 	private:
-		friend class AudioSpectralEnvelopeStroke;
-		AudioSpectralEnvelope(std::vector<float> gains, bool unity);
+		friend class SpectralEnvelopeStroke;
+		SpectralEnvelope(std::vector<float> gains, bool unity);
 		std::vector<float> _gains;
 		bool _unity;
 	};
 
 	// Single worker/UI owner. A fresh stroke captures E0 once; its dominance
 	// scratch is discarded on release/cancel and is never published to audio.
-	class AudioSpectralEnvelopeStroke
+	class SpectralEnvelopeStroke
 	{
 	public:
 		// UI-owned run provenance survives map handoffs. FIFO application, not
@@ -54,7 +54,7 @@ namespace spectral
 		// UI freezes a map; worker reads it; terminal receipt returns it for reuse.
 		class RelativeMap
 		{
-			friend class AudioSpectralEnvelopeStroke;
+			friend class SpectralEnvelopeStroke;
 		public:
 			static std::unique_ptr<RelativeMap> Create(unsigned long length, float sampleRate,
 				double radiusSeconds, std::string& reason);
@@ -70,22 +70,22 @@ namespace spectral
 			std::vector<std::uint32_t> _winners, _dirty;
 			double _radius;
 		};
-		static std::unique_ptr<AudioSpectralEnvelopeStroke> Begin(
-			std::shared_ptr<const AudioSpectralEnvelope> before, float sampleRate, std::string& reason);
+		static std::unique_ptr<SpectralEnvelopeStroke> Begin(
+			std::shared_ptr<const SpectralEnvelope> before, float sampleRate, std::string& reason);
         // Cumulative relative targets evaluate against captured E0.
         bool ApplyRelativeMap(const RelativeMap& map) noexcept;
-		std::shared_ptr<const AudioSpectralEnvelope> Snapshot(std::string& reason) const;
+		std::shared_ptr<const SpectralEnvelope> Snapshot(std::string& reason) const;
 		std::optional<double> RelativeFactorAt(unsigned long index) const noexcept;
 
 		// Snapshot adds finite local ramps at competing-winner boundaries, only
 		// within touched feather samples. Authored and untouched samples are protected.
 
 	private:
-		AudioSpectralEnvelopeStroke(std::shared_ptr<const AudioSpectralEnvelope> before, double rampHalfSamps);
+		SpectralEnvelopeStroke(std::shared_ptr<const SpectralEnvelope> before, double rampHalfSamps);
 		bool _IsRampBoundary(unsigned long leftIndex) const noexcept;
 		void _ApplyLocalRamps(std::vector<float>& gains) const noexcept;
 		static unsigned long _WrapSample(double integralSample, unsigned long length) noexcept;
-		std::shared_ptr<const AudioSpectralEnvelope> _before;
+		std::shared_ptr<const SpectralEnvelope> _before;
 		std::vector<float> _gains;
 		std::vector<double> _bestInfluence;
 		std::vector<std::uint64_t> _winnerIds;

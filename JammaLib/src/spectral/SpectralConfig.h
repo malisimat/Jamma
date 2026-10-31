@@ -6,7 +6,7 @@ namespace spectral
 {
 	// Transform tuning and bounded working-set limits. Future sidecar persistence
 	// must version this contract before changing saved transform semantics.
-	struct AudioSpectralConfig
+	struct SpectralConfig
 	{
 		static constexpr std::uint32_t TransformVersion = 1u;
 		static constexpr unsigned int WindowSamps = 4096u;
@@ -55,20 +55,20 @@ namespace spectral
             - DisplayWorkingBytes - MaxHistoryBytes - ShortSourceWorkingBytes;
 	};
 
-	struct AudioSpectralTransformConfig
+	struct SpectralTransformConfig
 	{
-		std::uint32_t Version = AudioSpectralConfig::TransformVersion;
-		unsigned int WindowSamps = AudioSpectralConfig::WindowSamps;
-		unsigned int HopSamps = AudioSpectralConfig::HopSamps;
+		std::uint32_t Version = SpectralConfig::TransformVersion;
+		unsigned int WindowSamps = SpectralConfig::WindowSamps;
+		unsigned int HopSamps = SpectralConfig::HopSamps;
 		// Periodic Hann analysis/synthesis windows, real float FFT, and explicit
 		// 1/N inverse FFT normalization followed by samplewise sum(window^2).
 		bool IsValid() const noexcept
 		{
-			return Version == AudioSpectralConfig::TransformVersion
+			return Version == SpectralConfig::TransformVersion
 				&& WindowSamps >= 4u && WindowSamps <= 16384u
 				&& (WindowSamps & (WindowSamps - 1u)) == 0u
 				&& HopSamps > 0u && HopSamps <= WindowSamps / 2u;
 		}
-		bool operator==(const AudioSpectralTransformConfig&) const = default;
+		bool operator==(const SpectralTransformConfig&) const = default;
 	};
 }
