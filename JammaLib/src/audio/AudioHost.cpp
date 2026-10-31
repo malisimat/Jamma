@@ -915,7 +915,16 @@ bool AudioHost::ApplyDesiredTimingAtAudioBoundary(std::uint64_t blockStartSample
 		{
 			timerCommand.Type = utils::Timer::CommandType::ReplaceTiming;
 			timerCommand.PhaseDeltaSamps = static_cast<long long>(replacement.RemoteMasterPhaseSamps);
-			if (_syncPhaseMap.SourceLengthSamps == 0ul)
+			// Before any local take exists, there is no recording ruler to preserve.
+			// Use the retained audio membership, including takes still recording.
+			const bool hasLocalContent = !stations || std::any_of(stations->begin(), stations->end(),
+				[](const auto& station)
+				{
+					return station && !station->IsRemote() && station->HasTimingContentAtAudioBoundary();
+				});
+			if (!hasLocalContent)
+				_syncPhaseMap.SourceLengthSamps = desired.RemoteMasterIntervalLengthSamps;
+			else if (_syncPhaseMap.SourceLengthSamps == 0ul)
 			{
 				_syncPhaseMap.SourceLengthSamps = previousMasterLength > 0ul
 					? previousMasterLength : desired.RemoteMasterIntervalLengthSamps;

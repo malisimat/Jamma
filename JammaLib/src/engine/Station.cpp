@@ -2372,6 +2372,12 @@ std::shared_ptr<const Station::AudioState> Station::_AudioStateSnapshot() const
 	return _audioState.load(std::memory_order_acquire);
 }
 
+bool Station::HasTimingContentAtAudioBoundary() const noexcept
+{
+	const auto state = _BorrowAudioState();
+	return !state.ReadSucceeded() || (state && !state->LoopTakes.empty());
+}
+
 base::PublishedAudioSnapshot<const Station::AudioState>::Lease Station::_BorrowAudioState() const noexcept
 {
 	return _audioState.borrow();

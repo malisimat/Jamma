@@ -142,6 +142,8 @@ namespace engine
 		void BeginCaptureAudioBoundary(std::uint32_t blockStartSample, std::uint64_t sceneSample, std::uint64_t absoluteSample,
             std::optional<std::uint32_t> earliestPhysicalSample = std::nullopt) noexcept;
 		void CompleteMidiIngressPump(std::uint32_t deviceSample, bool overflow = false);
+		// A failed bounded membership read conservatively protects the source ruler.
+		bool HasTimingContentAtAudioBoundary() const noexcept;
 		void ApplyAcceptedTimingCorrection(long long deltaSamps,
 			std::uint64_t generation, bool relocateMidi = false) noexcept;
 		void CaptureSceneAnchors(std::uint64_t sceneCoordinateSamps) noexcept;

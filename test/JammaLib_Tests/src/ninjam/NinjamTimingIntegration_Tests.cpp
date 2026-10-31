@@ -729,6 +729,164 @@ TEST(NinjamTimingProductionBoundary, StartupPlaceholderCannotSlowFirstMidiOnlyRe
 	EXPECT_EQ(0u, take->MappedMidiRestoreDiagnostic().ChangedCount);
 }
 
+TEST(NinjamTimingProductionBoundary, EmptySessionTempoChangesCannotRetimeOrDuplicateFirstQuantisedMidiRecording)
+{
+	constexpr auto sampleRate = 44100u;
+	const auto remoteInterval = ninjam::IntervalSampsFromTempo(113.0f, 8u, sampleRate);
+	const auto takeLength = remoteInterval;
+	constexpr auto blockSize = 512u;
+	auto clock = std::make_shared<Timer>();
+	clock->Tick(4096u, 0u);
+	auto station = NinjamProductionBoundaryFixture::MakeStation({});
+	station->SetClock(clock);
+	audio::AudioHost host{ io::UserConfig{} };
+	host.SetTimingClock(clock);
+	host.SetStations(std::make_shared<const std::vector<std::shared_ptr<engine::Station>>>(
+		std::vector<std::shared_ptr<engine::Station>>{ station }));
+	ninjam::NinjamTimingCoordinator coordinator;
+	ninjam::NinjamTempoJoinOptions options;
+	const auto connected = coordinator.ObserveSessionStatus({ true, true, 1u }, options, std::nullopt);
+	ASSERT_TRUE(connected.DesiredTransport);
+	host.PublishDesiredTiming(*connected.DesiredTransport);
+	ASSERT_TRUE(audio::NinjamAudioBoundaryTestAccess::Apply(host, clock->SceneSamplePos(), sampleRate));
+
+	// Apply exactly the NJClient observation sequence from fail-logs-1.txt.
+	// Use the adapter's shared validity boundary before conversion/publication.
+	ninjam::NinjamRemoteTiming remote;
+	remote.IsConnected = true;
+	remote.IntervalLengthSamps = 1000u;
+	remote.SourceSampleRate = sampleRate;
+	remote.Bpm = 120.0f;
+	remote.Bpi = 32u;
+	remote.HasDeviceAudioSampleAtObservation = true;
+	remote.DeviceAudioSampleAtObservation = clock->SceneSamplePos();
+	const auto observe = [&](bool hasLocalContent)
+	{
+		remote.IsValid = ninjam::IsValidRemoteTiming(remote.IntervalLengthSamps,
+			remote.SourceSampleRate, remote.Bpm, remote.Bpi);
+		auto timing = ninjam::ToDeviceTiming(remote, true, sampleRate, 0u, 0ul, 0u);
+		const auto local = clock->ObserveTransport();
+		timing.HasLocalTransport = true;
+		timing.LocalTransport = { local.MasterLengthSamps, local.MasterPhaseSamps,
+			local.LoopCount, local.AbsoluteSamplePos, local.SceneSamplePos };
+		return coordinator.Observe(timing, std::nullopt, hasLocalContent, io::UserConfig{}, *clock,
+			std::chrono::steady_clock::time_point{} + std::chrono::microseconds(
+				remote.DeviceAudioSampleAtObservation * 1000000u / sampleRate));
+	};
+	const auto apply = [&](const ninjam::NinjamTimingUpdate& update)
+	{
+		if (update.DesiredTransport)
+		{
+			host.PublishDesiredTiming(*update.DesiredTransport);
+			EXPECT_TRUE(audio::NinjamAudioBoundaryTestAccess::Apply(host, clock->SceneSamplePos(), sampleRate));
+			audio::NinjamAudioBoundaryTestAccess::ApplyDeferredMapTransition(host);
+		}
+	};
+	const auto placeholder = observe(false);
+	EXPECT_FALSE(placeholder.DesiredTransport);
+	apply(placeholder);
+	EXPECT_EQ(0ul, clock->SeedSourceLength());
+	EXPECT_FALSE(audio::NinjamAudioBoundaryTestAccess::SyncPhaseMap(host).IsActive());
+
+	remote.IntervalLengthSamps = ninjam::IntervalSampsFromTempo(400.0f, 8u, sampleRate);
+	remote.IntervalPositionSamps = 3072u;
+	remote.Bpm = 400.0f;
+	remote.Bpi = 8u;
+	const auto accepted = observe(false);
+	ASSERT_TRUE(accepted.DesiredTransport);
+	EXPECT_FALSE(accepted.PromptForTempoChange);
+	EXPECT_EQ(ninjam::NinjamLocalFollowPolicy::ContinuousSync, accepted.DesiredTransport->LocalFollowPolicy);
+	apply(accepted);
+	// Separate server votes can yield intermediate BPM-only and BPI-only geometries.
+	for (const auto bpi : { 8u, 16u, 8u })
+	{
+		clock->Tick(blockSize, 0u);
+		remote.Bpm = 113.0f;
+		remote.Bpi = bpi;
+		remote.IntervalLengthSamps = ninjam::IntervalSampsFromTempo(remote.Bpm, bpi, sampleRate);
+		remote.IntervalPositionSamps = 3072u;
+		remote.DeviceAudioSampleAtObservation = clock->SceneSamplePos();
+		const auto changed = observe(false);
+		ASSERT_TRUE(changed.DesiredTransport);
+		ASSERT_FALSE(changed.PromptForTempoChange);
+		apply(changed);
+	}
+	const auto map = audio::NinjamAudioBoundaryTestAccess::SyncPhaseMap(host);
+	EXPECT_EQ(remoteInterval, map.SourceLengthSamps);
+	ASSERT_EQ(remoteInterval, map.RemoteLengthSamps);
+
+	// Real captured MIDI material, with no audio loop or synthetic cursor setup.
+	engine::LoopTakeParams params;
+	params.Id = "first-remote-midi-take";
+	params.Size = { 100, 100 };
+	audio::MergeMixBehaviourParams merge;
+	auto take = std::make_shared<engine::LoopTake>(params, engine::LoopTake::GetMixerParams(params.Size, merge));
+	const auto recordStart = static_cast<std::uint32_t>(clock->SceneSamplePos());
+	engine::Quantiser quantiser;
+	quantiser.SetClock(clock);
+	quantiser.SetRemoteMidiGrid({ remoteInterval, 8u, 3072u, 113.0f, 1u }, 0, { station });
+	station->SetGlobalMidiQuantState(io::JamFile::GlobalMidiQuantState::All);
+	station->AddTake(take);
+	midi::MidiQuantisationSettings settings;
+	settings.Enabled = true;
+	settings.Fraction = midi::MidiQuantisationFraction::Whole;
+	take->SetMidiQuantisation(settings);
+	take->Record({}, station->Name(), { 0u }, { "Keys" }, {}, clock->AbsoluteSamplePos(), recordStart);
+	ASSERT_TRUE(take->RecordMidiEvent(midi::MidiEvent::MakeNoteOn(recordStart + 24u, 0u, 60u, 100u),
+		"Keys", recordStart + 24u));
+	ASSERT_TRUE(take->RecordMidiEvent(midi::MidiEvent::MakeNoteOff(recordStart + 19600u, 0u, 60u),
+		"Keys", recordStart + 19600u));
+	take->EndMultiWrite(takeLength, true, base::Audible::AUDIOSOURCE_ADC);
+	clock->Tick(takeLength, 0u);
+	take->Play(0ul, takeLength, 0u);
+	station->CommitChanges();
+	ASSERT_TRUE(take->GetLoops().empty());
+	ASSERT_EQ(1u, take->GetMidiLoops().size());
+	ASSERT_GT(take->GetMidiLoops().front()->EventCount(), 0u);
+	EXPECT_EQ(remoteInterval, clock->SeedSourceLength());
+	EXPECT_EQ((remoteInterval + 4u) / 8u, clock->QuantiseSamps());
+	audio::NinjamAudioBoundaryTestAccess::RestoreMappedSource(host, clock->SceneSamplePos());
+	const auto start = take->MidiPlayIndex();
+
+	class CapturingSink final : public midi::IMidiOutputSink
+	{
+	public:
+		void OnEvent(unsigned int, const midi::MidiEvent& event) noexcept override
+		{
+			if (event.IsNoteOn()) NoteOns.push_back(event.sampleOffset);
+		}
+		std::vector<std::uint32_t> NoteOns;
+	} sink;
+	// More than four remote intervals: ordinary advancement and mapped restore
+	// must agree at every block, including remote discipline and take wraps.
+	bool continuousPlayback = true;
+	for (unsigned int block = 0u; block < 2500u; ++block)
+	{
+		take->ReadMidiBlock(static_cast<std::uint32_t>(clock->SceneSamplePos()), blockSize, sink);
+		take->EndMultiPlay(blockSize);
+		clock->Tick(blockSize, 0u);
+		if (block % 2u == 0u)
+		{
+			remote.IntervalPositionSamps = clock->SampOffset();
+			remote.DeviceAudioSampleAtObservation = clock->SceneSamplePos();
+			const auto update = observe(true);
+			ASSERT_FALSE(update.PromptForTempoChange);
+			ASSERT_FALSE(update.TempoRequest);
+			apply(update);
+		}
+		audio::NinjamAudioBoundaryTestAccess::RestoreMappedSource(host, clock->SceneSamplePos());
+		continuousPlayback &= (start + static_cast<std::uint64_t>(block + 1u) * blockSize) % takeLength
+			== take->MidiPlayIndex();
+	}
+	EXPECT_TRUE(continuousPlayback);
+	ASSERT_GE(sink.NoteOns.size(), 4u);
+	for (std::size_t i = 1u; i < sink.NoteOns.size(); ++i)
+		EXPECT_EQ(takeLength, sink.NoteOns[i] - sink.NoteOns[i - 1u]) << "note=" << i;
+	EXPECT_FALSE(coordinator.PendingTempoProposal());
+	EXPECT_EQ(0u, take->MappedMidiRestoreDiagnostic().LargestBackstepSamps);
+	EXPECT_EQ(0u, take->MappedMidiRestoreDiagnostic().ChangedCount);
+}
+
 TEST(NinjamTimingProductionBoundary, NewQuantisedTakeAndMetronomeShareMusicalOrigin)
 {
 	for (const auto sampleRate : { 44100u, 48000u })
