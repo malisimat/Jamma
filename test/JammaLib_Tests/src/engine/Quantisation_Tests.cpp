@@ -1346,3 +1346,49 @@ TEST(Quantisation, ReclockResetIgnoresOlderTakesAndRetainsNewerFollowers)
     EXPECT_TRUE(quantiser.ResetReclockIfEmpty({station}));
     EXPECT_EQ(0ul, clock->SeedSourceLength());
 }
+
+TEST(Quantisation, ConnectedSoleMasterTapPreparesLocalTimingBeforeRequestingServerChange)
+{
+    auto take = MakeQuantisationContractTake("connected-master", 96000ul);
+    auto station = std::make_shared<QuantisationContractStation>();
+    station->AddTake(take);
+    auto clock = std::make_shared<utils::Timer>();
+    clock->SetQuantisation(24000u, utils::Timer::QUANTISE_MULTIPLE);
+    clock->SetSeedSourceLength(192000ul);
+    engine::Quantiser quantiser;
+    quantiser.SetClock(clock);
+    engine::RemoteTransportGeometry remote;
+    remote.IntervalLengthSamps = 192000ul;
+    remote.Bpi = 8u;
+    quantiser.SetRemoteMidiGrid(remote, 0, { station });
+    engine::QuantisationTiming requested;
+    unsigned int publications = 0u;
+    quantiser.SetLocalMasterTimingPublisher([&](const engine::QuantisationTiming& timing,
+        utils::Timer::QuantisationType, const engine::LoopTake* target, const engine::Loop*)
+    {
+        requested = timing;
+        EXPECT_EQ(take.get(), target);
+        return static_cast<std::uint64_t>(++publications);
+    });
+    io::UserConfig config;
+    ASSERT_TRUE(quantiser.CanEditMasterTempo({ station }));
+    EXPECT_FALSE(quantiser.HandleTapTempo(0u, 48000u, { station }, config, true));
+    EXPECT_TRUE(quantiser.HandleTapTempo(24000u, 48000u, { station }, config, true));
+    EXPECT_EQ(4u, requested.Bpi);
+    EXPECT_EQ(96000ul, requested.MasterLoopSamps);
+    EXPECT_EQ(192000ul, clock->SeedSourceLength());
+    EXPECT_EQ(96000ul, take->VisualLoopLengthSamps());
+    EXPECT_TRUE(quantiser.LocalMasterTimingPending());
+    EXPECT_FALSE(quantiser.HasActivatedLocalMaster({ station }));
+    EXPECT_FALSE(take->ResolvedMidiQuantisation().HasRemoteGrid());
+    EXPECT_TRUE(quantiser.HandleTapTempo(36000u, 48000u, { station }, config, true));
+    EXPECT_EQ(2u, publications);
+    EXPECT_EQ(2u, quantiser.PendingLocalMasterTimingVersion());
+    EXPECT_NE(24000u, requested.SeedSamps);
+    EXPECT_EQ(192000ul, clock->SeedSourceLength());
+    EXPECT_FALSE(quantiser.HasActivatedLocalMaster({ station }));
+    quantiser.CancelLocalMasterTiming(2u);
+    EXPECT_FALSE(quantiser.HasActivatedLocalMaster({ station }));
+    station->AddTake(MakeQuantisationContractTake("second", 96000ul));
+    EXPECT_FALSE(quantiser.CanEditMasterTempo({ station }));
+}

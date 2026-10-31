@@ -14,6 +14,8 @@
 #include "GuiDropDown.h"
 #include "../midi/MidiQuantisation.h"
 
+namespace ninjam { enum class NinjamLocalTempoState : std::uint8_t; }
+
 namespace gui
 {
 	// Optional exclusive choice: the radio's unused index represents pass-through.
@@ -42,6 +44,7 @@ namespace gui
 		struct SubdivisionChange { midi::MidiQuantisationFraction Value; };
 		struct TapTempo {};
 		struct Reclock {};
+		struct SyncToServer {};
 		struct ResetAll {};
 		struct SaveSession { bool ChooseFolder; bool AsDefault; };
 		struct LoadSession {};
@@ -55,7 +58,7 @@ namespace gui
 			AudioDeviceChange, AudioValueChange, MidiDeviceChange>;
 		struct DevicePages { std::vector<GuiSettingEntry> Audio, Midi; };
 		using Change = std::variant<ViewModeChange, GlobalQuantisationChange, ChannelChange,
-			OffsetChange, MetronomeChange, SubdivisionChange, TapTempo, Reclock, ResetAll>;
+			OffsetChange, MetronomeChange, SubdivisionChange, TapTempo, Reclock, SyncToServer, ResetAll>;
 
 		enum class DraftChange { None, Device, Channels, Format, Midi };
 		DraftChange EditDeviceDraft(const DeviceChange& command, const audio::AsioInventory& inventory,
@@ -83,6 +86,7 @@ namespace gui
 		const auto& Offset() const { return _transportOffsetInput; }
 		const auto& GlobalQuantisation() const { return _globalMidiQuantRadio; }
 		const auto& Subdivision() const { return _midiSubdivisionRadio; }
+		void RefreshNinjamStatus(ninjam::NinjamLocalTempoState state, bool connected, bool following);
 		void RefreshChannelPresentation(std::uint8_t channel);
 		DevicePages BuildDevicePages(const audio::AsioInventory& inventory,
 			const io::UserConfig::AudioSettings& audioDraft,
@@ -116,6 +120,7 @@ namespace gui
 		static constexpr unsigned int SaveSessionAsControlIndex = 7213u;
 		static constexpr unsigned int ResetAllControlIndex = 7214u;
 		static constexpr unsigned int ReclockControlIndex = 7006u;
+		static constexpr unsigned int SyncToServerControlIndex = 7007u;
 		static constexpr unsigned int MidiDeviceControlIndex = 7300u;
 		static constexpr unsigned int MidiDeviceControlLimit = 8300u;
 		static constexpr unsigned int MidiChannelOverrideControlIndex = 7001u;
@@ -129,9 +134,9 @@ namespace gui
 		std::shared_ptr<GuiToggle> _ninjamMetronomeToggle;
 		std::shared_ptr<GuiRadio> _globalMidiQuantRadio;
 		std::shared_ptr<GuiRadio> _midiSubdivisionRadio;
-		std::shared_ptr<GuiButton> _tapButton, _reclockButton, _resetAllButton;
+		std::shared_ptr<GuiButton> _tapButton, _reclockButton, _syncToServerButton, _resetAllButton;
 		std::shared_ptr<GuiButton> _saveButton, _saveDefaultJamButton, _loadButton, _saveAsJamButton;
-		std::shared_ptr<GuiLabel> _deviceStatus, _activeAudioStatus, _fileStatus;
+		std::shared_ptr<GuiLabel> _deviceStatus, _activeAudioStatus, _fileStatus, _ninjamStatus;
 		std::vector<std::string> _audioChoiceNames;
 		std::shared_ptr<GuiDropDown> _audioDeviceChoice;
 		std::shared_ptr<GuiDropDown> _audioSampleRateChoice;

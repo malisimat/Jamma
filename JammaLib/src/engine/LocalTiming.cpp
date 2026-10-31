@@ -52,7 +52,10 @@ void LocalTiming::Advance(Quantiser& quantisation, audio::AudioHost& audio,
 					prepared &= take->PrepareLocalMasterQuantisation(
 						quantisation.EffectiveSamps(),
 						(take->MidiQuantisationTransportStartSamps() % length +
-							_preparingDelta) % length);
+							_preparingDelta) % length,
+						quantisation.PendingMasterTapEdit() && take.get() == quantisation.PendingLocalMasterTake()
+							? receipt->NewMasterLengthSamps : 0u,
+						quantisation.ActiveGridDivisions());
 		}
 		if (prepared)
 		{

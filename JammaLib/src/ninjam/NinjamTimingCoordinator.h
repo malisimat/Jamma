@@ -49,6 +49,11 @@ namespace ninjam
 		Expired
 	};
 
+	enum class NinjamLocalTempoState : std::uint8_t
+	{
+		Following, AwaitingMaster, AwaitingServer, StayLocal, AwaitingFreshSync
+	};
+
 	struct NinjamTempoRequest
 	{
 		float Bpm = 0.0f;
@@ -199,6 +204,12 @@ namespace ninjam
 		NinjamTimingUpdate Connect(const NinjamTempoJoinOptions& options,
 			const std::optional<engine::QuantisationTiming>& localTiming) noexcept;
 		NinjamTimingUpdate Disconnect() noexcept;
+		NinjamTimingUpdate BeginLocalTiming() noexcept;
+		NinjamTimingUpdate PushActivatedLocalTempo(const engine::QuantisationTiming& timing,
+			std::chrono::steady_clock::time_point now = std::chrono::steady_clock::now()) noexcept;
+		NinjamTimingUpdate RequestSyncToServer() noexcept;
+		NinjamLocalTempoState LocalTempoState() const noexcept { return _localTempoState; }
+		NinjamLocalFollowPolicy FollowPolicy() const noexcept { return _activeFollowPolicy; }
 		NinjamTimingUpdate ObserveSessionStatus(const NinjamSessionTimingStatus& status,
 			const NinjamTempoJoinOptions& options,
 			const std::optional<engine::QuantisationTiming>& localTiming) noexcept;
@@ -242,6 +253,7 @@ namespace ninjam
 			float remoteBpm) noexcept;
 
 	private:
+		void _CancelTempoRequest() noexcept;
 		void _SetPendingTempoChange(const NinjamTempoChange& change);
 		static bool _MatchesRequest(const NinjamTiming& timing,
 			const engine::QuantisationTiming& request) noexcept;
@@ -268,6 +280,11 @@ namespace ninjam
 			long long valueSamps = 0,
 			std::uint64_t limitSamps = 0u,
 			std::uint64_t appliedSessionEpoch = 0u) noexcept;
+		NinjamLocalTempoState _localTempoState = NinjamLocalTempoState::Following;
+		std::optional<std::uint64_t> _followObservationFence;
+		std::optional<std::chrono::steady_clock::time_point> _localTempoRequestStartedAt;
+		std::uint64_t _followRevision = 0u;
+		unsigned long _sourceMasterIntervalLengthSamps = 0ul;
 		NinjamTimingTracker _tracker;
 		NinjamTempoJoinOptions _options{};
 		// Serialized by the service mutex; never reset revisions across reconnects.

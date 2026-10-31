@@ -165,6 +165,7 @@ namespace engine
         static io::JamFile::GlobalMidiQuantState GlobalQuantisationState(Scene& scene) { return scene._globalMidiQuantState; }
 
         static bool ReclockArmed(Scene& scene) { return scene._quantisation.IsArmedForReclock(); }
+        static std::uint64_t ReclockGeneration(Scene& scene) { return scene._quantisation.ReclockGeneration(); }
         static bool RigSaveRequested(const Scene& scene) { return scene._operation._rigSaveRequested; }
         static void ChooseAudio(Scene& scene, int index) { scene._workspace->Settings().AudioDevice()->SetSelectedIndex(index, true); }
         static void ChooseSampleRate(Scene& scene, int index) { scene._workspace->Settings().AudioSampleRate()->SetSelectedIndex(index, true); }
@@ -2759,10 +2760,10 @@ TEST_F(SceneRoutingIntegrationTest, ReclockButtonArmsOnceAndFormerKeyboardChordD
     scene->OnAction(key); EXPECT_FALSE(Access::ReclockArmed(*scene));
     actions::GuiAction button; button.ElementType = actions::GuiAction::ACTIONELEMENT_BUTTON; button.Index = 7006u;
     Access::RemoteGrid(*scene, {88200u, 4u, 0u, 120.0f, 1u}, 1234);
-    scene->OnAction(button); EXPECT_FALSE(Access::ReclockArmed(*scene));
-    Access::RemoteGrid(*scene, {}, 0);
     scene->OnAction(button); EXPECT_TRUE(Access::ReclockArmed(*scene));
+    const auto generation = Access::ReclockGeneration(*scene);
     scene->OnAction(button); EXPECT_TRUE(Access::ReclockArmed(*scene));
+    EXPECT_EQ(generation, Access::ReclockGeneration(*scene));
     exclusion.unlock(); scene->Shutdown();
 }
 

@@ -234,7 +234,8 @@ namespace engine
 		void CompleteLocalMasterQuantisationOnOwner() noexcept;
 		void CancelLocalMasterQuantisationOnOwner() noexcept;
 		bool PrepareLocalMasterQuantisation(unsigned int grainSamps,
-			std::uint64_t rebasedTransportStartSamps) noexcept;
+			std::uint64_t rebasedTransportStartSamps,
+			unsigned int masterTapLengthSamps = 0u, unsigned int masterTapDivisions = 0u) noexcept;
 		bool TryClaimPreparedMidiQuantisationAtAudioBoundary() noexcept;
 		void ReleasePreparedMidiQuantisationClaimAtAudioBoundary() noexcept;
 		void ActivatePreparedMidiQuantisationAtAudioBoundary() noexcept;
@@ -664,6 +665,7 @@ namespace engine
 		std::atomic<std::uint64_t> _preparedLocalMasterBaseGridPacked{ 0u };
 		std::atomic<std::uint64_t> _preparedLocalMasterQuantisationPacked{ 0u };
 		std::atomic<std::uint64_t> _preparedLocalMasterTransportStart{ 0u };
+		std::atomic<unsigned long> _preparedMasterTapLengthSamps{ 0ul };
 		std::atomic<unsigned long> _midiVisualPlayIndex;
 		std::atomic<unsigned long> _midiVisualLoopLength;
 		// Diagnostic scalars only: audio writer, job readers; lifetime is pinned by
@@ -722,6 +724,7 @@ namespace engine
 		mutable std::mutex _midiCaptureMutex;
 		base::PublishedAudioSnapshot<const MidiLoopSnapshot> _midiLoopSnapshot;
 		std::atomic<std::uint8_t> _promotionTopologyGate{ 0u }; // 1 callback, 2 owner.
+		base::PublishedAudioSnapshot<const AudioState>::Lease _promotionAudioLoopLease; // Callback only.
 		base::PublishedAudioSnapshot<const MidiLoopSnapshot>::Lease _promotionMidiLoopLease; // Callback only.
 		std::atomic<std::uint64_t> _midiQuantisationPacked;
 		std::atomic<std::uint8_t> _globalMidiQuantStatePacked{

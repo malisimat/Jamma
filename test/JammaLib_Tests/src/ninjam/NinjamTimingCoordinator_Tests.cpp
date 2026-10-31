@@ -1308,3 +1308,206 @@ TEST(NinjamTimingCoordinator, ReadMissRetainsAcceptedTempoButInvalidAndDisconnec
     EXPECT_FALSE(read().IsValid); // disconnected callback cleared the audio-owned cache
     Access::Connected(connection, false);
 }
+
+TEST(NinjamTimingCoordinator, ConnectedReclockObservesRemoteWithoutFollowingUntilActivatedMasterIsPushed)
+{
+	Timer clock;
+	NinjamTimingCoordinator coordinator;
+	Connect(coordinator, false, false);
+	auto timing = MakeTimingTempo(384000u, 100u, 120.0f, 16u);
+	timing.DeviceAudioSampleAtObservation = 1000u;
+	ASSERT_TRUE(coordinator.Observe(timing, std::nullopt, false, io::UserConfig{}, clock).DesiredTransport);
+	const auto suspend = coordinator.BeginLocalTiming();
+	ASSERT_TRUE(suspend.DesiredTransport);
+	EXPECT_EQ(ninjam::NinjamLocalFollowPolicy::NoSync, suspend.DesiredTransport->LocalFollowPolicy);
+	const auto revision = suspend.DesiredTransport->FollowRevision;
+	timing.IntervalLengthSamps = 192000u;
+	timing.Bpi = 8u;
+	timing.DeviceAudioSampleAtObservation = 2000u;
+	const auto observing = coordinator.Observe(timing, std::nullopt, false, io::UserConfig{}, clock);
+	EXPECT_FALSE(observing.DesiredTransport);
+	EXPECT_FALSE(observing.TempoRequest);
+	EXPECT_FALSE(observing.PromptForTempoChange);
+	EXPECT_EQ(ninjam::NinjamLocalTempoState::AwaitingMaster, coordinator.LocalTempoState());
+
+	engine::QuantisationTiming master;
+	master.MasterLoopSamps = 192000u;
+	master.SeedSamps = 24000u;
+	master.Bpm = 120.0f;
+	master.Bpi = 8u;
+	const auto push = coordinator.PushActivatedLocalTempo(master);
+	ASSERT_TRUE(push.TempoRequest);
+	ASSERT_TRUE(push.DesiredTransport);
+	EXPECT_EQ(8u, push.TempoRequest->Bpi);
+	EXPECT_EQ(revision, push.DesiredTransport->FollowRevision);
+	EXPECT_EQ(master.MasterLoopSamps, push.DesiredTransport->SourceMasterIntervalLengthSamps);
+	coordinator.NotifyTempoRequestSent(true);
+	EXPECT_FALSE(coordinator.Observe(timing, master, true, io::UserConfig{}, clock).DesiredTransport);
+	timing.DeviceAudioSampleAtObservation = 3000u;
+	const auto accepted = coordinator.Observe(timing, master, true, io::UserConfig{}, clock);
+	ASSERT_TRUE(accepted.DesiredTransport);
+	EXPECT_EQ(ninjam::TempoRequestState::Acknowledged, coordinator.RequestState());
+	EXPECT_EQ(ninjam::NinjamLocalTempoState::Following, coordinator.LocalTempoState());
+	EXPECT_EQ(revision, accepted.DesiredTransport->FollowRevision);
+	EXPECT_EQ(master.MasterLoopSamps, accepted.DesiredTransport->SourceMasterIntervalLengthSamps);
+}
+
+TEST(NinjamTimingCoordinator, NewLocalTapIntentSupersedesEarlierRequestAndRequiresBothObservedValues)
+{
+	Timer clock;
+	NinjamTimingCoordinator coordinator;
+	Connect(coordinator, false, false);
+	auto timing = MakeTimingTempo(384000u, 100u, 120.0f, 16u);
+	timing.DeviceAudioSampleAtObservation = 1000u;
+	coordinator.Observe(timing, std::nullopt, false, io::UserConfig{}, clock);
+	engine::QuantisationTiming master;
+	master.MasterLoopSamps = 192000u;
+	master.SeedSamps = 24000u;
+	master.Bpm = 120.0f;
+	master.Bpi = 8u;
+	coordinator.BeginLocalTiming();
+	coordinator.PushActivatedLocalTempo(master);
+	coordinator.NotifyTempoRequestSent(true);
+	const auto newer = coordinator.BeginLocalTiming();
+	master.MasterLoopSamps = 96000u;
+	master.Bpi = 4u;
+	coordinator.PushActivatedLocalTempo(master);
+	coordinator.NotifyTempoRequestSent(true);
+	timing.IntervalLengthSamps = 192000u;
+	timing.Bpi = 8u;
+	timing.DeviceAudioSampleAtObservation = 2000u;
+	EXPECT_FALSE(coordinator.Observe(timing, master, true, io::UserConfig{}, clock).DesiredTransport);
+	timing.IntervalLengthSamps = 96000u;
+	timing.Bpi = 4u;
+	timing.DeviceAudioSampleAtObservation = 3000u;
+	const auto accepted = coordinator.Observe(timing, master, true, io::UserConfig{}, clock);
+	ASSERT_TRUE(accepted.DesiredTransport);
+	EXPECT_EQ(4u, accepted.DesiredTransport->BeatsPerInterval);
+	EXPECT_EQ(newer.DesiredTransport->FollowRevision, accepted.DesiredTransport->FollowRevision);
+}
+
+TEST(NinjamTimingCoordinator, ExplicitSyncDiscardsStayLocalAndPendingPushButRequiresFreshUnchangedTiming)
+{
+	Timer clock;
+	NinjamTimingCoordinator coordinator;
+	Connect(coordinator, true, false);
+	auto timing = MakeTimingTempo(384000u, 100u, 120.0f, 16u);
+	timing.DeviceAudioSampleAtObservation = 1000u;
+	ASSERT_TRUE(coordinator.Observe(timing, std::nullopt, true, io::UserConfig{}, clock).PromptForTempoChange);
+	coordinator.ResolveTempoChange(false, std::nullopt, clock);
+	const auto sync = coordinator.RequestSyncToServer();
+	ASSERT_TRUE(sync.DesiredTransport);
+	EXPECT_FALSE(coordinator.PendingTempoProposal());
+	EXPECT_FALSE(coordinator.Observe(timing, std::nullopt, true, io::UserConfig{}, clock).DesiredTransport);
+	timing.DeviceAudioSampleAtObservation = 999u;
+	EXPECT_FALSE(coordinator.Observe(timing, std::nullopt, true, io::UserConfig{}, clock).DesiredTransport);
+	timing.DeviceAudioSampleAtObservation = 2000u;
+	const auto accepted = coordinator.Observe(timing, std::nullopt, true, io::UserConfig{}, clock);
+	ASSERT_TRUE(accepted.DesiredTransport);
+	EXPECT_EQ(sync.DesiredTransport->FollowRevision, accepted.DesiredTransport->FollowRevision);
+	EXPECT_EQ(ninjam::NinjamDesiredTimingIntent::Replacement, accepted.DesiredTransport->Intent);
+
+	coordinator.BeginLocalTiming();
+	engine::QuantisationTiming master;
+	master.MasterLoopSamps = 192000u;
+	master.Bpm = 120.0f;
+	master.Bpi = 8u;
+	coordinator.PushActivatedLocalTempo(master);
+	coordinator.NotifyTempoRequestSent(true);
+	coordinator.RequestSyncToServer();
+	EXPECT_EQ(ninjam::TempoRequestState::Idle, coordinator.RequestState());
+	timing.DeviceAudioSampleAtObservation = 3000u;
+	const auto current = coordinator.Observe(timing, master, true, io::UserConfig{}, clock);
+	ASSERT_TRUE(current.DesiredTransport);
+	EXPECT_EQ(16u, current.DesiredTransport->BeatsPerInterval);
+	EXPECT_EQ(192000ul, current.DesiredTransport->SourceMasterIntervalLengthSamps);
+}
+
+TEST(NinjamTimingCoordinator, FailedConnectedPushStaysLocalAfterDeadlineAndLaterRemoteChanges)
+{
+	Timer clock;
+	NinjamTimingCoordinator coordinator;
+	ninjam::NinjamTempoJoinOptions options;
+	options.PromptBeforeApplyingRemoteTempo = false;
+	options.PushLocalTempoOnJoin = false;
+	coordinator.Connect(options, std::nullopt);
+	const auto now = std::chrono::steady_clock::time_point{};
+	auto timing = MakeTimingTempo(384000u, 100u, 120.0f, 16u);
+	timing.DeviceAudioSampleAtObservation = 1000u;
+	coordinator.Observe(timing, std::nullopt, false, io::UserConfig{}, clock, now);
+	coordinator.BeginLocalTiming();
+	engine::QuantisationTiming master;
+	master.MasterLoopSamps = 192000u;
+	master.Bpm = 120.0f;
+	master.Bpi = 8u;
+	coordinator.PushActivatedLocalTempo(master, now);
+	coordinator.NotifyTempoRequestSent(true, now);
+	const auto expired = coordinator.Tick(master, true, clock, now + options.TempoRequestDeadline);
+	ASSERT_TRUE(expired.DesiredTransport);
+	EXPECT_EQ(ninjam::NinjamLocalFollowPolicy::NoSync, expired.DesiredTransport->LocalFollowPolicy);
+	EXPECT_EQ(ninjam::NinjamLocalTempoState::StayLocal, coordinator.LocalTempoState());
+	timing.DeviceAudioSampleAtObservation = 2000u;
+	timing.IntervalLengthSamps = 480000u;
+	timing.Bpm = 96.0f;
+	const auto changed = coordinator.Observe(timing, master, false, io::UserConfig{}, clock,
+		now + options.TempoRequestDeadline);
+	EXPECT_FALSE(changed.DesiredTransport);
+	EXPECT_FALSE(changed.TempoRequest);
+	EXPECT_FALSE(changed.PromptForTempoChange);
+}
+
+TEST(NinjamTimingCoordinator, InvalidRemoteObservationCancelsConnectedPushWithoutAutomaticResume)
+{
+	Timer clock;
+	NinjamTimingCoordinator coordinator;
+	Connect(coordinator, false, false);
+	auto timing = MakeTimingTempo(384000u, 100u, 120.0f, 16u);
+	timing.DeviceAudioSampleAtObservation = 1000u;
+	coordinator.Observe(timing, std::nullopt, false, io::UserConfig{}, clock);
+	coordinator.BeginLocalTiming();
+	engine::QuantisationTiming master;
+	master.MasterLoopSamps = 192000u;
+	master.Bpm = 120.0f;
+	master.Bpi = 8u;
+	coordinator.PushActivatedLocalTempo(master);
+	coordinator.NotifyTempoRequestSent(true);
+	timing.IsValid = false;
+	coordinator.Observe(timing, master, true, io::UserConfig{}, clock);
+	timing.IsValid = true;
+	timing.DeviceAudioSampleAtObservation = 2000u;
+	timing.IntervalLengthSamps = 192000u;
+	timing.Bpi = 8u;
+	EXPECT_FALSE(coordinator.Observe(timing, master, true, io::UserConfig{}, clock).DesiredTransport);
+	EXPECT_EQ(ninjam::NinjamLocalTempoState::StayLocal, coordinator.LocalTempoState());
+}
+
+TEST(NinjamTimingCoordinator, UndeliverableConnectedPushExpiresFromFirstAttemptWithoutAutoFollowing)
+{
+	Timer clock;
+	NinjamTimingCoordinator coordinator;
+	ninjam::NinjamTempoJoinOptions options;
+	options.PushLocalTempoOnJoin = false;
+	options.PromptBeforeApplyingRemoteTempo = false;
+	coordinator.Connect(options, std::nullopt);
+	const auto now = std::chrono::steady_clock::time_point{};
+	auto timing = MakeTimingTempo(384000u, 100u, 120.0f, 16u);
+	timing.DeviceAudioSampleAtObservation = 1000u;
+	coordinator.Observe(timing, std::nullopt, false, io::UserConfig{}, clock, now);
+	coordinator.BeginLocalTiming();
+	engine::QuantisationTiming master;
+	master.MasterLoopSamps = 192000u;
+	master.Bpm = 120.0f;
+	master.Bpi = 8u;
+	ASSERT_TRUE(coordinator.PushActivatedLocalTempo(master, now).TempoRequest);
+	coordinator.NotifyTempoRequestSent(false, now);
+	EXPECT_EQ(ninjam::TempoRequestState::Queued, coordinator.RequestState());
+	const auto expired = coordinator.Tick(master, true, clock, now + options.TempoRequestDeadline);
+	ASSERT_TRUE(expired.DesiredTransport);
+	EXPECT_EQ(ninjam::NinjamLocalFollowPolicy::NoSync, expired.DesiredTransport->LocalFollowPolicy);
+	EXPECT_EQ(ninjam::NinjamLocalTempoState::StayLocal, coordinator.LocalTempoState());
+	timing.DeviceAudioSampleAtObservation = 2000u;
+	timing.IntervalLengthSamps = 192000u;
+	timing.Bpi = 8u;
+	EXPECT_FALSE(coordinator.Observe(timing, master, false, io::UserConfig{}, clock,
+		now + options.TempoRequestDeadline).DesiredTransport);
+}

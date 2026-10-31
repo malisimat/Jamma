@@ -1602,15 +1602,32 @@ void LoopTake::CancelLocalMasterQuantisationOnOwner() noexcept
 	}
 	for (const auto& loop : _midiLoops)
 		if (loop) loop->CancelPreparedQuantisationOnOwner();
+	_preparedMasterTapLengthSamps.store(0ul, std::memory_order_release);
 	_localMasterQuantisationPrepared.store(false, std::memory_order_release);
 	_midiQuantisationUpdatePending.store(true, std::memory_order_release);
 	_promotionTopologyGate.store(0u, std::memory_order_seq_cst);
 }
 
 bool LoopTake::PrepareLocalMasterQuantisation(unsigned int grainSamps,
-	std::uint64_t rebasedTransportStartSamps) noexcept
+	std::uint64_t rebasedTransportStartSamps,
+	unsigned int masterTapLengthSamps, unsigned int masterTapDivisions) noexcept
 {
 	std::scoped_lock lock(_midiCaptureMutex);
+	// Serialize the complete prepared value with callback claims, including
+	// audio-only takes that have no MidiLoop publication gate of their own.
+	std::uint8_t expected = 0u;
+	while (!_promotionTopologyGate.compare_exchange_weak(expected, 2u,
+		std::memory_order_seq_cst))
+	{
+		expected = 0u;
+		std::this_thread::yield();
+	}
+	struct OwnerClaim
+	{
+		std::atomic<std::uint8_t>& Gate;
+		~OwnerClaim() { Gate.store(0u, std::memory_order_seq_cst); }
+	} ownerClaim{ _promotionTopologyGate };
+
 	auto settings = MidiQuantisation();
 	settings.GrainSamps = grainSamps;
 	auto resolved = _ResolvedMidiQuantisation(settings);
@@ -1621,6 +1638,15 @@ bool LoopTake::PrepareLocalMasterQuantisation(unsigned int grainSamps,
 		resolved.BaseIntervalSamps = 0u;
 		resolved.BaseDivisions = 0u;
 	}
+	if (masterTapLengthSamps > 0u)
+	{
+		if (masterTapDivisions == 0u) return false;
+		for (const auto& loop : GetLoops())
+			if (loop && !loop->CanSetLogicalLengthAtAudioBoundary(masterTapLengthSamps)) return false;
+		resolved.BaseIntervalSamps = masterTapLengthSamps;
+		resolved.BaseDivisions = masterTapDivisions;
+	}
+	_preparedMasterTapLengthSamps.store(masterTapLengthSamps, std::memory_order_release);
 	_preparedLocalMasterBaseGridPacked.store(
 		(static_cast<std::uint64_t>(resolved.BaseIntervalSamps) << 32u) | resolved.BaseDivisions,
 		std::memory_order_release);
@@ -1638,6 +1664,23 @@ bool LoopTake::TryClaimPreparedMidiQuantisationAtAudioBoundary() noexcept
 	std::uint8_t expected = 0u;
 	if (!_promotionTopologyGate.compare_exchange_strong(expected, 1u,
 		std::memory_order_seq_cst)) return false;
+	const auto masterTapLength = _preparedMasterTapLengthSamps.load(std::memory_order_acquire);
+	if (masterTapLength > 0ul)
+	{
+		_promotionAudioLoopLease = _BorrowAudioState();
+		if (!_promotionAudioLoopLease.ReadSucceeded())
+		{
+			ReleasePreparedMidiQuantisationClaimAtAudioBoundary();
+			return false;
+		}
+		if (_promotionAudioLoopLease)
+			for (const auto& loop : _promotionAudioLoopLease->Loops)
+				if (loop && !loop->CanSetLogicalLengthAtAudioBoundary(masterTapLength))
+				{
+					ReleasePreparedMidiQuantisationClaimAtAudioBoundary();
+					return false;
+				}
+	}
 	_promotionMidiLoopLease = _BorrowMidiLoopSnapshot();
 	if (!_promotionMidiLoopLease.ReadSucceeded())
 	{
@@ -1660,6 +1703,7 @@ void LoopTake::ReleasePreparedMidiQuantisationClaimAtAudioBoundary() noexcept
 		for (const auto& loop : *_promotionMidiLoopLease)
 			if (loop) loop->ReleasePreparedQuantisationClaimAtAudioBoundary();
 	_promotionMidiLoopLease.reset();
+	_promotionAudioLoopLease.reset();
 	std::uint8_t expected = 1u;
 	_promotionTopologyGate.compare_exchange_strong(expected, 0u,
 		std::memory_order_seq_cst);
@@ -1668,6 +1712,11 @@ void LoopTake::ReleasePreparedMidiQuantisationClaimAtAudioBoundary() noexcept
 void LoopTake::ActivatePreparedMidiQuantisationAtAudioBoundary() noexcept
 {
 	if (!_localMasterQuantisationPrepared.load(std::memory_order_acquire)) return;
+	const auto masterTapLength = _preparedMasterTapLengthSamps.load(std::memory_order_acquire);
+	if (masterTapLength > 0ul && _promotionAudioLoopLease)
+		for (const auto& loop : _promotionAudioLoopLease->Loops)
+			if (loop) loop->SetLogicalLengthAtAudioBoundary(masterTapLength);
+	_preparedMasterTapLengthSamps.store(0ul, std::memory_order_release);
 	_midiBaseGridPacked.store(_preparedLocalMasterBaseGridPacked.load(std::memory_order_acquire),
 		std::memory_order_release);
 	_midiQuantisationPacked.store(

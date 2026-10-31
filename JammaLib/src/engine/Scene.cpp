@@ -61,6 +61,8 @@ Scene::Scene(SceneParams params,
 	_quantisation.SetLocalMasterTimingPublisher([this](const QuantisationTiming& timing,
 		Timer::QuantisationType type, const LoopTake* take, const Loop* loop)
 	{
+		// Suspend following before the callback can prepare the new local ruler.
+		_ApplyNinjamTimingUpdate(_networkService->BeginLocalTiming());
 		return _audioEngine->PublishLocalMasterTiming(timing.SeedSamps,
 			timing.MasterLoopSamps, type, take, loop);
 	});
@@ -433,11 +435,8 @@ void Scene::_HandleReclockArm()
 	std::scoped_lock lock(_sceneMutex);
 	if (_operation.Current() != SessionControl::None || _operation.HoldsWriter() || _stationManagement.Busy() ||
 		_operation.RigSaveDialogOpen() || _operation.RigSaveInProgress() || _quantisation.IsArmedForReclock()) return;
-	if (_quantisation.ActiveGrid().Source == QuantisationGridSource::Remote)
-	{
-		std::cout << "[Quantisation] reclock rejected: remote authority; choose Stay local first" << std::endl;
-		return;
-	}
+	if (_quantisation.LocalMasterTimingPending()) return;
+	_ApplyNinjamTimingUpdate(_networkService->BeginLocalTiming());
 	std::cout << ">> Reclock armed <<" << std::endl;
 	_quantisation.ArmReclock(_stations);
 	_quantisation.SetRemoteMidiGrid({}, 0, _stations);
@@ -539,6 +538,15 @@ ActionResult Scene::OnAction(GuiAction action)
 		_workspace->Settings().Offset()->SynchronizeValueFromOwner(_transportOffsetLoopFrac);
 	}
 	else if (std::holds_alternative<Settings::Reclock>(*change)) _HandleReclockArm();
+	else if (std::holds_alternative<Settings::SyncToServer>(*change))
+	{
+		std::scoped_lock lock(_sceneMutex);
+		if (!_quantisation.LocalMasterTimingPending())
+		{
+			_quantisation.CancelReclock();
+			_ApplyNinjamTimingUpdate(_networkService->RequestSyncToServer());
+		}
+	}
 	else if (std::holds_alternative<Settings::ResetAll>(*change))
 	{
 		if (_operation.Current() != SessionControl::None || _operation.HoldsWriter() || _stationManagement.Busy() ||
@@ -613,6 +621,11 @@ void Scene::OnJobTick(Time curTime)
 			clock->QuantiseSamps() != _quantisation.EffectiveSamps())
 			_SetMidiQuantisationGrain(clock->QuantiseSamps(), "clock geometry changed");
 		const auto localTiming = _quantisation.CurrentTempoTiming(_CurrentSampleRate());
+		if (localTiming && _quantisation.HasActivatedLocalMaster(_stations))
+		{
+			_quantisation.CancelReclock();
+			_ApplyNinjamTimingUpdate(_networkService->PushActivatedLocalTempo(*localTiming));
+		}
 		bool hasLocalContent = false;
 		for (const auto& station : _stations)
 		{
@@ -1272,6 +1285,9 @@ void Scene::CommitChanges()
 		}
 
 		_workspace->SynchronizeTempoPrompt(_networkService->PendingRemoteTempoPrompt());
+		_workspace->Settings().RefreshNinjamStatus(_networkService->LocalTempoState(),
+			_networkService->HasConnectedTiming(),
+			_networkService->FollowPolicy() != ninjam::NinjamLocalFollowPolicy::NoSync);
 
 		// Completion/update payloads share structural ownership with start/end/ditch.
 		// Keep validation and mutation under the same off-callback scene lock.
@@ -1670,10 +1686,11 @@ void Scene::_ApplyQuantisationTiming(const QuantisationTiming& timing, const cha
 bool Scene::_HandleTapTempo(Time actionTime)
 {
 	std::scoped_lock lock(_sceneMutex);
+	const bool pushMaster = _networkService->HasConnectedTiming() && _quantisation.CanEditMasterTempo(_stations);
 	const auto handled = _quantisation.HandleTapTempo(_EstimatedAudioSampleAt(actionTime),
 		_CurrentSampleRate(),
 		_stations,
-		_userConfig);
+		_userConfig, pushMaster);
 	if (handled)
 	{
 		_quantisation.UpdateStationHints(nullptr, _workspace->SelectionDepth(), false, _stations);

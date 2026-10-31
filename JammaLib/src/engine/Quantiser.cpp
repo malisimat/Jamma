@@ -167,6 +167,7 @@ void Quantiser::ArmReclock()
 
 void Quantiser::ArmReclock(const std::vector<std::shared_ptr<engine::Station>>& stations)
 {
+	_pendingLocalMasterTimingVersion = 0u;
 	_reclockGeneration.fetch_add(1u, std::memory_order_acq_rel);
 	_acceptedRemoteGrid = {};
 	_acceptedRemoteGridOriginSamps = 0;
@@ -318,10 +319,38 @@ std::int32_t Quantiser::ResolvePhaseOffsetDrag(std::int32_t startOffsetSamps,
 	return _ClampPhaseOffset(static_cast<std::int64_t>(startOffsetSamps) + dragSamps);
 }
 
+
+bool Quantiser::CanEditMasterTempo(const std::vector<std::shared_ptr<Station>>& stations) const
+{
+	unsigned int eligible = 0u;
+	for (const auto& station : stations)
+		if (station && !station->IsRemote())
+			for (const auto& take : station->GetLoopTakes())
+				if (take && take->IsCompletedRecording()
+					&& std::find(_preReclockTakeIds.begin(), _preReclockTakeIds.end(), take->Id()) == _preReclockTakeIds.end())
+					++eligible;
+	return eligible == 1u;
+}
+
+bool Quantiser::HasActivatedLocalMaster(const std::vector<std::shared_ptr<Station>>& stations) const
+{
+	if (_localMasterTimingPending || !_clock || !_clock->SeedSourceLength()) return false;
+	for (const auto& station : stations)
+		if (station && !station->IsRemote())
+		{
+			const auto master = station->RecordedMasterTakeOnOwner();
+			if (master && master->IsCompletedRecording() && !master->FirstMasterActivationPending()
+				&& std::find(_preReclockTakeIds.begin(), _preReclockTakeIds.end(), master->Id()) == _preReclockTakeIds.end())
+				return true;
+		}
+	// A tap promotion uses the explicit local-master activation handshake.
+	return _pendingLocalMasterTimingVersion != 0u && !_localMasterTimingPending;
+}
+
 bool Quantiser::HandleTapTempo(std::uint64_t estimatedSampleAt,
     unsigned int sampleRate,
     const std::vector<std::shared_ptr<Station>>& stations,
-    const io::UserConfig& cfg)
+    const io::UserConfig& cfg, bool editRemoteMaster)
 {
     PulseOverlay();
     unsigned int eligible = 0u;
@@ -344,7 +373,7 @@ bool Quantiser::HandleTapTempo(std::uint64_t estimatedSampleAt,
         _masterOriginalBufferLengthSamps.store(_masterLoop ? _masterLoop->PhysicalLoopLength() : length, std::memory_order_release);
     }
     const auto original = _masterOriginalBufferLengthSamps.load(std::memory_order_acquire);
-    const auto interval = remote ? _acceptedRemoteGrid.IntervalLengthSamps :
+    const auto interval = remote && !(editRemoteMaster && eligible == 1u) ? _acceptedRemoteGrid.IntervalLengthSamps :
         (eligible == 1u && original ? original : (_clock ? _clock->SeedSourceLength() : 0ul));
     std::optional<QuantisationTiming> timing;
     double requestedDivisions = 0.0;
@@ -356,7 +385,7 @@ bool Quantiser::HandleTapTempo(std::uint64_t estimatedSampleAt,
         if (smoothedGap > 0.0) requestedDivisions = interval / smoothedGap;
     }
     if (!timing) return false;
-    if (eligible != 1u || remote)
+    if (eligible != 1u || (remote && !editRemoteMaster))
     {
         const auto grain = _clock ? _clock->QuantiseSamps() : 0u;
         const auto base = remote ? _acceptedRemoteGrid.Bpi :
@@ -422,6 +451,35 @@ bool Quantiser::HandleTapTempo(std::uint64_t estimatedSampleAt,
             << " physical=" << original << " logical=" << timing->MasterLoopSamps << " grain=" << timing->SeedSamps
             << " grains=" << timing->Bpi << std::endl;
         return false;
+    }
+    if (_localMasterTimingPublisher && editRemoteMaster)
+    {
+        // A later tap replaces the latest prepare request. Keep the original
+        // rollback state until the newest version is activated or cancelled.
+        if (!_localMasterTimingPending)
+        {
+            _previousMasterLoop = _masterLoop;
+            _previousGridSource = _gridSource.load(std::memory_order_acquire);
+            _previousMasterLoopLengthSamps = _masterLoopLengthSamps.load(std::memory_order_acquire);
+            _previousMasterOriginalBufferLengthSamps = _masterOriginalBufferLengthSamps.load(std::memory_order_acquire);
+            _previousActiveGridDivisions = _activeGridDivisions.load(std::memory_order_acquire);
+            _previousEffectiveQuantiseSamps = _effectiveQuantiseSamps.load(std::memory_order_acquire);
+            _previousSeedUsesPowers = _seedUsesPowers;
+        }
+        if (remote) SetRemoteMidiGrid({}, 0, stations);
+        _pendingMasterTake = soleTake;
+        SetSeedUsesPowers(cfg.Loop.SeedUsesPowers);
+        _pendingMasterTapEdit = true;
+        _localMasterTimingPending = true;
+        _pendingLocalMasterTimingVersion = _localMasterTimingPublisher(*timing,
+            cfg.Loop.SeedUsesPowers ? Timer::QUANTISE_POWER : Timer::QUANTISE_MULTIPLE,
+            soleTake.get(), _masterLoop.get());
+        _masterLoopLengthSamps.store(timing->MasterLoopSamps, std::memory_order_release);
+        _effectiveQuantiseSamps.store(timing->SeedSamps, std::memory_order_release);
+        _activeGridDivisions.store(timing->Bpi, std::memory_order_release);
+        _gridSource.store(QuantisationGridSource::Tap, std::memory_order_release);
+        _armReclock.store(false, std::memory_order_release);
+        return true;
     }
     // The recording's physical storage remains intact; Loop::Play only changes
     // its logical boundary and retains the recorded tail for a later resolution.
@@ -598,6 +656,8 @@ void Quantiser::CancelLocalMasterTiming(std::uint64_t version) noexcept
 	_effectiveQuantiseSamps.store(_previousEffectiveQuantiseSamps, std::memory_order_release);
 	_seedUsesPowers = _previousSeedUsesPowers;
 	_pendingMasterTake.reset();
+	_pendingMasterTapEdit = false;
+	_pendingLocalMasterTimingVersion = 0u;
 	_localMasterTimingPending = false;
 }
 

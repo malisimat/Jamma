@@ -34,6 +34,10 @@ namespace ninjam
 		std::uint64_t Version = 0u;
 		std::uint64_t SessionEpoch = 0u;
 		std::uint64_t Generation = 0u;
+		// Persistent workflow identity: intermediate NoSync may be overwritten.
+		std::uint64_t FollowRevision = 0u;
+		// Zero retains the recording ruler; a confirmed local master supplies its own.
+		unsigned long SourceMasterIntervalLengthSamps = 0ul;
 		NinjamDesiredTimingIntent Intent = NinjamDesiredTimingIntent::NoSync;
 		NinjamLocalFollowPolicy LocalFollowPolicy = NinjamLocalFollowPolicy::NoSync;
 		bool HasRemoteTiming = false;
@@ -80,6 +84,8 @@ namespace ninjam
 		std::atomic<std::uint64_t> _version{ 0u };
 		std::atomic<std::uint64_t> _sessionEpoch{ 0u };
 		std::atomic<std::uint64_t> _generation{ 0u };
+		std::atomic<std::uint64_t> _followRevision{ 0u };
+		std::atomic<unsigned long> _sourceMasterIntervalLengthSamps{ 0ul };
 		std::atomic<NinjamDesiredTimingIntent> _intent{ NinjamDesiredTimingIntent::NoSync };
 		std::atomic<NinjamLocalFollowPolicy> _localFollowPolicy{ NinjamLocalFollowPolicy::NoSync };
 		std::atomic_bool _hasRemoteTiming{ false };

@@ -1,4 +1,5 @@
 #include "SceneSettingsControls.h"
+#include "../ninjam/NinjamTimingCoordinator.h"
 #include "../io/RigFile.h"
 #include <algorithm>
 #include <cmath>
@@ -197,6 +198,8 @@ SceneSettingsControls::SceneSettingsControls(std::uint8_t channel, double offset
 	_loadButton = _SessionButton("Load");
 	_saveAsJamButton = _SessionButton("Save As...");
 	_reclockButton = _SessionButton("Reclock");
+	_syncToServerButton = _SessionButton("Sync to server");
+	_ninjamStatus = _StatusLabel("NINJAM disconnected", 44u);
 	_resetAllButton = _SessionButton("Reset All");
 
 }
@@ -209,6 +212,8 @@ std::vector<GuiSettingEntry> SceneSettingsControls::SettingsEntries() const
 		{ SettingsPage::Timing, "Subdivision: local grain / remote beat", _midiSubdivisionRadio, MidiSubdivisionControlIndex },
 		{ SettingsPage::Timing, "", _tapButton, TapTempoControlIndex },
 		{ SettingsPage::Timing, "", _reclockButton, ReclockControlIndex },
+		{ SettingsPage::Timing, "", _syncToServerButton, SyncToServerControlIndex },
+		{ SettingsPage::Timing, "", _ninjamStatus, 0u },
 		{ SettingsPage::Session, "", _resetAllButton, ResetAllControlIndex },
 		{ SettingsPage::Midi, "MIDI channel override", _midiChannelOverride, MidiChannelOverrideControlIndex },
 		{ SettingsPage::Midi, "", std::make_shared<GuiLabel>(GuiLabelParams::PanelHeader("All off = unchanged", 300u)), 0u },
@@ -231,6 +236,7 @@ std::optional<SceneSettingsControls::Change> SceneSettingsControls::Decode(const
 	if (action.ElementType == GuiAction::ACTIONELEMENT_BUTTON && action.Index == TapTempoControlIndex)
 		return TapTempo{};
 	if (action.ElementType == GuiAction::ACTIONELEMENT_BUTTON && action.Index == ReclockControlIndex) return Reclock{};
+	if (action.ElementType == GuiAction::ACTIONELEMENT_BUTTON && action.Index == SyncToServerControlIndex) return SyncToServer{};
 	if (action.ElementType == GuiAction::ACTIONELEMENT_BUTTON && action.Index == ResetAllControlIndex) return ResetAll{};
 	if (auto value = std::get_if<GuiAction::GuiInt>(&action.Data))
 	{
@@ -295,6 +301,18 @@ std::shared_ptr<GuiButton> SceneSettingsControls::_SessionButton(const std::stri
 	params.MinSize.Height = 40u;
 	params.TextFontSize = graphics::FontOptions::FONT_SMALL;
 	return std::make_shared<GuiButton>(params);
+}
+
+void SceneSettingsControls::RefreshNinjamStatus(ninjam::NinjamLocalTempoState state, bool connected, bool following)
+{
+	_syncToServerButton->SetEnabled(connected);
+	const char* text = "Local playback; server not followed";
+	if (!connected) text = "NINJAM disconnected";
+	else if (state == ninjam::NinjamLocalTempoState::AwaitingMaster) text = "Local timing; record a new master";
+	else if (state == ninjam::NinjamLocalTempoState::AwaitingServer) text = "Local playback; server tempo request pending";
+	else if (state == ninjam::NinjamLocalTempoState::AwaitingFreshSync) text = "Waiting for fresh server timing";
+	else if (following) text = "Following server timing";
+	_ninjamStatus->SetString(text);
 }
 
 void SceneSettingsControls::SetSessionEnabled(bool enabled, bool defaultEnabled)

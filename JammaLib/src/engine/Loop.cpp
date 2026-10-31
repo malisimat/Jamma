@@ -933,6 +933,22 @@ void Loop::Record()
 	_playState.store(STATE_RECORDING, std::memory_order_release);
 }
 
+bool Loop::CanSetLogicalLengthAtAudioBoundary(unsigned long length) const noexcept
+{
+	return length > 0ul && length <= PhysicalLoopLength()
+		&& _playState.load(std::memory_order_acquire) == STATE_PLAYING
+		&& !_isPunchInActive.load(std::memory_order_acquire);
+}
+
+void Loop::SetLogicalLengthAtAudioBoundary(unsigned long length) noexcept
+{
+	const auto phase = BodyPlayIndex();
+	if (_loopLength.load(std::memory_order_relaxed) != length) _InvalidateAudioSource();
+	_loopLength.store(length, std::memory_order_relaxed);
+	SetBodyPlayIndex(phase % length);
+	InvalidateSceneAnchor();
+}
+
 void Loop::Play(unsigned long index,
 	unsigned long loopLength,
 	bool continueRecording)

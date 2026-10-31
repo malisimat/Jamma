@@ -191,6 +191,8 @@ namespace audio
 
 	private:
 		friend class NinjamAudioBoundaryTestAccess;
+		void AdoptLocalSourceMasterAtAudioBoundary(
+			const std::vector<std::shared_ptr<engine::Station>>& stations, unsigned long length) noexcept;
 		bool _Init(std::shared_ptr<ninjam::NinjamController> controller, TickCallback tickCallback,
 			std::shared_ptr<utils::Timer> clock, bool generatedRig, const AsioInventory* inventory, bool exactSelection);
 		friend class LocalMasterPromotionSafetyTestAccess;
@@ -411,6 +413,8 @@ namespace audio
 		ninjam::NinjamLocalFollowPolicy _activeNinjamFollowPolicy = ninjam::NinjamLocalFollowPolicy::NoSync;
 		ninjam::NinjamDesiredTransportState _appliedNinjamTiming{};
 		ninjam::SyncPhaseMap _syncPhaseMap;
+		// Recording geometry survives loss/suspension of remote authority. Audio-owned.
+		unsigned long _retainedNinjamSourceLengthSamps = 0ul;
 		bool _captureMappedSourceAnchorsAfterOffset = false;
 		bool _mappedSourceHandledAtCommandBoundary = false;
 		TickCallback _tickCallback;

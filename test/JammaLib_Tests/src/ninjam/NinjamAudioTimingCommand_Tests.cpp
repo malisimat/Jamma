@@ -17,6 +17,8 @@ static NinjamDesiredTransportState MakeDesired(std::uint64_t version,
 		desired.Version = version;
 		desired.SessionEpoch = 2u;
 		desired.Generation = generation;
+		desired.FollowRevision = generation + 1u;
+		desired.SourceMasterIntervalLengthSamps = seedLength / 2ul;
 		desired.Intent = NinjamDesiredTimingIntent::Replacement;
 		desired.LocalFollowPolicy = ninjam::NinjamLocalFollowPolicy::ContinuousSync;
 		desired.HasRemoteTiming = true;
@@ -48,6 +50,8 @@ TEST(NinjamDesiredTransportStateMailbox, PublishedStateIsCompleteAndRepeatable)
 	EXPECT_EQ(7u, first->Version);
 	EXPECT_EQ(2u, first->SessionEpoch);
 	EXPECT_EQ(3u, first->Generation);
+	EXPECT_EQ(4u, first->FollowRevision);
+	EXPECT_EQ(500ul, first->SourceMasterIntervalLengthSamps);
 	EXPECT_EQ(1000ul, first->RemoteMasterIntervalLengthSamps);
 	EXPECT_EQ(250u, first->RemoteMasterPhaseSamps);
 	EXPECT_EQ(12345u, first->RemotePhaseDeviceSample);

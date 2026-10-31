@@ -101,10 +101,11 @@ namespace engine
 		void ArmReclock(const std::vector<std::shared_ptr<engine::Station>>& stations);
 		bool ResetReclockIfEmpty(const std::vector<std::shared_ptr<engine::Station>>& stations);
 		void ApplyTiming(const QuantisationTiming& timing, const char* source);
+		bool PendingMasterTapEdit() const noexcept { return _pendingMasterTapEdit; }
 		bool LocalMasterTimingPending() const noexcept { return _localMasterTimingPending; }
 		std::uint64_t PendingLocalMasterTimingVersion() const noexcept
 			{ return _pendingLocalMasterTimingVersion; }
-		void CompleteLocalMasterTiming() noexcept { _localMasterTimingPending = false; _pendingMasterTake.reset(); _previousMasterLoop.reset(); }
+		void CompleteLocalMasterTiming() noexcept { _pendingMasterTapEdit = false; _localMasterTimingPending = false; _pendingMasterTake.reset(); _previousMasterLoop.reset(); }
 		const engine::LoopTake* PendingLocalMasterTake() const noexcept
 			{ return _pendingMasterTake.get(); }
 		void CancelLocalMasterTiming(std::uint64_t version) noexcept;
@@ -124,7 +125,9 @@ namespace engine
 		bool HandleTapTempo(std::uint64_t estimatedSampleAt,
 			unsigned int sampleRate,
 			const std::vector<std::shared_ptr<engine::Station>>& stations,
-			const io::UserConfig& cfg);
+			const io::UserConfig& cfg, bool editRemoteMaster = false);
+		bool CanEditMasterTempo(const std::vector<std::shared_ptr<Station>>& stations) const;
+		bool HasActivatedLocalMaster(const std::vector<std::shared_ptr<Station>>& stations) const;
 
 		void DetachStationMaster(const std::shared_ptr<engine::Station>& station);
 		bool TrySetMasterFromHover(const std::shared_ptr<base::GuiElement>& hovering,
@@ -156,6 +159,7 @@ namespace engine
 		QuantisationGrid ActiveGrid() const noexcept;
 		std::int32_t GlobalPhaseOffsetSamps() const noexcept;
 		bool IsArmedForReclock() const noexcept;
+		void CancelReclock() noexcept { _armReclock.store(false, std::memory_order_release); }
 		std::shared_ptr<utils::Timer> Clock() const noexcept;
 		std::optional<QuantisationTiming> CurrentTempoTiming(unsigned int sampleRate) const;
 		struct TempoStatus
@@ -226,6 +230,7 @@ namespace engine
 
 		std::shared_ptr<utils::Timer> _clock;
 		LocalMasterTimingPublisher _localMasterTimingPublisher;
+		bool _pendingMasterTapEdit = false;
 		bool _localMasterTimingPending = false; // Serialized Scene owner.
 		std::uint64_t _pendingLocalMasterTimingVersion = 0u;
 		std::shared_ptr<engine::LoopTake> _pendingMasterTake;

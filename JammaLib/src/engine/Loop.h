@@ -278,6 +278,9 @@ namespace engine
 		std::string Id() const;
 		LoopPlayState PlayState() const { return _playState.load(std::memory_order_relaxed); }
 		unsigned long LoopLength() const noexcept { return _loopLength.load(std::memory_order_relaxed); }
+		// Prepared local-master activation only; storage/tail and playback state stay intact.
+		bool CanSetLogicalLengthAtAudioBoundary(unsigned long length) const noexcept;
+		void SetLogicalLengthAtAudioBoundary(unsigned long length) noexcept;
 		// Advisory editor eligibility only. The bounded copy runs on the callback
 		// itself; state checks alone cannot protect an off-audio PCM read.
 		virtual bool SupportsAudioSpectralEditing() const noexcept { return true; }

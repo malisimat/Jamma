@@ -7,6 +7,7 @@
 
 #include "audio/AudioHost.h"
 #include "engine/LoopTake.h"
+#include "engine/Loop.h"
 #include "engine/Quantiser.h"
 #include "engine/Station.h"
 #include "io/UserConfig.h"
@@ -167,4 +168,63 @@ TEST(MidiLoopLocalMasterSafety, SourcePublicationWaitsForCallbackClaim)
     midi::MidiEvent current{};
     ASSERT_TRUE(loop.TryGetPlaybackEvent(0u, current));
     EXPECT_EQ(61u, current.data1);
+}
+
+TEST(LoopTakeLocalMasterSafety, AudioOnlyReprepareWaitsForCallbackClaimAndKeepsWholeGeometry)
+{
+    engine::LoopTakeParams params;
+    params.Id = "audio-only-tap-safety";
+    params.Size = { 100, 100 };
+    auto take = std::make_shared<engine::LoopTake>(params,
+        engine::LoopTake::GetMixerParams(params.Size, audio::MergeMixBehaviourParams{}));
+    take->Record({ 0u }, "station", {}, {});
+    take->CommitChanges();
+    ASSERT_EQ(1u, take->GetLoops().size());
+    ASSERT_TRUE(take->GetMidiLoops().empty());
+    auto loop = take->GetLoops().front();
+    std::vector<float> samples(constants::MaxLoopFadeSamps + 1000u, 1.0f);
+    base::AudioWriteRequest write;
+    write.samples = samples.data();
+    write.numSamps = static_cast<unsigned int>(samples.size());
+    write.stride = 1u;
+    write.fadeCurrent = 0.0f;
+    write.fadeNew = 1.0f;
+    write.source = base::Audible::AUDIOSOURCE_ADC;
+    loop->OnBlockWrite(write, 0u);
+    loop->EndWrite(static_cast<unsigned int>(samples.size()), true);
+    take->Play(0u, 1000u, 0u);
+    take->CommitChanges();
+    ASSERT_TRUE(take->PrepareLocalMasterQuantisation(100u, 0u, 1000u, 10u));
+    ASSERT_TRUE(take->TryClaimPreparedMidiQuantisationAtAudioBoundary());
+
+    std::atomic<bool> entered{ false }, completed{ false }, prepared{ false };
+    std::thread publisher([&]
+    {
+        entered.store(true, std::memory_order_release);
+        prepared.store(take->PrepareLocalMasterQuantisation(100u, 0u, 900u, 9u), std::memory_order_release);
+        completed.store(true, std::memory_order_release);
+    });
+    for (unsigned int attempt = 0u; attempt < 100000u &&
+        !entered.load(std::memory_order_acquire); ++attempt) std::this_thread::yield();
+    EXPECT_TRUE(entered.load(std::memory_order_acquire));
+    for (unsigned int attempt = 0u; attempt < 1000u; ++attempt) std::this_thread::yield();
+    EXPECT_FALSE(completed.load(std::memory_order_acquire));
+    take->ActivatePreparedMidiQuantisationAtAudioBoundary();
+    EXPECT_EQ(1000ul, loop->LoopLength());
+    EXPECT_EQ(1000u, take->ResolvedMidiQuantisation().BaseIntervalSamps);
+    EXPECT_EQ(10u, take->ResolvedMidiQuantisation().BaseDivisions);
+    take->ReleasePreparedMidiQuantisationClaimAtAudioBoundary();
+    publisher.join();
+    ASSERT_TRUE(prepared.load(std::memory_order_acquire));
+    ASSERT_TRUE(take->TryClaimPreparedMidiQuantisationAtAudioBoundary());
+    take->ActivatePreparedMidiQuantisationAtAudioBoundary();
+    EXPECT_EQ(900ul, loop->LoopLength());
+    EXPECT_EQ(1000ul, loop->PhysicalLoopLength());
+    EXPECT_EQ(900u, take->ResolvedMidiQuantisation().BaseIntervalSamps);
+    EXPECT_EQ(9u, take->ResolvedMidiQuantisation().BaseDivisions);
+    take->ReleasePreparedMidiQuantisationClaimAtAudioBoundary();
+    // Rejected preparation releases the owner claim on its early return too.
+    EXPECT_FALSE(take->PrepareLocalMasterQuantisation(100u, 0u, 1001u, 10u));
+    EXPECT_TRUE(take->TryClaimPreparedMidiQuantisationAtAudioBoundary());
+    take->ReleasePreparedMidiQuantisationClaimAtAudioBoundary();
 }

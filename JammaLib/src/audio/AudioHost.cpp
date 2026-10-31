@@ -119,6 +119,17 @@ namespace audio
 		return std::nullopt;
 	}
 
+	void AudioHost::AdoptLocalSourceMasterAtAudioBoundary(
+		const std::vector<std::shared_ptr<engine::Station>>& stations, unsigned long length) noexcept
+	{
+		_retainedNinjamSourceLengthSamps = length;
+		_syncPhaseMap = {};
+		_activeNinjamFollowPolicy = ninjam::NinjamLocalFollowPolicy::NoSync;
+		_captureMappedSourceAnchorsAfterOffset = false;
+		for (const auto& station : stations)
+			if (station && !station->IsRemote()) station->ResetTimingEpoch();
+	}
+
 	void AudioHost::ApplyLocalMasterTimingAtAudioBoundary(
 		const std::vector<std::shared_ptr<engine::Station>>& stations,
 		utils::Timer* timingClock) noexcept
@@ -186,6 +197,7 @@ namespace audio
 			if (station && !station->IsRemote() && !station->MembershipRemoving()) station->ActivatePreparedMidiQuantisationAtAudioBoundary();
 		timingClock->SetQuantisation(prepared.SeedSamps, prepared.Type);
 		timingClock->SetSeedSourceLength(prepared.MasterLengthSamps);
+		AdoptLocalSourceMasterAtAudioBoundary(stations, prepared.MasterLengthSamps);
 		timingClock->InitialiseAbsoluteSamplePos(phase);
 		for (const auto& station : stations)
 			if (station && !station->IsRemote())
@@ -641,6 +653,7 @@ namespace audio
 		{
 			if (const auto clock = _timingClock.load()) { clock->Clear(); clock->ResetMusicalTransport(); }
 			_syncPhaseMap = {};
+			_retainedNinjamSourceLengthSamps = 0ul;
 			_activeNinjamFollowPolicy = ninjam::NinjamLocalFollowPolicy::NoSync;
 			_localTransportOffsetMasterLength = 0ul;
 			_localTransportOffsetTargetSamps = 0;
@@ -863,7 +876,10 @@ bool AudioHost::ApplyDesiredTimingAtAudioBoundary(std::uint64_t blockStartSample
 
 	const auto noSync = desired.LocalFollowPolicy == ninjam::NinjamLocalFollowPolicy::NoSync
 		|| !desired.HasRemoteTiming;
-	const auto resetAuthority = epochChanged || noSync;
+	const auto followChanged = desired.FollowRevision != _appliedNinjamTiming.FollowRevision;
+	const auto resetAuthority = epochChanged || followChanged || noSync;
+	if (!noSync && desired.SourceMasterIntervalLengthSamps > 0ul)
+		_retainedNinjamSourceLengthSamps = desired.SourceMasterIntervalLengthSamps;
 	if (resetAuthority)
 	{
 		if (stations)
@@ -926,9 +942,11 @@ bool AudioHost::ApplyDesiredTimingAtAudioBoundary(std::uint64_t blockStartSample
 				_syncPhaseMap.SourceLengthSamps = desired.RemoteMasterIntervalLengthSamps;
 			else if (_syncPhaseMap.SourceLengthSamps == 0ul)
 			{
-				_syncPhaseMap.SourceLengthSamps = previousMasterLength > 0ul
-					? previousMasterLength : desired.RemoteMasterIntervalLengthSamps;
+				_syncPhaseMap.SourceLengthSamps = _retainedNinjamSourceLengthSamps > 0ul
+					? _retainedNinjamSourceLengthSamps : previousMasterLength > 0ul
+						? previousMasterLength : desired.RemoteMasterIntervalLengthSamps;
 			}
+			_retainedNinjamSourceLengthSamps = _syncPhaseMap.SourceLengthSamps;
 			const auto sourceLength = _syncPhaseMap.SourceLengthSamps;
 			if (sourceLength > 0ul)
 			{
@@ -1201,8 +1219,14 @@ void AudioHost::PublishAudioCallbackProgress(std::uint64_t blockStartSample,
 		const auto& stations = stationsSnapshotValue ? *stationsSnapshotValue : _emptyStations;
 		auto* timingClock = _lastAudioTimingClock.get();
 		if (timingClock)
+		{
+			const auto previousLength = timingClock->SeedSourceLength();
 			for (const auto& station : stations)
 				if (station && !station->IsRemote()) station->ApplyFirstMasterRecordingAtAudioBoundary(*timingClock, blockStartSample);
+			const auto localLength = timingClock->SeedSourceLength();
+			if (localLength > 0ul && localLength != previousLength)
+				AdoptLocalSourceMasterAtAudioBoundary(stations, localLength);
+		}
 		ApplyLocalMasterTimingAtAudioBoundary(stations, timingClock);
 		ApplyDesiredTimingAtAudioBoundary(blockStartSample, audioStreamParams.SampleRate,
 			stationsSnapshotValue, timingClock);

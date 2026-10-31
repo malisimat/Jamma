@@ -10,6 +10,8 @@ namespace ninjam
 		_version.store(desired.Version, std::memory_order_relaxed);
 		_sessionEpoch.store(desired.SessionEpoch, std::memory_order_relaxed);
 		_generation.store(desired.Generation, std::memory_order_relaxed);
+		_followRevision.store(desired.FollowRevision, std::memory_order_relaxed);
+		_sourceMasterIntervalLengthSamps.store(desired.SourceMasterIntervalLengthSamps, std::memory_order_relaxed);
 		_intent.store(desired.Intent, std::memory_order_relaxed);
 		_localFollowPolicy.store(desired.LocalFollowPolicy, std::memory_order_relaxed);
 		_hasRemoteTiming.store(desired.HasRemoteTiming, std::memory_order_relaxed);
@@ -40,6 +42,8 @@ namespace ninjam
 			desired.Version = _version.load(std::memory_order_relaxed);
 			desired.SessionEpoch = _sessionEpoch.load(std::memory_order_relaxed);
 			desired.Generation = _generation.load(std::memory_order_relaxed);
+			desired.FollowRevision = _followRevision.load(std::memory_order_relaxed);
+			desired.SourceMasterIntervalLengthSamps = _sourceMasterIntervalLengthSamps.load(std::memory_order_relaxed);
 			desired.Intent = _intent.load(std::memory_order_relaxed);
 			desired.LocalFollowPolicy = _localFollowPolicy.load(std::memory_order_relaxed);
 			desired.HasRemoteTiming = _hasRemoteTiming.load(std::memory_order_relaxed);

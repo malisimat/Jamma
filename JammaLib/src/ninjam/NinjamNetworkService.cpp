@@ -53,6 +53,36 @@ namespace ninjam
 		return _timingCoordinator.Disconnect();
 	}
 
+	NinjamTimingUpdate NinjamNetworkService::BeginLocalTiming()
+	{
+		std::scoped_lock lock(_timingMutex);
+		return _timingCoordinator.BeginLocalTiming();
+	}
+
+	NinjamTimingUpdate NinjamNetworkService::PushActivatedLocalTempo(const engine::QuantisationTiming& timing)
+	{
+		std::scoped_lock lock(_timingMutex);
+		return _timingCoordinator.PushActivatedLocalTempo(timing);
+	}
+
+	NinjamTimingUpdate NinjamNetworkService::RequestSyncToServer()
+	{
+		std::scoped_lock lock(_timingMutex);
+		return _timingCoordinator.RequestSyncToServer();
+	}
+
+	NinjamLocalTempoState NinjamNetworkService::LocalTempoState() const noexcept
+	{
+		std::scoped_lock lock(_timingMutex);
+		return _timingCoordinator.LocalTempoState();
+	}
+
+	NinjamLocalFollowPolicy NinjamNetworkService::FollowPolicy() const noexcept
+	{
+		std::scoped_lock lock(_timingMutex);
+		return _timingCoordinator.FollowPolicy();
+	}
+
 	NinjamTimingUpdate NinjamNetworkService::ObserveSessionStatus(
 		const NinjamSessionTimingStatus& status,
 		const std::optional<engine::QuantisationTiming>& localTiming)

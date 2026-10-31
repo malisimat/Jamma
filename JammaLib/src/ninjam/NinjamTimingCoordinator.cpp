@@ -94,10 +94,70 @@ std::uint64_t NinjamTimingDiagnostics::Count(NinjamTimingDiagnosticReason reason
 	return reasonIndex < ReasonCounts.size() ? ReasonCounts[reasonIndex] : 0u;
 }
 
+
+void NinjamTimingCoordinator::_CancelTempoRequest() noexcept
+{
+	_requestedTempo.reset();
+	_localTempoRequestStartedAt.reset();
+	_firstSuccessfulTempoRequestSend.reset();
+	_requestState = TempoRequestState::Idle;
+	_tempoRequestSendConfirmed = false;
+	_requestSentObservationOrdinal = 0u;
+	_requestRetries = 0u;
+}
+
+NinjamTimingUpdate NinjamTimingCoordinator::BeginLocalTiming() noexcept
+{
+	if (!_tracker.IsConnected()) return {};
+	_CancelTempoRequest();
+	_pendingTempoChange.reset();
+	_ignoredTempoChange.reset();
+	_localTempoState = NinjamLocalTempoState::AwaitingMaster;
+	_followObservationFence = _lastRemotePhaseDeviceSample;
+	++_followRevision;
+	return _PublishNoSync(NinjamNoSyncReason::StayLocal);
+}
+
+NinjamTimingUpdate NinjamTimingCoordinator::PushActivatedLocalTempo(
+	const engine::QuantisationTiming& timing,
+	std::chrono::steady_clock::time_point now) noexcept
+{
+	if (_localTempoState != NinjamLocalTempoState::AwaitingMaster
+		|| !IsValidNinjamTempo(timing.Bpm, timing.Bpi) || timing.MasterLoopSamps == 0ul) return {};
+	_CancelTempoRequest();
+	_sourceMasterIntervalLengthSamps = timing.MasterLoopSamps;
+	_requestedTempo = timing;
+	_requestState = TempoRequestState::SentAwaitingOutcome;
+	_localTempoState = NinjamLocalTempoState::AwaitingServer;
+	_localTempoRequestStartedAt = now;
+	_followObservationFence = _lastRemotePhaseDeviceSample;
+	++_diagnostics.TempoRequestsSent;
+	auto update = _PublishNoSync(NinjamNoSyncReason::StayLocal);
+	update.TempoRequest = NinjamTempoRequest{ timing.Bpm, timing.Bpi };
+	return update;
+}
+
+NinjamTimingUpdate NinjamTimingCoordinator::RequestSyncToServer() noexcept
+{
+	if (!_tracker.IsConnected()) return {};
+	_CancelTempoRequest();
+	_pendingTempoChange.reset();
+	_ignoredTempoChange.reset();
+	_localTempoState = NinjamLocalTempoState::AwaitingFreshSync;
+	_followObservationFence = _lastRemotePhaseDeviceSample;
+	++_followRevision;
+	return _PublishNoSync(NinjamNoSyncReason::StayLocal);
+}
+
 NinjamTimingUpdate NinjamTimingCoordinator::Connect(const NinjamTempoJoinOptions& options,
 	const std::optional<engine::QuantisationTiming>& localTiming) noexcept
 {
 	_tracker.Connect();
+	_localTempoState = NinjamLocalTempoState::Following;
+	_followObservationFence.reset();
+	_localTempoRequestStartedAt.reset();
+	_sourceMasterIntervalLengthSamps = 0ul;
+	++_followRevision;
 	_options = options;
 	_pendingTempoChange.reset();
 	_ignoredTempoChange.reset();
@@ -130,6 +190,8 @@ NinjamTimingUpdate NinjamTimingCoordinator::Disconnect() noexcept
 	if (!_tracker.IsConnected() && _noSyncActive)
 		return {};
 	_tracker.Disconnect();
+	if (_localTempoState != NinjamLocalTempoState::Following)
+		_localTempoState = NinjamLocalTempoState::StayLocal;
 	_ignoredTempoChange.reset();
 	_latestObservedTempoChange.reset();
 	_requestedTempo.reset();
@@ -185,6 +247,8 @@ void NinjamTimingCoordinator::NotifyTempoRequestSent(bool success,
 	if (success)
 	{
 		_requestSentObservationOrdinal = _observationOrdinal;
+		if (_localTempoState == NinjamLocalTempoState::AwaitingServer)
+			_followObservationFence = _lastRemotePhaseDeviceSample;
 		if (!_firstSuccessfulTempoRequestSend.has_value())
 			_firstSuccessfulTempoRequestSend = now;
 		return;
@@ -310,8 +374,20 @@ NinjamTimingUpdate NinjamTimingCoordinator::Observe(const NinjamTiming& timing,
 			_desiredVersion, _lastDiagnosticAppliedVersion, _tracker.Generation(),
 			static_cast<long long>(timing.IntervalPositionSamps),
 			timing.IntervalLengthSamps);
+		return update;
 	}
-	if (!event.has_value() || event->Type != NinjamTimingEventType::GenerationChanged)
+	const bool followsFreshIntent = isFreshObservation
+		&& (!_followObservationFence || timing.DeviceAudioSampleAtObservation > *_followObservationFence);
+	if (_localTempoState == NinjamLocalTempoState::AwaitingFreshSync)
+	{
+		if (!followsFreshIntent) return update;
+		_localTempoState = NinjamLocalTempoState::Following;
+		return _AcceptTempoChange(*proposal, localTiming, clock, now);
+	}
+	if (_localTempoState == NinjamLocalTempoState::AwaitingMaster
+		|| _localTempoState == NinjamLocalTempoState::StayLocal) return update;
+	if (_localTempoState != NinjamLocalTempoState::AwaitingServer
+		&& (!event.has_value() || event->Type != NinjamTimingEventType::GenerationChanged))
 	{
 		if (_pendingTempoChange.has_value())
 		{
@@ -339,9 +415,12 @@ NinjamTimingUpdate NinjamTimingCoordinator::Observe(const NinjamTiming& timing,
 	if (_requestState == TempoRequestState::SentAwaitingOutcome && _tempoRequestSendConfirmed
 		&& _requestedTempo.has_value() && _latestObservedTempoChange.has_value()
 		&& _observationOrdinal > _requestSentObservationOrdinal
+		&& (_localTempoState != NinjamLocalTempoState::AwaitingServer || followsFreshIntent)
 		&& _MatchesRequest(timing, _requestedTempo.value()))
 	{
 		_requestedTempo.reset();
+		_localTempoState = NinjamLocalTempoState::Following;
+		_localTempoRequestStartedAt.reset();
 		_requestState = TempoRequestState::Acknowledged;
 		++_diagnostics.TempoAcknowledged;
 		return _AcceptTempoChange(_latestObservedTempoChange.value(), localTiming, clock, now);
@@ -361,7 +440,7 @@ NinjamTimingUpdate NinjamTimingCoordinator::Observe(const NinjamTiming& timing,
 		++_diagnostics.PhaseEventsInvalidated;
 		_RecordEmittedCommand(NinjamEmittedCommand::Invalidate, event->Generation);
 	}
-	if (!_joinAligned
+	if (_localTempoState != NinjamLocalTempoState::AwaitingServer && !_joinAligned
 		&& timing.LocalTransport.MasterLengthSamps == timing.IntervalLengthSamps)
 	{
 		_tracker.BeginJoinAlignment(static_cast<unsigned long>(
@@ -432,6 +511,11 @@ NinjamTimingUpdate NinjamTimingCoordinator::Observe(const NinjamTiming& timing,
 			_requestState = TempoRequestState::Expired;
 			_requestedTempo.reset();
 			++_diagnostics.TempoRequestsExpired;
+			if (_localTempoState == NinjamLocalTempoState::AwaitingServer)
+			{
+				_localTempoState = NinjamLocalTempoState::StayLocal;
+				return _PublishNoSync(NinjamNoSyncReason::StayLocal);
+			}
 			if (!_options.PromptBeforeApplyingRemoteTempo || !hasLocalContent)
 				return _AcceptTempoChange(proposal.value(), localTiming, clock, now);
 			_SetPendingTempoChange(proposal.value());
@@ -439,6 +523,8 @@ NinjamTimingUpdate NinjamTimingCoordinator::Observe(const NinjamTiming& timing,
 			return update;
 		}
 	}
+
+	if (_localTempoState == NinjamLocalTempoState::AwaitingServer) return update;
 
 	const auto seedLength = timing.LocalTransport.MasterLengthSamps;
 	if (seedLength == 0u || seedLength > (std::numeric_limits<unsigned int>::max)())
@@ -518,6 +604,17 @@ NinjamTimingUpdate NinjamTimingCoordinator::_ExpireTempoRequest(
 	std::chrono::steady_clock::time_point now)
 {
 	NinjamTimingUpdate update;
+	// Bound connected edits from their first attempt, including repeated send failures.
+	if (_localTempoState == NinjamLocalTempoState::AwaitingServer
+		&& _localTempoRequestStartedAt
+		&& now - *_localTempoRequestStartedAt >= _options.TempoRequestDeadline)
+	{
+		_CancelTempoRequest();
+		_requestState = TempoRequestState::Expired;
+		_localTempoState = NinjamLocalTempoState::StayLocal;
+		++_diagnostics.TempoRequestsExpired;
+		return _PublishNoSync(NinjamNoSyncReason::StayLocal);
+	}
 	if (_requestState != TempoRequestState::SentAwaitingOutcome
 		|| !_firstSuccessfulTempoRequestSend.has_value()
 		|| now - _firstSuccessfulTempoRequestSend.value() < _options.TempoRequestDeadline)
@@ -532,6 +629,11 @@ NinjamTimingUpdate NinjamTimingCoordinator::_ExpireTempoRequest(
 	_requestState = TempoRequestState::Expired;
 	_requestedTempo.reset();
 	++_diagnostics.TempoRequestsExpired;
+	if (_localTempoState == NinjamLocalTempoState::AwaitingServer)
+	{
+		_localTempoState = NinjamLocalTempoState::StayLocal;
+		return _PublishNoSync(NinjamNoSyncReason::StayLocal);
+	}
 	if (!_latestObservedTempoChange.has_value())
 		return update;
 	if (!_options.PromptBeforeApplyingRemoteTempo && !hasLocalContent && !preservePushedLocalTransport)
@@ -544,6 +646,13 @@ NinjamTimingUpdate NinjamTimingCoordinator::_ExpireTempoRequest(
 NinjamTimingUpdate NinjamTimingCoordinator::_EnterNoSync(
 	NinjamNoSyncReason reason, bool clearLatestProposal) noexcept
 {
+	if (_localTempoState == NinjamLocalTempoState::AwaitingMaster
+		|| _localTempoState == NinjamLocalTempoState::AwaitingServer
+		|| _localTempoState == NinjamLocalTempoState::AwaitingFreshSync)
+	{
+		_CancelTempoRequest();
+		_localTempoState = NinjamLocalTempoState::StayLocal;
+	}
 	// Deadline prompts intentionally survive; other losses invalidate even when
 	// transport is already local, so a displayed token cannot regain authority.
 	if (reason != NinjamNoSyncReason::ObservationDeadline) _pendingTempoChange.reset();
@@ -628,6 +737,8 @@ NinjamTimingUpdate NinjamTimingCoordinator::_PublishRemoteDesired(
 	NinjamDesiredTransportState desired;
 	desired.Version = ++_desiredVersion;
 	desired.SessionEpoch = _sessionEpoch;
+	desired.FollowRevision = _followRevision;
+	desired.SourceMasterIntervalLengthSamps = _sourceMasterIntervalLengthSamps;
 	desired.Generation = ++_commandGeneration;
 	desired.Intent = intent;
 	desired.LocalFollowPolicy = policy;
@@ -664,6 +775,8 @@ NinjamTimingUpdate NinjamTimingCoordinator::_PublishNoSync(NinjamNoSyncReason re
 	NinjamDesiredTransportState desired;
 	desired.Version = ++_desiredVersion;
 	desired.SessionEpoch = _sessionEpoch;
+	desired.FollowRevision = _followRevision;
+	desired.SourceMasterIntervalLengthSamps = _sourceMasterIntervalLengthSamps;
 	desired.Generation = _commandGeneration;
 	desired.Intent = NinjamDesiredTimingIntent::NoSync;
 	desired.LocalFollowPolicy = NinjamLocalFollowPolicy::NoSync;
@@ -740,6 +853,7 @@ NinjamTimingUpdate NinjamTimingCoordinator::ResolveTempoChange(bool accept,
 		_RecordEmittedCommand(NinjamEmittedCommand::Invalidate, _commandGeneration);
 		return update;
 	}
+	_localTempoState = NinjamLocalTempoState::Following;
 	return _AcceptTempoChange(change, localTiming, clock, now);
 }
 

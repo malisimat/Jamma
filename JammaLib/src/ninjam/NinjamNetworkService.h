@@ -36,6 +36,11 @@ namespace ninjam
 			const std::optional<engine::QuantisationTiming>& localTiming);
 
 		NinjamTimingUpdate ResetTempoSyncOnDisconnect();
+		NinjamTimingUpdate BeginLocalTiming();
+		NinjamTimingUpdate PushActivatedLocalTempo(const engine::QuantisationTiming& timing);
+		NinjamTimingUpdate RequestSyncToServer();
+		NinjamLocalTempoState LocalTempoState() const noexcept;
+		NinjamLocalFollowPolicy FollowPolicy() const noexcept;
 		NinjamTimingUpdate ObserveSessionStatus(const NinjamSessionTimingStatus& status,
 			const std::optional<engine::QuantisationTiming>& localTiming);
 
