@@ -27,7 +27,7 @@ namespace engine
 	class SessionControl : public SessionControls
 	{
 	public:
-		enum Kind { None, Audio, Midi, Save, Load, ResetSession };
+		enum Kind { None, Audio, Midi, Save, Load, ResetSession, AudioRefresh };
 		struct AudioRestoration { bool Success; bool AdmissionRestored; };
 		Kind Current() const { return _kind; }
 		std::uint64_t Identity() const { return _identity; }
@@ -92,6 +92,8 @@ namespace engine
 		void SubmitMidi(std::vector<io::UserConfig::MidiSettings> value, std::uint64_t revision)
 		{ _submittedMidi = {std::move(value), revision}; _midiDraftPending = true; }
 		void RequestMidiRefresh() noexcept override { _midiRefreshRequested.store(true, std::memory_order_release); }
+		void RequestAudioRefresh() noexcept override { _audioRefreshRequested.store(true, std::memory_order_release); }
+		void RefreshAudioFromWindow() noexcept { _manualAudioRefresh = true; RequestAudioRefresh(); }
 		void RefreshMidiFromWindow() noexcept { _devicePageDirty = true; RequestMidiRefresh(); }
 		void PumpOnWindow(StationAccess access, const Effects& effects, bool quitting);
 		void PumpOnJob(StationAccess access, const Effects& effects, bool quitting);
@@ -203,6 +205,8 @@ namespace engine
 		bool _panelLoadRequested = false;
 		std::mutex _midiLifecycleMutex;
 		std::atomic<bool> _midiRefreshRequested{ false };
+		std::atomic<bool> _audioRefreshRequested{ false };
+		bool _manualAudioRefresh = false; // Window owner only.
 		std::atomic<bool> _midiActive{ false };
 		midi::MidiRefreshPolicy _midiRefreshPolicy; // Job owner only; shutdown joins the job reader.
 		std::uint64_t _sourceRecoveryHeartbeat = 0u; // Job owner only.
@@ -228,6 +232,7 @@ namespace engine
 		void _UpdateWindowPresentation(const audio::AudioStreamParams& actual, bool inventoryBusy);
 		bool _ScheduleWindowOperation(DeviceSelectionSchedule::Clock::time_point now, const audio::AudioStreamParams& actual, const Effects& effects, bool inventoryBusy);
 		void _CompleteMidiRequest();
+		void _AcceptAudioCandidate(const audio::AudioStreamParams& actual, StationAccess access, const Effects& effects, bool refresh);
 		bool _AdmitBoundary(StationAccess access, DeviceSelectionSchedule::Clock::time_point now);
 		void _ApplyAdmittedOperation(const audio::AudioStreamParams& actual, DeviceSelectionSchedule::Clock::time_point now, StationAccess access, const Effects& effects);
 		void _ApplyAudioCandidate(const audio::AudioStreamParams& actual, DeviceSelectionSchedule::Clock::time_point now, StationAccess access, const Effects& effects, std::string& error);

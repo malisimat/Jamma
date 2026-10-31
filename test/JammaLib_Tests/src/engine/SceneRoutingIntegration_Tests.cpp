@@ -175,6 +175,28 @@ namespace engine
             scene._workspace->ApplyControlPresentation(scene._operation.TakePresentation(), scene.shared_from_this());
         }
         static io::UserConfig::AudioSettings SubmittedAudio(const Scene& scene) { return scene._operation._submittedAudio.Value; }
+		static bool ScheduleAudioRefresh(Scene& scene, SessionControl::Eligibility eligibility = {}, bool inventoryBusy = false)
+		{
+			SessionControl::Effects effects;
+			effects.CheckEligibility = [eligibility] { return eligibility; };
+			return scene._operation._ScheduleWindowOperation(std::chrono::steady_clock::now(), scene._audioEngine->GetStreamParams(), effects, inventoryBusy);
+		}
+		static bool AudioRefreshPending(const Scene& scene) { return scene._operation._audioRefreshRequested.load(); }
+		static bool AudioRefreshOperation(const Scene& scene) { return scene._operation.Current() == SessionControl::AudioRefresh; }
+		static void FinishTestAudioRefresh(Scene& scene) { scene._operation.Begin(SessionControl::None); }
+		static io::UserConfig::AudioSettings FailAudioRefreshWithoutHardware(Scene& scene)
+		{
+			// The existing uncertain-backend guard rejects before constructing any
+			// RtAudio object. Exercise request choice/failure scheduling hermetically.
+			scene._audioEngine->_backendLifetimeUncertain = true;
+			std::string error;
+			scene._operation._ApplyAudioCandidate({}, std::chrono::steady_clock::now(), {scene._sceneMutex, scene._stations}, {}, error);
+			EXPECT_FALSE(error.empty());
+			scene._audioEngine->_backendLifetimeUncertain = false;
+			return scene._operation._admittedAudio.Value;
+		}
+		static void SetUnsubmittedAudioDraft(Scene& scene, io::UserConfig::AudioSettings draft)
+		{ scene._operation._submittedAudio = {std::move(draft), 123u}; }
         static void AudioChannels(Scene& scene, unsigned int input, double value) { scene._workspace->Settings().AudioInput(input)->SetValue(value, true); }
         static std::shared_ptr<Station> RemovalTarget(Scene& scene)
         { std::scoped_lock lock(scene._sceneMutex); return scene._stationManagement.Target; }
@@ -2206,6 +2228,58 @@ TEST_F(SceneRoutingIntegrationTest, ResizingRehitsStationaryPointer)
 	ASSERT_TRUE(handle->RouteHitTest(handle->GlobalToLocal(point)));
 	scene->ApplyDeferredHoverUpdates(); // No further pointer event: resize must refresh the target.
 	EXPECT_EQ(base::GuiElement::STATE_OVER, handle->GetState());
+	scene->Shutdown();
+}
+
+TEST_F(SceneRoutingIntegrationTest, AudioRefreshCoalescesNotificationsAndDefersWhileBusy)
+{
+	using Access = engine::SourceLossIntegrationTestAccess;
+	auto scene = FreshScene({ Station("Local") }, {});
+	ASSERT_TRUE(scene);
+	{
+		auto excludeJob = Access::ExcludeJob(*scene);
+		scene->Controls().RequestAudioRefresh();
+		scene->Controls().RequestAudioRefresh();
+		EXPECT_FALSE(Access::ScheduleAudioRefresh(*scene, {}, true));
+		EXPECT_TRUE(Access::AudioRefreshPending(*scene));
+		EXPECT_FALSE(Access::ScheduleAudioRefresh(*scene, {true, false, false}));
+		EXPECT_TRUE(Access::AudioRefreshPending(*scene));
+		EXPECT_TRUE(Access::ScheduleAudioRefresh(*scene));
+		EXPECT_TRUE(Access::AudioRefreshOperation(*scene));
+		EXPECT_FALSE(Access::AudioRefreshPending(*scene));
+		Access::FinishTestAudioRefresh(*scene);
+		EXPECT_FALSE(Access::ScheduleAudioRefresh(*scene));
+	}
+	scene->Shutdown();
+}
+
+TEST_F(SceneRoutingIntegrationTest, AudioRefreshRetriesConfiguredDeviceWithoutApplyingDraftOrPolling)
+{
+	using Access = engine::SourceLossIntegrationTestAccess;
+	auto scene = FreshScene({ Station("Local") }, {});
+	ASSERT_TRUE(scene);
+	{
+		auto excludeJob = Access::ExcludeJob(*scene);
+		const auto configured = Access::SubmittedAudio(*scene);
+		auto draft = configured;
+		draft.Name = "Uncommitted different hardware";
+		Access::SetUnsubmittedAudioDraft(*scene, draft);
+		scene->Controls().RequestAudioRefresh();
+		// Empty startup inventory must not reject recovery before fresh discovery.
+		EXPECT_TRUE(Access::ScheduleAudioRefresh(*scene));
+		EXPECT_EQ(configured, Access::FailAudioRefreshWithoutHardware(*scene));
+		EXPECT_EQ(draft, Access::SubmittedAudio(*scene));
+		Access::FinishTestAudioRefresh(*scene);
+		EXPECT_FALSE(Access::ScheduleAudioRefresh(*scene));
+		// A late-ready driver or failed open receives one new attempt on rescan.
+		actions::GuiAction rescan;
+		rescan.ElementType = actions::GuiAction::ACTIONELEMENT_BUTTON;
+		rescan.Index = 7207u;
+		scene->OnAction(rescan);
+		EXPECT_TRUE(Access::ScheduleAudioRefresh(*scene));
+		EXPECT_EQ(configured, Access::FailAudioRefreshWithoutHardware(*scene));
+		Access::FinishTestAudioRefresh(*scene);
+	}
 	scene->Shutdown();
 }
 

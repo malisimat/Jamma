@@ -1087,7 +1087,10 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 		while (PeekMessage(&msg, nullptr, 0, 0, PM_REMOVE))
 		{
 			if (msg.message == WM_DEVICECHANGE && msg.wParam == DBT_DEVNODES_CHANGED)
+			{
 				scene.value()->Controls().RequestMidiRefresh();
+				scene.value()->Controls().RequestAudioRefresh();
+			}
 			if (msg.message == WM_QUIT)
 			{
 				consoleCommands.Close();

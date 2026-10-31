@@ -46,11 +46,12 @@ namespace gui
 		struct SaveSession { bool ChooseFolder; bool AsDefault; };
 		struct LoadSession {};
 		struct RefreshMidi {};
+		struct RefreshAudio {};
 		struct AudioDeviceChange { std::string Name; };
 		enum class AudioField { Inputs, Outputs, SampleRate, BufferSize };
 		struct AudioValueChange { AudioField Field; unsigned int Value; };
 		struct MidiDeviceChange { std::size_t Choice; std::string Name, RegistryId; bool Enabled; };
-		using DeviceChange = std::variant<SaveSession, LoadSession, RefreshMidi,
+		using DeviceChange = std::variant<SaveSession, LoadSession, RefreshMidi, RefreshAudio,
 			AudioDeviceChange, AudioValueChange, MidiDeviceChange>;
 		struct DevicePages { std::vector<GuiSettingEntry> Audio, Midi; };
 		using Change = std::variant<ViewModeChange, GlobalQuantisationChange, ChannelChange,
@@ -108,6 +109,7 @@ namespace gui
 		static constexpr unsigned int AudioDeviceControlIndex = 7200u;
 		static constexpr unsigned int AudioInputControlIndex = 7201u;
 		static constexpr unsigned int RefreshMidiControlIndex = 7206u;
+		static constexpr unsigned int RefreshAudioControlIndex = 7207u;
 		static constexpr unsigned int SaveSessionControlIndex = 7210u;
 		static constexpr unsigned int LoadSessionControlIndex = 7211u;
 		static constexpr unsigned int DefaultSessionControlIndex = 7212u;

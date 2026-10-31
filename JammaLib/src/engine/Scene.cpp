@@ -464,6 +464,8 @@ ActionResult Scene::OnAction(GuiAction action)
 		{ _operation.RequestPanelLoad(); return ActionResult::NoAction(); }
 		if (std::holds_alternative<SceneSettingsControls::RefreshMidi>(*deviceChange))
 		{ _operation.RefreshMidiFromWindow(); return ActionResult::NoAction(); }
+		if (std::holds_alternative<SceneSettingsControls::RefreshAudio>(*deviceChange))
+		{ _operation.RefreshAudioFromWindow(); return ActionResult::NoAction(); }
 	}
 	if (action.ElementType == GuiAction::ACTIONELEMENT_BUTTON &&
 		(action.Index == GuiMainPanel::SaveRigDefaultControlIndex || action.Index == GuiMainPanel::SaveRigControlIndex || action.Index == GuiMainPanel::SaveRigAsControlIndex))

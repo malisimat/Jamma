@@ -319,6 +319,7 @@ std::optional<SceneSettingsControls::DeviceChange> SceneSettingsControls::Decode
 	case DefaultSessionControlIndex: return SaveSession{ false, true };
 	case LoadSessionControlIndex: return LoadSession{};
 	case RefreshMidiControlIndex: return RefreshMidi{};
+	case RefreshAudioControlIndex: return RefreshAudio{};
 	case AudioDeviceControlIndex:
 		if (const auto value = std::get_if<GuiAction::GuiInt>(&action.Data);
 			value && value->Value >= 0 && static_cast<std::size_t>(value->Value) < _audioChoiceNames.size())
@@ -441,6 +442,7 @@ SceneSettingsControls::DevicePages SceneSettingsControls::BuildDevicePages(
 	entries.push_back({SettingsPage::Audio, "Active stream", _activeAudioStatus, 0u});
 	entries.push_back({SettingsPage::Audio, "Status", _deviceStatus, 0u});
 	auto button = [&](const std::string& text, unsigned int command){ auto params = GuiButtonParams::PanelButton(240u); params.Text = text; params.DispatchCommand = true; params.Size.Height = 40u; params.MinSize.Height = 40u; params.TextFontSize = graphics::FontOptions::FONT_SMALL; entries.push_back({SettingsPage::Audio,"",std::make_shared<GuiButton>(params),command}); };
+	button("Rescan audio devices", RefreshAudioControlIndex);
 	_midiChoices.clear(); _midiChoiceBindings.clear();
 	auto midiTitle = GuiLabelParams::PanelHeader(midi.Inventory.Error.empty() ? "MIDI input selection" : "MIDI inventory: " + midi.Inventory.Error, 320, 66u);
 	midiTitle.FontSize = graphics::FontOptions::FONT_SMALL;

@@ -451,6 +451,12 @@ namespace audio
 		return true;
 	}
 
+	bool AudioHost::HasOpenStream()
+	{
+		std::scoped_lock lock(_audioMutex);
+		return _audioDevice && _audioDevice->IsOpen();
+	}
+
 	bool AudioHost::HasMatchingRunningStream(const io::UserConfig::AudioSettings& request)
 	{
 		std::scoped_lock lock(_audioMutex);

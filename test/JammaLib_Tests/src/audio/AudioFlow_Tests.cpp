@@ -1759,6 +1759,8 @@ namespace audio
 			auto stations = std::make_shared<const std::vector<std::shared_ptr<Station>>>(
 				scene.SnapshotStations());
 			auto& host = *scene._audioEngine;
+			host.CloseCallbackAdmission();
+			ASSERT_TRUE(host.CallbackAdmissionIsQuiescent());
 			Prepare(host, std::move(stations), params);
 			host._tickCallback = [&scene, &tickCallbackCalled](Time streamTime,
 				unsigned int numSamps, const std::optional<io::UserConfig>& cfg,
@@ -1767,7 +1769,10 @@ namespace audio
 				tickCallbackCalled = true;
 				scene.OnTick(streamTime, numSamps, cfg, streamParams);
 			};
+			ASSERT_TRUE(host.ReopenCallbackAdmission());
 		}
+		static std::unique_lock<std::mutex> ExcludeSceneJob(engine::Scene& scene)
+		{ return std::unique_lock(scene._operation.LifecycleMutex()); }
 
 		static int InvokeSceneCallback(engine::Scene& scene, float* output,
 			unsigned int frames) noexcept
@@ -2119,6 +2124,9 @@ TEST(AudioCallbackRealtime, PreparedCallbackWithSceneTickDoesNotAllocate)
 	const audio::AudioStreamParams params{
 		std::string(192u, 'd'), 48000u, 2u, 128u, 0u, 0u, 1u, 1u };
 	bool tickCallbackCalled = false;
+	// The real job can close admission while acknowledging freshly prepared
+	// station state. Serialize this synthetic lifecycle and callback with it.
+	auto excludeJob = audio::AudioHostRealtimeTestAccess::ExcludeSceneJob(*scene);
 	audio::AudioHostRealtimeTestAccess::PrepareScene(*scene, params, tickCallbackCalled);
 	std::array<float, 128u> output{};
 	output.fill(1.0f);
@@ -2140,6 +2148,7 @@ TEST(AudioCallbackRealtime, PreparedCallbackWithSceneTickDoesNotAllocate)
 	EXPECT_EQ(0u, counts.Allocations);
 	EXPECT_EQ(0u, counts.Reallocations);
 	EXPECT_EQ(0u, counts.Frees);
+	excludeJob.unlock();
 	scene->Shutdown();
 }
 

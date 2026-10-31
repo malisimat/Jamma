@@ -20,6 +20,7 @@ namespace engine
 		virtual void SetMidiInputInventory(midi::MidiInputInventory inventory) = 0;
 		virtual midi::MidiConnectionResult GetMidiConnectionResult() const = 0;
 		virtual void RequestMidiRefresh() noexcept = 0;
+		virtual void RequestAudioRefresh() noexcept = 0;
 		virtual void CloseAudio() = 0;
 		virtual void SetSessionSaveFolder(std::wstring folder) = 0;
 		virtual void SetDefaultJamSaver(std::wstring path, std::function<bool(const std::wstring&, bool)> saver) = 0;
