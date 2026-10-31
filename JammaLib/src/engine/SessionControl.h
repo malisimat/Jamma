@@ -27,7 +27,7 @@ namespace engine
 	class SessionControl : public SessionControls
 	{
 	public:
-		enum Kind { None, Audio, Midi, Save, Load, ResetSession, AudioRefresh, AudioRescan };
+		enum Kind { None, Audio, Midi, Save, Load, ResetSession, AudioRefresh, AudioRescan, AudioReset };
 		struct AudioRestoration { bool Success; bool AdmissionRestored; };
 		Kind Current() const { return _kind; }
 		std::uint64_t Identity() const { return _identity; }
@@ -92,7 +92,7 @@ namespace engine
 		void SubmitMidi(std::vector<io::UserConfig::MidiSettings> value, std::uint64_t revision)
 		{ _submittedMidi = {std::move(value), revision}; _midiDraftPending = true; }
 		void RequestMidiRefresh() noexcept override { _midiRefreshRequested.store(true, std::memory_order_release); }
-		void RequestAudioRefresh() noexcept override { _audioRefreshRequested.store(true, std::memory_order_release); }
+		void RequestAudioRefresh() noexcept override { _audioRefreshRequested.store(true, std::memory_order_release); _audioChangeHintRequested.store(true, std::memory_order_release); }
 		void RefreshAudioFromWindow() noexcept { _manualAudioRefresh = true; RequestAudioRefresh(); }
 		void RefreshMidiFromWindow() noexcept { _devicePageDirty = true; RequestMidiRefresh(); }
 		void PumpOnWindow(StationAccess access, const Effects& effects, bool quitting);
@@ -206,7 +206,11 @@ namespace engine
 		std::mutex _midiLifecycleMutex;
 		std::atomic<bool> _midiRefreshRequested{ false };
 		std::atomic<bool> _audioRefreshRequested{ false };
+		std::atomic<bool> _audioChangeHintRequested{ false };
 		bool _manualAudioRefresh = false; // Window owner only.
+		bool _audioResetPending = false; // Window owner only; latched driver notification.
+		bool _audioUnavailablePresentationPending = false; // Waits for an overlapping rig edit.
+		friend class audio::AsioStreamTestAccess;
 		std::atomic<bool> _midiActive{ false };
 		midi::MidiRefreshPolicy _midiRefreshPolicy; // Job owner only; shutdown joins the job reader.
 		std::uint64_t _sourceRecoveryHeartbeat = 0u; // Job owner only.

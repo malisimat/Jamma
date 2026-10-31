@@ -9,6 +9,7 @@
 #include <mutex>
 #include <atomic>
 #include <functional>
+#include <chrono>
 #include "AudioDevice.h"
 #include "ChannelMixer.h"
 #include "NinjamMetronome.h"
@@ -141,6 +142,10 @@ namespace audio
 		AudioDevice* GetDevice() const { return _audioDevice.get(); }
 		bool HasMatchingRunningStream(const io::UserConfig::AudioSettings& request);
 		bool HasOpenStream(); // Serialized control callers; includes paused streams.
+		// Window lifecycle owner: notification observation only, no hardware polling.
+		bool ObserveBackendReset(bool deviceChange = false,
+			std::chrono::steady_clock::time_point now = std::chrono::steady_clock::now());
+		bool SuspendResetStream(std::string& error);
 		
 		std::shared_ptr<ChannelMixer> GetChannelMixer() { return _channelMixer; }
 		void SetNinjamMetronomeEnabled(bool enabled) noexcept { _ninjamMetronomeEnabled.store(enabled, std::memory_order_release); }
@@ -291,6 +296,11 @@ namespace audio
 		AsioOpenReport _asioOpenReport;
 		AsioInventory _asioInventory; // lifecycle owner writes; UI reads under control exclusion
 		bool _backendLifetimeUncertain = false;
+		bool _backendResetObserved = false; // Serialized lifecycle owner.
+		friend class AsioStreamTestAccess;
+		std::chrono::steady_clock::time_point _deviceChangeUntil{}, _lastDeviceHeartbeatAt{};
+		std::chrono::milliseconds _deviceStallThreshold{500};
+		std::uint64_t _lastDeviceHeartbeat = 0u;
 		// Lifecycle writes; job admission recovery reads. Failure stays closed until explicit recovery.
 		std::atomic<bool> _callbackRecoveryBlocked{false}; // lifecycle owner; blocks resume/replacement until stop is confirmed
 		// A driver that cannot confirm stop retains its callback userdata. The context

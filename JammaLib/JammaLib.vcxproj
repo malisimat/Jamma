@@ -310,6 +310,7 @@
     <ClInclude Include="lib\rtaudio\include\soundcard.h" />
     <ClInclude Include="src\base\ResourceUser.h" />
     <ClInclude Include="src\audio\AudioDevice.h" />
+    <ClInclude Include="src\audio\AsioStream.h" />
     <ClInclude Include="src\midi\MidiDevice.h" />
     <ClInclude Include="src\io\SerialDevice.h" />
     <ClInclude Include="src\io\SerialTriggerProtocol.h" />
@@ -565,6 +566,7 @@
     <ClCompile Include="src\audio\InterpolatedValue.cpp" />
     <ClCompile Include="lib\glew\glew.c" />
     <ClCompile Include="lib\rtaudio\RtAudio.cpp" />
+    <ClCompile Include="src\audio\AsioStream.cpp" />
     <ClCompile Include="src\engine\StationRemote.cpp" />
 	<ClCompile Include="src\engine\RigSnapshot.cpp" />
 	<ClCompile Include="src\engine\RigCoordinator.cpp" />

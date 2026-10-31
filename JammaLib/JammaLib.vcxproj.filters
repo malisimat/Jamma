@@ -306,6 +306,9 @@
     <ClInclude Include="src\audio\AudioDevice.h">
       <Filter>src\audio</Filter>
     </ClInclude>
+    <ClInclude Include="src\audio\AsioStream.h">
+      <Filter>src\audio</Filter>
+    </ClInclude>
     <ClInclude Include="src\audio\NinjamMetronome.h">
       <Filter>src\audio</Filter>
     </ClInclude>
@@ -875,6 +878,9 @@
       <Filter>src\audio</Filter>
     </ClCompile>
     <ClCompile Include="src\audio\AudioDevice.cpp">
+      <Filter>src\audio</Filter>
+    </ClCompile>
+    <ClCompile Include="src\audio\AsioStream.cpp">
       <Filter>src\audio</Filter>
     </ClCompile>
     <ClCompile Include="src\audio\NinjamMetronome.cpp">

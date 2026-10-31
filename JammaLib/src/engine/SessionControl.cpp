@@ -441,6 +441,13 @@ void SessionControl::FinishSessionLoad(bool replaced, const std::string& error, 
 void SessionControl::PumpOnWindow(StationAccess access, const Effects& effects, bool quitting)
 {
 	if (quitting) return;
+	const bool deviceChange = _audioChangeHintRequested.exchange(false, std::memory_order_acq_rel) && !_manualAudioRefresh;
+	if (_audio->ObserveBackendReset(deviceChange))
+	{
+		_audioResetPending = true;
+		_SetDeviceStatus("Audio driver requested reset; suspending unavailable device");
+		std::cout << "[ASIO] driver requested reset; suspending stream on window lifecycle owner" << std::endl;
+	}
 	const auto eligibility = effects.CheckEligibility();
 	const auto now = std::chrono::steady_clock::now();
 	const auto actual = _audio->GetStreamParams();
@@ -465,6 +472,9 @@ bool SessionControl::_ScheduleWindowOperation(DeviceSelectionSchedule::Clock::ti
 {
 	if (Current() == SessionControl::None)
 	{
+		// A lost source must settle captures through their existing recovery path;
+		// recording eligibility cannot postpone closing its dead stream forever.
+		if (_audioResetPending || (_audioUnavailablePresentationPending && _rig->EditsEnabled())) { Begin(AudioReset); return true; }
 		if (inventoryBusy || !_rig->EditsEnabled()) return false;
 		if (_midiDraftPending)
 		{
@@ -539,7 +549,7 @@ bool SessionControl::_AdmitBoundary(StationAccess access, DeviceSelectionSchedul
 	if (!InputClosed())
 	{
 		const auto accepted = _rig->Accepted();
-		if (!accepted || !_rig->EditsEnabled()) return false;
+		if (!accepted || (Current() != AudioReset && !_rig->EditsEnabled())) return false;
 		RequestBoundary(*_input, accepted->Revision);
 		return false; // Job acknowledges on its next turn; never wait under an application lock.
 	}
@@ -551,6 +561,49 @@ void SessionControl::_ApplyAdmittedOperation(const audio::AudioStreamParams& act
 	try
 	{
 		std::string error;
+		if (Current() == AudioReset)
+		{
+			// The job owner may have authorized a reopen before observing reset.
+			// Reclose under the acquired lifecycle writer before checking readers.
+			_audio->CloseCallbackAdmission();
+			// Observation already closed engine admission. Yield this frame while
+			// an admitted callback leaves; never spin with the lifecycle writer held.
+			if (!_audio->CallbackAdmissionIsQuiescent()) { ReleaseWriter(); return; }
+			if (!_audioResetPending)
+			{
+				const auto midi = MidiSnapshot();
+				{
+					std::scoped_lock lock(access.Mutex);
+					effects.ApplyRuntimeAvailabilityLocked({0u, midi->ConnectedIds, midi->ConnectedSerialIds, true, false, true});
+					_audioUnavailablePresentationPending = false;
+				}
+				FinishOperation(nullptr, access);
+				return;
+			}
+			const bool stopped = _audio->SuspendResetStream(error);
+			_audioResetPending = false;
+			_audioRefreshRequested.store(false, std::memory_order_release);
+			const auto midi = MidiSnapshot();
+			{
+				std::scoped_lock lock(access.Mutex);
+				_sourceLossRecoveryGateClosed = true;
+				++_audioStreamEpoch;
+				if (const auto accepted = _rig->Accepted())
+					for (const auto& runtime : accepted->Triggers) if (runtime.Instance)
+						runtime.Instance->ConfirmAudioAvailabilityOnJob(_audioStreamEpoch, {}, 0u);
+				_audioUnavailablePresentationPending = !_rig->EditsEnabled();
+				if (!_audioUnavailablePresentationPending)
+					effects.ApplyRuntimeAvailabilityLocked({0u, midi->ConnectedIds, midi->ConnectedSerialIds, true, false, true});
+			}
+			for (auto& device : _deviceInventory.Devices)
+				if (device.Name == actual.Name) { device.Probed = false; device.ProbeError = "Driver requested reset; reconnect and rescan"; }
+			// This is loss, not a temporary pause: FinishOperation must not restart it.
+			_paused = false;
+			FinishOperation(nullptr, access);
+			_SetDeviceStatus(stopped ? "Audio device unavailable; reconnect and Rescan audio devices" : error);
+			_devicePageDirty = true;
+			return;
+		}
 		if (Current() == SessionControl::Save) { _CaptureSession(actual, access, effects); return; }
 		if (Current() == AudioRefresh && _audio->HasOpenStream())
 		{

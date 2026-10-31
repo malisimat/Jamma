@@ -297,6 +297,8 @@ namespace audio
 			return false;
 		}
 		_audioDevice = std::move(*dev);
+		_backendResetObserved = false;
+		_deviceChangeUntil = {};
 		_backendLifetimeUncertain = _asioOpenReport.TeardownUncertain;
 		if (_backendLifetimeUncertain) return false;
 		const auto actual = _audioDevice->GetAudioStreamParams();
@@ -414,6 +416,7 @@ namespace audio
 	{
 		std::scoped_lock lock(_audioMutex);
 		error.clear();
+		if (_backendResetObserved) { error = "Audio device reset is awaiting reconciliation"; return false; }
 		if (_backendLifetimeUncertain && !_audioDevice) { error = "Backend teardown is unconfirmed; restart the application to recover"; return false; }
 		state.AdmissionWasOpen = (_callbackAdmission.load(std::memory_order_acquire) & _CallbackAdmissionClosed) == 0u;
 		state.WasRunning = _audioDevice && _audioDevice->IsRunning();
@@ -432,6 +435,7 @@ namespace audio
 	{
 		std::scoped_lock lock(_audioMutex);
 		error.clear();
+		if (_backendResetObserved) { error = "Audio device unavailable after driver reset"; return false; }
 		if (_backendLifetimeUncertain) { error = "Backend lifetime is uncertain; audio remains suspended"; return false; }
 		if (!CallbackAdmissionIsQuiescent()) { error = "Audio callback boundary is not quiescent"; return false; }
 		if (state.WasRunning && (!_audioDevice ||
@@ -455,6 +459,61 @@ namespace audio
 	{
 		std::scoped_lock lock(_audioMutex);
 		return _audioDevice && _audioDevice->IsOpen();
+	}
+
+	bool AudioHost::ObserveBackendReset(bool deviceChange, std::chrono::steady_clock::time_point now)
+	{
+		std::scoped_lock lock(_audioMutex);
+		if (_backendResetObserved || !_audioDevice) return false;
+		const auto heartbeat = AudioCallbackHeartbeat();
+		if (deviceChange && _audioDevice->IsRunning())
+		{
+			const auto params = _audioDevice->GetAudioStreamParams();
+			const auto threeBlocksMs = params.SampleRate ?
+				(static_cast<std::uint64_t>(params.BufSize) * 3000u + params.SampleRate - 1u) / params.SampleRate : 0u;
+			_deviceStallThreshold = std::chrono::milliseconds((std::max)(std::uint64_t{500}, threeBlocksMs));
+			// OS change is only a hint. Observe callback progress for a bounded
+			// interval; do not enumerate or probe a driver while its stream is open.
+			if (_deviceChangeUntil == std::chrono::steady_clock::time_point{} || now >= _deviceChangeUntil)
+			{
+				_lastDeviceHeartbeatAt = now;
+				_lastDeviceHeartbeat = heartbeat;
+			}
+			_deviceChangeUntil = now + _deviceStallThreshold + std::chrono::seconds(2);
+		}
+		if (heartbeat != _lastDeviceHeartbeat)
+		{
+			_lastDeviceHeartbeat = heartbeat;
+			_lastDeviceHeartbeatAt = now;
+		}
+		const bool admissionOpen = (_callbackAdmission.load(std::memory_order_acquire) & _CallbackAdmissionClosed) == 0u;
+		if (!admissionOpen) _lastDeviceHeartbeatAt = now; // Engine gating is not device loss.
+		const bool stalledAfterChange = _deviceChangeUntil != std::chrono::steady_clock::time_point{} &&
+			_audioDevice->IsRunning() && admissionOpen &&
+			now - _lastDeviceHeartbeatAt >= _deviceStallThreshold;
+		if (now >= _deviceChangeUntil) _deviceChangeUntil = {};
+		if (!_audioDevice->ResetRequested() && !stalledAfterChange) return false;
+		_backendResetObserved = true;
+		_deviceChangeUntil = {};
+		CloseCallbackAdmission();
+		_callbackRecoveryBlocked.store(true, std::memory_order_release);
+		return true;
+	}
+
+	bool AudioHost::SuspendResetStream(std::string& error)
+	{
+		std::scoped_lock lock(_audioMutex);
+		CloseCallbackAdmission();
+		if (!CallbackAdmissionIsQuiescent()) { error = "Waiting for audio callback to leave the reset boundary"; return false; }
+		// Admission protects engine state even if the driver cannot confirm stop.
+		// Retain topology/capture snapshots for the existing source-loss handshake.
+		const bool stopped = !_audioDevice || _audioDevice->TryStop();
+		_publishedStreamParams.store({}, std::memory_order_release);
+		_backendLifetimeUncertain = !stopped;
+		_callbackRecoveryBlocked.store(true, std::memory_order_release);
+		if (stopped) { _audioDevice.reset(); _backendResetObserved = false; }
+		else error = "Audio backend stop failed; restart the application to recover safely";
+		return stopped;
 	}
 
 	bool AudioHost::HasMatchingRunningStream(const io::UserConfig::AudioSettings& request)
@@ -508,6 +567,8 @@ namespace audio
 		}
 		_audioDevice.reset();
 		_backendLifetimeUncertain = false;
+		_backendResetObserved = false;
+		_deviceChangeUntil = {};
 		_publishedStreamParams.store({}, std::memory_order_release);
 		const auto discovered = AudioDevice::DiscoverAsio();
 		if (discovered.EnumerationError.empty()) _asioInventory = discovered;
