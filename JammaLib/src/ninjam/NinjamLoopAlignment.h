@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include "NinjamTiming.h"
 
 namespace ninjam
 {
@@ -43,6 +44,29 @@ namespace ninjam
 			% localMasterLength;
 		return (localMasterLength - elapsed) % localMasterLength;
 	}
+
+	// All phase corrections use the source ruler of the receiving recording.
+	inline long long SourceCorrectionAtRemotePhase(std::int64_t sourceCoordinate,
+		unsigned long sourceLength, unsigned int remotePhase, unsigned long remoteLength) noexcept
+	{
+		return SignedCircularDifference(static_cast<unsigned int>(PositiveModulo(sourceCoordinate, sourceLength)),
+			static_cast<unsigned int>(SourcePhaseAtRemotePhase(remotePhase, sourceLength, remoteLength)),
+			static_cast<unsigned int>(sourceLength));
+	}
+
+	// Complete neutral inputs at one accepted timing boundary. Legacy recordings
+	// retain the host map; newer recordings interpret the remote phase in their own ruler.
+	struct RemoteLoopTiming
+	{
+		std::uint64_t SceneSample = 0u;
+		unsigned long RemoteLength = 0ul;
+		unsigned int RemotePhase = 0u;
+		unsigned long PreviousMasterLength = 0ul;
+		unsigned int PreviousMasterPhase = 0u;
+		std::uint64_t Generation = 0u;
+		long long LegacySourceCorrection = 0;
+		bool RelocateMidi = false;
+	};
 
 	// Audio-thread-owned geometry for one remote-to-local ruler map. Keeping the
 	// origin with the geometry makes subsequent rounded rebases exact.

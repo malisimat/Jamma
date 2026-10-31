@@ -687,7 +687,7 @@ void Station::ApplyFirstMasterRecordingAtAudioBoundary(utils::Timer& clock, std:
 
 void Station::BeginCaptureAudioBoundary(std::uint32_t blockStartSample,
     std::uint64_t sceneSample, std::uint64_t absoluteSample,
-    std::optional<std::uint32_t> earliestPhysicalSample) noexcept
+    std::optional<std::uint32_t> earliestPhysicalSample, const RemoteTransportGeometry& recordingGeometry) noexcept
 {
     if (earliestPhysicalSample)
     {
@@ -706,7 +706,11 @@ void Station::BeginCaptureAudioBoundary(std::uint32_t blockStartSample,
     auto state = _BorrowAudioState();
     if (!state) return;
     for (const auto& take : state->OwnedLoopTakes)
-        if (take) take->BeginCaptureAudioBoundary(blockStartSample, sceneSample, absoluteSample);
+        if (take)
+        {
+            take->CaptureRecordingBaselineAtAudioBoundary(recordingGeometry, sceneSample);
+            take->BeginCaptureAudioBoundary(blockStartSample, sceneSample, absoluteSample);
+        }
 }
 
 void Station::ApplyAcceptedTimingCorrection(long long deltaSamps,
@@ -718,6 +722,14 @@ void Station::ApplyAcceptedTimingCorrection(long long deltaSamps,
 
 	for (const auto& take : state->OwnedLoopTakes)
 		if (take) take->ApplyAcceptedTimingCorrection(deltaSamps, generation, relocateMidi);
+}
+
+void Station::ApplyRemoteTiming(const ninjam::RemoteLoopTiming& timing) noexcept
+{
+	const auto state = _BorrowAudioState();
+	if (!state) return;
+	for (const auto& take : state->OwnedLoopTakes)
+		if (take) take->ApplyRemoteTiming(timing);
 }
 
 void Station::CaptureSceneAnchors(std::uint64_t sceneCoordinateSamps) noexcept
@@ -749,22 +761,22 @@ void Station::ResetTimingEpoch() noexcept
 		if (take) take->ResetTimingEpoch();
 }
 
-void Station::CaptureMappedSourceAnchors(std::int64_t sourceCoordinateSamps) noexcept
+void Station::CaptureMappedSourceAnchors(std::int64_t sourceCoordinateSamps, std::uint64_t sceneSample) noexcept
 {
 	auto state = _BorrowAudioState();
 	if (!state)
 		return;
 	for (const auto& take : state->OwnedLoopTakes)
-		if (take) take->CaptureMappedSourceAnchors(sourceCoordinateSamps);
+		if (take) take->CaptureMappedSourceAnchors(sourceCoordinateSamps, sceneSample);
 }
 
-void Station::RestoreMappedSourceCoordinate(std::int64_t sourceCoordinateSamps) noexcept
+void Station::RestoreMappedSourceCoordinate(std::int64_t sourceCoordinateSamps, std::uint64_t sceneSample) noexcept
 {
 	auto state = _BorrowAudioState();
 	if (!state)
 		return;
 	for (const auto& take : state->OwnedLoopTakes)
-		if (take) take->RestoreMappedSourceCoordinate(sourceCoordinateSamps);
+		if (take) take->RestoreMappedSourceCoordinate(sourceCoordinateSamps, sceneSample);
 }
 
 void Station::SetLocalTransportOffsetSamps(long long targetSamps) noexcept
@@ -1078,7 +1090,18 @@ ActionResult Station::OnAction(TriggerAction action)
 			{
 				if (clockWasSeeded)
 				{
-					auto [quantisedLength, err] = recordingClock->QuantiseLength(action.SampleCount);
+					auto quantised = recordingClock->QuantiseLength(action.SampleCount);
+					if (loopTake && recordingClock->Quantisation() != utils::Timer::QUANTISE_OFF)
+					{
+						const auto& take = *loopTake.value();
+						const auto grid = take.ResolvedMidiQuantisation();
+						auto captured = take.RecordingGeometry();
+						if (captured.IntervalLengthSamps == 0ul)
+							captured = { grid.RemoteIntervalSamps, grid.RemoteBpi };
+						if (captured.IntervalLengthSamps > 0ul && captured.Bpi > 0u)
+							quantised = captured.QuantiseLength(action.SampleCount, recordingClock->Quantisation() == utils::Timer::QUANTISE_POWER);
+					}
+					auto [quantisedLength, err] = quantised;
 					loopLength = quantisedLength;
 					errorSamps = err;
 				}

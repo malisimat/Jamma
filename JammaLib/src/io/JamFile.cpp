@@ -831,6 +831,10 @@ bool JamFile::ToStream(JamFile jam, std::stringstream& ss, std::string* error)
 				&& *take.BaseDivisions <= *take.BaseIntervalSamps)
 				ss << "," << kvStr("midiBaseIntervalSamps", std::to_string(*take.BaseIntervalSamps))
 					<< "," << kvUlong("midiBaseDivisions", *take.BaseDivisions);
+			if (take.RecordingMasterLengthSamps > 0ul && take.RecordingMasterLengthSamps <= MaxLoopLengthSamps
+				&& take.RecordingBeatsPerInterval > 0u && take.RecordingBeatsPerInterval <= take.RecordingMasterLengthSamps)
+				ss << "," << kvUlong("recordingMasterLengthSamps", take.RecordingMasterLengthSamps)
+					<< "," << kvUlong("recordingBeatsPerInterval", take.RecordingBeatsPerInterval);
 			ss << "," << kvUlong("midiPlayIndex", take.MidiPlayIndex)
 				<< "," << kvUlong("midiPlayLength", take.MidiPlayLength)
 				<< "," << kvStr("midiQuantTransportStart", std::to_string(take.MidiQuantTransportStart))
@@ -1492,6 +1496,16 @@ std::optional<JamFile::LoopTake> JamFile::LoopTake::FromJson(Json::JsonPart json
 	{
 		take.BaseIntervalSamps = *baseInterval;
 		take.BaseDivisions = static_cast<std::uint32_t>(*baseDivisions);
+	}
+
+	const auto recordingLength = Json::GetUnsigned(json, "recordingMasterLengthSamps");
+	const auto recordingBeats = Json::GetUnsigned(json, "recordingBeatsPerInterval");
+	// Missing or invalid optional geometry retains the legacy source ruler.
+	if (recordingLength && *recordingLength > 0u && *recordingLength <= MaxLoopLengthSamps
+		&& recordingBeats && *recordingBeats > 0u && *recordingBeats <= *recordingLength)
+	{
+		take.RecordingMasterLengthSamps = static_cast<unsigned long>(*recordingLength);
+		take.RecordingBeatsPerInterval = static_cast<unsigned int>(*recordingBeats);
 	}
 
 	take.MidiStreams = std::move(midiStreams);

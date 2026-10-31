@@ -147,6 +147,7 @@ void Quantiser::Clear(bool clearTapTempo, bool preserveTiming)
 	if (!preserveTiming)
 	{
 		_acceptedRemoteGrid = {};
+		_recordingRemoteGrid = {};
 		_acceptedRemoteGridOriginSamps = 0;
 		_gridSource.store(QuantisationGridSource::Default, std::memory_order_release);
 	}
@@ -268,8 +269,28 @@ void Quantiser::SetMidiGrain(unsigned int grainSamps,
 
 void Quantiser::SetRemoteMidiGrid(const RemoteTransportGeometry& geometry,
 	std::int64_t originSamps,
-	const std::vector<std::shared_ptr<Station>>& stations)
+	const std::vector<std::shared_ptr<Station>>& stations, bool preserveRecordedMaster)
 {
+	if (geometry.IntervalLengthSamps > 0ul && geometry.Bpi > 0u)
+	{
+		const bool newBaseline = _recordingRemoteGrid.IntervalLengthSamps > 0ul
+			&& (_recordingRemoteGrid.IntervalLengthSamps != geometry.IntervalLengthSamps
+				|| _recordingRemoteGrid.Bpi != geometry.Bpi || _recordingRemoteGrid.Bpm != geometry.Bpm);
+		_recordingRemoteGrid = geometry;
+		if (newBaseline && !preserveRecordedMaster)
+		{
+			_masterLoop.reset();
+			_masterLoopLengthSamps.store(0ul, std::memory_order_release);
+			_masterOriginalBufferLengthSamps.store(0ul, std::memory_order_release);
+			_preReclockTakeIds.clear();
+			for (const auto& station : stations)
+				if (station && !station->IsRemote())
+					for (const auto& take : station->GetLoopTakes())
+						if (take) _preReclockTakeIds.push_back(take->Id());
+			std::scoped_lock tapTempoLock(_tapTempoMutex);
+			_tapTempo.Clear();
+		}
+	}
 	const auto changed = _acceptedRemoteGrid.IntervalLengthSamps != geometry.IntervalLengthSamps
 		|| _acceptedRemoteGrid.Bpi != geometry.Bpi;
 	_acceptedRemoteGrid = geometry;
@@ -327,6 +348,7 @@ bool Quantiser::CanEditMasterTempo(const std::vector<std::shared_ptr<Station>>& 
 		if (station && !station->IsRemote())
 			for (const auto& take : station->GetLoopTakes())
 				if (take && take->IsCompletedRecording()
+                    && (_recordingRemoteGrid.IntervalLengthSamps == 0ul || take->IsIndependentRecording())
 					&& std::find(_preReclockTakeIds.begin(), _preReclockTakeIds.end(), take->Id()) == _preReclockTakeIds.end())
 					++eligible;
 	return eligible == 1u;
@@ -359,6 +381,7 @@ bool Quantiser::HandleTapTempo(std::uint64_t estimatedSampleAt,
         if (station && !station->IsRemote())
             for (const auto& take : station->GetLoopTakes())
                 if (take && take->IsCompletedRecording()
+                    && (_recordingRemoteGrid.IntervalLengthSamps == 0ul || take->IsIndependentRecording())
                     && std::find(_preReclockTakeIds.begin(), _preReclockTakeIds.end(), take->Id()) == _preReclockTakeIds.end())
                 {
                     ++eligible;
@@ -814,6 +837,14 @@ std::shared_ptr<Timer> Quantiser::Clock() const noexcept
 
 std::optional<QuantisationTiming> Quantiser::CurrentTempoTiming(unsigned int sampleRate) const
 {
+	if (_acceptedRemoteGrid.IntervalLengthSamps > 0ul && _acceptedRemoteGrid.Bpi > 0u)
+	{
+		const auto& remote = _acceptedRemoteGrid;
+		const auto seed = static_cast<unsigned int>((static_cast<std::uint64_t>(remote.IntervalLengthSamps)
+			+ remote.Bpi / 2u) / remote.Bpi);
+		return QuantisationTiming{ seed, static_cast<unsigned int>(remote.IntervalLengthSamps),
+			remote.Bpi, remote.Bpm, remote.Bpi };
+	}
 	auto seedSamps = _effectiveQuantiseSamps.load(std::memory_order_acquire);
 	auto masterLoopSamps = _masterLoopLengthSamps.load(std::memory_order_acquire);
 	if (_clock && (seedSamps == 0u || masterLoopSamps == 0ul))
@@ -2057,6 +2088,23 @@ void engine::Quantiser::RestoreMasterAudioLoopId(const std::string& id,
 void engine::Quantiser::AdoptRecordedMaster(const std::vector<std::shared_ptr<Station>>& stations)
 {
 	if (_masterLoop) return;
+	if (_acceptedRemoteGrid.IntervalLengthSamps > 0ul
+		&& _masterLoopLengthSamps.load(std::memory_order_acquire) == 0ul)
+	{
+		for (const auto& station : stations)
+			if (station && !station->IsRemote())
+				for (const auto& take : station->GetLoopTakes())
+					if (take && take->IsIndependentRecording() && !take->IsCaptureCancelled() && take->IsCompletedRecording()
+						&& std::find(_preReclockTakeIds.begin(), _preReclockTakeIds.end(), take->Id()) == _preReclockTakeIds.end())
+					{
+						_masterLoop = take->GetLoops().empty() ? nullptr : take->GetLoops().front();
+						const auto length = take->VisualLoopLengthSamps();
+						_masterLoopLengthSamps.store(length, std::memory_order_release);
+						_masterOriginalBufferLengthSamps.store(_masterLoop ? _masterLoop->PhysicalLoopLength() : length,
+							std::memory_order_release);
+						return;
+					}
+	}
 	for (const auto& station : stations)
 	{
 		if (!station || station->IsRemote()) continue;

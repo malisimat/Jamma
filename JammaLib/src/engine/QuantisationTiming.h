@@ -2,6 +2,8 @@
 
 #include <cstdint>
 #include <optional>
+#include <utility>
+#include <limits>
 
 #include "../../include/Constants.h"
 
@@ -68,6 +70,43 @@ namespace engine
 		unsigned int PhaseSamps = 0u;
 		float Bpm = 0.0f;
 		std::uint64_t Generation = 0u;
+
+		// Remote beats are rational subdivisions of the full interval. Multiplying
+		// a rounded beat length would move interval boundaries by sample(s).
+		std::pair<unsigned long, int> QuantiseLength(unsigned long length, bool powers) const noexcept
+		{
+			if (IntervalLengthSamps == 0ul || Bpi == 0u) return { length, 0 };
+			const auto boundary = [this](std::uint64_t beats) noexcept
+			{
+				return (beats * IntervalLengthSamps + Bpi / 2u) / Bpi;
+			};
+			std::uint64_t snapped = 0u;
+			const auto distance = [length](std::uint64_t value) noexcept
+			{ return value > length ? value - length : length - value; };
+			const auto consider = [&](std::uint64_t candidate) noexcept
+			{
+				if (candidate <= (std::numeric_limits<unsigned long>::max)()
+					&& (distance(candidate) < distance(snapped)
+						|| (distance(candidate) == distance(snapped) && candidate > snapped))) snapped = candidate;
+			};
+			if (powers)
+			{
+				for (std::uint64_t multiple = 1u; multiple <= 128u; multiple *= 2u)
+				{
+					consider(boundary(multiple));
+					// A full remote interval remains valid even for e.g. seven beats.
+					consider(multiple * IntervalLengthSamps);
+				}
+			}
+			else
+			{
+				const auto beats = static_cast<std::uint64_t>(length) * Bpi / IntervalLengthSamps;
+				consider(boundary(beats));
+				consider(boundary(beats + 1u));
+			}
+			return { static_cast<unsigned long>(snapped), static_cast<int>(static_cast<std::int64_t>(length)
+				- static_cast<std::int64_t>(snapped)) };
+		}
 	};
 
 	struct QuantisationParams

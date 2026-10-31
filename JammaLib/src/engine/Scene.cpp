@@ -203,7 +203,7 @@ void Scene::_ApplyNinjamTimingUpdate(const ninjam::NinjamTimingUpdate& update)
 		const auto& desired = update.DesiredTransport.value();
 		if (update.RemoteGrid.has_value())
 			_quantisation.SetRemoteMidiGrid(update.RemoteGrid->Geometry,
-				update.RemoteGrid->OriginSamps, _stations);
+				update.RemoteGrid->OriginSamps, _stations, update.RemoteGrid->PreserveRecordedMaster);
 		else if (desired.Intent == ninjam::NinjamDesiredTimingIntent::NoSync)
 			_quantisation.SetRemoteMidiGrid({}, 0, _stations);
 		if (_audioEngine)
@@ -620,6 +620,7 @@ void Scene::OnJobTick(Time curTime)
 		if (auto clock = _quantisation.Clock(); clock && !_quantisation.LocalMasterTimingPending() &&
 			clock->QuantiseSamps() != _quantisation.EffectiveSamps())
 			_SetMidiQuantisationGrain(clock->QuantiseSamps(), "clock geometry changed");
+		_quantisation.AdoptRecordedMaster(_stations);
 		const auto localTiming = _quantisation.CurrentTempoTiming(_CurrentSampleRate());
 		if (localTiming && _quantisation.HasActivatedLocalMaster(_stations))
 		{
@@ -672,10 +673,11 @@ void Scene::OnJobTick(Time curTime)
 						if (!take) continue;
 						if (count == takes.size()) break;
 						const auto restore = take->MappedMidiRestoreDiagnostic();
+						const auto recording = take->RecordingGeometry();
 						takes[count++] = { station->Name(), take->Id(), take->MidiPlayIndex(),
 							take->MidiLoopLengthSamps(), take->MidiAnchorCorrection(), take->NumRecordedSamps(),
 							restore.BeforeSamps, restore.TargetSamps, restore.Count, restore.ChangedCount,
-							restore.LargestBackstepSamps };
+							restore.LargestBackstepSamps, recording.IntervalLengthSamps, recording.Bpi };
 					}
 					if (count == takes.size()) break;
 				}

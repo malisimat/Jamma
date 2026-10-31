@@ -954,10 +954,8 @@ bool AudioHost::ApplyDesiredTimingAtAudioBoundary(std::uint64_t blockStartSample
 					? static_cast<unsigned long>(ninjam::PositiveModulo(
 						mappedSourceBefore.value(), sourceLength))
 					: static_cast<unsigned long>(previousRemotePhase) % sourceLength;
-				const auto sourceAfter = ninjam::SourcePhaseAtRemotePhase(replacement.RemoteMasterPhaseSamps,
-					sourceLength, desired.RemoteMasterIntervalLengthSamps);
-				localSourceCorrectionSamps = ninjam::SignedCircularDifference(static_cast<unsigned int>(sourceBefore),
-					static_cast<unsigned int>(sourceAfter), static_cast<unsigned int>(sourceLength));
+				localSourceCorrectionSamps = ninjam::SourceCorrectionAtRemotePhase(sourceBefore,
+					sourceLength, replacement.RemoteMasterPhaseSamps, desired.RemoteMasterIntervalLengthSamps);
 			}
 		}
 		else
@@ -982,16 +980,15 @@ bool AudioHost::ApplyDesiredTimingAtAudioBoundary(std::uint64_t blockStartSample
 		{
 			const auto sourceBefore = static_cast<unsigned long>(ninjam::PositiveModulo(
 				mappedSourceBefore.value(), _syncPhaseMap.SourceLengthSamps));
-			const auto sourceAfter = ninjam::SourcePhaseAtRemotePhase(timingClock->SampOffset(),
-				_syncPhaseMap.SourceLengthSamps, _syncPhaseMap.RemoteLengthSamps);
-			localSourceCorrectionSamps = ninjam::SignedCircularDifference(static_cast<unsigned int>(sourceBefore),
-				static_cast<unsigned int>(sourceAfter), static_cast<unsigned int>(_syncPhaseMap.SourceLengthSamps));
+			localSourceCorrectionSamps = ninjam::SourceCorrectionAtRemotePhase(sourceBefore,
+				_syncPhaseMap.SourceLengthSamps, timingClock->SampOffset(), _syncPhaseMap.RemoteLengthSamps);
 		}
 
 		if (stations)
 			for (const auto& station : *stations)
-				if (station && !station->IsRemote()) station->ApplyAcceptedTimingCorrection(
-					localSourceCorrectionSamps, desired.Generation, geometryChanged || !hadSyncPhaseMap);
+				if (station && !station->IsRemote()) station->ApplyRemoteTiming({ sceneCoordinate,
+					desired.RemoteMasterIntervalLengthSamps, timingClock->SampOffset(), previousMasterLength,
+					previousRemotePhase, desired.Generation, localSourceCorrectionSamps, geometryChanged || !hadSyncPhaseMap });
 
 		if (geometryChanged)
 			_syncPhaseMap.RemoteLengthSamps = desired.RemoteMasterIntervalLengthSamps;
@@ -1031,7 +1028,7 @@ std::optional<std::int64_t> AudioHost::RestoreMappedSourceAtScene(
 	if (stations)
 		for (const auto& station : *stations)
 			if (station && !station->IsRemote())
-				station->RestoreMappedSourceCoordinate(sourceCoordinate);
+				station->RestoreMappedSourceCoordinate(sourceCoordinate, sceneCoordinateSamps);
 	return sourceCoordinate;
 }
 
@@ -1042,7 +1039,7 @@ void AudioHost::CaptureMappedSourceAnchorsAfterOffset(
 		return;
 	for (const auto& station : stations)
 		if (station && !station->IsRemote())
-			station->CaptureMappedSourceAnchors(_syncPhaseMap.SourceCoordinateAtOrigin);
+			station->CaptureMappedSourceAnchors(_syncPhaseMap.SourceCoordinateAtOrigin, _syncPhaseMap.SceneOriginSamps);
 	_captureMappedSourceAnchorsAfterOffset = false;
 }
 
@@ -1243,10 +1240,15 @@ void AudioHost::PublishAudioCallbackProgress(std::uint64_t blockStartSample,
 			? audioStreamParams.InputLatency : _userConfig.Audio.LatencyIn;
 		const auto earliestPhysicalInput = static_cast<std::uint32_t>(_captureHistoryEpochDeviceSample)
 			- captureInputLatency;
+		const auto recordingGeometry = timingClock && _activeNinjamFollowPolicy != ninjam::NinjamLocalFollowPolicy::NoSync
+			? engine::RemoteTransportGeometry{ _appliedNinjamTiming.RemoteMasterIntervalLengthSamps,
+				_appliedNinjamTiming.BeatsPerInterval, timingClock->SampOffset(),
+				_appliedNinjamTiming.TempoBpm, _appliedNinjamTiming.Generation }
+			: engine::RemoteTransportGeometry{};
 		for (const auto& station : stations)
 			if (station && !station->IsRemote()) station->BeginCaptureAudioBoundary(blockStartSample,
 				timingClock ? timingClock->SceneSamplePos() : 0u,
-				timingClock ? timingClock->AbsoluteSamplePos() : 0u, earliestPhysicalInput);
+				timingClock ? timingClock->AbsoluteSamplePos() : 0u, earliestPhysicalInput, recordingGeometry);
 
 		if (nullptr != inBuf)
 		{

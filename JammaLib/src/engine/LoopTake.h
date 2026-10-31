@@ -15,6 +15,7 @@
 #include <memory>
 #include "Loop.h"
 #include "TriggerCaptureTiming.h"
+#include "../ninjam/NinjamLoopAlignment.h"
 #include "CameraRecordingObservation.h"
 #include "../graphics/CameraBounds.h"
 #include "../graphics/StationModel.h"
@@ -347,13 +348,26 @@ namespace engine
 		// its generation gate and shifts each entity by the common signed delta.
 		void ApplyAcceptedTimingCorrection(long long deltaSamps,
 			std::uint64_t generation, bool relocateMidi = false) noexcept;
+		void ApplyRemoteTiming(const ninjam::RemoteLoopTiming& timing) noexcept;
+		void CaptureRecordingBaselineAtAudioBoundary(const RemoteTransportGeometry& geometry,
+			std::uint64_t sceneSample) noexcept;
+		bool IsIndependentRecording() const noexcept { return _independentRecording; }
+		RemoteTransportGeometry RecordingGeometry() const noexcept
+		{
+			const auto packed = _recordingBaselinePacked.load(std::memory_order_acquire);
+			return { static_cast<unsigned long>(packed >> 32u), static_cast<unsigned int>(packed) };
+		}
+		unsigned long RecordingMasterLengthSamps() const noexcept
+			{ return static_cast<unsigned long>(_recordingBaselinePacked.load(std::memory_order_acquire) >> 32u); }
+		unsigned int RecordingBeatsPerInterval() const noexcept
+			{ return static_cast<unsigned int>(_recordingBaselinePacked.load(std::memory_order_acquire)); }
 		void CaptureSceneAnchors(std::uint64_t sceneCoordinateSamps) noexcept;
 		void InvalidateSceneAnchors() noexcept;
 		void ResetTimingEpoch() noexcept;
 		// Capture/restore use an already-mapped common source coordinate. Entity
 		// anchors and modulo lengths remain local to the take and its loops.
-		void CaptureMappedSourceAnchors(std::int64_t sourceCoordinateSamps) noexcept;
-		void RestoreMappedSourceCoordinate(std::int64_t sourceCoordinateSamps) noexcept;
+		void CaptureMappedSourceAnchors(std::int64_t sourceCoordinateSamps, std::uint64_t sceneSample = 0u) noexcept;
+		void RestoreMappedSourceCoordinate(std::int64_t sourceCoordinateSamps, std::uint64_t sceneSample = 0u) noexcept;
 		// Audio-thread absolute setter. The target is persistent so an empty take
 		// can reconcile when it first becomes playable.
 		void SetLocalTransportOffsetSamps(long long targetSamps) noexcept;
@@ -689,6 +703,11 @@ namespace engine
 		std::atomic<std::uint64_t> _consumedTimingCorrectionCount{ 0u };
 		// Audio-thread-only generation gate for the unified audio-boundary command.
 		std::uint64_t _audioTimingGeneration{ 0u };
+		// Recording geometry is published atomically; the active map belongs to audio.
+		std::atomic<std::uint64_t> _recordingBaselinePacked{ 0u };
+		std::atomic_bool _recordingBaselinePending{ false };
+		bool _independentRecording = false; // Owner sets before publishing a new take.
+		ninjam::SyncPhaseMap _recordingPhaseMap;
 		std::atomic<bool> _isPunchInActive;
 		std::atomic<bool> _isMidiPunchInActive;
 		std::shared_ptr<gui::GuiRack> _guiRack;

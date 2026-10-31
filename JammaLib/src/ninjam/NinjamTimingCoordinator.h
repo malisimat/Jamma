@@ -76,6 +76,8 @@ namespace ninjam
 		engine::RemoteTransportGeometry Geometry;
 		// Origin on the musical transport ruler, not the device sample counter.
 		std::int64_t OriginSamps = 0;
+		// Acknowledging a local reclock/tap keeps the master just recorded.
+		bool PreserveRecordedMaster = false;
 	};
 
 	struct NinjamTimingUpdate
@@ -260,7 +262,7 @@ namespace ninjam
 		static std::optional<NinjamTempoChange> _MakeProposal(const NinjamTiming& timing) noexcept;
 		NinjamTimingUpdate _AcceptTempoChange(const NinjamTempoChange& change,
 			const std::optional<engine::QuantisationTiming>& localTiming,
-			utils::Timer& clock, std::chrono::steady_clock::time_point now);
+			utils::Timer& clock, std::chrono::steady_clock::time_point now, bool preserveRecordedMaster = false);
 		NinjamTimingUpdate _PublishRemoteDesired(const NinjamTempoChange& change,
 			NinjamLocalFollowPolicy policy, NinjamDesiredTimingIntent intent,
 			bool remoteGridChanged) noexcept;

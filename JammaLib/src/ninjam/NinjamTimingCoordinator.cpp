@@ -423,7 +423,7 @@ NinjamTimingUpdate NinjamTimingCoordinator::Observe(const NinjamTiming& timing,
 		_localTempoRequestStartedAt.reset();
 		_requestState = TempoRequestState::Acknowledged;
 		++_diagnostics.TempoAcknowledged;
-		return _AcceptTempoChange(_latestObservedTempoChange.value(), localTiming, clock, now);
+		return _AcceptTempoChange(_latestObservedTempoChange.value(), localTiming, clock, now, true);
 	}
 	if (update.PromptForTempoChange)
 		return update;
@@ -791,7 +791,7 @@ NinjamTimingUpdate NinjamTimingCoordinator::_PublishNoSync(NinjamNoSyncReason re
 
 NinjamTimingUpdate NinjamTimingCoordinator::_AcceptTempoChange(const NinjamTempoChange& change,
 	const std::optional<engine::QuantisationTiming>& localTiming,
-	utils::Timer& clock, std::chrono::steady_clock::time_point now)
+	utils::Timer& clock, std::chrono::steady_clock::time_point now, bool preserveRecordedMaster)
 {
 	// Explicit acceptance of a preserved deadline proposal grants a bounded grace
 	// period for fresh observations. It does not invent a new observation anchor.
@@ -805,6 +805,7 @@ NinjamTimingUpdate NinjamTimingCoordinator::_AcceptTempoChange(const NinjamTempo
 	const auto policy = SelectLocalFollowPolicy(localTiming, change.Bpm);
 	auto update = _PublishRemoteDesired(change, policy,
 		NinjamDesiredTimingIntent::Replacement, true);
+	if (update.RemoteGrid) update.RemoteGrid->PreserveRecordedMaster = preserveRecordedMaster;
 	const auto generation = update.DesiredTransport->Generation;
 	_pendingTempoChange.reset();
 	_ignoredTempoChange.reset();

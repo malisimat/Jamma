@@ -373,6 +373,9 @@ namespace io
 					io::JamFile::LoopTake jamTake;
 					jamTake.Id = take->Id();
 					jamTake.Name = take->Id();
+					const auto recordingGeometry = take->RecordingGeometry();
+					jamTake.RecordingMasterLengthSamps = recordingGeometry.IntervalLengthSamps;
+					jamTake.RecordingBeatsPerInterval = recordingGeometry.Bpi;
 					jamTake.MasterLevel = take->MasterLevelForExport();
 					jamTake.BusLevels = take->BusLevelsForExport();
 					jamTake.VstChain = take->VstEntries();

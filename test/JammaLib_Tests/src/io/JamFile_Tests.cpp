@@ -970,3 +970,43 @@ TEST(JamFile, RetainsAudioShiftAndCreationSubdivisionIndependentlyOfMidiGrid)
 	const auto& savedTake = restored->Stations[0].LoopTakes[0]; ASSERT_EQ(1u,savedTake.Loops.size());
 	EXPECT_EQ(19,savedTake.TakePhaseOffsetSamps); EXPECT_EQ(-2000000017,savedTake.Loops[0].PlaybackOffsetSamps); EXPECT_EQ(300ul,savedTake.Loops[0].BodyPlayIndex);
 }
+
+TEST(JamFile, RecordingBaselineRoundTripAndLegacyFallback)
+{
+	JamFile jam{};
+	jam.Version = JamFile::VERSION_V;
+	jam.Name = "recording-baseline";
+	JamFile::Station station{};
+	station.Name = "station";
+	JamFile::LoopTake take{};
+	take.Name = "recorded-at-128";
+	take.RecordingMasterLengthSamps = 165375ul;
+	take.RecordingBeatsPerInterval = 8u;
+	station.LoopTakes.push_back(take);
+	take.Name = "legacy";
+	take.RecordingMasterLengthSamps = 0ul;
+	take.RecordingBeatsPerInterval = 0u;
+	station.LoopTakes.push_back(take);
+	jam.Stations.push_back(station);
+	std::stringstream output;
+	ASSERT_TRUE(JamFile::ToStream(jam, output));
+	const auto saved = output.str();
+	const auto restored = JamFile::FromStream(std::move(output));
+	ASSERT_TRUE(restored);
+	ASSERT_EQ(2u, restored->Stations[0].LoopTakes.size());
+	EXPECT_EQ(165375ul, restored->Stations[0].LoopTakes[0].RecordingMasterLengthSamps);
+	EXPECT_EQ(8u, restored->Stations[0].LoopTakes[0].RecordingBeatsPerInterval);
+	EXPECT_EQ(0ul, restored->Stations[0].LoopTakes[1].RecordingMasterLengthSamps);
+	EXPECT_EQ(0u, restored->Stations[0].LoopTakes[1].RecordingBeatsPerInterval);
+
+	for (const auto& malformed : {
+		std::regex_replace(saved, std::regex("recordingBeatsPerInterval\":8"), "recordingBeatsPerInterval\":0"),
+		std::regex_replace(saved, std::regex(",\"recordingBeatsPerInterval\":8"), ""),
+		std::regex_replace(saved, std::regex("recordingMasterLengthSamps\":165375"), "recordingMasterLengthSamps\":2147483648") })
+	{
+		const auto invalid = JamFile::FromStream(std::stringstream(malformed));
+		ASSERT_TRUE(invalid);
+		EXPECT_EQ(0ul, invalid->Stations[0].LoopTakes[0].RecordingMasterLengthSamps);
+		EXPECT_EQ(0u, invalid->Stations[0].LoopTakes[0].RecordingBeatsPerInterval);
+	}
+}

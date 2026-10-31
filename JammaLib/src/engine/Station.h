@@ -140,17 +140,19 @@ namespace engine
 		// Audio-thread only; called once at the top of the callback block.
 		void ApplyFirstMasterRecordingAtAudioBoundary(utils::Timer& clock, std::uint32_t blockStartSample = 0u) noexcept;
 		void BeginCaptureAudioBoundary(std::uint32_t blockStartSample, std::uint64_t sceneSample, std::uint64_t absoluteSample,
-            std::optional<std::uint32_t> earliestPhysicalSample = std::nullopt) noexcept;
+            std::optional<std::uint32_t> earliestPhysicalSample = std::nullopt,
+			const RemoteTransportGeometry& recordingGeometry = {}) noexcept;
 		void CompleteMidiIngressPump(std::uint32_t deviceSample, bool overflow = false);
 		// A failed bounded membership read conservatively protects the source ruler.
 		bool HasTimingContentAtAudioBoundary() const noexcept;
 		void ApplyAcceptedTimingCorrection(long long deltaSamps,
 			std::uint64_t generation, bool relocateMidi = false) noexcept;
+		void ApplyRemoteTiming(const ninjam::RemoteLoopTiming& timing) noexcept;
 		void CaptureSceneAnchors(std::uint64_t sceneCoordinateSamps) noexcept;
 		void InvalidateSceneAnchors() noexcept;
 		void ResetTimingEpoch() noexcept;
-		void CaptureMappedSourceAnchors(std::int64_t sourceCoordinateSamps) noexcept;
-		void RestoreMappedSourceCoordinate(std::int64_t sourceCoordinateSamps) noexcept;
+		void CaptureMappedSourceAnchors(std::int64_t sourceCoordinateSamps, std::uint64_t sceneSample = 0u) noexcept;
+		void RestoreMappedSourceCoordinate(std::int64_t sourceCoordinateSamps, std::uint64_t sceneSample = 0u) noexcept;
 		void SetLocalTransportOffsetSamps(long long targetSamps) noexcept;
 		virtual void OnBlockWriteChannel(unsigned int channel,
 			const base::AudioWriteRequest& request,

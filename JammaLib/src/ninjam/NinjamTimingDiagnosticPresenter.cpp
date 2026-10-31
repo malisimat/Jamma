@@ -86,7 +86,8 @@ void NinjamTimingDiagnosticPresenter::PresentPlayback(const NinjamTiming& timing
 			<< " recorded=" << take.RecordedSamps
 			<< " restore=" << take.RestoreBeforeSamps << "->" << take.RestoreTargetSamps
 			<< " restores=" << take.RestoreCount << " moved=" << take.RestoreChangedCount
-			<< " maxBackstep=" << take.LargestRestoreBackstepSamps << '\n';
+			<< " maxBackstep=" << take.LargestRestoreBackstepSamps
+			<< " recordingMaster=" << take.RecordingMasterLengthSamps << " recordingBpi=" << take.RecordingBpi << '\n';
 	}
 	_lastPlaybackTiming = timing;
 	_lastPlaybackEpoch = receipt.SessionEpoch;

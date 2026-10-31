@@ -22,6 +22,8 @@ namespace ninjam
 		std::uint64_t RestoreCount = 0u;
 		std::uint64_t RestoreChangedCount = 0u;
 		unsigned int LargestRestoreBackstepSamps = 0u;
+		unsigned long RecordingMasterLengthSamps = 0ul;
+		unsigned int RecordingBpi = 0u;
 	};
 
 	// Off-callback formatting of caller-sampled values. Mutable trace summaries are

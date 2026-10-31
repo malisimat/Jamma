@@ -847,6 +847,7 @@ static std::shared_ptr<QuantisationContractTake> MakeQuantisationContractTake(co
     params.Id = id;
     params.Size = { 100, 100 };
     auto take = std::make_shared<QuantisationContractTake>(params);
+    take->Record({}, id);
     take->CompleteMidi(length);
     return take;
 }
@@ -1391,4 +1392,50 @@ TEST(Quantisation, ConnectedSoleMasterTapPreparesLocalTimingBeforeRequestingServ
     EXPECT_FALSE(quantiser.HasActivatedLocalMaster({ station }));
     station->AddTake(MakeQuantisationContractTake("second", 96000ul));
     EXPECT_FALSE(quantiser.CanEditMasterTempo({ station }));
+}
+
+TEST(Quantisation, AcceptedRemoteTempoStartsNewMasterEligibilityWithoutClearingTransport)
+{
+	auto old = MakeQuantisationContractTake("old", 187328ul);
+	auto station = std::make_shared<QuantisationContractStation>();
+	station->AddTake(old);
+	auto clock = std::make_shared<utils::Timer>();
+	clock->SetSeedSourceLength(187327ul);
+	engine::Quantiser quantiser;
+	quantiser.SetClock(clock);
+	quantiser.SetRemoteMidiGrid({ 187327ul, 8u, 0u, 113.0f, 1u }, 0, { station });
+	quantiser.SetRemoteMidiGrid({ 165375ul, 8u, 0u, 128.0f, 2u }, 0, { station });
+	EXPECT_EQ(187327ul, clock->SeedSourceLength());
+	EXPECT_FALSE(quantiser.CanEditMasterTempo({ station }));
+	auto current = MakeQuantisationContractTake("new", 165375ul);
+	station->AddTake(current);
+	quantiser.AdoptRecordedMaster({ station });
+	EXPECT_TRUE(quantiser.CanEditMasterTempo({ station }));
+	const auto timing = quantiser.CurrentTempoTiming(44100u);
+	ASSERT_TRUE(timing);
+	EXPECT_EQ(165375u, timing->MasterLoopSamps);
+	EXPECT_EQ(8u, timing->Bpi);
+	EXPECT_FLOAT_EQ(128.0f, timing->Bpm);
+	quantiser.SetRemoteMidiGrid({}, 0, { station });
+	quantiser.SetRemoteMidiGrid({ 165375ul, 8u, 100u, 128.0f, 3u }, 0, { station });
+	EXPECT_TRUE(quantiser.CanEditMasterTempo({ station }));
+	quantiser.SetRemoteMidiGrid({ 154511ul, 8u, 0u, 137.0f, 4u }, 0, { station }, true);
+	EXPECT_TRUE(quantiser.CanEditMasterTempo({ station }));
+	quantiser.SetRemoteMidiGrid({ 165375ul, 8u, 0u, 128.0f, 5u }, 0, { station });
+	EXPECT_FALSE(quantiser.CanEditMasterTempo({ station }));
+}
+
+TEST(Quantisation, RemoteRecordingSpansUseExactIntervalInsteadOfRoundedBeats)
+{
+	const engine::RemoteTransportGeometry remote{ 165375ul, 8u, 0u, 128.0f, 1u };
+	for (const bool powers : { false, true })
+	{
+		EXPECT_EQ(165375ul, remote.QuantiseLength(164000ul, powers).first);
+		EXPECT_EQ(330750ul, remote.QuantiseLength(330752ul, powers).first);
+		EXPECT_EQ(82688ul, remote.QuantiseLength(82690ul, powers).first);
+	}
+	EXPECT_EQ(62016ul, remote.QuantiseLength(62000ul, false).first);
+	const engine::RemoteTransportGeometry seven{ 144703ul, 7u, 0u, 128.0f, 1u };
+	EXPECT_EQ(144703ul, seven.QuantiseLength(144700ul, true).first);
+	EXPECT_EQ(289406ul, seven.QuantiseLength(289410ul, true).first);
 }

@@ -182,6 +182,8 @@ namespace io
 			std::uint64_t MidiQuantTransportStart = 0;
 			std::optional<std::uint64_t> BaseIntervalSamps;
 			std::optional<std::uint32_t> BaseDivisions;
+			unsigned long RecordingMasterLengthSamps = 0ul;
+			unsigned int RecordingBeatsPerInterval = 0u;
 			std::vector<MidiStream> MidiStreams;
 			// One destination-bus list per audio input (loop) mixer.
 			std::vector<std::vector<unsigned long>> AudioRoutes;

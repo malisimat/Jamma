@@ -115,7 +115,7 @@ namespace engine
 			const std::vector<std::shared_ptr<engine::Station>>& stations);
 		void SetRemoteMidiGrid(const RemoteTransportGeometry& geometry,
 			std::int64_t originSamps,
-			const std::vector<std::shared_ptr<engine::Station>>& stations);
+			const std::vector<std::shared_ptr<engine::Station>>& stations, bool preserveRecordedMaster = false);
 		// Scene-serialized setup for a newly added local station.
 		void InitialiseStationMidiGrid(const std::shared_ptr<engine::Station>& station) const;
 		void SetGlobalPhaseOffsetSamps(std::int32_t offsetSamps,
@@ -243,6 +243,7 @@ namespace engine
 		bool _previousSeedUsesPowers = true;
 		std::shared_ptr<engine::Loop> _masterLoop;
 		RemoteTransportGeometry _acceptedRemoteGrid{};
+		RemoteTransportGeometry _recordingRemoteGrid{}; // Last accepted baseline survives Stay local.
 		std::int32_t _MasterAudioReferenceOffsetSamps() const noexcept;
 		midi::MidiQuantisationFraction _defaultMidiQuantisationFraction = midi::MidiQuantisationFraction::Quarter;
 		std::int64_t _acceptedRemoteGridOriginSamps = 0; // Scene-serialized job/UI owner.
