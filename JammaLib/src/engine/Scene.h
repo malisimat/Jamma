@@ -212,6 +212,7 @@ namespace engine
 			return _workspace->Editor().Open(take, audioLoop, midiLoop);
 		}
 		void CloseLoopGridEditor() { _workspace->Editor().Close(); }
+		base::PointerCursor CursorHint() const { return _workspace->CursorHint(); }
 		bool IsLoopGridEditorOpen() const noexcept { return _workspace->Editor().IsOpen(); }
 		bool LoopGridEditorReady() const noexcept { return _workspace->Editor().IsReady(); }
 		float LoopGridEditorMorph() const noexcept { return _workspace->Editor().Morph(); }

@@ -619,6 +619,28 @@ void Window::Render()
 
 	_scene->Draw3d(*_drawContext, 1, DrawPass::PASS_SCENE);
 	_scene->Draw(*_drawContext);
+	_UpdatePointerCursor();
+}
+
+// UI thread only. Do not replace cursors belonging to native frames or plugin windows.
+void Window::_UpdatePointerCursor()
+{
+	if (_released || !_wnd || !_scene) return;
+	POINT point;
+	RECT client;
+	if (!GetCursorPos(&point) || WindowFromPoint(point) != _wnd) return;
+	ScreenToClient(_wnd, &point);
+	GetClientRect(_wnd, &client);
+	if (!PtInRect(&client, point)) return;
+	LPCTSTR cursor = IDC_ARROW;
+	switch (_scene->CursorHint())
+	{
+	case base::PointerCursor::Move: cursor = IDC_SIZEALL; break;
+	case base::PointerCursor::Horizontal: cursor = IDC_SIZEWE; break;
+	case base::PointerCursor::Vertical: cursor = IDC_SIZENS; break;
+	default: break;
+	}
+	SetCursor(LoadCursor(nullptr, cursor));
 }
 
 void Window::Swap()
@@ -1367,32 +1389,9 @@ LRESULT CALLBACK Window::WindowProcedure(HWND hWindow, UINT message, WPARAM wPar
 	}
 	break;
 	case WM_SETCURSOR:
-	{
-		/*MOUSEOVERSTATE mouseoverstate = MOUSEOVER_NORMAL;
-
-		if (Component::MasterOverComponent() != nullptr)
-		mouseoverstate = Component::MasterOverComponent()->MouseOverState();
-
-		switch (mouseoverstate)
-		{
-		case MOUSEOVER_HAND:
-		SetCursor(HandCursor);
-		break;
-		case MOUSEOVER_OPENHAND:
-		SetCursor(OpenHandCursor);
-		break;
-		case MOUSEOVER_CLOSEDHAND:
-		SetCursor(ClosedHandCursor);
-		break;
-		case MOUSEOVER_CARET:
-		SetCursor(CaretCursor);
-		break;
-		default:
-		SetCursor(ArrowCursor);
-		break;
-		}*/
-	}
-	break;
+		if (LOWORD(lParam) != HTCLIENT) break;
+		window->_UpdatePointerCursor();
+		return TRUE;
 	case WM_LBUTTONDOWN:
 	{
 		int winHeight = (int)window->GetSize().Height;

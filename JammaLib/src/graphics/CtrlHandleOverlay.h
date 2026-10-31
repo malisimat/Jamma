@@ -42,6 +42,7 @@ namespace graphics
 		void SetButtonScope(int index, ButtonScope scope) noexcept;
 		void SetScopeLabel(const std::string& text);
 		const std::string& ScopeLabel() const noexcept { return _scopeText; }
+		int ActiveButton() const noexcept { return _activeButton; }
 		int VisibleButtonCount() const noexcept { return _visibleButtonCount; }
 		int HitTestButton(utils::Position2d pos) const noexcept;
 		std::optional<utils::Position2d> ButtonCenter(int index) const noexcept;

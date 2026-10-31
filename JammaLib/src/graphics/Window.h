@@ -143,6 +143,7 @@ namespace graphics
 		bool _nativeDestroyPending = false;
 		void _InstallRelativePointerHost();
 		void _UpdateCameraEligibility();
+		void _UpdatePointerCursor();
 		void _ReleaseOwnedMouseCapture();
 		static constexpr UINT PointerRefreshMessage = WM_APP + 0x341u;
 		bool _RelativePointerValid() const;

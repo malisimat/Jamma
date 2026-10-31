@@ -18,6 +18,29 @@ Workspace::Workspace(utils::Size2d size, std::uint64_t sceneIdentity) : _sceneId
 	_camera(CameraParams(MoveableParams({0, 0}, {0, 0, 420}, 1.0), 0))
 {}
 
+base::PointerCursor Workspace::CursorHint() const
+{
+	using Cursor = base::PointerCursor;
+	if (!_editor || !_interaction) return Cursor::Arrow;
+	const auto button = _interaction->OwnsPointer() ? _ctrlHandleOverlay.ActiveButton()
+		: _ctrlHeld && _interaction->EditModeActive() && !_editor->IsEngaged() && !PopupOpen() ? _ctrlHandleOverlay.HitTestButton(_cursorPos) : -1;
+	if (button >= 0) return button == 0 ? Cursor::Horizontal : Cursor::Vertical;
+	const auto captured = _pointer.Captured();
+	const auto control = captured ? captured
+		: _pointer.HoverPath2d().empty() ? nullptr : _pointer.HoverPath2d().back().lock();
+	if (control && control->IsEnabled() && std::dynamic_pointer_cast<GuiNumericInput>(control)) return Cursor::Vertical;
+	if (PopupOpen() || captured) return Cursor::Arrow;
+	if (_editor->NumericCursorAt(_cursorPos)) return Cursor::Vertical;
+	switch (_editor->EditHandle())
+	{
+	case LoopGridGeometry::EditHandle::Move: return Cursor::Move;
+	case LoopGridGeometry::EditHandle::Left:
+	case LoopGridGeometry::EditHandle::Right:
+	case LoopGridGeometry::EditHandle::Both: return Cursor::Horizontal;
+	default: return Cursor::Arrow;
+	}
+}
+
 void Workspace::Initialize(GuiHudParams hud, std::uint8_t channel, double offset,
 	io::JamFile::GlobalMidiQuantState quantisation,
 	std::function<void(const std::shared_ptr<base::GuiElement>&)> beforeHide,

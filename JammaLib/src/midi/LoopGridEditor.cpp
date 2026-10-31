@@ -825,10 +825,11 @@ void LoopGridEditor::_BeginGesture(const actions::TouchAction& action)
 				_freeDragOffsetU = point->U - plane->U;
 				_freeDragOffsetV = point->V - plane->V;
 			}
+		_gestureModelGeneration = loop->Model()->EditorModelGeneration();
 		_pointerOwned = true;
 		_pointerButton = 0;
 		_previewDirty = true;
-		_UpdateHover(*point);
+		_UpdateHeldTarget();
 	}
 	else
 	{
@@ -914,6 +915,7 @@ void LoopGridEditor::_UpdateHeldTarget()
 	}
 	_hoverRevision = _gesture->Before().Revision;
 	model->SetEditorHover(-1.0f, -1);
+	model->SetEditorHandle(EditHandle());
 	model->SetEditorHeld(static_cast<int>(*_gesture->CapturedNoteIndex()),
 		_gesture->Mode() == MidiGridGesture::Kind::Velocity ? _gesture->ProposedVelocity() : -1);
 	if (_gesture->Mode() == MidiGridGesture::Kind::Velocity)
@@ -997,6 +999,7 @@ void LoopGridEditor::_CancelGesture()
 
 void LoopGridEditor::_ClearIdleHover(bool clearCache)
 {
+	_editHandle = LoopGridGeometry::EditHandle::None;
 	_idleHoverPointer.reset();
 	if (clearCache)
 	{
@@ -1017,6 +1020,7 @@ void LoopGridEditor::_UpdateIdleHover()
 	const auto point = _PointAt(*_idleHoverPointer, false);
 	if (!point)
 	{
+		_editHandle = LoopGridGeometry::EditHandle::None;
 		if (auto loop = _midiLoop.lock())
 			if (auto model = loop->Model()) model->SetEditorHover(-1.0f, -1);
 		return;
@@ -1026,6 +1030,7 @@ void LoopGridEditor::_UpdateIdleHover()
 
 void LoopGridEditor::_UpdateHover(MidiGridGesture::Point point)
 {
+	_editHandle = LoopGridGeometry::EditHandle::None;
 	const auto loop = _midiLoop.lock();
 	const auto model = loop ? loop->Model() : nullptr;
 	if (!model) return;
@@ -1078,6 +1083,8 @@ void LoopGridEditor::_UpdateHover(MidiGridGesture::Point point)
 		_hoverRevision = source.Revision;
 	}
 	if (!length) return;
+	if (!gridResolved && target.NoteIndex)
+		_editHandle = LoopGridGeometry::NoteEditHandle(point.Sample, target.Start, target.End, _PixelsPerSample(length));
 	// Free timing has no cell to highlight, so empty space keeps the pointer glow.
 	if (!target.NoteIndex && !gridResolved)
 	{
@@ -1087,6 +1094,7 @@ void LoopGridEditor::_UpdateHover(MidiGridGesture::Point point)
 	model->SetEditorTarget(static_cast<float>(target.Start) / length,
 		static_cast<float>(target.End) / length, target.Pitch,
 		target.NoteIndex ? static_cast<int>(*target.NoteIndex) : -1);
+	model->SetEditorHandle(_editHandle);
 }
 
 void LoopGridEditor::_UpdatePreview()

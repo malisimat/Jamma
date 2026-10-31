@@ -41,6 +41,8 @@ namespace base
 		Fill    // Stretch to fill cell height.
 	};
 
+	enum class PointerCursor { Arrow, Move, Horizontal, Vertical };
+
 	class GuiElement;
 
 	class GuiElementParams :

@@ -963,7 +963,7 @@ TEST(MidiGridGesture, SliverAtLoopEndExtendsLeftRegardlessOfPickedEdge)
 	source.EventCount = 2u;
 	MidiGridGesture gesture;
 	ASSERT_TRUE(gesture.Begin(source, {99u, 60u, 0.99}, 4u, 1.0));
-	EXPECT_EQ(MidiGridGesture::Kind::TrimRight, gesture.Mode());
+	EXPECT_EQ(MidiGridGesture::Kind::Extend, gesture.Mode());
 	ASSERT_TRUE(gesture.Finish({80u, 60u, 0.80}));
 	EXPECT_EQ(79u, gesture.Working().Events[0].sampleOffset);
 	EXPECT_EQ(99u, gesture.Working().Events[1].sampleOffset);
@@ -977,7 +977,7 @@ TEST(MidiGridGesture, SliverAtLoopStartExtendsRightRegardlessOfPickedEdge)
 	source.EventCount = 2u;
 	MidiGridGesture gesture;
 	ASSERT_TRUE(gesture.Begin(source, {0u, 60u, 0.0}, 4u, 1.0));
-	EXPECT_EQ(MidiGridGesture::Kind::TrimLeft, gesture.Mode());
+	EXPECT_EQ(MidiGridGesture::Kind::Extend, gesture.Mode());
 	ASSERT_TRUE(gesture.Finish({20u, 60u, 0.20}));
 	EXPECT_EQ(0u, gesture.Working().Events[0].sampleOffset);
 	EXPECT_EQ(21u, gesture.Working().Events[1].sampleOffset);
@@ -993,4 +993,23 @@ TEST(MidiGridGesture, OneSampleNoteFlushWithLoopEndCanGrowLeft)
 	ASSERT_TRUE(gesture.Finish({80u, 60u, 0.80}));
 	EXPECT_EQ(80u, gesture.Working().Events[0].sampleOffset);
 	EXPECT_EQ(1u, gesture.Working().EventCount);
+}
+
+TEST(MidiGridGesture, TrimFeedbackTracksTheActualEdgeAfterSliverDirectionChanges)
+{
+	using Handle = midi::LoopGridGeometry::EditHandle;
+	auto source = MidiGridGestureFixture::EmptyLoop(false);
+	source.Events[0] = midi::MidiEvent::MakeNoteOn(40u, 4u, 60u, 87u);
+	source.Events[1] = midi::MidiEvent::MakeNoteOff(42u, 4u, 60u);
+	source.EventCount = 2u;
+	MidiGridGesture gesture;
+	ASSERT_TRUE(gesture.Begin(source, {41u, 60u, 0.41}, 4u, 1.0));
+	EXPECT_EQ(Handle::Both, gesture.EditHandle());
+	ASSERT_TRUE(gesture.CapturedNoteIndex());
+	ASSERT_TRUE(gesture.Update({30u, 60u, 0.30}));
+	EXPECT_EQ(Handle::Left, gesture.EditHandle());
+	ASSERT_TRUE(gesture.Update({50u, 60u, 0.50}));
+	EXPECT_EQ(Handle::Right, gesture.EditHandle());
+	gesture.Cancel();
+	EXPECT_EQ(Handle::None, gesture.EditHandle());
 }

@@ -180,6 +180,7 @@ void MidiModel::Draw3d(DrawContext& ctx, unsigned int numInstances, base::DrawPa
 	glCtx.SetUniform("EditorHoverPitch", _editorHoverPitch);
 	glCtx.SetUniform("EditorTargetStart", _editorTargetStart);
 	glCtx.SetUniform("EditorTargetEnd", _editorTargetEnd);
+	glCtx.SetUniform("EditorEditHandle", static_cast<int>(_editorHandle));
 	glCtx.SetUniform("EditorTargetInstance", _editorTargetInstance);
 	glCtx.SetUniform("EditorHeldInstance", _editorHeldInstance);
 	glCtx.SetUniform("EditorPreviewVelocity", _editorPreviewVelocity < 0
@@ -273,6 +274,7 @@ void MidiModel::SetEditorPitchRange(int bottomPitch, int visibleRows) noexcept
 
 void MidiModel::SetEditorHover(float u, int pitch) noexcept
 {
+	_editorHandle = midi::LoopGridGeometry::EditHandle::None;
 	_editorHoverU = u >= 0.0f && u < 1.0f ? u : -1.0f;
 	_editorHoverPitch = pitch >= 0 && pitch < 128 ? pitch : -1;
 	_editorTargetStart = _editorTargetEnd = -1.0f;

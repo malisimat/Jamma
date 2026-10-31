@@ -138,6 +138,7 @@ namespace gui
 		bool PopupOpen() const noexcept { return _popupManager.IsOpen(); }
 		bool IsEditingText() const noexcept { return _focusManager.IsEditingText(); }
 		bool CameraDragging() const noexcept { return _camera.IsBackgroundDragging(); }
+		base::PointerCursor CursorHint() const;
 		bool HasPointerCapture() const noexcept { return _pointer.HasCapture(); }
 		void CommitFocus() { _focusManager.ClearFocus(); }
 		void CancelBackgroundClick() { _selector->ClearBackgroundClick(); }
