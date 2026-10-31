@@ -89,6 +89,7 @@ namespace midi
 				_start = hit->Start;
 				_end = hit->End;
 				_pitch = hit->Pitch;
+				_directionalExtend = pixelsPerSample > 0.0 && (_end - _start) * pixelsPerSample <= 12.0;
 				_kind = hit->Zone == LoopGridGeometry::HitZone::LeftEdge ? Kind::TrimLeft
 					: hit->Zone == LoopGridGeometry::HitZone::RightEdge ? Kind::TrimRight : Kind::Move;
 				_preview.push_back({ _start, _end, _pitch, true });
@@ -169,6 +170,12 @@ namespace midi
 					pitch = std::clamp(static_cast<int>(_pitch) + static_cast<int>(point.Pitch)
 						- static_cast<int>(_anchor.Pitch), 0, 127);
 				}
+				// Narrow notes have no distinct handles: grow toward the drag.
+				else if (_directionalExtend)
+				{
+					if (delta < 0) start = std::max<std::int64_t>(0, start + delta);
+					else end = std::min(length, end + delta);
+				}
 				else if (_kind == Kind::TrimLeft)
 					start = std::clamp<std::int64_t>(start + delta, 0, end - 1);
 				else
@@ -209,6 +216,7 @@ namespace midi
 			_kind = Kind::None; _grid.reset(); _visited.clear(); _removed.clear(); _targets.Notes.clear();
 			_dirty = false;
 			_moved = false;
+			_directionalExtend = false;
 			_captured = {}; _velocityDelta = 0.0;
 			_rejected = false;
 			_preview.clear();
@@ -422,6 +430,7 @@ namespace midi
 		std::uint32_t _createDefaultDuration = 1u;
 		std::uint8_t _pitch = 60u, _channel = 0u;
 		std::uint8_t _creationVelocity = DefaultCreationVelocity;
+		bool _directionalExtend = false;
 		bool _fill = true, _dirty = false, _rejected = false, _moved = false;
 	};
 }

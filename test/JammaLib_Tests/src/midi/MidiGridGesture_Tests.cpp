@@ -954,3 +954,43 @@ TEST(MidiGridGesture, FreeShortNoteClickDeletesWithSmallPointerJitter)
     EXPECT_TRUE(gesture.Dirty());
     EXPECT_EQ(0u, gesture.Working().EventCount);
 }
+
+TEST(MidiGridGesture, SliverAtLoopEndExtendsLeftRegardlessOfPickedEdge)
+{
+	auto source = MidiGridGestureFixture::EmptyLoop(false);
+	source.Events[0] = midi::MidiEvent::MakeNoteOn(98u, 4u, 60u, 87u);
+	source.Events[1] = midi::MidiEvent::MakeNoteOff(99u, 4u, 60u);
+	source.EventCount = 2u;
+	MidiGridGesture gesture;
+	ASSERT_TRUE(gesture.Begin(source, {99u, 60u, 0.99}, 4u, 1.0));
+	EXPECT_EQ(MidiGridGesture::Kind::TrimRight, gesture.Mode());
+	ASSERT_TRUE(gesture.Finish({80u, 60u, 0.80}));
+	EXPECT_EQ(79u, gesture.Working().Events[0].sampleOffset);
+	EXPECT_EQ(99u, gesture.Working().Events[1].sampleOffset);
+}
+
+TEST(MidiGridGesture, SliverAtLoopStartExtendsRightRegardlessOfPickedEdge)
+{
+	auto source = MidiGridGestureFixture::EmptyLoop(false);
+	source.Events[0] = midi::MidiEvent::MakeNoteOn(0u, 4u, 60u, 87u);
+	source.Events[1] = midi::MidiEvent::MakeNoteOff(1u, 4u, 60u);
+	source.EventCount = 2u;
+	MidiGridGesture gesture;
+	ASSERT_TRUE(gesture.Begin(source, {0u, 60u, 0.0}, 4u, 1.0));
+	EXPECT_EQ(MidiGridGesture::Kind::TrimLeft, gesture.Mode());
+	ASSERT_TRUE(gesture.Finish({20u, 60u, 0.20}));
+	EXPECT_EQ(0u, gesture.Working().Events[0].sampleOffset);
+	EXPECT_EQ(21u, gesture.Working().Events[1].sampleOffset);
+}
+
+TEST(MidiGridGesture, OneSampleNoteFlushWithLoopEndCanGrowLeft)
+{
+	auto source = MidiGridGestureFixture::EmptyLoop(false);
+	source.Events[0] = midi::MidiEvent::MakeNoteOn(99u, 4u, 60u, 87u);
+	source.EventCount = 1u; // The logical loop end supplies the release.
+	MidiGridGesture gesture;
+	ASSERT_TRUE(gesture.Begin(source, {99u, 60u, 0.99}, 4u, 1.0));
+	ASSERT_TRUE(gesture.Finish({80u, 60u, 0.80}));
+	EXPECT_EQ(80u, gesture.Working().Events[0].sampleOffset);
+	EXPECT_EQ(1u, gesture.Working().EventCount);
+}

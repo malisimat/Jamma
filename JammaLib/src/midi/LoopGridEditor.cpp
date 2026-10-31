@@ -580,12 +580,27 @@ std::optional<MidiGridGesture::Point> LoopGridEditor::_PointAt(
 	const auto width = static_cast<int>(_size.Width);
 	const auto height = static_cast<int>(_size.Height);
 	if (!length || width <= 0 || height <= 0) return std::nullopt;
+	// Capture and hover use visible note faces; held drags retain the backing plane.
+	if (!clampToGrid)
+	{
+		MidiLoop::EditState source;
+		if (loop->SnapshotForEdit(source) && !LoopGridGeometry::Resolve(length,
+			source.Quantisation, source.QuantisationTransportStartSamps))
+			if (const auto ray = graphics::LoopGridProjection::UnprojectToLocalRay(
+				_ViewProjection(), _ModelMatrix(), pixel, width, height))
+				if (const auto hit = loop->Model()->PickEditorNote(ray->Origin, ray->Direction))
+					return MidiGridGesture::Point{hit->Sample, hit->Pitch,
+						static_cast<double>(hit->Sample) / length,
+						(hit->Pitch - loop->Model()->EditorBottomPitch() + 0.5) / loop->Model()->EditorVisibleRows()};
+	}
 	const auto local = graphics::LoopGridProjection::UnprojectToLocalPlane(_ViewProjection(),
 		_ModelMatrix(), pixel, width, height, 2.0f);
 	if (!local) return std::nullopt;
 	const auto radius = _MidiRadius(length);
-	const auto u = static_cast<double>(local->x / (2.0f * radius) + 0.5f);
-	const auto v = static_cast<double>(0.5f - local->z / (1.56f * radius));
+	const auto u = static_cast<double>(local->x / (2.0f * radius) + 0.5f)
+		+ (clampToGrid && _pointerOwned ? _freeDragOffsetU : 0.0);
+	const auto v = static_cast<double>(0.5f - local->z / (1.56f * radius))
+		+ (clampToGrid && _pointerOwned ? _freeDragOffsetV : 0.0);
 	if (!clampToGrid && (u < 0.0 || u >= 1.0 || v < 0.0 || v >= 1.0))
 		return std::nullopt;
 	const auto boundedU = std::clamp(u, 0.0, std::nextafter(1.0, 0.0));
@@ -708,6 +723,7 @@ void LoopGridEditor::_EndAudioStroke(bool cancel)
 	_audioStroke = false;
 	_audioStrokePoint.reset();
 	_pointerOwned = false;
+	_freeDragOffsetU = _freeDragOffsetV = 0.0;
 	_pointerButton = -1;
 	if (const auto loop = _audioLoop.lock())
 		if (const auto model = loop->AudioSpectralModel()) model->SetBrush({-1.0f,-1.0f}, {}, 0);
@@ -801,6 +817,14 @@ void LoopGridEditor::_BeginGesture(const actions::TouchAction& action)
 	_gesture = std::make_unique<MidiGridGesture>();
 	if (_gesture->Begin(source, *point, _ChannelOf(loop), _PixelsPerSample(source.LoopLengthSamps), _creationVelocity))
 	{
+		// Keep a captured face anchored while drag samples use the backing plane.
+		_freeDragOffsetU = _freeDragOffsetV = 0.0;
+		if (!_gesture->Grid())
+			if (const auto plane = _PointAt(action.Position, true))
+			{
+				_freeDragOffsetU = point->U - plane->U;
+				_freeDragOffsetV = point->V - plane->V;
+			}
 		_pointerOwned = true;
 		_pointerButton = 0;
 		_previewDirty = true;
@@ -952,6 +976,7 @@ void LoopGridEditor::_CancelGesture()
 	const auto relative = _relativePointer;
 	const auto button = _pointerButton;
 	_pointerOwned = false;
+	_freeDragOffsetU = _freeDragOffsetV = 0.0;
 	_pointerButton = -1;
 	_relativePointer = false;
 	_pitchView = false;

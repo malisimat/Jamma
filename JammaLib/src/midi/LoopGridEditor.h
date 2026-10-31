@@ -196,6 +196,7 @@ namespace midi
 		bool _buttonPressed = false;
 		bool _buttonShowsClose = false;
 		bool _pointerOwned = false;
+		double _freeDragOffsetU = 0.0, _freeDragOffsetV = 0.0;
 		int _pointerButton = -1;
 		bool _relativePointer = false;
 		bool _pitchView = false;

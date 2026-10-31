@@ -109,6 +109,8 @@ namespace graphics
 		void SetEditorTarget(float startU, float endU, int pitch, int noteIndex) noexcept;
 		void SetEditorHeld(int noteIndex, int proposedVelocity = -1) noexcept;
 		void ClearEditorHeld() noexcept;
+		struct EditorHit { std::uint32_t Sample; std::uint8_t Pitch; };
+		std::optional<EditorHit> PickEditorNote(glm::vec3 origin, glm::vec3 direction) const;
 		bool EditorNoteMatches(std::size_t index, const midi::MidiNote& note,
 			std::uint32_t loopLength) const noexcept;
 		std::uint64_t EditorModelGeneration() const noexcept { return _editorModelGeneration; }
