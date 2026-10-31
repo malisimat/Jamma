@@ -223,7 +223,6 @@ void GuiVstRack::Update(Model model, std::function<void(Command)> submit)
 	{
 		auto& row = _rows[index]; const auto& slot = _model.Slots[index];
 		const auto state = slot.Value.Pending ? 1u : slot.Value.Failed ? 3u : slot.Value.Plugin ? (slot.EditorOpen ? 2u : 1u) : 0u;
-		row.Handle->SetEnabled(_model.Editable && !_model.Inactive && !slot.Value.Pending && _model.TotalSlots > 1u);
 		row.Eligible = slot.Value.Plugin && slot.Value.Plugin->IsLoaded() && !slot.Value.Plugin->IsBypassed() && slot.Value.Plugin->MidiInput().Known
 			&& (slot.Value.Plugin->MidiInput().Notes || slot.Value.Plugin->MidiInput().Controllers);
 		const auto savedName = !slot.Value.Failed || slot.Value.Pending || slot.Value.Path.empty() ? std::string{} :
@@ -267,7 +266,6 @@ void GuiVstRack::_RebuildRows()
 			button->ReleaseResources(); _content->RemoveChild(button); button->DetachGuiOwnershipForRetirement();
 		}
 		row.Socket->ReleaseResources(); _content->RemoveChild(row.Socket); row.Socket->DetachGuiOwnershipForRetirement();
-		row.Handle->ReleaseResources(); _content->RemoveChild(row.Handle); row.Handle->DetachGuiOwnershipForRetirement();
 	}
 	_rows.clear();
 	std::vector<std::string> identities;
@@ -292,10 +290,6 @@ void GuiVstRack::_RebuildRows()
 			row.Buttons[i]->KeepReadableWhenDisabled = row.Missing;
 			_content->AddChild(row.Buttons[i]);
 		}
-		row.Handle = _MakeButton("=", "", [] { return Command{}; });
-		row.Handle->SetVisible(!row.Missing);
-		row.Handle->SetEnabled(!row.Missing && _model.Editable);
-		_content->AddChild(row.Handle);
 		base::GuiElementParams socket; socket.Size = {10u, 10u}; socket.MinSize = socket.Size;
 		socket.Texture = "hud_socket_cable"; socket.TextureShader = "texture_tinted";
 		socket.TintColor = row.Missing ? glm::vec3{1.0f, 0.25f, 0.2f} : glm::vec3{0.4f, 0.85f, 1.0f};
@@ -343,10 +337,8 @@ void GuiVstRack::_LayoutRows()
 	for (std::size_t i = 0u; i < _rows.size(); ++i)
 	{
 		const auto y = static_cast<int>(rowsHeight - (i + 1u) * _RowPitch);
-		for (auto& button : _rows[i].Buttons) { button->SetPosition({contentRect.Left, y}); button->SetSize({std::max(1u, rowWidth > 18u ? rowWidth - 18u : 1u), _RowHeight}); }
+		for (auto& button : _rows[i].Buttons) { button->SetPosition({contentRect.Left, y}); button->SetSize({rowWidth, _RowHeight}); }
 		_rows[i].Socket->SetPosition({contentRect.Left + 1, y + 13});
-		_rows[i].Handle->SetPosition({contentRect.Left + static_cast<int>(rowWidth) - 18, y});
-		_rows[i].Handle->SetSize({18u, _RowHeight});
 	}
 	_scroll->SetSize({_width, scrollHeight}); // Refresh content metrics without resetting scroll.
 	int bottom = top - static_cast<int>(scrollHeight) - static_cast<int>(_RowPitch);
@@ -394,12 +386,11 @@ void GuiVstRack::_RefreshChannelToggles()
 void GuiVstRack::CancelInteraction()
 {
 	if (_drag || _slotMove) _consumeRelease = true;
-	if (_slotMove) _feedback.clear();
+	if (_slotMove) _slotMove->SourceButton->ClearPointerState();
 	_slotMove.reset();
-	for (const auto& row : _rows) row.Handle->ApplyHoverState(false);
 	if (_channelPress) _toggles[_channelPress->Channel]->ClearPointerState();
 	_channelPress.reset();
-	_drag.reset(); _hovered = false;
+	_drag.reset(); _hovered = false; _hoveredSlot.reset();
 	if (_hoveredMidiSocket) _toggles[*_hoveredMidiSocket]->ApplyHoverState(false);
 	_hoveredMidiSocket.reset();
 	for (const auto& socket : _sourceSockets) socket->ApplyHoverState(false);
@@ -569,6 +560,9 @@ void GuiVstRack::_FinishDrag()
 
 void GuiVstRack::MovePointer(TouchMoveAction action)
 {
+	_hoveredSlot.reset();
+	for (const auto& row : _rows)
+		for (const auto& button : row.Buttons) button->ApplyHoverState(false);
 	if (_hoveredMidiSocket) _toggles[*_hoveredMidiSocket]->ApplyHoverState(false);
 	_hoveredMidiSocket.reset();
 	for (const auto& socket : _sourceSockets) socket->ApplyHoverState(false);
@@ -601,9 +595,12 @@ void GuiVstRack::MovePointer(TouchMoveAction action)
 		for (const auto& toggle : _toggles)
 			_hovered = _hovered || hitsControl(toggle, window);
 	const auto clip = _scroll->EffectiveContentRect(window);
-	for (const auto& row : _rows)
-		for (const auto& button : row.Buttons)
-			_hovered = _hovered || hitsControl(button, clip);
+	for (std::size_t i = 0u; i < _rows.size(); ++i)
+		if (const auto button = SlotButton(i); button && hitsControl(button, clip))
+		{
+			_hoveredSlot = i;
+			_hovered = true;
+		}
 }
 
 ActionResult GuiVstRack::OnAction(TouchMoveAction action)
@@ -652,7 +649,7 @@ ActionResult GuiVstRack::OnAction(TouchAction action)
 	{
 		if (action.Index == 1 && action.State == TouchAction::TOUCH_DOWN) CancelInteraction();
 		else if (action.Index == _slotMove->Index && action.Touch == _slotMove->Touch && action.State == TouchAction::TOUCH_UP)
-		{ _UpdateSlotMove(action.Position); _FinishSlotMove(); }
+		{ _UpdateSlotMove(action.Position); _FinishSlotMove(action); }
 		return _Captured();
 	}
 	if (_drag)
@@ -692,7 +689,7 @@ ActionResult GuiVstRack::OnAction(TouchAction action)
 					if (_submit) _submit(std::move(command)); _consumeRelease = true; return _Captured();
 				}
 		}
-		if (_BeginSlotMove(action) || _BeginDrag(action.Position)) return _Captured();
+		if (_BeginDrag(action.Position) || _BeginSlotMove(action)) return _Captured();
 	}
 	auto result = GuiElement::OnAction(action);
 	if (action.Index == 0 && action.State == TouchAction::TOUCH_DOWN && !_collapsed && result.IsEaten)
@@ -730,19 +727,20 @@ bool GuiVstRack::RouteHitTest(Position2d point)
 
 std::shared_ptr<base::GuiElement> GuiVstRack::FindTopmostDescendant(Position2d point)
 {
-	// Handles own their capture, independently of MIDI cable gestures.
-	if (IsEnabled() && IsVisible())
-	{
-		const auto global = point + GlobalPosition();
-		const auto clip = _scroll->EffectiveContentRect({0, 0, static_cast<int>(_viewport.Width), static_cast<int>(_viewport.Height)});
-		for (const auto& row : _rows)
-			if (row.Handle->IsVisible() && row.Handle->IsEnabled() && clip.Contains(global)
-				&& row.Handle->HitTest(row.Handle->GlobalToLocal(global))) return shared_from_this();
-	}
 	// Socket/cable gestures precede the underlying slot/channel buttons.
 	std::vector<CableInteraction::Endpoint> endpoints; std::vector<CableInteraction::Cable> cables; std::vector<Link> links;
 	_Geometry(endpoints, cables, links);
 	if (IsEnabled() && IsVisible() && (CableInteraction::HitEndpoint(endpoints, point, 9.0f) || CableInteraction::HitCable(cables, point, 5.0f))) return shared_from_this();
+	// The rack arbitrates clicks and drags on the same slot button.
+	if (IsEnabled() && IsVisible())
+	{
+		const auto global = point + GlobalPosition();
+		const auto clip = _scroll->EffectiveContentRect({0, 0, static_cast<int>(_viewport.Width), static_cast<int>(_viewport.Height)});
+		if (clip.Contains(global))
+			for (std::size_t i = 0u; i < _model.Slots.size(); ++i)
+				if (const auto button = SlotButton(i); button && button->IsEnabled()
+					&& button->HitTest(button->GlobalToLocal(global))) return shared_from_this();
+	}
 	return GuiElement::FindTopmostDescendant(point);
 }
 
@@ -775,10 +773,16 @@ void GuiVstRack::Draw(base::DrawContext& context)
 		_toggles[*_hoveredMidiSocket]->ApplyHoverState(true);
 		_sourceSockets[*_hoveredMidiSocket]->ApplyHoverState(true);
 	}
+	// Picking returns the rack so it can capture slot gestures; retain button hover feedback.
+	if (_hoveredSlot)
+		if (const auto button = SlotButton(*_hoveredSlot)) button->ApplyHoverState(true);
+	if (_slotMove && !_slotMove->Dragging)
+		_slotMove->SourceButton->ApplyHoverState(_slotMove->SourceButton->HitTest(
+			_slotMove->SourceButton->GlobalToLocal(_slotMove->Pointer + GlobalPosition())));
 	GuiElement::Draw(context);
 	auto& gl = dynamic_cast<graphics::GlDrawContext&>(context);
 	const auto p = Position(); gl.PushMvp(glm::translate(glm::mat4(1.0f), glm::vec3(p.X, p.Y, 0.0f)));
-	_DrawCables(context); gl.PopMvp();
+	_DrawCables(context); _DrawSlotMove(context); gl.PopMvp();
 }
 
 void GuiVstRack::_DrawCables(base::DrawContext& context)
@@ -834,55 +838,115 @@ void GuiVstRack::_DrawCables(base::DrawContext& context)
 	glBindVertexArray(0); glUseProgram(0);
 }
 
-std::shared_ptr<GuiButton> GuiVstRack::MoveHandle(std::size_t index) const
-{
-	return index < _rows.size() ? _rows[index].Handle : nullptr;
-}
-
 bool GuiVstRack::_BeginSlotMove(const TouchAction& action)
 {
 	if (!_model.Editable || _model.Inactive) return false;
 	const auto point = action.Position + GlobalPosition();
 	const auto clip = _scroll->EffectiveContentRect({0, 0, static_cast<int>(_viewport.Width), static_cast<int>(_viewport.Height)});
 	if (!clip.Contains(point)) return false;
-	for (const auto& row : _rows)
-		if (row.Handle->IsEnabled() && row.Handle->IsVisible() && row.Handle->HitTest(row.Handle->GlobalToLocal(point)))
-		{
-			vst::RackMove move{_model.OwnerScope, _model.OwnerId, row.Id, row.Ordinal, row.Ordinal, _model.Revision};
-			_slotMove = SlotMove{std::move(move), row.Ordinal, action.Index, action.Touch};
-			_UpdateSlotMove(action.Position);
-			return true;
-		}
+	for (std::size_t i = 0u; i < _model.Slots.size(); ++i)
+	{
+		const auto button = std::static_pointer_cast<Button>(SlotButton(i));
+		if (!button || !button->IsEnabled() || !button->HitTest(button->GlobalToLocal(point))) continue;
+		const auto& row = _rows[i];
+		vst::RackMove move{_model.OwnerScope, _model.OwnerId, row.Id, row.Ordinal, row.Ordinal, _model.Revision};
+		_slotMove = SlotMove{std::move(move), {}, button, action.Position, action.Position,
+			point - button->GlobalPosition(), false, action.Index, action.Touch};
+		auto press = action; press.Position = button->GlobalToLocal(point);
+		button->OnAction(press);
+		return true;
+	}
 	return false;
 }
 
 void GuiVstRack::_UpdateSlotMove(Position2d point)
 {
 	if (!_slotMove) return;
-	_slotMove->Target.reset();
+	auto& move = *_slotMove;
+	move.Pointer = point;
+	if (!move.Dragging)
+	{
+		if (_model.TotalSlots < 2u || (std::abs(point.X - move.Start.X) <= 4 && std::abs(point.Y - move.Start.Y) <= 4)) return;
+		move.Dragging = true;
+		move.SourceButton->ClearPointerState(); // A drag must never open the plugin editor on release.
+	}
+	move.Target.reset();
 	point = point + GlobalPosition();
 	const auto clip = _scroll->EffectiveContentRect({0, 0, static_cast<int>(_viewport.Width), static_cast<int>(_viewport.Height)});
-	for (const auto& row : _rows)
+	for (std::size_t i = 0u; i < _model.Slots.size(); ++i)
 	{
-		const auto p = row.Buttons[0]->GlobalPosition();
-		const auto size = row.Buttons[0]->GetSize();
-		const bool target = !row.Missing && Rect2d{p.X, p.Y, p.X + static_cast<int>(size.Width) + 18, p.Y + static_cast<int>(_RowHeight)}
-			.Intersected(clip).Contains(point);
-		row.Handle->ApplyHoverState(target);
-		if (target) _slotMove->Target = row.Ordinal;
+		const auto button = SlotButton(i);
+		const auto p = button->GlobalPosition(); const auto size = button->GetSize();
+		if (Rect2d{p.X, p.Y, p.X + static_cast<int>(size.Width), p.Y + static_cast<int>(size.Height)}
+			.Intersected(clip).Contains(point)) move.Target = _rows[i].Ordinal;
 	}
-	SetFeedback(_slotMove->Target ? "Move to slot " + std::to_string(*_slotMove->Target + 1u) : "Outside rack: cancel move");
 }
 
-void GuiVstRack::_FinishSlotMove()
+void GuiVstRack::_FinishSlotMove(const TouchAction& action)
 {
 	auto move = std::exchange(_slotMove, std::nullopt);
-	for (const auto& row : _rows) row.Handle->ApplyHoverState(false);
-	_feedback.clear();
-	if (!move || !move->Target || move->Move.Revision != _model.Revision || !_model.Editable
+	if (!move) return;
+	if (!move->Dragging)
+	{
+		auto release = action;
+		release.Position = move->SourceButton->GlobalToLocal(action.Position + GlobalPosition());
+		move->SourceButton->OnAction(release);
+		return;
+	}
+	if (!move->Target || move->Move.Revision != _model.Revision || !_model.Editable
 		|| *move->Target == move->Move.Source) return;
 	move->Move.Target = *move->Target;
 	Command command; command.Operation = Command::Kind::Move; command.Revision = move->Move.Revision;
 	command.Identity = move->Move.PluginId; command.Ordinal = move->Move.Source; command.Move = std::move(move->Move);
 	if (_submit) _submit(std::move(command));
+}
+
+void GuiVstRack::_DrawSlotMove(base::DrawContext& context)
+{
+	if (!_slotMove || !_slotMove->Dragging) return;
+	const auto shader = _cableShader.lock(); if (!shader || !_vertexArray) return;
+	// Four straight segments per rectangle, using the existing cable shader and VAO.
+	std::array<glm::vec4, 32> points{};
+	std::array<glm::vec4, 8> colors{};
+	std::size_t count = 0u;
+	const auto outline = [&](Rect2d rect, glm::vec4 color)
+	{
+		if (rect.IsEmpty()) return;
+		const std::array<glm::vec4, 4> corners{{
+			{rect.Left, rect.Bottom, 0, 0}, {rect.Right, rect.Bottom, 0, 0},
+			{rect.Right, rect.Top, 0, 0}, {rect.Left, rect.Top, 0, 0}}};
+		color.a *= context.Opacity();
+		for (auto i = 0u; i < 4u; ++i)
+		{
+			points[count * 4u] = points[count * 4u + 1u] = corners[i];
+			points[count * 4u + 2u] = points[count * 4u + 3u] = corners[(i + 1u) % 4u];
+			colors[count++] = color;
+		}
+	};
+	const auto origin = GlobalPosition();
+	const auto clip = _scroll->EffectiveContentRect({0, 0, static_cast<int>(_viewport.Width), static_cast<int>(_viewport.Height)})
+		.Translated({-origin.X, -origin.Y});
+	if (_slotMove->Target)
+		for (const auto& row : _rows)
+			if (row.Ordinal == *_slotMove->Target)
+			{
+				const auto p = row.Buttons[0]->GlobalPosition() - origin;
+				const auto size = row.Buttons[0]->GetSize();
+				outline(Rect2d{p.X, p.Y, p.X + static_cast<int>(size.Width), p.Y + static_cast<int>(size.Height)}.Intersected(clip),
+					{1.0f, 0.9f, 0.35f, 1.0f});
+			}
+	const auto p = _slotMove->Pointer - _slotMove->Offset;
+	const auto size = _slotMove->SourceButton->GetSize();
+	outline({p.X, p.Y, p.X + static_cast<int>(size.Width), p.Y + static_cast<int>(size.Height)},
+		_slotMove->Target ? glm::vec4{0.4f, 0.85f, 1.0f, 0.85f} : glm::vec4{1.0f, 0.3f, 0.25f, 0.85f});
+	auto& gl = dynamic_cast<graphics::GlDrawContext&>(context);
+	const auto program = shader->GetId(); glUseProgram(program); shader->SetUniforms(gl);
+	glUniform1i(glGetUniformLocation(program, "SegmentCount"), 2);
+	glUniform1i(glGetUniformLocation(program, "CableCount"), static_cast<int>(count));
+	glUniform4fv(glGetUniformLocation(program, "CableControlPoints"), static_cast<GLsizei>(count * 4u), reinterpret_cast<const GLfloat*>(points.data()));
+	glUniform4fv(glGetUniformLocation(program, "CableColors"), static_cast<GLsizei>(count), reinterpret_cast<const GLfloat*>(colors.data()));
+	GLfloat previousWidth; glGetFloatv(GL_LINE_WIDTH, &previousWidth);
+	glLineWidth(2.0f); glBindVertexArray(_vertexArray);
+	glDrawArraysInstanced(GL_LINES, 0, 2, static_cast<GLsizei>(count));
+	glBindVertexArray(0); glLineWidth(previousWidth); glUseProgram(0);
 }

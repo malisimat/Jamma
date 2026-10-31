@@ -71,7 +71,6 @@ namespace gui
 		std::shared_ptr<GuiButton> AppendButton() const;
 		std::shared_ptr<GuiToggle> ChannelsExpander() const;
 		std::shared_ptr<GuiButton> SlotButton(std::size_t index) const;
-		std::shared_ptr<GuiButton> MoveHandle(std::size_t index) const;
 		bool HasSlotMove() const noexcept { return _slotMove.has_value(); }
 		std::shared_ptr<GuiScrollPanel> SlotScroll() const { return _scroll; }
 		bool HasCableDrag() const noexcept { return _drag.has_value(); }
@@ -95,6 +94,7 @@ namespace gui
 		class Button;
 		class Socket;
 		std::optional<unsigned int> _hoveredMidiSocket;
+		std::optional<std::size_t> _hoveredSlot;
 		class Expander;
 		struct Row
 		{
@@ -104,7 +104,6 @@ namespace gui
 			bool Eligible = false;
 			std::array<std::shared_ptr<Button>, 4> Buttons;
 			std::shared_ptr<base::GuiElement> Socket;
-			std::shared_ptr<Button> Handle;
 		};
 		struct Link { unsigned int Channel; std::string Id; };
 		struct Drag
@@ -121,6 +120,9 @@ namespace gui
 		{
 			vst::RackMove Move;
 			std::optional<std::size_t> Target;
+			std::shared_ptr<Button> SourceButton;
+			utils::Position2d Start, Pointer, Offset;
+			bool Dragging = false;
 			int Index;
 			actions::TouchAction::TouchType Touch;
 		};
@@ -144,7 +146,8 @@ namespace gui
 		bool _BeginDrag(utils::Position2d point);
 		bool _BeginSlotMove(const actions::TouchAction& action);
 		void _UpdateSlotMove(utils::Position2d point);
-		void _FinishSlotMove();
+		void _FinishSlotMove(const actions::TouchAction& action);
+		void _DrawSlotMove(base::DrawContext& context);
 		void _UpdateDrag(utils::Position2d point);
 		void _FinishDrag();
 		void _RemoveLink(Routes& routes, const Link& link) const;

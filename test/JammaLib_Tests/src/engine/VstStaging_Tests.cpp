@@ -1515,7 +1515,7 @@ TEST_F(RackMoveTest, StationTakeAndLoopKeepInstancesStateAndSavedOrderInBothDire
  Check(MakeLoop(),vst::RackMove::Scope::Loop);
 }
 
-TEST(VstStaging, SlotMoveHandleIsSeparateFromCableDragAndCancelsOutsideEscapeOrStaleOwner)
+TEST(VstStaging, SlotButtonDragPreservesClicksAndCancelsOutsideEscapeOrStaleOwner)
 {
  gui::GuiRackParams params; params.Size = {220u,300u}; params.EnableVstControl = true; params.EnableVstRack = true;
  auto rack = std::make_shared<gui::GuiRack>(params); rack->SetPosition({300,700}); rack->Init();
@@ -1525,10 +1525,19 @@ TEST(VstStaging, SlotMoveHandleIsSeparateFromCableDragAndCancelsOutsideEscapeOrS
  std::vector<gui::GuiVstRack::Command> commands;
  const auto submit = [&](auto command) { commands.push_back(std::move(command)); };
  view->Update(model,submit); view->Layout(100u,0,{0,0},{20u,20u});
- const auto point = [&](std::size_t i) { return view->MoveHandle(i)->GlobalPosition() - view->GlobalPosition() + utils::Position2d{9,18}; };
+ const auto point = [&](std::size_t i) { return view->SlotButton(i)->GlobalPosition() - view->GlobalPosition() + utils::Position2d{40,18}; };
  actions::TouchAction touch; touch.Touch = actions::TouchAction::TOUCH_MOUSE; touch.Index = 0;
  const auto begin = [&] { touch.State = actions::TouchAction::TOUCH_DOWN; touch.Position = point(0u); EXPECT_TRUE(view->OnAction(touch).IsEaten); EXPECT_TRUE(view->HasSlotMove()); EXPECT_FALSE(view->HasCableDrag()); };
- begin(); touch.State = actions::TouchAction::TOUCH_UP; touch.Position = point(2u); view->OnAction(touch);
+ EXPECT_EQ(view, view->FindTopmostDescendant(point(0u)));
+ EXPECT_EQ(static_cast<unsigned int>(view->SlotScroll()->ContentRect().Right - view->SlotScroll()->ContentRect().Left), view->SlotButton(0u)->GetSize().Width);
+ begin(); touch.State = actions::TouchAction::TOUCH_UP; view->OnAction(touch);
+ ASSERT_EQ(1u, commands.size()); EXPECT_EQ(gui::GuiVstRack::Command::Kind::Slot, commands.back().Operation);
+ commands.clear();
+ begin(); touch.Position = point(2u);
+ actions::TouchMoveAction motion; motion.Touch = touch.Touch; motion.Index = touch.Index; motion.MouseButtonsDown = 1u; motion.Position = touch.Position;
+ view->OnAction(motion); view->Update(model, submit);
+ EXPECT_FALSE(view->TryGetChild(6u)->IsVisible()); // Drag hints must not create a Rack info footer.
+ touch.State = actions::TouchAction::TOUCH_UP; view->OnAction(touch);
  ASSERT_EQ(1u,commands.size()); EXPECT_EQ(0u,commands[0].Move.Source); EXPECT_EQ(2u,commands[0].Move.Target); EXPECT_EQ("slot-0",commands[0].Move.PluginId); EXPECT_EQ("owner",commands[0].Move.OwnerId);
  begin(); touch.State = actions::TouchAction::TOUCH_UP; touch.Position = {-1000,-1000}; view->OnAction(touch); EXPECT_EQ(1u,commands.size());
  begin(); actions::KeyAction escape; escape.KeyChar = 27u; escape.KeyActionType = actions::KeyAction::KEY_DOWN; view->OnAction(escape);
