@@ -790,9 +790,9 @@ TEST(MidiGridGesture, SplitEdgeCellsCreateOneNoteAndShareRemovalAndVelocity)
 		MidiGridGesture add;
 		ASSERT_TRUE(add.Begin(source, {clicked, 60u, clicked / 100.0}, 2u));
 		ASSERT_EQ(2u, add.Working().EventCount);
-		EXPECT_EQ(1u, add.Working().Events[0].sampleOffset);
+		EXPECT_EQ(0u, add.Working().Events[0].sampleOffset); // Stored before the +1 SHFT.
 		EXPECT_TRUE(add.Working().Events[0].IsNoteOff());
-		EXPECT_EQ(91u, add.Working().Events[1].sampleOffset);
+		EXPECT_EQ(90u, add.Working().Events[1].sampleOffset);
 		ASSERT_EQ(1u, add.Preview().size());
 		EXPECT_EQ(91u, add.Preview()[0].Start); EXPECT_EQ(101u, add.Preview()[0].End);
 		ASSERT_TRUE(add.Update({clicked == 0u ? 99u : 0u, 60u, clicked == 0u ? 0.99 : 0.0}));

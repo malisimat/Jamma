@@ -377,11 +377,9 @@ void LoopGridEditor::_FitPitchRange(const std::shared_ptr<MidiLoop>& midiLoop)
 	if (!model || !midiLoop->SnapshotForEdit(source))
 		return;
 	std::vector<MidiEvent> displayed(source.EventCount);
-	if (source.Quantisation.Enabled)
-		MidiQuantisation::BuildQuantisedPlaybackEvents(source.Events.data(),
-			source.EventCount, source.LoopLengthSamps, source.Quantisation,
-			source.QuantisationTransportStartSamps, displayed.data());
-	else std::copy_n(source.Events.begin(), source.EventCount, displayed.begin());
+	MidiQuantisation::BuildPlaybackEvents(source.Events.data(),
+		source.EventCount, source.LoopLengthSamps, source.Quantisation,
+		source.QuantisationTransportStartSamps, displayed.data());
 	const auto notes = MidiNote::ExtractSpans(displayed.data(),
 		displayed.size(), source.LoopLengthSamps);
 	int low = 127, high = 0;

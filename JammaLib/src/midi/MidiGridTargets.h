@@ -35,7 +35,7 @@ namespace midi
 			const auto count = source.EventCount;
 			if (count == 0u) return result;
 			std::vector<MidiEvent> displayed(count);
-			MidiQuantisation::BuildQuantisedPlaybackEvents(source.Events.data(), count,
+			MidiQuantisation::BuildPlaybackEvents(source.Events.data(), count,
 				source.LoopLengthSamps, source.Quantisation, source.QuantisationTransportStartSamps,
 				displayed.data(), false);
 			std::vector<std::size_t> order(count), off(count, count);
@@ -114,17 +114,17 @@ namespace midi
 			for (auto on : active) if (on != count) emit(on, source.LoopLengthSamps, count);
 			// ExtractSpans appends circular spans after ordinary spans. A quantised
 			// circular source can become ordinary, so use the displayed seam flags.
-			for (std::size_t slot = 0u; slot < crossingOn.size(); ++slot)
-				for (std::size_t i = 0u; i < (std::min)(crossingOn[slot].size(), crossingOff[slot].size()); ++i)
+			for (std::size_t on = 0u; on < count; ++on)
 				{
-					const auto on = crossingOn[slot][i], release = crossingOff[slot][i];
+					if (!source.Events[on].IsNoteOn() || off[on] == count) continue;
+					const auto release = off[on];
 					const auto& ev = displayed[on];
 					if (!(ev.flags & MidiEvent::TriggerSeamEndpoint)) continue;
 					const auto duration = static_cast<std::uint64_t>(source.LoopLengthSamps)
 						- ev.sampleOffset + displayed[release].sampleOffset;
 					if (duration == 0u || duration > source.LoopLengthSamps) continue;
 					result.Notes.push_back({ev.sampleOffset, ev.sampleOffset + static_cast<std::uint32_t>(duration),
-						ev.data1, on, release, false, ev.flags});
+						ev.data1, on, release, ambiguous[on], ev.flags});
 				}
 			return result;
 		}

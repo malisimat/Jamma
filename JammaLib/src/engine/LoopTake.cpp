@@ -1859,6 +1859,7 @@ std::shared_ptr<Loop> LoopTake::AddLoop(unsigned int chan, std::string stationNa
 
 void LoopTake::AddLoop(std::shared_ptr<Loop> loop)
 {
+	loop->SetInheritedPlaybackOffsetSamps(ResolvedMidiQuantisation().PhaseOffsetSamps);
 	loop->SetAutomationTopologyChangedCallback(_automationTopologyChanged);
 	loop->SetCaptureSourceMuteControl(_captureSourceMuteControl);
 	_backLoops.push_back(loop);
@@ -3533,6 +3534,7 @@ bool LoopTake::RestoreMidiFromExport(const MidiExportState& state)
 	_midiAnchorCorrection.store(0, std::memory_order_release);
 	_midiTransportStartSamps.store(state.QuantisationTransportStartSamps, std::memory_order_release);
 	_midiQuantisationPacked.store(state.Quantisation.Pack(), std::memory_order_release);
+	_ApplyAudioPhaseOffset();
 	_midiBaseGridPacked.store((static_cast<std::uint64_t>(state.BaseIntervalSamps) << 32u) | state.BaseDivisions, std::memory_order_release);
 	for (const auto& loop : _midiLoops)
 		loop->SetQuantisation(ResolvedMidiQuantisation(), state.QuantisationTransportStartSamps, _ForcedMidiQuantisationEnabled());
@@ -3708,10 +3710,20 @@ void LoopTake::_UpdateMidiModelRotation()
 	}
 }
 
+void LoopTake::_ApplyAudioPhaseOffset() noexcept
+{
+	const auto offset = ResolvedMidiQuantisation().PhaseOffsetSamps;
+	for (const auto& loop : _loops)
+		if (loop) loop->SetInheritedPlaybackOffsetSamps(offset);
+	for (const auto& loop : _backLoops)
+		if (loop) loop->SetInheritedPlaybackOffsetSamps(offset);
+}
+
 void LoopTake::SetMidiQuantisation(const midi::MidiQuantisationSettings& settings) noexcept
 {
 	const auto previous = MidiQuantisation();
 	_midiQuantisationPacked.store(settings.Pack(), std::memory_order_release);
+	_ApplyAudioPhaseOffset();
 
 	if (previous != settings)
 	{
@@ -3821,6 +3833,7 @@ void LoopTake::SetMidiQuantisationInheritedPhaseOffset(std::int32_t offsetSamps)
 {
 	const auto previous = ResolvedMidiQuantisation();
 	_midiInheritedPhaseOffsetSamps.store(offsetSamps, std::memory_order_release);
+	_ApplyAudioPhaseOffset();
 	const auto updated = ResolvedMidiQuantisation();
 
 	if (previous != updated)

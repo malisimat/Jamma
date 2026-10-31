@@ -544,6 +544,7 @@ namespace engine
 			base::AudioSource::AudioSourceType source) const;
 
 	private:
+		void _ApplyAudioPhaseOffset() noexcept;
 		static bool _HasMidiQuantisationGestureModifiers(base::Action::Modifiers modifiers) noexcept;
 		static unsigned long _NormalizeLoopIndex(long long index, unsigned long loopLength) noexcept;
 		static std::uint32_t _NormalizeMidiLoopOffset(std::uint32_t offset,

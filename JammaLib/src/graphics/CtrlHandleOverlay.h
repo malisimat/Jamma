@@ -3,6 +3,7 @@
 #include <array>
 #include <memory>
 #include <optional>
+#include <string>
 #include <gl/glew.h>
 #include "glm/glm.hpp"
 #include "../utils/CommonTypes.h"
@@ -39,6 +40,8 @@ namespace graphics
 		void SetVisibleButtonCount(int count) noexcept;
 		void SetActiveButton(int index) noexcept { _activeButton = index; }
 		void SetButtonScope(int index, ButtonScope scope) noexcept;
+		void SetScopeLabel(const std::string& text);
+		const std::string& ScopeLabel() const noexcept { return _scopeText; }
 		int VisibleButtonCount() const noexcept { return _visibleButtonCount; }
 		int HitTestButton(utils::Position2d pos) const noexcept;
 		std::optional<utils::Position2d> ButtonCenter(int index) const noexcept;
@@ -82,6 +85,8 @@ namespace graphics
 		int _visibleButtonCount = NumButtons;
 		int _activeButton = -1;
 		std::array<std::shared_ptr<gui::GuiLabel>, NumButtons> _captions;
+		std::shared_ptr<gui::GuiLabel> _scopeLabel;
+		std::string _scopeText;
 		std::array<ButtonScope, NumButtons> _buttonScopes = {
 			ButtonScope::Global,
 			ButtonScope::Global

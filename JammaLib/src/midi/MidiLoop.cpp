@@ -1315,8 +1315,9 @@ bool MidiLoop::MergePlaybackSeamNotes(PlaybackSnapshot& snapshot)
 				const auto cell = MidiQuantisation::NearestBoundaryIndex(transport + start - origin,
 					grid.GridInterval(), grid.GridDivisions());
 				start = origin + MidiQuantisation::BoundarySampleAt(cell,
-					grid.GridInterval(), grid.GridDivisions()) - transport + grid.PhaseOffsetSamps;
+					grid.GridInterval(), grid.GridDivisions()) - transport;
 			}
+			start += grid.PhaseOffsetSamps;
 			if (event.flags & TriggerSeamEndpoint) crossing[slot].push_back(spans.size());
 			else pending[slot].push_back(spans.size());
 			spans.push_back({ i, count, spans.size(), start, start });
@@ -1428,7 +1429,8 @@ bool MidiLoop::MergePlaybackSeamNotes(PlaybackSnapshot& snapshot)
 	for (std::size_t i = 0u; i < spans.size(); ++i)
 	{
 		const auto& span = spans[i];
-		if (!(snapshot.Raw[span.On].flags & TriggerSeamEndpoint) || span.Off == count) continue;
+		if (span.Off == count || (!(snapshot.Raw[span.On].flags & TriggerSeamEndpoint)
+			&& grid.PhaseOffsetSamps == 0)) continue;
 		const auto start = ((span.Start % length) + length) % length;
 		const auto duration = span.End - span.Start;
 		snapshot.Quantised[span.On].sampleOffset = static_cast<std::uint32_t>(start);
@@ -1437,6 +1439,11 @@ bool MidiLoop::MergePlaybackSeamNotes(PlaybackSnapshot& snapshot)
 		{
 			snapshot.Quantised[span.On].flags &= static_cast<std::uint8_t>(~TriggerSeamEndpoint);
 			snapshot.Quantised[span.Off].flags &= static_cast<std::uint8_t>(~TriggerSeamEndpoint);
+		}
+		else
+		{
+			snapshot.Quantised[span.On].flags |= TriggerSeamEndpoint;
+			snapshot.Quantised[span.Off].flags |= TriggerSeamEndpoint;
 		}
 		snapshot.QuantisedUnmatchedStarts[span.On] = start + duration >= length ? MergedContinuation : 0u;
 		snapshot.QuantisedContinuationRoots[span.On] = static_cast<std::uint16_t>(i + 1u);
@@ -1548,16 +1555,12 @@ bool MidiLoop::PublishCompletedEvents(const MidiEvent* raw, std::size_t count,
 	BuildChaseHead(snapshot, false);
 	snapshot.QuantisationActive = effectiveQuantisation.Enabled
 		&& effectiveQuantisation.GridInterval() > 0u && effectiveQuantisation.GridDivisions() > 0u && count > 0u;
-	if (snapshot.QuantisationActive)
-	{
-		MidiQuantisation::BuildQuantisedPlaybackEvents(snapshot.Raw.data(), count,
-			length, effectiveQuantisation, effectiveTransportStart, snapshot.Quantised.data(), false);
-	}
-	else
-		std::copy_n(snapshot.Raw.begin(), count, snapshot.Quantised.begin());
+	MidiQuantisation::BuildPlaybackEvents(snapshot.Raw.data(), count,
+		length, effectiveQuantisation, effectiveTransportStart, snapshot.Quantised.data(), false);
+	const bool shifted = effectiveQuantisation.PhaseOffsetSamps != 0 && length > 0u;
 	std::copy_n(snapshot.RawUnmatchedStarts.begin(), count, snapshot.QuantisedUnmatchedStarts.begin());
 	snapshot.QuantisedContinuationRoots.fill(0u);
-	snapshot.PlaybackViewActive = MergePlaybackSeamNotes(snapshot) || snapshot.QuantisationActive;
+	snapshot.PlaybackViewActive = MergePlaybackSeamNotes(snapshot) || snapshot.QuantisationActive || shifted;
 	if (snapshot.PlaybackViewActive)
 	{
 		MidiNote::SortMidiEvents(snapshot.Quantised.data(), count, snapshot.QuantisedUnmatchedStarts.data(),

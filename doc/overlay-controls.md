@@ -10,6 +10,8 @@ green locally; division uses orange globally and red locally. Dragging shows
 only the active handle and its caption. The bottom status area temporarily shows
 scope, signed shift in ms/samples, or fraction/divisions, including mixed values.
 Normal status returns when the gesture ends.
+The panel also labels its captured scope: Global, Station, Take or Loop, with
+the number of local targets. This label stays fixed while Ctrl holds that capture.
 
 ## Scope and capture
 
@@ -20,7 +22,8 @@ targets are supported. A shift drag applies one absolute offset to the captured
 targets, while DIV chooses one fraction; its press feedback reports mixed values.
 
 - Station: SHFT changes station offset; DIV changes the station's current takes.
-- Take: SHFT and DIV change the captured take settings.
+- Take: SHFT moves every audio and MIDI loop in the captured takes, preserving
+  loop-local shifts. DIV changes the captured take settings.
 - MIDI loop: SHFT is a stream-local additive offset; DIV is a stream-local
   fraction/enable override. Sibling MIDI streams keep their settings. A missing
   override inherits take settings.
@@ -38,6 +41,11 @@ that creation default.
 Global Off/All still controls playback enablement; Mixed uses take/loop choices.
 Global, station, take and stream offsets are composed once. Stream overrides
 and local tap base grids are saved separately from the unchanged packed fields.
+SHFT moves MIDI playback even with quantisation off, including exact editor
+events; it does not enable snapping or rewrite recorded events. Station and
+global SHFT also propagate to audio loops through their takes.
+With snapping enabled, events and the grid receive the same composed offset;
+note-ons snap to the shifted grid and note-offs follow to retain note duration.
 
 Release Ctrl during a drag to retain its capture and grid hold. Mouse release
 ends the gesture. Escape, capture/focus loss and deleted targets release the

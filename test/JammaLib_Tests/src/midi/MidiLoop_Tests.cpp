@@ -1418,6 +1418,88 @@ TEST(MidiLoop, EndRecordWithPowerQuantisationSnapsToPowerOfTwo) {
 
 // ── Slice 6: Non-destructive per-LoopTake MIDI quantisation ───────────────────
 
+TEST(MidiLoopQuantisation, PhaseShiftMovesPlaybackWithSnappingOffAndExactEvents)
+{
+	for (const bool enabled : {false, true})
+	for (const bool exact : {false, true})
+	for (const int phase : {-300, 200})
+	{
+		MidiLoop loop;
+		const std::array source = {
+			MidiEvent::MakeNoteOn(150u, 0u, 60u, 100u).WithFlags(exact ? MidiEvent::ExactTiming : 0u),
+			MidiEvent::MakeNoteOff(450u, 0u, 60u).WithFlags(exact ? MidiEvent::ExactTiming : 0u),
+			MidiEvent{500u, 0xb0u, 1u, 64u}};
+		loop.ReplaceRecordedEvents(source.data(), source.size(), 1000u);
+		MidiQuantisationSettings settings;
+		settings.Enabled = enabled;
+		settings.GrainSamps = 100u;
+		settings.Fraction = MidiQuantisationFraction::Whole;
+		settings.PhaseOffsetSamps = phase;
+		ASSERT_TRUE(loop.SetQuantisation(settings));
+		MidiLoopCapturingSink sink;
+		loop.ReadBlock(0u, 2000u, sink);
+		std::vector<unsigned int> attacks;
+		for (const auto& event : sink.events)
+			if (event.IsNoteOn()) attacks.push_back(event.sampleOffset);
+		ASSERT_EQ(2u, attacks.size());
+		const auto start = enabled && !exact ? 200 : 150;
+		EXPECT_EQ(static_cast<unsigned int>((start + phase + 1000) % 1000), attacks[0]);
+		EXPECT_EQ(attacks[0] + 1000u, attacks[1]);
+		const auto release = std::find_if(sink.events.begin(), sink.events.end(),
+			[&](const auto& event) { return event.IsNoteOff() && event.sampleOffset > attacks[0]; });
+		ASSERT_NE(sink.events.end(), release);
+		EXPECT_EQ(attacks[0] + 300u, release->sampleOffset);
+		const auto cc = std::find_if(sink.events.begin(), sink.events.end(),
+			[](const auto& event) { return event.MessageType() == 0xb0u; });
+		ASSERT_NE(sink.events.end(), cc);
+		EXPECT_EQ(static_cast<unsigned int>(500 + phase), cc->sampleOffset);
+		MidiEvent raw;
+		ASSERT_TRUE(loop.TryGetEvent(0u, raw));
+		EXPECT_EQ(150u, raw.sampleOffset);
+		settings.PhaseOffsetSamps = 0;
+		ASSERT_TRUE(loop.SetQuantisation(settings));
+		sink.Clear();
+		loop.ReadBlock(2000u, 1000u, sink);
+		const auto attack = std::find_if(sink.events.begin(), sink.events.end(),
+			[](const auto& event) { return event.IsNoteOn(); });
+		ASSERT_NE(sink.events.end(), attack);
+		EXPECT_EQ(2000u + start, attack->sampleOffset);
+	}
+}
+
+TEST(MidiLoopQuantisation, ShiftedEditorTargetsAndEditsUsePlaybackCoordinates)
+{
+	for (bool enabled : {false, true})
+	for (int phase : {-500, -200, 200, 400, 500})
+	{
+		MidiLoop loop;
+		loop.ReplaceRecordedEvents(nullptr, 0u, 1000u);
+		MidiQuantisationSettings settings;
+		settings.Enabled = enabled; settings.GrainSamps = 100u; settings.PhaseOffsetSamps = phase;
+		ASSERT_TRUE(loop.SetQuantisation(settings));
+		MidiLoop::EditState edit;
+		ASSERT_TRUE(loop.SnapshotForEdit(edit));
+		ASSERT_TRUE(midi::MidiEditOperations::CreateExact(edit, 250u, 400u, 0u, 60u));
+		ASSERT_EQ(2u, edit.EventCount);
+		const auto rawOn = std::find_if(edit.Events.begin(), edit.Events.begin() + edit.EventCount,
+			[](const auto& event) { return event.IsNoteOn(); });
+		ASSERT_NE(edit.Events.begin() + edit.EventCount, rawOn);
+		EXPECT_EQ(static_cast<unsigned int>((250 - phase + 1000) % 1000), rawOn->sampleOffset);
+		auto targets = midi::MidiGridTargets::Build(edit);
+		ASSERT_EQ(1u, targets.Notes.size());
+		EXPECT_EQ(250u, targets.Notes[0].Start);
+		EXPECT_EQ(400u, targets.Notes[0].End);
+		ASSERT_TRUE(midi::MidiEditOperations::MoveOrTrim(edit, targets.Notes[0].On, 500u, 650u, 62u));
+		ASSERT_TRUE(loop.PublishEdit(edit));
+		MidiLoopCapturingSink sink;
+		loop.ReadBlock(0u, 1000u, sink);
+		ASSERT_EQ(2u, sink.events.size());
+		EXPECT_EQ(500u, sink.events[0].sampleOffset);
+		EXPECT_EQ(650u, sink.events[1].sampleOffset);
+		EXPECT_EQ(62u, sink.events[0].data1);
+	}
+}
+
 TEST(MidiLoopQuantisation, EnabledShiftsEmittedEventsToSnapGrid) {
 	MidiLoop loop;
 	loop.StartRecord();

@@ -426,7 +426,7 @@ unsigned int Loop::ReadBlock(float* outBuf,
 	// _playIndex is always within range:
 	// [constants::MaxLoopFadeSamps : _loopLength + constants::MaxLoopFadeSamps - 1)
 	// index should apply the offset and then also stay in the same range
-	const auto targetOffset = PlaybackOffsetSamps();
+	const auto targetOffset = TotalPlaybackOffsetSamps();
 	const bool exactTargetOffset = _playbackOffsetRate == 0.0 && _playbackOffsetStart == targetOffset;
 	const auto playbackOffset = exactTargetOffset ? static_cast<std::int64_t>(targetOffset)
 		: static_cast<std::int64_t>(std::llround(_playbackOffsetStart));
@@ -1971,7 +1971,7 @@ void engine::Loop::_AdvancePlaybackOffset(unsigned int numSamps) noexcept
     static_assert(std::atomic<double>::is_always_lock_free);
     const auto length = LoopLength();
     _InitialisePlaybackOffset();
-    const auto target = static_cast<double>(PlaybackOffsetSamps());
+    const auto target = static_cast<double>(TotalPlaybackOffsetSamps());
     if (_playbackOffsetRate == 0.0 && _playbackOffsetStart == target) return;
     _playbackOffsetStart = _PlaybackOffsetAtFrame(numSamps);
     _playbackOffsetEnd = _playbackOffsetStart;
@@ -2004,7 +2004,7 @@ void engine::Loop::_InitialisePlaybackOffset() noexcept
         _playbackOffsetLength = length;
         return;
     }
-    _playbackOffsetStart = _playbackOffsetEnd = static_cast<double>(PlaybackOffsetSamps());
+    _playbackOffsetStart = _playbackOffsetEnd = static_cast<double>(TotalPlaybackOffsetSamps());
     _playbackOffsetRate = 0.0;
     _playbackOffsetInitialised = true;
     _playbackOffsetLength = length;

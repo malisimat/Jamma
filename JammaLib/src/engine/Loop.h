@@ -126,7 +126,8 @@ namespace engine
 			_loopLength(other._loopLength.load(std::memory_order_relaxed)),
 			_playState(other._playState.load(std::memory_order_relaxed)),
 			_playbackOffsetSamps(other.PlaybackOffsetSamps()),
-			_appliedPlaybackOffsetSamps(other.PlaybackOffsetSamps()),
+			_inheritedPlaybackOffsetSamps(other._inheritedPlaybackOffsetSamps.load(std::memory_order_relaxed)),
+			_appliedPlaybackOffsetSamps(static_cast<double>(other.TotalPlaybackOffsetSamps())),
 			_playIndex(other._playIndex.load(std::memory_order_relaxed)),
 			_loopParams{other._loopParams},
 			_mixer(std::move(other._mixer)),
@@ -180,6 +181,8 @@ namespace engine
 				_writeIndex.store(other._writeIndex.exchange(writeIndex, std::memory_order_relaxed), std::memory_order_relaxed);
 				auto offset = PlaybackOffsetSamps();
 				_playbackOffsetSamps.store(other._playbackOffsetSamps.exchange(offset, std::memory_order_relaxed), std::memory_order_relaxed);
+				const auto inheritedOffset = _inheritedPlaybackOffsetSamps.load(std::memory_order_relaxed);
+				_inheritedPlaybackOffsetSamps.store(other._inheritedPlaybackOffsetSamps.exchange(inheritedOffset, std::memory_order_relaxed), std::memory_order_relaxed);
 				_playbackOffsetInitialised = other._playbackOffsetInitialised = false;
 				_playbackOffsetPublished.store(false, std::memory_order_relaxed);
 				other._playbackOffsetPublished.store(false, std::memory_order_relaxed);
@@ -353,10 +356,14 @@ namespace engine
 		// Positive SHFT delays this audio source; transport/anchor cursors stay unchanged.
 		void SetPlaybackOffsetSamps(std::int32_t samples) noexcept { _playbackOffsetSamps.store(samples, std::memory_order_relaxed); }
 		std::int32_t PlaybackOffsetSamps() const noexcept { return _playbackOffsetSamps.load(std::memory_order_relaxed); }
+		// Owner-published take/station/global sum; persisted at those owners only.
+		void SetInheritedPlaybackOffsetSamps(std::int32_t samples) noexcept { _inheritedPlaybackOffsetSamps.store(samples, std::memory_order_relaxed); }
+		std::int64_t TotalPlaybackOffsetSamps() const noexcept
+		{ return static_cast<std::int64_t>(PlaybackOffsetSamps()) + _inheritedPlaybackOffsetSamps.load(std::memory_order_relaxed); }
 		// Before first audio publication, initial targets are already exact for presentation.
 		double AppliedPlaybackOffsetSamps() const noexcept
 		{ return _playbackOffsetPublished.load(std::memory_order_acquire)
-			? _appliedPlaybackOffsetSamps.load(std::memory_order_relaxed) : PlaybackOffsetSamps(); }
+			? _appliedPlaybackOffsetSamps.load(std::memory_order_relaxed) : TotalPlaybackOffsetSamps(); }
 		unsigned long PlaybackBodyIndex() const noexcept;
 		static unsigned long OffsetBodyIndex(unsigned long phase, unsigned long length, std::int64_t offset) noexcept;
 		unsigned long PlayIndex() const noexcept
@@ -508,6 +515,7 @@ namespace engine
 		// Source coordinates exclude plugin latency. Recorded rendering applies
 		// compensation after the loop chain, preserving capture/fade coordinates.
 		std::atomic<std::int32_t> _playbackOffsetSamps{ 0 };
+		std::atomic<std::int32_t> _inheritedPlaybackOffsetSamps{ 0 };
 		std::atomic<double> _appliedPlaybackOffsetSamps{ 0.0 };
 		std::atomic<bool> _playbackOffsetPublished{ false };
 		// Callback-owned trajectory; reads evaluate it without advancing it.

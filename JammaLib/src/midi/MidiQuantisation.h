@@ -173,6 +173,11 @@ namespace midi
 		// Build the canonical quantised event view used by playback and rendering.
 		// This is intended for non-realtime publication paths; callers still own
 		// the destination storage.
+		// Equivalent to shifting events and grid together before snapping.
+		static void BuildPlaybackEvents(const MidiEvent* src, std::size_t eventCount,
+			std::uint32_t loopLength, const MidiQuantisationSettings& settings,
+			std::uint64_t transportStartSamps, MidiEvent* dst, bool sort = true) noexcept;
+
 		static void BuildQuantisedPlaybackEvents(const MidiEvent* src,
 			std::size_t eventCount,
 			std::uint32_t loopLength,

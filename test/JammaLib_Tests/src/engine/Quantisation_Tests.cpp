@@ -1130,6 +1130,100 @@ TEST(QuantisationController, CapturedSelectionSurvivesChangesAndCancelPreservesC
 	EXPECT_FALSE(controller.EditModeActive());
 }
 
+TEST(QuantisationController, TakeShiftDelegatesToMixedLoopsAndKeepsCapturedScope)
+{
+	auto take = MakeQuantisationContractTake("mixed", 96000ul);
+	auto other = MakeQuantisationContractTake("other", 96000ul);
+	engine::LoopParams params;
+	params.Size = {80, 80};
+	auto audioLoop = std::make_shared<engine::Loop>(params,
+		engine::Loop::GetMixerParams({80, 80}, audio::WireMixBehaviourParams{}));
+	audioLoop->SetPlaybackOffsetSamps(100);
+	take->CompleteAudio({audioLoop});
+	auto midiLoop = std::make_shared<midi::MidiLoop>();
+	take->AddMidi(midiLoop);
+	auto streamSettings = midiLoop->GetLoopQuantisationOverride();
+	streamSettings.PhaseOffsetSamps = 50;
+	take->SetMidiLoopQuantisationOverride(midiLoop, streamSettings);
+	take->Select();
+	auto station = std::make_shared<QuantisationContractStation>();
+	station->AddTake(take);
+	station->AddTake(other);
+	graphics::CtrlHandleOverlay overlay;
+	engine::Quantiser quantiser;
+	std::vector<std::shared_ptr<engine::Station>> stations = {station};
+	engine::QuantiserController controller(overlay, quantiser, stations);
+	engine::QuantisationInteractionContext context;
+	context.SelectDepth = base::DEPTH_LOOPTAKE;
+	context.CursorPos = {200, 200};
+	context.ViewportSize = {800, 600};
+	const engine::QuantiserController::ChildResolver resolve = [other](const auto&) { return other; };
+	controller.OnCtrlModifierChanged(true, utils::Timer::GetTime(), context, resolve);
+	EXPECT_EQ("Take (1)", overlay.ScopeLabel());
+	take->DeSelect();
+	other->Select();
+	actions::TouchAction press;
+	press.State = actions::TouchAction::TOUCH_DOWN;
+	press.Index = 0;
+	press.Position = overlay.ButtonCenter(0).value();
+	ASSERT_TRUE(controller.TryHandleTouchAction(press, 48000u, true, context, resolve)->IsEaten);
+	actions::TouchMoveAction move;
+	move.Position = press.Position;
+	move.Position.X += 50;
+	controller.TryHandleTouchMove(move, 48000u);
+	EXPECT_EQ(2400, take->MidiQuantisation().PhaseOffsetSamps);
+	EXPECT_EQ(2500, audioLoop->TotalPlaybackOffsetSamps());
+	EXPECT_EQ(100, audioLoop->PlaybackOffsetSamps()); // Stream setting stays separate for save/load.
+	EXPECT_EQ(0, other->MidiQuantisation().PhaseOffsetSamps);
+	EXPECT_EQ("Take (1)", overlay.ScopeLabel());
+	// Station and global offsets compose once with each take and loop offset.
+	station->SetStationPhaseOffsetSamps(300);
+	station->SetGlobalPhaseOffsetSamps(-200);
+	EXPECT_EQ(2600, audioLoop->TotalPlaybackOffsetSamps());
+	EXPECT_EQ(2500, take->ResolvedMidiQuantisation().PhaseOffsetSamps);
+	EXPECT_EQ(2550, take->ResolvedMidiQuantisationFor(midiLoop).PhaseOffsetSamps);
+	EXPECT_EQ(100, other->ResolvedMidiQuantisation().PhaseOffsetSamps);
+	station->SetStationPhaseOffsetSamps(300);
+	EXPECT_EQ(2600, audioLoop->TotalPlaybackOffsetSamps());
+	controller.CancelInteraction(true);
+	context.SelectDepth = base::DEPTH_STATION;
+	station->Select();
+	controller.OnCtrlModifierChanged(true, utils::Timer::GetTime(), context, resolve);
+	EXPECT_EQ("Station (1)", overlay.ScopeLabel());
+	press.Position = overlay.ButtonCenter(0).value();
+	ASSERT_TRUE(controller.TryHandleTouchAction(press, 48000u, true, context, resolve)->IsEaten);
+	move.Position = press.Position; move.Position.X += 50;
+	controller.TryHandleTouchMove(move, 48000u);
+	EXPECT_EQ(2700, station->StationPhaseOffsetSamps());
+	EXPECT_EQ(5000, audioLoop->TotalPlaybackOffsetSamps());
+	EXPECT_EQ(4950, take->ResolvedMidiQuantisationFor(midiLoop).PhaseOffsetSamps);
+	EXPECT_EQ(2400, take->MidiQuantisation().PhaseOffsetSamps);
+	EXPECT_EQ(100, audioLoop->PlaybackOffsetSamps());
+	// Double-click each captured parent: reset only that level, not its children.
+	for (const auto depth : {base::DEPTH_STATION, base::DEPTH_LOOPTAKE})
+	{
+		controller.CancelInteraction(true);
+		take->Select(); other->DeSelect();
+		context.SelectDepth = depth;
+		const auto clickTime = utils::Timer::GetTime();
+		controller.OnCtrlModifierChanged(true, clickTime, context, resolve);
+		press.Position = overlay.ButtonCenter(0).value();
+		for (int click = 0; click < 2; ++click)
+		{
+			press.State = actions::TouchAction::TOUCH_DOWN;
+			press.SetActionTime(clickTime + std::chrono::milliseconds(click * 10));
+			ASSERT_TRUE(controller.TryHandleTouchAction(press, 48000u, true, context, resolve)->IsEaten);
+			press.State = actions::TouchAction::TOUCH_UP;
+			controller.TryHandleTouchAction(press, 48000u, true, context, resolve);
+		}
+		EXPECT_EQ(0, station->StationPhaseOffsetSamps());
+		EXPECT_EQ(depth == base::DEPTH_STATION ? 2400 : 0, take->MidiQuantisation().PhaseOffsetSamps);
+		EXPECT_EQ(depth == base::DEPTH_STATION ? 2300 : -100, audioLoop->TotalPlaybackOffsetSamps());
+		EXPECT_EQ(100, audioLoop->PlaybackOffsetSamps());
+		EXPECT_EQ(50, midiLoop->GetLoopQuantisationOverride().PhaseOffsetSamps);
+	}
+}
+
 TEST(QuantisationController, LoopDragChangesCapturedMidiStreamAndDeletionReleasesGesture)
 {
 	auto take = MakeQuantisationContractTake("midi-scope", 96000ul);

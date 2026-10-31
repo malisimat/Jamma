@@ -1175,6 +1175,20 @@ std::shared_ptr<GuiElement> QuantiserController::_HoverElement(const Quantisatio
 void QuantiserController::_ApplyOverlayScopes(const QuantisationInteractionContext& context,
 	const ChildResolver& childResolver)
 {
+	const auto target = _ctrlOverlayContext ? _capturedPhaseTarget : _ResolveMidiPhaseDragTarget(context, childResolver);
+	std::string scope = "Global";
+	std::size_t count = 0;
+	switch (target.Kind)
+	{
+	case MidiPhaseDragTargetKind::Station: scope = "Station"; count = target.StationTargets.size(); break;
+	case MidiPhaseDragTargetKind::LoopTake: scope = "Take"; count = target.TakeTargets.size(); break;
+	case MidiPhaseDragTargetKind::MidiLoop:
+	case MidiPhaseDragTargetKind::AudioLoop:
+		scope = "Loop"; count = target.AudioTargets.size() + target.MidiTargets.size(); break;
+	default: break;
+	}
+	if (count > 0) scope += " (" + std::to_string(count) + ")";
+	_overlay.SetScopeLabel(scope);
 	_overlay.SetButtonScope(0,
 		(_ctrlOverlayContext ? _capturedPhaseTarget.Kind == MidiPhaseDragTargetKind::Global : _IsPhaseGlobalTarget(context, childResolver))
 			? graphics::CtrlHandleOverlay::ButtonScope::Global
@@ -1773,6 +1787,7 @@ void QuantiserController::_SetMidiPhaseOffsetForTarget(const MidiPhaseDragTarget
 			settings.PhaseOffsetSamps = offsetSamps;
 			take->SetMidiQuantisation(settings);
 		}
+		_quantisation.UpdateStationHints(nullptr, base::DEPTH_LOOPTAKE, false, _stations);
 		break;
 	case MidiPhaseDragTargetKind::Global:
 	default:

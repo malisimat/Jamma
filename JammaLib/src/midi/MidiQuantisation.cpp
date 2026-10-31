@@ -166,6 +166,57 @@ void MidiQuantisation::QuantiseEvents(const MidiEvent* src,
 	}
 }
 
+void MidiQuantisation::BuildPlaybackEvents(const MidiEvent* src, std::size_t eventCount,
+	std::uint32_t loopLength, const MidiQuantisationSettings& settings,
+	std::uint64_t transportStartSamps, MidiEvent* dst, bool sort) noexcept
+{
+	if (!src || !dst || !eventCount) return;
+	auto grid = settings;
+	grid.PhaseOffsetSamps = 0;
+	BuildQuantisedPlaybackEvents(src, eventCount, loopLength, grid, transportStartSamps, dst, false);
+	if (settings.PhaseOffsetSamps != 0 && loopLength > 0u)
+	{
+		for (std::size_t i = 0; i < eventCount; ++i)
+		{
+			const auto position = static_cast<std::int64_t>(dst[i].sampleOffset) + settings.PhaseOffsetSamps;
+			dst[i].sampleOffset = static_cast<std::uint32_t>((position % loopLength + loopLength) % loopLength);
+		}
+		// Pair in source order before wrapping, preserving note duration and
+		// marking endpoints that now cross the seam for playback and picking.
+		std::vector<std::vector<std::size_t>> pending(MidiEvent::PairingSlotCount),
+			crossingOns(MidiEvent::PairingSlotCount), crossingOffs(MidiEvent::PairingSlotCount);
+		std::array<std::size_t, MidiEvent::PairingSlotCount> read{};
+		const auto pair = [&](std::size_t on, std::size_t off, bool crossing) {
+			const auto duration = static_cast<std::int64_t>(src[off].sampleOffset) - src[on].sampleOffset
+				+ (crossing ? loopLength : 0u);
+			const auto end = static_cast<std::int64_t>(dst[on].sampleOffset) + duration;
+			dst[off].sampleOffset = static_cast<std::uint32_t>((end % loopLength + loopLength) % loopLength);
+			for (const auto index : {on, off})
+			{
+				dst[index].flags &= static_cast<std::uint8_t>(~MidiEvent::TriggerSeamEndpoint);
+				if (end >= loopLength) dst[index].flags |= MidiEvent::TriggerSeamEndpoint;
+			}
+		};
+		for (std::size_t i = 0; i < eventCount; ++i)
+		{
+			const auto& event = src[i];
+			const auto slot = event.PairingSlot();
+			if (event.flags & MidiEvent::TriggerSeamEndpoint)
+			{
+				if (event.IsNoteOn()) crossingOns[slot].push_back(i);
+				else if (event.IsNoteOff()) crossingOffs[slot].push_back(i);
+			}
+			else if (event.IsNoteOn()) pending[slot].push_back(i);
+			else if (event.IsNoteOff() && read[slot] < pending[slot].size())
+				pair(pending[slot][read[slot]++], i, false);
+		}
+		for (std::size_t slot = 0; slot < crossingOns.size(); ++slot)
+			for (std::size_t i = 0; i < (std::min)(crossingOns[slot].size(), crossingOffs[slot].size()); ++i)
+				pair(crossingOns[slot][i], crossingOffs[slot][i], true);
+	}
+	if (sort) MidiNote::SortMidiEvents(dst, eventCount);
+}
+
 void MidiQuantisation::BuildQuantisedPlaybackEvents(const MidiEvent* src,
 	std::size_t eventCount,
 	std::uint32_t loopLength,

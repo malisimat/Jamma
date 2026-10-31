@@ -266,7 +266,7 @@ static void SettleTimingOffset(const std::shared_ptr<engine::Loop>& loop)
     for (auto block = 0u; block < 4096u; ++block)
     {
         loop->EndMultiPlay(128u);
-        if (loop->AppliedPlaybackOffsetSamps() == loop->PlaybackOffsetSamps()) return;
+        if (loop->AppliedPlaybackOffsetSamps() == loop->TotalPlaybackOffsetSamps()) return;
     }
     ADD_FAILURE() << "Audio shift did not converge";
 }
@@ -1177,6 +1177,11 @@ TEST(TriggerPredelayStation, FirstAudioAndMixedMasterReserveCompensatedOrigin)
             ASSERT_FALSE(master->Id().empty());
             ASSERT_EQ(master->Id(),quantiser.MasterAudioLoopId());
             master->SetPlaybackOffsetSamps(-1500);
+			auto takeGrid = take->MidiQuantisation();
+			takeGrid.PhaseOffsetSamps = 500;
+			take->SetMidiQuantisation(takeGrid);
+			station->SetStationPhaseOffsetSamps(300);
+			quantiser.SetGlobalPhaseOffsetSamps(200, stations);
             SettleTimingOffset(master);
             quantiser.UpdateStationHints(nullptr,base::DEPTH_LOOP,false,stations);
             struct DirectoryCleanup
@@ -1206,8 +1211,8 @@ TEST(TriggerPredelayStation, FirstAudioAndMixedMasterReserveCompensatedOrigin)
             EXPECT_EQ(jam->QuantiseSamps,restoredClock->QuantiseSamps());
             EXPECT_EQ(jam->MasterLengthSamps,restoredClock->SeedSourceLength());
             EXPECT_EQ(jam->AbsoluteSamplePos,restoredClock->AbsoluteSamplePos());
-            EXPECT_EQ(-1500,restoredStations[0]->MasterAudioReferenceOffsetSamps());
-            EXPECT_EQ(-1500,restoredStations[1]->MasterAudioReferenceOffsetSamps());
+            EXPECT_EQ(-500,restoredStations[0]->MasterAudioReferenceOffsetSamps());
+            EXPECT_EQ(-500,restoredStations[1]->MasterAudioReferenceOffsetSamps());
             // Scene commit may skip a contended frame while its job owner runs.
             const auto publishDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
             do
@@ -1221,6 +1226,9 @@ TEST(TriggerPredelayStation, FirstAudioAndMixedMasterReserveCompensatedOrigin)
             const auto restoredMaster = restoredStations[1]->GetLoopTakes()[1]->GetLoops()[0];
             EXPECT_EQ(master->Id(),restoredMaster->Id());
             EXPECT_EQ(-1500,restoredMaster->PlaybackOffsetSamps());
+			EXPECT_EQ(-500, restoredMaster->TotalPlaybackOffsetSamps());
+			EXPECT_EQ(300, restoredStations[1]->StationPhaseOffsetSamps());
+			EXPECT_EQ(500, restoredStations[1]->GetLoopTakes()[1]->MidiQuantisation().PhaseOffsetSamps);
             EXPECT_EQ(master->PlaybackBodyIndex(),restoredMaster->PlaybackBodyIndex());
             EXPECT_EQ(0,restoredStations[1]->GetLoopTakes()[0]->GetLoops()[0]->PlaybackOffsetSamps());
             (*loaded)->Shutdown();
@@ -1387,6 +1395,45 @@ TEST(TriggerBindingLearn, FreshValidatedPassiveIngressFreezesOneCandidateAndInfe
         const auto binding = io::TriggerBindingLearn::Midi("keys",midi::MidiEvent{0u,0xb0u,64u,static_cast<std::uint8_t>(value)});
         ASSERT_TRUE(binding); EXPECT_EQ(value != 0u,binding->Press.State); EXPECT_EQ(value == 0u,binding->Release.State);
     }
+}
+
+TEST(AudioLoopShift, HierarchyOffsetsComposeAndResetIndependently)
+{
+	auto take = MakePlayingTimingTake("hierarchy", 1000ul, 300ul);
+	auto sibling = MakePlayingTimingTake("sibling", 1500ul, 400ul);
+	auto loop = take->GetLoops().front();
+	auto siblingLoop = sibling->GetLoops().front();
+	auto station = std::make_shared<engine::Station>(engine::StationParams{},
+		engine::Station::GetMixerParams({100,100}, MergeMixBehaviourParams{}));
+	station->AddTake(take); station->AddTake(sibling); station->CommitChanges();
+	loop->SetPlaybackOffsetSamps(10);
+	siblingLoop->SetPlaybackOffsetSamps(-10);
+	auto settings = take->MidiQuantisation(); settings.PhaseOffsetSamps = 30;
+	take->SetMidiQuantisation(settings);
+	settings.PhaseOffsetSamps = -40; sibling->SetMidiQuantisation(settings);
+	station->SetStationPhaseOffsetSamps(100);
+	station->SetGlobalPhaseOffsetSamps(20);
+	EXPECT_EQ(160, loop->TotalPlaybackOffsetSamps());
+	EXPECT_EQ(70, siblingLoop->TotalPlaybackOffsetSamps());
+	SettleTimingOffset(loop); loop->SetBodyPlayIndex(300ul);
+	EXPECT_EQ(140ul, loop->PlaybackBodyIndex());
+	EXPECT_EQ(300ul, loop->BodyPlayIndex());
+	// Resetting the station preserves both take-local and stream-local values.
+	station->SetStationPhaseOffsetSamps(0);
+	EXPECT_EQ(60, loop->TotalPlaybackOffsetSamps());
+	EXPECT_EQ(-30, siblingLoop->TotalPlaybackOffsetSamps());
+	EXPECT_EQ(30, take->MidiQuantisation().PhaseOffsetSamps);
+	EXPECT_EQ(-40, sibling->MidiQuantisation().PhaseOffsetSamps);
+	EXPECT_EQ(10, loop->PlaybackOffsetSamps());
+	settings = take->MidiQuantisation(); settings.PhaseOffsetSamps = 0;
+	take->SetMidiQuantisation(settings);
+	EXPECT_EQ(30, loop->TotalPlaybackOffsetSamps());
+	EXPECT_EQ(-30, siblingLoop->TotalPlaybackOffsetSamps());
+	// Newly added loops inherit the owners without baking that into local state.
+	auto added = MakeTimingLoop(1000ul);
+	take->AddLoop(added); take->CommitChanges();
+	EXPECT_EQ(0, added->PlaybackOffsetSamps());
+	EXPECT_EQ(20, added->TotalPlaybackOffsetSamps());
 }
 
 TEST(AudioLoopShift, HandleChangesAudioOnlyAndDoubleClickResetsAcceptedOffset)
