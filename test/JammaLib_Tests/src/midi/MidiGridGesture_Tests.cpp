@@ -896,3 +896,61 @@ TEST(MidiGridGesture, UnequalLoopLengthWrapsOnlyAtItsClippedOuterEdges)
 			EXPECT_EQ(sample < 12u || sample >= 387u, targets.Resolve(sample, 60u, &*grid).NoteIndex.has_value());
 	}
 }
+
+TEST(MidiGridGesture, FreeClickDeletesCompleteNoteButReturningDragDoesNot)
+{
+    auto source = MidiGridGestureFixture::EmptyLoop(false);
+    source.Events[0] = midi::MidiEvent::MakeNoteOn(20u, 4u, 60u, 87u);
+    source.Events[1] = midi::MidiEvent::MakeNoteOff(40u, 4u, 60u);
+    source.Events[2] = midi::MidiEvent::MakeNoteOn(50u, 2u, 64u, 91u);
+    source.Events[3] = midi::MidiEvent::MakeNoteOff(70u, 2u, 64u);
+    source.EventCount = 4u;
+    MidiGridGesture gesture;
+    ASSERT_TRUE(gesture.Begin(source, {30u, 60u, 0.30}, 4u, 10.0));
+    EXPECT_FALSE(gesture.Dirty());
+    ASSERT_TRUE(gesture.Finish({30u, 60u, 0.30}));
+    EXPECT_TRUE(gesture.Dirty());
+    ASSERT_EQ(2u, gesture.Working().EventCount);
+    EXPECT_EQ(64u, gesture.Working().Events[0].data1);
+    EXPECT_EQ(50u, gesture.Working().Events[0].sampleOffset);
+    EXPECT_EQ(70u, gesture.Working().Events[1].sampleOffset);
+    EXPECT_EQ(4u, source.EventCount);
+    ASSERT_TRUE(gesture.Begin(source, {30u, 60u, 0.30}, 4u, 10.0));
+    ASSERT_TRUE(gesture.Update({31u, 60u, 0.31}));
+    ASSERT_TRUE(gesture.Finish({30u, 60u, 0.30}));
+    EXPECT_FALSE(gesture.Dirty());
+    EXPECT_EQ(4u, gesture.Working().EventCount);
+}
+
+TEST(MidiGridGesture, FreeCreateAndBothTrimsFinishWithoutSnapping)
+{
+    auto source = MidiGridGestureFixture::EmptyLoop(false);
+    MidiGridGesture gesture;
+    ASSERT_TRUE(gesture.Begin(source, {23u, 60u, 0.23}, 4u, 10.0));
+    ASSERT_TRUE(gesture.Finish({47u, 60u, 0.47}));
+    source = gesture.Working();
+    EXPECT_EQ(23u, source.Events[0].sampleOffset);
+    EXPECT_EQ(48u, source.Events[1].sampleOffset);
+    ASSERT_TRUE(gesture.Begin(source, {23u, 60u, 0.23}, 4u, 10.0));
+    EXPECT_EQ(MidiGridGesture::Kind::TrimLeft, gesture.Mode());
+    ASSERT_TRUE(gesture.Finish({27u, 60u, 0.27}));
+    source = gesture.Working();
+    EXPECT_EQ(27u, source.Events[0].sampleOffset);
+    ASSERT_TRUE(gesture.Begin(source, {48u, 60u, 0.48}, 4u, 10.0));
+    EXPECT_EQ(MidiGridGesture::Kind::TrimRight, gesture.Mode());
+    ASSERT_TRUE(gesture.Finish({43u, 60u, 0.43}));
+    EXPECT_EQ(43u, gesture.Working().Events[1].sampleOffset);
+}
+
+TEST(MidiGridGesture, FreeShortNoteClickDeletesWithSmallPointerJitter)
+{
+    auto source = MidiGridGestureFixture::EmptyLoop(false);
+    source.Events[0] = midi::MidiEvent::MakeNoteOn(20u, 4u, 60u, 87u);
+    source.Events[1] = midi::MidiEvent::MakeNoteOff(22u, 4u, 60u);
+    source.EventCount = 2u;
+    MidiGridGesture gesture;
+    ASSERT_TRUE(gesture.Begin(source, {20u, 60u, 0.20}, 4u, 1.0));
+    ASSERT_TRUE(gesture.Finish({21u, 60u, 0.21}));
+    EXPECT_TRUE(gesture.Dirty());
+    EXPECT_EQ(0u, gesture.Working().EventCount);
+}

@@ -209,8 +209,8 @@ Hover disambiguates several selected loops. Esc closes. **Ctrl+Z** undoes and
 changed target cancels unfinished previews.
 
 For MIDI, left-drag paints notes or erases occupied coverage on the active grid.
-With quantisation off, click empty space to add, drag a note body to move, or drag
-an edge to trim. Right-drag a note changes velocity; right-drag empty MIDI grid
+With quantisation off, click empty space to add or drag to set duration; click a
+note to delete it, drag its body to move, or drag an edge to trim. Right-drag a note changes velocity; right-drag empty MIDI grid
 pans pitch vertically and zooms horizontally. Ctrl-left-drag a note moves by grid
 cells/semitones; Ctrl-left-drag on empty MIDI grid has no action. Start a left/right
 drag off the MIDI grid to orbit. Wheel scrolls pitch and

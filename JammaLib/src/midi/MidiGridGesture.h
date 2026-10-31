@@ -68,6 +68,7 @@ namespace midi
 			_working = source;
 			_anchor = point;
 			_last = point;
+			_pixelsPerSample = pixelsPerSample;
 			_channel = channel;
 			_creationVelocity = velocity;
 			_grid = LoopGridGeometry::Resolve(source.LoopLengthSamps,
@@ -108,6 +109,9 @@ namespace midi
 		{
 			if (_kind == Kind::None || _rejected || point.Pitch > 127u) return false;
 			point.Sample = std::min(point.Sample, _before.LoopLengthSamps - 1u);
+			_moved |= point.Pitch != _anchor.Pitch || (_pixelsPerSample > 0.0
+				? std::abs(static_cast<double>(point.Sample) - _anchor.Sample) * _pixelsPerSample > 3.0
+				: point.Sample != _anchor.Sample);
 			if (_kind == Kind::Velocity) return true;
 			if (_kind == Kind::SnappedMove)
 			{
@@ -187,10 +191,24 @@ namespace midi
 			return _dirty;
 		}
 
+		bool Finish(Point point)
+		{
+			if (!Update(point)) return false;
+			// A click removes a note, including notes too short for a body hit.
+			if ((_kind == Kind::Move || _kind == Kind::TrimLeft || _kind == Kind::TrimRight) && !_moved)
+			{
+				_working = _before;
+				_dirty = MidiEditOperations::RemoveNote(_working, _onIndex);
+				_rejected = !_dirty;
+			}
+			return !_rejected;
+		}
+
 		void Cancel() noexcept
 		{
 			_kind = Kind::None; _grid.reset(); _visited.clear(); _removed.clear(); _targets.Notes.clear();
 			_dirty = false;
+			_moved = false;
 			_captured = {}; _velocityDelta = 0.0;
 			_rejected = false;
 			_preview.clear();
@@ -398,12 +416,12 @@ namespace midi
 		Point _anchor{}, _last{};
 		std::size_t _onIndex = 0u, _offIndex = 0u;
 		MidiGridTargets::Target _captured{};
-		double _velocityDelta = 0.0;
+		double _velocityDelta = 0.0, _pixelsPerSample = 0.0;
 		int _initialVelocity = 96, _proposedVelocity = 96;
 		std::uint32_t _start = 0u, _end = 0u;
 		std::uint32_t _createDefaultDuration = 1u;
 		std::uint8_t _pitch = 60u, _channel = 0u;
 		std::uint8_t _creationVelocity = DefaultCreationVelocity;
-		bool _fill = true, _dirty = false, _rejected = false;
+		bool _fill = true, _dirty = false, _rejected = false, _moved = false;
 	};
 }

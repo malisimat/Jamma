@@ -913,7 +913,7 @@ void LoopGridEditor::_EndGesture(const actions::TouchAction& action)
 		const auto snappedMove = _gesture->Mode() == MidiGridGesture::Kind::SnappedMove;
 		const auto point = _PointAt(action.Position, !snappedMove);
 		validDrop = !snappedMove || point.has_value();
-		if (point) _gesture->Update(*point);
+		if (point) _gesture->Finish(*point);
 	}
 	if (validDrop && _gesture && _gesture->Dirty() && !_gesture->Rejected()) _PublishGesture();
 	else if (_gesture && _gesture->Rejected()) _SetFeedback("Edit rejected; source unchanged");
@@ -1213,7 +1213,7 @@ void LoopGridEditor::UpdateUi(const glm::mat4& viewProjection)
 			if (loop->SnapshotForEdit(state))
 				mode = LoopGridGeometry::Resolve(state.LoopLengthSamps,
 					state.Quantisation, state.QuantisationTransportStartSamps)
-					? "Paint: click notes to remove; drag empty cells to add" : "Free timing: drag notes or edges";
+					? "Paint: click notes to remove; drag empty cells to add" : "Free timing: click notes to remove; drag to create, move or trim";
 		}
 		_modeLabel->SetString(mode);
 		_modeLabel->SetVisible(!_audioLoop.expired());
