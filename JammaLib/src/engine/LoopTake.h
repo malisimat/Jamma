@@ -68,6 +68,8 @@ namespace engine
 	public:
 		std::string Id;
 		unsigned int FadeSamps;
+		float SampleRate = static_cast<float>(constants::DefaultSampleRate);
+		unsigned int MidiSeamMergeWindowMs = constants::DefaultMidiSeamMergeWindowMs;
 		std::vector<LoopParams> Loops;
 	};
 
@@ -265,8 +267,8 @@ namespace engine
 		bool LoadManagedVstPlugin(std::wstring path, const std::string& identity = {});
 		bool UnloadManagedVstPlugin(const std::string& identity);
 		void ForceUnloadAllVstPlugins();
-		void SetMidiSeamMergeWindowMs(unsigned int milliseconds);
-		void SetSampleRate(float sampleRate);
+		// Owner-side playback format refresh; sample-only updates retain the seam policy.
+		void SetSampleRate(float sampleRate, std::optional<unsigned int> midiSeamMergeWindowMs = std::nullopt);
 		bool ReconfigureVstFormat(float sampleRate, unsigned int blockSize);
 		float GetSampleRate() const noexcept { return _sampleRate; }
 		unsigned int GetLastBufSize() const noexcept { return _lastBufSize; }
@@ -753,8 +755,8 @@ namespace engine
 		std::function<void()> _automationTopologyChanged;
 		std::vector<actions::JobAction> _pendingVstLoads;
 		std::vector<actions::JobAction> _pendingVstUnloads;
-		unsigned int _midiSeamMergeWindowMs = 200u;
-		float _sampleRate{ static_cast<float>(constants::DefaultSampleRate) };
+		unsigned int _midiSeamMergeWindowMs;
+		float _sampleRate;
 		// _vstPluginPaths: written on job thread (OnAction), read on main thread (VstEntries).
 		// Access is guarded by _vstPathsMutex in both directions.
 		mutable std::mutex _vstPathsMutex;

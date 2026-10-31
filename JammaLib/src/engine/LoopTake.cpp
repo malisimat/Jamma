@@ -185,6 +185,8 @@ LoopTake::LoopTake(LoopTakeParams params,
 	_audioBuffers(),
 	_backAudioBuffers(),
 	_vstChain(),
+	_midiSeamMergeWindowMs(params.MidiSeamMergeWindowMs),
+	_sampleRate(params.SampleRate),
 	_vstPluginPaths(),
 	_vstBlockScratch(),
 	_vstBlockPtrs()
@@ -1859,6 +1861,7 @@ std::shared_ptr<Loop> LoopTake::AddLoop(unsigned int chan, std::string stationNa
 
 void LoopTake::AddLoop(std::shared_ptr<Loop> loop)
 {
+	loop->SetSampleRate(_sampleRate);
 	loop->SetInheritedPlaybackOffsetSamps(ResolvedMidiQuantisation().PhaseOffsetSamps);
 	loop->SetAutomationTopologyChangedCallback(_automationTopologyChanged);
 	loop->SetCaptureSourceMuteControl(_captureSourceMuteControl);
@@ -1998,7 +2001,7 @@ void LoopTake::Record(std::vector<unsigned int> channels,
 	{
 		for (auto midiChan : midiChannels)
 		{
-			auto midiLoop = std::make_shared<midi::MidiLoop>();
+			auto midiLoop = std::make_shared<midi::MidiLoop>(_sampleRate, _midiSeamMergeWindowMs);
 			midiLoop->SetGroupId(utils::GetGuid());
 			graphics::MidiModelParams modelParams;
 			modelParams.ModelScale = 1.0f;
@@ -2006,8 +2009,6 @@ void LoopTake::Record(std::vector<unsigned int> channels,
 			auto midiModel = std::make_shared<graphics::MidiModel>(modelParams);
 			midiLoop->AttachModel(midiModel);
 			midiLoop->StartRecord();
-			midiLoop->SetSampleRate(_sampleRate);
-			midiLoop->SetMidiSeamMergeWindowMs(_midiSeamMergeWindowMs);
 			midiLoop->SetQuantisation(ResolvedMidiQuantisation(), MidiQuantisationTransportStartSamps(), _ForcedMidiQuantisationEnabled());
 			_midiLoops.push_back(midiLoop);
 			_midiLoopChannels.push_back(midiChan);
@@ -2853,7 +2854,7 @@ void LoopTake::Overdub(std::vector<unsigned int> channels,
 	{
 		for (auto midiChan : midiChannels)
 		{
-			auto midiLoop = std::make_shared<midi::MidiLoop>();
+			auto midiLoop = std::make_shared<midi::MidiLoop>(_sampleRate, _midiSeamMergeWindowMs);
 			graphics::MidiModelParams modelParams;
 			midiLoop->SetGroupId(utils::GetGuid());
 			modelParams.ModelScale = 1.0f;
@@ -2861,8 +2862,6 @@ void LoopTake::Overdub(std::vector<unsigned int> channels,
 			auto midiModel = std::make_shared<graphics::MidiModel>(modelParams);
 			midiLoop->AttachModel(midiModel);
 			midiLoop->StartRecord();
-			midiLoop->SetSampleRate(_sampleRate);
-			midiLoop->SetMidiSeamMergeWindowMs(_midiSeamMergeWindowMs);
 			midiLoop->SetQuantisation(ResolvedMidiQuantisation(), MidiQuantisationTransportStartSamps(), _ForcedMidiQuantisationEnabled());
 			_midiLoops.push_back(midiLoop);
 			_midiLoopChannels.push_back(midiChan);
@@ -3519,10 +3518,8 @@ bool LoopTake::RestoreMidiFromExport(const MidiExportState& state)
 			|| stream.Loop.LoopLengthSamps != state.LoopLengthSamps)
 			return false;
 
-		auto loop = std::make_shared<midi::MidiLoop>();
-		loop->SetMidiSeamMergeWindowMs(_midiSeamMergeWindowMs);
+		auto loop = std::make_shared<midi::MidiLoop>(_sampleRate, _midiSeamMergeWindowMs);
 		loop->SetGroupId(stream.Id.empty() ? utils::GetGuid() : stream.Id);
-		loop->SetSampleRate(_sampleRate);
 		if (!loop->RestoreFromExport(stream.Loop))
 			return false;
 
@@ -4559,15 +4556,22 @@ bool LoopTake::ReconfigureVstFormat(float sampleRate, unsigned int blockSize)
 	return true;
 }
 
-void LoopTake::SetSampleRate(float sampleRate)
+void LoopTake::SetSampleRate(float sampleRate, std::optional<unsigned int> midiSeamMergeWindowMs)
 {
-	_sampleRate = sampleRate;
-	for (auto& loop : _loops)
-		loop->SetSampleRate(sampleRate);
-	for (auto& loop : _backLoops)
-		loop->SetSampleRate(sampleRate);
+	std::scoped_lock midiLock(_midiCaptureMutex);
+	if (midiSeamMergeWindowMs)
+		_midiSeamMergeWindowMs = *midiSeamMergeWindowMs;
+	// Only the stopped-callback format transition may mutate audio-loop rate state.
+	if (_sampleRate != sampleRate)
+	{
+		_sampleRate = sampleRate;
+		for (auto& loop : _loops)
+			loop->SetSampleRate(sampleRate);
+		for (auto& loop : _backLoops)
+			loop->SetSampleRate(sampleRate);
+	}
 	for (auto& midiLoop : _midiLoops)
-		if (midiLoop) midiLoop->SetSampleRate(sampleRate);
+		if (midiLoop) midiLoop->SetSampleRate(sampleRate, _midiSeamMergeWindowMs);
 }
 
 void LoopTake::SetParentVisualScale(float scale) noexcept
@@ -4935,11 +4939,4 @@ std::shared_ptr<engine::Loop> engine::LoopTake::FindStagedAudioLoopById(const st
 	for (const auto& loop : _backLoops)
 		if (loop && loop->Id() == id) return loop;
 	return nullptr;
-}
-
-void LoopTake::SetMidiSeamMergeWindowMs(unsigned int milliseconds)
-{
-	std::scoped_lock lock(_midiCaptureMutex);
-	_midiSeamMergeWindowMs = milliseconds;
-	for (const auto& loop : _midiLoops) if (loop) loop->SetMidiSeamMergeWindowMs(milliseconds);
 }

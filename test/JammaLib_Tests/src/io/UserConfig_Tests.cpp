@@ -98,6 +98,21 @@ TEST(UserConfig, ParsesLoopSettings) {
 	ASSERT_FALSE(loop.value().SeedUsesPowers);
 }
 
+TEST(UserConfig, LegacyMidiSeamWindowAcceptsLargerIntegersAndRejectsInvalidTypes) {
+	for (const auto value : {"0", "200", "500", "4294967295"}) {
+		auto parsed = Json::FromStream(std::stringstream(std::string("{\"midiSeamMergeWindowMs\":") + value + "}"));
+		ASSERT_TRUE(parsed);
+		auto loop = UserConfig::LoopSettings::FromJson(std::get<Json::JsonPart>(*parsed));
+		ASSERT_TRUE(loop);
+		EXPECT_EQ(std::stoull(value), loop->MidiSeamMergeWindowMs);
+	}
+	for (const auto value : {"-1", "4294967296", "200.5", "true", "null", "\"500\""}) {
+		auto parsed = Json::FromStream(std::stringstream(std::string("{\"midiSeamMergeWindowMs\":") + value + "}"));
+		if (parsed)
+			EXPECT_FALSE(UserConfig::LoopSettings::FromJson(std::get<Json::JsonPart>(*parsed))) << value;
+	}
+}
+
 TEST(UserConfig, ParsesTriggerSettings) {
 	auto str = "{\"preDelaySamps\":0,\"debounceMs\":59}";
 	auto testStream = std::stringstream(str);

@@ -2554,3 +2554,44 @@ TEST_F(SceneRoutingIntegrationTest, SaveBusyFeedbackDoesNotOpenDialogsOrReplaceD
     EXPECT_EQ(L"prior/001.jam", scene->Controls().CurrentJamPath());
     exclusion.unlock(); scene->Shutdown();
 }
+
+TEST_F(SceneRoutingIntegrationTest, SeamPolicyRigChangePreservesStationPlaybackFormat)
+{
+	using Access = engine::SourceLossIntegrationTestAccess;
+	auto scene = FreshScene({Station("Local"), Station("Other")}, {});
+	ASSERT_TRUE(scene);
+	Access::PrepareHud(*scene);
+	auto station = scene->SnapshotStations().front();
+	std::shared_ptr<engine::LoopTake> take;
+	Access::WhileSceneLocked(*scene, [&] {
+		// A policy edit must retain each station's format, even when it differs
+		// from the scene device rate (as a newly joined remote station can).
+		station->SetSampleRate(32000.0f);
+		take = station->AddTake();
+		take->Record({}, "Local", {0u});
+		ASSERT_TRUE(take->RecordMidiEvent(midi::MidiEvent::MakeNoteOn(0u, 0u, 60u, 100u), 0u));
+		take->Play(0u, 10000u, 0u);
+	});
+	EXPECT_NE(32000u, Access::InteractionSampleRate(*scene));
+	auto candidate = scene->AcceptedRigSnapshot()->Rig;
+	candidate.User.Loop.MidiSeamMergeWindowMs = 500u;
+	auto result = scene->RequestRigEdit(candidate);
+	const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(1);
+	while (result == engine::RigCoordinator::EditResult::EditsDisabled
+		&& std::chrono::steady_clock::now() < deadline)
+	{
+		std::this_thread::sleep_for(std::chrono::milliseconds(1));
+		result = scene->RequestRigEdit(candidate);
+	}
+	ASSERT_EQ(engine::RigCoordinator::EditResult::Pending, result);
+	Settle(scene);
+	EXPECT_EQ(500u, scene->AcceptedRigSnapshot()->Rig.User.Loop.MidiSeamMergeWindowMs);
+	Access::WhileSceneLocked(*scene, [&] {
+		EXPECT_EQ(32000.0f, station->GetSampleRate());
+		EXPECT_EQ(32000.0f, take->GetSampleRate());
+		midi::MidiLoop::EditState edit;
+		ASSERT_TRUE(take->GetMidiLoops().front()->SnapshotForEdit(edit));
+		EXPECT_EQ(16000u, edit.SeamMergeWindowSamps);
+	});
+	scene->Shutdown();
+}

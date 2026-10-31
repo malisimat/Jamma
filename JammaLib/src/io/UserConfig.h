@@ -52,7 +52,7 @@ namespace io
 		struct LoopSettings
 		{
 			unsigned int FadeSamps = constants::DefaultFadeSamps; // The number of samples to fade in/out the start/end of a loop
-			unsigned int MidiSeamMergeWindowMs = 30u; // Forward boundary-held note tolerance, 0..200 ms
+			unsigned int MidiSeamMergeWindowMs = constants::DefaultMidiSeamMergeWindowMs; // Forward boundary-held note tolerance in nonnegative milliseconds
 			unsigned int SeedGrainMinMs = constants::DefaultSeedGrainMinMs; // Never halve below this grain length
 			unsigned int SeedGrainTargetMaxMs = constants::DefaultSeedGrainTargetMaxMs; // Prefer grains below this duration
 			unsigned int SeedBpmMin = constants::DefaultSeedBpmMin; // Choose beats-per-grain so BPM is at least this value

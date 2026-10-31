@@ -220,7 +220,7 @@ std::optional<UserConfig::LoopSettings> UserConfig::LoopSettings::FromJson(Json:
 	auto seamWindow = json.KeyValues.find("midiSeamMergeWindowMs");
 	if (seamWindow != json.KeyValues.end())
 	{
-		if (seamWindow->second.index() != 2 || std::get<unsigned long>(seamWindow->second) > 200u)
+		if (seamWindow->second.index() != 2 || std::get<unsigned long>(seamWindow->second) > (std::numeric_limits<unsigned int>::max)())
 			return std::nullopt;
 		loop.MidiSeamMergeWindowMs = std::get<unsigned long>(seamWindow->second);
 	}

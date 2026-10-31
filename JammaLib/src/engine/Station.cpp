@@ -86,7 +86,8 @@ Station::Station(StationParams params,
 	_backAudioBuffers(),
 	_allowedMidiChannels({1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16}),
 	_allowedMidiChannelMask(0xffffu),
-	_sampleRate(44100.0f),
+	_midiSeamMergeWindowMs(params.MidiSeamMergeWindowMs),
+	_sampleRate(params.SampleRate),
 	_blockSize(512u),
 	_vstBlockScratch(),
 	_vstBlockPtrs()
@@ -1540,11 +1541,12 @@ std::shared_ptr<LoopTake> Station::AddTake()
 	takeParams.Id = Name() + "-TK-" + utils::GetGuid();
 	takeParams.Size = { 100,100 };
 	takeParams.FadeSamps = _fadeSamps;
+	takeParams.SampleRate = _sampleRate;
+	takeParams.MidiSeamMergeWindowMs = _midiSeamMergeWindowMs;
 
 	MergeMixBehaviourParams mergeParams;
 	auto mixerParams = LoopTake::GetMixerParams(takeParams.Size, mergeParams);
 	auto take = std::make_shared<LoopTake>(takeParams, mixerParams);
-	take->SetMidiSeamMergeWindowMs(_midiSeamMergeWindowMs);
 	auto settings = take->MidiQuantisation();
 	settings.Fraction = _defaultMidiQuantisationFraction;
 	take->SetMidiQuantisation(settings);
@@ -1588,6 +1590,7 @@ void Station::AddTake(std::shared_ptr<LoopTake> take)
 		}
 	});
 	take->SetCameraRecordingPublisher(_cameraRecordingPublisher);
+	take->SetSampleRate(_sampleRate, _midiSeamMergeWindowMs);
 	take->SetupBuffers(_lastBufSize);
 	take->SetNumBusChannels(NumBusChannels());
 	take->SetSelectDepth(CurrentSelectDepth());
@@ -1804,19 +1807,22 @@ bool Station::ReconfigureVstFormat(float sampleRate, unsigned int blockSize)
 	return true;
 }
 
-void Station::SetSampleRate(float sampleRate)
+void Station::SetSampleRate(float sampleRate, std::optional<unsigned int> midiSeamMergeWindowMs)
 {
-    if (_sampleRate != sampleRate)
-    {
-        _captureHistory.ClearRecent();
-        _midiFormatEpochKnown.store(false, std::memory_order_release);
-        _midiFormatEpochPending.store(true, std::memory_order_release);
-    }
-	_sampleRate = sampleRate;
+	// Rate changes require stopped callbacks; live policy refresh leaves rate state untouched.
+	if (_sampleRate != sampleRate)
+	{
+		_captureHistory.ClearRecent();
+		_midiFormatEpochKnown.store(false, std::memory_order_release);
+		_midiFormatEpochPending.store(true, std::memory_order_release);
+		_sampleRate = sampleRate;
+	}
+	if (midiSeamMergeWindowMs)
+		_midiSeamMergeWindowMs = *midiSeamMergeWindowMs;
 	for (auto& take : _loopTakes)
-		take->SetSampleRate(sampleRate);
+		take->SetSampleRate(sampleRate, _midiSeamMergeWindowMs);
 	for (auto& take : _backLoopTakes)
-		take->SetSampleRate(sampleRate);
+		take->SetSampleRate(sampleRate, _midiSeamMergeWindowMs);
 }
 
 void Station::SetLogging(const io::LoggingConfig& config) noexcept
@@ -2750,11 +2756,4 @@ std::shared_ptr<LoopTake> Station::RecordedMasterTakeOnOwner() const
 		&& _firstMasterRecordingStatus.load(std::memory_order_relaxed) == 1u)
 		return request->Take;
 	return _recordedMasterTake.lock();
-}
-
-void Station::SetMidiSeamMergeWindowMs(unsigned int milliseconds)
-{
-	_midiSeamMergeWindowMs = milliseconds;
-	for (const auto& take : _loopTakes) if (take) take->SetMidiSeamMergeWindowMs(milliseconds);
-	for (const auto& take : _backLoopTakes) if (take) take->SetMidiSeamMergeWindowMs(milliseconds);
 }

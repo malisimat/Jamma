@@ -67,6 +67,8 @@ namespace engine
 		std::string Name;
 		std::string Id;
 		unsigned int FadeSamps;
+		float SampleRate = static_cast<float>(constants::DefaultSampleRate);
+		unsigned int MidiSeamMergeWindowMs = constants::DefaultMidiSeamMergeWindowMs;
 		unsigned int NumBusChannels;
 		float StationLevelFallRate;
 	};
@@ -219,8 +221,9 @@ namespace engine
 			const LoopTake* targetTake, const Loop* targetLoop,
 			std::uint32_t masterLength) const noexcept;
 		void SetupBuffers(unsigned int bufSize);
-		void SetMidiSeamMergeWindowMs(unsigned int milliseconds);
-		void SetSampleRate(float sampleRate);
+		// Owner-side playback format refresh; sample-only updates retain the seam policy.
+		void SetSampleRate(float sampleRate, std::optional<unsigned int> midiSeamMergeWindowMs = std::nullopt);
+		float GetSampleRate() const noexcept { return _sampleRate; }
 		int CurrentVstLatencySamps() const noexcept;
 		void PollPlaybackPluginChanges() const noexcept;
 		unsigned int RecordedPlaybackLatencySamps() const noexcept;
@@ -492,8 +495,8 @@ namespace engine
 
 		// Sample rate and block size captured at SetupBuffers time; needed to
 		// initialise a newly loaded plugin (IVstPlugin: VST2 or VST3).
-		unsigned int _midiSeamMergeWindowMs = 30u;
-		float _sampleRate = 44100.0f;
+		unsigned int _midiSeamMergeWindowMs;
+		float _sampleRate;
 		unsigned int _blockSize = 512u;
 		std::vector<float> _vstBlockScratch;
 		std::vector<float*> _vstBlockPtrs;

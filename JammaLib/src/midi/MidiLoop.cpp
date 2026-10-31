@@ -160,9 +160,10 @@ bool MidiLoop::FracWithinOverwriteWindow(float frac,
 	return frac >= startFrac || frac < endFrac;
 }
 
-MidiLoop::MidiLoop() noexcept
+MidiLoop::MidiLoop(float sampleRate, unsigned int midiSeamMergeWindowMs) noexcept
 	: _eventCount(0),
-	  _sampleRate(static_cast<float>(constants::DefaultSampleRate)),
+	  _sampleRate(sampleRate),
+	  _midiSeamMergeWindowMs(midiSeamMergeWindowMs),
 	  _loopLengthSamps(0),
 	  _automationGlobalSampleOrigin(0u),
 	  _dropped(0),
@@ -1995,19 +1996,15 @@ bool MidiLoop::IsAutomationLaneActive(std::size_t laneIdx) const noexcept
 	return _lanes[laneIdx].Mapping.IsActive();
 }
 
-void MidiLoop::SetSampleRate(float sampleRate) noexcept
+void MidiLoop::SetSampleRate(float sampleRate, std::optional<unsigned int> midiSeamMergeWindowMs) noexcept
 {
-	if (_sampleRate == sampleRate) return;
-	_sampleRate = sampleRate;
-	if (_state == MidiLoopState::Playing)
-		PublishCompletionWithRetry(_events.data(), _eventCount, _loopLengthSamps, ++_revision);
-}
-
-void MidiLoop::SetMidiSeamMergeWindowMs(unsigned int milliseconds) noexcept
-{
-	milliseconds = (std::min)(milliseconds, 200u);
-	if (_midiSeamMergeWindowMs == milliseconds) return;
-	_midiSeamMergeWindowMs = milliseconds;
+	const auto seamWindow = midiSeamMergeWindowMs ?
+		*midiSeamMergeWindowMs : _midiSeamMergeWindowMs;
+	if (_sampleRate == sampleRate && _midiSeamMergeWindowMs == seamWindow) return;
+	if (_sampleRate != sampleRate)
+		_sampleRate = sampleRate;
+	_midiSeamMergeWindowMs = seamWindow;
+	// Resolve the ms policy with the format and publish one coherent playback view.
 	if (_state == MidiLoopState::Playing)
 		PublishCompletionWithRetry(_events.data(), _eventCount, _loopLengthSamps, ++_revision);
 }

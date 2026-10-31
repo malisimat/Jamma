@@ -244,7 +244,8 @@ namespace midi
 		};
 
 	public:
-		MidiLoop() noexcept;
+		explicit MidiLoop(float sampleRate = static_cast<float>(constants::DefaultSampleRate),
+			unsigned int midiSeamMergeWindowMs = constants::DefaultMidiSeamMergeWindowMs) noexcept;
 		// Job owner assigns once before stream publication; audio never accesses it.
 		const std::string& Id() const noexcept { return _groupId; }
 		void SetGroupId(std::string id) { _groupId = std::move(id); }
@@ -433,11 +434,10 @@ namespace midi
 		const MidiQuantisationSettings& Quantisation() const noexcept { return _quantisation; }
 		bool IsQuantisationActive() const noexcept;
 
-		// Update the sample rate used to project the ms-based automation merge
-		// window into normalised frac space. Should be called whenever the audio
-		// device sample rate changes, mirroring the pattern used for audio Loop.
-		void SetSampleRate(float sampleRate) noexcept;
-		void SetMidiSeamMergeWindowMs(unsigned int milliseconds) noexcept;
+		// Owner-side format refresh: project automation timing and the optional ms-based
+		// seam policy at the current rate, then republish existing playback once.
+		// Sample-only updates retain the seam policy; audio reads the prepared snapshot.
+		void SetSampleRate(float sampleRate, std::optional<unsigned int> midiSeamMergeWindowMs = std::nullopt) noexcept;
 		// Same owner-side view as playback, retaining source indices for editor gestures.
 		static std::vector<ProjectedNote> BuildEditorNotes(const EditState& source);
 
@@ -545,7 +545,7 @@ namespace midi
 		std::uint64_t _callbackRevision = 0u;
 		std::size_t _eventCount;
 		float _sampleRate;
-		unsigned int _midiSeamMergeWindowMs = 30u;
+		unsigned int _midiSeamMergeWindowMs;
 		std::uint32_t _loopLengthSamps;
 		// TODO(latency): the loop-relative phase anchor used for MIDI/automation
 		// playback does not yet account for this take's VST chain latency -- see

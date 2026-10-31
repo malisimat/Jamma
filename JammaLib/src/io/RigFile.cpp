@@ -297,8 +297,7 @@ std::optional<RigFile> RigFile::Normalize(const RigFile& rig, Diagnostics* diagn
 		!require(audio.NumChannelsIn <= JamFile::MaxAudioRouteChannels, "$.devices.audio.numchannelsin", "Input channel capacity exceeded") ||
 		!require(audio.NumChannelsOut <= JamFile::MaxAudioRouteChannels, "$.devices.audio.numchannelsout", "Output channel capacity exceeded")) return std::nullopt;
 	const auto& loop = rig.User.Loop;
-	if (!require(loop.MidiSeamMergeWindowMs <= 200u, "$.settings.loop.midiSeamMergeWindowMs", "MIDI seam merge window must be 0..200 ms") ||
-		!require(loop.SeedGrainMinMs > 0u, "$.settings.loop.seedGrainMinMs", "Minimum grain must be positive") ||
+	if (!require(loop.SeedGrainMinMs > 0u, "$.settings.loop.seedGrainMinMs", "Minimum grain must be positive") ||
 		!require(loop.SeedGrainTargetMaxMs >= loop.SeedGrainMinMs, "$.settings.loop.seedGrainTargetMaxMs", "Maximum grain must be at least minimum grain") ||
 		!require(loop.SeedBpmMin > 0u, "$.settings.loop.seedBpmMin", "Minimum BPM must be positive") ||
 		!require(rig.User.Trigger.PreDelaySamps == 0u,
@@ -674,7 +673,7 @@ const std::string RigFile::DefaultJson = R"json({
     "serial":[]
   },
   "settings":{
-    "loop":{"fadeSamps":800,"midiSeamMergeWindowMs":30,"seedGrainMinMs":400,"seedGrainTargetMaxMs":3000,"seedBpmMin":80,"seedQuantisation":"power"},
+    "loop":{"fadeSamps":800,"midiSeamMergeWindowMs":200,"seedGrainMinMs":400,"seedGrainTargetMaxMs":3000,"seedBpmMin":80,"seedQuantisation":"power"},
     "trigger":{"debounceMs":280},
     "midi":{"channelOverrideTriggers":false,"channelOverrideLive":true}
   },

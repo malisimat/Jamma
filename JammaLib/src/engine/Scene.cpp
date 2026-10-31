@@ -861,7 +861,7 @@ void Scene::_AdvanceRigPublication()
 		return;
 	_userConfig.Loop.MidiSeamMergeWindowMs = pending->Rig.User.Loop.MidiSeamMergeWindowMs;
 	for (const auto& station : _stations)
-		if (station) station->SetMidiSeamMergeWindowMs(_userConfig.Loop.MidiSeamMergeWindowMs);
+		if (station) station->SetSampleRate(station->GetSampleRate(), _userConfig.Loop.MidiSeamMergeWindowMs);
 	if (pending->RenamedStation)
 		_workspace->SetFeedback("Station renamed. Save both JAM session and rig explicitly for consistent reload.");
 	if (pending->MembershipChange) _stationManagement.Committed = true;
@@ -1357,8 +1357,7 @@ void Scene::_PrepareStation(const std::shared_ptr<Station>& station)
 	station->SetTransportOffsetLoopFrac(_transportOffsetLoopFrac);
 	const auto stream = _audioEngine->GetStreamParams();
 	station->SetupBuffers(stream.BufSize ? stream.BufSize : ChannelMixer::DefaultBufferSize);
-	station->SetSampleRate(static_cast<float>(_CurrentSampleRate()));
-	station->SetMidiSeamMergeWindowMs(_userConfig.Loop.MidiSeamMergeWindowMs);
+	station->SetSampleRate(static_cast<float>(_CurrentSampleRate()), _userConfig.Loop.MidiSeamMergeWindowMs);
 	station->SetNumAdcChannels(_audioEngine->GetChannelMixer()->Source()->NumOutputChannels(Audible::AUDIOSOURCE_ADC));
 	station->SetNumDacChannels(_audioEngine->GetChannelMixer()->Sink()->NumInputChannels(Audible::AUDIOSOURCE_LOOPS));
 	station->Init();
