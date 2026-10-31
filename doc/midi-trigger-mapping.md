@@ -18,7 +18,7 @@ Rig files support multiple configured MIDI input devices. MIDI activation and di
     "serial": []
   },
   "settings": {
-    "loop": { "fadeSamps": 800, "seedGrainMinMs": 400, "seedGrainTargetMaxMs": 3000, "seedBpmMin": 80, "seedQuantisation": "power" },
+    "loop": { "fadeSamps": 800, "midiSeamMergeWindowMs": 200, "seedGrainMinMs": 400, "seedGrainTargetMaxMs": 3000, "seedBpmMin": 80, "seedQuantisation": "power" },
     "trigger": { "debounceMs": 280 },
     "midi": { "channelOverrideTriggers": false, "channelOverrideLive": true }
   },
@@ -100,3 +100,44 @@ OK applies the complete valid changed pedal draft through the existing acknowled
 Settings provides Save rig, Save rig as..., and Save rig as default.... Save rig overwrites the current editable user rig; generated, protected or unknown paths use Save As. Save As creates or explicitly overwrites a chosen user file and makes it the current path. Both ordinary actions leave startup defaults unchanged. Save rig as default is the separate explicit action that changes the startup selection.
 
 Each request writes a detached accepted rig revision through the existing atomic writer. Pending edits require retry. Completion reports the captured revision; newer changes remain unsaved. A failed save retains the previous current path and saved-revision state. Replacing the running Scene invalidates revision comparisons while retaining the current user path. Hardware preference writes preserve the saved mappings rather than persisting unsaved runtime binding edits.
+
+
+## MIDI loop boundary notes
+
+`settings.loop.midiSeamMergeWindowMs` is an overall rig setting, default 30 ms,
+accepting integers from 0 through 200. Missing fields in older rigs use the
+default. The MIDI owner converts milliseconds at the active stream sample rate,
+rounding to the nearest sample with half-sample ties upward, and publishes the
+resolved window with the immutable playback view. Accepted changes rebuild both
+existing and subsequently created/restored streams through their existing owners.
+
+A finite note merges with the next repeat only when their unwrapped spans really
+overlap. A captured tail whose key remained physically held may instead bridge
+to the earliest paired attack within the forward seam window (inclusive). Its
+channel, pitch and stream must match; an orphan release cannot qualify. The
+initial head stays audible, later duplicate heads are suppressed only while the
+matching tail continues, and that head's own release ends the note. Zero disables
+positive-distance matching while retaining exact-zero continuation and finite
+overlaps. Editor-authored finite endpoints do not become physical holds.
+
+An isolated held tail releases at the seam and attacks normally next repeat.
+Case [3], a finite capture suffix that does not reach the next head, still releases
+at the playable seam; this change does not retain its general post-wrap release.
+Notes held throughout capture keep exact endpoints at 0 and L-1, leaving a
+one-sample rest before the next repeat's fresh attack.
+
+Both quantise modes pair in source order, translate the whole positive-duration
+span by the attack's signed grid displacement, and compare spans before wrapping.
+The paired release follows that same displacement; it is never independently
+snapped or clamped to L-1. A 980/990 note in a 1000-sample loop snapped to 1000
+therefore plays at 0/10. An unmatched 980 attack retains its inferred 20-sample
+capture-window duration and cannot borrow an orphan release at 200 (or at 10).
+Playback, drawing and editor targets share prepared spans and source identities.
+Snapping may legitimately create/remove an overlap or move a head outside the
+configured tolerance; equivalent geometry uses the same merge policy.
+
+Native MIDI sidecar version 0.5 persists a flag on artificial capture closures.
+Older assets retain their known semantics: an unmarked L-1 release is treated as
+real because its physical origin cannot be recovered. Naturally unmatched legacy
+tails can still use seam matching. Source persistence stays unquantised. Replacing
+an endpoint in the editor clears obsolete held-boundary provenance.
