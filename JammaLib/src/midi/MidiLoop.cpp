@@ -332,6 +332,31 @@ bool MidiLoop::NormalizeTriggerCapture(std::uint32_t length, std::int64_t rotati
 	return true;
 }
 
+void MidiLoop::ClampFullLoopCaptureNotes(std::uint32_t length, const MidiNoteSnapshot& held) noexcept
+{
+	if (_state != MidiLoopState::Recording || length == 0u || held.Held.none()) return;
+	std::size_t kept = 0u;
+	for (std::size_t i = 0u; i < _eventCount; ++i)
+	{
+		const auto& event = _events[i];
+		if ((event.IsNoteOn() || event.IsNoteOff()) && held.Held.test(NoteSlot(event.Channel(), event.data1)))
+			continue;
+		_events[kept++] = event;
+	}
+	_eventCount = kept;
+	// Append every attack before releases so capacity pressure cannot drop a
+	// held pitch. If a release cannot fit, ordinary seam flushing still ends it.
+	for (std::size_t slot = 0u; slot < TotalNoteSlots; ++slot)
+		if (held.Held.test(slot))
+			RecordEvent(MidiEvent::MakeNoteOn(0u, static_cast<std::uint8_t>(slot >> 7u),
+				static_cast<std::uint8_t>(slot & 127u), held.Velocity[slot]).WithFlags(MidiEvent::ExactTiming));
+	if (length > 1u)
+		for (std::size_t slot = 0u; slot < TotalNoteSlots; ++slot)
+			if (held.Held.test(slot))
+				RecordEvent(MidiEvent::MakeNoteOff(length - 1u, static_cast<std::uint8_t>(slot >> 7u),
+					static_cast<std::uint8_t>(slot & 127u)).WithFlags(MidiEvent::ExactTiming));
+}
+
 void MidiLoop::Reset() noexcept
 {
 	_completedLengthForEditor.store(0u, std::memory_order_release);

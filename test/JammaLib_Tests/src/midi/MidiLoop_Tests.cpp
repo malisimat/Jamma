@@ -4644,3 +4644,49 @@ TEST(MidiLoopSeam, NonzeroHeadMergesOnlyWhenTailReachesIt)
 			[](const auto& event) { return event.IsNoteOn() && event.data2 == 95u; }));
 	}
 }
+
+TEST(LoopTakeMidiTiming, NoteHeldThroughoutCaptureHasExplicitFullLoopEndpoints)
+{
+	for (const bool quantised : { false, true })
+	for (const auto rotation : { -20ll, 0ll, 20ll })
+	for (const bool triggerCapture : { false, true })
+	{
+		SCOPED_TRACE(::testing::Message() << "quantised=" << quantised
+			<< " rotation=" << rotation << " trigger=" << triggerCapture);
+		auto take = MakeLoopTake();
+		take->SetGlobalMidiQuantState(io::JamFile::GlobalMidiQuantState::Mixed);
+		MidiQuantisationSettings settings;
+		settings.Enabled = quantised;
+		take->SetMidiQuantisation(settings);
+		constexpr auto trigger = 10000u;
+		constexpr auto length = 1000u;
+		if (triggerCapture)
+			take->ConfigureTriggerCapture({trigger, rotation, 2000u, 0u, 0u});
+		midi::MidiNoteSnapshot held;
+		held.Set(0u, 60u, 93u);
+		take->Record({}, "station", {0u}, {"Keys"}, {{"Keys", held}}, 0u, trigger);
+		take->SetMidiBaseGrid(length, 4u);
+		take->Play(0u, length, 0u);
+		if (triggerCapture) take->CompleteMidiIngressPump(trigger + 2u * length);
+		auto loop = take->GetMidiLoops().at(0u);
+		MidiLoop::ExportState saved;
+		ASSERT_TRUE(loop->SnapshotForExport(saved));
+		ASSERT_EQ(2u, saved.EventCount);
+		EXPECT_TRUE(saved.Events[0].IsNoteOn());
+		EXPECT_EQ(0u, saved.Events[0].sampleOffset);
+		EXPECT_EQ(93u, saved.Events[0].data2);
+		EXPECT_TRUE(saved.Events[1].IsNoteOff());
+		EXPECT_EQ(length - 1u, saved.Events[1].sampleOffset);
+		MidiLoopCapturingSink sink;
+		loop->ReadBlock(0u, 3u * length, sink);
+		ASSERT_EQ(6u, sink.events.size());
+		for (unsigned int repeat = 0u; repeat < 3u; ++repeat)
+		{
+			EXPECT_TRUE(sink.events[2u * repeat].IsNoteOn());
+			EXPECT_EQ(repeat * length, sink.events[2u * repeat].sampleOffset);
+			EXPECT_TRUE(sink.events[2u * repeat + 1u].IsNoteOff());
+			EXPECT_EQ((repeat + 1u) * length - 1u, sink.events[2u * repeat + 1u].sampleOffset);
+		}
+		EXPECT_TRUE(loop->HeldNotes().none());
+	}
+}

@@ -258,6 +258,9 @@ namespace midi
 		// MIDI owner only, before EndRecord: select physical [0,L), then rotate
 		// complete note endpoints into content coordinates. No publication occurs.
 		bool NormalizeTriggerCapture(std::uint32_t loopLengthSamps, std::int64_t rotation);
+		// MIDI owner only, after capture rotation: notes held throughout capture
+		// span the content window with a final-sample release before retriggering.
+		void ClampFullLoopCaptureNotes(std::uint32_t length, const MidiNoteSnapshot& held) noexcept;
 		// Finalize the recording with an explicit loop length in samples and transition
 		// to Playing. Events whose offset >= loopLengthSamps are kept in storage but will
 		// not be emitted (they are outside the playable window).

@@ -2421,6 +2421,7 @@ bool LoopTake::AdmitTriggerCaptureLength(unsigned long length) const noexcept
 void LoopTake::_FinalizeMidiCapture(unsigned long loopLength, unsigned long index, LoopTakeState& state)
 {
 	const auto midiLoopLength = static_cast<std::uint32_t>(loopLength);
+	std::vector<midi::MidiNoteSnapshot> heldThroughout;
 	if (_midiOverdubSession.Active)
 	{
 		if (_isMidiPunchInActive.load(std::memory_order_relaxed))
@@ -2438,6 +2439,7 @@ void LoopTake::_FinalizeMidiCapture(unsigned long loopLength, unsigned long inde
 	}
 	else
 	{
+		heldThroughout.resize(_midiLoops.size());
 		for (std::size_t i = 0u; i < _midiLoops.size(); ++i)
 		{
 			auto midiLoop = _midiLoops[i];
@@ -2450,32 +2452,40 @@ void LoopTake::_FinalizeMidiCapture(unsigned long loopLength, unsigned long inde
 				(i < _midiLoopChannels.size()) ?
 				(_midiLoopChannels[i] & midi::MidiEvent::ChannelMask) :
 				0u);
-            auto held = _midiRecordHeld[i];
-            if (_triggerCaptureConfigured)
-            {
-                held = {};
-                std::vector<midi::MidiEvent> eligible;
-                for (std::size_t e = 0u; e < midiLoop->EventCount(); ++e)
-                {
-                    midi::MidiEvent event;
-                    if (midiLoop->TryGetEvent(e, event) && event.sampleOffset < midiLoopLength) eligible.push_back(event);
-                }
-                midi::MidiNote::SortMidiEvents(eligible.data(), eligible.size());
-                for (const auto& event : eligible)
-                {
-                    if (event.IsNoteOn()) held.Set(event.Channel(), event.data1, event.data2);
-                    else if (event.IsNoteOff()) held.Clear(event.Channel(), event.data1);
-                }
-            }
+			midi::MidiNoteSnapshot held;
+			std::bitset<midi::MidiNote::TotalNoteSlots> released;
+			std::vector<midi::MidiEvent> eligible;
+			for (std::size_t e = 0u; e < midiLoop->EventCount(); ++e)
+			{
+				midi::MidiEvent event;
+				if (midiLoop->TryGetEvent(e, event) && event.sampleOffset < midiLoopLength) eligible.push_back(event);
+			}
+			midi::MidiNote::SortMidiEvents(eligible.data(), eligible.size());
+			for (const auto& event : eligible)
+			{
+				if (event.IsNoteOn()) held.Set(event.Channel(), event.data1, event.data2);
+				else if (event.IsNoteOff())
+				{
+					held.Clear(event.Channel(), event.data1);
+					released.set(midi::MidiNote::NoteSlot(event.Channel(), event.data1));
+				}
+			}
+			if (i < _midiRecordSeededHeld.size())
+			{
+				heldThroughout[i] = held;
+				heldThroughout[i].Held &= _midiRecordSeededHeld[i] & ~released;
+			}
+
 			const auto heldNoteOffSample = (midiLoopLength > 0u) ? (midiLoopLength - 1u) : 0u;
 			for (std::uint8_t note = 0u; note < 128u; ++note)
 			{
 				const auto slot = midi::MidiNote::NoteSlot(channel, note);
 				if (!held.Held.test(slot))
 					continue;
-				// A first-master note held on both trigger edges crosses the seam.
-				// Its head release closes the tail next repeat; an artificial L-1
-				// release would turn that continuation into two separate attacks.
+				// A note held throughout capture is clamped after rotation.
+				if (heldThroughout[i].Held.test(slot)) continue;
+				// A released/replayed first-master note can merge with its head
+				// next repeat; an artificial release would split that articulation.
 				if (!_triggerCaptureConfigured && _midiRecordStartSample && i < _midiRecordSeededHeld.size()
 					&& _midiRecordSeededHeld[i].test(slot))
 					continue;
@@ -2493,6 +2503,8 @@ void LoopTake::_FinalizeMidiCapture(unsigned long loopLength, unsigned long inde
             if (_triggerCaptureConfigured)
                 midiLoop->NormalizeTriggerCapture(midiLoopLength,
                     _triggerCaptureTiming.DelaySamps - _triggerCaptureTiming.SeamSamps);
+			if (i < heldThroughout.size())
+				midiLoop->ClampFullLoopCaptureNotes(midiLoopLength, heldThroughout[i]);
 			// Compute the global sample that corresponds to loop-relative position 0 so
 			// automation frac calculations stay in phase with _midiVisualPlayIndex.
 			// _midiVisualPlayIndex was just set to P0 = InitialMidiPlayIndex(...) above.
