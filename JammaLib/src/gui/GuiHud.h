@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <functional>
 #include <memory>
 #include <string>
@@ -340,7 +341,16 @@ namespace gui
 		std::optional<CableInteraction::End> _hoveredCableEnd;
 		std::shared_ptr<GuiHudSocket> _cableEndIcon;
 		std::shared_ptr<GuiHudSocket> _stationSocketIcon;
-		float _cableRevealAlpha = 0.0f;
+		struct CableFade
+		{
+			CableInteraction::Handle Route;
+			float Alpha = 0.0f;
+			bool Slow = false;
+		};
+		std::vector<CableFade> _cableFades;
+		std::chrono::steady_clock::time_point _lastCableFrame = std::chrono::steady_clock::now();
+		std::chrono::steady_clock::time_point _cableEditRevealUntil{};
+		std::optional<size_t> _editedCableTrigger;
 		std::vector<glm::vec4> _cableControlPoints;
 		std::vector<glm::vec4> _cableColors;
 		std::vector<glm::vec4> _cableRenderColors;

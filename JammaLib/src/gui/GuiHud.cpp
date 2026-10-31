@@ -1214,15 +1214,8 @@ void GuiHud::_DrawOverlayElement(base::DrawContext& ctx,
 
 void GuiHud::_DrawCables(base::DrawContext& ctx)
 {
-	const float fadeInStep = 0.16f;
-	const float fadeOutStep = 0.08f;
-	if (_cableRevealHeld || _hoveredCableEndpoint.has_value() || _cableDrag.has_value())
-		_cableRevealAlpha = std::min(1.0f, _cableRevealAlpha + fadeInStep);
-	else
-		_cableRevealAlpha = std::max(0.0f, _cableRevealAlpha - fadeOutStep);
-
-	if (_cableRevealAlpha <= 0.001f)
-		return;
+	// Keep geometry alive while each route fades, independently of input reveal intent.
+	_RebuildCableVertices();
 
 	auto shader = _cableShader.lock();
 	if (!shader || (_cableVertexArray == 0) || (_cableVertexBuffer == 0))
@@ -1255,7 +1248,7 @@ void GuiHud::_DrawCables(base::DrawContext& ctx)
 				std::clamp(color.r * brightness, 0.0f, 1.0f),
 				std::clamp(color.g * brightness, 0.0f, 1.0f),
 				std::clamp(color.b * brightness, 0.0f, 1.0f),
-				std::clamp(color.a * alphaMultiplier * _cableRevealAlpha, 0.0f, 1.0f));
+				std::clamp(color.a * alphaMultiplier, 0.0f, 1.0f));
 		}
 
 		glLineWidth(width);
@@ -1805,8 +1798,11 @@ actions::ActionResult GuiHud::OnAction(actions::TouchAction action)
 		drag.Route.Revision == _displayedRevision)
 	{
 		const auto release = CableInteraction::ReleaseToCandidate(drag, _displayedRig);
-		if (release.Changed && release.Candidate.has_value())
-			_SubmitCandidate(release.Candidate.value());
+		if (release.Changed && release.Candidate.has_value() && _SubmitCandidate(release.Candidate.value()))
+		{
+			_editedCableTrigger = drag.Route.TriggerIndex;
+			_cableEditRevealUntil = std::chrono::steady_clock::now() + std::chrono::milliseconds(350);
+		}
 	}
 	_CancelCableDrag();
 	_UpdateCableHover(action.Position);
@@ -2238,6 +2234,9 @@ void GuiHud::_PresentCableEnds(std::vector<CableInteraction::Cable>& cables)
 
 void GuiHud::_RebuildCableVertices()
 {
+	const auto now = std::chrono::steady_clock::now();
+	const auto elapsed = std::chrono::duration<float>(now - _lastCableFrame).count();
+	_lastCableFrame = now;
 	_cableControlPoints.clear();
 	_cableColors.clear();
 	const glm::vec4 inputToTriggerColor(0.86f, 0.24f, 0.26f, 0.90f);
@@ -2245,6 +2244,12 @@ void GuiHud::_RebuildCableVertices()
 	std::vector<CableInteraction::Endpoint> endpoints;
 	std::vector<CableInteraction::Cable> cables;
 	BuildInteractionGeometry(endpoints, cables);
+	const auto sameRoute = [](const auto& a, const auto& b) {
+		return a.TriggerIndex == b.TriggerIndex && a.Kind == b.Kind && a.RouteIndex == b.RouteIndex;
+	};
+	std::erase_if(_cableFades, [&cables, &sameRoute](const auto& fade) {
+		return std::none_of(cables.begin(), cables.end(), [&](const auto& cable) { return sameRoute(fade.Route, cable.Route); });
+	});
 	bool previewRenderable = true;
 	if (_cableDrag && _cableDrag->FromCable)
 	{
@@ -2260,23 +2265,33 @@ void GuiHud::_RebuildCableVertices()
 	}
 	for (const auto& cable : cables)
 	{
-		if (!_CableVisible(cable))
+		auto fade = std::find_if(_cableFades.begin(), _cableFades.end(), [&](const auto& value) { return sameRoute(value.Route, cable.Route); });
+		if (fade == _cableFades.end())
+			fade = _cableFades.insert(_cableFades.end(), { cable.Route });
+		const bool edited = _editedCableTrigger == cable.Route.TriggerIndex && now < _cableEditRevealUntil;
+		fade->Slow |= edited;
+		fade->Alpha = CableInteraction::FadeAlpha(fade->Alpha, _CableVisible(cable) || edited, elapsed, fade->Slow);
+		if (fade->Alpha <= 0.0f)
+		{
+			fade->Slow = false;
 			continue;
+		}
 		const bool selected = _hoveredCableRoute.has_value() &&
 			_hoveredCableRoute->Revision == cable.Route.Revision &&
 			_hoveredCableRoute->TriggerIndex == cable.Route.TriggerIndex &&
 			_hoveredCableRoute->Kind == cable.Route.Kind &&
 			_hoveredCableRoute->RouteIndex == cable.Route.RouteIndex;
+		const auto faded = [&fade](glm::vec4 color) { color.a *= fade->Alpha; return color; };
 		if (cable.Route.Kind == CableInteraction::RouteKind::Capture)
 		{
 			const auto color = cable.Start.Available ? inputToTriggerColor : glm::vec4(0.55f, 0.55f, 0.55f, 0.78f);
 			_AppendCurve(cable.Start.Position, cable.Finish.Position,
-				selected ? glm::vec4(glm::min(glm::vec3(color) * 1.35f, glm::vec3(1.0f)), 1.0f) : color);
+				faded(selected ? glm::vec4(glm::min(glm::vec3(color) * 1.35f, glm::vec3(1.0f)), 1.0f) : color));
 			continue;
 		}
 		_AppendStationCurve(cable.Start.Position, cable.Finish.Position,
-			selected ? glm::vec4(glm::min(glm::vec3(triggerToStationColor) * 1.3f, glm::vec3(1.0f)), 1.0f)
-			: triggerToStationColor);
+			faded(selected ? glm::vec4(glm::min(glm::vec3(triggerToStationColor) * 1.3f, glm::vec3(1.0f)), 1.0f)
+			: triggerToStationColor));
 	}
 	if (_cableDrag.has_value() && previewRenderable)
 	{

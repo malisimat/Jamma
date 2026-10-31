@@ -1012,3 +1012,27 @@ TEST_F(HudCableInteractionTests, VisiblePedalLearnControlOpensDialogWithoutSendi
     EXPECT_TRUE(learn->OnAction(learn->GlobalToLocal(action)).IsEaten);
     EXPECT_TRUE(popups.IsOpen()); EXPECT_EQ(0u,admittedEdges);
 }
+
+TEST_F(CableInteractionTests, FadeRetainsVisibilityAfterRevealEndsAndEditsFadeSlower)
+{
+    const auto visible = gui::CableInteraction::FadeAlpha(0.0f, true, 0.2f, false);
+    EXPECT_FLOAT_EQ(1.0f, visible);
+    const auto normal = gui::CableInteraction::FadeAlpha(visible, false, 0.175f, false);
+    const auto edited = gui::CableInteraction::FadeAlpha(visible, false, 0.175f, true);
+    EXPECT_NEAR(0.5f, normal, 0.0001f);
+    EXPECT_GT(edited, normal);
+    EXPECT_FLOAT_EQ(0.0f, gui::CableInteraction::FadeAlpha(normal, false, 1.0f, false));
+    EXPECT_FLOAT_EQ(0.0f, gui::CableInteraction::FadeAlpha(edited, false, 1.0f, true));
+    EXPECT_GT(gui::CableInteraction::FadeAlpha(normal, true, 0.05f, false), normal);
+}
+
+TEST_F(CableInteractionTests, FadeTimingDoesNotDependOnFrameRate)
+{
+    for (const auto frames : {30, 60, 144})
+    {
+        float alpha = 1.0f;
+        for (int frame = 0; frame < frames; ++frame)
+            alpha = gui::CableInteraction::FadeAlpha(alpha, false, 0.5f / frames, true);
+        EXPECT_NEAR(0.5f, alpha, 0.0001f);
+    }
+}

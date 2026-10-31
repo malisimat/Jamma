@@ -9,6 +9,7 @@
 #include "../vst/RackMove.h"
 #include "../midi/MidiChannelRoute.h"
 #include <array>
+#include <chrono>
 #include <functional>
 
 namespace resources { class ShaderResource; }
@@ -170,6 +171,10 @@ namespace gui
 		unsigned int _width = 64u;
 		int _faderBottom = 40;
 		utils::Size2d _viewport{1920u, 1080u};
+		float _cableAlpha = 0.0f;
+		bool _slowCableFade = false;
+		std::chrono::steady_clock::time_point _lastCableFrame = std::chrono::steady_clock::now();
+		std::chrono::steady_clock::time_point _cableEditRevealUntil{};
 		bool _collapsed = true, _revealHeld = false, _hovered = false, _consumeRelease = false, _consumeEscape = false, _rowsBuilt = false;
 		std::optional<Drag> _drag;
 		std::optional<SlotMove> _slotMove;

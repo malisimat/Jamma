@@ -186,6 +186,19 @@ std::shared_ptr<GuiButton> GuiVstRack::SlotButton(std::size_t index) const
 
 void GuiVstRack::Update(Model model, std::function<void(Command)> submit)
 {
+	const bool sameOwner = _model.OwnerId == model.OwnerId && _model.OwnerScope == model.OwnerScope;
+	if (!sameOwner)
+	{
+		_cableAlpha = 0.0f;
+		_slowCableFade = false;
+		_cableEditRevealUntil = {};
+	}
+	else if (_rowsBuilt && _model.ChannelRoutes != model.ChannelRoutes)
+	{
+		// Keep applied MIDI routing changes visible before the slower fade.
+		_slowCableFade = true;
+		_cableEditRevealUntil = std::chrono::steady_clock::now() + std::chrono::milliseconds(350);
+	}
 	if (!model.Editable || model.Inactive || (_drag && _drag->Revision != model.Revision)
 		|| (_slotMove && (_slotMove->Move.Revision != model.Revision || _slotMove->Move.OwnerId != model.OwnerId
 			|| _slotMove->Move.OwnerScope != model.OwnerScope))) CancelInteraction();
@@ -787,7 +800,16 @@ void GuiVstRack::Draw(base::DrawContext& context)
 
 void GuiVstRack::_DrawCables(base::DrawContext& context)
 {
-	if (!_revealHeld && !_hovered && !_drag) return;
+	const auto now = std::chrono::steady_clock::now();
+	const auto elapsed = std::chrono::duration<float>(now - _lastCableFrame).count();
+	_lastCableFrame = now;
+	const bool revealed = _revealHeld || _hovered || _drag || now < _cableEditRevealUntil;
+	_cableAlpha = CableInteraction::FadeAlpha(_cableAlpha, revealed, elapsed, _slowCableFade);
+	if (_cableAlpha <= 0.0f)
+	{
+		_slowCableFade = false;
+		return;
+	}
 	const auto shader = _cableShader.lock(); if (!shader || !_vertexArray) return;
 	std::vector<CableInteraction::Endpoint> endpoints; std::vector<CableInteraction::Cable> cables; std::vector<Link> links;
 	_Geometry(endpoints, cables, links);
@@ -827,7 +849,7 @@ void GuiVstRack::_DrawCables(base::DrawContext& context)
 				? glm::vec4{0.3f + hue * 0.6f, 0.9f - hue * 0.4f, 1.0f - hue * 0.3f, 0.85f}
 				: glm::vec4{0.55f, 0.55f, 0.55f, 0.55f};
 				if (width > 4.0f) colors[i] *= glm::vec4{0.45f, 0.45f, 0.45f, 1.0f};
-				colors[i].a *= context.Opacity();
+				colors[i].a *= context.Opacity() * _cableAlpha;
 			}
 			glUniform4fv(glGetUniformLocation(program, "CableControlPoints"), static_cast<GLsizei>(count * 4u), reinterpret_cast<const GLfloat*>(points.data()));
 			glUniform4fv(glGetUniformLocation(program, "CableColors"), static_cast<GLsizei>(count), reinterpret_cast<const GLfloat*>(colors.data()));

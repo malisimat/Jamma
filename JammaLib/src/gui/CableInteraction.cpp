@@ -411,3 +411,11 @@ bool CableInteraction::CanGrabEnd(const Cable& cable, End end, bool loopEditor, 
 {
 	return !loopEditor || revealHeld || cable.Route.Kind != RouteKind::Station || end == End::Start;
 }
+
+float CableInteraction::FadeAlpha(float alpha, bool revealed, float elapsedSeconds, bool slow)
+{
+	// Normal transitions take 200/350ms; edited routes take one second to disappear.
+	const float duration = revealed ? 0.2f : slow ? 1.0f : 0.35f;
+	const float step = std::max(0.0f, elapsedSeconds) / duration;
+	return std::clamp(alpha + (revealed ? step : -step), 0.0f, 1.0f);
+}
