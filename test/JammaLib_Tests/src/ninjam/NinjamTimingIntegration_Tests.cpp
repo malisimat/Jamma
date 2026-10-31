@@ -1701,3 +1701,77 @@ TEST(NinjamTimingProductionBoundary, RecordingBaselineSurvivesNoSyncWithoutChang
 	EXPECT_EQ((resumed + 64u) % 1000ul, take->MidiPlayIndex());
 	EXPECT_EQ(take->MidiPlayIndex(), NinjamProductionBoundaryFixture::AudioPosition(*take));
 }
+
+TEST(NinjamTimingProductionBoundary, ThreeRecordingBaselinesRemainDistinctAcrossRepeatedRemoteChanges)
+{
+	for (const auto sampleRate : { 44100u, 48000u })
+	{
+		auto station = NinjamProductionBoundaryFixture::MakeStation({});
+		auto clock = std::make_shared<Timer>();
+		station->SetClock(clock);
+		audio::AudioHost host{ io::UserConfig{} };
+		host.SetTimingClock(clock);
+		host.SetStations(std::make_shared<const std::vector<std::shared_ptr<engine::Station>>>(
+			std::vector<std::shared_ptr<engine::Station>>{ station }));
+		auto desired = NinjamProductionBoundaryFixture::Desired(1u, 0u, 0u,
+			ninjam::NinjamLocalFollowPolicy::ContinuousSync, 0ul, 0u);
+		const auto accept = [&](float bpm)
+		{
+			desired.Version++;
+			desired.Generation++;
+			desired.RemoteMasterIntervalLengthSamps = ninjam::IntervalSampsFromTempo(bpm, 8u, sampleRate);
+			desired.RemoteGridStepSamps = (desired.RemoteMasterIntervalLengthSamps + 4u) / 8u;
+			desired.RemoteMasterPhaseSamps = 0u;
+			desired.RemotePhaseDeviceSample = clock->SceneSamplePos();
+			desired.BeatsPerInterval = 8u;
+			desired.TempoBpm = bpm;
+			host.PublishDesiredTiming(desired);
+			EXPECT_TRUE(audio::NinjamAudioBoundaryTestAccess::Apply(host, clock->SceneSamplePos(), sampleRate));
+			audio::NinjamAudioBoundaryTestAccess::ApplyDeferredMapTransition(host);
+		};
+		std::vector<std::shared_ptr<NinjamProductionBoundaryLoopTake>> takes;
+		std::vector<unsigned long> recordedIntervals;
+		for (const auto bpm : { 113.0f, 128.0f, 137.0f })
+		{
+			accept(bpm);
+			const auto length = desired.RemoteMasterIntervalLengthSamps;
+			auto take = NinjamProductionBoundaryFixture::MakeTake("recording-" + std::to_string(bpm), length, 0ul);
+			station->AddTake(take);
+			station->CommitChanges();
+			// Also covers a completed take first published at its admission boundary.
+			station->BeginCaptureAudioBoundary(static_cast<std::uint32_t>(clock->SceneSamplePos()), clock->SceneSamplePos(),
+				clock->AbsoluteSamplePos(), {}, { length, 8u, 0u, bpm, desired.Generation });
+			takes.push_back(take);
+			recordedIntervals.push_back(length);
+			audio::NinjamAudioBoundaryTestAccess::RestoreMappedSource(host, clock->SceneSamplePos());
+			for (unsigned int block = 0u; block < 501u; ++block)
+			{
+				for (const auto& member : takes) member->EndMultiPlay(64u);
+				clock->Tick(64u, 0u);
+				audio::NinjamAudioBoundaryTestAccess::RestoreMappedSource(host, clock->SceneSamplePos());
+				ASSERT_EQ((static_cast<std::uint64_t>(block + 1u) * 64u) % length, take->MidiPlayIndex());
+				ASSERT_EQ(take->MidiPlayIndex(), NinjamProductionBoundaryFixture::AudioPosition(*take));
+			}
+		}
+		for (const auto bpm : { 128.0f, 113.0f, 137.0f, 128.0f })
+		{
+			accept(bpm);
+			for (const auto& take : takes) EXPECT_EQ(0ul, take->MidiPlayIndex());
+			for (unsigned int block = 0u; block < 401u; ++block)
+			{
+				for (const auto& take : takes) take->EndMultiPlay(64u);
+				clock->Tick(64u, 0u);
+				audio::NinjamAudioBoundaryTestAccess::RestoreMappedSource(host, clock->SceneSamplePos());
+			}
+			for (std::size_t i = 0u; i < takes.size(); ++i)
+			{
+				const auto source = recordedIntervals[i];
+				const auto remote = desired.RemoteMasterIntervalLengthSamps;
+				const auto expected = ((401ull * 64u * source + remote / 2u) / remote) % source;
+				EXPECT_EQ(source, takes[i]->RecordingMasterLengthSamps());
+				EXPECT_EQ(expected, takes[i]->MidiPlayIndex());
+				EXPECT_EQ(expected, NinjamProductionBoundaryFixture::AudioPosition(*takes[i]));
+			}
+		}
+	}
+}
