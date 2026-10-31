@@ -154,6 +154,16 @@ namespace engine
         static void ResolveReset(Scene& scene, bool accept) { ASSERT_TRUE(scene._resetAllDecision); *scene._resetAllDecision = accept; scene.AdvanceUiAnimations(); }
         static unsigned long ClockLength(Scene& scene) { return scene._quantisation.Clock()->SeedSourceLength(); }
         static void SetClock(Scene& scene) { scene._quantisation.Clock()->SetSeedSourceLength(96000ul); }
+        static void SetResetQuantisationState(Scene& scene)
+        {
+            scene._quantisation.SetGlobalPhaseOffsetSamps(321, scene._stations);
+            scene._quantisation.SetDefaultMidiQuantisationFraction(midi::MidiQuantisationFraction::Sixth, scene._stations, false);
+            scene._SetGlobalMidiQuantState(io::JamFile::GlobalMidiQuantState::All);
+        }
+        static std::int32_t GlobalPhase(Scene& scene) { return scene._quantisation.GlobalPhaseOffsetSamps(); }
+        static midi::MidiQuantisationFraction DefaultFraction(Scene& scene) { return scene._quantisation.DefaultMidiQuantisationFraction(); }
+        static io::JamFile::GlobalMidiQuantState GlobalQuantisationState(Scene& scene) { return scene._globalMidiQuantState; }
+
         static bool ReclockArmed(Scene& scene) { return scene._quantisation.IsArmedForReclock(); }
         static bool RigSaveRequested(const Scene& scene) { return scene._operation._rigSaveRequested; }
         static void ChooseAudio(Scene& scene, int index) { scene._workspace->Settings().AudioDevice()->SetSelectedIndex(index, true); }
@@ -2445,6 +2455,9 @@ TEST_F(SceneRoutingIntegrationTest, ResetAllConfirmationCancellationAndSerialize
     const auto engineRoutes = station->SnapshotAudioRoutesForExport();
     const auto revision = scene->AcceptedRigSnapshot()->Revision;
     Access::SetClock(*scene);
+    Access::SetResetQuantisationState(*scene);
+    station->SetStationPhaseOffsetSamps(-123);
+    stations.back()->SetStationPhaseOffsetSamps(456);
     scene->Controls().SetCurrentJamPath(L"previous/001.jam"); scene->Controls().SetSessionSaveFolder(L"previous");
     actions::GuiAction reset; reset.ElementType = actions::GuiAction::ACTIONELEMENT_BUTTON; reset.Index = 7214u;
     scene->OnAction(reset); const auto decision = Access::ResetDecision(*scene); ASSERT_TRUE(decision);
@@ -2452,6 +2465,11 @@ TEST_F(SceneRoutingIntegrationTest, ResetAllConfirmationCancellationAndSerialize
     Access::ResolveReset(*scene, false);
     EXPECT_EQ(1u, station->GetLoopTakeSnapshot().size()); EXPECT_DOUBLE_EQ(0.25, station->MasterLevelForExport());
     EXPECT_EQ(96000ul, Access::ClockLength(*scene)); EXPECT_EQ(L"previous/001.jam", scene->Controls().CurrentJamPath());
+    EXPECT_EQ(321, Access::GlobalPhase(*scene));
+    EXPECT_EQ(-123, station->StationPhaseOffsetSamps());
+    EXPECT_EQ(456, stations.back()->StationPhaseOffsetSamps());
+    for (const auto& retained : stations) EXPECT_EQ(321, retained->GlobalPhaseOffsetSamps());
+
     auto trigger = scene->AcceptedRigSnapshot()->Triggers.front().Instance;
     io::UserConfig captureConfig{}; captureConfig.Audio.NumChannelsIn = 1u;
     Access::StartRecording(*scene, trigger, captureConfig);
@@ -2481,7 +2499,22 @@ TEST_F(SceneRoutingIntegrationTest, ResetAllConfirmationCancellationAndSerialize
     EXPECT_TRUE(station->GetLoopTakeSnapshot().empty());
     unsigned int picks = 0u;
     { auto job = Access::ExcludeJob(*scene); Access::PickDirectory(*scene, [&](const auto&) { ++picks; return std::wstring{}; }); Access::Save(*scene); }
-    EXPECT_EQ(1u, picks); scene->Shutdown();
+    EXPECT_EQ(1u, picks);
+    {
+        auto job = Access::ExcludeJob(*scene);
+        EXPECT_EQ(0, Access::GlobalPhase(*scene));
+        EXPECT_EQ(midi::MidiQuantisationFraction::Sixth, Access::DefaultFraction(*scene));
+        EXPECT_EQ(io::JamFile::GlobalMidiQuantState::All, Access::GlobalQuantisationState(*scene));
+        for (const auto& retained : stations)
+        {
+            EXPECT_EQ(0, retained->GlobalPhaseOffsetSamps());
+            EXPECT_EQ(0, retained->StationPhaseOffsetSamps());
+            const auto freshTake = retained->AddTake();
+            EXPECT_EQ(0, freshTake->ResolvedMidiQuantisation().PhaseOffsetSamps);
+            EXPECT_EQ(midi::MidiQuantisationFraction::Sixth, freshTake->MidiQuantisation().Fraction);
+        }
+    }
+    scene->Shutdown();
 }
 
 TEST_F(SceneRoutingIntegrationTest, ReclockButtonArmsOnceAndFormerKeyboardChordDoesNotArm)

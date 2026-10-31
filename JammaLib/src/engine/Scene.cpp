@@ -1064,6 +1064,9 @@ void Scene::_ResetSessionWhileQuiescent()
 		_transportOffsetLoopFrac = 0.0;
 		for (const auto& station : _stations) if (station) station->SetTransportOffsetLoopFrac(0.0);
 		_audioEngine->PublishLocalTransportOffsetLoopFrac(0.0);
+		// Retained stations must not pass discarded session phase to new takes.
+		_quantisation.SetGlobalPhaseOffsetSamps(0, _stations);
+		for (const auto& station : _stations) if (station) station->SetStationPhaseOffsetSamps(0);
 		Reset(); // Remote authority is gone before the final local clock clear.
 		_workspace->InvalidateHover2d();
 	}
