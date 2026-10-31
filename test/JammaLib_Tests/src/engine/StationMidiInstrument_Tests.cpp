@@ -1394,8 +1394,13 @@ TEST(StationMidiInstrument, PartialFanoutAcceptanceRetainsTheAudibleLoopNote)
 	EXPECT_TRUE(loop->HeldNotes().test(midi::MidiLoop::NoteSlot(0u, 60u)));
 	RenderStationBlock(station, 128u);
 	RenderStationBlock(station, 256u);
-	EXPECT_EQ(1u, std::count_if(accepted->ProcessedEvents.begin(), accepted->ProcessedEvents.end(),
+	EXPECT_EQ(2u, std::count_if(accepted->ProcessedEvents.begin(), accepted->ProcessedEvents.end(),
 		[](const MidiEvent& event) { return event.IsNoteOn(); }));
+	ASSERT_EQ(3u, accepted->ProcessedEvents.size());
+	EXPECT_TRUE(accepted->ProcessedEvents[1].IsNoteOff());
+	EXPECT_EQ(256u, accepted->ProcessedEvents[1].sampleOffset);
+	EXPECT_TRUE(accepted->ProcessedEvents[2].IsNoteOn());
+	EXPECT_EQ(266u, accepted->ProcessedEvents[2].sampleOffset);
 }
 
 TEST(StationMidiInstrument, SkippedPluginBlockFlushesContinuationAndDropsStaleController)
