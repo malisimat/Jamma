@@ -34,98 +34,12 @@ namespace midi
 			MidiGridTargets result;
 			const auto count = source.EventCount;
 			if (count == 0u) return result;
-			std::vector<MidiEvent> displayed(count);
-			MidiQuantisation::BuildPlaybackEvents(source.Events.data(), count,
-				source.LoopLengthSamps, source.Quantisation, source.QuantisationTransportStartSamps,
-				displayed.data(), false);
-			std::vector<std::size_t> order(count), off(count, count);
-			std::vector<bool> ambiguous(count, false);
-			std::array<std::size_t, MidiEvent::PairingSlotCount> head, tail;
-			head.fill(count); tail.fill(count);
-			std::vector<std::size_t> next(count, count);
-			std::vector<std::vector<std::size_t>> crossingOn(MidiEvent::PairingSlotCount), crossingOff(MidiEvent::PairingSlotCount);
-			for (std::size_t i = 0; i < count; ++i)
+			for (const auto& projected : MidiLoop::BuildEditorNotes(source))
 			{
-				const auto& ev = source.Events[i];
-				if (ev.sampleOffset >= source.LoopLengthSamps) continue;
-				const auto slot = ev.PairingSlot();
-				if (ev.flags & MidiEvent::TriggerSeamEndpoint)
-				{
-					if (ev.IsNoteOn()) crossingOn[slot].push_back(i);
-					else if (ev.IsNoteOff()) crossingOff[slot].push_back(i);
-					continue;
-				}
-
-				if (ev.IsNoteOn())
-				{
-					if (head[slot] != count)
-					{
-						ambiguous[i] = true;
-						for (auto j = head[slot]; j != count; j = next[j]) ambiguous[j] = true;
-					}
-					if (head[slot] == count) head[slot] = i;
-					else next[tail[slot]] = i;
-					tail[slot] = i;
-				}
-				else if (ev.IsNoteOff() && head[slot] != count)
-				{
-					off[head[slot]] = i;
-					head[slot] = next[head[slot]];
-				}
+				const auto& note = projected.Note;
+				result.Notes.push_back({note.StartSample, note.StartSample + note.DurationSamples,
+					note.Note, projected.On, projected.Off, projected.Ambiguous, note.Flags});
 			}
-			std::iota(order.begin(), order.end(), 0u);
-			for (std::size_t slot = 0u; slot < crossingOn.size(); ++slot)
-				for (std::size_t i = 0u; i < (std::min)(crossingOn[slot].size(), crossingOff[slot].size()); ++i)
-				{
-					const auto on = crossingOn[slot][i], release = crossingOff[slot][i];
-					off[on] = release;
-				}
-			const auto priority = [](const MidiEvent& e) { return e.IsNoteOff() ? 0 : e.IsNoteOn() ? 2 : 1; };
-			std::stable_sort(order.begin(), order.end(), [&](auto a, auto b) {
-				return displayed[a].sampleOffset != displayed[b].sampleOffset
-					? displayed[a].sampleOffset < displayed[b].sampleOffset
-					: priority(displayed[a]) < priority(displayed[b]);
-			});
-			std::array<std::size_t, MidiEvent::PairingSlotCount> active;
-			active.fill(count);
-			const auto emit = [&](std::size_t on, std::uint32_t end, std::size_t displayedOff) {
-				const auto& ev = displayed[on];
-				if (end > ev.sampleOffset)
-					result.Notes.push_back({ev.sampleOffset, end, ev.data1, on, off[on],
-						ambiguous[on] || off[on] != displayedOff, ev.flags});
-			};
-			for (auto i : order)
-			{
-				const auto& ev = displayed[i];
-				if (ev.sampleOffset >= source.LoopLengthSamps) continue;
-				if (ev.flags & MidiEvent::TriggerSeamEndpoint) continue;
-				auto& on = active[ev.PairingSlot()];
-				if (ev.IsNoteOn())
-				{
-					if (on != count) emit(on, ev.sampleOffset, count);
-					on = i;
-				}
-				else if (ev.IsNoteOff() && on != count)
-				{
-					emit(on, ev.sampleOffset, i);
-					on = count;
-				}
-			}
-			for (auto on : active) if (on != count) emit(on, source.LoopLengthSamps, count);
-			// ExtractSpans appends circular spans after ordinary spans. A quantised
-			// circular source can become ordinary, so use the displayed seam flags.
-			for (std::size_t on = 0u; on < count; ++on)
-				{
-					if (!source.Events[on].IsNoteOn() || off[on] == count) continue;
-					const auto release = off[on];
-					const auto& ev = displayed[on];
-					if (!(ev.flags & MidiEvent::TriggerSeamEndpoint)) continue;
-					const auto duration = static_cast<std::uint64_t>(source.LoopLengthSamps)
-						- ev.sampleOffset + displayed[release].sampleOffset;
-					if (duration == 0u || duration > source.LoopLengthSamps) continue;
-					result.Notes.push_back({ev.sampleOffset, ev.sampleOffset + static_cast<std::uint32_t>(duration),
-						ev.data1, on, release, ambiguous[on], ev.flags});
-				}
 			return result;
 		}
 		Target Resolve(std::uint32_t sample, std::uint8_t pitch,

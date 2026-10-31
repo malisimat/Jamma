@@ -2006,6 +2006,8 @@ void LoopTake::Record(std::vector<unsigned int> channels,
 			auto midiModel = std::make_shared<graphics::MidiModel>(modelParams);
 			midiLoop->AttachModel(midiModel);
 			midiLoop->StartRecord();
+			midiLoop->SetSampleRate(_sampleRate);
+			midiLoop->SetMidiSeamMergeWindowMs(_midiSeamMergeWindowMs);
 			midiLoop->SetQuantisation(ResolvedMidiQuantisation(), MidiQuantisationTransportStartSamps(), _ForcedMidiQuantisationEnabled());
 			_midiLoops.push_back(midiLoop);
 			_midiLoopChannels.push_back(midiChan);
@@ -2490,7 +2492,8 @@ void LoopTake::_FinalizeMidiCapture(unsigned long loopLength, unsigned long inde
 					&& _midiRecordSeededHeld[i].test(slot))
 					continue;
 
-				midiLoop->RecordEvent(midi::MidiEvent::MakeNoteOff(heldNoteOffSample, channel, note));
+				midiLoop->RecordEvent(midi::MidiEvent::MakeNoteOff(heldNoteOffSample, channel, note)
+					.WithFlags(midi::MidiEvent::BoundaryHeld));
 			}
 		}
 	}
@@ -2858,6 +2861,8 @@ void LoopTake::Overdub(std::vector<unsigned int> channels,
 			auto midiModel = std::make_shared<graphics::MidiModel>(modelParams);
 			midiLoop->AttachModel(midiModel);
 			midiLoop->StartRecord();
+			midiLoop->SetSampleRate(_sampleRate);
+			midiLoop->SetMidiSeamMergeWindowMs(_midiSeamMergeWindowMs);
 			midiLoop->SetQuantisation(ResolvedMidiQuantisation(), MidiQuantisationTransportStartSamps(), _ForcedMidiQuantisationEnabled());
 			_midiLoops.push_back(midiLoop);
 			_midiLoopChannels.push_back(midiChan);
@@ -3515,6 +3520,7 @@ bool LoopTake::RestoreMidiFromExport(const MidiExportState& state)
 			return false;
 
 		auto loop = std::make_shared<midi::MidiLoop>();
+		loop->SetMidiSeamMergeWindowMs(_midiSeamMergeWindowMs);
 		loop->SetGroupId(stream.Id.empty() ? utils::GetGuid() : stream.Id);
 		loop->SetSampleRate(_sampleRate);
 		if (!loop->RestoreFromExport(stream.Loop))
@@ -4929,4 +4935,11 @@ std::shared_ptr<engine::Loop> engine::LoopTake::FindStagedAudioLoopById(const st
 	for (const auto& loop : _backLoops)
 		if (loop && loop->Id() == id) return loop;
 	return nullptr;
+}
+
+void LoopTake::SetMidiSeamMergeWindowMs(unsigned int milliseconds)
+{
+	std::scoped_lock lock(_midiCaptureMutex);
+	_midiSeamMergeWindowMs = milliseconds;
+	for (const auto& loop : _midiLoops) if (loop) loop->SetMidiSeamMergeWindowMs(milliseconds);
 }

@@ -1544,6 +1544,7 @@ std::shared_ptr<LoopTake> Station::AddTake()
 	MergeMixBehaviourParams mergeParams;
 	auto mixerParams = LoopTake::GetMixerParams(takeParams.Size, mergeParams);
 	auto take = std::make_shared<LoopTake>(takeParams, mixerParams);
+	take->SetMidiSeamMergeWindowMs(_midiSeamMergeWindowMs);
 	auto settings = take->MidiQuantisation();
 	settings.Fraction = _defaultMidiQuantisationFraction;
 	take->SetMidiQuantisation(settings);
@@ -2749,4 +2750,11 @@ std::shared_ptr<LoopTake> Station::RecordedMasterTakeOnOwner() const
 		&& _firstMasterRecordingStatus.load(std::memory_order_relaxed) == 1u)
 		return request->Take;
 	return _recordedMasterTake.lock();
+}
+
+void Station::SetMidiSeamMergeWindowMs(unsigned int milliseconds)
+{
+	_midiSeamMergeWindowMs = milliseconds;
+	for (const auto& take : _loopTakes) if (take) take->SetMidiSeamMergeWindowMs(milliseconds);
+	for (const auto& take : _backLoopTakes) if (take) take->SetMidiSeamMergeWindowMs(milliseconds);
 }

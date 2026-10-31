@@ -265,6 +265,7 @@ namespace engine
 		bool LoadManagedVstPlugin(std::wstring path, const std::string& identity = {});
 		bool UnloadManagedVstPlugin(const std::string& identity);
 		void ForceUnloadAllVstPlugins();
+		void SetMidiSeamMergeWindowMs(unsigned int milliseconds);
 		void SetSampleRate(float sampleRate);
 		bool ReconfigureVstFormat(float sampleRate, unsigned int blockSize);
 		float GetSampleRate() const noexcept { return _sampleRate; }
@@ -752,6 +753,7 @@ namespace engine
 		std::function<void()> _automationTopologyChanged;
 		std::vector<actions::JobAction> _pendingVstLoads;
 		std::vector<actions::JobAction> _pendingVstUnloads;
+		unsigned int _midiSeamMergeWindowMs = 200u;
 		float _sampleRate{ static_cast<float>(constants::DefaultSampleRate) };
 		// _vstPluginPaths: written on job thread (OnAction), read on main thread (VstEntries).
 		// Access is guarded by _vstPathsMutex in both directions.

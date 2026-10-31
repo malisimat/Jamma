@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <vector>
 
 #include "MidiEvent.h"
 
@@ -123,6 +124,17 @@ namespace midi
 			return "?";
 		}
 
+		struct NoteSpan
+		{
+			std::size_t On, Off; // Off == source count for an inferred capture-window end.
+			std::int64_t Start, End; // Unwrapped, retaining the original repeat.
+			bool BoundaryHeld = false;
+			bool Ambiguous = false;
+		};
+		// Owner-only source pairing. Orphan releases never acquire projected attacks.
+		static std::vector<NoteSpan> ProjectNotes(const MidiEvent* source, std::size_t count,
+			std::uint32_t length, const MidiQuantisationSettings& settings, std::uint64_t transport);
+
 		// Integer approximation used by the legacy sample-offset helper and UI.
 		// Playback uses rounded rational boundaries instead.
 		static constexpr std::uint32_t StepSamps(const MidiQuantisationSettings& settings) noexcept;
@@ -156,8 +168,7 @@ namespace midi
 		//     multiple, wrapped.
 		//   - The matching NoteOff is shifted by the same delta as its NoteOn,
 		//     preserving the recorded duration.
-		//   - If the shifted NoteOff would land at or past `loopLength`, it is
-		//     clamped to `loopLength - 1` so playback stays inside the loop.
+		//   - Endpoints wrap only after translating the complete positive span.
 		// Non-note events (and unpaired note events) keep their original
 		// timestamps.
 		// `dst` must have capacity for `eventCount` entries; allocation is the

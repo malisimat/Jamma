@@ -98,9 +98,9 @@ namespace midi
 				auto candidate = original;
 				candidate.Events[onIndex].sampleOffset = static_cast<std::uint32_t>(raw);
 				candidate.Events[onIndex].data1 = pitch;
-				candidate.Events[onIndex].flags &= static_cast<std::uint8_t>(~MidiEvent::TriggerSeamEndpoint);
+				candidate.Events[onIndex].flags &= static_cast<std::uint8_t>(~(MidiEvent::TriggerSeamEndpoint | MidiEvent::BoundaryHeld));
 				if (hasOff) { candidate.Events[offIndex].sampleOffset = static_cast<std::uint32_t>(raw + duration); candidate.Events[offIndex].data1 = pitch; }
-				if (hasOff) candidate.Events[offIndex].flags &= static_cast<std::uint8_t>(~MidiEvent::TriggerSeamEndpoint);
+				if (hasOff) candidate.Events[offIndex].flags &= static_cast<std::uint8_t>(~(MidiEvent::TriggerSeamEndpoint | MidiEvent::BoundaryHeld));
 				std::vector<std::size_t> order(candidate.EventCount);
 				std::iota(order.begin(), order.end(), 0u);
 				const auto priority = [](const MidiEvent& e) { return e.IsNoteOff() ? 0 : e.IsNoteOn() ? 2 : 1; };
@@ -150,7 +150,8 @@ namespace midi
 				|| channel >= 16u || pitch >= 128u || velocity == 0u)
 				return false;
 			const auto end = start + duration;
-			state.Events[state.EventCount++] = MidiEvent::MakeNoteOn(start, channel, pitch, velocity);
+			state.Events[state.EventCount++] = MidiEvent::MakeNoteOn(start, channel, pitch, velocity)
+				.WithFlags(end == state.LoopLengthSamps ? MidiEvent::ExactTiming : 0u);
 			// ExtractSpans extends an unmatched on to the seam. Playback flushes
 			// it there unless merged across the wrap, preserving a true one-sample final cell.
 			if (end < state.LoopLengthSamps)
@@ -260,7 +261,7 @@ namespace midi
 				&& !omitOff) return false;
 			state.Events[onIndex].sampleOffset = newStart;
 			state.Events[onIndex].data1 = newPitch;
-			state.Events[onIndex].flags &= static_cast<std::uint8_t>(~MidiEvent::TriggerSeamEndpoint);
+			state.Events[onIndex].flags &= static_cast<std::uint8_t>(~(MidiEvent::TriggerSeamEndpoint | MidiEvent::BoundaryHeld));
 			if (newEnd >= state.LoopLengthSamps && !omitOff) state.Events[onIndex].flags |= MidiEvent::TriggerSeamEndpoint;
 			if (offIndex < state.EventCount)
 			{
@@ -274,7 +275,7 @@ namespace midi
 				{
 					state.Events[offIndex].sampleOffset = newEnd % state.LoopLengthSamps;
 					state.Events[offIndex].data1 = newPitch;
-					state.Events[offIndex].flags &= static_cast<std::uint8_t>(~MidiEvent::TriggerSeamEndpoint);
+					state.Events[offIndex].flags &= static_cast<std::uint8_t>(~(MidiEvent::TriggerSeamEndpoint | MidiEvent::BoundaryHeld));
 					if (newEnd >= state.LoopLengthSamps) state.Events[offIndex].flags |= MidiEvent::TriggerSeamEndpoint;
 				}
 			}

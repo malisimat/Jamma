@@ -219,6 +219,7 @@ namespace engine
 			const LoopTake* targetTake, const Loop* targetLoop,
 			std::uint32_t masterLength) const noexcept;
 		void SetupBuffers(unsigned int bufSize);
+		void SetMidiSeamMergeWindowMs(unsigned int milliseconds);
 		void SetSampleRate(float sampleRate);
 		int CurrentVstLatencySamps() const noexcept;
 		void PollPlaybackPluginChanges() const noexcept;
@@ -491,6 +492,7 @@ namespace engine
 
 		// Sample rate and block size captured at SetupBuffers time; needed to
 		// initialise a newly loaded plugin (IVstPlugin: VST2 or VST3).
+		unsigned int _midiSeamMergeWindowMs = 30u;
 		float _sampleRate = 44100.0f;
 		unsigned int _blockSize = 512u;
 		std::vector<float> _vstBlockScratch;

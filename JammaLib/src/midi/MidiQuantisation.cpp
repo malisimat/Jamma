@@ -110,60 +110,90 @@ void MidiQuantisation::QuantiseEvents(const MidiEvent* src,
 		return;
 	}
 
-	// Track pending NoteOn shifts per (channel, note) slot in FIFO order so
-	// overlapping same-pitch notes pair each NoteOff with the earliest unmatched
-	// NoteOn.
-	std::array<std::vector<std::int64_t>, MidiEvent::PairingSlotCount> pendingDeltas;
-	std::array<std::size_t, MidiEvent::PairingSlotCount> pendingReadIndex{};
+	MidiQuantisationSettings settings;
+	settings.Enabled = true;
+	settings.Fraction = MidiQuantisationFraction::Whole;
+	settings.RemoteIntervalSamps = stepSamps;
+	settings.RemoteBpi = 1u;
+	settings.RemoteOriginSamps = phaseOffsetSamps;
+	BuildPlaybackEvents(src, eventCount, loopLength, settings, 0u, dst, false);
+}
 
-	for (std::size_t i = 0; i < eventCount; ++i)
+std::vector<MidiQuantisation::NoteSpan> MidiQuantisation::ProjectNotes(const MidiEvent* source,
+	std::size_t count, std::uint32_t length, const MidiQuantisationSettings& settings, std::uint64_t transport)
+{
+	std::vector<NoteSpan> spans;
+	if (!source || !length) return spans;
+	std::vector<std::vector<std::size_t>> pending(MidiEvent::PairingSlotCount),
+		crossing(MidiEvent::PairingSlotCount), releases(MidiEvent::PairingSlotCount);
+	std::array<std::size_t, MidiEvent::PairingSlotCount> read{};
+	for (std::size_t i = 0; i < count; ++i)
 	{
-		MidiEvent ev = src[i];
-		const auto slot = ev.PairingSlot();
-
-		if (ev.IsNoteOn())
+		const auto& event = source[i];
+		const auto slot = event.PairingSlot();
+		if (event.IsNoteOn())
 		{
-			if (ev.HasExactTiming()) pendingDeltas[slot].push_back(0);
-			else if (ev.sampleOffset < loopLength)
+			if (event.flags & MidiEvent::TriggerSeamEndpoint) crossing[slot].push_back(spans.size());
+			else
 			{
-				const auto quantised = QuantiseSampleOffset(ev.sampleOffset,
-					stepSamps,
-					loopLength,
-					phaseOffsetSamps);
-				pendingDeltas[slot].push_back(static_cast<std::int64_t>(quantised) -
-					static_cast<std::int64_t>(ev.sampleOffset));
-				ev.sampleOffset = quantised;
+				const bool overlap = read[slot] < pending[slot].size();
+				for (auto j = read[slot]; j < pending[slot].size(); ++j)
+					spans[pending[slot][j]].Ambiguous = true;
+				pending[slot].push_back(spans.size());
+				spans.push_back({i, count, event.sampleOffset, length, !event.HasExactTiming(), overlap});
+				continue;
 			}
+			spans.push_back({i, count, event.sampleOffset, length, !event.HasExactTiming()});
 		}
-		else if (ev.IsNoteOff())
+		else if (event.IsNoteOff() && (event.flags & MidiEvent::TriggerSeamEndpoint)) releases[slot].push_back(i);
+		else if (event.IsNoteOff() && read[slot] < pending[slot].size())
 		{
-			auto& deltas = pendingDeltas[slot];
-			auto& readIndex = pendingReadIndex[slot];
-
-			if (readIndex < deltas.size())
-			{
-				const auto delta = deltas[readIndex++];
-				const auto shifted = static_cast<std::int64_t>(ev.sampleOffset) + delta;
-				const auto loopEnd = static_cast<std::int64_t>(loopLength);
-
-				if (shifted < 0)
-				{
-					ev.sampleOffset = 0u;
-				}
-				else if (shifted >= loopEnd)
-				{
-					// Clamp to last sample of the loop so the NoteOff still fires.
-					ev.sampleOffset = static_cast<std::uint32_t>(loopEnd - 1);
-				}
-				else
-				{
-					ev.sampleOffset = static_cast<std::uint32_t>(shifted);
-				}
-			}
+			auto& span = spans[pending[slot][read[slot]++]];
+			span.Off = i; span.End = event.sampleOffset;
+			span.BoundaryHeld = (event.flags & MidiEvent::BoundaryHeld) != 0u;
+			if (span.BoundaryHeld) ++span.End;
 		}
-
-		dst[i] = ev;
 	}
+	for (std::size_t slot = 0; slot < crossing.size(); ++slot)
+		for (std::size_t i = 0; i < (std::min)(crossing[slot].size(), releases[slot].size()); ++i)
+		{
+			auto& span = spans[crossing[slot][i]];
+			span.Off = releases[slot][i];
+			span.End = static_cast<std::int64_t>(length) + source[span.Off].sampleOffset;
+			span.BoundaryHeld = (source[span.Off].flags & MidiEvent::BoundaryHeld) != 0u;
+			if (span.BoundaryHeld) ++span.End;
+		}
+	for (auto& span : spans)
+	{
+		const auto original = span.Start;
+		if (settings.Enabled && settings.GridInterval() && settings.GridDivisions()
+			&& !source[span.On].HasExactTiming())
+		{
+			const auto limit = (std::numeric_limits<std::int64_t>::max)() / 4;
+			const auto origin = settings.HasRemoteGrid() ? settings.RemoteOriginSamps : 0ll;
+			const auto interval = settings.GridInterval(), divisions = settings.GridDivisions();
+			// Invalid/extreme rulers keep source timing rather than overflowing a
+			// signed clock or rational-boundary intermediate. Valid audio rulers
+			// fit comfortably inside these bounds, even after years of playback.
+			if (transport <= static_cast<std::uint64_t>(limit) && origin >= -limit && origin <= limit
+				&& divisions <= static_cast<std::uint64_t>(limit) / interval)
+			{
+				const auto clock = static_cast<std::int64_t>(transport);
+				const auto relative = clock + original - origin;
+				const auto safeRelative = limit / static_cast<std::int64_t>(divisions);
+				if (relative >= -safeRelative && relative <= safeRelative)
+				{
+					const auto index = NearestBoundaryIndex(relative, interval, divisions);
+					if (index >= -limit / static_cast<std::int64_t>(interval)
+						&& index <= limit / static_cast<std::int64_t>(interval))
+						span.Start = origin + BoundarySampleAt(index, interval, divisions) - clock;
+				}
+			}
+		}
+		span.Start += settings.PhaseOffsetSamps;
+		span.End += span.Start - original;
+	}
+	return spans;
 }
 
 void MidiQuantisation::BuildPlaybackEvents(const MidiEvent* src, std::size_t eventCount,
@@ -171,48 +201,28 @@ void MidiQuantisation::BuildPlaybackEvents(const MidiEvent* src, std::size_t eve
 	std::uint64_t transportStartSamps, MidiEvent* dst, bool sort) noexcept
 {
 	if (!src || !dst || !eventCount) return;
-	auto grid = settings;
-	grid.PhaseOffsetSamps = 0;
-	BuildQuantisedPlaybackEvents(src, eventCount, loopLength, grid, transportStartSamps, dst, false);
-	if (settings.PhaseOffsetSamps != 0 && loopLength > 0u)
+	std::memcpy(dst, src, eventCount * sizeof(MidiEvent));
+	if (!loopLength) return;
+	const auto wrap = [loopLength](std::int64_t value) {
+		return static_cast<std::uint32_t>((value % loopLength + loopLength) % loopLength);
+	};
+	for (std::size_t i = 0; i < eventCount; ++i)
+		if (src[i].sampleOffset < loopLength) dst[i].sampleOffset = wrap(static_cast<std::int64_t>(src[i].sampleOffset) + settings.PhaseOffsetSamps);
+	for (const auto& span : ProjectNotes(src, eventCount, loopLength, settings, transportStartSamps))
 	{
-		for (std::size_t i = 0; i < eventCount; ++i)
+		if (src[span.On].sampleOffset >= loopLength || span.End <= span.Start) continue;
+		const auto start = wrap(span.Start);
+		dst[span.On].sampleOffset = start;
+		if (span.Off == eventCount) continue;
+		// Unmerged capture suffixes retain their historical seam-release policy.
+		if (src[span.Off].sampleOffset >= loopLength && settings.PhaseOffsetSamps == 0
+			&& !(src[span.On].flags & MidiEvent::TriggerSeamEndpoint)) continue;
+		dst[span.Off].sampleOffset = wrap(span.End);
+		for (auto index : {span.On, span.Off})
 		{
-			const auto position = static_cast<std::int64_t>(dst[i].sampleOffset) + settings.PhaseOffsetSamps;
-			dst[i].sampleOffset = static_cast<std::uint32_t>((position % loopLength + loopLength) % loopLength);
+			dst[index].flags &= static_cast<std::uint8_t>(~MidiEvent::TriggerSeamEndpoint);
+			if (start + span.End - span.Start >= loopLength) dst[index].flags |= MidiEvent::TriggerSeamEndpoint;
 		}
-		// Pair in source order before wrapping, preserving note duration and
-		// marking endpoints that now cross the seam for playback and picking.
-		std::vector<std::vector<std::size_t>> pending(MidiEvent::PairingSlotCount),
-			crossingOns(MidiEvent::PairingSlotCount), crossingOffs(MidiEvent::PairingSlotCount);
-		std::array<std::size_t, MidiEvent::PairingSlotCount> read{};
-		const auto pair = [&](std::size_t on, std::size_t off, bool crossing) {
-			const auto duration = static_cast<std::int64_t>(src[off].sampleOffset) - src[on].sampleOffset
-				+ (crossing ? loopLength : 0u);
-			const auto end = static_cast<std::int64_t>(dst[on].sampleOffset) + duration;
-			dst[off].sampleOffset = static_cast<std::uint32_t>((end % loopLength + loopLength) % loopLength);
-			for (const auto index : {on, off})
-			{
-				dst[index].flags &= static_cast<std::uint8_t>(~MidiEvent::TriggerSeamEndpoint);
-				if (end >= loopLength) dst[index].flags |= MidiEvent::TriggerSeamEndpoint;
-			}
-		};
-		for (std::size_t i = 0; i < eventCount; ++i)
-		{
-			const auto& event = src[i];
-			const auto slot = event.PairingSlot();
-			if (event.flags & MidiEvent::TriggerSeamEndpoint)
-			{
-				if (event.IsNoteOn()) crossingOns[slot].push_back(i);
-				else if (event.IsNoteOff()) crossingOffs[slot].push_back(i);
-			}
-			else if (event.IsNoteOn()) pending[slot].push_back(i);
-			else if (event.IsNoteOff() && read[slot] < pending[slot].size())
-				pair(pending[slot][read[slot]++], i, false);
-		}
-		for (std::size_t slot = 0; slot < crossingOns.size(); ++slot)
-			for (std::size_t i = 0; i < (std::min)(crossingOns[slot].size(), crossingOffs[slot].size()); ++i)
-				pair(crossingOns[slot][i], crossingOffs[slot][i], true);
 	}
 	if (sort) MidiNote::SortMidiEvents(dst, eventCount);
 }
@@ -263,88 +273,5 @@ void MidiQuantisation::BuildQuantisedPlaybackEvents(const MidiEvent* src,
 	const MidiQuantisationSettings& settings, std::uint64_t transportStartSamps,
 	MidiEvent* dst, bool sort) noexcept
 {
-	if (nullptr == src || nullptr == dst || eventCount == 0u || loopLength == 0u || !settings.Enabled)
-	{
-		if (src != nullptr && dst != nullptr && eventCount > 0u)
-			std::memcpy(dst, src, eventCount * sizeof(MidiEvent));
-		return;
-	}
-	const auto remote = settings.HasRemoteGrid();
-	const auto divisions = settings.GridDivisions();
-	const auto interval = settings.GridInterval();
-	const auto origin = remote ? settings.RemoteOriginSamps : 0ll;
-	if (divisions == 0u || interval == 0u)
-	{
-		std::memcpy(dst, src, eventCount * sizeof(MidiEvent));
-		return;
-	}
-	// Both local and remote grids use one absolute origin and rounded rational
-	// boundaries. A loop whose length is a whole number of intervals repeats on
-	// exactly the same boundaries, even when interval/divisions is fractional.
-	std::array<std::vector<std::int64_t>, MidiEvent::PairingSlotCount> pendingDeltas;
-	std::array<std::size_t, MidiEvent::PairingSlotCount> pendingReadIndex{};
-	std::vector<std::vector<std::size_t>> crossingOns(MidiEvent::PairingSlotCount);
-	std::vector<std::vector<std::size_t>> crossingOffs(MidiEvent::PairingSlotCount);
-	for (std::size_t i = 0u; i < eventCount; ++i)
-	{
-		auto event = src[i];
-		const auto slot = event.PairingSlot();
-		if (event.flags & MidiEvent::TriggerSeamEndpoint)
-		{
-			if (event.IsNoteOn()) crossingOns[slot].push_back(i);
-			else if (event.IsNoteOff()) crossingOffs[slot].push_back(i);
-			dst[i] = event;
-			continue;
-		}
-		if (event.IsNoteOn() && event.HasExactTiming())
-			pendingDeltas[slot].push_back(0);
-		else if (event.IsNoteOn() && event.sampleOffset < loopLength)
-		{
-			const auto absolute = static_cast<std::int64_t>(transportStartSamps) + event.sampleOffset;
-			const auto index = NearestBoundaryIndex(absolute - origin,
-				interval, divisions);
-			const auto boundary = origin + BoundarySampleAt(index, interval, divisions);
-			const auto local = boundary - static_cast<std::int64_t>(transportStartSamps) + settings.PhaseOffsetSamps;
-			const auto wrapped = ((local % static_cast<std::int64_t>(loopLength)) + loopLength) % loopLength;
-			event.sampleOffset = static_cast<std::uint32_t>(wrapped);
-			pendingDeltas[slot].push_back(static_cast<std::int64_t>(event.sampleOffset)
-				- static_cast<std::int64_t>(src[i].sampleOffset));
-		}
-		else if (event.IsNoteOff())
-		{
-			auto& deltas = pendingDeltas[slot];
-			auto& readIndex = pendingReadIndex[slot];
-			if (readIndex < deltas.size())
-			{
-				const auto shifted = static_cast<std::int64_t>(event.sampleOffset) + deltas[readIndex++];
-				const auto loopEnd = static_cast<std::int64_t>(loopLength);
-				event.sampleOffset = shifted < 0 ? 0u : static_cast<std::uint32_t>(
-					shifted >= loopEnd ? loopEnd - 1 : shifted);
-			}
-		}
-		dst[i] = event;
-	}
-	for (std::size_t slot = 0u; slot < crossingOns.size(); ++slot)
-		for (std::size_t i = 0u; i < (std::min)(crossingOns[slot].size(), crossingOffs[slot].size()); ++i)
-		{
-			const auto on = crossingOns[slot][i], off = crossingOffs[slot][i];
-			auto start = static_cast<std::int64_t>(src[on].sampleOffset);
-			if (!src[on].HasExactTiming())
-			{
-				const auto transport = static_cast<std::int64_t>(transportStartSamps);
-				const auto index = NearestBoundaryIndex(transport + start - origin, interval, divisions);
-				start = origin + BoundarySampleAt(index, interval, divisions) - transport + settings.PhaseOffsetSamps;
-			}
-			start = (start % loopLength + loopLength) % loopLength;
-			const auto duration = static_cast<std::int64_t>(loopLength) - src[on].sampleOffset + src[off].sampleOffset;
-			dst[on].sampleOffset = static_cast<std::uint32_t>(start);
-			dst[off].sampleOffset = static_cast<std::uint32_t>((start + duration) % loopLength);
-			// The baked circular identity describes the current endpoint layout.
-			if (start + duration < loopLength)
-			{
-				dst[on].flags &= static_cast<std::uint8_t>(~MidiEvent::TriggerSeamEndpoint);
-				dst[off].flags &= static_cast<std::uint8_t>(~MidiEvent::TriggerSeamEndpoint);
-			}
-		}
-	if (sort) MidiNote::SortMidiEvents(dst, eventCount);
+	BuildPlaybackEvents(src, eventCount, loopLength, settings, transportStartSamps, dst, sort);
 }

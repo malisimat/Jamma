@@ -226,7 +226,9 @@ RigCoordinator::EditResult RigCoordinator::SubmitCandidate(const io::RigFile& ca
 		_editsEnabled.store(true, std::memory_order_release);
 		return EditResult::ValidationFailed;
 	}
-	if (candidateRig.User != accepted->Rig.User)
+	auto lifecycleSettings = candidateRig.User;
+	lifecycleSettings.Loop.MidiSeamMergeWindowMs = accepted->Rig.User.Loop.MidiSeamMergeWindowMs;
+	if (lifecycleSettings != accepted->Rig.User)
 	{
 		_editsEnabled.store(true, std::memory_order_release);
 		return EditResult::ReinitialisationRequired;

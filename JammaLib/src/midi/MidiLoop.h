@@ -189,6 +189,7 @@ namespace midi
 	public:
 		struct EditState
 		{
+			std::uint32_t SeamMergeWindowSamps = 0u;
 			std::array<MidiEvent, DefaultCapacity> Events{};
 			std::size_t EventCount = 0u;
 			std::uint32_t LoopLengthSamps = 0u;
@@ -196,6 +197,13 @@ namespace midi
 			std::uint64_t SourceRevision = 0u;
 			MidiQuantisationSettings Quantisation{};
 			std::uint64_t QuantisationTransportStartSamps = 0u;
+		};
+
+		struct ProjectedNote
+		{
+			MidiNote Note;
+			std::size_t On, Off;
+			bool Ambiguous = false;
 		};
 
 	private:
@@ -215,13 +223,16 @@ namespace midi
 		struct PlaybackSnapshot
 		{
 			std::array<MidiEvent, DefaultCapacity> Raw{};
-			std::array<MidiEvent, DefaultCapacity> Quantised{};
-			std::array<std::uint8_t, DefaultCapacity> RawUnmatchedStarts{};
-			std::array<std::uint8_t, DefaultCapacity> QuantisedUnmatchedStarts{};
-			std::array<std::uint16_t, DefaultCapacity> QuantisedContinuationRoots{};
+			std::array<MidiEvent, 2u * DefaultCapacity> Quantised{};
+			std::array<std::uint8_t, 2u * DefaultCapacity> RawUnmatchedStarts{};
+			std::array<std::uint8_t, 2u * DefaultCapacity> QuantisedUnmatchedStarts{};
+			std::array<std::uint16_t, 2u * DefaultCapacity> QuantisedContinuationRoots{};
+			std::vector<ProjectedNote> Notes; // Owner-prepared drawing and edit identities.
 			ChaseState RawChaseHead{};
 			ChaseState QuantisedChaseHead{};
 			std::size_t EventCount = 0u;
+			std::size_t PlaybackEventCount = 0u;
+			std::uint32_t SeamMergeWindowSamps = 0u;
 			std::uint32_t LoopLengthSamps = 0u;
 			std::uint64_t Revision = 0u;
 			std::uint64_t SourceRevision = 0u;
@@ -425,7 +436,10 @@ namespace midi
 		// Update the sample rate used to project the ms-based automation merge
 		// window into normalised frac space. Should be called whenever the audio
 		// device sample rate changes, mirroring the pattern used for audio Loop.
-		void SetSampleRate(float sampleRate) noexcept { _sampleRate = sampleRate; }
+		void SetSampleRate(float sampleRate) noexcept;
+		void SetMidiSeamMergeWindowMs(unsigned int milliseconds) noexcept;
+		// Same owner-side view as playback, retaining source indices for editor gestures.
+		static std::vector<ProjectedNote> BuildEditorNotes(const EditState& source);
 
 		static constexpr std::size_t NoteSlot(std::uint8_t channel, std::uint8_t note) noexcept
 		{
@@ -531,6 +545,7 @@ namespace midi
 		std::uint64_t _callbackRevision = 0u;
 		std::size_t _eventCount;
 		float _sampleRate;
+		unsigned int _midiSeamMergeWindowMs = 30u;
 		std::uint32_t _loopLengthSamps;
 		// TODO(latency): the loop-relative phase anchor used for MIDI/automation
 		// playback does not yet account for this take's VST chain latency -- see

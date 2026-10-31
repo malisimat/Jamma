@@ -1995,3 +1995,19 @@ TEST_F(RigSnapshotTest, SuccessfulRigWriteKeepsCapturedRevisionDespiteDefaultUpd
 	(*created)->FinishExplicitRigSave();
 	(*created)->Shutdown();
 }
+
+TEST_F(RigSnapshotTest, SeamWindowCanChangeWithoutAcceptingOtherLifecycleSettings)
+{
+	using Result=engine::RigCoordinator::EditResult;
+	auto station=RuntimeStation("Station");
+	auto initial=EmptyRig();
+	engine::RigCoordinator coordinator;
+	ASSERT_TRUE(coordinator.BuildInitial(initial,{StationDescriptor("Station")},{station},0u,{},
+		engine::TriggerParams(),[](const io::RigFile&){return true;}));
+	auto candidate=initial; candidate.User.Audio.SampleRate+=1u;
+	EXPECT_EQ(Result::ReinitialisationRequired,coordinator.SubmitCandidate(candidate));
+	candidate=initial; candidate.User.Loop.MidiSeamMergeWindowMs=0u;
+	ASSERT_EQ(Result::Pending,coordinator.SubmitCandidate(candidate));
+	ASSERT_TRUE(coordinator.Staged());
+	EXPECT_EQ(0u,coordinator.Staged()->Rig.User.Loop.MidiSeamMergeWindowMs);
+}

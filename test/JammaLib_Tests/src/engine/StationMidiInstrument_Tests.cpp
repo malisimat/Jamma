@@ -956,12 +956,14 @@ TEST(StationMidiInstrument, RecordedMidiLoopPlaybackCanRouteToSpecificStationPlu
 	station->AddTake(take);
 	station->CommitChanges();
 
-	take->Record({}, station->Name(), { 0u }, { "Keys" });
+	take->Record({}, station->Name(), { 0u }, { "Keys" }, {}, 0u, 0u);
 	take->RecordMidiEvent(MidiEvent::MakeNoteOn(24u, 0u, 48u, 100u), "Keys", 24u);
 	take->Play(0u, 128u, 0u);
 	ASSERT_TRUE(station->SetMidiChannelRoute(0u, {{pluginB->StateId()}}, station->RackRevision()));
 
 	RenderStationBlock(station, 0u);
+
+	RenderStationBlock(station, 128u, 1u); // Artificial closure releases exactly at the seam.
 
 	EXPECT_TRUE(pluginA->Events.empty());
 	ASSERT_EQ(2u, pluginB->Events.size());
