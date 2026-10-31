@@ -183,14 +183,26 @@ namespace engine
 		}
 		static bool AudioRefreshPending(const Scene& scene) { return scene._operation._audioRefreshRequested.load(); }
 		static bool AudioRefreshOperation(const Scene& scene) { return scene._operation.Current() == SessionControl::AudioRefresh; }
+		static bool ScheduleRefreshWithOpenStream(Scene& scene) { return scene._operation._ScheduleAudioRefresh(true); }
+		static bool ManualAudioRescanOperation(const Scene& scene) { return scene._operation.Current() == SessionControl::AudioRescan; }
+		static void RequestManualAudioRescan(Scene& scene) { scene._operation.RefreshAudioFromWindow(); }
+		static SessionControl::Presentation DevicePresentation(Scene& scene) { return scene._operation.TakePresentation(); }
+		static io::UserConfig::AudioSettings ConfiguredAudio(const Scene& scene) { return scene._userConfig.Audio; }
+		static void SetHostInventory(Scene& scene, audio::AsioInventory inventory) { scene._audioEngine->_asioInventory = std::move(inventory); }
+		static bool ValidateAudioDraft(Scene& scene, bool hasTakes, std::string& error)
+		{
+			SessionControl::Effects effects;
+			effects.CheckEligibility = [hasTakes] { return SessionControl::Eligibility{false, hasTakes, false}; };
+			return scene._operation._ValidateAudioDraft(error, effects);
+		}
 		static void FinishTestAudioRefresh(Scene& scene) { scene._operation.Begin(SessionControl::None); }
-		static io::UserConfig::AudioSettings FailAudioRefreshWithoutHardware(Scene& scene)
+		static io::UserConfig::AudioSettings FailAudioRefreshWithoutHardware(Scene& scene, audio::AudioStreamParams actual = {})
 		{
 			// The existing uncertain-backend guard rejects before constructing any
 			// RtAudio object. Exercise request choice/failure scheduling hermetically.
 			scene._audioEngine->_backendLifetimeUncertain = true;
 			std::string error;
-			scene._operation._ApplyAudioCandidate({}, std::chrono::steady_clock::now(), {scene._sceneMutex, scene._stations}, {}, error);
+			scene._operation._ApplyAudioCandidate(actual, std::chrono::steady_clock::now(), {scene._sceneMutex, scene._stations}, {}, error);
 			EXPECT_FALSE(error.empty());
 			scene._audioEngine->_backendLifetimeUncertain = false;
 			return scene._operation._admittedAudio.Value;
@@ -2279,6 +2291,116 @@ TEST_F(SceneRoutingIntegrationTest, AudioRefreshRetriesConfiguredDeviceWithoutAp
 		EXPECT_TRUE(Access::ScheduleAudioRefresh(*scene));
 		EXPECT_EQ(configured, Access::FailAudioRefreshWithoutHardware(*scene));
 		Access::FinishTestAudioRefresh(*scene);
+	}
+	scene->Shutdown();
+}
+
+TEST_F(SceneRoutingIntegrationTest, OpenBackupStreamRequiresManualRescanAndKeepsItsActualGeometry)
+{
+	using Access = engine::SourceLossIntegrationTestAccess;
+	auto scene = FreshScene({ Station("Local") }, {});
+	ASSERT_TRUE(scene);
+	{
+		auto excludeJob = Access::ExcludeJob(*scene);
+		const auto configured = Access::ConfiguredAudio(*scene);
+		auto draft = configured;
+		draft.Name = "Unsaved different card";
+		Access::SetUnsubmittedAudioDraft(*scene, draft);
+		scene->Controls().RequestAudioRefresh();
+		// Explicit lifecycle observation represents a real open backup stream;
+		// no physical ASIO device is constructed by this policy test.
+		EXPECT_FALSE(Access::ScheduleRefreshWithOpenStream(*scene));
+		EXPECT_TRUE(Access::ControlIdle(*scene));
+		EXPECT_FALSE(Access::AudioRefreshPending(*scene));
+		EXPECT_NE(std::string::npos, Access::DevicePresentation(*scene).DeviceStatus.find("Rescan audio devices"));
+		EXPECT_FALSE(Access::ScheduleAudioRefresh(*scene)); // No periodic retry.
+
+		Access::RequestManualAudioRescan(*scene);
+		EXPECT_TRUE(Access::ScheduleRefreshWithOpenStream(*scene));
+		EXPECT_TRUE(Access::ManualAudioRescanOperation(*scene)); // Manual intent survives admission.
+		const audio::AudioStreamParams backup{"Current backup", 48000u, 3u, 256u, 11u, 22u, 1u, 2u};
+		const auto requested = Access::FailAudioRefreshWithoutHardware(*scene, backup);
+		EXPECT_EQ(backup.Name, requested.Name);
+		EXPECT_EQ(backup.SampleRate, requested.SampleRate);
+		EXPECT_EQ(backup.BufSize, requested.BufSize);
+		EXPECT_EQ(backup.NumBuffers, requested.NumBuffers);
+		EXPECT_EQ(backup.NumInputChannels, requested.NumChannelsIn);
+		EXPECT_EQ(backup.NumOutputChannels, requested.NumChannelsOut);
+		EXPECT_EQ(configured, Access::ConfiguredAudio(*scene));
+		EXPECT_EQ(configured, scene->AcceptedRigSnapshot()->Rig.User.Audio);
+		EXPECT_EQ(draft, Access::SubmittedAudio(*scene));
+		Access::FinishTestAudioRefresh(*scene);
+		EXPECT_FALSE(Access::ScheduleAudioRefresh(*scene));
+	}
+	scene->Shutdown();
+}
+
+TEST_F(SceneRoutingIntegrationTest, FailedAudioRequestStillPublishesHostInventoryForDevicePage)
+{
+	using Access = engine::SourceLossIntegrationTestAccess;
+	auto scene = FreshScene({ Station("Local") }, {});
+	ASSERT_TRUE(scene);
+	{
+		auto excludeJob = Access::ExcludeJob(*scene);
+		audio::AsioInventory inventory;
+		inventory.Devices = {{0u, "Newly powered preferred", true, "", 8u, 8u, {44100u}, 44100u}};
+		// Inject the host's discovery result to exercise the completion/publication
+		// path independently of physical ASIO discovery and open failure.
+		Access::SetHostInventory(*scene, inventory);
+		Access::RequestManualAudioRescan(*scene);
+		ASSERT_TRUE(Access::ScheduleRefreshWithOpenStream(*scene));
+		Access::FailAudioRefreshWithoutHardware(*scene, {"Current backup", 44100u, 2u, 128u, 0u, 0u, 2u, 2u});
+		const auto presentation = Access::DevicePresentation(*scene);
+		ASSERT_TRUE(presentation.PagesChanged);
+		ASSERT_EQ(1u, presentation.Inventory.Devices.size());
+		EXPECT_EQ("Newly powered preferred", presentation.Inventory.Devices.front().Name);
+		EXPECT_TRUE(presentation.Inventory.Devices.front().Probed);
+		EXPECT_NE(std::string::npos, presentation.DeviceStatus.find("Backend teardown"));
+		Access::FinishTestAudioRefresh(*scene);
+	}
+	scene->Shutdown();
+}
+
+TEST_F(SceneRoutingIntegrationTest, UnavailableDropdownSelectionCanReachFreshDiscoveryWithValidGeometry)
+{
+	using Access = engine::SourceLossIntegrationTestAccess;
+	auto scene = FreshScene({ Station("Local") }, {});
+	ASSERT_TRUE(scene);
+	{
+		auto excludeJob = Access::ExcludeJob(*scene);
+		audio::AsioInventory inventory;
+		inventory.Devices = {{0u, "Current backup", true, "", 2u, 2u, {44100u}, 44100u},
+			{1u, "Preferred", false, "Powered off at startup"}};
+		Access::StartedAudioSelection(*scene, inventory, {"Current backup", 44100u, 2u, 128u, 0u, 0u, 2u, 2u});
+		Access::ChooseAudio(*scene, 1);
+		EXPECT_EQ("Preferred", Access::SubmittedAudio(*scene).Name);
+		std::string error;
+		EXPECT_TRUE(Access::ValidateAudioDraft(*scene, false, error));
+		auto draft = Access::SubmittedAudio(*scene);
+		draft.Name = "Not in stale inventory";
+		Access::SetUnsubmittedAudioDraft(*scene, draft);
+		EXPECT_TRUE(Access::ValidateAudioDraft(*scene, false, error));
+		draft.NumChannelsIn = draft.NumChannelsOut = 0u;
+		Access::SetUnsubmittedAudioDraft(*scene, draft);
+		EXPECT_FALSE(Access::ValidateAudioDraft(*scene, false, error));
+		draft.NumChannelsOut = 2u;
+		draft.BufSize = 0u;
+		Access::SetUnsubmittedAudioDraft(*scene, draft);
+		EXPECT_FALSE(Access::ValidateAudioDraft(*scene, false, error));
+		draft.BufSize = 128u;
+		draft.SampleRate = Access::ConfiguredAudio(*scene).SampleRate == 48000u ? 44100u : 48000u;
+		Access::SetUnsubmittedAudioDraft(*scene, draft);
+		EXPECT_FALSE(Access::ValidateAudioDraft(*scene, true, error));
+		EXPECT_EQ("Sample rate cannot change while any takes exist", error);
+		draft.Name = "Current backup";
+		draft.SampleRate = 44100u;
+		draft.NumChannelsOut = 3u;
+		Access::SetUnsubmittedAudioDraft(*scene, draft);
+		EXPECT_FALSE(Access::ValidateAudioDraft(*scene, false, error));
+		draft.NumChannelsOut = 2u;
+		draft.SampleRate = 48000u;
+		Access::SetUnsubmittedAudioDraft(*scene, draft);
+		EXPECT_FALSE(Access::ValidateAudioDraft(*scene, false, error));
 	}
 	scene->Shutdown();
 }

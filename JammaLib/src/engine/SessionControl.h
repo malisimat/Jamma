@@ -27,7 +27,7 @@ namespace engine
 	class SessionControl : public SessionControls
 	{
 	public:
-		enum Kind { None, Audio, Midi, Save, Load, ResetSession, AudioRefresh };
+		enum Kind { None, Audio, Midi, Save, Load, ResetSession, AudioRefresh, AudioRescan };
 		struct AudioRestoration { bool Success; bool AdmissionRestored; };
 		Kind Current() const { return _kind; }
 		std::uint64_t Identity() const { return _identity; }
@@ -231,6 +231,7 @@ namespace engine
 		std::uint64_t _admittedMidiRevision = 0u;
 		void _UpdateWindowPresentation(const audio::AudioStreamParams& actual, bool inventoryBusy);
 		bool _ScheduleWindowOperation(DeviceSelectionSchedule::Clock::time_point now, const audio::AudioStreamParams& actual, const Effects& effects, bool inventoryBusy);
+		bool _ScheduleAudioRefresh(bool streamOpen);
 		void _CompleteMidiRequest();
 		void _AcceptAudioCandidate(const audio::AudioStreamParams& actual, StationAccess access, const Effects& effects, bool refresh);
 		bool _AdmitBoundary(StationAccess access, DeviceSelectionSchedule::Clock::time_point now);

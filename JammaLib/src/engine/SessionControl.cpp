@@ -318,9 +318,13 @@ bool SessionControl::_ValidateAudioDraft(std::string& error, const Effects& effe
 {
 	const auto found = std::find_if(_deviceInventory.Devices.begin(), _deviceInventory.Devices.end(),
 		[this](const auto& device) { return device.Name == _submittedAudio.Value.Name; });
-	if (found == _deviceInventory.Devices.end() || !found->Probed) { error = "Selected audio device is unavailable"; return false; }
-	if ((!_submittedAudio.Value.NumChannelsIn && !_submittedAudio.Value.NumChannelsOut) || _submittedAudio.Value.NumChannelsIn > found->InputChannels || _submittedAudio.Value.NumChannelsOut > found->OutputChannels) { error = "Invalid input/output channel counts"; return false; }
-	if (!_submittedAudio.Value.BufSize || !_submittedAudio.Value.SampleRate || std::find(found->SampleRates.begin(), found->SampleRates.end(), _submittedAudio.Value.SampleRate) == found->SampleRates.end()) { error = "Unsupported sample rate or invalid buffer request"; return false; }
+	// Missing/unprobed entries can be stale after a device powers on. The exact
+	// selection is validated again against fresh discovery after closing the stream.
+	const bool probed = found != _deviceInventory.Devices.end() && found->Probed;
+	if ((!_submittedAudio.Value.NumChannelsIn && !_submittedAudio.Value.NumChannelsOut) ||
+		(probed && (_submittedAudio.Value.NumChannelsIn > found->InputChannels || _submittedAudio.Value.NumChannelsOut > found->OutputChannels))) { error = "Invalid input/output channel counts"; return false; }
+	if (!_submittedAudio.Value.BufSize || !_submittedAudio.Value.SampleRate ||
+		(probed && std::find(found->SampleRates.begin(), found->SampleRates.end(), _submittedAudio.Value.SampleRate) == found->SampleRates.end())) { error = "Unsupported sample rate or invalid buffer request"; return false; }
 	const auto actual = _audio->GetStreamParams();
 	if (effects.CheckEligibility().HasTakes && _submittedAudio.Value.SampleRate != (actual.SampleRate ? actual.SampleRate : (*_config).Audio.SampleRate)) { error = "Sample rate cannot change while any takes exist"; return false; }
 	return true;
@@ -486,22 +490,26 @@ bool SessionControl::_ScheduleWindowOperation(DeviceSelectionSchedule::Clock::ti
 		else if (_audioRefreshRequested.load(std::memory_order_acquire))
 		{
 			if (effects.CheckEligibility().CaptureBusy || RigSaveInProgress() || RigSaveDialogOpen()) return false;
-			// RtAudio ASIO discovery unloads the process-wide current driver. Even a
-			// paused/open stream must be left alone; notifications never interrupt it.
-			if (_audio->HasOpenStream())
-			{
-				_audioRefreshRequested.exchange(false, std::memory_order_acq_rel);
-				if (_manualAudioRefresh) _SetDeviceStatus("Rescan unavailable while an audio stream is open");
-				_manualAudioRefresh = false;
-				return false;
-			}
-			_audioRefreshRequested.exchange(false, std::memory_order_acq_rel);
-			_manualAudioRefresh = false;
-			Begin(AudioRefresh);
-			_SetDeviceStatus("Waiting to rescan audio devices");
+			if (!_ScheduleAudioRefresh(_audio->HasOpenStream())) return false;
 		}
 		else return false;
 	}
+	return true;
+}
+
+bool SessionControl::_ScheduleAudioRefresh(bool streamOpen)
+{
+	// Notifications never interrupt an open stream. Explicit Rescan uses the
+	// admitted Reconfigure path, which closes it before ASIO discovery.
+	_audioRefreshRequested.exchange(false, std::memory_order_acq_rel);
+	if (streamOpen && !_manualAudioRefresh)
+	{
+		_SetDeviceStatus("Device change detected; Rescan audio devices to refresh the list");
+		return false;
+	}
+	// With no open stream, both requests recover the configured preferred card.
+	Begin(std::exchange(_manualAudioRefresh, false) && streamOpen ? AudioRescan : AudioRefresh);
+	_SetDeviceStatus("Waiting to rescan audio devices");
 	return true;
 }
 
@@ -546,7 +554,7 @@ void SessionControl::_ApplyAdmittedOperation(const audio::AudioStreamParams& act
 		if (Current() == SessionControl::Save) { _CaptureSession(actual, access, effects); return; }
 		if (Current() == AudioRefresh && _audio->HasOpenStream())
 		{
-			_SetDeviceStatus("Rescan unavailable while an audio stream is open");
+			_SetDeviceStatus("Device change detected; Rescan audio devices to refresh the list");
 			FinishOperation(nullptr, access); return;
 		}
 		if (!PauseAudio(*_audio, error))
@@ -567,14 +575,15 @@ void SessionControl::_ApplyAdmittedOperation(const audio::AudioStreamParams& act
 		}
 		if (Current() != SessionControl::Midi && effects.CheckEligibility().CaptureBusy)
 		{
-			if (Current() == AudioRefresh) RequestAudioRefresh();
+			if (Current() == AudioRescan) RefreshAudioFromWindow();
+			else if (Current() == AudioRefresh) RequestAudioRefresh();
 			if (Current() == SessionControl::Audio) _SetDeviceStatus("Waiting for recording");
 			else ReportFileOutcome("File operation rejected during capture/pending actions");
 			FinishOperation(nullptr, access); return;
 		}
 		if (Current() == SessionControl::Load) { MarkLoadReady(); ReportFileStatus("Loading session"); return; }
 
-		if (Current() == SessionControl::Audio || Current() == AudioRefresh) _ApplyAudioCandidate(actual, now, access, effects, error);
+		if (Current() == SessionControl::Audio || Current() == AudioRefresh || Current() == AudioRescan) _ApplyAudioCandidate(actual, now, access, effects, error);
 		if (Current() != SessionControl::None) FinishOperation(nullptr, access);
 	}
 	catch (const std::exception& error)
@@ -589,8 +598,21 @@ void SessionControl::_ApplyAdmittedOperation(const audio::AudioStreamParams& act
 void SessionControl::_ApplyAudioCandidate(const audio::AudioStreamParams& actual, DeviceSelectionSchedule::Clock::time_point now, StationAccess access, const Effects& effects, std::string& error)
 {
 	const auto admittedRevision = _audioSchedule.Revision;
-	const bool refresh = Current() == AudioRefresh;
+	const bool refresh = Current() == AudioRefresh || Current() == AudioRescan;
 	_admittedAudio = refresh ? Candidate<io::UserConfig::AudioSettings>{_config->Audio, _submittedAudio.Revision} : _submittedAudio;
+	if (Current() == AudioRescan && actual.SampleRate != 0u)
+	{
+		// Rescan preserves the current stream, including a startup fallback. Neither
+		// the saved preferred device nor an unsaved draft chooses this replacement.
+		auto& settings = _admittedAudio.Value;
+		settings = _audio->GetUserConfig().Audio;
+		settings.Name = actual.Name;
+		settings.SampleRate = actual.SampleRate;
+		settings.BufSize = actual.BufSize;
+		settings.NumBuffers = actual.NumBuffers;
+		settings.NumChannelsIn = actual.NumInputChannels;
+		settings.NumChannelsOut = actual.NumOutputChannels;
+	}
 	const auto requested = _admittedAudio.Value;
 	if (!refresh) _audioSchedule.Attempted(admittedRevision, now);
 	// Recovery opens the configured device against fresh discovery in Reconfigure;
@@ -615,13 +637,14 @@ void SessionControl::_ApplyAudioCandidate(const audio::AudioStreamParams& actual
 
 void SessionControl::_AcceptAudioCandidate(const audio::AudioStreamParams& actual, StationAccess access, const Effects& effects, bool refresh)
 {
-	// A successful replacement must remain running even if the previous stream
-	// was absent. Restore its admission only after runtime publication completes.
-	RestoreRunningAudio();
+	const bool preservePreferences = Current() == AudioRescan && actual.SampleRate != 0u;
+	// Rescan retains the previous running/paused state. A selected/recovered
+	// replacement starts even when the previous stream was absent.
+	if (!preservePreferences) RestoreRunningAudio();
 	const auto acceptedParams = _audio->GetStreamParams();
 	auto settings = _admittedAudio.Value; settings.Name = acceptedParams.Name; settings.SampleRate = acceptedParams.SampleRate; settings.BufSize = acceptedParams.BufSize; settings.NumBuffers = acceptedParams.NumBuffers; settings.NumChannelsIn = acceptedParams.NumInputChannels; settings.NumChannelsOut = acceptedParams.NumOutputChannels;
 	const auto oldRate = actual.SampleRate ? actual.SampleRate : _config->Audio.SampleRate;
-	(*_config).Audio = settings;
+	if (!preservePreferences) (*_config).Audio = settings;
 	auto& sizes = _acceptedBufferSizes[acceptedParams.Name];
 	if (std::find(sizes.begin(), sizes.end(), acceptedParams.BufSize) == sizes.end()) { if (sizes.size() == 16u) sizes.erase(sizes.begin()); sizes.push_back(acceptedParams.BufSize); }
 	const auto midiState = _midiState.load(std::memory_order_acquire);
@@ -641,12 +664,13 @@ void SessionControl::_AcceptAudioCandidate(const audio::AudioStreamParams& actua
 	_midiState.store(std::make_shared<const MidiState>(MidiState{refreshedMidi, newMidiNames, serialIds}), std::memory_order_release);
 	_midiActive.store(true, std::memory_order_release);
 	{ std::scoped_lock lock(access.Mutex); effects.ApplyRuntimeAvailabilityLocked({acceptedParams.NumInputChannels, newMidiNames, serialIds, true, false, true, oldRate}); }
-	const bool merged = _rig->MergeHardwarePreferences(settings, std::nullopt);
-	_SetDeviceStatus(!merged ? "Applied; rig update unavailable" : (acceptedParams.NumOutputChannels < actual.NumOutputChannels ? "Ready; unavailable output routes disconnected" : "Ready"));
+	const bool merged = preservePreferences || _rig->MergeHardwarePreferences(settings, std::nullopt);
+	_SetDeviceStatus(preservePreferences ? "Audio devices rescanned; current audio restored" :
+		(!merged ? "Applied; rig update unavailable" : (acceptedParams.NumOutputChannels < actual.NumOutputChannels ? "Ready; unavailable output routes disconnected" : "Ready")));
 	_Notice("Audio device", !merged ? "Audio device ready, but the rig could not be updated" :
 		(acceptedParams.NumOutputChannels < actual.NumOutputChannels ? "Ready; unavailable output routes disconnected" : "Audio device ready"));
-	if (_submittedAudio.Revision == _admittedAudio.Revision && (!refresh || _submittedAudio.Value == _admittedAudio.Value)) _submittedAudio.Value = settings;
-	if (!refresh || _submittedAudio.Value == settings)
+	if (!preservePreferences && _submittedAudio.Revision == _admittedAudio.Revision && (!refresh || _submittedAudio.Value == _admittedAudio.Value)) _submittedAudio.Value = settings;
+	if (!preservePreferences && (!refresh || _submittedAudio.Value == settings))
 		_presentation.AudioAccepted = Candidate<io::UserConfig::AudioSettings>{settings, _admittedAudio.Revision};
 	_devicePageDirty = true;
 }
