@@ -8,6 +8,7 @@
 #include "../midi/MidiRouter.h"
 #include "../io/NativeMidiSidecar.h"
 #include "../io/IoSessionLoader.h"
+#include "../gui/GuiVstRack.h"
 #include "../utils/MathUtils.h"
 
 using namespace engine;
@@ -1973,6 +1974,7 @@ void Station::OnBounce(unsigned int numSamps,
 bool Station::LayoutTakeRacks(const glm::mat4& viewProjection, utils::Size2d viewport)
 {
 	constexpr int padding = 8;
+	std::vector<std::pair<std::shared_ptr<LoopTake>, int>> visibleTakes;
 	std::optional<int> previousTop;
 	bool changed = false;
 	const auto stationPosition = PresentationModelPosition();
@@ -1991,11 +1993,41 @@ bool Station::LayoutTakeRacks(const glm::mat4& viewProjection, utils::Size2d vie
 			stationPosition.Z + takePosition.Z * scale, 1.0f);
 		if (clip.w <= 0.0f) continue;
 		const auto centreY = static_cast<int>((clip.y / clip.w + 1.0f) * 0.5f * viewport.Height);
+		visibleTakes.emplace_back(take, centreY);
+	}
+
+	// Keep the single-take size as the maximum, but use the projected spacing
+	// for multiple takes instead of dividing the fixed station control height.
+	int rackHeight = (std::max)(1, static_cast<int>(_CalcTakeHeight(_sizeParams.Size.Height, 1u))
+		- 2 * static_cast<int>(_Gap.Height));
+	if (visibleTakes.size() > 1u)
+	{
+		for (size_t i = 1; i < visibleTakes.size(); ++i)
+			rackHeight = (std::min)(rackHeight, (std::max)(1, visibleTakes[i].second - visibleTakes[i - 1].second - padding));
+	}
+	for (const auto& [take, centreY] : visibleTakes)
+	{
+		const auto rack = take->GetGuiRack();
+		const auto vstRack = rack->VstRack();
+		if (vstRack && visibleTakes.size() > 1u)
+			vstRack->SetAvailableExtension(static_cast<unsigned int>((std::max)(0, rackHeight - static_cast<int>(rack->ConstrainHeight(1u)))));
+		else if (vstRack)
+			vstRack->SetAvailableExtension((std::numeric_limits<unsigned int>::max)());
+		const auto extension = vstRack ? static_cast<int>(vstRack->BottomExtension()) : 0;
+		auto size = rack->GetSize();
+		const auto targetHeight = rack->ConstrainHeight(visibleTakes.size() > 1u
+			? static_cast<unsigned int>((std::max)(1, rackHeight - extension)) : take->GetSize().Height);
+		if (size.Height != targetHeight)
+		{
+			size.Height = targetHeight;
+			rack->SetSize(size);
+			changed = true;
+		}
 		const auto height = static_cast<int>(rack->GetSize().Height);
 		// Anchor the first rack to its take. Later racks stop approaching their
 		// predecessor at the padding limit, without switching layout modes.
-		auto bottom = centreY - height / 2;
-		if (previousTop) bottom = (std::max)(bottom, *previousTop + padding);
+		auto bottom = visibleTakes.size() > 1u ? centreY - rackHeight / 2 + extension : centreY - height / 2;
+		if (previousTop) bottom = (std::max)(bottom, *previousTop + padding + extension);
 		previousTop = bottom + height;
 		auto position = rack->Position();
 		position.Y = bottom - stationY - take->Position().Y;

@@ -177,6 +177,37 @@ GuiVstRack::~GuiVstRack()
 
 std::shared_ptr<GuiButton> GuiVstRack::AppendButton() const { return _append; }
 std::shared_ptr<GuiToggle> GuiVstRack::ChannelsExpander() const { return _collapse; }
+unsigned int GuiVstRack::BottomExtension() const noexcept
+{
+	int bottom = 0;
+	for (const auto& control : { std::static_pointer_cast<base::GuiElement>(_scroll),
+		std::static_pointer_cast<base::GuiElement>(_append), std::static_pointer_cast<base::GuiElement>(_recover),
+		std::static_pointer_cast<base::GuiElement>(_clearRoutes), std::static_pointer_cast<base::GuiElement>(_diagnostic),
+		std::static_pointer_cast<base::GuiElement>(_previous), std::static_pointer_cast<base::GuiElement>(_next) })
+		if (control->IsVisible()) bottom = std::min(bottom, control->Position().Y);
+	return static_cast<unsigned int>(-bottom);
+}
+void GuiVstRack::SetAvailableExtension(unsigned int height)
+{
+	unsigned int footerRows = _previous->IsVisible() ? 1u : 0u;
+	for (const auto& control : { _append, _recover, _clearRoutes, _diagnostic })
+		if (control->IsVisible()) ++footerRows;
+	auto rowHeight = _RowHeight;
+	while (rowHeight > 22u)
+	{
+		const auto pitch = rowHeight + 4u;
+		const auto available = std::clamp(GlobalPosition().Y + _faderBottom - 4 - GuiStyle::StatusBarHeight
+			- static_cast<int>(footerRows * pitch) - 4, static_cast<int>(pitch), 280);
+		const auto rowsHeight = _rows.empty() ? 0u : (std::min)(static_cast<unsigned int>(_rows.size()) * pitch + 4u,
+			static_cast<unsigned int>(available));
+		const auto extension = (std::max)(0, 4 + static_cast<int>(rowsHeight + footerRows * pitch) - _faderBottom);
+		if (static_cast<unsigned int>(extension) <= height) break;
+		--rowHeight;
+	}
+	if (_rowHeight == rowHeight) return;
+	_rowHeight = rowHeight;
+	_LayoutRows();
+}
 std::shared_ptr<GuiButton> GuiVstRack::SlotButton(std::size_t index) const
 {
 	if (index >= _rows.size()) return {};
@@ -333,12 +364,13 @@ void GuiVstRack::Layout(unsigned int width, int faderBottom,
 
 void GuiVstRack::_LayoutRows()
 {
-	const auto rowsHeight = static_cast<unsigned int>(_rows.size()) * _RowPitch + 4u;
+	const auto rowPitch = _rowHeight + 4u;
+	const auto rowsHeight = static_cast<unsigned int>(_rows.size()) * rowPitch + 4u;
 	const int top = _faderBottom - 4;
 	unsigned int footerRows = _previous->IsVisible() ? 1u : 0u;
 	for (const auto& control : {_append, _recover, _clearRoutes, _diagnostic})
 		if (control->IsVisible()) ++footerRows;
-	const int available = std::clamp(GlobalPosition().Y + top - GuiStyle::StatusBarHeight - static_cast<int>(footerRows * _RowPitch) - 4, 40, 280);
+	const int available = std::clamp(GlobalPosition().Y + top - GuiStyle::StatusBarHeight - static_cast<int>(footerRows * rowPitch) - 4, static_cast<int>(rowPitch), 280);
 	const auto height = std::min(rowsHeight, static_cast<unsigned int>(available));
 	const auto scrollHeight = _rows.empty() ? 0u : height;
 	_scroll->SetPosition({0, top - static_cast<int>(scrollHeight)}); _scroll->SetSize({_width, scrollHeight});
@@ -349,24 +381,24 @@ void GuiVstRack::_LayoutRows()
 	const auto rowWidth = static_cast<unsigned int>(std::max(1, contentRect.Right - contentRect.Left));
 	for (std::size_t i = 0u; i < _rows.size(); ++i)
 	{
-		const auto y = static_cast<int>(rowsHeight - (i + 1u) * _RowPitch);
-		for (auto& button : _rows[i].Buttons) { button->SetPosition({contentRect.Left, y}); button->SetSize({rowWidth, _RowHeight}); }
-		_rows[i].Socket->SetPosition({contentRect.Left + 1, y + 13});
+		const auto y = static_cast<int>(rowsHeight - (i + 1u) * rowPitch);
+		for (auto& button : _rows[i].Buttons) { button->SetPosition({contentRect.Left, y}); button->SetSize({rowWidth, _rowHeight}); }
+		_rows[i].Socket->SetPosition({contentRect.Left + 1, y + static_cast<int>((_rowHeight - 10u) / 2u)});
 	}
 	_scroll->SetSize({_width, scrollHeight}); // Refresh content metrics without resetting scroll.
-	int bottom = top - static_cast<int>(scrollHeight) - static_cast<int>(_RowPitch);
+	int bottom = top - static_cast<int>(scrollHeight) - static_cast<int>(rowPitch);
 	for (const auto& control : {_append, _recover, _clearRoutes, _diagnostic})
 	{
 		if (control == _append)
 		{
-			control->SetPosition({std::max(0, (static_cast<int>(_width) - static_cast<int>(_RowHeight)) / 2), bottom + 4});
-			control->SetSize({_RowHeight, _RowHeight});
+			control->SetPosition({std::max(0, (static_cast<int>(_width) - static_cast<int>(_rowHeight)) / 2), bottom + 4});
+			control->SetSize({_rowHeight, _rowHeight});
 		}
-		else { control->SetPosition({0, bottom}); control->SetSize({_width, _RowHeight}); }
-		if (control->IsVisible()) bottom -= static_cast<int>(_RowPitch);
+		else { control->SetPosition({0, bottom}); control->SetSize({_width, _rowHeight}); }
+		if (control->IsVisible()) bottom -= static_cast<int>(rowPitch);
 	}
 	_previous->SetPosition({0, bottom}); _next->SetPosition({static_cast<int>(_width / 2u), bottom});
-	_previous->SetSize({_width / 2u, _RowHeight}); _next->SetSize({_width - _width / 2u, _RowHeight});
+	_previous->SetSize({_width / 2u, _rowHeight}); _next->SetSize({_width - _width / 2u, _rowHeight});
 }
 
 void GuiVstRack::SetViewport(Size2d viewport) { _viewport = viewport; _LayoutRows(); }

@@ -759,12 +759,12 @@ TEST(Quantisation, OverlayWaitsTwoSecondsAfterReleaseBeforeFading)
     quantiser.SetOverlayHeld(false);
     const auto released = utils::Timer::GetTime();
     EXPECT_FLOAT_EQ(1.0f, quantiser.OverlayAlpha(beforeRelease + std::chrono::seconds(2)));
-    EXPECT_NEAR(0.5f, quantiser.OverlayAlpha(released + std::chrono::seconds(3)), 0.01f);
-    EXPECT_FLOAT_EQ(0.0f, quantiser.OverlayAlpha(released + std::chrono::seconds(4)));
+    EXPECT_NEAR(0.5f, quantiser.OverlayAlpha(released + std::chrono::milliseconds(2500)), 0.01f);
+    EXPECT_FLOAT_EQ(0.0f, quantiser.OverlayAlpha(released + std::chrono::seconds(3)));
     quantiser.PulseOverlay();
     const auto pulse = utils::Timer::GetTime();
     EXPECT_FLOAT_EQ(1.0f, quantiser.OverlayAlpha(pulse + std::chrono::seconds(1)));
-    EXPECT_NEAR(0.5f, quantiser.OverlayAlpha(pulse + std::chrono::seconds(3)), 0.01f);
+    EXPECT_NEAR(0.5f, quantiser.OverlayAlpha(pulse + std::chrono::milliseconds(2500)), 0.01f);
     quantiser.ClearOverlay();
     EXPECT_FLOAT_EQ(0.0f, quantiser.OverlayAlpha(pulse));
 }

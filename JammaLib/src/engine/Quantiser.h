@@ -197,7 +197,7 @@ namespace engine
 		static QuantisationPolicy Policy(const io::UserConfig& cfg);
 
 	private:
-		static constexpr double OverlayFadeSeconds = 2.0;
+		static constexpr double OverlayFadeSeconds = 1.0;
 		static constexpr int PhaseOffsetDragPixelsPerMillisecond = 1;
 		static constexpr std::int64_t StateInactive = 0LL;
 		static std::int32_t _ClampPhaseOffset(std::int64_t offsetSamps) noexcept;

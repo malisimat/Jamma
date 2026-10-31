@@ -72,6 +72,8 @@ namespace gui
 		std::shared_ptr<GuiButton> AppendButton() const;
 		std::shared_ptr<GuiToggle> ChannelsExpander() const;
 		std::shared_ptr<GuiButton> SlotButton(std::size_t index) const;
+		unsigned int BottomExtension() const noexcept;
+		void SetAvailableExtension(unsigned int height);
 		bool HasSlotMove() const noexcept { return _slotMove.has_value(); }
 		std::shared_ptr<GuiScrollPanel> SlotScroll() const { return _scroll; }
 		bool HasCableDrag() const noexcept { return _drag.has_value(); }
@@ -136,6 +138,7 @@ namespace gui
 		};
 		static constexpr unsigned int _RowHeight = 36u;
 		static constexpr unsigned int _RowPitch = 40u;
+		unsigned int _rowHeight = _RowHeight;
 		static constexpr unsigned int _PageSize = 32u;
 		std::shared_ptr<Button> _MakeButton(std::string text, std::string texture,
 			std::function<Command()> capture,

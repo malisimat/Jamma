@@ -86,6 +86,7 @@ namespace gui
 		std::shared_ptr<GuiVstRack> VstRack() const { return _vstRack; }
 
 		virtual void SetSize(utils::Size2d size) override;
+		unsigned int ConstrainHeight(unsigned int height) const noexcept;
 		virtual void SetVisible(bool visible) override;
 		void SetMasterControlsVisible(bool visible);
 		bool IsInView(utils::Size2d viewport) const;

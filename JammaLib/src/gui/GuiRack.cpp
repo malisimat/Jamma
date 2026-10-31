@@ -143,12 +143,17 @@ GuiRack::GuiRack(GuiRackParams params) :
 }
 
 
+unsigned int GuiRack::ConstrainHeight(unsigned int height) const noexcept
+{
+	const auto vstSpace = _rackParams.EnableVstControl ? GuiButtonParams::DefaultHeight + _SliderGap.Height : 0u;
+	return std::max(height, _MinimumScaleLayoutHeight + vstSpace);
+}
+
 void GuiRack::SetSize(utils::Size2d size)
 {
 	// The silence, unity and maximum anchors need distinct pixel rows even on
 	// compact layouts. This leaves at least three pixels of handle travel.
-	const auto vstSpace = _rackParams.EnableVstControl ? GuiButtonParams::DefaultHeight + _SliderGap.Height : 0u;
-	size.Height = std::max(size.Height, _MinimumScaleLayoutHeight + vstSpace);
+	size.Height = ConstrainHeight(size.Height);
 	// Leave room for the small Loop target hint as well as the VST glyphs.
 	const auto minFaderWidth = _rackParams.EnableVstControl ? 64u : 40u;
 	size.Width = std::max(size.Width, minFaderWidth + _ChannelToggleSize.Width + _ChannelTogglePaddingLeft + 2u * _SliderGap.Width);
