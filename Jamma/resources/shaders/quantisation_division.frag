@@ -14,8 +14,8 @@ in vec3 LocalPosition;
 
 void main()
 {
-	vec3 baseA = mix(vec3(0.18, 0.66, 0.76), vec3(0.84, 0.32, 0.62), MidiColours);
-	vec3 baseB = mix(vec3(0.12, 0.48, 0.64), vec3(0.68, 0.22, 0.48), MidiColours);
+	vec3 baseA = mix(vec3(0.47, 0.73, 0.88), vec3(0.40, 0.48, 0.60), MidiColours);
+	vec3 baseB = mix(vec3(0.35, 0.60, 0.79), vec3(0.31, 0.39, 0.52), MidiColours);
 	vec3 colour = mix(baseA, baseB, BandValue);
 
 	vec3 lightDir = normalize(vec3(-0.35, 0.55, 0.76));
@@ -27,5 +27,5 @@ void main()
 	colour += vec3(specular * mix(0.06, 0.16, verticalSheen));
 
 	colour *= mix(0.82, 1.18, clamp(Highlight, 0.0, 1.0));
-	ColorOUT = vec4(colour * SceneDim, OverlayAlpha * 0.62);
+	ColorOUT = vec4(colour * SceneDim, OverlayAlpha * mix(0.32, 0.24, MidiColours));
 }
