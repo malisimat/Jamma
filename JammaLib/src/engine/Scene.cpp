@@ -605,6 +605,8 @@ void Scene::OnJobTick(Time curTime)
 		// Keep the station clock synced when local content seeds it without NINJAM.
 		std::scoped_lock lock(_sceneMutex);
 		_localTiming.Advance(_quantisation, *_audioEngine, _stations);
+		if (!_networkService->HasConnectedTiming())
+			_quantisation.ResetReclockIfEmpty(_stations);
 		if (auto clock = _quantisation.Clock(); clock && !_quantisation.LocalMasterTimingPending() &&
 			clock->QuantiseSamps() != _quantisation.EffectiveSamps())
 			_SetMidiQuantisationGrain(clock->QuantiseSamps(), "clock geometry changed");

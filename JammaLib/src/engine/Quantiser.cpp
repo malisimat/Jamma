@@ -191,6 +191,26 @@ void Quantiser::ArmReclock(const std::vector<std::shared_ptr<engine::Station>>& 
 					_preReclockTakeIds.push_back(take->Id());
 }
 
+bool Quantiser::ResetReclockIfEmpty(const std::vector<std::shared_ptr<Station>>& stations)
+{
+	if (_preReclockTakeIds.empty() || LocalMasterTimingPending()
+		|| !_clock || !_clock->SeedSourceLength()) return false;
+	for (const auto& station : stations)
+		if (station && !station->IsRemote())
+			for (const auto& take : station->GetLoopTakes())
+				if (take && std::find(_preReclockTakeIds.begin(), _preReclockTakeIds.end(), take->Id())
+					== _preReclockTakeIds.end()) return false;
+	// Surviving takes from before reclock cannot keep the new clock alive.
+	// Preserve their exclusion when the next recording establishes a master.
+	ArmReclock(stations);
+	SetMidiGrain(0u, "reclock content removed", stations);
+	for (const auto& station : stations)
+		if (station && !station->IsRemote())
+			for (const auto& take : station->GetLoopTakes())
+				if (take) take->SetMidiBaseGrid(0u, 0u);
+	return true;
+}
+
 void Quantiser::ApplyTiming(const QuantisationTiming& timing, const char* source)
 {
 	if (!_clock || (timing.SeedSamps == 0u))

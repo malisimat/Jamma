@@ -99,6 +99,7 @@ namespace engine
 		// Compatibility entry point for callers without a scene snapshot.
 		void ArmReclock();
 		void ArmReclock(const std::vector<std::shared_ptr<engine::Station>>& stations);
+		bool ResetReclockIfEmpty(const std::vector<std::shared_ptr<engine::Station>>& stations);
 		void ApplyTiming(const QuantisationTiming& timing, const char* source);
 		bool LocalMasterTimingPending() const noexcept { return _localMasterTimingPending; }
 		std::uint64_t PendingLocalMasterTimingVersion() const noexcept

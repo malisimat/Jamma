@@ -1216,3 +1216,39 @@ TEST(QuantisationVisuals, ShiftedMasterMovesBlueFramesByEachLoopLengthWithoutMov
 		EXPECT_EQ(baselineDivisions,divisions.Transforms());
 	}
 }
+
+TEST(Quantisation, ReclockResetIgnoresOlderTakesAndRetainsNewerFollowers)
+{
+    auto old = MakeQuantisationContractTake("old", 96000ul);
+    auto master = MakeQuantisationContractTake("master", 48000ul);
+    auto follower = MakeQuantisationContractTake("follower", 48000ul);
+    auto station = std::make_shared<QuantisationContractStation>();
+    station->AddTake(old);
+    engine::Quantiser quantiser;
+    auto clock = std::make_shared<utils::Timer>();
+    quantiser.SetClock(clock);
+    quantiser.ArmReclock({station});
+    EXPECT_FALSE(quantiser.ResetReclockIfEmpty({station}));
+    station->AddTake(master);
+    station->AddTake(follower);
+    quantiser.Set(12000u, utils::Timer::QUANTISE_MULTIPLE);
+    clock->SetSeedSourceLength(48000ul);
+    ASSERT_TRUE(station->DitchTake(master));
+    EXPECT_FALSE(quantiser.ResetReclockIfEmpty({station}));
+    EXPECT_EQ(48000ul, clock->SeedSourceLength());
+    ASSERT_TRUE(station->DitchTake(follower));
+    EXPECT_TRUE(quantiser.ResetReclockIfEmpty({station}));
+    EXPECT_EQ(0ul, clock->SeedSourceLength());
+    EXPECT_EQ(0u, clock->QuantiseSamps());
+    EXPECT_TRUE(quantiser.IsArmedForReclock());
+    EXPECT_EQ(1u, station->GetLoopTakes().size());
+    EXPECT_FALSE(quantiser.ResetReclockIfEmpty({station}));
+    // A second master can be recorded and ditched without admitting old takes.
+    station->AddTake(master);
+    quantiser.Set(16000u, utils::Timer::QUANTISE_MULTIPLE);
+    clock->SetSeedSourceLength(64000ul);
+    EXPECT_FALSE(quantiser.ResetReclockIfEmpty({station}));
+    ASSERT_TRUE(station->DitchTake(master));
+    EXPECT_TRUE(quantiser.ResetReclockIfEmpty({station}));
+    EXPECT_EQ(0ul, clock->SeedSourceLength());
+}
