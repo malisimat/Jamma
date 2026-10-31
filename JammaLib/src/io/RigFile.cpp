@@ -206,10 +206,10 @@ public:
 			!Scalar(*audio, "bufsize", "$.devices.audio", a.BufSize) || !Scalar(*audio, "inlatency", "$.devices.audio", a.LatencyIn) ||
 			!Scalar(*audio, "outlatency", "$.devices.audio", a.LatencyOut) || !Scalar(*audio, "numbuffers", "$.devices.audio", a.NumBuffers) ||
 			!Scalar(*audio, "numchannelsin", "$.devices.audio", a.NumChannelsIn) || !Scalar(*audio, "numchannelsout", "$.devices.audio", a.NumChannelsOut)) return std::nullopt;
-		if (!Keys(*loop, "$.settings.loop", {"fadeSamps", "seedGrainMinMs", "seedGrainTargetMaxMs", "seedBpmMin", "seedQuantisation"})) return std::nullopt;
+		if (!Keys(*loop, "$.settings.loop", {"fadeSamps", "midiSeamMergeWindowMs", "seedGrainMinMs", "seedGrainTargetMaxMs", "seedBpmMin", "seedQuantisation"})) return std::nullopt;
 		auto& l = rig.User.Loop;
 		std::string quantisation;
-		if (!Scalar(*loop, "fadeSamps", "$.settings.loop", l.FadeSamps) || !Scalar(*loop, "seedGrainMinMs", "$.settings.loop", l.SeedGrainMinMs) ||
+		if ((loop->KeyValues.contains("midiSeamMergeWindowMs") && !Scalar(*loop, "midiSeamMergeWindowMs", "$.settings.loop", l.MidiSeamMergeWindowMs)) || !Scalar(*loop, "fadeSamps", "$.settings.loop", l.FadeSamps) || !Scalar(*loop, "seedGrainMinMs", "$.settings.loop", l.SeedGrainMinMs) ||
 			!Scalar(*loop, "seedGrainTargetMaxMs", "$.settings.loop", l.SeedGrainTargetMaxMs) || !Scalar(*loop, "seedBpmMin", "$.settings.loop", l.SeedBpmMin) ||
 			!Scalar(*loop, "seedQuantisation", "$.settings.loop", quantisation)) return std::nullopt;
 		if (quantisation != "power" && quantisation != "multiple") { Error("$.settings.loop.seedQuantisation", "Expected power or multiple"); return std::nullopt; }
@@ -297,7 +297,8 @@ std::optional<RigFile> RigFile::Normalize(const RigFile& rig, Diagnostics* diagn
 		!require(audio.NumChannelsIn <= JamFile::MaxAudioRouteChannels, "$.devices.audio.numchannelsin", "Input channel capacity exceeded") ||
 		!require(audio.NumChannelsOut <= JamFile::MaxAudioRouteChannels, "$.devices.audio.numchannelsout", "Output channel capacity exceeded")) return std::nullopt;
 	const auto& loop = rig.User.Loop;
-	if (!require(loop.SeedGrainMinMs > 0u, "$.settings.loop.seedGrainMinMs", "Minimum grain must be positive") ||
+	if (!require(loop.MidiSeamMergeWindowMs <= 200u, "$.settings.loop.midiSeamMergeWindowMs", "MIDI seam merge window must be 0..200 ms") ||
+		!require(loop.SeedGrainMinMs > 0u, "$.settings.loop.seedGrainMinMs", "Minimum grain must be positive") ||
 		!require(loop.SeedGrainTargetMaxMs >= loop.SeedGrainMinMs, "$.settings.loop.seedGrainTargetMaxMs", "Maximum grain must be at least minimum grain") ||
 		!require(loop.SeedBpmMin > 0u, "$.settings.loop.seedBpmMin", "Minimum BPM must be positive") ||
 		!require(rig.User.Trigger.PreDelaySamps == 0u,
@@ -463,7 +464,7 @@ bool RigFile::ToJsonStream(const RigFile& rig, std::stringstream& ss, Diagnostic
 	Part audio{{{"name", a.Name}, {"samplerate", integer(a.SampleRate)}, {"bufsize", integer(a.BufSize)}, {"inlatency", integer(a.LatencyIn)},
 		{"outlatency", integer(a.LatencyOut)}, {"numbuffers", integer(a.NumBuffers)}, {"numchannelsin", integer(a.NumChannelsIn)}, {"numchannelsout", integer(a.NumChannelsOut)}}};
 	const auto& l = user.Loop;
-	Part loop{{{"fadeSamps", integer(l.FadeSamps)}, {"seedGrainMinMs", integer(l.SeedGrainMinMs)}, {"seedGrainTargetMaxMs", integer(l.SeedGrainTargetMaxMs)},
+	Part loop{{{"midiSeamMergeWindowMs", integer(l.MidiSeamMergeWindowMs)}, {"fadeSamps", integer(l.FadeSamps)}, {"seedGrainMinMs", integer(l.SeedGrainMinMs)}, {"seedGrainTargetMaxMs", integer(l.SeedGrainTargetMaxMs)},
 		{"seedBpmMin", integer(l.SeedBpmMin)}, {"seedQuantisation", std::string(l.SeedUsesPowers ? "power" : "multiple")}}};
 	Part triggerSettings{{{"debounceMs", integer(user.Trigger.DebounceMs)}}};
 	Part midiSettings{{{"channelOverrideTriggers", user.Midi.ChannelOverrideTriggers}, {"channelOverrideLive", user.Midi.ChannelOverrideLive}}};
@@ -673,7 +674,7 @@ const std::string RigFile::DefaultJson = R"json({
     "serial":[]
   },
   "settings":{
-    "loop":{"fadeSamps":800,"seedGrainMinMs":400,"seedGrainTargetMaxMs":3000,"seedBpmMin":80,"seedQuantisation":"power"},
+    "loop":{"fadeSamps":800,"midiSeamMergeWindowMs":30,"seedGrainMinMs":400,"seedGrainTargetMaxMs":3000,"seedBpmMin":80,"seedQuantisation":"power"},
     "trigger":{"debounceMs":280},
     "midi":{"channelOverrideTriggers":false,"channelOverrideLive":true}
   },

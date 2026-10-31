@@ -428,3 +428,23 @@ TEST(RigFile, MigratesLegacyZeroAndDiagnosesNonzeroOrConflictingGlobalPredelay)
 		}
 	}
 }
+
+TEST(RigFile, MidiSeamWindowDefaultsValidatesAndRoundTrips)
+{
+	auto rig = RigFileTest::Read(RigFileTest::Trigger());
+	ASSERT_TRUE(rig); EXPECT_EQ(30u,rig->User.Loop.MidiSeamMergeWindowMs);
+	for (const auto ms : {0u,30u,200u})
+	{
+		rig->User.Loop.MidiSeamMergeWindowMs=ms;
+		std::stringstream saved; ASSERT_TRUE(RigFile::ToJsonStream(*rig,saved));
+		const auto restored=RigFile::FromStream(std::move(saved));
+		ASSERT_TRUE(restored); EXPECT_EQ(ms,restored->User.Loop.MidiSeamMergeWindowMs);
+	}
+	for (const auto value : {"-1","201","30.5","true","null","\"30\""})
+	{
+		auto json=RigFile::DefaultJson;
+		const auto at=json.find("\"midiSeamMergeWindowMs\":30"); ASSERT_NE(std::string::npos,at);
+		json.replace(at,std::string("\"midiSeamMergeWindowMs\":30").size(),std::string("\"midiSeamMergeWindowMs\":")+value);
+		EXPECT_FALSE(RigFile::FromStream(std::stringstream(json))) << value;
+	}
+}

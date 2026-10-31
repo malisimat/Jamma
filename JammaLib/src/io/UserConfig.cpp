@@ -217,6 +217,13 @@ std::optional<UserConfig::LoopSettings> UserConfig::LoopSettings::FromJson(Json:
 
 	LoopSettings loop;
 	loop.FadeSamps = fadeSamps;
+	auto seamWindow = json.KeyValues.find("midiSeamMergeWindowMs");
+	if (seamWindow != json.KeyValues.end())
+	{
+		if (seamWindow->second.index() != 2 || std::get<unsigned long>(seamWindow->second) > 200u)
+			return std::nullopt;
+		loop.MidiSeamMergeWindowMs = std::get<unsigned long>(seamWindow->second);
+	}
 	loop.SeedGrainMinMs = seedGrainMinMs;
 	loop.SeedGrainTargetMaxMs = seedGrainTargetMaxMs;
 	loop.SeedBpmMin = seedBpmMin;

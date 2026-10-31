@@ -134,3 +134,21 @@ TEST(NativeMidiSidecar, ExactEditorFlagsRoundTripAndLegacyEventsDefaultToRecorde
 	std::stringstream invalid;
 	EXPECT_FALSE(io::NativeMidiSidecar::ToStream(stream, invalid));
 }
+
+TEST(NativeMidiSidecar, BoundaryHeldClosuresRoundTripWithoutGuessingLegacyReleases)
+{
+	io::NativeMidiSidecar::Stream source;
+	source.LogicalLength=1000u;
+	source.Events={{20u,0x90u,60u,95u,0u},{100u,0x80u,60u,0u,0u},
+		{900u,0x90u,60u,88u,0u},{999u,0x80u,60u,0u,4u}};
+	std::stringstream bytes; ASSERT_TRUE(io::NativeMidiSidecar::ToStream(source,bytes));
+	const auto restored=io::NativeMidiSidecar::FromStream(bytes); ASSERT_TRUE(restored);
+	EXPECT_EQ(4u,restored->Events.back().Flags);
+	auto legacy=bytes.str(); legacy[10]=4;
+	std::stringstream invalidLegacy(legacy); EXPECT_FALSE(io::NativeMidiSidecar::FromStream(invalidLegacy));
+	source.Events.back().Flags=0u;
+	std::stringstream old; ASSERT_TRUE(io::NativeMidiSidecar::ToStream(source,old));
+	legacy=old.str(); legacy[10]=4;
+	std::stringstream validLegacy(legacy); const auto loaded=io::NativeMidiSidecar::FromStream(validLegacy);
+	ASSERT_TRUE(loaded); EXPECT_EQ(0u,loaded->Events.back().Flags);
+}
