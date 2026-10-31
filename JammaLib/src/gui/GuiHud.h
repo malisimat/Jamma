@@ -15,6 +15,7 @@
 #include "../io/RigFile.h"
 #include "../actions/TouchAction.h"
 #include "TriggerLearnController.h"
+#include "../midi/MidiQuantisation.h"
 
 namespace resources
 {
@@ -120,7 +121,7 @@ namespace gui
 		void SetStationAnchors(std::vector<StationAnchor> anchors);
 		void SetLoopEditorMode(bool enabled);
 		void SetQuantisationFeedback(const std::string& text);
-		void SetClockStatus(unsigned long masterLengthSamps, unsigned int grainSamps);
+		void SetClockStatus(unsigned long masterLengthSamps, midi::MidiQuantisationFraction fraction);
 		void SetPerformanceGroupFeedback(const std::string& text);
 		utils::Rect2d OccupiedTopStripBounds() const;
 		void SetTopPanelLayout(GuiTopPanelLayout layout);

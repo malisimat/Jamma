@@ -1634,3 +1634,59 @@ TEST(AudioLoopShift, PunchWritesAndLengthChangesPreserveActiveAppliedOffset)
     EXPECT_EQ(100,loop->PlaybackOffsetSamps());
     SettleTimingOffset(loop); EXPECT_DOUBLE_EQ(100.0,loop->AppliedPlaybackOffsetSamps());
 }
+
+TEST(LoopTakeTiming, ConfiguredCaptureAnchorsWaitForPlaybackActivation)
+{
+    for (const auto delay : {-17, 17})
+    for (const auto explicitCapture : {false, true})
+    for (const auto audio : {false, true})
+    {
+        SCOPED_TRACE(delay);
+        SCOPED_TRACE(explicitCapture);
+        SCOPED_TRACE(audio);
+        LoopTakeParams params;
+        params.Size = {100, 100};
+        params.FadeSamps = 0u;
+        auto take = std::make_shared<TimingTestLoopTake>(params,
+            LoopTake::GetMixerParams(params.Size, MergeMixBehaviourParams{}));
+        midi::MidiQuantisationSettings quantisation;
+        quantisation.Enabled = true;
+        quantisation.Fraction = midi::MidiQuantisationFraction::Whole;
+        take->SetMidiQuantisation(quantisation);
+        take->SetGlobalMidiQuantState(io::JamFile::GlobalMidiQuantState::All);
+        take->SetRemoteMidiQuantisationGrid({1000ul, 3u}, 0);
+        take->ConfigureTriggerCapture({1000u, delay, 10000u, 0u, 32u, -delay});
+        take->Record(audio ? std::vector<unsigned int>{0u} : std::vector<unsigned int>{},
+            "capture-anchor", {0u}, {}, {}, static_cast<std::uint64_t>((1000 - delay) % 1000), 1000u);
+        ASSERT_TRUE(take->RecordMidiEvent(midi::MidiEvent::MakeNoteOn(1340u, 0u, 60u, 100u), 1340u));
+        ASSERT_TRUE(take->RecordMidiEvent(midi::MidiEvent::MakeNoteOff(1450u, 0u, 60u), 1450u));
+        take->CommitChanges();
+        take->RestoreMappedSourceCoordinate(4000);
+        take->Play(constants::MaxLoopFadeSamps, 1000u, 0u);
+        take->CompleteMidiIngressPump(8000u);
+        const auto loop = audio ? take->GetLoops().front() : nullptr;
+        if (explicitCapture) take->CaptureMappedSourceAnchors(4000);
+        else take->RestoreMappedSourceCoordinate(4000);
+        if (loop) EXPECT_FALSE(loop->HasSceneAnchor());
+        // Delayed first topology observation must still establish trigger phase.
+        take->BeginCaptureAudioBoundary(2250u, 5250u, 1250u);
+        const auto phase = static_cast<unsigned long>(250 + delay);
+        if (loop) ASSERT_EQ(phase, loop->BodyPlayIndex());
+        ASSERT_EQ(phase, take->MidiVisualPosition());
+        take->RestoreMappedSourceCoordinate(5250);
+        if (loop) EXPECT_EQ(phase, loop->BodyPlayIndex());
+        EXPECT_EQ(phase, take->MidiVisualPosition());
+        if (!audio)
+        {
+            TriggerPredelayMidiSink sink;
+            take->ReadMidiBlock(2250u, 120u, sink);
+            ASSERT_EQ(1u, sink.Events.size());
+            EXPECT_TRUE(sink.Events[0].IsNoteOn());
+            // NINJAM's next beat is round(1000/3), independent of signed predelay.
+            EXPECT_EQ(2000u + (1000u + 1u) / 3u, sink.Events[0].sampleOffset);
+        }
+        take->RestoreMappedSourceCoordinate(5387);
+        if (loop) EXPECT_EQ(phase + 137u, loop->BodyPlayIndex());
+        EXPECT_EQ(phase + 137u, take->MidiVisualPosition());
+    }
+}

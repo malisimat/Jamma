@@ -1113,3 +1113,45 @@ TEST(AudioHostLocalMasterPromotion, LatestPreparedTimingReplacesEarlierVersion)
 	EXPECT_EQ(4000ul, clock->SeedSourceLength());
 	EXPECT_EQ(1000u, clock->SampOffset());
 }
+
+TEST(NinjamTimingProductionBoundary, RemoteBearingNoSyncReinitializesIdenticalGeometry)
+{
+    auto take = NinjamProductionBoundaryFixture::MakeTake("resume-offset", 777ul, 213ul);
+    auto station = NinjamProductionBoundaryFixture::MakeStation({take});
+    audio::AudioHost host{io::UserConfig{}};
+    auto clock = std::make_shared<Timer>();
+    clock->SetSeedSourceLength(1000ul);
+    host.SetTimingClock(clock);
+    host.SetStations(std::make_shared<const std::vector<std::shared_ptr<engine::Station>>>(
+        std::vector<std::shared_ptr<engine::Station>>{station}));
+    auto desired = NinjamProductionBoundaryFixture::Desired(1u, 1u, 1u,
+        ninjam::NinjamLocalFollowPolicy::BlockSync, 1100ul, 0u);
+    host.PublishDesiredTiming(desired);
+    ASSERT_TRUE(audio::NinjamAudioBoundaryTestAccess::Apply(host, 0u, 48000u));
+    audio::NinjamAudioBoundaryTestAccess::ApplyDeferredMapTransition(host);
+    desired.Version = 2u;
+    desired.LocalFollowPolicy = ninjam::NinjamLocalFollowPolicy::NoSync;
+    desired.Intent = ninjam::NinjamDesiredTimingIntent::NoSync;
+    host.PublishDesiredTiming(desired);
+    ASSERT_TRUE(audio::NinjamAudioBoundaryTestAccess::Apply(host, 0u, 48000u));
+    ASSERT_FALSE(audio::NinjamAudioBoundaryTestAccess::SyncPhaseMap(host).IsActive());
+    const auto before = NinjamProductionBoundaryFixture::AudioPosition(*take);
+    desired.Version = 3u;
+    desired.Generation = 2u;
+    desired.RemoteMasterPhaseSamps = 200u;
+    desired.LocalFollowPolicy = ninjam::NinjamLocalFollowPolicy::BlockSync;
+    desired.Intent = ninjam::NinjamDesiredTimingIntent::Replacement;
+    host.PublishDesiredTiming(desired);
+    ASSERT_TRUE(audio::NinjamAudioBoundaryTestAccess::Apply(host, 0u, 48000u));
+    audio::NinjamAudioBoundaryTestAccess::ApplyDeferredMapTransition(host);
+    const auto map = audio::NinjamAudioBoundaryTestAccess::SyncPhaseMap(host);
+    ASSERT_TRUE(map.IsActive());
+    EXPECT_EQ(1100ul, map.SourceLengthSamps);
+    EXPECT_EQ(1100ul, map.RemoteLengthSamps);
+    EXPECT_EQ((before + 200ul) % 777ul, NinjamProductionBoundaryFixture::AudioPosition(*take));
+    clock->Tick(137u, 0u);
+    take->EndMultiPlay(137u);
+    audio::NinjamAudioBoundaryTestAccess::RestoreMappedSource(host, clock->SceneSamplePos());
+    EXPECT_EQ((before + 200ul + 137ul) % 777ul, NinjamProductionBoundaryFixture::AudioPosition(*take));
+    EXPECT_EQ(NinjamProductionBoundaryFixture::AudioPosition(*take), take->MidiTimingPosition());
+}

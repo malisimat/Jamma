@@ -1998,7 +1998,7 @@ void Scene::Draw(DrawContext& ctx)
 	{
 		const auto clock = _quantisation.Clock();
 		hud->SetClockStatus(clock ? clock->SeedSourceLength() : 0ul,
-			clock ? clock->QuantiseSamps() : 0u);
+			_quantisation.DefaultMidiQuantisationFraction());
 	}
 	_workspace->DrawOverlayLocked(ctx, _stations, _quantisationInteraction, presentation);
 }

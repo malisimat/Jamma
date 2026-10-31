@@ -2488,13 +2488,11 @@ void gui::GuiHud::SetQuantisationFeedback(const std::string& text)
 	}
 }
 
-void GuiHud::SetClockStatus(unsigned long masterLengthSamps, unsigned int grainSamps)
+void GuiHud::SetClockStatus(unsigned long masterLengthSamps, midi::MidiQuantisationFraction fraction)
 {
 	std::string status = "Clock OFF | Subdiv --";
 	if (masterLengthSamps > 0ul)
-		status = grainSamps > 0u && masterLengthSamps % grainSamps == 0ul
-			? "Clock ON | Subdiv " + std::to_string(masterLengthSamps / grainSamps)
-			: "Clock ON | Subdiv --";
+		status = std::string("Clock ON | Subdiv ") + midi::MidiQuantisation::FractionLabel(fraction);
 	if (_clockStatusText == status) return;
 	_clockStatusText = std::move(status);
 	if (_routingStatusLabel && _performanceGroupFeedback.empty() && _quantisationFeedback.empty()

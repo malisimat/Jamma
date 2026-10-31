@@ -1000,6 +1000,11 @@ void LoopTake::InvalidateSceneAnchors() noexcept
 
 void LoopTake::CaptureMappedSourceAnchors(std::int64_t sourceCoordinateSamps) noexcept
 {
+	// Configured capture publishes its final cursor at the activation boundary.
+	if (_triggerCaptureConfigured && (!_capturePlaybackPrepared.load(std::memory_order_acquire)
+		|| _capturePlaybackPending.load(std::memory_order_acquire)))
+		return;
+
 	auto state = _BorrowAudioState();
 	if (state)
 		for (const auto& loop : state->Loops)
@@ -1026,6 +1031,11 @@ void LoopTake::ResetTimingEpoch() noexcept
 
 void LoopTake::RestoreMappedSourceCoordinate(std::int64_t sourceCoordinateSamps) noexcept
 {
+	// Configured capture publishes its final cursor at the activation boundary.
+	if (_triggerCaptureConfigured && (!_capturePlaybackPrepared.load(std::memory_order_acquire)
+		|| _capturePlaybackPending.load(std::memory_order_acquire)))
+		return;
+
 	auto state = _BorrowAudioState();
 	if (state)
 		for (const auto& loop : state->Loops)
