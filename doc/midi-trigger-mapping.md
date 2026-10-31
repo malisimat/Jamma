@@ -104,8 +104,9 @@ Each request writes a detached accepted rig revision through the existing atomic
 
 ## MIDI loop boundary notes
 
-`settings.loop.midiSeamMergeWindowMs` is an overall rig setting, default 30 ms,
-accepting integers from 0 through 200. Missing fields in older rigs use the
+`settings.loop.midiSeamMergeWindowMs` is an overall rig setting, default 200 ms,
+accepting any nonnegative integer representable by the unsigned millisecond field.
+The forward search stays within one loop repeat even for larger windows. Missing fields in older rigs use the
 default. The MIDI owner converts milliseconds at the active stream sample rate,
 rounding to the nearest sample with half-sample ties upward, and publishes the
 resolved window with the immutable playback view. Accepted changes rebuild both
