@@ -185,3 +185,39 @@ The core behavior is covered by the timing tests in
 [`NinjamTimingIntegration_Tests.cpp`](../test/JammaLib_Tests/src/ninjam/NinjamTimingIntegration_Tests.cpp)
 and
 [`LoopTakeTiming_Tests.cpp`](../test/JammaLib_Tests/src/engine/LoopTakeTiming_Tests.cpp).
+
+## Changing server timing while connected
+
+Before any local take exists, accepted BPM/BPI changes replace both remote timing
+and the empty session's source ruler. A first recording therefore uses the current
+server tempo rather than the tempo observed at join. Recording or retained takes
+prevent an empty-session ruler replacement.
+
+**Reclock** now suspends local playback's remote follow without disconnecting.
+Remote observations and the remote metronome continue. The next completed local
+master establishes local timing; only after its audio activation is acknowledged
+does Jamma request that BPM and full BPI using the existing server admin/vote path.
+A tap sequence with one eligible completed take since fresh/reclock reinterprets
+that master and requests its timing too. Further taps replace pending timing
+preparation and server intent. With additional eligible takes, taps continue to
+select subdivisions instead of changing the server.
+
+A fresh observation confirming both requested BPM and BPI resumes following.
+Jamma aligns local playback with projected server phase; this may audibly jump
+playback. The metronome always remains a reference to actual server timing, not
+the proposed local timing. Other takes retain their own lengths and relative
+offsets. A declined vote, exhausted retry, deadline or invalid/lost remote timing
+leaves playback local; a sent request alone never means the server accepted it.
+The Timing settings page displays whether playback follows the server, is local,
+is waiting for a new master, or is waiting for a server request/observation.
+
+**Sync to server** cancels a pending local tempo request and the previous follow
+choice, including Stay local. It waits for a fresh validated observation even if
+the server BPM/BPI is unchanged, then follows that timing. It does not request a
+server tempo change or erase recorded material/source geometry. Reclock and Sync
+to server therefore have distinct purposes: propose a new local master to the
+server, or follow the server's current timing.
+
+Follow revision and any explicit local source-master interval are retained in
+every complete desired publication. A latest-value mailbox may skip intermediate
+NoSync/replacement values without losing the need to reset stale map anchors.

@@ -71,7 +71,8 @@ smoothing; the accepted geometry remains unchanged. Sample zero is valid.
 
 One completed local take counts as one performance, including multichannel and
 MIDI-only takes. Remote, incomplete and pre-reclock takes are excluded. With one
-eligible take under local authority, taps reinterpret its integer beat count.
+eligible take, taps reinterpret its integer beat count. When connected, this
+prepares local timing and requests the resulting server BPM/BPI.
 Half ties round upward; audio grain floors to integer samples, and logical audio
 length is grain × beat count. The physical audio tail remains available and is
 retained by session WAV export. MIDI source events and their original logical
@@ -88,7 +89,23 @@ The selected base composes once with each take/stream fraction: effective cells
 per base interval = base divisions × fraction divisor. Without a tap base, local
 fractions refer to local grain; following NINJAM uses the authoritative remote
 beat. A tap base adds density relative to that reference. These references need
-not have equal lengths. Remote BPM/BPI stays authoritative; local taps can choose
-compatible subdivisions, and reclock is rejected until **Stay local** is chosen.
+not have equal lengths. Remote BPM/BPI stays authoritative while following. With additional eligible
+takes, local taps choose compatible subdivisions. Reclock suspends following
+until the new local master is established and its requested timing is confirmed.
 Repeated remote observations retain the tap base; a changed remote geometry or
 NoSync resets it. Remote authority is never restored from a saved session.
+
+### Connected NINJAM timing edits
+
+On the Timing page, **Reclock** keeps the NINJAM connection and its remote
+metronome active while a new local master is recorded. Once the new master has
+activated, Jamma requests its BPM/BPI from the server. Single-master taps also
+request updated timing; with more eligible takes they retain subdivision behavior.
+Local playback aligns when a fresh server observation confirms both requested
+values. A failed request leaves playback local.
+
+Use **Sync to server** to follow current remote timing again after Stay local or
+a failed local tempo request. It cancels the old request and waits for fresh
+server timing; it may jump local playback into alignment. The adjacent status
+shows local, pending, or following state. The metronome continues to reflect the
+actual remote beats throughout these workflows.
