@@ -1257,6 +1257,7 @@ void MidiLoop::ClassifyUnmatchedStarts(PlaybackSnapshot& snapshot) noexcept
 	heads.fill(End);
 	tails.fill(End);
 	snapshot.RawUnmatchedStarts.fill(0u);
+	std::bitset<TotalNoteSlots> seamHeads;
 	for (std::size_t i = 0u; i < snapshot.EventCount; ++i)
 	{
 		const auto& event = snapshot.Raw[i];
@@ -1275,9 +1276,16 @@ void MidiLoop::ClassifyUnmatchedStarts(PlaybackSnapshot& snapshot) noexcept
 		{
 			const auto index = heads[slot];
 			snapshot.RawUnmatchedStarts[index] = 0u;
+			if (snapshot.Raw[index].sampleOffset == 0u && event.sampleOffset > 0u)
+				seamHeads.set(NoteSlot(event.Channel(), event.data1));
 			heads[slot] = next[index];
 		}
 	}
+	// Only a real head at the boundary can extend an unmatched tail into
+	// the next repeat. An isolated tail must release and retrigger normally.
+	for (std::size_t i = 0u; i < snapshot.EventCount; ++i)
+		if (!seamHeads.test(NoteSlot(snapshot.Raw[i].Channel(), snapshot.Raw[i].data1)))
+			snapshot.RawUnmatchedStarts[i] = 0u;
 }
 
 bool MidiLoop::MergePlaybackSeamNotes(PlaybackSnapshot& snapshot)
@@ -1481,8 +1489,7 @@ bool MidiLoop::MergePlaybackSeamNotes(PlaybackSnapshot& snapshot)
 		if (!group.Continuous)
 			snapshot.Quantised[group.Release].sampleOffset = static_cast<std::uint32_t>((start + duration) % length);
 	}
-	// Existing unmatched tails already continue across ordinary seams. A
-	// wrapped tail can coincide with its next-repeat paired head, however.
+	// A wrapped unmatched tail can coincide with its next-repeat paired head.
 	// Suppress that head only when their unwrapped starts are one repeat apart;
 	// its original release still ends the continuation at the recorded time.
 	for (std::size_t slot = 0; slot < TotalNoteSlots; ++slot)
@@ -1499,6 +1506,8 @@ bool MidiLoop::MergePlaybackSeamNotes(PlaybackSnapshot& snapshot)
 			|| snapshot.Raw[tail.On].data1 != snapshot.Raw[head.On].data1
 			|| snapshot.Quantised[tail.On].sampleOffset >= length
 			|| snapshot.Quantised[tail.On].sampleOffset != snapshot.Quantised[head.On].sampleOffset) continue;
+		snapshot.QuantisedUnmatchedStarts[tail.On] = MergedContinuation;
+		snapshot.QuantisedContinuationRoots[tail.On] = static_cast<std::uint16_t>(tailIndex + 1u);
 		snapshot.Quantised[head.On].sampleOffset = snapshot.LoopLengthSamps;
 		snapshot.QuantisedUnmatchedStarts[head.On] = 0u;
 		merged = true;
@@ -1583,7 +1592,7 @@ bool MidiLoop::PublishCompletedEvents(const MidiEvent* raw, std::size_t count,
 bool MidiLoop::ShouldSuppressContinuedAttack(bool continuing, bool merged,
 	std::uint8_t startKind, std::uint16_t soundingRoot, std::uint16_t attackRoot) noexcept
 {
-	// Natural unmatched notes retain their slot policy. Merged components
+	// Natural seam pairs retain their slot policy. Merged components
 	// suppress only their own repeated root/head, not another articulation.
 	return continuing && (!merged ||
 		((startKind == MergedContinuation || startKind == MergedHead) && soundingRoot == attackRoot));

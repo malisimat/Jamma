@@ -144,7 +144,7 @@ namespace midi
 	//   - All storage is preallocated. RecordEvent / ReadBlock perform no heap allocation.
 	//   - When event capacity is reached during recording, further events are dropped
 	//     (Drop-newest; the recorded loop is what it is).
-	//   - Loop wrap releases paired held notes; unmatched attacks continue until
+	//   - Loop wrap releases unmerged held notes; merged attacks continue until
 	//     a played release or an explicit full flush.
 	class MidiLoop
 	{
@@ -284,7 +284,7 @@ namespace midi
 		// Time mapping: loopOffset = globalSample % LoopLengthSamps().
 		// Emitted events' `sampleOffset` is rewritten to the absolute global sample at
 		// which the sink should treat them as occurring. If the block crosses a loop
-		// boundary, paired held notes are flushed at the wrap sample; unmatched notes continue.
+		// boundary, unmerged held notes are flushed at the wrap sample; merged notes continue.
 		// Callback owner requests a full voice reset and destination-state chase.
 		void RequestRelocationChase() noexcept
 			{ _relocationChaseRequested = true; ++_relocationGeneration; }
@@ -450,7 +450,6 @@ namespace midi
 			std::uint8_t startKind, std::uint16_t root) noexcept;
 		static void BuildChaseHead(PlaybackSnapshot& snapshot, bool quantised) noexcept;
 		bool ChaseAtCursor(std::uint32_t sample, const PlaybackSnapshot& snapshot, IMidiSink& sink) noexcept;
-		static void ClassifyUnmatchedStarts(PlaybackSnapshot& snapshot) noexcept;
 		class OwnerPublicationGuard
 		{
 		public:
@@ -474,6 +473,7 @@ namespace midi
 		void PublishCompletionWithRetry(const MidiEvent* raw, std::size_t count,
 			std::uint32_t length, std::uint64_t revision) noexcept;
 		// Owner-side only: merge overlapping notes from adjacent source repeats.
+		static void ClassifyUnmatchedStarts(PlaybackSnapshot& snapshot) noexcept;
 		static bool MergePlaybackSeamNotes(PlaybackSnapshot& snapshot);
 		const PlaybackSnapshot* AcquirePlaybackSnapshot() const noexcept;
 		void ReleasePlaybackSnapshot() const noexcept;

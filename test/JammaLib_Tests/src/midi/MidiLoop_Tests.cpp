@@ -228,9 +228,9 @@ TEST(MidiLoop, DefaultCapacityDropsNewestEventsWhenFull) {
 
 	MidiLoopCapturingSink sink;
 	loop.ReadBlock(0u, static_cast<std::uint32_t>(capacity + 2u), sink);
-	ASSERT_EQ(128u, sink.events.size());
+	ASSERT_EQ(capacity, sink.events.size());
 	ASSERT_EQ(0u, sink.events.front().sampleOffset);
-	ASSERT_EQ(127u, sink.events.back().sampleOffset);
+	ASSERT_EQ(capacity - 1u, sink.events.back().sampleOffset);
 }
 
 TEST(MidiLoop, EmptyLoopProducesNoEvents) {
@@ -2712,7 +2712,7 @@ TEST(MidiLoopEdit, QuantisationKeepsRawSourceAndFlushesHeldOnRevision)
 	EXPECT_EQ(0u, exported.EventCount);
 }
 
-TEST(MidiLoopEdit, FinalCellContinuesAcrossWrapSeam)
+TEST(MidiLoopEdit, FinalCellReleasesAndRetriggersAcrossWrapSeam)
 {
 	MidiLoop loop;
 	loop.ReplaceRecordedEvents(nullptr, 0u, 16u);
@@ -2723,10 +2723,16 @@ TEST(MidiLoopEdit, FinalCellContinuesAcrossWrapSeam)
 	ASSERT_TRUE(loop.PublishEdit(edit));
 	MidiLoopCapturingSink sink;
 	loop.ReadBlock(15u, 34u, sink);
-	ASSERT_EQ(1u, sink.events.size());
+	ASSERT_EQ(6u, sink.events.size());
+	EXPECT_TRUE(sink.events[1].IsNoteOff());
+	EXPECT_EQ(16u, sink.events[1].sampleOffset);
+	EXPECT_EQ(31u, sink.events[2].sampleOffset);
+	EXPECT_EQ(32u, sink.events[3].sampleOffset);
+	EXPECT_EQ(47u, sink.events[4].sampleOffset);
 	EXPECT_TRUE(sink.events[0].IsNoteOn());
 	EXPECT_EQ(15u, sink.events[0].sampleOffset);
-	EXPECT_TRUE(loop.HeldNotes().test(MidiLoop::NoteSlot(1u, 72u)));
+	EXPECT_EQ(48u, sink.events[5].sampleOffset);
+	EXPECT_TRUE(loop.HeldNotes().none());
 }
 
 TEST(MidiLoopEdit, RejectsChangedNonNoteWithoutPublishing)
@@ -2815,7 +2821,7 @@ TEST(MidiLoopEdit, QuantisedAddInvertsLargePhaseOffset)
 	EXPECT_EQ(12u, displayed.sampleOffset);
 }
 
-TEST(MidiLoopEdit, QuantisedFinalCellContinuesAcrossSeamWhenShifted)
+TEST(MidiLoopEdit, QuantisedFinalCellReleasesAcrossSeamWhenShifted)
 {
 	MidiLoop loop;
 	loop.ReplaceRecordedEvents(nullptr, 0u, 100u);
@@ -2837,9 +2843,9 @@ TEST(MidiLoopEdit, QuantisedFinalCellContinuesAcrossSeamWhenShifted)
 	EXPECT_EQ(92u, displayed.sampleOffset);
 	MidiLoopCapturingSink sink;
 	loop.ReadBlock(92u, 209u, sink);
-	ASSERT_EQ(1u, sink.events.size());
+	ASSERT_EQ(6u, sink.events.size());
 	EXPECT_EQ(92u, sink.events[0].sampleOffset);
-	EXPECT_TRUE(loop.HeldNotes().test(MidiLoop::NoteSlot(0u, 60u)));
+	EXPECT_TRUE(loop.HeldNotes().none());
 	MidiLoop::EditState erase;
 	ASSERT_TRUE(loop.SnapshotForEdit(erase));
 	ASSERT_TRUE(midi::MidiEditOperations::SetCell(erase, 92u, 100u,
@@ -2848,8 +2854,7 @@ TEST(MidiLoopEdit, QuantisedFinalCellContinuesAcrossSeamWhenShifted)
 	EXPECT_EQ(0u, loop.EventCount());
 	sink.Clear();
 	loop.ReadBlock(301u, 1u, sink);
-	ASSERT_EQ(1u, sink.events.size());
-	EXPECT_TRUE(sink.events[0].IsNoteOff());
+	EXPECT_TRUE(sink.events.empty());
 	EXPECT_TRUE(loop.HeldNotes().none());
 }
 
@@ -3819,10 +3824,12 @@ TEST(MidiLoopSeam, TimelineIndependentOfBlockPartitionAndHeadOffset)
 		MidiLoopCapturingSink sink;
 		for (unsigned int cursor = 0u; cursor < 3000u; cursor += block)
 			loop.ReadBlock(cursor, std::min(block, 3000u - cursor), sink);
-		ASSERT_EQ(7u, sink.events.size());
+		ASSERT_EQ(head == 0u ? 7u : 11u, sink.events.size());
 		const auto playedHead = quantised && head == 20u ? 25u : head;
 		const auto playedRelease = playedHead + 100u;
-		const std::array times = { playedHead, playedRelease, 950u, 1000u + playedRelease, 1950u, 2000u + playedRelease, 2950u };
+		const std::vector<unsigned int> times = head == 0u
+			? std::vector<unsigned int>{ 0u, playedRelease, 950u, 1000u + playedRelease, 1950u, 2000u + playedRelease, 2950u }
+			: std::vector<unsigned int>{ playedHead, playedRelease, 950u, 1000u, 1000u + playedHead, 1000u + playedRelease, 1950u, 2000u, 2000u + playedHead, 2000u + playedRelease, 2950u };
 		for (std::size_t i = 0; i < times.size(); ++i) EXPECT_EQ(times[i], sink.events[i].sampleOffset);
 		EXPECT_EQ(113u, sink.events[2].data2);
 		EXPECT_TRUE(loop.HeldNotes().test(MidiLoop::NoteSlot(0, 60)));
@@ -3842,19 +3849,21 @@ TEST(MidiLoopSeam, QuantisedWrappedAttackKeepsUnmatchedClassification)
 	loop.ReplaceRecordedEvents(source.data(), source.size(), 1000u);
 	MidiLoopCapturingSink sink;
 	loop.ReadBlock(0u, 2000u, sink);
-	ASSERT_EQ(4u, sink.events.size());
+	ASSERT_EQ(6u, sink.events.size());
 	EXPECT_EQ(0u, sink.events[0].sampleOffset);
 	EXPECT_EQ(113u, sink.events[0].data2);
-	EXPECT_EQ(350u, sink.events[1].sampleOffset);
-	EXPECT_EQ(1000u, sink.events[2].sampleOffset);
-	EXPECT_EQ(1350u, sink.events[3].sampleOffset);
+	EXPECT_EQ(250u, sink.events[1].sampleOffset);
+	EXPECT_EQ(350u, sink.events[2].sampleOffset);
+	EXPECT_EQ(1000u, sink.events[3].sampleOffset);
+	EXPECT_EQ(1250u, sink.events[4].sampleOffset);
+	EXPECT_EQ(1350u, sink.events[5].sampleOffset);
 }
 
 TEST(MidiLoopSeam, SameIterationSuppressionAndSlotIndependence)
 {
 	MidiLoop loop;
-	// Different timing classes cannot pair, but any played release ends a
-	// sounding continuation. A velocity-zero NoteOn is such a release.
+	// Different timing classes cannot pair; isolated unmatched attacks must
+	// not suppress other articulations. Velocity-zero NoteOn still releases.
 	const std::array source = { MidiEvent::MakeNoteOn(10u, 0, 60, 111),
 		MidiEvent::MakeNoteOn(20u, 0, 60, 90).WithFlags(MidiEvent::ExactTiming),
 		MidiEvent::MakeNoteOn(30u, 1, 60, 80), MidiEvent::MakeNoteOn(40u, 0, 61, 70),
@@ -3863,17 +3872,18 @@ TEST(MidiLoopSeam, SameIterationSuppressionAndSlotIndependence)
 	loop.ReplaceRecordedEvents(source.data(), source.size(), 1000u);
 	MidiLoopCapturingSink sink;
 	loop.ReadBlock(0u, 3000u, sink);
-	ASSERT_EQ(9u, sink.events.size());
+	ASSERT_EQ(24u, sink.events.size());
 	EXPECT_EQ(10u, sink.events[0].sampleOffset);
 	EXPECT_EQ(111u, sink.events[0].data2);
-	EXPECT_EQ(30u, sink.events[1].sampleOffset);
-	EXPECT_EQ(40u, sink.events[2].sampleOffset);
-	EXPECT_TRUE(sink.events[3].IsNoteOff());
-	EXPECT_EQ(60u, sink.events[4].sampleOffset);
-	EXPECT_EQ(1050u, sink.events[5].sampleOffset);
-	EXPECT_EQ(1060u, sink.events[6].sampleOffset);
-	EXPECT_EQ(2050u, sink.events[7].sampleOffset);
-	EXPECT_EQ(2060u, sink.events[8].sampleOffset);
+	EXPECT_EQ(20u, sink.events[1].sampleOffset);
+	EXPECT_EQ(30u, sink.events[2].sampleOffset);
+	EXPECT_EQ(40u, sink.events[3].sampleOffset);
+	EXPECT_TRUE(sink.events[4].IsNoteOff());
+	EXPECT_EQ(60u, sink.events[5].sampleOffset);
+	EXPECT_EQ(1050u, sink.events[13].sampleOffset);
+	EXPECT_EQ(1060u, sink.events[14].sampleOffset);
+	EXPECT_EQ(2050u, sink.events[22].sampleOffset);
+	EXPECT_EQ(2060u, sink.events[23].sampleOffset);
 }
 
 TEST(MidiLoopSeam, RetainedReleaseMakesAttackPairedAndSeamFlushesBothPaths)
@@ -3909,11 +3919,15 @@ TEST(MidiLoopSeam, FifoPairingLeavesOnlyLaterAttackUnmatched)
 	loop.ReplaceRecordedEvents(source.data(), source.size(), 1000u);
 	MidiLoopCapturingSink sink;
 	loop.ReadBlock(0u, 2000u, sink);
-	ASSERT_EQ(6u, sink.events.size());
+	ASSERT_EQ(9u, sink.events.size());
 	EXPECT_EQ(20u, sink.events[1].sampleOffset);
 	EXPECT_EQ(40u, sink.events[3].sampleOffset);
-	EXPECT_EQ(1030u, sink.events[4].sampleOffset);
-	EXPECT_EQ(1040u, sink.events[5].sampleOffset);
+	EXPECT_TRUE(sink.events[4].IsNoteOff());
+	EXPECT_EQ(1000u, sink.events[4].sampleOffset);
+	EXPECT_EQ(1010u, sink.events[5].sampleOffset);
+	EXPECT_EQ(1020u, sink.events[6].sampleOffset);
+	EXPECT_EQ(1030u, sink.events[7].sampleOffset);
+	EXPECT_EQ(1040u, sink.events[8].sampleOffset);
 }
 
 TEST(MidiLoopSeam, UnmatchedSurvivesSaveLoadAndManyIterations)
@@ -3946,7 +3960,14 @@ TEST(MidiLoopSeam, UnmatchedSurvivesSaveLoadAndManyIterations)
 	MidiLoopCapturingSink sink;
 	restored.ReadBlock(0u, 1000u, sink);
 	restored.ReadBlock(1000u, 9000u, sink);
-	ASSERT_EQ(1u, sink.events.size());
+	ASSERT_EQ(19u, sink.events.size());
+	for (unsigned int repeat = 0u; repeat < 9u; ++repeat)
+	{
+		EXPECT_EQ(800u + repeat * 1000u, sink.events[2u * repeat].sampleOffset);
+		EXPECT_TRUE(sink.events[2u * repeat].IsNoteOn());
+		EXPECT_EQ((repeat + 1u) * 1000u, sink.events[2u * repeat + 1u].sampleOffset);
+		EXPECT_TRUE(sink.events[2u * repeat + 1u].IsNoteOff());
+	}
 	EXPECT_EQ(800u, sink.events[0].sampleOffset);
 	EXPECT_EQ(123u, sink.events[0].data2);
 	EXPECT_EQ(MidiEvent::ExactTiming, sink.events[0].flags);
@@ -3982,7 +4003,7 @@ TEST(MidiLoopSeam, FullFlushesClearContinuation)
 	}
 }
 
-TEST(MidiLoopSeam, SeamReleasesOnlyPairedHeldSlots)
+TEST(MidiLoopSeam, SeamReleasesPairedAndIsolatedUnmatchedHeldSlots)
 {
 	for (unsigned int block : { 1500u, 1000u })
 	{
@@ -3993,11 +4014,13 @@ TEST(MidiLoopSeam, SeamReleasesOnlyPairedHeldSlots)
 		MidiLoopCapturingSink sink;
 		loop.ReadBlock(0u, block, sink);
 		if (block == 1000u) loop.ReadBlock(1000u, 500u, sink);
-		ASSERT_EQ(3u, sink.events.size());
+		ASSERT_EQ(4u, sink.events.size());
 		EXPECT_TRUE(sink.events[2].IsNoteOff());
 		EXPECT_EQ(1000u, sink.events[2].sampleOffset);
-		EXPECT_EQ(1u, sink.events[2].Channel());
-		EXPECT_TRUE(loop.HeldNotes().test(MidiLoop::NoteSlot(0, 60)));
+		EXPECT_EQ(0u, sink.events[2].Channel());
+		EXPECT_TRUE(sink.events[3].IsNoteOff());
+		EXPECT_EQ(1u, sink.events[3].Channel());
+		EXPECT_FALSE(loop.HeldNotes().test(MidiLoop::NoteSlot(0, 60)));
 		EXPECT_FALSE(loop.HeldNotes().test(MidiLoop::NoteSlot(1, 60)));
 	}
 }
@@ -4022,15 +4045,18 @@ TEST(MidiLoopSeam, RecordingAndOverdubCompletionPublishUnmatchedClassification)
 		else loop.EndRecord(1000u);
 		MidiLoopCapturingSink sink;
 		loop.ReadBlock(0u, 2000u, sink);
-		ASSERT_EQ(5u, sink.events.size());
+		ASSERT_EQ(7u, sink.events.size());
 		const auto head = quantised ? 25u : 20u;
 		const auto release = head + 100u;
 		EXPECT_EQ(head, sink.events[0].sampleOffset);
 		EXPECT_EQ(release, sink.events[1].sampleOffset);
 		EXPECT_EQ(950u, sink.events[2].sampleOffset);
 		EXPECT_EQ(113u, sink.events[2].data2);
-		EXPECT_EQ(1000u + release, sink.events[3].sampleOffset);
-		EXPECT_EQ(1950u, sink.events[4].sampleOffset);
+		EXPECT_TRUE(sink.events[3].IsNoteOff());
+		EXPECT_EQ(1000u, sink.events[3].sampleOffset);
+		EXPECT_EQ(1000u + head, sink.events[4].sampleOffset);
+		EXPECT_EQ(1000u + release, sink.events[5].sampleOffset);
+		EXPECT_EQ(1950u, sink.events[6].sampleOffset);
 		EXPECT_TRUE(loop.HeldNotes().test(MidiLoop::NoteSlot(0u, 60u)));
 	}
 }
@@ -4136,7 +4162,7 @@ TEST(MidiLoopSeam, PaintedWrappedCellMergesRecordedHeadAndKeepsItsRelease)
 	}
 }
 
-TEST(MidiLoopSeam, EditedNoteEndingAtSeamContinuesUntilNextPlayedRelease)
+TEST(MidiLoopSeam, EditedNoteEndingAtSeamDoesNotMergeNonoverlappingHead)
 {
 	MidiLoop loop;
 	const std::array paired = { MidiEvent::MakeNoteOn(20u, 0u, 60u, 80u),
@@ -4149,8 +4175,8 @@ TEST(MidiLoopSeam, EditedNoteEndingAtSeamContinuesUntilNextPlayedRelease)
 	ASSERT_TRUE(loop.PublishEdit(edit));
 	MidiLoopCapturingSink sink;
 	loop.ReadBlock(0u, 2000u, sink);
-	ASSERT_EQ(5u, sink.events.size());
-	const std::array times = { 20u, 100u, 950u, 1100u, 1950u };
+	ASSERT_EQ(7u, sink.events.size());
+	const std::array times = { 20u, 100u, 950u, 1000u, 1020u, 1100u, 1950u };
 	for (std::size_t i = 0u; i < times.size(); ++i)
 		EXPECT_EQ(times[i], sink.events[i].sampleOffset);
 	EXPECT_EQ(113u, sink.events[2].data2);
@@ -4259,7 +4285,7 @@ TEST(MidiLoopRelocation, TailContinuationChasesAcrossBothSeekDirections)
 		settings.GrainSamps = 100u;
 		settings.Fraction = MidiQuantisationFraction::Quarter;
 		ASSERT_TRUE(loop.SetQuantisation(settings));
-		const std::array source = { MidiEvent::MakeNoteOn(20u, 0u, 60u, 80u),
+		const std::array source = { MidiEvent::MakeNoteOn(0u, 0u, 60u, 80u),
 			MidiEvent::MakeNoteOff(120u, 0u, 60u),
 			MidiEvent::MakeNoteOn(950u, 0u, 60u, 113u) };
 		loop.ReplaceRecordedEvents(source.data(), source.size(), 1000u);
@@ -4276,7 +4302,7 @@ TEST(MidiLoopRelocation, TailContinuationChasesAcrossBothSeekDirections)
 		EXPECT_TRUE(sink.events[1].IsNoteOn());
 		EXPECT_EQ(1050u, sink.events[1].sampleOffset);
 		EXPECT_EQ(113u, sink.events[1].data2);
-		EXPECT_EQ(quantised ? 1125u : 1120u, sink.events[2].sampleOffset);
+		EXPECT_EQ(1120u, sink.events[2].sampleOffset);
 		sink.Clear();
 		loop.RequestRelocationChase();
 		loop.ReadBlock(1970u, 80u, sink); // Backward phase seek into the tail.
@@ -4295,9 +4321,12 @@ TEST(MidiLoopRelocation, UnreleasedNoteChasesAndRetainsOriginalVelocity)
 	loop.ReplaceRecordedEvents(&attack, 1u, 1000u);
 	MidiLoopCapturingSink sink;
 	loop.RequestRelocationChase();
-	loop.ReadBlock(1100u, 900u, sink); // Head of a steady-state iteration.
+	loop.ReadBlock(1100u, 1u, sink); // No isolated tail carries into the head.
+	EXPECT_TRUE(sink.events.empty());
+	loop.RequestRelocationChase();
+	loop.ReadBlock(1970u, 1u, sink); // Seeking inside the tail still chases it.
 	ASSERT_EQ(1u, sink.events.size());
-	EXPECT_EQ(1100u, sink.events[0].sampleOffset);
+	EXPECT_EQ(1970u, sink.events[0].sampleOffset);
 	EXPECT_EQ(123u, sink.events[0].data2);
 	EXPECT_EQ(MidiEvent::ExactTiming, sink.events[0].flags);
 	EXPECT_TRUE(loop.HeldNotes().test(MidiLoop::NoteSlot(3u, 64u)));
@@ -4553,5 +4582,65 @@ TEST(MidiLoopPlayback, RejectedReleasePreservesItsVelocity)
 		[](const auto& event) { return event.IsNoteOff(); });
 	ASSERT_NE(sink.events.end(), release);
 	EXPECT_EQ(23u, release->data2);
+	}
+}
+
+TEST(MidiLoopSeam, TrimmedIsolatedNoteEndsAtSeamAndRetriggers)
+{
+	for (const bool quantised : { false, true })
+	for (const auto blockSize : { 1u, 17u, 1000u, 3000u })
+	{
+		MidiLoop loop;
+		const std::array source = { MidiEvent::MakeNoteOn(750u, 0u, 60u, 100u),
+			MidiEvent::MakeNoteOff(900u, 0u, 60u) };
+		loop.ReplaceRecordedEvents(source.data(), source.size(), 1000u);
+		MidiQuantisationSettings settings;
+		settings.Enabled = quantised;
+		settings.GrainSamps = 100u;
+		settings.Fraction = MidiQuantisationFraction::Quarter;
+		ASSERT_TRUE(loop.SetQuantisation(settings));
+		MidiLoop::EditState edit;
+		ASSERT_TRUE(loop.SnapshotForEdit(edit));
+		ASSERT_TRUE(midi::MidiEditOperations::MoveOrTrim(edit, 0u, 750u, 1000u, 60u));
+		ASSERT_TRUE(loop.PublishEdit(edit));
+		MidiLoopCapturingSink sink;
+		for (unsigned int cursor = 0u; cursor < 3001u; cursor += blockSize)
+			loop.ReadBlock(cursor, std::min(blockSize, 3001u - cursor), sink);
+		ASSERT_EQ(6u, sink.events.size());
+		for (unsigned int repeat = 0u; repeat < 3u; ++repeat)
+		{
+			EXPECT_TRUE(sink.events[2u * repeat].IsNoteOn());
+			EXPECT_EQ(750u + repeat * 1000u, sink.events[2u * repeat].sampleOffset);
+			EXPECT_TRUE(sink.events[2u * repeat + 1u].IsNoteOff());
+			EXPECT_EQ((repeat + 1u) * 1000u, sink.events[2u * repeat + 1u].sampleOffset);
+		}
+		EXPECT_TRUE(loop.HeldNotes().none());
+	}
+}
+
+TEST(MidiLoopSeam, NonzeroHeadMergesOnlyWhenTailReachesIt)
+{
+	for (const bool quantised : { false, true })
+	for (const bool overlaps : { false, true })
+	for (const auto blockSize : { 1u, 73u, 2000u })
+	{
+		MidiLoop loop;
+		MidiQuantisationSettings settings;
+		settings.Enabled = quantised;
+		settings.GrainSamps = 100u;
+		settings.Fraction = MidiQuantisationFraction::Quarter;
+		ASSERT_TRUE(loop.SetQuantisation(settings));
+		const std::array source = { MidiEvent::MakeNoteOn(20u, 0u, 36u, 95u),
+			MidiEvent::MakeNoteOff(120u, 0u, 36u),
+			MidiEvent::MakeNoteOn(900u, 0u, 36u, 88u),
+			MidiEvent::MakeNoteOff(overlaps ? 1030u : 1010u, 0u, 36u) };
+		loop.ReplaceRecordedEvents(source.data(), source.size(), 1000u);
+		MidiLoopCapturingSink sink;
+		for (unsigned int cursor = 0u; cursor < 2000u; cursor += blockSize)
+			loop.ReadBlock(cursor, std::min(blockSize, 2000u - cursor), sink);
+		EXPECT_EQ(overlaps ? 3u : 4u, std::count_if(sink.events.begin(), sink.events.end(),
+			[](const auto& event) { return event.IsNoteOn(); }));
+		EXPECT_EQ(overlaps ? 1u : 2u, std::count_if(sink.events.begin(), sink.events.end(),
+			[](const auto& event) { return event.IsNoteOn() && event.data2 == 95u; }));
 	}
 }

@@ -152,7 +152,7 @@ namespace midi
 			const auto end = start + duration;
 			state.Events[state.EventCount++] = MidiEvent::MakeNoteOn(start, channel, pitch, velocity);
 			// ExtractSpans extends an unmatched on to the seam. Playback flushes
-			// it there, preserving a true one-sample final cell.
+			// it there unless merged across the wrap, preserving a true one-sample final cell.
 			if (end < state.LoopLengthSamps)
 				state.Events[state.EventCount++] = MidiEvent::MakeNoteOff(end, channel, pitch);
 			MidiNote::SortMidiEvents(state.Events.data(), state.EventCount);
