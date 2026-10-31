@@ -301,6 +301,17 @@ TEST(InitFile, ParsesUiLoggingSetting) {
 	EXPECT_EQ("verbose", parsed->Logging.Ui);
 }
 
+TEST(InitFile, NinjamLoggingIsIndependentAndLegacyEventVerboseIsPreserved) {
+	auto legacy = InitFile::FromStream(std::stringstream("{\"logging\":{\"event\":\"verbose\"}}"));
+	ASSERT_TRUE(legacy);
+	EXPECT_EQ("verbose", legacy->Logging.Ninjam);
+	auto explicitSetting = InitFile::FromStream(std::stringstream(
+		"{\"logging\":{\"event\":\"verbose\",\"ninjam\":\"\"}}"));
+	ASSERT_TRUE(explicitSetting);
+	EXPECT_TRUE(explicitSetting->Logging.Ninjam.empty());
+	EXPECT_EQ("verbose", explicitSetting->Logging.Event);
+}
+
 TEST(InitFile, ConsoleAutostartDefaultsOnAndPersistsOff) {
 	auto legacy = InitFile::FromStream(std::stringstream("{}"));
 	ASSERT_TRUE(legacy);
@@ -334,6 +345,7 @@ TEST(InitFile, ToStreamWritesJsonThatParses) {
 	ini.WinPos = { -228, 23 };
 	ini.WinSize = { 2030u, 1061u };
 	ini.Logging.Ui = "verbose";
+	ini.Logging.Ninjam = "verbose";
 
 	std::stringstream ss;
 	ASSERT_TRUE(InitFile::ToStream(ini, ss));
@@ -349,6 +361,7 @@ TEST(InitFile, ToStreamWritesJsonThatParses) {
 	EXPECT_EQ(2030u, parsed->WinSize.Width);
 	EXPECT_EQ(1061u, parsed->WinSize.Height);
 	EXPECT_EQ("verbose", parsed->Logging.Ui);
+	EXPECT_EQ("verbose", parsed->Logging.Ninjam);
 }
 
 TEST(InitFile, GeneratedOriginRoundTripsButLegacyDefaultsRemainUnmarked) {

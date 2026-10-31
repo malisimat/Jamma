@@ -590,7 +590,7 @@ void Scene::OnJobTick(Time curTime)
 {
 	std::scoped_lock lifecycle(_operation.LifecycleMutex());
 	if (_operation.IsReplacing() || _isSceneQuitting.load(std::memory_order_acquire)) return;
-	const auto verboseTiming = _loggingConfig.Event == "verbose";
+	const auto verboseTiming = _loggingConfig.Ninjam == "verbose";
 	if (verboseTiming) _ninjamDiagnosticPresenter.ObserveJobTick(curTime);
 	std::function<void()> save;
 	{ std::scoped_lock lock(_sceneMutex); save = _operation.TakeExplicitRigSaveLocked(); }
@@ -651,7 +651,7 @@ void Scene::OnJobTick(Time curTime)
 		else if (auto clock = _quantisation.Clock())
 			_ApplyNinjamTimingUpdate(_networkService->TickTiming(
 				localTiming, hasLocalContent, *clock));
-		if (_loggingConfig.Event == "verbose" && _audioEngine)
+		if (_loggingConfig.Ninjam == "verbose" && _audioEngine)
 		{
 			const auto receipt = _audioEngine->LastAppliedDesiredTiming();
 			_ninjamDiagnosticPresenter.Present(_networkService->ObserveAppliedTimingReceipt(receipt), std::cout);
@@ -1108,7 +1108,7 @@ void Scene::SetLogging(io::LoggingConfig config) noexcept
 {
 	_loggingConfig = config;
 	if (_networkService)
-		_networkService->SetTimingDiagnosticsEnabled(_loggingConfig.Event == "verbose");
+		_networkService->SetTimingDiagnosticsEnabled(_loggingConfig.Ninjam == "verbose");
 	if (_inputSubsystem)
 		_inputSubsystem->SetLogging(_loggingConfig);
 	if (_windowSubsystem)

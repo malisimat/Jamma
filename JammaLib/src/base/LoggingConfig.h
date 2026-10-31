@@ -10,5 +10,6 @@ namespace base
 		std::string Audio;
 		std::string Event;
 		std::string Ui;
+		std::string Ninjam;
 	};
 }
