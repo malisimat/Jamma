@@ -182,6 +182,9 @@ namespace engine
 			return (_HasUncommittedChanges() && _flipTakeBuffer) ? _backLoopTakes : _loopTakes;
 		}
 		std::vector<std::shared_ptr<LoopTake>> GetLoopTakeSnapshot() const;
+		// Scene-serialized source admission; muted material remains eligible.
+		bool ContainsOverdubSource(const std::shared_ptr<LoopTake>& source) const;
+		std::string OverdubSourceRejection(const std::shared_ptr<LoopTake>& source) const;
 		void SetCameraRecordingPublisher(const std::shared_ptr<CameraRecordingPublisher>& publisher);
 		std::uint64_t LoopTakeRevision() const noexcept
 		{

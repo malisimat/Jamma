@@ -858,6 +858,25 @@ void Station::SetSelectDepth(base::SelectDepth depth)
 		_stationModel->SetVisible(atStation);
 }
 
+bool Station::ContainsOverdubSource(const std::shared_ptr<LoopTake>& source) const
+{
+	const auto& takes = GetLoopTakes();
+	return !MembershipRemoving() && source && !source->IsCaptureCancelled() &&
+		std::find(takes.begin(), takes.end(), source) != takes.end();
+}
+
+std::string Station::OverdubSourceRejection(const std::shared_ptr<LoopTake>& source) const
+{
+	if (!ContainsOverdubSource(source)) return "Overdub source is no longer in this station";
+	if (!source->IsCompletedRecording() || source->HasPendingTriggerCapture())
+		return "Overdub source is still recording";
+	if (source->GetLoops().empty() && source->GetMidiLoops().empty())
+		return "Overdub source has no recorded material";
+	if (!source->GetMidiLoops().empty() && !source->HasMidiDevicePhaseObservation())
+		return "Overdub source has no coherent MIDI device phase";
+	return {};
+}
+
 ActionResult Station::OnAction(KeyAction action)
 {
 	return ActionResult::NoAction();
@@ -1231,6 +1250,14 @@ ActionResult Station::OnAction(TriggerAction action)
 	{
 		auto midiInputChannels = resolveMidiRecordChannels();
 		auto sourceLoopTake = _loopTakes.empty() ? std::shared_ptr<LoopTake>() : _loopTakes.back();
+		if (!action.SourceId.empty())
+		{
+			const auto& members = GetLoopTakes();
+			const auto found = std::find_if(members.begin(), members.end(), [&action](const auto& member)
+				{ return member && member->Id() == action.SourceId; });
+			sourceLoopTake = found == members.end() ? nullptr : *found;
+			if (!OverdubSourceRejection(sourceLoopTake).empty()) return ActionResult::NoAction();
+		}
         auto sourceId = sourceLoopTake ? sourceLoopTake->Id() : "";
         if (sourceLoopTake && !midiInputChannels.empty() && !sourceLoopTake->GetMidiLoops().empty()
             && !sourceLoopTake->HasMidiDevicePhaseObservation())
@@ -1239,9 +1266,9 @@ ActionResult Station::OnAction(TriggerAction action)
             return ActionResult::NoAction();
         }
 
-        auto newLoopTake = AddTake();
         const auto timing = resolveCaptureTiming();
         if (!timing) return ActionResult::NoAction();
+        auto newLoopTake = AddTake();
         newLoopTake->ConfigureTriggerCapture(*timing);
 		newLoopTake->Overdub(action.InputChannels,
 			Name(),

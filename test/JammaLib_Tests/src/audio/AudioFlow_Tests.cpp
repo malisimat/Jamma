@@ -521,13 +521,17 @@ public:
 	struct Result
 	{
 		std::vector<float> Exported, Dac;
+		bool ExplicitSourceAccepted = false, OtherMaterialUnchanged = false;
+		bool SourceAndNewMidi = false, LaterMidiUnchanged = false;
+		bool RightCaptureComplete = false;
+		std::vector<float> SecondChannel;
 		std::vector<bool> Complete;
 		std::vector<unsigned int> CompletionEdges;
 		unsigned int HistoryReads = 0u;
 		bool DelayedPunchOpened = false, DelayedPunchClosed = false;
 	};
 
-	static Result CapturePunch(bool temporary, int delay, bool productionTrigger = false)
+	static Result CapturePunch(bool temporary, int delay, bool productionTrigger = false, bool explicitSource = false, bool mixedStereo = false)
 	{
 		constexpr unsigned int trigger = 1024u, length = 2048u;
 		constexpr unsigned int inputLatency = 11u, outputLatency = 23u, block = 128u;
@@ -537,16 +541,63 @@ public:
 		constexpr unsigned int punchStart = trigger + 333u, punchEnd = trigger + 1031u;
 		const auto seam = delay > 0 ? static_cast<unsigned int>(delay + (productionTrigger ? 480 : 10)) : 0u;
 		const auto deadline = trigger + length - seam + age;
-		auto station = MakeStation(1u);
-		auto source = MakeTake(); source->SetNumBusChannels(1u);
-		source->Record({}, "old");
+		const auto channels = mixedStereo ? 2u : 1u;
+		auto station = MakeStation(channels);
+		auto source = MakeTake(); source->SetNumBusChannels(channels);
+		source->Record({}, "old", mixedStereo ? std::vector<unsigned int>{3u} : std::vector<unsigned int>{},
+			mixedStereo ? std::vector<std::string>{"Keys"} : std::vector<std::string>{});
 		auto sourceLoop = source->AddLoop(0u, "old"); sourceLoop->Record();
 		std::vector<float> old(constants::MaxLoopFadeSamps + length, 0.0f);
 		old[constants::MaxLoopFadeSamps + 77u] = 0.25f;
 		WriteLoopSamples(sourceLoop, old);
+		std::shared_ptr<Loop> secondSourceLoop;
+		std::vector<float> secondBefore;
+		if (mixedStereo)
+		{
+			secondSourceLoop = source->AddLoop(1u, "old-stereo"); secondSourceLoop->Record();
+			std::vector<float> second(constants::MaxLoopFadeSamps + length, 0.0f);
+			std::fill(second.begin() + constants::MaxLoopFadeSamps, second.end(), 0.375f);
+			WriteLoopSamples(secondSourceLoop, second);
+			source->EndMultiWrite(length, true, Audible::AUDIOSOURCE_ADC);
+			EXPECT_TRUE(source->RecordMidiEvent(midi::MidiEvent::MakeNoteOn(10u, 3u, 60u, 100u), "Keys", length));
+			EXPECT_TRUE(source->RecordMidiEvent(midi::MidiEvent::MakeNoteOff(90u, 3u, 60u), "Keys", length));
+			station->SetAllowedMidiChannels({4u});
+		}
 		source->Play(constants::MaxLoopFadeSamps, length, 0u); source->CommitChanges();
+		if (mixedStereo)
+		{
+			secondBefore = secondSourceLoop->ExportSamples();
+			EXPECT_EQ(length, secondBefore.size());
+			EXPECT_EQ(1u, secondSourceLoop->LoopChannel());
+			EXPECT_TRUE(HasNonZero(secondBefore.data(), static_cast<unsigned int>(secondBefore.size())))
+				<< "Completed source A right channel must contain authored material before trigger admission";
+			auto probe = std::make_shared<AudioFlowCaptureStereoSink>(block);
+			source->WriteBlock(probe, std::make_shared<AudioFlowAdditiveBounceWriter>(), 0, block);
+			EXPECT_TRUE(HasNonZero(probe->GetSink(1u)->Samples.data(), block))
+				<< "Source A must actually bounce its right slot before delayed mixed capture";
+		}
 		std::shared_ptr<LoopTake> target;
 		station->AddTake(source);
+		std::shared_ptr<LoopTake> latest;
+		std::vector<float> latestBefore;
+		if (explicitSource)
+		{
+			latest = MakeTake(); latest->Record({0u}, "latest-B",
+				mixedStereo ? std::vector<unsigned int>{3u} : std::vector<unsigned int>{},
+				mixedStereo ? std::vector<std::string>{"Keys"} : std::vector<std::string>{}); latest->CommitChanges();
+			std::vector<float> other(constants::MaxLoopFadeSamps + length * 2u, 0.0f);
+			std::fill(other.begin() + constants::MaxLoopFadeSamps, other.end(), 0.875f);
+			WriteLoopSamples(latest->GetLoops().front(), other);
+			if (mixedStereo)
+			{
+				latest->EndMultiWrite(length * 2u, true, Audible::AUDIOSOURCE_ADC);
+				EXPECT_TRUE(latest->RecordMidiEvent(midi::MidiEvent::MakeNoteOn(10u, 3u, 67u, 100u), "Keys", length * 2u));
+				EXPECT_TRUE(latest->RecordMidiEvent(midi::MidiEvent::MakeNoteOff(90u, 3u, 67u), "Keys", length * 2u));
+			}
+			latest->Play(constants::MaxLoopFadeSamps, length * 2u, 0u);
+			station->AddTake(latest);
+			latestBefore = latest->GetLoops().front()->ExportSamples();
+		}
 		if (!productionTrigger)
 		{
 			target = MakeTake(); target->SetNumBusChannels(1u);
@@ -556,7 +607,7 @@ public:
 			station->AddTake(target);
 		}
 		station->SetVisible(true); station->SetEnabled(true); station->CommitChanges();
-		auto mixer = MakeChannelMixer(1u, age + 2u * block);
+		auto mixer = MakeChannelMixer(channels, age + 2u * block);
 		config.Audio.LatencyIn = inputLatency;
 		config.Audio.LatencyOut = outputLatency;
 		audio::AudioStreamParams stream;
@@ -566,8 +617,11 @@ public:
 		ditch.SetRelease(engine::TriggerBinding(engine::TRIGGER_KEY, 50u, 0u), true);
 		TriggerParams triggerParams;
 		triggerParams.Activate = {activate}; triggerParams.Ditch = {ditch};
+		if (mixedStereo) triggerParams.MidiInputDevices = {"Keys"};
 		triggerParams.InputChannels = {0u}; triggerParams.PreDelayMs = static_cast<double>(delay) / 48.0;
 		auto realTrigger = std::make_shared<Trigger>(triggerParams); realTrigger->SetReceiver(station);
+		if (mixedStereo) source->BeginCaptureAudioBoundary(0u, 0u, 0u);
+		if (explicitSource && !realTrigger->BindNextOverdubSource(station, source)) return {};
 		const auto key = [&](unsigned int value, unsigned int down) {
 			base::Action action; action.SetUserConfig(config); action.SetAudioParams(stream);
 			realTrigger->OnEvent(engine::TRIGGER_KEY, value, down, action);
@@ -579,7 +633,7 @@ public:
 		{
 			unsigned int end = (std::min)(start + block, deadline + 2u * block);
 			for (const auto edge : {trigger, trigger + 1u, trigger + length, punchStart, punchEnd,
-				punchStart + age, punchEnd + age, deadline})
+				punchStart + age, punchEnd + age, punchStart + 16u, punchStart + 32u, deadline})
 				if (edge > start && edge < end) end = edge;
 			const auto count = end - start;
 			if (productionTrigger)
@@ -597,6 +651,10 @@ public:
 				if (start == trigger + length) { key(50u, 1u); key(49u, 1u); }
 			}
 			if (start >= trigger) target->BeginCaptureAudioBoundary(start, start, start);
+			if (mixedStereo && start == punchStart + 16u)
+				EXPECT_TRUE(target->RecordMidiEvent(midi::MidiEvent::MakeNoteOn(start, 3u, 62u, 100u), "Keys", start));
+			if (mixedStereo && start == punchStart + 32u)
+				EXPECT_TRUE(target->RecordMidiEvent(midi::MidiEvent::MakeNoteOff(start, 3u, 62u), "Keys", start));
 			if (!productionTrigger && start == punchStart + age) target->TriggerPunchInAudio();
 			if (!productionTrigger && start == punchEnd + age) target->TriggerPunchOutAudio();
 			if (start == punchStart + age) result.DelayedPunchOpened = target->IsPunchInActive();
@@ -606,14 +664,14 @@ public:
 				target->SetTriggerCaptureStop(start);
 				target->Play(constants::MaxLoopFadeSamps, length, 0u, 0, false, outputLatency);
 			}
-			std::array<float, block> input{};
+			std::array<float, block * 2u> input{};
 			for (auto i = 0u; i < count; ++i)
 			{
 				const auto physical = static_cast<std::int64_t>(start) + i - inputLatency;
-				if (physical == punchStart || physical == punchEnd - 1u || physical == punchStart + 350u) input[i] = 0.75f;
-				if (physical == punchStart - 1u || physical == punchEnd) input[i] = 9.0f;
+				if (physical == punchStart || physical == punchEnd - 1u || physical == punchStart + 350u) input[i * channels] = 0.75f;
+				if (physical == punchStart - 1u || physical == punchEnd) input[i * channels] = 9.0f;
 			}
-			mixer.FromAdc(input.data(), 1u, count);
+			mixer.FromAdc(input.data(), channels, count);
 			audio::DacRenderContext dac{mixer.ObserveInputHistory(start, count, inputLatency, true)};
 			dac.History.ReadCount = &result.HistoryReads;
 			mixer.InitPlay(age - inputLatency, count);
@@ -628,8 +686,8 @@ public:
 			station->Zero(count, Audible::AUDIOSOURCE_LOOPS);
 			mixer.Sink()->Zero(count, Audible::AUDIOSOURCE_LOOPS);
 			station->WriteBlock(mixer.Sink(), nullptr, 0, count, start, temporary ? &dac : nullptr);
-			std::array<float, block> output{}; mixer.ToDac(output.data(), 1u, count);
-			result.Dac.insert(result.Dac.end(), output.begin(), output.begin() + count);
+			std::array<float, block * 2u> output{}; mixer.ToDac(output.data(), channels, count);
+			result.Dac.insert(result.Dac.end(), output.begin(), output.begin() + count * channels);
 			station->EndMultiPlay(count);
 			mixer.Sink()->EndMultiWrite(count, true, Audible::AUDIOSOURCE_LOOPS);
 			if (productionTrigger) realTrigger->OnTick(utils::Timer::GetTime(), count, config, stream);
@@ -645,7 +703,34 @@ public:
 			}
 			start = end;
 		}
+		if (mixedStereo) station->CompleteMidiIngressPump(deadline + 2u * block);
 		result.Exported = target->GetLoops().front()->ExportSamples();
+		if (explicitSource)
+		{
+			const auto history = realTrigger->GetTakes();
+			result.ExplicitSourceAccepted = !history.empty() && history.back().SourceTakeId == source->Id()
+				&& !realTrigger->HasExplicitNextOverdubSource();
+			result.OtherMaterialUnchanged = latest->GetLoops().front()->ExportSamples() == latestBefore
+				&& sourceLoop->ExportSamples() == std::vector<float>(old.begin() + constants::MaxLoopFadeSamps, old.end());
+		}
+		if (mixedStereo)
+		{
+			EXPECT_EQ(2u, target->GetLoops().size());
+			if (target->GetLoops().size() > 1u) result.RightCaptureComplete = target->GetLoops()[1]->TriggerCaptureComplete();
+			if (target->GetLoops().size() > 1u) result.SecondChannel = target->GetLoops()[1]->ExportSamples();
+			bool oldNote = false, newNote = false, wrongNote = false;
+			for (const auto& loop : target->GetMidiLoops())
+				for (std::size_t i = 0u; i < loop->EventCount(); ++i)
+				{
+					midi::MidiEvent event{};
+					if (loop->TryGetEvent(i, event) && event.IsNoteOn())
+					{ oldNote |= event.data1 == 60u; newNote |= event.data1 == 62u; wrongNote |= event.data1 == 67u; }
+				}
+			result.SourceAndNewMidi = oldNote && newNote && !wrongNote;
+			result.OtherMaterialUnchanged &= secondSourceLoop->ExportSamples() == secondBefore;
+			midi::MidiEvent b{};
+			result.LaterMidiUnchanged = latest->GetMidiLoops().front()->TryGetEvent(0u, b) && b.data1 == 67u;
+		}
 		return result;
 	}
 };
@@ -2372,3 +2457,38 @@ TEST(AudioCallbackRealtime, ActiveAudioShiftSeekDoesNotAllocateOrFree)
     EXPECT_TRUE(std::any_of(output.begin(),output.end(),[](float sample){ return sample!=0.0f; }));
 }
 #endif
+
+TEST(AudioFlow, ExplicitEarlierSourceCreatesItsAudioPlusNewPunchWithoutChangingLaterUnequalTake)
+{
+	for (const int delay : {-97, 0, 97})
+	{
+		SCOPED_TRACE(delay);
+		const auto original = AudioFlowTemporaryPlaybackRegression::CapturePunch(false, delay, true);
+		const auto selected = AudioFlowTemporaryPlaybackRegression::CapturePunch(false, delay, true, true);
+		ASSERT_EQ(2048u, selected.Exported.size());
+		EXPECT_TRUE(selected.ExplicitSourceAccepted);
+		EXPECT_TRUE(selected.OtherMaterialUnchanged);
+		EXPECT_EQ(original.Exported, selected.Exported);
+		EXPECT_GT(*std::max_element(selected.Exported.begin(), selected.Exported.end()), 0.25f);
+		EXPECT_EQ(selected.Exported.end(), std::find(selected.Exported.begin(), selected.Exported.end(), 0.875f));
+		EXPECT_TRUE(selected.DelayedPunchOpened);
+		EXPECT_TRUE(selected.DelayedPunchClosed);
+	}
+}
+
+TEST(AudioFlow, ExplicitEarlierMixedStereoSourceCompletesAudioAndMidiPlusNewPunch)
+{
+	const auto selected = AudioFlowTemporaryPlaybackRegression::CapturePunch(false, 0, true, true, true);
+	ASSERT_EQ(2048u, selected.Exported.size());
+	ASSERT_EQ(2048u, selected.SecondChannel.size());
+	EXPECT_TRUE(selected.ExplicitSourceAccepted);
+	EXPECT_TRUE(selected.OtherMaterialUnchanged);
+	EXPECT_TRUE(selected.SourceAndNewMidi);
+	EXPECT_TRUE(selected.LaterMidiUnchanged);
+	EXPECT_GT(*std::max_element(selected.Exported.begin(), selected.Exported.end()), 0.25f);
+	EXPECT_GT(*std::max_element(selected.SecondChannel.begin(), selected.SecondChannel.end()), 0.0f);
+	EXPECT_TRUE(selected.RightCaptureComplete);
+	EXPECT_EQ(1u, selected.CompletionEdges.size());
+	EXPECT_EQ(selected.Exported.end(), std::find(selected.Exported.begin(), selected.Exported.end(), 0.875f));
+	EXPECT_TRUE(selected.DelayedPunchOpened); EXPECT_TRUE(selected.DelayedPunchClosed);
+}

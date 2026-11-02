@@ -1,4 +1,5 @@
 #include "Trigger.h"
+#include "Station.h"
 
 #include <cassert>
 #include <cstdint>
@@ -823,13 +824,91 @@ void Trigger::AddMidiInputDevice(std::string device)
 		_midiInputDevices.push_back(std::move(device));
 }
 
+void Trigger::SetReceiver(std::shared_ptr<base::ActionReceiver> receiver)
+{
+	const bool changed = _acceptedRouteIdentity.load(std::memory_order_acquire) != receiver.get();
+	if (changed) _acceptedRouteRevision.fetch_add(1u, std::memory_order_acq_rel);
+	ActionSender::SetReceiver(std::move(receiver));
+	_acceptedRouteIdentity.store(_receiver.get(), std::memory_order_release);
+	if (changed) _acceptedRouteRevision.fetch_add(1u, std::memory_order_release);
+	_RefreshNextOverdubSource();
+}
+
+bool Trigger::BindNextOverdubSource(const std::shared_ptr<Station>& station, const std::shared_ptr<LoopTake>& source)
+{
+	// Do not touch ActionSender::_receiver: routing swaps that shared_ptr on audio.
+	const auto revision = _acceptedRouteRevision.load(std::memory_order_acquire);
+	if ((revision & 1u) || !station || station.get() != _acceptedRouteIdentity.load(std::memory_order_acquire) ||
+		revision != _acceptedRouteRevision.load(std::memory_order_acquire))
+	{
+		_nextSourceStatus = "Overdub source is not on the current trigger route";
+		return false;
+	}
+	const auto rejection = station->OverdubSourceRejection(source);
+	if (!rejection.empty()) { _nextSourceStatus = rejection; return false; }
+	if (_nextSourceVersionAllocator == std::numeric_limits<std::uint64_t>::max())
+	{
+		_nextSourceStatus = "Restart Jamma to arm another overdub source";
+		return false;
+	}
+	_nextSourceStation = station;
+	_nextSource = source;
+	_nextSourceId = source->Id();
+	_nextSourceRouteRevision = revision;
+	_nextSourceInvalid = false;
+	_nextSourceVersion = ++_nextSourceVersionAllocator;
+	_nextSourceStatus = "Next overdub source armed";
+	_publishedNextSourceVersion.store(_nextSourceVersion, std::memory_order_release);
+	return true;
+}
+
+void Trigger::ClearNextOverdubSource()
+{
+	_publishedNextSourceVersion.store(0u, std::memory_order_release);
+	_nextSourceVersion = 0u;
+	_nextSourceStation.reset();
+	_nextSource.reset();
+	_nextSourceId.clear();
+	_nextSourceInvalid = false;
+	_nextSourceStatus.clear();
+}
+
+void Trigger::_RefreshNextOverdubSource()
+{
+	if (!_nextSourceVersion || _nextSourceInvalid) return;
+	const auto revision = _acceptedRouteRevision.load(std::memory_order_acquire);
+	if (revision & 1u) return; // A routing boundary is in progress; admission will retry/reject.
+	const auto station = _nextSourceStation.lock();
+	const auto source = _nextSource.lock();
+	if (!station || revision != _nextSourceRouteRevision ||
+		station.get() != _acceptedRouteIdentity.load(std::memory_order_acquire) ||
+		_removingReceiver.load(std::memory_order_acquire) == station.get() ||
+		!station->ContainsOverdubSource(source))
+	{
+		_nextSourceInvalid = true;
+		_nextSourceStatus = "Next overdub source is no longer available; clear or rebind it";
+	}
+}
+
+std::shared_ptr<LoopTake> Trigger::NextOverdubSource()
+{
+	_RefreshNextOverdubSource();
+	return _nextSourceInvalid ? nullptr : _nextSource.lock();
+}
+
 void Trigger::ApplyCaptureRouting(std::shared_ptr<base::ActionReceiver>& receiver,
 	std::vector<unsigned int>& inputChannels,
 	std::vector<std::string>& midiInputDevices,
 	std::shared_ptr<audio::AudioMixer>& overdubMixer,
 	std::shared_ptr<base::BounceWriter>& overdubWriter) noexcept
 {
+	// Odd/even guards the raw identity observation. Strings/weak ownership stay
+	// on the Scene owner; a later boundary makes an armed route conservatively stale.
+	const bool changed = _receiver.get() != receiver.get();
+	if (changed) _acceptedRouteRevision.fetch_add(1u, std::memory_order_acq_rel);
 	_receiver.swap(receiver);
+	_acceptedRouteIdentity.store(_receiver.get(), std::memory_order_release);
+	if (changed) _acceptedRouteRevision.fetch_add(1u, std::memory_order_release);
 	_inputChannels.swap(inputChannels);
 	_midiInputDevices.swap(midiInputDevices);
 	_overdubMixer.swap(overdubMixer);
@@ -937,6 +1016,7 @@ void Trigger::CompleteReceiverRemovalOnJob()
 
 void Trigger::Reset()
 {
+	ClearNextOverdubSource();
 	for (auto& session : _captureSessions) _ReleaseSourceMuteClaim(session.get());
 	_sourceLossScanRequested.store(false, std::memory_order_release);
 	_activationReleaseRequested.store(false, std::memory_order_release);
@@ -1112,6 +1192,8 @@ bool Trigger::_QueueStructuralCommand(TriggerAction::TriggerActionType actionTyp
 	command.IsSourceLossCancellation = sourceLossCancellation;
 	// Loss arriving after edge validation cannot bless that edge with a newer epoch.
 	command.InputGeneration = _consumedInputLossGeneration;
+	if (actionType == TriggerAction::TRIGGER_OVERDUB_START)
+		command.NextSourceVersion = _publishedNextSourceVersion.load(std::memory_order_acquire);
 	if (!_structuralCommands.Push(command))
 	{
 		_structuralCommandDropCount.fetch_add(1u, std::memory_order_relaxed);
@@ -1343,6 +1425,7 @@ void Trigger::ProcessStructuralActionsOnJob(
 		}
 	}
 	_publishedCapturePending.store(capturePending, std::memory_order_release);
+	_RefreshNextOverdubSource();
 	StructuralCommand command;
 	if (!_structuralCommands.Peek(command))
 		return;
@@ -1373,6 +1456,29 @@ void Trigger::ProcessStructuralActionsOnJob(
 			receiver = take->Receiver;
 		}
 
+		std::shared_ptr<LoopTake> explicitSource;
+		if (command.NextSourceVersion)
+		{
+			if (command.NextSourceVersion != _nextSourceVersion)
+			{
+				_nextSourceStatus = "Overdub source changed before start; retry the current choice";
+				receiver.reset();
+			}
+			else if (_nextSourceInvalid)
+				receiver.reset();
+			else
+			{
+				const auto station = _nextSourceStation.lock();
+				explicitSource = _nextSource.lock();
+				const auto rejection = station ? station->OverdubSourceRejection(explicitSource) :
+					std::string("Overdub source station is no longer available");
+				if (!receiver || receiver.get() != station.get() || !rejection.empty())
+				{
+					_nextSourceStatus = rejection.empty() ? "Overdub start is temporarily unavailable" : rejection;
+					receiver.reset();
+				}
+			}
+		}
 		ActionResult actionResult = ActionResult::NoAction();
 		// An unbound restored entry with no pinned owners is terminal. Settle it
 		// through the result handshake; audio must retire its borrower before reclaim.
@@ -1385,6 +1491,9 @@ void Trigger::ProcessStructuralActionsOnJob(
 			actionResult.IsEaten = true;
 			actionResult.DitchResult = actions::DitchDisposition::AlreadyAbsent;
 		}
+		if (command.NextSourceVersion && receiver &&
+			(_jobTakeHistorySize >= _HistoryCapacity || _captureSessionCount >= _HistoryCapacity))
+			_nextSourceStatus = "Overdub history capacity unavailable; source remains armed";
 		if (receiver && (!isStart || (_jobTakeHistorySize < _HistoryCapacity &&
 			_captureSessionCount < _HistoryCapacity)))
 		{
@@ -1403,6 +1512,7 @@ void Trigger::ProcessStructuralActionsOnJob(
 				action.SourceId = take->SourceTakeId;
 				action.TargetId = take->TargetTakeId;
 			}
+			if (command.NextSourceVersion) action.SourceId = _nextSourceId;
 			if (isStart)
 			{
 				auto prepared = std::make_unique<CaptureSession>();
@@ -1435,6 +1545,12 @@ void Trigger::ProcessStructuralActionsOnJob(
 				if (actionResult.IsEaten && session->TargetTake && session->TargetTake->HasPendingTriggerCapture())
 					_publishedCapturePending.store(true, std::memory_order_release);
 			}
+			if (command.NextSourceVersion && actionResult.IsEaten &&
+				(!session || !session->TargetTake || session->SourceTake.get() != explicitSource.get() ||
+				 actionResult.ResultType != actions::ActionResultType::ACTIONRESULT_ACTIVATE))
+				actionResult = ActionResult::NoAction();
+			if (command.NextSourceVersion && !actionResult.IsEaten)
+				_nextSourceStatus = "Overdub start rejected; source remains armed";
 			if (isStart && !actionResult.IsEaten && session)
 				session->RetiredByAudio.store(true, std::memory_order_release);
 			if (isStart && actionResult.IsEaten)
@@ -1446,6 +1562,7 @@ void Trigger::ProcessStructuralActionsOnJob(
 						TriggerTake::SOURCE_ADC, actionResult.SourceId,
 						actionResult.TargetId, receiver };
 					_PublishJobHistory();
+					if (command.NextSourceVersion) ClearNextOverdubSource();
 				}
 				else
 					actionResult.IsEaten = false;

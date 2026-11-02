@@ -9,6 +9,7 @@
 #include "actions/TriggerAction.h"
 #include "base/AudioSink.h"
 #include "engine/Station.h"
+#include "engine/Trigger.h"
 #include "engine/Scene.h"
 #include "midi/MidiLoop.h"
 #include "midi/MidiIndexedOutputSink.h"
@@ -2824,4 +2825,102 @@ TEST(StationMidiInstrument, RetainedMuteGatesActualTakePluginOutputFromFirstBloc
 	auto live=MakeStation("muted-live-rack"); live->Mute(); auto livePlugin=AddPlugin(live,L"fake-retained-live-output.dll");
 	livePlugin->RenderRole=vst::RenderRole::Instrument; livePlugin->ReplaceOutput=true; livePlugin->OutputValue=0.25f;
 	const auto monitored=RenderStationAudioBlock(live,0u,32u); EXPECT_TRUE(std::any_of(monitored.begin(),monitored.end(),[](float value){return std::abs(value)>0.000001f;}));
+}
+
+TEST(StationMidiInstrument, ExplicitEarlierMidiOrMixedSourceRetainsMaterialAndItsAcceptedTimingBaseline)
+{
+	for (const bool mixed : {false, true})
+	for (const bool remote : {false, true})
+	{
+		SCOPED_TRACE(mixed);
+		SCOPED_TRACE(remote);
+		auto station = MakeStation("explicit-midi-source");
+		station->SetAllowedMidiChannels({4u});
+		auto makeSource = [&](const std::string& id, unsigned int pitch, unsigned int length)
+		{
+			auto take = MakeMidiTake(id);
+			take->Record(mixed ? std::vector<unsigned int>{0u, 1u} : std::vector<unsigned int>{},
+				station->Name(), {3u}, {"Keys"});
+			engine::RemoteTransportGeometry geometry;
+			geometry.IntervalLengthSamps = remote ? length * 2u : length;
+			geometry.Bpi = remote ? 8u : 4u;
+			take->CaptureRecordingBaselineAtAudioBoundary(geometry, 0u);
+			take->CommitChanges();
+			if (mixed)
+				for (unsigned int channel = 0u; channel < 2u; ++channel)
+				{
+					std::vector<float> samples(constants::MaxLoopFadeSamps + length, 0.0f);
+					std::fill(samples.begin() + constants::MaxLoopFadeSamps, samples.end(), channel ? 0.5f : 0.25f);
+					base::AudioWriteRequest request;
+					request.samples = samples.data(); request.numSamps = static_cast<unsigned int>(samples.size());
+					request.stride = 1u; request.fadeCurrent = 0.0f; request.fadeNew = 1.0f;
+					request.source = base::Audible::AUDIOSOURCE_ADC;
+					take->GetLoops()[channel]->OnBlockWrite(request, 0);
+					take->GetLoops()[channel]->EndWrite(request.numSamps, true);
+				}
+			take->EndMultiWrite(length, true, base::Audible::AUDIOSOURCE_ADC);
+			EXPECT_TRUE(take->RecordMidiEvent(MidiEvent::MakeNoteOn(10u, 3u, pitch, 100u), "Keys", length));
+			EXPECT_TRUE(take->RecordMidiEvent(MidiEvent::MakeNoteOff(90u, 3u, pitch), "Keys", length));
+			take->Play(mixed ? constants::MaxLoopFadeSamps : 0u, length, 0u);
+			station->AddTake(take); station->CommitChanges();
+			return take;
+		};
+		auto a = makeSource("explicit-A", 60u, 100u);
+		auto b = makeSource("later-B", 67u, 200u);
+		ASSERT_TRUE(a->IsCompletedRecording());
+		engine::Trigger trigger(engine::TriggerParams{}); trigger.SetReceiver(station);
+		EXPECT_FALSE(trigger.BindNextOverdubSource(station, a)); // No device phase observed yet.
+		a->BeginCaptureAudioBoundary(0u, 0u, 0u);
+		ASSERT_TRUE(trigger.BindNextOverdubSource(station, a));
+		const auto aRevision = a->GetMidiLoops().front()->Revision();
+		const auto bRevision = b->GetMidiLoops().front()->Revision();
+		std::vector<std::vector<float>> audioBefore;
+		for (const auto& loop : a->GetLoops()) audioBefore.push_back(loop->ExportSamples());
+		TriggerAction start;
+		start.ActionType = TriggerAction::TRIGGER_OVERDUB_START;
+		start.SourceId = a->Id(); start.MidiSample = 0u;
+		start.InputChannels = mixed ? std::vector<unsigned int>{0u, 1u} : std::vector<unsigned int>{};
+		start.MidiInputDevices = {"Keys"};
+		auto result = station->OnAction(start);
+		ASSERT_TRUE(result.IsEaten);
+		EXPECT_EQ(a->Id(), result.SourceId);
+		auto target = std::dynamic_pointer_cast<LoopTake>(result.TriggerTargetTake.lock());
+		ASSERT_NE(nullptr, target);
+		station->CommitChanges();
+		EXPECT_EQ(a->RecordingMasterLengthSamps(), target->RecordingMasterLengthSamps());
+		EXPECT_EQ(a->RecordingGeometry().Bpi, target->RecordingGeometry().Bpi);
+		target->BeginCaptureAudioBoundary(0u, 0u, 0u);
+		target->EndMultiWrite(20u, true, base::Audible::AUDIOSOURCE_ADC);
+		target->BeginCaptureAudioBoundary(20u, 20u, 20u); target->PunchIn();
+		target->EndMultiWrite(5u, true, base::Audible::AUDIOSOURCE_ADC);
+		EXPECT_TRUE(target->RecordMidiEvent(MidiEvent::MakeNoteOn(25u, 3u, 62u, 100u), "Keys", 25u));
+		target->EndMultiWrite(5u, true, base::Audible::AUDIOSOURCE_ADC);
+		EXPECT_TRUE(target->RecordMidiEvent(MidiEvent::MakeNoteOff(30u, 3u, 62u), "Keys", 30u));
+		target->EndMultiWrite(10u, true, base::Audible::AUDIOSOURCE_ADC);
+		target->BeginCaptureAudioBoundary(40u, 40u, 40u); target->PunchOut();
+		if (mixed)
+		{
+			// This branch verifies admitted mixed construction/preview. The real audio
+			// capture history/completion pipeline is exercised by AudioFlow's A/B fixture.
+			ASSERT_EQ(2u, target->GetLoops().size());
+			JobAction update; update.JobActionType = JobAction::JOB_UPDATELOOPS;
+			target->OnAction(update);
+		}
+		else
+		{
+			target->Play(0u, 100u, 0u); station->CompleteMidiIngressPump(4510u);
+		}
+		ASSERT_EQ(1u, target->GetMidiLoops().size());
+		bool sourceNote = false, newNote = false, laterNote = false;
+		for (std::size_t i = 0u; i < target->GetMidiLoops().front()->EventCount(); ++i)
+		{
+			MidiEvent event{}; ASSERT_TRUE(target->GetMidiLoops().front()->TryGetEvent(i, event));
+			if (event.IsNoteOn())
+			{ sourceNote |= event.data1 == 60u; newNote |= event.data1 == 62u; laterNote |= event.data1 == 67u; }
+		}
+		EXPECT_TRUE(sourceNote); EXPECT_TRUE(newNote); EXPECT_FALSE(laterNote);
+		EXPECT_EQ(aRevision, a->GetMidiLoops().front()->Revision());
+		EXPECT_EQ(bRevision, b->GetMidiLoops().front()->Revision());
+		for (std::size_t i = 0u; i < audioBefore.size(); ++i) EXPECT_EQ(audioBefore[i], a->GetLoops()[i]->ExportSamples());
+	}
 }

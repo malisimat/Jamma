@@ -430,26 +430,10 @@ unsigned int Loop::ReadBlock(float* outBuf,
 	const bool exactTargetOffset = _playbackOffsetRate == 0.0 && _playbackOffsetStart == targetOffset;
 	const auto playbackOffset = exactTargetOffset ? static_cast<std::int64_t>(targetOffset)
 		: static_cast<std::int64_t>(std::llround(_playbackOffsetStart));
-	auto index = playbackOffset == 0 ? _playIndex.load(std::memory_order_relaxed)
-		: constants::MaxLoopFadeSamps + OffsetBodyIndex(BodyPlayIndex(), loopLength, playbackOffset);
-
-	if (sampOffset >= 0)
-	{
-		index += sampOffset;
-	}
-	else
-	{
-		while (index < (unsigned long)(-sampOffset))
-			index += loopLength;
-
-		index += sampOffset;
-	}
-
-	while (index >= bufSize)
-		index -= loopLength;
-
-	if (index < constants::MaxLoopFadeSamps)
-		index += loopLength;
+	// Normalize on the fade-free body ruler. Storage-domain wrapping can land
+	// in the prefix when a signed offset crosses several very short loops.
+	const auto readOffset = playbackOffset - static_cast<std::int64_t>(sampOffset);
+	auto index = constants::MaxLoopFadeSamps + OffsetBodyIndex(BodyPlayIndex(), loopLength, readOffset);
 
     const bool ready = !_triggerCapture || TriggerCaptureReady(index - constants::MaxLoopFadeSamps, numSamps);
     const bool provisional = !ready && dac && CanUseTemporaryPlayback(index - constants::MaxLoopFadeSamps, numSamps)

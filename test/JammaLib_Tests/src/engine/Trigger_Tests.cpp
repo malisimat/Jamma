@@ -4178,3 +4178,156 @@ TEST(Trigger, UntimestampedSerialUsesAdmissionBoundary)
 	EXPECT_EQ(12345u, receiver->Actions()[0].MidiSample);
 	EXPECT_DOUBLE_EQ(0.0, receiver->Actions()[0].PreDelayMs);
 }
+
+// Build real completed members: admission must not depend on test-only state setters.
+static std::shared_ptr<LoopTake> AddCompletedOverdubSource(const std::shared_ptr<Station>& station,
+	const std::string& id, unsigned long length = 128ul)
+{
+	station->SetVisible(true);
+	station->SetEnabled(true);
+	auto take = MakeTestLoopTake(id);
+	station->AddTake(take);
+	take->Record({0u}, station->Name());
+	take->CommitChanges();
+	take->EndMultiWrite(constants::MaxLoopFadeSamps + length, true, base::Audible::AUDIOSOURCE_ADC);
+	take->Play(constants::MaxLoopFadeSamps, length, 0u);
+	station->CommitChanges();
+	return take;
+}
+
+TEST(Trigger, ExplicitNextSourceIsOneShotAndActiveCaptureRemainsPinnedAcrossRebind)
+{
+	auto station = MakeTestStation();
+	auto a = AddCompletedOverdubSource(station, "armed-A");
+	auto b = AddCompletedOverdubSource(station, "latest-B", 256ul);
+	auto trigger = MakeDefaultTrigger(station, 0u);
+	ASSERT_TRUE(a->IsCompletedRecording());
+	a->Mute(); // User mute is not an eligibility restriction.
+	ASSERT_TRUE(trigger->BindNextOverdubSource(station, a));
+	io::UserConfig cfg;
+	cfg.Audio = { "", 48000, 256, 256, 0, 2, 2, 2 };
+	cfg.Trigger = { 0, 0 };
+	base::Action action;
+	auto press = [&](bool activate, bool down)
+	{
+		ASSERT_TRUE(trigger->QueueExternalControlAction(activate, down, action).IsEaten);
+		TickAndComplete(trigger, 0u, cfg);
+	};
+	press(false, true);
+	press(true, true);
+	ASSERT_EQ(engine::TRIGSTATE_OVERDUBBING, trigger->GetState());
+	ASSERT_FALSE(trigger->GetTakes().empty());
+	EXPECT_EQ(a->Id(), trigger->GetTakes().back().SourceTakeId);
+	EXPECT_FALSE(trigger->HasExplicitNextOverdubSource());
+	ASSERT_TRUE(trigger->BindNextOverdubSource(station, b));
+	press(true, false);
+	press(true, true);
+	ASSERT_EQ(engine::TRIGSTATE_PUNCHEDIN, trigger->GetState());
+	EXPECT_EQ(a->Id(), trigger->GetTakes().back().SourceTakeId);
+	EXPECT_EQ(b, trigger->NextOverdubSource());
+	EXPECT_FALSE(b->IsSourceMuted());
+	trigger->Reset();
+	EXPECT_FALSE(trigger->HasExplicitNextOverdubSource());
+}
+
+TEST(Trigger, SupersededQueuedExplicitStartRejectsAndKeepsNewerBinding)
+{
+	auto station = MakeTestStation();
+	auto a = AddCompletedOverdubSource(station, "queued-A");
+	auto b = AddCompletedOverdubSource(station, "queued-B");
+	auto trigger = MakeDefaultTrigger(station, 0u);
+	ASSERT_TRUE(trigger->BindNextOverdubSource(station, a));
+	base::Action action;
+	ASSERT_TRUE(trigger->QueueExternalControlAction(false, true, action).IsEaten);
+	TickAndComplete(trigger);
+	ASSERT_TRUE(trigger->QueueExternalControlAction(true, true, action).IsEaten);
+	trigger->OnTick(GetTime(), 0u, std::nullopt, std::nullopt);
+	ASSERT_TRUE(trigger->BindNextOverdubSource(station, b));
+	CompleteQueuedStructuralAction(trigger);
+	EXPECT_EQ(2u, station->GetLoopTakes().size());
+	EXPECT_TRUE(trigger->GetTakes().empty());
+	EXPECT_EQ(b, trigger->NextOverdubSource());
+	EXPECT_NE(std::string::npos, trigger->NextOverdubSourceStatus().find("changed before start"));
+}
+
+TEST(Trigger, QueuedUnboundStartKeepsLatestAndDoesNotConsumeLaterArmedChoice)
+{
+	auto station = MakeTestStation();
+	auto a = AddCompletedOverdubSource(station, "later-A");
+	auto b = AddCompletedOverdubSource(station, "latest-B");
+	auto trigger = MakeDefaultTrigger(station, 0u);
+	base::Action action;
+	ASSERT_TRUE(trigger->QueueExternalControlAction(false, true, action).IsEaten);
+	TickAndComplete(trigger);
+	ASSERT_TRUE(trigger->QueueExternalControlAction(true, true, action).IsEaten);
+	trigger->OnTick(GetTime(), 0u, std::nullopt, std::nullopt);
+	ASSERT_TRUE(trigger->BindNextOverdubSource(station, a));
+	CompleteQueuedStructuralAction(trigger);
+	ASSERT_FALSE(trigger->GetTakes().empty());
+	EXPECT_EQ(b->Id(), trigger->GetTakes().back().SourceTakeId);
+	EXPECT_EQ(a, trigger->NextOverdubSource());
+}
+
+TEST(Trigger, RemovedOrReroutedExplicitSourceLeavesInvalidTombstoneUntilClear)
+{
+	auto station = MakeTestStation();
+	auto a = AddCompletedOverdubSource(station, "removed-A");
+	auto b = AddCompletedOverdubSource(station, "surviving-B");
+	auto trigger = MakeDefaultTrigger(station, 0u);
+	ASSERT_TRUE(trigger->BindNextOverdubSource(station, a));
+	actions::TriggerAction ditch;
+	ditch.ActionType = TriggerAction::TRIGGER_DITCH;
+	ditch.TargetId = a->Id();
+	ASSERT_TRUE(station->OnAction(ditch).IsEaten);
+	EXPECT_TRUE(trigger->NextOverdubSourceInvalid());
+	EXPECT_EQ(nullptr, trigger->NextOverdubSource());
+	EXPECT_TRUE(trigger->HasExplicitNextOverdubSource());
+	base::Action action;
+	trigger->QueueExternalControlAction(false, true, action);
+	TickAndComplete(trigger);
+	trigger->QueueExternalControlAction(true, true, action);
+	TickAndComplete(trigger);
+	EXPECT_TRUE(trigger->GetTakes().empty());
+	EXPECT_EQ(1u, station->GetLoopTakes().size());
+	trigger->Reset();
+	ASSERT_TRUE(trigger->BindNextOverdubSource(station, b));
+	std::shared_ptr<base::ActionReceiver> route = MakeTestStation("replacement");
+	std::vector<unsigned int> channels;
+	std::vector<std::string> devices;
+	std::shared_ptr<audio::AudioMixer> mixer;
+	std::shared_ptr<base::BounceWriter> writer;
+	trigger->ApplyCaptureRouting(route, channels, devices, mixer, writer);
+	EXPECT_TRUE(trigger->NextOverdubSourceInvalid());
+	trigger->ClearNextOverdubSource();
+	EXPECT_FALSE(trigger->HasExplicitNextOverdubSource());
+}
+
+TEST(Trigger, RejectedAdmissionRetainsBindingAndTimingFailureCreatesNoTake)
+{
+	auto station = MakeTestStation();
+	auto a = AddCompletedOverdubSource(station, "retained-A");
+	auto trigger = MakeDefaultTrigger(station, 0u);
+	ASSERT_TRUE(trigger->BindNextOverdubSource(station, a));
+	station->SetEnabled(false);
+	base::Action action;
+	trigger->QueueExternalControlAction(false, true, action);
+	TickAndComplete(trigger);
+	trigger->QueueExternalControlAction(true, true, action);
+	TickAndComplete(trigger);
+	EXPECT_EQ(a, trigger->NextOverdubSource());
+	EXPECT_FALSE(trigger->NextOverdubSourceStatus().empty());
+	EXPECT_EQ(1u, station->GetLoopTakes().size());
+	station->SetEnabled(true);
+	TriggerAction start;
+	start.ActionType = TriggerAction::TRIGGER_OVERDUB_START;
+	start.SourceId = a->Id();
+	start.PreDelayMs = std::numeric_limits<double>::quiet_NaN();
+	EXPECT_FALSE(station->OnAction(start).IsEaten);
+	EXPECT_EQ(1u, station->GetLoopTakes().size());
+	auto recording = station->AddTake();
+	recording->Record({0u}, station->Name());
+	EXPECT_FALSE(trigger->BindNextOverdubSource(station, recording));
+	EXPECT_EQ(a, trigger->NextOverdubSource());
+	station->SetMembershipRemoving(true);
+	EXPECT_TRUE(trigger->NextOverdubSourceInvalid());
+}

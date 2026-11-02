@@ -27,6 +27,8 @@
 
 namespace engine
 {
+	class Station;
+	class LoopTake;
 	struct TriggerTake
 	{
 		enum SourceType
@@ -350,6 +352,14 @@ namespace engine
 		std::uint64_t StructuralCommandDropCount() const noexcept { return _structuralCommandDropCount.load(std::memory_order_acquire); }
 		std::uint64_t ActivationOutcomeCount() const noexcept { return _activationOutcomeCount.load(std::memory_order_acquire); }
 		std::uint64_t DitchOutcomeCount() const noexcept { return _ditchOutcomeCount.load(std::memory_order_acquire); }
+		// Initial wiring and the following pending-source API are Scene-serialized, nonaudio only.
+		void SetReceiver(std::shared_ptr<base::ActionReceiver> receiver);
+		bool BindNextOverdubSource(const std::shared_ptr<Station>& station, const std::shared_ptr<LoopTake>& source);
+		void ClearNextOverdubSource();
+		std::shared_ptr<LoopTake> NextOverdubSource();
+		bool HasExplicitNextOverdubSource() const noexcept { return _nextSourceVersion != 0u; }
+		bool NextOverdubSourceInvalid() { _RefreshNextOverdubSource(); return _nextSourceInvalid; }
+		const std::string& NextOverdubSourceStatus() { _RefreshNextOverdubSource(); return _nextSourceStatus; }
 		// Hold the Scene mutex while processing commands so they cannot race Station edits.
 		void ProcessStructuralActionsOnJob(
 			const std::optional<io::UserConfig>& cfg,
@@ -487,6 +497,7 @@ namespace engine
 			bool ApplyToTargetMidi = true;
 			bool IsSourceLossCancellation = false;
 			std::uint64_t InputGeneration = 0u;
+			std::uint64_t NextSourceVersion = 0u;
 		};
 		struct CaptureSession
 		{
@@ -632,7 +643,19 @@ namespace engine
 
 		std::atomic<std::uint64_t> _activationOutcomeCount{ 0u };
 		std::atomic<std::uint64_t> _ditchOutcomeCount{ 0u };
-		std::string _overdubSourceId;
+		// Only the version and accepted route identity cross the audio boundary.
+		std::atomic<base::ActionReceiver*> _acceptedRouteIdentity{ nullptr };
+		std::atomic<std::uint64_t> _acceptedRouteRevision{ 0u };
+		std::atomic<std::uint64_t> _publishedNextSourceVersion{ 0u };
+		std::weak_ptr<Station> _nextSourceStation;
+		std::weak_ptr<LoopTake> _nextSource;
+		std::string _nextSourceId;
+		std::string _nextSourceStatus;
+		std::uint64_t _nextSourceVersion = 0u;
+		std::uint64_t _nextSourceVersionAllocator = 0u;
+		std::uint64_t _nextSourceRouteRevision = 0u;
+		bool _nextSourceInvalid = false;
+		void _RefreshNextOverdubSource();
 		// Written by audio thread (OnTick) and read by event-handler threads
 		// (key/MIDI/serial pumps) during state transitions. Atomic load/store
 		// (relaxed) gives a coherent snapshot without locks on the RT path.
