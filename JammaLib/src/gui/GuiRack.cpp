@@ -561,7 +561,7 @@ gui::GuiSliderParams GuiRack::_GetSliderParams(unsigned int index, utils::Size2d
 	sliderParams.Scale = GuiSliderParams::SliderScale::Decibels;
 	sliderParams.MinDecibels = GuiSliderParams::RackMinDecibels;
 	sliderParams.ScaleMarksEnabled = true;
-	sliderParams.ResetToUnityOnDoubleClick = true;
+	sliderParams.DefaultValue = 1.0;
 	sliderParams.InitValue = _rackParams.InitLevel;
 	sliderParams.Orientation = GuiSliderParams::SLIDER_VERTICAL;
 

@@ -131,6 +131,7 @@ SceneSettingsControls::SceneSettingsControls(std::uint8_t channel, double offset
 	auto level = GuiSliderParams::PanelHorizontal("yellow", 228u);
 	level.Index = MetronomeLevelControlIndex;
 	level.InitValue = 1.0;
+	level.DefaultValue = 1.0;
 	_metronomeLevel = std::make_shared<GuiSlider>(level);
 
 
