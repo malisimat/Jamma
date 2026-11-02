@@ -83,6 +83,7 @@ void Workspace::DrawOverlayLocked(DrawContext& ctx, const std::vector<std::share
 	if (_hudPanel)
 	{
 		_hudPanel->SetLoopEditorMode(loopEditorEngaged);
+		_hudPanel->PrepareOverdubSourcesLocked(_overdubSourceDrag ? _overdubSourceDrag->Output.Trigger.lock() : nullptr);
 		_hudPanel->SetQuantisationFeedback(presentation.QuantisationFeedback);
 		_hudPanel->SetEditModeAlpha(quantisation.PanelAlpha());
 	}
@@ -142,6 +143,8 @@ void Workspace::DrawWorldLocked(DrawContext& ctx, DrawPass pass, const std::vect
 	QuantiserController& quantisation, const PerformanceGroups& groups, WorldPresentation presentation)
 {
 
+	if (_overdubSourceDrag && (_popupManager.IsOpen() || _editor->IsEngaged() || !_OverdubSourceDragCurrentLocked(stations)))
+		_CancelOverdubSourceDrag();
 	auto& glCtx = dynamic_cast<GlDrawContext&>(ctx);
 	_viewProj = _compositor.BeginWorld(glCtx, _camera, _size, StationCentre(stations), pass);
 	UpdateHudStationAnchorsLocked(stations);
@@ -165,6 +168,7 @@ void Workspace::DrawWorldLocked(DrawContext& ctx, DrawPass pass, const std::vect
 	if (_selectionPanel && (!_selectionPanel->IsVisible() || !_selectionPanel->IsEnabled()
 		|| _popupManager.IsOpen() || _editor->IsEngaged() || presentation.EditControlsSuppressed))
 		_selectionPanel->ClearPerformanceGroupPointerState();
+	const bool sourcePreview = PASS_SCENE == pass && _overdubSourceDrag && !_overdubSourceDrag->Clear;
 	const auto hoveredGroup = PASS_SCENE == pass && _selectionPanel && !_popupManager.IsOpen()
 		&& !_editor->IsEngaged() && !presentation.EditControlsSuppressed
 		? _selectionPanel->HoveredPerformanceGroup() : std::nullopt;
@@ -210,9 +214,11 @@ void Workspace::DrawWorldLocked(DrawContext& ctx, DrawPass pass, const std::vect
 							: member({ GroupTargetKind::MidiLoop, station->Id(), take->Id(), loop->Id() }));
 			}
 		}
+	if (sourcePreview) previewMembers = _OverdubSourcePreviewMembersLocked(stations);
+
 	const bool selectionTint = backgroundPreview ? presentation.BackgroundSelectionPreview : selectionPreview != nullptr;
-	glCtx.SetGroupPreview(backgroundPreview || mutePreview || selectionPreview,
-		selectionTint ? glm::vec3(1.0f, 0.875f, 0.208f) : glm::vec3(0.259f, 0.588f, 1.0f), std::move(previewMembers), !backgroundPreview);
+	glCtx.SetGroupPreview(sourcePreview || backgroundPreview || mutePreview || selectionPreview,
+		selectionTint ? glm::vec3(1.0f, 0.875f, 0.208f) : glm::vec3(0.259f, 0.588f, 1.0f), std::move(previewMembers), sourcePreview || !backgroundPreview);
 	for (auto& station : stations)
 	{
 		station->Draw3d(ctx, 1, pass);
@@ -222,6 +228,7 @@ void Workspace::DrawWorldLocked(DrawContext& ctx, DrawPass pass, const std::vect
 
 void Workspace::ResizeLocked(utils::Size2d size, const std::vector<std::shared_ptr<Station>>& stations)
 {
+	_CancelOverdubSourceDrag();
 	_size = size;
 	_editor->SetSize(_size);
 	_tempoPrompt.FitToViewport(_size);
@@ -487,6 +494,9 @@ void Workspace::InitDynamicResourcesLocked(ResourceLib& resourceLib, const std::
 bool Workspace::AdvancePresentationLocked(const std::vector<std::shared_ptr<Station>>& stations,
 	const PerformanceGroups& groups, const AnimationPresentation& presentation)
 {
+	if (_overdubSourceDrag && (_popupManager.IsOpen() || _editor->IsEngaged() || presentation.Quitting ||
+		presentation.RigSaveInProgress || !_OverdubSourceDragCurrentLocked(stations))) _CancelOverdubSourceDrag();
+	if (_hudPanel) _hudPanel->PrepareOverdubSourcesLocked(_overdubSourceDrag ? _overdubSourceDrag->Output.Trigger.lock() : nullptr);
 	// Window calls once per UI frame before deferred hover and drawing.
 	// This clock is independent of the transport/audio callback.
 	const auto now = Timer::GetTime();
@@ -543,8 +553,101 @@ bool Workspace::AdvancePresentationLocked(const std::vector<std::shared_ptr<Stat
 	return stationsMoved || cameraMoved;
 }
 
+std::map<std::vector<unsigned int>, bool> Workspace::_OverdubSourcePreviewMembersLocked(const std::vector<std::shared_ptr<Station>>& stations) const
+{
+	std::map<std::vector<unsigned int>, bool> members;
+	if (!_overdubSourceDrag || _overdubSourceDrag->Clear) return members;
+	const auto eligible = _overdubSourceDrag->Hover.lock();
+	for (const auto& station : stations)
+		for (const auto& take : station->GetLoopTakes())
+		{
+			members[take->GlobalId()] = take == eligible;
+			for (const auto& loop : take->GetLoops()) if (const auto model = loop->Model()) members[model->GlobalId()] = take == eligible;
+			for (const auto& loop : take->GetMidiLoops()) if (const auto model = loop->Model()) members[model->GlobalId()] = take == eligible;
+		}
+	return members;
+}
+
+void Workspace::_CancelOverdubSourceDrag()
+{
+	if (!_overdubSourceDrag) return;
+	_overdubSourceRelease = _overdubSourceDrag->Clear ? 2 : 0;
+	_overdubSourceDrag.reset();
+	_pointer.ReleaseCapture();
+	_pointer.InvalidateHover();
+	if (_hudPanel) _hudPanel->SetOverdubSourceFeedback({});
+}
+
+bool Workspace::_OverdubSourceDragCurrentLocked(const std::vector<std::shared_ptr<Station>>& stations) const
+{
+	if (!_overdubSourceDrag || !_hudPanel || !_hudPanel->IsCurrentOverdubOutput(_overdubSourceDrag->Output)) return false;
+	const auto trigger = _overdubSourceDrag->Output.Trigger.lock();
+	if (_overdubSourceDrag->Clear) return trigger != nullptr; // Invalid/unwired tombstones must remain clearable.
+	const auto station = _overdubSourceDrag->Station.lock();
+	return trigger && station && !station->IsRemote() && !station->MembershipRemoving() &&
+		std::find(stations.begin(), stations.end(), station) != stations.end() && trigger->RoutesToStation(station);
+}
+
+std::optional<ActionResult> Workspace::_RouteOverdubSourceTouch(TouchAction action, StationAccess access, const InputPresentation& presentation)
+{
+	const bool mouse = action.Touch == TouchAction::TOUCH_MOUSE;
+	const bool down = action.State == TouchAction::TOUCH_DOWN;
+	if (mouse && down && _overdubSourceRelease == action.Index) _overdubSourceRelease.reset();
+	if (mouse && !down && _overdubSourceRelease == action.Index)
+	{ _overdubSourceRelease.reset(); return ActionResult{true}; }
+	const bool blocked = presentation.Quitting || presentation.WriterHeld || presentation.RigSaveDialogOpen || presentation.QuantisationResetRequested ||
+		_popupManager.IsOpen() || EditControlsSuppressed() || _editor->IsEngaged();
+	if (_overdubSourceDrag && blocked) _CancelOverdubSourceDrag();
+	if (_overdubSourceDrag && mouse && down && action.Index == (_overdubSourceDrag->Clear ? 2 : 0))
+	{ _CancelOverdubSourceDrag(); _overdubSourceRelease.reset(); }
+	if (mouse && !down && _overdubSourceRelease == action.Index)
+	{ _overdubSourceRelease.reset(); return ActionResult{true}; }
+	if (_overdubSourceDrag)
+	{
+		const auto button = _overdubSourceDrag->Clear ? 2 : 0;
+		if (!mouse || down || action.Index != button) return ActionResult{true};
+		std::scoped_lock lock(access.Mutex);
+		if (_OverdubSourceDragCurrentLocked(access.Stations))
+		{
+			const auto trigger = _overdubSourceDrag->Output.Trigger.lock();
+			const auto station = _overdubSourceDrag->Station.lock();
+			if (_overdubSourceDrag->Clear)
+			{
+				const auto hit = _hudPanel->OverdubOutputAt(_hudPanel->GlobalToLocal(action.Position));
+				if (hit && hit->Trigger.lock() == trigger && hit->Revision == _overdubSourceDrag->Output.Revision)
+					trigger->ClearNextOverdubSource();
+			}
+			else if (const auto take = _overdubSourceDrag->Hover.lock(); take && station->OverdubSourceRejection(take).empty())
+				trigger->BindNextOverdubSource(station, take);
+		}
+		_CancelOverdubSourceDrag(); _overdubSourceRelease.reset();
+		_hudPanel->PrepareOverdubSourcesLocked({});
+		return ActionResult{true};
+	}
+	if (blocked || !mouse || !down || (action.Index != 0 && action.Index != 2) ||
+		!(action.Modifiers & Action::MODIFIER_SHIFT) || (action.Modifiers & (Action::MODIFIER_CTRL | Action::MODIFIER_ALT)) ||
+		_pointer.Captured() || _camera.IsBackgroundDragging() || _isSceneTouching || _interaction->OwnsPointer() ||
+		!_hudPanel || _hudPanel->HasCableDrag()) return std::nullopt;
+	std::scoped_lock lock(access.Mutex);
+	const auto output = _hudPanel->OverdubOutputAt(_hudPanel->GlobalToLocal(action.Position));
+	if (!output) return std::nullopt;
+	std::shared_ptr<Station> station;
+	// Resolve the accepted rig's current index once, then retain weak identity.
+	// RoutesToStation checks the actual audio-accepted route before admission.
+	if (output->StationIndex && *output->StationIndex < access.Stations.size()) station = access.Stations[*output->StationIndex];
+	_overdubSourceDrag = OverdubSourceDrag{*output, station, {}, action.Index == 2};
+	_pointer.Capture(_hudPanel, PointerInteraction::Owner::Hud);
+	_selector->ClearBackgroundClick();
+	if (!_OverdubSourceDragCurrentLocked(access.Stations)) _CancelOverdubSourceDrag();
+	_hudPanel->PrepareOverdubSourcesLocked(output->Trigger.lock());
+	_hudPanel->SetOverdubSourceFeedback(action.Index == 2 ? "Release on this output to use latest take" :
+		"Choose a completed take in this trigger's station; Escape cancels");
+	return ActionResult{true, {}, {}, ACTIONRESULT_DEFAULT, nullptr, _hudPanel};
+}
+
 actions::ActionResult Workspace::OnTouch(actions::TouchAction action, StationAccess access, const InputPresentation& presentation)
 {
+	if (auto result = _RouteOverdubSourceTouch(action, access, presentation)) return *result;
 	if (presentation.Quitting || presentation.WriterHeld || presentation.RigSaveDialogOpen || _popupManager.IsOpen() || EditControlsSuppressed())
 		_editor->CancelInput();
 	// Finish only the canceled primary release even when normal activation is blocked.
@@ -564,6 +667,19 @@ actions::ActionResult Workspace::OnTouch(actions::TouchAction action, StationAcc
 
 actions::ActionResult Workspace::OnMove(actions::TouchMoveAction action, StationAccess access, const InputPresentation& presentation)
 {
+	if (_overdubSourceDrag)
+	{
+		if (action.Touch != TouchAction::TOUCH_MOUSE) return {true};
+		_cursorPos = action.Position;
+		std::scoped_lock lock(access.Mutex);
+		const auto button = _overdubSourceDrag->Clear ? 2 : 0;
+		if (presentation.Quitting || presentation.WriterHeld || presentation.RigSaveDialogOpen || presentation.QuantisationResetRequested ||
+			_popupManager.IsOpen() || EditControlsSuppressed() || _editor->IsEngaged() ||
+			!_OverdubSourceDragCurrentLocked(access.Stations) ||
+			(action.Touch == TouchAction::TOUCH_MOUSE && !(action.MouseButtonsDown & (1u << button))))
+			_CancelOverdubSourceDrag();
+		return {true};
+	}
 	if (presentation.Quitting || presentation.WriterHeld || presentation.RigSaveDialogOpen || _popupManager.IsOpen() || EditControlsSuppressed())
 		_editor->CancelInput();
 	const auto result = _OnPointerMove(action, access, presentation);
@@ -1014,6 +1130,28 @@ void Workspace::SetHover3d(std::vector<unsigned char> path, base::Action::Modifi
 		fullElementPath.push_back(segment - 1);
 	}
 
+	if (_overdubSourceDrag)
+	{
+		_overdubSourceDrag->Hover.reset();
+		if (!_OverdubSourceDragCurrentLocked(access.Stations)) { _CancelOverdubSourceDrag(); return; }
+		if (_overdubSourceDrag->Clear) return;
+		const bool covered = std::any_of(guiPath.begin(), guiPath.end(), [this](const auto& weak) {
+			const auto element = weak.lock();
+			return element == _mainPanel || element == _selectionPanel || element == _hudPanel || std::dynamic_pointer_cast<GuiRack>(element);
+		});
+		auto element = covered ? nullptr : _ChildFromPathLocked(fullElementPath, access);
+		for (; element; element = element->Parent())
+			if (const auto take = std::dynamic_pointer_cast<engine::LoopTake>(element))
+			{
+				const auto station = _overdubSourceDrag->Station.lock();
+				if (station && station->OverdubSourceRejection(take).empty()) _overdubSourceDrag->Hover = take;
+				break;
+			}
+		_hudPanel->SetOverdubSourceFeedback(_overdubSourceDrag->Hover.expired()
+			? "Choose a completed take in this trigger's station; Escape cancels"
+			: "Release to arm this take for the next overdub; Escape cancels");
+		return;
+	}
 	_hoverPath3d = fullElementPath;
 	_hoverElement3d = _ChildFromPathLocked(fullElementPath, access);
 	elementPath = fullElementPath;
@@ -1341,6 +1479,14 @@ QuantisationInteractionContext Workspace::InteractionContextLocked(StationAccess
 actions::ActionResult Workspace::OnKeyboard(KeyAction action, StationAccess access, const InputPresentation& presentation,
 	bool contextual, bool suppressedKey, bool freshLearnKey, const KeyboardHandler& handleKeyboard)
 {
+	if (_overdubSourceDrag)
+	{
+		if (action.KeyChar == 27u && action.KeyActionType == KeyAction::KEY_DOWN)
+		{ _CancelOverdubSourceDrag(); return {true}; }
+		if ((action.KeyChar == 17u || action.KeyChar == 18u) && action.KeyActionType == KeyAction::KEY_DOWN)
+			_CancelOverdubSourceDrag();
+		return {true}; // Modifier release never leaks into master/cable/editor/trigger actions.
+	}
 	// Physical modifier transitions must survive contextual editor consumption.
 	if (17u == action.KeyChar)
 	{
@@ -1530,6 +1676,7 @@ void Workspace::ReleaseQuantisationInput(StationAccess access, const InputPresen
 
 void Workspace::ReleaseQuantisationInputLocked(StationAccess access, const InputPresentation& presentation)
 {
+	_CancelOverdubSourceDrag();
 	_selector->ClearBackgroundClick();
 	_spaceHeld = _ctrlHeld = false;
 	_quantiser->SetOverlayHeld(false);
@@ -1654,6 +1801,7 @@ void Workspace::OpenStationRemoval(const std::string& name, const std::shared_pt
 void Workspace::CompleteMembershipPresentationLocked(const std::vector<std::shared_ptr<Station>>& stations,
 	const std::shared_ptr<Station>& removed, const std::shared_ptr<Station>& added, std::size_t affectedBindings)
 {
+	_CancelOverdubSourceDrag();
 	_selector->ClearBackgroundClick();
 	if (removed)
 	{
@@ -1724,6 +1872,7 @@ void Workspace::ResetKeyboardObservation()
 
 void Workspace::OnFocusLostLocked(StationAccess access, const InputPresentation& presentation)
 {
+	_CancelOverdubSourceDrag();
 	if (auto popup = _popupManager.Top()) popup->ClearPointerState();
 	_stationControls.Cancel();
 	ReleaseQuantisationInputLocked(access, presentation);
@@ -1745,6 +1894,7 @@ void Workspace::InitReceivers(const std::shared_ptr<base::ActionReceiver>& recei
 
 void Workspace::ClearReceivers()
 {
+	_CancelOverdubSourceDrag();
 	_selector->SetReceiver({});
 	if (_stationDeleteDialog) _stationDeleteDialog->SetButtonReceiver({});
 	if (_takeDitchDialog) _takeDitchDialog->SetButtonReceiver({});

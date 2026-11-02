@@ -1000,7 +1000,9 @@ TEST_F(HudCableInteractionTests, VisiblePedalLearnControlOpensDialogWithoutSendi
     EXPECT_FALSE(pedal->TryGetChild(2u)->IsVisible());
     actions::TouchMoveAction hover;
     hover.Position = learn->GlobalPosition() + utils::Position2d{2,2};
+    EXPECT_EQ(0u,admittedEdges);
     Hud->OnAction(hover);
+    EXPECT_EQ(0u,admittedEdges); // Geometry/status hover must never admit a trigger edge.
     EXPECT_EQ(base::GuiElement::STATE_OVER,learn->GetState());
     actions::TouchAction action; action.Touch = actions::TouchAction::TOUCH_MOUSE; action.Index = 0u;
     action.Position = learn->GlobalPosition() + utils::Position2d{2,2}; action.State = actions::TouchAction::TOUCH_DOWN;
@@ -1035,4 +1037,52 @@ TEST_F(CableInteractionTests, FadeTimingDoesNotDependOnFrameRate)
             alpha = gui::CableInteraction::FadeAlpha(alpha, false, 0.5f / frames, true);
         EXPECT_NEAR(0.5f, alpha, 0.0001f);
     }
+}
+
+TEST_F(HudCableInteractionTests, OverdubOutputIdentityUsesClippedSocketAndSurvivesBusyTriggerWithoutEnablingCableEdit)
+{
+	const auto endpoint = std::find_if(Endpoints.begin(), Endpoints.end(), [](const auto& value) {
+		return value.Kind == CableInteraction::EndpointKind::TriggerOutput && value.TriggerIndex == 0u;
+	});
+	ASSERT_NE(Endpoints.end(), endpoint);
+	const auto hit = Hud->OverdubOutputAt(endpoint->Position); ASSERT_TRUE(hit);
+	EXPECT_EQ(Routing->Triggers[0].Instance, hit->Trigger.lock()); EXPECT_EQ(42u, hit->Revision);
+	EXPECT_TRUE(Hud->IsCurrentOverdubOutput(*hit));
+	base::Action action;
+	Routing->Triggers[0].Instance->QueueExternalControlAction(true, true, action, Routing->Revision);
+	ASSERT_FALSE(Routing->Triggers[0].Instance->CanEditRouting());
+	EXPECT_TRUE(Hud->OverdubOutputAt(endpoint->Position));
+	ASSERT_TRUE(endpoint->HitBounds);
+	EXPECT_FALSE(Hud->OverdubOutputAt({endpoint->Position.X, endpoint->HitBounds->Bottom - 1}));
+	TriggerScroll()->SetScrollOffset(TriggerScroll()->MaxScrollOffset());
+	std::vector<CableInteraction::Endpoint> visible; std::vector<CableInteraction::Cable> cables;
+	Hud->BuildInteractionGeometry(visible, cables);
+	EXPECT_TRUE(std::none_of(visible.begin(), visible.end(), [](const auto& value) {
+		return value.Kind == CableInteraction::EndpointKind::TriggerOutput && value.TriggerIndex == 0u;
+	}));
+	auto changed = *Routing; changed.Revision += 1u;
+	Hud->SetRoutingConfig(20u, {}, changed);
+	EXPECT_FALSE(Hud->IsCurrentOverdubOutput(*hit)); EXPECT_TRUE(Submissions.empty());
+}
+
+TEST_F(HudCableInteractionTests, OverdubOutputRejectsStaleAcceptedRevisionWithoutAdmittingPedalEdges)
+{
+	unsigned int admitted = 0u;
+	std::uint64_t accepted = Routing->Revision;
+	gui::GuiHudParams params; params.Size = {1200u, 800u};
+	params.CurrentRigRevision = [&] { return accepted; };
+	params.AcceptTriggerInput = [&](std::uint64_t) { ++admitted; return true; };
+	auto hud = std::make_shared<gui::GuiHud>(params); hud->SetRoutingConfig(20u, {}, *Routing); hud->Init();
+	std::vector<std::shared_ptr<gui::GuiScrollPanel>> scrolls; Layout(hud, scrolls);
+	std::vector<CableInteraction::Endpoint> endpoints; std::vector<CableInteraction::Cable> cables;
+	hud->BuildInteractionGeometry(endpoints, cables);
+	const auto endpoint = std::find_if(endpoints.begin(), endpoints.end(), [](const auto& value) {
+		return value.Kind == CableInteraction::EndpointKind::TriggerOutput;
+	}); ASSERT_NE(endpoints.end(), endpoint);
+	const auto hit = hud->OverdubOutputAt(endpoint->Position); ASSERT_TRUE(hit);
+	actions::TouchMoveAction hover; hover.Position = endpoint->Position; hud->OnAction(hover);
+	EXPECT_EQ(0u, admitted); EXPECT_TRUE(hud->IsCurrentOverdubOutput(*hit));
+	++accepted; // Accepted owner advanced before the UI applies its pending routing presentation.
+	EXPECT_FALSE(hud->OverdubOutputAt(endpoint->Position)); EXPECT_FALSE(hud->IsCurrentOverdubOutput(*hit));
+	hud->OnAction(hover); EXPECT_EQ(0u, admitted);
 }

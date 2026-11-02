@@ -202,6 +202,7 @@ namespace engine
 			return _rigCoordinator.Accepted();
 		}
 		void ApplyDeferredHoverUpdates();
+		bool NeedsOverdubSourceReleasePick() const noexcept { return _workspace->NeedsOverdubSourceReleasePick(); }
 		void SetRelativePointerHost(std::function<bool(int, utils::Position2d)> begin,
 			std::function<void(int)> end, std::function<float()> logicalPixelScale = {});
 		// UI-thread editor seam, forwarded to midi::LoopGridEditor.

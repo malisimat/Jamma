@@ -834,6 +834,13 @@ void Trigger::SetReceiver(std::shared_ptr<base::ActionReceiver> receiver)
 	_RefreshNextOverdubSource();
 }
 
+bool Trigger::RoutesToStation(const std::shared_ptr<Station>& station) const noexcept
+{
+	const auto before = _acceptedRouteRevision.load(std::memory_order_acquire);
+	return !(before & 1u) && station && station.get() == _acceptedRouteIdentity.load(std::memory_order_acquire)
+		&& before == _acceptedRouteRevision.load(std::memory_order_acquire);
+}
+
 bool Trigger::BindNextOverdubSource(const std::shared_ptr<Station>& station, const std::shared_ptr<LoopTake>& source)
 {
 	// Do not touch ActionSender::_receiver: routing swaps that shared_ptr on audio.

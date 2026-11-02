@@ -46,11 +46,13 @@ namespace engine
         std::vector<unsigned char> PressPath;
         utils::Position2d PickPosition{};
         unsigned int PickCount = 0;
+        bool FailPick = false;
     protected:
         std::optional<unsigned int> _PickPointerPress(utils::Position2d position) override
         {
             PickPosition = position;
             ++PickCount;
+            if (FailPick) return std::nullopt;
             if (PressPath.empty()) return 0u; // Cleared picker pixel.
             unsigned int objectId = 0;
             for (unsigned int segment = 0; segment < 3u; ++segment)
@@ -76,6 +78,7 @@ namespace engine
 		}
 		static std::shared_ptr<base::GuiElement> SelectionHandle(Scene& scene) { return scene._workspace->SelectionPanel()->TryGetChild(1u); }
         static std::shared_ptr<gui::GuiMainPanel> SettingsPanel(Scene& scene) { return scene._workspace->MainPanel(); }
+        static gui::Workspace& Workspace(Scene& scene) { return *scene._workspace; }
         static std::vector<unsigned char> CurrentHover(Scene& scene) { return scene._workspace->CurrentHover(); }
 		struct MidiToken { std::uint64_t SceneId, OperationId, Revision; std::vector<io::UserConfig::MidiSettings> Desired; };
 		static bool Quitting(const Scene& scene) { return scene._isSceneQuitting.load(std::memory_order_acquire); }
@@ -3034,4 +3037,234 @@ TEST_F(SceneRoutingIntegrationTest, SeamPolicyRigChangePreservesStationPlaybackF
 		EXPECT_EQ(16000u, edit.SeamMergeWindowSamps);
 	});
 	scene->Shutdown();
+}
+
+static std::shared_ptr<engine::LoopTake> AddCompletedSourceChoiceTake(const std::shared_ptr<engine::Station>& station, bool includeMidi = false, bool includeAudio = true)
+{
+	auto take = station->AddTake();
+	take->Record(includeAudio ? std::vector<unsigned int>{0u} : std::vector<unsigned int>{}, station->Name(), includeMidi ? std::vector<unsigned int>{0u} : std::vector<unsigned int>{},
+		includeMidi ? std::vector<std::string>{"Keys"} : std::vector<std::string>{});
+	take->CommitChanges();
+	std::vector<float> data(constants::MaxLoopFadeSamps + 128u, 0.25f);
+	base::AudioWriteRequest request; request.samples = data.data(); request.numSamps = static_cast<unsigned int>(data.size()); request.fadeNew = 1.0f;
+	if (includeAudio) { take->GetLoops().front()->OnBlockWrite(request, 0); take->GetLoops().front()->EndWrite(request.numSamps, true); }
+	if (includeMidi)
+	{
+		take->EndMultiWrite(128u, true, base::Audible::AUDIOSOURCE_ADC);
+		EXPECT_TRUE(take->RecordMidiEvent(midi::MidiEvent::MakeNoteOn(10u, 0u, 60u, 100u), "Keys", 128u));
+		EXPECT_TRUE(take->RecordMidiEvent(midi::MidiEvent::MakeNoteOff(90u, 0u, 60u), "Keys", 128u));
+	}
+	take->Play(includeAudio ? constants::MaxLoopFadeSamps : 0u, 128u, 0u);
+	take->BeginCaptureAudioBoundary(0u, 0u, 0u);
+	station->CommitChanges();
+	return take;
+}
+
+static std::vector<unsigned char> SourceChoicePickPath(const std::shared_ptr<engine::LoopTake>& take)
+{
+	std::vector<unsigned char> path;
+	const auto id = take->GetLoops().empty() ? take->GetMidiLoops().front()->Model()->GlobalId() : take->GetLoops().front()->GlobalId();
+	for (const auto index : id) path.push_back(static_cast<unsigned char>(index + 1u));
+	return path;
+}
+
+static std::optional<utils::Position2d> SourceChoiceOutputPoint(const std::shared_ptr<gui::GuiHud>& hud)
+{
+	std::vector<gui::CableInteraction::Endpoint> endpoints; std::vector<gui::CableInteraction::Cable> cables;
+	hud->BuildInteractionGeometry(endpoints, cables);
+	for (const auto& endpoint : endpoints)
+		if (endpoint.Kind == gui::CableInteraction::EndpointKind::TriggerOutput && endpoint.TriggerIndex == 0u)
+			return endpoint.Position + hud->GlobalPosition();
+	return std::nullopt;
+}
+
+TEST_F(SceneRoutingIntegrationTest, ShiftOutputDragUsesFreshReleasePickAndDimsOnlyOtherAudioMidiWithoutDomainEdits)
+{
+	using Access = engine::SourceLossIntegrationTestAccess;
+	auto scene = FreshScene({Station("Keys"), Station("Other")}, {Trigger("source", "Keys")}); ASSERT_TRUE(scene);
+	resources::ResourceLib resources; engine::PressPickWindow window(*scene, resources); window.Resize({1280u, 900u});
+	Settle(scene); auto exclusion = Access::ExcludeJob(*scene);
+	const auto stations = scene->SnapshotStations();
+	auto a = AddCompletedSourceChoiceTake(stations[0]); auto b = AddCompletedSourceChoiceTake(stations[0], true, false);
+	auto other = AddCompletedSourceChoiceTake(stations[1]); b->Mute(); scene->CommitChanges();
+	auto hud = Access::PrepareHud(*scene); LayoutHud(hud);
+	const auto output = SourceChoiceOutputPoint(hud); ASSERT_TRUE(output);
+	auto& workspace = Access::Workspace(*scene);
+	const auto rig = scene->AcceptedRigSnapshot(); const auto trigger = rig->Triggers.front().Instance;
+	const auto master = Access::ClockLength(*scene); const auto aId = a->GetLoops().front()->Model()->GlobalId();
+	const auto midiId = b->GetMidiLoops().front()->Model()->GlobalId();
+	actions::TouchAction touch; touch.Touch = actions::TouchAction::TOUCH_MOUSE; touch.Index = 0;
+	touch.State = actions::TouchAction::TOUCH_DOWN; touch.Position = *output; touch.Modifiers = base::Action::MODIFIER_SHIFT;
+	const auto down = window.OnAction(touch); EXPECT_EQ(hud, down.ActiveElement.lock()); ASSERT_TRUE(workspace.OverdubSourceDragActive());
+	EXPECT_TRUE(gui::WorkspaceTestAccess::HasCapture(workspace)); EXPECT_FALSE(hud->HasCableDrag());
+	const auto point = Access::CanvasPoint(*scene);
+	actions::TouchMoveAction move; move.Touch = actions::TouchAction::TOUCH_MOUSE; move.Position = point; move.MouseButtonsDown = 1u;
+	EXPECT_TRUE(window.OnAction(move).IsEaten);
+	scene->SetHover3d(SourceChoicePickPath(b), base::Action::MODIFIER_SHIFT, point);
+	EXPECT_EQ(b, gui::WorkspaceTestAccess::OverdubHover(workspace));
+	const auto preview = gui::WorkspaceTestAccess::OverdubPreview(workspace, stations);
+	ASSERT_TRUE(preview.contains(aId)); ASSERT_TRUE(preview.contains(midiId));
+	EXPECT_FALSE(preview.at(aId)); EXPECT_TRUE(preview.at(midiId));
+	EXPECT_EQ(midiId, b->GetMidiLoops().front()->Model()->GlobalId()); EXPECT_TRUE(b->IsMuted()); EXPECT_FALSE(a->IsMuted());
+	// Deliberately stale asynchronous hover A: matching UP must pick B now.
+	scene->SetHover3d(SourceChoicePickPath(a), base::Action::MODIFIER_NONE, point);
+	window.PressPath = SourceChoicePickPath(b);
+	actions::KeyAction shiftUp; shiftUp.KeyChar = VK_SHIFT; shiftUp.KeyActionType = actions::KeyAction::KEY_UP;
+	scene->OnAction(shiftUp); EXPECT_TRUE(workspace.OverdubSourceDragActive());
+	touch.State = actions::TouchAction::TOUCH_UP; touch.Position = point; touch.Modifiers = base::Action::MODIFIER_NONE;
+	EXPECT_TRUE(window.OnAction(touch).IsEaten); EXPECT_EQ(2u, window.PickCount);
+	EXPECT_FALSE(workspace.OverdubSourceDragActive()); EXPECT_FALSE(gui::WorkspaceTestAccess::HasCapture(workspace));
+	Access::WhileSceneLocked(*scene, [&] { EXPECT_EQ(b, trigger->NextOverdubSource()); });
+	EXPECT_EQ(rig, scene->AcceptedRigSnapshot()); EXPECT_EQ(master, Access::ClockLength(*scene));
+	EXPECT_TRUE(trigger->GetTakes().empty()); EXPECT_EQ(0u, trigger->ActivationOutcomeCount());
+	EXPECT_FALSE(a->IsSelected()); EXPECT_FALSE(b->IsSelected()); EXPECT_FALSE(other->IsSelected());
+	EXPECT_TRUE(gui::WorkspaceTestAccess::OverdubPreview(workspace, stations).empty());
+	// A failed release pick must discard stale A rather than change the armed MIDI-only B.
+	touch.State = actions::TouchAction::TOUCH_DOWN; touch.Position = *output; touch.Modifiers = base::Action::MODIFIER_SHIFT;
+	window.PressPath.clear(); ASSERT_TRUE(window.OnAction(touch).IsEaten); ASSERT_TRUE(workspace.OverdubSourceDragActive());
+	scene->SetHover3d(SourceChoicePickPath(a), base::Action::MODIFIER_SHIFT, point); window.FailPick = true;
+	touch.State = actions::TouchAction::TOUCH_UP; touch.Position = point; touch.Modifiers = base::Action::MODIFIER_NONE;
+	EXPECT_TRUE(window.OnAction(touch).IsEaten);
+	Access::WhileSceneLocked(*scene, [&] { EXPECT_EQ(b, trigger->NextOverdubSource()); });
+	exclusion.unlock(); scene->Shutdown();
+}
+
+TEST_F(SceneRoutingIntegrationTest, SourceDragCancellationAndForeignReleasesPreserveBindingAndEatOnlyMatchingLateUp)
+{
+	using Access = engine::SourceLossIntegrationTestAccess;
+	for (const auto cancellation : {0u, 1u, 2u, 3u})
+	{
+		SCOPED_TRACE(cancellation);
+		auto scene = FreshScene({Station("Keys"), Station("Other")}, {Trigger("source", "Keys")}); ASSERT_TRUE(scene);
+		scene->SetSize({1280u, 900u}); Settle(scene); auto exclusion = Access::ExcludeJob(*scene);
+		const auto stations = scene->SnapshotStations(); auto a = AddCompletedSourceChoiceTake(stations[0]);
+		auto foreign = AddCompletedSourceChoiceTake(stations[1]); auto recording = stations[0]->AddTake(); recording->Record({0u}, "busy"); scene->CommitChanges();
+		auto hud = Access::PrepareHud(*scene); LayoutHud(hud); const auto output = SourceChoiceOutputPoint(hud); ASSERT_TRUE(output);
+		auto trigger = scene->AcceptedRigSnapshot()->Triggers.front().Instance; auto& workspace = Access::Workspace(*scene);
+		Access::WhileSceneLocked(*scene, [&] { ASSERT_TRUE(trigger->BindNextOverdubSource(stations[0], a)); });
+		actions::TouchAction touch; touch.Touch = actions::TouchAction::TOUCH_MOUSE; touch.Index = 0; touch.Position = *output;
+		touch.State = actions::TouchAction::TOUCH_DOWN; touch.Modifiers = base::Action::MODIFIER_SHIFT;
+		ASSERT_TRUE(scene->OnAction(touch).IsEaten); ASSERT_TRUE(workspace.OverdubSourceDragActive());
+		const auto point = Access::CanvasPoint(*scene);
+		scene->SetHover3d(SourceChoicePickPath(foreign), base::Action::MODIFIER_SHIFT, point);
+		EXPECT_EQ(nullptr, gui::WorkspaceTestAccess::OverdubHover(workspace));
+		scene->SetHover3d(SourceChoicePickPath(recording), base::Action::MODIFIER_SHIFT, point);
+		EXPECT_EQ(nullptr, gui::WorkspaceTestAccess::OverdubHover(workspace));
+		auto foreignUp = touch; foreignUp.Index = 2; foreignUp.State = actions::TouchAction::TOUCH_UP;
+		EXPECT_TRUE(scene->OnAction(foreignUp).IsEaten); EXPECT_TRUE(workspace.OverdubSourceDragActive());
+		if (cancellation == 0u) scene->OnInputFocusLost();
+		else if (cancellation == 1u)
+		{ actions::KeyAction escape; escape.KeyChar = VK_ESCAPE; escape.KeyActionType = actions::KeyAction::KEY_DOWN; EXPECT_TRUE(scene->OnAction(escape).IsEaten); }
+		else if (cancellation == 2u)
+		{ actions::TouchMoveAction lost; lost.Touch = actions::TouchAction::TOUCH_MOUSE; lost.Position = point; lost.MouseButtonsDown = 0u; EXPECT_TRUE(scene->OnAction(lost).IsEaten); }
+		else Access::OpenKeyboardModal(*scene);
+		EXPECT_FALSE(workspace.OverdubSourceDragActive());
+		foreignUp.Index = 4; scene->OnAction(foreignUp); // Wheel cannot consume the primary tombstone.
+		touch.State = actions::TouchAction::TOUCH_UP; touch.Position = point; touch.Modifiers = base::Action::MODIFIER_NONE;
+		EXPECT_TRUE(scene->OnAction(touch).IsEaten); EXPECT_FALSE(gui::WorkspaceTestAccess::HasCapture(workspace));
+		Access::WhileSceneLocked(*scene, [&] { EXPECT_EQ(a, trigger->NextOverdubSource()); });
+		EXPECT_FALSE(hud->HasCableDrag()); EXPECT_TRUE(trigger->GetTakes().empty());
+		exclusion.unlock(); scene->Shutdown();
+	}
+}
+
+TEST_F(SceneRoutingIntegrationTest, ShiftRightOutputClearsInvalidUnwiredChoiceOnlyOnMatchedRelease)
+{
+	using Access = engine::SourceLossIntegrationTestAccess;
+	auto scene = FreshScene({Station("Keys"), Station("Other")}, {Trigger("source", "Keys")}); ASSERT_TRUE(scene);
+	scene->SetSize({1280u, 900u}); Settle(scene); auto exclusion = Access::ExcludeJob(*scene);
+	const auto stations = scene->SnapshotStations(); auto a = AddCompletedSourceChoiceTake(stations[0]); scene->CommitChanges();
+	auto hud = Access::PrepareHud(*scene); LayoutHud(hud); const auto output = SourceChoiceOutputPoint(hud); ASSERT_TRUE(output);
+	auto trigger = scene->AcceptedRigSnapshot()->Triggers.front().Instance;
+	Access::WhileSceneLocked(*scene, [&] { ASSERT_TRUE(trigger->BindNextOverdubSource(stations[0], a)); });
+	// Simulate the existing accepted route boundary, not a UI rig candidate.
+	std::shared_ptr<base::ActionReceiver> route; std::vector<unsigned int> channels; std::vector<std::string> devices;
+	std::shared_ptr<audio::AudioMixer> mixer; std::shared_ptr<base::BounceWriter> writer;
+	trigger->ApplyCaptureRouting(route, channels, devices, mixer, writer);
+	Access::WhileSceneLocked(*scene, [&] { ASSERT_TRUE(trigger->NextOverdubSourceInvalid()); });
+	actions::TouchAction touch; touch.Touch = actions::TouchAction::TOUCH_MOUSE; touch.Index = 2;
+	touch.State = actions::TouchAction::TOUCH_DOWN; touch.Position = *output; touch.Modifiers = base::Action::MODIFIER_SHIFT;
+	EXPECT_TRUE(scene->OnAction(touch).IsEaten); EXPECT_TRUE(trigger->HasExplicitNextOverdubSource());
+	scene->OnInputFocusLost(); touch.State = actions::TouchAction::TOUCH_UP; touch.Modifiers = base::Action::MODIFIER_NONE;
+	EXPECT_TRUE(scene->OnAction(touch).IsEaten); EXPECT_TRUE(trigger->HasExplicitNextOverdubSource());
+	touch.State = actions::TouchAction::TOUCH_DOWN; touch.Modifiers = base::Action::MODIFIER_SHIFT;
+	EXPECT_TRUE(scene->OnAction(touch).IsEaten); EXPECT_TRUE(trigger->HasExplicitNextOverdubSource());
+	touch.State = actions::TouchAction::TOUCH_UP; touch.Modifiers = base::Action::MODIFIER_NONE;
+	EXPECT_TRUE(scene->OnAction(touch).IsEaten); EXPECT_FALSE(trigger->HasExplicitNextOverdubSource());
+	EXPECT_FALSE(hud->HasCableDrag()); EXPECT_EQ(0u, trigger->ActivationOutcomeCount());
+	exclusion.unlock(); scene->Shutdown();
+}
+
+TEST_F(SceneRoutingIntegrationTest, SourceChoiceAndClearRemainAvailableDuringAcceptedCaptureWithoutRetargetingItsPins)
+{
+	using Access = engine::SourceLossIntegrationTestAccess;
+	auto scene = FreshScene({Station("Keys"), Station("Other")}, {Trigger("source", "Keys")}); ASSERT_TRUE(scene);
+	scene->SetSize({1280u, 900u}); Settle(scene); auto exclusion = Access::ExcludeJob(*scene);
+	const auto stations = scene->SnapshotStations(); auto a = AddCompletedSourceChoiceTake(stations[0]); auto b = AddCompletedSourceChoiceTake(stations[0]); scene->CommitChanges();
+	auto hud = Access::PrepareHud(*scene); LayoutHud(hud); const auto output = SourceChoiceOutputPoint(hud); ASSERT_TRUE(output);
+	auto trigger = scene->AcceptedRigSnapshot()->Triggers.front().Instance; auto& workspace = Access::Workspace(*scene);
+	Access::WhileSceneLocked(*scene, [&] { ASSERT_TRUE(trigger->BindNextOverdubSource(stations[0], a)); });
+	base::Action input; io::UserConfig cfg;
+	auto control = [&](bool activate, bool down)
+	{
+		ASSERT_TRUE(trigger->QueueExternalControlAction(activate, down, input).IsEaten);
+		trigger->OnTick(utils::Timer::GetTime(), 0u, cfg, std::nullopt);
+		Access::WhileSceneLocked(*scene, [&] { trigger->ProcessStructuralActionsOnJob(cfg, std::nullopt); });
+		trigger->OnTick(utils::Timer::GetTime(), 0u, cfg, std::nullopt);
+	};
+	control(false, true); control(true, true);
+	ASSERT_EQ(engine::TRIGSTATE_OVERDUBBING, trigger->GetState()); ASSERT_FALSE(trigger->CanEditRouting());
+	ASSERT_FALSE(trigger->GetTakes().empty()); EXPECT_EQ(a->Id(), trigger->GetTakes().back().SourceTakeId);
+	actions::TouchAction touch; touch.Touch = actions::TouchAction::TOUCH_MOUSE; touch.Index = 0; touch.Position = *output;
+	touch.State = actions::TouchAction::TOUCH_DOWN; touch.Modifiers = base::Action::MODIFIER_SHIFT;
+	ASSERT_TRUE(scene->OnAction(touch).IsEaten); ASSERT_TRUE(workspace.OverdubSourceDragActive()); EXPECT_FALSE(hud->HasCableDrag());
+	const auto point = Access::CanvasPoint(*scene); scene->SetHover3d(SourceChoicePickPath(b), base::Action::MODIFIER_SHIFT, point);
+	ASSERT_EQ(b, gui::WorkspaceTestAccess::OverdubHover(workspace));
+	touch.State = actions::TouchAction::TOUCH_UP; touch.Position = point; touch.Modifiers = base::Action::MODIFIER_NONE;
+	EXPECT_TRUE(scene->OnAction(touch).IsEaten);
+	Access::WhileSceneLocked(*scene, [&] { EXPECT_EQ(b, trigger->NextOverdubSource()); });
+	EXPECT_EQ(a->Id(), trigger->GetTakes().back().SourceTakeId); EXPECT_EQ(engine::TRIGSTATE_OVERDUBBING, trigger->GetState());
+	touch.Index = 2; touch.Position = *output; touch.State = actions::TouchAction::TOUCH_DOWN; touch.Modifiers = base::Action::MODIFIER_SHIFT;
+	ASSERT_TRUE(scene->OnAction(touch).IsEaten); EXPECT_TRUE(trigger->HasExplicitNextOverdubSource());
+	touch.State = actions::TouchAction::TOUCH_UP; touch.Modifiers = base::Action::MODIFIER_NONE;
+	EXPECT_TRUE(scene->OnAction(touch).IsEaten); EXPECT_FALSE(trigger->HasExplicitNextOverdubSource());
+	EXPECT_EQ(a->Id(), trigger->GetTakes().back().SourceTakeId); EXPECT_EQ(1u, trigger->ActivationOutcomeCount());
+	touch.Index = 0; touch.State = actions::TouchAction::TOUCH_DOWN; touch.Modifiers = base::Action::MODIFIER_NONE;
+	scene->OnAction(touch); EXPECT_FALSE(hud->HasCableDrag()); EXPECT_FALSE(workspace.OverdubSourceDragActive());
+	touch.State = actions::TouchAction::TOUCH_UP; scene->OnAction(touch);
+	EXPECT_EQ(1u, trigger->ActivationOutcomeCount()); EXPECT_EQ(a->Id(), trigger->GetTakes().back().SourceTakeId);
+	exclusion.unlock(); scene->Shutdown();
+}
+
+TEST_F(SceneRoutingIntegrationTest, SourceDragRejectsForeignDropAndChangedRigWhileCtrlAltKeepExistingInputPath)
+{
+	using Access = engine::SourceLossIntegrationTestAccess;
+	auto scene = FreshScene({Station("Keys"), Station("Other")}, {Trigger("source", "Keys")}); ASSERT_TRUE(scene);
+	scene->SetSize({1280u, 900u}); Settle(scene); auto exclusion = Access::ExcludeJob(*scene);
+	const auto stations = scene->SnapshotStations(); auto a = AddCompletedSourceChoiceTake(stations[0]); auto foreign = AddCompletedSourceChoiceTake(stations[1]); scene->CommitChanges();
+	auto hud = Access::PrepareHud(*scene); LayoutHud(hud); const auto output = SourceChoiceOutputPoint(hud); ASSERT_TRUE(output);
+	auto trigger = scene->AcceptedRigSnapshot()->Triggers.front().Instance; auto& workspace = Access::Workspace(*scene);
+	Access::WhileSceneLocked(*scene, [&] { ASSERT_TRUE(trigger->BindNextOverdubSource(stations[0], a)); });
+	actions::TouchAction touch; touch.Touch = actions::TouchAction::TOUCH_MOUSE; touch.Index = 0; touch.Position = *output;
+	for (const auto modifiers : {base::Action::MODIFIER_SHIFT | base::Action::MODIFIER_CTRL, base::Action::MODIFIER_SHIFT | base::Action::MODIFIER_ALT})
+	{
+		touch.State = actions::TouchAction::TOUCH_DOWN; touch.Modifiers = static_cast<base::Action::Modifiers>(modifiers);
+		scene->OnAction(touch); EXPECT_FALSE(workspace.OverdubSourceDragActive());
+		scene->OnInputFocusLost(); touch.State = actions::TouchAction::TOUCH_UP; scene->OnAction(touch);
+	}
+	touch.State = actions::TouchAction::TOUCH_DOWN; touch.Modifiers = base::Action::MODIFIER_SHIFT; ASSERT_TRUE(scene->OnAction(touch).IsEaten);
+	const auto point = Access::CanvasPoint(*scene); scene->SetHover3d(SourceChoicePickPath(foreign), base::Action::MODIFIER_SHIFT, point);
+	EXPECT_EQ(nullptr, gui::WorkspaceTestAccess::OverdubHover(workspace));
+	touch.State = actions::TouchAction::TOUCH_UP; touch.Position = point; EXPECT_TRUE(scene->OnAction(touch).IsEaten);
+	Access::WhileSceneLocked(*scene, [&] { EXPECT_EQ(a, trigger->NextOverdubSource()); });
+	touch.State = actions::TouchAction::TOUCH_DOWN; touch.Position = *output; ASSERT_TRUE(scene->OnAction(touch).IsEaten);
+	ASSERT_TRUE(workspace.OverdubSourceDragActive());
+	auto replacement = *scene->AcceptedRigSnapshot(); replacement.Revision += 1u;
+	hud->SetRoutingConfig(2u, {}, replacement); LayoutHud(hud);
+	actions::TouchMoveAction move; move.Touch = actions::TouchAction::TOUCH_MOUSE; move.MouseButtonsDown = 1u; move.Position = point;
+	EXPECT_TRUE(scene->OnAction(move).IsEaten); EXPECT_FALSE(workspace.OverdubSourceDragActive());
+	touch.State = actions::TouchAction::TOUCH_UP; touch.Position = point; EXPECT_TRUE(scene->OnAction(touch).IsEaten);
+	Access::WhileSceneLocked(*scene, [&] { EXPECT_EQ(a, trigger->NextOverdubSource()); });
+	EXPECT_FALSE(hud->HasCableDrag()); EXPECT_TRUE(trigger->GetTakes().empty());
+	exclusion.unlock(); scene->Shutdown();
 }

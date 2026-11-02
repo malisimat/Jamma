@@ -72,6 +72,11 @@ Scene::Scene(SceneParams params,
 	hudParams.Size = params.Size;
 	hudParams.MinSize = params.Size;
 	hudParams.RoutingEditAvailabilityState = [this]() { return _RoutingEditAvailability(); };
+	hudParams.CurrentRigRevision = [this]()
+	{
+		const auto accepted = _rigCoordinator.Accepted();
+		return accepted ? accepted->Revision : 0u;
+	};
 	hudParams.AcceptTriggerInput = [this](std::uint64_t revision)
 	{
 		return _inputSubsystem && _inputSubsystem->TryAcceptUiRigTriggerInput(revision);

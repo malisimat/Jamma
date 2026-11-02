@@ -54,6 +54,8 @@ namespace gui
 		std::function<std::vector<io::TriggerBindingLearn::Device>()> TriggerLearnDevices;
 		std::function<std::shared_ptr<const io::TriggerBindingLearn::Observation>(std::optional<io::TriggerBindingLearn::Request>)> TriggerLearnInput;
 		std::function<RoutingEditAvailability()> RoutingEditAvailabilityState;
+		// Scene-serialized observation; unlike AcceptTriggerInput this never admits an edge.
+		std::function<std::uint64_t()> CurrentRigRevision;
 		std::function<bool(std::uint64_t)> AcceptTriggerInput;
 		std::function<void(const std::shared_ptr<base::GuiElement>&, bool)> FocusEditor;
 		GuiPopupManager* PopupManager = nullptr;
@@ -127,6 +129,19 @@ namespace gui
 		utils::Rect2d OccupiedRightRailBounds() const;
 		void SetTopPanelLayout(GuiTopPanelLayout layout);
 		void SetEditModeAlpha(float alpha) noexcept { _editModeAlpha = std::clamp(alpha, 0.0f, 1.0f); }
+		struct OverdubOutput
+		{
+			std::weak_ptr<engine::Trigger> Trigger;
+			std::string TriggerId;
+			std::optional<std::string> StationTarget;
+			std::optional<std::size_t> StationIndex;
+			std::uint64_t Revision = 0u;
+		};
+		std::optional<OverdubOutput> OverdubOutputAt(utils::Position2d localPoint) const;
+		bool IsCurrentOverdubOutput(const OverdubOutput& output) const;
+		// Caller holds Scene serialization; Draw uses these copied presentation values.
+		void PrepareOverdubSourcesLocked(const std::shared_ptr<engine::Trigger>& dragging);
+		void SetOverdubSourceFeedback(std::string text);
 		bool HasCableDrag() const noexcept { return _cableDrag.has_value(); }
 		bool IsApplying() const { return _RoutingEditAvailability() == RoutingEditAvailability::Applying; }
 		static std::vector<CableRoute> BuildCableRoutes(const engine::RoutingGraph& graph);
@@ -256,6 +271,7 @@ namespace gui
 			std::shared_ptr<GuiTriggerRename> Rename;
 			std::shared_ptr<base::GuiElement> InputSocket;
 			std::shared_ptr<base::GuiElement> OutputSocket;
+			std::shared_ptr<GuiLabel> SourceLabel;
 		};
 
 
@@ -284,6 +300,8 @@ namespace gui
 		std::shared_ptr<GuiPanel> _statusPanel;
 		std::shared_ptr<GuiLabel> _routingStatusLabel;
 		std::string _quantisationFeedback;
+		std::string _overdubSourceFeedback;
+		std::vector<std::string> _overdubSourceHints;
 		std::string _clockStatusText = "Clock OFF | Subdiv --";
 		std::string _performanceGroupFeedback; // UI/job owner under Scene serialization
 		float _editModeAlpha = 0.0f;
@@ -332,6 +350,7 @@ namespace gui
 		bool _altLearnHeld = false;
 		std::function<void(const std::shared_ptr<base::GuiElement>&, bool)> _focusEditor;
 		std::function<RoutingEditAvailability()> _routingEditAvailability;
+		std::function<std::uint64_t()> _currentRigRevision;
 		std::function<bool(std::uint64_t)> _acceptTriggerInput;
 		std::optional<RoutingEditAvailability> _lastRoutingEditAvailability;
 		GuiPopupManager* _popupManager = nullptr;

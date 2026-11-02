@@ -789,8 +789,10 @@ ActionResult Window::OnAction(TouchAction touchAction)
 	_cachedCursorPosition = touchAction.Position;
 	_cachedCursorModifiers = touchAction.Modifiers;
 	bool pressPicked = false;
-	if (touchAction.Touch == TouchAction::TOUCH_MOUSE && touchAction.State == TouchAction::TOUCH_DOWN
-		&& touchAction.Index != 4 && _buttonsDown == 0u)
+	const bool sourceReleasePick = touchAction.Touch == TouchAction::TOUCH_MOUSE &&
+		touchAction.State == TouchAction::TOUCH_UP && touchAction.Index == 0 && _scene->NeedsOverdubSourceReleasePick();
+	if (sourceReleasePick || (touchAction.Touch == TouchAction::TOUCH_MOUSE && touchAction.State == TouchAction::TOUCH_DOWN
+		&& touchAction.Index != 4 && _buttonsDown == 0u))
 	{
 		if (const auto objectId = _PickPointerPress(touchAction.Position))
 		{
@@ -799,6 +801,8 @@ ActionResult Window::OnAction(TouchAction touchAction)
 			_hover3dDirty = false;
 			pressPicked = true;
 		}
+		else if (sourceReleasePick)
+			_scene->SetHover3d({}, touchAction.Modifiers, touchAction.Position); // Failed release pick cannot reuse an old target.
 	}
 	switch (touchAction.Touch)
 	{

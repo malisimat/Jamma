@@ -1,5 +1,6 @@
 #pragma once
 
+#include <map>
 #include "SceneSelector.h"
 #include "../io/IoInputSubsystem.h"
 #include "../engine/HierarchySelection.h"
@@ -139,6 +140,8 @@ namespace gui
 		bool IsEditingText() const noexcept { return _focusManager.IsEditingText(); }
 		bool CameraDragging() const noexcept { return _camera.IsBackgroundDragging(); }
 		base::PointerCursor CursorHint() const;
+		bool NeedsOverdubSourceReleasePick() const noexcept { return _overdubSourceDrag && !_overdubSourceDrag->Clear; }
+		bool OverdubSourceDragActive() const noexcept { return _overdubSourceDrag.has_value(); }
 		bool HasPointerCapture() const noexcept { return _pointer.HasCapture(); }
 		void CommitFocus() { _focusManager.ClearFocus(); }
 		void CancelBackgroundClick() { _selector->ClearBackgroundClick(); }
@@ -166,7 +169,7 @@ namespace gui
 		void SynchronizeTempoPrompt(const std::optional<ninjam::NinjamTempoProposal>& prompt) { _tempoPrompt.Synchronize(prompt, _popupManager, _size); }
 		glm::mat4 ViewProjection() const noexcept { return _viewProj; }
 		bool RequestFocus(const std::shared_ptr<base::GuiElement>& editor) { return _focusManager.RequestFocus(editor); }
-		void OpenPopup(std::shared_ptr<base::GuiElement> popup) { if (_editor) _editor->CancelInput(); _popupManager.Open(std::move(popup)); }
+		void OpenPopup(std::shared_ptr<base::GuiElement> popup) { _CancelOverdubSourceDrag(); if (_editor) _editor->CancelInput(); _popupManager.Open(std::move(popup)); }
 		void ClosePopups() { _popupManager.CloseAll(); }
 		void CloseTopPopup() { _popupManager.Close(); }
 		bool IsSelectionMutePressed() const { return _selector->IsMutePressed(); }
@@ -258,6 +261,19 @@ namespace gui
 		std::weak_ptr<base::GuiElement> _hoverElement3d;
 		std::vector<unsigned char> _hoverPath3d;
 		std::vector<unsigned char> _lastLoggedHoverPath;
+		struct OverdubSourceDrag
+		{
+			GuiHud::OverdubOutput Output;
+			std::weak_ptr<engine::Station> Station;
+			std::weak_ptr<engine::LoopTake> Hover;
+			bool Clear = false;
+		};
+		std::optional<OverdubSourceDrag> _overdubSourceDrag;
+		std::optional<int> _overdubSourceRelease;
+		std::map<std::vector<unsigned int>, bool> _OverdubSourcePreviewMembersLocked(const std::vector<std::shared_ptr<engine::Station>>& stations) const;
+		void _CancelOverdubSourceDrag();
+		bool _OverdubSourceDragCurrentLocked(const std::vector<std::shared_ptr<engine::Station>>& stations) const;
+		std::optional<actions::ActionResult> _RouteOverdubSourceTouch(actions::TouchAction action, StationAccess access, const InputPresentation& presentation);
 		std::string _quantisationFeedback;
 		std::shared_ptr<gui::GuiPopup> _stationDeleteDialog;
 		std::shared_ptr<gui::GuiPopup> _takeDitchDialog;

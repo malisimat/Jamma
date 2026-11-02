@@ -14,6 +14,7 @@
 #include "GuiScrollPanel.h"
 #include "GlUtils.h"
 #include "../engine/Trigger.h"
+#include "../engine/Station.h"
 #include "../engine/RigSnapshot.h"
 #include "../graphics/GlDeleteQueue.h"
 #include "../graphics/GlDrawContext.h"
@@ -325,6 +326,7 @@ GuiHud::GuiHud(GuiHudParams params) :
 	_triggerLearnInput(std::move(params.TriggerLearnInput)),
 	_focusEditor(std::move(params.FocusEditor)),
 	_routingEditAvailability(std::move(params.RoutingEditAvailabilityState)),
+	_currentRigRevision(std::move(params.CurrentRigRevision)),
 	_acceptTriggerInput(std::move(params.AcceptTriggerInput)),
 	_popupManager(params.PopupManager)
 {
@@ -739,7 +741,13 @@ void GuiHud::_BuildTriggerRail()
 			_SocketSize,
 			glm::vec3(0.92f, 0.79f, 0.20f));
 		button->AddChild(outputSocket);
-		_triggerWidgets.push_back({ button, close, edit, rename, inputSocket, outputSocket });
+		GuiLabelParams sourceParams;
+		sourceParams.Position = {16, 3}; sourceParams.Size = {100u, 18u};
+		sourceParams.MinSize = sourceParams.Size; sourceParams.String = "";
+		sourceParams.ClipText = true; sourceParams.Ellipsize = true; sourceParams.GuiPassThrough = true;
+		auto sourceLabel = std::make_shared<GuiLabel>(sourceParams);
+		button->AddChild(sourceLabel);
+		_triggerWidgets.push_back({ button, close, edit, rename, inputSocket, outputSocket, sourceLabel });
 		_triggerList->AddChild(button);
 	}
 	const auto logicalHeight = _triggerNames.empty() ? 1u :
@@ -1286,6 +1294,73 @@ void GuiHud::SetStationAnchors(std::vector<StationAnchor> anchors)
 	_cablesDirty = true;
 }
 
+std::optional<GuiHud::OverdubOutput> GuiHud::OverdubOutputAt(Position2d point) const
+{
+	if (!IsVisible() || !IsEnabled() || _RoutingEditAvailability() == RoutingEditAvailability::Applying ||
+		(_currentRigRevision && _currentRigRevision() != _displayedRevision)) return std::nullopt;
+	std::vector<CableInteraction::Endpoint> endpoints;
+	std::vector<CableInteraction::Cable> cables;
+	BuildInteractionGeometry(endpoints, cables);
+	_FilterCableHits(endpoints, cables, point);
+	for (const auto& endpoint : endpoints)
+		if (endpoint.Kind == CableInteraction::EndpointKind::TriggerOutput && !endpoint.Continuation &&
+			endpoint.TriggerIndex && CableInteraction::HitTest(endpoint, point, 10.0f))
+		{
+			const auto i = *endpoint.TriggerIndex;
+			if (i < _triggers.size() && i < _displayedRig.Triggers.size() && !_triggers[i].expired())
+				return OverdubOutput{_triggers[i], _displayedRig.Triggers[i].Id,
+					_displayedRig.Triggers[i].StationTarget, i < _routingGraph.size() ? _routingGraph[i].StationIndex : std::nullopt, _displayedRevision};
+		}
+	return std::nullopt;
+}
+
+bool GuiHud::IsCurrentOverdubOutput(const OverdubOutput& output) const
+{
+	if (output.Revision != _displayedRevision || !IsVisible() || !IsEnabled() ||
+		_RoutingEditAvailability() == RoutingEditAvailability::Applying ||
+		(_currentRigRevision && _currentRigRevision() != output.Revision)) return false;
+	const auto trigger = output.Trigger.lock();
+	for (std::size_t i = 0u; trigger && i < _triggers.size() && i < _displayedRig.Triggers.size(); ++i)
+		if (_triggers[i].lock() == trigger && _displayedRig.Triggers[i].Id == output.TriggerId &&
+			_displayedRig.Triggers[i].StationTarget == output.StationTarget) return true;
+	return false;
+}
+
+void GuiHud::PrepareOverdubSourcesLocked(const std::shared_ptr<engine::Trigger>& dragging)
+{
+	_overdubSourceHints.resize(_triggerWidgets.size());
+	for (std::size_t i = 0u; i < _triggerWidgets.size(); ++i)
+	{
+		const auto trigger = i < _triggers.size() ? _triggers[i].lock() : nullptr;
+		const auto source = trigger ? trigger->NextOverdubSource() : nullptr;
+		const bool explicitChoice = trigger && trigger->HasExplicitNextOverdubSource();
+		const bool invalid = explicitChoice && trigger->NextOverdubSourceInvalid();
+		std::string label = invalid ? "Next invalid" : source ? "Next source" : "";
+		if (source)
+			if (const auto station = std::dynamic_pointer_cast<engine::Station>(source->Parent()))
+			{
+				const auto& takes = station->GetLoopTakes();
+				const auto found = std::find(takes.begin(), takes.end(), source);
+				if (found != takes.end()) label = "Next take " + std::to_string(std::distance(takes.begin(), found) + 1);
+			}
+		_triggerWidgets[i].SourceLabel->SetString(label);
+		_triggerWidgets[i].SourceLabel->SetTextColor(invalid ? glm::vec3(1.0f, 0.35f, 0.25f) : glm::vec3(0.25f, 0.95f, 0.85f));
+		if (auto socket = std::dynamic_pointer_cast<GuiHudSocket>(_triggerWidgets[i].OutputSocket))
+			socket->SetTint(trigger == dragging ? glm::vec3(0.95f, 0.35f, 1.0f) : invalid ? glm::vec3(1.0f, 0.3f, 0.2f)
+				: explicitChoice ? glm::vec3(0.2f, 0.95f, 0.8f) : glm::vec3(0.92f, 0.79f, 0.20f));
+		_overdubSourceHints[i] = (explicitChoice ? trigger->NextOverdubSourceStatus() + ". " : "")
+			+ "Shift-drag output to choose next overdub source. Shift-right-click output clears to latest.";
+	}
+}
+
+void GuiHud::SetOverdubSourceFeedback(std::string text)
+{
+	if (_overdubSourceFeedback == text) return;
+	_overdubSourceFeedback = std::move(text);
+	if (_routingStatusLabel && !_overdubSourceFeedback.empty()) _routingStatusLabel->SetString(_overdubSourceFeedback);
+	else _lastRoutingEditAvailability.reset();
+}
+
 actions::ActionResult GuiHud::_BeginCableDrag(Position2d point)
 {
 	if (_RoutingEditAvailability() != RoutingEditAvailability::Ready)
@@ -1625,7 +1700,7 @@ void GuiHud::_UpdateRoutingEditPresentation()
 		_triggerWidgets[i].Rename->Update(availability == RoutingEditAvailability::Applying);
 	}
 
-	if (!_routingStatusLabel || !_performanceGroupFeedback.empty() || !_quantisationFeedback.empty() || _lastRoutingEditAvailability == availability)
+	if (!_routingStatusLabel || !_overdubSourceFeedback.empty() || !_performanceGroupFeedback.empty() || !_quantisationFeedback.empty() || _lastRoutingEditAvailability == availability)
 		return;
 	_lastRoutingEditAvailability = availability;
 	switch (availability)
@@ -1839,6 +1914,12 @@ actions::ActionResult GuiHud::OnAction(actions::TouchMoveAction action)
 	if (!_cableDrag.has_value())
 	{
 		_UpdateCableHover(action.Position);
+		const auto output = OverdubOutputAt(action.Position);
+		std::string hint;
+		if (output)
+			for (std::size_t i = 0u; i < _displayedRig.Triggers.size() && i < _overdubSourceHints.size(); ++i)
+				if (_displayedRig.Triggers[i].Id == output->TriggerId) { hint = _overdubSourceHints[i]; break; }
+		SetOverdubSourceFeedback(std::move(hint));
 		// Resolve one leaf now for immediate feedback; drawing repeats the selection.
 		ApplyExclusiveHoverPoint(action.Position);
 		return actions::ActionResult::NoAction();
@@ -2487,7 +2568,7 @@ void gui::GuiHud::SetQuantisationFeedback(const std::string& text)
 	if (_quantisationFeedback == text) return;
 	_quantisationFeedback = text;
 	if (!_routingStatusLabel) return;
-	if (!text.empty() && _performanceGroupFeedback.empty()) _routingStatusLabel->SetString(text);
+	if (!text.empty() && _performanceGroupFeedback.empty() && _overdubSourceFeedback.empty()) _routingStatusLabel->SetString(text);
 	else
 	{
 		// Force normal routing status to recover on the next HUD update.
@@ -2502,7 +2583,7 @@ void GuiHud::SetClockStatus(unsigned long masterLengthSamps, midi::MidiQuantisat
 		status = std::string("Clock ON | Subdiv ") + midi::MidiQuantisation::FractionLabel(fraction);
 	if (_clockStatusText == status) return;
 	_clockStatusText = std::move(status);
-	if (_routingStatusLabel && _performanceGroupFeedback.empty() && _quantisationFeedback.empty()
+	if (_routingStatusLabel && _overdubSourceFeedback.empty() && _performanceGroupFeedback.empty() && _quantisationFeedback.empty()
 		&& _lastRoutingEditAvailability == RoutingEditAvailability::Ready)
 		_routingStatusLabel->SetString(_clockStatusText);
 }
@@ -2512,7 +2593,8 @@ void GuiHud::SetPerformanceGroupFeedback(const std::string& text)
 	if (_performanceGroupFeedback == text) return;
 	_performanceGroupFeedback = text;
 	if (!_routingStatusLabel) return;
-	if (!text.empty()) _routingStatusLabel->SetString(text);
+	if (!_overdubSourceFeedback.empty()) _routingStatusLabel->SetString(_overdubSourceFeedback);
+	else if (!text.empty()) _routingStatusLabel->SetString(text);
 	else if (!_quantisationFeedback.empty()) _routingStatusLabel->SetString(_quantisationFeedback);
 	else _lastRoutingEditAvailability.reset();
 }

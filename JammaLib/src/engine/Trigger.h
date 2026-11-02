@@ -354,6 +354,7 @@ namespace engine
 		std::uint64_t DitchOutcomeCount() const noexcept { return _ditchOutcomeCount.load(std::memory_order_acquire); }
 		// Initial wiring and the following pending-source API are Scene-serialized, nonaudio only.
 		void SetReceiver(std::shared_ptr<base::ActionReceiver> receiver);
+		bool RoutesToStation(const std::shared_ptr<Station>& station) const noexcept;
 		bool BindNextOverdubSource(const std::shared_ptr<Station>& station, const std::shared_ptr<LoopTake>& source);
 		void ClearNextOverdubSource();
 		std::shared_ptr<LoopTake> NextOverdubSource();
