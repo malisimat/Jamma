@@ -1,4 +1,5 @@
 #include "../gui/WorkspaceTestAccess.h"
+#include "../gui/LoopGridEditorTestAccess.h"
 
 #include "gtest/gtest.h"
 #include <sstream>
@@ -8,6 +9,7 @@
 #include "engine/LoopTake.h"
 #include "engine/Scene.h"
 #include "engine/Station.h"
+#include "engine/HierarchySelection.h"
 #include "engine/Trigger.h"
 #include "gui/GuiButton.h"
 #include "gui/GuiTextBox.h"
@@ -61,6 +63,7 @@ namespace engine
 using base::ActionSender;
 using base::ActionReceiver;
 using engine::Loop;
+using engine::GroupCommand;
 using engine::LoopTake;
 using engine::LoopTakeParams;
 using engine::Scene;
@@ -454,6 +457,47 @@ public:
 		return _ChildFromPath(_workspace->CurrentHover());
 	}
 
+	midi::LoopGridEditor& EditorForTest() { return _workspace->Editor(); }
+	void RefreshEditorForTest() { _workspace->UpdateEditorUi(); }
+	void ExpectEditorButtonUncoveredForTest()
+	{
+		const auto point = midi::LoopGridEditorTestAccess::ButtonPoint(EditorForTest());
+		EXPECT_GE(point.Y, gui::GuiStyle::StatusBarHeight);
+		EXPECT_FALSE(_workspace->MainPanel()->RouteHitTest(point));
+		EXPECT_FALSE(_workspace->SelectionPanel()->RouteHitTest(point));
+		EXPECT_FALSE(_workspace->Hud()->CapturesPointer(point));
+	}
+	void SelectionGroupForTest(GroupCommand command)
+	{
+		std::scoped_lock lock(_sceneMutex); _ExecuteGroupCommandLocked(true, command, 1u);
+	}
+	void ReplayExclusiveSelectionForTest(const std::shared_ptr<base::GuiElement>& first,
+		const std::shared_ptr<base::GuiElement>& second)
+	{
+		std::scoped_lock lock(_sceneMutex);
+		const std::vector<unsigned char> hover;
+		engine::HierarchySelection::EditBatch batch{true, base::DEPTH_LOOPTAKE, {}, 2u, {hover, false, false, false, false, false}};
+		std::size_t index = 0u;
+		for (const auto& target : {first, second})
+		{
+			std::vector<unsigned char> path;
+			for (const auto segment : target->GlobalId()) path.push_back(static_cast<unsigned char>(segment));
+			batch.Changes[index++] = {engine::HierarchySelection::Edit::Select, std::move(path)};
+		}
+		const auto outcome = engine::HierarchySelection::ApplyLocked(engine::HierarchySelection::BorrowLocked(_stations), batch);
+		_workspace->Editor().SelectionCommittedLocked({outcome.NewlySelected.data(), outcome.NewlySelectedCount});
+	}
+	bool WriterBlockedButtonReleaseForTest(TouchAction action)
+	{
+		auto presentation = _WorkspaceInputPresentation(); presentation.WriterHeld = true;
+		return _workspace->OnTouch(action, {_sceneMutex, _stations}, presentation).IsEaten;
+	}
+	void PopupForEditorTest() { _workspace->OpenPopup(std::make_shared<gui::GuiPopup>()); _workspace->ClosePopups(); }
+	void ReverseStationsForTest()
+	{
+		std::scoped_lock lock(_sceneMutex); std::reverse(_stations.begin(), _stations.end());
+		for (std::size_t index = 0u; index < _stations.size(); ++index) _stations[index]->SetIndex(static_cast<unsigned int>(index));
+	}
 	bool FindLoopGridEditorCandidateForTest(std::shared_ptr<LoopTake>& take,
 		std::shared_ptr<Loop>& audioLoop, std::shared_ptr<midi::MidiLoop>& midiLoop) const
 	{
@@ -2705,6 +2749,248 @@ TEST(Scene, StationMuteClickUsesAggregateTakeState) {
 	EXPECT_FALSE(station->AllTakesMuted());
 }
 
+class EditorSelectionTestData
+{
+public:
+	static std::shared_ptr<LoopTake> AddMidiTake(const std::shared_ptr<Station>& station,
+		std::initializer_list<unsigned int> channels, int populatedChannel = -1, bool controllerOnly = false)
+	{
+		auto take = station->AddTake(); LoopTake::MidiExportState state; state.LoopLengthSamps = 400u;
+		for (const auto channel : channels)
+		{
+			LoopTake::MidiStreamExport stream; stream.Channel = channel; stream.Loop.LoopLengthSamps = 400u;
+			if (static_cast<int>(channel) == populatedChannel)
+			{
+				stream.Loop.EventCount = controllerOnly ? 1u : 2u;
+				stream.Loop.Events[0] = controllerOnly ? midi::MidiEvent{20u, static_cast<std::uint8_t>(0xB0u | channel), 11u, 80u}
+					: midi::MidiEvent::MakeNoteOn(20u, channel, 60u, 100u);
+				if (!controllerOnly) stream.Loop.Events[1] = midi::MidiEvent::MakeNoteOff(40u, channel, 60u);
+			}
+			state.Streams.push_back(stream);
+		}
+		EXPECT_TRUE(take->RestoreMidiFromExport(state)); station->CommitChanges(); return take;
+	}
+	static void Hover(TestScene& scene, const std::shared_ptr<base::GuiElement>& target)
+	{
+		std::vector<unsigned char> path;
+		for (const auto index : target->GlobalId()) path.push_back(static_cast<unsigned char>(index + 1u));
+		scene.SetHover3d(path, base::Action::MODIFIER_NONE);
+	}
+	static void PaintSelection(TestScene& scene, const std::shared_ptr<base::GuiElement>& target,
+		const std::shared_ptr<base::GuiElement>& repeatSelected = {})
+	{
+		Hover(scene, target);
+		const auto point = scene.CanvasPointForTest();
+		scene.OnAction(MakeSceneTouch(TouchAction::TOUCH_DOWN, point, 0, LeftMouseButtonMask));
+		// Existing additive/subtractive paint commits selection without Shift's master shortcut.
+		scene.OnAction(MakeSceneTouchMove(point + utils::Position2d{5, 0}, LeftMouseButtonMask));
+		if (repeatSelected) Hover(scene, repeatSelected); // Repeated Select on an already selected target is not new recency.
+		scene.OnAction(MakeSceneTouch(TouchAction::TOUCH_UP, point + utils::Position2d{5, 0}, 0, 0u));
+	}
+	static void OpenKey(TestScene& scene)
+	{
+		KeyAction key; key.KeyChar = 69u; key.KeyActionType = KeyAction::KEY_UP;
+		EXPECT_TRUE(scene.OnAction(key).IsEaten);
+	}
+	static void Close(TestScene& scene) { scene.CloseLoopGridEditor(); scene.SettleLoopGridEditorForTest(); }
+	static void OpenButton(TestScene& scene)
+	{
+		scene.RefreshEditorForTest(); ASSERT_TRUE(midi::LoopGridEditorTestAccess::ButtonVisible(scene.EditorForTest()));
+		scene.ExpectEditorButtonUncoveredForTest();
+		const auto point = midi::LoopGridEditorTestAccess::ButtonPoint(scene.EditorForTest());
+		scene.OnAction(MakeSceneTouchMove(point, 0u)); // Normal movement must ignore old world hover at the button.
+		EXPECT_TRUE(scene.OnAction(MakeSceneTouch(TouchAction::TOUCH_DOWN, point, 0, LeftMouseButtonMask)).IsEaten);
+		EXPECT_TRUE(scene.OnAction(MakeSceneTouch(TouchAction::TOUCH_UP, point, 0, 0u)).IsEaten);
+	}
+};
+
+TEST(Scene, EditorUsesCommittedRecentSelectionForKeyAndButtonAcrossLifecycle)
+{
+	SceneParams params{base::DrawableParams(), base::MoveableParams(), base::SizeableParams({1400u, 900u})};
+	TestScene scene(params, {}); scene.PauseJobForTest();
+	auto stationA = MakeTestStation("recent-A"), stationB = MakeTestStation("recent-B");
+	scene.AddStationForTest(stationA); scene.AddStationForTest(stationB);
+	stationB->SetIndex(1u); // Test-only AddStation does not perform a rig membership reindex.
+	auto a = EditorSelectionTestData::AddMidiTake(stationA, {0u});
+	auto aggregate = EditorSelectionTestData::AddMidiTake(stationA, {8u}); aggregate->Select();
+	auto b = EditorSelectionTestData::AddMidiTake(stationB, {4u}, 4);
+	scene.SetSelectionDepthForTest(Scene::VIEW_LOOPTAKE);
+	EditorSelectionTestData::PaintSelection(scene, a->GetMidiLoops()[0]->Model());
+	EditorSelectionTestData::PaintSelection(scene, b->GetMidiLoops()[0]->Model(), a->GetMidiLoops()[0]->Model());
+	ASSERT_TRUE(a->IsSelected()); ASSERT_TRUE(b->IsSelected()); ASSERT_TRUE(aggregate->IsSelected());
+	scene.SetHover3d({}, base::Action::MODIFIER_NONE);
+	EditorSelectionTestData::OpenKey(scene); ASSERT_EQ(b, scene.LoopGridEditorTake());
+	EXPECT_EQ(5u, midi::LoopGridEditorTestAccess::DisplayedChannel(scene.EditorForTest()));
+	EditorSelectionTestData::Close(scene);
+	// Replay an exclusive command with the same final selection in the opposite order.
+	// This must not manufacture A as more recent than B.
+	scene.ReplayExclusiveSelectionForTest(b, a); aggregate->Select();
+	EditorSelectionTestData::OpenKey(scene); ASSERT_EQ(b, scene.LoopGridEditorTake());
+	EditorSelectionTestData::Close(scene);
+	EditorSelectionTestData::Hover(scene, a->GetMidiLoops()[0]->Model());
+	EditorSelectionTestData::OpenKey(scene); ASSERT_EQ(a, scene.LoopGridEditorTake());
+	EditorSelectionTestData::Close(scene);
+	EditorSelectionTestData::Hover(scene, a->GetMidiLoops()[0]->Model());
+	EditorSelectionTestData::OpenButton(scene); ASSERT_EQ(b, scene.LoopGridEditorTake());
+	EditorSelectionTestData::Close(scene);
+	// A group recall reselects B without inventing recency for its old selection.
+	scene.SelectionGroupForTest(GroupCommand::Store);
+	EditorSelectionTestData::PaintSelection(scene, b->GetMidiLoops()[0]->Model()); ASSERT_FALSE(b->IsSelected());
+	scene.SelectionGroupForTest(GroupCommand::RecallOrStore); ASSERT_TRUE(b->IsSelected());
+	scene.SetHover3d({}, base::Action::MODIFIER_NONE);
+	EditorSelectionTestData::OpenKey(scene); ASSERT_EQ(a, scene.LoopGridEditorTake());
+	EditorSelectionTestData::Close(scene);
+	EditorSelectionTestData::PaintSelection(scene, b->GetMidiLoops()[0]->Model()); ASSERT_FALSE(b->IsSelected());
+	EditorSelectionTestData::PaintSelection(scene, b->GetMidiLoops()[0]->Model()); ASSERT_TRUE(b->IsSelected());
+	scene.ReverseStationsForTest(); scene.SetHover3d({}, base::Action::MODIFIER_NONE);
+	EditorSelectionTestData::OpenKey(scene); ASSERT_EQ(b, scene.LoopGridEditorTake());
+	EditorSelectionTestData::Close(scene);
+	b->GetMidiLoops()[0]->StartRecord(); // A recent incomplete stream must not block an older playable target.
+	EditorSelectionTestData::Hover(scene, b->GetMidiLoops()[0]->Model());
+	EditorSelectionTestData::OpenKey(scene); ASSERT_EQ(a, scene.LoopGridEditorTake());
+	EditorSelectionTestData::Close(scene);
+	scene.RemoveStationForTest(stationB); // Externally retained B must not follow a reused hierarchy index.
+	scene.SetHover3d({}, base::Action::MODIFIER_NONE);
+	EditorSelectionTestData::OpenKey(scene); ASSERT_EQ(a, scene.LoopGridEditorTake());
+	EditorSelectionTestData::Close(scene);
+	// Ordinary close preserves history; an explicit session-history reset leaves ambiguous aggregate selection alone.
+	scene.EditorForTest().ClearSelectionHistory();
+	EXPECT_EQ(0u, midi::LoopGridEditorTestAccess::SelectionHistorySize(scene.EditorForTest()));
+	EditorSelectionTestData::OpenKey(scene); EXPECT_FALSE(scene.IsLoopGridEditorOpen());
+	EXPECT_EQ("Select a completed loop to edit", midi::LoopGridEditorTestAccess::Feedback(scene.EditorForTest()));
+	a->DeSelect(); aggregate->DeSelect();
+	EditorSelectionTestData::OpenButton(scene); EXPECT_FALSE(scene.IsLoopGridEditorOpen());
+	EXPECT_EQ("Select a completed loop to edit", midi::LoopGridEditorTestAccess::Feedback(scene.EditorForTest()));
+}
+
+TEST(Scene, EditorButtonCancelsLostHiddenFocusedModalAndDisabledPresses)
+{
+	for (const auto cancellation : {0u, 1u, 2u, 3u, 4u, 5u})
+	{
+		SCOPED_TRACE(::testing::Message() << "cancellation " << cancellation);
+		SceneParams params{base::DrawableParams(), base::MoveableParams(), base::SizeableParams({1400u, 900u})};
+		TestScene scene(params, {}); scene.PauseJobForTest();
+		auto station = MakeTestStation("button-lifetime"); scene.AddStationForTest(station);
+		auto take = EditorSelectionTestData::AddMidiTake(station, {4u}, 4);
+		scene.SetSelectionDepthForTest(Scene::VIEW_LOOPTAKE);
+		EditorSelectionTestData::PaintSelection(scene, take->GetMidiLoops()[0]->Model());
+		ASSERT_TRUE(take->IsSelected()); scene.SetHover3d({}, base::Action::MODIFIER_NONE);
+		if (cancellation == 4u) take->DeSelect(); // Disabled DOWN cannot arm a later enabled activation.
+		scene.RefreshEditorForTest(); ASSERT_TRUE(midi::LoopGridEditorTestAccess::ButtonVisible(scene.EditorForTest()));
+		scene.ExpectEditorButtonUncoveredForTest();
+		auto point = midi::LoopGridEditorTestAccess::ButtonPoint(scene.EditorForTest());
+		ASSERT_TRUE(scene.OnAction(MakeSceneTouch(TouchAction::TOUCH_DOWN, point, 0, LeftMouseButtonMask)).IsEaten);
+		EXPECT_EQ(cancellation != 4u, scene.EditorOwnsPointerForTest());
+		if (cancellation == 0u) scene.OnAction(MakeSceneTouchMove(point, 0u));
+		if (cancellation == 1u)
+		{
+			scene.SetSize({320u, 200u}); scene.RefreshEditorForTest();
+			EXPECT_FALSE(midi::LoopGridEditorTestAccess::ButtonVisible(scene.EditorForTest()));
+			scene.SetSize({1400u, 900u}); scene.RefreshEditorForTest();
+		}
+		if (cancellation == 2u) scene.OnInputFocusLost();
+		if (cancellation == 3u) scene.PopupForEditorTest();
+		if (cancellation == 4u) { take->Select(); scene.RefreshEditorForTest(); }
+		if (cancellation == 5u)
+		{
+			take->DeSelect(); scene.RefreshEditorForTest(); take->Select(); scene.RefreshEditorForTest();
+		}
+		EXPECT_FALSE(scene.EditorOwnsPointerForTest());
+		EXPECT_TRUE(midi::LoopGridEditorTestAccess::HasCancelledButtonRelease(scene.EditorForTest()));
+		// Unrelated pointer/wheel events cannot complete the canceled primary mouse press.
+		auto foreign = MakeSceneTouch(TouchAction::TOUCH_UP, point, 0, 0u); foreign.Touch = TouchAction::TOUCH_FINGER;
+		scene.OnAction(foreign); foreign.Touch = TouchAction::TOUCH_MOUSE; foreign.Index = 1; scene.OnAction(foreign);
+		scene.OnAction(MakeSceneWheel(1, point));
+		EXPECT_TRUE(midi::LoopGridEditorTestAccess::HasCancelledButtonRelease(scene.EditorForTest()));
+		point = midi::LoopGridEditorTestAccess::ButtonPoint(scene.EditorForTest());
+		EXPECT_TRUE(scene.OnAction(MakeSceneTouch(TouchAction::TOUCH_UP, point, 0, 0u)).IsEaten);
+		EXPECT_FALSE(scene.IsLoopGridEditorOpen());
+		EditorSelectionTestData::OpenButton(scene); EXPECT_EQ(take, scene.LoopGridEditorTake());
+	}
+}
+
+TEST(Scene, EditorButtonCancellationAllowsFreshWorldSelectionAndBlocksWriterReleaseActivation)
+{
+	SceneParams params{base::DrawableParams(), base::MoveableParams(), base::SizeableParams({1400u, 900u})};
+	TestScene scene(params, {}); scene.PauseJobForTest();
+	auto station = MakeTestStation("button-admission"); scene.AddStationForTest(station);
+	auto take = EditorSelectionTestData::AddMidiTake(station, {4u}, 4);
+	scene.SetSelectionDepthForTest(Scene::VIEW_LOOPTAKE);
+	const auto model = take->GetMidiLoops()[0]->Model();
+	EditorSelectionTestData::PaintSelection(scene, model); ASSERT_TRUE(take->IsSelected());
+	scene.RefreshEditorForTest(); const auto point = midi::LoopGridEditorTestAccess::ButtonPoint(scene.EditorForTest());
+	scene.OnAction(MakeSceneTouch(TouchAction::TOUCH_DOWN, point, 0, LeftMouseButtonMask));
+	scene.OnInputFocusLost(); ASSERT_FALSE(scene.EditorOwnsPointerForTest());
+	// A fresh primary DOWN elsewhere ends pending-only release ownership and routes normally.
+	EditorSelectionTestData::PaintSelection(scene, model); EXPECT_FALSE(take->IsSelected());
+	EditorSelectionTestData::PaintSelection(scene, model); ASSERT_TRUE(take->IsSelected());
+	scene.RefreshEditorForTest();
+	scene.OnAction(MakeSceneTouch(TouchAction::TOUCH_DOWN, point, 0, LeftMouseButtonMask));
+	ASSERT_TRUE(scene.EditorOwnsPointerForTest());
+	// Inject the actual Workspace admission value instead of acquiring a test-owned lifecycle writer.
+	EXPECT_TRUE(scene.WriterBlockedButtonReleaseForTest(MakeSceneTouch(TouchAction::TOUCH_UP, point, 0, 0u)));
+	EXPECT_FALSE(scene.IsLoopGridEditorOpen()); EXPECT_FALSE(scene.EditorOwnsPointerForTest());
+	EXPECT_FALSE(midi::LoopGridEditorTestAccess::HasCancelledButtonRelease(scene.EditorForTest()));
+	EditorSelectionTestData::OpenButton(scene); EXPECT_EQ(take, scene.LoopGridEditorTake());
+}
+
+TEST(Scene, EditorTakeEntryPrefersEligibleChannelFiveWhileLeafAndManualChoiceStayExplicit)
+{
+	SceneParams params{base::DrawableParams(), base::MoveableParams(), base::SizeableParams({1400u, 900u})};
+	TestScene scene(params, {}); scene.PauseJobForTest();
+	auto station = MakeTestStation("channel-five"); scene.AddStationForTest(station);
+	auto take = EditorSelectionTestData::AddMidiTake(station, {0u, 4u, 7u}, 4, true);
+	const auto empty = take->GetMidiLoops()[0], populated = take->GetMidiLoops()[1];
+	scene.SetSelectionDepthForTest(Scene::VIEW_LOOPTAKE);
+	EditorSelectionTestData::PaintSelection(scene, empty->Model());
+	ASSERT_TRUE(take->IsSelected());
+	EditorSelectionTestData::Hover(scene, empty->Model()); // Take-level empty channel 1 does not hide CC-only channel 5.
+	EditorSelectionTestData::OpenKey(scene); ASSERT_EQ(populated, scene.LoopGridEditorMidiLoop());
+	EXPECT_EQ(5u, midi::LoopGridEditorTestAccess::DisplayedChannel(scene.EditorForTest()));
+	EXPECT_TRUE(scene.EditorForTest().SelectMidiChannel(1u)); EXPECT_EQ(empty, scene.LoopGridEditorMidiLoop());
+	EXPECT_EQ(1u, midi::LoopGridEditorTestAccess::DisplayedChannel(scene.EditorForTest()));
+	EditorSelectionTestData::Close(scene);
+	scene.SetSelectionDepthForTest(Scene::VIEW_LOOP);
+	EditorSelectionTestData::Hover(scene, empty->Model());
+	EditorSelectionTestData::OpenKey(scene); ASSERT_EQ(empty, scene.LoopGridEditorMidiLoop());
+	EXPECT_EQ(1u, midi::LoopGridEditorTestAccess::DisplayedChannel(scene.EditorForTest()));
+	EditorSelectionTestData::Close(scene);
+	// New session starts without any selection recency from this editor.
+	TestScene replacement(params, {}); replacement.PauseJobForTest();
+	auto replacementStation = MakeTestStation("replacement"); replacement.AddStationForTest(replacementStation);
+	EditorSelectionTestData::AddMidiTake(replacementStation, {0u})->Select();
+	EditorSelectionTestData::AddMidiTake(replacementStation, {4u})->Select();
+	EditorSelectionTestData::OpenKey(replacement); EXPECT_FALSE(replacement.IsLoopGridEditorOpen());
+}
+
+TEST(Scene, MixedTakeEditorDefaultsToMidiButExplicitAudioHoverRemainsEligible)
+{
+	SceneParams params{base::DrawableParams(), base::MoveableParams(), base::SizeableParams({1400u, 900u})};
+	TestScene scene(params, {}); scene.PauseJobForTest();
+	auto station = MakeTestStation("mixed-editor"); scene.AddStationForTest(station);
+	auto take = EditorSelectionTestData::AddMidiTake(station, {0u, 4u, 7u}, 4);
+	const auto audio = take->AddLoop(0u, station->Name()); audio->Record();
+	std::vector<float> samples(constants::MaxLoopFadeSamps + 400u, 0.25f);
+	base::AudioWriteRequest write; write.samples = samples.data(); write.numSamps = static_cast<unsigned int>(samples.size());
+	write.stride = 1; write.fadeCurrent = 0.0f; write.fadeNew = 1.0f; write.source = base::Audible::AUDIOSOURCE_ADC;
+	audio->OnBlockWrite(write, 0); audio->EndWrite(write.numSamps, true); audio->Play(0u, 400u, false);
+	station->CommitChanges(); ASSERT_TRUE(audio->CanEditAudioSource());
+	scene.SetSelectionDepthForTest(Scene::VIEW_LOOPTAKE);
+	EditorSelectionTestData::PaintSelection(scene, take->GetMidiLoops()[0]->Model());
+	scene.SetHover3d({}, base::Action::MODIFIER_NONE);
+	EditorSelectionTestData::OpenKey(scene); ASSERT_EQ(take->GetMidiLoops()[1], scene.LoopGridEditorMidiLoop());
+	EXPECT_EQ(5u, midi::LoopGridEditorTestAccess::DisplayedChannel(scene.EditorForTest()));
+	EditorSelectionTestData::Close(scene);
+	EditorSelectionTestData::Hover(scene, audio);
+	EditorSelectionTestData::OpenKey(scene); EXPECT_EQ(audio, scene.LoopGridEditorAudioLoop());
+	EditorSelectionTestData::Close(scene);
+	// An incomplete populated stream cannot block the next eligible wired stream.
+	take->GetMidiLoops()[1]->StartRecord();
+	EditorSelectionTestData::Hover(scene, take->GetMidiLoops()[1]->Model());
+	EditorSelectionTestData::OpenKey(scene); ASSERT_EQ(take->GetMidiLoops()[0], scene.LoopGridEditorMidiLoop());
+	EXPECT_EQ(1u, midi::LoopGridEditorTestAccess::DisplayedChannel(scene.EditorForTest()));
+}
+
 TEST(Scene, MidiStreamSelectionPreservesPickedEditorIdentity) {
 	SceneParams sceneParams{ base::DrawableParams(), base::MoveableParams(),
 		base::SizeableParams({ 1400u, 900u }) };
@@ -2783,6 +3069,9 @@ TEST(Scene, MidiEditorDefaultsToFirstPopulatedWiredChannel) {
 	std::shared_ptr<midi::MidiLoop> candidate;
 	ASSERT_TRUE(scene.FindLoopGridEditorCandidateForTest(candidateTake, audioLoop, candidate));
 	EXPECT_EQ(loops[0], candidate); // All empty: first wired, not lowest channel number.
+	EditorSelectionTestData::OpenKey(scene); ASSERT_EQ(loops[0], scene.LoopGridEditorMidiLoop());
+	EXPECT_EQ(5u, midi::LoopGridEditorTestAccess::DisplayedChannel(scene.EditorForTest()));
+	EditorSelectionTestData::Close(scene);
 	const std::array events{midi::MidiEvent::MakeNoteOn(20u, 7u, 60u, 100u),
 		midi::MidiEvent::MakeNoteOff(40u, 7u, 60u)};
 	loops[2]->ReplaceRecordedEvents(events.data(), events.size(), 400u);
@@ -2791,6 +3080,9 @@ TEST(Scene, MidiEditorDefaultsToFirstPopulatedWiredChannel) {
 	loops[1]->ReplaceRecordedEvents(events.data(), events.size(), 400u);
 	ASSERT_TRUE(scene.FindLoopGridEditorCandidateForTest(candidateTake, audioLoop, candidate));
 	EXPECT_EQ(loops[1], candidate);
+	EditorSelectionTestData::OpenKey(scene); ASSERT_EQ(loops[1], scene.LoopGridEditorMidiLoop());
+	EXPECT_EQ(2u, midi::LoopGridEditorTestAccess::DisplayedChannel(scene.EditorForTest()));
+	EditorSelectionTestData::Close(scene);
 	std::vector<unsigned char> path;
 	for (const auto index : loops[0]->Model()->GlobalId())
 		path.push_back(static_cast<unsigned char>(index + 1u));

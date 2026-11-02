@@ -2,6 +2,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
+#include <utility>
 #include "glm/ext.hpp"
 #include "../graphics/LoopGridProjection.h"
 #include "../spectral/SpectralPicking.h"
@@ -14,7 +15,7 @@ LoopGridEditor::LoopGridEditor(Host host, utils::Size2d size) :
 	_host(std::move(host)),
 	_size(size)
 {
-	const auto buttonPos = _ButtonPosition(size);
+	const auto buttonPos = utils::Position2d{};
 
 	auto buttonParams = gui::GuiButtonParams::PanelButton(190u);
 	buttonParams.Text = "Edit loop (E)";
@@ -99,10 +100,10 @@ actions::ActionResult LoopGridEditor::_Eaten()
 	return eaten;
 }
 
-utils::Position2d LoopGridEditor::_ButtonPosition(utils::Size2d size)
+void LoopGridEditor::SetButtonArea(utils::Rect2d area)
 {
-	return { std::max(0, static_cast<int>(size.Width) - 202),
-		std::max(0, static_cast<int>(size.Height) - 42) };
+	_buttonArea = area;
+	_Layout();
 }
 
 float LoopGridEditor::_MidiRadius(std::uint32_t lengthSamps) noexcept
@@ -113,8 +114,13 @@ float LoopGridEditor::_MidiRadius(std::uint32_t lengthSamps) noexcept
 
 void LoopGridEditor::_Layout()
 {
-	const auto pos = _ButtonPosition(_size);
-	_button->SetPosition(pos);
+	const auto buttonSize = _button->GetSize();
+	const bool fits = !_buttonArea.IsEmpty() && _buttonArea.Right - _buttonArea.Left >= static_cast<int>(buttonSize.Width)
+		&& _buttonArea.Top - _buttonArea.Bottom >= static_cast<int>(buttonSize.Height);
+	const utils::Position2d position{_buttonArea.Right - static_cast<int>(buttonSize.Width), _buttonArea.Bottom};
+	if (!fits || position.X != _button->Position().X || position.Y != _button->Position().Y) _CancelButtonPress();
+	_button->SetVisible(fits);
+	if (fits) _button->SetPosition(position);
 	const int statusWidth = gui::GuiStyle::StatusBarWidth(static_cast<int>(_size.Width));
 	const int statusX = static_cast<int>(_size.Width) - statusWidth;
 	const int statusHeight = std::min(gui::GuiStyle::StatusBarHeight, static_cast<int>(_size.Height));
@@ -156,76 +162,108 @@ std::shared_ptr<MidiLoop> LoopGridEditor::_InitialMidiLoop(const engine::LoopTak
 	std::shared_ptr<MidiLoop> first;
 	for (const auto& loop : take.GetMidiLoops())
 	{
-		if (!loop || !loop->Model()) continue;
+		if (!loop || !loop->Model() || !loop->Model()->IsSelected() || loop->CompletedLengthForEditor() == 0u) continue;
 		if (!first) first = loop;
 		if (loop->EventCount() > 0u) return loop;
 	}
 	return first;
 }
 
+bool LoopGridEditor::_IsSelectedMemberLocked(const std::shared_ptr<base::GuiElement>& target) const
+{
+	if (!target || !target->IsSelected()) return false;
+	for (const auto& station : _host.Stations)
+	{
+		if (!station || station->MembershipRemoving()) continue;
+		for (const auto& take : station->GetLoopTakes())
+		{
+			if (!take || take->IsCaptureCancelled()) continue;
+			if (target == take) return true;
+			for (const auto& loop : take->GetLoops()) if (target == loop) return true;
+			for (const auto& loop : take->GetMidiLoops()) if (loop && target == loop->Model()) return true;
+		}
+	}
+	return false;
+}
+
+void LoopGridEditor::SelectionCommittedLocked(std::span<const std::shared_ptr<base::GuiElement>> selected)
+{
+	std::erase_if(_selectionHistory, [this](const auto& weak) { return !_IsSelectedMemberLocked(weak.lock()); });
+	for (const auto& target : selected)
+	{
+		if (!_IsSelectedMemberLocked(target)) continue;
+		std::erase_if(_selectionHistory, [&target](const auto& weak) { return weak.lock() == target; });
+		_selectionHistory.push_back(target);
+	}
+}
+
 bool LoopGridEditor::FindCandidate(std::shared_ptr<engine::LoopTake>& take,
 	std::shared_ptr<engine::Loop>& audioLoop,
 	std::shared_ptr<MidiLoop>& midiLoop) const
 {
-	const auto hovered = _host.Hovered ? _host.Hovered() : nullptr;
+	const auto hovered = !(_button->IsVisible() && _pointerOverButton) && _host.Hovered ? _host.Hovered() : nullptr;
 	std::scoped_lock lock(_host.SceneMutex);
 	const bool selectStreams = !_host.SelectionDepth || _host.SelectionDepth() == base::DEPTH_LOOP;
+	struct Candidate
+	{
+		std::shared_ptr<engine::LoopTake> Take;
+		std::shared_ptr<engine::Loop> Audio;
+		std::shared_ptr<MidiLoop> Midi;
+	};
+	Candidate fallback, recent, hover;
 	unsigned int fallbackCount = 0u;
+	std::size_t recentRank = 0u;
+	const auto consider = [&](Candidate candidate, bool isHovered) {
+		if (!_UnavailableReason(candidate.Take, candidate.Audio, candidate.Midi).empty()) return;
+		++fallbackCount; fallback = candidate;
+		if (isHovered) hover = candidate;
+		const std::shared_ptr<base::GuiElement> leaf = candidate.Audio
+			? std::static_pointer_cast<base::GuiElement>(candidate.Audio) : candidate.Midi->Model();
+		for (std::size_t index = 0u; index < _selectionHistory.size(); ++index)
+			if (const auto target = _selectionHistory[index].lock(); target &&
+				(target == leaf || target == candidate.Take ||
+					(!selectStreams && target->IsSelected() && target->Parent() == candidate.Take)) && index + 1u > recentRank)
+			{
+				recentRank = index + 1u; recent = candidate;
+			}
+	};
 	for (const auto& station : _host.Stations)
 	{
+		if (!station || station->MembershipRemoving()) continue;
 		for (const auto& candidateTake : station->GetLoopTakes())
 		{
-			if (!candidateTake || !candidateTake->IsSelected())
-				continue;
+			if (!candidateTake || !candidateTake->IsSelected() || candidateTake->IsCaptureCancelled()) continue;
+			const auto initial = selectStreams ? nullptr : _InitialMidiLoop(*candidateTake);
 			for (const auto& candidate : candidateTake->GetLoops())
+				if (candidate && candidate->IsSelected())
+				{
+					const bool isHovered = hovered && (hovered == candidate || hovered->Parent() == candidate);
+					// Take selection chooses its MIDI stream first; an explicit audio hover still wins.
+					if (selectStreams || !initial || isHovered) consider({candidateTake, candidate, {}}, isHovered);
+				}
+			if (!selectStreams)
 			{
-				if (!candidate)
-					continue;
-				if (candidate->IsSelected() && hovered
-					&& (hovered == candidate || hovered->Parent() == candidate))
-				{
-					take = candidateTake;
-					audioLoop = candidate;
-					midiLoop.reset();
-					return true;
-				}
-				if (candidate->IsSelected())
-				{
-					++fallbackCount;
-					take = candidateTake;
-					audioLoop = candidate;
-					midiLoop.reset();
-				}
+				bool hoveredTake = false;
+				for (const auto& candidate : candidateTake->GetMidiLoops())
+					if (candidate && candidate->Model() && candidate->Model()->IsSelected() && hovered &&
+						(hovered == candidate->Model() || hovered->Parent() == candidate->Model())) hoveredTake = true;
+				if (initial) consider({candidateTake, {}, initial}, hoveredTake);
 			}
-			bool countedMidiForTake = false;
-			for (const auto& candidate : candidateTake->GetMidiLoops())
-			{
-				if (!candidate)
-					continue;
-				if (candidate->Model() && candidate->Model()->IsSelected() && hovered
-					&& (hovered == candidate->Model() || hovered->Parent() == candidate->Model()))
-				{
-					take = candidateTake;
-					audioLoop.reset();
-					midiLoop = candidate;
-					return true;
-				}
-				if (candidate->Model() && candidate->Model()->IsSelected()
-					&& (selectStreams || !countedMidiForTake))
-				{
-					countedMidiForTake = true;
-					++fallbackCount;
-					take = candidateTake;
-					audioLoop.reset();
-					// Whole-take selection has a default channel; loop-depth selection
-					// counts each stream independently and requires disambiguation.
-					const auto initial = selectStreams ? nullptr : _InitialMidiLoop(*candidateTake);
-					midiLoop = initial && initial->Model()->IsSelected() ? initial : candidate;
-				}
-			}
+			else
+				for (const auto& candidate : candidateTake->GetMidiLoops())
+					if (candidate && candidate->Model() && candidate->Model()->IsSelected())
+						consider({candidateTake, {}, candidate}, hovered &&
+							(hovered == candidate->Model() || hovered->Parent() == candidate->Model()));
 		}
 	}
-	return fallbackCount == 1u;
+	const auto& chosen = hover.Take ? hover : recent.Take ? recent : fallback;
+	if (!hover.Take && !recent.Take && fallbackCount != 1u)
+	{
+		take.reset(); audioLoop.reset(); midiLoop.reset();
+		return false;
+	}
+	take = chosen.Take; audioLoop = chosen.Audio; midiLoop = chosen.Midi;
+	return true;
 }
 
 std::string LoopGridEditor::_UnavailableReason(const std::shared_ptr<engine::LoopTake>& take,
@@ -458,7 +496,7 @@ void LoopGridEditor::Close()
 	_ClearIdleHover(true);
 	_EndOrbit();
 	_revisionCursor.reset();
-	_buttonPressed = false;
+	_CancelButtonPress();
 	_audioEditor.Close();
 	_state = State::Closing;
 	_host.Camera.RestoreEditorReturnState(_returnCamera);
@@ -1142,7 +1180,7 @@ void LoopGridEditor::CancelInput()
 	_CancelGesture();
 	_EndOrbit();
 	_ClearIdleHover(true);
-	_buttonPressed = false;
+	_CancelButtonPress();
 	_channelDragging = false;
 	_channelInput->ClearFocus();
 }
@@ -1293,8 +1331,10 @@ void LoopGridEditor::UpdateUi(const glm::mat4& viewProjection)
 		const auto hasCandidate = FindCandidate(take, audioLoop, midiLoop);
 		const auto reason = hasCandidate
 			? _UnavailableReason(take, audioLoop, midiLoop)
-			: std::string{};
-		_button->SetEnabled(hasCandidate && reason.empty());
+			: std::string{"Select a completed loop to edit"};
+		const bool enabled = hasCandidate && reason.empty();
+		if (!enabled) _CancelButtonPress();
+		_button->SetEnabled(enabled);
 		_SetFeedback(reason);
 	}
 	else
@@ -1304,7 +1344,6 @@ void LoopGridEditor::UpdateUi(const glm::mat4& viewProjection)
 		_button->SetText(showsClose ? "Close editor (Esc)" : "Edit loop (E)");
 		_buttonShowsClose = showsClose;
 	}
-	_button->SetVisible(false);
 }
 
 void LoopGridEditor::ApplyToModels()
@@ -1346,6 +1385,7 @@ void LoopGridEditor::ApplyToModels()
 void LoopGridEditor::Draw(base::DrawContext& ctx)
 {
 	_feedback->Draw(ctx);
+	_button->Draw(ctx);
 	if (IsOpen() && !_audioLoop.expired()) _modeLabel->Draw(ctx);
 
 	if (IsOpen() && !_midiLoop.expired())
@@ -1356,16 +1396,42 @@ void LoopGridEditor::Draw(base::DrawContext& ctx)
 
 }
 
+void LoopGridEditor::_CancelButtonPress()
+{
+	_consumeButtonRelease = _consumeButtonRelease || _buttonPressed;
+	_buttonPressed = false;
+	_button->ClearPointerState();
+}
+
+bool LoopGridEditor::ConsumeCancelledButtonRelease(const actions::TouchAction& action)
+{
+	if (action.Touch != actions::TouchAction::TOUCH_MOUSE || action.Index != 0) return false;
+	if (action.State == actions::TouchAction::TOUCH_DOWN) { _consumeButtonRelease = false; return false; }
+	return std::exchange(_consumeButtonRelease, false);
+}
+
 bool LoopGridEditor::_HandleButton(actions::TouchAction action)
 {
+	if (ConsumeCancelledButtonRelease(action)) return true;
+	if (action.Touch == actions::TouchAction::TOUCH_MOUSE && action.Index == 4) return _buttonPressed;
+	if (_buttonPressed && (action.Touch != actions::TouchAction::TOUCH_MOUSE || action.Index != 0))
+	{
+		_CancelButtonPress();
+		return true;
+	}
 	if (!_button->IsVisible() || State::Closing == _state)
 		return false;
 	const auto inside = _button->HitTest(_button->GlobalToLocal(action.Position));
 	if (actions::TouchAction::TOUCH_DOWN == action.State && 0 == action.Index
 		&& action.Touch == actions::TouchAction::TOUCH_MOUSE && inside)
 	{
-		_buttonPressed = true;
-		_button->OnAction(_button->GlobalToLocal(action));
+		const auto result = _button->OnAction(_button->GlobalToLocal(action));
+		_buttonPressed = _button->IsEnabled() && result.IsEaten;
+		if (!_buttonPressed)
+		{
+			_consumeButtonRelease = true;
+			_SetFeedback("Select a completed loop to edit");
+		}
 		return true;
 	}
 	if (actions::TouchAction::TOUCH_UP == action.State && _buttonPressed
@@ -1382,8 +1448,9 @@ bool LoopGridEditor::_HandleButton(actions::TouchAction action)
 				std::shared_ptr<engine::LoopTake> take;
 				std::shared_ptr<engine::Loop> audioLoop;
 				std::shared_ptr<MidiLoop> midiLoop;
-				if (_button->IsEnabled() && FindCandidate(take, audioLoop, midiLoop))
+				if (FindCandidate(take, audioLoop, midiLoop))
 					Open(take, audioLoop, midiLoop);
+				else _SetFeedback("Select a completed loop to edit");
 			}
 		}
 		return true;
@@ -1393,6 +1460,8 @@ bool LoopGridEditor::_HandleButton(actions::TouchAction action)
 
 std::optional<actions::ActionResult> LoopGridEditor::OnAction(actions::TouchAction action)
 {
+	if (action.Touch == actions::TouchAction::TOUCH_MOUSE)
+		_pointerOverButton = _button->IsVisible() && _button->HitTest(_button->GlobalToLocal(action.Position));
 	_CheckGesture();
 	const auto isMouse = action.Touch == actions::TouchAction::TOUCH_MOUSE;
 	if (_pointerOwned)
@@ -1540,6 +1609,15 @@ std::optional<actions::ActionResult> LoopGridEditor::OnAction(actions::TouchActi
 
 std::optional<actions::ActionResult> LoopGridEditor::OnAction(actions::TouchMoveAction action)
 {
+	if (action.Touch == actions::TouchAction::TOUCH_MOUSE)
+		_pointerOverButton = _button->IsVisible() && _button->HitTest(_button->GlobalToLocal(action.Position));
+	if (_buttonPressed)
+	{
+		if (action.Origin == actions::TouchMoveAction::Provenance::CaptureCancellation ||
+			action.Touch != actions::TouchAction::TOUCH_MOUSE || (action.MouseButtonsDown & 1u) == 0u) _CancelButtonPress();
+		else _button->OnAction(_button->GlobalToLocal(action));
+		return _Eaten();
+	}
 	if (!_pointerOwned) _audioBandPreview = (action.Modifiers & base::Action::MODIFIER_ALT) != 0;
 	if (!IsEngaged()) return std::nullopt;
 	_CheckGesture();
@@ -1550,7 +1628,6 @@ std::optional<actions::ActionResult> LoopGridEditor::OnAction(actions::TouchMove
 		SelectMidiChannel(static_cast<unsigned int>(std::lround(_channelInput->Value())));
 		return _Eaten();
 	}
-	if (0u == (action.MouseButtonsDown & 1u)) _buttonPressed = false;
 	if (_pointerOwned && (action.Touch != actions::TouchAction::TOUCH_MOUSE
 		|| 0u == (action.MouseButtonsDown & (1u << _pointerButton))))
 	{
@@ -1669,6 +1746,6 @@ std::optional<actions::ActionResult> LoopGridEditor::TryOpenFromKey(const action
 	if (FindCandidate(take, audioLoop, midiLoop))
 		Open(take, audioLoop, midiLoop);
 	else
-		_SetFeedback("Select and hover one loop to edit");
+		_SetFeedback("Select a completed loop to edit");
 	return _Eaten();
 }

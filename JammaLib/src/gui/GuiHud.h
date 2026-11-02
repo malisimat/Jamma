@@ -124,6 +124,7 @@ namespace gui
 		void SetClockStatus(unsigned long masterLengthSamps, midi::MidiQuantisationFraction fraction);
 		void SetPerformanceGroupFeedback(const std::string& text);
 		utils::Rect2d OccupiedTopStripBounds() const;
+		utils::Rect2d OccupiedRightRailBounds() const;
 		void SetTopPanelLayout(GuiTopPanelLayout layout);
 		void SetEditModeAlpha(float alpha) noexcept { _editModeAlpha = std::clamp(alpha, 0.0f, 1.0f); }
 		bool HasCableDrag() const noexcept { return _cableDrag.has_value(); }

@@ -239,7 +239,13 @@ bool HierarchySelection::HasSelection(const LockedStations& view)
 HierarchySelection::Outcome HierarchySelection::ApplyLocked(const LockedStations& view, const EditBatch& batch)
 {
 	Outcome outcome{ batch.ClearSelection };
-	if (batch.ClearSelection) Clear(view);
+	std::array<bool, 2> selectedBeforeClear{};
+	if (batch.ClearSelection)
+	{
+		for (std::size_t index = 0u; index < batch.ChangeCount; ++index)
+			if (const auto target = Resolve(view, batch.Changes[index].Path)) selectedBeforeClear[index] = target->IsSelected();
+		Clear(view);
+	}
 	for (std::size_t index = 0u; index < batch.ChangeCount; ++index)
 	{
 		const auto& change = batch.Changes[index];
@@ -248,7 +254,11 @@ HierarchySelection::Outcome HierarchySelection::ApplyLocked(const LockedStations
 			if (auto target = Resolve(view, change.Path))
 			{
 				outcome.CollapseRacks = true;
+				const bool wasSelected = target->IsSelected();
 				SetSelected(view, target, batch.Depth, change.Operation == Edit::Select);
+				// Exclusive clear/reselect and repeated paint do not create new recency.
+				if (!wasSelected && !selectedBeforeClear[index] && target->IsSelected())
+					outcome.NewlySelected[outcome.NewlySelectedCount++] = target;
 			}
 		}
 		else SetMuted(view, change.Path, change.Operation == Edit::Mute);

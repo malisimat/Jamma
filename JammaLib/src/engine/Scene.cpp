@@ -1049,6 +1049,7 @@ void Scene::_ResetSessionWhileQuiescent()
 	// are stopped before resetting trigger queues or retiring take material.
 	DisconnectNinjam();
 	_workspace->Editor().Close();
+	_workspace->Editor().ClearSelectionHistory();
 	_workspace->CancelBackgroundClick();
 	// Slider cancellation can notify Scene; finish it before taking the scene lock.
 	_workspace->Settings().Offset()->ClearPointerState();
@@ -1631,8 +1632,10 @@ void Scene::_RestoreGroupSelectionDepthLocked()
 void Scene::_ExecuteGroupCommandLocked(bool selection, GroupCommand command, std::size_t slot)
 {
 	_performanceGroups.Acknowledge(_audioEngine->GroupMuteReceipt());
+	_workspace->Editor().SelectionCommittedLocked({});
 	_performanceGroups.Execute(selection, command, slot, _stations, _GroupSelectionDepthLocked(),
 		[this](auto application) { _PublishGroupMuteApplication(std::move(application)); });
+	_workspace->Editor().SelectionCommittedLocked({});
 	if (selection && command == GroupCommand::RecallOrStore) _RestoreGroupSelectionDepthLocked();
 	if (_workspace->SelectionPanel()) _workspace->SelectionPanel()->RefreshPerformanceGroups(_performanceGroups.Groups());
 	_workspace->InvalidateHover2d();
@@ -2191,9 +2194,11 @@ std::optional<ActionResult> Scene::_HandleKeyboardCommand(gui::Workspace::Keyboa
 	{
 		std::scoped_lock lock(_sceneMutex);
 		_performanceGroups.Acknowledge(_audioEngine->GroupMuteReceipt());
+		_workspace->Editor().SelectionCommittedLocked({});
 		if (_performanceGroups.HandleKey(action, _stations, _GroupSelectionDepthLocked(),
 			[this](auto application) { _PublishGroupMuteApplication(std::move(application)); }))
 		{
+			_workspace->Editor().SelectionCommittedLocked({});
 			if (_workspace->SelectionPanel()) _workspace->SelectionPanel()->RefreshPerformanceGroups(_performanceGroups.Groups());
 			return ActionResult{ true, {}, {}, ACTIONRESULT_DEFAULT, nullptr, {} };
 		}

@@ -45,7 +45,12 @@ namespace engine
 			std::size_t ChangeCount = 0u;
 			Appearance Presentation;
 		};
-		struct Outcome { bool CollapseRacks = false; };
+		struct Outcome
+		{
+			bool CollapseRacks = false;
+			std::array<std::shared_ptr<base::GuiElement>, 2> NewlySelected{};
+			std::size_t NewlySelectedCount = 0u;
+		};
 		static Outcome ApplyLocked(const LockedStations& view, const EditBatch& batch);
 		static void ApplyAppearance(const LockedStations& view, const Appearance& appearance);
 		static std::shared_ptr<base::GuiElement> Resolve(const LockedStations& view, const std::vector<unsigned char>& path);

@@ -6,6 +6,7 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <span>
 #include <string>
 #include <vector>
 #include <glm/glm.hpp>
@@ -62,6 +63,7 @@ namespace midi
 		void InitResources(resources::ResourceLib& resourceLib, bool forceInit);
 		void ReleaseResources();
 		void SetSize(utils::Size2d size);
+		void SetButtonArea(utils::Rect2d area);
 
 		bool Open(const std::shared_ptr<engine::LoopTake>& take,
 			const std::shared_ptr<engine::Loop>& audioLoop,
@@ -71,6 +73,9 @@ namespace midi
 		void UpdateUi(const glm::mat4& viewProjection);
 		void ApplyToModels();
 		void Draw(base::DrawContext& ctx);
+		// Caller holds Host::SceneMutex; receives committed selection identities, never hover.
+		void SelectionCommittedLocked(std::span<const std::shared_ptr<base::GuiElement>> selected);
+		void ClearSelectionHistory() { _selectionHistory.clear(); }
 		bool FindCandidate(std::shared_ptr<engine::LoopTake>& take,
 			std::shared_ptr<engine::Loop>& audioLoop,
 			std::shared_ptr<MidiLoop>& midiLoop) const;
@@ -94,7 +99,9 @@ namespace midi
 			: _gesture ? _gesture->EditHandle() : _editHandle; }
 		bool NumericCursorAt(utils::Position2d point) const
 		{ return IsReady() && (_channelDragging || (_channelInput->IsVisible() && _channelInput->HitTest(_channelInput->ParentToLocal(point)))); }
-		bool OwnsPointer() const noexcept { return _pointerOwned; }
+		bool OwnsPointer() const noexcept { return _pointerOwned || _buttonPressed; }
+		bool OwnsButtonInput() const noexcept { return _buttonPressed || _consumeButtonRelease; }
+		bool ConsumeCancelledButtonRelease(const actions::TouchAction& action);
 		bool IsOrbitDragging() const noexcept { return _orbitDragging; }
 		float Morph() const noexcept { return _blend; }
 		float SurroundingDim() const noexcept { return 1.0f - 0.72f * _blend; }
@@ -104,6 +111,7 @@ namespace midi
 		std::shared_ptr<engine::LoopTake> Take() const noexcept { return _take.lock(); }
 
 	private:
+		friend class LoopGridEditorTestAccess;
 		enum class State { Closed, Opening, Active, Closing };
 		struct CursorEntry
 		{
@@ -112,17 +120,19 @@ namespace midi
 		};
 
 		static actions::ActionResult _Eaten();
-		static utils::Position2d _ButtonPosition(utils::Size2d size);
 		static float _MidiRadius(std::uint32_t lengthSamps) noexcept;
 		static std::shared_ptr<MidiLoop> _InitialMidiLoop(const engine::LoopTake& take);
 
 		void _Layout();
 		void _SetFeedback(const std::string& message);
+		void _CancelButtonPress();
 		void _ResetTarget();
 		std::string _UnavailableReason(const std::shared_ptr<engine::LoopTake>& take,
 			const std::shared_ptr<engine::Loop>& audioLoop,
 			const std::shared_ptr<MidiLoop>& midiLoop) const;
 		bool _Validate() const;
+		bool _IsSelectedMemberLocked(const std::shared_ptr<base::GuiElement>& target) const;
+		std::vector<std::weak_ptr<base::GuiElement>> _selectionHistory;
 		void _AcquireRevisionCursor(const std::shared_ptr<MidiLoop>& midiLoop);
 		void _FitPitchRange(const std::shared_ptr<MidiLoop>& midiLoop);
 		glm::mat4 _ModelMatrix() const;
@@ -199,6 +209,9 @@ namespace midi
 		float _blend = 0.0f;
 		float _audioSurfaceBlend = 0.0f;
 		bool _buttonPressed = false;
+		bool _consumeButtonRelease = false;
+		bool _pointerOverButton = false;
+		utils::Rect2d _buttonArea{};
 		bool _buttonShowsClose = false;
 		LoopGridGeometry::EditHandle _editHandle = LoopGridGeometry::EditHandle::None;
 		bool _pointerOwned = false;

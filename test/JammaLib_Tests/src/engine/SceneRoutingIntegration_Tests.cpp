@@ -1,4 +1,5 @@
 #include "../gui/WorkspaceTestAccess.h"
+#include "../gui/LoopGridEditorTestAccess.h"
 #include "gtest/gtest.h"
 #include "../../TestPaths.h"
 #include <algorithm>
@@ -340,6 +341,8 @@ namespace engine
 			scene._workspace->CollapseRacksLocked(scene._stations);
 			EXPECT_FALSE(gui::WorkspaceTestAccess::HasCapture(*scene._workspace));
 		}
+		static std::size_t EditorSelectionHistory(const Scene& scene)
+		{ return midi::LoopGridEditorTestAccess::SelectionHistorySize(scene._workspace->Editor()); }
 		static std::shared_ptr<gui::GuiSlider> PhaseSetting(Scene& scene)
 		{
 			// FreshScene's compact window is not a dependable settings input viewport.
@@ -2807,6 +2810,14 @@ TEST_F(SceneRoutingIntegrationTest, ResetAllConfirmationCancellationAndSerialize
     Access::SetClock(*scene);
     Access::SetResetQuantisationState(*scene);
     const auto phaseSlider = Access::PhaseSetting(*scene); phaseSlider->SetValue(0.375, false);
+    Access::SetDepth(*scene, engine::Scene::VIEW_LOOPTAKE);
+    std::vector<unsigned char> selectedTakePath;
+    for (const auto index : take->GlobalId()) selectedTakePath.push_back(static_cast<unsigned char>(index + 1u));
+    scene->SetHover3d(selectedTakePath, base::Action::MODIFIER_NONE);
+    actions::TouchAction selectTake; selectTake.Position = Access::CanvasPoint(*scene);
+    selectTake.State = actions::TouchAction::TOUCH_DOWN; scene->OnAction(selectTake);
+    selectTake.State = actions::TouchAction::TOUCH_UP; scene->OnAction(selectTake);
+    ASSERT_TRUE(take->IsSelected()); ASSERT_GT(Access::EditorSelectionHistory(*scene), 0u);
     station->SetStationPhaseOffsetSamps(-123);
     stations.back()->SetStationPhaseOffsetSamps(456);
     scene->Controls().SetCurrentJamPath(L"previous/001.jam"); scene->Controls().SetSessionSaveFolder(L"previous");
@@ -2818,6 +2829,7 @@ TEST_F(SceneRoutingIntegrationTest, ResetAllConfirmationCancellationAndSerialize
     EXPECT_EQ(96000ul, Access::ClockLength(*scene)); EXPECT_EQ(L"previous/001.jam", scene->Controls().CurrentJamPath());
     EXPECT_EQ(321, Access::GlobalPhase(*scene));
     EXPECT_DOUBLE_EQ(0.375, phaseSlider->Value());
+    EXPECT_GT(Access::EditorSelectionHistory(*scene), 0u);
     EXPECT_EQ(-123, station->StationPhaseOffsetSamps());
     EXPECT_EQ(456, stations.back()->StationPhaseOffsetSamps());
     for (const auto& retained : stations) EXPECT_EQ(321, retained->GlobalPhaseOffsetSamps());
@@ -2846,6 +2858,7 @@ TEST_F(SceneRoutingIntegrationTest, ResetAllConfirmationCancellationAndSerialize
     ASSERT_TRUE(Access::ControlIdle(*scene));
     EXPECT_TRUE(station->GetLoopTakeSnapshot().empty());
     EXPECT_DOUBLE_EQ(0.0, phaseSlider->Value());
+    EXPECT_EQ(0u, Access::EditorSelectionHistory(*scene));
     EXPECT_DOUBLE_EQ(0.0, station->TransportOffsetLoopFrac());
     phasePress.State = actions::TouchAction::TOUCH_UP; phasePress.Position = phaseMove.Position;
     scene->OnAction(phasePress); // Old captured release cannot restore the pre-reset target.

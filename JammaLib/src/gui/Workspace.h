@@ -153,7 +153,7 @@ namespace gui
 		{ _camera.SetInteractionEligibility(eligible, held, recordings, utils::Timer::GetTime()); }
 		void RegisterStationLocked(std::size_t index, const std::shared_ptr<engine::Station>& station)
 		{ _camera.RegisterStation(index, station, station->LoopTakeRevision()); }
-		void UpdateEditorUi() { _editor->UpdateUi(_viewProj); }
+		void UpdateEditorUi();
 		void CloseTakeDitch() { _popupManager.Close(_takeDitchDialog); }
 		void CloseStationRemoval() { _popupManager.Close(_stationDeleteDialog); }
 		void PumpNativeControls() { _racks->Pump(); _runtimeDialogs.Pump(_popupManager, _size, _runtimeRendererReady); }
@@ -166,7 +166,7 @@ namespace gui
 		void SynchronizeTempoPrompt(const std::optional<ninjam::NinjamTempoProposal>& prompt) { _tempoPrompt.Synchronize(prompt, _popupManager, _size); }
 		glm::mat4 ViewProjection() const noexcept { return _viewProj; }
 		bool RequestFocus(const std::shared_ptr<base::GuiElement>& editor) { return _focusManager.RequestFocus(editor); }
-		void OpenPopup(std::shared_ptr<base::GuiElement> popup) { _popupManager.Open(std::move(popup)); }
+		void OpenPopup(std::shared_ptr<base::GuiElement> popup) { if (_editor) _editor->CancelInput(); _popupManager.Open(std::move(popup)); }
 		void ClosePopups() { _popupManager.CloseAll(); }
 		void CloseTopPopup() { _popupManager.Close(); }
 		bool IsSelectionMutePressed() const { return _selector->IsMutePressed(); }

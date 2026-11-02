@@ -503,6 +503,13 @@ void GuiHud::SetTopPanelLayout(GuiTopPanelLayout layout)
 	if (layout.Viewport == GetSize()) _LayoutPanels();
 }
 
+Rect2d GuiHud::OccupiedRightRailBounds() const
+{
+	if (!_triggerRail || !_triggerRail->IsVisible()) return {};
+	const auto position = _triggerRail->GlobalPosition(); const auto size = _triggerRail->GetSize();
+	return {position.X, position.Y, position.X + static_cast<int>(size.Width), position.Y + static_cast<int>(size.Height)};
+}
+
 Rect2d GuiHud::OccupiedTopStripBounds() const
 {
 	if (!_topStrip || !_topStrip->IsVisible()) return {};

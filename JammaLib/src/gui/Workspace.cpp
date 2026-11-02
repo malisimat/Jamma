@@ -545,6 +545,10 @@ bool Workspace::AdvancePresentationLocked(const std::vector<std::shared_ptr<Stat
 
 actions::ActionResult Workspace::OnTouch(actions::TouchAction action, StationAccess access, const InputPresentation& presentation)
 {
+	if (presentation.Quitting || presentation.WriterHeld || presentation.RigSaveDialogOpen || _popupManager.IsOpen() || EditControlsSuppressed())
+		_editor->CancelInput();
+	// Finish only the canceled primary release even when normal activation is blocked.
+	if (_editor->ConsumeCancelledButtonRelease(action)) return {true, {}, {}, ACTIONRESULT_DEFAULT, nullptr, {}};
 	if (_popupManager.ConsumeDismissedRelease(action))
 	{
 		_pointer.ReleaseCapture(); _pointer.ClearConsumedRelease();
@@ -560,6 +564,8 @@ actions::ActionResult Workspace::OnTouch(actions::TouchAction action, StationAcc
 
 actions::ActionResult Workspace::OnMove(actions::TouchMoveAction action, StationAccess access, const InputPresentation& presentation)
 {
+	if (presentation.Quitting || presentation.WriterHeld || presentation.RigSaveDialogOpen || _popupManager.IsOpen() || EditControlsSuppressed())
+		_editor->CancelInput();
 	const auto result = _OnPointerMove(action, access, presentation);
 	if (action.Origin == TouchMoveAction::Provenance::DeliveredPointer
 		&& (!_cameraPointerPreservesIdle || action.MouseButtonsDown == 0u)) _camera.HumanActivity(Timer::GetTime());
@@ -584,7 +590,13 @@ actions::ActionResult Workspace::_OnPointerAction(actions::TouchAction action, S
 	action.SetUserConfig(presentation.Config);
 	_cursorPos = action.Position;
 	InvalidateHover2d();
-	if (presentation.RigSaveDialogOpen) return { true, {}, {}, ACTIONRESULT_DEFAULT, nullptr, {} };
+	if (presentation.RigSaveDialogOpen) { _editor->CancelInput(); return { true, {}, {}, ACTIONRESULT_DEFAULT, nullptr, {} }; }
+	// The editor button owns its press and canceled release before panel/HUD routing.
+	if (_editor->OwnsButtonInput())
+	{
+		if (_popupManager.IsOpen() || EditControlsSuppressed()) _editor->CancelInput();
+		if (auto result = _editor->OnAction(action)) return *result;
+	}
 	if (const auto rack = std::dynamic_pointer_cast<gui::GuiVstRack>(_pointer.Captured()))
 	{
 		if (_popupManager.IsOpen() || _editor->IsEngaged() || EditControlsSuppressed())
@@ -838,6 +850,11 @@ actions::ActionResult Workspace::_OnPointerMove(actions::TouchMoveAction action,
 	action.SetActionTime(Timer::GetTime());
 	action.SetUserConfig(presentation.Config);
 	_cursorPos = action.Position;
+	if (_editor->OwnsButtonInput())
+	{
+		if (_popupManager.IsOpen() || EditControlsSuppressed()) _editor->CancelInput();
+		if (auto result = _editor->OnAction(action)) return *result;
+	}
 	InvalidateHover2d();
 	if (_selector->OwnsBackgroundClick())
 	{
@@ -966,6 +983,7 @@ bool Workspace::BackgroundSelectionPreviewActive(StationAccess access, const Inp
 void Workspace::_SelectAllLocalLocked(StationAccess access, const InputPresentation& presentation)
 {
 	CollapseRacksLocked(access.Stations);
+	_editor->SelectionCommittedLocked({}); // Prune before aggregate selection can reselect old identities.
 	HierarchySelection::SelectAllLocal(HierarchySelection::BorrowLocked(access.Stations), _selector->CurrentSelectDepth());
 }
 
@@ -1177,7 +1195,12 @@ void Workspace::UpdateSelection(actions::ActionResultType res, StationAccess acc
 			change.Edit == Edit::Mute ? HierarchySelection::Edit::Mute : HierarchySelection::Edit::Unmute;
 		batch.Changes[index] = { operation, change.Path };
 	}
-	if (HierarchySelection::ApplyLocked(view, batch).CollapseRacks) CollapseRacksLocked(access.Stations);
+	const auto outcome = HierarchySelection::ApplyLocked(view, batch);
+	if (outcome.CollapseRacks)
+	{
+		_editor->SelectionCommittedLocked({outcome.NewlySelected.data(), outcome.NewlySelectedCount});
+		CollapseRacksLocked(access.Stations);
+	}
 
 	if (auto hovered = _ChildFromPathLocked(_selector->CurrentHover(), access))
 	{
@@ -1272,6 +1295,27 @@ bool Workspace::_HasSelectionLocked(StationAccess access)
 	return HierarchySelection::HasSelection(HierarchySelection::BorrowLocked(access.Stations));
 }
 
+
+void Workspace::UpdateEditorUi()
+{
+	const int bottom = GuiStyle::StatusBarHeight + 8;
+	Rect2d area{8, bottom, static_cast<int>(_size.Width) - 8, bottom + static_cast<int>(GuiButtonParams::DefaultHeight)};
+	const auto avoidLeft = [&area](const Rect2d& occupied) {
+		if (!occupied.IsEmpty() && occupied.Bottom < area.Top && occupied.Top > area.Bottom)
+			area.Left = std::max(area.Left, occupied.Right + 8);
+	};
+	if (_mainPanel) avoidLeft(_mainPanel->PresentedFrameBounds().Translated(_mainPanel->GlobalPosition()));
+	if (_selectionPanel) avoidLeft(_selectionPanel->PresentedFrameBounds().Translated(_selectionPanel->GlobalPosition()));
+	if (_hudPanel)
+	{
+		avoidLeft(_hudPanel->OccupiedTopStripBounds());
+		const auto rail = _hudPanel->OccupiedRightRailBounds();
+		if (!rail.IsEmpty()) area.Right = std::min(area.Right, rail.Left - 8);
+	}
+	if (area.Top > static_cast<int>(_size.Height) || area.Right <= area.Left) area = {};
+	_editor->SetButtonArea(area);
+	_editor->UpdateUi(_viewProj);
+}
 
 void Workspace::InitializeEditor(std::mutex& mutex, const std::vector<std::shared_ptr<Station>>& stations, std::function<void()> onOpened)
 {
