@@ -8,6 +8,7 @@ namespace gui
 	{
 	public:
 		template<class T> static decltype(auto) Camera(T& owner) { return (owner._camera); }
+		static bool HasCapture(const Workspace& owner) { return owner._pointer.HasCapture(); }
 		static void SetProjection(Workspace& owner, glm::mat4 projection) { owner._viewProj = projection; }
 		static void ReplaceHud(Workspace& owner, std::shared_ptr<GuiHud> hud)
 		{

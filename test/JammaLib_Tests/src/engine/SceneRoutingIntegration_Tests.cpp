@@ -7,6 +7,7 @@
 #include <fstream>
 #include "engine/Scene.h"
 #include "gui/GuiScrollPanel.h"
+#include "gui/GuiVstRack.h"
 #include "gui/SceneSelector.h"
 #include "graphics/Window.h"
 #include "io/NativeMidiSidecar.h"
@@ -326,6 +327,19 @@ namespace engine
             std::scoped_lock lock(scene._sceneMutex);
             return scene._operation.SourceRecoveryGateClosed();
         }
+		static void ExpectUncoveredRackPoint(Scene& scene, utils::Position2d point)
+		{
+			for (const auto& panel : {scene._workspace->MainPanel(), scene._workspace->SelectionPanel()})
+				EXPECT_FALSE(panel->RouteHitTest(panel->GlobalToLocal(point)));
+			if (const auto hud = scene._workspace->Hud())
+				EXPECT_FALSE(hud->CapturesPointer(hud->GlobalToLocal(point)));
+		}
+		static void CollapseCapturedRack(Scene& scene)
+		{
+			std::scoped_lock lock(scene._sceneMutex);
+			scene._workspace->CollapseRacksLocked(scene._stations);
+			EXPECT_FALSE(gui::WorkspaceTestAccess::HasCapture(*scene._workspace));
+		}
 		static std::shared_ptr<gui::GuiSlider> PhaseSetting(Scene& scene)
 		{
 			// FreshScene's compact window is not a dependable settings input viewport.
@@ -888,6 +902,13 @@ TEST_F(SceneRoutingIntegrationTest, SelectingAnotherTakeCollapsesRackButHoverAnd
 	const auto rack = take->GetGuiRack();
 	rack->SetPosition({ 500, 400 });
 	rack->SetRackState(gui::GuiRackParams::RACK_CHANNELS, true);
+	const auto stationRack = station->GetGuiRack();
+	const auto stationGrid = stationRack->VstRack(); ASSERT_TRUE(stationGrid);
+	const auto takeGrid = rack->VstRack(); ASSERT_TRUE(takeGrid);
+	stationGrid->SetChannelsCollapsed(false); takeGrid->SetChannelsCollapsed(false);
+	const auto allowed = station->AllowedMidiChannels();
+	const auto midiRoutes = station->MidiChannelRoutes();
+	const auto gain = stationRack->GetMasterSlider()->Value();
 	scene->AdvanceUiAnimations();
 	ASSERT_EQ(gui::GuiRackParams::RACK_CHANNELS, rack->GetRackState());
 
@@ -911,6 +932,8 @@ TEST_F(SceneRoutingIntegrationTest, SelectingAnotherTakeCollapsesRackButHoverAnd
 	click.State = actions::TouchAction::TOUCH_UP;
 	scene->OnAction(click);
 	EXPECT_EQ(gui::GuiRackParams::RACK_CHANNELS, rack->GetRackState());
+	EXPECT_FALSE(stationGrid->ChannelsCollapsed());
+	EXPECT_FALSE(takeGrid->ChannelsCollapsed());
 
 	actions::TouchMoveAction move;
 	move.Touch = actions::TouchAction::TOUCH_MOUSE;
@@ -925,9 +948,14 @@ TEST_F(SceneRoutingIntegrationTest, SelectingAnotherTakeCollapsesRackButHoverAnd
 	EXPECT_TRUE(sibling->IsSelected());
 	EXPECT_EQ(gui::GuiRackParams::RACK_MASTER, rack->GetRackState());
 	EXPECT_TRUE(sibling->GetGuiRack()->GetMasterSlider()->Parent()->IsVisible());
+	EXPECT_TRUE(stationGrid->ChannelsCollapsed()); EXPECT_TRUE(takeGrid->ChannelsCollapsed());
+	EXPECT_EQ(allowed, station->AllowedMidiChannels()); EXPECT_EQ(midiRoutes, station->MidiChannelRoutes());
+	EXPECT_DOUBLE_EQ(gain, stationRack->GetMasterSlider()->Value());
 
 	// A background click clears selection and restores every master control.
 	rack->SetRackState(gui::GuiRackParams::RACK_ROUTER, true);
+	// The station faders are already MASTER; its grid can still be independently open.
+	stationGrid->SetChannelsCollapsed(false); takeGrid->SetChannelsCollapsed(false);
 	scene->AdvanceUiAnimations();
 	scene->SetHover3d({}, base::Action::MODIFIER_NONE);
 	click.State = actions::TouchAction::TOUCH_DOWN;
@@ -935,9 +963,69 @@ TEST_F(SceneRoutingIntegrationTest, SelectingAnotherTakeCollapsesRackButHoverAnd
 	click.State = actions::TouchAction::TOUCH_UP;
 	scene->OnAction(click);
 	EXPECT_FALSE(scene->HasSelection());
+	EXPECT_TRUE(stationGrid->ChannelsCollapsed()); EXPECT_TRUE(takeGrid->ChannelsCollapsed());
+	EXPECT_TRUE(stationRack->GetMasterSlider()->Parent()->IsVisible());
 	EXPECT_EQ(gui::GuiRackParams::RACK_MASTER, rack->GetRackState());
 	EXPECT_TRUE(sibling->GetGuiRack()->GetMasterSlider()->Parent()->IsVisible());
+	stationGrid->SetChannelsCollapsed(false);
+	EXPECT_FALSE(stationGrid->ChannelsCollapsed()); // Explicit collapse does not disable reopening.
 	scene->Shutdown();
+}
+
+TEST_F(SceneRoutingIntegrationTest, SharedRackCollapseCancelsChannelOwnerCableAndFooterCapture)
+{
+    using Access = engine::SourceLossIntegrationTestAccess;
+    for (const auto target : {0u, 1u, 2u, 3u})
+    {
+        auto scene = FreshScene({Station("Keys")}, {}); ASSERT_TRUE(scene);
+        auto exclusion = Access::ExcludeJob(*scene);
+        scene->SetSize({1280u, 900u});
+        auto station = scene->SnapshotStations().front(); station->Select();
+        station->SetAllowedMidiChannels({2, 5});
+        const auto rack = station->GetGuiRack(); const auto grid = rack->VstRack(); ASSERT_TRUE(grid);
+        rack->SetPosition({800, 300}); // Grid extends left of its fader; keep the full grid in free client space.
+        gui::GuiVstRack::Model model; model.Editable = true; model.Revision = 1u;
+        grid->Update(model, [](auto) {}); grid->SetChannelsCollapsed(false);
+        const auto channels = grid->ChannelsPanel();
+        // Footer identities are semantic command indices after GuiRack::Init.
+        const auto controlIndex = target < 2u ? 0u : target == 2u ? gui::GuiRack::MidiDeselectAllIndex : gui::GuiRack::MidiSelectAllIndex;
+        const auto control = channels->TryGetChild(static_cast<unsigned char>(controlIndex));
+        ASSERT_TRUE(control); EXPECT_EQ(channels, control->Parent());
+        if (target >= 2u)
+        {
+            const auto footer = std::dynamic_pointer_cast<gui::GuiButton>(control); ASSERT_TRUE(footer);
+            EXPECT_EQ(target == 2u ? "None" : "All", footer->Text());
+        }
+        else ASSERT_TRUE(std::dynamic_pointer_cast<gui::GuiToggle>(control));
+        actions::TouchAction down; down.State = actions::TouchAction::TOUCH_DOWN;
+        const auto local = utils::Position2d{10, 10};
+        down.Position = control->GlobalPosition() + local;
+        SCOPED_TRACE(::testing::Message() << "target " << target << " at " << down.Position.X << "," << down.Position.Y);
+        ASSERT_GE(down.Position.X, 0); ASSERT_LT(down.Position.X, 1280);
+        ASSERT_GE(down.Position.Y, 0); ASSERT_LT(down.Position.Y, 900);
+        Access::ExpectUncoveredRackPoint(*scene, down.Position);
+        const auto press = scene->OnAction(down); ASSERT_TRUE(press.IsEaten);
+        auto captured = press.ActiveElement.lock(); ASSERT_TRUE(captured);
+        if (target < 2u) ASSERT_EQ(grid, captured); // Grid owns channel press/drag.
+        else ASSERT_EQ(control, captured); // All/None footer owns its own press.
+        if (target == 1u)
+        {
+            actions::TouchMoveAction move; move.MouseButtonsDown = 1u;
+            move.Position = down.Position + utils::Position2d{20, 0}; scene->OnAction(move);
+            ASSERT_TRUE(grid->HasCableDrag());
+        }
+        const auto allowed = station->AllowedMidiChannels(); const auto routes = station->MidiChannelRoutes();
+        Access::CollapseCapturedRack(*scene);
+        EXPECT_TRUE(grid->ChannelsCollapsed()); EXPECT_FALSE(grid->HasCableDrag());
+        EXPECT_FALSE(channels->IsVisible()); EXPECT_EQ(base::GuiElement::STATE_NORMAL, control->GetState());
+        actions::TouchAction up = down; up.State = actions::TouchAction::TOUCH_UP;
+        up.Position = control->GlobalPosition() + local;
+        EXPECT_TRUE(scene->OnAction(up).IsEaten); // Removed capture's delayed release is consumed.
+        EXPECT_TRUE(station->IsSelected()); EXPECT_EQ(allowed, station->AllowedMidiChannels());
+        EXPECT_EQ(routes, station->MidiChannelRoutes());
+        grid->SetChannelsCollapsed(false); EXPECT_FALSE(grid->ChannelsCollapsed());
+        exclusion.unlock(); scene->Shutdown();
+    }
 }
 
 TEST_F(SceneRoutingIntegrationTest, FreshScenesResolveReorderedAndAdditionalStationsByName)
@@ -1884,6 +1972,7 @@ TEST_F(SceneRoutingIntegrationTest, BackgroundSelectAllUsesCurrentDepthAndPreser
         const auto rack = station->GetGuiRack();
         rack->SetPosition({ -1000, -1000 });
         rack->SetRackState(gui::GuiRackParams::RACK_CHANNELS, true);
+        const auto grid = rack->VstRack(); ASSERT_TRUE(grid); grid->SetChannelsCollapsed(false);
         scene->SetHover3d({}, base::Action::MODIFIER_NONE);
         actions::TouchAction click;
         click.Touch = actions::TouchAction::TOUCH_MOUSE;
@@ -1913,6 +2002,7 @@ TEST_F(SceneRoutingIntegrationTest, BackgroundSelectAllUsesCurrentDepthAndPreser
         midiTake->ReleaseTriggerSourceMuteAudio();
         EXPECT_FALSE(midiTake->IsMuted());
         EXPECT_EQ(gui::GuiRackParams::RACK_MASTER, rack->GetRackState());
+        EXPECT_TRUE(grid->ChannelsCollapsed());
         EXPECT_TRUE(remote->IsSelected());
         EXPECT_TRUE(remoteSelected->IsSelected());
         EXPECT_FALSE(remoteUnselected->IsSelected());

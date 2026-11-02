@@ -405,7 +405,9 @@ void GuiVstRack::SetViewport(Size2d viewport) { _viewport = viewport; _LayoutRow
 void GuiVstRack::SetFeedback(std::string message) { _feedback = std::move(message); }
 void GuiVstRack::SetChannelsCollapsed(bool collapsed)
 {
-	CancelInteraction(); _collapsed = collapsed; _channels->SetVisible(!collapsed);
+	CancelInteraction();
+	if (collapsed) _channels->ClearPointerState();
+	_collapsed = collapsed; _channels->SetVisible(!collapsed);
 	_collapse->SetToggleState(collapsed ? GuiToggleParams::TOGGLE_OFF : GuiToggleParams::TOGGLE_ON, true);
 }
 

@@ -322,8 +322,21 @@ void Workspace::UpdateRackVisibilityLocked(const std::vector<std::shared_ptr<Sta
 
 void Workspace::CollapseRacksLocked(const std::vector<std::shared_ptr<Station>>& stations)
 {
-	const auto collapse = [](const std::shared_ptr<GuiRack>& rack) {
+	const auto collapse = [this](const std::shared_ptr<GuiRack>& rack) {
 		if (!rack) return;
+		if (const auto vst = rack->VstRack())
+		{
+			// Channel clicks and cable/slot gestures can capture the rack itself;
+			// footer controls instead capture descendants of the hidden grid.
+			if (_pointer.Captured() == vst)
+			{
+				vst->ClearPointerState();
+				_pointer.ReleaseCapture();
+				_pointer.ConsumeNextRelease();
+			}
+			_pointer.OnSubtreeHidden(vst->ChannelsPanel(), _focusManager);
+			vst->SetChannelsCollapsed(true);
+		}
 		rack->SetRackState(GuiRackParams::RACK_MASTER, true);
 		rack->SetMasterControlsVisible(true);
 	};

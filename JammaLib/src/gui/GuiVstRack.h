@@ -67,6 +67,7 @@ namespace gui
 		void SetChannelsCollapsed(bool collapsed);
 		void SetAllowedMidiChannels(const std::vector<int>& channels);
 		bool ChannelsCollapsed() const noexcept { return _collapsed; }
+		std::shared_ptr<base::GuiElement> ChannelsPanel() const { return _channels; }
 		bool ChannelShownActive(unsigned int channel) const noexcept;
 		std::size_t PageOffset() const noexcept { return _pageOffset; }
 		std::shared_ptr<GuiButton> AppendButton() const;

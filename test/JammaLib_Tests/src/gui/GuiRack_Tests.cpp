@@ -143,6 +143,39 @@ TEST(GuiRack, RestoredSlotsReplaceMissingCableRowsAndRetainFailedSlots)
 	EXPECT_FALSE(view->SlotButton(1u));
 }
 
+TEST(GuiRack, CollapsingMidiGridClearsFooterPressWithoutChangingRoutingOrLevels)
+{
+	for (const auto footerIndex : {GuiRack::MidiDeselectAllIndex, GuiRack::MidiSelectAllIndex})
+	{
+		auto params = MakeRackParams(220, 300);
+		params.EnableVstRack = true; params.EnableVstRackMidiRouting = true;
+		unsigned int filterChanges = 0u;
+		params.OnAllowedMidiChannelsChanged = [&](const auto&) { ++filterChanges; };
+		auto rack = std::make_shared<GuiRack>(params); rack->Init();
+		auto receiver = std::make_shared<MockedRackReceiver>(); rack->SetReceiver(receiver);
+		rack->SetAllowedMidiChannels({2, 5}, true); rack->AddRoute(0u, 0u);
+		rack->GetMasterSlider()->SetValue(0.25, true);
+		const auto routes = rack->Routes(); const auto view = rack->VstRack(); ASSERT_TRUE(view);
+		view->SetChannelsCollapsed(false);
+		// GuiRack::Init assigns stable command indices, not child ordinals, to the footer.
+		const auto footer = std::dynamic_pointer_cast<gui::GuiButton>(view->ChannelsPanel()->TryGetChild(static_cast<unsigned char>(footerIndex)));
+		ASSERT_TRUE(footer); EXPECT_EQ(view->ChannelsPanel(), footer->Parent());
+		EXPECT_EQ(footerIndex == GuiRack::MidiDeselectAllIndex ? "None" : "All", footer->Text());
+		actions::TouchAction down; down.Position = {10, 10}; down.State = actions::TouchAction::TOUCH_DOWN;
+		ASSERT_TRUE(footer->OnAction(down).IsEaten);
+		view->SetChannelsCollapsed(true);
+		EXPECT_EQ(base::GuiElement::STATE_NORMAL, footer->GetState());
+		EXPECT_EQ(gui::GuiToggleParams::TOGGLE_OFF, view->ChannelsExpander()->GetToggleState());
+		// A late direct release remains harmless even if the grid reopens first.
+		view->SetChannelsCollapsed(false);
+		down.State = actions::TouchAction::TOUCH_UP; footer->OnAction(down);
+		EXPECT_EQ(0u, filterChanges); EXPECT_EQ(routes, rack->Routes());
+		EXPECT_DOUBLE_EQ(0.25, rack->GetMasterSlider()->Value());
+		EXPECT_TRUE(view->ChannelShownActive(1u)); EXPECT_TRUE(view->ChannelShownActive(4u));
+		EXPECT_FALSE(view->ChannelShownActive(0u));
+	}
+}
+
 TEST(GuiRack, SharedSlotViewPreservesCapturedIdentityScrollAndHiddenCableEndpoints)
 {
 	auto params = MakeRackParams(220, 300);
@@ -201,7 +234,12 @@ TEST(GuiRack, SharedSlotViewPreservesCapturedIdentityScrollAndHiddenCableEndpoin
 	view->BuildInteractionGeometry(endpoints, cables); ASSERT_EQ(2u, cables.size());
 	EXPECT_TRUE(cables[0].Start.Continuation);
 	EXPECT_EQ(2u, cables[0].Start.MidiChannel); EXPECT_EQ("slot-0", cables[0].Finish.PluginId);
+	view->SetChannelsCollapsed(false);
+	EXPECT_FALSE(view->ChannelsCollapsed());
+	const auto commandCount = commands.size();
 	view->SetChannelsCollapsed(true); endpoints.clear(); cables.clear(); view->BuildInteractionGeometry(endpoints, cables);
+	EXPECT_EQ(80, view->SlotScroll()->ScrollOffset()); EXPECT_EQ(commandCount, commands.size());
+	EXPECT_EQ(gui::GuiToggleParams::TOGGLE_OFF, expander->GetToggleState());
 	ASSERT_EQ(2u, cables.size()); EXPECT_TRUE(cables[0].Start.Continuation);
 	EXPECT_EQ(2u, cables[0].Start.MidiChannel); EXPECT_EQ("missing-slot", cables[1].Finish.PluginId);
 	EXPECT_FALSE(cables[1].Finish.Available);
