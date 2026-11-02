@@ -78,19 +78,20 @@ namespace gui
 		SceneSettingsControls(std::uint8_t channel, double offset, io::JamFile::GlobalMidiQuantState quantisation);
 		std::vector<GuiSettingEntry> SettingsEntries() const;
 		std::vector<GuiSettingEntry> SelectionEntries() const;
-		// Text notifications include in-progress edits. Invalid text retains the
-		// caller's accepted offset, not the widget's possibly uncommitted value.
+		// Decode control candidates; Scene retains domain acceptance.
 		std::optional<Change> Decode(const actions::GuiAction& action,
 			double acceptedOffset) const;
 		const auto& Mode() const { return _modeRadio; }
 		const auto& Channel() const { return _midiChannelOverride; }
 		const auto& MetronomeLevel() const { return _metronomeLevel; }
 		const auto& Metronome() const { return _ninjamMetronomeToggle; }
-		const auto& Offset() const { return _transportOffsetInput; }
+		const auto& Offset() const { return _transportOffsetSlider; }
 		const auto& GlobalQuantisation() const { return _globalMidiQuantRadio; }
 		const auto& Subdivision() const { return _midiSubdivisionRadio; }
 		void RefreshNinjamStatus(ninjam::NinjamLocalTempoState state, bool connected, bool following);
 		void RefreshChannelPresentation(std::uint8_t channel);
+		void RefreshOffsetPresentation(double acceptedOffset);
+		static std::string FormatOffset(double acceptedOffset);
 		DevicePages BuildDevicePages(const audio::AsioInventory& inventory,
 			const io::UserConfig::AudioSettings& audioDraft,
 			const std::unordered_map<std::string, std::vector<unsigned int>>& acceptedBufferSizes,
@@ -134,7 +135,8 @@ namespace gui
 		static constexpr unsigned int MidiSubdivisionControlIndex = 7005u;
 		std::shared_ptr<GuiRadio> _modeRadio;
 		std::shared_ptr<GuiMidiChannelOverride> _midiChannelOverride;
-		std::shared_ptr<GuiNumericInput> _transportOffsetInput;
+		std::shared_ptr<GuiSlider> _transportOffsetSlider;
+		std::shared_ptr<GuiLabel> _transportOffsetLabel;
 		std::shared_ptr<GuiToggle> _ninjamMetronomeToggle;
 		std::shared_ptr<GuiSlider> _metronomeLevel;
 		std::shared_ptr<GuiRadio> _globalMidiQuantRadio;

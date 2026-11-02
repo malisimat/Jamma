@@ -10,6 +10,7 @@
 #include "engine/Station.h"
 #include "engine/Trigger.h"
 #include "gui/GuiButton.h"
+#include "gui/GuiTextBox.h"
 #include "io/UserConfig.h"
 #include "io/Json.h"
 #include "io/RigFile.h"
@@ -494,7 +495,12 @@ public:
 	bool CtrlOverlayActiveForTest() const { return _quantisationInteraction.EditModeActive(); }
 	float GridAlphaForTest() const { return _quantisation.OverlayAlpha(Timer::GetTime()); }
 	void ClearGridForTest() { _quantisation.ClearOverlay(); }
-	void FocusTextForTest() { _workspace->RequestFocus(_workspace->Settings().Offset()); }
+	void FocusTextForTest()
+	{
+		_textFocusFixture = std::make_shared<gui::GuiTextBox>(gui::GuiTextBoxParams{});
+		EXPECT_TRUE(_workspace->RequestFocus(_textFocusFixture));
+	}
+	std::shared_ptr<gui::GuiTextBox> _textFocusFixture;
 	void ClearTextFocusForTest() { _workspace->CommitFocus(); }
 	glm::vec3 EditorProbeEyeLocalForTest() const { return _workspace->Editor().ProbeEyeLocal(); }
 

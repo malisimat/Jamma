@@ -168,6 +168,8 @@ namespace gui
 		double Value() const;
 		void SetValue(double value);
 		void SetValue(double value, bool bypassUpdate);
+		// Accept an owner result without notification, retaining the drag/undo baseline.
+		void SynchronizeValueFromOwner(double value);
 		void SetDragParams(utils::Position2d dragOffset,
 			utils::Size2d dragSize,
 			utils::Size2d dragGap);

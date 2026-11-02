@@ -122,6 +122,18 @@ void GuiSlider::SetValue(double value, bool bypassUpdates)
 	OnValueChange(bypassUpdates);
 }
 
+void GuiSlider::SynchronizeValueFromOwner(double value)
+{
+	if (!_isDragging)
+	{
+		SetValue(value, true);
+		return;
+	}
+	if (value == Value()) return;
+	_valueOffset = value - _initValue;
+	OnValueChange(true);
+}
+
 void GuiSlider::SetDragParams(utils::Position2d dragOffset,
 	utils::Size2d dragSize,
 	utils::Size2d dragGap)
@@ -804,7 +816,8 @@ double GuiSlider::CalcValueOffset(GuiSliderParams params,
 	double dragFrac = 0.0;
 
 	auto dragLength = CalcDragLength(params, size);
-	if (dragLength == 0u || !(params.Max > params.Min))
+	if (dragLength == 0u || !(params.Max > params.Min) ||
+		(dragPos.X == initDragPos.X && dragPos.Y == initDragPos.Y))
 		return 0.0;
 
 	if (params.Scale == GuiSliderParams::SliderScale::Decibels)

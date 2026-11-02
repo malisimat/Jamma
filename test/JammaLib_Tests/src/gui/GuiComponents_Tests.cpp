@@ -1618,11 +1618,19 @@ public:
 	std::shared_ptr<gui::GuiMainPanel> Settings() const { return _workspace->MainPanel(); }
 	std::shared_ptr<gui::GuiMainPanel> Selection() const { return _workspace->SelectionPanel(); }
 	std::shared_ptr<gui::GuiMidiChannelOverride> Channel() const { return _workspace->Settings().Channel(); }
-	std::shared_ptr<gui::GuiNumericInput> Phase() const { return _workspace->Settings().Offset(); }
+	std::shared_ptr<gui::GuiSlider> Phase() const { return _workspace->Settings().Offset(); }
 	std::shared_ptr<gui::GuiToggle> Click() const { return _workspace->Settings().Metronome(); }
 	std::shared_ptr<gui::GuiRadio> Quantisation() const { return _workspace->Settings().GlobalQuantisation(); }
 	std::shared_ptr<gui::GuiRadio> Depth() const { return _workspace->Settings().Mode(); }
 	std::shared_ptr<gui::GuiRadio> Subdivision() const { return _workspace->Settings().Subdivision(); }
+	using engine::Scene::OnAction;
+	actions::ActionResult OnAction(GuiAction action) override
+	{
+		if (action.ElementType == GuiAction::ACTIONELEMENT_SLIDER && action.Index == 7002u) ++PhaseActions;
+		return engine::Scene::OnAction(action);
+	}
+	unsigned int PhaseActions = 0u;
+	void RestorePhase(double value) { _SetTransportOffsetLoopFrac(value); }
 	void SetFrozenTapClock()
 	{
 		auto clock = std::make_shared<utils::Timer>();
@@ -1773,21 +1781,78 @@ TEST(GuiMidiChannelOverride, PresentationRefreshDoesNotDispatchActions)
 
 TEST_F(GuiSceneSettingsTests, PhaseOffsetUsesLoopFractionsAndPropagatesToStation)
 {
-	for (const auto value : { -2.0, -1.0, 0.5, 1.0, 2.0 }) {
-		Scene->Phase()->SetValue(value, true);
+	for (const auto value : { -2.0, -1.0, -0.005, 0.0, 0.005, 0.5, 1.0, 2.0 }) {
+		const auto before = Scene->PhaseActions;
+		Scene->Phase()->SetValue(value, false);
 		const auto expected = std::clamp(value, -1.0, 1.0);
 		EXPECT_DOUBLE_EQ(expected, Scene->PhaseFraction());
 		EXPECT_DOUBLE_EQ(expected, Station->TransportOffsetLoopFrac());
 		EXPECT_DOUBLE_EQ(expected, Scene->Phase()->Value());
+		EXPECT_EQ(before + 1u, Scene->PhaseActions);
 	}
-	Scene->Phase()->SetValue(std::numeric_limits<double>::quiet_NaN(), true);
+	GuiAction invalid; invalid.ElementType = GuiAction::ACTIONELEMENT_SLIDER; invalid.Index = 7002u;
+	invalid.Data = GuiAction::GuiDouble(std::numeric_limits<double>::quiet_NaN()); Scene->OnAction(invalid);
 	EXPECT_DOUBLE_EQ(1.0, Scene->PhaseFraction()); EXPECT_DOUBLE_EQ(1.0, Scene->Phase()->Value());
-	for (const auto text : { "nan", "0.5junk" }) {
-		Scene->Phase()->SetText(text, true);
-		EXPECT_DOUBLE_EQ(1.0, Scene->PhaseFraction()); EXPECT_DOUBLE_EQ(1.0, Scene->Phase()->Value());
-	}
 	const auto laterStation = Scene->AddStation();
 	EXPECT_DOUBLE_EQ(1.0, laterStation->TransportOffsetLoopFrac());
+	const auto before = Scene->PhaseActions;
+	Scene->RestorePhase(-0.125);
+	EXPECT_EQ(before, Scene->PhaseActions);
+	EXPECT_DOUBLE_EQ(-0.125, Scene->Phase()->Value());
+	EXPECT_DOUBLE_EQ(-0.125, Station->TransportOffsetLoopFrac());
+}
+
+TEST_F(GuiSceneSettingsTests, PhaseSliderDragsInFiveThousandthStepsAndDoubleClickResets)
+{
+	const auto slider = Scene->Phase();
+	slider->SetSize({410u, 34u}); // 400 pixels of travel for 400 intervals.
+	TouchAction press; press.Position = {200, 10}; press.State = TouchAction::TOUCH_DOWN;
+	press.SetActionTime(Time{});
+	ASSERT_TRUE(slider->OnAction(press).IsEaten);
+	TouchMoveAction move; move.Position = {201, 10};
+	const auto before = Scene->PhaseActions;
+	slider->OnAction(move);
+	EXPECT_NEAR(0.005, Scene->PhaseFraction(), 1e-12);
+	EXPECT_NEAR(0.005, slider->Value(), 1e-12); EXPECT_EQ(before + 1u, Scene->PhaseActions);
+	press.State = TouchAction::TOUCH_UP; press.Position = move.Position;
+	press.SetActionTime(Time{} + std::chrono::milliseconds(10));
+	const auto release = slider->OnAction(press); ASSERT_TRUE(release.Undo);
+	for (const auto milliseconds : {100, 200})
+	{
+		press.State = TouchAction::TOUCH_DOWN;
+		press.SetActionTime(Time{} + std::chrono::milliseconds(milliseconds)); slider->OnAction(press);
+		press.State = TouchAction::TOUCH_UP;
+		press.SetActionTime(Time{} + std::chrono::milliseconds(milliseconds + 10)); slider->OnAction(press);
+	}
+	EXPECT_DOUBLE_EQ(0.0, Scene->PhaseFraction()); EXPECT_DOUBLE_EQ(0.0, Station->TransportOffsetLoopFrac());
+	EXPECT_DOUBLE_EQ(0.0, slider->Value()); EXPECT_EQ(before + 2u, Scene->PhaseActions);
+	press.State = TouchAction::TOUCH_DOWN; press.Position = {200, 10};
+	press.SetActionTime(Time{} + std::chrono::milliseconds(1000)); slider->OnAction(press);
+	move.Position = {-1000, 10}; slider->OnAction(move);
+	EXPECT_DOUBLE_EQ(-1.0, Scene->PhaseFraction());
+	move.Position = {1000, 10}; slider->OnAction(move);
+	EXPECT_DOUBLE_EQ(1.0, Scene->PhaseFraction());
+	press.State = TouchAction::TOUCH_UP; press.Position = move.Position;
+	press.SetActionTime(Time{} + std::chrono::milliseconds(1010)); slider->OnAction(press);
+	EXPECT_DOUBLE_EQ(1.0, Station->TransportOffsetLoopFrac());
+}
+
+TEST(SceneSettingsControls, PhaseDecodeRequiresSliderNumberAndSignedFeedbackIsExplicit)
+{
+	gui::SceneSettingsControls controls(0u, -0.125, io::JamFile::GlobalMidiQuantState::Mixed);
+	EXPECT_DOUBLE_EQ(-0.125, controls.Offset()->Value());
+	GuiAction action; action.Index = 7002u; action.ElementType = GuiAction::ACTIONELEMENT_RACK;
+	action.Data = GuiAction::GuiDouble(0.5); EXPECT_FALSE(controls.Decode(action, 0.25));
+	action.ElementType = GuiAction::ACTIONELEMENT_SLIDER;
+	action.Data = GuiAction::GuiString("0.5"); EXPECT_FALSE(controls.Decode(action, 0.25));
+	action.Data = GuiAction::GuiDouble(0.5);
+	const auto decoded = controls.Decode(action, 0.25); ASSERT_TRUE(decoded);
+	EXPECT_DOUBLE_EQ(0.5, std::get<gui::SceneSettingsControls::OffsetChange>(*decoded).Value);
+	EXPECT_EQ("-1.000 loops", gui::SceneSettingsControls::FormatOffset(-1.0));
+	EXPECT_EQ("+0.000 loops", gui::SceneSettingsControls::FormatOffset(-0.0));
+	EXPECT_EQ("+1.000 loops", gui::SceneSettingsControls::FormatOffset(1.0));
+	EXPECT_EQ("-0.005 loops", gui::SceneSettingsControls::FormatOffset(-0.005));
+	EXPECT_EQ("+0.005 loops", gui::SceneSettingsControls::FormatOffset(0.005));
 }
 
 TEST_F(GuiSceneSettingsTests, ClickToggleReachesExistingAudioHostOwner)

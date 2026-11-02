@@ -538,7 +538,7 @@ ActionResult Scene::OnAction(GuiAction action)
 	else if (auto offset = std::get_if<Settings::OffsetChange>(&*change))
 	{
 		_SetTransportOffsetLoopFrac(offset->Value, false);
-		_workspace->Settings().Offset()->SynchronizeValueFromOwner(_transportOffsetLoopFrac);
+		_workspace->Settings().RefreshOffsetPresentation(_transportOffsetLoopFrac);
 	}
 	else if (std::holds_alternative<Settings::Reclock>(*change)) _HandleReclockArm();
 	else if (std::holds_alternative<Settings::SyncToServer>(*change))
@@ -1050,6 +1050,8 @@ void Scene::_ResetSessionWhileQuiescent()
 	DisconnectNinjam();
 	_workspace->Editor().Close();
 	_workspace->CancelBackgroundClick();
+	// Slider cancellation can notify Scene; finish it before taking the scene lock.
+	_workspace->Settings().Offset()->ClearPointerState();
 	std::vector<std::shared_ptr<LoopTake>> discarded;
 	std::vector<JobAction> retainedJobs;
 	{
@@ -1100,7 +1102,7 @@ void Scene::_ResetSessionWhileQuiescent()
 	// surviving station rack jobs and editors, while closing retired take editors.
 	for (const auto& take : discarded) _windowSubsystem->CloseVstEditorsForTake(take);
 	if (!retainedJobs.empty()) _QueueJobs(std::move(retainedJobs));
-	_workspace->Settings().Offset()->SynchronizeValueFromOwner(_transportOffsetLoopFrac);
+	_workspace->Settings().RefreshOffsetPresentation(_transportOffsetLoopFrac);
 }
 
 void Scene::InitGui()
@@ -1451,7 +1453,7 @@ void Scene::_SetTransportOffsetLoopFrac(double loopFrac, bool updateInput)
 		_audioEngine->PublishLocalTransportOffsetLoopFrac(loopFrac);
 
 	if (updateInput && _workspace->Settings().Offset())
-		_workspace->Settings().Offset()->SetValue(loopFrac, false);
+		_workspace->Settings().RefreshOffsetPresentation(loopFrac);
 }
 
 void Scene::_ApplyGlobalMidiQuantStateToAllLoopTakes()
@@ -1741,6 +1743,7 @@ void Scene::OnInputFocusLost()
 	}
 	// Window-owned focus finalization synchronously notifies the settings owner,
 	// which takes its own scene lock (e.g. SnapshotStations). Commit before locking.
+	_workspace->Settings().Offset()->ClearPointerState();
 	_workspace->CommitFocus();
 	std::scoped_lock lock(_sceneMutex);
 

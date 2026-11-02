@@ -595,6 +595,58 @@ private:
 	std::weak_ptr<GuiSlider> _slider;
 };
 
+class ClampedSliderReceiver : public MockedSliderReceiver
+{
+public:
+	ClampedSliderReceiver(const std::shared_ptr<GuiSlider>& slider) : MockedSliderReceiver(0.0), _slider(slider) {}
+	actions::ActionResult OnAction(GuiAction action) override
+	{
+		auto result = MockedSliderReceiver::OnAction(action);
+		if (auto slider = _slider.lock()) slider->SynchronizeValueFromOwner(std::min(Value(), 0.5));
+		return result;
+	}
+private:
+	std::weak_ptr<GuiSlider> _slider;
+};
+
+TEST(GuiSlider, AcceptedOwnerClampDuringDragKeepsUndoAndCancellationBaseline)
+{
+	for (const bool cancel : {false, true})
+	{
+		auto params = GuiSliderParams::PanelHorizontal("", 110u); params.InitValue = 0.25;
+		auto slider = std::make_shared<GuiSlider>(params);
+		auto receiver = std::make_shared<ClampedSliderReceiver>(slider); slider->SetReceiver(receiver);
+		slider->OnAction(FaderClickTestData::Pointer(TouchAction::TOUCH_DOWN, 0, {10, 10}));
+		TouchMoveAction move; move.Position = {110, 10}; slider->OnAction(move);
+		EXPECT_DOUBLE_EQ(0.5, slider->Value()); EXPECT_EQ(1u, receiver->ActionCount());
+		if (cancel)
+		{
+			slider->ClearPointerState();
+			EXPECT_DOUBLE_EQ(0.25, slider->Value()); EXPECT_EQ(2u, receiver->ActionCount());
+			slider->ClearPointerState(); EXPECT_EQ(2u, receiver->ActionCount());
+		}
+		const auto release = slider->OnAction(FaderClickTestData::Pointer(TouchAction::TOUCH_UP, 10, move.Position));
+		if (cancel) EXPECT_FALSE(release.Undo);
+		else
+		{
+			EXPECT_EQ(1u, receiver->ActionCount()); ASSERT_TRUE(release.Undo);
+			EXPECT_TRUE(release.Undo->Undo()); EXPECT_DOUBLE_EQ(0.25, slider->Value());
+			EXPECT_EQ(2u, receiver->ActionCount());
+		}
+	}
+}
+
+TEST(GuiSlider, QuantisedSignedSliderPreservesOffGridRestoreWithoutPointerMotion)
+{
+	auto params = GuiSliderParams::PanelHorizontal("", 410u);
+	params.Min = -1.0; params.Max = 1.0; params.Steps = 400u; params.InitValue = 0.1234;
+	auto slider = std::make_shared<GuiSlider>(params);
+	slider->OnAction(FaderClickTestData::Pointer(TouchAction::TOUCH_DOWN, 0, {10, 10}));
+	TouchMoveAction move; move.Position = {10, 10}; slider->OnAction(move);
+	EXPECT_DOUBLE_EQ(0.1234, slider->Value());
+	slider->ClearPointerState(); EXPECT_DOUBLE_EQ(0.1234, slider->Value());
+}
+
 TEST(GuiSlider, OwnerCanSynchronizeAcceptedResetWithoutRecursion)
 {
 	auto slider = FaderClickTestData::Fader(0.25);

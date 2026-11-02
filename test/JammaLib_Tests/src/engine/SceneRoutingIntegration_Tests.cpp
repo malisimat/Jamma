@@ -326,14 +326,25 @@ namespace engine
             std::scoped_lock lock(scene._sceneMutex);
             return scene._operation.SourceRecoveryGateClosed();
         }
-		static std::shared_ptr<gui::GuiNumericInput> FocusSetting(Scene& scene, const std::string& text)
+		static std::shared_ptr<gui::GuiSlider> PhaseSetting(Scene& scene)
 		{
-			auto field = scene._workspace->Settings().Offset();
-			// Focus manager and text edit state belong to the window owner. Commit
-			// remains deferred until actual Scene focus loss invokes FinalizeEdits.
-			EXPECT_TRUE(scene._workspace->RequestFocus(field));
-			field->SetText(text, false);
-			return field;
+			// FreshScene's compact window is not a dependable settings input viewport.
+			scene.SetSize({1200u, 900u});
+			auto panel = scene._workspace->MainPanel();
+			panel->SetPage(gui::SettingsPage::Timing); panel->SetExpanded(true);
+			// AdvanceAnimation bounds each frame to .05s, even for a large argument.
+			for (unsigned int frame = 0u; frame < 16u && panel->TransitionValue() < 1.0f; ++frame)
+				panel->AdvanceAnimation(0.05f);
+			EXPECT_FLOAT_EQ(1.0f, panel->TransitionValue());
+			return scene._workspace->Settings().Offset();
+		}
+		static utils::Position2d PhasePoint(Scene& scene)
+		{
+			const auto slider = PhaseSetting(scene);
+			const auto point = slider->GlobalPosition() + utils::Position2d{static_cast<int>(slider->GetSize().Width / 2u), 10};
+			const auto panel = scene._workspace->MainPanel();
+			EXPECT_TRUE(panel->RouteHitTest(panel->GlobalToLocal(point)));
+			return point;
 		}
 		static unsigned int ForcedChannel(const Scene& scene) { return scene._inputSubsystem->ForcedChannelOverride(); }
         static void OpenKeyboardModal(Scene& scene) { scene._workspace->OpenPopup(std::make_shared<gui::GuiPopup>()); }
@@ -1168,6 +1179,9 @@ TEST_F(SceneRoutingIntegrationTest, SavedJamAndExplicitRigReproduceAddedMembersh
  while (engine::SourceLossIntegrationTestAccess::Busy(*scene) && std::chrono::steady_clock::now() < deadline)
  { scene->CommitChanges(); std::this_thread::sleep_for(std::chrono::milliseconds(20)); }
  ASSERT_EQ(2u, scene->SnapshotStations().size());
+ const auto phase = engine::SourceLossIntegrationTestAccess::PhaseSetting(*scene);
+ phase->SetValue(-0.375, false);
+ for (const auto& station : scene->SnapshotStations()) EXPECT_DOUBLE_EQ(-0.375, station->TransportOffsetLoopFrac());
  const auto rig = scene->CaptureCommittedRig(); ASSERT_TRUE(rig);
  std::stringstream rigJson; ASSERT_TRUE(io::RigFile::ToJsonStream(*rig, rigJson));
  auto savedRig = io::RigFile::FromStream(std::move(rigJson)); ASSERT_TRUE(savedRig);
@@ -1177,6 +1191,7 @@ TEST_F(SceneRoutingIntegrationTest, SavedJamAndExplicitRigReproduceAddedMembersh
  std::ifstream file(directory / "session.jam"); std::stringstream jamJson; jamJson << file.rdbuf(); file.close();
  auto savedJam = io::JamFile::FromStream(std::move(jamJson)); ASSERT_TRUE(savedJam);
  EXPECT_EQ(2u, savedJam->Stations.size());
+ EXPECT_DOUBLE_EQ(-0.375, savedJam->TransportOffsetLoopFrac);
  const std::vector<int> allChannels{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16};
  EXPECT_EQ(allChannels, savedJam->Stations.front().AllowedMidiChannels);
  for (const auto& route : savedJam->Stations.front().MidiChannelRoutes) EXPECT_TRUE(route.PluginIds.empty());
@@ -1184,6 +1199,8 @@ TEST_F(SceneRoutingIntegrationTest, SavedJamAndExplicitRigReproduceAddedMembersh
  EXPECT_TRUE(savedJam->Stations.back().AllowedMidiChannels.empty());
  engine::SceneParams params({ "" }, {}, {640u, 480u});
  auto reloaded = engine::Scene::FromFile(params, *savedJam, *savedRig, directory.wstring()); ASSERT_TRUE(reloaded);
+ EXPECT_DOUBLE_EQ(-0.375, engine::SourceLossIntegrationTestAccess::PhaseSetting(*reloaded.value())->Value());
+ for (const auto& station : reloaded.value()->SnapshotStations()) EXPECT_DOUBLE_EQ(-0.375, station->TransportOffsetLoopFrac());
  EXPECT_EQ(scene->SnapshotStations()[0]->Name(), reloaded.value()->SnapshotStations()[0]->Name());
  EXPECT_EQ(allChannels, reloaded.value()->SnapshotStations()[0]->AllowedMidiChannels());
  EXPECT_TRUE(reloaded.value()->SnapshotStations()[1]->AllowedMidiChannels().empty());
@@ -1264,18 +1281,28 @@ TEST_F(SceneRoutingIntegrationTest, FocusLossPreservesMidiChannelToggleSelection
  scene->Shutdown();
 }
 
-TEST_F(SceneRoutingIntegrationTest, FocusLossCommitsPhaseOffsetSettingOutsideSceneLock)
+TEST_F(SceneRoutingIntegrationTest, PhaseSliderSceneCaptureFocusLossRestoresAcceptedBaseline)
 {
- auto scene = FreshScene({Station("A")}, {});
- ASSERT_TRUE(scene);
- auto field = engine::SourceLossIntegrationTestAccess::FocusSetting(*scene, "0.125");
- ASSERT_TRUE(field->HasFocus());
- EXPECT_DOUBLE_EQ(0.0, scene->SnapshotStations()[0]->TransportOffsetLoopFrac());
+ using Access = engine::SourceLossIntegrationTestAccess;
+ auto scene = FreshScene({Station("A")}, {}); ASSERT_TRUE(scene);
+ auto exclusion = Access::ExcludeJob(*scene);
+ const auto field = Access::PhaseSetting(*scene);
+ field->SetValue(0.125, false);
+ auto point = Access::PhasePoint(*scene);
+ actions::TouchAction press; press.State = actions::TouchAction::TOUCH_DOWN; press.Position = point;
+ const auto captured = scene->OnAction(press);
+ ASSERT_EQ(field, captured.ActiveElement.lock());
+ actions::TouchMoveAction move; move.MouseButtonsDown = 1u; move.Position = point + utils::Position2d{20, 0};
+ scene->OnAction(move);
+ EXPECT_GT(field->Value(), 0.125);
+ EXPECT_DOUBLE_EQ(field->Value(), scene->SnapshotStations()[0]->TransportOffsetLoopFrac());
  EXPECT_NO_THROW(scene->OnInputFocusLost());
  EXPECT_DOUBLE_EQ(0.125, scene->SnapshotStations()[0]->TransportOffsetLoopFrac());
  EXPECT_DOUBLE_EQ(0.125, field->Value());
- EXPECT_FALSE(field->HasFocus());
- scene->Shutdown();
+ press.State = actions::TouchAction::TOUCH_UP; press.Position = move.Position;
+ scene->OnAction(press); // Delayed release must not replay a canceled phase preview.
+ EXPECT_DOUBLE_EQ(0.125, field->Value());
+ exclusion.unlock(); scene->Shutdown();
 }
 
 TEST_F(SceneRoutingIntegrationTest, StationMotionPreservesFinalTopologyAndAppendLeavesSurvivorsStill)
@@ -2689,6 +2716,7 @@ TEST_F(SceneRoutingIntegrationTest, ResetAllConfirmationCancellationAndSerialize
     const auto revision = scene->AcceptedRigSnapshot()->Revision;
     Access::SetClock(*scene);
     Access::SetResetQuantisationState(*scene);
+    const auto phaseSlider = Access::PhaseSetting(*scene); phaseSlider->SetValue(0.375, false);
     station->SetStationPhaseOffsetSamps(-123);
     stations.back()->SetStationPhaseOffsetSamps(456);
     scene->Controls().SetCurrentJamPath(L"previous/001.jam"); scene->Controls().SetSessionSaveFolder(L"previous");
@@ -2699,6 +2727,7 @@ TEST_F(SceneRoutingIntegrationTest, ResetAllConfirmationCancellationAndSerialize
     EXPECT_EQ(1u, station->GetLoopTakeSnapshot().size()); EXPECT_DOUBLE_EQ(0.25, station->MasterLevelForExport());
     EXPECT_EQ(96000ul, Access::ClockLength(*scene)); EXPECT_EQ(L"previous/001.jam", scene->Controls().CurrentJamPath());
     EXPECT_EQ(321, Access::GlobalPhase(*scene));
+    EXPECT_DOUBLE_EQ(0.375, phaseSlider->Value());
     EXPECT_EQ(-123, station->StationPhaseOffsetSamps());
     EXPECT_EQ(456, stations.back()->StationPhaseOffsetSamps());
     for (const auto& retained : stations) EXPECT_EQ(321, retained->GlobalPhaseOffsetSamps());
@@ -2707,6 +2736,15 @@ TEST_F(SceneRoutingIntegrationTest, ResetAllConfirmationCancellationAndSerialize
     io::UserConfig captureConfig{}; captureConfig.Audio.NumChannelsIn = 1u;
     Access::StartRecording(*scene, trigger, captureConfig);
     ASSERT_EQ(engine::TRIGSTATE_RECORDING, trigger->GetState());
+    // Leave a real Scene/Workspace phase capture active across accepted reset.
+    const auto phasePoint = Access::PhasePoint(*scene);
+    actions::TouchAction phasePress; phasePress.State = actions::TouchAction::TOUCH_DOWN; phasePress.Position = phasePoint;
+    const auto phaseCapture = scene->OnAction(phasePress);
+    ASSERT_EQ(phaseSlider, phaseCapture.ActiveElement.lock());
+    actions::TouchMoveAction phaseMove; phaseMove.MouseButtonsDown = 1u;
+    phaseMove.Position = phasePoint + utils::Position2d{20, 0}; scene->OnAction(phaseMove);
+    ASSERT_GT(phaseSlider->Value(), 0.375);
+    EXPECT_DOUBLE_EQ(phaseSlider->Value(), station->TransportOffsetLoopFrac());
     const auto beforeResetCount = station->NumTakes();
     scene->OnAction(reset); Access::ResolveReset(*scene, true);
     scene->PumpDeviceAndFileControls(); // Closes input; it cannot mutate before job acknowledgement.
@@ -2716,7 +2754,14 @@ TEST_F(SceneRoutingIntegrationTest, ResetAllConfirmationCancellationAndSerialize
     while (!Access::ControlIdle(*scene) && std::chrono::steady_clock::now() < deadline)
     { scene->PumpDeviceAndFileControls(); std::this_thread::yield(); }
     ASSERT_TRUE(Access::ControlIdle(*scene));
-    EXPECT_TRUE(station->GetLoopTakeSnapshot().empty()); EXPECT_TRUE(stations.back()->GetLoopTakeSnapshot().empty());
+    EXPECT_TRUE(station->GetLoopTakeSnapshot().empty());
+    EXPECT_DOUBLE_EQ(0.0, phaseSlider->Value());
+    EXPECT_DOUBLE_EQ(0.0, station->TransportOffsetLoopFrac());
+    phasePress.State = actions::TouchAction::TOUCH_UP; phasePress.Position = phaseMove.Position;
+    scene->OnAction(phasePress); // Old captured release cannot restore the pre-reset target.
+    EXPECT_DOUBLE_EQ(0.0, phaseSlider->Value());
+    for (const auto& retained : stations) EXPECT_DOUBLE_EQ(0.0, retained->TransportOffsetLoopFrac());
+    EXPECT_TRUE(stations.back()->GetLoopTakeSnapshot().empty());
     EXPECT_EQ(stations, scene->SnapshotStations()); EXPECT_EQ(revision, scene->AcceptedRigSnapshot()->Revision);
     EXPECT_EQ((std::vector<int>{2,5,11}), station->AllowedMidiChannels());
     EXPECT_EQ(routes, station->MidiChannelRoutes()); EXPECT_EQ(rack, station->GetGuiRack());

@@ -3,6 +3,7 @@
 #include "../io/RigFile.h"
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <limits>
 #include "GuiStackPanel.h"
 
@@ -108,16 +109,16 @@ SceneSettingsControls::SceneSettingsControls(std::uint8_t channel, double offset
 	_midiChannelOverride = std::make_shared<GuiMidiChannelOverride>(channel);
 
 
-	GuiNumericInputParams transportOffsetParams = GuiNumericInputParams::PanelInput(88u);
+	auto transportOffsetParams = GuiSliderParams::PanelHorizontal("yellow", 320u);
 	transportOffsetParams.Index = TransportOffsetControlIndex;
-	transportOffsetParams.Size = { 96, GuiNumericInputParams::DefaultHeight };
 	transportOffsetParams.Min = -1.0;
 	transportOffsetParams.Max = 1.0;
-	transportOffsetParams.Step = 0.005;
-	transportOffsetParams.Decimals = 3;
+	transportOffsetParams.Steps = 400u;
+	transportOffsetParams.DefaultValue = 0.0;
 	transportOffsetParams.InitValue = offset;
-	_transportOffsetInput = std::make_shared<GuiNumericInput>(transportOffsetParams);
-
+	_transportOffsetSlider = std::make_shared<GuiSlider>(transportOffsetParams);
+	_transportOffsetLabel = _StatusLabel("", GuiLabelParams::DefaultHeight);
+	RefreshOffsetPresentation(offset);
 
 	GuiToggleParams metronomeToggleParams = GuiToggleParams::PanelPrimary();
 	metronomeToggleParams.Index = NinjamMetronomeControlIndex;
@@ -213,7 +214,8 @@ std::vector<GuiSettingEntry> SceneSettingsControls::SettingsEntries() const
 {
 	return {
 		{ SettingsPage::Timing, "Global MIDI quantisation", _globalMidiQuantRadio, 101u },
-		{ SettingsPage::Timing, "Local phase offset (loops)", _transportOffsetInput, TransportOffsetControlIndex },
+		{ SettingsPage::Timing, "Local phase offset (loops)", _transportOffsetSlider, TransportOffsetControlIndex },
+		{ SettingsPage::Timing, "", _transportOffsetLabel, 0u },
 		{ SettingsPage::Timing, "Subdivision: local grain / remote beat", _midiSubdivisionRadio, MidiSubdivisionControlIndex },
 		{ SettingsPage::Timing, "", _tapButton, TapTempoControlIndex },
 		{ SettingsPage::Timing, "", _reclockButton, ReclockControlIndex },
@@ -267,24 +269,10 @@ std::optional<SceneSettingsControls::Change> SceneSettingsControls::Decode(const
 	if (action.ElementType == GuiAction::ACTIONELEMENT_SLIDER && action.Index == MetronomeLevelControlIndex)
 		if (auto value = std::get_if<GuiAction::GuiDouble>(&action.Data); value && std::isfinite(value->Value))
 			return MetronomeLevelChange{ static_cast<float>(std::clamp(value->Value, 0.0, 1.0)) };
-	if (action.ElementType != GuiAction::ACTIONELEMENT_RACK) return std::nullopt;
-	if (action.Index == TransportOffsetControlIndex)
-	{
-		double offset = acceptedOffset;
-		if (auto text = std::get_if<GuiAction::GuiString>(&action.Data))
-		{
-			try
-			{
-				size_t consumed = 0;
-				const double parsed = std::stod(text->Value, &consumed);
-				if (consumed == text->Value.size() && std::isfinite(parsed)) offset = parsed;
-			}
-			catch (...) { /* Retain the accepted offset during invalid edits. */ }
-		}
-		else if (auto number = std::get_if<GuiAction::GuiDouble>(&action.Data)) offset = number->Value;
-		else return std::nullopt;
-		return OffsetChange{ offset }; // Scene retains engine-side validation and clamping.
-	}
+	if (action.ElementType == GuiAction::ACTIONELEMENT_SLIDER && action.Index == TransportOffsetControlIndex)
+		if (auto value = std::get_if<GuiAction::GuiDouble>(&action.Data))
+			return OffsetChange{ std::isfinite(value->Value) ? value->Value : acceptedOffset };
+
 	return std::nullopt;
 }
 
@@ -292,6 +280,21 @@ void SceneSettingsControls::RefreshChannelPresentation(std::uint8_t channel)
 {
 	if (_midiChannelOverride->Channel() != channel)
 		_midiChannelOverride->SetChannel(channel);
+}
+
+std::string SceneSettingsControls::FormatOffset(double acceptedOffset)
+{
+	// Avoid displaying negative zero after rounding to three decimals.
+	if (std::abs(acceptedOffset) < 0.0005) acceptedOffset = 0.0;
+	char text[32];
+	std::snprintf(text, sizeof(text), "%+.3f loops", acceptedOffset);
+	return text;
+}
+
+void SceneSettingsControls::RefreshOffsetPresentation(double acceptedOffset)
+{
+	_transportOffsetSlider->SynchronizeValueFromOwner(acceptedOffset);
+	_transportOffsetLabel->SetString(FormatOffset(acceptedOffset));
 }
 
 std::shared_ptr<GuiLabel> SceneSettingsControls::_StatusLabel(const std::string& text, unsigned int height)
