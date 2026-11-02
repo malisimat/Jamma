@@ -37,7 +37,7 @@ namespace midi
 			{
 				if (i == onIndex) movedOn = kept;
 				if (i == offIndex) movedOff = kept;
-				if (!removed[i]) candidate.Events[kept++] = state.Events[i];
+				if (!removed[i]) { candidate.Tokens[kept] = state.Tokens[i]; candidate.Events[kept++] = state.Events[i]; }
 			}
 			candidate.EventCount = kept;
 			if (offIndex == state.EventCount) movedOff = kept;
@@ -109,7 +109,7 @@ namespace midi
 						? candidate.Events[a].sampleOffset < candidate.Events[b].sampleOffset : priority(candidate.Events[a]) < priority(candidate.Events[b]); });
 				auto sorted = candidate;
 				std::size_t movedOn = 0;
-				for (std::size_t i = 0; i < order.size(); ++i) { sorted.Events[i] = candidate.Events[order[i]]; if (order[i] == onIndex) movedOn = i; }
+				for (std::size_t i = 0; i < order.size(); ++i) { sorted.Events[i] = candidate.Events[order[i]]; sorted.Tokens[i] = candidate.Tokens[order[i]]; if (order[i] == onIndex) movedOn = i; }
 				std::vector<MidiEvent> projected(sorted.EventCount);
 				MidiQuantisation::BuildPlaybackEvents(sorted.Events.data(), sorted.EventCount,
 					sorted.LoopLengthSamps, q, sorted.QuantisationTransportStartSamps, projected.data(), false);
@@ -150,13 +150,17 @@ namespace midi
 				|| channel >= 16u || pitch >= 128u || velocity == 0u)
 				return false;
 			const auto end = start + duration;
+			state.Tokens[state.EventCount] = 0u;
 			state.Events[state.EventCount++] = MidiEvent::MakeNoteOn(start, channel, pitch, velocity)
 				.WithFlags(end == state.LoopLengthSamps ? MidiEvent::ExactTiming : 0u);
 			// ExtractSpans extends an unmatched on to the seam. Playback flushes
 			// it there unless merged across the wrap, preserving a true one-sample final cell.
 			if (end < state.LoopLengthSamps)
+			{
+				state.Tokens[state.EventCount] = 0u;
 				state.Events[state.EventCount++] = MidiEvent::MakeNoteOff(end, channel, pitch);
-			MidiNote::SortMidiEvents(state.Events.data(), state.EventCount);
+			}
+			MidiNote::SortMidiEvents(state.Events.data(), state.EventCount, nullptr, nullptr, state.Tokens.data());
 			return true;
 		}
 
@@ -173,7 +177,7 @@ namespace midi
 				if (found == targets.Notes.end() || found->Ambiguous) return false;
 				std::size_t kept = 0u;
 				for (std::size_t i = 0u; i < state.EventCount; ++i)
-					if (i != onIndex && i != found->Off) state.Events[kept++] = state.Events[i];
+					if (i != onIndex && i != found->Off) { state.Tokens[kept] = state.Tokens[i]; state.Events[kept++] = state.Events[i]; }
 				state.EventCount = kept;
 				return true;
 			}
@@ -196,7 +200,7 @@ namespace midi
 			}
 			std::size_t kept = 0;
 			for (std::size_t i = 0; i < state.EventCount; ++i)
-				if (i != onIndex && i != off) state.Events[kept++] = state.Events[i];
+				if (i != onIndex && i != off) { state.Tokens[kept] = state.Tokens[i]; state.Events[kept++] = state.Events[i]; }
 			state.EventCount = kept;
 			return true;
 		}
@@ -218,12 +222,15 @@ namespace midi
 				return false;
 			const auto flags = static_cast<std::uint8_t>(MidiEvent::ExactTiming
 				| (end >= state.LoopLengthSamps && !omitOff ? MidiEvent::TriggerSeamEndpoint : 0u));
+			state.Tokens[state.EventCount] = 0u;
 			state.Events[state.EventCount++] = MidiEvent::MakeNoteOn(start, channel, pitch, velocity)
 				.WithFlags(flags);
 			if (!omitOff)
-				state.Events[state.EventCount++] = MidiEvent::MakeNoteOff(end % state.LoopLengthSamps, channel, pitch)
-					.WithFlags(flags);
-			MidiNote::SortMidiEvents(state.Events.data(), state.EventCount);
+			{
+				state.Tokens[state.EventCount] = 0u;
+				state.Events[state.EventCount++] = MidiEvent::MakeNoteOff(end % state.LoopLengthSamps, channel, pitch).WithFlags(flags);
+			}
+			MidiNote::SortMidiEvents(state.Events.data(), state.EventCount, nullptr, nullptr, state.Tokens.data());
 			return true;
 		}
 
@@ -268,7 +275,7 @@ namespace midi
 				if (omitOff)
 				{
 					for (std::size_t i = offIndex + 1u; i < state.EventCount; ++i)
-						state.Events[i - 1u] = state.Events[i];
+					{ state.Tokens[i - 1u] = state.Tokens[i]; state.Events[i - 1u] = state.Events[i]; }
 					--state.EventCount;
 				}
 				else
@@ -280,9 +287,11 @@ namespace midi
 				}
 			}
 			else if (!omitOff)
-				state.Events[state.EventCount++] = MidiEvent::MakeNoteOff(newEnd % state.LoopLengthSamps, on.Channel(), newPitch)
-					.WithFlags(state.Events[onIndex].flags);
-			MidiNote::SortMidiEvents(state.Events.data(), state.EventCount);
+			{
+				state.Tokens[state.EventCount] = 0u;
+				state.Events[state.EventCount++] = MidiEvent::MakeNoteOff(newEnd % state.LoopLengthSamps, on.Channel(), newPitch).WithFlags(state.Events[onIndex].flags);
+			}
+			MidiNote::SortMidiEvents(state.Events.data(), state.EventCount, nullptr, nullptr, state.Tokens.data());
 			return true;
 		}
 
@@ -392,7 +401,7 @@ namespace midi
 			{
 				if (i != matchingOn && i != matchingOff) continue;
 				for (std::size_t j = i + 1u; j < next.EventCount; ++j)
-					next.Events[j - 1u] = next.Events[j];
+				{ next.Tokens[j - 1u] = next.Tokens[j]; next.Events[j - 1u] = next.Events[j]; }
 				--next.EventCount;
 			}
 			if (cutStart > on.sampleOffset && !Create(next, on.sampleOffset,

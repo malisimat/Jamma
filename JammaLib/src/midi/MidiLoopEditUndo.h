@@ -56,7 +56,7 @@ namespace actions
 		}
 
 		bool Apply(const midi::MidiLoop::EditState& expectedContent,
-			const midi::MidiLoop::EditState& source)
+			midi::MidiLoop::EditState& source)
 		{
 			auto take = _take.lock();
 			auto loop = _loop.lock();
@@ -72,8 +72,9 @@ namespace actions
 			replacement.Quantisation = current.Quantisation;
 			replacement.QuantisationTransportStartSamps = current.QuantisationTransportStartSamps;
 			std::uint64_t acceptedRevision = 0u;
-			if (!take->PublishMidiEdit(loop, replacement, &acceptedRevision))
+			if (!take->PublishMidiEdit(loop, replacement, &acceptedRevision, &replacement))
 				return false;
+			source.Tokens = replacement.Tokens;
 			_cursor->Revision = acceptedRevision;
 			_cursor->SourceRevision = acceptedRevision;
 			return true;

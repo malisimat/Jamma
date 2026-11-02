@@ -433,7 +433,7 @@ namespace engine
 		// share _midiCaptureMutex; the audio callback reads only the loop snapshot.
 		bool PublishMidiEdit(const std::shared_ptr<midi::MidiLoop>& loop,
 			const midi::MidiLoop::EditState& edit,
-			std::uint64_t* acceptedRevision = nullptr);
+			std::uint64_t* acceptedRevision = nullptr, midi::MidiLoop::EditState* accepted = nullptr);
 		const std::vector<unsigned int>& MidiLoopChannels() const noexcept { return _midiLoopChannels; }
 		const std::vector<std::string>& MidiLoopDevices() const noexcept { return _midiLoopDevices; }
 		struct MidiStreamExport

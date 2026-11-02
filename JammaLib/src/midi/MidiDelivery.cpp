@@ -174,7 +174,7 @@ void MidiDelivery::Prepare(PreparedState& state, const PreparedState* previous,
 }
 
 bool MidiDelivery::_TryDeliverMidi(MidiDestination& destination, const MidiEvent& event,
-	bool isRealtime, MidiPlaybackBinding* owner) noexcept
+	bool isRealtime, MidiPlaybackBinding* owner, const midi::MidiVoiceEvent& voice) noexcept
 {
 	if (isRealtime) return owner
 		? _TryDeliverRecordedMidiNow(destination, event, *owner, true)
@@ -192,6 +192,7 @@ bool MidiDelivery::_TryDeliverMidi(MidiDestination& destination, const MidiEvent
 			- MidiDestination::ScheduledReleaseReserve)) return false;
 	MidiDestination::ScheduledMidi entry;
 	entry.Event = event;
+	entry.Voice = voice;
 	entry.Event.sampleOffset += delay; // Modular sample-clock arithmetic.
 	entry.IsRealtime = isRealtime;
 	entry.Owner = owner;
@@ -322,7 +323,7 @@ void MidiDelivery::_RecoverCancelledScheduledMidi(MidiDestination& destination,
 			destination.PendingReleases.set(slot);
 }
 
-void MidiDelivery::_InvalidateScheduledMidiAtBlockStart(const PreparedState& state, bool forceCancel) noexcept
+void MidiDelivery::_InvalidateScheduledMidiAtBlockStart(const PreparedState& state, std::uint32_t blockStartSample, bool forceCancel) noexcept
 {
 	// Retired plugins are outside the active chain; their future notes must never drain.
 	for (const auto& destination : state.RetiredMidiDestinations)
@@ -372,19 +373,27 @@ void MidiDelivery::_InvalidateScheduledMidiAtBlockStart(const PreparedState& sta
 				}
 				binding->HasHeld.store(binding->Held.any(), std::memory_order_release);
 			}
-			const auto revision = binding->Loop->PublishedRevisionAtAudioBoundary();
+			const auto sourceState = binding->Loop->PublishedStateAtAudioBoundary();
+			const auto revision = sourceState ? std::optional<std::uint64_t>{sourceState->Revision} : std::nullopt;
+			const auto recovery = sourceState ? std::optional<std::uint64_t>{sourceState->RecoveryEpoch} : std::nullopt;
 			const auto relocation = binding->Loop->RelocationGenerationAtAudioBoundary();
 			const bool changed = (binding->HasObservedSourceState
 				&& (static_cast<bool>(revision) != binding->HasObservedSourceRevision
 					|| (revision && *revision != binding->ObservedSourceRevision)))
 				|| relocation != binding->ObservedRelocationGeneration;
+			const bool recoveryChanged = binding->HasObservedSourceState
+				&& (recovery.has_value() != binding->HasObservedSourceRevision
+					|| (recovery && *recovery != binding->ObservedRecoveryEpoch));
+			const bool relocate = relocation != binding->ObservedRelocationGeneration;
+			binding->ReconcileScheduledThisBlock = changed && !recoveryChanged && !relocate;
+			if (recovery) binding->ObservedRecoveryEpoch = *recovery;
 			binding->HasObservedSourceState = true;
 			binding->HasObservedSourceRevision = revision.has_value();
 			if (revision) binding->ObservedSourceRevision = *revision;
 			binding->ObservedRelocationGeneration = relocation;
-			binding->CancelScheduledThisBlock = changed || binding->Take->IsMuted()
+			binding->CancelScheduledThisBlock = recoveryChanged || relocate || binding->Take->IsMuted()
 				|| binding->Take->IsCaptureCancelled();
-			if (changed) binding->Loop->RequestHeldFlush();
+			if (recoveryChanged || relocate) binding->Loop->RequestHeldFlush();
 		}
 	// A removed route can still own future entries in a destination retained by the new graph.
 	for (const auto& destination : state.MidiDestinations)
@@ -402,10 +411,29 @@ void MidiDelivery::_InvalidateScheduledMidiAtBlockStart(const PreparedState& sta
 		destination->LastBypassed = bypassed;
 		std::bitset<midi::MidiNote::TotalNoteSlots> affected;
 		auto retained = std::size_t{ 0u };
+		bool reconciled = false;
 		for (auto index = std::size_t{ 0u }; index < destination->ScheduledCount; ++index)
 		{
-			const auto entry = destination->Scheduled[index];
+			auto entry = destination->Scheduled[index];
 			auto* owner = entry.Owner;
+			if (owner && owner->ReconcileScheduledThisBlock && entry.Voice.Token && !owner->CancelScheduledThisBlock)
+			{
+				reconciled = true;
+				auto delta = std::int32_t{0};
+				if (!owner->Loop->ReconcileQueuedVoice(entry.Voice, entry.Event, delta))
+				{
+					if (entry.Event.IsNoteOn())
+					{
+						owner->QueuedEvents.fetch_sub(1u, std::memory_order_release);
+						continue;
+					}
+					// This release may be the only remaining owner after the logical
+					// source already accepted its old delayed endpoint.
+					entry.Event.sampleOffset = blockStartSample;
+					entry.Voice = {};
+				}
+				else entry.Event.sampleOffset += delta;
+			}
 			const bool invalid = owner && (forceCancel || bypassStarted
 				|| !owner->RoutingActive.load(std::memory_order_acquire)
 				|| owner->CancelScheduledThisBlock);
@@ -423,7 +451,7 @@ void MidiDelivery::_InvalidateScheduledMidiAtBlockStart(const PreparedState& sta
 			}
 			else destination->Scheduled[retained++] = entry;
 		}
-		if (retained != destination->ScheduledCount)
+		if (retained != destination->ScheduledCount || reconciled)
 		{
 			destination->ScheduledCount = retained;
 			auto precedes = [](const MidiDestination::ScheduledMidi& left,
@@ -709,6 +737,12 @@ void MidiDelivery::MidiPlaybackSink::OnEvent(unsigned int outputIndex, const Mid
 
 bool MidiDelivery::MidiPlaybackSink::TryOnEvent(unsigned int outputIndex, const MidiEvent& event) noexcept
 {
+	return TryOnVoiceEvent(outputIndex, event, {});
+}
+
+bool MidiDelivery::MidiPlaybackSink::TryOnVoiceEvent(unsigned int outputIndex, const MidiEvent& event,
+	const midi::MidiVoiceEvent& voice) noexcept
+{
 	if (outputIndex >= _state.MidiPlaybackRoutes.size()) return false;
 	const auto slot = midi::MidiNote::NoteSlot(event.Channel(), event.data1);
 	// Every destination must retain a release before the source forgets it.
@@ -734,7 +768,7 @@ bool MidiDelivery::MidiPlaybackSink::TryOnEvent(unsigned int outputIndex, const 
 			continue;
 		const bool immediateRelease = release && destination.RecoveringCompensationChange;
 		const bool delivered = MidiDelivery::_TryDeliverMidi(destination, event,
-			suppressSource || immediateRelease, binding.get());
+			suppressSource || immediateRelease, binding.get(), voice);
 		if (release) accepted &= delivered;
 		else accepted |= delivered;
 		if (event.IsNoteOn() && delivered && !binding->Held.test(slot))
@@ -900,7 +934,7 @@ void MidiDelivery::ProcessBlock(const PreparedState& state,
 			destination->BlockSustainAtStart = destination->PluginSustain;
 			destination->BlockTouched.reset();
 		}
-		_InvalidateScheduledMidiAtBlockStart(state);
+		_InvalidateScheduledMidiAtBlockStart(state, blockStartSample);
 		_DrainPendingMidiReleases(state, blockStartSample);
 	}
 
@@ -1038,7 +1072,7 @@ void MidiDelivery::ProcessBlock(const PreparedState& state,
 	if (allRetiredReleased) state.RetiredMidiQueueCancelled.store(true, std::memory_order_release);
 	if (!vstActive)
 	{
-		_InvalidateScheduledMidiAtBlockStart(state, true);
+		_InvalidateScheduledMidiAtBlockStart(state, blockStartSample, true);
 		return;
 	}
 

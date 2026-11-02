@@ -2003,6 +2003,125 @@ TEST(StationMidiInstrument, ReroutingAudibleUnmatchedNoteReleasesOldDestination)
 class PlaybackReviewDelivery : public midi::MidiDelivery
 {
 public:
+	static void CheckCircularQueuedReleaseExtension()
+	{
+		PreparedState state; auto take = MakeMidiTake("edit-circular-queue"); auto loop = std::make_shared<midi::MidiLoop>();
+		const std::array source{MidiEvent::MakeNoteOff(20u, 0u, 60u, 23u).WithFlags(MidiEvent::TriggerSeamEndpoint),
+			MidiEvent::MakeNoteOn(80u, 0u, 60u, 100u).WithFlags(MidiEvent::TriggerSeamEndpoint)};
+		loop->ReplaceRecordedEvents(source.data(), source.size(), 100u);
+		auto plugin = std::make_shared<StationMidiInstrumentFakePlugin>(); plugin->Load(L"", 44100.f, 128u, 2u);
+		auto destination = std::make_shared<MidiDestination>(); destination->Plugin = plugin; destination->ActiveCompensationDelaySamps = 50u;
+		auto binding = std::make_shared<MidiPlaybackBinding>(); binding->Take = take; binding->Loop = loop; binding->Destination = destination;
+		state.MidiPlaybackRoutes.push_back({binding}); state.MidiDestinations.push_back(destination);
+		state.DestinationChannels.push_back(0xffffu); state.DestinationRetirements.emplace_back();
+		_InvalidateScheduledMidiAtBlockStart(state, 10000u);
+		MidiPlaybackSink output(state); midi::MidiIndexedOutputSink sink(output, 0u, 80u, 10000u);
+		loop->ReadBlock(80u, 41u, sink); ASSERT_FALSE(binding->Held.any()); ASSERT_EQ(2u, destination->ScheduledCount);
+		_DrainScheduledMidi(state, 10000u, 61u); ASSERT_TRUE(binding->AudibleHeld.test(60u)); ASSERT_EQ(1u, plugin->Events.size());
+		midi::MidiLoop::EditState edit; ASSERT_TRUE(loop->SnapshotForEdit(edit));
+		edit.Events[0].sampleOffset = 40u; edit.Events[1].sampleOffset = 70u; ASSERT_TRUE(loop->PublishEdit(edit));
+		_InvalidateScheduledMidiAtBlockStart(state, 10061u); _DrainScheduledMidi(state, 10061u, 49u);
+		EXPECT_TRUE(binding->AudibleHeld.test(60u)); EXPECT_EQ(1u, plugin->Events.size());
+		_DrainScheduledMidi(state, 10110u, 1u); ASSERT_EQ(2u, plugin->Events.size());
+		EXPECT_TRUE(plugin->Events.back().IsNoteOff()); EXPECT_EQ(10110u, plugin->Events.back().sampleOffset);
+		EXPECT_EQ(23u, plugin->Events.back().data2); EXPECT_FALSE(binding->AudibleHeld.any());
+	}
+
+	static void CheckOrdinaryEditPartialFanoutRetry()
+	{
+		PreparedState state; auto take = MakeMidiTake("edit-partial-fanout");
+		auto loop = std::make_shared<midi::MidiLoop>();
+		const std::array source{MidiEvent::MakeNoteOn(10u, 0u, 60u, 100u), MidiEvent::MakeNoteOn(10u, 0u, 64u, 90u),
+			MidiEvent::MakeNoteOff(20u, 0u, 60u, 23u), MidiEvent::MakeNoteOff(900u, 0u, 64u)};
+		loop->ReplaceRecordedEvents(source.data(), source.size(), 1000u); state.MidiPlaybackRoutes.emplace_back();
+		std::array<std::shared_ptr<StationMidiInstrumentFakePlugin>, 2> plugins;
+		for (auto index = 0u; index < plugins.size(); ++index)
+		{
+			plugins[index] = std::make_shared<StationMidiInstrumentFakePlugin>(); plugins[index]->Load(L"", 44100.f, 128u, 2u);
+			auto destination = std::make_shared<MidiDestination>(); destination->Plugin = plugins[index];
+			auto binding = std::make_shared<MidiPlaybackBinding>(); binding->Take = take; binding->Loop = loop; binding->Destination = destination;
+			state.MidiDestinations.push_back(destination); state.MidiPlaybackRoutes[0].push_back(binding);
+			state.DestinationChannels.push_back(0xffffu); state.DestinationRetirements.emplace_back();
+		}
+		_InvalidateScheduledMidiAtBlockStart(state, 0u);
+		MidiPlaybackSink output(state); midi::MidiIndexedOutputSink sink(output, 0u, 0u, 0u);
+		loop->ReadBlock(0u, 15u, sink);
+		auto& slow = *state.MidiDestinations[0]; slow.ActiveCompensationDelaySamps = 256u;
+		slow.ScheduledCount = MidiDestination::ScheduledCapacity;
+		loop->ReadBlock(15u, 16u, sink);
+		ASSERT_TRUE(state.MidiPlaybackRoutes[0][0]->Held.test(60u)); ASSERT_FALSE(state.MidiPlaybackRoutes[0][1]->Held.test(60u));
+		midi::MidiLoop::EditState edit; ASSERT_TRUE(loop->SnapshotForEdit(edit));
+		edit.Events[edit.EventCount++] = MidiEvent::MakeNoteOn(950u, 0u, 72u, 80u);
+		edit.Events[edit.EventCount++] = MidiEvent::MakeNoteOff(960u, 0u, 72u); ASSERT_TRUE(loop->PublishEdit(edit));
+		slow.ScheduledCount = 0u; _InvalidateScheduledMidiAtBlockStart(state, 31u); loop->ReadBlock(31u, 1u, sink);
+		ASSERT_EQ(1u, slow.ScheduledCount); _DrainScheduledMidi(state, 256u, 128u);
+		for (auto index = 0u; index < plugins.size(); ++index)
+		{
+			EXPECT_TRUE(state.MidiPlaybackRoutes[0][index]->AudibleHeld.test(64u));
+			EXPECT_FALSE(state.MidiPlaybackRoutes[0][index]->AudibleHeld.test(60u));
+			EXPECT_EQ(2, std::count_if(plugins[index]->Events.begin(), plugins[index]->Events.end(), [](const auto& e) { return e.IsNoteOn(); }));
+			EXPECT_EQ(1, std::count_if(plugins[index]->Events.begin(), plugins[index]->Events.end(), [](const auto& e) { return e.IsNoteOff(); }));
+			EXPECT_EQ(23u, plugins[index]->Events.back().data2);
+		}
+	}
+
+	static void CheckOrdinaryEditDelayedQueue()
+	{
+		for (auto mode = 0u; mode < 3u; ++mode)
+		for (const auto deviceStart : {10000u, 0xfffffff0u})
+		{
+			SCOPED_TRACE(mode);
+			SCOPED_TRACE(deviceStart);
+			PreparedState state;
+			auto take = MakeMidiTake("edit-delayed-queue");
+			auto loop = std::make_shared<midi::MidiLoop>();
+			const std::array source{MidiEvent::MakeNoteOn(10u, 0u, 60u, 100u), MidiEvent::MakeNoteOn(12u, 0u, 64u, 90u),
+				MidiEvent::MakeNoteOff(50u, 0u, 60u, 23u), MidiEvent::MakeNoteOff(52u, 0u, 64u, 31u)};
+			loop->ReplaceRecordedEvents(source.data(), source.size(), 1000u);
+			state.MidiPlaybackRoutes.emplace_back();
+			auto plugin = std::make_shared<StationMidiInstrumentFakePlugin>();
+			plugin->Load(L"", 44100.f, 128u, 2u);
+			auto destination = std::make_shared<MidiDestination>();
+			destination->Plugin = plugin; destination->ActiveCompensationDelaySamps = 50u;
+			auto binding = std::make_shared<MidiPlaybackBinding>();
+			binding->Take = take; binding->Loop = loop; binding->Destination = destination;
+			state.MidiPlaybackRoutes[0].push_back(binding); state.MidiDestinations.push_back(destination);
+			state.DestinationChannels.push_back(0xffffu); state.DestinationRetirements.emplace_back();
+			MidiPlaybackSink output(state);
+			auto render = [&](unsigned int offset, unsigned int count) {
+				_InvalidateScheduledMidiAtBlockStart(state, deviceStart + offset);
+				// The source clock deliberately differs from the device clock, including uint32 wrap.
+				midi::MidiIndexedOutputSink sink(output, 0u, 1000u + offset, deviceStart + offset);
+				loop->ReadBlock(1000u + offset, count, sink);
+				_DrainScheduledMidi(state, deviceStart + offset, count);
+			};
+			render(0u, 55u);
+			ASSERT_EQ(4u, destination->ScheduledCount); ASSERT_FALSE(binding->Held.any());
+			if (mode == 2u) { render(55u, 10u); ASSERT_TRUE(binding->AudibleHeld.test(60u)); }
+			midi::MidiLoop::EditState edit; ASSERT_TRUE(loop->SnapshotForEdit(edit));
+			if (mode == 1u)
+			{
+				edit.Events[0] = edit.Events[1]; edit.Tokens[0] = edit.Tokens[1];
+				edit.Events[1] = edit.Events[3]; edit.Tokens[1] = edit.Tokens[3]; edit.EventCount = 2u;
+			}
+			else if (mode == 2u) { edit.Events[0].sampleOffset = 5u; edit.Events[2].sampleOffset = 90u; }
+			else { edit.Events[edit.EventCount++] = MidiEvent::MakeNoteOn(200u, 0u, 72u, 80u); edit.Events[edit.EventCount++] = MidiEvent::MakeNoteOff(210u, 0u, 72u); }
+			midi::MidiNote::SortMidiEvents(edit.Events.data(), edit.EventCount, nullptr, nullptr, edit.Tokens.data());
+			ASSERT_TRUE(loop->PublishEdit(edit));
+			render(mode == 2u ? 65u : 55u, mode == 2u ? 35u : 45u);
+			if (mode == 0u) ASSERT_EQ(2u, plugin->Events.size()); // Both attacks survive a revision after their source ends.
+			if (mode == 1u) { ASSERT_EQ(1u, plugin->Events.size()); EXPECT_EQ(64u, plugin->Events[0].data1); }
+			if (mode == 2u) { ASSERT_EQ(2u, plugin->Events.size()); EXPECT_TRUE(binding->AudibleHeld.test(60u)); }
+			render(100u, 40u);
+			if (mode == 2u) { EXPECT_TRUE(binding->AudibleHeld.test(60u)); EXPECT_FALSE(binding->AudibleHeld.test(64u)); }
+			render(140u, 1u);
+			EXPECT_FALSE(binding->AudibleHeld.any()); EXPECT_EQ(0u, destination->ScheduledCount);
+			const auto releases = std::count_if(plugin->Events.begin(), plugin->Events.end(), [](const auto& event) { return event.IsNoteOff(); });
+			EXPECT_EQ(mode == 1u ? 1 : 2, releases);
+			if (mode == 2u) { EXPECT_EQ(deviceStart + 140u, plugin->Events.back().sampleOffset); EXPECT_EQ(23u, plugin->Events.back().data2); }
+		}
+	}
+
 	static void CheckFanoutReleaseRetry()
 	{
 		for (const bool sustain : {false, true})
@@ -2144,6 +2263,60 @@ public:
 		}
 	}
 };
+TEST(StationMidiInstrument, LegacyAmbiguousFifoReleasesSurviveRecordedDeliveryCompensation)
+{
+	auto station = MakeStation("legacy-fifo-delivery");
+	station->SetSampleRate(static_cast<float>(constants::DefaultSampleRate), 0u);
+	auto plugin = AddPlugin(station, L"fake-fifo-delivery.dll");
+	auto take = MakeMidiTake("legacy-fifo-take");
+	take->Record({}, station->Name(), {0u}, {"source"}); take->Play(0u, 1000u, 0u);
+	const std::array source{MidiEvent::MakeNoteOn(10u, 0u, 60u, 80u), MidiEvent::MakeNoteOn(20u, 0u, 60u, 90u),
+		MidiEvent::MakeNoteOff(30u, 0u, 60u), MidiEvent::MakeNoteOn(40u, 0u, 60u, 100u)};
+	take->GetMidiLoops().at(0u)->ReplaceRecordedEvents(source.data(), source.size(), 1000u);
+	station->AddTake(take); station->CommitChanges(); ASSERT_TRUE(station->ConfigureRecordedMidiCompensation(256u));
+	for (auto sample = 0u; sample < 1664u; sample += 128u) RenderStationBlock(station, sample);
+	const std::array expected{266u, 276u, 286u, 296u, 1256u, 1266u, 1276u, 1286u, 1296u};
+	ASSERT_EQ(expected.size(), plugin->ProcessedEvents.size());
+	for (auto i = 0u; i < expected.size(); ++i) EXPECT_EQ(expected[i], plugin->ProcessedEvents[i].sampleOffset);
+	EXPECT_TRUE(plugin->ProcessedEvents[2].IsNoteOff()); EXPECT_TRUE(plugin->ProcessedEvents[4].IsNoteOff());
+	EXPECT_TRUE(plugin->ProcessedEvents[7].IsNoteOff());
+}
+
+TEST(StationMidiInstrument, OrdinaryEditorPublicationPreservesAudibleChordThroughStationDelivery)
+{
+	auto station = MakeStation("ordinary-edit-chord");
+	auto plugin = AddPlugin(station, L"fake-edit-chord.dll");
+	auto take = MakeMidiTake("ordinary-edit-chord-take");
+	take->Record({}, station->Name(), {0u}, {"source"}); take->Play(0u, 1000u, 0u);
+	auto loop = take->GetMidiLoops().at(0u);
+	const std::array source{MidiEvent::MakeNoteOn(0u, 0u, 60u, 100u), MidiEvent::MakeNoteOn(0u, 0u, 64u, 90u),
+		MidiEvent::MakeNoteOff(800u, 0u, 60u), MidiEvent::MakeNoteOff(900u, 0u, 64u)};
+	loop->ReplaceRecordedEvents(source.data(), source.size(), 1000u);
+	station->AddTake(take); station->CommitChanges(); ASSERT_TRUE(station->ConfigureRecordedMidiCompensation(256u));
+	RenderStationBlock(station, 0u); RenderStationBlock(station, 128u); RenderStationBlock(station, 256u);
+	ASSERT_EQ(2u, plugin->ProcessedEvents.size());
+	midi::MidiLoop::EditState edit; ASSERT_TRUE(loop->SnapshotForEdit(edit));
+	edit.Events[edit.EventCount++] = MidiEvent::MakeNoteOn(700u, 0u, 72u, 80u);
+	edit.Events[edit.EventCount++] = MidiEvent::MakeNoteOff(750u, 0u, 72u);
+	midi::MidiNote::SortMidiEvents(edit.Events.data(), edit.EventCount, nullptr, nullptr, edit.Tokens.data());
+	ASSERT_TRUE(loop->PublishEdit(edit)); RenderStationBlock(station, 384u);
+	ASSERT_EQ(2u, plugin->ProcessedEvents.size()); // No delivery-originated full flush on an ordinary revision.
+	ASSERT_TRUE(loop->SnapshotForEdit(edit));
+	edit.Events[0].data1 = 61u; // A changes pitch; B remains owned.
+	// Find A's paired release by pitch rather than relying on sorted insertion positions.
+	for (std::size_t n = 0u; n < edit.EventCount; ++n) if (edit.Events[n].IsNoteOff() && edit.Events[n].data1 == 60u) edit.Events[n].data1 = 61u;
+	ASSERT_TRUE(loop->PublishEdit(edit)); RenderStationBlock(station, 512u); RenderStationBlock(station, 640u); RenderStationBlock(station, 768u);
+	EXPECT_EQ(1, std::count_if(plugin->ProcessedEvents.begin(), plugin->ProcessedEvents.end(), [](const auto& e) { return e.IsNoteOff() && e.data1 == 60u; }));
+	EXPECT_EQ(0, std::count_if(plugin->ProcessedEvents.begin(), plugin->ProcessedEvents.end(), [](const auto& e) { return e.IsNoteOff() && e.data1 == 64u; }));
+}
+
+TEST(StationMidiInstrument, OrdinaryEditReconcilesDelayedArticulationsInMappedDeviceTime)
+{
+	PlaybackReviewDelivery::CheckOrdinaryEditDelayedQueue();
+	PlaybackReviewDelivery::CheckOrdinaryEditPartialFanoutRetry();
+	PlaybackReviewDelivery::CheckCircularQueuedReleaseExtension();
+}
+
 TEST(StationMidiInstrument, FullDelayedDestinationRetainsReleaseUntilRetry)
 {
 	PlaybackReviewDelivery::CheckFanoutReleaseRetry();

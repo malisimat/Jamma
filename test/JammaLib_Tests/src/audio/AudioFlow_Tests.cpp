@@ -1899,6 +1899,50 @@ thread_local bool AudioCallbackAllocationProbe::Scope::ArmedForThread = false;
 thread_local AudioCallbackAllocationProbe::Counts AudioCallbackAllocationProbe::Scope::CountsForThread{};
 std::atomic<_CRT_ALLOC_HOOK> AudioCallbackAllocationProbe::Scope::PreviousHook{ nullptr };
 
+class MidiAdoptionFixedSink final : public midi::IMidiSink
+{
+public:
+	void OnEvent(const midi::MidiEvent& event) noexcept override { (void)TryOnEvent(event); }
+	bool TryOnEvent(const midi::MidiEvent& event) noexcept override
+	{
+		if (RejectRelease && event.IsNoteOff()) return false;
+		if (Count < Events.size()) Events[Count++] = event;
+		return true;
+	}
+	std::array<midi::MidiEvent, 64> Events{};
+	std::size_t Count = 0u;
+	bool RejectRelease = false;
+};
+
+TEST(AudioCallbackRealtime, OrdinaryMidiAdoptionAndRejectedSelectiveRetryDoNotAllocateReallocateOrFree)
+{
+	auto loop = std::make_unique<midi::MidiLoop>();
+	const std::array source{midi::MidiEvent::MakeNoteOn(10u, 0u, 60u, 100u), midi::MidiEvent::MakeNoteOn(10u, 0u, 64u, 90u),
+		midi::MidiEvent::MakeNoteOff(80u, 0u, 60u), midi::MidiEvent::MakeNoteOff(90u, 0u, 64u)};
+	loop->ReplaceRecordedEvents(source.data(), source.size(), 100u);
+	MidiAdoptionFixedSink sink; loop->ReadBlock(0u, 31u, sink); sink.Count = 0u;
+	auto edit = std::make_unique<midi::MidiLoop::EditState>(); ASSERT_TRUE(loop->SnapshotForEdit(*edit));
+	edit->Events[2].sampleOffset = 25u;
+	ASSERT_TRUE(loop->PublishEdit(*edit)); sink.RejectRelease = true;
+	AudioCallbackAllocationProbe::Counts adoption, retry;
+	{
+		AudioCallbackAllocationProbe::Scope measured;
+		loop->ReadBlock(31u, 1u, sink);
+		adoption = measured.GetCounts();
+	}
+	sink.RejectRelease = false;
+	{
+		AudioCallbackAllocationProbe::Scope measured;
+		loop->ReadBlock(32u, 1u, sink);
+		retry = measured.GetCounts();
+	}
+	EXPECT_EQ(0u, adoption.Allocations); EXPECT_EQ(0u, adoption.Reallocations); EXPECT_EQ(0u, adoption.Frees);
+	EXPECT_EQ(0u, retry.Allocations); EXPECT_EQ(0u, retry.Reallocations); EXPECT_EQ(0u, retry.Frees);
+	ASSERT_EQ(1u, sink.Count); EXPECT_TRUE(sink.Events[0].IsNoteOff()); EXPECT_EQ(60u, sink.Events[0].data1);
+	RecordProperty("MidiLoopBytes", std::to_string(sizeof(midi::MidiLoop)));
+	RecordProperty("MidiEditStateBytes", std::to_string(sizeof(midi::MidiLoop::EditState)));
+}
+
 TEST(AudioCallbackRealtime, PreparedCallbackDoesNotAllocateOrFree)
 {
 	io::UserConfig config{};
@@ -2020,6 +2064,43 @@ private:
 	unsigned int _channels = 0u;
 	bool _loaded = false, _bypassed = false, _processed = false;
 };
+
+TEST(AudioCallbackRealtime, OrdinaryMidiDeliveryQueueReconciliationAndDrainDoNotUseHeap)
+{
+	using midi::MidiEvent;
+	audio::AudioHost host(io::UserConfig{}); auto station = MakeStation(1u);
+	auto plugin = std::make_shared<CallbackMidiFixedPlugin>();
+	actions::JobAction job; job.JobActionType = actions::JobAction::JOB_LOADVST;
+	job.VstPath = L"fixed-edit-queue.dll"; job.PreInitPlugin = plugin; station->OnAction(job); station->CommitChanges();
+	const audio::AudioStreamParams params{"test", 48000u, 2u, 128u, 0u, 0u, 0u, 1u};
+	auto stations = std::make_shared<const std::vector<std::shared_ptr<Station>>>(std::vector{station});
+	audio::AudioHostRealtimeTestAccess::Prepare(host, stations, params);
+	std::array<float, 128u> output{};
+	ASSERT_EQ(0, audio::AudioHostRealtimeTestAccess::InvokeCallback(host, output.data(), nullptr, 128u));
+	auto take = MakeTake(); take->Record({}, station->Name(), {0u}, {"source"}); take->Play(0u, 1000u, 0u);
+	auto loop = take->GetMidiLoops().at(0u);
+	const std::array source{MidiEvent::MakeNoteOn(0u, 0u, 60u, 100u), MidiEvent::MakeNoteOff(80u, 0u, 60u, 23u)};
+	loop->ReplaceRecordedEvents(source.data(), source.size(), 1000u); station->AddTake(take); station->CommitChanges();
+	ASSERT_TRUE(station->ConfigureRecordedMidiCompensation(256u));
+	auto measured = [&] {
+		AudioCallbackAllocationProbe::Counts counts; int result;
+		{
+			AudioCallbackAllocationProbe::Scope probe;
+			result = audio::AudioHostRealtimeTestAccess::InvokeCallback(host, output.data(), nullptr, 128u);
+			counts = probe.GetCounts();
+		}
+		EXPECT_EQ(0, result); EXPECT_EQ(0u, counts.Allocations); EXPECT_EQ(0u, counts.Reallocations); EXPECT_EQ(0u, counts.Frees);
+	};
+	measured(); // 128: source has accepted ON/OFF, both still waiting in the device queue.
+	EXPECT_EQ(0u, plugin->Count(0x90u, 60u, 100u));
+	auto edit = std::make_unique<midi::MidiLoop::EditState>(); ASSERT_TRUE(loop->SnapshotForEdit(*edit));
+	edit->Events[1].sampleOffset = 180u; ASSERT_TRUE(loop->PublishEdit(*edit));
+	measured(); // 256: binary token lookup and queued release endpoint update.
+	measured(); // 384: queued attack reaches the fixed plugin; old release at464 is gone.
+	EXPECT_EQ(1u, plugin->Count(0x90u, 60u, 100u)); EXPECT_EQ(0u, plugin->Count(0x80u, 60u, 23u));
+	measured(); // 512: extended endpoint564 releases once, despite source Held having cleared at80.
+	EXPECT_EQ(1u, plugin->Count(0x80u, 60u, 23u)); EXPECT_FALSE(plugin->Overflow);
+}
 
 TEST(AudioCallbackRealtime, MidiPublicationCableCancellationAndRetirementRetryDoNotUseHeap)
 {

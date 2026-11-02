@@ -52,7 +52,8 @@ namespace midi
 		// metadata follows its event through the same permutation.
 		static void SortMidiEvents(MidiEvent* events,
 			std::size_t eventCount, std::uint8_t* unmatchedStarts = nullptr,
-			std::uint16_t* continuationRoots = nullptr) noexcept;
+			std::uint16_t* continuationRoots = nullptr, std::uint64_t* tokens = nullptr,
+			std::uint16_t* owners = nullptr) noexcept;
 	};
 
 	struct MidiNoteSnapshot

@@ -24,6 +24,11 @@ namespace midi
 
 	bool MidiIndexedOutputSink::TryOnEvent(const MidiEvent& ev) noexcept
 	{
+		return TryOnVoiceEvent(ev, {});
+	}
+
+	bool MidiIndexedOutputSink::TryOnVoiceEvent(const MidiEvent& ev, const MidiVoiceEvent& voice) noexcept
+	{
 		MidiEvent mapped = ev;
 		mapped.sampleOffset = _outputBlockStart + (ev.sampleOffset - _midiBlockStart);
 		if (mapped.IsNoteOn())
@@ -36,6 +41,6 @@ namespace midi
 			// release. Do not deliver it or mark the source note as sounding.
 			if (!mapped.IsNoteOn()) return false;
 		}
-		return _outputSink.TryOnEvent(_outputIndex, mapped);
+		return _outputSink.TryOnVoiceEvent(_outputIndex, mapped, voice);
 	}
 }

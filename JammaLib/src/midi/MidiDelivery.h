@@ -59,6 +59,7 @@ namespace midi
 			struct ScheduledMidi
 			{
 				midi::MidiEvent Event;
+				midi::MidiVoiceEvent Voice;
 				std::uint64_t Sequence = 0u;
 				MidiPlaybackBinding* Owner = nullptr; // Pinned by QueuedEvents.
 				bool IsRealtime = false;
@@ -93,6 +94,8 @@ namespace midi
 			std::atomic<bool> HasHeld{ false }; // Audio publishes; job reclaims unused bindings.
 			std::atomic<unsigned int> QueuedEvents{ 0u }; // Pins raw queue identity until removed.
 			std::atomic<bool> RoutingActive{ true }; // Job publication; callback cancellation.
+			std::uint64_t ObservedRecoveryEpoch = 0u;
+			bool ReconcileScheduledThisBlock = false;
 			std::uint64_t ObservedSourceRevision = 0u; // Audio callback.
 			bool HasObservedSourceRevision = false;
 			bool HasObservedSourceState = false;
@@ -161,11 +164,12 @@ namespace midi
 			explicit MidiPlaybackSink(const PreparedState& state) noexcept : _state(state) {}
 			void OnEvent(unsigned int outputIndex, const midi::MidiEvent& event) noexcept override;
 			bool TryOnEvent(unsigned int outputIndex, const midi::MidiEvent& event) noexcept override;
+			bool TryOnVoiceEvent(unsigned int outputIndex, const midi::MidiEvent& event, const midi::MidiVoiceEvent& voice) noexcept override;
 		private:
 			const PreparedState& _state;
 		};
 
-		static bool _TryDeliverMidi(MidiDestination& destination, const midi::MidiEvent& event, bool isRealtime, MidiPlaybackBinding* owner = nullptr) noexcept;
+		static bool _TryDeliverMidi(MidiDestination& destination, const midi::MidiEvent& event, bool isRealtime, MidiPlaybackBinding* owner = nullptr, const midi::MidiVoiceEvent& voice = {}) noexcept;
 		static bool _TryDeliverMidiNow(MidiDestination& destination, const midi::MidiEvent& event, bool isRealtime) noexcept;
 		static bool _TryDeliverRecordedMidiNow(MidiDestination& destination, const midi::MidiEvent& event,
 			MidiPlaybackBinding& owner, bool isRealtime) noexcept;
@@ -176,7 +180,7 @@ namespace midi
 			MidiDestination& destination, MidiPlaybackBinding* owner) noexcept;
 		static void _RecoverCancelledScheduledMidi(MidiDestination& destination,
 			const std::bitset<midi::MidiNote::TotalNoteSlots>& affected) noexcept;
-		static void _InvalidateScheduledMidiAtBlockStart(const PreparedState& state, bool forceCancel = false) noexcept;
+		static void _InvalidateScheduledMidiAtBlockStart(const PreparedState& state, std::uint32_t blockStartSample, bool forceCancel = false) noexcept;
 		static void _DrainPendingMidiReleases(const PreparedState& state, std::uint32_t sample) noexcept;
 		static void _RecoverSkippedMidiBlocks(const PreparedState& state) noexcept;
 		static void _DispatchLiveMidi(const PreparedState& state, const midi::MidiEvent& event,

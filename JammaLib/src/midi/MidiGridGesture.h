@@ -358,7 +358,7 @@ namespace midi
 						removed[sourceNote.Off] = true;
 				_working.EventCount = 0u;
 				for (std::size_t i = 0u; i < _before.EventCount; ++i)
-					if (!removed[i]) _working.Events[_working.EventCount++] = _before.Events[i];
+					if (!removed[i]) { _working.Tokens[_working.EventCount] = _before.Tokens[i]; _working.Events[_working.EventCount++] = _before.Events[i]; }
 				_dirty = true;
 				AppendPreview(note.Start, note.End, note.Pitch, false);
 				return true;

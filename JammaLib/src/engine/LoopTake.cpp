@@ -3558,7 +3558,7 @@ bool LoopTake::RestoreAudioRoutes(const std::vector<std::vector<unsigned long>>&
 
 bool LoopTake::PublishMidiEdit(const std::shared_ptr<midi::MidiLoop>& loop,
 	const midi::MidiLoop::EditState& edit,
-	std::uint64_t* acceptedRevision)
+	std::uint64_t* acceptedRevision, midi::MidiLoop::EditState* accepted)
 {
 	std::scoped_lock midiLock(_midiCaptureMutex);
 	if (!loop || _state.load(std::memory_order_acquire) != STATE_PLAYING
@@ -3566,10 +3566,8 @@ bool LoopTake::PublishMidiEdit(const std::shared_ptr<midi::MidiLoop>& loop,
 		|| edit.Quantisation != loop->Quantisation()
 		|| edit.Quantisation != ResolvedMidiQuantisationFor(loop)
 		|| edit.QuantisationTransportStartSamps != MidiQuantisationTransportStartSamps()
-		|| !loop->PublishEdit(edit))
+		|| !loop->PublishEdit(edit, accepted, acceptedRevision))
 		return false;
-	if (acceptedRevision)
-		*acceptedRevision = edit.Revision + 1u;
 	loop->QueueModelUpdateFromEvents(edit.LoopLengthSamps, true);
 	_changesMade = true;
 	return true;

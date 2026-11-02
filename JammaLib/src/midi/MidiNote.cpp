@@ -104,7 +104,7 @@ std::vector<MidiNote> MidiNote::ExtractSpans(const MidiEvent* events,
 }
 
 void MidiNote::SortMidiEvents(MidiEvent* events,
-	std::size_t eventCount, std::uint8_t* unmatchedStarts, std::uint16_t* continuationRoots) noexcept
+	std::size_t eventCount, std::uint8_t* unmatchedStarts, std::uint16_t* continuationRoots, std::uint64_t* tokens, std::uint16_t* owners) noexcept
 {
 	if (nullptr == events || eventCount < 2u)
 		return;
@@ -131,16 +131,22 @@ void MidiNote::SortMidiEvents(MidiEvent* events,
 		const auto current = events[i];
 		const auto unmatched = unmatchedStarts ? unmatchedStarts[i] : 0u;
 		const auto root = continuationRoots ? continuationRoots[i] : 0u;
+		const auto token = tokens ? tokens[i] : 0u;
+		const auto owner = owners ? owners[i] : 0u;
 		std::size_t j = i;
 		while (j > 0u && shouldPrecede(current, events[j - 1u]))
 		{
 			events[j] = events[j - 1u];
 			if (unmatchedStarts) unmatchedStarts[j] = unmatchedStarts[j - 1u];
 			if (continuationRoots) continuationRoots[j] = continuationRoots[j - 1u];
+			if (tokens) tokens[j] = tokens[j - 1u];
+			if (owners) owners[j] = owners[j - 1u];
 			--j;
 		}
 		events[j] = current;
 		if (unmatchedStarts) unmatchedStarts[j] = static_cast<std::uint8_t>(unmatched);
 		if (continuationRoots) continuationRoots[j] = static_cast<std::uint16_t>(root);
+		if (tokens) tokens[j] = token;
+		if (owners) owners[j] = static_cast<std::uint16_t>(owner);
 	}
 }

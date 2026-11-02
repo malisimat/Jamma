@@ -996,7 +996,8 @@ void LoopGridEditor::_PublishGesture()
 	if (!loop || !take)
 		return;
 	std::uint64_t acceptedRevision = 0u;
-	if (!take->PublishMidiEdit(loop, _gesture->Working(), &acceptedRevision))
+	auto accepted = _gesture->Working();
+	if (!take->PublishMidiEdit(loop, _gesture->Working(), &acceptedRevision, &accepted))
 	{
 		_SetFeedback("Edit changed or cannot be represented");
 		return;
@@ -1004,7 +1005,7 @@ void LoopGridEditor::_PublishGesture()
 	if (!_revisionCursor)
 		_revisionCursor = std::make_shared<actions::MidiEditRevisionCursor>();
 	_host.Undo.Add(std::make_shared<actions::MidiLoopEditUndo>(take, loop,
-		_gesture->Before(), _gesture->Working(), acceptedRevision, _revisionCursor));
+		_gesture->Before(), std::move(accepted), acceptedRevision, _revisionCursor));
 	if (_gesture->Mode() == MidiGridGesture::Kind::Velocity)
 		_creationVelocity = static_cast<std::uint8_t>(_gesture->ProposedVelocity());
 	_SetFeedback("MIDI edit applied (Ctrl+Z to undo)");

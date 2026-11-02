@@ -17,6 +17,7 @@ namespace midi
 
 		void OnEvent(const MidiEvent& ev) noexcept override;
 		bool TryOnEvent(const MidiEvent& ev) noexcept override;
+		bool TryOnVoiceEvent(const MidiEvent& ev, const MidiVoiceEvent& voice) noexcept override;
 
 	private:
 		IMidiOutputSink& _outputSink;
