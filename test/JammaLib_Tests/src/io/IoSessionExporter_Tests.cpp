@@ -830,3 +830,40 @@ TEST(IoSessionExporter, SavesLegacyStationsWithUnidentifiedVstSlots)
 	EXPECT_EQ("station:1:vst:0", exported->Stations[2].VstChain[0].Id);
 	EXPECT_NE("station:1:vst:0", exported->Stations[0].VstChain[0].Id);
 }
+
+TEST(IoSessionExporter, RetainedParentMuteRoundTripsBeforeRestoredTakePublicationWithoutFlatteningChildFlags)
+{
+	for (const bool populated : {false,true})
+	{
+		auto station=IoSessionExporterTest::MakeStation("retained-session"); station->SetRetainedMuted(true);
+		if (populated)
+		{
+			auto take=IoSessionExporterTest::MakeTake("parent-child-raw"); take->AddLoop(IoSessionExporterTest::MakeAudioLoop(64u,0u,0u)); take->CommitChanges(); station->AddTake(take); station->CommitChanges();
+			ASSERT_TRUE(take->IsMuted()); ASSERT_EQ(1u,take->GetLoops().size()); EXPECT_FALSE(take->GetLoops().front()->GetTweakState() & base::Tweakable::TWEAKSTATE_MUTED);
+		}
+		Quantiser quantiser; quantiser.SetClock(std::make_shared<utils::Timer>());
+		if (populated) quantiser.ApplyTiming({16u,64ul,4u,120.0f,4u},"retained parent export fixture"); audio::AudioStreamParams stream{}; stream.SampleRate=44100u; stream.NumOutputChannels=2u;
+		io::UserConfig user{}; std::mutex mutex; const auto dir=IoSessionExporterTest::MakeDirectory();
+		ASSERT_TRUE(io::IoSessionExporter::ExportSessionToDirectory({station},{},quantiser,io::JamFile::GlobalMidiQuantState::Off,0.0,user,stream,nullptr,mutex,nullptr,dir.wstring()));
+		std::ifstream input(dir / "session.jam"); ASSERT_TRUE(input); std::stringstream contents; contents<<input.rdbuf(); auto saved=io::JamFile::FromStream(std::move(contents)); ASSERT_TRUE(saved); ASSERT_EQ(1u,saved->Stations.size());
+		EXPECT_TRUE(saved->Stations[0].Muted);
+		if (populated) { ASSERT_EQ(1u,saved->Stations[0].LoopTakes.size()); ASSERT_EQ(1u,saved->Stations[0].LoopTakes[0].Loops.size()); EXPECT_FALSE(saved->Stations[0].LoopTakes[0].Loops[0].Muted); }
+		StationParams params; params.Size={200u,200u}; const auto restored=io::IoSessionLoader::ReconstructStation(params,Station::GetMixerParams(params.Size,audio::MergeMixBehaviourParams{}),saved->Stations[0],dir.wstring()); ASSERT_TRUE(restored);
+		EXPECT_TRUE((*restored)->RetainedMuted()); EXPECT_TRUE((*restored)->AllTakesMuted());
+		if (populated)
+		{
+			const auto takes=(*restored)->GetLoopTakeSnapshot(); ASSERT_EQ(1u,takes.size()); ASSERT_NE(nullptr,takes[0]);
+			// The loader stages leaves until ordinary owner commit. Parent mute
+			// must already be effective on both the take and the staged source.
+			EXPECT_TRUE(takes[0]->IsMuted()); EXPECT_FALSE(takes[0]->GetTweakState() & base::Tweakable::TWEAKSTATE_MUTED);
+			ASSERT_TRUE(takes[0]->HasRestorableLoopMaterial());
+			const auto staged=takes[0]->FindStagedAudioLoopById(saved->Stations[0].LoopTakes[0].Loops[0].Id); ASSERT_NE(nullptr,staged);
+			EXPECT_EQ(64u,staged->LoopLength()); EXPECT_TRUE(staged->IsMuted()); EXPECT_FALSE(staged->GetTweakState() & base::Tweakable::TWEAKSTATE_MUTED);
+			takes[0]->CommitChanges(); (*restored)->CommitChanges();
+			const auto committed=(*restored)->GetLoopTakeSnapshot(); ASSERT_EQ(1u,committed.size()); ASSERT_EQ(1u,committed[0]->GetLoops().size());
+			EXPECT_EQ(staged,committed[0]->GetLoops().front()); EXPECT_TRUE(committed[0]->GetLoops().front()->IsMuted());
+			EXPECT_FALSE(committed[0]->GetLoops().front()->GetTweakState() & base::Tweakable::TWEAKSTATE_MUTED);
+		}
+		input.close(); std::filesystem::remove_all(dir);
+	}
+}

@@ -83,7 +83,7 @@ void HierarchySelection::SetMuted(const LockedStations& view, const std::vector<
 	};
 	if (auto station = std::dynamic_pointer_cast<Station>(target))
 	{
-		for (const auto& take : station->GetLoopTakes()) setMuted(take);
+		setMuted(station); // Station retains intent and preserves explicit child fan-out.
 	}
 	else if (auto tweakable = std::dynamic_pointer_cast<Tweakable>(target))
 		setMuted(tweakable);

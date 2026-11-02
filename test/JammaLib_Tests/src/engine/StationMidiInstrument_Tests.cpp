@@ -2751,3 +2751,77 @@ TEST(StationMidiInstrument, BroadcastUsesMidiCapabilitiesRatherThanAudioRackOrde
 	RenderStationBlock(station, 0u);
 	EXPECT_EQ(1u, a->Events.size()); EXPECT_TRUE(audioOnly->Events.empty()); EXPECT_EQ(1u, b->Events.size());
 }
+
+TEST(StationMidiInstrument, EmptyRetainedMuteAllowsMidiCaptureAndLiveMonitoringButOnlyFutureRecordedOnsetsAfterUnmute)
+{
+	auto station=MakeStation("retained-midi"); auto plugin=AddPlugin(station,L"fake-retained-midi.dll"); station->Mute();
+	auto take=station->AddTake(); take->Record({},station->Name(),{0u},{"source"}); take->CommitChanges();
+	std::uint32_t captured=0u;
+	for (const auto event : {MidiEvent::MakeNoteOn(0u,0u,60u,90u),MidiEvent::MakeNoteOff(80u,0u,60u),MidiEvent::MakeNoteOn(400u,0u,67u,95u),MidiEvent::MakeNoteOff(450u,0u,67u)})
+	{
+		take->EndMultiWrite(event.sampleOffset-captured,true,base::Audible::AUDIOSOURCE_ADC); captured=event.sampleOffset;
+		ASSERT_EQ(captured,take->NumRecordedSamps()); ASSERT_TRUE(take->RecordMidiEvent(event,"source",event.sampleOffset));
+	}
+	ASSERT_EQ(4u,take->GetMidiLoops().front()->EventCount());
+	take->EndMultiWrite(1000u-captured,true,base::Audible::AUDIOSOURCE_ADC);
+	take->Play(0u,1000u,0u); station->CommitChanges(); take->UnMute();
+	const auto savedCount=take->GetMidiLoops().front()->EventCount();
+	midi::MidiEvent authored; bool futureStored=false;
+	for (auto i=0u; i<savedCount; ++i) if (take->GetMidiLoops().front()->TryGetEvent(i,authored) && authored.IsNoteOn() && authored.data1==67u) { EXPECT_EQ(400u,authored.sampleOffset); futureStored=true; }
+	ASSERT_TRUE(futureStored);
+	ASSERT_TRUE(take->IsMuted()); EXPECT_FALSE(take->GetTweakState() & base::Tweakable::TWEAKSTATE_MUTED);
+	RenderStationBlock(station,0u); ASSERT_TRUE(station->TryEnqueueImmediateLiveMidi(MidiEvent::MakeNoteOn(128u,0u,72u,100u)));
+	ASSERT_TRUE(station->TryEnqueueImmediateLiveMidi(MidiEvent::MakeNoteOff(192u,0u,72u))); RenderStationBlock(station,128u);
+	EXPECT_EQ(256u,take->MidiPlayIndex()); EXPECT_EQ(savedCount,take->GetMidiLoops().front()->EventCount());
+	ASSERT_EQ(2u,plugin->ProcessedEvents.size()); EXPECT_EQ(72u,plugin->ProcessedEvents[0].data1); EXPECT_EQ(72u,plugin->ProcessedEvents[1].data1);
+	station->UnMute(); RenderStationBlock(station,256u);
+	EXPECT_EQ(0,std::count_if(plugin->ProcessedEvents.begin(),plugin->ProcessedEvents.end(),[](const auto& e){return e.IsNoteOn() && e.data1==67u;}));
+	RenderStationBlock(station,384u);
+	EXPECT_EQ(0,std::count_if(plugin->ProcessedEvents.begin(),plugin->ProcessedEvents.end(),[](const auto& e){return e.IsNoteOn() && e.data1==60u;}));
+	EXPECT_EQ(1,std::count_if(plugin->ProcessedEvents.begin(),plugin->ProcessedEvents.end(),[](const auto& e){return e.IsNoteOn() && e.data1==67u && e.sampleOffset==400u;}));
+}
+
+TEST(StationMidiInstrument, RetainedParentMuteCleansHeldChordAndPedalWithRejectedReleaseRetry)
+{
+	auto station=MakeStation("parent-held"); auto plugin=AddPlugin(station,L"fake-parent-held.dll"); auto take=MakeMidiTake("parent-held-take");
+	take->Record({},station->Name(),{0u},{"source"}); take->Play(0u,1000u,0u);
+	const std::array source{MidiEvent{0u,0xb0u,64u,127u},MidiEvent::MakeNoteOn(10u,0u,60u,90u),MidiEvent::MakeNoteOn(10u,0u,64u,80u),
+		MidiEvent::MakeNoteOff(800u,0u,60u,23u),MidiEvent::MakeNoteOff(800u,0u,64u),MidiEvent{900u,0xb0u,64u,0u}};
+	take->GetMidiLoops().front()->ReplaceRecordedEvents(source.data(),source.size(),1000u); station->AddTake(take); station->CommitChanges(); RenderStationBlock(station,0u);
+	ASSERT_EQ(3u,plugin->ProcessedEvents.size()); station->SetRetainedMuted(true); plugin->MaxAcceptedPerBlock=0u;
+	RenderStationBlock(station,128u); EXPECT_EQ(3u,plugin->ProcessedEvents.size()); plugin->MaxAcceptedPerBlock=100u; RenderStationBlock(station,256u);
+	EXPECT_FALSE(take->GetTweakState() & base::Tweakable::TWEAKSTATE_MUTED); EXPECT_TRUE(take->IsMuted());
+	EXPECT_EQ(2,std::count_if(plugin->ProcessedEvents.begin(),plugin->ProcessedEvents.end(),[](const auto& e){return e.IsNoteOff();}));
+	EXPECT_EQ(1,std::count_if(plugin->ProcessedEvents.begin(),plugin->ProcessedEvents.end(),[](const auto& e){return e.MessageType()==0xb0u && e.data1==64u && e.data2==0u;}));
+	station->SetRetainedMuted(false); RenderStationBlock(station,384u);
+	EXPECT_EQ(2,std::count_if(plugin->ProcessedEvents.begin(),plugin->ProcessedEvents.end(),[](const auto& e){return e.IsNoteOn();}));
+}
+
+TEST(StationMidiInstrument, RetainedMuteGatesActualTakePluginOutputFromFirstBlockButNotStationLiveRack)
+{
+	auto station=MakeStation("muted-take-plugin"); station->SetNumBusChannels(2u); station->SetupBuffers(32u); station->Mute(); auto take=MakeMidiTake("muted-take-plugin-source");
+	take->SetNumBusChannels(2u); take->SetupBuffers(32u); take->Record({0u},station->Name()); take->CommitChanges();
+	std::vector<float> silence(constants::MaxLoopFadeSamps+128u,0.0f); base::AudioWriteRequest request;
+	request.samples=silence.data(); request.numSamps=static_cast<unsigned int>(silence.size()); request.stride=1u; request.fadeNew=1.0f; request.source=base::Audible::AUDIOSOURCE_ADC;
+	take->OnBlockWriteChannel(0u,request,0); take->EndMultiWrite(request.numSamps,true,base::Audible::AUDIOSOURCE_ADC); take->Play(constants::MaxLoopFadeSamps,128u,0u);
+	auto plugin=std::make_shared<StationMidiInstrumentFakePlugin>(); plugin->RenderRole=vst::RenderRole::Instrument; plugin->ReplaceOutput=true; plugin->OutputValue=0.75f;
+	JobAction load; load.JobActionType=JobAction::JOB_LOADVST; load.VstPath=L"fake-retained-take-output.dll"; load.PreInitPlugin=plugin; take->OnAction(load); take->CommitChanges();
+	station->AddTake(take); station->CommitChanges();
+	const auto muted=RenderStationAudioBlock(station,0u,32u); ASSERT_GT(plugin->ProcessCalls,0u);
+	EXPECT_TRUE(std::all_of(muted.begin(),muted.end(),[](float value){return value==0.0f;}));
+	for (auto frame=1u; frame<=8u; ++frame)
+	{
+		const auto processed=plugin->ProcessCalls; const auto quiet=RenderStationAudioBlock(station,frame*32u,32u);
+		EXPECT_GT(plugin->ProcessCalls,processed); EXPECT_TRUE(std::all_of(quiet.begin(),quiet.end(),[](float value){return value==0.0f;}));
+	}
+	station->SetRetainedMuted(false); ASSERT_FALSE(take->IsMuted()); bool audible=false;
+	for (auto frame=9u; frame<25u; ++frame)
+	{
+		const auto signal=RenderStationAudioBlock(station,frame*32u,32u);
+		audible |= std::any_of(signal.begin(),signal.end(),[](float value){return std::abs(value)>0.000001f;});
+	}
+	EXPECT_TRUE(audible);
+	auto live=MakeStation("muted-live-rack"); live->Mute(); auto livePlugin=AddPlugin(live,L"fake-retained-live-output.dll");
+	livePlugin->RenderRole=vst::RenderRole::Instrument; livePlugin->ReplaceOutput=true; livePlugin->OutputValue=0.25f;
+	const auto monitored=RenderStationAudioBlock(live,0u,32u); EXPECT_TRUE(std::any_of(monitored.begin(),monitored.end(),[](float value){return std::abs(value)>0.000001f;}));
+}

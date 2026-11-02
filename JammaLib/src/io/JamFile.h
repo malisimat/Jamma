@@ -204,6 +204,7 @@ namespace io
 			std::vector<LoopTake> LoopTakes;
 			std::vector<VstEntry> VstChain;
 			std::int32_t StationPhaseOffsetSamps = 0;
+			bool Muted = false; // Retained station intent; absent in legacy sessions.
 			std::vector<int> AllowedMidiChannels;
 			std::array<midi::MidiChannelRoute, 16> MidiChannelRoutes{};
 			// One destination-output list per station bus mixer.

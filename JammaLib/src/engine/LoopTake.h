@@ -198,8 +198,12 @@ namespace engine
 			{ _captureSourceMuteControl->Acquire(); }
 		void ReleaseTriggerSourceMuteAudio() noexcept override
 			{ _captureSourceMuteControl->Release(); }
-		bool IsMuted() const override
-			{ return Tweakable::IsMuted() || _captureSourceMuteControl->IsMuted(); }
+		bool IsUserOrSourceMuted() const noexcept { return Tweakable::IsMuted() || _captureSourceMuteControl->IsMuted(); }
+		bool IsMuted() const override { return IsUserOrSourceMuted() || IsStationMuted(); }
+		bool IsStationMuted() const noexcept { return _stationMuteControl && _stationMuteControl->load(std::memory_order_acquire); }
+		bool IsSourceMuted() const noexcept { return _captureSourceMuteControl->IsMuted(); }
+		// Structural owner binds before Station membership publication. No parent pointer/cycle.
+		void SetStationMuteControl(const std::shared_ptr<const std::atomic<bool>>& control);
 		// Structural owner only; retains a control handle, never the source take.
 		void AcquireReplacementSourceMute(const std::shared_ptr<LoopTake>& source) noexcept;
 		unsigned long NumRecordedSamps() const;
@@ -713,6 +717,7 @@ namespace engine
 		std::shared_ptr<gui::GuiRack> _guiRack;
 		std::shared_ptr<graphics::TakeCoreModel> _takeCore;
 		std::shared_ptr<audio::AudioMixer> _masterMixer;
+		std::shared_ptr<const std::atomic<bool>> _stationMuteControl;
 		std::shared_ptr<audio::CaptureSourceMuteControl> _captureSourceMuteControl =
 			std::make_shared<audio::CaptureSourceMuteControl>();
 		std::shared_ptr<audio::CaptureSourceMuteControl> _replacementSourceMuteControl;

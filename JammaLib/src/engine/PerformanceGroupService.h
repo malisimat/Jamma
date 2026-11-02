@@ -13,10 +13,12 @@ namespace engine
     struct GroupMuteApplication
     {
         static constexpr std::size_t MaxTargets = 32768u;
+        struct StationState { std::shared_ptr<Station> Owner; bool Muted = false; };
         struct TakeState { std::shared_ptr<LoopTake> Take; bool Muted = false; };
         struct LoopState { std::shared_ptr<Loop> AudioLoop; bool Muted = false; std::shared_ptr<LoopTake> Take; };
         std::uint64_t Version = 0u;
         std::uint64_t TopologyRevision = 0u; // Accepted rig membership at publication.
+        std::vector<StationState> Stations;
         std::vector<TakeState> Takes;
         std::vector<LoopState> Loops;
         void ApplyAudio() const noexcept;
@@ -28,7 +30,7 @@ namespace engine
     {
     public:
         using Stations = std::vector<std::shared_ptr<Station>>;
-        static MuteGroupSnapshot CaptureMuteConfiguration(const Stations& stations);
+        static MuteGroupSnapshot CaptureMuteConfiguration(const Stations& stations, const GroupMuteApplication* desired = nullptr);
         static SelectionGroupSnapshot CaptureSelectionConfiguration(const Stations& stations, GroupTargetKind depth);
         static void RestoreSelection(const SelectionGroupSnapshot& snapshot, const Stations& stations);
         static std::shared_ptr<const GroupMuteApplication> PrepareMuteApplication(
@@ -36,7 +38,7 @@ namespace engine
         static std::shared_ptr<const GroupMuteApplication> PrepareSelectedTakeInversion(
             const Stations& stations, std::uint64_t version);
         static std::shared_ptr<const GroupMuteApplication> PrepareAllMuted(
-            const Stations& stations, bool muted, std::uint64_t version);
+            const Stations& stations, bool muted, std::uint64_t version, const GroupMuteApplication* desired = nullptr);
         static std::shared_ptr<Station> ResolveStation(const GroupTargetId& id, const Stations& stations);
         static std::shared_ptr<LoopTake> ResolveTake(const GroupTargetId& id, const Stations& stations);
     };

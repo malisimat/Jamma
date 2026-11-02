@@ -114,6 +114,11 @@ namespace engine
 		void SetClickPressed(bool pressed, bool mute = false) noexcept { if (_stationModel) _stationModel->SetClickPressed(pressed, mute); }
 		// Presentation query: callers serialize take membership with the scene lock.
 		bool AllTakesMuted() const;
+		bool IsMuted() const override { return RetainedMuted(); }
+		bool RetainedMuted() const noexcept { return _retainedMute->load(std::memory_order_acquire); }
+		void SetRetainedMuted(bool muted) noexcept { _retainedMute->store(muted, std::memory_order_release); }
+		bool Mute() override;
+		bool UnMute() override;
 		utils::Position3d TopCapModelPosition() const;
 		// Graphics/window owner only. Engine topology and serialization use ModelPosition.
 		utils::Position3d PresentationModelPosition() const;
@@ -494,6 +499,9 @@ namespace engine
         std::atomic<bool> _midiFormatEpochKnown{ false };
         std::atomic<std::uint32_t> _midiFormatEpochSample{ 0u };
 		std::vector<int> _allowedMidiChannels;
+		// Canonical station intent. Takes/mixers retain only this condition, never Station.
+		static_assert(std::atomic<bool>::is_always_lock_free);
+		std::shared_ptr<std::atomic<bool>> _retainedMute = std::make_shared<std::atomic<bool>>(false);
 		std::atomic<bool> _membershipRemoving{ false }; // Scene owner writes, UI/job readers; station lifetime pins teardown.
 		std::atomic<std::uint16_t> _allowedMidiChannelMask{ 0u };
 

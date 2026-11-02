@@ -59,9 +59,22 @@ bool AudioMixer::UnMute()
 	return Tweakable::UnMute();
 }
 
+void AudioMixer::SetStationMuteControl(const std::shared_ptr<const std::atomic<bool>>& control) noexcept
+{
+	_stationMuteControl = control;
+	if (control && control->load(std::memory_order_acquire))
+	{
+		// Pre-publication initialization: an already-muted station must never
+		// emit a first-block fade from the new mixer's default unity level.
+		_appliedFadeTarget = 0.0; _fade->Jump(0.0);
+		_publishedFadeLevel.store(0.0, std::memory_order_release);
+	}
+}
+
 bool AudioMixer::IsMuted() const
 {
-	return Tweakable::IsMuted() || IsCaptureSourceMuted();
+	return Tweakable::IsMuted() || IsCaptureSourceMuted()
+		|| (_stationMuteControl && _stationMuteControl->load(std::memory_order_acquire));
 }
 
 bool AudioMixer::AllowReplacementPlayback() noexcept

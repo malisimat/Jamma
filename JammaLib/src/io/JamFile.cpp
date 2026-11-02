@@ -782,6 +782,7 @@ bool JamFile::ToStream(JamFile jam, std::stringstream& ss, std::string* error)
 		}
 		ss << "],"
 			<< kvInt("stationphaseoffsetsamps", station.StationPhaseOffsetSamps) << ","
+			<< kvBool("muted", station.Muted) << ","
 			<< quoted("takes") << ":[";
 
 		for (size_t takeIndex = 0; takeIndex < station.LoopTakes.size(); ++takeIndex)
@@ -1696,6 +1697,11 @@ std::optional<JamFile::Station> JamFile::Station::FromJson(Json::JsonPart json)
 	Station station;
 	station.Id = Json::GetString(json, "id").value_or("");
 	station.Name = name;
+	if (const auto muted = json.KeyValues.find("muted"); muted != json.KeyValues.end())
+	{
+		if (muted->second.index() != 0) return std::nullopt;
+		station.Muted = std::get<bool>(muted->second);
+	}
 	station.StationType = stationType;
 	station.MasterLevel = masterLevel;
 	station.BusLevels = std::move(busLevels);

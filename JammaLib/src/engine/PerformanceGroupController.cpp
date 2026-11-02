@@ -47,6 +47,7 @@ bool PerformanceGroupController::HandleKey(const actions::KeyAction& action,
                                     if (leaf.AudioLoop == loop) leaf.Muted = state.Muted;
                             break;
                         }
+                revised->Stations = _pendingMute->Stations; // Selected inversion cannot discard pending parent intent.
                 // Publication supersedes the entire preceding application.
                 // Preserve desired flags outside this selected inversion too.
                 for (const auto& pending : _pendingMute->Takes)
@@ -57,7 +58,7 @@ bool PerformanceGroupController::HandleKey(const actions::KeyAction& action,
                     if (std::none_of(revised->Loops.begin(), revised->Loops.end(),
                         [&](const auto& state) { return state.AudioLoop == pending.AudioLoop; }))
                         revised->Loops.push_back(pending);
-                if (revised->Takes.size() + revised->Loops.size() > GroupMuteApplication::MaxTargets)
+                if (revised->Stations.size() + revised->Takes.size() + revised->Loops.size() > GroupMuteApplication::MaxTargets)
                 {
                     _error = "Mute group target limit exceeded";
                     _consumed[action.KeyChar] = true;
@@ -93,7 +94,7 @@ bool PerformanceGroupController::HandleKey(const actions::KeyAction& action,
 bool PerformanceGroupController::SetAllMuted(bool muted, const PerformanceGroupService::Stations& stations,
     const Publish& publish)
 {
-    auto application = PerformanceGroupService::PrepareAllMuted(stations, muted, ++_version);
+    auto application = PerformanceGroupService::PrepareAllMuted(stations, muted, ++_version, _pendingMute.get());
     if (!application) { _error = "Mute group target limit exceeded"; return false; }
     _error.clear();
     _pendingMute = application;
@@ -131,7 +132,7 @@ bool PerformanceGroupController::Execute(bool selection, GroupCommand command, s
     }
     // Vendor state capture excludes processing, even when invoked on the UI
     // thread. Live groups save only mute flags, which is also all recall applies.
-    auto snapshot = PerformanceGroupService::CaptureMuteConfiguration(stations);
+    auto snapshot = PerformanceGroupService::CaptureMuteConfiguration(stations, _pendingMute.get());
     if (snapshot.Targets.size() > GroupMuteApplication::MaxTargets)
     {
         _error = "Mute group target limit exceeded";

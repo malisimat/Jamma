@@ -1980,12 +1980,22 @@ std::shared_ptr<Loop> LoopTake::AddLoop(unsigned int chan, std::string stationNa
 	return loop;
 }
 
+void LoopTake::SetStationMuteControl(const std::shared_ptr<const std::atomic<bool>>& control)
+{
+	_stationMuteControl = control;
+	for (const auto& mixer : _audioMixers) mixer->SetStationMuteControl(control);
+	for (const auto& mixer : _backAudioMixers) mixer->SetStationMuteControl(control);
+	for (const auto& loop : _loops) loop->SetStationMuteControl(control);
+	for (const auto& loop : _backLoops) loop->SetStationMuteControl(control);
+}
+
 void LoopTake::AddLoop(std::shared_ptr<Loop> loop)
 {
 	loop->SetSampleRate(_sampleRate);
 	loop->SetInheritedPlaybackOffsetSamps(ResolvedMidiQuantisation().PhaseOffsetSamps);
 	loop->SetAutomationTopologyChangedCallback(_automationTopologyChanged);
 	loop->SetCaptureSourceMuteControl(_captureSourceMuteControl);
+	loop->SetStationMuteControl(_stationMuteControl);
 	_backLoops.push_back(loop);
 	_backAudioBuffers.push_back(std::make_shared<audio::AudioBuffer>(_lastBufSize));
 	
@@ -1995,6 +2005,7 @@ void LoopTake::AddLoop(std::shared_ptr<Loop> loop)
 
 	auto mixerParams = LoopTake::GetMixerParams(_guiParams.Size, mergeParams);
 	auto mixer = std::make_shared<audio::AudioMixer>(mixerParams);
+	mixer->SetStationMuteControl(_stationMuteControl);
 	mixer->SetUnmutedLevel(1.0);
 	_backAudioMixers.push_back(mixer);
 

@@ -799,7 +799,7 @@ io::JamFile::Loop Loop::ToJamFile(const std::string& wavFilename) const
 	loop.Speed = _pitch;
 	loop.MuteGroups = 0;
 	loop.SelectGroups = 0;
-	loop.Muted = IsMuted();
+	loop.Muted = IsUserOrSourceMuted(); // Parent intent is saved once on Station.
 
 	auto params = _mixer->GetBehaviourParams();
 	if (auto* wire = std::get_if<audio::WireMixBehaviourParams>(&params))
@@ -1478,9 +1478,14 @@ bool Loop::Mute()
 	return isNewState;
 }
 
-bool Loop::IsMuted() const
+bool Loop::IsUserOrSourceMuted() const noexcept
 {
 	return Tweakable::IsMuted() || _mixer->IsCaptureSourceMuted();
+}
+
+bool Loop::IsMuted() const
+{
+	return IsUserOrSourceMuted() || (_stationMuteControl && _stationMuteControl->load(std::memory_order_acquire));
 }
 
 void Loop::SetGroupMutedAudio(bool muted) noexcept

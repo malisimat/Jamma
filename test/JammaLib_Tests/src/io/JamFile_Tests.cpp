@@ -1010,3 +1010,18 @@ TEST(JamFile, RecordingBaselineRoundTripAndLegacyFallback)
 		EXPECT_EQ(0u, invalid->Stations[0].LoopTakes[0].RecordingBeatsPerInterval);
 	}
 }
+
+TEST(JamFile, StationRetainedMuteDefaultsFalseAndRoundTripsEmptyPopulatedAndExplicitFalse)
+{
+	auto legacy=JamFile::FromStream(std::stringstream(JamFile::DefaultJson)); ASSERT_TRUE(legacy); ASSERT_EQ(1u,legacy->Stations.size()); EXPECT_FALSE(legacy->Stations[0].Muted);
+	for (const bool muted : {false,true})
+	for (const bool populated : {false,true})
+	{
+		auto jam=*legacy; jam.Stations[0].Muted=muted;
+		if (populated) { JamFile::LoopTake take{}; take.Name="take"; jam.Stations[0].LoopTakes.push_back(take); }
+		std::stringstream output; ASSERT_TRUE(JamFile::ToStream(jam,output)); EXPECT_NE(std::string::npos,output.str().find(muted ? "\"muted\":true" : "\"muted\":false"));
+		auto restored=JamFile::FromStream(std::move(output)); ASSERT_TRUE(restored); EXPECT_EQ(muted,restored->Stations[0].Muted); EXPECT_EQ(populated?1u:0u,restored->Stations[0].LoopTakes.size());
+	}
+	auto json=Json::FromStream(std::stringstream("{\"name\":\"bad\",\"stationtype\":0,\"muted\":\"true\",\"takes\":[]}")); ASSERT_TRUE(json);
+	EXPECT_FALSE(JamFile::Station::FromJson(std::get<Json::JsonPart>(*json)));
+}

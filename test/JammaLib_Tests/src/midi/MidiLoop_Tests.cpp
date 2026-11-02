@@ -5346,3 +5346,26 @@ TEST(MidiLoopSeam, OrphanReleaseCannotSplitNearbyHeldBoundaryContinuation)
 		}
 	}
 }
+
+TEST(LoopTakeMidiTiming, RetainedStationMuteFlushesExternalOutputRetriesAndAdvancesPhaseWithoutPastAttackChase)
+{
+	class RejectFirstOff final : public MidiLoopCapturingOutputSink
+	{
+	public:
+		bool TryOnEvent(unsigned int index,const MidiEvent& event) noexcept override
+		{ if (Reject && event.IsNoteOff()) { Reject=false; return false; } OnEvent(index,event); return true; }
+		bool Reject=true;
+	};
+	auto station=MakeStation(); auto take=MakeLoopTake("station-external"); station->AddTake(take);
+	take->Record({},"station",{0u},{"source"}); take->Play(0u,200u,0u);
+	const std::array source{MidiEvent{0u,0xb0u,64u,127u},MidiEvent::MakeNoteOn(10u,0u,60u,90u),MidiEvent::MakeNoteOn(100u,0u,67u,80u),
+		MidiEvent::MakeNoteOff(120u,0u,67u),MidiEvent::MakeNoteOff(180u,0u,60u,23u),MidiEvent{190u,0xb0u,64u,0u}};
+	take->GetMidiLoops().front()->ReplaceRecordedEvents(source.data(),source.size(),200u); station->CommitChanges(); RejectFirstOff sink;
+	take->ReadMidiBlock(0u,32u,sink); take->EndMultiPlay(32u); ASSERT_EQ(2u,sink.events.size()); station->SetRetainedMuted(true);
+	take->ReadMidiBlock(32u,16u,sink); take->EndMultiPlay(16u); take->ReadMidiBlock(48u,16u,sink); take->EndMultiPlay(16u);
+	EXPECT_EQ(64u,take->MidiPlayIndex()); EXPECT_EQ(1,std::count_if(sink.events.begin(),sink.events.end(),[](const auto& e){return e.event.IsNoteOff();}));
+	EXPECT_EQ(1,std::count_if(sink.events.begin(),sink.events.end(),[](const auto& e){return e.event.MessageType()==0xb0u && e.event.data1==64u && e.event.data2==0u;}));
+	station->SetRetainedMuted(false); take->ReadMidiBlock(64u,64u,sink);
+	EXPECT_EQ(1,std::count_if(sink.events.begin(),sink.events.end(),[](const auto& e){return e.event.IsNoteOn() && e.event.data1==60u;}));
+	EXPECT_EQ(1,std::count_if(sink.events.begin(),sink.events.end(),[](const auto& e){return e.event.IsNoteOn() && e.event.data1==67u;}));
+}

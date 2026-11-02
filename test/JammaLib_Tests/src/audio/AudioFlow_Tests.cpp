@@ -9,6 +9,7 @@
 #include "engine/Scene.h"
 #include "engine/LoopTake.h"
 #include "engine/Loop.h"
+#include "engine/PerformanceGroupService.h"
 #include "engine/Trigger.h"
 #include "audio/ChannelMixer.h"
 #include "audio/AudioMixer.h"
@@ -476,6 +477,43 @@ public:
 		dest->OnBlockWriteChannel(channel, request, 0);
 	}
 };
+
+TEST(AudioFlow, RetainedEmptyStationCapturesAudioAndAdvancesPlaybackButFirstCompletedBlockIsSilent)
+{
+	constexpr auto block=16u; constexpr auto length=128u;
+	auto station=MakeStation(1u); station->SetupBuffers(block); station->Mute(); auto take=station->AddTake(); take->Record({0u},"muted-capture"); station->CommitChanges();
+	constexpr auto captureBlock=block;
+	auto mixer=MakeChannelMixer(1u,constants::MaxBlockSize); std::vector<float> input(captureBlock,0.25f);
+	const auto total=constants::MaxLoopFadeSamps+length;
+	for (auto at=0u; at<total; at+=captureBlock) WriteBlock(mixer,station,input.data(),1u,std::min(captureBlock,total-at));
+	EXPECT_EQ(total,take->NumRecordedSamps()); take->Play(constants::MaxLoopFadeSamps,length,0u); station->CommitChanges(); take->UnMute();
+	const auto loop=take->GetLoops().front(); EXPECT_TRUE(take->IsMuted()); EXPECT_TRUE(loop->IsMuted());
+	EXPECT_FALSE(take->GetTweakState() & base::Tweakable::TWEAKSTATE_MUTED); EXPECT_FALSE(loop->GetTweakState() & base::Tweakable::TWEAKSTATE_MUTED);
+	std::array<float,block> output{}; const auto before=loop->BodyPlayIndex(); ReadBlock(mixer,station,output.data(),1u,block);
+	EXPECT_TRUE(std::all_of(output.begin(),output.end(),[](float value){return value==0.0f;}));
+	EXPECT_EQ((before+block)%length,loop->BodyPlayIndex());
+	auto bounced=std::make_shared<AudioFlowCaptureMultiSink>(block); take->WriteBlock(bounced,std::make_shared<AudioFlowAdditiveBounceWriter>(),0,block);
+	EXPECT_TRUE(HasNonZero(bounced->GetSink()->Samples.data(),block)); // Parent gate does not alter captured/bounce source samples.
+	for (auto frame=0u; frame<8u; ++frame)
+	{ output.fill(0.0f); ReadBlock(mixer,station,output.data(),1u,block); EXPECT_FALSE(HasNonZero(output.data(),block)); }
+	station->UnMute(); ASSERT_FALSE(take->IsMuted()); ASSERT_FALSE(loop->IsMuted()); bool audible=false;
+	for (auto frame=0u; frame<16u; ++frame)
+	{ output.fill(0.0f); ReadBlock(mixer,station,output.data(),1u,block); audible |= HasNonZero(output.data(),block); }
+	EXPECT_TRUE(audible);
+}
+
+TEST(AudioFlow, RetainedParentSurvivesOverdubPunchCompletionAndReplacementAudition)
+{
+	auto station=MakeStation(1u); station->Mute(); auto source=station->AddTake(); auto target=station->AddTake(); station->CommitChanges();
+	target->Overdub({0u},"parent-overdub"); TriggerAction in; in.ActionType=TriggerAction::TRIGGER_PUNCHIN_START; in.SourceId=source->Id(); in.TargetId=target->Id();
+	ASSERT_TRUE(station->OnAction(in).IsEaten); EXPECT_EQ(LoopTake::STATE_PUNCHEDIN,target->TakeState());
+	TriggerAction out; out.ActionType=TriggerAction::TRIGGER_PUNCHIN_END; out.SourceId=source->Id(); out.TargetId=target->Id();
+	ASSERT_TRUE(station->OnAction(out).IsEaten); EXPECT_EQ(LoopTake::STATE_OVERDUBBING,target->TakeState());
+	EXPECT_TRUE(source->IsMuted()); source->UnMute(); target->UnMute(); EXPECT_TRUE(source->IsMuted()); EXPECT_TRUE(target->IsMuted());
+	target->AcquireReplacementSourceMute(source); source->UnMute(); EXPECT_TRUE(source->IsMuted()); EXPECT_FALSE(source->IsUserOrSourceMuted());
+	target->Play(0u,128u,0u); target->UnMute(); EXPECT_TRUE(target->IsMuted()); EXPECT_TRUE(station->RetainedMuted());
+	station->UnMute(); EXPECT_FALSE(source->IsMuted()); EXPECT_FALSE(target->IsMuted());
+}
 
 class AudioFlowTemporaryPlaybackRegression
 {
@@ -2100,6 +2138,30 @@ TEST(AudioCallbackRealtime, OrdinaryMidiDeliveryQueueReconciliationAndDrainDoNot
 	EXPECT_EQ(1u, plugin->Count(0x90u, 60u, 100u)); EXPECT_EQ(0u, plugin->Count(0x80u, 60u, 23u));
 	measured(); // 512: extended endpoint564 releases once, despite source Held having cleared at80.
 	EXPECT_EQ(1u, plugin->Count(0x80u, 60u, 23u)); EXPECT_FALSE(plugin->Overflow);
+}
+
+TEST(AudioCallbackRealtime, RetainedStationGroupApplicationAndHeldCleanupDoNotUseHeap)
+{
+	using midi::MidiEvent;
+	audio::AudioHost host(io::UserConfig{}); auto station=MakeStation(1u); auto plugin=std::make_shared<CallbackMidiFixedPlugin>();
+	actions::JobAction job; job.JobActionType=actions::JobAction::JOB_LOADVST; job.VstPath=L"fixed-parent-mute.dll"; job.PreInitPlugin=plugin; station->OnAction(job); station->CommitChanges();
+	const audio::AudioStreamParams params{"test",48000u,2u,128u,0u,0u,0u,1u};
+	auto stations=std::make_shared<const std::vector<std::shared_ptr<Station>>>(std::vector{station}); audio::AudioHostRealtimeTestAccess::Prepare(host,stations,params); std::array<float,128u> output{};
+	ASSERT_EQ(0,audio::AudioHostRealtimeTestAccess::InvokeCallback(host,output.data(),nullptr,128u));
+	auto take=MakeTake(); take->Record({},station->Name(),{0u},{"source"}); take->Play(0u,1000u,0u);
+	const std::array source{MidiEvent{0u,0xb0u,64u,127u},MidiEvent::MakeNoteOn(10u,0u,60u,100u),MidiEvent::MakeNoteOff(900u,0u,60u),MidiEvent{950u,0xb0u,64u,0u}};
+	take->GetMidiLoops().front()->ReplaceRecordedEvents(source.data(),source.size(),1000u); station->AddTake(take); station->CommitChanges();
+	ASSERT_EQ(0,audio::AudioHostRealtimeTestAccess::InvokeCallback(host,output.data(),nullptr,128u)); ASSERT_EQ(1u,plugin->Count(0x90u,60u,100u));
+	auto snapshot=engine::PerformanceGroupService::CaptureMuteConfiguration({station});
+	for (auto& state : snapshot.Targets) if (state.Target.Kind==engine::GroupTargetKind::Station) state.Muted=true;
+	auto application=engine::PerformanceGroupService::PrepareMuteApplication(snapshot,{station},1u); host.PublishGroupMuteApplication(application);
+	AudioCallbackAllocationProbe::Counts counts; int result;
+	{
+		AudioCallbackAllocationProbe::Scope probe; result=audio::AudioHostRealtimeTestAccess::InvokeCallback(host,output.data(),nullptr,128u); counts=probe.GetCounts();
+	}
+	EXPECT_EQ(0,result); EXPECT_EQ(0u,counts.Allocations); EXPECT_EQ(0u,counts.Reallocations); EXPECT_EQ(0u,counts.Frees);
+	EXPECT_EQ(1u,host.GroupMuteReceipt()); EXPECT_TRUE(station->RetainedMuted()); EXPECT_FALSE(take->GetTweakState() & base::Tweakable::TWEAKSTATE_MUTED);
+	EXPECT_EQ(1u,plugin->Count(0x80u,60u,0u)); EXPECT_EQ(1u,plugin->Count(0xb0u,64u,0u)); EXPECT_FALSE(plugin->Overflow);
 }
 
 TEST(AudioCallbackRealtime, MidiPublicationCableCancellationAndRetirementRetryDoNotUseHeap)

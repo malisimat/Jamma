@@ -256,6 +256,8 @@ namespace engine
 		virtual bool Mute() override;
 		virtual bool UnMute() override;
 		bool IsMuted() const override;
+		bool IsUserOrSourceMuted() const noexcept;
+		void SetStationMuteControl(const std::shared_ptr<const std::atomic<bool>>& control) noexcept { _stationMuteControl = control; }
 		void SetGroupMutedAudio(bool muted) noexcept;
 		void SetCaptureSourceMuteControl(
 			const std::shared_ptr<const audio::CaptureSourceMuteControl>& control) noexcept;
@@ -537,6 +539,7 @@ namespace engine
 		std::atomic<LoopPlayState> _playState;
 		LoopParams _loopParams;
 		std::shared_ptr<audio::AudioMixer> _mixer;
+		std::shared_ptr<const std::atomic<bool>> _stationMuteControl;
 		std::shared_ptr<audio::Hanning> _hanning;
 		std::shared_ptr<LoopModel> _model;
 		std::shared_ptr<graphics::SpectralModel> _spectralModel;

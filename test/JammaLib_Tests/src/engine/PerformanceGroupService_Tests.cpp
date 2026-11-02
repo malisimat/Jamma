@@ -399,7 +399,7 @@ TEST_F(PerformanceGroupServiceTest, FunctionKeysCreateNextPositionRecallOverwrit
     auto take = station->AddTake();
     engine::PerformanceGroupController controller;
     unsigned int publications = 0u;
-    auto publish = [&publications](auto application) { ++publications; application->ApplyAudio(); };
+    auto publish = [&publications, &controller](auto application) { ++publications; application->ApplyAudio(); controller.Acknowledge(application->Version); };
     actions::KeyAction key;
     key.KeyChar = 112u;
     key.KeyActionType = actions::KeyAction::KEY_DOWN;
@@ -575,4 +575,98 @@ TEST_F(PerformanceGroupServiceTest, GlobalMuteThenBackspaceBeforeReceiptPreserve
     pending->ApplyAudio();
     EXPECT_FALSE(sibling->IsMuted());
     EXPECT_FALSE(sibling->GetLoops().front()->IsMuted());
+}
+
+TEST_F(PerformanceGroupServiceTest, EmptyStationIntentSurvivesNewLeavesAndRetainsNoOwnerCycle)
+{
+    auto station=Station("empty-muted"); EXPECT_FALSE(station->AllTakesMuted()); ASSERT_TRUE(station->Mute());
+    EXPECT_TRUE(station->RetainedMuted()); EXPECT_TRUE(station->AllTakesMuted());
+    auto take=station->AddTake(); take->AddLoop(0u,station->Id()); take->CommitChanges();
+    auto loop=take->GetLoops().front(); EXPECT_TRUE(take->IsMuted()); EXPECT_TRUE(loop->IsMuted());
+    EXPECT_FALSE(take->GetTweakState() & base::Tweakable::TWEAKSTATE_MUTED); EXPECT_FALSE(loop->GetTweakState() & base::Tweakable::TWEAKSTATE_MUTED);
+    take->UnMute(); loop->UnMute(); EXPECT_TRUE(take->IsMuted()); EXPECT_TRUE(loop->IsMuted());
+    std::weak_ptr<engine::Station> weak=station;
+    take->DetachGuiOwnershipForRetirement(); // Actual removal detaches staged takes too.
+    station->DetachGuiOwnershipForRetirement();
+    station.reset(); EXPECT_TRUE(weak.expired());
+    EXPECT_TRUE(take->IsMuted()); EXPECT_TRUE(loop->IsMuted()); // Surviving scalar condition is lifetime-safe.
+}
+
+TEST_F(PerformanceGroupServiceTest, ParentRecallDoesNotFlattenChildrenButSourceSuppressionStillBecomesPersistent)
+{
+    auto station=Station("parent-source"); auto source=station->AddTake(); auto audible=station->AddTake(); auto rawMuted=station->AddTake();
+    for (auto take : {source,audible,rawMuted}) { take->AddLoop(0u,station->Id()); take->CommitChanges(); }
+    station->SetRetainedMuted(true); source->AcquireTriggerSourceMuteAudio(); rawMuted->SetGroupMutedAudio(true);
+    const auto snapshot=engine::PerformanceGroupService::CaptureMuteConfiguration({station});
+    for (auto take : {source,audible,rawMuted})
+    {
+        engine::GroupTargetId id{engine::GroupTargetKind::Take,station->Id(),take->Id(),{}};
+        EXPECT_FALSE(engine::PerformanceGroupPreview::AudibleTake(snapshot,id)); EXPECT_FALSE(engine::PerformanceGroupPreview::Contains(snapshot,id));
+        EXPECT_FALSE(engine::PerformanceGroupPreview::ContainsLive(snapshot,id,{id}));
+    }
+    station->SetRetainedMuted(false); source->ReleaseTriggerSourceMuteAudio();
+    auto application=engine::PerformanceGroupService::PrepareMuteApplication(snapshot,{station},1u); ASSERT_TRUE(application); application->ApplyAudio();
+    EXPECT_TRUE(station->RetainedMuted()); EXPECT_TRUE(source->GetTweakState() & base::Tweakable::TWEAKSTATE_MUTED);
+    EXPECT_FALSE(audible->GetTweakState() & base::Tweakable::TWEAKSTATE_MUTED); EXPECT_FALSE(audible->GetLoops().front()->GetTweakState() & base::Tweakable::TWEAKSTATE_MUTED);
+    station->SetRetainedMuted(false); EXPECT_FALSE(audible->IsMuted()); EXPECT_FALSE(audible->GetLoops().front()->IsMuted()); EXPECT_TRUE(source->IsMuted()); EXPECT_TRUE(rawMuted->IsMuted());
+}
+
+TEST_F(PerformanceGroupServiceTest, EmptyGlobalUnmuteAndStoreUseDesiredStationAndChildStateBeforeReceipt)
+{
+    auto empty=Station("empty"); auto station=Station("populated"); auto take=station->AddTake(); auto other=station->AddTake();
+    station->SetRetainedMuted(true); empty->SetRetainedMuted(true); take->SetGroupMutedAudio(true); other->SetGroupMutedAudio(true);
+    engine::PerformanceGroupController controller; std::shared_ptr<const engine::GroupMuteApplication> pending;
+    auto publish=[&](auto application){pending=std::move(application);};
+    ASSERT_TRUE(controller.SetAllMuted(false,{empty,station},publish)); ASSERT_EQ(2u,pending->Stations.size());
+    ASSERT_TRUE(controller.Execute(false,engine::GroupCommand::Store,1u,{empty,station},engine::GroupTargetKind::Take,publish));
+    const auto saved=controller.Groups().Mute.Get(1u); ASSERT_NE(nullptr,saved);
+    EXPECT_TRUE(engine::PerformanceGroupPreview::AudibleTake(*saved,{engine::GroupTargetKind::Take,station->Id(),take->Id(),{}}));
+    take->Select(); actions::KeyAction key; key.KeyChar=8u; key.KeyActionType=actions::KeyAction::KEY_DOWN;
+    ASSERT_TRUE(controller.HandleKey(key,{empty,station},engine::GroupTargetKind::Take,publish)); ASSERT_EQ(2u,pending->Stations.size());
+    pending->ApplyAudio(); EXPECT_FALSE(empty->RetainedMuted()); EXPECT_FALSE(station->RetainedMuted()); EXPECT_TRUE(take->IsMuted()); EXPECT_FALSE(other->IsMuted());
+    auto restore=engine::PerformanceGroupService::PrepareMuteApplication(*saved,{empty,station},pending->Version+1u); restore->ApplyAudio();
+    EXPECT_FALSE(empty->AllTakesMuted()); EXPECT_FALSE(take->IsMuted()); EXPECT_FALSE(other->IsMuted());
+}
+
+TEST_F(PerformanceGroupServiceTest, AggregateMutedChildrenRemainDistinctFromRetainedStationIntent)
+{
+    auto station=Station("aggregate"); auto first=station->AddTake(); auto second=station->AddTake();
+    first->Mute(); second->Mute(); EXPECT_TRUE(station->AllTakesMuted()); EXPECT_FALSE(station->RetainedMuted());
+    const auto saved=engine::PerformanceGroupService::CaptureMuteConfiguration({station});
+    station->Mute(); auto restore=engine::PerformanceGroupService::PrepareMuteApplication(saved,{station},1u); restore->ApplyAudio();
+    EXPECT_FALSE(station->RetainedMuted()); EXPECT_TRUE(station->AllTakesMuted()); ASSERT_TRUE(station->UnMute()); EXPECT_FALSE(station->AllTakesMuted());
+    station->Mute(); EXPECT_TRUE(first->GetTweakState() & base::Tweakable::TWEAKSTATE_MUTED); station->UnMute(); EXPECT_FALSE(second->IsMuted());
+    station->Mute(); ASSERT_TRUE(station->DitchTake(first)); ASSERT_TRUE(station->DitchTake(second)); station->CommitChanges();
+    EXPECT_TRUE(station->AllTakesMuted()); auto replacement=station->AddTake(); EXPECT_TRUE(replacement->IsMuted());
+    station->Reset(); EXPECT_FALSE(station->RetainedMuted());
+}
+
+TEST_F(PerformanceGroupServiceTest, DesiredRawUnmuteDoesNotEraseConcurrentSourceSuppressionInStoredGroup)
+{
+    auto station=Station("desired-source"); auto take=station->AddTake(); take->AddLoop(0u,station->Id()); take->CommitChanges();
+    station->SetRetainedMuted(true); take->SetGroupMutedAudio(true); take->AcquireTriggerSourceMuteAudio();
+    engine::PerformanceGroupController controller; std::shared_ptr<const engine::GroupMuteApplication> pending;
+    auto publish=[&](auto application){pending=std::move(application);};
+    ASSERT_TRUE(controller.SetAllMuted(false,{station},publish));
+    ASSERT_TRUE(controller.Execute(false,engine::GroupCommand::Store,1u,{station},engine::GroupTargetKind::Take,publish));
+    const auto saved=controller.Groups().Mute.Get(1u); ASSERT_NE(nullptr,saved);
+    const auto takeState=std::find_if(saved->Targets.begin(),saved->Targets.end(),[&](const auto& state){return state.Target.Kind==engine::GroupTargetKind::Take && state.Target.TakeId==take->Id();});
+    ASSERT_NE(saved->Targets.end(),takeState); EXPECT_FALSE(takeState->Muted); EXPECT_TRUE(takeState->EffectiveMuted);
+    auto restore=engine::PerformanceGroupService::PrepareMuteApplication(*saved,{station},pending->Version+1u); restore->ApplyAudio(); take->ReleaseTriggerSourceMuteAudio();
+    EXPECT_FALSE(station->RetainedMuted()); EXPECT_TRUE(take->GetTweakState() & base::Tweakable::TWEAKSTATE_MUTED); EXPECT_TRUE(take->IsMuted());
+}
+
+TEST_F(PerformanceGroupServiceTest, GlobalMutePreservesExplicitAndUnappliedDesiredParentIntent)
+{
+    auto station=Station("global-parent"); auto take=station->AddTake(); take->SetGroupSelected(true); station->SetRetainedMuted(true);
+    engine::PerformanceGroupController controller; std::shared_ptr<const engine::GroupMuteApplication> pending;
+    auto publish=[&](auto application){pending=std::move(application);};
+    ASSERT_TRUE(controller.Execute(false,engine::GroupCommand::Store,1u,{station},engine::GroupTargetKind::Take,publish));
+    station->SetRetainedMuted(false);
+    ASSERT_TRUE(controller.Execute(false,engine::GroupCommand::RecallOrStore,1u,{station},engine::GroupTargetKind::Take,publish));
+    ASSERT_TRUE(controller.SetAllMuted(true,{station},publish)); ASSERT_EQ(1u,pending->Stations.size()); EXPECT_TRUE(pending->Stations[0].Muted);
+    actions::KeyAction key; key.KeyChar=8u; key.KeyActionType=actions::KeyAction::KEY_DOWN;
+    ASSERT_TRUE(controller.HandleKey(key,{station},engine::GroupTargetKind::Take,publish)); pending->ApplyAudio();
+    EXPECT_TRUE(station->RetainedMuted()); EXPECT_FALSE(take->GetTweakState() & base::Tweakable::TWEAKSTATE_MUTED); EXPECT_TRUE(take->IsMuted());
+    ASSERT_TRUE(controller.SetAllMuted(false,{station},publish)); pending->ApplyAudio(); EXPECT_FALSE(station->RetainedMuted()); EXPECT_FALSE(take->IsMuted());
 }

@@ -255,11 +255,25 @@ float Station::CameraTakeVisualScale() const noexcept
 	return _masterMixer ? static_cast<float>(_masterMixer->UnmutedLevel()) : 1.0f;
 }
 
+bool Station::Mute()
+{
+	bool changed = !_retainedMute->exchange(true, std::memory_order_acq_rel);
+	for (const auto& take : GetLoopTakes()) if (take) changed |= take->Mute();
+	return changed;
+}
+
+bool Station::UnMute()
+{
+	bool changed = _retainedMute->exchange(false, std::memory_order_acq_rel);
+	for (const auto& take : GetLoopTakes()) if (take) changed |= take->UnMute();
+	return changed;
+}
+
 bool Station::AllTakesMuted() const
 {
 	const auto& takes = GetLoopTakes();
-	return !takes.empty() && std::all_of(takes.begin(), takes.end(),
-		[](const auto& take) { return take && take->IsMuted(); });
+	return RetainedMuted() || (!takes.empty() && std::all_of(takes.begin(), takes.end(),
+		[](const auto& take) { return take && take->IsMuted(); }));
 }
 
 void Station::Draw3d(base::DrawContext& ctx,
@@ -1530,6 +1544,7 @@ void Station::OnTick(Time curTime,
 
 void Station::Reset()
 {
+	SetRetainedMuted(false);
 	FlushLiveHeldMidiNotes();
 	for (const auto& take : GetLoopTakeSnapshot())
 	{
@@ -1605,6 +1620,7 @@ void Station::SetCameraRecordingPublisher(const std::shared_ptr<CameraRecordingP
 
 void Station::AddTake(std::shared_ptr<LoopTake> take)
 {
+	take->SetStationMuteControl(_retainedMute); // Before any take/mixer membership publication.
 	const std::weak_ptr<Station> weakStation = std::dynamic_pointer_cast<Station>(ActionReceiver::shared_from_this());
 	take->SetAutomationTopologyChangedCallback([weakStation] {
 		if (const auto station = weakStation.lock())

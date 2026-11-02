@@ -76,6 +76,7 @@ std::optional<std::shared_ptr<Station>> IoSessionLoader::ReconstructStation(Stat
 	stationParams.Name = stationStruct.Name;
 	stationParams.Id = stationStruct.Id;
 	auto station = std::make_shared<Station>(stationParams, mixerParams);
+	station->SetRetainedMuted(stationStruct.Muted); // Before any restored take is attached/published.
 	station->SetStationPhaseOffsetSamps(stationStruct.StationPhaseOffsetSamps);
 	station->SetAllowedMidiChannels(stationStruct.AllowedMidiChannels);
 	std::vector<std::string> identities;

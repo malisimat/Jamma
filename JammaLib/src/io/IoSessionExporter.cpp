@@ -357,6 +357,7 @@ namespace io
 				jamStation.BusLevels = station->BusLevelsForExport();
 				jamStation.VstChain = station->VstEntries();
 				jamStation.StationPhaseOffsetSamps = station->StationPhaseOffsetSamps();
+				jamStation.Muted = station->RetainedMuted();
 				jamStation.AllowedMidiChannels = station->AllowedMidiChannels();
 				jamStation.MidiChannelRoutes = station->MidiChannelRoutes();
 				jamStation.AudioRoutes = station->SnapshotAudioRoutesForExport();
