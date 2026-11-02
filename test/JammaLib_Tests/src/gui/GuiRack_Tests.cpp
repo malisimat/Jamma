@@ -59,6 +59,66 @@ TEST(GuiRack, CompactConstructionAndResizeKeepScaleAnchorsDistinct)
 	EXPECT_GE(rack.GetChannelSlider(0)->GetSize().Height, 47u);
 }
 
+class MidiSelectionTestRack : public GuiRack
+{
+public:
+	using GuiRack::GuiRack;
+	using base::GuiElement::OnAction;
+	using GuiRack::OnAction;
+	std::shared_ptr<gui::GuiButton> SelectionButton(unsigned int index)
+	{
+		return FindButton(std::static_pointer_cast<base::GuiElement>(shared_from_this()), index == 0u ? "None" : "All");
+	}
+	static std::shared_ptr<gui::GuiButton> FindButton(const std::shared_ptr<base::GuiElement>& element, const std::string& text)
+	{
+		if (auto button = std::dynamic_pointer_cast<gui::GuiButton>(element); button && button->Text() == text) return button;
+		for (unsigned int i = 0; i < 256u; ++i)
+		{
+			const auto child = element->TryGetChild(static_cast<unsigned char>(i));
+			if (!child) continue;
+			if (auto button = FindButton(child, text)) return button;
+		}
+		return {};
+	}
+};
+
+TEST(GuiRack, MidiSelectionButtonClicksPublishEmptyAndCompleteChannelSets)
+{
+	for (const bool stationRouting : {false, true})
+	{
+		auto params = MakeRackParams();
+		params.EnableVstRack = stationRouting;
+		params.EnableVstRackMidiRouting = stationRouting;
+		std::vector<int> selected{2, 7};
+		params.AllowedMidiChannels = selected;
+		params.OnAllowedMidiChannelsChanged = [&](const auto& channels) { selected = channels; };
+		auto rack = std::make_shared<MidiSelectionTestRack>(params);
+		rack->Init();
+		rack->SetRackState(GuiRackParams::RACK_CHANNELS, true);
+		if (stationRouting) rack->VstRack()->SetChannelsCollapsed(false);
+		const auto click = [&](unsigned int index)
+		{
+			const auto button = rack->SelectionButton(index);
+			ASSERT_NE(nullptr, button);
+			actions::TouchAction down;
+			down.Index = 0; down.Touch = actions::TouchAction::TOUCH_MOUSE;
+			down.State = actions::TouchAction::TOUCH_DOWN;
+			down.Position = button->GlobalPosition() - rack->GlobalPosition() + utils::Position2d{10, 10};
+			EXPECT_TRUE(rack->OnAction(down).IsEaten);
+			auto up = down; up.State = actions::TouchAction::TOUCH_UP;
+			rack->OnAction(up);
+		};
+		ASSERT_NE(nullptr, rack->SelectionButton(0));
+		ASSERT_NE(nullptr, rack->SelectionButton(1));
+		EXPECT_EQ("None", rack->SelectionButton(0)->Text());
+		EXPECT_EQ("All", rack->SelectionButton(1)->Text());
+		click(0);
+		EXPECT_TRUE(selected.empty());
+		click(1);
+		EXPECT_EQ((std::vector<int>{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16}), selected);
+	}
+}
+
 
 TEST(GuiRack, RestoredSlotsReplaceMissingCableRowsAndRetainFailedSlots)
 {

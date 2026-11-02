@@ -75,6 +75,8 @@ namespace gui
 	public:
 		static constexpr unsigned int RackStateNotificationIndex = ~0u;
 		static constexpr unsigned int MidiChannelToggleBaseIndex = 100u;
+		static constexpr unsigned int MidiDeselectAllIndex = 116u;
+		static constexpr unsigned int MidiSelectAllIndex = 117u;
 		static constexpr unsigned int VstControlActionIndex = ~0u - 1u;
 		void Init() override;
 		enum class VstControlState { Empty, Closed, Open, Failed, Loading };
@@ -166,6 +168,7 @@ namespace gui
 		std::shared_ptr<gui::GuiRouter> _router;
 		std::shared_ptr<base::GuiElement> _midiChannelPanel;
 		std::vector<std::shared_ptr<gui::GuiToggle>> _midiChannelToggles;
+		std::array<std::shared_ptr<GuiButton>, 2> _midiSelectionButtons;
 		GuiRackParams _rackParams;
 		std::shared_ptr<GuiStationLabel> _stationLabel;
 		std::shared_ptr<GuiVstRack> _vstRack;

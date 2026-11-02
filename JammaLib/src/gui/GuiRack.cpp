@@ -92,6 +92,18 @@ GuiRack::GuiRack(GuiRackParams params) :
 		_midiChannelPanel->AddChild(toggle);
 	}
 
+	for (auto i = 0u; i < _midiSelectionButtons.size(); ++i)
+	{
+		auto buttonParams = GuiButtonParams::PanelButton();
+		buttonParams.Index = i == 0u ? MidiDeselectAllIndex : MidiSelectAllIndex;
+		buttonParams.Text = i == 0u ? "None" : "All";
+		buttonParams.TextFontSize = graphics::FontOptions::FONT_SMALL;
+		buttonParams.TextPadding = 2u;
+		buttonParams.DispatchCommand = true;
+		_midiSelectionButtons[i] = std::make_shared<GuiButton>(buttonParams);
+		_midiChannelPanel->AddChild(_midiSelectionButtons[i]);
+	}
+
 	_children.push_back(_masterPanel);
 	_masterPanel->AddChild(_masterSlider);
 	if (params.EnableStationLabel)
@@ -226,6 +238,14 @@ void GuiRack::SetSize(utils::Size2d size)
 			channelToggleParams.Size);
 	}
 
+	const auto selectionWidth = (_midiChannelPanel->GetSize().Width - _MidiChannelToggleGap.Width) / 2u;
+	for (auto i = 0u; i < _midiSelectionButtons.size(); ++i)
+	{
+		_midiSelectionButtons[i]->SetPosition({static_cast<int>(i * (selectionWidth + _MidiChannelToggleGap.Width)),
+			-static_cast<int>(GuiButtonParams::DefaultHeight + _MidiChannelToggleGap.Height)});
+		_midiSelectionButtons[i]->SetSize({selectionWidth, GuiButtonParams::DefaultHeight});
+	}
+
 	for (auto i = 0u; i < _channelSliders.size(); ++i)
 	{
 		auto chanSliderParams = _GetSliderParams(i + 1, size);
@@ -245,6 +265,15 @@ ActionResult GuiRack::OnAction(GuiAction action)
 		return res;
 
 	bool toggleOn;
+	if (action.ElementType == GuiAction::ACTIONELEMENT_BUTTON &&
+		(action.Index == MidiDeselectAllIndex || action.Index == MidiSelectAllIndex))
+	{
+		std::vector<int> channels;
+		if (action.Index == MidiSelectAllIndex)
+			for (int channel = 1; channel <= 16; ++channel) channels.push_back(channel);
+		SetAllowedMidiChannels(channels, false);
+		return ActionResult::NoAction();
+	}
 	bool routerVisible = _routerPanel->IsVisible();
 	GuiRackParams::RackState newRackState;
 	if (action.ElementType == GuiAction::ACTIONELEMENT_BUTTON && action.Index == VstControlActionIndex)
@@ -420,6 +449,8 @@ void GuiRack::_InitReceivers()
 	_router->SetReceiver(ActionReceiver::shared_from_this());
 	for (auto& toggle : _midiChannelToggles)
 		toggle->SetReceiver(ActionReceiver::shared_from_this());
+	for (auto& button : _midiSelectionButtons)
+		button->SetReceiver(ActionReceiver::shared_from_this());
 }
 
 void GuiRack::_AddChannel(unsigned int index, utils::Size2d size)
@@ -746,6 +777,8 @@ void GuiRack::Init()
 	// Tree initialization assigns child ordinals; this command has a stable index.
 	for (auto& button : _vstControls)
 		if (button) button->SetIndex(VstControlActionIndex);
+	_midiSelectionButtons[0]->SetIndex(MidiDeselectAllIndex);
+	_midiSelectionButtons[1]->SetIndex(MidiSelectAllIndex);
 }
 
 void GuiRack::SetVstControlText(const std::string& text)
