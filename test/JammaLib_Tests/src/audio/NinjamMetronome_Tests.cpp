@@ -38,3 +38,24 @@ TEST(NinjamMetronome, MixesKnownOnsetToEveryOutputChannelOnly)
 		[](float sample) { return sample != 0.0f; }));
 	EXPECT_EQ(exportBuffer, std::vector<float>(16u, 0.0f));
 }
+
+TEST(NinjamMetronome, LevelScalesBothClickVoicesAndTheirTails)
+{
+	audio::NinjamMetronome full, quiet;
+	full.Configure(48000u); quiet.Configure(48000u);
+	for (const bool accent : {false, true})
+	{
+		full.Reset(); quiet.Reset();
+		ninjam::NinjamMetronomeTimingResult timing;
+		timing.Valid = true; timing.Onsets[0] = {0u, accent}; timing.OnsetCount = 1u;
+		for (int block = 0; block < 2; ++block)
+		{
+			std::array<float, 64> a{}, b{};
+			full.Mix(a.data(), 1u, 64u, timing);
+			quiet.Mix(b.data(), 1u, 64u, timing, 0.25f);
+			for (size_t index = 0; index < a.size(); ++index)
+				EXPECT_FLOAT_EQ(a[index] * 0.25f, b[index]);
+			timing.OnsetCount = 0u;
+		}
+	}
+}

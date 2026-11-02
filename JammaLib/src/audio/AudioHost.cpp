@@ -1371,8 +1371,6 @@ void AudioHost::PublishAudioCallbackProgress(std::uint64_t blockStartSample,
 
 			if (_ninjamController)
 			{
-				const auto metronomeEnabled = _ninjamMetronomeEnabled.load(std::memory_order_acquire);
-
 				const auto remoteTiming = _ninjamController->ProcessExportBlock(outBuf,
 					audioStreamParams.NumOutputChannels,
 					inBuf,
@@ -1381,36 +1379,9 @@ void AudioHost::PublishAudioCallbackProgress(std::uint64_t blockStartSample,
 					audioStreamParams.SampleRate,
 					blockStartSample);
 				publishNinjamTiming(remoteTiming);
-
-				if (metronomeEnabled && liveTiming.IsValid)
-				{
-					ninjam::NinjamMetronomeTimingInput timingInput;
-					timingInput.IntervalPositionSamps = liveTiming.IntervalPositionSamps;
-					timingInput.IntervalLengthSamps = liveTiming.IntervalLengthSamps;
-					timingInput.Bpm = liveTiming.Bpm;
-					timingInput.Bpi = liveTiming.Bpi;
-					timingInput.DeviceSampleRate = liveTiming.DeviceSampleRate;
-					// Clicks and local loop audio share this DAC buffer and hardware
-					// latency. Advancing only the click would separate their onsets.
-					timingInput.NumFrames = numSamps;
-
-					const auto metronomeTiming = ninjam::NinjamMetronomeTiming::Compute(
-						timingInput, _ninjamMetronomeTimingState);
-					if (metronomeTiming.GenerationReset)
-						_ninjamMetronome.Reset();
-					_ninjamMetronome.Mix(outBuf, audioStreamParams.NumOutputChannels, numSamps, metronomeTiming);
-				}
-				else
-				{
-					_ninjamMetronomeTimingState = {};
-					_ninjamMetronome.Reset();
-				}
 			}
-			else
-			{
-				_ninjamMetronomeTimingState = {};
-				_ninjamMetronome.Reset();
-			}
+			MixMetronome(outBuf, audioStreamParams.NumOutputChannels, numSamps,
+				audioStreamParams.SampleRate, liveTiming, timingClock);
 		}
 		else
 		{
@@ -1458,4 +1429,51 @@ void AudioHost::PublishAudioCallbackProgress(std::uint64_t blockStartSample,
 
 		PublishAudioCallbackProgress(blockStartSample, numSamps);
 	}
+}
+
+void audio::AudioHost::SetMetronomeLevel(float level) noexcept
+{
+	if (std::isfinite(level))
+		_metronomeLevel.store(std::clamp(level, 0.0f, 1.0f), std::memory_order_release);
+}
+
+void audio::AudioHost::MixMetronome(float* output, unsigned int channels, unsigned int frames,
+	unsigned int sampleRate, const ninjam::NinjamTiming& remote, const utils::Timer* clock) noexcept
+{
+	if (_metronomeWasRemote != remote.IsConnected)
+	{
+		_metronomeWasRemote = remote.IsConnected;
+		_ninjamMetronomeTimingState = {};
+		_ninjamMetronome.Reset();
+	}
+	ninjam::NinjamMetronomeTimingInput input;
+	input.NumFrames = frames;
+	input.DeviceSampleRate = sampleRate;
+	if (remote.IsConnected)
+	{
+		// Stay local and Reclock never substitute the local proposal for the server click.
+		if (remote.IsValid)
+		{
+			input.IntervalPositionSamps = remote.IntervalPositionSamps;
+			input.IntervalLengthSamps = remote.IntervalLengthSamps;
+			input.Bpi = remote.Bpi;
+		}
+	}
+	else if (clock)
+	{
+		input.IntervalPositionSamps = clock->SampOffset();
+		input.IntervalLengthSamps = clock->SeedSourceLength();
+		const auto grain = clock->QuantiseSamps();
+		// Local BPI is inferred from the established master/grain, independently
+		// of whether quantisation is enabled. Round once; beat boundaries stay rational.
+		if (input.IntervalLengthSamps)
+			input.Bpi = grain ? std::max(1u, static_cast<unsigned int>(
+				(static_cast<std::uint64_t>(input.IntervalLengthSamps) + grain / 2u) / grain)) : 1u;
+	}
+	if (!_ninjamMetronomeEnabled.load(std::memory_order_acquire))
+		input.IntervalLengthSamps = 0u;
+	const auto timing = ninjam::NinjamMetronomeTiming::Compute(input, _ninjamMetronomeTimingState);
+	if (!timing.Valid || timing.GenerationReset)
+		_ninjamMetronome.Reset();
+	_ninjamMetronome.Mix(output, channels, frames, timing, MetronomeLevel());
 }

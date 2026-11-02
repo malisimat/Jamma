@@ -21,7 +21,7 @@ void NinjamMetronome::Reset() noexcept
 void NinjamMetronome::Mix(float* interleavedOutput,
 	unsigned int numOutputChannels,
 	unsigned int numFrames,
-	const ninjam::NinjamMetronomeTimingResult& timing) noexcept
+	const ninjam::NinjamMetronomeTimingResult& timing, float level) noexcept
 {
 	if (!interleavedOutput || numOutputChannels == 0u || numFrames == 0u || !timing.Valid)
 		return;
@@ -43,8 +43,8 @@ void NinjamMetronome::Mix(float* interleavedOutput,
 		else if (normalAtSample)
 			_normalPlayIndex = 0u;
 
-		_MixTable(interleavedOutput, numOutputChannels, sample, _normalTable, _normalPlayIndex);
-		_MixTable(interleavedOutput, numOutputChannels, sample, _accentTable, _accentPlayIndex);
+		_MixTable(interleavedOutput, numOutputChannels, sample, _normalTable, _normalPlayIndex, level);
+		_MixTable(interleavedOutput, numOutputChannels, sample, _accentTable, _accentPlayIndex, level);
 	}
 }
 
@@ -82,12 +82,12 @@ void NinjamMetronome::_MixTable(float* interleavedOutput,
 	unsigned int numOutputChannels,
 	unsigned int sampleOffset,
 	const std::vector<float>& table,
-	unsigned int& playIndex) noexcept
+	unsigned int& playIndex, float level) noexcept
 {
 	if (playIndex >= table.size())
 		return;
 
-	const auto value = table[playIndex++];
+	const auto value = table[playIndex++] * level;
 	const auto outputOffset = static_cast<size_t>(sampleOffset) * numOutputChannels;
 	for (auto channel = 0u; channel < numOutputChannels; ++channel)
 		interleavedOutput[outputOffset + channel] += value;

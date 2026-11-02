@@ -149,6 +149,8 @@ namespace audio
 		
 		std::shared_ptr<ChannelMixer> GetChannelMixer() { return _channelMixer; }
 		void SetNinjamMetronomeEnabled(bool enabled) noexcept { _ninjamMetronomeEnabled.store(enabled, std::memory_order_release); }
+		void SetMetronomeLevel(float level) noexcept;
+		float MetronomeLevel() const noexcept { return _metronomeLevel.load(std::memory_order_acquire); }
 		bool NinjamMetronomeEnabled() const noexcept { return _ninjamMetronomeEnabled.load(std::memory_order_acquire); }
 		std::optional<ninjam::NinjamTiming> LatestNinjamTiming() const noexcept
 		{
@@ -321,6 +323,9 @@ namespace audio
 		std::unique_ptr<CallbackContext> _callbackContext;
 		bool _lastInitReplacedStream = false;
 		std::shared_ptr<ChannelMixer> _channelMixer;
+		void MixMetronome(float* output, unsigned int channels, unsigned int frames,
+			unsigned int sampleRate, const ninjam::NinjamTiming& remote, const utils::Timer* clock) noexcept;
+		bool _metronomeWasRemote = false;
 		NinjamMetronome _ninjamMetronome;
 		ninjam::NinjamMetronomeTimingState _ninjamMetronomeTimingState;
 		ninjam::NinjamTimingObservationMailbox _ninjamTimingMailbox;
@@ -362,7 +367,8 @@ namespace audio
 		double _localTransportOffsetLoopFrac = 0.0;
 		unsigned long _localTransportOffsetMasterLength = 0ul;
 		long long _localTransportOffsetTargetSamps = 0;
-		std::atomic_bool _ninjamMetronomeEnabled{ true };
+		std::atomic_bool _ninjamMetronomeEnabled{ false };
+		std::atomic<float> _metronomeLevel{ 1.0f };
 
 		std::atomic<std::uint64_t> _audioSampleCounter{ 0 };
 		// Replaced only with callback admission closed, then read by callback.

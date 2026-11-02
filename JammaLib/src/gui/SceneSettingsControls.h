@@ -8,6 +8,7 @@
 #include "GuiMainPanel.h"
 #include "GuiButton.h"
 #include "GuiNumericInput.h"
+#include "GuiSlider.h"
 #include "../io/JamFile.h"
 #include "../audio/AudioDevice.h"
 #include "../midi/MidiDevice.h"
@@ -41,6 +42,7 @@ namespace gui
 		struct ChannelChange { std::uint8_t Value; };
 		struct OffsetChange { double Value; };
 		struct MetronomeChange { bool Enabled; };
+		struct MetronomeLevelChange { float Value; };
 		struct SubdivisionChange { midi::MidiQuantisationFraction Value; };
 		struct TapTempo {};
 		struct Reclock {};
@@ -58,7 +60,7 @@ namespace gui
 			AudioDeviceChange, AudioValueChange, MidiDeviceChange>;
 		struct DevicePages { std::vector<GuiSettingEntry> Audio, Midi; };
 		using Change = std::variant<ViewModeChange, GlobalQuantisationChange, ChannelChange,
-			OffsetChange, MetronomeChange, SubdivisionChange, TapTempo, Reclock, SyncToServer, ResetAll>;
+			OffsetChange, MetronomeChange, MetronomeLevelChange, SubdivisionChange, TapTempo, Reclock, SyncToServer, ResetAll>;
 
 		enum class DraftChange { None, Device, Channels, Format, Midi };
 		DraftChange EditDeviceDraft(const DeviceChange& command, const audio::AsioInventory& inventory,
@@ -82,6 +84,7 @@ namespace gui
 			double acceptedOffset) const;
 		const auto& Mode() const { return _modeRadio; }
 		const auto& Channel() const { return _midiChannelOverride; }
+		const auto& MetronomeLevel() const { return _metronomeLevel; }
 		const auto& Metronome() const { return _ninjamMetronomeToggle; }
 		const auto& Offset() const { return _transportOffsetInput; }
 		const auto& GlobalQuantisation() const { return _globalMidiQuantRadio; }
@@ -125,6 +128,7 @@ namespace gui
 		static constexpr unsigned int MidiDeviceControlLimit = 8300u;
 		static constexpr unsigned int MidiChannelOverrideControlIndex = 7001u;
 		static constexpr unsigned int TransportOffsetControlIndex = 7002u;
+		static constexpr unsigned int MetronomeLevelControlIndex = 7008u;
 		static constexpr unsigned int NinjamMetronomeControlIndex = 7003u;
 		static constexpr unsigned int TapTempoControlIndex = 7004u;
 		static constexpr unsigned int MidiSubdivisionControlIndex = 7005u;
@@ -132,6 +136,7 @@ namespace gui
 		std::shared_ptr<GuiMidiChannelOverride> _midiChannelOverride;
 		std::shared_ptr<GuiNumericInput> _transportOffsetInput;
 		std::shared_ptr<GuiToggle> _ninjamMetronomeToggle;
+		std::shared_ptr<GuiSlider> _metronomeLevel;
 		std::shared_ptr<GuiRadio> _globalMidiQuantRadio;
 		std::shared_ptr<GuiRadio> _midiSubdivisionRadio;
 		std::shared_ptr<GuiButton> _tapButton, _reclockButton, _syncToServerButton, _resetAllButton;

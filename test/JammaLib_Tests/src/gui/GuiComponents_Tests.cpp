@@ -1633,6 +1633,9 @@ public:
 	bool TapAt(Time time) { return _HandleTapTempo(time); }
 	unsigned int ForcedChannel() const { return _inputSubsystem->ForcedChannelOverride(); }
 	double PhaseFraction() const { return _transportOffsetLoopFrac; }
+	void NinjamSession(bool connected) { _SetNinjamMetronomeSession(connected); }
+	std::shared_ptr<gui::GuiSlider> ClickLevel() const { return _workspace->Settings().MetronomeLevel(); }
+	float ClickGain() const { return _audioEngine->MetronomeLevel(); }
 	bool ClickEnabled() const { return _audioEngine->NinjamMetronomeEnabled(); }
 	io::JamFile::GlobalMidiQuantState QuantisationState() const { return _globalMidiQuantState; }
 	unsigned int SelectionDepth() const { return static_cast<unsigned int>(_workspace->PresentationMode()); }
@@ -2107,4 +2110,34 @@ TEST(GuiSubdivisionRestore, SavedEmptySessionRetainsCreationDefaultForAudioAndMi
 	EXPECT_EQ(midi::MidiQuantisationFraction::Sixth,audio->MidiQuantisation().Fraction);
 	EXPECT_EQ(midi::MidiQuantisationFraction::Sixth,midi->MidiQuantisation().Fraction);
 	(*restored)->Shutdown();
+}
+
+TEST_F(GuiSceneSettingsTests, MetronomeSessionEdgesRestoreLocalChoiceWithoutRepeatedAutoEnable)
+{
+	EXPECT_FALSE(Scene->ClickEnabled());
+	EXPECT_EQ(GuiToggleParams::TOGGLE_OFF, Scene->Click()->GetToggleState());
+	Scene->NinjamSession(true);
+	EXPECT_TRUE(Scene->ClickEnabled());
+	Scene->Click()->SetToggleState(GuiToggleParams::TOGGLE_OFF, false);
+	Scene->NinjamSession(true);
+	EXPECT_FALSE(Scene->ClickEnabled());
+	Scene->NinjamSession(false);
+	EXPECT_FALSE(Scene->ClickEnabled());
+	Scene->Click()->SetToggleState(GuiToggleParams::TOGGLE_ON, false);
+	Scene->NinjamSession(true);
+	Scene->Click()->SetToggleState(GuiToggleParams::TOGGLE_OFF, false);
+	Scene->NinjamSession(false);
+	EXPECT_TRUE(Scene->ClickEnabled());
+	EXPECT_EQ(GuiToggleParams::TOGGLE_ON, Scene->Click()->GetToggleState());
+	Scene->NinjamSession(false);
+	EXPECT_TRUE(Scene->ClickEnabled());
+}
+
+TEST_F(GuiSceneSettingsTests, MetronomeLevelReachesAudioOwnerAfterTreeRenumbering)
+{
+	EXPECT_FLOAT_EQ(1.0f, Scene->ClickGain());
+	Scene->ClickLevel()->SetValue(0.25, false);
+	EXPECT_FLOAT_EQ(0.25f, Scene->ClickGain());
+	Scene->ClickLevel()->SetValue(0.0, false);
+	EXPECT_FLOAT_EQ(0.0f, Scene->ClickGain());
 }

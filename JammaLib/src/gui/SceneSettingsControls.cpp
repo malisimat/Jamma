@@ -126,8 +126,12 @@ SceneSettingsControls::SceneSettingsControls(std::uint8_t channel, double offset
 	metronomeToggleParams.Size = { 120, 40u };
 	metronomeToggleParams.MinSize = { 120, 40u };
 	metronomeToggleParams.TextFontSize = graphics::FontOptions::FONT_SMALL;
-	metronomeToggleParams.InitState = GuiToggleParams::TOGGLE_ON;
+	metronomeToggleParams.InitState = GuiToggleParams::TOGGLE_OFF;
 	_ninjamMetronomeToggle = std::make_shared<GuiToggle>(metronomeToggleParams);
+	auto level = GuiSliderParams::PanelHorizontal("yellow", 228u);
+	level.Index = MetronomeLevelControlIndex;
+	level.InitValue = 1.0;
+	_metronomeLevel = std::make_shared<GuiSlider>(level);
 
 
 	GuiRadioParams globalMidiQuantRadioParams;
@@ -218,6 +222,7 @@ std::vector<GuiSettingEntry> SceneSettingsControls::SettingsEntries() const
 		{ SettingsPage::Midi, "MIDI channel override", _midiChannelOverride, MidiChannelOverrideControlIndex },
 		{ SettingsPage::Midi, "", std::make_shared<GuiLabel>(GuiLabelParams::PanelHeader("All off = unchanged", 300u)), 0u },
 		{ SettingsPage::Timing, "", _ninjamMetronomeToggle, NinjamMetronomeControlIndex },
+		{ SettingsPage::Timing, "Level", _metronomeLevel, MetronomeLevelControlIndex },
 		{ SettingsPage::Session, "", _saveButton, SaveSessionControlIndex },
 		{ SettingsPage::Session, "", _saveDefaultJamButton, DefaultSessionControlIndex },
 		{ SettingsPage::Session, "", _loadButton, LoadSessionControlIndex },
@@ -258,6 +263,9 @@ std::optional<SceneSettingsControls::Change> SceneSettingsControls::Decode(const
 		if (action.ElementType == GuiAction::ACTIONELEMENT_TOGGLE && action.Index == NinjamMetronomeControlIndex)
 			return MetronomeChange{ value->Value == GuiToggleParams::TOGGLE_ON };
 	}
+	if (action.ElementType == GuiAction::ACTIONELEMENT_SLIDER && action.Index == MetronomeLevelControlIndex)
+		if (auto value = std::get_if<GuiAction::GuiDouble>(&action.Data); value && std::isfinite(value->Value))
+			return MetronomeLevelChange{ static_cast<float>(std::clamp(value->Value, 0.0, 1.0)) };
 	if (action.ElementType != GuiAction::ACTIONELEMENT_RACK) return std::nullopt;
 	if (action.Index == TransportOffsetControlIndex)
 	{

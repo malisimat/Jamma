@@ -32,6 +32,9 @@ namespace audio
 	class NinjamAudioBoundaryTestAccess
 	{
 	public:
+		static void ConfigureMetronome(AudioHost& host) { host._ninjamMetronome.Configure(48000u); }
+		static void Click(AudioHost& host, float* output, unsigned int frames, const ninjam::NinjamTiming& remote, const Timer* clock)
+		{ host.MixMetronome(output, 1u, frames, 48000u, remote, clock); }
 		static bool Apply(AudioHost& host, std::uint64_t blockStartSample,
 			unsigned int sampleRate) noexcept
 		{
@@ -1774,4 +1777,54 @@ TEST(NinjamTimingProductionBoundary, ThreeRecordingBaselinesRemainDistinctAcross
 			}
 		}
 	}
+}
+
+TEST(AudioHostMetronome, LocalMasterUsesRenderPhaseAndStopsOnReclock)
+{
+	audio::AudioHost host{ io::UserConfig{} };
+	audio::NinjamAudioBoundaryTestAccess::ConfigureMetronome(host);
+	EXPECT_FALSE(host.NinjamMetronomeEnabled());
+	host.SetNinjamMetronomeEnabled(true);
+	Timer clock;
+	clock.SetQuantisation(1000u, Timer::QUANTISE_OFF);
+	clock.SetSeedSourceLength(4001ul);
+	clock.SetMasterLoopSampleOffset(990ul);
+	std::array<float, 64> output{};
+	audio::NinjamAudioBoundaryTestAccess::Click(host, output.data(), 64u, {}, &clock);
+	EXPECT_TRUE(std::all_of(output.begin(), output.begin() + 10, [](float x) { return x == 0.0f; }));
+	EXPECT_TRUE(std::any_of(output.begin() + 10, output.end(), [](float x) { return x != 0.0f; }));
+	clock.Clear();
+	output.fill(0.0f);
+	audio::NinjamAudioBoundaryTestAccess::Click(host, output.data(), 64u, {}, &clock);
+	EXPECT_EQ(output, (std::array<float, 64>{}));
+}
+
+TEST(AudioHostMetronome, ConnectedServerPhaseWinsOverLocalAndInvalidRemoteStaysSilent)
+{
+	audio::AudioHost host{ io::UserConfig{} };
+	audio::NinjamAudioBoundaryTestAccess::ConfigureMetronome(host);
+	host.SetNinjamMetronomeEnabled(true);
+	Timer clock;
+	clock.SetQuantisation(1000u, Timer::QUANTISE_MULTIPLE);
+	clock.SetSeedSourceLength(4000ul);
+	ninjam::NinjamTiming remote;
+	remote.IsConnected = true; remote.IsValid = true;
+	remote.IntervalLengthSamps = 4000u; remote.Bpi = 4u;
+	remote.IntervalPositionSamps = 500u;
+	std::array<float, 64> output{};
+	audio::NinjamAudioBoundaryTestAccess::Click(host, output.data(), 64u, remote, &clock);
+	EXPECT_EQ(output, (std::array<float, 64>{}));
+	remote.IntervalPositionSamps = 0u;
+	audio::NinjamAudioBoundaryTestAccess::Click(host, output.data(), 64u, remote, &clock);
+	EXPECT_TRUE(std::any_of(output.begin(), output.end(), [](float x) { return x != 0.0f; }));
+	// Identical geometry on returning local still discards the server's click tail.
+	clock.SetMasterLoopSampleOffset(500ul);
+	output.fill(0.0f);
+	audio::NinjamAudioBoundaryTestAccess::Click(host, output.data(), 64u, {}, &clock);
+	EXPECT_EQ(output, (std::array<float, 64>{}));
+	audio::NinjamAudioBoundaryTestAccess::Click(host, output.data(), 64u, remote, &clock);
+	remote.IsValid = false;
+	output.fill(0.0f);
+	audio::NinjamAudioBoundaryTestAccess::Click(host, output.data(), 64u, remote, &clock);
+	EXPECT_EQ(output, (std::array<float, 64>{}));
 }

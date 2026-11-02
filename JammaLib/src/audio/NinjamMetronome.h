@@ -13,7 +13,7 @@ namespace audio
 		void Mix(float* interleavedOutput,
 			unsigned int numOutputChannels,
 			unsigned int numFrames,
-			const ninjam::NinjamMetronomeTimingResult& timing) noexcept;
+			const ninjam::NinjamMetronomeTimingResult& timing, float level = 1.0f) noexcept;
 
 		const std::vector<float>& NormalTable() const noexcept { return _normalTable; }
 		const std::vector<float>& AccentTable() const noexcept { return _accentTable; }
@@ -27,7 +27,7 @@ namespace audio
 			unsigned int numOutputChannels,
 			unsigned int sampleOffset,
 			const std::vector<float>& table,
-			unsigned int& playIndex) noexcept;
+			unsigned int& playIndex, float level) noexcept;
 
 		std::vector<float> _normalTable;
 		std::vector<float> _accentTable;

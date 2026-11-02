@@ -263,3 +263,18 @@ Verbose PlaybackTake diagnostics include `recordingMaster` and `recordingBpi`.
 Zero means the legacy shared source map applies; a nonzero value identifies the
 take's own recording ruler, so the global PlaybackTrace map is not mistakenly
 interpreted as the rate for every take.
+
+## Metronome
+
+The metronome defaults off locally. Once the first master establishes Timer's
+interval, it accents the master start and divides that interval into local BPI
+beats, using rounded rational sample boundaries. Reclock silences the local
+click until the next master establishes timing. The Level slider below the
+toggle scales monitor output from silence to the original click level.
+
+An actual NINJAM session entry enables the metronome once, remembering the local
+toggle; departure restores that choice. Changing the toggle while connected
+lasts for that session. Remote observations and tempo retries do not enable it
+again. Connected clicks always use actual server geometry and phase, including
+Stay local and Reclock; unavailable remote timing remains silent. Clicks are
+mixed after NINJAM export and are never sent to the server.

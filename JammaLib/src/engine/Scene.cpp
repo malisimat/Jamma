@@ -159,6 +159,7 @@ void Scene::DisconnectNinjam()
 	{
 		std::scoped_lock lock(_sceneMutex);
 		_ApplyNinjamTimingUpdate(_networkService->ResetTempoSyncOnDisconnect());
+		_SetNinjamMetronomeSession(false);
 	}
 	if (_loggingConfig.Event == "verbose")
 		std::cout << "[NINJAM][TimingPolicy] changed policy=no-sync reason=disconnect\n";
@@ -525,6 +526,8 @@ ActionResult Scene::OnAction(GuiAction action)
 		std::scoped_lock lock(_sceneMutex);
 		_quantisation.SetDefaultMidiQuantisationFraction(subdivision->Value, _stations);
 	}
+	else if (auto level = std::get_if<Settings::MetronomeLevelChange>(&*change))
+		_audioEngine->SetMetronomeLevel(level->Value);
 	else if (auto metronome = std::get_if<Settings::MetronomeChange>(&*change))
 		_audioEngine->SetNinjamMetronomeEnabled(metronome->Enabled);
 	else if (auto channel = std::get_if<Settings::ChannelChange>(&*change))
@@ -638,6 +641,7 @@ void Scene::OnJobTick(Time curTime)
 		}
 		if (pumpResult.TimingStatus.Changed)
 		{
+			_SetNinjamMetronomeSession(pumpResult.TimingStatus.IsAvailable);
 			if (verboseTiming)
 				_ninjamDiagnosticPresenter.PresentSessionEdge(pumpResult.TimingStatus,
 					hasLocalContent, localTiming, std::cout);
@@ -2354,4 +2358,16 @@ void Scene::InitAudio(bool generatedRig, const audio::AsioInventory* inventory, 
 void Scene::FinishSessionLoad(bool replaced, const std::string& error) { _operation.FinishSessionLoad(replaced, error,
 {
 	_sceneMutex, _stations });
+}
+
+void Scene::_SetNinjamMetronomeSession(bool connected)
+{
+	if (_metronomeInNinjam == connected) return;
+	_metronomeInNinjam = connected;
+	if (connected)
+		_localMetronomeEnabled = _audioEngine->NinjamMetronomeEnabled();
+	const bool enabled = connected || _localMetronomeEnabled;
+	_audioEngine->SetNinjamMetronomeEnabled(enabled);
+	_workspace->Settings().Metronome()->SetToggleState(
+		enabled ? gui::GuiToggleParams::TOGGLE_ON : gui::GuiToggleParams::TOGGLE_OFF, true);
 }

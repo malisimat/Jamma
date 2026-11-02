@@ -337,6 +337,9 @@ namespace engine
 		bool _HandleTapTempo(Time actionTime);
 		void _ClearStationQuantisation();
 		bool _HasSelection() const;
+		void _SetNinjamMetronomeSession(bool connected);
+		bool _metronomeInNinjam = false;
+		bool _localMetronomeEnabled = false;
 		void _HandleRemoteTempoSnapshot(const ninjam::NinjamRemoteSnapshot& snapshot,
 			const std::optional<engine::QuantisationTiming>& localTiming,
 			bool hasLocalContent);

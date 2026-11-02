@@ -625,6 +625,8 @@ NinjamRemoteTiming NinjamConnection::ProcessExportBlock(const float* interleaved
 	else if (timing)
 		_audioRemoteTiming = *timing;
 	_audioRemoteTimingResetRevision = epochAfter;
+	// Physical membership survives a missing/invalid timing observation.
+	_audioRemoteTiming.IsConnected = true;
 	const auto remoteTiming = _audioRemoteTiming;
 	if (numFrames == 0u)
 		return remoteTiming;
