@@ -235,14 +235,17 @@ namespace midi
 		}
 
 		// Event index identifies the exact NoteOn in this revision. Reject an
-		// overlapping duplicate whose NoteOff pairing is ambiguous.
+		// overlapping duplicate whose NoteOff pairing is ambiguous. Exact trims resolve
+		// the original pairing before marking BOTH endpoints; source phase conversion
+		// and the attack token survive the existing event sort.
 		static bool MoveOrTrim(MidiLoop::EditState& state, std::size_t onIndex,
 			std::uint32_t newStart, std::uint32_t newEnd,
-			std::uint8_t newPitch) noexcept
+			std::uint8_t newPitch, bool exact = false) noexcept
 		{
 			if (onIndex >= state.EventCount || !state.Events[onIndex].IsNoteOn()
 				|| newPitch >= 128u || newStart >= newEnd
-				|| newEnd > state.LoopLengthSamps) return false;
+				|| newStart >= state.LoopLengthSamps
+				|| (exact ? newEnd - newStart > state.LoopLengthSamps : newEnd > state.LoopLengthSamps)) return false;
 			const auto duration = newEnd - newStart;
 			newStart = static_cast<std::uint32_t>(SourcePosition(newStart, state.LoopLengthSamps, state.Quantisation.PhaseOffsetSamps));
 			newEnd = newStart + duration;
@@ -266,6 +269,7 @@ namespace midi
 			}
 			if (offIndex == state.EventCount && state.EventCount == MidiLoop::DefaultCapacity
 				&& !omitOff) return false;
+			if (exact) state.Events[onIndex].flags |= MidiEvent::ExactTiming;
 			state.Events[onIndex].sampleOffset = newStart;
 			state.Events[onIndex].data1 = newPitch;
 			state.Events[onIndex].flags &= static_cast<std::uint8_t>(~(MidiEvent::TriggerSeamEndpoint | MidiEvent::BoundaryHeld));
@@ -280,6 +284,7 @@ namespace midi
 				}
 				else
 				{
+					if (exact) state.Events[offIndex].flags |= MidiEvent::ExactTiming;
 					state.Events[offIndex].sampleOffset = newEnd % state.LoopLengthSamps;
 					state.Events[offIndex].data1 = newPitch;
 					state.Events[offIndex].flags &= static_cast<std::uint8_t>(~(MidiEvent::TriggerSeamEndpoint | MidiEvent::BoundaryHeld));

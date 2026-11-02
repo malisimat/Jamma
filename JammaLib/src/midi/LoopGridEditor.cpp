@@ -647,7 +647,7 @@ std::optional<MidiGridGesture::Point> LoopGridEditor::_PointAt(
 	const auto pitch = std::clamp(model->EditorBottomPitch()
 		+ static_cast<int>(boundedV * model->EditorVisibleRows()), 0, 127);
 	const auto sample = LoopGridGeometry::SampleAtU(boundedU, length);
-	return MidiGridGesture::Point{ sample, static_cast<std::uint8_t>(pitch), boundedU, boundedV };
+	return MidiGridGesture::Point{ sample, static_cast<std::uint8_t>(pitch), boundedU, boundedV, boundedU * length };
 }
 
 std::uint8_t LoopGridEditor::_ChannelOf(const std::shared_ptr<MidiLoop>& loop) const
@@ -898,13 +898,17 @@ bool LoopGridEditor::_BeginSpecialGesture(const actions::TouchAction& action)
 		_SetFeedback("Note display is refreshing; try again");
 		return true; // Never capture a source identity behind a stale displayed instance.
 	}
-	const auto target = targets.Resolve(point->Sample, point->Pitch, nullptr);
+	const bool edge = action.Index == 0 && (action.Modifiers & base::Action::MODIFIER_ALT)
+		&& !(action.Modifiers & (base::Action::MODIFIER_CTRL | base::Action::MODIFIER_SHIFT));
+	const auto target = edge ? targets.ResolveEdge(point->EdgePosition(), point->Pitch, _PixelsPerSample(source.LoopLengthSamps), source.LoopLengthSamps)
+		: targets.Resolve(point->Sample, point->Pitch, nullptr);
 	const bool velocity = action.Index == 2;
 	if (!velocity && !target.NoteIndex) return true; // Ctrl is reserved for moving notes.
 	if (target.NoteIndex)
 	{
 		_gesture = std::make_unique<MidiGridGesture>();
 		const auto accepted = velocity ? _gesture->BeginVelocity(source, *point)
+			: edge ? _gesture->BeginEdge(source, *point, _PixelsPerSample(source.LoopLengthSamps))
 			: _gesture->BeginSnappedMove(source, *point);
 		if (!accepted)
 		{
@@ -972,6 +976,7 @@ void LoopGridEditor::_EndGesture(const actions::TouchAction& action)
 	bool validDrop = true;
 	if (_gesture && !wasRelative)
 	{
+		if (_gesture->IsEdge()) _gesture->SetEdgeFree(_altEdgeAvailable);
 		const auto snappedMove = _gesture->Mode() == MidiGridGesture::Kind::SnappedMove;
 		const auto point = _PointAt(action.Position, !snappedMove);
 		validDrop = !snappedMove || point.has_value();
@@ -1115,15 +1120,17 @@ void LoopGridEditor::_UpdateHover(MidiGridGesture::Point point)
 			_idleHoverCacheTransportStart = source.QuantisationTransportStartSamps;
 			_idleHoverCacheValid = true;
 		}
-		target = _idleHoverTargets.Resolve(point.Sample, point.Pitch,
-			_idleHoverGrid ? &*_idleHoverGrid : nullptr);
+		target = _altEdgeAvailable ? _idleHoverTargets.ResolveEdge(point.EdgePosition(), point.Pitch, _PixelsPerSample(source.LoopLengthSamps), source.LoopLengthSamps)
+			: _idleHoverTargets.Resolve(point.Sample, point.Pitch, _idleHoverGrid ? &*_idleHoverGrid : nullptr);
 		length = source.LoopLengthSamps;
 		gridResolved = _idleHoverGrid.has_value();
 		_hoverRevision = source.Revision;
 	}
 	if (!length) return;
-	if (!gridResolved && target.NoteIndex)
-		_editHandle = LoopGridGeometry::NoteEditHandle(point.Sample, target.Start, target.End, _PixelsPerSample(length));
+	if ((!gridResolved || _altEdgeAvailable) && target.NoteIndex)
+		_editHandle = LoopGridGeometry::NoteEditHandle(point.EdgePosition()
+			+ static_cast<double>(target.PointerOffset), target.Start, target.End, _PixelsPerSample(length));
+	if (_altEdgeAvailable && !target.NoteIndex) { model->SetEditorHover(-1.0f, -1); return; }
 	// Free timing has no cell to highlight, so empty space keeps the pointer glow.
 	if (!target.NoteIndex && !gridResolved)
 	{
@@ -1178,6 +1185,7 @@ void LoopGridEditor::_CheckGesture()
 
 void LoopGridEditor::CancelInput()
 {
+	_altEdgeAvailable = false;
 	_CancelGesture();
 	_EndOrbit();
 	_ClearIdleHover(true);
@@ -1461,6 +1469,8 @@ bool LoopGridEditor::_HandleButton(actions::TouchAction action)
 
 std::optional<actions::ActionResult> LoopGridEditor::OnAction(actions::TouchAction action)
 {
+	_altEdgeAvailable = (action.Modifiers & base::Action::MODIFIER_ALT)
+		&& !(action.Modifiers & (base::Action::MODIFIER_CTRL | base::Action::MODIFIER_SHIFT));
 	if (action.Touch == actions::TouchAction::TOUCH_MOUSE)
 		_pointerOverButton = _button->IsVisible() && _button->HitTest(_button->GlobalToLocal(action.Position));
 	_CheckGesture();
@@ -1594,7 +1604,9 @@ std::optional<actions::ActionResult> LoopGridEditor::OnAction(actions::TouchActi
 			return _Eaten();
 		}
 		const auto control = (base::Action::MODIFIER_CTRL & action.Modifiers) != 0;
-		if ((action.Index == 2 || control) && _BeginSpecialGesture(action)) return _Eaten();
+		const bool edge = action.Index == 0 && (action.Modifiers & base::Action::MODIFIER_ALT)
+			&& !(action.Modifiers & (base::Action::MODIFIER_CTRL | base::Action::MODIFIER_SHIFT));
+		if ((action.Index == 2 || control || edge) && _BeginSpecialGesture(action)) return _Eaten();
 		_ClearIdleHover(false);
 		if (action.Index == 0 && !control) _BeginGesture(action);
 		if (!_pointerOwned)
@@ -1610,6 +1622,8 @@ std::optional<actions::ActionResult> LoopGridEditor::OnAction(actions::TouchActi
 
 std::optional<actions::ActionResult> LoopGridEditor::OnAction(actions::TouchMoveAction action)
 {
+	_altEdgeAvailable = (action.Modifiers & base::Action::MODIFIER_ALT)
+		&& !(action.Modifiers & (base::Action::MODIFIER_CTRL | base::Action::MODIFIER_SHIFT));
 	if (action.Touch == actions::TouchAction::TOUCH_MOUSE)
 		_pointerOverButton = _button->IsVisible() && _button->HitTest(_button->GlobalToLocal(action.Position));
 	if (_buttonPressed)
@@ -1676,7 +1690,11 @@ std::optional<actions::ActionResult> LoopGridEditor::OnAction(actions::TouchMove
 		else if (_gesture)
 		{
 			if (_relativePointer) _gesture->UpdateRelative(action.RelativeDelta.Y);
-			else if (auto point = _PointAt(action.Position, true)) _gesture->Update(*point);
+			else if (auto point = _PointAt(action.Position, true))
+			{
+				if (_gesture->IsEdge()) _gesture->SetEdgeFree(_altEdgeAvailable);
+				_gesture->Update(*point);
+			}
 			_previewDirty = true;
 			if (_gesture->CapturedNoteIndex()) _UpdateHeldTarget();
 			else if (auto point = _PointAt(action.Position, true)) _UpdateHover(*point);
@@ -1702,6 +1720,18 @@ std::optional<actions::ActionResult> LoopGridEditor::OnAction(const actions::Key
 {
 	if (!IsEngaged())
 		return std::nullopt;
+	if (action.KeyChar == 16u || action.KeyChar == 17u || action.KeyChar == 18u)
+	{
+		_altEdgeAvailable = (action.Modifiers & base::Action::MODIFIER_ALT)
+			&& !(action.Modifiers & (base::Action::MODIFIER_CTRL | base::Action::MODIFIER_SHIFT));
+		_CheckGesture();
+		if (_gesture && _gesture->IsEdge())
+		{
+			_gesture->SetEdgeFree(_altEdgeAvailable);
+			_previewDirty = true; _UpdateHeldTarget();
+		}
+		else _UpdateIdleHover();
+	}
 	if (_channelInput->HasFocus() && action.KeyChar != 27u)
 	{
 		_channelInput->OnAction(action);

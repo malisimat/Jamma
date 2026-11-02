@@ -223,6 +223,7 @@ namespace midi
 		utils::Position2d _pitchViewPointerAnchor{};
 		std::uint64_t _gestureModelGeneration = 0u;
 		bool _previewDirty = false;
+		bool _altEdgeAvailable = false;
 		// UI-owned: retain pixels so camera and pitch-range changes refresh stationary hover.
 		std::optional<utils::Position2d> _idleHoverPointer;
 		bool _idleHoverCacheValid = false;

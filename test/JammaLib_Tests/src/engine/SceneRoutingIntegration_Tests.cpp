@@ -341,6 +341,12 @@ namespace engine
 			scene._workspace->CollapseRacksLocked(scene._stations);
 			EXPECT_FALSE(gui::WorkspaceTestAccess::HasCapture(*scene._workspace));
 		}
+		static midi::LoopGridEditor& Editor(Scene& scene) { return scene._workspace->Editor(); }
+		static void AdvanceEditor(Scene& scene)
+		{
+			for (auto i = 0u; i < 20u; ++i)
+			{ gui::WorkspaceTestAccess::Camera(*scene._workspace).TickBackgroundDrag(0.05f); scene._workspace->Editor().Tick(0.05f); }
+		}
 		static std::size_t EditorSelectionHistory(const Scene& scene)
 		{ return midi::LoopGridEditorTestAccess::SelectionHistorySize(scene._workspace->Editor()); }
 		static std::shared_ptr<gui::GuiSlider> PhaseSetting(Scene& scene)
@@ -1901,6 +1907,59 @@ TEST_F(SceneRoutingIntegrationTest, NativeBackgroundMiddleAndAltMiddleUseClickCo
     SetWindowLongPtrW(host, GWLP_USERDATA, 0);
     DestroyWindow(host);
     scene->Shutdown();
+}
+
+TEST_F(SceneRoutingIntegrationTest, NativeSystemAltEdgeReleaseSnapsCapturedEditorWithoutBackgroundAction)
+{
+    auto scene = FreshScene({Station("Keys")}, {}); ASSERT_TRUE(scene); scene->SetSize({1280u, 900u});
+    resources::ResourceLib resources; engine::NativeKeyboardWindow window(*scene, resources); window.Resize({1280u, 900u});
+    auto excludeJob = engine::SourceLossIntegrationTestAccess::ExcludeJob(*scene);
+    const auto station = scene->SnapshotStations().front(); station->SetGlobalMidiQuantState(io::JamFile::GlobalMidiQuantState::Mixed); auto take = station->AddTake();
+    take->SetGlobalMidiQuantState(io::JamFile::GlobalMidiQuantState::Mixed);
+    take->Record({}, station->Name(), {0u}, {"source"}); take->Play(0u, 100u, 0u);
+    auto settings = take->ResolvedMidiQuantisation(); settings.Enabled = true; settings.GrainSamps = 10u;
+    settings.Fraction = midi::MidiQuantisationFraction::Whole; take->SetMidiQuantisation(settings);
+    const auto loop = take->GetMidiLoops().front();
+    const std::array events{midi::MidiEvent::MakeNoteOn(40u, 0u, 60u, 80u), midi::MidiEvent::MakeNoteOff(60u, 0u, 60u)};
+    loop->ReplaceRecordedEvents(events.data(), events.size(), 100u);
+    ASSERT_TRUE(loop->SetQuantisation(take->ResolvedMidiQuantisation(), take->MidiQuantisationTransportStartSamps())); scene->CommitChanges();
+    ASSERT_TRUE(loop->UpdateModelFromEvents(100u, true)); take->Select();
+    auto& editor = engine::SourceLossIntegrationTestAccess::Editor(*scene); ASSERT_TRUE(editor.Open(take, nullptr, loop));
+    engine::SourceLossIntegrationTestAccess::AdvanceEditor(*scene); ASSERT_TRUE(editor.IsReady()); loop->Model()->SetEditorPitchRange(48,24);
+    const auto edge = midi::LoopGridEditorTestAccess::MidiPoint(editor, 0.60, 60);
+    const auto drag = midi::LoopGridEditorTestAccess::MidiPoint(editor, 0.67, 60); ASSERT_TRUE(edge); ASSERT_TRUE(drag);
+    ASSERT_GE(edge->X, 0); ASSERT_LT(edge->X, 1280); ASSERT_GE(edge->Y, 0); ASSERT_LT(edge->Y, 900);
+    engine::SourceLossIntegrationTestAccess::ExpectUncoveredRackPoint(*scene, *edge);
+    ASSERT_EQ(1u, loop->Model()->NoteInstanceCount());
+    ASSERT_TRUE(loop->Model()->EditorNoteMatches(0u, midi::MidiNote{40u,20u,0u,60u,80u,0u},100u));
+    const auto hit = midi::LoopGridEditorTestAccess::MidiHitPoint(editor, *edge); ASSERT_TRUE(hit);
+    ASSERT_EQ(60u, hit->Pitch); ASSERT_GE(hit->Sample,58u); ASSERT_LE(hit->Sample,61u);
+    SCOPED_TRACE(testing::Message() << "native pick sample=" << hit->Sample << " U=" << hit->U
+        << " precise=" << hit->EdgePosition() << " pixels/sample=" << midi::LoopGridEditorTestAccess::MidiPixelsPerSample(editor));
+    ASSERT_TRUE(hit->PickSample.has_value());
+    ASSERT_LE(std::abs(hit->EdgePosition()-60.0)*midi::LoopGridEditorTestAccess::MidiPixelsPerSample(editor),6.0);
+    ASSERT_TRUE(midi::LoopGridEditorTestAccess::HasMidiEdgeAt(editor,*edge));
+    const auto host = CreateWindowExW(0, L"STATIC", L"", 0, 0, 0, 0, 0, HWND_MESSAGE, nullptr, GetModuleHandleW(nullptr), nullptr);
+    ASSERT_NE(nullptr, host); SetWindowLongPtrW(host, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(&window));
+    const auto revision = loop->Revision(); window.NativeKeys.set(VK_MENU);
+    EXPECT_EQ(0, graphics::Window::WindowProcedure(host, WM_SYSKEYDOWN, VK_MENU, 1u << 29u));
+    ASSERT_TRUE(editor.IsReady()); ASSERT_EQ(base::Action::MODIFIER_ALT,window.Modifiers());
+    ASSERT_TRUE(midi::LoopGridEditorTestAccess::HasMidiEdgeAt(editor,*edge));
+    graphics::Window::WindowProcedure(host, WM_LBUTTONDOWN, MK_LBUTTON, MAKELPARAM(edge->X, 900 - edge->Y));
+    SCOPED_TRACE(testing::Message() << "edge=" << edge->X << "," << edge->Y
+        << " hit=" << hit->Sample << " ready=" << editor.IsReady()
+        << " feedback=" << midi::LoopGridEditorTestAccess::Feedback(editor));
+    ASSERT_TRUE(editor.OwnsPointer()); EXPECT_FALSE(editor.IsOrbitDragging());
+    graphics::Window::WindowProcedure(host, WM_MOUSEMOVE, MK_LBUTTON, MAKELPARAM(drag->X, 900 - drag->Y));
+    EXPECT_EQ(revision, loop->Revision()); window.NativeKeys.reset(VK_MENU);
+    EXPECT_EQ(0, graphics::Window::WindowProcedure(host, WM_SYSKEYUP, VK_MENU, 1u << 29u));
+    EXPECT_TRUE(editor.OwnsPointer()); EXPECT_FALSE(engine::SourceLossIntegrationTestAccess::BackgroundOwned(*scene));
+    graphics::Window::WindowProcedure(host, WM_LBUTTONUP, 0, MAKELPARAM(drag->X, 900 - drag->Y));
+    EXPECT_FALSE(editor.OwnsPointer()); EXPECT_EQ(revision + 1u, loop->Revision());
+    midi::MidiLoop::EditState edited; ASSERT_TRUE(loop->SnapshotForEdit(edited));
+    EXPECT_EQ(40u, edited.Events[0].sampleOffset); EXPECT_EQ(70u, edited.Events[1].sampleOffset);
+    EXPECT_TRUE(edited.Events[0].HasExactTiming()); EXPECT_TRUE(edited.Events[1].HasExactTiming()); EXPECT_FALSE(take->IsMuted());
+    SetWindowLongPtrW(host, GWLP_USERDATA, 0); DestroyWindow(host); excludeJob.unlock(); scene->Shutdown();
 }
 
 TEST_F(SceneRoutingIntegrationTest, NativeAltLeftBackgroundPreviewsAndSelectsAllWithoutMuting)

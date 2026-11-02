@@ -32,3 +32,9 @@ Explicit MIDI cables continue to address the same identities, including unavaila
 slots. Multiple instruments remain additive; effects process the accumulated bus
 in slot order. Intermediate or non-producing arrangements are allowed. A failed
 slot remains silent and recoverable; unsupported layouts are never reinterpreted.
+
+## MIDI editor edge timing
+
+With the MIDI editor open, Alt+primary (without Ctrl/Shift) captures a highlighted note edge while the time grid stays enabled. The other endpoint stays fixed. Release Alt while holding the mouse to snap only that edge to the nearest valid local/remote rational boundary and continue snapped dragging. Press Alt again to resume free movement from the current preview. Release the mouse first to commit the free edge; later Alt release does not change it. A stationary edge click is a no-op. Tiny notes choose an edge on the first drag direction and retain it.
+
+Free edge edits convert both paired endpoints to ExactTiming after resolving the original source pair. Display/source phase conversion, channel, velocity and transient attack identity remain intact. The accepted mouse-up publishes one revision and undo entry; modifier transitions affect detached preview only. Escape, input/focus loss, channel/viewport changes and stale source identity cancel through the existing editor path. Ctrl+primary remains snapped note move and right-button editing retains velocity behavior. Off-grid notes retain their normal hit/delete/move behavior.

@@ -1013,3 +1013,140 @@ TEST(MidiGridGesture, TrimFeedbackTracksTheActualEdgeAfterSliverDirectionChanges
 	gesture.Cancel();
 	EXPECT_EQ(Handle::None, gesture.EditHandle());
 }
+
+TEST(MidiGridGesture, AltEdgeKeepsPairTokensAndUntouchedEndpointAcrossStationarySnapAndRepress)
+{
+	for (const bool left : {false, true})
+	{
+		auto source = MidiGridGestureFixture::EmptyLoop();
+		ASSERT_TRUE(midi::MidiEditOperations::CreateExact(source, 13u, 37u, 2u, 60u, 87u));
+		source.Tokens[0] = 77u; source.Events[1].data2 = 23u;
+		MidiGridGesture gesture;
+		ASSERT_TRUE(gesture.BeginEdge(source, {left ? 13u : 37u, 60u}, 2.0));
+		ASSERT_TRUE(gesture.Update({left ? 17u : 43u, 60u}));
+		EXPECT_EQ(left ? 17u : 13u, gesture.Preview()[0].Start); EXPECT_EQ(left ? 37u : 43u, gesture.Preview()[0].End);
+		gesture.SetEdgeFree(false);
+		EXPECT_EQ(left ? 20u : 13u, gesture.Preview()[0].Start); EXPECT_EQ(left ? 37u : 40u, gesture.Preview()[0].End);
+		gesture.SetEdgeFree(true); // Pointer has not moved: exact same preview.
+		EXPECT_EQ(left ? 20u : 13u, gesture.Preview()[0].Start); EXPECT_EQ(left ? 37u : 40u, gesture.Preview()[0].End);
+		ASSERT_TRUE(gesture.Update({left ? 19u : 45u, 60u}));
+		EXPECT_EQ(left ? 22u : 13u, gesture.Preview()[0].Start); EXPECT_EQ(left ? 37u : 42u, gesture.Preview()[0].End);
+		EXPECT_EQ(77u, gesture.Working().Tokens[0]); EXPECT_EQ(23u, gesture.Working().Events[1].data2);
+		EXPECT_EQ(13u, gesture.Before().Events[0].sampleOffset); EXPECT_EQ(37u, gesture.Before().Events[1].sampleOffset);
+		EXPECT_TRUE(gesture.Working().Events[0].HasExactTiming()); EXPECT_TRUE(gesture.Working().Events[1].HasExactTiming());
+		ASSERT_TRUE(gesture.Finish({left ? 19u : 45u, 60u}));
+	}
+}
+
+TEST(MidiGridGesture, AltEdgeConvertsQuantisedPairAfterResolvingOriginalIdentityAndDoesNotDeleteStationary)
+{
+	auto source = MidiGridGestureFixture::EmptyLoop();
+	ASSERT_TRUE(midi::MidiEditOperations::Create(source, 11u, 20u, 2u, 60u, 83u)); source.Tokens[0] = 51u;
+	MidiGridGesture gesture; ASSERT_TRUE(gesture.BeginEdge(source, {10u, 60u}, 2.0));
+	ASSERT_TRUE(gesture.Finish({10u, 60u})); EXPECT_FALSE(gesture.Dirty()); EXPECT_FALSE(gesture.Working().Events[0].HasExactTiming());
+	ASSERT_TRUE(gesture.BeginEdge(source, {30u, 60u}, 2.0)); ASSERT_TRUE(gesture.Finish({37u, 60u}));
+	const auto targets = midi::MidiGridTargets::Build(gesture.Working()); ASSERT_EQ(1u, targets.Notes.size());
+	EXPECT_EQ(10u, targets.Notes[0].Start); EXPECT_EQ(37u, targets.Notes[0].End);
+	EXPECT_TRUE(gesture.Working().Events[0].HasExactTiming()); EXPECT_TRUE(gesture.Working().Events[1].HasExactTiming());
+	EXPECT_EQ(51u, gesture.Working().Tokens[0]); EXPECT_TRUE(gesture.Working().Quantisation.Enabled);
+}
+
+TEST(MidiGridGesture, AltEdgeTinyHandleLocksFirstDirectionAndRationalSnapKeepsOtherOffgridEdge)
+{
+	auto source = MidiGridGestureFixture::EmptyLoop(); ASSERT_TRUE(midi::MidiEditOperations::CreateExact(source, 23u, 25u, 0u, 60u));
+	MidiGridGesture gesture; ASSERT_TRUE(gesture.BeginEdge(source, {24u, 60u}, 1.0));
+	ASSERT_TRUE(gesture.Update({20u, 60u})); EXPECT_EQ(midi::LoopGridGeometry::EditHandle::Left, gesture.EditHandle());
+	ASSERT_TRUE(gesture.Update({26u, 60u})); EXPECT_EQ(midi::LoopGridGeometry::EditHandle::Left, gesture.EditHandle());
+	EXPECT_EQ(25u, gesture.Preview()[0].End); EXPECT_LT(gesture.Preview()[0].Start, 25u);
+	for (const bool remote : {false, true})
+	{
+		source = MidiGridGestureFixture::EmptyLoop(); source.Quantisation.BaseIntervalSamps = 100u; source.Quantisation.BaseDivisions = 7u;
+		if (remote) { source.Quantisation.RemoteIntervalSamps = 101u; source.Quantisation.RemoteBpi = 7u; source.Quantisation.RemoteOriginSamps = -23; }
+		source.Quantisation.PhaseOffsetSamps = 7; source.QuantisationTransportStartSamps = 13;
+		ASSERT_TRUE(midi::MidiEditOperations::CreateExact(source, 13u, 37u, 2u, 60u));
+		ASSERT_TRUE(gesture.BeginEdge(source, {37u, 60u}, 2.0)); ASSERT_TRUE(gesture.Update({44u, 60u})); gesture.SetEdgeFree(false);
+		const auto grid = gesture.Grid(); ASSERT_TRUE(grid);
+		EXPECT_NE(grid->Boundaries.end(), std::find(grid->Boundaries.begin(), grid->Boundaries.end(), gesture.Preview()[0].End));
+		const auto projected = midi::MidiGridTargets::Build(gesture.Working()); ASSERT_EQ(1u, projected.Notes.size());
+		EXPECT_EQ(13u, projected.Notes[0].Start); EXPECT_EQ(gesture.Preview()[0].End, projected.Notes[0].End);
+	}
+}
+
+TEST(MidiGridGesture, AltEdgeWrappedHeadRetainsPairedEndpointsAndSnapsOnlyRightOccurrence)
+{
+	auto source = MidiGridGestureFixture::EmptyLoop(); ASSERT_TRUE(midi::MidiEditOperations::CreateExact(source, 80u, 120u, 0u, 60u));
+	source.Tokens[1] = 81u; MidiGridGesture gesture;
+	ASSERT_TRUE(gesture.BeginEdge(source, {20u, 60u}, 2.0)); EXPECT_EQ(midi::LoopGridGeometry::EditHandle::Right, gesture.EditHandle());
+	ASSERT_TRUE(gesture.Update({27u, 60u})); EXPECT_EQ(80u, gesture.Preview()[0].Start); EXPECT_EQ(127u, gesture.Preview()[0].End);
+	gesture.SetEdgeFree(false); EXPECT_EQ(130u, gesture.Preview()[0].End);
+	const auto notes = midi::MidiGridTargets::Build(gesture.Working()); ASSERT_EQ(1u, notes.Notes.size());
+	EXPECT_EQ(80u, notes.Notes[0].Start); EXPECT_EQ(130u, notes.Notes[0].End);
+	for (std::size_t i = 0; i < gesture.Working().EventCount; ++i) EXPECT_TRUE(gesture.Working().Events[i].HasExactTiming());
+	EXPECT_EQ(81u, gesture.Working().Tokens[1]);
+}
+
+TEST(MidiGridGesture, AltTrimmedOffgridNoteRemainsWholeNoteDeletableAndSnappedMovable)
+{
+	auto source = MidiGridGestureFixture::EmptyLoop(); ASSERT_TRUE(midi::MidiEditOperations::Create(source,10u,20u,0u,60u,87u));
+	MidiGridGesture edge; ASSERT_TRUE(edge.BeginEdge(source,{30u,60u},2.0)); ASSERT_TRUE(edge.Finish({37u,60u})); source=edge.Working();
+	MidiGridGesture remove; ASSERT_TRUE(remove.Begin(source,{25u,60u},0u)); ASSERT_TRUE(remove.Finish({25u,60u})); EXPECT_EQ(0u,remove.Working().EventCount);
+	MidiGridGesture move; ASSERT_TRUE(move.BeginSnappedMove(source,{25u,60u})); ASSERT_TRUE(move.Finish({45u,62u}));
+	const auto notes=midi::MidiGridTargets::Build(move.Working()); ASSERT_EQ(1u,notes.Notes.size());
+	EXPECT_EQ(30u,notes.Notes[0].Start); EXPECT_EQ(57u,notes.Notes[0].End); EXPECT_EQ(62u,notes.Notes[0].Pitch);
+	EXPECT_TRUE(move.Working().Events[0].HasExactTiming()); EXPECT_TRUE(move.Working().Events[1].HasExactTiming());
+}
+
+TEST(MidiGridGesture, AltWrappedLeftUsesTailCoordinatesAndClampsOneLoopWithoutPoisoningDrag)
+{
+	auto source=MidiGridGestureFixture::EmptyLoop(); ASSERT_TRUE(midi::MidiEditOperations::CreateExact(source,80u,120u,0u,60u));
+	MidiGridGesture gesture; ASSERT_TRUE(gesture.BeginEdge(source,{80u,60u},2.0));
+	EXPECT_EQ(midi::LoopGridGeometry::EditHandle::Left,gesture.EditHandle());
+	ASSERT_TRUE(gesture.Update({70u,60u})); EXPECT_EQ(70u,gesture.Preview()[0].Start); EXPECT_EQ(120u,gesture.Preview()[0].End);
+	ASSERT_TRUE(gesture.Update({10u,60u})); EXPECT_EQ(20u,gesture.Preview()[0].Start); EXPECT_EQ(120u,gesture.Preview()[0].End); EXPECT_FALSE(gesture.Rejected());
+	gesture.SetEdgeFree(false); EXPECT_EQ(20u,gesture.Preview()[0].Start); EXPECT_FALSE(gesture.Rejected());
+	gesture.SetEdgeFree(true); ASSERT_TRUE(gesture.Update({15u,60u})); EXPECT_EQ(25u,gesture.Preview()[0].Start); EXPECT_EQ(120u,gesture.Preview()[0].End);
+	ASSERT_TRUE(gesture.Finish({15u,60u})); const auto notes=midi::MidiGridTargets::Build(gesture.Working()); ASSERT_EQ(1u,notes.Notes.size());
+	EXPECT_EQ(25u,notes.Notes[0].Start); EXPECT_EQ(120u,notes.Notes[0].End);
+}
+
+TEST(MidiGridGesture, AltWrappedTinyHeadKeepsCapturedOccurrenceAfterBothChoosesLeftAndRebases)
+{
+	auto source=MidiGridGestureFixture::EmptyLoop(); ASSERT_TRUE(midi::MidiEditOperations::CreateExact(source,98u,102u,0u,60u));
+	MidiGridGesture gesture; ASSERT_TRUE(gesture.BeginEdge(source,{2u,60u},1.0)); EXPECT_EQ(midi::LoopGridGeometry::EditHandle::Both,gesture.EditHandle());
+	ASSERT_TRUE(gesture.Update({1u,60u})); EXPECT_EQ(midi::LoopGridGeometry::EditHandle::Left,gesture.EditHandle());
+	EXPECT_EQ(97u,gesture.Preview()[0].Start); EXPECT_EQ(102u,gesture.Preview()[0].End);
+	ASSERT_TRUE(gesture.Update({0u,60u})); EXPECT_EQ(96u,gesture.Preview()[0].Start); EXPECT_FALSE(gesture.Rejected());
+	gesture.SetEdgeFree(false); EXPECT_EQ(90u,gesture.Preview()[0].Start); EXPECT_EQ(102u,gesture.Preview()[0].End);
+	gesture.SetEdgeFree(true); ASSERT_TRUE(gesture.Update({1u,60u})); EXPECT_EQ(91u,gesture.Preview()[0].Start); EXPECT_EQ(102u,gesture.Preview()[0].End);
+	ASSERT_TRUE(gesture.Finish({1u,60u})); EXPECT_FALSE(gesture.Rejected());
+}
+
+TEST(MidiGridGesture, AltEdgeHighZoomUsesFractionalPointerWithinSixPixelsWithoutRoundingEventSamples)
+{
+	auto source=MidiGridGestureFixture::EmptyLoop(); ASSERT_TRUE(midi::MidiEditOperations::Create(source,40u,20u,0u,60u));
+	MidiGridGesture gesture;
+	// One sample spans20 pixels. Flooring59.71 to59 would discard a valid5.8px hit.
+	MidiGridGesture::Point inside{59u,60u,0.5971,0.0,59.71};
+	ASSERT_TRUE(gesture.BeginEdge(source,inside,20.0)); EXPECT_EQ(midi::LoopGridGeometry::EditHandle::Right,gesture.EditHandle());
+	ASSERT_TRUE(gesture.Finish(inside)); EXPECT_FALSE(gesture.Dirty());
+	MidiGridGesture::Point outsideLeft{59u,60u,0.5969,0.0,59.69}; EXPECT_FALSE(gesture.BeginEdge(source,outsideLeft,20.0));
+	MidiGridGesture::Point outsideRight{60u,60u,0.6031,0.0,60.31}; EXPECT_FALSE(gesture.BeginEdge(source,outsideRight,20.0));
+	EXPECT_FALSE(gesture.BeginEdge(source,{59u,60u},20.0)); // Explicit integer callers retain integer hit coordinates.
+	EXPECT_TRUE(gesture.BeginEdge(source,{60u,60u},20.0));
+}
+
+TEST(MidiGridGesture, AltWrappedFractionalHitChoosesNearestEdgeOccurrenceAndKeepsItDuringDrag)
+{
+	auto source=MidiGridGestureFixture::EmptyLoop(); ASSERT_TRUE(midi::MidiEditOperations::CreateExact(source,80u,120u,0u,60u));
+	const auto targets=midi::MidiGridTargets::Build(source);
+	const auto left=targets.ResolveEdge(79.9,60u,20.0,100u); ASSERT_TRUE(left.NoteIndex); EXPECT_EQ(0u,left.PointerOffset);
+	const auto right=targets.ResolveEdge(19.9,60u,20.0,100u); ASSERT_TRUE(right.NoteIndex); EXPECT_EQ(100u,right.PointerOffset);
+	MidiGridGesture gesture; ASSERT_TRUE(gesture.BeginEdge(source,{79u,60u,0.799,0.0,79.9},20.0));
+	EXPECT_EQ(midi::LoopGridGeometry::EditHandle::Left,gesture.EditHandle()); EXPECT_EQ(left.PointerOffset,gesture.CapturedTarget().PointerOffset);
+	ASSERT_TRUE(gesture.Update({69u,60u,0.699,0.0,69.9})); EXPECT_EQ(70u,gesture.Preview()[0].Start); EXPECT_EQ(120u,gesture.Preview()[0].End);
+	ASSERT_TRUE(gesture.Update({64u,60u,0.649,0.0,64.9})); EXPECT_EQ(65u,gesture.Preview()[0].Start); EXPECT_FALSE(gesture.Rejected());
+	ASSERT_TRUE(gesture.BeginEdge(source,{19u,60u,0.199,0.0,19.9},20.0));
+	EXPECT_EQ(midi::LoopGridGeometry::EditHandle::Right,gesture.EditHandle()); EXPECT_EQ(right.PointerOffset,gesture.CapturedTarget().PointerOffset);
+	ASSERT_TRUE(gesture.Update({26u,60u,0.269,0.0,26.9})); EXPECT_EQ(80u,gesture.Preview()[0].Start); EXPECT_EQ(127u,gesture.Preview()[0].End);
+	ASSERT_TRUE(gesture.Update({89u,60u,0.899,0.0,89.9})); EXPECT_EQ(180u,gesture.Preview()[0].End); EXPECT_FALSE(gesture.Rejected());
+}

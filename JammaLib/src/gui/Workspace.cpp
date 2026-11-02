@@ -1708,7 +1708,7 @@ bool Workspace::PrepareKeyboard(KeyAction& action, StationAccess access)
 	if ((action.KeyChar == VK_MENU || action.KeyChar == VK_LMENU || action.KeyChar == VK_RMENU) && _hudPanel)
 	{
 		std::scoped_lock lock(access.Mutex);
-		_hudPanel->SetAltLearnHeld(keyDown && !_popupManager.IsOpen() && !_focusManager.IsEditingText());
+		_hudPanel->SetAltLearnHeld(keyDown && !_popupManager.IsOpen() && !_focusManager.IsEditingText() && !_editor->IsEngaged());
 	}
 	return freshLearnKey;
 }

@@ -3606,12 +3606,12 @@ protected:
 		return *graphics::LoopGridProjection::Project(vp, glm::mat4(1.0f),
 			{static_cast<float>((u-0.5)*100), 2.0f, static_cast<float>((0.5-v)*78)},800,800);
 	}
-	void Button(int index, bool down, utils::Position2d pixel, unsigned int buttons, bool control=false)
+	void Button(int index, bool down, utils::Position2d pixel, unsigned int buttons, bool control=false, bool alt=false)
 	{
 		TouchAction action;
 		action.Index=index; action.State=down ? TouchAction::TOUCH_DOWN : TouchAction::TOUCH_UP;
 		action.Position=pixel; action.MouseButtonsDown=buttons;
-		action.Modifiers=control ? base::Action::MODIFIER_CTRL : base::Action::MODIFIER_NONE;
+		action.Modifiers=static_cast<base::Action::Modifiers>((control ? base::Action::MODIFIER_CTRL : 0) | (alt ? base::Action::MODIFIER_ALT : 0));
 		editor->OnAction(action);
 	}
 	void Relative(int dx, int dy, unsigned int buttons)
@@ -3632,6 +3632,111 @@ protected:
 	int relativeButton=-1, endCount=0;
 	bool allowRelative=true;
 };
+
+TEST_F(MidiPointerEditorTest, AltEdgeStationarySystemKeyReleaseSnapsContinuesAndCreatesOneUndo)
+{
+	auto key = [&](bool down) { actions::KeyAction action; action.KeyChar=18u; action.IsSystem=true;
+		action.KeyActionType=down ? actions::KeyAction::KEY_DOWN : actions::KeyAction::KEY_UP;
+		action.Modifiers=down ? base::Action::MODIFIER_ALT : base::Action::MODIFIER_NONE; editor->OnAction(action); };
+	auto move = [&](double at, bool alt) { TouchMoveAction action; action.Position=Pixel(at,60); action.MouseButtonsDown=1u;
+		action.Modifiers=alt ? base::Action::MODIFIER_ALT : base::Action::MODIFIER_NONE; editor->OnAction(action); };
+	const auto revision=loop->Revision(); const auto before=std::make_unique<MidiLoop::EditState>(); ASSERT_TRUE(loop->SnapshotForEdit(*before));
+	key(true); move(0.30,true); editor->Tick(0.0f); EXPECT_EQ(midi::LoopGridGeometry::EditHandle::Right,editor->EditHandle());
+	Button(0,true,Pixel(0.30,60),1u,false,true); ASSERT_TRUE(editor->OwnsPointer()); EXPECT_FALSE(editor->IsOrbitDragging());
+	move(0.37,true); EXPECT_EQ(revision,loop->Revision()); key(false); EXPECT_EQ(revision,loop->Revision());
+	key(true); move(0.39,true); key(false); move(0.48,false); Button(0,false,Pixel(0.48,60),0u);
+	EXPECT_FALSE(editor->OwnsPointer()); EXPECT_EQ(revision+1u,loop->Revision());
+	midi::MidiLoop::EditState edited; ASSERT_TRUE(loop->SnapshotForEdit(edited));
+	const auto projected=midi::MidiGridTargets::Build(edited); ASSERT_EQ(1u,projected.Notes.size());
+	EXPECT_EQ(10u,projected.Notes[0].Start); EXPECT_EQ(50u,projected.Notes[0].End);
+	EXPECT_TRUE(edited.Events[0].HasExactTiming()); EXPECT_TRUE(edited.Events[1].HasExactTiming());
+	EXPECT_EQ(before->Tokens[0],edited.Tokens[0]); ASSERT_TRUE(history.Undo()); EXPECT_FALSE(history.Undo()); ASSERT_TRUE(history.Redo()); EXPECT_FALSE(history.Redo());
+}
+
+TEST_F(MidiPointerEditorTest, AltEdgeMouseUpCommitsFreeBeforeLaterModifierReleaseAndNoMotionIsNoop)
+{
+	actions::KeyAction key; key.KeyChar=18u; key.IsSystem=true; key.KeyActionType=actions::KeyAction::KEY_DOWN; key.Modifiers=base::Action::MODIFIER_ALT; editor->OnAction(key);
+	const auto revision=loop->Revision(); Button(0,true,Pixel(0.10,60),1u,false,true); Button(0,false,Pixel(0.10,60),0u,false,true);
+	EXPECT_EQ(revision,loop->Revision()); EXPECT_FALSE(history.Undo());
+	Button(0,true,Pixel(0.30,60),1u,false,true); ASSERT_TRUE(editor->OwnsPointer());
+	TouchMoveAction move; move.Position=Pixel(0.37,60); move.MouseButtonsDown=1u; move.Modifiers=base::Action::MODIFIER_ALT; editor->OnAction(move);
+	Button(0,false,move.Position,0u,false,true); const auto accepted=loop->Revision(); EXPECT_EQ(revision+1u,accepted);
+	midi::MidiLoop::EditState edited; ASSERT_TRUE(loop->SnapshotForEdit(edited));
+	const auto end=edited.Events[1].sampleOffset; EXPECT_GE(end,36u); EXPECT_LE(end,38u); EXPECT_NE(40u,end);
+	key.KeyActionType=actions::KeyAction::KEY_UP; key.Modifiers=base::Action::MODIFIER_NONE; editor->OnAction(key);
+	EXPECT_EQ(accepted,loop->Revision()); ASSERT_TRUE(history.Undo()); EXPECT_FALSE(history.Undo());
+}
+
+TEST_F(MidiPointerEditorTest, AltWrappedHeadLightsAndCapturesSameRightEdge)
+{
+	const std::array events{MidiEvent::MakeNoteOff(20u,0u,60u).WithFlags(MidiEvent::ExactTiming | MidiEvent::TriggerSeamEndpoint),
+		MidiEvent::MakeNoteOn(80u,0u,60u,80u).WithFlags(MidiEvent::ExactTiming | MidiEvent::TriggerSeamEndpoint)};
+	loop->ReplaceRecordedEvents(events.data(),events.size(),100u); ASSERT_TRUE(loop->UpdateModelFromEvents(100u,true));
+	actions::KeyAction key; key.KeyChar=18u; key.IsSystem=true; key.KeyActionType=actions::KeyAction::KEY_DOWN; key.Modifiers=base::Action::MODIFIER_ALT; editor->OnAction(key);
+	TouchMoveAction move; move.Position=Pixel(0.20,60); move.Modifiers=base::Action::MODIFIER_ALT; editor->OnAction(move); editor->Tick(0.0f);
+	EXPECT_EQ(midi::LoopGridGeometry::EditHandle::Right,editor->EditHandle());
+	Button(0,true,move.Position,1u,false,true); ASSERT_TRUE(editor->OwnsPointer()); EXPECT_EQ(midi::LoopGridGeometry::EditHandle::Right,editor->EditHandle());
+	editor->CancelInput(); EXPECT_FALSE(history.Undo());
+}
+
+TEST_F(MidiPointerEditorTest, AltWithControlKeepsSnappedMoveAndShiftDoesNotAdmitEdge)
+{
+	const auto revision=loop->Revision(); Button(0,true,Pixel(0.15,60),1u,true,true);
+	ASSERT_TRUE(editor->OwnsPointer()); EXPECT_EQ(midi::LoopGridGeometry::EditHandle::Move,editor->EditHandle()); editor->CancelInput();
+	TouchAction down; down.Index=0; down.State=TouchAction::TOUCH_DOWN; down.Position=Pixel(0.30,60); down.MouseButtonsDown=1u;
+	down.Modifiers=static_cast<base::Action::Modifiers>(base::Action::MODIFIER_ALT | base::Action::MODIFIER_SHIFT); editor->OnAction(down);
+	EXPECT_EQ(midi::LoopGridGeometry::EditHandle::None,editor->EditHandle()); editor->CancelInput();
+	EXPECT_EQ(revision,loop->Revision()); EXPECT_FALSE(history.Undo());
+}
+
+TEST_F(MidiPointerEditorTest, AltEdgeCancellationAndInvalidAdmissionNeverPaintOrPublish)
+{
+	for (auto cancellation = 0u; cancellation < 3u; ++cancellation)
+	{
+		SCOPED_TRACE(cancellation);
+		for (auto frame=0u; frame<20u; ++frame) { camera.TickBackgroundDrag(0.05f); editor->Tick(0.05f); }
+		ASSERT_TRUE(editor->IsReady());
+		const auto revision=loop->Revision(); Button(0,true,Pixel(0.30,60),1u,false,true); ASSERT_TRUE(editor->OwnsPointer());
+		TouchMoveAction move; move.Position=Pixel(0.37,60); move.MouseButtonsDown=1u; move.Modifiers=base::Action::MODIFIER_ALT; editor->OnAction(move);
+		if (cancellation == 0u) editor->CancelInput();
+		else if (cancellation == 1u) editor->SetSize({900u,800u});
+		else { move.MouseButtonsDown=0u; editor->OnAction(move); }
+		EXPECT_FALSE(editor->OwnsPointer()); Button(0,false,move.Position,0u,false,true);
+		EXPECT_EQ(revision,loop->Revision()); EXPECT_FALSE(history.Undo()); editor->SetSize({800u,800u});
+	}
+	for (auto frame=0u; frame<20u; ++frame) { camera.TickBackgroundDrag(0.05f); editor->Tick(0.05f); }
+	ASSERT_TRUE(editor->IsReady());
+	const auto revision=loop->Revision(); Button(0,true,Pixel(0.70,65),1u,false,true); Button(0,false,Pixel(0.70,65),0u,false,true);
+	EXPECT_FALSE(editor->OwnsPointer()); EXPECT_FALSE(editor->IsOrbitDragging()); EXPECT_EQ(revision,loop->Revision()); EXPECT_FALSE(history.Undo());
+}
+
+TEST(MidiLoopEdit, AcceptedAltStartTrimKeepsSoundingVoiceAndExactGeometryThroughUndoAndRestore)
+{
+	auto take=MakeLoopTake("alt-continuity"); take->SetGlobalMidiQuantState(io::JamFile::GlobalMidiQuantState::Mixed);
+	take->Record({},"station",{0u},{"source"}); take->Play(0u,100u,0u);
+	auto grid=take->ResolvedMidiQuantisation(); grid.Enabled=true; grid.GrainSamps=10u; grid.Fraction=MidiQuantisationFraction::Whole; take->SetMidiQuantisation(grid);
+	auto loop=take->GetMidiLoops().front(); const std::array events{MidiEvent::MakeNoteOn(11u,0u,60u,83u),MidiEvent::MakeNoteOff(31u,0u,60u,23u)};
+	loop->ReplaceRecordedEvents(events.data(),events.size(),100u); ASSERT_TRUE(loop->SetQuantisation(take->ResolvedMidiQuantisation(),take->MidiQuantisationTransportStartSamps()));
+	MidiLoopCapturingSink sink; loop->ReadBlock(0u,21u,sink); ASSERT_EQ(1u,sink.events.size()); sink.Clear();
+	auto before=std::make_unique<MidiLoop::EditState>(); ASSERT_TRUE(loop->SnapshotForEdit(*before)); midi::MidiGridGesture gesture;
+	ASSERT_TRUE(gesture.BeginEdge(*before,{10u,60u},2.0)); ASSERT_TRUE(gesture.Finish({3u,60u}));
+	auto accepted=std::make_unique<MidiLoop::EditState>(); std::uint64_t revision=0u;
+	ASSERT_TRUE(take->PublishMidiEdit(loop,gesture.Working(),&revision,accepted.get()));
+	actions::ActionUndoHistory history; auto cursor=std::make_shared<actions::MidiEditRevisionCursor>();
+	history.Add(std::make_shared<actions::MidiLoopEditUndo>(take,loop,*before,*accepted,revision,cursor));
+	ASSERT_TRUE(history.Undo()); ASSERT_TRUE(history.Redo()); EXPECT_EQ(before->Tokens[0],accepted->Tokens[0]);
+	loop->ReadBlock(21u,9u,sink); EXPECT_TRUE(sink.events.empty()); loop->ReadBlock(30u,1u,sink);
+	ASSERT_EQ(1u,sink.events.size()); EXPECT_TRUE(sink.events[0].IsNoteOff()); EXPECT_EQ(23u,sink.events[0].data2);
+	auto saved=std::make_unique<MidiLoop::ExportState>(); ASSERT_TRUE(loop->SnapshotForExport(*saved));
+	auto restored=std::make_unique<MidiLoop>();
+	// Export stores loop overrides; the destination take supplies the inherited ruler.
+	ASSERT_TRUE(restored->SetQuantisation(loop->Quantisation(),before->QuantisationTransportStartSamps));
+	ASSERT_TRUE(restored->RestoreFromExport(*saved));
+	auto state=std::make_unique<MidiLoop::EditState>(); ASSERT_TRUE(restored->SnapshotForEdit(*state));
+	const auto targets=midi::MidiGridTargets::Build(*state); ASSERT_EQ(1u,targets.Notes.size()); EXPECT_EQ(3u,targets.Notes[0].Start); EXPECT_EQ(30u,targets.Notes[0].End);
+	EXPECT_TRUE(state->Quantisation.Enabled); EXPECT_TRUE(state->Events[0].HasExactTiming()); EXPECT_TRUE(state->Events[1].HasExactTiming());
+	sink.Clear(); restored->ReadBlock(0u,31u,sink); ASSERT_EQ(2u,sink.events.size()); EXPECT_EQ(3u,sink.events[0].sampleOffset); EXPECT_EQ(30u,sink.events[1].sampleOffset);
+}
 
 TEST_F(MidiPointerEditorTest, MultipleSelectedMidiStreamsRequireHoverDisambiguation)
 {

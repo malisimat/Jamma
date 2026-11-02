@@ -27,6 +27,7 @@ namespace midi
 			std::uint32_t Start = 0u, End = 0u;
 			std::uint8_t Pitch = 0u;
 			std::optional<std::size_t> NoteIndex;
+			std::uint32_t PointerOffset = 0u; // Chosen wrapped edge occurrence, frozen by capture.
 		};
 		std::vector<Note> Notes;
 		static MidiGridTargets Build(const MidiLoop::EditState& source)
@@ -39,6 +40,27 @@ namespace midi
 				const auto& note = projected.Note;
 				result.Notes.push_back({note.StartSample, note.StartSample + note.DurationSamples,
 					note.Note, projected.On, projected.Off, projected.Ambiguous, note.Flags});
+			}
+			return result;
+		}
+		Target ResolveEdge(double sample, std::uint8_t pitch, double pixelsPerSample, std::uint32_t length) const
+		{
+			Target result; double closest = 1e30;
+			if (!std::isfinite(sample)) return result;
+			for (std::size_t i = 0u; i < Notes.size(); ++i)
+			{
+				const auto& note = Notes[i];
+				if (note.Pitch != pitch || note.Ambiguous) continue;
+				for (auto occurrence = 0u; occurrence <= (note.End > length ? 1u : 0u); ++occurrence)
+				{
+					const auto offset = occurrence ? length : 0u;
+					const auto at = sample + static_cast<double>(offset);
+					if (LoopGridGeometry::NoteEditHandle(at, note.Start, note.End, pixelsPerSample) == LoopGridGeometry::EditHandle::Move) continue;
+					const auto distance = std::min(std::abs(at - note.Start), std::abs(at - note.End));
+					if ((pixelsPerSample > 0.0 ? distance * pixelsPerSample > 6.0 : distance > 0.0)
+						|| distance > closest || (distance == closest && result.NoteIndex == i)) continue;
+					closest = distance; result = {note.Start, note.End, pitch, i, offset};
+				}
 			}
 			return result;
 		}
