@@ -741,6 +741,9 @@ void SessionControl::_CaptureSession(const audio::AudioStreamParams& actual, Sta
 	const auto result = effects.CaptureSession(_pendingSaveFolder, actual,
 		[this, &access](std::string& restoreError) { return FinishOperation(&restoreError, access); },
 		[this, &access, &effects](std::string& eligibilityError) {
+			// Export has acknowledged callback quiescence. Adopt the same pending
+			// UI mute command stream before raw JAM flags are captured, even offline.
+			if (!_audio->ApplyPendingRigWhileQuiescent()) { eligibilityError = "Audio state is not ready for session capture"; return false; }
 			_input->SuspendMidiDispatch();
 			for (const auto& station : access.Stations) if (station) station->ResetLiveMidiWhileQuiescent();
 			if (effects.CheckEligibility().CaptureBusy) { eligibilityError = "Save unavailable during capture or pending actions"; return false; }

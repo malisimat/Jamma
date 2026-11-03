@@ -121,6 +121,8 @@ Scene::Scene(SceneParams params,
 		_transportOffsetLoopFrac, _globalMidiQuantState,
 		[this](const auto& subtree) { _workspace->OnSettingsHidden(subtree); },
 		[this](bool selection, GroupCommand command, std::size_t slot) { _ExecuteGroupCommandLocked(selection, command, slot); });
+	_workspace->InitializeMuteGestures(_performanceGroups,
+		[this](auto application) { _PublishGroupMuteApplication(std::move(application)); });
 	_workspace->InitializeEditor(_sceneMutex, _stations,
 		[this]() { _workspace->OnLoopGridEditorOpened({ _sceneMutex, _stations }, _WorkspaceInputPresentation()); });
 	_workspace->Settings().SetAudioDraft(user.Audio);
@@ -1609,10 +1611,14 @@ void Scene::_JobLoop(std::function<void()> onStart) noexcept
 
 void Scene::_PublishAudioStations()
 {
-	_performanceGroups.CancelPending();
+	_performanceGroups.PrepareForTopology(_stations);
 	_audioEngine->PublishGroupMuteApplication(nullptr);
 	auto stations = std::make_shared<const std::vector<std::shared_ptr<Station>>>(_stations.begin(), _stations.end());
 	_audioEngine->SetStations(stations, _rigCoordinator.Accepted() ? _rigCoordinator.Accepted()->TopologyRevision : 0u);
+	// This is the last null publication in membership replacement. Rebase only
+	// after new membership is published so restoration cannot be wiped or rejected as old topology.
+	_performanceGroups.RepublishForTopology(_stations,
+		[this](auto application) { _PublishGroupMuteApplication(std::move(application)); });
 }
 
 GroupTargetKind Scene::_GroupSelectionDepthLocked() const
@@ -1917,7 +1923,7 @@ void Scene::_CommitStationMembershipLocked()
 	}
 	if (!_stationManagement.Committed || !_stationManagement.Candidate) return;
 	_performanceGroups.Acknowledge(_audioEngine->GroupMuteReceipt());
-	_performanceGroups.CancelPending();
+	_performanceGroups.PrepareForTopology(_stations);
 	_audioEngine->PublishGroupMuteApplication(nullptr);
 	const auto removed = _stationManagement.Target;
 	const auto affectedBindings = _stationManagement.Candidate->TriggerRouteUpdates.size();
@@ -2313,6 +2319,19 @@ SessionControl::Effects Scene::_ControlEffects()
 		},
 		[this](const SessionControl::RuntimeAvailability& update) { _ApplyRuntimeAvailabilityLocked(update); },
 		[this](const std::wstring& folder, const audio::AudioStreamParams& actual, const SessionControl::Restore& restore, const SessionControl::Restore& eligible) {
+			bool restorationReady = true;
+			{
+				std::scoped_lock lock(_sceneMutex);
+				if (_performanceGroups.MuteMarqueeActive()) restorationReady = _performanceGroups.CancelMuteMarquee(_stations,
+					[this](auto application) { _PublishGroupMuteApplication(std::move(application)); });
+				restorationReady &= !_performanceGroups.MuteMarqueeActive();
+			}
+			if (!restorationReady)
+			{
+				io::IoSessionExporter::ExportResult result;
+				result.Error = "Finish restoring mute preview before saving";
+				return result;
+			}
 			return io::IoSessionExporter::ExportSessionVersionToDirectory(_stations, AcceptedRigSnapshot(), _quantisation,
 				_globalMidiQuantState, _transportOffsetLoopFrac, _userConfig, actual, _audioEngine.get(), _sceneMutex,
 				_networkService->GetController(), folder, restore, eligible, &_performanceGroups.Groups());

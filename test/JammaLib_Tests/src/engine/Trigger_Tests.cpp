@@ -332,6 +332,11 @@ public:
 		return point;
 	}
 
+    bool DesiredMuteForTest(const engine::GroupTargetId& target)
+    { std::scoped_lock lock(_sceneMutex); return _performanceGroups.DesiredMuted(target,_stations); }
+    bool ApplyMuteBoundaryForTest()
+    { _audioEngine->CloseCallbackAdmission(); return _audioEngine->ApplyPendingRigWhileQuiescent(); }
+
 	void AddStationForTest(const std::shared_ptr<Station>& station)
 	{
 		_AddStation(station);
@@ -2740,10 +2745,16 @@ TEST(Scene, StationMuteClickUsesAggregateTakeState) {
 		scene.OnAction(MakeSceneTouch(TouchAction::TOUCH_UP, scene.CanvasPointForTest(), 1u, 0u));
 	};
 	click();
+    ASSERT_TRUE(scene.DesiredMuteForTest({engine::GroupTargetKind::Station,station->Id(),{},{}}));
+    EXPECT_FALSE(first->IsMuted()); EXPECT_FALSE(second->IsMuted());
+    ASSERT_TRUE(scene.ApplyMuteBoundaryForTest());
 	EXPECT_TRUE(first->IsMuted());
 	EXPECT_TRUE(second->IsMuted());
 	EXPECT_TRUE(station->AllTakesMuted());
 	click();
+    EXPECT_FALSE(scene.DesiredMuteForTest({engine::GroupTargetKind::Station,station->Id(),{},{}}));
+    EXPECT_TRUE(first->IsMuted()); EXPECT_TRUE(second->IsMuted());
+    ASSERT_TRUE(scene.ApplyMuteBoundaryForTest());
 	EXPECT_FALSE(first->IsMuted());
 	EXPECT_FALSE(second->IsMuted());
 	EXPECT_FALSE(station->AllTakesMuted());

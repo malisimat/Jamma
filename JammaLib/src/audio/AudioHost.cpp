@@ -1110,20 +1110,22 @@ void AudioHost::PublishAudioCallbackProgress(std::uint64_t blockStartSample,
 
 	void AudioHost::ApplyPendingGroupMuteAtAudioBoundary() noexcept
 	{
+		auto application = _groupMuteApplication.borrow();
+		ApplyBorrowedGroupMuteAtAudioBoundary(application.get());
+	}
+
+	void AudioHost::ApplyBorrowedGroupMuteAtAudioBoundary(const engine::GroupMuteApplication* application) noexcept
+	{
+		// Caller holds the immutable publication lease for this whole adoption.
+		if (!application || application->Version <= _groupAppliedVersion) return;
+		// Obsolete work is consumed without touching detached members.
+		if (application->TopologyRevision == 0u || (_audioAppliedRigSnapshot &&
+			application->TopologyRevision == _audioAppliedRigSnapshot->TopologyRevision))
 		{
-			auto application = _groupMuteApplication.borrow();
-			if (application && application->Version > _groupAppliedVersion)
-			{
-				// Obsolete work is consumed without touching detached members.
-				if (application->TopologyRevision == 0u || (_audioAppliedRigSnapshot &&
-					application->TopologyRevision == _audioAppliedRigSnapshot->TopologyRevision))
-				{
-					application->ApplyAudio();
-					_groupMuteReceipt.store(application->Version, std::memory_order_release);
-				}
-				_groupAppliedVersion = application->Version;
-			}
+			application->ApplyAudio();
+			_groupMuteReceipt.store(application->Version, std::memory_order_release);
 		}
+		_groupAppliedVersion = application->Version;
 	}
 
 	bool AudioHost::TryEnterCallback() noexcept

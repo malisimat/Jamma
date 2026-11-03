@@ -1,4 +1,5 @@
 #pragma once
+#include "MuteMarqueeProjection.h"
 
 #include <algorithm>
 #include <atomic>
@@ -82,6 +83,7 @@ namespace graphics
 		virtual void Draw3d(base::DrawContext& ctx, unsigned int numInstances, base::DrawPass pass) override;
 
 		CameraBounds CameraLocalBounds() const noexcept;
+		bool IntersectsMuteMarquee(const MuteMarqueeProjection& projection) const;
 		// Render-owned: consume every stream before calculating the take's shared range.
 		PitchRange PrepareSceneGeometry();
 		void SetSceneLayout(float height, PitchRange range) noexcept;

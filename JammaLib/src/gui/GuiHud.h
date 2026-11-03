@@ -142,6 +142,8 @@ namespace gui
 		// Caller holds Scene serialization; Draw uses these copied presentation values.
 		void PrepareOverdubSourcesLocked(const std::shared_ptr<engine::Trigger>& dragging);
 		void SetOverdubSourceFeedback(std::string text);
+		const std::string& OverdubSourceFeedback() const noexcept { return _overdubSourceFeedback; }
+		std::uint64_t CurrentRigRevision() const { return _currentRigRevision ? _currentRigRevision() : _displayedRevision; }
 		bool HasCableDrag() const noexcept { return _cableDrag.has_value(); }
 		bool IsApplying() const { return _RoutingEditAvailability() == RoutingEditAvailability::Applying; }
 		static std::vector<CableRoute> BuildCableRoutes(const engine::RoutingGraph& graph);

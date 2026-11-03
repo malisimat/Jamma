@@ -1,4 +1,5 @@
 #pragma once
+#include "MuteMarqueeProjection.h"
 
 #include <cstdint>
 #include <memory>
@@ -73,6 +74,7 @@ namespace graphics
 	public:
 		StationModel();
 		CameraBounds CameraLocalBounds() const noexcept;
+		bool IntersectsMuteMarquee(const MuteMarqueeProjection& projection) const;
 
 		// Copy
 		StationModel(const StationModel&) = delete;

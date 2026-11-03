@@ -2,6 +2,7 @@
 #include "engine/PerformanceGroupService.h"
 #include "engine/Station.h"
 #include "engine/PerformanceGroupController.h"
+#include "graphics/MuteMarqueeProjection.h"
 
 class PerformanceGroupServiceTest : public testing::Test
 {
@@ -669,4 +670,102 @@ TEST_F(PerformanceGroupServiceTest, GlobalMutePreservesExplicitAndUnappliedDesir
     ASSERT_TRUE(controller.HandleKey(key,{station},engine::GroupTargetKind::Take,publish)); pending->ApplyAudio();
     EXPECT_TRUE(station->RetainedMuted()); EXPECT_FALSE(take->GetTweakState() & base::Tweakable::TWEAKSTATE_MUTED); EXPECT_TRUE(take->IsMuted());
     ASSERT_TRUE(controller.SetAllMuted(false,{station},publish)); pending->ApplyAudio(); EXPECT_FALSE(station->RetainedMuted()); EXPECT_FALSE(take->IsMuted());
+}
+
+TEST_F(PerformanceGroupServiceTest, MarqueeRestoresRawChildrenAndLatestDesiredBeforeAudioReceipt)
+{
+    auto station = Station("marquee"); auto take = station->AddTake();
+    take->AddLoop(0u, station->Id()); take->AddLoop(1u, station->Id()); take->CommitChanges();
+    auto a = take->GetLoops()[0], b = take->GetLoops()[1]; b->SetGroupMutedAudio(true);
+    engine::PerformanceGroupController controller;
+    std::shared_ptr<const engine::GroupMuteApplication> pending;
+    const auto publish = [&](auto image) { pending = std::move(image); };
+    const engine::GroupTargetId target{engine::GroupTargetKind::Take, station->Id(), take->Id(), {}};
+    ASSERT_TRUE(controller.BeginMuteMarquee({station})); EXPECT_FALSE(pending);
+    ASSERT_TRUE(controller.PreviewMuteMarquee(std::array{target}, {station}, publish));
+    const auto preview = pending; ASSERT_TRUE(preview); preview->ApplyAudio();
+    EXPECT_TRUE(a->IsMuted()); EXPECT_TRUE(b->IsMuted());
+    controller.Acknowledge(preview->Version);
+    ASSERT_TRUE(controller.PreviewMuteMarquee({}, {station}, publish));
+    ASSERT_TRUE(pending); EXPECT_GT(pending->Version, preview->Version);
+    pending->ApplyAudio(); EXPECT_FALSE(a->IsMuted()); EXPECT_TRUE(b->IsMuted());
+    const auto restored = pending;
+    ASSERT_TRUE(controller.PreviewMuteMarquee({}, {station}, publish)); EXPECT_EQ(pending, restored);
+    ASSERT_TRUE(controller.PreviewMuteMarquee(std::array{target}, {station}, publish));
+    ASSERT_TRUE(controller.SetTargetMuted(target, false, {station}, publish));
+    EXPECT_FALSE(controller.MuteMarqueeActive());
+    pending->ApplyAudio(); EXPECT_FALSE(take->IsMuted()); EXPECT_FALSE(a->IsMuted()); EXPECT_TRUE(b->IsMuted());
+}
+
+TEST_F(PerformanceGroupServiceTest, ManualAuditionIsImmediateButMarqueeRestoreNeverReleasesReplacement)
+{
+    auto station = Station("audition"); auto source = station->AddTake();
+    source->AddLoop(0u, station->Id()); source->CommitChanges();
+    auto replacement = station->AddTake(); replacement->AcquireReplacementSourceMute(source);
+    ASSERT_TRUE(source->IsSourceMuted());
+    engine::PerformanceGroupController controller;
+    std::shared_ptr<const engine::GroupMuteApplication> pending;
+    const auto publish = [&](auto image) { pending = std::move(image); };
+    const engine::GroupTargetId target{engine::GroupTargetKind::Take, station->Id(), source->Id(), {}};
+    ASSERT_TRUE(controller.BeginMuteMarquee({station}));
+    ASSERT_TRUE(controller.PreviewMuteMarquee(std::array{target}, {station}, publish)); pending->ApplyAudio();
+    ASSERT_TRUE(controller.CancelMuteMarquee({station}, publish)); pending->ApplyAudio();
+    EXPECT_TRUE(source->IsSourceMuted());
+    ASSERT_TRUE(controller.SetTargetMuted(target, false, {station}, publish));
+    EXPECT_FALSE(source->IsSourceMuted()); // Admission auditions without waiting for callback.
+    auto newerReplacement = station->AddTake(); newerReplacement->AcquireReplacementSourceMute(source);
+    ASSERT_TRUE(source->IsSourceMuted()); pending->ApplyAudio();
+    EXPECT_TRUE(source->IsSourceMuted()); // Older queued raw command cannot audition a newer replacement.
+    source->AcquireTriggerSourceMuteAudio();
+    ASSERT_TRUE(controller.SetTargetMuted(target, false, {station}, publish)); pending->ApplyAudio();
+    EXPECT_TRUE(source->IsSourceMuted()); // Transient/punch claim remains authoritative.
+    source->ReleaseTriggerSourceMuteAudio(); EXPECT_FALSE(source->IsSourceMuted());
+}
+
+TEST_F(PerformanceGroupServiceTest, TopologyRestoreUsesSurvivingIdentityAndDoesNotMuteNewOwners)
+{
+    auto station = Station("topology"); auto old = station->AddTake();
+    engine::PerformanceGroupController controller;
+    std::shared_ptr<const engine::GroupMuteApplication> pending;
+    const auto publish = [&](auto image) { pending = std::move(image); };
+    ASSERT_TRUE(controller.BeginMuteMarquee({station}));
+    ASSERT_TRUE(controller.PreviewMuteMarquee(std::array{engine::GroupTargetId{engine::GroupTargetKind::Take,station->Id(),old->Id(),{}}}, {station}, publish));
+    pending->ApplyAudio(); ASSERT_TRUE(old->IsMuted());
+    controller.PrepareForTopology({station});
+    auto added = station->AddTake();
+    controller.RepublishForTopology({station}, publish); ASSERT_TRUE(pending); pending->ApplyAudio();
+    EXPECT_FALSE(old->IsMuted()); EXPECT_FALSE(added->IsMuted()); EXPECT_FALSE(controller.MuteMarqueeActive());
+}
+
+TEST(MuteMarqueeProjectionTest, ClipsActualTrianglesAndPreservesVisiblePartialAndInclusiveBoundary)
+{
+    const utils::Size2d size{100u,100u};
+    const std::array visible{utils::Rect2d{0,0,100,100}};
+    const auto hit = [&](utils::Rect2d rectangle, glm::vec3 a, glm::vec3 b, glm::vec3 c) {
+        return graphics::MuteMarqueeProjection(glm::mat4(1.0f),size,rectangle,visible).Intersects(a,b,c);
+    };
+    EXPECT_TRUE(hit({50,50,60,60},{0,0,0},{1,0,0},{0,1,0}));
+    EXPECT_FALSE(hit({90,90,100,100},{0,0,0},{1,0,0},{0,1,0})); // Empty bounding corner.
+    EXPECT_TRUE(hit({75,50,75,50},{0,0,0},{1,0,0},{0,1,0})); // Inclusive edge.
+    EXPECT_FALSE(hit({0,0,100,100},{0,0,2},{1,0,2},{0,1,2})); // Beyond far plane.
+    EXPECT_TRUE(hit({60,60,80,80},{0,0,-2},{1,0,0},{0,1,0})); // Crosses near plane.
+    const auto regions = graphics::MuteMarqueeProjection::VisibleRegions(size,std::array{utils::Rect2d{50,0,100,100}});
+    const graphics::MuteMarqueeProjection projection(glm::mat4(1),size,{0,0,100,100},regions);
+    EXPECT_FALSE(projection.Intersects({0.2f,0,0},{0.8f,0,0},{0.2f,0.8f,0}));
+    EXPECT_TRUE(projection.Intersects({-0.2f,0,0},{0.8f,0,0},{-0.2f,0.8f,0}));
+}
+
+TEST_F(PerformanceGroupServiceTest, RemoteManualIntentSurvivesLocalGlobalPublicationAndIsNotStored)
+{
+    engine::StationParams params; params.Id="remote-marquee"; params.Size={160u,320u};
+    auto remote=std::make_shared<RemoteGroupTestStation>(params,engine::Station::GetMixerParams(params.Size,audio::MergeMixBehaviourParams{}));
+    auto remoteTake=remote->AddTake(); auto local=Station("local-marquee"); auto localTake=local->AddTake();
+    engine::PerformanceGroupController controller; std::shared_ptr<const engine::GroupMuteApplication> pending;
+    const auto publish=[&](auto image){pending=std::move(image);};
+    const engine::GroupTargetId target{engine::GroupTargetKind::Take,remote->Id(),remoteTake->Id(),{}};
+    ASSERT_TRUE(controller.SetTargetMuted(target,true,{local,remote},publish));
+    ASSERT_TRUE(controller.SetAllMuted(false,{local,remote},publish));
+    pending->ApplyAudio(); EXPECT_TRUE(remoteTake->IsMuted()); EXPECT_FALSE(localTake->IsMuted());
+    const auto saved=engine::PerformanceGroupService::CaptureMuteConfiguration({local,remote});
+    EXPECT_TRUE(std::none_of(saved.Targets.begin(),saved.Targets.end(),[&](const auto& state){return state.Target.StationId==remote->Id();}));
 }

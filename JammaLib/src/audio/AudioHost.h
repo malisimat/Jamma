@@ -262,6 +262,7 @@ namespace audio
 			utils::Timer* timingClock) noexcept;
 		void ApplyPendingRigSnapshotAtAudioBoundary() noexcept;
 		void ApplyPendingGroupMuteAtAudioBoundary() noexcept;
+		void ApplyBorrowedGroupMuteAtAudioBoundary(const engine::GroupMuteApplication* application) noexcept;
 		void PublishRigTriggerTransitionAtAudioBoundary() noexcept;
 		void ApplyLocalTransportOffsetAtAudioBoundary(
 			const std::vector<std::shared_ptr<engine::Station>>& stations,

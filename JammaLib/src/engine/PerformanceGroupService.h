@@ -31,6 +31,14 @@ namespace engine
     public:
         using Stations = std::vector<std::shared_ptr<Station>>;
         static MuteGroupSnapshot CaptureMuteConfiguration(const Stations& stations, const GroupMuteApplication* desired = nullptr);
+		// Complete raw user intent; source/parent-effective presentation never becomes a child flag.
+		static std::shared_ptr<GroupMuteApplication> PrepareRawMuteApplication(
+			const Stations& stations, std::uint64_t version, const GroupMuteApplication* desired = nullptr);
+		static void SetTargetMuted(GroupMuteApplication& application, const Stations& stations, const GroupTargetId& target, bool muted, bool explicitIntent = false);
+		static std::shared_ptr<GroupMuteApplication> FilterMuteApplicationToCurrent(
+			const GroupMuteApplication& desired, const Stations& stations, std::uint64_t version);
+		static void RestoreSurvivingRawFlags(GroupMuteApplication& current, const GroupMuteApplication& baseline);
+		static bool DesiredMuted(const Stations& stations, const GroupTargetId& target, const GroupMuteApplication* desired);
         static SelectionGroupSnapshot CaptureSelectionConfiguration(const Stations& stations, GroupTargetKind depth);
         static void RestoreSelection(const SelectionGroupSnapshot& snapshot, const Stations& stations);
         static std::shared_ptr<const GroupMuteApplication> PrepareMuteApplication(

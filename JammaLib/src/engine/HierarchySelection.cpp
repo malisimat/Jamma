@@ -72,6 +72,20 @@ void HierarchySelection::Clear(const LockedStations& view)
 	}
 }
 
+std::optional<GroupTargetId> HierarchySelection::MuteTarget(const LockedStations& view, const std::vector<unsigned char>& path)
+{
+    const auto target = Resolve(view,path);
+    if (!target) return std::nullopt;
+    if (const auto station = std::dynamic_pointer_cast<Station>(target)) return GroupTargetId{GroupTargetKind::Station,station->Id(),{}, {}};
+    auto take = std::dynamic_pointer_cast<LoopTake>(target);
+    const auto loop = std::dynamic_pointer_cast<Loop>(target);
+    if (!take) take = std::dynamic_pointer_cast<LoopTake>(target->Parent());
+    if (!take) return std::nullopt;
+    const auto station = std::dynamic_pointer_cast<Station>(take->Parent());
+    if (!station) return std::nullopt;
+    return GroupTargetId{loop ? GroupTargetKind::AudioLoop : GroupTargetKind::Take,station->Id(),take->Id(),loop ? loop->Id() : std::string{}};
+}
+
 void HierarchySelection::SetMuted(const LockedStations& view, const std::vector<unsigned char>& path, bool muted)
 {
 	// Caller holds the scene lock across target resolution and membership access.

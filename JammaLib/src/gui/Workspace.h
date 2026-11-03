@@ -106,6 +106,8 @@ namespace gui
 			std::optional<bool> MuteAll;
 			bool CancelTakeDitch = false, CancelStationRemoval = false;
 		};
+		void InitializeMuteGestures(engine::PerformanceGroupController& controller, engine::PerformanceGroupController::Publish publish)
+		{ _muteController = &controller; _publishMute = std::move(publish); }
 		void InitializeEditor(std::mutex& mutex, const std::vector<std::shared_ptr<engine::Station>>& stations, std::function<void()> onOpened);
 		midi::LoopGridEditor& Editor() noexcept { return *_editor; }
 		const midi::LoopGridEditor& Editor() const noexcept { return *_editor; }
@@ -169,7 +171,7 @@ namespace gui
 		void SynchronizeTempoPrompt(const std::optional<ninjam::NinjamTempoProposal>& prompt) { _tempoPrompt.Synchronize(prompt, _popupManager, _size); }
 		glm::mat4 ViewProjection() const noexcept { return _viewProj; }
 		bool RequestFocus(const std::shared_ptr<base::GuiElement>& editor) { return _focusManager.RequestFocus(editor); }
-		void OpenPopup(std::shared_ptr<base::GuiElement> popup) { _CancelOverdubSourceDrag(); if (_editor) _editor->CancelInput(); _popupManager.Open(std::move(popup)); }
+		void OpenPopup(std::shared_ptr<base::GuiElement> popup) { _muteMarqueeCancelRequested = _muteMarqueeActive; _CancelOverdubSourceDrag(); if (_hudPanel) _hudPanel->SetOverdubSourceFeedback({}); if (_editor) _editor->CancelInput(); _popupManager.Open(std::move(popup)); }
 		void ClosePopups() { _popupManager.CloseAll(); }
 		void CloseTopPopup() { _popupManager.Close(); }
 		bool IsSelectionMutePressed() const { return _selector->IsMutePressed(); }
@@ -274,6 +276,18 @@ namespace gui
 		void _CancelOverdubSourceDrag();
 		bool _OverdubSourceDragCurrentLocked(const std::vector<std::shared_ptr<engine::Station>>& stations) const;
 		std::optional<actions::ActionResult> _RouteOverdubSourceTouch(actions::TouchAction action, StationAccess access, const InputPresentation& presentation);
+		bool _muteMarqueeActive = false, _muteMarqueeRelease = false, _muteMarqueeCancelRequested = false;
+		std::uint64_t _muteMarqueeRigRevision = 0u;
+		std::vector<const base::GuiElement*> _muteMarqueeMembership;
+		std::vector<engine::GroupTargetId> _muteMarqueeHits;
+		std::array<std::shared_ptr<GuiPanel>, 4u> _muteMarqueeOutline;
+		std::vector<const base::GuiElement*> _MuteMarqueeMembershipLocked(const std::vector<std::shared_ptr<engine::Station>>& stations) const;
+		void _CancelMuteMarqueeLocked(const std::vector<std::shared_ptr<engine::Station>>& stations);
+		void _UpdateMuteMarqueeLocked(const std::vector<std::shared_ptr<engine::Station>>& stations);
+		std::optional<actions::ActionResult> _RouteMuteMarqueeTouch(actions::TouchAction action, StationAccess access, const InputPresentation& presentation);
+		engine::PerformanceGroupController* _muteController = nullptr; // Scene lifetime; only borrowed under its mutex.
+		engine::PerformanceGroupController::Publish _publishMute;
+		base::Tweakable::TweakState _DesiredTweakStateLocked(const std::vector<unsigned char>& path, const std::vector<std::shared_ptr<engine::Station>>& stations) const;
 		std::string _quantisationFeedback;
 		std::shared_ptr<gui::GuiPopup> _stationDeleteDialog;
 		std::shared_ptr<gui::GuiPopup> _takeDitchDialog;

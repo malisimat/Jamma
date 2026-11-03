@@ -92,6 +92,7 @@ namespace gui
 		virtual void SetVisible(bool visible) override;
 		void SetMasterControlsVisible(bool visible);
 		bool IsInView(utils::Size2d viewport) const;
+		void AppendMuteMarqueeOccluders(std::vector<utils::Rect2d>& bounds) const;
 
 		virtual actions::ActionResult OnAction(actions::GuiAction action) override;
 

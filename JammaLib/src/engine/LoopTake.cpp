@@ -384,9 +384,7 @@ void LoopTake::SetSize(utils::Size2d size)
 	_ArrangeChildren();
 }
 
-void LoopTake::Draw3d(DrawContext& ctx,
-	unsigned int numInstances,
-	base::DrawPass pass)
+void LoopTake::_PrepareSceneGeometry()
 {
 	const auto takeVisualScale = static_cast<float>(_masterMixer ? _masterMixer->UnmutedLevel() : 1.0);
 
@@ -462,6 +460,38 @@ void LoopTake::Draw3d(DrawContext& ctx,
 	const auto depth = CurrentSelectDepth();
 	_takeCore->SetVisible((depth == base::SelectDepth::DEPTH_LOOPTAKE ||
 		depth == base::SelectDepth::DEPTH_LOOP) && coreRadius > 0.0f);
+}
+
+bool LoopTake::IntersectsMuteMarquee(const graphics::MuteMarqueeProjection& projection)
+{
+    if (!_isVisible || IsCaptureCancelled()) return false;
+    _PrepareSceneGeometry();
+    const auto pos = ModelPosition(); const auto scale = static_cast<float>(ModelScale());
+    const auto model = projection.Transformed(glm::translate(glm::mat4(1.0f), glm::vec3{pos.X,pos.Y,pos.Z}) * glm::scale(glm::mat4(1.0f), glm::vec3{scale}));
+    for (const auto& loop : _loops) if (loop && loop->IntersectsMuteMarquee(model)) return true;
+    for (const auto& loop : _midiLoops) if (loop && loop->Model() && loop->Model()->IntersectsMuteMarquee(model)) return true;
+    // TakeCoreModel is decorative alpha art and explicitly never changes interactive hit areas.
+    return false;
+}
+
+void LoopTake::CollectMuteMarqueeLeaves(const graphics::MuteMarqueeProjection& projection, const std::string& stationId, std::vector<GroupTargetId>& targets)
+{
+    if (!_isVisible || IsCaptureCancelled()) return;
+    _PrepareSceneGeometry();
+    const auto pos = ModelPosition(); const auto scale = static_cast<float>(ModelScale());
+    const auto model = projection.Transformed(glm::translate(glm::mat4(1.0f), glm::vec3{pos.X,pos.Y,pos.Z}) * glm::scale(glm::mat4(1.0f), glm::vec3{scale}));
+    for (const auto& loop : _loops)
+        if (loop && loop->IntersectsMuteMarquee(model)) targets.push_back({GroupTargetKind::AudioLoop,stationId,Id(),loop->Id()});
+    for (const auto& loop : _midiLoops)
+        if (loop && loop->Model() && loop->Model()->IntersectsMuteMarquee(model))
+        { targets.push_back({GroupTargetKind::Take,stationId,Id(),{}}); break; }
+}
+
+void LoopTake::Draw3d(DrawContext& ctx,
+	unsigned int numInstances,
+	base::DrawPass pass)
+{
+	_PrepareSceneGeometry();
 	if (_isVisible && pass == base::PASS_SCENE)
 	{
 		auto& glCtx = dynamic_cast<graphics::GlDrawContext&>(ctx);
@@ -2758,6 +2788,11 @@ bool LoopTake::Mute()
 	}
 
 	return isNewState;
+}
+
+bool LoopTake::AllowReplacementPlayback() noexcept
+{
+	return _captureSourceMuteControl->AllowReplacementPlayback();
 }
 
 bool LoopTake::UnMute()

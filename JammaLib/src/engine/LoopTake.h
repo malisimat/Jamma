@@ -1,4 +1,5 @@
 #pragma once
+#include "PerformanceGroups.h"
 #include "../vst/VstRackSlot.h"
 #include "../audio/InputHistory.h"
 
@@ -156,6 +157,8 @@ namespace engine
 		virtual bool DeSelect() override;
 		virtual bool Mute() override;
 		virtual bool UnMute() override;
+		// UI admission only: audition replacement source without changing raw flags.
+		bool AllowReplacementPlayback() noexcept;
 		// Audio-boundary group application changes persistent state only. It never
 		// propagates to new leaves or alters recording-owned source-mute controls.
 		void SetGroupMutedAudio(bool muted) noexcept
@@ -249,6 +252,8 @@ namespace engine
 		float VisualRadius() const noexcept;
 		// Presentation accessors: non-audio callers hold Scene::_sceneMutex.
 		bool HasCameraContent() const;
+		bool IntersectsMuteMarquee(const graphics::MuteMarqueeProjection& projection);
+		void CollectMuteMarqueeLeaves(const graphics::MuteMarqueeProjection& projection, const std::string& stationId, std::vector<GroupTargetId>& targets);
 		graphics::CameraBounds CameraBoundsInParent(float parentVisualScale = 1.0f) const;
 		std::optional<engine::QuantisationLoopTakeVisual> QuantisationVisual() const noexcept;
 		static std::vector<engine::QuantisationLoopTakeVisual> QuantisationVisualsFor(
@@ -515,6 +520,7 @@ namespace engine
 		void CollapseRouterToChannels();
 
 	protected:
+		void _PrepareSceneGeometry();
 		static unsigned int _CalcLoopHeight(unsigned int takeHeight, unsigned int numLoops);
 		static std::int32_t _ClampPhaseOffset(std::int64_t offsetSamps) noexcept;
 

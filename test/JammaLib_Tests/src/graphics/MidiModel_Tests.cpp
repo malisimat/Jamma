@@ -280,3 +280,25 @@ TEST(GraphicsMidiModel, FreeEditorPicksNearestNoteFace)
 	EXPECT_EQ(hit->Sample, 150u);
 	EXPECT_EQ(hit->Pitch, 60u);
 }
+
+TEST(GraphicsMidiModel, MarqueeUsesInteractiveRingHoleAndCurrentTransformNotDecorativeFan)
+{
+    graphics::MidiModelParams params; graphics::MidiModel ring(params); ring.UpdateModel({},128u);
+    ring.PrepareSceneGeometry(); ring.SetSceneLayout(100.0f,{60,60});
+    // Top-down projection maps x/z directly to screen; ring radius is the displayed 50-unit minimum.
+    glm::mat4 matrix(0.0f); matrix[0][0]=0.01f; matrix[2][1]=0.01f; matrix[1][2]=0.001f; matrix[3][3]=1.0f;
+    const std::array visible{utils::Rect2d{0,0,1000,1000}};
+    const auto hit=[&](utils::Rect2d rectangle,glm::mat4 transform) {
+        return ring.IntersectsMuteMarquee(graphics::MuteMarqueeProjection(transform,{1000u,1000u},rectangle,visible));
+    };
+    EXPECT_FALSE(hit({495,495,505,505},matrix)); // Hole is not a filled disc.
+    EXPECT_TRUE(hit({745,495,755,505},matrix));
+    EXPECT_TRUE(hit({780,500,780,500},matrix)); // Exact outer rendered ring vertex, inclusive.
+    EXPECT_FALSE(hit({745,745,755,755},matrix)); // Empty broad-bounds corner.
+    auto shifted=matrix; shifted[3][0]=0.5f;
+    EXPECT_FALSE(hit({245,495,255,505},shifted));
+    EXPECT_TRUE(hit({995,495,1000,505},shifted)); // Clipped partial ring still counts.
+    params.DrawSelectionRing=false; graphics::MidiModel decorativeOnly(params); decorativeOnly.UpdateModel({},128u);
+    decorativeOnly.PrepareSceneGeometry();
+    EXPECT_FALSE(decorativeOnly.IntersectsMuteMarquee(graphics::MuteMarqueeProjection(matrix,{1000u,1000u},{0,0,1000,1000},visible)));
+}

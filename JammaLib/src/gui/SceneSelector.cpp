@@ -347,8 +347,15 @@ bool SceneSelector::BeginBackgroundClick(const actions::TouchAction& action)
 	const auto buttonMask = (unmute || mute || select) ? (1u << action.Index) : 0u;
 	if (!(unmute || mute || select) || (action.MouseButtonsDown != 0u && action.MouseButtonsDown != buttonMask)) return false;
 	_backgroundClick = BackgroundClick{action.Index,
-		select ? BackgroundCommand::SelectAll : mute ? BackgroundCommand::MuteAll : BackgroundCommand::UnmuteAll, action.Position};
+		select ? BackgroundCommand::SelectAll : mute ? BackgroundCommand::MuteAll : BackgroundCommand::UnmuteAll, action.Position, action.Position};
 	return true;
+}
+
+std::optional<utils::Rect2d> SceneSelector::MuteMarqueeRectangle() const
+{
+    if (!OwnsPlainMiddleBackground() || _backgroundClick->Cancelled || !_backgroundClick->Moved) return std::nullopt;
+    const auto start = _backgroundClick->PressPosition, end = _backgroundClick->CurrentPosition;
+    return utils::Rect2d{(std::min)(start.X,end.X),(std::min)(start.Y,end.Y),(std::max)(start.X,end.X),(std::max)(start.Y,end.Y)};
 }
 
 std::optional<SceneSelector::BackgroundCommand> SceneSelector::BackgroundPreview() const
@@ -375,6 +382,7 @@ void SceneSelector::MoveBackgroundClick(const actions::TouchMoveAction& action, 
 {
 	if (!_backgroundClick) return;
 	const auto buttonMask = 1u << _backgroundClick->Button;
+	_backgroundClick->CurrentPosition = action.Position;
 	if (!allowed || action.Touch != actions::TouchAction::TOUCH_MOUSE || !(action.MouseButtonsDown & buttonMask))
 		_backgroundClick.reset();
 	else if (action.MouseButtonsDown != buttonMask) _backgroundClick->Cancelled = true;

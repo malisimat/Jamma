@@ -411,6 +411,20 @@ void GuiRack::SetMasterControlsVisible(bool visible)
 	_masterPanel->SetVisible(visible || _rackState != GuiRackParams::RACK_MASTER);
 }
 
+void GuiRack::AppendMuteMarqueeOccluders(std::vector<utils::Rect2d>& bounds) const
+{
+    if (!IsVisible()) return;
+    const auto append = [&](const std::shared_ptr<base::GuiElement>& panel)
+    {
+        if (!panel || !panel->IsVisible()) return;
+        const auto position = panel->GlobalPosition(); const auto size = panel->GetSize();
+        bounds.push_back({position.X,position.Y,position.X + static_cast<int>(size.Width),position.Y + static_cast<int>(size.Height)});
+    };
+    append(_masterPanel); append(_channelPanel); append(_routerPanel); append(_midiChannelPanel);
+    append(_channelToggle); append(_routerToggle); append(_stationLabel);
+    if (_vstRack) _vstRack->AppendMuteMarqueeOccluders(bounds);
+}
+
 bool GuiRack::IsInView(utils::Size2d viewport) const
 {
 	if (!IsVisible())

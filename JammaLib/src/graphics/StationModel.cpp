@@ -1,4 +1,5 @@
 #include "StationModel.h"
+#include <glm/ext/matrix_transform.hpp>
 
 #include <cmath>
 #include <algorithm>
@@ -450,6 +451,64 @@ StationModel::StationModel() :
 		StateRingOccluderInnerRadius * StateRingScale,
 		StateRingOccluderOuterRadius * StateRingScale,
 		UV_STATE_RING_DARK);
+}
+
+bool StationModel::IntersectsMuteMarquee(const MuteMarqueeProjection& projection) const
+{
+    if (!_isVisible) return false;
+    std::scoped_lock lock(_modelStateMutex);
+    const auto projected = projection.Transformed(glm::translate(glm::mat4(1.0f), glm::vec3{ModelPosition().X, ModelPosition().Y, ModelPosition().Z})
+        * glm::scale(glm::mat4(1.0f), glm::vec3{static_cast<float>(ModelScale())}));
+    const auto level = std::sqrt(std::clamp(_stationLevel, 0.0f, 1.0f));
+    const auto& vertices = _backVerts.empty() ? _modelParams.Verts : _backVerts;
+    const auto vertex = [&](std::size_t index)
+    {
+        const auto y = vertices[index * 3u + 1u];
+        const auto profile = 0.5f - 0.5f * std::cos(static_cast<float>(constants::TWOPI) * std::clamp(-y / 470.0f, 0.0f, 1.0f));
+        const auto radius = 0.5f + 4.0f * level * profile;
+        return glm::vec3{vertices[index * 3u] * radius, y, vertices[index * 3u + 2u] * radius};
+    };
+    for (std::size_t index = 0u; index + 8u < vertices.size(); index += 9u)
+        if (projected.Intersects(vertex(index / 3u), vertex(index / 3u + 1u), vertex(index / 3u + 2u))) return true;
+    for (const auto* ring : {&_topRing, &_bottomRing})
+        for (std::size_t index = 0u; index + 8u < ring->Verts.size(); index += 9u)
+        {
+            const auto& v = ring->Verts;
+            if (projected.Intersects({v[index],v[index+1u],v[index+2u]}, {v[index+3u],v[index+4u],v[index+5u]}, {v[index+6u],v[index+7u],v[index+8u]})) return true;
+        }
+    // Same20 segmented window prisms as station_ring.vert; their open windows remain empty.
+    const auto window = [&](unsigned int boundary)
+    {
+        const auto angle = static_cast<float>(constants::TWOPI) * static_cast<float>(boundary) / 20.0f;
+        float center = -8.7f, half = 2.2f;
+        switch (static_cast<unsigned int>(_stationVisualState))
+        {
+        case 0u: center += 0.7f * std::sin(4.0f * angle); half += 0.35f * std::cos(4.0f * angle); break;
+        case 1u: center += 0.8f * std::sin(10.0f * angle); half += 0.45f * std::cos(10.0f * angle); break;
+        case 2u: center += 1.8f * std::sin(4.0f * angle); half += 0.65f * std::cos(4.0f * angle); break;
+        case 3u: center += 1.2f * std::sin(5.0f * angle); half += 0.55f * std::cos(5.0f * angle); break;
+        case 4u: center += 1.5f * std::sin(4.0f * angle); half += 0.7f * std::sin(8.0f * angle); break;
+        default: center += 1.7f * std::sin(8.0f * angle); half += 0.45f * std::cos(4.0f * angle); break;
+        }
+        return glm::vec2{center - half,center + half};
+    };
+    for (const auto cap : {std::pair{StateRingTopY,1.0f}, std::pair{StateRingBottomY,-1.0f}})
+        for (unsigned int instance = 0u; instance < 20u; ++instance)
+        {
+            const auto vertex = [&](std::size_t index)
+            {
+                const auto& v = _ringOccluder.Verts; const auto& uv = _ringOccluder.Uvs;
+                const auto boundary = (instance + (v[index * 3u + 2u] > 0.5f ? 1u : 0u)) % 20u;
+                const auto angle = static_cast<float>(constants::TWOPI) * static_cast<float>(boundary) / 20.0f;
+                const auto opening = window(boundary); const auto t = v[index * 3u + 1u];
+                const auto y = uv[index * 2u] < 0.5f ? (-3.0f + (opening.y + 3.0f) * t) * StateRingScale
+                    : (opening.x + (-15.7f - opening.x) * t) * StateRingScale;
+                return glm::vec3{std::cos(angle) * v[index * 3u],cap.first + cap.second * y,std::sin(angle) * v[index * 3u]};
+            };
+            for (std::size_t i = 0u; i + 8u < _ringOccluder.Verts.size(); i += 9u)
+                if (projected.Intersects(vertex(i / 3u),vertex(i / 3u + 1u),vertex(i / 3u + 2u))) return true;
+        }
+    return false;
 }
 
 CameraBounds StationModel::CameraLocalBounds() const noexcept

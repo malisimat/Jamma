@@ -1,4 +1,6 @@
 #include "Workspace.h"
+#include "../graphics/MuteMarqueeProjection.h"
+#include <tuple>
 #include "../utils/Timer.h"
 #include <iostream>
 #include "../graphics/GlDrawContext.h"
@@ -52,6 +54,11 @@ void Workspace::Initialize(GuiHudParams hud, std::uint8_t channel, double offset
 		if (acquire) _focusManager.RequestFocus(editor);
 		else if (_focusManager.CurrentFocus() == editor) _focusManager.ClearFocus();
 	};
+	for (auto& edge : _muteMarqueeOutline)
+	{
+		edge = std::make_shared<GuiPanel>(GuiPopupParams::FlatRect(1u,1u,{0.30f,0.75f,1.0f},0.95f));
+		edge->SetVisible(false); AddChild(edge);
+	}
 	_hudPanel = std::make_shared<GuiHud>(hud);
 	AddChild(_hudPanel);
 	GuiSelectorParams selector;
@@ -143,6 +150,9 @@ void Workspace::DrawWorldLocked(DrawContext& ctx, DrawPass pass, const std::vect
 	QuantiserController& quantisation, const PerformanceGroups& groups, WorldPresentation presentation)
 {
 
+	if ((_muteMarqueeActive || _muteMarqueeCancelRequested) &&
+		(_popupManager.IsOpen() || _editor->IsEngaged() || !_muteController || !_muteController->MuteMarqueeActive()))
+		_CancelMuteMarqueeLocked(stations);
 	if (_overdubSourceDrag && (_popupManager.IsOpen() || _editor->IsEngaged() || !_OverdubSourceDragCurrentLocked(stations)))
 		_CancelOverdubSourceDrag();
 	auto& glCtx = dynamic_cast<GlDrawContext&>(ctx);
@@ -169,12 +179,13 @@ void Workspace::DrawWorldLocked(DrawContext& ctx, DrawPass pass, const std::vect
 		|| _popupManager.IsOpen() || _editor->IsEngaged() || presentation.EditControlsSuppressed))
 		_selectionPanel->ClearPerformanceGroupPointerState();
 	const bool sourcePreview = PASS_SCENE == pass && _overdubSourceDrag && !_overdubSourceDrag->Clear;
+	const bool marqueePreview = PASS_SCENE == pass && _muteMarqueeActive && _selector->MuteMarqueeRectangle().has_value();
 	const auto hoveredGroup = PASS_SCENE == pass && _selectionPanel && !_popupManager.IsOpen()
 		&& !_editor->IsEngaged() && !presentation.EditControlsSuppressed
 		? _selectionPanel->HoveredPerformanceGroup() : std::nullopt;
 	const auto mutePreview = hoveredGroup && !hoveredGroup->first ? groups.Mute.Get(hoveredGroup->second) : nullptr;
 	const auto selectionPreview = hoveredGroup && hoveredGroup->first ? groups.Selection.Get(hoveredGroup->second) : nullptr;
-	const bool backgroundPreview = PASS_SCENE == pass && presentation.BackgroundPreview;
+	const bool backgroundPreview = PASS_SCENE == pass && presentation.BackgroundPreview && !marqueePreview;
 	std::vector<GroupTargetId> livePreviewTargets;
 	if (mutePreview || selectionPreview)
 		for (const auto& station : stations)
@@ -214,10 +225,30 @@ void Workspace::DrawWorldLocked(DrawContext& ctx, DrawPass pass, const std::vect
 							: member({ GroupTargetKind::MidiLoop, station->Id(), take->Id(), loop->Id() }));
 			}
 		}
+	if (marqueePreview)
+	{
+		previewMembers.clear();
+		const auto hit = [&](const auto& station, const auto& take, const std::string& loopId) {
+			return std::any_of(_muteMarqueeHits.begin(),_muteMarqueeHits.end(),[&](const auto& id) {
+				return id.StationId == station->Id() && (id.Kind == GroupTargetKind::Station ||
+					(take && id.TakeId == take->Id() && (id.Kind == GroupTargetKind::Take || id.EntityId == loopId)));
+			});
+		};
+		for (const auto& station : stations)
+		{
+			previewMembers[station->GlobalId()] = hit(station,std::shared_ptr<LoopTake>{},{});
+			for (const auto& take : station->GetLoopTakes())
+			{
+				previewMembers[take->GlobalId()] = hit(station,take,{});
+				for (const auto& loop : take->GetLoops()) if (loop->Model()) previewMembers[loop->Model()->GlobalId()] = hit(station,take,loop->Id());
+				for (const auto& loop : take->GetMidiLoops()) if (loop->Model()) previewMembers[loop->Model()->GlobalId()] = hit(station,take,{});
+			}
+		}
+	}
 	if (sourcePreview) previewMembers = _OverdubSourcePreviewMembersLocked(stations);
 
 	const bool selectionTint = backgroundPreview ? presentation.BackgroundSelectionPreview : selectionPreview != nullptr;
-	glCtx.SetGroupPreview(sourcePreview || backgroundPreview || mutePreview || selectionPreview,
+	glCtx.SetGroupPreview(sourcePreview || marqueePreview || backgroundPreview || mutePreview || selectionPreview,
 		selectionTint ? glm::vec3(1.0f, 0.875f, 0.208f) : glm::vec3(0.259f, 0.588f, 1.0f), std::move(previewMembers), sourcePreview || !backgroundPreview);
 	for (auto& station : stations)
 	{
@@ -228,6 +259,7 @@ void Workspace::DrawWorldLocked(DrawContext& ctx, DrawPass pass, const std::vect
 
 void Workspace::ResizeLocked(utils::Size2d size, const std::vector<std::shared_ptr<Station>>& stations)
 {
+	_CancelMuteMarqueeLocked(stations);
 	_CancelOverdubSourceDrag();
 	_size = size;
 	_editor->SetSize(_size);
@@ -497,6 +529,9 @@ bool Workspace::AdvancePresentationLocked(const std::vector<std::shared_ptr<Stat
 	if (_overdubSourceDrag && (_popupManager.IsOpen() || _editor->IsEngaged() || presentation.Quitting ||
 		presentation.RigSaveInProgress || !_OverdubSourceDragCurrentLocked(stations))) _CancelOverdubSourceDrag();
 	if (_hudPanel) _hudPanel->PrepareOverdubSourcesLocked(_overdubSourceDrag ? _overdubSourceDrag->Output.Trigger.lock() : nullptr);
+    if (_hudPanel && (_popupManager.IsOpen() || presentation.Quitting || presentation.RigSaveInProgress))
+        _hudPanel->SetOverdubSourceFeedback({});
+
 	// Window calls once per UI frame before deferred hover and drawing.
 	// This clock is independent of the transport/audio callback.
 	const auto now = Timer::GetTime();
@@ -550,7 +585,118 @@ bool Workspace::AdvancePresentationLocked(const std::vector<std::shared_ptr<Stat
 		if (_mainPanel) _mainPanel->SetOccupiedTopBounds(
 			_selectionPanel ? _selectionPanel->TopPanelLayout().PresentedBounds : Rect2d{}, _hudPanel->OccupiedTopStripBounds());
 	}
+	if (_muteMarqueeActive || _muteMarqueeCancelRequested)
+	{
+		if (_popupManager.IsOpen() || _editor->IsEngaged() || presentation.Quitting || presentation.RigSaveInProgress) _CancelMuteMarqueeLocked(stations);
+		else _UpdateMuteMarqueeLocked(stations);
+	}
 	return stationsMoved || cameraMoved;
+}
+
+std::vector<const base::GuiElement*> Workspace::_MuteMarqueeMembershipLocked(const std::vector<std::shared_ptr<Station>>& stations) const
+{
+    std::vector<const base::GuiElement*> members;
+    for (const auto& station : stations)
+    {
+        if (!station) continue; members.push_back(station.get());
+        for (const auto& take : station->GetLoopTakes())
+        {
+            members.push_back(take.get());
+            for (const auto& loop : take->GetLoops()) members.push_back(loop.get());
+            for (const auto& loop : take->GetMidiLoops()) if (loop->Model()) members.push_back(loop->Model().get());
+        }
+    }
+    return members;
+}
+
+void Workspace::_CancelMuteMarqueeLocked(const std::vector<std::shared_ptr<Station>>& stations)
+{
+    if (!_muteMarqueeActive && !_muteMarqueeCancelRequested) return;
+    _muteMarqueeRelease |= _muteMarqueeActive;
+    _muteMarqueeActive = false;
+    _selector->ClearBackgroundClick();
+    _muteMarqueeHits.clear(); _muteMarqueeMembership.clear();
+    for (auto& edge : _muteMarqueeOutline) if (edge) edge->SetVisible(false);
+    _muteMarqueeCancelRequested = _muteController && _muteController->MuteMarqueeActive()
+        && !_muteController->CancelMuteMarquee(stations,_publishMute);
+}
+
+void Workspace::_UpdateMuteMarqueeLocked(const std::vector<std::shared_ptr<Station>>& stations)
+{
+    if (!_muteMarqueeActive) return;
+    if (!_muteController || !_muteController->MuteMarqueeActive() || _muteMarqueeCancelRequested ||
+        (_hudPanel && _muteMarqueeRigRevision != _hudPanel->CurrentRigRevision()) ||
+        _MuteMarqueeMembershipLocked(stations) != _muteMarqueeMembership)
+    { _CancelMuteMarqueeLocked(stations); return; }
+    const auto rectangle = _selector->MuteMarqueeRectangle();
+    if (!rectangle) return;
+    std::vector<utils::Rect2d> covered{{0,0,static_cast<int>(_size.Width),GuiStyle::StatusBarHeight}};
+    if (_mainPanel) _mainPanel->AppendMuteMarqueeOccluders(covered);
+    if (_selectionPanel) _selectionPanel->AppendMuteMarqueeOccluders(covered);
+    if (_hudPanel) { covered.push_back(_hudPanel->OccupiedTopStripBounds()); covered.push_back(_hudPanel->OccupiedRightRailBounds()); }
+    for (const auto& station : stations)
+    {
+        if (!station || !station->IsVisible()) continue;
+        station->GetGuiRack()->AppendMuteMarqueeOccluders(covered);
+        for (const auto& take : station->GetLoopTakes()) if (take && take->IsVisible()) take->GetGuiRack()->AppendMuteMarqueeOccluders(covered);
+    }
+    const auto visible = graphics::MuteMarqueeProjection::VisibleRegions(_size,covered);
+    const graphics::MuteMarqueeProjection projection(_viewProj,_size,*rectangle,visible);
+    std::vector<GroupTargetId> hits;
+    for (const auto& station : stations) if (station) station->CollectMuteMarqueeTargets(projection,_selector->CurrentSelectDepth(),hits);
+    const auto less = [](const auto& a, const auto& b) { return std::tie(a.Kind,a.StationId,a.TakeId,a.EntityId) < std::tie(b.Kind,b.StationId,b.TakeId,b.EntityId); };
+    std::sort(hits.begin(),hits.end(),less); hits.erase(std::unique(hits.begin(),hits.end()),hits.end());
+    if (hits != _muteMarqueeHits)
+    {
+        if (!_muteController->PreviewMuteMarquee(hits,stations,_publishMute)) { _CancelMuteMarqueeLocked(stations); return; }
+        _muteMarqueeHits = std::move(hits);
+    }
+    const auto width = static_cast<unsigned int>((std::max)(1,rectangle->Right - rectangle->Left));
+    const auto height = static_cast<unsigned int>((std::max)(1,rectangle->Top - rectangle->Bottom));
+    const std::array<Position2d,4u> positions{{{rectangle->Left,rectangle->Bottom},{rectangle->Left,rectangle->Top},{rectangle->Left,rectangle->Bottom},{rectangle->Right,rectangle->Bottom}}};
+    for (std::size_t i = 0u; i < _muteMarqueeOutline.size(); ++i)
+    {
+        _muteMarqueeOutline[i]->SetPosition(positions[i]); _muteMarqueeOutline[i]->SetSize(i < 2u ? Size2d{width,1u} : Size2d{1u,height});
+        _muteMarqueeOutline[i]->SetVisible(true);
+    }
+}
+
+std::optional<ActionResult> Workspace::_RouteMuteMarqueeTouch(TouchAction action, StationAccess access, const InputPresentation& presentation)
+{
+    const bool mouse = action.Touch == TouchAction::TOUCH_MOUSE, down = action.State == TouchAction::TOUCH_DOWN;
+    if (mouse && down && action.Index == 1) _muteMarqueeRelease = false;
+    if (mouse && !down && action.Index == 1 && _muteMarqueeRelease)
+    { _muteMarqueeRelease = false; return ActionResult{true}; }
+    if (!_muteMarqueeActive && !_muteMarqueeCancelRequested) return std::nullopt;
+    std::scoped_lock lock(access.Mutex);
+    if (!_muteController || !_muteController->MuteMarqueeActive() ||
+        (_hudPanel && _muteMarqueeRigRevision != _hudPanel->CurrentRigRevision()) ||
+        _MuteMarqueeMembershipLocked(access.Stations) != _muteMarqueeMembership ||
+        _muteMarqueeCancelRequested || presentation.Quitting || presentation.WriterHeld || presentation.RigSaveDialogOpen ||
+        presentation.QuantisationResetRequested || _popupManager.IsOpen() || _editor->IsEngaged() || EditControlsSuppressed() ||
+        (mouse && down && action.Index != 4))
+    {
+        _CancelMuteMarqueeLocked(access.Stations);
+        if (mouse && down && action.Index == 1) _muteMarqueeRelease = false;
+        if (mouse && !down && action.Index == 1) { _muteMarqueeRelease = false; return ActionResult{true}; }
+        return std::nullopt;
+    }
+    if (!mouse || down || action.Index != 1) return ActionResult{true};
+    const bool moved = action.Position != _selector->BackgroundPressPosition() || _selector->MuteMarqueeRectangle().has_value();
+    if (moved)
+    {
+        actions::TouchMoveAction finalMove; finalMove.Touch = TouchAction::TOUCH_MOUSE; finalMove.Position = action.Position; finalMove.MouseButtonsDown = 2u;
+        _selector->MoveBackgroundClick(finalMove,true); _UpdateMuteMarqueeLocked(access.Stations);
+    }
+    if (_muteMarqueeActive)
+    {
+        _muteController->CommitMuteMarquee(); _selector->ClearBackgroundClick(); _muteMarqueeActive = false;
+        _muteMarqueeHits.clear(); _muteMarqueeMembership.clear();
+        for (auto& edge : _muteMarqueeOutline) edge->SetVisible(false);
+        if (!moved) _inputCommands.MuteAll = false;
+    }
+    _muteMarqueeRelease = false;
+    return ActionResult{true};
 }
 
 std::map<std::vector<unsigned int>, bool> Workspace::_OverdubSourcePreviewMembersLocked(const std::vector<std::shared_ptr<Station>>& stations) const
@@ -647,6 +793,7 @@ std::optional<ActionResult> Workspace::_RouteOverdubSourceTouch(TouchAction acti
 
 actions::ActionResult Workspace::OnTouch(actions::TouchAction action, StationAccess access, const InputPresentation& presentation)
 {
+	if (auto result = _RouteMuteMarqueeTouch(action, access, presentation)) return *result;
 	if (auto result = _RouteOverdubSourceTouch(action, access, presentation)) return *result;
 	if (presentation.Quitting || presentation.WriterHeld || presentation.RigSaveDialogOpen || _popupManager.IsOpen() || EditControlsSuppressed())
 		_editor->CancelInput();
@@ -667,6 +814,23 @@ actions::ActionResult Workspace::OnTouch(actions::TouchAction action, StationAcc
 
 actions::ActionResult Workspace::OnMove(actions::TouchMoveAction action, StationAccess access, const InputPresentation& presentation)
 {
+	if (_muteMarqueeActive || _muteMarqueeCancelRequested)
+	{
+		if (action.Touch != TouchAction::TOUCH_MOUSE) return {true};
+		std::scoped_lock lock(access.Mutex); _cursorPos = action.Position;
+		if (_muteMarqueeCancelRequested || presentation.Quitting || presentation.WriterHeld || presentation.RigSaveDialogOpen ||
+			presentation.QuantisationResetRequested || _popupManager.IsOpen() || _editor->IsEngaged() || EditControlsSuppressed() ||
+			action.MouseButtonsDown != 2u || action.Modifiers != Action::MODIFIER_NONE) _CancelMuteMarqueeLocked(access.Stations);
+		else { _selector->MoveBackgroundClick(action,true); _UpdateMuteMarqueeLocked(access.Stations); }
+		return {true};
+	}
+    if (!_overdubSourceDrag && _hudPanel)
+    {
+        std::scoped_lock lock(access.Mutex);
+        const auto point=_hudPanel->GlobalToLocal(action.Position);
+        if (!_hudPanel->CapturesPointer(point) && !_hudPanel->OverdubOutputAt(point))
+            _hudPanel->SetOverdubSourceFeedback({});
+    }
 	if (_overdubSourceDrag)
 	{
 		if (action.Touch != TouchAction::TOUCH_MOUSE) return {true};
@@ -951,6 +1115,13 @@ actions::ActionResult Workspace::_OnPointerAction(actions::TouchAction action, S
 		// Chords retain camera/selection meaning; only a single-button empty hit starts a click.
 		if (_pointer.HoverScratch().empty() && _selector->CurrentHover().empty() && _hoverPath3d.empty() && _selector->BeginBackgroundClick(action))
 		{
+			if (_selector->OwnsPlainMiddleBackground() && _muteController)
+			{
+				std::scoped_lock lock(access.Mutex);
+				_muteMarqueeActive = _muteController->BeginMuteMarquee(access.Stations);
+				if (!_muteMarqueeActive) { _selector->ClearBackgroundClick(); _muteMarqueeRelease = true; }
+				else { _muteMarqueeMembership = _MuteMarqueeMembershipLocked(access.Stations); _muteMarqueeRigRevision = _hudPanel ? _hudPanel->CurrentRigRevision() : 0u; }
+			}
 			_camera.CancelBackgroundCoast();
 			_cameraPointerPreservesIdle = true;
 			return { true, {}, {}, ACTIONRESULT_DEFAULT, nullptr, {} };
@@ -984,13 +1155,17 @@ actions::ActionResult Workspace::_OnPointerMove(actions::TouchMoveAction action,
 		return _pointer.DispatchCapture(action, PointerInteraction::CaptureLoss::MouseZeroButtons, true);
 	}
 	if (!_popupManager.IsOpen() && !EditControlsSuppressed() && !_pointer.Captured() &&
-		!_camera.IsBackgroundDragging() && !_isSceneTouching && !_editor->OwnsPointer() && !_editor->IsOrbitDragging() &&
-		!_interaction->OwnsPointer() && _hudPanel && _hudPanel->CapturesPointer(_hudPanel->GlobalToLocal(action.Position)))
-	{
-		std::scoped_lock lock(access.Mutex);
-		_hudPanel->OnAction(_hudPanel->GlobalToLocal(action));
-		return { true, {}, {}, ACTIONRESULT_DEFAULT, nullptr, {} };
-	}
+        !_camera.IsBackgroundDragging() && !_isSceneTouching && !_editor->OwnsPointer() && !_editor->IsOrbitDragging() &&
+        !_interaction->OwnsPointer() && _hudPanel)
+    {
+        std::scoped_lock lock(access.Mutex);
+        const auto point=_hudPanel->GlobalToLocal(action.Position);
+        if (_hudPanel->CapturesPointer(point) || _hudPanel->OverdubOutputAt(point))
+        {
+            _hudPanel->OnAction(_hudPanel->GlobalToLocal(action));
+            return {true, {}, {}, ACTIONRESULT_DEFAULT, nullptr, {}};
+        }
+    }
 	if (!_popupManager.IsOpen() && !_editor->IsEngaged() && !_interaction->OwnsPointer())
 	{
 		for (const auto& station : access.Snapshot())
@@ -1189,7 +1364,7 @@ void Workspace::SetHover3d(std::vector<unsigned char> path, base::Action::Modifi
 	{
 		isSelected = hovering->IsSelected();
 
-		tweakState = HierarchySelection::TweakState(HierarchySelection::BorrowLocked(access.Stations), hovering);
+		tweakState = _DesiredTweakStateLocked(elementPath, access.Stations);
 	}
 
 	_selector->UpdateCurrentHover(elementPath,
@@ -1265,8 +1440,7 @@ void Workspace::ApplyDeferredHoverUpdates(StationAccess access, const InputPrese
 			if (hovering)
 			{
 				isSelected = hovering->IsSelected();
-				if (auto tweakable = std::dynamic_pointer_cast<Tweakable>(hovering))
-					tweakState = tweakable->IsMuted() ? Tweakable::TWEAKSTATE_MUTED : Tweakable::TWEAKSTATE_NONE;
+				{ std::scoped_lock lock(access.Mutex); tweakState = _DesiredTweakStateLocked(stationPath, access.Stations); }
 			}
 
 			_selector->UpdateCurrentHover(stationPath,
@@ -1317,12 +1491,21 @@ void Workspace::ApplyHoverPath2d(const std::vector<std::weak_ptr<base::GuiElemen
 	_pointer.ApplyHover(nextPath, _cursorPos);
 }
 
+base::Tweakable::TweakState Workspace::_DesiredTweakStateLocked(const std::vector<unsigned char>& path, const std::vector<std::shared_ptr<Station>>& stations) const
+{
+    const auto view = HierarchySelection::BorrowLocked(stations);
+    if (_muteController)
+        if (const auto target = HierarchySelection::MuteTarget(view,path))
+            return _muteController->DesiredMuted(*target,stations) ? Tweakable::TWEAKSTATE_MUTED : Tweakable::TWEAKSTATE_NONE;
+    return HierarchySelection::TweakState(view,HierarchySelection::Resolve(view,path));
+}
+
 void Workspace::UpdateSelection(actions::ActionResultType res, StationAccess access, const InputPresentation& presentation)
 {
 	std::scoped_lock lock(access.Mutex);
 	const auto view = HierarchySelection::BorrowLocked(access.Stations);
 	const auto update = _selector->SelectionChanges(res);
-	HierarchySelection::EditBatch batch{ update.ClearSelection, _selector->CurrentSelectDepth(), {}, update.ChangeCount,
+	HierarchySelection::EditBatch batch{ update.ClearSelection, _selector->CurrentSelectDepth(), {}, 0u,
 		{ update.HoverPath, update.ClearPicking, update.HighlightHover, update.HighlightMidiSiblings, update.ClickPressed, update.MutePressed } };
 	for (std::size_t index = 0u; index < update.ChangeCount; ++index)
 	{
@@ -1331,7 +1514,12 @@ void Workspace::UpdateSelection(actions::ActionResultType res, StationAccess acc
 		const auto operation = change.Edit == Edit::Select ? HierarchySelection::Edit::Select :
 			change.Edit == Edit::Deselect ? HierarchySelection::Edit::Deselect :
 			change.Edit == Edit::Mute ? HierarchySelection::Edit::Mute : HierarchySelection::Edit::Unmute;
-		batch.Changes[index] = { operation, change.Path };
+		if (_muteController && (operation == HierarchySelection::Edit::Mute || operation == HierarchySelection::Edit::Unmute))
+		{
+			if (const auto target = HierarchySelection::MuteTarget(view,change.Path))
+				_muteController->SetTargetMuted(*target,operation == HierarchySelection::Edit::Mute,access.Stations,_publishMute);
+		}
+		else batch.Changes[batch.ChangeCount++] = { operation, change.Path };
 	}
 	const auto outcome = HierarchySelection::ApplyLocked(view, batch);
 	if (outcome.CollapseRacks)
@@ -1342,7 +1530,7 @@ void Workspace::UpdateSelection(actions::ActionResultType res, StationAccess acc
 
 	if (auto hovered = _ChildFromPathLocked(_selector->CurrentHover(), access))
 	{
-		const auto tweakState = HierarchySelection::TweakState(HierarchySelection::BorrowLocked(access.Stations), hovered);
+		const auto tweakState = _DesiredTweakStateLocked(_selector->CurrentHover(), access.Stations);
 		_selector->UpdateCurrentHover(_selector->CurrentHover(),
 			Action::MODIFIER_NONE, hovered->IsSelected(), tweakState);
 	}
@@ -1486,6 +1674,13 @@ actions::ActionResult Workspace::OnKeyboard(KeyAction action, StationAccess acce
 		if ((action.KeyChar == 17u || action.KeyChar == 18u) && action.KeyActionType == KeyAction::KEY_DOWN)
 			_CancelOverdubSourceDrag();
 		return {true}; // Modifier release never leaks into master/cable/editor/trigger actions.
+	}
+	if (_muteMarqueeActive && action.KeyActionType == KeyAction::KEY_DOWN &&
+		(action.KeyChar == 27u || action.KeyChar == 16u || action.KeyChar == 17u || action.KeyChar == 18u ||
+		 action.KeyChar == 8u || (action.KeyChar >= 112u && action.KeyChar <= 120u)))
+	{
+		{ std::scoped_lock lock(access.Mutex); _CancelMuteMarqueeLocked(access.Stations); }
+		if (action.KeyChar == 27u) return {true};
 	}
 	// Physical modifier transitions must survive contextual editor consumption.
 	if (17u == action.KeyChar)
@@ -1676,6 +1871,8 @@ void Workspace::ReleaseQuantisationInput(StationAccess access, const InputPresen
 
 void Workspace::ReleaseQuantisationInputLocked(StationAccess access, const InputPresentation& presentation)
 {
+    if (_hudPanel) _hudPanel->SetOverdubSourceFeedback({});
+	_CancelMuteMarqueeLocked(access.Stations);
 	_CancelOverdubSourceDrag();
 	_selector->ClearBackgroundClick();
 	_spaceHeld = _ctrlHeld = false;
@@ -1801,6 +1998,7 @@ void Workspace::OpenStationRemoval(const std::string& name, const std::shared_pt
 void Workspace::CompleteMembershipPresentationLocked(const std::vector<std::shared_ptr<Station>>& stations,
 	const std::shared_ptr<Station>& removed, const std::shared_ptr<Station>& added, std::size_t affectedBindings)
 {
+	_CancelMuteMarqueeLocked(stations);
 	_CancelOverdubSourceDrag();
 	_selector->ClearBackgroundClick();
 	if (removed)
@@ -1872,6 +2070,7 @@ void Workspace::ResetKeyboardObservation()
 
 void Workspace::OnFocusLostLocked(StationAccess access, const InputPresentation& presentation)
 {
+	_CancelMuteMarqueeLocked(access.Stations);
 	_CancelOverdubSourceDrag();
 	if (auto popup = _popupManager.Top()) popup->ClearPointerState();
 	_stationControls.Cancel();

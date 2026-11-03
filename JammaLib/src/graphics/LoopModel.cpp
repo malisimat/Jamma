@@ -1,4 +1,5 @@
 #include "LoopModel.h"
+#include <glm/ext/matrix_transform.hpp>
 #include "GlDeleteQueue.h"
 #include <algorithm>
 #include <cmath>
@@ -178,6 +179,32 @@ void LoopModel::Draw3d(DrawContext& ctx,
 	glUseProgram(0);
 
 	glCtx.PopMvp();
+}
+
+bool LoopModel::IntersectsMuteMarquee(const graphics::MuteMarqueeProjection& projection) const
+{
+    if (!_isVisible || _editorMorph > 0.001f) return false;
+    std::scoped_lock lock(_waveformMutex, _modelStateMutex);
+    const auto& vertices = _backVerts.empty() ? _modelParams.Verts : _backVerts;
+    const auto& uvs = _backUvs.empty() ? _modelParams.Uvs : _backUvs;
+    if (_waveformDecimated.empty() || uvs.size() * 3u < vertices.size() * 2u) return false;
+    const auto matrix = glm::rotate(glm::mat4(1.0f), static_cast<float>(constants::TWOPI * _loopIndexFrac), glm::vec3{0,1,0})
+        * glm::translate(glm::mat4(1.0f), glm::vec3{ModelPosition().X, ModelPosition().Y, ModelPosition().Z})
+        * glm::scale(glm::mat4(1.0f), glm::vec3{static_cast<float>(ModelScale())});
+    const auto projected = projection.Transformed(matrix);
+    const auto vertex = [&](std::size_t index)
+    {
+        const auto sample = (std::min)(static_cast<std::size_t>(std::floor(std::clamp(uvs[index * 2u], 0.0f, 1.0f)
+            * static_cast<float>(_waveformDecimated.size()))), _waveformDecimated.size() - 1u);
+        const auto wave = _waveformDecimated[sample];
+        const auto top = vertices[index * 3u + 1u] >= 0.0f;
+        const auto y = (top ? _HeightScale * wave.y * _DisplayScale + _MinHeight : _HeightScale * wave.x * _DisplayScale - _MinHeight) * _sceneHeightScale;
+        const auto radius = _waveformRadius / _UnitMeshRadius;
+        return glm::vec3{vertices[index * 3u] * radius, y, vertices[index * 3u + 2u] * radius};
+    };
+    for (std::size_t index = 0u; index + 8u < vertices.size(); index += 9u)
+        if (projected.Intersects(vertex(index / 3u), vertex(index / 3u + 1u), vertex(index / 3u + 2u))) return true;
+    return false;
 }
 
 graphics::CameraBounds LoopModel::CameraLocalBounds() const

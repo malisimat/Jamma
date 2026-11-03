@@ -44,6 +44,9 @@ namespace gui
 		// Movement cancels the click while keeping pointer ownership until release.
 		enum class BackgroundCommand { UnmuteAll, MuteAll, SelectAll };
 		bool BeginBackgroundClick(const actions::TouchAction& action);
+		bool OwnsPlainMiddleBackground() const { return _backgroundClick && _backgroundClick->Command == BackgroundCommand::UnmuteAll; }
+		std::optional<utils::Rect2d> MuteMarqueeRectangle() const;
+		utils::Position2d BackgroundPressPosition() const { return _backgroundClick ? _backgroundClick->PressPosition : utils::Position2d{}; }
 		bool OwnsBackgroundClick() const { return _backgroundClick.has_value(); }
 		std::optional<BackgroundCommand> BackgroundPreview() const;
 		std::optional<BackgroundCommand> ReleaseBackgroundClick(const actions::TouchAction& action);
@@ -96,7 +99,7 @@ namespace gui
 		{
 			int Button;
 			BackgroundCommand Command;
-			utils::Position2d PressPosition;
+			utils::Position2d PressPosition, CurrentPosition;
 			bool Cancelled = false, Moved = false;
 		};
 		std::optional<BackgroundClick> _backgroundClick;

@@ -6,6 +6,7 @@
 #include "audio/AudioHost.h"
 #include "engine/Station.h"
 #include "engine/PerformanceGroupService.h"
+#include "engine/PerformanceGroupController.h"
 #include "gui/GuiHud.h"
 #include "base/PublishedAudioSnapshot.h"
 #include "utils/Timer.h"
@@ -43,6 +44,9 @@ namespace audio
 		{
 			return host._audioStations.borrow();
 		}
+        static auto BorrowMute(AudioHost& host) noexcept { return host._groupMuteApplication.borrow(); }
+        static void AdoptMute(AudioHost& host, const engine::GroupMuteApplication* image) noexcept
+        { host.ApplyBorrowedGroupMuteAtAudioBoundary(image); }
 		static auto BorrowClock(AudioHost& host) noexcept
 		{
 			return host._timingClock.borrow();
@@ -2010,4 +2014,70 @@ TEST_F(RigSnapshotTest, SeamWindowCanChangeWithoutAcceptingOtherLifecycleSetting
 	ASSERT_EQ(Result::Pending,coordinator.SubmitCandidate(candidate));
 	ASSERT_TRUE(coordinator.Staged());
 	EXPECT_EQ(0u,coordinator.Staged()->Rig.User.Loop.MidiSeamMergeWindowMs);
+}
+
+TEST(PerformanceGroupBoundary, AppliedMarqueeRestorationSurvivesFinalNullAndNewTopology)
+{
+    engine::StationParams params; params.Id="survivor"; params.Size={160u,320u};
+    auto survivor=std::make_shared<engine::Station>(params,engine::Station::GetMixerParams(params.Size,audio::MergeMixBehaviourParams{}));
+    auto removed=survivor->AddTake(); auto retained=survivor->AddTake();
+    auto departedParams=params; departedParams.Id="departed";
+    auto departed=std::make_shared<engine::Station>(departedParams,engine::Station::GetMixerParams(params.Size,audio::MergeMixBehaviourParams{}));
+    audio::AudioHost host(io::UserConfig{}); auto clock=std::make_shared<utils::Timer>(); host.SetTimingClock(clock);
+    audio::RigAudioBoundaryTestAccess::ConfigureCallback(host,clock);
+    auto rig=std::make_shared<engine::RigSnapshot>(); rig->Revision=1u; rig->Graph.Revision=1u; rig->TopologyRevision=1u;
+    rig->Stations=std::make_shared<const std::vector<std::shared_ptr<engine::Station>>>(std::vector{survivor,departed});
+    host.SetStations(rig->Stations); host.PublishPendingRigSnapshot(rig);
+    engine::PerformanceGroupController controller;
+    const auto publish=[&](std::shared_ptr<const engine::GroupMuteApplication> image) {
+        auto stamped=std::make_shared<engine::GroupMuteApplication>(*image); stamped->TopologyRevision=rig->TopologyRevision;
+        host.PublishGroupMuteApplication(std::move(stamped));
+    };
+    ASSERT_TRUE(controller.BeginMuteMarquee({survivor,departed}));
+    ASSERT_TRUE(controller.PreviewMuteMarquee(std::array{engine::GroupTargetId{engine::GroupTargetKind::Station,survivor->Id(),{},{}},engine::GroupTargetId{engine::GroupTargetKind::Station,departed->Id(),{},{}}},{survivor,departed},publish));
+    float output[8]{}; audio::RigAudioBoundaryTestAccess::RunBlock(host,output); ASSERT_TRUE(survivor->RetainedMuted());
+    ASSERT_TRUE(controller.CancelMuteMarquee({survivor,departed},publish));
+    auto oldRestore=audio::RigAudioBoundaryTestAccess::BorrowMute(host); ASSERT_TRUE(oldRestore);
+    const auto previewReceipt=host.GroupMuteReceipt();
+    ASSERT_TRUE(survivor->DitchTake(removed)); survivor->CommitChanges();
+    const bool removedRaw = (removed->GetTweakState() & base::Tweakable::TWEAKSTATE_MUTED) != 0;
+    host.PublishGroupMuteApplication({});
+    // Use a new Station owner with the same saved ID: identity reuse must not receive the old baseline.
+    auto replacement=std::make_shared<engine::Station>(departedParams,engine::Station::GetMixerParams(params.Size,audio::MergeMixBehaviourParams{}));
+    replacement->SetRetainedMuted(true);
+    rig=std::make_shared<engine::RigSnapshot>(); rig->Revision=2u; rig->Graph.Revision=2u; rig->TopologyRevision=2u;
+    rig->Stations=std::make_shared<const std::vector<std::shared_ptr<engine::Station>>>(std::vector{survivor,replacement});
+    host.SetStations(rig->Stations); host.PublishPendingRigSnapshot(rig);
+    auto added=survivor->AddTake();
+    audio::RigAudioBoundaryTestAccess::RunBlock(host,output); // New topology and final null are adopted first.
+    audio::RigAudioBoundaryTestAccess::AdoptMute(host,oldRestore.get());
+    EXPECT_TRUE(survivor->RetainedMuted()); EXPECT_EQ(previewReceipt,host.GroupMuteReceipt());
+    controller.RepublishForTopology({survivor,replacement},publish);
+    audio::RigAudioBoundaryTestAccess::RunBlock(host,output);
+    EXPECT_FALSE(survivor->RetainedMuted()); EXPECT_FALSE(retained->IsMuted()); EXPECT_FALSE(added->IsMuted());
+    EXPECT_TRUE(departed->RetainedMuted()); EXPECT_TRUE(replacement->RetainedMuted()); EXPECT_FALSE(controller.MuteMarqueeActive());
+    EXPECT_EQ(removedRaw,(removed->GetTweakState() & base::Tweakable::TWEAKSTATE_MUTED) != 0);
+    const auto restoredReceipt=host.GroupMuteReceipt();
+    audio::RigAudioBoundaryTestAccess::AdoptMute(host,oldRestore.get());
+    EXPECT_FALSE(survivor->RetainedMuted()); EXPECT_EQ(restoredReceipt,host.GroupMuteReceipt());
+}
+
+TEST(PerformanceGroupBoundary, CapacityGrowthRestoresBoundedBaselineThroughActualHost)
+{
+    engine::StationParams params; params.Id="capacity"; params.Size={160u,320u};
+    auto station=std::make_shared<engine::Station>(params,engine::Station::GetMixerParams(params.Size,audio::MergeMixBehaviourParams{}));
+    auto take=station->AddTake();
+    audio::AudioHost host(io::UserConfig{}); auto clock=std::make_shared<utils::Timer>(); host.SetTimingClock(clock);
+    host.SetStations(std::make_shared<const std::vector<std::shared_ptr<engine::Station>>>());
+    audio::RigAudioBoundaryTestAccess::ConfigureCallback(host,clock);
+    engine::PerformanceGroupController controller; const auto publish=[&](auto image){host.PublishGroupMuteApplication(std::move(image));};
+    ASSERT_TRUE(controller.BeginMuteMarquee({station}));
+    ASSERT_TRUE(controller.PreviewMuteMarquee(std::array{engine::GroupTargetId{engine::GroupTargetKind::Station,station->Id(),{},{}}},{station},publish));
+    float output[8]{}; audio::RigAudioBoundaryTestAccess::RunBlock(host,output); ASSERT_TRUE(take->IsMuted());
+    // Adversarial bounded view exercises the same capacity branch without allocating 32769 heavyweight owners.
+    const engine::PerformanceGroupService::Stations overCapacity(engine::GroupMuteApplication::MaxTargets+1u,station);
+    ASSERT_TRUE(controller.CancelMuteMarquee(overCapacity,publish));
+    audio::RigAudioBoundaryTestAccess::RunBlock(host,output);
+    EXPECT_FALSE(station->RetainedMuted()); EXPECT_FALSE(take->IsMuted()); EXPECT_FALSE(controller.MuteMarqueeActive());
+    EXPECT_FALSE(controller.Error().empty());
 }

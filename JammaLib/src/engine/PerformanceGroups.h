@@ -18,6 +18,7 @@ namespace engine
         std::string StationId;
         std::string TakeId;
         std::string EntityId;
+        bool operator==(const GroupTargetId&) const = default;
     };
 
     struct GroupMuteState

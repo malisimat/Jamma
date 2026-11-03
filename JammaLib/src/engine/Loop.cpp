@@ -183,6 +183,18 @@ void Loop::SetSize(utils::Size2d size)
 	GuiElement::SetSize(size);
 }
 
+bool Loop::IntersectsMuteMarquee(const graphics::MuteMarqueeProjection& projection)
+{
+    if (!_isVisible || !_model || LoopLength() == 0ul) return false;
+    const auto fraction = 1.0 - static_cast<double>(PlaybackBodyIndex()) / static_cast<double>(LoopLength());
+    _model->SetLoopIndexFrac(fraction);
+    const auto position = ModelPosition();
+    const auto scale = static_cast<float>(ModelScale());
+    const auto height = static_cast<float>(_mixer->UnmutedLevel()) * _masterVisualScale;
+    return _model->IntersectsMuteMarquee(projection.Transformed(glm::translate(glm::mat4(1.0f), glm::vec3{position.X,position.Y,position.Z})
+        * glm::scale(glm::mat4(1.0f), glm::vec3{scale,scale * height,scale})));
+}
+
 graphics::CameraBounds Loop::CameraBoundsInParent(float parentVisualScale) const
 {
 	if (!_model)
@@ -1483,6 +1495,11 @@ void Loop::SetCaptureSourceMuteControl(
 	const std::shared_ptr<const audio::CaptureSourceMuteControl>& control) noexcept
 {
 	_mixer->SetCaptureSourceMuteControl(control);
+}
+
+bool Loop::AllowReplacementPlayback() noexcept
+{
+	return _mixer && _mixer->AllowReplacementPlayback();
 }
 
 bool Loop::UnMute()

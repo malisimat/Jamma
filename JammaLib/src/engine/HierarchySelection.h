@@ -1,9 +1,11 @@
 #pragma once
 
 #include <memory>
+#include <optional>
 #include <array>
 #include <vector>
 #include "Station.h"
+#include "PerformanceGroups.h"
 
 namespace engine
 {
@@ -24,6 +26,7 @@ namespace engine
 			const std::vector<std::shared_ptr<Station>>& Stations;
 		};
 
+		static std::optional<GroupTargetId> MuteTarget(const LockedStations& view, const std::vector<unsigned char>& path);
 		static LockedStations BorrowLocked(const std::vector<std::shared_ptr<Station>>& stations) { return LockedStations(stations); }
 
 		struct Appearance

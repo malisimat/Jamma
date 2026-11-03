@@ -1,4 +1,5 @@
 #pragma once
+#include "../graphics/MuteMarqueeProjection.h"
 #include "../vst/VstRackSlot.h"
 #include "../audio/InputHistory.h"
 
@@ -255,6 +256,8 @@ namespace engine
 			bool updateIndex) override;
 		virtual bool Mute() override;
 		virtual bool UnMute() override;
+		// UI admission only: audition replacement source without changing raw flags.
+		bool AllowReplacementPlayback() noexcept;
 		bool IsMuted() const override;
 		bool IsUserOrSourceMuted() const noexcept;
 		void SetStationMuteControl(const std::shared_ptr<const std::atomic<bool>>& control) noexcept { _stationMuteControl = control; }
@@ -267,6 +270,7 @@ namespace engine
 		void RefreshVisualModel();
 		std::shared_ptr<LoopModel> Model() const noexcept { return _model; }
 		// Presentation-only, called with the scene/layout read ownership on the window thread.
+		bool IntersectsMuteMarquee(const graphics::MuteMarqueeProjection& projection);
 		graphics::CameraBounds CameraBoundsInParent(float parentVisualScale = 1.0f) const;
 		float UnfittedVisualHalfHeight(float parentVisualScale) const;
 		void SetSpectralMorph(float morph) noexcept { _spectralMorph = std::clamp(morph, 0.0f, 1.0f); }

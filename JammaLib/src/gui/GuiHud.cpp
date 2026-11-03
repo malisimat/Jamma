@@ -1465,6 +1465,7 @@ void GuiHud::_CancelCableDrag()
 
 void GuiHud::ClearPointerState()
 {
+    // Exclusive visual hover also calls this; semantic hint lifetime belongs to Workspace.
 	_labelPress.reset();
 	GuiPanel::ClearPointerState();
 	if (_cableDrag) _CancelCableDrag();

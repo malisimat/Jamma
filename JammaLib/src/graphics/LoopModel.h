@@ -1,4 +1,5 @@
 #pragma once
+#include "MuteMarqueeProjection.h"
 
 #include <algorithm>
 #include <array>
@@ -62,6 +63,7 @@ namespace engine
 
 		// Non-callback read through the existing waveform publication mutex.
 		graphics::CameraBounds CameraLocalBounds() const;
+		bool IntersectsMuteMarquee(const graphics::MuteMarqueeProjection& projection) const;
 		float SceneInnerRadius() const;
 		float UnfittedHalfHeight() const;
 		void SetSceneHeightScale(float scale) noexcept { _sceneHeightScale = std::clamp(scale, 0.0f, 1.0f); }
