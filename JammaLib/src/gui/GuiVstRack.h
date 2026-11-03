@@ -71,7 +71,6 @@ namespace gui
 		bool ChannelShownActive(unsigned int channel) const noexcept;
 		std::size_t PageOffset() const noexcept { return _pageOffset; }
 		std::shared_ptr<GuiButton> AppendButton() const;
-		void AppendMuteMarqueeOccluders(std::vector<utils::Rect2d>& bounds) const;
 		std::shared_ptr<GuiToggle> ChannelsExpander() const;
 		std::shared_ptr<GuiButton> SlotButton(std::size_t index) const;
 		unsigned int BottomExtension() const noexcept;

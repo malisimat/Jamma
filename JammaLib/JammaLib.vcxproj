@@ -243,7 +243,6 @@
     <ClInclude Include="src\gui\GuiRouter.h" />
     <ClInclude Include="src\graphics\ImageFullscreen.h" />
     <ClInclude Include="src\graphics\LoopModel.h" />
-    <ClInclude Include="src\graphics\MuteMarqueeProjection.h" />
     <ClInclude Include="src\engine\MidiRouter.h" />
     <ClInclude Include="src\engine\Quantiser.h" />
     <ClInclude Include="src\engine\QuantisationTiming.h" />

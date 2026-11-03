@@ -325,18 +325,6 @@ Rect2d GuiMainPanel::PresentedFrameBounds() const
 		static_cast<int>(_viewport.Width), static_cast<int>(_viewport.Height)});
 }
 
-void GuiMainPanel::AppendMuteMarqueeOccluders(std::vector<Rect2d>& rectangles) const
-{
-    if (!IsVisible()) return;
-    const auto frame=PresentedFrameBounds();
-    if (!frame.IsEmpty()) rectangles.push_back(frame.Translated(GlobalPosition()));
-    if (_handle && _handle->IsVisible())
-    {
-        const auto point=_handle->GlobalPosition(); const auto size=_handle->GetSize();
-        rectangles.push_back({point.X,point.Y,point.X+static_cast<int>(size.Width),point.Y+static_cast<int>(size.Height)});
-    }
-}
-
 GuiTopPanelLayout GuiMainPanel::TopPanelLayout() const
 {
 	GuiTopPanelLayout result;

@@ -1,5 +1,4 @@
 #pragma once
-#include "PerformanceGroups.h"
 #include "../vst/VstRackSlot.h"
 #include "../audio/InputHistory.h"
 
@@ -255,8 +254,6 @@ namespace engine
 		float VisualRadius() const noexcept;
 		// Presentation accessors: non-audio callers hold Scene::_sceneMutex.
 		bool HasCameraContent() const;
-		bool IntersectsMuteMarquee(const graphics::MuteMarqueeProjection& projection);
-		void CollectMuteMarqueeLeaves(const graphics::MuteMarqueeProjection& projection, const std::string& stationId, std::vector<GroupTargetId>& targets);
 		graphics::CameraBounds CameraBoundsInParent(float parentVisualScale = 1.0f) const;
 		std::optional<engine::QuantisationLoopTakeVisual> QuantisationVisual() const noexcept;
 		static std::vector<engine::QuantisationLoopTakeVisual> QuantisationVisualsFor(

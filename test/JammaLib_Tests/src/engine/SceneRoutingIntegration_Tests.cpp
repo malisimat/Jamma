@@ -14,7 +14,6 @@
 #include "gui/GuiVstRack.h"
 #include "gui/SceneSelector.h"
 #include "graphics/Window.h"
-#include "graphics/MuteMarqueeProjection.h"
 #include "io/NativeMidiSidecar.h"
 #include "io/IoSessionExporter.h"
 #include "utils/StringUtils.h"
@@ -287,13 +286,16 @@ namespace engine
         static bool CameraPointerHeld(const Scene& scene) { return gui::WorkspaceTestAccess::Camera(*scene._workspace).IsBackgroundPointerHeld(); }
         static void SetSaveTiming(Scene& scene)
         { scene._quantisation.ApplyTiming({16u,128ul,8u,120.0f,4u},"marquee save fixture"); }
-        static std::vector<GroupTargetId> GeometryAt(Scene& scene, utils::Rect2d rectangle, base::SelectDepth depth)
+        static std::vector<GroupTargetId> MarqueeAt(Scene& scene, utils::Rect2d rectangle, base::SelectDepth depth)
+        { return gui::WorkspaceTestAccess::MarqueeTargets(*scene._workspace,scene._stations,rectangle,depth); }
+        static void MarqueeCamera(Scene& scene, bool top)
         {
-            const std::array visible{utils::Rect2d{0,0,1280,900}};
-            const graphics::MuteMarqueeProjection projection(scene._workspace->ViewProjection(),{1280u,900u},rectangle,visible);
-            std::vector<GroupTargetId> hits;
-            for(const auto& station:scene._stations) station->CollectMuteMarqueeTargets(projection,depth,hits);
-            return hits;
+            auto& camera=gui::WorkspaceTestAccess::Camera(*scene._workspace);
+            camera.SetViewTarget(top ? graphics::Camera::View::TopDown : graphics::Camera::View::Front,
+                top ? graphics::Camera::Pose{{0,500,0},{0,-1,0},{0,0,-1}} : graphics::Camera::Pose{{0,0,500},{0,0,-1},{0,1,0}});
+            for (unsigned int i=0u;i<20u;++i) camera.TickBackgroundDrag(0.05f);
+            gui::WorkspaceTestAccess::SetProjection(*scene._workspace,
+                glm::ortho(-1000.0f,1000.0f,-1000.0f,1000.0f,-10000.0f,10000.0f)*camera.ViewMatrix());
         }
         static bool GlobalMuteCommand(Scene& scene, bool muted)
         {
@@ -361,47 +363,6 @@ namespace engine
         }
         static bool DesiredMute(Scene& scene, const GroupTargetId& target)
         { return scene._performanceGroups.DesiredMuted(target,scene._stations); }
-        static utils::Rect2d ExpandSettings(Scene& scene)
-        {
-            auto panel=scene._workspace->MainPanel(); panel->SetExpanded(true);
-            for(unsigned int frame=0u;frame<20u;++frame) panel->AdvanceAnimation(0.05f);
-            return panel->PresentedFrameBounds().Translated(panel->GlobalPosition());
-        }
-        static void CameraCentreAt(Scene& scene, utils::Position2d point)
-        {
-            auto& camera=gui::WorkspaceTestAccess::Camera(*scene._workspace); auto pose=camera.CurrentPose();
-            const auto centre=gui::Workspace::StationCentre(scene._stations);
-            const auto projection=camera.Projection(1280.0f/900.0f,centre); const auto distance=std::abs(pose.Eye.Z-centre.Z);
-            pose.Eye.X=centre.X+(640.0f-static_cast<float>(point.X))*distance/(640.0f*projection[0][0]);
-            pose.Eye.Y=centre.Y+(450.0f-static_cast<float>(point.Y))*distance/(450.0f*projection[1][1]);
-            camera.SetViewTarget(camera.CurrentView(),pose);
-            for(unsigned int frame=0u;frame<20u;++frame) camera.TickBackgroundDrag(0.05f);
-        }
-        static void FrontCamera(Scene& scene, const Station& station)
-        {
-            auto& camera=gui::WorkspaceTestAccess::Camera(*scene._workspace); const auto position=station.PresentationModelPosition();
-            camera.SetViewTarget(graphics::Camera::View::Front,{{position.X,position.Y,position.Z+500.0f},{0,0,-1},{0,1,0}});
-            for(unsigned int frame=0u;frame<20u;++frame) camera.TickBackgroundDrag(0.05f);
-        }
-        static utils::Position2d MidiPitchPoint(Scene& scene,const Station& station,const LoopTake& take,const midi::MidiLoop& stream,int pitch)
-        {
-            const auto model=stream.Model(); const auto scale=static_cast<float>(model->ModelScale());
-            const auto fitted=graphics::MidiModel::FitPitch(pitch,static_cast<float>(take.GetSize().Height)*0.94f/scale,{60,67},scale);
-            const auto stationPos=station.PresentationModelPosition(), takePos=take.ModelPosition(), modelPos=model->ModelPosition();
-            const auto takeScale=static_cast<float>(take.ModelScale()), stationScale=static_cast<float>(station.ModelScale());
-            const glm::vec3 local{50.0f*scale+modelPos.X,fitted.first*scale+modelPos.Y,modelPos.Z};
-            const glm::vec3 world{stationPos.X+stationScale*(takePos.X+takeScale*local.x),stationPos.Y+stationScale*(takePos.Y+takeScale*local.y),stationPos.Z+stationScale*(takePos.Z+takeScale*local.z)};
-            const auto clip=scene._workspace->ViewProjection()*glm::vec4(world,1.0f);
-            return {static_cast<int>(std::lround((clip.x/clip.w+1.0f)*640.0f)),static_cast<int>(std::lround((clip.y/clip.w+1.0f)*450.0f))};
-        }
-        static bool MidiGeometryAt(Scene& scene,const Station& station,const LoopTake& take,const midi::MidiLoop& stream,utils::Rect2d rectangle)
-        {
-            const std::array visible{utils::Rect2d{0,0,1280,900}};
-            const auto sp=station.PresentationModelPosition(),tp=take.ModelPosition();
-            const auto matrix=glm::translate(glm::mat4(1),glm::vec3{sp.X,sp.Y,sp.Z})*glm::scale(glm::mat4(1),glm::vec3{static_cast<float>(station.ModelScale())})*
-                glm::translate(glm::mat4(1),glm::vec3{tp.X,tp.Y,tp.Z})*glm::scale(glm::mat4(1),glm::vec3{static_cast<float>(take.ModelScale())});
-            return stream.Model()->IntersectsMuteMarquee(graphics::MuteMarqueeProjection(scene._workspace->ViewProjection()*matrix,{1280u,900u},rectangle,visible));
-        }
         static void MoveCameraAway(Scene& scene)
         {
             auto& camera=gui::WorkspaceTestAccess::Camera(*scene._workspace);
@@ -1991,6 +1952,8 @@ TEST_F(SceneRoutingIntegrationTest, InWindowBackgroundGesturesPreviewAndApplyOnl
     take->CommitChanges();
     scene->CommitChanges();
     auto loop = take->GetLoops().front();
+    // This test isolates background click admission; its one-pixel drags stay outside the station band.
+    engine::SourceLossIntegrationTestAccess::MarqueeCamera(*scene,false);
     for (const bool mute : { false, true })
     {
         for (int movement = 0; movement < 5; ++movement)
@@ -3505,7 +3468,50 @@ TEST_F(SceneRoutingIntegrationTest, SourceDragRejectsForeignDropAndChangedRigWhi
 	exclusion.unlock(); scene->Shutdown();
 }
 
-TEST_F(SceneRoutingIntegrationTest, MiddleMarqueeActualGeometryRestoresOnShrinkAndConsumesCanceledRelease)
+TEST_F(SceneRoutingIntegrationTest, MarqueeRectanglesUseNeighbourColumnsAndShortTakeBandsAtBothChildDepths)
+{
+    using Access=engine::SourceLossIntegrationTestAccess;
+    auto scene=FreshScene({Station("Left"),Station("Middle"),Station("Right")},{}); ASSERT_TRUE(scene);
+    scene->SetSize({1280u,900u}); Settle(scene); auto job=Access::ExcludeJob(*scene);
+    const auto stations=scene->SnapshotStations();
+    auto low=AddCompletedSourceChoiceTake(stations[1],true,true,true), high=AddCompletedSourceChoiceTake(stations[1]);
+    scene->CommitChanges();
+    for (std::size_t i=0u;i<stations.size();++i) stations[i]->SetModelPosition({(static_cast<float>(i)-1.0f)*600.0f,0,0});
+    low->SetModelPosition({0,-100,0}); high->SetModelPosition({0,100,0});
+    low->SetSize({160u,80u}); high->SetSize({160u,80u});
+    Access::MarqueeCamera(*scene,false);
+    const auto middle=engine::GroupTargetId{engine::GroupTargetKind::Station,stations[1]->Id(),{},{}};
+    EXPECT_EQ((std::vector<engine::GroupTargetId>{middle}),Access::MarqueeAt(*scene,{639,449,641,451},base::DEPTH_STATION));
+    EXPECT_TRUE(Access::MarqueeAt(*scene,{446,449,450,451},base::DEPTH_STATION).empty()); // Small neighbour gap.
+    const auto left=Access::MarqueeAt(*scene,{100,449,101,451},base::DEPTH_STATION);
+    ASSERT_EQ(1u,left.size()); EXPECT_EQ(stations[0]->Id(),left[0].StationId); // Outer column mirrors its only neighbour.
+    const std::vector<engine::GroupTargetId> expected{{engine::GroupTargetKind::Take,stations[1]->Id(),low->Id(),{}}};
+    for (const auto depth : {base::DEPTH_LOOPTAKE,base::DEPTH_LOOP})
+    {
+        EXPECT_EQ(expected,Access::MarqueeAt(*scene,{639,404,641,406},depth));
+        EXPECT_TRUE(Access::MarqueeAt(*scene,{639,449,641,451},depth).empty()); // Between the two short take bands.
+    }
+    job.unlock(); scene->Shutdown();
+}
+
+TEST_F(SceneRoutingIntegrationTest, MarqueeCameraFacingBandsRemainTallInTopViewAndSingleStation)
+{
+    using Access=engine::SourceLossIntegrationTestAccess;
+    auto scene=FreshScene({Station("Top")},{}); ASSERT_TRUE(scene);
+    scene->SetSize({1280u,900u}); Settle(scene); auto job=Access::ExcludeJob(*scene);
+    const auto station=scene->SnapshotStations().front(); const auto take=AddCompletedSourceChoiceTake(station);
+    scene->CommitChanges(); station->SetModelPosition({0,0,0}); take->SetModelPosition({0,0,0}); take->SetSize({160u,80u});
+    for (const bool top : {false,true})
+    {
+        Access::MarqueeCamera(*scene,top);
+        EXPECT_EQ(1u,Access::MarqueeAt(*scene,{639,529,641,531},base::DEPTH_STATION).size());
+        EXPECT_EQ(1u,Access::MarqueeAt(*scene,{639,459,641,461},base::DEPTH_LOOPTAKE).size());
+        EXPECT_TRUE(Access::MarqueeAt(*scene,{639,479,641,481},base::DEPTH_LOOP).empty());
+    }
+    job.unlock(); scene->Shutdown();
+}
+
+TEST_F(SceneRoutingIntegrationTest, MiddleMarqueeRectanglesRestoreOnShrinkAndConsumeCanceledRelease)
 {
     using Access=engine::SourceLossIntegrationTestAccess;
     auto scene=FreshScene({Station("Marquee")},{}); ASSERT_TRUE(scene);
@@ -3518,7 +3524,7 @@ TEST_F(SceneRoutingIntegrationTest, MiddleMarqueeActualGeometryRestoresOnShrinkA
     actions::TouchAction press; press.Touch=actions::TouchAction::TOUCH_MOUSE; press.Index=1;
     press.Position={1050,40}; press.State=actions::TouchAction::TOUCH_DOWN; press.MouseButtonsDown=2u;
     Access::ExpectUncoveredRackPoint(*scene,press.Position);
-    ASSERT_TRUE(Access::GeometryAt(*scene,{1050,40,1051,41},base::DEPTH_STATION).empty());
+    ASSERT_TRUE(Access::MarqueeAt(*scene,{1050,40,1051,41},base::DEPTH_STATION).empty());
     scene->OnAction(press);
     ASSERT_TRUE(Access::BackgroundOwned(*scene)); EXPECT_FALSE(station->RetainedMuted());
     actions::TouchMoveAction move; move.Touch=actions::TouchAction::TOUCH_MOUSE; move.MouseButtonsDown=2u; move.Position={400,800};
@@ -3633,7 +3639,7 @@ TEST_F(SceneRoutingIntegrationTest, MarqueeAllDepthsNormalizesMidiSiblingsAndPre
         EXPECT_TRUE(take->IsMuted());
         if(depth==engine::Scene::VIEW_STATION) EXPECT_TRUE(station->RetainedMuted());
         else EXPECT_FALSE(station->RetainedMuted());
-        // Even leaf-depth intersection with either channel mutes the owning take, not an individual MIDI stream.
+        // Take and loop depths share one band and mute every child in the owning take.
         EXPECT_TRUE(take->GetTweakState() & base::Tweakable::TWEAKSTATE_MUTED);
         scene->OnInputFocusLost(); ASSERT_TRUE(Access::ApplyMuteBoundary(*scene));
         EXPECT_FALSE(take->IsMuted()); EXPECT_FALSE(station->RetainedMuted());
@@ -3688,65 +3694,6 @@ TEST_F(SceneRoutingIntegrationTest, MarqueeIncludesDisplayedRemoteAndEmptyStatio
     job.unlock(); scene->Shutdown();
 }
 
-TEST_F(SceneRoutingIntegrationTest, LeafMarqueeKeepsMidiOwnerMutedWhileOneSiblingLeavesAndOtherRemains)
-{
-    using Access=engine::SourceLossIntegrationTestAccess;
-    auto scene=FreshScene({Station("Sibling geometry")},{}); ASSERT_TRUE(scene);
-    resources::ResourceLib resources; engine::PressPickWindow window(*scene,resources); window.Resize({1280u,900u}); Settle(scene);
-    auto job=Access::ExcludeJob(*scene); auto station=scene->SnapshotStations().front();
-    auto take=AddCompletedSourceChoiceTake(station,true,true,true); scene->CommitChanges(); ASSERT_EQ(2u,take->GetMidiLoops().size());
-    Access::SetDepth(*scene,engine::Scene::VIEW_LOOP); Access::FrontCamera(*scene,*station); scene->AdvanceUiAnimations();
-    Access::GeometryAt(*scene,{0,0,1280,900},base::DEPTH_LOOP); // Prepare current published model geometry.
-    const auto a=take->GetMidiLoops()[0],b=take->GetMidiLoops()[1];
-    const auto low=Access::MidiPitchPoint(*scene,*station,*take,*a,60), high=Access::MidiPitchPoint(*scene,*station,*take,*b,67);
-    ASSERT_LT(low.Y,high.Y);
-    const utils::Position2d anchor{(std::min)(low.X,high.X)-20,high.Y+30};
-    const utils::Position2d both{(std::max)(low.X,high.X)+20,low.Y-30},onlyB{both.X,high.Y-15};
-    const utils::Rect2d bRectangle{anchor.X,onlyB.Y,onlyB.X,anchor.Y};
-    ASSERT_FALSE(Access::MidiGeometryAt(*scene,*station,*take,*a,bRectangle));
-    ASSERT_TRUE(Access::MidiGeometryAt(*scene,*station,*take,*b,bRectangle));
-    Access::ExpectUncoveredRackPoint(*scene,anchor); scene->SetHover3d({},base::Action::MODIFIER_NONE);
-    actions::TouchAction press; press.Touch=actions::TouchAction::TOUCH_MOUSE; press.Index=1; press.Position=anchor;
-    press.State=actions::TouchAction::TOUCH_DOWN; press.MouseButtonsDown=2u; scene->OnAction(press); ASSERT_TRUE(Access::BackgroundOwned(*scene));
-    actions::TouchMoveAction move; move.Touch=actions::TouchAction::TOUCH_MOUSE; move.Position=both; move.MouseButtonsDown=2u;
-    scene->OnAction(move); scene->AdvanceUiAnimations(); ASSERT_TRUE(Access::ApplyMuteBoundary(*scene)); ASSERT_TRUE(take->IsMuted());
-    move.Position=onlyB; scene->OnAction(move); scene->AdvanceUiAnimations(); ASSERT_TRUE(Access::ApplyMuteBoundary(*scene)); EXPECT_TRUE(take->IsMuted());
-    EXPECT_TRUE(take->GetTweakState() & base::Tweakable::TWEAKSTATE_MUTED);
-    move.Position=anchor+utils::Position2d{1,1}; scene->OnAction(move); scene->AdvanceUiAnimations(); ASSERT_TRUE(Access::ApplyMuteBoundary(*scene)); EXPECT_FALSE(take->IsMuted());
-    scene->OnInputFocusLost(); job.unlock(); scene->Shutdown();
-}
-
-TEST_F(SceneRoutingIntegrationTest, LeafMarqueeExcludesActualSettingsOcclusionButIncludesVisiblePartialSurface)
-{
-    using Access=engine::SourceLossIntegrationTestAccess;
-    auto scene=FreshScene({Station("Occluded audio")},{}); ASSERT_TRUE(scene);
-    resources::ResourceLib resources; engine::PressPickWindow window(*scene,resources); window.Resize({1280u,900u}); Settle(scene);
-    auto job=Access::ExcludeJob(*scene); auto station=scene->SnapshotStations().front();
-    auto take=AddCompletedSourceChoiceTake(station); scene->CommitChanges(); ASSERT_EQ(1u,take->GetLoops().size()); const auto loop=take->GetLoops()[0];
-    Access::SetDepth(*scene,engine::Scene::VIEW_LOOP); Access::FrontCamera(*scene,*station); scene->AdvanceUiAnimations();
-    const auto frame=Access::ExpandSettings(*scene); ASSERT_GT(frame.Right-frame.Left,260); ASSERT_GT(frame.Top-frame.Bottom,300);
-    const auto middleY=(frame.Bottom+frame.Top)/2;
-    Access::CameraCentreAt(*scene,{(frame.Left+frame.Right)/2,middleY}); scene->AdvanceUiAnimations();
-    const utils::Position2d anchor{1050,40},end{frame.Left+1,frame.Top-1};
-    const utils::Rect2d rectangle{end.X,anchor.Y,anchor.X,end.Y};
-    const auto unclipped=Access::GeometryAt(*scene,rectangle,base::DEPTH_LOOP);
-    ASSERT_TRUE(std::any_of(unclipped.begin(),unclipped.end(),[&](const auto& target){return target.Kind==engine::GroupTargetKind::AudioLoop && target.EntityId==loop->Id();}));
-    Access::ExpectUncoveredRackPoint(*scene,anchor); ASSERT_TRUE(Access::GeometryAt(*scene,{1050,40,1051,41},base::DEPTH_LOOP).empty());
-    scene->SetHover3d({},base::Action::MODIFIER_NONE);
-    actions::TouchAction press; press.Touch=actions::TouchAction::TOUCH_MOUSE; press.Index=1; press.Position=anchor; press.State=actions::TouchAction::TOUCH_DOWN; press.MouseButtonsDown=2u;
-    scene->OnAction(press); ASSERT_TRUE(Access::BackgroundOwned(*scene));
-    actions::TouchMoveAction move; move.Touch=actions::TouchAction::TOUCH_MOUSE; move.Position=end; move.MouseButtonsDown=2u;
-    scene->OnAction(move); scene->AdvanceUiAnimations(); ASSERT_TRUE(Access::ApplyMuteBoundary(*scene));
-    EXPECT_FALSE(loop->GetTweakState() & base::Tweakable::TWEAKSTATE_MUTED); // Geometry exists but is wholly hidden by actual Settings scissor.
-    Access::CameraCentreAt(*scene,{frame.Right-20,middleY}); scene->AdvanceUiAnimations();
-    ASSERT_TRUE(Access::ApplyMuteBoundary(*scene)); EXPECT_TRUE(loop->GetTweakState() & base::Tweakable::TWEAKSTATE_MUTED);
-    EXPECT_FALSE(take->GetTweakState() & base::Tweakable::TWEAKSTATE_MUTED); EXPECT_FALSE(station->RetainedMuted());
-    // Keeping the same capture/rectangle, cover the surface again: restore only that raw leaf baseline.
-    Access::CameraCentreAt(*scene,{(frame.Left+frame.Right)/2,middleY}); scene->AdvanceUiAnimations();
-    ASSERT_TRUE(Access::ApplyMuteBoundary(*scene)); EXPECT_FALSE(loop->GetTweakState() & base::Tweakable::TWEAKSTATE_MUTED);
-    scene->OnInputFocusLost(); job.unlock(); scene->Shutdown();
-}
-
 TEST_F(SceneRoutingIntegrationTest, StationaryMarqueeLateReleaseCannotOverwriteCompetingMuteBeforePresentation)
 {
     using Access=engine::SourceLossIntegrationTestAccess;
@@ -3755,7 +3702,7 @@ TEST_F(SceneRoutingIntegrationTest, StationaryMarqueeLateReleaseCannotOverwriteC
     auto job=Access::ExcludeJob(*scene); auto station=scene->SnapshotStations().front(); auto take=AddCompletedSourceChoiceTake(station); scene->CommitChanges();
     Access::SetDepth(*scene,engine::Scene::VIEW_STATION); scene->AdvanceUiAnimations();
     const utils::Position2d point{1050,40}; Access::ExpectUncoveredRackPoint(*scene,point);
-    ASSERT_TRUE(Access::GeometryAt(*scene,{1050,40,1051,41},base::DEPTH_STATION).empty()); scene->SetHover3d({},base::Action::MODIFIER_NONE);
+    ASSERT_TRUE(Access::MarqueeAt(*scene,{1050,40,1051,41},base::DEPTH_STATION).empty()); scene->SetHover3d({},base::Action::MODIFIER_NONE);
     actions::TouchAction press; press.Touch=actions::TouchAction::TOUCH_MOUSE; press.Index=1; press.Position=point;
     press.State=actions::TouchAction::TOUCH_DOWN; press.MouseButtonsDown=2u; scene->OnAction(press); ASSERT_TRUE(Access::BackgroundOwned(*scene));
     ASSERT_TRUE(Access::GlobalMuteCommand(*scene,true)); auto newer=Access::BorrowMute(*scene); ASSERT_TRUE(newer);
@@ -3920,7 +3867,7 @@ TEST_F(SceneRoutingIntegrationTest, BothResetModesAbandonAppliedMarqueeAndQueued
         auto job=Access::ExcludeJob(*scene); auto station=scene->SnapshotStations().front(); auto discarded=AddCompletedSourceChoiceTake(station); scene->CommitChanges();
         Access::SetDepth(*scene,engine::Scene::VIEW_STATION); scene->AdvanceUiAnimations(); scene->SetHover3d({},base::Action::MODIFIER_NONE);
         actions::TouchAction press; press.Touch=actions::TouchAction::TOUCH_MOUSE; press.Index=1; press.Position={1050,40}; press.MouseButtonsDown=2u; press.State=actions::TouchAction::TOUCH_DOWN;
-        Access::ExpectUncoveredRackPoint(*scene,press.Position); ASSERT_TRUE(Access::GeometryAt(*scene,{1050,40,1051,41},base::DEPTH_STATION).empty());
+        Access::ExpectUncoveredRackPoint(*scene,press.Position); ASSERT_TRUE(Access::MarqueeAt(*scene,{1050,40,1051,41},base::DEPTH_STATION).empty());
         scene->OnAction(press); ASSERT_TRUE(Access::BackgroundOwned(*scene));
         actions::TouchMoveAction move; move.Touch=actions::TouchAction::TOUCH_MOUSE; move.MouseButtonsDown=2u; move.Position={400,800}; scene->OnAction(move); scene->AdvanceUiAnimations();
         ASSERT_TRUE(Access::ApplyMuteBoundary(*scene)); ASSERT_TRUE(station->RetainedMuted()); auto applied=Access::BorrowMute(*scene); ASSERT_TRUE(applied);

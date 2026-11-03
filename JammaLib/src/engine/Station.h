@@ -127,7 +127,6 @@ namespace engine
 		void FinishPresentationMove() noexcept;
 		bool IsPresentationMoving() const noexcept { return _stationModel && _stationModel->IsPresentationMoving(); }
 		// Presentation-only; caller holds Scene::_sceneMutex.
-		void CollectMuteMarqueeTargets(const graphics::MuteMarqueeProjection& projection, base::SelectDepth depth, std::vector<GroupTargetId>& targets);
 		graphics::CameraBounds CameraDeckBoundsInWorld() const;
 		float CameraTakeVisualScale() const noexcept;
 		virtual	utils::Position2d Position() const override;

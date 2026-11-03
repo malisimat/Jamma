@@ -291,6 +291,8 @@ namespace gui
 		std::array<std::shared_ptr<GuiPanel>, 4u> _muteMarqueeOutline;
 		std::vector<const base::GuiElement*> _MuteMarqueeMembershipLocked(const std::vector<std::shared_ptr<engine::Station>>& stations) const;
 		void _CancelMuteMarqueeLocked(const std::vector<std::shared_ptr<engine::Station>>& stations);
+        std::vector<engine::GroupTargetId> _MuteMarqueeTargetsLocked(const std::vector<std::shared_ptr<engine::Station>>& stations,
+            utils::Rect2d rectangle, base::SelectDepth depth) const;
 		void _UpdateMuteMarqueeLocked(const std::vector<std::shared_ptr<engine::Station>>& stations);
 		std::optional<actions::ActionResult> _RouteMuteMarqueeTouch(actions::TouchAction action, StationAccess access, const InputPresentation& presentation);
 		engine::PerformanceGroupController* _muteController = nullptr; // Scene lifetime; only borrowed under its mutex.

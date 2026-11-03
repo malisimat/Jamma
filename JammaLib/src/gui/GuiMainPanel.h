@@ -63,7 +63,6 @@ namespace gui
 		float TransitionValue() const { return _transition; }
 		float PresentedOpacity() const;
 		utils::Rect2d PresentedFrameBounds() const;
-        void AppendMuteMarqueeOccluders(std::vector<utils::Rect2d>& rectangles) const;
 		GuiTopPanelLayout TopPanelLayout() const;
 		void Draw(base::DrawContext& context) override;
 		void InitResources(resources::ResourceLib& resources, bool force) override;

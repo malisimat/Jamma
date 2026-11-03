@@ -2,7 +2,6 @@
 #include "engine/PerformanceGroupService.h"
 #include "engine/Station.h"
 #include "engine/PerformanceGroupController.h"
-#include "graphics/MuteMarqueeProjection.h"
 
 class PerformanceGroupServiceTest : public testing::Test
 {
@@ -735,24 +734,6 @@ TEST_F(PerformanceGroupServiceTest, TopologyRestoreUsesSurvivingIdentityAndDoesN
     auto added = station->AddTake();
     controller.RepublishForTopology({station}, publish); ASSERT_TRUE(pending); pending->ApplyAudio();
     EXPECT_FALSE(old->IsMuted()); EXPECT_FALSE(added->IsMuted()); EXPECT_FALSE(controller.MuteMarqueeActive());
-}
-
-TEST(MuteMarqueeProjectionTest, ClipsActualTrianglesAndPreservesVisiblePartialAndInclusiveBoundary)
-{
-    const utils::Size2d size{100u,100u};
-    const std::array visible{utils::Rect2d{0,0,100,100}};
-    const auto hit = [&](utils::Rect2d rectangle, glm::vec3 a, glm::vec3 b, glm::vec3 c) {
-        return graphics::MuteMarqueeProjection(glm::mat4(1.0f),size,rectangle,visible).Intersects(a,b,c);
-    };
-    EXPECT_TRUE(hit({50,50,60,60},{0,0,0},{1,0,0},{0,1,0}));
-    EXPECT_FALSE(hit({90,90,100,100},{0,0,0},{1,0,0},{0,1,0})); // Empty bounding corner.
-    EXPECT_TRUE(hit({75,50,75,50},{0,0,0},{1,0,0},{0,1,0})); // Inclusive edge.
-    EXPECT_FALSE(hit({0,0,100,100},{0,0,2},{1,0,2},{0,1,2})); // Beyond far plane.
-    EXPECT_TRUE(hit({60,60,80,80},{0,0,-2},{1,0,0},{0,1,0})); // Crosses near plane.
-    const auto regions = graphics::MuteMarqueeProjection::VisibleRegions(size,std::array{utils::Rect2d{50,0,100,100}});
-    const graphics::MuteMarqueeProjection projection(glm::mat4(1),size,{0,0,100,100},regions);
-    EXPECT_FALSE(projection.Intersects({0.2f,0,0},{0.8f,0,0},{0.2f,0.8f,0}));
-    EXPECT_TRUE(projection.Intersects({-0.2f,0,0},{0.8f,0,0},{-0.2f,0.8f,0}));
 }
 
 TEST_F(PerformanceGroupServiceTest, RemoteManualIntentSurvivesLocalGlobalPublicationAndIsNotStored)

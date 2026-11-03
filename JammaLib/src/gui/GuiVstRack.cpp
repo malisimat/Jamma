@@ -343,19 +343,6 @@ void GuiVstRack::_RebuildRows()
 	_resourcesNeedInitialising.store(true, std::memory_order_release);
 }
 
-void GuiVstRack::AppendMuteMarqueeOccluders(std::vector<utils::Rect2d>& bounds) const
-{
-    if (!IsVisible()) return;
-    const auto append = [&](const std::shared_ptr<base::GuiElement>& panel)
-    {
-        if (!panel || !panel->IsVisible()) return;
-        const auto pos = panel->GlobalPosition(); const auto size = panel->GetSize();
-        bounds.push_back({pos.X,pos.Y,pos.X + static_cast<int>(size.Width),pos.Y + static_cast<int>(size.Height)});
-    };
-    append(_channels); append(_scroll); append(_collapse); append(_append); append(_recover);
-    append(_clearRoutes); append(_diagnostic); append(_previous); append(_next);
-}
-
 void GuiVstRack::Layout(unsigned int width, int faderBottom,
 	Position2d expanderPosition, Size2d expanderSize)
 {

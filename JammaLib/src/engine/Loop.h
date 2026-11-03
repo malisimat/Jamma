@@ -1,5 +1,4 @@
 #pragma once
-#include "../graphics/MuteMarqueeProjection.h"
 #include "../vst/VstRackSlot.h"
 #include "../audio/InputHistory.h"
 
@@ -270,7 +269,6 @@ namespace engine
 		void RefreshVisualModel();
 		std::shared_ptr<LoopModel> Model() const noexcept { return _model; }
 		// Presentation-only, called with the scene/layout read ownership on the window thread.
-		bool IntersectsMuteMarquee(const graphics::MuteMarqueeProjection& projection);
 		graphics::CameraBounds CameraBoundsInParent(float parentVisualScale = 1.0f) const;
 		float UnfittedVisualHalfHeight(float parentVisualScale) const;
 		void SetSpectralMorph(float morph) noexcept { _spectralMorph = std::clamp(morph, 0.0f, 1.0f); }

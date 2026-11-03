@@ -1,5 +1,4 @@
 #include "Workspace.h"
-#include "../graphics/MuteMarqueeProjection.h"
 #include <tuple>
 #include "../utils/Timer.h"
 #include <iostream>
@@ -624,6 +623,75 @@ void Workspace::_CancelMuteMarqueeLocked(const std::vector<std::shared_ptr<Stati
         && !_muteController->CancelMuteMarquee(stations,_publishMute);
 }
 
+std::vector<GroupTargetId> Workspace::_MuteMarqueeTargetsLocked(const std::vector<std::shared_ptr<Station>>& stations,
+    utils::Rect2d rectangle, base::SelectDepth depth) const
+{
+    std::vector<GroupTargetId> hits;
+    if (!_size.Width || !_size.Height) return hits;
+    const auto view = _camera.ViewMatrix();
+    const glm::vec3 right{view[0][0],view[1][0],view[2][0]}, up{view[0][1],view[1][1],view[2][1]};
+    const auto project = [&](glm::vec3 point) -> std::optional<Position2d>
+    {
+        const auto clip = _viewProj * glm::vec4(point,1.0f);
+        if (!(clip.w > 0.000001f) || clip.z < -clip.w || clip.z > clip.w) return {};
+        const auto x = (clip.x / clip.w + 1.0f) * 0.5f * static_cast<float>(_size.Width);
+        const auto y = (clip.y / clip.w + 1.0f) * 0.5f * static_cast<float>(_size.Height);
+        if (!std::isfinite(x) || !std::isfinite(y)) return {};
+        return Position2d{static_cast<int>(std::clamp(x,-1000000.0f,1000000.0f)),
+            static_cast<int>(std::clamp(y,-1000000.0f,1000000.0f))};
+    };
+    struct Column { std::shared_ptr<Station> Owner; glm::vec3 Centre; Position2d Pixel; int HalfWidth; int HalfHeight; };
+    std::vector<Column> columns;
+    for (const auto& station : stations)
+    {
+        if (!station || !station->IsVisible() || station->MembershipRemoving()) continue;
+        const auto position = station->PresentationModelPosition();
+        const glm::vec3 centre{position.X,position.Y,position.Z};
+        const auto pixel = project(centre);
+        const auto edge = project(centre + right * (300.0f * std::abs(static_cast<float>(station->ModelScale()))));
+        const auto top = project(centre + up * std::abs(station->TopCapModelPosition().Y - position.Y));
+        if (!pixel || !edge || !top) continue;
+        columns.push_back({station,centre,*pixel,(std::max)(1,std::abs(edge->X-pixel->X)),(std::max)(1,std::abs(top->Y-pixel->Y))});
+    }
+    std::sort(columns.begin(),columns.end(),[](const auto& a,const auto& b) { return a.Pixel.X < b.Pixel.X; });
+    constexpr int gap = 4;
+    const auto intersects = [&](utils::Rect2d bounds)
+    {
+        bounds.Left = (std::max)(bounds.Left,0); bounds.Right = (std::min)(bounds.Right,static_cast<int>(_size.Width));
+        bounds.Bottom = (std::max)(bounds.Bottom,GuiStyle::StatusBarHeight); bounds.Top = (std::min)(bounds.Top,static_cast<int>(_size.Height));
+        return bounds.Left <= bounds.Right && bounds.Bottom <= bounds.Top &&
+            rectangle.Left <= bounds.Right && rectangle.Right >= bounds.Left && rectangle.Bottom <= bounds.Top && rectangle.Top >= bounds.Bottom;
+    };
+    for (std::size_t i = 0u; i < columns.size(); ++i)
+    {
+        const auto& column = columns[i];
+        const auto leftHalf = i ? (column.Pixel.X-columns[i-1u].Pixel.X)/2 : columns.size()>1u ? (columns[1u].Pixel.X-column.Pixel.X)/2 : column.HalfWidth;
+        const auto rightHalf = i+1u<columns.size() ? (columns[i+1u].Pixel.X-column.Pixel.X)/2 : i ? leftHalf : column.HalfWidth;
+        const auto left = column.Pixel.X-(std::max)(1,leftHalf-gap), rightEdge = column.Pixel.X+(std::max)(1,rightHalf-gap);
+        if (depth == base::DEPTH_STATION)
+        {
+            if (intersects({left,column.Pixel.Y-column.HalfHeight,rightEdge,column.Pixel.Y+column.HalfHeight}))
+                hits.push_back({GroupTargetKind::Station,column.Owner->Id(),{},{}});
+            continue;
+        }
+        const auto scale = static_cast<float>(column.Owner->ModelScale());
+        for (const auto& take : column.Owner->GetLoopTakes())
+        {
+            if (!take || !take->IsVisible() || take->IsCaptureCancelled()) continue;
+            const auto position = take->ModelPosition();
+            const auto centre = column.Centre + glm::vec3{position.X,position.Y,position.Z} * scale;
+            const auto pixel = project(centre);
+            const auto top = project(centre + up * (static_cast<float>(take->GetSize().Height) * std::abs(scale * static_cast<float>(take->ModelScale())) * 0.5f));
+            if (!pixel || !top) continue;
+            const auto halfHeight = (std::max)(1,std::abs(top->Y-pixel->Y));
+            // Loop depth deliberately shares the take band and whole-take mute fanout.
+            if (intersects({left,pixel->Y-halfHeight,rightEdge,pixel->Y+halfHeight}))
+                hits.push_back({GroupTargetKind::Take,column.Owner->Id(),take->Id(),{}});
+        }
+    }
+    return hits;
+}
+
 void Workspace::_UpdateMuteMarqueeLocked(const std::vector<std::shared_ptr<Station>>& stations)
 {
     if (!_muteMarqueeActive) return;
@@ -633,20 +701,7 @@ void Workspace::_UpdateMuteMarqueeLocked(const std::vector<std::shared_ptr<Stati
     { _CancelMuteMarqueeLocked(stations); return; }
     const auto rectangle = _selector->MuteMarqueeRectangle();
     if (!rectangle) return;
-    std::vector<utils::Rect2d> covered{{0,0,static_cast<int>(_size.Width),GuiStyle::StatusBarHeight}};
-    if (_mainPanel) _mainPanel->AppendMuteMarqueeOccluders(covered);
-    if (_selectionPanel) _selectionPanel->AppendMuteMarqueeOccluders(covered);
-    if (_hudPanel) { covered.push_back(_hudPanel->OccupiedTopStripBounds()); covered.push_back(_hudPanel->OccupiedRightRailBounds()); }
-    for (const auto& station : stations)
-    {
-        if (!station || !station->IsVisible()) continue;
-        station->GetGuiRack()->AppendMuteMarqueeOccluders(covered);
-        for (const auto& take : station->GetLoopTakes()) if (take && take->IsVisible()) take->GetGuiRack()->AppendMuteMarqueeOccluders(covered);
-    }
-    const auto visible = graphics::MuteMarqueeProjection::VisibleRegions(_size,covered);
-    const graphics::MuteMarqueeProjection projection(_viewProj,_size,*rectangle,visible);
-    std::vector<GroupTargetId> hits;
-    for (const auto& station : stations) if (station) station->CollectMuteMarqueeTargets(projection,_selector->CurrentSelectDepth(),hits);
+    auto hits = _MuteMarqueeTargetsLocked(stations,*rectangle,_selector->CurrentSelectDepth());
     const auto less = [](const auto& a, const auto& b) { return std::tie(a.Kind,a.StationId,a.TakeId,a.EntityId) < std::tie(b.Kind,b.StationId,b.TakeId,b.EntityId); };
     std::sort(hits.begin(),hits.end(),less); hits.erase(std::unique(hits.begin(),hits.end()),hits.end());
     if (hits != _muteMarqueeHits)

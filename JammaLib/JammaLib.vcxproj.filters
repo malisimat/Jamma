@@ -588,9 +588,6 @@
     <ClInclude Include="src\graphics\LoopModel.h">
       <Filter>src\graphics</Filter>
     </ClInclude>
-    <ClInclude Include="src\graphics\MuteMarqueeProjection.h">
-      <Filter>src\graphics</Filter>
-    </ClInclude>
     <ClInclude Include="src\audio\FallingValue.h">
       <Filter>src\audio</Filter>
     </ClInclude>

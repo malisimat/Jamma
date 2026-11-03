@@ -242,30 +242,6 @@ void Station::SetSize(utils::Size2d size)
 	_ArrangeChildren();
 }
 
-void Station::CollectMuteMarqueeTargets(const graphics::MuteMarqueeProjection& projection, base::SelectDepth depth, std::vector<GroupTargetId>& targets)
-{
-    if (!_isVisible || MembershipRemoving()) return;
-    const auto position = PresentationModelPosition(); const auto scale = static_cast<float>(ModelScale());
-    const auto model = projection.Transformed(glm::translate(glm::mat4(1.0f), glm::vec3{position.X,position.Y,position.Z}) * glm::scale(glm::mat4(1.0f), glm::vec3{scale}));
-    const auto parent = CameraTakeVisualScale();
-    for (const auto& take : _loopTakes) if (take) take->SetParentVisualScale(parent);
-    if (depth == base::DEPTH_STATION && _stationModel)
-    {
-        if (_stationModel->IntersectsMuteMarquee(model.Transformed(glm::translate(glm::mat4(1.0f), glm::vec3{0.0f,_StationModelYOffset,0.01f}))))
-        { targets.push_back({GroupTargetKind::Station,Id(),{},{}}); return; }
-    }
-    for (const auto& take : _loopTakes)
-    {
-        if (!take) continue;
-        if (depth == base::DEPTH_LOOP) take->CollectMuteMarqueeLeaves(model, Id(), targets);
-        else if (take->IntersectsMuteMarquee(model))
-        {
-            targets.push_back({depth == base::DEPTH_STATION ? GroupTargetKind::Station : GroupTargetKind::Take, Id(), depth == base::DEPTH_STATION ? std::string{} : take->Id(), {}});
-            if (depth == base::DEPTH_STATION) return;
-        }
-    }
-}
-
 graphics::CameraBounds Station::CameraDeckBoundsInWorld() const
 {
 	if (!_stationModel) return {};
