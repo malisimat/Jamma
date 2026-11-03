@@ -84,41 +84,59 @@ public:
 
 TEST(GuiRack, MidiSelectionButtonClicksPublishEmptyAndCompleteChannelSets)
 {
-	for (const bool stationRouting : {false, true})
+	auto params = MakeRackParams();
+	params.EnableVstRack = true;
+	params.EnableVstRackMidiRouting = true;
+	std::vector<int> selected{2, 7};
+	params.AllowedMidiChannels = selected;
+	params.OnAllowedMidiChannelsChanged = [&](const auto& channels) { selected = channels; };
+	auto rack = std::make_shared<MidiSelectionTestRack>(params);
+	rack->Init();
+	rack->SetRackState(GuiRackParams::RACK_CHANNELS, true);
+	rack->VstRack()->SetChannelsCollapsed(false);
+	const auto click = [&](unsigned int index)
 	{
-		auto params = MakeRackParams();
-		params.EnableVstRack = stationRouting;
-		params.EnableVstRackMidiRouting = stationRouting;
-		std::vector<int> selected{2, 7};
-		params.AllowedMidiChannels = selected;
-		params.OnAllowedMidiChannelsChanged = [&](const auto& channels) { selected = channels; };
-		auto rack = std::make_shared<MidiSelectionTestRack>(params);
-		rack->Init();
-		rack->SetRackState(GuiRackParams::RACK_CHANNELS, true);
-		if (stationRouting) rack->VstRack()->SetChannelsCollapsed(false);
-		const auto click = [&](unsigned int index)
-		{
-			const auto button = rack->SelectionButton(index);
-			ASSERT_NE(nullptr, button);
-			actions::TouchAction down;
-			down.Index = 0; down.Touch = actions::TouchAction::TOUCH_MOUSE;
-			down.State = actions::TouchAction::TOUCH_DOWN;
-			down.Position = button->GlobalPosition() - rack->GlobalPosition() + utils::Position2d{10, 10};
-			EXPECT_TRUE(rack->OnAction(down).IsEaten);
-			auto up = down; up.State = actions::TouchAction::TOUCH_UP;
-			rack->OnAction(up);
-		};
-		ASSERT_NE(nullptr, rack->SelectionButton(0));
-		ASSERT_NE(nullptr, rack->SelectionButton(1));
-		EXPECT_EQ("None", rack->SelectionButton(0)->Text());
-		EXPECT_EQ("All", rack->SelectionButton(1)->Text());
-		click(0);
-		EXPECT_TRUE(selected.empty());
-		click(1);
-		EXPECT_EQ((std::vector<int>{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16}), selected);
-	}
+		const auto button = rack->SelectionButton(index);
+		ASSERT_NE(nullptr, button);
+		actions::TouchAction down;
+		down.Index = 0; down.Touch = actions::TouchAction::TOUCH_MOUSE;
+		down.State = actions::TouchAction::TOUCH_DOWN;
+		down.Position = button->GlobalPosition() - rack->GlobalPosition() + utils::Position2d{10, 10};
+		EXPECT_TRUE(rack->OnAction(down).IsEaten);
+		auto up = down; up.State = actions::TouchAction::TOUCH_UP;
+		rack->OnAction(up);
+	};
+	ASSERT_NE(nullptr, rack->SelectionButton(0));
+	ASSERT_NE(nullptr, rack->SelectionButton(1));
+	EXPECT_EQ("None", rack->SelectionButton(0)->Text());
+	EXPECT_EQ("All", rack->SelectionButton(1)->Text());
+	click(0);
+	EXPECT_TRUE(selected.empty());
+	click(1);
+	EXPECT_EQ((std::vector<int>{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16}), selected);
 }
 
+TEST(GuiRack, ChildRacksHaveNoUnconnectedMidiChannelControls)
+{
+	auto params = MakeRackParams();
+	params.EnableVstRack = true;
+	params.EnableVstControl = true;
+	auto rack = std::make_shared<MidiSelectionTestRack>(params);
+	rack->Init();
+	for (const auto state : {GuiRackParams::RACK_MASTER, GuiRackParams::RACK_CHANNELS, GuiRackParams::RACK_ROUTER})
+	{
+		rack->SetRackState(state, true);
+		EXPECT_EQ(nullptr, rack->SelectionButton(0));
+		EXPECT_EQ(nullptr, rack->SelectionButton(1));
+		EXPECT_EQ(nullptr, MidiSelectionTestRack::FindButton(rack, "1"));
+		EXPECT_FALSE(rack->VstRack()->ChannelsExpander()->IsVisible());
+		std::vector<gui::CableInteraction::Endpoint> endpoints;
+		std::vector<gui::CableInteraction::Cable> cables;
+		rack->VstRack()->BuildInteractionGeometry(endpoints, cables);
+		EXPECT_TRUE(endpoints.empty());
+		EXPECT_TRUE(cables.empty());
+	}
+}
 
 TEST(GuiRack, RestoredSlotsReplaceMissingCableRowsAndRetainFailedSlots)
 {

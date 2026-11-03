@@ -62,6 +62,7 @@ namespace gui
 		bool EnableVstControl = false;
 		bool EnableStationLabel = false;
 		bool EnableVstRack = false;
+		// MIDI input filtering and cables are station-owned; child racks have audio effects only.
 		bool EnableVstRackMidiRouting = false;
 		std::function<void(base::Action::Modifiers)> OnVstControl;
 	};
@@ -134,9 +135,6 @@ namespace gui
 		static constexpr unsigned int _MinimumScaleLayoutHeight = 55u;
 		static constexpr unsigned int _DragHeight = 28u;
 		static constexpr unsigned int _DragOverhang = 2u;
-		static const utils::Size2d _MidiChannelToggleSize;
-		static const utils::Size2d _MidiChannelToggleGap;
-		static const unsigned int _MidiChannelPanelPadding;
 
 		virtual void _InitReceivers() override;
 
