@@ -5,28 +5,27 @@
 
 using namespace engine;
 
-void LocalTiming::Advance(Quantiser& quantisation, audio::AudioHost& audio,
-	const std::vector<std::shared_ptr<Station>>& callerLockedStations)
+LocalTiming::Result LocalTiming::Advance(Quantiser& quantisation, audio::AudioHost& audio,
+	const std::vector<std::shared_ptr<Station>>& callerLockedStations,std::chrono::steady_clock::time_point now)
 {
+    quantisation.ReconcileMasterMembership(callerLockedStations);
 	if (quantisation.LocalMasterTimingPending())
 	{
-		const auto* target = quantisation.PendingLocalMasterTake();
-		bool present = false;
-		for (const auto& station : callerLockedStations)
-			if (station && !station->IsRemote())
-				for (const auto& take : station->GetLoopTakes())
-					if (take.get() == target && !station->MembershipRemoving()) present = true;
-		if (!present && audio.LastActivatedLocalMasterTimingVersion() <
-			quantisation.PendingLocalMasterTimingVersion())
-		{
-			const auto version = quantisation.PendingLocalMasterTimingVersion();
-			audio.CancelLocalMasterTiming(version);
-			for (const auto& station : callerLockedStations)
-				if (station && !station->IsRemote())
-					for (const auto& take : station->GetLoopTakes())
-						if (take) take->CancelLocalMasterQuantisationOnOwner();
-			quantisation.CancelLocalMasterTiming(version);
-		}
+        const auto version=quantisation.PendingLocalMasterTimingVersion();
+        const bool valid=quantisation.PendingMasterTargetValid(callerLockedStations);
+        const bool expired=now-quantisation.PendingMasterStartedAt()>=PreparationDeadline;
+        if ((!valid || expired) && audio.LastActivatedLocalMasterTimingVersion()<version)
+        {
+            // Lost cancellation means audio already claimed irreversible activation.
+            // Poll its terminal receipt on a later pump; never restore over it.
+            if (!audio.CancelLocalMasterTiming(version)) return {};
+            for (const auto& station:callerLockedStations)
+                if(station && !station->IsRemote()) for(const auto& take:station->GetLoopTakes())
+                    if(take) take->CancelLocalMasterQuantisationOnOwner();
+            quantisation.CancelLocalMasterTiming(version);
+            quantisation.SetMasterFailure(expired ? "Master change timed out; previous timing restored" : "Master target unavailable; previous timing restored");
+            return {Outcome::Cancelled,version};
+        }
 	}
 	if (const auto receipt = audio.LastPreparedLocalMasterTiming();
 		receipt && quantisation.LocalMasterTimingPending() &&
@@ -73,6 +72,10 @@ void LocalTiming::Advance(Quantiser& quantisation, audio::AudioHost& audio,
 				for (const auto& take : station->GetLoopTakes())
 					if (take)
 						take->CompleteLocalMasterQuantisationOnOwner();
-		quantisation.CompleteLocalMasterTiming();
+		const auto version=quantisation.PendingLocalMasterTimingVersion();
+        quantisation.CompleteLocalMasterTiming();
+        quantisation.ReconcileMasterMembership(callerLockedStations);
+        return {Outcome::Activated,version};
 	}
+    return {};
 }

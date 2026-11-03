@@ -1087,6 +1087,7 @@ TEST(TriggerPredelayStation, FirstAudioAndMixedMasterReserveCompensatedOrigin)
         SCOPED_TRACE(delay);
         SCOPED_TRACE(withMidi);
         auto station = TriggerPredelayStationTest::MakeStation();
+        station->SetSampleRate(48000.0f);
         auto clock = std::make_shared<Timer>();
         station->SetClock(clock);
         // Keep the first recorded master behind unrelated earlier material.
@@ -1176,6 +1177,18 @@ TEST(TriggerPredelayStation, FirstAudioAndMixedMasterReserveCompensatedOrigin)
             const auto master = take->GetLoops().front();
             ASSERT_FALSE(master->Id().empty());
             ASSERT_EQ(master->Id(),quantiser.MasterAudioLoopId());
+            ASSERT_FALSE(quantiser.CurrentMasterDescription().empty());
+            unsigned int publications=0u;
+            quantiser.SetLocalMasterTimingPublisher([&](const auto&,auto,const auto*,const auto*){return ++publications;});
+            const auto acceptedPhase=clock->AbsoluteSamplePos();
+            EXPECT_EQ(engine::Quantiser::MasterOutcome::Unchanged,quantiser.SetMasterFromTarget(take,base::DEPTH_LOOPTAKE,stations,48000u,io::UserConfig{},true).Outcome);
+            EXPECT_EQ(0u,publications); EXPECT_EQ(acceptedPhase,clock->AbsoluteSamplePos());
+            engine::Quantiser restored; restored.SetClock(clock); restored.SetMidiGrain(clock->QuantiseSamps(),"restored master",stations);
+            restored.RestoreMasterAudioLoopId(master->Id(),stations);
+            restored.SetLocalMasterTimingPublisher([&](const auto&,auto,const auto*,const auto*){return ++publications;});
+            EXPECT_EQ(engine::Quantiser::MasterOutcome::Unchanged,restored.SetMasterFromTarget(master,base::DEPTH_LOOP,stations,48000u,io::UserConfig{},true).Outcome);
+            EXPECT_EQ(0u,publications); EXPECT_EQ(acceptedPhase,clock->AbsoluteSamplePos());
+
             master->SetPlaybackOffsetSamps(-1500);
 			auto takeGrid = take->MidiQuantisation();
 			takeGrid.PhaseOffsetSamps = 500;

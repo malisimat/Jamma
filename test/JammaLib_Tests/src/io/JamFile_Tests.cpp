@@ -1025,3 +1025,23 @@ TEST(JamFile, StationRetainedMuteDefaultsFalseAndRoundTripsEmptyPopulatedAndExpl
 	auto json=Json::FromStream(std::stringstream("{\"name\":\"bad\",\"stationtype\":0,\"muted\":\"true\",\"takes\":[]}")); ASSERT_TRUE(json);
 	EXPECT_FALSE(JamFile::Station::FromJson(std::get<Json::JsonPart>(*json)));
 }
+
+TEST(JamFile, ChosenMasterPreservesTakeAndExplicitLeafProvenanceAndInvalidPresence)
+{
+    for(const bool leaf:{false,true})
+    {
+        JamFile jam; jam.Name="chosen master"; JamFile::Station station; station.Name="station"; jam.Stations.push_back(station);
+        jam.ChosenMaster=engine::ChosenMasterReference{"station","take",leaf ? std::optional<std::string>{"audio"} : std::nullopt};
+        std::stringstream output; ASSERT_TRUE(JamFile::ToStream(jam,output));
+        const auto parsed=JamFile::FromStream(std::move(output)); ASSERT_TRUE(parsed); ASSERT_TRUE(parsed->ChosenMaster);
+        EXPECT_EQ("station",parsed->ChosenMaster->StationId); EXPECT_EQ("take",parsed->ChosenMaster->TakeId);
+        EXPECT_EQ(leaf,parsed->ChosenMaster->AudioLoopId.has_value());
+        if(leaf) EXPECT_EQ("audio",*parsed->ChosenMaster->AudioLoopId);
+    }
+    for(const auto invalid:{"true","{}","{\"stationId\":\"s\",\"takeId\":\"t\",\"audioLoopId\":false}"})
+    {
+        const auto parsed=JamFile::FromStream(std::stringstream(std::string("{\"name\":\"invalid master\",\"stations\":[{\"name\":\"station\",\"takes\":[]}],\"transport\":{\"initialized\":false,\"masterAudioLoopId\":\"legacy\",\"chosenMaster\":")+invalid+"}}"));
+        ASSERT_TRUE(parsed); ASSERT_TRUE(parsed->ChosenMaster); EXPECT_EQ("legacy",parsed->MasterAudioLoopId);
+        if(parsed->ChosenMaster->StationId=="s") { ASSERT_TRUE(parsed->ChosenMaster->AudioLoopId); EXPECT_TRUE(parsed->ChosenMaster->AudioLoopId->empty()); }
+    }
+}

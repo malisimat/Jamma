@@ -37,6 +37,9 @@ namespace ninjam
 
 		NinjamTimingUpdate ResetTempoSyncOnDisconnect();
 		NinjamTimingUpdate BeginLocalTiming();
+        void BindLocalTimingVersion(std::uint64_t version);
+        NinjamTimingUpdate RollbackLocalTiming(std::uint64_t version,const std::optional<engine::QuantisationTiming>& localTiming,
+            bool hasLocalContent,utils::Timer& clock,std::chrono::steady_clock::time_point now=std::chrono::steady_clock::now());
 		NinjamTimingUpdate PushActivatedLocalTempo(const engine::QuantisationTiming& timing);
 		NinjamTimingUpdate RequestSyncToServer();
 		NinjamLocalTempoState LocalTempoState() const noexcept;

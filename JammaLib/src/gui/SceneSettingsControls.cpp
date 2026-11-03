@@ -204,6 +204,9 @@ SceneSettingsControls::SceneSettingsControls(std::uint8_t channel, double offset
 	_loadButton = _SessionButton("Load");
 	_saveAsJamButton = _SessionButton("Save As...");
 	_reclockButton = _SessionButton("Reclock");
+    _useMasterButton=_SessionButton("Use as master");
+    _masterTarget=_StatusLabel("Reclock from this loop - Shift-click",44u);
+    _masterStatus=_StatusLabel("No chosen master",44u);
 	_syncToServerButton = _SessionButton("Sync to server");
 	_ninjamStatus = _StatusLabel("NINJAM disconnected", 44u);
 	_resetAllButton = _SessionButton("Reset All");
@@ -219,6 +222,9 @@ std::vector<GuiSettingEntry> SceneSettingsControls::SettingsEntries() const
 		{ SettingsPage::Timing, "Subdivision: local grain / remote beat", _midiSubdivisionRadio, MidiSubdivisionControlIndex },
 		{ SettingsPage::Timing, "", _tapButton, TapTempoControlIndex },
 		{ SettingsPage::Timing, "", _reclockButton, ReclockControlIndex },
+        {SettingsPage::Timing,"",_useMasterButton,UseMasterControlIndex},
+        {SettingsPage::Timing,"",_masterTarget,0u},
+        {SettingsPage::Timing,"",_masterStatus,0u},
 		{ SettingsPage::Timing, "", _syncToServerButton, SyncToServerControlIndex },
 		{ SettingsPage::Timing, "", _ninjamStatus, 0u },
 		{ SettingsPage::Session, "", _resetAllButton, ResetAllControlIndex },
@@ -244,6 +250,7 @@ std::optional<SceneSettingsControls::Change> SceneSettingsControls::Decode(const
 	if (action.ElementType == GuiAction::ACTIONELEMENT_BUTTON && action.Index == TapTempoControlIndex)
 		return TapTempo{};
 	if (action.ElementType == GuiAction::ACTIONELEMENT_BUTTON && action.Index == ReclockControlIndex) return Reclock{};
+    if (action.ElementType==GuiAction::ACTIONELEMENT_BUTTON && action.Index==UseMasterControlIndex) return UseMaster{};
 	if (action.ElementType == GuiAction::ACTIONELEMENT_BUTTON && action.Index == SyncToServerControlIndex) return SyncToServer{};
 	if (action.ElementType == GuiAction::ACTIONELEMENT_BUTTON && action.Index == ResetAllControlIndex) return ResetAll{};
 	if (auto value = std::get_if<GuiAction::GuiInt>(&action.Data))
@@ -289,6 +296,12 @@ std::string SceneSettingsControls::FormatOffset(double acceptedOffset)
 	char text[32];
 	std::snprintf(text, sizeof(text), "%+.3f loops", acceptedOffset);
 	return text;
+}
+
+void SceneSettingsControls::RefreshMasterPresentation(const std::string& target,const std::string& status,const std::string& current)
+{
+    _masterTarget->SetString(target.empty() ? "Choose a take or loop - Shift-click" : "Target: "+target+" - Shift-click");
+    _masterStatus->SetString((current.empty() ? "No chosen master" : "Current master: "+current)+(status.empty() ? "" : "\n"+status));
 }
 
 void SceneSettingsControls::RefreshOffsetPresentation(double acceptedOffset)

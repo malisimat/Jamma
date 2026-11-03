@@ -1511,3 +1511,115 @@ TEST(NinjamTimingCoordinator, UndeliverableConnectedPushExpiresFromFirstAttemptW
 	EXPECT_FALSE(coordinator.Observe(timing, master, false, io::UserConfig{}, clock,
 		now + options.TempoRequestDeadline).DesiredTransport);
 }
+
+TEST(NinjamTimingCoordinator, FailedMasterAssignmentRestoresFourPriorIntentsWithoutRewindingObservations)
+{
+    using State=ninjam::NinjamLocalTempoState;
+    for(const auto prior:{State::Following,State::StayLocal,State::AwaitingFreshSync,State::AwaitingServer})
+    {
+        SCOPED_TRACE(static_cast<int>(prior));
+        Timer clock; NinjamTimingCoordinator coordinator; Connect(coordinator,true,false);
+        const auto now=std::chrono::steady_clock::time_point{std::chrono::seconds(1)};
+        auto observed=MakeTimingTempo(384000u,100u,120.0f,16u); observed.DeviceAudioSampleAtObservation=1000u;
+        coordinator.Observe(observed,std::nullopt,false,io::UserConfig{},clock,now);
+        engine::QuantisationTiming request{24000u,192000ul,8u,120.0f,8u};
+        if(prior==State::StayLocal)
+        {
+            coordinator.BeginLocalTiming(); coordinator.PushActivatedLocalTempo(request,now-std::chrono::seconds(20));
+            coordinator.NotifyTempoRequestSent(true,now-std::chrono::seconds(20));
+            coordinator.Tick(request,true,clock,now);
+        }
+        else if(prior==State::AwaitingFreshSync) coordinator.RequestSyncToServer();
+        else if(prior==State::AwaitingServer)
+        {
+            coordinator.BeginLocalTiming(); ASSERT_TRUE(coordinator.PushActivatedLocalTempo(request,now).TempoRequest);
+            coordinator.NotifyTempoRequestSent(true,now);
+        }
+        ASSERT_EQ(prior,coordinator.LocalTempoState());
+        const auto suspended=coordinator.BeginLocalTiming(); ASSERT_TRUE(suspended.DesiredTransport); coordinator.BindLocalTimingVersion(77u);
+        observed.DeviceAudioSampleAtObservation=3000u;
+        EXPECT_FALSE(coordinator.Observe(observed,request,true,io::UserConfig{},clock,now+std::chrono::seconds(1)).TempoRequest);
+        const auto rollback=coordinator.RollbackLocalTiming(77u,request,true,clock,now+std::chrono::seconds(1));
+        ASSERT_TRUE(rollback.DesiredTransport); EXPECT_GT(rollback.DesiredTransport->FollowRevision,suspended.DesiredTransport->FollowRevision);
+        EXPECT_EQ(prior,coordinator.LocalTempoState()); EXPECT_FALSE(rollback.TempoRequest);
+        EXPECT_FALSE(coordinator.Observe(observed,request,true,io::UserConfig{},clock,now+std::chrono::seconds(1)).DesiredTransport);
+        observed.DeviceAudioSampleAtObservation=4000u;
+        const auto fresh=coordinator.Observe(observed,request,true,io::UserConfig{},clock,now+std::chrono::seconds(1));
+        if(prior==State::StayLocal) EXPECT_FALSE(fresh.DesiredTransport);
+        if(prior==State::Following || prior==State::AwaitingFreshSync) EXPECT_TRUE(fresh.DesiredTransport);
+        EXPECT_FALSE(coordinator.RollbackLocalTiming(77u,request,true,clock,now).DesiredTransport); // Capsule consumed once.
+    }
+}
+
+TEST(NinjamTimingCoordinator, FailedMasterAssignmentPreservesOriginalConfirmedRequestDeadlineAndDoesNotResend)
+{
+    Timer clock; NinjamTimingCoordinator coordinator; Connect(coordinator,false,false);
+    const auto start=std::chrono::steady_clock::time_point{std::chrono::seconds(1)};
+    auto observed=MakeTimingTempo(384000u,100u,120.0f,16u); observed.DeviceAudioSampleAtObservation=1000u;
+    coordinator.Observe(observed,std::nullopt,false,io::UserConfig{},clock,start);
+    engine::QuantisationTiming request{24000u,192000ul,8u,120.0f,8u};
+    coordinator.BeginLocalTiming(); ASSERT_TRUE(coordinator.PushActivatedLocalTempo(request,start).TempoRequest);
+    coordinator.NotifyTempoRequestSent(true,start);
+    coordinator.BeginLocalTiming(); coordinator.BindLocalTimingVersion(90u);
+    const auto rollback=coordinator.RollbackLocalTiming(90u,request,true,clock,start+std::chrono::seconds(16));
+    EXPECT_FALSE(rollback.TempoRequest); EXPECT_EQ(ninjam::TempoRequestState::Expired,coordinator.RequestState());
+    EXPECT_EQ(ninjam::NinjamLocalTempoState::StayLocal,coordinator.LocalTempoState());
+    EXPECT_FALSE(coordinator.Tick(request,true,clock,start+std::chrono::seconds(17)).TempoRequest);
+}
+
+TEST(NinjamTimingCoordinator, NewSyncIntentOrSessionSupersedesFailedMasterRollback)
+{
+    for(const bool reconnect:{false,true})
+    {
+        Timer clock; NinjamTimingCoordinator coordinator; Connect(coordinator,false,false);
+        auto observed=MakeTimingTempo(384000u,100u,120.0f,16u); observed.DeviceAudioSampleAtObservation=1000u;
+        coordinator.Observe(observed,std::nullopt,false,io::UserConfig{},clock);
+        coordinator.BeginLocalTiming(); coordinator.BindLocalTimingVersion(91u);
+        if(reconnect) { coordinator.Disconnect(); Connect(coordinator,false,false); }
+        else coordinator.RequestSyncToServer();
+        const auto before=coordinator.LocalTempoState();
+        EXPECT_FALSE(coordinator.RollbackLocalTiming(91u,std::nullopt,true,clock).DesiredTransport);
+        EXPECT_EQ(before,coordinator.LocalTempoState());
+    }
+}
+
+TEST(NinjamTimingCoordinator, FailedMasterDoesNotOverrideExplicitlyIgnoredFollowingProposal)
+{
+    Timer clock; NinjamTimingCoordinator coordinator; Connect(coordinator,true,false);
+    const auto now=std::chrono::steady_clock::time_point{std::chrono::seconds(1)};
+    auto observed=MakeTimingTempo(384000u,100u,120.0f,16u); observed.DeviceAudioSampleAtObservation=1000u;
+    coordinator.Observe(observed,std::nullopt,false,io::UserConfig{},clock,now);
+    observed.IntervalLengthSamps=192000u; observed.Bpi=8u; observed.DeviceAudioSampleAtObservation=2000u;
+    ASSERT_TRUE(coordinator.Observe(observed,std::nullopt,true,io::UserConfig{},clock,now).PromptForTempoChange);
+    coordinator.ResolveTempoChange(false,std::nullopt,clock);
+    ASSERT_EQ(ninjam::NinjamLocalTempoState::Following,coordinator.LocalTempoState());
+    coordinator.BeginLocalTiming(); coordinator.BindLocalTimingVersion(99u);
+    ASSERT_TRUE(coordinator.RollbackLocalTiming(99u,std::nullopt,true,clock,now).DesiredTransport);
+    observed.DeviceAudioSampleAtObservation=3000u;
+    const auto ignored=coordinator.Observe(observed,std::nullopt,true,io::UserConfig{},clock,now);
+    EXPECT_FALSE(ignored.DesiredTransport); EXPECT_FALSE(ignored.PromptForTempoChange);
+    observed.IntervalLengthSamps=96000u; observed.Bpi=4u; observed.DeviceAudioSampleAtObservation=4000u;
+    EXPECT_TRUE(coordinator.Observe(observed,std::nullopt,true,io::UserConfig{},clock,now).PromptForTempoChange);
+    coordinator.RequestSyncToServer(); observed.DeviceAudioSampleAtObservation=5000u;
+    EXPECT_TRUE(coordinator.Observe(observed,std::nullopt,true,io::UserConfig{},clock,now).DesiredTransport);
+}
+
+TEST(NinjamTimingCoordinator, SequentialFailedMasterChoicesPreserveUnresolvedFollowingAuthority)
+{
+    Timer clock; NinjamTimingCoordinator coordinator; Connect(coordinator,true,false);
+    const auto now=std::chrono::steady_clock::time_point{std::chrono::seconds(1)};
+    auto observed=MakeTimingTempo(384000u,100u,120.0f,16u); observed.DeviceAudioSampleAtObservation=1000u;
+    ASSERT_TRUE(coordinator.Observe(observed,std::nullopt,false,io::UserConfig{},clock,now).DesiredTransport);
+    coordinator.BeginLocalTiming(); coordinator.BindLocalTimingVersion(101u);
+    observed.IntervalLengthSamps=192000u; observed.Bpi=8u; observed.DeviceAudioSampleAtObservation=2000u;
+    EXPECT_FALSE(coordinator.Observe(observed,std::nullopt,true,io::UserConfig{},clock,now).PromptForTempoChange);
+    ASSERT_TRUE(coordinator.RollbackLocalTiming(101u,std::nullopt,true,clock,now).DesiredTransport);
+    // No fresh observation resolves the first restoration before a second choice.
+    coordinator.BeginLocalTiming(); coordinator.BindLocalTimingVersion(102u);
+    ASSERT_TRUE(coordinator.RollbackLocalTiming(102u,std::nullopt,true,clock,now).DesiredTransport);
+    observed.DeviceAudioSampleAtObservation=3000u;
+    const auto fresh=coordinator.Observe(observed,std::nullopt,true,io::UserConfig{},clock,now);
+    EXPECT_TRUE(fresh.PromptForTempoChange); ASSERT_TRUE(coordinator.PendingTempoChange());
+    EXPECT_EQ(8u,coordinator.PendingTempoChange()->Bpi);
+    EXPECT_EQ(ninjam::NinjamLocalFollowPolicy::NoSync,coordinator.FollowPolicy());
+}

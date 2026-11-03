@@ -61,10 +61,13 @@ Scene::Scene(SceneParams params,
 	_quantisation.SetLocalMasterTimingPublisher([this](const QuantisationTiming& timing,
 		Timer::QuantisationType type, const LoopTake* take, const Loop* loop)
 	{
-		// Suspend following before the callback can prepare the new local ruler.
+		if (!_audioEngine->CanPublishLocalMasterTiming()) return std::uint64_t{0u};
+        // Suspend following before the callback can prepare the new local ruler.
 		_ApplyNinjamTimingUpdate(_networkService->BeginLocalTiming());
-		return _audioEngine->PublishLocalMasterTiming(timing.SeedSamps,
+		const auto version=_audioEngine->PublishLocalMasterTiming(timing.SeedSamps,
 			timing.MasterLoopSamps, type, take, loop);
+        _networkService->BindLocalTimingVersion(version);
+        return version;
 	});
 	_quantisation.SetSeedUsesPowers(_userConfig.Loop.SeedUsesPowers);
 
@@ -337,7 +340,7 @@ std::optional<std::shared_ptr<Scene>> Scene::FromFile(SceneParams sceneParams,
 	}
 	scene->_quantisation.SetGlobalPhaseOffsetSamps(jamStruct.GlobalPhaseOffsetSamps, scene->_stations);
 	scene->_quantisation.SetDefaultMidiQuantisationFraction(jamStruct.DefaultMidiQuantFraction, scene->_stations, false);
-	scene->_quantisation.RestoreMasterAudioLoopId(jamStruct.MasterAudioLoopId, scene->_stations);
+	scene->_quantisation.RestoreChosenMasterReference(jamStruct.ChosenMaster,jamStruct.MasterAudioLoopId,scene->_stations,scene->_CurrentSampleRate());
 	if (scene->_workspace->Settings().Subdivision())
 		scene->_workspace->Settings().Subdivision()->SetCurrentValue(
 			midi::MidiQuantisation::FractionDisplayIndex(jamStruct.DefaultMidiQuantFraction), true);
@@ -434,7 +437,8 @@ bool Scene::AdvanceUiAnimations()
 		{ .CtrlHeld = _workspace->CtrlHeld(), .Quitting = _isSceneQuitting.load(std::memory_order_acquire),
 			.RigSaveInProgress = _operation.RigSaveInProgress(), .StationChangePending = _stationManagement.Busy(),
 			.RigEditsEnabled = _rigCoordinator.EditsEnabled(), .StationControlsAvailable = _StationManagementAvailableLocked(),
-			.RigRevision = accepted ? accepted->Revision : 0u, .GroupFeedback = _performanceGroups.Error() });
+			.RigRevision = accepted ? accepted->Revision : 0u, .GroupFeedback = _performanceGroups.Error(),
+            .MasterSampleRate=_CurrentSampleRate(), .MasterConfig=&_userConfig });
 }
 
 
@@ -547,6 +551,7 @@ ActionResult Scene::OnAction(GuiAction action)
 		_SetTransportOffsetLoopFrac(offset->Value, false);
 		_workspace->Settings().RefreshOffsetPresentation(_transportOffsetLoopFrac);
 	}
+	else if (std::holds_alternative<Settings::UseMaster>(*change)) _workspace->UseMaster({_sceneMutex,_stations},_WorkspaceInputPresentation());
 	else if (std::holds_alternative<Settings::Reclock>(*change)) _HandleReclockArm();
 	else if (std::holds_alternative<Settings::SyncToServer>(*change))
 	{
@@ -624,7 +629,8 @@ void Scene::OnJobTick(Time curTime)
 	{
 		// Keep the station clock synced when local content seeds it without NINJAM.
 		std::scoped_lock lock(_sceneMutex);
-		_localTiming.Advance(_quantisation, *_audioEngine, _stations);
+        const auto localResult=_localTiming.Advance(_quantisation,*_audioEngine,_stations);
+
 		if (!_networkService->HasConnectedTiming())
 			_quantisation.ResetReclockIfEmpty(_stations);
 		if (auto clock = _quantisation.Clock(); clock && !_quantisation.LocalMasterTimingPending() &&
@@ -632,11 +638,7 @@ void Scene::OnJobTick(Time curTime)
 			_SetMidiQuantisationGrain(clock->QuantiseSamps(), "clock geometry changed");
 		_quantisation.AdoptRecordedMaster(_stations);
 		const auto localTiming = _quantisation.CurrentTempoTiming(_CurrentSampleRate());
-		if (localTiming && _quantisation.HasActivatedLocalMaster(_stations))
-		{
-			_quantisation.CancelReclock();
-			_ApplyNinjamTimingUpdate(_networkService->PushActivatedLocalTempo(*localTiming));
-		}
+
 		bool hasLocalContent = false;
 		for (const auto& station : _stations)
 		{
@@ -645,6 +647,13 @@ void Scene::OnJobTick(Time curTime)
 			hasLocalContent = !station->GetLoopTakeSnapshot().empty();
 			if (hasLocalContent)
 				break;
+		}
+        if(localResult.State==LocalTiming::Outcome::Cancelled)
+            if(auto clock=_quantisation.Clock()) _ApplyNinjamTimingUpdate(_networkService->RollbackLocalTiming(localResult.Version,localTiming,hasLocalContent,*clock));
+		if (localResult.State!=LocalTiming::Outcome::Cancelled && localTiming && _quantisation.HasActivatedLocalMaster(_stations))
+		{
+			_quantisation.CancelReclock();
+			_ApplyNinjamTimingUpdate(_networkService->PushActivatedLocalTempo(*localTiming));
 		}
 		if (pumpResult.TimingStatus.Changed)
 		{
@@ -1782,6 +1791,12 @@ bool Scene::_SessionHasTakes() const
 bool Scene::_CaptureIsBusy() const
 {
 	std::scoped_lock lock(_sceneMutex);
+    return _CaptureIsBusyLocked();
+}
+
+bool Scene::_CaptureIsBusyLocked() const
+{
+    if(_quantisation.LocalMasterTimingPending()) return true;
 	if (_stationManagement.Busy() || _operation.RigSaveDialogOpen() || _operation.RigSaveInProgress()) return true;
 	const auto rig = AcceptedRigSnapshot();
 	if (rig) for (const auto& runtime : rig->Triggers)
@@ -1874,6 +1889,7 @@ void Scene::_ConfirmTakeDitch()
 		if (!station || !take || std::find(_stations.begin(), _stations.end(), station) == _stations.end()) return;
 		if (station->DitchTake(take))
 		{
+            _quantisation.DetachTakeMaster(take);
 			take->DeSelect();
 			_workspace->CollapseRacksLocked(_stations);
 			_workspace->InvalidateHover2d();
@@ -2090,6 +2106,7 @@ gui::Workspace::InputPresentation Scene::_WorkspaceInputPresentation() const
 		.Quitting = _isSceneQuitting.load(std::memory_order_acquire), .WriterHeld = _operation.HoldsWriter(),
 		.RigSaveDialogOpen = _operation.RigSaveDialogOpen(),
 		.QuantisationResetRequested = _quantisationInputResetRequested.load(std::memory_order_acquire),
+        .MasterChangeAllowedLocked = [this] { return _operation.Current()==SessionControl::None && !_operation.HoldsWriter() && !_CaptureIsBusyLocked() && _audioEngine->CanPublishLocalMasterTiming(); },
 		.Verbose = IsUiVerbose() };
 }
 

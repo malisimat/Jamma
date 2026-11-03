@@ -4,6 +4,7 @@
 // and fans policy-neutral operations to entities that retain their own cursors.
 
 #include <array>
+#include <limits>
 #include <memory>
 #include <vector>
 #include <mutex>
@@ -166,11 +167,11 @@ namespace audio
 			std::uint32_t NewPhaseSamps = 0u;
 			std::uint32_t NewMasterLengthSamps = 0u;
 		};
-		void CancelLocalMasterTiming(std::uint64_t version) noexcept
-			{ _localMasterCancelledVersion.store(version, std::memory_order_seq_cst); }
+		bool CancelLocalMasterTiming(std::uint64_t version) noexcept;
 		void CommitLocalMasterTiming(std::uint64_t version) noexcept
-			{ _localMasterCommitVersion.store(version, std::memory_order_seq_cst); }
-		std::uint64_t PublishLocalMasterTiming(unsigned int seedSamps,
+			{ if (_localMasterActivationGate.load(std::memory_order_seq_cst)==(version << 2u)) _localMasterCommitVersion.store(version, std::memory_order_seq_cst); }
+		bool CanPublishLocalMasterTiming() const noexcept { return _localMasterTimingMailbox.CanPublish(); }
+        std::uint64_t PublishLocalMasterTiming(unsigned int seedSamps,
 			std::uint32_t masterLengthSamps, utils::Timer::QuantisationType type,
 			const engine::LoopTake* targetTake, const engine::Loop* targetLoop) noexcept;
 		std::optional<LocalMasterTimingReceipt> LastPreparedLocalMasterTiming() const noexcept;
@@ -239,7 +240,8 @@ namespace audio
 		class LocalMasterTimingMailbox
 		{
 		public:
-			std::uint64_t Publish(const LocalMasterTimingRequest& request) noexcept;
+			bool CanPublish() const noexcept { return _sequence.load(std::memory_order_seq_cst)<=(std::numeric_limits<std::uint64_t>::max() >> 2u)-2u; }
+            std::uint64_t Publish(const LocalMasterTimingRequest& request) noexcept;
 			std::optional<LocalMasterTimingRequest> ConsumeLatest() noexcept;
 			void Acknowledge(std::uint64_t version) noexcept { _consumedSequence = version; }
 		private:
@@ -251,6 +253,7 @@ namespace audio
 			std::atomic<const engine::Loop*> _targetLoop{ nullptr };
 			std::uint64_t _consumedSequence = 0u; // callback owner
 		};
+        bool TryClaimLocalMasterActivation(std::uint64_t version) noexcept;
 		void ApplyLocalMasterTimingAtAudioBoundary(
 			const std::vector<std::shared_ptr<engine::Station>>& stations,
 			utils::Timer* timingClock) noexcept;
@@ -352,7 +355,10 @@ namespace audio
 		LocalMasterTimingRequest _preparedLocalMasterTiming{}; // Callback owner.
 		std::uint64_t _preparedLocalMasterSceneSample = 0u;
 		std::uint32_t _preparedLocalMasterPhase = 0u;
-		std::atomic<std::uint64_t> _localMasterCommitVersion{ 0u };
+		// Low bits: preparing=0, activation claimed=1, activated=2, cancelled=3.
+        static_assert(std::atomic<std::uint64_t>::is_always_lock_free);
+        std::atomic<std::uint64_t> _localMasterActivationGate{0u};
+        std::atomic<std::uint64_t> _localMasterCommitVersion{ 0u };
 		std::atomic<std::uint64_t> _localMasterCancelledVersion{ 0u };
 		std::atomic<std::uint64_t> _localMasterActivatedVersion{ 0u };
 		std::atomic<std::uint64_t> _localMasterPreparationRetryVersion{ 0u };

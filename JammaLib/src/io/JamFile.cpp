@@ -357,7 +357,25 @@ std::optional<JamFile> JamFile::FromStream(std::stringstream ss)
 		const auto masterId = transport.KeyValues.find("masterAudioLoopId");
 		if (masterId != transport.KeyValues.end() && masterId->second.index() == 4 && std::get<std::string>(masterId->second).size() <= 1024u)
 			jam.MasterAudioLoopId = std::get<std::string>(masterId->second);
-		const auto fractionIter = transport.KeyValues.find("defaultMidiQuantFraction");
+        const auto chosen = transport.KeyValues.find("chosenMaster");
+        if(chosen!=transport.KeyValues.end())
+        {
+            jam.ChosenMaster.emplace(); // Present but invalid stays distinct from legacy absence.
+            if(chosen->second.index()==6)
+            {
+                const auto& fields=std::get<Json::JsonPart>(chosen->second).KeyValues;
+                const auto identity=[&](const char* key)
+                {
+                    const auto value=fields.find(key);
+                    return value!=fields.end() && value->second.index()==4 && std::get<std::string>(value->second).size()<=1024u
+                        ? std::get<std::string>(value->second) : std::string{};
+                };
+                jam.ChosenMaster->StationId=identity("stationId");
+                jam.ChosenMaster->TakeId=identity("takeId");
+                if(fields.contains("audioLoopId")) jam.ChosenMaster->AudioLoopId=identity("audioLoopId");
+            }
+        }
+        const auto fractionIter = transport.KeyValues.find("defaultMidiQuantFraction");
 		if (fractionIter != transport.KeyValues.end() && fractionIter->second.index() == 2)
 		{
 			const auto value = std::get<unsigned long>(fractionIter->second);
@@ -758,7 +776,14 @@ bool JamFile::ToStream(JamFile jam, std::stringstream& ss, std::string* error)
 		ss << kvStr("quantisation", quantStr(jam.Quantisation)) << ",";
 	}
 	ss << kvStr("globalMidiQuantState", midiGlobalQuantStr(jam.GlobalMidiQuantStateValue)) << ",";
-	ss << kvStr("masterAudioLoopId", jam.MasterAudioLoopId) << ",";
+    ss << kvStr("masterAudioLoopId", jam.MasterAudioLoopId) << ",";
+    if(jam.ChosenMaster)
+    {
+        ss << quoted("chosenMaster") << ":{" << kvStr("stationId",jam.ChosenMaster->StationId) << ","
+            << kvStr("takeId",jam.ChosenMaster->TakeId);
+        if(jam.ChosenMaster->AudioLoopId) ss << "," << kvStr("audioLoopId",*jam.ChosenMaster->AudioLoopId);
+        ss << "},";
+    }
 	ss << kvInt("defaultMidiQuantFraction", static_cast<int>(jam.DefaultMidiQuantFraction)) << ",";
 	ss << kvInt("globalPhaseOffsetSamps", jam.GlobalPhaseOffsetSamps) << ",";
 	if (jam.TransportInitialised)

@@ -60,7 +60,8 @@ namespace audio
 	std::uint64_t AudioHost::LocalMasterTimingMailbox::Publish(
 		const LocalMasterTimingRequest& request) noexcept
 	{
-		const auto writing = _sequence.fetch_add(1u, std::memory_order_seq_cst) + 1u;
+		if (!CanPublish()) return 0u;
+        const auto writing = _sequence.fetch_add(1u, std::memory_order_seq_cst) + 1u;
 		_seedSamps.store(request.SeedSamps, std::memory_order_seq_cst);
 		_masterLengthSamps.store(request.MasterLengthSamps, std::memory_order_seq_cst);
 		_type.store(request.Type, std::memory_order_seq_cst);
@@ -97,9 +98,25 @@ namespace audio
 		std::uint32_t masterLengthSamps, utils::Timer::QuantisationType type,
 		const engine::LoopTake* targetTake, const engine::Loop* targetLoop) noexcept
 	{
-		return _localMasterTimingMailbox.Publish({ 0u, seedSamps, masterLengthSamps,
-			type, targetTake, targetLoop });
+		const auto version = _localMasterTimingMailbox.Publish({0u,seedSamps,masterLengthSamps,type,targetTake,targetLoop});
+        if(version) _localMasterActivationGate.store(version << 2u,std::memory_order_seq_cst);
+        return version;
 	}
+
+    bool AudioHost::TryClaimLocalMasterActivation(std::uint64_t version) noexcept
+    {
+        auto expected=version << 2u;
+        return _localMasterActivationGate.compare_exchange_strong(expected,(version << 2u)|1u,std::memory_order_seq_cst);
+    }
+
+    bool AudioHost::CancelLocalMasterTiming(std::uint64_t version) noexcept
+    {
+        auto expected=version << 2u;
+        if (!_localMasterActivationGate.compare_exchange_strong(expected,(version << 2u)|3u,std::memory_order_seq_cst))
+            return expected == ((version << 2u)|3u);
+        _localMasterCancelledVersion.store(version,std::memory_order_seq_cst);
+        return true;
+    }
 
 	std::optional<AudioHost::LocalMasterTimingReceipt>
 	AudioHost::LastPreparedLocalMasterTiming() const noexcept
@@ -190,6 +207,11 @@ namespace audio
 			_localMasterPreparationRetryVersion.store(prepared.Version, std::memory_order_seq_cst);
 			return;
 		}
+        if (!TryClaimLocalMasterActivation(prepared.Version))
+        {
+            for (const auto& station:stations) if(station && !station->IsRemote()) station->ReleasePreparedMidiQuantisationClaimAtAudioBoundary();
+            return;
+        }
 		const auto elapsed = timingClock->SceneSamplePos() - _preparedLocalMasterSceneSample;
 		const auto phase = static_cast<std::uint32_t>((_preparedLocalMasterPhase + elapsed)
 			% prepared.MasterLengthSamps);
@@ -202,8 +224,11 @@ namespace audio
 		for (const auto& station : stations)
 			if (station && !station->IsRemote())
 				station->ReleasePreparedMidiQuantisationClaimAtAudioBoundary();
-		_localMasterActivatedVersion.store(prepared.Version, std::memory_order_seq_cst);
-		_preparedLocalMasterTiming.Version = 0u;
+        const auto activatedVersion=prepared.Version;
+        _localMasterActivationGate.store((activatedVersion << 2u)|2u,std::memory_order_seq_cst);
+        _preparedLocalMasterTiming.Version=0u;
+        // Final receipt: after this store the owner may publish the next gate.
+        _localMasterActivatedVersion.store(activatedVersion,std::memory_order_seq_cst);
 	}
 
 	AudioHost::AudioHost(io::UserConfig userConfig) :

@@ -867,3 +867,64 @@ TEST(IoSessionExporter, RetainedParentMuteRoundTripsBeforeRestoredTakePublicatio
 		input.close(); std::filesystem::remove_all(dir);
 	}
 }
+
+class ChosenMasterDirectory
+{
+public:
+    const std::filesystem::path Path=IoSessionExporterTest::MakeDirectory();
+    ~ChosenMasterDirectory() { std::error_code ignored; std::filesystem::remove_all(Path,ignored); }
+};
+
+TEST(IoSessionExporter, ChosenMidiTakeAudioTakeAndLeafRoundTripBeforePublicationWithoutChangingSavedClock)
+{
+    for(unsigned int kind=0u;kind<3u;++kind)
+    {
+        SCOPED_TRACE(kind);
+        auto station=IoSessionExporterTest::MakeStation("Chosen source");
+        auto take=IoSessionExporterTest::MakeTake("chosen-take");
+        take->Record({},station->Name(),{0u},{""});
+        if(kind) take->AddLoop(IoSessionExporterTest::MakeAudioLoop(48000u,0u,123u));
+        take->CommitChanges(); take->Play(0u,48000u,0u); station->AddTake(take); station->CommitChanges();
+        auto clock=std::make_shared<utils::Timer>(); Quantiser quantiser; quantiser.SetClock(clock);
+        quantiser.ApplyTiming({12000u,48000ul,4u,240.0f,4u},"chosen export fixture");
+        const std::shared_ptr<base::GuiElement> target=kind==2u ? std::static_pointer_cast<base::GuiElement>(take->GetLoops().front()) : take;
+        ASSERT_EQ(Quantiser::MasterOutcome::Accepted,quantiser.SetMasterFromTarget(target,kind==2u ? base::DEPTH_LOOP : base::DEPTH_LOOPTAKE,{station},48000u,io::UserConfig{},true).Outcome);
+        const auto chosen=quantiser.ExportChosenMasterReference({station}); ASSERT_TRUE(chosen);
+        EXPECT_EQ(kind==2u,chosen->AudioLoopId.has_value());
+        ChosenMasterDirectory directory; audio::AudioStreamParams stream{}; stream.SampleRate=48000u; stream.NumOutputChannels=2u; std::mutex mutex;
+        ASSERT_TRUE(io::IoSessionExporter::ExportSessionToDirectory({station},{},quantiser,io::JamFile::GlobalMidiQuantState::Off,0.0,io::UserConfig{},stream,nullptr,mutex,nullptr,directory.Path.wstring()));
+        std::ifstream file(directory.Path/"session.jam"); ASSERT_TRUE(file); std::stringstream bytes; bytes<<file.rdbuf();
+        const auto saved=io::JamFile::FromStream(std::move(bytes)); ASSERT_TRUE(saved); ASSERT_TRUE(saved->ChosenMaster);
+        auto loaded=io::IoSessionLoader::Reconstruct(*saved,io::RigFile{},directory.Path.wstring()); ASSERT_EQ(1u,loaded.Stations.size());
+        const auto takes=loaded.Stations[0]->GetLoopTakeSnapshot(); ASSERT_EQ(1u,takes.size());
+        auto restoredClock=std::make_shared<utils::Timer>(); restoredClock->SetQuantisation(12000u,utils::Timer::QUANTISE_POWER); restoredClock->SetSeedSourceLength(96000u); ASSERT_TRUE(restoredClock->InitialiseAbsoluteSamplePos(777u));
+        ASSERT_EQ(96000ul,restoredClock->SeedSourceLength()); ASSERT_EQ(777u,restoredClock->AbsoluteSamplePos());
+        Quantiser restored; restored.SetClock(restoredClock);
+        restored.RestoreChosenMasterReference(saved->ChosenMaster,saved->MasterAudioLoopId,loaded.Stations,48000u);
+        auto reference=restored.ExportChosenMasterReference(loaded.Stations); ASSERT_TRUE(reference); EXPECT_EQ(kind==2u,reference->AudioLoopId.has_value());
+        EXPECT_EQ(96000ul,restoredClock->SeedSourceLength()); EXPECT_EQ(777u,restoredClock->AbsoluteSamplePos());
+        takes[0]->CommitChanges(); loaded.Stations[0]->CommitChanges();
+        ASSERT_TRUE(restored.ExportChosenMasterReference(loaded.Stations));
+        auto invalid=*saved->ChosenMaster; invalid.TakeId="missing";
+        restored.RestoreChosenMasterReference(invalid,saved->MasterAudioLoopId,loaded.Stations,48000u);
+        restored.AdoptRecordedMaster(loaded.Stations); EXPECT_FALSE(restored.ExportChosenMasterReference(loaded.Stations));
+        EXPECT_EQ(96000ul,restoredClock->SeedSourceLength()); EXPECT_EQ(777u,restoredClock->AbsoluteSamplePos());
+        restored.RestoreChosenMasterReference(std::nullopt,saved->MasterAudioLoopId,loaded.Stations,48000u);
+        EXPECT_EQ(kind!=0u,restored.ExportChosenMasterReference(loaded.Stations).has_value());
+        restored.RestoreChosenMasterReference(std::nullopt,"",loaded.Stations,48000u);
+        restored.AdoptRecordedMaster(loaded.Stations); EXPECT_FALSE(restored.ExportChosenMasterReference(loaded.Stations));
+        EXPECT_EQ(96000ul,restoredClock->SeedSourceLength());
+    }
+}
+
+TEST(IoSessionExporter, PendingMasterRejectsCaptureBeforeWritingManifestOrAssets)
+{
+    auto station=IoSessionExporterTest::MakeStation("Pending source"); auto take=IoSessionExporterTest::MakeTake("pending-save");
+    take->Record({},station->Name(),{0u},{""}); take->Play(0u,48000u,0u); station->AddTake(take); station->CommitChanges();
+    Quantiser quantiser; quantiser.SetClock(std::make_shared<utils::Timer>());
+    quantiser.SetLocalMasterTimingPublisher([](const auto&,auto,const auto*,const auto*) { return 7u; });
+    ASSERT_EQ(Quantiser::MasterOutcome::Applying,quantiser.SetMasterFromTarget(take,base::DEPTH_LOOPTAKE,{station},48000u,io::UserConfig{},true).Outcome);
+    ChosenMasterDirectory directory; audio::AudioStreamParams stream{}; stream.SampleRate=48000u; std::mutex mutex;
+    EXPECT_FALSE(io::IoSessionExporter::ExportSessionToDirectory({station},{},quantiser,io::JamFile::GlobalMidiQuantState::Off,0.0,io::UserConfig{},stream,nullptr,mutex,nullptr,directory.Path.wstring()));
+    EXPECT_TRUE(std::filesystem::is_empty(directory.Path)); EXPECT_TRUE(quantiser.LocalMasterTimingPending());
+}

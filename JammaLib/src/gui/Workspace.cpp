@@ -577,6 +577,9 @@ bool Workspace::AdvancePresentationLocked(const std::vector<std::shared_ptr<Stat
 			{ rack->ClearPointerState(); rack->SetRevealHeld(false); }
 		}
 
+    auto masterCandidate=_MasterCandidateLocked(stations);
+    if(masterCandidate.Target && presentation.MasterConfig) masterCandidate.Name=_quantiser->DescribeMasterTarget(masterCandidate.Target,masterCandidate.Depth,stations,presentation.MasterSampleRate,*presentation.MasterConfig);
+    _settingsControls->RefreshMasterPresentation(masterCandidate.Name,_quantiser->MasterStatus(),_quantiser->CurrentMasterDescription());
 	if (_selectionPanel) _selectionPanel->RefreshPerformanceGroups(groups);
 	if (_hudPanel)
 	{
@@ -1565,13 +1568,71 @@ void Workspace::EndBackgroundDrag()
 
 bool Workspace::_TrySetMasterFromHover(bool confirm, StationAccess access, const InputPresentation& presentation)
 {
-	std::scoped_lock lock(access.Mutex);
-	return _quantiser->TrySetMasterFromHover(_ChildFromPathLocked(_selector->CurrentHover(), access),
-		_selector->CurrentSelectDepth(),
-		access.Stations,
-		presentation.Stream.SampleRate,
-		presentation.Config,
-		confirm);
+    std::scoped_lock lock(access.Mutex);
+    const auto target=_ChildFromPathLocked(_selector->CurrentHover(),access);
+    if (!target) return false;
+    const bool allowed=!presentation.MasterChangeAllowedLocked || presentation.MasterChangeAllowedLocked();
+    _quantiser->SetMasterFromTarget(target,_selector->CurrentSelectDepth(),access.Stations,presentation.Stream.SampleRate,presentation.Config,confirm,
+        std::chrono::steady_clock::now(),allowed);
+    return true;
+}
+
+Workspace::MasterCandidate Workspace::_MasterCandidateLocked(const std::vector<std::shared_ptr<Station>>& stations) const
+{
+    const auto candidate=[&](std::shared_ptr<GuiElement> target)->MasterCandidate {
+        if(!target) return {};
+        auto take=std::dynamic_pointer_cast<LoopTake>(target); auto loop=std::dynamic_pointer_cast<Loop>(target);
+        if(!take && !loop) loop=std::dynamic_pointer_cast<Loop>(target->Parent());
+        if(!take && loop) take=std::dynamic_pointer_cast<LoopTake>(loop->Parent());
+        if(!take && std::dynamic_pointer_cast<graphics::MidiModel>(target)) take=std::dynamic_pointer_cast<LoopTake>(target->Parent());
+        if(!take) return {};
+        const bool leaf=loop && _selector->CurrentSelectDepth()==base::DEPTH_LOOP;
+        target=leaf ? std::static_pointer_cast<GuiElement>(loop) : std::static_pointer_cast<GuiElement>(take);
+        const auto depth=leaf ? base::DEPTH_LOOP : base::DEPTH_LOOPTAKE;
+        if(!_quantiser->CanUseMasterTarget(target,depth,stations)) return {};
+        for(const auto& station:stations) if(station)
+        {
+            const auto& takes=station->GetLoopTakes(); const auto found=std::find(takes.begin(),takes.end(),take);
+            if(found!=takes.end()) return {target,static_cast<unsigned int>(depth),station->Name()+" / take "+std::to_string(std::distance(takes.begin(),found)+1)+
+                (leaf ? " / audio "+std::to_string(loop->LoopChannel()+1u) : "")};
+        }
+        return {};
+    };
+    const bool gui=(_mainPanel && _mainPanel->RouteHitTest(_mainPanel->GlobalToLocal(_cursorPos))) ||
+        (_selectionPanel && _selectionPanel->RouteHitTest(_selectionPanel->GlobalToLocal(_cursorPos))) ||
+        (_hudPanel && _hudPanel->CapturesPointer(_hudPanel->GlobalToLocal(_cursorPos)));
+    if(!gui) if(auto hovered=candidate(_hoverElement3d.lock());hovered.Target) return hovered;
+    const auto history=_editor->CommittedSelectionHistoryLocked();
+    for(auto entry=history.rbegin();entry!=history.rend();++entry)
+        if(const auto selected=entry->lock();selected && selected->IsSelected())
+            if(auto recent=candidate(selected);recent.Target) return recent;
+    MasterCandidate fallback; unsigned int count=0u;
+    for(const auto& station:stations) if(station)
+        for(const auto& take:station->GetLoopTakes()) if(take && take->IsSelected())
+        {
+            if(_selector->CurrentSelectDepth()!=base::DEPTH_LOOP)
+            { if(auto current=candidate(take);current.Target) {fallback=std::move(current);++count;} }
+            else
+            {
+                bool midi=false;
+                for(const auto& stream:take->GetMidiLoops()) midi|=stream && stream->Model() && stream->Model()->IsSelected();
+                if(midi) { if(auto current=candidate(take);current.Target) {fallback=std::move(current);++count;} }
+                for(const auto& loop:take->GetLoops()) if(loop && loop->IsSelected())
+                    if(auto current=candidate(loop);current.Target) {fallback=std::move(current);++count;}
+            }
+        }
+    return count==1u ? fallback : MasterCandidate{};
+}
+
+void Workspace::UseMaster(StationAccess access,const InputPresentation& presentation)
+{
+    std::scoped_lock lock(access.Mutex);
+    const bool allowed=(!presentation.MasterChangeAllowedLocked || presentation.MasterChangeAllowedLocked()) &&
+        !_popupManager.IsOpen() && !_editor->IsEngaged();
+    const auto candidate=_MasterCandidateLocked(access.Stations);
+    if(!candidate.Target) { _quantiser->SetMasterFailure("Choose a completed local take or loop"); return; }
+    _quantiser->SetMasterFromTarget(candidate.Target,candidate.Depth,access.Stations,presentation.Stream.SampleRate,presentation.Config,true,
+        std::chrono::steady_clock::now(),allowed);
 }
 
 void Workspace::_UpdateStationQuantisation(std::shared_ptr<base::GuiElement> candidate, base::SelectDepth depth, bool confirmCandidate, StationAccess access)

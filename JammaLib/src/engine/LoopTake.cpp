@@ -352,6 +352,7 @@ std::optional<std::shared_ptr<LoopTake>> LoopTake::FromFile(LoopTakeParams takeP
 	}
 	if (!take->RestoreMixerLevels(takeStruct.MasterLevel, takeStruct.BusLevels))
 		return std::nullopt;
+    take->_restoredCompletedMaterial=take->TimingMaterialForRestore().second>0ul;
 	return take;
 }
 
@@ -5110,9 +5111,32 @@ bool LoopTake::MoveVstSlot(const vst::RackMove& move)
 	return true;
 }
 
+bool engine::LoopTake::HasCompletedTimingMaterial() const
+{
+    const auto state=TakeState();
+    return (state==STATE_PLAYING || (state==STATE_INACTIVE && _restoredCompletedMaterial)) &&
+        !IsCaptureCancelled() && !HasPendingTriggerCapture() && TimingMaterialForRestore().second>0ul;
+}
+
+std::pair<std::shared_ptr<engine::Loop>,unsigned long> engine::LoopTake::TimingMaterialForRestore() const
+{
+    std::shared_ptr<Loop> representative;
+    auto length=_midiVisualLoopLength.load(std::memory_order_relaxed);
+    for(const auto& loop:_backLoops) if(loop && loop->CanUseAsTimingReference())
+    {
+        if(!representative) representative=loop;
+        length=std::max(length,loop->LoopLength());
+    }
+    return {representative,length};
+}
+
 std::shared_ptr<engine::Loop> engine::LoopTake::FindStagedAudioLoopById(const std::string& id) const
 {
-	for (const auto& loop : _backLoops)
-		if (loop && loop->Id() == id) return loop;
-	return nullptr;
+    std::shared_ptr<Loop> found;
+    for(const auto& loop:_backLoops) if(loop && loop->Id()==id)
+    {
+        if(found) return nullptr; // Scoped imported references must be unambiguous.
+        found=loop;
+    }
+    return found;
 }

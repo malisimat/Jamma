@@ -316,6 +316,7 @@ namespace engine
 		void _FailJobThread(const char* stage, const char* detail, const actions::JobAction* job = nullptr) noexcept;
 		void _QueueJobs(std::vector<actions::JobAction> jobs);
 		bool _CaptureIsBusy() const;
+        bool _CaptureIsBusyLocked() const;
 		bool _SessionHasTakes() const;
 		void _PumpSourceLossRecovery();
 		void _PumpTriggerStructuralActions();

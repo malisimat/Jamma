@@ -46,6 +46,7 @@ namespace gui
 		struct SubdivisionChange { midi::MidiQuantisationFraction Value; };
 		struct TapTempo {};
 		struct Reclock {};
+        struct UseMaster {};
 		struct SyncToServer {};
 		struct ResetAll {};
 		struct SaveSession { bool ChooseFolder; bool AsDefault; };
@@ -60,7 +61,7 @@ namespace gui
 			AudioDeviceChange, AudioValueChange, MidiDeviceChange>;
 		struct DevicePages { std::vector<GuiSettingEntry> Audio, Midi; };
 		using Change = std::variant<ViewModeChange, GlobalQuantisationChange, ChannelChange,
-			OffsetChange, MetronomeChange, MetronomeLevelChange, SubdivisionChange, TapTempo, Reclock, SyncToServer, ResetAll>;
+			OffsetChange, MetronomeChange, MetronomeLevelChange, SubdivisionChange, TapTempo, Reclock, UseMaster, SyncToServer, ResetAll>;
 
 		enum class DraftChange { None, Device, Channels, Format, Midi };
 		DraftChange EditDeviceDraft(const DeviceChange& command, const audio::AsioInventory& inventory,
@@ -86,11 +87,13 @@ namespace gui
 		const auto& MetronomeLevel() const { return _metronomeLevel; }
 		const auto& Metronome() const { return _ninjamMetronomeToggle; }
 		const auto& Offset() const { return _transportOffsetSlider; }
+        const auto& MasterButton() const { return _useMasterButton; }
 		const auto& GlobalQuantisation() const { return _globalMidiQuantRadio; }
 		const auto& Subdivision() const { return _midiSubdivisionRadio; }
 		void RefreshNinjamStatus(ninjam::NinjamLocalTempoState state, bool connected, bool following);
 		void RefreshChannelPresentation(std::uint8_t channel);
 		void RefreshOffsetPresentation(double acceptedOffset);
+        void RefreshMasterPresentation(const std::string& target,const std::string& status,const std::string& current);
 		static std::string FormatOffset(double acceptedOffset);
 		DevicePages BuildDevicePages(const audio::AsioInventory& inventory,
 			const io::UserConfig::AudioSettings& audioDraft,
@@ -124,6 +127,7 @@ namespace gui
 		static constexpr unsigned int SaveSessionAsControlIndex = 7213u;
 		static constexpr unsigned int ResetAllControlIndex = 7214u;
 		static constexpr unsigned int ReclockControlIndex = 7006u;
+        static constexpr unsigned int UseMasterControlIndex = 7010u;
 		static constexpr unsigned int SyncToServerControlIndex = 7007u;
 		static constexpr unsigned int MidiDeviceControlIndex = 7300u;
 		static constexpr unsigned int MidiDeviceControlLimit = 8300u;
@@ -141,9 +145,9 @@ namespace gui
 		std::shared_ptr<GuiSlider> _metronomeLevel;
 		std::shared_ptr<GuiRadio> _globalMidiQuantRadio;
 		std::shared_ptr<GuiRadio> _midiSubdivisionRadio;
-		std::shared_ptr<GuiButton> _tapButton, _reclockButton, _syncToServerButton, _resetAllButton;
+		std::shared_ptr<GuiButton> _tapButton, _reclockButton, _useMasterButton, _syncToServerButton, _resetAllButton;
 		std::shared_ptr<GuiButton> _saveButton, _saveDefaultJamButton, _loadButton, _saveAsJamButton;
-		std::shared_ptr<GuiLabel> _deviceStatus, _activeAudioStatus, _fileStatus, _ninjamStatus;
+		std::shared_ptr<GuiLabel> _deviceStatus, _activeAudioStatus, _fileStatus, _ninjamStatus, _masterStatus, _masterTarget;
 		std::vector<std::string> _audioChoiceNames;
 		std::shared_ptr<GuiDropDown> _audioDeviceChoice;
 		std::shared_ptr<GuiDropDown> _audioSampleRateChoice;

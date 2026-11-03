@@ -22,6 +22,7 @@
 #include "../midi/MidiChannelRoute.h"
 #include "../audio/AudioMixer.h"
 #include "../engine/PerformanceGroups.h"
+#include "../engine/QuantisationTiming.h"
 
 namespace io
 {
@@ -245,6 +246,7 @@ namespace io
 		unsigned int QuantiseSamps = 1;
 		GlobalMidiQuantState GlobalMidiQuantStateValue = GlobalMidiQuantState::Off;
 		std::string MasterAudioLoopId;
+        std::optional<engine::ChosenMasterReference> ChosenMaster;
 		midi::MidiQuantisationFraction DefaultMidiQuantFraction = midi::MidiQuantisationFraction::Quarter;
 		std::int32_t GlobalPhaseOffsetSamps = 0;
 		double TransportOffsetLoopFrac = 0.0;

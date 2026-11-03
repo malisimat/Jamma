@@ -50,6 +50,8 @@ namespace gui
 			bool CtrlHeld, Quitting, RigSaveInProgress, StationChangePending, RigEditsEnabled, StationControlsAvailable;
 			std::uint64_t RigRevision;
 			std::string GroupFeedback;
+            unsigned int MasterSampleRate=0u;
+            const io::UserConfig* MasterConfig=nullptr;
 		};
 		bool AdvancePresentationLocked(const std::vector<std::shared_ptr<engine::Station>>& stations,
 			const engine::PerformanceGroups& groups, const AnimationPresentation& presentation);
@@ -98,7 +100,9 @@ namespace gui
 		{
 			const io::UserConfig& Config;
 			audio::AudioStreamParams Stream;
-			bool Quitting, WriterHeld, RigSaveDialogOpen, QuantisationResetRequested, Verbose;
+			bool Quitting, WriterHeld, RigSaveDialogOpen, QuantisationResetRequested;
+            std::function<bool()> MasterChangeAllowedLocked;
+            bool Verbose;
 		};
 		struct InputCommands
 		{
@@ -186,6 +190,7 @@ namespace gui
 		void SetHover3d(std::vector<unsigned char> path, base::Action::Modifiers modifiers, std::optional<utils::Position2d> pointerPosition, StationAccess access, const InputPresentation& presentation);
 		void ApplyDeferredHoverUpdates(StationAccess access, const InputPresentation& presentation);
 
+        void UseMaster(StationAccess access,const InputPresentation& presentation);
 		void OnSettingsHidden(const std::shared_ptr<base::GuiElement>& subtree);
 
 		bool BackgroundPreviewActive(StationAccess access, const InputPresentation& presentation) const;
@@ -224,6 +229,8 @@ namespace gui
 
 		void _UpdateStationQuantisation(std::shared_ptr<base::GuiElement> candidate, base::SelectDepth depth, bool confirmCandidate, StationAccess access);
 
+        struct MasterCandidate { std::shared_ptr<base::GuiElement> Target; unsigned int Depth=base::DEPTH_LOOPTAKE; std::string Name; };
+        MasterCandidate _MasterCandidateLocked(const std::vector<std::shared_ptr<engine::Station>>& stations) const;
 		bool _TrySetMasterFromHover(bool confirm, StationAccess access, const InputPresentation& presentation);
 
 		actions::ActionResult _UpdateBackgroundDrag(actions::TouchMoveAction action, StationAccess access, const InputPresentation& presentation);

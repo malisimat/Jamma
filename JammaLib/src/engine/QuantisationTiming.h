@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <optional>
+#include <string>
 #include <utility>
 #include <limits>
 
@@ -14,6 +15,13 @@ namespace midi
 
 namespace engine
 {
+    // A chosen source, not a transport ruler. Missing AudioLoopId means take provenance.
+    struct ChosenMasterReference
+    {
+        std::string StationId, TakeId;
+        std::optional<std::string> AudioLoopId;
+    };
+
 	// Exact, frozen audio geometry for locally recorded loops. This deliberately
 	// does not describe the musical grid: a grid cell may be fractional in samples.
 	struct LocalAudioGeometry

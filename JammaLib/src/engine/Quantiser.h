@@ -4,6 +4,7 @@
 // grid are distinct inputs, and remote follow/mapping authority lives elsewhere.
 
 #include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <functional>
 #include <limits>
@@ -83,7 +84,10 @@ namespace engine
 
 		std::string MasterAudioLoopId() const;
 		void RestoreMasterAudioLoopId(const std::string& id, const std::vector<std::shared_ptr<Station>>& stations);
-		void AdoptRecordedMaster(const std::vector<std::shared_ptr<Station>>& stations);
+        std::optional<ChosenMasterReference> ExportChosenMasterReference(const std::vector<std::shared_ptr<Station>>& stations) const;
+        void RestoreChosenMasterReference(const std::optional<ChosenMasterReference>& reference,
+            const std::string& legacyAudioId,const std::vector<std::shared_ptr<Station>>& stations,unsigned int sampleRate);
+        void AdoptRecordedMaster(const std::vector<std::shared_ptr<Station>>& stations);
 		void SetDefaultMidiQuantisationFraction(midi::MidiQuantisationFraction fraction,
 			const std::vector<std::shared_ptr<Station>>& stations, bool updateExisting = true);
 		midi::MidiQuantisationFraction DefaultMidiQuantisationFraction() const noexcept { return _defaultMidiQuantisationFraction; }
@@ -105,7 +109,7 @@ namespace engine
 		bool LocalMasterTimingPending() const noexcept { return _localMasterTimingPending; }
 		std::uint64_t PendingLocalMasterTimingVersion() const noexcept
 			{ return _pendingLocalMasterTimingVersion; }
-		void CompleteLocalMasterTiming() noexcept { _pendingMasterTapEdit = false; _localMasterTimingPending = false; _pendingMasterTake.reset(); _previousMasterLoop.reset(); }
+		void CompleteLocalMasterTiming();
 		const engine::LoopTake* PendingLocalMasterTake() const noexcept
 			{ return _pendingMasterTake.get(); }
 		void CancelLocalMasterTiming(std::uint64_t version) noexcept;
@@ -130,6 +134,20 @@ namespace engine
 		bool HasActivatedLocalMaster(const std::vector<std::shared_ptr<Station>>& stations) const;
 
 		void DetachStationMaster(const std::shared_ptr<engine::Station>& station);
+        void DetachTakeMaster(const std::shared_ptr<LoopTake>& take);
+        void ReconcileMasterMembership(const std::vector<std::shared_ptr<Station>>& stations);
+        enum class MasterOutcome { Unchanged, Applying, Rejected, Accepted };
+        struct MasterResult { MasterOutcome Outcome=MasterOutcome::Rejected; std::string Message; };
+        MasterResult SetMasterFromTarget(const std::shared_ptr<base::GuiElement>& target,unsigned int depth,
+            const std::vector<std::shared_ptr<Station>>& stations,unsigned int sampleRate,const io::UserConfig& cfg,bool confirm,
+            std::chrono::steady_clock::time_point now=std::chrono::steady_clock::now(),bool sessionAllowed=true);
+        bool CanUseMasterTarget(const std::shared_ptr<base::GuiElement>& target,unsigned int depth,const std::vector<std::shared_ptr<Station>>& stations) const;
+        std::string DescribeMasterTarget(const std::shared_ptr<base::GuiElement>& target,unsigned int depth,const std::vector<std::shared_ptr<Station>>& stations,unsigned int sampleRate,const io::UserConfig& cfg) const;
+        const std::string& MasterStatus() const noexcept { return _masterStatus; }
+        std::string CurrentMasterDescription() const { return _acceptedMasterIdentity ? _acceptedMasterIdentity->Name : std::string{}; }
+        bool PendingMasterTargetValid(const std::vector<std::shared_ptr<Station>>& stations) const;
+        std::chrono::steady_clock::time_point PendingMasterStartedAt() const noexcept { return _pendingMasterStartedAt; }
+        void SetMasterFailure(std::string text) { _masterStatus=std::move(text); }
 		bool TrySetMasterFromHover(const std::shared_ptr<base::GuiElement>& hovering,
 			unsigned int depth,
 			const std::vector<std::shared_ptr<engine::Station>>& stations,
@@ -228,6 +246,27 @@ namespace engine
 			unsigned int depth,
 			const std::vector<std::shared_ptr<engine::Station>>& stations) const;
 
+        struct MasterGeometry
+        {
+            unsigned long Length=0ul, Physical=0ul, Baseline=0ul;
+            unsigned int Seed=0u,Bpi=0u,Rate=0u; bool Powers=false;
+            unsigned int SourceRate=0u,SourceBpi=0u; unsigned long SourceLength=0ul;
+            bool operator==(const MasterGeometry&) const = default;
+        };
+        struct MasterIdentity
+        {
+            std::weak_ptr<LoopTake> Take; std::weak_ptr<Loop> ExplicitLoop;
+            bool HasExplicitLoop=false; MasterGeometry Geometry; std::string Name;
+        };
+        std::string _MasterTargetLabel(const std::shared_ptr<LoopTake>& take,const std::shared_ptr<Loop>& explicitLoop,
+            const std::vector<std::shared_ptr<Station>>& stations) const;
+        void _RememberRecordedMaster(const std::shared_ptr<LoopTake>& take,const std::shared_ptr<Loop>& explicitLoop,
+            const std::vector<std::shared_ptr<Station>>& stations,unsigned int sampleRate=0u);
+        std::optional<MasterIdentity> _acceptedMasterIdentity,_pendingMasterIdentity;
+        std::chrono::steady_clock::time_point _pendingMasterStartedAt{};
+        std::string _masterStatus;
+        // Loaded material cannot become a newly recorded master on an ordinary job tick.
+        std::vector<std::weak_ptr<LoopTake>> _restoredMasterCandidates;
 		std::shared_ptr<utils::Timer> _clock;
 		LocalMasterTimingPublisher _localMasterTimingPublisher;
 		bool _pendingMasterTapEdit = false;

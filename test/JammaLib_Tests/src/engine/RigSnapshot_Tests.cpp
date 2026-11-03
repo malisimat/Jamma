@@ -1637,7 +1637,10 @@ TEST_F(RigSnapshotTest, ReleasingCtrlCancelsBinAndConsumesItsRelease)
 TEST_F(RigSnapshotTest, DetachingDeletedMasterPreservesTransportAndGrid)
 {
  auto station = RuntimeStation("Master");
+ station->SetSampleRate(48000.0f);
  auto take = station->AddTake();
+ take->Record({},station->Name());
+ ASSERT_EQ(engine::LoopTake::STATE_RECORDING,take->TakeState());
  engine::LoopParams params; params.Size = {80u, 80u};
  audio::WireMixBehaviourParams wire; wire.Channels = {0u};
  auto loop = std::make_shared<engine::Loop>(params, engine::Loop::GetMixerParams(params.Size, wire));
@@ -1647,7 +1650,10 @@ TEST_F(RigSnapshotTest, DetachingDeletedMasterPreservesTransportAndGrid)
  request.stride = 1u; request.fadeCurrent = 0.0f; request.fadeNew = 1.0f; request.source = base::Audible::AUDIOSOURCE_ADC;
  loop->OnBlockWrite(request, 0); loop->EndWrite(request.numSamps, true);
  loop->Play(constants::MaxLoopFadeSamps, 48000u, false);
- take->AddLoop(loop); take->CommitChanges(); station->CommitChanges();
+ take->AddLoop(loop); take->CommitChanges();
+ take->Play(constants::MaxLoopFadeSamps,48000u,0u); station->CommitChanges();
+ ASSERT_EQ(engine::LoopTake::STATE_PLAYING,take->TakeState());
+ ASSERT_TRUE(take->HasCompletedTimingMaterial()); ASSERT_TRUE(loop->CanUseAsTimingReference());
  engine::Quantiser quantiser;
  auto clock = std::make_shared<utils::Timer>(); quantiser.SetClock(clock);
  ASSERT_TRUE(quantiser.TrySetMasterFromHover(loop, base::DEPTH_LOOP, {station}, 48000u, io::UserConfig{}, true));

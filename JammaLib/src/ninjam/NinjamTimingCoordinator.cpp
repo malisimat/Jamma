@@ -108,14 +108,56 @@ void NinjamTimingCoordinator::_CancelTempoRequest() noexcept
 
 NinjamTimingUpdate NinjamTimingCoordinator::BeginLocalTiming() noexcept
 {
-	if (!_tracker.IsConnected()) return {};
+    if (!_tracker.IsConnected()) return {};
+    if (!_priorLocalTiming)
+        _priorLocalTiming=PriorLocalTimingIntent{0u,_sessionEpoch,0u,_localTempoState,_sourceMasterIntervalLengthSamps,_requestSentAtWrap,
+            _requestedTempo,_localTempoRequestStartedAt,_firstSuccessfulTempoRequestSend,_requestState,_tempoRequestSendConfirmed,
+            _requestRetries,_requestSentObservationOrdinal,_pendingTempoChange,_ignoredTempoChange,
+            _restoringFollowing ? _priorFollowingObservation : _latestObservedTempoChange};
 	_CancelTempoRequest();
 	_pendingTempoChange.reset();
 	_ignoredTempoChange.reset();
 	_localTempoState = NinjamLocalTempoState::AwaitingMaster;
 	_followObservationFence = _lastRemotePhaseDeviceSample;
 	++_followRevision;
+    _priorLocalTiming->Follow=_followRevision;
 	return _PublishNoSync(NinjamNoSyncReason::StayLocal);
+}
+
+void NinjamTimingCoordinator::BindLocalTimingVersion(std::uint64_t version) noexcept
+{
+    if (_priorLocalTiming && _localTempoState==NinjamLocalTempoState::AwaitingMaster)
+        _priorLocalTiming->Version=version;
+}
+
+NinjamTimingUpdate NinjamTimingCoordinator::RollbackLocalTiming(std::uint64_t version,
+    const std::optional<engine::QuantisationTiming>& localTiming,bool hasLocalContent,utils::Timer& clock,
+    std::chrono::steady_clock::time_point now)
+{
+    if (!_priorLocalTiming || _priorLocalTiming->Version!=version) return {};
+    const auto prior=*_priorLocalTiming; _priorLocalTiming.reset();
+    if (prior.Session!=_sessionEpoch || prior.Follow!=_followRevision ||
+        _localTempoState!=NinjamLocalTempoState::AwaitingMaster || !_tracker.IsConnected()) return {};
+    ++_followRevision;
+    _localTempoState=prior.Mode; _sourceMasterIntervalLengthSamps=prior.SourceMaster;
+    _requestedTempo=prior.Requested; _localTempoRequestStartedAt=prior.Started;
+    _firstSuccessfulTempoRequestSend=prior.FirstSuccess; _requestState=prior.RequestState;
+    _tempoRequestSendConfirmed=prior.Confirmed; _requestRetries=prior.Retries;
+    _requestSentAtWrap=prior.SentWrap; _requestSentObservationOrdinal=prior.SentObservation;
+    _ignoredTempoChange=prior.Ignored; _followObservationFence=_lastRemotePhaseDeviceSample;
+    auto expired=_ExpireTempoRequest(localTiming,hasLocalContent,clock,now);
+    if (expired.DesiredTransport || expired.PromptForTempoChange) return expired;
+    if (prior.Mode==NinjamLocalTempoState::Following && !prior.Requested)
+    {
+        if (prior.Pending && _latestObservedTempoChange &&
+            (!_ignoredTempoChange || !_ignoredTempoChange->HasSameProposalIdentity(*_latestObservedTempoChange)))
+        {
+            ++_tempoProposalRevision; _pendingTempoChange.reset(); _SetPendingTempoChange(*_latestObservedTempoChange);
+            auto update=_PublishNoSync(NinjamNoSyncReason::StayLocal); update.PromptForTempoChange=true; return update;
+        }
+        _restoringFollowing=true; _priorFollowingObservation=prior.Observed;
+    }
+    return _PublishNoSync(NinjamNoSyncReason::StayLocal);
 }
 
 NinjamTimingUpdate NinjamTimingCoordinator::PushActivatedLocalTempo(
@@ -124,6 +166,7 @@ NinjamTimingUpdate NinjamTimingCoordinator::PushActivatedLocalTempo(
 {
 	if (_localTempoState != NinjamLocalTempoState::AwaitingMaster
 		|| !IsValidNinjamTempo(timing.Bpm, timing.Bpi) || timing.MasterLoopSamps == 0ul) return {};
+    _priorLocalTiming.reset(); _restoringFollowing=false;
 	_CancelTempoRequest();
 	_sourceMasterIntervalLengthSamps = timing.MasterLoopSamps;
 	_requestedTempo = timing;
@@ -139,6 +182,8 @@ NinjamTimingUpdate NinjamTimingCoordinator::PushActivatedLocalTempo(
 
 NinjamTimingUpdate NinjamTimingCoordinator::RequestSyncToServer() noexcept
 {
+    _priorLocalTiming.reset(); _restoringFollowing=false;
+
 	if (!_tracker.IsConnected()) return {};
 	_CancelTempoRequest();
 	_pendingTempoChange.reset();
@@ -152,6 +197,8 @@ NinjamTimingUpdate NinjamTimingCoordinator::RequestSyncToServer() noexcept
 NinjamTimingUpdate NinjamTimingCoordinator::Connect(const NinjamTempoJoinOptions& options,
 	const std::optional<engine::QuantisationTiming>& localTiming) noexcept
 {
+    _priorLocalTiming.reset(); _restoringFollowing=false;
+
 	_tracker.Connect();
 	_localTempoState = NinjamLocalTempoState::Following;
 	_followObservationFence.reset();
@@ -186,6 +233,8 @@ NinjamTimingUpdate NinjamTimingCoordinator::Connect(const NinjamTempoJoinOptions
 
 NinjamTimingUpdate NinjamTimingCoordinator::Disconnect() noexcept
 {
+    _priorLocalTiming.reset(); _restoringFollowing=false;
+
 	_pendingTempoChange.reset(); // Even an already-local transport invalidates its prompt.
 	if (!_tracker.IsConnected() && _noSyncActive)
 		return {};
@@ -378,6 +427,18 @@ NinjamTimingUpdate NinjamTimingCoordinator::Observe(const NinjamTiming& timing,
 	}
 	const bool followsFreshIntent = isFreshObservation
 		&& (!_followObservationFence || timing.DeviceAudioSampleAtObservation > *_followObservationFence);
+    if (_restoringFollowing && _localTempoState==NinjamLocalTempoState::Following)
+    {
+        if (!followsFreshIntent) return update;
+        if (_ignoredTempoChange && _ignoredTempoChange->HasSameProposalIdentity(*proposal)) return update;
+        _restoringFollowing=false;
+        const bool unchanged=_priorFollowingObservation && _priorFollowingObservation->HasSameProposalIdentity(*proposal);
+        _priorFollowingObservation.reset();
+        if (unchanged || !_options.PromptBeforeApplyingRemoteTempo || !hasLocalContent)
+            return _AcceptTempoChange(*proposal,localTiming,clock,now);
+        _SetPendingTempoChange(*proposal); update=_PublishNoSync(NinjamNoSyncReason::None);
+        update.PromptForTempoChange=true; return update;
+    }
 	if (_localTempoState == NinjamLocalTempoState::AwaitingFreshSync)
 	{
 		if (!followsFreshIntent) return update;

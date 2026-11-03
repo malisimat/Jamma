@@ -202,8 +202,8 @@ Remote observations and the remote metronome continue. The next completed local
 master establishes local timing; only after its audio activation is acknowledged
 does Jamma request that BPM and full BPI using the existing server admin/vote path.
 A tap sequence with one eligible completed take since fresh/reclock reinterprets
-that master and requests its timing too. Further taps replace pending timing
-preparation and server intent. With additional eligible takes, taps continue to
+that master and requests its timing too. While a master change is Applying, further taps are busy and leave its preparation
+and server intent unchanged. After acceptance a new tap sequence may request new timing. With additional eligible takes, taps continue to
 select subdivisions instead of changing the server.
 
 A fresh observation confirming both requested BPM and BPI resumes following.
@@ -278,3 +278,17 @@ lasts for that session. Remote observations and tempo retries do not enable it
 again. Connected clicks always use actual server geometry and phase, including
 Stay local and Reclock; unavailable remote timing remains silent. Clicks are
 mixed after NINJAM export and are never sent to the server.
+
+A completed local take (including muted MIDI material), or an explicit completed
+audio leaf, can be chosen with **Use as master** or Shift-click. The same accepted
+source with unchanged source geometry is a no-op even while a different remote
+ruler/subdivision is active. The same pending choice is also a no-op; a different
+choice is busy until activation or bounded cancellation completes. Assignment
+suspends follow only after eligibility is accepted. Cancellation restores prior
+follow intent and request deadlines; it does not rewind fresh server observations.
+
+JAM saves retain the accepted Station/Take reference and optional explicit audio
+leaf separately from the transport ruler. Missing or invalid references preserve
+saved timing without guessing a chosen source from its length. Legacy audio
+references remain supported. Saving waits while a master change is Applying;
+Reset may still cancel it through the existing quiescent boundary.

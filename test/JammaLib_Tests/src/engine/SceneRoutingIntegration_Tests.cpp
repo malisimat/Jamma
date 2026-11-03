@@ -6,6 +6,7 @@
 #include <bitset>
 #include <filesystem>
 #include <fstream>
+#include <tuple>
 #include <glm/gtc/matrix_transform.hpp>
 #include <cmath>
 #include "engine/Scene.h"
@@ -299,6 +300,54 @@ namespace engine
             std::scoped_lock lock(scene._sceneMutex);
             return scene._performanceGroups.SetAllMuted(muted,scene._stations,
                 [&](auto image){scene._PublishGroupMuteApplication(std::move(image));});
+        }
+        static void ConnectMasterTiming(Scene& scene)
+        {
+            auto options=scene._networkService->TempoJoinOptions(); options.PushLocalTempoOnJoin=false;
+            scene._networkService->SetTempoJoinOptions(options);
+            scene._networkService->PrepareTempoSyncOnConnect(scene._quantisation.CurrentTempoTiming(scene._CurrentSampleRate()));
+        }
+        static std::uint64_t MasterTempoSends(const Scene& scene) { return scene._networkService->TimingDiagnostics().TempoRequestsSent; }
+        static ninjam::NinjamLocalTempoState MasterFollowState(const Scene& scene) { return scene._networkService->LocalTempoState(); }
+        static void PumpMasterJob(Scene& scene)
+        {
+            // Existing completion runs at the end of the real job owner's idle pump.
+            auto completed=std::make_shared<std::atomic_bool>(false);
+            scene.CompleteStartupWhenIdle([completed] { completed->store(true,std::memory_order_release); });
+            const auto deadline=std::chrono::steady_clock::now()+std::chrono::seconds(3);
+            while(!completed->load(std::memory_order_acquire) && !scene.JobThreadFailed() && std::chrono::steady_clock::now()<deadline)
+                std::this_thread::sleep_for(std::chrono::milliseconds(5));
+            ASSERT_FALSE(scene.JobThreadFailed()) << scene.JobThreadFailureDetail();
+            ASSERT_TRUE(completed->load(std::memory_order_acquire));
+        }
+        static bool RequestResetDuringMaster(Scene& scene)
+        { scene._operation.RequestReset(scene._ControlEffects()); return scene._operation.Current()==SessionControl::ResetSession; }
+        static auto ChosenMaster(const Scene& scene) { return scene._quantisation.ExportChosenMasterReference(scene._stations); }
+        static auto AssignMaster(Scene& scene,const std::shared_ptr<LoopTake>& take)
+        {
+            std::scoped_lock lock(scene._sceneMutex);
+            return scene._quantisation.SetMasterFromTarget(take,base::DEPTH_LOOPTAKE,scene._stations,scene._CurrentSampleRate(),scene._userConfig,true);
+        }
+        static auto MasterClock(const Scene& scene)
+        { const auto clock=scene._quantisation.Clock(); return std::tuple{clock->SeedSourceLength(),clock->AbsoluteSamplePos(),clock->QuantiseSamps(),scene._quantisation.GlobalPhaseOffsetSamps()}; }
+        static std::uint64_t MasterVersion(const Scene& scene) { return scene._quantisation.PendingLocalMasterTimingVersion(); }
+        static bool MasterPending(const Scene& scene) { return scene._quantisation.LocalMasterTimingPending(); }
+        static std::string MasterStatus(const Scene& scene) { return scene._quantisation.MasterStatus(); }
+        static void ActivateMaster(Scene& scene)
+        {
+            std::scoped_lock lock(scene._sceneMutex); const auto clock=scene._quantisation.Clock();
+            scene._audioEngine->ApplyLocalMasterTimingAtAudioBoundary(scene._stations,clock.get());
+            scene._localTiming.Advance(scene._quantisation,*scene._audioEngine,scene._stations);
+            scene._audioEngine->ApplyLocalMasterTimingAtAudioBoundary(scene._stations,clock.get());
+            scene._localTiming.Advance(scene._quantisation,*scene._audioEngine,scene._stations);
+        }
+        static utils::Position2d MasterButtonPoint(Scene& scene)
+        {
+            auto panel=scene._workspace->MainPanel(); panel->SetPage(gui::SettingsPage::Timing); panel->SetExpanded(true);
+            for(unsigned int frame=0u;frame<20u;++frame) panel->AdvanceAnimation(0.05f);
+            const auto button=scene._workspace->Settings().MasterButton(); const auto size=button->GetSize();
+            const auto point=button->GlobalPosition()+utils::Position2d{static_cast<int>(size.Width/2u),static_cast<int>(size.Height/2u)};
+            EXPECT_TRUE(panel->RouteHitTest(panel->GlobalToLocal(point))); return point;
         }
         static bool DesiredMute(Scene& scene, const GroupTargetId& target)
         { return scene._performanceGroups.DesiredMuted(target,scene._stations); }
@@ -3641,4 +3690,111 @@ TEST_F(SceneRoutingIntegrationTest, StationaryMarqueeLateReleaseCannotOverwriteC
     auto afterRelease=Access::BorrowMute(*scene); ASSERT_TRUE(afterRelease); EXPECT_EQ(newer->Version,afterRelease->Version);
     ASSERT_TRUE(Access::ApplyMuteBoundary(*scene)); EXPECT_TRUE(take->IsMuted()); EXPECT_EQ(newer->Version,Access::MuteReceipt(*scene));
     EXPECT_FALSE(Access::BackgroundOwned(*scene)); newer.reset(); afterRelease.reset(); job.unlock(); scene->Shutdown();
+}
+
+TEST_F(SceneRoutingIntegrationTest, UseMasterButtonAndShiftClickShareActualAdmissionAndApplyingIdentity)
+{
+    using Access=engine::SourceLossIntegrationTestAccess;
+    auto scene=FreshScene({Station("Master command")},{}); ASSERT_TRUE(scene);
+    resources::ResourceLib resources; engine::PressPickWindow window(*scene,resources); window.Resize({1280u,900u}); Settle(scene);
+    auto job=Access::ExcludeJob(*scene); auto station=scene->SnapshotStations().front();
+    auto take=station->AddTake(); take->Record({0u},station->Name()); take->CommitChanges();
+    const auto loop=take->GetLoops().front(); std::vector<float> samples(constants::MaxLoopFadeSamps+48000u,0.25f);
+    base::AudioWriteRequest write; write.samples=samples.data(); write.numSamps=static_cast<unsigned int>(samples.size()); write.fadeNew=1.0f;
+    loop->OnBlockWrite(write,0u); loop->EndWrite(write.numSamps,true); take->Play(constants::MaxLoopFadeSamps,48000u,0u); take->BeginCaptureAudioBoundary(0u,0u,0u);
+    station->CommitChanges(); scene->CommitChanges(); ASSERT_TRUE(loop->CanEditAudioSource());
+    Access::SetDepth(*scene,engine::Scene::VIEW_LOOPTAKE); const auto canvas=Access::CanvasPoint(*scene);
+    scene->SetHover3d(SourceChoicePickPath(take),base::Action::MODIFIER_NONE,canvas);
+    actions::TouchAction touch; touch.Touch=actions::TouchAction::TOUCH_MOUSE; touch.Index=0; touch.Position=canvas;
+    touch.State=actions::TouchAction::TOUCH_DOWN; touch.MouseButtonsDown=1u; scene->OnAction(touch);
+    touch.State=actions::TouchAction::TOUCH_UP; touch.MouseButtonsDown=0u; scene->OnAction(touch); ASSERT_TRUE(take->IsSelected());
+    const auto button=Access::MasterButtonPoint(*scene);
+    actions::TouchMoveAction move; move.Touch=actions::TouchAction::TOUCH_MOUSE; move.Position=button; scene->OnAction(move);
+    touch.Position=button; touch.State=actions::TouchAction::TOUCH_DOWN; touch.MouseButtonsDown=1u; scene->OnAction(touch);
+    touch.State=actions::TouchAction::TOUCH_UP; touch.MouseButtonsDown=0u; scene->OnAction(touch);
+    ASSERT_TRUE(Access::MasterPending(*scene)); const auto version=Access::MasterVersion(*scene); ASSERT_GT(version,0u);
+    unsigned int savePickers=0u; Access::PickDirectory(*scene,[&](const auto&) { ++savePickers; return std::wstring{}; });
+    Access::Save(*scene); EXPECT_EQ(0u,savePickers); EXPECT_TRUE(Access::MasterPending(*scene));
+    EXPECT_NE(std::string::npos,Access::MasterStatus(*scene).find("Applying"));
+    // Same pending source through retained Shift-click does not publish another request.
+    touch.Position=canvas; touch.Modifiers=base::Action::MODIFIER_SHIFT; touch.State=actions::TouchAction::TOUCH_DOWN; touch.MouseButtonsDown=1u;
+    scene->SetHover3d(SourceChoicePickPath(take),base::Action::MODIFIER_SHIFT,canvas); EXPECT_TRUE(scene->OnAction(touch).IsEaten);
+    EXPECT_EQ(version,Access::MasterVersion(*scene));
+    touch.State=actions::TouchAction::TOUCH_UP; touch.MouseButtonsDown=0u; scene->OnAction(touch);
+    Access::ActivateMaster(*scene); EXPECT_FALSE(Access::MasterPending(*scene));
+    EXPECT_NE(std::string::npos,Access::MasterStatus(*scene).find("Current master"));
+    touch.State=actions::TouchAction::TOUCH_DOWN; touch.MouseButtonsDown=1u; scene->OnAction(touch);
+    EXPECT_EQ(version,Access::MasterVersion(*scene)); EXPECT_NE(std::string::npos,Access::MasterStatus(*scene).find("Already master"));
+    touch.State=actions::TouchAction::TOUCH_UP; touch.MouseButtonsDown=0u; scene->OnAction(touch);
+    // A failed new choice with an already accepted master must roll back before
+    // generic activated-master discovery can send that old tempo as the new request.
+    Access::ConnectMasterTiming(*scene); const auto sends=Access::MasterTempoSends(*scene);
+    auto other=station->AddTake(); other->Record({},station->Name(),{0u},{""}); other->Play(0u,48000u,0u); other->BeginCaptureAudioBoundary(0u,0u,0u);
+    station->CommitChanges(); scene->CommitChanges();
+    scene->SetHover3d(SourceChoicePickPath(other),base::Action::MODIFIER_SHIFT,canvas);
+    touch.State=actions::TouchAction::TOUCH_DOWN; touch.MouseButtonsDown=1u; ASSERT_TRUE(scene->OnAction(touch).IsEaten);
+    ASSERT_TRUE(Access::MasterPending(*scene));
+    touch.State=actions::TouchAction::TOUCH_UP; touch.MouseButtonsDown=0u; scene->OnAction(touch);
+    other->CancelCapture();
+    job.unlock(); Access::PumpMasterJob(*scene);
+    EXPECT_FALSE(Access::MasterPending(*scene)); EXPECT_EQ(sends,Access::MasterTempoSends(*scene));
+    EXPECT_EQ(ninjam::NinjamLocalTempoState::Following,Access::MasterFollowState(*scene));
+    auto finalJob=Access::ExcludeJob(*scene);
+    Access::SetDepth(*scene,engine::Scene::VIEW_LOOP);
+    scene->SetHover3d(SourceChoicePickPath(take),base::Action::MODIFIER_SHIFT,canvas);
+    touch.State=actions::TouchAction::TOUCH_DOWN; touch.MouseButtonsDown=1u; scene->OnAction(touch);
+    ASSERT_TRUE(Access::MasterPending(*scene)); EXPECT_TRUE(Access::RequestResetDuringMaster(*scene));
+    finalJob.unlock(); scene->Shutdown();
+}
+
+TEST_F(SceneRoutingIntegrationTest, RestoredChosenMasterAndOtherCompletedSourceRemainEligibleWithoutInferringInvalidReference)
+{
+    using Access=engine::SourceLossIntegrationTestAccess;
+    auto source=FreshScene({Station("Saved masters")},{}); ASSERT_TRUE(source); Settle(source);
+    auto sourceJob=Access::ExcludeJob(*source); auto station=source->SnapshotStations().front();
+    auto chosen=AddCompletedSourceChoiceTake(station); auto other=AddCompletedSourceChoiceTake(station); source->CommitChanges();
+    ASSERT_EQ(engine::Quantiser::MasterOutcome::Applying,Access::AssignMaster(*source,chosen).Outcome); Access::ActivateMaster(*source);
+    ASSERT_TRUE(Access::ChosenMaster(*source));
+    const ScopedMuteDirectory directory("jamma-chosen-master-scene-");
+    const auto saved=Access::SaveOffline(*source,directory.Path.wstring()); ASSERT_TRUE(saved.Success) << saved.Error;
+    std::ifstream file(std::filesystem::path(saved.Path)); std::stringstream bytes; bytes<<file.rdbuf();
+    const auto jam=io::JamFile::FromStream(std::move(bytes)); ASSERT_TRUE(jam); ASSERT_TRUE(jam->ChosenMaster); file.close();
+    const auto rig=source->AcceptedRigSnapshot()->Rig; sourceJob.unlock(); source->Shutdown();
+    for(const bool valid:{true,false})
+    {
+        SCOPED_TRACE(valid);
+        auto manifest=*jam; if(!valid) manifest.ChosenMaster->TakeId="removed-take";
+        engine::SceneParams params({""},{},{640u,480u});
+        auto created=engine::Scene::FromFile(params,manifest,rig,directory.Path.wstring(),[](const io::RigFile&) { return true; }); ASSERT_TRUE(created);
+        auto restored=*created;
+        // Let the real job owner reconcile imported membership before any UI child commit.
+        const auto before=Access::MasterClock(*restored); Access::PumpMasterJob(*restored);
+        auto job=Access::ExcludeJob(*restored); const auto stations=restored->SnapshotStations(); ASSERT_EQ(1u,stations.size());
+        const auto takes=stations[0]->GetLoopTakeSnapshot(); ASSERT_EQ(2u,takes.size());
+        ASSERT_TRUE(takes[0]->GetLoops().empty()); ASSERT_TRUE(takes[0]->TimingMaterialForRestore().first);
+        EXPECT_EQ(valid,Access::ChosenMaster(*restored).has_value());
+        for(const auto& take:takes) take->CommitChanges();
+        stations[0]->CommitChanges(); restored->CommitChanges();
+        ASSERT_FALSE(takes[0]->GetLoops().empty());
+        ASSERT_EQ(engine::LoopTake::STATE_INACTIVE,takes[0]->TakeState()); ASSERT_TRUE(takes[0]->HasCompletedTimingMaterial());
+        EXPECT_EQ(before,Access::MasterClock(*restored));
+        EXPECT_EQ(valid,Access::ChosenMaster(*restored).has_value());
+        if(valid)
+        {
+            const auto version=Access::MasterVersion(*restored);
+            EXPECT_EQ(engine::Quantiser::MasterOutcome::Unchanged,Access::AssignMaster(*restored,takes[0]).Outcome);
+            EXPECT_EQ(version,Access::MasterVersion(*restored)); EXPECT_EQ(before,Access::MasterClock(*restored));
+            ASSERT_EQ(engine::Quantiser::MasterOutcome::Applying,Access::AssignMaster(*restored,takes[1]).Outcome);
+            Access::ActivateMaster(*restored); EXPECT_FALSE(Access::MasterPending(*restored));
+            const auto accepted=Access::ChosenMaster(*restored); ASSERT_TRUE(accepted); EXPECT_EQ(takes[1]->Id(),accepted->TakeId);
+        }
+        else
+        {
+            EXPECT_FALSE(Access::ChosenMaster(*restored)); EXPECT_EQ(before,Access::MasterClock(*restored));
+            const auto resaved=Access::SaveOffline(*restored,directory.Path.wstring()); ASSERT_TRUE(resaved.Success) << resaved.Error;
+            std::ifstream again(std::filesystem::path(resaved.Path)); std::stringstream contents; contents<<again.rdbuf();
+            const auto unknown=io::JamFile::FromStream(std::move(contents)); ASSERT_TRUE(unknown); EXPECT_FALSE(unknown->ChosenMaster); EXPECT_TRUE(unknown->MasterAudioLoopId.empty());
+        }
+        job.unlock(); restored->Shutdown();
+    }
 }

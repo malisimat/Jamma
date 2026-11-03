@@ -1027,6 +1027,12 @@ void Loop::RefreshVisualModel()
 	_UpdateLoopModel();
 }
 
+bool Loop::CanUseAsTimingReference() const noexcept
+{
+    return _playState.load(std::memory_order_acquire)==STATE_PLAYING && !_isPunchInActive.load(std::memory_order_acquire) &&
+        LoopLength()>0ul && LoopLength()<=PhysicalLoopLength();
+}
+
 bool Loop::CanEditAudioSource() const noexcept
 {
 	if (!SupportsSpectralEditing()

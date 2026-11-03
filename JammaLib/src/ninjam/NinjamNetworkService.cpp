@@ -59,6 +59,14 @@ namespace ninjam
 		return _timingCoordinator.BeginLocalTiming();
 	}
 
+    void NinjamNetworkService::BindLocalTimingVersion(std::uint64_t version)
+    { std::scoped_lock lock(_timingMutex); _timingCoordinator.BindLocalTimingVersion(version); }
+
+    NinjamTimingUpdate NinjamNetworkService::RollbackLocalTiming(std::uint64_t version,
+        const std::optional<engine::QuantisationTiming>& localTiming,bool hasLocalContent,utils::Timer& clock,
+        std::chrono::steady_clock::time_point now)
+    { std::scoped_lock lock(_timingMutex); return _timingCoordinator.RollbackLocalTiming(version,localTiming,hasLocalContent,clock,now); }
+
 	NinjamTimingUpdate NinjamNetworkService::PushActivatedLocalTempo(const engine::QuantisationTiming& timing)
 	{
 		std::scoped_lock lock(_timingMutex);

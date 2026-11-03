@@ -1849,6 +1849,8 @@ namespace audio
 	class AudioHostRealtimeTestAccess
 	{
 	public:
+        static void ApplyMaster(AudioHost& host,const std::vector<std::shared_ptr<Station>>& stations,utils::Timer* clock) noexcept
+        { host.ApplyLocalMasterTimingAtAudioBoundary(stations,clock); }
 		static bool Enter(AudioHost& host) noexcept { return host.TryEnterCallback(); }
 		static void Leave(AudioHost& host) noexcept { host.LeaveCallback(); }
 		static void Prepare(AudioHost& host,
@@ -2491,4 +2493,32 @@ TEST(AudioFlow, ExplicitEarlierMixedStereoSourceCompletesAudioAndMidiPlusNewPunc
 	EXPECT_EQ(1u, selected.CompletionEdges.size());
 	EXPECT_EQ(selected.Exported.end(), std::find(selected.Exported.begin(), selected.Exported.end(), 0.875f));
 	EXPECT_TRUE(selected.DelayedPunchOpened); EXPECT_TRUE(selected.DelayedPunchClosed);
+}
+
+TEST(AudioCallbackRealtime, LocalMasterActivationAndCancellationDoNotAllocateReallocateOrFree)
+{
+    auto station=MakeStation(1u); auto take=MakeTake(); station->AddTake(take);
+    take->Record({},"master allocation",{0u},{"Keys"}); take->EndMultiWrite(48000u,true,Audible::AUDIOSOURCE_ADC);
+    take->Play(0u,48000u,0u); take->BeginCaptureAudioBoundary(0u,0u,0u); station->CommitChanges();
+    const std::vector<std::shared_ptr<Station>> stations{station};
+    auto clock=std::make_shared<utils::Timer>(); clock->SetQuantisation(6000u,utils::Timer::QUANTISE_POWER); clock->SetSeedSourceLength(24000u);
+    audio::AudioHost host(io::UserConfig{});
+    const auto version=host.PublishLocalMasterTiming(12000u,48000u,utils::Timer::QUANTISE_POWER,take.get(),nullptr);
+    audio::AudioHostRealtimeTestAccess::ApplyMaster(host,stations,clock.get()); ASSERT_TRUE(host.LastPreparedLocalMasterTiming());
+    ASSERT_TRUE(take->PrepareLocalMasterQuantisation(12000u,0u)); host.CommitLocalMasterTiming(version);
+    AudioCallbackAllocationProbe::Counts counts;
+    {
+        AudioCallbackAllocationProbe::Scope probe;
+        audio::AudioHostRealtimeTestAccess::ApplyMaster(host,stations,clock.get()); counts=probe.GetCounts();
+    }
+    EXPECT_EQ(version,host.LastActivatedLocalMasterTimingVersion()); EXPECT_EQ(48000ul,clock->SeedSourceLength());
+    EXPECT_EQ(0u,counts.Allocations); EXPECT_EQ(0u,counts.Reallocations); EXPECT_EQ(0u,counts.Frees);
+    const auto cancelled=host.PublishLocalMasterTiming(6000u,24000u,utils::Timer::QUANTISE_POWER,take.get(),nullptr);
+    ASSERT_TRUE(host.CancelLocalMasterTiming(cancelled));
+    {
+        AudioCallbackAllocationProbe::Scope probe;
+        audio::AudioHostRealtimeTestAccess::ApplyMaster(host,stations,clock.get()); counts=probe.GetCounts();
+    }
+    EXPECT_EQ(version,host.LastActivatedLocalMasterTimingVersion()); EXPECT_EQ(0u,counts.Allocations);
+    EXPECT_EQ(0u,counts.Reallocations); EXPECT_EQ(0u,counts.Frees);
 }

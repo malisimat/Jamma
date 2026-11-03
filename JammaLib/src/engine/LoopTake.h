@@ -177,7 +177,10 @@ namespace engine
 		LoopTakeSource TakeSourceType() const;
 		const std::vector<std::shared_ptr<Loop>>& GetLoops() const { return _loops; }
 		// Owner/job-side restore lookup includes material awaiting ordinary publication.
-		std::shared_ptr<Loop> FindStagedAudioLoopById(const std::string& id) const;
+        std::shared_ptr<Loop> FindStagedAudioLoopById(const std::string& id) const;
+        // Serialized import may precede the first child presentation commit.
+        std::pair<std::shared_ptr<Loop>,unsigned long> TimingMaterialForRestore() const;
+        bool HasCompletedTimingMaterial() const;
 		// Owner/job-side restoration admission, before staged audio publication.
 		bool HasRestorableLoopMaterial() const noexcept { return !_backLoops.empty() || !_midiLoops.empty(); }
 		std::vector<std::vector<unsigned long>> SnapshotAudioRoutesForExport() const;
@@ -731,6 +734,7 @@ namespace engine
 		float _parentVisualScale = 1.0f;
 		std::vector<std::shared_ptr<Loop>> _loops;
 		std::vector<std::shared_ptr<Loop>> _backLoops;
+        bool _restoredCompletedMaterial=false; // Serialized file construction; never admits a fresh inactive take.
 		std::vector<unsigned int> _recordInputChannels;
 		std::vector<std::shared_ptr<midi::MidiLoop>> _midiLoops;
 		std::vector<unsigned int> _midiLoopChannels;

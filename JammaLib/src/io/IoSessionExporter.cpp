@@ -302,6 +302,12 @@ namespace io
         const bool captured = [&]() -> bool
         {
 			std::scoped_lock lock(sceneMutex);
+            if(quantisation.LocalMasterTimingPending())
+            {
+                appendError("Wait for the master change before saving");
+                return false;
+            }
+            jam.ChosenMaster=quantisation.ExportChosenMasterReference(stations);
             jam.QuantiseSamps = quantisation.EffectiveSamps();
             jam.GlobalPhaseOffsetSamps = quantisation.GlobalPhaseOffsetSamps();
             jam.DefaultMidiQuantFraction = quantisation.DefaultMidiQuantisationFraction();

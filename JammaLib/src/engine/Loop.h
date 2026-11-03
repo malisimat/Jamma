@@ -291,6 +291,7 @@ namespace engine
 		// itself; state checks alone cannot protect an off-audio PCM read.
 		virtual bool SupportsSpectralEditing() const noexcept { return true; }
 		bool CanEditAudioSource() const noexcept;
+        bool CanUseAsTimingReference() const noexcept;
 		// UI-owner operations. No BufferBank PCM is read by the requesting thread.
 		std::shared_ptr<spectral::SpectralSourceCapture> RequestSpectralSource(std::string& reason,
             const std::shared_ptr<spectral::SpectralResourceBudget>& budget = nullptr,

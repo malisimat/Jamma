@@ -207,6 +207,9 @@ namespace ninjam
 			const std::optional<engine::QuantisationTiming>& localTiming) noexcept;
 		NinjamTimingUpdate Disconnect() noexcept;
 		NinjamTimingUpdate BeginLocalTiming() noexcept;
+        void BindLocalTimingVersion(std::uint64_t version) noexcept;
+        NinjamTimingUpdate RollbackLocalTiming(std::uint64_t version,const std::optional<engine::QuantisationTiming>& localTiming,
+            bool hasLocalContent,utils::Timer& clock,std::chrono::steady_clock::time_point now=std::chrono::steady_clock::now());
 		NinjamTimingUpdate PushActivatedLocalTempo(const engine::QuantisationTiming& timing,
 			std::chrono::steady_clock::time_point now = std::chrono::steady_clock::now()) noexcept;
 		NinjamTimingUpdate RequestSyncToServer() noexcept;
@@ -282,6 +285,22 @@ namespace ninjam
 			long long valueSamps = 0,
 			std::uint64_t limitSamps = 0u,
 			std::uint64_t appliedSessionEpoch = 0u) noexcept;
+        struct PriorLocalTimingIntent
+        {
+            std::uint64_t Version=0u,Session=0u,Follow=0u;
+            NinjamLocalTempoState Mode=NinjamLocalTempoState::Following;
+            unsigned long SourceMaster=0ul,SentWrap=0ul;
+            std::optional<engine::QuantisationTiming> Requested;
+            std::optional<std::chrono::steady_clock::time_point> Started,FirstSuccess;
+            TempoRequestState RequestState=TempoRequestState::Idle;
+            bool Confirmed=false;
+            unsigned int Retries=0u;
+            std::uint64_t SentObservation=0u;
+            std::optional<NinjamTempoChange> Pending,Ignored,Observed;
+        };
+        std::optional<PriorLocalTimingIntent> _priorLocalTiming;
+        bool _restoringFollowing=false;
+        std::optional<NinjamTempoChange> _priorFollowingObservation;
 		NinjamLocalTempoState _localTempoState = NinjamLocalTempoState::Following;
 		std::optional<std::uint64_t> _followObservationFence;
 		std::optional<std::chrono::steady_clock::time_point> _localTempoRequestStartedAt;
