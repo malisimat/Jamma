@@ -655,14 +655,18 @@ void LoopTake::OnBlockWriteChannel(unsigned int channel,
 }
 
 // Only called when outputting to DAC
-void LoopTake::PollPlaybackPluginChanges() const noexcept
+void LoopTake::PollPlaybackPluginChanges(const RenderState* prepared) const noexcept
 {
-	const auto chain = _vstChain.load(std::memory_order_acquire);
+	const auto chain = prepared ? prepared->Chain : _vstChain.load(std::memory_order_acquire);
 	if (chain) chain->PollPendingChanges();
-	const auto state = _AudioStateSnapshot();
-	if (state)
-		for (const auto& loop : state->Loops)
-			if (loop) loop->PollPlaybackPluginChanges();
+	const auto state = prepared ? prepared->Audio : _AudioStateSnapshot();
+	if (!state) return;
+	for (auto index=std::size_t{0u};index<state->Loops.size();++index)
+		if (prepared)
+		{
+			if (const auto& leaf=prepared->LoopChains[index]) leaf->PollPendingChanges();
+		}
+		else if (const auto& loop=state->Loops[index]) loop->PollPlaybackPluginChanges();
 }
 
 unsigned int LoopTake::RecordedPlaybackLatencySamps(const RenderState* prepared) const noexcept

@@ -320,12 +320,9 @@ namespace engine
 			return chain && chain->ContainsPlugin(plugin);
 		}
 
-		// Read-only, real-time-safe view of this take's aggregate VST
-		// processing latency, in samples (sum across the published chain).
-		// Plumb-only for now: not yet folded into any playback-position
-		// compensation -- see doc/ninjam-live-loop-latency-sync-planC.md §2/§7
-		// and IVstPlugin::GetLatencySamples.
-		void PollPlaybackPluginChanges() const noexcept;
+		// Structural polling and material compensation use the accepted render
+		// record when supplied, matching the audio block's chains and buffers.
+		void PollPlaybackPluginChanges(const RenderState* prepared = nullptr) const noexcept;
 		unsigned int RecordedPlaybackLatencySamps(const RenderState* prepared = nullptr) const noexcept;
 		bool CanConfigureRecordedPlaybackCompensation(unsigned int referenceLatencySamps,
 			unsigned int stationLatencySamps, const RenderState* prepared = nullptr) const noexcept;

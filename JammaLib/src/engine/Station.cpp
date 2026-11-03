@@ -507,8 +507,9 @@ void Station::PollPlaybackPluginChanges() const noexcept
 	const auto state = _AudioStateSnapshot();
 	if (!state) return;
 	if (state->Midi.MidiChain) state->Midi.MidiChain->PollPendingChanges();
-	for (const auto& take : state->OwnedLoopTakes)
-		if (take) take->PollPlaybackPluginChanges();
+	for (auto index=std::size_t{0u};index<state->OwnedLoopTakes.size();++index)
+		if (const auto& take=state->OwnedLoopTakes[index])
+			take->PollPlaybackPluginChanges(state->TakeRenders[index].get());
 }
 
 unsigned int Station::RecordedPlaybackLatencySamps() const noexcept

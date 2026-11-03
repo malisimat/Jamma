@@ -131,6 +131,8 @@ public:
 	void SetBypassed(bool bypass) noexcept override { _bypassed = bypass; }
 	bool IsBypassed() const noexcept override { return _bypassed; }
 	int GetLatencySamples() const noexcept override { return LatencySamps; }
+	void PollPendingChanges() const noexcept override { ++PollCalls; }
+	mutable unsigned int PollCalls = 0u;
 
 	std::uint32_t BlockStart = 0u;
 	std::uint32_t BlockSamples = 0u;
@@ -3408,4 +3410,26 @@ TEST(StationMidiInstrument, RetiredBindingAdmissionIsBoundedAndRejectsBeforeCanc
 	RecordProperty("preparedDestinationBytes",static_cast<int>(sizeof(midi::MidiDelivery::MidiDestination)));
 	RecordProperty("preparedBindingBytes",static_cast<int>(sizeof(midi::MidiDelivery::MidiPlaybackBinding)));
 	delivery.ClearAfterReadersStopped();
+}
+
+TEST(StationMidiInstrument, AcceptedChildChainsRemainPolledWhileReplacementsAwaitParentPublication)
+{
+	auto station=MakeStation("accepted-child-polling"); auto take=MakeMidiTake("accepted-polling-take");
+	take->Record({0u},station->Name()); take->CommitChanges();
+	auto leaf=take->GetLoops().front();
+	auto oldTake=AddChildMidiPlugin(take), oldLeaf=AddChildMidiPlugin(leaf);
+	station->AddTake(take); station->CommitChanges();
+	JobAction unload; unload.JobActionType=JobAction::JOB_UNLOADVST;
+	unload.VstIdentity=oldTake->StateId(); take->OnAction(unload); take->CommitChanges();
+	unload.VstIdentity=oldLeaf->StateId(); leaf->OnAction(unload); leaf->CommitChanges();
+	auto newTake=AddChildMidiPlugin(take), newLeaf=AddChildMidiPlugin(leaf);
+	for (const auto& plugin:{oldTake,oldLeaf,newTake,newLeaf}) plugin->PollCalls=0u;
+	station->PollPlaybackPluginChanges();
+	EXPECT_EQ(1u,oldTake->PollCalls); EXPECT_EQ(1u,oldLeaf->PollCalls);
+	EXPECT_EQ(0u,newTake->PollCalls); EXPECT_EQ(0u,newLeaf->PollCalls);
+	station->CommitChanges();
+	for (const auto& plugin:{oldTake,oldLeaf,newTake,newLeaf}) plugin->PollCalls=0u;
+	station->PollPlaybackPluginChanges();
+	EXPECT_EQ(0u,oldTake->PollCalls); EXPECT_EQ(0u,oldLeaf->PollCalls);
+	EXPECT_EQ(1u,newTake->PollCalls); EXPECT_EQ(1u,newLeaf->PollCalls);
 }
