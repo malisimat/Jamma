@@ -62,7 +62,7 @@ namespace gui
 		bool EnableVstControl = false;
 		bool EnableStationLabel = false;
 		bool EnableVstRack = false;
-		// MIDI input filtering and cables are station-owned; child racks have audio effects only.
+		// MIDI input filtering and cables are station-owned; child racks do not expose MIDI input routing.
 		bool EnableVstRackMidiRouting = false;
 		std::function<void(base::Action::Modifiers)> OnVstControl;
 	};
