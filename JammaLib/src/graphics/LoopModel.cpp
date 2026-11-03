@@ -192,6 +192,9 @@ bool LoopModel::IntersectsMuteMarquee(const graphics::MuteMarqueeProjection& pro
         * glm::translate(glm::mat4(1.0f), glm::vec3{ModelPosition().X, ModelPosition().Y, ModelPosition().Z})
         * glm::scale(glm::mat4(1.0f), glm::vec3{static_cast<float>(ModelScale())});
     const auto projected = projection.Transformed(matrix);
+    const auto radius = _waveformRadius * (1.0f + _RadialThicknessFrac);
+    const auto height = _cameraHalfHeight * std::abs(_sceneHeightScale);
+    if (!projected.MayIntersectBounds({-radius,-height,-radius},{radius,height,radius})) return false;
     const auto vertex = [&](std::size_t index)
     {
         const auto sample = (std::min)(static_cast<std::size_t>(std::floor(std::clamp(uvs[index * 2u], 0.0f, 1.0f)

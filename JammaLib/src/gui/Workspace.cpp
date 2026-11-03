@@ -824,7 +824,8 @@ actions::ActionResult Workspace::OnMove(actions::TouchMoveAction action, Station
 		if (_muteMarqueeCancelRequested || presentation.Quitting || presentation.WriterHeld || presentation.RigSaveDialogOpen ||
 			presentation.QuantisationResetRequested || _popupManager.IsOpen() || _editor->IsEngaged() || EditControlsSuppressed() ||
 			action.MouseButtonsDown != 2u || action.Modifiers != Action::MODIFIER_NONE) _CancelMuteMarqueeLocked(access.Stations);
-		else { _selector->MoveBackgroundClick(action,true); _UpdateMuteMarqueeLocked(access.Stations); }
+		// Presentation samples the latest rectangle once per frame; release still applies its final position.
+		else _selector->MoveBackgroundClick(action,true);
 		return {true};
 	}
     if (!_overdubSourceDrag && _hudPanel)

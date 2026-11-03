@@ -533,6 +533,7 @@ void Window::Render()
 	UpdateSessionTitle();
 	ProcessDeferredInputLoss();
 	_ReconcileKeyboardState();
+	_FlushRelativePointer();
 	GlDeleteQueue::FlushPendingDeletes();
 	ApplyPendingResize();
 
@@ -776,6 +777,7 @@ std::optional<unsigned int> Window::_PickPointerPress(utils::Position2d position
 ActionResult Window::OnAction(TouchAction touchAction)
 {
 	SceneDispatchScope dispatch(*this);
+	_FlushRelativePointer();
 	if (touchAction.Touch == TouchAction::TOUCH_FINGER && touchAction.Index >= 0 && touchAction.Index < 32)
 		_heldTouches.set(static_cast<size_t>(touchAction.Index), touchAction.State == TouchAction::TOUCH_DOWN);
 	_UpdateCameraEligibility();
@@ -903,6 +905,7 @@ bool Window::ProcessDeferredInputLoss()
 ActionResult Window::OnAction(KeyAction keyAction)
 {
 	SceneDispatchScope dispatch(*this);
+	_FlushRelativePointer();
 	if (!keyAction.IsSynthetic)
 	{
 		const bool cameraTrigger = _scene->IsCameraTriggerKey(keyAction.KeyChar);
@@ -1840,6 +1843,7 @@ bool Window::BeginRelativePointer(int button, utils::Position2d anchor)
 		if (device.usUsagePage == 1u && device.usUsage == 2u) _previousRawMouse = device;
 	RAWINPUTDEVICE mouse{ 1u, 2u, 0u, _wnd };
 	if (!RegisterRawInputDevices(&mouse, 1u, sizeof(mouse))) return false;
+	_pendingRelativeDelta = {};
 	_relativeButton = button;
 	// Keep the visible cursor free while raw input supplies gesture deltas.
 	// SetCursorPos(_relativeAnchorScreen.x, _relativeAnchorScreen.y);
@@ -1890,6 +1894,7 @@ void Window::_ResamplePointer()
 void Window::EndRelativePointer(int button)
 {
 	if (!HasRelativePointer() || button != _relativeButton) return;
+	_pendingRelativeDelta = {};
 	_relativeButton = -1;
 	_RestoreRawInput();
 	_ResamplePointer();
@@ -1917,16 +1922,35 @@ void Window::_HandleRawInput(HRAWINPUT input)
 		CancelMouseCapture();
 		return;
 	}
-	// SetCursorPos(_relativeAnchorScreen.x, _relativeAnchorScreen.y);
-	if (raw.data.mouse.lLastX == 0 && raw.data.mouse.lLastY == 0) return;
+	const auto upward = -static_cast<std::int64_t>(raw.data.mouse.lLastY);
+	_QueueRelativePointer({static_cast<int>(raw.data.mouse.lLastX),
+		static_cast<int>(std::clamp<std::int64_t>(upward, INT_MIN, INT_MAX))});
+}
+
+void Window::_QueueRelativePointer(utils::Position2d delta) noexcept
+{
+	const auto add = [](int previous, int next) {
+		return static_cast<int>(std::clamp<std::int64_t>(static_cast<std::int64_t>(previous) + next, INT_MIN, INT_MAX));
+	};
+	_pendingRelativeDelta = {add(_pendingRelativeDelta.X, delta.X), add(_pendingRelativeDelta.Y, delta.Y)};
+}
+
+void Window::_FlushRelativePointer()
+{
+	if (!HasRelativePointer() || _pendingRelativeDelta == utils::Position2d{}) return;
+	if (!_RelativePointerValid() || (_buttonsDown & (1u << _relativeButton)) == 0u)
+	{
+		CancelMouseCapture();
+		return;
+	}
+	const auto delta = _pendingRelativeDelta;
+	_pendingRelativeDelta = {}; // Consume before dispatch: Scene may cancel the gesture reentrantly.
 	TouchMoveAction movement;
 	movement.Index = _relativeButton;
 	movement.Position = _relativeAnchor;
 	movement.MouseButtonsDown = _buttonsDown;
 	movement.Modifiers = _modifiers;
 	movement.IsRelative = true;
-	const auto upward = -static_cast<std::int64_t>(raw.data.mouse.lLastY);
-	movement.RelativeDelta = { static_cast<int>(raw.data.mouse.lLastX),
-		static_cast<int>(std::clamp<std::int64_t>(upward, INT_MIN, INT_MAX)) };
+	movement.RelativeDelta = delta;
 	OnAction(movement);
 }

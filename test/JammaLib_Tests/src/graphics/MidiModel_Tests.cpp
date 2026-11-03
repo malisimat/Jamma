@@ -302,3 +302,27 @@ TEST(GraphicsMidiModel, MarqueeUsesInteractiveRingHoleAndCurrentTransformNotDeco
     decorativeOnly.PrepareSceneGeometry();
     EXPECT_FALSE(decorativeOnly.IntersectsMuteMarquee(graphics::MuteMarqueeProjection(matrix,{1000u,1000u},{0,0,1000,1000},visible)));
 }
+
+TEST(MuteMarqueeProjection, ClipsCrossingTrianglesAndRejectsOutsideFrustumAndMasks)
+{
+    const std::array visible{utils::Rect2d{0,0,1000,1000}};
+    graphics::MuteMarqueeProjection projection(glm::mat4(1.0f),{1000u,1000u},{450,450,550,550},visible);
+    EXPECT_FALSE(projection.MayIntersectBounds({0.2f,0.2f,-0.5f},{0.5f,0.5f,0.5f}));
+    EXPECT_TRUE(projection.MayIntersectBounds({-2,-2,-2},{2,2,2})); // Bounds crossing all planes cannot reject enclosed surfaces.
+    EXPECT_TRUE(projection.MayIntersectBounds({-0.1f,-0.1f,0},{0.1f,0.1f,0}));
+    EXPECT_TRUE(projection.Intersects({-0.05f,-0.05f,0},{0.05f,-0.05f,0},{0,0.05f,0}));
+    EXPECT_FALSE(projection.Intersects({0.2f,0.2f,0},{0.5f,0.2f,0},{0.2f,0.5f,0}));
+    EXPECT_TRUE(projection.Intersects({-2,-2,0},{2,-2,0},{0,2,0})); // All vertices outside; surface crosses marquee.
+    EXPECT_TRUE(projection.Intersects({-0.05f,-0.05f,-2},{0.05f,-0.05f,0},{0,0.05f,0}));
+    EXPECT_TRUE(projection.Intersects({-0.05f,-0.05f,2},{0.05f,-0.05f,0},{0,0.05f,0}));
+    EXPECT_FALSE(projection.Intersects({-0.05f,-0.05f,-2},{0.05f,-0.05f,-2},{0,0.05f,-2}));
+    EXPECT_FALSE(projection.Intersects({-0.05f,-0.05f,2},{0.05f,-0.05f,2},{0,0.05f,2}));
+    const std::array masks{utils::Rect2d{400,400,600,600}};
+    const auto uncovered=graphics::MuteMarqueeProjection::VisibleRegions({1000u,1000u},masks);
+    graphics::MuteMarqueeProjection occluded(glm::mat4(1.0f),{1000u,1000u},{0,0,1000,1000},uncovered);
+    EXPECT_FALSE(occluded.Intersects({-0.05f,-0.05f,0},{0.05f,-0.05f,0},{0,0.05f,0}));
+    EXPECT_TRUE(occluded.Intersects({-0.5f,-0.05f,0},{0.05f,-0.05f,0},{0,0.05f,0}));
+    auto behind=glm::mat4(1.0f); behind[3][3]=-1.0f;
+    EXPECT_FALSE(graphics::MuteMarqueeProjection(behind,{1000u,1000u},{0,0,1000,1000},visible)
+        .Intersects({-0.5f,-0.5f,0},{0.5f,-0.5f,0},{0,0.5f,0}));
+}

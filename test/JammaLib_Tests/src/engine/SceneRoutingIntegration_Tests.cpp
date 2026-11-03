@@ -3522,11 +3522,16 @@ TEST_F(SceneRoutingIntegrationTest, MiddleMarqueeActualGeometryRestoresOnShrinkA
     scene->OnAction(press);
     ASSERT_TRUE(Access::BackgroundOwned(*scene)); EXPECT_FALSE(station->RetainedMuted());
     actions::TouchMoveAction move; move.Touch=actions::TouchAction::TOUCH_MOUSE; move.MouseButtonsDown=2u; move.Position={400,800};
-    scene->OnAction(move); ASSERT_TRUE(Access::ApplyMuteBoundary(*scene));
+    for (unsigned int i=0u;i<1000u;++i) {
+        move.Position=(i%2u) ? utils::Position2d{400,800} : press.Position+utils::Position2d{1,1};
+        scene->OnAction(move);
+    }
+    EXPECT_FALSE(Access::DesiredMute(*scene,{engine::GroupTargetKind::Station,station->Id(),{},{}}));
+    scene->AdvanceUiAnimations(); ASSERT_TRUE(Access::ApplyMuteBoundary(*scene));
     EXPECT_TRUE(station->RetainedMuted()); EXPECT_TRUE(take->IsMuted());
-    move.Position=press.Position+utils::Position2d{1,1}; scene->OnAction(move); ASSERT_TRUE(Access::ApplyMuteBoundary(*scene));
+    move.Position=press.Position+utils::Position2d{1,1}; scene->OnAction(move); scene->AdvanceUiAnimations(); ASSERT_TRUE(Access::ApplyMuteBoundary(*scene));
     EXPECT_FALSE(station->RetainedMuted()); EXPECT_FALSE(take->IsMuted());
-    move.Position={400,800}; scene->OnAction(move); ASSERT_TRUE(Access::ApplyMuteBoundary(*scene));
+    move.Position={400,800}; scene->OnAction(move); scene->AdvanceUiAnimations(); ASSERT_TRUE(Access::ApplyMuteBoundary(*scene));
     ASSERT_TRUE(station->RetainedMuted());
     Access::MoveCameraAway(*scene); scene->AdvanceUiAnimations();
     ASSERT_TRUE(Access::ApplyMuteBoundary(*scene)); EXPECT_FALSE(station->RetainedMuted());
@@ -3623,7 +3628,7 @@ TEST_F(SceneRoutingIntegrationTest, MarqueeAllDepthsNormalizesMidiSiblingsAndPre
         scene->SetHover3d({},base::Action::MODIFIER_NONE);
         actions::TouchAction press; press.Touch=actions::TouchAction::TOUCH_MOUSE; press.Index=1; press.Position={1050,40};
         press.State=actions::TouchAction::TOUCH_DOWN; press.MouseButtonsDown=2u; scene->OnAction(press); ASSERT_TRUE(Access::BackgroundOwned(*scene));
-        actions::TouchMoveAction move; move.Touch=actions::TouchAction::TOUCH_MOUSE; move.Position={400,800}; move.MouseButtonsDown=2u; scene->OnAction(move);
+        actions::TouchMoveAction move; move.Touch=actions::TouchAction::TOUCH_MOUSE; move.Position={400,800}; move.MouseButtonsDown=2u; scene->OnAction(move); scene->AdvanceUiAnimations();
         ASSERT_TRUE(Access::ApplyMuteBoundary(*scene));
         EXPECT_TRUE(take->IsMuted());
         if(depth==engine::Scene::VIEW_STATION) EXPECT_TRUE(station->RetainedMuted());
@@ -3649,8 +3654,8 @@ TEST_F(SceneRoutingIntegrationTest, OfflineSaveCommitsReleasedMarqueeButCancelsA
         Access::SetDepth(*scene,engine::Scene::VIEW_STATION); scene->AdvanceUiAnimations(); scene->SetHover3d({},base::Action::MODIFIER_NONE);
         actions::TouchAction press; press.Touch=actions::TouchAction::TOUCH_MOUSE; press.Index=1; press.Position={1050,40};
         press.State=actions::TouchAction::TOUCH_DOWN; press.MouseButtonsDown=2u; scene->OnAction(press); ASSERT_TRUE(Access::BackgroundOwned(*scene));
-        actions::TouchMoveAction move; move.Touch=actions::TouchAction::TOUCH_MOUSE; move.Position={400,800}; move.MouseButtonsDown=2u; scene->OnAction(move);
-        ASSERT_TRUE(Access::DesiredMute(*scene,{engine::GroupTargetKind::Station,station->Id(),{},{}}));
+        actions::TouchMoveAction move; move.Touch=actions::TouchAction::TOUCH_MOUSE; move.Position={400,800}; move.MouseButtonsDown=2u; scene->OnAction(move); if (!commit) scene->AdvanceUiAnimations();
+        if (!commit) ASSERT_TRUE(Access::DesiredMute(*scene,{engine::GroupTargetKind::Station,station->Id(),{},{}}));
         if(commit) { press.State=actions::TouchAction::TOUCH_UP; press.Position=move.Position; press.MouseButtonsDown=0u; scene->OnAction(press); }
         else { ASSERT_TRUE(Access::ApplyMuteBoundary(*scene)); ASSERT_TRUE(station->RetainedMuted()); }
         const ScopedMuteDirectory ownedDirectory("jamma-marquee-save-"); const auto& directory=ownedDirectory.Path;
@@ -3676,7 +3681,7 @@ TEST_F(SceneRoutingIntegrationTest, MarqueeIncludesDisplayedRemoteAndEmptyStatio
     Access::SetDepth(*scene,engine::Scene::VIEW_STATION); scene->AdvanceUiAnimations(); scene->SetHover3d({},base::Action::MODIFIER_NONE);
     actions::TouchAction press; press.Touch=actions::TouchAction::TOUCH_MOUSE; press.Index=1; press.Position={1050,40};
     press.State=actions::TouchAction::TOUCH_DOWN; press.MouseButtonsDown=2u; scene->OnAction(press); ASSERT_TRUE(Access::BackgroundOwned(*scene));
-    actions::TouchMoveAction move; move.Touch=actions::TouchAction::TOUCH_MOUSE; move.Position={400,800}; move.MouseButtonsDown=2u; scene->OnAction(move);
+    actions::TouchMoveAction move; move.Touch=actions::TouchAction::TOUCH_MOUSE; move.Position={400,800}; move.MouseButtonsDown=2u; scene->OnAction(move); scene->AdvanceUiAnimations();
     ASSERT_TRUE(Access::ApplyMuteBoundary(*scene)); EXPECT_TRUE(empty->RetainedMuted()); EXPECT_TRUE(remote->RetainedMuted()); EXPECT_TRUE(remoteTake->IsMuted());
     EXPECT_FALSE(empty->IsSelected()); EXPECT_FALSE(remote->IsSelected()); EXPECT_FALSE(remoteTake->IsSelected());
     scene->OnInputFocusLost(); ASSERT_TRUE(Access::ApplyMuteBoundary(*scene)); EXPECT_FALSE(empty->RetainedMuted()); EXPECT_FALSE(remote->RetainedMuted());
@@ -3704,10 +3709,10 @@ TEST_F(SceneRoutingIntegrationTest, LeafMarqueeKeepsMidiOwnerMutedWhileOneSiblin
     actions::TouchAction press; press.Touch=actions::TouchAction::TOUCH_MOUSE; press.Index=1; press.Position=anchor;
     press.State=actions::TouchAction::TOUCH_DOWN; press.MouseButtonsDown=2u; scene->OnAction(press); ASSERT_TRUE(Access::BackgroundOwned(*scene));
     actions::TouchMoveAction move; move.Touch=actions::TouchAction::TOUCH_MOUSE; move.Position=both; move.MouseButtonsDown=2u;
-    scene->OnAction(move); ASSERT_TRUE(Access::ApplyMuteBoundary(*scene)); ASSERT_TRUE(take->IsMuted());
-    move.Position=onlyB; scene->OnAction(move); ASSERT_TRUE(Access::ApplyMuteBoundary(*scene)); EXPECT_TRUE(take->IsMuted());
+    scene->OnAction(move); scene->AdvanceUiAnimations(); ASSERT_TRUE(Access::ApplyMuteBoundary(*scene)); ASSERT_TRUE(take->IsMuted());
+    move.Position=onlyB; scene->OnAction(move); scene->AdvanceUiAnimations(); ASSERT_TRUE(Access::ApplyMuteBoundary(*scene)); EXPECT_TRUE(take->IsMuted());
     EXPECT_TRUE(take->GetTweakState() & base::Tweakable::TWEAKSTATE_MUTED);
-    move.Position=anchor+utils::Position2d{1,1}; scene->OnAction(move); ASSERT_TRUE(Access::ApplyMuteBoundary(*scene)); EXPECT_FALSE(take->IsMuted());
+    move.Position=anchor+utils::Position2d{1,1}; scene->OnAction(move); scene->AdvanceUiAnimations(); ASSERT_TRUE(Access::ApplyMuteBoundary(*scene)); EXPECT_FALSE(take->IsMuted());
     scene->OnInputFocusLost(); job.unlock(); scene->Shutdown();
 }
 
@@ -3731,7 +3736,7 @@ TEST_F(SceneRoutingIntegrationTest, LeafMarqueeExcludesActualSettingsOcclusionBu
     actions::TouchAction press; press.Touch=actions::TouchAction::TOUCH_MOUSE; press.Index=1; press.Position=anchor; press.State=actions::TouchAction::TOUCH_DOWN; press.MouseButtonsDown=2u;
     scene->OnAction(press); ASSERT_TRUE(Access::BackgroundOwned(*scene));
     actions::TouchMoveAction move; move.Touch=actions::TouchAction::TOUCH_MOUSE; move.Position=end; move.MouseButtonsDown=2u;
-    scene->OnAction(move); ASSERT_TRUE(Access::ApplyMuteBoundary(*scene));
+    scene->OnAction(move); scene->AdvanceUiAnimations(); ASSERT_TRUE(Access::ApplyMuteBoundary(*scene));
     EXPECT_FALSE(loop->GetTweakState() & base::Tweakable::TWEAKSTATE_MUTED); // Geometry exists but is wholly hidden by actual Settings scissor.
     Access::CameraCentreAt(*scene,{frame.Right-20,middleY}); scene->AdvanceUiAnimations();
     ASSERT_TRUE(Access::ApplyMuteBoundary(*scene)); EXPECT_TRUE(loop->GetTweakState() & base::Tweakable::TWEAKSTATE_MUTED);
@@ -3917,9 +3922,9 @@ TEST_F(SceneRoutingIntegrationTest, BothResetModesAbandonAppliedMarqueeAndQueued
         actions::TouchAction press; press.Touch=actions::TouchAction::TOUCH_MOUSE; press.Index=1; press.Position={1050,40}; press.MouseButtonsDown=2u; press.State=actions::TouchAction::TOUCH_DOWN;
         Access::ExpectUncoveredRackPoint(*scene,press.Position); ASSERT_TRUE(Access::GeometryAt(*scene,{1050,40,1051,41},base::DEPTH_STATION).empty());
         scene->OnAction(press); ASSERT_TRUE(Access::BackgroundOwned(*scene));
-        actions::TouchMoveAction move; move.Touch=actions::TouchAction::TOUCH_MOUSE; move.MouseButtonsDown=2u; move.Position={400,800}; scene->OnAction(move);
+        actions::TouchMoveAction move; move.Touch=actions::TouchAction::TOUCH_MOUSE; move.MouseButtonsDown=2u; move.Position={400,800}; scene->OnAction(move); scene->AdvanceUiAnimations();
         ASSERT_TRUE(Access::ApplyMuteBoundary(*scene)); ASSERT_TRUE(station->RetainedMuted()); auto applied=Access::BorrowMute(*scene); ASSERT_TRUE(applied);
-        move.Position=press.Position+utils::Position2d{1,1}; scene->OnAction(move); auto queuedRestore=Access::BorrowMute(*scene); ASSERT_TRUE(queuedRestore); ASSERT_GT(queuedRestore->Version,applied->Version);
+        move.Position=press.Position+utils::Position2d{1,1}; scene->OnAction(move); scene->AdvanceUiAnimations(); auto queuedRestore=Access::BorrowMute(*scene); ASSERT_TRUE(queuedRestore); ASSERT_GT(queuedRestore->Version,applied->Version);
         ASSERT_TRUE(Access::MarqueeActive(*scene)); ASSERT_TRUE(station->RetainedMuted()); // Restore is queued, not yet audible.
         ExecuteReset(scene,removeVsts,job); EXPECT_FALSE(Access::MarqueeActive(*scene)); EXPECT_FALSE(Access::BackgroundOwned(*scene));
         EXPECT_FALSE(station->RetainedMuted()); EXPECT_FALSE(Access::BorrowMute(*scene)); EXPECT_TRUE(station->GetLoopTakeSnapshot().empty());

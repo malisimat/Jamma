@@ -1031,3 +1031,66 @@ TEST(WindowTitle, ReplacementResetsUnsavedCaptionAndOldSceneCompletionCannotRena
 	window.UpdateSessionTitle();
 	EXPECT_EQ(3u, host.Changes);
 }
+
+namespace graphics
+{
+    class WindowInputTestAccess
+    {
+    public:
+        static void Begin(Window& window) { window._relativeButton=2; window._buttonsDown=4u; window._pendingRelativeDelta={}; }
+        static void Queue(Window& window, utils::Position2d delta) { window._QueueRelativePointer(delta); }
+        static void Flush(Window& window) { window._FlushRelativePointer(); }
+    };
+}
+
+class RelativeBurstWindow final : public Window
+{
+public:
+    RelativeBurstWindow(Scene& scene, ResourceLib& resources) : Window(scene,resources) {}
+    using Window::OnAction;
+    std::vector<actions::TouchMoveAction> Moves;
+    bool Valid=true;
+    bool CancelDuringMove=false;
+    actions::ActionResult OnAction(actions::TouchMoveAction move) override
+    {
+        Moves.push_back(move);
+        if (CancelDuringMove) EndRelativePointer(2);
+        return {true};
+    }
+protected:
+    bool _RelativePointerValid() const override { return Valid; }
+};
+
+TEST(WindowRelativeInput, BurstCoalescesAndReleaseFlushesBeforeEndingCapture)
+{
+    CameraActivityScene scene; ResourceLib resources; RelativeBurstWindow window(scene,resources);
+    window.Resize({1400u,900u});
+    graphics::WindowInputTestAccess::Begin(window);
+    for (int i=0;i<10000;++i) graphics::WindowInputTestAccess::Queue(window,{1,1});
+    EXPECT_TRUE(window.Moves.empty());
+    graphics::WindowInputTestAccess::Flush(window);
+    ASSERT_EQ(1u,window.Moves.size()); EXPECT_EQ(utils::Position2d(10000,10000),window.Moves[0].RelativeDelta);
+    graphics::WindowInputTestAccess::Flush(window); EXPECT_EQ(1u,window.Moves.size());
+    graphics::WindowInputTestAccess::Queue(window,{-3,7});
+    actions::TouchAction release; release.Touch=actions::TouchAction::TOUCH_MOUSE; release.Index=2;
+    release.State=actions::TouchAction::TOUCH_UP; window.OnAction(release);
+    ASSERT_EQ(2u,window.Moves.size()); EXPECT_EQ(utils::Position2d(-3,7),window.Moves.back().RelativeDelta);
+    EXPECT_EQ(4u,window.Moves.back().MouseButtonsDown); EXPECT_FALSE(window.HasRelativePointer());
+}
+
+TEST(WindowRelativeInput, ModifierFlushAndCancellationCannotReplayPendingMovement)
+{
+    CameraActivityScene scene; ResourceLib resources; RelativeBurstWindow window(scene,resources);
+    window.Resize({1400u,900u}); graphics::WindowInputTestAccess::Begin(window);
+    graphics::WindowInputTestAccess::Queue(window,{0,8});
+    actions::KeyAction key; key.KeyChar=VK_SHIFT; key.KeyActionType=actions::KeyAction::KEY_DOWN;
+    window.OnAction(key); ASSERT_EQ(1u,window.Moves.size());
+    EXPECT_EQ(base::Action::MODIFIER_NONE,window.Moves.back().Modifiers);
+    graphics::WindowInputTestAccess::Queue(window,{0,4}); graphics::WindowInputTestAccess::Flush(window);
+    ASSERT_EQ(2u,window.Moves.size()); EXPECT_TRUE(window.Moves.back().Modifiers & base::Action::MODIFIER_SHIFT);
+    graphics::WindowInputTestAccess::Queue(window,{0,100}); window.CancelMouseCapture();
+    graphics::WindowInputTestAccess::Flush(window); ASSERT_EQ(3u,window.Moves.size()); EXPECT_FALSE(window.Moves.back().IsRelative); // Cancellation itself delivers one absolute move.
+    graphics::WindowInputTestAccess::Begin(window); window.CancelDuringMove=true;
+    graphics::WindowInputTestAccess::Queue(window,{0,12}); graphics::WindowInputTestAccess::Flush(window);
+    const auto count=window.Moves.size(); graphics::WindowInputTestAccess::Flush(window); EXPECT_EQ(count,window.Moves.size());
+}

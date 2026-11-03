@@ -75,7 +75,7 @@ namespace midi
 			_velocityDelta = std::clamp(_velocityDelta + dy, -1000000.0, 1000000.0);
 			const auto steps = std::abs(_velocityDelta) < 3.0 ? 0 : static_cast<int>(std::clamp(std::trunc(_velocityDelta / 4.0), -127.0, 127.0));
 			_proposedVelocity = std::clamp(_initialVelocity + steps, 1, 127);
-			_working = _before;
+			// Velocity changes only the captured attack byte; the detached source is already copied at begin.
 			_dirty = _proposedVelocity != _initialVelocity;
 			return MidiEditOperations::SetVelocity(_working, _onIndex, _proposedVelocity);
 		}

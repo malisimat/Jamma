@@ -114,6 +114,7 @@ namespace graphics
 		static LRESULT CALLBACK WindowProcedure(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) noexcept;
 
 	protected:
+		virtual bool _RelativePointerValid() const;
 		virtual bool _IsNativeKeyDown(unsigned int key, bool queuedInput) const;
 		void _ReconcileKeyboardState(bool queuedInput = false);
 		// Resolve the current press, not a delayed asynchronous hover readback.
@@ -146,7 +147,9 @@ namespace graphics
 		void _UpdatePointerCursor();
 		void _ReleaseOwnedMouseCapture();
 		static constexpr UINT PointerRefreshMessage = WM_APP + 0x341u;
-		bool _RelativePointerValid() const;
+		friend class WindowInputTestAccess;
+		void _QueueRelativePointer(utils::Position2d delta) noexcept;
+		void _FlushRelativePointer();
 		void _RestoreRawInput();
 		void _ResamplePointer();
 		void _HandleRawInput(HRAWINPUT input);
@@ -176,6 +179,8 @@ namespace graphics
 		bool _releasingOwnedMouseCapture = false;
 		bool _windowSizeMove = false;
 		int _relativeButton = -1;
+		// UI-owned bounded displacement, consumed once per frame or ordered action.
+		utils::Position2d _pendingRelativeDelta{};
 		POINT _relativeAnchorClient{};
 		POINT _relativeAnchorScreen{};
 		utils::Position2d _relativeAnchor{};
