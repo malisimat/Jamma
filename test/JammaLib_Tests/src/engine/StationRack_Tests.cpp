@@ -141,6 +141,54 @@ TEST(StationRack, TakeRacksUseProjectedSpacingAndKeepSingleTakeHeight)
 	EXPECT_EQ(first->Rack()->ConstrainHeight(first->GetSize().Height), first->Rack()->GetSize().Height);
 }
 
+TEST(StationRack, MidiGridsAreExclusiveWithinEachStation)
+{
+	for (const bool committed : {false, true})
+	{
+		SCOPED_TRACE(committed ? "committed takes" : "staged takes");
+		auto station = MakeStation();
+		auto otherStation = MakeStation("other-station");
+		station->Init();
+		otherStation->Init();
+		CommitInitial(station);
+		CommitInitial(otherStation);
+		auto first = MakeTestLoopTake("first");
+		auto second = MakeTestLoopTake("second");
+		station->AddTake(first);
+		station->AddTake(second);
+		if (committed) station->CommitChanges();
+		else { first->Init(); second->Init(); }
+
+		const auto ownGrid = station->GetGuiRack()->VstRack();
+		const auto otherGrid = otherStation->GetGuiRack()->VstRack();
+		const auto firstGrid = first->Rack()->VstRack();
+		const auto secondGrid = second->Rack()->VstRack();
+		otherGrid->SetChannelsCollapsed(false);
+		ownGrid->SetChannelsCollapsed(false);
+		EXPECT_FALSE(ownGrid->ChannelsCollapsed());
+		EXPECT_FALSE(otherGrid->ChannelsCollapsed());
+
+		firstGrid->SetChannelsCollapsed(false);
+		EXPECT_TRUE(ownGrid->ChannelsCollapsed());
+		EXPECT_FALSE(firstGrid->ChannelsCollapsed());
+		EXPECT_FALSE(otherGrid->ChannelsCollapsed());
+
+		secondGrid->SetChannelsCollapsed(false);
+		EXPECT_TRUE(firstGrid->ChannelsCollapsed());
+		EXPECT_FALSE(secondGrid->ChannelsCollapsed());
+		EXPECT_FALSE(otherGrid->ChannelsCollapsed());
+
+		ownGrid->SetChannelsCollapsed(false);
+		EXPECT_TRUE(secondGrid->ChannelsCollapsed());
+		EXPECT_FALSE(ownGrid->ChannelsCollapsed());
+		EXPECT_FALSE(otherGrid->ChannelsCollapsed());
+		ownGrid->SetChannelsCollapsed(true);
+		EXPECT_TRUE(firstGrid->ChannelsCollapsed());
+		EXPECT_TRUE(secondGrid->ChannelsCollapsed());
+		EXPECT_FALSE(otherGrid->ChannelsCollapsed());
+	}
+}
+
 TEST(StationRack, RouterOpenCollapsesCommittedSiblingRacksToMaster)
 {
 	auto station = MakeStation();

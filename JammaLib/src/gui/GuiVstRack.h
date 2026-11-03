@@ -66,6 +66,7 @@ namespace gui
 		const std::string& Feedback() const noexcept { return _feedback; }
 		void SetRevealHeld(bool held) { _revealHeld = held; }
 		void SetChannelsCollapsed(bool collapsed);
+		void SetChannelsOpenedCallback(std::function<void()> callback) { _channelsOpened = std::move(callback); }
 		void SetAllowedMidiChannels(const std::vector<int>& channels);
 		bool ChannelsCollapsed() const noexcept { return _collapsed; }
 		std::shared_ptr<base::GuiElement> ChannelsPanel() const { return _channels; }
@@ -162,6 +163,7 @@ namespace gui
 		actions::ActionResult _Captured();
 		Model _model;
 		std::function<void(Command)> _submit;
+		std::function<void()> _channelsOpened;
 		std::shared_ptr<base::GuiElement> _channels;
 		std::vector<std::shared_ptr<GuiToggle>> _toggles;
 		std::vector<std::shared_ptr<base::GuiElement>> _sourceSockets;

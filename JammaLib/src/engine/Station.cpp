@@ -911,6 +911,8 @@ ActionResult Station::OnAction(GuiAction action)
 		if (panel->State == GuiRackParams::RACK_ROUTER) _CollapseOtherTakeRouters();
 		else if (panel->State == GuiRackParams::RACK_CHANNELS) _CollapseOtherTakeRoutersToChannels();
 	}
+	else if (std::holds_alternative<gui::GuiRack::MidiGridOpened>(intent))
+		_CollapseMidiGrids();
 	else if (const auto* count = std::get_if<gui::GuiRack::InputCountChange>(&intent))
 		SetNumBusChannels(count->Count);
 	else if (const auto* routes = std::get_if<gui::GuiRack::RouteChange>(&intent))
@@ -2643,6 +2645,14 @@ std::optional<std::shared_ptr<LoopTake>> Station::_TryGetTake(std::string id)
 	}
 
 	return std::nullopt;
+}
+
+void Station::_CollapseMidiGrids()
+{
+	_guiRack->VstRack()->SetChannelsCollapsed(true);
+	const auto& takes = (_HasUncommittedChanges() && _flipTakeBuffer) ? _backLoopTakes : _loopTakes;
+	for (const auto& take : takes)
+		take->GetGuiRack()->VstRack()->SetChannelsCollapsed(true);
 }
 
 void Station::_CollapseOtherTakeRouters()

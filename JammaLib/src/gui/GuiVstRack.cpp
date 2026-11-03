@@ -406,6 +406,8 @@ void GuiVstRack::SetViewport(Size2d viewport) { _viewport = viewport; _LayoutRow
 void GuiVstRack::SetFeedback(std::string message) { _feedback = std::move(message); }
 void GuiVstRack::SetChannelsCollapsed(bool collapsed)
 {
+	// Close sibling grids before opening this one; collapsing never notifies.
+	if (!collapsed && _collapsed && _channelsOpened) _channelsOpened();
 	CancelInteraction();
 	if (collapsed) _channels->ClearPointerState();
 	_collapsed = collapsed; _channels->SetVisible(!collapsed);

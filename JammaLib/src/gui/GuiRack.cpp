@@ -410,6 +410,17 @@ bool GuiRack::IsInView(utils::Size2d viewport) const
 void GuiRack::_InitReceivers()
 {
 	_receiversInitialized = true;
+	if (_vstRack) _vstRack->SetChannelsOpenedCallback([weak = std::weak_ptr<GuiRack>(
+		std::static_pointer_cast<GuiRack>(ActionReceiver::shared_from_this()))] {
+		if (const auto rack = weak.lock(); rack && rack->_receiver)
+		{
+			GuiAction action;
+			action.ElementType = GuiAction::ACTIONELEMENT_RACK;
+			action.Index = MidiGridOpenedNotificationIndex;
+			action.Data = GuiAction::GuiInt{0};
+			rack->_receiver->OnAction(action);
+		}
+	});
 
 	_masterSlider->SetReceiver(ActionReceiver::shared_from_this());
 	for (auto& button : _vstControls)
@@ -781,6 +792,7 @@ GuiRack::ControlIntent GuiRack::DecodeControlAction(const actions::GuiAction& ac
 	{
 		if (const auto* count = std::get_if<GuiAction::GuiInt>(&action.Data))
 		{
+			if (action.Index == MidiGridOpenedNotificationIndex) return MidiGridOpened{};
 			if (action.Index == RackStateNotificationIndex)
 			{
 				if (count->Value >= GuiRackParams::RACK_MASTER && count->Value <= GuiRackParams::RACK_ROUTER)

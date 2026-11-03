@@ -75,6 +75,7 @@ namespace gui
 
 	public:
 		static constexpr unsigned int RackStateNotificationIndex = ~0u;
+		static constexpr unsigned int MidiGridOpenedNotificationIndex = ~0u - 2u;
 		static constexpr unsigned int MidiChannelToggleBaseIndex = 100u;
 		static constexpr unsigned int MidiDeselectAllIndex = 116u;
 		static constexpr unsigned int MidiSelectAllIndex = 117u;
@@ -99,6 +100,7 @@ namespace gui
 		// Borrowed intents are consumed synchronously while the source action lives.
 		// The hierarchy owner applies mixer/topology consequences after decoding.
 		struct PanelOpened { GuiRackParams::RackState State; };
+		struct MidiGridOpened {};
 		struct InputCountChange { unsigned int Count; };
 		struct RouteChange
 		{
@@ -106,7 +108,7 @@ namespace gui
 			std::vector<unsigned int> OutputsFor(unsigned int input) const;
 		};
 		struct LevelChange { unsigned int Index; double Value; };
-		using ControlIntent = std::variant<std::monostate, PanelOpened, InputCountChange, RouteChange, LevelChange>;
+		using ControlIntent = std::variant<std::monostate, PanelOpened, MidiGridOpened, InputCountChange, RouteChange, LevelChange>;
 		static ControlIntent DecodeControlAction(const actions::GuiAction& action) noexcept;
 
 		GuiRackParams::RackState GetRackState() const;

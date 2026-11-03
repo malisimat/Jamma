@@ -403,6 +403,7 @@ namespace engine
 
 		using LoopTakeSnapshot = std::vector<std::weak_ptr<LoopTake>>;
 
+		void _CollapseMidiGrids();
 		void _CollapseOtherTakeRouters();
 		void _CollapseOtherTakeRoutersToChannels();
 		void _ApplyMidiQuantisationPhaseOffset() noexcept;
