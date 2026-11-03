@@ -22,7 +22,6 @@
 #include "../engine/LoopTake.h"
 #include "../engine/Station.h"
 #include "../graphics/Camera.h"
-#include "../gui/GuiButton.h"
 #include "../gui/GuiLabel.h"
 #include "../gui/GuiNumericInput.h"
 #include "../resources/ResourceLib.h"
@@ -63,7 +62,6 @@ namespace midi
 		void InitResources(resources::ResourceLib& resourceLib, bool forceInit);
 		void ReleaseResources();
 		void SetSize(utils::Size2d size);
-		void SetButtonArea(utils::Rect2d area);
 
 		bool Open(const std::shared_ptr<engine::LoopTake>& take,
 			const std::shared_ptr<engine::Loop>& audioLoop,
@@ -101,9 +99,7 @@ namespace midi
 			: _gesture ? _gesture->EditHandle() : _editHandle; }
 		bool NumericCursorAt(utils::Position2d point) const
 		{ return IsReady() && (_channelDragging || (_channelInput->IsVisible() && _channelInput->HitTest(_channelInput->ParentToLocal(point)))); }
-		bool OwnsPointer() const noexcept { return _pointerOwned || _buttonPressed; }
-		bool OwnsButtonInput() const noexcept { return _buttonPressed || _consumeButtonRelease; }
-		bool ConsumeCancelledButtonRelease(const actions::TouchAction& action);
+		bool OwnsPointer() const noexcept { return _pointerOwned; }
 		bool IsOrbitDragging() const noexcept { return _orbitDragging; }
 		float Morph() const noexcept { return _blend; }
 		float SurroundingDim() const noexcept { return 1.0f - 0.72f * _blend; }
@@ -127,7 +123,6 @@ namespace midi
 
 		void _Layout();
 		void _SetFeedback(const std::string& message);
-		void _CancelButtonPress();
 		void _ResetTarget();
 		std::string _UnavailableReason(const std::shared_ptr<engine::LoopTake>& take,
 			const std::shared_ptr<engine::Loop>& audioLoop,
@@ -167,7 +162,6 @@ namespace midi
 		void _UpdateIdleHover();
 		void _ClearIdleHover(bool clearCache = false);
 		void _CheckGesture();
-		bool _HandleButton(actions::TouchAction action);
 
 	private:
 		Host _host;
@@ -210,11 +204,6 @@ namespace midi
 		bool _orbitDragging = false;
 		float _blend = 0.0f;
 		float _audioSurfaceBlend = 0.0f;
-		bool _buttonPressed = false;
-		bool _consumeButtonRelease = false;
-		bool _pointerOverButton = false;
-		utils::Rect2d _buttonArea{};
-		bool _buttonShowsClose = false;
 		LoopGridGeometry::EditHandle _editHandle = LoopGridGeometry::EditHandle::None;
 		bool _pointerOwned = false;
 		double _freeDragOffsetU = 0.0, _freeDragOffsetV = 0.0;
@@ -242,7 +231,6 @@ namespace midi
 		std::shared_ptr<actions::MidiEditRevisionCursor> _revisionCursor;
 		std::vector<CursorEntry> _revisionCursors;
 		std::string _feedbackText;
-		std::shared_ptr<gui::GuiButton> _button;
 		std::shared_ptr<gui::GuiLabel> _feedback;
 		std::shared_ptr<gui::GuiLabel> _modeLabel;
 		std::shared_ptr<gui::GuiNumericInput> _channelInput;

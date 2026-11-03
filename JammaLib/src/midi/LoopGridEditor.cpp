@@ -15,24 +15,15 @@ LoopGridEditor::LoopGridEditor(Host host, utils::Size2d size) :
 	_host(std::move(host)),
 	_size(size)
 {
-	const auto buttonPos = utils::Position2d{};
-
-	auto buttonParams = gui::GuiButtonParams::PanelButton(190u);
-	buttonParams.Text = "Edit loop (E)";
-	buttonParams.Position = buttonPos;
-	_button = std::make_shared<gui::GuiButton>(buttonParams);
-	_button->Init();
-	_button->SetVisible(false);
-
 	auto feedbackParams = gui::GuiLabelParams::PanelHeader("", 330u);
 	feedbackParams.Ellipsize = true;
-	feedbackParams.Position = { std::max(0, buttonPos.X - 340), buttonPos.Y + 6 };
+	feedbackParams.Position = {};
 	_feedback = std::make_shared<gui::GuiLabel>(feedbackParams);
 	_feedback->Init();
 
 	auto modeParams = gui::GuiLabelParams::PanelHeader("", 260u);
 	modeParams.Ellipsize = true;
-	modeParams.Position = { std::max(0, buttonPos.X - 340), buttonPos.Y - 20 };
+	modeParams.Position = {};
 	_modeLabel = std::make_shared<gui::GuiLabel>(modeParams);
 	_modeLabel->Init();
 
@@ -56,7 +47,6 @@ LoopGridEditor::LoopGridEditor(Host host, utils::Size2d size) :
 void LoopGridEditor::InitResources(resources::ResourceLib& resourceLib, bool forceInit)
 {
 	_audioEditor.InitMeshResources(forceInit);
-	_button->InitResources(resourceLib, forceInit);
 	_feedback->InitResources(resourceLib, forceInit);
 	_modeLabel->InitResources(resourceLib, forceInit);
 	_channelInput->InitResources(resourceLib, forceInit);
@@ -67,7 +57,6 @@ void LoopGridEditor::ReleaseResources()
 {
 	CancelInput();
 	_audioEditor.ReleaseMeshResources();
-	_button->ReleaseResources();
 	_feedback->ReleaseResources();
 	_modeLabel->ReleaseResources();
 	_channelInput->ReleaseResources();
@@ -100,12 +89,6 @@ actions::ActionResult LoopGridEditor::_Eaten()
 	return eaten;
 }
 
-void LoopGridEditor::SetButtonArea(utils::Rect2d area)
-{
-	_buttonArea = area;
-	_Layout();
-}
-
 float LoopGridEditor::_MidiRadius(std::uint32_t lengthSamps) noexcept
 {
 	return static_cast<float>(std::clamp(
@@ -114,13 +97,6 @@ float LoopGridEditor::_MidiRadius(std::uint32_t lengthSamps) noexcept
 
 void LoopGridEditor::_Layout()
 {
-	const auto buttonSize = _button->GetSize();
-	const bool fits = !_buttonArea.IsEmpty() && _buttonArea.Right - _buttonArea.Left >= static_cast<int>(buttonSize.Width)
-		&& _buttonArea.Top - _buttonArea.Bottom >= static_cast<int>(buttonSize.Height);
-	const utils::Position2d position{_buttonArea.Right - static_cast<int>(buttonSize.Width), _buttonArea.Bottom};
-	if (!fits || position.X != _button->Position().X || position.Y != _button->Position().Y) _CancelButtonPress();
-	_button->SetVisible(fits);
-	if (fits) _button->SetPosition(position);
 	const int statusWidth = gui::GuiStyle::StatusBarWidth(static_cast<int>(_size.Width));
 	const int statusX = static_cast<int>(_size.Width) - statusWidth;
 	const int statusHeight = std::min(gui::GuiStyle::StatusBarHeight, static_cast<int>(_size.Height));
@@ -201,7 +177,7 @@ bool LoopGridEditor::FindCandidate(std::shared_ptr<engine::LoopTake>& take,
 	std::shared_ptr<engine::Loop>& audioLoop,
 	std::shared_ptr<MidiLoop>& midiLoop) const
 {
-	const auto hovered = !(_button->IsVisible() && _pointerOverButton) && _host.Hovered ? _host.Hovered() : nullptr;
+	const auto hovered = _host.Hovered ? _host.Hovered() : nullptr;
 	std::scoped_lock lock(_host.SceneMutex);
 	const bool selectStreams = !_host.SelectionDepth || _host.SelectionDepth() == base::DEPTH_LOOP;
 	struct Candidate
@@ -511,7 +487,6 @@ void LoopGridEditor::Close()
 	_ClearIdleHover(true);
 	_EndOrbit();
 	_revisionCursor.reset();
-	_CancelButtonPress();
 	_audioEditor.Close();
 	_state = State::Closing;
 	_host.Camera.RestoreEditorReturnState(_returnCamera);
@@ -1204,7 +1179,6 @@ void LoopGridEditor::CancelInput()
 	_CancelGesture();
 	_EndOrbit();
 	_ClearIdleHover(true);
-	_CancelButtonPress();
 	_channelDragging = false;
 	_channelInput->ClearFocus();
 }
@@ -1346,28 +1320,7 @@ void LoopGridEditor::UpdateUi(const glm::mat4& viewProjection)
 
 		}
 	}
-	const auto showsClose = IsOpen();
-	if (!showsClose && State::Closed == _state)
-	{
-		std::shared_ptr<engine::LoopTake> take;
-		std::shared_ptr<engine::Loop> audioLoop;
-		std::shared_ptr<MidiLoop> midiLoop;
-		const auto hasCandidate = FindCandidate(take, audioLoop, midiLoop);
-		const auto reason = hasCandidate
-			? _UnavailableReason(take, audioLoop, midiLoop)
-			: std::string{"Select a completed loop to edit"};
-		const bool enabled = hasCandidate && reason.empty();
-		if (!enabled) _CancelButtonPress();
-		_button->SetEnabled(enabled);
-		_SetFeedback(reason);
-	}
-	else
-		_button->SetEnabled(true);
-	if (showsClose != _buttonShowsClose)
-	{
-		_button->SetText(showsClose ? "Close editor (Esc)" : "Edit loop (E)");
-		_buttonShowsClose = showsClose;
-	}
+
 }
 
 void LoopGridEditor::ApplyToModels()
@@ -1409,7 +1362,6 @@ void LoopGridEditor::ApplyToModels()
 void LoopGridEditor::Draw(base::DrawContext& ctx)
 {
 	_feedback->Draw(ctx);
-	_button->Draw(ctx);
 	if (IsOpen() && !_audioLoop.expired()) _modeLabel->Draw(ctx);
 
 	if (IsOpen() && !_midiLoop.expired())
@@ -1420,74 +1372,10 @@ void LoopGridEditor::Draw(base::DrawContext& ctx)
 
 }
 
-void LoopGridEditor::_CancelButtonPress()
-{
-	_consumeButtonRelease = _consumeButtonRelease || _buttonPressed;
-	_buttonPressed = false;
-	_button->ClearPointerState();
-}
-
-bool LoopGridEditor::ConsumeCancelledButtonRelease(const actions::TouchAction& action)
-{
-	if (action.Touch != actions::TouchAction::TOUCH_MOUSE || action.Index != 0) return false;
-	if (action.State == actions::TouchAction::TOUCH_DOWN) { _consumeButtonRelease = false; return false; }
-	return std::exchange(_consumeButtonRelease, false);
-}
-
-bool LoopGridEditor::_HandleButton(actions::TouchAction action)
-{
-	if (ConsumeCancelledButtonRelease(action)) return true;
-	if (action.Touch == actions::TouchAction::TOUCH_MOUSE && action.Index == 4) return _buttonPressed;
-	if (_buttonPressed && (action.Touch != actions::TouchAction::TOUCH_MOUSE || action.Index != 0))
-	{
-		_CancelButtonPress();
-		return true;
-	}
-	if (!_button->IsVisible() || State::Closing == _state)
-		return false;
-	const auto inside = _button->HitTest(_button->GlobalToLocal(action.Position));
-	if (actions::TouchAction::TOUCH_DOWN == action.State && 0 == action.Index
-		&& action.Touch == actions::TouchAction::TOUCH_MOUSE && inside)
-	{
-		const auto result = _button->OnAction(_button->GlobalToLocal(action));
-		_buttonPressed = _button->IsEnabled() && result.IsEaten;
-		if (!_buttonPressed)
-		{
-			_consumeButtonRelease = true;
-			_SetFeedback("Select a completed loop to edit");
-		}
-		return true;
-	}
-	if (actions::TouchAction::TOUCH_UP == action.State && _buttonPressed
-		&& action.Touch == actions::TouchAction::TOUCH_MOUSE && action.Index == 0)
-	{
-		_buttonPressed = false;
-		_button->OnAction(_button->GlobalToLocal(action));
-		if (inside)
-		{
-			if (IsOpen())
-				Close();
-			else
-			{
-				std::shared_ptr<engine::LoopTake> take;
-				std::shared_ptr<engine::Loop> audioLoop;
-				std::shared_ptr<MidiLoop> midiLoop;
-				if (FindCandidate(take, audioLoop, midiLoop))
-					Open(take, audioLoop, midiLoop);
-				else _SetFeedback("Select a completed loop to edit");
-			}
-		}
-		return true;
-	}
-	return false;
-}
-
 std::optional<actions::ActionResult> LoopGridEditor::OnAction(actions::TouchAction action)
 {
 	_altEdgeAvailable = (action.Modifiers & base::Action::MODIFIER_ALT)
 		&& !(action.Modifiers & (base::Action::MODIFIER_CTRL | base::Action::MODIFIER_SHIFT));
-	if (action.Touch == actions::TouchAction::TOUCH_MOUSE)
-		_pointerOverButton = _button->IsVisible() && _button->HitTest(_button->GlobalToLocal(action.Position));
 	_CheckGesture();
 	const auto isMouse = action.Touch == actions::TouchAction::TOUCH_MOUSE;
 	if (_pointerOwned)
@@ -1541,7 +1429,6 @@ std::optional<actions::ActionResult> LoopGridEditor::OnAction(actions::TouchActi
 			return _Eaten();
 		}
 	}
-	if (_HandleButton(action)) return _Eaten();
 	if (!IsEngaged()) return std::nullopt;
 	if (_orbitDragging)
 	{
@@ -1639,15 +1526,6 @@ std::optional<actions::ActionResult> LoopGridEditor::OnAction(actions::TouchMove
 {
 	_altEdgeAvailable = (action.Modifiers & base::Action::MODIFIER_ALT)
 		&& !(action.Modifiers & (base::Action::MODIFIER_CTRL | base::Action::MODIFIER_SHIFT));
-	if (action.Touch == actions::TouchAction::TOUCH_MOUSE)
-		_pointerOverButton = _button->IsVisible() && _button->HitTest(_button->GlobalToLocal(action.Position));
-	if (_buttonPressed)
-	{
-		if (action.Origin == actions::TouchMoveAction::Provenance::CaptureCancellation ||
-			action.Touch != actions::TouchAction::TOUCH_MOUSE || (action.MouseButtonsDown & 1u) == 0u) _CancelButtonPress();
-		else _button->OnAction(_button->GlobalToLocal(action));
-		return _Eaten();
-	}
 	if (!_pointerOwned) _audioBandPreview = (action.Modifiers & base::Action::MODIFIER_ALT) != 0;
 	if (!IsEngaged()) return std::nullopt;
 	_CheckGesture();

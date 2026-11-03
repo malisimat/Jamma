@@ -464,14 +464,6 @@ public:
 
 	midi::LoopGridEditor& EditorForTest() { return _workspace->Editor(); }
 	void RefreshEditorForTest() { _workspace->UpdateEditorUi(); }
-	void ExpectEditorButtonUncoveredForTest()
-	{
-		const auto point = midi::LoopGridEditorTestAccess::ButtonPoint(EditorForTest());
-		EXPECT_GE(point.Y, gui::GuiStyle::StatusBarHeight);
-		EXPECT_FALSE(_workspace->MainPanel()->RouteHitTest(point));
-		EXPECT_FALSE(_workspace->SelectionPanel()->RouteHitTest(point));
-		EXPECT_FALSE(_workspace->Hud()->CapturesPointer(point));
-	}
 	void SelectionGroupForTest(GroupCommand command)
 	{
 		std::scoped_lock lock(_sceneMutex); _ExecuteGroupCommandLocked(true, command, 1u);
@@ -491,11 +483,6 @@ public:
 		}
 		const auto outcome = engine::HierarchySelection::ApplyLocked(engine::HierarchySelection::BorrowLocked(_stations), batch);
 		_workspace->Editor().SelectionCommittedLocked({outcome.NewlySelected.data(), outcome.NewlySelectedCount});
-	}
-	bool WriterBlockedButtonReleaseForTest(TouchAction action)
-	{
-		auto presentation = _WorkspaceInputPresentation(); presentation.WriterHeld = true;
-		return _workspace->OnTouch(action, {_sceneMutex, _stations}, presentation).IsEaten;
 	}
 	void PopupForEditorTest() { _workspace->OpenPopup(std::make_shared<gui::GuiPopup>()); _workspace->ClosePopups(); }
 	void ReverseStationsForTest()
@@ -2814,18 +2801,10 @@ public:
 		EXPECT_TRUE(scene.OnAction(key).IsEaten);
 	}
 	static void Close(TestScene& scene) { scene.CloseLoopGridEditor(); scene.SettleLoopGridEditorForTest(); }
-	static void OpenButton(TestScene& scene)
-	{
-		scene.RefreshEditorForTest(); ASSERT_TRUE(midi::LoopGridEditorTestAccess::ButtonVisible(scene.EditorForTest()));
-		scene.ExpectEditorButtonUncoveredForTest();
-		const auto point = midi::LoopGridEditorTestAccess::ButtonPoint(scene.EditorForTest());
-		scene.OnAction(MakeSceneTouchMove(point, 0u)); // Normal movement must ignore old world hover at the button.
-		EXPECT_TRUE(scene.OnAction(MakeSceneTouch(TouchAction::TOUCH_DOWN, point, 0, LeftMouseButtonMask)).IsEaten);
-		EXPECT_TRUE(scene.OnAction(MakeSceneTouch(TouchAction::TOUCH_UP, point, 0, 0u)).IsEaten);
-	}
+
 };
 
-TEST(Scene, EditorUsesCommittedRecentSelectionForKeyAndButtonAcrossLifecycle)
+TEST(Scene, EditorUsesCommittedRecentSelectionAcrossLifecycle)
 {
 	SceneParams params{base::DrawableParams(), base::MoveableParams(), base::SizeableParams({1400u, 900u})};
 	TestScene scene(params, {}); scene.PauseJobForTest();
@@ -2850,9 +2829,6 @@ TEST(Scene, EditorUsesCommittedRecentSelectionForKeyAndButtonAcrossLifecycle)
 	EditorSelectionTestData::Close(scene);
 	EditorSelectionTestData::Hover(scene, a->GetMidiLoops()[0]->Model());
 	EditorSelectionTestData::OpenKey(scene); ASSERT_EQ(a, scene.LoopGridEditorTake());
-	EditorSelectionTestData::Close(scene);
-	EditorSelectionTestData::Hover(scene, a->GetMidiLoops()[0]->Model());
-	EditorSelectionTestData::OpenButton(scene); ASSERT_EQ(b, scene.LoopGridEditorTake());
 	EditorSelectionTestData::Close(scene);
 	// A group recall reselects B without inventing recency for its old selection.
 	scene.SelectionGroupForTest(GroupCommand::Store);
@@ -2880,79 +2856,8 @@ TEST(Scene, EditorUsesCommittedRecentSelectionForKeyAndButtonAcrossLifecycle)
 	EditorSelectionTestData::OpenKey(scene); EXPECT_FALSE(scene.IsLoopGridEditorOpen());
 	EXPECT_EQ("Select a completed loop to edit", midi::LoopGridEditorTestAccess::Feedback(scene.EditorForTest()));
 	a->DeSelect(); aggregate->DeSelect();
-	EditorSelectionTestData::OpenButton(scene); EXPECT_FALSE(scene.IsLoopGridEditorOpen());
+	EditorSelectionTestData::OpenKey(scene); EXPECT_FALSE(scene.IsLoopGridEditorOpen());
 	EXPECT_EQ("Select a completed loop to edit", midi::LoopGridEditorTestAccess::Feedback(scene.EditorForTest()));
-}
-
-TEST(Scene, EditorButtonCancelsLostHiddenFocusedModalAndDisabledPresses)
-{
-	for (const auto cancellation : {0u, 1u, 2u, 3u, 4u, 5u})
-	{
-		SCOPED_TRACE(::testing::Message() << "cancellation " << cancellation);
-		SceneParams params{base::DrawableParams(), base::MoveableParams(), base::SizeableParams({1400u, 900u})};
-		TestScene scene(params, {}); scene.PauseJobForTest();
-		auto station = MakeTestStation("button-lifetime"); scene.AddStationForTest(station);
-		auto take = EditorSelectionTestData::AddMidiTake(station, {4u}, 4);
-		scene.SetSelectionDepthForTest(Scene::VIEW_LOOPTAKE);
-		EditorSelectionTestData::PaintSelection(scene, take->GetMidiLoops()[0]->Model());
-		ASSERT_TRUE(take->IsSelected()); scene.SetHover3d({}, base::Action::MODIFIER_NONE);
-		if (cancellation == 4u) take->DeSelect(); // Disabled DOWN cannot arm a later enabled activation.
-		scene.RefreshEditorForTest(); ASSERT_TRUE(midi::LoopGridEditorTestAccess::ButtonVisible(scene.EditorForTest()));
-		scene.ExpectEditorButtonUncoveredForTest();
-		auto point = midi::LoopGridEditorTestAccess::ButtonPoint(scene.EditorForTest());
-		ASSERT_TRUE(scene.OnAction(MakeSceneTouch(TouchAction::TOUCH_DOWN, point, 0, LeftMouseButtonMask)).IsEaten);
-		EXPECT_EQ(cancellation != 4u, scene.EditorOwnsPointerForTest());
-		if (cancellation == 0u) scene.OnAction(MakeSceneTouchMove(point, 0u));
-		if (cancellation == 1u)
-		{
-			scene.SetSize({320u, 200u}); scene.RefreshEditorForTest();
-			EXPECT_FALSE(midi::LoopGridEditorTestAccess::ButtonVisible(scene.EditorForTest()));
-			scene.SetSize({1400u, 900u}); scene.RefreshEditorForTest();
-		}
-		if (cancellation == 2u) scene.OnInputFocusLost();
-		if (cancellation == 3u) scene.PopupForEditorTest();
-		if (cancellation == 4u) { take->Select(); scene.RefreshEditorForTest(); }
-		if (cancellation == 5u)
-		{
-			take->DeSelect(); scene.RefreshEditorForTest(); take->Select(); scene.RefreshEditorForTest();
-		}
-		EXPECT_FALSE(scene.EditorOwnsPointerForTest());
-		EXPECT_TRUE(midi::LoopGridEditorTestAccess::HasCancelledButtonRelease(scene.EditorForTest()));
-		// Unrelated pointer/wheel events cannot complete the canceled primary mouse press.
-		auto foreign = MakeSceneTouch(TouchAction::TOUCH_UP, point, 0, 0u); foreign.Touch = TouchAction::TOUCH_FINGER;
-		scene.OnAction(foreign); foreign.Touch = TouchAction::TOUCH_MOUSE; foreign.Index = 1; scene.OnAction(foreign);
-		scene.OnAction(MakeSceneWheel(1, point));
-		EXPECT_TRUE(midi::LoopGridEditorTestAccess::HasCancelledButtonRelease(scene.EditorForTest()));
-		point = midi::LoopGridEditorTestAccess::ButtonPoint(scene.EditorForTest());
-		EXPECT_TRUE(scene.OnAction(MakeSceneTouch(TouchAction::TOUCH_UP, point, 0, 0u)).IsEaten);
-		EXPECT_FALSE(scene.IsLoopGridEditorOpen());
-		EditorSelectionTestData::OpenButton(scene); EXPECT_EQ(take, scene.LoopGridEditorTake());
-	}
-}
-
-TEST(Scene, EditorButtonCancellationAllowsFreshWorldSelectionAndBlocksWriterReleaseActivation)
-{
-	SceneParams params{base::DrawableParams(), base::MoveableParams(), base::SizeableParams({1400u, 900u})};
-	TestScene scene(params, {}); scene.PauseJobForTest();
-	auto station = MakeTestStation("button-admission"); scene.AddStationForTest(station);
-	auto take = EditorSelectionTestData::AddMidiTake(station, {4u}, 4);
-	scene.SetSelectionDepthForTest(Scene::VIEW_LOOPTAKE);
-	const auto model = take->GetMidiLoops()[0]->Model();
-	EditorSelectionTestData::PaintSelection(scene, model); ASSERT_TRUE(take->IsSelected());
-	scene.RefreshEditorForTest(); const auto point = midi::LoopGridEditorTestAccess::ButtonPoint(scene.EditorForTest());
-	scene.OnAction(MakeSceneTouch(TouchAction::TOUCH_DOWN, point, 0, LeftMouseButtonMask));
-	scene.OnInputFocusLost(); ASSERT_FALSE(scene.EditorOwnsPointerForTest());
-	// A fresh primary DOWN elsewhere ends pending-only release ownership and routes normally.
-	EditorSelectionTestData::PaintSelection(scene, model); EXPECT_FALSE(take->IsSelected());
-	EditorSelectionTestData::PaintSelection(scene, model); ASSERT_TRUE(take->IsSelected());
-	scene.RefreshEditorForTest();
-	scene.OnAction(MakeSceneTouch(TouchAction::TOUCH_DOWN, point, 0, LeftMouseButtonMask));
-	ASSERT_TRUE(scene.EditorOwnsPointerForTest());
-	// Inject the actual Workspace admission value instead of acquiring a test-owned lifecycle writer.
-	EXPECT_TRUE(scene.WriterBlockedButtonReleaseForTest(MakeSceneTouch(TouchAction::TOUCH_UP, point, 0, 0u)));
-	EXPECT_FALSE(scene.IsLoopGridEditorOpen()); EXPECT_FALSE(scene.EditorOwnsPointerForTest());
-	EXPECT_FALSE(midi::LoopGridEditorTestAccess::HasCancelledButtonRelease(scene.EditorForTest()));
-	EditorSelectionTestData::OpenButton(scene); EXPECT_EQ(take, scene.LoopGridEditorTake());
 }
 
 TEST(Scene, EditorTakeEntryPrefersEligibleChannelFiveWhileLeafAndManualChoiceStayExplicit)
