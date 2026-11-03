@@ -928,3 +928,70 @@ TEST(IoSessionExporter, PendingMasterRejectsCaptureBeforeWritingManifestOrAssets
     EXPECT_FALSE(io::IoSessionExporter::ExportSessionToDirectory({station},{},quantiser,io::JamFile::GlobalMidiQuantState::Off,0.0,io::UserConfig{},stream,nullptr,mutex,nullptr,directory.Path.wstring()));
     EXPECT_TRUE(std::filesystem::is_empty(directory.Path)); EXPECT_TRUE(quantiser.LocalMasterTimingPending());
 }
+
+
+TEST(IoSessionExporter, ChildMidiRoutingExportsAndRestoresIndependentLocalState)
+{
+	ChosenMasterDirectory directory;
+	auto station = IoSessionExporterTest::MakeStation("routing");
+	auto take = IoSessionExporterTest::MakeTake("child-routing");
+	auto loop = IoSessionExporterTest::MakeAudioLoop(64u, 0u, 0u, 0.01f);
+	const std::vector<int> all{1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16};
+	EXPECT_EQ(all, take->AllowedMidiChannels());
+	EXPECT_EQ(all, loop->AllowedMidiChannels());
+	station->SetAllowedMidiChannels({4,5});
+	std::array<midi::MidiChannelRoute,16> takeRoutes{};
+	takeRoutes[1].PluginIds = {"unavailable-take"};
+	take->RestoreMidiRouting({2,3}, takeRoutes);
+	std::array<midi::MidiChannelRoute,16> loopRoutes{};
+	loopRoutes[5].PluginIds = {"unavailable-loop"};
+	loop->RestoreMidiRouting({1,6}, loopRoutes);
+	take->AddLoop(loop);
+	take->CommitChanges();
+	station->AddTake(take);
+	station->CommitChanges();
+	Quantiser quantiser;
+	quantiser.SetClock(std::make_shared<utils::Timer>());
+	quantiser.ApplyTiming({16u,64ul,4u,120.0f,4u}, "child routing persistence fixture");
+	audio::AudioStreamParams stream{};
+	stream.SampleRate = 48000u;
+	std::mutex mutex;
+	ASSERT_TRUE(io::IoSessionExporter::ExportSessionToDirectory({station}, {}, quantiser,
+		io::JamFile::GlobalMidiQuantState::Off, 0.0, {}, stream, nullptr, mutex, nullptr, directory.Path.wstring()));
+	std::ifstream manifest(directory.Path / "session.jam");
+	std::stringstream contents;
+	contents << manifest.rdbuf();
+	auto saved = io::JamFile::FromStream(std::move(contents));
+	ASSERT_TRUE(saved);
+	auto& savedTake = saved->Stations.at(0).LoopTakes.at(0);
+	ASSERT_EQ(1u, savedTake.Loops.size());
+	EXPECT_EQ(std::vector<int>({2,3}), savedTake.AllowedMidiChannels);
+	EXPECT_EQ(std::vector<int>({1,6}), savedTake.Loops[0].AllowedMidiChannels);
+	EXPECT_EQ(takeRoutes, savedTake.MidiChannelRoutes);
+	EXPECT_EQ(loopRoutes, savedTake.Loops[0].MidiChannelRoutes);
+	for (const bool disabled : {false, true})
+	{
+		if (disabled)
+		{
+			savedTake.AllowedMidiChannels.clear();
+			savedTake.Loops[0].AllowedMidiChannels.clear();
+		}
+		const auto restored = io::IoSessionLoader::Reconstruct(*saved, io::RigFile{}, directory.Path.wstring());
+		ASSERT_EQ(1u, restored.Stations.size());
+		const auto takes = restored.Stations[0]->GetLoopTakeSnapshot();
+		ASSERT_EQ(1u, takes.size());
+		// Reconstruction stages audio leaves until their ordinary owner commit.
+		// Local routing must already be restored before that publication.
+		const auto staged = takes[0]->FindStagedAudioLoopById(savedTake.Loops[0].Id);
+		ASSERT_NE(nullptr, staged);
+		EXPECT_EQ(disabled ? std::vector<int>{} : std::vector<int>({2,3}), takes[0]->AllowedMidiChannels());
+		EXPECT_EQ(disabled ? std::vector<int>{} : std::vector<int>({1,6}), staged->AllowedMidiChannels());
+		EXPECT_EQ(takeRoutes, takes[0]->MidiChannelRoutes());
+		EXPECT_EQ(loopRoutes, staged->MidiChannelRoutes());
+		takes[0]->CommitChanges();
+		restored.Stations[0]->CommitChanges();
+		ASSERT_EQ(1u, takes[0]->GetLoops().size());
+		EXPECT_EQ(staged, takes[0]->GetLoops()[0]);
+		EXPECT_EQ(loopRoutes, takes[0]->GetLoops()[0]->MidiChannelRoutes());
+	}
+}

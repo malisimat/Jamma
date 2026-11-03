@@ -1,5 +1,6 @@
 #include "MidiDelivery.h"
 #include <algorithm>
+#include <cmath>
 #include "MidiBlockTiming.h"
 #include "MidiLoop.h"
 #include "../engine/LoopTake.h"
@@ -8,21 +9,20 @@
 using namespace midi;
 using engine::LoopTake;
 
-bool MidiDelivery::ConfigureCompensation(const PreparedState& state, unsigned int referenceLatencySamps) noexcept
+bool MidiDelivery::CanConfigureCompensation(const PreparedState& state, unsigned int referenceLatencySamps) noexcept
 {
 	constexpr unsigned int MaxCompensationSamps = 262144u;
-	if (!state.MidiChain) return true;
-	for (auto index = std::size_t{ 0u }; index < state.MidiDestinations.size(); ++index)
+	for (const auto path : state.DestinationPathLatency)
+		if (path > referenceLatencySamps || referenceLatencySamps - path > MaxCompensationSamps) return false;
+	return true;
+}
+
+bool MidiDelivery::ConfigureCompensation(const PreparedState& state, unsigned int referenceLatencySamps) noexcept
+{
+	if (!CanConfigureCompensation(state, referenceLatencySamps)) return false;
+	for (auto index = std::size_t{0u}; index < state.MidiDestinations.size(); ++index)
 	{
-		const auto remaining = std::max(0, state.MidiChain->GetLatencySamplesFrom(index));
-		if (static_cast<unsigned int>(remaining) > referenceLatencySamps
-			|| referenceLatencySamps - static_cast<unsigned int>(remaining) > MaxCompensationSamps)
-			return false;
-	}
-	for (auto index = std::size_t{ 0u }; index < state.MidiDestinations.size(); ++index)
-	{
-		const auto remaining = std::max(0, state.MidiChain->GetLatencySamplesFrom(index));
-		const auto delay = referenceLatencySamps - static_cast<unsigned int>(remaining);
+		const auto delay = static_cast<unsigned int>(referenceLatencySamps - state.DestinationPathLatency[index]);
 		auto& destination = *state.MidiDestinations[index];
 		if (destination.CompensationDelaySamps.load(std::memory_order_relaxed) != delay)
 		{
@@ -33,144 +33,188 @@ bool MidiDelivery::ConfigureCompensation(const PreparedState& state, unsigned in
 	return true;
 }
 
-void MidiDelivery::Prepare(PreparedState& state, const PreparedState* previous,
+bool MidiDelivery::Prepare(PreparedState& state, const PreparedState* previous,
 	std::shared_ptr<vst::VstChain> chain, const std::vector<std::shared_ptr<engine::LoopTake>>& takes,
-	std::uint16_t enabledChannels, const std::array<MidiChannelRoute, 16>& channelRoutes,
-	unsigned int renderChannels)
+	std::uint16_t enabledChannels, const std::array<MidiChannelRoute,16>& channelRoutes,
+	unsigned int renderChannels, std::span<const PreparedRack> childRacks,
+	std::span<const SourceGroup> sources)
 {
-	state.MidiChain = std::move(chain);
-	state.EnabledChannels = enabledChannels;
-	auto queueRemovedBindings = [&]() {
-		if (!previous) return;
-		for (const auto& routes : previous->MidiPlaybackRoutes)
-			for (const auto& binding : routes)
-			{
-				if (!binding || binding->ReleaseQueued
-					|| binding->ReleaseConsumed.load(std::memory_order_acquire)) continue;
-				bool stillRouted = false;
-				for (const auto& currentRoutes : state.MidiPlaybackRoutes)
-					for (const auto& current : currentRoutes) stillRouted |= current == binding;
-				if (stillRouted
-					|| std::find(_pendingLostPlaybackMidi.begin(), _pendingLostPlaybackMidi.end(), binding)
-						!= _pendingLostPlaybackMidi.end()) continue;
-				binding->EmitSourceLossRelease = true;
-				_pendingLostPlaybackMidi.push_back(binding);
-			}
-		FlushPendingLostPlaybackMidi();
-	};
-	auto retainRetired = [&]() {
-		auto retain = [&](const std::shared_ptr<MidiDestination>& candidate) {
-			if (!candidate
-				|| std::find(state.MidiDestinations.begin(), state.MidiDestinations.end(), candidate) != state.MidiDestinations.end()
-				|| std::find(state.RetiredMidiDestinations.begin(), state.RetiredMidiDestinations.end(), candidate) != state.RetiredMidiDestinations.end()) return;
-			state.RetiredMidiDestinations.push_back(candidate);
-		};
-		if (previous)
-		{
-			for (const auto& destination : previous->MidiDestinations) retain(destination);
-			for (const auto& destination : previous->RetiredMidiDestinations)
-				if (!destination->RetirementReleased.load(std::memory_order_acquire)) retain(destination);
-		}
-		for (const auto& binding : _midiPlaybackBindings)
-			if (binding->QueuedEvents.load(std::memory_order_acquire) > 0u) retain(binding->Destination);
-	};
-	if (!state.MidiChain)
-	{
-		retainRetired();
-		queueRemovedBindings();
-		for (const auto& binding : _midiPlaybackBindings)
-			binding->RoutingActive.store(false, std::memory_order_release);
-		return;
-	}
+	state.MidiChain = chain;
+	state.Racks.push_back({chain, nullptr, nullptr, renderChannels, enabledChannels, channelRoutes});
+	state.Racks.insert(state.Racks.end(), childRacks.begin(), childRacks.end());
+	if (!sources.empty()) state.SourceGroups.assign(sources.begin(), sources.end());
+	else for (const auto& take : takes)
+		if (take) state.SourceGroups.push_back({take, take->GetMidiLoopSnapshot()});
+	std::size_t destinationCount = 0u;
+	for (const auto& rack : state.Racks) if (rack.Chain) destinationCount += rack.Chain->NumPlugins();
+	if (std::count_if(state.Racks.begin(), state.Racks.end(), [](const auto& rack) { return rack.Chain && rack.Chain->NumPlugins(); }) > MaxRacks
+		|| destinationCount > MaxDestinations) return false;
+
 	std::erase_if(_midiDestinations, [](const auto& entry) { return entry.expired(); });
-	std::vector<std::shared_ptr<MidiDestination>> destinations;
-	for (std::size_t index = 0u; index < state.MidiChain->NumPlugins(); ++index)
+	std::vector<engine::LoopTake*> destinationTakes;
+	const auto stationLatency = chain ? static_cast<std::uint64_t>(std::max(0, chain->GetLatencySamples())) : 0u;
+	for (const auto& rack : state.Racks)
 	{
-		const auto plugin = state.MidiChain->GetPlugin(index);
-		std::shared_ptr<MidiDestination> destination;
-		for (const auto& weak : _midiDestinations)
-			if (const auto existing = weak.lock(); existing && existing->Plugin == plugin && !existing->RetirementReleased.load(std::memory_order_acquire))
-				{ destination = existing; break; }
-		if (!destination)
+		if (!rack.Chain) continue;
+		std::uint64_t ancestorLatency = rack.Take ? stationLatency : 0u;
+		if (rack.Loop)
+			for (const auto& ancestor : state.Racks)
+				if (ancestor.Take == rack.Take && !ancestor.Loop && ancestor.Chain)
+					ancestorLatency += static_cast<std::uint64_t>(std::max(0, ancestor.Chain->GetLatencySamples()));
+		state.EnabledChannels |= rack.EnabledChannels;
+		for (std::size_t index = 0; index < rack.Chain->NumPlugins(); ++index)
 		{
-			destination = std::make_shared<MidiDestination>();
-			destination->Plugin = plugin;
-			destination->RenderChannels = plugin && plugin->HostedChannelCount() > 0u ? plugin->HostedChannelCount()
-				: std::max(1u, renderChannels);
-			_midiDestinations.push_back(destination);
+			const auto plugin = rack.Chain->GetPlugin(index);
+			std::shared_ptr<MidiDestination> destination;
+			for (const auto& weak : _midiDestinations)
+				if (const auto existing = weak.lock(); existing && existing->Plugin == plugin && plugin
+					&& !existing->RetirementReleased.load(std::memory_order_acquire)) { destination = existing; break; }
+			if (!destination)
+			{
+				destination = std::make_shared<MidiDestination>();
+				destination->Plugin = plugin;
+				destination->AudioLoop = rack.Loop;
+				destination->RenderChannels = plugin && plugin->HostedChannelCount() > 0u
+					? plugin->HostedChannelCount() : std::max(1u, rack.RenderChannels);
+				_midiDestinations.push_back(destination);
+			}
+			// One processor has exactly one block lifecycle even in malformed shared topology.
+			if (std::find(state.MidiDestinations.begin(), state.MidiDestinations.end(), destination) != state.MidiDestinations.end()) return false;
+			state.MidiDestinations.push_back(destination);
+			destinationTakes.push_back(rack.Take);
+			state.DestinationLegacyVelocity.push_back(!rack.Take);
+			state.DestinationPathLatency.push_back(ancestorLatency + static_cast<std::uint64_t>(std::max(0, rack.Chain->GetLatencySamplesFrom(index))));
+			std::uint16_t mask = 0u;
+			bool acceptsMidi = false;
+			if (plugin)
+			{
+				const auto capability = plugin->MidiInput();
+				acceptsMidi = capability.Known && (capability.Notes || capability.Controllers);
+				if (capability.Known && (capability.Notes || capability.Controllers))
+					for (auto channel = 0u; channel < 16u; ++channel)
+					{
+						if (!(rack.EnabledChannels & (1u << channel))) continue;
+						const auto& ids = rack.ChannelRoutes[channel].PluginIds;
+						if (!ids.empty() && std::find(ids.begin(), ids.end(), plugin->StateId()) == ids.end()) continue;
+						mask |= static_cast<std::uint16_t>(1u << channel);
+						state.LiveChannelDestinations[channel].push_back(destination);
+					}
+			}
+			state.DestinationHasMidiInput.push_back(acceptsMidi);
+			state.DestinationChannels.push_back(mask);
+			std::array<std::uint64_t,16> retirements{};
+			if (previous)
+			{
+				const auto old = std::find(previous->MidiDestinations.begin(), previous->MidiDestinations.end(), destination);
+				if (old != previous->MidiDestinations.end())
+				{
+					const auto oldIndex = static_cast<std::size_t>(old - previous->MidiDestinations.begin());
+					retirements = previous->DestinationRetirements[oldIndex];
+					const auto removed = static_cast<std::uint16_t>(previous->DestinationChannels[oldIndex] & ~mask);
+					for (auto channel = 0u; channel < 16u; ++channel) if (removed & (1u << channel)) ++retirements[channel];
+				}
+			}
+			state.DestinationRetirements.push_back(retirements);
 		}
-		destinations.push_back(std::move(destination));
 	}
-	// The host currently has no plugin-to-plugin MIDI forwarding (VST3 outputEvents
-	// is null). Audio rack order alone does not imply an upstream MIDI supply.
-	for (auto channel = 0u; channel < 16u; ++channel)
+	// No-rack/disabled takes impose no MIDI callback work and must never freeze
+	// ordinary audio membership merely because they contain many recorded streams.
+	std::erase_if(state.SourceGroups, [&](const auto& group) {
+		for (std::size_t index = 0u; index < state.MidiDestinations.size(); ++index)
+			if (state.DestinationHasMidiInput[index] && (!destinationTakes[index] || destinationTakes[index] == group.Take.get())) return false;
+		return true;
+	});
+	std::size_t sourceCount = 0u, bindingCount = 0u;
+	for (const auto& group : state.SourceGroups)
 	{
-		if (!(enabledChannels & (1u << channel))) continue;
-		const auto& ids = channelRoutes[channel].PluginIds;
-		for (const auto& destination : destinations)
-		{
-			if (!destination->Plugin) continue;
-			const auto capabilities = destination->Plugin->MidiInput();
-			if (!capabilities.Known || (!capabilities.Notes && !capabilities.Controllers)) continue;
-			// Retained unavailable identities still make a channel cabled, never broadcast.
-			if (ids.empty() || std::find(ids.begin(), ids.end(), destination->Plugin->StateId()) != ids.end())
-				state.LiveChannelDestinations[channel].push_back(destination);
-		}
+		sourceCount += group.Sources.size();
+		for (std::size_t index = 0u; index < state.MidiDestinations.size(); ++index)
+			if (state.DestinationHasMidiInput[index] && (!destinationTakes[index] || destinationTakes[index] == group.Take.get()))
+				bindingCount += group.Sources.size();
 	}
-	// Route history matters within the current chain. Removed plugins are unloaded
-	// by the structural owner; do not repin their destinations on every publication.
-	state.MidiDestinations = destinations;
-	state.DestinationChannels.assign(destinations.size(), 0u);
-	for (auto index = 0u; index < destinations.size(); ++index)
-		for (auto channel = 0u; channel < 16u; ++channel)
-			if (std::find(state.LiveChannelDestinations[channel].begin(), state.LiveChannelDestinations[channel].end(), destinations[index]) != state.LiveChannelDestinations[channel].end())
-				state.DestinationChannels[index] |= static_cast<std::uint16_t>(1u << channel);
-	state.DestinationRetirements.resize(destinations.size());
+	std::size_t retainedCount = state.MidiDestinations.size();
 	if (previous)
-		for (auto index = std::size_t{0u}; index < destinations.size(); ++index)
-		{
-			const auto old = std::find(previous->MidiDestinations.begin(), previous->MidiDestinations.end(), destinations[index]);
-			if (old == previous->MidiDestinations.end()) continue;
-			const auto oldIndex = static_cast<std::size_t>(old - previous->MidiDestinations.begin());
-			auto& retirements = state.DestinationRetirements[index];
-			retirements = previous->DestinationRetirements[oldIndex];
-			const auto removed = previous->DestinationChannels[oldIndex] & ~state.DestinationChannels[index];
-			for (auto channel = 0u; channel < 16u; ++channel)
-				if (removed & (1u << channel)) ++retirements[channel];
-		}
-	for (const auto& take : takes)
-		for (const auto& loop : take->GetMidiLoopSnapshot())
+	{
+		for (const auto& destination : previous->MidiDestinations)
+			if (std::find(state.MidiDestinations.begin(), state.MidiDestinations.end(), destination) == state.MidiDestinations.end()) ++retainedCount;
+		for (const auto& destination : previous->RetiredMidiDestinations)
+			if (!destination->RetirementReleased.load(std::memory_order_acquire)) ++retainedCount;
+	}
+	if (sourceCount > MaxSources || bindingCount > MaxBindings || retainedCount > MaxRetainedDestinations) return false;
+	// Source replacement can outpace bounded release acknowledgements while audio
+	// is stopped. Count unreclaimed bindings and genuinely new source/destination
+	// identities before touching active routes or queueing any retirement.
+	auto retainedBindings = _midiPlaybackBindings.size();
+	for (const auto& group : state.SourceGroups)
+		for (const auto& loop : group.Sources)
+			for (std::size_t index=0u; index<state.MidiDestinations.size(); ++index)
+			{
+				if (!state.DestinationHasMidiInput[index] || (destinationTakes[index] && destinationTakes[index]!=group.Take.get())) continue;
+				const auto& destination=state.MidiDestinations[index];
+				const bool reused=std::any_of(_midiPlaybackBindings.begin(),_midiPlaybackBindings.end(),[&](const auto& existing) {
+					return existing->Take==group.Take && existing->Loop==loop && existing->Destination==destination
+						&& !existing->ReleaseQueued && !existing->ReleaseConsumed.load(std::memory_order_acquire)
+						&& existing->RoutingActive.load(std::memory_order_acquire);
+				});
+				if (!reused && ++retainedBindings>MaxRetainedBindings) return false;
+			}
+	// All admission checks precede binding-state changes and retirement queues.
+	for (const auto& group : state.SourceGroups)
+		for (const auto& loop : group.Sources)
 		{
 			std::vector<std::shared_ptr<MidiPlaybackBinding>> bindings;
-			for (const auto& destination : destinations)
+			std::vector<std::size_t> indices;
+			for (std::size_t index = 0u; index < state.MidiDestinations.size(); ++index)
 			{
+				if (!state.DestinationHasMidiInput[index] || (destinationTakes[index] && destinationTakes[index] != group.Take.get())) continue;
+				const auto& destination = state.MidiDestinations[index];
 				std::shared_ptr<MidiPlaybackBinding> binding;
 				for (const auto& existing : _midiPlaybackBindings)
-					if (existing->Take == take &&
-						existing->Loop == loop && existing->Destination == destination)
-						{ binding = existing; break; }
+					if (existing->Take == group.Take && existing->Loop == loop && existing->Destination == destination
+						&& !existing->ReleaseQueued && !existing->ReleaseConsumed.load(std::memory_order_acquire)
+						&& existing->RoutingActive.load(std::memory_order_acquire)) { binding = existing; break; }
 				if (!binding)
 				{
 					binding = std::make_shared<MidiPlaybackBinding>();
-					binding->Take = take;
+					binding->Take = group.Take;
 					binding->Loop = loop;
 					binding->Destination = destination;
 					_midiPlaybackBindings.push_back(binding);
 				}
-				bindings.push_back(std::move(binding));
+				bindings.push_back(binding);
+				indices.push_back(index);
 			}
 			state.MidiPlaybackRoutes.push_back(std::move(bindings));
+			state.PlaybackDestinationIndices.push_back(std::move(indices));
 		}
 	for (const auto& binding : _midiPlaybackBindings)
 	{
 		bool active = false;
 		for (const auto& routes : state.MidiPlaybackRoutes)
-			for (const auto& route : routes)
-				active |= route == binding;
+			for (const auto& route : routes) active |= route == binding;
 		binding->RoutingActive.store(active, std::memory_order_release);
+		if (!active && !binding->ReleaseQueued && !binding->ReleaseConsumed.load(std::memory_order_acquire)
+			&& std::find(_pendingLostPlaybackMidi.begin(), _pendingLostPlaybackMidi.end(), binding) == _pendingLostPlaybackMidi.end())
+		{
+			binding->EmitSourceLossRelease = true;
+			_pendingLostPlaybackMidi.push_back(binding);
+		}
 	}
-	retainRetired();
-	queueRemovedBindings();
+	auto retain = [&](const std::shared_ptr<MidiDestination>& candidate) {
+		if (candidate && std::find(state.MidiDestinations.begin(), state.MidiDestinations.end(), candidate) == state.MidiDestinations.end()
+			&& std::find(state.RetiredMidiDestinations.begin(), state.RetiredMidiDestinations.end(), candidate) == state.RetiredMidiDestinations.end())
+			state.RetiredMidiDestinations.push_back(candidate);
+	};
+	if (previous)
+	{
+		for (const auto& destination : previous->MidiDestinations) retain(destination);
+		for (const auto& destination : previous->RetiredMidiDestinations)
+			if (!destination->RetirementReleased.load(std::memory_order_acquire)) retain(destination);
+	}
+	for (const auto& binding : _midiPlaybackBindings)
+		if (binding->QueuedEvents.load(std::memory_order_acquire) > 0u) retain(binding->Destination);
+	FlushPendingLostPlaybackMidi();
+	return true;
 }
 
 bool MidiDelivery::_TryDeliverMidi(MidiDestination& destination, const MidiEvent& event,
@@ -345,12 +389,14 @@ void MidiDelivery::_InvalidateScheduledMidiAtBlockStart(const PreparedState& sta
 		{
 			const auto& binding = state.MidiPlaybackRoutes[output][index];
 			if (!binding || !binding->Loop || !binding->Destination) continue;
-			const auto channels = state.DestinationChannels[index];
+			const auto destinationIndex = state.PlaybackDestinationIndices[output][index];
+			const auto channels = static_cast<std::uint16_t>(binding->Destination->AudioLoop && binding->Destination->AudioLoop->IsMuted()
+				? 0u : state.DestinationChannels[destinationIndex]);
 			auto removed = static_cast<std::uint16_t>(binding->AllowedChannels & ~channels);
 			for (auto channel = 0u; channel < 16u; ++channel)
-				if (binding->AppliedRetirements[channel] != state.DestinationRetirements[index][channel])
+				if (binding->AppliedRetirements[channel] != state.DestinationRetirements[destinationIndex][channel])
 					removed |= static_cast<std::uint16_t>(1u << channel);
-			binding->AppliedRetirements = state.DestinationRetirements[index];
+			binding->AppliedRetirements = state.DestinationRetirements[destinationIndex];
 			binding->CancelChannelsThisBlock = removed;
 			binding->AllowedChannels = channels;
 			if (removed)
@@ -751,8 +797,9 @@ bool MidiDelivery::MidiPlaybackSink::TryOnVoiceEvent(unsigned int outputIndex, c
 	const bool release = event.IsNoteOff() || sustainRelease;
 	bool accepted = release;
 	bool eligible = false;
-	for (const auto& binding : _state.MidiPlaybackRoutes[outputIndex])
+	for (auto routeIndex = std::size_t{0u}; routeIndex < _state.MidiPlaybackRoutes[outputIndex].size(); ++routeIndex)
 	{
+		const auto& binding = _state.MidiPlaybackRoutes[outputIndex][routeIndex];
 		if (binding->Take->IsSourceLossCancelled() && event.IsNoteOn()) continue;
 		auto& destination = *binding->Destination;
 		const auto channel = event.Channel();
@@ -767,7 +814,14 @@ bool MidiDelivery::MidiPlaybackSink::TryOnVoiceEvent(unsigned int outputIndex, c
 		if (event.IsNoteOff() && !binding->Held.test(slot))
 			continue;
 		const bool immediateRelease = release && destination.RecoveringCompensationChange;
-		const bool delivered = MidiDelivery::_TryDeliverMidi(destination, event,
+		auto deliveredEvent = event;
+		if (event.IsNoteOn() && _state.DestinationLegacyVelocity[_state.PlaybackDestinationIndices[outputIndex][routeIndex]])
+		{
+			deliveredEvent.data2 = static_cast<std::uint8_t>(std::clamp(static_cast<int>(
+				event.data2 * binding->Take->RecordedMidiVelocityScale() + 0.5f), 0, 127));
+			if (!deliveredEvent.IsNoteOn()) continue; // Preserve the legacy zero-scale rejection.
+		}
+		const bool delivered = MidiDelivery::_TryDeliverMidi(destination, deliveredEvent,
 			suppressSource || immediateRelease, binding.get(), voice);
 		if (release) accepted &= delivered;
 		else accepted |= delivered;
@@ -870,8 +924,25 @@ void MidiDelivery::ProcessBlock(const PreparedState& state,
 	std::span<const std::shared_ptr<engine::LoopTake>> takes, std::span<float* const> instrumentPtrs,
 	bool vstActive, const std::atomic<bool>& membershipRemoving,
 	unsigned int sampsToRead,
-	std::uint32_t blockStartSample) noexcept
+	std::uint32_t blockStartSample, bool discontinuity) noexcept
 {
+	(void)takes; // SourceGroups pin the accepted membership.
+	if (discontinuity)
+	{
+		_hasDiscontinuityCutoff = true;
+		_discontinuityCutoff = blockStartSample;
+		for (const auto& destination : state.MidiDestinations)
+		{
+			destination->PendingReleases |= destination->PluginHeld | destination->LiveHeld;
+			destination->PendingSustainRelease |= destination->PluginSustain | destination->LiveSustain;
+			destination->LiveHeld.reset();
+			destination->LiveSustain.reset();
+		}
+		for (const auto& routes : state.MidiPlaybackRoutes)
+			for (const auto& binding : routes)
+				if (binding && binding->Loop) binding->Loop->RequestHeldFlush();
+	}
+
 	if (vstActive)
 	{
 		// A route/mask publication releases only this live owner's contribution.
@@ -934,7 +1005,7 @@ void MidiDelivery::ProcessBlock(const PreparedState& state,
 			destination->BlockSustainAtStart = destination->PluginSustain;
 			destination->BlockTouched.reset();
 		}
-		_InvalidateScheduledMidiAtBlockStart(state, blockStartSample);
+		_InvalidateScheduledMidiAtBlockStart(state, blockStartSample, discontinuity);
 		_DrainPendingMidiReleases(state, blockStartSample);
 	}
 
@@ -1009,6 +1080,7 @@ void MidiDelivery::ProcessBlock(const PreparedState& state,
 		else
 			_immediateLiveMidiIngress.Pop(liveMidi);
 
+		if (_hasDiscontinuityCutoff && liveMidi.IsNoteOn() && midi::MidiSampleDelta(liveMidi.sampleOffset, _discontinuityCutoff) < 0) continue;
 		liveMidi.sampleOffset = midi::RebaseMidiSampleForVstBlock(liveMidi.sampleOffset,
 			blockStartSample,
 			blockStartSample);
@@ -1022,6 +1094,17 @@ void MidiDelivery::ProcessBlock(const PreparedState& state,
 				revision = _liveNoteOnRevisions[midi::MidiNote::NoteSlot(liveMidi.Channel(), liveMidi.data1)].fetch_add(1u, std::memory_order_release) + 1u;
 			_DispatchLiveMidi(state, liveMidi, chooseSynthetic && syntheticEntry.SourceLossNoteOff, revision);
 		}
+	}
+
+	if (_hasDiscontinuityCutoff)
+	{
+		MidiEvent immediate{};
+		SyntheticMidi synthetic{};
+		const bool immediateBehind = _immediateLiveMidiIngress.Peek(immediate)
+			&& midi::MidiSampleDelta(immediate.sampleOffset, _discontinuityCutoff) < 0;
+		const bool syntheticBehind = _syntheticLiveMidiIngress.Peek(synthetic)
+			&& midi::MidiSampleDelta(synthetic.Event.sampleOffset, _discontinuityCutoff) < 0;
+		if (!immediateBehind && !syntheticBehind) _hasDiscontinuityCutoff = false;
 	}
 
 	// Removed processors retain their callback-owned release recovery until a
@@ -1078,15 +1161,10 @@ void MidiDelivery::ProcessBlock(const PreparedState& state,
 
 	auto midiOutputIndex = 0u;
 	MidiPlaybackSink midiSink(state);
-	for (const auto& take : takes)
-	{
-		if (!take)
-			continue;
-		midiOutputIndex += take->ReadMidiBlock(blockStartSample,
-			sampsToRead,
-			midiSink,
-			midiOutputIndex);
-	}
+	for (const auto& group : state.SourceGroups)
+		if (group.Take)
+			midiOutputIndex += group.Take->ReadPreparedMidiBlock(group.Sources, blockStartSample,
+				sampsToRead, midiSink, midiOutputIndex, true, group.Audio.get());
 
 	_DrainScheduledMidi(state, blockStartSample, sampsToRead);
 }
@@ -1209,4 +1287,23 @@ bool MidiDelivery::TryEnqueueImmediateLiveMidi(const MidiEvent& event) noexcept
 {
 	return _TryEnqueueOrderedLiveMidi(_immediateLiveMidiIngress,
 		_hasLastImmediateLiveMidiSample, _lastImmediateLiveMidiSample, event);
+}
+
+bool MidiDelivery::LatencyPathsChanged(const PreparedState& state) noexcept
+{
+	const auto station = state.MidiChain ? static_cast<std::uint64_t>(std::max(0, state.MidiChain->GetLatencySamples())) : 0u;
+	std::size_t destination = 0u;
+	for (const auto& rack : state.Racks)
+	{
+		if (!rack.Chain) continue;
+		auto ancestor = rack.Take ? station : 0u;
+		if (rack.Loop)
+			for (const auto& parent : state.Racks)
+				if (parent.Take == rack.Take && !parent.Loop && parent.Chain)
+					ancestor += static_cast<std::uint64_t>(std::max(0, parent.Chain->GetLatencySamples()));
+		for (std::size_t index=0u; index<rack.Chain->NumPlugins(); ++index, ++destination)
+			if (destination >= state.DestinationPathLatency.size()
+				|| state.DestinationPathLatency[destination] != ancestor + static_cast<std::uint64_t>(std::max(0,rack.Chain->GetLatencySamplesFrom(index)))) return true;
+	}
+	return destination != state.DestinationPathLatency.size();
 }

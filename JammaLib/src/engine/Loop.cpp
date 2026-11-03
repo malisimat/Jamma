@@ -1,4 +1,5 @@
 #include "Loop.h"
+#include "../vst/RackState.h"
 #include <algorithm>
 #include <cmath>
 #include <new>
@@ -600,56 +601,45 @@ void Loop::ClearRecordedPlaybackDelay() noexcept
 
 void Loop::WriteBlock(const std::shared_ptr<MultiAudioSink> dest,
 	const std::shared_ptr<base::BounceWriter> bounceWriter,
-	int sampOffset,
-	unsigned int numSamps, const audio::DacRenderContext* dac,
-    std::uint32_t trigger, std::int64_t delay, unsigned int channel)
+	int sampOffset, unsigned int numSamps, const audio::DacRenderContext* dac,
+	std::uint32_t trigger, std::int64_t delay, unsigned int channel,
+	vst::VstChain* preparedChain, bool usePreparedChain)
 {
-	// Mixer will stereo spread the mono wav
-	// and adjust level
-	auto loopLength = _loopLength.load(std::memory_order_relaxed);
-	auto playState = _playState.load(std::memory_order_relaxed);
-	if (0 == loopLength)
-	{
-		_mixer->UpdateVu(0.0f, numSamps);
-		ClearRecordedPlaybackDelay();
-		return;
-	}
-
-	if (STATE_RECORDING == playState)
-		_mixer->Offset(numSamps);
-
-	// Read source data from BufferBank into stack-allocated temp buffer
+	base::PublishedAudioSnapshot<vst::VstChain>::Lease chainLease;
+	if (!usePreparedChain) chainLease = _vstChain.borrow();
+	auto* chain = usePreparedChain ? preparedChain : chainLease.get();
+	const auto count = std::min(numSamps, constants::MaxBlockSize);
+	if (!count) return;
+	const auto loopLength = _loopLength.load(std::memory_order_relaxed);
+	if (_playState.load(std::memory_order_relaxed) == STATE_RECORDING) _mixer->Offset(count);
 	float tempBuf[constants::MaxBlockSize];
-	auto sampsToWrite = ReadBlock(tempBuf, sampOffset, numSamps, bounceWriter ? nullptr : dac, trigger, delay, channel);
-	if (sampsToWrite == 0u && bounceWriter == nullptr)
-		ClearRecordedPlaybackDelay();
-
-	if (sampsToWrite > 0)
+	auto rendered = loopLength ? ReadBlock(tempBuf, sampOffset, count,
+		bounceWriter ? nullptr : dac, trigger, delay, channel) : 0u;
+	if (!rendered)
 	{
-		auto chain = _vstChain.borrow();
-		if (chain && chain->IsActive())
+		if (bounceWriter || !chain || !chain->IsActive())
 		{
-			float instrumentScratch[constants::MaxBlockSize];
-			chain->ProcessRackMono(tempBuf, instrumentScratch, static_cast<int>(sampsToWrite));
+			_mixer->UpdateVu(0.0f, count);
+			ClearRecordedPlaybackDelay();
+			return;
 		}
-
-		// Only rendered playback is delayed; bounce and source capture keep
-		// their original sample coordinates.
-		if (bounceWriter == nullptr && _playbackDelay)
-		{
-			if (IsMuted()) _playbackDelay->Clear();
-			else _playbackDelay->Process(tempBuf, sampsToWrite);
-		}
-
-		// Route to destination via mixer or trigger
-		// (both ultimately call dest->OnBlockWriteChannel)
-		if (nullptr == bounceWriter)
-			_mixer->WriteBlock(dest, tempBuf, sampsToWrite);
-		else
-			bounceWriter->WriteBlock(dest, tempBuf, sampsToWrite, LoopChannel());
+		std::fill_n(tempBuf, count, 0.0f);
+		rendered = count; // A generator/release/tail is independent of audio material.
 	}
-	else
-		_mixer->UpdateVu(0.0f, numSamps);
+	// Compensate the material before instrument injection. Generated audio uses
+	// only its destination MIDI delay, so it is never delayed twice.
+	if (!bounceWriter && _playbackDelay)
+	{
+		if (IsMuted()) _playbackDelay->Clear();
+		else _playbackDelay->Process(tempBuf, rendered);
+	}
+	if (chain && chain->IsActive())
+	{
+		float instrumentScratch[constants::MaxBlockSize];
+		chain->ProcessRackMono(tempBuf, instrumentScratch, static_cast<int>(rendered), !bounceWriter);
+	}
+	if (!bounceWriter) _mixer->WriteBlock(dest, tempBuf, rendered);
+	else bounceWriter->WriteBlock(dest, tempBuf, rendered, LoopChannel());
 }
 
 void Loop::EndMultiPlay(unsigned int numSamps)
@@ -770,6 +760,8 @@ io::JamFile::Loop Loop::ToJamFile(const std::string& wavFilename) const
 
 	io::JamFile::Loop loop;
 	loop.Name = wavFilename;
+	loop.AllowedMidiChannels = _allowedMidiChannels;
+	loop.MidiChannelRoutes = _midiChannelRoutes;
 	loop.Id = _loopParams.Id;
 	loop.Channel = _loopParams.Channel;
 	loop.Length = loopLength;
@@ -1342,7 +1334,6 @@ bool Loop::CanRefreshVisualModel() const noexcept
 	}
 }
 
-
 void Loop::ConfigureTriggerCapture(std::int64_t begin, bool requireAdc, bool requireBounce, bool requirePunchAdc) noexcept
 {
 	_triggerCaptureBegin = begin;
@@ -1804,6 +1795,9 @@ std::vector<JobAction> Loop::_CommitChanges()
 	{
 		std::lock_guard<std::mutex> lock(_vstPathsMutex);
 		_flipVstChain.store(false, std::memory_order_release);
+		for (auto& route : _midiChannelRoutes)
+			for (const auto& identity : _pendingDeletedVstRouteIds) std::erase(route.PluginIds, identity);
+		_pendingDeletedVstRouteIds.clear();
 		_vstChain.store(_backVstChain, std::memory_order_release);
 		vstTopologyChanged = true;
 	}
@@ -1902,6 +1896,7 @@ ActionResult Loop::OnAction(JobAction action)
 					else replacement->AddSlot(std::move(existing));
 				}
 				_vstPluginPaths.erase(_vstPluginPaths.begin() + static_cast<std::ptrdiff_t>(removeIndex));
+				_pendingDeletedVstRouteIds.push_back(_vstSavedEntries[removeIndex].Id);
 				_vstSavedEntries.erase(_vstSavedEntries.begin() + static_cast<std::ptrdiff_t>(removeIndex));
 				_backVstChain = std::move(replacement);
 			++_rackRevision;
@@ -2026,4 +2021,46 @@ void engine::Loop::_InitialisePlaybackOffset() noexcept
     _playbackOffsetLength = length;
     _appliedPlaybackOffsetSamps.store(_playbackOffsetStart, std::memory_order_relaxed);
     _playbackOffsetPublished.store(true, std::memory_order_release);
+}
+
+void Loop::SetAllowedMidiChannels(const std::vector<int>& channels)
+{
+	std::vector<int> filtered;
+	std::uint16_t mask = 0u;
+	for (auto channel : channels)
+		if (channel >= 1 && channel <= 16 && !(mask & (1u << (channel - 1))))
+		{
+			mask |= static_cast<std::uint16_t>(1u << (channel - 1));
+			filtered.push_back(channel);
+		}
+	const auto removed = static_cast<std::uint16_t>(_allowedMidiChannelMask & ~mask);
+	for (auto channel = 0u; channel < 16u; ++channel)
+		if (removed & (1u << channel)) _midiChannelRoutes[channel] = {};
+	_allowedMidiChannels = std::move(filtered);
+	_allowedMidiChannelMask = mask;
+	++_rackRevision;
+	_changesMade = true;
+	if (_automationTopologyChanged) _automationTopologyChanged();
+}
+
+bool Loop::SetMidiChannelRoutes(std::array<midi::MidiChannelRoute,16> routes, std::uint64_t revision)
+{
+	if (revision != RackRevision()) return false;
+	std::string diagnostic;
+	auto allowed = vst::RackState::ValidateChannelRoutes(routes, _midiChannelRoutes,
+		GetVstRackSlots(), _allowedMidiChannels, diagnostic);
+	if (!allowed) return false;
+	SetAllowedMidiChannels(*allowed);
+	_midiChannelRoutes = std::move(routes);
+	if (_automationTopologyChanged) _automationTopologyChanged();
+	return true;
+}
+
+bool Loop::RestoreMidiRouting(const std::vector<int>& channels, std::array<midi::MidiChannelRoute,16> routes)
+{
+	if (!vst::RackState::ValidSavedRouting(_vstSavedEntries, routes)) return false;
+	SetAllowedMidiChannels(channels);
+	_midiChannelRoutes = std::move(routes);
+	if (_automationTopologyChanged) _automationTopologyChanged();
+	return true;
 }

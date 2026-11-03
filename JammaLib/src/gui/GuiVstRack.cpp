@@ -218,6 +218,7 @@ std::shared_ptr<GuiButton> GuiVstRack::SlotButton(std::size_t index) const
 void GuiVstRack::Update(Model model, std::function<void(Command)> submit)
 {
 	const bool sameOwner = _model.OwnerId == model.OwnerId && _model.OwnerScope == model.OwnerScope;
+	if (!sameOwner || _model.Revision != model.Revision) ClearPointerState();
 	if (!sameOwner)
 	{
 		_cableAlpha = 0.0f;

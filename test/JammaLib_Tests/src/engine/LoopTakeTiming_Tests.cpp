@@ -848,6 +848,17 @@ public:
         return station;
     }
 
+    static std::shared_ptr<midi::MidiLoop> FindStream(const std::shared_ptr<engine::LoopTake>& take,
+        const std::string& device, unsigned int channel)
+    {
+        const auto& loops = take->GetMidiLoops();
+        const auto& channels = take->MidiLoopChannels();
+        const auto& devices = take->MidiLoopDevices();
+        for (std::size_t index = 0u; index < loops.size(); ++index)
+            if (channels[index] == channel && devices[index] == device) return loops[index];
+        return nullptr;
+    }
+
     static actions::TriggerAction Start(std::uint32_t trigger, double delay)
     {
         actions::TriggerAction action;
@@ -890,7 +901,7 @@ TEST(TriggerPredelayStation, PhysicalHistoryPublicationGapAndSignedWorldAlignmen
         station->ObservePhysicalMidiForRecording(midi::MidiEvent::MakeNoteOff(trigger + 47500u, 0u, 40u), "Keys A");
         station->CompleteMidiIngressPump(trigger + 54000u);
         ASSERT_FALSE(take->MidiTriggerCapturePending());
-        ASSERT_EQ(2u, take->GetMidiLoops().size());
+        ASSERT_EQ(32u, take->GetMidiLoops().size());
         const auto expected = static_cast<std::uint32_t>((static_cast<std::int64_t>(delay * 48.0) + 48000) % 48000);
         unsigned int coincident = 0;
         for (const auto& loop : take->GetMidiLoops())
@@ -938,10 +949,12 @@ TEST(TriggerPredelayStation, OutOfOrderEndpointsRetainShortPretriggerPair)
     stop.SampleCount = 48000u;
     ASSERT_TRUE(station->OnAction(stop).IsEaten);
     station->CompleteMidiIngressPump(trigger + 54000u);
-    ASSERT_EQ(2u, take->GetMidiLoops().size());
+    ASSERT_EQ(32u, take->GetMidiLoops().size());
+    const auto stream = TriggerPredelayStationTest::FindStream(take,"Keys B",0u);
+    ASSERT_NE(nullptr,stream);
     midi::MidiEvent on, off;
-    ASSERT_TRUE(take->GetMidiLoops()[1]->TryGetEvent(0u, on));
-    ASSERT_TRUE(take->GetMidiLoops()[1]->TryGetEvent(1u, off));
+    ASSERT_TRUE(stream->TryGetEvent(0u, on));
+    ASSERT_TRUE(stream->TryGetEvent(1u, off));
     EXPECT_TRUE(on.IsNoteOn());
     EXPECT_EQ(96u, on.sampleOffset);
     EXPECT_TRUE(off.IsNoteOff());

@@ -603,6 +603,7 @@ TEST(JamFile, RoundTripsVstStateBlob) {
 	entry.Path = "C:\\Plugins\\Example.dll";
 	entry.Bypass = false;
 	entry.State = JamFile::VstEntry::EncodeState(stateBlob);
+	entry.Id = "loop-state-plugin";
 
 	JamFile::Loop loop;
 	loop.Name = "loop.wav";
@@ -1044,4 +1045,100 @@ TEST(JamFile, ChosenMasterPreservesTakeAndExplicitLeafProvenanceAndInvalidPresen
         ASSERT_TRUE(parsed); ASSERT_TRUE(parsed->ChosenMaster); EXPECT_EQ("legacy",parsed->MasterAudioLoopId);
         if(parsed->ChosenMaster->StationId=="s") { ASSERT_TRUE(parsed->ChosenMaster->AudioLoopId); EXPECT_TRUE(parsed->ChosenMaster->AudioLoopId->empty()); }
     }
+}
+
+
+TEST(JamFile, ChildMidiRoutingRoundTripsIndependentMasksAndUnavailableCables)
+{
+	JamFile jam{};
+	JamFile::Station station{};
+	station.Name = "station";
+	station.AllowedMidiChannels = {4, 5};
+	station.MidiChannelRoutes[3].PluginIds = {"missing-station"};
+	JamFile::LoopTake take{};
+	take.Name = "take";
+	take.AllowedMidiChannels = std::vector<int>{2, 3};
+	take.MidiChannelRoutes[1].PluginIds = {"take-b", "missing-take"};
+	take.VstChain = {{"missing-b.dll", false, {}, "take-b"}, {"missing-a.dll", false, {}, "take-a"}};
+	JamFile::Loop loop{};
+	loop.Name = "audio.wav";
+	loop.Length = 64ul;
+	loop.Speed = 1.0;
+	loop.Level = 1.0;
+	loop.Mix = {JamFile::LoopMix::MIX_WIRE, std::vector<unsigned long>{0ul}};
+	loop.AllowedMidiChannels = std::vector<int>{1, 6};
+	loop.MidiChannelRoutes[5].PluginIds = {"missing-loop"};
+	take.Loops.push_back(loop);
+	station.LoopTakes.push_back(take);
+	auto disabled = take;
+	disabled.Name = "disabled";
+	disabled.VstChain.clear();
+	disabled.AllowedMidiChannels.clear();
+	disabled.Loops[0].AllowedMidiChannels.clear();
+	station.LoopTakes.push_back(disabled);
+	jam.Stations.push_back(station);
+	std::stringstream output;
+	ASSERT_TRUE(JamFile::ToStream(jam, output));
+	EXPECT_TRUE(Json::FromStrictStream(std::stringstream(output.str())));
+	const auto restored = JamFile::FromStream(std::move(output));
+	ASSERT_TRUE(restored);
+	const auto& savedStation = restored->Stations.at(0);
+	const auto& savedTake = savedStation.LoopTakes.at(0);
+	const auto& savedLoop = savedTake.Loops.at(0);
+	EXPECT_EQ(station.AllowedMidiChannels, savedStation.AllowedMidiChannels);
+	EXPECT_EQ(station.MidiChannelRoutes, savedStation.MidiChannelRoutes);
+	EXPECT_EQ(take.AllowedMidiChannels, savedTake.AllowedMidiChannels);
+	EXPECT_EQ(take.MidiChannelRoutes, savedTake.MidiChannelRoutes);
+	EXPECT_EQ(loop.AllowedMidiChannels, savedLoop.AllowedMidiChannels);
+	EXPECT_EQ(loop.MidiChannelRoutes, savedLoop.MidiChannelRoutes);
+	ASSERT_EQ(2u, savedTake.VstChain.size());
+	EXPECT_EQ("take-b", savedTake.VstChain[0].Id);
+	EXPECT_EQ("take-a", savedTake.VstChain[1].Id);
+	EXPECT_TRUE(savedStation.LoopTakes.at(1).AllowedMidiChannels.empty());
+	EXPECT_TRUE(savedStation.LoopTakes.at(1).Loops.at(0).AllowedMidiChannels.empty());
+	EXPECT_EQ(take.MidiChannelRoutes, savedStation.LoopTakes.at(1).MidiChannelRoutes);
+	EXPECT_EQ(loop.MidiChannelRoutes, savedStation.LoopTakes.at(1).Loops.at(0).MidiChannelRoutes);
+	EXPECT_EQ(JamFile::CurrentFormatMinor, restored->FormatMinor);
+}
+
+TEST(JamFile, ChildMidiRouteSchemaErrorsRejectOwnerInsteadOfEnablingBroadcast)
+{
+	for (const auto& routes : {"true", "[]", "[{\"plugins\":[\"missing\"]}]"})
+	{
+		const auto json = Json::FromStream(std::stringstream("{\"name\":\"take\",\"midiChannelRoutes\":" + std::string(routes) + "}"));
+		ASSERT_TRUE(json);
+		EXPECT_FALSE(JamFile::LoopTake::FromJson(std::get<Json::JsonPart>(*json)));
+	}
+	const auto json = Json::FromStream(std::stringstream("{\"name\":\"take\",\"allowedmidichannels\":true}"));
+	ASSERT_TRUE(json);
+	const auto disabled = JamFile::LoopTake::FromJson(std::get<Json::JsonPart>(*json));
+	ASSERT_TRUE(disabled);
+	EXPECT_TRUE(disabled->AllowedMidiChannels.empty());
+}
+
+TEST(JamFile, InvalidChildMidiRoutesRejectWithoutTruncation)
+{
+	for (const auto& ids : {std::vector<std::string>{""}, std::vector<std::string>{"same","same"},
+		std::vector<std::string>{std::string("bad\0id",6u)}, std::vector<std::string>(33u,"missing")})
+	{
+		Json::JsonPart take;
+		Json::JsonPart route;
+		route.KeyValues["plugins"] = Json::JsonArray{static_cast<unsigned int>(ids.size()), ids};
+		std::vector<Json::JsonPart> channels(16u);
+		for (auto& channel : channels) channel.KeyValues["plugins"] = Json::JsonArray{0u, std::vector<bool>{}};
+		channels[0] = route;
+		take.KeyValues["midiChannelRoutes"] = Json::JsonArray{16u, channels};
+		EXPECT_FALSE(JamFile::LoopTake::FromJson(take));
+		JamFile jam{};
+		JamFile::Station station{};
+		JamFile::LoopTake descriptor{};
+		descriptor.MidiChannelRoutes[0].PluginIds = ids;
+		station.LoopTakes.push_back(descriptor);
+		jam.Stations.push_back(station);
+		std::stringstream output;
+		std::string error;
+		EXPECT_FALSE(JamFile::ToStream(jam, output, &error));
+		EXPECT_EQ("Invalid child MIDI routing", error);
+		EXPECT_TRUE(output.str().empty());
+	}
 }

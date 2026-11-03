@@ -1688,3 +1688,51 @@ TEST(VstStaging, ThrowingManagedStateFinishesOnlyOwnedRequestAndLeavesRecoverabl
     EXPECT_FALSE(rack.GetVstRackSlot().Pending); EXPECT_FALSE(rack.OnAction(job,{44100.0f,128u,2u,0u},"throw",0u).IsEaten);
     rack.ResetAfterReadersStopped(); EXPECT_TRUE(rack.CommitChain()); EXPECT_EQ(0u,rack.RackSlotCount());
 }
+
+TEST_F(VstRackControlsTest, ChildMidiGridBindsIndependentOwnerAtEachDepth)
+{
+ Station->SetAllowedMidiChannels({4, 5});
+ Take->SetAllowedMidiChannels({2, 3});
+ First->SetAllowedMidiChannels({1, 6});
+ Second->SetAllowedMidiChannels({7});
+ Update();
+ const auto rack = Take->GetGuiRack();
+ ASSERT_TRUE(rack->VstRack()->ChannelsPanel());
+ EXPECT_TRUE(rack->VstRack()->ChannelShownActive(1u));
+ EXPECT_FALSE(rack->VstRack()->ChannelShownActive(3u));
+ rack->SetAllowedMidiChannels({8}, false); Controls->Pump();
+ EXPECT_EQ((std::vector<int>{8}), Take->AllowedMidiChannels());
+ EXPECT_EQ((std::vector<int>{4, 5}), Station->AllowedMidiChannels());
+ First->Select(); Second->DeSelect(); Update(base::DEPTH_LOOP);
+ EXPECT_TRUE(rack->VstRack()->ChannelShownActive(0u));
+ EXPECT_TRUE(rack->VstRack()->ChannelShownActive(5u));
+ rack->SetAllowedMidiChannels({9, 10}, false); Controls->Pump();
+ EXPECT_EQ((std::vector<int>{9, 10}), First->AllowedMidiChannels());
+ EXPECT_EQ((std::vector<int>{8}), Take->AllowedMidiChannels());
+ EXPECT_EQ((std::vector<int>{7}), Second->AllowedMidiChannels());
+ EXPECT_EQ(2u, Commits);
+}
+
+TEST_F(VstRackControlsTest, ChildMidiGridRejectsStaleRevisionAndUnavailableOwner)
+{
+ Take->SetAllowedMidiChannels({2}); Update();
+ const auto rack = Take->GetGuiRack();
+ rack->SetAllowedMidiChannels({3}, false);
+ Take->SetAllowedMidiChannels({4});
+ Controls->Pump();
+ EXPECT_EQ((std::vector<int>{4}), Take->AllowedMidiChannels());
+ EXPECT_EQ(0u, Commits);
+ Update(); rack->SetAllowedMidiChannels({5}, false);
+ Stations.clear(); Controls->Pump();
+ EXPECT_EQ((std::vector<int>{4}), Take->AllowedMidiChannels());
+ EXPECT_EQ(0u, Commits);
+}
+
+TEST_F(VstRackControlsTest, AmbiguousLoopTargetClearsMidiCallback)
+{
+ Take->SetAllowedMidiChannels({2});
+ First->DeSelect(); Second->DeSelect(); Update(base::DEPTH_LOOP);
+ Take->GetGuiRack()->SetAllowedMidiChannels({3}, false); Controls->Pump();
+ EXPECT_EQ((std::vector<int>{2}), Take->AllowedMidiChannels());
+ EXPECT_EQ(0u, Commits);
+}

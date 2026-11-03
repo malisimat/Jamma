@@ -3704,8 +3704,14 @@ TEST(Trigger, ActivateRecordsConfiguredMidiLanesWithoutConnectedDevices)
             ASSERT_EQ(1u, station->GetLoopTakeSnapshot().size());
             auto take = station->GetLoopTakeSnapshot().front();
             EXPECT_EQ(mixed ? 1u : 0u, take->GetLoops().size());
-            ASSERT_EQ(2u, take->GetMidiLoops().size());
-            EXPECT_EQ(params.MidiInputDevices, take->MidiLoopDevices());
+            ASSERT_EQ(32u, take->GetMidiLoops().size());
+            ASSERT_EQ(32u, take->MidiLoopDevices().size());
+            ASSERT_EQ(32u, take->MidiLoopChannels().size());
+            for (auto stream = 0u; stream < 32u; ++stream)
+            {
+                EXPECT_EQ(params.MidiInputDevices[stream / 16u], take->MidiLoopDevices()[stream]);
+                EXPECT_EQ(stream % 16u, take->MidiLoopChannels()[stream]);
+            }
             EXPECT_FALSE(take->RecordMidiEvent(midi::MidiEvent::MakeNoteOn(0u, 0u, 60u, 100u), "unrelated", 0u));
             trigger->OnTick(GetTime(), 256u, cfg, std::nullopt);
 			boundary += 256u;
@@ -3713,15 +3719,17 @@ TEST(Trigger, ActivateRecordsConfiguredMidiLanesWithoutConnectedDevices)
 			station->CompleteMidiIngressPump(boundary + 4410u);
             EXPECT_EQ(engine::TRIGSTATE_DEFAULT, trigger->GetState());
             ASSERT_EQ(1u, trigger->GetTakes().size());
-            for (const auto& loop : take->GetMidiLoops())
+            for (auto stream = 0u; stream < take->GetMidiLoops().size(); ++stream)
             {
+                const auto& loop = take->GetMidiLoops()[stream];
+                const auto channel = static_cast<std::uint8_t>(take->MidiLoopChannels()[stream]);
                 EXPECT_EQ(midi::MidiLoopState::Playing, loop->State());
                 EXPECT_GT(loop->CompletedLengthForEditor(), 0u);
                 EXPECT_EQ(0u, loop->EventCount());
                 midi::MidiLoop::EditState edit;
                 ASSERT_TRUE(loop->SnapshotForEdit(edit));
-                edit.Events[0] = midi::MidiEvent::MakeNoteOn(0u, 0u, 60u, 100u);
-                edit.Events[1] = midi::MidiEvent::MakeNoteOff(1u, 0u, 60u);
+                edit.Events[0] = midi::MidiEvent::MakeNoteOn(0u, channel, 60u, 100u);
+                edit.Events[1] = midi::MidiEvent::MakeNoteOff(1u, channel, 60u);
                 edit.EventCount = 2u;
                 ASSERT_TRUE(loop->PublishEdit(edit));
                 midi::MidiEvent published;
@@ -3819,7 +3827,7 @@ TEST(Trigger, LosingOlderTailPreservesNewIndependentPunchAndItsQueuedRelease)
     auto oldStation = MakeTestStation("old-tail-source");
     auto healthyStation = MakeTestStation("new-punch-source");
     oldStation->SetAllowedMidiChannels({});
-    healthyStation->SetAllowedMidiChannels({}); // Audio-tail ownership; device names only exercise source loss.
+    healthyStation->SetAllowedMidiChannels({}); // Rack permissions do not suppress the wired MIDI capture.
     TriggerParams params;
     params.InputChannels = { 0u };
     params.MidiInputDevices = { "old" };
@@ -3852,6 +3860,9 @@ TEST(Trigger, LosingOlderTailPreservesNewIndependentPunchAndItsQueuedRelease)
     press(true, true); press(true, false);
     trigger->OnTick(GetTime(), 64u, cfg, std::nullopt);
     press(true, true); press(true, false);
+    // The wired source is mixed MIDI/audio even with its rack channels disabled.
+    // Supply the device-phase observation normally published by the audio boundary.
+    healthyStation->GetLoopTakeSnapshot().back()->BeginCaptureAudioBoundary(0u,0u,0u);
     press(false, true);
     press(true, true); press(true, false);
     ASSERT_EQ(engine::TRIGSTATE_OVERDUBBING, trigger->GetState());
@@ -3990,7 +4001,7 @@ TEST(Trigger, LossDuringPendingEndSettlesBeforeReconnectAndRejectsOldQueuedRelea
 TEST(Trigger, ConfirmedTailLossStaysStickyAfterCompletionAndPreservesEarlierCompletedHistory)
 {
     auto station = MakeTestStation("sticky-tail-loss");
-    station->SetAllowedMidiChannels({}); // Keep this completion race audio-only.
+    station->SetAllowedMidiChannels({}); // Disable rack reception, retaining the physical loss source.
     TriggerParams params;
     params.InputChannels = { 0u };
     params.MidiInputDevices = { "lost" };
@@ -4012,12 +4023,14 @@ TEST(Trigger, ConfirmedTailLossStaysStickyAfterCompletionAndPreservesEarlierComp
     record();
     auto completed = station->GetLoopTakeSnapshot().front();
     completed->EndRecording();
+    station->CompleteMidiIngressPump(100000u); // Close the wired MIDI side of the completed mixed take.
     ASSERT_FALSE(completed->HasPendingTriggerCapture());
     record();
     auto tail = station->GetLoopTakeSnapshot().back();
     ASSERT_TRUE(tail->HasPendingTriggerCapture());
     trigger->ConfirmMidiAvailabilityOnJob({}, { "lost" });
     tail->EndRecording(); // Completion races the already-confirmed request.
+    station->CompleteMidiIngressPump(200000u);
     ASSERT_FALSE(tail->HasPendingTriggerCapture());
     for (unsigned int step = 0u; step < 4u; ++step) TickAndComplete(trigger, 0u, cfg);
     ASSERT_EQ(1u, trigger->GetTakes().size());

@@ -295,39 +295,10 @@ bool RackState::UnloadManagedVstPlugin(const std::string& identity)
 std::optional<std::vector<int>> RackState::SetMidiChannelRoutes(std::array<midi::MidiChannelRoute, 16> routes, std::uint64_t revision, const std::vector<int>& allowedMidiChannels)
 {
 	if (revision != _rackRevision) { _rackDiagnostic = "Rack changed; retry the gesture."; return std::nullopt; }
-	const auto slots = GetVstRackSlots();
-	for (auto channel = 0u; channel < 16u; ++channel)
-	{
-		auto& route = routes[channel];
-		std::sort(route.PluginIds.begin(), route.PluginIds.end());
-		route.PluginIds.erase(std::unique(route.PluginIds.begin(), route.PluginIds.end()), route.PluginIds.end());
-		if (route.PluginIds.size() > MaxRackPlugins) { _rackDiagnostic = "Each channel supports at most 32 destinations."; return std::nullopt; }
-		for (const auto& id : route.PluginIds)
-		{
-			if (id.empty() || !io::NativeMidiSidecar::ValidatePluginIdentity(id)) { _rackDiagnostic = "Invalid plugin identity; remove or repair the cable."; return std::nullopt; }
-			const auto& oldIds = _midiChannelRoutes[channel].PluginIds;
-			if (std::find(oldIds.begin(), oldIds.end(), id) != oldIds.end()) continue;
-			const auto found = std::find_if(slots.begin(), slots.end(), [&](const auto& slot) { return slot.Identity == id; });
-			if (found == slots.end() || !found->Plugin) { _rackDiagnostic = "Destination is unavailable; retry its load first."; return std::nullopt; }
-			const auto capability = found->Plugin->MidiInput();
-			if (!capability.Known || (!capability.Notes && !capability.Controllers)) { _rackDiagnostic = "This plugin has no supported MIDI input."; return std::nullopt; }
-		}
-	}
-	std::vector<int> allowed = allowedMidiChannels;
-	for (auto channel = 0u; channel < 16u; ++channel)
-	{
-		const auto newlyConnected = std::any_of(routes[channel].PluginIds.begin(), routes[channel].PluginIds.end(), [&](const auto& id) {
-			const auto& prior = _midiChannelRoutes[channel].PluginIds;
-			return std::find(prior.begin(), prior.end(), id) == prior.end();
-		});
-		if (newlyConnected && std::find(allowed.begin(), allowed.end(), static_cast<int>(channel + 1u)) == allowed.end())
-			allowed.push_back(static_cast<int>(channel + 1u));
-	}
+	auto allowed = ValidateChannelRoutes(routes, _midiChannelRoutes, GetVstRackSlots(), allowedMidiChannels, _rackDiagnostic);
+	if (!allowed) return std::nullopt;
 	_midiChannelRoutes = std::move(routes);
-	if (allowed.size() != allowedMidiChannels.size())
-	{
-		std::sort(allowed.begin(), allowed.end());
-	}
+	if (allowed->size() != allowedMidiChannels.size()) std::sort(allowed->begin(), allowed->end());
 	++_rackRevision;
 	if (!_rackInactive && !_rackLatencySuspended) _rackDiagnostic.clear();
 	return allowed;
@@ -747,4 +718,66 @@ bool RackState::MoveSlot(const RackMove& move, const std::string& ownerId)
 	++_rackRevision;
 	_flipVstChain.store(true, std::memory_order_release);
 	return true; // Explicit MIDI routes are identities and remain unchanged.
+}
+
+std::optional<std::vector<int>> RackState::ValidateChannelRoutes(
+	std::array<midi::MidiChannelRoute,16>& routes,
+	const std::array<midi::MidiChannelRoute,16>& prior,
+	const std::vector<VstRackSlot>& slots, const std::vector<int>& allowedChannels,
+	std::string& diagnostic)
+{
+	for (auto channel = 0u; channel < 16u; ++channel)
+	{
+		auto& route = routes[channel];
+		std::sort(route.PluginIds.begin(), route.PluginIds.end());
+		route.PluginIds.erase(std::unique(route.PluginIds.begin(), route.PluginIds.end()), route.PluginIds.end());
+		if (route.PluginIds.size() > MaxRackPlugins) { diagnostic = "Each channel supports at most 32 destinations."; return std::nullopt; }
+		for (const auto& id : route.PluginIds)
+		{
+			if (id.empty() || !io::NativeMidiSidecar::ValidatePluginIdentity(id)) { diagnostic = "Invalid plugin identity; remove or repair the cable."; return std::nullopt; }
+			const auto& oldIds = prior[channel].PluginIds;
+			if (std::find(oldIds.begin(), oldIds.end(), id) != oldIds.end()) continue;
+			const auto found = std::find_if(slots.begin(), slots.end(), [&](const auto& slot) { return slot.Identity == id; });
+			if (found == slots.end() || !found->Plugin) { diagnostic = "Destination is unavailable; retry its load first."; return std::nullopt; }
+			const auto capability = found->Plugin->MidiInput();
+			if (!capability.Known || (!capability.Notes && !capability.Controllers)) { diagnostic = "This plugin has no supported MIDI input."; return std::nullopt; }
+		}
+	}
+	std::vector<int> allowed = allowedChannels;
+	for (auto channel = 0u; channel < 16u; ++channel)
+	{
+		const auto newlyConnected = std::any_of(routes[channel].PluginIds.begin(), routes[channel].PluginIds.end(), [&](const auto& id) {
+			const auto& oldIds = prior[channel].PluginIds;
+			return std::find(oldIds.begin(), oldIds.end(), id) == oldIds.end();
+		});
+		if (newlyConnected && std::find(allowed.begin(), allowed.end(), static_cast<int>(channel + 1u)) == allowed.end())
+			allowed.push_back(static_cast<int>(channel + 1u));
+	}
+	std::sort(allowed.begin(), allowed.end());
+	return allowed;
+}
+
+bool RackState::ValidSavedRouting(const std::vector<io::JamFile::VstEntry>& entries,
+	const std::array<midi::MidiChannelRoute,16>& routes)
+{
+	if (entries.size() > MaxRackPlugins) return false;
+	std::vector<std::string> ids;
+	for (const auto& entry : entries)
+	{
+		if (entry.Id.empty() || !io::NativeMidiSidecar::ValidatePluginIdentity(entry.Id)
+			|| std::find(ids.begin(), ids.end(), entry.Id) != ids.end()) return false;
+		ids.push_back(entry.Id);
+	}
+	for (const auto& route : routes)
+	{
+		if (route.PluginIds.size() > MaxRackPlugins) return false;
+		ids.clear();
+		for (const auto& id : route.PluginIds)
+		{
+			if (id.empty() || !io::NativeMidiSidecar::ValidatePluginIdentity(id)
+				|| std::find(ids.begin(), ids.end(), id) != ids.end()) return false;
+			ids.push_back(id);
+		}
+	}
+	return true;
 }

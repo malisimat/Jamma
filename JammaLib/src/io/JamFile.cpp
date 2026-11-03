@@ -8,6 +8,7 @@
 #include "JamFile.h"
 #include "NativeMidiSidecar.h"
 #include "PerformanceGroupPersistence.h"
+#include "../vst/RackState.h"
 #include <algorithm>
 #include <cctype>
 #include <cmath>
@@ -16,6 +17,7 @@
 #include <filesystem>
 #include <regex>
 #include <string>
+#include <type_traits>
 #include "../utils/MathUtils.h"
 #include "../utils/StringUtils.h"
 
@@ -23,6 +25,80 @@ using namespace io;
 using audio::BehaviourParams;
 
 const std::string JamFile::DefaultJson = "{\"name\":\"default\",\"ninjam\":{\"host\":\"ninjam.com:2049\",\"user\":\"jamma_guest\",\"pass\":\"\",\"workdir\":\"\"},\"stations\":[{\"name\":\"Station1\",\"stationtype\":0,\"allowedmidichannels\":[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16],\"takes\":[]}],\"quantisesamps\":1,\"quantisation\":\"off\"}";
+
+bool JamFile::ParseMidiChannelRoutes(const Json::JsonPart& json, std::array<midi::MidiChannelRoute, 16>& routes)
+{
+	if (const auto live = json.KeyValues.find("midiChannelRoutes"); live != json.KeyValues.end())
+	{
+		if (live->second.index() != 5) return false;
+		const auto& array = std::get<Json::JsonArray>(live->second);
+		if (array.Array.index() != 5) return false;
+		const auto& channels = std::get<std::vector<Json::JsonPart>>(array.Array);
+		if (channels.size() != 16u) return false;
+		std::size_t totalBytes = 0u;
+		for (auto channel = 0u; channel < 16u; ++channel)
+		{
+			const auto ids = channels[channel].KeyValues.find("plugins");
+			if (ids == channels[channel].KeyValues.end() || ids->second.index() != 5) return false;
+			auto& route = routes[channel];
+			const auto& values = std::get<Json::JsonArray>(ids->second);
+			if (values.Array.index() == 4)
+			{
+				const auto& entries = std::get<std::vector<std::string>>(values.Array);
+				if (entries.size() > MaxMidiRouteRecoveryIdsPerChannel) return false;
+				for (const auto& id : entries)
+				{
+					if (id.size() > MaxMidiRouteRecoveryBytes - totalBytes) return false;
+					totalBytes += id.size();
+				}
+				route.PluginIds = entries;
+			}
+			else if (!(values.Array.index() == 0 && std::get<std::vector<bool>>(values.Array).empty())) return false;
+			if (const auto raw = channels[channel].KeyValues.find("rawPluginIdsBase64"); raw != channels[channel].KeyValues.end())
+			{
+				if (raw->second.index() != 5) return false;
+				const auto& encoded = std::get<Json::JsonArray>(raw->second);
+				if (encoded.Array.index() != 4) return false;
+				const auto& entries = std::get<std::vector<std::string>>(encoded.Array);
+				if (!route.PluginIds.empty() || entries.size() > MaxMidiRouteRecoveryIdsPerChannel) return false;
+				route.PluginIds.resize(entries.size());
+				for (std::size_t index = 0; index < entries.size(); ++index)
+				{
+					if (entries[index].compare(0u, 4u, "b64:") != 0) return false;
+					if (entries[index].size() - 4u > 4u * ((MaxMidiRouteRecoveryBytes - totalBytes + 2u) / 3u)) return false;
+					const auto encodedId = entries[index].substr(4u);
+					const auto bytes = utils::Base64Decode(encodedId);
+					if (bytes.size() > MaxMidiRouteRecoveryBytes - totalBytes || utils::Base64Encode(bytes) != encodedId) return false;
+					totalBytes += bytes.size();
+					route.PluginIds[index].assign(bytes.begin(), bytes.end());
+				}
+			}
+		}
+	}
+	return true;
+}
+
+std::optional<std::vector<int>> JamFile::ParseAllowedMidiChannels(const Json::JsonPart& json)
+{
+	const auto found = json.KeyValues.find("allowedmidichannels");
+	if (found == json.KeyValues.end()) return std::nullopt;
+	std::array<bool, 16> enabled{};
+	if (const auto array = std::get_if<Json::JsonArray>(&found->second))
+	{
+		std::visit([&](const auto& values)
+		{
+			using Value = typename std::decay_t<decltype(values)>::value_type;
+			if constexpr (std::is_same_v<Value, long> || std::is_same_v<Value, unsigned long> || std::is_same_v<Value, double>)
+				for (const auto value : values)
+					if (std::isfinite(static_cast<double>(value)) && value >= 1 && value < 17)
+						enabled[static_cast<std::size_t>(value) - 1u] = true;
+		}, array->Array);
+	}
+	std::vector<int> channels;
+	for (auto channel = 0u; channel < enabled.size(); ++channel)
+		if (enabled[channel]) channels.push_back(static_cast<int>(channel) + 1);
+	return channels;
+}
 
 std::optional<double> JamFile::ParseFiniteNumber(const Json::JsonValue& value) noexcept
 {
@@ -534,6 +610,31 @@ bool JamFile::ToStream(JamFile jam, std::stringstream& ss, std::string* error)
 		return false;
 	};
 	if (!PerformanceGroupPersistence::ValidateIdentities(jam)) return fail("Duplicate or invalid session identity");
+	const auto validRoutes = [](const std::array<midi::MidiChannelRoute, 16>& routes)
+	{
+		std::size_t totalBytes = 0u;
+		for (const auto& route : routes)
+		{
+			if (route.PluginIds.size() > MaxMidiRouteRecoveryIdsPerChannel) return false;
+			for (const auto& id : route.PluginIds)
+			{
+				if (id.size() > MaxMidiRouteRecoveryBytes - totalBytes) return false;
+				totalBytes += id.size();
+			}
+		}
+		return true;
+	};
+	for (const auto& station : jam.Stations)
+	{
+		if (!validRoutes(station.MidiChannelRoutes)) return fail("MIDI route recovery data exceeds import limits");
+		for (const auto& take : station.LoopTakes)
+		{
+			if (!vst::RackState::ValidSavedRouting(take.VstChain, take.MidiChannelRoutes)) return fail("Invalid child MIDI routing");
+			for (const auto& loop : take.Loops)
+				if (!vst::RackState::ValidSavedRouting(loop.VstChain, loop.MidiChannelRoutes)) return fail("Invalid child MIDI routing");
+		}
+	}
+
 	auto escapeJsonString = [](const std::string& s) -> std::string {
 		std::string escaped;
 		escaped.reserve(s.size());
@@ -597,6 +698,40 @@ bool JamFile::ToStream(JamFile jam, std::stringstream& ss, std::string* error)
 			}
 			out += "]";
 			return out;
+		};
+
+	auto writeMidiChannelRoutes = [&](const std::array<midi::MidiChannelRoute, 16>& routes)
+		{
+			ss << ",\"midiChannelRoutes\":[";
+			for (auto channel = 0u; channel < 16u; ++channel)
+			{
+				if (channel) ss << ",";
+				const auto& route = routes[channel];
+				const bool hasRawIds = std::any_of(route.PluginIds.begin(), route.PluginIds.end(), [](const auto& id) { return id.empty() || !NativeMidiSidecar::ValidatePluginIdentity(id); });
+				ss << "{\"plugins\":[";
+				for (std::size_t index = 0; index < (hasRawIds ? 0u : route.PluginIds.size()); ++index)
+				{
+					if (index) ss << ",";
+					const auto& id = route.PluginIds[index];
+					ss << quoted(id);
+				}
+				ss << "]";
+				if (hasRawIds)
+				{
+					// Malformed inactive routes use a complete canonical byte array.
+					ss << ",\"rawPluginIdsBase64\":[";
+					for (std::size_t index = 0; index < route.PluginIds.size(); ++index)
+					{
+						if (index) ss << ",";
+						const auto& id = route.PluginIds[index];
+						const std::vector<std::uint8_t> bytes(id.begin(), id.end());
+						ss << quoted("b64:" + utils::Base64Encode(bytes));
+					}
+					ss << "]";
+				}
+				ss << "}";
+			}
+			ss << "]";
 		};
 
 	auto quantStr = [](utils::Timer::QuantisationType quant) -> std::string {
@@ -848,6 +983,8 @@ bool JamFile::ToStream(JamFile jam, std::stringstream& ss, std::string* error)
 					<< quoted("mix") << ":" << mixToJson(loop.Mix);
 				if (!loop.VstChain.empty())
 					ss << "," << quoted("vst") << ":" << vstChainToJson(loop.VstChain);
+				ss << "," << kvIntArray("allowedmidichannels", loop.AllowedMidiChannels);
+				writeMidiChannelRoutes(loop.MidiChannelRoutes);
 				ss << "}";
 			}
 
@@ -869,43 +1006,14 @@ bool JamFile::ToStream(JamFile jam, std::stringstream& ss, std::string* error)
 				ss << "," << quoted("audioRoutes") << ":" << audioRoutesToJson(take.AudioRoutes);
 			if (!take.VstChain.empty())
 				ss << "," << quoted("vst") << ":" << vstChainToJson(take.VstChain);
+			ss << "," << kvIntArray("allowedmidichannels", take.AllowedMidiChannels);
+			writeMidiChannelRoutes(take.MidiChannelRoutes);
 			ss << "}";
 		}
 
 		ss << "]";
 		ss << "," << kvIntArray("allowedmidichannels", station.AllowedMidiChannels);
-		{
-			ss << ",\"midiChannelRoutes\":[";
-			for (auto channel = 0u; channel < 16u; ++channel)
-			{
-				if (channel) ss << ",";
-				const auto& route = station.MidiChannelRoutes[channel];
-				const bool hasRawIds = std::any_of(route.PluginIds.begin(), route.PluginIds.end(), [](const auto& id) { return id.empty() || !NativeMidiSidecar::ValidatePluginIdentity(id); });
-				ss << "{\"plugins\":[";
-				for (std::size_t index = 0; index < (hasRawIds ? 0u : route.PluginIds.size()); ++index)
-				{
-					if (index) ss << ",";
-					const auto& id = route.PluginIds[index];
-					ss << quoted(id);
-				}
-				ss << "]";
-				if (hasRawIds)
-				{
-					// Malformed inactive routes use a complete canonical byte array.
-					ss << ",\"rawPluginIdsBase64\":[";
-					for (std::size_t index = 0; index < route.PluginIds.size(); ++index)
-					{
-						if (index) ss << ",";
-						const auto& id = route.PluginIds[index];
-						const std::vector<std::uint8_t> bytes(id.begin(), id.end());
-						ss << quoted("b64:" + utils::Base64Encode(bytes));
-					}
-					ss << "]";
-				}
-				ss << "}";
-			}
-			ss << "]";
-		}
+		writeMidiChannelRoutes(station.MidiChannelRoutes);
 		if (station.HasAudioRoutes)
 			ss << "," << quoted("audioRoutes") << ":" << audioRoutesToJson(station.AudioRoutes);
 		if (!station.VstChain.empty())
@@ -1248,6 +1356,9 @@ std::optional<JamFile::Loop> JamFile::Loop::FromJson(Json::JsonPart json)
 	loop.Muted = isMuted;
 	loop.Mix = mix;
 	loop.VstChain = vstChain;
+	if (auto channels = ParseAllowedMidiChannels(json)) loop.AllowedMidiChannels = std::move(*channels);
+	if (!ParseMidiChannelRoutes(json, loop.MidiChannelRoutes)
+		|| !vst::RackState::ValidSavedRouting(loop.VstChain, loop.MidiChannelRoutes)) return std::nullopt;
 	return loop;
 }
 
@@ -1505,6 +1616,9 @@ std::optional<JamFile::LoopTake> JamFile::LoopTake::FromJson(Json::JsonPart json
 	take.BusLevels = std::move(busLevels);
 	take.Loops = loops;
 	take.VstChain = vstChain;
+	if (auto channels = ParseAllowedMidiChannels(json)) take.AllowedMidiChannels = std::move(*channels);
+	if (!ParseMidiChannelRoutes(json, take.MidiChannelRoutes)
+		|| !vst::RackState::ValidSavedRouting(take.VstChain, take.MidiChannelRoutes)) return std::nullopt;
 	take.MidiQuantEnabled = midiQuantEnabled;
 	take.MidiQuantFraction = midiQuantFraction;
 	take.TakePhaseOffsetSamps = takePhaseOffsetSamps;
@@ -1590,41 +1704,7 @@ std::optional<JamFile::Station> JamFile::Station::FromJson(Json::JsonPart json)
 	if (iter != json.KeyValues.end())
 		stationPhaseOffsetSamps = ParseInt32Clamped(json.KeyValues["stationphaseoffsetsamps"], 0);
 
-	iter = json.KeyValues.find("allowedmidichannels");
-	if (iter != json.KeyValues.end())
-	{
-		if (json.KeyValues["allowedmidichannels"].index() == 5)
-		{
-			auto arr = std::get<Json::JsonArray>(json.KeyValues["allowedmidichannels"]);
-			if (arr.Array.index() == 2)
-			{
-				for (auto value : std::get<std::vector<unsigned long>>(arr.Array))
-				{
-					const auto channel = static_cast<int>(value);
-					if (channel >= 1 && channel <= 16)
-						allowedMidiChannels.push_back(channel);
-				}
-			}
-			else if (arr.Array.index() == 1)
-			{
-				for (auto value : std::get<std::vector<long>>(arr.Array))
-				{
-					const auto channel = static_cast<int>(value);
-					if (channel >= 1 && channel <= 16)
-						allowedMidiChannels.push_back(channel);
-				}
-			}
-			else if (arr.Array.index() == 3)
-			{
-				for (auto value : std::get<std::vector<double>>(arr.Array))
-				{
-					const auto channel = static_cast<int>(value);
-					if (channel >= 1 && channel <= 16)
-						allowedMidiChannels.push_back(channel);
-				}
-			}
-		}
-	}
+	allowedMidiChannels = ParseAllowedMidiChannels(json).value_or(std::vector<int>{});
 
 	std::vector<VstEntry> vstChain;
 	iter = json.KeyValues.find("vst");
@@ -1736,40 +1816,7 @@ std::optional<JamFile::Station> JamFile::Station::FromJson(Json::JsonPart json)
 	std::sort(allowedMidiChannels.begin(), allowedMidiChannels.end());
 	allowedMidiChannels.erase(std::unique(allowedMidiChannels.begin(), allowedMidiChannels.end()), allowedMidiChannels.end());
 	station.AllowedMidiChannels = std::move(allowedMidiChannels);
-	if (const auto live = json.KeyValues.find("midiChannelRoutes"); live != json.KeyValues.end())
-	{
-		if (live->second.index() != 5) return std::nullopt;
-		const auto& array = std::get<Json::JsonArray>(live->second);
-		if (array.Array.index() != 5) return std::nullopt;
-		const auto& channels = std::get<std::vector<Json::JsonPart>>(array.Array);
-		if (channels.size() != 16u) return std::nullopt;
-		for (auto channel = 0u; channel < 16u; ++channel)
-		{
-			const auto ids = channels[channel].KeyValues.find("plugins");
-			if (ids == channels[channel].KeyValues.end() || ids->second.index() != 5) return std::nullopt;
-			auto& route = station.MidiChannelRoutes[channel];
-			const auto& values = std::get<Json::JsonArray>(ids->second);
-			if (values.Array.index() == 4) route.PluginIds = std::get<std::vector<std::string>>(values.Array);
-			else if (!(values.Array.index() == 0 && std::get<std::vector<bool>>(values.Array).empty())) return std::nullopt;
-			if (const auto raw = channels[channel].KeyValues.find("rawPluginIdsBase64"); raw != channels[channel].KeyValues.end())
-			{
-				if (raw->second.index() != 5) return std::nullopt;
-				const auto& encoded = std::get<Json::JsonArray>(raw->second);
-				if (encoded.Array.index() != 4) return std::nullopt;
-				const auto& entries = std::get<std::vector<std::string>>(encoded.Array);
-				if (!route.PluginIds.empty()) return std::nullopt;
-				route.PluginIds.resize(entries.size());
-				for (std::size_t index = 0; index < entries.size(); ++index)
-				{
-					if (entries[index].compare(0u, 4u, "b64:") != 0) return std::nullopt;
-					const auto encodedId = entries[index].substr(4u);
-					const auto bytes = utils::Base64Decode(encodedId);
-					if (utils::Base64Encode(bytes) != encodedId) return std::nullopt;
-					route.PluginIds[index].assign(bytes.begin(), bytes.end());
-				}
-			}
-		}
-	}
+	if (!ParseMidiChannelRoutes(json, station.MidiChannelRoutes)) return std::nullopt;
 	station.AudioRoutes = std::move(audioRoutes);
 	station.HasAudioRoutes = hasAudioRoutes;
 	return station;

@@ -828,15 +828,24 @@ TEST_F(SceneRoutingIntegrationTest, ConfiguredMissingMidiSourceCreatesEditableTa
     ASSERT_EQ(1u, station->GetLoopTakeSnapshot().size());
     auto take = station->GetLoopTakeSnapshot().front();
     EXPECT_TRUE(take->GetLoops().empty());
-    ASSERT_EQ(1u, take->GetMidiLoops().size());
-    EXPECT_EQ(std::vector<std::string>{ "missing" }, take->MidiLoopDevices());
+    ASSERT_EQ(16u, take->GetMidiLoops().size());
+    ASSERT_EQ(16u, take->MidiLoopDevices().size());
+    ASSERT_EQ(16u, take->MidiLoopChannels().size());
+    for (auto stream = 0u; stream < 16u; ++stream)
+    {
+        EXPECT_EQ("missing",take->MidiLoopDevices()[stream]);
+        EXPECT_EQ(stream,take->MidiLoopChannels()[stream]);
+    }
     trigger->OnTick(utils::Timer::GetTime(), 256u, cfg, std::nullopt);
 	boundary += 256u;
     press(true); press(false);
 	station->CompleteMidiIngressPump(boundary + 4410u);
     EXPECT_EQ(engine::TRIGSTATE_DEFAULT, trigger->GetState());
-    EXPECT_GT(take->GetMidiLoops().front()->CompletedLengthForEditor(), 0u);
-    EXPECT_EQ(0u, take->GetMidiLoops().front()->EventCount());
+    for (const auto& stream : take->GetMidiLoops())
+    {
+        EXPECT_GT(stream->CompletedLengthForEditor(), 0u);
+        EXPECT_EQ(0u, stream->EventCount());
+    }
     jobExclusion.unlock();
     scene->Shutdown();
 }

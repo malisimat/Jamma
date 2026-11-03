@@ -118,6 +118,17 @@ static std::shared_ptr<LoopTake> MakeLoopTake(const std::string& id = "take-0")
 	return std::make_shared<LoopTake>(params, mixerParams);
 }
 
+static std::shared_ptr<MidiLoop> FindRecordedMidiStream(const std::shared_ptr<LoopTake>& take,
+	const std::string& device, unsigned int channel)
+{
+	const auto& loops = take->GetMidiLoops();
+	const auto& channels = take->MidiLoopChannels();
+	const auto& devices = take->MidiLoopDevices();
+	for (std::size_t index = 0u; index < loops.size(); ++index)
+		if (channels[index] == channel && devices[index] == device) return loops[index];
+	return nullptr;
+}
+
 static std::shared_ptr<Station> MakeStation(const std::string& name = "station")
 {
 	StationParams params;
@@ -1009,9 +1020,11 @@ static void CheckFirstMidiMasterBoundary(unsigned int configuredGrain, int stopA
 	end.SetUserConfig(cfg);
 	const auto ended = station->OnAction(end);
 	ASSERT_TRUE(ended.IsEaten);
-	ASSERT_EQ(1u, take->GetMidiLoops().size());
+	ASSERT_EQ(16u, take->GetMidiLoops().size());
+	const auto stream = FindRecordedMidiStream(take,"Keys",0u);
+	ASSERT_NE(nullptr,stream);
 	MidiEvent snare{};
-	ASSERT_TRUE(take->GetMidiLoops()[0]->TryGetEvent(0u, snare));
+	ASSERT_TRUE(stream->TryGetEvent(0u, snare));
 	EXPECT_EQ(17545u, snare.sampleOffset);
 	const auto expectedLength = static_cast<unsigned long>(expectedTiming->GrainSamps)
 		* expectedTiming->LoopGrains;
@@ -1051,14 +1064,14 @@ static void CheckFirstMidiMasterBoundary(unsigned int configuredGrain, int stopA
 	EXPECT_FALSE(take->FirstMasterActivationPending());
 	EXPECT_EQ(replacement == 0u ? expectedLength : (replacement == 2u ? 20000ul : 0ul),
 		clock->SeedSourceLength());
-	EXPECT_EQ(expectedLength, take->GetMidiLoops()[0]->LoopLengthSamps());
+	EXPECT_EQ(expectedLength, stream->LoopLengthSamps());
 	auto expectedPhase = (static_cast<long long>(physicalLength) - expectedLength + stopAge + activationDelay)
 		% static_cast<long long>(expectedLength);
 	if (expectedPhase < 0) expectedPhase += expectedLength;
 	EXPECT_EQ(static_cast<unsigned long>(expectedPhase), take->MidiPlayIndex());
 	if (replacement == 0u) EXPECT_EQ(clock->SampOffset(), take->MidiPlayIndex());
 	else EXPECT_EQ(priorClockPhase, clock->SampOffset());
-	EXPECT_EQ(77732u, take->GetMidiLoops()[0]->AutomationGlobalSampleOrigin()
+	EXPECT_EQ(77732u, stream->AutomationGlobalSampleOrigin()
 		+ static_cast<std::uint32_t>(take->MidiAnchorCorrection()));
 	EXPECT_FALSE(clock->PendingRecordingSeedOnOwner());
 	clock->Tick(64u, 0u);
@@ -1124,11 +1137,13 @@ TEST(LoopTakeMidiTiming, FirstCaptureAfterLoadedEmptySessionUsesTriggerInterval)
 	station->CompleteMidiIngressPump(startSample + 139104u + 4410u);
 	const auto takes = station->GetLoopTakes();
 	ASSERT_EQ(1u, takes.size());
-	ASSERT_EQ(1u, takes.front()->GetMidiLoops().size());
-	EXPECT_EQ(139104ul, takes.front()->GetMidiLoops().front()->LoopLengthSamps());
+	ASSERT_EQ(16u, takes.front()->GetMidiLoops().size());
+	const auto stream = FindRecordedMidiStream(takes.front(),"Keys",0u);
+	ASSERT_NE(nullptr,stream);
+	EXPECT_EQ(139104ul, stream->LoopLengthSamps());
 	EXPECT_EQ(0u, takes.front()->MidiQuantisationTransportStartSamps());
 	MidiEvent note{};
-	ASSERT_TRUE(takes.front()->GetMidiLoops().front()->TryGetEvent(0u, note));
+	ASSERT_TRUE(stream->TryGetEvent(0u, note));
 	EXPECT_EQ(80u, note.sampleOffset);
 	scene->Shutdown();
 }
@@ -1187,8 +1202,9 @@ TEST(LoopTakeMidiTiming, PositivePredelayFirstMasterPersistsFinalQuantisationOri
 	station->BeginCaptureAudioBoundary(boundary, clock->SceneSamplePos(), clock->AbsoluteSamplePos());
 	station->ApplyFirstMasterRecordingAtAudioBoundary(*clock, boundary);
 	ASSERT_FALSE(take->FirstMasterActivationPending());
-	ASSERT_EQ(1u, take->GetMidiLoops().size());
-	const auto& loop = take->GetMidiLoops().front();
+	ASSERT_EQ(16u, take->GetMidiLoops().size());
+	const auto loop = FindRecordedMidiStream(take,"Keys",0u);
+	ASSERT_NE(nullptr,loop);
 	ASSERT_TRUE(loop->IsQuantisationActive());
 	MidiLoop::EditState original;
 	ASSERT_TRUE(loop->SnapshotForEdit(original));
@@ -1208,7 +1224,8 @@ TEST(LoopTakeMidiTiming, PositivePredelayFirstMasterPersistsFinalQuantisationOri
 	auto restored = MakeLoopTake("predelay-restored-master");
 	restored->SetGlobalMidiQuantState(io::JamFile::GlobalMidiQuantState::Mixed);
 	ASSERT_TRUE(restored->RestoreMidiFromExport(saved));
-	const auto& restoredLoop = restored->GetMidiLoops().front();
+	const auto restoredLoop = FindRecordedMidiStream(restored,"Keys",0u);
+	ASSERT_NE(nullptr,restoredLoop);
 	MidiLoop::EditState reloaded;
 	ASSERT_TRUE(restoredLoop->SnapshotForEdit(reloaded));
 	EXPECT_EQ(original.QuantisationTransportStartSamps, reloaded.QuantisationTransportStartSamps);

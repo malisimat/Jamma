@@ -1,4 +1,5 @@
 #include "LoopTake.h"
+#include "../vst/RackState.h"
 
 #include <algorithm>
 #include <cmath>
@@ -211,6 +212,10 @@ LoopTake::~LoopTake()
 
 std::optional<std::shared_ptr<LoopTake>> LoopTake::FromFile(LoopTakeParams takeParams, io::JamFile::LoopTake takeStruct, std::wstring dir)
 {
+	if (!vst::RackState::ValidSavedRouting(takeStruct.VstChain, takeStruct.MidiChannelRoutes)) return std::nullopt;
+	for (const auto& loop : takeStruct.Loops)
+		if (!vst::RackState::ValidSavedRouting(loop.VstChain, loop.MidiChannelRoutes)) return std::nullopt;
+
 	auto mixerParams = GetMixerParams({ 100,100 }, audio::WireMixBehaviourParams());
 	auto take = std::make_shared<LoopTake>(takeParams, mixerParams);
 	take->_recordingBaselinePacked.store((static_cast<std::uint64_t>(takeStruct.RecordingMasterLengthSamps) << 32u)
@@ -237,6 +242,7 @@ std::optional<std::shared_ptr<LoopTake>> LoopTake::FromFile(LoopTakeParams takeP
 		
 		if (loop.has_value())
 		{
+			if (!vst::RackState::ValidSavedRouting(loopStruct.VstChain, loopStruct.MidiChannelRoutes)) return std::nullopt;
 			for (const auto& vstEntry : loopStruct.VstChain)
 			{
 				if (!loop.value()->LoadVstPluginSynchronously(utils::DecodeUtf8(vstEntry.Path), vstEntry.DecodeState(), vstEntry.Bypass, vstEntry.Id))
@@ -245,6 +251,7 @@ std::optional<std::shared_ptr<LoopTake>> LoopTake::FromFile(LoopTakeParams takeP
 				}
 			}
 
+			loop.value()->RestoreMidiRouting(loopStruct.AllowedMidiChannels, loopStruct.MidiChannelRoutes);
 			take->AddLoop(loop.value());
 			if (const auto slider = take->_guiRack->GetChannelSlider(
 				static_cast<unsigned int>(take->_backLoops.size() - 1u)))
@@ -334,6 +341,7 @@ std::optional<std::shared_ptr<LoopTake>> LoopTake::FromFile(LoopTakeParams takeP
 		take->ClearPendingAutomationBindings();
 	}
 
+	if (!vst::RackState::ValidSavedRouting(takeStruct.VstChain, takeStruct.MidiChannelRoutes)) return std::nullopt;
 	for (const auto& vstEntry : takeStruct.VstChain)
 	{
 		if (!take->LoadVstPluginSynchronously(utils::DecodeUtf8(vstEntry.Path), vstEntry.DecodeState(), vstEntry.Bypass, vstEntry.Id))
@@ -342,6 +350,7 @@ std::optional<std::shared_ptr<LoopTake>> LoopTake::FromFile(LoopTakeParams takeP
 		}
 	}
 
+	take->RestoreMidiRouting(takeStruct.AllowedMidiChannels, takeStruct.MidiChannelRoutes);
 	// Preserve an intentionally empty take; retain the existing skip behavior
 	// when recorded content was declared but every asset failed to restore.
 	if (!hasAudioLoop && midiState.Streams.empty()
@@ -515,14 +524,20 @@ unsigned int LoopTake::NumBusChannels() const
 	return 0u;
 }
 
-void LoopTake::Zero(unsigned int numSamps,
-	Audible::AudioSourceType source)
+void LoopTake::Zero(unsigned int numSamps, Audible::AudioSourceType source)
+{
+	ZeroPrepared(numSamps,source,nullptr);
+}
+
+void LoopTake::ZeroPrepared(unsigned int numSamps,
+	Audible::AudioSourceType source, const RenderState* prepared)
 {
 	if (_captureCancelled.load(std::memory_order_acquire))
 		return;
-	auto state = _BorrowAudioState();
-	if (!state)
-		return;
+	base::PublishedAudioSnapshot<const AudioState>::Lease lease;
+	if (!prepared) lease = _BorrowAudioState();
+	const auto* state = prepared ? prepared->Audio.get() : lease.get();
+	if (!state) return;
 
 	const auto channelCount = ((Audible::AUDIOSOURCE_ADC == source)
 		|| (Audible::AUDIOSOURCE_MONITOR == source)
@@ -539,7 +554,6 @@ void LoopTake::Zero(unsigned int numSamps,
 	for (const auto& loop : state->Loops)
 		if (loop) loop->Zero(numSamps);
 }
-
 
 void LoopTake::ConfigureTriggerCapture(const TriggerCaptureTiming& timing) noexcept
 {
@@ -609,10 +623,12 @@ void LoopTake::BeginCaptureAudioBoundary(std::uint64_t deviceSample,
     publishPhase();
 }
 
-bool LoopTake::AudioCaptureReady(unsigned int count, int offset) const noexcept
+bool LoopTake::AudioCaptureReady(unsigned int count, int offset, const AudioState* preparedAudio) const noexcept
 {
 	if (!_audioCaptureAdmitted.load(std::memory_order_acquire)) return false;
-	auto state = _BorrowAudioState();
+	base::PublishedAudioSnapshot<const AudioState>::Lease lease;
+	if (!preparedAudio) lease = _BorrowAudioState();
+	const auto* state = preparedAudio ? preparedAudio : lease.get();
 	if (!state) return false;
 	for (const auto& loop : state->Loops)
 		if (loop && !loop->TriggerCaptureReady(_NormalizeLoopIndex(
@@ -628,9 +644,10 @@ void LoopTake::OnBlockWriteChannel(unsigned int channel,
 	// Defer it to the next coherent boundary instead of writing at default index 0.
 	if (_captureCancelled.load(std::memory_order_acquire)
 		|| (_triggerCaptureConfigured && !_captureBoundaryStarted)) return;
-	auto state = _BorrowAudioState();
-	if (!state)
-		return;
+	base::PublishedAudioSnapshot<const AudioState>::Lease lease;
+	if (!_renderAudioState) lease = _BorrowAudioState();
+	const auto* state = _renderAudioState ? _renderAudioState : lease.get();
+	if (!state) return;
 
 	auto destination = _InputChannelFromState(*state, channel, request.source);
 	if (destination)
@@ -648,52 +665,60 @@ void LoopTake::PollPlaybackPluginChanges() const noexcept
 			if (loop) loop->PollPlaybackPluginChanges();
 }
 
-unsigned int LoopTake::RecordedPlaybackLatencySamps() const noexcept
+unsigned int LoopTake::RecordedPlaybackLatencySamps(const RenderState* prepared) const noexcept
 {
-	const auto own = static_cast<unsigned int>(std::max(0, CurrentVstLatencySamps()));
-	const auto state = _AudioStateSnapshot();
+	const auto chain = prepared ? prepared->Chain : _vstChain.load();
+	const auto own = static_cast<unsigned int>(chain ? std::max(0,chain->GetLatencySamples()) : 0);
+	const auto state = prepared ? prepared->Audio : _AudioStateSnapshot();
 	if (!state) return own;
 	auto longest = static_cast<std::uint64_t>(own);
-	for (const auto& loop : state->Loops)
-		if (loop) longest = std::max(longest, static_cast<std::uint64_t>(own) +
-			static_cast<unsigned int>(std::max(0, loop->CurrentVstLatencySamps())));
+	for (auto index=std::size_t{0u};index<state->Loops.size();++index)
+		if (const auto& loop=state->Loops[index])
+		{
+			const auto leaf = prepared ? (prepared->LoopChains[index] ? prepared->LoopChains[index]->GetLatencySamples() : 0)
+				: loop->CurrentVstLatencySamps();
+			longest=std::max(longest,static_cast<std::uint64_t>(own)+static_cast<unsigned int>(std::max(0,leaf)));
+		}
 	return static_cast<unsigned int>(std::min(longest,
 		static_cast<std::uint64_t>((std::numeric_limits<unsigned int>::max)())));
 }
 
 bool LoopTake::CanConfigureRecordedPlaybackCompensation(
-	unsigned int referenceLatencySamps, unsigned int stationLatencySamps) const noexcept
+	unsigned int referenceLatencySamps, unsigned int stationLatencySamps, const RenderState* prepared) const noexcept
 {
-	const auto own = static_cast<unsigned int>(std::max(0, CurrentVstLatencySamps()));
-	const auto state = _AudioStateSnapshot();
+	const auto chain = prepared ? prepared->Chain : _vstChain.load();
+	const auto own = static_cast<unsigned int>(chain ? std::max(0,chain->GetLatencySamples()) : 0);
+	const auto state = prepared ? prepared->Audio : _AudioStateSnapshot();
 	if (!state) return true;
-	for (const auto& loop : state->Loops)
+	for (auto index=std::size_t{0u};index<state->Loops.size();++index)
 	{
+		const auto& loop=state->Loops[index];
 		if (!loop) continue;
-		const auto path = static_cast<std::uint64_t>(stationLatencySamps) + own
-			+ static_cast<unsigned int>(std::max(0, loop->CurrentVstLatencySamps()));
-		if (path > referenceLatencySamps
-			|| referenceLatencySamps - path > audio::PlaybackDelay::MaxDelaySamps
-			|| !loop->CanConfigureRecordedPlaybackDelay(
-				static_cast<unsigned int>(referenceLatencySamps - path))) return false;
+		const auto leaf = prepared ? (prepared->LoopChains[index] ? prepared->LoopChains[index]->GetLatencySamples() : 0)
+			: loop->CurrentVstLatencySamps();
+		const auto path=static_cast<std::uint64_t>(stationLatencySamps)+own+static_cast<unsigned int>(std::max(0,leaf));
+		if (path>referenceLatencySamps || referenceLatencySamps-path>audio::PlaybackDelay::MaxDelaySamps
+			|| !loop->CanConfigureRecordedPlaybackDelay(static_cast<unsigned int>(referenceLatencySamps-path))) return false;
 	}
 	return true;
 }
 
 bool LoopTake::ConfigureRecordedPlaybackCompensation(
-	unsigned int referenceLatencySamps, unsigned int stationLatencySamps)
+	unsigned int referenceLatencySamps, unsigned int stationLatencySamps, const RenderState* prepared)
 {
-	if (!CanConfigureRecordedPlaybackCompensation(referenceLatencySamps, stationLatencySamps)) return false;
-	const auto own = static_cast<unsigned int>(std::max(0, CurrentVstLatencySamps()));
-	const auto state = _AudioStateSnapshot();
+	if (!CanConfigureRecordedPlaybackCompensation(referenceLatencySamps,stationLatencySamps,prepared)) return false;
+	const auto chain = prepared ? prepared->Chain : _vstChain.load();
+	const auto own = static_cast<unsigned int>(chain ? std::max(0,chain->GetLatencySamples()) : 0);
+	const auto state = prepared ? prepared->Audio : _AudioStateSnapshot();
 	if (!state) return true;
-	for (const auto& loop : state->Loops)
+	for (auto index=std::size_t{0u};index<state->Loops.size();++index)
 	{
+		const auto& loop=state->Loops[index];
 		if (!loop) continue;
-		const auto path = static_cast<std::uint64_t>(stationLatencySamps) + own
-			+ static_cast<unsigned int>(std::max(0, loop->CurrentVstLatencySamps()));
-		if (!loop->ConfigureRecordedPlaybackDelay(
-			static_cast<unsigned int>(referenceLatencySamps - path))) return false;
+		const auto leaf = prepared ? (prepared->LoopChains[index] ? prepared->LoopChains[index]->GetLatencySamples() : 0)
+			: loop->CurrentVstLatencySamps();
+		const auto path=static_cast<std::uint64_t>(stationLatencySamps)+own+static_cast<unsigned int>(std::max(0,leaf));
+		if (!loop->ConfigureRecordedPlaybackDelay(static_cast<unsigned int>(referenceLatencySamps-path))) return false;
 	}
 	return true;
 }
@@ -701,7 +726,7 @@ bool LoopTake::ConfigureRecordedPlaybackCompensation(
 void LoopTake::WriteBlock(const std::shared_ptr<MultiAudioSink> dest,
 	const std::shared_ptr<base::BounceWriter> bounceWriter,
 	int indexOffset,
-	unsigned int numSamps, const audio::DacRenderContext* dac)
+	unsigned int numSamps, const audio::DacRenderContext* dac, const RenderState* prepared)
 {
 	if (_captureCancelled.load(std::memory_order_acquire))
 	{
@@ -724,11 +749,19 @@ void LoopTake::WriteBlock(const std::shared_ptr<MultiAudioSink> dest,
 	auto loopDest = bounceWriter == nullptr ?
 		std::dynamic_pointer_cast<MultiAudioSink>(ptr) :
 		dest;
-	auto state = _BorrowAudioState();
-	if (!state)
-		return;
+	base::PublishedAudioSnapshot<const AudioState>::Lease lease;
+	if (!prepared) lease = _BorrowAudioState();
+	const auto* state = prepared ? prepared->Audio.get() : lease.get();
+	if (!state) return;
+	struct RoutingScope
+	{
+		const AudioState*& Active;
+		const AudioState* Previous;
+		~RoutingScope() { Active = Previous; }
+	} scope{_renderAudioState, _renderAudioState};
+	_renderAudioState = state;
 
-    const bool captureReady = bounceWriter || AudioCaptureReady(numSamps, indexOffset);
+    const bool captureReady = bounceWriter || AudioCaptureReady(numSamps, indexOffset, state);
     const bool provisional = !captureReady && dac && state->OrdinaryAudioCapture
         && (_state.load(std::memory_order_acquire) == STATE_PLAYINGRECORDING
             || _state.load(std::memory_order_acquire) == STATE_PLAYING)
@@ -748,7 +781,8 @@ void LoopTake::WriteBlock(const std::shared_ptr<MultiAudioSink> dest,
         if (const auto& loop = state->Loops[i])
             loop->WriteBlock(loopDest, bounceWriter, indexOffset, numSamps, provisional ? dac : nullptr,
                 _triggerCaptureTiming.TriggerSample.value_or(0u), _triggerCaptureTiming.DelaySamps,
-                provisional ? state->RecordInputChannels[i] : 0u);
+                provisional ? state->RecordInputChannels[i] : 0u,
+				prepared ? prepared->LoopChains[i].get() : nullptr, prepared != nullptr);
 	if (IsMuted())
 		for (const auto& loop : state->Loops)
 			if (loop) loop->ClearRecordedPlaybackDelay();
@@ -757,9 +791,13 @@ void LoopTake::WriteBlock(const std::shared_ptr<MultiAudioSink> dest,
 		return;
 
 	auto sampsToRead = (numSamps <= constants::MaxBlockSize) ? numSamps : constants::MaxBlockSize;
+	// Generated audio can persist without a material leaf. Apply Take-local mute
+	// and replacement/source intent to its existing master fade at this boundary.
+	if (IsUserOrSourceMuted()) _masterMixer->Mute();
+	else _masterMixer->UnMute();
 	auto masterLevel = static_cast<float>(_masterMixer->Level());
 	auto masterPeak = 0.0f;
-	const auto channelCount = (state->AudioBuffers.size() < state->AudioMixers.size()) ? state->AudioBuffers.size() : state->AudioMixers.size();
+	const auto channelCount = state->OutputMixers.size();
 	if (channelCount == 0u)
 	{
 		_masterMixer->UpdateVu(0.0f, sampsToRead);
@@ -767,12 +805,19 @@ void LoopTake::WriteBlock(const std::shared_ptr<MultiAudioSink> dest,
 		return;
 	}
 
+	for (auto channel=channelCount;channel<state->VstBlockPtrs.size();++channel)
+		std::fill_n(state->VstBlockPtrs[channel],sampsToRead,0.0f);
 	for (auto i = 0u; i < channelCount; i++)
 	{
 		auto* scratch = (i < state->VstBlockPtrs.size()) ? state->VstBlockPtrs[i] : nullptr;
 		if (!scratch)
 			continue;
 
+		if (i >= state->AudioBuffers.size())
+		{
+			std::fill_n(scratch, sampsToRead, 0.0f);
+			continue;
+		}
 		auto& buf = state->AudioBuffers[i];
 		buf->Delay(sampsToRead);
 		auto srcPtr = buf->PlaybackRead(scratch, sampsToRead);
@@ -783,10 +828,12 @@ void LoopTake::WriteBlock(const std::shared_ptr<MultiAudioSink> dest,
 			std::copy(srcPtr, srcPtr + sampsToRead, scratch);
 	}
 
-	auto chain = _vstChain.borrow();
+	base::PublishedAudioSnapshot<vst::VstChain>::Lease chainLease;
+	if (!prepared) chainLease = _vstChain.borrow();
+	auto* chain = prepared ? prepared->Chain.get() : chainLease.get();
 	if (chain && chain->IsActive() && state->VstBlockPtrs.size() >= channelCount
 		&& state->InstrumentPtrs.size() >= channelCount)
-		chain->ProcessRack(state->VstBlockPtrs.data(), state->InstrumentPtrs.data(), static_cast<int>(channelCount), sampsToRead);
+		chain->ProcessRack(state->VstBlockPtrs.data(), state->InstrumentPtrs.data(), static_cast<int>(state->VstBlockPtrs.size()), sampsToRead);
 
 	for (auto i = 0u; i < channelCount; i++)
 	{
@@ -803,7 +850,7 @@ void LoopTake::WriteBlock(const std::shared_ptr<MultiAudioSink> dest,
 				masterPeak = absSamp;
 		}
 
-		state->AudioMixers[i]->WriteBlock(dest, scratch, sampsToRead);
+		state->OutputMixers[i]->WriteBlock(dest, scratch, sampsToRead);
 	}
 
 	_masterMixer->UpdateVu(masterPeak, sampsToRead);
@@ -1426,7 +1473,7 @@ ActionResult LoopTake::OnAction(JobAction action)
 	{
 		auto plugin = action.PreInitPlugin ? action.PreInitPlugin : vst::MakePluginForPath(action.VstPath);
 		auto hostChannels = NumInputChannels(Audible::AUDIOSOURCE_LOOPS);
-		if (hostChannels == 0u) hostChannels = 1u;
+		if (hostChannels == 0u) hostChannels = std::max(2u, NumBusChannels());
 		const bool loaded = plugin->Load(action.VstPath, _sampleRate, _lastBufSize, hostChannels, vst::HostedLayoutMode::Exact);
 		if (action.VstIdentity.empty()) action.VstIdentity = plugin->StateId();
 		plugin->SetStateId(action.VstIdentity);
@@ -1489,6 +1536,7 @@ ActionResult LoopTake::OnAction(JobAction action)
 					else replacement->AddSlot(std::move(existing));
 				}
 				_vstPluginPaths.erase(_vstPluginPaths.begin() + static_cast<std::ptrdiff_t>(removeIndex));
+				_pendingDeletedVstRouteIds.push_back(_vstSavedEntries[removeIndex].Id);
 				_vstSavedEntries.erase(_vstSavedEntries.begin() + static_cast<std::ptrdiff_t>(removeIndex));
 				_backVstChain = std::move(replacement);
 			++_rackRevision;
@@ -1991,6 +2039,7 @@ void LoopTake::SetStationMuteControl(const std::shared_ptr<const std::atomic<boo
 	_stationMuteControl = control;
 	for (const auto& mixer : _audioMixers) mixer->SetStationMuteControl(control);
 	for (const auto& mixer : _backAudioMixers) mixer->SetStationMuteControl(control);
+	for (const auto& mixer : _generatorMixers) mixer->SetStationMuteControl(control);
 	for (const auto& loop : _loops) loop->SetStationMuteControl(control);
 	for (const auto& loop : _backLoops) loop->SetStationMuteControl(control);
 }
@@ -2070,6 +2119,7 @@ void LoopTake::SetNumBusChannels(unsigned int chans)
 		if (route.first < routes.size())
 			routes[route.first].push_back(route.second);
 	RestoreAudioRoutes(routes);
+	if (_loops.empty() && _backLoops.empty()) _PublishAudioState();
 }
 
 void LoopTake::Record(std::vector<unsigned int> channels,
@@ -2365,31 +2415,38 @@ std::vector<midi::MidiEvent> LoopTake::_BuildMidiLiveTransitionEvents(std::uint3
 }
 
 unsigned int LoopTake::ReadMidiBlock(std::uint32_t globalSample,
+	std::uint32_t numSamples, midi::IMidiOutputSink& sink, unsigned int firstOutputIndex) noexcept
+{
+	auto sources = _BorrowMidiLoopSnapshot();
+	if (!sources) return 0u;
+	return ReadPreparedMidiBlock(*sources, globalSample, numSamples, sink, firstOutputIndex, false);
+}
+
+unsigned int LoopTake::ReadPreparedMidiBlock(std::span<const std::shared_ptr<midi::MidiLoop>> sources,
+	std::uint32_t globalSample,
 	std::uint32_t numSamples,
 	midi::IMidiOutputSink& sink,
-	unsigned int firstOutputIndex) noexcept
+	unsigned int firstOutputIndex, bool rawVelocity, const AudioState* preparedAudio) noexcept
 {
-	auto snapshot = _BorrowMidiLoopSnapshot();
+
 	const bool cancelled = _captureCancelled.load(std::memory_order_acquire);
 	const bool flushOnly = cancelled || IsMuted();
 
 	const auto midiBlockStart = static_cast<std::uint32_t>(
 		_midiVisualPlayIndex.load(std::memory_order_relaxed));
-	if (!snapshot)
-		return 0u;
     if (!flushOnly && (MidiTriggerCapturePending() ||
-        (_triggerCaptureConfigured && !_capturePlaybackPrepared.load(std::memory_order_acquire)) || !AudioCaptureReady(numSamples)))
-        return static_cast<unsigned int>(snapshot->size());
+        (_triggerCaptureConfigured && !_capturePlaybackPrepared.load(std::memory_order_acquire)) || !AudioCaptureReady(numSamples, 0, preparedAudio)))
+        return static_cast<unsigned int>(sources.size());
 	if (_firstMasterActivationPending.load(std::memory_order_acquire) && !flushOnly)
-		return static_cast<unsigned int>(snapshot->size());
+		return static_cast<unsigned int>(sources.size());
 
-	for (auto i = 0u; i < snapshot->size(); ++i)
+	for (auto i = 0u; i < sources.size(); ++i)
 	{
-		const auto& midiLoop = (*snapshot)[i];
+		const auto& midiLoop = sources[i];
 		if (!midiLoop)
 			continue;
 
-		const auto masterVelocityScale = static_cast<float>(_masterMixer->UnmutedLevel());
+		const auto masterVelocityScale = rawVelocity ? 1.0f : RecordedMidiVelocityScale();
 		midi::MidiIndexedOutputSink indexedSink(sink,
 			firstOutputIndex + i,
 			midiBlockStart,
@@ -2401,7 +2458,7 @@ unsigned int LoopTake::ReadMidiBlock(std::uint32_t globalSample,
 			midiLoop->ReadBlock(midiBlockStart, numSamples, indexedSink);
 	}
 
-	return static_cast<unsigned int>(snapshot->size());
+	return static_cast<unsigned int>(sources.size());
 }
 
 std::uint32_t LoopTake::ResolveMidiRecordSample(std::uint32_t eventGlobalSample,
@@ -3334,12 +3391,15 @@ std::vector<JobAction> LoopTake::_CommitChanges()
 	{
 		std::lock_guard<std::mutex> lock(_vstPathsMutex);
 		_flipVstChain.store(false, std::memory_order_release);
+		for (auto& route : _midiChannelRoutes)
+			for (const auto& identity : _pendingDeletedVstRouteIds) std::erase(route.PluginIds, identity);
+		_pendingDeletedVstRouteIds.clear();
 		_vstChain.store(_backVstChain, std::memory_order_release);
 		vstTopologyChanged = true;
 	}
-	// Notify after releasing _vstPathsMutex. The parent commits before its
-	// children, so this schedules its next serialized dispatch publication.
-	if (vstTopologyChanged && _automationTopologyChanged) _automationTopologyChanged();
+	// Notify after releasing _vstPathsMutex. Station captures the completed
+	// hierarchy in its after-children commit hook.
+	if (vstTopologyChanged) _PublishAudioState();
 
 	std::vector<JobAction> jobs;
 
@@ -3518,8 +3578,10 @@ double LoopTake::MasterLevelForExport() const
 std::vector<double> LoopTake::BusLevelsForExport() const
 {
 	std::vector<double> levels;
-	levels.reserve(_audioMixers.size());
-	for (const auto& mixer : _audioMixers)
+	const auto state = _AudioStateSnapshot();
+	const auto& mixers = _audioMixers.empty() && state ? state->OutputMixers : _audioMixers;
+	levels.reserve(mixers.size());
+	for (const auto& mixer : mixers)
 		levels.push_back(mixer ? mixer->UnmutedLevel() : AudioMixer::DefaultLevel);
 	return levels;
 }
@@ -3529,7 +3591,12 @@ bool LoopTake::RestoreMixerLevels(double masterLevel, const std::vector<double>&
 	if (!std::isfinite(masterLevel) || std::any_of(busLevels.begin(), busLevels.end(),
 		[](double level) { return !std::isfinite(level); }))
 		return false;
-	if (busLevels.size() > (std::max)(_audioMixers.size(), _backAudioMixers.size()))
+	const bool pureMidi = _loops.empty() && _backLoops.empty();
+	const auto output = _AudioStateSnapshot();
+	if (pureMidi && (!output || busLevels.size() > output->OutputMixers.size()))
+		SetNumBusChannels(static_cast<unsigned int>(busLevels.size()));
+
+	if (busLevels.size() > (pureMidi ? _generatorMixers.size() : (std::max)(_audioMixers.size(), _backAudioMixers.size())))
 		return false;
 	if (_masterMixer)
 		_masterMixer->SetUnmutedLevel(masterLevel);
@@ -3540,6 +3607,7 @@ bool LoopTake::RestoreMixerLevels(double masterLevel, const std::vector<double>&
 	}
 	for (std::size_t index = 0u; index < busLevels.size(); ++index)
 	{
+		if (_audioMixers.empty() && index < _generatorMixers.size()) _generatorMixers[index]->SetUnmutedLevel(busLevels[index]);
 		if (index < _audioMixers.size() && _audioMixers[index]) _audioMixers[index]->SetUnmutedLevel(busLevels[index]);
 		if (index < _backAudioMixers.size() && _backAudioMixers[index]) _backAudioMixers[index]->SetUnmutedLevel(busLevels[index]);
 	}
@@ -3735,6 +3803,7 @@ void LoopTake::_PublishMidiLoopSnapshot()
 				std::this_thread::yield();
 	_midiLoopSnapshot.store(std::move(state), std::memory_order_release);
 	_promotionTopologyGate.store(0u, std::memory_order_seq_cst);
+	if (_automationTopologyChanged) _automationTopologyChanged();
 }
 
 void LoopTake::_PublishAudioState()
@@ -3747,15 +3816,38 @@ void LoopTake::_PublishAudioState()
     state->OrdinaryAudioCapture = _ordinaryAudioCapture && _triggerCaptureConfigured && _midiLoops.empty();
 	state->AudioMixers = _audioMixers;
 	state->AudioBuffers = _audioBuffers;
-	state->VstBlockScratch.resize(state->AudioBuffers.size() * constants::MaxBlockSize);
-	state->VstBlockPtrs.resize(state->AudioBuffers.size(), nullptr);
-	for (auto i = 0u; i < state->AudioBuffers.size(); i++)
-		state->VstBlockPtrs[i] = state->VstBlockScratch.data() + (static_cast<size_t>(i) * constants::MaxBlockSize);
-	state->InstrumentScratch.resize(state->AudioBuffers.size() * constants::MaxBlockSize);
-	state->InstrumentPtrs.resize(state->AudioBuffers.size(), nullptr);
-	for (auto i = 0u; i < state->AudioBuffers.size(); ++i)
-		state->InstrumentPtrs[i] = state->InstrumentScratch.data() + (static_cast<size_t>(i) * constants::MaxBlockSize);
+	const auto width = state->AudioBuffers.empty() ? std::max(2u, NumBusChannels())
+		: static_cast<unsigned int>(state->AudioBuffers.size());
+	state->OutputMixers = state->AudioMixers;
+	if (state->AudioBuffers.empty())
+	{
+		while (_generatorMixers.size() < width)
+		{
+			audio::MergeMixBehaviourParams merge;
+			merge.Channels.push_back(static_cast<unsigned int>(_generatorMixers.size()));
+			auto mixer = std::make_shared<audio::AudioMixer>(GetMixerParams(_sizeParams.Size, merge));
+			mixer->SetStationMuteControl(_stationMuteControl);
+			mixer->SetUnmutedLevel(1.0);
+			_generatorMixers.push_back(std::move(mixer));
+		}
+		state->OutputMixers.assign(_generatorMixers.begin(), _generatorMixers.begin() + width);
+	}
+	auto renderWidth = width;
+	if (const auto chain = _vstChain.load())
+		for (std::size_t index=0u;index<chain->NumPlugins();++index)
+			if (const auto plugin=chain->GetPlugin(index)) renderWidth=std::max(renderWidth,plugin->HostedChannelCount());
+	state->VstBlockScratch.resize(renderWidth * constants::MaxBlockSize);
+	state->VstBlockPtrs.resize(renderWidth, nullptr);
+	state->InstrumentScratch.resize(renderWidth * constants::MaxBlockSize);
+	state->InstrumentPtrs.resize(renderWidth, nullptr);
+	for (auto i = 0u; i < renderWidth; ++i)
+	{
+		state->VstBlockPtrs[i] = state->VstBlockScratch.data() + static_cast<size_t>(i) * constants::MaxBlockSize;
+		state->InstrumentPtrs[i] = state->InstrumentScratch.data() + static_cast<size_t>(i) * constants::MaxBlockSize;
+	}
+
 	_audioState.store(state, std::memory_order_release);
+	if (_automationTopologyChanged) _automationTopologyChanged();
 }
 
 void LoopTake::_ArrangeChildren()
@@ -3814,6 +3906,7 @@ GuiRackParams LoopTake::_GetRackParams(utils::Size2d size)
 	GuiRackParams rackParams;
 	rackParams.EnableVstControl = true;
 	rackParams.EnableVstRack = true;
+	rackParams.EnableVstRackMidiRouting = true;
 	rackParams.Position = { 0, 0 };
 	rackParams.Size = size;
 	rackParams.MinSize = rackParams.Size;
@@ -4826,7 +4919,7 @@ bool LoopTake::LoadVstPluginSynchronously(const std::wstring& path,
 	auto plugin = vst::MakePluginForPath(path);
 	auto hostChannels = NumInputChannels(Audible::AUDIOSOURCE_LOOPS);
 	if (hostChannels == 0u)
-		hostChannels = 1u;
+		hostChannels = std::max(2u, NumBusChannels());
 	const bool loaded = plugin->PreInit(path)
 		&& plugin->Load(path, _sampleRate, _lastBufSize, hostChannels, vst::HostedLayoutMode::Exact);
 
@@ -4928,7 +5021,6 @@ std::vector<io::JamFile::VstEntry> LoopTake::VstEntries() const
 
 	return entries;
 }
-
 
 bool LoopTake::TryGroupVstEntries(std::vector<io::JamFile::VstEntry>& output) const
 {
@@ -5114,4 +5206,58 @@ std::shared_ptr<engine::Loop> engine::LoopTake::FindStagedAudioLoopById(const st
         found=loop;
     }
     return found;
+}
+
+void LoopTake::SetAllowedMidiChannels(const std::vector<int>& channels)
+{
+	std::vector<int> filtered;
+	std::uint16_t mask = 0u;
+	for (auto channel : channels)
+		if (channel >= 1 && channel <= 16 && !(mask & (1u << (channel - 1))))
+		{
+			mask |= static_cast<std::uint16_t>(1u << (channel - 1));
+			filtered.push_back(channel);
+		}
+	const auto removed = static_cast<std::uint16_t>(_allowedMidiChannelMask & ~mask);
+	for (auto channel = 0u; channel < 16u; ++channel)
+		if (removed & (1u << channel)) _midiChannelRoutes[channel] = {};
+	_allowedMidiChannels = std::move(filtered);
+	_allowedMidiChannelMask = mask;
+	++_rackRevision;
+	_changesMade = true;
+	if (_automationTopologyChanged) _automationTopologyChanged();
+}
+
+bool LoopTake::SetMidiChannelRoutes(std::array<midi::MidiChannelRoute,16> routes, std::uint64_t revision)
+{
+	if (revision != RackRevision()) return false;
+	std::string diagnostic;
+	auto allowed = vst::RackState::ValidateChannelRoutes(routes, _midiChannelRoutes,
+		GetVstRackSlots(), _allowedMidiChannels, diagnostic);
+	if (!allowed) return false;
+	SetAllowedMidiChannels(*allowed);
+	_midiChannelRoutes = std::move(routes);
+	if (_automationTopologyChanged) _automationTopologyChanged();
+	return true;
+}
+
+bool LoopTake::RestoreMidiRouting(const std::vector<int>& channels, std::array<midi::MidiChannelRoute,16> routes)
+{
+	if (!vst::RackState::ValidSavedRouting(_vstSavedEntries, routes)) return false;
+	SetAllowedMidiChannels(channels);
+	_midiChannelRoutes = std::move(routes);
+	if (_automationTopologyChanged) _automationTopologyChanged();
+	return true;
+}
+
+std::shared_ptr<const LoopTake::RenderState> LoopTake::PrepareRenderState() const
+{
+	auto state = std::make_shared<RenderState>();
+	state->Audio = _AudioStateSnapshot();
+	state->Chain = _vstChain.load();
+	if (state->Audio)
+		for (const auto& loop : state->Audio->Loops)
+			state->LoopChains.push_back(loop ? loop->PreparedVstChain() : nullptr);
+	state->MidiSources = GetMidiLoopSnapshot();
+	return state;
 }

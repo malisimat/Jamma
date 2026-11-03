@@ -24,12 +24,13 @@ namespace gui
 		using Routes = std::array<midi::MidiChannelRoute, 16>;
 		struct Command
 		{
-			enum class Kind { Slot, Append, Recover, ClearInactiveRoutes, Diagnostic, Routes, Move };
+			enum class Kind { Slot, Append, Recover, ClearInactiveRoutes, Diagnostic, Routes, Channels, Move };
 			Kind Operation = Kind::Slot;
 			std::string Identity;
 			std::size_t Ordinal = 0u;
 			std::uint64_t Revision = 0u;
 			base::Action::Modifiers Modifiers = base::Action::MODIFIER_NONE;
+			std::vector<int> AllowedMidiChannels;
 			GuiVstRack::Routes ChannelRoutes{};
 			vst::RackMove Move;
 		};

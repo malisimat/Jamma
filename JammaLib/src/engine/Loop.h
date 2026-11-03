@@ -248,7 +248,8 @@ namespace engine
 			const std::shared_ptr<base::BounceWriter> bounceWriter,
 			int sampOffset,
 			unsigned int numSamps, const audio::DacRenderContext* dac = nullptr,
-            std::uint32_t trigger = 0u, std::int64_t delay = 0, unsigned int channel = 0u);
+            std::uint32_t trigger = 0u, std::int64_t delay = 0, unsigned int channel = 0u,
+			vst::VstChain* preparedChain = nullptr, bool usePreparedChain = false);
 		virtual void EndMultiPlay(unsigned int numSamps) override;
 		virtual void OnBlockWrite(const base::AudioWriteRequest& request, int writeOffset) override;
 		virtual void EndWrite(unsigned int numSamps,
@@ -436,6 +437,14 @@ namespace engine
 		std::vector<vst::VstRackSlot> GetVstRackSlots(std::size_t offset = 0u) const;
 		std::uint64_t RackRevision() const noexcept { return _rackRevision.load(std::memory_order_acquire); }
 		bool MoveVstSlot(const vst::RackMove& move);
+		void SetAllowedMidiChannels(const std::vector<int>& channels);
+		const std::vector<int>& AllowedMidiChannels() const noexcept { return _allowedMidiChannels; }
+		std::uint16_t AllowedMidiChannelMask() const noexcept { return _allowedMidiChannelMask; }
+		const std::array<midi::MidiChannelRoute,16>& MidiChannelRoutes() const noexcept { return _midiChannelRoutes; }
+		bool SetMidiChannelRoutes(std::array<midi::MidiChannelRoute,16> routes, std::uint64_t revision);
+		bool RestoreMidiRouting(const std::vector<int>& channels, std::array<midi::MidiChannelRoute,16> routes);
+		std::shared_ptr<vst::VstChain> PreparedVstChain() const { return _vstChain.load(); }
+
 		void SetAutomationTopologyChangedCallback(std::function<void()> changed)
 			{ _automationTopologyChanged = std::move(changed); }
 		std::shared_ptr<vst::IVstPlugin> FindVstPlugin(const vst::IVstPlugin* observer,
@@ -520,8 +529,8 @@ namespace engine
 		bool _visualUpdatesEnabled;
 		std::atomic<bool> _isPunchInActive;
 		// Current playback position, in samples. Advanced by ReadBlock().
-		// Source coordinates exclude plugin latency. Recorded rendering applies
-		// compensation after the loop chain, preserving capture/fade coordinates.
+		// Source coordinates exclude plugin latency. Recorded material compensation
+		// precedes rack injection; bounce/source capture keep their coordinates.
 		std::atomic<std::int32_t> _playbackOffsetSamps{ 0 };
 		std::atomic<std::int32_t> _inheritedPlaybackOffsetSamps{ 0 };
 		std::atomic<double> _appliedPlaybackOffsetSamps{ 0.0 };
@@ -568,9 +577,14 @@ namespace engine
 		mutable std::mutex _vstPathsMutex;
 		std::vector<std::wstring> _vstPluginPaths;
 		std::vector<io::JamFile::VstEntry> _vstSavedEntries;
+		std::vector<std::string> _pendingDeletedVstRouteIds; // Job staging, applied on serialized commit.
 		// UI stages requests, job completes them. Audio never reads this counter.
 		std::atomic<unsigned int> _vstJobsPending{ 0u };
 		std::atomic<std::uint64_t> _rackRevision{1u};
+		std::vector<int> _allowedMidiChannels{1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16};
+		std::uint16_t _allowedMidiChannelMask = 0xffffu;
+		std::array<midi::MidiChannelRoute,16> _midiChannelRoutes{};
+
 
 	private:
 		std::size_t _CollectAudioSourceCaptures(); // Off callback only.

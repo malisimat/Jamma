@@ -233,6 +233,8 @@ namespace base
 		virtual void _InitResources(resources::ResourceLib& resourceLib, bool forceInit) override;
 		virtual void _ReleaseResources() override;
 		virtual std::vector<actions::JobAction> _CommitChanges();
+		// Owners that publish child render state finish after every child commit.
+		virtual void _AfterChildrenCommit() {}
 		virtual bool _HitTest(utils::Position2d localPos);
 		bool _ChildRectHitTest(utils::Position2d localPos) const;
 		void _BeginGesture(GestureKind kind, utils::Position2d startPosition, int startValue = 0) noexcept;

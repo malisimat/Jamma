@@ -12,8 +12,9 @@
 #include "MidiNote.h"
 #include "MidiChannelRoute.h"
 #include "MidiLoop.h"
+#include "../engine/LoopTake.h"
 
-namespace engine { class LoopTake; }
+namespace engine { class LoopTake; class Loop; }
 namespace vst { class IVstPlugin; class VstChain; }
 
 namespace midi
@@ -32,6 +33,7 @@ namespace midi
 		struct MidiDestination
 		{
 			std::shared_ptr<vst::IVstPlugin> Plugin;
+			std::shared_ptr<engine::Loop> AudioLoop;
 			unsigned int RenderChannels = 0u; // Immutable captured hosted width.
 			std::bitset<midi::MidiNote::TotalNoteSlots> LiveHeld;
 			// Callback-owned pedal accounting, independent of changing live routes.
@@ -115,9 +117,38 @@ namespace midi
 			std::uint32_t LiveNoteOnRevision = 0u;
 		};
 	public:
+		// Whole-hierarchy admission limits bound destination queues and every event's
+		// fanout. Rejected preparation leaves the preceding render topology intact.
+		static constexpr std::size_t MaxRacks = 64u;
+		static constexpr std::size_t MaxDestinations = 64u;
+		static constexpr std::size_t MaxRetainedDestinations = 128u;
+		static constexpr std::size_t MaxBindings = 512u;
+		static constexpr std::size_t MaxSources = MaxBindings;
+		static constexpr std::size_t MaxRetainedBindings = 1024u;
+		struct PreparedRack
+		{
+			std::shared_ptr<vst::VstChain> Chain;
+			engine::LoopTake* Take = nullptr; // Null means Station; source groups pin takes.
+			std::shared_ptr<engine::Loop> Loop; // Audio leaf, never a MidiLoop.
+			unsigned int RenderChannels = 0u;
+			std::uint16_t EnabledChannels = 0u;
+			std::array<MidiChannelRoute,16> ChannelRoutes{};
+		};
+		struct SourceGroup
+		{
+			std::shared_ptr<engine::LoopTake> Take;
+			std::vector<std::shared_ptr<MidiLoop>> Sources;
+			std::shared_ptr<const engine::LoopTake::AudioState> Audio;
+		};
 		struct PreparedState
 		{
 			std::shared_ptr<vst::VstChain> MidiChain;
+			std::vector<PreparedRack> Racks;
+			std::vector<SourceGroup> SourceGroups;
+			std::vector<std::uint64_t> DestinationPathLatency;
+			std::vector<bool> DestinationLegacyVelocity;
+			std::vector<bool> DestinationHasMidiInput;
+			std::vector<std::vector<std::size_t>> PlaybackDestinationIndices;
 			std::array<std::vector<std::shared_ptr<MidiDestination>>, 16> LiveChannelDestinations;
 			std::uint16_t EnabledChannels = 0u;
 			std::vector<std::uint16_t> DestinationChannels; // Shared live/recorded permissions, immutable.
@@ -129,10 +160,13 @@ namespace midi
 			std::vector<std::vector<std::shared_ptr<MidiPlaybackBinding>>> MidiPlaybackRoutes;
 		};
 
-		void Prepare(PreparedState& state, const PreparedState* previous,
+		bool Prepare(PreparedState& state, const PreparedState* previous,
 			std::shared_ptr<vst::VstChain> chain, const std::vector<std::shared_ptr<engine::LoopTake>>& takes,
 			std::uint16_t enabledChannels, const std::array<MidiChannelRoute, 16>& channelRoutes,
-			unsigned int renderChannels);
+			unsigned int renderChannels, std::span<const PreparedRack> childRacks = {},
+			std::span<const SourceGroup> sources = {});
+		static bool LatencyPathsChanged(const PreparedState& state) noexcept; // Structural owner only.
+		static bool CanConfigureCompensation(const PreparedState& state, unsigned int referenceLatencySamps) noexcept;
 		static bool ConfigureCompensation(const PreparedState& state, unsigned int referenceLatencySamps) noexcept;
 		static void BeginRetiredBlock(const PreparedState& state,
 			std::uint32_t blockStartSample, unsigned int numSamps) noexcept;
@@ -140,7 +174,7 @@ namespace midi
 			std::span<const std::shared_ptr<engine::LoopTake>> takes, std::span<float* const> instrumentPtrs,
 			bool vstActive, const std::atomic<bool>& membershipRemoving,
 			unsigned int numSamps,
-			std::uint32_t blockStartSample) noexcept;
+			std::uint32_t blockStartSample, bool discontinuity = false) noexcept;
 		static void RecoverSkippedBlocks(const PreparedState& state) noexcept { _RecoverSkippedMidiBlocks(state); }
 		bool TryEnqueueImmediateLiveMidi(const MidiEvent& event) noexcept;
 		bool TryEnqueueSyntheticLiveMidi(const MidiEvent& event) noexcept { return _TryEnqueueSyntheticMidi({event}); }
@@ -199,6 +233,8 @@ namespace midi
 		std::vector<std::weak_ptr<MidiDestination>> _midiDestinations;
 		std::vector<std::shared_ptr<MidiPlaybackBinding>> _midiPlaybackBindings;
 		std::vector<std::shared_ptr<MidiPlaybackBinding>> _pendingLostPlaybackMidi;
+		bool _hasDiscontinuityCutoff = false; // Callback-owned until both bounded ingress queues cross cutoff.
+		std::uint32_t _discontinuityCutoff = 0u;
 		bool _hasLastImmediateLiveMidiSample = false;
 		std::uint32_t _lastImmediateLiveMidiSample = 0u;
 		bool _hasLastSyntheticLiveMidiSample = false;

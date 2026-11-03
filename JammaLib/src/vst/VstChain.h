@@ -30,7 +30,7 @@ namespace vst
 		void ProcessRack(float* const* channels, float* const* instrumentScratch,
 			int numChannels, int numSamples) noexcept;
 		// Preserve the mono host adapter (including its established output folding).
-		void ProcessRackMono(float* channel, float* instrumentScratch, int numSamples) noexcept;
+		void ProcessRackMono(float* channel, float* instrumentScratch, int numSamples, bool renderInstruments = true) noexcept;
 		VstChain();
 		~VstChain() = default;
 

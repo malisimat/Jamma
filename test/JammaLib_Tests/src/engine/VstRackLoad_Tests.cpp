@@ -3,6 +3,9 @@
 #include "engine/LoopTake.h"
 #include "engine/Loop.h"
 #include <algorithm>
+#include <fstream>
+#include "io/WavReadWriter.h"
+#include "io/NativeMidiSidecar.h"
 #include "../../TestPaths.h"
 #include "utils/StringUtils.h"
 
@@ -18,6 +21,8 @@ protected:
 	void TearDown() override
 	{
 		std::error_code error;
+		std::filesystem::remove(Directory / "routing.wav", error);
+		std::filesystem::remove(Directory / "routing.jammidi", error);
 		std::filesystem::remove(Directory, error);
 	}
 	std::wstring MissingPath(const wchar_t* name) const { return (Directory / name).wstring(); }
@@ -312,4 +317,106 @@ TEST_F(VstRackLoadTest, InactiveRackPreservesRawOrderRoutesAndExplicitRecovery)
 	io::JamFile::Station empty; empty.Name = "empty"; empty.Id = "empty"; empty.StationType = 0;
 	auto emptyStation = reconstruct(empty);
 	ASSERT_TRUE(emptyStation);
+}
+
+
+
+TEST_F(VstRackLoadTest, ChildRestoreKeepsIndependentMasksAndExplicitEmpty)
+{
+	io::WavReadWriter wav;
+	ASSERT_TRUE(wav.Write((Directory / "routing.wav").wstring(), std::vector<float>(64u, 0.0f), 64u, 48000u));
+	io::JamFile::Loop leaf{};
+	leaf.Id = "routing-leaf";
+	leaf.Name = "routing.wav";
+	leaf.Length = 64ul;
+	leaf.Level = 1.0;
+	leaf.Speed = 1.0;
+	leaf.Mix = {io::JamFile::LoopMix::MIX_WIRE, std::vector<unsigned long>{0ul}};
+	leaf.AllowedMidiChannels = {1,6};
+	leaf.MidiChannelRoutes[5].PluginIds = {"unavailable-leaf"};
+	io::JamFile::LoopTake saved{};
+	saved.Name = "routing-take";
+	saved.Id = "routing-take";
+	saved.AllowedMidiChannels = {2,3};
+	saved.MidiChannelRoutes[1].PluginIds = {"unavailable-take"};
+	saved.Loops.push_back(leaf);
+	for (const bool disabled : {false,true})
+	{
+		auto descriptor = saved;
+		if (disabled)
+		{
+			descriptor.AllowedMidiChannels.clear();
+			descriptor.Loops[0].AllowedMidiChannels.clear();
+		}
+		engine::LoopTakeParams params;
+		params.Id = descriptor.Id;
+		params.Size = {100u,100u};
+		const auto restored = engine::LoopTake::FromFile(params, descriptor, Directory.wstring());
+		ASSERT_TRUE(restored);
+		const auto take = *restored;
+		take->CommitChanges();
+		ASSERT_EQ(1u, take->GetLoops().size());
+		const auto loop = take->GetLoops()[0];
+		EXPECT_EQ(disabled ? std::vector<int>{} : std::vector<int>({2,3}), take->AllowedMidiChannels());
+		EXPECT_EQ(disabled ? std::vector<int>{} : std::vector<int>({1,6}), loop->AllowedMidiChannels());
+		EXPECT_EQ(saved.MidiChannelRoutes, take->MidiChannelRoutes());
+		EXPECT_EQ(leaf.MidiChannelRoutes, loop->MidiChannelRoutes());
+	}
+}
+
+TEST_F(VstRackLoadTest, PureMidiTakeRestoresLocalRoutingWithoutAudioLeaves)
+{
+	io::NativeMidiSidecar::Stream stream;
+	stream.LogicalLength = 64u;
+	stream.Events = {{0u,0x91u,60u,100u,0u},{32u,0x81u,60u,0u,0u}};
+	{
+		std::ofstream output(Directory / "routing.jammidi", std::ios::binary);
+		ASSERT_TRUE(io::NativeMidiSidecar::ToStream(stream, output));
+	}
+	io::JamFile::LoopTake descriptor{};
+	descriptor.Name = "midi-only";
+	descriptor.Id = "midi-only";
+	descriptor.MidiPlayLength = 64ul;
+	descriptor.MidiStreams.push_back({"routing.jammidi",1u,"test-owned",64ul,0u});
+	descriptor.AllowedMidiChannels = {2,3};
+	descriptor.MidiChannelRoutes[1].PluginIds = {"unavailable-instrument"};
+	engine::LoopTakeParams params;
+	params.Id = descriptor.Id;
+	params.Size = {100u,100u};
+	const auto restored = engine::LoopTake::FromFile(params, descriptor, Directory.wstring());
+	ASSERT_TRUE(restored);
+	const auto take = *restored;
+	take->CommitChanges();
+	EXPECT_TRUE(take->GetLoops().empty());
+	ASSERT_EQ(1u, take->GetMidiLoops().size());
+	EXPECT_EQ(2u, take->GetMidiLoops()[0]->EventCount());
+	EXPECT_EQ(descriptor.AllowedMidiChannels, take->AllowedMidiChannels());
+	EXPECT_EQ(descriptor.MidiChannelRoutes, take->MidiChannelRoutes());
+}
+
+TEST_F(VstRackLoadTest, InvalidChildRoutingRejectsRestoration)
+{
+	for (const bool atLeaf : {false,true})
+	for (auto scenario = 0u; scenario < 5u; ++scenario)
+	{
+		SCOPED_TRACE(atLeaf);
+		SCOPED_TRACE(scenario);
+		io::JamFile::Loop leaf{};
+		io::JamFile::LoopTake descriptor{};
+		descriptor.Id = "invalid-routing-take";
+		descriptor.Name = "invalid-routing-take";
+		auto& entries = atLeaf ? leaf.VstChain : descriptor.VstChain;
+		auto& routes = atLeaf ? leaf.MidiChannelRoutes : descriptor.MidiChannelRoutes;
+		entries.push_back({utils::EncodeUtf8(MissingPath(L"absent.dll")),false,{},"slot"});
+		if (scenario == 0u) entries[0].Id = std::string("bad\0id",6u);
+		if (scenario == 1u) entries.resize(33u,entries[0]);
+		if (scenario == 2u) routes[0].PluginIds = {""};
+		if (scenario == 3u) routes[0].PluginIds.resize(33u,"missing");
+		if (scenario == 4u) routes[0].PluginIds = {"duplicate","duplicate"};
+		if (atLeaf) descriptor.Loops.push_back(leaf);
+		engine::LoopTakeParams params;
+		params.Id = descriptor.Id;
+		params.Size = {100u,100u};
+		EXPECT_FALSE(engine::LoopTake::FromFile(params, descriptor, Directory.wstring()));
+	}
 }

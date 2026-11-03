@@ -62,7 +62,7 @@ namespace gui
 		bool EnableVstControl = false;
 		bool EnableStationLabel = false;
 		bool EnableVstRack = false;
-		// MIDI input filtering and cables are station-owned; child racks do not expose MIDI input routing.
+		// MIDI filters and cables belong to the rack currently presented at this depth.
 		bool EnableVstRackMidiRouting = false;
 		std::function<void(base::Action::Modifiers)> OnVstControl;
 	};
@@ -119,6 +119,8 @@ namespace gui
 		void ClearRoutes();
 		const std::vector<std::pair<unsigned int, unsigned int>>& Routes() const { return _router->Routes(); }
 		void SetAllowedMidiChannels(const std::vector<int>& channels, bool bypassUpdates);
+		void SetAllowedMidiChannelsCallback(std::function<void(const std::vector<int>&)> callback)
+		{ _rackParams.OnAllowedMidiChannelsChanged = std::move(callback); }
 
 		std::shared_ptr<gui::GuiSlider> GetMasterSlider() const;
 		std::shared_ptr<gui::GuiSlider> GetChannelSlider(unsigned int index) const;

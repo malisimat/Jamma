@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <array>
+#include <crtdbg.h>
 
 #include "actions/JobAction.h"
 #include "audio/PlaybackDelay.h"
@@ -38,7 +39,8 @@ public:
 	}
 
 	void Unload() override { _loaded = false; }
-	void ProcessBlock(float*, int32_t) noexcept override {}
+	void ProcessBlock(float* samples, int32_t count) noexcept override
+	{ float* channels[]{samples}; ProcessBlockMulti(channels, 1, count); }
 	void ProcessBlockStereo(float*, float*, int32_t) noexcept override {}
 
 	void ProcessBlockMulti(float* const* channels, int32_t numChannels, int32_t numSamples) noexcept override
@@ -210,14 +212,29 @@ private:
 	std::vector<std::shared_ptr<StationMidiInstrumentCaptureSink>> _sinks;
 };
 
-static std::shared_ptr<Station> MakeStation(const std::string& name)
+class ChildMidiTestStation final : public Station
+{
+public:
+	using Station::Station;
+	auto HoldAudioState() const { return _BorrowAudioState(); }
+};
+
+class ChildMidiTestTake final : public LoopTake
+{
+public:
+	using LoopTake::LoopTake;
+	auto HoldAudioState() const { return _BorrowAudioState(); }
+	auto HoldMidiSources() const { return _BorrowMidiLoopSnapshot(); }
+};
+
+static std::shared_ptr<ChildMidiTestStation> MakeStation(const std::string& name)
 {
 	StationParams params;
 	params.Name = name;
 	params.Size = { 200, 200 };
 	audio::MergeMixBehaviourParams merge;
 	auto mixerParams = Station::GetMixerParams(params.Size, merge);
-	auto station = std::make_shared<Station>(params, mixerParams);
+	auto station = std::make_shared<ChildMidiTestStation>(params, mixerParams);
 	station->SetAllowedMidiChannels({1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16});
 	station->SetupBuffers(128u);
 	station->SetNumDacChannels(2u);
@@ -266,14 +283,14 @@ static std::vector<float> RenderStationAudioBlock(const std::shared_ptr<Station>
 	return sink->ChannelSamples(0u);
 }
 
-static std::shared_ptr<LoopTake> MakeMidiTake(const std::string& id)
+static std::shared_ptr<ChildMidiTestTake> MakeMidiTake(const std::string& id)
 {
 	LoopTakeParams params;
 	params.Id = id;
 	params.Size = { 100, 100 };
 	audio::MergeMixBehaviourParams merge;
 	auto mixerParams = LoopTake::GetMixerParams(params.Size, merge);
-	return std::make_shared<LoopTake>(params, mixerParams);
+	return std::make_shared<ChildMidiTestTake>(params, mixerParams);
 }
 
 TEST(StationMidiInstrument, LiveMidiIsDeliveredToStationVstPlugin)
@@ -1054,7 +1071,8 @@ TEST(StationMidiInstrument, RecStartSeedsHeldChordIntoRecordingAndPlayback)
 	}
 
 	ASSERT_NE(nullptr, take);
-	ASSERT_EQ(1u, take->GetMidiLoops().size());
+	ASSERT_EQ(16u, take->GetMidiLoops().size());
+	for (auto channel=1u;channel<16u;++channel) EXPECT_EQ(0u,take->GetMidiLoops()[channel]->EventCount());
 	auto midiLoop = take->GetMidiLoops()[0];
 	ASSERT_NE(nullptr, midiLoop);
 
@@ -1091,7 +1109,7 @@ TEST(StationMidiInstrument, RecStartSeedsHeldChordIntoRecordingAndPlayback)
 	EXPECT_TRUE(foundOff[1]);
 }
 
-TEST(StationMidiInstrument, RecStartUsesStationAllowedChannels)
+TEST(StationMidiInstrument, RecStartCapturesAllWiredChannelsIndependentlyOfRackMask)
 {
 	auto station = MakeStation("station-recstart-station-midi-channels");
 	station->SetAllowedMidiChannels({ 2 });
@@ -1119,11 +1137,11 @@ TEST(StationMidiInstrument, RecStartUsesStationAllowedChannels)
 	}
 
 	ASSERT_NE(nullptr, take);
-	ASSERT_EQ(1u, take->GetMidiLoops().size());
-	ASSERT_EQ(1u, take->MidiLoopChannels()[0]);
-	ASSERT_EQ("Keys", take->MidiLoopDevices()[0]);
+	ASSERT_EQ(16u, take->GetMidiLoops().size());
+	ASSERT_EQ(1u, take->MidiLoopChannels()[1]);
+	ASSERT_EQ("Keys", take->MidiLoopDevices()[1]);
 
-	auto midiLoop = take->GetMidiLoops()[0];
+	auto midiLoop = take->GetMidiLoops()[1];
 	ASSERT_NE(nullptr, midiLoop);
 	ASSERT_EQ(1u, midiLoop->EventCount());
 
@@ -1213,9 +1231,9 @@ TEST(StationMidiInstrument, OverdubStartPassesSourceMidiToTargetTake)
 	}
 
 	ASSERT_NE(nullptr, targetTake);
-	ASSERT_EQ(1u, targetTake->GetMidiLoops().size());
-	ASSERT_EQ(3u, targetTake->MidiLoopChannels()[0]);
-	ASSERT_EQ("Keys", targetTake->MidiLoopDevices()[0]);
+	ASSERT_EQ(16u, targetTake->GetMidiLoops().size());
+	ASSERT_EQ(3u, targetTake->MidiLoopChannels()[3]);
+	ASSERT_EQ("Keys", targetTake->MidiLoopDevices()[3]);
 
 	targetTake->BeginCaptureAudioBoundary(0u, 0u, 0u);
 	targetTake->EndMultiWrite(20u, true, base::Audible::AUDIOSOURCE_ADC);
@@ -1227,15 +1245,15 @@ TEST(StationMidiInstrument, OverdubStartPassesSourceMidiToTargetTake)
 	targetTake->Play(0u, 100u, 0u);
 	station->CompleteMidiIngressPump(100u + 4410u);
 
-	ASSERT_EQ(4u, targetTake->GetMidiLoops()[0]->EventCount());
+	ASSERT_EQ(4u, targetTake->GetMidiLoops()[3]->EventCount());
 	MidiEvent event{};
-	ASSERT_TRUE(targetTake->GetMidiLoops()[0]->TryGetEvent(0u, event));
+	ASSERT_TRUE(targetTake->GetMidiLoops()[3]->TryGetEvent(0u, event));
 	EXPECT_EQ(10u, event.sampleOffset);
-	ASSERT_TRUE(targetTake->GetMidiLoops()[0]->TryGetEvent(1u, event));
+	ASSERT_TRUE(targetTake->GetMidiLoops()[3]->TryGetEvent(1u, event));
 	EXPECT_EQ(20u, event.sampleOffset);
-	ASSERT_TRUE(targetTake->GetMidiLoops()[0]->TryGetEvent(2u, event));
+	ASSERT_TRUE(targetTake->GetMidiLoops()[3]->TryGetEvent(2u, event));
 	EXPECT_EQ(40u, event.sampleOffset);
-	ASSERT_TRUE(targetTake->GetMidiLoops()[0]->TryGetEvent(3u, event));
+	ASSERT_TRUE(targetTake->GetMidiLoops()[3]->TryGetEvent(3u, event));
 	EXPECT_EQ(90u, event.sampleOffset);
 }
 
@@ -2006,6 +2024,24 @@ TEST(StationMidiInstrument, ReroutingAudibleUnmatchedNoteReleasesOldDestination)
 class PlaybackReviewDelivery : public midi::MidiDelivery
 {
 public:
+	// Direct scheduler fixtures construct the same immutable fanout indices that
+	// production Prepare resolves off callback; source/destination state stays explicit.
+	static void CompleteFixtureTopology(PreparedState& state)
+	{
+		state.DestinationLegacyVelocity.assign(state.MidiDestinations.size(), true);
+		state.DestinationChannels.resize(state.MidiDestinations.size(), 0xffffu);
+		state.DestinationRetirements.resize(state.MidiDestinations.size());
+		state.PlaybackDestinationIndices.clear();
+		for (const auto& routes : state.MidiPlaybackRoutes)
+		{
+			std::vector<std::size_t> indices;
+			for (const auto& binding : routes)
+				indices.push_back(static_cast<std::size_t>(std::find(state.MidiDestinations.begin(),
+					state.MidiDestinations.end(), binding->Destination) - state.MidiDestinations.begin()));
+			state.PlaybackDestinationIndices.push_back(std::move(indices));
+		}
+	}
+
 	static void CheckCircularQueuedReleaseExtension()
 	{
 		PreparedState state; auto take = MakeMidiTake("edit-circular-queue"); auto loop = std::make_shared<midi::MidiLoop>();
@@ -2017,6 +2053,7 @@ public:
 		auto binding = std::make_shared<MidiPlaybackBinding>(); binding->Take = take; binding->Loop = loop; binding->Destination = destination;
 		state.MidiPlaybackRoutes.push_back({binding}); state.MidiDestinations.push_back(destination);
 		state.DestinationChannels.push_back(0xffffu); state.DestinationRetirements.emplace_back();
+		CompleteFixtureTopology(state);
 		_InvalidateScheduledMidiAtBlockStart(state, 10000u);
 		MidiPlaybackSink output(state); midi::MidiIndexedOutputSink sink(output, 0u, 80u, 10000u);
 		loop->ReadBlock(80u, 41u, sink); ASSERT_FALSE(binding->Held.any()); ASSERT_EQ(2u, destination->ScheduledCount);
@@ -2046,6 +2083,7 @@ public:
 			state.MidiDestinations.push_back(destination); state.MidiPlaybackRoutes[0].push_back(binding);
 			state.DestinationChannels.push_back(0xffffu); state.DestinationRetirements.emplace_back();
 		}
+		CompleteFixtureTopology(state);
 		_InvalidateScheduledMidiAtBlockStart(state, 0u);
 		MidiPlaybackSink output(state); midi::MidiIndexedOutputSink sink(output, 0u, 0u, 0u);
 		loop->ReadBlock(0u, 15u, sink);
@@ -2090,6 +2128,7 @@ public:
 			binding->Take = take; binding->Loop = loop; binding->Destination = destination;
 			state.MidiPlaybackRoutes[0].push_back(binding); state.MidiDestinations.push_back(destination);
 			state.DestinationChannels.push_back(0xffffu); state.DestinationRetirements.emplace_back();
+			CompleteFixtureTopology(state);
 			MidiPlaybackSink output(state);
 			auto render = [&](unsigned int offset, unsigned int count) {
 				_InvalidateScheduledMidiAtBlockStart(state, deviceStart + offset);
@@ -2145,6 +2184,7 @@ public:
 				state.MidiPlaybackRoutes[0].push_back(binding);
 				state.MidiDestinations.push_back(destination);
 			}
+			CompleteFixtureTopology(state);
 			MidiPlaybackSink sink(state);
 			const auto on = sustain ? MidiEvent{0u, 0xb0u, 64u, 127u} : MidiEvent::MakeNoteOn(0u, 0u, 60u, 100u);
 			ASSERT_TRUE(sink.TryOnEvent(0u, on));
@@ -2194,6 +2234,7 @@ public:
 			state.MidiDestinations.push_back(destination);
 			state.MidiPlaybackRoutes[0].push_back(binding);
 		}
+		CompleteFixtureTopology(state);
 		MidiPlaybackSink output(state);
 		midi::MidiIndexedOutputSink sink(output, 0u, 0u, 0u);
 		loop->ReadBlock(0u, 10u, sink);
@@ -2912,11 +2953,11 @@ TEST(StationMidiInstrument, ExplicitEarlierMidiOrMixedSourceRetainsMaterialAndIt
 		{
 			target->Play(0u, 100u, 0u); station->CompleteMidiIngressPump(4510u);
 		}
-		ASSERT_EQ(1u, target->GetMidiLoops().size());
+		ASSERT_EQ(16u, target->GetMidiLoops().size());
 		bool sourceNote = false, newNote = false, laterNote = false;
-		for (std::size_t i = 0u; i < target->GetMidiLoops().front()->EventCount(); ++i)
+		for (std::size_t i = 0u; i < target->GetMidiLoops()[3]->EventCount(); ++i)
 		{
-			MidiEvent event{}; ASSERT_TRUE(target->GetMidiLoops().front()->TryGetEvent(i, event));
+			MidiEvent event{}; ASSERT_TRUE(target->GetMidiLoops()[3]->TryGetEvent(i, event));
 			if (event.IsNoteOn())
 			{ sourceNote |= event.data1 == 60u; newNote |= event.data1 == 62u; laterNote |= event.data1 == 67u; }
 		}
@@ -2951,4 +2992,420 @@ TEST(StationMidiInstrument, ResetModesReleaseSoundedNoteAndPedalBeforeRetirement
         EXPECT_EQ(1u,std::count_if(plugin->Events.begin(),plugin->Events.end(),[](const auto& event) { return event.MessageType()==0xb0u && event.data1==64u && event.data2==0u; }));
         const auto count=plugin->Events.size(); RenderStationBlock(station,384u); EXPECT_EQ(count,plugin->Events.size());
     }
+}
+
+// These fixtures inject plugins through the production child load job so format,
+// chain publication, exact ownership and parent notification are exercised too.
+template<class Owner>
+static std::shared_ptr<StationMidiInstrumentFakePlugin> AddChildMidiPlugin(
+	const std::shared_ptr<Owner>& owner)
+{
+	auto plugin = std::make_shared<StationMidiInstrumentFakePlugin>();
+	JobAction load;
+	load.JobActionType = JobAction::JOB_LOADVST;
+	load.VstPath = L"fake-child-midi.dll";
+	load.PreInitPlugin = plugin;
+	owner->OnAction(load);
+	owner->CommitChanges();
+	return plugin;
+}
+
+static void RecordChildChannels(const std::shared_ptr<LoopTake>& take,
+	const std::string& stationName, bool withAudioLeaf)
+{
+	take->Record(withAudioLeaf ? std::vector<unsigned int>{0u} : std::vector<unsigned int>{},
+		stationName, {0u,1u,2u,3u,4u,5u}, {"Keys"});
+	take->CommitChanges();
+	for (auto channel = 0u; channel < 6u; ++channel)
+		EXPECT_TRUE(take->RecordMidiEvent(MidiEvent::MakeNoteOn(0u, channel,
+			static_cast<std::uint8_t>(60u + channel), 80u), "Keys", 0u));
+	take->Play(0u, 1024u, 0u);
+}
+
+TEST(StationMidiInstrument, ChildLiveAndRecordedMasksAreIndependentAtAllThreeDepths)
+{
+	for (const bool recorded : {false, true})
+	{
+		SCOPED_TRACE(recorded);
+		auto station = MakeStation("three-depth-disjoint");
+		auto take = MakeMidiTake("three-depth-take");
+		RecordChildChannels(take, station->Name(), true);
+		ASSERT_EQ(1u, take->GetLoops().size());
+		auto leaf = take->GetLoops().front();
+		auto stationPlugin = AddPlugin(station, L"station-disjoint.dll");
+		auto takePlugin = AddChildMidiPlugin(take);
+		auto leafPlugin = AddChildMidiPlugin(leaf);
+		station->SetAllowedMidiChannels({4,5});
+		take->SetAllowedMidiChannels({2,3});
+		leaf->SetAllowedMidiChannels({1,6});
+		if (!recorded) take->SetAllowedMidiChannels({2,3});
+		station->AddTake(take); station->CommitChanges();
+		if (!recorded)
+		{
+			take->Mute(); // Live monitoring still receives raw wired MIDI.
+			for (auto channel = 0u; channel < 6u; ++channel)
+				ASSERT_TRUE(station->TryEnqueueImmediateLiveMidi(MidiEvent::MakeNoteOn(0u, channel,
+					static_cast<std::uint8_t>(72u + channel), 100u)));
+		}
+		RenderStationBlock(station, 0u);
+		for (const auto& plugin : {stationPlugin, takePlugin, leafPlugin})
+		{
+			EXPECT_EQ(1u, plugin->BeginCalls);
+			EXPECT_EQ(1u, plugin->ProcessCalls);
+			ASSERT_EQ(2u, plugin->Events.size());
+		}
+		EXPECT_EQ(3u, stationPlugin->Events[0].Channel()); EXPECT_EQ(4u, stationPlugin->Events[1].Channel());
+		EXPECT_EQ(1u, takePlugin->Events[0].Channel()); EXPECT_EQ(2u, takePlugin->Events[1].Channel());
+		EXPECT_EQ(0u, leafPlugin->Events[0].Channel()); EXPECT_EQ(5u, leafPlugin->Events[1].Channel());
+	}
+}
+
+TEST(StationMidiInstrument, EmptyAncestorMasksAndAbsentStationRackDoNotGateChildSources)
+{
+	auto station = MakeStation("empty-ancestors"); station->SetAllowedMidiChannels({});
+	auto take = MakeMidiTake("empty-parent-take");
+	RecordChildChannels(take, station->Name(), true);
+	take->SetAllowedMidiChannels({});
+	auto leafPlugin = AddChildMidiPlugin(take->GetLoops().front());
+	take->GetLoops().front()->SetAllowedMidiChannels({1,6});
+	station->AddTake(take); station->CommitChanges();
+	RenderStationBlock(station, 0u);
+	ASSERT_EQ(2u, leafPlugin->Events.size());
+	EXPECT_EQ(0u, leafPlugin->Events[0].Channel()); EXPECT_EQ(5u, leafPlugin->Events[1].Channel());
+	EXPECT_FALSE(leafPlugin->RealtimeFlags.front());
+}
+
+TEST(StationMidiInstrument, PureMidiTakeRendersSameBlockAndTailWithGainAppliedOnce)
+{
+	auto station = MakeStation("pure-midi-child");
+	auto stationPlugin = AddPlugin(station, L"velocity-observer.dll");
+	auto take = MakeMidiTake("pure-midi-render");
+	RecordChildChannels(take, station->Name(), false);
+	take->SetAllowedMidiChannels({1}); station->SetAllowedMidiChannels({1});
+	auto plugin = AddChildMidiPlugin(take);
+	plugin->RenderRole = vst::RenderRole::Instrument;
+	plugin->RenderMidiImpulses = true;
+	station->AddTake(take); station->CommitChanges();
+	ASSERT_TRUE(take->RestoreMixerLevels(0.5, {}));
+	const auto rendered = RenderStationAudioBlock(station, 0u, 128u);
+	ASSERT_TRUE(std::any_of(rendered.begin(), rendered.end(), [](float value) { return value != 0.0f; }));
+	ASSERT_EQ(1u, plugin->Events.size()); EXPECT_EQ(80u, plugin->Events.front().data2);
+	ASSERT_EQ(1u, stationPlugin->Events.size()); EXPECT_EQ(40u, stationPlugin->Events.front().data2);
+	EXPECT_FALSE(plugin->RealtimeFlags.front());
+	plugin->RenderMidiImpulses = false;
+	plugin->ReplaceOutput = true; plugin->OutputValue = 0.25f;
+	std::uint32_t nextBlock=128u;
+	auto settledOutput = [&]() {
+		std::vector<float> output;
+		// Existing mixer gains deliberately fade. Observe the steady result after
+		// that same bounded fade for both gain changes and mute.
+		for (auto block=0u;block<32u;++block)
+		{
+			output=RenderStationAudioBlock(station,nextBlock,128u);
+			nextBlock+=128u;
+		}
+		return output;
+	};
+	const auto half=settledOutput();
+	ASSERT_TRUE(take->RestoreMixerLevels(1.0, {}));
+	const auto full=settledOutput();
+	EXPECT_NE(0.0f,full.back()); EXPECT_NEAR(full.back()*0.5f,half.back(),0.00001f);
+	take->Mute();
+	const auto muted=settledOutput();
+	EXPECT_TRUE(std::all_of(muted.begin(),muted.end(),[](float value){return std::abs(value)<0.000001f;}));
+	EXPECT_EQ(plugin->BeginCalls,plugin->ProcessCalls); EXPECT_GT(plugin->ProcessCalls,96u);
+	EXPECT_TRUE(take->GetLoops().empty());
+}
+
+TEST(StationMidiInstrument, ParentFilterRetirementKeepsChildLiveNotesAndPedalsOwned)
+{
+	auto station = MakeStation("local-retirement");
+	auto stationPlugin = AddPlugin(station, L"parent-retirement.dll");
+	auto take = MakeMidiTake("retirement-take");
+	auto takePlugin = AddChildMidiPlugin(take);
+	station->AddTake(take); station->CommitChanges();
+	station->TryEnqueueImmediateLiveMidi(MidiEvent::MakeNoteOn(0u, 0u, 60u, 100u));
+	station->TryEnqueueImmediateLiveMidi({0u,0xb0u,64u,127u});
+	RenderStationBlock(station, 0u);
+	ASSERT_EQ(2u, stationPlugin->Events.size()); ASSERT_EQ(2u, takePlugin->Events.size());
+	station->SetAllowedMidiChannels({}); RenderStationBlock(station, 128u);
+	EXPECT_EQ(4u, stationPlugin->Events.size()); EXPECT_EQ(2u, takePlugin->Events.size());
+	takePlugin->MaxAcceptedPerBlock = 0u;
+	take->SetAllowedMidiChannels({}); station->CommitChanges(); RenderStationBlock(station, 256u);
+	EXPECT_EQ(2u, takePlugin->Events.size());
+	takePlugin->MaxAcceptedPerBlock = 64u; RenderStationBlock(station, 384u);
+	EXPECT_EQ(1u, std::count_if(takePlugin->Events.begin(), takePlugin->Events.end(), [](const auto& event) { return event.IsNoteOff(); }));
+	EXPECT_EQ(1u, std::count_if(takePlugin->Events.begin(), takePlugin->Events.end(), [](const auto& event) { return event.MessageType()==0xb0u && event.data1==64u && event.data2==0u; }));
+}
+
+TEST(StationMidiInstrument, ChildCablesRejectStaleGesturesAndUnknownSavedIdentityStaysSilent)
+{
+	auto station = MakeStation("child-cables");
+	auto take = MakeMidiTake("child-cable-take");
+	auto a = AddChildMidiPlugin(take), b = AddChildMidiPlugin(take);
+	station->AddTake(take); station->CommitChanges();
+	take->SetAllowedMidiChannels({});
+	auto routes = take->MidiChannelRoutes(); routes[0].PluginIds = {a->StateId()};
+	const auto revision = take->RackRevision();
+	ASSERT_TRUE(take->SetMidiChannelRoutes(routes, revision));
+	EXPECT_EQ((std::vector<int>{1}), take->AllowedMidiChannels());
+	EXPECT_FALSE(take->SetMidiChannelRoutes({}, revision));
+	station->CommitChanges();
+	station->TryEnqueueImmediateLiveMidi(MidiEvent::MakeNoteOn(0u, 0u, 60u, 100u)); RenderStationBlock(station, 0u);
+	EXPECT_EQ(1u, a->Events.size()); EXPECT_TRUE(b->Events.empty());
+	routes = take->MidiChannelRoutes(); routes[0].PluginIds = {"missing-child-destination"};
+	ASSERT_TRUE(take->RestoreMidiRouting({1}, routes)); station->CommitChanges();
+	station->TryEnqueueImmediateLiveMidi(MidiEvent::MakeNoteOn(128u, 0u, 61u, 100u)); RenderStationBlock(station, 128u);
+	EXPECT_EQ(1u, std::count_if(a->Events.begin(), a->Events.end(), [](const auto& event) { return event.IsNoteOn(); }));
+	EXPECT_TRUE(b->Events.empty());
+	take->SetAllowedMidiChannels({}); take->SetAllowedMidiChannels({1}); station->CommitChanges();
+	station->TryEnqueueImmediateLiveMidi(MidiEvent::MakeNoteOn(256u, 0u, 62u, 100u)); RenderStationBlock(station, 256u);
+	EXPECT_TRUE(std::any_of(b->Events.begin(), b->Events.end(), [](const auto& event) { return event.IsNoteOn() && event.data1==62u; }));
+}
+
+TEST(StationMidiInstrument, AcceptedSourceMembershipDoesNotBorrowNewerTakeSnapshots)
+{
+	auto station = MakeStation("pinned-midi-sources");
+	auto take = MakeMidiTake("pinned-midi-take");
+	RecordChildChannels(take, station->Name(), false); take->SetAllowedMidiChannels({1});
+	auto plugin = AddChildMidiPlugin(take);
+	station->AddTake(take); station->CommitChanges();
+	std::vector<decltype(take->HoldMidiSources())> sourceLeases;
+	std::vector<decltype(take->HoldAudioState())> audioLeases;
+	for (auto i=0u;i<8u;++i) { sourceLeases.push_back(take->HoldMidiSources()); audioLeases.push_back(take->HoldAudioState()); }
+	RenderStationBlock(station, 0u);
+	ASSERT_EQ(1u, plugin->Events.size());
+	EXPECT_EQ(60u, plugin->Events.front().data1);
+	EXPECT_EQ(1u, plugin->BeginCalls); EXPECT_EQ(1u, plugin->ProcessCalls);
+}
+
+TEST(StationMidiInstrument, BorrowFailureDropsAllStaleAttacksAcrossBoundedIngressDrains)
+{
+	auto station = MakeStation("borrow-recovery-pressure");
+	auto take = MakeMidiTake("borrow-pressure-take");
+	auto plugin = AddChildMidiPlugin(take);
+	station->AddTake(take); station->CommitChanges();
+	station->TryEnqueueImmediateLiveMidi(MidiEvent::MakeNoteOn(0u,0u,60u,100u)); RenderStationBlock(station,0u);
+	std::vector<decltype(station->HoldAudioState())> leases;
+	for (auto i=0u;i<8u;++i) leases.push_back(station->HoldAudioState());
+	for (auto i=0u;i<150u;++i) ASSERT_TRUE(station->TryEnqueueImmediateLiveMidi(MidiEvent::MakeNoteOn(128u,0u,61u,100u)));
+	RenderStationBlock(station,128u); RenderStationBlock(station,256u);
+	EXPECT_EQ(1u,plugin->Events.size()); leases.clear();
+	for (auto block=384u;block<1024u;block+=128u) RenderStationBlock(station,block);
+	EXPECT_EQ(0u,std::count_if(plugin->Events.begin(),plugin->Events.end(),[](const auto& event){return event.IsNoteOn()&&event.data1==61u;}));
+	EXPECT_TRUE(std::any_of(plugin->Events.begin(),plugin->Events.end(),[](const auto& event){return event.IsNoteOff()&&event.data1==60u;}));
+	station->TryEnqueueImmediateLiveMidi(MidiEvent::MakeNoteOn(1024u,0u,62u,100u)); RenderStationBlock(station,1024u);
+	EXPECT_TRUE(std::any_of(plugin->Events.begin(),plugin->Events.end(),[](const auto& event){return event.IsNoteOn()&&event.data1==62u;}));
+}
+
+TEST(StationMidiInstrument, RecordedFanoutStaysWithinContainingTakeAndPartialRejectionDoesNotRetriggerPeers)
+{
+	auto station = MakeStation("source-fanout"); station->SetAllowedMidiChannels({1});
+	auto stationPlugin = AddPlugin(station, L"source-fanout-station.dll");
+	auto a = MakeMidiTake("fanout-A"), b = MakeMidiTake("fanout-B");
+	for (const auto& take : {a,b})
+	{
+		take->Record({0u}, station->Name(), {0u}, {"Keys"}); take->CommitChanges();
+		EXPECT_TRUE(take->RecordMidiEvent(MidiEvent::MakeNoteOn(0u,0u,take==a?60u:72u,100u),"Keys",0u));
+		take->Play(0u,1024u,0u); take->SetAllowedMidiChannels({1});
+		take->GetLoops().front()->SetAllowedMidiChannels({1});
+	}
+	auto takeA = AddChildMidiPlugin(a), takeB = AddChildMidiPlugin(b);
+	auto leafA = AddChildMidiPlugin(a->GetLoops().front()), leafB = AddChildMidiPlugin(b->GetLoops().front());
+	leafB->MaxAcceptedPerBlock = 0u;
+	station->AddTake(a); station->AddTake(b); station->CommitChanges();
+	RenderStationBlock(station,0u);
+	ASSERT_EQ(2u,stationPlugin->Events.size());
+	ASSERT_EQ(1u,takeA->Events.size()); EXPECT_EQ(60u,takeA->Events.front().data1);
+	ASSERT_EQ(1u,leafA->Events.size()); EXPECT_EQ(60u,leafA->Events.front().data1);
+	ASSERT_EQ(1u,takeB->Events.size()); EXPECT_EQ(72u,takeB->Events.front().data1);
+	EXPECT_TRUE(leafB->Events.empty());
+	leafB->MaxAcceptedPerBlock = 64u; RenderStationBlock(station,128u);
+	EXPECT_EQ(2u,stationPlugin->Events.size()); EXPECT_EQ(1u,takeA->Events.size());
+	EXPECT_EQ(1u,takeB->Events.size()); EXPECT_EQ(1u,leafA->Events.size()); EXPECT_TRUE(leafB->Events.empty());
+}
+
+TEST(StationMidiInstrument, RecordedNoneResumeNoneRetainsDestinationReleaseLifecycle)
+{
+	auto station = MakeStation("recorded-none-cycle"); station->SetAllowedMidiChannels({});
+	auto take = MakeMidiTake("recorded-none-take");
+	take->Record({},station->Name(),{0u},{"Keys"});
+	take->EndMultiWrite(1024u,true,base::Audible::AUDIOSOURCE_ADC);
+	for (const auto& event : {MidiEvent::MakeNoteOn(0u,0u,60u,100u), MidiEvent{8u,0xb0u,64u,127u},
+		MidiEvent::MakeNoteOff(300u,0u,60u), MidiEvent{310u,0xb0u,64u,0u},
+		MidiEvent::MakeNoteOn(512u,0u,62u,100u), MidiEvent{520u,0xb0u,64u,127u}})
+		ASSERT_TRUE(take->RecordMidiEvent(event,"Keys",1024u));
+	take->Play(0u,1024u,0u); take->SetAllowedMidiChannels({1});
+	auto plugin = AddChildMidiPlugin(take);
+	station->AddTake(take); station->CommitChanges();
+	RenderStationBlock(station,0u);
+	plugin->MaxAcceptedPerBlock=0u; take->SetAllowedMidiChannels({}); station->CommitChanges(); RenderStationBlock(station,128u);
+	plugin->MaxAcceptedPerBlock=64u; RenderStationBlock(station,256u);
+	take->SetAllowedMidiChannels({1}); station->CommitChanges(); RenderStationBlock(station,384u); RenderStationBlock(station,512u);
+	plugin->MaxAcceptedPerBlock=0u; take->SetAllowedMidiChannels({}); station->CommitChanges(); RenderStationBlock(station,640u);
+	plugin->MaxAcceptedPerBlock=64u; RenderStationBlock(station,768u); RenderStationBlock(station,896u);
+	EXPECT_EQ(2u,std::count_if(plugin->Events.begin(),plugin->Events.end(),[](const auto& event){return event.IsNoteOn();}));
+	EXPECT_EQ(2u,std::count_if(plugin->Events.begin(),plugin->Events.end(),[](const auto& event){return event.IsNoteOff();}));
+	EXPECT_EQ(2u,std::count_if(plugin->Events.begin(),plugin->Events.end(),[](const auto& event){return event.MessageType()==0xb0u&&event.data1==64u&&event.data2==0u;}));
+}
+
+#ifdef _DEBUG
+class ChildMidiAllocationProbe
+{
+public:
+	ChildMidiAllocationProbe()
+	{
+		Allocations=0u; Frees=0u;
+		Previous.store(_CrtSetAllocHook(&Hook),std::memory_order_release);
+		Armed=true;
+	}
+	~ChildMidiAllocationProbe() { Armed=false; _CrtSetAllocHook(Previous.load(std::memory_order_acquire)); }
+	static thread_local std::size_t Allocations, Frees;
+private:
+	static thread_local bool Armed;
+	static std::atomic<_CRT_ALLOC_HOOK> Previous;
+	static int Hook(int type,void* data,std::size_t size,int block,long request,const unsigned char* file,int line)
+	{
+		if(Armed) { if(type==_HOOK_ALLOC||type==_HOOK_REALLOC) ++Allocations; if(type==_HOOK_FREE) ++Frees; }
+		const auto previous=Previous.load(std::memory_order_acquire);
+		return previous?previous(type,data,size,block,request,file,line):TRUE;
+	}
+};
+thread_local bool ChildMidiAllocationProbe::Armed=false;
+thread_local std::size_t ChildMidiAllocationProbe::Allocations=0u;
+thread_local std::size_t ChildMidiAllocationProbe::Frees=0u;
+std::atomic<_CRT_ALLOC_HOOK> ChildMidiAllocationProbe::Previous{nullptr};
+
+TEST(StationMidiInstrument, OccupiedChildDeliveryAndRetirementDoNotAllocateOrDestroyOwnershipOnCallback)
+{
+	auto station=MakeStation("allocation-child-routing"); auto take=MakeMidiTake("allocation-child-take");
+	RecordChildChannels(take,station->Name(),true);
+	auto parent=AddPlugin(station,L"allocation-parent.dll"), child=AddChildMidiPlugin(take), leaf=AddChildMidiPlugin(take->GetLoops().front());
+	station->AddTake(take); station->CommitChanges();
+	ASSERT_TRUE(station->ConfigureRecordedPlaybackCompensation(160u));
+	for(const auto& plugin:{parent,child,leaf})
+	{
+		plugin->Events.reserve(4096u); plugin->BlockEvents.reserve(1024u);
+		plugin->ProcessedEvents.reserve(4096u); plugin->RealtimeFlags.reserve(4096u);
+	}
+	auto sink=std::make_shared<StationMidiInstrumentCaptureMultiSink>(2u,128u);
+	station->TryEnqueueImmediateLiveMidi(MidiEvent::MakeNoteOn(0u,0u,72u,100u));
+	station->TryEnqueueImmediateLiveMidi({1u,0xb0u,64u,127u});
+	std::size_t allocations=0u,frees=0u;
+	{
+		ChildMidiAllocationProbe probe;
+		for(auto block:{0u,128u}) { station->Zero(128u,base::Audible::AUDIOSOURCE_LOOPS); station->WriteBlock(sink,nullptr,0,128u,block); station->EndMultiPlay(128u); }
+		allocations=ChildMidiAllocationProbe::Allocations; frees=ChildMidiAllocationProbe::Frees;
+	}
+	EXPECT_EQ(0u,allocations); EXPECT_EQ(0u,frees);
+	child->MaxAcceptedPerBlock=0u; take->SetAllowedMidiChannels({}); station->CommitChanges();
+	{
+		ChildMidiAllocationProbe probe;
+		station->Zero(128u,base::Audible::AUDIOSOURCE_LOOPS); station->WriteBlock(sink,nullptr,0,128u,256u); station->EndMultiPlay(128u);
+		allocations=ChildMidiAllocationProbe::Allocations; frees=ChildMidiAllocationProbe::Frees;
+	}
+	EXPECT_EQ(0u,allocations); EXPECT_EQ(0u,frees);
+	child->MaxAcceptedPerBlock=64u;
+	{
+		ChildMidiAllocationProbe probe;
+		station->Zero(128u,base::Audible::AUDIOSOURCE_LOOPS); station->WriteBlock(sink,nullptr,0,128u,384u); station->EndMultiPlay(128u);
+		allocations=ChildMidiAllocationProbe::Allocations; frees=ChildMidiAllocationProbe::Frees;
+	}
+	EXPECT_EQ(0u,allocations); EXPECT_EQ(0u,frees);
+	EXPECT_TRUE(std::any_of(child->Events.begin(),child->Events.end(),[](const auto& event){return event.IsNoteOff();}));
+	EXPECT_FALSE(parent->Events.empty()); EXPECT_FALSE(leaf->Events.empty());
+}
+#endif
+
+TEST(StationMidiInstrument, PureMidiOutputBusWidthAndLevelsAreIndependentOfCaptureStreamCount)
+{
+	auto station=MakeStation("four-channel-midi-bus"); station->SetNumBusChannels(4u); station->CommitChanges();
+	auto take=MakeMidiTake("four-channel-midi-take");
+	ASSERT_TRUE(take->RestoreMixerLevels(1.0,{0.25,0.5,0.75,1.0}));
+	EXPECT_EQ((std::vector<double>{0.25,0.5,0.75,1.0}),take->BusLevelsForExport());
+	auto plugin=AddChildMidiPlugin(take); EXPECT_EQ(4u,plugin->HostedChannels);
+	plugin->RenderRole=vst::RenderRole::Instrument; plugin->ReplaceOutput=true; plugin->OutputValue=0.25f;
+	station->AddTake(take); station->CommitChanges();
+	const auto output=RenderStationAudioBlock(station,0u,128u);
+	EXPECT_TRUE(std::any_of(output.begin(),output.end(),[](float value){return value!=0.0f;}));
+	EXPECT_TRUE(take->GetLoops().empty()); EXPECT_EQ(1u,plugin->ProcessCalls);
+	station->SetNumBusChannels(2u); station->CommitChanges();
+	EXPECT_EQ(2u,take->BusLevelsForExport().size());
+	const auto shrunk=RenderStationAudioBlock(station,128u,128u);
+	EXPECT_TRUE(std::any_of(shrunk.begin(),shrunk.end(),[](float value){return value!=0.0f;}));
+	EXPECT_TRUE(plugin->LastBlockProcessed); EXPECT_EQ(2u,plugin->ProcessCalls);
+}
+
+TEST(StationMidiInstrument, PendingChildChainDoesNotChangeAcceptedMaterialCompensation)
+{
+	auto station=MakeStation("accepted-child-latency");
+	auto take=MakeMidiTake("accepted-latency-take");
+	take->Record({0u},station->Name()); take->CommitChanges(); take->Play(0u,1024u,0u);
+	station->AddTake(take); station->CommitChanges();
+	auto plugin=AddChildMidiPlugin(take); plugin->LatencySamps=64;
+	// Child chain is newer, but the Station has not accepted its delivery/render publication.
+	EXPECT_EQ(64u,take->RecordedPlaybackLatencySamps());
+	EXPECT_EQ(0u,station->RecordedPlaybackLatencySamps());
+	EXPECT_TRUE(station->CanConfigureRecordedPlaybackCompensation(0u));
+	EXPECT_TRUE(station->ConfigureRecordedPlaybackCompensation(0u));
+	station->CommitChanges();
+	EXPECT_EQ(64u,station->RecordedPlaybackLatencySamps());
+	EXPECT_TRUE(station->ConfigureRecordedPlaybackCompensation(64u));
+}
+
+TEST(StationMidiInstrument, OneParentCommitPublishesCompletedChildAudioChainAndMidiSources)
+{
+	auto station=MakeStation("single-commit-child"); auto take=MakeMidiTake("single-commit-take");
+	station->AddTake(take);
+	take->Record({0u},station->Name(),{0u},{"Keys"});
+	ASSERT_TRUE(take->RecordMidiEvent(MidiEvent::MakeNoteOn(0u,0u,60u,100u),"Keys",0u));
+	take->Play(0u,1024u,0u);
+	auto plugin=std::make_shared<StationMidiInstrumentFakePlugin>();
+	plugin->RenderRole=vst::RenderRole::Instrument; plugin->RenderMidiImpulses=true;
+	JobAction job; job.JobActionType=JobAction::JOB_LOADVST; job.VstPath=L"single-commit-child.dll"; job.PreInitPlugin=plugin;
+	take->OnAction(job); // Staged child chain and audio membership are still uncommitted.
+	station->CommitChanges();
+	const auto output=RenderStationAudioBlock(station,0u,128u);
+	ASSERT_EQ(1u,plugin->Events.size()); EXPECT_EQ(60u,plugin->Events.front().data1);
+	EXPECT_EQ(1u,plugin->BeginCalls); EXPECT_EQ(1u,plugin->ProcessCalls);
+	EXPECT_TRUE(std::any_of(output.begin(),output.end(),[](float value){return value!=0.0f;}));
+}
+
+TEST(StationMidiInstrument, RetiredBindingAdmissionIsBoundedAndRejectsBeforeCancellingAcceptedRoutes)
+{
+	midi::MidiDelivery delivery;
+	auto take=MakeMidiTake("retained-binding-budget");
+	auto first=std::make_shared<midi::MidiLoop>(), second=std::make_shared<midi::MidiLoop>();
+	auto plugin=std::make_shared<StationMidiInstrumentFakePlugin>();
+	ASSERT_TRUE(plugin->Load(L"",44100.f,128u,2u));
+	auto chain=std::make_shared<vst::VstChain>(); chain->AddSlot(plugin);
+	std::vector<std::shared_ptr<LoopTake>> takes{take};
+	std::array<midi::MidiChannelRoute,16> routes{};
+	std::array<midi::MidiDelivery::SourceGroup,1> sources;
+	sources[0].Take=take; sources[0].Audio=take->PrepareRenderState()->Audio;
+	std::unique_ptr<midi::MidiDelivery::PreparedState> accepted;
+	for (std::size_t replacement=0u;replacement<midi::MidiDelivery::MaxRetainedBindings;++replacement)
+	{
+		sources[0].Sources={replacement%2u?second:first};
+		auto candidate=std::make_unique<midi::MidiDelivery::PreparedState>();
+		ASSERT_TRUE(delivery.Prepare(*candidate,accepted.get(),chain,takes,0xffffu,routes,2u,{},sources));
+		accepted=std::move(candidate);
+		delivery.Collect(); // Unacknowledged synthetic releases retain their existing strong pin.
+	}
+	const auto binding=accepted->MidiPlaybackRoutes.front().front();
+	ASSERT_TRUE(binding->RoutingActive.load()); ASSERT_FALSE(binding->ReleaseQueued);
+	sources[0].Sources={first};
+	midi::MidiDelivery::PreparedState rejected;
+	EXPECT_FALSE(delivery.Prepare(rejected,accepted.get(),chain,takes,0xffffu,routes,2u,{},sources));
+	EXPECT_TRUE(binding->RoutingActive.load()); EXPECT_FALSE(binding->ReleaseQueued);
+	// Re-publishing the accepted identity needs no new binding and still fits at
+	// the cap. Rejection cannot force the surviving processor into retirement.
+	sources[0].Sources={second};
+	midi::MidiDelivery::PreparedState same;
+	ASSERT_TRUE(delivery.Prepare(same,accepted.get(),chain,takes,0xffffu,routes,2u,{},sources));
+	EXPECT_EQ(binding,same.MidiPlaybackRoutes.front().front());
+	EXPECT_TRUE(same.RetiredMidiDestinations.empty());
+	RecordProperty("preparedDestinationBytes",static_cast<int>(sizeof(midi::MidiDelivery::MidiDestination)));
+	RecordProperty("preparedBindingBytes",static_cast<int>(sizeof(midi::MidiDelivery::MidiPlaybackBinding)));
+	delivery.ClearAfterReadersStopped();
 }

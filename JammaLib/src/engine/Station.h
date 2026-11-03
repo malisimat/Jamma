@@ -309,6 +309,7 @@ namespace engine
 		std::size_t RackSlotCount() const;
 		bool MoveVstSlot(const vst::RackMove& move);
 		std::string RackDiagnostic() const;
+		const std::string& MidiRoutingDiagnostic() const noexcept { return _midiRoutingDiagnostic; }
 		bool RecoverRack(std::uint64_t revision);
 		bool RemoveInactiveRackSlot(std::size_t ordinal, std::uint64_t revision);
 		bool ClearInactiveRackRoutes(std::uint64_t revision);
@@ -378,6 +379,7 @@ namespace engine
 		virtual void _InitResources(resources::ResourceLib& resourceLib, bool forceInit) override;
 		virtual void _ReleaseResources() override;
 		virtual std::vector<actions::JobAction> _CommitChanges() override;
+		void _AfterChildrenCommit() override;
 		virtual const std::shared_ptr<base::AudioSink> _InputChannel(unsigned int channel,
 			Audible::AudioSourceType source) override;
 		virtual void _ArrangeChildren() override;
@@ -387,6 +389,7 @@ namespace engine
 			std::uint64_t Generation = 0u;
 			// Retire strong ownership after the boundary acknowledgement so LoopTakes cannot die in the callback.
 			std::vector<std::shared_ptr<LoopTake>> OwnedLoopTakes;
+			std::vector<std::shared_ptr<const LoopTake::RenderState>> TakeRenders;
 			std::vector<std::weak_ptr<LoopTake>> LoopTakes;
 			std::vector<std::shared_ptr<audio::AudioMixer>> AudioMixers;
 			std::vector<std::shared_ptr<audio::AudioBuffer>> AudioBuffers;
@@ -419,15 +422,9 @@ namespace engine
 		// Copy each audio buffer into the corresponding VST scratch pointer.
 		void _PrepareVstScratch(const AudioState& state, unsigned int sampsToRead) noexcept;
 
-		// Run one VST block: update host time (derived from the clock and current
-		// tempo), open the MIDI block, drain live MIDI, read MIDI from loop takes,
-		// then process the audio block.
-		// When vstActive is false only live MIDI is drained (to prevent queue back-log).
-		void _RunVstBlock(vst::VstChain* chain,
-			const AudioState& state,
-			bool vstActive,
-			unsigned int channelCount,
-			unsigned int sampsToRead,
+		// Update host time, begin each prepared processor and dispatch MIDI once
+		// before any child audio render. The wrapping device timestamp is shared.
+		void _DeliverMidiBlock(const AudioState& state, unsigned int sampsToRead,
 			std::uint32_t blockStartSample) noexcept;
 
 
@@ -475,6 +472,7 @@ namespace engine
 		std::atomic<unsigned long> _firstMasterRecordingPhase{ 0ul };
 		std::atomic<std::uint8_t> _firstMasterRecordingStatus{ 0u };
 		base::PublishedAudioSnapshot<const AudioState> _audioState;
+		const AudioState* _renderAudioState = nullptr; // Scoped synchronous DAC routing only.
 		std::atomic<std::uint8_t> _promotionTopologyGate{ 0u }; // 1 callback, 2 owner.
 		base::PublishedAudioSnapshot<const AudioState>::Lease _promotionAudioLease; // Callback only.
 		struct RetiredAudioState
@@ -493,6 +491,8 @@ namespace engine
 		vst::RackState::Format _RackFormat() const;
 		bool _RackLatencyFeasible(const vst::VstChain& chain) const noexcept;
 		midi::MidiDelivery _midiDelivery;
+		std::string _midiRoutingDiagnostic; // Structural owner; rendered topology remains coherent on admission failure.
+		bool _midiBlockDiscontinuity = false; // Callback-only bounded-borrow recovery.
 		midi::CaptureHistory _captureHistory;
 		// Coherent correspondence: callback writes, structural owner reads via
 		// the existing Timer observation plus this device boundary publication.

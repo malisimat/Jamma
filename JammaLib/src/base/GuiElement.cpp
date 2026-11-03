@@ -302,6 +302,7 @@ std::vector<JobAction> GuiElement::CommitChanges()
 			jobList.insert(jobList.end(), jobs.begin(), jobs.end());
 	}
 
+	_AfterChildrenCommit();
 	return jobList;
 }
 

@@ -386,6 +386,8 @@ namespace io
 					jamTake.MasterLevel = take->MasterLevelForExport();
 					jamTake.BusLevels = take->BusLevelsForExport();
 					jamTake.VstChain = take->VstEntries();
+					jamTake.AllowedMidiChannels = take->AllowedMidiChannels();
+					jamTake.MidiChannelRoutes = take->MidiChannelRoutes();
 					jamTake.MidiQuantEnabled = take->MidiQuantisation().Enabled;
 					jamTake.MidiQuantFraction = midi::MidiQuantisation::FractionIndex(take->MidiQuantisation().Fraction);
 					jamTake.TakePhaseOffsetSamps = take->MidiQuantisation().PhaseOffsetSamps;

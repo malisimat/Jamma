@@ -80,6 +80,8 @@ namespace engine
 		public base::TriggerPunchTarget
 	{
 	public:
+		struct AudioState;
+		struct RenderState;
 		enum LoopTakeSource
 		{
 			SOURCE_ADC,
@@ -134,10 +136,13 @@ namespace engine
 		virtual void OnBlockWriteChannel(unsigned int channel,
 			const base::AudioWriteRequest& request,
 			int writeOffset) override;
+		std::shared_ptr<const RenderState> PrepareRenderState() const;
+		void ZeroPrepared(unsigned int numSamps, base::Audible::AudioSourceType source, const RenderState* prepared);
 		void WriteBlock(const std::shared_ptr<base::MultiAudioSink> dest,
 			const std::shared_ptr<base::BounceWriter> bounceWriter,
 			int indexOffset,
-			unsigned int numSamps, const audio::DacRenderContext* dac = nullptr);
+			unsigned int numSamps, const audio::DacRenderContext* dac = nullptr,
+			const RenderState* prepared = nullptr);
 		void SetActiveBounce(std::shared_ptr<LoopTake> sourceTake,
 			std::shared_ptr<base::BounceWriter> writer) noexcept;
 		void ProcessActiveBounce(int sourceOffset, unsigned int numSamps);
@@ -287,6 +292,14 @@ namespace engine
 		std::vector<vst::VstRackSlot> GetVstRackSlots(std::size_t offset = 0u) const;
 		std::uint64_t RackRevision() const noexcept { return _rackRevision.load(std::memory_order_acquire); }
 		bool MoveVstSlot(const vst::RackMove& move);
+		void SetAllowedMidiChannels(const std::vector<int>& channels);
+		const std::vector<int>& AllowedMidiChannels() const noexcept { return _allowedMidiChannels; }
+		std::uint16_t AllowedMidiChannelMask() const noexcept { return _allowedMidiChannelMask; }
+		const std::array<midi::MidiChannelRoute,16>& MidiChannelRoutes() const noexcept { return _midiChannelRoutes; }
+		bool SetMidiChannelRoutes(std::array<midi::MidiChannelRoute,16> routes, std::uint64_t revision);
+		bool RestoreMidiRouting(const std::vector<int>& channels, std::array<midi::MidiChannelRoute,16> routes);
+		std::shared_ptr<vst::VstChain> PreparedVstChain() const { return _vstChain.load(); }
+
 		void SetAutomationTopologyChangedCallback(std::function<void()> changed);
 		std::shared_ptr<vst::IVstPlugin> FindVstPlugin(const vst::IVstPlugin* observer,
 			const std::string& identity, std::size_t& index) const
@@ -313,11 +326,11 @@ namespace engine
 		// compensation -- see doc/ninjam-live-loop-latency-sync-planC.md §2/§7
 		// and IVstPlugin::GetLatencySamples.
 		void PollPlaybackPluginChanges() const noexcept;
-		unsigned int RecordedPlaybackLatencySamps() const noexcept;
+		unsigned int RecordedPlaybackLatencySamps(const RenderState* prepared = nullptr) const noexcept;
 		bool CanConfigureRecordedPlaybackCompensation(unsigned int referenceLatencySamps,
-			unsigned int stationLatencySamps) const noexcept;
+			unsigned int stationLatencySamps, const RenderState* prepared = nullptr) const noexcept;
 		bool ConfigureRecordedPlaybackCompensation(unsigned int referenceLatencySamps,
-			unsigned int stationLatencySamps);
+			unsigned int stationLatencySamps, const RenderState* prepared = nullptr);
 		int CurrentVstLatencySamps() const noexcept
 		{
 			auto chain = _vstChain.borrow();
@@ -404,7 +417,7 @@ namespace engine
         bool HasMidiDevicePhaseObservation() const noexcept { return _hasMidiDevicePhaseObservation.load(std::memory_order_acquire); }
 		std::uint32_t CaptureBoundarySample() const noexcept { return _captureBoundarySample.load(std::memory_order_acquire); }
 		void BeginCaptureAudioBoundary(std::uint64_t deviceSample, std::uint64_t sceneSample, std::uint64_t absoluteSample) noexcept;
-		bool AudioCaptureReady(unsigned int count, int offset = 0) const noexcept;
+		bool AudioCaptureReady(unsigned int count, int offset = 0, const AudioState* preparedAudio = nullptr) const noexcept;
 
 		// Atomic logical cancellation; destructive Ditch requires stopped/retired readers.
 		void CancelCapture(bool sourceLoss = false) noexcept;
@@ -431,6 +444,10 @@ namespace engine
 			std::uint32_t globalSampleNow) noexcept;
 		std::vector<midi::MidiEvent> BuildMidiPunchInLiveTransitionEvents(std::uint32_t punchSample) const;
 		std::vector<midi::MidiEvent> BuildMidiPunchOutLiveTransitionEvents(std::uint32_t punchSample) const;
+		float RecordedMidiVelocityScale() const noexcept { return static_cast<float>(_masterMixer->UnmutedLevel()); }
+		unsigned int ReadPreparedMidiBlock(std::span<const std::shared_ptr<midi::MidiLoop>> sources,
+			std::uint32_t globalSample, std::uint32_t numSamples,
+			midi::IMidiOutputSink& sink, unsigned int firstOutputIndex, bool rawVelocity = true, const AudioState* preparedAudio = nullptr) noexcept;
 		unsigned int ReadMidiBlock(std::uint32_t globalSample,
 			std::uint32_t numSamples,
 			midi::IMidiOutputSink& sink,
@@ -532,6 +549,7 @@ namespace engine
 			base::AudioSource::AudioSourceType source) override;
 		virtual void _ArrangeChildren() override;
 
+	public:
 		struct AudioState
 		{
 			// Snapshot pins keep retired loops alive until the job thread reclaims the state.
@@ -540,11 +558,23 @@ namespace engine
             bool OrdinaryAudioCapture = false;
 			std::vector<std::shared_ptr<audio::AudioMixer>> AudioMixers;
 			std::vector<std::shared_ptr<audio::AudioBuffer>> AudioBuffers;
+			std::vector<std::shared_ptr<audio::AudioMixer>> OutputMixers;
 			std::vector<float> VstBlockScratch;
 			std::vector<float*> VstBlockPtrs;
 			std::vector<float> InstrumentScratch;
 			std::vector<float*> InstrumentPtrs;
 		};
+
+		// Captured off callback together with the Station delivery topology. Audio
+		// never independently borrows a newer chain or MIDI source membership.
+		struct RenderState
+		{
+			std::shared_ptr<const AudioState> Audio;
+			std::shared_ptr<vst::VstChain> Chain;
+			std::vector<std::shared_ptr<vst::VstChain>> LoopChains;
+			std::vector<std::shared_ptr<midi::MidiLoop>> MidiSources;
+		};
+	protected:
 
 		using MidiLoopSnapshot = std::vector<std::shared_ptr<midi::MidiLoop>>;
 
@@ -780,6 +810,7 @@ namespace engine
 		std::vector<std::shared_ptr<audio::AudioBuffer>> _audioBuffers;
 		std::vector<std::shared_ptr<audio::AudioBuffer>> _backAudioBuffers;
 		base::PublishedAudioSnapshot<const AudioState> _audioState;
+		const AudioState* _renderAudioState = nullptr; // Scoped synchronous leaf-to-Take routing only.
 		// Live VST chain published atomically for lock-free audio-thread reads.
 		base::PublishedAudioSnapshot<vst::VstChain> _vstChain;
 		std::shared_ptr<vst::VstChain> _backVstChain;
@@ -796,9 +827,15 @@ namespace engine
 		mutable std::mutex _vstPathsMutex;
 		std::vector<std::wstring> _vstPluginPaths;
 		std::vector<io::JamFile::VstEntry> _vstSavedEntries;
+		std::vector<std::string> _pendingDeletedVstRouteIds; // Job staging, applied on serialized commit.
 		// UI stages requests, job completes them. Audio never reads this counter.
 		std::atomic<unsigned int> _vstJobsPending{ 0u };
 		std::atomic<std::uint64_t> _rackRevision{1u};
+		std::vector<int> _allowedMidiChannels{1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16};
+		std::uint16_t _allowedMidiChannelMask = 0xffffu;
+		std::array<midi::MidiChannelRoute,16> _midiChannelRoutes{};
+		std::vector<std::shared_ptr<audio::AudioMixer>> _generatorMixers;
+
 		// Startup-only metadata. Runtime lane pointers are installed by Station only
 		// after every chain named by these references has been constructed.
 		std::vector<PendingAutomationBinding> _pendingAutomationBindings;

@@ -417,8 +417,9 @@ void Station::Zero(unsigned int numSamps,
 		}
 	}
 
-	for (const auto& take : state->OwnedLoopTakes)
-		if (take) take->Zero(numSamps, source);
+	for (auto index=std::size_t{0u};index<state->OwnedLoopTakes.size();++index)
+		if (const auto& take=state->OwnedLoopTakes[index])
+			take->ZeroPrepared(numSamps, source, state->TakeRenders[index].get());
 }
 
 // Only called when outputting to DAC
@@ -430,29 +431,40 @@ void Station::WriteBlock(const std::shared_ptr<base::MultiAudioSink> dest,
 {
 	auto ptr = Sharable::shared_from_this();
 	auto state = _BorrowAudioState();
-	if (!state)
-		return;
-	auto stationSink = std::dynamic_pointer_cast<MultiAudioSink>(ptr);
-	for (const auto& take : state->OwnedLoopTakes)
+	if (!state.ReadSucceeded())
 	{
-		if (!take)
-			continue;
-
-		take->WriteBlock(stationSink, trigger, indexOffset, numSamps, trigger ? nullptr : dac);
+		_midiBlockDiscontinuity = true;
+		return;
 	}
+	if (!state) return;
+	struct RoutingScope
+	{
+		const AudioState*& Active;
+		const AudioState* Previous;
+		~RoutingScope() { Active = Previous; }
+	} scope{_renderAudioState, _renderAudioState};
+	_renderAudioState = state.get();
 
-	auto sampsToRead = (numSamps <= constants::MaxBlockSize) ? numSamps : constants::MaxBlockSize;
+	auto sampsToRead = std::min(numSamps, constants::MaxBlockSize);
+	const auto channelCount = std::min(state->AudioBuffers.size(), state->AudioMixers.size());
+	const auto& chain = state->Midi.MidiChain;
+	const bool vstActive = channelCount > 0u && chain && chain->NumPlugins() > 0u;
+	// Begin and fan out MIDI before any descendant processor renders this block.
+	// Bounce renders keep the established audio-only source-capture coordinates.
+	if (!trigger)
+		_DeliverMidiBlock(*state, sampsToRead, blockStartSample);
+	auto stationSink = std::dynamic_pointer_cast<MultiAudioSink>(ptr);
+	for (auto index = std::size_t{0u}; index < state->OwnedLoopTakes.size(); ++index)
+		if (const auto& take = state->OwnedLoopTakes[index])
+			take->WriteBlock(stationSink, trigger, indexOffset, numSamps, trigger ? nullptr : dac,
+				state->TakeRenders[index].get());
+	_PrepareVstScratch(*state, sampsToRead);
+	if (vstActive)
+		chain->ProcessRack(state->VstBlockPtrs.data(), state->InstrumentPtrs.data(),
+			static_cast<int>(state->VstRenderChannels), sampsToRead);
+	if (!trigger) midi::MidiDelivery::RecoverSkippedBlocks(state->Midi);
 	auto masterLevel = static_cast<float>(_masterMixer->Level());
 	auto masterPeak = 0.0f;
-	const auto channelCount = (state->AudioBuffers.size() < state->AudioMixers.size()) ? state->AudioBuffers.size() : state->AudioMixers.size();
-
-	_PrepareVstScratch(*state, sampsToRead);
-
-	const auto& chain = state->Midi.MidiChain;
-	const bool vstActive = (channelCount > 0u) && chain && chain->NumPlugins() > 0u && (state->VstBlockPtrs.size() >= channelCount);
-
-	_RunVstBlock(chain.get(), *state, vstActive,
-		static_cast<unsigned int>(channelCount), sampsToRead, blockStartSample);
 
 	// Drive any wired parameter automation. Runs independently of vstActive so a
 	// bypassed/idle chain still receives recorded parameter motion. Flat loop over
@@ -501,48 +513,39 @@ void Station::PollPlaybackPluginChanges() const noexcept
 
 unsigned int Station::RecordedPlaybackLatencySamps() const noexcept
 {
-	const auto stationLatency = static_cast<unsigned int>(std::max(0, CurrentVstLatencySamps()));
 	const auto state = _AudioStateSnapshot();
+	const auto stationLatency = static_cast<unsigned int>(state && state->Midi.MidiChain ? std::max(0,state->Midi.MidiChain->GetLatencySamples()) : 0);
 	if (!state) return stationLatency;
 	auto longest = static_cast<std::uint64_t>(stationLatency);
-	if (state->Midi.MidiChain)
-		for (std::size_t index = 0; index < state->Midi.MidiDestinations.size(); ++index)
-			longest = std::max(longest, static_cast<std::uint64_t>(std::max(0, state->Midi.MidiChain->GetLatencySamplesFrom(index))));
-	for (const auto& take : state->OwnedLoopTakes)
-		if (take) longest = std::max(longest,
-			static_cast<std::uint64_t>(stationLatency) + take->RecordedPlaybackLatencySamps());
+	for (const auto path : state->Midi.DestinationPathLatency) longest = std::max(longest, path);
+
+	for (auto index=std::size_t{0u};index<state->OwnedLoopTakes.size();++index)
+		if (const auto& take=state->OwnedLoopTakes[index]) longest = std::max(longest,
+			static_cast<std::uint64_t>(stationLatency) + take->RecordedPlaybackLatencySamps(state->TakeRenders[index].get()));
 	return static_cast<unsigned int>(std::min(longest,
 		static_cast<std::uint64_t>((std::numeric_limits<unsigned int>::max)())));
 }
 
 bool Station::CanConfigureRecordedPlaybackCompensation(unsigned int referenceLatencySamps) const noexcept
 {
-	constexpr unsigned int MaxCompensationSamps = 262144u;
-	const auto stationLatency = static_cast<unsigned int>(std::max(0, CurrentVstLatencySamps()));
 	const auto state = _AudioStateSnapshot();
+	const auto stationLatency = static_cast<unsigned int>(state && state->Midi.MidiChain ? std::max(0,state->Midi.MidiChain->GetLatencySamples()) : 0);
 	if (!state) return true;
-	for (const auto& take : state->OwnedLoopTakes)
-		if (take && !take->CanConfigureRecordedPlaybackCompensation(
-			referenceLatencySamps, stationLatency)) return false;
-	if (!state->Midi.MidiChain) return true;
-	for (auto index = std::size_t{ 0u }; index < state->Midi.MidiDestinations.size(); ++index)
-	{
-		const auto remaining = static_cast<unsigned int>(std::max(0, state->Midi.MidiChain->GetLatencySamplesFrom(index)));
-		if (remaining > referenceLatencySamps
-			|| referenceLatencySamps - remaining > MaxCompensationSamps) return false;
-	}
-	return true;
+	for (auto index=std::size_t{0u};index<state->OwnedLoopTakes.size();++index)
+		if (const auto& take=state->OwnedLoopTakes[index]; take && !take->CanConfigureRecordedPlaybackCompensation(
+			referenceLatencySamps, stationLatency, state->TakeRenders[index].get())) return false;
+	return midi::MidiDelivery::CanConfigureCompensation(state->Midi, referenceLatencySamps);
 }
 
 bool Station::ConfigureRecordedPlaybackCompensation(unsigned int referenceLatencySamps)
 {
 	if (!CanConfigureRecordedPlaybackCompensation(referenceLatencySamps)) return false;
-	const auto stationLatency = static_cast<unsigned int>(std::max(0, CurrentVstLatencySamps()));
 	const auto state = _AudioStateSnapshot();
+	const auto stationLatency = static_cast<unsigned int>(state && state->Midi.MidiChain ? std::max(0,state->Midi.MidiChain->GetLatencySamples()) : 0);
 	if (!state) return true;
-	for (const auto& take : state->OwnedLoopTakes)
-		if (take && !take->ConfigureRecordedPlaybackCompensation(
-			referenceLatencySamps, stationLatency)) return false;
+	for (auto index=std::size_t{0u};index<state->OwnedLoopTakes.size();++index)
+		if (const auto& take=state->OwnedLoopTakes[index]; take && !take->ConfigureRecordedPlaybackCompensation(
+			referenceLatencySamps, stationLatency, state->TakeRenders[index].get())) return false;
 	return ConfigureRecordedMidiCompensation(referenceLatencySamps);
 }
 
@@ -571,51 +574,47 @@ void Station::_PrepareVstScratch(const AudioState& state, unsigned int sampsToRe
 	}
 }
 
-void Station::_RunVstBlock(vst::VstChain* chain,
-	const AudioState& state,
-	bool vstActive,
-	unsigned int channelCount,
-	unsigned int sampsToRead,
+void Station::_DeliverMidiBlock(const AudioState& state, unsigned int sampsToRead,
 	std::uint32_t blockStartSample) noexcept
 {
 	midi::MidiDelivery::BeginRetiredBlock(state.Midi, blockStartSample, sampsToRead);
-	if (vstActive)
+	vst::HostTimeState hostTime;
+	hostTime.sampleRate = static_cast<double>(_sampleRate);
+	hostTime.isPlaying  = true;
+	if (_clock)
 	{
-		vst::HostTimeState hostTime;
-		hostTime.sampleRate = static_cast<double>(_sampleRate);
-		hostTime.isPlaying  = true;
-		if (_clock)
-		{
-			// NINJAM replaces the musical Timer epoch to establish remote phase.
-			// VST project time must remain continuous across that normal follow
-			// operation; scene time is the callback-owned monotonic ruler.
-			hostTime.samplePos = _clock->SceneSamplePos();
-		}
-		else
-		{
-			hostTime.samplePos = static_cast<std::uint64_t>(blockStartSample);
-		}
-		if (_clock)
-		{
-			const auto musicalPosition = _clock->CurrentMusicalPosition(
-				static_cast<unsigned int>(_sampleRate));
-			if (musicalPosition.IsValid)
-			{
-				hostTime.ppqPos = musicalPosition.Ppq;
-				hostTime.hasPpqPos = true;
-				hostTime.musicalPositionChanged = musicalPosition.PositionChanged;
-				hostTime.tempo = musicalPosition.Tempo;
-				hostTime.bpi = musicalPosition.BeatsPerInterval;
-			}
-		}
-		chain->UpdateHostTime(hostTime);
-		chain->BeginMidiBlock(blockStartSample, sampsToRead);
+		// NINJAM replaces the musical Timer epoch to establish remote phase.
+		// VST project time must remain continuous across that normal follow
+		// operation; scene time is the callback-owned monotonic ruler.
+		hostTime.samplePos = _clock->SceneSamplePos();
 	}
+	else
+	{
+		hostTime.samplePos = static_cast<std::uint64_t>(blockStartSample);
+	}
+	if (_clock)
+	{
+		const auto musicalPosition = _clock->CurrentMusicalPosition(
+			static_cast<unsigned int>(_sampleRate));
+		if (musicalPosition.IsValid)
+		{
+			hostTime.ppqPos = musicalPosition.Ppq;
+			hostTime.hasPpqPos = true;
+			hostTime.musicalPositionChanged = musicalPosition.PositionChanged;
+			hostTime.tempo = musicalPosition.Tempo;
+			hostTime.bpi = musicalPosition.BeatsPerInterval;
+		}
+	}
+	for (const auto& rack : state.Midi.Racks)
+		if (rack.Chain)
+		{
+			rack.Chain->UpdateHostTime(hostTime);
+			rack.Chain->BeginMidiBlock(blockStartSample, sampsToRead);
+		}
 	_midiDelivery.ProcessBlock(state.Midi, state.OwnedLoopTakes, state.InstrumentPtrs,
-		vstActive, _membershipRemoving, sampsToRead, blockStartSample);
-	if (!vstActive) return;
-	chain->ProcessRack(state.VstBlockPtrs.data(), state.InstrumentPtrs.data(), static_cast<int>(state.VstRenderChannels), sampsToRead);
-	midi::MidiDelivery::RecoverSkippedBlocks(state.Midi);
+		true, _membershipRemoving, sampsToRead, blockStartSample, _midiBlockDiscontinuity);
+	_midiBlockDiscontinuity = false;
+
 }
 
 void Station::RebuildAutomationDispatch()
@@ -943,13 +942,8 @@ ActionResult Station::OnAction(TriggerAction action)
 		// Station channel permissions do not supply a trigger recording source.
 		if (action.MidiInputDevices.empty())
 			return midiChannels;
-		const auto mask = _allowedMidiChannelMask.load(std::memory_order_acquire);
 		for (std::uint8_t channel = 0u; channel < 16u; ++channel)
 		{
-			const auto bit = static_cast<std::uint16_t>(1u << channel);
-			if ((mask & bit) == 0u)
-				continue;
-
 			midiChannels.push_back(channel);
 		}
 		return midiChannels;
@@ -2177,12 +2171,7 @@ void Station::SetAllowedMidiChannels(const std::vector<int>& channels)
 		filtered.push_back(channel);
 	}
 
-	const auto removedMask = static_cast<std::uint16_t>(oldMask & static_cast<std::uint16_t>(~mask));
-	if (removedMask != 0u)
-	{
-		for (const auto& noteOff : _captureHistory.RemoveChannels(removedMask))
-			TryEnqueueSyntheticLiveMidi(noteOff);
-	}
+	const auto removedMask = static_cast<std::uint16_t>(oldMask & ~mask);
 
 	_allowedMidiChannels = std::move(filtered);
 	_allowedMidiChannelMask.store(mask, std::memory_order_release);
@@ -2215,7 +2204,7 @@ bool Station::TryEnqueueSyntheticLiveMidi(const MidiEvent& event) noexcept
 void Station::ObservePhysicalMidiForRecording(const MidiEvent& event, const std::string& deviceName)
 {
 	if (MembershipRemoving()) return;
-	_captureHistory.Observe(event, deviceName, _sampleRate, AcceptsLiveMidiChannel(event.Channel()));
+	_captureHistory.Observe(event, deviceName, _sampleRate, true);
 }
 
 void Station::CompleteMidiIngressPump(std::uint32_t deviceSample, bool overflow)
@@ -2357,12 +2346,7 @@ std::vector<JobAction> Station::_CommitChanges()
 	}
 	// The rack commits metadata/chain together before Station publishes destinations.
 	if (_rackState.CommitChain()) audioStateChanged = true;
-	if (audioStateChanged) _PublishAudioState();
-	if (audioStateChanged || _automationDispatchDirty)
-	{
-		_automationDispatchDirty = false;
-		RebuildAutomationDispatch();
-	}
+	if (audioStateChanged) _automationDispatchDirty = true;
 
 	// Detect pending VST load/unload requests and queue a job for them.
 	std::vector<JobAction> jobs;
@@ -2388,12 +2372,23 @@ std::vector<JobAction> Station::_CommitChanges()
 	return jobs;
 }
 
+void Station::_AfterChildrenCommit()
+{
+	// Child publication callbacks only mark dirty while their commit holds rack
+	// metadata locks. Capture the completed hierarchy after all those commits return.
+	if (!_automationDispatchDirty) return;
+	_automationDispatchDirty = false;
+	_PublishAudioState();
+	RebuildAutomationDispatch();
+}
+
 const std::shared_ptr<AudioSink> Station::_InputChannel(unsigned int channel,
 	Audible::AudioSourceType source)
 {
-	auto state = _BorrowAudioState();
-	if (!state)
-		return nullptr;
+	base::PublishedAudioSnapshot<const AudioState>::Lease lease;
+	if (!_renderAudioState) lease = _BorrowAudioState();
+	const auto* state = _renderAudioState ? _renderAudioState : lease.get();
+	if (!state) return nullptr;
 
 	switch (source)
 	{
@@ -2502,10 +2497,37 @@ void Station::_PublishAudioState()
 	state->AudioMixers = _audioMixers;
 	state->AudioBuffers = _audioBuffers;
 	const auto previous = _AudioStateSnapshot();
-	_midiDelivery.Prepare(state->Midi, previous ? &previous->Midi : nullptr,
+	std::vector<midi::MidiDelivery::PreparedRack> childRacks;
+	std::vector<midi::MidiDelivery::SourceGroup> sources;
+	for (const auto& take : state->OwnedLoopTakes)
+	{
+		const auto render = take->PrepareRenderState();
+		state->TakeRenders.push_back(render);
+		sources.push_back({take, render->MidiSources, render->Audio});
+		const auto width = render->Audio ? static_cast<unsigned int>(render->Audio->VstBlockPtrs.size()) : 0u;
+		if (render->Chain && render->Chain->NumPlugins())
+			childRacks.push_back({render->Chain, take.get(), nullptr, width,
+				take->AllowedMidiChannelMask(), take->MidiChannelRoutes()});
+		if (render->Audio)
+			for (auto index = std::size_t{0u}; index < render->Audio->Loops.size(); ++index)
+			{
+				const auto& loop = render->Audio->Loops[index];
+				const auto& loopChain = render->LoopChains[index];
+				if (loop && loopChain && loopChain->NumPlugins())
+					childRacks.push_back({loopChain, take.get(), loop, 1u,
+						loop->AllowedMidiChannelMask(), loop->MidiChannelRoutes()});
+			}
+	}
+	if (!_midiDelivery.Prepare(state->Midi, previous ? &previous->Midi : nullptr,
 		(_rackState.Inactive() || _rackState.LatencySuspended()) ? nullptr : _rackState.ActiveChain(),
 		state->OwnedLoopTakes, _allowedMidiChannelMask.load(std::memory_order_acquire), _rackState.ChannelRoutes(),
-		static_cast<unsigned int>(state->AudioBuffers.size()));
+		static_cast<unsigned int>(state->AudioBuffers.size()), childRacks, sources))
+		{
+		_midiRoutingDiagnostic = "Routing update is too large. Remove a plugin, take or MIDI route and try again. Previous routing remains active.";
+		return;
+	}
+	_midiRoutingDiagnostic.clear();
+
 	state->VstRenderChannels = static_cast<unsigned int>(state->AudioBuffers.size());
 	for (const auto& destination : state->Midi.MidiDestinations) state->VstRenderChannels = std::max(state->VstRenderChannels, destination->RenderChannels);
 	for (const auto& destination : state->Midi.RetiredMidiDestinations) state->VstRenderChannels = std::max(state->VstRenderChannels, destination->RenderChannels);
@@ -2781,18 +2803,22 @@ bool Station::_RackLatencyFeasible(const vst::VstChain& chain) const noexcept
 
 void Station::RefreshRackLatency()
 {
-	if (_rackState.Inactive()) return;
-	const auto chain = _rackState.ActiveChain();
-	if (!chain) return;
-	const bool feasible = _RackLatencyFeasible(*chain);
-	bool canResume = true;
-	if (feasible && _rackState.LatencySuspended())
-	{
-		const auto state = _AudioStateSnapshot();
-		canResume = !HasUnacknowledgedAudioState() && (!state || state->Midi.RetiredMidiDestinations.empty())
-			&& !_midiDelivery.HasUnconsumedRemovedBinding();
-	}
-	if (_rackState.UpdateLatencyFeasibility(feasible, canResume)) _PublishAudioState();
+	bool changed = false;
+	if (!_rackState.Inactive())
+		if (const auto chain = _rackState.ActiveChain())
+		{
+			const bool feasible = _RackLatencyFeasible(*chain);
+			bool canResume = true;
+			if (feasible && _rackState.LatencySuspended())
+			{
+				const auto state = _AudioStateSnapshot();
+				canResume = !HasUnacknowledgedAudioState() && (!state || state->Midi.RetiredMidiDestinations.empty())
+					&& !_midiDelivery.HasUnconsumedRemovedBinding();
+			}
+			changed = _rackState.UpdateLatencyFeasibility(feasible, canResume);
+		}
+	const auto state = _AudioStateSnapshot();
+	if (changed || (state && midi::MidiDelivery::LatencyPathsChanged(state->Midi))) _PublishAudioState();
 }
 
 bool Station::RemoveInactiveRackSlot(std::size_t ordinal, std::uint64_t revision)

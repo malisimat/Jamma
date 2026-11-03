@@ -111,6 +111,8 @@ void VstRackControls::UpdateLocked(base::SelectDepth depth)
 				rack->SetVstControlState(GuiRack::VstControlState::Empty, false);
 				rack->SetVstControlText("VST L?");
 				rack->SetVstControlCallback({});
+				rack->SetAllowedMidiChannelsCallback({});
+				rack->SetAllowedMidiChannels({}, true);
 				if (const auto view = rack->VstRack()) { GuiVstRack::Model model; view->Update(std::move(model), {}); }
 			}
 		}
@@ -265,7 +267,7 @@ void VstRackControls::_PresentStationLocked(const std::shared_ptr<engine::Statio
 	model.TotalSlots = station->RackSlotCount(); model.Revision = station->RackRevision();
 	model.Editable = _AvailableLocked({station, {}, {}}) && !_busy;
 	model.Inactive = station->RackInactive(); model.Suspended = station->RackLatencySuspended();
-	model.Diagnostic = station->RackDiagnostic();
+	model.Diagnostic = station->MidiRoutingDiagnostic().empty() ? station->RackDiagnostic() : station->MidiRoutingDiagnostic();
 	if (!model.Inactive) model.ChannelRoutes = station->MidiChannelRoutes();
 	for (auto slot : station->GetVstRackSlots(control->PageOffset()))
 	{
@@ -316,7 +318,7 @@ void VstRackControls::_PumpStation(const Intent& intent)
 	if (command.Operation == Kind::Diagnostic)
 	{
 		std::string message;
-		{ std::scoped_lock lock(_host.Mutex); message = station->RackDiagnostic(); }
+		{ std::scoped_lock lock(_host.Mutex); message = station->MidiRoutingDiagnostic().empty() ? station->RackDiagnostic() : station->MidiRoutingDiagnostic(); }
 		if (message.empty() && rack) message = rack->Feedback();
 		if (!message.empty()) show(message);
 		return;
@@ -414,6 +416,20 @@ void VstRackControls::_PresentChildLocked(const std::shared_ptr<GuiRack>& rack, 
 	model.OwnerScope = target.Loop ? vst::RackMove::Scope::Loop : vst::RackMove::Scope::Take;
 	model.Revision = target.Loop ? target.Loop->RackRevision() : target.Take->RackRevision();
 	model.Editable = _AvailableLocked(target) && !_busy;
+	model.ChannelRoutes = target.Loop ? target.Loop->MidiChannelRoutes() : target.Take->MidiChannelRoutes();
+	model.Diagnostic = target.Station->MidiRoutingDiagnostic();
+	rack->SetAllowedMidiChannels(target.Loop ? target.Loop->AllowedMidiChannels() : target.Take->AllowedMidiChannels(), true);
+	rack->SetAllowedMidiChannelsCallback([this, life = std::weak_ptr<int>(_lifetime),
+		station = std::weak_ptr<engine::Station>(target.Station), take = std::weak_ptr<engine::LoopTake>(target.Take),
+		loop = std::weak_ptr<engine::Loop>(target.Loop), hasLoop = bool(target.Loop), revision = model.Revision](const std::vector<int>& channels) {
+		if (life.expired() || _busy || _intent || _confirmation) return;
+		Target owner{station.lock(), take.lock(), loop.lock()};
+		if (!owner.Station || !owner.Take || (hasLoop && !owner.Loop)) return;
+		GuiVstRack::Command command;
+		command.Operation = GuiVstRack::Command::Kind::Channels;
+		command.Revision = revision; command.AllowedMidiChannels = channels;
+		_intent = Intent{std::move(owner), base::Action::MODIFIER_NONE, std::move(command)};
+	});
 	const auto slots = target.Loop ? target.Loop->GetVstRackSlots() : target.Take->GetVstRackSlots();
 	model.TotalSlots = slots.size();
 	for (const auto& slot : slots) model.Slots.push_back({slot, slot.Plugin && _host.Editors.IsVstEditorOpen(slot.Plugin)});
@@ -445,6 +461,32 @@ void VstRackControls::_PumpChild(const Intent& intent)
 		bool changed = false;
 		{ std::scoped_lock lock(_host.Mutex); if (valid()) changed = owner.Loop ? owner.Loop->MoveVstSlot(command.Move) : owner.Take->MoveVstSlot(command.Move); }
 		if (changed) _host.Commit();
+		return;
+	}
+	if (command.Operation == Kind::Diagnostic)
+	{
+		std::string message;
+		{ std::scoped_lock lock(_host.Mutex); if (valid()) message = owner.Station->MidiRoutingDiagnostic(); }
+		if (!message.empty()) _ShowError(utils::DecodeUtf8(message));
+		return;
+	}
+	if (command.Operation == Kind::Channels || command.Operation == Kind::Routes)
+	{
+		bool changed = false;
+		{
+			std::scoped_lock lock(_host.Mutex);
+			if (!valid()) return;
+			if (command.Operation == Kind::Channels)
+			{
+				if (owner.Loop) owner.Loop->SetAllowedMidiChannels(command.AllowedMidiChannels);
+				else owner.Take->SetAllowedMidiChannels(command.AllowedMidiChannels);
+				changed = true;
+			}
+			else changed = owner.Loop ? owner.Loop->SetMidiChannelRoutes(command.ChannelRoutes, command.Revision)
+				: owner.Take->SetMidiChannelRoutes(command.ChannelRoutes, command.Revision);
+		}
+		if (changed) _host.Commit();
+		else if (const auto view = owner.Take->GetGuiRack()->VstRack()) view->SetFeedback("Rack edit rejected; retry after the rack finishes changing.");
 		return;
 	}
 	if (command.Operation != Kind::Slot && command.Operation != Kind::Append) return;

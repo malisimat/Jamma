@@ -52,6 +52,9 @@ namespace io
 		static constexpr std::size_t MaxLoopsPerTake = 1024u;
 		static constexpr std::size_t MaxMidiStreamsPerTake = 128u;
 		static constexpr std::size_t MaxAudioRouteChannels = 1024u;
+		// Recovery payloads may exceed active rack limits, but imports stay bounded.
+		static constexpr std::size_t MaxMidiRouteRecoveryIdsPerChannel = 4096u;
+		static constexpr std::size_t MaxMidiRouteRecoveryBytes = 1024u * 1024u;
 		static constexpr std::size_t MaxTriggerHistoryPerTrigger = 64u;
 		static constexpr unsigned long MaxLoopLengthSamps = 0x7fffffffu;
 
@@ -128,6 +131,9 @@ namespace io
 			bool Muted;
 			LoopMix Mix;
 			std::vector<VstEntry> VstChain;
+			// Each rack owns its channel choices independently.
+			std::vector<int> AllowedMidiChannels{1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16};
+			std::array<midi::MidiChannelRoute, 16> MidiChannelRoutes{};
 
 			static std::optional<Loop> FromJson(Json::JsonPart json);
 		};
@@ -175,6 +181,9 @@ namespace io
 			std::vector<double> BusLevels;
 			std::vector<Loop> Loops;
 			std::vector<VstEntry> VstChain;
+			// Each rack owns its channel choices independently.
+			std::vector<int> AllowedMidiChannels{1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16};
+			std::array<midi::MidiChannelRoute, 16> MidiChannelRoutes{};
 			bool MidiQuantEnabled = false;
 			int MidiQuantFraction = static_cast<int>(midi::MidiQuantisationFraction::Quarter);
 			std::int32_t TakePhaseOffsetSamps = 0;
@@ -259,6 +268,8 @@ namespace io
 		unsigned long MasterLengthSamps = 1;
 		std::uint64_t AbsoluteSamplePos = 0;
 	private:
+		static std::optional<std::vector<int>> ParseAllowedMidiChannels(const Json::JsonPart& json);
+		static bool ParseMidiChannelRoutes(const Json::JsonPart& json, std::array<midi::MidiChannelRoute, 16>& routes);
 		static std::optional<double> ParseFiniteNumber(const Json::JsonValue& value) noexcept;
 	};
 }

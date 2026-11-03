@@ -49,6 +49,14 @@ namespace vst
 		std::string RackDiagnostic() const;
 		std::optional<std::vector<int>> SetMidiChannelRoutes(std::array<midi::MidiChannelRoute,16> routes,
 			std::uint64_t revision, const std::vector<int>& allowedMidiChannels);
+		// Focused validation shared by Station, Take and audio-Loop routing owners.
+		static std::optional<std::vector<int>> ValidateChannelRoutes(
+			std::array<midi::MidiChannelRoute,16>& routes,
+			const std::array<midi::MidiChannelRoute,16>& prior,
+			const std::vector<VstRackSlot>& slots, const std::vector<int>& allowed,
+			std::string& diagnostic);
+		static bool ValidSavedRouting(const std::vector<io::JamFile::VstEntry>& entries,
+			const std::array<midi::MidiChannelRoute,16>& routes);
 		bool ClearChannelRoutes(std::uint16_t removedMask);
 		const std::array<midi::MidiChannelRoute,16>& ChannelRoutes() const { return _midiChannelRoutes; }
 		std::uint64_t Revision() const noexcept { return _rackRevision.load(); }

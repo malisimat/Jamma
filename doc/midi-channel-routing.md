@@ -1,16 +1,24 @@
-# Station MIDI channel routing
+# MIDI channel routing at Station, LoopTake and Loop depths
 
-Station channel buttons and cables control both live input and recorded MIDI reaching the station rack. UI and saved channel numbers are 1-16; event channels are 0-15. Take/output indices identify playback sources, not MIDI channels.
+Each rack has its own channel buttons and cables controlling live and recorded MIDI reaching that rack. UI and saved channel numbers are 1-16; event channels are 0-15. Take/output indices identify playback sources, not MIDI channels.
 
-- Disabled: admit no new rack events or capture on that channel. Existing recorded material stays stored.
+- Disabled: admit no new events to that rack on that channel. Existing recorded material stays stored.
 - Enabled with no cables: broadcast once to every MIDI-capable rack plugin.
 - Enabled with cables: send only to the selected identities. Unavailable identities remain cables and are silent until recovered; they do not cause broadcast.
 
 Disabling clears the channel's cables. Re-enabling starts in broadcast mode and does not replay suppressed attacks or reconstruct held physical notes. Removing the last cable also returns to broadcast. A cancelled, invalid or stale cable gesture leaves the prior state intact.
 
-New stations enable all 16 channels without cables. Loading restores saved channel choices, including an empty enabled set. The supported JAM representation is `allowedmidichannels` plus `midiChannelRoutes` (16 objects containing `plugins` identity lists). Obsolete output-index/live-plugin maps and the separate explicit-empty mode are no longer supported or migrated. Recorded material on a saved disabled channel is now silent until enabled.
+New Station, LoopTake and audio Loop owners enable all 16 channels without cables. Loading restores saved channel choices, including an empty enabled set. The supported JAM representation is `allowedmidichannels` plus `midiChannelRoutes` (16 objects containing `plugins` identity lists). Obsolete output-index/live-plugin maps and the separate explicit-empty mode are no longer supported or migrated. Recorded material on a saved disabled channel is silent at that rack until enabled. Child masks and routes are saved on their owning take or audio Loop. New owners use all channels; this feature adds no legacy migration mode.
 
-Rack routing is published with the enabled mask in one immutable audio snapshot. Per-destination/channel retirement counters preserve removal history across skipped publications, so disable/re-enable cannot revive a queued recorded attack. Delivery retires only obsolete ownership and retains bounded release retries to the old processor. Recorded MIDI retains destination suffix latency compensation and non-realtime flags; live MIDI stays immediate. Take-local processing, trigger routing and external MIDI output are unchanged.
+Channel selections never compound. For example, a Station accepting channels 4 and 5 still passes wired input channels 2 and 3 to a Take accepting those channels, and the Take passes every wired channel to its audio Loops. A parent filter or cable edit retires only its own destinations, without releasing child notes or pedals. Device wiring determines which Station hierarchy receives input; the rack masks do not change physical input history or recording admission.
+
+At LoopTake depth, the modern MIDI expander beside the take fader opens that take's grid and VST rack. At Loop depth, select one audio Loop to use its grid and rack; multiple or no selected audio Loops leave the target unavailable. The right expander still opens audio channel faders and routing. All/None and plugin cables work on the currently named rack owner.
+
+A Take rack receives its own recorded MIDI streams. An audio Loop rack receives the streams of its containing Take; audio channel indices are not MIDI stream identities. The Station rack continues to receive all of its takes. Configuring instruments at several depths layers them. A pure MIDI Take renders its Take instruments without creating dummy audio recordings. Individual MIDI-stream racks are not part of audio Loop selection.
+
+Rack routing is published with the enabled mask in one immutable audio snapshot. Per-destination/channel retirement counters preserve removal history across skipped publications, so disable/re-enable cannot revive a queued recorded attack. Delivery retires only obsolete ownership and retains bounded release retries to the old processor. Recorded MIDI retains destination suffix latency compensation and non-realtime flags; live MIDI stays immediate. Trigger routing and external MIDI output remain independent of rack routing.
+
+Whole-hierarchy delivery is admitted off the audio callback with bounded rack, destination, source and binding counts. If a proposed update exceeds those limits, Rack info explains that it has not been applied; the previous complete render/routing topology continues until the configuration is reduced. Pending edited configuration can still be saved. Input forwarding itself shares prepared destination/source views rather than copying event queues per hierarchy level.
 
 Ordinary note edits preserve the articulation actually accepted by each playback source. MidiLoop assigns transient loop-local tokens to raw attacks; sort, trim and undo carry those sidecars, while saved MIDI bytes and flags remain unchanged. A covered start/end extension keeps its sounding voice; deletion, changed channel/pitch or lost current coverage releases only that voice. Velocity affects future attacks. A new onset already behind the source cursor waits for its next occurrence. Source/grid replacement and explicit relocation retain full recovery, including skipped publications; canceled grid preparation cannot become an ordinary edit's recovery lineage.
 
