@@ -1171,6 +1171,26 @@ bool MidiDelivery::HasUnconsumedRemovedBinding() const noexcept
 	return false;
 }
 
+void MidiDelivery::FinalReleaseWhileQuiescent(const PreparedState& state) noexcept
+{
+    // Removed processors will not begin another audio block. One bounded final
+    // attempt uses the existing accepted/rejected release accounting before retirement.
+    const auto release=[](const auto& destination) {
+        if(!destination || !destination->Plugin || !destination->Plugin->IsLoaded()) return;
+        vst::IVstPlugin::PluginCallGuard call(*destination->Plugin,true);
+        if(!call) return;
+        destination->Plugin->BeginMidiBlock(0u,1u);
+        destination->PendingSustainRelease |= destination->PluginSustain;
+        destination->PendingReleases |= destination->PluginHeld;
+        for(auto channel=0u;channel<16u;++channel) if(destination->PendingSustainRelease.test(channel))
+            _TryDeliverMidiNow(*destination,{0u,static_cast<std::uint8_t>(0xb0u|channel),64u,0u},true);
+        for(std::size_t slot=0u;slot<MidiNote::TotalNoteSlots;++slot) if(destination->PendingReleases.test(slot))
+            _TryDeliverMidiNow(*destination,MidiEvent::MakeNoteOff(0u,static_cast<std::uint8_t>(slot/128u),static_cast<std::uint8_t>(slot%128u)),true);
+    };
+    for(const auto& destination:state.MidiDestinations) release(destination);
+    for(const auto& destination:state.RetiredMidiDestinations) release(destination);
+}
+
 void MidiDelivery::ClearAfterReadersStopped()
 {
 	for (const auto& binding : _midiPlaybackBindings)

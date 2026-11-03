@@ -75,6 +75,7 @@ namespace midi
 		void Draw(base::DrawContext& ctx);
 		// Caller holds Host::SceneMutex; receives committed selection identities, never hover.
 		void SelectionCommittedLocked(std::span<const std::shared_ptr<base::GuiElement>> selected);
+        void ResetSession();
 		void ClearSelectionHistory() { _selectionHistory.clear(); }
         std::span<const std::weak_ptr<base::GuiElement>> CommittedSelectionHistoryLocked() const noexcept { return _selectionHistory; }
 		bool FindCandidate(std::shared_ptr<engine::LoopTake>& take,

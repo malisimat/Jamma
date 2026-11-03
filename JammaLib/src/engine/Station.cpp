@@ -1933,6 +1933,31 @@ void Station::SetLogging(const io::LoggingConfig& config) noexcept
 	}
 }
 
+bool Station::StageVstJob(actions::JobAction& action)
+{
+    return _rackState.StageCompatibleJob(action);
+}
+
+void Station::ResetVstRackAfterReadersStopped()
+{
+    // Operational reset: all readers are drained, but normal publication resumes.
+    _automationPlayback.ClearAfterReadersStopped();
+    if(const auto state=_AudioStateSnapshot()) midi::MidiDelivery::FinalReleaseWhileQuiescent(state->Midi);
+    const auto retire=[](const std::shared_ptr<const AudioState>& state) {
+        if(!state) return;
+        vst::RackState::RetireChain(state->Midi.MidiChain);
+        for(const auto& destination:state->Midi.MidiDestinations)
+            if(destination && destination->Plugin) vst::QueueForUiThreadDestroy(destination->Plugin);
+    };
+    retire(_audioState.exchange(nullptr));
+    for(const auto& state:_retiredAudioStates) retire(state.State);
+    _retiredAudioStates.clear();
+    _midiDelivery.ClearAfterReadersStopped();
+    _rackState.ResetAfterReadersStopped();
+    _rackState.CommitChain();
+    _PublishAudioState(); RebuildAutomationDispatch(); _changesMade=true;
+}
+
 void Station::ForceUnloadAllVstPlugins()
 {
 	// Shutdown owns this thread after audio and job readers have stopped. There

@@ -485,6 +485,21 @@ bool LoopGridEditor::SelectMidiChannel(unsigned int channel)
 	return true;
 }
 
+void LoopGridEditor::ResetSession()
+{
+    CancelInput();
+    Close();
+    if(const auto loop=_audioLoop.lock()) if(const auto model=loop->Model()) { model->SetEditorMorph(0.0f); model->SetEditorActive(false); }
+    if(const auto loop=_midiLoop.lock()) if(const auto model=loop->Model()) { model->SetEditorMorph(0.0f); model->SetEditorActive(false); model->SetEditorHover(-1.0f,-1); }
+    _host.Camera.SetEditorPerspective(false);
+    _ResetTarget();
+    _pendingAudioUndo.clear(); _audioStrokePoint.reset();
+    _audioStroke=false; _audioNavigation=false; _audioPan=false; _audioBandPreview=false;
+    _revisionCursor.reset(); _revisionCursors.clear(); _selectionHistory.clear();
+    _gesture.reset(); _state=State::Closed; _blend=0.0f;
+    _SetFeedback("");
+}
+
 void LoopGridEditor::Close()
 {
 	if (!IsOpen())

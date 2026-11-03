@@ -8,6 +8,8 @@
 
 namespace engine
 {
+    enum class SessionResetMode { PreserveStationVsts, RemoveStationVsts };
+
 	// Borrowed non-audio controls. Window/startup callers must keep the owning
 	// Scene alive and must not retain this reference across Scene replacement.
 	// Calls retain their existing owner-thread/serialization requirements; this

@@ -272,7 +272,7 @@ TEST(RecordedPlaybackLatency, CapturedAudioAndMidiImpulsesMeetAtTheDac)
 	load.JobActionType = actions::JobAction::JOB_LOADVST;
 	load.VstPath = L"fake-recorded-latency.dll";
 	load.PreInitPlugin = plugin;
-	station->OnAction(load);
+	if(!load.VstManaged) EXPECT_TRUE(station->StageVstJob(load)); station->OnAction(load);
 	engine::LoopTakeParams takeParams;
 	takeParams.Size = { 100, 100 };
 	takeParams.FadeSamps = constants::DefaultFadeSamps;
@@ -344,7 +344,7 @@ TEST(RecordedPlaybackLatency, RapidReferenceChangeWaitsForAudioTransitionBeforeM
 	load.JobActionType = actions::JobAction::JOB_LOADVST;
 	load.VstPath = L"fake-transition.dll";
 	load.PreInitPlugin = plugin;
-	station->OnAction(load);
+	if(!load.VstManaged) EXPECT_TRUE(station->StageVstJob(load)); station->OnAction(load);
 	engine::LoopTakeParams takeParams;
 	takeParams.Size = { 100, 100 };
 	auto take = std::make_shared<engine::LoopTake>(takeParams,
@@ -398,7 +398,7 @@ static void VerifyRecordedCaptureOriginWithHardwareRuler(bool returningOutput,
 	load.JobActionType = actions::JobAction::JOB_LOADVST;
 	load.VstPath = L"fake-capture-ruler.dll";
 	load.PreInitPlugin = plugin;
-	station->OnAction(load);
+	if(!load.VstManaged) EXPECT_TRUE(station->StageVstJob(load)); station->OnAction(load);
 	engine::LoopTakeParams takeParams;
 	takeParams.Size = { 100, 100 };
 	takeParams.FadeSamps = constants::DefaultFadeSamps;
@@ -535,7 +535,7 @@ static void VerifySerialRenderedPath(bool indexedStationDestination)
 		job.JobActionType = actions::JobAction::JOB_LOADVST;
 		job.VstPath = path;
 		job.PreInitPlugin = plugin;
-		target->OnAction(job);
+		if constexpr (requires { target->StageVstJob(job); }) { if(!job.VstManaged) EXPECT_TRUE(target->StageVstJob(job)); } target->OnAction(job);
 		target->CommitChanges();
 		return plugin;
 	};
@@ -620,7 +620,7 @@ TEST(RecordedPlaybackLatency, ExcessiveStationLatencyIsRejectedWithoutWrappingCh
 		job.JobActionType = actions::JobAction::JOB_LOADVST;
 		job.VstPath = pluginPath;
 		job.PreInitPlugin = plugin;
-		target->OnAction(job);
+		if constexpr (requires { target->StageVstJob(job); }) { if(!job.VstManaged) EXPECT_TRUE(target->StageVstJob(job)); } target->OnAction(job);
 		target->CommitChanges();
 	};
 	loadMaxLatency(loop, L"fake-max-loop.dll");
@@ -1164,7 +1164,14 @@ TEST(RecordedPlaybackLatency, TemporaryWideFadeChecksRequestedSeamAndOneWrapOnly
     EXPECT_FALSE(pending->CanUseTemporaryPlayback((std::numeric_limits<unsigned long>::max)(),1));
     pending->SetBodyPlayIndex(0);
     const auto before=reads;
-    std::array<float,4> output{};
-    EXPECT_EQ(0u,pending->ReadBlock(output.data(),-static_cast<int>(constants::MaxLoopFadeSamps),4,&dac,trigger,-8));
-    EXPECT_EQ(before,reads); // legacy out-of-body offset remains recorded-only
+    std::array<float,4> output{},normalized{};
+    // Signed offsets normalize on the logical body ruler (Step8), including DAC
+    // temporary reads. -F maps to phase16 here, whose four samples are proven.
+    constexpr auto offset=-static_cast<int>(constants::MaxLoopFadeSamps);
+    const auto body=(length-constants::MaxLoopFadeSamps%length)%length;
+    ASSERT_EQ(16u,body); ASSERT_TRUE(pending->CanUseTemporaryPlayback(body,4u));
+    recorded->SetBodyPlayIndex(0u);
+    ASSERT_EQ(4u,recorded->ReadBlock(normalized.data(),offset,4u));
+    ASSERT_EQ(4u,pending->ReadBlock(output.data(),offset,4u,&dac,trigger,-8));
+    EXPECT_EQ(normalized,output); EXPECT_EQ(before+4u,reads);
 }

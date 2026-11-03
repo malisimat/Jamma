@@ -1308,9 +1308,13 @@ TEST(Scene, HidingSettingsDuringNumericCaptureConsumesTerminatingRelease) {
 	scene.OnAction(cancel);
 	// Cancellation may leave the handle's toggle accepted. Restore the visible
 	// page and reveal the actual target before testing capture dismissal.
+    // This tests decimal text focus, independently of the phase control's slider presentation.
+    auto numeric=std::make_shared<gui::GuiNumericInput>(gui::GuiNumericInputParams::PanelInput(228u));
+    panel->ReplacePageSettings(gui::SettingsPage::Timing,{{gui::SettingsPage::Timing,"Focus fixture",numeric,0u}});
+    panel->SetPage(gui::SettingsPage::Timing);
 	panel->SetExpanded(true);
 	for (int frame = 0; frame < 6; ++frame) panel->AdvanceAnimation(0.05f);
-	auto numeric = FindGuiElement<gui::GuiNumericInput>(*panel);
+	ASSERT_EQ(numeric,FindGuiElement<gui::GuiNumericInput>(*panel));
 	ASSERT_NE(nullptr, numeric);
 	const auto scroll = FindGuiElement<gui::GuiScrollPanel>(*panel);
 	ASSERT_NE(nullptr, scroll); ASSERT_NE(nullptr, scroll->Content());

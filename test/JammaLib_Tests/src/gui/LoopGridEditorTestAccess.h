@@ -26,6 +26,7 @@ namespace midi
 				{static_cast<float>((u - 0.5) * 2.0 * radius), 2.0f, static_cast<float>((0.5 - v) * 1.56 * radius)},
 				static_cast<int>(editor._size.Width), static_cast<int>(editor._size.Height));
 		}
+        static std::size_t RevisionCursorCount(const LoopGridEditor& editor) { return editor._revisionCursors.size(); }
 		static unsigned int DisplayedChannel(const LoopGridEditor& editor) { return static_cast<unsigned int>(editor._channelInput->Value()); }
 		static utils::Position2d ButtonPoint(const LoopGridEditor& editor) { return editor._button->GlobalPosition() + utils::Position2d{10, 10}; }
 		static bool HasCancelledButtonRelease(const LoopGridEditor& editor) { return editor._consumeButtonRelease; }

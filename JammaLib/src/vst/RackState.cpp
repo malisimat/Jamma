@@ -7,6 +7,50 @@
 using namespace vst;
 using namespace actions;
 
+void RackState::_StageRequestLocked(JobAction& action)
+{
+    action.VstRequestId=utils::GetGuid();
+    _requests.push_back({action.VstRequestId,action.VstIdentity,action.JobActionType});
+    _vstJobsPending.fetch_add(1u,std::memory_order_release);
+}
+
+bool RackState::_OwnsRequestLocked(const JobAction& action) const
+{
+    return !action.VstRequestId.empty() && std::any_of(_requests.begin(),_requests.end(),[&](const auto& request) {
+        return request.Id==action.VstRequestId && request.Slot==action.VstIdentity && request.Type==action.JobActionType;
+    });
+}
+
+void RackState::_FinishRequestLocked(const JobAction& action)
+{
+    if(!_OwnsRequestLocked(action)) return;
+    std::erase_if(_requests,[&](const auto& request) { return request.Id==action.VstRequestId; });
+    _vstJobsPending.fetch_sub(1u,std::memory_order_release);
+}
+
+bool RackState::StageCompatibleJob(JobAction& action)
+{
+    if(action.VstManaged || (action.JobActionType!=JobAction::JOB_LOADVST && action.JobActionType!=JobAction::JOB_UNLOADVST)) return false;
+    std::lock_guard lock(_vstPathsMutex);
+    if(_rackInactive || _requests.size()>=MaxRackDestinations || _OwnsRequestLocked(action)) return false;
+    if(action.VstIdentity.empty()) action.VstIdentity=action.PreInitPlugin ? action.PreInitPlugin->StateId() : utils::GetGuid();
+    if(action.VstIdentity.empty() || !io::NativeMidiSidecar::ValidatePluginIdentity(action.VstIdentity)) return false;
+    _StageRequestLocked(action);
+    return true;
+}
+
+void RackState::ResetAfterReadersStopped()
+{
+    RetireChain(_vstChain.exchange(nullptr)); RetireChain(std::move(_backVstChain));
+    std::lock_guard lock(_vstPathsMutex);
+    _pendingVstLoads.clear(); _pendingVstUnloads.clear(); _requests.clear(); _pendingRackIds.clear();
+    _pendingDeletedVstRouteIds.clear(); _failedInteractiveVstLoads.clear();
+    _vstPluginPaths.clear(); _vstSavedEntries.clear(); _midiChannelRoutes={};
+    _vstJobsPending.store(0u,std::memory_order_release);
+    _rackInactive=false; _rackLatencySuspended=false; _rackDiagnostic.clear(); ++_rackRevision;
+    _backVstChain=std::make_shared<VstChain>(); _flipVstChain.store(true,std::memory_order_release);
+}
+
 bool RackState::LoadVstPlugin(std::wstring path, std::vector<std::uint8_t> initialState, std::size_t retiredDestinations)
 {
 	const auto before = _pendingVstLoads.size();
@@ -70,14 +114,14 @@ void RackState::UnloadVstPlugin(size_t index)
 {
 	JobAction job;
 	job.JobActionType = JobAction::JOB_UNLOADVST;
-	job.VstRequestId = utils::GetGuid();
 	job.VstIndex = index;
 	{
 		std::lock_guard<std::mutex> lock(_vstPathsMutex);
-		if (index < _vstSavedEntries.size()) job.VstIdentity = _vstSavedEntries[index].Id;
+		if (index >= _vstSavedEntries.size() || _requests.size()>=MaxRackDestinations) return;
+        job.VstIdentity = _vstSavedEntries[index].Id;
+        _StageRequestLocked(job);
 	}
 	_pendingVstUnloads.push_back(std::move(job));
-	_vstJobsPending.fetch_add(1u, std::memory_order_release);
 }
 
 std::shared_ptr<vst::IVstPlugin> RackState::GetVstPlugin(size_t index) const
@@ -196,7 +240,7 @@ bool RackState::LoadManagedVstSlot(std::wstring path, const std::string& retryId
 	std::vector<std::uint8_t> state;
 	{
 		std::lock_guard<std::mutex> lock(_vstPathsMutex);
-		if (std::find(_pendingRackIds.begin(), _pendingRackIds.end(), identity) != _pendingRackIds.end()) return false;
+		if (_requests.size()>=MaxRackDestinations || std::find(_pendingRackIds.begin(), _pendingRackIds.end(), identity) != _pendingRackIds.end()) return false;
 		const auto chain = _flipVstChain.load(std::memory_order_acquire) ? _backVstChain : _vstChain.load(std::memory_order_acquire);
 		if (!identity.empty())
 		{
@@ -225,11 +269,10 @@ bool RackState::LoadManagedVstSlot(std::wstring path, const std::string& retryId
 	job.VstPath = std::move(path);
 	job.VstInitialState = std::move(state);
 	job.VstIdentity = identity;
-	job.VstRequestId = utils::GetGuid();
 	job.VstManaged = true;
 	job.VstDiscardOnFailure = discardOnFailure && retryIdentity.empty();
+    { std::lock_guard lock(_vstPathsMutex); _StageRequestLocked(job); }
 	_pendingVstLoads.push_back(std::move(job));
-	_vstJobsPending.fetch_add(1u, std::memory_order_release);
 	return true;
 }
 
@@ -404,9 +447,18 @@ bool RackState::LoadVstPluginSynchronously(const std::wstring& path, const std::
 
 actions::ActionResult RackState::OnAction(actions::JobAction action, const Format& format, const std::string& ownerName, std::size_t retiredDestinations)
 {
-	switch (action.JobActionType)
-	{
-	case JobAction::JOB_LOADVST:
+    if(action.JobActionType==JobAction::JOB_LOADVST || action.JobActionType==JobAction::JOB_UNLOADVST)
+    {
+        std::lock_guard lock(_vstPathsMutex);
+        if(!_OwnsRequestLocked(action))
+        {
+            if(action.PreInitPlugin) QueueForUiThreadDestroy(std::move(action.PreInitPlugin));
+            return ActionResult::NoAction();
+        }
+    }
+    switch (action.JobActionType)
+    {
+    case JobAction::JOB_LOADVST:
 	{
 		{
 			std::lock_guard<std::mutex> lock(_vstPathsMutex);
@@ -415,22 +467,26 @@ actions::ActionResult RackState::OnAction(actions::JobAction action, const Forma
 			const bool cancelled = action.VstManaged && std::find(_pendingRackIds.begin(), _pendingRackIds.end(), action.VstIdentity) == _pendingRackIds.end();
 			if (_rackInactive || overLimit || cancelled || (!action.VstIdentity.empty() && !io::NativeMidiSidecar::ValidatePluginIdentity(action.VstIdentity)))
 			{
-				if (_vstJobsPending.load(std::memory_order_acquire)) _vstJobsPending.fetch_sub(1u, std::memory_order_release);
-				_rackDiagnostic = cancelled ? "" : "Rack capacity or identity rejected; remove a slot and retry.";
+                _FinishRequestLocked(action);
+                if(action.PreInitPlugin) QueueForUiThreadDestroy(std::move(action.PreInitPlugin));
+                _rackDiagnostic = cancelled ? "" : "Rack capacity or identity rejected; remove a slot and retry.";
 				std::cerr << "[ERROR][VST][load] station='" << ownerName << "' path='" << utils::EncodeUtf8(action.VstPath)
 					<< "' id='" << action.VstIdentity << "' stage=admission inactive=" << _rackInactive
 					<< " over-limit=" << overLimit << " cancelled=" << cancelled << std::endl;
 				return ActionResult::NoAction();
 			}
 		}
-		auto plugin = action.PreInitPlugin ? action.PreInitPlugin : vst::MakePluginForPath(action.VstPath);
-		std::clog << "[VST][load] station='" << ownerName << "' path='" << utils::EncodeUtf8(action.VstPath)
+        std::shared_ptr<vst::IVstPlugin> plugin;
+        bool activated=false,loaded=false;
+        const auto hostChannels=std::max(1u,format.Channels);
+        try
+        {
+        plugin = action.PreInitPlugin ? action.PreInitPlugin : vst::MakePluginForPath(action.VstPath);
+        std::clog << "[VST][load] station='" << ownerName << "' path='" << utils::EncodeUtf8(action.VstPath)
 			<< "' id='" << action.VstIdentity << "' stage=begin preinitialized=" << bool(action.PreInitPlugin)
 			<< " state-bytes=" << action.VstInitialState.size() << std::endl;
-		auto hostChannels = format.Channels;
-		if (hostChannels == 0u) hostChannels = 1u;
-		const bool activated = plugin->Load(action.VstPath, format.SampleRate, format.BlockSize, hostChannels, vst::HostedLayoutMode::Exact);
-		bool loaded = activated && plugin->Role() != vst::RenderRole::Unknown;
+		activated = plugin->Load(action.VstPath, format.SampleRate, format.BlockSize, hostChannels, vst::HostedLayoutMode::Exact);
+		loaded = activated && plugin->Role() != vst::RenderRole::Unknown;
 		if (action.VstIdentity.empty()) action.VstIdentity = plugin->StateId();
 		plugin->SetStateId(action.VstIdentity);
 		if (loaded && !action.VstInitialState.empty()) plugin->SetState(action.VstInitialState);
@@ -440,14 +496,28 @@ actions::ActionResult RackState::OnAction(actions::JobAction action, const Forma
 			const auto found = std::find_if(_vstSavedEntries.begin(), _vstSavedEntries.end(), [&](const auto& entry) { return entry.Id == action.VstIdentity; });
 			if (found != _vstSavedEntries.end()) plugin->SetBypassed(found->Bypass);
 		}
-		loaded = loaded && plugin->GetLatencySamples() <= 262144;
-		if (!loaded) std::cerr << "[ERROR][VST][load] station='" << ownerName << "' path='" << utils::EncodeUtf8(action.VstPath)
+        loaded = loaded && plugin->GetLatencySamples() <= 262144;
+        }
+        catch(...)
+        {
+            if(plugin) QueueForUiThreadDestroy(std::move(plugin));
+            std::lock_guard lock(_vstPathsMutex);
+            if(_OwnsRequestLocked(action) && action.VstManaged) std::erase(_pendingRackIds,action.VstIdentity);
+            _FinishRequestLocked(action);
+            throw; // Preserve Scene's existing fatal job failure policy.
+        }
+        if (!loaded) std::cerr << "[ERROR][VST][load] station='" << ownerName << "' path='" << utils::EncodeUtf8(action.VstPath)
 			<< "' id='" << action.VstIdentity << "' stage=" << (!activated ? "load" : plugin->Role() == vst::RenderRole::Unknown ? "unsupported-role" : "latency-limit")
 			<< " latency=" << plugin->GetLatencySamples() << " rate=" << format.SampleRate << " block=" << format.BlockSize << " channels=" << hostChannels << std::endl;
 		if (!loaded) { vst::QueueForUiThreadDestroy(std::move(plugin)); plugin.reset(); }
 		{
 			std::lock_guard<std::mutex> lock(_vstPathsMutex);
-			// Multiple serialized jobs can complete before the UI publishes. Compose
+            if(!_OwnsRequestLocked(action))
+            {
+                if(plugin) QueueForUiThreadDestroy(std::move(plugin));
+                return ActionResult::NoAction();
+            }
+            // Multiple serialized jobs can complete before the UI publishes. Compose
 			// against the latest delivered chain so no earlier edit is discarded.
 			const auto chain = _flipVstChain.load(std::memory_order_acquire) ? _backVstChain : _vstChain.load(std::memory_order_acquire);
 			auto replacement = std::make_shared<vst::VstChain>();
@@ -463,7 +533,7 @@ actions::ActionResult RackState::OnAction(actions::JobAction action, const Forma
 				if (found == _vstSavedEntries.end() || cancelled)
 				{
 					if (plugin) vst::QueueForUiThreadDestroy(std::move(plugin));
-					if (_vstJobsPending.load(std::memory_order_acquire)) _vstJobsPending.fetch_sub(1u, std::memory_order_release);
+					_FinishRequestLocked(action);
 					return ActionResult::NoAction();
 				}
 				const auto index = static_cast<std::size_t>(found - _vstSavedEntries.begin());
@@ -515,7 +585,7 @@ actions::ActionResult RackState::OnAction(actions::JobAction action, const Forma
 			++_rackRevision;
 			_flipVstChain.store(true, std::memory_order_release);
 		}
-		if (_vstJobsPending.load(std::memory_order_acquire) != 0u) _vstJobsPending.fetch_sub(1u, std::memory_order_release);
+		{ std::lock_guard lock(_vstPathsMutex); _FinishRequestLocked(action); }
 		ActionResult res;
 		res.IsEaten = true;
 		res.ResultType = actions::ACTIONRESULT_DEFAULT;
@@ -549,7 +619,7 @@ actions::ActionResult RackState::OnAction(actions::JobAction action, const Forma
 				_flipVstChain.store(true, std::memory_order_release);
 			}
 		}
-		if (_vstJobsPending.load(std::memory_order_acquire) != 0u) _vstJobsPending.fetch_sub(1u, std::memory_order_release);
+		{ std::lock_guard lock(_vstPathsMutex); _FinishRequestLocked(action); }
 		ActionResult res;
 		res.IsEaten = true;
 		res.ResultType = actions::ACTIONRESULT_DEFAULT;
@@ -656,6 +726,7 @@ void RackState::ClearAfterReadersStopped()
 	_pendingVstLoads.clear();
 	_pendingVstUnloads.clear();
 	std::lock_guard<std::mutex> lock(_vstPathsMutex);
+    _requests.clear(); _pendingRackIds.clear();
 	_vstPluginPaths.clear();
 	_vstSavedEntries.clear();
 	_failedInteractiveVstLoads.clear();

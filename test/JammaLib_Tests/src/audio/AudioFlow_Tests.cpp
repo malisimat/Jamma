@@ -2196,7 +2196,7 @@ TEST(AudioCallbackRealtime, OrdinaryMidiDeliveryQueueReconciliationAndDrainDoNot
 	audio::AudioHost host(io::UserConfig{}); auto station = MakeStation(1u);
 	auto plugin = std::make_shared<CallbackMidiFixedPlugin>();
 	actions::JobAction job; job.JobActionType = actions::JobAction::JOB_LOADVST;
-	job.VstPath = L"fixed-edit-queue.dll"; job.PreInitPlugin = plugin; station->OnAction(job); station->CommitChanges();
+	job.VstPath = L"fixed-edit-queue.dll"; job.PreInitPlugin = plugin; if(!job.VstManaged) EXPECT_TRUE(station->StageVstJob(job)); station->OnAction(job); station->CommitChanges();
 	const audio::AudioStreamParams params{"test", 48000u, 2u, 128u, 0u, 0u, 0u, 1u};
 	auto stations = std::make_shared<const std::vector<std::shared_ptr<Station>>>(std::vector{station});
 	audio::AudioHostRealtimeTestAccess::Prepare(host, stations, params);
@@ -2231,7 +2231,7 @@ TEST(AudioCallbackRealtime, RetainedStationGroupApplicationAndHeldCleanupDoNotUs
 {
 	using midi::MidiEvent;
 	audio::AudioHost host(io::UserConfig{}); auto station=MakeStation(1u); auto plugin=std::make_shared<CallbackMidiFixedPlugin>();
-	actions::JobAction job; job.JobActionType=actions::JobAction::JOB_LOADVST; job.VstPath=L"fixed-parent-mute.dll"; job.PreInitPlugin=plugin; station->OnAction(job); station->CommitChanges();
+	actions::JobAction job; job.JobActionType=actions::JobAction::JOB_LOADVST; job.VstPath=L"fixed-parent-mute.dll"; job.PreInitPlugin=plugin; if(!job.VstManaged) EXPECT_TRUE(station->StageVstJob(job)); station->OnAction(job); station->CommitChanges();
 	const audio::AudioStreamParams params{"test",48000u,2u,128u,0u,0u,0u,1u};
 	auto stations=std::make_shared<const std::vector<std::shared_ptr<Station>>>(std::vector{station}); audio::AudioHostRealtimeTestAccess::Prepare(host,stations,params); std::array<float,128u> output{};
 	ASSERT_EQ(0,audio::AudioHostRealtimeTestAccess::InvokeCallback(host,output.data(),nullptr,128u));
@@ -2260,7 +2260,7 @@ TEST(AudioCallbackRealtime, MidiPublicationCableCancellationAndRetirementRetryDo
 		auto plugin = std::make_shared<CallbackMidiFixedPlugin>();
 		actions::JobAction job; job.JobActionType = actions::JobAction::JOB_LOADVST;
 		job.VstPath = path; job.PreInitPlugin = plugin;
-		station->OnAction(job); station->CommitChanges();
+		if(!job.VstManaged) EXPECT_TRUE(station->StageVstJob(job)); station->OnAction(job); station->CommitChanges();
 		return plugin;
 	};
 	auto removed = addPlugin(L"fixed-removed.dll"), survivor = addPlugin(L"fixed-survivor.dll");
@@ -2307,7 +2307,7 @@ TEST(AudioCallbackRealtime, MidiPublicationCableCancellationAndRetirementRetryDo
 	EXPECT_TRUE(survivor->HasNoteAt(60u, 384u)); EXPECT_TRUE(removed->HasNoteAt(62u, 384u));
 	removed->RejectSustainRelease = true;
 	actions::JobAction unload; unload.JobActionType = actions::JobAction::JOB_UNLOADVST; unload.VstIdentity = removed->StateId();
-	station->OnAction(unload); station->CommitChanges();
+	ASSERT_TRUE(station->StageVstJob(unload)); station->OnAction(unload); station->CommitChanges();
 	ASSERT_FALSE(station->OwnsPlugin(removed.get())); ASSERT_TRUE(station->OwnsPlugin(survivor.get()));
 	const auto activeCalls = removed->ProcessCalls;
 	measuredCallback(); // 512: retired processor runs release recovery, rejecting pedal-up.

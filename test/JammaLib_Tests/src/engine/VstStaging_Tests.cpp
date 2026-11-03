@@ -13,6 +13,7 @@
 #include "gui/VstRackControls.h"
 #include <functional>
 #include <sstream>
+#include <stdexcept>
 
 using actions::JobAction;
 using engine::Loop;
@@ -583,7 +584,7 @@ TEST(VstStaging, RapidMuteGroupRecallNeverTouchesStationOrTakePlugins)
   load.JobActionType = JobAction::JOB_LOADVST;
   load.VstPath = L"mute-recall.vst3";
   load.PreInitPlugin = plugin;
-  owner->OnAction(load);
+  if constexpr (requires { owner->StageVstJob(load); }) { if(!load.VstManaged) EXPECT_TRUE(owner->StageVstJob(load)); } owner->OnAction(load);
   owner->CommitChanges();
   ASSERT_EQ(owner->GetVstPlugin(0u), plugin);
   plugin->LifecycleCalls = 0u;
@@ -653,7 +654,7 @@ TEST(VstStaging, MuteGroupCreationAndOverwriteNeverCaptureOrInterruptBusyStation
   load.JobActionType = JobAction::JOB_LOADVST;
   load.VstPath = L"mute-store.vst3";
   load.PreInitPlugin = plugin;
-  owner->OnAction(load);
+  if constexpr (requires { owner->StageVstJob(load); }) { if(!load.VstManaged) EXPECT_TRUE(owner->StageVstJob(load)); } owner->OnAction(load);
   owner->CommitChanges();
   ASSERT_EQ(owner->GetVstPlugin(0u), plugin);
   plugin->LifecycleCalls = plugin->BypassCalls = 0u;
@@ -920,7 +921,7 @@ protected:
   load.JobActionType = JobAction::JOB_LOADVST;
   load.VstPath = L"reentrant.vst3";
   load.PreInitPlugin = plugin;
-  owner->OnAction(load);
+  if constexpr (requires { owner->StageVstJob(load); }) { if(!load.VstManaged) EXPECT_TRUE(owner->StageVstJob(load)); } owner->OnAction(load);
   owner->CommitChanges();
   ASSERT_EQ(owner->GetVstPlugin(0u), plugin);
 
@@ -930,7 +931,7 @@ protected:
    unload.JobActionType = JobAction::JOB_UNLOADVST;
    unload.VstIndex = 0u;
    unload.VstIdentity = identity;
-   owner->OnAction(unload);
+   if constexpr (requires { owner->StageVstJob(unload); }) { if(!unload.VstManaged) EXPECT_TRUE(owner->StageVstJob(unload)); } owner->OnAction(unload);
    reentered = true;
   };
   const auto entries = capture(*owner);
@@ -1106,7 +1107,7 @@ TEST_F(VstRackControlsTest, DelayedStationRemovalRejectsChangedRackRevisionAndRe
  JobAction installed; installed.JobActionType = JobAction::JOB_LOADVST;
  installed.VstPath = L"captured.vst3"; installed.VstIdentity = "captured";
  installed.PreInitPlugin = std::make_shared<StateGatePlugin>();
- Station->OnAction(installed); Station->CommitChanges(); Update();
+ if(!installed.VstManaged) EXPECT_TRUE(Station->StageVstJob(installed)); Station->OnAction(installed); Station->CommitChanges(); Update();
  const auto view = Station->GetGuiRack()->VstRack(); ASSERT_TRUE(view);
  const auto button = view->SlotButton(0u); ASSERT_TRUE(button);
  actions::TouchAction touch; touch.Index = 0; touch.Touch = actions::TouchAction::TOUCH_MOUSE;
@@ -1116,7 +1117,7 @@ TEST_F(VstRackControlsTest, DelayedStationRemovalRejectsChangedRackRevisionAndRe
  ASSERT_TRUE(Decision); EXPECT_FALSE(Decision->has_value());
  const auto revision = Station->RackRevision();
  installed.VstIdentity = "other"; installed.PreInitPlugin = std::make_shared<StateGatePlugin>();
- Station->OnAction(installed); Station->CommitChanges(); ASSERT_NE(revision,Station->RackRevision());
+ if(!installed.VstManaged) EXPECT_TRUE(Station->StageVstJob(installed)); Station->OnAction(installed); Station->CommitChanges(); ASSERT_NE(revision,Station->RackRevision());
  *Decision = true; Controls->Pump(); EXPECT_EQ(0u,Commits);
  EXPECT_EQ(2u,Station->RackSlotCount());
  Update();
@@ -1239,7 +1240,7 @@ TEST_F(VstRackControlsTest, FailedInteractiveAppendsRestoreEmptyRackAndLeaveOnly
 	for (auto job : jobs) {
 		if (job.JobActionType != JobAction::JOB_LOADVST) continue;
 		job.PreInitPlugin = std::make_shared<RackControlsFailedPlugin>();
-		Station->OnAction(job);
+		if(!job.VstManaged) EXPECT_TRUE(Station->StageVstJob(job)); Station->OnAction(job);
 		++loadCount;
 	}
 	ASSERT_EQ(2u, loadCount);
@@ -1259,7 +1260,7 @@ TEST_F(VstRackControlsTest, FailedSlotsShowRetryAtEachHierarchyLevel)
   job.JobActionType = JobAction::JOB_LOADVST;
   job.VstPath = path;
   job.PreInitPlugin = std::make_shared<RackControlsFailedPlugin>();
-  owner->OnAction(job);
+  if constexpr (requires { owner->StageVstJob(job); }) { if(!job.VstManaged) EXPECT_TRUE(owner->StageVstJob(job)); } owner->OnAction(job);
   owner->CommitChanges();
  };
  fail(Station, L"station-missing.vst3");
@@ -1314,7 +1315,7 @@ TEST_F(VstRackControlsTest, FailedStationAppendShowsErrorWithoutRedSlotOrRackInf
 	auto existing = std::make_shared<StateGatePlugin>();
 	JobAction installed; installed.JobActionType = JobAction::JOB_LOADVST;
 	installed.VstPath = L"existing.vst3"; installed.PreInitPlugin = existing;
-	Station->OnAction(installed); Station->CommitChanges();
+	if(!installed.VstManaged) EXPECT_TRUE(Station->StageVstJob(installed)); Station->OnAction(installed); Station->CommitChanges();
 	Pick = [] { return std::wstring{L"invalid-station.vst3"}; };
 	Update();
 	auto view = Station->GetGuiRack()->VstRack(); ASSERT_TRUE(view);
@@ -1328,7 +1329,7 @@ TEST_F(VstRackControlsTest, FailedStationAppendShowsErrorWithoutRedSlotOrRackInf
 	const auto load = std::find_if(jobs.begin(),jobs.end(),[](const auto& job) { return job.JobActionType == JobAction::JOB_LOADVST; });
 	ASSERT_NE(load,jobs.end());
 	auto failed = *load; failed.PreInitPlugin = std::make_shared<RackControlsFailedPlugin>();
-	Station->OnAction(failed); Station->CommitChanges();
+	if(!failed.VstManaged) EXPECT_TRUE(Station->StageVstJob(failed)); Station->OnAction(failed); Station->CommitChanges();
 	Controls->Pump(); Update();
 	ASSERT_EQ(1u,Errors.size());
 	EXPECT_NE(std::wstring::npos,Errors[0].find(L"invalid-station.vst3"));
@@ -1414,7 +1415,7 @@ TEST(VstStaging, RackMovePublishesMatchingIdentityDestinationsAndOrderDuringAnAc
  for (auto i = 0u; i < plugins.size(); ++i)
  {
   JobAction load; load.JobActionType = JobAction::JOB_LOADVST; load.VstPath = L"test-owned.vst3";
-  load.VstIdentity = ids[i]; load.PreInitPlugin = plugins[i]; station->OnAction(load);
+  load.VstIdentity = ids[i]; load.PreInitPlugin = plugins[i]; if(!load.VstManaged) EXPECT_TRUE(station->StageVstJob(load)); station->OnAction(load);
  }
  station->CommitChanges();
  midi::MidiChannelRoute cable; cable.PluginIds = {"instrument-b"};
@@ -1461,7 +1462,7 @@ protected:
   {
    plugins[i] = std::make_shared<RackOrderPlugin>(); plugins[i]->Value = static_cast<float>(i + 1u);
    JobAction load; load.JobActionType = JobAction::JOB_LOADVST; load.VstPath = L"order-" + std::to_wstring(i) + L".vst3";
-   load.VstIdentity = "order-" + std::to_string(i); load.PreInitPlugin = plugins[i]; owner->OnAction(load);
+   load.VstIdentity = "order-" + std::to_string(i); load.PreInitPlugin = plugins[i]; if constexpr (requires { owner->StageVstJob(load); }) { if(!load.VstManaged) EXPECT_TRUE(owner->StageVstJob(load)); } owner->OnAction(load);
   }
   owner->CommitChanges();
   vst::RackMove move{scope,owner->Id(),"order-0",0u,2u,owner->RackRevision()};
@@ -1583,7 +1584,7 @@ protected:
   for (auto i = 0u; i < plugins.size(); ++i)
   {
    JobAction load; load.JobActionType = JobAction::JOB_LOADVST; load.VstPath = L"scope-test.vst3";
-   load.VstIdentity = "scope-" + std::to_string(i); load.PreInitPlugin = plugins[i]; owner->OnAction(load);
+   load.VstIdentity = "scope-" + std::to_string(i); load.PreInitPlugin = plugins[i]; if constexpr (requires { owner->StageVstJob(load); }) { if(!load.VstManaged) EXPECT_TRUE(owner->StageVstJob(load)); } owner->OnAction(load);
   }
   owner->CommitChanges();
   EXPECT_FLOAT_EQ(5.0f,render()); // Instrument A -> effect -> additive B.
@@ -1607,4 +1608,83 @@ TEST_F(RackScopeRenderTest, TakeAndLoopPlaybackUseAdditiveInstrumentsAndOrderedE
  auto take = MakeTake("render-take"); take->SetNumBusChannels(1u); take->AddLoop(MakeLoop()); take->CommitChanges();
  Check(take,vst::RackMove::Scope::Take,[&] { sink->First = 0.0f; take->Zero(8u,base::Audible::AUDIOSOURCE_LOOPS); take->WriteBlock(sink,nullptr,0,8u); return sink->First; });
  EXPECT_EQ(6u,sink->Writes);
+}
+
+class ResetRackStation : public engine::Station
+{
+public:
+    ResetRackStation(engine::StationParams params):Station(params,Station::GetMixerParams(params.Size,MergeMixBehaviourParams{})) {}
+    auto PublishedState() const { return _AudioStateSnapshot(); }
+};
+
+class ResetRackPlugin final : public StateGatePlugin
+{
+public:
+    unsigned int Loads=0u;
+    bool Load(const std::wstring&,float,unsigned int,unsigned int,vst::HostedLayoutMode) override { ++Loads; return true; }
+    vst::RenderRole Role() const noexcept override { return vst::RenderRole::Instrument; }
+    vst::MidiInputCapabilities MidiInput() const noexcept override { return {true,true,true}; }
+};
+
+TEST(VstStaging, StationResetInvalidatesEveryOldRequestWithoutTouchingNewPendingCountAndResumesEmptyPublication)
+{
+    engine::StationParams params; params.Name="reset rack"; params.Size={200u,200u};
+    auto station=std::make_shared<ResetRackStation>(params); station->SetAllowedMidiChannels({2,5});
+    auto live=std::make_shared<ResetRackPlugin>();
+    JobAction installed; installed.JobActionType=JobAction::JOB_LOADVST; installed.VstPath=L"live.vst3"; installed.VstIdentity="same-slot"; installed.PreInitPlugin=live;
+    ASSERT_TRUE(station->StageVstJob(installed)); ASSERT_TRUE(station->OnAction(installed).IsEaten); station->CommitChanges();
+    ASSERT_EQ(live,station->GetVstPlugin(0u)); auto pinnedPublication=station->PublishedState(); ASSERT_FALSE(pinnedPublication->Midi.MidiDestinations.empty());
+    ASSERT_TRUE(station->LoadManagedVstSlot(L"pending.vst3")); const auto pending=station->CommitChanges();
+    auto managed=std::find_if(pending.begin(),pending.end(),[](const auto& job) { return job.JobActionType==JobAction::JOB_LOADVST; }); ASSERT_NE(pending.end(),managed);
+    auto staleManaged=*managed; auto stalePlugin=std::make_shared<ResetRackPlugin>(); staleManaged.PreInitPlugin=stalePlugin;
+    JobAction staleCompatible; staleCompatible.JobActionType=JobAction::JOB_LOADVST; staleCompatible.VstPath=L"queued.vst3"; staleCompatible.PreInitPlugin=std::make_shared<ResetRackPlugin>();
+    ASSERT_TRUE(station->StageVstJob(staleCompatible));
+    station->UnloadVstPlugin(0u); const auto unloading=station->CommitChanges();
+    const auto unload=std::find_if(unloading.begin(),unloading.end(),[](const auto& job) { return job.JobActionType==JobAction::JOB_UNLOADVST; }); ASSERT_NE(unloading.end(),unload); const auto staleUnload=*unload;
+    const auto revision=station->RackRevision(); station->ResetVstRackAfterReadersStopped();
+    EXPECT_GT(station->RackRevision(),revision); EXPECT_EQ(0u,station->RackSlotCount()); EXPECT_FALSE(station->GetVstRackSlot().Pending);
+    const auto empty=station->PublishedState(); ASSERT_TRUE(empty); ASSERT_TRUE(empty->Midi.MidiChain);
+    EXPECT_EQ(0u,empty->Midi.MidiChain->NumPlugins()); EXPECT_TRUE(empty->Midi.MidiDestinations.empty()); EXPECT_TRUE(empty->Midi.RetiredMidiDestinations.empty());
+    EXPECT_EQ((std::vector<int>{2,5}),station->AllowedMidiChannels());
+    auto replacement=std::make_shared<ResetRackPlugin>(); JobAction next=installed; next.PreInitPlugin=replacement;
+    ASSERT_TRUE(station->StageVstJob(next)); EXPECT_TRUE(station->GetVstRackSlot().Pending);
+    EXPECT_FALSE(station->OnAction(staleManaged).IsEaten); EXPECT_EQ(0u,stalePlugin->Loads);
+    EXPECT_FALSE(station->OnAction(staleCompatible).IsEaten); EXPECT_TRUE(station->GetVstRackSlot().Pending);
+    ASSERT_TRUE(station->OnAction(next).IsEaten); station->CommitChanges(); ASSERT_EQ(replacement,station->GetVstPlugin(0u));
+    EXPECT_FALSE(station->OnAction(staleUnload).IsEaten); station->CommitChanges(); EXPECT_EQ(replacement,station->GetVstPlugin(0u));
+    EXPECT_FALSE(station->GetVstRackSlot().Pending);
+    EXPECT_EQ(live,pinnedPublication->Midi.MidiChain->GetPlugin(0u)); // Owner pins keep retired publication valid until its reader ends.
+    pinnedPublication.reset(); station->ResetVstRackAfterReadersStopped();
+    EXPECT_EQ(0u,station->RackSlotCount());
+}
+
+TEST(VstStaging, EmptyResetRemovesFailedMissingInactiveAndPendingMetadataAndRejectsUnregisteredCompletion)
+{
+    vst::RackState rack;
+    io::JamFile::VstEntry failed; failed.Id="missing"; failed.Path="missing.vst3";
+    std::array<midi::MidiChannelRoute,16> routes{}; routes[4].PluginIds={"missing"};
+    rack.RestoreSaved({failed},routes,true); ASSERT_TRUE(rack.Inactive()); ASSERT_EQ(1u,rack.RackSlotCount());
+    rack.ResetAfterReadersStopped(); ASSERT_TRUE(rack.CommitChain()); EXPECT_FALSE(rack.Inactive()); EXPECT_FALSE(rack.LatencySuspended());
+    EXPECT_EQ(0u,rack.RackSlotCount()); EXPECT_TRUE(rack.RackDiagnostic().empty()); EXPECT_TRUE(rack.ChannelRoutes()[4].PluginIds.empty());
+    auto plugin=std::make_shared<ResetRackPlugin>(); JobAction unregistered; unregistered.JobActionType=JobAction::JOB_LOADVST; unregistered.VstPath=L"late.vst3"; unregistered.PreInitPlugin=plugin;
+    EXPECT_FALSE(rack.OnAction(unregistered,{44100.0f,128u,2u,0u},"reset",0u).IsEaten); EXPECT_EQ(0u,plugin->Loads);
+    ASSERT_TRUE(rack.StageCompatibleJob(unregistered)); EXPECT_TRUE(rack.OnAction(unregistered,{44100.0f,128u,2u,0u},"reset",0u).IsEaten);
+    ASSERT_TRUE(rack.CommitChain()); EXPECT_EQ(plugin,rack.GetVstPlugin(0u));
+}
+
+class ResetThrowingStatePlugin final : public StateGatePlugin
+{
+public:
+    void SetState(const std::vector<std::uint8_t>&) override { throw std::runtime_error("test-owned state failure"); }
+};
+
+TEST(VstStaging, ThrowingManagedStateFinishesOnlyOwnedRequestAndLeavesRecoverableNonpendingSlot)
+{
+    vst::RackState rack; ASSERT_TRUE(rack.LoadVstPlugin(L"throw-state.vst3",{1u},0u));
+    auto jobs=rack.TakePendingJobs(); ASSERT_EQ(1u,jobs.second.size()); auto job=jobs.second[0];
+    job.PreInitPlugin=std::make_shared<ResetThrowingStatePlugin>();
+    EXPECT_THROW(rack.OnAction(job,{44100.0f,128u,2u,0u},"throw",0u),std::runtime_error);
+    const auto slots=rack.GetVstRackSlots(); ASSERT_EQ(1u,slots.size()); EXPECT_FALSE(slots[0].Pending); EXPECT_TRUE(slots[0].Failed);
+    EXPECT_FALSE(rack.GetVstRackSlot().Pending); EXPECT_FALSE(rack.OnAction(job,{44100.0f,128u,2u,0u},"throw",0u).IsEaten);
+    rack.ResetAfterReadersStopped(); EXPECT_TRUE(rack.CommitChain()); EXPECT_EQ(0u,rack.RackSlotCount());
 }

@@ -233,7 +233,7 @@ static std::shared_ptr<StationMidiInstrumentFakePlugin> AddPlugin(const std::sha
 	job.JobActionType = JobAction::JOB_LOADVST;
 	job.VstPath = path;
 	job.PreInitPlugin = plugin;
-	station->OnAction(job);
+	if(!job.VstManaged) EXPECT_TRUE(station->StageVstJob(job)); station->OnAction(job);
 	station->CommitChanges();
 	return plugin;
 }
@@ -584,6 +584,7 @@ TEST(StationMidiInstrument, ShutdownReleasesRemovedPluginHeldByPlaybackRoute)
 	unload.JobActionType = JobAction::JOB_UNLOADVST;
 	unload.VstIndex = 0u;
 	unload.VstIdentity = plugin->StateId();
+	ASSERT_TRUE(station->StageVstJob(unload));
 	station->OnAction(unload);
 	station->CommitChanges();
 	std::weak_ptr<vst::IVstPlugin> lifetime = plugin;
@@ -1859,6 +1860,7 @@ TEST(StationMidiInstrument, RemovedDestinationCancelsQueuedShortNoteAndReclaimsP
 	unload.JobActionType = JobAction::JOB_UNLOADVST;
 	unload.VstIndex = 0u;
 	unload.VstIdentity = plugin->StateId();
+	ASSERT_TRUE(station->StageVstJob(unload));
 	station->OnAction(unload);
 	station->CommitChanges();
 	RenderStationBlock(station, 128u); // Retired destination queue is discarded even with no active chain.
@@ -2923,4 +2925,30 @@ TEST(StationMidiInstrument, ExplicitEarlierMidiOrMixedSourceRetainsMaterialAndIt
 		EXPECT_EQ(bRevision, b->GetMidiLoops().front()->Revision());
 		for (std::size_t i = 0u; i < audioBefore.size(); ++i) EXPECT_EQ(audioBefore[i], a->GetLoops()[i]->ExportSamples());
 	}
+}
+
+TEST(StationMidiInstrument, ResetModesReleaseSoundedNoteAndPedalBeforeRetirementOrThroughExistingResumeRetry)
+{
+    for(const bool removeVsts:{false,true})
+    {
+        SCOPED_TRACE(removeVsts);
+        auto station=MakeStation("reset-mode-midi"); auto plugin=AddPlugin(station,L"reset-mode-midi.dll");
+        ASSERT_TRUE(station->TryEnqueueImmediateLiveMidi(MidiEvent::MakeNoteOn(0u,0u,60u,100u)));
+        ASSERT_TRUE(station->TryEnqueueImmediateLiveMidi({1u,0xb0u,64u,127u})); RenderStationBlock(station,0u);
+        ASSERT_EQ(2u,plugin->Events.size()); plugin->Events.clear();
+        station->ResetLiveMidiWhileQuiescent(); EXPECT_TRUE(plugin->Events.empty());
+        if(removeVsts)
+        {
+            station->ResetVstRackAfterReadersStopped(); EXPECT_EQ(0u,station->RackSlotCount());
+            EXPECT_EQ(nullptr,station->GetVstPlugin(0u));
+        }
+        else
+        {
+            plugin->MaxAcceptedPerBlock=0u; RenderStationBlock(station,128u); EXPECT_TRUE(plugin->Events.empty());
+            plugin->MaxAcceptedPerBlock=64u; RenderStationBlock(station,256u); EXPECT_EQ(plugin,station->GetVstPlugin(0u));
+        }
+        EXPECT_EQ(1u,std::count_if(plugin->Events.begin(),plugin->Events.end(),[](const auto& event) { return event.IsNoteOff() && event.data1==60u; }));
+        EXPECT_EQ(1u,std::count_if(plugin->Events.begin(),plugin->Events.end(),[](const auto& event) { return event.MessageType()==0xb0u && event.data1==64u && event.data2==0u; }));
+        const auto count=plugin->Events.size(); RenderStationBlock(station,384u); EXPECT_EQ(count,plugin->Events.size());
+    }
 }

@@ -330,10 +330,11 @@ bool SessionControl::_ValidateAudioDraft(std::string& error, const Effects& effe
 	return true;
 }
 
-void SessionControl::RequestReset(const Effects& effects)
+void SessionControl::RequestReset(const Effects& effects,SessionResetMode mode)
 {
 	if (Current() != None || HoldsWriter() || !_rig->EditsEnabled() || effects.CheckEligibility().StructuralBusy)
 	{ ReportFileOutcome("Another operation is busy; retry Reset All"); return; }
+    _resetMode=mode;
 	Begin(ResetSession);
 	ReportFileStatus("Waiting to reset session");
 }
@@ -623,7 +624,7 @@ void SessionControl::_ApplyAdmittedOperation(const audio::AudioStreamParams& act
 		{
 			if (effects.CheckEligibility().StructuralBusy || !effects.ResetSessionWhileQuiescent)
 				ReportFileOutcome("Another operation is busy; retry Reset All");
-			else { effects.ResetSessionWhileQuiescent(); ClearJamDestination(); ReportFileOutcome("Session reset"); }
+			else { effects.ResetSessionWhileQuiescent(_resetMode); ClearJamDestination(); ReportFileOutcome("Session reset"); }
 			FinishOperation(nullptr, access); return;
 		}
 		if (Current() != SessionControl::Midi && effects.CheckEligibility().CaptureBusy)

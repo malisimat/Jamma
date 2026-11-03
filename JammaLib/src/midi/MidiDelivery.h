@@ -147,6 +147,7 @@ namespace midi
 		bool TryEnqueueSourceLossRelease(const MidiEvent& event, std::uint32_t revision) noexcept
 		{ return _TryEnqueueSyntheticMidi({event, nullptr, true, revision}); }
 		void ResetLiveMidiWhileQuiescent() noexcept;
+        static void FinalReleaseWhileQuiescent(const PreparedState& state) noexcept;
 		std::uint32_t LiveSustainRevision(unsigned int channel) const noexcept
 		{ return _liveSustainRevisions[channel].load(std::memory_order_acquire); }
 		std::uint32_t LiveNoteOnRevision(std::size_t slot) const noexcept

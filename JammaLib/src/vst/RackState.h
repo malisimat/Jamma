@@ -70,9 +70,16 @@ namespace vst
 		void RestoreSaved(const std::vector<io::JamFile::VstEntry>& entries, std::array<midi::MidiChannelRoute,16> routes, bool inactive);
 		static void RetireChain(std::shared_ptr<VstChain> chain);
 		void RetireChainsOnUiThread() const;
-		void ClearAfterReadersStopped();
+        void ClearAfterReadersStopped();
+        void ResetAfterReadersStopped();
+        bool StageCompatibleJob(actions::JobAction& action);
 
-	private:
+    private:
+        struct Request { std::string Id,Slot; actions::JobAction::JobType Type; };
+        std::vector<Request> _requests; // Structural owner, exact outstanding work only.
+        void _StageRequestLocked(actions::JobAction& action);
+        bool _OwnsRequestLocked(const actions::JobAction& action) const;
+        void _FinishRequestLocked(const actions::JobAction& action);
 		// VST insert chain applied after all LoopTakes are mixed down,
 		// just before each channel is sent to the output AudioMixer.
 		// Published atomically for lock-free audio-thread reads.

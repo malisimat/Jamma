@@ -2691,12 +2691,16 @@ TEST(Scene, MiddleMutePaintAppliesImmediatelySuppressesHoverAndPreservesOtherTak
 	scene.SetHover3d(midiPath, base::Action::MODIFIER_NONE);
 	scene.OnAction(down);
 	EXPECT_FALSE(midiTake->IsMuted()); // Preview only until drag/release.
-	scene.OnAction(MakeSceneTouchMove(scene.CanvasPointForTest({5, 0}), 2u));
-	EXPECT_TRUE(midiTake->IsMuted());
+    scene.OnAction(MakeSceneTouchMove(scene.CanvasPointForTest({5,0}),2u));
+    ASSERT_TRUE(scene.DesiredMuteForTest({engine::GroupTargetKind::Take,station->Id(),midiTake->Id(),{}}));
+    EXPECT_FALSE(midiTake->IsMuted()); ASSERT_TRUE(scene.ApplyMuteBoundaryForTest());
+    EXPECT_TRUE(midiTake->IsMuted());
 	EXPECT_FALSE(midiModel->IsPicking3d());
 	EXPECT_FALSE(midiTake->GetMidiLoops()[1]->Model()->IsPicking3d());
-	scene.SetHover3d(audioPath, base::Action::MODIFIER_NONE);
-	EXPECT_TRUE(audioLoop->IsMuted());
+    scene.SetHover3d(audioPath,base::Action::MODIFIER_NONE);
+    ASSERT_TRUE(scene.DesiredMuteForTest({engine::GroupTargetKind::AudioLoop,station->Id(),audioTake->Id(),audioLoop->Id()}));
+    EXPECT_FALSE(audioLoop->IsMuted()); ASSERT_TRUE(scene.ApplyMuteBoundaryForTest());
+    EXPECT_TRUE(audioLoop->IsMuted());
 	EXPECT_FALSE(audioLoop->IsPicking3d());
 	scene.SetHover3d(midiPath, base::Action::MODIFIER_NONE);
 	EXPECT_TRUE(midiTake->IsMuted()); // Revisiting never toggles a painted item.
@@ -2708,10 +2712,14 @@ TEST(Scene, MiddleMutePaintAppliesImmediatelySuppressesHoverAndPreservesOtherTak
 	// The cached MIDI target must resolve its take's muted state for the next stroke.
 	scene.OnAction(down);
 	EXPECT_TRUE(midiTake->IsMuted());
-	scene.OnAction(MakeSceneTouchMove(scene.CanvasPointForTest({5, 0}), 2u));
-	EXPECT_FALSE(midiTake->IsMuted());
-	scene.SetHover3d(audioPath, base::Action::MODIFIER_NONE);
-	EXPECT_FALSE(audioLoop->IsMuted());
+    scene.OnAction(MakeSceneTouchMove(scene.CanvasPointForTest({5,0}),2u));
+    EXPECT_FALSE(scene.DesiredMuteForTest({engine::GroupTargetKind::Take,station->Id(),midiTake->Id(),{}}));
+    EXPECT_TRUE(midiTake->IsMuted()); ASSERT_TRUE(scene.ApplyMuteBoundaryForTest());
+    EXPECT_FALSE(midiTake->IsMuted());
+    scene.SetHover3d(audioPath,base::Action::MODIFIER_NONE);
+    EXPECT_FALSE(scene.DesiredMuteForTest({engine::GroupTargetKind::AudioLoop,station->Id(),audioTake->Id(),audioLoop->Id()}));
+    EXPECT_TRUE(audioLoop->IsMuted()); ASSERT_TRUE(scene.ApplyMuteBoundaryForTest());
+    EXPECT_FALSE(audioLoop->IsMuted());
 	EXPECT_FALSE(audioLoop->IsPicking3d());
 	scene.OnAction(up);
 	EXPECT_TRUE(audioLoop->IsPicking3d());
@@ -2721,8 +2729,10 @@ TEST(Scene, MiddleMutePaintAppliesImmediatelySuppressesHoverAndPreservesOtherTak
 	scene.SetHover3d(midiPath, base::Action::MODIFIER_NONE);
 	scene.OnAction(down);
 	scene.SetHover3d(audioPath, base::Action::MODIFIER_NONE);
-	scene.OnAction(up);
-	EXPECT_TRUE(midiTake->IsMuted());
+    scene.OnAction(up);
+    ASSERT_TRUE(scene.DesiredMuteForTest({engine::GroupTargetKind::Take,station->Id(),midiTake->Id(),{}}));
+    EXPECT_FALSE(midiTake->IsMuted()); ASSERT_TRUE(scene.ApplyMuteBoundaryForTest());
+    EXPECT_TRUE(midiTake->IsMuted());
 	EXPECT_FALSE(audioLoop->IsMuted());
 	EXPECT_TRUE(untouched->IsMuted());
 }

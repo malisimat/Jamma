@@ -304,8 +304,9 @@ namespace engine
 
 		// Pass a locked station list or a snapshot; remote updates can erase entries.
 		void _HandleReclockArm();
-		void _ResetSessionWhileQuiescent();
+		void _ResetSessionWhileQuiescent(SessionResetMode mode);
 		gui::RuntimeDialogDecision _resetAllDecision;
+        SessionResetMode _resetDecisionMode=SessionResetMode::PreserveStationVsts;
 		void _SetQuantisation(unsigned int quantiseSamps, utils::Timer::QuantisationType quantisation);
 		void _SetMidiQuantisationGrain(unsigned int grainSamps, const char* source);
 		void _SetGlobalMidiQuantState(io::JamFile::GlobalMidiQuantState state, bool fromLocalEdit = false);

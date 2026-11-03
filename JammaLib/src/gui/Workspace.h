@@ -166,6 +166,7 @@ namespace gui
 		void CloseTakeDitch() { _popupManager.Close(_takeDitchDialog); }
 		void CloseStationRemoval() { _popupManager.Close(_stationDeleteDialog); }
 		void PumpNativeControls() { _racks->Pump(); _runtimeDialogs.Pump(_popupManager, _size, _runtimeRendererReady); }
+        void ResetSessionEditor() { _editor->ResetSession(); _undoHistory.Clear(); }
 		void ResetRackControls() { _racks->Reset(); }
 		void FinishRenderer() { _runtimeRendererReady = false; _runtimeDialogs.Pump(_popupManager, _size, false); }
 		void InitNoticeResources(resources::ResourceLib& resources, bool forceInit)

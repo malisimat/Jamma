@@ -426,7 +426,7 @@ bool Scene::AdvanceUiAnimations()
 	if (_resetAllDecision && _resetAllDecision->has_value())
 	{
 		const bool accepted = **_resetAllDecision; _resetAllDecision.reset();
-		if (accepted) _operation.RequestReset(_ControlEffects());
+		if (accepted) _operation.RequestReset(_ControlEffects(),_resetDecisionMode);
 	}
 	if (_quantisationInputResetRequested.exchange(false, std::memory_order_acq_rel))
 		_workspace->ReleaseQuantisationInput({ _sceneMutex, _stations }, _WorkspaceInputPresentation());
@@ -562,13 +562,20 @@ ActionResult Scene::OnAction(GuiAction action)
 			_ApplyNinjamTimingUpdate(_networkService->RequestSyncToServer());
 		}
 	}
-	else if (std::holds_alternative<Settings::ResetAll>(*change))
+	else if (const auto reset=std::get_if<Settings::ResetAll>(&*change))
 	{
 		if (_operation.Current() != SessionControl::None || _operation.HoldsWriter() || _stationManagement.Busy() ||
 			_operation.RigSaveInProgress() || _operation.RigSaveDialogOpen())
 		{ _operation.ReportFileOutcome("Another operation is busy; retry Reset All"); return ActionResult::NoAction(); }
-		if (!_resetAllDecision) _resetAllDecision = _workspace->Notices().Confirm("Reset All?",
-			"Disconnect NINJAM, discard every take and reset mixer faders to 0 dB. The rig, routing and station plugins are retained. This cannot be undone.", "Reset All");
+        if(!_resetAllDecision)
+        {
+            _resetDecisionMode=reset->Mode;
+            const bool remove=reset->Mode==SessionResetMode::RemoveStationVsts;
+            _resetAllDecision=_workspace->Notices().Confirm(remove ? "Reset Session + VSTs?" : "Reset Session?",
+                remove ? "Disconnect NINJAM, discard all takes, unload every station VST and reset mixer faders. Devices and input routing are retained. This cannot be undone."
+                : "Disconnect NINJAM, discard all takes and reset mixer faders. Station VST instances, settings, routing and editors are retained. This cannot be undone.",
+                remove ? "Reset Session + VSTs" : "Reset Session");
+        }
 	}
 	else if (std::holds_alternative<Settings::TapTempo>(*change))
 	{
@@ -1059,13 +1066,15 @@ void Scene::Reset()
 	_cameraRecordings->Reset(Timer::GetTime());
 }
 
-void Scene::_ResetSessionWhileQuiescent()
+void Scene::_ResetSessionWhileQuiescent(SessionResetMode mode)
 {
 	// SessionControl owns the writer lease: job/input producers and audio readers
 	// are stopped before resetting trigger queues or retiring take material.
-	DisconnectNinjam();
-	_workspace->Editor().Close();
-	_workspace->Editor().ClearSelectionHistory();
+    DisconnectNinjam();
+    if(mode==SessionResetMode::RemoveStationVsts)
+        for(const auto& station:SnapshotStations()) if(station && !station->IsRemote()) _windowSubsystem->CloseVstEditorsForStation(station);
+    _workspace->ResetRackControls();
+    _workspace->ResetSessionEditor();
 	_workspace->CancelBackgroundClick();
 	// Slider cancellation can notify Scene; finish it before taking the scene lock.
 	_workspace->Settings().Offset()->ClearPointerState();
@@ -1099,11 +1108,13 @@ void Scene::_ResetSessionWhileQuiescent()
 				take->DeSelect();
 				if (station->DitchTake(take)) discarded.push_back(take);
 			}
-			station->DeSelect();
-			// Update only existing mixer values; rebuilding channels erases cables.
+            station->DeSelect();
+            station->SetRetainedMuted(false);
+            // Update only existing mixer values; rebuilding channels erases cables.
 			station->RestoreMixerLevels(audio::AudioMixer::DefaultLevel,
 				std::vector<double>(station->NumBusChannels(), audio::AudioMixer::DefaultLevel));
 			auto jobs = station->CommitChanges();
+            if(mode==SessionResetMode::RemoveStationVsts) station->ResetVstRackAfterReadersStopped();
 			retainedJobs.insert(retainedJobs.end(), std::make_move_iterator(jobs.begin()), std::make_move_iterator(jobs.end()));
 		}
 		_transportOffsetLoopFrac = 0.0;
@@ -1117,7 +1128,8 @@ void Scene::_ResetSessionWhileQuiescent()
 	}
 	// Detached take jobs are rejected by _JobReceiverAvailableLocked. Preserve
 	// surviving station rack jobs and editors, while closing retired take editors.
-	for (const auto& take : discarded) _windowSubsystem->CloseVstEditorsForTake(take);
+	for (const auto& take : discarded)
+    { _windowSubsystem->CloseVstEditorsForTake(take); take->ForceUnloadAllVstPlugins(); }
 	if (!retainedJobs.empty()) _QueueJobs(std::move(retainedJobs));
 	_workspace->Settings().RefreshOffsetPresentation(_transportOffsetLoopFrac);
 }
@@ -2353,7 +2365,7 @@ SessionControl::Effects Scene::_ControlEffects()
 				_globalMidiQuantState, _transportOffsetLoopFrac, _userConfig, actual, _audioEngine.get(), _sceneMutex,
 				_networkService->GetController(), folder, restore, eligible, &_performanceGroups.Groups());
 		},
-		[this] { _ResetSessionWhileQuiescent(); }
+		[this](SessionResetMode mode) { _ResetSessionWhileQuiescent(mode); }
 	};
 }
 

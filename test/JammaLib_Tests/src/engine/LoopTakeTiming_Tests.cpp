@@ -1452,9 +1452,13 @@ TEST(AudioLoopShift, HierarchyOffsetsComposeAndResetIndependently)
 TEST(AudioLoopShift, HandleChangesAudioOnlyAndDoubleClickResetsAcceptedOffset)
 {
 	auto take = MakeTimingTestLoopTake("audio-shft");
+    take->Record({},"audio-shift");
 	auto loop = MakeTimingLoop(1000ul, true);
 	loop->SetBodyPlayIndex(300ul);
 	take->AddLoop(loop); take->CommitChanges();
+    take->Play(constants::MaxLoopFadeSamps,1000u,0u);
+    ASSERT_EQ(engine::LoopTake::STATE_PLAYING,take->TakeState()); ASSERT_TRUE(take->HasCompletedTimingMaterial());
+    loop->SetBodyPlayIndex(300ul);
 	take->SetMidiVisualPosition(300ul, 1000ul);
 	auto station = std::make_shared<engine::Station>(engine::StationParams{}, engine::Station::GetMixerParams({100,100}, MergeMixBehaviourParams{}));
 	station->AddTake(take); station->CommitChanges();

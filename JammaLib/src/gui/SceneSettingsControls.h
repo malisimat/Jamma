@@ -10,6 +10,7 @@
 #include "GuiNumericInput.h"
 #include "GuiSlider.h"
 #include "../io/JamFile.h"
+#include "../engine/SessionControls.h"
 #include "../audio/AudioDevice.h"
 #include "../midi/MidiDevice.h"
 #include "GuiDropDown.h"
@@ -48,7 +49,7 @@ namespace gui
 		struct Reclock {};
         struct UseMaster {};
 		struct SyncToServer {};
-		struct ResetAll {};
+		struct ResetAll { engine::SessionResetMode Mode=engine::SessionResetMode::PreserveStationVsts; };
 		struct SaveSession { bool ChooseFolder; bool AsDefault; };
 		struct LoadSession {};
 		struct RefreshMidi {};
@@ -126,6 +127,7 @@ namespace gui
 		static constexpr unsigned int DefaultSessionControlIndex = 7212u;
 		static constexpr unsigned int SaveSessionAsControlIndex = 7213u;
 		static constexpr unsigned int ResetAllControlIndex = 7214u;
+        static constexpr unsigned int ResetWithVstsControlIndex=7215u;
 		static constexpr unsigned int ReclockControlIndex = 7006u;
         static constexpr unsigned int UseMasterControlIndex = 7010u;
 		static constexpr unsigned int SyncToServerControlIndex = 7007u;
@@ -145,7 +147,7 @@ namespace gui
 		std::shared_ptr<GuiSlider> _metronomeLevel;
 		std::shared_ptr<GuiRadio> _globalMidiQuantRadio;
 		std::shared_ptr<GuiRadio> _midiSubdivisionRadio;
-		std::shared_ptr<GuiButton> _tapButton, _reclockButton, _useMasterButton, _syncToServerButton, _resetAllButton;
+		std::shared_ptr<GuiButton> _tapButton, _reclockButton, _useMasterButton, _syncToServerButton, _resetAllButton, _resetWithVstsButton;
 		std::shared_ptr<GuiButton> _saveButton, _saveDefaultJamButton, _loadButton, _saveAsJamButton;
 		std::shared_ptr<GuiLabel> _deviceStatus, _activeAudioStatus, _fileStatus, _ninjamStatus, _masterStatus, _masterTarget;
 		std::vector<std::string> _audioChoiceNames;

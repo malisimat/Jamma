@@ -62,7 +62,7 @@ namespace engine
 			std::function<Eligibility()> CheckEligibility;
 			std::function<void(const RuntimeAvailability&)> ApplyRuntimeAvailabilityLocked;
 			std::function<io::IoSessionExporter::ExportResult(const std::wstring&, const audio::AudioStreamParams&, const Restore&, const Restore&)> CaptureSession;
-			std::function<void()> ResetSessionWhileQuiescent;
+			std::function<void(SessionResetMode)> ResetSessionWhileQuiescent;
 		};
 		template<class T> struct Candidate { T Value; std::uint64_t Revision = 0u; };
 		struct Notice { std::string Title, Message; };
@@ -113,7 +113,7 @@ namespace engine
 		void SetMidiInputInventory(midi::MidiInputInventory inventory) override { _midiInputInventory = std::move(inventory); }
 		void SetHardwarePreferenceSaver(std::function<bool(const io::RigFile&)> saver) { _saveHardwarePreferences = std::move(saver); }
 		bool SaveHardwarePreferences(const io::RigFile& rig) const { return _saveHardwarePreferences && _saveHardwarePreferences(rig); }
-		void RequestReset(const Effects& effects);
+		void RequestReset(const Effects& effects,SessionResetMode mode=SessionResetMode::PreserveStationVsts);
 		void ClearJamDestination() { _currentJamPath.clear(); _sessionSaveFolder.clear(); }
 		void RequestSave(bool chooseFolder, bool asDefault, const Effects& effects);
 		void PickSessionForLoad(const Effects& effects);
@@ -253,6 +253,7 @@ namespace engine
 		void _RefreshPresentation() { _presentation.PagesChanged = true; _displayedMidiState = MidiSnapshot(); _devicePageDirty = false; }
 		void _Notice(std::string title, std::string message) { _presentation.Notices.push_back({std::move(title),std::move(message)}); }
 		Kind _kind = None;
+        SessionResetMode _resetMode=SessionResetMode::PreserveStationVsts;
 		std::uint64_t _identity = 0u, _revision = 0u;
 		std::mutex _lifecycleMutex;
 		std::unique_lock<std::mutex> _writer;

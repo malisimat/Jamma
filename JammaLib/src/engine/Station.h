@@ -324,7 +324,10 @@ namespace engine
 		bool RackLatencySuspended() const noexcept { return _rackState.LatencySuspended(); }
 		bool LoadManagedVstPlugin(std::wstring path);
 		bool UnloadManagedVstPlugin(const std::string& identity);
-		void ForceUnloadAllVstPlugins();
+        void ResetVstRackAfterReadersStopped();
+        // Compatibility producers must stage before PreInit/queue; completion never creates admission.
+        bool StageVstJob(actions::JobAction& action);
+        void ForceUnloadAllVstPlugins();
 
 		// Non-RT accessor to retrieve a loaded plugin instance (or nullptr).
 		std::shared_ptr<vst::IVstPlugin> GetVstPlugin(size_t index) const;

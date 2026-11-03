@@ -70,3 +70,27 @@ atomic publication rules; a lease protects lifetime only. Before
 destroying the snapshot owner, stop its audio reader and release all leases.
 Call `collect` from a writer or another non-callback pump so retired objects
 whose leases ended can be reclaimed even when no further publication occurs.
+
+
+### Session reset and rack retirement
+
+Both session reset modes share SessionControl's existing lifecycle writer and
+callback drain. Reset Session retains Station VST instances and exact pending
+requests. Reset Session + VSTs closes native editors outside the Scene lock,
+invalidates all original rack requests, clears every slot and its plugin routes,
+and publishes operational empty audio, MIDI delivery and automation state.
+It does not use Station's shutdown-only force-unload path. Removed takes use their
+existing terminal retirement path; surviving stations remain editable.
+
+Rack completions must match the original staged request ID, slot identity and job
+type before SDK load and installation. A stale request cannot decrement another
+request's pending count. UI PreInit and job queueing preserve the original token;
+compatibility producers explicitly stage before either step. Managed SDK failure
+finishes its exact pending identity and retires the local processor on the UI
+queue, then preserves Scene's existing fatal job failure policy.
+
+Only the drained VST-removal reset makes a bounded final note/pedal release
+attempt before removing destinations. Ordinary reset retains existing deferred
+release retries on resume. Plugin destruction remains on the UI destroy queue
+once all published-state/editor pins have been released. No reset preparation,
+slot allocation, SDK lifecycle call or plugin retirement runs on the callback.

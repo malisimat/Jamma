@@ -209,7 +209,8 @@ SceneSettingsControls::SceneSettingsControls(std::uint8_t channel, double offset
     _masterStatus=_StatusLabel("No chosen master",44u);
 	_syncToServerButton = _SessionButton("Sync to server");
 	_ninjamStatus = _StatusLabel("NINJAM disconnected", 44u);
-	_resetAllButton = _SessionButton("Reset All");
+	_resetAllButton = _SessionButton("Reset Session");
+    _resetWithVstsButton=_SessionButton("Reset Session + VSTs");
 
 }
 
@@ -228,6 +229,7 @@ std::vector<GuiSettingEntry> SceneSettingsControls::SettingsEntries() const
 		{ SettingsPage::Timing, "", _syncToServerButton, SyncToServerControlIndex },
 		{ SettingsPage::Timing, "", _ninjamStatus, 0u },
 		{ SettingsPage::Session, "", _resetAllButton, ResetAllControlIndex },
+        {SettingsPage::Session,"",_resetWithVstsButton,ResetWithVstsControlIndex},
 		{ SettingsPage::Midi, "MIDI channel override", _midiChannelOverride, MidiChannelOverrideControlIndex },
 		{ SettingsPage::Midi, "", std::make_shared<GuiLabel>(GuiLabelParams::PanelHeader("All off = unchanged", 300u)), 0u },
 		{ SettingsPage::Timing, "", _ninjamMetronomeToggle, NinjamMetronomeControlIndex },
@@ -253,6 +255,7 @@ std::optional<SceneSettingsControls::Change> SceneSettingsControls::Decode(const
     if (action.ElementType==GuiAction::ACTIONELEMENT_BUTTON && action.Index==UseMasterControlIndex) return UseMaster{};
 	if (action.ElementType == GuiAction::ACTIONELEMENT_BUTTON && action.Index == SyncToServerControlIndex) return SyncToServer{};
 	if (action.ElementType == GuiAction::ACTIONELEMENT_BUTTON && action.Index == ResetAllControlIndex) return ResetAll{};
+    if(action.ElementType==GuiAction::ACTIONELEMENT_BUTTON && action.Index==ResetWithVstsControlIndex) return ResetAll{engine::SessionResetMode::RemoveStationVsts};
 	if (auto value = std::get_if<GuiAction::GuiInt>(&action.Data))
 	{
 		if (action.ElementType == GuiAction::ACTIONELEMENT_RADIO)

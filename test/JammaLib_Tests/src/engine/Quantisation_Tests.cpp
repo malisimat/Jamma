@@ -1382,13 +1382,15 @@ TEST(Quantisation, ConnectedSoleMasterTapPreparesLocalTimingBeforeRequestingServ
     EXPECT_TRUE(quantiser.LocalMasterTimingPending());
     EXPECT_FALSE(quantiser.HasActivatedLocalMaster({ station }));
     EXPECT_FALSE(take->ResolvedMidiQuantisation().HasRemoteGrid());
-    EXPECT_TRUE(quantiser.HandleTapTempo(36000u, 48000u, { station }, config, true));
-    EXPECT_EQ(2u, publications);
-    EXPECT_EQ(2u, quantiser.PendingLocalMasterTimingVersion());
-    EXPECT_NE(24000u, requested.SeedSamps);
+    const auto firstRequest=requested;
+    const auto pendingGrain=quantiser.EffectiveSamps();
+    EXPECT_FALSE(quantiser.HandleTapTempo(36000u, 48000u, { station }, config, true)); // Applying is busy, never replaces an activation claim.
+    EXPECT_EQ(1u,publications); EXPECT_EQ(1u,quantiser.PendingLocalMasterTimingVersion());
+    EXPECT_EQ(firstRequest.SeedSamps,requested.SeedSamps); EXPECT_EQ(firstRequest.MasterLoopSamps,requested.MasterLoopSamps);
+    EXPECT_EQ(firstRequest.Bpi,requested.Bpi); EXPECT_EQ(firstRequest.Bpm,requested.Bpm); EXPECT_EQ(pendingGrain,quantiser.EffectiveSamps());
     EXPECT_EQ(192000ul, clock->SeedSourceLength());
     EXPECT_FALSE(quantiser.HasActivatedLocalMaster({ station }));
-    quantiser.CancelLocalMasterTiming(2u);
+    quantiser.CancelLocalMasterTiming(1u);
     EXPECT_FALSE(quantiser.HasActivatedLocalMaster({ station }));
     station->AddTake(MakeQuantisationContractTake("second", 96000ul));
     EXPECT_FALSE(quantiser.CanEditMasterTempo({ station }));
