@@ -301,10 +301,14 @@ std::string SceneSettingsControls::FormatOffset(double acceptedOffset)
 	return text;
 }
 
-void SceneSettingsControls::RefreshMasterPresentation(const std::string& target,const std::string& status,const std::string& current)
+void SceneSettingsControls::RefreshMasterPresentation(const std::string& target, const std::string& status, const std::string& current)
 {
-    _masterTarget->SetString(target.empty() ? "Choose a take or loop - Shift-click" : "Target: "+target+" - Shift-click");
-    _masterStatus->SetString((current.empty() ? "No chosen master" : "Current master: "+current)+(status.empty() ? "" : "\n"+status));
+	_masterTarget->SetString(target.empty() ? "Select a take or loop, or Shift-click one" : "Target: " + target);
+	std::string text = current.empty() ? "No chosen master" : "Master: " + current;
+	// Accepted/unchanged feedback already names the master shown above.
+	if (!status.empty() && status != "Current master - " + current && status != "Already master - " + current)
+		text += "\n" + status;
+	_masterStatus->SetString(text);
 }
 
 void SceneSettingsControls::RefreshOffsetPresentation(double acceptedOffset)
