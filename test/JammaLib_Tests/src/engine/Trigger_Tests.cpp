@@ -2804,6 +2804,41 @@ public:
 
 };
 
+TEST(Scene, EditorPrefersSelectedHoverThenRecentSelectionAndUsesHoverWithoutSelection)
+{
+	for (const auto depth : {Scene::VIEW_LOOPTAKE, Scene::VIEW_LOOP})
+	{
+		SCOPED_TRACE(::testing::Message() << "selection depth " << depth);
+		SceneParams params{base::DrawableParams(), base::MoveableParams(), base::SizeableParams({1400u, 900u})};
+		TestScene scene(params, {}); scene.PauseJobForTest();
+		auto station = MakeTestStation("editor-hover"); scene.AddStationForTest(station);
+		auto first = EditorSelectionTestData::AddMidiTake(station, {0u}, 0);
+		auto recent = EditorSelectionTestData::AddMidiTake(station, {1u}, 1);
+		auto unselected = EditorSelectionTestData::AddMidiTake(station, {2u}, 2);
+		scene.SetSelectionDepthForTest(depth);
+		EditorSelectionTestData::PaintSelection(scene, first->GetMidiLoops()[0]->Model());
+		EditorSelectionTestData::PaintSelection(scene, recent->GetMidiLoops()[0]->Model());
+		ASSERT_TRUE(first->IsSelected()); ASSERT_TRUE(recent->IsSelected()); ASSERT_FALSE(unselected->IsSelected());
+		// Hovering an unselected take must not prevent E from opening the last selection.
+		EditorSelectionTestData::Hover(scene, unselected->GetMidiLoops()[0]->Model());
+		EditorSelectionTestData::OpenKey(scene); ASSERT_EQ(recent, scene.LoopGridEditorTake());
+		EditorSelectionTestData::Close(scene);
+		EditorSelectionTestData::Hover(scene, first->GetMidiLoops()[0]->Model());
+		EditorSelectionTestData::OpenKey(scene); ASSERT_EQ(first, scene.LoopGridEditorTake());
+		EditorSelectionTestData::Close(scene);
+		first->DeSelect(); recent->DeSelect();
+		EditorSelectionTestData::Hover(scene, unselected->GetMidiLoops()[0]->Model());
+		EditorSelectionTestData::OpenKey(scene); ASSERT_EQ(unselected, scene.LoopGridEditorTake());
+		EXPECT_FALSE(unselected->IsSelected()); // Opening hover must not change persistent selection.
+		EditorSelectionTestData::Close(scene);
+		scene.SetHover3d({}, base::Action::MODIFIER_NONE);
+		EditorSelectionTestData::OpenKey(scene); EXPECT_FALSE(scene.IsLoopGridEditorOpen());
+		unselected->GetMidiLoops()[0]->StartRecord();
+		EditorSelectionTestData::Hover(scene, unselected->GetMidiLoops()[0]->Model());
+		EditorSelectionTestData::OpenKey(scene); EXPECT_FALSE(scene.IsLoopGridEditorOpen());
+	}
+}
+
 TEST(Scene, EditorUsesCommittedRecentSelectionAcrossLifecycle)
 {
 	SceneParams params{base::DrawableParams(), base::MoveableParams(), base::SizeableParams({1400u, 900u})};
@@ -2854,10 +2889,10 @@ TEST(Scene, EditorUsesCommittedRecentSelectionAcrossLifecycle)
 	scene.EditorForTest().ClearSelectionHistory();
 	EXPECT_EQ(0u, midi::LoopGridEditorTestAccess::SelectionHistorySize(scene.EditorForTest()));
 	EditorSelectionTestData::OpenKey(scene); EXPECT_FALSE(scene.IsLoopGridEditorOpen());
-	EXPECT_EQ("Select a completed loop to edit", midi::LoopGridEditorTestAccess::Feedback(scene.EditorForTest()));
+	EXPECT_EQ("Select or hover a completed loop to edit", midi::LoopGridEditorTestAccess::Feedback(scene.EditorForTest()));
 	a->DeSelect(); aggregate->DeSelect();
 	EditorSelectionTestData::OpenKey(scene); EXPECT_FALSE(scene.IsLoopGridEditorOpen());
-	EXPECT_EQ("Select a completed loop to edit", midi::LoopGridEditorTestAccess::Feedback(scene.EditorForTest()));
+	EXPECT_EQ("Select or hover a completed loop to edit", midi::LoopGridEditorTestAccess::Feedback(scene.EditorForTest()));
 }
 
 TEST(Scene, EditorTakeEntryPrefersEligibleChannelFiveWhileLeafAndManualChoiceStayExplicit)

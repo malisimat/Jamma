@@ -119,7 +119,7 @@ namespace midi
 
 		static actions::ActionResult _Eaten();
 		static float _MidiRadius(std::uint32_t lengthSamps) noexcept;
-		static std::shared_ptr<MidiLoop> _InitialMidiLoop(const engine::LoopTake& take);
+		static std::shared_ptr<MidiLoop> _InitialMidiLoop(const engine::LoopTake& take, bool selectedOnly = true);
 
 		void _Layout();
 		void _SetFeedback(const std::string& message);

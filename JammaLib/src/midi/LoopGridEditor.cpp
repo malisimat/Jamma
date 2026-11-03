@@ -133,12 +133,12 @@ void LoopGridEditor::_ResetTarget()
 	_midiLoop.reset();
 }
 
-std::shared_ptr<MidiLoop> LoopGridEditor::_InitialMidiLoop(const engine::LoopTake& take)
+std::shared_ptr<MidiLoop> LoopGridEditor::_InitialMidiLoop(const engine::LoopTake& take, bool selectedOnly)
 {
 	std::shared_ptr<MidiLoop> first;
 	for (const auto& loop : take.GetMidiLoops())
 	{
-		if (!loop || !loop->Model() || !loop->Model()->IsSelected() || loop->CompletedLengthForEditor() == 0u) continue;
+		if (!loop || !loop->Model() || (selectedOnly && !loop->Model()->IsSelected()) || loop->CompletedLengthForEditor() == 0u) continue;
 		if (!first) first = loop;
 		if (loop->EventCount() > 0u) return loop;
 	}
@@ -186,7 +186,8 @@ bool LoopGridEditor::FindCandidate(std::shared_ptr<engine::LoopTake>& take,
 		std::shared_ptr<engine::Loop> Audio;
 		std::shared_ptr<MidiLoop> Midi;
 	};
-	Candidate fallback, recent, hover;
+	Candidate fallback, recent, hover, unselectedHover;
+	bool hasSelection = false;
 	unsigned int fallbackCount = 0u;
 	std::size_t recentRank = 0u;
 	const auto consider = [&](Candidate candidate, bool isHovered) {
@@ -206,9 +207,29 @@ bool LoopGridEditor::FindCandidate(std::shared_ptr<engine::LoopTake>& take,
 	for (const auto& station : _host.Stations)
 	{
 		if (!station || station->MembershipRemoving()) continue;
+		hasSelection |= station->IsSelected();
 		for (const auto& candidateTake : station->GetLoopTakes())
 		{
-			if (!candidateTake || !candidateTake->IsSelected() || candidateTake->IsCaptureCancelled()) continue;
+			if (!candidateTake || candidateTake->IsCaptureCancelled()) continue;
+			hasSelection |= candidateTake->IsSelected();
+			if (!candidateTake->IsSelected())
+			{
+				// Hover is a fallback only when the session has no committed selection.
+				const auto initial = selectStreams ? nullptr : _InitialMidiLoop(*candidateTake, false);
+				for (const auto& candidate : candidateTake->GetLoops())
+					if (candidate && hovered && (hovered == candidate || hovered->Parent() == candidate)
+						&& _UnavailableReason(candidateTake, candidate, {}).empty())
+						unselectedHover = {candidateTake, candidate, {}};
+				for (const auto& candidate : candidateTake->GetMidiLoops())
+					if (candidate && candidate->Model() && hovered &&
+						(hovered == candidate->Model() || hovered->Parent() == candidate->Model()))
+					{
+						const auto stream = selectStreams ? candidate : initial;
+						if (stream && _UnavailableReason(candidateTake, {}, stream).empty())
+							unselectedHover = {candidateTake, {}, stream};
+					}
+				continue;
+			}
 			const auto initial = selectStreams ? nullptr : _InitialMidiLoop(*candidateTake);
 			for (const auto& candidate : candidateTake->GetLoops())
 				if (candidate && candidate->IsSelected())
@@ -232,8 +253,8 @@ bool LoopGridEditor::FindCandidate(std::shared_ptr<engine::LoopTake>& take,
 							(hovered == candidate->Model() || hovered->Parent() == candidate->Model()));
 		}
 	}
-	const auto& chosen = hover.Take ? hover : recent.Take ? recent : fallback;
-	if (!hover.Take && !recent.Take && fallbackCount != 1u)
+	const auto& chosen = !hasSelection ? unselectedHover : hover.Take ? hover : recent.Take ? recent : fallback;
+	if (!chosen.Take || (hasSelection && !hover.Take && !recent.Take && fallbackCount != 1u))
 	{
 		take.reset(); audioLoop.reset(); midiLoop.reset();
 		return false;
@@ -246,8 +267,7 @@ std::string LoopGridEditor::_UnavailableReason(const std::shared_ptr<engine::Loo
 	const std::shared_ptr<engine::Loop>& audioLoop,
 	const std::shared_ptr<MidiLoop>& midiLoop) const
 {
-	if (!take || !take->IsSelected()
-		|| (static_cast<bool>(audioLoop) == static_cast<bool>(midiLoop)))
+	if (!take || (static_cast<bool>(audioLoop) == static_cast<bool>(midiLoop)))
 		return "Select one loop to edit";
 	const auto state = take->TakeState();
 	if (state != engine::LoopTake::STATE_PLAYING && state != engine::LoopTake::STATE_INACTIVE)
@@ -256,8 +276,6 @@ std::string LoopGridEditor::_UnavailableReason(const std::shared_ptr<engine::Loo
 	{
 		if (!audioLoop->SupportsSpectralEditing())
 			return "Live remote audio cannot be edited";
-		if (!audioLoop->IsSelected())
-			return "Select the audio loop to edit";
 		if (audioLoop->LoopLength() == 0ul)
 			return "Loop has no completed audio";
 		if (!audioLoop->CanEditAudioSource())
@@ -265,7 +283,7 @@ std::string LoopGridEditor::_UnavailableReason(const std::shared_ptr<engine::Loo
 	}
 	else
 	{
-		if (!midiLoop->Model() || !midiLoop->Model()->IsSelected())
+		if (!midiLoop->Model())
 			return "Select the MIDI loop to edit";
 		if (midiLoop->CompletedLengthForEditor() == 0u)
 			return "Finish recording or set a loop length to edit";
@@ -309,7 +327,7 @@ bool LoopGridEditor::Open(const std::shared_ptr<engine::LoopTake>& take,
 	const std::shared_ptr<engine::Loop>& audioLoop,
 	const std::shared_ptr<MidiLoop>& midiLoop)
 {
-	if (State::Closed != _state || !take || !take->IsSelected()
+	if (State::Closed != _state || !take
 		|| (static_cast<bool>(audioLoop) == static_cast<bool>(midiLoop)))
 		return false;
 	const auto unavailableReason = _UnavailableReason(take, audioLoop, midiLoop);
@@ -1320,7 +1338,13 @@ void LoopGridEditor::UpdateUi(const glm::mat4& viewProjection)
 
 		}
 	}
-
+	if (State::Closed == _state)
+	{
+		std::shared_ptr<engine::LoopTake> take;
+		std::shared_ptr<engine::Loop> audioLoop;
+		std::shared_ptr<MidiLoop> midiLoop;
+		_SetFeedback(FindCandidate(take, audioLoop, midiLoop) ? "" : "Select or hover a completed loop to edit");
+	}
 }
 
 void LoopGridEditor::ApplyToModels()
@@ -1670,6 +1694,6 @@ std::optional<actions::ActionResult> LoopGridEditor::TryOpenFromKey(const action
 	if (FindCandidate(take, audioLoop, midiLoop))
 		Open(take, audioLoop, midiLoop);
 	else
-		_SetFeedback("Select a completed loop to edit");
+		_SetFeedback("Select or hover a completed loop to edit");
 	return _Eaten();
 }
