@@ -2839,6 +2839,45 @@ TEST(Scene, EditorPrefersSelectedHoverThenRecentSelectionAndUsesHoverWithoutSele
 	}
 }
 
+TEST(Scene, AudioEditorIgnoresUnselectedHoverUntilSelectionIsEmpty)
+{
+	for (const auto depth : {Scene::VIEW_LOOPTAKE, Scene::VIEW_LOOP})
+	{
+		SCOPED_TRACE(::testing::Message() << "selection depth " << depth);
+		SceneParams params{base::DrawableParams(), base::MoveableParams(), base::SizeableParams({1400u, 900u})};
+		TestScene scene(params, {}); scene.PauseJobForTest();
+		auto station = MakeTestStation("audio-editor-hover"); scene.AddStationForTest(station);
+		const auto addAudioTake = [&station]() {
+			auto take = station->AddTake();
+			const auto loop = take->AddLoop(0u, station->Name()); loop->Record();
+			std::vector<float> samples(constants::MaxLoopFadeSamps + 400u, 0.25f);
+			base::AudioWriteRequest write; write.samples = samples.data(); write.numSamps = static_cast<unsigned int>(samples.size());
+			write.stride = 1; write.fadeCurrent = 0.0f; write.fadeNew = 1.0f; write.source = base::Audible::AUDIOSOURCE_ADC;
+			loop->OnBlockWrite(write, 0); loop->EndWrite(write.numSamps, true); loop->Play(0u, 400u, false);
+			station->CommitChanges(); EXPECT_TRUE(loop->CanEditAudioSource());
+			return take;
+		};
+		auto first = addAudioTake(), recent = addAudioTake(), unselected = addAudioTake();
+		const auto firstLoop = first->GetLoops()[0], recentLoop = recent->GetLoops()[0], hoveredLoop = unselected->GetLoops()[0];
+		scene.SetSelectionDepthForTest(depth);
+		EditorSelectionTestData::PaintSelection(scene, firstLoop);
+		EditorSelectionTestData::PaintSelection(scene, recentLoop);
+		ASSERT_TRUE(first->IsSelected()); ASSERT_TRUE(recent->IsSelected()); ASSERT_FALSE(unselected->IsSelected());
+		EditorSelectionTestData::Hover(scene, hoveredLoop);
+		EditorSelectionTestData::OpenKey(scene); ASSERT_EQ(recent, scene.LoopGridEditorTake());
+		EXPECT_EQ(recentLoop, scene.LoopGridEditorAudioLoop());
+		EditorSelectionTestData::Close(scene);
+		EditorSelectionTestData::Hover(scene, firstLoop);
+		EditorSelectionTestData::OpenKey(scene); ASSERT_EQ(first, scene.LoopGridEditorTake());
+		EXPECT_EQ(firstLoop, scene.LoopGridEditorAudioLoop());
+		EditorSelectionTestData::Close(scene);
+		first->DeSelect(); recent->DeSelect();
+		EditorSelectionTestData::Hover(scene, hoveredLoop);
+		EditorSelectionTestData::OpenKey(scene); ASSERT_EQ(unselected, scene.LoopGridEditorTake());
+		EXPECT_EQ(hoveredLoop, scene.LoopGridEditorAudioLoop()); EXPECT_FALSE(unselected->IsSelected());
+	}
+}
+
 TEST(Scene, EditorUsesCommittedRecentSelectionAcrossLifecycle)
 {
 	SceneParams params{base::DrawableParams(), base::MoveableParams(), base::SizeableParams({1400u, 900u})};
