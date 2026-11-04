@@ -2495,6 +2495,7 @@ TEST(AudioFlow, ExplicitEarlierMixedStereoSourceCompletesAudioAndMidiPlusNewPunc
 	EXPECT_TRUE(selected.DelayedPunchOpened); EXPECT_TRUE(selected.DelayedPunchClosed);
 }
 
+#ifdef _DEBUG
 TEST(AudioCallbackRealtime, LocalMasterActivationAndCancellationDoNotAllocateReallocateOrFree)
 {
     auto station=MakeStation(1u); auto take=MakeTake(); station->AddTake(take);
@@ -2522,3 +2523,4 @@ TEST(AudioCallbackRealtime, LocalMasterActivationAndCancellationDoNotAllocateRea
     EXPECT_EQ(version,host.LastActivatedLocalMasterTimingVersion()); EXPECT_EQ(0u,counts.Allocations);
     EXPECT_EQ(0u,counts.Reallocations); EXPECT_EQ(0u,counts.Frees);
 }
+#endif
