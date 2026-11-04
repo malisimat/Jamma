@@ -1101,6 +1101,29 @@ TEST(JamFile, ChildMidiRoutingRoundTripsIndependentMasksAndUnavailableCables)
 	EXPECT_EQ(JamFile::CurrentFormatMinor, restored->FormatMinor);
 }
 
+TEST(JamFile, LegacyChildVstsWithoutIdentitiesPreserveRecordedMaterial)
+{
+	const auto manifest = R"({"name":"legacy","stations":[{"name":"station","takes":[{"name":"take","vst":[{"path":"missing-take.dll"}],"loops":[{"name":"audio.wav","length":220,"vst":[{"path":"missing-loop.dll"}]}]}]}]})";
+	const auto parsed = JamFile::FromStream(std::stringstream(manifest));
+	ASSERT_TRUE(parsed);
+	ASSERT_EQ(1u, parsed->Stations.size());
+	ASSERT_EQ(1u, parsed->Stations[0].LoopTakes.size());
+	const auto& take = parsed->Stations[0].LoopTakes[0];
+	ASSERT_EQ(1u, take.VstChain.size());
+	EXPECT_EQ("missing-take.dll", take.VstChain[0].Path);
+	EXPECT_TRUE(take.VstChain[0].Id.empty()); // Reconstruction supplies legacy identities.
+	ASSERT_EQ(1u, take.Loops.size());
+	EXPECT_EQ("audio.wav", take.Loops[0].Name);
+	EXPECT_EQ(220ul, take.Loops[0].Length);
+	ASSERT_EQ(1u, take.Loops[0].VstChain.size());
+	EXPECT_EQ("missing-loop.dll", take.Loops[0].VstChain[0].Path);
+	EXPECT_TRUE(take.Loops[0].VstChain[0].Id.empty());
+	std::stringstream output;
+	std::string error;
+	EXPECT_FALSE(JamFile::ToStream(*parsed, output, &error)); // Saving still requires migrated identities.
+	EXPECT_EQ("Invalid child MIDI routing", error);
+}
+
 TEST(JamFile, ChildMidiRouteSchemaErrorsRejectOwnerInsteadOfEnablingBroadcast)
 {
 	for (const auto& routes : {"true", "[]", "[{\"plugins\":[\"missing\"]}]"})

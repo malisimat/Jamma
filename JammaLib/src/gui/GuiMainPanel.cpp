@@ -117,7 +117,7 @@ GuiMainPanel::GuiMainPanel(GuiMainPanelParams params) : GuiPanel(params),
 		addSection("Jam", std::array<std::pair<const char*, unsigned int>, 4>{{
 			{"Load", 7211u}, {"Save", 7210u}, {"Save As...", 7213u}, {"Set as Default", 7212u}}});
 		for (const auto& setting : params.Settings)
-			if (setting.Page == SettingsPage::Session && (setting.Command == 0u || setting.Command == 7214u) && setting.Control)
+			if (setting.Page == SettingsPage::Session && (setting.Command == 0u || setting.Command == 7214u || setting.Command == 7215u) && setting.Control)
 			{
 				if (setting.Command != 0u)
 				{

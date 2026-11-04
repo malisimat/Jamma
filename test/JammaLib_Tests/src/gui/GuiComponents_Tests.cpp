@@ -1306,6 +1306,41 @@ TEST(GuiMainPanel, RetainedPagesKeepCommandIdentityAfterTreeInitialization) {
 	EXPECT_NO_THROW(numeric->SetValue(0.6, true));
 }
 
+TEST(GuiMainPanel, BothSessionResetButtonsAreAttachedAndDispatchTheirOwnCommand) {
+    gui::SceneSettingsControls controls(0u, 0.0, io::JamFile::GlobalMidiQuantState::Mixed);
+    gui::GuiMainPanelParams params;
+    params.Size = {1200u, 900u};
+    params.Settings = controls.SettingsEntries();
+    auto panel = std::make_shared<gui::GuiMainPanel>(params);
+    auto owner = std::make_shared<GuiRecordingActionReceiver>();
+    panel->Init();
+    panel->SetCommandOwner(owner);
+    panel->SetPage(gui::SettingsPage::Session);
+    for (const auto command : {7214u, 7215u}) {
+        SCOPED_TRACE(command);
+        const auto entry = std::find_if(params.Settings.begin(), params.Settings.end(),
+            [command](const auto& value) { return value.Command == command; });
+        ASSERT_NE(params.Settings.end(), entry);
+        const auto button = std::dynamic_pointer_cast<GuiButton>(entry->Control);
+        ASSERT_TRUE(button);
+        auto ancestor = button->Parent();
+        while (ancestor && ancestor != panel) ancestor = ancestor->Parent();
+        ASSERT_EQ(panel, ancestor); // A detached control cannot be reached on the Session page.
+        const auto before = owner->ActionCount;
+        EXPECT_TRUE(button->OnAction(MakeTouch(TouchAction::TOUCH_DOWN, {3,3})).IsEaten);
+        EXPECT_TRUE(button->OnAction(MakeTouch(TouchAction::TOUCH_UP, {3,3})).IsEaten);
+        ASSERT_EQ(before + 1, owner->ActionCount);
+        ASSERT_TRUE(owner->LastAction);
+        EXPECT_EQ(command, owner->LastAction->Index);
+        const auto decoded = controls.Decode(*owner->LastAction, 0.0);
+        ASSERT_TRUE(decoded);
+        const auto* reset = std::get_if<gui::SceneSettingsControls::ResetAll>(&*decoded);
+        ASSERT_NE(nullptr, reset);
+        EXPECT_EQ(command == 7214u ? engine::SessionResetMode::PreserveStationVsts
+            : engine::SessionResetMode::RemoveStationVsts, reset->Mode);
+    }
+}
+
 TEST(GuiMainPanel, SwitchAndCollapseFinalizeEditsAndOnlyCloseOwnedPopup) {
 	GuiNumericInputParams numericParams;
 	numericParams.Min = -1; numericParams.Max = 1; numericParams.InitValue = 0;

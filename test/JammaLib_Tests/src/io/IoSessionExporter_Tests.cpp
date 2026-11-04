@@ -810,7 +810,7 @@ TEST(IoSessionExporter, SavesLegacyStationsWithUnidentifiedVstSlots)
 {
 	// Reserve an explicit identity that the first legacy station would otherwise
 	// generate, then ensure both missing station and VST IDs remain unique.
-	const auto legacy = R"({"name":"legacy","stations":[{"name":"keys-a","stationtype":0,"takes":[{"name":"shared","loops":[]}],"vst":[{"path":"missing-a.dll","bypass":false,"state":""}]},{"name":"keys-b","stationtype":0,"takes":[{"name":"shared","loops":[]}],"vst":[{"path":"missing-b.dll","bypass":false,"state":""}]},{"id":"legacy:station:0","name":"explicit","stationtype":0,"takes":[],"vst":[{"id":"station:1:vst:0","path":"missing-c.dll","bypass":false,"state":""}]}],"quantisesamps":1,"quantisation":"off"})";
+	const auto legacy = R"({"name":"legacy","stations":[{"name":"keys-a","stationtype":0,"takes":[{"name":"shared","loops":[],"vst":[{"path":"missing-child.dll"},{"path":"missing-child-2.dll"}]}],"vst":[{"path":"missing-a.dll","bypass":false,"state":""}]},{"name":"keys-b","stationtype":0,"takes":[{"name":"shared","loops":[]}],"vst":[{"path":"missing-b.dll","bypass":false,"state":""}]},{"id":"legacy:station:0","name":"explicit","stationtype":0,"takes":[],"vst":[{"id":"station:1:vst:0","path":"missing-c.dll","bypass":false,"state":""}]}],"quantisesamps":1,"quantisation":"off"})";
 	const auto jam = io::JamFile::FromStream(std::stringstream(legacy));
 	ASSERT_TRUE(jam);
 	const auto loaded = io::IoSessionLoader::Reconstruct(*jam, io::RigFile{}, L"");
@@ -827,6 +827,14 @@ TEST(IoSessionExporter, SavesLegacyStationsWithUnidentifiedVstSlots)
 	ASSERT_EQ(1u, exported->Stations[0].LoopTakes.size());
 	ASSERT_EQ(1u, exported->Stations[1].LoopTakes.size());
 	EXPECT_NE(exported->Stations[0].LoopTakes[0].Id, exported->Stations[1].LoopTakes[0].Id);
+	const auto& childRack = exported->Stations[0].LoopTakes[0].VstChain;
+	ASSERT_EQ(2u, childRack.size());
+	EXPECT_EQ("missing-child.dll", childRack[0].Path);
+	EXPECT_EQ("missing-child-2.dll", childRack[1].Path);
+	EXPECT_FALSE(childRack[0].Id.empty());
+	EXPECT_FALSE(childRack[1].Id.empty());
+	EXPECT_NE(childRack[0].Id, childRack[1].Id);
+	EXPECT_NE(childRack[0].Id, exported->Stations[0].VstChain[0].Id);
 	EXPECT_EQ("station:1:vst:0", exported->Stations[2].VstChain[0].Id);
 	EXPECT_NE("station:1:vst:0", exported->Stations[0].VstChain[0].Id);
 }

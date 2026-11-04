@@ -611,12 +611,7 @@ TEST(TransportPhaseOffset, DirectTimingCommandKeepsMidiAutomationWithNoteCursor)
 	EXPECT_EQ(take->MidiVisualPosition(), automationPosition);
 }
 
-TEST(TransportPhaseOffset, ContinuousSyncMasterAdjustmentPreservesIndependentAudioAndMidiPhases)
-{
-	ExpectMasterPhaseAdjustmentPreservesIndependentLoopPhases();
-}
-
-TEST(TransportPhaseOffset, BlockSyncMasterAdjustmentPreservesIndependentAudioAndMidiPhases)
+TEST(TransportPhaseOffset, MasterAdjustmentPreservesIndependentAudioAndMidiPhases)
 {
 	ExpectMasterPhaseAdjustmentPreservesIndependentLoopPhases();
 }

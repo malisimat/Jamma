@@ -567,14 +567,12 @@ bool Workspace::AdvancePresentationLocked(const std::vector<std::shared_ptr<Stat
 	}
 	UpdateRackVisibilityLocked(stations, _editor->IsEngaged());
 	_racks->UpdateLocked(static_cast<base::SelectDepth>(depth));
-	for (const auto& station : stations)
-		if (const auto rack = station->GetGuiRack()->VstRack())
-		{
-			rack->SetViewport(_size);
-			if (_popupManager.IsOpen() || _editor->IsEngaged() || _focusManager.IsEditingText() ||
-				presentation.Quitting || presentation.RigSaveInProgress)
-			{ rack->ClearPointerState(); rack->SetRevealHeld(false); }
-		}
+	_VisitVstRacksLocked(stations, [this, &presentation](GuiVstRack& rack) {
+		rack.SetViewport(_size);
+		if (_popupManager.IsOpen() || _editor->IsEngaged() || _focusManager.IsEditingText() ||
+			presentation.Quitting || presentation.RigSaveInProgress)
+		{ rack.ClearPointerState(); rack.SetRevealHeld(false); }
+	});
 
     auto masterCandidate=_MasterCandidateLocked(stations);
     if(masterCandidate.Target && presentation.MasterConfig) masterCandidate.Name=_quantiser->DescribeMasterTarget(masterCandidate.Target,masterCandidate.Depth,stations,presentation.MasterSampleRate,*presentation.MasterConfig);
@@ -1218,9 +1216,11 @@ actions::ActionResult Workspace::_OnPointerMove(actions::TouchMoveAction action,
 		{
 			if (auto label = station->GetGuiRack()->StationLabel())
 				label->Move(label->GlobalToLocal(action));
-			if (auto rack = station->GetGuiRack()->VstRack())
-				rack->MovePointer(rack->GlobalToLocal(action));
 		}
+		std::scoped_lock lock(access.Mutex);
+		_VisitVstRacksLocked(access.Stations, [&action](GuiVstRack& rack) {
+			rack.MovePointer(rack.GlobalToLocal(action));
+		});
 	}
 	if (!_popupManager.IsOpen() && !_editor->IsEngaged() && _stationControls.Move(action))
 		return { true, {}, {}, ACTIONRESULT_DEFAULT, nullptr, {} };
@@ -1887,18 +1887,20 @@ actions::ActionResult Workspace::OnKeyboard(KeyAction action, StationAccess acce
 		{
 			std::scoped_lock lock(access.Mutex);
 			_hudPanel->SetCableRevealHeld(actions::KeyAction::KEY_DOWN == action.KeyActionType);
-			for (const auto& station : access.Stations)
-				if (auto rack = station->GetGuiRack()->VstRack())
-					rack->SetRevealHeld(actions::KeyAction::KEY_DOWN == action.KeyActionType);
+			_VisitVstRacksLocked(access.Stations, [&action](GuiVstRack& rack) {
+				rack.SetRevealHeld(actions::KeyAction::KEY_DOWN == action.KeyActionType);
+			});
 		}
 		return ActionResult::NoAction();
 	}
 	if (_hudPanel)
 	{
 		std::scoped_lock lock(access.Mutex);
-		for (const auto& station : access.Stations)
-			if (auto rack = station->GetGuiRack()->VstRack())
-				if (auto result = rack->OnAction(action); result.IsEaten) return result;
+		auto rackResult = ActionResult::NoAction();
+		_VisitVstRacksLocked(access.Stations, [&action, &rackResult](GuiVstRack& rack) {
+			if (!rackResult.IsEaten) rackResult = rack.OnAction(action);
+		});
+		if (rackResult.IsEaten) return rackResult;
 		if (_hudPanel->HasCableDrag())
 		{
 			auto hudResult = _hudPanel->OnAction(action);
@@ -1943,6 +1945,18 @@ actions::ActionResult Workspace::OnKeyboard(KeyAction action, StationAccess acce
 
 	return ActionResult::NoAction();
 
+}
+
+void Workspace::_VisitVstRacksLocked(const std::vector<std::shared_ptr<Station>>& stations,
+	const std::function<void(GuiVstRack&)>& visit)
+{
+	for (const auto& station : stations)
+	{
+		if (const auto rack = station->GetGuiRack()->VstRack()) visit(*rack);
+		// Loop depth presents the selected audio Loop through its take's rack view.
+		for (const auto& take : station->GetLoopTakes())
+			if (const auto rack = take->GetGuiRack()->VstRack()) visit(*rack);
+	}
 }
 
 bool Workspace::_HasSelection(StationAccess access) const

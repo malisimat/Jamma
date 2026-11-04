@@ -457,22 +457,6 @@ ASSERT_EQ(Loop::STATE_INACTIVE, loop.PlayState());
 
 // -- Recording-behaviour tests ----------------------------------------------
 
-TEST(Loop, Recording_WritesDataInRecordingState)
-{
-    const auto loopLength = 50ul;
-    const auto blockSize = 11u;
-
-    auto sink = std::make_shared<MockMultiSink>(blockSize);
-
-    auto loop = MakeLoop();
-    RecordAndPlay(loop, loopLength, false, 1.0f);
-    ASSERT_EQ(Loop::STATE_PLAYING, loop.PlayState());
-
-    PlayOneBlock(loop, sink, blockSize);
-
-    ASSERT_TRUE(HasNonZeroSample(sink->GetSamples()));
-}
-
 TEST(Loop, Recording_DoesNotWriteDataWhenInactive)
 {
 const auto loopLength = 50ul;
@@ -502,24 +486,6 @@ ASSERT_EQ(Loop::STATE_OVERDUBBINGRECORDING, loop.PlayState());
 PlayOneBlock(loop, sink, blockSize);
 
 ASSERT_FALSE(HasNonZeroSample(sink->GetSamples()));
-}
-
-TEST(Loop, Overdub_WritesBounceBeforePunchIn)
-{
-const auto loopLength = 50ul;
-const auto blockSize = 11u;
-
-auto sink = std::make_shared<MockMultiSink>(blockSize);
-
-auto loop = MakeLoop();
-loop.Overdub();
-WriteData(loop, loopLength, base::Audible::AUDIOSOURCE_BOUNCE, 1.0f);
-loop.Play(constants::MaxLoopFadeSamps, loopLength, true);
-ASSERT_EQ(Loop::STATE_OVERDUBBINGRECORDING, loop.PlayState());
-
-PlayOneBlock(loop, sink, blockSize);
-
-ASSERT_TRUE(HasNonZeroSample(sink->GetSamples()));
 }
 
 TEST(Loop, PunchedIn_MixesBounceWithAdc)

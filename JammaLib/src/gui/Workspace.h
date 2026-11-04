@@ -224,6 +224,8 @@ namespace gui
 
 	private:
 		friend class WorkspaceTestAccess;
+		static void _VisitVstRacksLocked(const std::vector<std::shared_ptr<engine::Station>>& stations,
+			const std::function<void(GuiVstRack&)>& visit);
 		std::optional<actions::ActionResult> _RouteQuantisationMove(actions::TouchMoveAction action, StationAccess access, const InputPresentation& presentation);
 
 		std::optional<actions::ActionResult> _RouteQuantisationTouch(actions::TouchAction action, StationAccess access, const InputPresentation& presentation);

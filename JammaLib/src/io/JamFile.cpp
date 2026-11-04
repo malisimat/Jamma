@@ -1358,7 +1358,7 @@ std::optional<JamFile::Loop> JamFile::Loop::FromJson(Json::JsonPart json)
 	loop.VstChain = vstChain;
 	if (auto channels = ParseAllowedMidiChannels(json)) loop.AllowedMidiChannels = std::move(*channels);
 	if (!ParseMidiChannelRoutes(json, loop.MidiChannelRoutes)
-		|| !vst::RackState::ValidSavedRouting(loop.VstChain, loop.MidiChannelRoutes)) return std::nullopt;
+		|| !vst::RackState::ValidSavedRouting(loop.VstChain, loop.MidiChannelRoutes, true)) return std::nullopt;
 	return loop;
 }
 
@@ -1618,7 +1618,7 @@ std::optional<JamFile::LoopTake> JamFile::LoopTake::FromJson(Json::JsonPart json
 	take.VstChain = vstChain;
 	if (auto channels = ParseAllowedMidiChannels(json)) take.AllowedMidiChannels = std::move(*channels);
 	if (!ParseMidiChannelRoutes(json, take.MidiChannelRoutes)
-		|| !vst::RackState::ValidSavedRouting(take.VstChain, take.MidiChannelRoutes)) return std::nullopt;
+		|| !vst::RackState::ValidSavedRouting(take.VstChain, take.MidiChannelRoutes, true)) return std::nullopt;
 	take.MidiQuantEnabled = midiQuantEnabled;
 	take.MidiQuantFraction = midiQuantFraction;
 	take.TakePhaseOffsetSamps = takePhaseOffsetSamps;

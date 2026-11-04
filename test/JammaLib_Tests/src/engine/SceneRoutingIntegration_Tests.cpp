@@ -3975,3 +3975,84 @@ TEST_F(SceneRoutingIntegrationTest, BothResetModesCancelActualAltEdgePreviewAndD
         editor.Close(); job.unlock(); scene->Shutdown();
     }
 }
+
+TEST_F(SceneRoutingIntegrationTest, ChildRackEscapeCancelsSlotMoveThroughSceneKeyboardDispatch)
+{
+    using Access = engine::SourceLossIntegrationTestAccess;
+    auto scene = FreshScene({Station("Child racks")}, {});
+    ASSERT_TRUE(scene);
+    Settle(scene);
+    auto job = Access::ExcludeJob(*scene);
+    const auto station = scene->SnapshotStations().front();
+    const auto take = AddCompletedSourceChoiceTake(station);
+    scene->CommitChanges();
+    const auto rack = take->GetGuiRack();
+    const auto view = rack->VstRack();
+    ASSERT_TRUE(view);
+    // Keep the real hierarchy-owned view in a deterministic visible viewport.
+    rack->SetPosition(rack->Position() + utils::Position2d{300,700} - rack->GlobalPosition());
+    rack->SetVisible(true);
+    view->SetVisible(true);
+    view->SetViewport({1200u,1000u});
+    for (const auto scope : {vst::RackMove::Scope::Take, vst::RackMove::Scope::Loop})
+    {
+        SCOPED_TRACE(static_cast<int>(scope));
+        gui::GuiVstRack::Model model;
+        model.OwnerScope = scope;
+        model.OwnerId = scope == vst::RackMove::Scope::Take ? take->Id() : take->GetLoops().front()->Id();
+        model.Revision = 1u;
+        model.Editable = true;
+        model.TotalSlots = 2u;
+        for (const auto* identity : {"first", "second"})
+        {
+            gui::GuiVstRack::Slot slot;
+            slot.Value.Identity = identity;
+            model.Slots.push_back(std::move(slot));
+        }
+        std::vector<gui::GuiVstRack::Command> commands;
+        view->Update(model, [&](auto command) { commands.push_back(std::move(command)); });
+        view->Layout(100u,0,{0,0},{20u,20u});
+        const auto point = [&](std::size_t index) {
+            return view->SlotButton(index)->GlobalPosition() - view->GlobalPosition() + utils::Position2d{40,18};
+        };
+        actions::TouchAction touch;
+        touch.Touch = actions::TouchAction::TOUCH_MOUSE;
+        touch.Index = 0;
+        actions::TouchMoveAction motion;
+        motion.Touch = touch.Touch;
+        motion.Index = touch.Index;
+        motion.MouseButtonsDown = 1u;
+        const auto begin = [&] {
+            touch.State = actions::TouchAction::TOUCH_DOWN;
+            touch.Position = point(0u);
+            EXPECT_TRUE(view->OnAction(touch).IsEaten);
+            EXPECT_TRUE(view->HasSlotMove());
+            motion.Position = point(1u);
+            view->OnAction(motion);
+        };
+        begin();
+        actions::KeyAction escape;
+        escape.KeyChar = VK_ESCAPE;
+        escape.KeyActionType = actions::KeyAction::KEY_DOWN;
+        EXPECT_TRUE(scene->OnAction(escape).IsEaten);
+        EXPECT_FALSE(view->HasSlotMove());
+        escape.KeyActionType = actions::KeyAction::KEY_UP;
+        EXPECT_TRUE(scene->OnAction(escape).IsEaten);
+        touch.State = actions::TouchAction::TOUCH_UP;
+        touch.Position = point(1u);
+        view->OnAction(touch);
+        EXPECT_TRUE(commands.empty());
+        // Cancellation consumes only the old release; the next gesture remains usable.
+        begin();
+        touch.State = actions::TouchAction::TOUCH_UP;
+        touch.Position = point(1u);
+        view->OnAction(touch);
+        ASSERT_EQ(1u, commands.size());
+        EXPECT_EQ(gui::GuiVstRack::Command::Kind::Move, commands.front().Operation);
+        EXPECT_EQ(scope, commands.front().Move.OwnerScope);
+        EXPECT_EQ(0u, commands.front().Move.Source);
+        EXPECT_EQ(1u, commands.front().Move.Target);
+    }
+    job.unlock();
+    scene->Shutdown();
+}

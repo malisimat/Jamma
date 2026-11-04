@@ -56,7 +56,7 @@ namespace vst
 			const std::vector<VstRackSlot>& slots, const std::vector<int>& allowed,
 			std::string& diagnostic);
 		static bool ValidSavedRouting(const std::vector<io::JamFile::VstEntry>& entries,
-			const std::array<midi::MidiChannelRoute,16>& routes);
+			const std::array<midi::MidiChannelRoute,16>& routes, bool allowMissingIdentities = false);
 		bool ClearChannelRoutes(std::uint16_t removedMask);
 		const std::array<midi::MidiChannelRoute,16>& ChannelRoutes() const { return _midiChannelRoutes; }
 		std::uint64_t Revision() const noexcept { return _rackRevision.load(); }
