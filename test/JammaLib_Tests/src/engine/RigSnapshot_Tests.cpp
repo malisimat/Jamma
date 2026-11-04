@@ -1896,9 +1896,9 @@ TEST(SessionSaveCompletion, WrittenNumberedJamRemainsCurrentWhenDefaultUpdateFai
 	const std::wstring written = L"C:/isolated-jamma/export/session-0002.jam";
 	scene.SetCurrentJamPath(previous);
 	unsigned defaultsWrites = 0u;
-	scene.SetDefaultJamSaver(previous, [&](const auto& path, bool named) {
+	scene.SetDefaultJamSaver(previous, [&](const auto& path) {
 		++defaultsWrites;
-		EXPECT_EQ(written, path); EXPECT_TRUE(named);
+		EXPECT_EQ(written, path);
 		// The destination belongs to the successful manifest write already.
 		EXPECT_EQ(written, scene.CurrentJamPath());
 		return false;
@@ -1913,7 +1913,7 @@ TEST(SessionSaveCompletion, OrdinarySaveChangesDestinationWithoutChangingDefault
 {
 	SessionSaveCompletionControl scene;
 	unsigned defaultsWrites = 0u;
-	scene.SetDefaultJamSaver(L"startup.jam", [&](const auto&, bool) { ++defaultsWrites; return true; });
+	scene.SetDefaultJamSaver(L"startup.jam", [&](const auto&) { ++defaultsWrites; return true; });
 	EXPECT_TRUE(scene.CurrentJamPath().empty());
 	scene.Complete(true, L"first-numbered.jam", false);
 	EXPECT_EQ(L"first-numbered.jam", scene.CurrentJamPath());
@@ -1928,7 +1928,7 @@ TEST(SessionSaveCompletion, FailedOrCancelledSaveRetainsLastCommittedDestination
 	scene.SetCurrentJamPath(L"previous.jam");
 	scene.SetSessionSaveFolder(L"previous-folder");
 	unsigned defaultsWrites = 0u;
-	scene.SetDefaultJamSaver(L"startup.jam", [&](const auto&, bool) { ++defaultsWrites; return true; });
+	scene.SetDefaultJamSaver(L"startup.jam", [&](const auto&) { ++defaultsWrites; return true; });
 	for (const auto* destination : {L"", L"denied.jam"})
 	{
 		scene.Complete(false, destination, true);

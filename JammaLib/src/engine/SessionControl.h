@@ -126,7 +126,7 @@ namespace engine
 		void ReportFileStatus(const std::string& status);
 		void ReportFileOutcome(const std::string& status) override;
 		void SetSessionSaveFolder(std::wstring folder) override { _sessionSaveFolder = std::move(folder); }
-		void SetDefaultJamSaver(std::wstring path, std::function<bool(const std::wstring&, bool)> saver) override { _defaultJamPath = std::move(path); _defaultJamSaver = std::move(saver); }
+		void SetDefaultJamSaver(std::wstring path, std::function<bool(const std::wstring&)> saver) override { _defaultJamPath = std::move(path); _defaultJamSaver = std::move(saver); }
 		void SetCurrentJamPath(std::wstring path) override { _currentJamPath = std::move(path); }
 		const std::wstring& CurrentJamPath() const noexcept override { return _currentJamPath; }
 		bool ConsumePanelLoadRequest() override { return std::exchange(_panelLoadRequested, false); }
@@ -200,7 +200,7 @@ namespace engine
 		std::function<std::wstring(const std::wstring&)> _pickSessionDirectory;
 		std::wstring _sessionSaveFolder, _pendingSaveFolder, _pendingLoadPath;
 		std::wstring _defaultJamPath, _currentJamPath;
-		std::function<bool(const std::wstring&, bool)> _defaultJamSaver;
+		std::function<bool(const std::wstring&)> _defaultJamSaver;
 		bool _pendingSaveAsDefault = false;
 		bool _panelLoadRequested = false;
 		std::mutex _midiLifecycleMutex;

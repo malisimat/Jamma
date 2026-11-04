@@ -23,7 +23,7 @@ namespace vst
 	class RackState
 	{
 	public:
-		static constexpr std::size_t MaxRackPlugins = 32u;
+		static constexpr std::size_t MaxRackPlugins = io::JamFile::MaxActiveRackPlugins;
 		static constexpr std::size_t MaxRackDestinations = 64u;
 		// Copied under the caller's serialized structural operation; never retained.
 		struct Format
@@ -55,8 +55,6 @@ namespace vst
 			const std::array<midi::MidiChannelRoute,16>& prior,
 			const std::vector<VstRackSlot>& slots, const std::vector<int>& allowed,
 			std::string& diagnostic);
-		static bool ValidSavedRouting(const std::vector<io::JamFile::VstEntry>& entries,
-			const std::array<midi::MidiChannelRoute,16>& routes, bool allowMissingIdentities = false);
 		bool ClearChannelRoutes(std::uint16_t removedMask);
 		const std::array<midi::MidiChannelRoute,16>& ChannelRoutes() const { return _midiChannelRoutes; }
 		std::uint64_t Revision() const noexcept { return _rackRevision.load(); }

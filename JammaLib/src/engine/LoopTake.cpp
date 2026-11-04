@@ -212,9 +212,9 @@ LoopTake::~LoopTake()
 
 std::optional<std::shared_ptr<LoopTake>> LoopTake::FromFile(LoopTakeParams takeParams, io::JamFile::LoopTake takeStruct, std::wstring dir)
 {
-	if (!vst::RackState::ValidSavedRouting(takeStruct.VstChain, takeStruct.MidiChannelRoutes)) return std::nullopt;
+	if (!io::JamFile::ValidSavedRouting(takeStruct.VstChain, takeStruct.MidiChannelRoutes)) return std::nullopt;
 	for (const auto& loop : takeStruct.Loops)
-		if (!vst::RackState::ValidSavedRouting(loop.VstChain, loop.MidiChannelRoutes)) return std::nullopt;
+		if (!io::JamFile::ValidSavedRouting(loop.VstChain, loop.MidiChannelRoutes)) return std::nullopt;
 
 	auto mixerParams = GetMixerParams({ 100,100 }, audio::WireMixBehaviourParams());
 	auto take = std::make_shared<LoopTake>(takeParams, mixerParams);
@@ -242,7 +242,7 @@ std::optional<std::shared_ptr<LoopTake>> LoopTake::FromFile(LoopTakeParams takeP
 		
 		if (loop.has_value())
 		{
-			if (!vst::RackState::ValidSavedRouting(loopStruct.VstChain, loopStruct.MidiChannelRoutes)) return std::nullopt;
+			if (!io::JamFile::ValidSavedRouting(loopStruct.VstChain, loopStruct.MidiChannelRoutes)) return std::nullopt;
 			for (const auto& vstEntry : loopStruct.VstChain)
 			{
 				if (!loop.value()->LoadVstPluginSynchronously(utils::DecodeUtf8(vstEntry.Path), vstEntry.DecodeState(), vstEntry.Bypass, vstEntry.Id))
@@ -341,7 +341,7 @@ std::optional<std::shared_ptr<LoopTake>> LoopTake::FromFile(LoopTakeParams takeP
 		take->ClearPendingAutomationBindings();
 	}
 
-	if (!vst::RackState::ValidSavedRouting(takeStruct.VstChain, takeStruct.MidiChannelRoutes)) return std::nullopt;
+	if (!io::JamFile::ValidSavedRouting(takeStruct.VstChain, takeStruct.MidiChannelRoutes)) return std::nullopt;
 	for (const auto& vstEntry : takeStruct.VstChain)
 	{
 		if (!take->LoadVstPluginSynchronously(utils::DecodeUtf8(vstEntry.Path), vstEntry.DecodeState(), vstEntry.Bypass, vstEntry.Id))
@@ -5255,7 +5255,7 @@ bool LoopTake::SetMidiChannelRoutes(std::array<midi::MidiChannelRoute,16> routes
 
 bool LoopTake::RestoreMidiRouting(const std::vector<int>& channels, std::array<midi::MidiChannelRoute,16> routes)
 {
-	if (!vst::RackState::ValidSavedRouting(_vstSavedEntries, routes)) return false;
+	if (!io::JamFile::ValidSavedRouting(_vstSavedEntries, routes)) return false;
 	SetAllowedMidiChannels(channels);
 	_midiChannelRoutes = std::move(routes);
 	if (_automationTopologyChanged) _automationTopologyChanged();

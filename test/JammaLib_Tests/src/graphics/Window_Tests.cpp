@@ -991,7 +991,7 @@ TEST(WindowTitle, WrittenJamStillNamesWindowWhenDefaultUpdateFailsAndFailedSaves
 	scene.Controls().SetCurrentJamPath(L"previous.jam");
 	window.UpdateSessionTitle();
 	unsigned int defaultsWrites = 0u;
-	scene.Controls().SetDefaultJamSaver(L"startup.jam", [&](const auto&, bool) { ++defaultsWrites; return false; });
+	scene.Controls().SetDefaultJamSaver(L"startup.jam", [&](const auto&) { ++defaultsWrites; return false; });
 	scene.CompleteSave(true, L"C:/isolated-jamma/export/committed-0003.jam", true);
 	window.UpdateSessionTitle();
 	EXPECT_EQ(1u, defaultsWrites);

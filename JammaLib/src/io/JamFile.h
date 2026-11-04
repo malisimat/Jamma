@@ -52,6 +52,7 @@ namespace io
 		static constexpr std::size_t MaxLoopsPerTake = 1024u;
 		static constexpr std::size_t MaxMidiStreamsPerTake = 128u;
 		static constexpr std::size_t MaxAudioRouteChannels = 1024u;
+		static constexpr std::size_t MaxActiveRackPlugins = 32u;
 		// Recovery payloads may exceed active rack limits, but imports stay bounded.
 		static constexpr std::size_t MaxMidiRouteRecoveryIdsPerChannel = 4096u;
 		static constexpr std::size_t MaxMidiRouteRecoveryBytes = 1024u * 1024u;
@@ -112,6 +113,8 @@ namespace io
 			// Returns an empty vector when State is empty or malformed.
 			std::vector<std::uint8_t> DecodeState() const;
 		};
+		static bool ValidSavedRouting(const std::vector<VstEntry>& entries,
+			const std::array<midi::MidiChannelRoute, 16>& routes, bool allowMissingIdentities = false);
 
 		struct Loop
 		{

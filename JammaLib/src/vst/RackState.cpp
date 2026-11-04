@@ -756,30 +756,3 @@ std::optional<std::vector<int>> RackState::ValidateChannelRoutes(
 	std::sort(allowed.begin(), allowed.end());
 	return allowed;
 }
-
-bool RackState::ValidSavedRouting(const std::vector<io::JamFile::VstEntry>& entries,
-	const std::array<midi::MidiChannelRoute,16>& routes, bool allowMissingIdentities)
-{
-	if (entries.size() > MaxRackPlugins) return false;
-	std::vector<std::string> ids;
-	for (const auto& entry : entries)
-	{
-		// Import precedes collision-aware legacy identity migration in IoSessionLoader.
-		if (allowMissingIdentities && entry.Id.empty()) continue;
-		if (entry.Id.empty() || !io::NativeMidiSidecar::ValidatePluginIdentity(entry.Id)
-			|| std::find(ids.begin(), ids.end(), entry.Id) != ids.end()) return false;
-		ids.push_back(entry.Id);
-	}
-	for (const auto& route : routes)
-	{
-		if (route.PluginIds.size() > MaxRackPlugins) return false;
-		ids.clear();
-		for (const auto& id : route.PluginIds)
-		{
-			if (id.empty() || !io::NativeMidiSidecar::ValidatePluginIdentity(id)
-				|| std::find(ids.begin(), ids.end(), id) != ids.end()) return false;
-			ids.push_back(id);
-		}
-	}
-	return true;
-}

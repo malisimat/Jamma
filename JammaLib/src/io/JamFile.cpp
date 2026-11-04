@@ -8,7 +8,6 @@
 #include "JamFile.h"
 #include "NativeMidiSidecar.h"
 #include "PerformanceGroupPersistence.h"
-#include "../vst/RackState.h"
 #include <algorithm>
 #include <cctype>
 #include <cmath>
@@ -25,6 +24,33 @@ using namespace io;
 using audio::BehaviourParams;
 
 const std::string JamFile::DefaultJson = "{\"name\":\"default\",\"ninjam\":{\"host\":\"ninjam.com:2049\",\"user\":\"jamma_guest\",\"pass\":\"\",\"workdir\":\"\"},\"stations\":[{\"name\":\"Station1\",\"stationtype\":0,\"allowedmidichannels\":[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16],\"takes\":[]}],\"quantisesamps\":1,\"quantisation\":\"off\"}";
+
+bool JamFile::ValidSavedRouting(const std::vector<VstEntry>& entries,
+	const std::array<midi::MidiChannelRoute, 16>& routes, bool allowMissingIdentities)
+{
+	if (entries.size() > MaxActiveRackPlugins) return false;
+	std::vector<std::string> ids;
+	for (const auto& entry : entries)
+	{
+		// Import precedes collision-aware legacy identity migration in IoSessionLoader.
+		if (allowMissingIdentities && entry.Id.empty()) continue;
+		if (entry.Id.empty() || !NativeMidiSidecar::ValidatePluginIdentity(entry.Id)
+			|| std::find(ids.begin(), ids.end(), entry.Id) != ids.end()) return false;
+		ids.push_back(entry.Id);
+	}
+	for (const auto& route : routes)
+	{
+		if (route.PluginIds.size() > MaxActiveRackPlugins) return false;
+		ids.clear();
+		for (const auto& id : route.PluginIds)
+		{
+			if (id.empty() || !NativeMidiSidecar::ValidatePluginIdentity(id)
+				|| std::find(ids.begin(), ids.end(), id) != ids.end()) return false;
+			ids.push_back(id);
+		}
+	}
+	return true;
+}
 
 bool JamFile::ParseMidiChannelRoutes(const Json::JsonPart& json, std::array<midi::MidiChannelRoute, 16>& routes)
 {
@@ -629,9 +655,9 @@ bool JamFile::ToStream(JamFile jam, std::stringstream& ss, std::string* error)
 		if (!validRoutes(station.MidiChannelRoutes)) return fail("MIDI route recovery data exceeds import limits");
 		for (const auto& take : station.LoopTakes)
 		{
-			if (!vst::RackState::ValidSavedRouting(take.VstChain, take.MidiChannelRoutes)) return fail("Invalid child MIDI routing");
+			if (!JamFile::ValidSavedRouting(take.VstChain, take.MidiChannelRoutes)) return fail("Invalid child MIDI routing");
 			for (const auto& loop : take.Loops)
-				if (!vst::RackState::ValidSavedRouting(loop.VstChain, loop.MidiChannelRoutes)) return fail("Invalid child MIDI routing");
+				if (!JamFile::ValidSavedRouting(loop.VstChain, loop.MidiChannelRoutes)) return fail("Invalid child MIDI routing");
 		}
 	}
 
@@ -1358,7 +1384,7 @@ std::optional<JamFile::Loop> JamFile::Loop::FromJson(Json::JsonPart json)
 	loop.VstChain = vstChain;
 	if (auto channels = ParseAllowedMidiChannels(json)) loop.AllowedMidiChannels = std::move(*channels);
 	if (!ParseMidiChannelRoutes(json, loop.MidiChannelRoutes)
-		|| !vst::RackState::ValidSavedRouting(loop.VstChain, loop.MidiChannelRoutes, true)) return std::nullopt;
+		|| !JamFile::ValidSavedRouting(loop.VstChain, loop.MidiChannelRoutes, true)) return std::nullopt;
 	return loop;
 }
 
@@ -1618,7 +1644,7 @@ std::optional<JamFile::LoopTake> JamFile::LoopTake::FromJson(Json::JsonPart json
 	take.VstChain = vstChain;
 	if (auto channels = ParseAllowedMidiChannels(json)) take.AllowedMidiChannels = std::move(*channels);
 	if (!ParseMidiChannelRoutes(json, take.MidiChannelRoutes)
-		|| !vst::RackState::ValidSavedRouting(take.VstChain, take.MidiChannelRoutes, true)) return std::nullopt;
+		|| !JamFile::ValidSavedRouting(take.VstChain, take.MidiChannelRoutes, true)) return std::nullopt;
 	take.MidiQuantEnabled = midiQuantEnabled;
 	take.MidiQuantFraction = midiQuantFraction;
 	take.TakePhaseOffsetSamps = takePhaseOffsetSamps;

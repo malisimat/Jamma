@@ -369,7 +369,7 @@ void SessionControl::CompleteSessionSave(bool success, const std::wstring& path,
 	_currentJamPath = path;
 	if (asDefault)
 	{
-		if (_defaultJamSaver(path, true)) ReportFileOutcome("Saved startup jam " + utils::EncodeUtf8(path));
+		if (_defaultJamSaver(path)) ReportFileOutcome("Saved startup jam " + utils::EncodeUtf8(path));
 		else ReportFileOutcome("Jam saved at " + utils::EncodeUtf8(path) + "; startup default unchanged");
 	}
 	else ReportFileOutcome("Saved " + utils::EncodeUtf8(path));

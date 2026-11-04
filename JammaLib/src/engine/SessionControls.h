@@ -25,7 +25,7 @@ namespace engine
 		virtual void RequestAudioRefresh() noexcept = 0;
 		virtual void CloseAudio() = 0;
 		virtual void SetSessionSaveFolder(std::wstring folder) = 0;
-		virtual void SetDefaultJamSaver(std::wstring path, std::function<bool(const std::wstring&, bool)> saver) = 0;
+		virtual void SetDefaultJamSaver(std::wstring path, std::function<bool(const std::wstring&)> saver) = 0;
 		virtual void SetCurrentJamPath(std::wstring path) = 0;
 		virtual const std::wstring& CurrentJamPath() const noexcept = 0;
 		virtual void ReportFileOutcome(const std::string& status) = 0;

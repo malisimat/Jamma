@@ -6,7 +6,7 @@ if (Test-Path -LiteralPath $OutputDirectory) { throw 'Use a fresh log output dir
 $folder=Split-Path -Parent $DefaultsPath
 New-Item -ItemType Directory -Force -Path $OutputDirectory | Out-Null
 $records=@()
-foreach ($name in @('startup.log','startup.log.1','startup.log.2','startup.log.3','worker-failure.log')) {
+foreach ($name in @('run.log','run.log.1','run.log.2','run.log.3','startup.log','startup.log.1','startup.log.2','startup.log.3','worker-failure.log')) {
   $src=Join-Path $folder $name
   if (Test-Path -LiteralPath $src) {
     $file=Get-Item -LiteralPath $src

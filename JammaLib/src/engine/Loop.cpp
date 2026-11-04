@@ -2058,7 +2058,7 @@ bool Loop::SetMidiChannelRoutes(std::array<midi::MidiChannelRoute,16> routes, st
 
 bool Loop::RestoreMidiRouting(const std::vector<int>& channels, std::array<midi::MidiChannelRoute,16> routes)
 {
-	if (!vst::RackState::ValidSavedRouting(_vstSavedEntries, routes)) return false;
+	if (!io::JamFile::ValidSavedRouting(_vstSavedEntries, routes)) return false;
 	SetAllowedMidiChannels(channels);
 	_midiChannelRoutes = std::move(routes);
 	if (_automationTopologyChanged) _automationTopologyChanged();
