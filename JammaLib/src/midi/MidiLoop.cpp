@@ -405,29 +405,14 @@ bool MidiLoop::SnapshotForExport(ExportState& state,
 	{
 		const auto& lane = _lanes[laneIdx];
 		auto& exported = state.AutomationLanes[laneIdx];
-		bool copied = false;
-		for (unsigned int attempt = 0u; attempt < 8u; ++attempt)
-		{
-			const auto before = lane.Revision.load(std::memory_order_acquire);
-			if ((before & 1u) != 0u)
-				continue;
-			exported.MatchKey = lane.Mapping.MatchKey.load(std::memory_order_acquire);
-			exported.TargetParameterIndex = lane.Mapping.TargetParameterIndex;
-			exported.TargetPlugin = lane.Mapping.TargetPlugin;
-			exported.SavedTarget = lane.Mapping.SavedTarget;
-			exported.PointCount = lane.PointCount;
-			if (exported.PointCount > exported.Points.size())
-				return false;
-			for (std::size_t point = 0u; point < exported.PointCount; ++point)
-				exported.Points[point] = lane.Points[point];
-			if (before == lane.Revision.load(std::memory_order_acquire))
-			{
-				copied = true;
-				break;
-			}
-		}
-		if (!copied)
-			return false;
+		exported.MatchKey = lane.Mapping.MatchKey.load(std::memory_order_acquire);
+		exported.TargetParameterIndex = lane.Mapping.TargetParameterIndex;
+		exported.TargetPlugin = lane.Mapping.TargetPlugin;
+		exported.SavedTarget = lane.Mapping.SavedTarget;
+		const auto points = lane.PublishedPoints.load();
+		exported.PointCount = points ? points->PointCount : 0u;
+		if (exported.PointCount > exported.Points.size()) return false;
+		if (points) std::copy_n(points->Points.begin(), exported.PointCount, exported.Points.begin());
 	}
 
 	return true;
@@ -467,6 +452,20 @@ bool MidiLoop::RestoreFromExport(const ExportState& state)
 				return false;
 		}
 	}
+	std::array<std::shared_ptr<const AutomationLane::PointSet>, MaxAutomationLanes> restoredPoints{};
+	try
+	{
+		for (std::size_t laneIdx = 0u; laneIdx < MaxAutomationLanes; ++laneIdx)
+		{
+			const auto& imported = state.AutomationLanes[laneIdx];
+			if (imported.PointCount == 0u) continue;
+			auto points = std::make_shared<AutomationLane::PointSet>();
+			points->PointCount = imported.PointCount;
+			std::copy_n(imported.Points.begin(), imported.PointCount, points->Points.begin());
+			restoredPoints[laneIdx] = std::move(points);
+		}
+	}
+	catch (const std::bad_alloc&) { return false; }
 	const auto activated = _preparedGridActivated.load(std::memory_order_seq_cst);
 	const auto& inherited = activated ? _preparedOwnerInheritedQuantisation : _inheritedQuantisation;
 	const auto& forced = activated ? _preparedOwnerForcedQuantisationEnabled : _forcedQuantisationEnabled;
@@ -491,17 +490,12 @@ bool MidiLoop::RestoreFromExport(const ExportState& state)
 	for (std::size_t laneIdx = 0u; laneIdx < MaxAutomationLanes; ++laneIdx)
 	{
 		auto& lane = _lanes[laneIdx];
-		const auto generation = lane.Revision.load(std::memory_order_relaxed);
-		lane.Revision.store(generation + 1u, std::memory_order_release);
 		const auto& imported = state.AutomationLanes[laneIdx];
 		lane.Mapping.TargetPlugin = nullptr;
 		lane.Mapping.SavedTarget = imported.SavedTarget;
 		lane.Mapping.TargetParameterIndex = imported.TargetParameterIndex;
 		lane.Mapping.MatchKey.store(imported.MatchKey, std::memory_order_relaxed);
-		lane.PointCount = imported.PointCount;
-		for (std::size_t point = 0u; point < imported.PointCount; ++point)
-			lane.Points[point] = imported.Points[point];
-		lane.Revision.store(generation + 2u, std::memory_order_release);
+		lane.PublishedPoints.store(std::move(restoredPoints[laneIdx]));
 	}
 
 	++_revision;
@@ -1920,21 +1914,17 @@ void MidiLoop::SetAutomationValueAtFrac(std::size_t laneIdx, double frac, float 
 {
 	if (laneIdx >= MaxAutomationLanes)
 		return;
-
-	auto& lane = _lanes[laneIdx];
-	auto fracF = ClampAutomationFrac(frac);
-
-	auto& points = lane.Points;
-	auto& count = lane.PointCount;
-
-	// Open the seqlock (odd) so a concurrent render-thread snapshot retries rather
-	// than observing a half-shifted buffer, then close it (even) on every exit.
-	const auto gen = lane.Revision.load(std::memory_order_relaxed);
-	lane.Revision.store(gen + 1u, std::memory_order_release);
-
-	InsertOrUpdateAutomationPoint(points, count, _sampleRate, _loopLengthSamps, fracF, value);
-
-	lane.Revision.store(gen + 2u, std::memory_order_release);
+	try
+	{
+		auto& lane = _lanes[laneIdx];
+		const auto current = lane.PublishedPoints.load();
+		auto updated = std::make_shared<AutomationLane::PointSet>();
+		if (current) *updated = *current;
+		InsertOrUpdateAutomationPoint(updated->Points, updated->PointCount,
+			_sampleRate, _loopLengthSamps, ClampAutomationFrac(frac), value);
+		lane.PublishedPoints.store(std::move(updated));
+	}
+	catch (const std::bad_alloc&) { /* Keep the last complete publication. */ }
 }
 
 void MidiLoop::OverwriteAutomationWindow(std::size_t laneIdx,
@@ -1945,10 +1935,6 @@ void MidiLoop::OverwriteAutomationWindow(std::size_t laneIdx,
 	if (laneIdx >= MaxAutomationLanes || 0u == _loopLengthSamps)
 		return;
 
-	auto& lane = _lanes[laneIdx];
-	auto& points = lane.Points;
-	auto& count = lane.PointCount;
-
 	const auto startWrapped = startSample % _loopLengthSamps;
 	const auto durationWrapped = durationSamples % _loopLengthSamps;
 	const bool overwritesFullLoop = durationSamples >= _loopLengthSamps && durationWrapped == 0u;
@@ -1957,103 +1943,83 @@ void MidiLoop::OverwriteAutomationWindow(std::size_t laneIdx,
 	const auto endFrac = SampleToAutomationFrac(endWrapped, _loopLengthSamps);
 	const bool wraps = !overwritesFullLoop && durationWrapped > 0u && endWrapped <= startWrapped;
 
-	const auto gen = lane.Revision.load(std::memory_order_relaxed);
-	lane.Revision.store(gen + 1u, std::memory_order_release);
-
-	if (overwritesFullLoop)
+	try
 	{
-		count = 0u;
-	}
-	else
-	{
-		// Compact in place: keep points outside the window, preserving sort order.
-		// Two-pointer pass over the sorted buffer — no temporary copy, no allocation.
-		std::size_t keptCount = 0u;
-		for (std::size_t i = 0u; i < count; ++i)
+		auto& lane = _lanes[laneIdx];
+		const auto current = lane.PublishedPoints.load();
+		auto updated = std::make_shared<AutomationLane::PointSet>();
+		if (current) *updated = *current;
+		auto& points = updated->Points;
+		auto& count = updated->PointCount;
+
+		if (overwritesFullLoop)
 		{
-			if (FracWithinOverwriteWindow(points[i].first, startFrac, endFrac, wraps))
-				continue;
-
-			points[keptCount++] = points[i];
-		}
-		count = keptCount;
-	}
-
-	InsertOrUpdateAutomationPoint(points, count, _sampleRate, _loopLengthSamps, startFrac, value);
-	InsertOrUpdateAutomationPoint(points, count, _sampleRate, _loopLengthSamps, endFrac, value);
-
-	lane.Revision.store(gen + 2u, std::memory_order_release);
-}
-
-float MidiLoop::GetAutomationValueAtCursor(std::size_t laneIdx, double frac, std::uint16_t& cursorIdx) const noexcept
-{
-	if (laneIdx >= MaxAutomationLanes)
-		return 0.0f;
-
-	const auto& lane = _lanes[laneIdx];
-	const auto fracF = static_cast<float>(frac);
-
-	// Seqlock read: retry while the MIDI-thread writer holds the lock (odd generation)
-	// or the buffer shifted under us. Bounded to avoid blocking the audio path; on
-	// give-up the cursor is left unchanged and the last committed value is returned.
-	for (int attempt = 0; attempt < 8; ++attempt)
-	{
-		const auto gen0 = lane.Revision.load(std::memory_order_acquire);
-		if (gen0 & 1u)
-			continue; // Writer in progress — spin once more.
-
-		const auto count = lane.PointCount;
-		if (0u == count)
-		{
-			const auto gen1 = lane.Revision.load(std::memory_order_acquire);
-			if (gen0 == gen1)
-				return 0.0f;
-			continue;
-		}
-
-		const auto& points = lane.Points;
-
-		// Stage cursor updates locally; only commit if the generation validates.
-		auto localCursor = cursorIdx;
-
-		// Clamp cursor into range and reset on loop wrap (frac stepped backward).
-		if (localCursor >= count)
-			localCursor = 0u;
-		if (fracF < points[localCursor].first)
-			localCursor = 0u;
-
-		// Advance forward while the next point still starts at or before frac.
-		while ((localCursor + 1u) < count && points[localCursor + 1u].first <= fracF)
-			++localCursor;
-
-		// Before the first point: hold the first value. At/after the last: hold last.
-		float result;
-		if (fracF <= points[0].first)
-		{
-			result = points[0].second;
-		}
-		else if ((localCursor + 1u) >= count)
-		{
-			result = points[count - 1u].second;
+			count = 0u;
 		}
 		else
 		{
-			const auto lo = points[localCursor];
-			const auto hi = points[localCursor + 1u];
-			const auto span = hi.first - lo.first;
-			result = (span <= 0.0f) ? hi.second
-			                        : lo.second + (fracF - lo.first) / span * (hi.second - lo.second);
+			// Compact in place: keep points outside the window, preserving sort order.
+			std::size_t keptCount = 0u;
+			for (std::size_t i = 0u; i < count; ++i)
+			{
+				if (FracWithinOverwriteWindow(points[i].first, startFrac, endFrac, wraps))
+					continue;
+				points[keptCount++] = points[i];
+			}
+			count = keptCount;
 		}
 
-		const auto gen1 = lane.Revision.load(std::memory_order_acquire);
-		if (gen0 == gen1)
-		{
-			cursorIdx = static_cast<std::uint16_t>(localCursor);
-			return result;
-		}
+		InsertOrUpdateAutomationPoint(points, count, _sampleRate, _loopLengthSamps, startFrac, value);
+		InsertOrUpdateAutomationPoint(points, count, _sampleRate, _loopLengthSamps, endFrac, value);
+		lane.PublishedPoints.store(std::move(updated));
+	}
+	catch (const std::bad_alloc&) { /* Keep the last complete publication. */ }
+}
+
+std::optional<float> MidiLoop::GetAutomationValueAtCursor(std::size_t laneIdx, double frac,
+	std::uint16_t& cursorIdx) const noexcept
+{
+	if (laneIdx >= MaxAutomationLanes)
+		return std::nullopt;
+
+	const auto pointsView = _lanes[laneIdx].PublishedPoints.borrow();
+	if (!pointsView.ReadSucceeded()) return std::nullopt;
+	if (!pointsView) return 0.0f;
+	const auto fracF = static_cast<float>(frac);
+	const auto count = pointsView->PointCount;
+	if (count == 0u) return 0.0f;
+	const auto& points = pointsView->Points;
+
+	// The lease pins this one complete point set until interpolation is done.
+	auto localCursor = cursorIdx;
+
+	// Clamp cursor into range and reset on loop wrap (frac stepped backward).
+	if (localCursor >= count)
+		localCursor = 0u;
+	if (fracF < points[localCursor].first)
+		localCursor = 0u;
+
+	// Advance forward while the next point still starts at or before frac.
+	while ((localCursor + 1u) < count && points[localCursor + 1u].first <= fracF)
+		++localCursor;
+
+	// Before the first point: hold the first value. At/after the last: hold last.
+	float result;
+	if (fracF <= points[0].first)
+		result = points[0].second;
+	else if ((localCursor + 1u) >= count)
+		result = points[count - 1u].second;
+	else
+	{
+		const auto lo = points[localCursor];
+		const auto hi = points[localCursor + 1u];
+		const auto span = hi.first - lo.first;
+		result = (span <= 0.0f) ? hi.second
+			: lo.second + (fracF - lo.first) / span * (hi.second - lo.second);
 	}
 
-	return 0.0f;
+	cursorIdx = static_cast<std::uint16_t>(localCursor);
+	return result;
 }
 
 void MidiLoop::ClearAutomationLane(std::size_t laneIdx) noexcept
@@ -2062,14 +2028,12 @@ void MidiLoop::ClearAutomationLane(std::size_t laneIdx) noexcept
 		return;
 
 	auto& lane = _lanes[laneIdx];
-	const auto gen = lane.Revision.load(std::memory_order_relaxed);
-	lane.Revision.store(gen + 1u, std::memory_order_release);
+	try { lane.PublishedPoints.store(nullptr); }
+	catch (const std::bad_alloc&) { return; } // Keep the old mapping and point set together.
 	lane.Mapping.MatchKey.store(AutomationMapping::kInactive, std::memory_order_relaxed);
 	lane.Mapping.TargetPlugin = nullptr;
 	lane.Mapping.SavedTarget = {};
 	lane.Mapping.TargetParameterIndex = 0u;
-	lane.PointCount = 0u;
-	lane.Revision.store(gen + 2u, std::memory_order_release);
 }
 
 void MidiLoop::ClearAutomationLanePoints(std::size_t laneIdx) noexcept
@@ -2077,11 +2041,8 @@ void MidiLoop::ClearAutomationLanePoints(std::size_t laneIdx) noexcept
 	if (laneIdx >= MaxAutomationLanes)
 		return;
 
-	auto& lane = _lanes[laneIdx];
-	const auto gen = lane.Revision.load(std::memory_order_relaxed);
-	lane.Revision.store(gen + 1u, std::memory_order_release);
-	lane.PointCount = 0u;
-	lane.Revision.store(gen + 2u, std::memory_order_release);
+	try { _lanes[laneIdx].PublishedPoints.store(nullptr); }
+	catch (const std::bad_alloc&) { /* Keep the last complete publication. */ }
 }
 
 std::optional<std::size_t> MidiLoop::ResolveAutomationLaneFor(const vst::IVstPlugin* plugin,
@@ -2139,29 +2100,17 @@ std::uint16_t MidiLoop::SnapshotAutomationLanePoints(std::size_t laneIdx,
 	if (laneIdx >= MaxAutomationLanes || !out || 0u == maxPoints)
 		return 0u;
 
-	const auto& lane = _lanes[laneIdx];
+	const auto points = _lanes[laneIdx].PublishedPoints.load();
+	if (!points) return 0u;
+	const auto count = (std::min)({points->PointCount, maxPoints,
+		static_cast<std::size_t>((std::numeric_limits<std::uint16_t>::max)())});
+	std::copy_n(points->Points.begin(), count, out);
+	return static_cast<std::uint16_t>(count);
+}
 
-	// Seqlock read: retry while the writer holds the lock (odd generation) or the
-	// generation changed mid-copy. Bounded retries — this is a display path, so a
-	// rare give-up returning the latest partial copy is acceptable.
-	for (int attempt = 0; attempt < 8; ++attempt)
-	{
-		const auto gen0 = lane.Revision.load(std::memory_order_acquire);
-		if (gen0 & 1u)
-			continue; // Writer in progress.
-
-		auto count = lane.PointCount;
-		if (count > maxPoints)
-			count = maxPoints;
-		for (std::size_t i = 0u; i < count; ++i)
-			out[i] = lane.Points[i];
-
-		const auto gen1 = lane.Revision.load(std::memory_order_acquire);
-		if (gen0 == gen1)
-			return static_cast<std::uint16_t>(count);
-	}
-
-	return 0u;
+void MidiLoop::CollectAutomationPointSnapshots()
+{
+	for (auto& lane : _lanes) lane.PublishedPoints.collect();
 }
 
 bool MidiLoop::IsAutomationLaneActive(std::size_t laneIdx) const noexcept

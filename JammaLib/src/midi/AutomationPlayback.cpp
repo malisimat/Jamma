@@ -133,15 +133,16 @@ void AutomationPlayback::ProcessBlock(std::uint32_t blockStartSample,
 			: 0.0;
 
 		auto& state = _automationPlaybackState[i];
-		const float val = entry.loop->GetAutomationValueAtCursor(entry.laneIdx, frac, state.cursorIdx);
+		const auto val = entry.loop->GetAutomationValueAtCursor(entry.laneIdx, frac, state.cursorIdx);
+		if (!val) continue;
 
 		const auto generation = entry.plugin->AutomationGeneration();
-		if (generation != state.stateGeneration || std::abs(val - state.lastValue) > AutomationEpsilon)
+		if (generation != state.stateGeneration || std::abs(*val - state.lastValue) > AutomationEpsilon)
 		{
 			vst::IVstPlugin::PluginCallGuard call(*entry.plugin);
 			if (!call) continue;
-			entry.plugin->SetParameter(entry.paramIdx, val);
-			state.lastValue = val;
+			entry.plugin->SetParameter(entry.paramIdx, *val);
+			state.lastValue = *val;
 			state.stateGeneration = generation;
 		}
 	}

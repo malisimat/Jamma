@@ -2577,6 +2577,18 @@ void Station::ReleaseRetiredAudioStates()
 {
 	_audioState.collect();
 	_automationPlayback.Collect();
+	// The frame owner reclaims automation point versions even when MIDI produces
+	// no further edits. These prepared states also cover takes pending retirement.
+	const auto collectAutomationPoints = [](const std::shared_ptr<const AudioState>& state)
+	{
+		if (!state) return;
+		for (const auto& render : state->TakeRenders)
+			if (render)
+				for (const auto& loop : render->MidiSources)
+					if (loop) loop->CollectAutomationPointSnapshots();
+	};
+	collectAutomationPoints(_AudioStateSnapshot());
+	for (const auto& retired : _retiredAudioStates) collectAutomationPoints(retired.State);
 	const auto completed = _audioCompletedStateGeneration.load(std::memory_order_acquire);
 	auto keep = std::remove_if(_retiredAudioStates.begin(), _retiredAudioStates.end(),
 		[completed](const RetiredAudioState& retired)

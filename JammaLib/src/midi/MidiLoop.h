@@ -15,6 +15,7 @@
 #include "../../include/Constants.h"
 #include "MidiEvent.h"
 #include "MidiQuantisation.h"
+#include "../base/PublishedAudioSnapshot.h"
 
 namespace vst
 {
@@ -137,15 +138,14 @@ namespace midi
 		static constexpr std::size_t MaxPoints = 512u;
 
 		AutomationMapping Mapping;
-		std::array<std::pair<float, float>, MaxPoints> Points{}; // (frac, value)
-		std::size_t PointCount = 0u;
-
-		// Seqlock generation counter. The MIDI thread (the only writer of Points /
-		// PointCount) bumps this to an odd value before mutating the buffer and back
-		// to an even value afterwards. Both the audio thread (GetAutomationValueAtCursor)
-		// and the render thread (SnapshotAutomationLanePoints) participate in a bounded
-		// retry loop so neither ever observes a half-shifted buffer.
-		std::atomic<std::uint32_t> Revision{ 0u };
+		struct PointSet
+		{
+			std::array<std::pair<float, float>, MaxPoints> Points{}; // (frac, value)
+			std::size_t PointCount = 0u;
+		};
+		// MIDI/UI writers publish immutable point sets. Audio borrows without
+		// shared ownership; render/export use the off-callback owning load.
+		base::PublishedAudioSnapshot<const PointSet> PublishedPoints;
 	};
 
 	// In-memory MIDI loop. Records sample-offset-stamped events relative to the
@@ -318,9 +318,8 @@ namespace midi
 		void Reset() noexcept;
 		// Non-RT save/load transfer. Call SnapshotForExport only at an established
 		// quiescent scene boundary: event storage has a single MIDI-writer owner.
-		// Automation points use their bounded lane seqlock and return false rather
-		// than exposing a torn lane. anchorCorrection is folded into the exported
-		// origin so restored takes can begin with correction zero.
+		// Automation points use immutable published lane views. anchorCorrection is
+		// folded into the exported origin so restored takes begin at correction zero.
 		bool SnapshotForExport(ExportState& state,
 			std::int32_t anchorCorrection = 0) const;
 		// Restores raw event order exactly; unlike ReplaceRecordedEvents this does
@@ -393,9 +392,9 @@ namespace midi
 
 		// Write a control point for lane laneIdx at fractional loop position frac
 		// (0..1). If a point already exists at (approximately) frac the value is
-		// updated in place; otherwise the point is inserted in frac order. Real-time
-		// safe: fixed-capacity storage, no allocation. Points beyond capacity are
-		// dropped (drop-newest). Called on the MIDI thread during recording.
+		// updated in place; otherwise the point is inserted in frac order. This
+		// non-audio MIDI-pump writer allocates an immutable copy; the callback only
+		// borrows it. Points beyond capacity are dropped (drop-newest).
 		void SetAutomationValueAtFrac(std::size_t laneIdx, double frac, float value) noexcept;
 
 		// Replace automation in the sample-domain half-open window
@@ -410,8 +409,10 @@ namespace midi
 		// Cursor-advancing read on lane laneIdx: advances cursorIdx forward to the
 		// correct bracket for frac, returns the piecewise-linearly interpolated
 		// value. Resets the cursor on loop wrap (detected when frac steps backward).
-		// Amortised O(1) per block. Returns 0 when the lane has no points.
-		float GetAutomationValueAtCursor(std::size_t laneIdx, double frac, std::uint16_t& cursorIdx) const noexcept;
+		// Amortised O(1) per block. Empty lanes yield zero; a failed bounded
+		// borrow yields no value so the caller can keep its previous parameter.
+		std::optional<float> GetAutomationValueAtCursor(std::size_t laneIdx, double frac,
+			std::uint16_t& cursorIdx) const noexcept;
 
 		// Clear a lane's mapping and control points (non-audio thread; delete key).
 		void ClearAutomationLane(std::size_t laneIdx) noexcept;
@@ -438,16 +439,17 @@ namespace midi
 			vst::IVstPlugin* plugin,
 			unsigned int paramIdx, const std::string& identity = {});
 
-		// Render-thread consistent read of a lane's control points via the lane
-		// seqlock. Copies up to maxPoints (frac, value) pairs into out and returns
-		// the count actually copied. Returns 0 for an invalid lane. Safe to call
-		// concurrently with MIDI-thread writes (retries on a torn read).
+		// Render-thread read of an immutable lane view. Copies up to maxPoints
+		// (frac, value) pairs into out and returns the count actually copied.
 		std::uint16_t SnapshotAutomationLanePoints(std::size_t laneIdx,
 			std::pair<float, float>* out, std::size_t maxPoints) const noexcept;
 
 		// Whether a lane currently has a mapping wired. Used by the renderer to gate
 		// and highlight active automation bands.
 		bool IsAutomationLaneActive(std::size_t laneIdx) const noexcept;
+		// Off-callback owner pump: reclaim retired point sets after audio borrows end,
+		// including when no further automation edit is published.
+		void CollectAutomationPointSnapshots();
 
 		// Non-destructive start-time quantisation. Non-RT publication builds immutable
 		// event buffers and publishes a raw pointer for audio-thread readers. Retained

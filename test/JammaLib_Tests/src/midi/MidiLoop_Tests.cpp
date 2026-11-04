@@ -2286,6 +2286,80 @@ TEST(MidiLoopPersistence, RestoreKeepsRawSimultaneousEventOrderAndAutomationOrig
 	EXPECT_EQ(lane.Points[1], restored.AutomationLanes[0].Points[1]);
 }
 
+TEST(MidiLoopAutomation, PublishedOverwriteIsCoherentDuringAudioAndRenderReads)
+{
+	MidiLoop loop(1000.0f);
+	loop.ReplaceRecordedEvents(nullptr, 0u, 1000u);
+	loop.OverwriteAutomationWindow(0u, 0u, 1000u, 0.2f);
+	std::atomic<unsigned int> readerReady{0u}, publishedEdit{0u}, readCount{0u};
+	std::thread writer([&]
+	{
+		for (unsigned int edit = 0u; edit < 256u; ++edit)
+		{
+			while (readerReady.load(std::memory_order_acquire) < edit + 1u) std::this_thread::yield();
+			loop.OverwriteAutomationWindow(0u, 0u, 1000u, (edit & 1u) ? 0.8f : 0.2f);
+			publishedEdit.store(edit + 1u, std::memory_order_release);
+			while (readCount.load(std::memory_order_acquire) < edit + 1u) std::this_thread::yield();
+		}
+	});
+	bool coherent = true;
+	unsigned int overlapReads = 0u;
+	std::uint16_t cursor = 0u;
+	std::array<std::pair<float, float>, 2u> points{};
+	for (unsigned int read = 0u; read < 256u; ++read)
+	{
+		readerReady.store(read + 1u, std::memory_order_release);
+		do
+		{
+			const auto currentCount = loop.SnapshotAutomationLanePoints(0u, points.data(), points.size());
+			coherent &= currentCount == 1u && points[0].first == 0.0f
+				&& (points[0].second == 0.2f || points[0].second == 0.8f);
+			const auto currentValue = loop.GetAutomationValueAtCursor(0u, 0.5, cursor);
+			coherent &= !currentValue || *currentValue == 0.2f || *currentValue == 0.8f;
+			++overlapReads;
+			std::this_thread::yield();
+		} while (publishedEdit.load(std::memory_order_acquire) < read + 1u);
+		const auto expected = (read & 1u) ? 0.8f : 0.2f;
+		const auto count = loop.SnapshotAutomationLanePoints(0u, points.data(), points.size());
+		coherent &= count == 1u && points[0].first == 0.0f && points[0].second == expected;
+		const auto value = loop.GetAutomationValueAtCursor(0u, 0.5, cursor);
+		coherent &= value && *value == expected;
+		readCount.store(read + 1u, std::memory_order_release);
+	}
+	writer.join();
+	loop.CollectAutomationPointSnapshots();
+	EXPECT_GE(readCount.load(), 256u);
+	EXPECT_GE(overlapReads, 256u);
+	EXPECT_TRUE(coherent);
+	const auto finalValue = loop.GetAutomationValueAtCursor(0u, 0.5, cursor);
+	ASSERT_TRUE(finalValue);
+	EXPECT_FLOAT_EQ(0.8f, *finalValue);
+}
+
+TEST(MidiLoopAutomation, RetiredPointsStayAliveUntilAudioBorrowEnds)
+{
+	MidiLoop loop(1000.0f);
+	loop.ReplaceRecordedEvents(nullptr, 0u, 1000u);
+	loop.SetAutomationValueAtFrac(0u, 0.25, 0.2f);
+	auto borrowed = loop.GetLane(0u).PublishedPoints.borrow();
+	ASSERT_TRUE(borrowed);
+	ASSERT_EQ(1u, borrowed->PointCount);
+	auto owned = loop.GetLane(0u).PublishedPoints.load();
+	std::weak_ptr<const midi::AutomationLane::PointSet> oldPoints = owned;
+	owned.reset();
+	loop.OverwriteAutomationWindow(0u, 0u, 1000u, 0.8f);
+	loop.CollectAutomationPointSnapshots();
+	EXPECT_FLOAT_EQ(0.2f, borrowed->Points[0].second);
+	EXPECT_FALSE(oldPoints.expired());
+	borrowed.reset();
+	loop.CollectAutomationPointSnapshots();
+	EXPECT_TRUE(oldPoints.expired());
+	std::uint16_t cursor = 0u;
+	const auto finalValue = loop.GetAutomationValueAtCursor(0u, 0.5, cursor);
+	ASSERT_TRUE(finalValue);
+	EXPECT_FLOAT_EQ(0.8f, *finalValue);
+}
+
 TEST(LoopTakeMidiOverdub, OverdubCreatesMidiLoopsMatchingConfiguredChannelsAndDevices)
 {
 	auto take = MakeLoopTake("overdub-midi-setup");
