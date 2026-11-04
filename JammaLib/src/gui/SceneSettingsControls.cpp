@@ -161,7 +161,7 @@ SceneSettingsControls::SceneSettingsControls(std::uint8_t channel, double offset
 			toggleParams.TintColor = glm::vec3(1.0f, 0.34f, 0.30f);
 			break;
 		case 1:
-			toggleParams.TintColor = glm::vec3(1.0f, 0.75f, 0.20f);
+			toggleParams.TintColor = glm::vec3(0.30f, 0.60f, 1.0f);
 			break;
 		case 2:
 		default:
