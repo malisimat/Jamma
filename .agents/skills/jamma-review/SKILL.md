@@ -7,6 +7,8 @@ description: Review substantial Jamma changes for correctness, real-time safety,
 
 Review the selected checkout without editing source unless fixes were requested. This skill does not authorize commits, PR publication or merging. Resolve every path from that checkout, including in a worktree.
 
+For a substantial pre-merge branch/tree review, use the global `code-review` workflow to coordinate independent investigation, coverage and cross-feature synthesis. This repo-local skill supplies Jamma's ownership, convention, real-time/threading and static-check evidence within that workflow; it does not replace the heavyweight review. Give each investigator the same verified worktree and exact Git scope, plus the applicable areas of this checklist. Cross-thread/audio review is covered here; no separate threading skill is required.
+
 ## Establish the contract
 
 Read `AGENTS.md`, `doc/glossary.md`, `doc/realtime-audio.md` and relevant subsystem guidance. They own the rules; this skill owns their review procedure. Turn the user's specific requests into explicit acceptance criteria. For example, "do not grow Scene" is a constraint to assess and report, not permission to invent a universal size cap.
