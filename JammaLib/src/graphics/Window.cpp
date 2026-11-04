@@ -1515,7 +1515,10 @@ LRESULT CALLBACK Window::WindowProcedure(HWND hWindow, UINT message, WPARAM wPar
 	case WM_INPUT:
 	{
 		if (GET_RAWINPUT_CODE_WPARAM(wParam) == RIM_INPUT)
+		{
 			window->_HandleRawInput(reinterpret_cast<HRAWINPUT>(lParam));
+			window->_DrainRawInput();
+		}
 		return DefWindowProc(hWindow, message, wParam, lParam);
 	}
 	case WM_DPICHANGED:
@@ -1916,8 +1919,18 @@ void Window::_HandleRawInput(HRAWINPUT input)
 		CancelMouseCapture();
 		return;
 	}
-	if (raw.header.dwType != RIM_TYPEMOUSE) return;
-	if (read < sizeof(RAWINPUT) || (raw.data.mouse.usFlags & MOUSE_MOVE_ABSOLUTE))
+	if (read < sizeof(RAWINPUT))
+	{
+		CancelMouseCapture();
+		return;
+	}
+	_HandleRawMouse(raw);
+}
+
+void Window::_HandleRawMouse(const RAWINPUT& raw)
+{
+	if (!HasRelativePointer() || raw.header.dwType != RIM_TYPEMOUSE) return;
+	if (raw.data.mouse.usFlags & MOUSE_MOVE_ABSOLUTE)
 	{
 		CancelMouseCapture();
 		return;
@@ -1925,6 +1938,28 @@ void Window::_HandleRawInput(HRAWINPUT input)
 	const auto upward = -static_cast<std::int64_t>(raw.data.mouse.lLastY);
 	_QueueRelativePointer({static_cast<int>(raw.data.mouse.lLastX),
 		static_cast<int>(std::clamp<std::int64_t>(upward, INT_MIN, INT_MAX))});
+}
+
+void Window::_DrainRawInput()
+{
+	if (!HasRelativePointer()) return;
+	// Reading the dispatched WM_INPUT above leaves later packets queued. Drain
+	// them in batches so a high polling rate mouse cannot outrun the UI pump.
+	std::array<RAWINPUT, 64> buffer{};
+	for (unsigned int batch = 0; batch < 8 && HasRelativePointer(); ++batch)
+	{
+		UINT bytes = sizeof(buffer);
+		const auto count = GetRawInputBuffer(buffer.data(), &bytes, sizeof(RAWINPUTHEADER));
+		if (count == 0 || count == UINT(-1)) break;
+		auto* raw = buffer.data();
+		for (UINT i = 0; i < count; ++i)
+		{
+			_HandleRawMouse(*raw);
+			const auto next = reinterpret_cast<ULONG_PTR>(raw) + raw->header.dwSize;
+			raw = reinterpret_cast<RAWINPUT*>((next + sizeof(ULONG_PTR) - 1u)
+				& ~(sizeof(ULONG_PTR) - 1u));
+		}
+	}
 }
 
 void Window::_QueueRelativePointer(utils::Position2d delta) noexcept

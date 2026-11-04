@@ -153,6 +153,8 @@ namespace graphics
 		void _RestoreRawInput();
 		void _ResamplePointer();
 		void _HandleRawInput(HRAWINPUT input);
+		void _HandleRawMouse(const RAWINPUT& raw);
+		void _DrainRawInput();
 		void LoadResources();
 		void InitScene();
 		void ApplyPendingResize();
