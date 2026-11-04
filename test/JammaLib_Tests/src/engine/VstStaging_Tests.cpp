@@ -1310,6 +1310,27 @@ TEST_F(VstRackControlsTest, FailedLoadReportsErrorAndRemainsReplaceable)
  EXPECT_TRUE(Take->GetVstRackSlot().Pending);
 }
 
+TEST_F(VstRackControlsTest, SuccessfulInteractiveLoadAttemptsToOpenEditor)
+{
+	Pick = [] { return std::wstring{L"loaded-without-editor.vst3"}; };
+	Update();
+	Click(Take->GetGuiRack());
+	Controls->Pump();
+	auto jobs = Take->CommitChanges();
+	const auto load = std::find_if(jobs.begin(), jobs.end(), [](const auto& job) {
+		return job.JobActionType == JobAction::JOB_LOADVST;
+	});
+	ASSERT_NE(load, jobs.end());
+	auto completed = *load;
+	completed.PreInitPlugin = std::make_shared<StateGatePlugin>();
+	Take->OnAction(completed);
+	Take->CommitChanges();
+	Controls->Pump();
+	EXPECT_TRUE(Take->GetVstRackSlot().Plugin);
+	ASSERT_EQ(1u, Errors.size());
+	EXPECT_NE(std::wstring::npos, Errors.front().find(L"editor could not be opened"));
+}
+
 TEST_F(VstRackControlsTest, FailedStationAppendShowsErrorWithoutRedSlotOrRackInfo)
 {
 	auto existing = std::make_shared<StateGatePlugin>();

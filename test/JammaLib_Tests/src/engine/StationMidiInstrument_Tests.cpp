@@ -3100,7 +3100,7 @@ TEST(StationMidiInstrument, PureMidiTakeRendersSameBlockAndTailWithGainAppliedOn
 	const auto rendered = RenderStationAudioBlock(station, 0u, 128u);
 	ASSERT_TRUE(std::any_of(rendered.begin(), rendered.end(), [](float value) { return value != 0.0f; }));
 	ASSERT_EQ(1u, plugin->Events.size()); EXPECT_EQ(80u, plugin->Events.front().data2);
-	ASSERT_EQ(1u, stationPlugin->Events.size()); EXPECT_EQ(40u, stationPlugin->Events.front().data2);
+	ASSERT_EQ(1u, stationPlugin->Events.size()); EXPECT_EQ(70u, stationPlugin->Events.front().data2);
 	EXPECT_FALSE(plugin->RealtimeFlags.front());
 	plugin->RenderMidiImpulses = false;
 	plugin->ReplaceOutput = true; plugin->OutputValue = 0.25f;
@@ -3125,6 +3125,23 @@ TEST(StationMidiInstrument, PureMidiTakeRendersSameBlockAndTailWithGainAppliedOn
 	EXPECT_TRUE(std::all_of(muted.begin(),muted.end(),[](float value){return std::abs(value)<0.000001f;}));
 	EXPECT_EQ(plugin->BeginCalls,plugin->ProcessCalls); EXPECT_GT(plugin->ProcessCalls,96u);
 	EXPECT_TRUE(take->GetLoops().empty());
+}
+
+TEST(StationMidiInstrument, TakeMasterFaderUsesSliderTravelForRecordedVelocity)
+{
+	auto take = MakeMidiTake("velocity-fader");
+	ASSERT_TRUE(take->RestoreMixerLevels(0.0, {}));
+	EXPECT_FLOAT_EQ(0.0f, take->RecordedMidiVelocityScale());
+	ASSERT_TRUE(take->RestoreMixerLevels(std::pow(10.0, -24.0 / 20.0), {}));
+	EXPECT_NEAR(0.5f, take->RecordedMidiVelocityScale(), 0.0001f);
+	ASSERT_TRUE(take->RestoreMixerLevels(1.0, {}));
+	EXPECT_FLOAT_EQ(1.0f, take->RecordedMidiVelocityScale());
+	ASSERT_TRUE(take->RestoreMixerLevels(2.0, {}));
+	EXPECT_NEAR(1.90309f, take->RecordedMidiVelocityScale(), 0.0001f);
+	ASSERT_TRUE(take->RestoreMixerLevels(std::pow(10.0, 10.0 / 20.0), {}));
+	EXPECT_NEAR(2.5f, take->RecordedMidiVelocityScale(), 0.0001f);
+	ASSERT_TRUE(take->RestoreMixerLevels(std::pow(10.0, 20.0 / 20.0), {}));
+	EXPECT_FLOAT_EQ(4.0f, take->RecordedMidiVelocityScale());
 }
 
 TEST(StationMidiInstrument, ParentFilterRetirementKeepsChildLiveNotesAndPedalsOwned)

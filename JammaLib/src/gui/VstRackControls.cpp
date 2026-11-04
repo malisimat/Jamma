@@ -125,6 +125,7 @@ void VstRackControls::Pump()
 	_busy = true;
 	struct BusyRelease { bool& Busy; ~BusyRelease() { Busy = false; } } release{_busy};
 	std::wstring failure;
+	std::vector<std::pair<Target, std::shared_ptr<vst::IVstPlugin>>> readyEditors;
 	{
 		std::scoped_lock lock(_host.Mutex);
 		std::erase_if(_loads, [&](const Target& target) {
@@ -137,8 +138,26 @@ void VstRackControls::Pump()
 				failure = L"Could not load VST:\n" + (rolledBack ? *rolledBack : completed.Path) +
 					L"\n\nCheck that the file is an installed 64-bit VST2 or VST3 plugin compatible with this item's channels." +
 					(rolledBack ? L"\nThe rack has been restored." : L"\nClick the red VST button to choose a replacement.");
+			else if (completed.Plugin) readyEditors.emplace_back(target, completed.Plugin);
 			return true;
 		});
+	}
+	for (const auto& [target, plugin] : readyEditors)
+	{
+		// Plugin editors can pump window messages; never enter native code while
+		// holding the Scene lock, and reject a slot retired during that pump.
+		{
+			std::scoped_lock lock(_host.Mutex);
+			if (!_AvailableLocked(target) || _SlotLocked(target).Plugin != plugin) continue;
+		}
+		if (!_host.Editors.OpenVstEditorForPlugin(plugin))
+			_ShowError(L"The plugin loaded, but its editor could not be opened. Click its VST button to retry.");
+		bool stillOwned = false;
+		{
+			std::scoped_lock lock(_host.Mutex);
+			stillOwned = _AvailableLocked(target) && _SlotLocked(target).Plugin == plugin;
+		}
+		if (!stillOwned) _host.Editors.CloseVstEditorForPlugin(plugin);
 	}
 	if (!failure.empty())
 	{
@@ -397,12 +416,6 @@ std::optional<actions::ActionResult> gui::VstRackControls::OnKeyboard(const acti
 {
 	if (action.KeyActionType != actions::KeyAction::KEY_UP || !(action.Modifiers & base::Action::MODIFIER_CTRL) ||
 		!(action.Modifiers & base::Action::MODIFIER_SHIFT)) return std::nullopt;
-	if (action.KeyChar == 86u)
-	{
-		const auto path = utils::PickFile(L"Choose VST plugin");
-		if (path.empty()) return actions::ActionResult::NoAction();
-		return _host.Editors.HandleVstInsert(path, depth, hovering, _host.Commit);
-	}
 	if (action.KeyChar == 69u) return _host.Editors.HandleVstEditorOpen(hovering, depth, stations);
 	return std::nullopt;
 }

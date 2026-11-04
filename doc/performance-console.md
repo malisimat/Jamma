@@ -79,7 +79,6 @@ outside the console; the loop editor consumes contextual key input.
 | **Space** | Tap tempo on press; hold the grid until release; works with Ctrl and in the editor, except text entry |
 | **Reclock (Timing settings)** | Suspend remote follow and arm a new local master; request its BPM/BPI after activation |
 | **Sync to server (Timing settings)** | Cancel local tempo intent and follow a fresh observation of current server timing |
-| **Ctrl+Shift+V** | Insert a VST on the hovered station/take/loop at the current selection depth |
 | **Ctrl+Shift+E** | Open the first VST editor on that hovered target |
 | Hold **`** or **numpad 0** | Reveal routing cables |
 | **F1–F9** | Recall a mute group, or capture an empty slot |

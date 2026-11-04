@@ -25,11 +25,6 @@ namespace vst
 		void CloseVstEditorsForTake(const std::shared_ptr<engine::LoopTake>& take);
 		void PruneClosedVstEditorWindows();
 
-		actions::ActionResult HandleVstInsert(const std::wstring& pluginPath,
-			base::SelectDepth depth,
-			const std::shared_ptr<base::GuiElement>& hovering,
-			const std::function<void()>& onCommit);
-
 		actions::ActionResult HandleVstEditorOpen(const std::shared_ptr<base::GuiElement>& hovering,
 			base::SelectDepth depth,
 			const std::vector<std::shared_ptr<engine::Station>>& stations);

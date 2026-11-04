@@ -441,7 +441,7 @@ namespace engine
 			std::uint32_t globalSampleNow) noexcept;
 		std::vector<midi::MidiEvent> BuildMidiPunchInLiveTransitionEvents(std::uint32_t punchSample) const;
 		std::vector<midi::MidiEvent> BuildMidiPunchOutLiveTransitionEvents(std::uint32_t punchSample) const;
-		float RecordedMidiVelocityScale() const noexcept { return static_cast<float>(_masterMixer->UnmutedLevel()); }
+		float RecordedMidiVelocityScale() const noexcept { return _masterMixer->UnmutedVelocityScale(); }
 		unsigned int ReadPreparedMidiBlock(std::span<const std::shared_ptr<midi::MidiLoop>> sources,
 			std::uint32_t globalSample, std::uint32_t numSamples,
 			midi::IMidiOutputSink& sink, unsigned int firstOutputIndex, bool rawVelocity = true, const AudioState* preparedAudio = nullptr) noexcept;
