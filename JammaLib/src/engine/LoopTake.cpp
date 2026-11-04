@@ -797,11 +797,22 @@ void LoopTake::WriteBlock(const std::shared_ptr<MultiAudioSink> dest,
 	auto sampsToRead = (numSamps <= constants::MaxBlockSize) ? numSamps : constants::MaxBlockSize;
 	// Generated audio can persist without a material leaf. Apply Take-local mute
 	// and replacement/source intent to its existing master fade at this boundary.
-	if (IsUserOrSourceMuted()) _masterMixer->Mute();
-	else _masterMixer->UnMute();
+	const bool muted = IsUserOrSourceMuted();
+	const bool mixerMuted = (_masterMixer->GetTweakState() & TWEAKSTATE_MUTED) != 0;
+	if (muted != mixerMuted)
+	{
+		if (muted) _masterMixer->Mute();
+		else _masterMixer->UnMute();
+	}
 	auto masterLevel = static_cast<float>(_masterMixer->Level());
 	auto masterPeak = 0.0f;
-	const auto channelCount = state->OutputMixers.size();
+	base::PublishedAudioSnapshot<vst::VstChain>::Lease chainLease;
+	if (!prepared) chainLease = _vstChain.borrow();
+	auto* chain = prepared ? prepared->Chain.get() : chainLease.get();
+	// Keep output routing prepared, but do not scan/mix known silence for a
+	// MIDI-only take. Any local rack must still run for generators and tails.
+	const auto channelCount = state->AudioBuffers.empty() && (!chain || chain->NumPlugins() == 0u)
+		? 0u : state->OutputMixers.size();
 	if (channelCount == 0u)
 	{
 		_masterMixer->UpdateVu(0.0f, sampsToRead);
@@ -832,9 +843,6 @@ void LoopTake::WriteBlock(const std::shared_ptr<MultiAudioSink> dest,
 			std::copy(srcPtr, srcPtr + sampsToRead, scratch);
 	}
 
-	base::PublishedAudioSnapshot<vst::VstChain>::Lease chainLease;
-	if (!prepared) chainLease = _vstChain.borrow();
-	auto* chain = prepared ? prepared->Chain.get() : chainLease.get();
 	if (chain && chain->IsActive() && state->VstBlockPtrs.size() >= channelCount
 		&& state->InstrumentPtrs.size() >= channelCount)
 		chain->ProcessRack(state->VstBlockPtrs.data(), state->InstrumentPtrs.data(), static_cast<int>(state->VstBlockPtrs.size()), sampsToRead);

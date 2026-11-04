@@ -1060,6 +1060,10 @@ TEST_F(SceneRoutingIntegrationTest, SelectingAnotherTakeCollapsesRackButHoverAnd
 	const auto stationGrid = stationRack->VstRack(); ASSERT_TRUE(stationGrid);
 	const auto takeGrid = rack->VstRack(); ASSERT_TRUE(takeGrid);
 	stationGrid->SetChannelsCollapsed(false); takeGrid->SetChannelsCollapsed(false);
+	// Opening a Take grid deliberately closes its Station sibling. Rack input
+	// must preserve this accepted state, rather than reopen the sibling.
+	ASSERT_TRUE(stationGrid->ChannelsCollapsed());
+	ASSERT_FALSE(takeGrid->ChannelsCollapsed());
 	const auto allowed = station->AllowedMidiChannels();
 	const auto midiRoutes = station->MidiChannelRoutes();
 	const auto gain = stationRack->GetMasterSlider()->Value();
@@ -1086,7 +1090,7 @@ TEST_F(SceneRoutingIntegrationTest, SelectingAnotherTakeCollapsesRackButHoverAnd
 	click.State = actions::TouchAction::TOUCH_UP;
 	scene->OnAction(click);
 	EXPECT_EQ(gui::GuiRackParams::RACK_CHANNELS, rack->GetRackState());
-	EXPECT_FALSE(stationGrid->ChannelsCollapsed());
+	EXPECT_TRUE(stationGrid->ChannelsCollapsed());
 	EXPECT_FALSE(takeGrid->ChannelsCollapsed());
 
 	actions::TouchMoveAction move;

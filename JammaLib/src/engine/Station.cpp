@@ -2190,7 +2190,9 @@ void Station::SetAllowedMidiChannels(const std::vector<int>& channels)
 bool Station::TryEnqueueImmediateLiveMidi(const MidiEvent& event) noexcept
 {
 	if (MembershipRemoving()) return false;
-	return _midiDelivery.TryEnqueueImmediateLiveMidi(event);
+	const auto state = _BorrowAudioState();
+	return _midiDelivery.TryEnqueueImmediateLiveMidi(event, state ? &state->Midi : nullptr,
+		state ? 0u : _liveMidiAdmissionGeneration.load(std::memory_order_acquire));
 }
 
 void Station::ResetLiveMidiWhileQuiescent() noexcept
@@ -2529,6 +2531,7 @@ void Station::_PublishAudioState()
 		_midiRoutingDiagnostic = "Routing update is too large. Remove a plugin, take or MIDI route and try again. Previous routing remains active.";
 		return;
 	}
+	state->Midi.Generation = state->Generation;
 	_midiRoutingDiagnostic.clear();
 
 	state->VstRenderChannels = static_cast<unsigned int>(state->AudioBuffers.size());
@@ -2549,6 +2552,7 @@ void Station::_PublishAudioState()
 		expected = 0u;
 		std::this_thread::yield();
 	}
+	_liveMidiAdmissionGeneration.store(state->Generation, std::memory_order_release);
 	auto retired = _audioState.exchange(std::shared_ptr<const AudioState>(state), std::memory_order_acq_rel);
 	_promotionTopologyGate.store(0u, std::memory_order_seq_cst);
 	if (retired)

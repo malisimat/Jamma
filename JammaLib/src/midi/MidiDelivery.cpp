@@ -1034,12 +1034,13 @@ void MidiDelivery::ProcessBlock(const PreparedState& state,
 	auto releaseSlotBudget = static_cast<unsigned int>(midi::MidiNote::TotalNoteSlots);
 	for (auto dispatched = 0u; dispatched < MaxLiveMidiEventsPerBlock; ++dispatched)
 	{
-		MidiEvent immediate{};
+		ImmediateMidi immediateEntry{};
+		const auto& immediate = immediateEntry.Event;
 		SyntheticMidi syntheticEntry{};
-		const auto hasImmediate = _immediateLiveMidiIngress.Peek(immediate);
+		const auto hasImmediate = _immediateLiveMidiIngress.Peek(immediateEntry);
 		const auto hasSynthetic = _syntheticLiveMidiIngress.Peek(syntheticEntry);
 		const auto& synthetic = syntheticEntry.Event;
-		const auto immediatePosition = hasImmediate
+		const auto immediatePosition = hasImmediate && immediateEntry.Generation <= state.Generation
 			? midi::ClassifyMidiSampleInBlock(immediate.sampleOffset, blockStartSample, sampsToRead)
 			: midi::MidiBlockSamplePosition::Future;
 		const auto syntheticPosition = hasSynthetic
@@ -1078,7 +1079,10 @@ void MidiDelivery::ProcessBlock(const PreparedState& state,
 			liveMidi = syntheticEntry.Event;
 		}
 		else
-			_immediateLiveMidiIngress.Pop(liveMidi);
+		{
+			_immediateLiveMidiIngress.Pop(immediateEntry);
+			liveMidi = immediateEntry.Event;
+		}
 
 		if (_hasDiscontinuityCutoff && liveMidi.IsNoteOn() && midi::MidiSampleDelta(liveMidi.sampleOffset, _discontinuityCutoff) < 0) continue;
 		liveMidi.sampleOffset = midi::RebaseMidiSampleForVstBlock(liveMidi.sampleOffset,
@@ -1098,9 +1102,10 @@ void MidiDelivery::ProcessBlock(const PreparedState& state,
 
 	if (_hasDiscontinuityCutoff)
 	{
-		MidiEvent immediate{};
+		ImmediateMidi immediateEntry{};
+		const auto& immediate = immediateEntry.Event;
 		SyntheticMidi synthetic{};
-		const bool immediateBehind = _immediateLiveMidiIngress.Peek(immediate)
+		const bool immediateBehind = _immediateLiveMidiIngress.Peek(immediateEntry)
 			&& midi::MidiSampleDelta(immediate.sampleOffset, _discontinuityCutoff) < 0;
 		const bool syntheticBehind = _syntheticLiveMidiIngress.Peek(synthetic)
 			&& midi::MidiSampleDelta(synthetic.Event.sampleOffset, _discontinuityCutoff) < 0;
@@ -1169,19 +1174,19 @@ void MidiDelivery::ProcessBlock(const PreparedState& state,
 	_DrainScheduledMidi(state, blockStartSample, sampsToRead);
 }
 
-bool MidiDelivery::_TryEnqueueOrderedLiveMidi(midi::MidiQueue<1024>& queue,
+bool MidiDelivery::_TryEnqueueOrderedLiveMidi(midi::MidiQueue<1024, ImmediateMidi>& queue,
 	bool& hasLastSample,
 	std::uint32_t& lastSample,
-	const midi::MidiEvent& event) noexcept
+	ImmediateMidi entry) noexcept
 {
-	auto queuedEvent = event;
+	auto& queuedEvent = entry.Event;
 	if (hasLastSample
 		&& midi::MidiSampleDelta(queuedEvent.sampleOffset, lastSample) < 0)
 	{
 		queuedEvent.sampleOffset = lastSample;
 	}
 
-	if (!queue.Push(queuedEvent))
+	if (!queue.Push(entry))
 		return false;
 
 	lastSample = queuedEvent.sampleOffset;
@@ -1283,10 +1288,16 @@ void MidiDelivery::ClearAfterReadersStopped()
 	_midiDestinations.clear();
 }
 
-bool MidiDelivery::TryEnqueueImmediateLiveMidi(const MidiEvent& event) noexcept
+bool MidiDelivery::TryEnqueueImmediateLiveMidi(const MidiEvent& event, const PreparedState* state,
+	std::uint64_t fallbackGeneration) noexcept
 {
+	const bool release = event.IsNoteOff() || (event.MessageType() == 0xb0u && event.data1 == 64u && event.data2 < 64u);
+	if (state && !release && state->LiveChannelDestinations[event.Channel()].empty()) return false;
+	// A callback may still hold an older graph when the producer sees a newly
+	// enabled route. Leave that input queued until a matching/newer graph runs.
+	// Releases and bounded snapshot-read failures remain conservatively admitted.
 	return _TryEnqueueOrderedLiveMidi(_immediateLiveMidiIngress,
-		_hasLastImmediateLiveMidiSample, _lastImmediateLiveMidiSample, event);
+		_hasLastImmediateLiveMidiSample, _lastImmediateLiveMidiSample, {event, release ? 0u : (state ? state->Generation : fallbackGeneration)});
 }
 
 bool MidiDelivery::LatencyPathsChanged(const PreparedState& state) noexcept

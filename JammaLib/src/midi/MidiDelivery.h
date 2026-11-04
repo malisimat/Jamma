@@ -109,6 +109,11 @@ namespace midi
 			bool EmitSourceLossRelease = true; // Frozen before queue publication.
 		};
 	private:
+		struct ImmediateMidi
+		{
+			midi::MidiEvent Event;
+			std::uint64_t Generation = 0u; // Accepted topology observed by producer.
+		};
 		struct SyntheticMidi
 		{
 			midi::MidiEvent Event;
@@ -142,6 +147,7 @@ namespace midi
 		};
 		struct PreparedState
 		{
+			std::uint64_t Generation = 0u;
 			std::shared_ptr<vst::VstChain> MidiChain;
 			std::vector<PreparedRack> Racks;
 			std::vector<SourceGroup> SourceGroups;
@@ -176,7 +182,8 @@ namespace midi
 			unsigned int numSamps,
 			std::uint32_t blockStartSample, bool discontinuity = false) noexcept;
 		static void RecoverSkippedBlocks(const PreparedState& state) noexcept { _RecoverSkippedMidiBlocks(state); }
-		bool TryEnqueueImmediateLiveMidi(const MidiEvent& event) noexcept;
+		bool TryEnqueueImmediateLiveMidi(const MidiEvent& event, const PreparedState* state = nullptr,
+			std::uint64_t fallbackGeneration = 0u) noexcept;
 		bool TryEnqueueSyntheticLiveMidi(const MidiEvent& event) noexcept { return _TryEnqueueSyntheticMidi({event}); }
 		bool TryEnqueueSourceLossRelease(const MidiEvent& event, std::uint32_t revision) noexcept
 		{ return _TryEnqueueSyntheticMidi({event, nullptr, true, revision}); }
@@ -224,11 +231,11 @@ namespace midi
 			unsigned int& budget, unsigned int& slotBudget) noexcept;
 		bool _TryEnqueueSyntheticMidi(SyntheticMidi entry) noexcept;
 
-		static bool _TryEnqueueOrderedLiveMidi(MidiQueue<1024>& queue,
-			bool& hasLastSample, std::uint32_t& lastSample, const MidiEvent& event) noexcept;
+		static bool _TryEnqueueOrderedLiveMidi(MidiQueue<1024, ImmediateMidi>& queue,
+			bool& hasLastSample, std::uint32_t& lastSample, ImmediateMidi entry) noexcept;
 
 	private:
-		midi::MidiQueue<1024> _immediateLiveMidiIngress;
+		midi::MidiQueue<1024, ImmediateMidi> _immediateLiveMidiIngress;
 		midi::MidiQueue<1024, SyntheticMidi> _syntheticLiveMidiIngress;
 		std::vector<std::weak_ptr<MidiDestination>> _midiDestinations;
 		std::vector<std::shared_ptr<MidiPlaybackBinding>> _midiPlaybackBindings;

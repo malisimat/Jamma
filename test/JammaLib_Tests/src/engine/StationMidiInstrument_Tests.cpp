@@ -204,10 +204,12 @@ protected:
 	const std::shared_ptr<base::AudioSink> _InputChannel(unsigned int channel,
 		base::Audible::AudioSourceType) override
 	{
+		++InputRequests;
 		return channel < _sinks.size() ? _sinks[channel] : nullptr;
 	}
 
 public:
+	unsigned int InputRequests = 0u;
 	const std::vector<float>& ChannelSamples(unsigned int channel) const { return _sinks.at(channel)->Samples; }
 
 private:
@@ -219,6 +221,8 @@ class ChildMidiTestStation final : public Station
 public:
 	using Station::Station;
 	auto HoldAudioState() const { return _BorrowAudioState(); }
+	template<class State> void DeliverPrepared(const State& state, std::uint32_t start)
+	{ _DeliverMidiBlock(state, 128u, start); }
 };
 
 class ChildMidiTestTake final : public LoopTake
@@ -2683,7 +2687,11 @@ TEST(StationMidiInstrument, LiveAndRecordedShareChannelStatesIncludingSixteenAnd
 				take->GetMidiLoops().at(0)->ReplaceRecordedEvents(events.data(), events.size(), 1024u);
 				station->AddTake(take); station->CommitChanges();
 			}
-			else for (const auto& event : events) ASSERT_TRUE(station->TryEnqueueImmediateLiveMidi(event));
+			else for (const auto& event : events)
+			{
+				const bool accepted = event.IsNoteOff() || event.Channel() == 1u || (mode != 0u && mode != 4u);
+				EXPECT_EQ(accepted, station->TryEnqueueImmediateLiveMidi(event));
+			}
 			const auto audio = RenderStationAudioBlock(station, 0u, 128u);
 			const auto selected = mode != 0u && mode != 4u;
 			for (const auto& plugin : {a, b})
@@ -3432,4 +3440,91 @@ TEST(StationMidiInstrument, AcceptedChildChainsRemainPolledWhileReplacementsAwai
 	station->PollPlaybackPluginChanges();
 	EXPECT_EQ(0u,oldTake->PollCalls); EXPECT_EQ(0u,oldLeaf->PollCalls);
 	EXPECT_EQ(1u,newTake->PollCalls); EXPECT_EQ(1u,newLeaf->PollCalls);
+}
+
+
+TEST(StationMidiInstrument, IrrelevantLiveFloodDoesNotConsumeCapacityOrDispatchBudget)
+{
+	auto station = MakeStation("admission-flood");
+	auto plugin = AddPlugin(station, L"admission.dll");
+	station->SetAllowedMidiChannels({1});
+	for (auto i = 0u; i < 2048u; ++i)
+		EXPECT_FALSE(station->TryEnqueueImmediateLiveMidi({0u, 0xb1u, 1u, 100u}));
+	ASSERT_TRUE(station->TryEnqueueImmediateLiveMidi(MidiEvent::MakeNoteOn(0u, 0u, 60u, 100u)));
+	ASSERT_TRUE(station->TryEnqueueImmediateLiveMidi({0u, 0xb0u, 64u, 127u}));
+	RenderStationBlock(station, 0u);
+	ASSERT_EQ(2u, plugin->Events.size());
+	EXPECT_TRUE(plugin->Events.front().IsNoteOn());
+	station->SetAllowedMidiChannels({});
+	for (auto i = 0u; i < 2048u; ++i)
+		EXPECT_FALSE(station->TryEnqueueImmediateLiveMidi({128u, 0xb1u, 1u, 100u}));
+	ASSERT_TRUE(station->TryEnqueueImmediateLiveMidi(MidiEvent::MakeNoteOff(128u, 0u, 60u)));
+	ASSERT_TRUE(station->TryEnqueueImmediateLiveMidi({128u, 0xb0u, 64u, 0u}));
+	RenderStationBlock(station, 128u);
+	EXPECT_TRUE(std::any_of(plugin->Events.begin(), plugin->Events.end(), [](const auto& e) { return e.IsNoteOff(); }));
+	EXPECT_TRUE(std::any_of(plugin->Events.begin(), plugin->Events.end(), [](const auto& e) { return e.MessageType() == 0xb0u && e.data1 == 64u && e.data2 == 0u; }));
+}
+
+TEST(StationMidiInstrument, NewlyEnabledChildInputWaitsForAcceptedGraphAndUsesLatestPublication)
+{
+	for (const bool forceBorrowFailure : {false, true})
+	{
+		SCOPED_TRACE(forceBorrowFailure);
+		auto station = MakeStation("admission-publication");
+		station->SetAllowedMidiChannels({});
+		auto take = MakeMidiTake("admission-child");
+		auto plugin = AddChildMidiPlugin(take);
+		take->SetAllowedMidiChannels({});
+		station->AddTake(take); station->CommitChanges();
+		auto old = station->HoldAudioState();
+		ASSERT_TRUE(old);
+		take->SetAllowedMidiChannels({2}); station->CommitChanges();
+		// Exhaust leases to exercise conservative admission on a bounded read failure.
+		std::vector<decltype(station->HoldAudioState())> leases;
+		if (forceBorrowFailure)
+			for (auto i = 0u; i < 7u; ++i) leases.push_back(station->HoldAudioState());
+		ASSERT_TRUE(station->TryEnqueueImmediateLiveMidi(MidiEvent::MakeNoteOn(0u, 1u, 62u, 100u)));
+		// Deterministically model publication while the callback holds its old lease.
+		station->DeliverPrepared(*old, 0u);
+		EXPECT_TRUE(plugin->Events.empty());
+		leases.clear();
+		ASSERT_TRUE(station->TryEnqueueImmediateLiveMidi(MidiEvent::MakeNoteOn(0u, 1u, 61u, 100u)));
+		// Supersede the enabling publication before callback adoption.
+		take->SetAllowedMidiChannels({2,3}); station->CommitChanges();
+		RenderStationBlock(station, 128u);
+		ASSERT_EQ(2u, plugin->Events.size());
+		EXPECT_EQ(62u, plugin->Events.front().data1);
+		EXPECT_EQ(61u, plugin->Events.back().data1);
+		EXPECT_TRUE(plugin->Events.front().IsNoteOn());
+	}
+}
+
+TEST(StationMidiInstrument, PureMidiWithoutLocalRackSkipsTakeMixingAndRackRemovalRestoresFastPath)
+{
+	auto station = MakeStation("midi-fast-path");
+	auto stationPlugin = AddPlugin(station, L"station-instrument.dll");
+	auto take = MakeMidiTake("midi-fast-path-take");
+	RecordChildChannels(take, station->Name(), false);
+	station->AddTake(take); station->CommitChanges();
+	auto sink = std::make_shared<StationMidiInstrumentCaptureMultiSink>(2u, 128u);
+	auto renderTake = [&] {
+		sink->InputRequests = 0u;
+		auto prepared = take->PrepareRenderState();
+		take->WriteBlock(sink, nullptr, 0, 128u, nullptr, prepared.get());
+		return sink->InputRequests;
+	};
+	EXPECT_EQ(0u, renderTake());
+	RenderStationBlock(station, 0u);
+	EXPECT_EQ(6u, stationPlugin->Events.size());
+	for (auto start = 128u; start <= 1024u; start += 128u) RenderStationBlock(station, start);
+	EXPECT_GE(std::count_if(stationPlugin->Events.begin(), stationPlugin->Events.end(), [](const auto& e) { return e.IsNoteOn(); }), 12);
+	auto plugin = AddChildMidiPlugin(take);
+	plugin->ReplaceOutput = true; plugin->OutputValue = 0.25f;
+	station->CommitChanges();
+	EXPECT_GT(renderTake(), 0u);
+	EXPECT_GT(plugin->ProcessCalls, 0u);
+	JobAction unload; unload.JobActionType = JobAction::JOB_UNLOADVST; unload.VstIdentity = plugin->StateId();
+	take->OnAction(unload); take->CommitChanges(); station->CommitChanges();
+	RenderStationBlock(station, 1152u);
+	EXPECT_EQ(0u, renderTake());
 }

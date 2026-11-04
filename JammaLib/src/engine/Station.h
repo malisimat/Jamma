@@ -483,6 +483,9 @@ namespace engine
 		};
 		std::vector<RetiredAudioState> _retiredAudioStates;
 		std::uint64_t _nextAudioStateGeneration = 1u;
+		// Structural owner publishes before the graph; ingress uses this only when
+		// its bounded snapshot borrow fails, deferring input past older callbacks.
+		std::atomic<std::uint64_t> _liveMidiAdmissionGeneration{0u};
 		std::atomic<std::uint64_t> _audioCompletedStateGeneration{ 0u };
 		std::atomic<double> _transportOffsetLoopFrac{ 0.0 };
 		midi::AutomationPlayback _automationPlayback;

@@ -1647,7 +1647,7 @@ void MidiRouter::_DispatchAvailableLiveMidi() noexcept
 					<< "\" " << MidiEvent::Direction(dispatchedEvent.Event);
 				MidiEvent::LogDetail(std::cout, selectedInput->DeviceSlot, dispatchedEvent.Event);
 				std::cout << " -> station=\"" << recipient.Station->Name()
-					<< "\" queue=" << (queued ? "accepted" : "full") << std::endl;
+					<< "\" queue=" << (queued ? "accepted" : "rejected") << std::endl;
 			}
 		}
 
