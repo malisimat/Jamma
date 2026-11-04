@@ -123,7 +123,7 @@ std::shared_ptr<GuiVstRack::Button> GuiVstRack::_MakeButton(
 		return life.expired() ? Command{} : capture();
 	};
 	button->Submit = [this, life = std::weak_ptr<int>(_lifetime)](Command command) {
-		if (!life.expired() && _submit) { if (command.Operation != Command::Kind::Diagnostic) _feedback.clear(); _submit(std::move(command)); }
+		if (!life.expired() && _submit) { if (command.Operation != Command::Kind::Diagnostic && !_feedback.empty()) { _feedback.clear(); _presentationDirty = true; } _submit(std::move(command)); }
 	};
 	return button;
 }
@@ -217,6 +217,42 @@ std::shared_ptr<GuiButton> GuiVstRack::SlotButton(std::size_t index) const
 
 void GuiVstRack::Update(Model model, std::function<void(Command)> submit)
 {
+	// Callers may fill a public Slot after construction. Capture live plugin state
+	// here so the comparison also notices capability and editor changes.
+	for (auto& slot : model.Slots)
+	{
+		slot.PluginName.clear();
+		slot.MidiKnown = false;
+		slot.Eligible = false;
+		if (!slot.Value.Plugin) continue;
+		slot.PluginName = slot.Value.Plugin->Name();
+		const auto midi = slot.Value.Plugin->MidiInput();
+		slot.MidiKnown = midi.Known;
+		slot.Eligible = slot.Value.Plugin->IsLoaded() && !slot.Value.Plugin->IsBypassed()
+			&& midi.Known && (midi.Notes || midi.Controllers);
+	}
+	const auto sameSlot = [](const Slot& a, const Slot& b) {
+		return a.Value.Identity == b.Value.Identity && a.Value.Path == b.Value.Path
+			&& a.Value.Pending == b.Value.Pending && a.Value.Failed == b.Value.Failed
+			&& a.Value.Plugin == b.Value.Plugin && a.EditorOpen == b.EditorOpen
+			&& a.PluginName == b.PluginName && a.MidiKnown == b.MidiKnown && a.Eligible == b.Eligible;
+	};
+	const bool samePresentation = !_presentationDirty && _rowsBuilt
+		&& (_rows.empty() || _rows.front().Ordinal == _pageOffset)
+		&& _model.OwnerName == model.OwnerName && _model.OwnerId == model.OwnerId
+		&& _model.OwnerScope == model.OwnerScope && _model.Revision == model.Revision
+		&& _model.TotalSlots == model.TotalSlots && _model.Editable == model.Editable
+		&& _model.Inactive == model.Inactive && _model.Suspended == model.Suspended
+		&& _model.Diagnostic == model.Diagnostic && _model.ChannelRoutes == model.ChannelRoutes
+		&& _model.Slots.size() == model.Slots.size()
+		&& std::equal(_model.Slots.begin(), _model.Slots.end(), model.Slots.begin(), sameSlot);
+	if (samePresentation)
+	{
+		// The callback can change with hierarchy membership even when the display is identical.
+		_submit = std::move(submit);
+		return;
+	}
+	_presentationDirty = false;
 	const bool sameOwner = _model.OwnerId == model.OwnerId && _model.OwnerScope == model.OwnerScope;
 	if (!sameOwner || _model.Revision != model.Revision) ClearPointerState();
 	if (!sameOwner)
@@ -268,13 +304,12 @@ void GuiVstRack::Update(Model model, std::function<void(Command)> submit)
 	{
 		auto& row = _rows[index]; const auto& slot = _model.Slots[index];
 		const auto state = slot.Value.Pending ? 1u : slot.Value.Failed ? 3u : slot.Value.Plugin ? (slot.EditorOpen ? 2u : 1u) : 0u;
-		row.Eligible = slot.Value.Plugin && slot.Value.Plugin->IsLoaded() && !slot.Value.Plugin->IsBypassed() && slot.Value.Plugin->MidiInput().Known
-			&& (slot.Value.Plugin->MidiInput().Notes || slot.Value.Plugin->MidiInput().Controllers);
+		row.Eligible = slot.Eligible;
 		const auto savedName = !slot.Value.Failed || slot.Value.Pending || slot.Value.Path.empty() ? std::string{} :
 			utils::EncodeUtf8(std::filesystem::path(slot.Value.Path).stem().wstring());
-		auto label = slot.Value.Pending ? "Loading..." : slot.Value.Plugin ? slot.Value.Plugin->Name() :
+		auto label = slot.Value.Pending ? "Loading..." : slot.Value.Plugin ? slot.PluginName :
 			slot.Value.Failed ? "Retry " + (savedName.empty() ? "VST" : savedName) : "Add VST";
-		if (!_toggles.empty() && slot.Value.Plugin && !slot.Value.Plugin->MidiInput().Known) label = "MIDI? " + label;
+		if (!_toggles.empty() && slot.Value.Plugin && !slot.MidiKnown) label = "MIDI? " + label;
 		for (auto i = 0u; i < row.Buttons.size(); ++i)
 		{
 			row.Buttons[i]->SetVisible(i == state);
@@ -365,6 +400,7 @@ void GuiVstRack::Layout(unsigned int width, int faderBottom,
 
 void GuiVstRack::_LayoutRows()
 {
+	_rowsGlobalY = GlobalPosition().Y;
 	const auto rowPitch = _rowHeight + 4u;
 	const auto rowsHeight = static_cast<unsigned int>(_rows.size()) * rowPitch + 4u;
 	const int top = _faderBottom - 4;
@@ -402,8 +438,18 @@ void GuiVstRack::_LayoutRows()
 	_previous->SetSize({_width / 2u, _rowHeight}); _next->SetSize({_width - _width / 2u, _rowHeight});
 }
 
-void GuiVstRack::SetViewport(Size2d viewport) { _viewport = viewport; _LayoutRows(); }
-void GuiVstRack::SetFeedback(std::string message) { _feedback = std::move(message); }
+void GuiVstRack::SetViewport(Size2d viewport)
+{
+	if (_viewport == viewport && _rowsGlobalY == GlobalPosition().Y) return;
+	_viewport = viewport;
+	_LayoutRows();
+}
+void GuiVstRack::SetFeedback(std::string message)
+{
+	if (_feedback == message) return;
+	_feedback = std::move(message);
+	_presentationDirty = true;
+}
 void GuiVstRack::SetChannelsCollapsed(bool collapsed)
 {
 	// Close sibling grids before opening this one; collapsing never notifies.
@@ -416,9 +462,11 @@ void GuiVstRack::SetChannelsCollapsed(bool collapsed)
 
 void GuiVstRack::SetAllowedMidiChannels(const std::vector<int>& channels)
 {
-	_allowedChannels.fill(false);
+	std::array<bool, 16> allowed{};
 	for (const auto channel : channels)
-		if (channel >= 1 && channel <= 16) _allowedChannels[static_cast<std::size_t>(channel - 1)] = true;
+		if (channel >= 1 && channel <= 16) allowed[static_cast<std::size_t>(channel - 1)] = true;
+	if (_allowedChannels == allowed) return;
+	_allowedChannels = allowed;
 	_RefreshChannelToggles();
 }
 
@@ -461,6 +509,13 @@ bool GuiVstRack::IsInView(Size2d viewport) const
 		if (!Rect2d{p.X, p.Y, p.X + static_cast<int>(s.Width), p.Y + static_cast<int>(s.Height)}.Intersected(window).IsEmpty()) return true;
 	}
 	return !_scroll->EffectiveContentRect(window).IsEmpty();
+}
+bool GuiVstRack::IsPresented() const
+{
+	if (!IsVisible()) return false;
+	for (auto element = Parent(); element; element = element->Parent())
+		if (!element->IsVisible()) return false;
+	return true;
 }
 
 void GuiVstRack::_Geometry(std::vector<CableInteraction::Endpoint>& endpoints,

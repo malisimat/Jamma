@@ -527,7 +527,6 @@ bool Workspace::AdvancePresentationLocked(const std::vector<std::shared_ptr<Stat
 {
 	if (_overdubSourceDrag && (_popupManager.IsOpen() || _editor->IsEngaged() || presentation.Quitting ||
 		presentation.RigSaveInProgress || !_OverdubSourceDragCurrentLocked(stations))) _CancelOverdubSourceDrag();
-	if (_hudPanel) _hudPanel->PrepareOverdubSourcesLocked(_overdubSourceDrag ? _overdubSourceDrag->Output.Trigger.lock() : nullptr);
     if (_hudPanel && (_popupManager.IsOpen() || presentation.Quitting || presentation.RigSaveInProgress))
         _hudPanel->SetOverdubSourceFeedback({});
 
@@ -574,9 +573,16 @@ bool Workspace::AdvancePresentationLocked(const std::vector<std::shared_ptr<Stat
 		{ rack.ClearPointerState(); rack.SetRevealHeld(false); }
 	});
 
-    auto masterCandidate=_MasterCandidateLocked(stations);
-    if(masterCandidate.Target && presentation.MasterConfig) masterCandidate.Name=_quantiser->DescribeMasterTarget(masterCandidate.Target,masterCandidate.Depth,stations,presentation.MasterSampleRate,*presentation.MasterConfig);
-    _settingsControls->RefreshMasterPresentation(masterCandidate.Name,_quantiser->MasterStatus(),_quantiser->CurrentMasterDescription());
+	// The timing page retains its labels while hidden; refresh when it is presented.
+	if (_mainPanel && _mainPanel->IsExpanded() && _mainPanel->Page() == SettingsPage::Timing)
+	{
+		auto masterCandidate = _MasterCandidateLocked(stations);
+		if (masterCandidate.Target && presentation.MasterConfig)
+			masterCandidate.Name = _quantiser->DescribeMasterTarget(masterCandidate.Target, masterCandidate.Depth,
+				stations, presentation.MasterSampleRate, *presentation.MasterConfig);
+		_settingsControls->RefreshMasterPresentation(masterCandidate.Name, _quantiser->MasterStatus(),
+			_quantiser->CurrentMasterDescription());
+	}
 	if (_selectionPanel) _selectionPanel->RefreshPerformanceGroups(groups);
 	if (_hudPanel)
 	{

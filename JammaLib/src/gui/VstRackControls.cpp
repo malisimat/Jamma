@@ -260,7 +260,7 @@ void VstRackControls::_PresentStationLocked(const std::shared_ptr<engine::Statio
 {
 	const auto rack = station->GetGuiRack();
 	const auto control = rack ? rack->VstRack() : nullptr;
-	if (!control) return;
+	if (!control || !control->IsPresented()) return;
 	GuiVstRack::Model model;
 	model.OwnerName = station->Name();
 	model.OwnerId = station->Id();
@@ -410,6 +410,7 @@ std::optional<actions::ActionResult> gui::VstRackControls::OnKeyboard(const acti
 void VstRackControls::_PresentChildLocked(const std::shared_ptr<GuiRack>& rack, const Target& target, const std::string& label)
 {
 	const auto control = rack->VstRack();
+	if (!control || !control->IsPresented()) return;
 	GuiVstRack::Model model;
 	model.OwnerName = label;
 	model.OwnerId = target.Loop ? target.Loop->Id() : target.Take->Id();

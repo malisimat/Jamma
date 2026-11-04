@@ -161,6 +161,52 @@ TEST(GuiRack, RestoredSlotsReplaceMissingCableRowsAndRetainFailedSlots)
 	EXPECT_FALSE(view->SlotButton(1u));
 }
 
+TEST(GuiRack, UnchangedSlotPresentationKeepsPressAndRefreshesCommandOwner)
+{
+	auto view = std::make_shared<gui::GuiVstRack>();
+	view->Init();
+	gui::GuiVstRack::Model model;
+	model.OwnerId = "station"; model.Revision = 7u; model.Editable = true; model.TotalSlots = 1u;
+	gui::GuiVstRack::Slot slot; slot.Value.Identity = "slot";
+	model.Slots.push_back(slot);
+	unsigned int oldOwner = 0u, currentOwner = 0u;
+	view->Update(model, [&](auto) { ++oldOwner; });
+	const auto button = view->SlotButton(0u); ASSERT_TRUE(button);
+	actions::TouchAction action; action.Index = 0; action.Touch = actions::TouchAction::TOUCH_MOUSE;
+	const auto position = button->GlobalPosition();
+	action.Position = {position.X + static_cast<int>(button->GetSize().Width / 2u),
+		position.Y + static_cast<int>(button->GetSize().Height / 2u)};
+	action.State = actions::TouchAction::TOUCH_DOWN;
+	ASSERT_TRUE(button->OnAction(action).IsEaten);
+	view->Update(model, [&](auto) { ++currentOwner; });
+	action.State = actions::TouchAction::TOUCH_UP;
+	EXPECT_TRUE(button->OnAction(action).IsEaten);
+	EXPECT_EQ(0u, oldOwner); EXPECT_EQ(1u, currentOwner);
+	model.Slots[0].Value.Pending = true;
+	view->Update(model, {});
+	EXPECT_FALSE(view->SlotButton(0u)->IsEnabled());
+}
+
+TEST(GuiRack, SlotRowsFollowGlobalHeightWithUnchangedViewport)
+{
+	auto view = std::make_shared<gui::GuiVstRack>();
+	view->Init();
+	gui::GuiVstRack::Model model;
+	model.Editable = true; model.TotalSlots = 12u;
+	for (auto index = 0u; index < 12u; ++index)
+	{
+		gui::GuiVstRack::Slot slot; slot.Value.Identity = std::to_string(index);
+		model.Slots.push_back(std::move(slot));
+	}
+	view->Update(std::move(model), {});
+	view->SetPosition({0, 50});
+	view->SetViewport({1200u, 1000u});
+	const auto lowHeight = view->SlotScroll()->GetSize().Height;
+	view->SetPosition({0, 500});
+	view->SetViewport({1200u, 1000u});
+	EXPECT_GT(view->SlotScroll()->GetSize().Height, lowHeight);
+}
+
 TEST(GuiRack, CollapsingMidiGridClearsFooterPressWithoutChangingRoutingOrLevels)
 {
 	for (const auto footerIndex : {GuiRack::MidiDeselectAllIndex, GuiRack::MidiSelectAllIndex})

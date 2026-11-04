@@ -836,6 +836,7 @@ void GuiHud::_RebuildPanels()
 
 void GuiHud::SetCableRevealHeld(bool held)
 {
+	if (_cableRevealHeld == held) return;
 	_cableRevealHeld = held;
 	_cablesDirty = true;
 	_hoveredCableRoute.reset();
@@ -1229,15 +1230,21 @@ void GuiHud::_DrawOverlayElement(base::DrawContext& ctx,
 
 void GuiHud::_DrawCables(base::DrawContext& ctx)
 {
-	// Keep geometry alive while each route fades, independently of input reveal intent.
-	_RebuildCableVertices();
+	if (_editedCableTrigger && std::chrono::steady_clock::now() >= _cableEditRevealUntil)
+	{
+		_editedCableTrigger.reset();
+		_cablesDirty = true;
+	}
+	// Geometry changes and active fades need a new frame; settled hidden cables do not.
+	const bool fading = std::any_of(_cableFades.begin(), _cableFades.end(), [](const CableFade& fade) {
+		return fade.Alpha > 0.0f && fade.Alpha < 1.0f;
+	});
+	if (_cablesDirty || fading) _RebuildCableVertices();
+	else _lastCableFrame = std::chrono::steady_clock::now();
 
 	auto shader = _cableShader.lock();
 	if (!shader || (_cableVertexArray == 0) || (_cableVertexBuffer == 0))
 		return;
-
-	if (_cablesDirty)
-		_RebuildCableVertices();
 
 	if (_cableColors.empty())
 		return;
@@ -1290,6 +1297,16 @@ void GuiHud::_DrawCables(base::DrawContext& ctx)
 
 void GuiHud::SetStationAnchors(std::vector<StationAnchor> anchors)
 {
+	const auto same = [](const StationAnchor& a, const StationAnchor& b) {
+		const bool sameScreen = a.ScreenPosition.has_value() == b.ScreenPosition.has_value()
+			&& (!a.ScreenPosition || (a.ScreenPosition->x == b.ScreenPosition->x
+				&& a.ScreenPosition->y == b.ScreenPosition->y));
+		return a.StationIndex == b.StationIndex && a.StationName == b.StationName
+			&& sameScreen && a.color.r == b.color.r && a.color.g == b.color.g
+			&& a.color.b == b.color.b && a.color.a == b.color.a;
+	};
+	if (anchors.size() == _stationAnchors.size()
+		&& std::equal(anchors.begin(), anchors.end(), _stationAnchors.begin(), same)) return;
 	_stationAnchors = std::move(anchors);
 	_cablesDirty = true;
 }
@@ -2340,6 +2357,7 @@ void GuiHud::_RebuildCableVertices()
 		return std::none_of(cables.begin(), cables.end(), [&](const auto& cable) { return sameRoute(fade.Route, cable.Route); });
 	});
 	bool previewRenderable = true;
+	bool retryBoundaryFade = false;
 	if (_cableDrag && _cableDrag->FromCable)
 	{
 		const auto current = std::find_if(cables.begin(), cables.end(), [this](const auto& cable)
@@ -2359,7 +2377,10 @@ void GuiHud::_RebuildCableVertices()
 			fade = _cableFades.insert(_cableFades.end(), { cable.Route });
 		const bool edited = _editedCableTrigger == cable.Route.TriggerIndex && now < _cableEditRevealUntil;
 		fade->Slow |= edited;
-		fade->Alpha = CableInteraction::FadeAlpha(fade->Alpha, _CableVisible(cable) || edited, elapsed, fade->Slow);
+		const bool revealed = _CableVisible(cable) || edited;
+		fade->Alpha = CableInteraction::FadeAlpha(fade->Alpha, revealed, elapsed, fade->Slow);
+		// A zero-duration first frame must not leave the fade at a settled endpoint.
+		retryBoundaryFade |= (revealed && fade->Alpha == 0.0f) || (!revealed && fade->Alpha == 1.0f);
 		if (fade->Alpha <= 0.0f)
 		{
 			fade->Slow = false;
@@ -2391,7 +2412,7 @@ void GuiHud::_RebuildCableVertices()
 			_AppendCurve(preview.first, preview.second, glm::vec4(0.35f, 0.82f, 1.0f, 0.95f));
 	}
 
-	_cablesDirty = false;
+	_cablesDirty = retryBoundaryFade;
 }
 
 utils::Position2d GuiHud::_ElementCenter(const std::shared_ptr<base::GuiElement>& element) const

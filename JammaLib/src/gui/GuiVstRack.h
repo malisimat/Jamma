@@ -38,6 +38,9 @@ namespace gui
 		{
 			vst::VstRackSlot Value;
 			bool EditorOpen = false;
+			std::string PluginName;
+			bool MidiKnown = false;
+			bool Eligible = false;
 		};
 		struct Model
 		{
@@ -82,6 +85,7 @@ namespace gui
 		bool HasCableDrag() const noexcept { return _drag.has_value(); }
 		void CancelInteraction();
 		bool IsInView(utils::Size2d viewport) const;
+		bool IsPresented() const;
 		void MovePointer(actions::TouchMoveAction action);
 		void BuildInteractionGeometry(std::vector<CableInteraction::Endpoint>& endpoints,
 			std::vector<CableInteraction::Cable>& cables) const;
@@ -178,11 +182,13 @@ namespace gui
 		unsigned int _width = 64u;
 		int _faderBottom = 40;
 		utils::Size2d _viewport{1920u, 1080u};
+		std::optional<int> _rowsGlobalY;
 		float _cableAlpha = 0.0f;
 		bool _slowCableFade = false;
 		std::chrono::steady_clock::time_point _lastCableFrame = std::chrono::steady_clock::now();
 		std::chrono::steady_clock::time_point _cableEditRevealUntil{};
 		bool _collapsed = true, _revealHeld = false, _hovered = false, _consumeRelease = false, _consumeEscape = false, _rowsBuilt = false;
+		bool _presentationDirty = false;
 		std::optional<Drag> _drag;
 		std::optional<SlotMove> _slotMove;
 		std::optional<ChannelPress> _channelPress;

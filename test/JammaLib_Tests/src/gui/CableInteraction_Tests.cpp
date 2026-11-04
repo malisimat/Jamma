@@ -1,5 +1,6 @@
 #include "gui/GuiPanelHeader.h"
 #include "gtest/gtest.h"
+#include "base/DrawContext.h"
 #include "gui/CableInteraction.h"
 #include <limits>
 #include "gui/GuiHud.h"
@@ -20,6 +21,18 @@ namespace gui
 	public:
 		static std::shared_ptr<GuiButton> TriggerClose(GuiHud& hud, std::size_t index)
 		{ return hud._triggerWidgets.at(index).Close; }
+		static void CableFrame(GuiHud& hud)
+		{
+			base::DrawContext context({1200u, 800u}, base::DrawContext::SCREEN);
+			hud._DrawCables(context);
+		}
+		static void SetCableElapsed(GuiHud& hud, std::chrono::milliseconds elapsed)
+		{ hud._lastCableFrame = std::chrono::steady_clock::now() - elapsed; }
+		static const std::vector<glm::vec4>& CableColors(const GuiHud& hud) { return hud._cableColors; }
+		static void MarkCableCache(GuiHud& hud) { hud._cableColors.push_back({9.0f, 0.0f, 0.0f, 0.0f}); }
+		static std::chrono::steady_clock::time_point LastCableFrame(const GuiHud& hud) { return hud._lastCableFrame; }
+		static void EditedCableReveal(GuiHud& hud, std::chrono::steady_clock::time_point until)
+		{ hud._editedCableTrigger = 0u; hud._cableEditRevealUntil = until; hud._cablesDirty = true; }
 	};
 }
 
@@ -177,6 +190,61 @@ TEST_F(HudCableGeometryTests, BothScrolledEndsAndStationBoundaryRetainOriginalRo
 	EXPECT_TRUE(cables.empty());
 	EXPECT_TRUE(endpoints.empty());
 	EXPECT_EQ(2u, gui::GuiHud::BuildCableRoutes(snapshot.Graph).size());
+}
+
+TEST_F(HudCableGeometryTests, SettledCableCacheStillFadesAfterRevealAndIdle)
+{
+	gui::GuiHudParams params;
+	params.Size = {1200u, 800u};
+	auto hud = std::make_shared<gui::GuiHud>(params);
+	engine::RigSnapshot snapshot;
+	snapshot.Revision = 42u;
+	io::RigFileRouting::TriggerResolution trigger;
+	trigger.TriggerIndex = 0u; trigger.TriggerName = "Trigger"; trigger.StationIndex = 0u;
+	snapshot.Graph.Triggers.push_back(trigger);
+	hud->SetRoutingConfig(0u, {}, snapshot);
+	hud->SetStationAnchors({{0u, "A", glm::dvec2{400, 400}, glm::vec4{1.0f}}});
+	std::vector<std::shared_ptr<gui::GuiScrollPanel>> scrolls;
+	Layout(hud, scrolls);
+	gui::GuiHudTestAccess::CableFrame(*hud);
+	EXPECT_TRUE(gui::GuiHudTestAccess::CableColors(*hud).empty());
+	gui::GuiHudTestAccess::MarkCableCache(*hud);
+	hud->SetStationAnchors({{0u, "A", glm::dvec2{400, 400}, glm::vec4{1.0f}}});
+	gui::GuiHudTestAccess::CableFrame(*hud);
+	ASSERT_EQ(1u, gui::GuiHudTestAccess::CableColors(*hud).size());
+	EXPECT_FLOAT_EQ(9.0f, gui::GuiHudTestAccess::CableColors(*hud).front().r);
+	hud->SetCableRevealHeld(true);
+	gui::GuiHudTestAccess::SetCableElapsed(*hud, std::chrono::milliseconds(50));
+	gui::GuiHudTestAccess::CableFrame(*hud);
+	ASSERT_FALSE(gui::GuiHudTestAccess::CableColors(*hud).empty());
+	const float rising = gui::GuiHudTestAccess::CableColors(*hud).front().a;
+	EXPECT_GT(rising, 0.0f);
+	gui::GuiHudTestAccess::SetCableElapsed(*hud, std::chrono::milliseconds(250));
+	gui::GuiHudTestAccess::CableFrame(*hud);
+	const float full = gui::GuiHudTestAccess::CableColors(*hud).front().a;
+	EXPECT_GT(full, rising);
+	gui::GuiHudTestAccess::EditedCableReveal(*hud, std::chrono::steady_clock::now() + std::chrono::seconds(1));
+	hud->SetCableRevealHeld(false);
+	gui::GuiHudTestAccess::SetCableElapsed(*hud, std::chrono::milliseconds(100));
+	gui::GuiHudTestAccess::CableFrame(*hud);
+	ASSERT_FALSE(gui::GuiHudTestAccess::CableColors(*hud).empty());
+	EXPECT_FLOAT_EQ(full, gui::GuiHudTestAccess::CableColors(*hud).front().a);
+	gui::GuiHudTestAccess::EditedCableReveal(*hud, std::chrono::steady_clock::now() - std::chrono::milliseconds(1));
+	gui::GuiHudTestAccess::SetCableElapsed(*hud, std::chrono::milliseconds(100));
+	gui::GuiHudTestAccess::CableFrame(*hud);
+	EXPECT_LT(gui::GuiHudTestAccess::CableColors(*hud).front().a, full);
+	// Edited routes take one second to disappear, even after reveal expires.
+	gui::GuiHudTestAccess::SetCableElapsed(*hud, std::chrono::milliseconds(1100));
+	gui::GuiHudTestAccess::CableFrame(*hud);
+	EXPECT_TRUE(gui::GuiHudTestAccess::CableColors(*hud).empty());
+	gui::GuiHudTestAccess::SetCableElapsed(*hud, std::chrono::seconds(5));
+	gui::GuiHudTestAccess::CableFrame(*hud);
+	EXPECT_LT(std::chrono::steady_clock::now() - gui::GuiHudTestAccess::LastCableFrame(*hud), std::chrono::seconds(1));
+	hud->SetCableRevealHeld(true);
+	gui::GuiHudTestAccess::SetCableElapsed(*hud, std::chrono::milliseconds(50));
+	gui::GuiHudTestAccess::CableFrame(*hud);
+	ASSERT_FALSE(gui::GuiHudTestAccess::CableColors(*hud).empty());
+	EXPECT_LT(gui::GuiHudTestAccess::CableColors(*hud).front().a, full);
 }
 
 TEST_F(HudCableGeometryTests, PopulatedRoutesAndUnavailableInputsSurviveClippingWithBoundedFans)
