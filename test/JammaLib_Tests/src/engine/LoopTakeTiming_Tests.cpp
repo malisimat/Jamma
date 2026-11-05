@@ -608,7 +608,7 @@ TEST(JamFile, SignedTransportOffsetPreservesM2M3MEntityPhases)
 	auto parsed = io::JamFile::FromStream(std::stringstream(
 		"{\"name\":\"jam\",\"transportoffsetloopfrac\":-0.25,\"stations\":[]}"));
 	ASSERT_TRUE(parsed.has_value());
-	const auto targetSamps = std::llround(parsed->TransportOffsetLoopFrac
+	const auto targetSamps = std::llround(-parsed->TransportOffsetLoopFrac
 		* static_cast<double>(masterLength));
 
 	auto take = MakeTimingTestLoopTake("signed-persisted-local-offset");
@@ -623,12 +623,12 @@ TEST(JamFile, SignedTransportOffsetPreservesM2M3MEntityPhases)
 	take->SetLocalTransportOffsetSamps(targetSamps);
 
 	ASSERT_EQ(4u, take->GetLoops().size());
-	EXPECT_EQ(850ul, TimingLoopBodyPosition(*take->GetLoops()[0]));
-	EXPECT_EQ(1850ul, TimingLoopBodyPosition(*take->GetLoops()[1]));
-	EXPECT_EQ(2850ul, TimingLoopBodyPosition(*take->GetLoops()[2]));
-	EXPECT_EQ(627ul, TimingLoopBodyPosition(*take->GetLoops()[3]));
-	EXPECT_EQ(2350ul, take->MidiVisualPosition());
-	EXPECT_EQ(250, take->MidiAnchorCorrection());
+	EXPECT_EQ(350ul, TimingLoopBodyPosition(*take->GetLoops()[0]));
+	EXPECT_EQ(350ul, TimingLoopBodyPosition(*take->GetLoops()[1]));
+	EXPECT_EQ(350ul, TimingLoopBodyPosition(*take->GetLoops()[2]));
+	EXPECT_EQ(350ul, TimingLoopBodyPosition(*take->GetLoops()[3]));
+	EXPECT_EQ(350ul, take->MidiVisualPosition());
+	EXPECT_EQ(-250, take->MidiAnchorCorrection());
 
 	constexpr auto globalSample = 5000;
 	constexpr auto frozenAutomationGlobalSampleOrigin = 2400;
@@ -1869,6 +1869,39 @@ TEST(LoopTakeTiming, ConfiguredCaptureAnchorsWaitForPlaybackActivation)
         take->RestoreMappedSourceCoordinate(5387);
         if (loop) EXPECT_EQ(phase + 137u, loop->BodyPlayIndex());
         EXPECT_EQ(phase + 137u, take->MidiVisualPosition());
+    }
+}
+
+TEST(TransportPhaseOffset, NewConfiguredAudioAndMidiTakeInheritsSignedAlignment)
+{
+    for (const auto fraction : {-0.25, 0.25})
+    {
+        SCOPED_TRACE(fraction);
+        const auto station = TriggerPredelayStationTest::MakeStation();
+        auto clock = std::make_shared<Timer>();
+        clock->SetSeedSourceLength(1000u);
+        station->SetClock(clock);
+        station->SetTransportOffsetLoopFrac(fraction);
+        auto take = MakeTimingTestLoopTake("new-offset-capture");
+        station->AddTake(take);
+        take->ConfigureTriggerCapture({1000u, 0, 10000u, 0u, 0u, 100u});
+        take->Record({0u}, "new-offset-capture", {0u}, {}, {}, 100u, 1000u);
+        take->CommitChanges();
+        take->Play(constants::MaxLoopFadeSamps, 1000u, 0u);
+        take->CompleteMidiIngressPump(8000u);
+        take->BeginCaptureAudioBoundary(2250u, 1350u, 1250u);
+        ASSERT_EQ(1u, take->GetLoops().size());
+        const auto origin = take->MidiQuantisationTransportStartSamps();
+        const auto before = take->GetLoops().front()->BodyPlayIndex();
+        const auto midiBefore = take->MidiVisualPosition();
+        take->EndMultiPlay(0u); // First playable boundary consumes the inherited target.
+        const auto shift = static_cast<long long>(std::llround(-fraction * 1000.0));
+        EXPECT_EQ(ninjam::PositiveModulo(before + shift, 1000u), take->GetLoops().front()->BodyPlayIndex());
+        EXPECT_EQ(ninjam::PositiveModulo(midiBefore + shift, 1000u), take->MidiVisualPosition());
+        EXPECT_EQ(origin, take->MidiQuantisationTransportStartSamps());
+        take->SetLocalTransportOffsetSamps(0);
+        EXPECT_EQ(before, take->GetLoops().front()->BodyPlayIndex());
+        EXPECT_EQ(midiBefore, take->MidiVisualPosition());
     }
 }
 

@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <atomic>
 #include <array>
+#include <cmath>
 #include <memory>
 #include <string>
 #include <thread>
@@ -14,6 +15,7 @@
 #include "engine/LoopTake.h"
 #include "engine/LocalTiming.h"
 #include "engine/Station.h"
+#include "engine/StationRemote.h"
 #include "midi/MidiLoop.h"
 #include "ninjam/NinjamAudioTimingCommand.h"
 #include "ninjam/NinjamMetronomeTiming.h"
@@ -164,14 +166,16 @@ public:
 	}
 
 	static std::shared_ptr<engine::Station> MakeStation(
-		const std::vector<std::shared_ptr<NinjamProductionBoundaryLoopTake>>& takes)
+		const std::vector<std::shared_ptr<NinjamProductionBoundaryLoopTake>>& takes, bool remote = false)
 	{
 		engine::StationParams params;
 		params.Name = "desired-state-station";
 		params.Size = { 200, 320 };
 		audio::MergeMixBehaviourParams merge;
-		auto station = std::make_shared<engine::Station>(params,
-			engine::Station::GetMixerParams(params.Size, merge));
+		const auto mixer = engine::Station::GetMixerParams(params.Size, merge);
+		std::shared_ptr<engine::Station> station = remote
+			? std::make_shared<engine::StationRemote>(params, mixer)
+			: std::make_shared<engine::Station>(params, mixer);
 		for (const auto& take : takes)
 			station->AddTake(take);
 		station->CommitChanges();
@@ -245,26 +249,56 @@ TEST(AudioHostLocalTransportOffsetPublication, LatestPublicationWinsAndZeroIsDel
 	EXPECT_FALSE(audio::NinjamAudioBoundaryTestAccess::ConsumeLocalTransportOffset(host).has_value());
 }
 
-TEST(AudioHostLocalTransportOffsetPublication, AppliesWhileDisconnectedAndNoSyncIsActive)
+TEST(AudioHostLocalTransportOffsetPublication, SignedOffsetMovesOnlyLocalAudioAndMidiUnderEveryAuthority)
 {
-	constexpr unsigned long masterLength = 1000ul;
-	auto take = NinjamProductionBoundaryFixture::MakeTake("local-offset", masterLength * 2ul, 100ul);
-	auto station = NinjamProductionBoundaryFixture::MakeStation({ take });
-	const std::vector<std::shared_ptr<engine::Station>> stations{ station };
-
-	audio::AudioHost host{ io::UserConfig{} };
-	auto clock = std::make_shared<Timer>();
-	clock->SetSeedSourceLength(masterLength);
-	host.SetTimingClock(clock);
-	host.SetStations(std::make_shared<const std::vector<std::shared_ptr<engine::Station>>>(stations));
-	host.PublishDesiredTiming(NinjamProductionBoundaryFixture::Desired(1u, 1u, 0u,
-		ninjam::NinjamLocalFollowPolicy::NoSync, 0ul, 0u));
-	ASSERT_TRUE(audio::NinjamAudioBoundaryTestAccess::Apply(host, 0u, 48000u));
-
-	host.PublishLocalTransportOffsetLoopFrac(0.25);
-	audio::NinjamAudioBoundaryTestAccess::ApplyLocalTransportOffset(host, stations, clock.get());
-	EXPECT_EQ(350ul, NinjamProductionBoundaryFixture::AudioPosition(*take));
-	EXPECT_EQ(350ul, take->MidiTimingPosition());
+    constexpr unsigned long masterLength = 1000ul;
+    for (const auto policy : { ninjam::NinjamLocalFollowPolicy::NoSync,
+        ninjam::NinjamLocalFollowPolicy::ContinuousSync, ninjam::NinjamLocalFollowPolicy::BlockSync })
+    {
+        SCOPED_TRACE(static_cast<int>(policy));
+        auto master = NinjamProductionBoundaryFixture::MakeTake("master-offset", masterLength, 100ul);
+        auto take = NinjamProductionBoundaryFixture::MakeTake("local-offset", masterLength * 2ul, 100ul);
+        auto station = NinjamProductionBoundaryFixture::MakeStation({ master, take });
+        auto remoteTake = NinjamProductionBoundaryFixture::MakeTake("remote-offset", masterLength, 100ul);
+        auto remote = NinjamProductionBoundaryFixture::MakeStation({ remoteTake }, true);
+        const std::vector<std::shared_ptr<engine::Station>> stations{ station, remote };
+        audio::AudioHost host{ io::UserConfig{} };
+        auto clock = std::make_shared<Timer>();
+        clock->SetSeedSourceLength(masterLength);
+        station->SetClock(clock);
+        host.SetTimingClock(clock);
+        host.SetStations(std::make_shared<const std::vector<std::shared_ptr<engine::Station>>>(stations));
+        host.PublishDesiredTiming(NinjamProductionBoundaryFixture::Desired(1u, 1u, 0u,
+            policy, policy == ninjam::NinjamLocalFollowPolicy::NoSync ? 0ul : masterLength, 0u));
+        ASSERT_TRUE(audio::NinjamAudioBoundaryTestAccess::Apply(host, 0u, 48000u));
+        const auto transport = clock->AbsoluteSamplePos();
+        const auto phase = clock->SampOffset();
+        const auto map = audio::NinjamAudioBoundaryTestAccess::SyncPhaseMap(host);
+        const auto origin = take->MidiQuantisationTransportStartSamps();
+        const auto masterBefore = NinjamProductionBoundaryFixture::AudioPosition(*master);
+        const auto before = NinjamProductionBoundaryFixture::AudioPosition(*take);
+        const auto midiBefore = take->MidiTimingPosition();
+        for (const auto fraction : { -0.25, 0.25, 0.0 })
+        {
+            SCOPED_TRACE(fraction);
+            station->SetTransportOffsetLoopFrac(fraction);
+            host.PublishLocalTransportOffsetLoopFrac(fraction);
+            audio::NinjamAudioBoundaryTestAccess::ApplyLocalTransportOffset(host, stations, clock.get());
+            const auto displacement = static_cast<long long>(std::llround(-fraction * masterLength));
+            EXPECT_EQ(displacement, station->TransportOffsetSamps());
+            EXPECT_EQ(ninjam::PositiveModulo(masterBefore + displacement, masterLength),
+                NinjamProductionBoundaryFixture::AudioPosition(*master));
+            EXPECT_EQ(ninjam::PositiveModulo(before + displacement, 2ul * masterLength),
+                NinjamProductionBoundaryFixture::AudioPosition(*take));
+            EXPECT_EQ(ninjam::PositiveModulo(midiBefore + displacement, 2ul * masterLength), take->MidiTimingPosition());
+            EXPECT_EQ(100ul, NinjamProductionBoundaryFixture::AudioPosition(*remoteTake));
+            EXPECT_EQ(100ul, remoteTake->MidiTimingPosition());
+            EXPECT_EQ(origin, take->MidiQuantisationTransportStartSamps()); // Blue master-start tick.
+            EXPECT_EQ(transport, clock->AbsoluteSamplePos());
+            EXPECT_EQ(phase, clock->SampOffset());
+            EXPECT_EQ(map.SourceCoordinateAtOrigin, audio::NinjamAudioBoundaryTestAccess::SyncPhaseMap(host).SourceCoordinateAtOrigin);
+        }
+    }
 }
 
 TEST(NinjamTimingProductionBoundary, CompleteDesiredStateSupersedesFormerCommandSequences)

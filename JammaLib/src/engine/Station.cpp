@@ -1894,7 +1894,8 @@ std::int32_t Station::TransportOffsetSamps() const noexcept
 	if (masterLoopSamps == 0ul)
 		return 0;
 
-	auto offset = static_cast<std::int64_t>(std::llround(loopFrac * static_cast<double>(masterLoopSamps)));
+	// Negative control values advance the source cursor, including new-take alignment.
+	auto offset = static_cast<std::int64_t>(std::llround(-loopFrac * static_cast<double>(masterLoopSamps)));
 	if (offset > static_cast<std::int64_t>(std::numeric_limits<std::int32_t>::max()))
 		offset = static_cast<std::int64_t>(std::numeric_limits<std::int32_t>::max());
 	else if (offset < static_cast<std::int64_t>(std::numeric_limits<std::int32_t>::min()))

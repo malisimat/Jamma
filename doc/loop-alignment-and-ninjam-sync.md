@@ -163,6 +163,15 @@ to `[-1, 1]`.
 Because it is independent of NINJAM authority, the offset can still be applied
 while disconnected or after entering `NoSync`.
 
+Negative **Local phase offset (loops)** values advance local audio and MIDI
+playback into later recorded content, making events sound earlier; positive
+values delay them. The source-cursor displacement is `-offset * master_length`,
+also used for new-take alignment. Returning to zero restores the original
+alignment. Local monitoring, NINJAM local audio export and editor playheads follow
+that displacement, including the local master. The shared transport origin,
+metronome, NINJAM timing, remote stations and MIDI editor's blue master-start
+tick stay fixed. The displayed and saved control values retain their sign.
+
 ## Implementation boundaries
 
 The main ownership boundaries are:

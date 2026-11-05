@@ -1266,7 +1266,7 @@ void AudioHost::PublishAudioCallbackProgress(std::uint64_t blockStartSample,
 			_localTransportOffsetMasterLength = masterLength;
 		const auto localTransportOffsetTargetSamps = masterLength == 0ul ? 0 :
 			static_cast<long long>(std::llround(
-				_localTransportOffsetLoopFrac * static_cast<double>(masterLength)));
+				-_localTransportOffsetLoopFrac * static_cast<double>(masterLength)));
 		const auto referenceRate = timingClock ? timingClock->MasterRecordingPlaybackRate() : 1.0;
         if (localTransportOffsetTargetSamps == _localTransportOffsetTargetSamps
             && _localTransportOffsetTimingVersion == _appliedNinjamTiming.Version
