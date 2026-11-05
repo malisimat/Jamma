@@ -27,5 +27,5 @@ void main()
 	colour += vec3(specular * mix(0.06, 0.16, verticalSheen));
 
 	colour *= mix(0.82, 1.18, clamp(Highlight, 0.0, 1.0));
-	ColorOUT = vec4(colour * SceneDim, OverlayAlpha * mix(0.32, 0.24, MidiColours));
+	ColorOUT = vec4(colour * SceneDim, OverlayAlpha * 0.20 * mix(0.32, 0.24, MidiColours));
 }

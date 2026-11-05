@@ -101,6 +101,7 @@ namespace base
 		std::string OutTexture;
 		std::string TextureShader = "texture";
 		float TextureOpacity = 1.0f;
+		float CornerRadius = 0.0f;
 		glm::vec3 TintColor;
 		LayoutSizing HorizSizing = LayoutSizing::Fixed;
 		LayoutSizing VertSizing  = LayoutSizing::Fixed;

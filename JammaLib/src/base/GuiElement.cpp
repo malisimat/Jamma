@@ -37,7 +37,11 @@ void GuiElement::_ApplyTextureTint(GlDrawContext& ctx) const
 	if (_guiParams.TextureShader == "texture_tinted")
 		ctx.SetUniform("TintColor", _guiParams.TintColor);
 	else if (_guiParams.TextureShader == "colour")
+	{
 		ctx.SetUniform("Color", glm::vec4(_guiParams.TintColor, 1.0f));
+		ctx.SetUniform("CornerRadius", _guiParams.CornerRadius);
+		ctx.SetUniform("RectSize", glm::vec3(GetSize().Width, GetSize().Height, 0.0f));
+	}
 }
 
 void GuiElement::_BeginGesture(GestureKind kind, Position2d startPosition, int startValue) noexcept

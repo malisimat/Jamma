@@ -50,6 +50,7 @@ namespace gui
 			_label = std::make_shared<GuiLabel>(label);
 			GuiLabelParams background;
 			background.UseDarkFlatBackground();
+			background.CornerRadius = 2.0f;
 			_background = std::make_shared<base::GuiElement>(background);
 			_editor = std::make_shared<Editor>();
 			auto button = GuiButtonParams::PanelButton(PencilSize);
