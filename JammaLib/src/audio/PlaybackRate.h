@@ -186,7 +186,8 @@ namespace audio
 			std::size_t first, std::size_t count) const noexcept;
 		static std::optional<PlaybackRateHistoryPoint> Point(const SegmentValue& segment,
 			std::uint64_t deviceFrame) noexcept;
-		static bool CanContinue(const SegmentValue& previous, const PlaybackRateBlock& next) noexcept;
+		bool CanContinue(const SegmentValue& previous, const PlaybackRateBlock& next) const noexcept;
+		void UpdateWriterEndpoint(const SegmentValue& segment, unsigned int appendedFrames, bool continuing) noexcept;
 		static std::optional<PlaybackMusicalHistoryPoint> MusicalPoint(const SegmentValue& segment,
 			std::uint64_t deviceFrame) noexcept;
 		std::vector<Segment> _segments;
@@ -195,5 +196,10 @@ namespace audio
 		std::size_t _first = 0u;
 		std::size_t _count = 0u;
 		std::uint64_t _retainFrom = 0u;
+		// Sole-writer cache; never published or read by history query threads.
+		PlaybackRateCursor _writerCursor{ 1.0, 1.0, 1.0 };
+		PlaybackRateCursor _writerMusicalCursor{ 1.0, 1.0, 1.0 };
+		double _writerProgress = 0.0;
+		double _writerMusicalProgress = 0.0;
 	};
 }

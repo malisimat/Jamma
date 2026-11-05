@@ -664,6 +664,7 @@ bool LoopTake::CanBeginPlaybackRateBlock(const audio::PlaybackRateBlock& block, 
 void LoopTake::BeginPlaybackRateBlock(const audio::PlaybackRateBlock& block, std::uint64_t deviceStart,
 	const audio::PlaybackRateHistory* history, bool followingRemote, double legacyRemoteRate) noexcept
 {
+	_midiProgressFrame.reset();
 	_playbackRateBlock = block;
 	_playbackRateBlock.MasterLength = 0u;
 	_playbackRateBlock.MasterRecordingRate = 1.0;
@@ -834,10 +835,22 @@ std::uint64_t LoopTake::RequiredRateHistoryStart(std::uint64_t fallback) const n
 	return fallback;
 }
 
+double LoopTake::_MidiSourceProgressAtFrame(unsigned int frame) const noexcept
+{
+	if (!_hasPlaybackRateBlock) return frame;
+	frame = (std::min)(frame, _playbackRateBlock.Frames);
+	if (!_midiProgressFrame || *_midiProgressFrame != frame)
+	{
+		_midiProgress = _playbackRateBlock.Advance(frame, _playbackRateBaseline);
+		_midiProgressFrame = frame;
+	}
+	return _midiProgress;
+}
+
 double LoopTake::MidiSourcePositionAtFrame(unsigned int frame) const noexcept
 {
 	return static_cast<double>(_midiSourceOriginInitialised ? _midiSourceWhole : _midiVisualPlayIndex.load(std::memory_order_relaxed)) + _midiSourceFraction
-		+ (_hasPlaybackRateBlock ? _playbackRateBlock.Advance(frame, _playbackRateBaseline) : frame);
+		+ _MidiSourceProgressAtFrame(frame);
 }
 
 double LoopTake::MidiSourcePhaseAtFrame(unsigned int frame, unsigned long length) const noexcept
@@ -846,7 +859,7 @@ double LoopTake::MidiSourcePhaseAtFrame(unsigned int frame, unsigned long length
 	const auto whole = _midiSourceOriginInitialised ? _midiSourceWhole : _midiVisualPlayIndex.load(std::memory_order_relaxed);
 	const auto start = ninjam::PositiveModulo(whole, length);
 	return std::fmod(static_cast<double>(start) + _midiSourceFraction
-		+ (_hasPlaybackRateBlock ? _playbackRateBlock.Advance(frame, _playbackRateBaseline) : frame), static_cast<double>(length));
+		+ _MidiSourceProgressAtFrame(frame), static_cast<double>(length));
 }
 
 void LoopTake::SetCaptureInputHistoryAtAudioBoundary(const audio::InputHistoryView& history) noexcept

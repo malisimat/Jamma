@@ -262,3 +262,68 @@ TEST(PlaybackRateHistory, UnknownPhaseEditRequiresReservedSlotEvenWhenRateContin
     history.RetainFrom(8u);
     EXPECT_TRUE(history.CanAppend(8u, block, false));
 }
+
+TEST(PlaybackRate, CoalescedWriterEndpointsMatchExactReplayAfterRejectionAndReset)
+{
+    for (const bool transition : {false, true})
+    {
+        SCOPED_TRACE(transition);
+        audio::PlaybackRateHistory history(1u);
+        audio::PlaybackRateBlock original{0.7, 1.9, 480.0, 4064u, 5u};
+        original.SourceScale = 1.0 / 1.3;
+        original.HasSourceTransition = transition;
+        original.InitialSourceVelocity = 0.8;
+        original.InitialSourcePhaseError = -11.7;
+        original.MasterLength = 101u;
+        original.MasterPositionWhole = 17u;
+        original.MasterPositionFraction = 0.3;
+        original.MasterRecordingRate = 1.9;
+        auto cursor = original.Cursor();
+        auto musical = original;
+        musical.SourceScale = 1.0;
+        musical.HasSourceTransition = false;
+        for (unsigned int start = 0u; start < original.Frames; start += 127u)
+        {
+            auto part = original;
+            part.Frames = 127u;
+            part.InitialRate = cursor.Current();
+            part.InitialSourceVelocity = cursor.SourceVelocity();
+            part.InitialSourcePhaseError = cursor.SourcePhaseError();
+            audio::SourcePosition master{17, 0.3};
+            ASSERT_TRUE(master.Advance(musical.Advance(start, original.MasterRecordingRate)));
+            part.MasterPositionWhole = static_cast<std::uint64_t>(master.Whole);
+            part.MasterPositionFraction = master.Fraction;
+            // An unsuccessful admission must not poison the cached endpoint.
+            if (start)
+            {
+                auto rejected = part;
+                ++rejected.Revision;
+                EXPECT_FALSE(history.Append(start, rejected));
+            }
+            ASSERT_TRUE(history.CanAppend(start, part));
+            ASSERT_TRUE(history.Append(start, part));
+            for (unsigned int i = 0u; i < part.Frames; ++i) cursor.Next();
+            const auto point = history.Query(start + part.Frames);
+            ASSERT_TRUE(point);
+            EXPECT_DOUBLE_EQ(original.Advance(start + part.Frames), point->Coordinate.Difference({}));
+            const auto observedMaster = history.QueryMusicalPosition(start + part.Frames);
+            ASSERT_TRUE(observedMaster);
+            EXPECT_DOUBLE_EQ(17.3 + musical.Advance(start + part.Frames, original.MasterRecordingRate),
+                static_cast<double>(observedMaster->Coordinate.Whole) + observedMaster->Coordinate.Fraction);
+        }
+        EXPECT_EQ(1u, history.Size());
+        audio::PlaybackRateBlock next{cursor.Current(), 1.9, 480.0, 127u, 6u};
+        EXPECT_FALSE(history.Append(original.Frames, next));
+        history.RetainFrom(original.Frames);
+        ASSERT_TRUE(history.Append(original.Frames, next));
+        const auto edge = history.Query(original.Frames);
+        ASSERT_TRUE(edge);
+        EXPECT_DOUBLE_EQ(original.Advance(original.Frames), edge->Coordinate.Difference({}));
+        history.Clear();
+        ASSERT_TRUE(history.Append(0u, {1.0, 1.0, 1.0, 4u, 1u}));
+        EXPECT_EQ(4.0, history.QueryDifference(0u, 4u));
+        history.Prepare(2u);
+        ASSERT_TRUE(history.Append(100u, {0.5, 0.5, 1.0, 8u, 1u}));
+        EXPECT_EQ(4.0, history.QueryDifference(100u, 108u));
+    }
+}

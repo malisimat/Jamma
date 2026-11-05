@@ -1902,3 +1902,23 @@ TEST(LoopTakePlaybackRate, RemoteGridKeepsFrozenRecordedIntervalAcrossServerChan
     EXPECT_EQ(12000, take->ResolvedMidiQuantisation().RemoteOriginSamps);
     EXPECT_EQ(8u, take->ResolvedMidiQuantisation().RemoteBpi);
 }
+
+TEST(LoopTakePlaybackRate, RepeatedAutomationQueriesPreserveChildWrapsAndInvalidateOnNewBlock)
+{
+    auto take = MakeTimingTestLoopTake("automation-ramp");
+    take->SetMidiVisualPosition(23u, 97u);
+    audio::PlaybackRateBlock block{0.7, 1.9, 480.0, 256u, 1u};
+    for (unsigned int pass = 0u; pass < 3u; ++pass)
+    {
+        take->BeginPlaybackRateBlock(block, pass * block.Frames, nullptr, false);
+        const auto origin = take->MidiSourcePositionAtFrame(0u);
+        for (const auto frame : {255u, 255u, 127u, 255u, 0u, 256u, 300u})
+            for (const auto length : {97ul, 113ul, 7ul})
+                EXPECT_NEAR(std::fmod(origin + block.Advance(frame), static_cast<double>(length)),
+                    take->MidiSourcePhaseAtFrame(frame, length), 1e-12);
+        take->EndMultiPlay(block.Frames);
+        auto cursor = block.Cursor();
+        for (unsigned int i = 0u; i < block.Frames; ++i) cursor.Next();
+        block.InitialRate = cursor.Current();
+    }
+}

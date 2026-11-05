@@ -243,6 +243,9 @@ void PlaybackRateHistory::Clear() noexcept
 	_sequence.fetch_add(1u);
 	_first = _count = 0u;
 	_retainFrom = 0u;
+	_writerCursor = PlaybackRateCursor(1.0, 1.0, 1.0);
+	_writerMusicalCursor = PlaybackRateCursor(1.0, 1.0, 1.0);
+	_writerProgress = _writerMusicalProgress = 0.0;
 	_publishedFirst.store(0u);
 	_publishedCount.store(0u);
 	_sequence.fetch_add(1u);
@@ -264,7 +267,32 @@ std::optional<PlaybackMusicalHistoryPoint> PlaybackRateHistory::MusicalPoint(
 	return PlaybackMusicalHistoryPoint{ position, block.MasterRecordingRate, block.MasterLength };
 }
 
-bool PlaybackRateHistory::CanContinue(const SegmentValue& previous, const PlaybackRateBlock& next) noexcept
+void PlaybackRateHistory::UpdateWriterEndpoint(const SegmentValue& segment,
+	unsigned int appendedFrames, bool continuing) noexcept
+{
+	const auto& block = segment.Block;
+	auto musical = block;
+	musical.SourceScale = 1.0;
+	musical.HasSourceTransition = false;
+	if (!continuing)
+	{
+		_writerCursor = block.Cursor();
+		_writerMusicalCursor = musical.Cursor();
+		_writerProgress = _writerMusicalProgress = 0.0;
+	}
+	if (block.IsConstant()) _writerProgress = block.Advance(block.Frames);
+	else for (unsigned int frame = 0u; frame < appendedFrames; ++frame)
+		_writerProgress += _writerCursor.Next();
+	if (block.RemoteIntervalLengthSamps) _writerMusicalProgress = static_cast<double>(block.Frames);
+	else if (block.MasterLength && std::isfinite(block.MasterRecordingRate) && block.MasterRecordingRate > 0.0)
+	{
+		if (musical.IsConstant()) _writerMusicalProgress = musical.Advance(block.Frames, block.MasterRecordingRate);
+		else for (unsigned int frame = 0u; frame < appendedFrames; ++frame)
+			_writerMusicalProgress += _writerMusicalCursor.Next() / block.MasterRecordingRate;
+	}
+}
+
+bool PlaybackRateHistory::CanContinue(const SegmentValue& previous, const PlaybackRateBlock& next) const noexcept
 {
 	const auto& old = previous.Block;
 	if (old.TargetRate != next.TargetRate || old.Revision != next.Revision || old.Damping != next.Damping
@@ -272,19 +300,19 @@ bool PlaybackRateHistory::CanContinue(const SegmentValue& previous, const Playba
 		|| old.RemoteIntervalLengthSamps != next.RemoteIntervalLengthSamps || old.RemoteBpi != next.RemoteBpi
 		|| old.MasterLength != next.MasterLength || old.MasterRecordingRate != next.MasterRecordingRate
 		|| next.Frames > (std::numeric_limits<unsigned int>::max)() - old.Frames) return false;
-	// Reject long ramp coalescing before replaying its musical endpoint.
+	// Retain the existing bounded query replay and admission policy.
 	if (!(old.IsConstant() && next.IsConstant()) && old.Frames + next.Frames > 4096u) return false;
 	if (old.MasterLength)
 	{
-		const auto end = MusicalPoint(previous, previous.Start + old.Frames);
-		if (!end || end->Coordinate.Whole < 0 || static_cast<std::uint64_t>(end->Coordinate.Whole) != next.MasterPositionWhole
-			|| std::abs(end->Coordinate.Fraction - next.MasterPositionFraction) > 1e-9) return false;
+		if (old.MasterPositionWhole > static_cast<std::uint64_t>((std::numeric_limits<std::int64_t>::max)())
+			|| !std::isfinite(old.MasterRecordingRate) || old.MasterRecordingRate <= 0.0) return false;
+		SourcePosition end{ static_cast<std::int64_t>(old.MasterPositionWhole), old.MasterPositionFraction };
+		if (!end.Advance(_writerMusicalProgress) || end.Whole < 0 || static_cast<std::uint64_t>(end.Whole) != next.MasterPositionWhole
+			|| std::abs(end.Fraction - next.MasterPositionFraction) > 1e-9) return false;
 	}
 	if (old.IsConstant() && next.IsConstant()) return old.TargetRate == next.InitialRate;
-	auto cursor = old.Cursor();
-	for (unsigned int frame = 0u; frame < old.Frames; ++frame) cursor.Next();
-	return cursor.Current() == next.InitialRate && (!next.HasSourceTransition
-		|| (cursor.SourceVelocity() == next.InitialSourceVelocity && cursor.SourcePhaseError() == next.InitialSourcePhaseError));
+	return _writerCursor.Current() == next.InitialRate && (!next.HasSourceTransition
+		|| (_writerCursor.SourceVelocity() == next.InitialSourceVelocity && _writerCursor.SourcePhaseError() == next.InitialSourcePhaseError));
 }
 
 bool PlaybackRateHistory::CanAppend(std::uint64_t deviceStart, const PlaybackRateBlock& block, bool allowContinuation) const noexcept
@@ -317,19 +345,21 @@ bool PlaybackRateHistory::Append(std::uint64_t deviceStart, const PlaybackRateBl
 		if (CanContinue(last, block))
 		{
 			last.Block.Frames += block.Frames;
+			UpdateWriterEndpoint(last, block.Frames, true);
 			_sequence.fetch_add(1u);
 			_segments[lastIndex].Write(last);
 			_sequence.fetch_add(1u);
 			return true;
 		}
 		origin = last.Origin;
-		if (!origin.Advance(last.Block.Advance(last.Block.Frames))) return false;
+		if (!origin.Advance(_writerProgress)) return false;
 	}
 	if (_count == _segments.size())
 	{
 		const auto oldest = _segments[_first].Read();
 		if (oldest.Start + oldest.Block.Frames > _retainFrom) return false;
 	}
+	UpdateWriterEndpoint({ deviceStart, block, origin }, block.Frames, false);
 	_sequence.fetch_add(1u);
 	if (_count == _segments.size())
 	{

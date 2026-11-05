@@ -775,6 +775,10 @@ namespace engine
 		std::atomic_bool _recordingPlaybackRatePending{ false };
 		audio::PlaybackRateBlock _playbackRateBlock;
 		double _playbackRateBaseline = 1.0;
+		// Callback-only readers share the exact recurrence result for their query edge.
+		mutable std::optional<unsigned int> _midiProgressFrame;
+		mutable double _midiProgress = 0.0;
+		double _MidiSourceProgressAtFrame(unsigned int frame) const noexcept;
 		double _midiSourceFraction = 0.0;
 		std::int64_t _midiSourceWhole = 0;
 		bool _midiSourceOriginInitialised = false;
