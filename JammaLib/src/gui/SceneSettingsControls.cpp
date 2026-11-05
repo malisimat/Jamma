@@ -135,8 +135,8 @@ SceneSettingsControls::SceneSettingsControls(std::uint8_t channel, double offset
 	metronomeToggleParams.Index = NinjamMetronomeControlIndex;
 	metronomeToggleParams.ToggleIndex = NinjamMetronomeControlIndex;
 	metronomeToggleParams.Text = "Metronome";
-	metronomeToggleParams.Size = { 120, 40u };
-	metronomeToggleParams.MinSize = { 120, 40u };
+	metronomeToggleParams.Size = { 120, GuiToggleParams::DefaultHeight };
+	metronomeToggleParams.MinSize = metronomeToggleParams.Size;
 	metronomeToggleParams.TextFontSize = graphics::FontOptions::FONT_SMALL;
 	metronomeToggleParams.InitState = GuiToggleParams::TOGGLE_OFF;
 	_ninjamMetronomeToggle = std::make_shared<GuiToggle>(metronomeToggleParams);
@@ -150,7 +150,7 @@ SceneSettingsControls::SceneSettingsControls(std::uint8_t channel, double offset
 	GuiRadioParams globalMidiQuantRadioParams;
 	globalMidiQuantRadioParams.Index = 101u;
 	globalMidiQuantRadioParams.InitValue = static_cast<unsigned int>(quantisation);
-	globalMidiQuantRadioParams.Size = { 228, 40 };
+	globalMidiQuantRadioParams.Size = { 228, GuiToggleParams::DefaultHeight };
 
 	std::vector<GuiToggleParams> globalQuantToggleParams;
 	for (auto i = 0u; i < 3; ++i)
@@ -159,7 +159,7 @@ SceneSettingsControls::SceneSettingsControls(std::uint8_t channel, double offset
 		toggleParams.Text = i == 0 ? "Off" : i == 1 ? "Mixed" : "All";
 		toggleParams.TextureShader = "texture_tinted";
 		toggleParams.Position = { static_cast<int>(i * 76), 0 };
-		toggleParams.Size = { 72, 40 };
+		toggleParams.Size = { 72, GuiToggleParams::DefaultHeight };
 		toggleParams.Texture = "rounded_but";
 		toggleParams.OverTexture = "rounded_but_over";
 		toggleParams.DownTexture = "rounded_but_down";
@@ -189,7 +189,6 @@ SceneSettingsControls::SceneSettingsControls(std::uint8_t channel, double offset
 	auto tapParams = GuiButtonParams::PanelButton(180u);
 	tapParams.Index = TapTempoControlIndex;
 	tapParams.Text = "Tap tempo (Space)";
-	tapParams.Size.Height = 40u; tapParams.MinSize.Height = 40u;
 	tapParams.TextFontSize = graphics::FontOptions::FONT_SMALL;
 	_tapButton = std::make_shared<GuiButton>(tapParams);
 	GuiRadioParams subdivisionParams;
@@ -239,18 +238,18 @@ std::vector<GuiSettingEntry> SceneSettingsControls::SettingsEntries() const
 		{ SettingsPage::Timing, "", _transportOffsetLabel, 0u },
 		{ SettingsPage::Timing, "Subdivision: local grain / remote beat", _midiSubdivisionRadio, MidiSubdivisionControlIndex },
 		{ SettingsPage::Timing, "", _tapButton, TapTempoControlIndex },
-		{ SettingsPage::Timing, "", _reclockButton, ReclockControlIndex },
+		{ SettingsPage::Timing, "Master clock", _reclockButton, ReclockControlIndex },
         {SettingsPage::Timing,"",_useMasterButton,UseMasterControlIndex},
         {SettingsPage::Timing,"",_masterTarget,0u},
         {SettingsPage::Timing,"",_masterStatus,0u},
 		{ SettingsPage::Timing, "", _syncToServerButton, SyncToServerControlIndex },
 		{ SettingsPage::Timing, "", _ninjamStatus, 0u },
-		{ SettingsPage::Session, "", _resetAllButton, ResetAllControlIndex },
+		{ SettingsPage::Session, "Reset session", _resetAllButton, ResetAllControlIndex },
         {SettingsPage::Session,"",_resetWithVstsButton,ResetWithVstsControlIndex},
 		{ SettingsPage::Midi, "MIDI channel override", _midiChannelOverride, MidiChannelOverrideControlIndex },
 		{ SettingsPage::Midi, "", std::make_shared<GuiLabel>(GuiLabelParams::PanelHeader("All off = unchanged", 300u)), 0u },
-		{ SettingsPage::Timing, "", _ninjamMetronomeToggle, NinjamMetronomeControlIndex },
-		{ SettingsPage::Timing, "Level", _metronomeLevel, MetronomeLevelControlIndex },
+		{ SettingsPage::Timing, "Metronome", _ninjamMetronomeToggle, NinjamMetronomeControlIndex },
+		{ SettingsPage::Timing, "", _metronomeLevel, MetronomeLevelControlIndex },
 		{ SettingsPage::Session, "", _saveButton, SaveSessionControlIndex },
 		{ SettingsPage::Session, "", _saveDefaultJamButton, DefaultSessionControlIndex },
 		{ SettingsPage::Session, "", _loadButton, LoadSessionControlIndex },
@@ -371,8 +370,8 @@ std::shared_ptr<GuiButton> SceneSettingsControls::_SessionButton(const std::stri
 	auto params = GuiButtonParams::PanelButton(240u);
 	params.Text = text;
 	params.DispatchCommand = true;
-	params.Size.Height = 40u;
-	params.MinSize.Height = 40u;
+	params.Size.Height = GuiButtonParams::DefaultHeight;
+	params.MinSize.Height = GuiButtonParams::DefaultHeight;
 	params.TextFontSize = graphics::FontOptions::FONT_SMALL;
 	return std::make_shared<GuiButton>(params);
 }
@@ -533,12 +532,11 @@ SceneSettingsControls::DevicePages SceneSettingsControls::BuildDevicePages(
 	}
 	entries.push_back({SettingsPage::Audio, "Active stream", _activeAudioStatus, 0u});
 	entries.push_back({SettingsPage::Audio, "Status", _deviceStatus, 0u});
-	auto button = [&](const std::string& text, unsigned int command){ auto params = GuiButtonParams::PanelButton(240u); params.Text = text; params.DispatchCommand = true; params.Size.Height = 40u; params.MinSize.Height = 40u; params.TextFontSize = graphics::FontOptions::FONT_SMALL; entries.push_back({SettingsPage::Audio,"",std::make_shared<GuiButton>(params),command}); };
+	auto button = [&](const std::string& text, unsigned int command){ auto params = GuiButtonParams::PanelButton(240u); params.Text = text; params.DispatchCommand = true; params.Size.Height = GuiButtonParams::DefaultHeight; params.MinSize.Height = GuiButtonParams::DefaultHeight; params.TextFontSize = graphics::FontOptions::FONT_SMALL; entries.push_back({SettingsPage::Audio,"",std::make_shared<GuiButton>(params),command}); };
 	button("Rescan audio devices", RefreshAudioControlIndex);
 	_midiChoices.clear(); _midiChoiceBindings.clear();
-	auto midiTitle = GuiLabelParams::PanelHeader(midi.Inventory.Error.empty() ? "MIDI input selection" : "MIDI inventory: " + midi.Inventory.Error, 320, 66u);
-	midiTitle.FontSize = graphics::FontOptions::FONT_SMALL;
-	midiEntries.push_back({SettingsPage::Midi, "", std::make_shared<GuiLabel>(midiTitle), 0u});
+	midiEntries.push_back({SettingsPage::Midi, "MIDI input selection",
+		_StatusLabel(midi.Inventory.Error, midi.Inventory.Error.empty() ? 0u : 66u), 0u});
 	// Existing registry entries remain independent even when hardware selectors
 	// coincide. Inventory-only choices acquire their ID when first selected.
 	auto choices = midiDraft;
@@ -579,7 +577,7 @@ SceneSettingsControls::DevicePages SceneSettingsControls::BuildDevicePages(
 		_midiChoices.push_back({choice.Name, choice.Id, control});
 	}
 	auto refreshMidi = GuiButtonParams::PanelButton(240u); refreshMidi.Text = "Refresh MIDI devices"; refreshMidi.DispatchCommand = true;
-	refreshMidi.Size.Height = 40u; refreshMidi.MinSize.Height = 40u; refreshMidi.TextFontSize = graphics::FontOptions::FONT_SMALL;
+	refreshMidi.Size.Height = GuiButtonParams::DefaultHeight; refreshMidi.MinSize.Height = GuiButtonParams::DefaultHeight; refreshMidi.TextFontSize = graphics::FontOptions::FONT_SMALL;
 	midiEntries.push_back({SettingsPage::Midi, "", std::make_shared<GuiButton>(refreshMidi), RefreshMidiControlIndex});
 	return { std::move(entries), std::move(midiEntries) };
 }

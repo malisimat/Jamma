@@ -10,6 +10,66 @@ using namespace base;
 using namespace actions;
 using namespace utils;
 
+namespace gui
+{
+	// Decoration follows existing page rows, so grouping adds no layout height
+	// and never participates in picking or command routing.
+	class GuiSettingsSectionHeader : public GuiLabel
+	{
+	public:
+		explicit GuiSettingsSectionHeader(GuiLabelParams params) : GuiLabel(_TitleParams(params)), _background(_BackgroundParams()) {}
+		void Draw(DrawContext& context) override
+		{
+			if (!IsVisible()) return;
+			if (const auto page = Parent())
+			{
+				bool inSection = false;
+				int bottom = Position().Y;
+				for (unsigned int index = 0; index < 256u; ++index)
+				{
+					const auto child = page->TryGetChild(static_cast<unsigned char>(index));
+					if (!child) break;
+					if (child.get() == this) inSection = true;
+					else if (inSection && std::dynamic_pointer_cast<GuiSettingsSectionHeader>(child)) break;
+					if (inSection) bottom = std::min(bottom, child->Position().Y);
+				}
+				_background.SetPosition({ Position().X - 3, bottom - 1 });
+				_background.SetSize({ GetSize().Width + 6u,
+					static_cast<unsigned int>(Position().Y - bottom) + GetSize().Height + 2u });
+				_background.Draw(context);
+			}
+			GuiLabel::Draw(context);
+		}
+	protected:
+		void _InitResources(resources::ResourceLib& resources, bool force) override
+		{
+			GuiLabel::_InitResources(resources, force);
+			_background.InitResources(resources, force);
+		}
+		void _ReleaseResources() override
+		{
+			_background.ReleaseResources();
+			GuiLabel::_ReleaseResources();
+		}
+	private:
+		static GuiLabelParams _TitleParams(GuiLabelParams params)
+		{
+			params.UseDarkFlatBackground(0.65f);
+			params.FontSize = graphics::FontOptions::FONT_SMALL;
+			return params;
+		}
+		static GuiElementParams _BackgroundParams()
+		{
+			GuiElementParams params;
+			params.TextureShader = "colour";
+			params.TintColor = GuiStyle::Graphite();
+			params.TextureOpacity = 0.40f;
+			return params;
+		}
+		GuiPanel _background;
+	};
+}
+
 GuiMainPanel::GuiMainPanel(GuiMainPanelParams params) : GuiPanel(params),
 	_selectionOnly(params.SelectionOnly), _page(params.SelectionOnly ? SettingsPage::Selection : SettingsPage::Timing),
 	_popups(params.PopupManager), _beforeHide(std::move(params.BeforeHide))
@@ -69,7 +129,8 @@ GuiMainPanel::GuiMainPanel(GuiMainPanelParams params) : GuiPanel(params),
 			auto label = GuiLabelParams::PanelHeader(setting.Label, 320, labelHeight);
 			label.UseDarkFlatBackground();
 			label.FontSize = graphics::FontOptions::FONT_SMALL;
-			page->AddChild(std::make_shared<GuiLabel>(label));
+			page->AddChild(_selectionOnly ? std::make_shared<GuiLabel>(label)
+				: std::make_shared<GuiSettingsSectionHeader>(label));
 		}
 		page->AddChild(setting.Control);
 		_controlSizes.emplace_back(setting.Control, setting.Control->GetSize());
@@ -84,8 +145,8 @@ GuiMainPanel::GuiMainPanel(GuiMainPanelParams params) : GuiPanel(params),
 			auto label = GuiLabelParams::PanelHeader(title, 320u);
 			label.UseDarkFlatBackground();
 			label.FontSize = graphics::FontOptions::FONT_SMALL;
-			page->AddChild(std::make_shared<GuiLabel>(label));
-			auto row = std::make_shared<GuiStackPanel>(GuiStackPanelParams::PanelHorizontalRow(320u, 40u));
+			page->AddChild(std::make_shared<GuiSettingsSectionHeader>(label));
+			auto row = std::make_shared<GuiStackPanel>(GuiStackPanelParams::PanelHorizontalRow(320u, GuiButtonParams::DefaultHeight));
 			std::shared_ptr<GuiButton> defaultButton;
 			for (const auto& [text, command] : controls)
 			{
@@ -96,7 +157,7 @@ GuiMainPanel::GuiMainPanel(GuiMainPanelParams params) : GuiPanel(params),
 				{
 					auto buttonParams = GuiButtonParams::PanelButton(80u);
 					buttonParams.Text = text; buttonParams.DispatchCommand = true;
-					buttonParams.Size.Height = 40u; buttonParams.MinSize = { 0u, 40u };
+					buttonParams.MinSize.Width = 0u;
 					buttonParams.TextFontSize = graphics::FontOptions::FONT_SMALL;
 					button = std::make_shared<GuiButton>(buttonParams);
 				}
@@ -125,6 +186,8 @@ GuiMainPanel::GuiMainPanel(GuiMainPanelParams params) : GuiPanel(params),
 					auto binding = std::make_shared<GuiCommandReceiver>(setting.Command);
 					setting.Control->SetReceiver(binding); _bindings.push_back(std::move(binding));
 				}
+				if (!setting.Label.empty())
+					page->AddChild(std::make_shared<GuiSettingsSectionHeader>(GuiLabelParams::PanelHeader(setting.Label, 320u)));
 				page->AddChild(setting.Control);
 				_controlSizes.emplace_back(setting.Control, setting.Control->GetSize());
 			}
@@ -589,7 +652,8 @@ void GuiMainPanel::_LayoutSettings(int panelWidth, int panelHeight)
 		else
 		{
 			if (original != _controlSizes.end())
-				child->SetSize({ (std::dynamic_pointer_cast<GuiButton>(child) || std::dynamic_pointer_cast<GuiSlider>(child))
+				child->SetSize({ (std::dynamic_pointer_cast<GuiButton>(child) || std::dynamic_pointer_cast<GuiSlider>(child) ||
+					std::dynamic_pointer_cast<GuiStackPanel>(child))
 					? childWidth : std::min(childWidth, original->second.Width), original->second.Height });
 			if (auto stack = std::dynamic_pointer_cast<GuiStackPanel>(child))
 			{
@@ -597,11 +661,11 @@ void GuiMainPanel::_LayoutSettings(int panelWidth, int panelHeight)
 				{
 					unsigned int count = 0u;
 					while (count < 255u && stack->TryGetChild(static_cast<unsigned char>(count))) ++count;
-					stack->SetSize({ childWidth, 40u });
+					stack->SetSize({ childWidth, GuiButtonParams::DefaultHeight });
 					const auto gaps = count > 0u ? (count - 1u) * GuiStackPanelParams::PanelRowSpacing : 0u;
 					const auto available = childWidth > gaps ? childWidth - gaps : 0u;
 					for (unsigned int i = 0u; i < count; ++i)
-						stack->TryGetChild(static_cast<unsigned char>(i))->SetSize({ available * (i + 1u) / count - available * i / count, 40u });
+						stack->TryGetChild(static_cast<unsigned char>(i))->SetSize({ available * (i + 1u) / count - available * i / count, GuiButtonParams::DefaultHeight });
 				}
 				stack->InvalidateLayout();
 				stack->ComputeLayout();
@@ -669,7 +733,7 @@ void GuiMainPanel::ReplacePageSettings(SettingsPage pageId, const std::vector<Gu
 			auto labelParams = GuiLabelParams::PanelHeader(setting.Label, 320, labelHeight);
 			labelParams.UseDarkFlatBackground();
 			labelParams.FontSize = graphics::FontOptions::FONT_SMALL;
-			page->AddChild(std::make_shared<GuiLabel>(labelParams));
+			page->AddChild(std::make_shared<GuiSettingsSectionHeader>(labelParams));
 		}
 		page->AddChild(setting.Control);
 		// A retained widget may currently be wrapped for a narrow viewport.

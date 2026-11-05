@@ -1401,6 +1401,39 @@ TEST(GuiMainPanel, ControlsRecoverTheirWidthsAfterTinyAndZeroViewport) {
 	EXPECT_EQ(originalWidth, numeric->GetSize().Width);
 }
 
+TEST(GuiMainPanel, MidiDeviceStackFillsPageAfterReplacementAndResize) {
+	gui::GuiMainPanelParams params;
+	params.Size = { 1200u, 900u };
+	auto panel = std::make_shared<gui::GuiMainPanel>(params);
+	panel->Init();
+	panel->SetPage(gui::SettingsPage::Midi);
+	const auto replaceDevices = [&]() {
+		gui::GuiStackPanelParams stackParams;
+		stackParams.Size = { 300u, GuiToggleParams::DefaultHeight };
+		auto devices = std::make_shared<gui::GuiStackPanel>(stackParams);
+		auto toggleParams = GuiToggleParams::PanelPrimary();
+		toggleParams.Size.Width = 300u;
+		toggleParams.HorizSizing = base::LayoutSizing::Fill;
+		auto toggle = std::make_shared<GuiToggle>(toggleParams);
+		devices->AddChild(toggle);
+		auto refresh = std::make_shared<GuiButton>(GuiButtonParams::PanelButton(240u));
+		panel->ReplacePageSettings(gui::SettingsPage::Midi, {
+			{ gui::SettingsPage::Midi, "MIDI inputs", devices, 0u },
+			{ gui::SettingsPage::Midi, "", refresh, 7206u } });
+		EXPECT_EQ(refresh->GetSize().Width, toggle->GetSize().Width);
+		EXPECT_EQ(refresh->GlobalPosition().X, toggle->GlobalPosition().X);
+		EXPECT_GT(toggle->GetSize().Width, 300u);
+		return toggle;
+	};
+	auto toggle = replaceDevices();
+	const auto width = toggle->GetSize().Width;
+	panel->SetViewportSize({ 40u, 40u });
+	panel->SetViewportSize({ 1200u, 900u });
+	EXPECT_EQ(width, toggle->GetSize().Width);
+	toggle = replaceDevices();
+	EXPECT_EQ(width, toggle->GetSize().Width);
+}
+
 TEST(GuiFocusManager, MovingOrClearingFocusFinalizesNumericEdits) {
 	GuiNumericInputParams params;
 	params.Min = 0; params.Max = 16; params.InitValue = 3; params.Decimals = 0;
