@@ -119,7 +119,8 @@ bool PlaybackRate::Commit(const PlaybackRateBlock& block) noexcept
 		block.TargetRate != _target || block.Damping != _damping ||
 		block.SourceScale != 1.0 || block.HasSourceTransition) return false;
 	auto cursor = block.Cursor();
-	for (unsigned int frame = 0u; frame < block.Frames; ++frame) cursor.Next();
+	if (!block.IsConstant())
+		for (unsigned int frame = 0u; frame < block.Frames; ++frame) cursor.Next();
 	_state = cursor;
 	return true;
 }
@@ -271,6 +272,8 @@ bool PlaybackRateHistory::CanContinue(const SegmentValue& previous, const Playba
 		|| old.RemoteIntervalLengthSamps != next.RemoteIntervalLengthSamps || old.RemoteBpi != next.RemoteBpi
 		|| old.MasterLength != next.MasterLength || old.MasterRecordingRate != next.MasterRecordingRate
 		|| next.Frames > (std::numeric_limits<unsigned int>::max)() - old.Frames) return false;
+	// Reject long ramp coalescing before replaying its musical endpoint.
+	if (!(old.IsConstant() && next.IsConstant()) && old.Frames + next.Frames > 4096u) return false;
 	if (old.MasterLength)
 	{
 		const auto end = MusicalPoint(previous, previous.Start + old.Frames);
@@ -278,9 +281,6 @@ bool PlaybackRateHistory::CanContinue(const SegmentValue& previous, const Playba
 			|| std::abs(end->Coordinate.Fraction - next.MasterPositionFraction) > 1e-9) return false;
 	}
 	if (old.IsConstant() && next.IsConstant()) return old.TargetRate == next.InitialRate;
-	// Never turn a long ramp/seek into an ever-growing callback replay. The
-	// physical history capacity already reserves one descriptor per frame.
-	if (old.Frames + next.Frames > 4096u) return false;
 	auto cursor = old.Cursor();
 	for (unsigned int frame = 0u; frame < old.Frames; ++frame) cursor.Next();
 	return cursor.Current() == next.InitialRate && (!next.HasSourceTransition
@@ -293,7 +293,7 @@ bool PlaybackRateHistory::CanAppend(std::uint64_t deviceStart, const PlaybackRat
 	if (!_count) return true;
 	const auto last = _segments[(_first + _count - 1u) % _segments.size()].Read();
 	if (last.Start + last.Block.Frames != deviceStart) return false;
-	if ((allowContinuation && CanContinue(last, block)) || _count < _segments.size()) return true;
+	if (_count < _segments.size() || (allowContinuation && CanContinue(last, block))) return true;
 	const auto oldest = _segments[_first].Read();
 	return oldest.Start + oldest.Block.Frames <= _retainFrom;
 }

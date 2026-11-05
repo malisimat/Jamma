@@ -3,7 +3,6 @@
 #include <algorithm>
 #include <cmath>
 #include <new>
-#include <emmintrin.h>
 
 namespace engine
 {
@@ -23,99 +22,12 @@ namespace engine
 }
 
 
-// Prepared once before callback execution. A fixed polyphase windowed-sinc
-// bank covers the admitted local range, including the 25% seek allowance.
-// Each row is normalized to preserve DC, including very short wrapped loops.
-struct engine::Loop::PlaybackFilter
-{
-    static constexpr unsigned int Taps = 128, Phases = 257, Bands = 33;
-    static constexpr double MaximumRate = 16.0 / 3.0; // inverse of 0.25 minus its 25% correction budget
-    std::array<float, Taps * Phases * Bands> Coefficients{};
-    PlaybackFilter()
-    {
-        constexpr double pi = 3.14159265358979323846;
-        for (unsigned int band = 0; band < Bands; ++band)
-        {
-            // Each interpolation endpoint is safe for the upper edge of its
-            // bin. In particular bank zero is not an allpass: mixing it into
-            // a near-unity speedup would leak essentially the entire alias.
-            const double upperRate = 1.0 + (MaximumRate - 1.0) * (std::min)(band + 1u, Bands - 1u) / (Bands - 1);
-            // Blackman's finite transition consumes a fixed source-frequency
-            // width. Reserve it explicitly, including at 4x/5x; a percentage
-            // guard shrinks with rate and leaks the new Nyquist band.
-            // Passband/transition are deliberately narrower than ideal sinc.
-            const double cutoff = 1.0 / upperRate - 6.5 / Taps;
-            for (unsigned int phase = 0; phase < Phases; ++phase)
-            {
-                double total = 0.0;
-                const auto base = (band * Phases + phase) * Taps;
-                for (unsigned int tap = 0; tap < Taps; ++tap)
-                {
-                    const double x = static_cast<double>(tap) - (Taps / 2 - 1) - static_cast<double>(phase) / (Phases - 1);
-                    const double sinc = std::abs(x) < 1e-12 ? cutoff : std::sin(pi * cutoff * x) / (pi * x);
-                    const double window = 0.42 - 0.5 * std::cos(2.0 * pi * tap / (Taps - 1))
-                        + 0.08 * std::cos(4.0 * pi * tap / (Taps - 1));
-                    Coefficients[base + tap] = static_cast<float>(sinc * window);
-                    total += sinc * window;
-                }
-                for (unsigned int tap = 0; tap < Taps; ++tap)
-                    Coefficients[base + tap] = static_cast<float>(Coefficients[base + tap] / total);
-            }
-        }
-    }
-    struct Selection
-    {
-        const float* Lower;
-        const float* Upper;
-        double RateFraction;
-        double PhaseFraction;
-        double Weight(unsigned int tap) const noexcept
-        {
-            const auto low = Lower[tap] + (Lower[tap + Taps] - Lower[tap]) * PhaseFraction;
-            const auto high = Upper[tap] + (Upper[tap + Taps] - Upper[tap]) * PhaseFraction;
-            return low + (high - low) * RateFraction;
-        }
-    };
-    // Contiguous spans use SSE2 (baseline on Windows x64), with double
-    // coefficients and accumulation matching the scalar quality path.
-    static double Dot(const float* samples, const double* weights, unsigned int count) noexcept
-    {
-        auto sum = _mm_setzero_pd();
-        unsigned int i = 0;
-        for (; i + 4 <= count; i += 4)
-        {
-            const auto values = _mm_loadu_ps(samples + i);
-            sum = _mm_add_pd(sum, _mm_mul_pd(_mm_cvtps_pd(values), _mm_loadu_pd(weights + i)));
-            sum = _mm_add_pd(sum, _mm_mul_pd(_mm_cvtps_pd(_mm_movehl_ps(values, values)),
-                _mm_loadu_pd(weights + i + 2)));
-        }
-        alignas(16) double lanes[2];
-        _mm_store_pd(lanes, sum);
-        auto result = lanes[0] + lanes[1];
-        for (; i < count; ++i) result += samples[i] * weights[i];
-        return result;
-    }
-    Selection Row(double rate, double fraction) const noexcept
-    {
-        const auto bandCoordinate = std::clamp((rate - 1.0) * (Bands - 1) / (MaximumRate - 1.0), 0.0, static_cast<double>(Bands - 1));
-        const auto band = (std::min)(static_cast<unsigned int>(bandCoordinate), Bands - 2);
-        const auto phaseCoordinate = fraction * (Phases - 1);
-        const auto phase = (std::min)(static_cast<unsigned int>(phaseCoordinate), Phases - 2);
-        return {Coefficients.data() + (band * Phases + phase) * Taps,
-            Coefficients.data() + ((band + 1) * Phases + phase) * Taps,
-            bandCoordinate - band, phaseCoordinate - phase};
-    }
-};
-const std::unique_ptr<const engine::Loop::PlaybackFilter> engine::Loop::_playbackFilter =
-    std::make_unique<const engine::Loop::PlaybackFilter>();
-
 void engine::Loop::SetPlaybackRateBlockAtAudioBoundary(const audio::PlaybackRateBlock& block,
     double recordingRate) noexcept
 {
     if (!std::isfinite(recordingRate) || recordingRate <= 0.0) return;
     _playbackRateBlock = block;
     _recordingPlaybackRate = recordingRate;
-    _InitialisePlaybackFilter();
     if (LoopLength()) { _InitialisePlaybackOffset(); _PreparePlaybackOffsetTarget(); }
 }
 
@@ -165,12 +77,12 @@ void engine::Loop::SetCaptureInputHistoryAtAudioBoundary(const audio::InputHisto
 void engine::Loop::FlushPendingCaptureAtAudioBoundary() noexcept
 {
     if (!_triggerCapture || !_captureRateHistory || !TriggerCaptureCoverageValid()) return;
-    _FlushFilteredCapture(false);
+    _FlushMappedCapture(false);
     // The source pointer is borrowed only while ProcessActiveBounce pins it.
-    if (_captureSource) _FlushFilteredCapture(true);
+    if (_captureSource) _FlushMappedCapture(true);
 }
 
-void engine::Loop::_QueueFilteredCapture(const base::AudioWriteRequest& request, int writeOffset,
+void engine::Loop::_QueueMappedCapture(const base::AudioWriteRequest& request, int writeOffset,
     bool residual) noexcept
 {
     if (!request.numSamps) return;
@@ -178,17 +90,16 @@ void engine::Loop::_QueueFilteredCapture(const base::AudioWriteRequest& request,
     if (signedStart < 0 || request.numSamps > constants::MaxBlockSize)
     { _triggerCaptureCoverageValid.store(false, std::memory_order_release); return; }
     const auto start = static_cast<std::uint64_t>(signedStart);
-    auto& filter = _captureFilters[residual ? 1u : 0u];
+    auto& capture = _captureQueues[residual ? 1u : 0u];
     if (residual)
     {
         if (_captureResidualStart && start != _captureResidualEnd)
         { _triggerCaptureCoverageValid.store(false, std::memory_order_release); return; }
         if (!_captureResidualStart) _captureResidualStart = start;
         const auto end = start + request.numSamps;
-        if (filter.Count)
+        if (capture.Count)
         {
-            const auto pending = filter.Regions[filter.First].Cursor;
-            const auto oldest = pending >= CaptureFilterTaps / 2 ? pending - CaptureFilterTaps / 2 : 0u;
+            const auto oldest = capture.Regions[capture.First].Cursor;
             if (end > oldest + _captureResidualSamples.size())
             { _triggerCaptureCoverageValid.store(false, std::memory_order_release); return; }
         }
@@ -196,18 +107,18 @@ void engine::Loop::_QueueFilteredCapture(const base::AudioWriteRequest& request,
             _captureResidualSamples[(start + frame) % _captureResidualSamples.size()] = request.samples[frame * request.stride];
         _captureResidualEnd = end;
     }
-    if (filter.Count == filter.Regions.size())
+    if (capture.Count == capture.Regions.size())
     { _triggerCaptureCoverageValid.store(false, std::memory_order_release); return; }
-    auto& region = filter.Regions[(filter.First + filter.Count++) % filter.Regions.size()];
+    auto& region = capture.Regions[(capture.First + capture.Count++) % capture.Regions.size()];
     region = {start, start + request.numSamps, request.fadeNew, request.fadeCurrent,
         residual ? _captureSource : nullptr, residual && _captureSource ? _captureSource->AudioSourceGeneration() : 0u,
         _captureSourceBodyOrigin};
     FlushPendingCaptureAtAudioBoundary();
 }
 
-void engine::Loop::_FlushFilteredCapture(bool residual) noexcept
+void engine::Loop::_FlushMappedCapture(bool residual) noexcept
 {
-    auto& filter = _captureFilters[residual ? 1u : 0u];
+    auto& capture = _captureQueues[residual ? 1u : 0u];
     auto& published = residual ? _triggerBounceThrough : _triggerAdcThrough;
     auto through = published.load(std::memory_order_relaxed);
     const auto captureEnd = _triggerCaptureEnd.load(std::memory_order_acquire);
@@ -219,10 +130,10 @@ void engine::Loop::_FlushFilteredCapture(bool residual) noexcept
         if (!residual) _triggerAdcBlockThrough = through;
     };
     unsigned int work = 0u;
-    while (filter.Count && TriggerCaptureCoverageValid())
+    while (capture.Count && TriggerCaptureCoverageValid())
     {
-        auto& region = filter.Regions[filter.First];
-        if (through >= captureEnd) { filter = {}; break; }
+        auto& region = capture.Regions[capture.First];
+        if (through >= captureEnd) { capture = {}; break; }
         if (residual && (!region.SourceIdentity || region.SourceIdentity != _captureSource
             || region.SourceGeneration != _captureSource->AudioSourceGeneration()))
         { _triggerCaptureCoverageValid.store(false, std::memory_order_release); break; }
@@ -234,25 +145,16 @@ void engine::Loop::_FlushFilteredCapture(bool residual) noexcept
             const auto block = _captureRateHistory->DescribeAt(region.Cursor);
             if (!block) { _triggerCaptureCoverageValid.store(false, std::memory_order_release); publish(); return; }
             auto rate = block->Cursor();
+            const bool constantRate = block->IsConstant();
+            const auto constantIncrement = block->InitialRate * block->SourceScale / _captureRecordingRate;
             const auto count = (std::min)(static_cast<std::uint64_t>(block->Frames), region.End - region.Cursor);
             for (std::uint64_t frame = 0; frame < count; ++frame)
             {
-                if (++work > constants::MaxBlockSize + CaptureFilterTaps)
+                if (++work > constants::MaxBlockSize + CaptureInterpolationSamples)
                 { _triggerCaptureCoverageValid.store(false, std::memory_order_release); publish(); return; }
-                const auto increment = rate.Next() / _captureRecordingRate;
-                if (!(increment >= 1.0 / PlaybackFilter::MaximumRate) || increment > MaximumFilteredSourceRate)
+                const auto increment = constantRate ? constantIncrement : rate.Next() / _captureRecordingRate;
+                if (!(increment >= MinimumSourceRate) || increment > MaximumSourceRate)
                 { _triggerCaptureCoverageValid.store(false, std::memory_order_release); publish(); return; }
-                if (!filter.FilterInitialised)
-                {
-                    // A new never-audible capture starts with its correct filter.
-                    // A live unity writer entering mapped capture retains its
-                    // previous response and blends from that physical boundary.
-                    const auto& prior = _captureInterpolation[residual ? 2u : 0u];
-                    const auto continuing = prior.Valid && prior.Frame + 1u == region.Cursor;
-                    filter.FilterMix = !continuing && increment < 1.0 ? 1.0 : 0.0;
-                    filter.FilterInitialised = true;
-                }
-                const auto filterMix = _NextPlaybackFilterMix(filter.FilterMix, 1.0 / increment);
                 const auto next = position + increment;
                 auto first = (std::max)({static_cast<std::int64_t>(std::ceil(position)), through, _triggerCaptureBegin});
                 const auto end = (std::min)(static_cast<std::int64_t>(std::ceil(next)), captureEnd);
@@ -262,29 +164,27 @@ void engine::Loop::_FlushFilteredCapture(bool residual) noexcept
                 {
                     if (index != through || index < 0 || index >= _bufferBank.Capacity())
                     { _triggerCaptureCoverageValid.store(false, std::memory_order_release); publish(); return; }
-                    if (residual && _captureFilters[0].Count)
+                    if (residual && _captureQueues[0].Count)
                     {
-                        const auto& adc = _captureFilters[0].Regions[_captureFilters[0].First];
+                        const auto& adc = _captureQueues[0].Regions[_captureQueues[0].First];
                         const auto pending = _captureRateHistory->Query(adc.Cursor);
                         if (!pending) { _triggerCaptureCoverageValid.store(false, std::memory_order_release); publish(); return; }
                         const auto pendingSource = pending->Coordinate.Difference(_captureSourceOrigin) / _captureRecordingRate + constants::MaxLoopFadeSamps;
                         if (index >= std::ceil(pendingSource)) { publish(); return; }
                     }
                     const auto fraction = (static_cast<double>(index) - position) / increment;
-                    const auto weights = _playbackFilter->Row((std::max)(1.0, 1.0 / increment), fraction);
                     double sample = 0.0;
-                    for (unsigned int tap = 0; tap < PlaybackFilter::Taps; ++tap)
+                    for (unsigned int neighbor = 0; neighbor < CaptureInterpolationSamples; ++neighbor)
                     {
-                        const auto linearWeight = tap == PlaybackFilter::Taps / 2 - 1 ? 1.0 - fraction
-                            : tap == PlaybackFilter::Taps / 2 ? fraction : 0.0;
-                        const auto weight = linearWeight + (weights.Weight(tap) - linearWeight) * filterMix;
-                        if (std::abs(weight) < 1e-15) continue; // unity capture remains an exact impulse
-                        const auto input = static_cast<std::int64_t>(region.Cursor) + tap - (PlaybackFilter::Taps / 2 - 1);
+                        const auto weight = neighbor == 0u ? 1.0 - fraction : fraction;
+                        // Exact integer samples need no right-hand lookahead.
+                        if (weight == 0.0) continue;
+                        const auto input = static_cast<std::int64_t>(region.Cursor) + neighbor;
                         float value = 0.0f;
                         if (residual)
                         {
-                            // The wet residual processor starts at this capture boundary;
-                            // its cold FIR state is zero. Original source material is never padded.
+                            // The residual starts at this capture boundary.
+                            // Original source material is composed separately below.
                             if (input >= static_cast<std::int64_t>(*_captureResidualStart))
                             {
                                 if (input >= static_cast<std::int64_t>(_captureResidualEnd)) { publish(); return; }
@@ -309,14 +209,13 @@ void engine::Loop::_FlushFilteredCapture(bool residual) noexcept
                     wrote = true;
                 }
                 position = next;
-                // Commit once per consumed device interval. An unavailable
-                // footprint can retry this interval without advancing the blend.
-                filter.FilterMix = filterMix;
+                // Retry an unavailable right-hand neighbor at this same
+                // physical interval; published source samples are not rewritten.
                 ++region.Cursor;
             }
         }
-        filter.First = (filter.First + 1u) % filter.Regions.size();
-        --filter.Count;
+        capture.First = (capture.First + 1u) % capture.Regions.size();
+        --capture.Count;
     }
     publish();
 }
@@ -326,7 +225,7 @@ void engine::Loop::_WriteRateMappedCapture(const base::AudioWriteRequest& reques
     if (!request.numSamps || !request.samples) return;
     if (request.source == AUDIOSOURCE_ADC || request.source == AUDIOSOURCE_BOUNCE)
     {
-        _QueueFilteredCapture(request, writeOffset, request.source == AUDIOSOURCE_BOUNCE);
+        _QueueMappedCapture(request, writeOffset, request.source == AUDIOSOURCE_BOUNCE);
         return;
     }
     const auto physicalSigned = static_cast<std::int64_t>(_capturePhysicalInputStart) + writeOffset;
@@ -368,7 +267,7 @@ void engine::Loop::_WriteRateMappedCapture(const base::AudioWriteRequest& reques
             const auto first = previous.Valid ? static_cast<std::int64_t>(std::floor(previous.Position)) + 1
                 : static_cast<std::int64_t>(std::ceil(position));
             const auto last = static_cast<std::int64_t>(std::floor(position));
-            if (last - first > static_cast<std::int64_t>(MaximumFilteredSourceRate))
+            if (last - first > static_cast<std::int64_t>(MaximumSourceRate))
             {
                 _triggerCaptureCoverageValid.store(false, std::memory_order_release);
                 return;
@@ -397,7 +296,7 @@ void engine::Loop::_WriteRateMappedCapture(const base::AudioWriteRequest& reques
             previous = {true, physical, position, sample};
             if (slot == 1u) _lastPeak = (std::max)(_lastPeak, std::abs(sample));
             const auto increment = cursor.Next() / _captureRecordingRate;
-            if (!(increment > 0.0) || increment > MaximumFilteredSourceRate)
+            if (!(increment > 0.0) || increment > MaximumSourceRate)
             {
                 _triggerCaptureCoverageValid.store(false, std::memory_order_release);
                 return;
@@ -844,7 +743,6 @@ unsigned int Loop::ReadBlock(float* outBuf,
 	if (!isPlaying || (0 == loopLength))
 		return 0;
 
-	_InitialisePlaybackFilter();
 	_InitialisePlaybackOffset(); // Cold latch once; repeated consumers share this block head.
 	const auto sourceGeneration = AudioSourceGeneration();
 	auto peak = 0.0f;
@@ -894,7 +792,7 @@ unsigned int Loop::ReadBlock(float* outBuf,
 
 	const bool fractionalSeek = !_playbackRateBlock.IsConstant()
         || _playbackRateBlock.InitialRate * _playbackRateBlock.SourceScale != _recordingPlaybackRate || _playbackFraction != 0.0
-        || _playbackOffsetRate != 0.0 || _playbackFilterMix != 0.0
+        || _playbackOffsetRate != 0.0
         || (!exactTargetOffset && _playbackOffsetStart != std::round(_playbackOffsetStart));
     if (fractionalSeek)
     {
@@ -920,134 +818,55 @@ unsigned int Loop::ReadBlock(float* outBuf,
         if (body < 0.0) body += loopLength;
         auto rate = _playbackRateBlock.Cursor();
         auto appliedOffset = _playbackOffsetStart;
-        auto filterMix = _playbackFilterMix;
-        const bool originalMaterial = !provisional && (!_activeSpectral
-            || _activeSpectral->Source().Generation != sourceGeneration);
-        const auto seamBegin = _loopParams.FadeSamps < loopLength
-            ? loopLength - _loopParams.FadeSamps : 0ul;
-        std::array<double, PlaybackFilter::Taps> coefficients;
-        double coefficientRate = -1.0, coefficientFraction = -1.0;
-        // The footprint moves only a few source samples per device frame.
-        // Cache composed material, never phase, within this reader call. During
-        // a spectral fade, filter its two endpoint materials independently;
-        // linear FIR/seam composition commutes with the convex transition.
-        const bool cacheMaterial = !originalMaterial || _loopParams.FadeSamps != 0;
-        const auto transitionRemaining = !originalMaterial && _spectralTransitionProgress < _spectralTransitionSamps
-            ? _spectralTransitionSamps - _spectralTransitionProgress : 0u;
-        std::array<float, PlaybackFilter::Taps> materialStart, materialEnd;
-        unsigned int materialHead = 0;
-        unsigned long materialSource = 0;
-        bool materialValid = false;
+        const bool constantRate = _playbackRateBlock.IsConstant();
+        const bool movingOffset = _playbackOffsetStart != _playbackOffsetEnd;
+        const auto constantIncrement = _playbackRateBlock.InitialRate * _playbackRateBlock.SourceScale / _recordingPlaybackRate;
         for (auto frame = 0u; frame < count; ++frame)
         {
-            const auto baseIncrement = rate.Next() / _recordingPlaybackRate;
-            const auto nextOffset = _NextPlaybackOffset(appliedOffset, rate.BaseIncrement() / _recordingPlaybackRate,
-                rate.Correction() / _recordingPlaybackRate);
-            const auto offsetIncrement = nextOffset - appliedOffset;
-            appliedOffset = nextOffset;
-            const auto increment = baseIncrement - offsetIncrement;
+            auto increment = constantRate ? constantIncrement : rate.Next() / _recordingPlaybackRate;
+            if (movingOffset)
+            {
+                const auto baseIncrement = constantRate ? constantIncrement : rate.BaseIncrement() / _recordingPlaybackRate;
+                const auto correction = constantRate ? 0.0 : rate.Correction() / _recordingPlaybackRate;
+                const auto nextOffset = _NextPlaybackOffset(appliedOffset, baseIncrement, correction);
+                increment -= nextOffset - appliedOffset;
+                appliedOffset = nextOffset;
+            }
+            if (!(increment > 0.0) || increment > MaximumSourceRate) return 0u;
             const auto first = static_cast<unsigned long>(body);
             const auto fraction = body - first;
             const auto next = first + 1ul == loopLength ? 0ul : first + 1ul;
             const auto linear = static_cast<double>(sampleAtBody(first, frame)) * (1.0 - fraction)
                 + static_cast<double>(sampleAtBody(next, frame)) * fraction;
-            double sample = linear;
-            filterMix = _NextPlaybackFilterMix(filterMix, increment);
-            if (filterMix != 0.0)
-            {
-                sample = 0.0;
-                if (increment > MaximumFilteredSourceRate) return 0u;
-                const auto filterRate = (std::max)(1.0, increment);
-                if (filterRate != coefficientRate || fraction != coefficientFraction)
-                {
-                    const auto weights = _playbackFilter->Row(filterRate, fraction);
-                    for (unsigned int tap = 0; tap < PlaybackFilter::Taps; ++tap)
-                        coefficients[tap] = weights.Weight(tap);
-                    coefficientRate = filterRate;
-                    coefficientFraction = fraction;
-                }
-                auto signedSource = (static_cast<std::int64_t>(first)
-                    - (PlaybackFilter::Taps / 2 - 1)) % static_cast<std::int64_t>(loopLength);
-                if (signedSource < 0) signedSource += loopLength;
-                auto source = static_cast<unsigned long>(signedSource);
-                if (cacheMaterial)
-                {
-                    const auto advance = materialValid
-                        ? (source + loopLength - materialSource) % loopLength : PlaybackFilter::Taps;
-                    const auto fill = static_cast<unsigned int>((std::min)(advance,
-                        static_cast<unsigned long>(PlaybackFilter::Taps)));
-                    materialHead = (materialHead + fill) % PlaybackFilter::Taps;
-                    auto refillSource = (source + PlaybackFilter::Taps - fill) % loopLength;
-                    for (unsigned int tap = PlaybackFilter::Taps - fill; tap < PlaybackFilter::Taps; ++tap)
-                    {
-                        const auto slot = (materialHead + tap) % PlaybackFilter::Taps;
-                        materialStart[slot] = sampleAtBody(refillSource, 0);
-                        if (transitionRemaining) materialEnd[slot] = sampleAtBody(refillSource, transitionRemaining);
-                        if (++refillSource == loopLength) refillSource = 0;
-                    }
-                    materialSource = source;
-                    materialValid = true;
-                    const auto dot = [&](const auto& material) noexcept
-                    {
-                        const auto firstSpan = PlaybackFilter::Taps - materialHead;
-                        return PlaybackFilter::Dot(material.data() + materialHead, coefficients.data(), firstSpan)
-                            + PlaybackFilter::Dot(material.data(), coefficients.data() + firstSpan, materialHead);
-                    };
-                    sample = dot(materialStart);
-                    if (transitionRemaining)
-                    {
-                        const auto weight = static_cast<double>((std::min)(frame, transitionRemaining)) / transitionRemaining;
-                        sample = sample * (1.0 - weight) + dot(materialEnd) * weight;
-                    }
-                }
-                else for (unsigned int tap = 0; tap < PlaybackFilter::Taps;)
-                {
-                    const auto storage = constants::MaxLoopFadeSamps + source;
-                    // Outside seam/material transitions, one bank lookup owns
-                    // the whole contiguous span. Never read across a bank, child
-                    // wrap, published extent or seam boundary.
-                    if (originalMaterial && source < seamBegin && storage < bufBankSize)
-                    {
-                        const auto span = static_cast<unsigned int>((std::min)({
-                            static_cast<unsigned long>(PlaybackFilter::Taps - tap),
-                            seamBegin - source, bufBankSize - storage,
-                            BufferBank::_BufferBankSize - storage % BufferBank::_BufferBankSize}));
-                        sample += PlaybackFilter::Dot(_bufferBank.BlockPtr(storage), coefficients.data() + tap, span);
-                        tap += span;
-                        source += span;
-                    }
-                    else
-                    {
-                        sample += coefficients[tap++] * sampleAtBody(source, frame);
-                        ++source;
-                    }
-                    if (source == loopLength) source = 0;
-                }
-                sample = linear + (sample - linear) * filterMix;
-            }
-            outBuf[frame] = static_cast<float>(sample);
+            outBuf[frame] = static_cast<float>(linear);
             peak = (std::max)(peak, std::abs(outBuf[frame]));
-            body = std::fmod(body + increment, static_cast<double>(loopLength));
-            if (body < 0.0) body += loopLength;
+            body += increment;
+            if (body >= loopLength)
+            {
+                body -= loopLength;
+                // One subtraction covers ordinary loops. Tiny children can
+                // wrap several times at the admitted source rate (at most 5).
+                if (body >= loopLength) body = std::fmod(body, static_cast<double>(loopLength));
+            }
         }
         _lastPeak = peak;
         return count;
     }
 
 	// Check if we are inside crossfading region at any point
-	auto isXfadeRegion = (index + numSamps) >= (bufSize - _loopParams.FadeSamps);
+	auto isXfadeRegion = _loopParams.FadeSamps != 0u
+		&& (index + numSamps) >= (bufSize - _loopParams.FadeSamps);
 
 	auto sampsToWrite = (numSamps <= constants::MaxBlockSize) ? numSamps : constants::MaxBlockSize;
 
 	if (isXfadeRegion)
 	{
-		// Fill temp buffer with crossfade-mixed samples
-		auto startIndex = index;
+		// Re-evaluate the seam on the wrapped index, including short loops
+		// that cross several seams within one device block.
 
 		for (auto i = 0u; i < sampsToWrite; i++)
 		{
-			auto isXfade = (startIndex + i) >= (bufSize - _loopParams.FadeSamps);
-			isXfade &= index < bufSize;
+			const auto isXfade = index >= (bufSize - _loopParams.FadeSamps) && index < bufSize;
 
 			if (provisional || index < bufBankSize)
 			{
@@ -1055,7 +874,7 @@ unsigned int Loop::ReadBlock(float* outBuf,
 
 				if (isXfade)
 				{
-					auto xfadeIndex = (startIndex + i) - (bufSize - _loopParams.FadeSamps);
+					auto xfadeIndex = index - (bufSize - _loopParams.FadeSamps);
 					auto xfadeBufIndex = constants::MaxLoopFadeSamps + xfadeIndex - _loopParams.FadeSamps;
 					auto xfadeSamp = readSource(xfadeBufIndex, i);
 
@@ -1191,7 +1010,6 @@ void Loop::EndMultiPlay(unsigned int numSamps)
 	if (0 == loopLength)
 		return;
 		
-	_AdvancePlaybackFilter(numSamps);
 	_AdvancePlaybackOffset(numSamps);
 
     if (_playbackFraction == 0.0 && _playbackRateBlock.IsConstant()
@@ -1534,7 +1352,7 @@ void Loop::Reset()
 	_captureRateHistory = nullptr;
 	_captureSource = nullptr;
 	_captureInputHistory = {};
-	_captureFilters = {};
+	_captureQueues = {};
 	_captureResidualStart.reset();
 	_captureResidualEnd = 0;
 	_captureInterpolation = {};
@@ -1542,8 +1360,6 @@ void Loop::Reset()
 	_playIndex.store(0ul, std::memory_order_relaxed);
 	_loopLength.store(0ul, std::memory_order_relaxed);
 	_playbackFraction = 0.0;
-	_playbackFilterMix = 0.0;
-	_playbackFilterInitialised = false;
 	_playbackOffsetInitialised = false;
 	_playbackOffsetPublished.store(false, std::memory_order_release);
 	_playbackRateBlock = {};
@@ -1905,7 +1721,7 @@ bool Loop::CanRefreshVisualModel() const noexcept
 void Loop::ConfigureTriggerCapture(std::int64_t begin, bool requireAdc, bool requireBounce, bool requirePunchAdc) noexcept
 {
 	_captureInterpolation = {};
-	_captureFilters = {};
+	_captureQueues = {};
 	_captureResidualStart.reset();
 	_captureResidualEnd = 0;
 	_triggerCaptureBegin = begin;
@@ -2557,38 +2373,6 @@ void engine::Loop::AdoptInheritedPlaybackOffsetAtAudioBoundary() noexcept
     _appliedPlaybackOffsetSamps.store(_playbackOffsetStart, std::memory_order_relaxed);
 }
 
-void engine::Loop::_InitialisePlaybackFilter() noexcept
-{
-    if (_playbackFilterInitialised) return;
-    const auto slope = _playbackRateBlock.HasSourceTransition ? _playbackRateBlock.InitialSourceVelocity
-        : _playbackRateBlock.InitialRate * _playbackRateBlock.SourceScale;
-    _playbackFilterMix = slope / _recordingPlaybackRate > 1.0 ? 1.0 : 0.0;
-    _playbackFilterInitialised = true;
-}
-
-double engine::Loop::_NextPlaybackFilterMix(double value, double sourceIncrement) const noexcept
-{
-    const auto target = sourceIncrement > 1.0 ? 1.0 : 0.0;
-    const auto next = value + (target - value) / _playbackOffsetDamping;
-    return std::abs(next - target) <= 1e-12 ? target : next;
-}
-
-void engine::Loop::_AdvancePlaybackFilter(unsigned int frames) noexcept
-{
-    _InitialisePlaybackFilter();
-    _InitialisePlaybackOffset();
-    auto rate = _playbackRateBlock.Cursor();
-    auto offset = _playbackOffsetStart;
-    for (unsigned int frame = 0; frame < frames; ++frame)
-    {
-        const auto increment = rate.Next() / _recordingPlaybackRate;
-        const auto next = _NextPlaybackOffset(offset, rate.BaseIncrement() / _recordingPlaybackRate,
-            rate.Correction() / _recordingPlaybackRate);
-        _playbackFilterMix = _NextPlaybackFilterMix(_playbackFilterMix, increment - (next - offset));
-        offset = next;
-    }
-}
-
 double engine::Loop::_NextPlaybackOffset(double value, double baseIncrement, double sharedCorrection) const noexcept
 {
     const auto error = _playbackOffsetEnd - value;
@@ -2603,12 +2387,18 @@ void engine::Loop::_AdvancePlaybackOffset(unsigned int numSamps) noexcept
 {
     static_assert(std::atomic<double>::is_always_lock_free);
     _InitialisePlaybackOffset();
-    auto rate = _playbackRateBlock.Cursor();
-    for (unsigned int frame = 0; frame < numSamps; ++frame)
+    if (_playbackOffsetStart != _playbackOffsetEnd)
     {
-        rate.Next();
-        _playbackOffsetStart = _NextPlaybackOffset(_playbackOffsetStart,
-            rate.BaseIncrement() / _recordingPlaybackRate, rate.Correction() / _recordingPlaybackRate);
+        auto rate = _playbackRateBlock.Cursor();
+        const bool constantRate = _playbackRateBlock.IsConstant();
+        const auto constantIncrement = _playbackRateBlock.InitialRate * _playbackRateBlock.SourceScale / _recordingPlaybackRate;
+        for (unsigned int frame = 0; frame < numSamps && _playbackOffsetStart != _playbackOffsetEnd; ++frame)
+        {
+            if (!constantRate) rate.Next();
+            _playbackOffsetStart = _NextPlaybackOffset(_playbackOffsetStart,
+                constantRate ? constantIncrement : rate.BaseIncrement() / _recordingPlaybackRate,
+                constantRate ? 0.0 : rate.Correction() / _recordingPlaybackRate);
+        }
     }
     _PreparePlaybackOffsetTarget();
     _appliedPlaybackOffsetSamps.store(_playbackOffsetStart, std::memory_order_relaxed);

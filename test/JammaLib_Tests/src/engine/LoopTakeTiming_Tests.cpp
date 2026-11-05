@@ -262,6 +262,89 @@ TEST(LoopTakePlaybackRate, UnequalMidiChildrenWrapOnlyOnTheirOwnLengths)
 	EXPECT_DOUBLE_EQ(6.0, take->MidiSourcePhaseAtFrame(0u, 7u));
 }
 
+TEST(LoopTakePlaybackRate, EqualNonBinaryRecordingRateAdvancesExactlyAtUnity)
+{
+	for (const auto reference : {0.7, 1.3, 1.9})
+	{
+		SCOPED_TRACE(reference);
+		auto take = MakeTimingTestLoopTake();
+		take->RestoreRecordingPlaybackRate(reference);
+		take->SetMidiVisualPosition(0u, 97u);
+		std::uint64_t device = 0u;
+		for (auto iteration = 0u; iteration < 64u; ++iteration)
+		{
+			const auto count = iteration % 17u + 1u;
+			const audio::PlaybackRateBlock block{reference, reference, 480.0, count, 1u};
+			take->BeginPlaybackRateBlock(block, device, nullptr, false);
+			EXPECT_EQ(static_cast<double>(device + count), take->MidiSourcePositionAtFrame(count));
+			take->EndMultiPlay(count);
+			device += count;
+			EXPECT_EQ(static_cast<double>(device), take->MidiSourcePositionAtFrame(0u));
+			EXPECT_EQ(device % 97u, take->MidiVisualPosition());
+		}
+	}
+}
+
+TEST(LoopTakePlaybackRate, IndependentCaptureKeepsRawAudioMidiAndLengthAcrossRateEdits)
+{
+	LoopTakeParams params;
+	params.Size = {100, 100};
+	params.FadeSamps = 0u;
+	auto take = std::make_shared<TimingTestLoopTake>(params,
+		LoopTake::GetMixerParams(params.Size, MergeMixBehaviourParams{}));
+	take->ConfigureTriggerCapture({0u, 0, 10000u, 0u, 0u});
+	take->Record({0u}, "raw-rate-capture", {0u}, {}, {}, 0u, 0u);
+	take->CommitChanges();
+	ASSERT_EQ(1u, take->GetLoops().size());
+	const auto loop = take->GetLoops().front();
+	audio::PlaybackRateHistory history(8u);
+	constexpr auto count = 32u;
+	std::array<float, count * 3u> input;
+	for (auto i = 0u; i < input.size(); ++i) input[i] = static_cast<float>(static_cast<int>(i % 19u) - 9) / 16.0f;
+	unsigned int device = 0u;
+	for (const auto rate : {1.9, 0.5, 2.0})
+	{
+		const audio::PlaybackRateBlock block{rate, rate, 480.0, count, device + 1u};
+		ASSERT_TRUE(history.Append(device, block));
+		take->BeginPlaybackRateBlock(block, device, &history, false);
+		take->BeginCaptureAudioBoundary(device, device, device);
+		ASSERT_TRUE(take->RecordMidiEvent(midi::MidiEvent::MakeNoteOn(device + 3u, 0u, 60u, 100u), device + 3u));
+		ASSERT_TRUE(take->RecordMidiEvent(midi::MidiEvent::MakeNoteOff(device + 6u, 0u, 60u), device + 6u));
+		AudioWriteRequest request;
+		request.samples = input.data() + device;
+		request.numSamps = count;
+		request.fadeNew = 1.0f;
+		request.fadeCurrent = 0.0f;
+		request.stride = 1u;
+		request.source = Audible::AUDIOSOURCE_ADC;
+		loop->OnBlockWrite(request, 0);
+		take->EndMultiWrite(count, true, Audible::AUDIOSOURCE_ADC);
+		take->EndMultiPlay(count);
+		device += count;
+		EXPECT_EQ(device, take->NumRecordedSamps());
+		EXPECT_EQ(static_cast<double>(device), take->CaptureSourcePositionAtDeviceSample(device));
+		EXPECT_EQ(device, take->CaptureSourceLengthAtDeviceSample(device));
+		EXPECT_EQ(1.9, take->RecordingPlaybackRate());
+	}
+	take->Play(constants::MaxLoopFadeSamps, device, 0u);
+	take->CompleteMidiIngressPump(10000u);
+	take->EndRecording();
+	ASSERT_EQ(1u, take->GetMidiLoops().size());
+	const auto midi = take->GetMidiLoops().front();
+	ASSERT_EQ(6u, midi->EventCount());
+	for (auto i = 0u; i < 6u; ++i)
+	{
+		midi::MidiEvent event;
+		ASSERT_TRUE(midi->TryGetEvent(i, event));
+		EXPECT_EQ((i / 2u) * count + (i % 2u ? 6u : 3u), event.sampleOffset);
+	}
+	loop->SetPlaybackRateBlockAtAudioBoundary({1.0, 1.0, 1.0, device, 1u});
+	loop->SetBodyPlayIndex(0u);
+	std::array<float, count * 3u> output{};
+	ASSERT_EQ(device, loop->ReadBlock(output.data(), 0, device));
+	EXPECT_EQ(input, output);
+}
+
 TEST(LoopTakePlaybackRate, SaveDuringSharedShiftRestoresAudiblePhaseForUnequalChildren)
 {
 	auto take = MakeTimingTestLoopTake("save-source-position");

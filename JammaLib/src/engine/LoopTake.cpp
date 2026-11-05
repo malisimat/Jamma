@@ -588,6 +588,18 @@ bool LoopTake::_InitialiseCaptureRateOrigin(const audio::PlaybackRateHistory& hi
 	return true;
 }
 
+void LoopTake::_ApplyRecordingRate(audio::PlaybackRateBlock& block, double recordingRate) noexcept
+{
+	block.SourceScale = 1.0 / recordingRate;
+	// Equal stored rates are exactly unity, even when reciprocal multiplication
+	// would round below one. Moving trajectories retain their common recurrence.
+	if (block.InitialRate == recordingRate && block.TargetRate == recordingRate)
+	{
+		block.InitialRate = block.TargetRate = 1.0;
+		block.SourceScale = 1.0;
+	}
+}
+
 bool LoopTake::_SeedSourceRateHistory(const audio::PlaybackRateHistory& history, std::uint64_t first,
 	std::uint64_t end, bool sourceRuler) noexcept
 {
@@ -598,7 +610,7 @@ bool LoopTake::_SeedSourceRateHistory(const audio::PlaybackRateHistory& history,
 		segment->Frames = static_cast<unsigned int>((std::min)(static_cast<std::uint64_t>(segment->Frames), end - first));
 		if (!sourceRuler)
 		{
-			segment->SourceScale = 1.0 / RecordingPlaybackRate();
+			_ApplyRecordingRate(*segment, RecordingPlaybackRate());
 			if (segment->RemoteIntervalLengthSamps)
 			{
 				segment->InitialRate = segment->TargetRate = RecordingMasterLengthSamps()
@@ -633,7 +645,7 @@ bool LoopTake::CanBeginPlaybackRateBlock(const audio::PlaybackRateBlock& block, 
 	auto candidate = block;
 	candidate.MasterLength = 0u;
 	candidate.MasterRecordingRate = 1.0;
-	candidate.SourceScale = 1.0 / RecordingPlaybackRate();
+	_ApplyRecordingRate(candidate, RecordingPlaybackRate());
 	if (followingRemote)
 	{
 		candidate.InitialRate = candidate.TargetRate = RecordingMasterLengthSamps() && block.RemoteIntervalLengthSamps
@@ -706,7 +718,7 @@ void LoopTake::BeginPlaybackRateBlock(const audio::PlaybackRateBlock& block, std
 		_sourceRateHistoryStarted = true;
 	}
 	_playbackRateBaseline = RecordingPlaybackRate();
-	_playbackRateBlock.SourceScale = 1.0 / _playbackRateBaseline;
+	_ApplyRecordingRate(_playbackRateBlock, _playbackRateBaseline);
 	if (followingRemote)
 	{
 		const auto rate = RecordingMasterLengthSamps() && block.RemoteIntervalLengthSamps
@@ -933,11 +945,9 @@ void LoopTake::BeginCaptureAudioBoundary(std::uint64_t deviceSample,
 		? deviceSample - _triggerCaptureTiming.SourceAgeSamps : 0u;
 	if (_captureRateOriginReady.load(std::memory_order_acquire) && _playbackRateHistory)
 	{
-		_captureUsesRateMapping = _captureUsesRateMapping
-			|| !_independentRecording
-			|| _playbackRateBlock.InitialRate * _playbackRateBlock.SourceScale != 1.0
-			|| _playbackRateBlock.TargetRate * _playbackRateBlock.SourceScale != 1.0
-			|| _playbackRateBlock.HasSourceTransition;
+		// Independent recording keeps physical input samples unchanged. Overdub
+		// and punch still write into their inherited source ruler.
+		_captureUsesRateMapping = !_independentRecording;
 		if (_captureUsesRateMapping && deviceSample >= _triggerCaptureTiming.SourceAgeSamps)
 		{
 			const auto point = _playbackRateHistory->Query(physicalInputStart);
@@ -1290,7 +1300,8 @@ void LoopTake::EndMultiPlay(unsigned int numSamps)
 	if (_hasPlaybackRateBlock)
 	{
 		auto cursor = _playbackRateBlock.Cursor();
-		for (auto frame = 0u; frame < numSamps; ++frame) cursor.Next();
+		if (!_playbackRateBlock.IsConstant())
+			for (auto frame = 0u; frame < numSamps; ++frame) cursor.Next();
 		_sourceVelocity = cursor.SourceVelocity();
 		_sourcePhaseError = cursor.SourcePhaseError();
 		_sourceTransitionActive = _sourcePhaseError != 0.0
@@ -3148,6 +3159,13 @@ std::optional<double> LoopTake::CaptureSourcePositionAtDeviceSample(std::uint32_
 	if (delta < 0 && static_cast<std::uint64_t>(-static_cast<std::int64_t>(delta)) > anchor) return std::nullopt;
 	const auto physical = delta < 0 ? anchor - static_cast<std::uint64_t>(-static_cast<std::int64_t>(delta))
 		: anchor + static_cast<std::uint64_t>(delta);
+	if (_independentRecording)
+	{
+		const auto fromRawStart = physical >= _captureMidiPhysicalOrigin
+			? static_cast<double>(physical - _captureMidiPhysicalOrigin)
+			: -static_cast<double>(_captureMidiPhysicalOrigin - physical);
+		return fromRawStart + static_cast<double>(_triggerCaptureTiming.DelaySamps - _triggerCaptureTiming.SeamSamps);
+	}
 	const auto point = _sourceRateHistory.Query(physical);
 	if (!point) return std::nullopt;
 	return point->Coordinate.Difference(_captureRateOrigin);
@@ -3162,7 +3180,7 @@ std::optional<unsigned long> LoopTake::CaptureSourceLengthAtDeviceSample(std::ui
 
 bool LoopTake::_MapPendingMidiCaptureRate() noexcept
 {
-	if (_midiCaptureRateMapped || !_captureRateOriginReady.load(std::memory_order_acquire)) return true;
+	if (_independentRecording || _midiCaptureRateMapped || !_captureRateOriginReady.load(std::memory_order_acquire)) return true;
 	const auto* history = _captureRateHistory.load(std::memory_order_acquire);
 	if (!history) return false;
 	for (const auto& loop : _midiLoops)

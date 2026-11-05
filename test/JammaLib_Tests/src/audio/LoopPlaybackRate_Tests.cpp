@@ -75,7 +75,7 @@ TEST_F(LoopPlaybackRateTest, EqualRecordingAndCurrentRateUsesExactOriginalSample
     EXPECT_EQ(0ul, loop->BodyPlayIndex());
 }
 
-TEST_F(LoopPlaybackRateTest, ShortLoopFilterWrapPreservesDcThroughMultipleWraps)
+TEST_F(LoopPlaybackRateTest, ShortLoopLinearWrapPreservesDcThroughMultipleWraps)
 {
     auto loop = Make({0.75f, 0.75f, 0.75f});
     loop->SetPlaybackRateBlockAtAudioBoundary(Rate(2.0, 16), 0.5);
@@ -86,20 +86,55 @@ TEST_F(LoopPlaybackRateTest, ShortLoopFilterWrapPreservesDcThroughMultipleWraps)
     EXPECT_EQ(1ul, loop->BodyPlayIndex());
 }
 
-TEST_F(LoopPlaybackRateTest, FourfoldSpeedRejectsAboveOutputNyquistTone)
+TEST_F(LoopPlaybackRateTest, ShortLoopsUseLinearSamplesAcrossMultipleWrapsPerFrame)
 {
-    std::vector<float> body(1000);
-    for (unsigned int i = 0; i < body.size(); ++i)
-        body[i] = static_cast<float>(std::sin(2.0 * 3.14159265358979323846 * 0.4 * i));
-    auto loop = Make(body);
-    loop->SetPlaybackRateBlockAtAudioBoundary(Rate(2.0, 256), 0.5);
-    std::array<float,256> output{};
-    ASSERT_EQ(256u, loop->ReadBlock(output.data(), 0, 256));
-    double energy = 0.0;
-    for (const auto sample : output) energy += sample * sample;
-    const auto rms = std::sqrt(energy / output.size());
-    std::cout << "Playback alias RMS=" << rms << " relative to ideal band-limited reference (zero)\n";
-    EXPECT_LT(rms, 1e-4); // >77 dB rejection against full-scale sine.
+    for (const auto length : {1u, 2u, 3u})
+        for (const auto rate : {0.25, 1.0, 1.5, 3.7, 5.0})
+    {
+        SCOPED_TRACE(length);
+        SCOPED_TRACE(rate);
+        std::vector<float> body(length);
+        for (unsigned int i = 0; i < length; ++i) body[i] = 0.25f + i * 0.125f;
+        auto loop = Make(body);
+        loop->SetPlaybackRateBlockAtAudioBoundary(Rate(rate, 128));
+        std::array<float,128> output{};
+        ASSERT_EQ(output.size(), loop->ReadBlock(output.data(), 0, 128));
+        for (unsigned int i = 0; i < output.size(); ++i)
+        {
+            const auto position = std::fmod(i * rate, static_cast<double>(length));
+            const auto first = static_cast<unsigned int>(position);
+            const auto fraction = position - first;
+            const auto expected = body[first] * (1.0 - fraction) + body[(first + 1u) % length] * fraction;
+            EXPECT_NEAR(expected, output[i], 1e-6) << i;
+        }
+        loop->EndMultiPlay(128);
+        EXPECT_NEAR(std::fmod(128 * rate, static_cast<double>(length)), loop->FractionalBodyPlayIndex(), 1e-10);
+    }
+}
+
+TEST_F(LoopPlaybackRateTest, UnityKeepsUnequalLoopPhasesExactOverManyCallbacks)
+{
+    for (const auto recordingRate : {0.5, 1.0, 2.0})
+    {
+        SCOPED_TRACE(recordingRate);
+        auto shortLoop = Make(std::vector<float>(97, 0.25f));
+        auto doubleLoop = Make(std::vector<float>(194, 0.25f));
+        auto tripleLoop = Make(std::vector<float>(291, 0.25f));
+        for (auto* loop : {shortLoop.get(), doubleLoop.get(), tripleLoop.get()}) loop->SetBodyPlayIndex(11);
+        std::uint64_t total = 11;
+        for (unsigned int block = 0; block < 1024; ++block)
+        {
+            const auto frames = block % 2u ? 4096u : 127u;
+            total += frames;
+            for (auto* loop : {shortLoop.get(), doubleLoop.get(), tripleLoop.get()})
+            {
+                loop->SetPlaybackRateBlockAtAudioBoundary(Rate(recordingRate, frames), recordingRate);
+                loop->EndMultiPlay(frames);
+                EXPECT_EQ(total % loop->LoopLength(), loop->BodyPlayIndex());
+                EXPECT_DOUBLE_EQ(static_cast<double>(loop->BodyPlayIndex()), loop->FractionalBodyPlayIndex());
+            }
+        }
+    }
 }
 
 TEST_F(LoopPlaybackRateTest, CallbackPartitionsPreserveFractionalSourcePosition)
@@ -152,7 +187,7 @@ TEST_F(LoopPlaybackRateTest, CaptureNormalizesDeviceFramesIntoSourceTime)
     loop.EndRecording();
     std::array<float,4> output{};
     ASSERT_EQ(4u, loop.ReadBlock(output.data(), 0, 4));
-    // Finite windowed FIR preserves a ramp within its measured first-moment error.
+    // The selected source grid samples this physical ramp at every second frame.
     EXPECT_NEAR(0.0f, output[0], 1e-5);
     EXPECT_NEAR(0.2f, output[1], 1e-5);
     EXPECT_NEAR(0.4f, output[2], 1e-5);
@@ -183,7 +218,7 @@ TEST_F(LoopPlaybackRateTest, InheritedShiftKeepsOneSignedRouteAcrossUnequalChild
     EXPECT_DOUBLE_EQ(20.0, previous);
 }
 
-TEST_F(LoopPlaybackRateTest, QuarterRateCaptureRejectsAliasing)
+TEST_F(LoopPlaybackRateTest, QuarterRateCapturePreservesSelectedPhysicalSamples)
 {
     engine::LoopParams params; params.FadeSamps = 0;
     audio::AudioMixerParams mixer;
@@ -211,14 +246,11 @@ TEST_F(LoopPlaybackRateTest, QuarterRateCaptureRejectsAliasing)
     loop.Play(constants::MaxLoopFadeSamps, 64, true); loop.EndRecording();
     std::array<float,64> output{};
     ASSERT_EQ(64u, loop.ReadBlock(output.data(), 0, 64));
-    double energy = 0.0;
-    for (const auto sample : output) energy += sample * sample;
-    const auto rms = std::sqrt(energy / output.size());
-    std::cout << "Capture alias RMS=" << rms << " relative to ideal band-limited reference (zero)\n";
-    EXPECT_LT(rms, 1e-4);
+    for (unsigned int i = 0; i < output.size(); ++i)
+        EXPECT_FLOAT_EQ(samples[64u + 4u * i], output[i]) << i;
 }
 
-TEST_F(LoopPlaybackRateTest, CaptureFlushesOriginalEnvelopeWithoutAnotherInputWrite)
+TEST_F(LoopPlaybackRateTest, CaptureWaitsOnlyForMissingLinearEndpointAndRetainsEnvelope)
 {
     engine::LoopParams params; params.FadeSamps = 0;
     audio::AudioMixerParams mixer;
@@ -227,20 +259,20 @@ TEST_F(LoopPlaybackRateTest, CaptureFlushesOriginalEnvelopeWithoutAnotherInputWr
     loop.Record(); loop.ConfigureTriggerCapture(constants::MaxLoopFadeSamps, true, false);
     ASSERT_TRUE(loop.SetTriggerCaptureLength(4));
     audio::PlaybackRateHistory history(2);
-    ASSERT_TRUE(history.Append(0, Rate(0.5, 256)));
+    ASSERT_TRUE(history.Append(0, Rate(0.75, 256)));
     std::array<float,256> samples{}; samples.fill(0.25f);
-    audio::InputHistoryChannel channel{samples.data(), 256, 72};
+    audio::InputHistoryChannel channel{samples.data(), 256, 67};
     audio::InputHistoryView view;
-    view.Channels = &channel; view.ChannelCount = 1; view.ValidCount = 72; view.IngressHead = 72;
-    loop.SetCaptureRateHistoryAtAudioBoundary(&history, 64, {32, 0.0}, 1.0);
+    view.Channels = &channel; view.ChannelCount = 1; view.ValidCount = 67; view.IngressHead = 67;
+    loop.SetCaptureRateHistoryAtAudioBoundary(&history, 64, {48, 0.0}, 1.0);
     loop.SetCaptureInputHistoryAtAudioBoundary(view, 0);
     base::AudioWriteRequest request; request.samples = samples.data(); request.numSamps = 8;
     request.fadeNew = 0.5f;
     loop.OnBlockWrite(request, 0); loop.EndWrite(8, true);
     EXPECT_TRUE(loop.TriggerCaptureCoverageValid());
     EXPECT_FALSE(loop.TriggerCaptureComplete());
-    channel.WriteHead = 144; view.ValidCount = 144; view.IngressHead = 144;
-    loop.SetCaptureRateHistoryAtAudioBoundary(&history, 72, {32, 0.0}, 1.0);
+    channel.WriteHead = 72; view.ValidCount = 72; view.IngressHead = 72;
+    loop.SetCaptureRateHistoryAtAudioBoundary(&history, 72, {48, 0.0}, 1.0);
     loop.SetCaptureInputHistoryAtAudioBoundary(view, 0); // no ADC request after punch-out
     loop.EndWrite(8, true);
     EXPECT_TRUE(loop.TriggerCaptureCoverageValid());
@@ -251,15 +283,24 @@ TEST_F(LoopPlaybackRateTest, CaptureFlushesOriginalEnvelopeWithoutAnotherInputWr
     for (const auto sample : output) EXPECT_NEAR(0.125f, sample, 1e-6);
 }
 
-// Explicit Release-only quality gate; ordinary unit runs omit machine timings.
+// Opt-in diagnostic for both Debug callback headroom and Release throughput.
+// Ordinary unit runs omit machine timings; these are measurements, not thresholds.
 TEST_F(LoopPlaybackRateTest, DISABLED_FixedFilterCpuBenchmark)
 {
-    constexpr unsigned int frames = 256, passes = 64;
+    constexpr unsigned int frames = 256;
+#ifdef _DEBUG
+    constexpr unsigned int passes = 16, warmup = 4;
+    constexpr const char* configuration = "Debug";
+#else
+    constexpr unsigned int passes = 64, warmup = 8;
+    constexpr const char* configuration = "Release";
+#endif
     std::vector<float> body(1000);
     for (unsigned int i = 0; i < body.size(); ++i)
         body[i] = static_cast<float>(std::sin(i * 0.071));
     struct Case { double Speed; const char* Material; };
-    for (const auto scenario : {Case{1.01, "raw"}, Case{3.7, "raw"}, Case{4.0, "raw"},
+    for (const auto scenario : {Case{1.0, "raw"}, Case{0.5, "raw"}, Case{1.01, "raw"},
+        Case{1.5, "raw"}, Case{2.0, "raw"}, Case{3.7, "raw"}, Case{4.0, "raw"},
         Case{5.0, "raw"}, Case{0.0, "raw"}, Case{5.0, "64-source seam16"}, Case{3.7, "spectral"}, Case{3.7, "spectral fade"}})
         for (const auto voices : {1u, 32u})
     {
@@ -300,12 +341,12 @@ TEST_F(LoopPlaybackRateTest, DISABLED_FixedFilterCpuBenchmark)
         }
         std::array<float, frames> output{};
         std::array<double, passes> durations{};
-        for (unsigned int pass = 0; pass < passes + 8; ++pass)
+        for (unsigned int pass = 0; pass < passes + warmup; ++pass)
         {
             const auto started = std::chrono::steady_clock::now();
             for (const auto& loop : loops)
             {
-                // Replay the changing block to measure sustained coefficient updates.
+                // Replay the changing block to measure sustained rate smoothing.
                 loop->SetPlaybackRateBlockAtAudioBoundary(block);
                 ASSERT_EQ(frames, loop->ReadBlock(output.data(), 0, frames));
                 // Hold the transition at its block head to stress two active
@@ -313,16 +354,16 @@ TEST_F(LoopPlaybackRateTest, DISABLED_FixedFilterCpuBenchmark)
                 loop->EndMultiPlay(spectralFade ? 0u : frames);
             }
             const auto ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count();
-            if (pass >= 8) durations[pass - 8] = ms;
+            if (pass >= warmup) durations[pass - warmup] = ms;
         }
         std::sort(durations.begin(), durations.end());
-        std::cout << "Varispeed filter rate=" << (speed == 0.0 ? "1-to-2 ramp" : std::to_string(speed)) << " material=" << scenario.Material << ": " << voices << " mono sources, " << frames
-            << " frames, median=" << durations[passes / 2] << "ms max=" << durations.back()
+        std::cout << "Varispeed " << configuration << " rate=" << (speed == 0.0 ? "1-to-2 ramp" : std::to_string(speed)) << " material=" << scenario.Material << ": " << voices << " mono sources, " << frames
+            << " frames, median=" << durations[passes / 2] << "ms p95=" << durations[(passes - 1) * 95 / 100] << "ms max=" << durations.back()
             << "ms; 48kHz callback deadline=" << frames / 48.0 << "ms\n";
     }
 }
 
-TEST_F(LoopPlaybackRateTest, WetResidualIsBandLimitedAndOriginalSourceIsCopiedOnce)
+TEST_F(LoopPlaybackRateTest, WetResidualUsesLinearCaptureAndOriginalSourceIsCopiedOnce)
 {
     auto source = Make(std::vector<float>(256, 0.25f));
     engine::LoopParams params; params.FadeSamps = 0;
@@ -332,8 +373,8 @@ TEST_F(LoopPlaybackRateTest, WetResidualIsBandLimitedAndOriginalSourceIsCopiedOn
     loop.Overdub(); loop.ConfigureTriggerCapture(constants::MaxLoopFadeSamps, false, true);
     ASSERT_TRUE(loop.SetTriggerCaptureLength(64));
     audio::PlaybackRateHistory history(2);
-    ASSERT_TRUE(history.Append(0, Rate(0.5, 512)));
-    loop.SetCaptureRateHistoryAtAudioBoundary(&history, 64, {32, 0.0}, 2.0);
+    ASSERT_TRUE(history.Append(0, Rate(0.75, 512)));
+    loop.SetCaptureRateHistoryAtAudioBoundary(&history, 64, {48, 0.0}, 2.0);
     loop.SetCaptureSourceAtAudioBoundary(source.get(), 0.0);
     std::array<float,512> samples{};
     for (unsigned int i = 0; i < samples.size(); ++i)
@@ -343,68 +384,73 @@ TEST_F(LoopPlaybackRateTest, WetResidualIsBandLimitedAndOriginalSourceIsCopiedOn
     request.samples = samples.data() + 64; request.numSamps = 256;
     loop.OnBlockWrite(request, 0); loop.EndWrite(256, true);
     EXPECT_TRUE(loop.TriggerCaptureCoverageValid());
-    EXPECT_FALSE(loop.TriggerCaptureComplete());
-    loop.SetCaptureRateHistoryAtAudioBoundary(&history, 320, {32, 0.0}, 2.0);
-    request.samples = samples.data() + 320; request.numSamps = 128;
-    loop.OnBlockWrite(request, 0); loop.EndWrite(128, true);
-    ASSERT_TRUE(loop.TriggerCaptureCoverageValid());
     ASSERT_TRUE(loop.TriggerCaptureComplete());
     loop.SetCaptureSourceAtAudioBoundary(nullptr, 0.0);
     loop.Play(constants::MaxLoopFadeSamps, 64, true); loop.EndRecording();
     std::array<float,64> output{};
     ASSERT_EQ(64u, loop.ReadBlock(output.data(), 0, 64));
-    // Ignore the wet FIR's cold startup; dry original remains exactly 0.25.
-    double energy = 0.0;
-    for (unsigned int i = 16; i < output.size(); ++i) energy += (output[i] - 0.25) * (output[i] - 0.25);
-    const auto rms = std::sqrt(energy / 48);
-    std::cout << "Wet residual alias RMS=" << rms << "\n";
-    EXPECT_LT(rms, 1e-4);
-}
-
-TEST_F(LoopPlaybackRateTest, NearUnitySpeedupRejectsNyquistBandAcrossRateBins)
-{
-    for (const auto rate : {1.001, 1.01, 1.05, 1.13, 1.14, 1.5, 2.0, 3.0, 4.0, 5.0})
+    for (unsigned int i = 0; i < output.size(); ++i)
     {
-        SCOPED_TRACE(rate);
-        // Frequencies are above the new Nyquist and periodic on the source.
-        const auto frequency = std::ceil((0.5 / rate + 0.0002) * 10000.0) / 10000.0;
-        std::vector<float> body(10000);
-        for (unsigned int i = 0; i < body.size(); ++i)
-            body[i] = static_cast<float>(std::sin(2.0 * 3.14159265358979323846 * frequency * i));
-        auto loop = Make(body);
-        loop->SetPlaybackRateBlockAtAudioBoundary(Rate(rate, 1024));
-        std::array<float,1024> output{};
-        ASSERT_EQ(1024u, loop->ReadBlock(output.data(), 0, 1024));
-        double energy = 0.0;
-        for (const auto sample : output) energy += sample * sample;
-        const auto rms = std::sqrt(energy / output.size());
-        std::cout << "Rate " << rate << " Nyquist-band alias RMS=" << rms << "\n";
-        EXPECT_LT(rms, 3e-4); // >=67 dB against full-scale input sine, including bin boundaries.
+        const auto physical = 64.0 + i * (2.0 / 0.75);
+        const auto first = static_cast<unsigned int>(physical);
+        const auto fraction = physical - first;
+        const auto residual = samples[first] * (1.0 - fraction) + samples[first + 1u] * fraction;
+        EXPECT_NEAR(0.25 + residual, output[i], 1e-6) << i;
     }
 }
 
-TEST_F(LoopPlaybackRateTest, UnityFilterTransitionHasBoundedOnsetAndSettles)
+TEST_F(LoopPlaybackRateTest, FractionalPlaybackMatchesLinearReferenceAtEveryAdmittedSpeed)
+{
+    for (const auto rate : {0.25, 0.5, 0.99, 1.0, 1.001, 1.01, 1.5, 2.0, 3.7, 4.0, 5.0})
+    {
+        SCOPED_TRACE(rate);
+        std::vector<float> body(1000);
+        for (unsigned int i = 0; i < body.size(); ++i)
+            body[i] = static_cast<float>(std::sin(2.0 * 3.14159265358979323846 * 0.499 * i));
+        auto loop = Make(body);
+        loop->SetPlaybackRateBlockAtAudioBoundary(Rate(rate, 1024));
+        std::array<float,1024> output{};
+        ASSERT_EQ(output.size(), loop->ReadBlock(output.data(), 0, 1024));
+        for (unsigned int i = 0; i < output.size(); ++i)
+        {
+            const auto position = std::fmod(i * rate, static_cast<double>(body.size()));
+            const auto first = static_cast<unsigned int>(position);
+            const auto fraction = position - first;
+            const auto expected = body[first] * (1.0 - fraction) + body[(first + 1u) % body.size()] * fraction;
+            EXPECT_NEAR(expected, output[i], 1e-6) << i;
+        }
+    }
+}
+
+TEST_F(LoopPlaybackRateTest, RateRampStartsAtExistingPositionAndReplaysWithoutCursorMutation)
 {
     std::vector<float> body(1000);
     for (unsigned int i = 0; i < body.size(); ++i)
-        body[i] = static_cast<float>(std::cos(2.0 * 3.14159265358979323846 * 0.499 * i));
+        body[i] = static_cast<float>(std::cos(i * 0.071));
     auto loop = Make(body);
-    loop->SetPlaybackRateBlockAtAudioBoundary(Rate(1.0, 256));
-    loop->EndMultiPlay(1000); // Establish audible unity; keep phase at zero.
-    loop->SetPlaybackRateBlockAtAudioBoundary(Rate(1.01, 256));
+    loop->SetBodyPlayIndex(37);
+    constexpr double damping = 480.0;
+    loop->SetPlaybackRateBlockAtAudioBoundary({1.0, 2.0, damping, 256, 1u});
     std::array<float,256> first{}, repeated{};
-    ASSERT_EQ(256u, loop->ReadBlock(first.data(), 0, 256));
-    ASSERT_EQ(256u, loop->ReadBlock(repeated.data(), 0, 256));
+    ASSERT_EQ(first.size(), loop->ReadBlock(first.data(), 0, 256));
+    ASSERT_EQ(repeated.size(), loop->ReadBlock(repeated.data(), 0, 256));
     EXPECT_EQ(first, repeated);
-    EXPECT_NEAR(1.0f, first[0], 0.003f); // <= one exponential step, no filter-enable discontinuity.
-    for (unsigned int block = 0; block < 64; ++block) loop->EndMultiPlay(256);
-    ASSERT_EQ(256u, loop->ReadBlock(first.data(), 0, 256));
-    double energy = 0.0;
-    for (const auto sample : first) energy += sample * sample;
-    EXPECT_LT(std::sqrt(energy / first.size()), 3e-4);
+    EXPECT_FLOAT_EQ(body[37], first[0]);
+    EXPECT_EQ(37ul, loop->BodyPlayIndex());
+    double position = 37.0, rate = 1.0;
+    for (unsigned int i = 0; i < first.size(); ++i)
+    {
+        const auto index = static_cast<unsigned int>(position);
+        const auto fraction = position - index;
+        EXPECT_NEAR(body[index] * (1.0 - fraction) + body[index + 1u] * fraction, first[i], 1e-6) << i;
+        rate += (2.0 - rate) / damping;
+        position += rate;
+    }
+    loop->EndMultiPlay(256);
+    EXPECT_NEAR(position, loop->FractionalBodyPlayIndex(), 1e-10);
 }
 
-TEST_F(LoopPlaybackRateTest, FilterPassbandPreservesLowFrequencyLevel)
+TEST_F(LoopPlaybackRateTest, LinearPlaybackPreservesLowFrequencyLevel)
 {
     for (const auto rate : {1.01, 2.0, 4.0})
     {
@@ -452,7 +498,7 @@ TEST_F(LoopPlaybackRateTest, InheritedOffsetTransferPreservesColdAndAlreadyAudib
     }
 }
 
-TEST_F(LoopPlaybackRateTest, CaptureFilterActivationAndDeferredRetriesShareOneTrajectory)
+TEST_F(LoopPlaybackRateTest, LinearCaptureRateChangeAndDeferredRetriesShareOneTrajectory)
 {
     const auto capture = [&](bool defer)
     {
@@ -503,11 +549,15 @@ TEST_F(LoopPlaybackRateTest, CaptureFilterActivationAndDeferredRetriesShareOneTr
     ASSERT_EQ(immediate.size(), deferred.size());
     for (unsigned int i = 0; i < immediate.size(); ++i)
         EXPECT_NEAR(immediate[i], deferred[i], 1e-6) << i;
-    const auto onset = std::cos(2.0 * 3.14159265358979323846 * 0.499 * 128);
-    EXPECT_NEAR(onset, immediate[128], 0.003);
-    double energy = 0.0;
-    for (unsigned int i = 15872; i < immediate.size(); ++i) energy += immediate[i] * immediate[i];
-    EXPECT_LT(std::sqrt(energy / 512), 3e-4);
+    for (unsigned int i = 0; i < immediate.size(); ++i)
+    {
+        const auto physical = i < 128u ? static_cast<double>(i) : 128.0 + (i - 128u) / 0.99;
+        const auto first = static_cast<unsigned int>(physical);
+        const auto fraction = physical - first;
+        const auto left = static_cast<float>(std::cos(2.0 * 3.14159265358979323846 * 0.499 * first));
+        const auto right = static_cast<float>(std::cos(2.0 * 3.14159265358979323846 * 0.499 * (first + 1u)));
+        EXPECT_NEAR(left * (1.0 - fraction) + right * fraction, immediate[i], 1e-6) << i;
+    }
 }
 
 TEST_F(LoopPlaybackRateTest, SaveReloadPreservesAudiblePhaseDuringLocalAndSharedShift)
@@ -554,7 +604,7 @@ TEST_F(LoopPlaybackRateTest, SaveReloadPreservesAudiblePhaseDuringLocalAndShared
 }
 
 
-TEST_F(LoopPlaybackRateTest, FilterSpansRespectBankBoundaryAndChildWrap)
+TEST_F(LoopPlaybackRateTest, LinearEndpointsRespectBankBoundaryAndChildWrap)
 {
     constexpr unsigned long length = 1000000;
     constexpr double radians = 2.0 * 3.14159265358979323846 / 1000.0;
@@ -572,7 +622,7 @@ TEST_F(LoopPlaybackRateTest, FilterSpansRespectBankBoundaryAndChildWrap)
     }
 }
 
-TEST_F(LoopPlaybackRateTest, FilteredPlaybackUsesPublishedSpectralMaterial)
+TEST_F(LoopPlaybackRateTest, LinearPlaybackUsesPublishedSpectralMaterial)
 {
     auto loop = Make(std::vector<float>(1024, 0.5f));
     std::string reason;
@@ -613,7 +663,7 @@ TEST_F(LoopPlaybackRateTest, FilteredPlaybackUsesPublishedSpectralMaterial)
     for (const auto sample : output) EXPECT_NEAR(0.25f, sample, 1e-6);
 }
 
-TEST_F(LoopPlaybackRateTest, FilteredSeamMatchesCapturedUnityMaterialAcrossPartitions)
+TEST_F(LoopPlaybackRateTest, LinearSeamMatchesCapturedUnityMaterialAcrossRampPartitions)
 {
     std::vector<float> body(64);
     for (unsigned int i = 0; i < body.size(); ++i)
@@ -622,23 +672,29 @@ TEST_F(LoopPlaybackRateTest, FilteredSeamMatchesCapturedUnityMaterialAcrossParti
     std::vector<float> composed(body.size());
     ASSERT_EQ(composed.size(), seam->ReadBlock(composed.data(), 0, static_cast<unsigned int>(composed.size())));
     // Capturing the unity seam's material gives an independent source-space
-    // reference. Filtering must operate on these composed samples, including
-    // both contributors, even when its footprint wraps this short child twice.
+    // reference. Interpolation must use both composed endpoints, including
+    // samples on opposite sides of a child wrap.
     auto reference = Make(composed);
     auto partitioned = Make(body, 16);
+    audio::PlaybackRate wholeRate, splitRate;
+    ASSERT_TRUE(wholeRate.Configure(48000));
+    ASSERT_TRUE(splitRate.Configure(48000));
+    ASSERT_TRUE(wholeRate.SetTarget(2.0, 1u));
+    ASSERT_TRUE(splitRate.SetTarget(2.0, 1u));
     for (auto* loop : {seam.get(), reference.get(), partitioned.get()})
     {
         float unitySample;
-        ASSERT_EQ(1u, loop->ReadBlock(&unitySample, 0, 1)); // Equal live filter history on every reader.
+        ASSERT_EQ(1u, loop->ReadBlock(&unitySample, 0, 1));
         loop->SetBodyPlayIndex(47);
-        loop->SetPlaybackRateBlockAtAudioBoundary(Rate(3.7, 128));
+        loop->SetPlaybackRateBlockAtAudioBoundary(wholeRate.DescribeBlock(128));
     }
     std::array<float, 128> actual{}, expected{}, split{};
     ASSERT_EQ(actual.size(), seam->ReadBlock(actual.data(), 0, 128));
     ASSERT_EQ(expected.size(), reference->ReadBlock(expected.data(), 0, 128));
     ASSERT_EQ(37u, partitioned->ReadBlock(split.data(), 0, 37));
     partitioned->EndMultiPlay(37);
-    partitioned->SetPlaybackRateBlockAtAudioBoundary(Rate(3.7, 91));
+    ASSERT_TRUE(splitRate.Commit(splitRate.DescribeBlock(37)));
+    partitioned->SetPlaybackRateBlockAtAudioBoundary(splitRate.DescribeBlock(91));
     ASSERT_EQ(91u, partitioned->ReadBlock(split.data() + 37, 0, 91));
     for (unsigned int i = 0; i < actual.size(); ++i)
     {

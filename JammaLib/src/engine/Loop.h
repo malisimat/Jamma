@@ -132,8 +132,6 @@ namespace engine
 			_playbackRateBlock(other._playbackRateBlock),
 			_recordingPlaybackRate(other._recordingPlaybackRate),
 			_playbackFraction(other._playbackFraction),
-			_playbackFilterMix(other._playbackFilterMix),
-			_playbackFilterInitialised(other._playbackFilterInitialised),
 			_playIndex(other._playIndex.load(std::memory_order_relaxed)),
 			_loopParams{other._loopParams},
 			_mixer(std::move(other._mixer)),
@@ -195,8 +193,6 @@ namespace engine
 				std::swap(_playbackRateBlock, other._playbackRateBlock);
 				std::swap(_recordingPlaybackRate, other._recordingPlaybackRate);
 				std::swap(_playbackFraction, other._playbackFraction);
-				std::swap(_playbackFilterMix, other._playbackFilterMix);
-				std::swap(_playbackFilterInitialised, other._playbackFilterInitialised);
 				auto playIndex = _playIndex.load(std::memory_order_relaxed);
 				_playIndex.store(other._playIndex.exchange(playIndex, std::memory_order_relaxed), std::memory_order_relaxed);
 				auto playState = _playState.load(std::memory_order_relaxed);
@@ -266,7 +262,8 @@ namespace engine
 		// EndMultiPlay commits the fractional source phase.
 		void SetPlaybackRateBlockAtAudioBoundary(const audio::PlaybackRateBlock& block,
 			double recordingRate = 1.0) noexcept;
-		static constexpr double MaximumFilteredSourceRate = 5.0;
+		static constexpr double MinimumSourceRate = 3.0 / 16.0;
+		static constexpr double MaximumSourceRate = 5.0;
 		void SetCaptureSourceAtAudioBoundary(const Loop* source, double sourceBodyOrigin) noexcept
 		{ _captureSource = source; _captureSourceBodyOrigin = sourceBodyOrigin; }
 		void SetCaptureInputHistoryAtAudioBoundary(const audio::InputHistoryView& history, unsigned int channel) noexcept;
@@ -568,11 +565,6 @@ namespace engine
 		unsigned long _playbackOffsetLength = 0ul;
 		double _NextPlaybackOffset(double value, double baseIncrement, double sharedCorrection) const noexcept;
 		double _playbackOffsetDamping = 480.500173611;
-		double _playbackFilterMix = 0.0;
-		bool _playbackFilterInitialised = false;
-		double _NextPlaybackFilterMix(double value, double sourceIncrement) const noexcept;
-		void _InitialisePlaybackFilter() noexcept;
-		void _AdvancePlaybackFilter(unsigned int frames) noexcept;
 		void _AdvancePlaybackOffset(unsigned int numSamps) noexcept;
 		void _InitialisePlaybackOffset() noexcept;
 		void _PreparePlaybackOffsetTarget() noexcept;
@@ -594,8 +586,8 @@ namespace engine
 		std::array<CaptureInterpolation, 3> _captureInterpolation{};
 		audio::InputHistoryView _captureInputHistory;
 		unsigned int _captureInputChannel = 0;
-		static constexpr unsigned int CaptureFilterTaps = 128u;
-		struct CaptureFilterRegion
+		static constexpr unsigned int CaptureInterpolationSamples = 2u;
+		struct CaptureRegion
 		{
 			std::uint64_t Cursor = 0, End = 0;
 			float FadeNew = 1.0f, FadeCurrent = 0.0f;
@@ -603,19 +595,17 @@ namespace engine
 			std::uint64_t SourceGeneration = 0;
 			double SourceBodyOrigin = 0.0;
 		};
-		struct CaptureFilterState
+		struct CaptureQueue
 		{
-			std::array<CaptureFilterRegion,128> Regions{};
+			std::array<CaptureRegion,128> Regions{};
 			unsigned int First = 0, Count = 0;
-			double FilterMix = 0.0;
-			bool FilterInitialised = false;
 		};
-		std::array<CaptureFilterState,2> _captureFilters{};
-		std::array<float, constants::MaxBlockSize + CaptureFilterTaps> _captureResidualSamples{};
+		std::array<CaptureQueue,2> _captureQueues{};
+		std::array<float, constants::MaxBlockSize + CaptureInterpolationSamples> _captureResidualSamples{};
 		std::optional<std::uint64_t> _captureResidualStart;
 		std::uint64_t _captureResidualEnd = 0;
-		void _QueueFilteredCapture(const base::AudioWriteRequest& request, int writeOffset, bool residual) noexcept;
-		void _FlushFilteredCapture(bool residual) noexcept;
+		void _QueueMappedCapture(const base::AudioWriteRequest& request, int writeOffset, bool residual) noexcept;
+		void _FlushMappedCapture(bool residual) noexcept;
 		void _WriteRateMappedCapture(const base::AudioWriteRequest& request, int writeOffset) noexcept;
 		audio::PlaybackRateBlock _playbackRateBlock;
 		double _recordingPlaybackRate = 1.0;
@@ -671,8 +661,6 @@ namespace engine
 		void _AdvanceSpectralPlayback(unsigned int numSamps) noexcept;
 		float _ReadSpectralSample(unsigned long storageIndex, unsigned int blockOffset, std::uint64_t generation) const noexcept;
 		spectral::SpectralSourceLayout _SpectralSourceLayout() const noexcept;
-		struct PlaybackFilter;
-		static const std::unique_ptr<const PlaybackFilter> _playbackFilter;
 		static void _DrainVstChain(std::shared_ptr<vst::VstChain> chain);
 	};
 }

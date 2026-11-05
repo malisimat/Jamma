@@ -798,6 +798,7 @@ namespace engine
 		std::shared_ptr<LoopTake> _captureRateParent; // Set before publication; callback borrows without ownership changes.
 		bool _SeedSourceRateHistory(const audio::PlaybackRateHistory& history, std::uint64_t first,
 			std::uint64_t end, bool sourceRuler) noexcept;
+		static void _ApplyRecordingRate(audio::PlaybackRateBlock& block, double recordingRate) noexcept;
 		std::atomic<std::uint64_t> _midiRateHistoryConsumedThrough{ 0u };
 		bool _captureUsesRateMapping = false; // Callback-owned; once enabled it remains on through completion.
 		double _sourceVelocity = 1.0;
