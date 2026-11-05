@@ -22,6 +22,19 @@ quality/performance tradeoff for predictable callback cost. Settled unity
 playback retains exact integer advancement; rate and phase ramps retain their
 shared fractional trajectory.
 
+Mapped overdub/punch renders leaf-plugin input on the capture history's source
+trajectory, with the same source-body origin and applied child SHFT used by dry
+reconstruction. Device source age and output latency are resolved through retained
+history, including ramps and fractional source positions. The identical rendered
+dry block is subtracted after the leaf rack; original source material is then
+composed once on the destination grid.
+
+History continuation checks reuse sole-writer terminal rate, velocity, phase debt
+and progress caches. Only newly accepted frames extend those caches, in the original
+recurrence order. Retention, the 4096-frame ramp coalescing bound and coherent reader
+publication are unchanged. Automation phase queries reuse a take's block progress
+at the requested edge, then wrap separately for each child's own length.
+
 Editing the rate leaves server follow; returning to 1.0 does not rejoin it.
 Sync to server is explicit. While following, server geometry determines source
 speed, and the retained local rate resumes when leaving follow. Accepted server

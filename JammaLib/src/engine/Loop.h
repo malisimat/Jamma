@@ -12,6 +12,7 @@
 #include <memory>
 #include <mutex>
 #include <limits>
+#include <span>
 #include "ActionReceiver.h"
 #include "../base/BounceWriter.h"
 #include "Tweakable.h"
@@ -251,12 +252,18 @@ namespace engine
 
 		// Reads source data via ReadBlock, then routes to destination
 		// via mixer->WriteBlock → behaviour->ApplyBlock → dest->OnBlockWriteChannel.
+		struct SourceReadTrajectory
+		{
+			std::span<const double> Positions; // Capture-relative source coordinates, shared by channels.
+			double BodyOrigin = 0.0;
+		};
 		void WriteBlock(const std::shared_ptr<base::MultiAudioSink> dest,
 			const std::shared_ptr<base::BounceWriter> bounceWriter,
 			int sampOffset,
 			unsigned int numSamps, const audio::DacRenderContext* dac = nullptr,
             std::uint32_t trigger = 0u, std::int64_t delay = 0, unsigned int channel = 0u,
-			vst::VstChain* preparedChain = nullptr, bool usePreparedChain = false, bool sourceResidual = false);
+			vst::VstChain* preparedChain = nullptr, bool usePreparedChain = false, bool sourceResidual = false,
+			const SourceReadTrajectory* sourceTrajectory = nullptr);
 		virtual void EndMultiPlay(unsigned int numSamps) override;
 		// Audio boundary only. All readers replay the same immutable block; only
 		// EndMultiPlay commits the fractional source phase.

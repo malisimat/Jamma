@@ -949,7 +949,8 @@ void Loop::WriteBlock(const std::shared_ptr<MultiAudioSink> dest,
 	const std::shared_ptr<base::BounceWriter> bounceWriter,
 	int sampOffset, unsigned int numSamps, const audio::DacRenderContext* dac,
 	std::uint32_t trigger, std::int64_t delay, unsigned int channel,
-	vst::VstChain* preparedChain, bool usePreparedChain, bool sourceResidual)
+	vst::VstChain* preparedChain, bool usePreparedChain, bool sourceResidual,
+	const SourceReadTrajectory* sourceTrajectory)
 {
 	base::PublishedAudioSnapshot<vst::VstChain>::Lease chainLease;
 	if (!usePreparedChain) chainLease = _vstChain.borrow();
@@ -959,8 +960,15 @@ void Loop::WriteBlock(const std::shared_ptr<MultiAudioSink> dest,
 	const auto loopLength = _loopLength.load(std::memory_order_relaxed);
 	if (_playState.load(std::memory_order_relaxed) == STATE_RECORDING) _mixer->Offset(count);
 	float tempBuf[constants::MaxBlockSize];
-	auto rendered = loopLength ? ReadBlock(tempBuf, sampOffset, count,
-		bounceWriter ? nullptr : dac, trigger, delay, channel) : 0u;
+	auto rendered = 0u;
+	if (sourceTrajectory && bounceWriter && sourceResidual && loopLength)
+	{
+		rendered = (std::min)(count, static_cast<unsigned int>(sourceTrajectory->Positions.size()));
+		for (unsigned int frame = 0u; frame < rendered; ++frame)
+			tempBuf[frame] = _ReadSourceBodySample(sourceTrajectory->BodyOrigin + sourceTrajectory->Positions[frame], frame);
+	}
+	else if (loopLength) rendered = ReadBlock(tempBuf, sampOffset, count,
+		bounceWriter ? nullptr : dac, trigger, delay, channel);
 	if (!rendered)
 	{
 		if (bounceWriter || !chain || !chain->IsActive())

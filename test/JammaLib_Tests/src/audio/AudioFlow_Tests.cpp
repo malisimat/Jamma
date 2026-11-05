@@ -2815,3 +2815,118 @@ TEST(AudioCallbackRealtime, LocalMasterActivationAndCancellationDoNotAllocateRea
     EXPECT_EQ(0u,counts.Reallocations); EXPECT_EQ(0u,counts.Frees);
 }
 #endif
+
+class AudioFlowRateGainPlugin final : public vst::IVstPlugin
+{
+public:
+    bool PreInit(const std::wstring&) override { return true; }
+    bool Load(const std::wstring&, float, unsigned int, unsigned int, vst::HostedLayoutMode) override { return true; }
+    void Unload() override {}
+    void ProcessBlock(float* samples, int32_t count) noexcept override
+    {
+        Count = static_cast<unsigned int>(count);
+        for (int32_t i = 0; i < count; ++i) { Input[i] = samples[i]; samples[i] *= 2.0f; }
+    }
+    void ProcessBlockStereo(float* left, float* right, int32_t count) noexcept override
+    { ProcessBlock(left, count); for (int32_t i = 0; i < count; ++i) right[i] *= 2.0f; }
+    void ProcessBlockMulti(float* const* channels, int32_t count, int32_t frames) noexcept override
+    { for (int32_t i = 0; i < count; ++i) ProcessBlock(channels[i], frames); }
+    void BeginMidiBlock(std::uint32_t, std::uint32_t) noexcept override {}
+    void SendMidiEvent(const midi::MidiEvent&, bool) noexcept override {}
+    void SetParameter(unsigned int, float) noexcept override {}
+    float GetParameter(unsigned int) const noexcept override { return 0.0f; }
+    bool OpenEditor(HWND) override { return false; }
+    void CloseEditor() override {}
+    utils::Size2d GetEditorSize() const noexcept override { return {}; }
+    bool IsLoaded() const noexcept override { return true; }
+    const std::string& Name() const noexcept override { return _name; }
+    void SetBypassed(bool bypassed) noexcept override { _bypassed = bypassed; }
+    bool IsBypassed() const noexcept override { return _bypassed; }
+    vst::RenderRole Role() const noexcept override { return vst::RenderRole::Effect; }
+    std::array<float, constants::MaxBlockSize> Input{};
+    unsigned int Count = 0u;
+private:
+    std::string _name = "rate-gain";
+    bool _bypassed = false;
+};
+
+TEST(AudioFlow, MappedOverdubPluginInputUsesCaptureHistoryWithLatencyAndChildShift)
+{
+    constexpr auto trigger = 256u, age = 37u, outputLatency = 23u, length = 4096u;
+    for (const auto speed : {0.5, 1.0, 1.5, 0.0})
+    for (const auto blockSize : {32u, 64u})
+    {
+        SCOPED_TRACE(speed);
+        SCOPED_TRACE(blockSize);
+        auto source = MakeTake(); source->ResetPlaybackRateHistoryForDevice(1000u);
+        source->Record({0u}, "source"); source->CommitChanges();
+        auto leaf = source->GetLoops().front();
+        std::vector<float> body(constants::MaxLoopFadeSamps + length, 0.0f);
+        for (unsigned int i = 0u; i < length; ++i)
+            body[constants::MaxLoopFadeSamps + i] = static_cast<float>(0.0001 * i);
+        WriteLoopSamples(leaf, body);
+        source->Play(constants::MaxLoopFadeSamps, length, 0u); source->CommitChanges();
+        source->RestoreRecordingPlaybackRate(1.0);
+        leaf->SetPlaybackOffsetSamps(11);
+        auto plugin = std::make_shared<AudioFlowRateGainPlugin>();
+        actions::JobAction job; job.JobActionType = actions::JobAction::JOB_LOADVST;
+        job.VstPath = L"rate-gain.dll"; job.PreInitPlugin = plugin;
+        leaf->OnAction(job);
+        leaf->CommitChanges();
+        auto target = MakeTake(); target->ResetPlaybackRateHistoryForDevice(1000u);
+        audio::PlaybackRateHistory history(64u);
+        audio::PlaybackRateBlock rate{speed ? speed : 0.7, speed ? speed : 1.9, 480.0, blockSize, 1u};
+        auto reference = rate.Cursor();
+        std::array<double, 1025u> positions{};
+        for (unsigned int i = 0u; i < 1024u; ++i) positions[i + 1u] = positions[i] + reference.Next();
+        for (unsigned int start = 0u; start < 768u; start += blockSize)
+        {
+            ASSERT_TRUE(history.Append(start, rate));
+            source->BeginPlaybackRateBlock(rate, start, &history, false);
+            if (start == trigger)
+            {
+                target->ConfigureTriggerCapture({trigger, 0, length, age, 0u});
+                target->Overdub({}, "target", {}, {}, source); target->CommitChanges();
+                target->SetActiveBounce(source, std::make_shared<AudioFlowAdditiveBounceWriter>());
+                ASSERT_TRUE(target->GetLoops().front()->SetTriggerCaptureLength(128u));
+            }
+            if (start >= trigger)
+            {
+                target->BeginPlaybackRateBlock(rate, start, &history, false);
+                target->BeginCaptureAudioBoundary(start, start, start);
+                plugin->Count = 0u;
+                target->ProcessActiveBounce(-static_cast<int>(age + outputLatency), blockSize);
+                ASSERT_EQ(blockSize, plugin->Count);
+                const auto pastOutput = positions[start] - positions[start - outputLatency];
+                for (unsigned int i = 0u; i < blockSize; ++i)
+                {
+                    auto phase = std::fmod(positions[start - age + i] - pastOutput - 11.0, static_cast<double>(length));
+                    if (phase < 0.0) phase += length;
+                    const auto first = static_cast<unsigned int>(phase);
+                    const auto fraction = phase - first;
+                    const auto expected = body[constants::MaxLoopFadeSamps + first] * (1.0 - fraction)
+                        + body[constants::MaxLoopFadeSamps + (first + 1u) % length] * fraction;
+                    EXPECT_NEAR(expected, plugin->Input[i], 1e-6) << start << "/" << i;
+                }
+                ASSERT_TRUE(target->GetLoops().front()->TriggerCaptureCoverageValid());
+                target->EndMultiWrite(blockSize, true, Audible::AUDIOSOURCE_BOUNCE);
+                target->EndMultiPlay(blockSize);
+            }
+            source->EndMultiPlay(blockSize);
+            auto cursor = rate.Cursor();
+            for (unsigned int i = 0u; i < blockSize; ++i) cursor.Next();
+            rate.InitialRate = cursor.Current();
+        }
+        if (speed)
+        {
+            ASSERT_TRUE(target->GetLoops().front()->TriggerCaptureComplete());
+            target->Play(constants::MaxLoopFadeSamps, 128u, 0u);
+            target->EndRecording();
+            const auto captured = target->GetLoops().front()->ExportSamples();
+            ASSERT_EQ(128u, captured.size());
+            for (unsigned int i = 0u; i < captured.size(); ++i)
+                EXPECT_NEAR(2.0 * 0.0001 * (trigger * speed - outputLatency * speed - 11.0 + i),
+                    captured[i], 1e-6) << i;
+        }
+    }
+}

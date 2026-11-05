@@ -1268,15 +1268,19 @@ void LoopTake::ProcessActiveBounce(int sourceOffset, unsigned int numSamps)
 		return;
 
 	auto sourceTake = _activeBounceSource.lock();
-	if (!sourceTake)
+	if (!sourceTake || sourceTake->_captureCancelled.load(std::memory_order_acquire))
 		return;
 
 	auto target = MultiAudioSink::shared_from_this();
 	auto destinationState = _BorrowAudioState();
 	auto sourceState = sourceTake->_BorrowAudioState();
 	if (!destinationState || !sourceState) return;
+	std::array<double, constants::MaxBlockSize> sourcePositions;
+	double progress = 0.0;
 	if (_captureUsesRateMapping)
 	{
+		if (numSamps > sourcePositions.size() || _triggerCaptureTiming.SourceAgeSamps > _playbackDeviceStart)
+		{ _captureCancelled.store(true, std::memory_order_release); return; }
 		const auto outputLatency = (std::max)(std::int64_t{0}, -static_cast<std::int64_t>(sourceOffset)
 			- _triggerCaptureTiming.SourceAgeSamps);
 		if (static_cast<std::uint64_t>(outputLatency) > _playbackDeviceStart)
@@ -1284,17 +1288,50 @@ void LoopTake::ProcessActiveBounce(int sourceOffset, unsigned int numSamps)
 		const auto current = _sourceRateHistory.Query(_playbackDeviceStart);
 		const auto latency = sourceTake->_sourceRateHistory.QueryDifference(_playbackDeviceStart - outputLatency, _playbackDeviceStart);
 		if (!current || !latency) { _captureCancelled.store(true, std::memory_order_release); return; }
-		const auto progress = current->Coordinate.Difference(_captureRateOrigin) + *latency;
+		progress = current->Coordinate.Difference(_captureRateOrigin) + *latency;
+		// Render the same source ruler that reconstructs the dry body. A device
+		// latency offset passed to ReadBlock would instead be treated as source samples.
+		auto physical = _playbackDeviceStart - _triggerCaptureTiming.SourceAgeSamps;
+		const auto first = _sourceRateHistory.Query(physical);
+		if (!first) { _captureCancelled.store(true, std::memory_order_release); return; }
+		auto position = first->Coordinate.Difference(_captureRateOrigin);
+		unsigned int frame = 0u;
+		while (frame < numSamps)
+		{
+			const auto segment = _sourceRateHistory.DescribeAt(physical);
+			if (!segment) { _captureCancelled.store(true, std::memory_order_release); return; }
+			auto cursor = segment->Cursor();
+			const auto count = (std::min)(segment->Frames, numSamps - frame);
+			const auto constantIncrement = segment->InitialRate * segment->SourceScale;
+			for (unsigned int i = 0u; i < count; ++i)
+			{
+				sourcePositions[frame++] = position;
+				position += segment->IsConstant() ? constantIncrement : cursor.Next();
+			}
+			physical += count;
+		}
 		for (std::size_t i = 0u; i < destinationState->Loops.size(); ++i)
 			if (const auto& destination = destinationState->Loops[i])
 			{
 				const auto* source = i < sourceState->Loops.size() ? sourceState->Loops[i].get() : nullptr;
 				destination->SetCaptureSourceAtAudioBoundary(source,
-					source ? source->FractionalBodyPlayIndex() - progress : 0.0);
+					source ? source->FractionalBodyPlayIndex() - source->AppliedPlaybackOffsetSamps() - progress : 0.0);
 			}
 	}
 	_activeBounceWriter->BeginCaptureBlock(numSamps);
-	sourceTake->WriteBlock(target, _activeBounceWriter, sourceOffset, numSamps, nullptr, nullptr, _captureUsesRateMapping);
+	if (_captureUsesRateMapping)
+	{
+		for (std::size_t i = 0u; i < destinationState->Loops.size() && i < sourceState->Loops.size(); ++i)
+			if (destinationState->Loops[i] && sourceState->Loops[i])
+			{
+				const auto& source = sourceState->Loops[i];
+				const Loop::SourceReadTrajectory trajectory{ { sourcePositions.data(), numSamps },
+					source->FractionalBodyPlayIndex() - source->AppliedPlaybackOffsetSamps() - progress };
+				source->WriteBlock(target, _activeBounceWriter, 0, numSamps, nullptr, 0u, 0, 0u,
+					nullptr, false, true, &trajectory);
+			}
+	}
+	else sourceTake->WriteBlock(target, _activeBounceWriter, sourceOffset, numSamps);
 	_activeBounceWriter->EndCaptureBlock(numSamps);
 	for (const auto& loop : destinationState->Loops)
 		if (loop) loop->SetCaptureSourceAtAudioBoundary(nullptr, 0.0);
