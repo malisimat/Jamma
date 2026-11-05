@@ -142,11 +142,6 @@
     </Content>
   </ItemGroup>
   <ItemGroup>
-    <Content Include="resources\wav\hh.wav">
-      <Filter>resources\wav</Filter>
-    </Content>
-  </ItemGroup>
-  <ItemGroup>
     <Content Include="resources\ResourceList.txt">
       <Filter>resources</Filter>
     </Content>

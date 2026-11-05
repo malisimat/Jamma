@@ -1,11 +1,12 @@
 #include "ImageUtils.h"
+#include "StringUtils.h"
 
 using namespace utils;
 
 std::optional<std::tuple<std::vector<unsigned char>, unsigned int, unsigned int>> ImageUtils::LoadTga(const std::string& fileName)
 {
 	FILE* file;
-	auto res = fopen_s(&file, fileName.c_str(), "rb");
+	auto res = _wfopen_s(&file, utils::DecodeUtf8(fileName).c_str(), L"rb");
 
 	if (!file)
 		return std::nullopt;

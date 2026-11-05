@@ -1,4 +1,5 @@
 #include "ShaderResource.h"
+#include "../utils/StringUtils.h"
 #include "../graphics/GlDeleteQueue.h"
 #include "glm/gtc/type_ptr.hpp"
 
@@ -115,7 +116,7 @@ void ShaderResource::InitUniforms(std::vector<std::string> uniforms)
 bool ShaderResource::AddStageFromFile(GLuint shaderProgram, const std::string& filePath, GLenum shaderType)
 {
 	std::ifstream f;
-	f.open(filePath.c_str(), std::ios::in | std::ios::binary);
+	f.open(utils::DecodeUtf8(filePath), std::ios::in | std::ios::binary);
 
 	if (!f.is_open())
 	{

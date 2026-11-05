@@ -33,7 +33,6 @@
 1 router_active
 1 router_over
 1 router_down
-3 hh
 1 red
 1 green
 1 orange

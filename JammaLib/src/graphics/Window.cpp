@@ -84,7 +84,7 @@ void Window::LoadResources()
 {
 	std::ifstream inputFile;
 	const auto resourceListPath = resources::ResolveResourceListPath();
-	inputFile.open(resourceListPath, std::ios::in);
+	inputFile.open(utils::DecodeUtf8(resourceListPath), std::ios::in);
 
 	if (inputFile.good())
 	{

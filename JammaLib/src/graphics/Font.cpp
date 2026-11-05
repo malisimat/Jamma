@@ -2,6 +2,7 @@
 #include "Font.h"
 #include "GlDeleteQueue.h"
 #include "../resources/ResourcePaths.h"
+#include "../utils/StringUtils.h"
 #include <iterator>
 #include <limits>
 
@@ -34,7 +35,7 @@ std::optional<std::unique_ptr<Font>> Font::Load(FontOptions::FontSize size,
 	std::weak_ptr<ShaderResource> shader)
 {
 	auto datafilename = GetFontFilename();
-	std::ifstream inputFile(datafilename.c_str(), std::ios::binary);
+	std::ifstream inputFile(utils::DecodeUtf8(datafilename), std::ios::binary);
 	if (!inputFile)
 	{
 		std::cout << "[LOAD] failed to open font resource " << datafilename << "\n";
