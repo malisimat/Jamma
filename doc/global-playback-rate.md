@@ -27,7 +27,10 @@ trajectory, with the same source-body origin and applied child SHFT used by dry
 reconstruction. Device source age and output latency are resolved through retained
 history, including ramps and fractional source positions. The identical rendered
 dry block is subtracted after the leaf rack; original source material is then
-composed once on the destination grid.
+composed once on the destination grid. Output-latency source progress is frozen
+at the effective capture start so a ramp cannot move that origin with callback size.
+Child SHFT edits replay the existing smooth offset recurrence per frame; pending
+capture retains that descriptor so deferred interpolation uses the same motion.
 
 History continuation checks reuse sole-writer terminal rate, velocity, phase debt
 and progress caches. Only newly accepted frames extend those caches, in the original

@@ -583,6 +583,8 @@ bool LoopTake::_InitialiseCaptureRateOrigin(const audio::PlaybackRateHistory& hi
 	const auto raw = history.Query(rawStart);
 	if (!content || !raw) return false;
 	_captureRateOrigin = content->Coordinate;
+	_captureContentPhysicalOrigin = effectiveStart;
+	_captureOutputLatencyProgress.reset();
 	_captureMidiRateOrigin = raw->Coordinate;
 	_captureMidiPhysicalOrigin = rawStart;
 	return true;
@@ -1110,7 +1112,7 @@ bool LoopTake::ConfigureRecordedPlaybackCompensation(
 void LoopTake::WriteBlock(const std::shared_ptr<MultiAudioSink> dest,
 	const std::shared_ptr<base::BounceWriter> bounceWriter,
 	int indexOffset,
-	unsigned int numSamps, const audio::DacRenderContext* dac, const RenderState* prepared, bool sourceResidual)
+	unsigned int numSamps, const audio::DacRenderContext* dac, const RenderState* prepared)
 {
 	if (_captureCancelled.load(std::memory_order_acquire))
 	{
@@ -1166,7 +1168,7 @@ void LoopTake::WriteBlock(const std::shared_ptr<MultiAudioSink> dest,
             loop->WriteBlock(loopDest, bounceWriter, indexOffset, numSamps, provisional ? dac : nullptr,
                 _triggerCaptureTiming.TriggerSample.value_or(0u), _triggerCaptureTiming.DelaySamps,
                 provisional ? state->RecordInputChannels[i] : 0u,
-				prepared ? prepared->LoopChains[i].get() : nullptr, prepared != nullptr, sourceResidual);
+				prepared ? prepared->LoopChains[i].get() : nullptr, prepared != nullptr);
 	if (IsMuted())
 		for (const auto& loop : state->Loops)
 			if (loop) loop->ClearRecordedPlaybackDelay();
@@ -1258,7 +1260,7 @@ void LoopTake::SetActiveBounce(std::shared_ptr<LoopTake> sourceTake,
 
 void LoopTake::ProcessActiveBounce(int sourceOffset, unsigned int numSamps)
 {
-	if (!_activeBounceWriter)
+	if (!_activeBounceWriter || _captureCancelled.load(std::memory_order_acquire))
 		return;
 
 	const auto state = _state.load(std::memory_order_relaxed);
@@ -1283,12 +1285,19 @@ void LoopTake::ProcessActiveBounce(int sourceOffset, unsigned int numSamps)
 		{ _captureCancelled.store(true, std::memory_order_release); return; }
 		const auto outputLatency = (std::max)(std::int64_t{0}, -static_cast<std::int64_t>(sourceOffset)
 			- _triggerCaptureTiming.SourceAgeSamps);
-		if (static_cast<std::uint64_t>(outputLatency) > _playbackDeviceStart)
-		{ _captureCancelled.store(true, std::memory_order_release); return; }
+		if (!_captureOutputLatencyProgress)
+		{
+			if (static_cast<std::uint64_t>(outputLatency) > _captureContentPhysicalOrigin)
+			{ _captureCancelled.store(true, std::memory_order_release); return; }
+			// Anchor output latency at capture admission. Re-evaluating it at each
+			// callback head moves the dry origin during a ramp and depends on block size.
+			_captureOutputLatencyProgress = sourceTake->_sourceRateHistory.QueryDifference(
+				_captureContentPhysicalOrigin - outputLatency, _captureContentPhysicalOrigin);
+			if (!_captureOutputLatencyProgress) { _captureCancelled.store(true, std::memory_order_release); return; }
+		}
 		const auto current = _sourceRateHistory.Query(_playbackDeviceStart);
-		const auto latency = sourceTake->_sourceRateHistory.QueryDifference(_playbackDeviceStart - outputLatency, _playbackDeviceStart);
-		if (!current || !latency) { _captureCancelled.store(true, std::memory_order_release); return; }
-		progress = current->Coordinate.Difference(_captureRateOrigin) + *latency;
+		if (!current) { _captureCancelled.store(true, std::memory_order_release); return; }
+		progress = current->Coordinate.Difference(_captureRateOrigin) + *_captureOutputLatencyProgress;
 		// Render the same source ruler that reconstructs the dry body. A device
 		// latency offset passed to ReadBlock would instead be treated as source samples.
 		auto physical = _playbackDeviceStart - _triggerCaptureTiming.SourceAgeSamps;
@@ -1310,13 +1319,6 @@ void LoopTake::ProcessActiveBounce(int sourceOffset, unsigned int numSamps)
 			}
 			physical += count;
 		}
-		for (std::size_t i = 0u; i < destinationState->Loops.size(); ++i)
-			if (const auto& destination = destinationState->Loops[i])
-			{
-				const auto* source = i < sourceState->Loops.size() ? sourceState->Loops[i].get() : nullptr;
-				destination->SetCaptureSourceAtAudioBoundary(source,
-					source ? source->FractionalBodyPlayIndex() - source->AppliedPlaybackOffsetSamps() - progress : 0.0);
-			}
 	}
 	_activeBounceWriter->BeginCaptureBlock(numSamps);
 	if (_captureUsesRateMapping)
@@ -1326,9 +1328,10 @@ void LoopTake::ProcessActiveBounce(int sourceOffset, unsigned int numSamps)
 			{
 				const auto& source = sourceState->Loops[i];
 				const Loop::SourceReadTrajectory trajectory{ { sourcePositions.data(), numSamps },
-					source->FractionalBodyPlayIndex() - source->AppliedPlaybackOffsetSamps() - progress };
+					source->FractionalBodyPlayIndex() - progress };
+				destinationState->Loops[i]->SetCaptureSourceAtAudioBoundary(source.get(), trajectory.BodyOrigin);
 				source->WriteBlock(target, _activeBounceWriter, 0, numSamps, nullptr, 0u, 0, 0u,
-					nullptr, false, true, &trajectory);
+					nullptr, false, &trajectory);
 			}
 	}
 	else sourceTake->WriteBlock(target, _activeBounceWriter, sourceOffset, numSamps);

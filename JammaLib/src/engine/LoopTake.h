@@ -143,7 +143,7 @@ namespace engine
 			const std::shared_ptr<base::BounceWriter> bounceWriter,
 			int indexOffset,
 			unsigned int numSamps, const audio::DacRenderContext* dac = nullptr,
-			const RenderState* prepared = nullptr, bool sourceResidual = false);
+			const RenderState* prepared = nullptr);
 		void SetActiveBounce(std::shared_ptr<LoopTake> sourceTake,
 			std::shared_ptr<base::BounceWriter> writer) noexcept;
 		void ProcessActiveBounce(int sourceOffset, unsigned int numSamps);
@@ -787,6 +787,8 @@ namespace engine
 		const audio::PlaybackRateHistory* _masterRateHistory = nullptr;
 		std::uint64_t _playbackDeviceStart = 0u;
 		audio::SourcePosition _captureRateOrigin;
+		std::uint64_t _captureContentPhysicalOrigin = 0u; // Callback-owned capture admission edge.
+		std::optional<double> _captureOutputLatencyProgress; // Frozen on the same source ruler.
 		audio::SourcePosition _captureMidiRateOrigin;
 		std::uint64_t _captureMidiPhysicalOrigin = 0u;
 		bool _midiCaptureRateMapped = false; // MIDI owner, protected by existing capture mutex.

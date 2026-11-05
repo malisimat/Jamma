@@ -262,7 +262,7 @@ namespace engine
 			int sampOffset,
 			unsigned int numSamps, const audio::DacRenderContext* dac = nullptr,
             std::uint32_t trigger = 0u, std::int64_t delay = 0, unsigned int channel = 0u,
-			vst::VstChain* preparedChain = nullptr, bool usePreparedChain = false, bool sourceResidual = false,
+			vst::VstChain* preparedChain = nullptr, bool usePreparedChain = false,
 			const SourceReadTrajectory* sourceTrajectory = nullptr);
 		virtual void EndMultiPlay(unsigned int numSamps) override;
 		// Audio boundary only. All readers replay the same immutable block; only
@@ -594,6 +594,18 @@ namespace engine
 		audio::InputHistoryView _captureInputHistory;
 		unsigned int _captureInputChannel = 0;
 		static constexpr unsigned int CaptureInterpolationSamples = 2u;
+		// Frozen child SHFT recurrence, replayed by readers and pending capture.
+		struct PlaybackOffsetCursor
+		{
+			PlaybackOffsetCursor() = default;
+			explicit PlaybackOffsetCursor(const Loop& loop) noexcept;
+			double Value = 0.0, Target = 0.0, Damping = 1.0, RecordingRate = 1.0, ConstantIncrement = 1.0;
+			bool ConstantRate = true;
+			audio::PlaybackRateCursor Rate{ 1.0, 1.0, 1.0 };
+			double Next() noexcept;
+			static double NextValue(double value, double target, double damping,
+				double baseIncrement, double sharedCorrection) noexcept;
+		};
 		struct CaptureRegion
 		{
 			std::uint64_t Cursor = 0, End = 0;
@@ -601,6 +613,7 @@ namespace engine
 			const Loop* SourceIdentity = nullptr; // Compared only; current bounce scope pins dereference.
 			std::uint64_t SourceGeneration = 0;
 			double SourceBodyOrigin = 0.0;
+			PlaybackOffsetCursor SourceOffset;
 		};
 		struct CaptureQueue
 		{

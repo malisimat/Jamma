@@ -2854,79 +2854,109 @@ TEST(AudioFlow, MappedOverdubPluginInputUsesCaptureHistoryWithLatencyAndChildShi
 {
     constexpr auto trigger = 256u, age = 37u, outputLatency = 23u, length = 4096u;
     for (const auto speed : {0.5, 1.0, 1.5, 0.0})
-    for (const auto blockSize : {32u, 64u})
     {
-        SCOPED_TRACE(speed);
-        SCOPED_TRACE(blockSize);
-        auto source = MakeTake(); source->ResetPlaybackRateHistoryForDevice(1000u);
-        source->Record({0u}, "source"); source->CommitChanges();
-        auto leaf = source->GetLoops().front();
-        std::vector<float> body(constants::MaxLoopFadeSamps + length, 0.0f);
-        for (unsigned int i = 0u; i < length; ++i)
-            body[constants::MaxLoopFadeSamps + i] = static_cast<float>(0.0001 * i);
-        WriteLoopSamples(leaf, body);
-        source->Play(constants::MaxLoopFadeSamps, length, 0u); source->CommitChanges();
-        source->RestoreRecordingPlaybackRate(1.0);
-        leaf->SetPlaybackOffsetSamps(11);
-        auto plugin = std::make_shared<AudioFlowRateGainPlugin>();
-        actions::JobAction job; job.JobActionType = actions::JobAction::JOB_LOADVST;
-        job.VstPath = L"rate-gain.dll"; job.PreInitPlugin = plugin;
-        leaf->OnAction(job);
-        leaf->CommitChanges();
-        auto target = MakeTake(); target->ResetPlaybackRateHistoryForDevice(1000u);
-        audio::PlaybackRateHistory history(64u);
-        audio::PlaybackRateBlock rate{speed ? speed : 0.7, speed ? speed : 1.9, 480.0, blockSize, 1u};
-        auto reference = rate.Cursor();
-        std::array<double, 1025u> positions{};
-        for (unsigned int i = 0u; i < 1024u; ++i) positions[i + 1u] = positions[i] + reference.Next();
-        for (unsigned int start = 0u; start < 768u; start += blockSize)
+        std::vector<float> partitionReference;
+        for (const auto blockSize : {32u, 64u})
         {
-            ASSERT_TRUE(history.Append(start, rate));
-            source->BeginPlaybackRateBlock(rate, start, &history, false);
-            if (start == trigger)
+            SCOPED_TRACE(speed);
+            SCOPED_TRACE(blockSize);
+            auto source = MakeTake(); source->ResetPlaybackRateHistoryForDevice(1000u);
+            source->Record({0u}, "source"); source->CommitChanges();
+            auto leaf = source->GetLoops().front();
+            std::vector<float> body(constants::MaxLoopFadeSamps + length, 0.0f);
+            for (unsigned int i = 0u; i < length; ++i)
+                body[constants::MaxLoopFadeSamps + i] = static_cast<float>(0.0001 * i);
+            WriteLoopSamples(leaf, body);
+            source->Play(constants::MaxLoopFadeSamps, length, 0u); source->CommitChanges();
+            source->RestoreRecordingPlaybackRate(1.0);
+            leaf->SetPlaybackOffsetSamps(11);
+            auto plugin = std::make_shared<AudioFlowRateGainPlugin>();
+            actions::JobAction job; job.JobActionType = actions::JobAction::JOB_LOADVST;
+            job.VstPath = L"rate-gain.dll"; job.PreInitPlugin = plugin;
+            leaf->OnAction(job);
+            leaf->CommitChanges();
+            auto target = MakeTake(); target->ResetPlaybackRateHistoryForDevice(1000u);
+            audio::PlaybackRateHistory history(64u);
+            audio::PlaybackRateBlock rate{speed ? speed : 0.7, speed ? speed : 1.9, 480.0, blockSize, 1u};
+            auto reference = rate.Cursor();
+            std::array<double, 1025u> positions{};
+            for (unsigned int i = 0u; i < 1024u; ++i) positions[i + 1u] = positions[i] + reference.Next();
+            for (unsigned int start = 0u; start < 768u; start += blockSize)
             {
-                target->ConfigureTriggerCapture({trigger, 0, length, age, 0u});
-                target->Overdub({}, "target", {}, {}, source); target->CommitChanges();
-                target->SetActiveBounce(source, std::make_shared<AudioFlowAdditiveBounceWriter>());
-                ASSERT_TRUE(target->GetLoops().front()->SetTriggerCaptureLength(128u));
-            }
-            if (start >= trigger)
-            {
-                target->BeginPlaybackRateBlock(rate, start, &history, false);
-                target->BeginCaptureAudioBoundary(start, start, start);
-                plugin->Count = 0u;
-                target->ProcessActiveBounce(-static_cast<int>(age + outputLatency), blockSize);
-                ASSERT_EQ(blockSize, plugin->Count);
-                const auto pastOutput = positions[start] - positions[start - outputLatency];
-                for (unsigned int i = 0u; i < blockSize; ++i)
+                ASSERT_TRUE(history.Append(start, rate));
+                if (start == 320u) leaf->SetPlaybackOffsetSamps(31);
+                source->BeginPlaybackRateBlock(rate, start, &history, false);
+                if (start == trigger)
                 {
-                    auto phase = std::fmod(positions[start - age + i] - pastOutput - 11.0, static_cast<double>(length));
-                    if (phase < 0.0) phase += length;
-                    const auto first = static_cast<unsigned int>(phase);
-                    const auto fraction = phase - first;
-                    const auto expected = body[constants::MaxLoopFadeSamps + first] * (1.0 - fraction)
-                        + body[constants::MaxLoopFadeSamps + (first + 1u) % length] * fraction;
-                    EXPECT_NEAR(expected, plugin->Input[i], 1e-6) << start << "/" << i;
+                    target->ConfigureTriggerCapture({trigger, 0, length, age, 0u});
+                    target->Overdub({}, "target", {}, {}, source); target->CommitChanges();
+                    target->SetActiveBounce(source, std::make_shared<AudioFlowAdditiveBounceWriter>());
+                    ASSERT_TRUE(target->GetLoops().front()->SetTriggerCaptureLength(128u));
                 }
-                ASSERT_TRUE(target->GetLoops().front()->TriggerCaptureCoverageValid());
-                target->EndMultiWrite(blockSize, true, Audible::AUDIOSOURCE_BOUNCE);
-                target->EndMultiPlay(blockSize);
+                if (start >= trigger)
+                {
+                    target->BeginPlaybackRateBlock(rate, start, &history, false);
+                    target->BeginCaptureAudioBoundary(start, start, start);
+                    std::array<float, 64u> normalRead{};
+                    ASSERT_EQ(blockSize, leaf->ReadBlock(normalRead.data(), 0, blockSize));
+                    plugin->Count = 0u;
+#ifdef _DEBUG
+                    AudioCallbackAllocationProbe::Counts counts;
+                    {
+                        AudioCallbackAllocationProbe::Scope probe;
+                        target->ProcessActiveBounce(-static_cast<int>(age + outputLatency), blockSize);
+                        counts = probe.GetCounts();
+                    }
+                    EXPECT_EQ(0u, counts.Allocations);
+                    EXPECT_EQ(0u, counts.Reallocations);
+                    EXPECT_EQ(0u, counts.Frees);
+#else
+                    target->ProcessActiveBounce(-static_cast<int>(age + outputLatency), blockSize);
+#endif
+                    ASSERT_EQ(blockSize, plugin->Count);
+                    const auto pastOutput = positions[trigger] - positions[trigger - outputLatency];
+                    for (unsigned int i = 0u; i < blockSize; ++i)
+                    {
+                        // A linear source exposes phase directly. Reuse the ordinary
+                        // reader's SHFT motion instead of duplicating its recurrence.
+                        const auto expected = normalRead[i] + 0.0001 *
+                            (positions[start - age + i] - positions[start + i] - pastOutput);
+                        EXPECT_NEAR(expected, plugin->Input[i], 1e-6) << start << "/" << i;
+                    }
+                    ASSERT_TRUE(target->GetLoops().front()->TriggerCaptureCoverageValid());
+                    target->EndMultiWrite(blockSize, true, Audible::AUDIOSOURCE_BOUNCE);
+                    target->EndMultiPlay(blockSize);
+                }
+                source->EndMultiPlay(blockSize);
+                auto cursor = rate.Cursor();
+                for (unsigned int i = 0u; i < blockSize; ++i) cursor.Next();
+                rate.InitialRate = cursor.Current();
             }
-            source->EndMultiPlay(blockSize);
-            auto cursor = rate.Cursor();
-            for (unsigned int i = 0u; i < blockSize; ++i) cursor.Next();
-            rate.InitialRate = cursor.Current();
-        }
-        if (speed)
-        {
-            ASSERT_TRUE(target->GetLoops().front()->TriggerCaptureComplete());
-            target->Play(constants::MaxLoopFadeSamps, 128u, 0u);
-            target->EndRecording();
-            const auto captured = target->GetLoops().front()->ExportSamples();
-            ASSERT_EQ(128u, captured.size());
-            for (unsigned int i = 0u; i < captured.size(); ++i)
-                EXPECT_NEAR(2.0 * 0.0001 * (trigger * speed - outputLatency * speed - 11.0 + i),
-                    captured[i], 1e-6) << i;
+            {
+                ASSERT_TRUE(target->GetLoops().front()->TriggerCaptureComplete());
+                target->Play(constants::MaxLoopFadeSamps, 128u, 0u);
+                target->EndRecording();
+                const auto captured = target->GetLoops().front()->ExportSamples();
+                ASSERT_EQ(128u, captured.size());
+                for (unsigned int i = 0u; i < 8u; ++i)
+                    EXPECT_NEAR(2.0 * 0.0001 * (positions[trigger - outputLatency] - 11.0 + i), captured[i], 1e-6) << i;
+                if (partitionReference.empty()) partitionReference = captured;
+                else for (unsigned int i = 0u; i < captured.size(); ++i)
+                    EXPECT_NEAR(partitionReference[i], captured[i], 1e-6) << i;
+            }
+            auto cancelled = MakeTake(); cancelled->ResetPlaybackRateHistoryForDevice(1000u);
+            cancelled->ConfigureTriggerCapture({trigger, 0, length, age, 0u});
+            cancelled->Overdub({}, "cancelled", {}, {}, source); cancelled->CommitChanges();
+            cancelled->SetActiveBounce(source, std::make_shared<AudioFlowAdditiveBounceWriter>());
+            cancelled->BeginPlaybackRateBlock(rate, 768u, &history, false);
+            cancelled->BeginCaptureAudioBoundary(768u, 768u, 768u);
+            ASSERT_TRUE(cancelled->IsArmed());
+            cancelled->CancelRateCaptureBefore(10000u);
+            ASSERT_EQ(LoopTake::STATE_OVERDUBBING, cancelled->TakeState());
+            ASSERT_FALSE(cancelled->IsArmed());
+            plugin->Count = 0u;
+            cancelled->ProcessActiveBounce(-static_cast<int>(age + outputLatency), blockSize);
+            EXPECT_EQ(0u, plugin->Count);
         }
     }
 }

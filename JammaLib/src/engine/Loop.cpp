@@ -113,6 +113,7 @@ void engine::Loop::_QueueMappedCapture(const base::AudioWriteRequest& request, i
     region = {start, start + request.numSamps, request.fadeNew, request.fadeCurrent,
         residual ? _captureSource : nullptr, residual && _captureSource ? _captureSource->AudioSourceGeneration() : 0u,
         _captureSourceBodyOrigin};
+    if (residual && _captureSource) region.SourceOffset = PlaybackOffsetCursor(*_captureSource);
     FlushPendingCaptureAtAudioBoundary();
 }
 
@@ -133,7 +134,7 @@ void engine::Loop::_FlushMappedCapture(bool residual) noexcept
     while (capture.Count && TriggerCaptureCoverageValid())
     {
         auto& region = capture.Regions[capture.First];
-        if (through >= captureEnd) { capture = {}; break; }
+        if (through >= captureEnd) { capture.First = capture.Count = 0u; break; }
         if (residual && (!region.SourceIdentity || region.SourceIdentity != _captureSource
             || region.SourceGeneration != _captureSource->AudioSourceGeneration()))
         { _triggerCaptureCoverageValid.store(false, std::memory_order_release); break; }
@@ -156,6 +157,9 @@ void engine::Loop::_FlushMappedCapture(bool residual) noexcept
                 if (!(increment >= MinimumSourceRate) || increment > MaximumSourceRate)
                 { _triggerCaptureCoverageValid.store(false, std::memory_order_release); publish(); return; }
                 const auto next = position + increment;
+                auto sourceOffset = residual ? std::optional{ region.SourceOffset } : std::nullopt;
+                const auto firstOffset = sourceOffset ? sourceOffset->Value : 0.0;
+                const auto nextOffset = sourceOffset ? sourceOffset->Next() : 0.0;
                 auto first = (std::max)({static_cast<std::int64_t>(std::ceil(position)), through, _triggerCaptureBegin});
                 const auto end = (std::min)(static_cast<std::int64_t>(std::ceil(next)), captureEnd);
                 // ADC gaps are intentional when punching over an existing source.
@@ -202,13 +206,15 @@ void engine::Loop::_FlushMappedCapture(bool residual) noexcept
                         sample += weight * value;
                     }
                     if (residual) sample += _captureSource->_ReadSourceBodySample(region.SourceBodyOrigin
-                        + static_cast<double>(index) - constants::MaxLoopFadeSamps, static_cast<unsigned int>(frame));
+                        + static_cast<double>(index) - constants::MaxLoopFadeSamps
+                        - (firstOffset + fraction * (nextOffset - firstOffset)), static_cast<unsigned int>(frame));
                     auto& destination = _bufferBank[static_cast<unsigned long>(index)];
                     destination = region.FadeNew * static_cast<float>(sample) + region.FadeCurrent * destination;
                     ++through;
                     wrote = true;
                 }
                 position = next;
+                if (sourceOffset) region.SourceOffset = *sourceOffset;
                 // Retry an unavailable right-hand neighbor at this same
                 // physical interval; published source samples are not rewritten.
                 ++region.Cursor;
@@ -949,7 +955,7 @@ void Loop::WriteBlock(const std::shared_ptr<MultiAudioSink> dest,
 	const std::shared_ptr<base::BounceWriter> bounceWriter,
 	int sampOffset, unsigned int numSamps, const audio::DacRenderContext* dac,
 	std::uint32_t trigger, std::int64_t delay, unsigned int channel,
-	vst::VstChain* preparedChain, bool usePreparedChain, bool sourceResidual,
+	vst::VstChain* preparedChain, bool usePreparedChain,
 	const SourceReadTrajectory* sourceTrajectory)
 {
 	base::PublishedAudioSnapshot<vst::VstChain>::Lease chainLease;
@@ -961,11 +967,19 @@ void Loop::WriteBlock(const std::shared_ptr<MultiAudioSink> dest,
 	if (_playState.load(std::memory_order_relaxed) == STATE_RECORDING) _mixer->Offset(count);
 	float tempBuf[constants::MaxBlockSize];
 	auto rendered = 0u;
-	if (sourceTrajectory && bounceWriter && sourceResidual && loopLength)
+	const bool sourceResidual = sourceTrajectory && bounceWriter;
+	if (sourceResidual && loopLength)
 	{
+		const auto state = _playState.load(std::memory_order_acquire);
+		if (state != STATE_PLAYING && state != STATE_PLAYINGRECORDING
+			&& state != STATE_OVERDUBBINGRECORDING && state != STATE_PUNCHEDIN) return;
 		rendered = (std::min)(count, static_cast<unsigned int>(sourceTrajectory->Positions.size()));
+		auto offset = PlaybackOffsetCursor(*this);
 		for (unsigned int frame = 0u; frame < rendered; ++frame)
-			tempBuf[frame] = _ReadSourceBodySample(sourceTrajectory->BodyOrigin + sourceTrajectory->Positions[frame], frame);
+		{
+			tempBuf[frame] = _ReadSourceBodySample(sourceTrajectory->BodyOrigin + sourceTrajectory->Positions[frame] - offset.Value, frame);
+			offset.Next();
+		}
 	}
 	else if (loopLength) rendered = ReadBlock(tempBuf, sampOffset, count,
 		bounceWriter ? nullptr : dac, trigger, delay, channel);
@@ -1360,7 +1374,7 @@ void Loop::Reset()
 	_captureRateHistory = nullptr;
 	_captureSource = nullptr;
 	_captureInputHistory = {};
-	_captureQueues = {};
+	for (auto& queue : _captureQueues) queue.First = queue.Count = 0u;
 	_captureResidualStart.reset();
 	_captureResidualEnd = 0;
 	_captureInterpolation = {};
@@ -1729,7 +1743,7 @@ bool Loop::CanRefreshVisualModel() const noexcept
 void Loop::ConfigureTriggerCapture(std::int64_t begin, bool requireAdc, bool requireBounce, bool requirePunchAdc) noexcept
 {
 	_captureInterpolation = {};
-	_captureQueues = {};
+	for (auto& queue : _captureQueues) queue.First = queue.Count = 0u;
 	_captureResidualStart.reset();
 	_captureResidualEnd = 0;
 	_triggerCaptureBegin = begin;
@@ -2383,13 +2397,37 @@ void engine::Loop::AdoptInheritedPlaybackOffsetAtAudioBoundary() noexcept
 
 double engine::Loop::_NextPlaybackOffset(double value, double baseIncrement, double sharedCorrection) const noexcept
 {
-    const auto error = _playbackOffsetEnd - value;
+    return PlaybackOffsetCursor::NextValue(value, _playbackOffsetEnd, _playbackOffsetDamping, baseIncrement, sharedCorrection);
+}
+
+engine::Loop::PlaybackOffsetCursor::PlaybackOffsetCursor(const Loop& loop) noexcept :
+    Value(loop._playbackOffsetStart), Target(loop._playbackOffsetEnd), Damping(loop._playbackOffsetDamping),
+    RecordingRate(loop._recordingPlaybackRate),
+    ConstantIncrement(loop._playbackRateBlock.InitialRate * loop._playbackRateBlock.SourceScale / loop._recordingPlaybackRate),
+    ConstantRate(loop._playbackRateBlock.IsConstant()), Rate(loop._playbackRateBlock.Cursor())
+{
+}
+
+double engine::Loop::PlaybackOffsetCursor::Next() noexcept
+{
+    if (Value == Target) return Value;
+    if (!ConstantRate) Rate.Next();
+    Value = NextValue(Value, Target, Damping,
+        ConstantRate ? ConstantIncrement : Rate.BaseIncrement() / RecordingRate,
+        ConstantRate ? 0.0 : Rate.Correction() / RecordingRate);
+    return Value;
+}
+
+double engine::Loop::PlaybackOffsetCursor::NextValue(double value, double target, double damping,
+    double baseIncrement, double sharedCorrection) noexcept
+{
+    const auto error = target - value;
     const auto limit = (std::max)(0.0, 0.25 * baseIncrement - std::abs(sharedCorrection));
-    if (std::abs(error) <= 1e-6 && std::abs(error) <= limit) return _playbackOffsetEnd;
-    const auto next = value + std::clamp(error / _playbackOffsetDamping, -limit, limit);
+    if (std::abs(error) <= 1e-6 && std::abs(error) <= limit) return target;
+    const auto next = value + std::clamp(error / damping, -limit, limit);
     // Large persisted signed SHFT values can exhaust double precision before
     // the absolute tolerance. Finish only if the remainder fits this frame's budget.
-    return next == value && std::abs(error) <= limit ? _playbackOffsetEnd : next;
+    return next == value && std::abs(error) <= limit ? target : next;
 }
 void engine::Loop::_AdvancePlaybackOffset(unsigned int numSamps) noexcept
 {
