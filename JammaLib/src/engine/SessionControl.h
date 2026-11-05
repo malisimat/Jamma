@@ -71,6 +71,7 @@ namespace engine
 		{
 			std::uint64_t SceneId = 0u, OperationId = 0u;
 			bool SessionEnabled = false, DefaultEnabled = false, PagesChanged = true;
+			bool AudioPaused = false, AudioPauseEnabled = false;
 			std::string DeviceStatus, ActiveAudioStatus, FileStatus;
 			audio::AsioInventory Inventory;
 			std::unordered_map<std::string, std::vector<unsigned int>> AcceptedBufferSizes;
@@ -108,8 +109,7 @@ namespace engine
 		void InitMidi(bool generatedRig = false);
 		void CloseMidi();
 		void CloseAudio() override;
-		bool PauseAudio();
-		bool ResumeAudio();
+		void ToggleAudioPause(StationAccess access, const Effects& effects);
 		void SetMidiInputInventory(midi::MidiInputInventory inventory) override { _midiInputInventory = std::move(inventory); }
 		void SetHardwarePreferenceSaver(std::function<bool(const io::RigFile&)> saver) { _saveHardwarePreferences = std::move(saver); }
 		bool SaveHardwarePreferences(const io::RigFile& rig) const { return _saveHardwarePreferences && _saveHardwarePreferences(rig); }

@@ -309,3 +309,12 @@ leaf separately from the transport ruler. Missing or invalid references preserve
 saved timing without guessing a chosen source from its length. Legacy audio
 references remain supported. Saving waits while a master change is Applying;
 Reset may still cancel it through the existing quiescent boundary.
+
+## Pause and resume
+
+The main settings panel opens on Timing. Its **Pause** button stops the audio
+device stream, freezing local transport, loop playback and recording, monitoring,
+and NINJAM audio processing. **Resume** restarts that stream from the retained
+local position; server-follow timing may realign it to the live server.
+Pause is temporary: it is not saved in a JAM or rig, and loading a session starts
+running. The button is unavailable while device or session operations are busy.

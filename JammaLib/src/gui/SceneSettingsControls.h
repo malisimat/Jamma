@@ -44,6 +44,7 @@ namespace gui
 		struct OffsetChange { double Value; };
 		struct PlaybackRateChange { double Value; };
 		struct RequestServerTempo {};
+		struct ToggleAudioPause {};
 		struct MetronomeChange { bool Enabled; };
 		struct MetronomeLevelChange { float Value; };
 		struct SubdivisionChange { midi::MidiQuantisationFraction Value; };
@@ -64,7 +65,7 @@ namespace gui
 			AudioDeviceChange, AudioValueChange, MidiDeviceChange>;
 		struct DevicePages { std::vector<GuiSettingEntry> Audio, Midi; };
 		using Change = std::variant<ViewModeChange, GlobalQuantisationChange, ChannelChange,
-			OffsetChange, PlaybackRateChange, RequestServerTempo, MetronomeChange, MetronomeLevelChange, SubdivisionChange, TapTempo, Reclock, UseMaster, SyncToServer, ResetAll>;
+			OffsetChange, PlaybackRateChange, RequestServerTempo, ToggleAudioPause, MetronomeChange, MetronomeLevelChange, SubdivisionChange, TapTempo, Reclock, UseMaster, SyncToServer, ResetAll>;
 
 		enum class DraftChange { None, Device, Channels, Format, Midi };
 		DraftChange EditDeviceDraft(const DeviceChange& command, const audio::AsioInventory& inventory,
@@ -94,6 +95,7 @@ namespace gui
 		const auto& GlobalQuantisation() const { return _globalMidiQuantRadio; }
 		const auto& Subdivision() const { return _midiSubdivisionRadio; }
 		void RefreshNinjamStatus(ninjam::NinjamLocalTempoState state, bool connected, bool following, bool aligning = false);
+		void RefreshAudioPause(bool paused, bool enabled);
 		void RefreshChannelPresentation(std::uint8_t channel);
 		void RefreshOffsetPresentation(double acceptedOffset);
 		void RefreshPlaybackRate(double target, double applied, bool following, bool canRequest, double bpm, unsigned int bpi, bool unsupportedRemoteRate = false, bool aligning = false, bool controlPending = false);
@@ -134,6 +136,7 @@ namespace gui
 		static constexpr unsigned int ReclockControlIndex = 7006u;
         static constexpr unsigned int UseMasterControlIndex = 7010u;
 		static constexpr unsigned int SyncToServerControlIndex = 7007u;
+		static constexpr unsigned int AudioPauseControlIndex = 7013u;
 		static constexpr unsigned int PlaybackRateControlIndex = 7011u;
 		static constexpr unsigned int RequestServerTempoControlIndex = 7012u;
 		static constexpr unsigned int MidiDeviceControlIndex = 7300u;
@@ -148,7 +151,7 @@ namespace gui
 		std::shared_ptr<GuiMidiChannelOverride> _midiChannelOverride;
 		std::shared_ptr<GuiSlider> _transportOffsetSlider, _playbackRateSlider;
 		std::shared_ptr<GuiLabel> _playbackRateLabel, _serverTempoLabel;
-		std::shared_ptr<GuiButton> _requestServerTempoButton;
+		std::shared_ptr<GuiButton> _requestServerTempoButton, _audioPauseButton;
 		std::shared_ptr<GuiLabel> _transportOffsetLabel;
 		std::shared_ptr<GuiToggle> _ninjamMetronomeToggle;
 		std::shared_ptr<GuiSlider> _metronomeLevel;

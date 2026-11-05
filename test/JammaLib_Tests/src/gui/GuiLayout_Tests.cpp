@@ -1334,3 +1334,30 @@ TEST(Scene, HidingSettingsDuringNumericCaptureConsumesTerminatingRelease) {
 	EXPECT_TRUE(scene.OnAction(action).IsEaten);
 	EXPECT_DOUBLE_EQ(0.5, numeric->Value());
 }
+
+TEST(Scene, CompactSettingsScrollExtentMatchesStandardControlHeightsAndRowGaps) {
+	SettingsTestScene scene(SceneParams({ "" }, {}, {800u, 600u}), io::UserConfig{});
+	auto panel = scene.SettingsPanel();
+	std::vector<gui::GuiSettingEntry> entries;
+	std::vector<std::shared_ptr<GuiButton>> buttons;
+	std::vector<std::shared_ptr<gui::GuiSlider>> sliders;
+	for (unsigned int i = 0u; i < 4u; ++i) {
+		auto button = std::make_shared<GuiButton>(MakeButtonParams(240u, 40u));
+		auto slider = std::make_shared<gui::GuiSlider>(gui::GuiSliderParams::PanelHorizontal("yellow", 320u));
+		buttons.push_back(button); sliders.push_back(slider);
+		entries.push_back({gui::SettingsPage::Timing, "", button, 0u});
+		entries.push_back({gui::SettingsPage::Timing, "", slider, 0u});
+	}
+	panel->ReplacePageSettings(gui::SettingsPage::Timing, entries);
+	panel->SetPage(gui::SettingsPage::Timing);
+	panel->SetExpanded(true);
+	for (int frame = 0; frame < 6; ++frame) panel->AdvanceAnimation(0.05f);
+	const auto scroll = FindGuiElement<gui::GuiScrollPanel>(*panel);
+	ASSERT_TRUE(scroll); ASSERT_TRUE(scroll->Content());
+	for (const auto& button : buttons) EXPECT_EQ(40u, button->GetSize().Height);
+	for (const auto& slider : sliders) EXPECT_EQ(gui::GuiSliderParams::DefaultHeight, slider->GetSize().Height);
+	const unsigned int expected = 16u + 4u * (40u + gui::GuiSliderParams::DefaultHeight)
+		+ 7u * GuiStackPanelParams::PanelRowSpacing;
+	EXPECT_EQ(expected, scroll->Content()->GetSize().Height);
+	EXPECT_EQ(std::max(0, static_cast<int>(expected) - static_cast<int>(scroll->ViewportHeight())), scroll->MaxScrollOffset());
+}

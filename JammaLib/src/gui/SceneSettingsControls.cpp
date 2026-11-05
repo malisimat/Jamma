@@ -215,6 +215,7 @@ SceneSettingsControls::SceneSettingsControls(std::uint8_t channel, double offset
 	_loadButton = _SessionButton("Load");
 	_saveAsJamButton = _SessionButton("Save As...");
 	_reclockButton = _SessionButton("Reclock");
+	_audioPauseButton = _SessionButton("Pause");
     _useMasterButton=_SessionButton("Use as master");
     _masterTarget=_StatusLabel("Reclock from this loop - Shift-click",44u);
     _masterStatus=_StatusLabel("No chosen master",44u);
@@ -228,6 +229,7 @@ SceneSettingsControls::SceneSettingsControls(std::uint8_t channel, double offset
 std::vector<GuiSettingEntry> SceneSettingsControls::SettingsEntries() const
 {
 	return {
+		{ SettingsPage::Timing, "", _audioPauseButton, AudioPauseControlIndex },
 		{ SettingsPage::Timing, "Global MIDI quantisation", _globalMidiQuantRadio, 101u },
 		{ SettingsPage::Timing, "Playback rate", _playbackRateSlider, PlaybackRateControlIndex },
         { SettingsPage::Timing, "", _playbackRateLabel, 0u },
@@ -264,6 +266,8 @@ std::vector<GuiSettingEntry> SceneSettingsControls::SelectionEntries() const
 std::optional<SceneSettingsControls::Change> SceneSettingsControls::Decode(const GuiAction& action,
 	double acceptedOffset) const
 {
+	if (action.ElementType == GuiAction::ACTIONELEMENT_BUTTON && action.Index == AudioPauseControlIndex)
+		return ToggleAudioPause{};
 	if (action.ElementType == GuiAction::ACTIONELEMENT_BUTTON && action.Index == RequestServerTempoControlIndex)
         return RequestServerTempo{};
     if (action.ElementType == GuiAction::ACTIONELEMENT_SLIDER && action.Index == PlaybackRateControlIndex)
@@ -659,4 +663,10 @@ void SceneSettingsControls::SetAudioDraftFromStream(const audio::AudioStreamPara
 	draft.BufSize = params.BufSize;
 	draft.NumBuffers = params.NumBuffers;
 	SetAudioDraft(std::move(draft));
+}
+
+void SceneSettingsControls::RefreshAudioPause(bool paused, bool enabled)
+{
+	_audioPauseButton->SetText(paused ? "Resume" : "Pause");
+	_audioPauseButton->SetEnabled(enabled);
 }

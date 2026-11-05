@@ -2241,3 +2241,46 @@ TEST_F(GuiSceneSettingsTests, MetronomeLevelReachesAudioOwnerAfterTreeRenumberin
 	Scene->ClickLevel()->SetValue(0.0, false);
 	EXPECT_FLOAT_EQ(0.0f, Scene->ClickGain());
 }
+
+TEST(SceneSettingsControls, PauseButtonIsAttachedDecodesAndReflectsRuntimeState) {
+	gui::SceneSettingsControls controls(0u, 0.0, io::JamFile::GlobalMidiQuantState::Mixed);
+	gui::GuiMainPanelParams params;
+	params.Size = {1200u, 900u};
+	params.Settings = controls.SettingsEntries();
+	const auto entry = std::find_if(params.Settings.begin(), params.Settings.end(),
+		[](const auto& value) { return value.Command == 7013u; });
+	ASSERT_NE(params.Settings.end(), entry);
+	EXPECT_EQ(gui::SettingsPage::Timing, entry->Page);
+	const auto button = std::dynamic_pointer_cast<GuiButton>(entry->Control);
+	ASSERT_TRUE(button);
+	EXPECT_EQ("Pause", button->Text());
+	auto panel = std::make_shared<gui::GuiMainPanel>(params);
+	auto owner = std::make_shared<GuiRecordingActionReceiver>();
+	panel->Init();
+	panel->SetCommandOwner(owner);
+	EXPECT_EQ(gui::SettingsPage::Timing, panel->Page());
+	auto ancestor = button->Parent();
+	while (ancestor && ancestor != panel) ancestor = ancestor->Parent();
+	ASSERT_EQ(panel, ancestor);
+	EXPECT_TRUE(button->OnAction(MakeTouch(TouchAction::TOUCH_DOWN, {3,3})).IsEaten);
+	EXPECT_TRUE(button->OnAction(MakeTouch(TouchAction::TOUCH_UP, {3,3})).IsEaten);
+	ASSERT_TRUE(owner->LastAction);
+	const auto decoded = controls.Decode(*owner->LastAction, 0.0);
+	ASSERT_TRUE(decoded);
+	EXPECT_TRUE(std::holds_alternative<gui::SceneSettingsControls::ToggleAudioPause>(*decoded));
+	auto invalid = *owner->LastAction;
+	invalid.ElementType = actions::GuiAction::ACTIONELEMENT_SLIDER;
+	EXPECT_FALSE(controls.Decode(invalid, 0.0));
+	controls.RefreshAudioPause(true, true);
+	EXPECT_EQ("Resume", button->Text());
+	EXPECT_TRUE(button->IsEnabled());
+	controls.RefreshAudioPause(false, false);
+	EXPECT_EQ("Pause", button->Text());
+	EXPECT_FALSE(button->IsEnabled());
+	// Reconstructed controls start running regardless of the previous UI state.
+	controls.RefreshAudioPause(true, true);
+	gui::SceneSettingsControls reloaded(0u, 0.0, io::JamFile::GlobalMidiQuantState::Mixed);
+	for (const auto& setting : reloaded.SettingsEntries())
+		if (setting.Command == 7013u)
+			EXPECT_EQ("Pause", std::dynamic_pointer_cast<GuiButton>(setting.Control)->Text());
+}

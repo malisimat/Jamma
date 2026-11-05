@@ -2226,6 +2226,7 @@ void Workspace::ApplyControlPresentation(SessionControl::Presentation presentati
 	if (presentation.AudioAccepted) _settingsControls->AcceptAudioDraft(std::move(presentation.AudioAccepted->Value), presentation.AudioAccepted->Revision);
 	if (presentation.MidiAccepted) _settingsControls->AcceptMidiDraft(std::move(presentation.MidiAccepted->Value), presentation.MidiAccepted->Revision);
 	_settingsControls->SetSessionEnabled(presentation.SessionEnabled, presentation.DefaultEnabled);
+	_settingsControls->RefreshAudioPause(presentation.AudioPaused, presentation.AudioPauseEnabled);
 	_settingsControls->SetDeviceStatus(presentation.DeviceStatus);
 	_settingsControls->SetActiveAudioStatus(presentation.ActiveAudioStatus);
 	_settingsControls->SetFileStatus(presentation.FileStatus);

@@ -539,6 +539,8 @@ ActionResult Scene::OnAction(GuiAction action)
 	{
 		_workspace->SetViewMode(view->Value, { _sceneMutex, _stations }, _WorkspaceInputPresentation());
 	}
+	else if (std::holds_alternative<Settings::ToggleAudioPause>(*change))
+		_operation.ToggleAudioPause({ _sceneMutex, _stations }, _ControlEffects());
 	else if (auto quantisation = std::get_if<Settings::GlobalQuantisationChange>(&*change))
 		_SetGlobalMidiQuantState(quantisation->Value);
 	else if (auto subdivision = std::get_if<Settings::SubdivisionChange>(&*change))

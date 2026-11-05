@@ -302,16 +302,31 @@ void SessionControl::CloseAudio()
 	_audio->Close();
 }
 
-bool SessionControl::PauseAudio()
+void SessionControl::ToggleAudioPause(StationAccess access, const Effects& effects)
 {
+	if (Current() != None || HoldsWriter() || IsReplacing() || RigSaveInProgress() || RigSaveDialogOpen()) return;
+	std::unique_lock lifecycle(_lifecycleMutex, std::try_to_lock);
+	if (!lifecycle.owns_lock() || !_rig->EditsEnabled() || effects.CheckEligibility().StructuralBusy) return;
 	auto* device = _audio ? _audio->GetDevice() : nullptr;
-	return device && device->Pause();
-}
-
-bool SessionControl::ResumeAudio()
-{
-	auto* device = _audio ? _audio->GetDevice() : nullptr;
-	return device && device->Resume();
+	if (!device || !device->IsOpen()) return;
+	// Stop the device on the window owner; no Scene lock is held while the
+	// backend waits for the final callback. No pause state is saved in the jam.
+	const bool running = device->IsRunning();
+	if (!running)
+	{
+		std::scoped_lock midiLifecycle(_midiLifecycleMutex);
+		// Discard monitoring events accumulated while callbacks were stopped and
+		// release held notes before the first resumed block. Join MIDI producers
+		// before taking the Scene lock, as in the session-operation boundary.
+		_input->SuspendMidiDispatch();
+		{
+			std::scoped_lock lock(access.Mutex);
+			for (const auto& station : access.Stations) if (station) station->ResetLiveMidiWhileQuiescent();
+		}
+		_input->ResumeMidiDispatch();
+	}
+	const bool success = running ? device->Pause() : device->Resume();
+	if (!success) _Notice("Audio", "Audio could not pause or resume");
 }
 
 bool SessionControl::_ValidateAudioDraft(std::string& error, const Effects& effects) const
@@ -460,6 +475,10 @@ void SessionControl::PumpOnWindow(StationAccess access, const Effects& effects, 
 
 void SessionControl::_UpdateWindowPresentation(const audio::AudioStreamParams& actual, bool inventoryBusy)
 {
+	auto* device = _audio->GetDevice();
+	_presentation.AudioPaused = device && device->IsOpen() && !device->IsRunning();
+	_presentation.AudioPauseEnabled = device && device->IsOpen() && !inventoryBusy
+		&& Current() == None && !_rigSaveInProgress && !_rigSaveDialogOpen && _rig->EditsEnabled();
 	const bool filesEnabled = !inventoryBusy && Current() == SessionControl::None && _rig->EditsEnabled();
 	_SetSessionEnabled(filesEnabled, filesEnabled && !_defaultJamPath.empty() && static_cast<bool>(_defaultJamSaver));
 	if (actual.BufSize && !_acceptedBufferSizes.contains(actual.Name)) { _acceptedBufferSizes[actual.Name] = {actual.BufSize}; _devicePageDirty = true; }
@@ -864,6 +883,7 @@ void SessionControl::SetRigSaveDialogOpenLocked(bool open)
 SessionControl::Presentation SessionControl::TakePresentation()
 {
 	Presentation result;
+	result.AudioPaused = _presentation.AudioPaused; result.AudioPauseEnabled = _presentation.AudioPauseEnabled;
 	result.SceneId = _sceneIdentity; result.OperationId = Identity();
 	result.SessionEnabled = _presentation.SessionEnabled; result.DefaultEnabled = _presentation.DefaultEnabled;
 	result.DeviceStatus = _presentation.DeviceStatus; result.ActiveAudioStatus = _presentation.ActiveAudioStatus; result.FileStatus = _presentation.FileStatus;

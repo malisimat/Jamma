@@ -53,7 +53,7 @@ GuiMainPanel::GuiMainPanel(GuiMainPanelParams params) : GuiPanel(params),
 		GuiStackPanelParams pageParams;
 		pageParams.PaddingH = PageContentPadding;
 		pageParams.PaddingV = PageContentPadding;
-		pageParams.Spacing = 10u;
+		pageParams.Spacing = GuiStackPanelParams::PanelRowSpacing;
 		pageParams.Size = { 300u, 8u };
 		page = std::make_shared<GuiStackPanel>(pageParams);
 	}
@@ -607,7 +607,8 @@ void GuiMainPanel::_LayoutSettings(int panelWidth, int panelHeight)
 				stack->ComputeLayout();
 			}
 		}
-		contentHeight += child->GetSize().Height + 10u;
+		if (index > 0u) contentHeight += GuiStackPanelParams::PanelRowSpacing;
+		contentHeight += child->GetSize().Height;
 		contentWidth = std::max(contentWidth, child->GetSize().Width);
 	}
 	page->SetSize({ contentWidth + 16u, contentHeight });
@@ -656,7 +657,7 @@ void GuiMainPanel::ReplacePageSettings(SettingsPage pageId, const std::vector<Gu
 		[&oldPage](const auto& item) { return item.first->Parent() == oldPage; }), _controlSizes.end());
 	_pageBindings[index].clear();
 	GuiStackPanelParams params;
-	params.PaddingH = 4u; params.PaddingV = 4u; params.Spacing = 8u; params.Size = {300u, 8u};
+	params.PaddingH = PageContentPadding; params.PaddingV = PageContentPadding; params.Spacing = GuiStackPanelParams::PanelRowSpacing; params.Size = {300u, 8u};
 	auto page = std::make_shared<GuiStackPanel>(params);
 	for (const auto& setting : settings)
 	{

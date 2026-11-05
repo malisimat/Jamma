@@ -57,6 +57,12 @@ namespace audio
 			return host._callbackAdmission.compare_exchange_strong(expected, 0u);
 		}
 		static bool LifetimeUncertain(const AudioHost& host) { return host._backendLifetimeUncertain; }
+		static engine::SessionControl::Presentation PausePresentation(engine::SessionControl& control, AudioHost& host)
+		{
+			control._UpdateWindowPresentation(host.GetStreamParams(), false);
+			return control.TakePresentation();
+		}
+		static void Begin(engine::SessionControl& control, engine::SessionControl::Kind kind) { control.Begin(kind); }
 		static void Inventory(engine::SessionControl& control) { control._deviceInventory.Devices = {{0u, "Primary ASIO device", true}}; }
 	};
 }
@@ -296,4 +302,58 @@ TEST(AsioStreamRecovery, WindowLossWaitsForInputJobBoundaryPreservesPreferencesA
 	control.PumpOnWindow({sceneMutex, stations}, effects, false);
 	EXPECT_EQ(calls.Stops, 1u); // No periodic recovery or discovery.
 	}
+}
+
+TEST(AsioStreamRecovery, SessionPauseResumesStreamAndHonoursBusyBoundaries)
+{
+	Access::Calls calls;
+	io::UserConfig config{};
+	config.Audio.Name = "Primary ASIO device";
+	config.Audio.BufSize = 128u;
+	config.Audio.NumBuffers = 2u;
+	config.Audio.NumChannelsIn = config.Audio.NumChannelsOut = 2u;
+	audio::AudioHost host(config);
+	engine::SessionControl control;
+	io::IoInputSubsystem input(config, io::LoggingConfig{});
+	engine::RigCoordinator rig;
+	const std::vector<std::shared_ptr<engine::Station>> stations;
+	std::mutex sceneMutex;
+	io::RigFile rigFile;
+	rigFile.Name = "pause test";
+	rigFile.User = config;
+	ASSERT_TRUE(rig.BuildInitial(rigFile, {}, stations, 2u, {}, {}, {}));
+	control.Bind(host, input, rig, config, 1u);
+	auto device = Access::Device(std::make_unique<Access::FakeBackend>(calls));
+	auto* stream = device.get();
+	Access::Install(host, std::move(device));
+	bool structuralBusy = false;
+	engine::SessionControl::Effects effects;
+	effects.CheckEligibility = [&] { return engine::SessionControl::Eligibility{false, false, structuralBusy}; };
+
+	ASSERT_TRUE(stream->IsRunning());
+	control.ToggleAudioPause({sceneMutex, stations}, effects);
+	EXPECT_FALSE(stream->IsRunning());
+	EXPECT_TRUE(stream->IsOpen());
+	EXPECT_EQ(1u, calls.Stops);
+	const auto paused = Access::PausePresentation(control, host);
+	EXPECT_TRUE(paused.AudioPaused);
+	EXPECT_TRUE(paused.AudioPauseEnabled);
+	// An overlapping session operation cannot resume a paused stream.
+	Access::Begin(control, engine::SessionControl::Save);
+	control.ToggleAudioPause({sceneMutex, stations}, effects);
+	EXPECT_FALSE(stream->IsRunning());
+	Access::Begin(control, engine::SessionControl::None);
+	structuralBusy = true;
+	control.ToggleAudioPause({sceneMutex, stations}, effects);
+	EXPECT_FALSE(stream->IsRunning());
+	structuralBusy = false;
+	control.ToggleAudioPause({sceneMutex, stations}, effects);
+	EXPECT_TRUE(stream->IsRunning());
+	EXPECT_EQ(1u, calls.Stops);
+	// Resume keeps the same prepared device and does not reopen hardware.
+	EXPECT_EQ(stream, host.GetDevice());
+	EXPECT_EQ(0u, calls.Closes);
+	const auto running = Access::PausePresentation(control, host);
+	EXPECT_FALSE(running.AudioPaused);
+	EXPECT_TRUE(running.AudioPauseEnabled);
 }
