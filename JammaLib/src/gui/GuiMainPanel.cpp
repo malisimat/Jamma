@@ -1,6 +1,7 @@
 #include "GuiMainPanel.h"
 #include "GuiLabel.h"
 #include "GuiPanelHeader.h"
+#include "GuiSlider.h"
 #include "../graphics/GlDrawContext.h"
 #include <cmath>
 
@@ -588,7 +589,7 @@ void GuiMainPanel::_LayoutSettings(int panelWidth, int panelHeight)
 		else
 		{
 			if (original != _controlSizes.end())
-				child->SetSize({ std::dynamic_pointer_cast<GuiButton>(child)
+				child->SetSize({ (std::dynamic_pointer_cast<GuiButton>(child) || std::dynamic_pointer_cast<GuiSlider>(child))
 					? childWidth : std::min(childWidth, original->second.Width), original->second.Height });
 			if (auto stack = std::dynamic_pointer_cast<GuiStackPanel>(child))
 			{

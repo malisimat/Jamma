@@ -120,6 +120,8 @@ SceneSettingsControls::SceneSettingsControls(std::uint8_t channel, double offset
 	_transportOffsetLabel = _StatusLabel("", GuiLabelParams::DefaultHeight);
 	RefreshOffsetPresentation(offset);
     auto rate = GuiSliderParams::PanelHorizontal("purple", 320u);
+    rate.TintColor = glm::vec3(0.65f, 0.35f, 0.9f);
+    rate.DragOverTexture = "purple";
     rate.Index = PlaybackRateControlIndex;
     rate.Min = -1.0; rate.Max = 1.0; rate.Steps = 400u;
     rate.DefaultValue = 0.0; rate.InitValue = 0.0;
